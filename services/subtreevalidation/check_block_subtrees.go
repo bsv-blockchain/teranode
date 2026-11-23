@@ -393,6 +393,31 @@ func (u *Server) getSubtreeToCheck(ctx context.Context, request *subtreevalidati
 	return subtreeToCheck, nil
 }
 
+// feedsBlockAssembly reports whether a block's transactions may be added to
+// block assembly. Only when the FSM state allows it (stateFeeds: RUNNING, or a
+// short catchup from RUNNING that keeps the hand-off), and only when the block is
+// not above tip+1: a height locktime final there may not be final at tip+1.
+//
+// A block under other transaction rules than tip+1 (a side block below Genesis or
+// Chronicle) still feeds. Its txs carry the block's height, and block assembly's era
+// filter drops them and records the drop, so a descendant in a later block of the
+// same fork, under tip+1's rules, is dropped with them. Withholding them here would
+// leave block assembly unaware of them, and let such a descendant in without its
+// parent. A block that feeds even when it does not extend the tip keeps the txs of a
+// competitor that loses in the template.
+func (u *Server) feedsBlockAssembly(ctx context.Context, stateFeeds bool, blockHeight uint32) (bool, error) {
+	if !stateFeeds {
+		return false, nil
+	}
+
+	_, tipMeta, err := u.blockchainClient.GetBestBlockHeader(ctx)
+	if err != nil {
+		return false, errors.NewServiceError("failed to get best block header", err)
+	}
+
+	return blockHeight <= tipMeta.Height+1, nil
+}
+
 // CheckBlockSubtrees validates every subtree a block references, fetching any it
 // does not hold, and reports whether the block's transactions are valid.
 //
@@ -592,8 +617,14 @@ func (u *Server) CheckBlockSubtrees(ctx context.Context, request *subtreevalidat
 	// short catchup that started from RUNNING: block validation asks to keep the
 	// hand-off on, offering unseen fork transactions to the pool through the
 	// existing RUNNING path (including its block-context queue-shed policy).
-	addTXToBlockAssembly := *currentState == blockchain.FSMStateRUNNING ||
+	// Either way the block must also pass feedsBlockAssembly's height gate.
+	stateFeeds := *currentState == blockchain.FSMStateRUNNING ||
 		(*currentState == blockchain.FSMStateCATCHINGBLOCKS && request.GetKeepBlockAssemblyHandoff())
+
+	addTXToBlockAssembly, err := u.feedsBlockAssembly(ctx, stateFeeds, block.Height)
+	if err != nil {
+		return nil, errors.WrapGRPC(errors.NewProcessingError("[CheckBlockSubtrees] Failed to decide block assembly feed", err))
+	}
 
 	// BATCHED SUBTREE LOADING: Get blockIds once before batching
 	blockHeaderIDs, err := u.blockchainClient.GetBlockHeaderIDs(ctx, block.Header.HashPrevBlock, uint64(u.settings.GetUtxoStoreBlockHeightRetention()*2))
@@ -1721,12 +1752,30 @@ func (u *Server) processTransactionsInLevels(ctx context.Context, allTransaction
 
 	// Track validation results. firstErr keeps the first swallowed per-tx error so
 	// the summary error below can chain a cause instead of only reporting counts.
+	// failures tallies every swallowed error by cause, so the summary names each
+	// cause with a count and an example txid instead of one ERROR line per tx.
 	var (
 		errorsFound         atomic.Uint64
 		missingParentErrors atomic.Uint64
+		failures            txFailureTally
 		firstErrMu          sync.Mutex
 		firstErr            error
 	)
+
+	// One summary line per call, however the call ends. This function runs once per
+	// load batch of the block, or on the batch path's fallback transactions, so the
+	// denominator is this call's input, not the block. A store-side cause (circuit
+	// breaker open, context canceled) is this node's problem and still needs to be
+	// seen, so it stays at ERROR, once, with the counts per cause and an example
+	// txid each. The caller's all-missing-parent deferral logs at Info and does not
+	// use this.
+	logFailureSummary := func() {
+		if failures.count() == 0 {
+			return
+		}
+
+		u.logger.Errorf("[processTransactionsInLevels][%s] %d of %d txs in this batch failed (%d missing-parent): %s", blockHash.String(), errorsFound.Load(), totalTxCount, missingParentErrors.Load(), failures.String())
+	}
 
 	// Transactions accepted whose two-phase-commit unlock failed. This path validates with
 	// WithIgnoreLocked(true), so a locked parent never answers a child in the next level
@@ -1787,6 +1836,8 @@ func (u *Server) processTransactionsInLevels(ctx context.Context, allTransaction
 		// and the existing missing-parent handling is preserved.
 		prefetchedParents, prefetchErr := u.prefetchLevelParents(ctx, levelTxs)
 		if prefetchErr != nil {
+			logFailureSummary()
+
 			return prefetchErr
 		}
 
@@ -1800,6 +1851,8 @@ func (u *Server) processTransactionsInLevels(ctx context.Context, allTransaction
 		for _, mTx := range levelTxs {
 			tx := mTx.tx
 			if tx == nil {
+				logFailureSummary()
+
 				return errors.NewProcessingError("[processTransactionsInLevels] transaction is nil at level %d", level)
 			}
 
@@ -1842,6 +1895,7 @@ func (u *Server) processTransactionsInLevels(ctx context.Context, allTransaction
 
 					// Count all other errors
 					errorsFound.Add(1)
+					failures.add(*tx.TxIDChainHash(), err)
 
 					if errors.Is(err, errors.ErrTxMissingParent) {
 						// missingParentErrors drives the all-missing-parent deferral below;
@@ -1860,8 +1914,8 @@ func (u *Server) processTransactionsInLevels(ctx context.Context, allTransaction
 						u.logger.Errorf("[processTransactionsInLevels] Conflicting-walk limit exceeded for transaction %s: %v", tx.TxIDChainHash().String(), err)
 						return err
 					} else {
-						u.logger.Errorf("[processTransactionsInLevels] Processing error for transaction %s: %v", tx.TxIDChainHash().String(), err)
-
+						// Already logged at Debug above; the cause is tallied and reported once
+						// per call below, with counts and an example per cause (issue 2108).
 						firstErrMu.Lock()
 						if firstErr == nil {
 							firstErr = err
@@ -1882,8 +1936,12 @@ func (u *Server) processTransactionsInLevels(ctx context.Context, allTransaction
 			})
 		}
 
-		// Fail early if we get an actual tx error thrown
+		// Fail early if we get an actual tx error thrown. The failures tallied before
+		// it (a store fault on a sibling, say) had their own ERROR lines before the
+		// tally and still need to be seen.
 		if err = g.Wait(); err != nil {
+			logFailureSummary()
+
 			return errors.NewProcessingError("[processTransactionsInLevels] Failed to process level %d", level+1, err)
 		}
 
@@ -1912,11 +1970,14 @@ func (u *Server) processTransactionsInLevels(ctx context.Context, allTransaction
 			u.logger.Infof("[processTransactionsInLevels] %d missing-parent errors (deferred to sequential revalidation)", errorsFound.Load())
 			return nil
 		}
+
+		logFailureSummary()
+
 		if firstErr != nil {
-			return errors.NewProcessingError("[processTransactionsInLevels] Completed processing with %d errors (%d missing-parent)", errorsFound.Load(), missingParentErrors.Load(), firstErr)
+			return errors.NewProcessingError("[processTransactionsInLevels] Completed processing with %d errors (%d missing-parent): %s", errorsFound.Load(), missingParentErrors.Load(), failures.String(), firstErr)
 		}
 
-		return errors.NewProcessingError("[processTransactionsInLevels] Completed processing with %d errors (%d missing-parent)", errorsFound.Load(), missingParentErrors.Load())
+		return errors.NewProcessingError("[processTransactionsInLevels] Completed processing with %d errors (%d missing-parent): %s", errorsFound.Load(), missingParentErrors.Load(), failures.String())
 	}
 
 	u.logger.Debugf("[processTransactionsInLevels] Successfully processed all %d transactions", totalTxCount)
@@ -1978,6 +2039,12 @@ func (u *Server) prefetchLevelParents(ctx context.Context, levelTxs []missingTx)
 	}
 
 	prefetchFields := append(append([]fields.FieldName(nil), prefetchParentBaseFields...), fields.Outputs)
+
+	// With lane positions on, the same read also gives each parent's own lane position, which the
+	// validator copies onto the child (validator.Options.PrefetchedParents).
+	if u.settings.UtxoStore.LaneMigration.Stamps() {
+		prefetchFields = append(prefetchFields, fields.LanePosition)
+	}
 
 	items := make([]*utxostore.UnresolvedMetaData, 0, len(distinct))
 	for parentHash := range distinct {

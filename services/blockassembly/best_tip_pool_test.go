@@ -57,12 +57,16 @@ func testReplayResetPool(t *testing.T, lateFailure, giveUp bool, coinbaseMaturit
 	require.NoError(t, err)
 	ba.subtreeProcessor = stp
 	stp.Start(t.Context())
-	genesis := genesisHeader(t, items)
+	// The scenario starts one block above genesis, so its blocks are past regtest's P2SH
+	// activation (2): a transaction mined at height 1 falls under other script rules than the
+	// template's next block, and block assembly keeps it out.
+	genesis := buildChain(genesisHeader(t, items), 1, 18000)[0]
+	addBlockWithMinedSet(t.Context(), t, items, genesis)
 	a1 := buildChain(genesis, 1, 19000)[0]
 	addBlockWithMinedSet(t.Context(), t, items, a1)
-	startReplayAt(t, items, a1, 1)
+	startReplayAt(t, items, a1, 2)
 	stp.InitCurrentBlockHeader(a1)
-	require.NoError(t, items.utxoStore.SetBlockHeight(3))
+	require.NoError(t, items.utxoStore.SetBlockHeight(4))
 	funding := replayPoolTx(&chainhash.Hash{}, 100)
 	parent := replayPoolTx(funding.TxIDChainHash(), 99)
 	child := replayPoolTx(parent.TxIDChainHash(), 98)
@@ -87,9 +91,9 @@ func testReplayResetPool(t *testing.T, lateFailure, giveUp bool, coinbaseMaturit
 	require.NoError(t, err)
 	_, bMeta, err := items.blockchainClient.GetBlockHeader(t.Context(), b[0].Hash())
 	require.NoError(t, err)
-	_, err = items.utxoStore.SetMinedMulti(t.Context(), []*chainhash.Hash{funding.TxIDChainHash()}, utxo.MinedBlockInfo{BlockID: genMeta.ID, BlockHeight: 0})
+	_, err = items.utxoStore.SetMinedMulti(t.Context(), []*chainhash.Hash{funding.TxIDChainHash()}, utxo.MinedBlockInfo{BlockID: genMeta.ID, BlockHeight: genMeta.Height})
 	require.NoError(t, err)
-	_, err = items.utxoStore.SetMinedMulti(t.Context(), []*chainhash.Hash{parent.TxIDChainHash()}, utxo.MinedBlockInfo{BlockID: bMeta.ID, BlockHeight: 1})
+	_, err = items.utxoStore.SetMinedMulti(t.Context(), []*chainhash.Hash{parent.TxIDChainHash()}, utxo.MinedBlockInfo{BlockID: bMeta.ID, BlockHeight: bMeta.Height})
 	require.NoError(t, err)
 
 	a := buildChain(a1, 2, 21000)
@@ -256,7 +260,7 @@ func TestReplayBestTipChanges_LowWaterReplaysShortBranch(t *testing.T) {
 
 	// X2 is revalidated and processed again by block validation; Y3 stays the best tip.
 	require.NoError(t, items.blockchainClient.RevalidateBlock(ctx, x2.Hash()))
-	require.NoError(t, items.blockchainClient.SetBlockMinedSet(ctx, x2.Hash()))
+	setBlockMinedSetAtCurrentGeneration(ctx, t, items, x2.Hash())
 	best, _, err = items.blockchainClient.GetBestBlockHeader(ctx)
 	require.NoError(t, err)
 	require.Equal(t, y[1].Hash().String(), best.Hash().String())
@@ -350,7 +354,7 @@ func TestReplayBestTipChanges_DroppedTipNeverAppliedReloadsItsTransactions(t *te
 	require.NoError(t, err)
 	_, err = items.utxoStore.SetMinedMulti(ctx, []*chainhash.Hash{blockOnly.TxIDChainHash()}, utxo.MinedBlockInfo{BlockID: xMeta.ID, BlockHeight: 2, UnsetMined: true})
 	require.NoError(t, err)
-	require.NoError(t, items.blockchainClient.SetBlockMinedSet(ctx, x.Hash()))
+	setBlockMinedSetAtCurrentGeneration(ctx, t, items, x.Hash())
 
 	best, _, err = items.blockchainClient.GetBestBlockHeader(ctx)
 	require.NoError(t, err)
@@ -447,12 +451,16 @@ func TestRestampStaleBranch_WaitsForPendingMinedSet(t *testing.T) {
 	ba.subtreeProcessor = stp
 	stp.Start(ctx)
 
-	genesis := genesisHeader(t, items)
+	// One block above genesis, so the scenario is past regtest's P2SH activation (2): a
+	// transaction mined at height 1 falls under other script rules than the next block, and
+	// block assembly keeps it out.
+	genesis := buildChain(genesisHeader(t, items), 1, 59000)[0]
+	addBlockWithMinedSet(ctx, t, items, genesis)
 	a1 := buildChain(genesis, 1, 60000)[0]
 	addBlockWithMinedSet(ctx, t, items, a1)
-	startReplayAt(t, items, a1, 1)
+	startReplayAt(t, items, a1, 2)
 	stp.InitCurrentBlockHeader(a1)
-	require.NoError(t, items.utxoStore.SetBlockHeight(2))
+	require.NoError(t, items.utxoStore.SetBlockHeight(3))
 
 	// P spends a confirmed transaction, and only Y contains it.
 	funding := replayPoolTx(&chainhash.Hash{}, 100)
@@ -494,11 +502,11 @@ func TestRestampStaleBranch_WaitsForPendingMinedSet(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, pending, 1, "Y must be pending, or the wait returns on its first poll")
 
-	_, err = items.utxoStore.SetMinedMulti(ctx, []*chainhash.Hash{funding.TxIDChainHash()}, utxo.MinedBlockInfo{BlockID: genMeta.ID, BlockHeight: 0, OnLongestChain: true})
+	_, err = items.utxoStore.SetMinedMulti(ctx, []*chainhash.Hash{funding.TxIDChainHash()}, utxo.MinedBlockInfo{BlockID: genMeta.ID, BlockHeight: genMeta.Height, OnLongestChain: true})
 	require.NoError(t, err)
 
 	// setTxMined(Y)'s first chunk already gave P Y's block id with onLongestChain=true.
-	yMined := utxo.MinedBlockInfo{BlockID: yMeta.ID, BlockHeight: 1, OnLongestChain: true}
+	yMined := utxo.MinedBlockInfo{BlockID: yMeta.ID, BlockHeight: yMeta.Height, OnLongestChain: true}
 	_, err = items.utxoStore.SetMinedMulti(ctx, []*chainhash.Hash{blockOnly.TxIDChainHash()}, yMined)
 	require.NoError(t, err)
 
@@ -512,7 +520,7 @@ func TestRestampStaleBranch_WaitsForPendingMinedSet(t *testing.T) {
 			validationDone <- err
 			return
 		}
-		validationDone <- items.blockchainClient.SetBlockMinedSet(ctx, y.Hash())
+		validationDone <- items.blockchainClient.SetBlockMinedSet(ctx, y.Hash(), yMeta.MinedSetGeneration)
 	}()
 
 	require.NoError(t, ba.restampStaleBranch(ctx, []blockHeaderWithMeta{{header: y, meta: yMeta}}, best))

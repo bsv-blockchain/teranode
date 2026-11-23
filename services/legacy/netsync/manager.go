@@ -669,6 +669,9 @@ func maxInFlightForSize(avgSize int64) int {
 	}
 }
 
+// laneTxMetaReceived counts the txmeta entries relay receives, by whether they carry lane positions.
+var laneTxMetaReceived = txmetacache.NewLaneTxMetaReceived("legacy")
+
 // SyncManager is used to communicate block related messages with peers. The
 // SyncManager is started as by executing Start() in a goroutine. Once started,
 // it selects peers to sync from and starts the initial block download. Once the
@@ -688,6 +691,10 @@ type SyncManager struct {
 	// accepting counts, per hash, the accepted copies queued for handleBlockOnDiskMsg and not yet
 	// handled; pipelineBlockDelete treats such a block as parked. Guarded by settlingMu.
 	accepting map[chainhash.Hash]int
+
+	// announced remembers the blocks most recently announced to legacy peers, by the
+	// blocks-final consumer or the reconciler; see runBlockAnnounceReconciler.
+	announced recentAnnouncements
 
 	ctx          context.Context
 	logger       ulogger.Logger
@@ -5128,6 +5135,8 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 
 	sm.startKafkaListeners(ctx, nil)
 
+	go sm.runBlockAnnounceReconciler(ctx, blockAnnounceReconcileInterval)
+
 	return &sm, nil
 }
 
@@ -5318,20 +5327,8 @@ func (sm *SyncManager) processBlocksFinalMessage(msg *kafka.KafkaMessage) error 
 		return nil
 	}
 
-	// create wireBlockHeader
-	wireBlockHeader := header.ToWireBlockHeader()
-
 	sm.logger.Infof("[kafkaBlocksFinalListener] received block final message from Kafka: %s, %s", hash, header.String())
-	sm.peerNotifier.RelayInventory(wire.NewInvVect(wire.InvTypeBlock, hash), wireBlockHeader)
-	sm.peerNotifier.BlockConnected()
-
-	// Raise the known height of every peer that announced this block, as btcd's handleBlockMsg
-	// does. Without it a peer's height moved only when it announced a block whose header this
-	// node already had, so at the tip startSync could find no peer ahead and nothing re-asked a
-	// block whose park record was dropped (2026-10-10, 13 minutes at 970,502).
-	if height, err := safeconversion.Uint32ToInt32(blockMsg.Height); err == nil && height > 0 {
-		sm.peerNotifier.UpdatePeerHeights(hash, height, nil)
-	}
+	sm.announceBlock(hash, header.ToWireBlockHeader(), blockMsg.Height)
 
 	return nil
 }
@@ -5342,13 +5339,30 @@ func (sm *SyncManager) processBlocksFinalMessage(msg *kafka.KafkaMessage) error 
 // For each entry:
 //
 //	[32 bytes] - tx hash (raw bytes)
-//	[1 byte]   - action (0=ADD, 1=DELETE)
+//	[1 byte]   - action (0=ADD, 1=DELETE, 2=ADDLane, 3=ADDOwn)
 //	[4 bytes]  - content length (uint32, little-endian) - 0 for DELETE
-//	[N bytes]  - content (metaBytes) - only for ADD
+//	[N bytes]  - content - for every ADD form, none for DELETE: MetaBytes for ADD, the lane
+//	             encoding for ADDLane, MetaBytes and the own position for ADDOwn
+//	             (docs/references/kafkaMessageFormat.md)
 func (sm *SyncManager) kafkaTXmetaListener(ctx context.Context, kafkaURL *url.URL, groupID string) {
 	kafka.StartKafkaListener(ctx, sm.logger, kafkaURL, groupID, true, func(msg *kafka.KafkaMessage) error {
 		return sm.processTXmetaBatchMessage(msg.Value)
 	}, &sm.settings.Kafka)
+}
+
+// lastTxmetaBucketsWarnNano throttles the BucketsCount-mismatch warning to one
+// line per minute per process: the warning fires from the per-message path.
+var lastTxmetaBucketsWarnNano atomic.Int64
+
+func (sm *SyncManager) warnBucketsMismatch(producerBuckets uint16) {
+	now := time.Now().UnixNano()
+
+	last := lastTxmetaBucketsWarnNano.Load()
+	if now-last < int64(time.Minute) || !lastTxmetaBucketsWarnNano.CompareAndSwap(last, now) {
+		return
+	}
+
+	sm.logger.Warnf("txmeta v2 batch from producer with BucketsCount=%d, this receiver compiled with BucketsCount=%d: cache bucket ranges overlap, partitions contend; rebuild both sides with matching txmetacache build tags", producerBuckets, txmetacache.BucketsCount)
 }
 
 // processTXmetaBatchMessage processes a binary batch message from the txmeta Kafka topic.
@@ -5364,11 +5378,11 @@ func (sm *SyncManager) kafkaTXmetaListener(ctx context.Context, kafkaURL *url.UR
 //	  per entry: [32 hash][1 action][4 contentLen][N content]
 //
 //	v2 (partition-aware)
-//	  [1 byte magic=0xFF][1 byte version=0x02][2 reserved=0][4 entry count LE]
+//	  [1 byte magic=0xFF][1 byte version=0x02][2 bytes uint16 LE BucketsCount][4 entry count LE]
 //	  per entry: [8 xxhash][32 hash][1 action][4 contentLen][N content]
 //
-// v2 detection requires the full 4-byte header signature AND a plausible
-// entry count for the buffer length, otherwise the message is parsed as v1.
+// v2 detection requires the header signature (magic, version and a zero or
+// power-of-two BucketsCount) AND a plausible entry count for the buffer length, otherwise the message is parsed as v1.
 // This avoids misclassifying v1 messages whose entry count happens to begin
 // with 0xFF (counts 255, 511, 767, ...).
 //
@@ -5386,20 +5400,28 @@ func (sm *SyncManager) processTXmetaBatchMessage(data []byte) error {
 		isV2       bool
 	)
 
-	// Speculative v2 detection: require the full header signature
-	// (magic + version + reserved bytes) and an entry count that fits in the
-	// remaining buffer at the minimum v2 entry size. Any failure falls
-	// through to v1 — never silently drops a valid v1 message.
+	// Speculative v2 detection: require the header signature (magic +
+	// version + a plausible power-of-two BucketsCount in bytes 2:4) and an
+	// entry count that fits in the remaining buffer at the minimum v2 entry
+	// size. Any failure falls through to v1 — never silently drops a valid
+	// v1 message. A BucketsCount that differs from this binary's compile-time
+	// count is logged: the batch stays valid, but producer and receiver
+	// cache bucket ranges overlap and partition alignment is lost.
 	if len(data) >= txmetacache.WireV2HeaderLen &&
 		data[0] == txmetacache.WireV2Magic &&
-		data[1] == txmetacache.WireV2Version &&
-		data[2] == 0 && data[3] == 0 {
-		candidateCount := binary.LittleEndian.Uint32(data[4:])
-		remaining := uint64(len(data) - txmetacache.WireV2HeaderLen)
-		if uint64(candidateCount)*uint64(txmetacache.WireV2MinEntrySize) <= remaining {
-			entryCount = candidateCount
-			offset = txmetacache.WireV2HeaderLen
-			isV2 = true
+		data[1] == txmetacache.WireV2Version {
+		if wireBuckets := binary.LittleEndian.Uint16(data[txmetacache.WireV2BucketsOffset:]); wireBuckets == 0 || wireBuckets&(wireBuckets-1) == 0 {
+			candidateCount := binary.LittleEndian.Uint32(data[4:])
+			remaining := uint64(len(data) - txmetacache.WireV2HeaderLen)
+			if uint64(candidateCount)*uint64(txmetacache.WireV2MinEntrySize) <= remaining {
+				entryCount = candidateCount
+				offset = txmetacache.WireV2HeaderLen
+				isV2 = true
+				// Zero is a batch from a pre-buckets producer: nothing to compare.
+				if wireBuckets != 0 && int(wireBuckets) != txmetacache.BucketsCount {
+					sm.warnBucketsMismatch(wireBuckets)
+				}
+			}
 		}
 	}
 
@@ -5441,8 +5463,9 @@ func (sm *SyncManager) processTXmetaBatchMessage(data []byte) error {
 		contentLen := binary.LittleEndian.Uint32(data[offset:])
 		offset += 4
 
-		if action == txmetacache.WireActionADD {
-			// Handle ADD
+		if action == txmetacache.WireActionADD || action == txmetacache.WireActionADDLane || action == txmetacache.WireActionADDOwn {
+			// Handle ADD, in any of its encodings: the validator sends the lane and own ones at
+			// utxostore_laneMigration shadow, and relay needs no position.
 			if offset+int(contentLen) > len(data) {
 				sm.logger.Errorf("[kafkaTXmetaListener] truncated content at entry %d", i)
 				return nil
@@ -5450,6 +5473,32 @@ func (sm *SyncManager) processTXmetaBatchMessage(data []byte) error {
 
 			content := data[offset : offset+int(contentLen)]
 			offset += int(contentLen)
+
+			switch {
+			case action == txmetacache.WireActionADDOwn:
+				laneTxMetaReceived.CountOwn()
+			case action == txmetacache.WireActionADDLane || (sm.settings != nil && sm.settings.UtxoStore.LaneMigration.Stamps()):
+				laneTxMetaReceived.Count(action == txmetacache.WireActionADDLane)
+			}
+
+			switch action {
+			case txmetacache.WireActionADDLane:
+				legacy, err := txmetacache.LaneMetaContent(content)
+				if err != nil {
+					sm.logger.Errorf("Failed to decode lane tx meta data for %s: %v", hash, err)
+					continue
+				}
+
+				content = legacy
+			case txmetacache.WireActionADDOwn:
+				legacy, err := txmetacache.OwnCacheContent(content)
+				if err != nil {
+					sm.logger.Errorf("Failed to decode own-position tx meta data for %s: %v", hash, err)
+					continue
+				}
+
+				content = legacy
+			}
 
 			sm.logger.Debugf("Received tx message from Kafka: %v", hash)
 

@@ -14,6 +14,7 @@ import (
 	"github.com/bsv-blockchain/teranode/services/blockchain/blockchain_api"
 	"github.com/bsv-blockchain/teranode/stores/blob/storetypes"
 	"github.com/bsv-blockchain/teranode/stores/blockchain/options"
+	"github.com/bsv-blockchain/teranode/util/lane"
 )
 
 // Subscriber source identifiers passed to Subscribe(). Services use these
@@ -97,6 +98,17 @@ type ClientI interface {
 
 	// AssignBlockID returns a stable block ID for a given block hash (idempotent per hash).
 	AssignBlockID(ctx context.Context, blockHash *chainhash.Hash) (uint64, error)
+
+	// OpenLaneLease opens a lease on a free lane, never 254 or 255, with its first grant. It returns
+	// an error when no lane is free, and the caller retries.
+	OpenLaneLease(ctx context.Context, holder string) (lane.LeaseID, lane.Grant, error)
+
+	// RenewLaneLease renews a lease and, with WantGrant, records the next grant. A closed lease is
+	// answered with Closed set, not an error, and the holder opens a new lease.
+	RenewLaneLease(ctx context.Context, r lane.Renewal) (lane.RenewResult, error)
+
+	// ReleaseLaneLease closes a lease cleanly. alreadyClosed reports a lease that was closed before.
+	ReleaseLaneLease(ctx context.Context, r lane.Release) (alreadyClosed bool, err error)
 
 	// SendNotification broadcasts a notification to subscribers.
 	//
@@ -392,58 +404,6 @@ type ClientI interface {
 	// - Error if the header retrieval or ancestor finding fails
 	GetBlockHeadersFromCommonAncestor(ctx context.Context, hashTarget *chainhash.Hash, blockLocatorHashes []chainhash.Hash, maxHeaders uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error)
 
-	// GetLatestBlockHeaderFromBlockLocator retrieves the latest block header from a block locator.
-	//
-	// This method finds the latest block header that can be reached from a given block locator,
-	// starting from the best block hash. It traverses the blockchain using the provided locator
-	// hashes to find the most recent header that is part of the main chain.
-	//
-	// Parameters:
-	// - ctx: Context for the operation with timeout and cancellation support
-	// - bestBlockHash: Hash of the current best block to start the search from
-	// - blockLocator: Array of hashes representing the block locator to traverse
-	//
-	// Returns:
-	// - BlockHeader containing the latest header found
-	// - BlockHeaderMeta containing additional metadata about the header
-	// - Error if the header retrieval fails or if no valid header is found in the locator
-	GetLatestBlockHeaderFromBlockLocator(ctx context.Context, bestBlockHash *chainhash.Hash, blockLocator []chainhash.Hash) (*model.BlockHeader, *model.BlockHeaderMeta, error)
-
-	// GetBlockHeadersFromOldest retrieves block headers starting from the oldest block.
-	//
-	// This method fetches a sequence of block headers starting from the specified hash,
-	// moving forward in the chain order. This is useful for retrieving headers in ascending
-	// order, such as when processing blocks from the genesis block onward.
-	//
-	// Parameters:
-	// - ctx: Context for the operation with timeout and cancellation support
-	// - chainTipHash: Hash of the current chain tip to ensure the blocks are on the same chain
-	// - targetHash: Hash of the starting block (inclusive)
-	// - numberOfHeaders: Maximum number of headers to retrieve
-	//
-	// Returns:
-	// - Array of BlockHeader objects in ascending order
-	// - Array of corresponding BlockHeaderMeta objects with additional metadata
-	// - Error if the header retrieval fails or if the blocks aren't on the same chain
-	GetBlockHeadersFromOldest(ctx context.Context, chainTipHash, targetHash *chainhash.Hash, numberOfHeaders uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error)
-
-	// GetBlockHeadersFromTill retrieves block headers between two blocks.
-	//
-	// This method fetches a sequence of block headers starting from one specified hash
-	// and ending at another hash, inclusive of both endpoints. This allows efficient
-	// retrieval of a specific section of the blockchain's headers.
-	//
-	// Parameters:
-	// - ctx: Context for the operation with timeout and cancellation support
-	// - blockHashFrom: Hash of the starting block (inclusive)
-	// - blockHashTill: Hash of the ending block (inclusive)
-	//
-	// Returns:
-	// - Array of BlockHeader objects in chain order
-	// - Array of corresponding BlockHeaderMeta objects with additional metadata
-	// - Error if the header retrieval fails or if the blocks aren't on the same chain
-	GetBlockHeadersFromTill(ctx context.Context, blockHashFrom *chainhash.Hash, blockHashTill *chainhash.Hash) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error)
-
 	// GetBlockHeadersFromHeight retrieves block headers from a specific height.
 	//
 	// This method fetches a sequence of block headers starting from the specified height
@@ -462,7 +422,7 @@ type ClientI interface {
 	GetBlockHeadersFromHeight(ctx context.Context, height, limit uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error)
 
 	// BlocksBetterThan returns the valid blocks that sort better than after in the order the
-	// store picks its best tip by (most chain work, then lowest peer id, then lowest block id),
+	// store picks its best tip by (most chain work, then lowest block id),
 	// worst first, at or above minHeight, at most limit of them. When from is not nil it also
 	// returns the valid blocks that sort better than or level with from.
 	//
@@ -637,10 +597,15 @@ type ClientI interface {
 	// Parameters:
 	// - ctx: Context for the operation with timeout and cancellation support
 	// - blockHash: Hash of the block to mark as mined
+	// - minedSetGeneration: BlockHeaderMeta.MinedSetGeneration read from GetBlockHeader
+	//   when the caller's tagging run started. The write is refused if it has moved since,
+	//   because ClearBlockMinedSet, InvalidateBlock or RevalidateBlock cleared mined_set so
+	//   the block is processed again.
 	//
 	// Returns:
+	// - errors.ErrStateError if the block's mined_set generation no longer equals minedSetGeneration
 	// - Error if the operation fails, nil on success
-	SetBlockMinedSet(ctx context.Context, blockHash *chainhash.Hash) error
+	SetBlockMinedSet(ctx context.Context, blockHash *chainhash.Hash, minedSetGeneration uint64) error
 
 	// ClearBlockMinedSet resets the mined_set flag to false for a block.
 	//
@@ -783,7 +748,8 @@ type ClientI interface {
 	// - blockIDs: Array of block IDs to check
 	//
 	// Returns:
-	// - Boolean indicating whether all the blocks are in the main chain (true) or not (false)
+	// - Boolean indicating whether ANY of the blocks is in the main chain (true) or none is (false).
+	//   Callers rely on this any-of semantics; an empty blockIDs slice returns false.
 	// - Error if the check operation fails
 	CheckBlockIsInCurrentChain(ctx context.Context, blockIDs []uint32) (bool, error)
 

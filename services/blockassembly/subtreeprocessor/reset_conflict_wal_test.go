@@ -103,7 +103,7 @@ func newWALTestChain(t *testing.T) (blockchain.ClientI, *walTestChain) {
 	return client, chain
 }
 
-func newResetWALTestProcessor(t *testing.T, start bool) (*SubtreeProcessor, *countPendingScans, *blob_memory.Memory, *walTestChain) {
+func newResetWALTestProcessor(t *testing.T, start bool, opts ...Options) (*SubtreeProcessor, *countPendingScans, *blob_memory.Memory, *walTestChain) {
 	t.Helper()
 
 	ctx := t.Context()
@@ -127,7 +127,7 @@ func newResetWALTestProcessor(t *testing.T, start bool) (*SubtreeProcessor, *cou
 		}
 	}()
 
-	stp, err := NewSubtreeProcessor(ctx, ulogger.TestLogger{}, test.CreateBaseTestSettings(t), subtreeStore, blockchainClient, store, newSubtreeChan)
+	stp, err := NewSubtreeProcessor(ctx, ulogger.TestLogger{}, test.CreateBaseTestSettings(t), subtreeStore, blockchainClient, store, newSubtreeChan, opts...)
 	require.NoError(t, err)
 
 	if start {
@@ -288,9 +288,13 @@ func storeTestSubtree(t *testing.T, subtreeStore *blob_memory.Memory, conflictin
 	require.NoError(t, subtreeStore.Set(t.Context(), st.RootHash()[:], fileformat.FileTypeSubtree, subtreeBytes))
 
 	// A move back reads the subtree meta too.
+	// Node 0 is the coinbase placeholder, which has no parents; every tx after it
+	// takes its parents from its inputs, as the meta reader requires (issue 1638).
 	meta := subtreepkg.NewSubtreeMeta(st)
-	for i := range st.Nodes {
-		require.NoError(t, meta.SetTxInpoints(i, subtreepkg.NewTxInpoints()))
+	require.NoError(t, meta.SetTxInpoints(0, subtreepkg.NewTxInpoints()))
+
+	for _, tx := range txs {
+		require.NoError(t, meta.SetTxInpointsFromTx(tx))
 	}
 
 	metaBytes, err := meta.Serialize()

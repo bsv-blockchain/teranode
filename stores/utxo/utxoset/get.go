@@ -50,11 +50,12 @@ func (s *Store) Get(ctx context.Context, hash *chainhash.Hash, fieldNames ...fie
 	// goroutines, and each of those is otherwise its own round trip.
 	wantChildren := wantsConflictingChildren(fieldNames)
 	wantBody := wantsBody(fieldNames)
+	wantLane := wantsLanePosition(fieldNames)
 
 	if s.getBatcher != nil {
-		data, err = s.getBatched(ctx, hash, wantChildren, wantBody)
+		data, err = s.getBatched(ctx, hash, wantChildren, wantBody, wantLane)
 	} else {
-		data, err = s.getDirect(ctx, hash, wantChildren, wantBody)
+		data, err = s.getDirect(ctx, hash, wantChildren, wantBody, wantLane)
 	}
 
 	if err != nil {
@@ -77,8 +78,8 @@ func (s *Store) Get(ctx context.Context, hash *chainhash.Hash, fieldNames ...fie
 // and a second copy of it here is a defect waiting for one copy to be fixed and the other
 // forgotten.
 func (s *Store) getDirect(ctx context.Context, hash *chainhash.Hash,
-	wantChildren, wantBody bool) (*meta.Data, error) {
-	res, err := s.lookupMany(ctx, []chainhash.Hash{*hash}, wantChildren, !wantBody)
+	wantChildren, wantBody, wantLane bool) (*meta.Data, error) {
+	res, err := s.lookupManyLane(ctx, []chainhash.Hash{*hash}, wantChildren, !wantBody, wantLane)
 	if err != nil {
 		return nil, err
 	}

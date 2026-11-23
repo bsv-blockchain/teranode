@@ -10,6 +10,7 @@ import (
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
+	"github.com/bsv-blockchain/teranode/util/lane"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -365,7 +366,7 @@ func writeCreateThenSpend(ctx context.Context, s SpendAndCreateMultiStore, width
 
 	// Each call's options are the transaction's own, followed by the wave's: nothing for a
 	// combined call and create-only for the rest in the first wave, spend-only and
-	// RequireParentOutputs in the second. They are built per call, so a list holds no options
+	// RequireParentOutputs in the second, with the lane position the first wave wrote. They are built per call, so a list holds no options
 	// for its transactions while it runs; the wave's own are built once here.
 	createOnly, spendOnly, requireParentOutputs := WithCreateOnly(), WithSpendOnly(), withRequireParentOutputs()
 
@@ -446,7 +447,18 @@ func writeCreateThenSpend(ctx context.Context, s SpendAndCreateMultiStore, width
 	notStarted = runDetachedWave(ctx, bound, widths.Spend, toSpend, func(callCtx context.Context, i int) {
 		spent[i] = true
 
-		_, spends, err := s.SpendAndCreate(callCtx, txs[i], blockHeight, items.option(i), spendOnly, requireParentOutputs)
+		// The first wave wrote the record with its lane position; the spends name it, so a store
+		// that records the spender's position in each parent's slot records this one. A record that
+		// already existed came back with no Meta, and its spends go without, counted as missing.
+		var spends []*Spend
+		var err error
+
+		if md := results[i].Meta; md != nil && md.LanePosition != lane.None {
+			_, spends, err = s.SpendAndCreate(callCtx, txs[i], blockHeight, items.option(i), spendOnly, requireParentOutputs, WithLanePosition(md.LanePosition))
+		} else {
+			_, spends, err = s.SpendAndCreate(callCtx, txs[i], blockHeight, items.option(i), spendOnly, requireParentOutputs)
+		}
+
 		if err != nil {
 			results[i] = SpendAndCreateMultiResult{Status: MultiTxFailed, Meta: results[i].Meta, Spends: spends, Err: err}
 
@@ -517,6 +529,7 @@ func (l *listItems) option(i int) CreateOption {
 		o.TxIDs = nil
 		o.SubtreeIdxs = nil
 		o.BelowCheckpoint = false
+		o.ParentLanePositions = nil
 		o.TxID = &l.txids[i]
 		o.MinedBlockInfos = l.base.MinedBlockInfos[:l.k:l.k]
 
@@ -600,6 +613,10 @@ func PrepareSpendAndCreateMulti(txs []*bt.Tx, opts ...CreateOption) (*SpendAndCr
 
 	if options.TxIDs != nil && len(options.TxIDs) != len(txs) {
 		return nil, newSpendAndCreateMultiRefusedError("WithTXIDs has %d txids for %d transactions", len(options.TxIDs), len(txs))
+	}
+
+	if options.LanePosition != 0 {
+		return nil, newSpendAndCreateMultiRefusedError("WithLanePosition describes one record; a list takes its positions from the store's source")
 	}
 
 	if options.SubtreeIdxs != nil {

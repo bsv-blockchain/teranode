@@ -1006,7 +1006,7 @@ func TestAerospike(t *testing.T) {
 		assert.Nil(t, rec.Bins["creating"])
 
 		// Increment via multi API
-		require.NoError(t, store.IncrementSpentRecordsMulti([]*chainhash.Hash{bigTx.TxIDChainHash()}, 1, 0))
+		require.NoError(t, store.IncrementSpentRecordsMulti(context.Background(), []*chainhash.Hash{bigTx.TxIDChainHash()}, 1, 0))
 
 		rec2, err := client.Get(util.GetAerospikeReadPolicy(tSettings), bigTxKey)
 		require.NoError(t, err)
@@ -1065,7 +1065,7 @@ func TestAerospike(t *testing.T) {
 		var invalid chainhash.Hash // zero hash, not present
 		ids := []*chainhash.Hash{valid, &invalid}
 
-		aggErr := store.IncrementSpentRecordsMulti(ids, 1, 0)
+		aggErr := store.IncrementSpentRecordsMulti(context.Background(), ids, 1, 0)
 		require.Error(t, aggErr)
 		t.Logf("Error: %v", aggErr)
 
@@ -1875,7 +1875,7 @@ func TestCreateZeroSat(t *testing.T) {
 	assert.NotNil(t, response)
 	assert.Equal(t, 2, response.Bins["totalUtxos"])
 	assert.Equal(t, 2, response.Bins["spentUtxos"])
-	assert.Equal(t, 11, response.Bins[fields.DeleteAtHeight.String()])
+	require.Equal(t, 133, response.Bins[fields.DeleteAtHeight.String()])
 }
 
 // TestAerospikeOutpointBatcherDrainMode is a happy-path smoke test for the
@@ -2255,7 +2255,8 @@ func TestRespendExpiredChild(t *testing.T) {
 	key, err := aerospike.NewKey(store.GetNamespace(), store.GetName(), tx.TxIDChainHash().CloneBytes())
 	require.NoError(t, err)
 
-	// mark the child as deleted
+	// mark the child as deleted: the output names this spender, so a spend by
+	// it is a replay.
 	bin := aerospike.NewBin(fields.DeletedChildren.String(), map[string]bool{
 		spendingTx1.TxIDChainHash().String(): true,
 	})
@@ -2266,7 +2267,159 @@ func TestRespendExpiredChild(t *testing.T) {
 	spend, err := store.Spend(ctx, spendingTx1, 1)
 	require.Error(t, err)
 	assert.Error(t, spend[0].Err)
-	assert.ErrorIs(t, spend[0].Err, errors.ErrUtxoError)
+	// The dedicated code, not the generic ErrUtxoError: utxo.IsSpendRollbackError keys
+	// on it to roll back the sibling spends of the same transaction.
+	assert.ErrorIs(t, spend[0].Err, errors.ErrUtxoSpendingTxPruned)
+	assert.Contains(t, spend[0].Err.Error(), "spending transaction was pruned")
+}
+
+// TestReplayMarkerRule pins how the Lua spend reads a deletedChildren marker:
+// it refuses the marked child only while the output still names that child as
+// its spender. An older pruner wrote a marker for every deleted child,
+// conflicting losers included, so a marker for a loser L must never refuse L's
+// spend of an output L does not hold: doing so turns a block the rest of the
+// network accepts into an invalid one.
+func TestReplayMarkerRule(t *testing.T) {
+	type outputState int
+
+	const (
+		outputUnspent outputState = iota
+		outputSpentByOther
+		outputSpentBySpender
+	)
+
+	cases := []struct {
+		name   string
+		marker interface{}
+		output outputState
+		// wantPruned: the spend answers ErrUtxoSpendingTxPruned; otherwise
+		// wantSpent says whether it answers ErrSpent or succeeds.
+		wantPruned bool
+		wantSpent  bool
+	}{
+		{name: "marker_loser_output_held_by_other", marker: true, output: outputSpentByOther, wantSpent: true},
+		{name: "marker_loser_output_unspent", marker: true, output: outputUnspent},
+		{name: "marker_output_names_spender", marker: true, output: outputSpentBySpender, wantPruned: true},
+	}
+
+	for _, mode := range []struct {
+		name        string
+		expressions bool
+	}{{name: "lua"}, {name: "expressions", expressions: true}} {
+		t.Run(mode.name, func(t *testing.T) {
+			logger := ulogger.NewErrorTestLogger(t)
+			tSettings := test.CreateBaseTestSettings(t)
+
+			if mode.expressions {
+				// The expression fast path needs one utxo per record. A marker
+				// hit there is FILTERED_OUT and re-issued through Lua.
+				tSettings.Aerospike.EnableSpendFilterExpressions = true
+				tSettings.UtxoStore.UtxoBatchSize = 1
+			}
+
+			client, store, ctx, deferFn := initAerospike(t, tSettings, logger)
+			t.Cleanup(deferFn)
+
+			for i, tc := range cases {
+				t.Run(tc.name, func(t *testing.T) {
+					parent := bt.NewTx()
+					require.NoError(t, parent.From("1111111111111111111111111111111111111111111111111111111111111111", uint32(i), "51", 30000))
+					require.NoError(t, parent.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 4000))
+
+					_, err := store.Create(ctx, parent, 0)
+					require.NoError(t, err)
+
+					spender := utxo2.GetSpendingTx(parent, 0)
+					other := utxo2.GetSpendingTx(parent, 0)
+					require.NotEqual(t, spender.TxIDChainHash().String(), other.TxIDChainHash().String())
+
+					switch tc.output {
+					case outputSpentByOther:
+						_, err = store.Spend(ctx, other, 1)
+						require.NoError(t, err)
+					case outputSpentBySpender:
+						_, err = store.Spend(ctx, spender, 1)
+						require.NoError(t, err)
+					}
+
+					key, err := aerospike.NewKey(store.GetNamespace(), store.GetName(), parent.TxIDChainHash().CloneBytes())
+					require.NoError(t, err)
+					require.NoError(t, client.PutBins(nil, key, aerospike.NewBin(fields.DeletedChildren.String(),
+						map[interface{}]interface{}{spender.TxIDChainHash().String(): tc.marker})))
+
+					_, err = store.Spend(ctx, spender, 1)
+
+					switch {
+					case tc.wantPruned:
+						require.ErrorIs(t, err, errors.ErrUtxoSpendingTxPruned)
+					case tc.wantSpent:
+						require.Error(t, err)
+						require.NotErrorIs(t, err, errors.ErrUtxoSpendingTxPruned, "a marker for a spender the output never named must not answer as a replay")
+						require.ErrorIs(t, err, errors.ErrSpent)
+					default:
+						require.NoError(t, err, "a marker for a spender the output never named must not refuse its spend")
+					}
+				})
+			}
+		})
+	}
+}
+
+// TestBatchedSpendKeepsReplayPastTheErrorCap: replay C spends 11 outputs. The
+// first 10 are already spent by another transaction and answer ErrSpent; only
+// the eleventh parent carries C's marker. The batched spend caps its aggregate
+// at 10 errors, so the marker answer reaches the caller only because it is put
+// first, and without it the validator sees a plain double spend.
+func TestBatchedSpendKeepsReplayPastTheErrorCap(t *testing.T) {
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings := test.CreateBaseTestSettings(t)
+
+	client, store, ctx, deferFn := initAerospike(t, tSettings, logger)
+	t.Cleanup(deferFn)
+
+	const inputs = 11
+
+	parents := make([]*bt.Tx, inputs)
+	replay := bt.NewTx()
+	other := bt.NewTx()
+
+	for i := range parents {
+		parents[i] = bt.NewTx()
+		require.NoError(t, parents[i].From("2222222222222222222222222222222222222222222222222222222222222222", uint32(i), "51", 30000))
+		require.NoError(t, parents[i].PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 4000))
+
+		_, err := store.Create(ctx, parents[i], 0)
+		require.NoError(t, err)
+
+		require.NoError(t, replay.From(parents[i].TxID(), 0, parents[i].Outputs[0].LockingScript.String(), parents[i].Outputs[0].Satoshis))
+
+		if i < inputs-1 {
+			require.NoError(t, other.From(parents[i].TxID(), 0, parents[i].Outputs[0].LockingScript.String(), parents[i].Outputs[0].Satoshis))
+		}
+	}
+
+	require.NoError(t, replay.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 30000))
+	require.NoError(t, other.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 20000))
+
+	// C's original spend of every output, then the first 10 released and taken
+	// by another transaction, so only the eleventh output still names C.
+	replaySpends, err := store.Spend(ctx, replay, 1)
+	require.NoError(t, err, "fixture: C's original spend")
+	require.NoError(t, store.Unspend(ctx, replaySpends[:inputs-1]))
+
+	_, err = store.Spend(ctx, other, 1)
+	require.NoError(t, err, "fixture: the first 10 outputs are spent by another transaction")
+
+	key, err := aerospike.NewKey(store.GetNamespace(), store.GetName(), parents[inputs-1].TxIDChainHash().CloneBytes())
+	require.NoError(t, err)
+	require.NoError(t, client.PutBins(nil, key, aerospike.NewBin(fields.DeletedChildren.String(),
+		map[interface{}]interface{}{replay.TxIDChainHash().String(): true})))
+
+	spends, err := store.Spend(ctx, replay, 1)
+	require.Error(t, err)
+	require.Len(t, spends, inputs)
+	require.ErrorIs(t, spends[inputs-1].Err, errors.ErrUtxoSpendingTxPruned, "fixture: the last input meets the marker")
+	require.ErrorIs(t, err, errors.ErrUtxoSpendingTxPruned, "the marker answer survives the cap on the aggregate")
 }
 
 func TestStore_AerospikeTwoPhaseCommit(t *testing.T) {
@@ -2595,121 +2748,4 @@ func TestAerospikeCleanupService(t *testing.T) {
 
 	// Start the cleanup service
 	cleanupService.Start(ctx)
-}
-
-func TestDeletedChildren(t *testing.T) {
-	logger := ulogger.NewErrorTestLogger(t)
-	tSettings := test.CreateBaseTestSettings(t)
-
-	client, store, ctx, deferFn := initAerospike(t, tSettings, logger)
-
-	t.Cleanup(func() {
-		deferFn()
-	})
-
-	privKey, _ := bec.PrivateKeyFromBytes([]byte("ALWAYS_THE_SAME"))
-
-	// Create the coinbase tx
-	coinbaseTx := transactions.Create(t,
-		transactions.WithCoinbaseData(100, "/Test miner/"),
-		transactions.WithP2PKHOutputs(1, 5_000_000_000, privKey.PubKey()),
-	)
-
-	_, err := store.Create(ctx, coinbaseTx, 0, utxo.WithMinedBlockInfo(utxo.MinedBlockInfo{
-		BlockID:        1,
-		BlockHeight:    1,
-		OnLongestChain: true,
-	}))
-	require.NoError(t, err)
-
-	t.Logf("Coinbase tx: %s", coinbaseTx.TxIDChainHash().String())
-
-	// Create the parentTx with 500 outputs
-	parentTxOptions := []transactions.TxOption{
-		transactions.WithInput(coinbaseTx, 0, privKey),
-	}
-
-	for i := 0; i < 500; i++ {
-		parentTxOptions = append(parentTxOptions, transactions.WithP2PKHOutputs(1, 10_000_000, privKey.PubKey()))
-	}
-
-	parentTx := transactions.Create(t, parentTxOptions...)
-
-	_, err = store.Create(ctx, parentTx, 0, utxo.WithMinedBlockInfo(utxo.MinedBlockInfo{
-		BlockID:        1,
-		BlockHeight:    1,
-		OnLongestChain: true,
-	}))
-	require.NoError(t, err)
-
-	t.Logf("Parent tx: %s", parentTx.TxIDChainHash().String())
-
-	// Create the childTx with 100 outputs
-	childTxOptions := []transactions.TxOption{
-		transactions.WithInput(parentTx, 0, privKey),
-	}
-
-	for i := 0; i < 100; i++ {
-		childTxOptions = append(childTxOptions, transactions.WithP2PKHOutputs(1, 100_000, privKey.PubKey()))
-	}
-
-	childTx := transactions.Create(t, childTxOptions...)
-
-	_, err = store.Spend(ctx, childTx, 1)
-	require.NoError(t, err)
-
-	_, err = store.Create(ctx, childTx, 0, utxo.WithMinedBlockInfo(utxo.MinedBlockInfo{
-		BlockID:        1,
-		BlockHeight:    1,
-		OnLongestChain: true,
-	}))
-
-	require.NoError(t, err)
-
-	t.Logf("Child tx: %s", childTx.TxIDChainHash().String())
-
-	// Now we spend all the outputs in the childTx so it can be deleted...
-	for i := 0; i < len(childTx.Outputs); i++ {
-		spendTx := transactions.Create(t,
-			transactions.WithInput(childTx, uint32(i), privKey),
-			transactions.WithP2PKHOutputs(1, 100, privKey.PubKey()),
-		)
-
-		_, err = store.Spend(ctx, spendTx, 1)
-		require.NoError(t, err)
-	}
-
-	parentKey, err := aerospike.NewKey(store.GetNamespace(), store.GetName(), parentTx.TxIDChainHash().CloneBytes())
-	require.NoError(t, err)
-
-	childKey, err := aerospike.NewKey(store.GetNamespace(), store.GetName(), childTx.TxIDChainHash().CloneBytes())
-	require.NoError(t, err)
-
-	childResp, err := client.Get(nil, childKey, fields.DeleteAtHeight.String())
-	require.NoError(t, err)
-
-	assert.Equal(t, 11, childResp.Bins[fields.DeleteAtHeight.String()])
-
-	opts := pruner.Options{
-		Ctx:           ctx,
-		Logger:        logger,
-		Client:        client,
-		ExternalStore: memory.New(),
-		Namespace:     store.GetNamespace(),
-		Set:           store.GetName(),
-		IndexWaiter:   &mockIndexWaiter{},
-		LuaPackage:    teranode_aerospike.LuaPackage,
-	}
-
-	cleanupService, err := pruner.NewService(tSettings, opts)
-	require.NoError(t, err)
-
-	err = cleanupService.ProcessSingleRecord(childTx.TxIDChainHash(), childTx.Inputs)
-	require.NoError(t, err)
-
-	parentResp, err := client.Get(nil, parentKey, fields.DeletedChildren.String())
-	require.NoError(t, err)
-
-	deletedChildrenMap := parentResp.Bins[fields.DeletedChildren.String()].(map[interface{}]interface{})
-	assert.Len(t, deletedChildrenMap, 1)
 }

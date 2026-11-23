@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"math"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -34,6 +35,7 @@ import (
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/pkg/urlutil"
 	"github.com/bsv-blockchain/teranode/services/blockchain/blockchain_api"
+	"github.com/bsv-blockchain/teranode/services/p2p/peerregistry"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/blob"
 	blobstoreoptions "github.com/bsv-blockchain/teranode/stores/blob/options"
@@ -46,6 +48,7 @@ import (
 	"github.com/bsv-blockchain/teranode/util/health"
 	"github.com/bsv-blockchain/teranode/util/kafka"
 	kafkamessage "github.com/bsv-blockchain/teranode/util/kafka/kafka_message"
+	"github.com/bsv-blockchain/teranode/util/lane"
 	"github.com/bsv-blockchain/teranode/util/tracing"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
@@ -407,6 +410,10 @@ func (b *Blockchain) HealthGRPC(ctx context.Context, _ *emptypb.Empty) (*blockch
 // Returns:
 // - Error if initialization fails, nil on success
 func (b *Blockchain) Init(ctx context.Context) error {
+	if err := b.settings.BlockChain.CheckLaneLease(); err != nil {
+		return err
+	}
+
 	b.finiteStateMachine = b.NewFiniteStateMachine()
 
 	// check if we are in local testing mode with a defined target state for the FSM
@@ -528,7 +535,7 @@ const (
 	maxNotificationMetadataFieldLen = 256
 
 	// maxBlockHeadersPerRequest bounds the header-only RPCs' (GetBlockHeaders,
-	// GetBlockHeadersFromOldest, GetBlockHeadersToCommonAncestor,
+	// GetBlockHeadersToCommonAncestor,
 	// GetBlockHeadersFromCommonAncestor, GetBlockHeadersFromHeight,
 	// LocateBlockHeaders) caller-supplied header counts. The store's
 	// preallocFor already bounds the initial slice capacity, but not the
@@ -747,6 +754,9 @@ func (b *Blockchain) Start(ctx context.Context, readyCh chan<- struct{}) error {
 
 	// Start batch token cleanup
 	go b.cleanupExpiredBatchTokens()
+
+	// Close lane leases whose holders went silent.
+	go b.startLaneLeaseSweep(ctx)
 
 	if err := b.startHTTP(ctx); err != nil {
 		return errors.WrapGRPC(err)
@@ -1087,19 +1097,16 @@ func (b *Blockchain) startSubscriptions() {
 const sendDeadline = 5 * time.Second
 
 // minPeerRegistryTTL is the floor applied to an operator-configured
-// p2p_peer_registry_ttl. A connected peer republishes node_status every
-// nodeStatusPublishInterval (10s, see services/p2p/Server.go), which refreshes
-// LastSeen via Register (services/blockchain/peer_registry.go), and the
-// gossip-handler batcher coalesces those refreshes for up to one minute
-// (registryReassertTTL, services/p2p/peer_registry_batcher.go) before
-// re-asserting. A TTL below this floor risks the cleanup loop expiring an
-// actively-connected peer between its own batched refreshes — the peer then
-// fails IsPeerUnhealthy (services/p2p/handle_catchup_metrics.go), which gates
-// it out of catchup, and drops any not-yet-flushed validated-header progress
-// (RecordValidatedPeerProgress, services/blockchain/peer_registry.go). Five
-// minutes is 5x the batcher's reassert window and 30x the publish interval,
-// comfortably covering a missed beat or two of either.
-const minPeerRegistryTTL = 5 * time.Minute
+// p2p_peer_registry_ttl. It is not restated arithmetic: the number is derived
+// in one place - services/p2p/peerregistry - from the two P2P cadences it
+// exists to cover (node-status publishes every NodeStatusPublishInterval
+// refreshing LastSeen via Register, coalesced by the gossip batcher for up to
+// RegistryReassertTTL). A TTL below the floor risks the cleanup loop expiring
+// an actively-connected peer between its own batched refreshes - the peer
+// then fails IsPeerUnhealthy (services/p2p/handle_catchup_metrics.go), which
+// gates it out of catchup, and drops any not-yet-flushed validated-header
+// progress (RecordValidatedPeerProgress, services/blockchain/peer_registry.go).
+const minPeerRegistryTTL = peerregistry.MinTTL
 
 // resolvePeerRegistryTTL applies the same coercion Server.go has always
 // applied for ttl<=0 (select the 24h default) and adds a floor for a
@@ -1333,6 +1340,17 @@ func (b *Blockchain) AddBlock(ctx context.Context, request *blockchain_api.AddBl
 	}
 	if request.OptionID != 0 {
 		storeBlockOptions = append(storeBlockOptions, blockchainoptions.WithID(request.OptionID))
+	}
+
+	// The block's lane map rows, at utxostore_laneMigration shadow. They are measured, never
+	// acted on, so rows that do not even parse are dropped and the block is stored without them.
+	if len(request.LaneMapRows) > 0 {
+		if laneRows, laneErr := laneMapRowsFromProto(request.LaneMapRows); laneErr != nil {
+			lane.CountRowInsertFailure()
+			b.logger.Warnf("[Blockchain][AddBlock][%s] dropping its lane map rows: %v", header.Hash().String(), laneErr)
+		} else {
+			storeBlockOptions = append(storeBlockOptions, blockchainoptions.WithLaneMapRows(laneRows))
+		}
 	}
 
 	ID, height, err := b.store.StoreBlock(ctx, block, request.PeerId, storeBlockOptions...)
@@ -1629,6 +1647,223 @@ func (b *Blockchain) AssignBlockID(ctx context.Context, req *blockchain_api.Assi
 	return &blockchain_api.AssignBlockIDResponse{BlockId: id}, nil
 }
 
+// maxLaneHolderBytes is the longest holder name a hand-out accepts. Each hand-out keeps its holder
+// for ever in the insert-only lane_handout table, so the length has to be bounded.
+const maxLaneHolderBytes = 256
+
+// OpenLaneLease opens a lease on a free lane for a record-creating process, with its first grant.
+func (b *Blockchain) OpenLaneLease(ctx context.Context, req *blockchain_api.OpenLaneLeaseRequest) (*blockchain_api.LaneLeaseGrant, error) {
+	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "OpenLaneLease",
+		tracing.WithParentStat(b.stats),
+		tracing.WithDebugLogMessage(b.logger, "[OpenLaneLease] called by %s", req.GetHolder()),
+	)
+	defer deferFn()
+
+	id, g, err := openLaneLease(ctx, b.store, b.settings, req.GetHolder())
+	if err != nil {
+		return nil, errors.WrapGRPC(err)
+	}
+
+	return &blockchain_api.LaneLeaseGrant{LeaseId: id[:], Lane: uint32(g.Lane), First: g.First, Last: g.Last}, nil
+}
+
+// RenewLaneLease renews a lane lease and, if asked, grants the next stretch of positions.
+func (b *Blockchain) RenewLaneLease(ctx context.Context, req *blockchain_api.RenewLaneLeaseRequest) (*blockchain_api.RenewLaneLeaseResponse, error) {
+	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "RenewLaneLease",
+		tracing.WithParentStat(b.stats),
+	)
+	defer deferFn()
+
+	id, l, err := leaseFromRequest(req.GetLeaseId(), req.GetLane())
+	if err != nil {
+		return nil, errors.WrapGRPC(err)
+	}
+
+	res, err := renewLaneLease(ctx, b.store, b.settings, lane.Renewal{
+		Lease:     id,
+		Lane:      l,
+		Rate:      req.GetRate(),
+		WantGrant: req.GetWantGrant(),
+		Settles:   lane.Settles{First: req.GetSettlesFirst(), LastTaken: req.GetSettlesLastTaken()},
+	})
+	if err != nil {
+		return nil, errors.WrapGRPC(err)
+	}
+
+	return &blockchain_api.RenewLaneLeaseResponse{Closed: res.Closed, Granted: res.Granted, First: res.Grant.First, Last: res.Grant.Last}, nil
+}
+
+// ReleaseLaneLease closes a lane lease cleanly.
+func (b *Blockchain) ReleaseLaneLease(ctx context.Context, req *blockchain_api.ReleaseLaneLeaseRequest) (*blockchain_api.ReleaseLaneLeaseResponse, error) {
+	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "ReleaseLaneLease",
+		tracing.WithParentStat(b.stats),
+	)
+	defer deferFn()
+
+	id, l, err := leaseFromRequest(req.GetLeaseId(), req.GetLane())
+	if err != nil {
+		return nil, errors.WrapGRPC(err)
+	}
+
+	already, err := releaseLaneLease(ctx, b.store, lane.Release{
+		Lease:     id,
+		Lane:      l,
+		LastTaken: req.GetLastTaken(),
+		Settles:   lane.Settles{First: req.GetSettlesFirst(), LastTaken: req.GetSettlesLastTaken()},
+	})
+	if err != nil {
+		return nil, errors.WrapGRPC(err)
+	}
+
+	return &blockchain_api.ReleaseLaneLeaseResponse{AlreadyClosed: already}, nil
+}
+
+// leaseFromRequest checks the lease ID and lane a request names.
+func leaseFromRequest(leaseID []byte, l uint32) (lane.LeaseID, uint8, error) {
+	var id lane.LeaseID
+
+	if len(leaseID) != len(id) {
+		return id, 0, errors.NewInvalidArgumentError("lane lease id is %d bytes, not %d", len(leaseID), len(id))
+	}
+
+	if l > lane.MaxLane {
+		return id, 0, errors.NewInvalidArgumentError("lane %d is above %d", l, lane.MaxLane)
+	}
+
+	copy(id[:], leaseID)
+
+	return id, uint8(l), nil
+}
+
+// openLaneLease fills the grant size and close time from settings and the height from the best
+// block, then asks the store. The Server and the LocalClient share it and the two below.
+func openLaneLease(ctx context.Context, store blockchain_store.Store, tSettings *settings.Settings, holder string) (lane.LeaseID, lane.Grant, error) {
+	// A LocalClient reaches this with no Server or gRPC Client built, and neither of those
+	// registers the metrics for it.
+	initPrometheusMetrics()
+
+	if len(holder) > maxLaneHolderBytes {
+		return lane.LeaseID{}, lane.Grant{}, errors.NewInvalidArgumentError("lane lease holder is %d bytes, above %d", len(holder), maxLaneHolderBytes)
+	}
+
+	_, meta, err := store.GetBestBlockHeader(ctx)
+	if err != nil {
+		return lane.LeaseID{}, lane.Grant{}, err
+	}
+
+	id, g, lapsed, err := store.OpenLaneLease(ctx, blockchainoptions.LaneLeaseOpen{
+		Holder:     holder,
+		Height:     meta.Height,
+		GrantMin:   tSettings.BlockChain.LaneGrantMin,
+		CloseAfter: tSettings.BlockChain.LaneLeaseCloseAfter,
+	})
+	if err != nil {
+		return lane.LeaseID{}, lane.Grant{}, err
+	}
+
+	prometheusBlockchainLaneLeaseOpens.Inc()
+	// An open closes stale leases before it chooses a lane; after an outage most lapses happen here
+	// rather than in the sweep, so they feed the sweep's counter.
+	prometheusBlockchainLaneLeaseCloses.WithLabelValues("lapsed").Add(float64(lapsed))
+	prometheusBlockchainLaneLeaseGrants.WithLabelValues(strconv.Itoa(int(g.Lane))).Inc()
+
+	return id, g, nil
+}
+
+func renewLaneLease(ctx context.Context, store blockchain_store.Store, tSettings *settings.Settings, r lane.Renewal) (lane.RenewResult, error) {
+	initPrometheusMetrics()
+
+	req := blockchainoptions.LaneLeaseRenew{
+		Lease:         r.Lease,
+		Lane:          r.Lane,
+		Rate:          r.Rate,
+		WantGrant:     r.WantGrant,
+		Settles:       r.Settles,
+		GrantMin:      tSettings.BlockChain.LaneGrantMin,
+		GrantDuration: tSettings.BlockChain.LaneGrantDuration,
+	}
+
+	if r.WantGrant {
+		_, meta, err := store.GetBestBlockHeader(ctx)
+		if err != nil {
+			return lane.RenewResult{}, err
+		}
+
+		req.Height = meta.Height
+	}
+
+	g, granted, closed, err := store.RenewLaneLease(ctx, req)
+	if err != nil {
+		return lane.RenewResult{}, err
+	}
+
+	if granted {
+		prometheusBlockchainLaneLeaseGrants.WithLabelValues(strconv.Itoa(int(g.Lane))).Inc()
+	}
+
+	return lane.RenewResult{Closed: closed, Granted: granted, Grant: g}, nil
+}
+
+func releaseLaneLease(ctx context.Context, store blockchain_store.Store, r lane.Release) (bool, error) {
+	initPrometheusMetrics()
+
+	already, err := store.ReleaseLaneLease(ctx, blockchainoptions.LaneLeaseRelease{Lease: r.Lease, Lane: r.Lane, LastTaken: r.LastTaken, Settles: r.Settles})
+	if err != nil {
+		return false, err
+	}
+
+	if !already {
+		prometheusBlockchainLaneLeaseCloses.WithLabelValues("clean").Inc()
+	}
+
+	return already, nil
+}
+
+// startLaneLeaseSweep closes silent leases every renewal interval until ctx ends. Several
+// blockchain pods may sweep at once; each lease still closes once.
+func (b *Blockchain) startLaneLeaseSweep(ctx context.Context) {
+	ticker := time.NewTicker(b.settings.BlockChain.LaneLeaseRenewInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			b.sweepLaneLeases(ctx)
+		}
+	}
+}
+
+// laneSweepMinTimeout is the least time one sweep gets, however short the renewal interval is.
+const laneSweepMinTimeout = 10 * time.Second
+
+// sweepLaneLeases runs one sweep. It holds row locks that every lease open needs, so it gets a
+// deadline and a stalled sweep lets go of them.
+func (b *Blockchain) sweepLaneLeases(ctx context.Context) {
+	timeout := b.settings.BlockChain.LaneLeaseRenewInterval
+	if timeout < laneSweepMinTimeout {
+		timeout = laneSweepMinTimeout
+	}
+
+	sweepCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	n, err := b.store.CloseStaleLaneLeases(sweepCtx, b.settings.BlockChain.LaneLeaseCloseAfter)
+	if err != nil {
+		if ctx.Err() == nil {
+			b.logger.Warnf("[Blockchain] could not close stale lane leases: %v", err)
+		}
+
+		return
+	}
+
+	if n > 0 {
+		b.logger.Infof("[Blockchain] closed %d lane leases with no renewal in %s", n, b.settings.BlockChain.LaneLeaseCloseAfter)
+		prometheusBlockchainLaneLeaseCloses.WithLabelValues("lapsed").Add(float64(n))
+	}
+}
+
 // GetBlockStats retrieves statistical information about the blockchain.
 func (b *Blockchain) GetBlockStats(ctx context.Context, _ *emptypb.Empty) (*model.BlockStats, error) {
 	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "GetBlockStats",
@@ -1778,89 +2013,6 @@ func (b *Blockchain) GetHashOfAncestorBlock(ctx context.Context, request *blockc
 
 	return &blockchain_api.GetHashOfAncestorBlockResponse{
 		Hash: hash[:],
-	}, nil
-}
-
-func (b *Blockchain) GetLatestBlockHeaderFromBlockLocator(ctx context.Context, request *blockchain_api.GetLatestBlockHeaderFromBlockLocatorRequest) (*blockchain_api.GetBlockHeaderResponse, error) {
-	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "GetLatestBlockHeaderFromBlockLocator",
-		tracing.WithParentStat(b.stats),
-		tracing.WithHistogram(prometheusBlockchainGetLatestBlockHeaderFromBlockLocator),
-	)
-	defer deferFn()
-
-	bestBlockHash, err := chainhash.NewHash(request.BestBlockHash)
-	if err != nil {
-		return nil, errors.WrapGRPC(errors.NewInvalidArgumentError("[Blockchain][GetLatestBlockHeaderFromBlockLocator] request's best block hash is not valid", err))
-	}
-
-	locatorHashes := make([]chainhash.Hash, len(request.BlockLocatorHashes))
-	for i, hashBytes := range request.BlockLocatorHashes {
-		hash, err := chainhash.NewHash(hashBytes)
-		if err != nil {
-			return nil, errors.WrapGRPC(errors.NewInvalidArgumentError("[Blockchain][GetLatestBlockHeaderFromBlockLocator] request's block locator hash is not valid", err))
-		}
-
-		locatorHashes[i] = *hash
-	}
-
-	blockHeader, meta, err := b.store.GetLatestBlockHeaderFromBlockLocator(ctx, bestBlockHash, locatorHashes)
-	if err != nil {
-		return nil, errors.WrapGRPC(err)
-	}
-
-	return &blockchain_api.GetBlockHeaderResponse{
-		BlockHeader:    blockHeader.Bytes(),
-		Height:         meta.Height,
-		TxCount:        meta.TxCount,
-		SizeInBytes:    meta.SizeInBytes,
-		Miner:          meta.Miner,
-		ChainWork:      meta.ChainWork,
-		BlockTime:      meta.BlockTime,
-		Timestamp:      meta.Timestamp,
-		MedianTimePast: meta.MedianTimePast,
-	}, nil
-}
-
-func (b *Blockchain) GetBlockHeadersFromOldest(ctx context.Context, request *blockchain_api.GetBlockHeadersFromOldestRequest) (*blockchain_api.GetBlockHeadersResponse, error) {
-	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "GetBlockHeadersFromOldest",
-		tracing.WithParentStat(b.stats),
-		tracing.WithHistogram(prometheusBlockchainGetBlockHeadersFromOldest),
-	)
-	defer deferFn()
-
-	chainTipHash, err := chainhash.NewHash(request.ChainTipHash)
-	if err != nil {
-		return nil, errors.WrapGRPC(errors.NewInvalidArgumentError("[Blockchain][GetBlockHeadersFromOldest] request's start hash is not valid", err))
-	}
-
-	targetHash, err := chainhash.NewHash(request.TargetHash)
-	if err != nil {
-		return nil, errors.WrapGRPC(errors.NewInvalidArgumentError("[Blockchain][GetBlockHeadersFromOldest] request's target hash is not valid", err))
-	}
-
-	if uint64(request.NumberOfHeaders) > b.maxBlockHeadersPerRequest() {
-		return nil, errors.WrapGRPC(errors.NewInvalidArgumentError("[Blockchain][GetBlockHeadersFromOldest] %d headers requested, maximum is %d", request.NumberOfHeaders, b.maxBlockHeadersPerRequest()))
-	}
-
-	blockHeaders, blockHeaderMetas, err := b.store.GetBlockHeadersFromOldest(ctx, chainTipHash, targetHash, request.GetNumberOfHeaders())
-	if err != nil {
-		return nil, errors.WrapGRPC(err)
-	}
-
-	blockHeaderBytes := make([][]byte, len(blockHeaders))
-
-	for i, blockHeader := range blockHeaders {
-		blockHeaderBytes[i] = blockHeader.Bytes()
-	}
-
-	blockHeaderMetaBytes := make([][]byte, len(blockHeaderMetas))
-	for i, meta := range blockHeaderMetas {
-		blockHeaderMetaBytes[i] = meta.Bytes()
-	}
-
-	return &blockchain_api.GetBlockHeadersResponse{
-		BlockHeaders: blockHeaderBytes,
-		Metas:        blockHeaderMetaBytes,
 	}, nil
 }
 
@@ -2044,6 +2196,8 @@ func (b *Blockchain) GetBlockHeader(ctx context.Context, req *blockchain_api.Get
 		Invalid:        meta.Invalid,
 		ProcessedAt:    processedAt,
 		MedianTimePast: meta.MedianTimePast,
+
+		MinedSetGeneration: meta.MinedSetGeneration,
 	}, nil
 }
 
@@ -2168,45 +2322,6 @@ func (b *Blockchain) GetBlockHeadersToCommonAncestor(ctx context.Context, req *b
 	}, nil
 }
 
-// GetBlockHeadersFromTill retrieves block headers between two specified blocks.
-func (b *Blockchain) GetBlockHeadersFromTill(ctx context.Context, req *blockchain_api.GetBlockHeadersFromTillRequest) (*blockchain_api.GetBlockHeadersResponse, error) {
-	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "GetBlockHeadersFromTill",
-		tracing.WithParentStat(b.stats),
-		tracing.WithHistogram(prometheusBlockchainGetBlockHeaders),
-	)
-	defer deferFn()
-
-	startHash, err := chainhash.NewHash(req.StartHash)
-	if err != nil {
-		return nil, errors.WrapGRPC(errors.NewBlockNotFoundError("[Blockchain][GetBlockHeadersFromTill] request's start hash is not valid", err))
-	}
-
-	endHash, err := chainhash.NewHash(req.EndHash)
-	if err != nil {
-		return nil, errors.WrapGRPC(errors.NewBlockNotFoundError("[Blockchain][GetBlockHeadersFromTill] request's end hash is not valid", err))
-	}
-
-	blockHeaders, blockHeaderMetas, err := b.store.GetBlockHeadersFromTill(ctx, startHash, endHash)
-	if err != nil {
-		return nil, errors.WrapGRPC(err)
-	}
-
-	blockHeaderBytes := make([][]byte, len(blockHeaders))
-	for i, blockHeader := range blockHeaders {
-		blockHeaderBytes[i] = blockHeader.Bytes()
-	}
-
-	blockHeaderMetaBytes := make([][]byte, len(blockHeaders))
-	for i, meta := range blockHeaderMetas {
-		blockHeaderMetaBytes[i] = meta.Bytes()
-	}
-
-	return &blockchain_api.GetBlockHeadersResponse{
-		BlockHeaders: blockHeaderBytes,
-		Metas:        blockHeaderMetaBytes,
-	}, nil
-}
-
 // GetBlockHeadersFromHeight retrieves block headers starting from a specific height.
 func (b *Blockchain) GetBlockHeadersFromHeight(ctx context.Context, req *blockchain_api.GetBlockHeadersFromHeightRequest) (*blockchain_api.GetBlockHeadersFromHeightResponse, error) {
 	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "GetBlockHeadersFromHeight",
@@ -2251,7 +2366,7 @@ func (b *Blockchain) BlocksBetterThan(ctx context.Context, req *blockchain_api.B
 		return nil, errors.WrapGRPC(errors.NewInvalidArgumentError("[Blockchain][BlocksBetterThan] invalid limit %d, must be 1 to %d", req.Limit, b.maxBlockHeadersPerRequest()))
 	}
 
-	after, err := model.NewBestTipKeyFromBytes(req.After)
+	after, err := model.NewCurrentBestTipKeyFromBytes(req.After)
 	if err != nil {
 		return nil, errors.WrapGRPC(errors.NewInvalidArgumentError("[Blockchain][BlocksBetterThan] invalid after key", err))
 	}
@@ -2259,7 +2374,7 @@ func (b *Blockchain) BlocksBetterThan(ctx context.Context, req *blockchain_api.B
 	var from *model.BestTipKey
 
 	if len(req.From) > 0 {
-		key, keyErr := model.NewBestTipKeyFromBytes(req.From)
+		key, keyErr := model.NewCurrentBestTipKeyFromBytes(req.From)
 		if keyErr != nil {
 			return nil, errors.WrapGRPC(errors.NewInvalidArgumentError("[Blockchain][BlocksBetterThan] invalid from key", keyErr))
 		}
@@ -3136,7 +3251,9 @@ func (b *Blockchain) SetBlockMinedSet(ctx context.Context, req *blockchain_api.S
 		return nil, errors.WrapGRPC(errors.NewInvalidArgumentError("[Blockchain][SetBlockMinedSet] hash must be %d bytes, got %d", chainhash.HashSize, len(req.BlockHash)))
 	}
 
-	err = b.store.SetBlockMinedSet(ctx, blockHash)
+	// An absent generation comes from a blockvalidation that predates it; keep the
+	// unconditional write it relied on rather than refuse every call during a rolling upgrade.
+	err = b.store.SetBlockMinedSet(ctx, blockHash, req.MinedSetGeneration)
 	if err != nil {
 		return nil, errors.WrapGRPC(err)
 	}

@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/bsv-blockchain/aerospike-client-go/v8"
+	"github.com/bsv-blockchain/aerospike-client-go/v8/types"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
@@ -355,4 +356,86 @@ func TestStoreExternallyWithLock_BatchOperateFails(t *testing.T) {
 	require.True(t, errors.As(err, &teranodeErr), "error should be a teranode errors.Error: %v", err)
 	require.True(t, teranodeErr.Is(errors.ErrProcessing), "error should be a ProcessingError: %v", err)
 	require.Contains(t, err.Error(), tx.TxIDChainHash().String(), "error should mention the tx hash")
+}
+
+// TestStoreExternallyWithLock_MasterMayExistLeavesOutcomeUnknown checks that a
+// multi-record create whose master record may exist reaches the caller marked
+// outcome-unknown. utxo.SequentialSpendAndCreate unspends the inputs of a
+// create that failed for certain, and doing that while the master record
+// stands leaves a stored transaction with live inputs. A batch the server
+// rejected before writing anything stays a plain failure.
+func TestStoreExternallyWithLock_MasterMayExistLeavesOutcomeUnknown(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+
+	cases := []struct {
+		name        string
+		batchFn     func(client *uaerospike.Client) func(*aerospike.BatchPolicy, []aerospike.BatchRecordIfc) aerospike.Error
+		wantUnknown bool
+	}{
+		{
+			// The records are written, and the client reports the call in doubt,
+			// as a timeout after sending does.
+			name: "write lands, call in doubt",
+			batchFn: func(client *uaerospike.Client) func(*aerospike.BatchPolicy, []aerospike.BatchRecordIfc) aerospike.Error {
+				return func(policy *aerospike.BatchPolicy, records []aerospike.BatchRecordIfc) aerospike.Error {
+					_ = client.BatchOperate(policy, records)
+
+					return &aerospike.AerospikeError{ResultCode: types.TIMEOUT, InDoubt: true}
+				}
+			},
+			wantUnknown: true,
+		},
+		{
+			// The master record is written and a child record fails.
+			name: "master written, child failed",
+			batchFn: func(client *uaerospike.Client) func(*aerospike.BatchPolicy, []aerospike.BatchRecordIfc) aerospike.Error {
+				return func(policy *aerospike.BatchPolicy, records []aerospike.BatchRecordIfc) aerospike.Error {
+					if err := client.BatchOperate(policy, records); err != nil {
+						return err
+					}
+
+					records[1].BatchRec().Err = &aerospike.AerospikeError{ResultCode: types.PARAMETER_ERROR}
+					records[1].BatchRec().ResultCode = types.PARAMETER_ERROR
+
+					return nil
+				}
+			},
+			wantUnknown: true,
+		},
+		{
+			name: "server rejected the batch, nothing written",
+			batchFn: func(_ *uaerospike.Client) func(*aerospike.BatchPolicy, []aerospike.BatchRecordIfc) aerospike.Error {
+				return func(_ *aerospike.BatchPolicy, _ []aerospike.BatchRecordIfc) aerospike.Error {
+					return &aerospike.AerospikeError{ResultCode: types.PARAMETER_ERROR}
+				}
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			logger := ulogger.NewErrorTestLogger(t)
+			settings := test.CreateBaseTestSettings(t)
+
+			client, store, _, cleanup := initAerospike(t, settings, logger)
+			defer cleanup()
+
+			cleanDB(t, client)
+
+			tx := createTransactionWithOutputs(settings.UtxoStore.UtxoBatchSize + 1)
+
+			store.SetBatchOperateFn(tc.batchFn(client))
+			defer store.SetBatchOperateFn(nil)
+
+			bItem, binsToStore := prepareBatchStoreItem(t, store, tx, 100, []uint32{}, []uint32{}, []int{})
+			go store.StoreTransactionExternally(ctx, bItem, binsToStore)
+
+			err := bItem.RecvDone()
+			require.Error(t, err)
+			require.Equal(t, tc.wantUnknown, utxo.IsCreateOutcomeUnknown(err), "result: %v", err)
+		})
+	}
 }

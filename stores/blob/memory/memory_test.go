@@ -321,3 +321,25 @@ func TestMemory_CloseStopsTTLCleaner(t *testing.T) {
 	// Closing twice must not panic on the already-cancelled context.
 	require.NoError(t, store.Close(context.Background()))
 }
+
+// TestMemoryBlockHeightAcrossGoroutines: the current block height is set while other goroutines
+// store blobs whose delete height derives from it; run with -race.
+func TestMemoryBlockHeightAcrossGoroutines(t *testing.T) {
+	store := New(options.WithDefaultBlockHeightRetention(10))
+
+	done := make(chan struct{})
+
+	go func() {
+		defer close(done)
+
+		for height := uint32(0); height < 200; height++ {
+			store.SetCurrentBlockHeight(height)
+		}
+	}()
+
+	for i := byte(0); i < 200; i++ {
+		require.NoError(t, store.Set(context.Background(), []byte{i}, fileformat.FileTypeTesting, []byte{i}))
+	}
+
+	<-done
+}

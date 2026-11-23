@@ -11,6 +11,7 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/bscript"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/stretchr/testify/require"
@@ -238,4 +239,54 @@ func TestConflictRecovery_DamagedRecords(t *testing.T) {
 	r, lerr = s.LoadConflictRecovery(ctx, id)
 	require.NoError(t, lerr)
 	require.Nil(t, r, "the record is gone")
+}
+
+// At shadow every spend RestoreConflictSpends writes counts once as not carrying a lane position,
+// across batches; with lane positions off nothing is counted, and a batch that fails counts nothing.
+func TestRestoreConflictSpendsCountsEachRestoredSpend(t *testing.T) {
+	s, _ := setupStoreForLockTest(t)
+	ctx := t.Context()
+
+	_, child := restoreTestTxs(t, s, 3)
+
+	spends, err := utxo.GetSpends(child)
+	require.NoError(t, err)
+
+	// Two batches for the three spends.
+	s.settings.UtxoStore.SpendBatcherSize = 2
+
+	for _, tc := range []struct {
+		name      string
+		migration settings.LaneMigration
+		counted   float64
+	}{
+		{name: "off", migration: settings.LaneMigrationOff, counted: 0},
+		{name: "shadow", migration: settings.LaneMigrationShadow, counted: 3},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s.settings.UtxoStore.LaneMigration = tc.migration
+
+			require.NoError(t, s.Unspend(ctx, spends))
+
+			carried, missing := laneSpendCount(t, "yes"), laneSpendCount(t, "no")
+			require.NoError(t, s.RestoreConflictSpends(ctx, spends, 2))
+			require.InDelta(t, carried, laneSpendCount(t, "yes"), 0)
+			require.InDelta(t, missing+tc.counted, laneSpendCount(t, "no"), 0, "one count per restored spend")
+		})
+	}
+
+	t.Run("a failed batch counts nothing", func(t *testing.T) {
+		s.settings.UtxoStore.LaneMigration = settings.LaneMigrationShadow
+
+		require.NoError(t, s.Unspend(ctx, spends))
+
+		s.batchOperateFn = func(*aerospike.BatchPolicy, []aerospike.BatchRecordIfc) aerospike.Error {
+			return aerospike.ErrNetwork
+		}
+		t.Cleanup(func() { s.batchOperateFn = nil })
+
+		missing := laneSpendCount(t, "no")
+		require.Error(t, s.RestoreConflictSpends(ctx, spends, 2))
+		require.InDelta(t, missing, laneSpendCount(t, "no"), 0)
+	})
 }

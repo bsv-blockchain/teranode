@@ -252,6 +252,28 @@ func (m *ExpiringMap[K, V]) Get(key K) (value V, ok bool) {
 	return
 }
 
+// GetAndDelete removes the entry for key and returns its value, in one step
+// under the write lock. ok reports whether this call removed an entry, so when
+// several goroutines race for the same key exactly one of them gets ok == true.
+//
+// Expiry is ignored: an entry the cleaner has not yet removed is still returned.
+// The eviction function and channel do not fire, as with Delete. A caller that
+// hands ownership of a value through the map can rely on both: the goroutine
+// that gets ok == true is the only one that will ever see the value leave it.
+func (m *ExpiringMap[K, V]) GetAndDelete(key K) (value V, ok bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	item, ok := m.items[key]
+	if !ok {
+		return
+	}
+
+	delete(m.items, key)
+
+	return item.item, true
+}
+
 // Delete deletes the given key from the map.
 func (m *ExpiringMap[K, V]) Delete(key K) {
 	m.mu.Lock()

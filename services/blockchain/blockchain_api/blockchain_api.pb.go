@@ -256,6 +256,7 @@ type AddBlockRequest struct {
 	OptionInvalid     bool                   `protobuf:"varint,10,opt,name=optionInvalid,proto3" json:"optionInvalid,omitempty"`                              // Option to invalidate block when adding
 	OptionID          uint64                 `protobuf:"varint,11,opt,name=optionID,proto3" json:"optionID,omitempty"`                                        // Optional block ID
 	CoinbaseBump      []byte                 `protobuf:"bytes,12,opt,name=coinbase_bump,json=coinbaseBump,proto3" json:"coinbase_bump,omitempty"`             // Coinbase BUMP (BRC-74 merkle proof)
+	LaneMapRows       []*LaneMapRow          `protobuf:"bytes,13,rep,name=lane_map_rows,json=laneMapRows,proto3" json:"lane_map_rows,omitempty"`              // Lane map rows, stored in the block's transaction (utxostore_laneMigration shadow)
 	unknownFields     protoimpl.UnknownFields
 	sizeCache         protoimpl.SizeCache
 }
@@ -374,6 +375,99 @@ func (x *AddBlockRequest) GetCoinbaseBump() []byte {
 	return nil
 }
 
+func (x *AddBlockRequest) GetLaneMapRows() []*LaneMapRow {
+	if x != nil {
+		return x.LaneMapRows
+	}
+	return nil
+}
+
+// LaneMapRow is one lane map row of a block: the positions the block took from one lane, or from
+// a run of whole chunks of it when the lane's bitmap is split (util/lane MapRow).
+type LaneMapRow struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Lane          uint32                 `protobuf:"varint,1,opt,name=lane,proto3" json:"lane,omitempty"`                            // Lane number, 0 to 255
+	First         uint64                 `protobuf:"varint,2,opt,name=first,proto3" json:"first,omitempty"`                          // Lowest position taken
+	Last          uint64                 `protobuf:"varint,3,opt,name=last,proto3" json:"last,omitempty"`                            // Highest position taken
+	FirstHole     uint64                 `protobuf:"varint,4,opt,name=first_hole,json=firstHole,proto3" json:"first_hole,omitempty"` // Lowest position between first and last not taken, 0 when none
+	Tag           uint32                 `protobuf:"varint,5,opt,name=tag,proto3" json:"tag,omitempty"`                              // Row tag: 0 a range with no holes, 1 a 64-bit Roaring bitmap of the positions taken
+	HoleData      []byte                 `protobuf:"bytes,6,opt,name=hole_data,json=holeData,proto3" json:"hole_data,omitempty"`     // The bitmap, for tag 1
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *LaneMapRow) Reset() {
+	*x = LaneMapRow{}
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *LaneMapRow) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*LaneMapRow) ProtoMessage() {}
+
+func (x *LaneMapRow) ProtoReflect() protoreflect.Message {
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use LaneMapRow.ProtoReflect.Descriptor instead.
+func (*LaneMapRow) Descriptor() ([]byte, []int) {
+	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *LaneMapRow) GetLane() uint32 {
+	if x != nil {
+		return x.Lane
+	}
+	return 0
+}
+
+func (x *LaneMapRow) GetFirst() uint64 {
+	if x != nil {
+		return x.First
+	}
+	return 0
+}
+
+func (x *LaneMapRow) GetLast() uint64 {
+	if x != nil {
+		return x.Last
+	}
+	return 0
+}
+
+func (x *LaneMapRow) GetFirstHole() uint64 {
+	if x != nil {
+		return x.FirstHole
+	}
+	return 0
+}
+
+func (x *LaneMapRow) GetTag() uint32 {
+	if x != nil {
+		return x.Tag
+	}
+	return 0
+}
+
+func (x *LaneMapRow) GetHoleData() []byte {
+	if x != nil {
+		return x.HoleData
+	}
+	return nil
+}
+
 // GetBlockRequest represents a request to retrieve a block by its hash.
 type GetBlockRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -384,7 +478,7 @@ type GetBlockRequest struct {
 
 func (x *GetBlockRequest) Reset() {
 	*x = GetBlockRequest{}
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[2]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -396,7 +490,7 @@ func (x *GetBlockRequest) String() string {
 func (*GetBlockRequest) ProtoMessage() {}
 
 func (x *GetBlockRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[2]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -409,7 +503,7 @@ func (x *GetBlockRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetBlockRequest.ProtoReflect.Descriptor instead.
 func (*GetBlockRequest) Descriptor() ([]byte, []int) {
-	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{2}
+	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *GetBlockRequest) GetHash() []byte {
@@ -430,7 +524,7 @@ type GetBlocksRequest struct {
 
 func (x *GetBlocksRequest) Reset() {
 	*x = GetBlocksRequest{}
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[3]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -442,7 +536,7 @@ func (x *GetBlocksRequest) String() string {
 func (*GetBlocksRequest) ProtoMessage() {}
 
 func (x *GetBlocksRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[3]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -455,7 +549,7 @@ func (x *GetBlocksRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetBlocksRequest.ProtoReflect.Descriptor instead.
 func (*GetBlocksRequest) Descriptor() ([]byte, []int) {
-	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{3}
+	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *GetBlocksRequest) GetHash() []byte {
@@ -482,7 +576,7 @@ type GetBlocksResponse struct {
 
 func (x *GetBlocksResponse) Reset() {
 	*x = GetBlocksResponse{}
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[4]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -494,7 +588,7 @@ func (x *GetBlocksResponse) String() string {
 func (*GetBlocksResponse) ProtoMessage() {}
 
 func (x *GetBlocksResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[4]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -507,7 +601,7 @@ func (x *GetBlocksResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetBlocksResponse.ProtoReflect.Descriptor instead.
 func (*GetBlocksResponse) Descriptor() ([]byte, []int) {
-	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{4}
+	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *GetBlocksResponse) GetBlocks() [][]byte {
@@ -527,7 +621,7 @@ type GetBlockByHeightRequest struct {
 
 func (x *GetBlockByHeightRequest) Reset() {
 	*x = GetBlockByHeightRequest{}
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[5]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -539,7 +633,7 @@ func (x *GetBlockByHeightRequest) String() string {
 func (*GetBlockByHeightRequest) ProtoMessage() {}
 
 func (x *GetBlockByHeightRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[5]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -552,7 +646,7 @@ func (x *GetBlockByHeightRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetBlockByHeightRequest.ProtoReflect.Descriptor instead.
 func (*GetBlockByHeightRequest) Descriptor() ([]byte, []int) {
-	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{5}
+	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *GetBlockByHeightRequest) GetHeight() uint32 {
@@ -572,7 +666,7 @@ type GetBlockByIDRequest struct {
 
 func (x *GetBlockByIDRequest) Reset() {
 	*x = GetBlockByIDRequest{}
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[6]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -584,7 +678,7 @@ func (x *GetBlockByIDRequest) String() string {
 func (*GetBlockByIDRequest) ProtoMessage() {}
 
 func (x *GetBlockByIDRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[6]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -597,7 +691,7 @@ func (x *GetBlockByIDRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetBlockByIDRequest.ProtoReflect.Descriptor instead.
 func (*GetBlockByIDRequest) Descriptor() ([]byte, []int) {
-	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{6}
+	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *GetBlockByIDRequest) GetId() uint64 {
@@ -617,7 +711,7 @@ type GetNextBlockIDResponse struct {
 
 func (x *GetNextBlockIDResponse) Reset() {
 	*x = GetNextBlockIDResponse{}
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[7]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -629,7 +723,7 @@ func (x *GetNextBlockIDResponse) String() string {
 func (*GetNextBlockIDResponse) ProtoMessage() {}
 
 func (x *GetNextBlockIDResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[7]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -642,7 +736,7 @@ func (x *GetNextBlockIDResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetNextBlockIDResponse.ProtoReflect.Descriptor instead.
 func (*GetNextBlockIDResponse) Descriptor() ([]byte, []int) {
-	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{7}
+	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *GetNextBlockIDResponse) GetNextBlockId() uint64 {
@@ -662,7 +756,7 @@ type AssignBlockIDRequest struct {
 
 func (x *AssignBlockIDRequest) Reset() {
 	*x = AssignBlockIDRequest{}
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[8]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -674,7 +768,7 @@ func (x *AssignBlockIDRequest) String() string {
 func (*AssignBlockIDRequest) ProtoMessage() {}
 
 func (x *AssignBlockIDRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[8]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -687,7 +781,7 @@ func (x *AssignBlockIDRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AssignBlockIDRequest.ProtoReflect.Descriptor instead.
 func (*AssignBlockIDRequest) Descriptor() ([]byte, []int) {
-	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{8}
+	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *AssignBlockIDRequest) GetBlockHash() []byte {
@@ -707,7 +801,7 @@ type AssignBlockIDResponse struct {
 
 func (x *AssignBlockIDResponse) Reset() {
 	*x = AssignBlockIDResponse{}
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[9]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -719,7 +813,7 @@ func (x *AssignBlockIDResponse) String() string {
 func (*AssignBlockIDResponse) ProtoMessage() {}
 
 func (x *AssignBlockIDResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[9]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -732,7 +826,7 @@ func (x *AssignBlockIDResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AssignBlockIDResponse.ProtoReflect.Descriptor instead.
 func (*AssignBlockIDResponse) Descriptor() ([]byte, []int) {
-	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{9}
+	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *AssignBlockIDResponse) GetBlockId() uint64 {
@@ -753,7 +847,7 @@ type GetBlockInChainByHeightHashRequest struct {
 
 func (x *GetBlockInChainByHeightHashRequest) Reset() {
 	*x = GetBlockInChainByHeightHashRequest{}
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[10]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -765,7 +859,7 @@ func (x *GetBlockInChainByHeightHashRequest) String() string {
 func (*GetBlockInChainByHeightHashRequest) ProtoMessage() {}
 
 func (x *GetBlockInChainByHeightHashRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[10]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -778,7 +872,7 @@ func (x *GetBlockInChainByHeightHashRequest) ProtoReflect() protoreflect.Message
 
 // Deprecated: Use GetBlockInChainByHeightHashRequest.ProtoReflect.Descriptor instead.
 func (*GetBlockInChainByHeightHashRequest) Descriptor() ([]byte, []int) {
-	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{10}
+	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *GetBlockInChainByHeightHashRequest) GetHeight() uint32 {
@@ -812,7 +906,7 @@ type GetBlockResponse struct {
 
 func (x *GetBlockResponse) Reset() {
 	*x = GetBlockResponse{}
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[11]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -824,7 +918,7 @@ func (x *GetBlockResponse) String() string {
 func (*GetBlockResponse) ProtoMessage() {}
 
 func (x *GetBlockResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[11]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -837,7 +931,7 @@ func (x *GetBlockResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetBlockResponse.ProtoReflect.Descriptor instead.
 func (*GetBlockResponse) Descriptor() ([]byte, []int) {
-	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{11}
+	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *GetBlockResponse) GetHeader() []byte {
@@ -906,7 +1000,7 @@ type GetFullBlockResponse struct {
 
 func (x *GetFullBlockResponse) Reset() {
 	*x = GetFullBlockResponse{}
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[12]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -918,7 +1012,7 @@ func (x *GetFullBlockResponse) String() string {
 func (*GetFullBlockResponse) ProtoMessage() {}
 
 func (x *GetFullBlockResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[12]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -931,7 +1025,7 @@ func (x *GetFullBlockResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetFullBlockResponse.ProtoReflect.Descriptor instead.
 func (*GetFullBlockResponse) Descriptor() ([]byte, []int) {
-	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{12}
+	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *GetFullBlockResponse) GetFullBlockBytes() []byte {
@@ -951,7 +1045,7 @@ type GetBlockGraphDataRequest struct {
 
 func (x *GetBlockGraphDataRequest) Reset() {
 	*x = GetBlockGraphDataRequest{}
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[13]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -963,7 +1057,7 @@ func (x *GetBlockGraphDataRequest) String() string {
 func (*GetBlockGraphDataRequest) ProtoMessage() {}
 
 func (x *GetBlockGraphDataRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[13]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -976,7 +1070,7 @@ func (x *GetBlockGraphDataRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetBlockGraphDataRequest.ProtoReflect.Descriptor instead.
 func (*GetBlockGraphDataRequest) Descriptor() ([]byte, []int) {
-	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{13}
+	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *GetBlockGraphDataRequest) GetPeriodMillis() uint64 {
@@ -996,7 +1090,7 @@ type GetBlockExistsResponse struct {
 
 func (x *GetBlockExistsResponse) Reset() {
 	*x = GetBlockExistsResponse{}
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[14]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1008,7 +1102,7 @@ func (x *GetBlockExistsResponse) String() string {
 func (*GetBlockExistsResponse) ProtoMessage() {}
 
 func (x *GetBlockExistsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[14]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1021,7 +1115,7 @@ func (x *GetBlockExistsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetBlockExistsResponse.ProtoReflect.Descriptor instead.
 func (*GetBlockExistsResponse) Descriptor() ([]byte, []int) {
-	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{14}
+	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *GetBlockExistsResponse) GetExists() bool {
@@ -1041,7 +1135,7 @@ type GetMedianTimeRequest struct {
 
 func (x *GetMedianTimeRequest) Reset() {
 	*x = GetMedianTimeRequest{}
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[15]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1053,7 +1147,7 @@ func (x *GetMedianTimeRequest) String() string {
 func (*GetMedianTimeRequest) ProtoMessage() {}
 
 func (x *GetMedianTimeRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[15]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1066,7 +1160,7 @@ func (x *GetMedianTimeRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetMedianTimeRequest.ProtoReflect.Descriptor instead.
 func (*GetMedianTimeRequest) Descriptor() ([]byte, []int) {
-	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{15}
+	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *GetMedianTimeRequest) GetBlockHash() []byte {
@@ -1087,7 +1181,7 @@ type GetBlockHeadersRequest struct {
 
 func (x *GetBlockHeadersRequest) Reset() {
 	*x = GetBlockHeadersRequest{}
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[16]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1099,7 +1193,7 @@ func (x *GetBlockHeadersRequest) String() string {
 func (*GetBlockHeadersRequest) ProtoMessage() {}
 
 func (x *GetBlockHeadersRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[16]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1112,7 +1206,7 @@ func (x *GetBlockHeadersRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetBlockHeadersRequest.ProtoReflect.Descriptor instead.
 func (*GetBlockHeadersRequest) Descriptor() ([]byte, []int) {
-	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{16}
+	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *GetBlockHeadersRequest) GetStartHash() []byte {
@@ -1141,7 +1235,7 @@ type GetBlockHeadersToCommonAncestorRequest struct {
 
 func (x *GetBlockHeadersToCommonAncestorRequest) Reset() {
 	*x = GetBlockHeadersToCommonAncestorRequest{}
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[17]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1153,7 +1247,7 @@ func (x *GetBlockHeadersToCommonAncestorRequest) String() string {
 func (*GetBlockHeadersToCommonAncestorRequest) ProtoMessage() {}
 
 func (x *GetBlockHeadersToCommonAncestorRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[17]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1166,7 +1260,7 @@ func (x *GetBlockHeadersToCommonAncestorRequest) ProtoReflect() protoreflect.Mes
 
 // Deprecated: Use GetBlockHeadersToCommonAncestorRequest.ProtoReflect.Descriptor instead.
 func (*GetBlockHeadersToCommonAncestorRequest) Descriptor() ([]byte, []int) {
-	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{17}
+	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *GetBlockHeadersToCommonAncestorRequest) GetTargetHash() []byte {
@@ -1202,7 +1296,7 @@ type GetBlockHeadersFromCommonAncestorRequest struct {
 
 func (x *GetBlockHeadersFromCommonAncestorRequest) Reset() {
 	*x = GetBlockHeadersFromCommonAncestorRequest{}
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[18]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1214,7 +1308,7 @@ func (x *GetBlockHeadersFromCommonAncestorRequest) String() string {
 func (*GetBlockHeadersFromCommonAncestorRequest) ProtoMessage() {}
 
 func (x *GetBlockHeadersFromCommonAncestorRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[18]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1227,7 +1321,7 @@ func (x *GetBlockHeadersFromCommonAncestorRequest) ProtoReflect() protoreflect.M
 
 // Deprecated: Use GetBlockHeadersFromCommonAncestorRequest.ProtoReflect.Descriptor instead.
 func (*GetBlockHeadersFromCommonAncestorRequest) Descriptor() ([]byte, []int) {
-	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{18}
+	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *GetBlockHeadersFromCommonAncestorRequest) GetTargetHash() []byte {
@@ -1262,7 +1356,7 @@ type GetBlockHeadersResponse struct {
 
 func (x *GetBlockHeadersResponse) Reset() {
 	*x = GetBlockHeadersResponse{}
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[19]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1274,7 +1368,7 @@ func (x *GetBlockHeadersResponse) String() string {
 func (*GetBlockHeadersResponse) ProtoMessage() {}
 
 func (x *GetBlockHeadersResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[19]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1287,7 +1381,7 @@ func (x *GetBlockHeadersResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetBlockHeadersResponse.ProtoReflect.Descriptor instead.
 func (*GetBlockHeadersResponse) Descriptor() ([]byte, []int) {
-	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{19}
+	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *GetBlockHeadersResponse) GetBlockHeaders() [][]byte {
@@ -1300,59 +1394,6 @@ func (x *GetBlockHeadersResponse) GetBlockHeaders() [][]byte {
 func (x *GetBlockHeadersResponse) GetMetas() [][]byte {
 	if x != nil {
 		return x.Metas
-	}
-	return nil
-}
-
-// GetBlockHeadersFromTillRequest requests headers between two blocks.
-type GetBlockHeadersFromTillRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	StartHash     []byte                 `protobuf:"bytes,1,opt,name=startHash,proto3" json:"startHash,omitempty"` // Starting block hash
-	EndHash       []byte                 `protobuf:"bytes,2,opt,name=endHash,proto3" json:"endHash,omitempty"`     // Ending block hash
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *GetBlockHeadersFromTillRequest) Reset() {
-	*x = GetBlockHeadersFromTillRequest{}
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[20]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *GetBlockHeadersFromTillRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*GetBlockHeadersFromTillRequest) ProtoMessage() {}
-
-func (x *GetBlockHeadersFromTillRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[20]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use GetBlockHeadersFromTillRequest.ProtoReflect.Descriptor instead.
-func (*GetBlockHeadersFromTillRequest) Descriptor() ([]byte, []int) {
-	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{20}
-}
-
-func (x *GetBlockHeadersFromTillRequest) GetStartHash() []byte {
-	if x != nil {
-		return x.StartHash
-	}
-	return nil
-}
-
-func (x *GetBlockHeadersFromTillRequest) GetEndHash() []byte {
-	if x != nil {
-		return x.EndHash
 	}
 	return nil
 }
@@ -2347,24 +2388,25 @@ func (x *RevalidateBlockRequest) GetBlockHash() []byte {
 
 // GetBlockHeaderResponse contains detailed block header information.
 type GetBlockHeaderResponse struct {
-	state          protoimpl.MessageState `protogen:"open.v1"`
-	BlockHeader    []byte                 `protobuf:"bytes,1,opt,name=blockHeader,proto3" json:"blockHeader,omitempty"`                                 // Serialized block header
-	Id             uint32                 `protobuf:"varint,2,opt,name=id,proto3" json:"id,omitempty"`                                                  // Block identifier
-	Height         uint32                 `protobuf:"varint,3,opt,name=height,proto3" json:"height,omitempty"`                                          // Block height
-	TxCount        uint64                 `protobuf:"varint,4,opt,name=tx_count,json=txCount,proto3" json:"tx_count,omitempty"`                         // Transaction count
-	SizeInBytes    uint64                 `protobuf:"varint,5,opt,name=size_in_bytes,json=sizeInBytes,proto3" json:"size_in_bytes,omitempty"`           // Block size
-	Miner          string                 `protobuf:"bytes,6,opt,name=miner,proto3" json:"miner,omitempty"`                                             // Miner identifier
-	PeerId         string                 `protobuf:"bytes,7,opt,name=peer_id,json=peerId,proto3" json:"peer_id,omitempty"`                             // Peer identifier
-	BlockTime      uint32                 `protobuf:"varint,8,opt,name=block_time,json=blockTime,proto3" json:"block_time,omitempty"`                   // Block timestamp
-	Timestamp      uint32                 `protobuf:"varint,9,opt,name=timestamp,proto3" json:"timestamp,omitempty"`                                    // Processing timestamp
-	ChainWork      []byte                 `protobuf:"bytes,10,opt,name=chain_work,json=chainWork,proto3" json:"chain_work,omitempty"`                   // Accumulated chain work
-	MinedSet       bool                   `protobuf:"varint,11,opt,name=mined_set,json=minedSet,proto3" json:"mined_set,omitempty"`                     // Mined status
-	SubtreesSet    bool                   `protobuf:"varint,12,opt,name=subtrees_set,json=subtreesSet,proto3" json:"subtrees_set,omitempty"`            // Subtrees status
-	Invalid        bool                   `protobuf:"varint,13,opt,name=invalid,proto3" json:"invalid,omitempty"`                                       // Validity status
-	ProcessedAt    *timestamppb.Timestamp `protobuf:"bytes,14,opt,name=processed_at,json=processedAt,proto3" json:"processed_at,omitempty"`             // Timestamp when block was processed
-	MedianTimePast uint32                 `protobuf:"varint,15,opt,name=median_time_past,json=medianTimePast,proto3" json:"median_time_past,omitempty"` // Median Time Past (MTP) - median of last 11 block timestamps (BIP113)
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	state              protoimpl.MessageState `protogen:"open.v1"`
+	BlockHeader        []byte                 `protobuf:"bytes,1,opt,name=blockHeader,proto3" json:"blockHeader,omitempty"`                                             // Serialized block header
+	Id                 uint32                 `protobuf:"varint,2,opt,name=id,proto3" json:"id,omitempty"`                                                              // Block identifier
+	Height             uint32                 `protobuf:"varint,3,opt,name=height,proto3" json:"height,omitempty"`                                                      // Block height
+	TxCount            uint64                 `protobuf:"varint,4,opt,name=tx_count,json=txCount,proto3" json:"tx_count,omitempty"`                                     // Transaction count
+	SizeInBytes        uint64                 `protobuf:"varint,5,opt,name=size_in_bytes,json=sizeInBytes,proto3" json:"size_in_bytes,omitempty"`                       // Block size
+	Miner              string                 `protobuf:"bytes,6,opt,name=miner,proto3" json:"miner,omitempty"`                                                         // Miner identifier
+	PeerId             string                 `protobuf:"bytes,7,opt,name=peer_id,json=peerId,proto3" json:"peer_id,omitempty"`                                         // Peer identifier
+	BlockTime          uint32                 `protobuf:"varint,8,opt,name=block_time,json=blockTime,proto3" json:"block_time,omitempty"`                               // Block timestamp
+	Timestamp          uint32                 `protobuf:"varint,9,opt,name=timestamp,proto3" json:"timestamp,omitempty"`                                                // Processing timestamp
+	ChainWork          []byte                 `protobuf:"bytes,10,opt,name=chain_work,json=chainWork,proto3" json:"chain_work,omitempty"`                               // Accumulated chain work
+	MinedSet           bool                   `protobuf:"varint,11,opt,name=mined_set,json=minedSet,proto3" json:"mined_set,omitempty"`                                 // Mined status
+	SubtreesSet        bool                   `protobuf:"varint,12,opt,name=subtrees_set,json=subtreesSet,proto3" json:"subtrees_set,omitempty"`                        // Subtrees status
+	Invalid            bool                   `protobuf:"varint,13,opt,name=invalid,proto3" json:"invalid,omitempty"`                                                   // Validity status
+	ProcessedAt        *timestamppb.Timestamp `protobuf:"bytes,14,opt,name=processed_at,json=processedAt,proto3" json:"processed_at,omitempty"`                         // Timestamp when block was processed
+	MedianTimePast     uint32                 `protobuf:"varint,15,opt,name=median_time_past,json=medianTimePast,proto3" json:"median_time_past,omitempty"`             // Median Time Past (MTP) - median of last 11 block timestamps (BIP113)
+	MinedSetGeneration uint64                 `protobuf:"varint,16,opt,name=mined_set_generation,json=minedSetGeneration,proto3" json:"mined_set_generation,omitempty"` // Bumped by every write that clears mined_set; SetBlockMinedSet compares against it
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
 }
 
 func (x *GetBlockHeaderResponse) Reset() {
@@ -2498,6 +2540,13 @@ func (x *GetBlockHeaderResponse) GetProcessedAt() *timestamppb.Timestamp {
 func (x *GetBlockHeaderResponse) GetMedianTimePast() uint32 {
 	if x != nil {
 		return x.MedianTimePast
+	}
+	return 0
+}
+
+func (x *GetBlockHeaderResponse) GetMinedSetGeneration() uint64 {
+	if x != nil {
+		return x.MinedSetGeneration
 	}
 	return 0
 }
@@ -3421,120 +3470,6 @@ func (x *GetHashOfAncestorBlockRequest) GetDepth() uint32 {
 	return 0
 }
 
-// GetLatestBlockHeaderFromBlockLocatorRequest
-type GetLatestBlockHeaderFromBlockLocatorRequest struct {
-	state              protoimpl.MessageState `protogen:"open.v1"`
-	BestBlockHash      []byte                 `protobuf:"bytes,1,opt,name=bestBlockHash,proto3" json:"bestBlockHash,omitempty"`           // Best block hash
-	BlockLocatorHashes [][]byte               `protobuf:"bytes,2,rep,name=blockLocatorHashes,proto3" json:"blockLocatorHashes,omitempty"` // Block locator hashes
-	unknownFields      protoimpl.UnknownFields
-	sizeCache          protoimpl.SizeCache
-}
-
-func (x *GetLatestBlockHeaderFromBlockLocatorRequest) Reset() {
-	*x = GetLatestBlockHeaderFromBlockLocatorRequest{}
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[61]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *GetLatestBlockHeaderFromBlockLocatorRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*GetLatestBlockHeaderFromBlockLocatorRequest) ProtoMessage() {}
-
-func (x *GetLatestBlockHeaderFromBlockLocatorRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[61]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use GetLatestBlockHeaderFromBlockLocatorRequest.ProtoReflect.Descriptor instead.
-func (*GetLatestBlockHeaderFromBlockLocatorRequest) Descriptor() ([]byte, []int) {
-	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{61}
-}
-
-func (x *GetLatestBlockHeaderFromBlockLocatorRequest) GetBestBlockHash() []byte {
-	if x != nil {
-		return x.BestBlockHash
-	}
-	return nil
-}
-
-func (x *GetLatestBlockHeaderFromBlockLocatorRequest) GetBlockLocatorHashes() [][]byte {
-	if x != nil {
-		return x.BlockLocatorHashes
-	}
-	return nil
-}
-
-// GetBlockHeadersFromOldestRequest retrieves block headers starting from the oldest block.
-type GetBlockHeadersFromOldestRequest struct {
-	state           protoimpl.MessageState `protogen:"open.v1"`
-	ChainTipHash    []byte                 `protobuf:"bytes,1,opt,name=chainTipHash,proto3" json:"chainTipHash,omitempty"`        // Chain tip hash
-	TargetHash      []byte                 `protobuf:"bytes,2,opt,name=targetHash,proto3" json:"targetHash,omitempty"`            // Target block hash
-	NumberOfHeaders uint64                 `protobuf:"varint,3,opt,name=numberOfHeaders,proto3" json:"numberOfHeaders,omitempty"` // Maximum number of hashes to return
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
-}
-
-func (x *GetBlockHeadersFromOldestRequest) Reset() {
-	*x = GetBlockHeadersFromOldestRequest{}
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[62]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *GetBlockHeadersFromOldestRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*GetBlockHeadersFromOldestRequest) ProtoMessage() {}
-
-func (x *GetBlockHeadersFromOldestRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[62]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use GetBlockHeadersFromOldestRequest.ProtoReflect.Descriptor instead.
-func (*GetBlockHeadersFromOldestRequest) Descriptor() ([]byte, []int) {
-	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{62}
-}
-
-func (x *GetBlockHeadersFromOldestRequest) GetChainTipHash() []byte {
-	if x != nil {
-		return x.ChainTipHash
-	}
-	return nil
-}
-
-func (x *GetBlockHeadersFromOldestRequest) GetTargetHash() []byte {
-	if x != nil {
-		return x.TargetHash
-	}
-	return nil
-}
-
-func (x *GetBlockHeadersFromOldestRequest) GetNumberOfHeaders() uint64 {
-	if x != nil {
-		return x.NumberOfHeaders
-	}
-	return 0
-}
-
 // GetHashOfAncestorBlockResponse contains an ancestor block hash.
 type GetHashOfAncestorBlockResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -3545,7 +3480,7 @@ type GetHashOfAncestorBlockResponse struct {
 
 func (x *GetHashOfAncestorBlockResponse) Reset() {
 	*x = GetHashOfAncestorBlockResponse{}
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[63]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[61]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3557,7 +3492,7 @@ func (x *GetHashOfAncestorBlockResponse) String() string {
 func (*GetHashOfAncestorBlockResponse) ProtoMessage() {}
 
 func (x *GetHashOfAncestorBlockResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[63]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[61]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3570,7 +3505,7 @@ func (x *GetHashOfAncestorBlockResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetHashOfAncestorBlockResponse.ProtoReflect.Descriptor instead.
 func (*GetHashOfAncestorBlockResponse) Descriptor() ([]byte, []int) {
-	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{63}
+	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{61}
 }
 
 func (x *GetHashOfAncestorBlockResponse) GetHash() []byte {
@@ -3591,7 +3526,7 @@ type GetNextWorkRequiredRequest struct {
 
 func (x *GetNextWorkRequiredRequest) Reset() {
 	*x = GetNextWorkRequiredRequest{}
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[64]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[62]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3603,7 +3538,7 @@ func (x *GetNextWorkRequiredRequest) String() string {
 func (*GetNextWorkRequiredRequest) ProtoMessage() {}
 
 func (x *GetNextWorkRequiredRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[64]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[62]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3616,7 +3551,7 @@ func (x *GetNextWorkRequiredRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetNextWorkRequiredRequest.ProtoReflect.Descriptor instead.
 func (*GetNextWorkRequiredRequest) Descriptor() ([]byte, []int) {
-	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{64}
+	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{62}
 }
 
 func (x *GetNextWorkRequiredRequest) GetPreviousBlockHash() []byte {
@@ -3643,7 +3578,7 @@ type GetNextWorkRequiredResponse struct {
 
 func (x *GetNextWorkRequiredResponse) Reset() {
 	*x = GetNextWorkRequiredResponse{}
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[65]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[63]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3655,7 +3590,7 @@ func (x *GetNextWorkRequiredResponse) String() string {
 func (*GetNextWorkRequiredResponse) ProtoMessage() {}
 
 func (x *GetNextWorkRequiredResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[65]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[63]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3668,7 +3603,7 @@ func (x *GetNextWorkRequiredResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetNextWorkRequiredResponse.ProtoReflect.Descriptor instead.
 func (*GetNextWorkRequiredResponse) Descriptor() ([]byte, []int) {
-	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{65}
+	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{63}
 }
 
 func (x *GetNextWorkRequiredResponse) GetBits() []byte {
@@ -3680,15 +3615,21 @@ func (x *GetNextWorkRequiredResponse) GetBits() []byte {
 
 // SetBlockMinedSetRequest marks a block as mined.
 type SetBlockMinedSetRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	BlockHash     []byte                 `protobuf:"bytes,1,opt,name=blockHash,proto3" json:"blockHash,omitempty"` // Hash of the mined block
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state     protoimpl.MessageState `protogen:"open.v1"`
+	BlockHash []byte                 `protobuf:"bytes,1,opt,name=blockHash,proto3" json:"blockHash,omitempty"` // Hash of the mined block
+	// The block's mined_set generation (GetBlockHeaderResponse.mined_set_generation)
+	// when the caller's tagging run started. Every writer that clears mined_set bumps
+	// it, so the write is refused with ERR_STATE_ERROR if it has changed since.
+	// Absent means a caller that predates the field: the write is unconditional, as
+	// it was before.
+	MinedSetGeneration *uint64 `protobuf:"varint,2,opt,name=mined_set_generation,json=minedSetGeneration,proto3,oneof" json:"mined_set_generation,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
 }
 
 func (x *SetBlockMinedSetRequest) Reset() {
 	*x = SetBlockMinedSetRequest{}
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[66]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[64]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3700,7 +3641,7 @@ func (x *SetBlockMinedSetRequest) String() string {
 func (*SetBlockMinedSetRequest) ProtoMessage() {}
 
 func (x *SetBlockMinedSetRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[66]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[64]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3713,7 +3654,7 @@ func (x *SetBlockMinedSetRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetBlockMinedSetRequest.ProtoReflect.Descriptor instead.
 func (*SetBlockMinedSetRequest) Descriptor() ([]byte, []int) {
-	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{66}
+	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{64}
 }
 
 func (x *SetBlockMinedSetRequest) GetBlockHash() []byte {
@@ -3721,6 +3662,13 @@ func (x *SetBlockMinedSetRequest) GetBlockHash() []byte {
 		return x.BlockHash
 	}
 	return nil
+}
+
+func (x *SetBlockMinedSetRequest) GetMinedSetGeneration() uint64 {
+	if x != nil && x.MinedSetGeneration != nil {
+		return *x.MinedSetGeneration
+	}
+	return 0
 }
 
 type ClearBlockMinedSetRequest struct {
@@ -3732,7 +3680,7 @@ type ClearBlockMinedSetRequest struct {
 
 func (x *ClearBlockMinedSetRequest) Reset() {
 	*x = ClearBlockMinedSetRequest{}
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[67]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[65]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3744,7 +3692,7 @@ func (x *ClearBlockMinedSetRequest) String() string {
 func (*ClearBlockMinedSetRequest) ProtoMessage() {}
 
 func (x *ClearBlockMinedSetRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[67]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[65]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3757,7 +3705,7 @@ func (x *ClearBlockMinedSetRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ClearBlockMinedSetRequest.ProtoReflect.Descriptor instead.
 func (*ClearBlockMinedSetRequest) Descriptor() ([]byte, []int) {
-	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{67}
+	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{65}
 }
 
 func (x *ClearBlockMinedSetRequest) GetBlockHash() []byte {
@@ -3777,7 +3725,7 @@ type GetBlocksMinedNotSetResponse struct {
 
 func (x *GetBlocksMinedNotSetResponse) Reset() {
 	*x = GetBlocksMinedNotSetResponse{}
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[68]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[66]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3789,7 +3737,7 @@ func (x *GetBlocksMinedNotSetResponse) String() string {
 func (*GetBlocksMinedNotSetResponse) ProtoMessage() {}
 
 func (x *GetBlocksMinedNotSetResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[68]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[66]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3802,7 +3750,7 @@ func (x *GetBlocksMinedNotSetResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetBlocksMinedNotSetResponse.ProtoReflect.Descriptor instead.
 func (*GetBlocksMinedNotSetResponse) Descriptor() ([]byte, []int) {
-	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{68}
+	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{66}
 }
 
 func (x *GetBlocksMinedNotSetResponse) GetBlockBytes() [][]byte {
@@ -3822,7 +3770,7 @@ type SetBlockSubtreesSetRequest struct {
 
 func (x *SetBlockSubtreesSetRequest) Reset() {
 	*x = SetBlockSubtreesSetRequest{}
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[69]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[67]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3834,7 +3782,7 @@ func (x *SetBlockSubtreesSetRequest) String() string {
 func (*SetBlockSubtreesSetRequest) ProtoMessage() {}
 
 func (x *SetBlockSubtreesSetRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[69]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[67]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3847,7 +3795,7 @@ func (x *SetBlockSubtreesSetRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetBlockSubtreesSetRequest.ProtoReflect.Descriptor instead.
 func (*SetBlockSubtreesSetRequest) Descriptor() ([]byte, []int) {
-	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{69}
+	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{67}
 }
 
 func (x *SetBlockSubtreesSetRequest) GetBlockHash() []byte {
@@ -3867,7 +3815,7 @@ type GetBlocksSubtreesNotSetResponse struct {
 
 func (x *GetBlocksSubtreesNotSetResponse) Reset() {
 	*x = GetBlocksSubtreesNotSetResponse{}
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[70]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[68]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3879,7 +3827,7 @@ func (x *GetBlocksSubtreesNotSetResponse) String() string {
 func (*GetBlocksSubtreesNotSetResponse) ProtoMessage() {}
 
 func (x *GetBlocksSubtreesNotSetResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[70]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[68]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3892,7 +3840,7 @@ func (x *GetBlocksSubtreesNotSetResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetBlocksSubtreesNotSetResponse.ProtoReflect.Descriptor instead.
 func (*GetBlocksSubtreesNotSetResponse) Descriptor() ([]byte, []int) {
-	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{70}
+	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{68}
 }
 
 func (x *GetBlocksSubtreesNotSetResponse) GetBlockBytes() [][]byte {
@@ -3916,7 +3864,7 @@ type SetBlockProcessedAtRequest struct {
 
 func (x *SetBlockProcessedAtRequest) Reset() {
 	*x = SetBlockProcessedAtRequest{}
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[71]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[69]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3928,7 +3876,7 @@ func (x *SetBlockProcessedAtRequest) String() string {
 func (*SetBlockProcessedAtRequest) ProtoMessage() {}
 
 func (x *SetBlockProcessedAtRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[71]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[69]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3941,7 +3889,7 @@ func (x *SetBlockProcessedAtRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetBlockProcessedAtRequest.ProtoReflect.Descriptor instead.
 func (*SetBlockProcessedAtRequest) Descriptor() ([]byte, []int) {
-	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{71}
+	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{69}
 }
 
 func (x *SetBlockProcessedAtRequest) GetBlockHash() []byte {
@@ -3968,7 +3916,7 @@ type GetFSMStateResponse struct {
 
 func (x *GetFSMStateResponse) Reset() {
 	*x = GetFSMStateResponse{}
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[72]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[70]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3980,7 +3928,7 @@ func (x *GetFSMStateResponse) String() string {
 func (*GetFSMStateResponse) ProtoMessage() {}
 
 func (x *GetFSMStateResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[72]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[70]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3993,7 +3941,7 @@ func (x *GetFSMStateResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetFSMStateResponse.ProtoReflect.Descriptor instead.
 func (*GetFSMStateResponse) Descriptor() ([]byte, []int) {
-	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{72}
+	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{70}
 }
 
 func (x *GetFSMStateResponse) GetState() FSMStateType {
@@ -4013,7 +3961,7 @@ type SendFSMEventRequest struct {
 
 func (x *SendFSMEventRequest) Reset() {
 	*x = SendFSMEventRequest{}
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[73]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[71]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4025,7 +3973,7 @@ func (x *SendFSMEventRequest) String() string {
 func (*SendFSMEventRequest) ProtoMessage() {}
 
 func (x *SendFSMEventRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[73]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[71]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4038,7 +3986,7 @@ func (x *SendFSMEventRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SendFSMEventRequest.ProtoReflect.Descriptor instead.
 func (*SendFSMEventRequest) Descriptor() ([]byte, []int) {
-	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{73}
+	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{71}
 }
 
 func (x *SendFSMEventRequest) GetEvent() FSMEventType {
@@ -4115,7 +4063,7 @@ type PeerRegistryInfo struct {
 
 func (x *PeerRegistryInfo) Reset() {
 	*x = PeerRegistryInfo{}
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[74]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[72]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4127,7 +4075,7 @@ func (x *PeerRegistryInfo) String() string {
 func (*PeerRegistryInfo) ProtoMessage() {}
 
 func (x *PeerRegistryInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[74]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[72]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4140,7 +4088,7 @@ func (x *PeerRegistryInfo) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PeerRegistryInfo.ProtoReflect.Descriptor instead.
 func (*PeerRegistryInfo) Descriptor() ([]byte, []int) {
-	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{74}
+	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{72}
 }
 
 func (x *PeerRegistryInfo) GetPeerId() string {
@@ -4482,7 +4430,7 @@ type RegisterPeerRequest struct {
 
 func (x *RegisterPeerRequest) Reset() {
 	*x = RegisterPeerRequest{}
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[75]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[73]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4494,7 +4442,7 @@ func (x *RegisterPeerRequest) String() string {
 func (*RegisterPeerRequest) ProtoMessage() {}
 
 func (x *RegisterPeerRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[75]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[73]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4507,7 +4455,7 @@ func (x *RegisterPeerRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RegisterPeerRequest.ProtoReflect.Descriptor instead.
 func (*RegisterPeerRequest) Descriptor() ([]byte, []int) {
-	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{75}
+	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{73}
 }
 
 func (x *RegisterPeerRequest) GetPeer() *PeerRegistryInfo {
@@ -4530,7 +4478,7 @@ type RecordValidatedPeerProgressRequest struct {
 
 func (x *RecordValidatedPeerProgressRequest) Reset() {
 	*x = RecordValidatedPeerProgressRequest{}
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[76]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[74]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4542,7 +4490,7 @@ func (x *RecordValidatedPeerProgressRequest) String() string {
 func (*RecordValidatedPeerProgressRequest) ProtoMessage() {}
 
 func (x *RecordValidatedPeerProgressRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[76]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[74]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4555,7 +4503,7 @@ func (x *RecordValidatedPeerProgressRequest) ProtoReflect() protoreflect.Message
 
 // Deprecated: Use RecordValidatedPeerProgressRequest.ProtoReflect.Descriptor instead.
 func (*RecordValidatedPeerProgressRequest) Descriptor() ([]byte, []int) {
-	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{76}
+	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{74}
 }
 
 func (x *RecordValidatedPeerProgressRequest) GetPeerId() string {
@@ -4603,7 +4551,7 @@ type UpdatePeerMetricsRequest struct {
 
 func (x *UpdatePeerMetricsRequest) Reset() {
 	*x = UpdatePeerMetricsRequest{}
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[77]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[75]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4615,7 +4563,7 @@ func (x *UpdatePeerMetricsRequest) String() string {
 func (*UpdatePeerMetricsRequest) ProtoMessage() {}
 
 func (x *UpdatePeerMetricsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[77]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[75]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4628,7 +4576,7 @@ func (x *UpdatePeerMetricsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdatePeerMetricsRequest.ProtoReflect.Descriptor instead.
 func (*UpdatePeerMetricsRequest) Descriptor() ([]byte, []int) {
-	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{77}
+	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{75}
 }
 
 func (x *UpdatePeerMetricsRequest) GetPeerId() string {
@@ -4697,7 +4645,7 @@ type RemovePeerRequest struct {
 
 func (x *RemovePeerRequest) Reset() {
 	*x = RemovePeerRequest{}
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[78]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[76]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4709,7 +4657,7 @@ func (x *RemovePeerRequest) String() string {
 func (*RemovePeerRequest) ProtoMessage() {}
 
 func (x *RemovePeerRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[78]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[76]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4722,7 +4670,7 @@ func (x *RemovePeerRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RemovePeerRequest.ProtoReflect.Descriptor instead.
 func (*RemovePeerRequest) Descriptor() ([]byte, []int) {
-	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{78}
+	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{76}
 }
 
 func (x *RemovePeerRequest) GetPeerId() string {
@@ -4747,7 +4695,7 @@ type ListPeersRequest struct {
 
 func (x *ListPeersRequest) Reset() {
 	*x = ListPeersRequest{}
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[79]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[77]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4759,7 +4707,7 @@ func (x *ListPeersRequest) String() string {
 func (*ListPeersRequest) ProtoMessage() {}
 
 func (x *ListPeersRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[79]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[77]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4772,7 +4720,7 @@ func (x *ListPeersRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListPeersRequest.ProtoReflect.Descriptor instead.
 func (*ListPeersRequest) Descriptor() ([]byte, []int) {
-	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{79}
+	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{77}
 }
 
 func (x *ListPeersRequest) GetTransportFilter() TransportType {
@@ -4827,7 +4775,7 @@ type ListPeersResponse struct {
 
 func (x *ListPeersResponse) Reset() {
 	*x = ListPeersResponse{}
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[80]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[78]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4839,7 +4787,7 @@ func (x *ListPeersResponse) String() string {
 func (*ListPeersResponse) ProtoMessage() {}
 
 func (x *ListPeersResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[80]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[78]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4852,7 +4800,7 @@ func (x *ListPeersResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListPeersResponse.ProtoReflect.Descriptor instead.
 func (*ListPeersResponse) Descriptor() ([]byte, []int) {
-	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{80}
+	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{78}
 }
 
 func (x *ListPeersResponse) GetPeers() []*PeerRegistryInfo {
@@ -4872,7 +4820,7 @@ type GetPeerRequest struct {
 
 func (x *GetPeerRequest) Reset() {
 	*x = GetPeerRequest{}
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[81]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[79]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4884,7 +4832,7 @@ func (x *GetPeerRequest) String() string {
 func (*GetPeerRequest) ProtoMessage() {}
 
 func (x *GetPeerRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[81]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[79]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4897,7 +4845,7 @@ func (x *GetPeerRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetPeerRequest.ProtoReflect.Descriptor instead.
 func (*GetPeerRequest) Descriptor() ([]byte, []int) {
-	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{81}
+	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{79}
 }
 
 func (x *GetPeerRequest) GetPeerId() string {
@@ -4918,7 +4866,7 @@ type GetPeerResponse struct {
 
 func (x *GetPeerResponse) Reset() {
 	*x = GetPeerResponse{}
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[82]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[80]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4930,7 +4878,7 @@ func (x *GetPeerResponse) String() string {
 func (*GetPeerResponse) ProtoMessage() {}
 
 func (x *GetPeerResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[82]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[80]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4943,7 +4891,7 @@ func (x *GetPeerResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetPeerResponse.ProtoReflect.Descriptor instead.
 func (*GetPeerResponse) Descriptor() ([]byte, []int) {
-	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{82}
+	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{80}
 }
 
 func (x *GetPeerResponse) GetPeer() *PeerRegistryInfo {
@@ -4972,7 +4920,7 @@ type AddBanScoreRequest struct {
 
 func (x *AddBanScoreRequest) Reset() {
 	*x = AddBanScoreRequest{}
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[83]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[81]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4984,7 +4932,7 @@ func (x *AddBanScoreRequest) String() string {
 func (*AddBanScoreRequest) ProtoMessage() {}
 
 func (x *AddBanScoreRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[83]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[81]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4997,7 +4945,7 @@ func (x *AddBanScoreRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AddBanScoreRequest.ProtoReflect.Descriptor instead.
 func (*AddBanScoreRequest) Descriptor() ([]byte, []int) {
-	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{83}
+	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{81}
 }
 
 func (x *AddBanScoreRequest) GetPeerId() string {
@@ -5032,7 +4980,7 @@ type AddBanScoreResponse struct {
 
 func (x *AddBanScoreResponse) Reset() {
 	*x = AddBanScoreResponse{}
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[84]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[82]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5044,7 +4992,7 @@ func (x *AddBanScoreResponse) String() string {
 func (*AddBanScoreResponse) ProtoMessage() {}
 
 func (x *AddBanScoreResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[84]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[82]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5057,7 +5005,7 @@ func (x *AddBanScoreResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AddBanScoreResponse.ProtoReflect.Descriptor instead.
 func (*AddBanScoreResponse) Descriptor() ([]byte, []int) {
-	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{84}
+	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{82}
 }
 
 func (x *AddBanScoreResponse) GetScore() int32 {
@@ -5084,7 +5032,7 @@ type IsPeerBannedRequest struct {
 
 func (x *IsPeerBannedRequest) Reset() {
 	*x = IsPeerBannedRequest{}
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[85]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[83]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5096,7 +5044,7 @@ func (x *IsPeerBannedRequest) String() string {
 func (*IsPeerBannedRequest) ProtoMessage() {}
 
 func (x *IsPeerBannedRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[85]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[83]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5109,7 +5057,7 @@ func (x *IsPeerBannedRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use IsPeerBannedRequest.ProtoReflect.Descriptor instead.
 func (*IsPeerBannedRequest) Descriptor() ([]byte, []int) {
-	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{85}
+	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{83}
 }
 
 func (x *IsPeerBannedRequest) GetPeerId() string {
@@ -5129,7 +5077,7 @@ type IsPeerBannedResponse struct {
 
 func (x *IsPeerBannedResponse) Reset() {
 	*x = IsPeerBannedResponse{}
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[86]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[84]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5141,7 +5089,7 @@ func (x *IsPeerBannedResponse) String() string {
 func (*IsPeerBannedResponse) ProtoMessage() {}
 
 func (x *IsPeerBannedResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[86]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[84]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5154,7 +5102,7 @@ func (x *IsPeerBannedResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use IsPeerBannedResponse.ProtoReflect.Descriptor instead.
 func (*IsPeerBannedResponse) Descriptor() ([]byte, []int) {
-	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{86}
+	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{84}
 }
 
 func (x *IsPeerBannedResponse) GetBanned() bool {
@@ -5174,7 +5122,7 @@ type ListBannedPeersResponse struct {
 
 func (x *ListBannedPeersResponse) Reset() {
 	*x = ListBannedPeersResponse{}
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[87]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[85]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5186,7 +5134,7 @@ func (x *ListBannedPeersResponse) String() string {
 func (*ListBannedPeersResponse) ProtoMessage() {}
 
 func (x *ListBannedPeersResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[87]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[85]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5199,7 +5147,7 @@ func (x *ListBannedPeersResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListBannedPeersResponse.ProtoReflect.Descriptor instead.
 func (*ListBannedPeersResponse) Descriptor() ([]byte, []int) {
-	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{87}
+	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{85}
 }
 
 func (x *ListBannedPeersResponse) GetPeerIds() []string {
@@ -5220,7 +5168,7 @@ type UpdateConnectionStateRequest struct {
 
 func (x *UpdateConnectionStateRequest) Reset() {
 	*x = UpdateConnectionStateRequest{}
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[88]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[86]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5232,7 +5180,7 @@ func (x *UpdateConnectionStateRequest) String() string {
 func (*UpdateConnectionStateRequest) ProtoMessage() {}
 
 func (x *UpdateConnectionStateRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[88]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[86]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5245,7 +5193,7 @@ func (x *UpdateConnectionStateRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateConnectionStateRequest.ProtoReflect.Descriptor instead.
 func (*UpdateConnectionStateRequest) Descriptor() ([]byte, []int) {
-	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{88}
+	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{86}
 }
 
 func (x *UpdateConnectionStateRequest) GetPeerId() string {
@@ -5272,7 +5220,7 @@ type UpdateLastMessageTimeRequest struct {
 
 func (x *UpdateLastMessageTimeRequest) Reset() {
 	*x = UpdateLastMessageTimeRequest{}
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[89]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[87]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5284,7 +5232,7 @@ func (x *UpdateLastMessageTimeRequest) String() string {
 func (*UpdateLastMessageTimeRequest) ProtoMessage() {}
 
 func (x *UpdateLastMessageTimeRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[89]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[87]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5297,7 +5245,7 @@ func (x *UpdateLastMessageTimeRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateLastMessageTimeRequest.ProtoReflect.Descriptor instead.
 func (*UpdateLastMessageTimeRequest) Descriptor() ([]byte, []int) {
-	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{89}
+	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{87}
 }
 
 func (x *UpdateLastMessageTimeRequest) GetPeerId() string {
@@ -5318,7 +5266,7 @@ type UpdateStorageRequest struct {
 
 func (x *UpdateStorageRequest) Reset() {
 	*x = UpdateStorageRequest{}
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[90]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[88]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5330,7 +5278,7 @@ func (x *UpdateStorageRequest) String() string {
 func (*UpdateStorageRequest) ProtoMessage() {}
 
 func (x *UpdateStorageRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[90]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[88]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5343,7 +5291,7 @@ func (x *UpdateStorageRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateStorageRequest.ProtoReflect.Descriptor instead.
 func (*UpdateStorageRequest) Descriptor() ([]byte, []int) {
-	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{90}
+	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{88}
 }
 
 func (x *UpdateStorageRequest) GetPeerId() string {
@@ -5370,7 +5318,7 @@ type RecordSyncAttemptRequest struct {
 
 func (x *RecordSyncAttemptRequest) Reset() {
 	*x = RecordSyncAttemptRequest{}
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[91]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[89]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5382,7 +5330,7 @@ func (x *RecordSyncAttemptRequest) String() string {
 func (*RecordSyncAttemptRequest) ProtoMessage() {}
 
 func (x *RecordSyncAttemptRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[91]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[89]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5395,7 +5343,7 @@ func (x *RecordSyncAttemptRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RecordSyncAttemptRequest.ProtoReflect.Descriptor instead.
 func (*RecordSyncAttemptRequest) Descriptor() ([]byte, []int) {
-	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{91}
+	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{89}
 }
 
 func (x *RecordSyncAttemptRequest) GetPeerId() string {
@@ -5415,7 +5363,7 @@ type ClearAllSyncAttemptsResponse struct {
 
 func (x *ClearAllSyncAttemptsResponse) Reset() {
 	*x = ClearAllSyncAttemptsResponse{}
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[92]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[90]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5427,7 +5375,7 @@ func (x *ClearAllSyncAttemptsResponse) String() string {
 func (*ClearAllSyncAttemptsResponse) ProtoMessage() {}
 
 func (x *ClearAllSyncAttemptsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[92]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[90]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5440,7 +5388,7 @@ func (x *ClearAllSyncAttemptsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ClearAllSyncAttemptsResponse.ProtoReflect.Descriptor instead.
 func (*ClearAllSyncAttemptsResponse) Descriptor() ([]byte, []int) {
-	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{92}
+	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{90}
 }
 
 func (x *ClearAllSyncAttemptsResponse) GetCleared() int32 {
@@ -5461,7 +5409,7 @@ type RecordReceivedRequest struct {
 
 func (x *RecordReceivedRequest) Reset() {
 	*x = RecordReceivedRequest{}
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[93]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[91]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5473,7 +5421,7 @@ func (x *RecordReceivedRequest) String() string {
 func (*RecordReceivedRequest) ProtoMessage() {}
 
 func (x *RecordReceivedRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[93]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[91]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5486,7 +5434,7 @@ func (x *RecordReceivedRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RecordReceivedRequest.ProtoReflect.Descriptor instead.
 func (*RecordReceivedRequest) Descriptor() ([]byte, []int) {
-	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{93}
+	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{91}
 }
 
 func (x *RecordReceivedRequest) GetPeerId() string {
@@ -5514,7 +5462,7 @@ type RecordCatchupErrorRequest struct {
 
 func (x *RecordCatchupErrorRequest) Reset() {
 	*x = RecordCatchupErrorRequest{}
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[94]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[92]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5526,7 +5474,7 @@ func (x *RecordCatchupErrorRequest) String() string {
 func (*RecordCatchupErrorRequest) ProtoMessage() {}
 
 func (x *RecordCatchupErrorRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[94]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[92]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5539,7 +5487,7 @@ func (x *RecordCatchupErrorRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RecordCatchupErrorRequest.ProtoReflect.Descriptor instead.
 func (*RecordCatchupErrorRequest) Descriptor() ([]byte, []int) {
-	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{94}
+	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{92}
 }
 
 func (x *RecordCatchupErrorRequest) GetPeerId() string {
@@ -5566,7 +5514,7 @@ type RecordCatchupAttemptRequest struct {
 
 func (x *RecordCatchupAttemptRequest) Reset() {
 	*x = RecordCatchupAttemptRequest{}
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[95]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[93]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5578,7 +5526,7 @@ func (x *RecordCatchupAttemptRequest) String() string {
 func (*RecordCatchupAttemptRequest) ProtoMessage() {}
 
 func (x *RecordCatchupAttemptRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[95]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[93]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5591,7 +5539,7 @@ func (x *RecordCatchupAttemptRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RecordCatchupAttemptRequest.ProtoReflect.Descriptor instead.
 func (*RecordCatchupAttemptRequest) Descriptor() ([]byte, []int) {
-	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{95}
+	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{93}
 }
 
 func (x *RecordCatchupAttemptRequest) GetPeerId() string {
@@ -5612,7 +5560,7 @@ type RecordCatchupSuccessRequest struct {
 
 func (x *RecordCatchupSuccessRequest) Reset() {
 	*x = RecordCatchupSuccessRequest{}
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[96]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[94]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5624,7 +5572,7 @@ func (x *RecordCatchupSuccessRequest) String() string {
 func (*RecordCatchupSuccessRequest) ProtoMessage() {}
 
 func (x *RecordCatchupSuccessRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[96]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[94]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5637,7 +5585,7 @@ func (x *RecordCatchupSuccessRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RecordCatchupSuccessRequest.ProtoReflect.Descriptor instead.
 func (*RecordCatchupSuccessRequest) Descriptor() ([]byte, []int) {
-	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{96}
+	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{94}
 }
 
 func (x *RecordCatchupSuccessRequest) GetPeerId() string {
@@ -5664,7 +5612,7 @@ type RecordCatchupFailureRequest struct {
 
 func (x *RecordCatchupFailureRequest) Reset() {
 	*x = RecordCatchupFailureRequest{}
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[97]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[95]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5676,7 +5624,7 @@ func (x *RecordCatchupFailureRequest) String() string {
 func (*RecordCatchupFailureRequest) ProtoMessage() {}
 
 func (x *RecordCatchupFailureRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[97]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[95]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5689,7 +5637,7 @@ func (x *RecordCatchupFailureRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RecordCatchupFailureRequest.ProtoReflect.Descriptor instead.
 func (*RecordCatchupFailureRequest) Descriptor() ([]byte, []int) {
-	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{97}
+	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{95}
 }
 
 func (x *RecordCatchupFailureRequest) GetPeerId() string {
@@ -5709,7 +5657,7 @@ type ResetReputationRequest struct {
 
 func (x *ResetReputationRequest) Reset() {
 	*x = ResetReputationRequest{}
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[98]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[96]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5721,7 +5669,7 @@ func (x *ResetReputationRequest) String() string {
 func (*ResetReputationRequest) ProtoMessage() {}
 
 func (x *ResetReputationRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[98]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[96]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5734,7 +5682,7 @@ func (x *ResetReputationRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ResetReputationRequest.ProtoReflect.Descriptor instead.
 func (*ResetReputationRequest) Descriptor() ([]byte, []int) {
-	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{98}
+	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{96}
 }
 
 func (x *ResetReputationRequest) GetPeerId() string {
@@ -5754,7 +5702,7 @@ type ResetReputationResponse struct {
 
 func (x *ResetReputationResponse) Reset() {
 	*x = ResetReputationResponse{}
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[99]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[97]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5766,7 +5714,7 @@ func (x *ResetReputationResponse) String() string {
 func (*ResetReputationResponse) ProtoMessage() {}
 
 func (x *ResetReputationResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[99]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[97]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5779,7 +5727,7 @@ func (x *ResetReputationResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ResetReputationResponse.ProtoReflect.Descriptor instead.
 func (*ResetReputationResponse) Descriptor() ([]byte, []int) {
-	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{99}
+	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{97}
 }
 
 func (x *ResetReputationResponse) GetReset_() int32 {
@@ -5799,7 +5747,7 @@ type ReconsiderBadPeersRequest struct {
 
 func (x *ReconsiderBadPeersRequest) Reset() {
 	*x = ReconsiderBadPeersRequest{}
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[100]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[98]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5811,7 +5759,7 @@ func (x *ReconsiderBadPeersRequest) String() string {
 func (*ReconsiderBadPeersRequest) ProtoMessage() {}
 
 func (x *ReconsiderBadPeersRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[100]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[98]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5824,7 +5772,7 @@ func (x *ReconsiderBadPeersRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReconsiderBadPeersRequest.ProtoReflect.Descriptor instead.
 func (*ReconsiderBadPeersRequest) Descriptor() ([]byte, []int) {
-	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{100}
+	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{98}
 }
 
 func (x *ReconsiderBadPeersRequest) GetCooldownSeconds() int64 {
@@ -5844,7 +5792,7 @@ type ReconsiderBadPeersResponse struct {
 
 func (x *ReconsiderBadPeersResponse) Reset() {
 	*x = ReconsiderBadPeersResponse{}
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[101]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[99]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5856,7 +5804,7 @@ func (x *ReconsiderBadPeersResponse) String() string {
 func (*ReconsiderBadPeersResponse) ProtoMessage() {}
 
 func (x *ReconsiderBadPeersResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[101]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[99]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5869,7 +5817,7 @@ func (x *ReconsiderBadPeersResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReconsiderBadPeersResponse.ProtoReflect.Descriptor instead.
 func (*ReconsiderBadPeersResponse) Descriptor() ([]byte, []int) {
-	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{101}
+	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{99}
 }
 
 func (x *ReconsiderBadPeersResponse) GetReconsidered() int32 {
@@ -5890,7 +5838,7 @@ type GetBlockLocatorRequest struct {
 
 func (x *GetBlockLocatorRequest) Reset() {
 	*x = GetBlockLocatorRequest{}
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[102]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[100]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5902,7 +5850,7 @@ func (x *GetBlockLocatorRequest) String() string {
 func (*GetBlockLocatorRequest) ProtoMessage() {}
 
 func (x *GetBlockLocatorRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[102]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[100]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5915,7 +5863,7 @@ func (x *GetBlockLocatorRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetBlockLocatorRequest.ProtoReflect.Descriptor instead.
 func (*GetBlockLocatorRequest) Descriptor() ([]byte, []int) {
-	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{102}
+	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{100}
 }
 
 func (x *GetBlockLocatorRequest) GetHash() []byte {
@@ -5942,7 +5890,7 @@ type GetBlockLocatorResponse struct {
 
 func (x *GetBlockLocatorResponse) Reset() {
 	*x = GetBlockLocatorResponse{}
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[103]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[101]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5954,7 +5902,7 @@ func (x *GetBlockLocatorResponse) String() string {
 func (*GetBlockLocatorResponse) ProtoMessage() {}
 
 func (x *GetBlockLocatorResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[103]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[101]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5967,7 +5915,7 @@ func (x *GetBlockLocatorResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetBlockLocatorResponse.ProtoReflect.Descriptor instead.
 func (*GetBlockLocatorResponse) Descriptor() ([]byte, []int) {
-	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{103}
+	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{101}
 }
 
 func (x *GetBlockLocatorResponse) GetLocator() [][]byte {
@@ -5989,7 +5937,7 @@ type LocateBlockHeadersRequest struct {
 
 func (x *LocateBlockHeadersRequest) Reset() {
 	*x = LocateBlockHeadersRequest{}
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[104]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[102]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6001,7 +5949,7 @@ func (x *LocateBlockHeadersRequest) String() string {
 func (*LocateBlockHeadersRequest) ProtoMessage() {}
 
 func (x *LocateBlockHeadersRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[104]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[102]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6014,7 +5962,7 @@ func (x *LocateBlockHeadersRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LocateBlockHeadersRequest.ProtoReflect.Descriptor instead.
 func (*LocateBlockHeadersRequest) Descriptor() ([]byte, []int) {
-	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{104}
+	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{102}
 }
 
 func (x *LocateBlockHeadersRequest) GetLocator() [][]byte {
@@ -6048,7 +5996,7 @@ type LocateBlockHeadersResponse struct {
 
 func (x *LocateBlockHeadersResponse) Reset() {
 	*x = LocateBlockHeadersResponse{}
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[105]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[103]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6060,7 +6008,7 @@ func (x *LocateBlockHeadersResponse) String() string {
 func (*LocateBlockHeadersResponse) ProtoMessage() {}
 
 func (x *LocateBlockHeadersResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[105]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[103]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6073,7 +6021,7 @@ func (x *LocateBlockHeadersResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LocateBlockHeadersResponse.ProtoReflect.Descriptor instead.
 func (*LocateBlockHeadersResponse) Descriptor() ([]byte, []int) {
-	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{105}
+	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{103}
 }
 
 func (x *LocateBlockHeadersResponse) GetBlockHeaders() [][]byte {
@@ -6094,7 +6042,7 @@ type GetBestHeightAndTimeResponse struct {
 
 func (x *GetBestHeightAndTimeResponse) Reset() {
 	*x = GetBestHeightAndTimeResponse{}
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[106]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[104]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6106,7 +6054,7 @@ func (x *GetBestHeightAndTimeResponse) String() string {
 func (*GetBestHeightAndTimeResponse) ProtoMessage() {}
 
 func (x *GetBestHeightAndTimeResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[106]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[104]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6119,7 +6067,7 @@ func (x *GetBestHeightAndTimeResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetBestHeightAndTimeResponse.ProtoReflect.Descriptor instead.
 func (*GetBestHeightAndTimeResponse) Descriptor() ([]byte, []int) {
-	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{106}
+	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{104}
 }
 
 func (x *GetBestHeightAndTimeResponse) GetHeight() uint32 {
@@ -6146,7 +6094,7 @@ type GetChainTipsResponse struct {
 
 func (x *GetChainTipsResponse) Reset() {
 	*x = GetChainTipsResponse{}
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[107]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[105]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6158,7 +6106,7 @@ func (x *GetChainTipsResponse) String() string {
 func (*GetChainTipsResponse) ProtoMessage() {}
 
 func (x *GetChainTipsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[107]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[105]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6171,7 +6119,7 @@ func (x *GetChainTipsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetChainTipsResponse.ProtoReflect.Descriptor instead.
 func (*GetChainTipsResponse) Descriptor() ([]byte, []int) {
-	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{107}
+	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{105}
 }
 
 func (x *GetChainTipsResponse) GetTips() []*model.ChainTip {
@@ -6194,7 +6142,7 @@ type ReportPeerFailureRequest struct {
 
 func (x *ReportPeerFailureRequest) Reset() {
 	*x = ReportPeerFailureRequest{}
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[108]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[106]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6206,7 +6154,7 @@ func (x *ReportPeerFailureRequest) String() string {
 func (*ReportPeerFailureRequest) ProtoMessage() {}
 
 func (x *ReportPeerFailureRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[108]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[106]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6219,7 +6167,7 @@ func (x *ReportPeerFailureRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReportPeerFailureRequest.ProtoReflect.Descriptor instead.
 func (*ReportPeerFailureRequest) Descriptor() ([]byte, []int) {
-	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{108}
+	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{106}
 }
 
 func (x *ReportPeerFailureRequest) GetHash() []byte {
@@ -6260,7 +6208,7 @@ type SetBlockPersistedAtRequest struct {
 
 func (x *SetBlockPersistedAtRequest) Reset() {
 	*x = SetBlockPersistedAtRequest{}
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[109]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[107]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6272,7 +6220,7 @@ func (x *SetBlockPersistedAtRequest) String() string {
 func (*SetBlockPersistedAtRequest) ProtoMessage() {}
 
 func (x *SetBlockPersistedAtRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[109]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[107]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6285,7 +6233,7 @@ func (x *SetBlockPersistedAtRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetBlockPersistedAtRequest.ProtoReflect.Descriptor instead.
 func (*SetBlockPersistedAtRequest) Descriptor() ([]byte, []int) {
-	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{109}
+	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{107}
 }
 
 func (x *SetBlockPersistedAtRequest) GetBlockHash() []byte {
@@ -6305,7 +6253,7 @@ type GetBlocksNotPersistedRequest struct {
 
 func (x *GetBlocksNotPersistedRequest) Reset() {
 	*x = GetBlocksNotPersistedRequest{}
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[110]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[108]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6317,7 +6265,7 @@ func (x *GetBlocksNotPersistedRequest) String() string {
 func (*GetBlocksNotPersistedRequest) ProtoMessage() {}
 
 func (x *GetBlocksNotPersistedRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[110]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[108]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6330,7 +6278,7 @@ func (x *GetBlocksNotPersistedRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetBlocksNotPersistedRequest.ProtoReflect.Descriptor instead.
 func (*GetBlocksNotPersistedRequest) Descriptor() ([]byte, []int) {
-	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{110}
+	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{108}
 }
 
 func (x *GetBlocksNotPersistedRequest) GetLimit() int32 {
@@ -6350,7 +6298,7 @@ type GetBlocksNotPersistedResponse struct {
 
 func (x *GetBlocksNotPersistedResponse) Reset() {
 	*x = GetBlocksNotPersistedResponse{}
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[111]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[109]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6362,7 +6310,7 @@ func (x *GetBlocksNotPersistedResponse) String() string {
 func (*GetBlocksNotPersistedResponse) ProtoMessage() {}
 
 func (x *GetBlocksNotPersistedResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[111]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[109]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6375,7 +6323,7 @@ func (x *GetBlocksNotPersistedResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetBlocksNotPersistedResponse.ProtoReflect.Descriptor instead.
 func (*GetBlocksNotPersistedResponse) Descriptor() ([]byte, []int) {
-	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{111}
+	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{109}
 }
 
 func (x *GetBlocksNotPersistedResponse) GetBlockBytes() [][]byte {
@@ -6397,7 +6345,7 @@ type ScheduleBlobDeletionRequest struct {
 
 func (x *ScheduleBlobDeletionRequest) Reset() {
 	*x = ScheduleBlobDeletionRequest{}
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[112]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[110]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6409,7 +6357,7 @@ func (x *ScheduleBlobDeletionRequest) String() string {
 func (*ScheduleBlobDeletionRequest) ProtoMessage() {}
 
 func (x *ScheduleBlobDeletionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[112]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[110]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6422,7 +6370,7 @@ func (x *ScheduleBlobDeletionRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ScheduleBlobDeletionRequest.ProtoReflect.Descriptor instead.
 func (*ScheduleBlobDeletionRequest) Descriptor() ([]byte, []int) {
-	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{112}
+	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{110}
 }
 
 func (x *ScheduleBlobDeletionRequest) GetBlobKey() []byte {
@@ -6464,7 +6412,7 @@ type ScheduleBlobDeletionResponse struct {
 
 func (x *ScheduleBlobDeletionResponse) Reset() {
 	*x = ScheduleBlobDeletionResponse{}
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[113]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[111]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6476,7 +6424,7 @@ func (x *ScheduleBlobDeletionResponse) String() string {
 func (*ScheduleBlobDeletionResponse) ProtoMessage() {}
 
 func (x *ScheduleBlobDeletionResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[113]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[111]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6489,7 +6437,7 @@ func (x *ScheduleBlobDeletionResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ScheduleBlobDeletionResponse.ProtoReflect.Descriptor instead.
 func (*ScheduleBlobDeletionResponse) Descriptor() ([]byte, []int) {
-	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{113}
+	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{111}
 }
 
 func (x *ScheduleBlobDeletionResponse) GetDeletionId() int64 {
@@ -6525,7 +6473,7 @@ type CancelBlobDeletionRequest struct {
 
 func (x *CancelBlobDeletionRequest) Reset() {
 	*x = CancelBlobDeletionRequest{}
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[114]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[112]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6537,7 +6485,7 @@ func (x *CancelBlobDeletionRequest) String() string {
 func (*CancelBlobDeletionRequest) ProtoMessage() {}
 
 func (x *CancelBlobDeletionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[114]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[112]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6550,7 +6498,7 @@ func (x *CancelBlobDeletionRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CancelBlobDeletionRequest.ProtoReflect.Descriptor instead.
 func (*CancelBlobDeletionRequest) Descriptor() ([]byte, []int) {
-	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{114}
+	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{112}
 }
 
 func (x *CancelBlobDeletionRequest) GetBlobKey() []byte {
@@ -6591,7 +6539,7 @@ type CancelBlobDeletionResponse struct {
 
 func (x *CancelBlobDeletionResponse) Reset() {
 	*x = CancelBlobDeletionResponse{}
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[115]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[113]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6603,7 +6551,7 @@ func (x *CancelBlobDeletionResponse) String() string {
 func (*CancelBlobDeletionResponse) ProtoMessage() {}
 
 func (x *CancelBlobDeletionResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[115]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[113]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6616,7 +6564,7 @@ func (x *CancelBlobDeletionResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CancelBlobDeletionResponse.ProtoReflect.Descriptor instead.
 func (*CancelBlobDeletionResponse) Descriptor() ([]byte, []int) {
-	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{115}
+	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{113}
 }
 
 func (x *CancelBlobDeletionResponse) GetCancelled() bool {
@@ -6647,7 +6595,7 @@ type ListScheduledDeletionsRequest struct {
 
 func (x *ListScheduledDeletionsRequest) Reset() {
 	*x = ListScheduledDeletionsRequest{}
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[116]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[114]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6659,7 +6607,7 @@ func (x *ListScheduledDeletionsRequest) String() string {
 func (*ListScheduledDeletionsRequest) ProtoMessage() {}
 
 func (x *ListScheduledDeletionsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[116]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[114]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6672,7 +6620,7 @@ func (x *ListScheduledDeletionsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListScheduledDeletionsRequest.ProtoReflect.Descriptor instead.
 func (*ListScheduledDeletionsRequest) Descriptor() ([]byte, []int) {
-	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{116}
+	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{114}
 }
 
 func (x *ListScheduledDeletionsRequest) GetMinHeight() uint32 {
@@ -6731,7 +6679,7 @@ type ScheduledDeletion struct {
 
 func (x *ScheduledDeletion) Reset() {
 	*x = ScheduledDeletion{}
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[117]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[115]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6743,7 +6691,7 @@ func (x *ScheduledDeletion) String() string {
 func (*ScheduledDeletion) ProtoMessage() {}
 
 func (x *ScheduledDeletion) ProtoReflect() protoreflect.Message {
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[117]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[115]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6756,7 +6704,7 @@ func (x *ScheduledDeletion) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ScheduledDeletion.ProtoReflect.Descriptor instead.
 func (*ScheduledDeletion) Descriptor() ([]byte, []int) {
-	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{117}
+	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{115}
 }
 
 func (x *ScheduledDeletion) GetId() int64 {
@@ -6811,7 +6759,7 @@ type ListScheduledDeletionsResponse struct {
 
 func (x *ListScheduledDeletionsResponse) Reset() {
 	*x = ListScheduledDeletionsResponse{}
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[118]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[116]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6823,7 +6771,7 @@ func (x *ListScheduledDeletionsResponse) String() string {
 func (*ListScheduledDeletionsResponse) ProtoMessage() {}
 
 func (x *ListScheduledDeletionsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[118]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[116]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6836,7 +6784,7 @@ func (x *ListScheduledDeletionsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListScheduledDeletionsResponse.ProtoReflect.Descriptor instead.
 func (*ListScheduledDeletionsResponse) Descriptor() ([]byte, []int) {
-	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{118}
+	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{116}
 }
 
 func (x *ListScheduledDeletionsResponse) GetDeletions() []*ScheduledDeletion {
@@ -6863,7 +6811,7 @@ type GetPendingBlobDeletionsRequest struct {
 
 func (x *GetPendingBlobDeletionsRequest) Reset() {
 	*x = GetPendingBlobDeletionsRequest{}
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[119]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[117]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6875,7 +6823,7 @@ func (x *GetPendingBlobDeletionsRequest) String() string {
 func (*GetPendingBlobDeletionsRequest) ProtoMessage() {}
 
 func (x *GetPendingBlobDeletionsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[119]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[117]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6888,7 +6836,7 @@ func (x *GetPendingBlobDeletionsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetPendingBlobDeletionsRequest.ProtoReflect.Descriptor instead.
 func (*GetPendingBlobDeletionsRequest) Descriptor() ([]byte, []int) {
-	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{119}
+	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{117}
 }
 
 func (x *GetPendingBlobDeletionsRequest) GetHeight() uint32 {
@@ -6914,7 +6862,7 @@ type GetPendingBlobDeletionsResponse struct {
 
 func (x *GetPendingBlobDeletionsResponse) Reset() {
 	*x = GetPendingBlobDeletionsResponse{}
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[120]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[118]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6926,7 +6874,7 @@ func (x *GetPendingBlobDeletionsResponse) String() string {
 func (*GetPendingBlobDeletionsResponse) ProtoMessage() {}
 
 func (x *GetPendingBlobDeletionsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[120]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[118]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6939,7 +6887,7 @@ func (x *GetPendingBlobDeletionsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetPendingBlobDeletionsResponse.ProtoReflect.Descriptor instead.
 func (*GetPendingBlobDeletionsResponse) Descriptor() ([]byte, []int) {
-	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{120}
+	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{118}
 }
 
 func (x *GetPendingBlobDeletionsResponse) GetDeletions() []*ScheduledDeletion {
@@ -6958,7 +6906,7 @@ type RemoveBlobDeletionRequest struct {
 
 func (x *RemoveBlobDeletionRequest) Reset() {
 	*x = RemoveBlobDeletionRequest{}
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[121]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[119]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6970,7 +6918,7 @@ func (x *RemoveBlobDeletionRequest) String() string {
 func (*RemoveBlobDeletionRequest) ProtoMessage() {}
 
 func (x *RemoveBlobDeletionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[121]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[119]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6983,7 +6931,7 @@ func (x *RemoveBlobDeletionRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RemoveBlobDeletionRequest.ProtoReflect.Descriptor instead.
 func (*RemoveBlobDeletionRequest) Descriptor() ([]byte, []int) {
-	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{121}
+	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{119}
 }
 
 func (x *RemoveBlobDeletionRequest) GetDeletionId() int64 {
@@ -7003,7 +6951,7 @@ type IncrementBlobDeletionRetryRequest struct {
 
 func (x *IncrementBlobDeletionRetryRequest) Reset() {
 	*x = IncrementBlobDeletionRetryRequest{}
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[122]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[120]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7015,7 +6963,7 @@ func (x *IncrementBlobDeletionRetryRequest) String() string {
 func (*IncrementBlobDeletionRetryRequest) ProtoMessage() {}
 
 func (x *IncrementBlobDeletionRetryRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[122]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[120]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7028,7 +6976,7 @@ func (x *IncrementBlobDeletionRetryRequest) ProtoReflect() protoreflect.Message 
 
 // Deprecated: Use IncrementBlobDeletionRetryRequest.ProtoReflect.Descriptor instead.
 func (*IncrementBlobDeletionRetryRequest) Descriptor() ([]byte, []int) {
-	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{122}
+	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{120}
 }
 
 func (x *IncrementBlobDeletionRetryRequest) GetDeletionId() int64 {
@@ -7055,7 +7003,7 @@ type IncrementBlobDeletionRetryResponse struct {
 
 func (x *IncrementBlobDeletionRetryResponse) Reset() {
 	*x = IncrementBlobDeletionRetryResponse{}
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[123]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[121]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7067,7 +7015,7 @@ func (x *IncrementBlobDeletionRetryResponse) String() string {
 func (*IncrementBlobDeletionRetryResponse) ProtoMessage() {}
 
 func (x *IncrementBlobDeletionRetryResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[123]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[121]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7080,7 +7028,7 @@ func (x *IncrementBlobDeletionRetryResponse) ProtoReflect() protoreflect.Message
 
 // Deprecated: Use IncrementBlobDeletionRetryResponse.ProtoReflect.Descriptor instead.
 func (*IncrementBlobDeletionRetryResponse) Descriptor() ([]byte, []int) {
-	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{123}
+	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{121}
 }
 
 func (x *IncrementBlobDeletionRetryResponse) GetShouldRemove() bool {
@@ -7108,7 +7056,7 @@ type CompleteBlobDeletionsRequest struct {
 
 func (x *CompleteBlobDeletionsRequest) Reset() {
 	*x = CompleteBlobDeletionsRequest{}
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[124]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[122]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7120,7 +7068,7 @@ func (x *CompleteBlobDeletionsRequest) String() string {
 func (*CompleteBlobDeletionsRequest) ProtoMessage() {}
 
 func (x *CompleteBlobDeletionsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[124]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[122]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7133,7 +7081,7 @@ func (x *CompleteBlobDeletionsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CompleteBlobDeletionsRequest.ProtoReflect.Descriptor instead.
 func (*CompleteBlobDeletionsRequest) Descriptor() ([]byte, []int) {
-	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{124}
+	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{122}
 }
 
 func (x *CompleteBlobDeletionsRequest) GetCompletedIds() []int64 {
@@ -7167,7 +7115,7 @@ type CompleteBlobDeletionsResponse struct {
 
 func (x *CompleteBlobDeletionsResponse) Reset() {
 	*x = CompleteBlobDeletionsResponse{}
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[125]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[123]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7179,7 +7127,7 @@ func (x *CompleteBlobDeletionsResponse) String() string {
 func (*CompleteBlobDeletionsResponse) ProtoMessage() {}
 
 func (x *CompleteBlobDeletionsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[125]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[123]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7192,7 +7140,7 @@ func (x *CompleteBlobDeletionsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CompleteBlobDeletionsResponse.ProtoReflect.Descriptor instead.
 func (*CompleteBlobDeletionsResponse) Descriptor() ([]byte, []int) {
-	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{125}
+	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{123}
 }
 
 func (x *CompleteBlobDeletionsResponse) GetRemovedCount() int32 {
@@ -7221,7 +7169,7 @@ type AcquireBlobDeletionBatchRequest struct {
 
 func (x *AcquireBlobDeletionBatchRequest) Reset() {
 	*x = AcquireBlobDeletionBatchRequest{}
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[126]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[124]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7233,7 +7181,7 @@ func (x *AcquireBlobDeletionBatchRequest) String() string {
 func (*AcquireBlobDeletionBatchRequest) ProtoMessage() {}
 
 func (x *AcquireBlobDeletionBatchRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[126]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[124]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7246,7 +7194,7 @@ func (x *AcquireBlobDeletionBatchRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AcquireBlobDeletionBatchRequest.ProtoReflect.Descriptor instead.
 func (*AcquireBlobDeletionBatchRequest) Descriptor() ([]byte, []int) {
-	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{126}
+	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{124}
 }
 
 func (x *AcquireBlobDeletionBatchRequest) GetHeight() uint32 {
@@ -7287,7 +7235,7 @@ type AcquireBlobDeletionBatchResponse struct {
 
 func (x *AcquireBlobDeletionBatchResponse) Reset() {
 	*x = AcquireBlobDeletionBatchResponse{}
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[127]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[125]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7299,7 +7247,7 @@ func (x *AcquireBlobDeletionBatchResponse) String() string {
 func (*AcquireBlobDeletionBatchResponse) ProtoMessage() {}
 
 func (x *AcquireBlobDeletionBatchResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[127]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[125]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7312,7 +7260,7 @@ func (x *AcquireBlobDeletionBatchResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AcquireBlobDeletionBatchResponse.ProtoReflect.Descriptor instead.
 func (*AcquireBlobDeletionBatchResponse) Descriptor() ([]byte, []int) {
-	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{127}
+	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{125}
 }
 
 func (x *AcquireBlobDeletionBatchResponse) GetBatchToken() string {
@@ -7341,7 +7289,7 @@ type CompleteBlobDeletionBatchRequest struct {
 
 func (x *CompleteBlobDeletionBatchRequest) Reset() {
 	*x = CompleteBlobDeletionBatchRequest{}
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[128]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[126]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7353,7 +7301,7 @@ func (x *CompleteBlobDeletionBatchRequest) String() string {
 func (*CompleteBlobDeletionBatchRequest) ProtoMessage() {}
 
 func (x *CompleteBlobDeletionBatchRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[128]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[126]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7366,7 +7314,7 @@ func (x *CompleteBlobDeletionBatchRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CompleteBlobDeletionBatchRequest.ProtoReflect.Descriptor instead.
 func (*CompleteBlobDeletionBatchRequest) Descriptor() ([]byte, []int) {
-	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{128}
+	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{126}
 }
 
 func (x *CompleteBlobDeletionBatchRequest) GetBatchToken() string {
@@ -7409,7 +7357,7 @@ type BatchTokenInfo struct {
 
 func (x *BatchTokenInfo) Reset() {
 	*x = BatchTokenInfo{}
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[129]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[127]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7421,7 +7369,7 @@ func (x *BatchTokenInfo) String() string {
 func (*BatchTokenInfo) ProtoMessage() {}
 
 func (x *BatchTokenInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[129]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[127]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7434,7 +7382,7 @@ func (x *BatchTokenInfo) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BatchTokenInfo.ProtoReflect.Descriptor instead.
 func (*BatchTokenInfo) Descriptor() ([]byte, []int) {
-	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{129}
+	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{127}
 }
 
 func (x *BatchTokenInfo) GetToken() string {
@@ -7483,7 +7431,7 @@ type LegacyPeerInfo struct {
 
 func (x *LegacyPeerInfo) Reset() {
 	*x = LegacyPeerInfo{}
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[130]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[128]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7495,7 +7443,7 @@ func (x *LegacyPeerInfo) String() string {
 func (*LegacyPeerInfo) ProtoMessage() {}
 
 func (x *LegacyPeerInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[130]
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[128]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7508,7 +7456,7 @@ func (x *LegacyPeerInfo) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LegacyPeerInfo.ProtoReflect.Descriptor instead.
 func (*LegacyPeerInfo) Descriptor() ([]byte, []int) {
-	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{130}
+	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{128}
 }
 
 func (x *LegacyPeerInfo) GetInbound() bool {
@@ -7567,6 +7515,396 @@ func (x *LegacyPeerInfo) GetTimeConnected() *timestamppb.Timestamp {
 	return nil
 }
 
+// OpenLaneLeaseRequest asks for a lease on a free lane.
+type OpenLaneLeaseRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Holder        string                 `protobuf:"bytes,1,opt,name=holder,proto3" json:"holder,omitempty"` // Names the process asking; recorded with the lease and its grants
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *OpenLaneLeaseRequest) Reset() {
+	*x = OpenLaneLeaseRequest{}
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[129]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *OpenLaneLeaseRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*OpenLaneLeaseRequest) ProtoMessage() {}
+
+func (x *OpenLaneLeaseRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[129]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use OpenLaneLeaseRequest.ProtoReflect.Descriptor instead.
+func (*OpenLaneLeaseRequest) Descriptor() ([]byte, []int) {
+	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{129}
+}
+
+func (x *OpenLaneLeaseRequest) GetHolder() string {
+	if x != nil {
+		return x.Holder
+	}
+	return ""
+}
+
+// LaneLeaseGrant is a new lease and its first grant.
+type LaneLeaseGrant struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	LeaseId       []byte                 `protobuf:"bytes,1,opt,name=lease_id,json=leaseId,proto3" json:"lease_id,omitempty"` // 16 random bytes naming the lease
+	Lane          uint32                 `protobuf:"varint,2,opt,name=lane,proto3" json:"lane,omitempty"`
+	First         uint64                 `protobuf:"varint,3,opt,name=first,proto3" json:"first,omitempty"` // First position, inclusive
+	Last          uint64                 `protobuf:"varint,4,opt,name=last,proto3" json:"last,omitempty"`   // Last position, inclusive
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *LaneLeaseGrant) Reset() {
+	*x = LaneLeaseGrant{}
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[130]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *LaneLeaseGrant) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*LaneLeaseGrant) ProtoMessage() {}
+
+func (x *LaneLeaseGrant) ProtoReflect() protoreflect.Message {
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[130]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use LaneLeaseGrant.ProtoReflect.Descriptor instead.
+func (*LaneLeaseGrant) Descriptor() ([]byte, []int) {
+	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{130}
+}
+
+func (x *LaneLeaseGrant) GetLeaseId() []byte {
+	if x != nil {
+		return x.LeaseId
+	}
+	return nil
+}
+
+func (x *LaneLeaseGrant) GetLane() uint32 {
+	if x != nil {
+		return x.Lane
+	}
+	return 0
+}
+
+func (x *LaneLeaseGrant) GetFirst() uint64 {
+	if x != nil {
+		return x.First
+	}
+	return 0
+}
+
+func (x *LaneLeaseGrant) GetLast() uint64 {
+	if x != nil {
+		return x.Last
+	}
+	return 0
+}
+
+// RenewLaneLeaseRequest renews a lease, reports the holder's rate and may ask for the next grant.
+type RenewLaneLeaseRequest struct {
+	state            protoimpl.MessageState `protogen:"open.v1"`
+	LeaseId          []byte                 `protobuf:"bytes,1,opt,name=lease_id,json=leaseId,proto3" json:"lease_id,omitempty"`
+	Lane             uint32                 `protobuf:"varint,2,opt,name=lane,proto3" json:"lane,omitempty"`
+	Rate             uint64                 `protobuf:"varint,3,opt,name=rate,proto3" json:"rate,omitempty"`                                                   // Positions taken per second, as the holder measured it
+	WantGrant        bool                   `protobuf:"varint,4,opt,name=want_grant,json=wantGrant,proto3" json:"want_grant,omitempty"`                        // Asks for the next grant
+	SettlesFirst     uint64                 `protobuf:"varint,5,opt,name=settles_first,json=settlesFirst,proto3" json:"settles_first,omitempty"`               // With want_grant: first position of the oldest grant the holder has left and not yet reported; 0 for none
+	SettlesLastTaken uint64                 `protobuf:"varint,6,opt,name=settles_last_taken,json=settlesLastTaken,proto3" json:"settles_last_taken,omitempty"` // Its final number: its last position if used up, else the highest taken, lowered past positions at the top that came back unwritten. 0 with settles_first set when every position the grant gave out came back
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
+}
+
+func (x *RenewLaneLeaseRequest) Reset() {
+	*x = RenewLaneLeaseRequest{}
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[131]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RenewLaneLeaseRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RenewLaneLeaseRequest) ProtoMessage() {}
+
+func (x *RenewLaneLeaseRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[131]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RenewLaneLeaseRequest.ProtoReflect.Descriptor instead.
+func (*RenewLaneLeaseRequest) Descriptor() ([]byte, []int) {
+	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{131}
+}
+
+func (x *RenewLaneLeaseRequest) GetLeaseId() []byte {
+	if x != nil {
+		return x.LeaseId
+	}
+	return nil
+}
+
+func (x *RenewLaneLeaseRequest) GetLane() uint32 {
+	if x != nil {
+		return x.Lane
+	}
+	return 0
+}
+
+func (x *RenewLaneLeaseRequest) GetRate() uint64 {
+	if x != nil {
+		return x.Rate
+	}
+	return 0
+}
+
+func (x *RenewLaneLeaseRequest) GetWantGrant() bool {
+	if x != nil {
+		return x.WantGrant
+	}
+	return false
+}
+
+func (x *RenewLaneLeaseRequest) GetSettlesFirst() uint64 {
+	if x != nil {
+		return x.SettlesFirst
+	}
+	return 0
+}
+
+func (x *RenewLaneLeaseRequest) GetSettlesLastTaken() uint64 {
+	if x != nil {
+		return x.SettlesLastTaken
+	}
+	return 0
+}
+
+// RenewLaneLeaseResponse answers a renewal. closed means the lease is closed and nothing was recorded.
+type RenewLaneLeaseResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Closed        bool                   `protobuf:"varint,1,opt,name=closed,proto3" json:"closed,omitempty"`
+	Granted       bool                   `protobuf:"varint,2,opt,name=granted,proto3" json:"granted,omitempty"` // first and last name a new grant
+	First         uint64                 `protobuf:"varint,3,opt,name=first,proto3" json:"first,omitempty"`
+	Last          uint64                 `protobuf:"varint,4,opt,name=last,proto3" json:"last,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RenewLaneLeaseResponse) Reset() {
+	*x = RenewLaneLeaseResponse{}
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[132]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RenewLaneLeaseResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RenewLaneLeaseResponse) ProtoMessage() {}
+
+func (x *RenewLaneLeaseResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[132]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RenewLaneLeaseResponse.ProtoReflect.Descriptor instead.
+func (*RenewLaneLeaseResponse) Descriptor() ([]byte, []int) {
+	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{132}
+}
+
+func (x *RenewLaneLeaseResponse) GetClosed() bool {
+	if x != nil {
+		return x.Closed
+	}
+	return false
+}
+
+func (x *RenewLaneLeaseResponse) GetGranted() bool {
+	if x != nil {
+		return x.Granted
+	}
+	return false
+}
+
+func (x *RenewLaneLeaseResponse) GetFirst() uint64 {
+	if x != nil {
+		return x.First
+	}
+	return 0
+}
+
+func (x *RenewLaneLeaseResponse) GetLast() uint64 {
+	if x != nil {
+		return x.Last
+	}
+	return 0
+}
+
+// ReleaseLaneLeaseRequest ends a lease cleanly.
+type ReleaseLaneLeaseRequest struct {
+	state            protoimpl.MessageState `protogen:"open.v1"`
+	LeaseId          []byte                 `protobuf:"bytes,1,opt,name=lease_id,json=leaseId,proto3" json:"lease_id,omitempty"`
+	Lane             uint32                 `protobuf:"varint,2,opt,name=lane,proto3" json:"lane,omitempty"`
+	LastTaken        uint64                 `protobuf:"varint,3,opt,name=last_taken,json=lastTaken,proto3" json:"last_taken,omitempty"` // Highest position this lease gave out that may carry a record: positions at the top that came back unwritten are left out; 0 when this lease gave none out or every one of them came back
+	SettlesFirst     uint64                 `protobuf:"varint,4,opt,name=settles_first,json=settlesFirst,proto3" json:"settles_first,omitempty"`
+	SettlesLastTaken uint64                 `protobuf:"varint,5,opt,name=settles_last_taken,json=settlesLastTaken,proto3" json:"settles_last_taken,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
+}
+
+func (x *ReleaseLaneLeaseRequest) Reset() {
+	*x = ReleaseLaneLeaseRequest{}
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[133]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ReleaseLaneLeaseRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ReleaseLaneLeaseRequest) ProtoMessage() {}
+
+func (x *ReleaseLaneLeaseRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[133]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ReleaseLaneLeaseRequest.ProtoReflect.Descriptor instead.
+func (*ReleaseLaneLeaseRequest) Descriptor() ([]byte, []int) {
+	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{133}
+}
+
+func (x *ReleaseLaneLeaseRequest) GetLeaseId() []byte {
+	if x != nil {
+		return x.LeaseId
+	}
+	return nil
+}
+
+func (x *ReleaseLaneLeaseRequest) GetLane() uint32 {
+	if x != nil {
+		return x.Lane
+	}
+	return 0
+}
+
+func (x *ReleaseLaneLeaseRequest) GetLastTaken() uint64 {
+	if x != nil {
+		return x.LastTaken
+	}
+	return 0
+}
+
+func (x *ReleaseLaneLeaseRequest) GetSettlesFirst() uint64 {
+	if x != nil {
+		return x.SettlesFirst
+	}
+	return 0
+}
+
+func (x *ReleaseLaneLeaseRequest) GetSettlesLastTaken() uint64 {
+	if x != nil {
+		return x.SettlesLastTaken
+	}
+	return 0
+}
+
+// ReleaseLaneLeaseResponse answers a release.
+type ReleaseLaneLeaseResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	AlreadyClosed bool                   `protobuf:"varint,1,opt,name=already_closed,json=alreadyClosed,proto3" json:"already_closed,omitempty"` // The lease was closed before this release
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ReleaseLaneLeaseResponse) Reset() {
+	*x = ReleaseLaneLeaseResponse{}
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[134]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ReleaseLaneLeaseResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ReleaseLaneLeaseResponse) ProtoMessage() {}
+
+func (x *ReleaseLaneLeaseResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[134]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ReleaseLaneLeaseResponse.ProtoReflect.Descriptor instead.
+func (*ReleaseLaneLeaseResponse) Descriptor() ([]byte, []int) {
+	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{134}
+}
+
+func (x *ReleaseLaneLeaseResponse) GetAlreadyClosed() bool {
+	if x != nil {
+		return x.AlreadyClosed
+	}
+	return false
+}
+
 var File_services_blockchain_blockchain_api_blockchain_api_proto protoreflect.FileDescriptor
 
 const file_services_blockchain_blockchain_api_blockchain_api_proto_rawDesc = "" +
@@ -7575,7 +7913,7 @@ const file_services_blockchain_blockchain_api_blockchain_api_proto_rawDesc = "" 
 	"\x0eHealthResponse\x12\x0e\n" +
 	"\x02ok\x18\x01 \x01(\bR\x02ok\x12\x18\n" +
 	"\adetails\x18\x02 \x01(\tR\adetails\x128\n" +
-	"\ttimestamp\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\ttimestamp\"\xb4\x03\n" +
+	"\ttimestamp\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\ttimestamp\"\xf4\x03\n" +
 	"\x0fAddBlockRequest\x12\x16\n" +
 	"\x06header\x18\x01 \x01(\fR\x06header\x12%\n" +
 	"\x0esubtree_hashes\x18\x02 \x03(\fR\rsubtreeHashes\x12\x1f\n" +
@@ -7590,7 +7928,17 @@ const file_services_blockchain_blockchain_api_blockchain_api_proto_rawDesc = "" 
 	"\roptionInvalid\x18\n" +
 	" \x01(\bR\roptionInvalid\x12\x1a\n" +
 	"\boptionID\x18\v \x01(\x04R\boptionID\x12#\n" +
-	"\rcoinbase_bump\x18\f \x01(\fR\fcoinbaseBump\"%\n" +
+	"\rcoinbase_bump\x18\f \x01(\fR\fcoinbaseBump\x12>\n" +
+	"\rlane_map_rows\x18\r \x03(\v2\x1a.blockchain_api.LaneMapRowR\vlaneMapRows\"\x98\x01\n" +
+	"\n" +
+	"LaneMapRow\x12\x12\n" +
+	"\x04lane\x18\x01 \x01(\rR\x04lane\x12\x14\n" +
+	"\x05first\x18\x02 \x01(\x04R\x05first\x12\x12\n" +
+	"\x04last\x18\x03 \x01(\x04R\x04last\x12\x1d\n" +
+	"\n" +
+	"first_hole\x18\x04 \x01(\x04R\tfirstHole\x12\x10\n" +
+	"\x03tag\x18\x05 \x01(\rR\x03tag\x12\x1b\n" +
+	"\thole_data\x18\x06 \x01(\fR\bholeData\"%\n" +
 	"\x0fGetBlockRequest\x12\x12\n" +
 	"\x04hash\x18\x01 \x01(\fR\x04hash\"<\n" +
 	"\x10GetBlocksRequest\x12\x12\n" +
@@ -7652,10 +8000,7 @@ const file_services_blockchain_blockchain_api_blockchain_api_proto_rawDesc = "" 
 	"maxHeaders\"S\n" +
 	"\x17GetBlockHeadersResponse\x12\"\n" +
 	"\fblockHeaders\x18\x01 \x03(\fR\fblockHeaders\x12\x14\n" +
-	"\x05metas\x18\x02 \x03(\fR\x05metas\"X\n" +
-	"\x1eGetBlockHeadersFromTillRequest\x12\x1c\n" +
-	"\tstartHash\x18\x01 \x01(\fR\tstartHash\x12\x18\n" +
-	"\aendHash\x18\x02 \x01(\fR\aendHash\"Z\n" +
+	"\x05metas\x18\x02 \x03(\fR\x05metas\"Z\n" +
 	" GetBlockHeadersFromHeightRequest\x12 \n" +
 	"\vstartHeight\x18\x01 \x01(\rR\vstartHeight\x12\x14\n" +
 	"\x05limit\x18\x02 \x01(\rR\x05limit\"]\n" +
@@ -7707,7 +8052,7 @@ const file_services_blockchain_blockchain_api_blockchain_api_proto_rawDesc = "" 
 	"\x17InvalidateBlockResponse\x12,\n" +
 	"\x11invalidatedBlocks\x18\x01 \x03(\fR\x11invalidatedBlocks\"6\n" +
 	"\x16RevalidateBlockRequest\x12\x1c\n" +
-	"\tblockHash\x18\x01 \x01(\fR\tblockHash\"\xef\x03\n" +
+	"\tblockHash\x18\x01 \x01(\fR\tblockHash\"\xa1\x04\n" +
 	"\x16GetBlockHeaderResponse\x12 \n" +
 	"\vblockHeader\x18\x01 \x01(\fR\vblockHeader\x12\x0e\n" +
 	"\x02id\x18\x02 \x01(\rR\x02id\x12\x16\n" +
@@ -7726,7 +8071,8 @@ const file_services_blockchain_blockchain_api_blockchain_api_proto_rawDesc = "" 
 	"\fsubtrees_set\x18\f \x01(\bR\vsubtreesSet\x12\x18\n" +
 	"\ainvalid\x18\r \x01(\bR\ainvalid\x12=\n" +
 	"\fprocessed_at\x18\x0e \x01(\v2\x1a.google.protobuf.TimestampR\vprocessedAt\x12(\n" +
-	"\x10median_time_past\x18\x0f \x01(\rR\x0emedianTimePast\"V\n" +
+	"\x10median_time_past\x18\x0f \x01(\rR\x0emedianTimePast\x120\n" +
+	"\x14mined_set_generation\x18\x10 \x01(\x04R\x12minedSetGeneration\"V\n" +
 	" CheckBlockIsCurrentChainResponse\x122\n" +
 	"\x14isPartOfCurrentChain\x18\x01 \x01(\bR\x14isPartOfCurrentChain\"^\n" +
 	"\"CheckBlockIsAncestorOfBlockRequest\x12\x1a\n" +
@@ -7779,25 +8125,18 @@ const file_services_blockchain_blockchain_api_blockchain_api_proto_rawDesc = "" 
 	"\x05block\x18\x01 \x01(\v2\x14.model.SuitableBlockR\x05block\"I\n" +
 	"\x1dGetHashOfAncestorBlockRequest\x12\x12\n" +
 	"\x04hash\x18\x01 \x01(\fR\x04hash\x12\x14\n" +
-	"\x05depth\x18\x02 \x01(\rR\x05depth\"\x83\x01\n" +
-	"+GetLatestBlockHeaderFromBlockLocatorRequest\x12$\n" +
-	"\rbestBlockHash\x18\x01 \x01(\fR\rbestBlockHash\x12.\n" +
-	"\x12blockLocatorHashes\x18\x02 \x03(\fR\x12blockLocatorHashes\"\x90\x01\n" +
-	" GetBlockHeadersFromOldestRequest\x12\"\n" +
-	"\fchainTipHash\x18\x01 \x01(\fR\fchainTipHash\x12\x1e\n" +
-	"\n" +
-	"targetHash\x18\x02 \x01(\fR\n" +
-	"targetHash\x12(\n" +
-	"\x0fnumberOfHeaders\x18\x03 \x01(\x04R\x0fnumberOfHeaders\"4\n" +
+	"\x05depth\x18\x02 \x01(\rR\x05depth\"4\n" +
 	"\x1eGetHashOfAncestorBlockResponse\x12\x12\n" +
 	"\x04hash\x18\x01 \x01(\fR\x04hash\"v\n" +
 	"\x1aGetNextWorkRequiredRequest\x12,\n" +
 	"\x11previousBlockHash\x18\x01 \x01(\fR\x11previousBlockHash\x12*\n" +
 	"\x10currentBlockTime\x18\x02 \x01(\x03R\x10currentBlockTime\"1\n" +
 	"\x1bGetNextWorkRequiredResponse\x12\x12\n" +
-	"\x04bits\x18\x01 \x01(\fR\x04bits\"7\n" +
+	"\x04bits\x18\x01 \x01(\fR\x04bits\"\x87\x01\n" +
 	"\x17SetBlockMinedSetRequest\x12\x1c\n" +
-	"\tblockHash\x18\x01 \x01(\fR\tblockHash\"9\n" +
+	"\tblockHash\x18\x01 \x01(\fR\tblockHash\x125\n" +
+	"\x14mined_set_generation\x18\x02 \x01(\x04H\x00R\x12minedSetGeneration\x88\x01\x01B\x17\n" +
+	"\x15_mined_set_generation\"9\n" +
 	"\x19ClearBlockMinedSetRequest\x12\x1c\n" +
 	"\tblockHash\x18\x01 \x01(\fR\tblockHash\">\n" +
 	"\x1cGetBlocksMinedNotSetResponse\x12\x1e\n" +
@@ -8083,7 +8422,36 @@ const file_services_blockchain_blockchain_api_blockchain_api_proto_rawDesc = "" 
 	"\x0fstarting_height\x18\x06 \x01(\x05R\x0estartingHeight\x12 \n" +
 	"\fis_sync_peer\x18\a \x01(\bR\n" +
 	"isSyncPeer\x12A\n" +
-	"\x0etime_connected\x18\b \x01(\v2\x1a.google.protobuf.TimestampR\rtimeConnected*F\n" +
+	"\x0etime_connected\x18\b \x01(\v2\x1a.google.protobuf.TimestampR\rtimeConnected\".\n" +
+	"\x14OpenLaneLeaseRequest\x12\x16\n" +
+	"\x06holder\x18\x01 \x01(\tR\x06holder\"i\n" +
+	"\x0eLaneLeaseGrant\x12\x19\n" +
+	"\blease_id\x18\x01 \x01(\fR\aleaseId\x12\x12\n" +
+	"\x04lane\x18\x02 \x01(\rR\x04lane\x12\x14\n" +
+	"\x05first\x18\x03 \x01(\x04R\x05first\x12\x12\n" +
+	"\x04last\x18\x04 \x01(\x04R\x04last\"\xcc\x01\n" +
+	"\x15RenewLaneLeaseRequest\x12\x19\n" +
+	"\blease_id\x18\x01 \x01(\fR\aleaseId\x12\x12\n" +
+	"\x04lane\x18\x02 \x01(\rR\x04lane\x12\x12\n" +
+	"\x04rate\x18\x03 \x01(\x04R\x04rate\x12\x1d\n" +
+	"\n" +
+	"want_grant\x18\x04 \x01(\bR\twantGrant\x12#\n" +
+	"\rsettles_first\x18\x05 \x01(\x04R\fsettlesFirst\x12,\n" +
+	"\x12settles_last_taken\x18\x06 \x01(\x04R\x10settlesLastTaken\"t\n" +
+	"\x16RenewLaneLeaseResponse\x12\x16\n" +
+	"\x06closed\x18\x01 \x01(\bR\x06closed\x12\x18\n" +
+	"\agranted\x18\x02 \x01(\bR\agranted\x12\x14\n" +
+	"\x05first\x18\x03 \x01(\x04R\x05first\x12\x12\n" +
+	"\x04last\x18\x04 \x01(\x04R\x04last\"\xba\x01\n" +
+	"\x17ReleaseLaneLeaseRequest\x12\x19\n" +
+	"\blease_id\x18\x01 \x01(\fR\aleaseId\x12\x12\n" +
+	"\x04lane\x18\x02 \x01(\rR\x04lane\x12\x1d\n" +
+	"\n" +
+	"last_taken\x18\x03 \x01(\x04R\tlastTaken\x12#\n" +
+	"\rsettles_first\x18\x04 \x01(\x04R\fsettlesFirst\x12,\n" +
+	"\x12settles_last_taken\x18\x05 \x01(\x04R\x10settlesLastTaken\"A\n" +
+	"\x18ReleaseLaneLeaseResponse\x12%\n" +
+	"\x0ealready_closed\x18\x01 \x01(\bR\ralreadyClosed*F\n" +
 	"\fFSMEventType\x12\b\n" +
 	"\x04STOP\x10\x00\x12\a\n" +
 	"\x03RUN\x10\x01\x12\x11\n" +
@@ -8095,7 +8463,7 @@ const file_services_blockchain_blockchain_api_blockchain_api_proto_rawDesc = "" 
 	"\fFSMStateType\x12\b\n" +
 	"\x04IDLE\x10\x00\x12\v\n" +
 	"\aRUNNING\x10\x01\x12\x12\n" +
-	"\x0eCATCHINGBLOCKS\x10\x02\"\x04\b\x03\x10\x03*\rLEGACYSYNCING2\x8d9\n" +
+	"\x0eCATCHINGBLOCKS\x10\x02\"\x04\b\x03\x10\x03*\rLEGACYSYNCING2\xb28\n" +
 	"\rBlockchainAPI\x12F\n" +
 	"\n" +
 	"HealthGRPC\x12\x16.google.protobuf.Empty\x1a\x1e.blockchain_api.HealthResponse\"\x00\x12E\n" +
@@ -8111,17 +8479,14 @@ const file_services_blockchain_blockchain_api_blockchain_api_proto_rawDesc = "" 
 	"\x0eGetLastNBlocks\x12%.blockchain_api.GetLastNBlocksRequest\x1a&.blockchain_api.GetLastNBlocksResponse\"\x00\x12v\n" +
 	"\x15GetLastNInvalidBlocks\x12,.blockchain_api.GetLastNInvalidBlocksRequest\x1a-.blockchain_api.GetLastNInvalidBlocksResponse\"\x00\x12g\n" +
 	"\x10GetSuitableBlock\x12'.blockchain_api.GetSuitableBlockRequest\x1a(.blockchain_api.GetSuitableBlockResponse\"\x00\x12y\n" +
-	"\x16GetHashOfAncestorBlock\x12-.blockchain_api.GetHashOfAncestorBlockRequest\x1a..blockchain_api.GetHashOfAncestorBlockResponse\"\x00\x12\x8d\x01\n" +
-	"$GetLatestBlockHeaderFromBlockLocator\x12;.blockchain_api.GetLatestBlockHeaderFromBlockLocatorRequest\x1a&.blockchain_api.GetBlockHeaderResponse\"\x00\x12x\n" +
-	"\x19GetBlockHeadersFromOldest\x120.blockchain_api.GetBlockHeadersFromOldestRequest\x1a'.blockchain_api.GetBlockHeadersResponse\"\x00\x12p\n" +
+	"\x16GetHashOfAncestorBlock\x12-.blockchain_api.GetHashOfAncestorBlockRequest\x1a..blockchain_api.GetHashOfAncestorBlockResponse\"\x00\x12p\n" +
 	"\x13GetNextWorkRequired\x12*.blockchain_api.GetNextWorkRequiredRequest\x1a+.blockchain_api.GetNextWorkRequiredResponse\"\x00\x12[\n" +
 	"\x0eGetBlockExists\x12\x1f.blockchain_api.GetBlockRequest\x1a&.blockchain_api.GetBlockExistsResponse\"\x00\x12d\n" +
 	"\x0fGetBlockHeaders\x12&.blockchain_api.GetBlockHeadersRequest\x1a'.blockchain_api.GetBlockHeadersResponse\"\x00\x12^\n" +
 	"\x1aGetBestBlockHeaderUncached\x12\x16.google.protobuf.Empty\x1a&.blockchain_api.GetBlockHeaderResponse\"\x00\x12q\n" +
 	"\x1cGetBlockHeadersByParentLinks\x12&.blockchain_api.GetBlockHeadersRequest\x1a'.blockchain_api.GetBlockHeadersResponse\"\x00\x12\x84\x01\n" +
 	"\x1fGetBlockHeadersToCommonAncestor\x126.blockchain_api.GetBlockHeadersToCommonAncestorRequest\x1a'.blockchain_api.GetBlockHeadersResponse\"\x00\x12\x88\x01\n" +
-	"!GetBlockHeadersFromCommonAncestor\x128.blockchain_api.GetBlockHeadersFromCommonAncestorRequest\x1a'.blockchain_api.GetBlockHeadersResponse\"\x00\x12t\n" +
-	"\x17GetBlockHeadersFromTill\x12..blockchain_api.GetBlockHeadersFromTillRequest\x1a'.blockchain_api.GetBlockHeadersResponse\"\x00\x12\x82\x01\n" +
+	"!GetBlockHeadersFromCommonAncestor\x128.blockchain_api.GetBlockHeadersFromCommonAncestorRequest\x1a'.blockchain_api.GetBlockHeadersResponse\"\x00\x12\x82\x01\n" +
 	"\x19GetBlockHeadersFromHeight\x120.blockchain_api.GetBlockHeadersFromHeightRequest\x1a1.blockchain_api.GetBlockHeadersFromHeightResponse\"\x00\x12g\n" +
 	"\x10BlocksBetterThan\x12'.blockchain_api.BlocksBetterThanRequest\x1a(.blockchain_api.BlocksBetterThanResponse\"\x00\x12]\n" +
 	"\x14ClearBestTipLowWater\x12+.blockchain_api.ClearBestTipLowWaterRequest\x1a\x16.google.protobuf.Empty\"\x00\x12|\n" +
@@ -8129,7 +8494,10 @@ const file_services_blockchain_blockchain_api_blockchain_api_proto_rawDesc = "" 
 	"\x1aGetMedianTimePastByHeights\x121.blockchain_api.GetMedianTimePastByHeightsRequest\x1a2.blockchain_api.GetMedianTimePastByHeightsResponse\"\x00\x12j\n" +
 	"\x11GetBlocksByHeight\x12(.blockchain_api.GetBlocksByHeightRequest\x1a).blockchain_api.GetBlocksByHeightResponse\"\x00\x12\x88\x01\n" +
 	"\x1bFindBlocksContainingSubtree\x122.blockchain_api.FindBlocksContainingSubtreeRequest\x1a3.blockchain_api.FindBlocksContainingSubtreeResponse\"\x00\x12h\n" +
-	"\x11GetBlockHeaderIDs\x12&.blockchain_api.GetBlockHeadersRequest\x1a).blockchain_api.GetBlockHeaderIDsResponse\"\x00\x12V\n" +
+	"\x11GetBlockHeaderIDs\x12&.blockchain_api.GetBlockHeadersRequest\x1a).blockchain_api.GetBlockHeaderIDsResponse\"\x00\x12W\n" +
+	"\rOpenLaneLease\x12$.blockchain_api.OpenLaneLeaseRequest\x1a\x1e.blockchain_api.LaneLeaseGrant\"\x00\x12a\n" +
+	"\x0eRenewLaneLease\x12%.blockchain_api.RenewLaneLeaseRequest\x1a&.blockchain_api.RenewLaneLeaseResponse\"\x00\x12g\n" +
+	"\x10ReleaseLaneLease\x12'.blockchain_api.ReleaseLaneLeaseRequest\x1a(.blockchain_api.ReleaseLaneLeaseResponse\"\x00\x12V\n" +
 	"\x12GetBestBlockHeader\x12\x16.google.protobuf.Empty\x1a&.blockchain_api.GetBlockHeaderResponse\"\x00\x12\x81\x01\n" +
 	"\x1aCheckBlockIsInCurrentChain\x12/.blockchain_api.CheckBlockIsCurrentChainRequest\x1a0.blockchain_api.CheckBlockIsCurrentChainResponse\"\x00\x12\x88\x01\n" +
 	"\x1bCheckBlockIsAncestorOfBlock\x122.blockchain_api.CheckBlockIsAncestorOfBlockRequest\x1a3.blockchain_api.CheckBlockIsAncestorOfBlockResponse\"\x00\x12N\n" +
@@ -8210,383 +8578,388 @@ func file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP() 
 }
 
 var file_services_blockchain_blockchain_api_blockchain_api_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
-var file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes = make([]protoimpl.MessageInfo, 132)
+var file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes = make([]protoimpl.MessageInfo, 136)
 var file_services_blockchain_blockchain_api_blockchain_api_proto_goTypes = []any{
-	(FSMEventType)(0),                                   // 0: blockchain_api.FSMEventType
-	(TransportType)(0),                                  // 1: blockchain_api.TransportType
-	(FSMStateType)(0),                                   // 2: blockchain_api.FSMStateType
-	(*HealthResponse)(nil),                              // 3: blockchain_api.HealthResponse
-	(*AddBlockRequest)(nil),                             // 4: blockchain_api.AddBlockRequest
-	(*GetBlockRequest)(nil),                             // 5: blockchain_api.GetBlockRequest
-	(*GetBlocksRequest)(nil),                            // 6: blockchain_api.GetBlocksRequest
-	(*GetBlocksResponse)(nil),                           // 7: blockchain_api.GetBlocksResponse
-	(*GetBlockByHeightRequest)(nil),                     // 8: blockchain_api.GetBlockByHeightRequest
-	(*GetBlockByIDRequest)(nil),                         // 9: blockchain_api.GetBlockByIDRequest
-	(*GetNextBlockIDResponse)(nil),                      // 10: blockchain_api.GetNextBlockIDResponse
-	(*AssignBlockIDRequest)(nil),                        // 11: blockchain_api.AssignBlockIDRequest
-	(*AssignBlockIDResponse)(nil),                       // 12: blockchain_api.AssignBlockIDResponse
-	(*GetBlockInChainByHeightHashRequest)(nil),          // 13: blockchain_api.GetBlockInChainByHeightHashRequest
-	(*GetBlockResponse)(nil),                            // 14: blockchain_api.GetBlockResponse
-	(*GetFullBlockResponse)(nil),                        // 15: blockchain_api.GetFullBlockResponse
-	(*GetBlockGraphDataRequest)(nil),                    // 16: blockchain_api.GetBlockGraphDataRequest
-	(*GetBlockExistsResponse)(nil),                      // 17: blockchain_api.GetBlockExistsResponse
-	(*GetMedianTimeRequest)(nil),                        // 18: blockchain_api.GetMedianTimeRequest
-	(*GetBlockHeadersRequest)(nil),                      // 19: blockchain_api.GetBlockHeadersRequest
-	(*GetBlockHeadersToCommonAncestorRequest)(nil),      // 20: blockchain_api.GetBlockHeadersToCommonAncestorRequest
-	(*GetBlockHeadersFromCommonAncestorRequest)(nil),    // 21: blockchain_api.GetBlockHeadersFromCommonAncestorRequest
-	(*GetBlockHeadersResponse)(nil),                     // 22: blockchain_api.GetBlockHeadersResponse
-	(*GetBlockHeadersFromTillRequest)(nil),              // 23: blockchain_api.GetBlockHeadersFromTillRequest
-	(*GetBlockHeadersFromHeightRequest)(nil),            // 24: blockchain_api.GetBlockHeadersFromHeightRequest
-	(*GetBlockHeadersFromHeightResponse)(nil),           // 25: blockchain_api.GetBlockHeadersFromHeightResponse
-	(*BlocksBetterThanRequest)(nil),                     // 26: blockchain_api.BlocksBetterThanRequest
-	(*BlocksBetterThanResponse)(nil),                    // 27: blockchain_api.BlocksBetterThanResponse
-	(*ClearBestTipLowWaterRequest)(nil),                 // 28: blockchain_api.ClearBestTipLowWaterRequest
-	(*GetBlockHeadersByHeightRequest)(nil),              // 29: blockchain_api.GetBlockHeadersByHeightRequest
-	(*GetBlockHeadersByHeightResponse)(nil),             // 30: blockchain_api.GetBlockHeadersByHeightResponse
-	(*GetMedianTimePastByHeightsRequest)(nil),           // 31: blockchain_api.GetMedianTimePastByHeightsRequest
-	(*GetMedianTimePastByHeightsResponse)(nil),          // 32: blockchain_api.GetMedianTimePastByHeightsResponse
-	(*GetBlocksByHeightRequest)(nil),                    // 33: blockchain_api.GetBlocksByHeightRequest
-	(*GetBlocksByHeightResponse)(nil),                   // 34: blockchain_api.GetBlocksByHeightResponse
-	(*FindBlocksContainingSubtreeRequest)(nil),          // 35: blockchain_api.FindBlocksContainingSubtreeRequest
-	(*FindBlocksContainingSubtreeResponse)(nil),         // 36: blockchain_api.FindBlocksContainingSubtreeResponse
-	(*GetBlockHeaderIDsResponse)(nil),                   // 37: blockchain_api.GetBlockHeaderIDsResponse
-	(*GetMedianTimeResponse)(nil),                       // 38: blockchain_api.GetMedianTimeResponse
-	(*GetBlockHeaderRequest)(nil),                       // 39: blockchain_api.GetBlockHeaderRequest
-	(*CheckBlockIsCurrentChainRequest)(nil),             // 40: blockchain_api.CheckBlockIsCurrentChainRequest
-	(*InvalidateBlockRequest)(nil),                      // 41: blockchain_api.InvalidateBlockRequest
-	(*InvalidateBlockResponse)(nil),                     // 42: blockchain_api.InvalidateBlockResponse
-	(*RevalidateBlockRequest)(nil),                      // 43: blockchain_api.RevalidateBlockRequest
-	(*GetBlockHeaderResponse)(nil),                      // 44: blockchain_api.GetBlockHeaderResponse
-	(*CheckBlockIsCurrentChainResponse)(nil),            // 45: blockchain_api.CheckBlockIsCurrentChainResponse
-	(*CheckBlockIsAncestorOfBlockRequest)(nil),          // 46: blockchain_api.CheckBlockIsAncestorOfBlockRequest
-	(*CheckBlockIsAncestorOfBlockResponse)(nil),         // 47: blockchain_api.CheckBlockIsAncestorOfBlockResponse
-	(*SubscribeRequest)(nil),                            // 48: blockchain_api.SubscribeRequest
-	(*Notification)(nil),                                // 49: blockchain_api.Notification
-	(*NotificationMetadata)(nil),                        // 50: blockchain_api.NotificationMetadata
-	(*GetSubscribersResponse)(nil),                      // 51: blockchain_api.GetSubscribersResponse
-	(*GetStateRequest)(nil),                             // 52: blockchain_api.GetStateRequest
-	(*StateResponse)(nil),                               // 53: blockchain_api.StateResponse
-	(*SetStateRequest)(nil),                             // 54: blockchain_api.SetStateRequest
-	(*GetBlockIsMinedRequest)(nil),                      // 55: blockchain_api.GetBlockIsMinedRequest
-	(*GetBlockIsMinedResponse)(nil),                     // 56: blockchain_api.GetBlockIsMinedResponse
-	(*GetLastNBlocksRequest)(nil),                       // 57: blockchain_api.GetLastNBlocksRequest
-	(*GetLastNBlocksResponse)(nil),                      // 58: blockchain_api.GetLastNBlocksResponse
-	(*GetLastNInvalidBlocksRequest)(nil),                // 59: blockchain_api.GetLastNInvalidBlocksRequest
-	(*GetLastNInvalidBlocksResponse)(nil),               // 60: blockchain_api.GetLastNInvalidBlocksResponse
-	(*GetSuitableBlockRequest)(nil),                     // 61: blockchain_api.GetSuitableBlockRequest
-	(*GetSuitableBlockResponse)(nil),                    // 62: blockchain_api.GetSuitableBlockResponse
-	(*GetHashOfAncestorBlockRequest)(nil),               // 63: blockchain_api.GetHashOfAncestorBlockRequest
-	(*GetLatestBlockHeaderFromBlockLocatorRequest)(nil), // 64: blockchain_api.GetLatestBlockHeaderFromBlockLocatorRequest
-	(*GetBlockHeadersFromOldestRequest)(nil),            // 65: blockchain_api.GetBlockHeadersFromOldestRequest
-	(*GetHashOfAncestorBlockResponse)(nil),              // 66: blockchain_api.GetHashOfAncestorBlockResponse
-	(*GetNextWorkRequiredRequest)(nil),                  // 67: blockchain_api.GetNextWorkRequiredRequest
-	(*GetNextWorkRequiredResponse)(nil),                 // 68: blockchain_api.GetNextWorkRequiredResponse
-	(*SetBlockMinedSetRequest)(nil),                     // 69: blockchain_api.SetBlockMinedSetRequest
-	(*ClearBlockMinedSetRequest)(nil),                   // 70: blockchain_api.ClearBlockMinedSetRequest
-	(*GetBlocksMinedNotSetResponse)(nil),                // 71: blockchain_api.GetBlocksMinedNotSetResponse
-	(*SetBlockSubtreesSetRequest)(nil),                  // 72: blockchain_api.SetBlockSubtreesSetRequest
-	(*GetBlocksSubtreesNotSetResponse)(nil),             // 73: blockchain_api.GetBlocksSubtreesNotSetResponse
-	(*SetBlockProcessedAtRequest)(nil),                  // 74: blockchain_api.SetBlockProcessedAtRequest
-	(*GetFSMStateResponse)(nil),                         // 75: blockchain_api.GetFSMStateResponse
-	(*SendFSMEventRequest)(nil),                         // 76: blockchain_api.SendFSMEventRequest
-	(*PeerRegistryInfo)(nil),                            // 77: blockchain_api.PeerRegistryInfo
-	(*RegisterPeerRequest)(nil),                         // 78: blockchain_api.RegisterPeerRequest
-	(*RecordValidatedPeerProgressRequest)(nil),          // 79: blockchain_api.RecordValidatedPeerProgressRequest
-	(*UpdatePeerMetricsRequest)(nil),                    // 80: blockchain_api.UpdatePeerMetricsRequest
-	(*RemovePeerRequest)(nil),                           // 81: blockchain_api.RemovePeerRequest
-	(*ListPeersRequest)(nil),                            // 82: blockchain_api.ListPeersRequest
-	(*ListPeersResponse)(nil),                           // 83: blockchain_api.ListPeersResponse
-	(*GetPeerRequest)(nil),                              // 84: blockchain_api.GetPeerRequest
-	(*GetPeerResponse)(nil),                             // 85: blockchain_api.GetPeerResponse
-	(*AddBanScoreRequest)(nil),                          // 86: blockchain_api.AddBanScoreRequest
-	(*AddBanScoreResponse)(nil),                         // 87: blockchain_api.AddBanScoreResponse
-	(*IsPeerBannedRequest)(nil),                         // 88: blockchain_api.IsPeerBannedRequest
-	(*IsPeerBannedResponse)(nil),                        // 89: blockchain_api.IsPeerBannedResponse
-	(*ListBannedPeersResponse)(nil),                     // 90: blockchain_api.ListBannedPeersResponse
-	(*UpdateConnectionStateRequest)(nil),                // 91: blockchain_api.UpdateConnectionStateRequest
-	(*UpdateLastMessageTimeRequest)(nil),                // 92: blockchain_api.UpdateLastMessageTimeRequest
-	(*UpdateStorageRequest)(nil),                        // 93: blockchain_api.UpdateStorageRequest
-	(*RecordSyncAttemptRequest)(nil),                    // 94: blockchain_api.RecordSyncAttemptRequest
-	(*ClearAllSyncAttemptsResponse)(nil),                // 95: blockchain_api.ClearAllSyncAttemptsResponse
-	(*RecordReceivedRequest)(nil),                       // 96: blockchain_api.RecordReceivedRequest
-	(*RecordCatchupErrorRequest)(nil),                   // 97: blockchain_api.RecordCatchupErrorRequest
-	(*RecordCatchupAttemptRequest)(nil),                 // 98: blockchain_api.RecordCatchupAttemptRequest
-	(*RecordCatchupSuccessRequest)(nil),                 // 99: blockchain_api.RecordCatchupSuccessRequest
-	(*RecordCatchupFailureRequest)(nil),                 // 100: blockchain_api.RecordCatchupFailureRequest
-	(*ResetReputationRequest)(nil),                      // 101: blockchain_api.ResetReputationRequest
-	(*ResetReputationResponse)(nil),                     // 102: blockchain_api.ResetReputationResponse
-	(*ReconsiderBadPeersRequest)(nil),                   // 103: blockchain_api.ReconsiderBadPeersRequest
-	(*ReconsiderBadPeersResponse)(nil),                  // 104: blockchain_api.ReconsiderBadPeersResponse
-	(*GetBlockLocatorRequest)(nil),                      // 105: blockchain_api.GetBlockLocatorRequest
-	(*GetBlockLocatorResponse)(nil),                     // 106: blockchain_api.GetBlockLocatorResponse
-	(*LocateBlockHeadersRequest)(nil),                   // 107: blockchain_api.LocateBlockHeadersRequest
-	(*LocateBlockHeadersResponse)(nil),                  // 108: blockchain_api.LocateBlockHeadersResponse
-	(*GetBestHeightAndTimeResponse)(nil),                // 109: blockchain_api.GetBestHeightAndTimeResponse
-	(*GetChainTipsResponse)(nil),                        // 110: blockchain_api.GetChainTipsResponse
-	(*ReportPeerFailureRequest)(nil),                    // 111: blockchain_api.ReportPeerFailureRequest
-	(*SetBlockPersistedAtRequest)(nil),                  // 112: blockchain_api.SetBlockPersistedAtRequest
-	(*GetBlocksNotPersistedRequest)(nil),                // 113: blockchain_api.GetBlocksNotPersistedRequest
-	(*GetBlocksNotPersistedResponse)(nil),               // 114: blockchain_api.GetBlocksNotPersistedResponse
-	(*ScheduleBlobDeletionRequest)(nil),                 // 115: blockchain_api.ScheduleBlobDeletionRequest
-	(*ScheduleBlobDeletionResponse)(nil),                // 116: blockchain_api.ScheduleBlobDeletionResponse
-	(*CancelBlobDeletionRequest)(nil),                   // 117: blockchain_api.CancelBlobDeletionRequest
-	(*CancelBlobDeletionResponse)(nil),                  // 118: blockchain_api.CancelBlobDeletionResponse
-	(*ListScheduledDeletionsRequest)(nil),               // 119: blockchain_api.ListScheduledDeletionsRequest
-	(*ScheduledDeletion)(nil),                           // 120: blockchain_api.ScheduledDeletion
-	(*ListScheduledDeletionsResponse)(nil),              // 121: blockchain_api.ListScheduledDeletionsResponse
-	(*GetPendingBlobDeletionsRequest)(nil),              // 122: blockchain_api.GetPendingBlobDeletionsRequest
-	(*GetPendingBlobDeletionsResponse)(nil),             // 123: blockchain_api.GetPendingBlobDeletionsResponse
-	(*RemoveBlobDeletionRequest)(nil),                   // 124: blockchain_api.RemoveBlobDeletionRequest
-	(*IncrementBlobDeletionRetryRequest)(nil),           // 125: blockchain_api.IncrementBlobDeletionRetryRequest
-	(*IncrementBlobDeletionRetryResponse)(nil),          // 126: blockchain_api.IncrementBlobDeletionRetryResponse
-	(*CompleteBlobDeletionsRequest)(nil),                // 127: blockchain_api.CompleteBlobDeletionsRequest
-	(*CompleteBlobDeletionsResponse)(nil),               // 128: blockchain_api.CompleteBlobDeletionsResponse
-	(*AcquireBlobDeletionBatchRequest)(nil),             // 129: blockchain_api.AcquireBlobDeletionBatchRequest
-	(*AcquireBlobDeletionBatchResponse)(nil),            // 130: blockchain_api.AcquireBlobDeletionBatchResponse
-	(*CompleteBlobDeletionBatchRequest)(nil),            // 131: blockchain_api.CompleteBlobDeletionBatchRequest
-	(*BatchTokenInfo)(nil),                              // 132: blockchain_api.BatchTokenInfo
-	(*LegacyPeerInfo)(nil),                              // 133: blockchain_api.LegacyPeerInfo
-	nil,                                                 // 134: blockchain_api.NotificationMetadata.MetadataEntry
-	(*timestamppb.Timestamp)(nil),                       // 135: google.protobuf.Timestamp
-	(model.NotificationType)(0),                         // 136: model.NotificationType
-	(*model.BlockInfo)(nil),                             // 137: model.BlockInfo
-	(*model.SuitableBlock)(nil),                         // 138: model.SuitableBlock
-	(*model.ChainTip)(nil),                              // 139: model.ChainTip
-	(*emptypb.Empty)(nil),                               // 140: google.protobuf.Empty
-	(*model.BlockStats)(nil),                            // 141: model.BlockStats
-	(*model.BlockDataPoints)(nil),                       // 142: model.BlockDataPoints
+	(FSMEventType)(0),                                // 0: blockchain_api.FSMEventType
+	(TransportType)(0),                               // 1: blockchain_api.TransportType
+	(FSMStateType)(0),                                // 2: blockchain_api.FSMStateType
+	(*HealthResponse)(nil),                           // 3: blockchain_api.HealthResponse
+	(*AddBlockRequest)(nil),                          // 4: blockchain_api.AddBlockRequest
+	(*LaneMapRow)(nil),                               // 5: blockchain_api.LaneMapRow
+	(*GetBlockRequest)(nil),                          // 6: blockchain_api.GetBlockRequest
+	(*GetBlocksRequest)(nil),                         // 7: blockchain_api.GetBlocksRequest
+	(*GetBlocksResponse)(nil),                        // 8: blockchain_api.GetBlocksResponse
+	(*GetBlockByHeightRequest)(nil),                  // 9: blockchain_api.GetBlockByHeightRequest
+	(*GetBlockByIDRequest)(nil),                      // 10: blockchain_api.GetBlockByIDRequest
+	(*GetNextBlockIDResponse)(nil),                   // 11: blockchain_api.GetNextBlockIDResponse
+	(*AssignBlockIDRequest)(nil),                     // 12: blockchain_api.AssignBlockIDRequest
+	(*AssignBlockIDResponse)(nil),                    // 13: blockchain_api.AssignBlockIDResponse
+	(*GetBlockInChainByHeightHashRequest)(nil),       // 14: blockchain_api.GetBlockInChainByHeightHashRequest
+	(*GetBlockResponse)(nil),                         // 15: blockchain_api.GetBlockResponse
+	(*GetFullBlockResponse)(nil),                     // 16: blockchain_api.GetFullBlockResponse
+	(*GetBlockGraphDataRequest)(nil),                 // 17: blockchain_api.GetBlockGraphDataRequest
+	(*GetBlockExistsResponse)(nil),                   // 18: blockchain_api.GetBlockExistsResponse
+	(*GetMedianTimeRequest)(nil),                     // 19: blockchain_api.GetMedianTimeRequest
+	(*GetBlockHeadersRequest)(nil),                   // 20: blockchain_api.GetBlockHeadersRequest
+	(*GetBlockHeadersToCommonAncestorRequest)(nil),   // 21: blockchain_api.GetBlockHeadersToCommonAncestorRequest
+	(*GetBlockHeadersFromCommonAncestorRequest)(nil), // 22: blockchain_api.GetBlockHeadersFromCommonAncestorRequest
+	(*GetBlockHeadersResponse)(nil),                  // 23: blockchain_api.GetBlockHeadersResponse
+	(*GetBlockHeadersFromHeightRequest)(nil),         // 24: blockchain_api.GetBlockHeadersFromHeightRequest
+	(*GetBlockHeadersFromHeightResponse)(nil),        // 25: blockchain_api.GetBlockHeadersFromHeightResponse
+	(*BlocksBetterThanRequest)(nil),                  // 26: blockchain_api.BlocksBetterThanRequest
+	(*BlocksBetterThanResponse)(nil),                 // 27: blockchain_api.BlocksBetterThanResponse
+	(*ClearBestTipLowWaterRequest)(nil),              // 28: blockchain_api.ClearBestTipLowWaterRequest
+	(*GetBlockHeadersByHeightRequest)(nil),           // 29: blockchain_api.GetBlockHeadersByHeightRequest
+	(*GetBlockHeadersByHeightResponse)(nil),          // 30: blockchain_api.GetBlockHeadersByHeightResponse
+	(*GetMedianTimePastByHeightsRequest)(nil),        // 31: blockchain_api.GetMedianTimePastByHeightsRequest
+	(*GetMedianTimePastByHeightsResponse)(nil),       // 32: blockchain_api.GetMedianTimePastByHeightsResponse
+	(*GetBlocksByHeightRequest)(nil),                 // 33: blockchain_api.GetBlocksByHeightRequest
+	(*GetBlocksByHeightResponse)(nil),                // 34: blockchain_api.GetBlocksByHeightResponse
+	(*FindBlocksContainingSubtreeRequest)(nil),       // 35: blockchain_api.FindBlocksContainingSubtreeRequest
+	(*FindBlocksContainingSubtreeResponse)(nil),      // 36: blockchain_api.FindBlocksContainingSubtreeResponse
+	(*GetBlockHeaderIDsResponse)(nil),                // 37: blockchain_api.GetBlockHeaderIDsResponse
+	(*GetMedianTimeResponse)(nil),                    // 38: blockchain_api.GetMedianTimeResponse
+	(*GetBlockHeaderRequest)(nil),                    // 39: blockchain_api.GetBlockHeaderRequest
+	(*CheckBlockIsCurrentChainRequest)(nil),          // 40: blockchain_api.CheckBlockIsCurrentChainRequest
+	(*InvalidateBlockRequest)(nil),                   // 41: blockchain_api.InvalidateBlockRequest
+	(*InvalidateBlockResponse)(nil),                  // 42: blockchain_api.InvalidateBlockResponse
+	(*RevalidateBlockRequest)(nil),                   // 43: blockchain_api.RevalidateBlockRequest
+	(*GetBlockHeaderResponse)(nil),                   // 44: blockchain_api.GetBlockHeaderResponse
+	(*CheckBlockIsCurrentChainResponse)(nil),         // 45: blockchain_api.CheckBlockIsCurrentChainResponse
+	(*CheckBlockIsAncestorOfBlockRequest)(nil),       // 46: blockchain_api.CheckBlockIsAncestorOfBlockRequest
+	(*CheckBlockIsAncestorOfBlockResponse)(nil),      // 47: blockchain_api.CheckBlockIsAncestorOfBlockResponse
+	(*SubscribeRequest)(nil),                         // 48: blockchain_api.SubscribeRequest
+	(*Notification)(nil),                             // 49: blockchain_api.Notification
+	(*NotificationMetadata)(nil),                     // 50: blockchain_api.NotificationMetadata
+	(*GetSubscribersResponse)(nil),                   // 51: blockchain_api.GetSubscribersResponse
+	(*GetStateRequest)(nil),                          // 52: blockchain_api.GetStateRequest
+	(*StateResponse)(nil),                            // 53: blockchain_api.StateResponse
+	(*SetStateRequest)(nil),                          // 54: blockchain_api.SetStateRequest
+	(*GetBlockIsMinedRequest)(nil),                   // 55: blockchain_api.GetBlockIsMinedRequest
+	(*GetBlockIsMinedResponse)(nil),                  // 56: blockchain_api.GetBlockIsMinedResponse
+	(*GetLastNBlocksRequest)(nil),                    // 57: blockchain_api.GetLastNBlocksRequest
+	(*GetLastNBlocksResponse)(nil),                   // 58: blockchain_api.GetLastNBlocksResponse
+	(*GetLastNInvalidBlocksRequest)(nil),             // 59: blockchain_api.GetLastNInvalidBlocksRequest
+	(*GetLastNInvalidBlocksResponse)(nil),            // 60: blockchain_api.GetLastNInvalidBlocksResponse
+	(*GetSuitableBlockRequest)(nil),                  // 61: blockchain_api.GetSuitableBlockRequest
+	(*GetSuitableBlockResponse)(nil),                 // 62: blockchain_api.GetSuitableBlockResponse
+	(*GetHashOfAncestorBlockRequest)(nil),            // 63: blockchain_api.GetHashOfAncestorBlockRequest
+	(*GetHashOfAncestorBlockResponse)(nil),           // 64: blockchain_api.GetHashOfAncestorBlockResponse
+	(*GetNextWorkRequiredRequest)(nil),               // 65: blockchain_api.GetNextWorkRequiredRequest
+	(*GetNextWorkRequiredResponse)(nil),              // 66: blockchain_api.GetNextWorkRequiredResponse
+	(*SetBlockMinedSetRequest)(nil),                  // 67: blockchain_api.SetBlockMinedSetRequest
+	(*ClearBlockMinedSetRequest)(nil),                // 68: blockchain_api.ClearBlockMinedSetRequest
+	(*GetBlocksMinedNotSetResponse)(nil),             // 69: blockchain_api.GetBlocksMinedNotSetResponse
+	(*SetBlockSubtreesSetRequest)(nil),               // 70: blockchain_api.SetBlockSubtreesSetRequest
+	(*GetBlocksSubtreesNotSetResponse)(nil),          // 71: blockchain_api.GetBlocksSubtreesNotSetResponse
+	(*SetBlockProcessedAtRequest)(nil),               // 72: blockchain_api.SetBlockProcessedAtRequest
+	(*GetFSMStateResponse)(nil),                      // 73: blockchain_api.GetFSMStateResponse
+	(*SendFSMEventRequest)(nil),                      // 74: blockchain_api.SendFSMEventRequest
+	(*PeerRegistryInfo)(nil),                         // 75: blockchain_api.PeerRegistryInfo
+	(*RegisterPeerRequest)(nil),                      // 76: blockchain_api.RegisterPeerRequest
+	(*RecordValidatedPeerProgressRequest)(nil),       // 77: blockchain_api.RecordValidatedPeerProgressRequest
+	(*UpdatePeerMetricsRequest)(nil),                 // 78: blockchain_api.UpdatePeerMetricsRequest
+	(*RemovePeerRequest)(nil),                        // 79: blockchain_api.RemovePeerRequest
+	(*ListPeersRequest)(nil),                         // 80: blockchain_api.ListPeersRequest
+	(*ListPeersResponse)(nil),                        // 81: blockchain_api.ListPeersResponse
+	(*GetPeerRequest)(nil),                           // 82: blockchain_api.GetPeerRequest
+	(*GetPeerResponse)(nil),                          // 83: blockchain_api.GetPeerResponse
+	(*AddBanScoreRequest)(nil),                       // 84: blockchain_api.AddBanScoreRequest
+	(*AddBanScoreResponse)(nil),                      // 85: blockchain_api.AddBanScoreResponse
+	(*IsPeerBannedRequest)(nil),                      // 86: blockchain_api.IsPeerBannedRequest
+	(*IsPeerBannedResponse)(nil),                     // 87: blockchain_api.IsPeerBannedResponse
+	(*ListBannedPeersResponse)(nil),                  // 88: blockchain_api.ListBannedPeersResponse
+	(*UpdateConnectionStateRequest)(nil),             // 89: blockchain_api.UpdateConnectionStateRequest
+	(*UpdateLastMessageTimeRequest)(nil),             // 90: blockchain_api.UpdateLastMessageTimeRequest
+	(*UpdateStorageRequest)(nil),                     // 91: blockchain_api.UpdateStorageRequest
+	(*RecordSyncAttemptRequest)(nil),                 // 92: blockchain_api.RecordSyncAttemptRequest
+	(*ClearAllSyncAttemptsResponse)(nil),             // 93: blockchain_api.ClearAllSyncAttemptsResponse
+	(*RecordReceivedRequest)(nil),                    // 94: blockchain_api.RecordReceivedRequest
+	(*RecordCatchupErrorRequest)(nil),                // 95: blockchain_api.RecordCatchupErrorRequest
+	(*RecordCatchupAttemptRequest)(nil),              // 96: blockchain_api.RecordCatchupAttemptRequest
+	(*RecordCatchupSuccessRequest)(nil),              // 97: blockchain_api.RecordCatchupSuccessRequest
+	(*RecordCatchupFailureRequest)(nil),              // 98: blockchain_api.RecordCatchupFailureRequest
+	(*ResetReputationRequest)(nil),                   // 99: blockchain_api.ResetReputationRequest
+	(*ResetReputationResponse)(nil),                  // 100: blockchain_api.ResetReputationResponse
+	(*ReconsiderBadPeersRequest)(nil),                // 101: blockchain_api.ReconsiderBadPeersRequest
+	(*ReconsiderBadPeersResponse)(nil),               // 102: blockchain_api.ReconsiderBadPeersResponse
+	(*GetBlockLocatorRequest)(nil),                   // 103: blockchain_api.GetBlockLocatorRequest
+	(*GetBlockLocatorResponse)(nil),                  // 104: blockchain_api.GetBlockLocatorResponse
+	(*LocateBlockHeadersRequest)(nil),                // 105: blockchain_api.LocateBlockHeadersRequest
+	(*LocateBlockHeadersResponse)(nil),               // 106: blockchain_api.LocateBlockHeadersResponse
+	(*GetBestHeightAndTimeResponse)(nil),             // 107: blockchain_api.GetBestHeightAndTimeResponse
+	(*GetChainTipsResponse)(nil),                     // 108: blockchain_api.GetChainTipsResponse
+	(*ReportPeerFailureRequest)(nil),                 // 109: blockchain_api.ReportPeerFailureRequest
+	(*SetBlockPersistedAtRequest)(nil),               // 110: blockchain_api.SetBlockPersistedAtRequest
+	(*GetBlocksNotPersistedRequest)(nil),             // 111: blockchain_api.GetBlocksNotPersistedRequest
+	(*GetBlocksNotPersistedResponse)(nil),            // 112: blockchain_api.GetBlocksNotPersistedResponse
+	(*ScheduleBlobDeletionRequest)(nil),              // 113: blockchain_api.ScheduleBlobDeletionRequest
+	(*ScheduleBlobDeletionResponse)(nil),             // 114: blockchain_api.ScheduleBlobDeletionResponse
+	(*CancelBlobDeletionRequest)(nil),                // 115: blockchain_api.CancelBlobDeletionRequest
+	(*CancelBlobDeletionResponse)(nil),               // 116: blockchain_api.CancelBlobDeletionResponse
+	(*ListScheduledDeletionsRequest)(nil),            // 117: blockchain_api.ListScheduledDeletionsRequest
+	(*ScheduledDeletion)(nil),                        // 118: blockchain_api.ScheduledDeletion
+	(*ListScheduledDeletionsResponse)(nil),           // 119: blockchain_api.ListScheduledDeletionsResponse
+	(*GetPendingBlobDeletionsRequest)(nil),           // 120: blockchain_api.GetPendingBlobDeletionsRequest
+	(*GetPendingBlobDeletionsResponse)(nil),          // 121: blockchain_api.GetPendingBlobDeletionsResponse
+	(*RemoveBlobDeletionRequest)(nil),                // 122: blockchain_api.RemoveBlobDeletionRequest
+	(*IncrementBlobDeletionRetryRequest)(nil),        // 123: blockchain_api.IncrementBlobDeletionRetryRequest
+	(*IncrementBlobDeletionRetryResponse)(nil),       // 124: blockchain_api.IncrementBlobDeletionRetryResponse
+	(*CompleteBlobDeletionsRequest)(nil),             // 125: blockchain_api.CompleteBlobDeletionsRequest
+	(*CompleteBlobDeletionsResponse)(nil),            // 126: blockchain_api.CompleteBlobDeletionsResponse
+	(*AcquireBlobDeletionBatchRequest)(nil),          // 127: blockchain_api.AcquireBlobDeletionBatchRequest
+	(*AcquireBlobDeletionBatchResponse)(nil),         // 128: blockchain_api.AcquireBlobDeletionBatchResponse
+	(*CompleteBlobDeletionBatchRequest)(nil),         // 129: blockchain_api.CompleteBlobDeletionBatchRequest
+	(*BatchTokenInfo)(nil),                           // 130: blockchain_api.BatchTokenInfo
+	(*LegacyPeerInfo)(nil),                           // 131: blockchain_api.LegacyPeerInfo
+	(*OpenLaneLeaseRequest)(nil),                     // 132: blockchain_api.OpenLaneLeaseRequest
+	(*LaneLeaseGrant)(nil),                           // 133: blockchain_api.LaneLeaseGrant
+	(*RenewLaneLeaseRequest)(nil),                    // 134: blockchain_api.RenewLaneLeaseRequest
+	(*RenewLaneLeaseResponse)(nil),                   // 135: blockchain_api.RenewLaneLeaseResponse
+	(*ReleaseLaneLeaseRequest)(nil),                  // 136: blockchain_api.ReleaseLaneLeaseRequest
+	(*ReleaseLaneLeaseResponse)(nil),                 // 137: blockchain_api.ReleaseLaneLeaseResponse
+	nil,                                              // 138: blockchain_api.NotificationMetadata.MetadataEntry
+	(*timestamppb.Timestamp)(nil),                    // 139: google.protobuf.Timestamp
+	(model.NotificationType)(0),                      // 140: model.NotificationType
+	(*model.BlockInfo)(nil),                          // 141: model.BlockInfo
+	(*model.SuitableBlock)(nil),                      // 142: model.SuitableBlock
+	(*model.ChainTip)(nil),                           // 143: model.ChainTip
+	(*emptypb.Empty)(nil),                            // 144: google.protobuf.Empty
+	(*model.BlockStats)(nil),                         // 145: model.BlockStats
+	(*model.BlockDataPoints)(nil),                    // 146: model.BlockDataPoints
 }
 var file_services_blockchain_blockchain_api_blockchain_api_proto_depIdxs = []int32{
-	135, // 0: blockchain_api.HealthResponse.timestamp:type_name -> google.protobuf.Timestamp
-	135, // 1: blockchain_api.GetBlockHeaderResponse.processed_at:type_name -> google.protobuf.Timestamp
-	136, // 2: blockchain_api.Notification.type:type_name -> model.NotificationType
-	50,  // 3: blockchain_api.Notification.metadata:type_name -> blockchain_api.NotificationMetadata
-	134, // 4: blockchain_api.NotificationMetadata.metadata:type_name -> blockchain_api.NotificationMetadata.MetadataEntry
-	137, // 5: blockchain_api.GetLastNBlocksResponse.blocks:type_name -> model.BlockInfo
-	137, // 6: blockchain_api.GetLastNInvalidBlocksResponse.blocks:type_name -> model.BlockInfo
-	138, // 7: blockchain_api.GetSuitableBlockResponse.block:type_name -> model.SuitableBlock
-	2,   // 8: blockchain_api.GetFSMStateResponse.state:type_name -> blockchain_api.FSMStateType
-	0,   // 9: blockchain_api.SendFSMEventRequest.event:type_name -> blockchain_api.FSMEventType
-	1,   // 10: blockchain_api.PeerRegistryInfo.transport_type:type_name -> blockchain_api.TransportType
-	135, // 11: blockchain_api.PeerRegistryInfo.connected_at:type_name -> google.protobuf.Timestamp
-	135, // 12: blockchain_api.PeerRegistryInfo.last_message_time:type_name -> google.protobuf.Timestamp
-	135, // 13: blockchain_api.PeerRegistryInfo.last_interaction_attempt:type_name -> google.protobuf.Timestamp
-	135, // 14: blockchain_api.PeerRegistryInfo.last_interaction_success:type_name -> google.protobuf.Timestamp
-	135, // 15: blockchain_api.PeerRegistryInfo.last_interaction_failure:type_name -> google.protobuf.Timestamp
-	135, // 16: blockchain_api.PeerRegistryInfo.last_seen:type_name -> google.protobuf.Timestamp
-	135, // 17: blockchain_api.PeerRegistryInfo.last_block_time:type_name -> google.protobuf.Timestamp
-	135, // 18: blockchain_api.PeerRegistryInfo.last_sync_attempt:type_name -> google.protobuf.Timestamp
-	135, // 19: blockchain_api.PeerRegistryInfo.last_reputation_reset:type_name -> google.protobuf.Timestamp
-	135, // 20: blockchain_api.PeerRegistryInfo.last_catchup_error_time:type_name -> google.protobuf.Timestamp
-	135, // 21: blockchain_api.PeerRegistryInfo.last_validated_at:type_name -> google.protobuf.Timestamp
-	135, // 22: blockchain_api.PeerRegistryInfo.full_storage_penalty_until:type_name -> google.protobuf.Timestamp
-	133, // 23: blockchain_api.PeerRegistryInfo.legacy:type_name -> blockchain_api.LegacyPeerInfo
-	77,  // 24: blockchain_api.RegisterPeerRequest.peer:type_name -> blockchain_api.PeerRegistryInfo
-	1,   // 25: blockchain_api.ListPeersRequest.transport_filter:type_name -> blockchain_api.TransportType
-	77,  // 26: blockchain_api.ListPeersResponse.peers:type_name -> blockchain_api.PeerRegistryInfo
-	77,  // 27: blockchain_api.GetPeerResponse.peer:type_name -> blockchain_api.PeerRegistryInfo
-	139, // 28: blockchain_api.GetChainTipsResponse.tips:type_name -> model.ChainTip
-	120, // 29: blockchain_api.ListScheduledDeletionsResponse.deletions:type_name -> blockchain_api.ScheduledDeletion
-	120, // 30: blockchain_api.GetPendingBlobDeletionsResponse.deletions:type_name -> blockchain_api.ScheduledDeletion
-	120, // 31: blockchain_api.AcquireBlobDeletionBatchResponse.deletions:type_name -> blockchain_api.ScheduledDeletion
-	135, // 32: blockchain_api.LegacyPeerInfo.time_connected:type_name -> google.protobuf.Timestamp
-	140, // 33: blockchain_api.BlockchainAPI.HealthGRPC:input_type -> google.protobuf.Empty
-	4,   // 34: blockchain_api.BlockchainAPI.AddBlock:input_type -> blockchain_api.AddBlockRequest
-	5,   // 35: blockchain_api.BlockchainAPI.GetBlock:input_type -> blockchain_api.GetBlockRequest
-	6,   // 36: blockchain_api.BlockchainAPI.GetBlocks:input_type -> blockchain_api.GetBlocksRequest
-	8,   // 37: blockchain_api.BlockchainAPI.GetBlockByHeight:input_type -> blockchain_api.GetBlockByHeightRequest
-	9,   // 38: blockchain_api.BlockchainAPI.GetBlockByID:input_type -> blockchain_api.GetBlockByIDRequest
-	140, // 39: blockchain_api.BlockchainAPI.GetNextBlockID:input_type -> google.protobuf.Empty
-	11,  // 40: blockchain_api.BlockchainAPI.AssignBlockID:input_type -> blockchain_api.AssignBlockIDRequest
-	140, // 41: blockchain_api.BlockchainAPI.GetBlockStats:input_type -> google.protobuf.Empty
-	16,  // 42: blockchain_api.BlockchainAPI.GetBlockGraphData:input_type -> blockchain_api.GetBlockGraphDataRequest
-	57,  // 43: blockchain_api.BlockchainAPI.GetLastNBlocks:input_type -> blockchain_api.GetLastNBlocksRequest
-	59,  // 44: blockchain_api.BlockchainAPI.GetLastNInvalidBlocks:input_type -> blockchain_api.GetLastNInvalidBlocksRequest
-	61,  // 45: blockchain_api.BlockchainAPI.GetSuitableBlock:input_type -> blockchain_api.GetSuitableBlockRequest
-	63,  // 46: blockchain_api.BlockchainAPI.GetHashOfAncestorBlock:input_type -> blockchain_api.GetHashOfAncestorBlockRequest
-	64,  // 47: blockchain_api.BlockchainAPI.GetLatestBlockHeaderFromBlockLocator:input_type -> blockchain_api.GetLatestBlockHeaderFromBlockLocatorRequest
-	65,  // 48: blockchain_api.BlockchainAPI.GetBlockHeadersFromOldest:input_type -> blockchain_api.GetBlockHeadersFromOldestRequest
-	67,  // 49: blockchain_api.BlockchainAPI.GetNextWorkRequired:input_type -> blockchain_api.GetNextWorkRequiredRequest
-	5,   // 50: blockchain_api.BlockchainAPI.GetBlockExists:input_type -> blockchain_api.GetBlockRequest
-	19,  // 51: blockchain_api.BlockchainAPI.GetBlockHeaders:input_type -> blockchain_api.GetBlockHeadersRequest
-	140, // 52: blockchain_api.BlockchainAPI.GetBestBlockHeaderUncached:input_type -> google.protobuf.Empty
-	19,  // 53: blockchain_api.BlockchainAPI.GetBlockHeadersByParentLinks:input_type -> blockchain_api.GetBlockHeadersRequest
-	20,  // 54: blockchain_api.BlockchainAPI.GetBlockHeadersToCommonAncestor:input_type -> blockchain_api.GetBlockHeadersToCommonAncestorRequest
-	21,  // 55: blockchain_api.BlockchainAPI.GetBlockHeadersFromCommonAncestor:input_type -> blockchain_api.GetBlockHeadersFromCommonAncestorRequest
-	23,  // 56: blockchain_api.BlockchainAPI.GetBlockHeadersFromTill:input_type -> blockchain_api.GetBlockHeadersFromTillRequest
-	24,  // 57: blockchain_api.BlockchainAPI.GetBlockHeadersFromHeight:input_type -> blockchain_api.GetBlockHeadersFromHeightRequest
-	26,  // 58: blockchain_api.BlockchainAPI.BlocksBetterThan:input_type -> blockchain_api.BlocksBetterThanRequest
-	28,  // 59: blockchain_api.BlockchainAPI.ClearBestTipLowWater:input_type -> blockchain_api.ClearBestTipLowWaterRequest
-	29,  // 60: blockchain_api.BlockchainAPI.GetBlockHeadersByHeight:input_type -> blockchain_api.GetBlockHeadersByHeightRequest
-	31,  // 61: blockchain_api.BlockchainAPI.GetMedianTimePastByHeights:input_type -> blockchain_api.GetMedianTimePastByHeightsRequest
-	33,  // 62: blockchain_api.BlockchainAPI.GetBlocksByHeight:input_type -> blockchain_api.GetBlocksByHeightRequest
-	35,  // 63: blockchain_api.BlockchainAPI.FindBlocksContainingSubtree:input_type -> blockchain_api.FindBlocksContainingSubtreeRequest
-	19,  // 64: blockchain_api.BlockchainAPI.GetBlockHeaderIDs:input_type -> blockchain_api.GetBlockHeadersRequest
-	140, // 65: blockchain_api.BlockchainAPI.GetBestBlockHeader:input_type -> google.protobuf.Empty
-	40,  // 66: blockchain_api.BlockchainAPI.CheckBlockIsInCurrentChain:input_type -> blockchain_api.CheckBlockIsCurrentChainRequest
-	46,  // 67: blockchain_api.BlockchainAPI.CheckBlockIsAncestorOfBlock:input_type -> blockchain_api.CheckBlockIsAncestorOfBlockRequest
-	140, // 68: blockchain_api.BlockchainAPI.GetChainTips:input_type -> google.protobuf.Empty
-	39,  // 69: blockchain_api.BlockchainAPI.GetBlockHeader:input_type -> blockchain_api.GetBlockHeaderRequest
-	41,  // 70: blockchain_api.BlockchainAPI.InvalidateBlock:input_type -> blockchain_api.InvalidateBlockRequest
-	43,  // 71: blockchain_api.BlockchainAPI.RevalidateBlock:input_type -> blockchain_api.RevalidateBlockRequest
-	48,  // 72: blockchain_api.BlockchainAPI.Subscribe:input_type -> blockchain_api.SubscribeRequest
-	49,  // 73: blockchain_api.BlockchainAPI.SendNotification:input_type -> blockchain_api.Notification
-	140, // 74: blockchain_api.BlockchainAPI.GetSubscribers:input_type -> google.protobuf.Empty
-	52,  // 75: blockchain_api.BlockchainAPI.GetState:input_type -> blockchain_api.GetStateRequest
-	54,  // 76: blockchain_api.BlockchainAPI.SetState:input_type -> blockchain_api.SetStateRequest
-	55,  // 77: blockchain_api.BlockchainAPI.GetBlockIsMined:input_type -> blockchain_api.GetBlockIsMinedRequest
-	69,  // 78: blockchain_api.BlockchainAPI.SetBlockMinedSet:input_type -> blockchain_api.SetBlockMinedSetRequest
-	70,  // 79: blockchain_api.BlockchainAPI.ClearBlockMinedSet:input_type -> blockchain_api.ClearBlockMinedSetRequest
-	140, // 80: blockchain_api.BlockchainAPI.GetBlocksMinedNotSet:input_type -> google.protobuf.Empty
-	72,  // 81: blockchain_api.BlockchainAPI.SetBlockSubtreesSet:input_type -> blockchain_api.SetBlockSubtreesSetRequest
-	140, // 82: blockchain_api.BlockchainAPI.GetBlocksSubtreesNotSet:input_type -> google.protobuf.Empty
-	74,  // 83: blockchain_api.BlockchainAPI.SetBlockProcessedAt:input_type -> blockchain_api.SetBlockProcessedAtRequest
-	112, // 84: blockchain_api.BlockchainAPI.SetBlockPersistedAt:input_type -> blockchain_api.SetBlockPersistedAtRequest
-	113, // 85: blockchain_api.BlockchainAPI.GetBlocksNotPersisted:input_type -> blockchain_api.GetBlocksNotPersistedRequest
-	76,  // 86: blockchain_api.BlockchainAPI.SendFSMEvent:input_type -> blockchain_api.SendFSMEventRequest
-	140, // 87: blockchain_api.BlockchainAPI.GetFSMCurrentState:input_type -> google.protobuf.Empty
-	140, // 88: blockchain_api.BlockchainAPI.WaitUntilFSMTransitionFromIdleState:input_type -> google.protobuf.Empty
-	140, // 89: blockchain_api.BlockchainAPI.Run:input_type -> google.protobuf.Empty
-	140, // 90: blockchain_api.BlockchainAPI.CatchUpBlocks:input_type -> google.protobuf.Empty
-	140, // 91: blockchain_api.BlockchainAPI.Idle:input_type -> google.protobuf.Empty
-	111, // 92: blockchain_api.BlockchainAPI.ReportPeerFailure:input_type -> blockchain_api.ReportPeerFailureRequest
-	105, // 93: blockchain_api.BlockchainAPI.GetBlockLocator:input_type -> blockchain_api.GetBlockLocatorRequest
-	107, // 94: blockchain_api.BlockchainAPI.LocateBlockHeaders:input_type -> blockchain_api.LocateBlockHeadersRequest
-	140, // 95: blockchain_api.BlockchainAPI.GetBestHeightAndTime:input_type -> google.protobuf.Empty
-	115, // 96: blockchain_api.BlockchainAPI.ScheduleBlobDeletion:input_type -> blockchain_api.ScheduleBlobDeletionRequest
-	117, // 97: blockchain_api.BlockchainAPI.CancelBlobDeletion:input_type -> blockchain_api.CancelBlobDeletionRequest
-	119, // 98: blockchain_api.BlockchainAPI.ListScheduledDeletions:input_type -> blockchain_api.ListScheduledDeletionsRequest
-	122, // 99: blockchain_api.BlockchainAPI.GetPendingBlobDeletions:input_type -> blockchain_api.GetPendingBlobDeletionsRequest
-	124, // 100: blockchain_api.BlockchainAPI.RemoveBlobDeletion:input_type -> blockchain_api.RemoveBlobDeletionRequest
-	125, // 101: blockchain_api.BlockchainAPI.IncrementBlobDeletionRetry:input_type -> blockchain_api.IncrementBlobDeletionRetryRequest
-	127, // 102: blockchain_api.BlockchainAPI.CompleteBlobDeletions:input_type -> blockchain_api.CompleteBlobDeletionsRequest
-	129, // 103: blockchain_api.BlockchainAPI.AcquireBlobDeletionBatch:input_type -> blockchain_api.AcquireBlobDeletionBatchRequest
-	131, // 104: blockchain_api.BlockchainAPI.CompleteBlobDeletionBatch:input_type -> blockchain_api.CompleteBlobDeletionBatchRequest
-	78,  // 105: blockchain_api.PeerRegistryService.RegisterPeer:input_type -> blockchain_api.RegisterPeerRequest
-	80,  // 106: blockchain_api.PeerRegistryService.UpdatePeerMetrics:input_type -> blockchain_api.UpdatePeerMetricsRequest
-	81,  // 107: blockchain_api.PeerRegistryService.RemovePeer:input_type -> blockchain_api.RemovePeerRequest
-	82,  // 108: blockchain_api.PeerRegistryService.ListPeers:input_type -> blockchain_api.ListPeersRequest
-	84,  // 109: blockchain_api.PeerRegistryService.GetPeer:input_type -> blockchain_api.GetPeerRequest
-	86,  // 110: blockchain_api.PeerRegistryService.AddBanScore:input_type -> blockchain_api.AddBanScoreRequest
-	88,  // 111: blockchain_api.PeerRegistryService.IsPeerBanned:input_type -> blockchain_api.IsPeerBannedRequest
-	140, // 112: blockchain_api.PeerRegistryService.ListBannedPeers:input_type -> google.protobuf.Empty
-	140, // 113: blockchain_api.PeerRegistryService.ClearBannedPeers:input_type -> google.protobuf.Empty
-	91,  // 114: blockchain_api.PeerRegistryService.UpdateConnectionState:input_type -> blockchain_api.UpdateConnectionStateRequest
-	92,  // 115: blockchain_api.PeerRegistryService.UpdateLastMessageTime:input_type -> blockchain_api.UpdateLastMessageTimeRequest
-	93,  // 116: blockchain_api.PeerRegistryService.UpdateStorage:input_type -> blockchain_api.UpdateStorageRequest
-	94,  // 117: blockchain_api.PeerRegistryService.RecordSyncAttempt:input_type -> blockchain_api.RecordSyncAttemptRequest
-	140, // 118: blockchain_api.PeerRegistryService.ClearAllSyncAttempts:input_type -> google.protobuf.Empty
-	96,  // 119: blockchain_api.PeerRegistryService.RecordBlockReceived:input_type -> blockchain_api.RecordReceivedRequest
-	96,  // 120: blockchain_api.PeerRegistryService.RecordSubtreeReceived:input_type -> blockchain_api.RecordReceivedRequest
-	96,  // 121: blockchain_api.PeerRegistryService.RecordTransactionReceived:input_type -> blockchain_api.RecordReceivedRequest
-	97,  // 122: blockchain_api.PeerRegistryService.RecordCatchupError:input_type -> blockchain_api.RecordCatchupErrorRequest
-	98,  // 123: blockchain_api.PeerRegistryService.RecordCatchupAttempt:input_type -> blockchain_api.RecordCatchupAttemptRequest
-	99,  // 124: blockchain_api.PeerRegistryService.RecordCatchupSuccess:input_type -> blockchain_api.RecordCatchupSuccessRequest
-	100, // 125: blockchain_api.PeerRegistryService.RecordCatchupFailure:input_type -> blockchain_api.RecordCatchupFailureRequest
-	101, // 126: blockchain_api.PeerRegistryService.ResetReputation:input_type -> blockchain_api.ResetReputationRequest
-	103, // 127: blockchain_api.PeerRegistryService.ReconsiderBadPeers:input_type -> blockchain_api.ReconsiderBadPeersRequest
-	79,  // 128: blockchain_api.PeerRegistryService.RecordValidatedPeerProgress:input_type -> blockchain_api.RecordValidatedPeerProgressRequest
-	3,   // 129: blockchain_api.BlockchainAPI.HealthGRPC:output_type -> blockchain_api.HealthResponse
-	140, // 130: blockchain_api.BlockchainAPI.AddBlock:output_type -> google.protobuf.Empty
-	14,  // 131: blockchain_api.BlockchainAPI.GetBlock:output_type -> blockchain_api.GetBlockResponse
-	7,   // 132: blockchain_api.BlockchainAPI.GetBlocks:output_type -> blockchain_api.GetBlocksResponse
-	14,  // 133: blockchain_api.BlockchainAPI.GetBlockByHeight:output_type -> blockchain_api.GetBlockResponse
-	14,  // 134: blockchain_api.BlockchainAPI.GetBlockByID:output_type -> blockchain_api.GetBlockResponse
-	10,  // 135: blockchain_api.BlockchainAPI.GetNextBlockID:output_type -> blockchain_api.GetNextBlockIDResponse
-	12,  // 136: blockchain_api.BlockchainAPI.AssignBlockID:output_type -> blockchain_api.AssignBlockIDResponse
-	141, // 137: blockchain_api.BlockchainAPI.GetBlockStats:output_type -> model.BlockStats
-	142, // 138: blockchain_api.BlockchainAPI.GetBlockGraphData:output_type -> model.BlockDataPoints
-	58,  // 139: blockchain_api.BlockchainAPI.GetLastNBlocks:output_type -> blockchain_api.GetLastNBlocksResponse
-	60,  // 140: blockchain_api.BlockchainAPI.GetLastNInvalidBlocks:output_type -> blockchain_api.GetLastNInvalidBlocksResponse
-	62,  // 141: blockchain_api.BlockchainAPI.GetSuitableBlock:output_type -> blockchain_api.GetSuitableBlockResponse
-	66,  // 142: blockchain_api.BlockchainAPI.GetHashOfAncestorBlock:output_type -> blockchain_api.GetHashOfAncestorBlockResponse
-	44,  // 143: blockchain_api.BlockchainAPI.GetLatestBlockHeaderFromBlockLocator:output_type -> blockchain_api.GetBlockHeaderResponse
-	22,  // 144: blockchain_api.BlockchainAPI.GetBlockHeadersFromOldest:output_type -> blockchain_api.GetBlockHeadersResponse
-	68,  // 145: blockchain_api.BlockchainAPI.GetNextWorkRequired:output_type -> blockchain_api.GetNextWorkRequiredResponse
-	17,  // 146: blockchain_api.BlockchainAPI.GetBlockExists:output_type -> blockchain_api.GetBlockExistsResponse
-	22,  // 147: blockchain_api.BlockchainAPI.GetBlockHeaders:output_type -> blockchain_api.GetBlockHeadersResponse
-	44,  // 148: blockchain_api.BlockchainAPI.GetBestBlockHeaderUncached:output_type -> blockchain_api.GetBlockHeaderResponse
-	22,  // 149: blockchain_api.BlockchainAPI.GetBlockHeadersByParentLinks:output_type -> blockchain_api.GetBlockHeadersResponse
-	22,  // 150: blockchain_api.BlockchainAPI.GetBlockHeadersToCommonAncestor:output_type -> blockchain_api.GetBlockHeadersResponse
-	22,  // 151: blockchain_api.BlockchainAPI.GetBlockHeadersFromCommonAncestor:output_type -> blockchain_api.GetBlockHeadersResponse
-	22,  // 152: blockchain_api.BlockchainAPI.GetBlockHeadersFromTill:output_type -> blockchain_api.GetBlockHeadersResponse
-	25,  // 153: blockchain_api.BlockchainAPI.GetBlockHeadersFromHeight:output_type -> blockchain_api.GetBlockHeadersFromHeightResponse
-	27,  // 154: blockchain_api.BlockchainAPI.BlocksBetterThan:output_type -> blockchain_api.BlocksBetterThanResponse
-	140, // 155: blockchain_api.BlockchainAPI.ClearBestTipLowWater:output_type -> google.protobuf.Empty
-	30,  // 156: blockchain_api.BlockchainAPI.GetBlockHeadersByHeight:output_type -> blockchain_api.GetBlockHeadersByHeightResponse
-	32,  // 157: blockchain_api.BlockchainAPI.GetMedianTimePastByHeights:output_type -> blockchain_api.GetMedianTimePastByHeightsResponse
-	34,  // 158: blockchain_api.BlockchainAPI.GetBlocksByHeight:output_type -> blockchain_api.GetBlocksByHeightResponse
-	36,  // 159: blockchain_api.BlockchainAPI.FindBlocksContainingSubtree:output_type -> blockchain_api.FindBlocksContainingSubtreeResponse
-	37,  // 160: blockchain_api.BlockchainAPI.GetBlockHeaderIDs:output_type -> blockchain_api.GetBlockHeaderIDsResponse
-	44,  // 161: blockchain_api.BlockchainAPI.GetBestBlockHeader:output_type -> blockchain_api.GetBlockHeaderResponse
-	45,  // 162: blockchain_api.BlockchainAPI.CheckBlockIsInCurrentChain:output_type -> blockchain_api.CheckBlockIsCurrentChainResponse
-	47,  // 163: blockchain_api.BlockchainAPI.CheckBlockIsAncestorOfBlock:output_type -> blockchain_api.CheckBlockIsAncestorOfBlockResponse
-	110, // 164: blockchain_api.BlockchainAPI.GetChainTips:output_type -> blockchain_api.GetChainTipsResponse
-	44,  // 165: blockchain_api.BlockchainAPI.GetBlockHeader:output_type -> blockchain_api.GetBlockHeaderResponse
-	42,  // 166: blockchain_api.BlockchainAPI.InvalidateBlock:output_type -> blockchain_api.InvalidateBlockResponse
-	140, // 167: blockchain_api.BlockchainAPI.RevalidateBlock:output_type -> google.protobuf.Empty
-	49,  // 168: blockchain_api.BlockchainAPI.Subscribe:output_type -> blockchain_api.Notification
-	140, // 169: blockchain_api.BlockchainAPI.SendNotification:output_type -> google.protobuf.Empty
-	51,  // 170: blockchain_api.BlockchainAPI.GetSubscribers:output_type -> blockchain_api.GetSubscribersResponse
-	53,  // 171: blockchain_api.BlockchainAPI.GetState:output_type -> blockchain_api.StateResponse
-	140, // 172: blockchain_api.BlockchainAPI.SetState:output_type -> google.protobuf.Empty
-	56,  // 173: blockchain_api.BlockchainAPI.GetBlockIsMined:output_type -> blockchain_api.GetBlockIsMinedResponse
-	140, // 174: blockchain_api.BlockchainAPI.SetBlockMinedSet:output_type -> google.protobuf.Empty
-	140, // 175: blockchain_api.BlockchainAPI.ClearBlockMinedSet:output_type -> google.protobuf.Empty
-	71,  // 176: blockchain_api.BlockchainAPI.GetBlocksMinedNotSet:output_type -> blockchain_api.GetBlocksMinedNotSetResponse
-	140, // 177: blockchain_api.BlockchainAPI.SetBlockSubtreesSet:output_type -> google.protobuf.Empty
-	73,  // 178: blockchain_api.BlockchainAPI.GetBlocksSubtreesNotSet:output_type -> blockchain_api.GetBlocksSubtreesNotSetResponse
-	140, // 179: blockchain_api.BlockchainAPI.SetBlockProcessedAt:output_type -> google.protobuf.Empty
-	140, // 180: blockchain_api.BlockchainAPI.SetBlockPersistedAt:output_type -> google.protobuf.Empty
-	114, // 181: blockchain_api.BlockchainAPI.GetBlocksNotPersisted:output_type -> blockchain_api.GetBlocksNotPersistedResponse
-	75,  // 182: blockchain_api.BlockchainAPI.SendFSMEvent:output_type -> blockchain_api.GetFSMStateResponse
-	75,  // 183: blockchain_api.BlockchainAPI.GetFSMCurrentState:output_type -> blockchain_api.GetFSMStateResponse
-	140, // 184: blockchain_api.BlockchainAPI.WaitUntilFSMTransitionFromIdleState:output_type -> google.protobuf.Empty
-	140, // 185: blockchain_api.BlockchainAPI.Run:output_type -> google.protobuf.Empty
-	140, // 186: blockchain_api.BlockchainAPI.CatchUpBlocks:output_type -> google.protobuf.Empty
-	140, // 187: blockchain_api.BlockchainAPI.Idle:output_type -> google.protobuf.Empty
-	140, // 188: blockchain_api.BlockchainAPI.ReportPeerFailure:output_type -> google.protobuf.Empty
-	106, // 189: blockchain_api.BlockchainAPI.GetBlockLocator:output_type -> blockchain_api.GetBlockLocatorResponse
-	108, // 190: blockchain_api.BlockchainAPI.LocateBlockHeaders:output_type -> blockchain_api.LocateBlockHeadersResponse
-	109, // 191: blockchain_api.BlockchainAPI.GetBestHeightAndTime:output_type -> blockchain_api.GetBestHeightAndTimeResponse
-	116, // 192: blockchain_api.BlockchainAPI.ScheduleBlobDeletion:output_type -> blockchain_api.ScheduleBlobDeletionResponse
-	118, // 193: blockchain_api.BlockchainAPI.CancelBlobDeletion:output_type -> blockchain_api.CancelBlobDeletionResponse
-	121, // 194: blockchain_api.BlockchainAPI.ListScheduledDeletions:output_type -> blockchain_api.ListScheduledDeletionsResponse
-	123, // 195: blockchain_api.BlockchainAPI.GetPendingBlobDeletions:output_type -> blockchain_api.GetPendingBlobDeletionsResponse
-	140, // 196: blockchain_api.BlockchainAPI.RemoveBlobDeletion:output_type -> google.protobuf.Empty
-	126, // 197: blockchain_api.BlockchainAPI.IncrementBlobDeletionRetry:output_type -> blockchain_api.IncrementBlobDeletionRetryResponse
-	128, // 198: blockchain_api.BlockchainAPI.CompleteBlobDeletions:output_type -> blockchain_api.CompleteBlobDeletionsResponse
-	130, // 199: blockchain_api.BlockchainAPI.AcquireBlobDeletionBatch:output_type -> blockchain_api.AcquireBlobDeletionBatchResponse
-	140, // 200: blockchain_api.BlockchainAPI.CompleteBlobDeletionBatch:output_type -> google.protobuf.Empty
-	140, // 201: blockchain_api.PeerRegistryService.RegisterPeer:output_type -> google.protobuf.Empty
-	140, // 202: blockchain_api.PeerRegistryService.UpdatePeerMetrics:output_type -> google.protobuf.Empty
-	140, // 203: blockchain_api.PeerRegistryService.RemovePeer:output_type -> google.protobuf.Empty
-	83,  // 204: blockchain_api.PeerRegistryService.ListPeers:output_type -> blockchain_api.ListPeersResponse
-	85,  // 205: blockchain_api.PeerRegistryService.GetPeer:output_type -> blockchain_api.GetPeerResponse
-	87,  // 206: blockchain_api.PeerRegistryService.AddBanScore:output_type -> blockchain_api.AddBanScoreResponse
-	89,  // 207: blockchain_api.PeerRegistryService.IsPeerBanned:output_type -> blockchain_api.IsPeerBannedResponse
-	90,  // 208: blockchain_api.PeerRegistryService.ListBannedPeers:output_type -> blockchain_api.ListBannedPeersResponse
-	140, // 209: blockchain_api.PeerRegistryService.ClearBannedPeers:output_type -> google.protobuf.Empty
-	140, // 210: blockchain_api.PeerRegistryService.UpdateConnectionState:output_type -> google.protobuf.Empty
-	140, // 211: blockchain_api.PeerRegistryService.UpdateLastMessageTime:output_type -> google.protobuf.Empty
-	140, // 212: blockchain_api.PeerRegistryService.UpdateStorage:output_type -> google.protobuf.Empty
-	140, // 213: blockchain_api.PeerRegistryService.RecordSyncAttempt:output_type -> google.protobuf.Empty
-	95,  // 214: blockchain_api.PeerRegistryService.ClearAllSyncAttempts:output_type -> blockchain_api.ClearAllSyncAttemptsResponse
-	140, // 215: blockchain_api.PeerRegistryService.RecordBlockReceived:output_type -> google.protobuf.Empty
-	140, // 216: blockchain_api.PeerRegistryService.RecordSubtreeReceived:output_type -> google.protobuf.Empty
-	140, // 217: blockchain_api.PeerRegistryService.RecordTransactionReceived:output_type -> google.protobuf.Empty
-	140, // 218: blockchain_api.PeerRegistryService.RecordCatchupError:output_type -> google.protobuf.Empty
-	140, // 219: blockchain_api.PeerRegistryService.RecordCatchupAttempt:output_type -> google.protobuf.Empty
-	140, // 220: blockchain_api.PeerRegistryService.RecordCatchupSuccess:output_type -> google.protobuf.Empty
-	140, // 221: blockchain_api.PeerRegistryService.RecordCatchupFailure:output_type -> google.protobuf.Empty
-	102, // 222: blockchain_api.PeerRegistryService.ResetReputation:output_type -> blockchain_api.ResetReputationResponse
-	104, // 223: blockchain_api.PeerRegistryService.ReconsiderBadPeers:output_type -> blockchain_api.ReconsiderBadPeersResponse
-	140, // 224: blockchain_api.PeerRegistryService.RecordValidatedPeerProgress:output_type -> google.protobuf.Empty
-	129, // [129:225] is the sub-list for method output_type
-	33,  // [33:129] is the sub-list for method input_type
-	33,  // [33:33] is the sub-list for extension type_name
-	33,  // [33:33] is the sub-list for extension extendee
-	0,   // [0:33] is the sub-list for field type_name
+	139, // 0: blockchain_api.HealthResponse.timestamp:type_name -> google.protobuf.Timestamp
+	5,   // 1: blockchain_api.AddBlockRequest.lane_map_rows:type_name -> blockchain_api.LaneMapRow
+	139, // 2: blockchain_api.GetBlockHeaderResponse.processed_at:type_name -> google.protobuf.Timestamp
+	140, // 3: blockchain_api.Notification.type:type_name -> model.NotificationType
+	50,  // 4: blockchain_api.Notification.metadata:type_name -> blockchain_api.NotificationMetadata
+	138, // 5: blockchain_api.NotificationMetadata.metadata:type_name -> blockchain_api.NotificationMetadata.MetadataEntry
+	141, // 6: blockchain_api.GetLastNBlocksResponse.blocks:type_name -> model.BlockInfo
+	141, // 7: blockchain_api.GetLastNInvalidBlocksResponse.blocks:type_name -> model.BlockInfo
+	142, // 8: blockchain_api.GetSuitableBlockResponse.block:type_name -> model.SuitableBlock
+	2,   // 9: blockchain_api.GetFSMStateResponse.state:type_name -> blockchain_api.FSMStateType
+	0,   // 10: blockchain_api.SendFSMEventRequest.event:type_name -> blockchain_api.FSMEventType
+	1,   // 11: blockchain_api.PeerRegistryInfo.transport_type:type_name -> blockchain_api.TransportType
+	139, // 12: blockchain_api.PeerRegistryInfo.connected_at:type_name -> google.protobuf.Timestamp
+	139, // 13: blockchain_api.PeerRegistryInfo.last_message_time:type_name -> google.protobuf.Timestamp
+	139, // 14: blockchain_api.PeerRegistryInfo.last_interaction_attempt:type_name -> google.protobuf.Timestamp
+	139, // 15: blockchain_api.PeerRegistryInfo.last_interaction_success:type_name -> google.protobuf.Timestamp
+	139, // 16: blockchain_api.PeerRegistryInfo.last_interaction_failure:type_name -> google.protobuf.Timestamp
+	139, // 17: blockchain_api.PeerRegistryInfo.last_seen:type_name -> google.protobuf.Timestamp
+	139, // 18: blockchain_api.PeerRegistryInfo.last_block_time:type_name -> google.protobuf.Timestamp
+	139, // 19: blockchain_api.PeerRegistryInfo.last_sync_attempt:type_name -> google.protobuf.Timestamp
+	139, // 20: blockchain_api.PeerRegistryInfo.last_reputation_reset:type_name -> google.protobuf.Timestamp
+	139, // 21: blockchain_api.PeerRegistryInfo.last_catchup_error_time:type_name -> google.protobuf.Timestamp
+	139, // 22: blockchain_api.PeerRegistryInfo.last_validated_at:type_name -> google.protobuf.Timestamp
+	139, // 23: blockchain_api.PeerRegistryInfo.full_storage_penalty_until:type_name -> google.protobuf.Timestamp
+	131, // 24: blockchain_api.PeerRegistryInfo.legacy:type_name -> blockchain_api.LegacyPeerInfo
+	75,  // 25: blockchain_api.RegisterPeerRequest.peer:type_name -> blockchain_api.PeerRegistryInfo
+	1,   // 26: blockchain_api.ListPeersRequest.transport_filter:type_name -> blockchain_api.TransportType
+	75,  // 27: blockchain_api.ListPeersResponse.peers:type_name -> blockchain_api.PeerRegistryInfo
+	75,  // 28: blockchain_api.GetPeerResponse.peer:type_name -> blockchain_api.PeerRegistryInfo
+	143, // 29: blockchain_api.GetChainTipsResponse.tips:type_name -> model.ChainTip
+	118, // 30: blockchain_api.ListScheduledDeletionsResponse.deletions:type_name -> blockchain_api.ScheduledDeletion
+	118, // 31: blockchain_api.GetPendingBlobDeletionsResponse.deletions:type_name -> blockchain_api.ScheduledDeletion
+	118, // 32: blockchain_api.AcquireBlobDeletionBatchResponse.deletions:type_name -> blockchain_api.ScheduledDeletion
+	139, // 33: blockchain_api.LegacyPeerInfo.time_connected:type_name -> google.protobuf.Timestamp
+	144, // 34: blockchain_api.BlockchainAPI.HealthGRPC:input_type -> google.protobuf.Empty
+	4,   // 35: blockchain_api.BlockchainAPI.AddBlock:input_type -> blockchain_api.AddBlockRequest
+	6,   // 36: blockchain_api.BlockchainAPI.GetBlock:input_type -> blockchain_api.GetBlockRequest
+	7,   // 37: blockchain_api.BlockchainAPI.GetBlocks:input_type -> blockchain_api.GetBlocksRequest
+	9,   // 38: blockchain_api.BlockchainAPI.GetBlockByHeight:input_type -> blockchain_api.GetBlockByHeightRequest
+	10,  // 39: blockchain_api.BlockchainAPI.GetBlockByID:input_type -> blockchain_api.GetBlockByIDRequest
+	144, // 40: blockchain_api.BlockchainAPI.GetNextBlockID:input_type -> google.protobuf.Empty
+	12,  // 41: blockchain_api.BlockchainAPI.AssignBlockID:input_type -> blockchain_api.AssignBlockIDRequest
+	144, // 42: blockchain_api.BlockchainAPI.GetBlockStats:input_type -> google.protobuf.Empty
+	17,  // 43: blockchain_api.BlockchainAPI.GetBlockGraphData:input_type -> blockchain_api.GetBlockGraphDataRequest
+	57,  // 44: blockchain_api.BlockchainAPI.GetLastNBlocks:input_type -> blockchain_api.GetLastNBlocksRequest
+	59,  // 45: blockchain_api.BlockchainAPI.GetLastNInvalidBlocks:input_type -> blockchain_api.GetLastNInvalidBlocksRequest
+	61,  // 46: blockchain_api.BlockchainAPI.GetSuitableBlock:input_type -> blockchain_api.GetSuitableBlockRequest
+	63,  // 47: blockchain_api.BlockchainAPI.GetHashOfAncestorBlock:input_type -> blockchain_api.GetHashOfAncestorBlockRequest
+	65,  // 48: blockchain_api.BlockchainAPI.GetNextWorkRequired:input_type -> blockchain_api.GetNextWorkRequiredRequest
+	6,   // 49: blockchain_api.BlockchainAPI.GetBlockExists:input_type -> blockchain_api.GetBlockRequest
+	20,  // 50: blockchain_api.BlockchainAPI.GetBlockHeaders:input_type -> blockchain_api.GetBlockHeadersRequest
+	144, // 51: blockchain_api.BlockchainAPI.GetBestBlockHeaderUncached:input_type -> google.protobuf.Empty
+	20,  // 52: blockchain_api.BlockchainAPI.GetBlockHeadersByParentLinks:input_type -> blockchain_api.GetBlockHeadersRequest
+	21,  // 53: blockchain_api.BlockchainAPI.GetBlockHeadersToCommonAncestor:input_type -> blockchain_api.GetBlockHeadersToCommonAncestorRequest
+	22,  // 54: blockchain_api.BlockchainAPI.GetBlockHeadersFromCommonAncestor:input_type -> blockchain_api.GetBlockHeadersFromCommonAncestorRequest
+	24,  // 55: blockchain_api.BlockchainAPI.GetBlockHeadersFromHeight:input_type -> blockchain_api.GetBlockHeadersFromHeightRequest
+	26,  // 56: blockchain_api.BlockchainAPI.BlocksBetterThan:input_type -> blockchain_api.BlocksBetterThanRequest
+	28,  // 57: blockchain_api.BlockchainAPI.ClearBestTipLowWater:input_type -> blockchain_api.ClearBestTipLowWaterRequest
+	29,  // 58: blockchain_api.BlockchainAPI.GetBlockHeadersByHeight:input_type -> blockchain_api.GetBlockHeadersByHeightRequest
+	31,  // 59: blockchain_api.BlockchainAPI.GetMedianTimePastByHeights:input_type -> blockchain_api.GetMedianTimePastByHeightsRequest
+	33,  // 60: blockchain_api.BlockchainAPI.GetBlocksByHeight:input_type -> blockchain_api.GetBlocksByHeightRequest
+	35,  // 61: blockchain_api.BlockchainAPI.FindBlocksContainingSubtree:input_type -> blockchain_api.FindBlocksContainingSubtreeRequest
+	20,  // 62: blockchain_api.BlockchainAPI.GetBlockHeaderIDs:input_type -> blockchain_api.GetBlockHeadersRequest
+	132, // 63: blockchain_api.BlockchainAPI.OpenLaneLease:input_type -> blockchain_api.OpenLaneLeaseRequest
+	134, // 64: blockchain_api.BlockchainAPI.RenewLaneLease:input_type -> blockchain_api.RenewLaneLeaseRequest
+	136, // 65: blockchain_api.BlockchainAPI.ReleaseLaneLease:input_type -> blockchain_api.ReleaseLaneLeaseRequest
+	144, // 66: blockchain_api.BlockchainAPI.GetBestBlockHeader:input_type -> google.protobuf.Empty
+	40,  // 67: blockchain_api.BlockchainAPI.CheckBlockIsInCurrentChain:input_type -> blockchain_api.CheckBlockIsCurrentChainRequest
+	46,  // 68: blockchain_api.BlockchainAPI.CheckBlockIsAncestorOfBlock:input_type -> blockchain_api.CheckBlockIsAncestorOfBlockRequest
+	144, // 69: blockchain_api.BlockchainAPI.GetChainTips:input_type -> google.protobuf.Empty
+	39,  // 70: blockchain_api.BlockchainAPI.GetBlockHeader:input_type -> blockchain_api.GetBlockHeaderRequest
+	41,  // 71: blockchain_api.BlockchainAPI.InvalidateBlock:input_type -> blockchain_api.InvalidateBlockRequest
+	43,  // 72: blockchain_api.BlockchainAPI.RevalidateBlock:input_type -> blockchain_api.RevalidateBlockRequest
+	48,  // 73: blockchain_api.BlockchainAPI.Subscribe:input_type -> blockchain_api.SubscribeRequest
+	49,  // 74: blockchain_api.BlockchainAPI.SendNotification:input_type -> blockchain_api.Notification
+	144, // 75: blockchain_api.BlockchainAPI.GetSubscribers:input_type -> google.protobuf.Empty
+	52,  // 76: blockchain_api.BlockchainAPI.GetState:input_type -> blockchain_api.GetStateRequest
+	54,  // 77: blockchain_api.BlockchainAPI.SetState:input_type -> blockchain_api.SetStateRequest
+	55,  // 78: blockchain_api.BlockchainAPI.GetBlockIsMined:input_type -> blockchain_api.GetBlockIsMinedRequest
+	67,  // 79: blockchain_api.BlockchainAPI.SetBlockMinedSet:input_type -> blockchain_api.SetBlockMinedSetRequest
+	68,  // 80: blockchain_api.BlockchainAPI.ClearBlockMinedSet:input_type -> blockchain_api.ClearBlockMinedSetRequest
+	144, // 81: blockchain_api.BlockchainAPI.GetBlocksMinedNotSet:input_type -> google.protobuf.Empty
+	70,  // 82: blockchain_api.BlockchainAPI.SetBlockSubtreesSet:input_type -> blockchain_api.SetBlockSubtreesSetRequest
+	144, // 83: blockchain_api.BlockchainAPI.GetBlocksSubtreesNotSet:input_type -> google.protobuf.Empty
+	72,  // 84: blockchain_api.BlockchainAPI.SetBlockProcessedAt:input_type -> blockchain_api.SetBlockProcessedAtRequest
+	110, // 85: blockchain_api.BlockchainAPI.SetBlockPersistedAt:input_type -> blockchain_api.SetBlockPersistedAtRequest
+	111, // 86: blockchain_api.BlockchainAPI.GetBlocksNotPersisted:input_type -> blockchain_api.GetBlocksNotPersistedRequest
+	74,  // 87: blockchain_api.BlockchainAPI.SendFSMEvent:input_type -> blockchain_api.SendFSMEventRequest
+	144, // 88: blockchain_api.BlockchainAPI.GetFSMCurrentState:input_type -> google.protobuf.Empty
+	144, // 89: blockchain_api.BlockchainAPI.WaitUntilFSMTransitionFromIdleState:input_type -> google.protobuf.Empty
+	144, // 90: blockchain_api.BlockchainAPI.Run:input_type -> google.protobuf.Empty
+	144, // 91: blockchain_api.BlockchainAPI.CatchUpBlocks:input_type -> google.protobuf.Empty
+	144, // 92: blockchain_api.BlockchainAPI.Idle:input_type -> google.protobuf.Empty
+	109, // 93: blockchain_api.BlockchainAPI.ReportPeerFailure:input_type -> blockchain_api.ReportPeerFailureRequest
+	103, // 94: blockchain_api.BlockchainAPI.GetBlockLocator:input_type -> blockchain_api.GetBlockLocatorRequest
+	105, // 95: blockchain_api.BlockchainAPI.LocateBlockHeaders:input_type -> blockchain_api.LocateBlockHeadersRequest
+	144, // 96: blockchain_api.BlockchainAPI.GetBestHeightAndTime:input_type -> google.protobuf.Empty
+	113, // 97: blockchain_api.BlockchainAPI.ScheduleBlobDeletion:input_type -> blockchain_api.ScheduleBlobDeletionRequest
+	115, // 98: blockchain_api.BlockchainAPI.CancelBlobDeletion:input_type -> blockchain_api.CancelBlobDeletionRequest
+	117, // 99: blockchain_api.BlockchainAPI.ListScheduledDeletions:input_type -> blockchain_api.ListScheduledDeletionsRequest
+	120, // 100: blockchain_api.BlockchainAPI.GetPendingBlobDeletions:input_type -> blockchain_api.GetPendingBlobDeletionsRequest
+	122, // 101: blockchain_api.BlockchainAPI.RemoveBlobDeletion:input_type -> blockchain_api.RemoveBlobDeletionRequest
+	123, // 102: blockchain_api.BlockchainAPI.IncrementBlobDeletionRetry:input_type -> blockchain_api.IncrementBlobDeletionRetryRequest
+	125, // 103: blockchain_api.BlockchainAPI.CompleteBlobDeletions:input_type -> blockchain_api.CompleteBlobDeletionsRequest
+	127, // 104: blockchain_api.BlockchainAPI.AcquireBlobDeletionBatch:input_type -> blockchain_api.AcquireBlobDeletionBatchRequest
+	129, // 105: blockchain_api.BlockchainAPI.CompleteBlobDeletionBatch:input_type -> blockchain_api.CompleteBlobDeletionBatchRequest
+	76,  // 106: blockchain_api.PeerRegistryService.RegisterPeer:input_type -> blockchain_api.RegisterPeerRequest
+	78,  // 107: blockchain_api.PeerRegistryService.UpdatePeerMetrics:input_type -> blockchain_api.UpdatePeerMetricsRequest
+	79,  // 108: blockchain_api.PeerRegistryService.RemovePeer:input_type -> blockchain_api.RemovePeerRequest
+	80,  // 109: blockchain_api.PeerRegistryService.ListPeers:input_type -> blockchain_api.ListPeersRequest
+	82,  // 110: blockchain_api.PeerRegistryService.GetPeer:input_type -> blockchain_api.GetPeerRequest
+	84,  // 111: blockchain_api.PeerRegistryService.AddBanScore:input_type -> blockchain_api.AddBanScoreRequest
+	86,  // 112: blockchain_api.PeerRegistryService.IsPeerBanned:input_type -> blockchain_api.IsPeerBannedRequest
+	144, // 113: blockchain_api.PeerRegistryService.ListBannedPeers:input_type -> google.protobuf.Empty
+	144, // 114: blockchain_api.PeerRegistryService.ClearBannedPeers:input_type -> google.protobuf.Empty
+	89,  // 115: blockchain_api.PeerRegistryService.UpdateConnectionState:input_type -> blockchain_api.UpdateConnectionStateRequest
+	90,  // 116: blockchain_api.PeerRegistryService.UpdateLastMessageTime:input_type -> blockchain_api.UpdateLastMessageTimeRequest
+	91,  // 117: blockchain_api.PeerRegistryService.UpdateStorage:input_type -> blockchain_api.UpdateStorageRequest
+	92,  // 118: blockchain_api.PeerRegistryService.RecordSyncAttempt:input_type -> blockchain_api.RecordSyncAttemptRequest
+	144, // 119: blockchain_api.PeerRegistryService.ClearAllSyncAttempts:input_type -> google.protobuf.Empty
+	94,  // 120: blockchain_api.PeerRegistryService.RecordBlockReceived:input_type -> blockchain_api.RecordReceivedRequest
+	94,  // 121: blockchain_api.PeerRegistryService.RecordSubtreeReceived:input_type -> blockchain_api.RecordReceivedRequest
+	94,  // 122: blockchain_api.PeerRegistryService.RecordTransactionReceived:input_type -> blockchain_api.RecordReceivedRequest
+	95,  // 123: blockchain_api.PeerRegistryService.RecordCatchupError:input_type -> blockchain_api.RecordCatchupErrorRequest
+	96,  // 124: blockchain_api.PeerRegistryService.RecordCatchupAttempt:input_type -> blockchain_api.RecordCatchupAttemptRequest
+	97,  // 125: blockchain_api.PeerRegistryService.RecordCatchupSuccess:input_type -> blockchain_api.RecordCatchupSuccessRequest
+	98,  // 126: blockchain_api.PeerRegistryService.RecordCatchupFailure:input_type -> blockchain_api.RecordCatchupFailureRequest
+	99,  // 127: blockchain_api.PeerRegistryService.ResetReputation:input_type -> blockchain_api.ResetReputationRequest
+	101, // 128: blockchain_api.PeerRegistryService.ReconsiderBadPeers:input_type -> blockchain_api.ReconsiderBadPeersRequest
+	77,  // 129: blockchain_api.PeerRegistryService.RecordValidatedPeerProgress:input_type -> blockchain_api.RecordValidatedPeerProgressRequest
+	3,   // 130: blockchain_api.BlockchainAPI.HealthGRPC:output_type -> blockchain_api.HealthResponse
+	144, // 131: blockchain_api.BlockchainAPI.AddBlock:output_type -> google.protobuf.Empty
+	15,  // 132: blockchain_api.BlockchainAPI.GetBlock:output_type -> blockchain_api.GetBlockResponse
+	8,   // 133: blockchain_api.BlockchainAPI.GetBlocks:output_type -> blockchain_api.GetBlocksResponse
+	15,  // 134: blockchain_api.BlockchainAPI.GetBlockByHeight:output_type -> blockchain_api.GetBlockResponse
+	15,  // 135: blockchain_api.BlockchainAPI.GetBlockByID:output_type -> blockchain_api.GetBlockResponse
+	11,  // 136: blockchain_api.BlockchainAPI.GetNextBlockID:output_type -> blockchain_api.GetNextBlockIDResponse
+	13,  // 137: blockchain_api.BlockchainAPI.AssignBlockID:output_type -> blockchain_api.AssignBlockIDResponse
+	145, // 138: blockchain_api.BlockchainAPI.GetBlockStats:output_type -> model.BlockStats
+	146, // 139: blockchain_api.BlockchainAPI.GetBlockGraphData:output_type -> model.BlockDataPoints
+	58,  // 140: blockchain_api.BlockchainAPI.GetLastNBlocks:output_type -> blockchain_api.GetLastNBlocksResponse
+	60,  // 141: blockchain_api.BlockchainAPI.GetLastNInvalidBlocks:output_type -> blockchain_api.GetLastNInvalidBlocksResponse
+	62,  // 142: blockchain_api.BlockchainAPI.GetSuitableBlock:output_type -> blockchain_api.GetSuitableBlockResponse
+	64,  // 143: blockchain_api.BlockchainAPI.GetHashOfAncestorBlock:output_type -> blockchain_api.GetHashOfAncestorBlockResponse
+	66,  // 144: blockchain_api.BlockchainAPI.GetNextWorkRequired:output_type -> blockchain_api.GetNextWorkRequiredResponse
+	18,  // 145: blockchain_api.BlockchainAPI.GetBlockExists:output_type -> blockchain_api.GetBlockExistsResponse
+	23,  // 146: blockchain_api.BlockchainAPI.GetBlockHeaders:output_type -> blockchain_api.GetBlockHeadersResponse
+	44,  // 147: blockchain_api.BlockchainAPI.GetBestBlockHeaderUncached:output_type -> blockchain_api.GetBlockHeaderResponse
+	23,  // 148: blockchain_api.BlockchainAPI.GetBlockHeadersByParentLinks:output_type -> blockchain_api.GetBlockHeadersResponse
+	23,  // 149: blockchain_api.BlockchainAPI.GetBlockHeadersToCommonAncestor:output_type -> blockchain_api.GetBlockHeadersResponse
+	23,  // 150: blockchain_api.BlockchainAPI.GetBlockHeadersFromCommonAncestor:output_type -> blockchain_api.GetBlockHeadersResponse
+	25,  // 151: blockchain_api.BlockchainAPI.GetBlockHeadersFromHeight:output_type -> blockchain_api.GetBlockHeadersFromHeightResponse
+	27,  // 152: blockchain_api.BlockchainAPI.BlocksBetterThan:output_type -> blockchain_api.BlocksBetterThanResponse
+	144, // 153: blockchain_api.BlockchainAPI.ClearBestTipLowWater:output_type -> google.protobuf.Empty
+	30,  // 154: blockchain_api.BlockchainAPI.GetBlockHeadersByHeight:output_type -> blockchain_api.GetBlockHeadersByHeightResponse
+	32,  // 155: blockchain_api.BlockchainAPI.GetMedianTimePastByHeights:output_type -> blockchain_api.GetMedianTimePastByHeightsResponse
+	34,  // 156: blockchain_api.BlockchainAPI.GetBlocksByHeight:output_type -> blockchain_api.GetBlocksByHeightResponse
+	36,  // 157: blockchain_api.BlockchainAPI.FindBlocksContainingSubtree:output_type -> blockchain_api.FindBlocksContainingSubtreeResponse
+	37,  // 158: blockchain_api.BlockchainAPI.GetBlockHeaderIDs:output_type -> blockchain_api.GetBlockHeaderIDsResponse
+	133, // 159: blockchain_api.BlockchainAPI.OpenLaneLease:output_type -> blockchain_api.LaneLeaseGrant
+	135, // 160: blockchain_api.BlockchainAPI.RenewLaneLease:output_type -> blockchain_api.RenewLaneLeaseResponse
+	137, // 161: blockchain_api.BlockchainAPI.ReleaseLaneLease:output_type -> blockchain_api.ReleaseLaneLeaseResponse
+	44,  // 162: blockchain_api.BlockchainAPI.GetBestBlockHeader:output_type -> blockchain_api.GetBlockHeaderResponse
+	45,  // 163: blockchain_api.BlockchainAPI.CheckBlockIsInCurrentChain:output_type -> blockchain_api.CheckBlockIsCurrentChainResponse
+	47,  // 164: blockchain_api.BlockchainAPI.CheckBlockIsAncestorOfBlock:output_type -> blockchain_api.CheckBlockIsAncestorOfBlockResponse
+	108, // 165: blockchain_api.BlockchainAPI.GetChainTips:output_type -> blockchain_api.GetChainTipsResponse
+	44,  // 166: blockchain_api.BlockchainAPI.GetBlockHeader:output_type -> blockchain_api.GetBlockHeaderResponse
+	42,  // 167: blockchain_api.BlockchainAPI.InvalidateBlock:output_type -> blockchain_api.InvalidateBlockResponse
+	144, // 168: blockchain_api.BlockchainAPI.RevalidateBlock:output_type -> google.protobuf.Empty
+	49,  // 169: blockchain_api.BlockchainAPI.Subscribe:output_type -> blockchain_api.Notification
+	144, // 170: blockchain_api.BlockchainAPI.SendNotification:output_type -> google.protobuf.Empty
+	51,  // 171: blockchain_api.BlockchainAPI.GetSubscribers:output_type -> blockchain_api.GetSubscribersResponse
+	53,  // 172: blockchain_api.BlockchainAPI.GetState:output_type -> blockchain_api.StateResponse
+	144, // 173: blockchain_api.BlockchainAPI.SetState:output_type -> google.protobuf.Empty
+	56,  // 174: blockchain_api.BlockchainAPI.GetBlockIsMined:output_type -> blockchain_api.GetBlockIsMinedResponse
+	144, // 175: blockchain_api.BlockchainAPI.SetBlockMinedSet:output_type -> google.protobuf.Empty
+	144, // 176: blockchain_api.BlockchainAPI.ClearBlockMinedSet:output_type -> google.protobuf.Empty
+	69,  // 177: blockchain_api.BlockchainAPI.GetBlocksMinedNotSet:output_type -> blockchain_api.GetBlocksMinedNotSetResponse
+	144, // 178: blockchain_api.BlockchainAPI.SetBlockSubtreesSet:output_type -> google.protobuf.Empty
+	71,  // 179: blockchain_api.BlockchainAPI.GetBlocksSubtreesNotSet:output_type -> blockchain_api.GetBlocksSubtreesNotSetResponse
+	144, // 180: blockchain_api.BlockchainAPI.SetBlockProcessedAt:output_type -> google.protobuf.Empty
+	144, // 181: blockchain_api.BlockchainAPI.SetBlockPersistedAt:output_type -> google.protobuf.Empty
+	112, // 182: blockchain_api.BlockchainAPI.GetBlocksNotPersisted:output_type -> blockchain_api.GetBlocksNotPersistedResponse
+	73,  // 183: blockchain_api.BlockchainAPI.SendFSMEvent:output_type -> blockchain_api.GetFSMStateResponse
+	73,  // 184: blockchain_api.BlockchainAPI.GetFSMCurrentState:output_type -> blockchain_api.GetFSMStateResponse
+	144, // 185: blockchain_api.BlockchainAPI.WaitUntilFSMTransitionFromIdleState:output_type -> google.protobuf.Empty
+	144, // 186: blockchain_api.BlockchainAPI.Run:output_type -> google.protobuf.Empty
+	144, // 187: blockchain_api.BlockchainAPI.CatchUpBlocks:output_type -> google.protobuf.Empty
+	144, // 188: blockchain_api.BlockchainAPI.Idle:output_type -> google.protobuf.Empty
+	144, // 189: blockchain_api.BlockchainAPI.ReportPeerFailure:output_type -> google.protobuf.Empty
+	104, // 190: blockchain_api.BlockchainAPI.GetBlockLocator:output_type -> blockchain_api.GetBlockLocatorResponse
+	106, // 191: blockchain_api.BlockchainAPI.LocateBlockHeaders:output_type -> blockchain_api.LocateBlockHeadersResponse
+	107, // 192: blockchain_api.BlockchainAPI.GetBestHeightAndTime:output_type -> blockchain_api.GetBestHeightAndTimeResponse
+	114, // 193: blockchain_api.BlockchainAPI.ScheduleBlobDeletion:output_type -> blockchain_api.ScheduleBlobDeletionResponse
+	116, // 194: blockchain_api.BlockchainAPI.CancelBlobDeletion:output_type -> blockchain_api.CancelBlobDeletionResponse
+	119, // 195: blockchain_api.BlockchainAPI.ListScheduledDeletions:output_type -> blockchain_api.ListScheduledDeletionsResponse
+	121, // 196: blockchain_api.BlockchainAPI.GetPendingBlobDeletions:output_type -> blockchain_api.GetPendingBlobDeletionsResponse
+	144, // 197: blockchain_api.BlockchainAPI.RemoveBlobDeletion:output_type -> google.protobuf.Empty
+	124, // 198: blockchain_api.BlockchainAPI.IncrementBlobDeletionRetry:output_type -> blockchain_api.IncrementBlobDeletionRetryResponse
+	126, // 199: blockchain_api.BlockchainAPI.CompleteBlobDeletions:output_type -> blockchain_api.CompleteBlobDeletionsResponse
+	128, // 200: blockchain_api.BlockchainAPI.AcquireBlobDeletionBatch:output_type -> blockchain_api.AcquireBlobDeletionBatchResponse
+	144, // 201: blockchain_api.BlockchainAPI.CompleteBlobDeletionBatch:output_type -> google.protobuf.Empty
+	144, // 202: blockchain_api.PeerRegistryService.RegisterPeer:output_type -> google.protobuf.Empty
+	144, // 203: blockchain_api.PeerRegistryService.UpdatePeerMetrics:output_type -> google.protobuf.Empty
+	144, // 204: blockchain_api.PeerRegistryService.RemovePeer:output_type -> google.protobuf.Empty
+	81,  // 205: blockchain_api.PeerRegistryService.ListPeers:output_type -> blockchain_api.ListPeersResponse
+	83,  // 206: blockchain_api.PeerRegistryService.GetPeer:output_type -> blockchain_api.GetPeerResponse
+	85,  // 207: blockchain_api.PeerRegistryService.AddBanScore:output_type -> blockchain_api.AddBanScoreResponse
+	87,  // 208: blockchain_api.PeerRegistryService.IsPeerBanned:output_type -> blockchain_api.IsPeerBannedResponse
+	88,  // 209: blockchain_api.PeerRegistryService.ListBannedPeers:output_type -> blockchain_api.ListBannedPeersResponse
+	144, // 210: blockchain_api.PeerRegistryService.ClearBannedPeers:output_type -> google.protobuf.Empty
+	144, // 211: blockchain_api.PeerRegistryService.UpdateConnectionState:output_type -> google.protobuf.Empty
+	144, // 212: blockchain_api.PeerRegistryService.UpdateLastMessageTime:output_type -> google.protobuf.Empty
+	144, // 213: blockchain_api.PeerRegistryService.UpdateStorage:output_type -> google.protobuf.Empty
+	144, // 214: blockchain_api.PeerRegistryService.RecordSyncAttempt:output_type -> google.protobuf.Empty
+	93,  // 215: blockchain_api.PeerRegistryService.ClearAllSyncAttempts:output_type -> blockchain_api.ClearAllSyncAttemptsResponse
+	144, // 216: blockchain_api.PeerRegistryService.RecordBlockReceived:output_type -> google.protobuf.Empty
+	144, // 217: blockchain_api.PeerRegistryService.RecordSubtreeReceived:output_type -> google.protobuf.Empty
+	144, // 218: blockchain_api.PeerRegistryService.RecordTransactionReceived:output_type -> google.protobuf.Empty
+	144, // 219: blockchain_api.PeerRegistryService.RecordCatchupError:output_type -> google.protobuf.Empty
+	144, // 220: blockchain_api.PeerRegistryService.RecordCatchupAttempt:output_type -> google.protobuf.Empty
+	144, // 221: blockchain_api.PeerRegistryService.RecordCatchupSuccess:output_type -> google.protobuf.Empty
+	144, // 222: blockchain_api.PeerRegistryService.RecordCatchupFailure:output_type -> google.protobuf.Empty
+	100, // 223: blockchain_api.PeerRegistryService.ResetReputation:output_type -> blockchain_api.ResetReputationResponse
+	102, // 224: blockchain_api.PeerRegistryService.ReconsiderBadPeers:output_type -> blockchain_api.ReconsiderBadPeersResponse
+	144, // 225: blockchain_api.PeerRegistryService.RecordValidatedPeerProgress:output_type -> google.protobuf.Empty
+	130, // [130:226] is the sub-list for method output_type
+	34,  // [34:130] is the sub-list for method input_type
+	34,  // [34:34] is the sub-list for extension type_name
+	34,  // [34:34] is the sub-list for extension extendee
+	0,   // [0:34] is the sub-list for field type_name
 }
 
 func init() { file_services_blockchain_blockchain_api_blockchain_api_proto_init() }
@@ -8594,13 +8967,14 @@ func file_services_blockchain_blockchain_api_blockchain_api_proto_init() {
 	if File_services_blockchain_blockchain_api_blockchain_api_proto != nil {
 		return
 	}
+	file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[64].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_services_blockchain_blockchain_api_blockchain_api_proto_rawDesc), len(file_services_blockchain_blockchain_api_blockchain_api_proto_rawDesc)),
 			NumEnums:      3,
-			NumMessages:   132,
+			NumMessages:   136,
 			NumExtensions: 0,
 			NumServices:   2,
 		},

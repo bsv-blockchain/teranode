@@ -53,10 +53,12 @@ func isDeadlock(err error) bool {
 //
 // The lock release (setLockedDirect), the mine (recordMined) and the un-mine (unMine) all update
 // the identity and containment rows of whichever transactions they name, in an order the
-// statements choose. Two of them that share transactions can therefore lock those rows in
-// different orders, and PostgreSQL then stops one of them. Ordering them with per-transaction
-// advisory locks was tried and fails at scale: a mine names thousands of transactions, and the
-// locks of many concurrent callers overflow PostgreSQL's shared lock table ("out of shared
+// statements choose, and the restore (Unspend) share-locks the ones it reads the lock from. Two
+// of them that share transactions can therefore lock those rows in different orders, and
+// PostgreSQL then stops one of them. Delete crosses the restore the same way on a single
+// transaction: it takes the identity and containment rows before the undo records, and the
+// restore takes an undo record before it share-locks those rows. Ordering them with per-transaction advisory locks was tried
+// and fails at scale: a mine names thousands of transactions, and the locks of many concurrent callers overflow PostgreSQL's shared lock table ("out of shared
 // memory"). A deadlock is rare, PostgreSQL detects it, and a retry from the start is safe, so
 // that is the cure. The sql store does the same for its spends (isDeadlock in stores/utxo/sql).
 // Each retry waits first for PostgreSQL's deadlock_timeout, the time it takes to detect the

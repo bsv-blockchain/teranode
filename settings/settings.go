@@ -32,7 +32,19 @@ func NewSettings(alternativeContext ...string) *Settings {
 
 	globalBlockHeightRetention := getUint32("global_blockHeightRetention", blocksInADayOnAverage*2, alternativeContext...)
 
-	doubleSpendWindowMillis := getInt("double_spend_window_millis", 0, alternativeContext...)
+	// The double-spend window governs two behaviours: the mining hold-back in
+	// queue eligibility and the time bound of the subtree-processor drain
+	// (see BlockAssembly.DoubleSpendWindow longdesc). This key predates the
+	// blockassembly_* naming convention; the prefixed key is canonical now
+	// and the unprefixed one keeps working as a deprecated alias, so an
+	// operator searching the config for the service name finds it.
+	doubleSpendWindowMillis := getInt("blockassembly_doubleSpendWindowMillis", -1, alternativeContext...)
+	if doubleSpendWindowMillis < 0 {
+		doubleSpendWindowMillis = getInt("double_spend_window_millis", 0, alternativeContext...)
+	}
+	if doubleSpendWindowMillis < 0 {
+		doubleSpendWindowMillis = 0 // milliseconds are never negative; treat as 0
+	}
 	doubleSpendWindow := time.Duration(doubleSpendWindowMillis) * time.Millisecond
 
 	blacklistMap := getMultiStringMap("subtreevalidation_blacklisted_baseurls", "|", []string{}, alternativeContext...)
@@ -197,16 +209,17 @@ func NewSettings(alternativeContext ...string) *Settings {
 			OverloadRetryMaxBackoff:         getDuration("aerospike_overload_retry_max_backoff", 5*time.Second, alternativeContext...),
 		},
 		Alert: AlertSettings{
-			GenesisKeys:              getMultiString("alert_genesis_keys", "|", []string{}, alternativeContext...),
-			P2PPrivateKey:            getString("alert_p2p_private_key", "", alternativeContext...),
-			ProtocolID:               getString("alert_protocol_id", "", alternativeContext...),
-			StoreURL:                 getURL("alert_store", "sqlite:///alert", alternativeContext...),
-			TopicName:                getString("alert_topic_name", "", alternativeContext...),
-			P2PPort:                  getPort("ALERT_P2P_PORT", 9908, alternativeContext...),
-			P2PBootstrapPeer:         getString("alert_p2p_bootstrap_peer", "", alternativeContext...),
-			P2PAllowPrivateIPs:       getBool("alert_p2p_allow_private_ips", false, alternativeContext...),
-			P2PPeerDiscoveryInterval: getDuration("alert_p2p_peer_discovery_interval", 10*time.Minute, alternativeContext...),
-			P2PDHTMode:               getString("alert_p2p_dht_mode", "client", alternativeContext...),
+			GenesisKeys:                            getMultiString("alert_genesis_keys", "|", []string{}, alternativeContext...),
+			P2PPrivateKey:                          getString("alert_p2p_private_key", "", alternativeContext...),
+			ProtocolID:                             getString("alert_protocol_id", "", alternativeContext...),
+			StoreURL:                               getURL("alert_store", "sqlite:///alert", alternativeContext...),
+			TopicName:                              getString("alert_topic_name", "", alternativeContext...),
+			P2PPort:                                getPort("ALERT_P2P_PORT", 9908, alternativeContext...),
+			P2PBootstrapPeer:                       getString("alert_p2p_bootstrap_peer", "", alternativeContext...),
+			P2PAllowPrivateIPs:                     getBool("alert_p2p_allow_private_ips", false, alternativeContext...),
+			P2PPeerDiscoveryInterval:               getDuration("alert_p2p_peer_discovery_interval", 10*time.Minute, alternativeContext...),
+			P2PDHTMode:                             getString("alert_p2p_dht_mode", "client", alternativeContext...),
+			ConfiscationAllowReassignWithoutScript: getBool("alert_confiscationAllowReassignWithoutScript", false, alternativeContext...),
 		},
 		Asset: AssetSettings{
 			APIPrefix:               getString("asset_apiPrefix", "/api/v1", alternativeContext...),
@@ -295,6 +308,7 @@ func NewSettings(alternativeContext ...string) *Settings {
 			QuorumTimeout:                         getDuration("block_quorum_timeout", 10*time.Second, alternativeContext...),
 			ProcessTxMetaUsingStoreBatchSize:      getInt("blockvalidation_processTxMetaUsingStore_BatchSize", 1024, alternativeContext...),
 			UTXOPersisterBufferSize:               getString("utxoPersister_buffer_size", "256KB", alternativeContext...),
+			UTXOPersisterLivenessStallTimeout:     getDuration("utxoPersister_livenessStallTimeout", 0, alternativeContext...),
 			UTXOPersisterDirect:                   getBool("direct", true, alternativeContext...),
 			TxStore:                               getURL("txstore", "", alternativeContext...),
 			UtxoStore:                             getURL("txmeta_store", "", alternativeContext...),
@@ -323,7 +337,6 @@ func NewSettings(alternativeContext ...string) *Settings {
 			GRPCMaxRetries:                       getInt("blockassembly_grpcMaxRetries", 3, alternativeContext...),
 			GRPCRetryBackoff:                     getDuration("blockassembly_grpcRetryBackoff", 2*time.Second, alternativeContext...),
 			LocalDAHCache:                        getString("blockassembly_localDAHCache", "", alternativeContext...),
-			MaxBlockReorgCatchup:                 getInt("blockassembly_maxBlockReorgCatchup", 100, alternativeContext...),
 			MaxBlockReorgRollback:                getInt("blockassembly_maxBlockReorgRollback", 100, alternativeContext...),
 			MoveBackBlockConcurrency:             getInt("blockassembly_moveBackBlockConcurrency", 375, alternativeContext...),
 			ProcessRemainderTxHashesConcurrency:  getInt("blockassembly_processRemainderTxHashesConcurrency", 375, alternativeContext...),
@@ -346,6 +359,7 @@ func NewSettings(alternativeContext ...string) *Settings {
 			CoinbaseRecoveryConsecutiveGood:      getInt("blockassembly_coinbaseRecoveryConsecutiveGood", 6, alternativeContext...),
 			CoinbaseRecoveryMaxAttempts:          getInt("blockassembly_coinbaseRecoveryMaxAttempts", 3, alternativeContext...),
 			MinerWalletPrivateKeys:               getMultiString("miner_wallet_private_keys", "|", []string{}, alternativeContext...),
+			EmergencyDifficultyDelay:             getDuration("blockassembly_emergencyDifficultyDelay", 0, alternativeContext...),
 			DifficultyCache:                      getBool("blockassembly_difficultyCache", true, alternativeContext...),
 			UseDynamicSubtreeSize:                getBool("blockassembly_useDynamicSubtreeSize", false, alternativeContext...),
 			BlockchainSubscriptionTimeout:        getDuration("blockassembly_blockchainSubscriptionTimeout", 5*time.Minute, alternativeContext...),
@@ -364,6 +378,7 @@ func NewSettings(alternativeContext ...string) *Settings {
 			IdleSleepDuration:                    getDuration("blockassembly_idle_sleep_duration", 10*time.Millisecond, alternativeContext...),
 			MaxQueueItems:                        getInt64("blockassembly_maxQueueItems", 0, alternativeContext...),
 			QueueFullWaitTimeout:                 getDuration("blockassembly_queueFullWaitTimeout", 100*time.Millisecond, alternativeContext...),
+			MaxTransactionsInMemory:              getUint64("blockassembly_maxTransactionsInMemory", 0, alternativeContext...),
 			TxMapDirs:                            getMultiString("blockassembly_txMapDirs", "|", []string{}, alternativeContext...),
 			SubtreeMmapDir:                       getString("blockassembly_subtreeMmapDir", "", alternativeContext...),
 		},
@@ -391,6 +406,11 @@ func NewSettings(alternativeContext ...string) *Settings {
 			MaxBlocksByHeightRange:     getInt("blockchain_maxBlocksByHeightRange", 2000, alternativeContext...),
 			GenerationalCacheCapacity:  getInt("blockchain_generationalCacheCapacity", 100000, alternativeContext...),
 			MaxInvalidBlocksPerRequest: getInt("blockchain_maxInvalidBlocksPerRequest", 10000, alternativeContext...),
+			LaneLeaseRenewInterval:     getDuration("blockchain_laneLeaseRenewInterval", 30*time.Second, alternativeContext...),
+			LaneLeaseStopAfter:         getDuration("blockchain_laneLeaseStopAfter", 2*time.Minute, alternativeContext...),
+			LaneLeaseCloseAfter:        getDuration("blockchain_laneLeaseCloseAfter", 3*time.Minute, alternativeContext...),
+			LaneGrantMin:               getUint64AtLeast("blockchain_laneGrantMin", 10_000, 1, alternativeContext...),
+			LaneGrantDuration:          getDuration("blockchain_laneGrantDuration", 2*time.Minute, alternativeContext...),
 		},
 		BlockValidation: BlockValidationSettings{
 			MaxRetries:                                getInt("blockValidationMaxRetries", 3, alternativeContext...),
@@ -584,6 +604,7 @@ func NewSettings(alternativeContext ...string) *Settings {
 			IncrementBatcherTickerIntervalMillis:    getInt("utxostore_incrementBatcherTickerIntervalMillis", 0, alternativeContext...),
 			SetDAHBatcherTickerIntervalMillis:       getInt("utxostore_setDAHBatcherTickerIntervalMillis", 0, alternativeContext...),
 			LockedBatcherTickerIntervalMillis:       getInt("utxostore_lockedBatcherTickerIntervalMillis", 0, alternativeContext...),
+			LaneMigration:                           LaneMigration(getString("utxostore_laneMigration", string(LaneMigrationOff), alternativeContext...)),
 		},
 		P2P: P2PSettings{
 			BlockTopic:          getString("p2p_block_topic", "", alternativeContext...),
@@ -643,6 +664,25 @@ func NewSettings(alternativeContext ...string) *Settings {
 			EnablePeerScoring:              getBool("p2p_enable_peer_scoring", true, alternativeContext...),
 			EnablePeerExchange:             getBool("p2p_enable_peer_exchange", true, alternativeContext...),
 			PeerScoreIPColocationThreshold: getInt("p2p_peer_score_ip_colocation_threshold", 10, alternativeContext...),
+			// Connection manager watermarks and libp2p resource manager overrides.
+			// Every default is 0 / empty, which keeps the go-p2p-message-bus and
+			// go-libp2p defaults, so a node that sets none of these builds the
+			// same message bus config as before the keys existed.
+			MaxConnections:          getInt("p2p_max_connections", 0, alternativeContext...),
+			MinConnections:          getInt("p2p_min_connections", 0, alternativeContext...),
+			ConnectionGracePeriod:   getDuration("p2p_connection_grace_period", 0, alternativeContext...),
+			RcmgrConns:              getInt("p2p_rcmgr_conns", 0, alternativeContext...),
+			RcmgrConnsInbound:       getInt("p2p_rcmgr_conns_inbound", 0, alternativeContext...),
+			RcmgrConnsOutbound:      getInt("p2p_rcmgr_conns_outbound", 0, alternativeContext...),
+			RcmgrStreams:            getInt("p2p_rcmgr_streams", 0, alternativeContext...),
+			RcmgrStreamsInbound:     getInt("p2p_rcmgr_streams_inbound", 0, alternativeContext...),
+			RcmgrStreamsOutbound:    getInt("p2p_rcmgr_streams_outbound", 0, alternativeContext...),
+			RcmgrFD:                 getInt("p2p_rcmgr_fd", 0, alternativeContext...),
+			RcmgrPeerConns:          getInt("p2p_rcmgr_peer_conns", 0, alternativeContext...),
+			RcmgrPeerConnsInbound:   getInt("p2p_rcmgr_peer_conns_inbound", 0, alternativeContext...),
+			RcmgrPeerStreamsInbound: getInt("p2p_rcmgr_peer_streams_inbound", 0, alternativeContext...),
+			RcmgrIPv4SubnetLimits:   dropEmptyStrings(getMultiString("p2p_rcmgr_ipv4_subnet_limits", "|", []string{}, alternativeContext...)),
+			RcmgrIPv6SubnetLimits:   dropEmptyStrings(getMultiString("p2p_rcmgr_ipv6_subnet_limits", "|", []string{}, alternativeContext...)),
 			// Full/pruned node selection configuration
 			AllowPrunedNodeFallback:                   getBool("p2p_allow_pruned_node_fallback", true, alternativeContext...),
 			SyncCoordinatorPeriodicEvaluationInterval: getDuration("p2p_sync_coordinator_periodic_evaluation_interval", 30*time.Second, alternativeContext...),
@@ -720,6 +760,7 @@ func NewSettings(alternativeContext ...string) *Settings {
 			ProcessTxMetaUsingCacheConcurrency:        getInt("subtreevalidation_processTxMetaUsingCache_Concurrency", 32, alternativeContext...),
 			PeerSubtreeConcurrency:                    getInt("subtreevalidation_peerSubtreeConcurrency", 32, alternativeContext...),
 			SkippedSubtreeBackfillMax:                 getInt("subtreevalidation_skippedSubtreeBackfillMax", 4096, alternativeContext...),
+			FailedSubtreeNegativeCacheTTL:             getDuration("subtreevalidation_failedSubtreeNegativeCacheTTL", 30*time.Second, alternativeContext...),
 			ProcessTxMetaUsingCacheMissingTxThreshold: getInt("subtreevalidation_processTxMetaUsingCache_MissingTxThreshold", 1, alternativeContext...),
 			SubtreeDAHConcurrency:                     getInt("subtreevalidation_subtreeDAHConcurrency", 8, alternativeContext...),
 			TxMetaCacheEnabled:                        getBool("subtreevalidation_txMetaCacheEnabled", true, alternativeContext...),
@@ -781,6 +822,7 @@ func NewSettings(alternativeContext ...string) *Settings {
 			AllowSyncCandidateFromLocalPeers: getBool("legacy_allowSyncCandidateFromLocalPeers", false, alternativeContext...),
 			TempStore:                        getURL("temp_store", "file://./data/tempstore", alternativeContext...),
 			PeerIdleTimeout:                  getDuration("legacy_peerIdleTimeout", 125*time.Second, alternativeContext...), // ping/pong interval is 2 mins, so we set this to 125s to be sure
+			PeerSendTimeout:                  getDuration("legacy_peerSendTimeout", 20*time.Minute, alternativeContext...),  // SV Node -p2ptimeout default
 			MaxAddnodePeers:                  getInt("legacy_maxAddnodePeers", 8, alternativeContext...),
 			ReplenishInterval:                getDuration("legacy_replenishInterval", 2*time.Second, alternativeContext...),
 			MaxFeelerPeers:                   getInt("legacy_maxFeelerPeers", 1, alternativeContext...),

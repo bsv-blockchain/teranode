@@ -13,6 +13,7 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/util"
+	"github.com/bsv-blockchain/teranode/util/lane"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -114,7 +115,7 @@ func minedBlock(infos []utxo.MinedBlockInfo) (utxo.MinedBlockInfo, bool) {
 // table forever and the UTXO table's size is the entire budget. This mirrors the
 // PR 684 queue store's spendable_count and the aerospike store's ShouldStoreOutputAsUTXO
 // gate, so all three agree on what "spendable" means.
-func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...utxo.CreateOption) (*meta.Data, error) {
+func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...utxo.CreateOption) (_ *meta.Data, err error) {
 	// Parsed up front rather than only on the batched path, because the single path now needs
 	// to know whether this create carries block information before it opens its transaction:
 	// that is what decides which tx_mined partition has to exist.
@@ -122,6 +123,48 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 	for _, opt := range opts {
 		opt(options)
 	}
+
+	// Before the batcher and before any transaction, so a wait for a position holds nothing, and a
+	// create that cannot get one fails having written nothing. createIn parses opts again, so the
+	// position goes there too.
+	position, err := s.Take(ctx, options)
+	if err != nil {
+		return nil, err
+	}
+
+	// A position this call took from the source is its own to record if the create fails. A
+	// caller that stops waiting for the batch gets its context error while the batch may still
+	// write the record, and LaneBurnReason says so. A batch that failed with its database
+	// transaction open says why on its result, and so does a direct call whose context had
+	// already ended.
+	//
+	// It also goes back for reuse when the create provably wrote nothing: a batch that failed
+	// before its COMMIT was sent rolled back whole, and a refused claim of a create with no block
+	// wrote nothing (refusedUnwritten). A position the caller named is the caller's.
+	var knownBurnReason string
+
+	if utxo.TookLanePosition(options.LanePosition, position) {
+		defer func() {
+			if err == nil {
+				return
+			}
+
+			if knownBurnReason != "" {
+				s.BurnLanePosition(options.Caller, knownBurnReason)
+			} else {
+				s.BurnCreateLanePosition(options, position, err, nil)
+			}
+
+			if knownBurnReason == utxo.LaneBurnRolledBack {
+				s.ReturnLanePosition(position, utxo.LaneReturnRolledBack, true)
+			} else {
+				s.ReturnLanePosition(position, utxo.LaneReturnExists, refusedUnwritten(err, options))
+			}
+		}()
+	}
+
+	options.LanePosition = position
+	opts = utxo.WithTakenLanePosition(opts, position)
 
 	// Batched when configured, which is the normal path. The batcher collects calls arriving
 	// from many goroutines and sends them as one round trip, which is what the other two
@@ -146,12 +189,20 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 			}) {
 				select {
 				case res := <-done:
+					knownBurnReason = res.burnReason
+
 					return res.data, res.err
 				case <-ctx.Done():
 					return nil, ctx.Err()
 				}
 			}
 		}
+	}
+
+	// A call whose context has already ended fails before it opens a database transaction, so its
+	// position was certainly not written.
+	if ctx.Err() != nil {
+		knownBurnReason = utxo.LaneBurnError
 	}
 
 	// Both partitions BEFORE the transaction is opened, never inside it: the DDL needs its own
@@ -210,13 +261,29 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 		return nil, cerr
 	}
 
-	if err := dbTx.Commit(ctx); err != nil {
-		return nil, errors.NewStorageError("[utxoset][Create] commit", err)
+	if err := commitCreates(ctx, dbTx); err != nil {
+		// The commit may have landed, as the SQL store marks the same failure.
+		return nil, utxo.MarkCreateOutcomeUnknown(errors.NewStorageError("[utxoset][Create] commit", err))
 	}
 
 	committed = true
 
 	return data, cerr
+}
+
+// refusedUnwritten reports whether err, the final answer of a create, proves that no record carries
+// the create's lane position: ErrTxExists for a create that carries no block. The claim that refused
+// it wrote nothing (see createPlan.settle), and with no block there is no containment row, the one
+// write a refused claim still makes, whose position can be the create's own (minedLaneValue). The
+// answer must be final: a rerun after a batch whose COMMIT may have landed can meet its own record.
+func refusedUnwritten(err error, options *utxo.CreateOptions) bool {
+	if !errors.Is(err, errors.ErrTxExists) {
+		return false
+	}
+
+	_, mined := minedBlock(options.MinedBlockInfos)
+
+	return !mined
 }
 
 // appendCreate adds one transaction to the plan: its identity row, its serialized bytes, and
@@ -395,6 +462,19 @@ func (s *Store) appendCreate(p *createPlan, item int, tx *bt.Tx, blockHeight uin
 	p.locktimes = append(p.locktimes, int32(tx.LockTime))
 	p.createdAt = append(p.createdAt, time.Now().UnixMilli())
 	p.txFlags = append(p.txFlags, flags)
+	// With no column there is nowhere to write it. The daemon only gives a store a source with the
+	// flag on, and the flag adds the column at open, so this is a caller naming a position on a
+	// store opened with the flag off.
+	if s.laneColumn {
+		p.addLane(options.LanePosition)
+	}
+
+	// The parents' positions go beside the inpoints, so only a create that stores inpoints writes
+	// them, and only on a database with the column. A list that does not match the inpoints is
+	// left out, never written partly: the coverage counter shows it.
+	if s.laneParentColumn {
+		p.addParentLanes(encodeParentLanes(inpoints, options.ParentLanePositions, txInpoints.ParentTxHashes))
+	}
 	p.bodies = append(p.bodies, body)
 	p.minedRows = append(p.minedRows, atBirth)
 	p.seedRows = append(p.seedRows, s.seedingCreate(options))
@@ -459,7 +539,27 @@ func (s *Store) appendCreate(p *createPlan, item int, tx *bt.Tx, blockHeight uin
 		IsCoinbase:  isCoinbase,
 		Conflicting: options.Conflicting,
 		Locked:      options.Locked,
+		// The position the record is written with, zero with lane positions off, so the validator
+		// can publish it in the transaction's metadata without reading the record back.
+		LanePosition: options.LanePosition,
 	}, nil
+}
+
+// encodeParentLanes is parent_lane_positions for a create: eight bytes per distinct parent, in the
+// order of parentHashes, the transaction's TxInpoints parents. It is nil when the create stores no
+// inpoints, or when positions is not one valid position per parent; nothing is written then.
+func encodeParentLanes(inpoints []byte, positions []uint64, parentHashes []chainhash.Hash) []byte {
+	if inpoints == nil || len(positions) == 0 || len(positions) != len(parentHashes) {
+		return nil
+	}
+
+	for _, position := range positions {
+		if !lane.Valid(position) {
+			return nil
+		}
+	}
+
+	return lane.AppendPositions(make([]byte, 0, len(positions)*lane.PositionSize), positions)
 }
 
 // txFee is the transaction's fee, or nil when the store cannot know it.

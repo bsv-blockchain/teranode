@@ -151,6 +151,7 @@ func TestCheckBlockSubtrees_ShortCircuitRequiresFileTypeSubtree(t *testing.T) {
 		// has none in the sibling sub-test above.
 		server.blockchainClient.(*blockchain.Mock).On("GetBlockHeaderIDs",
 			mock.Anything, mock.Anything, mock.Anything).Return([]uint32{1, 2, 3}, nil).Maybe()
+		mockBestBlockHeader(server)
 
 		// The fallback marker alone. The missing-subtree gate keys on FileTypeSubtree ONLY, so this
 		// hash must still be treated as missing — which is precisely why a block whose only local copy

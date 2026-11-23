@@ -2,6 +2,7 @@ package sql
 
 import (
 	"context"
+	"database/sql"
 	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
@@ -32,13 +33,56 @@ func (s *SQL) RevalidateBlock(ctx context.Context, blockHash *chainhash.Hash) er
 	s.mainChainRebuilding.Add(1)
 	defer s.mainChainRebuilding.Add(-1)
 
-	// Update the block to valid (not invalid) and clear the mined_set flag.
+	// An invalid fork below a checkpoint the best chain has passed stays invalid.
+	var height uint32
+	if err = s.db.QueryRowContext(ctx, `SELECT height FROM blocks WHERE hash = $1`, blockHash.CloneBytes()).Scan(&height); err != nil {
+		return errors.NewStorageError("error reading height of block %s", blockHash.String(), err)
+	}
+
+	var bestHeight uint32
+	if err = s.readBestValidHeight(ctx, s.db, &bestHeight); err != nil {
+		return errors.NewStorageError("error reading the best block height for the checkpoint fork rule", err)
+	}
+
+	if err = s.rejectForkBelowPassedCheckpoint(blockHash, height, bestHeight); err != nil {
+		return err
+	}
+
+	// Update the block to valid (not invalid) and clear the mined_set flag. Bump
+	// mined_set_gen so an in-flight tagging run cannot overwrite the reset.
 	q := `
 		UPDATE blocks
-		SET invalid = false, mined_set = false
+		SET invalid = false, mined_set = false, mined_set_gen = mined_set_gen + 1
 		WHERE hash = $1
 	`
-	if _, err = s.db.ExecContext(ctx, q, blockHash.CloneBytes()); err != nil {
+	// In a transaction so the shared row is locked first; see chainWriteStateKey.
+	var forkErr error
+
+	if err = s.db.RetryTx(ctx, nil, func(tx *sql.Tx) error {
+		if lockErr := s.lockChainWrites(ctx, tx); lockErr != nil {
+			return lockErr
+		}
+
+		// Another process can move the best block until this transaction holds the chain
+		// write lock, so with the lock the checkpoint rule is applied again under it.
+		if s.chainWriteLocking() {
+			if readErr := s.readBestValidHeight(ctx, tx, &bestHeight); readErr != nil {
+				return readErr
+			}
+
+			if forkErr = s.rejectForkBelowPassedCheckpoint(blockHash, height, bestHeight); forkErr != nil {
+				return forkErr
+			}
+		}
+
+		_, execErr := tx.ExecContext(ctx, q, blockHash.CloneBytes())
+
+		return execErr
+	}); err != nil {
+		if forkErr != nil {
+			return forkErr
+		}
+
 		return errors.NewStorageError("error updating block to valid", err)
 	}
 

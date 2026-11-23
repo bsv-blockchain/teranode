@@ -30,6 +30,21 @@ func TestConflictRecoveryForwardOwnBlock(t *testing.T) {
 	tests.ConflictRecoveryForwardOwnBlock(t, store)
 }
 
+func TestConflictRecoveryConfirmedLoserNotDemoted(t *testing.T) {
+	store, _ := newTestStore(t)
+	tests.ConflictRecoveryConfirmedLoserNotDemoted(t, store)
+}
+
+func TestConflictRecoveryConfirmedLoserOwnsWinningInput(t *testing.T) {
+	store, _ := newTestStore(t)
+	tests.ConflictRecoveryConfirmedLoserOwnsWinningInput(t, store)
+}
+
+func TestConflictRecoveryConfirmedLoserMixedChains(t *testing.T) {
+	store, _ := newTestStore(t)
+	tests.ConflictRecoveryConfirmedLoserMixedChains(t, store)
+}
+
 func TestConflictRecoveryForeignLock(t *testing.T) {
 	store, _ := newTestStore(t)
 	tests.ConflictRecoveryForeignLock(t, store)
@@ -242,6 +257,11 @@ func TestConflictRecoveryLateWinnerChild(t *testing.T) {
 func TestConflictRecoveryReverseThenReadd(t *testing.T) {
 	store, _ := newTestStore(t)
 	tests.ConflictRecoveryReverseThenReadd(t, store)
+}
+
+func TestConflictRecoveryReverseKeepsForeignLock(t *testing.T) {
+	store, _ := newTestStore(t)
+	tests.ConflictRecoveryReverseKeepsForeignLock(t, store)
 }
 
 // lockAfterPrepare wraps the store. Once the checklist is prepared, another holder locks the parent,

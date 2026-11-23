@@ -1570,8 +1570,11 @@ func (p *Peer) writeMessage(msg wire.Message, enc wire.MessageEncoding) error {
 		}))
 	}
 
-	// Write the message to the peer.
-	n, err := wire.WriteMessageWithEncodingN(p.conn, msg, p.ProtocolVersion(), p.cfg.ChainParams.Net, enc)
+	// Write the message to the peer. The progress writer fails the write when
+	// the socket accepts nothing for a whole send-timeout window, so a peer that stopped
+	// reading is disconnected by outHandler instead of parking it forever.
+	w := &sendProgressWriter{conn: p.conn, timeout: p.sendTimeout()}
+	n, err := wire.WriteMessageWithEncodingN(w, msg, p.ProtocolVersion(), p.cfg.ChainParams.Net, enc)
 	atomic.AddUint64(&p.bytesSent, uint64(n))
 
 	if p.cfg.Listeners.OnWrite != nil {
@@ -1579,6 +1582,69 @@ func (p *Peer) writeMessage(msg wire.Message, enc wire.MessageEncoding) error {
 	}
 
 	return err
+}
+
+// sendTimeout is the window a socket write gets to have any bytes accepted
+// before the peer is disconnected. It follows SV Node's "socket sending
+// timeout" (-p2ptimeout, default 20 minutes); sendProgressWriter says where
+// the bound differs.
+func (p *Peer) sendTimeout() time.Duration {
+	if p.settings == nil || p.settings.Legacy.PeerSendTimeout <= 0 {
+		return DefaultPeerSendTimeout
+	}
+
+	return p.settings.Legacy.PeerSendTimeout
+}
+
+// DefaultPeerSendTimeout is the send timeout used when legacy_peerSendTimeout
+// is not positive. It matches SV Node's DEFAULT_P2P_TIMEOUT_INTERVAL.
+const DefaultPeerSendTimeout = 20 * time.Minute
+
+// sendProgressWriter arms a write deadline before each socket write and
+// re-arms it whenever the write timed out after the socket had accepted some
+// bytes. A write therefore fails only when a whole timeout window passes with
+// no bytes accepted, so a slow peer that keeps reading is never cut off,
+// however large the message. The check runs once per window, so a peer that
+// stalls partway through a window is dropped after between one and two times
+// the timeout with no bytes accepted. SV Node compares the clock with its last
+// send and drops it after one.
+type sendProgressWriter struct {
+	conn    net.Conn
+	timeout time.Duration
+}
+
+// Write implements io.Writer.
+func (w *sendProgressWriter) Write(b []byte) (int, error) {
+	written := 0
+
+	for {
+		if err := w.conn.SetWriteDeadline(time.Now().Add(w.timeout)); err != nil {
+			// A connection that cannot take a deadline is written as it was
+			// before the send timeout existed. A closed socket also lands
+			// here, and its write below fails at once.
+			n, writeErr := w.conn.Write(b[written:])
+
+			return written + n, writeErr
+		}
+
+		n, err := w.conn.Write(b[written:])
+		written += n
+
+		if err == nil {
+			return written, nil
+		}
+
+		var netErr net.Error
+		if !errors.As(err, &netErr) || !netErr.Timeout() {
+			return written, err
+		}
+
+		if n == 0 {
+			return written, errors.NewNetworkTimeoutError("socket sending timeout: no bytes accepted for %s", w.timeout, err)
+		}
+		// The socket took some bytes before the deadline: the peer is still
+		// reading, so re-arm the deadline and send the rest.
+	}
 }
 
 // isAllowedReadError returns whether or not the passed error is allowed without

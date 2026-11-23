@@ -23,6 +23,7 @@ import (
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/blockchain/options"
 	"github.com/bsv-blockchain/teranode/util"
+	"github.com/bsv-blockchain/teranode/util/lane"
 	"github.com/bsv-blockchain/teranode/util/tracing"
 	"github.com/bsv-blockchain/teranode/util/usql"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -97,10 +98,104 @@ const errBlockAlreadyExistsInDB = "block already exists in the database: %s"
 //   - BlockAlreadyExistsError for duplicate block submissions
 //   - StorageError for database failures
 //   - ProcessingError for internal processing failures
+//
+// On PostgreSQL a fork block that cannot get a row lock within forkLockTimeout gives up
+// slowPathMu and tries again after forkLockRetryDelay, until ctx ends. See
+// forkLockWaitError.
 func (s *SQL) StoreBlock(ctx context.Context, block *model.Block, peerID string, opts ...options.StoreBlockOption) (uint64, uint32, error) {
 	ctx, _, deferFn := tracing.Tracer("sql").Start(ctx, "sql:StoreBlock")
 	defer deferFn()
 
+	for attempt := 1; ; attempt++ {
+		id, height, err := s.storeBlockAttempt(ctx, block, peerID, opts...)
+
+		lockWait, waited := err.(*forkLockWaitError) //nolint:errorlint // storeBlockAttempt returns it unwrapped
+		if !waited {
+			return id, height, err
+		}
+
+		if attempt == 1 || attempt%forkLockWarnEvery == 0 {
+			s.logger.Warnf("[StoreBlock][%s] fork block could not lock a row within %s on attempt %d, retrying in %s without slowPathMu: %v",
+				block.Hash().String(), forkLockTimeout, attempt, forkLockRetryDelay, lockWait.cause)
+		}
+
+		select {
+		case <-ctx.Done():
+			return 0, height, errors.NewStorageError("[StoreBlock][%s] fork block gave up after %d attempts to lock its rows: %v", block.Hash().String(), attempt, lockWait.cause, ctx.Err())
+		case <-time.After(forkLockRetryDelay):
+		}
+	}
+}
+
+const (
+	// forkLockTimeout bounds each lock wait in the fork path's transaction on PostgreSQL.
+	// Normal holders of those rows (another chain write, or an update of mined_set,
+	// persisted_at or processed_at) hold them for milliseconds, so a longer wait is almost
+	// always a walk without slowPathMu. PostgreSQL's deadlock_timeout defaults to 1 s, so
+	// when the fork is the first of the two to wait, it gives up through this bound before
+	// deadlock detection runs. When the walk waits first, PostgreSQL can still abort the
+	// walk as the deadlock victim, and the walk's own retry runs it again.
+	forkLockTimeout = 500 * time.Millisecond
+	// forkLockRetryDelay is how long a fork block that gave up a lock wait leaves
+	// slowPathMu free before it tries again. The fork holds the chain-write row for up to
+	// forkLockTimeout of each round, so the longer this is the less often a walk meets it
+	// at its chain-write check and rolls back.
+	forkLockRetryDelay = time.Second
+	// forkLockWarnEvery logs one retry in this many, about one line every 45 s.
+	forkLockWarnEvery = 30
+)
+
+// forkLockTimeoutStatement sets forkLockTimeout for the rest of one transaction. It is a
+// literal rather than formatted from forkLockTimeout so no SQL is built at run time;
+// TestForkLockTimeoutStatementMatchesTheTimeout keeps the two in step.
+const forkLockTimeoutStatement = `SET LOCAL lock_timeout = '500ms'`
+
+// forkLockWaitError is the fork path's transaction giving up a lock wait after
+// forkLockTimeout (55P03, lock_not_available).
+//
+// A full on_main_chain walk on PostgreSQL runs without slowPathMu and holds a row lock on
+// every blocks row its UPDATEs change until it commits, up to migrationFullRebuildTimeout
+// (30 min). A fork block's reconcile that reaches such a row would wait there while it
+// holds slowPathMu, and every later StoreBlock, extends included, would wait behind it.
+// With the bound, StoreBlock releases slowPathMu and runs the whole attempt again, so
+// extends keep being stored while the fork block retries. It retries until it stores,
+// fails with an error other than a lock wait, or its caller's context ends. Block
+// validation's non-optimistic store gives AddBlock 30 s, so there a fork block that meets
+// a longer walk fails and is stored when offered again. Callers that pass their own
+// context (the optimistic add, quick validation's commit, block assembly's mined block)
+// keep retrying until the walk commits, without slowPathMu. The invalid-block store takes
+// no chain-write lock and runs no reconcile, so a walk never holds it.
+//
+// It neither unwraps to the driver error nor says "timeout" in its message, so RetryTx
+// treats it as not retriable and returns at once rather than retrying under slowPathMu,
+// and the pool's circuit breaker does not count it as a failure.
+type forkLockWaitError struct {
+	cause error
+}
+
+func (e *forkLockWaitError) Error() string {
+	return "fork block gave up waiting for a row lock"
+}
+
+// isLockNotAvailable reports whether err is PostgreSQL's 55P03, lock_not_available.
+func isLockNotAvailable(err error) bool {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) {
+		return pgErr.Code == usql.PgErrLockNotAvailable
+	}
+
+	var pqErr *pq.Error
+	if errors.As(err, &pqErr) {
+		return string(pqErr.Code) == usql.PgErrLockNotAvailable
+	}
+
+	return false
+}
+
+// storeBlockAttempt is one StoreBlock attempt under slowPathMu. It returns a
+// *forkLockWaitError, unwrapped, when the fork path gave up a lock wait and committed
+// nothing.
+func (s *SQL) storeBlockAttempt(ctx context.Context, block *model.Block, peerID string, opts ...options.StoreBlockOption) (uint64, uint32, error) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -110,7 +205,8 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block, peerID string,
 		opt(&storeBlockOptions)
 	}
 
-	// Acquire slowPathMu for the duration of every StoreBlock call. The cost is
+	// Acquire slowPathMu for the duration of every StoreBlock attempt. An attempt that
+	// releases it early has committed nothing (see forkLockWaitError). The cost is
 	// one uncontended mutex acquire on the common path; the benefit is that
 	// the read of preBestHash, the INSERT, the maxBlockID CAS, and any
 	// post-INSERT classification all observe a serialized view of the chain.
@@ -121,7 +217,7 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block, peerID string,
 	// sequence — leaving two flagged siblings at the same height. The CAS
 	// only proves "I am at the head of the ID sequence", not "I have the
 	// chain_work tiebreak best": canonical selection is by chain_work DESC,
-	// peer_id ASC, id ASC, so a CAS-winning sibling can still be the loser.
+	// id ASC, so a CAS-winning sibling can still be the loser.
 	// Serializing forces the second writer to observe the first's row as the
 	// new best, which makes its onMainChain calculation false (parent !=
 	// preBestHash anymore), routes it through the slow-path classifier, and
@@ -156,7 +252,7 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block, peerID string,
 		block.Header.HashPrevBlock != nil &&
 		*block.Header.HashPrevBlock == *preBestHash
 
-	// Raise the guard before the INSERT and hold it for the whole call: always on a node
+	// Raise the guard before the INSERT and hold it for the whole attempt: always on a node
 	// running the forked-set route, and only for a non-extend on every other node.
 	//
 	// On a forked-set node a common extend needs it too. The INSERT writes on_main_chain =
@@ -180,8 +276,8 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block, peerID string,
 	//
 	// The forked-set node does pay that cost on those other readers. That is the trade the
 	// route asks for, and it is scoped to the nodes that opted into the route.
-	guardWholeCall := s.useInMemoryChainCheck || !onMainChain
-	if guardWholeCall {
+	guardWholeAttempt := s.useInMemoryChainCheck || !onMainChain
+	if guardWholeAttempt {
 		s.mainChainRebuilding.Add(1)
 		defer s.mainChainRebuilding.Add(-1)
 	}
@@ -196,10 +292,11 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block, peerID string,
 	// SQLITE_BUSY, a failed reconcile or a cancelled context is not noted. A failed commit
 	// is, because a commit error does not prove nothing committed.
 	//
-	// The note carries the lowest height the reconcile can have moved the best chain at:
-	// the bottom of its own walk, maxDepth below this block. A reorg the reconcile can
-	// handle forks within that walk, and a block that does not take the tip moves no
-	// block's membership at all.
+	// The note carries the height just above the fork point of the old and new best
+	// blocks, found by parent_id alone, or the lowest row the reconcile changed when that
+	// is lower. The rows changed are not enough on their own: with stale flags the best
+	// chain can have changed below all of them. A block that does not take the tip moves
+	// no block's membership at all.
 	var (
 		membershipMoved bool
 		movedFloor      int64
@@ -215,12 +312,14 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block, peerID string,
 
 	// The fork path writes the row and repairs on_main_chain in ONE transaction, so a
 	// failure between them cannot leave a committed block carrying a flag nothing will
-	// revisit. The reconciliation is a single statement bounded to the recent lineage,
-	// so the transaction stays small however large the blocks are: it touches block
-	// rows only, never transactions or coins.
+	// revisit. The reconciliation walks at least reconcileMaxDepth blocks and on down to
+	// the fork point, and a reorg adds the parent_id walk reorgForkFloor runs, so the
+	// transaction grows with the fork's depth but not with the size of the blocks: it
+	// touches block rows only, never transactions or coins.
 	//
-	// The common extend keeps its single auto-committed INSERT, which already writes
-	// the correct flag and needs no repair.
+	// The common extend without lane map rows keeps its single auto-committed INSERT,
+	// which already writes the correct flag and needs no repair. With rows, at
+	// utxostore_laneMigration shadow, it is one transaction holding the INSERT and the rows.
 	var (
 		newBlockID    uint64
 		height        uint32
@@ -229,12 +328,55 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block, peerID string,
 		err           error
 	)
 
-	if onMainChain {
+	// The block's lane map rows, at utxostore_laneMigration shadow, go in the block's own
+	// transaction (insertLaneMapRowsWithBlock). An invalid block gets none.
+	laneRows, laneRowsRefused := s.checkedLaneMapRows(block, storeBlockOptions)
+
+	if laneRows != nil {
+		// On SQLite the lane write lock is a process mutex only the holder of the whole
+		// transaction can take, before it begins: see insertLaneMapRowsTx.
+		unlockLanes := s.lockLaneProcess()
+		defer unlockLanes()
+	}
+
+	if onMainChain && laneRows != nil {
+		// The common extend, with its rows: one transaction holding the INSERT and the rows,
+		// instead of the auto-committed INSERT below.
+		err = s.db.RetryTx(ctx, nil, func(tx *sql.Tx) error {
+			var storeErr error
+
+			newBlockID, height, _, storedInvalid, storeErr = s.storeBlock(ctx, tx, block, peerID, storeBlockOptions, onMainChain)
+			if storeErr != nil || storedInvalid {
+				return storeErr
+			}
+
+			return s.insertLaneMapRowsWithBlock(ctx, tx, block, newBlockID, laneRows)
+		})
+		if err != nil {
+			return 0, height, s.typedStoreBlockError(err, block)
+		}
+	} else if onMainChain {
 		newBlockID, height, _, storedInvalid, err = s.storeBlock(ctx, s.db, block, peerID, storeBlockOptions, onMainChain)
 		if err != nil {
 			return 0, height, s.typedStoreBlockError(err, block)
 		}
 	} else {
+		// Read the best block before the insert, so the new row cannot be its own best.
+		// slowPathMu, held for the whole call, keeps this process from moving it before
+		// the insert; reading inside the transaction while storeBlock reads its parent on
+		// another connection deadlocks SQLite. Under chain write locking it is read again
+		// in the transaction, for the other processes.
+		var bestHeight uint32
+		if !storeBlockOptions.Invalid {
+			if bestErr := s.readBestValidHeight(ctx, s.db, &bestHeight); bestErr != nil {
+				return 0, 0, errors.NewStorageError("[%s] failed to read the best block height for the checkpoint fork rule", block.Hash().String(), bestErr)
+			}
+		}
+
+		if s.forkBestReadHook != nil {
+			s.forkBestReadHook()
+		}
+
 		// RetryTx keeps the pool's retry and circuit-breaker behaviour, but retries
 		// the whole transaction rather than one statement: a statement that fails
 		// inside a PostgreSQL transaction aborts it, so only a fresh BEGIN can retry.
@@ -243,10 +385,39 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block, peerID string,
 		// concrete type (SQLSTATE, SQLite result code), and a teranode error keeps
 		// only the message, so wrapping first would hide SQLITE_LOCKED or a 40001
 		// from it. The errors are typed after RetryTx returns.
-		err = s.db.RetryTx(ctx, nil, func(tx *sql.Tx) error {
+		forkTx := func(tx *sql.Tx) error {
 			var storeErr error
 
 			reconcileErr = nil
+
+			// Bound every lock wait below, so a row held by a walk without slowPathMu
+			// cannot keep this transaction, and slowPathMu with it, waiting; see
+			// forkLockWaitError. It changes no data, so lockChainWrites below is still
+			// the first statement a walk can see.
+			if s.engine == util.Postgres {
+				if _, storeErr = tx.ExecContext(ctx, forkLockTimeoutStatement); storeErr != nil {
+					return storeErr
+				}
+			}
+
+			// First, so a walk in any process sees the reconcile below; see
+			// chainWriteStateKey. A block stored as invalid skips the reconcile and
+			// moves no membership, so it takes no lock: otherwise a peer could keep
+			// rolling the walk back with blocks that change nothing it can see.
+			if !storeBlockOptions.Invalid {
+				if storeErr = s.lockChainWrites(ctx, tx); storeErr != nil {
+					return storeErr
+				}
+
+				// slowPathMu keeps this process's writes off the best block, but another
+				// process can move it until this transaction holds the chain write lock. With
+				// the lock, read it again here, under the lock and before the insert.
+				if s.chainWriteLocking() {
+					if storeErr = s.readBestValidHeight(ctx, tx, &bestHeight); storeErr != nil {
+						return storeErr
+					}
+				}
+			}
 
 			newBlockID, height, _, storedInvalid, storeErr = s.storeBlock(ctx, tx, block, peerID, storeBlockOptions, onMainChain)
 			if storeErr != nil {
@@ -261,29 +432,80 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block, peerID string,
 				return nil
 			}
 
-			reconcile := func() (bool, error) {
-				changed, err := s.reconcileOnMainChainRows(ctx, tx)
+			// Only a block that does not extend the best block can fork below a
+			// checkpoint the best chain has passed; one that extends it sits above
+			// every such checkpoint. Checked here, in the insert's transaction, so a
+			// tip that passed the checkpoint while the block was being validated is
+			// still seen.
+			if forkErr := s.rejectForkBelowPassedCheckpoint(block.Hash(), height, bestHeight); forkErr != nil {
+				return forkErr
+			}
 
-				return changed > 0, err
+			if laneRows != nil {
+				if storeErr = s.insertLaneMapRowsWithBlock(ctx, tx, block, newBlockID, laneRows); storeErr != nil {
+					return storeErr
+				}
+			}
+
+			reconcile := func() (bool, int64, error) {
+				changed, floor, err := s.reconcileOnMainChainRows(ctx, tx)
+				if err != nil || changed == 0 {
+					return changed > 0, floor, err
+				}
+
+				// The rows the reconcile changed are not the whole of what moved: with stale
+				// flags the best chain can have changed below the lowest of them. Note the
+				// fork point too, whichever is lower.
+				forkFloor, err := s.reorgForkFloor(ctx, tx, newBlockID)
+				if err != nil {
+					return true, noRepairFloor, err
+				}
+
+				if forkFloor == noRepairFloor {
+					return true, noRepairFloor, nil
+				}
+
+				return true, lowerRepairFloor(floor, forkFloor), nil
 			}
 
 			if s.reconcileHook != nil {
-				// A test's stand-in cannot say what it changed, so count it as a change.
-				reconcile = func() (bool, error) { return true, s.reconcileHook() }
+				// A test's stand-in cannot say what it changed, so count it as a change that
+				// cannot name a floor.
+				reconcile = func() (bool, int64, error) { return true, noRepairFloor, s.reconcileHook() }
 			}
 
-			var moved bool
+			var (
+				moved bool
+				floor int64
+			)
 
-			moved, reconcileErr = reconcile()
+			moved, floor, reconcileErr = reconcile()
 			if reconcileErr == nil && moved {
 				// RetryTx commits next. Kept true if that commit fails, and across a retry
-				// whose earlier commit may have landed before it reported the error.
+				// whose earlier commit may have landed before it reported the error. A retry
+				// reaches this line only when the earlier attempt did not commit: if it had,
+				// the retry's INSERT would fail on ux_blocks_hash first. So the latest floor
+				// is the one that describes the committed rows.
 				membershipMoved = true
-				movedFloor = s.reconcileFloor(height)
+				movedFloor = floor
 			}
 
 			return reconcileErr
+		}
+
+		err = s.db.RetryTx(ctx, nil, func(tx *sql.Tx) error {
+			txErr := forkTx(tx)
+			if isLockNotAvailable(txErr) {
+				return &forkLockWaitError{cause: txErr}
+			}
+
+			return txErr
 		})
+
+		if lockWait, ok := err.(*forkLockWaitError); ok { //nolint:errorlint // RetryTx returns the closure's error unchanged
+			return 0, height, lockWait
+		}
+
 		if err != nil {
 			// Label the error as the reconciliation's only when it is the very value the
 			// reconciliation returned. RetryTx hands back the closure's error unchanged, but
@@ -301,6 +523,19 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block, peerID string,
 			}
 
 			return 0, height, s.typedStoreBlockError(err, block)
+		}
+	}
+
+	// The block is stored: count what this attempt did with its rows, once. A block stored as
+	// invalid, asked for or inherited from an invalid parent, takes no rows, so it counts nothing,
+	// whatever an earlier attempt of the same store did with them.
+	if !storedInvalid {
+		if laneRowsRefused {
+			lane.CountRowInsertFailure()
+		}
+
+		if laneRows != nil {
+			laneRows.observe()
 		}
 	}
 
@@ -387,7 +622,7 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block, peerID string,
 		// The defensive on_main_chain clear Case 1 would have done is deliberately not
 		// attempted. Which flag to write depends on the classification we could not read,
 		// and the rebuild does not need the flag: mainChainRebuilding is still held for the
-		// whole call, so rebuildOffChainSet takes its flag-free parent_id CTE branch. A
+		// whole attempt, so rebuildOffChainSet takes its flag-free parent_id CTE branch. A
 		// fork-path insert already reconciled the column inside its own transaction, so
 		// only an extend can leave a stale flag here: its INSERT wrote true, and nothing
 		// has confirmed it. Record that, with this block's height as the floor, so the
@@ -424,12 +659,12 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block, peerID string,
 		// the CTE for the brief inconsistency window. A fork-path insert
 		// (onMainChain false) was already reconciled inside its transaction.
 		//
-		// On a forked-set node the guard is already held for the whole call, which is what
+		// On a forked-set node the guard is already held for the whole attempt, which is what
 		// this clear and the rebuild below both need. On any other node it was not raised
 		// for an extend and there is no rebuild to cover, so bracket just the UPDATE, as
 		// this branch always did there.
 		if onMainChain {
-			if !guardWholeCall {
+			if !guardWholeAttempt {
 				s.mainChainRebuilding.Add(1)
 			}
 
@@ -440,14 +675,23 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block, peerID string,
 			//
 			// A clear that committed moves a row a walk without slowPathMu may already have
 			// read, so it is noted. A failed one is marked instead, which owes its own repair.
-			if _, clearErr := s.db.ExecContext(postBestCtx, `UPDATE blocks SET on_main_chain = false WHERE id = $1`, newBlockID); clearErr != nil {
+			clearErr := s.db.RetryTx(postBestCtx, nil, func(tx *sql.Tx) error {
+				if err := s.lockChainWrites(postBestCtx, tx); err != nil {
+					return err
+				}
+
+				_, err := tx.ExecContext(postBestCtx, `UPDATE blocks SET on_main_chain = false WHERE id = $1`, newBlockID)
+
+				return err
+			})
+			if clearErr != nil {
 				s.logger.Errorf("StoreBlock: clear sibling-fork on_main_chain: %v", clearErr)
 				s.markOnMainChainDirty(false, int64(height), "store_block_fork_clear", clearErr)
 			} else {
 				s.noteOnMainChainWrite(int64(height))
 			}
 
-			if !guardWholeCall {
+			if !guardWholeAttempt {
 				s.mainChainRebuilding.Add(-1)
 			}
 		}
@@ -535,6 +779,44 @@ func (s *SQL) getPreviousBlockInfo(ctx context.Context, prevBlockHash chainhash.
 	}
 
 	return id, chainWork, height, invalid, nil
+}
+
+// bestValidHeightQuery reads the height of the best valid block, ordered as getBestBlockID orders.
+const bestValidHeightQuery = `
+	SELECT height
+	FROM blocks
+	WHERE invalid = false
+	ORDER BY chain_work DESC, id ASC
+	LIMIT 1
+`
+
+// readBestValidHeight sets bestHeight to the height of the best valid block, or leaves it
+// at 0 on an empty store. It reads nothing when no checkpoints are configured, since the
+// checkpoint fork rule is its only user.
+func (s *SQL) readBestValidHeight(ctx context.Context, exec execQuerier, bestHeight *uint32) error {
+	if s.chainParams == nil || len(s.chainParams.Checkpoints) == 0 {
+		return nil
+	}
+
+	if err := exec.QueryRowContext(ctx, bestValidHeightQuery).Scan(bestHeight); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+
+	return nil
+}
+
+// rejectForkBelowPassedCheckpoint returns a BlockInvalid error when a block at height
+// is below a checkpoint the best valid block (at bestHeight) has reached: bitcoin-sv's
+// bad-fork-prior-to-checkpoint. Callers read bestHeight under slowPathMu, and again under the
+// chain write lock where other processes write the chain, so no writer that takes that lock can
+// move the best block between the read and their write. A main-chain extend inserts without it;
+// a single block-validation instance, the documented deployment, holds slowPathMu for both.
+func (s *SQL) rejectForkBelowPassedCheckpoint(hash *chainhash.Hash, height, bestHeight uint32) error {
+	if s.chainParams == nil || !model.ForkBelowCheckpoint(s.chainParams.Checkpoints, height, bestHeight) {
+		return nil
+	}
+
+	return errors.NewBlockInvalidError("[%s] bad-fork-prior-to-checkpoint: block height %d is below a checkpoint the best block (height %d) has passed", hash.String(), height, bestHeight)
 }
 
 // execQuerier is the subset of database calls storeBlock needs. Both *usql.DB and
@@ -653,7 +935,30 @@ func (s *SQL) storeBlock(ctx context.Context, exec execQuerier, block *model.Blo
 	// block's transactions may already carry it in the UTXO store. See
 	// checkCallerSuppliedBlockID for the rules and the swept-reservation case.
 	if useCustomID && !genesis {
-		if err := s.checkCallerSuppliedBlockID(ctx, block.Hash(), storeBlockOptions.ID); err != nil {
+		alreadyStored, err := s.checkCallerSuppliedBlockID(ctx, block.Hash(), storeBlockOptions.ID)
+		if err != nil {
+			return 0, 0, nil, false, err
+		}
+
+		// A hash that is already stored goes on to the INSERT, which returns
+		// "block already exists". Callers that retry an AddBlock whose first
+		// attempt landed treat that as success, so a late caller still holding a
+		// refused id must not get the id-order refusal, nor drop a reservation.
+		//
+		// Checked before the INSERT, because the extend path without lane map rows
+		// auto-commits it. This runs for a block stored invalid too, unlike the BIP34
+		// guard above: the rule is about the row's place in the parent_id graph, which
+		// the ancestry walks follow whatever the invalid flag says, not about the
+		// block's validity.
+		if err := checkBlockIDAboveParent(block, storeBlockOptions.ID, previousBlockID); err != nil && !alreadyStored {
+			// The reservation is stale. Drop it so the caller's next AssignBlockID
+			// takes a fresh id above the parent, rather than being refused with the
+			// same id until the age-based sweep removes it. A fallback that reuses
+			// the same *model.Block keeps its block.ID and is refused again; the
+			// fresh id comes on an attempt that decodes the block anew, such as the
+			// legacy park's retry.
+			s.dropBlockIDReservation(ctx, block.Hash(), storeBlockOptions.ID)
+
 			return 0, 0, nil, false, err
 		}
 	}
@@ -912,6 +1217,24 @@ RETURNING id
 	// roll back.
 
 	return newBlockID, height, cumulativeChainWorkBytes, storeAsInvalid, nil
+}
+
+// checkBlockIDAboveParent refuses a block whose id is not above its parent's id.
+//
+// Ids come from one sequence that only grows, and a child's id is reserved only
+// after its parent is stored, so a child always sits above its parent. The ancestry
+// queries depend on that: CheckBlockIsAncestorOfBlock and CheckBlockIsInCurrentChain
+// bound their parent_id walk by the gap between two ids, so a child stored below its
+// parent would make them answer "not an ancestor" for a true ancestor. The one known
+// way to break the rule is a reservation that outlives a rewind: the parent is
+// deleted and stored again under a new, higher id, while the child keeps the lower
+// id it reserved before. Genesis has no parent and is never checked.
+func checkBlockIDAboveParent(block *model.Block, id, parentID uint64) error {
+	if id > parentID {
+		return nil
+	}
+
+	return errors.NewBlockIDOrderError("[StoreBlock][%s] refusing block id %d: its parent %s is stored under id %d, and a block's id must be above its parent's", block.Hash().String(), id, block.Header.HashPrevBlock.String(), parentID)
 }
 
 // typedStoreBlockError turns an error from storeBlock, or from the BEGIN and COMMIT

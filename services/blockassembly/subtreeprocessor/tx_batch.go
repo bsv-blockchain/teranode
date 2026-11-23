@@ -12,8 +12,12 @@ import (
 // allowing multiple transactions to be enqueued and dequeued as a single unit.
 // This significantly reduces atomic operations and improves throughput at high volumes.
 type TxBatch struct {
-	nodes      []subtree.Node          // All transaction nodes in this batch
-	txInpoints []*subtree.TxInpoints   // Corresponding inpoints for each node
-	time       int64                   // Single timestamp for the entire batch
-	next       atomic.Pointer[TxBatch] // Pointer to next batch in queue
+	nodes      []subtree.Node        // All transaction nodes in this batch
+	txInpoints []*subtree.TxInpoints // Corresponding inpoints for each node
+	// validatedHeights holds, per node, the block height its transaction was validated
+	// at, so the processor can drop one validated under other rules than the next block's.
+	// Nil, or 0 for a node, means untagged: the node is admitted as before.
+	validatedHeights []uint32
+	time             int64                   // Single timestamp for the entire batch
+	next             atomic.Pointer[TxBatch] // Pointer to next batch in queue
 }

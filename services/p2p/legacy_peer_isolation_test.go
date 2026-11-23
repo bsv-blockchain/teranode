@@ -65,7 +65,7 @@ func TestSyncCoordinator_NeverSeesWirePeer(t *testing.T) {
 
 	require.True(t, sc.isCaughtUp(),
 		"an ahead wire peer with a DataHub URL must not make the node look behind")
-	require.Empty(t, sc.selectNewSyncPeer(), "a wire peer must never be selected for sync")
+	require.Empty(t, sc.selectNewSyncPeer(false), "a wire peer must never be selected for sync")
 }
 
 // TestGetPeerRegistry_ExcludesWirePeers checks the p2p read path stays

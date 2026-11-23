@@ -24,6 +24,11 @@ import (
 )
 
 func runLoadUnminedBenchmark(txCount int, cpuProfile, memProfile, aerospikeURL string) error {
+	tSettings := createLoadUnminedBenchmarkSettings()
+	if tSettings.UtxoStore.LaneMigration != settings.LaneMigrationOff {
+		return errors.NewConfigurationError("load-unmined benchmark requires utxostore_laneMigration=off; no lane position source is configured")
+	}
+
 	fmt.Printf("LoadUnmined Benchmark\n")
 	fmt.Printf("=====================\n")
 	fmt.Printf("Transaction Count:      %d\n", txCount)
@@ -51,9 +56,6 @@ func runLoadUnminedBenchmark(txCount int, cpuProfile, memProfile, aerospikeURL s
 		}()
 		fmt.Printf("[Setup] Aerospike container ready\n")
 	}
-
-	// Create settings
-	tSettings := createLoadUnminedBenchmarkSettings()
 
 	// Parse Aerospike URL and create store
 	aerospikeURI, err := url.Parse(aerospikeURL)

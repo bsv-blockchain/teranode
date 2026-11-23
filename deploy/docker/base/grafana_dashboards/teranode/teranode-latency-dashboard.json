@@ -8394,20 +8394,6 @@
           },
           "editorMode": "code",
           "exemplar": false,
-          "expr": "histogram_quantile(0.95, sum by (le) (rate(teranode_blockchain_get_block_headers_from_oldest_bucket{namespace=~\"$namespace\"}[$grouping_interval])))",
-          "instant": false,
-          "interval": "$grouping_interval",
-          "legendFormat": "blockchain_get_block_headers_from_oldest",
-          "range": true,
-          "refId": "t5"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${prometheus}"
-          },
-          "editorMode": "code",
-          "exemplar": false,
           "expr": "histogram_quantile(0.95, sum by (le) (rate(teranode_blockchain_get_block_is_mined_bucket{namespace=~\"$namespace\"}[$grouping_interval])))",
           "instant": false,
           "interval": "$grouping_interval",
@@ -8624,20 +8610,6 @@
           "legendFormat": "blockchain_get_last_n_block",
           "range": true,
           "refId": "t21"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${prometheus}"
-          },
-          "editorMode": "code",
-          "exemplar": false,
-          "expr": "histogram_quantile(0.95, sum by (le) (rate(teranode_blockchain_get_latest_block_header_from_block_locator_bucket{namespace=~\"$namespace\"}[$grouping_interval])))",
-          "instant": false,
-          "interval": "$grouping_interval",
-          "legendFormat": "blockchain_get_latest_block_header_from_block_locator",
-          "range": true,
-          "refId": "t22"
         },
         {
           "datasource": {

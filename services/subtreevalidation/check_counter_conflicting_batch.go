@@ -342,7 +342,7 @@ func (u *Server) counterSpendersBatch(ctx context.Context, txHashes []chainhash.
 	for i, txHash := range unique {
 		if txReadErrs[i] != nil {
 			if txErr == nil {
-				txErr = errors.NewProcessingError("[checkCounterConflictingOnCurrentChainBatch][%s] failed to get the inpoints of the transaction", txHash.String(), txReadErrs[i])
+				txErr = errors.NewStorageError("[checkCounterConflictingOnCurrentChainBatch][%s] failed to get the inpoints of the transaction", txHash.String(), txReadErrs[i])
 			}
 
 			continue
@@ -356,7 +356,7 @@ func (u *Server) counterSpendersBatch(ctx context.Context, txHashes []chainhash.
 
 		if inpointErrs[i] != nil {
 			if txErr == nil {
-				txErr = errors.NewProcessingError("[checkCounterConflictingOnCurrentChainBatch][%s] failed to read what the transaction spends", txHash.String(), inpointErrs[i])
+				txErr = errors.NewStorageError("[checkCounterConflictingOnCurrentChainBatch][%s] failed to read what the transaction spends", txHash.String(), inpointErrs[i])
 			}
 
 			continue
@@ -405,7 +405,7 @@ func counterSpendersOf(txHash chainhash.Hash, inpoints []subtreepkg.Inpoint, par
 		idx := parentIdx[inpoint.Hash]
 
 		if readErr := parentReadErrs[idx]; readErr != nil {
-			fail(errors.NewProcessingError("[checkCounterConflictingOnCurrentChainBatch][%s] failed to get the spenders of parent %s", txHash.String(), inpoint.Hash.String(), readErr))
+			fail(errors.NewStorageError("[checkCounterConflictingOnCurrentChainBatch][%s] failed to get the spenders of parent %s", txHash.String(), inpoint.Hash.String(), readErr))
 			continue
 		}
 
@@ -512,7 +512,7 @@ func (u *Server) firstMinedOnChain(ctx context.Context, members map[chainhash.Ha
 
 					err = missingRecordsError("counter-conflicting record", []chainhash.Hash{member})
 				} else {
-					err = errors.NewProcessingError("[checkCounterConflictingOnCurrentChainBatch][%s] failed to get counter conflicting tx meta", member.String(), err)
+					err = errors.NewStorageError("[checkCounterConflictingOnCurrentChainBatch][%s] failed to get counter conflicting tx meta", member.String(), err)
 				}
 
 				mu.Lock()

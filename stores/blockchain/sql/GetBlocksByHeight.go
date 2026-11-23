@@ -91,7 +91,7 @@ func (s *SQL) GetBlocksByHeight(ctx context.Context, startHeight, endHeight uint
 				SELECT b.hash
 				FROM blocks b
 				WHERE b.invalid = false
-				ORDER BY chain_work DESC, peer_id ASC, id ASC
+				ORDER BY chain_work DESC, id ASC
 				LIMIT 1
 			)
 			UNION ALL
