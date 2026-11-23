@@ -36,3 +36,13 @@ func WithTxMetaEvictor(e *TxMetaEvictor) Options {
 		stp.txMetaEvictor = e
 	}
 }
+
+// WithStoredSet makes the processor cut every mining template at the first chained subtree that is
+// not in set, which the storage side fills as it stores (blockassembly_storedPrefixTemplate). Nil,
+// the default, publishes the whole chain as before.
+func WithStoredSet(set *StoredSet) Options {
+	return func(stp *SubtreeProcessor) {
+		stp.storedSet = set
+		stp.prefixWatch = newStoredPrefixWatch()
+	}
+}

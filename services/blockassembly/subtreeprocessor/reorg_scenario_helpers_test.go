@@ -76,6 +76,9 @@ type reorgScenarioConfig struct {
 	// storeConsumer, when set, answers every store request in place of the default listener,
 	// which answers ErrChan and Result as stored.
 	storeConsumer func(req NewSubtreeRequest)
+
+	// storedSet, when set, is the processor's stored set (WithStoredSet); the consumer fills it.
+	storedSet *StoredSet
 }
 
 type reorgScenario struct {
@@ -503,6 +506,10 @@ func (sc *reorgScenario) buildProcessor(t testing.TB) {
 	var opts []Options
 	if sc.cfg.diskTxMap {
 		opts = append(opts, WithTxMapDirs([]string{t.TempDir()}))
+	}
+
+	if sc.cfg.storedSet != nil {
+		opts = append(opts, WithStoredSet(sc.cfg.storedSet))
 	}
 
 	newSubtreeChan := make(chan NewSubtreeRequest, 1024)

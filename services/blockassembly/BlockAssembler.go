@@ -369,6 +369,14 @@ type BlockAssemblerOption func(*blockAssemblerOptions)
 
 type blockAssemblerOptions struct {
 	txMetaEvictor *subtreeprocessor.TxMetaEvictor
+	storedSet     *subtreeprocessor.StoredSet
+}
+
+// WithStoredSet gives the assembler's subtree processor the set of stored subtree roots it cuts
+// mining templates at (blockassembly_storedPrefixTemplate). Nil, the default, builds templates from
+// every completed subtree.
+func WithStoredSet(set *subtreeprocessor.StoredSet) BlockAssemblerOption {
+	return func(o *blockAssemblerOptions) { o.storedSet = set }
 }
 
 // WithTxMetaEvictor makes the assembler (and its subtree processor) publish txmeta
@@ -427,6 +435,10 @@ func NewBlockAssembler(ctx context.Context, logger ulogger.Logger, tSettings *se
 
 	if options.txMetaEvictor != nil {
 		stpOpts = append(stpOpts, subtreeprocessor.WithTxMetaEvictor(options.txMetaEvictor))
+	}
+
+	if options.storedSet != nil {
+		stpOpts = append(stpOpts, subtreeprocessor.WithStoredSet(options.storedSet))
 	}
 
 	subtreeProcessor, err := subtreeprocessor.NewSubtreeProcessor(ctx, logger, tSettings, subtreeStore, blockchainClient, utxoStore, newSubtreeChan, stpOpts...)

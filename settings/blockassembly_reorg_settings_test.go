@@ -16,3 +16,12 @@ func TestBlockAssemblyReorgStoreDeadline(t *testing.T) {
 	t.Setenv("blockassembly_reorgStoreDeadline", "45s")
 	require.Equal(t, 45*time.Second, NewSettings().BlockAssembly.ReorgStoreDeadline, "loader must read blockassembly_reorgStoreDeadline")
 }
+
+// The stored-prefix template is off by default (issue 2269). Only a non-default override read back
+// proves NewSettings reads the key.
+func TestBlockAssemblyStoredPrefixTemplate(t *testing.T) {
+	require.False(t, NewSettings().BlockAssembly.StoredPrefixTemplate, "off by default")
+
+	t.Setenv("blockassembly_storedPrefixTemplate", "true")
+	require.True(t, NewSettings().BlockAssembly.StoredPrefixTemplate, "loader must read blockassembly_storedPrefixTemplate")
+}

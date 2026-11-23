@@ -449,6 +449,16 @@ type SubtreeProcessor struct {
 	// txMapDirs, when non-empty, enables disk-backed DiskTxMap across these directories.
 	txMapDirs []string
 
+	// storedSet, when set, makes every mining template stop at the first chained subtree whose
+	// root is not in it (blockassembly_storedPrefixTemplate). Nil publishes the whole chain.
+	storedSet *StoredSet
+
+	// storedCut is the last result of GetPrecomputedMiningData's cut.
+	storedCut atomic.Pointer[storedCut]
+
+	// prefixWatch is the state of maintainStoredPrefix. Owned by the processor goroutine.
+	prefixWatch storedPrefixWatch
+
 	// txMetaEvictor publishes txmeta DELETEs for txs this processor's conflict
 	// processing marks conflicting. Nil when the txmeta topic is not configured.
 	txMetaEvictor *TxMetaEvictor
@@ -916,6 +926,17 @@ func (stp *SubtreeProcessor) Start(ctx context.Context) {
 				}
 			}()
 
+			// The stored-prefix upkeep runs on a timer of its own; with no stored set the channel
+			// is nil and the case never fires.
+			var storedPrefixTick <-chan time.Time
+
+			if stp.storedSet != nil {
+				ticker := time.NewTicker(stp.prefixWatch.tickEvery)
+				defer ticker.Stop()
+
+				storedPrefixTick = ticker.C
+			}
+
 			// Phase 1: Dequeue multiple batches
 			dequeueBatches := make([]*TxBatch, 0, maxBatchesPerIteration)
 
@@ -1127,6 +1148,9 @@ func (stp *SubtreeProcessor) Start(ctx context.Context) {
 					})
 
 					stp.setCurrentRunningState(StateRunning)
+
+				case <-storedPrefixTick:
+					stp.maintainStoredPrefix(time.Now())
 
 				case <-stp.announcementTicker.C:
 					// Periodically announce the current subtree if it has transactions.
@@ -4947,7 +4971,43 @@ func (stp *SubtreeProcessor) GetPrecomputedMiningData() *PrecomputedMiningData {
 		return nil
 	}
 
-	return stp.precomputedMiningData.Load()
+	data := stp.precomputedMiningData.Load()
+	if stp.storedSet == nil || data == nil || len(data.Subtrees) == 0 {
+		return data
+	}
+
+	// The cut is made at read time, on every read: the set grows as stores finish, with no
+	// message to the processor, so a copy made at publish time would go stale. With nothing stored
+	// the slice is empty and the candidate is an empty block: the open subtree alone does not
+	// follow the chained ones (see incompleteSubtreeSnapshot).
+	//
+	// The result is kept until the set or the published data changes, so a read costs two atomic
+	// loads, not a lookup per chained subtree. The version is read before the prefix is computed:
+	// a store that lands meanwhile leaves the kept result stale, so the next read computes again.
+	version := stp.storedSet.Version()
+	if c := stp.storedCut.Load(); c != nil && c.data == data && c.version == version {
+		return c.cut
+	}
+
+	cut := data
+
+	if keep := stp.storedSet.PrefixLen(data.Subtrees); keep < len(data.Subtrees) {
+		copied := *data
+		copied.Subtrees = data.Subtrees[:keep:keep]
+		cut = &copied
+	}
+
+	stp.storedCut.Store(&storedCut{data: data, version: version, cut: cut})
+
+	return cut
+}
+
+// storedCut is the template cut at the stored prefix, for the published data and the version of the
+// stored set it was computed from.
+type storedCut struct {
+	data    *PrecomputedMiningData
+	version uint64
+	cut     *PrecomputedMiningData
 }
 
 // DrainingAfterBlock reports whether the work deferred past the last
@@ -4986,6 +5046,12 @@ func (stp *SubtreeProcessor) GetIncompleteSubtreeMiningData(ctx context.Context)
 		}
 
 		return stp.unlessFailedForkReorg(snapshot.data)
+	}
+
+	// With the stored-prefix cut on and subtrees chained, the answer is nil (see
+	// incompleteSubtreeSnapshot): do not wait for the processor to say so.
+	if stp.storedSet != nil && stp.chainedSubtreeCount.Load() > 0 {
+		return nil
 	}
 
 	responseCh := make(chan *PrecomputedMiningData, 1)

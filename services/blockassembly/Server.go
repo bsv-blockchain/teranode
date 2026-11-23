@@ -127,6 +127,10 @@ type BlockAssembly struct {
 	// write failed. Nil when a BlockAssembly is built without New.
 	lateAnnounce chan chainhash.Hash
 
+	// storedSet is the set of subtree roots whose files are stored, shared with the subtree
+	// processor, which cuts its templates at it. Nil unless blockassembly_storedPrefixTemplate is on.
+	storedSet *subtreeprocessor.StoredSet
+
 	// blockSubmissionChan handles block submission requests
 	blockSubmissionChan chan *BlockSubmissionRequest
 
@@ -361,8 +365,16 @@ func (ba *BlockAssembly) Init(ctx context.Context) (err error) {
 	// nil when no txmeta producer is configured, which disables eviction publishing
 	txMetaEvictor := subtreeprocessor.NewTxMetaEvictor(ba.logger, ba.txMetaProducer)
 
+	assemblerOpts := []BlockAssemblerOption{WithTxMetaEvictor(txMetaEvictor)}
+
+	// one set, written by the store workers and read by the subtree processor
+	if ba.settings.BlockAssembly.StoredPrefixTemplate {
+		ba.storedSet = subtreeprocessor.NewStoredSet()
+		assemblerOpts = append(assemblerOpts, WithStoredSet(ba.storedSet))
+	}
+
 	ba.blockAssembler, err = NewBlockAssembler(ctx, ba.logger, ba.settings, ba.stats, ba.utxoStore, ba.subtreeStore, ba.blockchainClient, newSubtreeChan,
-		WithTxMetaEvictor(txMetaEvictor))
+		assemblerOpts...)
 	if err != nil {
 		return errors.NewServiceError("failed to init block assembler", err)
 	}
@@ -1089,6 +1101,7 @@ func (ba *BlockAssembly) storeSubtreeMeta(ctx context.Context, subtreeRequest su
 			outcome.metaStored()
 		} else {
 			ba.logger.Errorf("[BlockAssembly:storeSubtreeData][%s] failed to store subtree meta: %s", subtree.RootHash().String(), err)
+			outcome.toRetry()
 			subtreeRetryChan <- &subtreeRetrySend{
 				subtreeHash:      *subtree.RootHash(),
 				subtreeMetaBytes: subtreeMetaBytes,
@@ -1132,6 +1145,9 @@ func (ba *BlockAssembly) storeSubtreeData(ctx context.Context, subtreeRequest su
 	// The typed result of this request, posted to subtreeRequest.Result once its store is settled
 	metaApplicable := subtreeRequest.ParentTxMap != nil && ba.settings.BlockAssembly.StoreTxInpointsForSubtreeMeta
 	outcome := newSubtreeStoreOutcome(subtreeRequest, metaApplicable, ba.lateAnnounce)
+	if ba.storedSet != nil {
+		outcome.track(ba.storedSet, *subtree.RootHash())
+	}
 
 	// Check whether this subtree already exists in the store
 	if ok, _ := ba.subtreeStore.Exists(ctx, subtree.RootHash()[:], fileformat.FileTypeSubtree); ok {
@@ -1151,12 +1167,17 @@ func (ba *BlockAssembly) storeSubtreeData(ctx context.Context, subtreeRequest su
 
 		if metaApplicable {
 			// Stored means both files: report whether the meta is there, checked only for a caller
-			// that reads the result. A missing one is not rebuilt, which would read the request's maps
-			// after the caller moved on (that needs pinning).
-			if subtreeRequest.Result == nil {
+			// that reads the result or the stored set. A missing one is not rebuilt, which would read
+			// the request's maps after the caller moved on (that needs pinning), unless the stored
+			// set needs it: a subtree whose file landed and whose meta failed is sent again by the
+			// processor and would never reach the set otherwise. The build is inline, before the
+			// caller is answered, so the request's maps are still in use.
+			if subtreeRequest.Result == nil && ba.storedSet == nil {
 				outcome.metaAbsent()
 			} else if metaExists, _ := ba.subtreeStore.Exists(ctx, subtree.RootHash()[:], fileformat.FileTypeSubtreeMeta); metaExists {
 				outcome.metaStored()
+			} else if ba.storedSet != nil {
+				ba.storeSubtreeMeta(ctx, subtreeRequest, dah, outcome, subtreeRetryChan)
 			} else {
 				outcome.metaAbsent()
 			}
@@ -1213,6 +1234,7 @@ func (ba *BlockAssembly) storeSubtreeData(ctx context.Context, subtreeRequest su
 				outcome.subtreeStored(true)
 			} else {
 				ba.logger.Errorf("[BlockAssembly:storeSubtreeData][%s] failed to store subtree: %s", subtree.RootHash().String(), err)
+				outcome.toRetry()
 				subtreeRetryChan <- &subtreeRetrySend{
 					subtreeHash:  *subtree.RootHash(),
 					subtreeBytes: subtreeBytes,

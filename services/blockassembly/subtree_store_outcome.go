@@ -38,6 +38,13 @@ type subtreeStoreOutcome struct {
 	// late is the notification sender's input for the announcement of a subtree a retry stored.
 	// Nil when no sender runs, in which case the announcement is sent directly.
 	late chan<- chainhash.Hash
+
+	// set is the stored set the settled request reports to, with the request's root, when
+	// blockassembly_storedPrefixTemplate is on; nil otherwise.
+	set      *subtreeprocessor.StoredSet
+	root     chainhash.Hash
+	started  time.Time
+	retrying bool // a write was handed to the retry processor
 }
 
 func newSubtreeStoreOutcome(request subtreeprocessor.NewSubtreeRequest, metaApplicable bool, late chan<- chainhash.Hash) *subtreeStoreOutcome {
@@ -68,11 +75,47 @@ func (o *subtreeStoreOutcome) settle(apply func(r *subtreeprocessor.StoreResult)
 	apply(&o.res)
 
 	o.pending--
-	if o.pending == 0 && o.result != nil {
-		select {
-		case o.result <- o.res:
-		default:
+	if o.pending == 0 {
+		// before the result is posted, so a waiter that sees the result finds the root in the set
+		if o.set != nil {
+			o.set.Finish(o.root, o.res, o.retrying, time.Since(o.started))
 		}
+
+		if o.result != nil {
+			select {
+			case o.result <- o.res:
+			default:
+			}
+		}
+	}
+}
+
+// track makes the outcome report to set when it settles. Nil-safe.
+func (o *subtreeStoreOutcome) track(set *subtreeprocessor.StoredSet, root chainhash.Hash) {
+	if o == nil {
+		return
+	}
+
+	o.mu.Lock()
+	defer o.mu.Unlock()
+
+	o.set, o.root, o.started = set, root, time.Now()
+}
+
+// toRetry notes that a write was handed to the retry processor, which the stored set counts until
+// the request settles. Nil-safe.
+func (o *subtreeStoreOutcome) toRetry() {
+	if o == nil {
+		return
+	}
+
+	o.mu.Lock()
+	defer o.mu.Unlock()
+
+	if o.set != nil && !o.retrying && o.pending > 0 {
+		o.retrying = true
+
+		o.set.RetryStarted()
 	}
 }
 

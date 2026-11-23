@@ -41,6 +41,11 @@ var (
 
 	prometheusSubtreeProcessorDynamicSubtreeSize prometheus.Gauge
 
+	// prometheusSubtreeProcessorStoredPrefixOldestUnstored is the age in seconds of the oldest
+	// chained subtree that is not in the stored set, 0 when every chained subtree is stored. It
+	// grows while a template stays cut short: the alert on a stored prefix that does not advance.
+	prometheusSubtreeProcessorStoredPrefixOldestUnstored prometheus.Gauge
+
 	// prometheusSubtreeProcessorBlockMaxSizeResizes counts re-chunks of the queue because
 	// the first subtree exceeded blockmaxsize. A resize lasts for one block, so a steadily
 	// rising count means it repeats every block, each time rebuilding and storing the queue.
@@ -246,6 +251,15 @@ func _initPrometheusMetrics() {
 			Subsystem: "subtreeprocessor",
 			Name:      "dynamic_subtree_size",
 			Help:      "Dynamic subtree size in number of transactions",
+		},
+	)
+
+	prometheusSubtreeProcessorStoredPrefixOldestUnstored = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "teranode",
+			Subsystem: "subtreeprocessor",
+			Name:      "stored_prefix_oldest_unstored_seconds",
+			Help:      "Age of the oldest chained subtree not yet in the stored set, with blockassembly_storedPrefixTemplate on",
 		},
 	)
 
