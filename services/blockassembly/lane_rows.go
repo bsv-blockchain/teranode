@@ -34,12 +34,14 @@ const laneBitmapsService = "blockassembly"
 // ownLaneBitmapsKeepBlocks is how many blocks the kept bitmaps of a subtree outlive the height
 // they were last stored at, or last listed in a mining candidate. A block that moves the pool on
 // usually rebuilds every transaction left into new subtrees, which are stored and kept again; a
-// coinbase-only block does not, so the pool's subtrees stay as they were, and serving them in a
-// candidate is what keeps their entries current (keepCandidateLaneBitmaps). An entry older than
-// this is in no current candidate, and it is dropped when the next one is kept. This bounds the
-// memory to the subtrees stored or listed at the last ownLaneBitmapsKeepBlocks+1 heights: about
-// 0.5 KB per million-transaction subtree whose lanes are contiguous runs, which is how block
-// assembly fills its subtrees from the queue.
+// coinbase-only block does not, so the pool's subtrees stay as they were. The subtrees the latest
+// mining candidate lists are therefore never dropped, whatever their height
+// (keepCandidateLaneBitmaps): several coinbase-only blocks with no candidate served between them
+// would otherwise age out subtrees still in the pool. Any other entry older than this is dropped
+// when the next one is kept. This bounds the memory to the subtrees stored or listed at the last
+// ownLaneBitmapsKeepBlocks+1 heights, plus the latest candidate's: about 0.5 KB per
+// million-transaction subtree whose lanes are contiguous runs, which is how block assembly fills
+// its subtrees from the queue.
 const ownLaneBitmapsKeepBlocks = 2
 
 // ownLaneBitmapsWait bounds how long storing our block waits for the kept bitmaps of a subtree
@@ -62,6 +64,8 @@ type ownLaneBitmaps struct {
 	pending map[chainhash.Hash]struct{}
 	// changed is closed, and replaced, whenever a subtree's bitmaps are kept or its storage ends.
 	changed chan struct{}
+	// listed holds the subtrees the latest mining candidate lists, whose entries are not dropped.
+	listed map[chainhash.Hash]struct{}
 }
 
 // keptLaneBitmaps is one subtree's bitmaps and the block height it was last stored at.
@@ -96,6 +100,10 @@ func (o *ownLaneBitmaps) put(root chainhash.Hash, lanes lane.LaneBitmaps, height
 	}
 
 	for hash, kept := range o.bySubtree {
+		if _, inCandidate := o.listed[hash]; inCandidate {
+			continue
+		}
+
 		if kept.height < height-ownLaneBitmapsKeepBlocks {
 			delete(o.bySubtree, hash)
 		}
@@ -120,6 +128,24 @@ func (o *ownLaneBitmaps) touch(root chainhash.Hash, height uint32) bool {
 	}
 
 	return ok
+}
+
+// list records roots as the subtrees the latest mining candidate lists, which put does not drop,
+// and marks their kept bitmaps as current at height.
+func (o *ownLaneBitmaps) list(roots []chainhash.Hash, height uint32) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+
+	o.listed = make(map[chainhash.Hash]struct{}, len(roots))
+
+	for _, root := range roots {
+		o.listed[root] = struct{}{}
+
+		if kept, ok := o.bySubtree[root]; ok && kept.height < height {
+			kept.height = height
+			o.bySubtree[root] = kept
+		}
+	}
 }
 
 // expect marks subtree root as being stored by a storage worker, so a block that lists it before
@@ -346,18 +372,19 @@ func (ba *BlockAssembly) keepExistingSubtreeLaneBitmaps(ctx context.Context, sub
 	}
 }
 
-// keepCandidateLaneBitmaps marks the kept bitmaps of a mining candidate's subtrees as current, so
-// they outlive blocks that do not rebuild the pool's subtrees.
+// keepCandidateLaneBitmaps keeps the bitmaps of a mining candidate's subtrees until a later
+// candidate no longer lists them, so they outlive blocks that do not rebuild the pool's subtrees.
 func (ba *BlockAssembly) keepCandidateLaneBitmaps(subtrees []*subtreepkg.Subtree) {
 	if ba.blockAssembler == nil || ba.blockAssembler.utxoStore == nil {
 		return
 	}
 
-	height := ba.blockAssembler.utxoStore.GetBlockHeight()
-
-	for _, st := range subtrees {
-		ba.ownLaneBitmaps.touch(*st.RootHash(), height)
+	roots := make([]chainhash.Hash, len(subtrees))
+	for i, st := range subtrees {
+		roots[i] = *st.RootHash()
 	}
+
+	ba.ownLaneBitmaps.list(roots, ba.blockAssembler.utxoStore.GetBlockHeight())
 }
 
 // ownLaneRows builds the lane map rows of block, a block this node mined, from the kept lane

@@ -8,6 +8,7 @@ import (
 
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/stores/blockchain/options"
+	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/lane"
 )
 
@@ -28,6 +29,13 @@ const (
 	laneMapRowsSavepoint         = `SAVEPOINT lane_map_rows`
 	laneMapRowsRollbackSavepoint = `ROLLBACK TO SAVEPOINT lane_map_rows`
 	laneMapRowsReleaseSavepoint  = `RELEASE SAVEPOINT lane_map_rows`
+
+	// laneMapRowsLockTimeout bounds, on Postgres, every lock wait of a block's lane map rows insert,
+	// so a lock held elsewhere costs the block its rows, not its store: StoreBlock holds slowPathMu
+	// and the block's uncommitted INSERT meanwhile. It reads the timeout in force, to put back
+	// once the rows are in; a rollback to the savepoint undoes it by itself.
+	laneMapRowsLockTimeout = `SELECT current_setting('lock_timeout'), set_config('lock_timeout', '2000ms', true)`
+	laneMapRowsRestoreLock = `SELECT set_config('lock_timeout', $1, true)`
 )
 
 // laneRowsToStore is the rows StoreBlock is to insert with its block, already checked, and what
@@ -103,13 +111,32 @@ func (s *SQL) insertLaneMapRowsWithBlock(ctx context.Context, tx *sql.Tx, block 
 		return err
 	}
 
-	if err := s.insertLaneMapRowsTx(ctx, tx, uint32(blockID), rows.rows); err != nil {
+	var previousLockTimeout string
+
+	err := func() error {
+		if s.engine == util.Postgres {
+			var set string
+			if err := tx.QueryRowContext(ctx, laneMapRowsLockTimeout).Scan(&previousLockTimeout, &set); err != nil {
+				return err
+			}
+		}
+
+		return s.insertLaneMapRowsTx(ctx, tx, uint32(blockID), rows.rows)
+	}()
+
+	switch {
+	case err != nil:
+		// the rollback also undoes the lock timeout set after the savepoint
 		if _, rbErr := tx.ExecContext(ctx, laneMapRowsRollbackSavepoint); rbErr != nil {
 			return rbErr
 		}
 
 		rows.refused = true
 		s.logger.Warnf("[StoreBlock][%s] storing the block without its lane map rows, whose insert failed: %v", block.Hash().String(), err)
+	case s.engine == util.Postgres:
+		if _, err = tx.ExecContext(ctx, laneMapRowsRestoreLock, previousLockTimeout); err != nil {
+			return err
+		}
 	}
 
 	if _, err := tx.ExecContext(ctx, laneMapRowsReleaseSavepoint); err != nil {

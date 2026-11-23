@@ -1357,3 +1357,60 @@ func TestStoreSubtreeDataWithoutMetaKeepsNodeZerosLanePosition(t *testing.T) {
 		})
 	}
 }
+
+// clearedBetweenReadsMap answers, through separate reads, what a pool map answers when it is
+// cleared between them: it holds the tx (Exists) but reads no position for it. Its one-read
+// LookupPosition gives the coherent answer, that the map does not hold it.
+type clearedBetweenReadsMap struct {
+	subtreeprocessor.TxInpointsMap
+}
+
+func (clearedBetweenReadsMap) Exists(chainhash.Hash) bool { return true }
+
+func (clearedBetweenReadsMap) PositionWithErr(chainhash.Hash) (uint64, error) { return 0, nil }
+
+func (clearedBetweenReadsMap) LookupPosition(chainhash.Hash) (uint64, bool, error) {
+	return 0, false, nil
+}
+
+// TestRemovedMemberPositionUsesTheOneReadLookup: a removed member with no position backup is
+// looked up in the pool with one read, so a map cleared between an existence read and a position
+// read does not make its position a known none; the member is lost and the subtree keeps no
+// bitmaps.
+func TestRemovedMemberPositionUsesTheOneReadLookup(t *testing.T) {
+	st, txMap := laneSealSubtree(t, "cleared-between-reads")
+	pool := clearedBetweenReadsMap{TxInpointsMap: txMap}
+
+	_, known := removedLanePosition(pool, txmap.NewSyncedMap[chainhash.Hash, uint64](), st.Nodes[1].Hash)
+	require.False(t, known)
+
+	_, lost := subtreeLanePositions(st, pool, nil, txmap.NewSyncedMap[chainhash.Hash, uint64]())
+	require.Equal(t, 3, lost)
+}
+
+// TestCandidateSubtreesOutliveBlocksWithNoCandidateServed: a subtree the latest mining candidate
+// lists keeps its bitmaps across blocks that do not rebuild the pool's subtrees even when no
+// candidate is served between them, so a subtree kept at a newer height does not drop it; once a
+// later candidate no longer lists it, it ages out.
+func TestCandidateSubtreesOutliveBlocksWithNoCandidateServed(t *testing.T) {
+	var kept ownLaneBitmaps
+
+	inPool := chainhash.HashH([]byte("listed-in-pool"))
+
+	kept.put(inPool, lane.LaneBitmaps{}, 100)
+	kept.list([]chainhash.Hash{inPool}, 100)
+
+	// three coinbase-only blocks, no candidate served, then a new subtree is kept at 103
+	sealed := chainhash.HashH([]byte("sealed-after-blocks"))
+	kept.put(sealed, lane.LaneBitmaps{}, 103)
+
+	_, missing := kept.get([]*chainhash.Hash{&inPool})
+	require.Zero(t, missing, "the latest candidate still lists it")
+
+	// a later candidate no longer lists it: it ages out with the next subtree kept
+	kept.list([]chainhash.Hash{sealed}, 103)
+	kept.put(chainhash.HashH([]byte("later")), lane.LaneBitmaps{}, 106)
+
+	_, missing = kept.get([]*chainhash.Hash{&inPool})
+	require.Equal(t, 1, missing)
+}

@@ -697,3 +697,73 @@ func TestDeleteBlockLeavesItsLaneMapRows(t *testing.T) {
 		requireRowsOf(t, s, id1, rows)
 	})
 }
+
+// A lock on lane_map held elsewhere costs a block its rows, not its store: on Postgres the rows'
+// insert waits at most its lock timeout, then rolls back to its savepoint, and the block commits
+// without rows, counted as an insert failure. The block's own transaction keeps the lock timeout
+// it had: a later statement in it is not bounded by the rows' timeout.
+func TestStoreBlockBoundsItsLaneMapRowsLockWait_PostgreSQL(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping postgres-backed test in -short mode")
+	}
+
+	s, cleanup := setupLanePostgresStore(t)
+	defer cleanup()
+
+	ctx := t.Context()
+
+	holder, err := s.db.BeginTx(ctx, nil)
+	require.NoError(t, err)
+
+	defer func() { _ = holder.Rollback() }()
+
+	_, err = holder.ExecContext(ctx, `LOCK TABLE lane_map IN ACCESS EXCLUSIVE MODE`)
+	require.NoError(t, err)
+
+	failures := laneMetricValue(t, "teranode_lane_row_insert_failures_total")
+
+	storeCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	start := time.Now()
+	id, _, err := s.StoreBlock(storeCtx, block1, "", options.WithLaneMapRows(blockLaneRows(t)))
+	require.NoError(t, err, "the block stores although its rows wait on a lock")
+	require.Less(t, time.Since(start), 20*time.Second, "the rows' lock wait is bounded")
+
+	require.NoError(t, holder.Rollback())
+
+	requireRowsOf(t, s, id, nil)
+	require.Equal(t, failures+1, laneMetricValue(t, "teranode_lane_row_insert_failures_total"))
+}
+
+// The rows' insert puts back the lock timeout its transaction had once the rows are in, so the
+// rest of the block's transaction is bounded as before.
+func TestInsertLaneMapRowsWithBlockRestoresTheLockTimeout_PostgreSQL(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping postgres-backed test in -short mode")
+	}
+
+	s, cleanup := setupLanePostgresStore(t)
+	defer cleanup()
+
+	ctx := t.Context()
+
+	id, err := s.AssignBlockID(ctx, block1.Hash())
+	require.NoError(t, err)
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	require.NoError(t, err)
+
+	defer func() { _ = tx.Rollback() }()
+
+	_, err = tx.ExecContext(ctx, `SET LOCAL lock_timeout = '500ms'`)
+	require.NoError(t, err)
+
+	rows := &laneRowsToStore{rows: blockLaneRows(t), block: lane.BlockPeer}
+	require.NoError(t, s.insertLaneMapRowsWithBlock(ctx, tx, block1, id, rows))
+	require.True(t, rows.stored)
+
+	var timeout string
+	require.NoError(t, tx.QueryRowContext(ctx, `SHOW lock_timeout`).Scan(&timeout))
+	require.Equal(t, "500ms", timeout)
+}
