@@ -43,6 +43,9 @@ type Interface interface {
 	// GetTxBlockRefs returns only the block IDs and block heights recorded for a transaction (no body),
 	// for callers that need where it was mined rather than what it is.
 	GetTxBlockRefs(ctx context.Context, hash *chainhash.Hash) (*meta.Data, error)
+	// GetTxFundingRecord returns the body, coinbase flag, mined blocks, unmined height and the
+	// conflicting and locked flags of a transaction, the fields an output-status answer reads.
+	GetTxFundingRecord(ctx context.Context, hash *chainhash.Hash) (*meta.Data, error)
 	GetTransaction(ctx context.Context, hash *chainhash.Hash) ([]byte, error)
 	GetBlockStats(ctx context.Context) (*model.BlockStats, error)
 	GetBlockGraphData(ctx context.Context, periodMillis uint64) (*model.BlockDataPoints, error)
@@ -324,6 +327,27 @@ func (repo *Repository) GetTxMeta(ctx context.Context, hash *chainhash.Hash) (*m
 // the body, and possibly an external blob, when only the mined blocks are needed.
 func (repo *Repository) GetTxBlockRefs(ctx context.Context, hash *chainhash.Hash) (*meta.Data, error) {
 	return repo.UtxoStore.Get(ctx, hash, fields.BlockIDs, fields.BlockHeights)
+}
+
+// TxFundingRecordFields are the fields GetTxFundingRecord reads.
+var TxFundingRecordFields = []fields.FieldName{
+	fields.Tx, fields.IsCoinbase, fields.BlockIDs, fields.BlockHeights, fields.UnminedSince,
+	fields.Conflicting, fields.Locked,
+}
+
+// GetTxFundingRecord reads what an output-status answer needs from the transaction that created the
+// output: the body (for the output's value and script), whether it is a coinbase, the blocks it was
+// mined in, since when it is unmined, and the transaction-level conflicting and locked flags. The
+// fields are named because a store's default read does not include all of them: Aerospike's default
+// leaves out UnminedSince. As in GetTxMeta, a transaction that is not the complete requested one is
+// dropped and the metadata kept.
+func (repo *Repository) GetTxFundingRecord(ctx context.Context, hash *chainhash.Hash) (*meta.Data, error) {
+	txMeta, err := repo.UtxoStore.Get(ctx, hash, TxFundingRecordFields...)
+	if err != nil {
+		return nil, err
+	}
+
+	return withoutUnserializableTx(txMeta, hash), nil
 }
 
 // GetTransaction retrieves transaction data by its hash.

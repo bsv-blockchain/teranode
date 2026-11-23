@@ -54,6 +54,14 @@ func (m *MockRepositoryForMerkleProof) GetTxBlockRefs(ctx context.Context, hash 
 	return args.Get(0).(*meta.Data), args.Error(1)
 }
 
+func (m *MockRepositoryForMerkleProof) GetTxFundingRecord(ctx context.Context, hash *chainhash.Hash) (*meta.Data, error) {
+	args := m.Called(ctx, hash)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*meta.Data), args.Error(1)
+}
+
 func (m *MockRepositoryForMerkleProof) GetTransaction(ctx context.Context, hash *chainhash.Hash) ([]byte, error) {
 	args := m.Called(ctx, hash)
 	if args.Get(0) == nil {

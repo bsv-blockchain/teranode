@@ -228,3 +228,28 @@ func TestRepository_GetTxBlockRefs_requestsOnlyTheBlockFields(t *testing.T) {
 	require.Nil(t, got.Tx)
 	mockUtxoStore.AssertExpectations(t)
 }
+
+// GetTxFundingRecord names its fields, because a store's default read leaves some out: Aerospike's
+// default read has no UnminedSince (measured on a real Aerospike: an unmined record read back 0 by
+// default and its height with the field named), so an unconfirmed funding transaction would have
+// read as "funding unknown".
+func TestRepository_GetTxFundingRecord_requestsTheStatusFields(t *testing.T) {
+	repo, mockUtxoStore, _ := newRepoWithMockedUtxoStore(t)
+
+	hash, err := chainhash.NewHashFromStr("0303030303030303030303030303030303030303030303030303030303030303")
+	require.NoError(t, err)
+
+	want := []fields.FieldName{fields.Tx, fields.IsCoinbase, fields.BlockIDs, fields.BlockHeights,
+		fields.UnminedSince, fields.Conflicting, fields.Locked}
+	require.Equal(t, want, repository.TxFundingRecordFields)
+
+	mockUtxoStore.On("Get", mock.Anything, hash, want).
+		Return(&meta.Data{IsCoinbase: true, UnminedSince: 800, Locked: true}, nil)
+
+	got, err := repo.GetTxFundingRecord(context.Background(), hash)
+	require.NoError(t, err)
+	require.True(t, got.IsCoinbase)
+	require.True(t, got.Locked)
+	require.Equal(t, uint32(800), got.UnminedSince)
+	mockUtxoStore.AssertExpectations(t)
+}

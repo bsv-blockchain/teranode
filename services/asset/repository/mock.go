@@ -33,6 +33,16 @@ func (m *Mock) GetTxMeta(_ context.Context, hash *chainhash.Hash) (*meta.Data, e
 	return args.Get(0).(*meta.Data), args.Error(1)
 }
 
+func (m *Mock) GetTxFundingRecord(_ context.Context, hash *chainhash.Hash) (*meta.Data, error) {
+	args := m.Called(hash)
+
+	if args.Error(1) != nil {
+		return nil, args.Error(1)
+	}
+
+	return args.Get(0).(*meta.Data), args.Error(1)
+}
+
 func (m *Mock) GetTxBlockRefs(_ context.Context, hash *chainhash.Hash) (*meta.Data, error) {
 	args := m.Called(hash)
 

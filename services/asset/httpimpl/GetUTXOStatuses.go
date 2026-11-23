@@ -21,15 +21,20 @@ import (
 
 const (
 	// utxoStatusMaxRecords is the hard per-request cap for POST /api/v1/utxos/status.
-	// Per record the worst case is one output-status read, one funding-record read,
-	// one spender block-reference read (block IDs and heights only, no transaction
-	// body) and one main-chain check per block the transaction
-	// sits in (a remote call when the main-chain cache does not cover the height).
-	// Funding and spender records are memoised per transaction, and each distinct
-	// funding height costs one block fetch per request. The cap is far below the
-	// asset_maxBatchRecords default used by the 48-byte route. The configured
+	// Per record the worst case is one output-status read, one funding-record read
+	// (the full transaction body), one spender block-reference read (block IDs and
+	// heights only, no transaction body) and one main-chain check per block the
+	// transaction sits in (a remote call when the main-chain cache does not cover the
+	// height). Funding and spender records are memoised per transaction, and each
+	// distinct funding height costs one block fetch per request. The cap is far below
+	// the asset_maxBatchRecords default used by the 48-byte route. The configured
 	// asset_maxBatchRecords still applies when it is lower.
 	utxoStatusMaxRecords = 1024
+
+	// utxoStatusBodyReads bounds how many funding-record reads (each loads a full
+	// transaction body, possibly from an external blob) run at once per request.
+	// Only the requested outputs' value and script hash are kept after each read.
+	utxoStatusBodyReads = 8
 
 	// utxoStatusRecordMaxBytes is an upper bound on the JSON size of one result,
 	// used to charge asset_maxBatchResponseBytes before any lookup runs.
@@ -48,6 +53,8 @@ const (
 	utxoReasonOther    = "unrecognised_store_status"
 	utxoReasonNoOutput = "output_not_found"
 	utxoReasonUnspend  = "unspendable"
+	utxoReasonMaturity = "maturity_unknown"
+	utxoReasonHeld     = "held"
 )
 
 // UTXOStatusBlockRef names the best block the batch was read against.
@@ -91,7 +98,9 @@ type UTXOStatusRecord struct {
 	Satoshis            *uint64 `json:"satoshis,omitempty"`
 	LockingScriptSha256 string  `json:"lockingScriptSha256,omitempty"`
 	// Immature is true when the output is not yet spendable: coinbase maturity,
-	// or a spend-height hold set by the alert system or a reassignment.
+	// or a spend-height hold set by the alert system or a reassignment. A coinbase
+	// output whose maturity cannot be checked, and a hold that may hide another
+	// state, are reported as unknown instead.
 	Immature bool `json:"immature,omitempty"`
 	// Funding is absent when the node cannot establish where the funding
 	// transaction is (a failed main-chain check, no block evidence, or a block
@@ -130,7 +139,22 @@ type UTXOStatusResponse struct {
 // An output the store never keeps as a UTXO (OP_FALSE OP_RETURN, and before
 // Genesis a bare OP_RETURN or an oversized script) is reported as unknown
 // (unspendable), because some stores answer OK for it. That check needs the
-// funding transaction body; without the body it cannot run.
+// funding transaction body; without the body it cannot run. An output the store
+// holds whose funding record cannot be read is unknown (store_unavailable), and
+// one whose record has gone is unknown (not_found_may_be_pruned), because
+// neither that check nor the coinbase maturity check could run.
+//
+// Coinbase maturity is derived from the funding block height and the best
+// height, because Aerospike's GetSpend does not apply it. A coinbase output
+// whose funding block is not placed on the main chain (a failed main-chain
+// check, a block ID that does not match the block at that height, or a block
+// that was reorged out) is unknown (maturity_unknown).
+//
+// A store's IMMATURE status can replace the output's own state: Aerospike
+// applies a spend-height hold over SPENT, and SQL and pebble apply it after
+// frozen, locked and conflicting. A held output whose store answer carries
+// spending data (spent, or the frozen marker) is unknown (held); one whose
+// transaction is marked conflicting or locked is unknown with that reason.
 //
 // Consistency: the best block is read once before the lookups and once after.
 // Records are read one by one from the store at slightly different moments, so
@@ -186,11 +210,13 @@ func (h *HTTP) GetUTXOStatuses() func(c echo.Context) error {
 		}
 
 		lk := &utxoStatusLookup{
-			h:      h,
-			bestH:  best.Height,
-			metas:  make(map[chainhash.Hash]*utxoStatusMetaEntry),
-			refs:   make(map[chainhash.Hash]*utxoStatusMetaEntry),
-			blocks: make(map[uint32]*utxoStatusBlockEntry),
+			h:        h,
+			bestH:    best.Height,
+			wanted:   utxoStatusWanted(reqBytes, numRecords),
+			bodySem:  make(chan struct{}, utxoStatusBodyReads),
+			fundings: make(map[chainhash.Hash]*utxoStatusFundingEntry),
+			refs:     make(map[chainhash.Hash]*utxoStatusMetaEntry),
+			blocks:   make(map[uint32]*utxoStatusBlockEntry),
 		}
 		results := make([]UTXOStatusRecord, numRecords)
 
@@ -264,10 +290,56 @@ func (h *HTTP) utxoStatusBestBlock(ctx context.Context) (*UTXOStatusBlockRef, er
 	return &UTXOStatusBlockRef{Hash: header.Hash().String(), Height: headerMeta.Height}, nil
 }
 
+// utxoStatusWanted maps each requested transaction to the output indexes the
+// request asks about, so a funding read keeps only those outputs.
+func utxoStatusWanted(reqBytes []byte, numRecords int) map[chainhash.Hash][]uint32 {
+	wanted := make(map[chainhash.Hash][]uint32)
+
+	for i := 0; i < numRecords; i++ {
+		off := i * utxosRequestRecordSize
+
+		var txHash chainhash.Hash
+		copy(txHash[:], reqBytes[off:off+32])
+
+		wanted[txHash] = append(wanted[txHash], binary.LittleEndian.Uint32(reqBytes[off+32:off+36]))
+	}
+
+	return wanted
+}
+
 // utxoStatusMetaEntry memoises one transaction-record read for the request.
 type utxoStatusMetaEntry struct {
 	once sync.Once
 	data *meta.Data
+	err  error
+}
+
+// utxoStatusOutput is what an answer needs from one funding output.
+type utxoStatusOutput struct {
+	satoshis   uint64
+	scriptHash string
+	// storable is false for an output the store never keeps as a UTXO.
+	storable bool
+}
+
+// utxoStatusFundingRecord is a funding-transaction record with the body dropped: the
+// requested outputs are summarised and the transaction itself is not kept.
+type utxoStatusFundingRecord struct {
+	// meta holds IsCoinbase, BlockIDs, BlockHeights, UnminedSince, Conflicting
+	// and Locked. Its Tx is always nil.
+	meta *meta.Data
+	// hasBody is true when the store returned the transaction body.
+	hasBody bool
+	// numOutputs is the body's output count, set only when hasBody.
+	numOutputs int
+	// outputs holds the requested outputs that exist in the body.
+	outputs map[uint32]utxoStatusOutput
+}
+
+// utxoStatusFundingEntry memoises one funding-record read for the request.
+type utxoStatusFundingEntry struct {
+	once sync.Once
+	rec  *utxoStatusFundingRecord
 	err  error
 }
 
@@ -279,35 +351,108 @@ type utxoStatusBlockEntry struct {
 }
 
 type utxoStatusLookup struct {
-	h      *HTTP
-	bestH  uint32
-	mu     sync.Mutex
-	metas  map[chainhash.Hash]*utxoStatusMetaEntry
-	refs   map[chainhash.Hash]*utxoStatusMetaEntry
-	blocks map[uint32]*utxoStatusBlockEntry
+	h        *HTTP
+	bestH    uint32
+	wanted   map[chainhash.Hash][]uint32
+	bodySem  chan struct{}
+	mu       sync.Mutex
+	fundings map[chainhash.Hash]*utxoStatusFundingEntry
+	refs     map[chainhash.Hash]*utxoStatusMetaEntry
+	blocks   map[uint32]*utxoStatusBlockEntry
 }
 
-// txMeta returns the (memoised) store record for a transaction. A nil record
-// with a nil error means the store does not hold the transaction.
-func (l *utxoStatusLookup) txMeta(ctx context.Context, hash *chainhash.Hash) (*meta.Data, error) {
+// fundingRecord returns the (memoised) funding-transaction record, with the
+// requested outputs summarised and the body dropped. At most utxoStatusBodyReads
+// of these reads run at once. A nil record with a nil error means the store does
+// not hold the transaction.
+func (l *utxoStatusLookup) fundingRecord(ctx context.Context, hash *chainhash.Hash) (*utxoStatusFundingRecord, error) {
 	l.mu.Lock()
 
-	e, ok := l.metas[*hash]
+	e, ok := l.fundings[*hash]
 	if !ok {
-		e = &utxoStatusMetaEntry{}
-		l.metas[*hash] = e
+		e = &utxoStatusFundingEntry{}
+		l.fundings[*hash] = e
 	}
 
 	l.mu.Unlock()
 
 	e.once.Do(func() {
-		e.data, e.err = l.h.repository.GetTxMeta(ctx, hash)
-		if e.err != nil && isStoreNotFound(e.err) {
-			e.data, e.err = nil, nil
+		select {
+		case l.bodySem <- struct{}{}:
+		case <-ctx.Done():
+			e.err = ctx.Err()
+			return
 		}
+
+		defer func() { <-l.bodySem }()
+
+		data, err := l.h.repository.GetTxFundingRecord(ctx, hash)
+
+		switch {
+		case err != nil && isStoreNotFound(err):
+			return
+		case err != nil:
+			e.err = err
+			return
+		case data == nil:
+			return
+		}
+
+		e.rec = l.summarise(data, l.wanted[*hash])
 	})
 
-	return e.data, e.err
+	return e.rec, e.err
+}
+
+// summarise keeps what the answers need from a funding record and drops the
+// transaction body.
+func (l *utxoStatusLookup) summarise(data *meta.Data, vouts []uint32) *utxoStatusFundingRecord {
+	rec := &utxoStatusFundingRecord{
+		meta: &meta.Data{
+			IsCoinbase:   data.IsCoinbase,
+			BlockIDs:     data.BlockIDs,
+			BlockHeights: data.BlockHeights,
+			UnminedSince: data.UnminedSince,
+			Conflicting:  data.Conflicting,
+			Locked:       data.Locked,
+		},
+	}
+
+	if data.Tx == nil {
+		return rec
+	}
+
+	rec.hasBody = true
+	rec.numOutputs = len(data.Tx.Outputs)
+	rec.outputs = make(map[uint32]utxoStatusOutput, len(vouts))
+
+	// The script rules depend on the height: the funding block's when known,
+	// else the best block.
+	height := l.bestH
+	if len(data.BlockHeights) > 0 {
+		height = data.BlockHeights[0]
+	}
+
+	for _, vout := range vouts {
+		if int(vout) >= rec.numOutputs {
+			continue
+		}
+
+		if _, done := rec.outputs[vout]; done {
+			continue
+		}
+
+		out := data.Tx.Outputs[vout]
+		sum := sha256.Sum256(*out.LockingScript)
+
+		rec.outputs[vout] = utxoStatusOutput{
+			satoshis:   out.Satoshis,
+			scriptHash: hex.EncodeToString(sum[:]),
+			storable:   utxo.ShouldStoreOutputAsUTXO(out, height, l.h.settings.ChainCfgParams.GenesisActivationHeight),
+		}
+	}
+
+	return rec
 }
 
 // blockRefs returns the (memoised) block IDs and heights recorded for a
@@ -375,31 +520,24 @@ func (l *utxoStatusLookup) record(ctx context.Context, txHash *chainhash.Hash, v
 
 	notFound := err != nil || sr == nil || sr.Status == int(utxo.Status_NOT_FOUND)
 
-	data, metaErr := l.txMeta(ctx, txHash)
+	fr, metaErr := l.fundingRecord(ctx, txHash)
 	if metaErr != nil && ctx.Err() != nil {
 		return rec, ctx.Err()
 	}
 
-	if metaErr == nil && data != nil && data.Tx != nil {
-		if int(vout) < len(data.Tx.Outputs) {
-			out := data.Tx.Outputs[vout]
-
+	if metaErr == nil && fr != nil && fr.hasBody {
+		if int(vout) < fr.numOutputs {
 			// Some stores keep no UTXO slot for an output that can never be
-			// spent and then answer OK for it. Check the script rules here.
-			// The height is the funding block's when known, else the best block.
-			height := l.bestH
-			if len(data.BlockHeights) > 0 {
-				height = data.BlockHeights[0]
-			}
+			// spent and then answer OK for it. summarise applied the script rules.
+			if out, ok := fr.outputs[vout]; ok {
+				if !out.storable {
+					return unknown(utxoReasonUnspend)
+				}
 
-			if !utxo.ShouldStoreOutputAsUTXO(out, height, l.h.settings.ChainCfgParams.GenesisActivationHeight) {
-				return unknown(utxoReasonUnspend)
+				sats := out.satoshis
+				rec.Satoshis = &sats
+				rec.LockingScriptSha256 = out.scriptHash
 			}
-
-			sats := out.Satoshis
-			sum := sha256.Sum256(*out.LockingScript)
-			rec.Satoshis = &sats
-			rec.LockingScriptSha256 = hex.EncodeToString(sum[:])
 		} else if notFound {
 			return unknown(utxoReasonVout)
 		}
@@ -422,14 +560,38 @@ func (l *utxoStatusLookup) record(ctx context.Context, txHash *chainhash.Hash, v
 		}
 	}
 
-	if metaErr == nil && data != nil {
-		rec.Funding = l.funding(ctx, data, true)
+	// The store holds the output, but without its funding record neither the
+	// script check above nor the coinbase maturity check below can run, so the
+	// answer would be a guess.
+	switch {
+	case metaErr != nil:
+		l.h.logger.Warnf("[Asset_http:GetUTXOStatuses] %s:%d funding record: %v", txHash.String(), vout, metaErr)
+
+		return unknown(utxoReasonStore)
+	case fr == nil:
+		// The record was gone by the time it was read (pruned after a spend).
+		return unknown(utxoReasonPruned)
 	}
+
+	rec.Funding = l.funding(ctx, fr.meta, true)
 
 	switch utxo.Status(sr.Status) { //nolint:gosec
 	case utxo.Status_OK:
 		rec.Status = utxoStatusUnspent
 	case utxo.Status_IMMATURE:
+		// A spend-height hold can replace the output's own state: Aerospike sets
+		// IMMATURE over SPENT, and SQL and pebble set it after frozen, locked and
+		// conflicting. Spent and frozen outputs carry spending data (frozen as the
+		// frozen marker); locked and conflicting are flags on the transaction.
+		switch {
+		case sr.SpendingData != nil:
+			return unknown(utxoReasonHeld)
+		case fr.meta.Conflicting:
+			return unknown(utxoReasonConflict)
+		case fr.meta.Locked:
+			return unknown(utxoReasonLocked)
+		}
+
 		rec.Status, rec.Immature = utxoStatusUnspent, true
 	case utxo.Status_SPENT:
 		rec.Status = utxoStatusSpent
@@ -456,9 +618,16 @@ func (l *utxoStatusLookup) record(ctx context.Context, txHash *chainhash.Hash, v
 	}
 
 	// Aerospike's GetSpend ignores coinbase maturity, so derive it here as well.
-	if rec.Status == utxoStatusUnspent && data != nil && data.IsCoinbase && rec.Funding != nil && rec.Funding.Mined &&
-		uint64(rec.Funding.BlockHeight)+uint64(l.h.settings.ChainCfgParams.CoinbaseMaturity) > uint64(l.bestH) { //nolint:gosec
-		rec.Immature = true
+	// It needs the funding block on the main chain; without that a coinbase
+	// output's maturity is not known, and it is not reported as unspent.
+	if rec.Status == utxoStatusUnspent && fr.meta.IsCoinbase {
+		if rec.Funding == nil || !rec.Funding.Mined {
+			return unknown(utxoReasonMaturity)
+		}
+
+		if uint64(rec.Funding.BlockHeight)+uint64(l.h.settings.ChainCfgParams.CoinbaseMaturity) > uint64(l.bestH) { //nolint:gosec
+			rec.Immature = true
+		}
 	}
 
 	return rec, nil
