@@ -121,7 +121,7 @@ service BlockchainAPI {
   // A lease that is closed is answered with closed set, not an error, and the holder opens a new one.
   rpc RenewLaneLease(RenewLaneLeaseRequest) returns (RenewLaneLeaseResponse) {}
 
-  // ReleaseLaneLease closes a lane lease cleanly and records the last position its holder took.
+  // ReleaseLaneLease closes a lane lease cleanly and records the highest position its holder gave out that may carry a record (positions at the top that came back unwritten are left out).
   rpc ReleaseLaneLease(ReleaseLaneLeaseRequest) returns (ReleaseLaneLeaseResponse) {}
 
   // GetBestBlockHeader retrieves the header of the current best block.
@@ -1225,7 +1225,7 @@ message RenewLaneLeaseRequest {
   uint64 rate = 3;                // Positions taken per second, as the holder measured it
   bool want_grant = 4;            // Asks for the next grant
   uint64 settles_first = 5;       // With want_grant: first position of the oldest grant the holder has left and not yet reported; 0 for none
-  uint64 settles_last_taken = 6;  // Its final number: its last position if used up, else the highest taken. Never 0 when settles_first is set: a grant never used is not settled
+  uint64 settles_last_taken = 6;  // Its final number: its last position if used up, else the highest taken, lowered past positions at the top that came back unwritten. 0 with settles_first set when every position the grant gave out came back
 }
 
 // RenewLaneLeaseResponse answers a renewal. closed means the lease is closed and nothing was recorded.
@@ -1240,7 +1240,7 @@ message RenewLaneLeaseResponse {
 message ReleaseLaneLeaseRequest {
   bytes lease_id = 1;
   uint32 lane = 2;
-  uint64 last_taken = 3;          // Last position taken in the lane; 0 for none
+  uint64 last_taken = 3;          // Highest position this lease gave out that may carry a record: positions at the top that came back unwritten are left out; 0 when this lease gave none out or every one of them came back
   uint64 settles_first = 4;
   uint64 settles_last_taken = 5;
 }

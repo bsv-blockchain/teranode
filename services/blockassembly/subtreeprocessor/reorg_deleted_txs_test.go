@@ -1692,3 +1692,51 @@ func TestRemoveCoinbaseUtxosTakesAVanishedTxOutOfBlockAssembly(t *testing.T) {
 		require.Equal(t, -1, foundIndex, "%s must not be in any subtree", name)
 	}
 }
+
+// callerRecorder remembers the caller each SpendAndCreate names, by transaction, then forwards it.
+type callerRecorder struct {
+	utxostore.Store
+
+	mu      sync.Mutex
+	callers map[chainhash.Hash][]utxostore.Caller
+}
+
+func (r *callerRecorder) SpendAndCreate(ctx context.Context, tx *bt.Tx, blockHeight uint32,
+	opts ...utxostore.CreateOption) (*meta.Data, []*utxostore.Spend, error) {
+	options := &utxostore.CreateOptions{}
+	for _, opt := range opts {
+		opt(options)
+	}
+
+	r.mu.Lock()
+	r.callers[*tx.TxIDChainHash()] = append(r.callers[*tx.TxIDChainHash()], options.Caller)
+	r.mu.Unlock()
+
+	return r.Store.SpendAndCreate(ctx, tx, blockHeight, opts...)
+}
+
+// Block assembly names itself on the creates it makes, the coinbase and the transactions a reorg
+// re-creates, so a lane position either of them burns is counted under block_assembly.
+func TestBlockAssemblyCreatesNameBlockAssembly(t *testing.T) {
+	ctx := context.Background()
+	stp, block := newMoveForwardCommitBoundaryProcessor(t)
+
+	first, second := createCoinbaseChain(t, ctx, stp, block)
+
+	require.NoError(t, stp.removeCoinbaseUtxos(ctx, block))
+
+	recorder := &callerRecorder{Store: stp.utxoStore, callers: map[chainhash.Hash][]utxostore.Caller{}}
+	stp.utxoStore = recorder
+
+	_, _, err := stp.moveForwardBlock(ctx, block, true, map[chainhash.Hash]struct{}{}, false, true)
+	require.NoError(t, err)
+
+	for name, tx := range map[string]*bt.Tx{"coinbase": block.CoinbaseTx, "first": first, "second": second} {
+		callers := recorder.callers[*tx.TxIDChainHash()]
+		require.NotEmpty(t, callers, "%s was created by the move forward", name)
+
+		for _, c := range callers {
+			require.Equal(t, utxostore.CallerBlockAssembly, c, name)
+		}
+	}
+}

@@ -247,6 +247,26 @@ SELECT k.txid, hit.mined_height, hit.block_id, hit.flags, b.raw_tx
  ) AS hit
   LEFT JOIN tx_body b ON $4::boolean AND b.created_height = hit.created_height AND b.txid = k.txid`
 
+// The thin steps with lane_position added, for a read that asks for it on a database with
+// lane_position on utxo and spend_journal (Store.laneCoinColumn). A coin row and a journal row
+// carry their creating transaction's position, so a parent whose identity row the stamp has
+// deleted, and whose containment row is below the lookup floor, still answers with its position.
+var (
+	utxoFactsLaneSQL = laneStatement(utxoFactsSQL,
+		"hit.flags, b.raw_tx\n  FROM unnest", "hit.flags, b.raw_tx, hit.lane_position\n  FROM unnest",
+		"u.created_height, u.flags\n     FROM utxo u", "u.created_height, u.flags, u.lane_position\n     FROM utxo u")
+
+	spentParentFactsLaneSQL = laneStatement(spentParentFactsSQL,
+		"hit.flags, b.raw_tx\n  FROM unnest", "hit.flags, b.raw_tx, hit.lane_position\n  FROM unnest",
+		"j.created_height, j.flags\n     FROM spend_journal j", "j.created_height, j.flags, j.lane_position\n     FROM spend_journal j")
+)
+
+// thinLane is whether a thin step reads lane_position: the read asked for it and the coin and
+// journal rows have the column.
+func (s *Store) thinLane(res *lookupResult) bool {
+	return res.wantLane && s.laneCoinColumn
+}
+
 // lookupResult is one read of the store: what it found, and what it could not make sense of.
 //
 // The two maps are separate because a transaction the store HOLDS but cannot decode is not the
@@ -269,8 +289,10 @@ type lookupResult struct {
 
 	// wantLane sends the reads to the statements that also select lane_position, and lanes holds
 	// what they found. A batch with no such read runs the statements it always did, scans what it
-	// always did and pays nothing. Only Get, the get batcher and BatchDecorate set it, when a caller
-	// names fields.LanePosition, and one such read turns it on for its whole get batch.
+	// always did and pays nothing. Get, the get batcher and BatchDecorate set it when a caller names
+	// fields.LanePosition, and one such read turns it on for its whole get batch. burnUnlessStored
+	// also sets it, through getDirect, for its one-transaction read-back after a spend-and-create
+	// batch's COMMIT reported failure, outside any get batch.
 	wantLane bool
 	lanes    map[chainhash.Hash]uint64
 }
@@ -1142,14 +1164,19 @@ func (s *Store) readUTXOFacts(ctx context.Context, hashes []chainhash.Hash,
 
 	leaves, ids, los, his := liveUTXOArgs(txids)
 
-	rows, err := s.pool.Query(ctx, utxoFactsSQL, leaves, ids, los, his, !res.noBody)
+	stmt := utxoFactsSQL
+	if s.thinLane(res) {
+		stmt = utxoFactsLaneSQL
+	}
+
+	rows, err := s.pool.Query(ctx, stmt, leaves, ids, los, his, !res.noBody)
 	if err != nil {
 		return nil, errors.NewStorageError("[utxoset][lookup] UTXO facts", err)
 	}
 
 	var zero []chainhash.Hash
 
-	if err := scanBlockFacts(rows, "UTXO facts", res, &zero); err != nil {
+	if err := scanBlockFacts(rows, "UTXO facts", res, &zero, s.thinLane(res)); err != nil {
 		return nil, err
 	}
 
@@ -1211,12 +1238,17 @@ func (s *Store) readSpentParents(ctx context.Context, hashes []chainhash.Hash,
 
 	_, ids, los, his := liveUTXOArgs(txids)
 
-	rows, err := s.pool.Query(ctx, spentParentFactsSQL, ids, los, his, !res.noBody)
+	stmt := spentParentFactsSQL
+	if s.thinLane(res) {
+		stmt = spentParentFactsLaneSQL
+	}
+
+	rows, err := s.pool.Query(ctx, stmt, ids, los, his, !res.noBody)
 	if err != nil {
 		return errors.NewStorageError("[utxoset][lookup] spent parents", err)
 	}
 
-	return scanBlockFacts(rows, "spent parents", res, nil)
+	return scanBlockFacts(rows, "spent parents", res, nil, s.thinLane(res))
 }
 
 // scanBlockFacts reads the (txid, mined_height, block_id, flags, raw_tx) shape both thin steps
@@ -1226,8 +1258,8 @@ func (s *Store) readSpentParents(ctx context.Context, hashes []chainhash.Hash,
 //
 // A row at the (0,0) sentinel is handed to zero when the caller supplies it, instead of
 // answering: it is a second-tier trigger, not an answer. The undo step supplies nil because its
-// statement filters the sentinel out.
-func scanBlockFacts(rows pgx.Rows, what string, res *lookupResult, zero *[]chainhash.Hash) error {
+// statement filters the sentinel out. withLane says the statement also returns lane_position.
+func scanBlockFacts(rows pgx.Rows, what string, res *lookupResult, zero *[]chainhash.Hash, withLane bool) error {
 	defer rows.Close()
 
 	for rows.Next() {
@@ -1237,9 +1269,17 @@ func scanBlockFacts(rows pgx.Rows, what string, res *lookupResult, zero *[]chain
 			blockID     int32
 			flags       int16
 			rawTx       []byte
+			position    *int64
 		)
 
-		if err := rows.Scan(&txid, &minedHeight, &blockID, &flags, &rawTx); err != nil {
+		var err error
+		if withLane {
+			err = rows.Scan(&txid, &minedHeight, &blockID, &flags, &rawTx, &position)
+		} else {
+			err = rows.Scan(&txid, &minedHeight, &blockID, &flags, &rawTx)
+		}
+
+		if err != nil {
 			return errors.NewStorageError("[utxoset][lookup] %s scan", what, err)
 		}
 
@@ -1280,6 +1320,10 @@ func scanBlockFacts(rows pgx.Rows, what string, res *lookupResult, zero *[]chain
 		}
 
 		res.found[h] = data
+
+		if withLane {
+			res.noteLane(txid, &position)
+		}
 	}
 
 	if err := rows.Err(); err != nil {

@@ -314,6 +314,11 @@ func (s *Store) claimFloor() int32 {
 type createResult struct {
 	data *meta.Data
 	err  error
+
+	// burnReason says why the item's lane position burned when the batch failed with its database
+	// transaction open: rolled_back, or outcome_unknown when the COMMIT itself failed and may have
+	// landed. Empty for any other answer.
+	burnReason string
 }
 
 // createItem is a single Create waiting for its batch to flush.
@@ -352,8 +357,14 @@ type createPlan struct {
 	// lanes is the lane position of each transaction in its signed form (util/lane), 0 for none.
 	// It stays nil until a transaction in the plan has one, so a plan with none allocates nothing
 	// for it.
-	lanes  []int64
-	bodies [][]byte
+	lanes []int64
+	// parentLanes is each transaction's parent_lane_positions, nil for none, and nil as a whole
+	// until a transaction in the plan has some (addParentLanes).
+	parentLanes [][]byte
+	// countLanes counts each claimed record's lane position coverage (utxo.CountLaneRecord); it is
+	// set with lane positions on.
+	countLanes bool
+	bodies     [][]byte
 	// minedRows is true for a transaction that carries a block at or below the highest
 	// checkpoint, which is what sends it to createMinedPlanSQL instead of createIdentPlanSQL.
 	// The three fields below carry the block for every transaction that carries one, whichever
@@ -391,8 +402,9 @@ type createPlan struct {
 // planCreates flattens a batch of transactions into one set of arrays.
 func (s *Store) planCreates(items []*createItem) *createPlan {
 	p := &createPlan{
-		perItem: make([]*meta.Data, len(items)),
-		errs:    make([]error, len(items)),
+		perItem:    make([]*meta.Data, len(items)),
+		errs:       make([]error, len(items)),
+		countLanes: s.laneShadow,
 	}
 
 	// One claim per txid per statement, deduplicated HERE rather than left to the database.
@@ -472,6 +484,10 @@ func (p *createPlan) sortRows() {
 		p.lanes = permute(p.lanes, order)
 	}
 
+	if p.parentLanes != nil {
+		p.parentLanes = permute(p.parentLanes, order)
+	}
+
 	p.bodies = permute(p.bodies, order)
 	p.minedRows = permute(p.minedRows, order)
 	p.seedRows = permute(p.seedRows, order)
@@ -535,6 +551,110 @@ var (
 	)
 )
 
+// The lane create statements with the copies that teranode-cli prepare-lane-schema's columns allow
+// (see Store.laneParentColumn and Store.laneCoinColumn), indexed by createLaneForm. A database
+// with only the identity columns runs createIdentPlanLaneSQL and createMinedPlanLaneSQL as before.
+//
+// parent_lane_positions sits beside tx_inpoints and travels where they do: the identity claim
+// writes the caller's ($28, NULL for none), and every containment row copies the identity row's
+// first, as it copies its inpoints. The block-path claim has no caller's list, because it writes
+// no inpoints either.
+//
+// utxo.lane_position is the position of the transaction that created the output, so each UTXO
+// takes its claim's position: the identity claim returns the one it wrote, and the block-path
+// claim, which takes only a record new to the store, passes its own on.
+var (
+	createIdentPlanLaneForms = [4]string{
+		createIdentPlanLaneSQL,
+		laneStatement(createIdentPlanLaneSQL, identParentLaneEdits...),
+		laneStatement(createIdentPlanLaneSQL, identCoinLaneEdits...),
+		laneStatement(laneStatement(createIdentPlanLaneSQL, identParentLaneEdits...), identCoinLaneEdits...),
+	}
+
+	createMinedPlanLaneForms = [4]string{
+		createMinedPlanLaneSQL,
+		laneStatement(createMinedPlanLaneSQL, minedParentLaneEdits...),
+		laneStatement(createMinedPlanLaneSQL, minedCoinLaneEdits...),
+		laneStatement(laneStatement(createMinedPlanLaneSQL, minedParentLaneEdits...), minedCoinLaneEdits...),
+	}
+)
+
+var (
+	identParentLaneEdits = []string{
+		"$26::bigint[], $27::bigint[])", "$26::bigint[], $27::bigint[], $28::bytea[])",
+		"subtree_idx, fee, lane_position)", "subtree_idx, fee, lane_position, parent_lane_positions)",
+		"created_at, flags, lane_position)\n    SELECT t.leaf", "created_at, flags, lane_position, parent_lane_positions)\n    SELECT t.leaf",
+		"           NULLIF(t.lane_position, 0)\n", "           NULLIF(t.lane_position, 0), t.parent_lane_positions\n",
+		"created_at, flags, lane_position)\n    SELECT t.txid", "created_at, flags, lane_position, parent_lane_positions)\n    SELECT t.txid",
+		minedLaneValue + "\n      FROM t", minedLaneValue + ",\n           COALESCE(i.parent_lane_positions, t.parent_lane_positions)\n      FROM t",
+		"i.created_at, i.flags, i.lane_position\n", "i.created_at, i.flags, i.lane_position, i.parent_lane_positions\n",
+	}
+
+	identCoinLaneEdits = []string{
+		"RETURNING leaf, txid\n", "RETURNING leaf, txid, lane_position\n",
+		"leaf, flags, ukey, txid, script)\n    SELECT o.satoshis, o.created_height, o.spendable_from, 0, 0,\n           o.leaf, o.flags, o.ukey, o.txid, o.script\n",
+		"leaf, flags, ukey, txid, script, lane_position)\n    SELECT o.satoshis, o.created_height, o.spendable_from, 0, 0,\n           o.leaf, o.flags, o.ukey, o.txid, o.script, c.lane_position\n",
+	}
+
+	minedParentLaneEdits = []string{
+		"created_at, flags, lane_position)\n    SELECT t.txid", "created_at, flags, lane_position, parent_lane_positions)\n    SELECT t.txid",
+		minedLaneValue + "\n      FROM t", minedLaneValue + ",\n           i.parent_lane_positions\n      FROM t",
+		"i.created_at, i.flags, i.lane_position\n", "i.created_at, i.flags, i.lane_position, i.parent_lane_positions\n",
+	}
+
+	minedCoinLaneEdits = []string{
+		"SELECT t.k, t.txid\n      FROM t\n      JOIN mined x", "SELECT t.k, t.txid, t.lane_position\n      FROM t\n      JOIN mined x",
+		"leaf, flags, ukey, txid, script)\n    SELECT o.satoshis, o.created_height, o.spendable_from, o.mined_height, o.block_id,\n           o.leaf, o.flags, o.ukey, o.txid, o.script\n",
+		"leaf, flags, ukey, txid, script, lane_position)\n    SELECT o.satoshis, o.created_height, o.spendable_from, o.mined_height, o.block_id,\n           o.leaf, o.flags, o.ukey, o.txid, o.script, NULLIF(c.lane_position, 0)\n",
+	}
+)
+
+// createLaneForm is the index into createIdentPlanLaneForms and createMinedPlanLaneForms for this
+// database's lane columns.
+func (s *Store) createLaneForm() int {
+	form := 0
+	if s.laneParentColumn {
+		form |= 1
+	}
+
+	if s.laneCoinColumn {
+		form |= 2
+	}
+
+	return form
+}
+
+// addParentLanes records the parents' lane positions of the row appendCreate is adding, encoded as
+// parent_lane_positions stores them, nil for none. Like addLane it allocates nothing until a row
+// has some.
+func (p *createPlan) addParentLanes(encoded []byte) {
+	switch {
+	case p.parentLanes != nil:
+		p.parentLanes = append(p.parentLanes, encoded)
+	case encoded != nil:
+		p.parentLanes = make([][]byte, len(p.txFlags)-1, cap(p.txFlags))
+		p.parentLanes = append(p.parentLanes, encoded)
+	}
+}
+
+// lanesByTxid maps each transaction of the plan that has a lane position to it, in signed form, for
+// the statements that write one row per output; nil when no transaction has one.
+func (p *createPlan) lanesByTxid() map[string]int64 {
+	if p.lanes == nil {
+		return nil
+	}
+
+	m := make(map[string]int64, len(p.txids))
+
+	for k, id := range p.txids {
+		if p.lanes[k] != 0 {
+			m[string(id)] = p.lanes[k]
+		}
+	}
+
+	return m
+}
+
 // addLane records the lane position of the row appendCreate is adding, whose txFlags are already in.
 // Rows before the first position get zeros, which the statements write as NULL.
 func (p *createPlan) addLane(position uint64) {
@@ -559,7 +679,7 @@ func (p *createPlan) subset(idx []int) *createPlan {
 		return p
 	}
 
-	q := &createPlan{perItem: p.perItem, errs: p.errs}
+	q := &createPlan{perItem: p.perItem, errs: p.errs, countLanes: p.countLanes}
 
 	keep := make(map[string]struct{}, len(idx))
 
@@ -577,6 +697,10 @@ func (p *createPlan) subset(idx []int) *createPlan {
 		q.txFlags = append(q.txFlags, p.txFlags[i])
 		if p.lanes != nil {
 			q.lanes = append(q.lanes, p.lanes[i])
+		}
+
+		if p.parentLanes != nil {
+			q.parentLanes = append(q.parentLanes, p.parentLanes[i])
 		}
 
 		q.bodies = append(q.bodies, p.bodies[i])
@@ -712,7 +836,7 @@ func (s *Store) runSeedPlan(ctx context.Context, q querier, p *createPlan) error
 func (s *Store) runIdentPlan(ctx context.Context, q querier, p *createPlan) error {
 	stmt, argCount := createIdentPlanSQL, 26
 	if s.laneColumn {
-		stmt, argCount = createIdentPlanLaneSQL, 27
+		stmt, argCount = createIdentPlanLaneForms[s.createLaneForm()], 28
 	}
 
 	// Sized up front: growing a slice this wide for one more argument costs a whole second array.
@@ -724,6 +848,10 @@ func (s *Store) runIdentPlan(ctx context.Context, q querier, p *createPlan) erro
 		p.utxoUkeys, p.utxoTxids, p.utxoScripts, s.claimFloor(), p.fees)
 	if s.laneColumn {
 		args = append(args, p.lanes)
+	}
+
+	if s.laneParentColumn {
+		args = append(args, p.parentLanes)
 	}
 
 	rows, err := q.Query(ctx, stmt, args...)
@@ -762,7 +890,7 @@ func (s *Store) runMinedPlan(ctx context.Context, q querier, p *createPlan) erro
 
 	stmt, argCount := createMinedPlanSQL, 25
 	if s.laneColumn {
-		stmt, argCount = createMinedPlanLaneSQL, 26
+		stmt, argCount = createMinedPlanLaneForms[s.createLaneForm()], 26
 	}
 
 	args := append(make([]any, 0, argCount),
@@ -878,6 +1006,10 @@ func (p *createPlan) settle(rows pgx.Rows) error {
 		return errors.NewStorageError("[utxoset][Create] rows", err)
 	}
 
+	if p.countLanes {
+		p.countLaneCoverage(claimed)
+	}
+
 	if len(claimed) == len(p.owner) {
 		return nil
 	}
@@ -898,6 +1030,22 @@ func (p *createPlan) settle(rows pgx.Rows) error {
 	}
 
 	return nil
+}
+
+// countLaneCoverage counts the lane position coverage of each record the claim took. A record with
+// inpoints spends parents; one without (a coinbase, or a block-path create, which stores none) is
+// left out of the parents kind. A batch that rolls back after this and runs again counts twice,
+// which the coverage share tolerates.
+func (p *createPlan) countLaneCoverage(claimed map[int32]struct{}) {
+	for k := range p.owner {
+		if _, ok := claimed[int32(k)]; !ok { //nolint:gosec // bounded by batch size
+			continue
+		}
+
+		own := p.lanes != nil && p.lanes[k] != 0
+		parents := p.parentLanes != nil && p.parentLanes[k] != nil
+		utxo.CountLaneRecord(laneStoreName, own, p.inpoints[k] != nil, parents)
+	}
 }
 
 // lockTxids takes a transaction-scoped advisory lock per transaction id, in sorted order.
@@ -970,6 +1118,10 @@ func newCreateBatcher(s *Store, size int, duration time.Duration, drainMode, gre
 
 	return b
 }
+
+// createBatchBeforeCommit is a test hook called just before a create batch commits. An error from it
+// fails the batch, which rolls back. nil in production.
+var createBatchBeforeCommit func() error
 
 // sendCreateBatch flushes a batch of Creates as one statement.
 func (s *Store) sendCreateBatch(batch []*createItem) {
@@ -1067,17 +1219,24 @@ func (s *Store) sendCreateBatch(batch []*createItem) {
 	}()
 
 	if err := s.lockTxids(ctx, dbTx, plan.txids); err != nil {
-		s.failBatch(batch, err)
+		s.failBatchWith(batch, err, utxo.LaneBurnRolledBack)
 		return
 	}
 
 	if err := s.runCreatePlan(ctx, dbTx, plan); err != nil {
-		s.failBatch(batch, err)
+		s.failBatchWith(batch, err, utxo.LaneBurnRolledBack)
 		return
 	}
 
-	if err := dbTx.Commit(ctx); err != nil {
-		s.failBatch(batch, errors.NewStorageError("[utxoset][Create] commit", err))
+	if createBatchBeforeCommit != nil {
+		if err := createBatchBeforeCommit(); err != nil {
+			s.failBatchWith(batch, err, utxo.LaneBurnRolledBack)
+			return
+		}
+	}
+
+	if err := commitCreates(ctx, dbTx); err != nil {
+		s.failBatchWith(batch, errors.NewStorageError("[utxoset][Create] commit", err), utxo.LaneBurnOutcomeUnknown)
 		return
 	}
 
@@ -1093,5 +1252,13 @@ func (s *Store) sendCreateBatch(batch []*createItem) {
 func (s *Store) failBatch(items []*createItem, err error) {
 	for _, item := range items {
 		item.done <- createResult{err: err}
+	}
+}
+
+// failBatchWith is failBatch for a batch whose database transaction was open, with the reason its
+// items' lane positions burned.
+func (s *Store) failBatchWith(items []*createItem, err error, burnReason string) {
+	for _, item := range items {
+		item.done <- createResult{err: err, burnReason: burnReason}
 	}
 }

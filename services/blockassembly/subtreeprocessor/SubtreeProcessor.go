@@ -8260,6 +8260,7 @@ func (stp *SubtreeProcessor) processCoinbaseUtxos(ctx context.Context, block *mo
 				BlockHeight: blockHeight,
 				SubtreeIdx:  0, // Coinbase is always the first transaction in the first subtree
 			}),
+		utxostore.WithCaller(utxostore.CallerBlockAssembly),
 	); err != nil {
 		if errors.Is(err, errors.ErrTxExists) {
 			// This will also be called for the 2 coinbase transactions that are duplicated on the network

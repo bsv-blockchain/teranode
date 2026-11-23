@@ -220,6 +220,12 @@ type netBelowTx struct {
 	tx    *bt.Tx
 	txid  chainhash.Hash
 	ident bool
+	// burn says why the transaction's lane position burned once its chunk failed: outcome_unknown,
+	// set before the chunk sends its COMMIT, since a failure from then on may have landed, or
+	// rolled_back for one that failed before. A byte in ident's padding,
+	// so the struct does not grow. Each chunk writes only its own transactions', and they are read
+	// after every chunk ends.
+	burn listBurn
 	// netted[vin] is true when input vin spends an output of an earlier transaction of the
 	// list. nil when none does.
 	netted []bool
@@ -231,6 +237,27 @@ type netBelowTx struct {
 func (s *Store) netBelow(ctx context.Context, txs []*bt.Tx, list *utxo.SpendAndCreateMultiList,
 	blockHeight uint32, positions []uint64) ([]utxo.SpendAndCreateMultiResult, error) {
 	mi, _ := minedBlock(list.Options.MinedBlockInfos)
+
+	// Every position taken for the list that no record carries burns, whichever way the list
+	// ends. A failure before the items exist burns them all; after, the chunks that committed
+	// gave their transactions results even when the list as a whole failed.
+	var items []*netBelowTx
+
+	defer func() {
+		var outcome func(int) (utxo.SpendAndCreateMultiResult, string)
+
+		if items != nil {
+			outcome = func(i int) (utxo.SpendAndCreateMultiResult, string) {
+				if items[i] == nil {
+					return utxo.SpendAndCreateMultiResult{}, ""
+				}
+
+				return items[i].result, items[i].burn.String()
+			}
+		}
+
+		s.burnList(list, positions, utxo.LaneBurnListFailed, outcome)
+	}()
 
 	for i, tx := range txs {
 		if tx.IsCoinbase() {
@@ -248,7 +275,7 @@ func (s *Store) netBelow(ctx context.Context, txs []*bt.Tx, list *utxo.SpendAndC
 		position[list.TxIDs[i]] = i
 	}
 
-	items := make([]*netBelowTx, len(txs))
+	items = make([]*netBelowTx, len(txs))
 	spender := make(map[nettedKey]nettedSpender)
 
 	for i, tx := range txs {
@@ -295,10 +322,37 @@ func (s *Store) netBelow(ctx context.Context, txs []*bt.Tx, list *utxo.SpendAndC
 	g.SetLimit(workers)
 
 	for _, chunk := range netBelowChunks(items, size, nettedBelowMaxChunkOutputs) {
-		g.Go(func() error { return s.netBelowChunk(gCtx, chunk, list, blockHeight, spender, positions) })
+		g.Go(func() error {
+			// A chunk admitted after a sibling failed never starts: it would fail at its begin
+			// anyway, and left untouched its positions count as list_failed, not rolled_back.
+			if err := gCtx.Err(); err != nil {
+				return err
+			}
+
+			// A transaction with no reason yet failed before its chunk sent the COMMIT (see
+			// netBelowChunk), so nothing of it was written.
+			err := s.netBelowChunk(gCtx, chunk, list, blockHeight, spender, positions)
+			if err != nil {
+				for _, it := range chunk {
+					if it.burn == listBurnNone {
+						it.burn = listBurnRolledBack
+					}
+				}
+			}
+
+			return err
+		})
 	}
 
-	if err := g.Wait(); err != nil {
+	err = g.Wait()
+
+	// A transaction its chunk rolled back whole before sending the COMMIT wrote nothing, so its
+	// position also goes back once every chunk has ended. The deferred burnList counts it as burned.
+	s.returnRolledBackList(positions, func(i int) bool {
+		return items[i].burn == listBurnRolledBack && items[i].result.Status == utxo.MultiTxNotAttempted
+	})
+
+	if err != nil {
 		return nil, err
 	}
 
@@ -410,6 +464,18 @@ INSERT INTO utxo (satoshis, created_height, spendable_from, mined_height, block_
 SELECT * FROM unnest($1::bigint[], $2::int[], $3::int[], $4::int[], $5::int[],
                      $6::smallint[], $7::smallint[], $8::uuid[], $9::bytea[], $10::bytea[])`
 
+// nettedCoinsLaneSQL is nettedCoinsSQL with each coin's lane position, the creating transaction's,
+// for a database with lane_position on utxo (Store.laneCoinColumn).
+const nettedCoinsLaneSQL = `
+INSERT INTO utxo (satoshis, created_height, spendable_from, mined_height, block_id,
+                  leaf, flags, ukey, txid, script, lane_position)
+SELECT o.satoshis, o.created_height, o.spendable_from, o.mined_height, o.block_id,
+       o.leaf, o.flags, o.ukey, o.txid, o.script, NULLIF(o.lane_position, 0)
+  FROM unnest($1::bigint[], $2::int[], $3::int[], $4::int[], $5::int[],
+              $6::smallint[], $7::smallint[], $8::uuid[], $9::bytea[], $10::bytea[], $11::bigint[])
+    AS o(satoshis, created_height, spendable_from, mined_height, block_id, leaf, flags, ukey, txid,
+         script, lane_position)`
+
 // nettedBodiesSQL writes the bodies the plan carries, which is none below the checkpoint when
 // utxostore_skipTxBodyBelowCheckpoint is on.
 const nettedBodiesSQL = `
@@ -509,7 +575,14 @@ func (s *Store) netBelowChunk(ctx context.Context, chunk []*netBelowTx, list *ut
 		return err
 	}
 
-	if err = dbTx.Commit(ctx); err != nil {
+	// Marked before the COMMIT is sent: from then on a failure may have landed, so the chunk's
+	// positions must not count as rolled_back, which would send them back. A chunk that commits
+	// gives every transaction a result, which burnList reads first.
+	for _, it := range chunk {
+		it.burn = listBurnOutcomeUnknown
+	}
+
+	if err = commitCreates(ctx, dbTx); err != nil {
 		return errors.NewStorageError("[utxoset][SpendAndCreateMulti] commit netted chunk", err)
 	}
 
@@ -626,6 +699,16 @@ func (s *Store) netBelowClaim(ctx context.Context, dbTx pgx.Tx, p *createPlan) (
 
 	if err := rows.Err(); err != nil {
 		return nil, errors.NewStorageError("[utxoset][SpendAndCreateMulti] claim rows", err)
+	}
+
+	// The netted claim writes no inpoints, so its records are counted for their own position only,
+	// as the block-path claim's are. A chunk that rolls back and runs again counts twice.
+	if s.laneShadow {
+		for k, id := range p.txids {
+			if claimed[string(id)] {
+				utxo.CountLaneRecord(laneStoreName, p.lanes != nil && p.lanes[k] != 0, false, false)
+			}
+		}
 	}
 
 	return claimed, nil
@@ -775,12 +858,32 @@ func (s *Store) netBelowCoins(ctx context.Context, dbTx pgx.Tx, p *createPlan, c
 		// In batches of nettedCoinsBatchRows rows and nettedCoinsBatchBytes bytes, in the sorted
 		// sequence: the driver builds each statement in memory, several times the size of its
 		// rows, and Postgres refuses a message of 1 GB or more.
+		// Each coin's lane position, the creating transaction's, when the database has the column
+		// and a transaction of the plan has one.
+		var coinLanes []int64
+
+		if lanes := p.lanesByTxid(); s.laneCoinColumn && lanes != nil {
+			coinLanes = make([]int64, len(p.utxoTxids))
+			for c, id := range p.utxoTxids {
+				coinLanes[c] = lanes[string(id)]
+			}
+		}
+
 		for _, batch := range coinBatches(rows, p.utxoScripts, nettedCoinsBatchRows, nettedCoinsBatchBytes) {
-			if _, err := dbTx.Exec(ctx, nettedCoinsSQL,
+			stmt := nettedCoinsSQL
+			args := []any{
 				permute(p.utxoSats, batch), permute(p.utxoHeights, batch), permute(p.utxoSpendable, batch),
 				permute(p.utxoMined, batch), permute(p.utxoBlockIDs, batch), permute(p.utxoLeaves, batch),
 				permute(p.utxoFlags, batch), permute(p.utxoUkeys, batch), permute(p.utxoTxids, batch),
-				permute(p.utxoScripts, batch)); err != nil {
+				permute(p.utxoScripts, batch),
+			}
+
+			if coinLanes != nil {
+				stmt = nettedCoinsLaneSQL
+				args = append(args, permute(coinLanes, batch))
+			}
+
+			if _, err := dbTx.Exec(ctx, stmt, args...); err != nil {
 				return errors.NewStorageError("[utxoset][SpendAndCreateMulti] coins of netted chunk", err)
 			}
 		}
