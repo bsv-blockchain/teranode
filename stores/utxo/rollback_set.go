@@ -66,8 +66,11 @@ func IsHistoricalSpend(recordedHeight uint32, recorded bool, incomingHeight, ret
 // ago or an earlier failed attempt at this very call did. The recorded spend
 // height settles most cases. A match at least HistoricalSpendAge blocks older
 // than the incoming spend is history (IsHistoricalSpend). The stores never pass such a match in
-// idempotent, so a rollback never reverses it: reversing a confirmed spend
-// would hand a confirmed output to the next spender.
+// idempotent, so Spend's own rollback never reverses it: reversing a confirmed
+// spend would hand a confirmed output to the next spender. Spend still returns
+// such a match among its successful inputs, and SequentialSpendAndCreate
+// unspends every returned input when Create then fails with an error other than
+// ErrTxExists or an unknown outcome, historical matches included.
 //
 // A young match is reversible, and reversing it is what keeps the store
 // self-healing. The store leaves partial spends committed when a call fails on
