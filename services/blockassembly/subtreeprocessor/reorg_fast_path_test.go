@@ -84,6 +84,15 @@ type fastPathRun struct {
 	reasons []string
 }
 
+// slowReference is the slow path whatever blockassembly_reorgFastPath the environment sets.
+func slowReference(t testing.TB, sc *reorgScenario) error {
+	t.Helper()
+
+	sc.stp.settings.BlockAssembly.ReorgFastPath = false
+
+	return sc.run(t)
+}
+
 // fastReorgPath is the fast path: the scenario's processor with the setting on, run through reorgBlocks.
 func fastReorgPath(t testing.TB, sc *reorgScenario) error {
 	t.Helper()
@@ -141,7 +150,7 @@ func requireFastPathMatchesSlow(t *testing.T, cfg reorgScenarioConfig, divergenc
 
 	var rec fastPathRun
 
-	requireReorgEquivalent(t, cfg, slowReorgPath, recordingFastPath(&rec), divergences...)
+	requireReorgEquivalent(t, cfg, slowReference, recordingFastPath(&rec), divergences...)
 	require.True(t, rec.applied, "the fast path must apply, it declined: %v", rec.reasons)
 	require.Empty(t, rec.reasons)
 }
@@ -153,7 +162,7 @@ func requireFastPathDeclines(t *testing.T, cfg reorgScenarioConfig, reason strin
 
 	var rec fastPathRun
 
-	requireReorgEquivalent(t, cfg, slowReorgPath, recordingFastPath(&rec))
+	requireReorgEquivalent(t, cfg, slowReference, recordingFastPath(&rec))
 	require.False(t, rec.applied, "the fast path must decline")
 	require.Equal(t, []string{reason}, rec.reasons)
 }
@@ -166,7 +175,7 @@ func requireDeclinedLikeSlow(t *testing.T, cfg reorgScenarioConfig, setup func(s
 
 	slow := newReorgScenario(t, cfg)
 	setup(slow)
-	slowErr := slow.run(t)
+	slowErr := slowReference(t, slow)
 
 	fast := newReorgScenario(t, cfg)
 	setup(fast)
@@ -226,7 +235,7 @@ func TestReorgScenario_FastPathOffDoesNotRun(t *testing.T) {
 	before := readFastPathCounts()
 
 	sc := newReorgScenario(t, smallScenarioConfig())
-	require.NoError(t, sc.run(t))
+	require.NoError(t, slowReference(t, sc))
 
 	after := readFastPathCounts()
 	require.Equal(t, before.applied, after.applied)
@@ -541,7 +550,7 @@ func TestReorgDifferential_FastPathUnionFilteredFinalDrain(t *testing.T) {
 	slowWithArrival := func(t testing.TB, sc *reorgScenario) error {
 		prepare(sc)
 		fired := beforeForwardBlockOn(sc.stp, sc.forward[0].Header, inject(sc))
-		err := sc.run(t)
+		err := slowReference(t, sc)
 		require.True(t, *fired)
 
 		return err
