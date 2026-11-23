@@ -69,7 +69,28 @@ func buildBenchIndex(b *testing.B, takes func(laneNum uint8, block uint32) *roar
 
 	rand.New(rand.NewPCG(1, 2)).Shuffle(len(lookups), func(i, j int) { lookups[i], lookups[j] = lookups[j], lookups[i] })
 
+	// The lookups mix answers from a row, from the floor and none, reported as shares.
+	var byRow, byFloor, misses float64
+
+	v := idx.Snapshot().Main()
+
+	for _, pos := range lookups {
+		switch v.Lookup(pos).Via {
+		case ViaRow:
+			byRow++
+		case ViaFloor:
+			byFloor++
+		default:
+			misses++
+		}
+	}
+
+	n := float64(len(lookups))
+
 	return &benchIndex{idx: idx, lookups: lookups, heapUnit: "heap-MB", heapDivisor: 1, metrics: map[string]float64{
+		"%row":     100 * byRow / n,
+		"%floor":   100 * byFloor / n,
+		"%miss":    100 * misses / n,
 		"index-MB": float64(stats.Bytes) / (1 << 20),
 		"rows":     float64(stats.Rows),
 		"listed":   float64(stats.Listed),
@@ -122,7 +143,8 @@ func (bi *benchIndex) run(b *testing.B) {
 // mainnetShape is a mainnet backlog: a lane creates perBlock positions a block, and each position
 // is taken by one block within spread blocks of its creation, chosen at random, so a block's row
 // spans spread blocks of positions with the rest of them holes and about spread rows overlap at
-// any position. Block 973,667 took 3.5 million transactions created over a day; at 17 lanes that
+// any position. One position in 20 is never taken, a transaction never mined, so a lookup of it
+// tests every overlapping row and finds none. Block 973,667 took 3.5 million transactions created over a day; at 17 lanes that
 // is about 1,430 positions per lane per block, and nine rows overlap typically, 30 at worst.
 func mainnetShape(perBlock uint64, spread uint32) (func(uint8, uint32) *roaring64.Bitmap, func(uint8) []uint64) {
 	taken := make([]map[uint32]*roaring64.Bitmap, benchLanes)
@@ -134,6 +156,10 @@ func mainnetShape(perBlock uint64, spread uint32) (func(uint8, uint32) *roaring6
 		for created := uint32(1); created <= benchBlocks; created++ {
 			for i := uint64(0); i < perBlock; i++ {
 				p := uint64(created-1)*perBlock + i + 1
+
+				if rng.IntN(20) == 0 {
+					continue
+				}
 
 				blk := min(created+uint32(rng.IntN(int(spread))), benchBlocks)
 				if taken[l][blk] == nil {

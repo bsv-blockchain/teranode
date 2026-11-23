@@ -662,7 +662,9 @@ func (u *Server) blessMissing(ctx context.Context, blockHash chainhash.Hash, sub
 		// A record that already existed and names a mined block, the case the check below can
 		// reject, comes back without its position; read it now, and keep it on txMeta so the read
 		// where the transaction goes into the subtree's metadata is not repeated when the record
-		// has one. A record with no mined block needs no position here, so nothing is read.
+		// has one. A record with no mined block needs no position for the check, so nothing is
+		// read, and such a record that came back without its position counts no_position even
+		// though the store holds one.
 		if len(txMeta.BlockIDs) > 0 {
 			u.fillLanePosition(ctx, tx.TxIDChainHash(), txMeta)
 		}

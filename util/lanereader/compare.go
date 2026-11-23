@@ -204,8 +204,12 @@ func classifyBlocks(v *lane.ChainView, a lane.Answer, todayBlockIDs []uint32) st
 	s := v.Snapshot()
 
 	var (
-		onChain       []uint32
+		onChain []uint32
+		// unknown is a block today names that may be on the chain: one the index never loaded,
+		// or a known one the view cannot place. foldedOutside is the second kind for a folded
+		// block the floor's claims cover.
 		unknown       bool
+		foldedOutside bool
 		lowestOnChain uint32 = ^uint32(0)
 	)
 
@@ -224,7 +228,11 @@ func classifyBlocks(v *lane.ChainView, a lane.Answer, todayBlockIDs []uint32) st
 			// when the block is folded and so may be older than the window. The windows callers
 			// give (blockchain retention times two, 576 blocks by default) are deeper than the
 			// settle depth, so an unfolded block missing from one is off the chain: a fork.
-			unknown = unknown || v.Disconnected() || (v.IDSet() && s.Folded(id))
+			if v.IDSet() && s.Folded(id) {
+				unknown, foldedOutside = true, true
+			}
+
+			unknown = unknown || v.Disconnected()
 
 			continue
 		}
@@ -263,11 +271,13 @@ func classifyBlocks(v *lane.ChainView, a lane.Answer, todayBlockIDs []uint32) st
 
 		return KindTodayOnly
 	case unknown:
-		// Today names a block the index never loaded: older than its start, or forgotten.
-		switch a.Via {
-		case lane.ViaFloor:
+		// Today names a block the index cannot place on the chain. A floor answer agrees only with
+		// a folded block the index knows, outside the caller's window of IDs: a block it never
+		// loaded may be an orphan, so the floor's settled block need not be the one today names.
+		switch {
+		case a.Via == lane.ViaFloor && foldedOutside:
 			return KindAgree
-		case lane.ViaRow:
+		case a.Via == lane.ViaRow:
 			return KindDifferentBlock
 		}
 
@@ -377,9 +387,11 @@ func (d *disagreementLog) log(r *Reader, reader, kind string, hash chainhash.Has
 	}
 
 	gate := g.(*logGate)
-	n := gate.seen.Add(1)
 
-	if n > disagreementsLogged {
+	// Past the first few, a disagreement inside the minute only reads the gate, so a run of them
+	// from many goroutines shares the cache line without writing it. seen counts the lines
+	// written; the totals are in teranode_lane_reader_answers_total.
+	if gate.seen.Load() >= disagreementsLogged {
 		now := time.Now().UnixNano()
 		last := gate.last.Load()
 
@@ -390,17 +402,19 @@ func (d *disagreementLog) log(r *Reader, reader, kind string, hash chainhash.Has
 		gate.last.Store(time.Now().UnixNano())
 	}
 
+	n := gate.seen.Add(1)
+
 	laneNum, p := lane.Unpack(pos)
 
 	switch todayForm {
 	case "height":
-		r.logger.Warnf("[lanereader] %s %s (%d so far): tx %s lane %d position %d: lanes mined=%t via %s block %d height %d; today mined=%t height %d; index tip %d anchor %d start %d",
+		r.logger.Warnf("[lanereader] %s %s (log line %d): tx %s lane %d position %d: lanes mined=%t via %s block %d height %d; today mined=%t height %d; index tip %d anchor %d start %d",
 			reader, kind, n, hash.String(), laneNum, p, a.Mined, a.Via, a.BlockID, a.Height, todayMined, todayValue, s.TipHeight(), s.AnchorHeight(), s.StartHeight())
 	case "duplicate":
-		r.logger.Warnf("[lanereader] %s %s (%d so far): block %s (ID %d): lanes counts %d positions taken before it; today duplicate=%t; index tip %d anchor %d start %d",
+		r.logger.Warnf("[lanereader] %s %s (log line %d): block %s (ID %d): lanes counts %d positions taken before it; today duplicate=%t; index tip %d anchor %d start %d",
 			reader, kind, n, hash.String(), a.BlockID, todayValue, todayMined, s.TipHeight(), s.AnchorHeight(), s.StartHeight())
 	default:
-		r.logger.Warnf("[lanereader] %s %s (%d so far): tx %s lane %d position %d: lanes mined=%t via %s block %d height %d; today block IDs %v; index tip %d anchor %d start %d",
+		r.logger.Warnf("[lanereader] %s %s (log line %d): tx %s lane %d position %d: lanes mined=%t via %s block %d height %d; today block IDs %v; index tip %d anchor %d start %d",
 			reader, kind, n, hash.String(), laneNum, p, a.Mined, a.Via, a.BlockID, a.Height, todayBlockIDs, s.TipHeight(), s.AnchorHeight(), s.StartHeight())
 	}
 }

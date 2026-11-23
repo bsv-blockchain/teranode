@@ -1064,3 +1064,54 @@ func TestReaderDoesNotCountANewBlockAboveTheTipAsOffChain(t *testing.T) {
 		r.CompareHeight(ReaderValidator, chainhash.Hash{}, lane.Pack(4, 5), true, b2.height)
 	})
 }
+
+// gatedHeaders holds every header read until release is closed.
+type gatedHeaders struct {
+	Source
+	release chan struct{}
+}
+
+func (g *gatedHeaders) GetBlockHeaders(ctx context.Context, h *chainhash.Hash, n uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
+	<-g.release
+
+	return g.Source.GetBlockHeaders(ctx, h, n)
+}
+
+// While a block's chain loads, its parents are held up to maxPendingParents; one more counts
+// not_ready at once, and the held ones are each answered once the chain is in.
+func TestBlockParentsHoldsUpToItsCapWhileTheChainLoads(t *testing.T) {
+	store := newStore(t, "sqlite")
+	c := newChain(t, store)
+
+	b1 := c.add(nil)
+
+	source := &gatedHeaders{Source: store, release: make(chan struct{})}
+	close(source.release)
+
+	r := newReader(ulogger.TestLogger{}, source, 100)
+	follow(t, r)
+
+	b2 := c.add(b1, takes(t, 8, 9))
+	source.release = make(chan struct{})
+
+	notReady := answers(ReaderBlockParent, KindNotReady, lane.ViaNone)
+	agree := answers(ReaderBlockParent, KindAgree, lane.ViaRow)
+
+	bp := r.BlockParents(context.Background(), b2.hash)
+
+	for i := 0; i <= maxPendingParents; i++ {
+		bp.ObserveParent(chainhash.Hash{2}, lane.Pack(8, 9), []uint32{b2.id})
+	}
+
+	require.Equal(t, notReady+1, answers(ReaderBlockParent, KindNotReady, lane.ViaNone), "one past the cap counts not_ready")
+	require.Equal(t, agree, answers(ReaderBlockParent, KindAgree, lane.ViaRow), "the held ones wait for the chain")
+
+	close(source.release)
+
+	require.Eventually(t, func() bool {
+		return answers(ReaderBlockParent, KindAgree, lane.ViaRow) == agree+maxPendingParents
+	}, 10*time.Second, 10*time.Millisecond)
+
+	time.Sleep(50 * time.Millisecond)
+	require.Equal(t, agree+maxPendingParents, answers(ReaderBlockParent, KindAgree, lane.ViaRow), "each held parent answered once")
+}

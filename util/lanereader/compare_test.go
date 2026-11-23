@@ -84,7 +84,24 @@ func BenchmarkCompareHeightParallel(b *testing.B) {
 
 	for i := range probes {
 		pos := lane.Pack(uint8(rng.IntN(lanes)), uint64(rng.IntN(perBlock*blocks))+1) //nolint:gosec // lanes fits a byte
-		probes[i] = probe{pos: pos, height: v.Lookup(pos).Height}
+		a := v.Lookup(pos)
+
+		height := a.Height
+		if a.Via == lane.ViaFloor {
+			height = 1 // any height at or below the anchor agrees with a floor answer
+		}
+
+		probes[i] = probe{pos: pos, height: height}
+	}
+
+	// Every probe agrees at its height and disagrees at the tip's height plus one, above every
+	// row's block and the anchor.
+	s := r.Snapshot()
+	disagreeHeight := s.TipHeight() + 1
+
+	for _, p := range probes[:1_000] {
+		require.Equal(b, KindAgree, classifyHeight(s, p.pos, v.Lookup(p.pos), true, p.height))
+		require.Equal(b, KindDifferentBlock, classifyHeight(s, p.pos, v.Lookup(p.pos), true, disagreeHeight))
 	}
 
 	for _, agree := range []bool{true, false} {
@@ -102,7 +119,7 @@ func BenchmarkCompareHeightParallel(b *testing.B) {
 
 					height := p.height
 					if !agree {
-						height = p.height + 1
+						height = disagreeHeight
 					}
 
 					r.CompareHeight(ReaderValidator, chainhash.Hash{}, p.pos, true, height)
@@ -177,7 +194,33 @@ func TestLookupTimesASampleOfLookups(t *testing.T) {
 		r.lookup(r.MainView(), lane.Pack(1, 1))
 	}
 
+	// One in 64: about 200 of 12,800, the rate the hot path's cost was measured at.
+	require.Equal(t, 64, lookupSampleEvery)
+
 	got := timed() - before
-	require.Greater(t, got, uint64(lookups/lookupSampleEvery/4), "some lookups are timed")
-	require.Less(t, got, uint64(lookups/lookupSampleEvery*4), "only a sample is timed")
+	require.Greater(t, got, uint64(100), "some lookups are timed")
+	require.Less(t, got, uint64(400), "only about one in 64 is timed")
+}
+
+// A floor answer does not agree with a block the index never loaded: that block may be an orphan,
+// and the floor's settled block need not be the one today names.
+func TestFloorAnswerDoesNotAgreeWithAnUnloadedBlock(t *testing.T) {
+	r := newReader(ulogger.TestLogger{}, nil, 2)
+	idx := lane.NewIndex(2)
+
+	rows, err := lane.BuildMapRows(2, roaring64.BitmapOf(7))
+	require.NoError(t, err)
+	require.NoError(t, idx.AddBlock(lane.IndexBlock{ID: 1, Height: 1, Hash: benchBlockHash(1)}, rows))
+
+	for h := uint32(2); h <= 4; h++ {
+		require.NoError(t, idx.AddBlock(lane.IndexBlock{ID: h, Height: h, Hash: benchBlockHash(h), Parent: benchBlockHash(h - 1)}, nil))
+	}
+
+	require.NoError(t, idx.SetTip(benchBlockHash(4)))
+	r.idx.Store(idx)
+	require.Equal(t, lane.ViaFloor, r.MainView().Lookup(lane.Pack(2, 7)).Via)
+
+	requireCounted(t, ReaderBlockParent, KindNotLoaded, lane.ViaFloor, func() {
+		r.CompareBlocks(ReaderBlockParent, r.MainView(), chainhash.Hash{}, lane.Pack(2, 7), []uint32{999})
+	})
 }
