@@ -380,6 +380,54 @@ func TestSpend_MixedEpochProbesInOneRecordTripOnInfrastructureError(t *testing.T
 	}
 }
 
+func TestSpendExpressions_CurrentProbeFailureTripsBeforeBatchSuccessCloses(t *testing.T) {
+	s := newSpendBreakerTestStore(t, true)
+	cb := newCircuitBreaker(2, 2, time.Hour)
+	s.spendCircuitBreaker = cb
+	cb.RecordFailure(breakerSlot{})
+	cb.RecordFailure(breakerSlot{})
+	expireCooldown(cb)
+
+	_, carried := cb.Admit()
+	_, hanging := cb.Admit()
+	cb.RecordSuccess(carried)
+	cb.mu.Lock()
+	cb.nextAttempt = time.Now().Add(-2 * time.Hour)
+	cb.mu.Unlock()
+
+	batch, group := competingSpendBatch(distinctParents(2)...)
+	admitProbes(t, cb, batch)
+	require.NotEqual(t, hanging.epoch, batch[0].breakerSlot.epoch)
+	require.Equal(t, 1, cb.consecutiveSuccess)
+
+	s.batchOperateFn = func(_ *aerospike.BatchPolicy, records []aerospike.BatchRecordIfc) aerospike.Error {
+		require.Len(t, records, 2)
+		records[1].BatchRec().Err = &aerospike.AerospikeError{ResultCode: types.TIMEOUT}
+		return nil
+	}
+
+	s.sendSpendBatchLua(batch)
+	requireGroupCompleted(t, group, time.Second)
+	require.Equal(t, cbStateOpen, cb.state, "a current probe failure must trip before its batch's success can close")
+}
+
+func TestSpendExpressions_ClosedMixedBatchStillCountsFailure(t *testing.T) {
+	s := newSpendBreakerTestStore(t, true)
+	cb := newCircuitBreaker(2, 1, time.Hour)
+	s.spendCircuitBreaker = cb
+	batch, group := competingSpendBatch(distinctParents(2)...)
+	s.batchOperateFn = func(_ *aerospike.BatchPolicy, records []aerospike.BatchRecordIfc) aerospike.Error {
+		require.Len(t, records, 2)
+		records[1].BatchRec().Err = &aerospike.AerospikeError{ResultCode: types.TIMEOUT}
+		return nil
+	}
+
+	s.sendSpendBatchLua(batch)
+	requireGroupCompleted(t, group, time.Second)
+	require.Equal(t, cbStateClosed, cb.state)
+	require.Equal(t, 1, cb.consecutiveFailures, "a mixed closed-state batch still records its infrastructure failure")
+}
+
 func pathName(expressions bool) string {
 	if expressions {
 		return "expressions"

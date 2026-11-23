@@ -507,15 +507,27 @@ func (s *Store) processSpendBatchResultsExpressions(
 	// infraErrCount — issue #953. A data-state answer still proves the server
 	// answered, so a probe among those items counts as a success, and a probe
 	// with no usable answer gives its slot back.
-	if okCount > 0 {
+	if infraErrCount > 0 {
+		// A closed-admission success resets earlier failures, but the failure
+		// in this batch must remain counted. Probe successes must wait until
+		// after the failure, or carried successes could close half-open first.
+		for _, slot := range successSlots {
+			if !slot.taken {
+				s.spendCircuitBreaker.RecordSuccess(slot)
+				break
+			}
+		}
+		s.spendCircuitBreaker.RecordBatchFailure(failureSlots)
+		for _, slot := range successSlots {
+			if slot.taken {
+				s.spendCircuitBreaker.RecordSuccess(slot)
+			}
+		}
+	} else if okCount > 0 {
 		s.recordSpendSuccess(successSlots)
 	}
 
 	s.recordServerAnswer(answerSlots)
-
-	if infraErrCount > 0 {
-		s.spendCircuitBreaker.RecordBatchFailure(failureSlots)
-	}
 
 	s.releaseSlots(releasedSlots)
 
