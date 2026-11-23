@@ -114,11 +114,9 @@ type BlockAssembly struct {
 	// jobStore caches mining jobs with TTL
 	jobStore *ttlcache.Cache[chainhash.Hash, *subtreeprocessor.Job]
 
-	// storing holds the subtrees whose storage has not finished, with how many stores of each
-	// are running. Their completion callback reads the nodes after both writes are done, so
-	// retirement must not unmap them before then.
-	storingMu sync.Mutex
-	storing   map[*subtreepkg.Subtree]int
+	// readerPins keeps the subtrees a candidate being built, or a request using a job, reads
+	// from being unmapped: the job store only covers a job while it is in the store.
+	readerPins subtreeprocessor.SubtreePins
 
 	// jobCoinbaseMu makes GetMiningCandidate's read of a job's coinbase and its store of the new
 	// job one step, so two polls that share a candidate id cannot each build a coinbase and leave
@@ -647,6 +645,8 @@ func (ba *BlockAssembly) runNewSubtreeListener(ctx context.Context, newSubtreeCh
 			select {
 			case workChan <- work:
 			case <-ctx.Done():
+				newSubtreeRequest.Done()
+
 				return
 			}
 		}
@@ -658,6 +658,8 @@ func (ba *BlockAssembly) subtreeStorageWorker(ctx context.Context, workChan <-ch
 	for work := range workChan {
 		select {
 		case <-ctx.Done():
+			work.request.Done()
+
 			return
 		default:
 		}
@@ -692,6 +694,8 @@ func (ba *BlockAssembly) subtreeStorageWorker(ctx context.Context, workChan <-ch
 		select {
 		case resultChan <- result:
 		case <-ctx.Done():
+			work.request.Done()
+
 			return
 		}
 
@@ -699,6 +703,9 @@ func (ba *BlockAssembly) subtreeStorageWorker(ctx context.Context, workChan <-ch
 		if allDone != nil {
 			<-allDone
 		}
+
+		// The callback has run, or storeSubtreeData returned early: nothing reads the subtree now
+		work.request.Done()
 
 		// Send error back to caller if channel exists.
 		sendCallerErr(ctx, work.request.ErrChan, result.err)
@@ -991,43 +998,42 @@ func (ba *BlockAssembly) buildSubtreeMeta(subtreeRequest subtreeprocessor.NewSub
 
 // retainedSubtrees lists the subtrees the subtree processor must not unmap yet: those of
 // every cached mining job, which SubmitMiningSolution and GetCandidateBlock read for as long
-// as the job lives, and those whose storage callback has not run. It reads the live jobs, so
-// there is no count to leak when a job expires, is replaced or is deleted. Items() neither
-// extends a job's TTL nor returns an expired job.
+// as the job lives, and those a request still reads after its job left the store or before
+// it was stored (readerPins). It reads the live jobs, so there is no count to leak when a job
+// expires, is replaced or is deleted. Items() neither extends a job's TTL nor returns an
+// expired job. Jobs built from the same snapshot share one backing array, which is listed once.
 func (ba *BlockAssembly) retainedSubtrees() []*subtreepkg.Subtree {
-	var retained []*subtreepkg.Subtree
+	retained := ba.readerPins.Pinned()
+	listed := make(map[**subtreepkg.Subtree]int)
 
 	for _, item := range ba.jobStore.Items() {
-		retained = append(retained, item.Value().Subtrees...)
-	}
+		subtrees := item.Value().Subtrees
+		if len(subtrees) == 0 || listed[&subtrees[0]] >= len(subtrees) {
+			continue
+		}
 
-	ba.storingMu.Lock()
-	defer ba.storingMu.Unlock()
-
-	for st := range ba.storing {
-		retained = append(retained, st)
+		listed[&subtrees[0]] = len(subtrees)
+		retained = append(retained, subtrees...)
 	}
 
 	return retained
 }
 
-// markStoring keeps st mapped until the returned function is called.
-func (ba *BlockAssembly) markStoring(st *subtreepkg.Subtree) func() {
-	ba.storingMu.Lock()
-	defer ba.storingMu.Unlock()
+// holdJob returns the job stored under id with its subtrees pinned in hold, or nil when there is
+// none. The job is looked up again after the pin: a job still in the store then was in it at
+// every close since the first lookup, so its subtrees were retained until the pin existed.
+func (ba *BlockAssembly) holdJob(hold *subtreeprocessor.SubtreeHold, id chainhash.Hash) *subtreeprocessor.Job {
+	for {
+		item := ba.jobStore.Get(id)
+		if item == nil {
+			return nil
+		}
 
-	if ba.storing == nil {
-		ba.storing = make(map[*subtreepkg.Subtree]int)
-	}
+		job := item.Value()
+		hold.Pin(job.Subtrees...)
 
-	ba.storing[st]++
-
-	return func() {
-		ba.storingMu.Lock()
-		defer ba.storingMu.Unlock()
-
-		if ba.storing[st]--; ba.storing[st] == 0 {
-			delete(ba.storing, st)
+		if again := ba.jobStore.Get(id); again != nil && again.Value() == job {
+			return job
 		}
 	}
 }
@@ -1081,10 +1087,6 @@ func (ba *BlockAssembly) storeSubtreeData(ctx context.Context, subtreeRequest su
 	subtreeStorageDone := make(chan struct{}) // Separate signal for coordinator
 	metaDoneCh := make(chan struct{})
 	allDoneCh := make(chan struct{})
-
-	// The completion callback below reads the nodes once both writes are done, and none of the
-	// returns above is reached from here on, so the subtree is held until the coordinator ends.
-	doneStoring := ba.markStoring(subtree)
 
 	// Build, serialize, and store subtree meta in background
 	if subtreeRequest.ParentTxMap != nil && ba.settings.BlockAssembly.StoreTxInpointsForSubtreeMeta {
@@ -1150,7 +1152,6 @@ func (ba *BlockAssembly) storeSubtreeData(ctx context.Context, subtreeRequest su
 	// with the worker that reads the storedOK value from subtreeDoneCh.
 	go func() {
 		defer close(allDoneCh)
-		defer doneStoring()
 		<-subtreeStorageDone
 		<-metaDoneCh
 		// Trigger cleanup of soft-deleted transactions
@@ -1845,7 +1846,11 @@ func (ba *BlockAssembly) GetMiningCandidate(ctx context.Context, req *blockassem
 
 	includeSubtreeHashes := req.IncludeSubtrees
 
-	miningCandidate, subtrees, err := ba.blockAssembler.GetMiningCandidate(ctx)
+	// held until the job is stored, which keeps the job's subtrees from then on
+	hold := ba.readerPins.NewHold()
+	defer hold.Release()
+
+	miningCandidate, subtrees, err := ba.blockAssembler.GetMiningCandidate(ctx, hold)
 	if err != nil {
 		return nil, errors.WrapGRPC(err)
 	}
@@ -2178,12 +2183,14 @@ func (ba *BlockAssembly) submitMiningSolution(ctx context.Context, req *BlockSub
 		return nil, err
 	}
 
-	jobItem := ba.jobStore.Get(*storeID)
-	if jobItem == nil {
+	// the job's subtrees stay mapped until this returns, even if the job leaves the store
+	hold := ba.readerPins.NewHold()
+	defer hold.Release()
+
+	job := ba.holdJob(hold, *storeID)
+	if job == nil {
 		return nil, errors.NewNotFoundError("[BlockAssembly][%s] job not found", jobID)
 	}
-
-	job := jobItem.Value()
 
 	hashPrevBlock, err := chainhash.NewHash(job.MiningCandidate.PreviousHash)
 	if err != nil {
@@ -2664,12 +2671,14 @@ func (ba *BlockAssembly) GetCandidateBlock(ctx context.Context, req *blockassemb
 		return nil, errors.WrapGRPC(errors.NewInvalidArgumentError("invalid candidate ID", err))
 	}
 
-	jobItem := ba.jobStore.Get(*storeID)
-	if jobItem == nil {
+	// the job's subtrees stay mapped until this returns, even if the job leaves the store
+	hold := ba.readerPins.NewHold()
+	defer hold.Release()
+
+	job := ba.holdJob(hold, *storeID)
+	if job == nil {
 		return nil, errors.WrapGRPC(errors.NewNotFoundError("[GetCandidateBlock][%s] candidate not found", candidateID))
 	}
-
-	job := jobItem.Value()
 
 	// The coinbase the job was issued with, so this block is the one a coinbase-less solution to the
 	// candidate would mine.
@@ -3107,7 +3116,10 @@ func (ba *BlockAssembly) CheckBlockAssembly(_ context.Context, _ *blockassembly_
 //   - *blockassembly_api.OKResponse: Response indicating success
 func (ba *BlockAssembly) GetBlockAssemblyBlockCandidate(ctx context.Context, _ *blockassembly_api.EmptyMessage) (*blockassembly_api.GetBlockAssemblyBlockCandidateResponse, error) {
 	// get a mining candidate
-	candidate, subtrees, err := ba.blockAssembler.GetMiningCandidate(ctx)
+	hold := ba.readerPins.NewHold()
+	defer hold.Release()
+
+	candidate, subtrees, err := ba.blockAssembler.GetMiningCandidate(ctx, hold)
 	if err != nil {
 		return nil, errors.WrapGRPC(errors.NewProcessingError("[CheckBlockAssemblyBlockTemplate] error getting mining candidate", err))
 	}

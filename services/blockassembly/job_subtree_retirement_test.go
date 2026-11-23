@@ -23,10 +23,12 @@ import (
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/services/blockassembly/blockassembly_api"
 	"github.com/bsv-blockchain/teranode/services/blockassembly/subtreeprocessor"
+	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/blob"
 	"github.com/bsv-blockchain/teranode/stores/blob/options"
@@ -60,12 +62,29 @@ func (s *blockingSubtreeStore) Set(ctx context.Context, key []byte, fileType fil
 	return s.Store.Set(ctx, key, fileType, value, opts...)
 }
 
+// hookedClient runs a function inside GetNextWorkRequired, which a mining candidate calls after
+// it has loaded the processor's subtrees and before it returns them.
+type hookedClient struct {
+	blockchain.ClientI
+
+	hook atomic.Pointer[func()]
+}
+
+func (c *hookedClient) GetNextWorkRequired(ctx context.Context, hash *chainhash.Hash, currentBlockTime int64) (*model.NBit, error) {
+	if fn := c.hook.Swap(nil); fn != nil {
+		(*fn)()
+	}
+
+	return c.ClientI.GetNextWorkRequired(ctx, hash, currentBlockTime)
+}
+
 // mmapJobServer is a started server whose processor holds complete mmap-backed subtrees.
 type mmapJobServer struct {
 	ba      *BlockAssembly
 	mmap    string
 	blocks  *blockingSubtreeStore
 	genesis *chainhash.Hash
+	client  *hookedClient
 }
 
 // newMmapJobServer starts a server with mmap subtrees of four leaves. With gated set,
@@ -82,7 +101,16 @@ func newMmapJobServer(t *testing.T, gated bool) *mmapJobServer {
 		s.BlockAssembly.UseDynamicSubtreeSize = false
 		s.BlockAssembly.SubtreeProcessorBatcherSize = 1
 		s.BlockAssembly.DoubleSpendWindow = 0
+
+		if gated {
+			// one worker, so the second subtree waits in the queue while the first write is blocked
+			s.BlockAssembly.SubtreeStorageWorkers = 1
+		}
 	})
+
+	client := &hookedClient{ClientI: ba.blockchainClient}
+	ba.blockchainClient = client
+	ba.blockAssembler.blockchainClient = client
 
 	blocks := &blockingSubtreeStore{Store: store, release: make(chan struct{}), entered: make(chan chainhash.Hash, 16)}
 	blocks.gate.Store(gated)
@@ -125,7 +153,7 @@ func newMmapJobServer(t *testing.T, gated bool) *mmapJobServer {
 		require.True(t, st.IsMmapBacked(), "the subtrees must be mmap-backed for these tests to mean anything")
 	}
 
-	return &mmapJobServer{ba: ba, mmap: mmapDir, blocks: blocks}
+	return &mmapJobServer{ba: ba, mmap: mmapDir, blocks: blocks, client: client}
 }
 
 // storeJob caches a mining candidate built from the processor's current subtrees, as
@@ -241,19 +269,23 @@ func (m *mmapJobServer) requireGuardLetsJobThrough(t *testing.T, id chainhash.Ha
 	require.False(t, best.HashPrevBlock.IsEqual(prev), "the stale-job guard would have rejected the job")
 }
 
-// reset runs the assembler's reset on the current tip and waits for it.
-func (m *mmapJobServer) reset(t *testing.T) {
-	t.Helper()
-
+// tryReset runs the assembler's reset on the current tip and waits for it.
+func (m *mmapJobServer) tryReset() error {
 	errCh := make(chan error, 1)
 	m.ba.blockAssembler.resetCh <- resetRequest{ErrCh: errCh}
 
 	select {
 	case err := <-errCh:
-		require.NoError(t, err)
+		return err
 	case <-time.After(10 * time.Second):
-		require.FailNow(t, "reset did not finish")
+		return errors.NewProcessingError("reset did not finish")
 	}
+}
+
+func (m *mmapJobServer) reset(t *testing.T) {
+	t.Helper()
+
+	require.NoError(t, m.tryReset())
 }
 
 // addTip adds a block on the genesis block, with the given work, and waits until block
@@ -365,12 +397,13 @@ func TestJobSubtreesStayMappedWhileTheJobIsReadAndAreClosedAfterItExpires(t *tes
 
 	id, job := m.storeJob(t)
 
-	const ttl = 400 * time.Millisecond
+	const ttl = 3 * time.Second
 
 	m.ba.jobStore.Set(id, m.ba.jobStore.Get(id).Value(), ttl)
 
-	for range 6 {
-		time.Sleep(ttl / 2)
+	// read for longer than the TTL: every Get extends it
+	for range 5 {
+		time.Sleep(time.Second)
 		require.NotNil(t, m.ba.jobStore.Get(id), "the job expired although it was read")
 	}
 
@@ -382,6 +415,45 @@ func TestJobSubtreesStayMappedWhileTheJobIsReadAndAreClosedAfterItExpires(t *tes
 
 	m.reset(t)
 	m.requireClosed(t, job)
+}
+
+// The mining candidate loads the processor's subtrees, then reads them, then stores its
+// job. A reset that retires them in between, here run from inside the difficulty lookup,
+// must not unmap what the candidate is about to hand out.
+func TestCandidateSubtreesStayMappedBetweenTheSnapshotAndTheJobStore(t *testing.T) {
+	m := newMmapJobServer(t, false)
+
+	before := map[*subtreepkg.Subtree]string{}
+	for _, st := range chainedSubtrees(m.ba) {
+		before[st] = backingFile(t, st)
+	}
+
+	var ran atomic.Bool
+
+	hook := func() {
+		ran.Store(true)
+		m.reset(t)
+	}
+	m.client.hook.Store(&hook)
+
+	candidate, err := m.ba.GetMiningCandidate(t.Context(), &blockassembly_api.GetMiningCandidateRequest{})
+	require.NoError(t, err)
+	require.True(t, ran.Load(), "the reset did not run inside the candidate")
+
+	id, err := chainhash.NewHash(candidate.Id)
+	require.NoError(t, err)
+
+	job := m.ba.jobStore.Get(*id).Value()
+	require.GreaterOrEqual(t, len(job.Subtrees), 2)
+
+	for i, st := range job.Subtrees {
+		file, ok := before[st]
+		if !ok {
+			file = backingFile(t, st)
+		}
+
+		require.True(t, fileExists(file), "job subtree %d was closed before the job was stored", i)
+	}
 }
 
 func TestJobSubtreesAreClosedOnceTheJobIsGone(t *testing.T) {
@@ -398,51 +470,34 @@ func TestJobSubtreesAreClosedOnceTheJobIsGone(t *testing.T) {
 	m.requireClosed(t, job)
 }
 
-func TestSubtreesStayMappedWhileTheirStorageCallbackIsPending(t *testing.T) {
+// One worker is blocked in a write, so the other chained subtrees wait in the queue, and
+// none of them has reached the storage code yet. They must stay mapped all the same.
+func TestSubtreesStayMappedWhileTheirStoreIsQueuedOrPending(t *testing.T) {
 	m := newMmapJobServer(t, true)
 
-	// each blocked write belongs to a subtree whose completion callback is now pending
-	writing := map[chainhash.Hash]struct{}{}
-
 	select {
-	case key := <-m.blocks.entered:
-		writing[key] = struct{}{}
+	case <-m.blocks.entered:
 	case <-time.After(5 * time.Second):
 		require.FailNow(t, "no subtree write started")
 	}
 
-collect:
-	for len(writing) < len(chainedSubtrees(m.ba)) {
-		select {
-		case key := <-m.blocks.entered:
-			writing[key] = struct{}{}
-		case <-time.After(time.Second):
-			break collect
-		}
-	}
+	queued := chainedSubtrees(m.ba)
+	require.GreaterOrEqual(t, len(queued), 2)
 
-	var pending []*subtreepkg.Subtree
-
-	for _, st := range chainedSubtrees(m.ba) {
-		if _, ok := writing[*st.RootHash()]; ok {
-			pending = append(pending, st)
-		}
-	}
-
-	require.NotEmpty(t, pending)
-
-	stored := m.hold(t, pending)
+	stored := m.hold(t, queued)
 
 	m.reset(t)
 
 	m.requireNotInstalled(t, stored)
-	m.requireStillMapped(t, stored, "a pending storage callback")
+	m.requireStillMapped(t, stored, "a queued or pending store")
 
 	// the writes finish, the callbacks run, and the next reset may close them
 	m.blocks.open()
 
 	require.Eventually(t, func() bool {
-		m.reset(t)
+		if m.tryReset() != nil {
+			return false
+		}
 
 		for _, file := range stored.files {
 			if fileExists(file) {
@@ -451,7 +506,7 @@ collect:
 		}
 
 		return true
-	}, 10*time.Second, 100*time.Millisecond, "the subtrees are never closed once their callbacks have run")
+	}, 10*time.Second, 100*time.Millisecond, "the subtrees are never closed once their stores have ended")
 }
 
 func TestJobSubtreesStayMapped_OlderJobAfterASiblingReorgCommit(t *testing.T) {

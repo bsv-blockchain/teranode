@@ -2886,12 +2886,15 @@ func (b *BlockAssembler) onResetDone(storageTriggered bool, resp subtreeprocesso
 //
 // Parameters:
 //   - ctx: Context for cancellation
+//   - hold: optional; when given, the returned subtrees stay mapped from before they are
+//     read here until the caller releases the hold, so a block or reset that retires them
+//     in between cannot unmap them (mmap mode)
 //
 // Returns:
 //   - *model.MiningCandidate: Mining candidate block
 //   - []*util.Subtree: Associated subtrees
 //   - error: Any error encountered during retrieval
-func (b *BlockAssembler) GetMiningCandidate(ctx context.Context) (*model.MiningCandidate, []*subtree.Subtree, error) {
+func (b *BlockAssembler) GetMiningCandidate(ctx context.Context, hold ...*subtreeprocessor.SubtreeHold) (*model.MiningCandidate, []*subtree.Subtree, error) {
 	ctx, _, deferFn := tracing.Tracer("blockassembly").Start(ctx, "GetMiningCandidate",
 		tracing.WithParentStat(b.stats),
 		tracing.WithHistogram(prometheusBlockAssemblyGetMiningCandidateDuration),
@@ -2947,6 +2950,9 @@ func (b *BlockAssembler) GetMiningCandidate(ctx context.Context) (*model.MiningC
 
 	// Get pre-computed data (atomic read, no locks, no channel sync)
 	data := b.subtreeProcessor.GetPrecomputedMiningData()
+	if len(hold) > 0 {
+		data = hold[0].PinCurrent(b.subtreeProcessor.GetPrecomputedMiningData)
+	}
 
 	// Check if we have valid precomputed data with subtrees
 	var subtrees []*subtree.Subtree

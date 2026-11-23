@@ -95,6 +95,15 @@ type NewSubtreeRequest struct {
 	SkipNotification  bool                                                    // Whether to skip notification to the network
 	ErrChan           chan error                                              // Channel for error reporting
 	OnStorageComplete func()                                                  // Called when storage completes to trigger cleanup
+	Release           func()                                                  // Called once the request's work has ended, whatever its outcome; nil when nothing is held
+}
+
+// Done tells the processor the work for this request has ended, so the subtree it held
+// mapped for the store can be closed.
+func (r NewSubtreeRequest) Done() {
+	if r.Release != nil {
+		r.Release()
+	}
 }
 
 // moveBlockRequest represents a request to move a block in the chain.
@@ -246,6 +255,12 @@ type SubtreeProcessor struct {
 	// keeps them mapped. It runs on the processor goroutine and must be safe to call
 	// while the owner changes what it holds.
 	retainedSubtrees func() []*subtreepkg.Subtree
+
+	// storagePins holds the subtrees sent to storage from the send until the store's work
+	// has ended: the request waits in newSubtreeChan and the storage queue, where a block
+	// or reset can retire the subtree, and the worker then serializes it and the completion
+	// callback walks its nodes.
+	storagePins SubtreePins
 
 	// catchUpRollbackSubtrees are the chained and current subtrees from before a
 	// catch-up, which its rollback puts back if any block fails. closeRetiredSubtrees
@@ -3152,6 +3167,15 @@ func (stp *SubtreeProcessor) processorContext() context.Context {
 	return context.Background()
 }
 
+// pinForStorage keeps st mapped until the returned function runs, which the storage worker
+// does through NewSubtreeRequest.Done and the sender does itself when the send fails.
+func (stp *SubtreeProcessor) pinForStorage(st *subtreepkg.Subtree) func() {
+	hold := stp.storagePins.NewHold()
+	hold.Pin(st)
+
+	return hold.Release
+}
+
 // sendNewSubtree delivers req on newSubtreeChan while honouring ctx
 // cancellation, so a stalled, backpressured, or shut-down listener cannot wedge
 // the single subtree-processor goroutine. Returns ctx.Err() if cancelled before
@@ -3232,6 +3256,7 @@ func (stp *SubtreeProcessor) processCompleteSubtree(skipNotification bool) (err 
 		OnStorageComplete: func() {
 			stp.cleanupDeletedTxs(oldSubtree)
 		},
+		Release: stp.pinForStorage(oldSubtree),
 	}
 
 	// Respect processor context cancellation while sending: a full newSubtreeChan buffer with a
@@ -3239,6 +3264,8 @@ func (stp *SubtreeProcessor) processCompleteSubtree(skipNotification bool) (err 
 	// context-aware sends in the Start() select loop and reorgBlocks.
 	ctx := stp.processorContext()
 	if err := stp.sendNewSubtree(ctx, req); err != nil {
+		req.Done()
+
 		return errors.NewProcessingError("[%s] cancelled while sending subtree to newSubtreeChan", oldSubtreeHash.String(), err)
 	}
 
@@ -4367,8 +4394,7 @@ func (stp *SubtreeProcessor) storeAndAnnounceChainedSubtrees(ctx context.Context
 		// buffer during a large (>1000 subtree) reorg must not block this
 		// goroutine forever if the consumer has been cancelled. Matches the
 		// select pattern used by the other newSubtreeChan sends.
-		select {
-		case stp.newSubtreeChan <- NewSubtreeRequest{
+		req := NewSubtreeRequest{
 			Subtree:     subtree,
 			ParentTxMap: stp.currentTxMap,
 			DeletedTxs:  stp.deletedTxs,
@@ -4376,8 +4402,14 @@ func (stp *SubtreeProcessor) storeAndAnnounceChainedSubtrees(ctx context.Context
 			OnStorageComplete: func() {
 				stp.cleanupDeletedTxs(st)
 			},
-		}:
+			Release: stp.pinForStorage(subtree),
+		}
+
+		select {
+		case stp.newSubtreeChan <- req:
 		case <-ctx.Done():
+			req.Done()
+
 			return errors.NewProcessingError("[%s] context cancelled while announcing subtrees", caller, ctx.Err())
 		}
 	}
@@ -4693,6 +4725,10 @@ func (stp *SubtreeProcessor) closeRetiredSubtrees() {
 		for _, st := range data.Subtrees {
 			held[st] = struct{}{}
 		}
+	}
+
+	for _, st := range stp.storagePins.Pinned() {
+		held[st] = struct{}{}
 	}
 
 	if stp.retainedSubtrees != nil {
@@ -8816,11 +8852,14 @@ func (stp *SubtreeProcessor) parallelBuildRemainderSubtrees(ctx context.Context,
 			SkipNotification:  skipNotification,
 			ErrChan:           errCh,
 			OnStorageComplete: func() { stp.cleanupDeletedTxs(oldSubtree) },
+			Release:           stp.pinForStorage(oldSubtree),
 		}
 
 		// Respect context cancellation while sending: a full newSubtreeChan buffer during a large
 		// reorg must not block this goroutine forever if the consumer has been cancelled.
 		if err := stp.sendNewSubtree(ctx, req); err != nil {
+			req.Done()
+
 			return errors.NewProcessingError("[%s] cancelled while sending subtree to newSubtreeChan", oldSubtreeHash.String(), err)
 		}
 
