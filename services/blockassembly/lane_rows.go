@@ -68,12 +68,48 @@ type ownLaneBitmaps struct {
 	changed chan struct{}
 	// listed holds the subtrees the latest mining candidate lists, whose entries are not dropped.
 	listed map[chainhash.Hash]struct{}
+	// fileDAHLocks serialize the writes and delete-at updates of one subtree's lane bitmaps file,
+	// so two storage requests of it cannot leave the file with the older one's delete-at. They are
+	// striped by root, so a slow write of one subtree's file does not hold up another's.
+	fileDAHLocks [64]sync.Mutex
+}
+
+// fileLock is the lock that serializes subtree root's lane bitmaps file writes and refreshes.
+func (o *ownLaneBitmaps) fileLock(root chainhash.Hash) *sync.Mutex {
+	return &o.fileDAHLocks[root[0]%uint8(len(o.fileDAHLocks))]
+}
+
+// fileDAHLater reports whether subtree root's lane bitmaps file already has a later delete-at
+// height than dah from this process. An equal one is not skipped, so a store of the subtree again
+// still finds out from the file store whether the file was lost.
+func (o *ownLaneBitmaps) fileDAHLater(root chainhash.Hash, dah uint32) bool {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+
+	kept, ok := o.bySubtree[root]
+
+	return ok && kept.fileDAH > dah
+}
+
+// recordFileDAH notes dah as the delete-at height subtree root's lane bitmaps file now has, if
+// its bitmaps are kept and it is later than the one noted.
+func (o *ownLaneBitmaps) recordFileDAH(root chainhash.Hash, dah uint32) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+
+	if kept, ok := o.bySubtree[root]; ok && kept.fileDAH < dah {
+		kept.fileDAH = dah
+		o.bySubtree[root] = kept
+	}
 }
 
 // keptLaneBitmaps is one subtree's bitmaps and the block height it was last stored at.
 type keptLaneBitmaps struct {
 	lanes  lane.LaneBitmaps
 	height uint32
+	// fileDAH is the highest delete-at height this process gave the subtree's lane bitmaps file,
+	// 0 when none; a refresh never lowers it (setLaneBitmapsFileDAH).
+	fileDAH uint32
 }
 
 // put keeps the bitmaps of subtree root, stored at height, and drops entries last stored more
@@ -98,7 +134,7 @@ func (o *ownLaneBitmaps) put(root chainhash.Hash, lanes lane.LaneBitmaps, height
 
 	first = !already
 
-	o.bySubtree[root] = keptLaneBitmaps{lanes: lanes, height: keptHeight}
+	o.bySubtree[root] = keptLaneBitmaps{lanes: lanes, height: keptHeight, fileDAH: kept.fileDAH}
 	o.broadcastLocked()
 
 	if height <= ownLaneBitmapsKeepBlocks {
@@ -361,13 +397,21 @@ func (ba *BlockAssembly) writeLaneBitmapsFile(ctx context.Context, bitmaps lane.
 		return
 	}
 
-	err = ba.subtreeStore.Set(ctx, root[:], fileformat.FileTypeSubtreeLaneBitmaps, data, options.WithDeleteAt(dah))
+	// An exclusive publish bounds the file store's delete-at scheduling, which the subtree file
+	// waits behind, and never replaces the delete-at of a file another writer published first.
+	fileLock := ba.ownLaneBitmaps.fileLock(root)
+	fileLock.Lock()
+	err = ba.subtreeStore.Set(ctx, root[:], fileformat.FileTypeSubtreeLaneBitmaps, data, options.WithDeleteAt(dah), options.WithExclusivePublish())
+	if err == nil {
+		ba.ownLaneBitmaps.recordFileDAH(root, dah)
+	}
+	fileLock.Unlock()
 
 	switch {
 	case errors.Is(err, errors.ErrBlobAlreadyExists):
 		// a file from an earlier store, after a restart or by subtree validation, lives as long as
 		// the subtree now does
-		if dahErr := ba.subtreeStore.SetDAH(ctx, root[:], fileformat.FileTypeSubtreeLaneBitmaps, dah); dahErr != nil {
+		if dahErr := ba.setLaneBitmapsFileDAH(ctx, root, dah); dahErr != nil {
 			ba.logger.Warnf("[BlockAssembly:storeSubtreeData][%s] the lane bitmaps file may now expire before its subtree, whose DAH update failed: %v", root.String(), dahErr)
 		}
 	case err != nil:
@@ -390,7 +434,7 @@ func (ba *BlockAssembly) keepExistingSubtreeLaneBitmaps(ctx context.Context, sub
 		return
 	}
 
-	err := ba.subtreeStore.SetDAH(ctx, root[:], fileformat.FileTypeSubtreeLaneBitmaps, dah)
+	err := ba.setLaneBitmapsFileDAH(ctx, root, dah)
 
 	switch {
 	case errors.Is(err, errors.ErrNotFound):
@@ -404,6 +448,30 @@ func (ba *BlockAssembly) keepExistingSubtreeLaneBitmaps(ctx context.Context, sub
 	case err != nil:
 		ba.logger.Warnf("[BlockAssembly:storeSubtreeData][%s] the lane bitmaps file may now expire before its subtree, whose DAH update failed: %v", root.String(), err)
 	}
+}
+
+// setLaneBitmapsFileDAH gives subtree root's lane bitmaps file delete-at height dah, unless this
+// process already gave it a later one. The updates of one subtree's file are serialized (fileLock): the file store
+// replaces a blob's delete-at rather than keeping the later one, so two storage requests of one
+// subtree racing would otherwise leave the file with whichever height came last, possibly the
+// older, and the file would expire before its subtree.
+func (ba *BlockAssembly) setLaneBitmapsFileDAH(ctx context.Context, root chainhash.Hash, dah uint32) error {
+	fileLock := ba.ownLaneBitmaps.fileLock(root)
+	fileLock.Lock()
+
+	defer fileLock.Unlock()
+
+	if ba.ownLaneBitmaps.fileDAHLater(root, dah) {
+		return nil
+	}
+
+	if err := ba.subtreeStore.SetDAH(ctx, root[:], fileformat.FileTypeSubtreeLaneBitmaps, dah); err != nil {
+		return err
+	}
+
+	ba.ownLaneBitmaps.recordFileDAH(root, dah)
+
+	return nil
 }
 
 // keepCandidateLaneBitmaps keeps the bitmaps of a mining candidate's subtrees until a later

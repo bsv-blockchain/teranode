@@ -1544,3 +1544,94 @@ func TestTwoStoresOfOneSubtreeCountItsMembersOnce(t *testing.T) {
 
 	require.Equal(t, before+1, ownLaneMetric(t, "teranode_lane_txs_without_position_total", unpositioned))
 }
+
+// TestKeepingBitmapsWakesAWaitingBlock: a block waiting for a subtree's bitmaps returns as soon as
+// they are kept, not when its wait runs out.
+func TestKeepingBitmapsWakesAWaitingBlock(t *testing.T) {
+	var kept ownLaneBitmaps
+
+	root := chainhash.HashH([]byte("wakes-a-waiter"))
+	kept.expect(root)
+
+	done := make(chan time.Duration, 1)
+
+	go func() {
+		start := time.Now()
+		_, absent, timedOut := kept.waitFor(t.Context(), []*chainhash.Hash{&root}, 10*time.Second)
+		require.Zero(t, absent+timedOut)
+
+		done <- time.Since(start)
+	}()
+
+	// the waiter is established once it has registered for a change
+	require.Eventually(t, func() bool {
+		kept.mu.Lock()
+		defer kept.mu.Unlock()
+
+		return kept.changed != nil
+	}, 5*time.Second, time.Millisecond)
+
+	kept.put(root, lane.LaneBitmaps{}, 1)
+
+	select {
+	case waited := <-done:
+		require.Less(t, waited, 5*time.Second)
+	case <-time.After(5 * time.Second):
+		t.Fatal("the waiting block was not woken when its subtree's bitmaps were kept")
+	}
+}
+
+// dahRecordingStore records each delete-at height given to a lane bitmaps file, and each set
+// option asking for an exclusive publish.
+type dahRecordingStore struct {
+	blob.Store
+
+	mu        sync.Mutex
+	dahs      []uint32
+	exclusive []bool
+}
+
+func (s *dahRecordingStore) SetDAH(ctx context.Context, key []byte, fileType fileformat.FileType, dah uint32, opts ...blobOptions.FileOption) error {
+	if fileType == fileformat.FileTypeSubtreeLaneBitmaps {
+		s.mu.Lock()
+		s.dahs = append(s.dahs, dah)
+		s.mu.Unlock()
+	}
+
+	return s.Store.SetDAH(ctx, key, fileType, dah, opts...)
+}
+
+func (s *dahRecordingStore) Set(ctx context.Context, key []byte, fileType fileformat.FileType, value []byte, opts ...blobOptions.FileOption) error {
+	if fileType == fileformat.FileTypeSubtreeLaneBitmaps {
+		s.mu.Lock()
+		s.exclusive = append(s.exclusive, blobOptions.MergeOptions(nil, opts).ExclusivePublish)
+		s.mu.Unlock()
+	}
+
+	return s.Store.Set(ctx, key, fileType, value, opts...)
+}
+
+// TestAnOlderRefreshDoesNotShortenTheLaneBitmapsFile: a storage request of an existing subtree
+// that refreshes its lane bitmaps file with an older delete-at height than one already given
+// leaves the file with the later one; the write itself is an exclusive publish.
+func TestAnOlderRefreshDoesNotShortenTheLaneBitmapsFile(t *testing.T) {
+	server, memoryStore := setupServerWithSettings(t, func(s *settings.Settings) { s.UtxoStore.LaneMigration = settings.LaneMigrationShadow })
+
+	recording := &dahRecordingStore{Store: memoryStore}
+	server.subtreeStore = recording
+
+	st, txMap := laneSealSubtree(t, "older-refresh")
+	request := subtreeprocessor.NewSubtreeRequest{Subtree: st, ParentTxMap: txMap}
+
+	laneBits, _ := subtreeLanePositions(st, txMap, nil, nil)
+	server.storeSubtreeLaneBitmaps(t.Context(), st, laneBits, 1, 300)
+
+	server.keepExistingSubtreeLaneBitmaps(t.Context(), request, 2, 302) // a newer refresh
+	server.keepExistingSubtreeLaneBitmaps(t.Context(), request, 1, 301) // an older one, finishing last
+
+	recording.mu.Lock()
+	defer recording.mu.Unlock()
+
+	require.Equal(t, []bool{true}, recording.exclusive, "the file is written with an exclusive publish")
+	require.Equal(t, []uint32{302}, recording.dahs, "only the later delete-at is applied")
+}

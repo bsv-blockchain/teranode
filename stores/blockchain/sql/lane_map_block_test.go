@@ -787,8 +787,8 @@ func TestInsertLaneMapRowsWithBlockRestoresTheLockTimeout_PostgreSQL(t *testing.
 	}
 }
 
-// The rows' lock timeout is 2 s exactly: the bound the store is held for, pinned apart from any
-// timing.
+// The rows' lock timeout is 2 s exactly, pinned apart from any timing. Postgres applies it to each
+// lock the insert takes, so an insert that waits for two locks can take up to twice that.
 func TestLaneMapRowsLockTimeoutIsTwoSeconds_PostgreSQL(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping postgres-backed test in -short mode")
