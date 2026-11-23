@@ -27,6 +27,9 @@ package subtreeprocessor
 //	REORG_SCALE_INTAKE_TPS  live intake during the timed run, tx/s (default 0)
 //	REORG_SCALE_FAST        1 to run the reorg case with blockassembly_reorgFastPath on (default off);
 //	                        the report says whether the fast path applied or declined, and why
+//	REORG_SCALE_PREPARED    1 to prepare the set of the winning blocks before the timed run, as PrepareBlock
+//	                        does while they are validated (issue 2269, PR 8); needs REORG_SCALE_FAST=1.
+//	                        The set is built before the timer starts and its time is in prepare_seconds
 //	REORG_SCALE_VERIFY      1 to check the order oracle after the run (slow, needs the hash sets)
 //	REORG_SCALE_OUT         path of the JSON report (default: logged only)
 //
@@ -62,6 +65,8 @@ type reorgScaleReport struct {
 	FastPath       bool    `json:"fast_path"`
 	FastApplied    bool    `json:"fast_applied"`
 	FastDeclined   string  `json:"fast_declined,omitempty"`
+	Prepared       bool    `json:"prepared,omitempty"`
+	PrepareSeconds float64 `json:"prepare_seconds,omitempty"`
 	GOMAXPROCS     int     `json:"gomaxprocs"`
 	BuildSeconds   float64 `json:"build_seconds"`
 	RunSeconds     float64 `json:"run_seconds"`
@@ -200,6 +205,15 @@ func TestReorgScale(t *testing.T) {
 		skipStoreMarks:   true,
 	})
 	report.BuildSeconds = time.Since(start).Seconds()
+
+	if os.Getenv("REORG_SCALE_PREPARED") == "1" {
+		require.True(t, report.FastPath && report.Case == "reorg", "REORG_SCALE_PREPARED needs REORG_SCALE_FAST=1 and the reorg case")
+
+		start = time.Now()
+		sc.stp.settings.BlockAssembly.ReorgFastPath = true
+		sc.prepareForwardSet(t, len(sc.forward))
+		report.Prepared, report.PrepareSeconds = true, time.Since(start).Seconds()
+	}
 
 	runtime.GC()
 
