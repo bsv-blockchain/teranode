@@ -3,6 +3,7 @@ package subtreeprocessor
 import (
 	"context"
 	"runtime"
+	"slices"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
@@ -15,7 +16,8 @@ import (
 // subtree lists, so it is used for the same blocks with the same lists, and only while the tip is
 // the one it was prepared against. The set of a child holds the competitor's hashes too, because the
 // fast path needs one set over every winner and a merge of two at reorg time costs as much as
-// reading them; the competitor's own set is let go once it is built.
+// reading them; the competitor's own set is let go when the build of its child's starts. The slot
+// holds the competitor, then its first child alone.
 type forkPrepared struct {
 	tip      chainhash.Hash
 	blocks   []chainhash.Hash
@@ -36,16 +38,20 @@ func forkPrepareWorkers() int {
 	return max(1, runtime.GOMAXPROCS(0)/4)
 }
 
-// forkSetFits is the memory gate before a set is built: the heap the last GC found live, two sets
-// (the one built and the room Freeze needs), and the pending set's 48 bytes a transaction must
-// stay within three quarters of the memory limit. An unset limit passes, as in the fast path.
-func forkSetFits(txCount uint64, pending int) bool {
+// forkSetFits is the memory gate before a set is built: the heap the last GC found live, less the
+// bytes that are let go before the build, plus the set's bytes and the pending set's 48 bytes a
+// transaction, must stay within three quarters of the memory limit. An unset limit passes, as in the
+// fast path. The pending count is the processor's atomic one: the tx map itself is swapped by the
+// processor goroutine.
+func (stp *SubtreeProcessor) forkSetFits(setBytes, releasing uint64) bool {
 	live, limit := reorgMemoryStats()
 	if limit <= 0 || limit >= 1<<62 {
 		return true
 	}
 
-	return live+2*txCount*fastPathSetBytesPerHash+uint64(pending)*fastPathBytesPerPending <= uint64(limit)/4*3 //nolint:gosec // limit is positive, pending is a length
+	live -= min(live, releasing)
+
+	return live+setBytes+stp.TxCount()*fastPathBytesPerPending <= uint64(limit)/4*3 //nolint:gosec // limit is positive
 }
 
 // prepareForkBlock starts building the set of a block that is not a child of the tip: a competitor
@@ -98,7 +104,16 @@ func (stp *SubtreeProcessor) prepareForkBlock(block *model.Block) {
 	}
 
 	for _, existing := range stp.preparedFork {
-		if slicesEqualHashes(existing.blocks, e.blocks) {
+		if slices.Equal(existing.blocks, e.blocks) {
+			stp.preparedMu.Unlock()
+			return
+		}
+	}
+
+	for _, existing := range stp.preparedFork {
+		// the competitor again, or a second child of it: the one prepared is kept, and the slot never
+		// holds more than the competitor and one child
+		if parent == nil && existing.blocks[0] == hash || parent != nil && len(existing.blocks) == 2 {
 			stp.preparedMu.Unlock()
 			return
 		}
@@ -122,20 +137,6 @@ func (stp *SubtreeProcessor) prepareForkBlock(block *model.Block) {
 	go stp.runForkPrepare(ctx, e, parent, block)
 }
 
-func slicesEqualHashes(a, b []chainhash.Hash) bool {
-	if len(a) != len(b) {
-		return false
-	}
-
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-
-	return true
-}
-
 // runForkPrepare binds the block, checks the memory gate and builds the set of e, over the blocks of
 // the competitor too when parent is set. A failure takes e out of the slot.
 func (stp *SubtreeProcessor) runForkPrepare(ctx context.Context, e *forkPrepared, parent *forkPrepared, block *model.Block) {
@@ -145,13 +146,6 @@ func (stp *SubtreeProcessor) runForkPrepare(ctx context.Context, e *forkPrepared
 	if e.err != nil {
 		stp.logger.Warnf("[PrepareBlock][%s] not preparing the block for a fork reorg: %v", block.String(), e.err)
 		stp.removeFork(e)
-
-		return
-	}
-
-	// the competitor's own set is not needed once the set over both is built
-	if parent != nil {
-		stp.removeFork(parent)
 	}
 }
 
@@ -181,10 +175,31 @@ func (stp *SubtreeProcessor) buildForkSet(ctx context.Context, e *forkPrepared, 
 		return errors.NewProcessingError("tip moved since the block was prepared")
 	}
 
-	if !forkSetFits(e.txCount, stp.currentTxMap.Length()) {
+	// The set over both blocks is built from the store, not from the competitor's set, which is let
+	// go before the build: the gate counts it as freed. The reorg of the competitor alone is then
+	// not prepared, which a reorg onto its child makes unlikely to matter.
+	var releasing uint64
+
+	setBytes := 2 * e.txCount * fastPathSetBytesPerHash // this set and the room for its child's
+
+	if parent != nil {
+		releasing, setBytes = parent.txCount*fastPathSetBytesPerHash, e.txCount*fastPathSetBytesPerHash
+	}
+
+	if !stp.forkSetFits(setBytes, releasing) {
 		return errors.NewProcessingError("not enough memory to prepare the block")
 	}
 
+	if parent != nil {
+		stp.removeFork(parent)
+	}
+
+	return stp.buildForkTxMap(ctx, e)
+}
+
+// buildForkTxMap builds the set of every subtree of e's blocks, bounded to a quarter of the cores,
+// with the subtrees that are still to be checked verified.
+func (stp *SubtreeProcessor) buildForkTxMap(ctx context.Context, e *forkPrepared) (err error) {
 	subtrees := make(map[chainhash.Hash]int)
 
 	for _, list := range e.subtrees {
@@ -196,7 +211,7 @@ func (stp *SubtreeProcessor) buildForkSet(ctx context.Context, e *forkPrepared, 
 		}
 	}
 
-	stp.logger.Infof("[PrepareBlock][%s] building the transaction map of %d subtrees for a fork reorg", block.String(), len(subtrees))
+	stp.logger.Infof("[PrepareBlock][%s] building the transaction map of %d subtrees for a fork reorg", e.blocks[len(e.blocks)-1].String(), len(subtrees))
 
 	e.txMap, e.conflicting, err = stp.createTransactionMap(ctx, subtrees, len(subtrees), e.txCount,
 		txMapBuild{workers: forkPrepareWorkers(), verifyToCheck: true})

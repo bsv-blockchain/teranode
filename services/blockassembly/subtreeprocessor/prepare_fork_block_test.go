@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"runtime"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -116,7 +117,7 @@ func waitForkDone(t *testing.T, stp *SubtreeProcessor, n int) []*forkPrepared {
 }
 
 // A competitor of the tip is prepared, and so is its child: the child's set holds both blocks, so a
-// reorg onto the two reads neither again, and the competitor's own set is let go once it is built.
+// reorg onto the two reads neither again, and the competitor's own set is let go.
 func TestPrepareForkBlock_PreparesCompetitorAndItsChild(t *testing.T) {
 	f := newForkFixture(t)
 	f2 := f.child(t, f.block.Hash())
@@ -295,10 +296,7 @@ func TestPrepareForkBlock_NotBuiltWhenTheMemoryGateFails(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newForkFixture(t)
 
-			for i := 0; i < 5; i++ {
-				_, inserted := f.stp.currentTxMap.SetIfNotExists(chainhash.HashH([]byte{byte(i)}), &subtreepkg.TxInpoints{})
-				require.True(t, inserted)
-			}
+			f.stp.txCount.Store(5)
 
 			reads := f.gated.reads.Load()
 
@@ -364,4 +362,137 @@ func TestPrepareForkBlock_ToCheckSubtreeWithChangedLeafIsRejected(t *testing.T) 
 	f.stp.PrepareBlock(f.block)
 	entries := waitForkDone(t, f.stp, 1)
 	require.NoError(t, entries[0].err)
+}
+
+// The child's gate counts the competitor's set as freed, since the union is built from the store and the
+// competitor's set is let go before the build: at the design's shape a child fits where the competitor
+// did, and does not where the live heap, competitor's set included, would have it over.
+func TestPrepareForkBlock_ChildGateCountsTheCompetitorsSetAsFreed(t *testing.T) {
+	const (
+		blockTxs = 8
+		pending  = 5
+	)
+
+	solo := uint64(blockTxs * fastPathSetBytesPerHash)
+	union := uint64(2 * blockTxs * fastPathSetBytesPerHash)
+
+	for _, tc := range []struct {
+		name  string
+		extra int64 // limit above what the union needs, with the competitor's set freed
+		built bool
+	}{
+		{"fits once the competitor's set is freed", 0, true},
+		{"one step short", -4, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newForkFixture(t)
+			f2 := f.child(t, f.block.Hash())
+			f.stp.txCount.Store(pending)
+
+			// the live heap holds the competitor's set once it is built
+			const base = 999
+			need := base + union + pending*fastPathBytesPerPending
+			require.Zero(t, need%3)
+
+			var competitorBuilt atomic.Bool
+
+			old := reorgMemoryStats
+			reorgMemoryStats = func() (uint64, int64) {
+				if competitorBuilt.Load() {
+					return base + solo, int64(need/3*4) + tc.extra
+				}
+
+				return base, int64(need / 3 * 4)
+			}
+
+			defer func() { reorgMemoryStats = old }()
+
+			// the competitor's own gate passes: 2 sets, 999 + 528 + 240
+			f.stp.settings.BlockAssembly.ReorgFastPath = true
+			f.stp.PrepareBlock(f.block)
+			waitForkDone(t, f.stp, 1)
+			competitorBuilt.Store(true)
+
+			f.stp.PrepareBlock(f2)
+
+			if tc.built {
+				require.Eventually(t, func() bool { e := forkEntries(f.stp); return len(e) == 1 && len(e[0].blocks) == 2 }, 10*time.Second, 5*time.Millisecond)
+				require.NoError(t, waitForkDone(t, f.stp, 1)[0].err)
+
+				return
+			}
+
+			// the child failed its gate, and the competitor's set stays
+			require.Eventually(t, func() bool {
+				e := forkEntries(f.stp)
+				return len(e) == 1 && len(e[0].blocks) == 1
+			}, 10*time.Second, 5*time.Millisecond)
+		})
+	}
+}
+
+// The competitor is hinted again after its child's set has replaced its own, which happens whenever
+// block validation retries, and the child's set stays.
+func TestPrepareForkBlock_HintForTheCompetitorAgainKeepsTheChildsSet(t *testing.T) {
+	f := newForkFixture(t)
+	f2 := f.child(t, f.block.Hash())
+
+	f.stp.PrepareBlock(f.block)
+	waitForkDone(t, f.stp, 1)
+	f.stp.PrepareBlock(f2)
+	require.Eventually(t, func() bool { e := forkEntries(f.stp); return len(e) == 1 && len(e[0].blocks) == 2 }, 10*time.Second, 5*time.Millisecond)
+
+	union := waitForkDone(t, f.stp, 1)[0]
+
+	f.stp.PrepareBlock(f.block)
+	f.stp.PrepareBlock(f2)
+
+	entries := forkEntries(f.stp)
+	require.Len(t, entries, 1)
+	require.Same(t, union, entries[0])
+}
+
+// A second child of the competitor does not get a set of its own: the slot holds the competitor and one
+// child, and the first child's stays.
+func TestPrepareForkBlock_SlotHoldsOneChild(t *testing.T) {
+	f := newForkFixture(t)
+	first, second := f.child(t, f.block.Hash()), f.child(t, f.block.Hash())
+
+	f.stp.PrepareBlock(f.block)
+	waitForkDone(t, f.stp, 1)
+
+	f.gated.hold()
+	defer f.gated.release()
+
+	f.stp.PrepareBlock(first)
+	f.stp.PrepareBlock(second)
+
+	entries := forkEntries(f.stp)
+	require.LessOrEqual(t, len(entries), 2)
+
+	for _, e := range entries {
+		require.NotEqual(t, *second.Hash(), e.blocks[len(e.blocks)-1], "the second child has no set")
+	}
+}
+
+// The build runs on forkPrepareWorkers, not on the setting's reads: on one core it reads one subtree at a
+// time, where the unbounded build reads both of the block's at once.
+func TestPrepareForkBlock_BuildReadsOnTheBoundedWorkers(t *testing.T) {
+	f := newForkFixture(t)
+
+	counting := &concurrencyStore{Store: f.stp.subtreeStore}
+	f.stp.subtreeStore = counting
+
+	defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(1))
+
+	f.stp.PrepareBlock(f.block)
+	waitForkDone(t, f.stp, 1)
+
+	require.Equal(t, int32(1), counting.peak.Load())
+
+	counting.peak.Store(0)
+
+	_, _, err := f.stp.createTransactionMap(context.Background(), map[chainhash.Hash]int{*f.block.Subtrees[0]: 0, *f.block.Subtrees[1]: 1}, 2, 8, txMapBuild{})
+	require.NoError(t, err)
+	require.Equal(t, int32(2), counting.peak.Load(), "control: the unbounded build reads both at once")
 }

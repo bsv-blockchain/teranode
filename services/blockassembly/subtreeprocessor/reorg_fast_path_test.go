@@ -704,7 +704,7 @@ func logSubtreeReads(sc *reorgScenario) *keyLogStore {
 
 // prepareForwardSet puts into the processor's fork slot the set that PrepareBlock builds for the
 // scenario's winning blocks, from blocks[0] to blocks[n-1], built as it builds them. The scenario's
-// headers do not commit to their subtrees, so the bind in PrepareBlock is left out.
+// headers do not commit to their subtrees, so the bind in PrepareBlock and the memory gate are left out.
 func (sc *reorgScenario) prepareForwardSet(t testing.TB, n int) {
 	t.Helper()
 
@@ -721,10 +721,12 @@ func (sc *reorgScenario) prepareForwardSet(t testing.TB, n int) {
 		e.subtrees = append(e.subtrees, list)
 	}
 
-	var err error
+	for _, block := range blocks {
+		e.txCount += block.TransactionCount
+	}
 
-	e.txMap, e.conflicting, err = sc.stp.buildUnionSet(context.Background(), blocks)
-	require.NoError(t, err)
+	// built as PrepareBlock builds it: on the bounded workers, verifying what is still to be checked
+	require.NoError(t, sc.stp.buildForkTxMap(context.Background(), e))
 	close(e.done)
 
 	sc.stp.preparedMu.Lock()
@@ -783,8 +785,9 @@ func TestReorgFastPath_IgnoresASetPreparedForOtherBlocks(t *testing.T) {
 	require.Positive(t, reads, "the set is of the first winner only, so the winners are read")
 }
 
-// The sets are let go whenever the fast path declines, before the slow path allocates: at a gate
-// before the set is taken, and at one after.
+// The sets are let go whenever the fast path declines, before the slow path allocates: at a gate before
+// the set is taken, and at one after. reorgInPlace is called on its own, because the slow path that runs
+// after a decline lets go of the slot too, once it moves a block forward.
 func TestReorgFastPath_LetsGoOfThePreparedSetsWhenItDeclines(t *testing.T) {
 	for name, c := range map[string]struct {
 		reason string
@@ -797,21 +800,18 @@ func TestReorgFastPath_LetsGoOfThePreparedSetsWhenItDeclines(t *testing.T) {
 			cfg := smallScenarioConfig()
 			c.tweak(&cfg)
 
-			left := -1
+			sc := newReorgScenario(t, cfg)
+			sc.prepareForwardSet(t, 1)
+			sc.prepareForwardSet(t, 2)
+			require.Len(t, forkEntries(sc.stp), 2)
 
-			var rec fastPathRun
+			before := readFastPathCounts()
 
-			requireReorgEquivalent(t, cfg, slowReference, func(t testing.TB, sc *reorgScenario) error {
-				sc.prepareForwardSet(t, 1)
-				sc.prepareForwardSet(t, 2)
-
-				err := recordingFastPath(&rec)(t, sc)
-				left = len(forkEntries(sc.stp))
-
-				return err
-			})
-			require.Equal(t, []string{c.reason}, rec.reasons)
-			require.Zero(t, left)
+			result, err := sc.stp.reorgInPlace(t.Context(), []*model.Block{sc.lost}, sc.forward, nil)
+			require.NoError(t, err)
+			require.Nil(t, result, "declined")
+			require.Equal(t, []string{c.reason}, readFastPathCounts().declinedSince(before))
+			require.Empty(t, forkEntries(sc.stp))
 		})
 	}
 }
