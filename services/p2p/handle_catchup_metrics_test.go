@@ -17,6 +17,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 )
 
 // freshTestServer wires a P2P Server backed by a real in-memory
@@ -558,6 +559,19 @@ func TestGetPeersForCatchup_ValidatedTripleRoundTrips(t *testing.T) {
 	require.Equal(t, uint32(498), p.ValidatedHeight)
 	require.Equal(t, validatedHash.String(), p.ValidatedBlockHash)
 	require.Equal(t, validatedWork, p.ValidatedChainWork)
+
+	// Over the wire and through the client-side converter, which is what the
+	// blockvalidation catchup gate actually reads.
+	wire, err := proto.Marshal(p)
+	require.NoError(t, err)
+	decoded := &p2p_api.PeerInfoForCatchup{}
+	require.NoError(t, proto.Unmarshal(wire, decoded))
+
+	native, err := convertFromAPIPeerInfo(decoded)
+	require.NoError(t, err)
+	require.Equal(t, uint32(498), native.ValidatedHeight)
+	require.Equal(t, validatedHash, native.ValidatedBlockHash)
+	require.Equal(t, validatedWork, native.ValidatedChainWork)
 }
 
 func TestReportValidBlockHeaders_CreditsReputationNotCatchupCounters(t *testing.T) {

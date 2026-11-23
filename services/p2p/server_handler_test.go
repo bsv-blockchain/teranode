@@ -54,6 +54,9 @@ func TestServer_PeerInfoToP2PProto_RoundTripFields(t *testing.T) {
 		BlocksReceived:         11,
 		SubtreesReceived:       12,
 		TransactionsReceived:   13,
+		ValidatedHeight:        98,
+		ValidatedBlockHash:     hash,
+		ValidatedChainWork:     []byte{0x00, 0x00, 0x00, 0x42},
 	}
 
 	out := peerInfoToP2PProto(bp)
@@ -77,6 +80,23 @@ func TestServer_PeerInfoToP2PProto_RoundTripFields(t *testing.T) {
 	require.Equal(t, bp.BlocksReceived, out.BlocksReceived)
 	require.Equal(t, bp.SubtreesReceived, out.SubtreesReceived)
 	require.Equal(t, bp.TransactionsReceived, out.TransactionsReceived)
+	require.Equal(t, bp.ValidatedHeight, out.ValidatedHeight)
+	require.Equal(t, hash.String(), out.ValidatedBlockHash)
+	require.Equal(t, bp.ValidatedChainWork, out.ValidatedChainWork)
+
+	// The validated triple must also come back out of the client-side converter after
+	// a wire round trip, since the catchup peer gate reads it from the native type.
+	wire, err := proto.Marshal(out)
+	require.NoError(t, err)
+	decoded := &p2p_api.PeerRegistryInfo{}
+	require.NoError(t, proto.Unmarshal(wire, decoded))
+	decoded.Id = mustNewPeerID(t).String() // "peer-1" is not a decodable libp2p ID
+
+	native, err := convertFromAPIPeerInfo(decoded)
+	require.NoError(t, err)
+	require.Equal(t, bp.ValidatedHeight, native.ValidatedHeight)
+	require.Equal(t, hash, native.ValidatedBlockHash)
+	require.Equal(t, bp.ValidatedChainWork, native.ValidatedChainWork)
 }
 
 // TestServer_GetPeerRegistry_ReceivedCountersSurviveWire drives the path a
