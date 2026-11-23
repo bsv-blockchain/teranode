@@ -205,6 +205,11 @@ func safeBatcherPutBatchCtx[T any](b batcherIfc[T], ctx context.Context, items [
 type Store struct {
 	utxo.LanePositions
 
+	// laneSlotWrites is whether the server records a spend's lane position in the parent's slot,
+	// which the start-up probe checks with lane positions on. It only decides how spends are
+	// counted; a spend carries its position either way.
+	laneSlotWrites atomic.Bool
+
 	ctx                 context.Context // store the global context for things that run in the background
 	url                 *url.URL
 	client              *uaerospike.Client
@@ -434,8 +439,8 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 		batcherWait:            batcherWaitTimeout(tSettings),
 	}
 
-	s.NameLaneBurns("aerospike")
-	s.NameLaneReturns("aerospike")
+	s.NameLaneBurns(laneStoreName)
+	s.NameLaneReturns(laneStoreName)
 
 	// Initialize spendLuaPackages array with configurable count
 	if s.settings.Aerospike.SeparateSpendUDFModuleCount > 0 {
@@ -576,6 +581,13 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 	// update the version of the lua script when a new version is launched, do not re-use the old one
 	if err = registerLuaIfNecessary(logger, client, LuaPackageMined, teranodeLUA); err != nil {
 		return nil, errors.NewStorageError("Failed to register udfLUA mined", err)
+	}
+
+	// With lane positions on, check that the server records a spender's lane position in the
+	// parent's slot, on the route spends take. It only decides how spends are counted; with lane
+	// positions off it does not run.
+	if s.laneShadow() {
+		s.laneSlotWrites.Store(s.probeLaneSlotWrites(ctx))
 	}
 
 	spendBatchSize := s.settings.UtxoStore.SpendBatcherSize

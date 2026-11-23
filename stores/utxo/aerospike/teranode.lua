@@ -26,6 +26,7 @@ local BIN_UTXOS = "utxos"
 local BIN_UTXO_SPENDABLE_IN = "utxoSpendableIn"
 local BIN_LAST_SPENT_STATE = "lastSpentState"  -- Tracks last signaled state: "ALLSPENT" or "NOTALLSPENT"
 local BIN_DELETED_CHILDREN = "deletedChildren"  -- Tracks which child transactions have already been deleted
+local BIN_SPEND_LANE_POS = "spendLanePos"  -- 8 little-endian bytes per output: the lane position of its spender
 
 -- Status constants
 local STATUS_OK = "OK"
@@ -110,6 +111,8 @@ end
 
 -- Helper functions
 local bytes_size = bytes.size
+local bytes_get_int64_le = bytes.get_int64_le
+local bytes_set_int64_le = bytes.set_int64_le
 local bytes_get_bytes = bytes.get_bytes
 local string_format = string.format
 local table_concat = table.concat
@@ -202,6 +205,63 @@ local function createUTXOWithSpendingData(utxoHash, spendingData)
     end
 
     return newUtxo
+end
+
+-- Lane positions in the slot (util/lane in teranode). The spendLanePos bin holds 8 little-endian
+-- bytes per output, in output order: the lane position of the transaction that spent output offset
+-- is bytes offset*8 to offset*8+7, the packed position bit for bit. A spend writes it only when its
+-- item carries a non-zero lanePos, which teranode sends only with utxostore_laneMigration at shadow,
+-- so with lane positions off no record gains the bin. It grows with zeros to cover the output being
+-- spent and is never shrunk. Zero means no position. A spend repeated by the same spender writes
+-- nothing, so a stored position never changes. Unspend zeroes the output's 8 bytes.
+local SLOT_LANE_POS_SIZE = 8
+
+-- Records position for the output at offset (0-based) and returns the bin to write back, which is
+-- a new, longer byte string when lanes did not yet cover the output.
+local function setSlotLanePos(lanes, offset, position)
+    local base = offset * SLOT_LANE_POS_SIZE
+    local needed = base + SLOT_LANE_POS_SIZE
+    local size = 0
+
+    if lanes ~= nil then
+        size = bytes_size(lanes)
+    end
+
+    if size < needed then
+        local grown = bytes(needed)
+
+        for i = 1, size do
+            grown[i] = lanes[i]
+        end
+
+        for i = size + 1, needed do
+            grown[i] = 0
+        end
+
+        lanes = grown
+    end
+
+    bytes_set_int64_le(lanes, base + 1, position)
+
+    return lanes
+end
+
+-- Zeroes the position recorded for the output at offset (0-based). Returns the bin to write back,
+-- or nil when the bin does not cover the output, so there is nothing to clear.
+local function clearSlotLanePos(lanes, offset)
+    if lanes == nil then
+        return nil
+    end
+
+    local base = offset * SLOT_LANE_POS_SIZE
+
+    if bytes_size(lanes) < base + SLOT_LANE_POS_SIZE or bytes_get_int64_le(lanes, base + 1) == 0 then
+        return nil
+    end
+
+    bytes_set_int64_le(lanes, base + 1, 0)
+
+    return lanes
 end
 
 --- Retrieves and validates a UTXO and its spending data
@@ -366,6 +426,8 @@ function spendMulti(rec, spends, ignoreConflicting, ignoreLocked, currentBlockHe
     local spendableIn = rec[BIN_UTXO_SPENDABLE_IN]
     local spendCount = #spends
     local spentUtxos = rec[BIN_SPENT_UTXOS] or 0
+    local slotLanes = nil
+    local slotLanesChanged = false
 
     -- Use direct array indexing instead of iterator for better performance
     for i = 1, spendCount do
@@ -452,12 +514,27 @@ function spendMulti(rec, spends, ignoreConflicting, ignoreLocked, currentBlockHe
         utxos[offset + 1] = newUtxo -- NB - lua arrays are 1-based!!!!
         spentUtxos = spentUtxos + 1
 
+        -- The spender's lane position, only when the spend carries one.
+        local lanePos = spend['lanePos']
+        if lanePos ~= nil and lanePos ~= 0 then
+            if not slotLanesChanged then
+                slotLanes = rec[BIN_SPEND_LANE_POS]
+            end
+
+            slotLanes = setSlotLanePos(slotLanes, offset, lanePos)
+            slotLanesChanged = true
+        end
+
         ::continue::
     end
 
     -- Update the record with the new values
     rec[BIN_UTXOS] = utxos
     rec[BIN_SPENT_UTXOS] = spentUtxos
+
+    if slotLanesChanged then
+        rec[BIN_SPEND_LANE_POS] = slotLanes
+    end
 
     local signal, childCount, conflicting = setDeleteAtHeight(rec, currentBlockHeight, blockHeightRetention)
 
@@ -579,6 +656,12 @@ function unspend(rec, offset, utxoHash, expectedSpendingData, currentBlockHeight
 
         local spentUtxos = rec[BIN_SPENT_UTXOS]
         rec[BIN_SPENT_UTXOS] = spentUtxos - 1
+
+        -- The spender's lane position goes with its spend.
+        local clearedLanes = clearSlotLanePos(rec[BIN_SPEND_LANE_POS], offset)
+        if clearedLanes ~= nil then
+            rec[BIN_SPEND_LANE_POS] = clearedLanes
+        end
     end
 
     local signal, childCount, conflicting = setDeleteAtHeight(rec, currentBlockHeight, blockHeightRetention)

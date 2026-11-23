@@ -61,7 +61,9 @@ func (s *Store) ParentOutputsForValidation(ctx context.Context, outpoints []utxo
 		hashes[i] = op.TxID
 	}
 
-	res, err := s.lookupMany(ctx, hashes, false, true)
+	// With lane positions on, the same lookup also selects each parent's own lane position, which
+	// the validator copies onto the child; it is one more column on rows the lookup reads anyway.
+	res, err := s.lookupManyLane(ctx, hashes, false, true, s.laneShadow)
 	if err != nil {
 		fault := errors.NewStorageError("[utxoset][ParentOutputsForValidation] lookup", err)
 		for i := range answers {
@@ -86,6 +88,7 @@ func (s *Store) ParentOutputsForValidation(ctx context.Context, outpoints []utxo
 		}
 
 		answers[i].Status, answers[i].Height = parentStatus(data)
+		answers[i].LanePosition = data.LanePosition
 		fromCoins = append(fromCoins, i)
 	}
 

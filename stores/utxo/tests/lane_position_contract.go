@@ -593,7 +593,9 @@ func LanePositionBurns(t *testing.T, db utxostore.Store, store string) {
 		require.NoError(t, err)
 
 		// Spends root output 0, which w.Txs[0] has spent: the spend is refused before any create
-		// runs, so every store hands the position back, and it still burned.
+		// runs and before any write, so every store hands the position back, and it still burned. A
+		// store that records the spender's position in the parents' slots returns it too, because
+		// its only input was refused before its slot was written.
 		double := spendOneOutput(t, w.Roots[0], 0)
 
 		requireBurns(t, store, LaneBurns{utxostore.LaneBurnSpendRejected + "/validator": 1}, func() {

@@ -265,6 +265,21 @@ type SequentialStore interface {
 	GetMeta(ctx context.Context, hash *chainhash.Hash, data *meta.Data) error
 }
 
+// LaneSpender is a SequentialStore whose spend can record the spender's lane position (util/lane)
+// in each parent's slot, in the same write that marks the output spent. SequentialSpendAndCreate
+// calls it, in place of Spend, when the call has a spender position: the one it just took for the
+// record it creates, or the one a spend-only caller names for a record already written. With lane
+// positions off every spend goes through Spend exactly as before. It is an
+// interface of its own rather than a field of IgnoreFlags, because IgnoreFlags sits inside
+// CreateOptions, which every create allocates, and eight more bytes there would move it up a size
+// class.
+//
+// A LaneSpender writes no parent's slot for an input whose Spend comes back with a refusal its spend
+// script makes before it writes that output (see LaneSpendWroteNothing).
+type LaneSpender interface {
+	SpendWithLanePosition(ctx context.Context, tx *bt.Tx, blockHeight uint32, position uint64, ignoreFlags IgnoreFlags) ([]*Spend, error)
+}
+
 // SequentialSpendAndCreate implements the Store.SpendAndCreate contract as the
 // original two-call sequence: spend the inputs, create the outputs, and roll the
 // spends back (with retries) when the create definitely failed. Concrete stores
@@ -328,6 +343,9 @@ func SequentialSpendAndCreate(ctx context.Context, logger ulogger.Logger, s Sequ
 	var (
 		taker LanePositionTaker
 		taken uint64
+		// spender is the record's position, which a LaneSpender records in each parent's slot;
+		// zero with lane positions off, so the spends go out exactly as before.
+		spender uint64
 	)
 
 	if !options.SpendOnly {
@@ -345,7 +363,18 @@ func SequentialSpendAndCreate(ctx context.Context, logger ulogger.Logger, s Sequ
 			if TookLanePosition(options.LanePosition, position) {
 				taken = position
 			}
+
+			spender = position
 		}
+	} else if options.LanePosition != lane.None {
+		// A spend-only call creates nothing, so it takes, burns and returns no position. A caller
+		// that has already written the record, as a below-checkpoint list's second wave has, names
+		// that record's position so its spends record it in each parent's slot.
+		if err := lane.CheckPosition(options.LanePosition); err != nil {
+			return nil, nil, errors.NewInvalidArgumentError("[SequentialSpendAndCreate] spender lane position", err)
+		}
+
+		spender = options.LanePosition
 	}
 
 	// Create-first ordering (create tentative → spend → finalize) applies only to the
@@ -354,7 +383,7 @@ func SequentialSpendAndCreate(ctx context.Context, logger ulogger.Logger, s Sequ
 	if createFirst && !options.CreateOnly && !options.SpendOnly {
 		blockContext := options.IgnoreFlags.IgnoreLocked || len(options.MinedBlockInfos) > 0
 
-		return sequentialCreateFirst(ctx, logger, s, tx, blockHeight, options.IgnoreFlags, blockContext, opts...)
+		return sequentialCreateFirst(ctx, logger, s, tx, blockHeight, options.IgnoreFlags, blockContext, spender, opts...)
 	}
 
 	blockContext := options.IgnoreFlags.IgnoreLocked || len(options.MinedBlockInfos) > 0
@@ -369,11 +398,22 @@ func SequentialSpendAndCreate(ctx context.Context, logger ulogger.Logger, s Sequ
 	// position that two records carry is not.
 	positionClean := true
 
+	// spentWithLane is whether a spend of this call carried the spender's position into the
+	// parents' slots. A refused spend of that kind may still have written a slot on a parent it
+	// spent before the refusal, so it returns its position only when every input was refused before
+	// its write (LaneSpendWroteNothing). It stays set across rounds: a slot that an earlier round
+	// wrote is not undone by a later refusal.
+	var spentWithLane bool
+
 	for {
 		var spends []*Spend
 
 		if !options.CreateOnly {
-			spends, err = s.Spend(ctx, tx, blockHeight, options.IgnoreFlags)
+			var laneSpend bool
+
+			spends, laneSpend, err = spendWithPosition(ctx, s, tx, blockHeight, spender, options.IgnoreFlags)
+			spentWithLane = spentWithLane || laneSpend
+
 			if err != nil {
 				if inTheWay.reverseCarried(ctx, logger, s, tx, blockHeight, opts) {
 					// The claim wrote a record that carries the position.
@@ -391,8 +431,10 @@ func SequentialSpendAndCreate(ctx context.Context, logger ulogger.Logger, s Sequ
 					taker.BurnLanePosition(options.Caller, reason)
 
 					// No record of this round carries the position; a refused spend returns it, when
-					// no earlier Create of this call may have written it.
-					if positionClean && RefusedSpend(err, spends) {
+					// no earlier Create of this call may have written it, and, for a spend that
+					// carried it into the parents' slots, only when every input was refused before
+					// its write.
+					if positionClean && RefusedSpend(err, spends) && (!spentWithLane || LaneSpendWroteNothing(spends)) {
 						taker.ReturnLanePosition(taken, LaneReturnSpendRejected, true)
 					}
 				}
@@ -456,6 +498,20 @@ func SequentialSpendAndCreate(ctx context.Context, logger ulogger.Logger, s Sequ
 
 		return nil, nil, err
 	}
+}
+
+// spendWithPosition spends the inputs of tx, recording the spender's lane position in each parent's
+// slot when the store can and the call has a position. laneSpend reports whether it did.
+func spendWithPosition(ctx context.Context, s SequentialStore, tx *bt.Tx, blockHeight uint32, spender uint64, flags IgnoreFlags) (spends []*Spend, laneSpend bool, err error) {
+	if laneSpender, ok := s.(LaneSpender); ok && spender != lane.None {
+		spends, err = laneSpender.SpendWithLanePosition(ctx, tx, blockHeight, spender, flags)
+
+		return spends, true, err
+	}
+
+	spends, err = s.Spend(ctx, tx, blockHeight, flags)
+
+	return spends, false, err
 }
 
 // rollbackInTheWay is the state of one spend-first SpendAndCreate across the rounds it needs to
@@ -1105,7 +1161,7 @@ func releaseRollbackHold(ctx context.Context, logger ulogger.Logger, s rollbackH
 //     ErrTxExists roll-forward on re-encounter, the pruner sweep, or setMined. The lease is
 //     released, because the spends it covers are complete.
 func sequentialCreateFirst(ctx context.Context, logger ulogger.Logger, s SequentialStore,
-	tx *bt.Tx, blockHeight uint32, ignoreFlags IgnoreFlags, blockContext bool, opts ...CreateOption) (*meta.Data, []*Spend, error) {
+	tx *bt.Tx, blockHeight uint32, ignoreFlags IgnoreFlags, blockContext bool, spender uint64, opts ...CreateOption) (*meta.Data, []*Spend, error) {
 	// Force WithCreating(true) last so it cannot be overridden by a caller option (belt and
 	// suspenders alongside the caller-supplied WithCreating rejection in SequentialSpendAndCreate).
 	createOpts := append(append([]CreateOption{}, opts...), WithCreating(true))
@@ -1196,7 +1252,7 @@ func sequentialCreateFirst(ctx context.Context, logger ulogger.Logger, s Sequent
 	freshFlags.RequireParentOutputs = true
 
 	spendCtx, cancelSpend := context.WithDeadline(WithLeaseBound(ctx), spendDeadline)
-	spends, err := s.Spend(spendCtx, tx, blockHeight, freshFlags)
+	spends, _, err := spendWithPosition(spendCtx, s, tx, blockHeight, spender, freshFlags)
 
 	cancelSpend()
 
