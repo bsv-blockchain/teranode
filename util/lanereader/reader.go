@@ -120,6 +120,16 @@ func (r *Reader) Snapshot() *lane.IndexSnapshot {
 	return r.idx.Load().Snapshot()
 }
 
+// ViewOfIDs is the view of the chain whose blocks are ids in the newest snapshot, nil until the
+// index has its first tip.
+func (r *Reader) ViewOfIDs(ids map[uint32]bool) *lane.ChainView {
+	if s := r.Snapshot(); s != nil {
+		return s.ViewOfIDs(ids)
+	}
+
+	return nil
+}
+
 // MainView is the view of the main chain in the newest snapshot, nil until the index has its
 // first tip.
 func (r *Reader) MainView() *lane.ChainView {

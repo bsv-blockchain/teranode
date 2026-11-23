@@ -302,8 +302,10 @@ type IndexSnapshot struct {
 	tipID        uint32
 	tipHeight    uint32
 	// anchorHeight is the height of the newest folded block, the block every floor's claims rest
-	// on; 0 before any fold.
+	// on; 0 before any fold. anchorID is that block, valid when anchored.
 	anchorHeight uint32
+	anchored     bool
+	anchorID     uint32
 	// startHeight is the lowest height on the main chain the index loaded.
 	startHeight uint32
 	stats       IndexStats
@@ -388,6 +390,9 @@ type ChainView struct {
 	joinHeight uint32
 	// floorValid is whether the floors hold on this chain: the chain holds the anchor.
 	floorValid bool
+	// ids, when set, is the chain as a set of block IDs, given by the caller, in place of fork and
+	// joinHeight.
+	ids map[uint32]bool
 }
 
 // Snapshot is the view's snapshot.
@@ -398,6 +403,15 @@ func (v *ChainView) FloorValid() bool { return v.floorValid }
 
 // Height returns block id's height and whether it is on the chain.
 func (v *ChainView) Height(id uint32) (uint32, bool) {
+	if v.ids != nil {
+		b, ok := v.snap.blocks[id]
+		if !ok || !v.ids[id] {
+			return 0, false
+		}
+
+		return b.height, true
+	}
+
 	if h, ok := v.fork[id]; ok {
 		return h, true
 	}
@@ -450,6 +464,13 @@ func (s *IndexSnapshot) ViewFrom(hash chainhash.Hash) (*ChainView, bool) {
 
 		id = b.parent
 	}
+}
+
+// ViewOfIDs is the view of the chain whose blocks are ids, as a caller that already holds its
+// chain's block IDs, such as subtree validation's already-mined check, judges it. The floors hold
+// only if ids holds the anchor.
+func (s *IndexSnapshot) ViewOfIDs(ids map[uint32]bool) *ChainView {
+	return &ChainView{snap: s, ids: ids, floorValid: s.anchored && ids[s.anchorID]}
 }
 
 // Lookup answers whether the chain holds a block that took the packed lane position pos, and
@@ -926,6 +947,8 @@ func (x *Index) publish() {
 		tipID:        x.tipID,
 		tipHeight:    x.tipHeight,
 		anchorHeight: x.anchorH,
+		anchored:     x.anchored,
+		anchorID:     x.anchorID,
 		startHeight:  x.tipHeight,
 	}
 

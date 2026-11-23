@@ -372,3 +372,28 @@ func TestIndexIntervalTreeFindsEveryCoveringRow(t *testing.T) {
 		require.Equal(t, Answer{Mined: true, Via: ViaRow, BlockID: want, Height: want}, v.Lookup(Pack(9, p)), "position %d", p)
 	}
 }
+
+// A view given as a set of block IDs judges on exactly those blocks, fork blocks included, and
+// the floors hold only if the set holds the anchor.
+func TestIndexViewOfIDs(t *testing.T) {
+	c := newTestChain(t, 2)
+
+	c.add(1, 0, 1, rangeRows(t, 4, 1, 100))
+	c.line(2, 5)
+	c.add(106, 5, 6, rowsOf(t, 4, 200))
+	c.add(6, 5, 6)
+	c.tip(6) // anchor 4
+
+	s := c.idx.Snapshot()
+
+	v := s.ViewOfIDs(map[uint32]bool{1: true, 2: true, 3: true, 4: true, 5: true, 106: true})
+	require.True(t, v.FloorValid())
+	require.Equal(t, Answer{Mined: true, Via: ViaRow, BlockID: 106, Height: 6}, v.Lookup(Pack(4, 200)), "the fork block in the set")
+	require.Equal(t, Answer{Mined: true, Via: ViaFloor}, v.Lookup(Pack(4, 50)))
+
+	v = s.ViewOfIDs(map[uint32]bool{5: true, 106: true})
+	require.False(t, v.FloorValid(), "the set does not hold the anchor")
+	require.Equal(t, Answer{}, v.Lookup(Pack(4, 50)))
+
+	require.Equal(t, Answer{}, s.ViewOfIDs(map[uint32]bool{6: true}).Lookup(Pack(4, 200)), "the fork block is not in the set")
+}

@@ -626,9 +626,16 @@ func (u *Server) blessMissing(ctx context.Context, blockHash chainhash.Hash, sub
 		return nil, false, errors.NewProcessingError("[blessMissingTransaction][%s/%s][%s] tx meta is nil", blockHash.String(), subtreeHash.String(), tx.TxID())
 	}
 
-	// At utxostore_laneMigration shadow, the lanes shadow of the check below, counted only.
+	// At utxostore_laneMigration shadow, the lanes shadow of the check below, counted only, judged
+	// on the same chain: blockIds, the ancestry the caller validates against, or the main chain
+	// when the caller gave none.
 	if r := lanereader.Current(); r != nil {
-		r.CompareBlocks(lanereader.ReaderSubtreeAlreadyMined, r.MainView(), *tx.TxIDChainHash(), txMeta.LanePosition, txMeta.BlockIDs)
+		view := r.MainView()
+		if len(blockIds) > 0 {
+			view = r.ViewOfIDs(blockIds)
+		}
+
+		r.CompareBlocks(lanereader.ReaderSubtreeAlreadyMined, view, *tx.TxIDChainHash(), txMeta.LanePosition, txMeta.BlockIDs)
 	}
 
 	// check whether this transaction was already mined on our chain by comparing the block ids

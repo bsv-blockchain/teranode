@@ -572,3 +572,49 @@ func TestReaderPrepareGivesUpWaitingForAnotherLoad(t *testing.T) {
 	_, ok = r.Prepare(context.Background(), b2.hash)
 	require.True(t, ok)
 }
+
+// setMined's backlog can reach a block already folded into the floors, whose rows' bitmaps have
+// left memory: the duplicate check counts it not_loaded, whatever the verdict.
+func TestReaderCountsTheDuplicateCheckOfAFoldedBlockNotLoaded(t *testing.T) {
+	engines(t, func(t *testing.T, store blockchainstore.Store) {
+		c := newChain(t, store)
+
+		b1 := c.add(nil, takes(t, 2, 50))
+		c.line(b1, 4)
+
+		r := newReader(ulogger.TestLogger{}, store, 2)
+		follow(t, r)
+		require.True(t, r.Snapshot().Folded(b1.id))
+
+		for _, verdict := range []bool{false, true} {
+			requireCounted(t, ReaderBlockDuplicate, KindNotLoaded, lane.ViaNone, func() {
+				r.CompareDuplicates(r.MainView(), b1.hash, b1.id, verdict)
+			})
+		}
+	})
+}
+
+// Subtree validation's check judges on the block IDs of the chain it validates against, so a
+// block a reorg replaced, still on that chain, answers by its row.
+func TestReaderJudgesOnTheChainOfTheCallersBlockIDs(t *testing.T) {
+	engines(t, func(t *testing.T, store blockchainstore.Store) {
+		c := newChain(t, store)
+
+		b1 := c.add(nil)
+		b2 := c.add(b1, takes(t, 4, 5))
+
+		r := newReader(ulogger.TestLogger{}, store, 100)
+		follow(t, r)
+
+		rival := c.add(b1)
+		c.add(rival)
+		follow(t, r)
+
+		requireCounted(t, ReaderSubtreeAlreadyMined, KindAgree, lane.ViaRow, func() {
+			r.CompareBlocks(ReaderSubtreeAlreadyMined, r.ViewOfIDs(map[uint32]bool{b1.id: true, b2.id: true}), chainhash.Hash{}, lane.Pack(4, 5), []uint32{b2.id})
+		})
+		requireCounted(t, ReaderSubtreeAlreadyMined, KindLanesOnly, lane.ViaRow, func() {
+			r.CompareBlocks(ReaderSubtreeAlreadyMined, r.ViewOfIDs(map[uint32]bool{b1.id: true, b2.id: true}), chainhash.Hash{}, lane.Pack(4, 5), nil)
+		})
+	})
+}

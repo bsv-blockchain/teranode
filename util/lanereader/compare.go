@@ -270,6 +270,14 @@ func (r *Reader) CompareDuplicates(v *lane.ChainView, hash chainhash.Hash, block
 	byRow, byFloor, hasRows := v.TakenBefore(blockID)
 	taken := byRow + byFloor
 
+	// A block already folded into the floors, as setMined's backlog can reach during catch-up,
+	// has rows whose bitmaps have left memory: the index cannot say.
+	if state, _ := v.Snapshot().Block(blockID); state == lane.BlockHasRows && v.Snapshot().Folded(blockID) {
+		count(ReaderBlockDuplicate, KindNotLoaded, lane.ViaNone)
+
+		return
+	}
+
 	via := lane.ViaNone
 
 	switch {

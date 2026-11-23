@@ -125,8 +125,10 @@ func (d *Daemon) startServices(ctx context.Context, logger ulogger.Logger, appSe
 		{startPruner, func() error { return d.startPrunerService(ctx, appSettings, createLogger) }},
 	}
 
-	// At utxostore_laneMigration shadow, every process with a check that asks whether a parent is
-	// mined keeps an index of the lane map and answers it from there too (util/lanereader).
+	// At utxostore_laneMigration shadow, a process running a service that checks whether a parent
+	// is mined, or builds a validator that does, keeps an index of the lane map and answers those
+	// checks from it too (util/lanereader). An RPC-only process with a local validator does not,
+	// so its validator's parent checks are not counted.
 	if startSubtreeValidation || startBlockValidation || startValidator || startPropagation || startLegacy {
 		d.startLaneReader(ctx, appSettings, createLogger)
 	}
