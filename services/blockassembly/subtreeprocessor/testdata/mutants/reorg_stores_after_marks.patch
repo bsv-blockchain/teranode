@@ -1,0 +1,26 @@
+diff --git a/services/blockassembly/subtreeprocessor/SubtreeProcessor.go b/services/blockassembly/subtreeprocessor/SubtreeProcessor.go
+index 6396edc30..a21700334 100644
+--- a/services/blockassembly/subtreeprocessor/SubtreeProcessor.go
++++ b/services/blockassembly/subtreeprocessor/SubtreeProcessor.go
+@@ -6041,9 +6041,6 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveBackBlocks []*
+ 	// that failed or did not finish in time fails the reorg here, before anything irreversible
+ 	// below, and a reset follows (failedForkReorgNeedsReset). At 0 the wait is as before and never
+ 	// fails on a store.
+-	if err = stp.storeAndAnnounceChainedSubtrees(ctx, "reorgBlocks", len(stp.chainedSubtrees), true, stp.settings.BlockAssembly.ReorgStoreDeadline); err != nil {
+-		return err
+-	}
+ 
+ 	stp.phases.done("store_wait")
+ 
+@@ -6070,6 +6067,11 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveBackBlocks []*
+ 		return err
+ 	}
+ 
++	// mutant: the stores run after the marks
++	if err = stp.storeAndAnnounceChainedSubtrees(ctx, "reorgBlocks", len(stp.chainedSubtrees), true, stp.settings.BlockAssembly.ReorgStoreDeadline); err != nil {
++		return err
++	}
++
+ 	stp.phases.done("marks")
+ 
+ 	// Announce the subtrees stored above. They are in the store, so the store's Exists path
