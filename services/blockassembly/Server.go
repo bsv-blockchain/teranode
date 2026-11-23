@@ -937,7 +937,7 @@ func (ba *BlockAssembly) buildSubtreeMeta(subtreeRequest subtreeprocessor.NewSub
 	// An in-memory tx map keeps the inpoints serialized, so the meta is put
 	// together from those bytes without decoding and encoding every tx's inpoints.
 	if serialized, ok := subtreeRequest.ParentTxMap.(serializedInpointsMap); ok {
-		subtreeMetaBytes, err := buildSubtreeMetaBytes(subtree, serialized, subtreeRequest.DeletedTxs, laneBits)
+		subtreeMetaBytes, err := buildSubtreeMetaBytes(subtree, serialized, subtreeRequest.DeletedTxs, subtreeRequest.DeletedPositions, laneBits)
 		if err != nil {
 			ba.logger.Errorf("[BlockAssembly:storeSubtreeData][%s] failed to build subtree meta: %s", subtree.RootHash().String(), err)
 			return nil, false
@@ -999,18 +999,20 @@ func (ba *BlockAssembly) buildSubtreeMeta(subtreeRequest subtreeprocessor.NewSub
 				}
 			}
 
-			if laneBits != nil {
-				// a node found only in DeletedTxs, below, has no position
-				laneBits.Add(position)
-			}
-
 			if !found && subtreeRequest.DeletedTxs != nil {
 				// Fallback: check if transaction was deleted during async storage
 				var deletedTxInpoints subtreepkg.TxInpoints
 				deletedTxInpoints, found = subtreeRequest.DeletedTxs.Get(node.Hash)
 				if found {
 					txInpoints = &deletedTxInpoints
+
+					// and its lane position from the backup beside it
+					position = deletedLanePosition(subtreeRequest.DeletedPositions, node.Hash)
 				}
+			}
+
+			if laneBits != nil {
+				laneBits.Add(position)
 			}
 			if !found {
 				ba.logger.Errorf("[BlockAssembly:storeSubtreeData][%s] failed to find parent tx hashes for node %s: parent transaction not found in ParentTxMap or DeletedTxs", subtreeRequest.Subtree.RootHash().String(), node.Hash.String())
@@ -1120,7 +1122,7 @@ func (ba *BlockAssembly) storeSubtreeData(ctx context.Context, subtreeRequest su
 			if lanes {
 				// a meta pass that failed part way collected only some positions
 				if !ok {
-					laneBits = subtreeLanePositions(subtree, subtreeRequest.ParentTxMap)
+					laneBits = subtreeLanePositions(subtree, subtreeRequest.ParentTxMap, subtreeRequest.DeletedPositions)
 				}
 
 				ba.storeSubtreeLaneBitmaps(ctx, subtree, laneBits, height, dah)
@@ -1157,7 +1159,7 @@ func (ba *BlockAssembly) storeSubtreeData(ctx context.Context, subtreeRequest su
 			go func() {
 				defer close(laneBitmapsDone)
 
-				ba.storeSubtreeLaneBitmaps(ctx, subtree, subtreeLanePositions(subtree, subtreeRequest.ParentTxMap), height, dah)
+				ba.storeSubtreeLaneBitmaps(ctx, subtree, subtreeLanePositions(subtree, subtreeRequest.ParentTxMap, subtreeRequest.DeletedPositions), height, dah)
 			}()
 		}
 	}

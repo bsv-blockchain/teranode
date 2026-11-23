@@ -51,9 +51,9 @@ var emptyInpointsWire = [4]byte{} // TxInpoints.Serialize of inpoints without pa
 // but the coinbase placeholder to laneBits. When parents keeps positions, each node's position is
 // read with its inpoints, under the same lock; that includes node 0 of a subtree that is not its
 // block's first, which is a real tx. A node found only in deletedTxs, because it was removed while
-// the subtree was being stored, has none, which is counted. laneBits is complete only when it
-// returns no error.
-func buildSubtreeMetaBytes(subtree *subtreepkg.Subtree, parents serializedInpointsMap, deletedTxs *txmap.SyncedMap[chainhash.Hash, subtreepkg.TxInpoints], laneBits *lane.BitmapsBuilder) ([]byte, error) {
+// the subtree was being stored, takes its position from deletedPositions, the backup kept beside
+// it, or has none, which is counted. laneBits is complete only when it returns no error.
+func buildSubtreeMetaBytes(subtree *subtreepkg.Subtree, parents serializedInpointsMap, deletedTxs *txmap.SyncedMap[chainhash.Hash, subtreepkg.TxInpoints], deletedPositions *txmap.SyncedMap[chainhash.Hash, uint64], laneBits *lane.BitmapsBuilder) ([]byte, error) {
 	nodes := subtree.Nodes
 
 	var positioned positionedSerializedInpointsMap
@@ -98,13 +98,17 @@ func buildSubtreeMetaBytes(subtree *subtreepkg.Subtree, parents serializedInpoin
 			return nil, errors.NewProcessingError("inpoints of node %s cannot be serialized", node.Hash.String(), err)
 		}
 
-		if laneBits != nil {
-			// a node found only in deletedTxs, below, has no position
-			laneBits.Add(position)
+		if found {
+			if laneBits != nil {
+				laneBits.Add(position)
+			}
+
+			continue
 		}
 
-		if found {
-			continue
+		// removed while the subtree was being stored: its position is in the backup beside its inpoints
+		if laneBits != nil {
+			laneBits.Add(deletedLanePosition(deletedPositions, node.Hash))
 		}
 
 		if deletedTxs == nil {
@@ -127,4 +131,16 @@ func buildSubtreeMetaBytes(subtree *subtreepkg.Subtree, parents serializedInpoin
 	}
 
 	return out, nil
+}
+
+// deletedLanePosition returns the lane position backed up for hash when it was removed from the pool
+// while its subtree was being stored, or 0 for none.
+func deletedLanePosition(deletedPositions *txmap.SyncedMap[chainhash.Hash, uint64], hash chainhash.Hash) uint64 {
+	if deletedPositions == nil {
+		return 0
+	}
+
+	position, _ := deletedPositions.Get(hash)
+
+	return position
 }

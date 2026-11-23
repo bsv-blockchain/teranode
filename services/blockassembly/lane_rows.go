@@ -7,6 +7,7 @@ import (
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
+	txmap "github.com/bsv-blockchain/go-tx-map"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
@@ -254,7 +255,10 @@ func (o *ownLaneBitmaps) len() int {
 // PositionWithErr: a read error that Position recorded on the map would be taken by the
 // processor's next check for its own, and fail that block movement into a reset. A position that
 // cannot be read is none, and counted.
-func subtreeLanePositions(subtree *subtreepkg.Subtree, parentTxMap subtreeprocessor.TxInpointsMap) *lane.BitmapsBuilder {
+//
+// A tx removed from the pool while the subtree was being stored takes its position from
+// deletedPositions, the backup kept beside its inpoints.
+func subtreeLanePositions(subtree *subtreepkg.Subtree, parentTxMap subtreeprocessor.TxInpointsMap, deletedPositions *txmap.SyncedMap[chainhash.Hash, uint64]) *lane.BitmapsBuilder {
 	laneBits := lane.NewBitmapsBuilder()
 
 	withErr, readsWithErr := parentTxMap.(interface {
@@ -273,6 +277,10 @@ func subtreeLanePositions(subtree *subtreepkg.Subtree, parentTxMap subtreeproces
 			position, _ = withErr.PositionWithErr(node.Hash)
 		case parentTxMap != nil:
 			position = parentTxMap.Position(node.Hash)
+		}
+
+		if position == 0 {
+			position = deletedLanePosition(deletedPositions, node.Hash)
 		}
 
 		laneBits.Add(position)
@@ -322,7 +330,7 @@ func (ba *BlockAssembly) keepExistingSubtreeLaneBitmaps(ctx context.Context, sub
 	root := *subtree.RootHash()
 
 	if !ba.ownLaneBitmaps.touch(root, height) {
-		ba.storeSubtreeLaneBitmaps(ctx, subtree, subtreeLanePositions(subtree, subtreeRequest.ParentTxMap), height, dah)
+		ba.storeSubtreeLaneBitmaps(ctx, subtree, subtreeLanePositions(subtree, subtreeRequest.ParentTxMap, subtreeRequest.DeletedPositions), height, dah)
 		return
 	}
 
@@ -336,8 +344,10 @@ func (ba *BlockAssembly) keepExistingSubtreeLaneBitmaps(ctx context.Context, sub
 // counted and logged.
 //
 // A subtree of the block whose bitmaps are not kept yet is waited for, up to ownLaneBitmapsWait:
-// its storage may still be running. The wait is part of the build stage's time. Past it, one still
-// being stored counts as timed out and one with no storage running as absent.
+// its storage may still be running. When the wait ends with every subtree's bitmaps kept, it is
+// part of the build stage's time (teranode_lane_gate_seconds{block="own",stage="build"}). When any
+// is still missing, no build time is recorded: one still being stored counts as timed out and one
+// with no storage running as absent, in teranode_lane_missing_bitmaps_total.
 func (ba *BlockAssembly) ownLaneRows(ctx context.Context, block *model.Block) []lane.MapRow {
 	if !ba.keepsLanePositions() || len(block.Subtrees) == 0 {
 		return nil

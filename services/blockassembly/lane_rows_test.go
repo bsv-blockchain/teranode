@@ -577,7 +577,7 @@ func TestSubtreeLanePositionsReadsWithoutRecordingErrors(t *testing.T) {
 	require.NoError(t, st.AddCoinbaseNode())
 	require.NoError(t, st.AddNode(chainhash.HashH([]byte("lane-failing-read")), 1, 1))
 
-	laneBits := subtreeLanePositions(st, failingPositionMap{TxInpointsMap: subtreeprocessor.NewSplitTxInpointsMap(1)})
+	laneBits := subtreeLanePositions(st, failingPositionMap{TxInpointsMap: subtreeprocessor.NewSplitTxInpointsMap(1)}, nil)
 	require.Equal(t, 1, laneBits.Unpositioned())
 }
 

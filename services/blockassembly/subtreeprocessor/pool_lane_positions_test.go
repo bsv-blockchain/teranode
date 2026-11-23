@@ -416,3 +416,38 @@ func TestPoolKeepsLanePositionAcrossMapKinds(t *testing.T) {
 		})
 	}
 }
+
+// TestConflictRemovalBacksUpLanePositions: a removal backs up each tx's lane position beside its
+// inpoints before it deletes the tx from the pool, so a subtree being stored meanwhile keeps it; the
+// disk map's re-chain does the same for every tx it deletes and re-adds. The backup goes once the
+// subtree is stored.
+func TestConflictRemovalBacksUpLanePositions(t *testing.T) {
+	stp, _ := lanePoolProcessor(t, true, true)
+
+	for i := 0; i < 9; i++ {
+		require.NoError(t, stp.addNodeAt(subtreepkg.Node{Hash: lanePoolTxHash(800 + i), Fee: 1, SizeInBytes: 1}, lanePoolInpoints(i), lane.Pack(5, uint64(50+i)), true))
+	}
+
+	removed := lanePoolTxHash(801)
+
+	// what a subtree storage in flight would hold, taken before the removal
+	backups := stp.deletedPositions
+
+	require.NoError(t, stp.removeTxFromSubtrees(context.Background(), removed))
+
+	position, ok := backups.Get(removed)
+	require.True(t, ok, "the removed tx's position is backed up")
+	require.Equal(t, lane.Pack(5, 51), position)
+
+	_, stillHeld := backups.Get(lanePoolTxHash(805))
+	require.False(t, stillHeld, "a re-chained tx's backup goes once it is back in the pool")
+
+	st, err := subtreepkg.NewTreeByLeafCount(4)
+	require.NoError(t, err)
+	require.NoError(t, st.AddNode(removed, 1, 1))
+
+	stp.cleanupDeletedTxs(st)
+
+	_, ok = backups.Get(removed)
+	require.False(t, ok, "the backup goes once the subtree is stored")
+}
