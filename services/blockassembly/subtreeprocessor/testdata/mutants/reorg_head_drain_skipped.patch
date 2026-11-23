@@ -1,0 +1,13 @@
+diff --git a/services/blockassembly/subtreeprocessor/SubtreeProcessor.go b/services/blockassembly/subtreeprocessor/SubtreeProcessor.go
+index 2d7cbd297..d7f361f59 100644
+--- a/services/blockassembly/subtreeprocessor/SubtreeProcessor.go
++++ b/services/blockassembly/subtreeprocessor/SubtreeProcessor.go
+@@ -5531,7 +5531,7 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveBackBlocks []*
+ 	stp.phases.done("upfront_reads")
+ 
+ 	// dequeueDuringBlockMovement all transactions that are in the queue
+-	if err = stp.dequeueDuringBlockMovement(nil, nil, nil, true); err != nil {
++	if err = error(nil); err != nil { // mutant: the head drain is skipped
+ 		return errors.NewProcessingError("[reorgBlocks] error dequeueing transactions during block movement", err)
+ 	}
+ 
