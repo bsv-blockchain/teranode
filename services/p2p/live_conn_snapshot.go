@@ -108,8 +108,10 @@ func (s *Server) liveConnAddrs(peerID string) ([]string, bool) {
 
 	// Re-read the clock: the wait for rebuildMu can be as long as another
 	// worker's walk, and judging that worker's view against the pre-wait time
-	// would make it look younger than it is, while stamping our own rebuild
-	// with it would publish a view already partway through its TTL.
+	// would make it look younger than it is. Views are stamped when their walk
+	// completes (see rebuildLiveConnsLocked), so a view published while we
+	// waited reads as fresh here and a queue of waiters behind one slow walk
+	// shares its result instead of each walking again.
 	now = time.Now()
 
 	// Another worker may have rebuilt while we waited for the lock; its view
@@ -120,7 +122,7 @@ func (s *Server) liveConnAddrs(peerID string) ([]string, bool) {
 		}
 	}
 
-	v := s.rebuildLiveConnsLocked(now)
+	v := s.rebuildLiveConnsLocked()
 
 	addrs, ok := v.addrs[peerID]
 
@@ -130,7 +132,13 @@ func (s *Server) liveConnAddrs(peerID string) ([]string, bool) {
 // rebuildLiveConnsLocked walks P2PClient.GetPeers() once, publishes the peers
 // with open connections as the current view and returns it. Callers must
 // hold liveConns.rebuildMu.
-func (s *Server) rebuildLiveConnsLocked(now time.Time) *liveConnView {
+//
+// The view is stamped when the walk returns, not when it started. A walk is
+// linear in every author the message bus has tracked, so it can outlast
+// liveConnMissRefreshInterval; a start-of-walk stamp would make the view stale
+// on arrival and send every lookup queued behind the walk into a walk of its
+// own.
+func (s *Server) rebuildLiveConnsLocked() *liveConnView {
 	peers := s.P2PClient.GetPeers()
 	addrs := make(map[string][]string, len(peers))
 
@@ -140,7 +148,7 @@ func (s *Server) rebuildLiveConnsLocked(now time.Time) *liveConnView {
 		}
 	}
 
-	v := &liveConnView{addrs: addrs, takenAt: now}
+	v := &liveConnView{addrs: addrs, takenAt: time.Now()}
 	s.liveConns.view.Store(v)
 
 	return v
@@ -180,7 +188,7 @@ func (s *Server) snapshotLiveConnIDs() map[string]struct{} {
 	s.liveConns.rebuildMu.Lock()
 	defer s.liveConns.rebuildMu.Unlock()
 
-	v := s.rebuildLiveConnsLocked(time.Now())
+	v := s.rebuildLiveConnsLocked()
 
 	for id := range v.addrs {
 		live[id] = struct{}{}
