@@ -10,6 +10,7 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/bscript"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/services/validator"
 	"github.com/bsv-blockchain/teranode/settings"
@@ -188,6 +189,14 @@ func TestBlessMissingShadowsTheAlreadyMinedCheck(t *testing.T) {
 	_, _, err = server.blessMissing(context.Background(), chainhash.Hash{}, chainhash.Hash{}, tx, 3, map[uint32]bool{b2: true}, validator.ProcessOptions())
 	require.NoError(t, err, "b1 is not on the caller's chain, so the transaction is not already mined there")
 	require.Equal(t, before+1, subtreeAlreadyMined(t, lanereader.KindAgree, "none"))
+
+	// The caller's chain holds b1: the check rejects the transaction as already mined, and the
+	// shadow has compared it first.
+	before = subtreeAlreadyMined(t, lanereader.KindAgree, "row")
+
+	_, _, err = server.blessMissing(context.Background(), chainhash.Hash{}, chainhash.Hash{}, tx, 3, map[uint32]bool{b1: true, b2: true}, validator.ProcessOptions())
+	require.ErrorIs(t, err, errors.ErrTxInvalid)
+	require.Equal(t, before+1, subtreeAlreadyMined(t, lanereader.KindAgree, "row"), "compared before the rejection")
 
 	// A record with no mined block, such as a new one on the block path, needs no position for
 	// the check, so the shadow reads nothing.

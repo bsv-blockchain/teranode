@@ -257,8 +257,9 @@ func BenchmarkIndexLookupDesignRate(b *testing.B) {
 // BenchmarkIndexLookupDesignRateScattered times a lookup in one design-rate backlog row per lane:
 // a block taking a random half of 53 million positions, one by one, the shape whose hole data the
 // design puts at 75 to 78 MB a block over 17 lanes. Only 4 such rows are built: 288 blocks of
-// them are the 22 GB case no reader holds (the design's overflow), so this measures the lookup
-// cost and the heap per row, not two days.
+// them are the 22 GB case far past the reader memory mark, which the current reader would still
+// try to load (the design's bounded overflow read is not built), so this measures the lookup cost
+// and the heap per row, not two days.
 func BenchmarkIndexLookupDesignRateScattered(b *testing.B) {
 	const (
 		perBlock = 53_000_000
