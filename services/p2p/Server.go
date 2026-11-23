@@ -43,6 +43,7 @@ import (
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
+	"github.com/bsv-blockchain/teranode/util/expiringmap"
 	"github.com/bsv-blockchain/teranode/util/health"
 	"github.com/bsv-blockchain/teranode/util/kafka"
 	kafkamessage "github.com/bsv-blockchain/teranode/util/kafka/kafka_message"
@@ -52,6 +53,7 @@ import (
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
 	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/peer"
+	ma "github.com/multiformats/go-multiaddr"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/emptypb"
@@ -129,6 +131,22 @@ const (
 	// the untruncated validator error chain, so keep headroom for those during
 	// mixed-version operation.
 	maxRejectedTxMessageSize = 8 * 1024 // 8KB
+
+	// preAnnouncedBlockHashTTL bounds how long an entry survives in
+	// preAnnouncedBlockHashes. It only needs to outlast the gap between
+	// AddBlock and the SetBlockSubtreesSet call that follows it (block
+	// assembly's mined-block path, and quick-validate/catchup's commitBlock) —
+	// two back-to-back synchronous calls, normally well under a second. Kept
+	// generous over that to tolerate load rather than tuned tight: an entry
+	// living past its consuming BlockSubtreesSet notification only wastes a
+	// slot until it expires, since the Block notification already announced
+	// that hash correctly.
+	preAnnouncedBlockHashTTL = 10 * time.Minute
+
+	// preAnnouncedBlockHashMaxSize bounds preAnnouncedBlockHashes so a burst of
+	// locally-mined or quick-validated blocks whose SetBlockSubtreesSet call is
+	// slow to arrive cannot grow it without limit.
+	preAnnouncedBlockHashMaxSize = 1024
 )
 
 // peerMapEntry stores peer information with timestamp for TTL tracking
@@ -183,12 +201,22 @@ type Server struct {
 	subtreeSeenHashes                 seenHashCache                  // Subtree hashes already announced within the TTL; suppresses replayed announcements before the Kafka publish
 	lastAnnouncedBlockHash            atomic.Pointer[chainhash.Hash] // Most recently gossiped tip; suppresses the consecutive re-announcements a blockchain-subscription reconnect replays
 	lastAnnouncedSubtreeHash          atomic.Pointer[chainhash.Hash] // Most recently gossiped subtree, same consecutive-duplicate guard as lastAnnouncedBlockHash
-	connectedPeersProbe               atomic.Pointer[peersProbe]     // Briefly cached "any peer connected" answer for the sender guards; GetPeers walks every connection and subtrees announce constantly
-	startTime                         time.Time                      // Server start time for uptime calculation
-	peerRegistry                      blockchain.PeerRegistryClientI // gRPC client for the centralized peer registry hosted by the blockchain service
-	peerSelector                      *PeerSelector                  // Stateless peer selection logic
-	syncCoordinator                   *SyncCoordinator               // Orchestrates sync operations
-	syncConnectionTimes               sync.Map                       // Map to track when we first connected to each sync peer (peerID -> timestamp)
+	// preAnnouncedBlockHashes records hashes announceBlock already announced
+	// via NotificationType_Block because their subtrees were already set at add
+	// time; handleBlockSubtreesSetNotification consumes an entry to skip the
+	// second, BlockSubtreesSet-triggered announcement of the same hash instead
+	// of gossiping it twice. See announceBlock's comments for why this cannot
+	// affect the lastAnnouncedBlockHash reorg-away-and-back case. Entries expire
+	// on their own (preAnnouncedBlockHashTTL) as a memory bound for the case
+	// SetBlockSubtreesSet's notification never arrives; correctness does not
+	// depend on the TTL length, only the map's memory bound does.
+	preAnnouncedBlockHashes *expiringmap.ExpiringMap[chainhash.Hash, struct{}]
+	connectedPeersProbe     atomic.Pointer[peersProbe]     // Briefly cached "any peer connected" answer for the sender guards; GetPeers walks every connection and subtrees announce constantly
+	startTime               time.Time                      // Server start time for uptime calculation
+	peerRegistry            blockchain.PeerRegistryClientI // gRPC client for the centralized peer registry hosted by the blockchain service
+	peerSelector            *PeerSelector                  // Stateless peer selection logic
+	syncCoordinator         *SyncCoordinator               // Orchestrates sync operations
+	syncConnectionTimes     sync.Map                       // Map to track when we first connected to each sync peer (peerID -> timestamp)
 
 	// Cleanup configuration
 	peerMapCleanupTicker *time.Ticker  // Ticker for periodic cleanup of peer maps
@@ -287,6 +315,60 @@ func privateIPColocationWhitelist() []*net.IPNet {
 	return nets
 }
 
+// bsvaBootstrapDomain is the BSVA-managed DNS zone behind the committed
+// p2p_bootstrap_peers default (/dnsaddr/${network}.bootstrap.teranode.bsvb.tech).
+const bsvaBootstrapDomain = "bootstrap.teranode.bsvb.tech"
+
+// isRegtest reports whether the node runs on regtest, a local chain with no
+// public network to join.
+func isRegtest(tSettings *settings.Settings) bool {
+	return tSettings.ChainCfgParams != nil && tSettings.ChainCfgParams.Name == chaincfg.RegressionNetParams.Name
+}
+
+// isBSVABootstrapPeer reports whether addr is a /dnsaddr/ entry in the
+// BSVA-managed bootstrap zone. Unparseable entries are not matched: the message
+// bus logs and skips them itself.
+func isBSVABootstrapPeer(addr string) bool {
+	maddr, err := ma.NewMultiaddr(addr)
+	if err != nil {
+		return false
+	}
+
+	host, err := maddr.ValueForProtocol(ma.P_DNSADDR)
+	if err != nil {
+		return false
+	}
+
+	host = strings.TrimSuffix(strings.ToLower(host), ".")
+
+	return host == bsvaBootstrapDomain || strings.HasSuffix(host, "."+bsvaBootstrapDomain)
+}
+
+// bootstrapPeersForNetwork returns the configured bootstrap peers, minus any
+// BSVA-managed bootstrap entries on regtest. The committed default is templated
+// from ${network}, so a regtest node would otherwise try to resolve
+// regtest.bootstrap.teranode.bsvb.tech: BSVA publishes no such record.
+// Operator-supplied peers are kept so private multi-node regtest clusters can
+// still bootstrap.
+func bootstrapPeersForNetwork(logger ulogger.Logger, tSettings *settings.Settings) []string {
+	peers := tSettings.P2P.BootstrapPeers
+	if !isRegtest(tSettings) {
+		return peers
+	}
+
+	kept := make([]string, 0, len(peers))
+	for _, p := range peers {
+		if isBSVABootstrapPeer(p) {
+			logger.Infof("[p2p] skipping BSVA bootstrap peer %s on regtest", p)
+			continue
+		}
+
+		kept = append(kept, p)
+	}
+
+	return kept
+}
+
 // buildP2PMessageBusConfig maps Teranode P2P settings onto the message bus config.
 //
 // GossipSub mesh protection: peer scoring penalizes IP-colocated Sybil swarms and
@@ -295,6 +377,18 @@ func privateIPColocationWhitelist() []*net.IPNet {
 // inverted here because the settings key is expressed as an enable flag while the bus
 // config expresses it as a disable flag. PX enabled without scoring is the
 // spec-violating state this wiring exists to eliminate, so it is a configuration error.
+//
+// AllowedPublisherIDs, when set, is passed straight through to the bus, which filters
+// pubsub message authorship against it. This is global across every subscribed topic
+// (block, subtree, node status, rejected tx), not just block and subtree: a
+// non-allowlisted peer's messages on all four are silently dropped before delivery.
+// Because node status is included, a filtered peer stops being registered or
+// refreshed by incoming messages. That only removes it from the peer registry and
+// the /p2p-ws monitoring feed immediately if it was never registered before the
+// allowlist took effect: a pre-existing entry stays, and reconcileConnectionStates
+// keeps it flagged connected off live libp2p connectivity regardless of pubsub
+// filtering, until p2p_peer_registry_ttl (default 24h) evicts it. That consequence
+// is accepted, not worked around here - see the field's settings doc.
 func buildP2PMessageBusConfig(logger ulogger.Logger, tSettings *settings.Settings, privKey crypto.PrivKey, protocolVersion, dhtMode string, advertiseAddresses []string) (p2pMessageBus.Config, error) {
 	if tSettings.P2P.EnablePeerExchange && !tSettings.P2P.EnablePeerScoring {
 		return p2pMessageBus.Config{}, errors.NewConfigurationError("p2p_enable_peer_exchange requires p2p_enable_peer_scoring (gossipsub v1.1 pairs PX with scoring); disable peer exchange or enable scoring")
@@ -305,8 +399,9 @@ func buildP2PMessageBusConfig(logger ulogger.Logger, tSettings *settings.Setting
 		Name:                tSettings.ClientName,
 		Logger:              logger,
 		PeerCacheFile:       p2pCacheFilePath(tSettings.P2P.PeerCacheDir),
-		BootstrapPeers:      tSettings.P2P.BootstrapPeers,
+		BootstrapPeers:      bootstrapPeersForNetwork(logger, tSettings),
 		StaticPeers:         tSettings.P2P.StaticPeers,
+		AllowedPublisherIDs: tSettings.P2P.AllowedPublisherIDs,
 		ProtocolVersion:     protocolVersion,
 		DHTMode:             dhtMode,
 		DHTCleanupInterval:  tSettings.P2P.DHTCleanupInterval,
@@ -315,6 +410,14 @@ func buildP2PMessageBusConfig(logger ulogger.Logger, tSettings *settings.Setting
 		AllowPrivateIPs:     tSettings.P2P.AllowPrivateIPs,
 		EnablePeerScoring:   tSettings.P2P.EnablePeerScoring,
 		DisablePeerExchange: !tSettings.P2P.EnablePeerExchange,
+	}
+
+	// An empty bootstrap list otherwise falls back to the public IPFS bootstrap
+	// peers; regtest must never dial, relay through or join the DHT of those.
+	conf.DisableDefaultBootstrapPeers = isRegtest(tSettings)
+
+	if err := applyConnectionLimits(&conf, tSettings.P2P); err != nil {
+		return p2pMessageBus.Config{}, err
 	}
 
 	if tSettings.P2P.EnablePeerScoring {
@@ -415,16 +518,16 @@ func resolveAdvertiseAddresses(logger ulogger.Logger, tSettings *settings.Settin
 		// Silent mode: no explicit announce addresses. Discoverability is
 		// removed by disabling the DHT (see NewServer), not by this branch.
 		if len(tSettings.P2P.AdvertiseAddresses) > 0 {
-			logger.Infof("[silent mode] p2p_advertise_addresses %v suppressed - nothing is announced in silent mode", tSettings.P2P.AdvertiseAddresses)
+			logger.Infof("[silent mode] p2p_advertise_addresses %v suppressed - nothing is announced in silent mode", tSettings.P2P.AdvertiseAddresses) // urlsafe: libp2p multiaddrs, which have no userinfo
 		} else {
 			logger.Infof("[silent mode] no advertise addresses announced")
 		}
 		return nil
 	case len(tSettings.P2P.AdvertiseAddresses) > 0:
-		logger.Infof("Using configured advertise addresses: %v", tSettings.P2P.AdvertiseAddresses)
+		logger.Infof("Using configured advertise addresses: %v", tSettings.P2P.AdvertiseAddresses) // urlsafe: libp2p multiaddrs, which have no userinfo
 		return tSettings.P2P.AdvertiseAddresses
 	default:
-		logger.Infof("No advertise addresses configured - libp2p will advertise every bound interface address (private ones included) and the public address observed by peers; p2p_share_private_addresses=%v has no effect on this", tSettings.P2P.SharePrivateAddresses)
+		logger.Infof("No advertise addresses configured - libp2p will advertise every bound interface address (private ones included) and the public address observed by peers; p2p_share_private_addresses=%v has no effect on this", tSettings.P2P.SharePrivateAddresses) // urlsafe: a bool
 		return nil
 	}
 }
@@ -658,6 +761,7 @@ func NewServer(
 		nodeStatusTopicName:               fmt.Sprintf("%s-%s", topicPrefix, nodeStatusTopic),
 		topicPrefix:                       topicPrefix,
 		startTime:                         time.Now(),
+		preAnnouncedBlockHashes:           expiringmap.New[chainhash.Hash, struct{}](preAnnouncedBlockHashTTL).WithMaxSize(preAnnouncedBlockHashMaxSize),
 	}
 
 	initPrometheusMetrics()
@@ -941,6 +1045,13 @@ func (s *Server) setupHTTPServer() *echo.Echo {
 		},
 		AllowMethods: []string{echo.GET},
 	}))
+
+	httpRateLimit := 0
+	if s.settings != nil {
+		httpRateLimit = s.settings.P2P.HTTPRateLimit
+	}
+
+	e.Use(newIPRateLimiter(httpRateLimit).Middleware())
 
 	e.GET("/health", func(c echo.Context) error {
 		return c.String(http.StatusOK, "OK")
@@ -1446,9 +1557,9 @@ func (s *Server) updatePeerLastMessageTime(from string, originatorPeerID string)
 	// would exempt them from registry cleanup and let a flood of self-signed
 	// messages under fresh peer IDs grow the registry without bound.
 	if s.hasLiveConnection(from) {
-		s.addConnectedPeer(senderID, "", 0, nil, "")
+		s.addConnectedPeer(senderID, "", peerHeightClaim{}, nil, "")
 	} else {
-		s.addPeer(senderID, "", 0, nil, "")
+		s.addPeer(senderID, "", peerHeightClaim{}, nil, "")
 	}
 	s.touchLastMessageTime(senderID)
 
@@ -1461,7 +1572,7 @@ func (s *Server) updatePeerLastMessageTime(from string, originatorPeerID string)
 				return
 			}
 			// Add as gossiped peer (not connected) before updating last message time
-			s.addPeer(peerID, "", 0, nil, "")
+			s.addPeer(peerID, "", peerHeightClaim{}, nil, "")
 			s.touchLastMessageTime(peerID)
 		}
 	}
@@ -1562,7 +1673,10 @@ func (s *Server) handleNodeStatusTopic(ctx context.Context, m []byte, peerID str
 	// clients. It is bounded here rather than in sanitizeNodeStatusMessage so
 	// that sanitizeAdvertisedTip still sees the value the peer actually sent.
 	notificationBestBlockHash := sanitizePeerHexString(nodeStatusMessage.BestBlockHash, maxPeerHexStringLen)
-	sanitizedBestHeight := nodeStatusMessage.BestHeight
+	// sanitizedHeights is only ever produced by sanitizeAdvertisedTip: addPeer
+	// below is gated on sanitizedTipOK, so its zero value never reaches the
+	// registry.
+	var sanitizedHeights peerHeightClaim
 	var sanitizedBestBlockHash *chainhash.Hash
 	sanitizedTipOK := false
 
@@ -1595,10 +1709,15 @@ func (s *Server) handleNodeStatusTopic(ctx context.Context, m []byte, peerID str
 
 	if !isSelf && nodeStatusMessage.BestHeight > 0 && nodeStatusMessage.PeerID != "" {
 		var ok bool
-		sanitizedBestHeight, sanitizedBestBlockHash, ok = s.sanitizeAdvertisedTip(nodeStatusMessage.PeerID, nodeStatusMessage.BestHeight, nodeStatusMessage.BestBlockHash, s.getLocalHeight(ctx))
+		sanitizedHeights, sanitizedBestBlockHash, ok = s.sanitizeAdvertisedTip(nodeStatusMessage.PeerID, nodeStatusMessage.BestHeight, nodeStatusMessage.BestBlockHash, s.getLocalHeight(ctx))
 		if ok {
 			sanitizedTipOK = true
-			notificationBestHeight = sanitizedBestHeight
+			// Only the registry copy below is capped. notificationBestHeight
+			// keeps the height the peer actually advertised: the cap is a
+			// bound on what an unvalidated claim may influence, not a
+			// statement about the peer, and a node still catching up would
+			// otherwise report every peer at localHeight+maxLead — a number
+			// no peer ever sent, shown next to that peer's real tip hash.
 			notificationBestBlockHash = sanitizedBestBlockHash.String()
 		} else {
 			notificationBestHeight = 0
@@ -1674,7 +1793,7 @@ func (s *Server) handleNodeStatusTopic(ctx context.Context, m []byte, peerID str
 			return
 		}
 
-		s.addPeer(peerID, nodeStatusMessage.ClientName, sanitizedBestHeight, sanitizedBestBlockHash, nodeStatusMessage.BaseURL)
+		s.addPeer(peerID, nodeStatusMessage.ClientName, sanitizedHeights, sanitizedBestBlockHash, nodeStatusMessage.BaseURL)
 		s.logger.Debugf("[handleNodeStatusTopic] Updated block hash %s for peer %s", notificationBestBlockHash, peerID)
 
 		// Update storage mode if provided
@@ -1688,7 +1807,7 @@ func (s *Server) handleNodeStatusTopic(ctx context.Context, m []byte, peerID str
 	// Also ensure the sender is in the registry
 	if !isSelf && peerID != "" {
 		if senderID, err := peer.Decode(peerID); err == nil {
-			s.addPeer(senderID, "", 0, nil, "")
+			s.addPeer(senderID, "", peerHeightClaim{}, nil, "")
 		}
 	}
 }
@@ -1720,7 +1839,50 @@ func (s *Server) hasConnectedPeers() bool {
 	return nonEmpty
 }
 
+// handleBlockNotification announces a block on NotificationType_Block. It only
+// publishes once the block's subtrees are validated (meta.SubtreesSet): in
+// optimistic-mining mode for peer blocks, AddBlock runs before block.Valid's
+// block-level checks (header contextual rules, old-block-ID / double-spend
+// checks) finish in a background goroutine — the block's subtrees are already
+// fully validated and their files already stored by the time AddBlock runs, in
+// both optimistic and normal validation, so this is not about a peer being
+// unable to fetch the subtrees we announce. It is about not relaying a block
+// to the rest of the network before this node's own background integrity
+// check on it has finished, even though optimistic mining's actual benefit
+// (mining on top of the block sooner) is purely local and does not need the
+// announcement to happen early. The block is announced instead once
+// NotificationType_BlockSubtreesSet fires for it, via
+// handleBlockSubtreesSetNotification below.
 func (s *Server) handleBlockNotification(ctx context.Context, hash *chainhash.Hash) error {
+	return s.announceBlock(ctx, hash, false)
+}
+
+// handleBlockSubtreesSetNotification announces a block on
+// NotificationType_BlockSubtreesSet, sent once SetBlockSubtreesSet runs for
+// it (services/blockchain/Server.go). This is what makes optimistic-mode peer
+// blocks — whose earlier Block notification arrived before block.Valid
+// finished in the background and so was not announced by
+// handleBlockNotification — get announced at all, and it is when the normal
+// (non-optimistic) validation path first announces a peer block too, since it
+// also defers AddBlock's SubtreesSet option to after validation completes.
+//
+// There is deliberately no check that the block is still the tip or on the
+// main chain. Before this gate existed every added block was announced on
+// AddBlock, side-chain blocks included, so that is unchanged. What differs is
+// timing: a block whose flag the periodic sweep sets late is announced late,
+// possibly after the tip has moved on.
+func (s *Server) handleBlockSubtreesSetNotification(ctx context.Context, hash *chainhash.Hash) error {
+	return s.announceBlock(ctx, hash, true)
+}
+
+// announceBlock is the shared implementation behind handleBlockNotification
+// and handleBlockSubtreesSetNotification. viaSubtreesSetNotification tells it
+// which of the two notifications is being processed, which matters only for
+// the preAnnouncedBlockHashes duplicate check below — everything else
+// (dedup against the current tip, the invalid check, message construction,
+// field validation, publish, and the node_status refresh) is identical
+// either way.
+func (s *Server) announceBlock(ctx context.Context, hash *chainhash.Hash, viaSubtreesSetNotification bool) error {
 	if s.settings.P2P.ListenMode == settings.ListenModeListenOnly || s.settings.P2P.ListenMode == settings.ListenModeSilent {
 		return nil
 	}
@@ -1732,10 +1894,41 @@ func (s *Server) handleBlockNotification(ctx context.Context, hash *chainhash.Ha
 	// a flapping blockchain stream would re-gossip the same hash with a fresh
 	// seqno — a replay to peers that suppress and spam-score repeats. Suppress
 	// consecutive duplicates only: a reorg away and back changes the announced
-	// hash in between and still gets through.
+	// hash in between and still gets through. This guard is symmetric across
+	// both notification types: whichever of the two most recently announced a
+	// hash arms it, and either can trip it next.
 	if last := s.lastAnnouncedBlockHash.Load(); last != nil && last.IsEqual(hash) {
-		ctxLogger.Debugf("[handleBlockNotification] suppressing repeat announcement of current tip %s", hash.String())
+		ctxLogger.Debugf("[announceBlock] suppressing repeat announcement of current tip %s", hash.String())
 		return nil
+	}
+
+	// A block whose subtrees were already set when it was added (block
+	// assembly's locally-mined path, and the quick-validate/catchup path) gets
+	// announced here by the Block notification below, before this function
+	// ever sees a BlockSubtreesSet notification for it. Both of those paths
+	// still call SetBlockSubtreesSet afterwards for unrelated reasons (the
+	// former so blockvalidation's setMined listener runs, the latter as part
+	// of updateSubtreesDAH), which fires a second, BlockSubtreesSet,
+	// notification for the SAME hash — announcing again here would gossip the
+	// block twice. preAnnouncedBlockHashes is written only by the
+	// viaSubtreesSetNotification=false (Block) branch below and consumed only
+	// here, so it never affects a same-type re-announcement: the
+	// lastAnnouncedBlockHash guard above, and the reorg-away-and-back case its
+	// comment describes, stay a Block-notification-only concern that this
+	// check cannot see (that case is exercised purely through repeated Block
+	// notifications, e.g. TestHandleBlockNotification_SuppressesConsecutiveDuplicateTip,
+	// so it never reaches this branch at all).
+	// Nil-checked because tests build a Server literal directly rather than
+	// through NewServer; a nil map here just disables this specific dedup
+	// (the lastAnnouncedBlockHash guard above still applies), matching the
+	// other pointer-shaped optional fields on Server (e.g. registryBatcher).
+	if viaSubtreesSetNotification && s.preAnnouncedBlockHashes != nil {
+		if _, ok := s.preAnnouncedBlockHashes.Get(*hash); ok {
+			s.preAnnouncedBlockHashes.Delete(*hash)
+			ctxLogger.Debugf("[announceBlock] block %s already announced when its subtrees were set at add time, skipping duplicate BlockSubtreesSet announcement", hash.String())
+
+			return nil
+		}
 	}
 
 	var msgBytes []byte
@@ -1747,7 +1940,33 @@ func (s *Server) handleBlockNotification(ctx context.Context, hash *chainhash.Ha
 
 	if meta.Invalid {
 		// do not announce invalid blocks
-		ctxLogger.Infof("[handleBlockNotification] Not announcing invalid block %s", hash.String())
+		ctxLogger.Infof("[announceBlock] Not announcing invalid block %s", hash.String())
+		return nil
+	}
+
+	// subtrees_set is not just about subtree data: on the validation paths,
+	// updateSubtreesDAH sets it only after block.Valid succeeds (both the
+	// optimistic and normal paths defer it to there), not merely once the
+	// subtrees are servable (those are already valid and stored before AddBlock
+	// runs, in either path). It is not a guarantee that the check passed,
+	// though. The periodic processSubtreesNotSet sweep also calls
+	// updateSubtreesDAH, on every block whose flag is still false, and that
+	// includes an optimistic block whose background check exited without
+	// success and is waiting for revalidation (a failed header-ID lookup, a
+	// non-invalid block.Valid error, or a failed attempt to record the block as
+	// invalid). If the sweep reaches such a block before its revalidation
+	// finishes, the block is announced. That is no worse than before this gate
+	// existed, when every block was announced on AddBlock. The sweep cannot
+	// simply skip these blocks: a successful reValidateBlock never calls
+	// updateSubtreesDAH, so after a transient failure the sweep is the only
+	// thing that sets the flag, and setMined depends on it. The BlockSubtreesSet
+	// notification announces the block once the flag is set. Defensively
+	// applied to both notification types, though a BlockSubtreesSet
+	// notification should never observe this false: the store update and cache
+	// invalidation in SetBlockSubtreesSet happen before it sends the
+	// notification.
+	if !meta.SubtreesSet {
+		ctxLogger.Debugf("[announceBlock] not yet announcing block %s, subtrees not set", hash.String())
 		return nil
 	}
 
@@ -1800,12 +2019,20 @@ func (s *Server) handleBlockNotification(ctx context.Context, hash *chainhash.Ha
 	// proxy for the topic mesh.
 	if sent && s.hasConnectedPeers() {
 		s.lastAnnouncedBlockHash.Store(hash)
+
+		// Only the Block-notification branch records this: it is what
+		// handleBlockSubtreesSetNotification's duplicate check above consumes,
+		// and a BlockSubtreesSet announcement never needs to arm it, since
+		// nothing ever consumes an entry written from that side.
+		if !viaSubtreesSetNotification && s.preAnnouncedBlockHashes != nil {
+			s.preAnnouncedBlockHashes.Set(*hash, struct{}{})
+		}
 	}
 
 	// Also send a node_status update when best block changes
 	if err = s.handleNodeStatusNotification(ctx); err != nil {
 		// Log the error but don't fail the block notification
-		ctxLogger.Warnf("[handleBlockNotification] error sending node status update: %v", err)
+		ctxLogger.Warnf("[announceBlock] error sending node status update: %v", err)
 	}
 
 	return nil
@@ -2445,6 +2672,10 @@ func (s *Server) processBlockchainNotification(ctx context.Context, notification
 		ctxLogger.Infof(logProcessingNotification, notification.Type, hash.String())
 		return s.handleBlockNotification(ctx, hash) // These handlers return wrapped errors
 
+	case model.NotificationType_BlockSubtreesSet:
+		ctxLogger.Infof(logProcessingNotification, notification.Type, hash.String())
+		return s.handleBlockSubtreesSetNotification(ctx, hash)
+
 	case model.NotificationType_Subtree:
 		ctxLogger.Infof(logProcessingNotification, notification.Type, hash.String())
 		return s.handleSubtreeNotification(ctx, hash)
@@ -2460,35 +2691,146 @@ func (s *Server) processBlockchainNotification(ctx context.Context, notification
 	return nil // For unhandled types, not an error that stops the listener
 }
 
+// notificationProcessTimeout bounds the work done for one notification on the
+// announcement worker: Block, BlockSubtreesSet, Subtree, a PeerFailure that is
+// not a catchup failure, and any other type. It covers the calls that honour
+// the notification's context: the FSM skip check, the blockchain reads, the
+// wait for the pubsub event loop at the start of the gossip publish, and most
+// of the node_status refresh. Two waits are not bounded by it: the node_status
+// sync-peer lookup (getPeer) uses the service context, and libp2p's final
+// hand-off of a message to its event loop waits only on the pubsub's own
+// context, so a stalled pubsub loop can still park the announcement worker.
+// Peer rotation does not run on that worker. A var so tests can shorten it.
+var notificationProcessTimeout = 30 * time.Second
+
+// The queue sizes are vars so tests can shrink them.
+var (
+	// peerFailureQueueSize holds catchup PeerFailure notifications waiting for
+	// the peer-failure worker. Each one rotates the sync peer, so a backlog this
+	// deep already means rotation is behind; a drop past it loses nothing a
+	// queued entry will not redo.
+	peerFailureQueueSize = 64
+
+	// announcementQueueSize matches the blockchain client's per-subscriber
+	// channel buffer (services/blockchain/Client.go Subscribe). That client
+	// waits up to 30 s for room before it drops a notification; this queue
+	// drops at once. A backlog of more than 1,000 that would have drained
+	// within 30 s is therefore lost here, where the old serial listener
+	// delivered it. Each drop is counted in
+	// teranode_p2p_blockchain_notifications_dropped_total with
+	// reason="queue_full".
+	announcementQueueSize = 1_000
+)
+
+// blockchainSubscriptionListener reads the blockchain subscription and hands
+// each notification to a worker queue without doing any work itself, so
+// nothing it reads can wait behind a slow blockchain call or gossip publish. A
+// notification whose queue is full is dropped at once, logged at Warn and
+// counted with reason=queue_full.
+//
+// Catchup PeerFailure notifications get a worker of their own. They are what
+// drops a sync peer promptly after a failed catchup; without them rotation
+// waits for the periodic reputation check or the no-progress timeout. Catchup
+// restores RUNNING before it reports the failure, so they arrive while Block
+// notifications are being announced. On a shared serial loop a block announcement parked in
+// GetBlockHeader or Publish held the PeerFailure behind it, and once the
+// subscription channel filled, the blockchain client dropped it outright: the
+// node kept syncing from the peer that had just failed it. Other PeerFailure
+// types (today only "block", from the Kafka block-retry path) are only logged,
+// so they go with everything else to the announcement worker and cannot fill
+// the peer-failure queue ahead of a catchup failure. The announcement worker keeps the order this listener
+// receives them in. The blockchain client sends each notification from its
+// own goroutine, so that order is not guaranteed.
 func (s *Server) blockchainSubscriptionListener(ctx context.Context, blockchainSubscription <-chan *blockchain.Notification) {
 	ctxLogger := s.logger.WithTraceContext(ctx)
 
-	// define vars here to prevent too many allocs
-	var notification *blockchain.Notification
+	peerFailures := make(chan *blockchain.Notification, peerFailureQueueSize)
+	announcements := make(chan *blockchain.Notification, announcementQueueSize)
+
+	go s.peerFailureWorker(ctx, peerFailures)
+	go s.announcementWorker(ctx, announcements)
 
 	for {
 		select {
 		case <-ctx.Done():
 			ctxLogger.Infof("[blockchainSubscriptionListener] P2P service shutting down")
 			return
-		case notification = <-blockchainSubscription:
+		case notification := <-blockchainSubscription:
 			if notification == nil {
 				continue
 			}
 
-			// Skip notifications whose outbound announcement is not allowed in
-			// the current FSM state; control notifications (e.g. PeerFailure,
-			// needed to switch peers on catchup failure) always pass.
-			if s.shouldSkipNotification(ctx, notification.Type) {
-				continue
+			queue, queueName := announcements, "announcement"
+			if isCatchupPeerFailure(notification) {
+				queue, queueName = peerFailures, "peer-failure"
 			}
 
-			// received a message
-			if err := s.processBlockchainNotification(ctx, notification); err != nil {
-				ctxLogger.Errorf("[blockchainSubscriptionListener] Error processing notification (Type: %s, Hash: %s): %v", notification.Type, notification.Hash, err)
-				continue // Continue to next notification on error
+			select {
+			case queue <- notification:
+			default:
+				blockchainNotificationDropped(queueName, notification.Type.String(), dropReasonQueueFull)
+				ctxLogger.Warnf("[blockchainSubscriptionListener] dropping notification (Type: %s, Hash: %x): %s queue full", notification.Type, notification.Hash, queueName)
 			}
 		}
+	}
+}
+
+// isCatchupPeerFailure reports whether the notification is a catchup
+// PeerFailure, the only kind handlePeerFailureNotification acts on.
+func isCatchupPeerFailure(notification *blockchain.Notification) bool {
+	return notification.Type == model.NotificationType_PeerFailure &&
+		notification.Metadata != nil &&
+		notification.Metadata.Metadata["failure_type"] == "catchup"
+}
+
+// peerFailureWorker handles catchup PeerFailure notifications one at a time, in
+// arrival order. HandleCatchupFailure bounds its own registry calls, so this
+// worker needs no deadline of its own.
+func (s *Server) peerFailureWorker(ctx context.Context, queue <-chan *blockchain.Notification) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case notification := <-queue:
+			if err := s.processBlockchainNotification(ctx, notification); err != nil {
+				s.logger.Errorf("[peerFailureWorker] Error processing notification (Type: %s, Hash: %x): %v", notification.Type, notification.Hash, err)
+			}
+		}
+	}
+}
+
+// announcementWorker handles every notification except catchup PeerFailures,
+// in arrival order, each under its own notificationProcessTimeout. An
+// announcement that fails after its deadline has passed is logged at Error,
+// counted with reason="timeout", and not retried. One that finishes past the
+// deadline without an error is not counted.
+func (s *Server) announcementWorker(ctx context.Context, queue <-chan *blockchain.Notification) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case notification := <-queue:
+			s.processAnnouncementNotification(ctx, notification)
+		}
+	}
+}
+
+func (s *Server) processAnnouncementNotification(ctx context.Context, notification *blockchain.Notification) {
+	notificationCtx, cancel := context.WithTimeout(ctx, notificationProcessTimeout)
+	defer cancel()
+
+	// Skip notifications whose outbound announcement is not allowed in the
+	// current FSM state.
+	if s.shouldSkipNotification(notificationCtx, notification.Type) {
+		return
+	}
+
+	if err := s.processBlockchainNotification(notificationCtx, notification); err != nil {
+		if notificationCtx.Err() == context.DeadlineExceeded {
+			blockchainNotificationDropped("announcement", notification.Type.String(), dropReasonTimeout)
+		}
+
+		s.logger.Errorf("[announcementWorker] Error processing notification (Type: %s, Hash: %x): %v", notification.Type, notification.Hash, err)
 	}
 }
 
@@ -2657,6 +2999,12 @@ func (s *Server) Stop(ctx context.Context) error {
 	s.subtreeSeenHashes.Clear()
 	s.logger.Infof("[Stop] cleared peer maps")
 
+	// Stop preAnnouncedBlockHashes' cleanup goroutine; nil in tests that
+	// construct Server directly without going through NewServer.
+	if s.preAnnouncedBlockHashes != nil {
+		s.preAnnouncedBlockHashes.Stop()
+	}
+
 	if len(errs) > 0 {
 		// Combine errors if multiple occurred
 		// This simple approach just returns the first error, consider a multi-error type if needed
@@ -2696,11 +3044,12 @@ func (s *Server) GetPeers(ctx context.Context, _ *emptypb.Empty) (*p2p_api.GetPe
 			addr := addrByPeerID[p.ID]
 
 			resp.Peers = append(resp.Peers, &p2p_api.Peer{
-				Id:            p.ID,
-				Addr:          addr,
-				Banscore:      p.BanScore,
-				CurrentHeight: p.Height,
-				BytesReceived: p.BytesReceived,
+				Id:               p.ID,
+				Addr:             addr,
+				Banscore:         p.BanScore,
+				CurrentHeight:    p.Height,
+				AdvertisedHeight: p.AdvertisedHeight,
+				BytesReceived:    p.BytesReceived,
 			})
 		}
 
@@ -3129,6 +3478,7 @@ func peerInfoToP2PProto(p *blockchain.PeerInfo) *p2p_api.PeerRegistryInfo {
 	return &p2p_api.PeerRegistryInfo{
 		Id:                     p.ID,
 		Height:                 p.Height,
+		AdvertisedHeight:       p.AdvertisedHeight,
 		BlockHash:              blockHashStr,
 		DataHubUrl:             p.DataHubURL,
 		BanScore:               p.BanScore,

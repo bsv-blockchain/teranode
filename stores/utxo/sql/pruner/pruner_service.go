@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/utxo/pruner"
@@ -24,6 +25,7 @@ type Service struct {
 	settings         *settings.Settings
 	db               *usql.DB
 	ctx              context.Context
+	reapConflicting  func(ctx context.Context, txHash chainhash.Hash, blockHeight, safetyWindow uint32) (bool, error)
 }
 
 // Options contains configuration options for the cleanup service
@@ -40,6 +42,11 @@ type Options struct {
 	// SafetyWindow is the number of blocks a child must be stable before parent deletion
 	// If not specified, defaults to global_blockHeightRetention (288 blocks)
 	SafetyWindow uint32
+
+	// ReapConflicting deletes one expired conflicting record and the references its parents hold
+	// to it in one transaction. It returns false when the record is no longer eligible or when a
+	// conflict intent is pending, and the pruner then keeps the record for a later block.
+	ReapConflicting func(ctx context.Context, txHash chainhash.Hash, blockHeight, safetyWindow uint32) (bool, error)
 }
 
 // NewService creates a new cleanup service for the SQL store
@@ -69,6 +76,7 @@ func NewService(tSettings *settings.Settings, opts Options) (*Service, error) {
 		settings:         tSettings,
 		db:               opts.DB,
 		ctx:              opts.Ctx,
+		reapConflicting:  opts.ReapConflicting,
 	}
 
 	return service, nil
@@ -126,36 +134,11 @@ func (s *Service) Prune(ctx context.Context, blockHeight uint32, blockHashStr st
 	return deletedCount, nil
 }
 
-// deleteTombstoned removes transactions that have passed their expiration time.
-// Only deletes parent transactions if their last spending child is mined and stable.
-func (s *Service) deleteTombstoned(ctx context.Context, blockHeight uint32) (int64, error) {
-	// Use configured safety window from settings
-	safetyWindow := s.safetyWindow
-
-	// Defensive child verification is conditional on the UTXODefensiveEnabled setting
-	// When disabled, parents are deleted without verifying children are stable
-	var deleteQuery string
-	var result interface{ RowsAffected() (int64, error) }
-	var err error
-
-	if !s.defensiveEnabled {
-		// Defensive mode disabled - delete all transactions past their expiration
-		deleteQuery = `
-			DELETE FROM transactions
-			WHERE delete_at_height IS NOT NULL
-			  AND delete_at_height <= $1
-		`
-		result, err = s.db.ExecContext(ctx, deleteQuery, blockHeight)
-	} else {
-		// Defensive mode enabled - verify ALL spending children are stable before deletion
-		// This prevents orphaning any child transaction
-		deleteQuery = `
-			DELETE FROM transactions
-			WHERE id IN (
-				SELECT t.id
-				FROM transactions t
-				WHERE t.delete_at_height IS NOT NULL
+// DefensiveDeleteFilter selects the records the defensive pruner may delete. It takes the block height as
+// $1 and the safety window as $2 and expects the transactions table aliased as t.
+const DefensiveDeleteFilter = `t.delete_at_height IS NOT NULL
 				  AND t.delete_at_height <= $1
+				  AND (t.unmined_since IS NULL OR t.conflicting)
 				  AND NOT EXISTS (
 				    -- Find ANY unstable child - if found, parent cannot be deleted
 				    -- This ensures ALL children must be stable before parent deletion
@@ -175,10 +158,70 @@ func (s *Service) deleteTombstoned(ctx context.Context, blockHeight uint32) (int
 				            AND child_blocks.block_height <= ($1 - $2)  -- Child must be stable
 				        )
 				      )
-				  )
+				  )`
+
+// deleteTombstoned removes transactions that have passed their expiration time.
+// Only deletes parent transactions if their last spending child is mined and stable.
+// Records that are currently unmined (unmined_since set) are skipped unless they are conflicting,
+// even if they still carry a delete_at_height: MarkTransactionsOnLongestChain(false) does not clear
+// it. This is defence in depth: the check and the delete are one statement, but a record that becomes
+// unmined concurrently with the delete is not covered. A skipped record has its delete_at_height
+// cleared (unless preserve_until is set), matching the store invariant that an unmined transaction has
+// no DAH, so it no longer matches the DAH index in later cycles.
+func (s *Service) deleteTombstoned(ctx context.Context, blockHeight uint32) (int64, error) {
+	// Use configured safety window from settings
+	safetyWindow := s.safetyWindow
+
+	s.clearUnminedDeleteAtHeight(ctx, blockHeight)
+
+	// Defensive child verification is conditional on the UTXODefensiveEnabled setting
+	// When disabled, parents are deleted without verifying children are stable
+	var deleteQuery string
+	var result interface{ RowsAffected() (int64, error) }
+	var err error
+
+	if !s.defensiveEnabled {
+		// Defensive mode disabled - delete all transactions past their expiration
+		deleteQuery = `
+			DELETE FROM transactions
+			WHERE delete_at_height IS NOT NULL
+			  AND delete_at_height <= $1
+			  AND (unmined_since IS NULL OR conflicting)
+		`
+		result, err = s.db.ExecContext(ctx, deleteQuery, blockHeight)
+	} else {
+		// Defensive mode enabled - verify ALL spending children are stable before deletion
+		// This prevents orphaning any child transaction
+		conflictingClause := ""
+		if s.reapConflicting != nil {
+			conflictingClause = "AND NOT t.conflicting"
+		}
+
+		deleteQuery = `
+			DELETE FROM transactions
+			WHERE id IN (
+				SELECT t.id
+				FROM transactions t
+				WHERE ` + DefensiveDeleteFilter + `
+				  ` + conflictingClause + `
 			)
 		`
 		result, err = s.db.ExecContext(ctx, deleteQuery, blockHeight, safetyWindow)
+		if err != nil {
+			return 0, errors.NewStorageError("failed to delete transactions", err)
+		}
+
+		count, rowsErr := result.RowsAffected()
+		if rowsErr != nil {
+			return 0, errors.NewStorageError("failed to get rows affected", rowsErr)
+		}
+
+		reaped, reapErr := s.reapExpiredConflicting(ctx, blockHeight, safetyWindow)
+		if reapErr != nil {
+			return count, reapErr
+		}
+
+		return count + reaped, nil
 	}
 
 	if err != nil {
@@ -191,4 +234,88 @@ func (s *Service) deleteTombstoned(ctx context.Context, blockHeight uint32) (int
 	}
 
 	return count, nil
+}
+
+// clearUnminedDeleteAtHeight clears delete_at_height on unmined, non-conflicting, non-preserved records
+// that are due for deletion, so the delete below skips them and later cycles no longer match them.
+// A failure is only logged: nothing is deleted on its account and the rows are retried next cycle.
+func (s *Service) clearUnminedDeleteAtHeight(ctx context.Context, blockHeight uint32) {
+	result, err := s.db.ExecContext(ctx, `
+		UPDATE transactions
+		SET delete_at_height = NULL
+		WHERE delete_at_height IS NOT NULL
+		  AND delete_at_height <= $1
+		  AND unmined_since IS NOT NULL
+		  AND NOT conflicting
+		  AND preserve_until IS NULL
+	`, blockHeight)
+	if err != nil {
+		s.logger.Errorf("[pruner] failed to clear delete_at_height of unmined records: %v", err)
+		return
+	}
+
+	if count, err := result.RowsAffected(); err == nil && count > 0 {
+		s.logger.Infof("[pruner] cleared delete_at_height of %d unmined records", count)
+	}
+}
+
+// reapExpiredConflicting reaps every expired conflicting record the defensive delete skipped. Each
+// record is reaped in its own transaction by the store, which keeps a record that was promoted or that
+// has a conflict intent pending. A record that cannot be reaped is kept and retried next block.
+func (s *Service) reapExpiredConflicting(ctx context.Context, blockHeight, safetyWindow uint32) (int64, error) {
+	if s.reapConflicting == nil {
+		return 0, nil
+	}
+
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT t.hash FROM transactions t
+		WHERE `+DefensiveDeleteFilter+`
+		  AND t.conflicting
+	`, blockHeight, safetyWindow)
+	if err != nil {
+		return 0, errors.NewStorageError("failed to list expired conflicting transactions", err)
+	}
+
+	defer rows.Close()
+
+	var hashes []chainhash.Hash
+
+	for rows.Next() {
+		var raw []byte
+		if err = rows.Scan(&raw); err != nil {
+			return 0, errors.NewStorageError("failed to scan expired conflicting transaction", err)
+		}
+
+		hash, hashErr := chainhash.NewHash(raw)
+		if hashErr != nil {
+			continue
+		}
+
+		hashes = append(hashes, *hash)
+	}
+
+	if err = rows.Err(); err != nil {
+		return 0, errors.NewStorageError("failed to read expired conflicting transactions", err)
+	}
+
+	if err = rows.Close(); err != nil {
+		return 0, errors.NewStorageError("failed to close expired conflicting transactions", err)
+	}
+
+	var reaped int64
+
+	for i := range hashes {
+		ok, reapErr := s.reapConflicting(ctx, hashes[i], blockHeight, safetyWindow)
+		if reapErr != nil {
+			s.logger.Errorf("[pruner] keeping conflicting transaction %s: %v", hashes[i].String(), reapErr)
+
+			continue
+		}
+
+		if ok {
+			reaped++
+		}
+	}
+
+	return reaped, nil
 }

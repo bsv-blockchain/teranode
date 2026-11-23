@@ -79,6 +79,12 @@ func (s *Store) SetBatchOperateFn(fn func(*aerospike.BatchPolicy, []aerospike.Ba
 	s.batchOperateFn = fn
 }
 
+// SetLockPutFn was implemented to facilitate testing of a creation lock write
+// that fails for a reason other than the lock already being held.
+func (s *Store) SetLockPutFn(fn func(*aerospike.WritePolicy, *aerospike.Key, ...*aerospike.Bin) aerospike.Error) {
+	s.lockPutFn = fn
+}
+
 // GetSettings was implemented to facilitate testing
 func (s *Store) GetSettings() *settings.Settings {
 	return s.settings

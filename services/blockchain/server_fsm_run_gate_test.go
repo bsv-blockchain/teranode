@@ -74,10 +74,14 @@ func (s *fsmGateStore) GetBestBlockHeader(ctx context.Context) (*model.BlockHead
 func newTestBlockchainForGate(t *testing.T, params *chaincfg.Params, store *fsmGateStore) *Blockchain {
 	t.Helper()
 	initPrometheusMetrics()
+
+	tSettings := &settings.Settings{ChainCfgParams: params}
+	setLaneLeaseTimings(tSettings)
+
 	b := &Blockchain{
 		logger:        ulogger.TestLogger{},
 		store:         store,
-		settings:      &settings.Settings{ChainCfgParams: params},
+		settings:      tSettings,
 		notifications: make(chan *blockchain_api.Notification, 10),
 		stats:         gocore.NewStat("blockchain-test"),
 	}

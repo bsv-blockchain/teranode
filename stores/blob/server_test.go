@@ -7,11 +7,14 @@ import (
 	"encoding/base64"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -37,9 +40,12 @@ func TestServerOperations(t *testing.T) {
 	serverStoreURL, err := url.Parse(fmt.Sprintf("file://%s?testId=%d", tempDir, time.Now().UnixNano()))
 	require.NoError(t, err)
 
+	const serverAuthToken = "server-operations-token"
+
 	blobServer, err := NewHTTPBlobServer(
 		logger,
 		serverStoreURL,
+		serverAuthToken,
 		options.WithDefaultSubDirectory("sub"),
 	)
 	require.NoError(t, err)
@@ -58,7 +64,7 @@ func TestServerOperations(t *testing.T) {
 	clientStoreURL, err := url.Parse("http://localhost:7979")
 	require.NoError(t, err)
 
-	client, err := blobhttp.New(logger, clientStoreURL)
+	client, err := blobhttp.New(logger, clientStoreURL, options.WithHTTPAuthToken(serverAuthToken))
 	require.NoError(t, err)
 
 	t.Run("SetAndGet", func(t *testing.T) {
@@ -169,6 +175,7 @@ type countingReadSeekCloser struct {
 	readErr    error
 	seekErr    error
 	closeCount int
+	maxReadLen int // largest buffer handed to Read
 }
 
 func newCountingReadSeekCloser(data []byte) *countingReadSeekCloser {
@@ -176,6 +183,8 @@ func newCountingReadSeekCloser(data []byte) *countingReadSeekCloser {
 }
 
 func (c *countingReadSeekCloser) Read(p []byte) (int, error) {
+	c.maxReadLen = max(c.maxReadLen, len(p))
+
 	if c.readErr != nil {
 		return 0, c.readErr
 	}
@@ -192,8 +201,8 @@ func (c *countingReadSeekCloser) Seek(offset int64, whence int) (int64, error) {
 func (c *countingReadSeekCloser) Close() error { c.closeCount++; return nil }
 
 // nonSeekingCloser is an io.ReadCloser that deliberately does NOT implement
-// io.Seeker, so it triggers handleRangeRequest's "Store does not support
-// seeking" branch (handlers should still close it on the way out).
+// io.Seeker, so it triggers handleRangeRequest's whole-blob fallback
+// (handlers should still close it on the way out).
 type nonSeekingCloser struct{ closeCount int }
 
 func (n *nonSeekingCloser) Read([]byte) (int, error) { return 0, io.EOF }
@@ -291,13 +300,14 @@ func TestHandleRangeRequest_ClosesReaderOnAllPaths(t *testing.T) {
 		srv.handleRangeRequest(rr, req, []byte("foo"), fileformat.FileTypeTesting)
 
 		require.Equal(t, 1, reader.closeCount, "reader must be Closed when the store does not support seeking")
-		require.Contains(t, rr.Body.String(), "does not support seeking")
+		require.Equal(t, http.StatusOK, rr.Code)
 	})
 
 	t.Run("read error", func(t *testing.T) {
 		reader := newCountingReadSeekCloser([]byte("xx"))
 		reader.readErr = errors.New(errors.ERR_PROCESSING, "deliberate read failure")
-		srv := &HTTPBlobServer{store: &fakeRangeStore{reader: reader}, logger: logger}
+		logs := &logRecorder{}
+		srv := &HTTPBlobServer{store: &fakeRangeStore{reader: reader}, logger: ulogger.NewErrorTestLogger(logs)}
 
 		req := httptest.NewRequest("GET", "/blob/Zm9vLnRlc3Rpbmc=", nil)
 		req.Header.Set("Range", "bytes=0-10")
@@ -305,7 +315,15 @@ func TestHandleRangeRequest_ClosesReaderOnAllPaths(t *testing.T) {
 
 		srv.handleRangeRequest(rr, req, []byte("foo"), fileformat.FileTypeTesting)
 
-		require.Equal(t, 1, reader.closeCount, "reader must be Closed when ReadFull fails")
+		require.Equal(t, 1, reader.closeCount, "reader must be Closed when the copy fails")
+
+		// The 206 headers go out before the copy, so the failure cannot change the status;
+		// the client sees a body shorter than Content-Length and the server logs it.
+		require.Equal(t, http.StatusPartialContent, rr.Code)
+		require.Equal(t, "2", rr.Header().Get("Content-Length"))
+		require.Empty(t, rr.Body.Bytes())
+		require.Len(t, logs.lines, 1)
+		require.Contains(t, logs.lines[0], "range read failed after 0/2 bytes")
 	})
 }
 
@@ -324,7 +342,9 @@ func newFileBackedFakeStore(t *testing.T, payload []byte) *fileBackedFakeStore {
 
 	storeURL, err := url.Parse("file://" + dir)
 	require.NoError(t, err)
-	srv, err := NewHTTPBlobServer(ulogger.New("rangereq"), storeURL)
+	// No token: this fixture only serves GETs, so a read-only server is also a check
+	// that reads are unaffected by the mutation gate.
+	srv, err := NewHTTPBlobServer(ulogger.New("rangereq"), storeURL, "")
 	require.NoError(t, err)
 	_ = srv // just used for the store construction
 
@@ -394,40 +414,379 @@ func TestHandleRangeRequest_ContentRangeReportsActualTotal(t *testing.T) {
 		"Content-Range must report the full blob length in the /total position per RFC 7233 §4.2, not the returned-slice length")
 }
 
-// TestHandleRangeRequest_ContentRangeUnknownTotalForNonSeekable pins the
-// fallback: when the underlying reader is not seekable but start==0, the
-// handler should still return the requested bytes and emit "/*" for the
-// total per RFC 7233.
-func TestHandleRangeRequest_ContentRangeUnknownTotalForNonSeekable(t *testing.T) {
-	// nonSeekingCloser returns io.EOF on Read, simulating a 0-byte payload
-	// from a non-seekable source. start=0 means we should not require
-	// seeking and should fall back to "*" for the total.
-	reader := &nonSeekingCloser{}
-	srv := &HTTPBlobServer{store: &fakeRangeStore{reader: reader}, logger: ulogger.New("rangereq")}
+// logRecorder is a ulogger.TestingT that keeps every line ErrorTestLogger writes.
+type logRecorder struct{ lines []string }
 
-	req := httptest.NewRequest("GET", "/blob/", nil)
-	req.Header.Set("Range", "bytes=0-0")
-	rr := httptest.NewRecorder()
+func (l *logRecorder) Errorf(format string, args ...interface{}) {
+	l.lines = append(l.lines, fmt.Sprintf(format, args...))
+}
+func (l *logRecorder) FailNow() {}
+func (l *logRecorder) Logf(format string, args ...any) {
+	l.lines = append(l.lines, fmt.Sprintf(format, args...))
+}
 
-	srv.handleRangeRequest(rr, req, []byte("k"), fileformat.FileTypeTesting)
+func TestParseByteRange(t *testing.T) {
+	valid := []struct {
+		header string
+		want   byteRange
+	}{
+		{header: "bytes=0-4", want: byteRange{first: 0, last: 4}},
+		{header: "bytes=5-5", want: byteRange{first: 5, last: 5}},
+		{header: "bytes=5-", want: byteRange{first: 5, openEnded: true}},
+		{header: "bytes=-3", want: byteRange{suffix: true, suffixLen: 3}},
+		{header: "bytes=0-9223372036854775807", want: byteRange{first: 0, last: math.MaxInt64}},
+	}
 
-	require.Equal(t, http.StatusPartialContent, rr.Code, "start=0 against a non-seekable reader must still succeed")
-	gotCR := rr.Header().Get("Content-Range")
-	require.Equal(t, "bytes 0-0/*", gotCR,
-		"non-seekable readers cannot report a total, so Content-Range must use the RFC 7233 \"*\" sentinel")
+	for _, tt := range valid {
+		t.Run("valid "+tt.header, func(t *testing.T) {
+			got, status := parseByteRange(tt.header)
+			require.Equal(t, http.StatusOK, status)
+			require.Equal(t, tt.want, got)
+		})
+	}
+
+	malformed := []string{
+		"",
+		"0-4",
+		"items=0-4",
+		"bytes=",
+		"bytes=-",
+		"bytes=5",
+		"bytes=+5-6",
+		"bytes=5-+6",
+		"bytes=--5",
+		"bytes= 5-6",
+		"bytes=5-6 ",
+		"bytes=a-b",
+		"bytes=5-6-7",
+		"bytes=99999999999999999999-",
+		"bytes=0-9223372036854775808",
+		"bytes=-99999999999999999999",
+	}
+
+	for _, header := range malformed {
+		t.Run("malformed "+header, func(t *testing.T) {
+			_, status := parseByteRange(header)
+			require.Equal(t, http.StatusBadRequest, status)
+		})
+	}
+
+	notSatisfiable := []string{"bytes=0-1,3-4", "bytes=5-2"}
+
+	for _, header := range notSatisfiable {
+		t.Run("not satisfiable "+header, func(t *testing.T) {
+			_, status := parseByteRange(header)
+			require.Equal(t, http.StatusRequestedRangeNotSatisfiable, status)
+		})
+	}
+}
+
+// TestHandleRangeRequest_AllocationIndependentOfRangeHeader is the regression test for
+// bitcoin-sv/teranode issue 4853: the handler used to make([]byte, end-start) from the
+// header before looking at the blob, so a one-byte object with a multi-gigabyte range
+// allocated gigabytes. The auditor observed the reader being handed an 8 MiB buffer for
+// a 1-byte blob. The span must now be clamped to the real size and the body streamed.
+func TestHandleRangeRequest_AllocationIndependentOfRangeHeader(t *testing.T) {
+	for _, header := range []string{"bytes=0-8388607", "bytes=0-2147483647", "bytes=0-9223372036854775807"} {
+		t.Run(header, func(t *testing.T) {
+			reader := newCountingReadSeekCloser([]byte{0x42})
+			srv := &HTTPBlobServer{store: &fakeRangeStore{reader: reader}, logger: ulogger.New("rangereq")}
+
+			req := httptest.NewRequest("GET", "/blob/", nil)
+			req.Header.Set("Range", header)
+			rr := httptest.NewRecorder()
+
+			srv.handleRangeRequest(rr, req, []byte("k"), fileformat.FileTypeTesting)
+
+			require.Equal(t, http.StatusPartialContent, rr.Code)
+			require.Equal(t, []byte{0x42}, rr.Body.Bytes())
+			require.Equal(t, "bytes 0-0/1", rr.Header().Get("Content-Range"))
+			require.Equal(t, "1", rr.Header().Get("Content-Length"))
+			require.LessOrEqual(t, reader.maxReadLen, 64*1024, "read buffer must not be sized from the Range header")
+			require.Equal(t, 1, reader.closeCount)
+		})
+	}
+}
+
+func TestHandleRangeRequest_ResolvesAgainstBlobSize(t *testing.T) {
+	payload := []byte("0123456789") // 10 bytes
+	store := newFileBackedFakeStore(t, payload).underlying(t)
+	srv := &HTTPBlobServer{store: store, logger: ulogger.New("rangereq")}
+
+	serve := func(header string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest("GET", "/blob/", nil)
+		req.Header.Set("Range", header)
+		rr := httptest.NewRecorder()
+
+		srv.handleRangeRequest(rr, req, []byte("k"), fileformat.FileTypeTesting)
+
+		return rr
+	}
+
+	served := []struct {
+		header       string
+		body         string
+		contentRange string
+	}{
+		{header: "bytes=5-", body: "56789", contentRange: "bytes 5-9/10"},
+		{header: "bytes=0-", body: "0123456789", contentRange: "bytes 0-9/10"},
+		{header: "bytes=-3", body: "789", contentRange: "bytes 7-9/10"},
+		{header: "bytes=-50", body: "0123456789", contentRange: "bytes 0-9/10"},
+		{header: "bytes=8-100", body: "89", contentRange: "bytes 8-9/10"},
+		{header: "bytes=9-9", body: "9", contentRange: "bytes 9-9/10"},
+		{header: "bytes=3-9223372036854775807", body: "3456789", contentRange: "bytes 3-9/10"},
+	}
+
+	for _, tt := range served {
+		t.Run(tt.header, func(t *testing.T) {
+			rr := serve(tt.header)
+
+			require.Equal(t, http.StatusPartialContent, rr.Code)
+			require.Equal(t, tt.body, rr.Body.String())
+			require.Equal(t, tt.contentRange, rr.Header().Get("Content-Range"))
+			require.Equal(t, strconv.Itoa(len(tt.body)), rr.Header().Get("Content-Length"))
+		})
+	}
+
+	unsatisfiable := []string{"bytes=10-", "bytes=10-20", "bytes=9223372036854775807-", "bytes=-0"}
+
+	for _, header := range unsatisfiable {
+		t.Run(header+" is 416 with size", func(t *testing.T) {
+			rr := serve(header)
+
+			require.Equal(t, http.StatusRequestedRangeNotSatisfiable, rr.Code)
+			require.Equal(t, "bytes */10", rr.Header().Get("Content-Range"))
+		})
+	}
+
+	for _, header := range []string{"bytes=5-2", "bytes=0-1,3-4"} {
+		t.Run(header+" is 416", func(t *testing.T) {
+			require.Equal(t, http.StatusRequestedRangeNotSatisfiable, serve(header).Code)
+		})
+	}
+
+	t.Run("malformed is 400", func(t *testing.T) {
+		require.Equal(t, http.StatusBadRequest, serve("bytes=+1-2").Code)
+	})
+}
+
+// TestHandleRangeRequest_NonSeekableServesWholeBlob pins the fallback for readers
+// without a size (memory, S3, HTTP stores). A 206 would have to advertise a
+// Content-Range before knowing the blob holds those bytes, so for "bytes=0-1048575"
+// against an 11-byte blob it claimed 1 MiB and sent 11 bytes. The handler now ignores
+// the range (RFC 9110 section 14.2) and streams the whole blob with 200, which also
+// replaces the old 500 for the suffix, open-ended and first>0 forms.
+func TestHandleRangeRequest_NonSeekableServesWholeBlob(t *testing.T) {
+	headers := []string{
+		"bytes=0-4", "bytes=0-0", "bytes=0-1048575", "bytes=0-9223372036854775807",
+		"bytes=-3", "bytes=0-", "bytes=2-", "bytes=2-4",
+	}
+
+	for _, header := range headers {
+		t.Run(header, func(t *testing.T) {
+			reader := &closeCountingReader{r: strings.NewReader("hello world")}
+			srv := &HTTPBlobServer{store: &fakeRangeStore{reader: reader}, logger: ulogger.New("rangereq")}
+
+			req := httptest.NewRequest("GET", "/blob/", nil)
+			req.Header.Set("Range", header)
+			rr := httptest.NewRecorder()
+
+			srv.handleRangeRequest(rr, req, []byte("k"), fileformat.FileTypeTesting)
+
+			require.Equal(t, http.StatusOK, rr.Code)
+			require.Equal(t, "hello world", rr.Body.String())
+			require.Empty(t, rr.Header().Get("Content-Range"), "a 200 must not claim a range")
+			require.Equal(t, 1, reader.closeCount)
+		})
+	}
+
+	t.Run("invalid ranges are still rejected before opening the blob", func(t *testing.T) {
+		srv := &HTTPBlobServer{store: &fakeRangeStore{reader: &nonSeekingCloser{}}, logger: ulogger.New("rangereq")}
+
+		for header, want := range map[string]int{"bytes=+1-2": http.StatusBadRequest, "bytes=5-2": http.StatusRequestedRangeNotSatisfiable} {
+			req := httptest.NewRequest("GET", "/blob/", nil)
+			req.Header.Set("Range", header)
+			rr := httptest.NewRecorder()
+
+			srv.handleRangeRequest(rr, req, []byte("k"), fileformat.FileTypeTesting)
+
+			require.Equal(t, want, rr.Code, header)
+		}
+	})
+}
+
+// closeCountingReader is a non-seekable io.ReadCloser with content that counts Close
+// calls. It wraps io.Reader rather than embedding *strings.Reader, which would promote
+// Seek and take the seekable path.
+type closeCountingReader struct {
+	r          io.Reader
+	closeCount int
+}
+
+func (c *closeCountingReader) Read(p []byte) (int, error) { return c.r.Read(p) }
+func (c *closeCountingReader) Close() error               { c.closeCount++; return nil }
+
+// TestGetKeyFromPath_ShortPathsDoNotPanic pins the bound check: a dot before the end of the
+// "/blob/" prefix used to slice out of range.
+func TestGetKeyFromPath_ShortPathsDoNotPanic(t *testing.T) {
+	tests := []struct {
+		name    string
+		path    string
+		wantErr bool
+		wantKey []byte
+	}{
+		{name: "dot at root", path: "/.tx", wantErr: true},
+		{name: "dot inside prefix", path: "/blob.tx", wantErr: true},
+		{name: "empty key", path: "/blob/.tx", wantKey: []byte{}},
+		{name: "prefix not at start", path: "/x/blob/abc.tx", wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var (
+				key []byte
+				err error
+			)
+
+			require.NotPanics(t, func() { key, _, err = getKeyFromPath(tt.path) })
+
+			if tt.wantErr {
+				require.Error(t, err)
+				return
+			}
+
+			require.NoError(t, err)
+			require.Equal(t, tt.wantKey, key)
+		})
+	}
+}
+
+// TestHTTPBlobServer_ShortGetPathIsBadRequest drives the same path through the handler: GET is
+// unauthenticated, so this is reachable by anyone who can reach the listener.
+func TestHTTPBlobServer_ShortGetPathIsBadRequest(t *testing.T) {
+	server, _ := newAuthTestServer(t, "")
+
+	require.Equal(t, http.StatusBadRequest, doBlobRequest(t, server, http.MethodGet, "/.tx", "", nil))
+}
+
+// faultingStore answers every read and DAH update with err. Every other method panics, as
+// fakeRangeStore's do.
+type faultingStore struct {
+	*fakeRangeStore
+}
+
+func (s *faultingStore) SetDAH(context.Context, []byte, fileformat.FileType, uint32, ...options.FileOption) error {
+	return s.err
+}
+
+// TestHTTPBlobServer_FaultIsNotAMiss pins that the server answers 404 only for a miss. Over
+// HTTP a 404 is what the client reports to its caller as a miss, so a store that failed while
+// it looked - a storage error, whatever it wraps - must answer 500.
+func TestHTTPBlobServer_FaultIsNotAMiss(t *testing.T) {
+	const token = "fault-is-not-a-miss"
+
+	requests := map[string]func() *http.Request{
+		"GET": func() *http.Request {
+			return httptest.NewRequest(http.MethodGet, "/blob/Zm9v.testing", nil)
+		},
+		"GET with a Range": func() *http.Request {
+			req := httptest.NewRequest(http.MethodGet, "/blob/Zm9v.testing", nil)
+			req.Header.Set("Range", "bytes=0-1")
+
+			return req
+		},
+		"PATCH": func() *http.Request {
+			req := httptest.NewRequest(http.MethodPatch, "/blob/Zm9v.testing?dah=10", nil)
+			req.Header.Set("Authorization", "Bearer "+token)
+
+			return req
+		},
+	}
+
+	for name, tc := range map[string]struct {
+		err    error
+		status int
+	}{
+		"the store does not hold the blob":  {errors.ErrNotFound, http.StatusNotFound},
+		"a not-found with context":          {errors.NewNotFoundError("no blob for this key"), http.StatusNotFound},
+		"a storage error over a not-found":  {errors.NewStorageError("longterm read failed", errors.ErrNotFound), http.StatusInternalServerError},
+		"a storage error with no not-found": {errors.NewStorageError("disk read failed"), http.StatusInternalServerError},
+		"a not-found under a storage error": {errors.NewProcessingError("decorate", errors.NewStorageError("read", errors.NewNotFoundError("x"))), http.StatusInternalServerError},
+	} {
+		for method, newRequest := range requests {
+			t.Run(name+"/"+method, func(t *testing.T) {
+				srv := &HTTPBlobServer{
+					store:     &faultingStore{&fakeRangeStore{err: tc.err}},
+					logger:    ulogger.TestLogger{},
+					authToken: token,
+				}
+
+				rr := httptest.NewRecorder()
+				srv.ServeHTTP(rr, newRequest())
+
+				require.Equal(t, tc.status, rr.Code)
+
+				if tc.status == http.StatusNotFound {
+					require.Equal(t, NotFoundMsg+"\n", rr.Body.String(), "the client reads a 404 as a miss only with this body")
+				}
+			})
+		}
+	}
+}
+
+// TestHTTPBlobServer_ClientTellsMissFromFault drives the real client against the real server,
+// so the body the server writes for a miss and the body the client accepts as one cannot drift
+// apart.
+func TestHTTPBlobServer_ClientTellsMissFromFault(t *testing.T) {
+	for name, tc := range map[string]struct {
+		storeErr error
+		miss     bool
+	}{
+		"a miss":                           {errors.ErrNotFound, true},
+		"a storage error over a not-found": {errors.NewStorageError("longterm read failed", errors.ErrNotFound), false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			server := httptest.NewServer(&HTTPBlobServer{
+				store:  &faultingStore{&fakeRangeStore{err: tc.storeErr}},
+				logger: ulogger.TestLogger{},
+			})
+			t.Cleanup(server.Close)
+
+			storeURL, err := url.Parse(server.URL)
+			require.NoError(t, err)
+
+			client, err := blobhttp.New(ulogger.TestLogger{}, storeURL, options.WithHTTPAuthToken(""))
+			require.NoError(t, err)
+
+			_, err = client.Get(context.Background(), []byte("foo"), fileformat.FileTypeTesting)
+			require.Error(t, err)
+
+			if tc.miss {
+				require.ErrorIs(t, err, errors.ErrNotFound)
+				require.NotErrorIs(t, err, errors.ErrStorageError)
+			} else {
+				require.ErrorIs(t, err, errors.ErrStorageError)
+				require.NotErrorIs(t, err, errors.ErrNotFound)
+			}
+		})
+	}
 }
 
 // TestServerRejectsUnsafeFilename drives the real HTTPBlobServer end-to-end over a file store
 // and asserts that a traversal filename on the query string is rejected with 400 on every
-// method before it reaches the backend, while a plain basename still works. The store is
-// rooted in a subdirectory so an escape would be observable on disk.
+// method before it reaches the backend, while a plain basename still works. Every request
+// carries the shared secret, so the 400 comes from the filename check and not from the
+// mutation auth gate: an authenticated caller is held to the same rule. The store is rooted
+// in a subdirectory so an escape would be observable on disk.
 func TestServerRejectsUnsafeFilename(t *testing.T) {
+	const authToken = "filename-test-token"
+
 	tempDir := t.TempDir()
 
 	storeURL, err := url.Parse(fmt.Sprintf("file://%s?testId=%d", tempDir, time.Now().UnixNano()))
 	require.NoError(t, err)
 
-	blobServer, err := NewHTTPBlobServer(ulogger.TestLogger{}, storeURL, options.WithDefaultSubDirectory("tenant-a"))
+	blobServer, err := NewHTTPBlobServer(ulogger.TestLogger{}, storeURL, authToken, options.WithDefaultSubDirectory("tenant-a"))
 	require.NoError(t, err)
 
 	ts := httptest.NewServer(blobServer)
@@ -459,6 +818,7 @@ func TestServerRejectsUnsafeFilename(t *testing.T) {
 
 		req, err := http.NewRequest(method, ts.URL+blobPath+"?"+q.Encode(), body)
 		require.NoError(t, err)
+		req.Header.Set("Authorization", "Bearer "+authToken)
 
 		resp, err := http.DefaultClient.Do(req)
 		require.NoError(t, err)

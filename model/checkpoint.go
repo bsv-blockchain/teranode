@@ -43,6 +43,30 @@ func BelowCheckpoint(checkpoints []chaincfg.Checkpoint, height uint32) bool {
 	return highest > 0 && height > 0 && height <= highest
 }
 
+// ForkBelowCheckpoint reports whether a block at blockHeight forks the chain below a
+// checkpoint the tip (tipHeight) has already reached: bitcoin-sv's
+// bad-fork-prior-to-checkpoint. Checkpoints above the tip do not count, so initial sync
+// is unaffected. A block AT a checkpoint height is left to the exact hash check
+// (catchup.ValidateHeaderAgainstCheckpoints). Genesis (height 0) has no parent to fork
+// from, as in BelowCheckpoint.
+func ForkBelowCheckpoint(checkpoints []chaincfg.Checkpoint, blockHeight, tipHeight uint32) bool {
+	if blockHeight == 0 {
+		return false
+	}
+
+	for _, cp := range checkpoints {
+		if cp.Height < 0 {
+			continue
+		}
+
+		if h := uint32(cp.Height); h <= tipHeight && blockHeight < h {
+			return true
+		}
+	}
+
+	return false
+}
+
 // OutpointOnlyEligible is the single eligibility gate for the below-checkpoint
 // outpoint-only fast path (PR 1178): the operator opted in, the UTXO store supports
 // outpoint-only spends (Stage A is SQL-only; Aerospike deferred to Stage B), chain
@@ -51,8 +75,14 @@ func BelowCheckpoint(checkpoints []chaincfg.Checkpoint, height uint32) bool {
 // closed (fail-safe, invariant I2). Chain params are passed explicitly because
 // callers legitimately source them differently (netsync holds *chaincfg.Params
 // directly; blockvalidation and model read settings.ChainCfgParams).
+//
+// A store that nets below the checkpoint (utxoset) is always opted in, whatever
+// blockvalidation_outpoint_only_below_checkpoint says: it writes those blocks only through
+// the netted route, so the answer must come from the store, the checkpoint table and the
+// height alone. Every service then reaches the same answer, even when its copy of the
+// setting differs from another service's.
 func OutpointOnlyEligible(tSettings *settings.Settings, store utxo.Store, params *chaincfg.Params, height uint32) bool {
-	if tSettings == nil || !tSettings.BlockValidation.OutpointOnlyBelowCheckpoint {
+	if tSettings == nil || (!tSettings.BlockValidation.OutpointOnlyBelowCheckpoint && !utxo.NetsBelowCheckpoint(store)) {
 		return false
 	}
 
@@ -92,34 +122,4 @@ func HighestCheckpointHash(checkpoints []chaincfg.Checkpoint) *chainhash.Hash {
 	}
 
 	return hash
-}
-
-// SkipExpectedDifficulty reports whether a block may skip the expected-nBits
-// (DAA) check because the pinned checkpoint hashes already certify the
-// difficulty schedule over its part of the chain.
-//
-// It requires the height to be inside the certified prefix AND the node to still
-// be building that prefix (bestHeight below the highest checkpoint). The second
-// conjunct is the fix: BelowCheckpoint alone is true for EVERY height in
-// 1..highest, so on a fully synced node it granted the skip to a NEWLY supplied
-// fork at a low height — and the DAA rule is the only check that binds a block's
-// declared difficulty to the chain it claims to extend. A block's own
-// proof-of-work floor is not a substitute: it bounds how easy a declared target
-// may be, not whether it is the correct one for that chain position
-// (GHSA-gggq-8f59-4jm9).
-//
-// A node that already holds the whole prefix has no legitimate reason to accept a
-// new block inside it, so demanding the real rule there costs nothing. A node
-// still syncing satisfies this prefix predicate. Callers implementing historical
-// retarget rules enforce those separately; this height predicate does not establish
-// checkpoint ancestry or select the applicable difficulty algorithm.
-//
-// Callers that cannot establish bestHeight must not skip. See BelowCheckpoint for
-// the boundary, including the mandatory height > 0 guard.
-func SkipExpectedDifficulty(checkpoints []chaincfg.Checkpoint, blockHeight, bestHeight uint32) bool {
-	if !BelowCheckpoint(checkpoints, blockHeight) {
-		return false
-	}
-
-	return bestHeight < HighestCheckpointHeight(checkpoints)
 }

@@ -2,6 +2,7 @@ package logger
 
 import (
 	"context"
+	"net/url"
 	"testing"
 	"time"
 
@@ -13,8 +14,13 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
+	"github.com/bsv-blockchain/teranode/stores/utxo/nullstore"
+	"github.com/bsv-blockchain/teranode/stores/utxo/pruner"
 	"github.com/bsv-blockchain/teranode/stores/utxo/spend"
+	"github.com/bsv-blockchain/teranode/stores/utxo/sql"
+	"github.com/bsv-blockchain/teranode/stores/utxo/tests"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -61,6 +67,8 @@ func (m *MockStore) GetBlockState() utxo.BlockState {
 	}
 }
 
+func (m *MockStore) Stamper() pruner.Stamper { return pruner.NoStamp }
+
 func (m *MockStore) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
 	args := m.Called(ctx, checkLiveness)
 	return args.Int(0), args.String(1), args.Error(2)
@@ -76,6 +84,31 @@ func (m *MockStore) SupportsOutpointOnlySpend() bool { return m.SupportsOutpoint
 // TestSupportsOutpointOnlySpend_Delegates verifies the logger decorator forwards the
 // wrapped store's fast-path capability in both directions (so a SQL store wrapped by the
 // logger still reports true, and the gates that query through the decorator engage).
+// TestConflictingTxHashes_Delegates pins that the logger decorator returns the
+// wrapped store's answer unchanged, including indexed=false.
+func TestConflictingTxHashes_Delegates(t *testing.T) {
+	ctx := context.Background()
+	want := []chainhash.Hash{{1}, {2}}
+
+	inner := &MockStore{}
+	inner.On("ConflictingTxHashes", ctx).Return(want, true, nil).Once()
+	inner.On("ConflictingTxHashes", ctx).Return(nil, false, nil).Once()
+
+	s := New(ctx, ulogger.TestLogger{}, inner)
+
+	hashes, indexed, err := s.ConflictingTxHashes(ctx)
+	require.NoError(t, err)
+	require.True(t, indexed)
+	require.Equal(t, want, hashes)
+
+	hashes, indexed, err = s.ConflictingTxHashes(ctx)
+	require.NoError(t, err)
+	require.False(t, indexed)
+	require.Nil(t, hashes)
+
+	inner.AssertExpectations(t)
+}
+
 func TestSupportsOutpointOnlySpend_Delegates(t *testing.T) {
 	for _, want := range []bool{true, false} {
 		inner := &MockStore{SupportsOutpointOnlySpendResult: want}
@@ -159,6 +192,14 @@ func (m *MockStore) GetConflictingTxIterator() (utxo.UnminedTxIterator, error) {
 	return args.Get(0).(utxo.UnminedTxIterator), args.Error(1)
 }
 
+func (m *MockStore) ConflictingTxHashes(ctx context.Context) ([]chainhash.Hash, bool, error) {
+	args := m.Called(ctx)
+	if args.Get(0) == nil {
+		return nil, args.Bool(1), args.Error(2)
+	}
+	return args.Get(0).([]chainhash.Hash), args.Bool(1), args.Error(2)
+}
+
 func (m *MockStore) RemoveFromConflictingChildren(ctx context.Context, removals []utxo.ConflictingChildRemoval) error {
 	args := m.Called(ctx, removals)
 	return args.Error(0)
@@ -182,6 +223,24 @@ func (m *MockStore) BatchDecorate(ctx context.Context, unresolvedMetaDataSlice [
 func (m *MockStore) PreviousOutputsDecorate(ctx context.Context, tx *bt.Tx) error {
 	args := m.Called(ctx, tx)
 	return args.Error(0)
+}
+
+func (m *MockStore) SpendAndCreateMulti(ctx context.Context, txs []*bt.Tx, blockHeight uint32, opts ...utxo.CreateOption) ([]utxo.SpendAndCreateMultiResult, error) {
+	args := m.Called(ctx, txs, blockHeight, opts)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+
+	return args.Get(0).([]utxo.SpendAndCreateMultiResult), args.Error(1)
+}
+
+func (m *MockStore) ParentOutputsForValidation(ctx context.Context, outpoints []utxo.Outpoint, opts ...utxo.ParentOutputOption) ([]utxo.ParentOutput, error) {
+	args := m.Called(ctx, outpoints)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+
+	return args.Get(0).([]utxo.ParentOutput), args.Error(1)
 }
 
 func (m *MockStore) BatchPreviousOutputsDecorate(ctx context.Context, txs []*bt.Tx) error {
@@ -1085,4 +1144,230 @@ func TestInterfaceCompliance(t *testing.T) {
 	loggerStore, ok := store.(*Store)
 	require.True(t, ok)
 	require.NotNil(t, loggerStore)
+}
+
+// SpendsMadeBy returns nothing: no test here drives the conflict-undo path.
+func (m *MockStore) SpendsMadeBy(ctx context.Context, txHash chainhash.Hash) ([]*utxo.Spend, error) {
+	return nil, nil
+}
+
+// newLoggedSQLiteStore wraps a sqlitememory UTXO store in the logger store.
+func newLoggedSQLiteStore(t *testing.T) (utxo.Store, utxo.Store) {
+	t.Helper()
+
+	ctx := context.Background()
+	tSettings := test.CreateBaseTestSettings(t)
+
+	storeURL, err := url.Parse("sqlitememory:///" + t.Name())
+	require.NoError(t, err)
+
+	base, err := sql.New(ctx, ulogger.NewErrorTestLogger(t), tSettings, storeURL)
+	require.NoError(t, err)
+
+	return New(ctx, ulogger.TestLogger{}, base), base
+}
+
+// The logger store forwards Stamper to the inner store. A sql store has nothing to stamp, so
+// what comes back is pruner.NoStamp, and the wrapper does not invent a stamp of its own.
+func TestStamper_Forwards(t *testing.T) {
+	s, base := newLoggedSQLiteStore(t)
+
+	require.Equal(t, base.Stamper(), s.Stamper())
+	require.Equal(t, pruner.NoStamp, s.Stamper())
+}
+
+// The logger store forwards a list to the inner store's SpendAndCreateMulti,
+// which writes every record, and forwards parent reads, which return what the
+// inner store holds.
+func TestSpendAndCreateMulti_Forwards(t *testing.T) {
+	ctx := context.Background()
+	s, base := newLoggedSQLiteStore(t)
+
+	w := tests.BuildMultiWorkload(t, 0x01, 2, 2)
+	w.StoreRoots(t, base, 6)
+
+	results, err := s.SpendAndCreateMulti(ctx, w.Txs, 7, utxo.WithIgnoreLocked(true))
+	require.NoError(t, err)
+	require.Len(t, results, len(w.Txs))
+
+	for i, r := range results {
+		require.Equal(t, utxo.MultiTxCreated, r.Status, "tx %d: %v", i, r.Err)
+
+		_, err := base.Get(ctx, w.Txs[i].TxIDChainHash())
+		require.NoError(t, err, "tx %d must be in the inner store", i)
+	}
+}
+
+func TestParentOutputsForValidation_Forwards(t *testing.T) {
+	ctx := context.Background()
+	s, base := newLoggedSQLiteStore(t)
+
+	w := tests.BuildMultiWorkload(t, 0x02, 0, 1)
+	w.StoreRoots(t, base, 6)
+
+	root := w.Roots[0]
+	answers, err := s.ParentOutputsForValidation(ctx, []utxo.Outpoint{{TxID: *root.TxIDChainHash(), Vout: 1}, {TxID: chainhash.Hash{0x0e}, Vout: 0}})
+	require.NoError(t, err)
+	require.Len(t, answers, 2)
+	require.Equal(t, utxo.ParentOutputNotMined, answers[0].Status)
+	require.Equal(t, root.Outputs[1].Satoshis, answers[0].Satoshis)
+	require.Equal(t, root.Outputs[1].LockingScript.Bytes(), answers[0].LockingScript.Bytes())
+	require.Equal(t, utxo.ParentOutputTxNotFound, answers[1].Status)
+}
+
+// The pruner service finds a store's pruner with utxo.As, so a sql store
+// wrapped in the logger must still hand back its own pruner service.
+func TestAs_FindsPrunerBehindLogger(t *testing.T) {
+	sql.ResetPrunerServiceForTests()
+	t.Cleanup(sql.ResetPrunerServiceForTests)
+
+	s, base := newLoggedSQLiteStore(t)
+
+	_, plain := s.(pruner.PrunerServiceProvider)
+	require.False(t, plain, "the logger does not implement the pruner provider itself")
+
+	provider, ok := utxo.As[pruner.PrunerServiceProvider](s)
+	require.True(t, ok)
+
+	service, err := provider.GetPrunerService()
+	require.NoError(t, err)
+	require.NotNil(t, service)
+
+	inner, err := base.(pruner.PrunerServiceProvider).GetPrunerService()
+	require.NoError(t, err)
+	require.Same(t, inner, service)
+}
+
+// A logged store whose wrapped store has no pruner reports no pruner provider.
+func TestAs_NoPrunerBehindLogger(t *testing.T) {
+	inner, err := nullstore.NewNullStore()
+	require.NoError(t, err)
+
+	s := New(context.Background(), ulogger.TestLogger{}, inner)
+
+	_, ok := utxo.As[pruner.PrunerServiceProvider](s)
+	require.False(t, ok)
+}
+
+// indexWaitingStore adds the optional WaitForIndexReady method to a real store,
+// standing in for the aerospike store, which is the only store that has it.
+type indexWaitingStore struct {
+	utxo.Store
+	waited []string
+}
+
+func (s *indexWaitingStore) WaitForIndexReady(_ context.Context, indexName string) error {
+	s.waited = append(s.waited, indexName)
+	return nil
+}
+
+type indexWaiter = interface {
+	WaitForIndexReady(ctx context.Context, indexName string) error
+}
+
+// utxo.As looks through the logger, so a caller asking for the concrete store
+// gets the wrapped one back.
+func TestAs_FindsStoreBehindLogger(t *testing.T) {
+	s, base := newLoggedSQLiteStore(t)
+
+	_, isSQL := s.(*sql.Store)
+	require.False(t, isSQL, "a plain type assertion cannot see through the logger")
+
+	found, ok := utxo.As[*sql.Store](s)
+	require.True(t, ok)
+	require.Same(t, base, found)
+}
+
+// Block assembly waits for the unmined_since index when the store has
+// WaitForIndexReady. With logging on, the wait must still reach the store.
+func TestAs_FindsIndexWaiterBehindLogger(t *testing.T) {
+	_, base := newLoggedSQLiteStore(t)
+
+	inner := &indexWaitingStore{Store: base}
+	s := New(context.Background(), ulogger.TestLogger{}, inner)
+
+	waiter, ok := utxo.As[indexWaiter](s)
+	require.True(t, ok)
+	require.NoError(t, waiter.WaitForIndexReady(context.Background(), "unminedSinceIndex"))
+	require.Equal(t, []string{"unminedSinceIndex"}, inner.waited)
+}
+
+// The logger does not add WaitForIndexReady itself, so a logged store without
+// it still reports that it has none and block assembly records the wait as
+// skipped rather than successful.
+func TestAs_LoggedSQLStoreHasNoIndexWaiter(t *testing.T) {
+	s, _ := newLoggedSQLiteStore(t)
+
+	_, ok := utxo.As[indexWaiter](s)
+	require.False(t, ok)
+}
+
+func TestAs_NilStore(t *testing.T) {
+	_, ok := utxo.As[*sql.Store](nil)
+	require.False(t, ok)
+}
+
+func (m *MockStore) SaveConflictRecovery(ctx context.Context, id chainhash.Hash, r *utxo.ConflictRecovery) error {
+	return nil
+}
+func (m *MockStore) LoadConflictRecovery(ctx context.Context, id chainhash.Hash) (*utxo.ConflictRecovery, error) {
+	return nil, nil
+}
+func (m *MockStore) RestoreConflictSpends(ctx context.Context, spends []*utxo.Spend, height uint32) error {
+	return nil
+}
+
+func (m *MockStore) SetConflictLocks(ctx context.Context, id chainhash.Hash, parents []chainhash.Hash, locked bool) error {
+	return nil
+}
+
+func (m *MockStore) ReleaseConflictLocks(ctx context.Context, id chainhash.Hash, parents []chainhash.Hash) error {
+	return nil
+}
+
+// recoveryPassthrough records the conflict recovery calls that the logging store forwards.
+type recoveryPassthrough struct {
+	utxo.Store
+	calls []string
+}
+
+func (s *recoveryPassthrough) SaveConflictRecovery(context.Context, chainhash.Hash, *utxo.ConflictRecovery) error {
+	s.calls = append(s.calls, "save")
+	return nil
+}
+
+func (s *recoveryPassthrough) LoadConflictRecovery(context.Context, chainhash.Hash) (*utxo.ConflictRecovery, error) {
+	s.calls = append(s.calls, "load")
+	return &utxo.ConflictRecovery{Version: 1, Phase: utxo.ConflictRecoveryFinished}, nil
+}
+
+func (s *recoveryPassthrough) RestoreConflictSpends(context.Context, []*utxo.Spend, uint32) error {
+	s.calls = append(s.calls, "restore")
+	return nil
+}
+
+func (s *recoveryPassthrough) SetConflictLocks(context.Context, chainhash.Hash, []chainhash.Hash, bool) error {
+	s.calls = append(s.calls, "lock")
+	return nil
+}
+
+func (s *recoveryPassthrough) ReleaseConflictLocks(context.Context, chainhash.Hash, []chainhash.Hash) error {
+	s.calls = append(s.calls, "release")
+	return nil
+}
+
+func TestLoggerStore_ForwardsConflictRecovery(t *testing.T) {
+	inner := &recoveryPassthrough{}
+	store := New(context.Background(), ulogger.TestLogger{}, inner)
+	ctx := context.Background()
+	id := chainhash.Hash{1}
+
+	require.NoError(t, store.SaveConflictRecovery(ctx, id, nil))
+	r, err := store.LoadConflictRecovery(ctx, id)
+	require.NoError(t, err)
+	require.Equal(t, utxo.ConflictRecoveryFinished, r.Phase)
+	require.NoError(t, store.RestoreConflictSpends(ctx, nil, 1))
+	require.NoError(t, store.SetConflictLocks(ctx, id, nil, true))
+	require.NoError(t, store.ReleaseConflictLocks(ctx, id, nil))
+	require.Equal(t, []string{"save", "load", "restore", "lock", "release"}, inner.calls)
 }

@@ -4,13 +4,24 @@
 
 ## Configuration Settings
 
+The Default column is the loader fallback in `settings/settings.go`. A node uses
+it only when no configuration file sets the key. A node that runs on the
+repository configuration uses the base value in the committed `settings.conf`
+when that file sets the key, unless `settings_local.conf` or a context-specific
+key (`key.<context>`) sets another. `settings.conf` sets
+`blockvalidation_quick_validate_create_concurrency`,
+`blockvalidation_outpoint_only_below_checkpoint` and
+`blockvalidation_legacy_unified_below_checkpoint` to the same values as the
+loader (0, false and false), so for these keys the two agree. The
+`blockvalidation_isParentMined_retry_*` keys and
+`blockvalidation_catchup_prefetch_budget_bytes` have no line in `settings.conf`.
+
 | Setting | Type | Default | Environment Variable | Usage |
 |---------|------|---------|---------------------|-------|
-| MaxRetries | int | 3 | blockValidationMaxRetries | General retry behavior |
+| MaxRetries | int | 3 | blockValidationMaxRetries | Requeues per block after a fetch failure or deadline |
 | RetrySleep | time.Duration | 1s | blockValidationRetrySleep | Retry delay timing |
 | GRPCAddress | string | "localhost:8088" | blockvalidation_grpcAddress | Client connection address |
 | GRPCListenAddress | string | ":8088" | blockvalidation_grpcListenAddress | **CRITICAL** - gRPC server binding (service skipped if empty) |
-| KafkaWorkers | int | 0 | blockvalidation_kafkaWorkers | Kafka consumer parallelism |
 | LocalSetTxMinedConcurrency | int | 8 | blockvalidation_localSetTxMinedConcurrency | Transaction mining concurrency |
 | MaxPreviousBlockHeadersToCheck | uint64 | 100 | blockvalidation_maxPreviousBlockHeadersToCheck | Block header validation depth |
 | MissingTransactionsBatchSize | int | 5000 | blockvalidation_missingTransactionsBatchSize | Missing transaction batch size |
@@ -27,12 +38,12 @@
 | ValidateBlockSubtreesConcurrency | int | max(4, CPU/2) | blockvalidation_validateBlockSubtreesConcurrency | Block subtree validation concurrency |
 | ValidationMaxRetries | int | 3 | blockvalidation_validation_max_retries | Validation retry attempts |
 | ValidationRetrySleep | time.Duration | 5s | blockvalidation_validation_retry_sleep | Validation retry delay |
-| OptimisticMining | bool | true | blockvalidation_optimistic_mining | Optimistic mining behavior (global; the peer-served path also requires OptimisticMiningPeerBlocks, and catch-up is never optimistic) |
+| OptimisticMining | bool | true | blockvalidation_optimistic_mining | Optimistic mining behavior (global; every validation path also requires OptimisticMiningPeerBlocks, and catch-up is never optimistic) |
 | OptimisticMiningPeerBlocks | bool | false | blockvalidation_optimistic_mining_peer_blocks | Opt in to optimistic mining on the peer-served path (accepts the invalidate-route tradeoff) |
-| MaxCorruptAttemptsPerBlock | int | 3 | blockvalidation_max_corrupt_attempts_per_block | Ban-score-independent per-(block hash, serving peerID) cap on corrupt re-downloads; also sizes the separate local-policy decline cap (0 disables, re-opening the DoS) |
-| CorruptAttemptCooldown | time.Duration | 10m | blockvalidation_corrupt_attempt_cooldown | Fixed cooldown window after which a capped (hash, peerID) is admitted again, for both caps |
+| MaxCorruptAttemptsPerBlock | int | 3 | blockvalidation_max_corrupt_attempts_per_block | Ban-score-independent per-(block hash, serving peerID) cap on corrupt re-downloads; also sizes the separate local-policy decline cap and the worker panic cap (0 disables all three, re-opening the DoS) |
+| CorruptAttemptCooldown | time.Duration | 10m | blockvalidation_corrupt_attempt_cooldown | Fixed cooldown window after which a capped (hash, peerID) is admitted again, for the corrupt, local-policy decline and worker panic caps |
 | IsParentMinedRetryMaxRetry | int | 45 | blockvalidation_isParentMined_retry_max_retry | Parent mining check retries |
-| IsParentMinedRetryBackoffMultiplier | int | 4 | blockvalidation_isParentMined_retry_backoff_multiplier | Parent mining retry backoff multiplier |
+| IsParentMinedRetryBackoffMultiplier | int | 4 | blockvalidation_isParentMined_retry_backoff_multiplier | Slope of the linear backoff between parent-mined retries: the wait before retry i, counting from 0, is (multiplier x i + 1) x base |
 | IsParentMinedRetryBackoffDuration | time.Duration | 20ms | blockvalidation_isParentMined_retry_backoff_duration | Parent mining retry backoff base duration |
 | SubtreeGroupConcurrency | int | 1 | blockvalidation_subtreeGroupConcurrency | Subtree group processing concurrency |
 | BlockFoundChBufferSize | int | 1000 | blockvalidation_blockFoundCh_buffer_size | Block discovery pipeline buffer |
@@ -51,7 +62,7 @@
 | CatchupMaxRetries | int | 3 | blockvalidation_catchup_max_retries | Catchup operation retries |
 | CatchupIterationTimeout | int | 30 | blockvalidation_catchup_iteration_timeout | **CRITICAL** - Catchup iteration timeout |
 | CatchupOperationTimeout | int | 300 | blockvalidation_catchup_operation_timeout | **CRITICAL** - Catchup operation timeout |
-| CatchupMaxAccumulatedHeaders | int | 100000 | blockvalidation_max_accumulated_headers | **CRITICAL** - Memory protection during catchup |
+| CatchupMaxAccumulatedHeaders | int | 100000 | blockvalidation_max_accumulated_headers | **CRITICAL** - Memory protection during catchup. Not used on utxoset below the hardcoded checkpoint: each catch-up window there runs from where the node is to the next hardcoded checkpoint (at most one checkpoint gap plus any UTXO-store lag; testnet's largest gap, 100,010 blocks, is about 8 MB of headers). Block validation refuses to start there when `blockvalidation_catchup_checkpoint_hash` and `blockvalidation_catchup_checkpoint_height` are set |
 | CircuitBreakerFailureThreshold | int | 5 | blockvalidation_circuit_breaker_failure_threshold | Circuit breaker failure detection |
 | CircuitBreakerSuccessThreshold | int | 2 | blockvalidation_circuit_breaker_success_threshold | Circuit breaker recovery |
 | CircuitBreakerTimeoutSeconds | int | 30 | blockvalidation_circuit_breaker_timeout_seconds | Circuit breaker timeout |
@@ -74,6 +85,11 @@
 | CatchupMinThroughputKBps | int | 100 | blockvalidation_catchup_min_throughput_kbps | Minimum throughput (KB/s) before switching peers |
 | CatchupParallelFetchEnabled | bool | true | blockvalidation_catchup_parallel_fetch_enabled | Enable parallel fetching from multiple peers |
 | CatchupParallelFetchWorkers | int | 3 | blockvalidation_catchup_parallel_fetch_workers | Number of parallel fetch workers |
+| CatchupKeepBlockAssemblyMaxBlocks | int | 6 | blockvalidation_catchup_keep_block_assembly_max_blocks | Most blocks a catch-up from RUNNING may fetch and still hand transactions to block assembly |
+| QuickValidateCreateConcurrency | int | 0 | blockvalidation_quick_validate_create_concurrency | Callers allowed in flight at once in the first wave of a below-checkpoint list that quick validation hands the SQL and Aerospike UTXO stores; that wave creates every record and also spends the inputs of each transaction with no parent in the list. 0 derives it as max(min(utxostore_storeBatcherSize x utxostore_batcherMaxConcurrent, 16384), utxostore_storeBatcherSize x 8); an explicit value is not capped |
+| OutpointOnlyBelowCheckpoint | bool | false | blockvalidation_outpoint_only_below_checkpoint | Below the hardcoded checkpoint, quick validation spends by outpoint and skips parent reads, fees and the UTXO-hash checksum. Only on stores that support outpoint-only spends (SQL); Aerospike keeps reading parent outputs. No effect on utxoset, which always takes this route below the checkpoint |
+| QuickValidateNetRange | int | 65536 | blockvalidation_quick_validate_net_range | Transactions per list that quick validation hands a store that nets below the checkpoint (utxoset): fixed ranges of transaction positions, the same lists whatever subtree size a block arrives with. Must be a power of two, otherwise the default is used. Do not change it while a block is partly applied |
+| LegacyUnifiedBelowCheckpoint | bool | false | blockvalidation_legacy_unified_below_checkpoint | Legacy below-checkpoint blocks are quick-validated through the native catchup path's machinery instead of fully validated. Requires the setting above, a store that supports outpoint-only spends and a header run proven to end at a pinned checkpoint; legacy and block validation must agree on both settings. Off, every legacy block is fully validated. No effect on utxoset: there legacy and block validation ignore this setting and the one above, and always take the route, because that store takes blocks below the checkpoint only through quick validation |
 
 ## Configuration Dependencies
 
@@ -91,23 +107,45 @@
 
 ### Optimistic Mining
 
-- `OptimisticMining = true`: enables background validation for performance on paths that opt in
-- Block validation proceeds while subtree validation runs in the background
+- `OptimisticMining` defaults to `true`: once the block's subtrees have been validated
+  (transaction and script checks, synchronously) and the checks before the add below have passed,
+  the block is added to the chain and mining can start on it, before the full block validation
+  has run
+- The full block validation continues in the background - the merkle root over every subtree, the
+  coinbase rules again, duplicate transactions, transaction ordering and parent-spend checks, and
+  the old-block-ID check that a parent not found among the block's recent ancestors
+  (`blockvalidation_maxPreviousBlockHeadersToCheck`) is in the block's own history. If a background
+  check proves the block invalid it is
+  invalidated and its UTXO effects are rolled back; a transient storage or processing failure
+  instead schedules a re-validation and leaves the block on the chain in the meantime
 - Can be overridden per-validation via the `DisableOptimisticMining` option
-- **On the peer-served validation path optimistic mining is OFF unless BOTH
+- **On every validation path optimistic mining is OFF unless BOTH
   `blockvalidation_optimistic_mining` AND `blockvalidation_optimistic_mining_peer_blocks` are set**
-  (default `(true, false)` = off). The global flag being false always wins, so the peer-blocks flag
-  can never bypass it (bitcoin-sv/teranode#4692). Revalidation of an already-stored block is always
-  non-optimistic regardless of these flags.
+  (default `(true, false)` = off). The requirement is applied where each validation chooses its
+  mode, not only at the peer entry gate, so an internal caller cannot turn optimistic on the global
+  flag alone (bitcoin-sv/teranode#4844). The global flag being false always wins, so the peer-blocks
+  flag can never bypass it (bitcoin-sv/teranode#4692). Revalidation of an already-stored block, and
+  blocks arriving over the legacy sync route (`baseURL == "legacy"`), are always non-optimistic
+  regardless of these flags.
 - **The catch-up path is always non-optimistic**, whatever these two flags are set to. It validates
   against a cached header run holding only the block's in-batch predecessors, which cannot carry the
   median-time-past window the optimistic branch checks synchronously; lifting this requires the
   header cache to top up short windows from the store first (issue 1499).
-- **Opt-in tradeoff:** with both flags set, a corrupt body on the optimistic-background path is
-  already added before background validation runs, so it takes the *invalidate route* (it is
-  invalidated/poisoned rather than re-downloaded) until the `block.Valid` integrity-floor split lands
-  and removes that path. With the default (peer-blocks off) a corrupt body is never added and is
-  re-downloaded, not poisoned.
+- **Checks before the add:** with both flags set, the header-context checks and, for a body with
+  no subtrees, the coinbase-only binding run first and are verdicts: a block that fails them is
+  rejected, not added. Then the integrity floor binds a body with subtrees to its header through its
+  first and last subtrees, and the coinbase rules run on it: shape, the common transaction rules,
+  coinbase length, finality and BIP34. A block that fails the floor is not added early; it is
+  validated fully first, exactly as with the peer-blocks flag off. The floor reads, deserializes and
+  hashes the first and last subtrees once more than validation alone would, because the full
+  validation loads its own copies.
+- **Opt-in tradeoff:** the floor does not check duplicate transactions, the lengths of the subtrees
+  between the first and last, fees, or transaction order and spends. A body that breaks one of those
+  is found only after the add, so a corrupt one takes the *invalidate route* (it is
+  invalidated/poisoned rather than re-downloaded). With the default (peer-blocks off) a corrupt body
+  is never added and is re-downloaded, not poisoned.
+- Checkpoint-verified blocks take the quick-validation pipeline instead, which never consults this
+  setting.
 
 ### Corrupt-body re-download cap
 
@@ -194,7 +232,7 @@ blockvalidation_useCatchupWhenBehind=false
 
 ```bash
 blockvalidation_validateBlockSubtreesConcurrency=16
-blockvalidation_processTxMetaUsingStoreBatchSize=2048
+blockvalidation_processTxMetaUsingStore_BatchSize=2048
 blockvalidation_catchupConcurrency=8
 blockvalidation_fetch_num_workers=32
 blockvalidation_subtree_batch_size=32

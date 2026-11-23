@@ -311,6 +311,32 @@ func TestSSRFCheckRedirect_StaysOnOrigin(t *testing.T) {
 	require.ErrorContains(t, err, "POST")
 }
 
+// TestSSRFCheckRedirect_RefusesAnyNonReadMethod pins that the redirect refusal is not specific
+// to POST: any original request that is not a GET or HEAD is refused, even on the same origin.
+func TestSSRFCheckRedirect_RefusesAnyNonReadMethod(t *testing.T) {
+	origProtection := SSRFProtectionEnabled()
+
+	SetSSRFProtection(true)
+	defer SetSSRFProtection(origProtection)
+
+	check := ssrfCheckRedirect(DefaultSSRFDialPolicy)
+
+	fromURL, err := url.Parse("http://peer.example/a")
+	require.NoError(t, err)
+	toURL, err := url.Parse("http://peer.example/b")
+	require.NoError(t, err)
+
+	for _, method := range []string{http.MethodPut, http.MethodDelete} {
+		err := check(&http.Request{URL: toURL, Method: method}, []*http.Request{{URL: fromURL, Method: method}})
+		require.ErrorContains(t, err, "redirect of a "+method)
+	}
+
+	for _, method := range []string{"", http.MethodGet, http.MethodHead} {
+		require.NoError(t, check(&http.Request{URL: toURL, Method: http.MethodGet}, []*http.Request{{URL: fromURL, Method: method}}),
+			"a same-origin redirect of %q must still be followed", method)
+	}
+}
+
 // TestDoHTTPRequest_POSTRedirectNotFollowed drives a live 302 answer to a POST, which Go
 // would otherwise follow as a GET.
 func TestDoHTTPRequest_POSTRedirectNotFollowed(t *testing.T) {
@@ -369,4 +395,54 @@ func TestDoLocalServiceHTTPRequestBodyReader_ReachesLoopback(t *testing.T) {
 	body, err := io.ReadAll(reader)
 	require.NoError(t, err)
 	require.Equal(t, "block", string(body))
+}
+
+// TestDoLocalServiceHTTPRequestBodyReader_CarriesHeaders covers the legacy peer
+// server's internal-pool token: DoLocalServiceHTTPRequestBodyReader's optional
+// headers argument must reach the outgoing request, and omitting it (as every
+// other caller does) must not send any extra header.
+func TestDoLocalServiceHTTPRequestBodyReader_CarriesHeaders(t *testing.T) {
+	var gotHeader string
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotHeader = r.Header.Get("X-Teranode-Internal-Token")
+		_, _ = w.Write([]byte("ok"))
+	}))
+	defer server.Close()
+
+	reader, err := DoLocalServiceHTTPRequestBodyReader(context.Background(), server.URL,
+		map[string]string{"X-Teranode-Internal-Token": "a-shared-secret"})
+	require.NoError(t, err)
+	_ = reader.Close()
+	require.Equal(t, "a-shared-secret", gotHeader, "the header passed in must reach the request")
+
+	gotHeader = ""
+
+	reader, err = DoLocalServiceHTTPRequestBodyReader(context.Background(), server.URL)
+	require.NoError(t, err)
+	_ = reader.Close()
+	require.Empty(t, gotHeader, "omitting headers must not send the header at all")
+}
+
+// TestDoLocalServiceHTTPRequestBodyReader_MergesEveryHeadersMap pins that
+// headers from every map passed reach the request, rather than every map after
+// the first being silently ignored. A later map wins on a duplicate key.
+func TestDoLocalServiceHTTPRequestBodyReader_MergesEveryHeadersMap(t *testing.T) {
+	var got http.Header
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = r.Header.Clone()
+		_, _ = w.Write([]byte("ok"))
+	}))
+	defer server.Close()
+
+	reader, err := DoLocalServiceHTTPRequestBodyReader(context.Background(), server.URL,
+		map[string]string{"X-First": "1", "X-Shared": "first"},
+		map[string]string{"X-Second": "2", "X-Shared": "second"})
+	require.NoError(t, err)
+	_ = reader.Close()
+
+	require.Equal(t, "1", got.Get("X-First"))
+	require.Equal(t, "2", got.Get("X-Second"))
+	require.Equal(t, "second", got.Get("X-Shared"))
 }

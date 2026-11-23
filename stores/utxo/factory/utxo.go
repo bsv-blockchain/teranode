@@ -80,11 +80,25 @@ const errGettingBestHeightAndTime = "[UTXOStore] error getting best height and t
 
 var availableDatabases = map[string]func(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, url *url.URL) (utxo.Store, error){}
 
+// An enabled store must not behave like an off store before its owner installs
+// the allocator. This source fails instead of allocating or supplying a default.
+type unconfiguredLaneSource struct{}
+
+func (s unconfiguredLaneSource) Next(context.Context) (uint64, error) { return 0, s.Ready() }
+func (s unconfiguredLaneSource) Start(context.Context) error          { return s.Ready() }
+func (unconfiguredLaneSource) Ready() error {
+	return errors.NewConfigurationError("lane positions enabled but no lane position source is configured; install a source before creating records, or run historical imports with utxostore_laneMigration=off")
+}
+
 // NewStore creates a new UTXO store implementation based on the settings.
 // The source parameter is used for logging purposes.
 // The startBlockchainListener parameter controls whether to set up automatic
 // block height updates (defaults to true if not specified).
 func NewStore(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, source string, startBlockchainListener ...bool) (utxo.Store, error) {
+	if err := settings.CheckLaneMigration(tSettings.UtxoStore.LaneMigration); err != nil {
+		return nil, err
+	}
+
 	var port int
 
 	var err error
@@ -113,6 +127,17 @@ func NewStore(ctx context.Context, logger ulogger.Logger, tSettings *settings.Se
 		utxoStore, err = dbInit(ctx, logger, tSettings, storeURL)
 		if err != nil {
 			return nil, err
+		}
+
+		if tSettings.UtxoStore.LaneMigration.Stamps() {
+			taker, ok := utxo.As[utxo.LanePositionTaker](utxoStore)
+			if !ok {
+				if closeErr := utxoStore.Close(ctx); closeErr != nil {
+					logger.Errorf("[UTXOStore] closing unsupported lane store: %v", closeErr)
+				}
+				return nil, errors.NewConfigurationError("utxostore_laneMigration=%s requires a UTXO store that can write lane positions", tSettings.UtxoStore.LaneMigration)
+			}
+			taker.SetLanePositionSource(unconfiguredLaneSource{})
 		}
 
 		if storeURL.Query().Get("logging") == "true" {

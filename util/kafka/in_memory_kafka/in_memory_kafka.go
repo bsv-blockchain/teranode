@@ -25,11 +25,17 @@ type InMemoryBroker struct {
 	mu     sync.RWMutex
 }
 
-// Topic holds messages and consumer channels for a specific topic.
+// Topic holds the consumer channels for a specific topic and the next offset to assign.
+//
+// It holds no messages. It used to keep every message ever produced, in a history nothing read,
+// so on a node running Kafka in memory each message stayed on the heap for good: on mainnet on
+// 2026-09-30 that was 6.9 GB of transaction metadata, 88% of the live heap, with the garbage
+// collector taking 68% of the CPU. A message is delivered to the consumers there are when it is
+// produced, exactly as before, and is then free to be collected.
 type Topic struct {
-	messages  []*Message
-	consumers []chan *Message
-	mu        sync.RWMutex
+	nextOffset int64
+	consumers  []chan *Message
+	mu         sync.RWMutex
 }
 
 // NewInMemoryBroker creates a new instance of the in-memory broker.
@@ -49,7 +55,6 @@ func (b *InMemoryBroker) Produce(ctx context.Context, topic string, key []byte, 
 		b.mu.Lock()
 		if _, exists := b.topics[topic]; !exists {
 			b.topics[topic] = &Topic{
-				messages:  make([]*Message, 0),
 				consumers: make([]chan *Message, 0),
 			}
 		}
@@ -64,11 +69,11 @@ func (b *InMemoryBroker) Produce(ctx context.Context, topic string, key []byte, 
 		Topic:     topic,
 		Key:       key,
 		Value:     value,
-		Offset:    int64(len(t.messages)),
+		Offset:    t.nextOffset,
 		Partition: 0,
 		Timestamp: time.Now(),
 	}
-	t.messages = append(t.messages, msg)
+	t.nextOffset++
 
 	// Broadcast to all consumers
 	for _, ch := range t.consumers {
@@ -81,9 +86,7 @@ func (b *InMemoryBroker) Produce(ctx context.Context, topic string, key []byte, 
 	return nil
 }
 
-// DropTopic removes the topic entirely from the broker. Use at end-of-test
-// teardown to release the historical-messages buffer the broker pins
-// indefinitely.
+// DropTopic removes the topic entirely from the broker.
 func (b *InMemoryBroker) DropTopic(topic string) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -104,28 +107,6 @@ func (b *InMemoryBroker) HasConsumer(topic string) bool {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 	return len(t.consumers) > 0
-}
-
-// TruncateTopic drops the broker's retained-messages buffer for a topic. The
-// in-memory broker otherwise keeps every produced message forever, which is
-// fine for short tests but pins gigabytes in long benchmark runs. Callers
-// that have confirmed all consumers have already drained past a given point
-// (e.g. via their own processed-counter watermark) can use this to release
-// the broker-side retention without affecting in-flight delivery — only the
-// historical buffer is cleared, not the per-consumer channels.
-func (b *InMemoryBroker) TruncateTopic(topic string) {
-	b.mu.RLock()
-	t, ok := b.topics[topic]
-	b.mu.RUnlock()
-	if !ok {
-		return
-	}
-	t.mu.Lock()
-	// Drop the backing array entirely (t.messages = t.messages[:0] would
-	// keep cap()-many message pointers alive and defeat the purpose for
-	// long bench runs).
-	t.messages = nil
-	t.mu.Unlock()
 }
 
 // Topics returns a list of topic names managed by the broker.
@@ -405,7 +386,6 @@ func (mcg *InMemoryConsumerGroup) Consume(ctx context.Context, topics []string, 
 		mcg.broker.mu.Lock()
 		if _, exists := mcg.broker.topics[topicToConsume]; !exists {
 			mcg.broker.topics[topicToConsume] = &Topic{
-				messages:  make([]*Message, 0),
 				consumers: make([]chan *Message, 0),
 			}
 		}

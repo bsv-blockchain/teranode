@@ -25,6 +25,7 @@ type catchupReportRecorder struct {
 	mu             sync.Mutex
 	malicious      []string
 	genericError   []string
+	errorMessages  []string
 	failureKinds   []string
 	failureHashes  []string
 	failurePeerIDs []string
@@ -38,10 +39,11 @@ func (m *catchupReportRecorder) RecordCatchupMalicious(_ context.Context, peerID
 	return nil
 }
 
-func (m *catchupReportRecorder) UpdateCatchupError(_ context.Context, peerID, _ string) error {
+func (m *catchupReportRecorder) UpdateCatchupError(_ context.Context, peerID, errorMsg string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.genericError = append(m.genericError, peerID)
+	m.errorMessages = append(m.errorMessages, errorMsg)
 
 	return nil
 }
@@ -74,6 +76,15 @@ func (m *catchupReportRecorder) genericErrorReported() []string {
 	defer m.mu.Unlock()
 	out := make([]string, len(m.genericError))
 	copy(out, m.genericError)
+
+	return out
+}
+
+func (m *catchupReportRecorder) errorMessagesReported() []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]string, len(m.errorMessages))
+	copy(out, m.errorMessages)
 
 	return out
 }
@@ -187,4 +198,55 @@ func TestReleaseCatchupLock_CorruptBodyClassifiedNonPeer(t *testing.T) {
 		require.Equal(t, []string{"peer-invalid"}, rec.maliciousReported(),
 			"a consensus-invalid body must flag the serving peer malicious")
 	})
+}
+
+// TestReleaseCatchupLock_UnboundTxInvalidIsConsensusFailure is a regression for
+// bitcoin-sv/teranode#4844: the corrupt verdict ValidateBlockWithOptions returns for an invalid
+// transaction in an unbound subtree list used to take releaseCatchupLock's corrupt branch, which
+// suppresses the malicious report. On catch-up it is a consensus rejection, so it must be scored
+// exactly like a consensus-invalid block: validation_failure, the primary reported malicious, the
+// same failure charges, and no corrupt-body diagnostic.
+func TestReleaseCatchupLock_UnboundTxInvalidIsConsensusFailure(t *testing.T) {
+	release := func(t *testing.T, terminal error) (*Server, *catchupReportRecorder) {
+		t.Helper()
+
+		rec := &catchupReportRecorder{}
+		u := &Server{logger: ulogger.TestLogger{}, p2pClient: rec}
+
+		block := newReleaseCatchupBlock(t)
+		catchupCtx := &CatchupContext{
+			blockUpTo: block,
+			baseURL:   "http://peer",
+			peerID:    "peer-primary",
+			startTime: time.Now(),
+		}
+
+		u.releaseCatchupLock(catchupCtx, &terminal)
+
+		return u, rec
+	}
+
+	unbound := errors.NewBlockCorruptError("[ValidateBlock][%s] block contains invalid transactions", "hash",
+		errors.NewTxInvalidError("transaction in subtree is invalid"))
+	require.True(t, isUnboundTxInvalidVerdict(unbound), "fixture precondition: the producer's error shape")
+
+	u, rec := release(t, unbound)
+
+	require.NotNil(t, u.previousCatchupAttempt)
+	require.Equal(t, "validation_failure", u.previousCatchupAttempt.ErrorType)
+	require.Equal(t, []string{"peer-primary"}, rec.maliciousReported(),
+		"the primary must be reported malicious for an invalid transaction in its subtree list")
+
+	for _, msg := range rec.errorMessagesReported() {
+		require.NotContains(t, msg, "corrupt block body during catchup")
+	}
+
+	// Scored exactly like a consensus-invalid block.
+	_, control := release(t, errors.NewBlockInvalidError("[BLOCK] block violates consensus"))
+
+	peerIDs, kinds, hashes := rec.failuresWithKindReported()
+	controlPeerIDs, controlKinds, controlHashes := control.failuresWithKindReported()
+	require.Equal(t, controlPeerIDs, peerIDs)
+	require.Equal(t, controlKinds, kinds)
+	require.Equal(t, controlHashes, hashes)
 }

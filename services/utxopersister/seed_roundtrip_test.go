@@ -70,8 +70,10 @@ func TestProductionSeedIsConsumerReadable(t *testing.T) {
 	c.lastBlockHash = &currentHash
 	c.lastBlockHeight = seedHeight
 	c.previousBlockHash = &prevHash
+	c.firstBlockHeight = 100 // the staged previous set is at height 99
+	c.firstBlockHeightKnown = true
 
-	us, err := GetUTXOSet(ctx, logger, tSettings, store, &currentHash)
+	us, err := GetUTXOSet(ctx, logger, tSettings, store, &currentHash, seedHeight)
 	require.NoError(t, err)
 
 	require.NoError(t, us.CreateUTXOSet(ctx, c))

@@ -370,6 +370,10 @@ func (uw *UTXOWrapper) String() string {
 	return s.String()
 }
 
+// maxExactScriptAlloc is the largest script length NewUTXOFromReader trusts
+// enough to allocate up front; longer scripts use a bounded, growing read.
+const maxExactScriptAlloc = 64 * 1024
+
 // NewUTXOFromReader creates a new UTXO from the provided reader.
 // It deserializes a UTXO by reading the index, value, script length, and script bytes.
 // Returns the UTXO and any error encountered during deserialization.
@@ -400,7 +404,21 @@ func (uw *UTXOWrapper) NewUTXOFromReader(r io.Reader, utxo *UTXO) error {
 	// Read the script length
 	l := uint32(uw.b16[12]) | uint32(uw.b16[13])<<8 | uint32(uw.b16[14])<<16 | uint32(uw.b16[15])<<24
 
-	// l is an untrusted length from the file, so do NOT do make([]byte, l).
+	// Almost every script is small, so read those into an exactly-sized slice:
+	// one allocation, no over-sized backing array retained by the UTXO. The
+	// bound keeps a bogus length from forcing more than a small allocation.
+	if l <= maxExactScriptAlloc {
+		script := make([]byte, l)
+		if _, err := io.ReadFull(r, script); err != nil {
+			return errors.NewStorageError("failed to read utxo script (%d bytes)", l, err)
+		}
+
+		utxo.Script = script
+
+		return nil
+	}
+
+	// Above the bound, l is an untrusted length from the file, so do NOT do make([]byte, l).
 	// io.CopyN here resolves to bytes.Buffer.ReadFrom(io.LimitReader(r, l)),
 	// and ReadFrom grows the buffer in fixed-size (512-byte) increments sized
 	// to the bytes actually read, stopping at the underlying EOF — it never
