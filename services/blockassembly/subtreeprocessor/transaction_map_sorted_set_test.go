@@ -2,14 +2,19 @@ package subtreeprocessor
 
 import (
 	"context"
+	"io"
 	"net/url"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
+	"github.com/bsv-blockchain/teranode/stores/blob"
 	blob_memory "github.com/bsv-blockchain/teranode/stores/blob/memory"
+	"github.com/bsv-blockchain/teranode/stores/blob/options"
 	"github.com/bsv-blockchain/teranode/stores/utxo/sql"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/test"
@@ -172,4 +177,123 @@ func TestCreateTransactionMap_MissingSubtreeErrors(t *testing.T) {
 	require.Contains(t, err.Error(), "error getting subtrees")
 	require.Nil(t, set)
 	require.Nil(t, conflicting)
+}
+
+// concurrencyStore records the most subtree reads open at once.
+type concurrencyStore struct {
+	blob.Store
+	open, peak atomic.Int32
+}
+
+type countedReader struct {
+	io.ReadCloser
+	store *concurrencyStore
+}
+
+func (r *countedReader) Close() error {
+	r.store.open.Add(-1)
+	return r.ReadCloser.Close()
+}
+
+func (s *concurrencyStore) GetIoReader(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...options.FileOption) (io.ReadCloser, error) {
+	reader, err := s.Store.GetIoReader(ctx, key, fileType, opts...)
+	if err != nil {
+		return nil, err
+	}
+
+	n := s.open.Add(1)
+	for peak := s.peak.Load(); n > peak && !s.peak.CompareAndSwap(peak, n); peak = s.peak.Load() {
+	}
+
+	time.Sleep(5 * time.Millisecond)
+
+	return &countedReader{ReadCloser: reader, store: s}, nil
+}
+
+// A bounded build reads no more subtrees at once than its worker count, and an unbounded one still
+// reads as many as the setting allows.
+func TestCreateTransactionMap_WorkersBoundTheReads(t *testing.T) {
+	stp, store := newTxMapTestProcessor(t)
+
+	roots := make(map[chainhash.Hash]int)
+
+	for s := 0; s < 8; s++ {
+		roots[storeSubtree(t, store, randHashes(16, int64(100+s)))] = s
+	}
+
+	counting := &concurrencyStore{Store: store}
+	stp.subtreeStore = counting
+
+	_, _, err := stp.createTransactionMap(context.Background(), roots, len(roots), 128, txMapBuild{workers: 2})
+	require.NoError(t, err)
+	require.LessOrEqual(t, int(counting.peak.Load()), 2)
+
+	counting.peak.Store(0)
+
+	_, _, err = stp.createTransactionMap(context.Background(), roots, len(roots), 128, txMapBuild{})
+	require.NoError(t, err)
+	require.Greater(t, int(counting.peak.Load()), 2, "an unbounded build keeps the setting's concurrency")
+}
+
+// storeCorruptedSubtree stores, under the key of a good subtree, a file that starts with the
+// right root but whose second leaf is another hash, as the file type given.
+func storeCorruptedSubtree(t testing.TB, store *blob_memory.Memory, fileType fileformat.FileType) chainhash.Hash {
+	t.Helper()
+
+	st, err := subtreepkg.NewTreeByLeafCount(4)
+	require.NoError(t, err)
+
+	for i, h := range randHashes(4, 55) {
+		if i == 0 {
+			require.NoError(t, st.AddCoinbaseNode())
+		} else {
+			require.NoError(t, st.AddNode(h, 1, 1))
+		}
+	}
+
+	b, err := st.Serialize()
+	require.NoError(t, err)
+
+	// root(32) fees(8) size(8) leaves(8), then 48 bytes a leaf: flip a byte of the second leaf's hash
+	b[56+48+3] ^= 0xff
+
+	require.NoError(t, store.Set(context.Background(), st.RootHash()[:], fileType, b))
+
+	return *st.RootHash()
+}
+
+// A subtree that is only in the to-check state has not been checked against its root by anyone, so a
+// verifying build recomputes the root from the leaves and refuses a body that does not hash to it.
+// The root at the head of the file is the key's, so only a recompute sees the changed leaf.
+func TestCreateTransactionMap_ToCheckSubtreeBodyIsVerified(t *testing.T) {
+	stp, store := newTxMapTestProcessor(t)
+	root := storeCorruptedSubtree(t, store, fileformat.FileTypeSubtreeToCheck)
+
+	_, _, err := stp.createTransactionMap(context.Background(), map[chainhash.Hash]int{root: 0}, 1, 4, txMapBuild{verifyToCheck: true})
+	require.ErrorContains(t, err, "does not hash to its key")
+
+	_, _, err = stp.createTransactionMap(context.Background(), map[chainhash.Hash]int{root: 0}, 1, 4, txMapBuild{})
+	require.NoError(t, err, "the default build does not verify")
+}
+
+// A subtree in the subtree store was root-checked before subtree validation wrote it there, so it is
+// not recomputed, and a good to-check body passes the check.
+func TestCreateTransactionMap_VerifyOnlyRecomputesToCheckSubtrees(t *testing.T) {
+	stp, store := newTxMapTestProcessor(t)
+	root := storeCorruptedSubtree(t, store, fileformat.FileTypeSubtree)
+
+	_, _, err := stp.createTransactionMap(context.Background(), map[chainhash.Hash]int{root: 0}, 1, 4, txMapBuild{verifyToCheck: true})
+	require.NoError(t, err)
+
+	good := randHashes(4, 56)
+	good[0] = subtreepkg.CoinbasePlaceholderHashValue
+	goodRoot := storeSubtree(t, store, good)
+	b, err := store.Get(context.Background(), goodRoot[:], fileformat.FileTypeSubtree)
+	require.NoError(t, err)
+	require.NoError(t, store.Del(context.Background(), goodRoot[:], fileformat.FileTypeSubtree))
+	require.NoError(t, store.Set(context.Background(), goodRoot[:], fileformat.FileTypeSubtreeToCheck, b))
+
+	set, _, err := stp.createTransactionMap(context.Background(), map[chainhash.Hash]int{goodRoot: 0}, 1, 4, txMapBuild{verifyToCheck: true})
+	require.NoError(t, err)
+	require.Equal(t, 4, set.Length())
 }

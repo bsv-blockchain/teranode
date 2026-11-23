@@ -16,6 +16,7 @@ package subtreeprocessor
 
 import (
 	"bufio"
+	"bytes"
 	"container/ring"
 	"context"
 	"encoding/binary"
@@ -9455,11 +9456,29 @@ func (stp *SubtreeProcessor) legacyParallelGetAndSetIfNotExists(
 //   - util.TxMap: Created transaction map
 //   - error: Any error encountered during map creation
 func (stp *SubtreeProcessor) CreateTransactionMap(ctx context.Context, blockSubtreesMap map[chainhash.Hash]int, totalSubtreesInBlock int, estimatedTxCount uint64) (*SortedHashSet, []chainhash.Hash, error) {
+	return stp.createTransactionMap(ctx, blockSubtreesMap, totalSubtreesInBlock, estimatedTxCount, txMapBuild{})
+}
+
+// txMapBuild changes how createTransactionMap builds. The zero value is CreateTransactionMap.
+type txMapBuild struct {
+	// workers bounds the readers, the inserters and the freeze, when it is above zero
+	workers int
+	// verifyToCheck recomputes the root of every subtree read from the to-check state
+	verifyToCheck bool
+}
+
+func (stp *SubtreeProcessor) createTransactionMap(ctx context.Context, blockSubtreesMap map[chainhash.Hash]int, totalSubtreesInBlock int, estimatedTxCount uint64, build txMapBuild) (*SortedHashSet, []chainhash.Hash, error) {
 	startTime := time.Now()
 
 	prometheusSubtreeProcessorCreateTransactionMap.Inc()
 
 	concurrentSubtreeReads := stp.settings.BlockAssembly.SubtreeProcessorConcurrentReads
+	workers := runtime.GOMAXPROCS(0)
+
+	if build.workers > 0 {
+		concurrentSubtreeReads = min(concurrentSubtreeReads, build.workers)
+		workers = build.workers
+	}
 
 	// Log memory stats before allocation if debug logging is enabled
 	var memStatsBefore runtime.MemStats
@@ -9501,7 +9520,7 @@ func (stp *SubtreeProcessor) CreateTransactionMap(ctx context.Context, blockSubt
 	// the pool to runnable parallelism. Under a cgroup CPU quota (the normal
 	// container/k8s deployment) NumCPU() reports host cores and would
 	// oversubscribe. Matches map.go and the errgroup limit at line ~2292.
-	inserter := newBucketInserter(transactionMap, runtime.GOMAXPROCS(0))
+	inserter := newBucketInserter(transactionMap, workers)
 
 	g, ctx := errgroup.WithContext(ctx)
 	util.SafeSetLimit(stp.logger, g, concurrentSubtreeReads)
@@ -9518,6 +9537,14 @@ func (stp *SubtreeProcessor) CreateTransactionMap(ctx context.Context, blockSubt
 				subtreeReader, err = stp.subtreeStore.GetIoReader(ctx, st[:], fileformat.FileTypeSubtreeToCheck)
 				if err != nil {
 					return errors.NewServiceError("error getting subtree: %s", st.String(), err)
+				}
+
+				// A subtree in the subtree store was root-checked before subtree validation wrote it
+				// there. One still to check was not, and its leaves are what the set is built from.
+				if build.verifyToCheck {
+					if subtreeReader, err = verifyToCheckSubtree(subtreeReader, st, stp.settings.SubtreeValidation.MaxIncomingSubtreeBytes); err != nil {
+						return err
+					}
 				}
 			}
 
@@ -9593,7 +9620,7 @@ func (stp *SubtreeProcessor) CreateTransactionMap(ctx context.Context, blockSubt
 	// The set is fully built and has no further writers: freeze it, which lays
 	// the hashes out sorted for the ~hundreds of millions of Exists probes in
 	// processRemainderTxHashes and dequeueDuringBlockMovement.
-	if err = transactionMap.Freeze(runtime.GOMAXPROCS(0)); err != nil {
+	if err = transactionMap.Freeze(workers); err != nil {
 		return nil, nil, errors.NewProcessingError("error freezing transaction map", err)
 	}
 
@@ -9625,6 +9652,34 @@ func (stp *SubtreeProcessor) CreateTransactionMap(ctx context.Context, blockSubt
 	prometheusSubtreeProcessorCreateTransactionMapDuration.Observe(float64(time.Since(startTime).Microseconds()) / 1_000_000)
 
 	return transactionMap, conflictingNodes, nil
+}
+
+// verifyToCheckSubtree reads a subtree body, recomputes its merkle root from the leaves and returns the
+// body again if the root is the key's. The root at the head of the file is not enough: it is the
+// claim, and a changed leaf would leave it as it is. It closes reader.
+func verifyToCheckSubtree(reader io.ReadCloser, key chainhash.Hash, maxBytes int64) (io.ReadCloser, error) {
+	defer func() { _ = reader.Close() }()
+
+	data, err := io.ReadAll(io.LimitReader(reader, maxBytes+1))
+	if err != nil {
+		return nil, errors.NewProcessingError("error reading subtree %s", key.String(), err)
+	}
+
+	if int64(len(data)) > maxBytes {
+		return nil, errors.NewProcessingError("subtree %s is larger than %d bytes", key.String(), maxBytes)
+	}
+
+	subtree := &subtreepkg.Subtree{}
+	if err = subtree.DeserializeFromReader(bytes.NewReader(data)); err != nil {
+		return nil, errors.NewProcessingError("error deserializing subtree %s", key.String(), err)
+	}
+
+	store, err := subtreepkg.BuildMerkleTreeStoreFromBytes(subtree.Nodes)
+	if err != nil || len(*store) == 0 || chainhash.Hash((*store)[len(*store)-1]) != key {
+		return nil, errors.NewProcessingError("subtree %s does not hash to its key", key.String())
+	}
+
+	return io.NopCloser(bytes.NewReader(data)), nil
 }
 
 func (stp *SubtreeProcessor) markConflictingTxsInSubtrees(ctx context.Context, losingTxHashesMap txmap.TxMap) error {
