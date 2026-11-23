@@ -372,16 +372,22 @@ func TestOwnLaneBitmapsKeepsOnlyRecentSubtrees(t *testing.T) {
 	kept.put(*hashOf(1), lane.LaneBitmaps{}, 100)
 	kept.put(*hashOf(2), lane.LaneBitmaps{}, 100)
 
+	// two blocks later both are still kept: three heights are
+	kept.put(*hashOf(4), lane.LaneBitmaps{}, 100+ownLaneBitmapsKeepBlocks)
+
+	_, missing := kept.get([]*chainhash.Hash{hashOf(1), hashOf(2)})
+	require.Zero(t, missing, "stored ownLaneBitmapsKeepBlocks blocks ago, still kept")
+
 	require.True(t, kept.touch(*hashOf(2), 105), "stored again five blocks later")
 
 	kept.put(*hashOf(3), lane.LaneBitmaps{}, 100+ownLaneBitmapsKeepBlocks+1)
 
-	_, missing := kept.get([]*chainhash.Hash{hashOf(1)})
+	_, missing = kept.get([]*chainhash.Hash{hashOf(1)})
 	require.Equal(t, 1, missing, "last stored more than the margin ago")
 
 	_, missing = kept.get([]*chainhash.Hash{hashOf(2), hashOf(3)})
 	require.Zero(t, missing)
-	require.Equal(t, 2, kept.len())
+	require.Equal(t, 3, kept.len())
 	require.False(t, kept.touch(*hashOf(1), 200))
 }
 
@@ -767,4 +773,67 @@ func TestOwnLaneBitmapsWaitCountsAgainAsItEnds(t *testing.T) {
 		require.Zero(t, absent)
 		require.Equal(t, 1, timedOut)
 	})
+}
+
+// blockingReadMap is a pool map whose reads wait until release is closed, so the storage of a
+// subtree that reads it stays in progress.
+type blockingReadMap struct {
+	subtreeprocessor.TxInpointsMap
+	release chan struct{}
+}
+
+func (m *blockingReadMap) Get(hash chainhash.Hash) (*subtreepkg.TxInpoints, bool) {
+	<-m.release
+
+	return m.TxInpointsMap.Get(hash)
+}
+
+// TestSubtreeListenerMarksASubtreeAsBeingStored: a subtree handed to the storage listener is marked
+// as being stored, so a block that lists it while its bitmaps are not kept yet counts it as timed
+// out, not absent; once its storage ends nothing waits for it and the block gets its rows.
+func TestSubtreeListenerMarksASubtreeAsBeingStored(t *testing.T) {
+	previous := ownLaneBitmapsWait
+	ownLaneBitmapsWait = 50 * time.Millisecond
+
+	t.Cleanup(func() { ownLaneBitmapsWait = previous })
+
+	server, _ := setupServerWithSettings(t, func(s *settings.Settings) { s.UtxoStore.LaneMigration = settings.LaneMigrationShadow })
+
+	ctx, cancel := context.WithCancel(t.Context())
+	t.Cleanup(cancel)
+
+	requests := make(chan subtreeprocessor.NewSubtreeRequest, 1)
+	go server.runNewSubtreeListener(ctx, requests, make(chan *subtreeRetrySend, 10))
+
+	st, txMap := laneSealSubtree(t, "listener")
+	slow := &blockingReadMap{TxInpointsMap: txMap, release: make(chan struct{})}
+	errCh := make(chan error, 1)
+	requests <- subtreeprocessor.NewSubtreeRequest{Subtree: st, ParentTxMap: slow, ErrChan: errCh}
+
+	require.Eventually(t, func() bool {
+		server.ownLaneBitmaps.mu.Lock()
+		defer server.ownLaneBitmaps.mu.Unlock()
+
+		_, storing := server.ownLaneBitmaps.pending[*st.RootHash()]
+
+		return storing
+	}, 5*time.Second, time.Millisecond, "the listener marks the subtree as being stored")
+
+	timedOut := map[string]string{"block": lane.BlockOwn, "reason": lane.MissingBitmapsTimedOut}
+	before := ownLaneMetric(t, "teranode_lane_missing_bitmaps_total", timedOut)
+
+	block := &model.Block{Header: laneTestHeader(), Subtrees: []*chainhash.Hash{st.RootHash()}, TransactionCount: 4}
+
+	require.Nil(t, server.ownLaneRows(ctx, block))
+	require.Equal(t, before+1, ownLaneMetric(t, "teranode_lane_missing_bitmaps_total", timedOut), "a subtree still being stored is timed out, not absent")
+
+	close(slow.release)
+	require.NoError(t, <-errCh)
+
+	server.ownLaneBitmaps.mu.Lock()
+	_, stillStoring := server.ownLaneBitmaps.pending[*st.RootHash()]
+	server.ownLaneBitmaps.mu.Unlock()
+	require.False(t, stillStoring, "once its storage ends nothing waits for it")
+
+	require.NotEmpty(t, server.ownLaneRows(ctx, block))
 }

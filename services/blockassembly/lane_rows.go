@@ -36,9 +36,10 @@ const laneBitmapsService = "blockassembly"
 // them possibly still being stored (see ownLaneBitmapsWait): when a
 // block moves the pool on, every transaction left is built into new subtrees, which are stored and
 // kept again, and a candidate cut before that block is stale. So an entry older than this serves
-// nothing, and it is dropped when the next one is kept. This bounds the memory to about two
-// blocks' subtrees: about 0.5 KB per million-transaction subtree whose lanes are contiguous runs,
-// which is how block assembly fills its subtrees from the queue.
+// nothing, and it is dropped when the next one is kept. This bounds the memory to the subtrees
+// stored at the last ownLaneBitmapsKeepBlocks+1 heights, three generations of the pool's
+// subtrees: about 0.5 KB per million-transaction subtree whose lanes are contiguous runs, which is
+// how block assembly fills its subtrees from the queue.
 const ownLaneBitmapsKeepBlocks = 2
 
 // ownLaneBitmapsWait bounds how long storing our block waits for the kept bitmaps of a subtree
