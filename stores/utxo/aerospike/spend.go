@@ -715,8 +715,9 @@ type spendCompletionResult struct {
 	// prunedRejection is true when a resolved input was refused as a pruned
 	// replay; see utxo.RollbackSet.
 	prunedRejection bool
-	// unresolved counts inputs skipped because they were still in flight on the
-	// abort path. Their answers are unknown.
+	// unresolved counts inputs whose answer is unknown: inputs still in flight on
+	// the abort path, and historical matches whose spender existence read failed
+	// (refuseHistoricalReplays).
 	unresolved int
 	// requireParentOutput mirrors the batchSpend field for the call; see
 	// rollbackPartialSpends and rollbackSet.
@@ -755,7 +756,8 @@ type spendCompletionResult struct {
 // is held back when a resolved input was refused as a pruned replay, when any
 // input is still unanswered, since that input may be the refused one, or on a
 // RequireParentOutputs call, whose record exists so its matches are its own
-// spends. On the normal path every input is answered, so unresolved is zero there.
+// spends. On the normal path unresolved is nonzero only when
+// refuseHistoricalReplays could not read whether the spender exists.
 func (r *spendCompletionResult) rollbackSet() []*utxo.Spend {
 	return utxo.RollbackSet(r.spentSpends, r.idempotentSpends, r.prunedRejection || r.unresolved > 0 || r.requireParentOutput)
 }
