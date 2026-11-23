@@ -1635,3 +1635,33 @@ func TestAnOlderRefreshDoesNotShortenTheLaneBitmapsFile(t *testing.T) {
 	require.Equal(t, []bool{true}, recording.exclusive, "the file is written with an exclusive publish")
 	require.Equal(t, []uint32{302}, recording.dahs, "only the later delete-at is applied")
 }
+
+// TestAPendingSubtreeKeepsItsFileDAH: a subtree with a storage request still running is not
+// dropped by age, so that request, finishing with an older delete-at height, does not lower its
+// lane bitmaps file's.
+func TestAPendingSubtreeKeepsItsFileDAH(t *testing.T) {
+	server, memoryStore := setupServerWithSettings(t, func(s *settings.Settings) { s.UtxoStore.LaneMigration = settings.LaneMigrationShadow })
+
+	recording := &dahRecordingStore{Store: memoryStore}
+	server.subtreeStore = recording
+
+	st, txMap := laneSealSubtree(t, "pending-file-dah")
+	root := *st.RootHash()
+
+	// an older request has taken the subtree and not finished
+	server.ownLaneBitmaps.expect(root)
+
+	// a newer request stores it at height 100, then a subtree kept at 103 would age it out
+	laneBits, _ := subtreeLanePositions(st, txMap, nil, nil)
+	server.storeSubtreeLaneBitmaps(t.Context(), st, laneBits, 100, 388)
+	server.ownLaneBitmaps.put(chainhash.HashH([]byte("pending-file-dah-later")), lane.LaneBitmaps{}, 103)
+
+	// the older request finishes with its older delete-at
+	server.keepExistingSubtreeLaneBitmaps(t.Context(), subtreeprocessor.NewSubtreeRequest{Subtree: st, ParentTxMap: txMap}, 99, 387)
+	server.ownLaneBitmaps.settle(root)
+
+	recording.mu.Lock()
+	defer recording.mu.Unlock()
+
+	require.Empty(t, recording.dahs, "the older delete-at is not applied")
+}

@@ -31,8 +31,7 @@ const (
 	laneMapRowsReleaseSavepoint  = `RELEASE SAVEPOINT lane_map_rows`
 
 	// laneMapRowsLockTimeout bounds, on Postgres, each lock wait of a block's lane map rows insert
-	// (the block's lane write lock, then lane_map's table lock, each up to 2 s), so a lock held
-	// elsewhere costs the block its rows, not its store: StoreBlock holds slowPathMu
+	// at 2 s, so a lock held elsewhere costs the block its rows, not its store: StoreBlock holds slowPathMu
 	// and the block's uncommitted INSERT meanwhile. It reads the timeout in force, to put back
 	// once the rows are in; a rollback to the savepoint undoes it by itself.
 	laneMapRowsLockTimeout = `SELECT current_setting('lock_timeout'), set_config('lock_timeout', '2000ms', true)`

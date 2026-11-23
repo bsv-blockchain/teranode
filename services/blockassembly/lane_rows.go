@@ -146,6 +146,12 @@ func (o *ownLaneBitmaps) put(root chainhash.Hash, lanes lane.LaneBitmaps, height
 			continue
 		}
 
+		// a storage request of it still running would re-create the entry without its file's
+		// delete-at height
+		if o.pending[hash] > 0 {
+			continue
+		}
+
 		if kept.height < height-ownLaneBitmapsKeepBlocks {
 			delete(o.bySubtree, hash)
 		}
