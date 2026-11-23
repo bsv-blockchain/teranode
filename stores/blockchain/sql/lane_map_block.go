@@ -18,8 +18,8 @@ import (
 // from a sequence that never hands one out again (BIGSERIAL, SQLite AUTOINCREMENT), so such rows
 // name a block ID no block has, which no chain reaches, and a reader has to resolve rows through
 // their blocks. Nothing reads the rows yet, so they are measured, never acted on: rows that fail
-// their check, or whose insert fails, are rolled back to a savepoint, and the block commits as it
-// would without lanes. What is measured is counted once the block is stored, from the attempt that
+// their check are left out before the block's transaction begins, rows whose insert fails are
+// rolled back to a savepoint, and either way the block commits as it would without lanes. What is measured is counted once the block is stored, from the attempt that
 // stored it, so a store that is retried, or that fails, adds nothing for the attempts it gave up.
 
 // laneMapRowsSavepoint brackets a block's rows inside its transaction. Postgres aborts the whole
