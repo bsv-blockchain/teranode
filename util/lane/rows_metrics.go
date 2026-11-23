@@ -85,7 +85,7 @@ func initRowsMetrics() {
 			Namespace: "teranode",
 			Subsystem: "lane",
 			Name:      "row_count_mismatches_total",
-			Help:      "Blocks whose map rows hold fewer or more members than the block's transaction count less its coinbase; counted and logged, and the rows still go with the block. block is peer or own",
+			Help:      "Blocks whose map rows hold fewer or more members than the block's transaction count less its coinbase; counted and logged, and whatever rows were built still go with the block. A block whose subtrees hold no position has no rows, and with transactions besides its coinbase it counts as fewer. block is peer or own",
 		}, []string{"block", "direction"})
 		prometheusLaneMissingBitmaps = promauto.NewCounterVec(prometheus.CounterOpts{
 			Namespace: "teranode",
@@ -97,7 +97,7 @@ func initRowsMetrics() {
 			Namespace: "teranode",
 			Subsystem: "lane",
 			Name:      "txs_without_position_total",
-			Help:      "Transactions a subtree's lane bitmaps leave out because no valid lane position was known for them, by the service that built the bitmaps; the coinbase placeholder is not counted",
+			Help:      "Transactions a subtree's lane bitmaps leave out because no valid lane position was known for them, by the service that built the bitmaps; counted each time a subtree is validated (subtreevalidation) or stored (blockassembly), so a transaction in several subtrees, as peers announce the same unmined transactions again or block assembly rebuilds its subtrees after a block, counts once for each. The coinbase placeholder is not counted",
 		}, []string{"service"})
 		prometheusLaneRowInsertFailure = promauto.NewCounterVec(prometheus.CounterOpts{
 			Namespace: "teranode",
@@ -147,7 +147,8 @@ func CountMissingBitmaps(block, reason string, n int) {
 	prometheusLaneMissingBitmaps.WithLabelValues(block, reason).Add(float64(n))
 }
 
-// CountTxsWithoutPosition counts n transactions left out of a subtree's bitmaps by service.
+// CountTxsWithoutPosition counts n transactions left out of a subtree's bitmaps by service. It is
+// called once per subtree validated, so a transaction counts again in every subtree it is in.
 func CountTxsWithoutPosition(service string, n int) {
 	if n <= 0 {
 		return

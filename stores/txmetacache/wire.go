@@ -43,6 +43,14 @@ const (
 	// magic byte can also begin a MetaBytes fee. The validator sends it only at
 	// utxostore_laneMigration shadow; a receiver accepts both (see LaneMetaContent).
 	WireActionADDLane = byte(2)
+	// WireActionADDOwn is WireActionADD whose content is the txmeta cache form with the
+	// transaction's own lane position: MetaBytes, then the position, uint64 LE
+	// (meta.CacheBytesInto, checked by meta.OwnCacheBytesView). The validator sends it at
+	// utxostore_laneMigration shadow when it knows the transaction's own position but not every
+	// parent's, so the lane encoding cannot carry it, as for a transaction spending an output
+	// created before lane positions were on. A receiver accepts it beside the other two; one
+	// built before it skips the entry as an unknown action.
+	WireActionADDOwn = byte(3)
 
 	// WireV2Magic is the first byte of a v2 batch message. Not a unique
 	// discriminator on its own — see the package comment above.
