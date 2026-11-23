@@ -3154,8 +3154,10 @@ func (s *laneCaptureStore) SpendAndCreate(ctx context.Context, tx *bt.Tx, blockH
 }
 
 // TestValidateHandsTheLanePositionToBlockAssembly: at shadow the validator hands block assembly
-// the lane position the create gave the record, and 0 for a record without one; at off it hands
-// over 0 even when the store returns a position.
+// the lane position the create returned, and 0 for a record without one; at off it hands over 0
+// even when the store returns a position. The store under laneCaptureStore is SQL, which returns
+// no position from its create (lanes Phase 1 leaves it out), so laneCaptureStore sets the returned
+// position as utxoset and Aerospike do; the test pins the validator's copy, not a store.
 func TestValidateHandsTheLanePositionToBlockAssembly(t *testing.T) {
 	tracing.SetupMockTracer()
 	initPrometheusMetrics()

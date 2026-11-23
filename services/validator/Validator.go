@@ -1489,8 +1489,10 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 		}
 
 		// At utxostore_laneMigration shadow block assembly builds its subtrees' lane bitmaps from
-		// the position the create gave the record. A record without one hands over 0, which block
-		// assembly counts and still mines.
+		// the LanePosition on the meta the create returned. utxoset and Aerospike, which lanes
+		// Phase 1 covers, set it to the position they wrote. The SQL UTXO store writes the column
+		// and returns 0, so on SQLite or Postgres every handoff is 0. A 0 is counted by block
+		// assembly, and the tx is still mined.
 		if v.laneShadow() {
 			blockAssemblyData.LanePosition = txMetaData.LanePosition
 		}
