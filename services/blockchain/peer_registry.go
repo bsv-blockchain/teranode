@@ -8,10 +8,12 @@ import (
 	"sync/atomic"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
 	p2pconstants "github.com/bsv-blockchain/teranode/interfaces/p2p"
+	"github.com/bsv-blockchain/teranode/pkg/urlutil"
 	"github.com/bsv-blockchain/teranode/services/blockchain/blockchain_api"
 	"github.com/bsv-blockchain/teranode/services/blockchain/work"
 	"github.com/bsv-blockchain/teranode/stores/blob"
@@ -56,6 +58,31 @@ func sanitizeClientName(name string) string {
 	}
 
 	return strings.TrimSpace(cleaned.String())
+}
+
+// maxCatchupErrorLength caps a stored catchup error. It is a diagnostic for the
+// dashboard, not a log: the full error is logged where it happens.
+const maxCatchupErrorLength = 512
+
+// SanitizeCatchupError makes a catchup error safe to store and serve. The error comes
+// from fetches at peer-chosen URLs and is served by the Asset /peers and
+// /catchup/status endpoints, so IP
+// literals are redacted - a dial error otherwise tells the peer which private address
+// a hostname resolved to (bitcoin-sv/teranode#4855) - and the length is capped, cutting
+// on a rune boundary.
+func SanitizeCatchupError(errMsg string) string {
+	errMsg = urlutil.RedactIPLiterals(errMsg)
+
+	if len(errMsg) <= maxCatchupErrorLength {
+		return errMsg
+	}
+
+	cut := maxCatchupErrorLength
+	for cut > 0 && !utf8.RuneStart(errMsg[cut]) {
+		cut--
+	}
+
+	return errMsg[:cut] + "…"
 }
 
 // LegacyPeerInfo holds fields that only a Bitcoin wire-protocol (legacy) peer
@@ -318,6 +345,7 @@ func (r *CentralizedPeerRegistry) Register(info *PeerInfo) {
 		// Strip dangerous characters out of the peer-supplied client name so
 		// it can't break logs / dashboards / JSON consumers.
 		entry.ClientName = sanitizeClientName(entry.ClientName)
+		entry.LastCatchupError = SanitizeCatchupError(entry.LastCatchupError)
 		if storagePromotionBlocked(entry.Storage, entry.FullStoragePenaltyUntil, now) {
 			entry.Storage = ""
 		}
@@ -1361,8 +1389,11 @@ func (r *CentralizedPeerRegistry) RecordCatchupFailure(peerID string) {
 	}
 }
 
-// RecordCatchupError stores the most recent catchup error reported against the peer.
+// RecordCatchupError stores the most recent catchup error reported against the peer,
+// sanitized by SanitizeCatchupError.
 func (r *CentralizedPeerRegistry) RecordCatchupError(peerID string, errMsg string) {
+	errMsg = SanitizeCatchupError(errMsg)
+
 	r.mu.Lock()
 	defer r.mu.Unlock()
 

@@ -119,6 +119,20 @@ func TestParseLuaMapResponse(t *testing.T) {
 			},
 		},
 		{
+			// The native dispatcher may encode the idempotent list as a typed
+			// integer slice, as it does blockIDs. A bare []interface{} assertion
+			// rejected it and failed every spend in the record.
+			name: "native response with a typed idempotent slice",
+			response: map[string]interface{}{
+				"status":     "OK",
+				"idempotent": []int64{0, 3},
+			},
+			expectError: false,
+			validateResult: func(t *testing.T, result *LuaMapResponse) {
+				assert.Equal(t, []int{0, 3}, result.Idempotent)
+			},
+		},
+		{
 			name: "minimal response with only status",
 			response: map[interface{}]interface{}{
 				"status": "ERROR",
@@ -178,7 +192,7 @@ func TestParseLuaMapResponse(t *testing.T) {
 				"blockIDs": []interface{}{100, "not an int", 102},
 			},
 			expectError:   true,
-			errorContains: "invalid blockID at index 1",
+			errorContains: "invalid blockIDs entry at index 1",
 		},
 		{
 			name: "invalid errors type",
@@ -375,4 +389,55 @@ func TestParseLuaMapResponse_EdgeCases(t *testing.T) {
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "invalid error offset type: string")
 	})
+}
+
+func TestParseLuaMapResponse_Conflicting(t *testing.T) {
+	s := &Store{}
+
+	tests := []struct {
+		name     string
+		response interface{}
+		want     bool
+	}{
+		{"udf shape true", map[interface{}]interface{}{"status": "OK", "signal": "DAHSET", "conflicting": true}, true},
+		{"native shape true", map[string]interface{}{"status": "OK", "signal": "DAHSET", "conflicting": true}, true},
+		{"explicit false", map[interface{}]interface{}{"status": "OK", "signal": "DAHSET", "conflicting": false}, false},
+		{"absent", map[interface{}]interface{}{"status": "OK", "signal": "DAHSET"}, false},
+		{"non bool ignored", map[interface{}]interface{}{"status": "OK", "conflicting": 1}, false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			res, err := s.ParseLuaMapResponse(tc.response)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, res.Conflicting)
+		})
+	}
+
+	t.Run("reset clears", func(t *testing.T) {
+		r := &LuaMapResponse{Conflicting: true}
+		r.Reset()
+		require.False(t, r.Conflicting)
+	})
+}
+
+// TestLuaMapResponseResetClearsIdempotent: responses are pooled, so Reset must
+// drop the idempotent indexes. A stale list would mark the next response's
+// fresh writes as idempotent matches, and a failed call would then leave those
+// writes in place, spent by a transaction the store does not hold.
+func TestLuaMapResponseResetClearsIdempotent(t *testing.T) {
+	s := &Store{}
+
+	res, err := s.ParseLuaMapResponse(map[interface{}]interface{}{
+		"status":            "OK",
+		"idempotent":        []interface{}{0, 2},
+		"idempotentHeights": map[interface{}]interface{}{0: 1200, 2: int64(1300)},
+	})
+	require.NoError(t, err)
+	require.Equal(t, []int{0, 2}, res.Idempotent, "fixture: the list is parsed")
+	require.Equal(t, map[int]uint32{0: 1200, 2: 1300}, res.IdempotentHeights, "fixture: the heights are parsed")
+
+	res.Reset()
+	require.Nil(t, res.Idempotent)
+	require.Nil(t, res.IdempotentHeights)
 }

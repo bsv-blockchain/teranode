@@ -88,6 +88,12 @@ type barrierDecorateStore struct {
 	reached  chan struct{}
 }
 
+// ConflictingTxHashes reports no conflicting index, so the cached-subtree check
+// takes the per-transaction path this store exercises.
+func (s *barrierDecorateStore) ConflictingTxHashes(context.Context) ([]chainhash.Hash, bool, error) {
+	return nil, false, nil
+}
+
 func (s *barrierDecorateStore) BatchDecorate(ctx context.Context, items []*utxo.UnresolvedMetaData, _ ...fields.FieldName) error {
 	s.mu.Lock()
 	s.inFlight++
@@ -198,6 +204,12 @@ type countingDecorateStore struct {
 	calls atomic.Int64
 }
 
+// ConflictingTxHashes reports no conflicting index, so the cached-subtree check
+// takes the per-transaction path this store exercises.
+func (s *countingDecorateStore) ConflictingTxHashes(context.Context) ([]chainhash.Hash, bool, error) {
+	return nil, false, nil
+}
+
 func (s *countingDecorateStore) BatchDecorate(_ context.Context, items []*utxo.UnresolvedMetaData, _ ...fields.FieldName) error {
 	s.calls.Add(1)
 
@@ -263,6 +275,12 @@ type itemErrStore struct {
 	calls    atomic.Int64
 }
 
+// ConflictingTxHashes reports no conflicting index, so the cached-subtree check
+// takes the per-transaction path this store exercises.
+func (s *itemErrStore) ConflictingTxHashes(context.Context) ([]chainhash.Hash, bool, error) {
+	return nil, false, nil
+}
+
 func (s *itemErrStore) BatchDecorate(_ context.Context, items []*utxo.UnresolvedMetaData, _ ...fields.FieldName) error {
 	attempt := int(s.calls.Add(1))
 
@@ -326,6 +344,12 @@ func TestCachedSubtreeConflictingNodes_PersistentItemErrorFailsAfterBoundedRetri
 // one the txmeta cache would accept.
 type fullMetaStore struct {
 	utxo.Store
+}
+
+// ConflictingTxHashes reports no conflicting index, so the cached-subtree check
+// takes the per-transaction path this store exercises.
+func (s *fullMetaStore) ConflictingTxHashes(context.Context) ([]chainhash.Hash, bool, error) {
+	return nil, false, nil
 }
 
 func (s *fullMetaStore) BatchDecorate(_ context.Context, items []*utxo.UnresolvedMetaData, _ ...fields.FieldName) error {

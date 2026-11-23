@@ -6,6 +6,7 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-subtree"
 	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 )
 
 // CachedMeta is the part of a cached txmeta entry that subtree validation
@@ -20,6 +21,9 @@ type CachedMeta struct {
 	Locked      bool
 	InBlock     bool
 	TxInpoints  subtree.TxInpoints
+	// LanePosition is the own lane position the entry carries after its MetaBytes (see
+	// meta.CacheBytesInto), or 0.
+	LanePosition uint64
 }
 
 // metaHeaderBytes is fee (8) + size (8) + flags (1) + parent count (4).
@@ -39,8 +43,8 @@ func metaArenaNeed(b []byte) (parents, vouts int) {
 	return parents, (rest - parents*chainhash.HashSize) / 4
 }
 
-// decodeCachedMeta decodes a MetaBytes encoding (trailing bytes ignored) into
-// a CachedMeta. Parent hashes and vout words are copied into the caller's
+// decodeCachedMeta decodes a MetaBytes encoding (trailing bytes ignored, except
+// an own lane position, which is read: meta.CacheBytesInto) into a CachedMeta. Parent hashes and vout words are copied into the caller's
 // parents and vouts, which must be at least as large as metaArenaNeed(b)
 // reports; it returns how many of each it used. The decoded TxInpoints
 // reference those slices, capped so an append cannot run into a neighbour's
@@ -66,6 +70,8 @@ func decodeCachedMeta(b []byte, parents []chainhash.Hash, vouts []uint32) (Cache
 
 	n := uint64(binary.LittleEndian.Uint32(b[17:21]))
 	if n == 0 {
+		m.LanePosition = meta.CachedLanePosition(b[metaHeaderBytes:])
+
 		return m, 0, 0, nil
 	}
 
@@ -111,6 +117,7 @@ func decodeCachedMeta(b []byte, parents []chainhash.Hash, vouts []uint32) (Cache
 	}
 
 	m.TxInpoints = subtree.NewTxInpointsFromPacked(parents[:n:n], vouts[:used:used])
+	m.LanePosition = meta.CachedLanePosition(b[pos:])
 
 	return m, int(n), int(used), nil //nolint:gosec // bounded by len(b)
 }

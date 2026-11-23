@@ -86,6 +86,7 @@ enum ERR {
   UTXO_INVALID_SIZE=75;
   UTXO_UNSPENT=76;
   UTXO_WALK_LIMIT_EXCEEDED=77;
+  UTXO_SPENDING_TX_PRUNED=78;
   UTXO_ERROR=79;
   // Kafka errors 80-89
   KAFKA_DECODE_ERROR=80;
@@ -94,6 +95,7 @@ enum ERR {
   BLOB_EXISTS=90;
   BLOB_NOT_FOUND=91;
   BLOB_FOOTER_SIZE_MISMATCH=92;
+  BLOB_CORRUPT=93;
   BLOB_ERROR=99;
   // State errors 100-109
   STATE_INITIALIZATION=100;
@@ -119,4 +121,8 @@ enum ERR {
   // (not yet: see services/legacy/peer streamingBlockHandler). Wrapped inside the BLOCK_INVALID
   // verdict at the sites that raise it, never the outermost code.
   BLOCK_BODY_MISMATCH=122;
+  // A block whose id is not above its parent's id. Ids come from one sequence and a child's id is
+  // taken only after its parent is stored, so a child always sits above its parent; the ancestry
+  // queries bound their walk by that. StoreBlock refuses a block that would break it.
+  BLOCK_ID_ORDER=123;
 }

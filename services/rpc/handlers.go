@@ -69,6 +69,50 @@ const txRejectedPrefix = "TX rejected: "
 // live items expire after 10s
 var rpcCallCache = newRPCCache()
 
+// chainTipsCacheKey holds the single getchaintips entry. The entry records the
+// best block hash it was computed at, so a lookup can tell whether it is stale.
+const chainTipsCacheKey = "getchaintips"
+
+type chainTipsCacheEntry struct {
+	bestHash string
+	result   []map[string]interface{}
+}
+
+var (
+	chainTipsMu  sync.Mutex
+	chainTipsGen uint64
+)
+
+// clearChainTipsCache drops the cached getchaintips answer and bumps the
+// generation, so a walk that started before the clear cannot store its result
+// afterwards. Commands that change block validity call it so the next
+// getchaintips reflects the change.
+func clearChainTipsCache() {
+	chainTipsMu.Lock()
+	defer chainTipsMu.Unlock()
+
+	chainTipsGen++
+	rpcCallCache.Delete(chainTipsCacheKey)
+}
+
+func chainTipsGeneration() uint64 {
+	chainTipsMu.Lock()
+	defer chainTipsMu.Unlock()
+
+	return chainTipsGen
+}
+
+// storeChainTips caches the answer unless the cache was cleared since generation
+// was read, in which case the answer may predate the change and is not stored.
+func storeChainTips(generation uint64, entry chainTipsCacheEntry) {
+	chainTipsMu.Lock()
+	defer chainTipsMu.Unlock()
+
+	if chainTipsGen == generation {
+		rpcCallCache.Set(chainTipsCacheKey, entry, ttlcache.DefaultTTL)
+	}
+}
+
 func newRPCCache() *ttlcache.Cache[string, any] {
 	c := ttlcache.New[string, any](
 		ttlcache.WithTTL[string, any](10*time.Second),
@@ -889,6 +933,16 @@ func handleSendRawTransaction(ctx context.Context, s *RPCServer, cmd interface{}
 	}
 
 	s.logger.Debugf("tx to send: %v", tx)
+
+	// A syncing node stores no unmined transaction, not even the blob (issue
+	// 2003). -10 is the code bitcoind uses for a call it refuses during initial
+	// block download, so a client already handling that one needs no change.
+	if s.unminedTxGate.Refuses(ctx, tx.TxIDChainHash()) {
+		return nil, &bsvjson.RPCError{
+			Code:    bsvjson.ErrRPCClientInInitialDownload,
+			Message: "node is syncing and accepts no unmined transactions until it reaches the chain tip",
+		}
+	}
 
 	// Store the transaction in blob store first (following the pattern from propagation service)
 	if s.txStore != nil {
@@ -1918,6 +1972,8 @@ func handleInvalidateBlock(ctx context.Context, s *RPCServer, cmd interface{}, _
 	}
 
 	_, err = s.blockchainClient.InvalidateBlock(ctx, ch)
+	clearChainTipsCache()
+
 	if err != nil {
 		return nil, s.rpcLookupError(err, bsvjson.ErrRPCInternal.Code, "")
 	}
@@ -1965,6 +2021,8 @@ func handleReconsiderBlock(ctx context.Context, s *RPCServer, cmd interface{}, _
 	defer deferFn()
 
 	c := cmd.(*bsvjson.ReconsiderBlockCmd)
+
+	defer clearChainTipsCache()
 
 	ch, err := chainhash.NewHashFromStr(c.BlockHash)
 	if err != nil {
@@ -2773,7 +2831,12 @@ func handleFreeze(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan s
 		return nil, rpcDecodeHexError(c.TxID)
 	}
 
-	if err = s.utxoStore.FreezeUTXOs(ctx, []*utxo.Spend{{TxID: h, Vout: uint32(c.Vout), UTXOHash: h}}, s.settings); err != nil { // nolint:gosec
+	vout, err := safeconversion.IntToUint32(c.Vout)
+	if err != nil {
+		return nil, s.rpcInputError(err, bsvjson.ErrRPCInvalidParameter, "")
+	}
+
+	if err = s.utxoStore.FreezeUTXOs(ctx, []*utxo.Spend{{TxID: h, Vout: vout, UTXOHash: h}}, s.settings); err != nil {
 		return nil, err
 	}
 
@@ -2822,7 +2885,12 @@ func handleUnfreeze(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan
 		return nil, rpcDecodeHexError(c.TxID)
 	}
 
-	if err = s.utxoStore.UnFreezeUTXOs(ctx, []*utxo.Spend{{TxID: h, Vout: uint32(c.Vout), UTXOHash: h}}, s.settings); err != nil { // nolint:gosec
+	vout, err := safeconversion.IntToUint32(c.Vout)
+	if err != nil {
+		return nil, s.rpcInputError(err, bsvjson.ErrRPCInvalidParameter, "")
+	}
+
+	if err = s.utxoStore.UnFreezeUTXOs(ctx, []*utxo.Spend{{TxID: h, Vout: vout, UTXOHash: h}}, s.settings); err != nil {
 		return nil, err
 	}
 
@@ -2882,8 +2950,13 @@ func handleReassign(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan
 		return nil, rpcDecodeHexError(c.NewUTXOHash)
 	}
 
+	oldVout, err := safeconversion.IntToUint32(c.OldVout)
+	if err != nil {
+		return nil, s.rpcInputError(err, bsvjson.ErrRPCInvalidParameter, "")
+	}
+
 	if err = s.utxoStore.ReAssignUTXO(ctx,
-		&utxo.Spend{TxID: oldTXIDHash, Vout: uint32(c.OldVout), UTXOHash: oldUTXOHash}, // nolint:gosec
+		&utxo.Spend{TxID: oldTXIDHash, Vout: oldVout, UTXOHash: oldUTXOHash},
 		&utxo.Spend{UTXOHash: newUTXOHash}, s.settings); err != nil {
 		return nil, err
 	}
@@ -2976,6 +3049,16 @@ func isIPOrSubnet(ipOrSubnet string) bool {
 }
 
 // handleGetchaintips implements the getchaintips command.
+//
+// The cached answer carries the best block hash it was computed at and is
+// served only while that hash is still the best. A best-tip change (new block,
+// reorg) therefore retires it at once, and so does invalidateblock or
+// reconsiderblock through this server (clearChainTipsCache). A walk that was
+// already running when one of them cleared the cache does not store its result
+// (generation check). It does NOT cover
+// a side-branch block that arrives while the best tip is unchanged: that tip
+// shows up when the entry expires, within the cache's 10 second TTL. If the
+// best header cannot be read, the call serves a fresh walk and skips the cache.
 func handleGetchaintips(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan struct{}) (interface{}, error) {
 	ctx, _, deferFn := tracing.Tracer("rpc").Start(ctx, "handleGetchaintips",
 		tracing.WithParentStat(RPCStat),
@@ -2984,13 +3067,30 @@ func handleGetchaintips(ctx context.Context, s *RPCServer, cmd interface{}, _ <-
 	)
 	defer deferFn()
 
-	if cached := rpcCallCache.Get("getchaintips"); cached != nil {
-		return cached.Value(), nil
-	}
-
 	_, ok := cmd.(*bsvjson.GetChainTipsCmd)
 	if !ok {
 		return nil, bsvjson.ErrRPCInternal
+	}
+
+	if s.blockchainClient == nil {
+		return nil, bsvjson.ErrRPCInternal
+	}
+
+	generation := chainTipsGeneration()
+	bestHash := ""
+
+	if header, _, err := s.blockchainClient.GetBestBlockHeader(ctx); err == nil {
+		bestHash = header.Hash().String()
+	} else {
+		s.logger.Warnf("[handleGetchaintips] best header unavailable (%v); serving an uncached chain tips walk", err)
+	}
+
+	if bestHash != "" {
+		if cached := rpcCallCache.Get(chainTipsCacheKey); cached != nil {
+			if entry, ok := cached.Value().(chainTipsCacheEntry); ok && entry.bestHash == bestHash {
+				return entry.result, nil
+			}
+		}
 	}
 
 	// Get chain tips from the blockchain client
@@ -3011,8 +3111,8 @@ func handleGetchaintips(ctx context.Context, s *RPCServer, cmd interface{}, _ <-
 		})
 	}
 
-	if s.settings.RPC.CacheEnabled {
-		rpcCallCache.Set("getchaintips", result, 300*time.Second)
+	if s.settings.RPC.CacheEnabled && bestHash != "" {
+		storeChainTips(generation, chainTipsCacheEntry{bestHash: bestHash, result: result})
 	}
 
 	return result, nil

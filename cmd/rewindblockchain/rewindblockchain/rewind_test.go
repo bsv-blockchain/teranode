@@ -27,6 +27,8 @@ import (
 	blockchainsql "github.com/bsv-blockchain/teranode/stores/blockchain/sql"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	utxofields "github.com/bsv-blockchain/teranode/stores/utxo/fields"
+	storelogger "github.com/bsv-blockchain/teranode/stores/utxo/logger"
+	"github.com/bsv-blockchain/teranode/stores/utxo/pruner"
 	utxosql "github.com/bsv-blockchain/teranode/stores/utxo/sql"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/test"
@@ -480,6 +482,8 @@ func TestRewindBlockchain_Integration(t *testing.T) {
 	// inside Phase 4 reflects the new tip without any manual cache flush.
 	// A deleted block's subtree can also have kept-aside conflicting txs next to it.
 	require.NoError(t, subtreeStore.Set(ctx, subtree3Root[:], fileformat.FileTypeSubtreeConflicting, []byte{0x01}))
+	// And lane bitmaps, at utxostore_laneMigration shadow.
+	require.NoError(t, subtreeStore.Set(ctx, subtree3Root[:], fileformat.FileTypeSubtreeLaneBitmaps, []byte{0x01}))
 
 	opts := Options{
 		TargetHeight: 2,
@@ -567,6 +571,10 @@ func TestRewindBlockchain_Integration(t *testing.T) {
 	exists, err := subtreeStore.Exists(ctx, subtree3Root[:], fileformat.FileTypeSubtreeConflicting)
 	require.NoError(t, err)
 	require.False(t, exists, "kept-aside conflicting txs of subtree3 should be deleted from blob store")
+
+	exists, err = subtreeStore.Exists(ctx, subtree3Root[:], fileformat.FileTypeSubtreeLaneBitmaps)
+	require.NoError(t, err)
+	require.False(t, exists, "lane bitmaps of subtree3 should be deleted from blob store")
 
 	// Surviving subtree blobs remain.
 	for name, h := range map[string]*chainhash.Hash{
@@ -1675,4 +1683,281 @@ func TestNewSubtreeStore_RejectsNilURL(t *testing.T) {
 	_, err := newSubtreeStore(logger(), tSettings)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "not configured")
+}
+
+// stampedUTXOStore stands in for a UTXO store that writes blocks permanently at a fixed depth,
+// for the boundary the preflight refuses to cross. The sql store underneath answers everything
+// else; the stamp, which the sql store does not have, is supplied here. Its floors and depth are
+// fixed values, not a real stamp: a rewind reads only those two.
+type stampedUTXOStore struct {
+	utxo.Store
+
+	fence uint32
+	depth uint32
+}
+
+func (s stampedUTXOStore) Stamper() pruner.Stamper { return s }
+
+func (s stampedUTXOStore) Floors(context.Context) (pruner.StampFloors, error) {
+	return pruner.StampFloors{StampFence: s.fence, StampCompleteFloor: s.fence}, nil
+}
+
+func (s stampedUTXOStore) StampDepth() uint32 { return s.depth }
+
+func (stampedUTXOStore) WindowBlocks() uint32 { return 96 }
+
+// OpenDrain is refused: a rewind never opens a drain.
+func (stampedUTXOStore) OpenDrain(context.Context) (pruner.StampDrain, pruner.StampFloors, error) {
+	return nil, pruner.StampFloors{}, errors.NewProcessingError("a rewind never opens a stamp drain")
+}
+
+// TestRewindBlockchain_RefusesToExposeAStampedHeight: with a stamp fence of 96 and a stamp depth
+// of 96, the highest stamped height is 95 and the lowest safe target is 191. A target below
+// that is refused with no override, --force-deep included; the boundary target is accepted (and
+// short-circuits through DryRun). The numbers are a third of mainnet's because the chain
+// builder here holds at most 255 blocks; the rule is the same arithmetic.
+func TestRewindBlockchain_RefusesToExposeAStampedHeight(t *testing.T) {
+	const chainHeight = 200
+
+	run := func(t *testing.T, target int64) error {
+		ctx := context.Background()
+		bcStore, utxoStore, subtreeStore, tSettings := newTestStores(t, ctx)
+
+		bits, err := model.NewNBitFromString("207fffff")
+		require.NoError(t, err)
+		buildLinearChain(t, ctx, bcStore, chainHeight, bits, tSettings.ChainCfgParams.GenesisHash)
+		require.NoError(t, bcStore.SetFSMState(ctx, "IDLE"))
+
+		_, err = Rewind(ctx, logger(), tSettings, Options{
+			TargetHeight: target,
+			DryRun:       true,
+			AssumeYes:    true,
+			ForceDeep:    true,
+			Stores: &Stores{
+				Blockchain: bcStore,
+				UTXO:       stampedUTXOStore{Store: utxoStore, fence: 96, depth: 96},
+				Subtree:    subtreeStore,
+			},
+		})
+
+		return err
+	}
+
+	t.Run("refused one below the boundary", func(t *testing.T) {
+		err := run(t, 190)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "highest stamped height 95")
+		require.Contains(t, err.Error(), "lowest safe target is 191")
+		require.NotContains(t, err.Error(), "--force-deep", "there is no override")
+	})
+
+	t.Run("accepted at the boundary", func(t *testing.T) {
+		require.NoError(t, run(t, 191))
+	})
+}
+
+// TestRewindBlockchain_RefusesToExposeAStampedHeightThroughTheLoggingWrapper: a store opened with
+// logging=true reaches the tool wrapped in stores/utxo/logger. The wrapper forwards Stamper like
+// any other method, so the preflight still reads the stamp boundary and refuses the target.
+func TestRewindBlockchain_RefusesToExposeAStampedHeightThroughTheLoggingWrapper(t *testing.T) {
+	const chainHeight = 200
+
+	ctx := context.Background()
+	bcStore, utxoStore, subtreeStore, tSettings := newTestStores(t, ctx)
+
+	bits, err := model.NewNBitFromString("207fffff")
+	require.NoError(t, err)
+	buildLinearChain(t, ctx, bcStore, chainHeight, bits, tSettings.ChainCfgParams.GenesisHash)
+	require.NoError(t, bcStore.SetFSMState(ctx, "IDLE"))
+
+	wrapped := storelogger.New(ctx, logger(), stampedUTXOStore{Store: utxoStore, fence: 96, depth: 96})
+
+	_, err = Rewind(ctx, logger(), tSettings, Options{
+		TargetHeight: 190,
+		DryRun:       true,
+		AssumeYes:    true,
+		ForceDeep:    true,
+		Stores: &Stores{
+			Blockchain: bcStore,
+			UTXO:       wrapped,
+			Subtree:    subtreeStore,
+		},
+	})
+	require.Error(t, err, "the logging wrapper hid the stamp boundary from the preflight")
+	require.Contains(t, err.Error(), "lowest safe target is 191")
+}
+
+// TestRewindBlockchain_SQLStoreHasNoStampBoundary: the plain sql store is asked for its stamp the
+// same way as any other and answers pruner.NoStamp, whose zero fence means nothing is stamped.
+// The preflight reads that as no boundary and permits a deep target, as it always has for a
+// store without a stamp. Without the zero-fence test, fence - 1 + depth wraps to the top of
+// uint32 and every target would be refused.
+func TestRewindBlockchain_SQLStoreHasNoStampBoundary(t *testing.T) {
+	const chainHeight = 200
+
+	ctx := context.Background()
+	bcStore, utxoStore, subtreeStore, tSettings := newTestStores(t, ctx)
+
+	require.Equal(t, pruner.NoStamp, utxoStore.Stamper(), "the sql store has nothing to stamp")
+
+	bits, err := model.NewNBitFromString("207fffff")
+	require.NoError(t, err)
+	buildLinearChain(t, ctx, bcStore, chainHeight, bits, tSettings.ChainCfgParams.GenesisHash)
+	require.NoError(t, bcStore.SetFSMState(ctx, "IDLE"))
+
+	_, err = Rewind(ctx, logger(), tSettings, Options{
+		TargetHeight: 1,
+		DryRun:       true,
+		AssumeYes:    true,
+		ForceDeep:    true,
+		Stores: &Stores{
+			Blockchain: bcStore,
+			UTXO:       utxoStore,
+			Subtree:    subtreeStore,
+		},
+	})
+	require.NoError(t, err)
+}
+
+// TestRewind_ClearsBlockIDReservations checks that a rewind which deletes blocks
+// also clears every durable block-id reservation. A reservation that outlived the
+// rewind would let a child keep an id reserved before its deleted parent was stored
+// again under a new, higher id, so the child would land below its parent, which
+// StoreBlock refuses. The node is stopped while the tool runs, so the durable table
+// is the only reservation state the next start sees; the in-memory map of the store
+// instance used here is not checked because the tool runs as its own process.
+func TestRewind_ClearsBlockIDReservations(t *testing.T) {
+	ctx := context.Background()
+	bcStore, utxoStore, subtreeStore, tSettings := newTestStores(t, ctx)
+
+	storeChainWithPendingChild(t, ctx, bcStore, tSettings, nil)
+
+	stats, err := Rewind(ctx, logger(), tSettings, Options{
+		TargetHeight: 2,
+		AssumeYes:    true,
+		Stores: &Stores{
+			Blockchain: bcStore,
+			UTXO:       utxoStore,
+			Subtree:    subtreeStore,
+		},
+	})
+	require.NoError(t, err)
+	require.Equal(t, 2, stats.BlocksDeleted, "the rewind must delete blocks for the reservations to matter")
+	require.Zero(t, countBlockIDReservations(t, ctx, bcStore), "a rewind that deletes blocks must clear every reservation")
+}
+
+// TestRewind_ClearsBlockIDReservationsBeforeAFailure checks that phase 2 clears the
+// reservations before it deletes the first block, so a run that fails part-way
+// never leaves deleted blocks beside surviving reservations. The tip names a
+// subtree with no blob in the subtree store, so rewindOneBlock fails on its first
+// block, on GetSubtrees.
+func TestRewind_ClearsBlockIDReservationsBeforeAFailure(t *testing.T) {
+	ctx := context.Background()
+	bcStore, utxoStore, subtreeStore, tSettings := newTestStores(t, ctx)
+
+	missingSubtree := chainhash.HashH([]byte("subtree with no blob"))
+	storeChainWithPendingChild(t, ctx, bcStore, tSettings, &missingSubtree)
+
+	_, err := Rewind(ctx, logger(), tSettings, Options{
+		TargetHeight: 2,
+		AssumeYes:    true,
+		Stores: &Stores{
+			Blockchain: bcStore,
+			UTXO:       utxoStore,
+			Subtree:    subtreeStore,
+		},
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "GetSubtrees", "the run must fail inside phase 2, after it starts")
+	require.Zero(t, countBlockIDReservations(t, ctx, bcStore), "phase 2 must clear the reservations before it deletes any block")
+}
+
+// TestClearBlockIDReservations_StoreAndForceNotIdle covers the two edges of the
+// clear: a store that keeps no reservations is refused rather than skipped, and
+// with --force-not-idle the operator is warned that a running node's in-memory
+// reservations are out of the tool's reach.
+func TestClearBlockIDReservations_StoreAndForceNotIdle(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("a store that cannot clear is refused", func(t *testing.T) {
+		bcStore, _, _, _ := newTestStores(t, ctx)
+		wrapped := &errOnGetStateStore{Store: bcStore}
+
+		e := &env{logger: logger(), blockchainStore: wrapped}
+
+		err := e.clearBlockIDReservations(ctx)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "cannot clear block id reservations")
+	})
+
+	t.Run("force-not-idle warns about the running node's memory", func(t *testing.T) {
+		bcStore, _, _, _ := newTestStores(t, ctx)
+
+		pending := chainhash.HashH([]byte("reserved while the node runs"))
+		_, err := bcStore.AssignBlockID(ctx, &pending)
+		require.NoError(t, err)
+
+		log := &capturingLogger{}
+		e := &env{logger: log, blockchainStore: bcStore, opts: Options{ForceNotIdle: true}}
+
+		require.NoError(t, e.clearBlockIDReservations(ctx))
+		require.Zero(t, countBlockIDReservations(t, ctx, bcStore))
+		require.Contains(t, log.warnText(), "--force-not-idle")
+		require.Contains(t, log.infoText(), "cleared 1 block id reservations")
+	})
+}
+
+// storeChainWithPendingChild stores four blocks on genesis and reserves an id for
+// a child of the tip that is never stored. Only the tip may name a subtree, and
+// that subtree has no blob unless the caller writes one; the others name none, so
+// phase 2 can delete them without subtree blobs.
+func storeChainWithPendingChild(t *testing.T, ctx context.Context, bcStore blockchain_store.Store, tSettings *settings.Settings, tipSubtree *chainhash.Hash) {
+	t.Helper()
+
+	bits, err := model.NewNBitFromString("207fffff")
+	require.NoError(t, err)
+
+	prevHash := tSettings.ChainCfgParams.GenesisHash
+	var blocks []*model.Block
+	for i := 1; i <= 4; i++ {
+		coinbase := makeCoinbaseTx(t, byte(i), byte(i))
+		block := &model.Block{
+			Header: &model.BlockHeader{
+				Version:        1,
+				Timestamp:      uint32(1700000000 + i),
+				Nonce:          uint32(i),
+				HashPrevBlock:  prevHash,
+				HashMerkleRoot: coinbase.TxIDChainHash(),
+				Bits:           *bits,
+			},
+			CoinbaseTx:       coinbase,
+			TransactionCount: 1,
+		}
+		if i == 4 && tipSubtree != nil {
+			block.Subtrees = []*chainhash.Hash{tipSubtree}
+		}
+		_, _, err = bcStore.StoreBlock(ctx, block, "peer", blockchainoptions.WithMinedSet(true))
+		require.NoError(t, err, "StoreBlock height %d", i)
+
+		blocks = append(blocks, block)
+		prevHash = block.Hash()
+	}
+
+	require.NoError(t, bcStore.SetFSMState(ctx, "IDLE"))
+	require.NoError(t, setBlockAssemblerState(ctx, bcStore, 4, blocks[3].Header))
+
+	// A child of the tip that was reserved but never stored.
+	pendingChild := chainhash.HashH([]byte("reserved before the rewind"))
+	_, err = bcStore.AssignBlockID(ctx, &pendingChild)
+	require.NoError(t, err)
+	require.Equal(t, 1, countBlockIDReservations(t, ctx, bcStore))
+}
+
+func countBlockIDReservations(t *testing.T, ctx context.Context, store blockchain_store.Store) int {
+	t.Helper()
+
+	var count int
+	require.NoError(t, store.GetDB().QueryRowContext(ctx, `SELECT COUNT(*) FROM block_id_reservations`).Scan(&count))
+
+	return count
 }

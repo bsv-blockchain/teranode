@@ -38,6 +38,16 @@ const (
 	// FileTypeSubtreeConflicting holds the txs of a peer subtree that were kept aside because
 	// they conflict with txs this node accepted, until a block references the subtree.
 	FileTypeSubtreeConflicting FileType = "subtreeConflicting"
+
+	// FileTypeReorgDeletedTxs holds the txs block assembly deleted from the UTXO store because they
+	// spend the coinbase of a block it moved back, keyed by that block's hash, until the block is
+	// moved forward again or the file expires.
+	FileTypeReorgDeletedTxs FileType = "reorgDeletedTxs"
+
+	// FileTypeSubtreeLaneBitmaps holds the lane positions a subtree's transactions took, one
+	// Roaring bitmap per lane (util/lane EncodeSubtreeBitmaps), keyed by the subtree's hash and
+	// written before the subtree file with the same expiry.
+	FileTypeSubtreeLaneBitmaps FileType = "subtreeLaneBitmaps"
 )
 
 func (f FileType) String() string {
@@ -76,6 +86,8 @@ var (
 	magicSeedCheckpoint = [8]byte{'S', 'C', 'P', '-', '1', '.', '0', ' '} // SCP-1.0
 
 	magicSubtreeConflicting = [8]byte{'S', 'C', 'F', '-', '1', '.', '0', ' '} // SCF-1.0
+	magicReorgDeletedTxs    = [8]byte{'R', 'D', 'T', '-', '1', '.', '0', ' '} // RDT-1.0
+	magicSubtreeLaneBitmaps = [8]byte{'S', 'L', 'B', '-', '1', '.', '0', ' '} // SLB-1.0
 )
 
 var fileTypeToMagic = map[FileType][8]byte{
@@ -104,6 +116,8 @@ var fileTypeToMagic = map[FileType][8]byte{
 	FileTypeSeedCheckpoint: magicSeedCheckpoint,
 
 	FileTypeSubtreeConflicting: magicSubtreeConflicting,
+	FileTypeReorgDeletedTxs:    magicReorgDeletedTxs,
+	FileTypeSubtreeLaneBitmaps: magicSubtreeLaneBitmaps,
 }
 
 var magicToFileType = map[[8]byte]FileType{
@@ -133,6 +147,8 @@ var magicToFileType = map[[8]byte]FileType{
 	magicSeedCheckpoint: FileTypeSeedCheckpoint,
 
 	magicSubtreeConflicting: FileTypeSubtreeConflicting,
+	magicReorgDeletedTxs:    FileTypeReorgDeletedTxs,
+	magicSubtreeLaneBitmaps: FileTypeSubtreeLaneBitmaps,
 }
 
 type Header struct {
@@ -206,6 +222,10 @@ func normalizeMagic(magic *[8]byte) {
 	}
 }
 
+// ErrUnknownMagic is wrapped by Read and ReadHeaderFromBytes when the first eight bytes are no
+// known file type's magic, so a caller can tell a malformed header from a failed read.
+var ErrUnknownMagic = fmt.Errorf("unknown magic")
+
 func (h *Header) Read(r io.Reader) error {
 	// Use io.ReadFull, not a single r.Read: io.Reader.Read may return fewer
 	// than 8 bytes with a nil error (sockets, TLS, io.Pipe, bufio over a slow
@@ -219,8 +239,7 @@ func (h *Header) Read(r io.Reader) error {
 	normalizeMagic(&h.magic)
 
 	if _, ok := magicToFileType[h.magic]; !ok {
-		// nolint: forbidigo
-		return fmt.Errorf("unknown magic: %v", h.magic)
+		return fmt.Errorf("%w: %v", ErrUnknownMagic, h.magic)
 	}
 
 	return nil
@@ -251,8 +270,7 @@ func ReadHeaderFromBytes(b []byte) (Header, error) {
 	normalizeMagic(&header.magic)
 
 	if _, ok := magicToFileType[header.magic]; !ok {
-		// nolint: forbidigo
-		return Header{}, fmt.Errorf("unknown magic: %v", header.magic)
+		return Header{}, fmt.Errorf("%w: %v", ErrUnknownMagic, header.magic)
 	}
 
 	return header, nil

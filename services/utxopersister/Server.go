@@ -82,6 +82,42 @@ type Server struct {
 
 	// triggerCh is used to trigger processing operations
 	triggerCh chan string
+
+	// heartbeat is what the liveness probe judges. The main loop in Start owns
+	// it; what beats is listed in the utxoPersister_livenessStallTimeout long
+	// description (issue 1447).
+	heartbeat health.Heartbeat
+
+	// heartbeatInterval is the idle tick of the main loop. Zero means
+	// defaultHeartbeatInterval; tests set it shorter.
+	heartbeatInterval time.Duration
+
+	// pollInterval is how long the main loop waits for other work before it
+	// polls on its own. Zero means 1m with a blockchain client and 10s without
+	// one; tests set it shorter.
+	pollInterval time.Duration
+}
+
+// defaultHeartbeatInterval is how often an idle main loop beats its heartbeat.
+const defaultHeartbeatInterval = 5 * time.Second
+
+// progressBeatEvery is how many records a long read or write handles between
+// beats, so the cost of beating stays far below the cost of the records.
+const progressBeatEvery = 10_000
+
+func effectiveHeartbeatInterval(configured time.Duration) time.Duration {
+	if configured <= 0 {
+		return defaultHeartbeatInterval
+	}
+
+	return configured
+}
+
+// livenessTimeoutTooTight reports whether a liveness stall timeout sits close
+// enough to the idle tick that it cannot tell an idle loop from a wedged one.
+// Zero or less means the check is off, which is never too tight.
+func livenessTimeoutTooTight(stallTimeout, heartbeatInterval time.Duration) bool {
+	return stallTimeout > 0 && stallTimeout <= 2*heartbeatInterval
 }
 
 // New creates a new Server instance with the provided parameters.
@@ -170,9 +206,27 @@ func NewDirect(
 // when to route traffic to this service instance.
 func (s *Server) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
 	if checkLiveness {
-		// Add liveness checks here. Don't include dependency checks.
-		// If the service is stuck return http.StatusServiceUnavailable
-		// to indicate a restart is needed
+		// Liveness answers one question: is the main loop WEDGED, such that a
+		// restart is the only way out? An idle loop still beats, so a dependency
+		// that is down while nothing is being rolled up stays a readiness matter.
+		// Opt-in, off by default: see the utxoPersister_livenessStallTimeout long
+		// description (issue 1447).
+		var stallTimeout time.Duration
+		if s.settings != nil {
+			stallTimeout = s.settings.Block.UTXOPersisterLivenessStallTimeout
+		}
+
+		if age, stalled := s.heartbeat.Stalled(stallTimeout); stalled {
+			// The 503 body lands nested in the daemon's aggregate JSON, which the
+			// kubelet event truncates, so the same line goes to the log: it is
+			// the trace an operator reads after the restart.
+			msg := fmt.Sprintf("UTXO persister main loop has not made progress for %s (limit %s)", age, stallTimeout)
+
+			s.logger.Warnf("[UTXOPersister][Health] liveness failing: %s", msg)
+
+			return http.StatusServiceUnavailable, msg, nil
+		}
+
 		return http.StatusOK, "OK", nil
 	}
 
@@ -245,6 +299,13 @@ func (s *Server) Init(ctx context.Context) (err error) {
 func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 	close(readyCh)
 
+	// The consolidation ceiling sits this many blocks behind the best tip and is
+	// fixed in code, so the coin archive always trails the node's own chain view
+	// by at least that much and only catches up after the tip advances again.
+	// Name the coupling at start-up so an operator sizing recovery sees it there
+	// rather than inferring it from a stale archive after downtime.
+	s.logger.Infof("[UTXOPersister Service] coin archive consolidates to best tip minus %d blocks (compile-time ceiling)", confirmations)
+
 	var (
 		err error
 		ch  chan *blockchain.Notification
@@ -283,19 +344,111 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 		duration = 10 * time.Second
 	}
 
+	if s.pollInterval > 0 {
+		duration = s.pollInterval
+	}
+
+	heartbeatInterval := effectiveHeartbeatInterval(s.heartbeatInterval)
+
+	// A timeout at or below the idle tick cannot tell an idle loop from a wedged
+	// one, so it would restart a healthy node. Warn rather than clamp: the
+	// operator chose the value, and silently overriding it would hide the mistake.
+	if stallTimeout := s.settings.Block.UTXOPersisterLivenessStallTimeout; livenessTimeoutTooTight(stallTimeout, heartbeatInterval) {
+		s.logger.Warnf("[UTXOPersister] utxoPersister_livenessStallTimeout %s is not comfortably longer than the %s heartbeat interval: a healthy idle persister may be reported as wedged and restarted", stallTimeout, heartbeatInterval)
+	}
+
+	initPrometheusMetrics()
+
+	go s.publishHeartbeatAge(ctx, heartbeatInterval)
+
+	heartbeatTicker := time.NewTicker(heartbeatInterval)
+	defer heartbeatTicker.Stop()
+
+	// The poll timer fires when no other work has arrived for `duration`. It is
+	// a timer that each work case resets, not a time.After inside the select:
+	// the heartbeat tick is a select case too, and a fresh time.After on every
+	// pass would be restarted by each tick and never fire.
+	// Since Go 1.23 Reset discards a pending fire, so no drain is needed.
+	pollTimer := time.NewTimer(duration)
+	defer pollTimer.Stop()
+
+	// A deliberate stop is not a wedge. The health server can outlive this loop
+	// through a graceful drain, and a heartbeat left ageing there would fail the
+	// probe and cut the drain short (health.Heartbeat.Disable).
+	defer s.heartbeat.Disable()
+
+	// The first beat happens HERE, not at construction, so the heartbeat does not
+	// age through the FSM wait above (health.Heartbeat explains why). Work inside
+	// a single pass beats as it advances; which steps beat is listed once, in
+	// the utxoPersister_livenessStallTimeout long description.
 	for {
+		s.heartbeat.Beat()
+
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 
+		case <-heartbeatTicker.C:
+			// Idle tick: the beat at the top of the loop is the whole point.
+
 		case <-ch:
 			s.handleTriggerError(ctx, s.trigger(ctx, "blockchain"), "blockchain")
+			pollTimer.Reset(duration)
 
 		case source := <-s.triggerCh:
 			s.handleTriggerError(ctx, s.trigger(ctx, source), source)
+			pollTimer.Reset(duration)
 
-		case <-time.After(duration):
+		case <-pollTimer.C:
 			s.handleTriggerError(ctx, s.trigger(ctx, "timer"), "timer")
+			pollTimer.Reset(duration)
+		}
+	}
+}
+
+// publishHeartbeatAge publishes the heartbeat's age until ctx ends. It runs on
+// its own goroutine, not on the main loop, so the gauge keeps climbing while the
+// loop is wedged. It is published whether or not the liveness timeout is set, so
+// an operator can measure the worst case before choosing a timeout.
+func (s *Server) publishHeartbeatAge(ctx context.Context, interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		prometheusUTXOPersisterLivenessHeartbeatAge.Set(s.heartbeat.Age().Seconds())
+
+		select {
+		case <-ctx.Done():
+			// The service context has ended, so the loop is stopping: it returns
+			// and disables its heartbeat once its current pass ends. The gauge
+			// reads 0 from here rather than freezing at its last age, even if
+			// that pass is still running, so a loop wedged at shutdown shows 0.
+			prometheusUTXOPersisterLivenessHeartbeatAge.Set(0)
+
+			return
+		case <-ticker.C:
+		}
+	}
+}
+
+// waitBeating waits for delay, beating the heartbeat on every tick so a
+// deliberate wait between passes is not read as a stall. It returns early with
+// ctx's error when ctx ends.
+func (s *Server) waitBeating(ctx context.Context, delay time.Duration) error {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+
+	ticker := time.NewTicker(effectiveHeartbeatInterval(s.heartbeatInterval))
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-timer.C:
+			return nil
+		case <-ticker.C:
+			s.heartbeat.BeatIfStarted()
 		}
 	}
 }
@@ -397,7 +550,12 @@ func (s *Server) trigger(ctx context.Context, source string) error {
 	}
 
 	if delay > 0 {
-		time.Sleep(delay)
+		// The wait for confirmations runs inside the main loop's select case,
+		// so it beats or a synced node would age the heartbeat for a minute on
+		// every pass. It also ends at shutdown instead of holding the stop up.
+		if err := s.waitBeating(ctx, delay); err != nil {
+			return nil
+		}
 	}
 
 	// Trigger the next block processing
@@ -493,6 +651,7 @@ func (s *Server) processNextBlock(ctx context.Context) (time.Duration, error) {
 	}
 
 	c := NewConsolidator(s.logger, s.settings, s.blockchainStore, s.blockchainClient, s.blockStore, lastWrittenUTXOSetHash)
+	c.progress = s.heartbeat.BeatIfStarted
 
 	s.logger.Infof("Rolling up data from block height %d to %d", s.lastHeight+1, maxHeight)
 
@@ -526,34 +685,41 @@ func (s *Server) processNextBlock(ctx context.Context) (time.Duration, error) {
 
 	s.logger.Infof("Processing block %s height %d", c.lastBlockHash, c.lastBlockHeight)
 
-	if us == nil {
-		s.logger.Infof("UTXOSet already exists for block %s height %d", c.lastBlockHash, c.lastBlockHeight)
-
-		s.lastHeight = c.lastBlockHeight
-
-		return 0, s.writeLastHeight(ctx, s.lastHeight)
+	// A set published by an earlier run that stopped before writing
+	// lastProcessed.dat (a crash, a deploy, or a liveness restart), or by a
+	// one-shot BuildUTXOSetToHeight with updateLastProcessed false. The file store
+	// publishes a set under its name only once it is complete, so an existing
+	// set is a finished one. CreateUTXOSet is not idempotent (NewFileStorer
+	// refuses an existing blob), so without this check every later pass would
+	// fail on ErrBlobAlreadyExists until the chain tip moves the target past
+	// this block, which on a chain whose tip has stopped is indefinitely.
+	existing, err := s.blockStore.Exists(ctx, c.lastBlockHash[:], fileformat.FileTypeUtxoSet)
+	if err != nil {
+		return 0, errors.NewStorageError("[UTXOPersister] error checking for an existing UTXOSet for block %s height %d", c.lastBlockHash, c.lastBlockHeight, err)
 	}
 
-	if err := us.CreateUTXOSet(ctx, c); err != nil {
-		return 0, err
-	}
-
-	// Persist the set-hash sidecar. This is deliberately non-fatal: the utxo-set
-	// blob is already committed above, and CreateUTXOSet is not idempotent — a
-	// retry re-enters it and NewFileStorer fails with ErrBlobAlreadyExists on the
-	// existing blob. Returning an error here would therefore wedge the persister
-	// on this block permanently after a single transient sidecar-write failure.
-	// The sidecar is auxiliary (it only feeds the optional signed-checkpoint seed
-	// feature and can be backfilled), so a failure is logged and the pipeline
-	// advances, mirroring the headers-file write below.
-	setHash := c.acc.Digest()
-	if err := persistSetHash(ctx, s.blockStore, c.lastBlockHash, setHash); err != nil {
-		s.logger.Warnf("[UTXOPersister] failed to write utxo-set-hash for block %s at height %d; checkpoint unavailable for this block until backfilled: %v", c.lastBlockHash.String(), c.lastBlockHeight, err)
+	if existing {
+		// The set-hash sidecar is not rewritten: its digest is folded while the
+		// set is written, and the set is not being written. It is auxiliary and
+		// can be backfilled, as below.
+		s.logger.Infof("[UTXOPersister] UTXOSet already exists for block %s height %d but lastProcessed.dat is behind it (an earlier run stopped before recording it, or a one-shot build wrote it); recording it now", c.lastBlockHash, c.lastBlockHeight)
 	} else {
-		s.logger.Infof("[UTXOPersister] wrote utxo-set-hash %x for block %s at height %d", setHash, c.lastBlockHash.String(), c.lastBlockHeight)
-	}
+		if err := us.CreateUTXOSet(ctx, c); err != nil {
+			return 0, err
+		}
 
-	s.lastHeight = c.lastBlockHeight
+		// Persist the set-hash sidecar. This is deliberately non-fatal: the utxo-set
+		// blob is already committed above. The sidecar is auxiliary (it only feeds
+		// the optional signed-checkpoint seed feature and can be backfilled), so a
+		// failure is logged and the pipeline advances, mirroring the headers-file
+		// write below.
+		setHash := c.acc.Digest()
+		if err := persistSetHash(ctx, s.blockStore, c.lastBlockHash, setHash); err != nil {
+			s.logger.Warnf("[UTXOPersister] failed to write utxo-set-hash for block %s at height %d; checkpoint unavailable for this block until backfilled: %v", c.lastBlockHash.String(), c.lastBlockHeight, err)
+		} else {
+			s.logger.Infof("[UTXOPersister] wrote utxo-set-hash %x for block %s at height %d", setHash, c.lastBlockHash.String(), c.lastBlockHeight)
+		}
+	}
 
 	// Write the headers file for the UTXO set
 	if s.blockchainStore != nil {
@@ -564,10 +730,28 @@ func (s *Server) processNextBlock(ctx context.Context) (time.Duration, error) {
 		s.logger.Warnf("[UTXOPersister] Cannot write headers file: blockchain client interface doesn't support GetBlockHeader")
 	}
 
-	// Remove the previous block's UTXOSet and headers
+	// Record the new height BEFORE deleting the previous set. The previous set is
+	// the base the next pass verifies and builds on until this is written, so
+	// deleting it first would let a stop between the two (a crash, a deploy, a
+	// liveness restart, or a failed delete below) restart onto a base that no
+	// longer exists, and every later pass would fail verifyLastSet.
+	if err := s.writeLastHeight(ctx, c.lastBlockHeight); err != nil {
+		return 0, err
+	}
+	// Keep the in-memory height at the previous set until the write succeeds,
+	// so a later pass in this process retries recording the published set.
+	s.lastHeight = c.lastBlockHeight
+
+	// Remove the previous block's UTXOSet and its side files. lastProcessed.dat
+	// has already moved past it, so a stop or a failed delete here leaves some
+	// or all of those files on disk, and this loop never comes back to them.
 	if lastWrittenUTXOSetHash.String() != s.settings.ChainCfgParams.GenesisHash.String() && !s.settings.BlockPersister.SkipUTXODelete {
+		// A failed delete is logged here, not returned: no later pass would retry
+		// it, and the trigger handler would log it as "will retry".
 		if err := s.blockStore.Del(ctx, lastWrittenUTXOSetHash[:], fileformat.FileTypeUtxoSet); err != nil {
-			return 0, errors.NewProcessingError("[UTXOPersister] Error deleting UTXOSet for block %s height %d", lastWrittenUTXOSetHash, c.firstBlockHeight, err)
+			s.logger.Errorf("[UTXOPersister] Error deleting previous UTXOSet for block %s height %d; the new set is recorded, so this is not retried and the previous set, or some of its side files, stay on disk until removed by hand: %v", lastWrittenUTXOSetHash, metas[0].Height, err)
+
+			return 0, nil
 		}
 
 		if err := s.blockStore.Del(ctx, lastWrittenUTXOSetHash[:], fileformat.FileTypeUtxoSetHash); err != nil {
@@ -577,11 +761,11 @@ func (s *Server) processNextBlock(ctx context.Context) (time.Duration, error) {
 		// No separate delete for the ".sha256" sidecars: the Del calls above already remove the
 		// checksum file alongside the blob it describes.
 		if err := s.blockStore.Del(ctx, lastWrittenUTXOSetHash[:], fileformat.FileTypeUtxoHeaders); err != nil {
-			s.logger.Warnf("[UTXOPersister] Error deleting UTXOHeaders for block %s height %d: %v", lastWrittenUTXOSetHash, c.firstBlockHeight, err)
+			s.logger.Warnf("[UTXOPersister] Error deleting UTXOHeaders for block %s height %d: %v", lastWrittenUTXOSetHash, metas[0].Height, err)
 		}
 	}
 
-	return 0, s.writeLastHeight(ctx, s.lastHeight)
+	return 0, nil
 }
 
 // BuildUTXOSetToHeight performs a one-shot consolidation of the per-block
@@ -701,6 +885,10 @@ func (s *Server) BuildUTXOSetToHeight(ctx context.Context, startHeight, endHeigh
 
 	// Consolidate the range on top of the seed and write the new set.
 	c := NewConsolidator(s.logger, s.settings, s.blockchainStore, s.blockchainClient, s.blockStore, seedHash)
+
+	// BeatIfStarted, not Beat: this one-shot build never arms the heartbeat on
+	// its own, and only renews one the main loop already owns.
+	c.progress = s.heartbeat.BeatIfStarted
 
 	if err := c.ConsolidateBlockRange(ctx, startHeight+1, endHeight); err != nil {
 		return errors.NewProcessingError("[UTXOPersister] error consolidating block range %d..%d", startHeight+1, endHeight, err)

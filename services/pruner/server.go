@@ -72,10 +72,23 @@ type Server struct {
 	pruneNotify         chan pruneSignal
 	stats               *gocore.Stat
 
+	// Catchup-guard visibility: name of the last non-RUNNING FSM state the
+	// skipDuringCatchup guard saw and when it was last warned about. Read and
+	// written only by the processing loop.
+	lastGuardStateName string
+	lastGuardWarnedAt  time.Time
+
 	// Blob deletion
 	blobStores           map[storetypes.BlobStoreType]blob.Store
 	blobNotify           chan pruneSignal
 	blobDeletionObserver BlobDeletionObserver
+
+	// The stamp worker. stamper is nil for a store that does not stamp, and then no worker
+	// runs. stampNotify holds one signal, the latest. stampRetry is the retry timer's
+	// interval, a constant in production and short in tests.
+	stamper     pruner.Stamper
+	stampNotify chan pruneSignal
+	stampRetry  time.Duration
 }
 
 // New creates a new Pruner server instance with the provided dependencies.
@@ -99,6 +112,8 @@ func New(
 		blobStores:          make(map[storetypes.BlobStoreType]blob.Store),
 		pruneNotify:         make(chan pruneSignal, 1),
 		blobNotify:          make(chan pruneSignal, 1),
+		stampNotify:         make(chan pruneSignal, 1),
+		stampRetry:          stampRetryInterval,
 		stats:               gocore.NewStat("pruner"),
 	}
 }
@@ -129,6 +144,12 @@ func (s *Server) Init(ctx context.Context) error {
 		return errors.NewServiceError("pruner service not available from UTXO store")
 	}
 
+	// The stamp worker, for a store whose UTXOs get their block from a deep pass.
+	s.stamper = s.findStamper()
+	if s.stamper != nil && s.settings.Pruner.SkipDuringCatchup {
+		s.logger.Errorf("[pruner] pruner_skipDuringCatchup is true on a store that stamps: the stamp, and with it every tx_mined partition drop, will stall for the whole catch-up")
+	}
+
 	// Validate block trigger mode
 	blockTrigger := s.settings.Pruner.BlockTrigger
 	if blockTrigger != settings.PrunerBlockTriggerOnBlockPersisted && blockTrigger != settings.PrunerBlockTriggerOnBlockMined {
@@ -137,6 +158,20 @@ func (s *Server) Init(ctx context.Context) error {
 	}
 
 	// Blob deletion is now managed by blockchain service - no local DB needed
+
+	// Announce the trigger mode the service will act on. The service subscribes
+	// and reports healthy in either mode, and in OnBlockPersisted mode with no
+	// Block Persister deployed it then waits forever for a notification that no
+	// process will send - "pruning never happened" used to be discovered as disk
+	// growth. Named here - Init runs before any FSM wait - the silent
+	// configuration is visible early in every start-up. Prune passes themselves
+	// are already countable via the prunerDuration histogram, so an operator can
+	// alarm on a pass count that never leaves zero.
+	if blockTrigger == settings.PrunerBlockTriggerOnBlockPersisted {
+		s.logger.Infof("[pruner] trigger mode OnBlockPersisted: pruning waits for BlockPersisted notifications - if the Block Persister is not deployed nothing will ever prune; see pruner_block_trigger's recommendation for the persister-less mode")
+	} else {
+		s.logger.Infof("[pruner] trigger mode OnBlockMined: pruning triggers on mined blocks, no Block Persister required")
+	}
 
 	// Subscribe to blockchain notifications for event-driven pruning.
 	// The pruner_block_trigger setting controls which notification type is used:
@@ -291,6 +326,11 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 
 	// Start blob deletion worker
 	go s.blobDeletionWorker()
+
+	// Start the stamp worker, beside the pruner processor and never in front of it
+	if s.stamper != nil {
+		go s.stampWorker(ctx)
+	}
 
 	// Start blob deletion metrics updater
 	go s.updateBlobDeletionMetrics()

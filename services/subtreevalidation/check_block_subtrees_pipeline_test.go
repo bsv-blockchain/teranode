@@ -83,15 +83,17 @@ func buildMultiBatchBlock(t *testing.T, server *Server, n int) *model.Block {
 func wireMultiBatchMocks(server *Server) {
 	server.settings.SubtreeValidation.TxBatchSize = 1
 
+	tip := &model.BlockHeader{
+		Version:        1,
+		HashPrevBlock:  &chainhash.Hash{},
+		HashMerkleRoot: &chainhash.Hash{},
+		Timestamp:      uint32(time.Now().Unix()),
+		Bits:           model.NBit{},
+		Nonce:          0,
+	}
 	server.blockchainClient.(*blockchain.Mock).On("GetBestBlockHeader", mock.Anything).
-		Return(&model.BlockHeader{
-			Version:        1,
-			HashPrevBlock:  &chainhash.Hash{},
-			HashMerkleRoot: &chainhash.Hash{},
-			Timestamp:      uint32(time.Now().Unix()),
-			Bits:           model.NBit{},
-			Nonce:          0,
-		}, &model.BlockHeaderMeta{ID: 100}, nil).Maybe()
+		Return(tip, &model.BlockHeaderMeta{ID: 100}, nil).Maybe()
+	mockTipHeaders(server, tip)
 	server.blockchainClient.(*blockchain.Mock).On("GetBlockHeaderIDs",
 		mock.Anything, mock.Anything, mock.Anything).
 		Return([]uint32{1, 2, 3}, nil).Maybe()
@@ -112,8 +114,10 @@ func TestCheckBlockSubtrees_MultiBatch_BalancesArenas(t *testing.T) {
 
 	wireMultiBatchMocks(server)
 
-	mockValidator := server.validatorClient.(*validator.MockValidator)
-	mockValidator.UtxoStore = server.utxoStore
+	// The mock validator derives each tx's meta from the tx itself, parents
+	// included. Pointed at the mocked utxo store it would get an empty meta back,
+	// whose subtree meta cannot be serialized; the subtree is written only after
+	// its meta, so validation would fail.
 
 	const numSubtrees = 5
 	block := buildMultiBatchBlock(t, server, numSubtrees)
@@ -198,6 +202,15 @@ func TestCheckBlockSubtrees_OnlyRunningFeedsBlockAssembly(t *testing.T) {
 					call.ReturnArguments = mock.Arguments{&fsmState, nil}
 				}
 			}
+
+			// A tip past Chronicle, so the block extends it within one era.
+			// Registered before wireMultiBatchMocks: testify serves the first match.
+			tipHeight := server.settings.ChainCfgParams.ChronicleActivationHeight + 50
+			tip := &model.BlockHeader{HashPrevBlock: &chainhash.Hash{}, HashMerkleRoot: &chainhash.Hash{}}
+			bc.On("GetBestBlockHeader", mock.Anything).
+				Return(tip, &model.BlockHeaderMeta{ID: 100, Height: tipHeight}, nil)
+			mockTipHeaders(server, tip)
+
 			wireMultiBatchMocks(server)
 
 			mockValidator := server.validatorClient.(*validator.MockValidator)
@@ -206,6 +219,7 @@ func TestCheckBlockSubtrees_OnlyRunningFeedsBlockAssembly(t *testing.T) {
 			server.validatorClient = recording
 
 			block := buildMultiBatchBlock(t, server, 2)
+			block.Height = tipHeight + 1
 			blockBytes, err := block.Bytes()
 			require.NoError(t, err)
 
@@ -221,6 +235,76 @@ func TestCheckBlockSubtrees_OnlyRunningFeedsBlockAssembly(t *testing.T) {
 			for _, calls := range recording.callsByTx {
 				for _, opts := range calls {
 					require.Equal(t, state == blockchain.FSMStateRUNNING, opts.AddTXToBlockAssembly)
+				}
+			}
+		})
+	}
+}
+
+// TestCheckBlockSubtrees_BlockAssemblyFeedFollowsScriptEra pins the block assembly
+// feed in RUNNING. A block's txs are validated at the block's own height, while
+// assembly mines them at tip+1 without re-checking scripts. A side block below
+// Genesis feeds too: its txs carry the block's height, and block assembly's era filter
+// drops them and records the drop, so a descendant in a later block of the same fork
+// is dropped with them. A same-era competitor whose parent is not the tip must feed, or its txs are
+// stranded when it loses: ErrTxExists keeps them out of assembly on resubmission.
+// A block above tip+1 does not feed: a height locktime final there may not be
+// final at tip+1.
+func TestCheckBlockSubtrees_BlockAssemblyFeedFollowsScriptEra(t *testing.T) {
+	tests := []struct {
+		name        string
+		blockHeight func(genesis uint32) uint32
+		extendsTip  bool
+		feeds       bool
+	}{
+		{"side block below Genesis", func(genesis uint32) uint32 { return genesis - 1 }, false, true},
+		{"same-era competitor at the tip height", func(genesis uint32) uint32 { return genesis + 50 }, false, true},
+		{"same-era block above tip+1", func(genesis uint32) uint32 { return genesis + 52 }, false, false},
+		{"block extending the tip", func(genesis uint32) uint32 { return genesis + 51 }, true, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server, cleanup := setupTestServer(t)
+			defer cleanup()
+
+			// Registered before wireMultiBatchMocks: testify serves the first match.
+			genesis := server.settings.ChainCfgParams.GenesisActivationHeight
+			tipHeader := &model.BlockHeader{HashPrevBlock: &chainhash.Hash{}, HashMerkleRoot: &chainhash.Hash{}, Timestamp: 1_700_000_000}
+			bc := server.blockchainClient.(*blockchain.Mock)
+			bc.On("GetBestBlockHeader", mock.Anything).
+				Return(tipHeader, &model.BlockHeaderMeta{ID: 100, Height: genesis + 50}, nil)
+			bc.On("GetBlockHeaders", mock.Anything, tipHeader.Hash(), mock.Anything).
+				Return([]*model.BlockHeader{tipHeader}, []*model.BlockHeaderMeta{{ID: 100, Height: genesis + 50}}, nil).Maybe()
+
+			wireMultiBatchMocks(server) // FSM RUNNING
+
+			mockValidator := server.validatorClient.(*validator.MockValidator)
+			mockValidator.UtxoStore = server.utxoStore
+			recording := newRecordingValidatorClient(mockValidator)
+			server.validatorClient = recording
+
+			block := buildMultiBatchBlock(t, server, 1)
+			block.Header.HashPrevBlock = &chainhash.Hash{} // not the tip
+			if tt.extendsTip {
+				block.Header.HashPrevBlock = tipHeader.Hash()
+			}
+			block.Height = tt.blockHeight(genesis)
+			blockBytes, err := block.Bytes()
+			require.NoError(t, err)
+
+			_, err = server.CheckBlockSubtrees(context.Background(), &subtreevalidation_api.CheckBlockSubtreesRequest{
+				Block:   blockBytes,
+				BaseUrl: "http://test.com",
+			})
+			require.NoError(t, err)
+
+			recording.mu.Lock()
+			defer recording.mu.Unlock()
+			require.NotEmpty(t, recording.callsByTx, "no transaction was validated")
+			for _, calls := range recording.callsByTx {
+				for _, opts := range calls {
+					require.Equal(t, tt.feeds, opts.AddTXToBlockAssembly)
 				}
 			}
 		})
@@ -255,6 +339,15 @@ func TestCheckBlockSubtrees_KeepHandoffDuringShortCatchup(t *testing.T) {
 					call.ReturnArguments = mock.Arguments{&fsmState, nil}
 				}
 			}
+
+			// A tip past Chronicle, so the block extends it within one era.
+			// Registered before wireMultiBatchMocks: testify serves the first match.
+			tipHeight := server.settings.ChainCfgParams.ChronicleActivationHeight + 50
+			tip := &model.BlockHeader{HashPrevBlock: &chainhash.Hash{}, HashMerkleRoot: &chainhash.Hash{}}
+			bc.On("GetBestBlockHeader", mock.Anything).
+				Return(tip, &model.BlockHeaderMeta{ID: 100, Height: tipHeight}, nil)
+			mockTipHeaders(server, tip)
+
 			wireMultiBatchMocks(server)
 
 			mockValidator := server.validatorClient.(*validator.MockValidator)
@@ -263,6 +356,7 @@ func TestCheckBlockSubtrees_KeepHandoffDuringShortCatchup(t *testing.T) {
 			server.validatorClient = recording
 
 			block := buildMultiBatchBlock(t, server, 2)
+			block.Height = tipHeight + 1
 			blockBytes, err := block.Bytes()
 			require.NoError(t, err)
 

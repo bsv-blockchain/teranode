@@ -6,6 +6,8 @@ import (
 
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/stores/utxo/tests"
@@ -19,7 +21,7 @@ import (
 // conflicting and mined records and paginated child records must not.
 func TestUnminedIterator_RawScanMatchesStore(t *testing.T) {
 	for _, storeInpoints := range []bool{false, true} {
-		t.Run(map[bool]string{false: "without inpoints", true: "with inpoints"}[storeInpoints], func(t *testing.T) {
+		t.Run(map[bool]string{false: "subtree meta off", true: "subtree meta on"}[storeInpoints], func(t *testing.T) {
 			logger := ulogger.NewErrorTestLogger(t)
 			tSettings := test.CreateBaseTestSettings(t)
 			tSettings.BlockAssembly.StoreTxInpointsForSubtreeMeta = storeInpoints
@@ -110,13 +112,82 @@ func TestUnminedIterator_RawScanMatchesStore(t *testing.T) {
 				require.Positive(t, u.UnminedSince)
 				require.NotNil(t, u.TxInpoints)
 
-				if storeInpoints {
-					require.Equal(t, []chainhash.Hash{*tests.Tx.TxIDChainHash()}, u.TxInpoints.GetParentTxHashes(), "inpoints of %s", hash)
-					require.Equal(t, tx.Inputs[0].PreviousTxOutIndex, u.TxInpoints.GetTxInpoints()[0].Index, "vout of %s", hash)
-				} else {
-					require.Empty(t, u.TxInpoints.GetParentTxHashes())
-				}
+				// parent links come back in both modes: the setting only decides
+				// whether subtree meta files are written
+				require.Equal(t, []chainhash.Hash{*tests.Tx.TxIDChainHash()}, u.TxInpoints.GetParentTxHashes(), "inpoints of %s", hash)
+				require.Equal(t, tx.Inputs[0].PreviousTxOutIndex, u.TxInpoints.GetTxInpoints()[0].Index, "vout of %s", hash)
 			}
 		})
 	}
+}
+
+// A record whose external file has gone is left out of the block assembly scan,
+// against a real Aerospike and file blob store: the scan must not fail, and
+// every other unmined transaction, external ones included, still comes back.
+// The plain scan, which the rewind tool uses, still fails on the same record.
+func TestUnminedIterator_SkipsExternalRecordWithMissingFile(t *testing.T) {
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.UtxoStore.ExternalizeAllTransactions = true
+
+	_, store, ctx, deferFn := initAerospike(t, tSettings, logger)
+	t.Cleanup(deferFn)
+
+	height := store.GetBlockHeight() + 1
+
+	healthy := paginatedSpendAndCreateTx(t, 0, 1000, 2)
+	_, _, err := store.SpendAndCreate(ctx, healthy, height, utxo.WithCreateOnly())
+	require.NoError(t, err)
+
+	broken := paginatedSpendAndCreateTx(t, 1, 2000, 2)
+	_, _, err = store.SpendAndCreate(ctx, broken, height, utxo.WithCreateOnly())
+	require.NoError(t, err)
+
+	// The unmined_since index is built asynchronously; wait while both files
+	// still exist, so a missing record below can only be the skip.
+	require.True(t, waitUnminedIteratorHas(t, ctx, store, broken.TxIDChainHash(), 30*time.Second))
+	require.True(t, waitUnminedIteratorHas(t, ctx, store, healthy.TxIDChainHash(), 30*time.Second))
+
+	require.NoError(t, store.GetExternalStore().Del(ctx, broken.TxIDChainHash()[:], fileformat.FileTypeTx))
+
+	plain, err := store.GetUnminedTxIterator()
+	require.NoError(t, err)
+
+	var plainErr error
+	for plainErr == nil {
+		var batch []*utxo.UnminedTransaction
+		if batch, plainErr = plain.Next(ctx); plainErr == nil && len(batch) == 0 {
+			break
+		}
+	}
+
+	require.ErrorIs(t, plainErr, errors.ErrNotFound)
+	require.NoError(t, plain.Close())
+
+	it, err := store.GetUnminedTxIteratorSkippingMissingExternal()
+	require.NoError(t, err)
+
+	got := map[chainhash.Hash]*utxo.UnminedTransaction{}
+
+	for {
+		batch, err := it.Next(ctx)
+		require.NoError(t, err)
+
+		if len(batch) == 0 {
+			break
+		}
+
+		for _, tx := range batch {
+			if !tx.Skip {
+				got[tx.Hash] = tx
+			}
+		}
+	}
+
+	require.NoError(t, it.Err())
+	require.NoError(t, it.Close())
+
+	require.NotContains(t, got, *broken.TxIDChainHash())
+	require.Contains(t, got, *healthy.TxIDChainHash())
+	require.Equal(t, []chainhash.Hash{*tests.Tx.TxIDChainHash()}, got[*healthy.TxIDChainHash()].TxInpoints.GetParentTxHashes())
 }

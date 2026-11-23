@@ -1,7 +1,9 @@
 package utxo
 
 import (
+	"context"
 	"testing"
+	"unsafe"
 
 	"github.com/stretchr/testify/require"
 )
@@ -61,6 +63,7 @@ func TestCreateOptionsDoNotAllocate(t *testing.T) {
 		{"WithConflicting", func() { escapeOption(WithConflicting(true)) }},
 		{"WithCreateOnly", func() { escapeOption(WithCreateOnly()) }},
 		{"WithSpendOnly", func() { escapeOption(WithSpendOnly()) }},
+		{"WithCaller", func() { escapeOption(WithCaller(CallerValidator)) }},
 	}
 
 	for _, c := range cases {
@@ -110,3 +113,34 @@ func TestCreateOptionsStillSetWhatTheySay(t *testing.T) {
 	WithSpendOnly()(&o)
 	require.True(t, o.SpendOnly)
 }
+
+// CreateOptions is allocated once per create, so a new field must not move it up a size class.
+func TestCreateOptionsSize(t *testing.T) {
+	// 136, in the 144-byte size class: the 112 it was plus ParentLanePositions' slice header, which
+	// a create with lane positions on fills and one with them off leaves nil. Carrying the parents'
+	// positions to the store needs some field here, and any field moves it past 112; the PR that
+	// added it measured the create benchmark before and after.
+	require.Equal(t, uintptr(136), unsafe.Sizeof(CreateOptions{}))
+}
+
+// TestTakeDoesNotAllocate holds the point of taking lane positions in the store: with a source set,
+// Take allocates nothing beyond the source's Next. The stores that pass the position on as a create
+// option (SequentialSpendAndCreate and utxoset) add that option's two allocations.
+func TestTakeDoesNotAllocate(t *testing.T) {
+	var positions LanePositions
+
+	positions.SetLanePositionSource(constantLanePosition{})
+
+	options := &CreateOptions{}
+	ctx := context.Background()
+
+	require.Zero(t, testing.AllocsPerRun(1000, func() {
+		if p, err := positions.Take(ctx, options); err != nil || p == 0 {
+			t.Fatal("no position")
+		}
+	}))
+}
+
+type constantLanePosition struct{}
+
+func (constantLanePosition) Next(context.Context) (uint64, error) { return 1, nil }

@@ -250,7 +250,7 @@ services:
 
   asset-cache:
     container_name: asset-cache
-    image: nginx:1.27.4
+    image: nginx:1.30.7
     networks:
       - teranode-network
     ports:

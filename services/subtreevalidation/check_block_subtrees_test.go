@@ -474,6 +474,7 @@ func TestCheckBlockSubtrees_SiblingFailureDoesNotCancelInFlight(t *testing.T) {
 
 	server, cleanup := setupTestServer(t)
 	defer cleanup()
+	mockBestBlockHeader(server)
 
 	server.blockchainClient.(*blockchain.Mock).On("GetBlockHeaderIDs",
 		mock.Anything, mock.Anything, mock.Anything).
@@ -605,6 +606,7 @@ func TestCheckBlockSubtrees_Optimistic_SkipsFetchSubtreeData(t *testing.T) {
 
 		server, cleanup := setupTestServer(t)
 		defer cleanup()
+		mockBestBlockHeader(server)
 
 		// New starts pessimistic regardless of bootstrap; Arm applies the intent.
 		afCfg := adaptivefetch.DefaultConfig()
@@ -690,6 +692,7 @@ func TestCheckBlockSubtrees_OversizedBody(t *testing.T) {
 
 	server, cleanup := setupTestServer(t)
 	defer cleanup()
+	mockBestBlockHeader(server)
 
 	server.settings.SubtreeValidation.MaxIncomingSubtreeBytes = 128 // tiny cap
 
@@ -743,6 +746,7 @@ func TestCheckBlockSubtrees_RetriesSubtreeFetchOn429(t *testing.T) {
 
 	server, cleanup := setupTestServer(t)
 	defer cleanup()
+	mockBestBlockHeader(server)
 
 	server.settings.SubtreeValidation.MaxIncomingSubtreeBytes = 128 // tiny cap
 
@@ -808,6 +812,7 @@ func TestCheckBlockSubtrees_LocalAssemblyPolicyIgnored(t *testing.T) {
 
 	server, cleanup := setupTestServer(t)
 	defer cleanup()
+	mockBestBlockHeader(server)
 
 	// Docker quickstart profile: small local assembly cap, generous receive cap.
 	server.settings.BlockAssembly.MaximumMerkleItemsPerSubtree = 32768
@@ -2334,6 +2339,24 @@ func blessedSubtreeBytes(t *testing.T) []byte {
 	return b
 }
 
+// mockBestBlockHeader serves a tip for tests that reach the block assembly feed
+// decision without testing it. It is not part of setupTestServer: testify serves
+// the first matching expectation, so a default there would shadow every test's
+// own GetBestBlockHeader.
+func mockBestBlockHeader(server *Server) {
+	tip := &model.BlockHeader{HashPrevBlock: &chainhash.Hash{}, HashMerkleRoot: &chainhash.Hash{}}
+	server.blockchainClient.(*blockchain.Mock).On("GetBestBlockHeader", mock.Anything).
+		Return(tip, &model.BlockHeaderMeta{ID: 100}, nil).Maybe()
+	mockTipHeaders(server, tip)
+}
+
+// mockTipHeaders serves tip for the median-time-past lookup feedsBlockAssembly makes
+// for a block whose parent is not the tip.
+func mockTipHeaders(server *Server, tip *model.BlockHeader) {
+	server.blockchainClient.(*blockchain.Mock).On("GetBlockHeaders", mock.Anything, tip.Hash(), mock.Anything).
+		Return([]*model.BlockHeader{tip}, []*model.BlockHeaderMeta{{ID: 100}}, nil).Maybe()
+}
+
 func setupTestServer(t *testing.T) (*Server, func()) {
 	logger := &ulogger.TestLogger{}
 
@@ -2356,6 +2379,10 @@ func setupTestServer(t *testing.T) (*Server, func()) {
 		mock.Anything, mock.Anything, mock.Anything).
 		Return(nil).Maybe()
 	// Set up default mock for GetBlockHeight method
+	// No conflicting index: cached subtrees take the per-transaction path these
+	// tests were written against. Tests of the index path wrap the store.
+	mockUtxoStore.On("ConflictingTxHashes", mock.Anything).
+		Return(nil, false, nil).Maybe()
 	mockUtxoStore.On("GetBlockHeight").
 		Return(uint32(100)).Maybe()
 	// Set up default mock for GetMeta method
