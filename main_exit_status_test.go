@@ -2,6 +2,9 @@ package main
 
 import (
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
+	"encoding/hex"
 	"net"
 	"net/http"
 	"os"
@@ -164,7 +167,7 @@ func startMainChild(t *testing.T, env ...string) *mainChild {
 // and main turning it into the exit status.
 func TestMainExitsNonZeroWhenTheDaemonFails(t *testing.T) {
 	// An unsupported store scheme fails the blockchain service in
-	// startServices, before it binds anything, after RunDaemon has handed
+	// startServices, before blockchain binds anything, after RunDaemon has handed
 	// over to Start.
 	child := startMainChild(t, "blockchain_store=nosuchscheme:///exit_status")
 
@@ -238,6 +241,67 @@ func awaitReadiness(t *testing.T, child *mainChild, timeout time.Duration) bool 
 		case <-time.After(200 * time.Millisecond):
 		}
 	}
+}
+
+// TestMainSplitAlertStartup starts the real alert daemon before blockchain.
+// Alert liveness must answer while its blockchain client is still connecting,
+// so blockchain can pass its alert gate and alert can initialize its service.
+func TestMainSplitAlertStartup(t *testing.T) {
+	grpcAddr := freeLocalAddr(t)
+	alertAddr := freeLocalAddr(t)
+	_, p2pPort, err := net.SplitHostPort(freeLocalAddr(t))
+	require.NoError(t, err)
+	_, keyBytes, err := ed25519.GenerateKey(rand.Reader)
+	require.NoError(t, err)
+
+	alert := startMainChild(t,
+		mainSubprocessArgs+"=-all=0 -alert=1 -blockchain=0",
+		"health_check_httpListenAddress="+alertAddr,
+		"blockchain_grpcAddress="+grpcAddr,
+		"blockchain_maxRetries=100",
+		"blockchain_retrySleep=10",
+		"alert_store=sqlitememory:///split_alert",
+		"utxostore=sqlitememory:///split_alert_utxo",
+		"dataFolder="+t.TempDir(),
+		"alert_p2p_private_key="+hex.EncodeToString(keyBytes),
+		"ALERT_P2P_PORT="+p2pPort,
+		"alert_p2p_allow_private_ips=true",
+		"alert_protocol_id=/teranode-test/split-alert/1.0.0",
+		"alert_topic_name=teranode-test-split-alert",
+	)
+	t.Cleanup(func() {
+		if t.Failed() {
+			t.Logf("alert output:\n%s", alert.output())
+		}
+	})
+	client := &http.Client{Timeout: time.Second}
+	ctx := t.Context()
+	require.Eventually(t, func() bool {
+		return readinessOK(ctx, client, "http://"+alertAddr+"/health/liveness")
+	}, 5*time.Second, 20*time.Millisecond)
+	require.False(t, readinessOK(ctx, client, "http://"+alertAddr+"/health/readiness"))
+
+	blockchain := startMainChild(t,
+		"blockchain_requireAlertSystem=true",
+		"alert_healthAddress=http://"+alertAddr,
+		"alert_startupTimeout=10s",
+		"blockchain_store=sqlitememory:///split_blockchain",
+		"blockchain_grpcListenAddress="+grpcAddr,
+		"blockchain_grpcAddress="+grpcAddr,
+		"blockchain_httpListenAddress="+freeLocalAddr(t),
+	)
+	require.True(t, awaitReadiness(t, blockchain, 20*time.Second), "blockchain did not become ready:\n%s", blockchain.output())
+	require.Eventually(t, func() bool {
+		return strings.Contains(alert.output(), "Starting service Alert")
+	}, 20*time.Second, 20*time.Millisecond)
+	require.True(t, readinessOK(ctx, client, "http://"+alertAddr+"/health/liveness"))
+
+	// Peer discovery is independent of the dependency cycle under test. Stop
+	// alert here without waiting for it to join an external alert network.
+	require.NoError(t, alert.cmd.Process.Kill())
+	<-alert.done
+	require.NoError(t, blockchain.cmd.Process.Signal(syscall.SIGTERM))
+	require.Equal(t, 0, blockchain.exitCode(t, 20*time.Second), "blockchain output:\n%s", blockchain.output())
 }
 
 func readinessOK(ctx context.Context, client *http.Client, url string) bool {
