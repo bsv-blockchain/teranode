@@ -3451,6 +3451,74 @@ func (c *countingUnminedIterator) Next(ctx context.Context) ([]*utxoStore.Unmine
 	return batch, err
 }
 
+type queuedChildSkippingStore struct {
+	utxoStore.Store
+	iterator utxoStore.UnminedTxIterator
+}
+
+func (s *queuedChildSkippingStore) GetUnminedTxIteratorSkippingMissingExternal() (utxoStore.UnminedTxIterator, error) {
+	return s.iterator, nil
+}
+
+type queuedChildSkippingIterator struct {
+	missingParent chainhash.Hash
+	queueChild    func()
+	next          int
+}
+
+func (it *queuedChildSkippingIterator) Next(context.Context) ([]*utxoStore.UnminedTransaction, error) {
+	it.next++
+	if it.next == 1 {
+		return []*utxoStore.UnminedTransaction{{Node: &subtreepkg.Node{Hash: it.missingParent}, Skip: true}}, nil
+	}
+	if it.next == 2 {
+		it.queueChild() // this partition has finished, but the load has not
+	}
+	return nil, nil
+}
+
+func (*queuedChildSkippingIterator) Err() error   { return nil }
+func (*queuedChildSkippingIterator) Close() error { return nil }
+
+// A child submitted after the scan saw its missing external parent is still
+// queued when the load finishes. The startup drain must reject it by parent
+// hash while admitting an unrelated transaction from the same queue batch.
+func TestLoadUnminedTransactionsDropsQueuedChildOfMissingExternalParent(t *testing.T) {
+	initPrometheusMetrics()
+	ctx := t.Context()
+	items := setupBlockAssemblyTest(t, func(s *settings.Settings) {
+		s.BlockAssembly.OnRestartValidateParentChain = true
+		s.BlockAssembly.OnRestartRemoveInvalidParentChainTxs = true
+		s.BlockAssembly.DoubleSpendWindow = time.Hour // the startup drain must not defer already queued children
+	})
+	ba := items.blockAssembler
+	ba.subtreeProcessor.Stop(ctx)
+
+	stp, err := subtreeprocessor.NewSubtreeProcessor(ctx, ulogger.TestLogger{}, ba.settings, nil, items.blockchainClient, nil, items.newSubtreeChan)
+	require.NoError(t, err)
+	ba.subtreeProcessor = stp // leave its consumer stopped, as during the startup load
+	ba.setBestBlockHeader(model.GenesisBlockHeader, 0)
+
+	parent := chainhash.HashH([]byte("missing-external-parent"))
+	child := chainhash.HashH([]byte("queued-child"))
+	unrelated := chainhash.HashH([]byte("queued-unrelated"))
+	it := &queuedChildSkippingIterator{missingParent: parent}
+	it.queueChild = func() {
+		require.Equal(t, subtreeprocessor.Admitted, ba.AddTxBatchBounded(
+			[]subtreepkg.Node{{Hash: child, Fee: 1000, SizeInBytes: 250}, {Hash: unrelated, Fee: 1000, SizeInBytes: 250}},
+			[]*subtreepkg.TxInpoints{singleParentInpointsPtr(parent, 0), singleParentInpointsPtr(chainhash.Hash{}, 0)}, false))
+	}
+	ba.utxoStore = &queuedChildSkippingStore{Store: items.utxoStore, iterator: it}
+
+	require.NoError(t, ba.loadUnminedTransactions(ctx, false))
+	require.NoError(t, ba.drainUnminedDropHashes("drainQueue_startup", false))
+
+	_, childPlaced := stp.GetCurrentTxMap().Get(child)
+	_, unrelatedPlaced := stp.GetCurrentTxMap().Get(unrelated)
+	require.False(t, childPlaced, "the queued child must not enter a mining candidate without its parent")
+	require.True(t, unrelatedPlaced, "the drain must still admit unrelated queued transactions")
+}
+
 // The in-memory load with the parent check on opens the scan that skips a
 // missing external file. The disk-sorted load, which runs only with the parent
 // check off, and the in-memory load with it off keep the plain scan, because

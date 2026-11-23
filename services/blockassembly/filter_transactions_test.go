@@ -404,9 +404,12 @@ func TestValidateParentChain_RejectsChildOfUnloadedUnminedParent(t *testing.T) {
 		})
 	}
 
+	items.blockAssembler.unminedDropHashes = make(map[chainhash.Hash]struct{})
 	validTxs, err := items.blockAssembler.validateParentChain(ctx, loaded, map[uint32]bool{})
 	require.NoError(t, err)
 	require.Empty(t, validTxs)
+	require.Contains(t, items.blockAssembler.unminedDropHashes, *child.TxIDChainHash(), "a queued grandchild may arrive after its scanned child was rejected")
+	require.Contains(t, items.blockAssembler.unminedDropHashes, *grandchild.TxIDChainHash())
 }
 
 // TestValidateParentChain_BatchDecorateRequestsConflicting verifies that validateParentChain

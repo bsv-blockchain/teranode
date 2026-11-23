@@ -3819,6 +3819,14 @@ func (b *BlockAssembler) validateParentChain(
 		}
 	}
 
+	// A descendant can arrive through AddTx after its scan partition has
+	// finished. Keep rejected scan hashes for the startup queue drain too.
+	if b.unminedDropHashes != nil {
+		for hash := range rejectedHashes {
+			b.unminedDropHashes[hash] = struct{}{}
+		}
+	}
+
 	// Propagate conflicting flag to UTXO store for cascaded descendants. This prevents
 	// future restarts from re-discovering the same orphans and leaking them into block
 	// assembly. Best-effort: even on failure the in-memory filter has already protected
@@ -4244,7 +4252,7 @@ func (b *BlockAssembler) fixUnminedSinceInconsistencies(ctx context.Context) err
 // pending map error (AddDirectly/AddNodesDirectly): the map may be partially
 // populated, and a restart reloads it.
 // drainUnminedDropHashes drains the input queue with b.unminedDropHashes (set
-// by markAsConflicting during the load just completed) as the drop filter,
+// by markAsConflicting and by the skipped-parent scan during the load) as the drop filter,
 // then flushes and checks the disk tx map for DrainQueue's own writes: they
 // land after loadUnminedTransactions' own end-of-load FlushDiskTxMapForLoad
 // call, so a trailing unflushed failure there needs the same check, or it
@@ -4417,6 +4425,7 @@ func (b *BlockAssembler) loadUnminedTransactions(ctx context.Context, isReload b
 		unminedTxs              []*utxo.UnminedTransaction
 		lockedTxs               []chainhash.Hash
 		markAsMinedOnLongestTxs []chainhash.Hash
+		skippedHashes           []chainhash.Hash
 	}
 	workerResults := make([]workerResult, numWorkers)
 
@@ -4438,6 +4447,9 @@ func (b *BlockAssembler) loadUnminedTransactions(ctx context.Context, isReload b
 				for _, unminedTransaction := range batch {
 					if unminedTransaction.Skip {
 						skippedCount.Add(1)
+						if unminedTransaction.Node != nil {
+							localResult.skippedHashes = append(localResult.skippedHashes, unminedTransaction.Hash)
+						}
 						continue
 					}
 
@@ -4519,6 +4531,9 @@ func (b *BlockAssembler) loadUnminedTransactions(ctx context.Context, isReload b
 
 	// Merge per-worker results into final slices
 	for idx := range workerResults {
+		for _, hash := range workerResults[idx].skippedHashes {
+			b.unminedDropHashes[hash] = struct{}{}
+		}
 		unminedTransactions = append(unminedTransactions, workerResults[idx].unminedTxs...)
 		workerResults[idx].unminedTxs = nil // Clear slice to release memory
 

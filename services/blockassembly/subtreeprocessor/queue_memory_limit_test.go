@@ -737,6 +737,26 @@ func TestSubtreeProcessor_DrainDoesNotCountADuplicateAsPlaced(t *testing.T) {
 	require.Equal(t, before+1, stp.txCount.Load(), "only the transaction that was not already placed is added")
 }
 
+// The post-block-movement drain must leave recent batches behind when the
+// double-spend window is enabled, even when it has hashes to drop. The next
+// normal dequeue is responsible for them after the window expires.
+func TestDrainQueueHonorsDoubleSpendWindowWithDropHashes(t *testing.T) {
+	stp := newTestProcessorNoStart(t)
+	stp.settings.BlockAssembly.DoubleSpendWindow = time.Second
+	stp.consumerStarted.Store(true) // the post-block-movement path runs after Start
+
+	enqueuedAt := time.Date(2030, 1, 2, 3, 4, 5, 0, time.UTC)
+	stp.queue.clock = fixedClock{t: enqueuedAt}
+	stp.clock = fixedClock{t: enqueuedAt.Add(500 * time.Millisecond)}
+
+	unrelated := chainhash.HashH([]byte("recent-unrelated-transaction"))
+	stp.queue.enqueueBatch([]subtree.Node{{Hash: unrelated, Fee: 1, SizeInBytes: 250}}, []*subtree.TxInpoints{{}})
+	stp.DrainQueue(map[chainhash.Hash]struct{}{chainhash.HashH([]byte("conflicting-parent")): {}})
+
+	require.Equal(t, int64(1), stp.queue.length(), "post-block-movement drain must honor the double-spend window")
+	require.NotContains(t, collectSubtreeHashes(stp), unrelated)
+}
+
 func TestSubtreeProcessor_DequeueDuringBlockMovementCountsANodeWhoseSubtreeFailedToComplete(t *testing.T) {
 	stp := newTestProcessorNoStart(t)
 

@@ -735,11 +735,16 @@ func TestRawUnminedHandler_SkipsExternalRecordWithMissingFile(t *testing.T) {
 	require.NoError(t, h.flush())
 
 	txs := collectResults(it)
-	require.Len(t, txs, 1)
+	require.Len(t, txs, 2)
+	require.True(t, txs[0].Skip)
+	require.NotNil(t, txs[0].Node)
+	var missing chainhash.Hash
+	binary.LittleEndian.PutUint64(missing[:], 2)
+	require.Equal(t, missing, txs[0].Hash, "block assembly needs the missing parent hash to filter queued children")
 
 	var want chainhash.Hash
 	binary.LittleEndian.PutUint64(want[:], 3)
-	require.Equal(t, want, txs[0].Hash)
+	require.Equal(t, want, txs[1].Hash)
 	require.Equal(t, int64(1), it.missingExternalSkipped.Load())
 }
 
