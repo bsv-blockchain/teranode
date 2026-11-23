@@ -637,6 +637,12 @@ func (ba *BlockAssembly) runNewSubtreeListener(ctx context.Context, newSubtreeCh
 
 		case newSubtreeRequest := <-newSubtreeChan:
 			ba.logger.Infof("[runNewSubtreeListener][%s] New subtree request: %d", newSubtreeRequest.Subtree.RootHash().String(), seq)
+
+			// at shadow a block listing this subtree waits for its lane bitmaps while it is stored
+			if ba.keepsLanePositions() {
+				ba.ownLaneBitmaps.expect(*newSubtreeRequest.Subtree.RootHash())
+			}
+
 			work := &subtreeStorageWork{
 				seq:     seq,
 				request: newSubtreeRequest,
@@ -697,6 +703,11 @@ func (ba *BlockAssembly) subtreeStorageWorker(ctx context.Context, workChan <-ch
 		// Wait for all work to complete before sending response to caller
 		if allDone != nil {
 			<-allDone
+		}
+
+		// at shadow nothing waits for this subtree's lane bitmaps any more, kept or not
+		if ba.keepsLanePositions() {
+			ba.ownLaneBitmaps.settle(*work.request.Subtree.RootHash())
 		}
 
 		// Send error back to caller if channel exists.
@@ -2581,7 +2592,7 @@ func (ba *BlockAssembly) submitMiningSolution(ctx context.Context, req *BlockSub
 
 	// At utxostore_laneMigration shadow the block's lane map rows, built from its own subtrees'
 	// lane bitmaps and stored in the block's database transaction; see ownLaneRows.
-	if laneRows := ba.ownLaneRows(block); laneRows != nil {
+	if laneRows := ba.ownLaneRows(callerCtx, block); laneRows != nil {
 		addBlockOpts = append(addBlockOpts, blockchainoptions.WithOwnBlockLaneMapRows(laneRows))
 	}
 

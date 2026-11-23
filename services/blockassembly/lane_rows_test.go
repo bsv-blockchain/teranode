@@ -397,6 +397,14 @@ type setOrderStore struct {
 func (s *setOrderStore) Set(ctx context.Context, key []byte, fileType fileformat.FileType, value []byte, opts ...blobOptions.FileOption) error {
 	s.mu.Lock()
 	s.sets = append(s.sets, fileType)
+	s.mu.Unlock()
+
+	if err := s.Store.Set(ctx, key, fileType, value, opts...); err != nil {
+		return err
+	}
+
+	// only a write the store took sets the file's delete-at height
+	s.mu.Lock()
 
 	if s.dahs == nil {
 		s.dahs = map[fileformat.FileType]uint32{}
@@ -405,7 +413,27 @@ func (s *setOrderStore) Set(ctx context.Context, key []byte, fileType fileformat
 	s.dahs[fileType] = blobOptions.NewFileOptions(opts...).DAH
 	s.mu.Unlock()
 
-	return s.Store.Set(ctx, key, fileType, value, opts...)
+	return nil
+}
+
+func (s *setOrderStore) SetDAH(ctx context.Context, key []byte, fileType fileformat.FileType, dah uint32, opts ...blobOptions.FileOption) error {
+	s.mu.Lock()
+
+	if s.dahs == nil {
+		s.dahs = map[fileformat.FileType]uint32{}
+	}
+
+	s.dahs[fileType] = dah
+	s.mu.Unlock()
+
+	return s.Store.SetDAH(ctx, key, fileType, dah, opts...)
+}
+
+func (s *setOrderStore) dah(fileType fileformat.FileType) uint32 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return s.dahs[fileType]
 }
 
 func (s *setOrderStore) index(fileType fileformat.FileType) int {
@@ -551,4 +579,143 @@ func TestSubtreeLanePositionsReadsWithoutRecordingErrors(t *testing.T) {
 
 	laneBits := subtreeLanePositions(st, failingPositionMap{TxInpointsMap: subtreeprocessor.NewSplitTxInpointsMap(1)})
 	require.Equal(t, 1, laneBits.Unpositioned())
+}
+
+// laneSealSubtree is a subtree of three positioned txs, after the coinbase placeholder, and the
+// in-memory pool map that holds them.
+func laneSealSubtree(t *testing.T, name string) (*subtreepkg.Subtree, subtreeprocessor.TxInpointsMap) {
+	t.Helper()
+
+	txMap := subtreeprocessor.NewSplitTxInpointsMap(4)
+
+	st, err := subtreepkg.NewTreeByLeafCount(4)
+	require.NoError(t, err)
+	require.NoError(t, st.AddCoinbaseNode())
+
+	for i := 0; i < 3; i++ {
+		hash := chainhash.HashH(fmt.Appendf(nil, "lane-existing-%s-%d", name, i))
+		require.NoError(t, st.AddNode(hash, 1, 1))
+		txMap.SetAt(hash, singleParentInpointsPtr(chainhash.HashH([]byte{byte(i), 0x77}), 0), lane.Pack(4, uint64(20+i)))
+	}
+
+	return st, txMap
+}
+
+// TestStoreSubtreeDataKeepsAnExistingSubtreesLaneBitmaps: a subtree the store already holds keeps
+// its lane bitmaps and their file lives as long as the subtree, whether its bitmaps are kept in
+// memory (stored again by this process) or not (after a restart, or first stored by subtree
+// validation).
+func TestStoreSubtreeDataKeepsAnExistingSubtreesLaneBitmaps(t *testing.T) {
+	shadow := func(s *settings.Settings) { s.UtxoStore.LaneMigration = settings.LaneMigrationShadow }
+
+	t.Run("kept, stored again at a later height", func(t *testing.T) {
+		server, memoryStore := setupServerWithSettings(t, shadow)
+		store := &setOrderStore{Store: memoryStore}
+		server.subtreeStore = store
+
+		st, txMap := laneSealSubtree(t, "kept")
+
+		subtreeDone, allDone, err := server.storeSubtreeData(t.Context(), subtreeprocessor.NewSubtreeRequest{Subtree: st, ParentTxMap: txMap}, make(chan *subtreeRetrySend, 10))
+		require.NoError(t, err)
+		require.True(t, <-subtreeDone)
+		<-allDone
+
+		require.NoError(t, server.blockAssembler.utxoStore.SetBlockHeight(130))
+
+		_, _, err = server.storeSubtreeData(t.Context(), subtreeprocessor.NewSubtreeRequest{Subtree: st, ParentTxMap: txMap}, make(chan *subtreeRetrySend, 10))
+		require.ErrorIs(t, err, errors.ErrBlobAlreadyExists)
+
+		require.Equal(t, store.dah(fileformat.FileTypeSubtree), store.dah(fileformat.FileTypeSubtreeLaneBitmaps), "the bitmaps file lives as long as the subtree")
+		require.Equal(t, uint32(130)+server.settings.GlobalBlockHeightRetention, store.dah(fileformat.FileTypeSubtreeLaneBitmaps))
+	})
+
+	t.Run("not kept, the files already stored", func(t *testing.T) {
+		server, memoryStore := setupServerWithSettings(t, shadow)
+		store := &setOrderStore{Store: memoryStore}
+		server.subtreeStore = store
+
+		st, txMap := laneSealSubtree(t, "restart")
+
+		subtreeBytes, err := st.Serialize()
+		require.NoError(t, err)
+		require.NoError(t, memoryStore.Set(t.Context(), st.RootHash()[:], fileformat.FileTypeSubtree, subtreeBytes))
+
+		old, err := lane.EncodeSubtreeBitmaps(lane.SubtreeBitmaps{SubtreeHash: *st.RootHash(), Lanes: lane.LaneBitmaps{}})
+		require.NoError(t, err)
+		require.NoError(t, memoryStore.Set(t.Context(), st.RootHash()[:], fileformat.FileTypeSubtreeLaneBitmaps, old, blobOptions.WithDeleteAt(5)))
+
+		_, _, err = server.storeSubtreeData(t.Context(), subtreeprocessor.NewSubtreeRequest{Subtree: st, ParentTxMap: txMap}, make(chan *subtreeRetrySend, 10))
+		require.ErrorIs(t, err, errors.ErrBlobAlreadyExists)
+
+		kept, missing := server.ownLaneBitmaps.get([]*chainhash.Hash{st.RootHash()})
+		require.Zero(t, missing, "the bitmaps are built from the pool and kept")
+		require.Equal(t, []uint64{20, 21, 22}, kept[0][4].ToArray())
+		require.Equal(t, store.dah(fileformat.FileTypeSubtree), store.dah(fileformat.FileTypeSubtreeLaneBitmaps), "the old file lives as long as the subtree")
+	})
+}
+
+// TestOwnLaneRowsWaitsForBitmapsStillBeingStored: a block listing a subtree whose storage is still
+// running gets its rows once the bitmaps are kept; a subtree still being stored past the wait
+// counts as timed out, and one no storage is running for as absent.
+func TestOwnLaneRowsWaitsForBitmapsStillBeingStored(t *testing.T) {
+	previous := ownLaneBitmapsWait
+	ownLaneBitmapsWait = 200 * time.Millisecond
+
+	t.Cleanup(func() { ownLaneBitmapsWait = previous })
+
+	server, _ := setupServerWithSettings(t, func(s *settings.Settings) { s.UtxoStore.LaneMigration = settings.LaneMigrationShadow })
+
+	root := chainhash.HashH([]byte("lane-wait-root"))
+	block := &model.Block{Header: laneTestHeader(), Subtrees: []*chainhash.Hash{&root}, TransactionCount: 2}
+
+	t.Run("kept while waiting", func(t *testing.T) {
+		server.ownLaneBitmaps.expect(root)
+
+		go func() {
+			time.Sleep(20 * time.Millisecond)
+			server.ownLaneBitmaps.put(root, lane.LaneBitmaps{3: bitmapOfPositions(9)}, 123)
+		}()
+
+		rows := server.ownLaneRows(t.Context(), block)
+		require.Len(t, rows, 1)
+		require.Equal(t, uint8(3), rows[0].Lane)
+	})
+
+	for _, tc := range []struct {
+		name    string
+		pending bool
+		reason  string
+	}{
+		{"still being stored", true, lane.MissingBitmapsTimedOut},
+		{"no storage running", false, lane.MissingBitmapsAbsent},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			other := chainhash.HashH([]byte("lane-wait-" + tc.name))
+			if tc.pending {
+				server.ownLaneBitmaps.expect(other)
+			}
+
+			labels := map[string]string{"block": lane.BlockOwn, "reason": tc.reason}
+			before := ownLaneMetric(t, "teranode_lane_missing_bitmaps_total", labels)
+
+			start := time.Now()
+			rows := server.ownLaneRows(t.Context(), &model.Block{Header: laneTestHeader(), Subtrees: []*chainhash.Hash{&other}, TransactionCount: 2})
+
+			require.Nil(t, rows)
+			require.GreaterOrEqual(t, time.Since(start), ownLaneBitmapsWait, "it waited")
+			require.Equal(t, before+1, ownLaneMetric(t, "teranode_lane_missing_bitmaps_total", labels))
+		})
+	}
+}
+
+func bitmapOfPositions(positions ...uint64) *roaring64.Bitmap {
+	bm := roaring64.New()
+	bm.AddMany(positions)
+
+	return bm
+}
+
+// laneTestHeader is a block header with every hash set, so the block can name itself in a log.
+func laneTestHeader() *model.BlockHeader {
+	return &model.BlockHeader{HashPrevBlock: &chainhash.Hash{}, HashMerkleRoot: &chainhash.Hash{}}
 }

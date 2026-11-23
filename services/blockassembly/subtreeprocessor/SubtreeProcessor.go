@@ -4359,8 +4359,8 @@ func (stp *SubtreeProcessor) reChainSubtrees(fromIndex int) error {
 			}
 
 			// The tx's lane position goes back with it, so the re-chained subtrees' lane bitmaps
-			// still hold it. Zero without lanes.
-			position := stp.currentTxMap.Position(node.Hash)
+			// still hold it. Without lanes nothing more is read.
+			position := stp.lanePositionIn(stp.currentTxMap, node.Hash)
 
 			// Save to deleted backup before removing (protects brief window during delete-and-readd)
 			stp.deletedTxs.Set(node.Hash, *parents)
