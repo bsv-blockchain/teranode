@@ -2752,7 +2752,7 @@ func handleGetMiningInfo(ctx context.Context, s *RPCServer, cmd interface{}, _ <
 // flexible UTXO management based on changing circumstances or investigation outcomes.
 //
 // Security considerations:
-// - Admin-only: rpcAccessPolicy classifies it rpcAccessAdmin, so rpc_limit_user is rejected before dispatch
+// - Requires admin privileges to execute
 // - Changes persist across node restarts
 // - Affects transaction validation and mempool acceptance
 // - Should be used carefully to avoid disrupting legitimate transactions
@@ -2846,7 +2846,7 @@ func parseAlertHash(name, value string) (*chainhash.Hash, error) {
 // management process.
 //
 // Security considerations:
-// - Admin-only: rpcAccessPolicy classifies it rpcAccessAdmin, so rpc_limit_user is rejected before dispatch
+// - Requires admin privileges to execute
 // - May trigger transaction reordering in the transaction processing system
 // - Changes persist across node restarts
 // - Should be used carefully to avoid disrupting legitimate transactions
@@ -2894,7 +2894,7 @@ func handleUnfreeze(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan
 // The reassign operation is used to correct mistakes in the UTXO management process.
 //
 // Security considerations:
-// - Admin-only: rpcAccessPolicy classifies it rpcAccessAdmin, so rpc_limit_user is rejected before dispatch
+// - Requires admin privileges to execute
 // - May trigger transaction reordering in the transaction processing system
 // - Changes persist across node restarts
 // - Should be used carefully to avoid disrupting legitimate transactions

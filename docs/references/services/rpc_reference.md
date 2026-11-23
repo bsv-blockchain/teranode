@@ -1468,7 +1468,7 @@ Checks if a network address is currently banned.
 
 ### freeze
 
-Freezes a specific UTXO, preventing it from being spent. Admin-only.
+Freezes a specific UTXO, preventing it from being spent.
 
 **Parameters** (positional, in this order):
 
@@ -1509,7 +1509,7 @@ Freezes a specific UTXO, preventing it from being spent. Admin-only.
 
 ### unfreeze
 
-Unfreezes a previously frozen UTXO, allowing it to be spent. Admin-only.
+Unfreezes a previously frozen UTXO, allowing it to be spent.
 
 **Parameters** (positional, in this order):
 
@@ -1549,7 +1549,7 @@ Unfreezes a previously frozen UTXO, allowing it to be spent. Admin-only.
 ### reassign
 
 Replaces a frozen UTXO's commitment using its outpoint and the old and new hashes.
-No destination address or replacement locking script is accepted. Admin-only.
+No destination address or replacement locking script is accepted.
 
 **Known regression:** do not reassign to a different owner. The RPC can succeed
 with a `null` result while leaving the output unspendable by both owners, even
