@@ -20,7 +20,9 @@ const defaultCreatingSweepMaxPerPass = 1000
 // stored tx bytes and finalizes it. Spends are idempotent for the same spender, so
 // re-spending inputs an earlier attempt already spent is safe. The roll-forward does not
 // ignore locks: a locked parent is the hand-off barrier, so ErrTxLocked leaves the record
-// creating and it is retried on a later pass. A tx that lost a double-spend (ErrSpent,
+// creating and it is retried on a later pass, until the record is older than
+// lockedParentRollbackAgeMultiple times the age at which the sweep first sees it. A parent that
+// still blocks it then is not committing, and the record is rolled back. A tx that lost a double-spend (ErrSpent,
 // ErrTxConflicting, ErrFrozen, ErrUtxoHashMismatch), or that spends a missing parent or a vout
 // that does not exist (ErrTxNotFound), is rolled back by
 // utxo.RollBackCreating: the record is marked rolling back, every input of the tx is
@@ -72,6 +74,36 @@ func (s *Server) sweepCreatingTxs(ctx context.Context, blockHeight uint32) {
 	// caught up next block" — the reviewers' non-convergence concern.
 	progressed := 0
 	warnedNoBlockAssembly := false
+
+	// longStale reports whether a record is old enough that a parent which still blocks it is not
+	// committing. The records older than that are read once per pass, and only when one needs it.
+	var (
+		veryStale       map[chainhash.Hash]struct{}
+		veryStaleLoaded bool
+	)
+
+	longStale := func(hash chainhash.Hash) bool {
+		if !veryStaleLoaded {
+			veryStaleLoaded = true
+
+			bound := uint64(minAge) * lockedParentRollbackAgeMultiple
+			if uint64(blockHeight) > bound {
+				older, queryErr := s.utxoStore.QueryStaleCreatingTxs(ctx, blockHeight-uint32(bound), maxPerPass) //nolint:gosec // bound < blockHeight
+				if queryErr != nil {
+					s.logger.Warnf("[pruner][creating-sweep][%d] reading the records older than %d blocks failed, none is rolled back for a locked parent this pass: %v", blockHeight, bound, queryErr)
+				} else {
+					veryStale = make(map[chainhash.Hash]struct{}, len(older))
+					for _, h := range older {
+						veryStale[h] = struct{}{}
+					}
+				}
+			}
+		}
+
+		_, ok := veryStale[hash]
+
+		return ok
+	}
 
 	for _, hash := range hashes {
 		hash := hash
@@ -188,7 +220,12 @@ func (s *Server) sweepCreatingTxs(ctx context.Context, blockHeight uint32) {
 		// reverses the spends this pass made.
 		_, completed, rfErr := utxo.RollForwardCreating(ctx, s.logger, s.utxoStore, md.Tx, md.Attempt, blockHeight)
 		if rfErr != nil {
-			if isUnwinnableSpendError(rfErr) {
+			// A locked or creating parent is transient, and the record waits for it. A parent that
+			// stays that way for lockedParentRollbackAgeMultiple times the age at which the sweep
+			// first sees a record is not committing, and a record that waits on it would keep the
+			// inputs that did spend, and every output of its own, unspendable for as long as the lock
+			// lasts. Such a record is rolled back like any other that can never be completed.
+			if isUnwinnableSpendError(rfErr) || (isTransientSpendError(rfErr) && longStale(hash)) {
 				// A lease that is still live belongs to a spender that returned with an unknown
 				// outcome or crashed. The rollback would wait for it, so the record is left for a
 				// later pass, when the lease is stale.
@@ -265,6 +302,17 @@ func (s *Server) sweepCreatingTxs(ctx context.Context, blockHeight uint32) {
 	if progressed == 0 {
 		s.logger.Warnf("[pruner][creating-sweep][%d] rolled forward 0 of %d stale creating txs; the page may be stuck (e.g. a permanently locked parent)", blockHeight, len(hashes))
 	}
+}
+
+// lockedParentRollbackAgeMultiple is how many times the age at which the sweep first sees a record
+// (pruner_creatingTxSweepMinAgeBlocks) a record may wait for a locked or creating parent before the
+// sweep rolls it back.
+const lockedParentRollbackAgeMultiple = 10
+
+// isTransientSpendError reports whether a spend error says that a parent is committing: its record
+// is locked, or still creating.
+func isTransientSpendError(err error) bool {
+	return errors.Is(err, errors.ErrTxLocked) || errors.Is(err, errors.ErrTxCreating)
 }
 
 // isUnwinnableSpendError reports whether a spend error means the tx can never be

@@ -36,6 +36,9 @@ type fakeSweepStore struct {
 
 	stale           []chainhash.Hash
 	queryErr        error
+	queryBefore     []uint32
+	veryStale       []chainhash.Hash
+	veryStaleErr    error
 	getResp         map[chainhash.Hash]*meta.Data
 	spendErr        error
 	spendIncomplete bool
@@ -154,8 +157,17 @@ func (f *fakeSweepStore) SetLocked(_ context.Context, txHashes []chainhash.Hash,
 	return nil
 }
 
-func (f *fakeSweepStore) QueryStaleCreatingTxs(_ context.Context, _ uint32, limit int) ([]chainhash.Hash, error) {
+func (f *fakeSweepStore) QueryStaleCreatingTxs(_ context.Context, before uint32, limit int) ([]chainhash.Hash, error) {
 	f.lastLimit = limit
+	f.queryBefore = append(f.queryBefore, before)
+
+	// The query for the records that are much older than the sweep's age asks for a height well
+	// below the one of the plain query. These tests sweep at height 100 with a minimum age of 2, so
+	// that is 80 against 98.
+	if before < 90 {
+		return f.veryStale, f.veryStaleErr
+	}
+
 	return f.stale, f.queryErr
 }
 
@@ -612,6 +624,66 @@ func TestSweepCreatingTxsLockedParentRetriesNextBlock(t *testing.T) {
 	require.Equal(t, []string{"lease", "spend", "unlease"}, store.trace, "the lease is taken before the spend and released once the spend has failed")
 	require.Equal(t, [][]byte{fakeLease}, store.leasesFreed)
 	require.Empty(t, store.unlocked)
+}
+
+// A parent that stays locked is transient only for a while. A record that has waited for it for ten
+// times the age at which the sweep first saw it is rolled back: it is not waiting for a commit, and
+// it keeps the inputs that did spend, and its own outputs, unspendable for as long as the lock lasts.
+func TestSweepCreatingTxsRollsBackARecordThatAParentHasLockedForLong(t *testing.T) {
+	ns, err := nullstore.NewNullStore()
+	require.NoError(t, err)
+
+	txA := oneOutputTx(1)
+	hashA := *txA.TxIDChainHash()
+
+	for name, transient := range map[string]error{"locked": errors.ErrTxLocked, "creating": errors.ErrTxCreating} {
+		t.Run(name+" and long stale", func(t *testing.T) {
+			store := &fakeSweepStore{
+				NullStore:   ns,
+				stale:       []chainhash.Hash{hashA},
+				veryStale:   []chainhash.Hash{hashA},
+				getResp:     map[chainhash.Hash]*meta.Data{hashA: {Creating: true, Attempt: sweepToken, Tx: txA}},
+				spendErr:    transient,
+				spendSpends: []*utxo.Spend{{Err: transient}},
+			}
+
+			newSweepServer(t, store).sweepCreatingTxs(context.Background(), 100)
+
+			require.Equal(t, []chainhash.Hash{hashA}, store.began, "a record that a parent has blocked for long is rolled back")
+			require.Len(t, store.queryBefore, 2)
+			require.Less(t, store.queryBefore[1], store.queryBefore[0], "the second query reads the older records")
+		})
+
+		t.Run(name+" and not yet long stale", func(t *testing.T) {
+			store := &fakeSweepStore{
+				NullStore:   ns,
+				stale:       []chainhash.Hash{hashA},
+				getResp:     map[chainhash.Hash]*meta.Data{hashA: {Creating: true, Attempt: sweepToken, Tx: txA}},
+				spendErr:    transient,
+				spendSpends: []*utxo.Spend{{Err: transient}},
+			}
+
+			newSweepServer(t, store).sweepCreatingTxs(context.Background(), 100)
+
+			require.Empty(t, store.began, "a parent that may still be committing leaves the record creating")
+		})
+	}
+
+	t.Run("a failed read of the older records rolls nothing back", func(t *testing.T) {
+		store := &fakeSweepStore{
+			NullStore:    ns,
+			stale:        []chainhash.Hash{hashA},
+			veryStale:    []chainhash.Hash{hashA},
+			veryStaleErr: errors.NewStorageError("read boom"),
+			getResp:      map[chainhash.Hash]*meta.Data{hashA: {Creating: true, Attempt: sweepToken, Tx: txA}},
+			spendErr:     errors.ErrTxLocked,
+			spendSpends:  []*utxo.Spend{{Err: errors.ErrTxLocked}},
+		}
+
+		newSweepServer(t, store).sweepCreatingTxs(context.Background(), 100)
+
+		require.Empty(t, store.began)
+	})
 }
 
 func TestSweepCreatingTxsRollForwardDoesNotIgnoreLocks(t *testing.T) {
