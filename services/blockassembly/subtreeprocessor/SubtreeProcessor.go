@@ -241,6 +241,12 @@ type SubtreeProcessor struct {
 	// Stop instead of immediately. Owned by the processor goroutine.
 	retiredSubtrees []*subtreepkg.Subtree
 
+	// retainedSubtrees, when set, lists subtrees that something outside the processor
+	// still reads: cached mining jobs and storage not yet finished. closeRetiredSubtrees
+	// keeps them mapped. It runs on the processor goroutine and must be safe to call
+	// while the owner changes what it holds.
+	retainedSubtrees func() []*subtreepkg.Subtree
+
 	// catchUpRollbackSubtrees are the chained and current subtrees from before a
 	// catch-up, which its rollback puts back if any block fails. closeRetiredSubtrees
 	// keeps them mapped until the catch-up ends, while it closes each block's
@@ -4664,8 +4670,9 @@ func (stp *SubtreeProcessor) retireSubtrees(subtrees ...*subtreepkg.Subtree) {
 // closeRetiredSubtrees closes the retired subtrees nothing in the processor still
 // holds. A failed block movement puts its input subtrees back while they sit in
 // retiredSubtrees, a catch-up's rollback puts back the subtrees from before it, and
-// the precomputed mining data may still point at a retired one, so those are kept
-// for a later close rather than unmapped under a reader.
+// the precomputed mining data may still point at a retired one, and cached mining
+// jobs and unfinished storage read subtrees too (retainedSubtrees), so those are
+// kept for a later close rather than unmapped under a reader.
 func (stp *SubtreeProcessor) closeRetiredSubtrees() {
 	if len(stp.retiredSubtrees) == 0 {
 		return
@@ -4684,6 +4691,12 @@ func (stp *SubtreeProcessor) closeRetiredSubtrees() {
 
 	if data := stp.precomputedMiningData.Load(); data != nil {
 		for _, st := range data.Subtrees {
+			held[st] = struct{}{}
+		}
+	}
+
+	if stp.retainedSubtrees != nil {
+		for _, st := range stp.retainedSubtrees() {
 			held[st] = struct{}{}
 		}
 	}

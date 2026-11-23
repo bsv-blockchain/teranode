@@ -1,6 +1,8 @@
 // Package subtreeprocessor provides functionality for processing transaction subtrees in Teranode.
 package subtreeprocessor
 
+import subtreepkg "github.com/bsv-blockchain/go-subtree"
+
 // Options represents a function type for configuring the SubtreeProcessor.
 // This type implements the functional options pattern, allowing for flexible and
 // extensible configuration of the SubtreeProcessor with optional parameters.
@@ -14,6 +16,15 @@ type Options func(*SubtreeProcessor)
 func WithMmapDir(dir string) Options {
 	return func(stp *SubtreeProcessor) {
 		stp.mmapDir = dir
+	}
+}
+
+// WithRetainedSubtrees makes closeRetiredSubtrees keep every subtree fn returns mapped,
+// for readers outside the processor such as cached mining jobs. fn is called on the
+// processor goroutine at every close.
+func WithRetainedSubtrees(fn func() []*subtreepkg.Subtree) Options {
+	return func(stp *SubtreeProcessor) {
+		stp.retainedSubtrees = fn
 	}
 }
 

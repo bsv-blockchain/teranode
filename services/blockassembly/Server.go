@@ -114,6 +114,12 @@ type BlockAssembly struct {
 	// jobStore caches mining jobs with TTL
 	jobStore *ttlcache.Cache[chainhash.Hash, *subtreeprocessor.Job]
 
+	// storing holds the subtrees whose storage has not finished, with how many stores of each
+	// are running. Their completion callback reads the nodes after both writes are done, so
+	// retirement must not unmap them before then.
+	storingMu sync.Mutex
+	storing   map[*subtreepkg.Subtree]int
+
 	// jobCoinbaseMu makes GetMiningCandidate's read of a job's coinbase and its store of the new
 	// job one step, so two polls that share a candidate id cannot each build a coinbase and leave
 	// one miner holding a coinbase the job no longer has.
@@ -342,7 +348,7 @@ func (ba *BlockAssembly) Init(ctx context.Context) (err error) {
 	txMetaEvictor := subtreeprocessor.NewTxMetaEvictor(ba.logger, ba.txMetaProducer)
 
 	ba.blockAssembler, err = NewBlockAssembler(ctx, ba.logger, ba.settings, ba.stats, ba.utxoStore, ba.subtreeStore, ba.blockchainClient, newSubtreeChan,
-		WithTxMetaEvictor(txMetaEvictor))
+		WithTxMetaEvictor(txMetaEvictor), WithRetainedSubtrees(ba.retainedSubtrees))
 	if err != nil {
 		return errors.NewServiceError("failed to init block assembler", err)
 	}
@@ -983,6 +989,49 @@ func (ba *BlockAssembly) buildSubtreeMeta(subtreeRequest subtreeprocessor.NewSub
 	return subtreeMetaBytes, true
 }
 
+// retainedSubtrees lists the subtrees the subtree processor must not unmap yet: those of
+// every cached mining job, which SubmitMiningSolution and GetCandidateBlock read for as long
+// as the job lives, and those whose storage callback has not run. It reads the live jobs, so
+// there is no count to leak when a job expires, is replaced or is deleted. Items() neither
+// extends a job's TTL nor returns an expired job.
+func (ba *BlockAssembly) retainedSubtrees() []*subtreepkg.Subtree {
+	var retained []*subtreepkg.Subtree
+
+	for _, item := range ba.jobStore.Items() {
+		retained = append(retained, item.Value().Subtrees...)
+	}
+
+	ba.storingMu.Lock()
+	defer ba.storingMu.Unlock()
+
+	for st := range ba.storing {
+		retained = append(retained, st)
+	}
+
+	return retained
+}
+
+// markStoring keeps st mapped until the returned function is called.
+func (ba *BlockAssembly) markStoring(st *subtreepkg.Subtree) func() {
+	ba.storingMu.Lock()
+	defer ba.storingMu.Unlock()
+
+	if ba.storing == nil {
+		ba.storing = make(map[*subtreepkg.Subtree]int)
+	}
+
+	ba.storing[st]++
+
+	return func() {
+		ba.storingMu.Lock()
+		defer ba.storingMu.Unlock()
+
+		if ba.storing[st]--; ba.storing[st] == 0 {
+			delete(ba.storing, st)
+		}
+	}
+}
+
 // storeSubtreeData stores the subtree data and metadata to the blob store.
 // It returns two channels:
 //   - subtreeDone: signals when subtree storage is complete (bool = success)
@@ -1032,6 +1081,10 @@ func (ba *BlockAssembly) storeSubtreeData(ctx context.Context, subtreeRequest su
 	subtreeStorageDone := make(chan struct{}) // Separate signal for coordinator
 	metaDoneCh := make(chan struct{})
 	allDoneCh := make(chan struct{})
+
+	// The completion callback below reads the nodes once both writes are done, and none of the
+	// returns above is reached from here on, so the subtree is held until the coordinator ends.
+	doneStoring := ba.markStoring(subtree)
 
 	// Build, serialize, and store subtree meta in background
 	if subtreeRequest.ParentTxMap != nil && ba.settings.BlockAssembly.StoreTxInpointsForSubtreeMeta {
@@ -1097,6 +1150,7 @@ func (ba *BlockAssembly) storeSubtreeData(ctx context.Context, subtreeRequest su
 	// with the worker that reads the storedOK value from subtreeDoneCh.
 	go func() {
 		defer close(allDoneCh)
+		defer doneStoring()
 		<-subtreeStorageDone
 		<-metaDoneCh
 		// Trigger cleanup of soft-deleted transactions

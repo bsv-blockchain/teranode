@@ -364,6 +364,15 @@ type BlockAssemblerOption func(*blockAssemblerOptions)
 
 type blockAssemblerOptions struct {
 	txMetaEvictor *subtreeprocessor.TxMetaEvictor
+
+	retainedSubtrees func() []*subtree.Subtree
+}
+
+// WithRetainedSubtrees keeps the subtrees fn returns mapped when the subtree processor
+// retires subtrees, because something outside it, such as a cached mining job, still
+// reads them.
+func WithRetainedSubtrees(fn func() []*subtree.Subtree) BlockAssemblerOption {
+	return func(o *blockAssemblerOptions) { o.retainedSubtrees = fn }
 }
 
 // WithTxMetaEvictor makes the assembler (and its subtree processor) publish txmeta
@@ -422,6 +431,10 @@ func NewBlockAssembler(ctx context.Context, logger ulogger.Logger, tSettings *se
 
 	if options.txMetaEvictor != nil {
 		stpOpts = append(stpOpts, subtreeprocessor.WithTxMetaEvictor(options.txMetaEvictor))
+	}
+
+	if options.retainedSubtrees != nil {
+		stpOpts = append(stpOpts, subtreeprocessor.WithRetainedSubtrees(options.retainedSubtrees))
 	}
 
 	subtreeProcessor, err := subtreeprocessor.NewSubtreeProcessor(ctx, logger, tSettings, subtreeStore, blockchainClient, utxoStore, newSubtreeChan, stpOpts...)
