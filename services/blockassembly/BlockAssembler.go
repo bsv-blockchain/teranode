@@ -328,8 +328,11 @@ type BlockAssembler struct {
 	startupLoadHeld atomic.Bool
 
 	// unminedDropHashes accumulates hashes that should be dropped from the
-	// input queue at the end of loadUnminedTransactions. Populated by
-	// markAsConflicting via the cascade returned from MarkConflictingRecursively.
+	// input queue at the end of loadUnminedTransactions. Populated during the
+	// load by markAsConflicting (the cascade returned from
+	// MarkConflictingRecursively), by the hashes of records the scan skipped
+	// because their external file is missing, and by validateParentChain with
+	// the descendants of those skipped records it rejects.
 	// Read once by Start / postProcessFn after loadUnminedTransactions returns,
 	// then handed to subtreeProcessor.DrainQueue. Serialized by
 	// unminedTransactionsLoading; must not be touched concurrently.
@@ -3811,19 +3814,19 @@ func (b *BlockAssembler) validateParentChain(
 					// Filtering enabled - skip and track for cascade filtering of descendants
 					rejectedHashes[tx.Hash] = struct{}{}
 					skippedCount++
+
+					// A descendant of a record the scan skipped can also be queued
+					// through AddTx; drop its queued copy too. Other rejections stay
+					// out of the drop set: a child whose parent arrived while the
+					// scan ran must still be placed from the queue after its parent.
+					if descendsFromDropped(b.unminedDropHashes, parentHashes) {
+						b.unminedDropHashes[tx.Hash] = struct{}{}
+					}
 				} else {
 					// Filtering disabled (default) - keep transaction despite invalid parents
 					validTxs = append(validTxs, tx)
 				}
 			}
-		}
-	}
-
-	// A descendant can arrive through AddTx after its scan partition has
-	// finished. Keep rejected scan hashes for the startup queue drain too.
-	if b.unminedDropHashes != nil {
-		for hash := range rejectedHashes {
-			b.unminedDropHashes[hash] = struct{}{}
 		}
 	}
 
@@ -4272,6 +4275,23 @@ func (b *BlockAssembler) drainUnminedDropHashes(where string, isReload bool) err
 	b.subtreeProcessor.DrainQueue(drop)
 
 	return b.subtreeProcessor.FlushDiskTxMapForLoad(where, isReload)
+}
+
+// descendsFromDropped reports whether any parent is in the load's drop set. The
+// parent chain check runs parents before children, so a rejected descendant
+// added here carries the drop down to its own children.
+func descendsFromDropped(drop map[chainhash.Hash]struct{}, parents []chainhash.Hash) bool {
+	if drop == nil {
+		return false
+	}
+
+	for _, parent := range parents {
+		if _, ok := drop[parent]; ok {
+			return true
+		}
+	}
+
+	return false
 }
 
 // unminedTxIteratorForLoad opens the unmined scan block assembly loads from.

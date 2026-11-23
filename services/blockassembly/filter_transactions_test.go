@@ -360,56 +360,73 @@ func TestValidateParentChain_RejectsChildOfConflictingParent(t *testing.T) {
 	mockStore.AssertExpectations(t)
 }
 
-// TestValidateParentChain_RejectsChildOfUnloadedUnminedParent covers a parent the
-// unmined scan left out, such as an external record whose file is missing: the
-// parent is in the store and still unmined, but not in the loaded list. The
-// child, and the grandchild through it, must not reach a block template.
+// TestValidateParentChain_RejectsChildOfUnloadedUnminedParent covers a parent
+// that is in the store and still unmined, but not in the loaded list. The child,
+// and the grandchild through it, must not reach a block template from the load.
+// Only when the scan skipped the parent (its hash is in the drop set, as for an
+// external record whose file is missing) do they join the drop set, so their
+// queued copies are dropped too. A parent that merely arrived while the scan
+// ran is queued, and its queued children must still be placed after it.
 func TestValidateParentChain_RejectsChildOfUnloadedUnminedParent(t *testing.T) {
-	ctx := t.Context()
-	items := setupBlockAssemblyTest(t, func(s *settings.Settings) {
-		s.BlockAssembly.OnRestartValidateParentChain = true
-		s.BlockAssembly.OnRestartRemoveInvalidParentChainTxs = true
-	})
+	for _, skipped := range []bool{true, false} {
+		t.Run(map[bool]string{true: "parent skipped by the scan", false: "parent arrived during the scan"}[skipped], func(t *testing.T) {
+			ctx := t.Context()
+			items := setupBlockAssemblyTest(t, func(s *settings.Settings) {
+				s.BlockAssembly.OnRestartValidateParentChain = true
+				s.BlockAssembly.OnRestartRemoveInvalidParentChainTxs = true
+			})
 
-	parent := newTx(60)
-	child := newTx(61)
-	require.NoError(t, child.Inputs[0].PreviousTxIDAdd(parent.TxIDChainHash()))
-	grandchild := newTx(62)
-	require.NoError(t, grandchild.Inputs[0].PreviousTxIDAdd(child.TxIDChainHash()))
+			parent := newTx(60)
+			child := newTx(61)
+			require.NoError(t, child.Inputs[0].PreviousTxIDAdd(parent.TxIDChainHash()))
+			grandchild := newTx(62)
+			require.NoError(t, grandchild.Inputs[0].PreviousTxIDAdd(child.TxIDChainHash()))
 
-	loaded := make([]*utxo.UnminedTransaction, 0, 2)
+			loaded := make([]*utxo.UnminedTransaction, 0, 2)
 
-	for i, tx := range []*bt.Tx{parent, child, grandchild} {
-		// at a non-zero height, so the store records each one as unmined since then
-		_, _, err := items.utxoStore.SpendAndCreate(ctx, tx, 1, utxo.WithCreateOnly())
-		require.NoError(t, err)
+			for i, tx := range []*bt.Tx{parent, child, grandchild} {
+				// at a non-zero height, so the store records each one as unmined since then
+				_, _, err := items.utxoStore.SpendAndCreate(ctx, tx, 1, utxo.WithCreateOnly())
+				require.NoError(t, err)
 
-		if tx == parent {
-			stored, err := items.utxoStore.Get(ctx, tx.TxIDChainHash(), fields.UnminedSince, fields.BlockIDs)
+				if tx == parent {
+					stored, err := items.utxoStore.Get(ctx, tx.TxIDChainHash(), fields.UnminedSince, fields.BlockIDs)
+					require.NoError(t, err)
+					require.Positive(t, stored.UnminedSince, "the parent must read back as unmined, not as an inconsistent record")
+					require.Empty(t, stored.BlockIDs)
+
+					continue // not in the loaded list
+				}
+
+				inpoints, err := subtree.NewTxInpointsFromTx(tx)
+				require.NoError(t, err)
+
+				loaded = append(loaded, &utxo.UnminedTransaction{
+					Node:         &subtree.Node{Hash: *tx.TxIDChainHash(), Fee: 1000, SizeInBytes: 250},
+					TxInpoints:   &inpoints,
+					CreatedAt:    i,
+					UnminedSince: 1,
+				})
+			}
+
+			items.blockAssembler.unminedDropHashes = make(map[chainhash.Hash]struct{})
+			if skipped {
+				items.blockAssembler.unminedDropHashes[*parent.TxIDChainHash()] = struct{}{}
+			}
+
+			validTxs, err := items.blockAssembler.validateParentChain(ctx, loaded, map[uint32]bool{})
 			require.NoError(t, err)
-			require.Positive(t, stored.UnminedSince, "the parent must read back as unmined, not as an inconsistent record")
-			require.Empty(t, stored.BlockIDs)
+			require.Empty(t, validTxs)
 
-			continue // the scan left the parent out
-		}
-
-		inpoints, err := subtree.NewTxInpointsFromTx(tx)
-		require.NoError(t, err)
-
-		loaded = append(loaded, &utxo.UnminedTransaction{
-			Node:         &subtree.Node{Hash: *tx.TxIDChainHash(), Fee: 1000, SizeInBytes: 250},
-			TxInpoints:   &inpoints,
-			CreatedAt:    i,
-			UnminedSince: 1,
+			if skipped {
+				require.Contains(t, items.blockAssembler.unminedDropHashes, *child.TxIDChainHash(), "a queued child of a skipped parent must be dropped")
+				require.Contains(t, items.blockAssembler.unminedDropHashes, *grandchild.TxIDChainHash(), "the drop must cascade to the grandchild")
+			} else {
+				require.NotContains(t, items.blockAssembler.unminedDropHashes, *child.TxIDChainHash(), "a queued child of a queued parent must still be placed")
+				require.NotContains(t, items.blockAssembler.unminedDropHashes, *grandchild.TxIDChainHash())
+			}
 		})
 	}
-
-	items.blockAssembler.unminedDropHashes = make(map[chainhash.Hash]struct{})
-	validTxs, err := items.blockAssembler.validateParentChain(ctx, loaded, map[uint32]bool{})
-	require.NoError(t, err)
-	require.Empty(t, validTxs)
-	require.Contains(t, items.blockAssembler.unminedDropHashes, *child.TxIDChainHash(), "a queued grandchild may arrive after its scanned child was rejected")
-	require.Contains(t, items.blockAssembler.unminedDropHashes, *grandchild.TxIDChainHash())
 }
 
 // TestValidateParentChain_BatchDecorateRequestsConflicting verifies that validateParentChain
