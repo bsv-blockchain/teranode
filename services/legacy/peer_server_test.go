@@ -1705,6 +1705,48 @@ func TestHandleBanEvent_DisconnectsIPv6PeersInTheBannedSubnet(t *testing.T) {
 	require.Len(t, state.inboundPeers.Range(), 1)
 }
 
+// One disconnect request removes every inbound peer it matches, not only the first, and answers
+// nil. handleBanEvent asks again until nothing matches, so this is only visible on a single request.
+func TestHandleQuery_DisconnectNodeRemovesEveryMatchingInboundPeer(t *testing.T) {
+	srv := &server{logger: ulogger.TestLogger{}}
+	state := newTestPeerState()
+
+	for i, addr := range []string{"10.0.0.5:8333", "10.0.0.9:51234", "192.168.1.1:8333"} {
+		state.inboundPeers.Set(int32(i), newTestOutboundPeer(t, srv, addr))
+	}
+
+	msg := disconnectNodeMsg{
+		cmp:   func(sp *serverPeer) bool { return sp.Addr() != "192.168.1.1:8333" },
+		reply: make(chan error, 1),
+	}
+
+	srv.handleQuery(state, msg)
+
+	require.NoError(t, <-msg.reply)
+
+	remaining := state.inboundPeers.Range()
+	require.Len(t, remaining, 1, "both matching inbound peers go on one request")
+
+	for _, sp := range remaining {
+		require.Equal(t, "192.168.1.1:8333", sp.Addr())
+	}
+}
+
+// Unbanning an IP:port lifts the host from the peer handler's own list, which is keyed by host.
+func TestHandleUnbanPeerMsg_AnIPAndPortLiftsTheHost(t *testing.T) {
+	srv := &server{logger: ulogger.TestLogger{}, ctx: t.Context(), banList: emptyWritableBanList(t)}
+	state := newTestPeerState()
+
+	require.NoError(t, srv.banList.Add(t.Context(), "9.9.9.9", time.Now().Add(time.Hour)))
+	state.banned.Set("9.9.9.9", time.Now().Add(time.Hour))
+
+	srv.handleUnbanPeerMsg(state, "9.9.9.9:8333")
+
+	_, held := state.banned.Get("9.9.9.9")
+	require.False(t, held, "the port is stripped before the host is lifted")
+	require.False(t, srv.banList.IsBanned("9.9.9.9"))
+}
+
 // A ban recorded while the server is running reaches the peer loop, which is what disconnects a
 // connected peer at the banned address. Start used to run the peer loop in the foreground and only
 // launch the ban listener after it, so the listener started at shutdown: nothing drained the ban
