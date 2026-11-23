@@ -46,3 +46,12 @@ func WithStoredSet(set *StoredSet) Options {
 		stp.prefixWatch = newStoredPrefixWatch()
 	}
 }
+
+// WithStoreQueue makes the processor hand every store request to q, which never blocks it, instead
+// of sending on newSubtreeChan (blockassembly_storedPrefixTemplate). Nil, the default, keeps the
+// blocking send.
+func WithStoreQueue(q *StoreQueue) Options {
+	return func(stp *SubtreeProcessor) {
+		stp.storeQueue = q
+	}
+}

@@ -123,8 +123,7 @@ func (stp *SubtreeProcessor) sendChainedSubtreeAgain(i int, root chainhash.Hash,
 
 	st := stp.chainedSubtrees[i]
 
-	select {
-	case stp.newSubtreeChan <- NewSubtreeRequest{
+	req := NewSubtreeRequest{
 		Subtree:           st,
 		ParentTxMap:       stp.currentTxMap,
 		superseded:        stp.supersedeToken(),
@@ -132,10 +131,19 @@ func (stp *SubtreeProcessor) sendChainedSubtreeAgain(i int, root chainhash.Hash,
 		SkipNotification:  true,
 		ErrChan:           make(chan error, 1),
 		OnStorageComplete: func() { stp.cleanupDeletedTxs(st) },
-	}:
-		w.lastSent[root] = now
-
-		stp.logger.Warnf("[SubtreeProcessor] chained subtree %d is not stored, sending it to the store again", i)
-	default:
 	}
+
+	if stp.storeQueue != nil {
+		stp.storeQueue.Push(req)
+	} else {
+		select {
+		case stp.newSubtreeChan <- req:
+		default:
+			return
+		}
+	}
+
+	w.lastSent[root] = now
+
+	stp.logger.Warnf("[SubtreeProcessor] chained subtree %d is not stored, sending it to the store again", i)
 }

@@ -131,6 +131,10 @@ type BlockAssembly struct {
 	// processor, which cuts its templates at it. Nil unless blockassembly_storedPrefixTemplate is on.
 	storedSet *subtreeprocessor.StoredSet
 
+	// storeQueue takes the subtree processor's store requests in place of newSubtreeChan, so that
+	// none of them blocks it. Nil unless blockassembly_storedPrefixTemplate is on.
+	storeQueue *subtreeprocessor.StoreQueue
+
 	// blockSubmissionChan handles block submission requests
 	blockSubmissionChan chan *BlockSubmissionRequest
 
@@ -371,6 +375,9 @@ func (ba *BlockAssembly) Init(ctx context.Context) (err error) {
 	if ba.settings.BlockAssembly.StoredPrefixTemplate {
 		ba.storedSet = subtreeprocessor.NewStoredSet()
 		assemblerOpts = append(assemblerOpts, WithStoredSet(ba.storedSet))
+
+		ba.storeQueue = subtreeprocessor.NewStoreQueue(uint64(max(ba.settings.BlockAssembly.StoreQueueMaxMB, 0)) << 20)
+		assemblerOpts = append(assemblerOpts, WithStoreQueue(ba.storeQueue))
 	}
 
 	ba.blockAssembler, err = NewBlockAssembler(ctx, ba.logger, ba.settings, ba.stats, ba.utxoStore, ba.subtreeStore, ba.blockchainClient, newSubtreeChan,
@@ -626,6 +633,12 @@ type subtreeStorageResult struct {
 // runNewSubtreeListener handles incoming requests for new subtrees.
 // It uses a worker pool for parallel storage and ensures notifications are sent in order.
 func (ba *BlockAssembly) runNewSubtreeListener(ctx context.Context, newSubtreeChan <-chan subtreeprocessor.NewSubtreeRequest, subtreeRetryChan chan *subtreeRetrySend) {
+	if ba.storeQueue != nil {
+		ba.runStoreQueueListener(ctx, subtreeRetryChan)
+
+		return
+	}
+
 	numWorkers := ba.settings.BlockAssembly.SubtreeStorageWorkers
 	if numWorkers <= 0 {
 		numWorkers = 4
@@ -640,7 +653,7 @@ func (ba *BlockAssembly) runNewSubtreeListener(ctx context.Context, newSubtreeCh
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			ba.subtreeStorageWorker(ctx, workChan, subtreeRetryChan, resultChan)
+			ba.subtreeStorageWorker(ctx, func() (*subtreeStorageWork, bool) { work, ok := <-workChan; return work, ok }, subtreeRetryChan, resultChan)
 		}()
 	}
 
@@ -679,13 +692,62 @@ func (ba *BlockAssembly) runNewSubtreeListener(ctx context.Context, newSubtreeCh
 	}
 }
 
-// subtreeStorageWorker processes subtree storage work items in parallel.
-func (ba *BlockAssembly) subtreeStorageWorker(ctx context.Context, workChan <-chan *subtreeStorageWork, subtreeRetryChan chan *subtreeRetrySend, resultChan chan<- *subtreeStorageResult) {
-	for work := range workChan {
+// runStoreQueueListener is the listener with blockassembly_storedPrefixTemplate on: the workers take
+// requests from the store queue themselves, which gives each its sequence number at pickup, so a
+// request the queue drops before pickup leaves no gap for the in-order sender to wait on.
+func (ba *BlockAssembly) runStoreQueueListener(ctx context.Context, subtreeRetryChan chan *subtreeRetrySend) {
+	numWorkers := ba.settings.BlockAssembly.SubtreeStorageWorkers
+	if numWorkers <= 0 {
+		numWorkers = 4
+	}
+
+	resultChan := make(chan *subtreeStorageResult, numWorkers*2)
+
+	var wg sync.WaitGroup
+	for i := 0; i < numWorkers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			ba.subtreeStorageWorker(ctx, func() (*subtreeStorageWork, bool) {
+				request, seq, ok := ba.storeQueue.Take(ctx)
+
+				return &subtreeStorageWork{seq: seq, request: request}, ok
+			}, subtreeRetryChan, resultChan)
+		}()
+	}
+
+	notifyDone := make(chan struct{})
+	go func() {
+		defer close(notifyDone)
+		ba.subtreeNotificationSender(ctx, resultChan)
+	}()
+
+	<-ctx.Done()
+	ba.logger.Infof("Stopping subtree listener")
+	wg.Wait()
+	close(resultChan)
+	<-notifyDone
+}
+
+// subtreeStorageWorker processes subtree storage work items in parallel, each taken from next until
+// it reports false.
+func (ba *BlockAssembly) subtreeStorageWorker(ctx context.Context, next func() (*subtreeStorageWork, bool), subtreeRetryChan chan *subtreeRetrySend, resultChan chan<- *subtreeStorageResult) {
+	for work, ok := next(); ok; work, ok = next() {
 		select {
 		case <-ctx.Done():
 			return
 		default:
+		}
+
+		// Nothing to store: announce a subtree that is stored, in order with the others.
+		if work.request.AnnounceOnly {
+			select {
+			case resultChan <- &subtreeStorageResult{seq: work.seq, request: work.request, storedOK: true}:
+			case <-ctx.Done():
+				return
+			}
+
+			continue
 		}
 
 		result := &subtreeStorageResult{
@@ -728,6 +790,7 @@ func (ba *BlockAssembly) subtreeStorageWorker(ctx context.Context, workChan <-ch
 
 		// Send error back to caller if channel exists.
 		sendCallerErr(ctx, work.request.ErrChan, result.err)
+		work.request.Answered(result.err)
 	}
 }
 

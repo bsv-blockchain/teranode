@@ -39,6 +39,9 @@ type subtreeStoreOutcome struct {
 	// Nil when no sender runs, in which case the announcement is sent directly.
 	late chan<- chainhash.Hash
 
+	// settled is the request's Settled: the store queue's charge for it ends with its store.
+	settled func()
+
 	// set is the stored set the settled request reports to, with the request's root, when
 	// blockassembly_storedPrefixTemplate is on; nil otherwise.
 	set      *subtreeprocessor.StoredSet
@@ -48,7 +51,7 @@ type subtreeStoreOutcome struct {
 }
 
 func newSubtreeStoreOutcome(request subtreeprocessor.NewSubtreeRequest, metaApplicable bool, late chan<- chainhash.Hash) *subtreeStoreOutcome {
-	o := &subtreeStoreOutcome{result: request.Result, skip: request.SkipNotification, late: late, pending: 1}
+	o := &subtreeStoreOutcome{result: request.Result, skip: request.SkipNotification, late: late, pending: 1, settled: request.Settled}
 	if metaApplicable {
 		o.pending++
 	} else {
@@ -86,6 +89,10 @@ func (o *subtreeStoreOutcome) settle(apply func(r *subtreeprocessor.StoreResult)
 			case o.result <- o.res:
 			default:
 			}
+		}
+
+		if o.settled != nil {
+			o.settled()
 		}
 	}
 }

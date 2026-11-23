@@ -25,3 +25,12 @@ func TestBlockAssemblyStoredPrefixTemplate(t *testing.T) {
 	t.Setenv("blockassembly_storedPrefixTemplate", "true")
 	require.True(t, NewSettings().BlockAssembly.StoredPrefixTemplate, "loader must read blockassembly_storedPrefixTemplate")
 }
+
+// The store queue's byte limit (issue 2269) has a default that only applies with the stored-prefix
+// template on. Only a non-default override read back proves NewSettings reads the key.
+func TestBlockAssemblyStoreQueueMaxMB(t *testing.T) {
+	require.Equal(t, 4096, NewSettings().BlockAssembly.StoreQueueMaxMB)
+
+	t.Setenv("blockassembly_storeQueueMaxMB", "512")
+	require.Equal(t, 512, NewSettings().BlockAssembly.StoreQueueMaxMB, "loader must read blockassembly_storeQueueMaxMB")
+}

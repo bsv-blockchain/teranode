@@ -370,6 +370,14 @@ type BlockAssemblerOption func(*blockAssemblerOptions)
 type blockAssemblerOptions struct {
 	txMetaEvictor *subtreeprocessor.TxMetaEvictor
 	storedSet     *subtreeprocessor.StoredSet
+	storeQueue    *subtreeprocessor.StoreQueue
+}
+
+// WithStoreQueue gives the assembler's subtree processor the queue that takes its store requests
+// without ever blocking it (blockassembly_storedPrefixTemplate). Nil, the default, keeps the
+// blocking send on newSubtreeChan.
+func WithStoreQueue(q *subtreeprocessor.StoreQueue) BlockAssemblerOption {
+	return func(o *blockAssemblerOptions) { o.storeQueue = q }
 }
 
 // WithStoredSet gives the assembler's subtree processor the set of stored subtree roots it cuts
@@ -439,6 +447,10 @@ func NewBlockAssembler(ctx context.Context, logger ulogger.Logger, tSettings *se
 
 	if options.storedSet != nil {
 		stpOpts = append(stpOpts, subtreeprocessor.WithStoredSet(options.storedSet))
+	}
+
+	if options.storeQueue != nil {
+		stpOpts = append(stpOpts, subtreeprocessor.WithStoreQueue(options.storeQueue))
 	}
 
 	subtreeProcessor, err := subtreeprocessor.NewSubtreeProcessor(ctx, logger, tSettings, subtreeStore, blockchainClient, utxoStore, newSubtreeChan, stpOpts...)

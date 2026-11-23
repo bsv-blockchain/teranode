@@ -96,8 +96,13 @@ type NewSubtreeRequest struct {
 	ErrChan           chan error                                              // Channel for error reporting
 	OnStorageComplete func()                                                  // Called when storage completes to trigger cleanup
 	Result            chan StoreResult                                        // Optional: receives the final outcome of the store, once; the caller makes it buffered (capacity 1)
+	Class             StoreClass                                              // Chain (default) or Snapshot; only with a StoreQueue
+	AnnounceOnly      bool                                                    // Announce an already stored subtree without storing it; only with a StoreQueue
 
 	superseded *atomic.Bool // set by reset() when the state this request was built from is retired; see Superseded
+
+	answered func(err error) // set by a StoreQueue: see Answered
+	settled  func()          // set by a StoreQueue: see Settled
 }
 
 // moveBlockRequest represents a request to move a block in the chain.
@@ -452,6 +457,10 @@ type SubtreeProcessor struct {
 	// storedSet, when set, makes every mining template stop at the first chained subtree whose
 	// root is not in it (blockassembly_storedPrefixTemplate). Nil publishes the whole chain.
 	storedSet *StoredSet
+
+	// storeQueue, when set, takes every store request instead of newSubtreeChan, so that no send
+	// blocks the processor (blockassembly_storedPrefixTemplate). Nil keeps the blocking send.
+	storeQueue *StoreQueue
 
 	// storedCut is the last result of GetPrecomputedMiningData's cut.
 	storedCut atomic.Pointer[storedCut]
@@ -978,28 +987,28 @@ func (stp *SubtreeProcessor) Start(ctx context.Context) {
 							superseded:  stp.supersedeToken(),
 							DeletedTxs:  stp.deletedTxs,
 							ErrChan:     make(chan error),
+							Class:       StoreClassSnapshot,
 							OnStorageComplete: func() {
 								stp.cleanupDeletedTxs(incompleteSubtree)
 							},
 						}
 
 						// Send announcement, respecting context cancellation
-						select {
-						case stp.newSubtreeChan <- send:
-							// Wait for a response to ensure proper synchronization.
-							// This prevents race conditions when mining initial blocks and running coinbase splitter together.
-							// Without this wait, getMiningCandidate creates subtrees in the background while
-							// submitMiningSolution tries to setDAH on subtrees that might not yet exist.
-							select {
-							case <-send.ErrChan:
-								// Announcement completed, reset timer
-								stp.resetAnnouncementTicker()
-							case <-processorCtx.Done():
-								// Context cancelled while waiting for response
-								return
-							}
-						case <-processorCtx.Done():
+						if stp.sendNewSubtree(processorCtx, send) != nil {
 							// Context cancelled while trying to send
+							return
+						}
+
+						// Wait for a response to ensure proper synchronization.
+						// This prevents race conditions when mining initial blocks and running coinbase splitter together.
+						// Without this wait, getMiningCandidate creates subtrees in the background while
+						// submitMiningSolution tries to setDAH on subtrees that might not yet exist.
+						select {
+						case <-send.ErrChan:
+							// Announcement completed, reset timer
+							stp.resetAnnouncementTicker()
+						case <-processorCtx.Done():
+							// Context cancelled while waiting for response
 							return
 						}
 					}
@@ -1172,24 +1181,24 @@ func (stp *SubtreeProcessor) Start(ctx context.Context) {
 							superseded:  stp.supersedeToken(),
 							DeletedTxs:  stp.deletedTxs,
 							ErrChan:     make(chan error),
+							Class:       StoreClassSnapshot,
 							OnStorageComplete: func() {
 								stp.cleanupDeletedTxs(incompleteSubtree)
 							},
 						}
 
 						// Send announcement, but respect context cancellation
-						select {
-						case stp.newSubtreeChan <- send:
-							// Wait for response, also respecting context cancellation
-							select {
-							case <-send.ErrChan:
-								// Announcement completed
-							case <-processorCtx.Done():
-								// Context cancelled while waiting for response
-								return
-							}
-						case <-processorCtx.Done():
+						if stp.sendNewSubtree(processorCtx, send) != nil {
 							// Context cancelled while trying to send
+							return
+						}
+
+						// Wait for response, also respecting context cancellation
+						select {
+						case <-send.ErrChan:
+							// Announcement completed
+						case <-processorCtx.Done():
+							// Context cancelled while waiting for response
 							return
 						}
 					}
@@ -1481,17 +1490,38 @@ func (stp *SubtreeProcessor) storeIncompleteSnapshot(ctx context.Context, incomp
 		ParentTxMap: parentTxMap,
 		superseded:  stp.supersedeToken(),
 		ErrChan:     make(chan error, 1),
+		Class:       StoreClassSnapshot,
+	}
+
+	if stp.storeQueue != nil {
+		send.Result = make(chan StoreResult, 1)
+	}
+
+	if stp.sendNewSubtree(ctx, send) != nil {
+		return false
 	}
 
 	select {
-	case stp.newSubtreeChan <- send:
-		select {
-		case <-send.ErrChan:
-			return true
-		case <-ctx.Done():
-			return false
-		}
+	case <-send.ErrChan:
+		return stp.snapshotStored(send.Result)
 	case <-ctx.Done():
+		return false
+	}
+}
+
+// snapshotStored says whether a snapshot's store left its subtree in the store. ErrChan is answered
+// with nil whatever happened to the write, so with a store queue the answer is the typed result,
+// read after ErrChan: a write that failed is retried and has no result yet, and is not stored. Without
+// a queue ErrChan is all there is.
+func (stp *SubtreeProcessor) snapshotStored(result chan StoreResult) bool {
+	if stp.storeQueue == nil {
+		return true
+	}
+
+	select {
+	case r := <-result:
+		return r.SubtreeStored && r.Err == nil && !r.Cancelled
+	default:
 		return false
 	}
 }
@@ -1505,9 +1535,10 @@ type afterBlockSnapshot struct {
 	data        *PrecomputedMiningData
 	parentTxMap TxInpointsMap // captured on the processing goroutine
 
-	mu      sync.Mutex // guards pending and stored
-	pending chan error // ErrChan of the store request in flight, if any
-	stored  bool
+	mu            sync.Mutex // guards pending, pendingResult and stored
+	pending       chan error // ErrChan of the store request in flight, if any
+	pendingResult chan StoreResult
+	stored        bool
 }
 
 // storeOnce stores (and announces) the snapshot unless it already is,
@@ -1527,27 +1558,58 @@ func (a *afterBlockSnapshot) storeOnce(ctx context.Context, stp *SubtreeProcesso
 		return false
 	}
 
-	if a.pending == nil {
+	if a.pending == nil && a.pendingResult == nil {
 		send := NewSubtreeRequest{
 			Subtree:     a.data.Subtrees[0],
 			ParentTxMap: a.parentTxMap,
 			ErrChan:     make(chan error, 1), // the worker never blocks on a caller that gave up
+			Class:       StoreClassSnapshot,
 		}
 
+		if stp.storeQueue != nil {
+			send.Result = make(chan StoreResult, 1)
+		}
+
+		if stp.sendNewSubtree(ctx, send) != nil {
+			return false
+		}
+
+		a.pending, a.pendingResult = send.ErrChan, send.Result
+	}
+
+	if a.pending != nil {
 		select {
-		case stp.newSubtreeChan <- send:
-			a.pending = send.ErrChan
+		case err := <-a.pending:
+			a.pending = nil
+
+			if err != nil {
+				a.pendingResult = nil
+
+				stp.logger.Warnf("[SubtreeProcessor] error storing the after-block incomplete subtree snapshot: %v", err)
+
+				return false
+			}
+
+			if stp.storeQueue == nil {
+				a.stored = true
+
+				return true
+			}
 		case <-ctx.Done():
 			return false
 		}
 	}
 
+	// With a store queue ErrChan says only that the first attempt ended. A write that failed is
+	// retried, and the typed result is posted when the retries end: keep waiting for that request
+	// rather than sending another for every caller of an outage.
 	select {
-	case err := <-a.pending:
-		a.pending = nil
+	case r := <-a.pendingResult:
+		a.pendingResult = nil
 
-		if err != nil {
-			stp.logger.Warnf("[SubtreeProcessor] error storing the after-block incomplete subtree snapshot: %v", err)
+		if !r.SubtreeStored || r.Err != nil || r.Cancelled {
+			stp.logger.Warnf("[SubtreeProcessor] the after-block incomplete subtree snapshot was not stored")
+
 			return false
 		}
 
@@ -3221,6 +3283,12 @@ func (stp *SubtreeProcessor) processorContext() context.Context {
 // the send completes, nil on success. Mirrors the context-aware sends in the
 // Start() select loop and reorgBlocks.
 func (stp *SubtreeProcessor) sendNewSubtree(ctx context.Context, req NewSubtreeRequest) error {
+	if stp.storeQueue != nil {
+		stp.storeQueue.Push(req)
+
+		return nil
+	}
+
 	select {
 	case stp.newSubtreeChan <- req:
 		return nil
@@ -4426,6 +4494,16 @@ func (stp *SubtreeProcessor) reChainSubtrees(fromIndex int) error {
 // store that failed, was cancelled, or did not finish within deadline of the send is an error.
 // Without one the wait is for ErrChan, which a failed write answers with nil.
 func (stp *SubtreeProcessor) storeAndAnnounceChainedSubtrees(ctx context.Context, caller string, wait int, skipNotification bool, deadline time.Duration) error {
+	// With a store queue the reorg's two calls (wait with no announcement, announce with no wait)
+	// do not send the chain again: it was sent as it was built.
+	if stp.storeQueue != nil && wait > 0 && skipNotification {
+		return stp.awaitQueuedStores(ctx, caller, deadline)
+	}
+
+	if stp.storeQueue != nil && wait == 0 && !skipNotification {
+		return stp.announceChainedSubtrees(ctx, caller)
+	}
+
 	wait = min(wait, len(stp.chainedSubtrees))
 
 	var results []chan StoreResult
@@ -4448,8 +4526,7 @@ func (stp *SubtreeProcessor) storeAndAnnounceChainedSubtrees(ctx context.Context
 		// buffer during a large (>1000 subtree) reorg must not block this
 		// goroutine forever if the consumer has been cancelled. Matches the
 		// select pattern used by the other newSubtreeChan sends.
-		select {
-		case stp.newSubtreeChan <- NewSubtreeRequest{
+		if err := stp.sendNewSubtree(ctx, NewSubtreeRequest{
 			Subtree:     subtree,
 			ParentTxMap: stp.currentTxMap,
 			superseded:  stp.supersedeToken(),
@@ -4460,9 +4537,8 @@ func (stp *SubtreeProcessor) storeAndAnnounceChainedSubtrees(ctx context.Context
 				stp.cleanupDeletedTxs(st)
 			},
 			SkipNotification: skipNotification,
-		}:
-		case <-ctx.Done():
-			return errors.NewProcessingError("[%s] context cancelled while announcing subtrees", caller, ctx.Err())
+		}); err != nil {
+			return errors.NewProcessingError("[%s] context cancelled while announcing subtrees", caller, err)
 		}
 	}
 
@@ -4756,6 +4832,12 @@ func (stp *SubtreeProcessor) enforceBlockMaxSize(ctx context.Context) error {
 // its input subtrees back while they are retired, and the next block retires them a
 // second time, so without this closeRetiredSubtrees would close the same subtree twice.
 func (stp *SubtreeProcessor) retireSubtrees(subtrees ...*subtreepkg.Subtree) {
+	// a subtree that left the chain no longer needs its store: it goes last, and is dropped when
+	// the store queue needs the room
+	if stp.storeQueue != nil {
+		stp.storeQueue.Stale(subtrees...)
+	}
+
 	var listed map[*subtreepkg.Subtree]struct{}
 
 	for _, st := range subtrees {
@@ -4845,6 +4927,10 @@ func (stp *SubtreeProcessor) restoreSubtrees(chainedSubtrees []*subtreepkg.Subtr
 	// A subtree in both sets is retired too and stays installed: the close skips it.
 	stp.retireSubtrees(discarded...)
 	stp.retireSubtrees(stp.currentSubtree.Load())
+
+	if stp.storeQueue != nil {
+		stp.wantRestored(chainedSubtrees)
+	}
 
 	stp.currentSubtree.Store(currentSubtree)
 	stp.updateChainedSubtreeCounts()

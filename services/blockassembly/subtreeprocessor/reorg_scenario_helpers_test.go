@@ -79,6 +79,10 @@ type reorgScenarioConfig struct {
 
 	// storedSet, when set, is the processor's stored set (WithStoredSet); the consumer fills it.
 	storedSet *StoredSet
+
+	// storeQueue, when set, is the processor's store queue (WithStoreQueue), which the test drains;
+	// no consumer of newSubtreeChan sees a request then.
+	storeQueue *StoreQueue
 }
 
 type reorgScenario struct {
@@ -510,6 +514,10 @@ func (sc *reorgScenario) buildProcessor(t testing.TB) {
 
 	if sc.cfg.storedSet != nil {
 		opts = append(opts, WithStoredSet(sc.cfg.storedSet))
+	}
+
+	if sc.cfg.storeQueue != nil {
+		opts = append(opts, WithStoreQueue(sc.cfg.storeQueue))
 	}
 
 	newSubtreeChan := make(chan NewSubtreeRequest, 1024)
