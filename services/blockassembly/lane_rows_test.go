@@ -645,6 +645,10 @@ func laneSealSubtree(t *testing.T, name string) (*subtreepkg.Subtree, subtreepro
 		txMap.SetAt(hash, singleParentInpointsPtr(chainhash.HashH([]byte{byte(i), 0x77}), 0), lane.Pack(4, uint64(20+i)))
 	}
 
+	// the root is computed once here, as the processor does before it sends a subtree, so test
+	// goroutines that read it while a storage worker does never race on its lazy cache
+	_ = st.RootHash()
+
 	return st, txMap
 }
 
