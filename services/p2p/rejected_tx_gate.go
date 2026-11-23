@@ -38,8 +38,9 @@ const (
 // the publish:
 //
 //   - a per-txid dedup on the shared seenHashCache primitive, keyed by our own
-//     peer ID as the single announcer, so a repeated txid is re-broadcast at
-//     most once per publish window;
+//     peer ID as the single announcer, so a txid the validator keeps
+//     rejecting is re-broadcast periodically rather than on every rejection
+//     (see Dedup period below);
 //   - a token bucket on the publish rate, so a distinct-txid flood is capped at
 //     the configured rate and burst regardless of how fast the validator
 //     rejects.
@@ -68,11 +69,23 @@ const (
 // is refused on the spent budget, and the first repeat after the window rolls
 // over is refused too, because the cache remembers last window's grantee (us)
 // and withholds the rollover retry grant from it. Only a repeat after a second
-// rollover is granted, so a txid the validator keeps rejecting is re-broadcast
-// about once every two windows (~30s) until its entry ages out at the seen-hash
-// TTL and it starts fresh. Neither value passed to setLimits changes this; the
-// window is a package constant shared with the block and subtree announcement
-// dedup.
+// rollover is granted, so while its entry lives a txid the validator keeps
+// rejecting is re-broadcast about once every two windows (~30s).
+//
+// The entry lives for the seen-hash TTL. When it ages out the next rejection
+// starts it fresh and is granted at once, without consulting the window, so
+// the two-window period assumes a TTL longer than two windows, as the 2m
+// default is:
+//
+//   - with an effective TTL of two windows or less the period is the TTL
+//     itself, and at the one-window floor ttlLocked applies to a shorter
+//     p2p_seen_hash_ttl it is one window (~15s);
+//   - with a longer TTL each age-out adds one re-broadcast, which can follow
+//     the previous one by less than a window.
+//
+// The window is a package constant shared with the block and subtree
+// announcement dedup; of the values passed to setLimits only the TTL changes
+// the period.
 //
 // Like the other bounds in this package there is no unbounded mode: an
 // unconfigured gate falls back to the defaults above on first use.

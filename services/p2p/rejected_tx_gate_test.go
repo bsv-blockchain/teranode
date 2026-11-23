@@ -103,7 +103,7 @@ func TestRejectedTxHandler_DistinctTxIDFloodIsRateLimited(t *testing.T) {
 	require.Equal(t, 5, *published, "a flood of %d rejections must be capped at the burst", flood)
 }
 
-// A repeated txid is re-broadcast once per publish window, and a repeat never
+// A repeated txid is re-broadcast once per dedup period, and a repeat never
 // consumes a rate-limit token that a fresh txid could have used.
 func TestRejectedTxHandler_RepeatedTxIDPublishedOnce(t *testing.T) {
 	s, published := countingPublishServer(t, nil, 0)
@@ -350,6 +350,49 @@ func TestRejectedTxEgressGate_RepeatPeriodIsTwoPublishWindows(t *testing.T) {
 	clock.advance(seenHashPublishWindow)
 	grant, _ = g.allow("a", "self")
 	require.Nil(t, grant, "and the cycle repeats")
+}
+
+// The two-window period assumes a TTL longer than two windows. A shorter one
+// sets the period itself, because an aged-out entry starts fresh and is
+// granted at once: a TTL below the window runs at the one-window floor, and a
+// TTL between one and two windows is the period. Pins what the gate doc, the
+// p2p_rejected_tx_publish_rate longdesc and the duplicate metric help say.
+func TestRejectedTxEgressGate_ShortTTLSetsRepeatPeriod(t *testing.T) {
+	cases := []struct {
+		ttl  time.Duration
+		want time.Duration
+	}{
+		{5 * time.Second, seenHashPublishWindow},
+		{seenHashPublishWindow, seenHashPublishWindow},
+		{20 * time.Second, 20 * time.Second},
+		{2 * seenHashPublishWindow, 2 * seenHashPublishWindow},
+		{2 * time.Minute, 2 * seenHashPublishWindow},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.ttl.String(), func(t *testing.T) {
+			g, clock := gateWithClock()
+			g.setLimits(1000, 1000, 0, tc.ttl)
+
+			start := clock.now
+
+			var grants []time.Duration
+
+			for clock.now.Sub(start) <= 2*time.Minute {
+				if grant, _ := g.allow("a", "self"); grant != nil {
+					grants = append(grants, clock.now.Sub(start))
+				}
+
+				clock.advance(time.Second)
+			}
+
+			require.Greater(t, len(grants), 2)
+
+			for i := 1; i < len(grants); i++ {
+				require.Equal(t, tc.want, grants[i]-grants[i-1], "a rejection every second, ttl %s: grants at %v", tc.ttl, grants)
+			}
+		})
+	}
 }
 
 // A seen-hash TTL below the publish window must not switch the dedup off: the
