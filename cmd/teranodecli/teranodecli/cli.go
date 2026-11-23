@@ -5,9 +5,11 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"os/signal"
 	"sort"
 	"strconv"
 	"strings"
+	"syscall"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/cmd/aerospikekafkaconnector"
@@ -841,7 +843,12 @@ func repairMissingParentsExecute(logger ulogger.Logger, tSettings *settings.Sett
 			return err
 		}
 
-		report, err := repairmissingparents.Run(context.Background(), logger, tSettings, opts)
+		// An interrupt stops the run between parents. A parent being written is rolled
+		// back on a context the interrupt does not reach.
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer stop()
+
+		report, err := repairmissingparents.Run(ctx, logger, tSettings, opts)
 		if err != nil {
 			return err
 		}

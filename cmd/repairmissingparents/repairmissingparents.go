@@ -173,6 +173,9 @@ type Repairer struct {
 	peer          Peer
 	opts          Options
 	genesisHeight uint32
+	// preserveBlocks is how long a rebuilt parent with local unmined children is kept
+	// from pruning, as the pruner keeps the parents of old unmined transactions.
+	preserveBlocks uint32
 	// localSpends maps each absent parent to the local unmined children that spend
 	// its outputs: parent -> vout -> children. A rebuild must agree with them.
 	localSpends map[chainhash.Hash]map[uint32][]chainhash.Hash
@@ -191,6 +194,8 @@ func NewRepairer(logger ulogger.Logger, tSettings *settings.Settings, store utxo
 		peer:          peer,
 		opts:          opts,
 		genesisHeight: tSettings.ChainCfgParams.GenesisActivationHeight,
+
+		preserveBlocks: tSettings.UtxoStore.ParentPreservationBlocks,
 	}
 }
 
@@ -210,6 +215,10 @@ func Run(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 	store, err := utxofactory.NewStore(ctx, logger, tSettings, "repair-missing-parents", false)
 	if err != nil {
 		return nil, errors.NewStorageError("failed to open utxo store", err)
+	}
+
+	if err := requirePaginated(tSettings, store); err != nil {
+		return nil, err
 	}
 
 	return NewRepairer(logger, tSettings, store, chain, NewHTTPPeer(opts.PeerURL, nil), opts).Run(ctx)
@@ -278,7 +287,11 @@ func (r *Repairer) Run(ctx context.Context) (*Report, error) {
 
 	for _, p := range plans {
 		if !r.opts.DryRun && p.res.Outcome == OutcomePlanned {
-			p.res = r.write(ctx, p, currentHeight)
+			if ctx.Err() != nil {
+				p.res.Outcome, p.res.Detail = OutcomeFailed, joinDetail(p.res.Detail, "interrupted before write; nothing written for this parent")
+			} else {
+				p.res = r.write(ctx, p, currentHeight)
+			}
 		}
 
 		report.Results = append(report.Results, p.res)
@@ -491,15 +504,23 @@ func (r *Repairer) readPeer(ctx context.Context, parent chainhash.Hash, res *Res
 		return nil, OutcomeFailed
 	}
 
-	createHeight := pm.BlockHeights[0]
-
-	minedInfos, notes, _, err := r.mapBlocks(ctx, pm)
+	minedInfos, notes, notOnChain, err := r.mapBlocks(ctx, pm)
 	if err != nil {
 		res.BlockHeights = pm.BlockHeights
 		res.Detail = err.Error()
 
-		return nil, OutcomeChainMismatch
+		// Only a definite answer is a mismatch. A transient lookup error or a peer that
+		// could not place the transaction is retried by running the tool again.
+		if notOnChain {
+			return nil, OutcomeChainMismatch
+		}
+
+		return nil, OutcomeFailed
 	}
+
+	// mapBlocks accepted the main-chain entry, so the index is set and in range. Its
+	// height, unlike entry 0, was checked against our chain.
+	createHeight := pm.BlockHeights[*pm.MainChainIndex]
 
 	for _, info := range minedInfos {
 		res.BlockHeights = append(res.BlockHeights, info.BlockHeight)
@@ -619,18 +640,23 @@ func (r *Repairer) write(ctx context.Context, p *plan, currentHeight uint32) Res
 		utxo.WithTXID(&parent),
 	}
 
-	if _, _, err := r.store.SpendAndCreate(ctx, p.tx, p.createHeight, createOpts...); err != nil {
-		res.Outcome, res.Detail = OutcomeFailed, fmt.Sprintf("create: %v", err)
+	// fail records the failure and rolls the record back.
+	fail := func(outcome Outcome, format string, args ...any) Result {
+		res.Outcome, res.Detail = outcome, fmt.Sprintf(format, args...)
+		return r.rollback(ctx, res, len(p.tx.Outputs))
+	}
 
+	if _, _, err := r.store.SpendAndCreate(ctx, p.tx, p.createHeight, createOpts...); err != nil {
 		// The record was absent when planned, so ErrTxExists means something else wrote
 		// it since; it is not ours to delete. Any other error may still have landed the
 		// write (a batcher-wait timeout or a cancelled context completes it later, and a
 		// paginated create can leave some records), so it is rolled back.
 		if errors.Is(err, errors.ErrTxExists) {
+			res.Outcome, res.Detail = OutcomeFailed, fmt.Sprintf("create: %v", err)
 			return res
 		}
 
-		return r.rollback(ctx, res, len(p.tx.Outputs))
+		return fail(OutcomeFailed, "create: %v", err)
 	}
 
 	for _, spender := range p.spenders {
@@ -643,23 +669,34 @@ func (r *Repairer) write(ctx context.Context, p *plan, currentHeight uint32) Res
 			continue
 		}
 
-		res.Outcome, res.Detail = OutcomeFailed, fmt.Sprintf("spend by %s: %v", spender.TxID(), err)
-
+		outcome := OutcomeFailed
 		if errors.Is(err, errors.ErrSpent) {
-			res.Outcome = OutcomeInconsistentSpender
+			outcome = OutcomeInconsistentSpender
 		}
 
-		return r.rollback(ctx, res, len(p.tx.Outputs))
+		return fail(outcome, "spend by %s: %v", spender.TxID(), err)
 	}
 
 	if err := r.markDeletedChildren(parent, p.deletedChildren); err != nil {
-		res.Outcome, res.Detail = OutcomeFailed, fmt.Sprintf("deleted children: %v", err)
-		return r.rollback(ctx, res, len(p.tx.Outputs))
+		return fail(OutcomeFailed, "deleted children: %v", err)
 	}
 
 	if err := r.verify(ctx, parent, res, len(p.tx.Outputs), true); err != nil {
-		res.Outcome, res.Detail = OutcomeFailed, fmt.Sprintf("verify: %v", err)
-		return r.rollback(ctx, res, len(p.tx.Outputs))
+		return fail(OutcomeFailed, "verify: %v", err)
+	}
+
+	// A parent with local unmined children is all spent and mined after the rebuild, so
+	// it gets a delete-at-height and would re-enter the race with the pruner that
+	// removed it. Preserve it the way the pruner preserves the parents of old unmined
+	// transactions.
+	if len(r.localSpends[parent]) > 0 {
+		until := currentHeight + r.preserveBlocks
+
+		if err := r.store.PreserveTransactions(ctx, []chainhash.Hash{parent}, until); err != nil {
+			return fail(OutcomeFailed, "preserve: %v", err)
+		}
+
+		res.Detail = joinDetail(res.Detail, fmt.Sprintf("preserved until height %d", until))
 	}
 
 	res.Outcome = OutcomeRepaired
@@ -1072,7 +1109,7 @@ func (r *Repairer) checkPrunedSpender(parent, spender chainhash.Hash, tx *bt.Tx)
 		}
 	}
 
-	if _, ok := r.store.(paginatedStore); !ok {
+	if _, ok := r.paginated(); !ok {
 		return OutcomePrunedSpender, errors.NewProcessingError("spender %s was pruned here and this store cannot record deleted children", spender.String())
 	}
 
@@ -1148,7 +1185,10 @@ func (r *Repairer) checkOtherInput(ctx context.Context, spender chainhash.Hash, 
 		return false, errors.NewStorageError("read %s:%d", prev.String(), in.PreviousTxOutIndex, err)
 	}
 
-	if sr == nil || sr.SpendingData == nil || sr.SpendingData.TxID == nil || !sr.SpendingData.TxID.IsEqual(&spender) || sr.SpendingData.Vin != vin {
+	// SPENT is required as well: a conflicting or locked output can carry this
+	// spender's data, and the replay's own guards would then fail and roll back the
+	// spender's other inputs.
+	if sr == nil || sr.Status != int(utxo.Status_SPENT) || sr.SpendingData == nil || sr.SpendingData.TxID == nil || !sr.SpendingData.TxID.IsEqual(&spender) || sr.SpendingData.Vin != vin {
 		state := "no state"
 		if sr != nil {
 			state = utxo.Status(sr.Status).String() //nolint:gosec
@@ -1237,7 +1277,7 @@ func (r *Repairer) markDeletedChildren(parent chainhash.Hash, children []Planned
 		return nil
 	}
 
-	ps, ok := r.store.(paginatedStore)
+	ps, ok := r.paginated()
 	if !ok {
 		return errors.NewProcessingError("store cannot record deleted children")
 	}
@@ -1283,6 +1323,41 @@ type paginatedStore interface {
 	GetName() string
 }
 
+// unwrapStore returns the store beneath any logging wrappers.
+func unwrapStore(s utxo.Store) utxo.Store {
+	for {
+		u, ok := s.(interface{ Unwrap() utxo.Store })
+		if !ok {
+			return s
+		}
+
+		s = u.Unwrap()
+	}
+}
+
+// paginated returns the Aerospike view of the store, looking through wrappers such as
+// the storelogger that ?logging=true adds.
+func (r *Repairer) paginated() (paginatedStore, bool) {
+	ps, ok := unwrapStore(r.store).(paginatedStore)
+	return ps, ok
+}
+
+// requirePaginated fails when settings name an Aerospike store but the store the tool
+// holds cannot be reached as one: the stale-record check and the deleted-child writes
+// would then be skipped silently.
+func requirePaginated(tSettings *settings.Settings, store utxo.Store) error {
+	u := tSettings.UtxoStore.UtxoStore
+	if u == nil || u.Scheme != "aerospike" {
+		return nil
+	}
+
+	if _, ok := unwrapStore(store).(paginatedStore); !ok {
+		return errors.NewStorageError("the utxo store is configured as aerospike but is %T, which the repair cannot see through; stale pagination records could be missed", store)
+	}
+
+	return nil
+}
+
 // findStaleChildRecords returns the keys of pagination records that survived the
 // master's deletion. The pruner stamps master and children with the same deleteAtHeight,
 // but a failed cascade or a master-only Delete leaves children behind (see
@@ -1290,7 +1365,7 @@ type paginatedStore interface {
 // a rebuild on top of it never re-signals ALLSPENT to the new master and a descendant
 // addressing it can get TX_LOCKED. They are removed and rebuilt from the peer instead.
 func (r *Repairer) findStaleChildRecords(parent chainhash.Hash, outputs int) ([]*aerospike.Key, error) {
-	ps, ok := r.store.(paginatedStore)
+	ps, ok := r.paginated()
 	if !ok || ps.GetUtxoBatchSize() <= 0 {
 		return nil, nil
 	}
@@ -1325,7 +1400,10 @@ func (r *Repairer) deleteStaleChildRecords(keys []*aerospike.Key) error {
 		return nil
 	}
 
-	ps := r.store.(paginatedStore)
+	ps, ok := r.paginated()
+	if !ok {
+		return errors.NewProcessingError("store cannot delete pagination records")
+	}
 
 	for _, key := range keys {
 		if _, err := ps.GetClient().Delete(nil, key); err != nil && !errors.Is(err, aerospike.ErrKeyNotFound) {

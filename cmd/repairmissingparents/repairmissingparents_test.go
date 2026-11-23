@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -23,6 +24,7 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo/spend"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/test"
+	"github.com/bsv-blockchain/teranode/util/uaerospike"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
@@ -97,6 +99,21 @@ func (f *fixture) meta() map[string]any {
 		"subtreeIdxs":    []int{3},
 		"mainChainIndex": 0,
 	}
+}
+
+// minedMeta is the peer's txmeta for a transaction mined in one block on its main chain.
+func minedMeta(blockHash chainhash.Hash, height uint32) map[string]any {
+	return map[string]any{
+		"blockHeights":   []uint32{height},
+		"blockHashes":    []string{blockHash.String()},
+		"subtreeIdxs":    []int{0},
+		"mainChainIndex": 0,
+	}
+}
+
+// unminedMeta is the peer's txmeta for a transaction that is not mined.
+func unminedMeta() map[string]any {
+	return map[string]any{"blockHeights": []uint32{}, "blockHashes": []string{}, "subtreeIdxs": []int{}, "mainChainIndex": -1}
 }
 
 func (p *peer) serve(t *testing.T) *httptest.Server {
@@ -431,6 +448,7 @@ func TestRepairsMissingParentWithExactSpentState(t *testing.T) {
 
 	store.AssertExpectations(t)
 	store.AssertNotCalled(t, "DeleteComplete", mock.Anything, mock.Anything)
+	store.AssertNotCalled(t, "PreserveTransactions", mock.Anything, mock.Anything, mock.Anything)
 	require.Contains(t, out.String(), "plan:")
 	require.Contains(t, out.String(), parentHash.String())
 	require.Contains(t, out.String(), string(OutcomeRepaired))
@@ -630,18 +648,22 @@ func TestChainMismatchAbortsRecord(t *testing.T) {
 	f := newFixture(t)
 	parentHash := *f.parent.TxIDChainHash()
 
+	// A definite answer is a mismatch. A case the peer or a lookup left undetermined is
+	// a failure, which a rerun can resolve.
 	tests := []struct {
-		name   string
-		chain  func(c *blockchain.Mock)
-		meta   func(m map[string]any)
-		detail string
+		name    string
+		chain   func(c *blockchain.Mock)
+		meta    func(m map[string]any)
+		detail  string
+		outcome Outcome
 	}{
 		{
 			name: "block unknown here",
 			chain: func(c *blockchain.Mock) {
 				c.On("GetBlockHeader", mock.Anything, hashPtr(f.blockHash)).Return(nil, nil, errors.NewNotFoundError("block not found"))
 			},
-			detail: "is not in our blockchain",
+			detail:  "is not in our blockchain",
+			outcome: OutcomeChainMismatch,
 		},
 		{
 			name: "block at a different height here",
@@ -649,7 +671,8 @@ func TestChainMismatchAbortsRecord(t *testing.T) {
 				c.On("GetBlockHeader", mock.Anything, hashPtr(f.blockHash)).
 					Return(&model.BlockHeader{}, &model.BlockHeaderMeta{ID: f.blockID, Height: f.blockHeight + 1}, nil)
 			},
-			detail: "is at height",
+			detail:  "is at height",
+			outcome: OutcomeFailed,
 		},
 		{
 			name: "block marked invalid here",
@@ -657,7 +680,8 @@ func TestChainMismatchAbortsRecord(t *testing.T) {
 				c.On("GetBlockHeader", mock.Anything, hashPtr(f.blockHash)).
 					Return(&model.BlockHeader{}, &model.BlockHeaderMeta{ID: f.blockID, Height: f.blockHeight, Invalid: true}, nil)
 			},
-			detail: "marked invalid",
+			detail:  "marked invalid",
+			outcome: OutcomeChainMismatch,
 		},
 		{
 			name: "block on a fork here",
@@ -666,27 +690,40 @@ func TestChainMismatchAbortsRecord(t *testing.T) {
 					Return(&model.BlockHeader{}, &model.BlockHeaderMeta{ID: f.blockID, Height: f.blockHeight}, nil)
 				c.On("CheckBlockIsInCurrentChain", mock.Anything, []uint32{f.blockID}).Return(false, nil)
 			},
-			detail: "not on our current chain",
+			detail:  "not on our current chain",
+			outcome: OutcomeChainMismatch,
 		},
 		{
-			name:   "peer predates mainChainIndex",
-			meta:   func(m map[string]any) { delete(m, "mainChainIndex") },
-			detail: "did not report mainChainIndex",
+			name: "block lookup fails transiently",
+			chain: func(c *blockchain.Mock) {
+				c.On("GetBlockHeader", mock.Anything, hashPtr(f.blockHash)).Return(nil, nil, errors.NewServiceError("connection refused"))
+			},
+			detail:  "connection refused",
+			outcome: OutcomeFailed,
 		},
 		{
-			name:   "peer could not place the tx on its main chain",
-			meta:   func(m map[string]any) { m["mainChainIndex"] = -1 },
-			detail: "mainChainIndex -1",
+			name:    "peer predates mainChainIndex",
+			meta:    func(m map[string]any) { delete(m, "mainChainIndex") },
+			detail:  "did not report mainChainIndex",
+			outcome: OutcomeFailed,
 		},
 		{
-			name:   "subtree indexes missing",
-			meta:   func(m map[string]any) { m["subtreeIdxs"] = []int{} },
-			detail: "0 subtree indexes for 1 heights",
+			name:    "peer could not place the tx on its main chain",
+			meta:    func(m map[string]any) { m["mainChainIndex"] = -1 },
+			detail:  "mainChainIndex -1",
+			outcome: OutcomeFailed,
 		},
 		{
-			name:   "negative subtree index",
-			meta:   func(m map[string]any) { m["subtreeIdxs"] = []int{-1} },
-			detail: "subtree index -1",
+			name:    "subtree indexes missing",
+			meta:    func(m map[string]any) { m["subtreeIdxs"] = []int{} },
+			detail:  "0 subtree indexes for 1 heights",
+			outcome: OutcomeFailed,
+		},
+		{
+			name:    "negative subtree index",
+			meta:    func(m map[string]any) { m["subtreeIdxs"] = []int{-1} },
+			detail:  "subtree index -1",
+			outcome: OutcomeFailed,
 		},
 	}
 
@@ -719,7 +756,7 @@ func TestChainMismatchAbortsRecord(t *testing.T) {
 			r, _ := newRepairer(t, store, chain, p.serve(t).URL, Options{TxIDs: []chainhash.Hash{parentHash}})
 
 			res := runOne(t, r)
-			require.Equal(t, OutcomeChainMismatch, res.Outcome)
+			require.Equal(t, tt.outcome, res.Outcome, res.Detail)
 			require.Contains(t, res.Detail, tt.detail)
 			assertNoWrites(t, store)
 		})
@@ -1258,7 +1295,7 @@ func TestUnheldOffChainSpenderLeavesOutputUnspent(t *testing.T) {
 	currentHeight := f.blockHeight + 1500
 
 	p := f.peer(f.spentItems())
-	p.metas[f.unminedChild.TxID()] = map[string]any{"blockHeights": []uint32{}, "blockHashes": []string{}, "subtreeIdxs": []int{}, "mainChainIndex": -1}
+	p.metas[f.unminedChild.TxID()] = unminedMeta()
 
 	store := unheldUnminedChildStore(f)
 	store.On("SpendAndCreate", mock.Anything, txWithID(f.parent.TxID()), f.blockHeight, mock.Anything).Return(&meta.Data{}, nil, nil).Once()
@@ -1374,7 +1411,7 @@ func TestAlreadyPresentWithOffChainSpendLeftUnspentMatches(t *testing.T) {
 	f := newFixture(t)
 
 	p := f.peer(f.spentItems())
-	p.metas[f.unminedChild.TxID()] = map[string]any{"blockHeights": []uint32{}, "blockHashes": []string{}, "subtreeIdxs": []int{}, "mainChainIndex": -1}
+	p.metas[f.unminedChild.TxID()] = unminedMeta()
 
 	rebuilt := f.matching()
 	rebuilt.SpendingDatas[1] = nil
@@ -1389,4 +1426,403 @@ func TestAlreadyPresentWithOffChainSpendLeftUnspentMatches(t *testing.T) {
 	res := runOne(t, r)
 	require.Equal(t, OutcomeAlreadyPresent, res.Outcome, res.Detail)
 	assertNoWrites(t, store)
+}
+
+// Entry 0 of the peer's list is a fork block we do not hold, at another height. The
+// create height must come from the main-chain entry, which was checked against our chain.
+func TestCreateHeightComesFromTheMainChainEntry(t *testing.T) {
+	f := newFixture(t)
+	parentHash := *f.parent.TxIDChainHash()
+	currentHeight := f.blockHeight + 1500
+	forkHash := chainhash.HashH([]byte("fork-block-below"))
+
+	chain := idleChain(t, f)
+	chain.On("GetBlockHeader", mock.Anything, hashPtr(forkHash)).Return(nil, nil, errors.NewBlockNotFoundError("block not found"))
+
+	p := f.peer(f.spentItems())
+	p.metas[f.parent.TxID()] = map[string]any{
+		"blockHeights":   []uint32{f.blockHeight - 7, f.blockHeight},
+		"blockHashes":    []string{forkHash.String(), f.blockHash.String()},
+		"subtreeIdxs":    []int{1, 3},
+		"mainChainIndex": 1,
+	}
+
+	store := missingParentStore(f)
+	store.On("SpendAndCreate", mock.Anything, txWithID(f.parent.TxID()), f.blockHeight, mock.Anything).Return(&meta.Data{}, nil, nil).Once()
+	store.On("SpendAndCreate", mock.Anything, mock.Anything, currentHeight, mock.Anything).Return(nil, []*utxo.Spend{}, nil).Twice()
+	store.On("Get", mock.Anything, hashPtr(parentHash), mock.Anything).Return(f.matching(), nil)
+
+	r, _ := newRepairer(t, store, chain, p.serve(t).URL, Options{TxIDs: []chainhash.Hash{parentHash}})
+
+	res := runOne(t, r)
+	require.Equal(t, OutcomeRepaired, res.Outcome, res.Detail)
+	store.AssertExpectations(t)
+}
+
+// preserveStore holds the fixture's unmined child both locally and in the unmined set,
+// so the rebuilt parent has a local unmined child, and the rebuild reads back as planned.
+func preserveStore(f *fixture) *utxo.MockUtxostore {
+	store := baseStore(f.unminedChild)
+	// Absent for the unmined walk and for planning, then present for the read-back.
+	store.On("Get", mock.Anything, hashPtr(*f.parent.TxIDChainHash()), mock.Anything).Return(nil, errors.NewTxNotFoundError("not found")).Twice()
+	store.On("Get", mock.Anything, hashPtr(*f.parent.TxIDChainHash()), mock.Anything).Return(f.matching(), nil)
+	store.On("SpendAndCreate", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(&meta.Data{}, []*utxo.Spend{}, nil)
+
+	return holdSpenders(store, f)
+}
+
+// A rebuilt parent with local unmined children is all spent and mined, so it would get a
+// delete-at-height and re-enter the race with the pruner. It is preserved like the
+// pruner preserves the parents of old unmined transactions.
+func TestRebuiltParentWithLocalChildIsPreserved(t *testing.T) {
+	f := newFixture(t)
+	parentHash := *f.parent.TxIDChainHash()
+
+	store := preserveStore(f)
+
+	r, _ := newRepairer(t, store, idleChain(t, f), f.peerServer(t, f.spentItems()).URL, Options{TxIDs: []chainhash.Hash{parentHash}})
+	require.NotZero(t, r.preserveBlocks)
+
+	until := f.blockHeight + 1500 + r.preserveBlocks
+	store.On("PreserveTransactions", mock.Anything, []chainhash.Hash{parentHash}, until).Return(nil).Once()
+
+	res := runOne(t, r)
+	require.Equal(t, OutcomeRepaired, res.Outcome, res.Detail)
+	require.Contains(t, res.Detail, "preserved until height")
+	store.AssertExpectations(t)
+}
+
+func TestPreserveFailureRollsBack(t *testing.T) {
+	f := newFixture(t)
+	parentHash := *f.parent.TxIDChainHash()
+
+	store := preserveStore(f)
+	store.On("PreserveTransactions", mock.Anything, mock.Anything, mock.Anything).Return(errors.NewStorageError("preserve refused")).Once()
+	store.On("DeleteComplete", mock.Anything, hashPtr(parentHash)).Return(nil).Once()
+
+	r, _ := newRepairer(t, store, idleChain(t, f), f.peerServer(t, f.spentItems()).URL, Options{TxIDs: []chainhash.Hash{parentHash}})
+
+	res := runOne(t, r)
+	require.Equal(t, OutcomeFailed, res.Outcome)
+	require.Contains(t, res.Detail, "preserve: ")
+	require.Contains(t, res.Detail, "record rolled back")
+	store.AssertExpectations(t)
+}
+
+// cancelOnWrite cancels a context when the report line that precedes the writes is printed.
+type cancelOnWrite struct {
+	bytes.Buffer
+	cancel  func()
+	trigger string
+}
+
+func (c *cancelOnWrite) Write(b []byte) (int, error) {
+	if strings.Contains(string(b), c.trigger) {
+		c.cancel()
+	}
+
+	return c.Buffer.Write(b)
+}
+
+// An interrupt after the plan is printed stops the run before any parent is written.
+func TestInterruptBeforeWriteWritesNothing(t *testing.T) {
+	f := newFixture(t)
+	parentHash := *f.parent.TxIDChainHash()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	out := &cancelOnWrite{cancel: cancel, trigger: "result:"}
+	store := missingParentStore(f)
+
+	p := NewHTTPPeer(f.peerServer(t, f.spentItems()).URL, nil)
+	r := NewRepairer(ulogger.TestLogger{}, test.CreateBaseTestSettings(t), store, idleChain(t, f), p, Options{TxIDs: []chainhash.Hash{parentHash}, Stdout: out})
+
+	report, err := r.Run(ctx)
+	require.NoError(t, err)
+	require.Equal(t, OutcomeFailed, report.Results[0].Outcome)
+	require.Contains(t, report.Results[0].Detail, "interrupted before write")
+	require.True(t, report.Failed())
+	assertNoWrites(t, store)
+}
+
+type wrappedStore struct {
+	utxo.Store
+	inner utxo.Store
+}
+
+func (w wrappedStore) Unwrap() utxo.Store { return w.inner }
+
+type fakePaginated struct {
+	*utxo.MockUtxostore
+}
+
+func (fakePaginated) GetUtxoBatchSize() int         { return 1 }
+func (fakePaginated) GetClient() *uaerospike.Client { return nil }
+func (fakePaginated) GetNamespace() string          { return "ns" }
+func (fakePaginated) GetName() string               { return "set" }
+
+func TestUnwrapStoreLooksThroughWrappers(t *testing.T) {
+	inner := new(utxo.MockUtxostore)
+
+	require.Same(t, inner, unwrapStore(wrappedStore{Store: new(utxo.MockUtxostore), inner: wrappedStore{Store: new(utxo.MockUtxostore), inner: inner}}))
+	require.Same(t, inner, unwrapStore(inner))
+}
+
+func TestRequirePaginatedFailsInsteadOfSkipping(t *testing.T) {
+	aero := test.CreateBaseTestSettings(t)
+	aero.UtxoStore.UtxoStore = &url.URL{Scheme: "aerospike", Host: "localhost:3000"}
+
+	other := test.CreateBaseTestSettings(t)
+	other.UtxoStore.UtxoStore = &url.URL{Scheme: "sqlite", Host: "memory"}
+
+	plain := new(utxo.MockUtxostore)
+	paginated := fakePaginated{new(utxo.MockUtxostore)}
+
+	err := requirePaginated(aero, wrappedStore{Store: plain, inner: plain})
+	require.Error(t, err, "an aerospike URL with a store that is not one must fail")
+	require.Contains(t, err.Error(), "stale pagination records")
+
+	require.NoError(t, requirePaginated(aero, paginated))
+	require.NoError(t, requirePaginated(aero, wrappedStore{Store: paginated, inner: paginated}), "a wrapped aerospike store is seen through")
+	require.NoError(t, requirePaginated(other, plain), "a store that is not configured as aerospike needs no pagination view")
+}
+
+func TestHTTPPeerDefaultClientBoundsHeadersNotBody(t *testing.T) {
+	p := NewHTTPPeer("http://peer", nil)
+
+	require.Zero(t, p.client.Timeout, "a total client timeout would cut a large body read")
+	require.Equal(t, peerHeaderTimeout, p.client.Transport.(*http.Transport).ResponseHeaderTimeout)
+	require.Equal(t, peerRequestTimeout, p.reqTimeout)
+}
+
+func TestHTTPPeerStalledResponseTimesOut(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.(http.Flusher).Flush()
+		<-r.Context().Done()
+	}))
+	t.Cleanup(srv.Close)
+
+	p := NewHTTPPeer(srv.URL, nil)
+	p.reqTimeout = 50 * time.Millisecond
+	p.attempts = 1
+
+	_, err := p.get(context.Background(), "/x")
+	require.Error(t, err)
+}
+
+func TestHTTPPeerErrorBodyIsBoundedAndSingleLine(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte(strings.Repeat("line\n", 5000)))
+	}))
+	t.Cleanup(srv.Close)
+
+	p := NewHTTPPeer(srv.URL, nil)
+	p.attempts = 1
+
+	_, err := p.get(context.Background(), "/x")
+	require.Error(t, err)
+	require.Less(t, len(err.Error()), 800)
+	require.NotContains(t, err.Error(), "\n")
+}
+
+func presentStore(f *fixture, rec *meta.Data) *utxo.MockUtxostore {
+	store := holdSpenders(baseStore(), f)
+	store.On("Get", mock.Anything, hashPtr(*f.parent.TxIDChainHash()), mock.Anything).Return(rec, nil)
+
+	return store
+}
+
+// A present record is compared with the peer on blocks and on every output's spent state.
+func TestPresentRecordIsComparedWithThePeer(t *testing.T) {
+	f := newFixture(t)
+	other := chainhash.HashH([]byte("another-spender"))
+
+	tests := []struct {
+		name   string
+		items  []peerUTXO
+		record func(m *meta.Data)
+		detail string
+	}{
+		{
+			name:   "output count",
+			record: func(m *meta.Data) { m.SpendingDatas = m.SpendingDatas[:1] },
+			detail: "state for 1 outputs, transaction has 2",
+		},
+		{
+			name:   "planned block missing",
+			record: func(m *meta.Data) { m.BlockIDs, m.BlockHeights = nil, nil },
+			detail: "is missing",
+		},
+		{
+			name:   "block at another height",
+			record: func(m *meta.Data) { m.BlockHeights = []uint32{f.blockHeight + 1} },
+			detail: "is missing",
+		},
+		{
+			name:   "spent in the store, unspent at the peer",
+			items:  []peerUTXO{{Vout: 0, Status: statusSpent, SpendingData: spend.NewSpendingData(f.minedChild.TxIDChainHash(), 0)}, {Vout: 1, Status: statusOK}},
+			detail: "is spent by",
+		},
+		{
+			name:   "spent by another transaction in the store",
+			record: func(m *meta.Data) { m.SpendingDatas[1] = spend.NewSpendingData(&other, 0) },
+			detail: "spent by " + other.String(),
+		},
+		{
+			name:   "spent by the same transaction at another vin",
+			record: func(m *meta.Data) { m.SpendingDatas[1] = spend.NewSpendingData(f.unminedChild.TxIDChainHash(), 5) },
+			detail: "in the store",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rec := f.matching()
+			if tt.record != nil {
+				tt.record(rec)
+			}
+
+			items := tt.items
+			if items == nil {
+				items = f.spentItems()
+			}
+
+			store := presentStore(f, rec)
+
+			r, _ := newRepairer(t, store, idleChain(t, f), f.peerServer(t, items).URL, Options{TxIDs: []chainhash.Hash{*f.parent.TxIDChainHash()}})
+
+			res := runOne(t, r)
+			require.Equal(t, OutcomePresentMismatch, res.Outcome, res.Detail)
+			require.Contains(t, res.Detail, tt.detail)
+			assertNoWrites(t, store)
+		})
+	}
+}
+
+// A present record may carry more blocks than the peer's main-chain entry.
+func TestPresentRecordWithExtraBlocksMatches(t *testing.T) {
+	f := newFixture(t)
+
+	rec := f.matching()
+	rec.BlockIDs = append(rec.BlockIDs, 999)
+	rec.BlockHeights = append(rec.BlockHeights, f.blockHeight+5)
+
+	r, _ := newRepairer(t, presentStore(f, rec), idleChain(t, f), f.peerServer(t, f.spentItems()).URL, Options{TxIDs: []chainhash.Hash{*f.parent.TxIDChainHash()}})
+
+	res := runOne(t, r)
+	require.Equal(t, OutcomeAlreadyPresent, res.Outcome, res.Detail)
+}
+
+func TestVerifyRejectsWrongBlockHeights(t *testing.T) {
+	f := newFixture(t)
+	parentHash := *f.parent.TxIDChainHash()
+
+	store := missingParentStore(f)
+	store.On("SpendAndCreate", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(&meta.Data{}, []*utxo.Spend{}, nil)
+
+	wrong := f.matching()
+	wrong.BlockHeights = []uint32{f.blockHeight + 3}
+	store.On("Get", mock.Anything, hashPtr(parentHash), mock.Anything).Return(wrong, nil)
+	store.On("DeleteComplete", mock.Anything, hashPtr(parentHash)).Return(nil).Once()
+
+	r, _ := newRepairer(t, store, idleChain(t, f), f.peerServer(t, f.spentItems()).URL, Options{TxIDs: []chainhash.Hash{parentHash}})
+
+	res := runOne(t, r)
+	require.Equal(t, OutcomeFailed, res.Outcome)
+	require.Contains(t, res.Detail, "block heights")
+	store.AssertExpectations(t)
+}
+
+// Another input of a spender must be SPENT by that spender at that vin. Matching the
+// txid alone, the vin alone, or the data under a conflicting or locked status is not enough.
+func TestOtherInputMustBeSpentByTheSpenderAtThatVin(t *testing.T) {
+	f := newFixture(t)
+	parentHash := *f.parent.TxIDChainHash()
+
+	q := secondParent(t, f.unminedChild)
+	qHash := *q.TxIDChainHash()
+	other := chainhash.HashH([]byte("someone-else"))
+	child := f.unminedChild.TxIDChainHash()
+
+	tests := []struct {
+		name string
+		resp utxo.SpendResponse
+	}{
+		{"same txid, other vin", utxo.SpendResponse{Status: int(utxo.Status_SPENT), SpendingData: spend.NewSpendingData(child, 0)}},
+		{"other txid, same vin", utxo.SpendResponse{Status: int(utxo.Status_SPENT), SpendingData: spend.NewSpendingData(&other, 1)}},
+		{"conflicting status with its data", utxo.SpendResponse{Status: int(utxo.Status_CONFLICTING), SpendingData: spend.NewSpendingData(child, 1)}},
+		{"locked status with its data", utxo.SpendResponse{Status: int(utxo.Status_LOCKED), SpendingData: spend.NewSpendingData(child, 1)}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resp := tt.resp
+
+			store := missingParentStore(f)
+			store.On("Get", mock.Anything, hashPtr(qHash), mock.Anything).Return(&meta.Data{}, nil)
+			store.On("GetSpend", mock.Anything, spendOf(qHash, 0)).Return(&resp, nil)
+
+			r, _ := newRepairer(t, store, idleChain(t, f), f.peerServer(t, f.spentItems()).URL, Options{TxIDs: []chainhash.Hash{parentHash}})
+
+			res := runOne(t, r)
+			require.Equal(t, OutcomeUnsafeSpender, res.Outcome, res.Detail)
+			require.Contains(t, res.Detail, "the replay would change it")
+			assertNoWrites(t, store)
+		})
+	}
+}
+
+// The spender's second input on the parent is planned for another spender but at the
+// same vin, so only the spender identity tells them apart.
+func TestSpenderInputPlannedForAnotherSpenderAtTheSameVinIsRefused(t *testing.T) {
+	f := newFixture(t)
+	parentHash := *f.parent.TxIDChainHash()
+
+	x := bt.NewTx()
+	require.NoError(t, x.From(f.parent.TxID(), 0, f.parent.Outputs[0].LockingScript.String(), f.parent.Outputs[0].Satoshis))
+	require.NoError(t, x.From(f.parent.TxID(), 1, f.parent.Outputs[1].LockingScript.String(), f.parent.Outputs[1].Satoshis))
+	require.NoError(t, x.PayToAddress(payAddress, 17000))
+
+	p := f.peer([]peerUTXO{
+		{Vout: 0, Status: statusSpent, SpendingData: spend.NewSpendingData(x.TxIDChainHash(), 0)},
+		{Vout: 1, Status: statusSpent, SpendingData: spend.NewSpendingData(f.unminedChild.TxIDChainHash(), 1)},
+	})
+	p.txs[x.TxID()] = x.ExtendedBytes()
+
+	store := missingParentStore(f)
+	store.On("Get", mock.Anything, hashPtr(*x.TxIDChainHash()), mock.Anything).Return(&meta.Data{}, nil)
+
+	r, _ := newRepairer(t, store, idleChain(t, f), p.serve(t).URL, Options{TxIDs: []chainhash.Hash{parentHash}})
+
+	res := runOne(t, r)
+	require.Equal(t, OutcomeUnsafeSpender, res.Outcome)
+	require.Contains(t, res.Detail, "which the peer does not record as spent by it there")
+	assertNoWrites(t, store)
+}
+
+// An output the store never keeps as a UTXO may be OK or NOT_FOUND at the peer, nothing else.
+func TestUnspendableOutputWithAnyOtherStateIsRefused(t *testing.T) {
+	dataScript, err := bscript.NewFromASM("OP_FALSE OP_RETURN 68656c6c6f")
+	require.NoError(t, err)
+
+	f := newFixture(t, &bt.Output{LockingScript: dataScript, Satoshis: 0})
+	parentHash := *f.parent.TxIDChainHash()
+
+	for _, status := range []string{statusSpent, "FROZEN", "LOCKED"} {
+		t.Run(status, func(t *testing.T) {
+			store := missingParentStore(f)
+
+			items := append(f.spentItems(), peerUTXO{Vout: 2, Status: status})
+
+			r, _ := newRepairer(t, store, idleChain(t, f), f.peerServer(t, items).URL, Options{TxIDs: []chainhash.Hash{parentHash}})
+
+			res := runOne(t, r)
+			require.Equal(t, OutcomePeerStateUnusable, res.Outcome)
+			require.Contains(t, res.Detail, "output 2 is unspendable but peer reports "+status)
+			assertNoWrites(t, store)
+		})
+	}
 }

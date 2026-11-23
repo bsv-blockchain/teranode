@@ -21,6 +21,7 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	teranode_aerospike "github.com/bsv-blockchain/teranode/stores/utxo/aerospike"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
+	utxologger "github.com/bsv-blockchain/teranode/stores/utxo/logger"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/stores/utxo/spend"
 	"github.com/bsv-blockchain/teranode/ulogger"
@@ -130,10 +131,8 @@ func peerItemsFromStore(t *testing.T, store utxo.Store, tx *bt.Tx) []peerUTXO {
 
 func peerFor(txs []*bt.Tx, parent *bt.Tx, blockHash chainhash.Hash, height uint32, items []peerUTXO) *peer {
 	p := &peer{
-		txs: map[string][]byte{},
-		metas: map[string]any{parent.TxID(): map[string]any{
-			"blockHeights": []uint32{height}, "blockHashes": []string{blockHash.String()}, "subtreeIdxs": []int{0}, "mainChainIndex": 0,
-		}},
+		txs:   map[string][]byte{},
+		metas: map[string]any{parent.TxID(): minedMeta(blockHash, height)},
 		utxos: map[string]any{parent.TxID(): items},
 	}
 
@@ -235,6 +234,10 @@ func TestIntegration_RepairRestoresPrunedParentExactly(t *testing.T) {
 	}
 
 	require.Nil(t, after[fields.UnminedSince.String()], "a rebuilt mined parent must not look unmined")
+
+	// The parent has a local unmined child, so it is preserved from the pruner.
+	require.NotNil(t, after[fields.PreserveUntil.String()], "a parent with a local unmined child must be preserved")
+	require.Nil(t, before[fields.PreserveUntil.String()])
 
 	// The store's own read path agrees with the peer's spent state.
 	got, err := store.Get(ctx, f.parent.TxIDChainHash(), fields.Utxos, fields.BlockIDs)
@@ -498,7 +501,7 @@ func TestIntegration_UnheldOffChainSpenderLeavesOutputUnspent(t *testing.T) {
 
 	items := []peerUTXO{{Vout: 0, Status: statusSpent, SpendingData: spend.NewSpendingData(x.TxIDChainHash(), 0)}}
 	pr := peerFor([]*bt.Tx{p, x}, p, blockHash, height, items)
-	pr.metas[x.TxID()] = map[string]any{"blockHeights": []uint32{}, "blockHashes": []string{}, "subtreeIdxs": []int{}, "mainChainIndex": -1}
+	pr.metas[x.TxID()] = unminedMeta()
 
 	r, out := newIntegrationRepairer(t, store, idleChainFor(blockHash, blockID, height), pr.serve(t).URL, Options{TxIDs: []chainhash.Hash{*p.TxIDChainHash()}})
 
@@ -564,7 +567,7 @@ func TestIntegration_PrunedSpenderIsRecordedAsDeletedChild(t *testing.T) {
 	require.NoError(t, store.Delete(ctx, p.TxIDChainHash()))
 
 	pr := peerFor([]*bt.Tx{p, s}, p, blockHash, height, items)
-	pr.metas[s.TxID()] = map[string]any{"blockHeights": []uint32{height}, "blockHashes": []string{blockHash.String()}, "subtreeIdxs": []int{0}, "mainChainIndex": 0}
+	pr.metas[s.TxID()] = minedMeta(blockHash, height)
 
 	r, out := newIntegrationRepairer(t, store, idleChainFor(blockHash, blockID, height), pr.serve(t).URL, Options{TxIDs: []chainhash.Hash{*p.TxIDChainHash()}})
 
@@ -631,7 +634,7 @@ func TestIntegration_PrunedSpenderWithOtherParentIsRefused(t *testing.T) {
 	require.NoError(t, store.Delete(ctx, p.TxIDChainHash()))
 
 	pr := peerFor([]*bt.Tx{p, s}, p, blockHash, height, items)
-	pr.metas[s.TxID()] = map[string]any{"blockHeights": []uint32{height}, "blockHashes": []string{blockHash.String()}, "subtreeIdxs": []int{0}, "mainChainIndex": 0}
+	pr.metas[s.TxID()] = minedMeta(blockHash, height)
 
 	r, out := newIntegrationRepairer(t, store, idleChainFor(blockHash, blockID, height), pr.serve(t).URL, Options{TxIDs: []chainhash.Hash{*p.TxIDChainHash()}})
 
@@ -691,13 +694,8 @@ func TestIntegration_SpenderWithWrongInputDataIsRefused(t *testing.T) {
 	tampered.Inputs[0].PreviousTxSatoshis++
 	require.Equal(t, x.TxID(), tampered.TxID(), "the txid must not cover the extended input data")
 
-	pr := &peer{
-		txs: map[string][]byte{p.TxID(): p.ExtendedBytes(), x.TxID(): tampered.ExtendedBytes()},
-		metas: map[string]any{p.TxID(): map[string]any{
-			"blockHeights": []uint32{height}, "blockHashes": []string{blockHash.String()}, "subtreeIdxs": []int{0}, "mainChainIndex": 0,
-		}},
-		utxos: map[string]any{p.TxID(): items},
-	}
+	pr := peerFor([]*bt.Tx{p, x}, p, blockHash, height, items)
+	pr.txs[x.TxID()] = tampered.ExtendedBytes()
 
 	r, out := newIntegrationRepairer(t, store, idleChainFor(blockHash, blockID, height), pr.serve(t).URL, Options{TxIDs: []chainhash.Hash{*p.TxIDChainHash()}})
 
@@ -811,4 +809,31 @@ func TestIntegration_CreateFailureSweepsOrphanedChildren(t *testing.T) {
 	require.Error(t, err, "no master may remain")
 	require.False(t, childRecordExists(t, client, store, parentHash, 1), "orphaned pagination record 1 must be swept")
 	require.False(t, childRecordExists(t, client, store, parentHash, 2), "orphaned pagination record 2 must be swept")
+}
+
+// ?logging=true wraps the store in the storelogger. The stale-record check must see
+// through it, not skip silently.
+func TestIntegration_StaleChildrenAreFoundThroughTheLoggerWrapper(t *testing.T) {
+	client, store := startAerospike(t, func(s *settings.Settings) { s.UtxoStore.UtxoBatchSize = 2 })
+	ctx := context.Background()
+
+	const height = uint32(690000)
+	const blockID = uint32(97)
+	blockHash := chainhash.HashH([]byte("block-690000"))
+
+	require.NoError(t, store.SetBlockHeight(height))
+
+	parent, spenders, items := paginatedParent(t, store, "gp-wrapped", height, blockID)
+	parentHash := parent.TxIDChainHash()
+
+	peer := servePeer(t, append([]*bt.Tx{parent}, spenders...), parent, blockHash, height, items)
+	wrapped := utxologger.New(ctx, ulogger.NewErrorTestLogger(t), store)
+
+	r, out := newIntegrationRepairer(t, wrapped, idleChainFor(blockHash, blockID, height), peer.URL, Options{TxIDs: []chainhash.Hash{*parentHash}, DryRun: true})
+
+	report, err := r.Run(ctx)
+	require.NoError(t, err, out.String())
+	require.Equal(t, OutcomePlanned, report.Results[0].Outcome, report.Results[0].Detail)
+	require.Contains(t, report.Results[0].Detail, "2 stale pagination record(s) would be removed")
+	require.True(t, childRecordExists(t, client, store, parentHash, 1))
 }

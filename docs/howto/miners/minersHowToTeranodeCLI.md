@@ -346,7 +346,7 @@ The rebuilt record follows what this node knows, not only what the peer reports:
 Preconditions:
 
 1. The blockchain service must be running. The tool reads the FSM state and resolves block hashes through it.
-2. Put the FSM in IDLE with `teranode-cli setfsmstate --fsmstate idle`. The tool refuses to run in any other state.
+2. Put the FSM in IDLE with `teranode-cli setfsmstate --fsmstate idle`. The tool refuses to run in any other state. The command moves a node from RUNNING or CATCHINGBLOCKS to IDLE. Check that the FSM reads IDLE before you pass `--dry-run=false`.
 3. Stop the other services that write to the UTXO store (propagation, validator, block validation, subtree validation, block assembly). The validator does not pause in IDLE.
 
 Options:
@@ -375,6 +375,10 @@ Pass `--txids`, `--scan`, or both. The tool plans every parent first and prints 
 The command exits non-zero when any parent is not `repaired`, `planned` or `already present`.
 
 The scan cannot see a hole whose only child is already mined; that hole surfaces as a catch-up wedge naming the parent, which you pass with `--txids`. A parent the peer has itself pruned cannot be rebuilt by this tool.
+
+An interrupt (Ctrl-C) stops the run between parents. A parent that is being written is rolled back. If a rollback fails, the detail column says `ROLLBACK FAILED`. A record left like that is not found by `--scan`, because the parent is present. Run the parent again with `--txids`: the tool compares it with the peer and reports `present but differs from peer`. The tool never changes a record that is already present, so such a record needs an operator decision before the parent can be repaired.
+
+A parent that has local unmined children is kept from pruning after the rebuild, for `utxostore_parentPreservationBlocks` blocks, so it does not go back into the race with the pruner.
 
 ⚠️ **Warning**: This command writes to the UTXO store. Run it with the default `--dry-run` first and read the plan before you pass `--dry-run=false`.
 

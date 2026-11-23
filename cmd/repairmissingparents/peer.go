@@ -53,6 +53,13 @@ const (
 	maxPeerResponseBytes = 1 << 30
 	peerAttempts         = 3
 	peerRetryDelay       = time.Second
+	// peerHeaderTimeout bounds the wait for response headers. peerRequestTimeout bounds
+	// a whole request, body included, so a transaction near the size limit can finish
+	// while a stalled peer cannot hold the run forever.
+	peerHeaderTimeout  = 30 * time.Second
+	peerRequestTimeout = 10 * time.Minute
+	// errorBodyBytes caps how much of a failure response is read and echoed.
+	errorBodyBytes = 256
 )
 
 // HTTPPeer reads from an asset service over HTTP.
@@ -62,13 +69,17 @@ type HTTPPeer struct {
 	maxBody    int64
 	attempts   int
 	retryDelay time.Duration
+	reqTimeout time.Duration
 }
 
 // NewHTTPPeer returns a Peer for the asset service at baseURL (scheme://host[:port],
-// without the /api/v1 prefix). A nil client uses a 30-second-timeout default.
+// without the /api/v1 prefix). A nil client waits 30 seconds for headers and has no
+// total timeout of its own: each request is bounded by peerRequestTimeout instead.
 func NewHTTPPeer(baseURL string, client *http.Client) *HTTPPeer {
 	if client == nil {
-		client = &http.Client{Timeout: 30 * time.Second}
+		transport := http.DefaultTransport.(*http.Transport).Clone()
+		transport.ResponseHeaderTimeout = peerHeaderTimeout
+		client = &http.Client{Transport: transport}
 	}
 
 	return &HTTPPeer{
@@ -77,6 +88,7 @@ func NewHTTPPeer(baseURL string, client *http.Client) *HTTPPeer {
 		maxBody:    maxPeerResponseBytes,
 		attempts:   peerAttempts,
 		retryDelay: peerRetryDelay,
+		reqTimeout: peerRequestTimeout,
 	}
 }
 
@@ -114,6 +126,9 @@ func (p *HTTPPeer) get(ctx context.Context, path string) ([]byte, error) {
 }
 
 func (p *HTTPPeer) getOnce(ctx context.Context, path string) ([]byte, bool, error) {
+	ctx, cancel := context.WithTimeout(ctx, p.reqTimeout)
+	defer cancel()
+
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, p.baseURL+path, nil)
 	if err != nil {
 		return nil, false, errors.NewProcessingError("build request %s", path, err)
@@ -125,6 +140,19 @@ func (p *HTTPPeer) getOnce(ctx context.Context, path string) ([]byte, bool, erro
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode != http.StatusOK {
+		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, errorBodyBytes))
+
+		switch {
+		case resp.StatusCode == http.StatusNotFound:
+			return nil, true, errors.NewNotFoundError("peer has no record for %s", path)
+		case resp.StatusCode >= http.StatusInternalServerError:
+			return nil, true, errors.NewServiceError("peer %s returned %d: %q", path, resp.StatusCode, snippet)
+		default:
+			return nil, false, errors.NewServiceError("peer %s returned %d: %q", path, resp.StatusCode, snippet)
+		}
+	}
+
 	body, err := io.ReadAll(io.LimitReader(resp.Body, p.maxBody+1))
 	if err != nil {
 		return nil, true, errors.NewServiceError("read peer response %s", path, err)
@@ -132,15 +160,6 @@ func (p *HTTPPeer) getOnce(ctx context.Context, path string) ([]byte, bool, erro
 
 	if int64(len(body)) > p.maxBody {
 		return nil, false, errors.NewProcessingError("peer response %s exceeds %d bytes", path, p.maxBody)
-	}
-
-	switch {
-	case resp.StatusCode == http.StatusNotFound:
-		return nil, true, errors.NewNotFoundError("peer has no record for %s", path)
-	case resp.StatusCode >= http.StatusInternalServerError:
-		return nil, true, errors.NewServiceError("peer %s returned %d: %s", path, resp.StatusCode, strings.TrimSpace(string(body)))
-	case resp.StatusCode != http.StatusOK:
-		return nil, false, errors.NewServiceError("peer %s returned %d: %s", path, resp.StatusCode, strings.TrimSpace(string(body)))
 	}
 
 	return body, false, nil
