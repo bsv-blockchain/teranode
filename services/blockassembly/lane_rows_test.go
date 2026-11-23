@@ -947,3 +947,39 @@ func TestStoreSubtreeDataBuildsLaneBitmapsWhenTheMetaPassFails(t *testing.T) {
 	require.Equal(t, []uint64{20, 22}, kept[0][4].ToArray(), "the members before and after the lost one keep their positions")
 	require.Equal(t, before+1, ownLaneMetric(t, "teranode_lane_txs_without_position_total", unpositioned))
 }
+
+// failingBitmapsWriteStore refuses every write of a lane bitmaps file.
+type failingBitmapsWriteStore struct {
+	blob.Store
+}
+
+func (s failingBitmapsWriteStore) Set(ctx context.Context, key []byte, fileType fileformat.FileType, value []byte, opts ...blobOptions.FileOption) error {
+	if fileType == fileformat.FileTypeSubtreeLaneBitmaps {
+		return errors.NewStorageError("write refused")
+	}
+
+	return s.Store.Set(ctx, key, fileType, value, opts...)
+}
+
+// TestStoreSubtreeDataCountsAFailedLaneBitmapsWrite: a lane bitmaps file block assembly cannot write
+// is counted as write_failed under block="own"; the subtree is still stored, and its bitmaps are
+// still kept for a block this node mines.
+func TestStoreSubtreeDataCountsAFailedLaneBitmapsWrite(t *testing.T) {
+	server, memoryStore := setupServerWithSettings(t, func(s *settings.Settings) { s.UtxoStore.LaneMigration = settings.LaneMigrationShadow })
+	server.subtreeStore = failingBitmapsWriteStore{Store: memoryStore}
+
+	labels := map[string]string{"block": lane.BlockOwn, "reason": lane.MissingBitmapsWriteFailed}
+	before := ownLaneMetric(t, "teranode_lane_missing_bitmaps_total", labels)
+
+	st, txMap := laneSealSubtree(t, "write-fails")
+
+	subtreeDone, allDone, err := server.storeSubtreeData(t.Context(), subtreeprocessor.NewSubtreeRequest{Subtree: st, ParentTxMap: txMap}, make(chan *subtreeRetrySend, 10))
+	require.NoError(t, err)
+	require.True(t, <-subtreeDone, "the subtree is still stored")
+	<-allDone
+
+	require.Equal(t, before+1, ownLaneMetric(t, "teranode_lane_missing_bitmaps_total", labels))
+
+	_, missing := server.ownLaneBitmaps.get([]*chainhash.Hash{st.RootHash()})
+	require.Zero(t, missing, "its bitmaps are still kept")
+}

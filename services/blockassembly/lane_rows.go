@@ -276,7 +276,9 @@ func (ba *BlockAssembly) storeSubtreeLaneBitmaps(ctx context.Context, subtree *s
 
 	data, err := lane.EncodeSubtreeBitmaps(bitmaps)
 	if err != nil {
+		lane.CountMissingBitmaps(lane.BlockOwn, lane.MissingBitmapsWriteFailed, 1)
 		ba.logger.Warnf("[BlockAssembly:storeSubtreeData][%s] storing the subtree without its lane bitmaps file, which could not be encoded: %v", root.String(), err)
+
 		return
 	}
 
@@ -290,6 +292,8 @@ func (ba *BlockAssembly) storeSubtreeLaneBitmaps(ctx context.Context, subtree *s
 			ba.logger.Warnf("[BlockAssembly:storeSubtreeData][%s] the lane bitmaps file may now expire before its subtree, whose DAH update failed: %v", root.String(), dahErr)
 		}
 	case err != nil:
+		// a peer's block that lists this subtree will count it absent; our own uses the kept bitmaps
+		lane.CountMissingBitmaps(lane.BlockOwn, lane.MissingBitmapsWriteFailed, 1)
 		ba.logger.Warnf("[BlockAssembly:storeSubtreeData][%s] storing the subtree without its lane bitmaps file, whose write failed: %v", root.String(), err)
 	}
 }
