@@ -206,3 +206,85 @@ func TestReorgScenario_FastPathMapWritesDoNotGrowWithThePendingSet(t *testing.T)
 	require.Equal(t, small.inserted, large.inserted)
 	require.Equal(t, small.deleted, large.deleted)
 }
+
+// The awaited stores of PR 2b hold for the fast path too: its subtrees are stored before the first
+// longest-chain mark and announced after it, and a failed store fails the reorg before any mark.
+func TestReorgScenario_FastPathStoresBeforeTheMarksAndAnnouncesAfter(t *testing.T) {
+	sc, r, _ := newAwaitedStoreScenario(t, 5*time.Second, answerStored)
+
+	var rec fastPathRun
+
+	require.NoError(t, recordingFastPath(&rec)(t, sc))
+	require.True(t, rec.applied, "declined: %v", rec.reasons)
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	require.NotEmpty(t, r.awaited, "the reorg waits for the stores of the subtrees it built")
+
+	for _, marks := range r.awaited {
+		require.Zero(t, marks, "every awaited store is sent before the first longest-chain mark")
+	}
+
+	require.NotEmpty(t, r.announced)
+
+	for _, marks := range r.announced {
+		require.Positive(t, marks, "nothing is announced before the marks")
+	}
+}
+
+func TestReorgScenario_FastPathFailedStoreFailsTheReorgBeforeTheMarks(t *testing.T) {
+	sc, r, logger := newAwaitedStoreScenario(t, 5*time.Second, failAwaited)
+
+	var rec fastPathRun
+
+	require.Error(t, recordingFastPath(&rec)(t, sc))
+	require.True(t, rec.applied, "declined: %v", rec.reasons)
+
+	require.Zero(t, sc.utxo.markCount(true)+sc.utxo.markCount(false), "no longest-chain mark is written")
+	require.True(t, sc.stp.failedForkReorgNeedsReset.Load(), "only a reset may follow")
+	require.NotContains(t, logger.phases("reorgBlocks"), "processed_at", "no forward block is marked processed")
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	require.Empty(t, r.announced, "nothing is announced")
+}
+
+// Design section 3.2: every node of the installed subtrees has an entry in the tx map at every instant.
+// The meta of a subtree that holds an effective D1 transaction reads its inpoints from the map, and a
+// reset or a removal between two steps would find the node without one.
+func TestReorgScenario_FastPathEveryInstalledNodeIsInTheMapAtEveryBeat(t *testing.T) {
+	for _, disk := range []bool{false, true} {
+		cfg := smallScenarioConfig()
+		cfg.diskTxMap = disk
+
+		sc := newReorgScenario(t, cfg)
+		sc.stp.settings.BlockAssembly.ReorgFastPath = true
+
+		beats, checked := 0, 0
+
+		sc.stp.SetProgressHook(func() {
+			beats++
+
+			if sc.stp.reorgPendingD1 == nil && checked == 0 {
+				return // before the fast path
+			}
+
+			missing := 0
+
+			for _, node := range assemblyNodes(sc.stp) {
+				if node.Hash != subtreepkg.CoinbasePlaceholderHashValue && !sc.stp.currentTxMap.Exists(node.Hash) {
+					missing++
+				}
+			}
+
+			require.Zero(t, missing, "beat %d: installed nodes without a tx map entry", beats)
+
+			checked++
+		})
+
+		require.NoError(t, sc.run(t))
+		require.GreaterOrEqual(t, checked, 4, "the fast path beats at least four times")
+	}
+}
