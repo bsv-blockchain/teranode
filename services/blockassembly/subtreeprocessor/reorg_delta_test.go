@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"math/rand"
+	"slices"
 	"testing"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
@@ -25,6 +26,8 @@ type deltaCase struct {
 	overlap          float64
 	seed             int64
 	dupAcrossWinners bool
+	// dupIsLost makes the hash that dupAcrossWinners duplicates a lost node too
+	dupIsLost bool
 }
 
 // deltaBlocks is what newDeltaBlocks stored: the blocks and the leaves of every subtree.
@@ -91,6 +94,10 @@ func newDeltaBlocks(t testing.TB, store *blob_memory.Memory, c deltaCase) *delta
 	if c.dupAcrossWinners {
 		// one hash in two winner blocks, besides the placeholder every block has
 		d.winnerLeaves[len(d.winnerLeaves)-1][0][1] = d.winnerLeaves[0][0][1]
+	}
+
+	if c.dupIsLost {
+		d.lostLeaves[0][0][1] = d.winnerLeaves[0][0][1]
 	}
 
 	for _, l := range d.lostLeaves {
@@ -165,8 +172,9 @@ func requireDeltaMatchesReference(t testing.TB, stp *SubtreeProcessor, d *deltaB
 	want := referenceDelta(d)
 
 	require.Equal(t, want.Hits, got.Hits)
-	require.Equal(t, want.D1, got.D1, "D1 must be the lost nodes not in the winners, in the lost blocks' order")
-	require.Equal(t, want.D2, got.D2, "D2 must be each winner hash nobody lost, once, ascending")
+	// slices.Equal, not require.Equal: a mismatch of a million hashes would be rendered as a diff
+	require.True(t, slices.Equal(want.D1, got.D1), "D1 must be the lost nodes not in the winners, in the lost blocks' order: want %d got %d", len(want.D1), len(got.D1))
+	require.True(t, slices.Equal(want.D2, got.D2), "D2 must be each winner hash nobody lost, once, ascending: want %d got %d", len(want.D2), len(got.D2))
 }
 
 // TestReorgDelta_MatchesReference pins that both directions are exact against a map
@@ -222,6 +230,50 @@ func TestReorgDelta_Duplicates(t *testing.T) {
 	}
 
 	require.LessOrEqual(t, n, 1)
+}
+
+// TestReorgDelta_DuplicateWinnerThatWasLost pins a winner hash present in two winner blocks
+// and in a lost block: one hit, in neither D1 nor D2, and nothing else lost with it.
+func TestReorgDelta_DuplicateWinnerThatWasLost(t *testing.T) {
+	stp, store := newTxMapTestProcessor(t)
+	d := newDeltaBlocks(t, store, deltaCase{lostBlocks: 2, winBlocks: 2, subtrees: 2, subtreeSize: 64, overlap: 0.3, seed: 21, dupAcrossWinners: true, dupIsLost: true})
+	dup := d.winnerLeaves[0][0][1]
+
+	require.Equal(t, dup, d.winnerLeaves[1][0][1])
+	require.Equal(t, dup, d.lostLeaves[0][0][1])
+
+	winners, err := stp.buildUnionSet(context.Background(), d.winners)
+	require.NoError(t, err)
+
+	got, err := stp.computeReorgDelta(context.Background(), d.lost, winners, 3)
+	require.NoError(t, err)
+
+	for _, n := range got.D1 {
+		require.NotEqual(t, dup, n.Hash)
+	}
+
+	require.NotContains(t, got.D2, dup)
+	requireDeltaMatchesReference(t, stp, d, 3)
+}
+
+// TestReorgDelta_ManyPartitions runs the delta on a winner set of several partitions, where D2
+// joins the partitions' lists, IterPositions calls back from several goroutines and the bitmap
+// positions of partitions after the first start above zero.
+func TestReorgDelta_ManyPartitions(t *testing.T) {
+	stp, store := newTxMapTestProcessor(t)
+
+	for _, overlap := range []float64{0.5, 1} {
+		d := newDeltaBlocks(t, store, deltaCase{
+			lostBlocks: 1, winBlocks: 2, subtrees: 2, subtreeSize: 1 << 16,
+			overlap: overlap, seed: 31 + int64(overlap*10), dupAcrossWinners: true, dupIsLost: true,
+		})
+
+		winners, err := stp.buildUnionSet(context.Background(), d.winners)
+		require.NoError(t, err)
+		require.Greater(t, winners.Partitions(), 1)
+
+		requireDeltaMatchesReference(t, stp, d, 4)
+	}
 }
 
 // TestReorgDelta_WorkerCounts pins that the answer does not depend on the worker bound.

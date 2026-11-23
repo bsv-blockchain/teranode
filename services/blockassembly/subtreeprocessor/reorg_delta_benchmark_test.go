@@ -17,7 +17,12 @@ import (
 // so this is the cost of one probe with a warm directory; a real 1.2B-hash set misses
 // the TLB and the cache far more (design section 4.4).
 func BenchmarkReorgSortedHashSetFind(b *testing.B) {
-	for _, n := range []int{1 << 20, 1 << 22} {
+	sizes := []int{1 << 20, 1 << 22}
+	if testing.Short() {
+		sizes = sizes[:1] // CI runs these with -short and a budget for the whole filter
+	}
+
+	for _, n := range sizes {
 		// the benchmark function runs again for every b.N the framework tries: build once
 		var (
 			hashes []chainhash.Hash
@@ -60,7 +65,12 @@ func BenchmarkReorgSortedHashSetFind(b *testing.B) {
 // subtrees are real files in the memory blob store and are read and parsed in every
 // iteration; the set is built once, outside the timer.
 func BenchmarkReorgDelta(b *testing.B) {
-	for _, overlap := range []float64{0.5, 0.99} {
+	overlaps := []float64{0.5, 0.99}
+	if testing.Short() {
+		overlaps = overlaps[:1]
+	}
+
+	for _, overlap := range overlaps {
 		// the benchmark function runs again for every b.N the framework tries: build once
 		var (
 			stp       *SubtreeProcessor

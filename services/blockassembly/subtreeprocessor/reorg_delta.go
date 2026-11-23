@@ -104,14 +104,19 @@ func (stp *SubtreeProcessor) computeReorgDelta(ctx context.Context, lost []*mode
 
 			defer func() { _ = reader.Close() }()
 
-			// one bucket keeps the leaves in node order
-			leaves := make(map[uint16][]chainhash.Hash, 1)
+			// One bucket keeps the leaves in node order. The subtree's own leaf count is only
+			// read inside the deserializer, so size by the block's average (subtrees are full
+			// but the last), bounded by what a subtree may hold, to skip the append doublings.
+			hint := min(lost[jb.block].TransactionCount/uint64(len(lost[jb.block].Subtrees)), uint64(maxSize)/subtreeLeafBytes)
+			leaves := map[uint16][]chainhash.Hash{0: make([]chainhash.Hash, 0, hint)}
 
 			var conflicting []chainhash.Hash
 
 			if err = deserializeHashesIntoBuckets(reader, func(chainhash.Hash) uint16 { return 0 }, maxSize, &leaves, &conflicting); err != nil {
 				return errors.NewProcessingError("error deserializing lost subtree: %s", root.String(), err)
 			}
+
+			var jobHits uint64
 
 			for n, h := range leaves[0] {
 				if h == subtreepkg.CoinbasePlaceholderHashValue {
@@ -124,7 +129,7 @@ func (stp *SubtreeProcessor) computeReorgDelta(ctx context.Context, lost []*mode
 					continue
 				}
 
-				hits[j]++
+				jobHits++
 
 				// load first: most winners are hit once and the word is shared by 64 of them
 				word, bit := &bitmap[pos/64], uint64(1)<<(pos%64)
@@ -132,6 +137,8 @@ func (stp *SubtreeProcessor) computeReorgDelta(ctx context.Context, lost []*mode
 					word.Or(bit)
 				}
 			}
+
+			hits[j] = jobHits
 
 			return nil
 		})
@@ -152,6 +159,7 @@ func (stp *SubtreeProcessor) computeReorgDelta(ctx context.Context, lost []*mode
 	delta.D1 = make([]reorgDeltaNode, 0, nD1)
 	for j := range jobs {
 		delta.D1 = append(delta.D1, d1[j]...)
+		d1[j] = nil // not held twice while the rest are copied
 	}
 
 	// each partition is walked by one goroutine, and partition p holds the hashes below
