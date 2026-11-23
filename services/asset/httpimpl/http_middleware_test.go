@@ -318,6 +318,76 @@ func TestNew_HeavyRateLimiterUsesDistinctMetricLabelForCatchupRoutes(t *testing.
 		"the non-catchup heavy-route rejection must be counted under heavy")
 }
 
+// fireRequestsWithLegacyToken is fireRequests with legacyInternalTokenHeader set
+// to token on every request; an empty token sends no header.
+func fireRequestsWithLegacyToken(srv *HTTP, path, token string, n int) (tooMany int) {
+	for i := 0; i < n; i++ {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		if token != "" {
+			req.Header.Set(legacyInternalTokenHeader, token)
+		}
+		rec := httptest.NewRecorder()
+		srv.e.ServeHTTP(rec, req)
+		if rec.Code == http.StatusTooManyRequests {
+			tooMany++
+		}
+	}
+	return tooMany
+}
+
+// TestNew_LegacyPeerPoolTokenExemptsBlockLegacyFromHeavyLimiter — this node's own
+// legacy peer server fetches every block it serves to SV peers from
+// GET /block_legacy/:hash. It is not in this node's peer registry, so the heavy
+// limiter keys it by IP as an unverified client and its 429s stall the SV peers.
+// A request presenting asset_legacyPeerPoolToken must skip the heavy limiter on
+// that route. A missing or wrong token, an unset configured token, and the token
+// on any other heavy route must still be limited.
+func TestNew_LegacyPeerPoolTokenExemptsBlockLegacyFromHeavyLimiter(t *testing.T) {
+	const token = "internal-token"
+
+	legacyPath := fmt.Sprintf("/api/v1/block_legacy/%s?wire=1", testHashHex)
+
+	newServer := func(t *testing.T, configuredToken string) *HTTP {
+		tSettings := baseTestSettings()
+		tSettings.Asset.HTTPHeavyRateLimit = 1
+		tSettings.Asset.LegacyPeerPoolToken = configuredToken
+
+		return newTestServer(t, tSettings)
+	}
+
+	t.Run("the configured token skips the heavy limiter", func(t *testing.T) {
+		srv := newServer(t, token)
+
+		require.Zero(t, fireRequestsWithLegacyToken(srv, legacyPath, token, 5),
+			"the legacy peer server presenting the token must not be rate limited")
+	})
+
+	t.Run("no token is limited", func(t *testing.T) {
+		srv := newServer(t, token)
+
+		require.Equal(t, 1, fireRequestsWithLegacyToken(srv, legacyPath, "", 2))
+	})
+
+	t.Run("a wrong token is limited", func(t *testing.T) {
+		srv := newServer(t, token)
+
+		require.Equal(t, 1, fireRequestsWithLegacyToken(srv, legacyPath, "wrong-token", 2))
+	})
+
+	t.Run("an unset configured token exempts nobody", func(t *testing.T) {
+		srv := newServer(t, "")
+
+		require.Equal(t, 1, fireRequestsWithLegacyToken(srv, legacyPath, "anything", 2))
+	})
+
+	t.Run("the token does not exempt other heavy routes", func(t *testing.T) {
+		srv := newServer(t, token)
+		path := fmt.Sprintf("/api/v1/block/%s/hex", testHashHex)
+
+		require.Equal(t, 1, fireRequestsWithLegacyToken(srv, path, token, 2))
+	})
+}
+
 // TestNew_TrustedProxyCIDRsReplaceEchoDefaults — echo.TrustIPRange is additive:
 // link-local and private networks stay trusted unless explicitly disabled. An
 // operator who configures an allowlist means that list plus loopback and

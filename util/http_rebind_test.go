@@ -446,3 +446,88 @@ func TestDoLocalServiceHTTPRequestBodyReader_MergesEveryHeadersMap(t *testing.T)
 	require.Equal(t, "2", got.Get("X-Second"))
 	require.Equal(t, "second", got.Get("X-Shared"))
 }
+
+// TestDoLocalServiceHTTPRequestBodyReaderWithRetry_RetriesOn429ThenSucceeds covers the
+// legacy peer server's block fetch from this node's own asset service. A 429 from the
+// asset rate limiter must be retried rather than returned, or the SV peer that asked for
+// the block never gets it. The fetch must still reach loopback, and the headers (the
+// internal pool token) must go out on every attempt, not only the first.
+func TestDoLocalServiceHTTPRequestBodyReaderWithRetry_RetriesOn429ThenSucceeds(t *testing.T) {
+	var attempts, withToken atomic.Int32
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := attempts.Add(1)
+		if r.Header.Get("X-Teranode-Internal-Token") == "a-shared-secret" {
+			withToken.Add(1)
+		}
+
+		if n < 3 {
+			w.WriteHeader(http.StatusTooManyRequests)
+			return
+		}
+
+		_, _ = w.Write([]byte("block"))
+	}))
+	defer server.Close()
+
+	origProtection := SSRFProtectionEnabled()
+	SetSSRFProtection(true)
+	defer SetSSRFProtection(origProtection)
+
+	parsed, err := url.Parse(server.URL)
+	require.NoError(t, err)
+
+	localURL := "http://localhost:" + parsed.Port() + "/api/v1/block_legacy/aa?wire=1"
+
+	reader, err := doLocalServiceHTTPRequestBodyReaderWithRetry(context.Background(), localURL, testRetryConfig,
+		map[string]string{"X-Teranode-Internal-Token": "a-shared-secret"})
+	require.NoError(t, err)
+
+	defer func() { _ = reader.Close() }()
+
+	body, err := io.ReadAll(reader)
+	require.NoError(t, err)
+	require.Equal(t, "block", string(body))
+	require.Equal(t, int32(3), attempts.Load(), "two 429s, then the block")
+	require.Equal(t, int32(3), withToken.Load(), "every attempt must carry the headers")
+}
+
+// TestDoLocalServiceHTTPRequestBodyReaderWithRetry_DoesNotRetryOtherErrors pins that only
+// admission rejections (429, 503) are retried: a 404 is the asset service's answer and is
+// returned at once.
+func TestDoLocalServiceHTTPRequestBodyReaderWithRetry_DoesNotRetryOtherErrors(t *testing.T) {
+	var attempts atomic.Int32
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		attempts.Add(1)
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	_, err := doLocalServiceHTTPRequestBodyReaderWithRetry(context.Background(), server.URL, testRetryConfig)
+	require.Error(t, err)
+	require.Equal(t, int32(1), attempts.Load())
+}
+
+// TestDoLocalServiceHTTPRequestBodyReaderWithRetry_DoesNotFollowRedirects pins that the
+// retrying variant keeps the local client's refusal to follow redirects, so the internal
+// token header never reaches a redirect target.
+func TestDoLocalServiceHTTPRequestBodyReaderWithRetry_DoesNotFollowRedirects(t *testing.T) {
+	var targetHits atomic.Int32
+
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		targetHits.Add(1)
+		_, _ = w.Write([]byte("redirected"))
+	}))
+	defer target.Close()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, target.URL, http.StatusFound)
+	}))
+	defer server.Close()
+
+	_, err := doLocalServiceHTTPRequestBodyReaderWithRetry(context.Background(), server.URL, testRetryConfig,
+		map[string]string{"X-Teranode-Internal-Token": "a-shared-secret"})
+	require.Error(t, err)
+	require.Zero(t, targetHits.Load())
+}

@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -2024,4 +2026,38 @@ func TestUPnPUpdateThread_KeepsRenewingAfterAFailedAddressLookup(t *testing.T) {
 
 	require.Eventually(t, func() bool { return nat.mappings.Load() >= 3 }, 5*time.Second, 10*time.Millisecond,
 		"the port mapping must be renewed after a failed address lookup")
+}
+
+// TestPushBlockMsg_RetriesRateLimitedAssetFetch covers the legacy peer server reading a block
+// it serves to an SV peer from this node's own asset service. That service's heavy rate limiter
+// may answer 429; pushBlockMsg must retry, because a 429 returned as is leaves the SV peer's
+// getdata unanswered and the peer stops syncing. The asset service here answers 429, then 404,
+// so a retry is visible as the second request and as the 404 being the error returned.
+func TestPushBlockMsg_RetriesRateLimitedAssetFetch(t *testing.T) {
+	var requests atomic.Int32
+
+	asset := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if requests.Add(1) == 1 {
+			w.WriteHeader(http.StatusTooManyRequests)
+			return
+		}
+
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer asset.Close()
+
+	s := &server{
+		ctx:              context.Background(),
+		settings:         &settings.Settings{},
+		logger:           ulogger.TestLogger{},
+		assetHTTPAddress: asset.URL + "/api/v1",
+	}
+	sp := &serverPeer{server: s}
+	doneChan := make(chan struct{}, 1)
+
+	err := s.pushBlockMsg(sp, &chainhash.Hash{}, doneChan, nil, wire.BaseEncoding)
+	require.Error(t, err)
+	require.Equal(t, int32(2), requests.Load(), "the 429 must be retried")
+	require.False(t, errors.Is(err, errors.ErrServiceRateLimited), "the error returned must be the answer after the retry")
+	require.Len(t, doneChan, 1, "a failed fetch must still signal doneChan")
 }

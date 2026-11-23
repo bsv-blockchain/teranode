@@ -479,7 +479,10 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, repo *repository.R
 	apiGroup.GET("/blocks/:hash/hex", h.GetNBlocks(HEX), heavyMW()...)
 	apiGroup.GET("/blocks/:hash/json", h.GetNBlocks(JSON), heavyMW()...)
 
-	apiGroup.GET("/block_legacy/:hash", h.GetLegacyBlock(), heavyMW()...) // BINARY_STREAM (also supports ?type=miningcandidate)
+	// This node's own legacy peer server fetches every block it serves to SV peers here. It is not
+	// in this node's peer registry, so the heavy limiter would key it by IP as an unverified client;
+	// a request presenting asset_legacyPeerPoolToken skips the limiter (see exemptLegacyPeerServer).
+	apiGroup.GET("/block_legacy/:hash", h.GetLegacyBlock(), h.exemptLegacyPeerServer(heavyMW())...) // BINARY_STREAM (also supports ?type=miningcandidate)
 
 	apiGroup.GET("/block/:hash", h.GetBlockByHash(BINARY_STREAM), catchupHeavyMW()...)
 	apiGroup.GET("/block/:hash/hex", h.GetBlockByHash(HEX), heavyMW()...)

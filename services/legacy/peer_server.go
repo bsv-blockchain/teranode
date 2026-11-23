@@ -1845,7 +1845,11 @@ func (s *server) pushBlockMsg(sp *serverPeer, hash *chainhash.Hash, doneChan cha
 	url := fmt.Sprintf("%s/block_legacy/%s?wire=1", s.assetHTTPAddress, hash.String())
 	// asset_httpAddress is this node's own asset service, from settings, and is routinely
 	// localhost or a private container address. The peer-URL client refuses both.
-	reader, err := util.DoLocalServiceHTTPRequestBodyReader(s.ctx, url, legacyPeerPoolHeaders(s.settings))
+	//
+	// The asset service's heavy rate limiter can answer 429 here: without
+	// asset_legacyPeerPoolToken this request is limited like any anonymous client. Retry it,
+	// honouring Retry-After, since a failed fetch leaves the SV peer's getdata unanswered.
+	reader, err := util.DoLocalServiceHTTPRequestBodyReaderWithRetry(s.ctx, url, legacyPeerPoolHeaders(s.settings))
 	if err != nil {
 		sp.server.logger.Errorf("Unable to fetch requested block %v: %v", hash, err)
 
