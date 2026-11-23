@@ -9,9 +9,9 @@ import (
 	"github.com/bsv-blockchain/teranode/util/lane"
 )
 
-// The lane metadata encoding is the versioned form of MetaBytes that carries lane positions. It is
-// for the lane-format txmeta topic and cache, never mixed with the unversioned MetaBytes, which
-// stays byte for byte what it was:
+// The lane metadata encoding is the versioned form of MetaBytes that carries lane positions. On the
+// txmeta topic the action byte says which encoding an entry holds, and the txmeta cache keeps the
+// embedded MetaBytes only. MetaBytes stays byte for byte what it was:
 //
 //	[0]      LaneMetaMagic
 //	[1]      LaneMetaVersion
@@ -30,9 +30,10 @@ import (
 const (
 	// LaneMetaMagic is the first byte of the lane metadata encoding. It is not a discriminator: a
 	// legacy MetaBytes begins with a fee, and a fee whose low 16 bits are 0x01A7 (423 satoshis,
-	// say) starts with the same two bytes as LaneMetaMagic and LaneMetaVersion. So the lane encoding
-	// must travel on its own topic and in its own cache, never mixed with MetaBytes, for a reader
-	// to know which it holds. Nothing produces or consumes it yet; that rule binds the step that does.
+	// say) starts with the same two bytes as LaneMetaMagic and LaneMetaVersion. So whatever carries
+	// the lane encoding must say so outside it, never leaving a reader to guess from the bytes. On
+	// the txmeta topic each entry's action byte says it (txmetacache.WireActionADDLane); the txmeta
+	// cache keeps MetaBytes only.
 	LaneMetaMagic = byte(0xA7)
 
 	// LaneMetaVersion is the only version of the lane metadata encoding.
@@ -155,4 +156,52 @@ func (d *Data) metaFlags() byte {
 	}
 
 	return f
+}
+
+// LaneMetaBytesView returns the MetaBytes a lane metadata encoding holds whole, between its header
+// and its parent positions, as a sub-slice of b capped at its own length, with nothing parsed into
+// objects and nothing allocated. It checks the magic, version, own position and flag bits, walks the
+// inpoints' counts to find exactly where they end, and checks that one valid position per parent
+// follows and nothing else. It is for a receiver that keeps MetaBytes and not the positions;
+// NewDataFromLaneMetaBytes is the full check.
+func LaneMetaBytesView(b []byte) ([]byte, error) {
+	if len(b) < laneMetaHeader+4 {
+		return nil, errors.NewProcessingError("lane metadata is %d bytes, too short", len(b))
+	}
+
+	if b[0] != LaneMetaMagic || b[1] != LaneMetaVersion {
+		return nil, errors.NewProcessingError("lane metadata starts with %#x %#x, not the lane magic and version", b[0], b[1])
+	}
+
+	if err := lane.CheckPosition(binary.LittleEndian.Uint64(b[2:])); err != nil {
+		return nil, errors.NewProcessingError("lane metadata own position", err)
+	}
+
+	if flags := b[laneMetaHeader-1]; flags&^0b11111 != 0 {
+		return nil, errors.NewProcessingError("lane metadata has unknown flag bits %#x", flags)
+	}
+
+	size := uint64(len(b))
+	parents := uint64(binary.LittleEndian.Uint32(b[laneMetaHeader:]))
+	off := uint64(laneMetaHeader) + 4 + parents*32
+
+	for i := uint64(0); i < parents; i++ {
+		if off+4 > size {
+			return nil, errors.NewProcessingError("lane metadata inpoints truncated at parent %d", i)
+		}
+
+		off += 4 + 4*uint64(binary.LittleEndian.Uint32(b[off:]))
+	}
+
+	if off > size || size-off != parents*lane.PositionSize {
+		return nil, errors.NewProcessingError("lane metadata has %d bytes after its inpoints for %d parent positions", int64(size)-int64(off), parents)
+	}
+
+	for p := off; p < size; p += lane.PositionSize {
+		if err := lane.CheckPosition(binary.LittleEndian.Uint64(b[p:])); err != nil {
+			return nil, errors.NewProcessingError("lane metadata parent position", err)
+		}
+	}
+
+	return b[2+lane.PositionSize : off : off], nil
 }

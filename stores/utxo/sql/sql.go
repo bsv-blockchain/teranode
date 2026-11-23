@@ -260,6 +260,9 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 		ctx:      ctx,
 	}
 
+	s.NameLaneBurns("sql")
+	s.NameLaneReturns("sql")
+
 	otelTracer := tracing.Tracer("utxo").OTelTracer()
 	batcherOpts := func(name string) []batcher.Option {
 		return []batcher.Option{
@@ -451,7 +454,7 @@ func (s *Store) Health(ctx context.Context, checkLiveness bool) (int, string, er
 
 // Create stores a new transaction's outputs as UTXOs.
 // For coinbase transactions, it sets the maturity period to 100 blocks.
-func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...utxo.CreateOption) (*meta.Data, error) {
+func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...utxo.CreateOption) (txMeta *meta.Data, err error) {
 	options := &utxo.CreateOptions{}
 	for _, opt := range opts {
 		opt(options)
@@ -462,6 +465,20 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 		return nil, takeErr
 	}
 
+	// A position this call took from the source is its own to record if the create fails, and to
+	// return for reuse when the create was refused in a way markRefusedCreate proves wrote nothing.
+	// A caller that stopped waiting for the batcher gets a context error while the batch may still
+	// write the record, and LaneBurnReason says so. A position the caller named is the caller's.
+	if utxo.TookLanePosition(options.LanePosition, position) {
+		defer func() {
+			s.BurnCreateLanePosition(options, position, err, nil)
+
+			if err != nil {
+				s.ReturnLanePosition(position, utxo.LaneReturnExists, utxo.LanePositionUnwritten(err))
+			}
+		}()
+	}
+
 	options.LanePosition = position
 
 	ctx, _, deferFn := tracing.Tracer("utxo").Start(ctx, "sql:Create")
@@ -469,20 +486,25 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 
 	// Postgres with createBatcher: enqueue and wait for batch callback
 	if s.createBatcher != nil {
-		return s.createBatched(ctx, tx, blockHeight, options)
+		txMeta, err = s.createBatched(ctx, tx, blockHeight, options)
+		return txMeta, markRefusedCreate(err, false)
 	}
 
-	// Try the operation with retry logic for lock errors
-	var txMeta *meta.Data
-	var err error
+	// An attempt whose outcome is unknown, or that failed after its record committed, may have
+	// written this position, and then a later attempt's ErrTxExists is this create's own record.
+	mayHaveCommitted := false
 
+	// Try the operation with retry logic for lock errors
 	for attempt := 0; attempt <= 3; attempt++ {
 		txMeta, err = s.createWithRetry(ctx, tx, blockHeight, options)
 
 		// If no error or not a lock error, return immediately
 		if err == nil || !isLockError(err) {
-			return txMeta, err
+			return txMeta, markRefusedCreate(err, mayHaveCommitted)
 		}
+
+		_, committed := err.(*createCommittedError)
+		mayHaveCommitted = mayHaveCommitted || committed || utxo.IsCreateOutcomeUnknown(err)
 
 		// For lock errors, retry with backoff
 		if attempt < 3 {
@@ -499,6 +521,24 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 	}
 
 	return txMeta, err
+}
+
+// markRefusedCreate marks err as proof that the create wrote no record carrying its lane position
+// (utxo.MarkLanePositionUnwritten) when it is ErrTxExists and no earlier attempt of the create may
+// have committed. Such a refusal proves it: the per-statement path meets the unique violation, or
+// the duplicate in a child table, inside its database transaction and rolls it back, and the CTE
+// paths, single and batched, insert with ON CONFLICT DO NOTHING and gate the inputs, outputs and
+// block ids on the transaction row they inserted, so a refused create writes no row carrying its
+// lane position. The batch's later conflict-link write can still add a parent's link for a refused
+// conflicting create, but that table has no lane position. A retry after an attempt that may have
+// committed can meet this create's own record, which carries the position, so its ErrTxExists is
+// left unmarked.
+func markRefusedCreate(err error, mayHaveCommitted bool) error {
+	if mayHaveCommitted || !errors.Is(err, errors.ErrTxExists) {
+		return err
+	}
+
+	return utxo.MarkLanePositionUnwritten(err)
 }
 
 // createBatched enqueues a Create request into the createBatcher for bulk processing.
@@ -1025,13 +1065,34 @@ func (s *Store) createCTE(ctx context.Context, btTx *bt.Tx, blockHeight uint32, 
 
 	// Handle conflicting children (rare path — separate round-trip only when needed)
 	if txMeta.Conflicting {
-		if err = s.insertConflictingChildrenPgx(ctx, btTx, txHash); err != nil {
-			return nil, err
+		if conflictingChildrenFault != nil {
+			err = conflictingChildrenFault()
+		} else {
+			err = s.insertConflictingChildrenPgx(ctx, btTx, txHash)
+		}
+
+		if err != nil {
+			// The record and its lane position are committed; see createCommittedError.
+			return nil, &createCommittedError{err}
 		}
 	}
 
 	return txMeta, nil
 }
+
+// conflictingChildrenFault, when set, replaces createCTE's conflicting-children write with its
+// error. A test hook; nil in production.
+var conflictingChildrenFault func() error
+
+// createCommittedError is an error from the part of a create that runs after the record committed:
+// createCTE's conflicting-children write, a transaction of its own. Create may retry it as a lock
+// error, and the retry then meets this create's own record, so a later ErrTxExists proves nothing
+// about the lane position. It wraps the error unchanged.
+type createCommittedError struct{ err error }
+
+func (e *createCommittedError) Error() string { return e.err.Error() }
+
+func (e *createCommittedError) Unwrap() error { return e.err }
 
 // inputArrayParams holds parallel arrays for UNNEST input insertion.
 type inputArrayParams struct {

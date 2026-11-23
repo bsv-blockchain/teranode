@@ -72,3 +72,11 @@ func TestEncodeDeleteBatch(t *testing.T) {
 		require.Equal(t, hashes, decodeDeleteBatchLikeConsumer(t, EncodeDeleteBatch(hashes)))
 	})
 }
+
+// The action bytes are on the wire between separately deployed services and documented in
+// docs/references/kafkaMessageFormat.md, so their values never change.
+func TestWireActionValues(t *testing.T) {
+	require.Equal(t, byte(0), WireActionADD)
+	require.Equal(t, byte(1), WireActionDELETE)
+	require.Equal(t, byte(2), WireActionADDLane)
+}

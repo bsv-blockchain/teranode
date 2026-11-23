@@ -15,6 +15,7 @@ import (
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/validator"
+	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/util/kafka"
 	kafkamessage "github.com/bsv-blockchain/teranode/util/kafka/kafka_message"
 	"github.com/bsv-blockchain/teranode/util/tracing"
@@ -211,6 +212,11 @@ const (
 // validateAdmittedPeerSubtree validates a peer subtree that holds an admission slot, on a node
 // that is RUNNING.
 func (u *Server) validateAdmittedPeerSubtree(ctx context.Context, hash *chainhash.Hash, baseURL *url.URL, peerID string, validationOptions ...validator.Option) (peerSubtreeResult, error) {
+	// A peer's subtree, live or replayed after a catch-up, is validated without InBlock, so the
+	// validator would label its creates as its own on the burned lane position counter. It names
+	// subtree validation instead. First, so an option the caller passes still wins.
+	validationOptions = append([]validator.Option{validator.WithCaller(utxo.CallerSubtreeValidation)}, validationOptions...)
+
 	// The span starts after the wait, so the handler histogram measures
 	// validation only; the wait has its own metric.
 	ctx, _, deferFn := tracing.Tracer("subtreevalidation").Start(ctx, "subtreesHandler",
