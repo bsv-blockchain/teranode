@@ -2,6 +2,7 @@ package blockvalidation
 
 import (
 	"context"
+	"net/url"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -21,6 +22,7 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/blob"
 	blobmemory "github.com/bsv-blockchain/teranode/stores/blob/memory"
 	bloboptions "github.com/bsv-blockchain/teranode/stores/blob/options"
+	blockchain_store "github.com/bsv-blockchain/teranode/stores/blockchain"
 	blockchainoptions "github.com/bsv-blockchain/teranode/stores/blockchain/options"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/lane"
@@ -686,7 +688,13 @@ func laneValidateBlock(t *testing.T, wrap func(blob.Store) blob.Store, seed func
 	got.mu.Lock()
 	defer got.mu.Unlock()
 
-	require.Zero(t, got.invalids, "the block is valid")
+	// Optimistic mining stores the block and returns, and validates it in the background, which
+	// nothing here waits for; only full validation has finished by now, so only there is the
+	// block known to be valid. The rows go on the first AddBlock on both paths.
+	if !optimistic {
+		require.Zero(t, got.invalids, "the block is valid")
+	}
+
 	require.Equal(t, 1, got.stores)
 
 	return got
@@ -728,6 +736,91 @@ func TestValidateBlock_LaneRowsReachAddBlockOnBothStorePaths(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			got := laneValidateBlock(t, func(s blob.Store) blob.Store { return s }, seed, optimistic)
 			require.Equal(t, []lane.MapRow{{Lane: 7, First: 5, Last: 5, Tag: lane.RowTagRange}}, got.rows)
+		})
+	}
+}
+
+// From block validation to the blockchain store, with nothing mocked between: a block whose
+// subtree's lane bitmaps hold a position is validated at shadow through a blockchain LocalClient
+// over a real sqlitememory store, and the store then holds the block's row, on both store paths.
+func TestValidateBlock_StoresTheBlocksLaneRows(t *testing.T) {
+	for _, optimistic := range []bool{false, true} {
+		name := "full validation"
+		if optimistic {
+			name = "optimistic mining"
+		}
+
+		t.Run(name, func(t *testing.T) {
+			initPrometheusMetrics()
+
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+
+			utxoStore, subtreeValidationClient, _, txStore, subtreeStore, cleanup := setup(t)
+			defer cleanup()
+
+			tSettings := test.CreateBaseTestSettings(t)
+			tSettings.UtxoStore.LaneMigration = settings.LaneMigrationShadow
+			tSettings.ChainCfgParams.CoinbaseMaturity = 0
+			tSettings.GlobalBlockHeightRetention = 0
+			tSettings.BlockValidation.OptimisticMining = optimistic
+			tSettings.BlockValidation.OptimisticMiningPeerBlocks = optimistic
+
+			subtree, err := subtreepkg.NewTreeByLeafCount(2)
+			require.NoError(t, err)
+			require.NoError(t, subtree.AddCoinbaseNode())
+
+			subtreeMeta := subtreepkg.NewSubtreeMeta(subtree)
+
+			coinbase, err := bt.NewTxFromString(model.CoinbaseHex)
+			require.NoError(t, err)
+
+			coinbase.Outputs = nil
+			require.NoError(t, coinbase.AddP2PKHOutputFromAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 5000000000))
+
+			subtreeBytes, err := subtree.Serialize()
+			require.NoError(t, err)
+			require.NoError(t, subtreeStore.Set(ctx, subtree.RootHash()[:], fileformat.FileTypeSubtree, subtreeBytes))
+
+			subtreeMetaBytes, err := subtreeMeta.Serialize()
+			require.NoError(t, err)
+			require.NoError(t, subtreeStore.Set(ctx, subtree.RootHash()[:], fileformat.FileTypeSubtreeMeta, subtreeMetaBytes))
+
+			bitmaps, err := lane.EncodeSubtreeBitmaps(lane.SubtreeBitmaps{SubtreeHash: *subtree.RootHash(), Lanes: lane.LaneBitmaps{7: lanePositions(5)}})
+			require.NoError(t, err)
+			require.NoError(t, subtreeStore.Set(ctx, subtree.RootHash()[:], fileformat.FileTypeSubtreeLaneBitmaps, bitmaps))
+
+			replicated := subtree.Duplicate()
+			replicated.ReplaceRootNode(coinbase.TxIDChainHash(), 0, uint64(coinbase.Size())) //nolint:gosec // a test size
+
+			nBits, err := model.NewNBitFromString("207fffff")
+			require.NoError(t, err)
+
+			genesis, err := chainhash.NewHashFromStr("0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206")
+			require.NoError(t, err)
+
+			header := &model.BlockHeader{Version: 1, HashPrevBlock: genesis, HashMerkleRoot: replicated.RootHash(), Timestamp: uint32(time.Now().Unix()), Bits: *nBits} //nolint:gosec // a test timestamp
+			mineHeader(t, header)
+
+			block, err := model.NewBlock(header, coinbase, []*chainhash.Hash{subtree.RootHash()}, uint64(subtree.Length()), 123123, 1, 0) //nolint:gosec // a test count
+			require.NoError(t, err)
+
+			blockchainStore, err := blockchain_store.NewStore(ulogger.TestLogger{}, &url.URL{Scheme: "sqlitememory"}, tSettings)
+			require.NoError(t, err)
+
+			blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, tSettings, blockchainStore, nil, nil)
+			require.NoError(t, err)
+
+			bv := NewBlockValidation(ctx, ulogger.TestLogger{}, tSettings, blockchainClient, subtreeStore, txStore, utxoStore, nil, subtreeValidationClient)
+
+			require.NoError(t, bv.ValidateBlockWithOptions(ctx, block, "http://localhost:8000", &ValidateBlockOptions{DisableOptimisticMining: !optimistic}))
+
+			_, blockMeta, err := blockchainClient.GetBlockHeader(ctx, block.Hash())
+			require.NoError(t, err)
+
+			rows, err := blockchainStore.LaneMapRows(ctx, blockMeta.ID)
+			require.NoError(t, err)
+			require.Equal(t, []lane.MapRow{{Lane: 7, First: 5, Last: 5, Tag: lane.RowTagRange}}, rows)
 		})
 	}
 }
