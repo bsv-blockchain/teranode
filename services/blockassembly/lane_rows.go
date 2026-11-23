@@ -248,20 +248,18 @@ func subtreeLanePositions(subtree *subtreepkg.Subtree, parentTxMap subtreeproces
 		}
 
 		// the processor may remove or re-add the member between reads, so a 0 is checked against
-		// the removal backup and the map again before the member counts as without a position
+		// the removal backup and the map again; a member whose position cannot be told from none
+		// is lost, as is one in neither the pool nor the removal backups
 		position := poolLanePosition(parentTxMap, node.Hash)
 		if position == 0 {
-			position = removedLanePosition(parentTxMap, deletedPositions, node.Hash)
-		}
+			var known bool
 
-		// still none: a member back in the pool was re-added after the reads above (another
-		// storage request that shares it finished and dropped its backup meanwhile), so it is read
-		// once more; one in neither the pool nor the backup is lost
-		if position == 0 {
-			switch {
-			case parentTxMap != nil && parentTxMap.Exists(node.Hash):
-				position = poolLanePosition(parentTxMap, node.Hash)
-			case deletedTxs == nil || !deletedTxs.Exists(node.Hash):
+			position, known = removedLanePosition(parentTxMap, deletedPositions, node.Hash)
+
+			inPool := parentTxMap != nil && parentTxMap.Exists(node.Hash)
+			inRemoved := deletedTxs != nil && deletedTxs.Exists(node.Hash)
+
+			if !known || (deletedPositions == nil && !inPool && !inRemoved) {
 				lost++
 				continue
 			}

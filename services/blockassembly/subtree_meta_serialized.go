@@ -53,7 +53,7 @@ var emptyInpointsWire = [4]byte{} // TxInpoints.Serialize of inpoints without pa
 // block's first, which is a real tx. A node found only in deletedTxs, because it was removed while
 // the subtree was being stored, takes its position from deletedPositions, the backup kept beside
 // it, or has none, which is counted. laneBits is complete only when it returns no error.
-func buildSubtreeMetaBytes(subtree *subtreepkg.Subtree, parents serializedInpointsMap, deletedTxs *txmap.SyncedMap[chainhash.Hash, subtreepkg.TxInpoints], deletedPositions *txmap.SyncedMap[chainhash.Hash, uint64], laneBits *lane.BitmapsBuilder) ([]byte, error) {
+func buildSubtreeMetaBytes(subtree *subtreepkg.Subtree, parents serializedInpointsMap, deletedTxs *txmap.SyncedMap[chainhash.Hash, subtreepkg.TxInpoints], deletedPositions *txmap.SyncedMap[chainhash.Hash, uint64], laneBits *laneCollector) ([]byte, error) {
 	nodes := subtree.Nodes
 
 	var positioned positionedSerializedInpointsMap
@@ -106,9 +106,15 @@ func buildSubtreeMetaBytes(subtree *subtreepkg.Subtree, parents serializedInpoin
 			continue
 		}
 
-		// removed while the subtree was being stored: its position is in the backup beside its inpoints
+		// removed while the subtree was being stored: its position is in the backup beside its
+		// inpoints, read before them (see backUpLanePosition)
+		positionKnown := true
+
 		if laneBits != nil {
-			laneBits.Add(removedLanePosition(parents, deletedPositions, node.Hash))
+			var removedPosition uint64
+
+			removedPosition, positionKnown = removedLanePosition(parents, deletedPositions, node.Hash)
+			laneBits.Add(removedPosition)
 		}
 
 		if deletedTxs == nil {
@@ -118,6 +124,10 @@ func buildSubtreeMetaBytes(subtree *subtreepkg.Subtree, parents serializedInpoin
 		deleted, found := deletedTxs.Get(node.Hash)
 		if !found {
 			return nil, errors.NewProcessingError("inpoints of node %s not found in the parent tx map or the deleted txs", node.Hash.String())
+		}
+
+		if !positionKnown {
+			laneBits.lost++
 		}
 
 		if idx != 0 && deleted.ParentTxHashes == nil {
@@ -134,16 +144,44 @@ func buildSubtreeMetaBytes(subtree *subtreepkg.Subtree, parents serializedInpoin
 }
 
 // removedLanePosition returns the lane position of a member the pool map did not hold when it was
-// read: the backup kept beside deletedTxs, or, when the backup is gone too, the pool map's record
-// read again. The processor removes and re-adds members while a storage worker reads them: a
-// re-chain backs a tx up, deletes it, re-adds it and then drops the backup, so a worker that missed
-// it in the map can find the backup already dropped and the tx back in the map.
-func removedLanePosition(pool any, deletedPositions *txmap.SyncedMap[chainhash.Hash, uint64], hash chainhash.Hash) uint64 {
-	if position := deletedLanePosition(deletedPositions, hash); position != 0 {
-		return position
+// read, and whether it is known. At utxostore_laneMigration shadow a removed tx's position is backed
+// up beside its inpoints, 0 included for one without a position, so a member with no backup entry
+// is either back in the pool (a re-chain re-added it and dropped the backup) or its backup was
+// dropped by another storage request's cleanup: the pool map is read again, and if it does not hold
+// the member either, its position is not known. Without backups (deletedPositions nil) the pool
+// map's answer is taken as it is.
+func removedLanePosition(pool any, deletedPositions *txmap.SyncedMap[chainhash.Hash, uint64], hash chainhash.Hash) (uint64, bool) {
+	if deletedPositions == nil {
+		return poolLanePosition(pool, hash), true
 	}
 
-	return poolLanePosition(pool, hash)
+	if position, ok := deletedPositions.Get(hash); ok {
+		return position, true
+	}
+
+	if position := poolLanePosition(pool, hash); position != 0 {
+		return position, true
+	}
+
+	if m, ok := pool.(interface {
+		Exists(hash chainhash.Hash) bool
+	}); ok && m.Exists(hash) {
+		// re-added after the read above: read it once more
+		return poolLanePosition(pool, hash), true
+	}
+
+	return 0, false
+}
+
+// laneCollector gathers a subtree's lane positions during its meta pass. lost counts the members
+// whose position could not be told from none, which makes the bitmaps unusable.
+type laneCollector struct {
+	*lane.BitmapsBuilder
+	lost int
+}
+
+func newLaneCollector() *laneCollector {
+	return &laneCollector{BitmapsBuilder: lane.NewBitmapsBuilder()}
 }
 
 // poolLanePosition reads hash's lane position from the pool map, 0 when it holds none or does not

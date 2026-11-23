@@ -276,7 +276,7 @@ func BenchmarkBuildSubtreeMeta(b *testing.B) {
 		b.ReportAllocs()
 
 		for i := 0; i < b.N; i++ {
-			laneBits := lane.NewBitmapsBuilder()
+			laneBits := newLaneCollector()
 			if _, err := buildSubtreeMetaBytes(subtree, positioned, nil, nil, laneBits); err != nil {
 				b.Fatal(err)
 			}
@@ -329,7 +329,7 @@ func TestBuildSubtreeMetaBytesCollectsEveryNodesLanePosition(t *testing.T) {
 		require.True(t, m.Delete(removed))
 	}
 
-	laneBits := lane.NewBitmapsBuilder()
+	laneBits := newLaneCollector()
 
 	_, err = buildSubtreeMetaBytes(subtree, m, deleted, deletedPositions, laneBits)
 	require.NoError(t, err)
@@ -389,7 +389,7 @@ func BenchmarkBuildSubtreeMetaDiskTxMap(b *testing.B) {
 		b.ReportAllocs()
 
 		for i := 0; i < b.N; i++ {
-			laneBits := lane.NewBitmapsBuilder()
+			laneBits := newLaneCollector()
 			if _, ok := ba.buildSubtreeMeta(request, laneBits); !ok {
 				b.Fatal("failed")
 			}

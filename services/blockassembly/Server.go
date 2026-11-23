@@ -46,7 +46,6 @@ import (
 	"github.com/bsv-blockchain/teranode/util/bump"
 	"github.com/bsv-blockchain/teranode/util/health"
 	"github.com/bsv-blockchain/teranode/util/kafka"
-	"github.com/bsv-blockchain/teranode/util/lane"
 	"github.com/bsv-blockchain/teranode/util/retry"
 	"github.com/bsv-blockchain/teranode/util/tracing"
 	"github.com/jellydator/ttlcache/v3"
@@ -931,7 +930,7 @@ func (ba *BlockAssembly) sendSubtreeNotification(ctx context.Context, subtreeHas
 // the coinbase placeholder to laneBits in the same pass. Both pool maps return each position with
 // its inpoints, from one lock or one disk read; any other map is asked for it after. laneBits is
 // complete only when it reports true.
-func (ba *BlockAssembly) buildSubtreeMeta(subtreeRequest subtreeprocessor.NewSubtreeRequest, laneBits *lane.BitmapsBuilder) ([]byte, bool) {
+func (ba *BlockAssembly) buildSubtreeMeta(subtreeRequest subtreeprocessor.NewSubtreeRequest, laneBits *laneCollector) ([]byte, bool) {
 	subtree := subtreeRequest.Subtree
 
 	// An in-memory tx map keeps the inpoints serialized, so the meta is put
@@ -1001,12 +1000,15 @@ func (ba *BlockAssembly) buildSubtreeMeta(subtreeRequest subtreeprocessor.NewSub
 
 			if !found && subtreeRequest.DeletedTxs != nil {
 				// Fallback: check if transaction was deleted during async storage. Its lane
-				// position is read from the backup beside it first: the backups are written
-				// position first and dropped inpoints first, so inpoints found here come with
-				// their position (see backUpLanePosition).
-				var removedPosition uint64
+				// position is read from the backup beside it first (see backUpLanePosition); one
+				// that cannot be told from none makes the subtree's lane bitmaps unusable.
+				var (
+					removedPosition uint64
+					positionKnown   = true
+				)
+
 				if laneBits != nil {
-					removedPosition = removedLanePosition(subtreeRequest.ParentTxMap, subtreeRequest.DeletedPositions, node.Hash)
+					removedPosition, positionKnown = removedLanePosition(subtreeRequest.ParentTxMap, subtreeRequest.DeletedPositions, node.Hash)
 				}
 
 				var deletedTxInpoints subtreepkg.TxInpoints
@@ -1014,6 +1016,10 @@ func (ba *BlockAssembly) buildSubtreeMeta(subtreeRequest subtreeprocessor.NewSub
 				if found {
 					txInpoints = &deletedTxInpoints
 					position = removedPosition
+
+					if !positionKnown {
+						laneBits.lost++
+					}
 				}
 			}
 
@@ -1118,17 +1124,20 @@ func (ba *BlockAssembly) storeSubtreeData(ctx context.Context, subtreeRequest su
 		go func() {
 			defer close(metaDoneCh)
 
-			var laneBits *lane.BitmapsBuilder
+			var laneBits *laneCollector
 			if lanes {
-				laneBits = lane.NewBitmapsBuilder()
+				laneBits = newLaneCollector()
 			}
 
 			subtreeMetaBytes, ok := ba.buildSubtreeMeta(subtreeRequest, laneBits)
 
 			if lanes {
-				if ok {
-					ba.storeSubtreeLaneBitmaps(ctx, subtree, laneBits, height, dah)
-				} else {
+				switch {
+				case ok && laneBits.lost > 0:
+					ba.logger.Warnf("[BlockAssembly:storeSubtreeData][%s] storing the subtree without lane bitmaps: the lane positions of %d of its removed members could not be read", subtree.RootHash().String(), laneBits.lost)
+				case ok:
+					ba.storeSubtreeLaneBitmaps(ctx, subtree, laneBits.BitmapsBuilder, height, dah)
+				default:
 					// a meta pass that failed part way collected only some positions
 					ba.storeLanePositionsFromPool(ctx, subtreeRequest, height, dah)
 				}

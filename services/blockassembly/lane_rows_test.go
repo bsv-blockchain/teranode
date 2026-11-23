@@ -1167,8 +1167,19 @@ func TestSubtreeLanePositionsSurvivesRemovalDuringTheRead(t *testing.T) {
 func TestRemovedLanePositionReadsThePoolAgain(t *testing.T) {
 	st, txMap := laneSealSubtree(t, "removed-reread")
 
-	require.Equal(t, lane.Pack(4, 21), removedLanePosition(txMap, txmap.NewSyncedMap[chainhash.Hash, uint64](), st.Nodes[2].Hash))
-	require.Zero(t, removedLanePosition(nil, nil, st.Nodes[2].Hash))
+	position, known := removedLanePosition(txMap, txmap.NewSyncedMap[chainhash.Hash, uint64](), st.Nodes[2].Hash)
+	require.True(t, known)
+	require.Equal(t, lane.Pack(4, 21), position)
+
+	position, known = removedLanePosition(nil, nil, st.Nodes[2].Hash)
+	require.True(t, known, "without backups the pool's answer is taken")
+	require.Zero(t, position)
+
+	// with backups, a member in neither the backup nor the pool has no known position
+	require.True(t, txMap.Delete(st.Nodes[2].Hash))
+
+	_, known = removedLanePosition(txMap, txmap.NewSyncedMap[chainhash.Hash, uint64](), st.Nodes[2].Hash)
+	require.False(t, known)
 }
 
 // TestOwnLaneBitmapsPutKeepsTheNewerHeight: a storage worker that captured an older height, and
@@ -1220,4 +1231,129 @@ func TestSubtreeLanePositionsReadsAMemberReAddedAfterEveryRead(t *testing.T) {
 // it, is held back at most one second for a subtree whose bitmaps are not kept.
 func TestOwnLaneBitmapsWaitIsOneSecond(t *testing.T) {
 	require.Equal(t, time.Second, ownLaneBitmapsWait)
+}
+
+// laneTestPoolMap is a pool map of either kind, the in-memory map or the disk map, for tests that
+// must hold on both: each reads a tx's lane position on its own code path.
+func laneTestPoolMap(t *testing.T, disk bool) subtreeprocessor.TxInpointsMap {
+	t.Helper()
+
+	if !disk {
+		return subtreeprocessor.NewSplitTxInpointsMap(4)
+	}
+
+	m, err := subtreeprocessor.NewDiskTxMap(subtreeprocessor.DiskTxMapOptions{BasePaths: []string{t.TempDir()}})
+	require.NoError(t, err)
+
+	t.Cleanup(func() { _ = m.Close() })
+
+	return m
+}
+
+// TestStoreSubtreeDataKeepsNoLaneBitmapsWhenARemovedMembersPositionIsUnknown: a member removed
+// from the pool while its subtree was stored takes its position from the backup beside its
+// inpoints; if another storage request's cleanup dropped that backup meanwhile, its position
+// cannot be told from none, and the subtree is stored without lane bitmaps rather than with
+// bitmaps that miss it. The meta is stored either way.
+func TestStoreSubtreeDataKeepsNoLaneBitmapsWhenARemovedMembersPositionIsUnknown(t *testing.T) {
+	for _, disk := range []bool{false, true} {
+		for _, backedUp := range []bool{true, false} {
+			t.Run(fmt.Sprintf("disk=%t backedUp=%t", disk, backedUp), func(t *testing.T) {
+				server, memoryStore := setupServerWithSettings(t, func(s *settings.Settings) { s.UtxoStore.LaneMigration = settings.LaneMigrationShadow })
+
+				st, err := subtreepkg.NewTreeByLeafCount(4)
+				require.NoError(t, err)
+				require.NoError(t, st.AddCoinbaseNode())
+
+				txMap := laneTestPoolMap(t, disk)
+				deletedTxs := txmap.NewSyncedMap[chainhash.Hash, subtreepkg.TxInpoints]()
+				deletedPositions := txmap.NewSyncedMap[chainhash.Hash, uint64]()
+
+				for i := 0; i < 3; i++ {
+					hash := chainhash.HashH(fmt.Appendf(nil, "lane-unknown-%t-%t-%d", disk, backedUp, i))
+					require.NoError(t, st.AddNode(hash, 1, 1))
+
+					inpoints := singleParentInpointsPtr(chainhash.HashH([]byte{byte(i), 0x78}), 0)
+
+					if i == 1 {
+						// removed: its inpoints are backed up, and its position only if no
+						// cleanup dropped it
+						deletedTxs.Set(hash, *inpoints)
+
+						if backedUp {
+							deletedPositions.Set(hash, lane.Pack(4, uint64(20+i)))
+						}
+
+						continue
+					}
+
+					txMap.SetAt(hash, inpoints, lane.Pack(4, uint64(20+i)))
+				}
+
+				_ = st.RootHash()
+
+				subtreeDone, allDone, err := server.storeSubtreeData(t.Context(), subtreeprocessor.NewSubtreeRequest{
+					Subtree: st, ParentTxMap: txMap, DeletedTxs: deletedTxs, DeletedPositions: deletedPositions,
+				}, make(chan *subtreeRetrySend, 10))
+				require.NoError(t, err)
+				require.True(t, <-subtreeDone)
+				<-allDone
+
+				_, err = memoryStore.Get(t.Context(), st.RootHash()[:], fileformat.FileTypeSubtreeMeta)
+				require.NoError(t, err, "the meta is stored")
+
+				kept, missing := server.ownLaneBitmaps.get([]*chainhash.Hash{st.RootHash()})
+				if !backedUp {
+					require.Equal(t, 1, missing, "no bitmaps are kept")
+					return
+				}
+
+				require.Zero(t, missing)
+				require.Equal(t, []uint64{20, 21, 22}, kept[0][4].ToArray())
+			})
+		}
+	}
+}
+
+// TestStoreSubtreeDataWithoutMetaKeepsNodeZerosLanePosition: a later subtree has no coinbase
+// placeholder, so its node 0 is a real tx; with no meta written, the positions-only pass keeps that
+// tx's position, on both pool maps.
+func TestStoreSubtreeDataWithoutMetaKeepsNodeZerosLanePosition(t *testing.T) {
+	for _, disk := range []bool{false, true} {
+		t.Run(fmt.Sprintf("disk=%t", disk), func(t *testing.T) {
+			server, memoryStore := setupServerWithSettings(t, func(s *settings.Settings) {
+				s.UtxoStore.LaneMigration = settings.LaneMigrationShadow
+				s.BlockAssembly.StoreTxInpointsForSubtreeMeta = false
+			})
+
+			st, err := subtreepkg.NewTreeByLeafCount(4)
+			require.NoError(t, err)
+
+			txMap := laneTestPoolMap(t, disk)
+
+			for i := 0; i < 4; i++ {
+				hash := chainhash.HashH(fmt.Appendf(nil, "lane-node-zero-%t-%d", disk, i))
+				require.NoError(t, st.AddNode(hash, 1, 1))
+				txMap.SetAt(hash, singleParentInpointsPtr(chainhash.HashH([]byte{byte(i), 0x79}), 0), lane.Pack(5, uint64(30+i)))
+			}
+
+			_ = st.RootHash()
+
+			subtreeDone, allDone, err := server.storeSubtreeData(t.Context(), subtreeprocessor.NewSubtreeRequest{Subtree: st, ParentTxMap: txMap}, make(chan *subtreeRetrySend, 10))
+			require.NoError(t, err)
+			require.True(t, <-subtreeDone)
+			<-allDone
+
+			kept, missing := server.ownLaneBitmaps.get([]*chainhash.Hash{st.RootHash()})
+			require.Zero(t, missing)
+			require.Equal(t, []uint64{30, 31, 32, 33}, kept[0][5].ToArray(), "node 0 keeps its position")
+
+			stored, err := memoryStore.Get(t.Context(), st.RootHash()[:], fileformat.FileTypeSubtreeLaneBitmaps)
+			require.NoError(t, err)
+
+			decoded, err := lane.DecodeSubtreeBitmaps(stored)
+			require.NoError(t, err)
+			require.Equal(t, []uint64{30, 31, 32, 33}, decoded.Lanes[5].ToArray(), "the stored bitmaps hold node 0 too")
+		})
+	}
 }

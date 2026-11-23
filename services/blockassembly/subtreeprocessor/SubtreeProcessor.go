@@ -1650,9 +1650,8 @@ func (stp *SubtreeProcessor) backUpLanePosition(hash chainhash.Hash) {
 		return
 	}
 
-	if position := stp.lanePositionIn(stp.currentTxMap, hash); position != 0 {
-		stp.deletedPositions.Set(hash, position)
-	}
+	// 0 is recorded too, so a reader can tell a tx without a position from a backup it missed
+	stp.deletedPositions.Set(hash, stp.lanePositionIn(stp.currentTxMap, hash))
 }
 
 // GetCurrentRunningState returns the current operational state of the processor.
@@ -4470,7 +4469,7 @@ func (stp *SubtreeProcessor) reChainSubtrees(fromIndex int) error {
 
 			// Save to deleted backup before removing (protects brief window during delete-and-readd);
 			// the position backup goes in before the inpoints backup (see backUpLanePosition)
-			if position != 0 && stp.deletedPositions != nil {
+			if stp.deletedPositions != nil {
 				stp.deletedPositions.Set(node.Hash, position)
 			}
 			stp.deletedTxs.Set(node.Hash, *parents)

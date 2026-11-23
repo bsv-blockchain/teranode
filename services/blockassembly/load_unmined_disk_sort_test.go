@@ -459,3 +459,43 @@ func TestLoadUnminedTransactionsWithDiskSortKeepsLanePositions(t *testing.T) {
 		})
 	}
 }
+
+// TestLoadUnminedTransactionsSequentiallyKeepsLanePositions: at shadow a reload without the disk
+// sort and with UnminedLoadingBatchSize 0, which adds each tx on its own, carries each tx's lane
+// position into the pool, on a startup load and on a reset's reload.
+func TestLoadUnminedTransactionsSequentiallyKeepsLanePositions(t *testing.T) {
+	initPrometheusMetrics()
+
+	for _, isReload := range []bool{false, true} {
+		t.Run(map[bool]string{false: "startup", true: "reset reload"}[isReload], func(t *testing.T) {
+			ba, utxoStore, cleanup := setupDiskSortTest(t)
+			defer cleanup()
+
+			ctx := context.Background()
+
+			ba.settings.UtxoStore.LaneMigration = settings.LaneMigrationShadow
+			ba.settings.BlockAssembly.UnminedTxDiskSortEnabled = false
+			ba.settings.BlockAssembly.UnminedLoadingBatchSize = 0
+
+			positions := make(map[chainhash.Hash]uint64)
+
+			for i, tx := range generateTestTransactionsForDiskSort(t, 5) {
+				_, _, err := utxoStore.SpendAndCreate(ctx, tx, 1, utxo.WithCreateOnly())
+				require.NoError(t, err)
+
+				positions[*tx.TxIDChainHash()] = lane.Pack(7, uint64(i+1))
+			}
+
+			ba.utxoStore = &lanePositionIteratorStore{Store: utxoStore, positions: positions}
+
+			require.NoError(t, ba.loadUnminedTransactions(ctx, isReload))
+
+			txMap := ba.subtreeProcessor.GetCurrentTxMap()
+
+			for hash, position := range positions {
+				require.True(t, txMap.Exists(hash))
+				require.Equal(t, position, txMap.Position(hash))
+			}
+		})
+	}
+}

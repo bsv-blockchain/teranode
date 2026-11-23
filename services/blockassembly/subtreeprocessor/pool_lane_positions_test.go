@@ -11,6 +11,7 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2/bscript"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/blob/memory"
@@ -575,4 +576,44 @@ func TestPositionsOfTheWrongLengthAreDropped(t *testing.T) {
 	require.NoError(t, stp.dequeueDuringBlockMovement(nil, nil, nil, true))
 
 	requirePoolPositions(t, stp, map[chainhash.Hash]uint64{nodes[0].Hash: 0, nodes[1].Hash: 0})
+}
+
+// failingBatchStore refuses every BatchDecorate call whose batch holds failHash.
+type failingBatchStore struct {
+	utxo.Store
+	failHash chainhash.Hash
+}
+
+func (s failingBatchStore) BatchDecorate(ctx context.Context, unresolved []*utxo.UnresolvedMetaData, fieldsToRead ...fields.FieldName) error {
+	for _, item := range unresolved {
+		if item.Hash == s.failHash {
+			return errors.NewStorageError("batch read refused")
+		}
+	}
+
+	return s.Store.BatchDecorate(ctx, unresolved, fieldsToRead...)
+}
+
+// TestMoveBackKeepsTxsWhoseLanePositionReadFails: a move-back's position batch that the UTXO store
+// refuses leaves its txs without positions, and the other batches keep theirs; a lanes read never
+// stops a reorg.
+func TestMoveBackKeepsTxsWhoseLanePositionReadFails(t *testing.T) {
+	stp, store := lanePoolProcessor(t, false, true)
+
+	previous := moveBackStoreReadBatchSize
+	moveBackStoreReadBatchSize = 1
+
+	t.Cleanup(func() { moveBackStoreReadBatchSize = previous })
+
+	hashes := make([]chainhash.Hash, 3)
+	positions := make([]uint64, 3)
+
+	for i := range hashes {
+		positions[i] = lane.Pack(uint8(40+i), uint64(i+1))
+		hashes[i] = createWithLanePosition(t, store, byte(60+i), positions[i])
+	}
+
+	stp.utxoStore = failingBatchStore{Store: store, failHash: hashes[1]}
+
+	require.Equal(t, []uint64{positions[0], 0, positions[2]}, stp.lanePositionsFromUtxoStore(context.Background(), &model.Block{Header: prevBlockHeader}, hashes))
 }
