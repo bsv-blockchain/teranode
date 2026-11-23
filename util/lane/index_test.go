@@ -126,6 +126,7 @@ func TestIndexFoldsSettledBlocksIntoTheFloor(t *testing.T) {
 	require.Equal(t, Answer{}, v.Lookup(Pack(2, 5)), "below the first row seen is not settled")
 	require.Equal(t, Answer{}, v.Lookup(Pack(2, 21)), "above the floor")
 	require.Equal(t, uint64(1), snap.Stats().Listed, "only the hole is listed, not the history before the first row")
+	require.Greater(t, snap.Stats().Bytes, uint64(snap.Stats().Blocks)*128, "the floor's bitmaps are counted")
 
 	state, height := snap.Block(1)
 	require.Equal(t, BlockHasRows, state)
@@ -569,6 +570,68 @@ func TestIndexLateBlockSettlesAPositionBelowTheLanesFirstRow(t *testing.T) {
 
 	// Block 7 re-takes 600: the duplicate count finds it below the lane's first row.
 	c.add(7, 6, 7, rowsOf(t, 4, 600))
+	c.tip(7)
+
+	_, byFloor, hasRows := c.main().TakenBefore(7)
+	require.True(t, hasRows)
+	require.Equal(t, uint64(1), byFloor)
+}
+
+// A fold never changes a snapshot already published: its floor bitmaps are copied, not shared.
+func TestIndexFoldLeavesPublishedSnapshotsUnchanged(t *testing.T) {
+	c := newTestChain(t, 2)
+
+	took := roaring64.New()
+	took.AddRange(1, 101)
+	took.Remove(50)
+	rows1, err := BuildMapRows(4, took)
+	require.NoError(t, err)
+
+	c.add(1, 0, 1, rows1)
+	c.line(2, 3)
+	c.tip(3) // block 1 folded: 50 listed
+
+	before := c.idx.Snapshot()
+	require.Equal(t, Answer{}, before.Main().Lookup(Pack(4, 50)))
+
+	c.add(4, 3, 4, rowsOf(t, 4, 50))
+	c.line(5, 6)
+	c.tip(6) // block 4 folded: 50 settled
+
+	require.Equal(t, ViaFloor, c.main().Lookup(Pack(4, 50)).Via)
+	require.Equal(t, Answer{}, before.Main().Lookup(Pack(4, 50)), "the earlier snapshot still lists 50")
+}
+
+// Below the lane's first folded row, the duplicate count counts only positions a folded block
+// took, and the below-history set holds only positions below that row.
+func TestIndexBelowTheFirstRowCountsOnlyWhatFolded(t *testing.T) {
+	c := newTestChain(t, 2)
+
+	c.add(1, 0, 1, rangeRows(t, 4, 1_000, 2_000))
+	c.line(2, 3)
+	c.tip(3) // floor from 1,000
+
+	bytes := c.idx.Snapshot().Stats().Bytes
+
+	// Block 4 takes 600, below the first row, and a scatter above it, 1,000 positions up to
+	// 10,000 apart.
+	positions := []uint64{600}
+	for p := uint64(2_001); p < 12_000; p += 10 {
+		positions = append(positions, p)
+	}
+
+	c.add(4, 3, 4, rowsOf(t, 4, positions...))
+	c.line(5, 6)
+	c.tip(6) // block 4 folded
+
+	// The scatter above the first row adds to the list of holes, the 9,000 positions between its
+	// members, about 4.4 KB. Copied into the below-history set as well, it would add its own
+	// thousand positions again, about 2 KB more.
+	grew := c.idx.Snapshot().Stats().Bytes - bytes
+	require.Less(t, grew, uint64(5_500))
+
+	// Block 7 takes 600 again and 700, below the first row and never taken: only 600 counts.
+	c.add(7, 6, 7, rowsOf(t, 4, 600, 700))
 	c.tip(7)
 
 	_, byFloor, hasRows := c.main().TakenBefore(7)
