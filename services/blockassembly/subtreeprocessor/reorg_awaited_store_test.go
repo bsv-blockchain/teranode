@@ -77,7 +77,7 @@ func failAwaited(req NewSubtreeRequest) {
 	answerStored(req)
 }
 
-func TestReorgAwaitedStore_StoresBeforeTheMarksAndAnnouncesAfter(t *testing.T) {
+func TestReorgScenario_AwaitedStore_StoresBeforeTheMarksAndAnnouncesAfter(t *testing.T) {
 	sc, r, _ := newAwaitedStoreScenario(t, 5*time.Second, answerStored)
 
 	require.NoError(t, sc.run(t))
@@ -98,7 +98,7 @@ func TestReorgAwaitedStore_StoresBeforeTheMarksAndAnnouncesAfter(t *testing.T) {
 	}
 }
 
-func TestReorgAwaitedStore_FailedStoreFailsTheReorgBeforeTheMarks(t *testing.T) {
+func TestReorgScenario_AwaitedStore_FailedStoreFailsTheReorgBeforeTheMarks(t *testing.T) {
 	sc, r, logger := newAwaitedStoreScenario(t, 5*time.Second, failAwaited)
 
 	require.Error(t, sc.run(t))
@@ -113,7 +113,7 @@ func TestReorgAwaitedStore_FailedStoreFailsTheReorgBeforeTheMarks(t *testing.T) 
 	require.Empty(t, r.announced, "nothing is announced")
 }
 
-func TestReorgAwaitedStore_StoreThatDoesNotFinishInTimeFailsTheReorg(t *testing.T) {
+func TestReorgScenario_AwaitedStore_StoreThatDoesNotFinishInTimeFailsTheReorg(t *testing.T) {
 	never := func(req NewSubtreeRequest) {
 		if req.Result != nil {
 			// the write never settles: answer ErrChan only, as a store whose write hangs does not
@@ -134,7 +134,7 @@ func TestReorgAwaitedStore_StoreThatDoesNotFinishInTimeFailsTheReorg(t *testing.
 	require.Zero(t, sc.utxo.markCount(true)+sc.utxo.markCount(false))
 }
 
-func TestReorgAwaitedStore_NoDeadlineNeverFailsOnAStore(t *testing.T) {
+func TestReorgScenario_AwaitedStore_NoDeadlineNeverFailsOnAStore(t *testing.T) {
 	sc, r, _ := newAwaitedStoreScenario(t, 0, failAwaited)
 
 	require.NoError(t, sc.run(t), "with the deadline at 0 a failed store does not fail the reorg")
