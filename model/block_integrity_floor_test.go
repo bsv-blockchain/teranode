@@ -299,7 +299,8 @@ func TestCheckIntegrityFloor_HeaderContextFailureFailsTheFloor(t *testing.T) {
 	block, store := boundSubtreeBlockAt(t, coinbase, finalityTestHeight, threeHoursAhead)
 
 	err := block.CheckIntegrityFloor(context.Background(), store, floorChain(t), tSettings, ulogger.TestLogger{})
-	requireBoundFloorFailure(t, err, "more than two hours in the future")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "more than two hours in the future")
 
 	// Control: the same body under a header time the checks accept passes.
 	block, store = boundSubtreeBlockAt(t, coinbase, finalityTestHeight, finalityTestHeaderTime)
