@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/bsv-blockchain/aerospike-client-go/v8"
+	"github.com/bsv-blockchain/aerospike-client-go/v8/types"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/settings"
@@ -71,8 +72,9 @@ func (f *blobDeletionFixture) blobExists(t *testing.T, i int) bool {
 func TestFlushCleanupBatches_DeletesTheBlobOfEveryConfirmedRecordOnly(t *testing.T) {
 	fixture := newBlobDeletionFixture(t, false, func(records []aerospike.BatchRecordIfc) {
 		// record 0: deleted. record 1: already gone. record 2: the delete failed.
-		records[1].BatchRec().Err = aerospike.ErrKeyNotFound
-		records[2].BatchRec().Err = aerospike.ErrTimeout
+		answerRecord(records[0], types.OK)
+		answerRecord(records[1], types.KEY_NOT_FOUND_ERROR)
+		answerRecord(records[2], types.TIMEOUT)
 	})
 
 	err := fixture.service.flushCleanupBatches(context.Background(), fixture.keys, fixture.files)
@@ -81,6 +83,38 @@ func TestFlushCleanupBatches_DeletesTheBlobOfEveryConfirmedRecordOnly(t *testing
 	require.False(t, fixture.blobExists(t, 0), "a deleted record's blob goes")
 	require.False(t, fixture.blobExists(t, 1), "an already-gone record's blob goes")
 	require.True(t, fixture.blobExists(t, 2), "the blob of a record whose delete failed stays")
+}
+
+// answerRecord sets a record's answer the way the client does: OK clears the error, any other
+// code carries one.
+func answerRecord(record aerospike.BatchRecordIfc, code types.ResultCode) {
+	rec := record.BatchRec()
+	rec.ResultCode = code
+
+	if code != types.OK {
+		rec.Err = &aerospike.AerospikeError{ResultCode: code}
+	}
+}
+
+// TestFlushCleanupBatches_ABatchErrorKeepsTheAnswersThatCameBack: a batch call that returns an
+// error, such as a timeout on one node, still carries the answers of the nodes that replied. The
+// record those nodes deleted is never found again by the deleteAtHeight scan, so its blob goes now
+// or never. A record no node answered keeps NO_RESPONSE, and its blob stays.
+func TestFlushCleanupBatches_ABatchErrorKeepsTheAnswersThatCameBack(t *testing.T) {
+	fixture := newBlobDeletionFixture(t, false, func([]aerospike.BatchRecordIfc) {})
+	fixture.service.batchOperateFn = func(_ *aerospike.BatchPolicy, records []aerospike.BatchRecordIfc) error {
+		// record 0: deleted. record 1: already gone. record 2: its node timed out, no answer.
+		answerRecord(records[0], types.OK)
+		answerRecord(records[1], types.KEY_NOT_FOUND_ERROR)
+
+		return aerospike.ErrTimeout
+	}
+
+	require.Error(t, fixture.service.flushCleanupBatches(context.Background(), fixture.keys, fixture.files))
+
+	require.False(t, fixture.blobExists(t, 0), "a record deleted before the batch error loses its blob")
+	require.False(t, fixture.blobExists(t, 1), "an already-gone record loses its blob")
+	require.True(t, fixture.blobExists(t, 2), "an unanswered record keeps its blob")
 }
 
 func TestFlushCleanupBatches_KeepsEveryBlobWhenTheBatchFails(t *testing.T) {

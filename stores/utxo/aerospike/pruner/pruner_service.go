@@ -1880,7 +1880,12 @@ func (s *Service) flushCleanupBatches(ctx context.Context, deletions []*aerospik
 // - Multiple delete attempts on same record are harmless
 // - Partial batch failures can be retried without side effects
 //
-// When the whole batch fails or the context ends, nothing is confirmed.
+// A record is confirmed only by its own answer: OK, or KEY_NOT_FOUND. That holds when the batch
+// call itself returns an error too. A batch that times out on one node still carries the answers
+// of the nodes that replied, and a record those nodes deleted is never found again by the
+// deleteAtHeight scan, so dropping its confirmation would strand its blob. A record no node
+// answered keeps the client's NO_RESPONSE code and is not confirmed. When the context ends before
+// the batch is sent, nothing is confirmed.
 func (s *Service) executeBatchDeletions(ctx context.Context, keys []*aerospike.Key) (map[*aerospike.Key]struct{}, error) {
 	if len(keys) == 0 {
 		return nil, nil
@@ -1896,39 +1901,33 @@ func (s *Service) executeBatchDeletions(ctx context.Context, keys []*aerospike.K
 	default:
 	}
 
-	// Execute batch
-	if err := s.batchOperate(batchRecords); err != nil {
-		s.logger.Errorf("Batch deletion failed for %d records: %v", len(keys), err)
-		return nil, errors.NewStorageError("batch deletion failed", err)
+	batchErr := s.batchOperate(batchRecords)
+	if batchErr != nil {
+		s.logger.Errorf("Batch deletion failed for %d records: %v", len(keys), batchErr)
 	}
 
-	// Check for errors and count successes
-	successCount := 0
-	alreadyDeletedCount := 0
 	errorCount := 0
 
 	confirmed := make(map[*aerospike.Key]struct{}, len(keys))
 
 	for i, rec := range batchRecords {
-		if rec.BatchRec().Err != nil {
-			if rec.BatchRec().Err.Matches(aerospike.ErrKeyNotFound.ResultCode) {
-				// Idempotent: Record already deleted by concurrent pruning or previous run
-				// This operation is safely re-runnable - treat as success
-				alreadyDeletedCount++
-
-				confirmed[keys[i]] = struct{}{}
-			} else {
-				s.logger.Errorf("Deletion error for key %v: %v", rec.BatchRec().Key, rec.BatchRec().Err)
-				errorCount++
-			}
-		} else {
-			successCount++
-
+		switch rec.BatchRec().ResultCode {
+		case types.OK, types.KEY_NOT_FOUND_ERROR:
+			// KEY_NOT_FOUND: already deleted by concurrent pruning or a previous run.
 			confirmed[keys[i]] = struct{}{}
+		default:
+			if batchErr == nil {
+				s.logger.Errorf("Deletion error for key %v: %v", rec.BatchRec().Key, rec.BatchRec().Err)
+			}
+
+			errorCount++
 		}
 	}
 
-	// Return error if any individual record operations failed
+	if batchErr != nil {
+		return confirmed, errors.NewStorageError("batch deletion failed", batchErr)
+	}
+
 	if errorCount > 0 {
 		return confirmed, errors.NewStorageError("%d deletion operations failed", errorCount)
 	}
