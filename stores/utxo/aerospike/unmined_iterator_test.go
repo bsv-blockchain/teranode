@@ -326,7 +326,7 @@ func Test_newUnminedTxIterator(t *testing.T) {
 	t.Run("NilStore", func(t *testing.T) {
 		// This would panic in real usage, but test the behavior
 		assert.Panics(t, func() {
-			_, _ = newUnminedTxIterator(nil)
+			_, _ = newUnminedTxIterator(nil, false)
 		})
 	})
 
@@ -339,7 +339,7 @@ func Test_newUnminedTxIterator(t *testing.T) {
 
 		// This will panic because client.Query is called on nil
 		assert.Panics(t, func() {
-			_, _ = newUnminedTxIterator(store)
+			_, _ = newUnminedTxIterator(store, false)
 		})
 	})
 }

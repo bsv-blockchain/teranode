@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	as "github.com/bsv-blockchain/aerospike-client-go/v8"
@@ -27,18 +28,22 @@ const errAerospikeClientNotInit = "aerospike client not initialized"
 // It scans all records in the set and yields those that are not mined (i.e., unmined/mempool)
 // Uses multiple workers to read from Aerospike in parallel for improved throughput
 type unminedTxIterator struct {
-	store            *Store
-	prunerMode       bool   // when true, uses pruner-specific bins and filter
-	prunerCutoff     uint32 // cutoff block height for pruner mode
-	conflictingMode  bool   // when true, emits records where conflicting=true regardless of unminedSince
-	err              error
-	done             bool
-	recordset        *as.Recordset
-	resultChan       chan []*utxo.UnminedTransaction
-	errorChan        chan error
-	cancelWorkers    context.CancelFunc
-	wg               sync.WaitGroup
-	queryIdleTimeout time.Duration // idle timeout for detecting stalled Aerospike connections
+	store           *Store
+	prunerMode      bool   // when true, uses pruner-specific bins and filter
+	prunerCutoff    uint32 // cutoff block height for pruner mode
+	conflictingMode bool   // when true, emits records where conflicting=true regardless of unminedSince
+	// skipMissingExternal leaves out an external record whose file is not found,
+	// rather than failing the scan. Only block assembly's load asks for it.
+	skipMissingExternal    bool
+	missingExternalSkipped atomic.Int64
+	err                    error
+	done                   bool
+	recordset              *as.Recordset
+	resultChan             chan []*utxo.UnminedTransaction
+	errorChan              chan error
+	cancelWorkers          context.CancelFunc
+	wg                     sync.WaitGroup
+	queryIdleTimeout       time.Duration // idle timeout for detecting stalled Aerospike connections
 }
 
 // newUnminedTxIterator creates a new iterator for scanning unmined transactions in Aerospike.
@@ -52,7 +57,7 @@ type unminedTxIterator struct {
 // Returns:
 //   - *unminedTxIterator: A new iterator instance ready for use
 //   - error: Any error encountered during iterator initialization
-func newUnminedTxIterator(store *Store) (*unminedTxIterator, error) {
+func newUnminedTxIterator(store *Store, skipMissingExternal bool) (*unminedTxIterator, error) {
 	numPartitionQueries, err := calculatePartitionQueries(store)
 	if err != nil {
 		return nil, err
@@ -60,7 +65,7 @@ func newUnminedTxIterator(store *Store) (*unminedTxIterator, error) {
 
 	store.logger.Infof("[newUnminedTxIterator] Using %d parallel Aerospike partition queries for unmined transactions", numPartitionQueries)
 
-	return launchPartitionIterator(store, numPartitionQueries, false, 0)
+	return launchPartitionIteratorWithMode(store, numPartitionQueries, false, 0, false, skipMissingExternal)
 }
 
 // calculatePartitionQueries determines the optimal number of parallel partition queries
@@ -129,12 +134,12 @@ func getConfigValue(store *Store, configParam string) (string, error) {
 // launchPartitionIterator creates and starts a partition-parallel iterator.
 // Both the block assembly and pruner iterators use this shared setup.
 func launchPartitionIterator(store *Store, numPartitionQueries int, prunerMode bool, prunerCutoff uint32) (*unminedTxIterator, error) {
-	return launchPartitionIteratorWithMode(store, numPartitionQueries, prunerMode, prunerCutoff, false)
+	return launchPartitionIteratorWithMode(store, numPartitionQueries, prunerMode, prunerCutoff, false, false)
 }
 
 // launchPartitionIteratorWithMode is the generalised form that supports the
 // conflicting-scan mode used by repair tooling.
-func launchPartitionIteratorWithMode(store *Store, numPartitionQueries int, prunerMode bool, prunerCutoff uint32, conflictingMode bool) (*unminedTxIterator, error) {
+func launchPartitionIteratorWithMode(store *Store, numPartitionQueries int, prunerMode bool, prunerCutoff uint32, conflictingMode, skipMissingExternal bool) (*unminedTxIterator, error) {
 	const totalPartitions = 4096 // Aerospike has 4096 partitions
 
 	if numPartitionQueries < 1 {
@@ -161,14 +166,15 @@ func launchPartitionIteratorWithMode(store *Store, numPartitionQueries int, prun
 	}
 
 	it := &unminedTxIterator{
-		store:            store,
-		prunerMode:       prunerMode,
-		prunerCutoff:     prunerCutoff,
-		conflictingMode:  conflictingMode,
-		resultChan:       make(chan []*utxo.UnminedTransaction, resultChanSize),
-		errorChan:        make(chan error, numPartitionQueries),
-		cancelWorkers:    cancel,
-		queryIdleTimeout: queryIdleTimeout,
+		store:               store,
+		prunerMode:          prunerMode,
+		prunerCutoff:        prunerCutoff,
+		conflictingMode:     conflictingMode,
+		skipMissingExternal: skipMissingExternal,
+		resultChan:          make(chan []*utxo.UnminedTransaction, resultChanSize),
+		errorChan:           make(chan error, numPartitionQueries),
+		cancelWorkers:       cancel,
+		queryIdleTimeout:    queryIdleTimeout,
 	}
 
 	partitionStart := 0
@@ -743,6 +749,10 @@ func (it *unminedTxIterator) Next(ctx context.Context) ([]*utxo.UnminedTransacti
 					}
 				default:
 				}
+				if skipped := it.missingExternalSkipped.Load(); skipped > 0 {
+					it.store.logger.Errorf("[unminedTxIterator] left out %d unmined transactions whose external file is missing; if that is every external transaction, check the external store is mounted and configured", skipped)
+				}
+
 				it.closeWithLogging()
 				return nil, nil
 			}
@@ -952,7 +962,33 @@ func (s *Store) GetUnminedTxIterator() (utxo.UnminedTxIterator, error) {
 		return nil, errors.NewProcessingError(errAerospikeClientNotInit)
 	}
 
-	return newUnminedTxIterator(s)
+	return newUnminedTxIterator(s, false)
+}
+
+// Block assembly finds the skipping scan through this interface; a rename here
+// must not silently drop the store back to the failing scan.
+var _ utxo.MissingExternalSkipper = (*Store)(nil)
+
+// GetUnminedTxIteratorSkippingMissingExternal is GetUnminedTxIterator for block
+// assembly's load, which runs at start, on reload and on reset, and opens it
+// only while that load's parent chain check drops a skipped record's children
+// (blockassembly_onRestartValidateParentChain and
+// blockassembly_onRestartRemoveInvalidParentChainTxs both on). An unmined
+// record marked external whose file the external store does not have is logged,
+// counted and returned as a Skip record carrying its hash, instead of failing
+// the scan, so block assembly can drop its queued children: the file does not come
+// back, so failing would stop block assembly from starting on every restart.
+// The input-validating reset loads this way too, so it leaves such a record
+// unexamined and reports it only through the log and
+// teranode_aerospike_unmined_missing_external_skipped. Callers outside block
+// assembly's load, such as the rewind tool and the input-validation dry run,
+// keep GetUnminedTxIterator, which still fails on the record.
+func (s *Store) GetUnminedTxIteratorSkippingMissingExternal() (utxo.UnminedTxIterator, error) {
+	if s.client == nil {
+		return nil, errors.NewProcessingError(errAerospikeClientNotInit)
+	}
+
+	return newUnminedTxIterator(s, true)
 }
 
 // GetPrunableUnminedTxIterator returns a lightweight iterator optimized for pruner use.
@@ -995,5 +1031,5 @@ func (s *Store) GetConflictingTxIterator() (utxo.UnminedTxIterator, error) {
 
 	s.logger.Infof("[GetConflictingTxIterator] Using %d parallel partition queries", numPartitionQueries)
 
-	return launchPartitionIteratorWithMode(s, numPartitionQueries, false, 0, true)
+	return launchPartitionIteratorWithMode(s, numPartitionQueries, false, 0, true, false)
 }
