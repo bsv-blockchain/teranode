@@ -1151,10 +1151,11 @@ func (s *Server) shouldSkipBannedPeer(from string, messageType string) bool {
 // walk and without caching anything under its ID.
 //
 // Accepted window: a neighbour that connects just after the snapshot was
-// taken is a miss, and misses are served from the snapshot for up to
-// liveConnMissRefreshInterval (1s) before one rebuilds it. A banned IP that
-// reconnects under a fresh peer ID therefore gets at most that long of
-// gossip accepted per connection. Rebuilding on every miss would close the
+// taken is a miss, and misses are served from the snapshot until it is
+// liveConnMissRefreshInterval (1s) old. The snapshot is stamped when its walk
+// returns, so the window is that interval plus one walk. A banned IP that
+// reconnects under a fresh peer ID gets that long of gossip accepted per
+// connection. Rebuilding on every miss would close the
 // window but cost a GetPeers walk, linear in every author the message bus has
 // tracked, per message from an unknown author. Closing it needs a per-peer
 // connectedness lookup from go-p2p-message-bus, which its client does not
@@ -1190,8 +1191,8 @@ func (s *Server) isPeerIPBanned(peerID string) bool {
 // registry score is below 20 has its messages processed when an honest
 // neighbour relays them; the ban gate (shouldSkipBannedPeer) still applies to
 // it. And a low-score neighbour that has just connected passes until the
-// live-connection snapshot sees it, at most liveConnMissRefreshInterval (see
-// isPeerIPBanned).
+// live-connection snapshot sees it: liveConnMissRefreshInterval plus one walk
+// (see isPeerIPBanned).
 //
 // Reputation scores of connected peers are cached for
 // reputationCacheTTL (bounded at insert) to avoid a round-trip on every pubsub

@@ -202,7 +202,7 @@ Malicious peers can be reconsidered after a cooldown period through the `Reconsi
 
 The P2P service drops gossip (subtree, rejected-transaction and node-status messages) from a peer whose score is below 20.0, but only when that peer is a direct neighbour with an open libp2p connection. Messages relayed from authors we are not connected to are not reputation-gated, so a low-score author's messages are processed when an honest neighbour relays them. The author ID of a relayed message costs nothing to create, and looking up each new one in the registry would cost a round-trip per message. Bans still apply to relayed authors.
 
-A low-score neighbour that has just connected can pass the gate for up to one second, until the service's view of open connections is refreshed.
+A low-score neighbour that has just connected can pass the gate until the service's view of open connections is refreshed: about one second, plus the time that refresh takes.
 
 ## 5. Peer Selection Strategy
 
