@@ -129,7 +129,7 @@ func (d *Daemon) startServices(ctx context.Context, logger ulogger.Logger, appSe
 	// is mined, or builds a validator that does, keeps an index of the lane map and answers those
 	// checks from it too (util/lanereader). An RPC-only process with a local validator does not,
 	// so its validator's parent checks are not counted.
-	if startSubtreeValidation || startBlockValidation || startValidator || startPropagation || startLegacy {
+	if needsLaneReader(startSubtreeValidation, startBlockValidation, startValidator, startPropagation, startLegacy) {
 		d.startLaneReader(ctx, appSettings, createLogger)
 	}
 
@@ -781,6 +781,13 @@ func (d *Daemon) startBlockAssemblyService(ctx context.Context, appSettings *set
 		blockchainClient,
 		blockassembly.WithTxMetaProducer(txMetaProducer),
 	))
+}
+
+// needsLaneReader reports whether a process running these services keeps a lane index: one that
+// checks whether a parent is mined, or builds a validator that does. RPC is left out, so an
+// RPC-only process with a local validator does not count its validator's parent checks.
+func needsLaneReader(subtreeValidation, blockValidation, validator, propagation, legacy bool) bool {
+	return subtreeValidation || blockValidation || validator || propagation || legacy
 }
 
 // laneReaderConnectRetry is how long the lane index waits before connecting to the blockchain

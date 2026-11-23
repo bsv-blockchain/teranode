@@ -13,8 +13,10 @@
 // its index's tip. Loading by ID along the chain is the only way rows enter the index, so a
 // deleted block's rows, which name an ID no chain reaches, are never used. A reorg moves the tip
 // to the new chain; one deeper than the settle depth, past rows already folded into the floors,
-// rebuilds the index. Block validation loads a block's own ancestry the same way before it judges
-// it (Prepare), since the follower can be up to a second behind.
+// rebuilds the index. The follower reads the best block one second after each step finishes, so
+// while it is idle it is about a second behind; during a load of many blocks or a rebuild, readers
+// keep the previous snapshot until that step finishes. Block validation therefore loads a block's
+// own ancestry the same way before it judges it (Prepare).
 package lanereader
 
 import (
