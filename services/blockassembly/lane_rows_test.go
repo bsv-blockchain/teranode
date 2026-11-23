@@ -12,6 +12,7 @@ import (
 	"github.com/RoaringBitmap/roaring/v2/roaring64"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
+	txmap "github.com/bsv-blockchain/go-tx-map"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
@@ -619,7 +620,11 @@ func TestSubtreeLanePositionsReadsWithoutRecordingErrors(t *testing.T) {
 	require.NoError(t, st.AddCoinbaseNode())
 	require.NoError(t, st.AddNode(chainhash.HashH([]byte("lane-failing-read")), 1, 1))
 
-	laneBits := subtreeLanePositions(st, failingPositionMap{TxInpointsMap: subtreeprocessor.NewSplitTxInpointsMap(1)}, nil)
+	txMap := subtreeprocessor.NewSplitTxInpointsMap(1)
+	txMap.Set(st.Nodes[1].Hash, singleParentInpointsPtr(chainhash.HashH([]byte("lane-failing-parent")), 0))
+
+	laneBits, lost := subtreeLanePositions(st, failingPositionMap{TxInpointsMap: txMap}, nil, nil)
+	require.Zero(t, lost)
 	require.Equal(t, 1, laneBits.Unpositioned())
 }
 
@@ -951,32 +956,63 @@ func TestSubtreeStorageThatFailsStopsTheWait(t *testing.T) {
 	require.Equal(t, before+1, ownLaneMetric(t, "teranode_lane_missing_bitmaps_total", absent))
 }
 
-// TestStoreSubtreeDataBuildsLaneBitmapsWhenTheMetaPassFails: a meta pass that fails part way still
-// leaves the subtree with every position the pool holds, from a positions-only pass; the member the
-// pool has lost is counted as without one.
-func TestStoreSubtreeDataBuildsLaneBitmapsWhenTheMetaPassFails(t *testing.T) {
-	server, memoryStore := setupServerWithSettings(t, func(s *settings.Settings) { s.UtxoStore.LaneMigration = settings.LaneMigrationShadow })
+// TestStoreSubtreeDataKeepsNoLaneBitmapsWhenThePoolLostMembers: a subtree whose pool half was
+// cleared before its storage ran (after a block, while it was queued behind a storage backlog) is
+// stored without lane bitmaps, kept or written, with the meta pass or without it; a block listing
+// it counts it absent rather than taking bitmaps that miss its members.
+func TestStoreSubtreeDataKeepsNoLaneBitmapsWhenThePoolLostMembers(t *testing.T) {
+	for _, meta := range []bool{true, false} {
+		t.Run(fmt.Sprintf("meta=%t", meta), func(t *testing.T) {
+			server, memoryStore := setupServerWithSettings(t, func(s *settings.Settings) {
+				s.UtxoStore.LaneMigration = settings.LaneMigrationShadow
+				s.BlockAssembly.StoreTxInpointsForSubtreeMeta = meta
+			})
 
-	st, txMap := laneSealSubtree(t, "meta-fails")
+			st, txMap := laneSealSubtree(t, fmt.Sprintf("pool-cleared-%t", meta))
+			txMap.Clear()
 
-	// the middle tx is in neither the pool nor the deleted backup, so the meta cannot be built
-	require.True(t, txMap.Delete(st.Nodes[2].Hash))
+			unpositioned := map[string]string{"service": laneBitmapsService}
+			before := ownLaneMetric(t, "teranode_lane_txs_without_position_total", unpositioned)
 
-	unpositioned := map[string]string{"service": laneBitmapsService}
-	before := ownLaneMetric(t, "teranode_lane_txs_without_position_total", unpositioned)
+			subtreeDone, allDone, err := server.storeSubtreeData(t.Context(), subtreeprocessor.NewSubtreeRequest{Subtree: st, ParentTxMap: txMap}, make(chan *subtreeRetrySend, 10))
+			require.NoError(t, err)
+			require.True(t, <-subtreeDone)
+			<-allDone
 
-	subtreeDone, allDone, err := server.storeSubtreeData(t.Context(), subtreeprocessor.NewSubtreeRequest{Subtree: st, ParentTxMap: txMap}, make(chan *subtreeRetrySend, 10))
-	require.NoError(t, err)
-	require.True(t, <-subtreeDone)
-	<-allDone
+			_, err = memoryStore.Get(t.Context(), st.RootHash()[:], fileformat.FileTypeSubtree)
+			require.NoError(t, err, "the subtree is still stored")
 
-	_, err = memoryStore.Get(t.Context(), st.RootHash()[:], fileformat.FileTypeSubtreeMeta)
-	require.Error(t, err, "precondition: no meta was stored")
+			_, missing := server.ownLaneBitmaps.get([]*chainhash.Hash{st.RootHash()})
+			require.Equal(t, 1, missing, "no bitmaps are kept")
 
-	kept, missing := server.ownLaneBitmaps.get([]*chainhash.Hash{st.RootHash()})
-	require.Zero(t, missing)
-	require.Equal(t, []uint64{20, 22}, kept[0][4].ToArray(), "the members before and after the lost one keep their positions")
-	require.Equal(t, before+1, ownLaneMetric(t, "teranode_lane_txs_without_position_total", unpositioned))
+			_, err = memoryStore.Get(t.Context(), st.RootHash()[:], fileformat.FileTypeSubtreeLaneBitmaps)
+			require.Error(t, err, "no bitmaps file is written")
+
+			require.Equal(t, before, ownLaneMetric(t, "teranode_lane_txs_without_position_total", unpositioned), "the lost members are not counted as txs without a position")
+		})
+	}
+}
+
+// TestSubtreeLanePositionsTakesARemovedTxsBackup: a member removed from the pool while its
+// subtree was stored takes its position from the backup beside deletedTxs and is not lost; one in
+// neither the pool nor the backup is lost.
+func TestSubtreeLanePositionsTakesARemovedTxsBackup(t *testing.T) {
+	st, txMap := laneSealSubtree(t, "removed-backup")
+
+	removed, gone := st.Nodes[1].Hash, st.Nodes[2].Hash
+	removedInpoints, _ := txMap.Get(removed)
+	require.True(t, txMap.Delete(removed))
+	require.True(t, txMap.Delete(gone))
+
+	deletedTxs := txmap.NewSyncedMap[chainhash.Hash, subtreepkg.TxInpoints]()
+	deletedTxs.Set(removed, *removedInpoints)
+
+	deletedPositions := txmap.NewSyncedMap[chainhash.Hash, uint64]()
+	deletedPositions.Set(removed, lane.Pack(4, 20))
+
+	laneBits, lost := subtreeLanePositions(st, txMap, deletedTxs, deletedPositions)
+	require.Equal(t, 1, lost)
+	require.Equal(t, []uint64{20, 22}, laneBits.Subtree(*st.RootHash()).Lanes[4].ToArray())
 }
 
 // failingBitmapsWriteStore refuses every write of a lane bitmaps file.

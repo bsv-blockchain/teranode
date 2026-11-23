@@ -1120,12 +1120,13 @@ func (ba *BlockAssembly) storeSubtreeData(ctx context.Context, subtreeRequest su
 			subtreeMetaBytes, ok := ba.buildSubtreeMeta(subtreeRequest, laneBits)
 
 			if lanes {
-				// a meta pass that failed part way collected only some positions
-				if !ok {
-					laneBits = subtreeLanePositions(subtree, subtreeRequest.ParentTxMap, subtreeRequest.DeletedPositions)
+				if ok {
+					ba.storeSubtreeLaneBitmaps(ctx, subtree, laneBits, height, dah)
+				} else {
+					// a meta pass that failed part way collected only some positions
+					ba.storeLanePositionsFromPool(ctx, subtreeRequest, height, dah)
 				}
 
-				ba.storeSubtreeLaneBitmaps(ctx, subtree, laneBits, height, dah)
 				close(laneBitmapsDone)
 			}
 
@@ -1159,7 +1160,7 @@ func (ba *BlockAssembly) storeSubtreeData(ctx context.Context, subtreeRequest su
 			go func() {
 				defer close(laneBitmapsDone)
 
-				ba.storeSubtreeLaneBitmaps(ctx, subtree, subtreeLanePositions(subtree, subtreeRequest.ParentTxMap, subtreeRequest.DeletedPositions), height, dah)
+				ba.storeLanePositionsFromPool(ctx, subtreeRequest, height, dah)
 			}()
 		}
 	}

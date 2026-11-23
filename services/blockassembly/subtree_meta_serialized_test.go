@@ -406,7 +406,7 @@ func BenchmarkBuildSubtreeMetaDiskTxMap(b *testing.B) {
 		b.ReportAllocs()
 
 		for i := 0; i < b.N; i++ {
-			laneBits := subtreeLanePositions(subtree, m, nil)
+			laneBits, _ := subtreeLanePositions(subtree, m, nil, nil)
 			if _, err := lane.EncodeSubtreeBitmaps(laneBits.Subtree(*subtree.RootHash())); err != nil {
 				b.Fatal(err)
 			}

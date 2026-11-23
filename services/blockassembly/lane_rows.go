@@ -223,18 +223,19 @@ func (o *ownLaneBitmaps) lookupLocked(roots []*chainhash.Hash) (bitmaps []lane.L
 
 // subtreeLanePositions builds the lane bitmaps of subtree from the positions parentTxMap keeps with
 // its transactions, for a subtree whose meta pass did not collect them (no meta is written, or
-// building it failed). A transaction the map no longer holds has no position here: it is counted as
-// without one, as a transaction that arrived without one is. The coinbase placeholder is skipped.
+// building it failed). A tx removed from the pool while the subtree was being stored is in
+// deletedTxs and takes its position from deletedPositions, the backup kept beside it. lost counts
+// the members found in neither: the half of the double buffer the subtree was sealed from has
+// been cleared since, after a block, so the bitmaps would be missing those members and must not be
+// kept. The coinbase placeholder is skipped.
 //
 // It runs on a subtree storage worker, beside the processor, so the disk map is read with
 // PositionWithErr: a read error that Position recorded on the map would be taken by the
 // processor's next check for its own, and fail that block movement into a reset. A position that
 // cannot be read is none, and counted.
-//
-// A tx removed from the pool while the subtree was being stored takes its position from
-// deletedPositions, the backup kept beside its inpoints.
-func subtreeLanePositions(subtree *subtreepkg.Subtree, parentTxMap subtreeprocessor.TxInpointsMap, deletedPositions *txmap.SyncedMap[chainhash.Hash, uint64]) *lane.BitmapsBuilder {
-	laneBits := lane.NewBitmapsBuilder()
+func subtreeLanePositions(subtree *subtreepkg.Subtree, parentTxMap subtreeprocessor.TxInpointsMap,
+	deletedTxs *txmap.SyncedMap[chainhash.Hash, subtreepkg.TxInpoints], deletedPositions *txmap.SyncedMap[chainhash.Hash, uint64]) (laneBits *lane.BitmapsBuilder, lost int) {
+	laneBits = lane.NewBitmapsBuilder()
 
 	withErr, readsWithErr := parentTxMap.(interface {
 		PositionWithErr(hash chainhash.Hash) (uint64, error)
@@ -245,23 +246,44 @@ func subtreeLanePositions(subtree *subtreepkg.Subtree, parentTxMap subtreeproces
 			continue
 		}
 
-		var position uint64
+		if parentTxMap == nil || !parentTxMap.Exists(node.Hash) {
+			if deletedTxs == nil || !deletedTxs.Exists(node.Hash) {
+				lost++
+				continue
+			}
 
-		switch {
-		case readsWithErr:
-			position, _ = withErr.PositionWithErr(node.Hash)
-		case parentTxMap != nil:
-			position = parentTxMap.Position(node.Hash)
+			laneBits.Add(deletedLanePosition(deletedPositions, node.Hash))
+
+			continue
 		}
 
-		if position == 0 {
-			position = deletedLanePosition(deletedPositions, node.Hash)
+		var position uint64
+
+		if readsWithErr {
+			position, _ = withErr.PositionWithErr(node.Hash)
+		} else {
+			position = parentTxMap.Position(node.Hash)
 		}
 
 		laneBits.Add(position)
 	}
 
-	return laneBits
+	return laneBits, lost
+}
+
+// storeLanePositionsFromPool builds subtree's lane bitmaps with subtreeLanePositions and stores
+// them, unless the pool no longer holds some of its members, when it stores none: the subtree then
+// counts as absent for a block that lists it, rather than holding bitmaps that miss members.
+func (ba *BlockAssembly) storeLanePositionsFromPool(ctx context.Context, subtreeRequest subtreeprocessor.NewSubtreeRequest, height, dah uint32) {
+	subtree := subtreeRequest.Subtree
+
+	laneBits, lost := subtreeLanePositions(subtree, subtreeRequest.ParentTxMap, subtreeRequest.DeletedTxs, subtreeRequest.DeletedPositions)
+	if lost > 0 {
+		ba.logger.Warnf("[BlockAssembly:storeSubtreeData][%s] storing the subtree without lane bitmaps: %d of its members are no longer in the pool it was sealed from", subtree.RootHash().String(), lost)
+		return
+	}
+
+	ba.storeSubtreeLaneBitmaps(ctx, subtree, laneBits, height, dah)
 }
 
 // storeSubtreeLaneBitmaps keeps the lane bitmaps laneBits collected for subtree in memory, for the
@@ -309,7 +331,7 @@ func (ba *BlockAssembly) keepExistingSubtreeLaneBitmaps(ctx context.Context, sub
 	root := *subtree.RootHash()
 
 	if !ba.ownLaneBitmaps.touch(root, height) {
-		ba.storeSubtreeLaneBitmaps(ctx, subtree, subtreeLanePositions(subtree, subtreeRequest.ParentTxMap, subtreeRequest.DeletedPositions), height, dah)
+		ba.storeLanePositionsFromPool(ctx, subtreeRequest, height, dah)
 		return
 	}
 
@@ -318,7 +340,7 @@ func (ba *BlockAssembly) keepExistingSubtreeLaneBitmaps(ctx context.Context, sub
 	switch {
 	case errors.Is(err, errors.ErrNotFound):
 		// an earlier write of the file failed while its bitmaps were kept: write it now
-		ba.storeSubtreeLaneBitmaps(ctx, subtree, subtreeLanePositions(subtree, subtreeRequest.ParentTxMap, subtreeRequest.DeletedPositions), height, dah)
+		ba.storeLanePositionsFromPool(ctx, subtreeRequest, height, dah)
 	case err != nil:
 		ba.logger.Warnf("[BlockAssembly:storeSubtreeData][%s] the lane bitmaps file may now expire before its subtree, whose DAH update failed: %v", root.String(), err)
 	}
