@@ -324,6 +324,35 @@ func TestLanePositionsOnWithoutTheLaneSchemaCountTheMissingCopies(t *testing.T) 
 	requireGetLane(t, s, ctx, child, lane.Pack(6, 2), "the record's own position is still written")
 }
 
+// On utxoset the spend counter's carried label says whether the spent output's own position, its
+// creating transaction's, was copied into the journal row, not whether the spender has a position.
+// An output created before shadow has none, so its spend counts no while the spender, created at
+// shadow, keeps its own position, which P4 reaches through the journal row's spending_txid. This is
+// what mainnet showed: every spend counted no had spent an output created before the soak started.
+func TestLaneSpendOfAnOutputCreatedBeforeShadowCountsNo(t *testing.T) {
+	s, ctx := newLaneCopyStore(t)
+
+	parent := mkTx(t, 1, 5_000)
+	_, err := s.Create(ctx, parent, 100) // created before shadow: no position
+	require.NoError(t, err)
+
+	before := readLaneSpendCoverage(t)
+
+	child := childOf(t, parent, 0)
+	_, _, err = s.SpendAndCreate(ctx, child, 101, utxo.WithLanePosition(lane.Pack(8, 2)))
+	require.NoError(t, err)
+
+	after := readLaneSpendCoverage(t)
+	require.Equal(t, before["no"]+1, after["no"], "a spend of an output with no position counts no")
+	require.Equal(t, before["yes"], after["yes"])
+
+	v, ok := journalLane(t, s, ctx, parent, 0)
+	require.True(t, ok, "the spend wrote a journal row")
+	require.Nil(t, v, "the journal row copies the output's missing position")
+
+	requireGetLane(t, s, ctx, child, lane.Pack(8, 2), "the spender has its own position all the same")
+}
+
 // The coverage counters see every copy the store writes at shadow.
 func TestLaneCoverageCountsCarriedPositions(t *testing.T) {
 	s, ctx := newLaneCopyStore(t)
