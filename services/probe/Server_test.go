@@ -20,6 +20,11 @@ import (
 
 const testToken = "test-token"
 
+func TestNewSetsDefaultWriteTimeout(t *testing.T) {
+	srv := New(ulogger.TestLogger{}, settings.NewSettings(), nil, nil)
+	require.Equal(t, defaultWriteTimeout, srv.writeTimeout)
+}
+
 func newTestServer(t *testing.T, token string) *Server {
 	t.Helper()
 
