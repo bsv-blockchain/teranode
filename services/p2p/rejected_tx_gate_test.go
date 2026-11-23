@@ -511,8 +511,14 @@ func TestApplyPeerMapLimits_ConfiguresRejectedTxEgress(t *testing.T) {
 	grant, why := s.rejectedTxEgress.allow(distinctTxID(100), "self")
 	require.NotNil(t, grant, "the configured rate must be in force: one token per second: %s", why)
 
+	// The TTL leg needs an entry the size cap has not evicted, and a repeat
+	// that only the configured TTL lets through. distinctTxID(100) was just
+	// granted and is resident. One minute on, under the 2m default its
+	// window has rolled with us as last window's grantee, so the repeat
+	// would be refused as a duplicate; under the configured 1m the entry
+	// has expired and the repeat is a fresh grant.
 	clock.advance(time.Minute)
-	grant, why = s.rejectedTxEgress.allow(distinctTxID(0), "self")
+	grant, why = s.rejectedTxEgress.allow(distinctTxID(100), "self")
 	require.NotNil(t, grant, "the configured TTL must be in force: the entry expired after one minute: %s", why)
 }
 
