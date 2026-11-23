@@ -8,6 +8,7 @@ import (
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-chaincfg"
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/stores/blob"
@@ -203,4 +204,65 @@ func TestConsolidatorRecordDone_ReportsEveryBatch(t *testing.T) {
 
 	// No progress callback, as in a consolidator nobody watches, is a no-op.
 	(&consolidator{}).recordDone()
+}
+
+// A missing deletions ledger is never "no deletions": NewUTXOSet always writes
+// the file, so a miss means the block persister has not finished the block.
+// Treating it as zero spends would roll the block into the set with every
+// spent output still present.
+func TestConsumeDeletions_MissingLedgerPropagatesAsError(t *testing.T) {
+	ctx := context.Background()
+	logger := ulogger.NewVerboseTestLogger(t)
+	tSettings := test.CreateBaseTestSettings(t)
+
+	storeURL, err := url.Parse("file://" + t.TempDir())
+	require.NoError(t, err)
+
+	store, err := blob.NewStore(logger, storeURL)
+	require.NoError(t, err)
+
+	us := &UTXOSet{
+		logger:           logger,
+		settings:         tSettings,
+		blockHash:        chainhash.HashH([]byte("additions-written-deletions-missing")),
+		blockHeight:      200,
+		blockHeightKnown: true,
+		store:            store,
+	}
+
+	c := &consolidator{
+		logger:    logger,
+		settings:  tSettings,
+		additions: map[UTXODeletion]*Addition{},
+		deletions: map[UTXODeletion]struct{}{},
+	}
+
+	err = c.consumeDeletions(ctx, us)
+	require.Error(t, err)
+	require.True(t, errors.Is(err, errors.ErrNotFound), "expected the store's not-found error to reach the caller, got %v", err)
+	require.Empty(t, c.deletions)
+}
+
+func TestConsumeDeletions_PropagatesReaderErrors(t *testing.T) {
+	ctx := context.Background()
+	logger := ulogger.NewVerboseTestLogger(t)
+	tSettings := test.CreateBaseTestSettings(t)
+
+	us := &UTXOSet{
+		logger:           logger,
+		settings:         tSettings,
+		blockHash:        chainhash.HashH([]byte("height-unknown-block")),
+		blockHeightKnown: false,
+	}
+
+	c := &consolidator{
+		logger:    logger,
+		settings:  tSettings,
+		additions: map[UTXODeletion]*Addition{},
+		deletions: map[UTXODeletion]struct{}{},
+	}
+
+	err := c.consumeDeletions(ctx, us)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "requires the block height")
 }

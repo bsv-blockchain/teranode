@@ -2023,6 +2023,129 @@ func TestStart_ProcessingLoopStopsDuringPersistSleep(t *testing.T) {
 	}
 }
 
+// attemptRecordingStore fails every block-file check, as an unreachable store does, and records
+// when each block was tried.
+type attemptRecordingStore struct {
+	*existsFailingStore
+	mu       sync.Mutex
+	attempts map[chainhash.Hash][]time.Time
+}
+
+func (s *attemptRecordingStore) Exists(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...bloboptions.FileOption) (bool, error) {
+	if fileType == fileformat.FileTypeBlock {
+		hash, err := chainhash.NewHash(key)
+		if err == nil {
+			s.mu.Lock()
+			s.attempts[*hash] = append(s.attempts[*hash], time.Now())
+			s.mu.Unlock()
+		}
+	}
+
+	return s.existsFailingStore.Exists(ctx, key, fileType, opts...)
+}
+
+func (s *attemptRecordingStore) attemptsFor(hash chainhash.Hash) []time.Time {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return append([]time.Time(nil), s.attempts[hash]...)
+}
+
+// switchingBlockClient hands the loop one block until it is told to hand over another.
+type switchingBlockClient struct {
+	*MockBlockchainClient
+	current atomic.Pointer[model.Block]
+}
+
+func (c *switchingBlockClient) GetBlocksNotPersisted(context.Context, int) ([]*model.Block, error) {
+	return []*model.Block{c.current.Load()}, nil
+}
+
+func (c *switchingBlockClient) SetBlockPersistedAt(context.Context, *chainhash.Hash) error {
+	return nil
+}
+
+// repeatedFailureLogger signals each "failing repeatedly" operator announcement.
+type repeatedFailureLogger struct {
+	ulogger.TestLogger
+	announced chan struct{}
+}
+
+func (l *repeatedFailureLogger) Errorf(format string, args ...interface{}) {
+	if strings.Contains(format, "failing repeatedly") {
+		l.announced <- struct{}{}
+	}
+}
+
+// TestStart_RetryPacingRestartsForANewBlock drives the processing loop through failures on one
+// block and then another. The second block must wait the base interval after its first failure
+// and earn its own operator announcement, not inherit the first block's escalated wait.
+func TestStart_RetryPacingRestartsForANewBlock(t *testing.T) {
+	block, _, _, mockUTXOStore, subtreeStore, _, _, tSettings := setup(t)
+
+	base := 50 * time.Millisecond
+	tSettings.BlockPersister.PersistSleep = base
+	tSettings.BlockPersister.HTTPListenAddress = ""
+
+	headerB := *block.Header
+	headerB.Nonce++
+	blockB := &model.Block{
+		Header:           &headerB,
+		CoinbaseTx:       block.CoinbaseTx,
+		TransactionCount: block.TransactionCount,
+		SizeInBytes:      block.SizeInBytes,
+		Subtrees:         block.Subtrees,
+		Height:           block.Height + 1,
+	}
+
+	hashA, hashB := *block.Header.Hash(), *blockB.Header.Hash()
+	require.NotEqual(t, hashA, hashB)
+
+	blockStore := &attemptRecordingStore{
+		existsFailingStore: &existsFailingStore{Memory: memory.New(), fileType: fileformat.FileTypeBlock},
+		attempts:           map[chainhash.Hash][]time.Time{},
+	}
+
+	client := &switchingBlockClient{MockBlockchainClient: NewMockBlockchainClient()}
+	client.current.Store(block)
+
+	logger := &repeatedFailureLogger{announced: make(chan struct{}, 8)}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	server := New(ctx, logger, tSettings, blockStore, subtreeStore, mockUTXOStore, client)
+
+	go func() {
+		_ = server.Start(ctx, make(chan struct{}, 1))
+	}()
+
+	waitForAnnouncement := func(what string) {
+		t.Helper()
+
+		select {
+		case <-logger.announced:
+		case <-time.After(10 * time.Second):
+			t.Fatalf("no operator announcement for %s", what)
+		}
+	}
+
+	waitForAnnouncement("block A")
+	client.current.Store(blockB)
+	waitForAnnouncement("block B")
+
+	attemptsB := blockStore.attemptsFor(hashB)
+	require.GreaterOrEqual(t, len(attemptsB), announceAtFailures)
+	require.Less(t, attemptsB[1].Sub(attemptsB[0]), 3*base,
+		"block B waits the base interval after its first failure, not block A's escalated wait")
+
+	select {
+	case <-logger.announced:
+		t.Fatal("a block announced twice in one unbroken failure run")
+	case <-time.After(3 * base):
+	}
+}
+
 func (m *MockUTXOStore) SaveConflictRecovery(context.Context, chainhash.Hash, *utxo.ConflictRecovery) error {
 	return nil
 }
