@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"os"
 	"testing"
 
 	"github.com/bsv-blockchain/go-bt/v2"
@@ -37,7 +38,12 @@ func initAerospikeBench(b *testing.B, settings *settings.Settings, logger ulogge
 				err = errors.NewError("container startup panic: %v", r)
 			}
 		}()
-		c, e := aeroTest.RunContainer(ctx)
+		var opts []testcontainers.ContainerCustomizer
+		if aerospikeContainerImage != "" {
+			opts = append(opts, aeroTest.WithImage(aerospikeContainerImage))
+		}
+
+		c, e := aeroTest.RunContainer(ctx, opts...)
 		if e != nil {
 			err = e
 			return
@@ -72,6 +78,10 @@ func initAerospikeBench(b *testing.B, settings *settings.Settings, logger ulogge
 		host, port, aerospikeNamespace, aerospikeSet, aerospikeBlockRetention)
 	aeroURL, err := url.Parse(aerospikeContainerURL)
 	require.NoError(b, err)
+
+	if os.Getenv("TERANODE_TEST_AEROSPIKE_NATIVE_OPS") == "true" {
+		settings.Aerospike.UseNativeTeranodeOps = true
+	}
 
 	db, err := teranode_aerospike.New(ctx, logger, settings, aeroURL)
 	require.NoError(b, err)

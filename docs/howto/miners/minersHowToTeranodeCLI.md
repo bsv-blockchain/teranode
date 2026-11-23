@@ -17,6 +17,7 @@ Usage: teranode-cli <command> [options]
     Available Commands:
     aerospikekafkaconnector  Read Aerospike CDC from Kafka and filter by txID bin
     aerospikereader      Aerospike Reader
+    audit-mined-set      List blocks stored with mined_set true whose transactions lack the block id or are still locked (read-only; remedy is a resync)
     bitcointoutxoset     Bitcoin to Utxoset
     checkblock           Check block - fetches a block and validates it using the block validation service
     checkblockassembly   Check block assembly state by validating unmined transaction inputs (read-only)
@@ -25,11 +26,13 @@ Usage: teranode-cli <command> [options]
     export-blocks        Export blockchain to CSV
     filereader           File Reader
     fix-chainwork        Fix incorrect chainwork values in blockchain database
+    free-spent-output    Free one output still spent by a transaction the UTXO store has no record of (the error 78 stall; see --help)
     getfsmstate          Get the current FSM State
     import-blocks        Import blockchain from CSV
     loadunminedbench     Benchmark loadUnminedTransactions with CPU and memory profiling
     logs                 Interactive log viewer with filtering and search
     monitor              Live TUI dashboard for monitoring node status
+    prepare-lane-schema  Install the UTXO store's lane columns, empty, at lane migration step off (node must be stopped)
     reconsiderblock      Reconsider a block that was previously marked as invalid
     remainderbench       Benchmark processRemainderTransactionsAndDequeue with CPU and memory profiling
     resetblockassembly   Reset block assembly state
@@ -106,6 +109,15 @@ Usage: teranode-cli <command> [options]
 |                      |                                                | `--batch-size` - Updates per transaction (default: 1000)        |
 |                      |                                                | `--start-height` - Starting block height (default: 650286)      |
 |                      |                                                | `--end-height` - Ending block height (default: 0 for tip)       |
+| `audit-mined-set`    | List blocks stored with mined_set true whose   | `--start-height` - First height to audit (default: 0)           |
+|                      | sampled transactions lack the block ID or are  | `--end-height` - Last height to audit (required)                |
+|                      | still locked (read-only; remedy is a resync)   | `--max-blocks` - Refuse a wider range (default: 10000)          |
+| `free-spent-output`  | Free one output still spent by a transaction   | `--parent` - Parent transaction id (required)                    |
+|                      | the store has no record of (error 78 stall;    | `--vout` - Output index (default: 0)                             |
+|                      | see docs/topics/stores/utxo.md first)          | `--spender` - Spender transaction id (required)                  |
+| `prepare-lane-schema`| Install the UTXO store's lane columns, empty,  | none                                                             |
+|                      | at lane migration step off (node must be       |                                                                  |
+|                      | stopped; run as the tables' owner)             |                                                                  |
 | `rewindblockchain`   | Rewind blockchain DB, UTXO store and subtree   | `--target-height` - Height to rewind to (default: Block Assembly's saved height) |
 |                      | blobs to Block Assembly's persisted height     | `--dry-run` - Report the plan without modifying any store        |
 |                      | (DESTRUCTIVE - node must be stopped)           | `--assume-yes` - Skip the interactive confirmation               |
@@ -187,8 +199,11 @@ teranode-cli checkblock 000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b6
 ### File Reader
 
 ```bash
-teranode-cli filereader [path] [options]
+teranode-cli filereader [options] [path]
 ```
+
+Flags must come before the path: anything after the first positional argument is not parsed as a flag, so
+`teranode-cli` rejects it.
 
 Options:
 
@@ -346,10 +361,9 @@ not fully enforce — the node stopped, the FSM state in the blockchain DB readi
 reports the tip, target, and block count without mutating anything, but it
 returns before the subtree store is touched, so it cannot confirm that last one.
 
-Note that `IDLE` is only reachable from `RUNNING`: the FSM has no
-`CATCHINGBLOCKS` → `IDLE` transition, so on a node stuck catching blocks
-`setfsmstate --fsmstate=idle` fails and the state has to be moved via `running`
-first.
+`setfsmstate --fsmstate=idle` reaches `IDLE` from both `RUNNING` and
+`CATCHINGBLOCKS`. From `CATCHINGBLOCKS` it does not cancel a catchup already in
+progress, so stop the services before rewinding.
 
 A step-by-step operator runbook is not published yet. Until it is, do not run
 this against a production node without working through those preconditions
@@ -563,6 +577,8 @@ The CLI will exit with status code 1 when:
 - Invalid commands are provided
 - Required arguments are missing
 - Command execution fails
+
+`audit-mined-set` also exits 1 when it finds an affected block, and exits 2 when no block is affected but every audited block is `UNCHECKED`. Exit 2 means nothing could be checked, which is not a pass.
 
 ## Environment
 

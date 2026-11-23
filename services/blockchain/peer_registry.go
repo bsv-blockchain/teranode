@@ -8,9 +8,12 @@ import (
 	"sync/atomic"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
+	p2pconstants "github.com/bsv-blockchain/teranode/interfaces/p2p"
+	"github.com/bsv-blockchain/teranode/pkg/urlutil"
 	"github.com/bsv-blockchain/teranode/services/blockchain/blockchain_api"
 	"github.com/bsv-blockchain/teranode/services/blockchain/work"
 	"github.com/bsv-blockchain/teranode/stores/blob"
@@ -57,6 +60,47 @@ func sanitizeClientName(name string) string {
 	return strings.TrimSpace(cleaned.String())
 }
 
+// maxCatchupErrorLength caps a stored catchup error. It is a diagnostic for the
+// dashboard, not a log: the full error is logged where it happens.
+const maxCatchupErrorLength = 512
+
+// SanitizeCatchupError makes a catchup error safe to store and serve. The error comes
+// from fetches at peer-chosen URLs and is served by the Asset /peers and
+// /catchup/status endpoints, so IP
+// literals are redacted - a dial error otherwise tells the peer which private address
+// a hostname resolved to (bitcoin-sv/teranode#4855) - and the length is capped, cutting
+// on a rune boundary.
+func SanitizeCatchupError(errMsg string) string {
+	errMsg = urlutil.RedactIPLiterals(errMsg)
+
+	if len(errMsg) <= maxCatchupErrorLength {
+		return errMsg
+	}
+
+	cut := maxCatchupErrorLength
+	for cut > 0 && !utf8.RuneStart(errMsg[cut]) {
+		cut--
+	}
+
+	return errMsg[:cut] + "…"
+}
+
+// LegacyPeerInfo holds fields that only a Bitcoin wire-protocol (legacy) peer
+// supplies. A nil pointer on PeerInfo means "this update carries no legacy
+// data"; it never means "clear the stored values". The struct is replaced
+// wholesale on update, because Inbound and IsSyncPeer are meaningful when
+// false and a field-by-field merge could not tell false from unset.
+type LegacyPeerInfo struct {
+	Inbound         bool      // The peer dialled us
+	ProtocolVersion uint32    // Wire protocol version, e.g. 70016
+	ServiceFlags    uint64    // wire.ServiceFlag bits
+	PingMicros      int64     // Last ping round trip, microseconds
+	TimeOffsetSecs  int64     // Peer clock offset from ours, seconds
+	StartingHeight  int32     // Peer height at handshake
+	IsSyncPeer      bool      // The legacy sync manager selected this peer
+	TimeConnected   time.Time // When the wire connection opened
+}
+
 // PeerInfo holds transport-agnostic information about a peer known to the node.
 // It is used across all transport types (HTTP DataHub, wire protocol, etc.).
 type PeerInfo struct {
@@ -65,6 +109,7 @@ type PeerInfo struct {
 	TransportTypeSet          bool // When true, TransportType was explicitly set by the caller
 	ClientName                string
 	Height                    uint32
+	AdvertisedHeight          uint32
 	DataHubURL                string
 	NetworkAddress            string
 	IsBanned                  bool
@@ -109,6 +154,9 @@ type PeerInfo struct {
 	ReputationResetCount int32
 	LastCatchupError     string
 	LastCatchupErrorTime time.Time
+
+	// Legacy holds wire-protocol-only fields. It is nil for libp2p peers.
+	Legacy *LegacyPeerInfo
 }
 
 func clonePeerInfo(info *PeerInfo) PeerInfo {
@@ -116,7 +164,21 @@ func clonePeerInfo(info *PeerInfo) PeerInfo {
 	peerCopy.BlockHash = cloneHash(info.BlockHash)
 	peerCopy.ValidatedBlockHash = cloneHash(info.ValidatedBlockHash)
 	peerCopy.ValidatedChainWork = append([]byte(nil), info.ValidatedChainWork...)
+	peerCopy.Legacy = cloneLegacyPeerInfo(info.Legacy)
+
 	return peerCopy
+}
+
+// cloneLegacyPeerInfo copies the legacy block behind a fresh pointer so the
+// registry never aliases a caller's struct. A nil input returns nil.
+func cloneLegacyPeerInfo(legacy *LegacyPeerInfo) *LegacyPeerInfo {
+	if legacy == nil {
+		return nil
+	}
+
+	legacyCopy := *legacy
+
+	return &legacyCopy
 }
 
 func cloneHash(hash *chainhash.Hash) *chainhash.Hash {
@@ -158,7 +220,12 @@ func DefaultBanConfig() BanConfig {
 			"protocol_violation": 20,
 			"spam":               50,
 			"invalid_block":      10,
-			"catchup_failure":    30,
+			// Corrupt block body (bitcoin-sv/teranode#4692): scored like invalid_block (a DoS-scoring
+			// event) but without the block-index poison — the block is re-downloaded. Keyed off the
+			// shared constant so a rename cannot silently zero the score.
+			p2pconstants.ReasonCorruptBlockBody.String(): 10,
+			"catchup_failure":   30,
+			"catchup_malicious": 50,
 		},
 	}
 }
@@ -278,6 +345,7 @@ func (r *CentralizedPeerRegistry) Register(info *PeerInfo) {
 		// Strip dangerous characters out of the peer-supplied client name so
 		// it can't break logs / dashboards / JSON consumers.
 		entry.ClientName = sanitizeClientName(entry.ClientName)
+		entry.LastCatchupError = SanitizeCatchupError(entry.LastCatchupError)
 		if storagePromotionBlocked(entry.Storage, entry.FullStoragePenaltyUntil, now) {
 			entry.Storage = ""
 		}
@@ -307,6 +375,16 @@ func (r *CentralizedPeerRegistry) Register(info *PeerInfo) {
 	}
 	if info.Height > 0 {
 		existing.Height = info.Height
+	}
+	// Carried separately from Height: Height is capped against local progress
+	// for sync decisions, AdvertisedHeight is what the peer actually claimed
+	// and is reported to operators unchanged. Newest-wins, like Height: the
+	// p2p batcher keeps the highest claim within one flush window, but across
+	// windows a lower claim may replace a higher one. That is intended — a
+	// peer that reorgs to a lower tip must not keep showing its old height —
+	// and a display that dips heals on the peer's next announcement.
+	if info.AdvertisedHeight > 0 {
+		existing.AdvertisedHeight = info.AdvertisedHeight
 	}
 	if info.DataHubURL != "" {
 		existing.DataHubURL = info.DataHubURL
@@ -357,6 +435,14 @@ func (r *CentralizedPeerRegistry) Register(info *PeerInfo) {
 			existing.ValidatedHeight = 0
 		}
 	}
+	// Replace the legacy block wholesale rather than field-by-field: Inbound
+	// and IsSyncPeer are meaningful when false, so a per-field "is it non-zero"
+	// merge could not distinguish false from unset. A nil Legacy means the
+	// caller has no legacy data and must leave the stored block alone.
+	if info.Legacy != nil {
+		existing.Legacy = cloneLegacyPeerInfo(info.Legacy)
+	}
+
 	// Only update TransportType when the caller explicitly set it.
 	if info.TransportTypeSet {
 		existing.TransportType = info.TransportType
@@ -397,6 +483,13 @@ func (r *CentralizedPeerRegistry) UpdateMetrics(
 	info.LastSeen = now
 
 	if recordMalicious {
+		// Setting LastInteractionFailure here and the 5.0 reputation pin in
+		// calculateAndUpdateReputation are both load-bearing for recovery:
+		// ReconsiderBadPeers only clears MaliciousCount for peers with
+		// ReputationScore < 20 and a non-zero last failure, and that sweep is
+		// the sole automatic path that stops IsPeerMalicious excluding the
+		// peer. Removing either turns a malicious record into a permanent
+		// exclusion.
 		info.MaliciousCount++
 		info.InteractionAttempts++
 		info.InteractionFailures++
@@ -1296,8 +1389,11 @@ func (r *CentralizedPeerRegistry) RecordCatchupFailure(peerID string) {
 	}
 }
 
-// RecordCatchupError stores the most recent catchup error reported against the peer.
+// RecordCatchupError stores the most recent catchup error reported against the peer,
+// sanitized by SanitizeCatchupError.
 func (r *CentralizedPeerRegistry) RecordCatchupError(peerID string, errMsg string) {
+	errMsg = SanitizeCatchupError(errMsg)
+
 	r.mu.Lock()
 	defer r.mu.Unlock()
 

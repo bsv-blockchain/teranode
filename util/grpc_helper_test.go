@@ -17,6 +17,7 @@ import (
 
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
@@ -139,6 +140,96 @@ func TestCreateAuthInterceptor(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestCreateAuthInterceptorRejectionsCounted pins that every rejection path
+// (missing metadata, missing key, mismatched key) increments
+// grpcAuthRejectionsTotal - a key mismatch across services otherwise fails
+// every protected RPC while HealthGRPC/Health stay green, with nothing to
+// alert on.
+func TestCreateAuthInterceptorRejectionsCounted(t *testing.T) {
+	const method = "/test.service/AuthCountedMethod"
+
+	interceptor := CreateAuthInterceptor("valid-key", map[string]bool{method: true})
+	info := &grpc.UnaryServerInfo{FullMethod: method}
+	mockHandler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return "success", nil
+	}
+
+	before := testutil.ToFloat64(grpcAuthRejectionsTotal.WithLabelValues(method))
+
+	// missing metadata
+	_, err := interceptor(context.Background(), "request", info, mockHandler)
+	require.Error(t, err)
+
+	// missing API key header
+	ctx := metadata.NewIncomingContext(context.Background(), metadata.New(map[string]string{}))
+	_, err = interceptor(ctx, "request", info, mockHandler)
+	require.Error(t, err)
+
+	// mismatched API key
+	ctx = metadata.NewIncomingContext(context.Background(), metadata.New(map[string]string{apiKeyHeader: "wrong-key"}))
+	_, err = interceptor(ctx, "request", info, mockHandler)
+	require.Error(t, err)
+
+	require.Equal(t, before+3, testutil.ToFloat64(grpcAuthRejectionsTotal.WithLabelValues(method)),
+		"all three rejection paths must be counted")
+
+	// a successful call must not increment the rejection counter
+	ctx = metadata.NewIncomingContext(context.Background(), metadata.New(map[string]string{apiKeyHeader: "valid-key"}))
+	_, err = interceptor(ctx, "request", info, mockHandler)
+	require.NoError(t, err)
+	require.Equal(t, before+3, testutil.ToFloat64(grpcAuthRejectionsTotal.WithLabelValues(method)))
+}
+
+// TestPanicRecoveryInterceptors covers the structural fix for the
+// slice-to-array panic class: grpc-go does not recover handler panics, so
+// without these interceptors a single malformed request kills the process.
+func TestPanicRecoveryInterceptors(t *testing.T) {
+	logger := ulogger.TestLogger{}
+
+	t.Run("unary panic becomes Internal", func(t *testing.T) {
+		interceptor := CreatePanicRecoveryUnaryInterceptor(logger, "test")
+
+		before := testutil.ToFloat64(grpcPanicsRecoveredTotal.WithLabelValues("test", "/svc/Method"))
+
+		resp, err := interceptor(context.Background(), nil, &grpc.UnaryServerInfo{FullMethod: "/svc/Method"},
+			func(ctx context.Context, req any) (any, error) {
+				panic("boom")
+			})
+
+		require.Nil(t, resp)
+		require.Equal(t, codes.Internal, status.Code(err))
+		require.Equal(t, before+1, testutil.ToFloat64(grpcPanicsRecoveredTotal.WithLabelValues("test", "/svc/Method")),
+			"a recovered unary panic must be counted so it is alertable, not just logged")
+	})
+
+	t.Run("unary success passes through", func(t *testing.T) {
+		interceptor := CreatePanicRecoveryUnaryInterceptor(logger, "test")
+
+		resp, err := interceptor(context.Background(), nil, &grpc.UnaryServerInfo{FullMethod: "/svc/Method"},
+			func(ctx context.Context, req any) (any, error) {
+				return "ok", nil
+			})
+
+		require.NoError(t, err)
+		require.Equal(t, "ok", resp)
+	})
+
+	t.Run("stream panic becomes Internal", func(t *testing.T) {
+		interceptor := CreatePanicRecoveryStreamInterceptor(logger, "test")
+
+		before := testutil.ToFloat64(grpcPanicsRecoveredTotal.WithLabelValues("test", "/svc/Stream"))
+
+		err := interceptor(nil, nil, &grpc.StreamServerInfo{FullMethod: "/svc/Stream"},
+			func(srv any, stream grpc.ServerStream) error {
+				panic("boom")
+			})
+
+		require.Equal(t, codes.Internal, status.Code(err))
+		require.Equal(t, before+1, testutil.ToFloat64(grpcPanicsRecoveredTotal.WithLabelValues("test", "/svc/Stream")),
+			"a recovered stream panic must be counted so it is alertable, not just logged")
+	})
 }
 
 func TestCreateAuthInterceptorMissingMetadata(t *testing.T) {
@@ -715,6 +806,88 @@ func TestRetryInterceptorMaxRetriesExceeded(t *testing.T) {
 	assert.Equal(t, maxRetries, callCount, "Should call invoker exactly maxRetries times")
 }
 
+func TestRetryInterceptorStopsWhenCallerDeadlineExpires(t *testing.T) {
+	// The production settings are 40 attempts x 250ms backoff (~10s), while
+	// callers bound their own deadline (rpc_client_call_timeout, 5s by default).
+	// The retry loop must not keep spending attempts after that deadline, or the
+	// caller's own timeout is silently stretched (#1538).
+	const maxAttempts = 40
+	backoff := 250 * time.Millisecond
+	interceptor := retryInterceptor(maxAttempts, backoff, "test")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+
+	callCount := 0
+	mockInvoker := func(ctx context.Context, method string, req, reply interface{}, cc *grpc.ClientConn, opts ...grpc.CallOption) error {
+		callCount++
+		return status.Error(codes.Unavailable, "service unavailable")
+	}
+
+	start := time.Now()
+	err := interceptor(ctx, "/test.service/TestMethod", "request", "reply", nil, mockInvoker)
+	elapsed := time.Since(start)
+
+	require.Error(t, err)
+	assert.Equal(t, codes.DeadlineExceeded, status.Code(err),
+		"must report the caller's deadline, not the last transient status")
+	assert.Less(t, elapsed, backoff*3,
+		"must give up promptly after the deadline instead of running the full retry budget")
+
+	// 300ms deadline against a 250ms backoff allows at most 2 attempts.
+	assert.LessOrEqual(t, callCount, 2, "should not retry past the caller's deadline")
+}
+
+func TestRetryInterceptorReturnsPromptlyOnCancel(t *testing.T) {
+	const maxAttempts = 40
+	backoff := 250 * time.Millisecond
+	interceptor := retryInterceptor(maxAttempts, backoff, "test")
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	callCount := 0
+	mockInvoker := func(ctx context.Context, method string, req, reply interface{}, cc *grpc.ClientConn, opts ...grpc.CallOption) error {
+		callCount++
+		return status.Error(codes.Unavailable, "service unavailable")
+	}
+
+	// Cancel from another goroutine part-way through the first backoff.
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		cancel()
+	}()
+
+	start := time.Now()
+	err := interceptor(ctx, "/test.service/TestMethod", "request", "reply", nil, mockInvoker)
+	elapsed := time.Since(start)
+
+	require.Error(t, err)
+	assert.Equal(t, codes.Canceled, status.Code(err))
+	assert.Less(t, elapsed, backoff,
+		"a cancel during backoff must interrupt the wait, not sleep it out")
+	assert.Equal(t, 1, callCount)
+}
+
+func TestRetryInterceptorDoesNotInvokeAfterDeadlineAlreadyPassed(t *testing.T) {
+	interceptor := retryInterceptor(40, time.Millisecond, "test")
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Nanosecond)
+	defer cancel()
+	<-ctx.Done()
+
+	callCount := 0
+	mockInvoker := func(ctx context.Context, method string, req, reply interface{}, cc *grpc.ClientConn, opts ...grpc.CallOption) error {
+		callCount++
+		return nil
+	}
+
+	err := interceptor(ctx, "/test.service/TestMethod", "request", "reply", nil, mockInvoker)
+
+	require.Error(t, err)
+	assert.Equal(t, codes.DeadlineExceeded, status.Code(err))
+	assert.Zero(t, callCount, "must not dial at all once the caller's deadline has passed")
+}
+
 func TestRetryInterceptorBackoffTiming(t *testing.T) {
 	backoff := 50 * time.Millisecond
 	interceptor := retryInterceptor(3, backoff, "test")
@@ -1144,4 +1317,47 @@ func TestGRPCHelperIntegration(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NotNil(t, server)
 	server.Stop()
+}
+
+func TestRetryInterceptorFinalAttemptReturnsContextError(t *testing.T) {
+	t.Run("maxAttempts=1, context canceled during invoke returns Canceled", func(t *testing.T) {
+		interceptor := retryInterceptor(1, 1*time.Millisecond, "test")
+
+		ctx, cancel := context.WithCancel(context.Background())
+		callCount := 0
+		mockInvoker := func(ctx context.Context, method string, req, reply interface{}, cc *grpc.ClientConn, opts ...grpc.CallOption) error {
+			callCount++
+			// Cancel the context during the invoke (simulating a cancellation during the call)
+			cancel()
+			return status.Error(codes.Unavailable, "service unavailable")
+		}
+
+		err := interceptor(ctx, "/test.service/TestMethod", "request", "reply", nil, mockInvoker)
+
+		require.Error(t, err)
+		assert.Equal(t, codes.Canceled, status.Code(err))
+		assert.Equal(t, 1, callCount, "Should call invoker exactly once")
+	})
+
+	t.Run("maxAttempts=1, context deadline expires after invoke returns DeadlineExceeded", func(t *testing.T) {
+		interceptor := retryInterceptor(1, 1*time.Millisecond, "test")
+
+		// Create a context with a very short deadline
+		ctx, cancel := context.WithTimeout(context.Background(), 1*time.Millisecond)
+		defer cancel()
+
+		callCount := 0
+		mockInvoker := func(ctx context.Context, method string, req, reply interface{}, cc *grpc.ClientConn, opts ...grpc.CallOption) error {
+			callCount++
+			// Simulate a delay that would cause the deadline to be exceeded
+			time.Sleep(10 * time.Millisecond)
+			return status.Error(codes.Unavailable, "service unavailable")
+		}
+
+		err := interceptor(ctx, "/test.service/TestMethod", "request", "reply", nil, mockInvoker)
+
+		require.Error(t, err)
+		assert.Equal(t, codes.DeadlineExceeded, status.Code(err))
+		assert.Equal(t, 1, callCount, "Should call invoker exactly once")
+	})
 }

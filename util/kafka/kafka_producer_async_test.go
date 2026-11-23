@@ -12,7 +12,17 @@ import (
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/twmb/franz-go/pkg/kadm"
+	"github.com/twmb/franz-go/pkg/kerr"
 )
+
+func TestPartitionCountFromTopicDetailReturnsTopicError(t *testing.T) {
+	detail := kadm.TopicDetail{Err: kerr.UnknownTopicOrPartition}
+
+	count, err := partitionCountFromTopicDetail(detail)
+	require.ErrorIs(t, err, kerr.UnknownTopicOrPartition)
+	require.Zero(t, count)
+}
 
 func TestMessageStruct(t *testing.T) {
 	key := []byte("test-key")

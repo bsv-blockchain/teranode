@@ -9,6 +9,7 @@ package validator
 
 import (
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 )
 
@@ -46,8 +47,16 @@ type Options struct {
 	// rather than via mempool submission. Published on the txmeta topic so
 	// relay consumers never announce such transactions. Explicit by design —
 	// not inferred from SkipPolicyChecks, which external submitters may set
-	// on genuinely fresh transactions.
+	// on genuinely fresh transactions. It also changes which validation
+	// checks run and how block assembly treats the transaction; for example,
+	// the DAH-evicted-parent grace runs only when InBlock is false.
 	InBlock bool
+
+	// Caller names the service the validation's create is made for, on the burned lane position
+	// counter (stores/utxo, WithCaller). Zero lets the validator choose: subtree validation for
+	// InBlock, the validator otherwise. It changes nothing about validation, and it is not sent to
+	// a remote validator over gRPC, which then chooses as for zero.
+	Caller utxo.Caller
 
 	// SkipScriptValidation determines whether BDK transaction/script validation should be skipped.
 	// When true, the validator skips the BDK ValidateTransaction call (script execution,
@@ -176,6 +185,18 @@ type Options struct {
 	// extension, so the prefetch can never reduce correctness. nil = always
 	// read from the store (the non-catchup default).
 	PrefetchedParents map[chainhash.Hash]*meta.Data
+
+	// WaitForBlockAssembly makes a queue-full block-assembly handoff
+	// (ErrThresholdExceeded) retry in place rather than surfacing the shed to the
+	// caller. The retry is bounded by validator_blockAssemblyShedRetryTimeout (2s
+	// default), not unbounded: if the window expires the transaction's UTXO-store
+	// work is unwound (see unwindShed) and it is dropped, silently, because
+	// propagation has already returned success on the ingest path. It is set only
+	// on the Kafka ingest path, where surfacing the shed would advance the
+	// consumer offset past a transaction that never reached a mining template.
+	// Synchronous callers (gRPC, HTTP, propagation) leave it false so a shed
+	// surfaces promptly as ResourceExhausted rather than blocking the client.
+	WaitForBlockAssembly bool
 
 	// OutpointOnlySpend enables the below-checkpoint fast path:
 	//   - Parent Get (block-heights + extend) is skipped entirely — utxoHeights
@@ -331,6 +352,14 @@ func WithInBlock(inBlock bool) Option {
 	}
 }
 
+// WithCaller names the service a validation's create is made for, on the burned lane position
+// counter. See Options.Caller.
+func WithCaller(caller utxo.Caller) Option {
+	return func(o *Options) {
+		o.Caller = caller
+	}
+}
+
 // WithSkipScriptValidation creates an option to skip the BDK transaction/script
 // validation step. See Options.SkipScriptValidation for safety constraints.
 func WithSkipScriptValidation(skip bool) Option {
@@ -392,6 +421,16 @@ func WithUnconfirmedParentsAtCandidateHeight(enabled bool) Option {
 func WithOutpointOnlySpend(b bool) Option {
 	return func(o *Options) {
 		o.OutpointOnlySpend = b
+	}
+}
+
+// WithWaitForBlockAssembly makes a queue-full block-assembly handoff retry in
+// place, bounded by validator_blockAssemblyShedRetryTimeout and then unwound and
+// dropped rather than retried forever. See Options.WaitForBlockAssembly for the
+// contract — set only on the Kafka ingest path.
+func WithWaitForBlockAssembly(wait bool) Option {
+	return func(o *Options) {
+		o.WaitForBlockAssembly = wait
 	}
 }
 

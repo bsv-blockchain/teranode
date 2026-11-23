@@ -12,8 +12,10 @@ import (
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
+	prunerstore "github.com/bsv-blockchain/teranode/stores/utxo/pruner"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -310,6 +312,148 @@ func TestWaitForBlockMinedStatusSkippedWhenNoBAClient(t *testing.T) {
 	}
 }
 
+// TestSkipDuringCatchupSkipsWhenCatchingUp verifies that when
+// pruner_skipDuringCatchup=true and the FSM reports CATCHINGBLOCKS, the
+// pruner records prunerSkipped("catchup_mode"), never notifies the blob
+// deletion worker, and never advances lastProcessedHeight.
+// IDLE is covered because an operator STOP can park a node while its catchup
+// batch is still marking transactions mined.
+func TestSkipDuringCatchupSkipsWhenCatchingUp(t *testing.T) {
+	for _, state := range []blockchain.FSMStateType{blockchain.FSMStateCATCHINGBLOCKS, blockchain.FSMStateIDLE} {
+		t.Run(state.String(), func(t *testing.T) { testSkipDuringCatchupSkipsInState(t, state) })
+	}
+}
+
+func testSkipDuringCatchupSkipsInState(t *testing.T, state blockchain.FSMStateType) {
+	initPrometheusMetrics()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	logger := ulogger.New("test")
+
+	blockchainMock := &blockchain.Mock{}
+	blockchainMock.On("GetFSMCurrentState", mock.Anything).Return(&state, nil)
+
+	server := &Server{
+		ctx:              ctx,
+		logger:           logger,
+		pruneNotify:      make(chan pruneSignal, 1),
+		blobNotify:       make(chan pruneSignal, 1),
+		blockchainClient: blockchainMock,
+		settings: &settings.Settings{
+			Pruner: settings.PrunerSettings{
+				SkipDuringCatchup: true,
+			},
+		},
+	}
+
+	skipsBefore := getCounterValue(t, prunerSkipped, "catchup_mode")
+
+	go server.prunerProcessor(ctx)
+
+	server.pruneNotify <- pruneSignal{blockHeight: 500, blockHash: chainhash.Hash{0x04}}
+
+	require.Eventually(t, func() bool {
+		return getCounterValue(t, prunerSkipped, "catchup_mode")-skipsBefore >= 1
+	}, time.Second, 10*time.Millisecond)
+
+	select {
+	case <-server.blobNotify:
+		t.Fatal("blob deletion worker should not have been notified while catching up")
+	default:
+		// Expected: no blob notification
+	}
+
+	require.Equal(t, uint32(0), server.lastProcessedHeight.Load(),
+		"lastProcessedHeight should remain 0 when the block is skipped for catchup")
+
+	blockchainMock.AssertExpectations(t)
+}
+
+// TestSkipDuringCatchupProceedsWhenRunning verifies that when
+// pruner_skipDuringCatchup=true but the FSM reports RUNNING, pruning
+// proceeds normally and the blob deletion worker is notified.
+func TestSkipDuringCatchupProceedsWhenRunning(t *testing.T) {
+	initPrometheusMetrics()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	logger := ulogger.New("test")
+
+	blockchainMock := &blockchain.Mock{}
+	running := blockchain.FSMStateRUNNING
+	blockchainMock.On("GetFSMCurrentState", mock.Anything).Return(&running, nil)
+
+	server := &Server{
+		ctx:              ctx,
+		logger:           logger,
+		pruneNotify:      make(chan pruneSignal, 1),
+		blobNotify:       make(chan pruneSignal, 1),
+		blockchainClient: blockchainMock,
+		settings: &settings.Settings{
+			Pruner: settings.PrunerSettings{
+				SkipDuringCatchup: true,
+			},
+		},
+	}
+
+	go server.prunerProcessor(ctx)
+
+	server.pruneNotify <- pruneSignal{blockHeight: 501, blockHash: chainhash.Hash{0x05}}
+
+	select {
+	case sig := <-server.blobNotify:
+		require.Equal(t, uint32(501), sig.blockHeight, "blob worker should be notified when FSM is RUNNING")
+	case <-time.After(time.Second):
+		t.Fatal("pruning should have proceeded when FSM state is RUNNING")
+	}
+
+	blockchainMock.AssertExpectations(t)
+}
+
+// TestSkipDuringCatchupWithNilBlockchainClientDoesNotPanic verifies the
+// missing nil guard: pruner_skipDuringCatchup=true with blockchainClient==nil
+// must not panic on the s.blockchainClient.GetFSMCurrentState call, mirroring
+// the existing blockAssemblyClient!=nil guard used for the mined_set wait.
+// Existing test harnesses construct &Server{} with blockchainClient nil, so
+// without this guard, flipping the flag on in such a harness panics.
+func TestSkipDuringCatchupWithNilBlockchainClientDoesNotPanic(t *testing.T) {
+	initPrometheusMetrics()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	server := &Server{
+		ctx:              ctx,
+		logger:           ulogger.New("test"),
+		pruneNotify:      make(chan pruneSignal, 1),
+		blobNotify:       make(chan pruneSignal, 1),
+		blockchainClient: nil, // no client wired, mirrors real test harness construction
+		settings: &settings.Settings{
+			Pruner: settings.PrunerSettings{
+				SkipDuringCatchup: true,
+			},
+		},
+	}
+
+	// A missing nil guard panics inside the prunerProcessor goroutine, which
+	// crashes the test binary (not recoverable via require.NotPanics since
+	// the panic occurs on a different goroutine); a passing run without a
+	// crash, receiving the blob notification below, proves the guard exists.
+	go server.prunerProcessor(ctx)
+
+	server.pruneNotify <- pruneSignal{blockHeight: 502, blockHash: chainhash.Hash{0x06}}
+
+	select {
+	case sig := <-server.blobNotify:
+		require.Equal(t, uint32(502), sig.blockHeight, "blob worker should be notified when the FSM state cannot be determined")
+	case <-time.After(time.Second):
+		t.Fatal("pruning should have proceeded without touching a nil blockchainClient")
+	}
+}
+
 // TestStart_FSMContextCancellation verifies graceful shutdown handling when
 // the context is cancelled during the FSM wait. The error must be returned
 // (not swallowed) and must be a context error so the service manager can
@@ -421,4 +565,201 @@ func TestProcessExpiredPreservationsPhaseSkipped(t *testing.T) {
 	case <-time.After(200 * time.Millisecond):
 		// expected: ProcessExpiredPreservations was not called
 	}
+}
+
+// failingIterator is a typed nil used only as the (ignored) iterator return value
+// of a mocked GetPrunableUnminedTxIterator call that fails.
+type failingIterator struct{ utxo.UnminedTxIterator }
+
+// recordingPruner records Prune calls so tests can assert whether Phase 2 ran.
+type recordingPruner struct {
+	prunerstore.Service
+	calls chan uint32
+}
+
+func (r *recordingPruner) Prune(_ context.Context, height uint32, _ string) (int64, error) {
+	r.calls <- height
+	return 0, nil
+}
+
+// TestPhase1FailureSkipsPhase2 verifies that when Phase 1 (parent preservation) fails, Phase 2
+// (DAH deletion) does not run in that cycle, the error is counted, the cycle is counted as
+// skipped, and lastProcessedHeight is not advanced so the height is retried on the next trigger.
+func TestPhase1FailureSkipsPhase2(t *testing.T) {
+	initPrometheusMetrics()
+	prunerPreserveParentsFailing.Set(0) // process-global gauge: reset so state does not leak between tests or -count runs
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	mockStore := &utxo.MockUtxostore{}
+	mockStore.On("GetPrunableUnminedTxIterator", mock.Anything).
+		Return((*failingIterator)(nil), errors.NewStorageError("boom"))
+	mockStore.On("ProcessExpiredPreservations", mock.Anything, mock.Anything).Return(nil)
+
+	pruneSvc := &recordingPruner{calls: make(chan uint32, 2)}
+
+	server := &Server{
+		ctx:           ctx,
+		logger:        ulogger.New("test"),
+		pruneNotify:   make(chan pruneSignal, 1),
+		blobNotify:    make(chan pruneSignal, 1),
+		utxoStore:     mockStore,
+		prunerService: pruneSvc,
+		settings: &settings.Settings{
+			UtxoStore: settings.UtxoStoreSettings{
+				UnminedTxRetention:       10,
+				ParentPreservationBlocks: 100,
+			},
+		},
+	}
+
+	errsBefore := getCounterValue(t, prunerErrors, "preserve_parents")
+	skippedBefore := getCounterValue(t, prunerSkipped, "preserve_parents_failed")
+
+	go server.prunerProcessor(ctx)
+	server.pruneNotify <- pruneSignal{blockHeight: 101, blockHash: chainhash.Hash{}}
+
+	require.Eventually(t, func() bool {
+		return getCounterValue(t, prunerSkipped, "preserve_parents_failed") == skippedBefore+1
+	}, 2*time.Second, 10*time.Millisecond, "cycle should be counted as skipped when Phase 1 fails")
+
+	require.Equal(t, errsBefore+1, getCounterValue(t, prunerErrors, "preserve_parents"))
+	require.Empty(t, pruneSvc.calls, "Phase 2 must not run when Phase 1 failed")
+	require.Equal(t, uint32(0), server.lastProcessedHeight.Load(),
+		"lastProcessedHeight must not advance so the height is retried")
+	require.Equal(t, float64(1), testutil.ToFloat64(prunerPreserveParentsFailing), "one consecutive Phase 1 failure")
+	mockStore.AssertCalled(t, "ProcessExpiredPreservations", mock.Anything, uint32(101))
+}
+
+// emptyIterator is an unmined tx iterator with nothing in it.
+type emptyIterator struct{ utxo.UnminedTxIterator }
+
+func (emptyIterator) Next(context.Context) ([]*utxo.UnminedTransaction, error) { return nil, nil }
+func (emptyIterator) Err() error                                               { return nil }
+func (emptyIterator) Close() error                                             { return nil }
+
+func newPhase1TestServer(ctx context.Context, store *utxo.MockUtxostore, pruneSvc *recordingPruner, skipPreserve bool) *Server {
+	return &Server{
+		ctx:           ctx,
+		logger:        ulogger.New("test"),
+		pruneNotify:   make(chan pruneSignal, 1),
+		blobNotify:    make(chan pruneSignal, 1),
+		utxoStore:     store,
+		prunerService: pruneSvc,
+		settings: &settings.Settings{
+			UtxoStore: settings.UtxoStoreSettings{
+				UnminedTxRetention:       10,
+				ParentPreservationBlocks: 100,
+			},
+			Pruner: settings.PrunerSettings{SkipPreserveParents: skipPreserve},
+		},
+	}
+}
+
+// A cycle skipped because Phase 1 failed does not wedge pruning: the next block
+// runs Phase 1 again and, once it succeeds, Phase 2 and the height advance.
+func TestPhase1FailureThenSuccessPrunes(t *testing.T) {
+	initPrometheusMetrics()
+	prunerPreserveParentsFailing.Set(0) // process-global gauge: reset so state does not leak between tests or -count runs
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	mockStore := &utxo.MockUtxostore{}
+	mockStore.On("GetPrunableUnminedTxIterator", mock.Anything).
+		Return((*failingIterator)(nil), errors.NewStorageError("boom")).Once()
+	mockStore.On("GetPrunableUnminedTxIterator", mock.Anything).Return(emptyIterator{}, nil)
+	mockStore.On("ProcessExpiredPreservations", mock.Anything, mock.Anything).Return(nil)
+
+	pruneSvc := &recordingPruner{calls: make(chan uint32, 2)}
+	server := newPhase1TestServer(ctx, mockStore, pruneSvc, false)
+
+	go server.prunerProcessor(ctx)
+
+	server.pruneNotify <- pruneSignal{blockHeight: 101, blockHash: chainhash.Hash{}}
+	require.Eventually(t, func() bool { return testutil.ToFloat64(prunerPreserveParentsFailing) == 1 },
+		2*time.Second, 10*time.Millisecond)
+
+	server.pruneNotify <- pruneSignal{blockHeight: 102, blockHash: chainhash.Hash{}}
+
+	select {
+	case h := <-pruneSvc.calls:
+		require.Equal(t, uint32(102), h)
+	case <-time.After(2 * time.Second):
+		t.Fatal("Phase 2 did not run after Phase 1 succeeded again")
+	}
+
+	require.Eventually(t, func() bool { return server.lastProcessedHeight.Load() == 102 },
+		2*time.Second, 10*time.Millisecond)
+	require.Equal(t, float64(0), testutil.ToFloat64(prunerPreserveParentsFailing), "a success resets the failure streak")
+}
+
+// A Phase 1 error caused by shutdown is not a Phase 1 failure: the streak gauge and
+// the preserve_parents error counter must not move, and the processor must return.
+func TestPhase1ErrorOnContextCancelIsNotAFailure(t *testing.T) {
+	initPrometheusMetrics()
+	prunerPreserveParentsFailing.Set(0)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	mockStore := &utxo.MockUtxostore{}
+	mockStore.On("GetPrunableUnminedTxIterator", mock.Anything).
+		Run(func(mock.Arguments) { cancel() }).
+		Return((*failingIterator)(nil), errors.NewStorageError("boom"))
+	// Stubbed so that if the shutdown guard regresses, the flow reaches Phase 1b
+	// and the assertions below fail cleanly instead of the mock panicking.
+	mockStore.On("ProcessExpiredPreservations", mock.Anything, mock.Anything).Return(nil)
+
+	pruneSvc := &recordingPruner{calls: make(chan uint32, 2)}
+	server := newPhase1TestServer(ctx, mockStore, pruneSvc, false)
+
+	errsBefore := getCounterValue(t, prunerErrors, "preserve_parents")
+	skippedBefore := getCounterValue(t, prunerSkipped, "preserve_parents_failed")
+
+	done := make(chan struct{})
+	go func() {
+		server.prunerProcessor(ctx)
+		close(done)
+	}()
+	server.pruneNotify <- pruneSignal{blockHeight: 101, blockHash: chainhash.Hash{}}
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("processor did not return after the context was cancelled")
+	}
+
+	require.Equal(t, float64(0), testutil.ToFloat64(prunerPreserveParentsFailing), "shutdown must not count as a Phase 1 failure")
+	require.Equal(t, errsBefore, getCounterValue(t, prunerErrors, "preserve_parents"))
+	require.Equal(t, skippedBefore, getCounterValue(t, prunerSkipped, "preserve_parents_failed"))
+	require.Empty(t, pruneSvc.calls, "Phase 2 must not run")
+}
+
+// With pruner_skipPreserveParents set, Phase 1 is skipped on purpose, not failed:
+// Phase 2 still runs.
+func TestSkipPreserveParentsStillPrunes(t *testing.T) {
+	initPrometheusMetrics()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	mockStore := &utxo.MockUtxostore{}
+	mockStore.On("ProcessExpiredPreservations", mock.Anything, mock.Anything).Return(nil)
+
+	pruneSvc := &recordingPruner{calls: make(chan uint32, 2)}
+	server := newPhase1TestServer(ctx, mockStore, pruneSvc, true)
+
+	go server.prunerProcessor(ctx)
+	server.pruneNotify <- pruneSignal{blockHeight: 101, blockHash: chainhash.Hash{}}
+
+	select {
+	case h := <-pruneSvc.calls:
+		require.Equal(t, uint32(101), h)
+	case <-time.After(2 * time.Second):
+		t.Fatal("Phase 2 did not run with pruner_skipPreserveParents set")
+	}
+
+	mockStore.AssertNotCalled(t, "GetPrunableUnminedTxIterator", mock.Anything)
 }

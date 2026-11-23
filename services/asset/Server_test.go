@@ -6,13 +6,17 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
+	"github.com/bsv-blockchain/teranode/services/asset/httpimpl"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/blockchain/blockchain_api"
 	"github.com/bsv-blockchain/teranode/settings"
@@ -76,7 +80,7 @@ func testSetup(t *testing.T) *testCtx {
 	blockchainClient, err := blockchain.NewLocalClient(logger, settings, blockchainStore, nil, nil)
 	require.NoError(t, err)
 
-	server := NewServer(logger, settings, utxoStore, txSore, subtreeStore, blockPersisterStore, blockchainClient, nil, nil, nil)
+	server := NewServer(logger, settings, utxoStore, txSore, subtreeStore, blockPersisterStore, blockchainClient, nil, nil, nil, nil)
 
 	return &testCtx{
 		server:           server,
@@ -217,6 +221,7 @@ func TestHealth_LivenessCheck(t *testing.T) {
 		nil,
 		nil,
 		nil,
+		nil,
 	)
 
 	status, msg, err := server.Health(context.Background(), true)
@@ -229,6 +234,7 @@ func TestHealth_ReadinessWithNoDependencies(t *testing.T) {
 	server := NewServer(
 		ulogger.New("asset"),
 		test.CreateBaseTestSettings(t),
+		nil,
 		nil,
 		nil,
 		nil,
@@ -540,6 +546,7 @@ func TestHealth_ErrorCases(t *testing.T) {
 			nil, // blockvalidationClient
 			nil, // p2pClient
 			nil, // banList
+			nil,
 		)
 
 		// Readiness check should still return OK status even with nil dependencies
@@ -608,7 +615,7 @@ func TestServerStart_FSMContextCancellation(t *testing.T) {
 	mockBlockchainClient.On("GetBlockHeaders", mock.Anything, mock.Anything, mock.Anything).
 		Return([]*model.BlockHeader{}, []*model.BlockHeaderMeta{}, nil).Maybe()
 
-	server := NewServer(logger, tSettings, utxoStore, blobMemory.New(), blobMemory.New(), blobMemory.New(), mockBlockchainClient, nil, nil, nil)
+	server := NewServer(logger, tSettings, utxoStore, blobMemory.New(), blobMemory.New(), blobMemory.New(), mockBlockchainClient, nil, nil, nil, nil)
 	require.NoError(t, server.Init(ctx))
 
 	readyCh := make(chan struct{})
@@ -617,4 +624,36 @@ func TestServerStart_FSMContextCancellation(t *testing.T) {
 	require.Error(t, startErr)
 	require.True(t, errors.IsContextError(startErr), "expected context error, got %v", startErr)
 	mockBlockchainClient.AssertExpectations(t)
+}
+
+// TestHealth_HTTPServerCheckProbesAlive pins that the service's own HTTP
+// connectivity check targets the static liveness route. Probing /health would
+// feed the dependency readiness result back into itself once /health starts
+// propagating a 503, marking the service unhealthy because a store is degraded.
+func TestHealth_HTTPServerCheckProbesAlive(t *testing.T) {
+	var (
+		mu    sync.Mutex
+		paths []string
+	)
+
+	probe := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		paths = append(paths, r.URL.Path)
+		mu.Unlock()
+
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer probe.Close()
+
+	server := testSetup(t).server
+	server.httpServer = &httpimpl.HTTP{}
+	server.httpAddr = strings.TrimPrefix(probe.URL, "http://")
+
+	_, _, err := server.Health(context.Background(), false)
+	require.NoError(t, err)
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	require.Equal(t, []string{"/alive"}, paths, "the HTTP self-check must probe /alive, not /health")
 }

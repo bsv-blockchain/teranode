@@ -19,11 +19,13 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
+	"net"
 	"net/http"
 	"strconv"
 	"sync"
 	"time"
 
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
@@ -210,6 +212,41 @@ func (u *Server) getNextBlockToProcess(ctx context.Context) (*model.Block, error
 	return blocks[0], nil
 }
 
+// sleepUnlessDone waits PersistSleep, or until ctx is done. The processing loop checks ctx at the
+// top of every iteration, so a shutdown stops it at once instead of after the sleep.
+func (u *Server) sleepUnlessDone(ctx context.Context) {
+	timer := time.NewTimer(u.settings.BlockPersister.PersistSleep)
+	defer timer.Stop()
+
+	select {
+	case <-ctx.Done():
+	case <-timer.C:
+	}
+}
+
+// sleepFor waits exactly d, or until ctx is done.
+func (u *Server) sleepFor(ctx context.Context, d time.Duration) {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+
+	select {
+	case <-ctx.Done():
+	case <-timer.C:
+	}
+}
+
+// pacedSleep records one same-block failure, waits the escalated interval, and
+// once the failure stops looking transient, says so once: the block is not
+// going to file itself and an operator is the only way out (pruned source data
+// behind the retention window being the shipped instance).
+func (u *Server) pacedSleep(ctx context.Context, pacer *failurePacer, block *chainhash.Hash) {
+	d := pacer.next(block)
+	if pacer.announce() {
+		u.logger.Errorf("[BlockPersister] Block %s failing repeatedly (%d consecutive failures, next wait %v): this block will not file without operator action - if it trails the retention window its source transactions may already be pruned", block, pacer.consecutive(), d)
+	}
+	u.sleepFor(ctx, d)
+}
+
 // Start initializes and begins the block persister service operations.
 //
 // This method starts the main processing loop and sets up HTTP services if configured.
@@ -269,7 +306,14 @@ func (u *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 
 		u.logger.Infof("[BlockPersister] HTTP server listening on %s", address)
 
-		blobStoreServer, err := blob.NewHTTPBlobServer(u.logger, blockStoreURL, options.WithHashPrefix(hashPrefix))
+		authToken := u.settings.BlockPersister.HTTPAuthToken
+		if authToken == "" {
+			u.logger.Warnf("[BlockPersister] HTTP blob API is read-only: blockpersister_httpAuthToken is not set")
+		} else if !isLoopbackListener(listener) {
+			u.logger.Warnf("[BlockPersister] HTTP blob API listens on %s with no TLS: the auth token crosses the network in the clear", listener.Addr())
+		}
+
+		blobStoreServer, err := blob.NewHTTPBlobServer(u.logger, blockStoreURL, authToken, options.WithHashPrefix(hashPrefix))
 		if err != nil {
 			return errors.NewServiceError("failed to create blob store server", err)
 		}
@@ -335,6 +379,13 @@ func (u *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 
 	// Start the processing loop in a goroutine
 	go func() {
+		// Paces retries that target the same block. Transient failures recover
+		// by retrying promptly; a block that cannot succeed (pruned source data,
+		// see reconciliation notes §36) escalates its wait and announces itself
+		// instead of emitting one flat error forever. A run belongs to one block: a
+		// different block starts again, and every filed block resets it.
+		pacer := &failurePacer{base: u.settings.BlockPersister.PersistSleep, max: pacerMaxSleep}
+
 		for {
 			select {
 			case <-ctx.Done():
@@ -343,14 +394,19 @@ func (u *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 			default:
 				block, err := u.getNextBlockToProcess(ctx)
 				if err != nil {
+					// The tip query is cheap and its failures are transient (connection
+					// blips, FSM churn). Retrying promptly is the recovery behaviour, so
+					// this branch does not take the failure pacer or the long idle sleep -
+					// a short beat that keeps the loop hot enough to catch up the moment
+					// the query interface returns, while still bounding log rate.
 					u.logger.Errorf("[BlockPersister] Error getting next block to process: %v", err)
-					time.Sleep(u.settings.BlockPersister.PersistSleep) // Sleep after error
+					u.sleepFor(ctx, time.Second)
 
 					continue
 				}
 
 				if block == nil {
-					time.Sleep(u.settings.BlockPersister.PersistSleep) // Sleep when no blocks available
+					u.sleepUnlessDone(ctx) // Sleep when no blocks available
 
 					continue
 				}
@@ -363,18 +419,22 @@ func (u *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 				blockBytes, err := block.Bytes()
 				if err != nil {
 					u.logger.Errorf("[BlockPersister] Failed to get block bytes: %v", err)
-					time.Sleep(u.settings.BlockPersister.PersistSleep)
+					u.pacedSleep(ctx, pacer, block.Hash())
 
 					continue
 				}
 
 				// Process the block
 				if err = u.persistBlock(ctx, block.Hash(), blockBytes); err != nil {
-					if errors.Is(err, errors.NewBlobAlreadyExistsError("")) {
+					if u.blockAlreadyPersisted(ctx, block.Hash(), err) {
 						// We log the error but continue processing
 						u.logger.Infof("[BlockPersister] Block %s already exists, skipping...", block.String())
 					} else {
 						u.logger.Errorf("[BlockPersister] Failed to persist block %s: %v", block.String(), err)
+						// The next attempt is the same block: pace it. This is the branch a
+						// pruned-source block lives in forever (§36), and the only signal
+						// that it needs an operator rather than another retry.
+						u.pacedSleep(ctx, pacer, block.Hash())
 
 						continue
 					}
@@ -383,9 +443,11 @@ func (u *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 				// Mark block as persisted in database
 				if err = u.blockchainClient.SetBlockPersistedAt(ctx, block.Hash()); err != nil {
 					u.logger.Errorf("[BlockPersister] Failed to mark block %s as persisted: %v", block.String(), err)
+					u.pacedSleep(ctx, pacer, block.Hash())
 
 					continue
 				}
+				pacer.reset()
 
 				// RUNTIME COORDINATION: Notify subscribers that block has been persisted
 				//
@@ -450,4 +512,31 @@ func (u *Server) Stop(_ context.Context) error {
 	// flushing store, Kafka producer, or batcher that would need draining here.
 	// If one is ever added, drain it in this method (see DC11/DC15).
 	return nil
+}
+
+// isLoopbackListener reports whether a listener is bound to a loopback address. It looks at the
+// address actually bound rather than the configured string, so "localhost:" or a hostname that
+// resolves to loopback is recognised, and an unspecified address such as ":8083" is not.
+func isLoopbackListener(listener net.Listener) bool {
+	tcpAddr, ok := listener.Addr().(*net.TCPAddr)
+
+	return ok && tcpAddr.IP.IsLoopback()
+}
+
+// blockAlreadyPersisted reports whether err, returned by persistBlock, means an earlier attempt
+// already persisted the block. BLOB_EXISTS alone is not enough, because it can come from any file
+// an attempt writes, so the block's files are checked as persistBlock checks them.
+func (u *Server) blockAlreadyPersisted(ctx context.Context, hash *chainhash.Hash, err error) bool {
+	if !errors.Is(err, errors.ErrBlobAlreadyExists) {
+		return false
+	}
+
+	persisted, checkErr := u.blockPersisted(ctx, hash)
+	if checkErr != nil {
+		u.logger.Warnf("[BlockPersister] error checking for the files of block %s: %v", hash.String(), checkErr)
+
+		return false
+	}
+
+	return persisted
 }

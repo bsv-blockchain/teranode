@@ -6,10 +6,12 @@ import (
 
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/kafka"
 	kafkamessage "github.com/bsv-blockchain/teranode/util/kafka/kafka_message"
 	"github.com/bsv-blockchain/teranode/util/test"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
 )
@@ -58,6 +60,41 @@ func TestPublishPolicyRejectedTx(t *testing.T) {
 			require.Contains(t, m.Reason, "test policy rejection")
 		default:
 			t.Fatal("expected a message to be published")
+		}
+	})
+
+	t.Run("publishes only in RUNNING", func(t *testing.T) {
+		// IDLE is suppressed: an operator STOP can land while catchup is running.
+		for _, tt := range []struct {
+			state     blockchain.FSMStateType
+			published bool
+		}{
+			{blockchain.FSMStateRUNNING, true},
+			{blockchain.FSMStateCATCHINGBLOCKS, false},
+			{blockchain.FSMStateIDLE, false},
+		} {
+			t.Run(tt.state.String(), func(t *testing.T) {
+				state := tt.state
+				blockchainClient := &blockchain.Mock{}
+				blockchainClient.On("GetFSMCurrentState", mock.Anything).Return(&state, nil)
+				producer := kafka.NewKafkaAsyncProducerMock()
+
+				v := &Validator{
+					logger:                              logger,
+					settings:                            test.CreateBaseTestSettings(t),
+					blockchainClient:                    blockchainClient,
+					policyRejectedTxKafkaProducerClient: producer,
+				}
+
+				v.publishPolicyRejectedTx(ctx, logger, newPolicyRejectedTestTx(t, 32), policyErr)
+
+				select {
+				case <-producer.PublishChannel():
+					require.True(t, tt.published, "%s must not publish", tt.state)
+				default:
+					require.False(t, tt.published, "RUNNING must publish")
+				}
+			})
 		}
 	})
 

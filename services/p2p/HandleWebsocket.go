@@ -56,10 +56,11 @@ type notificationMsg struct {
 	SyncPeerBlockHash string `json:"sync_peer_block_hash,omitempty"` // Best block hash of the sync peer
 	SyncConnectedAt   int64  `json:"sync_connected_at,omitempty"`    // Unix timestamp when we first connected to this sync peer
 	// New fields for enhanced node status
-	MinMiningTxFee      *float64   `json:"min_mining_tx_fee,omitempty"`     // Minimum mining transaction fee configured for this node (nil = unknown, 0 = no fee). Prefer FeePolicy.MiningFee.
-	FeePolicy           *FeePolicy `json:"fee_policy,omitempty"`            // Full fee policy advertised to peers (nil = unknown/old peer)
-	ConnectedPeersCount int        `json:"connected_peers_count,omitempty"` // Number of connected peers
-	Storage             string     `json:"storage,omitempty"`               // Storage mode: "full" (block persister running and caught up), "pruned" (no persister or lagging), or empty (old version)
+	MinMiningTxFee            *float64   `json:"min_mining_tx_fee,omitempty"`            // Minimum mining transaction fee configured for this node (nil = unknown, 0 = no fee). Prefer FeePolicy.MiningFee.
+	FeePolicy                 *FeePolicy `json:"fee_policy,omitempty"`                   // Full fee policy advertised to peers (nil = unknown/old peer)
+	ConnectedPeersCount       int        `json:"connected_peers_count,omitempty"`        // Number of connected peers
+	LegacyConnectedPeersCount int        `json:"legacy_connected_peers_count,omitempty"` // Number of connected legacy (Bitcoin wire protocol) peers
+	Storage                   string     `json:"storage,omitempty"`                      // Storage mode: "full" (block persister running and caught up), "pruned" (no persister or lagging), or empty (old version)
 }
 
 // clientChannelMap manages a thread-safe collection of WebSocket client channels.
@@ -98,12 +99,14 @@ func (cm *clientChannelMap) add(ch chan []byte, cancel context.CancelFunc) {
 	cm.Lock()
 	defer cm.Unlock()
 	cm.channels[ch] = cancel
+	prometheusP2PWebsocketConnections.Set(float64(len(cm.channels)))
 }
 
 func (cm *clientChannelMap) remove(ch chan []byte) {
 	cm.Lock()
 	defer cm.Unlock()
 	delete(cm.channels, ch)
+	prometheusP2PWebsocketConnections.Set(float64(len(cm.channels)))
 }
 
 // evict removes a client channel and cancels its connection. Without the

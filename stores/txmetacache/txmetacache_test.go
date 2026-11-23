@@ -20,6 +20,7 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo/tests"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
+	"github.com/bsv-blockchain/teranode/util/lane"
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -730,15 +731,15 @@ func Test_txMetaCache_MultiOperations(t *testing.T) {
 		err = cache.SetCacheMulti([][]byte{hash[:]}, [][]byte{[]byte{}})
 		require.NoError(t, err)
 
-		// An empty value still gets the 4-byte height suffix appended by
-		// SetCacheMulti, so the stored entry is exactly 4 bytes.
+		// Values are stored exactly as given (no block height suffix), so the
+		// empty value comes back empty.
 		byteBackend, ok := cache.cache.(*improvedCacheBackend)
 		require.True(t, ok, "test relies on ImprovedCache byte backend")
 
 		cachedBytes := make([]byte, 0)
 		err = byteBackend.cache.Get(&cachedBytes, hash[:])
 		require.NoError(t, err)
-		require.Equal(t, 4, len(cachedBytes))
+		require.Empty(t, cachedBytes)
 	})
 }
 
@@ -1298,3 +1299,107 @@ func TestTxMetaCacheSetMinedMulti_UnsetMinedToleratesGap(t *testing.T) {
 type assertErr string
 
 func (e assertErr) Error() string { return string(e) }
+
+// conflictingAnswerStore answers ConflictingTxHashes with a fixed answer the
+// cache could not make up itself.
+type conflictingAnswerStore struct {
+	*nullstore.NullStore
+	hashes  []chainhash.Hash
+	indexed bool
+	err     error
+}
+
+func (s *conflictingAnswerStore) ConflictingTxHashes(context.Context) ([]chainhash.Hash, bool, error) {
+	return s.hashes, s.indexed, s.err
+}
+
+// TestTxMetaCache_ConflictingTxHashesAsksTheStore pins that the cache forwards
+// ConflictingTxHashes to its store unchanged: it holds no conflicting set of
+// its own, and must neither invent an indexed answer nor hide an error.
+func TestTxMetaCache_ConflictingTxHashesAsksTheStore(t *testing.T) {
+	ns, err := nullstore.NewNullStore()
+	require.NoError(t, err)
+
+	answers := []*conflictingAnswerStore{
+		{NullStore: ns, hashes: []chainhash.Hash{{1}, {2}}, indexed: true},
+		{NullStore: ns, indexed: false},
+		{NullStore: ns, err: errors.NewStorageError("index query failed")},
+	}
+
+	for _, store := range answers {
+		c, err := NewTxMetaCache(context.Background(), settings.NewSettings(), ulogger.TestLogger{}, store, Unallocated)
+		require.NoError(t, err)
+
+		hashes, indexed, err := c.(*TxMetaCache).ConflictingTxHashes(t.Context())
+		require.Equal(t, store.hashes, hashes)
+		require.Equal(t, store.indexed, indexed)
+		require.Equal(t, store.err, err)
+	}
+}
+
+// GetMeta reads no lane position, so at shadow a miss caches nothing: the entry would be a hit
+// without the position, and the subtree's lane bitmaps would leave the transaction out. At off it
+// caches the entry as before. An entry already cached with its position keeps it.
+func Test_txMetaCache_GetMetaAtShadowCachesNoEntryWithoutAPosition(t *testing.T) {
+	ctx := context.Background()
+
+	stored := &meta.Data{Fee: 1, SizeInBytes: 1, TxInpoints: subtree.NewTxInpointsFromPacked([]chainhash.Hash{{0x09}}, []uint32{1, 0})}
+
+	cached := func(t *testing.T, c *TxMetaCache, h chainhash.Hash) (CachedMeta, bool) {
+		t.Helper()
+
+		out, found := make([]CachedMeta, 1), make([]bool, 1)
+		_, err := c.GetMetaCachedInto(ctx, []chainhash.Hash{h}, nil, out, found)
+		require.NoError(t, err)
+
+		return out[0], found[0]
+	}
+
+	withPosition := *stored
+	withPosition.LanePosition = lane.Pack(8, 14)
+
+	for _, tc := range []struct {
+		name   string
+		mode   settings.LaneMigration
+		read   *meta.Data
+		cached bool
+	}{
+		{name: "off", mode: settings.LaneMigrationOff, read: stored, cached: true},
+		{name: "shadow", mode: settings.LaneMigrationShadow, read: stored, cached: false},
+		{name: "shadow, the position read with it", mode: settings.LaneMigrationShadow, read: &withPosition, cached: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tSettings := test.CreateBaseTestSettings(t)
+			tSettings.UtxoStore.LaneMigration = tc.mode
+
+			store := &utxo.MockUtxostore{}
+			store.On("GetMeta", mock.Anything, mock.Anything, mock.Anything).Return(tc.read)
+
+			s, err := NewTxMetaCache(ctx, tSettings, ulogger.TestLogger{}, store, Unallocated)
+			require.NoError(t, err)
+
+			c := s.(*TxMetaCache)
+
+			h := chainhash.Hash{0x01}
+			require.NoError(t, c.GetMeta(ctx, &h, &meta.Data{}))
+
+			got, found := cached(t, c, h)
+			require.Equal(t, tc.cached, found)
+
+			if found {
+				require.Equal(t, tc.read.LanePosition, got.LanePosition)
+			}
+
+			// An entry cached with its position, as the Kafka handler stores it, is a hit: GetMeta
+			// leaves it, position and all.
+			positioned := chainhash.Hash{0x02}
+			require.NoError(t, c.SetCache(&positioned, &withPosition))
+
+			require.NoError(t, c.GetMeta(ctx, &positioned, &meta.Data{}))
+
+			got, found = cached(t, c, positioned)
+			require.True(t, found)
+			require.Equal(t, lane.Pack(8, 14), got.LanePosition)
+		})
+	}
+}

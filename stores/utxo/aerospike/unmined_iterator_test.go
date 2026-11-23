@@ -123,7 +123,7 @@ func Test_extractTransactionData(t *testing.T) {
 		txData, err := it.extractTransactionData(bins)
 		assert.NoError(t, err)
 		assert.NotNil(t, txData)
-		assert.Equal(t, validHash, *txData.hash)
+		assert.Equal(t, validHash, txData.hash)
 		assert.Equal(t, uint64(1000), txData.fee)
 		assert.Equal(t, uint64(250), txData.size)
 	})
@@ -232,7 +232,7 @@ func Test_processTransactionInpoints(t *testing.T) {
 	it := &unminedTxIterator{}
 	ctx := context.Background()
 	txData := &transactionData{
-		hash: &chainhash.Hash{},
+		hash: chainhash.Hash{},
 	}
 
 	t.Run("InternalTransaction", func(t *testing.T) {
@@ -326,7 +326,7 @@ func Test_newUnminedTxIterator(t *testing.T) {
 	t.Run("NilStore", func(t *testing.T) {
 		// This would panic in real usage, but test the behavior
 		assert.Panics(t, func() {
-			_, _ = newUnminedTxIterator(nil)
+			_, _ = newUnminedTxIterator(nil, false)
 		})
 	})
 
@@ -339,7 +339,7 @@ func Test_newUnminedTxIterator(t *testing.T) {
 
 		// This will panic because client.Query is called on nil
 		assert.Panics(t, func() {
-			_, _ = newUnminedTxIterator(store)
+			_, _ = newUnminedTxIterator(store, false)
 		})
 	})
 }
@@ -368,7 +368,7 @@ func Test_extractTxIDAndUnminedSince(t *testing.T) {
 		}
 		hash, unminedSince, err := extractTxIDAndUnminedSince(bins)
 		require.NoError(t, err)
-		assert.Equal(t, validHash, *hash)
+		assert.Equal(t, validHash, hash)
 		assert.Equal(t, 42, unminedSince)
 	})
 

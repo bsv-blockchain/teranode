@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/stretchr/testify/require"
 )
 
@@ -133,7 +134,7 @@ func testLongestChainInvalidateBlock(t *testing.T, utxoStore string) {
 	td.VerifyInBlockAssembly(t, tx1)
 
 	_, block4a := td.CreateTestBlock(t, block3, 4001, tx1)
-	// require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block4a, block4a.Height, "legacy", "", 0))
+	// require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block4a, block4a.Height, "legacy", "", 0, false))
 	require.NoError(t, td.BlockValidation.ValidateBlock(td.Ctx, block4a, "legacy", false, true), "Failed to process block")
 	td.WaitForBlock(t, block4a, blockWait)
 	td.WaitForBlockBeingMined(t, block4a)
@@ -162,9 +163,13 @@ func testLongestChainInvalidateBlock(t *testing.T, utxoStore string) {
 	require.NoError(t, td.BlockAssemblyClient.ResetBlockAssembly(td.Ctx),
 		"second reset must succeed to pick up tx1 after BlockMinedUnset processing completes")
 
-	require.NoError(t, td.WaitForTransactionInBlockAssembly(tx1, blockWait),
-		"tx1 must return to block assembly after block4a is invalidated")
-	td.VerifyInBlockAssembly(t, tx1) // re-added to block assembly
+	// ResetBlockAssembly only queues the reset. A candidate read before the reset starts can
+	// already show tx1, and one read during it is empty, so poll until a candidate shows tx1
+	// exactly once rather than checking a single read after the first sighting.
+	require.Eventually(t, func() bool {
+		count, err := td.CountInBlockAssembly(tx1)
+		return err == nil && count == 1
+	}, blockWait, 100*time.Millisecond, "tx1 must return to block assembly exactly once after block4a is invalidated")
 	td.VerifyNotOnLongestChainInUtxoStore(t, tx1)
 }
 
@@ -208,17 +213,31 @@ func testLongestChainInvalidateBlockWithOldTx(t *testing.T, utxoStore string) {
 
 	// create a block with tx1 and tx2 that will be invalid as tx2 is already on block4a
 	_, block5a := td.CreateTestBlock(t, block4a, 5001, tx1, tx2)
-	// processing the block as "test" will allow us to do optimistic mining
-	require.NoError(t, td.BlockValidation.ValidateBlock(td.Ctx, block5a, "test", false), "Failed to process block")
 
-	td.WaitForBlock(t, block5a, blockWait)
+	// BV-BODY-017 requires block5a to be rejected ERR_BLOCK_INVALID before it can become the tip.
+	// Today it is added and only invalidated once mined-tagging finds tx2 already on the chain
+	// (GAP-BV-011, which has no TestKnownDefect_ proof yet).
+	// This test is about what happens to tx1 and tx2 afterwards, so it accepts either route to the
+	// invalid verdict and waits for it before checking the end state.
+	if err := td.BlockValidation.ValidateBlock(td.Ctx, block5a, "test", false); err != nil {
+		require.True(t, errors.Is(err, errors.ErrBlockInvalid), "block5a re-includes tx2 from block4a, got: %v", err)
+	} else {
+		require.Eventually(t, func() bool {
+			_, meta, err := td.BlockchainClient.GetBlockHeader(td.Ctx, block5a.Hash())
+			return err == nil && meta.Invalid
+		}, blockWait, 100*time.Millisecond, "block5a must be marked invalid once tx2 is found already mined in block4a")
+	}
 
-	// should return back to block4a as block5a is invalid
+	// block5a is invalid, so the tip is block4a
 
 	td.WaitForBlock(t, block4a, blockWait)
 
 	// 0 -> 1 ... 2 -> 3 -> 4a (*)
 
+	// Block assembly reports block4a from inside its reset, before it leaves the reorging
+	// state, and a candidate asked for meanwhile is empty. Wait for tx1 to reach a candidate.
+	require.NoError(t, td.WaitForTransactionInBlockAssembly(tx1, blockWait),
+		"tx1 must return to block assembly after block5a is invalidated")
 	td.VerifyInBlockAssembly(t, tx1)    // re-added to block assembly
 	td.VerifyNotInBlockAssembly(t, tx2) // removed as already mined in block4a
 	td.VerifyNotOnLongestChainInUtxoStore(t, tx1)

@@ -20,6 +20,7 @@ import (
 	"github.com/bsv-blockchain/teranode/services/validator"
 	"github.com/bsv-blockchain/teranode/stores/blob"
 	"github.com/bsv-blockchain/teranode/stores/blob/options"
+	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/jarcoal/httpmock"
 	"github.com/stretchr/testify/mock"
@@ -82,8 +83,19 @@ func TestCheckBlockSubtrees_SubtreeToCheckAlreadyExists(t *testing.T) {
 		mock.Anything, blockchain.FSMStateRUNNING).
 		Return(true, nil).Maybe()
 
-	// Let the mock validator bless txs against the server's utxo store.
-	server.validatorClient.(*validator.MockValidator).UtxoStore = server.utxoStore
+	// Bless each tx with a meta that carries its parents. The mocked utxo store
+	// answers with an empty meta, whose subtree meta cannot be serialized, and the
+	// subtree is written only after its meta, so validation would fail. This tx has
+	// no previous-output values, so the validator's own tx-derived default cannot
+	// compute a fee for it either.
+	server.validatorClient.(*validator.MockValidator).ValidateFunc = func(_ context.Context, tx *bt.Tx) (*meta.Data, error) {
+		inpoints, err := subtreepkg.NewTxInpointsFromTx(tx)
+		if err != nil {
+			return nil, err
+		}
+
+		return &meta.Data{TxInpoints: inpoints, SizeInBytes: uint64(tx.Size())}, nil //nolint:gosec // test tx size
+	}
 
 	// Build a real subtree (coinbase placeholder + one tx) so its root matches its
 	// served node bytes and the root-hash check passes, taking us to the store call.

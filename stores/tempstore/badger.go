@@ -110,7 +110,40 @@ func (s *BadgerTempStore) Get(key []byte) ([]byte, error) {
 	return result, err
 }
 
+// GetEach looks up n keys in a single read transaction, calling fn with each
+// key's value, or nil when the key is absent. The value is only valid for the
+// duration of the call. It stops at the first error returned by fn.
+func (s *BadgerTempStore) GetEach(n int, key func(i int) []byte, fn func(i int, value []byte) error) error {
+	return s.db.View(func(txn *badger.Txn) error {
+		for i := 0; i < n; i++ {
+			item, err := txn.Get(key(i))
+			if err == badger.ErrKeyNotFound {
+				if err = fn(i, nil); err != nil {
+					return err
+				}
+
+				continue
+			}
+
+			if err != nil {
+				return err
+			}
+
+			if err = item.Value(func(value []byte) error { return fn(i, value) }); err != nil {
+				return err
+			}
+		}
+
+		return nil
+	})
+}
+
 // WriteBatch provides efficient batch write operations.
+//
+// Every WriteBatch, including the fresh one Flush installs after writing,
+// holds a Badger read mark until it is flushed or cancelled. Call Cancel when
+// done with a batch (also after a successful Flush): an abandoned batch pins
+// Badger's read watermark for the life of the store.
 type WriteBatch struct {
 	wb    *badger.WriteBatch
 	store *BadgerTempStore

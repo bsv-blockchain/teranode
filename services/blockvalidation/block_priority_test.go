@@ -11,14 +11,25 @@ import (
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // mockBlockProcessor is a test implementation that always allows block processing
 type mockBlockProcessor struct{}
 
-func (m *mockBlockProcessor) CanProcessBlock(ctx context.Context, hash *chainhash.Hash) (bool, error) {
+func (m *mockBlockProcessor) CanProcessBlock(ctx context.Context, hash *chainhash.Hash, _ BlockPriority) (bool, error) {
 	return true, nil
 }
+
+func (m *mockBlockProcessor) StartProcessingBlock(hash *chainhash.Hash, _ BlockPriority) bool {
+	return true
+}
+
+func (m *mockBlockProcessor) IsBlockInFlight(hash *chainhash.Hash, pending func(chainhash.Hash) bool) bool {
+	return pending(*hash)
+}
+
+func (m *mockBlockProcessor) FinishProcessingBlock(hash *chainhash.Hash) {}
 
 func TestBlockPriorityQueue(t *testing.T) {
 	t.Run("Priority ordering", func(t *testing.T) {
@@ -329,20 +340,20 @@ func TestForkManager(t *testing.T) {
 		hash2, _ := chainhash.NewHashFromStr("0000000000000000000000000000000000000000000000000000000000000002")
 
 		// Should be able to process first block
-		canProcess, err := fm.CanProcessBlock(ctx, hash1)
+		canProcess, err := fm.CanProcessBlock(ctx, hash1, PriorityChainExtending)
 		assert.NoError(t, err)
 		assert.True(t, canProcess)
-		assert.True(t, fm.StartProcessingBlock(hash1))
+		assert.True(t, fm.StartProcessingBlock(hash1, PriorityChainExtending))
 
 		// Should be able to process second block (different fork)
-		canProcess, err = fm.CanProcessBlock(ctx, hash2)
+		canProcess, err = fm.CanProcessBlock(ctx, hash2, PriorityChainExtending)
 		assert.NoError(t, err)
 		assert.True(t, canProcess)
-		assert.True(t, fm.StartProcessingBlock(hash2))
+		assert.True(t, fm.StartProcessingBlock(hash2, PriorityChainExtending))
 
 		// Should not be able to process third block (max parallel reached)
 		hash3, _ := chainhash.NewHashFromStr("0000000000000000000000000000000000000000000000000000000000000003")
-		canProcess, err = fm.CanProcessBlock(ctx, hash3)
+		canProcess, err = fm.CanProcessBlock(ctx, hash3, PriorityChainExtending)
 		assert.NoError(t, err)
 		assert.False(t, canProcess)
 
@@ -353,7 +364,7 @@ func TestForkManager(t *testing.T) {
 		assert.Equal(t, 1, fm.GetParallelProcessingCount())
 
 		// Now should be able to process third block
-		canProcess, err = fm.CanProcessBlock(ctx, hash3)
+		canProcess, err = fm.CanProcessBlock(ctx, hash3, PriorityChainExtending)
 		assert.NoError(t, err)
 		assert.True(t, canProcess)
 	})
@@ -397,4 +408,28 @@ func TestForkManager(t *testing.T) {
 		_, exists = fm.GetForkForBlock(blockHash)
 		assert.False(t, exists)
 	})
+}
+
+// TestBlockPriorityQueue_DuplicateAnnouncementJoinsWaitingCaller: a second announcement of a
+// queued hash becomes an additional source, not a second entry. If a caller waits on it, the
+// caller must be answered with the queued entry's outcome; the source alone is dropped once a
+// worker takes the entry, so a reply left on it would never be answered.
+func TestBlockPriorityQueue_DuplicateAnnouncementJoinsWaitingCaller(t *testing.T) {
+	pq := NewBlockPriorityQueue(ulogger.TestLogger{})
+	hash := &chainhash.Hash{7}
+
+	first := newBlockFoundReply()
+	second := newBlockFoundReply()
+
+	pq.Add(processBlockFound{hash: hash, baseURL: "http://a", reply: first}, PriorityChainExtending, 5)
+	pq.Add(processBlockFound{hash: hash, baseURL: "http://b", reply: second}, PriorityChainExtending, 5)
+	require.Equal(t, 1, pq.Size())
+
+	taken, status := pq.Get(context.Background(), &mockBlockProcessor{})
+	require.Equal(t, GetOK, status)
+
+	taken.reply.answer(nil)
+
+	require.NoError(t, <-first.ch)
+	require.NoError(t, <-second.ch)
 }

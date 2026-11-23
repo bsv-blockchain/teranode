@@ -214,3 +214,31 @@ func TestNewUtxoSpentError(t *testing.T) {
 		require.Nil(t, data.SpendingData)
 	})
 }
+
+// TestUtxoSpentErrorMessageCarriesNoCodeRendering pins the producer, not the
+// consumer.
+//
+// This message used to open with errCodeMsgFmt ("UTXO_SPENT (70): "), which
+// Error() and UserMessage already prepend - so the rendering was duplicated, and
+// worse, the code became part of Message() rather than around it. The JSON-RPC
+// boundary reads Message() precisely because it never contains a code, so an
+// ordinary double-spend answered "TX rejected: UTXO_SPENT (70): ...".
+//
+// The boundary now also strips a leading code rendering defensively, which means
+// a regression here is invisible from that side. This test is what makes it
+// visible: it is the only thing that fails if the prefix comes back.
+func TestUtxoSpentErrorMessageCarriesNoCodeRendering(t *testing.T) {
+	err := NewUtxoSpentError(chainhash.Hash{}, 0, chainhash.Hash{}, nil)
+
+	require.NotContains(t, err.Message(), "UTXO_SPENT",
+		"the code name belongs around the message, not inside it")
+	require.NotContains(t, err.Message(), "(70)")
+	require.Contains(t, err.Message(), "utxo already spent by tx")
+
+	// Error() on this data-carrying type renders the code numerically ("70: ")
+	// rather than via errCodeMsgFmt, so the name appears nowhere at all once the
+	// message stops carrying it. Checked rather than assumed: an earlier version
+	// of this test asserted the name appeared exactly once and was wrong.
+	require.NotContains(t, err.Error(), "UTXO_SPENT")
+	require.Contains(t, err.Error(), "70: ")
+}

@@ -284,60 +284,109 @@ var rpcUnimplemented = map[string]struct{}{
 	"preciousblock": {},
 }
 
-// Commands that are available to a limited user
-var rpcLimited = map[string]struct{}{
-	// Websockets commands
-	"loadtxfilter":          {},
-	"notifyblocks":          {},
-	"notifynewtransactions": {},
-	"notifyreceived":        {},
-	"notifyspent":           {},
-	"rescan":                {},
-	"rescanblocks":          {},
-	"session":               {},
+// rpcAccess classifies who may call an RPC method.
+type rpcAccess int
 
-	// Websockets AND HTTP/S commands
-	"help": {},
+const (
+	// rpcAccessAdmin methods are callable only with the admin credential.
+	rpcAccessAdmin rpcAccess = iota
 
-	// HTTP/S-only commands
-	"createrawtransaction":  {},
-	"decoderawtransaction":  {},
-	"decodescript":          {},
-	"estimatefee":           {},
-	"getbestblock":          {},
-	"getbestblockhash":      {},
-	"getblock":              {},
-	"getblockcount":         {},
-	"getblockhash":          {},
-	"getblockheader":        {},
-	"getcfilter":            {},
-	"getcfilterheader":      {},
-	"getcurrentnet":         {},
-	"getdifficulty":         {},
-	"getheaders":            {},
-	"getinfo":               {},
-	"getnettotals":          {},
-	"getnetworkhashps":      {},
-	"getrawmempool":         {},
-	"getrawtransaction":     {},
-	"gettxout":              {},
-	"gettxoutproof":         {},
-	"searchrawtransactions": {},
-	"sendrawtransaction":    {},
-	"submitblock":           {},
-	"uptime":                {},
-	"validateaddress":       {},
-	"verifymessage":         {},
-	"verifytxoutproof":      {},
-	"version":               {},
-	"getminingcandidate":    {},
-	"submitminingsolution":  {},
+	// rpcAccessReadOnly methods are queries callable by the limited credential. A query may
+	// have a side effect: getrawmempool with verbose=true requests a mining candidate.
+	rpcAccessReadOnly
 
-	// BSV-specific commands
-	"freeze":   {},
-	"unfreeze": {},
-	"reassign": {},
+	// rpcAccessLimitedWrite methods change node or network state but are
+	// intentionally exposed to the limited credential (transaction and block submission, mining).
+	rpcAccessLimitedWrite
+)
+
+// rpcAccessPolicy is the single authorisation table. Every registered handler
+// must appear here. A method that is absent from the table is denied to a limited user.
+var rpcAccessPolicy = map[string]rpcAccess{
+	"addnode":               rpcAccessAdmin,
+	"clearbanned":           rpcAccessAdmin,
+	"debuglevel":            rpcAccessAdmin,
+	"freeze":                rpcAccessAdmin,
+	"generate":              rpcAccessAdmin,
+	"generatetoaddress":     rpcAccessAdmin,
+	"getaddednodeinfo":      rpcAccessAdmin,
+	"getblockbyheight":      rpcAccessAdmin,
+	"getblockchaininfo":     rpcAccessAdmin,
+	"getblocktemplate":      rpcAccessAdmin,
+	"getchaintips":          rpcAccessAdmin,
+	"getconnectioncount":    rpcAccessAdmin,
+	"getgenerate":           rpcAccessAdmin,
+	"gethashespersec":       rpcAccessAdmin,
+	"getmempoolinfo":        rpcAccessAdmin,
+	"getmininginfo":         rpcAccessAdmin,
+	"getpeerinfo":           rpcAccessAdmin,
+	"invalidateblock":       rpcAccessAdmin,
+	"isbanned":              rpcAccessAdmin,
+	"listbanned":            rpcAccessAdmin,
+	"node":                  rpcAccessAdmin,
+	"ping":                  rpcAccessAdmin,
+	"reassign":              rpcAccessAdmin,
+	"reconsiderblock":       rpcAccessAdmin,
+	"setban":                rpcAccessAdmin,
+	"setgenerate":           rpcAccessAdmin,
+	"stop":                  rpcAccessAdmin,
+	"unfreeze":              rpcAccessAdmin,
+	"verifychain":           rpcAccessAdmin,
+	"createrawtransaction":  rpcAccessReadOnly,
+	"decoderawtransaction":  rpcAccessReadOnly,
+	"decodescript":          rpcAccessReadOnly,
+	"estimatefee":           rpcAccessReadOnly,
+	"getbestblock":          rpcAccessReadOnly,
+	"getbestblockhash":      rpcAccessReadOnly,
+	"getblock":              rpcAccessReadOnly,
+	"getblockcount":         rpcAccessReadOnly,
+	"getblockhash":          rpcAccessReadOnly,
+	"getblockheader":        rpcAccessReadOnly,
+	"getcfilter":            rpcAccessReadOnly,
+	"getcfilterheader":      rpcAccessReadOnly,
+	"getcurrentnet":         rpcAccessReadOnly,
+	"getdifficulty":         rpcAccessReadOnly,
+	"getheaders":            rpcAccessReadOnly,
+	"getinfo":               rpcAccessReadOnly,
+	"getnettotals":          rpcAccessReadOnly,
+	"getnetworkhashps":      rpcAccessReadOnly,
+	"getrawmempool":         rpcAccessReadOnly,
+	"getrawtransaction":     rpcAccessReadOnly,
+	"gettxout":              rpcAccessReadOnly,
+	"gettxoutproof":         rpcAccessReadOnly,
+	"help":                  rpcAccessReadOnly,
+	"loadtxfilter":          rpcAccessReadOnly,
+	"notifyblocks":          rpcAccessReadOnly,
+	"notifynewtransactions": rpcAccessReadOnly,
+	"notifyreceived":        rpcAccessReadOnly,
+	"notifyspent":           rpcAccessReadOnly,
+	"rescan":                rpcAccessReadOnly,
+	"rescanblocks":          rpcAccessReadOnly,
+	"searchrawtransactions": rpcAccessReadOnly,
+	"session":               rpcAccessReadOnly,
+	"uptime":                rpcAccessReadOnly,
+	"validateaddress":       rpcAccessReadOnly,
+	"verifymessage":         rpcAccessReadOnly,
+	"verifytxoutproof":      rpcAccessReadOnly,
+	"version":               rpcAccessReadOnly,
+	"getminingcandidate":    rpcAccessLimitedWrite,
+	"sendrawtransaction":    rpcAccessLimitedWrite,
+	"submitblock":           rpcAccessLimitedWrite,
+	"submitminingsolution":  rpcAccessLimitedWrite,
 }
+
+// Commands that are available to a limited user, derived from rpcAccessPolicy.
+var rpcLimited = func() map[string]struct{} {
+	limited := make(map[string]struct{}, len(rpcAccessPolicy))
+
+	for method, access := range rpcAccessPolicy {
+		if access != rpcAccessAdmin {
+			limited[method] = struct{}{}
+		}
+	}
+
+	return limited
+}()
 
 // builderScript is a convenience function which is used for hard-coded scripts
 // built with the script builder.   Any errors are converted to a panic since it
@@ -634,7 +683,7 @@ type RPCServer struct {
 	authsha [sha256.Size]byte
 
 	// limitauthsha contains the SHA256 hash of the HTTP basic auth string for limited-level access
-	// This is used for authenticating clients with restricted access (read-only operations)
+	// This is used for authenticating clients with restricted access (read-only commands and the submission commands)
 	limitauthsha [sha256.Size]byte
 
 	// numClients tracks the number of connected RPC clients for connection limiting
@@ -662,7 +711,10 @@ type RPCServer struct {
 	// logger provides structured logging capabilities for operational and debugging messages
 	logger ulogger.Logger
 
-	// rpcMaxClients is the maximum number of concurrent RPC clients allowed
+	// rpcMaxClients is the maximum number of concurrent in-flight RPC requests.
+	// Counted per request, not per socket: every reply closes the connection,
+	// so each request holds a slot for its whole duration (see limitConnections).
+	// The name predates that reading and stays for setting-key compatibility.
 	// This setting helps prevent resource exhaustion from too many simultaneous connections
 	rpcMaxClients int
 
@@ -715,6 +767,10 @@ type RPCServer struct {
 	// validatorClient provides access to the transaction validator service
 	// Used for synchronous transaction validation in sendrawtransaction RPC
 	validatorClient validator.Interface
+
+	// unminedTxGate makes sendrawtransaction refuse a transaction while the node
+	// syncs (issue 2003). nil accepts everything.
+	unminedTxGate *blockchain.UnminedTxGate
 }
 
 // httpStatusLine returns a response Status-Line (RFC 2616 Section 6.1)
@@ -846,10 +902,16 @@ func (s *RPCServer) RequestedProcessShutdown() <-chan struct{} {
 //
 // This function is safe for concurrent access through the use of atomic operations.
 func (s *RPCServer) limitConnections(w http.ResponseWriter, remoteAddr string) bool {
-	if int(atomic.LoadInt32(&s.numClients)+1) > s.rpcMaxClients {
-		s.logger.Infof("Max RPC clients exceeded [%d] - "+
-			"disconnecting client %s", s.rpcMaxClients,
+	if inFlight := int(atomic.LoadInt32(&s.numClients)); inFlight+1 > s.rpcMaxClients {
+		s.logger.Infof("Max concurrent RPC requests exceeded [%d of %d allowed, %d in flight] - "+
+			"refusing client %s", inFlight+1, s.rpcMaxClients, inFlight,
 			remoteAddr)
+		// The door sheds rather than queues - deliberately, so a crowd of
+		// callers cannot pile work behind an already-busy Validator - so a
+		// refused request is worth retrying as soon as a slot frees. A machine
+		// caller needs a number for that, not prose; 1s is a politeness floor
+		// for the log and the client, and a slot routinely frees sooner.
+		w.Header().Set("Retry-After", "1")
 		http.Error(w, "503 Too busy.  Try again later.",
 			http.StatusServiceUnavailable)
 
@@ -1089,7 +1151,16 @@ func (s *RPCServer) createMarshalledReply(id, result interface{}, replyErr error
 		if jErr, ok := replyErr.(*bsvjson.RPCError); ok {
 			jsonErr = jErr
 		} else {
-			jsonErr = s.internalRPCError(replyErr.Error(), "")
+			// A handler returned a bare Go error. Hand the caller the trimmed
+			// form rather than replyErr.Error(), which put internal service
+			// names and the storage layer's own text across the API boundary.
+			// s.rpcError logs the full chain, so nothing diagnostic is lost.
+			//
+			// No not-found mapping here: this site has no idea what the
+			// request asked for, and "the block you asked for does not exist"
+			// is the wrong answer to a request that named no block. Handlers
+			// that do name one opt in with s.rpcLookupError. See rpc_errors.go.
+			jsonErr = s.rpcError(replyErr, bsvjson.ErrRPCInternal.Code, "")
 		}
 	}
 
@@ -1406,6 +1477,26 @@ func (s *RPCServer) Start(ctx context.Context, readyCh chan<- struct{}) error {
 	return nil
 }
 
+// authShaForCredentials computes the stored comparison hash for one
+// user/pass pair, exactly as the request path expects it: the SHA-256 of the
+// "Basic base64(user:pass)" header value. An empty user OR pass yields the
+// all-zero array - no credentials configured does not disable
+// authentication, it locks the door: checkAuth is always called with
+// require=true on the request path, and no real header hashes to the zero
+// array. (The longdesc of rpc_user/rpc_pass once claimed otherwise; the
+// empty-credentials tests in auth_empty_credentials_test.go keep that
+// sentence from coming back wrong.)
+func authShaForCredentials(user, pass string) [sha256.Size]byte {
+	if user == "" || pass == "" {
+		return [sha256.Size]byte{}
+	}
+
+	login := user + ":" + pass
+	auth := "Basic " + base64.StdEncoding.EncodeToString([]byte(login))
+
+	return sha256.Sum256([]byte(auth))
+}
+
 // NewServer creates and configures a new RPC server instance with the given dependencies.
 //
 // This factory function creates a fully configured RPCServer instance, setting up:
@@ -1458,6 +1549,7 @@ func NewServer(logger ulogger.Logger, tSettings *settings.Settings, blockchainCl
 		p2pClient:              p2pClient,
 		txStore:                txStore,
 		validatorClient:        validatorClient,
+		unminedTxGate:          blockchain.NewUnminedTxGate(logger, blockchainClient, blockchain.UnminedTxRouteRPCSendRawTx),
 	}
 
 	rpcUser := tSettings.RPC.RPCUser
@@ -1480,17 +1572,8 @@ func NewServer(logger ulogger.Logger, tSettings *settings.Settings, blockchainCl
 		logger.Warnf("rpc_limit_pass not set in config")
 	}
 
-	if rpcUser != "" && rpcPass != "" {
-		login := rpcUser + ":" + rpcPass
-		auth := "Basic " + base64.StdEncoding.EncodeToString([]byte(login))
-		rpc.authsha = sha256.Sum256([]byte(auth))
-	}
-
-	if rpcLimitUser != "" && rpcLimitPass != "" {
-		login := rpcLimitUser + ":" + rpcLimitPass
-		auth := "Basic " + base64.StdEncoding.EncodeToString([]byte(login))
-		rpc.limitauthsha = sha256.Sum256([]byte(auth))
-	}
+	rpc.authsha = authShaForCredentials(rpcUser, rpcPass)
+	rpc.limitauthsha = authShaForCredentials(rpcLimitUser, rpcLimitPass)
 	// rpc.cfg.Chain.Subscribe(rpc.handleBlockchainNotification)
 
 	rpc.rpcMaxClients = tSettings.RPC.RPCMaxClients

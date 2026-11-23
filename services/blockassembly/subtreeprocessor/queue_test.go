@@ -60,66 +60,31 @@ func Test_queue(t *testing.T) {
 
 func Test_queueWithTime(t *testing.T) {
 	q := NewLockFreeQueue()
+	clock := &fixedClock{t: time.UnixMilli(1_000)}
+	q.clock = clock
 
-	enqueueBatches(t, q, 1, 10)
-
-	validFromMillis := time.Now().Add(-200 * time.Millisecond).UnixMilli()
-	_, found := q.dequeueBatch(validFromMillis)
-	require.False(t, found)
-
-	time.Sleep(50 * time.Millisecond)
-
-	validFromMillis = time.Now().Add(-200 * time.Millisecond).UnixMilli()
-	_, found = q.dequeueBatch(validFromMillis)
-	require.False(t, found)
-
-	time.Sleep(200 * time.Millisecond)
-
-	batches := 0
-	validFromMillis = time.Now().Add(-200 * time.Millisecond).UnixMilli()
-
-	for {
-		batch, found := q.dequeueBatch(validFromMillis)
-		if !found {
-			break
+	// Exercise both initial enqueue and reuse after draining without depending
+	// on scheduler delays or wall-clock sleeps.
+	for cycle := 0; cycle < 2; cycle++ {
+		enqueueBatches(t, q, 1, 10)
+		enqueuedAt := clock.Now().UnixMilli()
+		for _, cutoff := range []int64{enqueuedAt - 200, enqueuedAt - 150, enqueuedAt} {
+			_, found := q.dequeueBatch(cutoff)
+			require.False(t, found, "cutoff is exclusive")
+			require.Equal(t, int64(10), q.length())
 		}
 
-		assert.Greater(t, batch.time, int64(0))
-		batches++
-	}
-
-	assert.True(t, q.IsEmpty())
-	assert.Equal(t, 10, batches)
-
-	enqueueBatches(t, q, 1, 10)
-
-	validFromMillis = time.Now().Add(-200 * time.Millisecond).UnixMilli()
-	_, found = q.dequeueBatch(validFromMillis)
-	require.False(t, found)
-
-	time.Sleep(50 * time.Millisecond)
-
-	validFromMillis = time.Now().Add(-200 * time.Millisecond).UnixMilli()
-	_, found = q.dequeueBatch(validFromMillis)
-	require.False(t, found)
-
-	time.Sleep(200 * time.Millisecond)
-
-	batches = 0
-	validFromMillis = time.Now().Add(-200 * time.Millisecond).UnixMilli()
-
-	for {
-		batch, found := q.dequeueBatch(validFromMillis)
-		if !found {
-			break
+		for i := 0; i < 10; i++ {
+			batch, found := q.dequeueBatch(enqueuedAt + 1)
+			require.True(t, found)
+			require.Equal(t, enqueuedAt, batch.time)
+			require.Len(t, batch.nodes, 1)
 		}
-
-		assert.Greater(t, batch.time, int64(0))
-		batches++
+		require.True(t, q.IsEmpty())
+		_, found := q.dequeueBatch(enqueuedAt + 1)
+		require.False(t, found)
+		clock.t = clock.t.Add(time.Second)
 	}
-
-	assert.True(t, q.IsEmpty())
-	assert.Equal(t, 10, batches)
 }
 
 // Test_enqueueBatchUnboundedContract pins LockFreeQueue's current intake
@@ -193,26 +158,24 @@ func Test_queueClockOverride(t *testing.T) {
 	require.Equal(t, fixed.UnixMilli(), batch.time)
 }
 
-// Test_zeroWindowFormulasAgree asserts parity between the two
-// validFromMillis formulas inside SubtreeProcessor at DoubleSpendWindow=0
-// (the documented default - see BlockAssembly.DoubleSpendWindow in
-// settings/blockassembly_settings.go).
-// Both call sites now zero-guard the calculation, so neither activates
-// the queue filter in LockFreeQueue.dequeueBatch and both admit same-millisecond
-// batches.
+// Test_zeroWindowFormulasAgree pins, on a bare queue, the dequeue each
+// SubtreeProcessor call site uses at DoubleSpendWindow=0 (the documented
+// default - see BlockAssembly.DoubleSpendWindow in
+// settings/blockassembly_settings.go): both admit a same-millisecond batch.
+// The subtests mirror the call sites rather than run them;
+// TestDequeueDuringBlockMovement_DrainCutoffAtClockNow pins the drain call
+// site itself.
 //
 //	Start loop (the default: branch of SubtreeProcessor.Start):
-//	  validFromMillis = 0                              if DoubleSpendWindow == 0
-//	  validFromMillis = (now - window).UnixMilli()     otherwise
+//	  dequeueBatch(0)                                  if DoubleSpendWindow <= 0
+//	  dequeueBatch((now - window).UnixMilli())         if DoubleSpendWindow > 0
 //
-//	SubtreeProcessor.dequeueDuringBlockMovement:
-//	  validFromMillis = 0                              if DoubleSpendWindow == 0
-//	  validFromMillis = (now - window).UnixMilli()     otherwise
+//	SubtreeProcessor.forEachDrainChunk (block-movement drains):
+//	  dequeueBatchUntil(now.UnixMilli())               if DoubleSpendWindow <= 0
+//	  dequeueBatch((now - window).UnixMilli())         if DoubleSpendWindow > 0
 //
-// Before the fix, the drain formula was unconditional, which held back
-// same-millisecond batches under the default config. This test pins the
-// post-fix parity. If a future change removes either zero-guard, the
-// corresponding subtest will fail.
+// The Start loop disables the time filter; the drain keeps one, inclusive
+// of its own millisecond, so it still does not chase fresh ingest.
 func Test_zeroWindowFormulasAgree(t *testing.T) {
 	fixed := time.Date(2030, 1, 2, 3, 4, 5, 0, time.UTC)
 	window := time.Duration(0)
@@ -241,16 +204,13 @@ func Test_zeroWindowFormulasAgree(t *testing.T) {
 	})
 
 	t.Run("drain_formula_admits_same_millisecond_batch", func(t *testing.T) {
-		// Mirror of the formula in SubtreeProcessor.dequeueDuringBlockMovement.
-		drainValidFromMillis := int64(0)
-		if window > 0 {
-			drainValidFromMillis = fixed.Add(-window).UnixMilli()
-		}
+		// Mirror of the window-0 dequeue in SubtreeProcessor.forEachDrainChunk.
+		require.Zero(t, window)
 
 		q := enqueueAtFixed()
-		batch, found := q.dequeueBatch(drainValidFromMillis)
+		batch, found := q.dequeueBatchUntil(fixed.UnixMilli())
 		require.True(t, found, "drain must admit same-ms batch at window=0 "+
-			"(zero-guard parity with the Start loop)")
+			"(parity with the Start loop)")
 		require.Equal(t, fixed.UnixMilli(), batch.time)
 	})
 }
@@ -413,6 +373,255 @@ func Test_dequeueBatchUntilPreservesPostBoundaryBatch(t *testing.T) {
 	require.False(t, found, "empty queue returns false")
 }
 
+// Test_headAgeGaugeRefreshedOnRefusalPath pins the fix for the lost-update race
+// that could zero the head-age gauge during a real backlog: when the head-of-
+// line batch is held back by the double-spend window (dequeueBatch refuses it as
+// too new), the gauge must be refreshed to that batch's time rather than left at
+// a stale 0. The clock is forced so the batch and the validFrom cutoff share a
+// millisecond, i.e. the head is refused (>= is inclusive).
+func Test_headAgeGaugeRefreshedOnRefusalPath(t *testing.T) {
+	fixed := time.Date(2030, 1, 2, 3, 4, 5, 0, time.UTC)
+
+	q := NewLockFreeQueue()
+	q.clock = fixedClock{t: fixed}
+	q.enqueueBatch(
+		[]subtree.Node{{Hash: chainhash.Hash{}, Fee: 1, SizeInBytes: 0}},
+		[]*subtree.TxInpoints{{}},
+	)
+
+	// Simulate a stale 0 left by an empty-clear that raced a producer.
+	q.oldestPendingMillis.Store(0)
+
+	// The head is refused for being too new (batch.time == validFromMillis).
+	_, found := q.dequeueBatch(fixed.UnixMilli())
+	require.False(t, found, "precondition: the held head is refused")
+
+	require.Equal(t, fixed.UnixMilli(), q.oldestPendingMillis.Load(),
+		"the refusal path must refresh the gauge to the held head's time, not leave a stale 0")
+	require.NotZero(t, q.headAgeMillis(fixed.Add(time.Second).UnixMilli()),
+		"headAgeMillis must be non-zero while a batch is held")
+}
+
+// Test_headAgeGaugeProducerCASFromEmpty pins that a producer sets the gauge from
+// empty on the empty->non-empty transition even when the new batch shares a
+// millisecond with a just-drained batch — the same-millisecond case the recheck
+// design must not confuse.
+func Test_headAgeGaugeProducerCASFromEmpty(t *testing.T) {
+	fixed := time.Date(2030, 1, 2, 3, 4, 5, 0, time.UTC)
+
+	q := NewLockFreeQueue()
+	q.clock = fixedClock{t: fixed}
+
+	// Enqueue then drain a first batch so the queue is genuinely empty and the
+	// gauge is cleared to 0.
+	q.enqueueBatch(
+		[]subtree.Node{{Hash: chainhash.Hash{}, Fee: 1, SizeInBytes: 0}},
+		[]*subtree.TxInpoints{{}},
+	)
+	_, found := q.dequeueBatch(0)
+	require.True(t, found)
+	require.Equal(t, int64(0), q.oldestPendingMillis.Load(), "precondition: gauge cleared to 0 on empty")
+
+	// A new same-millisecond batch must set the gauge via the producer CAS.
+	q.enqueueBatch(
+		[]subtree.Node{{Hash: chainhash.Hash{}, Fee: 2, SizeInBytes: 0}},
+		[]*subtree.TxInpoints{{}},
+	)
+	require.Equal(t, fixed.UnixMilli(), q.oldestPendingMillis.Load(),
+		"the producer CAS must set the gauge from empty even for a same-ms batch")
+}
+
+// Test_headAgeGaugeConsumerEmptyClearReReadRepair pins the consumer empty-clear
+// re-read repair: when the gauge has been cleared to 0 (an empty-clear that raced
+// a producer's link) but a batch is in fact linked at the head, updateOldestPending
+// must restore the linked head's time rather than leave a stale 0 — and it must do
+// so by value, so a batch sharing a millisecond with a just-removed batch is not
+// confused. This is the observable contract of the Store(0)+re-read shape.
+//
+// Note on scope: the re-read's *second* head.next load (first load nil, second
+// non-nil) is only reachable when a producer links between the two loads, which is
+// an inherently concurrent interleaving and cannot be forced deterministically from
+// a single goroutine. This test pins the deterministic half — a linked head with a
+// zeroed gauge is restored, not dropped — and Test_headAgeGaugeConcurrentDrainRace
+// exercises the racing second-load path under -race.
+func Test_headAgeGaugeConsumerEmptyClearReReadRepair(t *testing.T) {
+	fixed := time.Date(2030, 1, 2, 3, 4, 5, 0, time.UTC)
+
+	q := NewLockFreeQueue()
+	q.clock = fixedClock{t: fixed}
+
+	// Drain a first batch so the queue reaches the empty state whose clear the
+	// re-read must repair.
+	q.enqueueBatch(
+		[]subtree.Node{{Hash: chainhash.Hash{}, Fee: 1, SizeInBytes: 0}},
+		[]*subtree.TxInpoints{{}},
+	)
+	_, found := q.dequeueBatch(0)
+	require.True(t, found)
+	require.Equal(t, int64(0), q.oldestPendingMillis.Load(), "precondition: gauge cleared to 0 on empty")
+
+	// Link a new batch B sharing the just-removed batch's millisecond, then force
+	// the gauge back to 0 to model the empty-clear Store(0) that raced B's link.
+	q.enqueueBatch(
+		[]subtree.Node{{Hash: chainhash.Hash{}, Fee: 2, SizeInBytes: 0}},
+		[]*subtree.TxInpoints{{}},
+	)
+	q.oldestPendingMillis.Store(0)
+
+	// updateOldestPending must observe the linked head and restore its time.
+	q.updateOldestPending()
+
+	require.Equal(t, fixed.UnixMilli(), q.oldestPendingMillis.Load(),
+		"the empty-clear re-read must restore the linked head's time by value, not leave a stale 0")
+	require.NotZero(t, q.headAgeMillis(fixed.Add(time.Second).UnixMilli()))
+}
+
+// Test_headAgeGaugeConcurrentDrainRace exercises the gauge writers — the producer
+// CAS, the consumer empty-clear + recheck, and the refusal-path refresh — under
+// -race with many producers and a single draining/refusing consumer, all on a
+// fixed clock so every batch shares one millisecond.
+//
+// The monitor asserts the point-5 invariant DURING the run: a non-empty queue
+// must never present a zero head age. It observes "non-empty" via q.length()
+// (the queueLength atomic) and the age via headAgeMillis (the oldestPendingMillis
+// atomic) — both atomic-only, so the observation is race-free and never touches
+// q.head (which the single consumer mutates without a lock; the after-join drain
+// below is the only place q.head is read).
+//
+// The two atomics cannot be sampled in one snapshot, so at the instant the queue
+// refills a transient (age==0, length>0) skew is possible: enqueueBatch now
+// reserves the length BEFORE it links the batch and runs the gauge CAS, so a
+// monitor can see length>0 for a moment before the gauge is set. That transient
+// resolves as soon as the producer's very next step links and CASes. A genuine
+// regression — a latched stale 0 while a backlog is held (the exact defect the
+// refusal-path refresh and the empty-clear re-read remove) — instead persists
+// across the consumer's passes. The monitor therefore re-confirms a bounded number
+// of times and flags only a violation that does not clear, which is the strongest
+// variant observable without a q.head read.
+func Test_headAgeGaugeConcurrentDrainRace(t *testing.T) {
+	fixed := time.UnixMilli(1_700_000_000_000).UTC()
+
+	q := NewLockFreeQueue()
+	q.clock = fixedClock{t: fixed}
+
+	nowMillis := fixed.Add(time.Second).UnixMilli()
+
+	var (
+		wg         sync.WaitGroup
+		violations atomic.Int64
+		stop       = make(chan struct{})
+	)
+
+	for p := 0; p < 4; p++ {
+		wg.Add(1)
+
+		go func() {
+			defer wg.Done()
+
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+				}
+
+				q.enqueueBatch(
+					[]subtree.Node{{Hash: chainhash.Hash{}, Fee: 1, SizeInBytes: 0}},
+					[]*subtree.TxInpoints{{}},
+				)
+			}
+		}()
+	}
+
+	// Single consumer: alternately holds the head back (refusal-path refresh) and
+	// drains (empty-clear + recheck), so the empty<->non-empty transitions the
+	// gauge fix targets are hit repeatedly.
+	wg.Add(1)
+
+	go func() {
+		defer wg.Done()
+
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+
+			q.dequeueBatch(fixed.UnixMilli()) // refuse the head (too new)
+			q.dequeueBatch(0)                 // drain one
+		}
+	}()
+
+	// Monitor: assert "length>0 => headAgeMillis>0" during the run, race-free,
+	// re-confirming to reject the transient two-atomic snapshot skew.
+	wg.Add(1)
+
+	go func() {
+		defer wg.Done()
+
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+
+			if q.headAgeMillis(nowMillis) != 0 || q.length() == 0 {
+				continue
+			}
+
+			// Candidate violation: re-confirm. A real latched 0 persists while the
+			// held backlog stays queued; a snapshot skew clears within a few reads.
+			persisted := true
+
+			for i := 0; i < 100_000; i++ {
+				// Yield the P between reads. On a constrained GOMAXPROCS (as CI
+				// runners commonly are) a tight loop of atomic-only reads never
+				// hits a cooperative preemption point on its own, so a producer
+				// that reserved queueLength but has not yet completed publish's
+				// CAS can be starved for the loop's entire duration - the
+				// documented one-batch skew then reads as "persisted" even
+				// though it is not a latched gauge, just a descheduled producer
+				// that never got a turn. Gosched gives that producer the
+				// scheduling opportunity the skew's self-healing depends on,
+				// so only a genuinely latched value - one that does not clear
+				// no matter how many turns other goroutines get - survives.
+				runtime.Gosched()
+
+				if q.headAgeMillis(nowMillis) != 0 || q.length() == 0 {
+					persisted = false
+					break
+				}
+			}
+
+			if persisted {
+				violations.Add(1)
+				return
+			}
+		}
+	}()
+
+	time.Sleep(300 * time.Millisecond)
+	close(stop)
+	wg.Wait()
+
+	require.Zero(t, violations.Load(),
+		"a non-empty queue must never present a zero head age (point-5 invariant)")
+
+	// All goroutines have joined; touching q.head is now safe. Drain fully and
+	// assert the gauge clears to 0 exactly when the queue empties.
+	for {
+		if _, found := q.dequeueBatch(0); !found {
+			break
+		}
+	}
+
+	require.True(t, q.IsEmpty(), "queue fully drained")
+	require.Equal(t, int64(0), q.oldestPendingMillis.Load(), "gauge clears to 0 once the queue is empty")
+	require.Zero(t, q.headAgeMillis(nowMillis))
+}
+
 func Test_queue2Threads(t *testing.T) {
 	q := NewLockFreeQueue()
 
@@ -454,6 +663,8 @@ func Test_queue2Threads(t *testing.T) {
 }
 
 func Test_queueLarge(t *testing.T) {
+	skipUnlessHeavyTests(t)
+
 	runtime.GC()
 
 	q := NewLockFreeQueue()

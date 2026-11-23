@@ -29,10 +29,12 @@ import (
 	"net/url"
 	"os"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/bsv-blockchain/go-batcher/v2"
 	bt "github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/bscript"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
@@ -54,15 +56,20 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo/nullstore"
 	"github.com/bsv-blockchain/teranode/stores/utxo/sql"
 	"github.com/bsv-blockchain/teranode/stores/utxo/tests"
+	"github.com/bsv-blockchain/teranode/stores/utxo/utxoset"
+	tpostgres "github.com/bsv-blockchain/teranode/test/utils/postgres"
 	"github.com/bsv-blockchain/teranode/test/utils/transactions"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/kafka"
+	"github.com/bsv-blockchain/teranode/util/lane"
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/bsv-blockchain/teranode/util/tracing"
 	aeroTest "github.com/bsv-blockchain/testcontainers-aerospike-go"
 	"github.com/cespare/xxhash/v2"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/ordishs/gocore"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -267,6 +274,7 @@ func TestValidate_BlockAssemblyAndTxMetaChannels(t *testing.T) {
 	assert.Equal(t, tx.TxID(), blockAssembler.storedTxs[0].txHash.String())
 	assert.Equal(t, txMeta.Fee, blockAssembler.storedTxs[0].fee)
 	assert.Equal(t, txMeta.SizeInBytes, blockAssembler.storedTxs[0].size)
+	assert.Equal(t, uint32(257727), blockAssembler.storedTxs[0].validatedHeight, "block assembly is told the height the tx was validated at")
 }
 
 func TestValidate_RejectedTransactionChannel(t *testing.T) {
@@ -484,7 +492,12 @@ func TestValidate_BlockAssemblyError(t *testing.T) {
 	require.Error(t, err)
 	require.Nil(t, txMetaData)
 
-	// the tx should be stored in the utxo store as locked
+	// The tx is durably persisted with its inputs spent, but sendToBlockAssembler
+	// failed, so it is NOT in block assembly. It must stay Locked: unlocking an
+	// undelivered tx would let a child spending it enter this node's mining
+	// template without its parent. The block assembler's unmined-transaction
+	// loader heals this in the safe order - add to the subtree processor first,
+	// clear Locked second.
 	txMeta, err := utxoStore.Get(t.Context(), tx.TxIDChainHash())
 	require.NoError(t, err)
 	assert.Equal(t, true, txMeta.Locked)
@@ -492,6 +505,81 @@ func TestValidate_BlockAssemblyError(t *testing.T) {
 	// check the kafka channels, nothing should have been sent, since the tx never was sent correctly to the block assembly
 	require.Equal(t, 0, len(txmetaKafkaProducerClient.PublishChannel()), "txMetaKafkaChan should be empty")
 	require.Equal(t, 0, len(rejectedTxKafkaProducerClient.PublishChannel()), "rejectedTxKafkaChan should have 1 message")
+}
+
+// TestValidate_PanicDuringBlockAssemblyDeliveryKeepsLock covers the specific
+// failure mode unlockLockedTxOnExit's `delivered` flag exists to close: a panic
+// unwinding from inside the addToBlockAssembly window (after the tx is durably
+// persisted and Locked, before sendToBlockAssembler returns), rather than an
+// ordinary error return. On main, before the deferred-unlock refactor, a panic
+// there simply skipped the tail-of-function unlock statement, so the tx stayed
+// Locked. If the deferred helper used `err == nil` as its proxy for "delivered",
+// this would incorrectly unlock the tx, since err is nil for the entire window
+// regardless of whether a panic occurs. Gating on an explicit `delivered` flag
+// that is only set true after sendToBlockAssembler actually returns keeps this
+// panic-safe.
+func TestValidate_PanicDuringBlockAssemblyDeliveryKeepsLock(t *testing.T) {
+	tracing.SetupMockTracer()
+
+	txHex := "010000000000000000ef01febe0cbd7d87d44cbd4b5adac0a5bfcdbd2b672c9113f5d74a6459a2b85569db010000008b48304502207ec38d0a4ef79c3a4286ba3e5a5b6ede1fa678af9242465140d78a901af9e4e0022100c26c377d44b761469cf0bdcdbf4931418f2c5a02ce6b72bbb7af52facd7228c1014104bc9eb4fe4cb53e35df7e7734c4c3cd91c6af7840be80f4a1fff283e2cd6ae8f7713cb263a4590263240e3c01ec36bc603c32281ac08773484dc69b8152e48cecffffffff60b74700000000001976a9148ac9bdc626352d16e18c26f431e834f9aae30e2888ac0230424700000000001976a9148ac9bdc626352d16e18c26f431e834f9aae30e2888ac1027000000000000166a148ac9bdc626352d16e18c26f431e834f9aae30e2800000000"
+	tx, err := bt.NewTxFromString(txHex)
+	require.NoError(t, err)
+
+	parenTxHex := "010000000000000000ef01154d5d31268f7ea94c80a7bf6de54e47812712feec25c17b8feceb570dfd9daf000000008b4830450220612b3ec065ec2b2a1757d97b7f57fba3c363645355cf6e1a5a1834411e6ab425022100bd071b90d391eb75dc9e2eea8b6774f36bf9c55439a971f0d1f4470b6448aef601410426e4e0654f72721b97a03c8170417c9ddabadcef97fe8ea626176ea62665b55ca2ff485f84df12ddec171e01ee8f9c7472c6c8467b0cf74ae8b3b614ed16cbdbffffffff008a6600000000001976a91429be45311cc66a5a6cc4a42516dbb7c9b126a3c188ac0280841e00000000001976a914996ed5e55d68aef653c85339f83873fac1321f0788ac60b74700000000001976a9148ac9bdc626352d16e18c26f431e834f9aae30e2888ac00000000"
+
+	parentTx, err := bt.NewTxFromString(parenTxHex)
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	logger := ulogger.NewErrorTestLogger(t)
+
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.ChainCfgParams = &chaincfg.MainNetParams
+
+	utxoStoreURL, err := url.Parse("sqlitememory:///test_panic_during_block_assembly")
+	require.NoError(t, err)
+
+	utxoStore, err := sql.New(ctx, logger, tSettings, utxoStoreURL)
+	require.NoError(t, err)
+
+	_ = utxoStore.SetBlockHeight(257727)
+	//nolint:gosec
+	_ = utxoStore.SetMedianBlockTime(uint32(time.Now().Unix()))
+
+	_, err = utxoStore.Create(context.Background(), parentTx, 257726, utxostore.WithMinedBlockInfo(utxostore.MinedBlockInfo{BlockID: 1, BlockHeight: 257726, SubtreeIdx: 0}))
+	require.NoError(t, err)
+
+	initPrometheusMetrics()
+
+	blockAssembler := &MockBlockAssemblyStore{panicOnStore: true}
+
+	v := &Validator{
+		logger:                        logger,
+		settings:                      tSettings,
+		txValidator:                   NewTxValidator(logger, tSettings),
+		utxoStore:                     utxoStore,
+		blockAssembler:                blockAssembler,
+		stats:                         gocore.NewStat("validator"),
+		txmetaKafkaProducerClient:     kafka.NewKafkaAsyncProducerMock(),
+		rejectedTxKafkaProducerClient: kafka.NewKafkaAsyncProducerMock(),
+	}
+
+	func() {
+		defer func() {
+			r := recover()
+			require.NotNil(t, r, "the mock must actually panic for this test to exercise anything")
+		}()
+
+		_, _ = v.Validate(t.Context(), tx, 257727, WithSkipPolicyChecks(true))
+	}()
+
+	// The tx was durably persisted, spent, and Locked before the panic. It was
+	// never delivered to block assembly (the panic unwound from inside
+	// sendToBlockAssembler), so it must stay Locked - exactly as it would on the
+	// ordinary sendToBlockAssembler-returns-an-error path.
+	txMeta, err := utxoStore.Get(t.Context(), tx.TxIDChainHash())
+	require.NoError(t, err)
+	require.True(t, txMeta.Locked, "a tx must stay locked when a panic unwinds before it was actually delivered to block assembly")
 }
 
 // TestValidate_ConsensusRejectsUnconfirmedParent: a tx whose parent exists in
@@ -894,20 +982,28 @@ func TestIsFinalb633531280f980108329e3e0b9335b2290892d120916f9e17a9e3033bde1260b
 
 // txFeeSize represents transaction metadata for block assembly testing.
 type txFeeSize struct {
-	txHash     *chainhash.Hash
-	fee        uint64
-	size       uint64
-	txInpoints subtree.TxInpoints
+	txHash          *chainhash.Hash
+	fee             uint64
+	size            uint64
+	txInpoints      subtree.TxInpoints
+	validatedHeight uint32
 }
 
 // MockBlockAssemblyStore provides a test double for block assembly storage operations.
 type MockBlockAssemblyStore struct {
-	returnError error
-	storedTxs   []txFeeSize
-	removedTxs  []chainhash.Hash
+	returnError  error
+	panicOnStore bool
+	storedTxs    []txFeeSize
+	removedTxs   []chainhash.Hash
 }
 
-func (s *MockBlockAssemblyStore) Store(_ context.Context, hash *chainhash.Hash, fee, size uint64, txInpoints subtree.TxInpoints) (bool, error) {
+func (s *MockBlockAssemblyStore) Store(_ context.Context, hash *chainhash.Hash, fee, size uint64, txInpoints subtree.TxInpoints, validatedHeight uint32) (bool, error) {
+	if s.panicOnStore {
+		// Simulates a nil/misconfigured block-assembly client panicking mid-delivery,
+		// e.g. inside the real gRPC client's Store() call.
+		panic("simulated panic: block assembler Store()")
+	}
+
 	if s.returnError != nil {
 		return false, s.returnError
 	}
@@ -917,10 +1013,11 @@ func (s *MockBlockAssemblyStore) Store(_ context.Context, hash *chainhash.Hash, 
 	}
 
 	s.storedTxs = append(s.storedTxs, txFeeSize{
-		txHash:     hash,
-		fee:        fee,
-		size:       size,
-		txInpoints: txInpoints,
+		txHash:          hash,
+		fee:             fee,
+		size:            size,
+		txInpoints:      txInpoints,
+		validatedHeight: validatedHeight,
 	})
 
 	return true, nil
@@ -1046,9 +1143,13 @@ func Test_getUtxoBlockHeights(t *testing.T) {
 
 		mockUtxoStore.On("GetBlockState").Return(utxostore.BlockState{Height: 1000, MedianTime: 1000000000})
 
-		mockUtxoStore.On("Get", mock.Anything, mock.Anything, mock.Anything).Return(&meta.Data{
-			BlockHeights: make([]uint32, 0),
-		}, nil)
+		// Extended transactions are re-extended from the store too
+		// (GHSA-v76m-6vc7-g7c7), so the parent read must carry outputs.
+		mockUtxoStore.On("ParentOutputsForValidation", mock.Anything, mock.Anything).Return([]utxostore.ParentOutput{
+			{Status: utxostore.ParentOutputNotMined, Satoshis: 1000000, LockingScript: bscript.NewFromBytes([]byte{0x51})},
+			{Status: utxostore.ParentOutputNotMined, Satoshis: 1000000, LockingScript: bscript.NewFromBytes([]byte{0x51})},
+			{Status: utxostore.ParentOutputNotMined, Satoshis: 1000000, LockingScript: bscript.NewFromBytes([]byte{0x51})},
+		}, nil).Once()
 
 		utxoHashes, err := v.getUtxoBlockHeightsAndExtendTx(ctx, tx, tx.TxID(), nil)
 		require.NoError(t, err)
@@ -1073,22 +1174,12 @@ func Test_getUtxoBlockHeights(t *testing.T) {
 
 		mockUtxoStore.On("GetBlockState").Return(utxostore.BlockState{Height: 1000, MedianTime: 1000000000})
 
-		mockUtxoStore.On("Get", mock.Anything, mock.MatchedBy(func(hash *chainhash.Hash) bool {
-			return hash.String() == "10031ea0997a461d4e09157c6f9d15ff09e61f73aebd9e7f821e4c77c8251afe"
-		}), mock.Anything).Return(&meta.Data{
-			BlockHeights: []uint32{125, 126},
-		}, nil).Once()
-
-		mockUtxoStore.On("Get", mock.Anything, mock.MatchedBy(func(hash *chainhash.Hash) bool {
-			return hash.String() == "9c1599ff3e2ba140c9df526fdb239db236227840093916e90244835d0780a053"
-		}), mock.Anything).Return(&meta.Data{
-			BlockHeights: []uint32{},
-		}, nil).Once()
-
-		mockUtxoStore.On("Get", mock.Anything, mock.MatchedBy(func(hash *chainhash.Hash) bool {
-			return hash.String() == "928ed84cd4c48beb0d3494ccc17cc1e06b1473f9dc118db9bb56972395ede461"
-		}), mock.Anything).Return(&meta.Data{
-			BlockHeights: []uint32{768, 769},
+		// One call for all three inputs, in input order. The parent recorded in
+		// blocks 125 and 126 resolves to its lowest height, which is 125.
+		mockUtxoStore.On("ParentOutputsForValidation", mock.Anything, mock.Anything).Return([]utxostore.ParentOutput{
+			{Status: utxostore.ParentOutputMined, Height: 125, Satoshis: 1000000, LockingScript: bscript.NewFromBytes([]byte{0x51})},
+			{Status: utxostore.ParentOutputNotMined, Satoshis: 2000000, LockingScript: bscript.NewFromBytes([]byte{0x51})},
+			{Status: utxostore.ParentOutputMined, Height: 768, Satoshis: 3000000, LockingScript: bscript.NewFromBytes([]byte{0x51})},
 		}, nil).Once()
 
 		utxoHashes, err := v.getUtxoBlockHeightsAndExtendTx(ctx, tx, tx.TxID(), nil)
@@ -1133,32 +1224,23 @@ func Test_getUtxoBlockHeights(t *testing.T) {
 
 		mockUtxoStore.On("GetBlockState").Return(utxostore.BlockState{Height: 1000, MedianTime: 1000000000})
 
-		mockUtxoStore.On("Get", mock.Anything, mock.MatchedBy(func(hash *chainhash.Hash) bool {
-			return hash.String() == "10031ea0997a461d4e09157c6f9d15ff09e61f73aebd9e7f821e4c77c8251afe"
-		}), mock.Anything).Return(&meta.Data{
-			BlockHeights: []uint32{125, 126},
-			Tx: &bt.Tx{
-				Outputs: expectedOutputs["10031ea0997a461d4e09157c6f9d15ff09e61f73aebd9e7f821e4c77c8251afe"],
-			},
-		}, nil).Once()
-
-		mockUtxoStore.On("Get", mock.Anything, mock.MatchedBy(func(hash *chainhash.Hash) bool {
-			return hash.String() == "9c1599ff3e2ba140c9df526fdb239db236227840093916e90244835d0780a053"
-		}), mock.Anything).Return(&meta.Data{
-			BlockHeights: []uint32{},
-			Tx: &bt.Tx{
-				Outputs: expectedOutputs["9c1599ff3e2ba140c9df526fdb239db236227840093916e90244835d0780a053"],
-			},
-		}, nil).Once()
-
-		mockUtxoStore.On("Get", mock.Anything, mock.MatchedBy(func(hash *chainhash.Hash) bool {
-			return hash.String() == "928ed84cd4c48beb0d3494ccc17cc1e06b1473f9dc118db9bb56972395ede461"
-		}), mock.Anything).Return(&meta.Data{
-			BlockHeights: []uint32{768, 769},
-			Tx: &bt.Tx{
-				Outputs: expectedOutputs["928ed84cd4c48beb0d3494ccc17cc1e06b1473f9dc118db9bb56972395ede461"],
-			},
-		}, nil).Once()
+		hashes := []string{
+			"10031ea0997a461d4e09157c6f9d15ff09e61f73aebd9e7f821e4c77c8251afe",
+			"9c1599ff3e2ba140c9df526fdb239db236227840093916e90244835d0780a053",
+			"928ed84cd4c48beb0d3494ccc17cc1e06b1473f9dc118db9bb56972395ede461",
+		}
+		heights := []uint32{125, 0, 768}
+		answers := make([]utxostore.ParentOutput, len(hashes))
+		for i, h := range hashes {
+			answers[i] = utxostore.ParentOutput{
+				Status:        utxostore.ParentOutputMined,
+				Height:        heights[i],
+				Satoshis:      expectedOutputs[h][0].Satoshis,
+				LockingScript: expectedOutputs[h][0].LockingScript,
+			}
+		}
+		answers[1].Status = utxostore.ParentOutputNotMined
+		mockUtxoStore.On("ParentOutputsForValidation", mock.Anything, mock.Anything).Return(answers, nil).Once()
 
 		utxoHashes, err := v.getUtxoBlockHeightsAndExtendTx(ctx, txNonExtended, txNonExtended.TxID(), nil)
 		require.NoError(t, err)
@@ -1297,6 +1379,200 @@ func TestValidator_TwoPhaseCommitTransaction_AlreadySpendable(t *testing.T) {
 	assert.False(t, metaData.Locked, "TX should remain spendable after 2-phase commit")
 }
 
+// TestValidator_UnlockLockedTxOnExit_KeepsLockOnError is the direct, white-box
+// test for the mechanism validateInternal defers immediately after a tx is
+// durably persisted+spent+Locked (see the two error returns in the
+// addToBlockAssembly block: building tx inpoints via subtree.NewTxInpointsFromTx,
+// and sendToBlockAssembler). On both paths the tx never reaches block assembly,
+// so the 2PC lock must NOT be released: an unlocked-but-undelivered parent lets a
+// child enter the mining template without it. Staying locked is the documented
+// safe failure mode, and the block assembler's unmined-transaction loader heals
+// it in the correct order (add to subtree processor, then unlock).
+//
+// subtree.NewTxInpointsFromTx cannot currently be made to return an error (its
+// implementation is infallible in the pinned go-subtree version), so that
+// specific call site cannot be forced end-to-end without changing production
+// code paths outside validateInternal's control. This test instead calls the
+// shared cleanup function directly with an already-set error, which is exactly
+// the state validateInternal is in on both of those return paths: it proves the
+// record stays locked and the original, more informative error is preserved.
+func TestValidator_UnlockLockedTxOnExit_KeepsLockOnError(t *testing.T) {
+	tracing.SetupMockTracer()
+
+	tx, err := bt.NewTxFromString("010000000000000000ef01b136c673a9b815af2bfdeccc9479deec3273ee98a188c26d3c14b5e6bfcbca0b010000006b48304502200241ac9536c536f21e522dec152e69674094b371b14c26edf706e1db0e6487190221008ee66bdafc7d39ee041e1425a7b2df780702e9b066c3a1e9715b03b23fbd99be41210373c9cb2feaa59dd208ad90dc4c8f32dac7a30a65e590fa16e2a421637927ae63feffffff4004fb0b000000001976a91471902a65346b0d951358ec9a1b306ecd36d284ae88ac0280969800000000001976a914dd37ee4ce93278fbc398abcda001d1d855841e0788ac3cd35d0b000000001976a914d04ad25d93764cf83aca0ca0c7cbb7ba8850f75888ac00000000")
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings := test.CreateBaseTestSettings(t)
+
+	utxoStoreURL, err := url.Parse("sqlitememory:///test_unlock_on_exit_clears_lock")
+	require.NoError(t, err)
+
+	utxoStore, err := sql.New(ctx, logger, tSettings, utxoStoreURL)
+	require.NoError(t, err)
+
+	// Mirrors what spendAndCreateInUtxoStore leaves behind on the addToBlockAssembly
+	// path: the tx durably persisted, spent, and Locked.
+	txMetaData, err := utxoStore.Create(ctx, tx, 100, utxostore.WithLocked(true))
+	require.NoError(t, err)
+	require.True(t, txMetaData.Locked)
+
+	v := &Validator{
+		logger:      ulogger.TestLogger{},
+		utxoStore:   utxoStore,
+		settings:    tSettings,
+		txValidator: NewTxValidator(ulogger.TestLogger{}, tSettings),
+		stats:       gocore.NewStat("validator"),
+	}
+
+	ctx, _, endSpan := tracing.Tracer("validator").Start(context.Background(), "Test")
+	defer endSpan()
+
+	// Simulate validateInternal already holding an error (e.g. the tx-inpoints or
+	// sendToBlockAssembler failure) when the deferred cleanup runs.
+	originalErr := errors.NewProcessingError("[Validate][%s] error getting tx inpoints", tx.TxID())
+	deferredErr := error(originalErr)
+	delivered := false
+	shedInBlock := false
+
+	v.unlockLockedTxOnExit(ctx, tx, tx.TxID(), txMetaData, &deferredErr, &delivered, &shedInBlock)
+
+	require.True(t, txMetaData.Locked, "an undelivered tx must stay locked, or a child can be mined without its parent")
+	require.Same(t, originalErr, deferredErr, "the original, more informative error must be preserved")
+
+	storedMeta := &meta.Data{}
+	err = utxoStore.GetMeta(ctx, tx.TxIDChainHash(), storedMeta)
+	require.NoError(t, err)
+	require.True(t, storedMeta.Locked, "the store record must stay locked until the unmined-transaction loader delivers it to block assembly")
+}
+
+// TestValidator_UnlockLockedTxOnExit_ClearsLockOnSuccess is the counterpart: when
+// validateInternal is returning success the tx has reached block assembly, so the
+// 2PC lock is released - in memory and in the store.
+func TestValidator_UnlockLockedTxOnExit_ClearsLockOnSuccess(t *testing.T) {
+	tracing.SetupMockTracer()
+
+	tx, err := bt.NewTxFromString("010000000000000000ef01b136c673a9b815af2bfdeccc9479deec3273ee98a188c26d3c14b5e6bfcbca0b010000006b48304502200241ac9536c536f21e522dec152e69674094b371b14c26edf706e1db0e6487190221008ee66bdafc7d39ee041e1425a7b2df780702e9b066c3a1e9715b03b23fbd99be41210373c9cb2feaa59dd208ad90dc4c8f32dac7a30a65e590fa16e2a421637927ae63feffffff4004fb0b000000001976a91471902a65346b0d951358ec9a1b306ecd36d284ae88ac0280969800000000001976a914dd37ee4ce93278fbc398abcda001d1d855841e0788ac3cd35d0b000000001976a914d04ad25d93764cf83aca0ca0c7cbb7ba8850f75888ac00000000")
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings := test.CreateBaseTestSettings(t)
+
+	utxoStoreURL, err := url.Parse("sqlitememory:///test_unlock_on_exit_clears_lock_on_success")
+	require.NoError(t, err)
+
+	utxoStore, err := sql.New(ctx, logger, tSettings, utxoStoreURL)
+	require.NoError(t, err)
+
+	txMetaData, err := utxoStore.Create(ctx, tx, 100, utxostore.WithLocked(true))
+	require.NoError(t, err)
+	require.True(t, txMetaData.Locked)
+
+	v := &Validator{
+		logger:      ulogger.TestLogger{},
+		utxoStore:   utxoStore,
+		settings:    tSettings,
+		txValidator: NewTxValidator(ulogger.TestLogger{}, tSettings),
+		stats:       gocore.NewStat("validator"),
+	}
+
+	ctx, _, endSpan := tracing.Tracer("validator").Start(context.Background(), "Test")
+	defer endSpan()
+
+	var deferredErr error
+
+	delivered := true
+	shedInBlock := false
+
+	v.unlockLockedTxOnExit(ctx, tx, tx.TxID(), txMetaData, &deferredErr, &delivered, &shedInBlock)
+
+	require.NoError(t, deferredErr)
+	require.False(t, txMetaData.Locked, "a delivered tx must be unlocked on the success path")
+
+	storedMeta := &meta.Data{}
+	err = utxoStore.GetMeta(ctx, tx.TxIDChainHash(), storedMeta)
+	require.NoError(t, err)
+	require.False(t, storedMeta.Locked, "the store record must be unlocked on the success path")
+}
+
+// TestValidator_UnlockLockedTxOnExit_NoopWhenNotLocked covers the case where the
+// tx was never Locked to begin with: unlockLockedTxOnExit must be a no-op
+// (SetLocked must not be called at all). This is the SkipUtxoCreation /
+// not-added-to-block-assembly case.
+func TestValidator_UnlockLockedTxOnExit_NoopWhenNotLocked(t *testing.T) {
+	tracing.SetupMockTracer()
+
+	tx, err := bt.NewTxFromString("010000000000000000ef01b136c673a9b815af2bfdeccc9479deec3273ee98a188c26d3c14b5e6bfcbca0b010000006b48304502200241ac9536c536f21e522dec152e69674094b371b14c26edf706e1db0e6487190221008ee66bdafc7d39ee041e1425a7b2df780702e9b066c3a1e9715b03b23fbd99be41210373c9cb2feaa59dd208ad90dc4c8f32dac7a30a65e590fa16e2a421637927ae63feffffff4004fb0b000000001976a91471902a65346b0d951358ec9a1b306ecd36d284ae88ac0280969800000000001976a914dd37ee4ce93278fbc398abcda001d1d855841e0788ac3cd35d0b000000001976a914d04ad25d93764cf83aca0ca0c7cbb7ba8850f75888ac00000000")
+	require.NoError(t, err)
+
+	utxoStore := NewFailingUtxoStore(t) // any SetLocked call would error here, proving it was never called
+
+	v := &Validator{
+		logger:      ulogger.TestLogger{},
+		utxoStore:   utxoStore,
+		settings:    test.CreateBaseTestSettings(t),
+		txValidator: NewTxValidator(ulogger.TestLogger{}, test.CreateBaseTestSettings(t)),
+		stats:       gocore.NewStat("validator"),
+	}
+
+	ctx, _, endSpan := tracing.Tracer("validator").Start(context.Background(), "Test")
+	defer endSpan()
+
+	txMetaData := &meta.Data{Locked: false}
+	var deferredErr error
+
+	delivered := true
+	shedInBlock := false
+
+	v.unlockLockedTxOnExit(ctx, tx, tx.TxID(), txMetaData, &deferredErr, &delivered, &shedInBlock)
+
+	require.NoError(t, deferredErr)
+}
+
+// TestValidator_UnlockLockedTxOnExit_SetsErrOnUnlockFailure covers the
+// success-path-so-far case: the tx was Locked and delivered to block assembly
+// (incoming deferred error is nil), but the unlock (SetLocked(false) via the
+// two-phase commit) itself fails. unlockLockedTxOnExit must surface that
+// failure by setting the deferred error to the unlock error, and must leave
+// the in-memory Locked flag untouched (it stays true) since the store record
+// was never actually unlocked.
+func TestValidator_UnlockLockedTxOnExit_SetsErrOnUnlockFailure(t *testing.T) {
+	initPrometheusMetrics()
+	tracing.SetupMockTracer()
+
+	tx, err := bt.NewTxFromString("010000000000000000ef01b136c673a9b815af2bfdeccc9479deec3273ee98a188c26d3c14b5e6bfcbca0b010000006b48304502200241ac9536c536f21e522dec152e69674094b371b14c26edf706e1db0e6487190221008ee66bdafc7d39ee041e1425a7b2df780702e9b066c3a1e9715b03b23fbd99be41210373c9cb2feaa59dd208ad90dc4c8f32dac7a30a65e590fa16e2a421637927ae63feffffff4004fb0b000000001976a91471902a65346b0d951358ec9a1b306ecd36d284ae88ac0280969800000000001976a914dd37ee4ce93278fbc398abcda001d1d855841e0788ac3cd35d0b000000001976a914d04ad25d93764cf83aca0ca0c7cbb7ba8850f75888ac00000000")
+	require.NoError(t, err)
+
+	utxoStore := NewFailingUtxoStore(t) // SetLocked always errors here
+	_, err = utxoStore.Create(context.Background(), tx, 100, utxostore.WithLocked(true))
+	require.NoError(t, err)
+
+	v := &Validator{
+		logger:      ulogger.TestLogger{},
+		utxoStore:   utxoStore,
+		settings:    test.CreateBaseTestSettings(t),
+		txValidator: NewTxValidator(ulogger.TestLogger{}, test.CreateBaseTestSettings(t)),
+		stats:       gocore.NewStat("validator"),
+	}
+
+	ctx, _, endSpan := tracing.Tracer("validator").Start(context.Background(), "Test")
+	defer endSpan()
+
+	txMetaData := &meta.Data{Locked: true}
+	var deferredErr error
+
+	delivered := true
+	shedInBlock := false
+
+	v.unlockLockedTxOnExit(ctx, tx, tx.TxID(), txMetaData, &deferredErr, &delivered, &shedInBlock)
+
+	require.Error(t, deferredErr, "the unlock failure must be surfaced via the deferred error")
+	require.ErrorIs(t, deferredErr, errors.ErrTxUnlockFailed)
+	require.True(t, txMetaData.Locked, "the in-memory Locked flag must not be cleared when the unlock itself fails")
+}
+
 // FailingUtxoStore provides a test double that simulates UTXO store failures.
 type FailingUtxoStore struct {
 	*sql.Store
@@ -1328,6 +1604,7 @@ func NewFailingUtxoStore(t *testing.T) *FailingUtxoStore {
 }
 
 func TestValidator_TwoPhaseCommitTransaction_SetLockedFails(t *testing.T) {
+	initPrometheusMetrics()
 	tracing.SetupMockTracer()
 
 	ctx := t.Context()
@@ -1415,6 +1692,65 @@ func TestValidator_LockedFlagChangedIfBlockAssemblyStoreSucceeds(t *testing.T) {
 	assert.False(t, metaData.Locked, "Flag should be unset after successful block assembly")
 }
 
+// TestValidator_ValidateWithOptions_ReturnsUnlockFailureError drives the real
+// ValidateWithOptions entry point end-to-end with a store whose SetLocked fails,
+// and asserts the RETURNED error reflects the unlock failure - rather than
+// invoking unlockLockedTxOnExit directly, as the other unlock tests do. This
+// exercises the named-return/defer mechanism itself (err is a named return at
+// validateInternal's signature, and the deferred call writes to it through the
+// *error argument): a test that only calls the helper directly would still pass
+// even if that plumbing were broken (e.g. the signature changed to unnamed
+// returns), which would silently swallow unlock failures on the success path.
+func TestValidator_ValidateWithOptions_ReturnsUnlockFailureError(t *testing.T) {
+	initPrometheusMetrics()
+	tracing.SetupMockTracer()
+
+	ctx := context.Background()
+
+	utxoStore := NewFailingUtxoStore(t) // SetLocked always errors here
+
+	txs := transactions.CreateTestTransactionChainWithCount(t, 3)
+
+	_, err := utxoStore.Create(
+		ctx,
+		txs[0],
+		1,
+		utxostore.WithLocked(false),
+	)
+	require.NoError(t, err)
+
+	blockAsmMock := blockassembly.NewMock()
+
+	settings := test.CreateBaseTestSettings(t)
+	settings.BlockAssembly.Disabled = false
+
+	v := &Validator{
+		logger:         ulogger.TestLogger{},
+		utxoStore:      utxoStore,
+		blockAssembler: blockAsmMock,
+		settings:       settings,
+		txValidator:    NewTxValidator(ulogger.TestLogger{}, test.CreateBaseTestSettings(t)),
+		stats:          gocore.NewStat("validator"),
+	}
+
+	blockAsmMock.On("Store", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		Return(true, nil).Times(1)
+
+	require.NoError(t, utxoStore.SetBlockHeight(2))
+	require.NoError(t, utxoStore.SetMedianBlockTime(1700000000))
+
+	opts := &Options{AddTXToBlockAssembly: true}
+
+	_, err = v.ValidateWithOptions(ctx, txs[1], 2, opts)
+	require.Error(t, err, "the unlock failure must be surfaced through the real named-return/defer path, not swallowed")
+	require.ErrorIs(t, err, errors.ErrTxUnlockFailed, "the unlock failure must be typed so callers can tell accepted-but-locked from a real failure")
+
+	metaData := &meta.Data{}
+	err = utxoStore.GetMeta(ctx, txs[1].TxIDChainHash(), metaData)
+	require.NoError(t, err)
+	require.True(t, metaData.Locked, "the tx was delivered to block assembly but the unlock itself failed, so it must stay locked in the store")
+}
+
 func TestValidator_LockedFlagNotChangedIfBlockAssemblyDidNotStoreTx(t *testing.T) {
 	tracing.SetupMockTracer()
 
@@ -1457,9 +1793,6 @@ func TestValidator_LockedFlagNotChangedIfBlockAssemblyDidNotStoreTx(t *testing.T
 		stats:          gocore.NewStat("validator"),
 	}
 
-	blockAsmMock.On("Store", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
-		Return(false, errors.New(errors.ERR_PROCESSING, "tx rejected")).Once()
-
 	opts := &Options{AddTXToBlockAssembly: true}
 
 	err = utxoStore.SetBlockHeight(2) // We need to set this for the SQL implementation
@@ -1467,13 +1800,22 @@ func TestValidator_LockedFlagNotChangedIfBlockAssemblyDidNotStoreTx(t *testing.T
 	err = utxoStore.SetMedianBlockTime(1700000000)
 	require.NoError(t, err)
 
+	// Idempotent-resubmit contract: a resubmit of an already-existing (Locked,
+	// unmined, non-conflicting) transaction returns success without re-driving
+	// the block-assembly handoff or mutating lock state. Propagation maps
+	// ErrTxExists to HTTP 200, so a resubmit must not surface as a failure for a
+	// transaction that is already durably accepted; a first-submission shed
+	// self-recovers via the in-place Kafka-ingest retry, not on resubmit. The
+	// titular invariant still holds: the tx stays Locked (its 2PC never re-ran).
 	_, err = v.ValidateWithOptions(ctx, txs[1], 2, opts)
-	require.NoError(t, err)
+	require.NoError(t, err, "an idempotent resubmit of an existing tx returns success")
+
+	blockAsmMock.AssertNotCalled(t, "Store", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 
 	metaData := &meta.Data{}
 	err = utxoStore.GetMeta(ctx, txs[1].TxIDChainHash(), metaData)
 	require.NoError(t, err)
-	assert.True(t, metaData.Locked, "Flag should be set if block assembly did not store tx")
+	assert.True(t, metaData.Locked, "Flag should remain set if block assembly did not store tx")
 }
 
 func Test_serializeTxMetaBatch(t *testing.T) {
@@ -1668,12 +2010,12 @@ func Test_serializeTxMetaBatchV2(t *testing.T) {
 		{item: &txmetaBatchItem{hash: &h2, isDelete: true}, h: 0x0102030405060708},
 	}
 
-	data := serializeTxMetaBatchV2(items)
+	data := serializeTxMetaBatchV2(items, txmetacache.BucketsCount)
 
 	assert.Equal(t, byte(0xFF), data[0], "magic byte")
 	assert.Equal(t, byte(0x02), data[1], "version byte")
-	assert.Equal(t, byte(0x00), data[2], "reserved")
-	assert.Equal(t, byte(0x00), data[3], "reserved")
+	assert.Equal(t, uint16(txmetacache.BucketsCount), binary.LittleEndian.Uint16(data[2:4]),
+		"producer BucketsCount in the header")
 	assert.Equal(t, uint32(2), binary.LittleEndian.Uint32(data[4:]), "entry count")
 
 	// Entry 1 (ADD).
@@ -1784,6 +2126,17 @@ func (f *fakeAsyncProducer) Publish(m *kafka.Message) { f.publish(m) }
 
 func (f *fakeAsyncProducer) TryPublish(m *kafka.Message) bool { f.publish(m); return true }
 
+// parentLockingScript is the P2PKH script the height-lookup fixtures below fund
+// their input from.
+var parentLockingScript = func() []byte {
+	b, err := hex.DecodeString("76a914000000000000000000000000000000000000000088ac")
+	if err != nil {
+		panic(err)
+	}
+
+	return b
+}()
+
 func TestGetUtxoBlockHeightAndExtendForParentTx_RecordedHeightFromStore(t *testing.T) {
 	ctx := context.Background()
 
@@ -1797,18 +2150,21 @@ func TestGetUtxoBlockHeightAndExtendForParentTx_RecordedHeightFromStore(t *testi
 	// Create mock UTXO store
 	mockUtxoStore := utxostore.MockUtxostore{}
 	mockUtxoStore.On("GetBlockState").Return(utxostore.BlockState{Height: 1000, MedianTime: 1000000000})
-	mockUtxoStore.On("Get", mock.Anything, mock.Anything, mock.Anything).Return(&meta.Data{
-		BlockHeights: []uint32{999},
-	}, nil)
+	mockUtxoStore.On("ParentOutputsForValidation", mock.Anything, []utxostore.Outpoint{{TxID: parentTxHash, Vout: 0}}).Return([]utxostore.ParentOutput{{
+		Status: utxostore.ParentOutputMined,
+		Height: 999,
+		// The parent read carries outputs because re-extension is unconditional
+		// (GHSA-v76m-6vc7-g7c7); this mirrors the fixture's own input.
+		Satoshis:      1000,
+		LockingScript: bscript.NewFromBytes(parentLockingScript),
+	}}, nil)
 
 	v := &Validator{
 		utxoStore: &mockUtxoStore,
 	}
 
-	utxoHeights := make([]uint32, 1)
-
 	// A parent with recorded BlockHeights resolves to its real stored height.
-	err := v.getUtxoBlockHeightAndExtendForParentTx(ctx, parentTxHash, []int{0}, utxoHeights, tx, false, nil)
+	utxoHeights, err := v.getUtxoBlockHeightsAndExtendTx(ctx, tx, tx.TxID(), nil)
 
 	require.NoError(t, err)
 	assert.Equal(t, uint32(999), utxoHeights[0])
@@ -1833,16 +2189,19 @@ func TestGetUtxoBlockHeightAndExtendForParentTx_FallbackWritesUnconfirmedSentine
 	// UTXO store returns a metadata record with empty BlockHeights — the
 	// "parent exists but not yet confirmed" case that triggers the fallback.
 	mockUtxoStore := utxostore.MockUtxostore{}
-	mockUtxoStore.On("Get", mock.Anything, mock.Anything, mock.Anything).Return(&meta.Data{
-		BlockHeights: []uint32{},
-	}, nil)
+	mockUtxoStore.On("ParentOutputsForValidation", mock.Anything, []utxostore.Outpoint{{TxID: parentTxHash, Vout: 0}}).Return([]utxostore.ParentOutput{{
+		Status: utxostore.ParentOutputNotMined,
+		// The parent read carries outputs because re-extension is unconditional
+		// (GHSA-v76m-6vc7-g7c7); this mirrors the fixture's own input.
+		Satoshis:      1000,
+		LockingScript: bscript.NewFromBytes(parentLockingScript),
+	}}, nil)
 
 	v := &Validator{
 		utxoStore: &mockUtxoStore,
 	}
 
-	utxoHeights := make([]uint32, 1)
-	err := v.getUtxoBlockHeightAndExtendForParentTx(ctx, parentTxHash, []int{0}, utxoHeights, tx, false, nil)
+	utxoHeights, err := v.getUtxoBlockHeightsAndExtendTx(ctx, tx, tx.TxID(), nil)
 	require.NoError(t, err)
 	require.Equal(t, unconfirmedParentHeight, utxoHeights[0],
 		"fallback must write the teranode-internal sentinel, not blockState.Height+1")
@@ -2257,4 +2616,673 @@ func TestReadMTPsLocked_GuardFiresOnUnpopulatedStore(t *testing.T) {
 	require.Contains(t, err.Error(), "MTP store not loaded up to height 5")
 	require.Nil(t, utxoMTPs)
 	require.Equal(t, uint32(0), blockMTP)
+}
+
+// laneShadowValidator is parentOutputsValidator at utxostore_laneMigration shadow.
+func laneShadowValidator(t *testing.T, store utxostore.Store) *Validator {
+	t.Helper()
+
+	v := parentOutputsValidator(t, store)
+	v.settings.UtxoStore.LaneMigration = settings.LaneMigrationShadow
+
+	return v
+}
+
+// The parents' lane positions come out in the order subtree.TxInpoints lists the parents, which is
+// the order the lane txmeta encoding and the store's parent_lane_positions use.
+func TestParentLanePositionsFollowTxInpointsOrder(t *testing.T) {
+	parents := []chainhash.Hash{{3}, {1}, {3}, {2}, {1}}
+	tx := parentOutputsChild(t, parents, []uint32{0, 0, 1, 0, 1})
+
+	inputLanes := []uint64{lane.Pack(3, 1), lane.Pack(1, 1), lane.Pack(3, 1), lane.Pack(2, 1), lane.Pack(1, 1)}
+
+	inpoints, err := subtree.NewTxInpointsFromTx(tx)
+	require.NoError(t, err)
+	require.Equal(t, []chainhash.Hash{{3}, {1}, {2}}, inpoints.ParentTxHashes)
+
+	require.Equal(t, []uint64{lane.Pack(3, 1), lane.Pack(1, 1), lane.Pack(2, 1)}, parentLanePositions(tx, inputLanes))
+	require.Nil(t, parentLanePositions(tx, nil), "lane positions off")
+
+	// A wide transaction takes the set, and must give the same order.
+	wide := make([]chainhash.Hash, 0, 3*parentLaneLinearMax)
+	vouts := make([]uint32, 0, cap(wide))
+	wideLanes := make([]uint64, 0, cap(wide))
+
+	for i := 0; i < cap(wide); i++ {
+		p := chainhash.Hash{byte(i % (parentLaneLinearMax + 3))}
+		wide = append(wide, p)
+		vouts = append(vouts, uint32(i)) //nolint:gosec // i is small
+		wideLanes = append(wideLanes, lane.Pack(1, uint64(p[0])+1))
+	}
+
+	wideTx := parentOutputsChild(t, wide, vouts)
+	wideInpoints, err := subtree.NewTxInpointsFromTx(wideTx)
+	require.NoError(t, err)
+
+	want := make([]uint64, len(wideInpoints.ParentTxHashes))
+	for i, p := range wideInpoints.ParentTxHashes {
+		want[i] = lane.Pack(1, uint64(p[0])+1)
+	}
+
+	require.Equal(t, want, parentLanePositions(wideTx, wideLanes))
+}
+
+// At shadow the parents' lane positions come from the one parent read the validator already makes,
+// whether the store answers it or the caller prefetched the parent.
+func TestParentLanePositionsComeFromTheParentRead(t *testing.T) {
+	ctx := context.Background()
+	base := parentOutputsStore(t)
+
+	s0 := bscript.NewFromBytes([]byte{0x76, 0xa9, 0x00})
+	first := storedParent(t, base, 1, 120, s0, s0)
+	second := storedParent(t, base, 2, 0, s0)
+
+	positions := map[chainhash.Hash]uint64{
+		*first.TxIDChainHash():  lane.Pack(7, 100),
+		*second.TxIDChainHash(): lane.Pack(8, 200),
+	}
+
+	store := &countingParentStore{Store: base}
+	store.override = func(answers []utxostore.ParentOutput) ([]utxostore.ParentOutput, error) {
+		for i := range answers {
+			answers[i].LanePosition = positions[store.outpoints[len(store.outpoints)-len(answers)+i].TxID]
+		}
+
+		return answers, nil
+	}
+
+	tx := parentOutputsChild(t, []chainhash.Hash{*second.TxIDChainHash(), *first.TxIDChainHash(), *first.TxIDChainHash()}, []uint32{0, 0, 1})
+
+	_, parentLanes, _, err := laneShadowValidator(t, store).getTransactionInputBlockHeightsAndExtendTx(ctx, tx, tx.TxID(), &Options{})
+	require.NoError(t, err)
+	require.Equal(t, []uint64{lane.Pack(8, 200), lane.Pack(7, 100)}, parentLanes)
+	require.Equal(t, 1, store.calls, "no read is added for the positions")
+
+	t.Run("prefetched", func(t *testing.T) {
+		prefetched := map[chainhash.Hash]*meta.Data{
+			*first.TxIDChainHash(): {Tx: first, BlockHeights: []uint32{120}, LanePosition: lane.Pack(9, 1)},
+		}
+
+		calls := store.calls
+
+		_, parentLanes, _, err := laneShadowValidator(t, store).getTransactionInputBlockHeightsAndExtendTx(ctx, tx, tx.TxID(),
+			&Options{PrefetchedParents: prefetched})
+		require.NoError(t, err)
+		require.Equal(t, []uint64{lane.Pack(8, 200), lane.Pack(9, 1)}, parentLanes)
+		require.Equal(t, calls+1, store.calls, "only the parent not prefetched is read")
+	})
+
+	t.Run("off", func(t *testing.T) {
+		_, parentLanes, _, err := parentOutputsValidator(t, store).getTransactionInputBlockHeightsAndExtendTx(ctx, tx, tx.TxID(), &Options{})
+		require.NoError(t, err)
+		require.Nil(t, parentLanes)
+	})
+}
+
+// At shadow the txmeta entry carries the lane positions when every one is valid, and is the legacy
+// entry otherwise, counted with its reason; off, it is always the legacy entry.
+func TestTxMetaPayloadCarriesLanePositionsAtShadow(t *testing.T) {
+	parents := []chainhash.Hash{{1}, {2}}
+	tx := parentOutputsChild(t, parents, []uint32{0, 0})
+
+	inpoints, err := subtree.NewTxInpointsFromTx(tx)
+	require.NoError(t, err)
+
+	data := func(own uint64) *meta.Data {
+		return &meta.Data{TxInpoints: inpoints, Fee: 500, SizeInBytes: 250, LanePosition: own}
+	}
+
+	legacy, err := data(lane.Pack(1, 1)).MetaBytes()
+	require.NoError(t, err)
+
+	shadow := laneShadowValidator(t, nil)
+	good := []uint64{lane.Pack(2, 1), lane.Pack(3, 1)}
+
+	t.Run("off", func(t *testing.T) {
+		b, action, err := parentOutputsValidator(t, nil).txMetaPayload(data(lane.Pack(1, 1)), good)
+		require.NoError(t, err)
+		require.Equal(t, txmetacache.WireActionADD, action)
+		require.Equal(t, legacy, b)
+	})
+
+	t.Run("every position valid", func(t *testing.T) {
+		b, action, err := shadow.txMetaPayload(data(lane.Pack(1, 1)), good)
+		require.NoError(t, err)
+		require.Equal(t, txmetacache.WireActionADDLane, action)
+
+		var back meta.Data
+		gotParents, err := meta.NewDataFromLaneMetaBytes(b, &back)
+		require.NoError(t, err)
+		require.Equal(t, lane.Pack(1, 1), back.LanePosition)
+		require.Equal(t, good, gotParents)
+	})
+
+	for _, c := range []struct {
+		name    string
+		own     uint64
+		parents []uint64
+		reason  string
+	}{
+		{"no own position", lane.None, good, txmetacache.LaneMissOwn},
+		{"one more position than parents", lane.Pack(1, 1), []uint64{lane.Pack(2, 1), lane.Pack(3, 1), lane.Pack(4, 1)}, txmetacache.LaneMissParentsNotRead},
+		{"parents not read", lane.Pack(1, 1), nil, txmetacache.LaneMissParentsNotRead},
+		{"a parent without a position", lane.Pack(1, 1), []uint64{lane.Pack(2, 1), lane.None}, txmetacache.LaneMissParent},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			require.Equal(t, c.reason, laneTxMetaMiss(data(c.own), c.parents))
+
+			b, action, err := shadow.txMetaPayload(data(c.own), c.parents)
+			require.NoError(t, err, "a miss is counted, never an error")
+
+			if c.own == lane.None {
+				require.Equal(t, txmetacache.WireActionADD, action, "with no own position the entry is MetaBytes")
+
+				want, err := data(c.own).MetaBytes()
+				require.NoError(t, err)
+				require.Equal(t, want, b)
+
+				return
+			}
+
+			// The own position still goes, after MetaBytes: the cache form subtree validation
+			// keeps for the subtree's lane bitmaps.
+			require.Equal(t, txmetacache.WireActionADDOwn, action)
+
+			want, err := data(c.own).CacheBytes()
+			require.NoError(t, err)
+			require.Equal(t, want, b)
+
+			legacyPart, own, err := meta.OwnCacheBytesView(b)
+			require.NoError(t, err)
+			require.Equal(t, c.own, own)
+			require.Equal(t, legacy, legacyPart)
+		})
+	}
+
+	t.Run("no parents", func(t *testing.T) {
+		require.Empty(t, laneTxMetaMiss(&meta.Data{LanePosition: lane.Pack(1, 1), IsCoinbase: true}, nil))
+	})
+}
+
+// A lane entry goes on the wire with the ADDLane action, in both wire formats.
+func TestSerializeTxMetaBatchMarksLaneEntries(t *testing.T) {
+	h1, h2, h3 := chainhash.Hash{1}, chainhash.Hash{2}, chainhash.Hash{3}
+	batch := []*txmetaBatchItem{
+		{hash: &h1, metaBytes: []byte("legacy")},
+		{hash: &h2, metaBytes: []byte("lane"), action: txmetacache.WireActionADDLane},
+		{hash: &h3, metaBytes: []byte("own"), action: txmetacache.WireActionADDOwn},
+	}
+
+	v1 := serializeTxMetaBatch(batch)
+	off := 4
+	require.Equal(t, txmetacache.WireActionADD, v1[off+32])
+	off += 32 + 1 + 4 + len("legacy")
+	require.Equal(t, txmetacache.WireActionADDLane, v1[off+32])
+	off += 32 + 1 + 4 + len("lane")
+	require.Equal(t, txmetacache.WireActionADDOwn, v1[off+32])
+
+	v2 := serializeTxMetaBatchV2([]txmetaItemWithHash{{item: batch[0]}, {item: batch[1]}, {item: batch[2]}}, txmetacache.BucketsCount)
+	off = txmetacache.WireV2HeaderLen
+	require.Equal(t, txmetacache.WireActionADD, v2[off+8+32])
+	off += 8 + 32 + 1 + 4 + len("legacy")
+	require.Equal(t, txmetacache.WireActionADDLane, v2[off+8+32])
+	off += 8 + 32 + 1 + 4 + len("lane")
+	require.Equal(t, txmetacache.WireActionADDOwn, v2[off+8+32])
+}
+
+// From the parent read to the record and the txmeta entry, on a real utxoset store at
+// utxostore_laneMigration shadow with the lane schema installed: the parent's position comes back
+// with the read, the create writes it beside the child's inpoints, and the child's txmeta entry
+// carries the child's own position and its parent's.
+func TestLanePositionsFlowThroughAUtxosetStore(t *testing.T) {
+	ctx := context.Background()
+
+	dsn, cleanup, err := tpostgres.SetupTestPostgresContainer()
+	if err != nil {
+		test.SkipIfContainerUnavailable(t, err)
+		t.Fatalf("postgres container unavailable: %v", err)
+	}
+
+	t.Cleanup(func() { _ = cleanup() })
+
+	u, err := url.Parse(dsn)
+	require.NoError(t, err)
+
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.UtxoStore.LaneMigration = settings.LaneMigrationShadow
+
+	first, err := utxoset.New(ctx, ulogger.TestLogger{}, tSettings, u)
+	require.NoError(t, err)
+	require.NoError(t, first.PrepareLaneSchema(ctx))
+	require.NoError(t, first.Close(ctx))
+
+	store, err := utxoset.New(ctx, ulogger.TestLogger{}, tSettings, u)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = store.Close(ctx) })
+	require.NoError(t, store.SetBlockHeight(200))
+
+	parentPosition, childPosition := lane.Pack(12, 1), lane.Pack(12, 2)
+	store.SetLanePositionSource(tests.NewScriptedLanePositions(parentPosition, childPosition))
+
+	parent := storedParent(t, store, 0x61, 0, bscript.NewFromBytes([]byte{0x76, 0xa9, 0x61}))
+	child := parentOutputsChild(t, []chainhash.Hash{*parent.TxIDChainHash()}, []uint32{0})
+
+	v := laneShadowValidator(t, store)
+
+	_, parentLanes, _, err := v.getTransactionInputBlockHeightsAndExtendTx(ctx, child, child.TxID(), &Options{})
+	require.NoError(t, err)
+	require.Equal(t, []uint64{parentPosition}, parentLanes, "the parent read gives the parent's position")
+
+	md, _, err := v.spendAndCreateInUtxoStore(ctx, child, 201, false, &Options{}, parentLanes)
+	require.NoError(t, err)
+	require.Equal(t, childPosition, md.LanePosition, "the create returns the position it wrote")
+
+	b, action, err := v.txMetaPayload(md, parentLanes)
+	require.NoError(t, err)
+	require.Equal(t, txmetacache.WireActionADDLane, action)
+
+	var back meta.Data
+	gotParents, err := meta.NewDataFromLaneMetaBytes(b, &back)
+	require.NoError(t, err)
+	require.Equal(t, childPosition, back.LanePosition)
+	require.Equal(t, []uint64{parentPosition}, gotParents)
+
+	pool, err := pgxpool.New(ctx, dsn)
+	require.NoError(t, err)
+	t.Cleanup(pool.Close)
+
+	var stored []byte
+	require.NoError(t, pool.QueryRow(ctx, `SELECT parent_lane_positions FROM tx_ident WHERE txid = $1`,
+		child.TxIDChainHash()[:]).Scan(&stored))
+	require.Equal(t, lane.AppendPositions(nil, []uint64{parentPosition}), stored, "the record keeps its parent's position")
+}
+
+func TestCreateCaller(t *testing.T) {
+	require.Equal(t, utxostore.CallerValidator, createCaller(nil))
+	require.Equal(t, utxostore.CallerValidator, createCaller(&Options{}))
+	require.Equal(t, utxostore.CallerSubtreeValidation, createCaller(&Options{InBlock: true}))
+
+	// WithCaller sets the caller and nothing else: it changes nothing about validation.
+	named := ProcessOptions(WithCaller(utxostore.CallerBlockValidation))
+	require.Equal(t, utxostore.CallerBlockValidation, named.Caller)
+
+	named.Caller = utxostore.CallerUnknown
+	require.Equal(t, ProcessOptions(), named, "WithCaller must leave every other option as it was")
+
+	// A caller the options name wins, with or without InBlock.
+	require.Equal(t, utxostore.CallerSubtreeValidation, createCaller(&Options{Caller: utxostore.CallerSubtreeValidation}))
+	require.Equal(t, utxostore.CallerBlockValidation, createCaller(&Options{Caller: utxostore.CallerBlockValidation, InBlock: true}))
+}
+
+// A validator create names its caller on the store's burned lane position counter: its own for a
+// mempool submission, subtree validation's for a request marked InBlock.
+func TestSpendAndCreateInUtxoStoreNamesItsCaller(t *testing.T) {
+	tracing.SetupMockTracer()
+
+	ctx := context.Background()
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings := test.CreateBaseTestSettings(t)
+
+	storeURL, err := url.Parse("sqlitememory:///validator_burn_caller")
+	require.NoError(t, err)
+
+	store, err := sql.New(ctx, logger, tSettings, storeURL)
+	require.NoError(t, err)
+
+	v := &Validator{logger: logger, utxoStore: store, settings: tSettings}
+
+	for _, c := range []struct {
+		name    string
+		inBlock bool
+		named   utxostore.Caller
+		caller  string
+		seed    byte
+	}{
+		{"mempool submission", false, utxostore.CallerUnknown, "validator", 0xce},
+		{"in a block or subtree", true, utxostore.CallerUnknown, "subtree_validation", 0xcf},
+		{"a peer subtree, named without InBlock", false, utxostore.CallerSubtreeValidation, "subtree_validation", 0xd9},
+		{"a named caller wins over InBlock", true, utxostore.CallerBlockValidation, "block_validation", 0xda},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			// A transaction whose parent the store does not hold: the spend fails, and the
+			// position the call took burns.
+			tx := tests.BuildMultiWorkload(t, c.seed, 1, 1).Roots[0]
+
+			store.SetLanePositionSource(tests.NewScriptedLanePositions(lane.Pack(40, 1)))
+			t.Cleanup(func() { store.SetLanePositionSource(nil) })
+
+			before := tests.ReadLaneBurns(t, "sql")
+
+			_, _, err := v.spendAndCreateInUtxoStore(ctx, tx, 940, false, &Options{InBlock: c.inBlock, Caller: c.named}, nil)
+			require.Error(t, err)
+
+			burns := tests.ReadLaneBurns(t, "sql").Since(before)
+			require.Len(t, burns, 1, "one position burned: %v", burns)
+
+			for key, n := range burns {
+				require.Equal(t, float64(1), n)
+				require.Truef(t, strings.HasSuffix(key, "/"+c.caller), "burn %q is labelled %s", key, c.caller)
+			}
+		})
+	}
+}
+
+// createCallerRecorder remembers the caller each create-only SpendAndCreate names, by transaction,
+// then forwards the call to the real store.
+type createCallerRecorder struct {
+	utxostore.Store
+
+	mu      sync.Mutex
+	callers map[chainhash.Hash][]utxostore.Caller
+}
+
+func (r *createCallerRecorder) SpendAndCreate(ctx context.Context, tx *bt.Tx, blockHeight uint32,
+	opts ...utxostore.CreateOption) (*meta.Data, []*utxostore.Spend, error) {
+	if options, err := utxostore.ParseCreateOptions(opts...); err == nil && options.CreateOnly {
+		r.mu.Lock()
+		if r.callers == nil {
+			r.callers = map[chainhash.Hash][]utxostore.Caller{}
+		}
+
+		r.callers[*tx.TxIDChainHash()] = append(r.callers[*tx.TxIDChainHash()], options.Caller)
+		r.mu.Unlock()
+	}
+
+	return r.Store.SpendAndCreate(ctx, tx, blockHeight, opts...)
+}
+
+// createOnly returns the callers the create-only calls for txid named.
+func (r *createCallerRecorder) createOnly(txid chainhash.Hash) []utxostore.Caller {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	return append([]utxostore.Caller(nil), r.callers[txid]...)
+}
+
+// laneTxMetaCounter reads one series of a teranode_lane counter from the default registry.
+func laneTxMetaCounter(t *testing.T, name string, labels map[string]string) float64 {
+	t.Helper()
+
+	families, err := prometheus.DefaultGatherer.Gather()
+	require.NoError(t, err)
+
+	for _, family := range families {
+		if family.GetName() != name {
+			continue
+		}
+
+	metrics:
+		for _, m := range family.GetMetric() {
+			got := map[string]string{}
+			for _, l := range m.GetLabel() {
+				got[l.GetName()] = l.GetValue()
+			}
+
+			for k, v := range labels {
+				if got[k] != v {
+					continue metrics
+				}
+			}
+
+			return m.GetCounter().GetValue()
+		}
+	}
+
+	return 0
+}
+
+func laneSentCount(t *testing.T, format string) float64 {
+	return laneTxMetaCounter(t, "teranode_lane_txmeta_messages_total", map[string]string{"side": "sent", "format": format})
+}
+
+func laneMissCount(t *testing.T, reason string) float64 {
+	return laneTxMetaCounter(t, "teranode_lane_txmeta_position_misses_total", map[string]string{"reason": reason})
+}
+
+// The validator counts every entry it sends at shadow, lane or legacy, with the reason for a legacy
+// one. An entry that passes the position checks but does not encode, here because its inpoints name
+// a parent twice, goes out legacy and is counted as encode_failed.
+func TestTxMetaPayloadCountsWhatItSends(t *testing.T) {
+	parents := []chainhash.Hash{{1}, {2}}
+	tx := parentOutputsChild(t, parents, []uint32{0, 0})
+
+	inpoints, err := subtree.NewTxInpointsFromTx(tx)
+	require.NoError(t, err)
+
+	shadow := laneShadowValidator(t, nil)
+	good := []uint64{lane.Pack(2, 1), lane.Pack(3, 1)}
+
+	t.Run("lane", func(t *testing.T) {
+		lanes := laneSentCount(t, "lane")
+
+		_, action, err := shadow.txMetaPayload(&meta.Data{TxInpoints: inpoints, LanePosition: lane.Pack(1, 1)}, good)
+		require.NoError(t, err)
+		require.Equal(t, txmetacache.WireActionADDLane, action)
+		require.InDelta(t, lanes+1, laneSentCount(t, "lane"), 0)
+	})
+
+	t.Run("a parent miss", func(t *testing.T) {
+		own, legacy, misses := laneSentCount(t, "own"), laneSentCount(t, "legacy"), laneMissCount(t, txmetacache.LaneMissParent)
+
+		_, action, err := shadow.txMetaPayload(&meta.Data{TxInpoints: inpoints, LanePosition: lane.Pack(1, 1)}, []uint64{lane.Pack(2, 1), lane.None})
+		require.NoError(t, err)
+		require.Equal(t, txmetacache.WireActionADDOwn, action)
+		require.InDelta(t, own+1, laneSentCount(t, "own"), 0)
+		require.InDelta(t, legacy, laneSentCount(t, "legacy"), 0)
+		require.InDelta(t, misses+1, laneMissCount(t, txmetacache.LaneMissParent), 0)
+	})
+
+	t.Run("an own entry that cannot serialize", func(t *testing.T) {
+		// Two parents and a single vout word: the inpoints cannot serialize, so neither can the
+		// own entry, and the error goes back rather than an entry with no content.
+		broken := &meta.Data{TxInpoints: subtree.NewTxInpointsFromPacked([]chainhash.Hash{{1}, {2}}, []uint32{0}), LanePosition: lane.Pack(1, 1)}
+
+		_, wantErr := broken.MetaBytes()
+		require.Error(t, wantErr, "the fixture really fails to serialize")
+
+		_, _, err := shadow.txMetaPayload(broken, nil)
+		require.Error(t, err)
+	})
+
+	t.Run("no own position", func(t *testing.T) {
+		own, legacy, misses := laneSentCount(t, "own"), laneSentCount(t, "legacy"), laneMissCount(t, txmetacache.LaneMissOwn)
+
+		_, action, err := shadow.txMetaPayload(&meta.Data{TxInpoints: inpoints}, good)
+		require.NoError(t, err)
+		require.Equal(t, txmetacache.WireActionADD, action)
+		require.InDelta(t, own, laneSentCount(t, "own"), 0)
+		require.InDelta(t, legacy+1, laneSentCount(t, "legacy"), 0)
+		require.InDelta(t, misses+1, laneMissCount(t, txmetacache.LaneMissOwn), 0)
+	})
+
+	t.Run("an encode failure", func(t *testing.T) {
+		twice := subtree.NewTxInpointsFromPacked([]chainhash.Hash{{1}, {1}}, []uint32{1, 0, 1, 1})
+		data := &meta.Data{TxInpoints: twice, Fee: 500, SizeInBytes: 250, LanePosition: lane.Pack(1, 1)}
+		require.Empty(t, laneTxMetaMiss(data, good), "the position checks pass")
+
+		own, misses := laneSentCount(t, "own"), laneMissCount(t, txmetacache.LaneMissEncode)
+
+		b, action, err := shadow.txMetaPayload(data, good)
+		require.NoError(t, err, "a miss is counted, never an error")
+		require.Equal(t, txmetacache.WireActionADDOwn, action, "the own position still goes")
+
+		want, err := data.CacheBytes()
+		require.NoError(t, err)
+		require.Equal(t, want, b)
+		require.InDelta(t, own+1, laneSentCount(t, "own"), 0)
+		require.InDelta(t, misses+1, laneMissCount(t, txmetacache.LaneMissEncode), 0)
+	})
+}
+
+// laneCaptureStore gives each parent read a lane position per parent, keeps the options of the
+// create, and gives the created record its own position, so a test can follow the positions through
+// Validate without a lane position source.
+type laneCaptureStore struct {
+	utxostore.Store
+
+	parentPositions map[chainhash.Hash]uint64
+	own             uint64
+	created         *utxostore.CreateOptions
+}
+
+func (s *laneCaptureStore) ParentOutputsForValidation(ctx context.Context, outpoints []utxostore.Outpoint, opts ...utxostore.ParentOutputOption) ([]utxostore.ParentOutput, error) {
+	answers, err := s.Store.ParentOutputsForValidation(ctx, outpoints, opts...)
+	if err != nil {
+		return nil, err
+	}
+
+	for i := range answers {
+		answers[i].LanePosition = s.parentPositions[outpoints[i].TxID]
+	}
+
+	return answers, nil
+}
+
+func (s *laneCaptureStore) SpendAndCreate(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...utxostore.CreateOption) (*meta.Data, []*utxostore.Spend, error) {
+	created, err := utxostore.ParseCreateOptions(opts...)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	s.created = created
+
+	md, spends, err := s.Store.SpendAndCreate(ctx, tx, blockHeight, opts...)
+	if md != nil {
+		md.LanePosition = s.own
+	}
+
+	return md, spends, err
+}
+
+// laneEntry reads the one entry of a v1 txmeta message: its action and its content.
+func laneEntry(t *testing.T, value []byte) (byte, []byte) {
+	t.Helper()
+
+	require.Equal(t, uint32(1), binary.LittleEndian.Uint32(value))
+
+	off := 4 + 32
+	action := value[off]
+	off++
+
+	n := int(binary.LittleEndian.Uint32(value[off:]))
+	off += 4
+	require.Len(t, value, off+n)
+
+	return action, value[off:]
+}
+
+// Through Validate at shadow, the parents' positions the parent read returned go to the create and
+// into the published txmeta entry, which carries the ADDLane action and the child's and parent's
+// positions, on the direct publish and through the batcher. A record without its own position goes
+// out as a plain ADD entry holding MetaBytes, on both paths.
+func TestValidateCarriesLanePositionsToTheCreateAndTheTxMeta(t *testing.T) {
+	tracing.SetupMockTracer()
+	initPrometheusMetrics()
+
+	ctx := context.Background()
+	base := parentOutputsStore(t)
+
+	s0 := bscript.NewFromBytes([]byte{0x76, 0xa9, 0x00})
+	parent := storedParent(t, base, 0x71, 150, s0, s0, s0, s0)
+	parentPosition := lane.Pack(14, 1)
+
+	store := &laneCaptureStore{Store: base, parentPositions: map[chainhash.Hash]uint64{*parent.TxIDChainHash(): parentPosition}}
+
+	validate := func(t *testing.T, v *Validator, vout uint32, own uint64) {
+		t.Helper()
+
+		store.own = own
+
+		child := parentOutputsChild(t, []chainhash.Hash{*parent.TxIDChainHash()}, []uint32{vout})
+		_, err := v.Validate(ctx, child, 201, WithSkipPolicyChecks(true), WithSkipScriptValidation(true), WithAddTXToBlockAssembly(false))
+		require.NoError(t, err)
+
+		require.NotNil(t, store.created)
+		require.Equal(t, []uint64{parentPosition}, store.created.ParentLanePositions, "the create gets the parent's position")
+	}
+
+	newValidator := func(t *testing.T) *Validator {
+		v := laneShadowValidator(t, store)
+		v.logger = ulogger.TestLogger{}
+		v.txValidator = NewTxValidator(ulogger.TestLogger{}, v.settings)
+		v.stats = gocore.NewStat("validator")
+
+		return v
+	}
+
+	// checkEntry checks one published entry: ADDLane with the child's and parent's positions when
+	// the child has its own position, a plain ADD holding MetaBytes when it has none.
+	checkEntry := func(t *testing.T, action byte, content []byte, own uint64) {
+		t.Helper()
+
+		if own == lane.None {
+			require.Equal(t, txmetacache.WireActionADD, action, "an entry without positions is a plain ADD")
+
+			var back meta.Data
+			require.NoError(t, meta.NewMetaDataFromBytes(content, &back), "and holds MetaBytes")
+
+			return
+		}
+
+		require.Equal(t, txmetacache.WireActionADDLane, action)
+
+		var back meta.Data
+		gotParents, err := meta.NewDataFromLaneMetaBytes(content, &back)
+		require.NoError(t, err)
+		require.Equal(t, own, back.LanePosition)
+		require.Equal(t, []uint64{parentPosition}, gotParents)
+	}
+
+	for _, tc := range []struct {
+		name string
+		vout uint32
+		own  uint64
+	}{
+		{name: "lane entry", vout: 0, own: lane.Pack(14, 2)},
+		{name: "plain entry", vout: 1, own: lane.None},
+	} {
+		t.Run("direct publish: "+tc.name, func(t *testing.T) {
+			producer := kafka.NewKafkaAsyncProducerMock()
+
+			v := newValidator(t)
+			v.txmetaKafkaProducerClient = producer
+
+			validate(t, v, tc.vout, tc.own)
+
+			require.Len(t, producer.PublishChannel(), 1)
+			msg := <-producer.PublishChannel()
+
+			action, content := laneEntry(t, msg.Value)
+			checkEntry(t, action, content, tc.own)
+		})
+
+		t.Run("batcher: "+tc.name, func(t *testing.T) {
+			var (
+				mu    sync.Mutex
+				items []*txmetaBatchItem
+			)
+
+			v := newValidator(t)
+			v.txmetaKafkaProducerClient = kafka.NewKafkaAsyncProducerMock()
+			v.txmetaKafkaBatcher = batcher.New[txmetaBatchItem](1, 10*time.Millisecond, func(batch []*txmetaBatchItem) {
+				mu.Lock()
+				items = append(items, batch...)
+				mu.Unlock()
+			}, true)
+
+			validate(t, v, tc.vout+2, tc.own)
+
+			require.Eventually(t, func() bool {
+				mu.Lock()
+				defer mu.Unlock()
+
+				return len(items) == 1
+			}, 2*time.Second, 10*time.Millisecond)
+
+			mu.Lock()
+			defer mu.Unlock()
+
+			checkEntry(t, items[0].wireAction(), items[0].metaBytes, tc.own)
+		})
+	}
 }

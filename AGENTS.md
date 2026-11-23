@@ -18,6 +18,7 @@ make test           # Unit tests (no integration)
 make smoketest      # E2E smoke tests
 make sequentialtest # Order-dependent tests
 make testall        # Everything
+make fuzz           # Fuzz the parsers locally (FUZZTIME=30s default)
 make lint           # Changed files vs main
 make dev            # Dev mode with dashboard
 make gen            # Regenerate protobuf Go code
@@ -57,6 +58,20 @@ git fetch upstream && git rebase upstream/main && git push origin <branch>
 - **NEVER auto-resolve merge conflicts** — show the conflicting files and wait for
   approval on the resolution strategy.
 
+## Reviewing a Team PR
+
+Full process: [`docs/references/reviewProcess.md`](docs/references/reviewProcess.md). Agent steps: the `review-fix-forward` skill in `.claude/skills/`.
+
+- P0: request changes. The assignee fixes it. Never fix a P0 yourself.
+- P1–P3: finish the review first. Then fix them in separate `review-fix:` commits.
+- Before fixing, read the PR comments for an open `Fixing review findings:` claim. If one is open, do not push fixes.
+- If no claim is open, post a claim comment before the first fix.
+- Push to the PR branch only when the user asks in this session. Fast-forward only.
+- Fix only what the review found. Never rebase, force-push, or resolve conflicts.
+- Post one hand-back comment: findings, fixing commits, open items, questions.
+- In that comment, advise the assignee whether each existing approver should re-review. Criteria are in the process file. Do not ask the approver yourself.
+- The assignee still owns the PR. The other reviewer approves the final head commit.
+
 ## Go Conventions
 
 - No `Get` prefix on getters: `Name()`, not `GetName()`.
@@ -72,8 +87,24 @@ git fetch upstream && git rebase upstream/main && git push origin <branch>
 - Use TestContainers for integration tests needing external services (Aerospike,
   PostgreSQL).
 
+Test file layout:
+
+- `foo.go` is tested in `foo_test.go`. Before writing a test, find the existing
+  test file for the code under test and add to it.
+- A second test file for the same code is allowed only when its name states the
+  behaviour it covers (`create_arena_test.go`). Never name a file by how it was
+  written: no `_additional`, `_coverage`, `_extra`, `_more`, `_new` or numeric
+  suffixes.
+- Keep unit tests in the same directory as the code; don't move them to a
+  separate tree. The top-level `test/` tree holds the e2e, multi-node,
+  consensus-vector, long-running, sequential, chaos and soak suites.
+- Search production code first and open tests only when needed. Most hits for a
+  common identifier are in tests: `git grep <name> -- ':!*_test.go'`.
+
 Test tags: `testtxmetacache` (small cache for testing), `largetxmetacache`
-(production cache size), `aerospike` (tests requiring Aerospike).
+(production cache size), `aerospike` (gates one native-ops integration test; the
+Aerospike store itself is always compiled and its container-backed tests run untagged,
+skipping when Docker is unavailable — reconciliation notes section 72).
 
 ```bash
 make smoketest TEST_RETRY_COUNT=3                       # retry (smoke/sequential only)
@@ -129,6 +160,22 @@ npm test && npm run lint && npm run check && npm run build
   instead of burying them.
 - Self-review before reporting (logic, edge cases, races, security, side effects),
   and report concretely: what changed, what was run and its result, residual risk.
+- A breaking change gets a `## Breaking` section in the PR description, and the `breaking`
+  label if it exists. The release skill collects these sections into the release notes.
+  Breaking means an operator or integrator must act before or during
+  the upgrade, or something that worked stops working without their action: a removed,
+  renamed or newly required setting, a change to what an existing setting does, or a
+  startup failure on previously valid config; access a deployment didn't need before
+  (credentials, Kafka ACLs); a wire, proto, gRPC or HTTP API incompatibility for
+  external clients, error and status codes included; a consensus change, or any other
+  upgrade-order or no-downgrade constraint, between services that can be upgraded
+  separately too; a removed, renamed or redefined metric or label value; a store or
+  interface change that breaks out-of-tree implementations. A bug fix that does any of
+  these still counts. No section for other bug fixes (even observable ones), new
+  limits or defaults that don't break sane existing use, internal behaviour changes, log
+  changes, error-message wording or performance changes. Section: 1–3 lines saying what
+  changed, who is affected and what to do. Detail goes in the rest of the PR. Do not
+  edit a shared file for this: the repo has no `CHANGELOG.md`.
 
 ## Security Rules
 
@@ -140,17 +187,7 @@ npm test && npm run lint && npm run check && npm run build
 
 ## Specialized Agents
 
-Domain-specific agents in `.claude/agents/`, invoked via the Agent tool:
-
-- **bitcoin-expert** — BSV protocol, consensus, cryptography, BSV-specific features
-- **test-writer-fixer** — writes/fixes tests after code changes
-- **api-tester** — API load testing and contract validation
-- **backend-architect** — system design and architecture decisions
-- **document-reviewer** — documentation quality and accuracy
-
-Vendored from [VoltAgent/awesome-claude-code-subagents](https://github.com/VoltAgent/awesome-claude-code-subagents):
-**golang-pro** (concurrency, perf, idiomatic Go), **code-reviewer** (language-agnostic
-review), **security-auditor** (consensus/UTXO/crypto), **qa-expert** (coverage,
-race/fuzz, CI gates), **performance-engineer** (hot-path, locks, throughput),
-**typescript-pro**, **frontend-developer** (`ui/dashboard` Svelte), **security-engineer**
-(infra/CI/supply-chain), **penetration-tester** (DoS vectors, panic chains).
+Domain-specific agents live in `.claude/agents/`, one Markdown file per agent, each
+with its own description. Claude Code loads them automatically — read the directory
+for the current roster rather than a list duplicated here. Some are vendored from
+[VoltAgent/awesome-claude-code-subagents](https://github.com/VoltAgent/awesome-claude-code-subagents).
