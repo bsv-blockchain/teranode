@@ -124,6 +124,9 @@ func (o *ownLaneBitmaps) expect(root chainhash.Hash) {
 	}
 
 	o.pending[root] = struct{}{}
+
+	// a waiter that counted this subtree before its storage began counts it again
+	o.broadcastLocked()
 }
 
 // settle marks the storage of subtree root as finished, kept or not, so nothing waits for it.
@@ -163,23 +166,7 @@ func (o *ownLaneBitmaps) waitFor(ctx context.Context, roots []*chainhash.Hash, w
 
 	for {
 		o.mu.Lock()
-
-		bitmaps = make([]lane.LaneBitmaps, len(roots))
-		absent, timedOut = 0, 0
-
-		for i, root := range roots {
-			kept, ok := o.bySubtree[*root]
-			if ok {
-				bitmaps[i] = kept.lanes
-				continue
-			}
-
-			if _, storing := o.pending[*root]; storing {
-				timedOut++
-			} else {
-				absent++
-			}
-		}
+		bitmaps, absent, timedOut = o.lookupLocked(roots)
 
 		if absent+timedOut == 0 {
 			o.mu.Unlock()
@@ -191,12 +178,41 @@ func (o *ownLaneBitmaps) waitFor(ctx context.Context, roots []*chainhash.Hash, w
 
 		select {
 		case <-changed:
+			continue
 		case <-timer.C:
-			return bitmaps, absent, timedOut
 		case <-ctx.Done():
-			return bitmaps, absent, timedOut
+		}
+
+		// Count once more as the wait ends: bitmaps kept, or a storage begun, as the timer fired
+		// count as they now stand.
+		o.mu.Lock()
+		bitmaps, absent, timedOut = o.lookupLocked(roots)
+		o.mu.Unlock()
+
+		return bitmaps, absent, timedOut
+	}
+}
+
+// lookupLocked returns the kept bitmaps of each subtree in roots, in order, and how many have none:
+// timedOut for one still being stored, absent for one no storage is running for. The caller holds
+// o.mu.
+func (o *ownLaneBitmaps) lookupLocked(roots []*chainhash.Hash) (bitmaps []lane.LaneBitmaps, absent, timedOut int) {
+	bitmaps = make([]lane.LaneBitmaps, len(roots))
+
+	for i, root := range roots {
+		if kept, ok := o.bySubtree[*root]; ok {
+			bitmaps[i] = kept.lanes
+			continue
+		}
+
+		if _, storing := o.pending[*root]; storing {
+			timedOut++
+		} else {
+			absent++
 		}
 	}
+
+	return bitmaps, absent, timedOut
 }
 
 // get returns the kept bitmaps of each subtree in roots, in order, and how many of them have

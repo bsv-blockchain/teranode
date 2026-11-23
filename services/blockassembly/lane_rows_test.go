@@ -719,3 +719,23 @@ func bitmapOfPositions(positions ...uint64) *roaring64.Bitmap {
 func laneTestHeader() *model.BlockHeader {
 	return &model.BlockHeader{HashPrevBlock: &chainhash.Hash{}, HashMerkleRoot: &chainhash.Hash{}}
 }
+
+// TestOwnLaneBitmapsWaitCountsAgainAsItEnds: a subtree whose storage began during the wait counts
+// as timed out when the wait ends, not as absent.
+func TestOwnLaneBitmapsWaitCountsAgainAsItEnds(t *testing.T) {
+	root := chainhash.HashH([]byte("lane-wait-recount"))
+	roots := []*chainhash.Hash{&root}
+
+	t.Run("storage begins during the wait", func(t *testing.T) {
+		var kept ownLaneBitmaps
+
+		go func() {
+			time.Sleep(20 * time.Millisecond)
+			kept.expect(root)
+		}()
+
+		_, absent, timedOut := kept.waitFor(t.Context(), roots, 100*time.Millisecond)
+		require.Zero(t, absent)
+		require.Equal(t, 1, timedOut)
+	})
+}

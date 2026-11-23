@@ -1096,9 +1096,10 @@ func (ba *BlockAssembly) storeSubtreeData(ctx context.Context, subtreeRequest su
 	// laneBitmapsDone is closed once the write of the subtree's lane bitmaps has finished or failed.
 	// The subtree file waits for it, as subtree validation's does, so a subtree file is never
 	// written before its lane bitmaps are. A failed encode or write is logged and the subtree is
-	// still stored, as subtree validation does at shadow, so a stored subtree can lack the file,
-	// and a block that lists it then counts its bitmaps as missing. Without lanes it is closed now
-	// and nothing waits.
+	// still stored, as subtree validation does at shadow, so a stored subtree can lack the file. A
+	// peer's block that lists it then counts its bitmaps as missing; a block this node mines still
+	// uses the bitmaps kept in memory before the write. Without lanes it is closed now and nothing
+	// waits.
 	laneBitmapsDone := make(chan struct{})
 	if !lanes {
 		close(laneBitmapsDone)
