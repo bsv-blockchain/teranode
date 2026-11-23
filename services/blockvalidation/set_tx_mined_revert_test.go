@@ -3,10 +3,14 @@ package blockvalidation
 import (
 	"bytes"
 	"context"
+	"io"
 	"net/url"
 	"os"
+	"reflect"
+	"strings"
 	"testing"
 	"time"
+	"unsafe"
 
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/bscript"
@@ -677,4 +681,280 @@ func (c *headerFailingClient) GetBlockHeader(_ context.Context, _ *chainhash.Has
 	}
 
 	return nil, nil, errors.NewServiceError("headerFailingClient: GetBlockHeader called with fail=false")
+}
+
+// injectedSubtreeCloseErr is the error a failingCloser reports.
+const injectedSubtreeCloseErr = "injected subtree close failure"
+
+// failingCloser stands in for a subtree's mmap closer whose Close fails, which is
+// the only way Block.ReleaseSubtreeNodes returns an error. A real munmap failure
+// cannot be provoked portably, so the wrapper runs the real Close (the mapping and
+// its backing file are still released, nothing leaks) and then reports an
+// injected error.
+type failingCloser struct {
+	inner io.Closer
+	calls int
+}
+
+func (c *failingCloser) Close() error {
+	c.calls++
+
+	if c.inner != nil {
+		_ = c.inner.Close()
+	}
+
+	return errors.NewProcessingError(injectedSubtreeCloseErr)
+}
+
+// injectFailingCloser swaps the unexported closer of an mmap-backed subtree for a
+// failingCloser wrapping it. go-subtree exposes no hook for this; the require
+// checks make a go-subtree change to that field fail here, loudly, instead of
+// silently testing nothing.
+func injectFailingCloser(t *testing.T, st *subtreepkg.Subtree) *failingCloser {
+	t.Helper()
+
+	require.True(t, st.IsMmapBacked(), "precondition: only an mmap-backed subtree has a closer to wrap")
+
+	rv := reflect.ValueOf(st).Elem().FieldByName("closer")
+	require.True(t, rv.IsValid(), "go-subtree's Subtree has no closer field any more; update injectFailingCloser")
+	require.Equal(t, reflect.TypeOf((*io.Closer)(nil)).Elem(), rv.Type(), "go-subtree's Subtree.closer is no longer an io.Closer")
+
+	field := reflect.NewAt(rv.Type(), unsafe.Pointer(rv.UnsafeAddr())).Elem()
+	inner, ok := field.Interface().(io.Closer)
+	require.True(t, ok && inner != nil, "precondition: the mmap-backed subtree has a closer")
+
+	fc := &failingCloser{inner: inner}
+	field.Set(reflect.ValueOf(fc))
+
+	return fc
+}
+
+// warningsContaining returns the logged warnings that contain substr.
+func warningsContaining(logger *warnCaptureLogger, substr string) []string {
+	var out []string
+
+	for _, w := range logger.warned() {
+		if strings.Contains(w, substr) {
+			out = append(out, w)
+		}
+	}
+
+	return out
+}
+
+// TestSetTxMinedStatus_DeferredReleaseLogsCloseFailure covers the warning in the
+// deferred release setTxMinedStatus registers as soon as it owns the block. A
+// cached block whose mmap-backed subtree fails to close, and whose GetBlockHeader
+// fetch fails, leaves that defer as the only release. The close failure must be
+// logged, naming the block and the cause, and must not replace the error the
+// call returns.
+func TestSetTxMinedStatus_DeferredReleaseLogsCloseFailure(t *testing.T) {
+	initPrometheusMetrics()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	logger := &warnCaptureLogger{Logger: ulogger.TestLogger{}}
+	tSettings := test.CreateBaseTestSettings(t)
+
+	subtree, err := subtreepkg.NewTreeByLeafCount(2)
+	require.NoError(t, err)
+	require.NoError(t, subtree.AddCoinbaseNode())
+
+	var txHash chainhash.Hash
+	txHash[0] = 0x22
+	require.NoError(t, subtree.AddNode(txHash, 100, 0))
+
+	subtreeBytes, err := subtree.Serialize()
+	require.NoError(t, err)
+
+	mmapDir := t.TempDir()
+	mmapSubtree, err := subtreepkg.NewSubtreeFromReaderMmap(bytes.NewReader(subtreeBytes), mmapDir)
+	require.NoError(t, err)
+
+	closer := injectFailingCloser(t, mmapSubtree)
+
+	coinbaseTx := coinbaseAtHeight(t, 1)
+	hdr := minedBIP34Header(t, 4, tSettings.ChainCfgParams.GenesisHash, subtree.RootHash())
+
+	block, err := model.NewBlock(hdr, coinbaseTx, []*chainhash.Hash{subtree.RootHash()},
+		uint64(subtree.Length()), uint64(coinbaseTx.Size()), 1, 0) //nolint:gosec
+	require.NoError(t, err)
+	block.ReplaceSubtreeSlices([]*subtreepkg.Subtree{mmapSubtree})
+
+	failing := &headerFailingClient{fail: true}
+
+	bv := &BlockValidation{
+		logger:              logger,
+		settings:            tSettings,
+		blockchainClient:    failing,
+		mmapDir:             mmapDir,
+		lastValidatedBlocks: expiringmap.New[chainhash.Hash, *model.Block](2 * time.Minute),
+		blockExistsCache:    expiringmap.New[chainhash.Hash, bool](120 * time.Minute),
+		subtreeExistsCache:  expiringmap.New[chainhash.Hash, bool](10 * time.Minute),
+		stats:               gocore.NewStat("blockvalidation"),
+	}
+	defer bv.StopCaches()
+
+	bv.lastValidatedBlocks.Set(*block.Hash(), block)
+	require.True(t, bv.hasValidSubtrees(block), "precondition: the cached block has its mmap subtree loaded")
+
+	err = bv.setTxMinedStatus(ctx, block.Hash())
+	require.Positive(t, failing.headerCalls, "precondition: GetBlockHeader was reached")
+	require.Error(t, err)
+	require.ErrorContains(t, err, "failed to get block header from blockchain", "the GetBlockHeader failure is what the call returns")
+	require.NotContains(t, err.Error(), injectedSubtreeCloseErr, "a release failure is logged, never returned")
+
+	require.Equal(t, 1, closer.calls, "the deferred release closed the owned subtree exactly once")
+	require.Nil(t, block.SubtreeSlices[0], "the entry is dropped even though its Close failed")
+
+	warns := warningsContaining(logger, "failed releasing subtrees: ")
+	require.Len(t, warns, 1, "the deferred release must log its close failure once; warnings: %q", logger.warned())
+	require.Contains(t, warns[0], block.Hash().String(), "the warning names the block")
+	require.Contains(t, warns[0], injectedSubtreeCloseErr, "the warning carries the close error")
+}
+
+// TestSetTxMinedStatus_SuccessPathLogsReleaseFailureBeforeSettingMinedSet covers
+// the warning of the explicit release on the success path, the one that runs
+// before SetBlockMinedSet. A close failure there is logged and the run still
+// succeeds and publishes mined_set. The explicit release nils the entry despite
+// the failure, so the deferred release finds nothing left and logs nothing: the
+// subtree is closed once, and only this warning is emitted.
+func TestSetTxMinedStatus_SuccessPathLogsReleaseFailureBeforeSettingMinedSet(t *testing.T) {
+	initPrometheusMetrics()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	logger := &warnCaptureLogger{Logger: ulogger.TestLogger{}}
+	tSettings := test.CreateBaseTestSettings(t)
+
+	blockChainStore, err := blockchain_store.NewStore(logger, &url.URL{Scheme: "sqlitememory"}, tSettings)
+	require.NoError(t, err)
+
+	blockchainClient, err := blockchain.NewLocalClient(logger, tSettings, blockChainStore, nil, nil)
+	require.NoError(t, err)
+
+	utxoStoreURL, err := url.Parse("sqlitememory:///gap2029closefail")
+	require.NoError(t, err)
+
+	utxoStore, err := sql.New(ctx, logger, tSettings, utxoStoreURL)
+	require.NoError(t, err)
+
+	subtreeStore := blobmemory.New()
+	txStore := blobmemory.New()
+
+	subtreeValidationClient := &subtreevalidation.MockSubtreeValidation{}
+	subtreeValidationClient.On("CheckBlockSubtrees", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
+
+	privateKey, err := bec.NewPrivateKey()
+	require.NoError(t, err)
+	address, err := bscript.NewAddressFromPublicKey(privateKey.PubKey(), true)
+	require.NoError(t, err)
+
+	fundingTx := bt.NewTx()
+	require.NoError(t, fundingTx.From("0000000000000000000000000000000000000000000000000000000000000000", 0xffffffff, "", 0))
+	fundingTx.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{0x03, 0x64, 0x00, 0x00, 0x00, '/', 'F', 'u', 'n', 'd'})
+	require.NoError(t, fundingTx.AddP2PKHOutputFromAddress(address.AddressString, 50*100000000))
+
+	txT := bt.NewTx()
+	require.NoError(t, txT.FromUTXOs(&bt.UTXO{
+		TxIDHash:      fundingTx.TxIDChainHash(),
+		Vout:          0,
+		LockingScript: fundingTx.Outputs[0].LockingScript,
+		Satoshis:      fundingTx.Outputs[0].Satoshis,
+	}))
+	require.NoError(t, txT.AddP2PKHOutputFromAddress(address.AddressString, 49*100000000))
+	require.NoError(t, txT.FillAllInputs(ctx, &unlocker.Getter{PrivateKey: privateKey}))
+
+	_, _, err = utxoStore.SpendAndCreate(ctx, fundingTx, 0, utxostore.WithMinedBlockInfo(utxostore.MinedBlockInfo{BlockID: 0, BlockHeight: 0}), utxostore.WithCreateOnly())
+	require.NoError(t, err)
+
+	_, _, err = utxoStore.SpendAndCreate(ctx, txT, 0, utxostore.WithCreateOnly())
+	require.NoError(t, err)
+
+	subtree, err := subtreepkg.NewTreeByLeafCount(2)
+	require.NoError(t, err)
+	require.NoError(t, subtree.AddCoinbaseNode())
+	require.NoError(t, subtree.AddNode(*txT.TxIDChainHash(), uint64(txT.Size()), 0)) //nolint:gosec
+
+	subtreeMeta := subtreepkg.NewSubtreeMeta(subtree)
+	require.NoError(t, subtreeMeta.SetTxInpointsFromTx(txT))
+
+	subtreeBytes, err := subtree.Serialize()
+	require.NoError(t, err)
+	require.NoError(t, subtreeStore.Set(ctx, subtree.RootHash()[:], fileformat.FileTypeSubtree, subtreeBytes))
+
+	subtreeMetaBytes, err := subtreeMeta.Serialize()
+	require.NoError(t, err)
+	require.NoError(t, subtreeStore.Set(ctx, subtree.RootHash()[:], fileformat.FileTypeSubtreeMeta, subtreeMetaBytes))
+
+	const blockHeight = uint32(1)
+
+	coinbaseTx := coinbaseAtHeight(t, blockHeight)
+
+	replicated := subtree.Duplicate()
+	replicated.ReplaceRootNode(coinbaseTx.TxIDChainHash(), 0, uint64(coinbaseTx.Size())) //nolint:gosec
+
+	hdr := minedBIP34Header(t, 4, tSettings.ChainCfgParams.GenesisHash, replicated.RootHash())
+
+	block, err := model.NewBlock(hdr, coinbaseTx, []*chainhash.Hash{subtree.RootHash()},
+		uint64(subtree.Length()), uint64(coinbaseTx.Size()+txT.Size()), blockHeight, 0) //nolint:gosec
+	require.NoError(t, err)
+
+	require.NoError(t, blockchainClient.SetBlockMinedSet(ctx, tSettings.ChainCfgParams.GenesisHash, 0))
+
+	mmapDir := t.TempDir()
+
+	bv := &BlockValidation{
+		logger:                        logger,
+		settings:                      tSettings,
+		blockchainClient:              blockchainClient,
+		subtreeStore:                  subtreeStore,
+		txStore:                       txStore,
+		utxoStore:                     utxoStore,
+		subtreeValidationClient:       subtreeValidationClient,
+		mmapDir:                       mmapDir,
+		lastValidatedBlocks:           expiringmap.New[chainhash.Hash, *model.Block](2 * time.Minute),
+		blockExistsCache:              expiringmap.New[chainhash.Hash, bool](120 * time.Minute),
+		subtreeExistsCache:            expiringmap.New[chainhash.Hash, bool](10 * time.Minute),
+		blockHashesCurrentlyValidated: txmap.NewSwissMap(0),
+		blocksCurrentlyValidating:     txmap.NewSyncedMap[chainhash.Hash, *validationResult](),
+		setMinedChan:                  make(chan *chainhash.Hash, 1),
+		revalidateBlockChan:           make(chan revalidateBlockData, 1),
+		stats:                         gocore.NewStat("blockvalidation"),
+	}
+	defer bv.StopCaches()
+
+	// Validate and store the block; this caches it in lastValidatedBlocks with its subtrees loaded.
+	require.NoError(t, bv.ValidateBlock(ctx, block, "test"))
+
+	// Swap the cached block's subtree for an mmap-backed one, as in
+	// TestSetTxMinedStatus_ReleasesMmapSubtreesBeforeSettingMinedSet, and make its
+	// Close fail.
+	cached, ok := bv.lastValidatedBlocks.Get(*block.Hash())
+	require.True(t, ok, "precondition: the validated block is cached")
+
+	mmapSubtree, err := subtreepkg.NewSubtreeFromReaderMmap(bytes.NewReader(subtreeBytes), mmapDir)
+	require.NoError(t, err)
+
+	closer := injectFailingCloser(t, mmapSubtree)
+	cached.ReplaceSubtreeSlices([]*subtreepkg.Subtree{mmapSubtree})
+
+	require.NoError(t, bv.setTxMinedStatus(ctx, block.Hash()), "a release failure is logged, never returned")
+
+	_, meta, err := blockchainClient.GetBlockHeader(ctx, block.Hash())
+	require.NoError(t, err)
+	require.True(t, meta.MinedSet, "mined_set is still published after the release failure")
+
+	require.Equal(t, 1, closer.calls, "the subtree is closed once, by the explicit release; the deferred one finds the entry gone")
+	require.Nil(t, cached.SubtreeSlices[0], "the entry is dropped even though its Close failed")
+
+	warns := warningsContaining(logger, "failed releasing subtrees after setting mined: ")
+	require.Len(t, warns, 1, "the explicit release must log its close failure once; warnings: %q", logger.warned())
+	require.Contains(t, warns[0], block.Hash().String(), "the warning names the block")
+	require.Contains(t, warns[0], injectedSubtreeCloseErr, "the warning carries the close error")
+
+	require.Empty(t, warningsContaining(logger, "failed releasing subtrees: "),
+		"the deferred release must find nothing left to close after the explicit one")
 }
