@@ -75,7 +75,7 @@ func BenchmarkDequeueThroughput(b *testing.B) {
 
 					for j := range nodes {
 						if positions != nil {
-							stp.queue.enqueuePositionedBatchBounded(nodes[j], inpoints[j], positions[j], false)
+							stp.queue.enqueuePositionedBatchBounded(nodes[j], inpoints[j], false, nil, positions[j])
 							continue
 						}
 

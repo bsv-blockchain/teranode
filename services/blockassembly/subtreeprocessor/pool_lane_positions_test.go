@@ -195,7 +195,7 @@ func TestPoolKeepsLanePositionThroughBlockMovementDequeue(t *testing.T) {
 
 			// the sequential drain during a block movement
 			nodes, inpoints, positions := batch(200)
-			require.Equal(t, Admitted, stp.queue.enqueuePositionedBatchBounded(nodes, inpoints, positions, false))
+			require.Equal(t, Admitted, stp.queue.enqueuePositionedBatchBounded(nodes, inpoints, false, nil, positions))
 			require.NoError(t, stp.dequeueDuringBlockMovement(nil, nil, nil, true))
 
 			// the parallel drain after a block, with one batch without positions
@@ -530,4 +530,31 @@ func TestMoveBackReadsLanePositionsInConcurrentBatches(t *testing.T) {
 	require.Equal(t, want, stp.lanePositionsFromUtxoStore(context.Background(), &model.Block{Header: prevBlockHeader}, hashes))
 	require.False(t, probe.timedOut, "the first batches ran at the same time")
 	require.Equal(t, limit, probe.maxSeen, "no more batches at once than the limit")
+}
+
+// TestTxEraFilterKeepsEachTxsLanePosition: a transaction the era filter drops from a dequeued
+// batch takes its lane position with it, so each kept transaction keeps its own. Regtest: next
+// height 150 shares rules with [100, 199], so a tx validated at 250 is dropped.
+func TestTxEraFilterKeepsEachTxsLanePosition(t *testing.T) {
+	stp := newTestSubtreeProcessorForDequeueStaleness(t, context.Background())
+	stp.SetTxEra(150)
+
+	nodes := []subtreepkg.Node{
+		{Hash: chainhash.HashH([]byte("era-lane-kept-1")), Fee: 1, SizeInBytes: 1},
+		{Hash: chainhash.HashH([]byte("era-lane-dropped")), Fee: 1, SizeInBytes: 1},
+		{Hash: chainhash.HashH([]byte("era-lane-kept-2")), Fee: 1, SizeInBytes: 1},
+	}
+
+	batch := &TxBatch{
+		nodes:            nodes,
+		txInpoints:       []*subtreepkg.TxInpoints{{}, {}, {}},
+		validatedHeights: []uint32{150, 250, 150},
+		positions:        []uint64{lane.Pack(3, 1), lane.Pack(3, 2), lane.Pack(3, 3)},
+	}
+
+	stp.filterTxEra([]*TxBatch{batch})
+
+	require.Equal(t, []chainhash.Hash{nodes[0].Hash, nodes[2].Hash}, []chainhash.Hash{batch.nodes[0].Hash, batch.nodes[1].Hash})
+	require.Len(t, batch.nodes, 2)
+	require.Equal(t, []uint64{lane.Pack(3, 1), lane.Pack(3, 3)}, batch.positions)
 }

@@ -53,7 +53,7 @@ func (m *Mock) Health(ctx context.Context, checkLiveness bool) (int, string, err
 	return args.Int(0), args.String(1), args.Error(2)
 }
 
-func (m *Mock) Store(ctx context.Context, hash *chainhash.Hash, fee, size uint64, txInpoints subtree.TxInpoints, lanePosition uint64) (bool, error) {
+func (m *Mock) Store(ctx context.Context, hash *chainhash.Hash, fee, size uint64, txInpoints subtree.TxInpoints, _ uint32, lanePosition uint64) (bool, error) {
 	args := m.Called(ctx, hash, fee, size, txInpoints, lanePosition)
 
 	if args.Error(1) != nil {

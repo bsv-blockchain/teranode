@@ -62,12 +62,12 @@ type Interface interface {
 	//
 	// Returns:
 	//   - Admission: Admitted, or the bound that refused the batch
-	AddBatchBounded(nodes []subtreepkg.Node, txInpoints []*subtreepkg.TxInpoints, inBlock bool) Admission
+	AddBatchBounded(nodes []subtreepkg.Node, txInpoints []*subtreepkg.TxInpoints, inBlock bool, validatedHeights []uint32) Admission
 
 	// AddPositionedBatchBounded is AddBatchBounded for a batch that carries each transaction's own
 	// lane position (util/lane), positions[i] for nodes[i] and 0 for none, at
 	// utxostore_laneMigration shadow. A nil positions is AddBatchBounded.
-	AddPositionedBatchBounded(nodes []subtreepkg.Node, txInpoints []*subtreepkg.TxInpoints, positions []uint64, inBlock bool) Admission
+	AddPositionedBatchBounded(nodes []subtreepkg.Node, txInpoints []*subtreepkg.TxInpoints, inBlock bool, validatedHeights []uint32, positions []uint64) Admission
 
 	// HeldCount returns the transactions held in memory: queued, dequeued but not yet counted,
 	// and already in subtrees.
@@ -91,6 +91,26 @@ type Interface interface {
 	// Returns:
 	//   - bool: true while the hold is active
 	UnminedLoading() bool
+
+	// SetTxEra sets the transaction rules the template admits to those of the next
+	// block's height. See tx_era.go.
+	SetTxEra(nextHeight uint32)
+
+	// TxEra returns the range of validated heights the template admits, ok false when it
+	// admits every height.
+	TxEra() (lo, hi uint32, ok bool)
+
+	// FilterUnminedTxEra returns the reloaded transactions the template admits, given the
+	// height each was validated at.
+	FilterUnminedTxEra(txs []*utxostore.UnminedTransaction, validatedHeights []uint32) []*utxostore.UnminedTransaction
+
+	// NothingToReload reports whether the template holds no transaction besides the coinbase
+	// and none is recorded as kept out, so a reload would change nothing.
+	NothingToReload() bool
+
+	// RestartDroppedTxs starts a reload's own record of the transactions kept out; finish
+	// keeps it when the reload succeeded and restores the previous one when it did not.
+	RestartDroppedTxs() (finish func(reloaded bool))
 
 	// Start starts the main processing goroutine for the SubtreeProcessor.
 	// This should be called after loading unmined transactions at startup to avoid race conditions.

@@ -18,6 +18,7 @@ import (
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/blockchain/work"
+	"github.com/bsv-blockchain/teranode/services/blockvalidation/catchup"
 	"github.com/bsv-blockchain/teranode/services/blockvalidation/testhelpers"
 	"github.com/bsv-blockchain/teranode/services/p2p"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
@@ -765,6 +766,76 @@ func TestCatchup_NoMinedSetChurnOnRejectedFork(t *testing.T) {
 
 		mockBlockchainClient.AssertNotCalled(t, "ClearBlockMinedSet", mock.Anything, mock.Anything)
 		mockBlockchainClient.AssertNotCalled(t, "SendNotification", mock.Anything, mock.Anything)
+	})
+
+	t.Run("ForkBelowPassedCheckpoint", func(t *testing.T) {
+		// The fork leaves our chain at 100, below the checkpoint at 120 that the tip (150) has
+		// passed: bitcoin-sv's bad-fork-prior-to-checkpoint. The offered chain is refused before
+		// any block is fetched, so a block of it that is already stored is never reached either.
+		server, mockBlockchainClient, targetBlock, cleanup := buildForkScenario(t, 100, 150)
+		defer cleanup()
+
+		params := *server.settings.ChainCfgParams
+		params.Checkpoints = []chaincfg.Checkpoint{{Height: 120, Hash: &chainhash.Hash{0x01}}}
+		server.settings.ChainCfgParams = &params
+		server.settings.ChainCfgParams.CoinbaseMaturity = 100
+		server.settings.BlockValidation.SecretMiningThreshold = 1000
+
+		before := blockFetches()
+		err := server.catchup(context.Background(), targetBlock, "peer-4697", "http://peer")
+
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "bad-fork-prior-to-checkpoint")
+		require.Equal(t, before, blockFetches(), "no block of the fork may be fetched")
+		mockBlockchainClient.AssertNotCalled(t, "ClearBlockMinedSet", mock.Anything, mock.Anything)
+	})
+
+	t.Run("StoredTargetForkBelowPassedCheckpoint", func(t *testing.T) {
+		// The target is already stored as valid, at height 101, below the checkpoint at 120
+		// that the tip (150) has passed. Catchup ends before the fork checks when the target
+		// exists, so it must apply the rule there: a stored fork is refused, a main-chain block
+		// is not.
+		for _, onMainChain := range []bool{false, true} {
+			t.Run(fmt.Sprintf("onMainChain=%v", onMainChain), func(t *testing.T) {
+				server, mockBlockchainClient, targetBlock, cleanup := buildForkScenario(t, 100, 150)
+				defer cleanup()
+
+				params := *server.settings.ChainCfgParams
+				params.Checkpoints = []chaincfg.Checkpoint{{Height: 120, Hash: &chainhash.Hash{0x01}}}
+				server.settings.ChainCfgParams = &params
+				server.blockValidation.settings.ChainCfgParams = &params
+
+				// Ahead of the scenario's catch-alls, which report every other block missing.
+				n := len(mockBlockchainClient.ExpectedCalls)
+				mockBlockchainClient.On("GetBlockExists", mock.Anything, targetBlock.Hash()).Return(true, nil)
+				mockBlockchainClient.On("GetBlockHeader", mock.Anything, targetBlock.Hash()).
+					Return(targetBlock.Header, &model.BlockHeaderMeta{Height: 101, ID: 7}, nil)
+				mockBlockchainClient.On("GetBlockHeaderIDs", mock.Anything, targetBlock.Hash(), uint64(1)).Return([]uint32{7}, nil)
+				mockBlockchainClient.On("CheckBlockIsInCurrentChain", mock.Anything, []uint32{7}).Return(onMainChain, nil)
+				added := append([]*mock.Call(nil), mockBlockchainClient.ExpectedCalls[n:]...)
+				mockBlockchainClient.ExpectedCalls = append(added, mockBlockchainClient.ExpectedCalls[:n]...)
+
+				// One earlier failure on the peer's breaker: a forbidden target must add to it,
+				// not reset it with a success, or a peer that keeps offering one never trips it.
+				server.peerCircuitBreakers = catchup.NewPeerCircuitBreakers(catchup.DefaultCircuitBreakerConfig())
+				server.peerCircuitBreakers.GetBreaker("peer-stored-fork").RecordFailure()
+
+				err := server.catchup(context.Background(), targetBlock, "peer-stored-fork", "http://peer")
+
+				_, failures, _, _ := server.peerCircuitBreakers.GetBreaker("peer-stored-fork").GetStats()
+
+				if onMainChain {
+					require.NoError(t, err)
+					require.Zero(t, failures, "a main-chain target credits the peer")
+
+					return
+				}
+
+				require.Error(t, err)
+				require.Contains(t, err.Error(), "bad-fork-prior-to-checkpoint")
+				require.Equal(t, 2, failures, "a forbidden target counts against the peer")
+			})
+		}
 	})
 
 	t.Run("SecretMiningDepth", func(t *testing.T) {

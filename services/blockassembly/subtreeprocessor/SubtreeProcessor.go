@@ -207,6 +207,14 @@ type SubtreeProcessor struct {
 	// settings contains the configuration parameters for the processor
 	settings *settings.Settings
 
+	// txEra is the range of validated heights admitted to the template; nil admits all.
+	// droppedTxs holds the transactions kept out, so their descendants are kept out too.
+	// See tx_era.go.
+	txEra        atomic.Pointer[txEra]
+	droppedMu    sync.Mutex
+	droppedTxs   map[chainhash.Hash]struct{}
+	droppedCount atomic.Int64
+
 	// currentItemsPerFile specifies the maximum number of items per subtree file
 	currentItemsPerFile atomic.Int32
 
@@ -295,6 +303,9 @@ type SubtreeProcessor struct {
 
 	// lengthCh receives requests for the current length of the processor
 	lengthCh chan chan int
+
+	// templateEmptyCh receives NothingToReload's requests
+	templateEmptyCh chan chan bool
 
 	// checkSubtreeProcessorCh is used to check the subtree processor state
 	checkSubtreeProcessorCh chan chan error
@@ -747,6 +758,7 @@ func NewSubtreeProcessor(_ context.Context, logger ulogger.Logger, tSettings *se
 		reconcileCoinbasesCh:         make(chan reconcileCoinbasesMsg),
 		removeTxCh:                   make(chan chainhash.Hash, 100),
 		lengthCh:                     make(chan chan int),
+		templateEmptyCh:              make(chan chan bool),
 		checkSubtreeProcessorCh:      make(chan chan error),
 		newSubtreeChan:               newSubtreeChan,
 		chainedSubtrees:              make([]*subtreepkg.Subtree, 0, ExpectedNumberOfSubtrees),
@@ -1102,6 +1114,11 @@ func (stp *SubtreeProcessor) Start(ctx context.Context) {
 					// return the length of the current subtree
 					lengthCh <- stp.currentSubtree.Load().Length()
 
+				case emptyCh := <-stp.templateEmptyCh:
+					// Answered between dequeue iterations, so no dequeued batch is half placed.
+					current := stp.currentSubtree.Load()
+					emptyCh <- len(stp.chainedSubtrees) == 0 && (current == nil || current.Length() <= 1) && stp.droppedCount.Load() == 0
+
 				case errCh := <-stp.checkSubtreeProcessorCh:
 					errCh <- stp.runHandlerWithRecover("checkSubtreeProcessor", func() error {
 						stp.setCurrentRunningState(StateCheckSubtreeProcessor)
@@ -1200,6 +1217,10 @@ func (stp *SubtreeProcessor) Start(ctx context.Context) {
 					for _, batch := range dequeueBatches {
 						dequeuedItems += int64(len(batch.nodes))
 					}
+
+					// Before the parallel filter: descendants are found in queue order. After
+					// the count above, which settles what the queue handed out, kept or not.
+					stp.filterTxEra(dequeueBatches)
 
 					if len(dequeueBatches) == 0 {
 						stp.setCurrentRunningState(StateRunning)
@@ -1894,8 +1915,9 @@ func (stp *SubtreeProcessor) reset(blockHeader *model.BlockHeader, moveBackBlock
 	}
 
 	// clear remove map to prevent memory leak - entries for transactions that were
-	// never dequeued would otherwise accumulate indefinitely across resets
-	stp.removeMap = txmap.NewSplitSwissMap(256, 16)
+	// never dequeued would otherwise accumulate indefinitely across resets. Cleared in
+	// place: GetRemoveMapLength reads the field from other goroutines.
+	stp.removeMap.Clear()
 
 	// reset tx count
 	stp.setTxCountFromSubtrees()
@@ -2732,6 +2754,36 @@ func (stp *SubtreeProcessor) ProcessRemainderTransactionsAndDequeue(ctx context.
 	return stp.processRemainderTransactionsAndDequeue(ctx, params)
 }
 
+// NothingToReload reports whether a reload of the template would change nothing: it holds no
+// transaction besides the coinbase, and none is recorded as kept out (a transaction dropped
+// under the previous rules can be admitted under the new ones) or held (a held one can be
+// untagged, and only a reload checks it against the new rules). It is answered on the
+// processor's goroutine between dequeue iterations, so a batch admitted under the previous
+// transaction rules is either in the template already or still queued, where the current
+// rules decide it. A processor that is not running answers false, so the caller reloads.
+func (stp *SubtreeProcessor) NothingToReload() bool {
+	p := stp.processorCtx.Load()
+	if p == nil {
+		return false
+	}
+
+	ctx := *p
+	emptyCh := make(chan bool, 1)
+
+	select {
+	case stp.templateEmptyCh <- emptyCh:
+	case <-ctx.Done():
+		return false
+	}
+
+	select {
+	case empty := <-emptyCh:
+		return empty
+	case <-ctx.Done():
+		return false
+	}
+}
+
 // TxCount returns the total number of transactions processed.
 //
 // Returns:
@@ -3515,19 +3567,20 @@ func (stp *SubtreeProcessor) AddBatch(nodes []subtreepkg.Node, txInpoints []*sub
 //   - nodes: Transaction nodes to add
 //   - txInpoints: Parent transaction references for each node
 //   - inBlock: Whether the transactions arrived inside a block
+//   - validatedHeights: Height each node was validated at, or nil when untagged
 //
 // Returns:
 //   - Admission: Admitted, or the bound that refused the batch
-func (stp *SubtreeProcessor) AddBatchBounded(nodes []subtreepkg.Node, txInpoints []*subtreepkg.TxInpoints, inBlock bool) Admission {
-	return stp.queue.enqueueBatchBounded(nodes, txInpoints, inBlock)
+func (stp *SubtreeProcessor) AddBatchBounded(nodes []subtreepkg.Node, txInpoints []*subtreepkg.TxInpoints, inBlock bool, validatedHeights []uint32) Admission {
+	return stp.queue.enqueueBatchBounded(nodes, txInpoints, inBlock, validatedHeights)
 }
 
 // AddPositionedBatchBounded is AddBatchBounded for a batch whose transactions carry their own lane
 // positions (util/lane), positions[i] for nodes[i] and 0 for none, at utxostore_laneMigration
 // shadow. The positions travel with the transactions into the pool, where the lane bitmaps a
 // sealed subtree is stored with are built from them. A nil positions is AddBatchBounded.
-func (stp *SubtreeProcessor) AddPositionedBatchBounded(nodes []subtreepkg.Node, txInpoints []*subtreepkg.TxInpoints, positions []uint64, inBlock bool) Admission {
-	return stp.queue.enqueuePositionedBatchBounded(nodes, txInpoints, positions, inBlock)
+func (stp *SubtreeProcessor) AddPositionedBatchBounded(nodes []subtreepkg.Node, txInpoints []*subtreepkg.TxInpoints, inBlock bool, validatedHeights []uint32, positions []uint64) Admission {
+	return stp.queue.enqueuePositionedBatchBounded(nodes, txInpoints, inBlock, validatedHeights, positions)
 }
 
 // heldBase is the count of transactions the subtrees hold, which the queue's in-memory limit
@@ -6501,17 +6554,28 @@ func (stp *SubtreeProcessor) moveBackBlockBulkBuild(ctx context.Context, block *
 	flatInpoints := make([]*subtreepkg.TxInpoints, 0, blockNodeCount)
 	flatNodes := make([]subtreepkg.Node, 0, blockNodeCount)
 
+	// The block's transactions were validated at its height: keep out the ones under other
+	// rules than the next block's, as on every other way into the template.
+	droppedFromBlock := false
+
+	stp.droppedMu.Lock()
 	for idx, subtreeNodes := range subtreesNodes {
 		startIdx := 0
 		if idx == 0 {
 			startIdx = 1 // skip coinbase in first subtree
 		}
 		for i := startIdx; i < len(subtreeNodes); i++ {
+			if !stp.admitTxLocked(subtreeNodes[i].Hash, &subtreeMetaTxInpoints[idx][i], block.Height) {
+				droppedFromBlock = true
+				continue
+			}
+
 			flatHashes = append(flatHashes, subtreeNodes[i].Hash)
 			flatInpoints = append(flatInpoints, &subtreeMetaTxInpoints[idx][i])
 			flatNodes = append(flatNodes, subtreeNodes[i])
 		}
 	}
+	stp.droppedMu.Unlock()
 
 	if len(flatHashes) > 0 {
 		// At utxostore_laneMigration shadow the block's txs come back with the lane positions
@@ -6538,10 +6602,15 @@ func (stp *SubtreeProcessor) moveBackBlockBulkBuild(ctx context.Context, block *
 		}
 	}
 
-	// Step 4: Collect previous mempool nodes (already in currentTxMap)
+	// Step 4: Collect previous mempool nodes (already in currentTxMap). One that spends a
+	// transaction Step 3 kept out goes too, with its own descendants: the template would
+	// otherwise hold a child without its parent. Previous nodes are in template order,
+	// parents first, so one pass finds every descendant.
+	keepPrevious := stp.keepPreviousNodeFunc(droppedFromBlock)
+
 	for _, st := range previousChainedSubtrees {
 		for _, node := range st.Nodes {
-			if node.Hash.Equal(subtreepkg.CoinbasePlaceholderHashValue) {
+			if node.Hash.Equal(subtreepkg.CoinbasePlaceholderHashValue) || !keepPrevious(node.Hash) {
 				continue
 			}
 			allNodes = append(allNodes, node)
@@ -6549,7 +6618,7 @@ func (stp *SubtreeProcessor) moveBackBlockBulkBuild(ctx context.Context, block *
 	}
 	if previousCurrentSubtree != nil {
 		for _, node := range previousCurrentSubtree.Nodes {
-			if node.Hash.Equal(subtreepkg.CoinbasePlaceholderHashValue) {
+			if node.Hash.Equal(subtreepkg.CoinbasePlaceholderHashValue) || !keepPrevious(node.Hash) {
 				continue
 			}
 			allNodes = append(allNodes, node)
@@ -7834,6 +7903,16 @@ func (stp *SubtreeProcessor) moveForwardBlockDeferringDrain(ctx context.Context,
 		return nil, nil, nil, err
 	}
 
+	// The block's mined drops are forgotten before the drain below, so their queued children are
+	// admitted, and put back if the move fails after this: the block is then not applied.
+	if forgotten := stp.forgetMinedDroppedTxs(transactionMap); len(forgotten) != 0 {
+		defer func() {
+			if err != nil {
+				stp.restoreForgottenDroppedTxs(forgotten)
+			}
+		}()
+	}
+
 	if stp.reorgForwardTxMapSubtrees != nil {
 		for subtreeHash := range blockSubtreesMap {
 			stp.reorgForwardTxMapSubtrees = append(stp.reorgForwardTxMapSubtrees, subtreeHash)
@@ -8382,6 +8461,10 @@ func (stp *SubtreeProcessor) runDrainChunk(chunk []*TxBatch, chunkItems int, fn 
 
 		stp.queue.settle(int64(chunkItems))
 	}()
+
+	// Before fn, in queue order, so descendants are found. chunkItems was counted before it,
+	// as the queue handed the chunk out, so the settle above releases what was dropped too.
+	stp.filterTxEra(chunk)
 
 	placed, err = fn(chunk)
 

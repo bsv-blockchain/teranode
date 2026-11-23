@@ -71,11 +71,13 @@ type Options struct {
 
 // record is one buffered transaction. seq is its position in the buffer at
 // insertion, which makes (createdAt, seq) a total order that reproduces a
-// stable sort, and indexes the inpoints arena offsets.
+// stable sort, and indexes the inpoints arena offsets. validatedHeight is the
+// height the transaction was validated at, 0 when unknown.
 type record struct {
-	createdAt int64
-	node      subtreepkg.Node
-	seq       uint32
+	createdAt       int64
+	node            subtreepkg.Node
+	seq             uint32
+	validatedHeight uint32
 }
 
 // batchBuf is one buffer of records. arena holds serialized inpoints; the
@@ -257,14 +259,15 @@ func (s *Sorter) buffered() int {
 }
 
 // Add buffers one transaction. inpoints is ignored unless the sorter was
-// created WithInpoints; nil means no inpoints.
-func (s *Sorter) Add(createdAt int64, node subtreepkg.Node, inpoints *subtreepkg.TxInpoints) error {
-	return s.AddAt(createdAt, node, inpoints, 0)
+// created WithInpoints; nil means no inpoints. validatedHeight, the height the
+// transaction was validated at (0 when unknown), comes back with it from Drain.
+func (s *Sorter) Add(createdAt int64, node subtreepkg.Node, inpoints *subtreepkg.TxInpoints, validatedHeight uint32) error {
+	return s.AddAt(createdAt, node, inpoints, validatedHeight, 0)
 }
 
 // AddAt is Add for a transaction with its own lane position, which is ignored
 // unless the sorter was created WithPositions; 0 means none.
-func (s *Sorter) AddAt(createdAt int64, node subtreepkg.Node, inpoints *subtreepkg.TxInpoints, position uint64) error {
+func (s *Sorter) AddAt(createdAt int64, node subtreepkg.Node, inpoints *subtreepkg.TxInpoints, validatedHeight uint32, position uint64) error {
 	if s.drained {
 		return errors.NewProcessingError("unminedsort: Add after Drain")
 	}
@@ -275,7 +278,7 @@ func (s *Sorter) AddAt(createdAt int64, node subtreepkg.Node, inpoints *subtreep
 		return errors.NewProcessingError("unminedsort: buffer exceeds %d records; set a spill directory or lower BufferRecords", 1<<32-1)
 	}
 
-	b.recs = append(b.recs, record{createdAt: createdAt, node: node, seq: uint32(len(b.recs))}) //nolint:gosec // bounded above
+	b.recs = append(b.recs, record{createdAt: createdAt, node: node, seq: uint32(len(b.recs)), validatedHeight: validatedHeight}) //nolint:gosec // bounded above
 
 	if s.opts.WithInpoints {
 		if inpoints != nil {
@@ -426,6 +429,7 @@ func (s *Sorter) writeRun(b *batchBuf, path string) error {
 		scratch = append(scratch, rec.node.Hash[:]...)
 		scratch = binary.AppendUvarint(scratch, rec.node.Fee)
 		scratch = binary.AppendUvarint(scratch, rec.node.SizeInBytes)
+		scratch = binary.AppendUvarint(scratch, uint64(rec.validatedHeight))
 
 		if s.opts.WithInpoints {
 			inp := b.inpoints(rec.seq)
@@ -523,10 +527,11 @@ type source interface {
 
 // entry is a decoded record ready to emit.
 type entry struct {
-	createdAt int64
-	node      subtreepkg.Node
-	inpoints  []byte
-	position  uint64
+	createdAt       int64
+	node            subtreepkg.Node
+	inpoints        []byte
+	validatedHeight uint32
+	position        uint64
 }
 
 type fileSource struct {
@@ -595,6 +600,13 @@ func (fs *fileSource) next() (bool, error) {
 		return false, fs.readErr(err)
 	}
 
+	validatedHeight, err := binary.ReadUvarint(fs.r)
+	if err != nil {
+		return false, fs.readErr(err)
+	}
+
+	fs.cur.validatedHeight = uint32(validatedHeight) //nolint:gosec // written by this package from a uint32
+
 	fs.cur.inpoints = nil
 
 	if fs.withI {
@@ -657,6 +669,7 @@ func (ms *memSource) next() (bool, error) {
 	rec := &c.chunk[c.pos-1]
 	ms.cur.createdAt = rec.createdAt
 	ms.cur.node = rec.node
+	ms.cur.validatedHeight = rec.validatedHeight
 	ms.cur.inpoints = nil
 
 	if ms.withI {
@@ -705,13 +718,15 @@ type txPair struct {
 }
 
 // Drain emits every added transaction in (CreatedAt, insertion) order, calling
-// fn with batches of about batchSize. A batch only ends where CreatedAt
-// changes, so an equal-CreatedAt group is never split across batches.
+// fn with batches of about batchSize and, per transaction, the validated height
+// it was added with. A batch only ends where CreatedAt changes, so an
+// equal-CreatedAt group is never split across batches.
 //
-// fn must not retain the batch slice, the *UnminedTransaction or its *Node
-// after it returns: they are reused for the next batch. Each TxInpoints is a
-// fresh allocation and may be retained. Drain may be called once.
-func (s *Sorter) Drain(ctx context.Context, batchSize int, fn func(batch []*utxo.UnminedTransaction) error) error {
+// fn must not retain the batch slice, the heights slice, the
+// *UnminedTransaction or its *Node after it returns: they are reused for the
+// next batch. Each TxInpoints is a fresh allocation and may be retained. Drain
+// may be called once.
+func (s *Sorter) Drain(ctx context.Context, batchSize int, fn func(batch []*utxo.UnminedTransaction, validatedHeights []uint32) error) error {
 	if s.drained {
 		return errors.NewProcessingError("unminedsort: Drain called twice")
 	}
@@ -767,6 +782,7 @@ func (s *Sorter) Drain(ctx context.Context, batchSize int, fn func(batch []*utxo
 
 	pairs := make([]txPair, 0, batchSize)
 	ptrs := make([]*utxo.UnminedTransaction, 0, batchSize)
+	heights := make([]uint32, 0, batchSize)
 	emitted := 0
 
 	flush := func() error {
@@ -780,8 +796,9 @@ func (s *Sorter) Drain(ctx context.Context, batchSize int, fn func(batch []*utxo
 			ptrs = append(ptrs, &pairs[i].tx)
 		}
 
-		err := fn(ptrs)
+		err := fn(ptrs, heights)
 		pairs = pairs[:0]
+		heights = heights[:0]
 
 		return err
 	}
@@ -818,6 +835,7 @@ func (s *Sorter) Drain(ctx context.Context, batchSize int, fn func(batch []*utxo
 			},
 			node: e.node,
 		})
+		heights = append(heights, e.validatedHeight)
 
 		ok, err := srcs[top].next()
 		if err != nil {
