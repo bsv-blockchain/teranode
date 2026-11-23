@@ -39,9 +39,9 @@ const (
 	// call; larger payloads take a second read.
 	logReadAhead = 512
 
-	// recordMagic starts every payload record, so a record lost to a failed
-	// write (a zero-filled hole or the end of the file) reads as an error
-	// instead of as an empty TxInpoints.
+	// recordMagic, or recordMagicPositioned below, starts every payload record,
+	// so a record lost to a failed write (a zero-filled hole or the end of the
+	// file) reads as an error instead of as an empty TxInpoints.
 	recordMagic      = 0xA5
 	recordHeaderSize = 5 // magic + uint32 payload length
 

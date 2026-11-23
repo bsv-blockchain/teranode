@@ -314,7 +314,7 @@ func (ba *BlockAssembly) storeSubtreeLaneBitmaps(ctx context.Context, subtree *s
 		// a file from an earlier store, after a restart or by subtree validation, lives as long as
 		// the subtree now does
 		if dahErr := ba.subtreeStore.SetDAH(ctx, root[:], fileformat.FileTypeSubtreeLaneBitmaps, dah); dahErr != nil {
-			ba.logger.Debugf("[BlockAssembly:storeSubtreeData][%s] could not update the lane bitmaps file's DAH: %v", root.String(), dahErr)
+			ba.logger.Warnf("[BlockAssembly:storeSubtreeData][%s] the lane bitmaps file may now expire before its subtree, whose DAH update failed: %v", root.String(), dahErr)
 		}
 	case err != nil:
 		ba.logger.Warnf("[BlockAssembly:storeSubtreeData][%s] storing the subtree without its lane bitmaps file, whose write failed: %v", root.String(), err)
@@ -334,8 +334,14 @@ func (ba *BlockAssembly) keepExistingSubtreeLaneBitmaps(ctx context.Context, sub
 		return
 	}
 
-	if err := ba.subtreeStore.SetDAH(ctx, root[:], fileformat.FileTypeSubtreeLaneBitmaps, dah); err != nil {
-		ba.logger.Debugf("[BlockAssembly:storeSubtreeData][%s] could not update the lane bitmaps file's DAH: %v", root.String(), err)
+	err := ba.subtreeStore.SetDAH(ctx, root[:], fileformat.FileTypeSubtreeLaneBitmaps, dah)
+
+	switch {
+	case errors.Is(err, errors.ErrNotFound):
+		// an earlier write of the file failed while its bitmaps were kept: write it now
+		ba.storeSubtreeLaneBitmaps(ctx, subtree, subtreeLanePositions(subtree, subtreeRequest.ParentTxMap, subtreeRequest.DeletedPositions), height, dah)
+	case err != nil:
+		ba.logger.Warnf("[BlockAssembly:storeSubtreeData][%s] the lane bitmaps file may now expire before its subtree, whose DAH update failed: %v", root.String(), err)
 	}
 }
 

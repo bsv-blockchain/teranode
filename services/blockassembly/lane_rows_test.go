@@ -417,6 +417,11 @@ func (s *setOrderStore) Set(ctx context.Context, key []byte, fileType fileformat
 }
 
 func (s *setOrderStore) SetDAH(ctx context.Context, key []byte, fileType fileformat.FileType, dah uint32, opts ...blobOptions.FileOption) error {
+	// as the file store does for a file that is not there
+	if exists, err := s.Store.Exists(ctx, key, fileType, opts...); err == nil && !exists {
+		return errors.ErrNotFound
+	}
+
 	s.mu.Lock()
 
 	if s.dahs == nil {
@@ -627,6 +632,30 @@ func TestStoreSubtreeDataKeepsAnExistingSubtreesLaneBitmaps(t *testing.T) {
 
 		require.Equal(t, store.dah(fileformat.FileTypeSubtree), store.dah(fileformat.FileTypeSubtreeLaneBitmaps), "the bitmaps file lives as long as the subtree")
 		require.Equal(t, uint32(130)+server.settings.GlobalBlockHeightRetention, store.dah(fileformat.FileTypeSubtreeLaneBitmaps))
+	})
+
+	t.Run("kept, its file lost", func(t *testing.T) {
+		server, memoryStore := setupServerWithSettings(t, shadow)
+		store := &setOrderStore{Store: memoryStore}
+		server.subtreeStore = store
+
+		st, txMap := laneSealSubtree(t, "lost")
+
+		subtreeDone, allDone, err := server.storeSubtreeData(t.Context(), subtreeprocessor.NewSubtreeRequest{Subtree: st, ParentTxMap: txMap}, make(chan *subtreeRetrySend, 10))
+		require.NoError(t, err)
+		require.True(t, <-subtreeDone)
+		<-allDone
+
+		// the file's first write failed, or it was lost, while the bitmaps stayed kept
+		require.NoError(t, memoryStore.Del(t.Context(), st.RootHash()[:], fileformat.FileTypeSubtreeLaneBitmaps))
+
+		_, _, err = server.storeSubtreeData(t.Context(), subtreeprocessor.NewSubtreeRequest{Subtree: st, ParentTxMap: txMap}, make(chan *subtreeRetrySend, 10))
+		require.ErrorIs(t, err, errors.ErrBlobAlreadyExists)
+
+		exists, err := memoryStore.Exists(t.Context(), st.RootHash()[:], fileformat.FileTypeSubtreeLaneBitmaps)
+		require.NoError(t, err)
+		require.True(t, exists, "storing the subtree again writes its lost lane bitmaps file")
+		require.Equal(t, store.dah(fileformat.FileTypeSubtree), store.dah(fileformat.FileTypeSubtreeLaneBitmaps))
 	})
 
 	t.Run("not kept, the files already stored", func(t *testing.T) {
