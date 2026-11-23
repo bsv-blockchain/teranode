@@ -68,29 +68,30 @@ type fakeSequentialStore struct {
 	// endErr is what EndCreateFirstRollback answers.
 	endErr error
 
-	spendCalls     int
-	createCalls    int
-	unspendCalls   int
-	finalizeCalls  int
-	deleteCalls    int
-	deletedHashes  []*chainhash.Hash
-	unspentWith    []*Spend
-	unspentBatches [][]*Spend
-	spendFlags     []IgnoreFlags
-	beginCalls     int
-	leaseCalls     int
-	unleaseCalls   int
-	leasesCalls    int
-	releaseCalls   int
-	releaseErr     error
-	clearCalls     int
-	clearAdopt     []bool
-	finalizeTokens [][]byte
-	finalizeLeases [][]byte
-	beginTokens    [][]byte
-	endTokens      [][]byte
-	leaseTokens    [][]byte
-	leasesTokens   [][]byte
+	spendCalls      int
+	createCalls     int
+	unspendCalls    int
+	finalizeCalls   int
+	deleteCalls     int
+	deletedHashes   []*chainhash.Hash
+	unspentWith     []*Spend
+	unspentBatches  [][]*Spend
+	spendFlags      []IgnoreFlags
+	spendLeaseBound []bool
+	beginCalls      int
+	leaseCalls      int
+	unleaseCalls    int
+	leasesCalls     int
+	releaseCalls    int
+	releaseErr      error
+	clearCalls      int
+	clearAdopt      []bool
+	finalizeTokens  [][]byte
+	finalizeLeases  [][]byte
+	beginTokens     [][]byte
+	endTokens       [][]byte
+	leaseTokens     [][]byte
+	leasesTokens    [][]byte
 	// unleased holds, per ReleaseSpendLease call, the attempt and the lease it named.
 	unleased       [][2][]byte
 	spendDeadlines []time.Time
@@ -101,6 +102,7 @@ type fakeSequentialStore struct {
 func (f *fakeSequentialStore) Spend(ctx context.Context, _ *bt.Tx, _ uint32, ignoreFlags ...IgnoreFlags) ([]*Spend, error) {
 	deadline, _ := ctx.Deadline()
 	f.spendDeadlines = append(f.spendDeadlines, deadline)
+	f.spendLeaseBound = append(f.spendLeaseBound, IsLeaseBound(ctx))
 	f.spendCalls++
 	f.spendFlags = ignoreFlags
 	f.callSeq = append(f.callSeq, "spend")
@@ -182,6 +184,53 @@ func TestSequentialSpendAndCreateRejectsInvalidPositionBeforeSpending(t *testing
 }
 
 func (b *boundedSequentialStore) SpendRollbackTimeout() time.Duration { return b.bound }
+
+// deadCtxStore ends the caller's context when its second spend returns, and refuses every read
+// and take on a context that has ended, as the real store does.
+type deadCtxStore struct {
+	fakeSequentialStore
+	cancel context.CancelFunc
+}
+
+func (d *deadCtxStore) Spend(ctx context.Context, tx *bt.Tx, h uint32, flags ...IgnoreFlags) ([]*Spend, error) {
+	spends, err := d.fakeSequentialStore.Spend(ctx, tx, h, flags...)
+	if d.spendCalls == 2 {
+		d.cancel()
+	}
+
+	return spends, err
+}
+
+func (d *deadCtxStore) GetMeta(ctx context.Context, hash *chainhash.Hash, data *meta.Data) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	return d.fakeSequentialStore.GetMeta(ctx, hash, data)
+}
+
+func (d *deadCtxStore) TakeRollbackHold(ctx context.Context, hash *chainhash.Hash, attempt []byte) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+
+	return d.fakeSequentialStore.TakeRollbackHold(ctx, hash, attempt)
+}
+
+// A reversal that tolerates missing parents wraps the store in a reverser with a one-method set.
+// It must still report the store's own bound, or every reversal under it runs at the default.
+func TestTolerantReverserKeepsTheBoundOfItsStore(t *testing.T) {
+	store := &boundedSequentialStore{bound: 7 * time.Second}
+
+	require.Equal(t, 7*time.Second, rollbackBound(tolerantReverser{store}))
+
+	ctx, cancel := rollbackContext(context.Background(), tolerantReverser{store})
+	defer cancel()
+
+	deadline, ok := ctx.Deadline()
+	require.True(t, ok)
+	require.Less(t, time.Until(deadline), 8*time.Second, "a reversal is bounded by the configured timeout, not by the default of two minutes")
+}
 
 func (f *fakeSequentialStore) FinalizeTransaction(_ context.Context, _ *bt.Tx, attempt, lease []byte) error {
 	f.finalizeCalls++
@@ -782,25 +831,35 @@ func TestSequentialSpendAndCreate(t *testing.T) {
 	t.Run("a spend that fails in a later round reverses the spends of the earlier round", func(t *testing.T) {
 		shortenUnspendBackoff(t)
 
+		two := scriptedTwoInputTx(t)
 		earlier := []*Spend{{Vout: 0}, {Vout: 1}}
 		spendErr := errors.NewStorageError("the spend of the second round failed")
 
-		// No record is left at the txid: the earlier spends name nothing and are reversed at once.
+		// No record is left at the txid: the call claims it with the tentative create of the
+		// transaction, which the store writes CREATE_ONLY, and rolls that attempt back. The rollback
+		// reverses every input under its marker and leaves a hold, so no read-then-write is left
+		// for another attempt to slip between.
 		gone := &fakeSequentialStore{
 			spendsSeq:   [][]*Spend{earlier, {{Vout: 0}}},
 			spendErrs:   []error{nil, spendErr},
-			createErr:   errors.NewTxExistsError("held"),
+			createErrs:  []error{errors.NewTxExistsError("held")},
+			createMeta:  &meta.Data{Creating: true, Attempt: []byte{3}},
 			existing:    meta.Data{Creating: true, RollingBack: true, Hold: true},
 			clearResult: true,
 			getMetaErrs: []error{nil, nil, errors.NewTxNotFoundError("no record")},
 		}
 
-		md, spends, err := SequentialSpendAndCreate(ctx, logger, gone, tx, 100, false)
+		md, spends, err := SequentialSpendAndCreate(ctx, logger, gone, two, 100, false)
 		require.ErrorIs(t, err, spendErr)
 		require.Nil(t, md)
 		require.Len(t, spends, 1, "the spends of the failed round are returned for the caller to classify")
-		require.Equal(t, []string{"spend", "create", "getmeta", "getmeta", "clear", "spend", "getmeta", "unspend"}, gone.callSeq)
-		require.Equal(t, earlier, gone.unspentWith, "the store's own rollback covers only the inputs the failed spend took")
+		require.Equal(t, []string{
+			"spend", "create", "getmeta", "getmeta", "clear",
+			"spend", "getmeta",
+			"create", "unlease", "begin", "unspend", "release", "delete",
+		}, gone.callSeq, "the claim is the create, and the reversal runs under the marker of its attempt")
+		require.Equal(t, [][]byte{{3}}, gone.beginTokens)
+		require.True(t, gone.lastCreateOpts.Creating, "the claim is the tentative create")
 
 		// The record of a rollback is back at the txid: they are reversed under its hold.
 		back := &fakeSequentialStore{
@@ -812,7 +871,7 @@ func TestSequentialSpendAndCreate(t *testing.T) {
 			clearResult: true,
 		}
 
-		_, _, err = SequentialSpendAndCreate(ctx, logger, back, tx, 100, false)
+		_, _, err = SequentialSpendAndCreate(ctx, logger, back, two, 100, false)
 		require.ErrorIs(t, err, spendErr)
 		require.Equal(t, []string{"spend", "create", "getmeta", "getmeta", "clear", "spend", "getmeta", "take", "unspend", "release"}, back.callSeq)
 		require.Equal(t, [][]byte{{6}}, back.takeTokens)
@@ -828,10 +887,52 @@ func TestSequentialSpendAndCreate(t *testing.T) {
 			clearResult: true,
 		}
 
-		_, _, err = SequentialSpendAndCreate(ctx, logger, replaced, tx, 100, false)
+		_, _, err = SequentialSpendAndCreate(ctx, logger, replaced, two, 100, false)
 		require.ErrorIs(t, err, spendErr)
 		require.Equal(t, 0, replaced.unspendCalls)
 		require.Equal(t, 0, replaced.takeCalls)
+
+		// The claim is refused because another attempt wrote the record between the read and the
+		// create: the call looks again, finds the record of that attempt and leaves the spends.
+		raced := &fakeSequentialStore{
+			spendsSeq:   [][]*Spend{earlier, {{Vout: 0}}},
+			spendErrs:   []error{nil, spendErr},
+			createErr:   errors.NewTxExistsError("another attempt"),
+			existing:    meta.Data{Creating: true, RollingBack: true, Hold: true},
+			clearResult: true,
+			getMetaErrs: []error{nil, nil, errors.NewTxNotFoundError("no record"), nil},
+			existingSeq: []meta.Data{{Creating: true, RollingBack: true, Hold: true}, {Creating: true, RollingBack: true, Hold: true}, {}, {}},
+		}
+
+		_, _, err = SequentialSpendAndCreate(ctx, logger, raced, two, 100, false)
+		require.ErrorIs(t, err, spendErr)
+		require.Equal(t, 0, raced.unspendCalls, "a create that the store refused wrote nothing, and the record that is there now owns the spends")
+		require.Equal(t, 0, raced.beginCalls)
+	})
+
+	t.Run("a spend that fails because the caller's context ended still reverses the spends of the earlier round", func(t *testing.T) {
+		shortenUnspendBackoff(t)
+
+		two := scriptedTwoInputTx(t)
+		callerCtx, cancel := context.WithCancel(ctx)
+
+		f := &deadCtxStore{
+			fakeSequentialStore: fakeSequentialStore{
+				spendsSeq:   [][]*Spend{{{Vout: 0}, {Vout: 1}}, {{Vout: 0}}},
+				spendErrs:   []error{nil, context.Canceled},
+				createErrs:  []error{errors.NewTxExistsError("held")},
+				createMeta:  &meta.Data{Creating: true, Attempt: []byte{4}},
+				existing:    meta.Data{Creating: true, RollingBack: true, Hold: true},
+				clearResult: true,
+				getMetaErrs: []error{nil, nil, errors.NewTxNotFoundError("no record")},
+			},
+			cancel: cancel,
+		}
+
+		_, _, err := SequentialSpendAndCreate(callerCtx, logger, f, two, 100, false)
+		require.ErrorIs(t, err, context.Canceled)
+		require.Equal(t, 1, f.unspendCalls, "the cleanup runs on a context of its own: the caller's ended with the spend")
+		require.Equal(t, [][]byte{{4}}, f.beginTokens)
 	})
 
 	t.Run("create over a hold adopts it in block context only", func(t *testing.T) {
@@ -894,35 +995,35 @@ func TestSequentialSpendAndCreate(t *testing.T) {
 		}
 	})
 
-	t.Run("a create-only call over a hold that stands returns ErrTxExists unchanged", func(t *testing.T) {
+	t.Run("a create-only call over a hold that stands returns a transient error, not ErrTxExists", func(t *testing.T) {
 		for name, clearErr := range map[string]error{
 			"not cleared": nil,
 			"clear error": errors.NewStorageError("clear boom"),
 		} {
-			existsErr := errors.NewTxExistsError("held")
 			f := &fakeSequentialStore{
-				createErr: existsErr,
+				createErr: errors.NewTxExistsError("held"),
 				existing:  meta.Data{Creating: true, RollingBack: true, Hold: true},
 				clearErr:  clearErr,
 			}
 
 			_, spends, err := SequentialSpendAndCreate(ctx, logger, f, tx, 100, false, WithCreateOnly())
-			require.Same(t, existsErr, err, "%s: the caller of a single-phase create resolves the hold itself", name)
+			require.ErrorIs(t, err, errors.ErrProcessing, name)
+			require.NotErrorIs(t, err, errors.ErrTxExists, "%s: a placeholder is not a stored transaction, and a caller that reads ErrTxExists as done would spend under it", name)
 			require.Nil(t, spends, name)
 			require.Equal(t, []string{"create", "getmeta", "clear"}, f.callSeq, name)
 			require.Equal(t, 0, f.unspendCalls, name)
 		}
 	})
 
-	t.Run("a create-only call over a record whose rollback is still open returns ErrTxExists unchanged", func(t *testing.T) {
-		existsErr := errors.NewTxExistsError("rolling back")
+	t.Run("a create-only call over a record whose rollback is still open returns a transient error, not ErrTxExists", func(t *testing.T) {
 		f := &fakeSequentialStore{
-			createErr: existsErr,
+			createErr: errors.NewTxExistsError("rolling back"),
 			existing:  meta.Data{Creating: true, RollingBack: true},
 		}
 
 		_, spends, err := SequentialSpendAndCreate(ctx, logger, f, tx, 100, false, WithCreateOnly())
-		require.Same(t, existsErr, err)
+		require.ErrorIs(t, err, errors.ErrProcessing)
+		require.NotErrorIs(t, err, errors.ErrTxExists)
 		require.Nil(t, spends)
 		require.Equal(t, []string{"create", "getmeta"}, f.callSeq, "no clear, no unspend: a create-only call made no spend")
 	})
@@ -1036,16 +1137,22 @@ type fakeRollForwarder struct {
 	finalizeErrs  []error
 	finalizeLease []byte
 	finalizeCalls int
-	lastOpts      CreateOptions
-	spendCalls    int
-	existing      meta.Data
-	getMetaErr    error
-	getMetaCalls  int
-	leaseDeclined bool
-	leaseErr      error
-	leaseCalls    int
-	unleaseCalls  int
-	leaseTokens   [][]byte
+	// finalizeCtxErr and finalizeLeaseBound describe the context of the finalize. afterSpend runs
+	// when the spend has returned.
+	finalizeCtxErr     error
+	finalizeLeaseBound bool
+	afterSpend         func()
+	spendLeaseBound    bool
+	lastOpts           CreateOptions
+	spendCalls         int
+	existing           meta.Data
+	getMetaErr         error
+	getMetaCalls       int
+	leaseDeclined      bool
+	leaseErr           error
+	leaseCalls         int
+	unleaseCalls       int
+	leaseTokens        [][]byte
 	// unleased holds, per ReleaseSpendLease call, the attempt and the lease it named.
 	unleased      [][2][]byte
 	finalizeToken []byte
@@ -1096,6 +1203,11 @@ func (f *fakeRollForwarder) GetMeta(_ context.Context, _ *chainhash.Hash, data *
 
 func (f *fakeRollForwarder) SpendAndCreate(ctx context.Context, _ *bt.Tx, _ uint32, opts ...CreateOption) (*meta.Data, []*Spend, error) {
 	f.spendDeadline, _ = ctx.Deadline()
+	f.spendLeaseBound = IsLeaseBound(ctx)
+
+	if f.afterSpend != nil {
+		defer f.afterSpend()
+	}
 
 	o := CreateOptions{}
 	for _, opt := range opts {
@@ -1110,6 +1222,8 @@ func (f *fakeRollForwarder) SpendAndCreate(ctx context.Context, _ *bt.Tx, _ uint
 
 func (f *fakeRollForwarder) FinalizeTransaction(ctx context.Context, _ *bt.Tx, attempt, lease []byte) error {
 	f.finalizeDeadline, _ = ctx.Deadline()
+	f.finalizeCtxErr = ctx.Err()
+	f.finalizeLeaseBound = IsLeaseBound(ctx)
 	f.finalizeCalls++
 	f.finalizeToken = attempt
 	f.finalizeLease = lease
@@ -1264,6 +1378,20 @@ func TestRollForwardCreating(t *testing.T) {
 		require.NotEmpty(t, f.finalizeLease)
 		require.Equal(t, fakeLease, f.finalizeLease, "the store records this lease as the caller of the write")
 		require.NotEqual(t, []byte{1}, f.finalizeLease, "the lease of a roll-forward is not the attempt token")
+	})
+
+	t.Run("the spend and the finalize are bound by the lease, and the finalize outlives the caller's context", func(t *testing.T) {
+		callerCtx, cancel := context.WithCancel(ctx)
+
+		f := &fakeRollForwarder{spends: []*Spend{{}, {}}, afterSpend: cancel}
+
+		_, completed, err := RollForwardCreating(callerCtx, ulogger.TestLogger{}, f, tx, []byte{1}, 100)
+		require.NoError(t, err)
+		require.True(t, completed)
+		require.True(t, f.spendLeaseBound, "the store must not start the write of this spend after the time its lease names")
+		require.True(t, f.finalizeLeaseBound)
+		require.NoError(t, f.finalizeCtxErr, "the spends are done, so the finalize runs to its end: a finalize that stopped with its caller leaves a write that may land with nobody to read its answer")
+		require.False(t, f.finalizeDeadline.IsZero(), "a finalize is bounded by the rollback bound")
 	})
 
 	t.Run("a finalize that fails on every try releases the lease, returns the spends and leaves them in place", func(t *testing.T) {
@@ -2106,6 +2234,10 @@ func TestSequentialSpendAndCreate_CreateFirst(t *testing.T) {
 
 	t.Run("a per-input error that is a verdict of the store releases the creator's lease and rolls back", func(t *testing.T) {
 		for name, verdict := range spendVerdicts {
+			if name == "locked" || name == "creating" {
+				continue // a parent that is committing: see the next test
+			}
+
 			f := &fakeSequentialStore{
 				spends:     []*Spend{{}, {Err: verdict}},
 				spendErr:   errors.NewUtxoError("spend failed"),
@@ -2116,6 +2248,51 @@ func TestSequentialSpendAndCreate_CreateFirst(t *testing.T) {
 			require.ErrorIs(t, err, errors.ErrUtxoError, name)
 			require.Equal(t, []string{"create", "spend", "unlease", "begin", "unspend", "release", "delete"}, f.callSeq, name)
 		}
+	})
+
+	t.Run("the spend of a create-first call is bound by its lease", func(t *testing.T) {
+		f := &fakeSequentialStore{spends: []*Spend{{}}, createMeta: &meta.Data{Creating: true, Attempt: []byte{9}}}
+
+		_, _, err := SequentialSpendAndCreate(ctx, logger, f, tx, 100, true)
+		require.NoError(t, err)
+		require.Equal(t, []bool{true}, f.spendLeaseBound)
+
+		plain := &fakeSequentialStore{spends: []*Spend{{}}, createMeta: &meta.Data{}}
+
+		_, _, err = SequentialSpendAndCreate(ctx, logger, plain, tx, 100, false)
+		require.NoError(t, err)
+		require.Equal(t, []bool{false}, plain.spendLeaseBound, "a spend that no lease bounds is not held to a deadline")
+	})
+
+	t.Run("a parent that is still committing keeps the record creating and leaves no hold", func(t *testing.T) {
+		for name, transient := range map[string]error{
+			"locked":   errors.ErrTxLocked,
+			"creating": errors.ErrTxCreating,
+		} {
+			f := &fakeSequentialStore{
+				spends:     []*Spend{{}, {Err: transient}},
+				spendErr:   errors.NewTxLockedError("parent is committing", errors.NewUtxoError("spend failed", transient)),
+				createMeta: &meta.Data{Creating: true, Attempt: []byte{9}},
+			}
+
+			md, spends, err := SequentialSpendAndCreate(ctx, logger, f, tx, 100, true)
+			require.Nil(t, md, name)
+			require.Len(t, spends, 2, name)
+			require.ErrorIs(t, err, errors.ErrTxLocked, "%s: the retry loop of the validator keys on this error", name)
+			require.Equal(t, []string{"create", "spend", "unlease"}, f.callSeq,
+				"%s: no marker, no reversal and no hold: a retry finds the record creating, and spends and finalizes it", name)
+		}
+
+		// One input that can never be spent decides it: the rollback runs.
+		mixed := &fakeSequentialStore{
+			spends:     []*Spend{{Err: errors.ErrTxLocked}, {Err: errors.ErrSpent}},
+			spendErr:   errors.NewUtxoError("spend failed"),
+			createMeta: &meta.Data{Creating: true, Attempt: []byte{9}},
+		}
+
+		_, _, err := SequentialSpendAndCreate(ctx, logger, mixed, tx, 100, true)
+		require.ErrorIs(t, err, errors.ErrUtxoError)
+		require.Equal(t, []string{"create", "spend", "unlease", "begin", "unspend", "release", "delete"}, mixed.callSeq)
 	})
 
 	t.Run("a finalize that finds the record already final on its first try is another actor's: an ordinary duplicate", func(t *testing.T) {

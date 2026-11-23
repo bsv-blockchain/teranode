@@ -5,6 +5,7 @@ import (
 	"context"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/bsv-blockchain/aerospike-client-go/v8"
 	"github.com/bsv-blockchain/aerospike-client-go/v8/types"
@@ -161,9 +162,16 @@ func removeUnminedSinceIfMinedOp() *aerospike.Operation {
 }
 
 // sendFinalizeBatch clears the creating bin for a batch of transactions. Single-record
-// txs (the overwhelmingly common case) are cleared in one BatchOperate over the whole
-// batch; multi-record txs are handled inline via clearCreatingFlag, which already
+// txs (the overwhelmingly common case) are cleared in one BatchOperate per deadline group;
+// multi-record txs are handled inline via clearCreatingFlag, which already
 // implements the children-first-then-master ordering and FILTERED_OUT idempotency.
+//
+// An item whose caller has given up is completed with that error and is not sent. Without that, the
+// write of a finalize that its caller abandoned would still land and clear the creating bin, and
+// stamp the record with the lease of a caller that already returned an error: the record would be
+// final, its inputs spent, and no caller would own the hand-off to block assembly. A write that is
+// sent carries only the time its callers have left (see finalizeGroups), so none starts after the
+// deadline of its caller.
 func (s *Store) sendFinalizeBatch(batch []*batchFinalize) {
 	// go-batcher recovers panics in this fn; re-complete every item on panic so a
 	// crash cannot orphan the waiting submitters (complete is CAS-guarded).
@@ -174,11 +182,17 @@ func (s *Store) sendFinalizeBatch(batch []*batchFinalize) {
 	}()
 
 	var (
-		singleRecords []aerospike.BatchRecordIfc
-		singleOwner   []int // singleRecords[k] belongs to batch[singleOwner[k]]
+		singles       []*batchFinalize
+		singleRecords []aerospike.BatchRecordIfc // singleRecords[k] is the write of singles[k]
 	)
 
-	for idx, item := range batch {
+	for _, item := range batch {
+		if err := item.ctx.Err(); err != nil {
+			item.complete(err)
+
+			continue
+		}
+
 		numRecords := s.finalizeRecordCount(item.tx)
 
 		if numRecords > 1 {
@@ -201,28 +215,92 @@ func (s *Store) sendFinalizeBatch(batch []*batchFinalize) {
 		writePolicy.RecordExistsAction = aerospike.UPDATE_ONLY
 		writePolicy.FilterExpression = finalizeFilter(item.attempt) // only touch records that still carry the creating bin and the token and are not rolling back
 
+		singles = append(singles, item)
 		singleRecords = append(singleRecords, aerospike.NewBatchWrite(writePolicy, key, finalizeMasterOps(item.attempt, item.lease)...))
-		singleOwner = append(singleOwner, idx)
 	}
 
-	if len(singleRecords) == 0 {
-		return
+	for _, group := range finalizeGroups(singles) {
+		s.sendFinalizeGroup(singles, singleRecords, group)
+	}
+}
+
+// finalizeGroups splits single-record finalizes into groups that are sent apart: the items with no
+// deadline, and the items with one, grouped by the second their deadline falls in. A write is
+// bounded by the earliest deadline of its group, so no item is limited by a deadline more than a
+// second shorter than its own, and a caller that is nearly out of time cannot shorten the budget of
+// an unrelated one. Each group holds indexes into the items.
+func finalizeGroups(items []*batchFinalize) [][]int {
+	byBucket := make(map[time.Time][]int)
+
+	var buckets []time.Time
+
+	for i, item := range items {
+		bucket := deadlineBucket(item.ctx)
+
+		if _, seen := byBucket[bucket]; !seen {
+			buckets = append(buckets, bucket)
+		}
+
+		byBucket[bucket] = append(byBucket[bucket], i)
 	}
 
-	if err := s.batchOperate(util.GetAerospikeBatchPolicy(s.settings), singleRecords); err != nil {
-		for _, idx := range singleOwner {
-			batch[idx].complete(errors.NewProcessingError("[sendFinalizeBatch] BatchOperate failed", err))
+	groups := make([][]int, 0, len(buckets))
+
+	for _, bucket := range buckets {
+		groups = append(groups, byBucket[bucket])
+	}
+
+	return groups
+}
+
+// deadlineBucket is the second the deadline of ctx falls in, and the zero time for a context with
+// none.
+func deadlineBucket(ctx context.Context) time.Time {
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		return time.Time{}
+	}
+
+	return deadline.Truncate(time.Second)
+}
+
+// sendFinalizeGroup writes the finalizes of one group and completes their items.
+func (s *Store) sendFinalizeGroup(items []*batchFinalize, records []aerospike.BatchRecordIfc, group []int) {
+	groupRecords := make([]aerospike.BatchRecordIfc, len(group))
+
+	var earliest time.Time
+
+	for k, idx := range group {
+		groupRecords[k] = records[idx]
+
+		if deadline, ok := items[idx].ctx.Deadline(); ok && (earliest.IsZero() || deadline.Before(earliest)) {
+			earliest = deadline
+		}
+	}
+
+	writeCtx, cancel := context.Background(), context.CancelFunc(func() {})
+	if !earliest.IsZero() {
+		writeCtx, cancel = context.WithDeadline(context.Background(), earliest)
+	}
+
+	err := s.batchOperateWithin(writeCtx, util.GetAerospikeBatchPolicy(s.settings), groupRecords)
+
+	cancel()
+
+	if err != nil {
+		for _, idx := range group {
+			items[idx].complete(errors.NewProcessingError("[sendFinalizeBatch] BatchOperate failed", err))
 		}
 
 		return
 	}
 
-	for k, rec := range singleRecords {
-		idx := singleOwner[k]
+	for k, idx := range group {
+		item := items[idx]
 
-		recErr := rec.BatchRec().Err
+		recErr := groupRecords[k].BatchRec().Err
 		if recErr == nil {
-			batch[idx].complete(nil)
+			item.complete(nil)
 			continue
 		}
 
@@ -231,13 +309,13 @@ func (s *Store) sendFinalizeBatch(batch []*batchFinalize) {
 		case ok && aErr.ResultCode == types.FILTERED_OUT:
 			// Creating bin already absent → already finalized, idempotent success. A rolling
 			// back record, or one owned by another attempt, is refused.
-			batch[idx].complete(s.finalizeFilteredOutResult(batch[idx].tx.TxIDChainHash(), batch[idx].attempt, batch[idx].lease))
+			item.complete(s.finalizeFilteredOutResult(item.tx.TxIDChainHash(), item.attempt, item.lease))
 		case ok && aErr.ResultCode == types.KEY_NOT_FOUND_ERROR:
 			// The record vanished between create and finalize — surface it so the
 			// caller (validator roll-forward / sweeper) knows the state is broken.
-			batch[idx].complete(errors.NewTxNotFoundError("[sendFinalizeBatch] record not found for tx %s", batch[idx].tx.TxIDChainHash().String()))
+			item.complete(errors.NewTxNotFoundError("[sendFinalizeBatch] record not found for tx %s", item.tx.TxIDChainHash().String()))
 		default:
-			batch[idx].complete(errors.NewProcessingError("[sendFinalizeBatch] failed to finalize tx %s", batch[idx].tx.TxIDChainHash().String(), recErr))
+			item.complete(errors.NewProcessingError("[sendFinalizeBatch] failed to finalize tx %s", item.tx.TxIDChainHash().String(), recErr))
 		}
 	}
 }

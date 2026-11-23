@@ -4,6 +4,7 @@ import (
 	"context"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/bsv-blockchain/aerospike-client-go/v8"
 	"github.com/bsv-blockchain/aerospike-client-go/v8/types"
@@ -188,15 +189,24 @@ func TestFinalizeTransaction_OneCallerOwnsTheHandOff(t *testing.T) {
 	})
 }
 
-// cancelledAfterStartContext reports itself cancelled through Err but never closes Done, so a
-// FinalizeTransaction wait runs to batch completion and only then observes the cancellation.
-type cancelledAfterStartContext struct {
+// cancelledAfterBatchContext reports itself cancelled through Err once the flag is set, and never
+// closes Done, so a FinalizeTransaction wait runs to batch completion and only then observes the
+// cancellation. The flag is set after the batch write returns: a finalize whose caller has given up
+// before the send is not sent at all (TestFinalizeTransaction_AnAbandonedFinalizeIsNotSent).
+type cancelledAfterBatchContext struct {
 	context.Context
+	cancelled *atomic.Bool
 }
 
-func (cancelledAfterStartContext) Done() <-chan struct{} { return nil }
+func (cancelledAfterBatchContext) Done() <-chan struct{} { return nil }
 
-func (cancelledAfterStartContext) Err() error { return context.Canceled }
+func (c cancelledAfterBatchContext) Err() error {
+	if c.cancelled.Load() {
+		return context.Canceled
+	}
+
+	return nil
+}
 
 // TestFinalizeTransaction_ContextCancellation pins the return value when the caller's context is
 // cancelled: before the call the finalize reports the context error; once the batch completed the
@@ -233,7 +243,20 @@ func TestFinalizeTransaction_ContextCancellation(t *testing.T) {
 		_, err = store.Create(ctx, tx, 100, utxo.WithCreating(true))
 		require.NoError(t, err)
 
-		err = store.FinalizeTransaction(cancelledAfterStartContext{Context: ctx}, tx, attemptOf(t, ctx, store, tx.TxIDChainHash()), attemptOf(t, ctx, store, tx.TxIDChainHash()))
+		// Read before the hook is installed: the read of the token is a batch of its own.
+		token := attemptOf(t, ctx, store, tx.TxIDChainHash())
+
+		var cancelled atomic.Bool
+
+		store.SetBatchOperateFn(func(policy *aerospike.BatchPolicy, records []aerospike.BatchRecordIfc) aerospike.Error {
+			applied := client.BatchOperate(policy, records)
+			cancelled.Store(true)
+
+			return applied
+		})
+		t.Cleanup(func() { store.SetBatchOperateFn(nil) })
+
+		err = store.FinalizeTransaction(cancelledAfterBatchContext{Context: ctx, cancelled: &cancelled}, tx, token, token)
 		require.NoError(t, err, "a finalize that landed must not be reported as failed")
 
 		got := &meta.Data{}
@@ -598,4 +621,54 @@ func TestFinalizeTransaction_PaginatedRecordsItsCaller(t *testing.T) {
 	for idx := uint32(0); idx <= 2; idx++ {
 		require.NotContains(t, recordBins(t, client, store, hash, idx, fields.Creating), fields.Creating.String(), "record %d", idx)
 	}
+}
+
+// TestFinalizeTransaction_AnAbandonedFinalizeIsNotSent covers a caller whose context ends while its
+// finalize is queued. The write of such a finalize must not land later: it would clear the creating
+// bin and stamp the record with the lease of a caller that has returned an error, and no caller would
+// own the hand-off to block assembly, because every recovery path selects on the creating bin.
+func TestFinalizeTransaction_AnAbandonedFinalizeIsNotSent(t *testing.T) {
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings := test.CreateBaseTestSettings(t)
+
+	client, store, ctx, deferFn := initAerospike(t, tSettings, logger)
+	t.Cleanup(deferFn)
+	cleanDB(t, client)
+
+	_, err := store.Create(ctx, tests.ParentTx, 100)
+	require.NoError(t, err)
+
+	_, err = store.Create(ctx, tx, 100, utxo.WithCreating(true))
+	require.NoError(t, err)
+
+	token := attemptOf(t, ctx, store, tx.TxIDChainHash())
+
+	var writes atomic.Int32
+
+	store.SetBatchOperateFn(func(policy *aerospike.BatchPolicy, records []aerospike.BatchRecordIfc) aerospike.Error {
+		for _, record := range records {
+			if write, ok := record.(*aerospike.BatchWrite); ok && write.Policy != nil && write.Policy.RecordExistsAction == aerospike.UPDATE_ONLY {
+				writes.Add(1)
+			}
+		}
+
+		return client.BatchOperate(policy, records)
+	})
+	t.Cleanup(func() { store.SetBatchOperateFn(nil) })
+
+	abandoned, cancel := context.WithCancel(ctx)
+	cancel()
+
+	require.Error(t, store.FinalizeTransaction(abandoned, tx, token, token), "the caller gave up")
+
+	// The batcher sends what it holds after its batch duration; wait for it to have done so.
+	time.Sleep(500 * time.Millisecond)
+
+	require.Zero(t, writes.Load(), "the finalize of a caller that gave up must not be written")
+
+	got := &meta.Data{}
+	require.NoError(t, store.GetMeta(ctx, tx.TxIDChainHash(), got))
+	require.True(t, got.Creating, "the record is still creating: a roll-forward or the sweep owns it")
+
+	require.NoError(t, store.FinalizeTransaction(ctx, tx, token, token), "a live caller still finalizes it")
 }

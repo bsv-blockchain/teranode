@@ -1821,7 +1821,9 @@ func (s *Store) sendOutpointBatch(batch []*batchOutpoint) {
 		// can be reconstructed with the era-aware unspendable rule keyed to their
 		// creation height, and so parent-output items can report it. The parent's
 		// inputs, version and locktime are not read: nothing on this path uses them.
-		bins := []fields.FieldName{fields.Outputs, fields.External, fields.BlockHeights}
+		// Hold is read so the data-less record that a rolled-back create-first attempt leaves for
+		// its txid answers as a missing parent, not as a record with no outputs bin.
+		bins := []fields.FieldName{fields.Outputs, fields.External, fields.BlockHeights, fields.Hold}
 		record := aerospike.NewBatchRead(policy, key, fields.FieldNamesToStrings(bins))
 
 		// Add to batch records
@@ -1864,6 +1866,15 @@ func (s *Store) sendOutpointBatch(batch []*batchOutpoint) {
 		}
 
 		bins := batchRecord.Record.Bins
+
+		// A hold carries no transaction. A child that spends its txid has no parent to read, which
+		// is what a missing record means to the caller, a definite not found that it can defer or
+		// park, and not a fault of this node's storage.
+		if hold, _ := bins[fields.Hold.String()].(bool); hold {
+			txErrors[previousTxHash] = errors.NewTxNotFoundError("transaction %s is held by a rolled back create-first attempt and carries no outputs", previousTxHash.String())
+
+			continue
+		}
 
 		var previousTx *bt.Tx
 

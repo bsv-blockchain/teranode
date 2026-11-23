@@ -209,6 +209,8 @@ func TestValidate_CreateFirst_ErrTxExistsCreating(t *testing.T) {
 		_, err := v.ValidateWithOptions(ctx, childTx, 500, creatingExistsOpts())
 
 		require.Error(t, err, "a creating record whose roll-forward re-spend is incomplete must not validate")
+		require.NotErrorIs(t, err, errors.ErrTxExists, "a caller that finds ErrTxExists in the chain reads the transaction as already validated")
+		require.ErrorIs(t, err, errors.ErrProcessing)
 		require.Equal(t, 2, shim.combinedCalls, "attempt 0 (TX_LOCKED) then attempt 1 (ErrTxExists) must both run")
 		require.Equal(t, 0, shim.rollForwardCalls, "the store reported no roll-forward")
 		require.Equal(t, 0, shim.finalizeCalls, "an unrolled creating record must not be finalized")

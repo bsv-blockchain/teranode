@@ -445,7 +445,9 @@ reorg/conflict helpers) are single-phase and bypass the create-first ordering.
   caller's ignore flags, then finalize) and returns an `ErrTxExists` for which
   `utxo.IsRolledForward` is true, so the validator hands the transaction to block assembly.
   A record that is rolling back, or a hold a finished rollback left, is refused with a
-  transient error until the hold expires. A create in block context clears a hold at once.
+  transient error until the hold expires. A create-only call gets the same transient error, never
+  `ErrTxExists`: a placeholder is not a stored transaction, and a caller that reads `ErrTxExists`
+  as done would spend the parent outputs under it. A create in block context clears a hold at once.
   A rollback that its owner left open is first finished by the same call
   (`utxo.FinishRollBackCreating`), when no holder is busy and no spend lease is live, so a block
   that contains the transaction does not depend on the sweep. With the flag off, a spend-first
@@ -509,15 +511,25 @@ other, with a lease on the master record.
   that. No lease is granted on a record that is final, so no spender starts after the delete.
 - **A queued spend ends with its lease.** The context of a spend under a lease ends at the time
   the lease names. The caller stops waiting then, but its batch is queued on the context of the
-  store. The store keeps the deadline for it (`splitSpendsByDeadline`): an item whose deadline
-  has passed is completed with an error and is not sent, and the items with a deadline are sent
-  apart from the others under the earliest of their deadlines. Each send, a repeat after an
+  store. The store keeps the deadline for it (`splitSpendsByDeadline`), but only for a context
+  that a lease bounds (`utxo.WithLeaseBound`, set by the create-first spend and the
+  roll-forward): the deadline of any other caller says only when it stops waiting. An item whose
+  deadline has passed is completed with an error and is not sent. The items with a deadline are
+  sent apart from the others, in groups of one second, each under the earliest deadline of its
+  group, so no item is limited by a deadline more than a second shorter than its own and one
+  caller that is nearly out of time cannot fail the spends of unrelated ones. Each send, a repeat after an
   overload included, carries only the time that is left as its timeout
   (`uaerospike.Client.BatchOperateBefore`). The client stops at that timeout, and the server
   does not start a command whose timeout has passed. No write of a spend therefore starts after
   the time its lease names, and the lease is live for a further
   `utxostore_spendRollbackTimeout` after it. `aerospike_batchPolicy` can no longer make a spend
-  under a lease outlast it.
+  under a lease outlast it. The queued finalize follows the same rules (`sendFinalizeBatch`): a
+  finalize whose caller has given up is completed with that error and not sent, and the writes
+  are grouped by deadline. Its write would otherwise land late, clear the creating bin and stamp
+  the record with the lease of a caller that already returned an error, and then no caller owns
+  the hand-off. The roll-forward finalizes under a context of its own, bounded by the rollback
+  timeout, as the creator does, so a caller that gives up after the spends does not leave a
+  finalize with nobody to read its answer.
 - **Unknown outcome and crash.** A spend that gave no per-input result, whose context ended, that
   hit `utxostore_spendWaitTimeout`, or that carries a per-input error which is not a verdict of the
   store on that input (a storage fault, a timeout) may still commit. Its lease is not released. A
@@ -643,9 +655,24 @@ from touching the next.
   `utxostore_spendRollbackTimeout`: each of those ends within one timeout, and a holder that
   crashed counts as gone after two. A spend that fails after the call went around once reverses
   the spends of the earlier round as well, under the hold when a rollback record is back at the
-  txid. The store's own partial-spend rollback (`partialSpendRollbackDecision`) follows the same
+  txid, and when no record is at the txid the call claims it with the tentative create of the
+  transaction, which the store writes with CREATE_ONLY and so refuses when another attempt wrote
+  the record first, and rolls that attempt back. This is the one fence the store can order for a
+  txid with no record: a read of the record followed by an unspend would clear the spends of a
+  create that landed between the two. The cleanup runs on a context of its own, because the spend
+  that failed often failed with the context of the caller. The store's own partial-spend rollback (`partialSpendRollbackDecision`) follows the same
   rule and waits in the same way, so a spend that takes one input and fails on another beside a
   busy rollback is reverted and not left beside a hold that expires.
+- **What a reader sees.** A hold has no `outputs` bin. `ParentOutputsForValidation` reads the
+  `hold` bin and answers a missing parent for it, so a child of a rolled-back txid is deferred or
+  parked as for any missing parent, and is not classified as a fault of this node's storage.
+- **A parent that is still committing.** When every input that failed is behind a parent that is
+  locked or still creating, the creator releases its lease and leaves the record creating, with
+  the spends that landed. It does not roll back: a rollback would leave a hold for
+  `utxostore_spendRollbackTimeout`, which a retry of the same transaction meets before the parent
+  has committed. A repeat finds the record, spends again and finalizes it, and the sweep does the
+  same or rolls it back once an input can no longer be spent. One input with any other error
+  decides for the rollback.
 - **Expiry.** A hold expires with its time to live. `ClearCreateFirstHold(hash, adopt)` deletes
   one earlier, or one that has no time to live, filtered on `hold` and on the `holdUntil` that
   was read. Without `adopt` it goes

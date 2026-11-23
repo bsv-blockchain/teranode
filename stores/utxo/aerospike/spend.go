@@ -58,6 +58,7 @@ package aerospike
 import (
 	"context"
 	"runtime/debug"
+	"sort"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -507,8 +508,12 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 	items := make([]*batchSpend, len(spends))
 	group := completion.NewGroup(int32(len(spends)))
 
-	// Zero when the caller has no deadline. The store keeps it for the queued items.
-	deadline, _ := ctx.Deadline()
+	// Zero unless the caller holds a spend lease that this deadline bounds, so only a create-first
+	// spender is held to it. The store keeps it for the queued items.
+	var deadline time.Time
+	if utxo.IsLeaseBound(ctx) {
+		deadline, _ = ctx.Deadline()
+	}
 
 	// Enqueue all inputs of this tx as one ordered group via a single
 	// PutBatchCtx, instead of one PutCtx per input — cutting the per-item
@@ -1176,19 +1181,27 @@ func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 	}
 }
 
-// splitSpendsByDeadline is the end-to-end bound on a queued spend. A caller whose context has a
-// deadline stops waiting at it, and a create-first spender tells every other actor, with its spend
-// lease, that it spends no later than that. The batch of such a caller is still queued here, on
-// the context of the store, so the store must keep the promise itself:
+// splitSpendsByDeadline is the end-to-end bound on a queued spend. A create-first spender tells
+// every other actor, with its spend lease, that it spends no later than the deadline of its
+// context (utxo.WithLeaseBound). The caller stops waiting at it, but its batch is queued on the
+// context of the store, so the store must keep the promise itself:
 //   - an item whose deadline has passed is completed with an error and is not sent;
-//   - the items with a deadline are sent apart from the others, under the earliest of their
-//     deadlines (spendWriteContext), so no send of theirs starts after it and each send carries
-//     only the time that is left. The items with no deadline keep the timeouts of the policy.
+//   - the items with a deadline are sent apart from the others, grouped by the second their
+//     deadline falls in, and each group under the earliest of its deadlines (spendWriteContext), so
+//     no send of theirs starts after it and each send carries only the time that is left. A group
+//     spans at most a second, so no item is limited by a deadline more than a second shorter than
+//     its own, and a caller that is nearly out of time cannot shorten the budget of an unrelated
+//     one. The items with no deadline keep the timeouts of the policy, and spends that no lease
+//     bounds are not touched.
 //
 // A lease is live for a further utxostore_spendRollbackTimeout after the deadline it names, which
 // covers a write that started just before it.
 func splitSpendsByDeadline(batch []*batchSpend, now time.Time) [][]*batchSpend {
-	var unbounded, bounded []*batchSpend
+	var unbounded []*batchSpend
+
+	byBucket := make(map[time.Time][]*batchSpend)
+
+	var buckets []time.Time
 
 	for _, item := range batch {
 		switch {
@@ -1199,18 +1212,26 @@ func splitSpendsByDeadline(batch []*batchSpend, now time.Time) [][]*batchSpend {
 		case !item.deadline.After(now):
 			item.complete(errors.NewServiceUnavailableError("[SPEND] the spend of %s was not sent: the deadline of its caller passed while it was queued", item.spend.TxID.String()))
 		default:
-			bounded = append(bounded, item)
+			bucket := item.deadline.Truncate(time.Second)
+
+			if _, seen := byBucket[bucket]; !seen {
+				buckets = append(buckets, bucket)
+			}
+
+			byBucket[bucket] = append(byBucket[bucket], item)
 		}
 	}
 
-	parts := make([][]*batchSpend, 0, 2)
+	parts := make([][]*batchSpend, 0, 1+len(buckets))
 
 	if len(unbounded) > 0 {
 		parts = append(parts, unbounded)
 	}
 
-	if len(bounded) > 0 {
-		parts = append(parts, bounded)
+	sort.Slice(buckets, func(i, j int) bool { return buckets[i].Before(buckets[j]) })
+
+	for _, bucket := range buckets {
+		parts = append(parts, byBucket[bucket])
 	}
 
 	return parts

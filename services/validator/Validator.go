@@ -1231,7 +1231,12 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 			// exactly as for a fresh create. The roll-forward leaves the record Locked. This
 			// attempt did not create it, so a shed hand-off must not unwind it (see below).
 			if txMetaData.Creating && !rolledForward {
-				return nil, errors.NewProcessingError("[Validate][%s] tx exists in creating state and the store did not roll it forward; not treating as validated", txID, existsErr)
+				// The error must not carry existsErr as its cause: errors.Is walks the whole chain,
+				// and a caller that finds ErrTxExists in it reads the transaction as already
+				// validated, which is what this guard exists to refuse. The cause is logged.
+				v.logger.Warnf("[Validate][%s] tx exists in creating state and the store did not roll it forward: %v", txID, existsErr)
+
+				return nil, errors.NewProcessingError("[Validate][%s] tx exists in creating state and the store did not roll it forward; not treating as validated", txID)
 			}
 
 			if rolledForward {

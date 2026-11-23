@@ -65,6 +65,24 @@ func IsCreateOutcomeUnknown(err error) bool {
 	return hasErrorData(err, createOutcomeUnknownKey)
 }
 
+// leaseBoundKey is the context key WithLeaseBound sets.
+type leaseBoundKey struct{}
+
+// WithLeaseBound marks ctx as the context of a spend or a finalize that a spend lease bounds: the
+// caller told every other actor, with its lease, that it acts no later than the deadline of ctx. A
+// store that queues the write must then not start it after that deadline. A context that is not
+// marked carries a deadline that only says when its caller stops waiting.
+func WithLeaseBound(ctx context.Context) context.Context {
+	return context.WithValue(ctx, leaseBoundKey{}, true)
+}
+
+// IsLeaseBound reports whether ctx carries the mark of WithLeaseBound.
+func IsLeaseBound(ctx context.Context) bool {
+	bound, _ := ctx.Value(leaseBoundKey{}).(bool)
+
+	return bound
+}
+
 // rolledForwardKey is the error-data key MarkRolledForward sets.
 const rolledForwardKey = "rolledForward"
 
@@ -357,7 +375,10 @@ func SequentialSpendAndCreate(ctx context.Context, logger ulogger.Logger, s Sequ
 		if !options.CreateOnly {
 			spends, err = s.Spend(ctx, tx, blockHeight, options.IgnoreFlags)
 			if err != nil {
-				inTheWay.reverseCarried(ctx, logger, s, tx)
+				if inTheWay.reverseCarried(ctx, logger, s, tx, blockHeight, opts) {
+					// The claim wrote a record that carries the position.
+					positionClean = false
+				}
 
 				if taken != lane.None {
 					// The spend half failed, so no create of this round ran and its outcome is known
@@ -508,7 +529,10 @@ func (r *rollbackInTheWay) resolve(ctx context.Context, logger ulogger.Logger, s
 			return true, nil, nil
 		}
 
-		return false, spends, existsErr
+		// A record that is being rolled back is not a stored transaction. Reporting it as one, with
+		// ErrTxExists, lets a caller that treats that as done spend the parent outputs of a txid that
+		// holds only a placeholder. The error is transient and does not carry ErrTxExists.
+		return false, spends, errors.NewProcessingError("SpendAndCreate: tx %s is being rolled back by a create-first attempt and is not a stored transaction; retry after it completes", hash.String())
 	}
 
 	if expired {
@@ -533,24 +557,98 @@ func (r *rollbackInTheWay) resolve(ctx context.Context, logger ulogger.Logger, s
 
 // reverseCarried runs when the spend of a later round failed. The spends of the earlier round are
 // then spends of a txid that this call will not create, and the store's own rollback covers only
-// the inputs that the failed spend took. They are reversed when no record owns them: at once when
-// the txid has no record, and under the hold when the record of a rollback is back at it. A
-// record of a later attempt owns them, and they stay.
-func (r *rollbackInTheWay) reverseCarried(ctx context.Context, logger ulogger.Logger, s SequentialStore, tx *bt.Tx) {
+// the inputs that the failed spend took. It reports whether it wrote a record for the txid.
+//
+// It runs under a context of its own. The spend that failed often failed because the caller's
+// context ended, and this cleanup is needed most then, so it neither uses that context nor depends
+// on it: it ignores the caller's cancellation and has its own bound, and the wait for a taken hold
+// starts when it starts, not when the call did.
+//
+// The spends are reversed when no record owns them, and what decides that has to be a write that
+// the store orders, not a read followed by a write: spends are the txid and the input index, so an
+// attempt that creates the txid between the two would have its own spends reversed.
+//   - A record of a rollback is at the txid: the hold of its attempt is taken, which no create can
+//     adopt, and the spends are reversed under it (settle).
+//   - A record of a later attempt is at the txid: it owns the spends, and they stay.
+//   - No record is at the txid: the call claims it with the tentative create of the transaction,
+//     which the store writes with CREATE_ONLY, so it is refused when another attempt got there
+//     first and the call then looks again. With the record its own, the call rolls the attempt
+//     back (RollBackCreating): the marker, the reversal of every input under the hold, and the
+//     hold that keeps the txid taken until it expires.
+func (r *rollbackInTheWay) reverseCarried(ctx context.Context, logger ulogger.Logger, s SequentialStore, tx *bt.Tx, blockHeight uint32, opts []CreateOption) (wroteRecord bool) {
 	if len(r.carried) == 0 {
-		return
+		return false
+	}
+
+	hash := tx.TxIDChainHash()
+	bound := rollbackBound(s)
+
+	rbCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 4*bound)
+	defer cancel()
+
+	r.deadline = time.Now().Add(2 * bound)
+
+	for round := 0; round < reverseCarriedRounds; round++ {
+		outcome, err := r.settle(rbCtx, logger, s, hash, r.carried, nil)
+
+		switch outcome {
+		case rollbackReversed, rollbackReplaced:
+			r.carried = nil
+
+			return wroteRecord
+		case rollbackGone:
+			claimed, claimErr := claimAndRollBack(rbCtx, logger, s, tx, blockHeight, opts)
+			wroteRecord = wroteRecord || claimed
+
+			if claimErr == nil {
+				r.carried = nil
+
+				return wroteRecord
+			}
+
+			if !errors.Is(claimErr, errors.ErrTxExists) {
+				logger.Errorf("SpendAndCreate: the spends of an earlier round for %s could not be reversed after its spend failed, they are left in place: %v", hash.String(), claimErr)
+
+				return wroteRecord
+			}
+
+			// Another attempt wrote the record first: look again, it owns the spends now.
+		default:
+			logger.Errorf("SpendAndCreate: the spends of an earlier round for %s could not be reversed after its spend failed, they are left in place: %v", hash.String(), err)
+
+			return wroteRecord
+		}
+	}
+
+	return wroteRecord
+}
+
+// reverseCarriedRounds bounds how often reverseCarried looks again after another attempt wrote the
+// record of the txid between its read and its claim.
+const reverseCarriedRounds = 3
+
+// claimAndRollBack writes the tentative record of tx and rolls its attempt back, which reverses
+// every input of the transaction under the marker and the hold of the attempt. The create is the
+// claim: the store writes it with CREATE_ONLY, so it fails with ErrTxExists when any record is at
+// the txid, and the error is returned for the caller to look again. claimed reports whether the
+// record was written.
+func claimAndRollBack(ctx context.Context, logger ulogger.Logger, s SequentialStore, tx *bt.Tx, blockHeight uint32, opts []CreateOption) (claimed bool, err error) {
+	createOpts := append(append([]CreateOption{}, opts...), WithCreating(true))
+
+	md, err := s.Create(ctx, tx, blockHeight, createOpts...)
+	if err != nil {
+		return false, err
 	}
 
 	hash := tx.TxIDChainHash()
 
-	outcome, err := r.settle(ctx, logger, s, hash, r.carried, nil)
-	if outcome == rollbackGone {
-		outcome, err = rollbackReversed, unspendDetached(ctx, logger, tolerantReverser{s}, r.carried)
+	releaseSpendLease(ctx, logger, s, hash, md.Attempt, md.Attempt)
+
+	if rollbackErr := RollBackCreating(ctx, logger, s, tx, md.Attempt); rollbackErr != nil {
+		return true, errors.NewProcessingError("SpendAndCreate: rolling back the claim of %s failed, tx left for the sweep", hash.String(), rollbackErr)
 	}
 
-	if outcome == rollbackUndecided || err != nil {
-		logger.Errorf("SpendAndCreate: the spends of an earlier round for %s could not be reversed after its spend failed, they are left in place: %v", hash.String(), err)
-	}
+	return true, nil
 }
 
 // settle waits at the record of a rollback until the call can act on it, and acts:
@@ -650,8 +748,8 @@ func unspendDetached(ctx context.Context, logger ulogger.Logger, s SpendReverser
 }
 
 // finalizeDetached runs finalizeWithRetry under rollbackContext.
-func finalizeDetached(ctx context.Context, logger ulogger.Logger, s SequentialStore, tx *bt.Tx, attempt, lease []byte) error {
-	fCtx, cancel := rollbackContext(ctx, s)
+func finalizeDetached(ctx context.Context, logger ulogger.Logger, s transactionFinalizer, tx *bt.Tx, attempt, lease []byte) error {
+	fCtx, cancel := rollbackContext(WithLeaseBound(ctx), s)
 	defer cancel()
 
 	return finalizeWithRetry(fCtx, logger, s, tx, attempt, lease)
@@ -679,6 +777,13 @@ type tolerantReverser struct {
 
 func (r tolerantReverser) Unspend(ctx context.Context, spends []*Spend, flagAsLocked ...bool) error {
 	return UnspendTolerantOfMissingParents(ctx, r.SpendReverser, spends)
+}
+
+// SpendRollbackTimeout is the bound of the store this reverser wraps. The reverser embeds the
+// one-method SpendReverser, so without this its method set has no bound, rollbackBound falls back
+// to its default, and a reversal under it ignores utxostore_spendRollbackTimeout.
+func (r tolerantReverser) SpendRollbackTimeout() time.Duration {
+	return rollbackBound(r.SpendReverser)
 }
 
 // RollBackCreating undoes a create-first transition whose spend failed: it marks the record
@@ -979,6 +1084,10 @@ func releaseRollbackHold(ctx context.Context, logger ulogger.Logger, s rollbackH
 //     the spend batch may still commit after the caller returned, so nothing is reversed or
 //     deleted and the lease is not released. The creating record stays as the recovery journal
 //     and the sweep re-spends idempotently, or rolls back once the lease is stale.
+//   - Spend fails and every input that failed is behind a parent that is locked or still
+//     creating (spendFailureTransient): the lease is released and nothing is reversed. The
+//     record stays creating, as the journal of the spends that landed, so a repeat of the call
+//     finds it, spends again and finalizes. A rollback would leave a hold that the repeat meets.
 //   - Spend fails otherwise: the lease is released and RollBackCreating marks the record rolling
 //     back, unspends every input of the tx and ends the rollback, which leaves a hold for the
 //     txid, under a detached context bounded like the spend-first rollback. Without the rollback
@@ -1086,7 +1195,7 @@ func sequentialCreateFirst(ctx context.Context, logger ulogger.Logger, s Sequent
 	freshFlags := ignoreFlags
 	freshFlags.RequireParentOutputs = true
 
-	spendCtx, cancelSpend := context.WithDeadline(ctx, spendDeadline)
+	spendCtx, cancelSpend := context.WithDeadline(WithLeaseBound(ctx), spendDeadline)
 	spends, err := s.Spend(spendCtx, tx, blockHeight, freshFlags)
 
 	cancelSpend()
@@ -1097,6 +1206,17 @@ func sequentialCreateFirst(ctx context.Context, logger ulogger.Logger, s Sequent
 		}
 
 		releaseSpendLease(ctx, logger, s, hash, md.Attempt, md.Attempt)
+
+		if spendFailureTransient(spends) {
+			// Every input that failed is behind a parent that is committing: its record is locked
+			// or still creating, and that window ends. A rollback would leave a hold on this txid
+			// for the rollback timeout, which a retry of the same transaction meets before the
+			// parent has committed, and the retry loop that exists for this window gives up on it.
+			// The record stays creating instead, as the journal of the spends that landed. A repeat
+			// of this call finds it, spends the inputs again and finalizes, and the sweep does the
+			// same, or rolls it back once an input can no longer be spent.
+			return nil, spends, err
+		}
 
 		if rollbackErr := RollBackCreating(ctx, logger, s, tx, md.Attempt); rollbackErr != nil {
 			return nil, spends, errors.NewProcessingError("SpendAndCreate: error reversing utxo spends: %v", rollbackErr, err)
@@ -1156,6 +1276,29 @@ func spendOutcomeUnknown(spends []*Spend, err error) bool {
 
 	// A failure that names no input is known only when the error itself is a verdict.
 	return verdicts == 0 && !isSpendVerdict(err)
+}
+
+// spendFailureTransient reports whether every input of a failed spend that carries an error is
+// behind a parent whose own two-phase commit is in flight: ErrTxLocked or ErrTxCreating. Such a
+// failure ends by itself when the parent commits, and the store's own partial-spend rollback skips
+// it for the same reason. One input with any other error, or no per-input error at all, is not
+// transient.
+func spendFailureTransient(spends []*Spend) bool {
+	failed := 0
+
+	for _, sp := range spends {
+		if sp == nil || sp.Err == nil {
+			continue
+		}
+
+		if !errors.Is(sp.Err, errors.ErrTxLocked) && !errors.Is(sp.Err, errors.ErrTxCreating) {
+			return false
+		}
+
+		failed++
+	}
+
+	return failed > 0
 }
 
 // isSpendVerdict reports whether the error of one input is the store's answer about that input:
@@ -1298,7 +1441,7 @@ type creatingFinisher interface {
 func rollForwardCreating(ctx context.Context, logger ulogger.Logger, s creatingFinisher, tx *bt.Tx, attempt []byte, spend func(context.Context) ([]*Spend, error)) (spends []*Spend, completed bool, err error) {
 	hash := tx.TxIDChainHash()
 
-	bCtx, cancel := boundedContext(ctx, s)
+	bCtx, cancel := boundedContext(WithLeaseBound(ctx), s)
 	defer cancel()
 
 	lease, took, err := s.TakeSpendLease(bCtx, hash, attempt)
@@ -1326,7 +1469,10 @@ func rollForwardCreating(ctx context.Context, logger ulogger.Logger, s creatingF
 			hash.String(), len(spends), len(tx.Inputs))
 	}
 
-	if err = finalizeWithRetry(bCtx, logger, s, tx, attempt, lease); err != nil {
+	// The spends are done, so the finalize runs to its end whatever happens to the caller's
+	// context: it ends with the rollback bound, as the creator's does. A finalize that stopped
+	// with its caller would leave the answer of a write that may still land with nobody to read it.
+	if err = finalizeDetached(ctx, logger, s, tx, attempt, lease); err != nil {
 		releaseSpendLease(ctx, logger, s, hash, attempt, lease)
 
 		if IsAlreadyFinal(err) {
