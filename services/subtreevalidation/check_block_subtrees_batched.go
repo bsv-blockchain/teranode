@@ -603,7 +603,8 @@ func (u *Server) writeList(ctx context.Context, checker validator.BlockBatchChec
 
 	prometheusSubtreeValidationBatchLists.Inc()
 
-	results, err := u.utxoStore.SpendAndCreateMulti(ctx, txs, blockHeight, utxo.WithTXIDs(txids), utxo.WithIgnoreLocked(true))
+	results, err := u.utxoStore.SpendAndCreateMulti(ctx, txs, blockHeight, utxo.WithTXIDs(txids), utxo.WithIgnoreLocked(true),
+		utxo.WithCaller(utxo.CallerSubtreeValidation))
 
 	switch {
 	case utxo.IsSpendAndCreateMultiRefused(err):

@@ -558,6 +558,12 @@ Any centrifuge-compatible client (`centrifuge-go`, `centrifuge-js`, `centrifuge-
 - **Auto-subscription**: Upon connection, clients are automatically subscribed to all available channels
 - **Reconnection**: Clients should implement reconnection logic with exponential backoff
 - **Status Caching**: New clients immediately receive the cached current node status upon connection
+- **Delivery Guarantees**: delivery is best-effort (at-most-once), with no history and no recovery.
+    - The Asset service relays the P2P WebSocket feed, so all loss points of [P2P WebSocket notifications](p2p.md#26-websocket-notifications) apply first.
+    - When the Asset service loses its connection to the P2P service, it reconnects with backoff (1 s to 60 s). Notifications sent during the gap are lost.
+    - The channels publish without Centrifuge history, so a reconnecting client cannot recover missed publications.
+    - Centrifuge disconnects a client whose outbound queue exceeds 1 MB (the `ClientQueueMaxSize` default).
+    - After a reconnect, re-read the current state from the HTTP API. Do not use this socket as a complete record of blocks or subtrees.
 
 ## 5. Technology
 

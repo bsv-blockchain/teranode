@@ -66,6 +66,11 @@ message CheckBlockSubtreesRequest {
   string base_url = 2;
   // peer_id is the P2P peer identifier used for peer reputation tracking
   string peer_id = 3;
+  // keep_block_assembly_handoff asks subtree validation to hand the block's unseen
+  // transactions to block assembly even though the FSM is in CATCHINGBLOCKS. Block
+  // validation sets it for a short catch-up that started from RUNNING. Unset reads as
+  // false, so an older block validation keeps the hand-off off during catch-up.
+  bool keep_block_assembly_handoff = 4;
 }
 
 // CheckBlockSubtreesResponse contains the validation results for subtrees in a block.

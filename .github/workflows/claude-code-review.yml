@@ -284,7 +284,7 @@ jobs:
             Apply the methodology from `.claude/agents/document-reviewer.md` scoped to PR changes.
 
             When the PR modifies documentation files (README.md, docs/*, CONTRIBUTING.md, ARCHITECTURE.md,
-            DESIGN.md, CHANGELOG.md, OpenAPI/Swagger specs, or significant inline doc comments/godoc):
+            DESIGN.md, OpenAPI/Swagger specs, or significant inline doc comments/godoc):
             - Verify factual accuracy against current code — do documented behaviors match the actual implementation?
             - Check that code examples and snippets match actual function signatures and behavior
             - Look for completeness gaps: missing options, edge cases, warnings, or error conditions

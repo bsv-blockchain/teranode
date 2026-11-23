@@ -196,6 +196,28 @@ func TestHeader_Read_UnknownMagic(t *testing.T) {
 	assert.Contains(t, err.Error(), "expected to read 8 bytes")
 }
 
+// TestHeader_UnknownMagicIsWrapped pins that both header readers wrap ErrUnknownMagic, which
+// the blob stores use to tell a corrupt header from a failed read.
+func TestHeader_UnknownMagicIsWrapped(t *testing.T) {
+	var header Header
+
+	err := header.Read(bytes.NewReader([]byte("NOTMAGIC")))
+	require.ErrorIs(t, err, ErrUnknownMagic)
+	require.Contains(t, err.Error(), "unknown magic")
+
+	_, err = ReadHeaderFromBytes([]byte("NOTMAGIC"))
+	require.ErrorIs(t, err, ErrUnknownMagic)
+
+	// A short input is a different fault: there are not enough bytes to hold any magic.
+	_, err = ReadHeaderFromBytes([]byte("abc"))
+	require.Error(t, err)
+	require.NotErrorIs(t, err, ErrUnknownMagic)
+
+	err = header.Read(bytes.NewReader([]byte("abc")))
+	require.Error(t, err)
+	require.NotErrorIs(t, err, ErrUnknownMagic)
+}
+
 // TestHeader_Read_BackwardCompatibility tests Read with trailing nulls
 func TestHeader_Read_BackwardCompatibility(t *testing.T) {
 	var header Header
@@ -384,6 +406,24 @@ func TestFileTypeToMagicMapping(t *testing.T) {
 			assert.Equal(t, expectedMagic, magicBytes)
 		})
 	}
+}
+
+// Every file type has its own magic, and the magic reads back as that type. The UTXO headers
+// type is the one with two magics, its two format versions.
+func TestFileTypeMagicsAreDistinct(t *testing.T) {
+	seen := map[[8]byte]FileType{}
+
+	for fileType, magic := range fileTypeToMagic {
+		other, dup := seen[magic]
+		require.False(t, dup, "%s and %s share a magic", fileType, other)
+
+		seen[magic] = fileType
+		require.Equal(t, fileType, magicToFileType[magic], "%s reads back from its magic", fileType)
+	}
+
+	// The lane bitmaps file's name and magic are on disk beside every subtree.
+	require.Equal(t, "subtreeLaneBitmaps", FileTypeSubtreeLaneBitmaps.String())
+	require.Equal(t, [8]byte{'S', 'L', 'B', '-', '1', '.', '0', ' '}, FileTypeSubtreeLaneBitmaps.ToMagicBytes())
 }
 
 // TestMagicToFileTypeMapping tests the magicToFileType mapping

@@ -25,6 +25,8 @@ import (
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/kafka"
 	"github.com/bsv-blockchain/teranode/util/test"
+	"github.com/prometheus/client_golang/prometheus"
+	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -482,8 +484,13 @@ func TestValidator_ValidateInternal_CreateConflicting_TxAlreadyExists(t *testing
 	)
 
 	testHash, _ := chainhash.NewHashFromStr("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
+	// Spent by a different transaction, which every store names: aerospike and sql fill
+	// ConflictingTxID from the spend record, and utxoset from its journal. A bare ErrSpent with
+	// no spender is utxoset's shape for coins this transaction may have taken itself, which the
+	// resubmission check answers instead (TestValidate_ResubmissionIsRecognisedByItsOwnTxid).
+	winner := chainhash.Hash{0x0b}
 	spends := []*utxo.Spend{
-		{TxID: testHash, Vout: 0, Err: errors.ErrSpent},
+		{TxID: testHash, Vout: 0, Err: errors.ErrSpent, ConflictingTxID: &winner},
 	}
 
 	// The store knows the real parent: the validator re-extends from the
@@ -547,8 +554,11 @@ func TestValidator_ValidateInternal_CreateConflicting_TxAlreadyExistsEvictsTxMet
 	)
 
 	testHash, _ := chainhash.NewHashFromStr("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
+	// Spent by a named other transaction, as every store reports a real conflict; see
+	// TestValidator_ValidateInternal_CreateConflicting_TxAlreadyExists.
+	winner := chainhash.Hash{0x0b}
 	spends := []*utxo.Spend{
-		{TxID: testHash, Vout: 0, Err: errors.ErrSpent},
+		{TxID: testHash, Vout: 0, Err: errors.ErrSpent, ConflictingTxID: &winner},
 	}
 
 	// The store knows the real parent: the validator re-extends from the
@@ -618,8 +628,11 @@ func TestValidator_ValidateInternal_CreateConflicting_PartialMarkEvictsTxMeta(t 
 	)
 
 	testHash, _ := chainhash.NewHashFromStr("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
+	// Spent by a named other transaction, as every store reports a real conflict; see
+	// TestValidator_ValidateInternal_CreateConflicting_TxAlreadyExists.
+	winner := chainhash.Hash{0x0b}
 	spends := []*utxo.Spend{
-		{TxID: testHash, Vout: 0, Err: errors.ErrSpent},
+		{TxID: testHash, Vout: 0, Err: errors.ErrSpent, ConflictingTxID: &winner},
 	}
 
 	// The store knows the real parent: the validator re-extends from the
@@ -859,7 +872,10 @@ func TestValidator_ValidateInternal_UTXOError_ConflictingTxCreation(t *testing.T
 
 	// Mock the spend phase to return UTXO error with conflicting spend (Once so
 	// the conflicting-fallback create below matches the second expectation)
-	spends := []*utxo.Spend{{TxID: &chainhash.Hash{}, Vout: 0, Err: errors.ErrSpent}}
+	// Spent by a named other transaction, as every store reports a real conflict; see
+	// TestValidator_ValidateInternal_CreateConflicting_TxAlreadyExists.
+	winner := chainhash.Hash{0x0b}
+	spends := []*utxo.Spend{{TxID: &chainhash.Hash{}, Vout: 0, Err: errors.ErrSpent, ConflictingTxID: &winner}}
 	utxoErr := errors.NewUtxoError("utxo error", errors.ErrUtxoError)
 	mockStore.On("SpendAndCreate", mock.Anything, tx, mock.Anything, mock.Anything).Return(nil, spends, utxoErr).Once()
 
@@ -874,17 +890,69 @@ func TestValidator_ValidateInternal_UTXOError_ConflictingTxCreation(t *testing.T
 	mockStore.AssertExpectations(t)
 }
 
-func TestValidator_ValidateInternal_TxNotFoundError_ExistingTx(t *testing.T) {
-	ctx := context.Background()
-	logger := ulogger.TestLogger{}
-	mockStore := &utxo.MockUtxostore{}
-	settings := test.CreateBaseTestSettings(t)
+// TestValidate_SpendStepTxNotFoundNotBlessed pins that the spend step has no
+// DAH-evicted-parent grace. A not-found from SpendAndCreate surfaces as an error,
+// even for a child that is mined on the current chain, and the validator reads
+// neither the child record nor the chain. The only grace is the ingest extend step.
+func TestValidate_SpendStepTxNotFoundNotBlessed(t *testing.T) {
+	graceChain := newGraceChain(t)
 
-	validator, err := New(ctx, logger, settings, mockStore, nil, nil, nil, nil, nil)
+	for _, inBlock := range []bool{false, true} {
+		t.Run(fmt.Sprintf("inBlock=%v", inBlock), func(t *testing.T) {
+			ctx := context.Background()
+			mockStore := &utxo.MockUtxostore{}
+			chain := &graceChainClient{ClientI: graceChain.client}
+
+			validator, err := New(ctx, ulogger.TestLogger{}, test.CreateBaseTestSettings(t), mockStore, nil, nil, nil, nil, chain)
+			require.NoError(t, err)
+
+			v := validator.(*Validator)
+
+			privateKey, publicKey := bec.PrivateKeyFromBytes([]byte("THIS_IS_A_DETERMINISTIC_PRIVATE_KEY"))
+			coinbaseTx := transactions.Create(t,
+				transactions.WithCoinbaseData(100, "/Test miner/"),
+				transactions.WithP2PKHOutputs(1, 50e8, publicKey),
+			)
+			tx := transactions.Create(t,
+				transactions.WithPrivateKey(privateKey),
+				transactions.WithInput(coinbaseTx, 0),
+				transactions.WithP2PKHOutputs(1, 1000),
+				transactions.WithChangeOutput(),
+			)
+
+			mockStore.On("ParentOutputsForValidation", mock.Anything, mock.Anything).Return(parentOutputsOf(coinbaseTx, utxo.ParentOutputNotMined), nil)
+			mockStore.On("GetBlockState").Return(utxo.BlockState{Height: 100, MedianTime: 1000000000})
+			mockStore.On("SpendAndCreate", mock.Anything, tx, mock.Anything, mock.Anything).Return(nil, []*utxo.Spend{}, errors.NewTxNotFoundError("tx not found"))
+			mockStore.On("GetMeta", mock.Anything, mock.Anything, mock.Anything).
+				Run(func(args mock.Arguments) {
+					// A record the grace would bless: mined on the current chain, with inpoints.
+					*args.Get(2).(*meta.Data) = *minedRecord(t, tx, graceChain.mainIDs[1])
+				}).
+				Return(nil).Maybe()
+
+			txMetaData, err := v.validateInternal(ctx, tx, 100, &Options{InBlock: inBlock})
+
+			require.Nil(t, txMetaData)
+			require.ErrorIs(t, err, errors.ErrTxNotFound)
+			require.Contains(t, err.Error(), "error spending utxos")
+			mockStore.AssertNotCalled(t, "GetMeta", mock.Anything, mock.Anything, mock.Anything)
+			require.Empty(t, chain.asked)
+		})
+	}
+}
+
+// TestValidateInternalRecordsHistogramPastDecoupling pins that the
+// validateInternal span still ends, and records its histogram sample, on a
+// return after the post-decision context is detached.
+func TestValidateInternalRecordsHistogramPastDecoupling(t *testing.T) {
+	ctx := context.Background()
+	mockStore := &utxo.MockUtxostore{}
+
+	validator, err := New(ctx, ulogger.TestLogger{}, test.CreateBaseTestSettings(t), mockStore, nil, nil, nil, nil, nil)
 	require.NoError(t, err)
+
 	v := validator.(*Validator)
 
-	// Create transaction
 	privateKey, publicKey := bec.PrivateKeyFromBytes([]byte("THIS_IS_A_DETERMINISTIC_PRIVATE_KEY"))
 	coinbaseTx := transactions.Create(t,
 		transactions.WithCoinbaseData(100, "/Test miner/"),
@@ -897,146 +965,40 @@ func TestValidator_ValidateInternal_TxNotFoundError_ExistingTx(t *testing.T) {
 		transactions.WithChangeOutput(),
 	)
 
-	// Mock parent tx extension
 	mockStore.On("ParentOutputsForValidation", mock.Anything, mock.Anything).Return(parentOutputsOf(coinbaseTx, utxo.ParentOutputNotMined), nil)
 	mockStore.On("GetBlockState").Return(utxo.BlockState{Height: 100, MedianTime: 1000000000})
+	mockStore.On("SpendAndCreate", mock.Anything, tx, mock.Anything, mock.Anything).Return(nil, []*utxo.Spend{}, errors.NewStorageError("spend failed"))
 
-	// Mock spendUtxos to return TxNotFound error
-	mockStore.On("SpendAndCreate", mock.Anything, tx, mock.Anything, mock.Anything).Return(nil, []*utxo.Spend{}, errors.NewTxNotFoundError("tx not found"))
+	histogram := isolateValidateHistogram(t)
 
-	// Mock GetMeta to return existing tx already mined and not flagged — legitimate DAH-evicted-parent case.
-	existingMeta := &meta.Data{Tx: tx, BlockIDs: []uint32{1, 2}}
-	mockStore.On("GetMeta", mock.Anything, mock.Anything, mock.Anything).
-		Run(func(args mock.Arguments) {
-			data := args.Get(2).(*meta.Data)
-			*data = *existingMeta
-		}).
-		Return(nil)
+	_, err = v.validateInternal(ctx, tx, 100, &Options{})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "error spending utxos")
 
-	options := &Options{}
-	txMetaData, err := v.validateInternal(ctx, tx, 100, options)
-
-	assert.NoError(t, err)
-	assert.NotNil(t, txMetaData)
-	assert.Equal(t, []uint32{1, 2}, txMetaData.BlockIDs)
-	mockStore.AssertExpectations(t)
+	require.Equal(t, uint64(1), validateHistogramCount(t, histogram), "validateInternal must record exactly one histogram sample")
 }
 
-// TestValidate_TxNotFoundShortcut verifies that when spendUtxos returns ErrTxNotFound (parent missing),
-// the validator only short-circuits with (meta, nil) when the stored metadata genuinely confirms prior
-// full validation: tx has been mined (BlockIDs non-empty), is not Conflicting, and is not Locked.
-// In all other cases the original ErrTxNotFound must surface to the caller. This guards against a reorg
-// or DAH-eviction window where a stale or mid-flight record could otherwise be accepted as "blessed".
-func TestValidate_TxNotFoundShortcut(t *testing.T) {
-	makeTxAndParent := func(t *testing.T) (*bt.Tx, *bt.Tx) {
-		privateKey, publicKey := bec.PrivateKeyFromBytes([]byte("THIS_IS_A_DETERMINISTIC_PRIVATE_KEY"))
-		coinbaseTx := transactions.Create(t,
-			transactions.WithCoinbaseData(100, "/Test miner/"),
-			transactions.WithP2PKHOutputs(1, 50e8, publicKey),
-		)
-		tx := transactions.Create(t,
-			transactions.WithPrivateKey(privateKey),
-			transactions.WithInput(coinbaseTx, 0),
-			transactions.WithP2PKHOutputs(1, 1000),
-			transactions.WithChangeOutput(),
-		)
-		return tx, coinbaseTx
-	}
+// isolateValidateHistogram swaps the validateInternal histogram for an
+// unregistered one for this test, so other tests cannot change its count.
+func isolateValidateHistogram(t *testing.T) prometheus.Histogram {
+	t.Helper()
 
-	setupValidator := func(t *testing.T, tx *bt.Tx, coinbaseTx *bt.Tx, getMetaResult *meta.Data, getMetaErr error) (*Validator, *utxo.MockUtxostore) {
-		ctx := context.Background()
-		logger := ulogger.TestLogger{}
-		mockStore := &utxo.MockUtxostore{}
-		settings := test.CreateBaseTestSettings(t)
+	original := prometheusTransactionValidateTotal
+	histogram := prometheus.NewHistogram(prometheus.HistogramOpts{Name: "test_validator_validate_total"})
+	prometheusTransactionValidateTotal = histogram
 
-		validator, err := New(ctx, logger, settings, mockStore, nil, nil, nil, nil, nil)
-		require.NoError(t, err)
-		v := validator.(*Validator)
+	t.Cleanup(func() { prometheusTransactionValidateTotal = original })
 
-		mockStore.On("ParentOutputsForValidation", mock.Anything, mock.Anything).Return(parentOutputsOf(coinbaseTx, utxo.ParentOutputNotMined), nil)
-		mockStore.On("GetBlockState").Return(utxo.BlockState{Height: 100, MedianTime: 1000000000})
-		mockStore.On("SpendAndCreate", mock.Anything, tx, mock.Anything, mock.Anything).Return(nil, []*utxo.Spend{}, errors.NewTxNotFoundError("tx not found"))
-		if getMetaErr != nil {
-			mockStore.On("GetMeta", mock.Anything, mock.Anything, mock.Anything).Return(getMetaErr)
-		} else {
-			mockStore.On("GetMeta", mock.Anything, mock.Anything, mock.Anything).
-				Run(func(args mock.Arguments) {
-					data := args.Get(2).(*meta.Data)
-					*data = *getMetaResult
-				}).
-				Return(nil)
-		}
+	return histogram
+}
 
-		return v, mockStore
-	}
+func validateHistogramCount(t *testing.T, histogram prometheus.Histogram) uint64 {
+	t.Helper()
 
-	t.Run("shortcut allowed when mined and not flagged", func(t *testing.T) {
-		tx, coinbaseTx := makeTxAndParent(t)
-		existingMeta := &meta.Data{Tx: tx, BlockIDs: []uint32{1, 2}, Conflicting: false, Locked: false}
-		v, mockStore := setupValidator(t, tx, coinbaseTx, existingMeta, nil)
+	m := &dto.Metric{}
+	require.NoError(t, histogram.Write(m))
 
-		txMetaData, err := v.validateInternal(context.Background(), tx, 100, &Options{})
-
-		require.NoError(t, err)
-		require.NotNil(t, txMetaData)
-		require.Equal(t, []uint32{1, 2}, txMetaData.BlockIDs)
-		mockStore.AssertExpectations(t)
-	})
-
-	t.Run("shortcut denied when not yet mined (BlockIDs empty)", func(t *testing.T) {
-		tx, coinbaseTx := makeTxAndParent(t)
-		notYetMined := &meta.Data{Tx: tx, BlockIDs: nil, Conflicting: false, Locked: false}
-		v, mockStore := setupValidator(t, tx, coinbaseTx, notYetMined, nil)
-
-		txMetaData, err := v.validateInternal(context.Background(), tx, 100, &Options{})
-
-		require.Error(t, err)
-		require.Nil(t, txMetaData)
-		require.True(t, errors.Is(err, errors.ErrTxNotFound), "expected wrapped ErrTxNotFound, got: %v", err)
-		require.Contains(t, err.Error(), "error spending utxos")
-		mockStore.AssertExpectations(t)
-	})
-
-	t.Run("shortcut denied when conflicting", func(t *testing.T) {
-		tx, coinbaseTx := makeTxAndParent(t)
-		conflicting := &meta.Data{Tx: tx, BlockIDs: []uint32{1}, Conflicting: true, Locked: false}
-		v, mockStore := setupValidator(t, tx, coinbaseTx, conflicting, nil)
-
-		txMetaData, err := v.validateInternal(context.Background(), tx, 100, &Options{})
-
-		require.Error(t, err)
-		require.Nil(t, txMetaData)
-		require.True(t, errors.Is(err, errors.ErrTxNotFound), "expected wrapped ErrTxNotFound, got: %v", err)
-		require.Contains(t, err.Error(), "error spending utxos")
-		mockStore.AssertExpectations(t)
-	})
-
-	t.Run("shortcut denied when locked", func(t *testing.T) {
-		tx, coinbaseTx := makeTxAndParent(t)
-		locked := &meta.Data{Tx: tx, BlockIDs: []uint32{1}, Conflicting: false, Locked: true}
-		v, mockStore := setupValidator(t, tx, coinbaseTx, locked, nil)
-
-		txMetaData, err := v.validateInternal(context.Background(), tx, 100, &Options{})
-
-		require.Error(t, err)
-		require.Nil(t, txMetaData)
-		require.True(t, errors.Is(err, errors.ErrTxNotFound), "expected wrapped ErrTxNotFound, got: %v", err)
-		require.Contains(t, err.Error(), "error spending utxos")
-		mockStore.AssertExpectations(t)
-	})
-
-	t.Run("shortcut denied when GetMeta itself fails", func(t *testing.T) {
-		tx, coinbaseTx := makeTxAndParent(t)
-		v, mockStore := setupValidator(t, tx, coinbaseTx, nil, errors.NewTxNotFoundError("meta not found"))
-
-		txMetaData, err := v.validateInternal(context.Background(), tx, 100, &Options{})
-
-		require.Error(t, err)
-		require.Nil(t, txMetaData)
-		require.True(t, errors.Is(err, errors.ErrTxNotFound), "expected wrapped ErrTxNotFound, got: %v", err)
-		require.Contains(t, err.Error(), "error spending utxos")
-		mockStore.AssertExpectations(t)
-	})
+	return m.GetHistogram().GetSampleCount()
 }
 
 func TestValidator_ValidateInternal_GeneralSpendError(t *testing.T) {
@@ -1187,7 +1149,7 @@ func TestSendTxMetaDeletesToKafka_BoundsAndSplitsCascades(t *testing.T) {
 					keys[string(msg.Key)] = true
 					require.LessOrEqual(t, len(value), maxRecord, "a record must fit Kafka's default message size")
 
-					isV2 := value[0] == txmetacache.WireV2Magic && value[1] == txmetacache.WireV2Version && value[2] == 0 && value[3] == 0
+					isV2 := hasV2HeaderSignature(value)
 					require.Equal(t, format == "v2", isV2, "a v1 record must never start with the v2 header signature")
 
 					count, offset := int(binary.LittleEndian.Uint32(value[:4])), 4
@@ -1244,7 +1206,7 @@ func TestSendTxMetaBatch_NeverSendsAV2LookalikeV1Record(t *testing.T) {
 
 	for len(producer.PublishChannel()) > 0 {
 		value := (<-producer.PublishChannel()).Value
-		require.False(t, value[0] == txmetacache.WireV2Magic && value[1] == txmetacache.WireV2Version && value[2] == 0 && value[3] == 0,
+		require.False(t, hasV2HeaderSignature(value),
 			"a v1 record must never start with the v2 header signature")
 
 		total += int(binary.LittleEndian.Uint32(value[:4]))
@@ -1314,7 +1276,7 @@ func TestSendTxMetaDeletesToKafka_BatchedRecordsStayBounded(t *testing.T) {
 				require.LessOrEqual(t, len(value), maxRecord, "a record must fit Kafka's default message size")
 
 				if format == "v1" {
-					require.False(t, value[0] == txmetacache.WireV2Magic && value[1] == txmetacache.WireV2Version && value[2] == 0 && value[3] == 0)
+					require.False(t, hasV2HeaderSignature(value))
 				}
 			}
 		})
@@ -1378,4 +1340,16 @@ func TestSplitTxMetaBatch(t *testing.T) {
 // double spend and nothing else.
 func spentParentIsNotACoinbase(mockStore *utxo.MockUtxostore) {
 	mockStore.On("Get", mock.Anything, mock.Anything, []fields.FieldName{fields.IsCoinbase, fields.BlockHeights}).Return(&meta.Data{BlockHeights: []uint32{1}}, nil)
+}
+
+// hasV2HeaderSignature mirrors the receivers' header test: magic, version and a
+// zero or power-of-two BucketsCount in bytes 2:4.
+func hasV2HeaderSignature(value []byte) bool {
+	if len(value) < txmetacache.WireV2HeaderLen || value[0] != txmetacache.WireV2Magic || value[1] != txmetacache.WireV2Version {
+		return false
+	}
+
+	buckets := binary.LittleEndian.Uint16(value[txmetacache.WireV2BucketsOffset:])
+
+	return buckets == 0 || buckets&(buckets-1) == 0
 }

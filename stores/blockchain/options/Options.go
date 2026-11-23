@@ -12,6 +12,8 @@
 // numerous method overloads or complex parameter structs.
 package options
 
+import "github.com/bsv-blockchain/teranode/util/lane"
+
 // StoreBlockOptions defines the configuration parameters for storing blocks.
 // It controls metadata flags that affect how blocks are processed and stored.
 type StoreBlockOptions struct {
@@ -25,6 +27,10 @@ type StoreBlockOptions struct {
 	Invalid bool
 	// ID is an optional identifier for the block, instead of incrementing the last known block ID
 	ID uint64
+	// LaneMapRows are the block's lane map rows, inserted in the block's own database
+	// transaction at utxostore_laneMigration shadow. Nil stores the block as it is stored
+	// without lanes.
+	LaneMapRows []lane.MapRow
 }
 
 // StoreBlockOption is a function type that modifies StoreBlockOptions.

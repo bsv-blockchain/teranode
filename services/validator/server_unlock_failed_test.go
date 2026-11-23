@@ -43,7 +43,13 @@ func unlockFailedErr() error {
 func kafkaTxMessage(t *testing.T) *kafka.KafkaMessage {
 	t.Helper()
 
-	value, err := proto.Marshal(&kafkamessage.KafkaTxValidationTopicMessage{Tx: sampleTx})
+	return kafkaTxMessageFor(t, sampleTx)
+}
+
+func kafkaTxMessageFor(t *testing.T, raw []byte) *kafka.KafkaMessage {
+	t.Helper()
+
+	value, err := proto.Marshal(&kafkamessage.KafkaTxValidationTopicMessage{Tx: raw})
 	require.NoError(t, err)
 
 	return &kafka.KafkaMessage{Value: value}

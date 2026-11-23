@@ -9,6 +9,7 @@ import (
 	"github.com/bsv-blockchain/aerospike-client-go/v8/types"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/uaerospike"
 	"github.com/prometheus/client_golang/prometheus/testutil"
@@ -62,6 +63,63 @@ func TestClearUnminedDAH(t *testing.T) {
 		require.Equal(t, 2, svc.clearUnminedDAH(context.Background(), clears(t)))
 		require.Equal(t, 2, *calls)
 		require.Equal(t, float64(2), testutil.ToFloat64(prometheusUtxoDAHClearedUnmined)-before)
+	})
+
+	t.Run("the master clear bumps the version and the page clear carries it", func(t *testing.T) {
+		var (
+			svc         *Service
+			masterOps   int
+			pageOps     int
+			pageFilters int
+		)
+
+		svc, _ = newSvc(t, func(records []aerospike.BatchRecordIfc, call int) error {
+			for _, r := range records {
+				w, ok := r.(*aerospike.BatchWrite)
+				require.True(t, ok)
+
+				if call == 1 {
+					masterOps = len(w.Ops)
+					r.BatchRec().Record = &aerospike.Record{Bins: aerospike.BinMap{svc.fieldDeleteAtHeight: 7, fields.DAHVersion.String(): 3}}
+
+					continue
+				}
+
+				pageOps = len(w.Ops)
+
+				if w.Policy.FilterExpression != nil {
+					pageFilters++
+				}
+			}
+
+			return nil
+		})
+
+		svc.clearUnminedDAH(context.Background(), clears(t))
+
+		require.Equal(t, 4, masterOps, "read DAH, clear DAH, bump version, read version")
+		require.Equal(t, 3, pageOps, "read DAH, clear DAH, stamp the master version")
+		require.Equal(t, 1, pageFilters, "the page write must be refused when the page holds that version or a later one")
+	})
+
+	t.Run("a page write filtered out by the version is not a failure", func(t *testing.T) {
+		var svc *Service
+
+		svc, _ = newSvc(t, func(records []aerospike.BatchRecordIfc, call int) error {
+			for _, r := range records {
+				if call == 1 {
+					r.BatchRec().Record = &aerospike.Record{Bins: aerospike.BinMap{svc.fieldDeleteAtHeight: 7, fields.DAHVersion.String(): 3}}
+
+					continue
+				}
+
+				r.BatchRec().Err = &aerospike.AerospikeError{ResultCode: types.FILTERED_OUT}
+			}
+
+			return nil
+		})
+
+		require.Equal(t, 1, svc.clearUnminedDAH(context.Background(), clears(t)), "only the master was cleared")
 	})
 
 	t.Run("records without a DAH are not counted but pages are still written", func(t *testing.T) {

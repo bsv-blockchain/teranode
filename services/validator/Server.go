@@ -29,6 +29,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -142,6 +143,10 @@ type Server struct {
 	// mutex costs nothing on a per-service-lifecycle path.
 	consumerMu sync.Mutex
 
+	// backpressureOffWarned latches the one warning that Kafka backpressure is off while block
+	// assembly enforces an in-memory transaction limit.
+	backpressureOffWarned atomic.Bool
+
 	// consumerCtx is a cancellable child of the Start context that the Kafka
 	// message handler passes into ValidateWithOptions. Cancelling it aborts an
 	// in-place block-assembly handoff retry (WaitForBlockAssembly) promptly at
@@ -156,6 +161,13 @@ type Server struct {
 	// It is the ONLY handle on consumerCtx, which is why setConsumerContext
 	// cancels the pair it replaces rather than overwriting both fields.
 	consumerCancel context.CancelFunc
+
+	// unminedTxGate drops every transaction taken from the validator Kafka topic
+	// while the node syncs (issue 2003). Only the Kafka consumer consults it: the
+	// gRPC and HTTP endpoints also serve block and subtree validation during
+	// catch-up, which must go on validating a block's own transactions. nil
+	// accepts everything.
+	unminedTxGate *blockchain.UnminedTxGate
 }
 
 // setConsumerContext installs the consumer context and its cancel function,
@@ -234,6 +246,7 @@ func NewServer(logger ulogger.Logger, tSettings *settings.Settings, utxoStore ut
 		rejectedTxKafkaProducerClient:       rejectedTxKafkaProducerClient,
 		policyRejectedTxKafkaProducerClient: policyRejectedTxKafkaProducerClient,
 		blockAssemblyClient:                 blockAssemblyClient,
+		unminedTxGate:                       blockchain.NewUnminedTxGate(logger, blockchainClient, blockchain.UnminedTxRouteValidatorKafka),
 	}
 }
 
@@ -470,6 +483,14 @@ func (v *Server) handleKafkaTxMessage(consumerCtx context.Context, msg *kafka.Ka
 		return err
 	}
 
+	// A syncing node stores no unmined transaction (issue 2003). The message is
+	// dropped, and nil commits its offset: a transaction held until RUNNING would
+	// be hours old when the node caught up. Propagation refuses at its own intake,
+	// so this catches what was already on the topic when the sync began.
+	if v.unminedTxGate.Refuses(consumerCtx, tx.TxIDChainHash()) {
+		return nil
+	}
+
 	height := kafkaMsg.Height
 
 	options := kafkaValidationOptions(kafkaMsg.Options)
@@ -479,6 +500,17 @@ func (v *Server) handleKafkaTxMessage(consumerCtx context.Context, msg *kafka.Ka
 		// The tx was accepted, spent and created; only the unlock failed. It is already
 		// logged and counted in the validator, and the lock heals when the tx is mined.
 		if errors.Is(err, errors.ErrTxUnlockFailed) {
+			return nil
+		}
+
+		// A shed at block assembly's in-memory limit is not an invalid tx either: the
+		// validator unwound a valid transaction because the node had no room for it.
+		// It is counted on its own, and the validator already logged the drop at a
+		// bounded rate, so nil commits the offset without an error line per message.
+		if blockassembly.IsHeldLimitShed(err) {
+			prometheusHeldLimitShedTransactions.Inc()
+			v.warnBackpressureOffWithLimit(consumerCtx)
+
 			return nil
 		}
 
@@ -768,6 +800,9 @@ func (v *Server) validateTransaction(ctx context.Context, req *validator_api.Val
 		Valid:    true,
 		Txid:     tx.TxIDChainHash().CloneBytes(),
 		Metadata: txMetaBytes,
+		// Bytes does not carry the lane position, so it goes beside it: subtree validation puts it
+		// in the subtree's lane bitmaps at utxostore_laneMigration shadow.
+		LanePosition: txMetaData.LanePosition,
 	}, nil
 }
 
@@ -812,6 +847,7 @@ func (v *Server) ValidateTransactionBatch(ctx context.Context, req *validator_ap
 
 	// we create a slice for all transactions we just batched, in the same order as we got them
 	metaData := make([][]byte, len(req.GetTransactions()))
+	lanePositions := make([]uint64, len(req.GetTransactions()))
 	errReasons := make([]*errors.TError, len(req.GetTransactions()))
 
 	for idx, reqItem := range req.GetTransactions() {
@@ -823,6 +859,7 @@ func (v *Server) ValidateTransactionBatch(ctx context.Context, req *validator_ap
 			// metadata through the nil-safe generated accessor: no response means
 			// empty metadata at this index, with the error recorded alongside it.
 			metaData[idx] = validatorResponse.GetMetadata()
+			lanePositions[idx] = validatorResponse.GetLanePosition()
 			errReasons[idx] = errors.Wrap(err)
 
 			// Never return an error because we don't want to cancel the context for other transactions in the batch.
@@ -836,9 +873,10 @@ func (v *Server) ValidateTransactionBatch(ctx context.Context, req *validator_ap
 	return &validator_api.ValidateTransactionBatchResponse{
 		// Valid is always true at the batch level by design — callers must
 		// inspect per-item Errors. The field is retained for wire compatibility.
-		Valid:    true,
-		Errors:   errReasons,
-		Metadata: metaData,
+		Valid:         true,
+		Errors:        errReasons,
+		Metadata:      metaData,
+		LanePositions: lanePositions,
 	}, nil
 }
 

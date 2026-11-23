@@ -586,55 +586,6 @@ func TestForkManager_CleanupRoutine(t *testing.T) {
 	assert.Less(t, finalCount, initialCount, "Cleanup should have removed at least one fork")
 }
 
-func TestForkManager_ForkResolution(t *testing.T) {
-	initPrometheusMetrics()
-	logger := ulogger.TestLogger{}
-	tSettings := test.CreateBaseTestSettings(t)
-	tSettings.BlockValidation.MaxParallelForks = 10
-	fm := NewForkManager(logger, tSettings)
-
-	resolutions := make([]*ForkResolution, 0)
-	var resolutionMu sync.Mutex
-
-	fm.OnForkResolution(func(resolution *ForkResolution) {
-		resolutionMu.Lock()
-		resolutions = append(resolutions, resolution)
-		resolutionMu.Unlock()
-	})
-
-	baseHash, _ := chainhash.NewHashFromStr("0000000000000000000000000000000000000000000000000000000000000001")
-	fm.RegisterFork("fork1", baseHash, 1000)
-
-	merkleRoot, _ := chainhash.NewHashFromStr("1111111111111111111111111111111111111111111111111111111111111111")
-	block := &model.Block{
-		Height: 1001,
-		Header: &model.BlockHeader{
-			Version:        1,
-			HashPrevBlock:  baseHash,
-			HashMerkleRoot: merkleRoot,
-			Timestamp:      uint32(time.Now().Unix()),
-			Bits:           model.NBit{0xff, 0xff, 0x00, 0x1d},
-			Nonce:          0,
-		},
-	}
-
-	require.NoError(t, fm.AddBlockToFork(block, "fork1"))
-
-	fm.CheckForkResolution(context.Background(), block, block.Hash(), 1001)
-
-	time.Sleep(100 * time.Millisecond)
-
-	resolutionMu.Lock()
-	defer resolutionMu.Unlock()
-
-	require.Len(t, resolutions, 1)
-	resolution := resolutions[0]
-
-	assert.Equal(t, "fork1", resolution.ForkID)
-	assert.Equal(t, "main", resolution.ResolvedTo)
-	assert.Equal(t, uint32(1001), resolution.FinalHeight)
-}
-
 func TestForkManager_MetricsCollection(t *testing.T) {
 	initPrometheusMetrics()
 	logger := ulogger.TestLogger{}

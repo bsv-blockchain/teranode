@@ -1,8 +1,11 @@
 package aerospike
 
 import (
+	"context"
 	"sync"
 
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/teranode/stores/utxo"
 	aeropruner "github.com/bsv-blockchain/teranode/stores/utxo/aerospike/pruner"
 	"github.com/bsv-blockchain/teranode/stores/utxo/pruner"
 )
@@ -27,6 +30,12 @@ func ResetPrunerServiceForTests() {
 	prunerServiceError = nil
 }
 
+// Stamper returns pruner.NoStamp: an aerospike store writes each UTXO's block when it is mined,
+// so it has nothing to stamp.
+func (s *Store) Stamper() pruner.Stamper {
+	return pruner.NoStamp
+}
+
 // GetPrunerService returns a pruner service for the Aerospike store.
 // This implements the pruner.PrunerProvider interface.
 func (s *Store) GetPrunerService() (pruner.Service, error) {
@@ -44,43 +53,22 @@ func (s *Store) GetPrunerService() (pruner.Service, error) {
 		return prunerServiceInstance, prunerServiceError
 	}
 
-	// Create options for the pruner service.
-	//
-	// BuildAddDeletedChildrenRecord routes the pruner's per-parent update through
-	// the native-op wrapper (subOpAddDeletedChildren), with transparent UDF
-	// fallback when the cluster does not support wire op 200. This eliminates the
-	// steady stream of batch_sub_udf calls the pruner used to emit even on
-	// native-op-enabled deployments.
-	//
-	// A missing parent is the routine case for this op — the parent is normally
-	// one the pruner itself already deleted — so the record must never be created.
-	// initNativeTeranodeOps pins that for every native op by setting the shared
-	// nativeOpBatchWritePolicy to UPDATE_ONLY, matching the Lua addDeletedChildren
-	// this replaces (it returns TX_NOT_FOUND without writing when
-	// aerospike:exists(rec) is false). A resurrected parent would hold only
-	// deletedChildren — no txid, no deleteAtHeight — which the DAH scan could
-	// never reclaim and extractTxHash would fail on. The miss therefore reaches
-	// the pruner as KEY_NOT_FOUND, which it counts as a skipped parent.
+	// Create options for the pruner service. The pruner writes no replay markers: a replay of a
+	// pruned transaction is refused when it is spent, from the height stored with the spend. It
+	// still writes records it keeps (clearUnminedDAH, and in defensive mode ClearParentRefs, which
+	// unspends through the store's UDF-only Unspend), so it makes no native-op call of its own and
+	// needs no demotion hook.
 	opts := aeropruner.Options{
-		Logger:                        s.logger,
-		Ctx:                           s.ctx,
-		Client:                        s.client,
-		ExternalStore:                 s.externalStore,
-		Namespace:                     s.namespace,
-		Set:                           s.setName,
-		IndexWaiter:                   s,
-		LuaPackage:                    LuaPackage,
-		BuildAddDeletedChildrenRecord: s.prunerAddDeletedChildrenRecord,
-
-		// Give the pruner the same runtime demotion every other native call site
-		// has. The startup probe samples one partition master, so a mixed-version
-		// cluster can pass it and then reject native writes with PARAMETER_ERROR
-		// on other partitions. The pruner runs every block, making it a likely
-		// first victim; without this it is the one native call site that cannot
-		// trigger the fallback, and its parent updates would keep failing for the
-		// process lifetime. demoteNativeOnUnsupported ignores everything that is
-		// not a PARAMETER_ERROR, so handing it every error is safe.
-		ObserveNativeOpError: s.demoteNativeOnUnsupported,
+		Logger:        s.logger,
+		Ctx:           s.ctx,
+		Client:        s.client,
+		ExternalStore: s.externalStore,
+		Namespace:     s.namespace,
+		Set:           s.setName,
+		IndexWaiter:   s,
+		ClearParentRefs: func(ctx context.Context, txHash *chainhash.Hash) error {
+			return utxo.ClearParentRefs(ctx, s, txHash)
+		},
 	}
 
 	// Create a new pruner service

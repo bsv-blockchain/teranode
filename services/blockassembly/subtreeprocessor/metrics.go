@@ -48,6 +48,11 @@ var (
 	// non-zero value means a client's batch size is above this pod's normalized cap.
 	prometheusSubtreeProcessorOversizeBatchAdmitted prometheus.Counter
 
+	// prometheusSubtreeProcessorTxEraDropped counts transactions kept out of the template
+	// because they were validated under other consensus rules than the next block's, or
+	// descend from one that was.
+	prometheusSubtreeProcessorTxEraDropped prometheus.Counter
+
 	// prometheusSubtreeProcessorDiskTxMapErrors counts disk tx map storage errors
 	// that surface after an operation's commit point, where the underlying state
 	// change has already been applied and cannot be rolled back. These are logged
@@ -60,6 +65,11 @@ var (
 	// publish. Each one leaves subtree validation caching a demoted tx as
 	// non-conflicting until the cache rotates it out.
 	prometheusTxMetaDeleteDropped prometheus.Counter
+
+	// prometheusReorgDeletedTxsVanished counts txs a move-back locked and meant to save for
+	// restoration that were gone from the store by the time they were read back, with no copy in
+	// an earlier saved file. They are missing from the restoration file.
+	prometheusReorgDeletedTxsVanished prometheus.Counter
 )
 
 var (
@@ -285,6 +295,15 @@ func _initPrometheusMetrics() {
 		},
 	)
 
+	prometheusSubtreeProcessorTxEraDropped = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "subtreeprocessor",
+			Name:      "tx_era_dropped_total",
+			Help:      "Number of transactions kept out of the template because they were validated under other consensus rules than the next block's, or because they descend from one that was",
+		},
+	)
+
 	prometheusSubtreeProcessorDiskTxMapErrors = promauto.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: "teranode",
@@ -301,6 +320,15 @@ func _initPrometheusMetrics() {
 			Subsystem: "subtreeprocessor",
 			Name:      "txmeta_delete_dropped_total",
 			Help:      "Txmeta cache DELETEs for txs demoted to conflicting that were dropped because the txmeta producer buffer was full or stopped",
+		},
+	)
+
+	prometheusReorgDeletedTxsVanished = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "subtreeprocessor",
+			Name:      "reorg_deleted_txs_vanished_total",
+			Help:      "Txs locked by a move-back that vanished before they were saved for restoration, so they are missing from the restoration file",
 		},
 	)
 }

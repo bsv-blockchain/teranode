@@ -494,9 +494,9 @@ type countingSubtreeValidationClient struct {
 	checkBlockSubtreesCalls atomic.Int32
 }
 
-func (c *countingSubtreeValidationClient) CheckBlockSubtrees(ctx context.Context, block *model.Block, peerID, baseURL string) error {
+func (c *countingSubtreeValidationClient) CheckBlockSubtrees(ctx context.Context, block *model.Block, peerID, baseURL string, keepBlockAssemblyHandoff bool) error {
 	c.checkBlockSubtreesCalls.Add(1)
-	return c.Interface.CheckBlockSubtrees(ctx, block, peerID, baseURL)
+	return c.Interface.CheckBlockSubtrees(ctx, block, peerID, baseURL, keepBlockAssemblyHandoff)
 }
 
 // TestValidateBlock_PoWCheckedBeforeSubtreeValidation pins the ordering

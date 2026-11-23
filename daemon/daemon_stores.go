@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"os"
 	"strconv"
 	"sync"
 
@@ -22,6 +23,7 @@ import (
 	utxofactory "github.com/bsv-blockchain/teranode/stores/utxo/factory"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/kafka"
+	"github.com/bsv-blockchain/teranode/util/lane"
 )
 
 const msgCreateBlockHeightTrackerCh = "could not create block height tracker channel"
@@ -47,6 +49,13 @@ type Stores struct {
 	// them is out of scope for this PR.
 	peerRegistryClientOnce sync.Once
 	peerRegistryClientErr  error
+
+	// wrappers wrap each store as it is built; set with WithStoreWrappers.
+	wrappers StoreWrappers
+	// rawUtxoStore and rawBlockchainStore are the stores before wrapping, so
+	// the test daemon's Crash can reach their database handles.
+	rawUtxoStore       utxostore.Store
+	rawBlockchainStore blockchainstore.Store
 
 	// constructedClients retains every gRPC client the daemon constructs
 	// (both daemonStores singletons and the fresh-per-construction clients
@@ -81,14 +90,99 @@ func (d *Stores) GetUtxoStore(ctx context.Context, logger ulogger.Logger,
 		return d.mainUtxoStore, nil
 	}
 
-	var err error
+	// A step this build does not implement, or an unknown one, fails before the store opens: at a
+	// stamping step utxoset adds its lane column at open, which a refused step must not do.
+	if err := settings.CheckLaneMigration(appSettings.UtxoStore.LaneMigration); err != nil {
+		return nil, err
+	}
 
-	d.mainUtxoStore, err = utxofactory.NewStore(ctx, logger, appSettings, "main")
+	store, err := newMainUtxoStore(ctx, logger, appSettings)
 	if err != nil {
 		return nil, err
 	}
 
+	// Lane positions go to the real store, before any test wrapper, so the allocator is found on it.
+	if appSettings.UtxoStore.LaneMigration.Stamps() {
+		if err := d.giveLanePositions(ctx, logger, appSettings, store); err != nil {
+			// The singleton stays unset, so a retry starts clean, and the store just opened is not leaked.
+			if closeErr := store.Close(ctx); closeErr != nil {
+				logger.Warnf("[lane] could not close the UTXO store after failing to give it lane positions: %v", closeErr)
+			}
+
+			return nil, err
+		}
+	}
+
+	d.rawUtxoStore = store
+
+	if d.wrappers.UtxoStore != nil {
+		store = d.wrappers.UtxoStore(store)
+	}
+
+	d.mainUtxoStore = store
+
 	return d.mainUtxoStore, nil
+}
+
+// newMainUtxoStore opens the process's UTXO store. A var so a test can open one without a
+// blockchain service, which the factory's block height listener needs.
+var newMainUtxoStore = func(ctx context.Context, logger ulogger.Logger, appSettings *settings.Settings) (utxostore.Store, error) {
+	return utxofactory.NewStore(ctx, logger, appSettings, "main")
+}
+
+// laneLeaseSource returns what the allocator takes its lease from: a blockchain client of its own,
+// which the allocator closes after it releases its lease. The daemon closes the clients it retains
+// in the order it built them, so a retained client would close before the release could go out,
+// and the daemon's context ends before that, so the client is built on one shutdown does not
+// cancel (see blockchain.NewLaneClient). A var so a test can answer without a blockchain service.
+var laneLeaseSource = func(ctx context.Context, _ *Stores, logger ulogger.Logger, appSettings *settings.Settings) (lane.LeaseSource, error) {
+	return blockchain.NewLaneClient(ctx, logger, appSettings)
+}
+
+// giveLanePositions hands the process's one UTXO store its lane position source. Every service in
+// the process creates records through that store, so that is one allocator and one lane lease per
+// process, with no change at any call site. The allocator starts on the first create unless
+// something starts it sooner. A validator starts it when it is built, so a process holding a local
+// validator takes a lane at start whether or not it ever creates a record; any other process that
+// never creates records never takes one. A store that cannot write lane positions, such as null or
+// pebble, makes startup fail at shadow.
+func (d *Stores) giveLanePositions(ctx context.Context, logger ulogger.Logger, appSettings *settings.Settings,
+	store utxostore.Store) error {
+	taker, ok := utxostore.As[utxostore.LanePositionTaker](store)
+	if !ok {
+		return errors.NewConfigurationError("utxostore_laneMigration=%s requires a UTXO store that can write lane positions", appSettings.UtxoStore.LaneMigration)
+	}
+
+	if err := appSettings.BlockChain.CheckLaneLease(); err != nil {
+		return err
+	}
+
+	source, err := laneLeaseSource(ctx, d, logger, appSettings)
+	if err != nil {
+		return err
+	}
+
+	hostname, err := os.Hostname()
+	if err != nil {
+		hostname = "unknown-host"
+	}
+
+	holder := appSettings.ClientName + "@" + hostname
+
+	logger.Infof("[lane] lane migration at %s: holder %s takes a lane lease", appSettings.UtxoStore.LaneMigration, holder)
+
+	allocator := lane.NewAllocator(source, holder, lane.Timings{
+		Renew:         appSettings.BlockChain.LaneLeaseRenewInterval,
+		Stop:          appSettings.BlockChain.LaneLeaseStopAfter,
+		GrantDuration: appSettings.BlockChain.LaneGrantDuration,
+	}, logger)
+	// Retained so the daemon closes it, which releases the lease and then closes its client. In a
+	// process that also runs the blockchain service, that service has stopped by then, so the
+	// release fails, is logged, and the lease lapses after blockchain_laneLeaseCloseAfter.
+	d.retainClient(allocator)
+	taker.SetLanePositionSource(allocator)
+
+	return nil
 }
 
 // GetSubtreeValidationClient returns the main subtree validation client instance. If the client
@@ -412,7 +506,7 @@ func (d *Stores) GetTxStore(ctx context.Context, logger ulogger.Logger, appSetti
 
 	var err error
 
-	hashPrefix := 2
+	hashPrefix := storetypes.DefaultHashPrefix(storetypes.TXSTORE)
 	if txStoreURL.Query().Get("hashPrefix") != "" {
 		hashPrefix, err = strconv.Atoi(txStoreURL.Query().Get("hashPrefix"))
 		if err != nil {
@@ -435,6 +529,10 @@ func (d *Stores) GetTxStore(ctx context.Context, logger ulogger.Logger, appSetti
 		return nil, errors.NewServiceError("could not create tx store", err)
 	}
 
+	if d.wrappers.TxStore != nil {
+		d.mainTxStore = d.wrappers.TxStore(d.mainTxStore)
+	}
+
 	return d.mainTxStore, nil
 }
 
@@ -454,7 +552,7 @@ func (d *Stores) GetSubtreeStore(ctx context.Context, logger ulogger.Logger, app
 		return nil, errors.NewConfigurationError("subtreestore config not found")
 	}
 
-	hashPrefix := 2
+	hashPrefix := storetypes.DefaultHashPrefix(storetypes.SUBTREESTORE)
 	if subtreeStoreURL.Query().Get("hashPrefix") != "" {
 		hashPrefix, err = strconv.Atoi(subtreeStoreURL.Query().Get("hashPrefix"))
 		if err != nil {
@@ -488,6 +586,10 @@ func (d *Stores) GetSubtreeStore(ctx context.Context, logger ulogger.Logger, app
 		return nil, errors.NewServiceError("could not create subtree store", err)
 	}
 
+	if d.wrappers.SubtreeStore != nil {
+		d.mainSubtreeStore = d.wrappers.SubtreeStore(d.mainSubtreeStore)
+	}
+
 	return d.mainSubtreeStore, nil
 }
 
@@ -506,6 +608,12 @@ func (d *Stores) GetBlockchainStore(_ context.Context, logger ulogger.Logger, ap
 	blockchainStore, err := blockchainstore.NewStore(logger, blockchainStoreURL, appSettings)
 	if err != nil {
 		return nil, err
+	}
+
+	d.rawBlockchainStore = blockchainStore
+
+	if d.wrappers.BlockchainStore != nil {
+		blockchainStore = d.wrappers.BlockchainStore(blockchainStore)
 	}
 
 	d.mainBlockchainStore = blockchainStore
@@ -527,7 +635,7 @@ func (d *Stores) GetTempStore(ctx context.Context, logger ulogger.Logger, appSet
 
 	var err error
 
-	hashPrefix := 0
+	hashPrefix := storetypes.DefaultHashPrefix(storetypes.TEMPSTORE)
 	if tempStoreURL.Query().Get("hashPrefix") != "" {
 		hashPrefix, err = strconv.Atoi(tempStoreURL.Query().Get("hashPrefix"))
 		if err != nil {
@@ -580,7 +688,7 @@ func (d *Stores) GetBlockStore(ctx context.Context, logger ulogger.Logger, appSe
 
 	var err error
 
-	hashPrefix := -2
+	hashPrefix := storetypes.DefaultHashPrefix(storetypes.BLOCKSTORE)
 
 	if blockStoreURL.Query().Get("hashPrefix") != "" {
 		hashPrefix, err = strconv.Atoi(blockStoreURL.Query().Get("hashPrefix"))
@@ -615,6 +723,10 @@ func (d *Stores) GetBlockStore(ctx context.Context, logger ulogger.Logger, appSe
 		return nil, errors.NewServiceError("could not create block store", err)
 	}
 
+	if d.wrappers.BlockStore != nil {
+		d.mainBlockStore = d.wrappers.BlockStore(d.mainBlockStore)
+	}
+
 	return d.mainBlockStore, nil
 }
 
@@ -634,7 +746,7 @@ func (d *Stores) GetBlockPersisterStore(ctx context.Context, logger ulogger.Logg
 
 	var err error
 
-	hashPrefix := 2
+	hashPrefix := storetypes.DefaultHashPrefix(storetypes.BLOCKPERSISTERSTORE)
 	if blockStoreURL.Query().Get("hashPrefix") != "" {
 		hashPrefix, err = strconv.Atoi(blockStoreURL.Query().Get("hashPrefix"))
 		if err != nil {
@@ -687,12 +799,14 @@ func (d *Stores) Cleanup() {
 	// back a closed cached handle. The other closed singletons (block /
 	// block-persister stores, peer-registry client) are already nil'd below.
 	d.mainBlockchainStore = nil
+	d.rawBlockchainStore = nil
 	d.mainBlockValidationClient = nil
 	d.mainSubtreeStore = nil
 	d.mainSubtreeValidationClient = nil
 	d.mainTempStore = nil
 	d.mainTxStore = nil
 	d.mainUtxoStore = nil
+	d.rawUtxoStore = nil
 	d.mainValidatorClient = nil
 	d.mainP2PClient = nil
 	d.mainPeerRegistryClient = nil

@@ -157,6 +157,33 @@ func TestSQLGetLastNBlocks(t *testing.T) {
 		assert.GreaterOrEqual(t, len(blocks), 4) // Genesis + 3 blocks + alternative
 	})
 
+	t.Run("get last blocks with includeOrphans=true and fromHeight", func(t *testing.T) {
+		storeURL, err := url.Parse("sqlitememory:///")
+		require.NoError(t, err)
+
+		s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
+		require.NoError(t, err)
+
+		_, _, err = s.StoreBlock(context.Background(), block1, "")
+		require.NoError(t, err)
+		_, _, err = s.StoreBlock(context.Background(), block2, "")
+		require.NoError(t, err)
+		_, _, err = s.StoreBlock(context.Background(), block3, "")
+		require.NoError(t, err)
+		_, _, err = s.StoreBlock(context.Background(), blockAlternative2, "")
+		require.NoError(t, err)
+
+		// fromHeight bounds the orphan-inclusive read as it does the main-chain one, so a
+		// caller can page down from the tip: block3 is above it, both blocks at 2 are not.
+		blocks, err := s.GetLastNBlocks(context.Background(), 2, true, 2)
+		require.NoError(t, err)
+		require.Len(t, blocks, 2)
+
+		for _, b := range blocks {
+			require.Equal(t, uint32(2), b.Height)
+		}
+	})
+
 	t.Run("cache hit", func(t *testing.T) {
 		storeURL, err := url.Parse("sqlitememory:///")
 		require.NoError(t, err)
