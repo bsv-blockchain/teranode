@@ -2797,7 +2797,7 @@ func TestSerializeTxMetaBatchMarksLaneEntries(t *testing.T) {
 	off += 32 + 1 + 4 + len("legacy")
 	require.Equal(t, txmetacache.WireActionADDLane, v1[off+32])
 
-	v2 := serializeTxMetaBatchV2([]txmetaItemWithHash{{item: batch[0]}, {item: batch[1]}})
+	v2 := serializeTxMetaBatchV2([]txmetaItemWithHash{{item: batch[0]}, {item: batch[1]}}, txmetacache.BucketsCount)
 	off = txmetacache.WireV2HeaderLen
 	require.Equal(t, txmetacache.WireActionADD, v2[off+8+32])
 	off += 8 + 32 + 1 + 4 + len("legacy")
