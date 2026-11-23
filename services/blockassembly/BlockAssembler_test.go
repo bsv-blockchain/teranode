@@ -3517,7 +3517,7 @@ func TestLoadUnminedTransactionsDropsQueuedChildOfMissingExternalParent(t *testi
 	it.queueChild = func() {
 		require.Equal(t, subtreeprocessor.Admitted, ba.AddTxBatchBounded(
 			[]subtreepkg.Node{{Hash: child, Fee: 1000, SizeInBytes: 250}, {Hash: unrelated, Fee: 1000, SizeInBytes: 250}},
-			[]*subtreepkg.TxInpoints{singleParentInpointsPtr(parent, 0), singleParentInpointsPtr(chainhash.Hash{}, 0)}, false))
+			[]*subtreepkg.TxInpoints{singleParentInpointsPtr(parent, 0), singleParentInpointsPtr(chainhash.Hash{}, 0)}, false, nil))
 	}
 	ba.utxoStore = &queuedChildSkippingStore{Store: items.utxoStore, iterator: it}
 
