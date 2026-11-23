@@ -34,7 +34,7 @@ func buildTXmetaBatchMessage(t *testing.T, entries []txmetaTestEntry) []byte {
 		// 1-byte action
 		buf = append(buf, entry.action)
 
-		if entry.action == txmetacache.WireActionADD || entry.action == txmetacache.WireActionADDLane {
+		if entry.action == txmetacache.WireActionADD || entry.action == txmetacache.WireActionADDLane || entry.action == txmetacache.WireActionADDOwn {
 			metaBytes := entryContent(t, entry)
 
 			// 4-byte content length
@@ -61,8 +61,8 @@ type txmetaTestEntry struct {
 	raw []byte
 }
 
-// entryContent is an ADD entry's MetaBytes, or an ADDLane entry's lane encoding with one position
-// per parent.
+// entryContent is an ADD entry's MetaBytes, an ADDLane entry's lane encoding with one position per
+// parent, or an ADDOwn entry's MetaBytes and own position.
 func entryContent(t *testing.T, entry txmetaTestEntry) []byte {
 	t.Helper()
 
@@ -77,6 +77,13 @@ func entryContent(t *testing.T, entry txmetaTestEntry) []byte {
 		}
 
 		b, err := entry.meta.LaneMetaBytesInto(nil, parents)
+		require.NoError(t, err)
+
+		return b
+	}
+
+	if entry.action == txmetacache.WireActionADDOwn {
+		b, err := entry.meta.CacheBytes()
 		require.NoError(t, err)
 
 		return b
@@ -165,7 +172,7 @@ func buildTXmetaBatchMessageV2(t *testing.T, entries []txmetaTestEntry) []byte {
 		// 1-byte action
 		buf = append(buf, entry.action)
 
-		if entry.action == txmetacache.WireActionADD || entry.action == txmetacache.WireActionADDLane {
+		if entry.action == txmetacache.WireActionADD || entry.action == txmetacache.WireActionADDLane || entry.action == txmetacache.WireActionADDOwn {
 			metaBytes := entryContent(t, entry)
 
 			lenBuf := make([]byte, 4)
@@ -749,4 +756,81 @@ func TestProcessTXmetaBatchMessage_BucketsCountWarning(t *testing.T) {
 
 		require.Equal(t, int32(1), warns.Load())
 	})
+}
+
+// Relay announces a transaction whose entry carries only its own position, which the validator
+// sends at utxostore_laneMigration shadow when a parent has none, exactly as a plain one, in both
+// wire formats; it skips one that arrived in a block, and one that does not check out without the
+// entries after it. Every own entry counts, whatever relay's own setting.
+func TestProcessTXmetaBatchMessage_OwnPositionEntriesAreAnnounced(t *testing.T) {
+	relayed, err := chainhash.NewHashFromStr("1111111111111111111111111111111111111111111111111111111111111111")
+	require.NoError(t, err)
+
+	inBlock, err := chainhash.NewHashFromStr("2222222222222222222222222222222222222222222222222222222222222222")
+	require.NoError(t, err)
+
+	bad, err := chainhash.NewHashFromStr("3333333333333333333333333333333333333333333333333333333333333333")
+	require.NoError(t, err)
+
+	plainBytes, err := (&meta.Data{Fee: 700, SizeInBytes: 250}).MetaBytes()
+	require.NoError(t, err)
+
+	entries := []txmetaTestEntry{
+		// Plain MetaBytes under the ADDOwn action: no position follows them, so it is refused.
+		{hash: *bad, action: txmetacache.WireActionADDOwn, raw: plainBytes},
+		{hash: *relayed, action: txmetacache.WireActionADDOwn, meta: meta.Data{Fee: 423, SizeInBytes: 250, LanePosition: lane.Pack(8, 14)}},
+		{hash: *inBlock, action: txmetacache.WireActionADDOwn, meta: meta.Data{Fee: 500, SizeInBytes: 250, InBlock: true, LanePosition: lane.Pack(8, 15)}},
+	}
+
+	shadow := &settings.Settings{UtxoStore: settings.UtxoStoreSettings{LaneMigration: settings.LaneMigrationShadow}}
+
+	for name, tc := range map[string]struct {
+		build    func(*testing.T, []txmetaTestEntry) []byte
+		settings *settings.Settings
+	}{
+		"v1 at off":    {buildTXmetaBatchMessage, &settings.Settings{}},
+		"v2 at off":    {buildTXmetaBatchMessageV2, &settings.Settings{}},
+		"v1 at shadow": {buildTXmetaBatchMessage, shadow},
+		"v2 at shadow": {buildTXmetaBatchMessageV2, shadow},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var mu sync.Mutex
+			var announced []*TxHashAndFee
+
+			sm := &SyncManager{
+				logger:   ulogger.TestLogger{},
+				settings: tc.settings,
+				txAnnounceBatcher: batcher.NewWithDeduplication[TxHashAndFee](100, 50*time.Millisecond, func(batch []*TxHashAndFee) {
+					mu.Lock()
+					announced = append(announced, batch...)
+					mu.Unlock()
+				}, false),
+			}
+
+			own, lanes, legacy := relayLaneCount(t, "own"), relayLaneCount(t, "lane"), relayLaneCount(t, "legacy")
+
+			require.NoError(t, sm.processTXmetaBatchMessage(tc.build(t, entries)))
+
+			require.Eventually(t, func() bool {
+				mu.Lock()
+				defer mu.Unlock()
+
+				return len(announced) == 1
+			}, 2*time.Second, 10*time.Millisecond)
+
+			time.Sleep(100 * time.Millisecond)
+
+			mu.Lock()
+			defer mu.Unlock()
+
+			require.Len(t, announced, 1, "neither the malformed entry nor the in-block one is announced")
+			require.Equal(t, *relayed, announced[0].TxHash)
+			require.Equal(t, uint64(423), announced[0].Fee)
+			require.Equal(t, uint64(250), announced[0].Size)
+
+			require.InDelta(t, own+3, relayLaneCount(t, "own"), 0, "every own entry counts, the malformed one too, whatever relay's setting")
+			require.InDelta(t, lanes, relayLaneCount(t, "lane"), 0, "and in no other format")
+			require.InDelta(t, legacy, relayLaneCount(t, "legacy"), 0)
+		})
+	}
 }

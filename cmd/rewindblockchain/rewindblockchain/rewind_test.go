@@ -482,6 +482,8 @@ func TestRewindBlockchain_Integration(t *testing.T) {
 	// inside Phase 4 reflects the new tip without any manual cache flush.
 	// A deleted block's subtree can also have kept-aside conflicting txs next to it.
 	require.NoError(t, subtreeStore.Set(ctx, subtree3Root[:], fileformat.FileTypeSubtreeConflicting, []byte{0x01}))
+	// And lane bitmaps, at utxostore_laneMigration shadow.
+	require.NoError(t, subtreeStore.Set(ctx, subtree3Root[:], fileformat.FileTypeSubtreeLaneBitmaps, []byte{0x01}))
 
 	opts := Options{
 		TargetHeight: 2,
@@ -569,6 +571,10 @@ func TestRewindBlockchain_Integration(t *testing.T) {
 	exists, err := subtreeStore.Exists(ctx, subtree3Root[:], fileformat.FileTypeSubtreeConflicting)
 	require.NoError(t, err)
 	require.False(t, exists, "kept-aside conflicting txs of subtree3 should be deleted from blob store")
+
+	exists, err = subtreeStore.Exists(ctx, subtree3Root[:], fileformat.FileTypeSubtreeLaneBitmaps)
+	require.NoError(t, err)
+	require.False(t, exists, "lane bitmaps of subtree3 should be deleted from blob store")
 
 	// Surviving subtree blobs remain.
 	for name, h := range map[string]*chainhash.Hash{

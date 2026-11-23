@@ -408,9 +408,10 @@ func probeIndices(ctx context.Context, cache *txmetacache.TxMetaCache, sc *probe
 				conflicting: txMeta.Conflicting,
 				// The cached encoding has no Creating flag; a cached entry was
 				// always reported as not creating.
-				creating:   false,
-				isSet:      true,
-				txInpoints: txMeta.TxInpoints,
+				creating:     false,
+				isSet:        true,
+				txInpoints:   txMeta.TxInpoints,
+				lanePosition: txMeta.LanePosition,
 			}
 
 			continue

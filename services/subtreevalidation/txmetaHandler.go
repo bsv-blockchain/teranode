@@ -210,6 +210,14 @@ func (u *Server) txmetaHandler(ctx context.Context, msg *kafka.KafkaMessage) err
 		bufs.hashes = make([]uint64, 0, entriesInt)
 	}
 
+	// At shadow the cache keeps each lane entry's own position after its MetaBytes, for the block
+	// gate (meta.CacheBytesInto). Those values are built here, in one buffer per message sized to
+	// the message: each is shorter than its entry, so the buffer never grows and the values
+	// already taken from it stay put. It is not pooled, so a message's buffer dies with it.
+	laneShadow := u.laneShadow()
+
+	var laneCacheValues []byte
+
 	for i := uint32(0); i < entries; i++ {
 		if offset+entryHeaderSize > len(data) {
 			u.logger.Errorf("[txmetaHandler] truncated message at entry %d", i)
@@ -247,18 +255,37 @@ func (u *Server) txmetaHandler(ctx context.Context, msg *kafka.KafkaMessage) err
 				bufs.hashes = append(bufs.hashes, entryHash)
 			}
 
-			if u.laneShadow() {
+			if laneShadow {
 				laneTxMetaReceived.Count(false)
 			}
 		case txmetacache.WireActionADDLane:
 			// The lane encoding, sent at utxostore_laneMigration shadow. The cache keeps the
-			// MetaBytes it always kept, which the lane encoding holds whole, so the positions
-			// stop here until a reader needs them; an entry that does not decode is dropped and
+			// MetaBytes it always kept, which the lane encoding holds whole, and at shadow the
+			// own position after it, which the block gate reads when the subtree is validated;
+			// the parents' positions stop here. An entry that does not decode is dropped and
 			// counted, and the transaction is read from the store if it is asked for.
 			laneTxMetaReceived.Count(true)
 
 			end := offset + int(contentLen)
-			legacy, err := txmetacache.LaneMetaContent(data[offset:end:end])
+
+			var (
+				value []byte
+				err   error
+			)
+
+			if laneShadow {
+				if laneCacheValues == nil {
+					laneCacheValues = make([]byte, 0, len(data))
+				}
+
+				start := len(laneCacheValues)
+				if laneCacheValues, err = txmetacache.AppendLaneCacheContent(laneCacheValues, data[offset:end:end]); err == nil {
+					value = laneCacheValues[start:len(laneCacheValues):len(laneCacheValues)]
+				}
+			} else {
+				value, err = txmetacache.LaneMetaContent(data[offset:end:end])
+			}
+
 			if err != nil {
 				prometheusSubtreeValidationSetTXMetaCacheKafkaErrors.Inc()
 				u.logger.Debugf("[txmetaHandler] dropping lane txmeta entry %d: %v", i, err)
@@ -267,7 +294,34 @@ func (u *Server) txmetaHandler(ctx context.Context, msg *kafka.KafkaMessage) err
 			}
 
 			bufs.keys = append(bufs.keys, key)
-			bufs.values = append(bufs.values, legacy)
+			bufs.values = append(bufs.values, value)
+			if isV2 {
+				bufs.hashes = append(bufs.hashes, entryHash)
+			}
+		case txmetacache.WireActionADDOwn:
+			// MetaBytes and the own position, sent at shadow when the validator knows the own
+			// position but not every parent's. It is already the cache form, so at shadow the
+			// cache keeps it whole; with lane positions off it keeps the MetaBytes. An entry
+			// that does not check out is dropped and counted, as a malformed ADDLane entry is.
+			laneTxMetaReceived.CountOwn()
+
+			end := offset + int(contentLen)
+
+			legacy, err := txmetacache.OwnCacheContent(data[offset:end:end])
+			if err != nil {
+				prometheusSubtreeValidationSetTXMetaCacheKafkaErrors.Inc()
+				u.logger.Debugf("[txmetaHandler] dropping own-position txmeta entry %d: %v", i, err)
+
+				break
+			}
+
+			value := legacy
+			if laneShadow {
+				value = data[offset:end:end]
+			}
+
+			bufs.keys = append(bufs.keys, key)
+			bufs.values = append(bufs.values, value)
 			if isV2 {
 				bufs.hashes = append(bufs.hashes, entryHash)
 			}
@@ -322,8 +376,8 @@ func (u *Server) txmetaHandler(ctx context.Context, msg *kafka.KafkaMessage) err
 // lane positions.
 var laneTxMetaReceived = txmetacache.NewLaneTxMetaReceived("subtreevalidation")
 
-// laneShadow reports whether lane positions are on, which is when this consumer counts the formats
-// of the txmeta entries it receives.
+// laneShadow reports whether lane positions are on. This consumer counts a plain ADD entry only
+// then, and counts every ADDLane and ADDOwn entry it receives whatever its own setting.
 func (u *Server) laneShadow() bool {
 	return u.settings != nil && u.settings.UtxoStore.LaneMigration.Stamps()
 }

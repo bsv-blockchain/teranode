@@ -56,8 +56,10 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/blob/options"
 	"github.com/bsv-blockchain/teranode/stores/txmetacache"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
+	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/util"
+	"github.com/bsv-blockchain/teranode/util/lane"
 	"github.com/bsv-blockchain/teranode/util/tracing"
 	"github.com/ordishs/gocore"
 	"golang.org/x/sync/errgroup"
@@ -474,6 +476,28 @@ func (u *Server) readTxFromReader(body io.ReadCloser) (tx *bt.Tx, err error) {
 	return tx, nil
 }
 
+// fillLanePosition reads, at utxostore_laneMigration shadow, the own lane position of a record
+// whose metadata came back without one, for the subtree's lane bitmaps. That is metadata read with
+// GetMeta, which reads no position: the read-back of a record whose metadata did not come back with
+// the validator's answer, the validator's answer for a transaction it found already stored, an
+// older remote validator's answer, and the SQL store's create. blessMissingTransactions calls it,
+// where the position goes into the subtree; the block path's levels, which drop the metadata, do
+// not. The position is only measured, so a failure to read it leaves it at zero, where the
+// transaction is counted as one without a position, and is not an error.
+func (u *Server) fillLanePosition(ctx context.Context, hash *chainhash.Hash, md *meta.Data) {
+	if !u.laneShadow() || lane.Valid(md.LanePosition) {
+		return
+	}
+
+	withLane, err := u.utxoStore.Get(ctx, hash, fields.LanePosition)
+	if err != nil || withLane == nil {
+		u.logger.Debugf("[fillLanePosition][%s] lane position not read: %v", hash.String(), err)
+		return
+	}
+
+	md.LanePosition = withLane.LanePosition
+}
+
 // blessMissingTransaction validates a transaction and retrieves its metadata,
 // performing the core consensus validation operations required for blockchain inclusion.
 //
@@ -691,6 +715,10 @@ type metaSliceItem struct {
 	creating    bool
 	isSet       bool
 	txInpoints  subtreepkg.TxInpoints
+	// lanePosition is the transaction's own lane position, 0 when none was known: the txmeta
+	// cache keeps it at utxostore_laneMigration shadow, a store read asks for it then, and a
+	// create returns it. Only the subtree's lane bitmaps read it.
+	lanePosition uint64
 	// keptAside marks a tx of a peer subtree that conflicts with a tx this node accepted,
 	// or descends from one. It is not validated or stored until a block references it.
 	keptAside bool
@@ -1002,6 +1030,13 @@ func (u *Server) ValidateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 
 	u.logger.Debugf("[ValidateSubtreeInternal][%s] adding %d nodes to subtree instance", v.SubtreeHash.String(), len(txHashes))
 
+	// At shadow, the subtree's lane bitmaps: each member's own lane position, by lane, for the
+	// block gate to merge into its block's rows. The coinbase placeholder has no position yet.
+	var laneBits *lane.BitmapsBuilder
+	if u.laneShadow() {
+		laneBits = lane.NewBitmapsBuilder()
+	}
+
 	for idx, txHash := range txHashes {
 		// if placeholder just add it and continue
 		if idx == 0 && txHash.Equal(*subtreepkg.CoinbasePlaceholderHash) {
@@ -1039,6 +1074,10 @@ func (u *Server) ValidateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 			}
 		}
 
+		if laneBits != nil {
+			laneBits.Add(txMetaSlice[idx].lanePosition)
+		}
+
 		// add the txMeta data we need for block validation
 		subtreeIdx := subtree.Length() - 1
 
@@ -1054,7 +1093,16 @@ func (u *Server) ValidateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 		return nil, u.storeSubtreeWithConflictingTxs(ctx, v.SubtreeHash, txHashes, keptAside)
 	}
 
-	if err = u.storeSubtreeFiles(ctx, stat, &v.SubtreeHash, subtree, subtreeMeta); err != nil {
+	var laneBitmaps *lane.SubtreeBitmaps
+
+	if laneBits != nil {
+		lane.CountTxsWithoutPosition(laneBitmapsService, laneBits.Unpositioned())
+
+		bitmaps := laneBits.Subtree(v.SubtreeHash)
+		laneBitmaps = &bitmaps
+	}
+
+	if err = u.storeSubtreeFiles(ctx, stat, &v.SubtreeHash, subtree, subtreeMeta, laneBitmaps); err != nil {
 		return nil, err
 	}
 
@@ -1097,7 +1145,10 @@ func (u *Server) waitForRetryOrPriority(ctx context.Context, subtreeHash string,
 	}
 }
 
-func (u *Server) storeSubtreeFiles(ctx context.Context, stat *gocore.Stat, subtreeHash *chainhash.Hash, subtree *subtreepkg.Subtree, subtreeMeta *subtreepkg.Meta) error {
+// storeSubtreeFiles writes a validated subtree's files, all with one expiry: its meta, and beside it
+// its lane bitmaps when laneBitmaps is not nil (utxostore_laneMigration shadow), then the subtree
+// file once both are written.
+func (u *Server) storeSubtreeFiles(ctx context.Context, stat *gocore.Stat, subtreeHash *chainhash.Hash, subtree *subtreepkg.Subtree, subtreeMeta *subtreepkg.Meta, laneBitmaps *lane.SubtreeBitmaps) error {
 	ctx, _, deferFn := tracing.Tracer("subtreevalidation").Start(ctx, "storeSubtreeFiles",
 		tracing.WithParentStat(stat),
 		tracing.WithDebugLogMessage(u.logger, "[storeSubtreeFiles][%s] called", subtreeHash.String()),
@@ -1111,6 +1162,26 @@ func (u *Server) storeSubtreeFiles(ctx context.Context, stat *gocore.Stat, subtr
 	}
 
 	dah := u.utxoStore.GetBlockHeight() + u.settings.GetSubtreeValidationBlockHeightRetention()
+
+	// The lane bitmaps file only has to exist before the subtree file, which the block gate reads
+	// as "this subtree is done", so it is written beside the meta rather than before it: at
+	// shadow a subtree waits for no extra write in turn. Every return waits for it, so no write
+	// outlives the call.
+	waitForBitmaps := func() {}
+
+	if laneBitmaps != nil {
+		bitmapsWritten := make(chan struct{})
+
+		go func() {
+			defer close(bitmapsWritten)
+
+			u.storeSubtreeLaneBitmaps(ctx, subtreeHash, *laneBitmaps, dah)
+		}()
+
+		defer func() { <-bitmapsWritten }()
+
+		waitForBitmaps = func() { <-bitmapsWritten }
+	}
 
 	// The meta is written before the subtree, not beside it. The .subtree file is what
 	// every later check reads as "this subtree is done": the quorum lock's file check on
@@ -1149,6 +1220,8 @@ func (u *Server) storeSubtreeFiles(ctx context.Context, stat *gocore.Stat, subtr
 		return errors.NewProcessingError("[ValidateSubtreeInternal][%s] failed to serialize subtree", subtreeHash.String(), err)
 	}
 
+	waitForBitmaps()
+
 	u.logger.Debugf("[ValidateSubtreeInternal][%s] store subtree", subtreeHash.String())
 
 	if err = u.subtreeStore.Set(ctx,
@@ -1167,6 +1240,26 @@ func (u *Server) storeSubtreeFiles(ctx context.Context, stat *gocore.Stat, subtr
 	_ = u.SetSubtreeExists(subtreeHash)
 
 	return nil
+}
+
+// laneBitmapsService labels the transactions this service leaves out of a subtree's lane bitmaps.
+const laneBitmapsService = "subtreevalidation"
+
+// storeSubtreeLaneBitmaps writes a subtree's lane bitmaps file, before its subtree file and with
+// its expiry, so the block gate finds it beside the subtree. At shadow nothing acts on lanes, so
+// a failure to write it does not stop the subtree: it is logged and counted as write_failed, and
+// the block that lists the subtree counts its bitmaps as absent and goes without rows. A file
+// already there, from an earlier validation of the same subtree, is kept.
+func (u *Server) storeSubtreeLaneBitmaps(ctx context.Context, subtreeHash *chainhash.Hash, bitmaps lane.SubtreeBitmaps, dah uint32) {
+	data, err := lane.EncodeSubtreeBitmaps(bitmaps)
+	if err == nil {
+		err = u.subtreeStore.Set(ctx, subtreeHash[:], fileformat.FileTypeSubtreeLaneBitmaps, data, options.WithDeleteAt(dah))
+	}
+
+	if err != nil && !errors.Is(err, errors.ErrBlobAlreadyExists) {
+		lane.CountMissingBitmaps(lane.MissingBitmapsWriteFailed, 1)
+		u.logger.Warnf("[ValidateSubtreeInternal][%s] failed to store subtree lane bitmaps, its block will go without lane rows: %v", subtreeHash.String(), err)
+	}
 }
 
 // getSubtreeTxHashes retrieves transaction hashes for a subtree from a remote source.
@@ -1553,14 +1646,19 @@ func (u *Server) blessMissingTransactions(ctx context.Context, subtreeHash chain
 						return nil
 					}
 
+					// The position goes into the subtree's lane bitmaps; fill it if the answer
+					// came without one.
+					u.fillLanePosition(gCtx, tx.TxIDChainHash(), txMeta)
+
 					txMetaSlice[txIdx] = metaSliceItem{
-						fee:         txMeta.Fee,
-						sizeInBytes: txMeta.SizeInBytes,
-						coinbase:    txMeta.IsCoinbase,
-						conflicting: txMeta.Conflicting,
-						creating:    txMeta.Creating,
-						isSet:       true,
-						txInpoints:  txMeta.TxInpoints,
+						fee:          txMeta.Fee,
+						sizeInBytes:  txMeta.SizeInBytes,
+						coinbase:     txMeta.IsCoinbase,
+						conflicting:  txMeta.Conflicting,
+						creating:     txMeta.Creating,
+						isSet:        true,
+						txInpoints:   txMeta.TxInpoints,
+						lanePosition: txMeta.LanePosition,
 					}
 				}
 

@@ -1342,6 +1342,17 @@ func (b *Blockchain) AddBlock(ctx context.Context, request *blockchain_api.AddBl
 		storeBlockOptions = append(storeBlockOptions, blockchainoptions.WithID(request.OptionID))
 	}
 
+	// The block's lane map rows, at utxostore_laneMigration shadow. They are measured, never
+	// acted on, so rows that do not even parse are dropped and the block is stored without them.
+	if len(request.LaneMapRows) > 0 {
+		if laneRows, laneErr := laneMapRowsFromProto(request.LaneMapRows); laneErr != nil {
+			lane.CountRowInsertFailure()
+			b.logger.Warnf("[Blockchain][AddBlock][%s] dropping its lane map rows: %v", header.Hash().String(), laneErr)
+		} else {
+			storeBlockOptions = append(storeBlockOptions, blockchainoptions.WithLaneMapRows(laneRows))
+		}
+	}
+
 	ID, height, err := b.store.StoreBlock(ctx, block, request.PeerId, storeBlockOptions...)
 	if err != nil {
 		return nil, errors.WrapGRPC(err)

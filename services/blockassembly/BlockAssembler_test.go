@@ -31,6 +31,7 @@ import (
 	blockchainstore "github.com/bsv-blockchain/teranode/stores/blockchain"
 	utxoStore "github.com/bsv-blockchain/teranode/stores/utxo"
 	utxofields "github.com/bsv-blockchain/teranode/stores/utxo/fields"
+	utxologger "github.com/bsv-blockchain/teranode/stores/utxo/logger"
 	utxostoresql "github.com/bsv-blockchain/teranode/stores/utxo/sql"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
@@ -330,6 +331,10 @@ func TestBlockAssembly_Start(t *testing.T) {
 		blockchainClient.On("GetBlockHeaders", mock.Anything, mock.Anything, mock.Anything).Return([]*model.BlockHeader{model.GenesisBlockHeader}, []*model.BlockHeaderMeta{{Height: 0}}, nil)
 		blockchainClient.On("GetBlockHeaderIDs", mock.Anything, mock.Anything, mock.Anything).Return([]uint32{0}, nil)
 		blockchainClient.On("GetBlocksMinedNotSet", mock.Anything).Return([]*model.Block{}, nil)
+		// The median time past of the resumed tip, for the template's next block: the batched
+		// header read above is not anchored on it, so the lookup walks the parent links.
+		blockchainClient.On("GetBlockHeader", mock.Anything, bestBlockHeader.Hash()).Return(bestBlockHeader, &model.BlockHeaderMeta{Height: 1}, nil)
+		blockchainClient.On("GetBlockHeader", mock.Anything, genesisBlock.Hash()).Return(genesisBlock.Header, &model.BlockHeaderMeta{Height: 0}, nil)
 		nextBits := model.NBit{0xff, 0xff, 0x7f, 0x20}
 		blockchainClient.On("GetNextWorkRequired", mock.Anything, bestBlockHeader.Hash(), mock.Anything).Return(&nextBits, nil)
 		subChan := make(chan *blockchain_api.Notification, 1)
@@ -460,31 +465,31 @@ func TestBlockAssembly_AddTx(t *testing.T) {
 
 		_, _, err := testItems.utxoStore.SpendAndCreate(ctx, tx1, 0, utxoStore.WithCreateOnly())
 		require.NoError(t, err)
-		require.Equal(t, subtreeprocessor.Admitted, testItems.blockAssembler.AddTxBatchBounded([]subtreepkg.Node{{Hash: *hash1, Fee: 111}}, []*subtreepkg.TxInpoints{{ParentTxHashes: []chainhash.Hash{}}}, false))
+		require.Equal(t, subtreeprocessor.Admitted, testItems.blockAssembler.AddTxBatchBounded([]subtreepkg.Node{{Hash: *hash1, Fee: 111}}, []*subtreepkg.TxInpoints{{ParentTxHashes: []chainhash.Hash{}}}, false, nil))
 
 		_, _, err = testItems.utxoStore.SpendAndCreate(ctx, tx2, 0, utxoStore.WithCreateOnly())
 		require.NoError(t, err)
-		require.Equal(t, subtreeprocessor.Admitted, testItems.blockAssembler.AddTxBatchBounded([]subtreepkg.Node{{Hash: *hash2, Fee: 222}}, []*subtreepkg.TxInpoints{{ParentTxHashes: []chainhash.Hash{}}}, false))
+		require.Equal(t, subtreeprocessor.Admitted, testItems.blockAssembler.AddTxBatchBounded([]subtreepkg.Node{{Hash: *hash2, Fee: 222}}, []*subtreepkg.TxInpoints{{ParentTxHashes: []chainhash.Hash{}}}, false, nil))
 
 		_, _, err = testItems.utxoStore.SpendAndCreate(ctx, tx3, 0, utxoStore.WithCreateOnly())
 		require.NoError(t, err)
-		require.Equal(t, subtreeprocessor.Admitted, testItems.blockAssembler.AddTxBatchBounded([]subtreepkg.Node{{Hash: *hash3, Fee: 333}}, []*subtreepkg.TxInpoints{{ParentTxHashes: []chainhash.Hash{}}}, false))
+		require.Equal(t, subtreeprocessor.Admitted, testItems.blockAssembler.AddTxBatchBounded([]subtreepkg.Node{{Hash: *hash3, Fee: 333}}, []*subtreepkg.TxInpoints{{ParentTxHashes: []chainhash.Hash{}}}, false, nil))
 
 		_, _, err = testItems.utxoStore.SpendAndCreate(ctx, tx4, 0, utxoStore.WithCreateOnly())
 		require.NoError(t, err)
-		require.Equal(t, subtreeprocessor.Admitted, testItems.blockAssembler.AddTxBatchBounded([]subtreepkg.Node{{Hash: *hash4, Fee: 110}}, []*subtreepkg.TxInpoints{{ParentTxHashes: []chainhash.Hash{}}}, false))
+		require.Equal(t, subtreeprocessor.Admitted, testItems.blockAssembler.AddTxBatchBounded([]subtreepkg.Node{{Hash: *hash4, Fee: 110}}, []*subtreepkg.TxInpoints{{ParentTxHashes: []chainhash.Hash{}}}, false, nil))
 
 		_, _, err = testItems.utxoStore.SpendAndCreate(ctx, tx5, 0, utxoStore.WithCreateOnly())
 		require.NoError(t, err)
-		require.Equal(t, subtreeprocessor.Admitted, testItems.blockAssembler.AddTxBatchBounded([]subtreepkg.Node{{Hash: *hash5, Fee: 220}}, []*subtreepkg.TxInpoints{{ParentTxHashes: []chainhash.Hash{}}}, false))
+		require.Equal(t, subtreeprocessor.Admitted, testItems.blockAssembler.AddTxBatchBounded([]subtreepkg.Node{{Hash: *hash5, Fee: 220}}, []*subtreepkg.TxInpoints{{ParentTxHashes: []chainhash.Hash{}}}, false, nil))
 
 		_, _, err = testItems.utxoStore.SpendAndCreate(ctx, tx6, 0, utxoStore.WithCreateOnly())
 		require.NoError(t, err)
-		require.Equal(t, subtreeprocessor.Admitted, testItems.blockAssembler.AddTxBatchBounded([]subtreepkg.Node{{Hash: *hash6, Fee: 330}}, []*subtreepkg.TxInpoints{{ParentTxHashes: []chainhash.Hash{}}}, false))
+		require.Equal(t, subtreeprocessor.Admitted, testItems.blockAssembler.AddTxBatchBounded([]subtreepkg.Node{{Hash: *hash6, Fee: 330}}, []*subtreepkg.TxInpoints{{ParentTxHashes: []chainhash.Hash{}}}, false, nil))
 
 		_, _, err = testItems.utxoStore.SpendAndCreate(ctx, tx7, 0, utxoStore.WithCreateOnly())
 		require.NoError(t, err)
-		require.Equal(t, subtreeprocessor.Admitted, testItems.blockAssembler.AddTxBatchBounded([]subtreepkg.Node{{Hash: *hash7, Fee: 6}}, []*subtreepkg.TxInpoints{{ParentTxHashes: []chainhash.Hash{}}}, false))
+		require.Equal(t, subtreeprocessor.Admitted, testItems.blockAssembler.AddTxBatchBounded([]subtreepkg.Node{{Hash: *hash7, Fee: 6}}, []*subtreepkg.TxInpoints{{ParentTxHashes: []chainhash.Hash{}}}, false, nil))
 
 		completeWg.Wait()
 
@@ -870,23 +875,23 @@ func TestBlockAssembly_ShouldNotAllowMoreThanOneCoinbaseTx(t *testing.T) {
 
 		_, _, err := testItems.utxoStore.SpendAndCreate(ctx, tx1, 0, utxoStore.WithCreateOnly())
 		require.NoError(t, err)
-		require.Equal(t, subtreeprocessor.Admitted, testItems.blockAssembler.AddTxBatchBounded([]subtreepkg.Node{{Hash: *subtreepkg.CoinbasePlaceholderHash, Fee: 5000000000}}, []*subtreepkg.TxInpoints{{ParentTxHashes: []chainhash.Hash{}}}, false))
+		require.Equal(t, subtreeprocessor.Admitted, testItems.blockAssembler.AddTxBatchBounded([]subtreepkg.Node{{Hash: *subtreepkg.CoinbasePlaceholderHash, Fee: 5000000000}}, []*subtreepkg.TxInpoints{{ParentTxHashes: []chainhash.Hash{}}}, false, nil))
 
 		_, _, err = testItems.utxoStore.SpendAndCreate(ctx, tx2, 0, utxoStore.WithCreateOnly())
 		require.NoError(t, err)
-		require.Equal(t, subtreeprocessor.Admitted, testItems.blockAssembler.AddTxBatchBounded([]subtreepkg.Node{{Hash: *hash2, Fee: 222}}, []*subtreepkg.TxInpoints{{ParentTxHashes: []chainhash.Hash{}}}, false))
+		require.Equal(t, subtreeprocessor.Admitted, testItems.blockAssembler.AddTxBatchBounded([]subtreepkg.Node{{Hash: *hash2, Fee: 222}}, []*subtreepkg.TxInpoints{{ParentTxHashes: []chainhash.Hash{}}}, false, nil))
 
 		_, _, err = testItems.utxoStore.SpendAndCreate(ctx, tx3, 0, utxoStore.WithCreateOnly())
 		require.NoError(t, err)
-		require.Equal(t, subtreeprocessor.Admitted, testItems.blockAssembler.AddTxBatchBounded([]subtreepkg.Node{{Hash: *hash3, Fee: 334}}, []*subtreepkg.TxInpoints{{ParentTxHashes: []chainhash.Hash{}}}, false))
+		require.Equal(t, subtreeprocessor.Admitted, testItems.blockAssembler.AddTxBatchBounded([]subtreepkg.Node{{Hash: *hash3, Fee: 334}}, []*subtreepkg.TxInpoints{{ParentTxHashes: []chainhash.Hash{}}}, false, nil))
 
 		_, _, err = testItems.utxoStore.SpendAndCreate(ctx, tx4, 0, utxoStore.WithCreateOnly())
 		require.NoError(t, err)
-		require.Equal(t, subtreeprocessor.Admitted, testItems.blockAssembler.AddTxBatchBounded([]subtreepkg.Node{{Hash: *hash4, Fee: 444}}, []*subtreepkg.TxInpoints{{ParentTxHashes: []chainhash.Hash{}}}, false))
+		require.Equal(t, subtreeprocessor.Admitted, testItems.blockAssembler.AddTxBatchBounded([]subtreepkg.Node{{Hash: *hash4, Fee: 444}}, []*subtreepkg.TxInpoints{{ParentTxHashes: []chainhash.Hash{}}}, false, nil))
 
 		_, _, err = testItems.utxoStore.SpendAndCreate(ctx, tx5, 0, utxoStore.WithCreateOnly())
 		require.NoError(t, err)
-		require.Equal(t, subtreeprocessor.Admitted, testItems.blockAssembler.AddTxBatchBounded([]subtreepkg.Node{{Hash: *hash5, Fee: 555}}, []*subtreepkg.TxInpoints{{ParentTxHashes: []chainhash.Hash{}}}, false))
+		require.Equal(t, subtreeprocessor.Admitted, testItems.blockAssembler.AddTxBatchBounded([]subtreepkg.Node{{Hash: *hash5, Fee: 555}}, []*subtreepkg.TxInpoints{{ParentTxHashes: []chainhash.Hash{}}}, false, nil))
 
 		wg.Wait()
 
@@ -993,15 +998,15 @@ func TestBlockAssembly_GetMiningCandidate(t *testing.T) {
 
 		_, _, err := testItems.utxoStore.SpendAndCreate(ctx, tx2, 0, utxoStore.WithCreateOnly())
 		require.NoError(t, err)
-		require.Equal(t, subtreeprocessor.Admitted, testItems.blockAssembler.AddTxBatchBounded([]subtreepkg.Node{{Hash: *hash2, Fee: 222, SizeInBytes: 222}}, []*subtreepkg.TxInpoints{{ParentTxHashes: []chainhash.Hash{}}}, false))
+		require.Equal(t, subtreeprocessor.Admitted, testItems.blockAssembler.AddTxBatchBounded([]subtreepkg.Node{{Hash: *hash2, Fee: 222, SizeInBytes: 222}}, []*subtreepkg.TxInpoints{{ParentTxHashes: []chainhash.Hash{}}}, false, nil))
 
 		_, _, err = testItems.utxoStore.SpendAndCreate(ctx, tx3, 0, utxoStore.WithCreateOnly())
 		require.NoError(t, err)
-		require.Equal(t, subtreeprocessor.Admitted, testItems.blockAssembler.AddTxBatchBounded([]subtreepkg.Node{{Hash: *hash3, Fee: 333, SizeInBytes: 333}}, []*subtreepkg.TxInpoints{{ParentTxHashes: []chainhash.Hash{}}}, false))
+		require.Equal(t, subtreeprocessor.Admitted, testItems.blockAssembler.AddTxBatchBounded([]subtreepkg.Node{{Hash: *hash3, Fee: 333, SizeInBytes: 333}}, []*subtreepkg.TxInpoints{{ParentTxHashes: []chainhash.Hash{}}}, false, nil))
 
 		_, _, err = testItems.utxoStore.SpendAndCreate(ctx, tx4, 0, utxoStore.WithCreateOnly())
 		require.NoError(t, err)
-		require.Equal(t, subtreeprocessor.Admitted, testItems.blockAssembler.AddTxBatchBounded([]subtreepkg.Node{{Hash: *hash4, Fee: 444, SizeInBytes: 444}}, []*subtreepkg.TxInpoints{{ParentTxHashes: []chainhash.Hash{}}}, false))
+		require.Equal(t, subtreeprocessor.Admitted, testItems.blockAssembler.AddTxBatchBounded([]subtreepkg.Node{{Hash: *hash4, Fee: 444, SizeInBytes: 444}}, []*subtreepkg.TxInpoints{{ParentTxHashes: []chainhash.Hash{}}}, false, nil))
 
 		// Wait until the assembler has committed all 3 txs into the mining candidate.
 		// completeWg.Done() previously fired before the assembler acked the subtree
@@ -1111,7 +1116,7 @@ func TestBlockAssembly_GetMiningCandidate_MaxBlockSize(t *testing.T) {
 			_, _, err := testItems.utxoStore.SpendAndCreate(ctx, tx, 0, utxoStore.WithCreateOnly())
 			require.NoError(t, err)
 
-			require.Equal(t, subtreeprocessor.Admitted, testItems.blockAssembler.AddTxBatchBounded([]subtreepkg.Node{{Hash: *tx.TxIDChainHash(), Fee: 1000000000, SizeInBytes: 15000}}, []*subtreepkg.TxInpoints{{ParentTxHashes: []chainhash.Hash{}}}, false))
+			require.Equal(t, subtreeprocessor.Admitted, testItems.blockAssembler.AddTxBatchBounded([]subtreepkg.Node{{Hash: *tx.TxIDChainHash(), Fee: 1000000000, SizeInBytes: 15000}}, []*subtreepkg.TxInpoints{{ParentTxHashes: []chainhash.Hash{}}}, false, nil))
 		}
 
 		completeWg.Wait()
@@ -1221,7 +1226,7 @@ func TestBlockAssembly_GetMiningCandidate_MaxBlockSize_LessThanSubtreeSize(t *te
 			_, _, err := testItems.utxoStore.SpendAndCreate(ctx, tx, 0, utxoStore.WithCreateOnly())
 			require.NoError(t, err)
 
-			require.Equal(t, subtreeprocessor.Admitted, testItems.blockAssembler.AddTxBatchBounded([]subtreepkg.Node{{Hash: *tx.TxIDChainHash(), Fee: 1000000000, SizeInBytes: 150000}}, []*subtreepkg.TxInpoints{{ParentTxHashes: []chainhash.Hash{}}}, false)) // 0.15MB
+			require.Equal(t, subtreeprocessor.Admitted, testItems.blockAssembler.AddTxBatchBounded([]subtreepkg.Node{{Hash: *tx.TxIDChainHash(), Fee: 1000000000, SizeInBytes: 150000}}, []*subtreepkg.TxInpoints{{ParentTxHashes: []chainhash.Hash{}}}, false, nil)) // 0.15MB
 		}
 
 		wg.Wait()
@@ -1334,7 +1339,7 @@ func TestBlockAssembly_CoinbaseSubsidyBugReproduction(t *testing.T) {
 			Hash:        *tx1.TxIDChainHash(),
 			Fee:         200000, // 0.002 BSV
 			SizeInBytes: 250,
-		}}, []*subtreepkg.TxInpoints{{ParentTxHashes: []chainhash.Hash{}}}, false))
+		}}, []*subtreepkg.TxInpoints{{ParentTxHashes: []chainhash.Hash{}}}, false, nil))
 
 		_, _, err = testItems.utxoStore.SpendAndCreate(ctx, tx2, 0, utxoStore.WithCreateOnly())
 		require.NoError(t, err)
@@ -1342,7 +1347,7 @@ func TestBlockAssembly_CoinbaseSubsidyBugReproduction(t *testing.T) {
 			Hash:        *tx2.TxIDChainHash(),
 			Fee:         300000, // 0.003 BSV
 			SizeInBytes: 250,
-		}}, []*subtreepkg.TxInpoints{{ParentTxHashes: []chainhash.Hash{}}}, false))
+		}}, []*subtreepkg.TxInpoints{{ParentTxHashes: []chainhash.Hash{}}}, false, nil))
 
 		_, _, err = testItems.utxoStore.SpendAndCreate(ctx, tx3, 0, utxoStore.WithCreateOnly())
 		require.NoError(t, err)
@@ -1350,7 +1355,7 @@ func TestBlockAssembly_CoinbaseSubsidyBugReproduction(t *testing.T) {
 			Hash:        *tx3.TxIDChainHash(),
 			Fee:         100000, // 0.001 BSV
 			SizeInBytes: 250,
-		}}, []*subtreepkg.TxInpoints{{ParentTxHashes: []chainhash.Hash{}}}, false))
+		}}, []*subtreepkg.TxInpoints{{ParentTxHashes: []chainhash.Hash{}}}, false, nil))
 
 		wg.Wait()
 
@@ -1707,6 +1712,7 @@ func TestBlockAssembler_GetMiningCandidate_StaleFallbackIntegration(t *testing.T
 				[]subtreepkg.Node{{Hash: txHash, Fee: uint64(100 * (i + 1)), SizeInBytes: 250}},
 				[]*subtreepkg.TxInpoints{{}},
 				false,
+				nil,
 			))
 		}
 
@@ -1780,6 +1786,7 @@ func TestBlockAssembler_GetMiningCandidate_StaleFallbackIntegration(t *testing.T
 				[]subtreepkg.Node{{Hash: txHash, Fee: uint64(200 * (i + 1)), SizeInBytes: 300}},
 				[]*subtreepkg.TxInpoints{{}},
 				false,
+				nil,
 			))
 		}
 
@@ -2203,7 +2210,7 @@ func TestBlockAssembly_Start_HoldsTheHeldCountFullFromConstructionToTheEndOfTheL
 
 	require.GreaterOrEqual(t, ba.subtreeProcessor.HeldCount(), limit, "ingest can be served before Start runs, and it must read full from construction")
 	require.Equal(t, subtreeprocessor.RefusedHeld, ba.subtreeProcessor.AddBatchBounded(
-		[]subtreepkg.Node{{Hash: chainhash.HashH([]byte("before-start"))}}, []*subtreepkg.TxInpoints{{}}, false))
+		[]subtreepkg.Node{{Hash: chainhash.HashH([]byte("before-start"))}}, []*subtreepkg.TxInpoints{{}}, false, nil))
 
 	spy := &heldReadingSpy{Interface: ba.subtreeProcessor, limit: limit}
 	ba.subtreeProcessor = spy
@@ -3172,6 +3179,9 @@ func TestReset_ConflictDetectionViaValidateInputs(t *testing.T) {
 		Return([]*model.BlockHeader{genesisHeader}, []*model.BlockHeaderMeta{genesisMeta}, nil)
 	mockBC.On("GetBlockHeaders", mock.Anything, mock.Anything, uint64(0)).
 		Return([]*model.BlockHeader{}, []*model.BlockHeaderMeta{}, nil)
+	// The reload's next block: the median time past of the headers ending at genesis.
+	mockBC.On("GetBlockHeaders", mock.Anything, genesisHash, uint64(blockchain.MedianTimeBlocks)).
+		Return([]*model.BlockHeader{genesisHeader}, []*model.BlockHeaderMeta{genesisMeta}, nil)
 	// loadUnminedTransactions: GetBlockHeaderIDs for best-chain check.
 	mockBC.On("GetBlockHeaderIDs", mock.Anything, mock.Anything, mock.Anything).Return([]uint32{}, nil)
 	// reset() calls SetState to persist the new block assembly tip after reset completes.
@@ -3331,6 +3341,297 @@ func TestLoadUnminedTransactionsKeepsParentLinksWithSubtreeMetaOff(t *testing.T)
 			inpoints, ok := items.blockAssembler.subtreeProcessor.GetCurrentTxMap().Get(*tx.TxIDChainHash())
 			require.True(t, ok, "the reload must put the tx in block assembly")
 			require.Equal(t, []chainhash.Hash{parentHash}, inpoints.ParentTxHashes, "the reload must keep the tx's parent links")
+		})
+	}
+}
+
+// skippingUtxoStore is a store that offers the load scan that leaves out an
+// external record whose file is missing, as the Aerospike store does.
+type skippingUtxoStore struct {
+	*utxoStore.MockUtxostore
+	skippingCalls int
+	err           error
+}
+
+func (s *skippingUtxoStore) GetUnminedTxIteratorSkippingMissingExternal() (utxoStore.UnminedTxIterator, error) {
+	s.skippingCalls++
+
+	return nil, s.err
+}
+
+// Block assembly's load asks a store for the scan that skips a missing external
+// file, found through a wrapper too, but only while the load drops the children
+// of a transaction it left out. It falls back to the plain scan otherwise, and
+// on a store without the skipping scan.
+func TestUnminedTxIteratorForLoad(t *testing.T) {
+	withParentCheck := func(validate, remove bool) *settings.Settings {
+		s := test.CreateBaseTestSettings(t)
+		s.BlockAssembly.OnRestartValidateParentChain = validate
+		s.BlockAssembly.OnRestartRemoveInvalidParentChainTxs = remove
+
+		return s
+	}
+
+	t.Run("store with the skipping scan, behind a wrapper", func(t *testing.T) {
+		store := &skippingUtxoStore{MockUtxostore: new(utxoStore.MockUtxostore)}
+		b := &BlockAssembler{settings: withParentCheck(true, true), utxoStore: utxologger.New(context.Background(), ulogger.TestLogger{}, store)}
+
+		_, err := b.unminedTxIteratorForLoad()
+		require.NoError(t, err)
+		require.Equal(t, 1, store.skippingCalls)
+		store.AssertNotCalled(t, "GetUnminedTxIterator")
+	})
+
+	t.Run("an error from the skipping scan reaches the caller", func(t *testing.T) {
+		store := &skippingUtxoStore{MockUtxostore: new(utxoStore.MockUtxostore), err: errors.NewProcessingError("scan unavailable")}
+		b := &BlockAssembler{settings: withParentCheck(true, true), utxoStore: store}
+
+		_, err := b.unminedTxIteratorForLoad()
+		require.ErrorIs(t, err, store.err)
+	})
+
+	for _, tc := range []struct {
+		name             string
+		validate, remove bool
+	}{
+		{"parent check off", false, true},
+		{"parent check keeps invalid children", true, false},
+	} {
+		t.Run(tc.name+": plain scan", func(t *testing.T) {
+			store := &skippingUtxoStore{MockUtxostore: new(utxoStore.MockUtxostore)}
+			store.On("GetUnminedTxIterator").Return(&sliceUnminedIterator{}, nil).Once()
+			b := &BlockAssembler{settings: withParentCheck(tc.validate, tc.remove), utxoStore: store}
+
+			_, err := b.unminedTxIteratorForLoad()
+			require.NoError(t, err)
+			require.Zero(t, store.skippingCalls)
+			store.AssertExpectations(t)
+		})
+	}
+
+	t.Run("store without it", func(t *testing.T) {
+		store := new(utxoStore.MockUtxostore)
+		store.On("GetUnminedTxIterator").Return(&sliceUnminedIterator{}, nil).Once()
+		b := &BlockAssembler{settings: withParentCheck(true, true), utxoStore: store}
+
+		_, err := b.unminedTxIteratorForLoad()
+		require.NoError(t, err)
+		store.AssertExpectations(t)
+	})
+}
+
+// loadSkippingStore offers the skipping scan over a real store, counts which
+// scan the load opened and how many transactions the load read from it.
+type loadSkippingStore struct {
+	utxoStore.Store
+	skippingCalls, plainCalls, yielded int
+}
+
+func (s *loadSkippingStore) GetUnminedTxIteratorSkippingMissingExternal() (utxoStore.UnminedTxIterator, error) {
+	s.skippingCalls++
+
+	return s.counting()
+}
+
+func (s *loadSkippingStore) GetUnminedTxIterator() (utxoStore.UnminedTxIterator, error) {
+	s.plainCalls++
+
+	return s.counting()
+}
+
+func (s *loadSkippingStore) counting() (utxoStore.UnminedTxIterator, error) {
+	it, err := s.Store.GetUnminedTxIterator()
+	if err != nil {
+		return nil, err
+	}
+
+	return &countingUnminedIterator{UnminedTxIterator: it, yielded: &s.yielded}, nil
+}
+
+type countingUnminedIterator struct {
+	utxoStore.UnminedTxIterator
+	yielded *int
+}
+
+func (c *countingUnminedIterator) Next(ctx context.Context) ([]*utxoStore.UnminedTransaction, error) {
+	batch, err := c.UnminedTxIterator.Next(ctx)
+	*c.yielded += len(batch)
+
+	return batch, err
+}
+
+type queuedChildSkippingStore struct {
+	utxoStore.Store
+	iterator utxoStore.UnminedTxIterator
+}
+
+func (s *queuedChildSkippingStore) GetUnminedTxIteratorSkippingMissingExternal() (utxoStore.UnminedTxIterator, error) {
+	return s.iterator, nil
+}
+
+type queuedChildSkippingIterator struct {
+	missingParent chainhash.Hash
+	queueChild    func()
+	next          int
+}
+
+func (it *queuedChildSkippingIterator) Next(context.Context) ([]*utxoStore.UnminedTransaction, error) {
+	it.next++
+	if it.next == 1 {
+		// an unmined coinbase comes back as a Skip record with no Node, beside
+		// the hashed skip of the missing external parent
+		return []*utxoStore.UnminedTransaction{{Skip: true}, {Node: &subtreepkg.Node{Hash: it.missingParent}, Skip: true}}, nil
+	}
+	if it.next == 2 {
+		it.queueChild() // this partition has finished, but the load has not
+	}
+	return nil, nil
+}
+
+func (*queuedChildSkippingIterator) Err() error   { return nil }
+func (*queuedChildSkippingIterator) Close() error { return nil }
+
+// A child submitted after the scan saw its missing external parent is still
+// queued when the load finishes. The startup drain must reject it by parent
+// hash while admitting an unrelated transaction from the same queue batch.
+func TestLoadUnminedTransactionsDropsQueuedChildOfMissingExternalParent(t *testing.T) {
+	initPrometheusMetrics()
+	ctx := t.Context()
+	items := setupBlockAssemblyTest(t, func(s *settings.Settings) {
+		s.BlockAssembly.OnRestartValidateParentChain = true
+		s.BlockAssembly.OnRestartRemoveInvalidParentChainTxs = true
+		s.BlockAssembly.DoubleSpendWindow = time.Hour // the startup drain must not defer already queued children
+	})
+	ba := items.blockAssembler
+	ba.subtreeProcessor.Stop(ctx)
+
+	stp, err := subtreeprocessor.NewSubtreeProcessor(ctx, ulogger.TestLogger{}, ba.settings, nil, items.blockchainClient, nil, items.newSubtreeChan)
+	require.NoError(t, err)
+	ba.subtreeProcessor = stp // leave its consumer stopped, as during the startup load
+	ba.setBestBlockHeader(model.GenesisBlockHeader, 0)
+
+	parent := chainhash.HashH([]byte("missing-external-parent"))
+	child := chainhash.HashH([]byte("queued-child"))
+	unrelated := chainhash.HashH([]byte("queued-unrelated"))
+	it := &queuedChildSkippingIterator{missingParent: parent}
+	it.queueChild = func() {
+		require.Equal(t, subtreeprocessor.Admitted, ba.AddTxBatchBounded(
+			[]subtreepkg.Node{{Hash: child, Fee: 1000, SizeInBytes: 250}, {Hash: unrelated, Fee: 1000, SizeInBytes: 250}},
+			[]*subtreepkg.TxInpoints{singleParentInpointsPtr(parent, 0), singleParentInpointsPtr(chainhash.Hash{}, 0)}, false, nil))
+	}
+	ba.utxoStore = &queuedChildSkippingStore{Store: items.utxoStore, iterator: it}
+
+	require.NoError(t, ba.loadUnminedTransactions(ctx, false))
+	require.Equal(t, map[chainhash.Hash]struct{}{parent: {}}, ba.unminedDropHashes, "only the hashed skip joins the drop set")
+	require.NoError(t, ba.drainUnminedDropHashes("drainQueue_startup", false))
+
+	_, childPlaced := stp.GetCurrentTxMap().Get(child)
+	_, unrelatedPlaced := stp.GetCurrentTxMap().Get(unrelated)
+	require.False(t, childPlaced, "the queued child must not enter a mining candidate without its parent")
+	require.True(t, unrelatedPlaced, "the drain must still admit unrelated queued transactions")
+}
+
+// minedSkipStore hands the load one fixed batch through the skipping scan and
+// records which hashes the load asks it to mark as mined on the longest chain.
+type minedSkipStore struct {
+	utxoStore.Store
+	batch  []*utxoStore.UnminedTransaction
+	marked []chainhash.Hash
+}
+
+func (s *minedSkipStore) GetUnminedTxIteratorSkippingMissingExternal() (utxoStore.UnminedTxIterator, error) {
+	return &sliceUnminedIterator{batches: [][]*utxoStore.UnminedTransaction{s.batch}}, nil
+}
+
+func (s *minedSkipStore) MarkTransactionsOnLongestChain(_ context.Context, hashes []chainhash.Hash, _ bool) error {
+	s.marked = append(s.marked, hashes...)
+
+	return nil
+}
+
+// A record whose external file is missing but which is already mined on the
+// best chain, with a stale unmined_since, is repaired by the load like any
+// other such record. It must not join the drop set, or its valid children
+// would be dropped on every load.
+func TestLoadUnminedTransactionsRepairsAMinedSkipRecord(t *testing.T) {
+	initPrometheusMetrics()
+	ctx := t.Context()
+	items := setupBlockAssemblyTest(t, func(s *settings.Settings) {
+		s.BlockAssembly.OnRestartValidateParentChain = true
+		s.BlockAssembly.OnRestartRemoveInvalidParentChainTxs = true
+	})
+	ba := items.blockAssembler
+
+	mined := chainhash.HashH([]byte("mined-record-missing-file"))
+	unmined := chainhash.HashH([]byte("unmined-record-missing-file"))
+	bestHeader, bestMeta, err := items.blockchainClient.GetBestBlockHeader(ctx)
+	require.NoError(t, err)
+	ba.setBestBlockHeader(bestHeader, bestMeta.Height)
+	bestIDs, err := items.blockchainClient.GetBlockHeaderIDs(ctx, bestHeader.Hash(), uint64(bestMeta.Height)+1)
+	require.NoError(t, err)
+	require.NotEmpty(t, bestIDs)
+	genesisID := bestIDs[len(bestIDs)-1] // a block on the load's best chain
+
+	store := &minedSkipStore{Store: items.utxoStore, batch: []*utxoStore.UnminedTransaction{
+		{Node: &subtreepkg.Node{Hash: mined}, Skip: true, UnminedSince: 1, BlockIDs: []uint32{genesisID}},
+		{Node: &subtreepkg.Node{Hash: unmined}, Skip: true, UnminedSince: 1},
+	}}
+	ba.utxoStore = store
+
+	require.NoError(t, ba.loadUnminedTransactions(ctx, false))
+	require.Equal(t, []chainhash.Hash{mined}, store.marked, "the mined record is repaired")
+	require.Equal(t, map[chainhash.Hash]struct{}{unmined: {}}, ba.unminedDropHashes, "only the unmined record's children are dropped")
+}
+
+// The in-memory load with the parent check on opens the scan that skips a
+// missing external file. The disk-sorted load, which runs only with the parent
+// check off, and the in-memory load with it off keep the plain scan, because
+// nothing there would drop a skipped transaction's children.
+func TestLoadUnminedTransactionsUsesTheSkippingScan(t *testing.T) {
+	for _, tc := range []struct {
+		name               string
+		validate, diskSort bool
+		wantSkipping       bool
+	}{
+		{"in memory, parent check on", true, false, true},
+		{"in memory, parent check off", false, false, false},
+		{"disk sort", false, true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			initPrometheusMetrics()
+
+			ctx := t.Context()
+			items := setupBlockAssemblyTest(t, func(s *settings.Settings) {
+				s.BlockAssembly.OnRestartValidateParentChain = tc.validate
+				s.BlockAssembly.OnRestartRemoveInvalidParentChainTxs = true
+				s.BlockAssembly.UnminedTxDiskSortEnabled = tc.diskSort
+				s.BlockAssembly.UnminedTxDiskSortPaths = []string{t.TempDir()}
+			})
+
+			tx := newTx(43)
+			_, _, err := items.utxoStore.SpendAndCreate(ctx, tx, 0, utxoStore.WithCreateOnly())
+			require.NoError(t, err)
+
+			store := &loadSkippingStore{Store: items.blockAssembler.utxoStore}
+			items.blockAssembler.utxoStore = store
+
+			require.NoError(t, items.blockAssembler.loadUnminedTransactions(ctx, false))
+
+			if tc.wantSkipping {
+				require.Equal(t, 1, store.skippingCalls)
+				require.Zero(t, store.plainCalls)
+			} else {
+				require.Zero(t, store.skippingCalls)
+				require.Equal(t, 1, store.plainCalls)
+			}
+
+			require.Equal(t, 1, store.yielded, "the load must read the tx from the scan it opened")
+
+			// with the parent check on, the tx is dropped: its parent is in no block
+			if !tc.validate {
+				_, ok := items.blockAssembler.subtreeProcessor.GetCurrentTxMap().Get(*tx.TxIDChainHash())
+				require.True(t, ok, "the load must put the tx in block assembly")
+			}
 		})
 	}
 }

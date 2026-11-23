@@ -23,6 +23,7 @@ import (
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/internal/soak"
 	"github.com/bsv-blockchain/teranode/test"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/goleak"
 	"golang.org/x/sync/errgroup"
@@ -77,7 +78,9 @@ func loadConfig(t *testing.T) config {
 	cfg.warmup = envDuration(t, "SOAK_WARMUP", defaultWarmup)
 
 	cfg.tolerance.HeapRel = envFloat(t, "SOAK_HEAP_TOLERANCE", cfg.tolerance.HeapRel)
+	cfg.tolerance.HeapAbs = envFloat(t, "SOAK_HEAP_TOLERANCE_MIB", cfg.tolerance.HeapAbs/(1024*1024)) * 1024 * 1024
 	cfg.tolerance.GoroutineRel = envFloat(t, "SOAK_GOROUTINE_TOLERANCE", cfg.tolerance.GoroutineRel)
+	cfg.tolerance.GoroutineAbs = envFloat(t, "SOAK_GOROUTINE_TOLERANCE_ABS", cfg.tolerance.GoroutineAbs)
 
 	require.Positive(t, cfg.txsPerCycle, "SOAK_TXS_PER_CYCLE must be positive")
 	require.Less(t, cfg.warmup, cfg.duration, "SOAK_WARMUP must be shorter than SOAK_DURATION")
@@ -96,12 +99,18 @@ func loadConfig(t *testing.T) config {
 }
 
 // TestSoakSteadyLoad runs the real in-process daemon (propagation, validator, block assembly, block and subtree
-// validation, blockchain) under a constant transaction rate for SOAK_DURATION, samples heap and goroutine counts every
-// SOAK_SAMPLE_INTERVAL, and fails if, after SOAK_WARMUP, either trends upward beyond the tolerance.
+// validation, blockchain, block persister, pruner) under a constant transaction rate for SOAK_DURATION, samples heap and goroutine
+// counts every SOAK_SAMPLE_INTERVAL, and fails if, after the warm-up, either trends upward beyond the tolerance.
 //
-// The load is steady by construction: a fixed pool of SOAK_TXS_PER_CYCLE UTXOs is spent 1-in/1-out each cycle, the
-// outputs become the next cycle's pool, and every cycle ends with the transactions mined. The UTXO set and the
-// per-block transaction count therefore stay constant, so a rising trend points at retained state, not more work.
+// The per-cycle work is constant: a fixed pool of SOAK_TXS_PER_CYCLE UTXOs is spent 1-in/1-out each cycle, the
+// outputs become the next cycle's pool, and every cycle ends with the transactions mined. The UTXO store is bounded
+// by the pruner's block-height retention: spent outputs are deleted once they are retention blocks deep. The one
+// exception is each block's coinbase output, which is never spent, so the store gains one row per block; that row
+// lives in the store, not the Go heap.
+//
+// The warm-up ends at the later of SOAK_WARMUP and the chain reaching retention blocks past the first spend. Until
+// then the pruner has nothing to delete and the retention-bounded state is still filling, so the ramp is counted in
+// blocks; gating on height keeps it out of the analysis however fast the runner mines.
 //
 // Set SOAK_INJECT_LEAK=1 to add a deliberate per-cycle leak and confirm the test fails.
 func TestSoakSteadyLoad(t *testing.T) {
@@ -122,8 +131,11 @@ func TestSoakSteadyLoad(t *testing.T) {
 	defer leak.release()
 
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
-		EnableRPC:            true,
-		EnableValidator:      true,
+		EnableRPC:       true,
+		EnableValidator: true,
+		EnablePruner:    true,
+		// The pruner's default trigger is a BlockPersisted notification, so without the persister it never runs.
+		EnableBlockPersister: true,
 		UTXOStoreType:        cfg.utxoStoreType,
 		SettingsOverrideFunc: test.ComposeSettings(test.SystemTestSettings()),
 	})
@@ -149,6 +161,14 @@ func TestSoakSteadyLoad(t *testing.T) {
 
 	pool := outputsOf(parentTx)
 
+	// The first cycle's spends are mined in the next block; the pruner reaches steady state once the chain is
+	// retention blocks past that.
+	retention := max(td.Settings.GetUtxoStoreBlockHeightRetention(), td.Settings.GetSubtreeValidationBlockHeightRetention())
+	steadyHeight := bestHeight(t, td) + 1 + retention
+	steadyAt := time.Duration(-1)
+
+	t.Logf("soak warm-up ends at the later of %s and block height %d (retention %d)", cfg.warmup, steadyHeight, retention)
+
 	sampler := soak.NewSampler(cfg.sampleInterval)
 	sampler.Start(td.Ctx)
 
@@ -160,11 +180,16 @@ func TestSoakSteadyLoad(t *testing.T) {
 		pool = runCycle(t, td, privKey, pool)
 		cycles++
 
+		if steadyAt < 0 && bestHeight(t, td) >= steadyHeight {
+			steadyAt = time.Since(start)
+			t.Logf("soak chain reached steady-state height %d after %s", steadyHeight, steadyAt.Round(time.Second))
+		}
+
 		if cfg.injectLeak {
 			leak.inject()
 		}
 
-		if !baselineWritten && time.Since(start) >= cfg.warmup {
+		if !baselineWritten && steadyAt >= 0 && time.Since(start) >= cfg.warmup {
 			// A heap profile at the start of the analysis window lets a failure be diagnosed with
 			// go tool pprof -diff_base, rather than guessed at from a single end-of-run snapshot.
 			writeProfile(t, cfg.outputDir, "heap", "soak-heap-baseline.pprof", 0)
@@ -175,14 +200,27 @@ func TestSoakSteadyLoad(t *testing.T) {
 
 	samples := sampler.Stop()
 
-	t.Logf("soak load done: cycles=%d txs=%d elapsed=%s", cycles, cycles*cfg.txsPerCycle, time.Since(start).Round(time.Second))
+	t.Logf("soak load done: cycles=%d txs=%d height=%d elapsed=%s", cycles, cycles*cfg.txsPerCycle, bestHeight(t, td),
+		time.Since(start).Round(time.Second))
+
+	require.GreaterOrEqual(t, steadyAt, time.Duration(0),
+		"chain never reached steady-state height %d; raise SOAK_DURATION so the run outlasts the pruner's %d-block retention", steadyHeight, retention)
+
+	warmup := max(cfg.warmup, steadyAt)
+
+	// The SQL pruner has no observer hook, so read its counters from the in-process metrics registry to confirm it
+	// actually deleted spent outputs; otherwise the run says nothing about the pruner or a retention-bounded store.
+	pruned := counterSum(t, "teranode_pruner_deleting_children_total")
+	t.Logf("soak pruner: deleted=%.0f errors=%.0f skipped=%.0f", pruned,
+		counterSum(t, "teranode_pruner_errors_total"), counterSum(t, "teranode_pruner_skipped_total"))
+	require.Positive(t, pruned, "the pruner deleted no records, so the UTXO store was not bounded during the run")
 
 	csvPath := filepath.Join(cfg.outputDir, "soak-samples.csv")
 	require.NoError(t, soak.WriteCSV(csvPath, samples))
 	t.Logf("soak samples written to %s", csvPath)
 
-	result, err := soak.Analyze(samples, cfg.warmup, cfg.tolerance)
-	require.NoError(t, err)
+	result, err := soak.Analyze(samples, warmup, cfg.tolerance)
+	require.NoError(t, err, "too few samples after the %s warm-up; raise SOAK_DURATION", warmup.Round(time.Second))
 
 	t.Logf("soak result: %s", result)
 
@@ -299,6 +337,39 @@ func waitForMiningCandidate(t *testing.T, td *daemon.TestDaemon, n int) {
 	}
 
 	t.Logf("mining candidate did not reach %d txs within 30s; mining anyway", n)
+}
+
+// counterSum returns the total of every series of the named counter in the default Prometheus registry, or 0 if the
+// counter has not been registered or observed.
+func counterSum(t *testing.T, name string) float64 {
+	t.Helper()
+
+	families, err := prometheus.DefaultGatherer.Gather()
+	require.NoError(t, err)
+
+	var sum float64
+
+	for _, family := range families {
+		if family.GetName() != name {
+			continue
+		}
+
+		for _, m := range family.GetMetric() {
+			sum += m.GetCounter().GetValue()
+		}
+	}
+
+	return sum
+}
+
+// bestHeight returns the height of the chain tip.
+func bestHeight(t *testing.T, td *daemon.TestDaemon) uint32 {
+	t.Helper()
+
+	_, meta, err := td.BlockchainClient.GetBestBlockHeader(td.Ctx)
+	require.NoError(t, err)
+
+	return meta.Height
 }
 
 // mineUntilConfirmed mines blocks until n non-coinbase transactions have been confirmed, failing after

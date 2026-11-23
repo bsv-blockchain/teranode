@@ -178,6 +178,9 @@ install-tools:
 	go install github.com/ctrf-io/go-ctrf-json-reporter/cmd/go-ctrf-json-reporter@latest
 	go install gotest.tools/gotestsum@latest
 
+# -timeout is per package. stores/utxo/aerospike runs its testcontainer suite
+# under -race and coverage, which took 9m20s on main by itself in October 2026,
+# so 10m left no room for new container tests there.
 .PHONY: test
 test:
 	@command -v gotestsum >/dev/null 2>&1 || { echo "gotestsum not found. Installing..."; $(MAKE) install-tools; }
@@ -200,7 +203,8 @@ longtest:
 # run the soak test: the in-process daemon under steady tx load for SOAK_DURATION, failing if heap or goroutine
 # counts trend upward. No -race: the detector skews memory and throughput, which is what this test measures.
 # SOAK_TIMEOUT must exceed SOAK_DURATION by at least 10m. Other knobs (SOAK_WARMUP, SOAK_SAMPLE_INTERVAL,
-# SOAK_TXS_PER_CYCLE, SOAK_UTXO_STORE, SOAK_OUTPUT_DIR, SOAK_INJECT_LEAK) are read from the environment.
+# SOAK_TXS_PER_CYCLE, SOAK_UTXO_STORE, SOAK_OUTPUT_DIR, SOAK_INJECT_LEAK and the SOAK_*_TOLERANCE* settings) are
+# read from the environment; see docs/howto/runningTests.md.
 # Example: make soaktest SOAK_DURATION=2h SOAK_TIMEOUT=150m
 SOAK_DURATION ?= 30m
 SOAK_TIMEOUT ?= 60m
@@ -266,11 +270,13 @@ FUZZ_TARGETS = \
 	services/rpc/bsvjson:FuzzUnmarshalCmd \
 	util/lane:FuzzDecodeDiskPayload \
 	util/lane:FuzzDecodeHoleData \
+	util/lane:FuzzCheckContainersMatchesValidate \
 	util/lane:FuzzDecodeSubtreePositions \
 	util/lane:FuzzDecodeProofFile \
 	util/lane:FuzzDecodeSubtreeBitmaps \
 	util/lane/backfill:FuzzOpenManifest \
-	stores/utxo/meta:FuzzNewDataFromLaneMetaBytes
+	stores/utxo/meta:FuzzNewDataFromLaneMetaBytes \
+	stores/utxo/meta:FuzzOwnCacheBytesView
 
 # Per-target budget. The nightly workflow uses 5m; the default here is kept
 # short so `make fuzz` is usable as a pre-push check.
