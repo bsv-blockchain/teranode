@@ -789,6 +789,12 @@ func (u *Server) releaseCatchupLock(ctx *CatchupContext, err *error) {
 			// hold (handleExhaustedAncestorWalk). Matched by its data marker, like the case above.
 			errorType = "local_header_cap"
 			isPeerError = false
+		case !isLocalCatchupFault(*err) && isInheritedInvalidError(*err):
+			// The block is invalid only because this node holds its parent invalid. The serving
+			// peer delivered an honest descendant of a block we condemned, so it is neither
+			// malicious nor at fault. Must precede the consensus case below, which reports malicious.
+			errorType = "inherited_invalid"
+			isPeerError = false
 		case !isLocalCatchupFault(*err) && (errors.Is(*err, errors.ErrBlockInvalid) || errors.Is(*err, errors.ErrTxInvalid)):
 			// Gated on the same predicate validateBlocksOnChannel and
 			// processCatchupChItem use, rather than on the case ordering above it.

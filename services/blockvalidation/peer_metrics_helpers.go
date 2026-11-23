@@ -408,11 +408,41 @@ func (u *Server) reportValidatedChainProgress(ctx context.Context, peerID string
 // reported malicious here. Since this is a reputation call, that is the exact
 // failure the branch exists to remove.
 func shouldReportConsensusMalicious(err error) bool {
-	if isLocalCatchupFault(err) {
+	if isLocalCatchupFault(err) || isInheritedInvalidError(err) {
 		return false
 	}
 
 	return errors.Is(err, errors.ErrBlockInvalid) || errors.Is(err, errors.ErrTxInvalid)
+}
+
+const errDataInheritedInvalid = "inherited_invalid"
+
+// markInheritedInvalid tags a block-invalid error whose only cause is an invalid parent. The
+// serving peer did not make that block invalid: this node condemned the parent, for example by
+// invalidateblock, and every honest peer on that chain serves descendants of it. The tag keeps
+// the verdict out of the malicious report. The error code is unchanged, so errors.Is still
+// matches ErrBlockInvalid and the block is still rejected and never retried from another peer.
+func markInheritedInvalid(err *errors.Error) *errors.Error {
+	err.SetData(errDataInheritedInvalid, true)
+
+	return err
+}
+
+// isInheritedInvalidError reports whether any link in the wrap chain carries the mark from
+// markInheritedInvalid.
+func isInheritedInvalidError(err error) bool {
+	var e *errors.Error
+
+	for err != nil && errors.As(err, &e) {
+		if inherited, ok := e.GetData(errDataInheritedInvalid).(bool); ok && inherited {
+			return true
+		}
+
+		err = e.WrappedErr()
+		e = nil
+	}
+
+	return false
 }
 
 // isUnboundTxInvalidVerdict reports whether a failed block validation is the corrupt verdict
