@@ -21,6 +21,7 @@ import (
 	txmap "github.com/bsv-blockchain/go-tx-map"
 	"github.com/bsv-blockchain/go-wire"
 	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/services/blockassembly"
 	blockchain2 "github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/blockvalidation"
@@ -29,10 +30,12 @@ import (
 	"github.com/bsv-blockchain/teranode/services/legacy/txscript"
 	"github.com/bsv-blockchain/teranode/services/subtreevalidation"
 	"github.com/bsv-blockchain/teranode/services/validator"
+	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/blob"
 	blob_memory "github.com/bsv-blockchain/teranode/stores/blob/memory"
 	blockchainstore "github.com/bsv-blockchain/teranode/stores/blockchain"
 	"github.com/bsv-blockchain/teranode/stores/txmetacache"
+	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/stores/utxo/sql"
 	"github.com/bsv-blockchain/teranode/test/utils/transactions"
@@ -1189,4 +1192,55 @@ func TestProcessOrphanTransactions_RefusedOnceTheNodeStartsSyncing(t *testing.T)
 			require.InDelta(t, refusedBefore, sm.orphanGate.RefusedTotal(), 0)
 		})
 	}
+}
+
+// TestNew_WiresEveryDependency pins that New stores each Dependencies field in
+// the matching SyncManager field. SubtreeStore and TempStore are both blob.Store,
+// so swapping them compiles; the park would then write out-of-order blocks into
+// the subtree store, and no other test notices because the park only checks that
+// its store is non-nil.
+func TestNew_WiresEveryDependency(t *testing.T) {
+	// New starts a goroutine that polls the blockchain client every second while
+	// ctx is alive.
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	bestHeader := &model.BlockHeader{HashPrevBlock: &chainhash.Hash{}, HashMerkleRoot: &chainhash.Hash{}}
+
+	client := &blockchain2.Mock{}
+	client.Mock.On("GetBestBlockHeader", mock.Anything).
+		Return(bestHeader, &model.BlockHeaderMeta{Height: 800_000}, nil)
+	client.Mock.On("IsFSMCurrentState", mock.Anything, mock.Anything).Return(false, nil)
+	client.Mock.On("GetBlockHeaders", mock.Anything, mock.Anything, mock.Anything).Return([]*model.BlockHeader{}, []*model.BlockHeaderMeta{}, nil)
+
+	tSettings := &settings.Settings{}
+
+	deps := Dependencies{
+		BlockchainClient:  client,
+		ValidationClient:  &validator.MockValidator{},
+		UtxoStore:         &utxo.MockUtxostore{},
+		SubtreeStore:      blob_memory.New(),
+		TempStore:         parkTempStore(t, tSettings),
+		SubtreeValidation: &subtreevalidation.MockSubtreeValidation{},
+		BlockValidation:   &blockvalidation.MockBlockValidation{},
+		BlockAssembly:     blockassembly.NewMock(),
+	}
+	require.NotSame(t, deps.SubtreeStore, deps.TempStore, "the two blob stores must be distinct for the swap check to mean anything")
+
+	sm, err := New(ctx, ulogger.TestLogger{}, tSettings, deps, &Config{
+		ChainParams:        &chaincfg.MainNetParams,
+		DisableCheckpoints: true,
+	})
+	require.NoError(t, err)
+
+	require.Same(t, deps.BlockchainClient, sm.blockchainClient)
+	require.Same(t, deps.ValidationClient, sm.validationClient)
+	require.Same(t, deps.UtxoStore, sm.utxoStore)
+	require.Same(t, deps.SubtreeStore, sm.subtreeStore)
+	require.Same(t, deps.SubtreeValidation, sm.subtreeValidation)
+	require.Same(t, deps.BlockValidation, sm.blockValidation)
+	require.Same(t, deps.BlockAssembly, sm.blockAssembly)
+
+	require.NotNil(t, sm.blockPark)
+	require.Same(t, deps.TempStore, sm.blockPark.store, "the park must write to the temp store, not the subtree store")
 }
