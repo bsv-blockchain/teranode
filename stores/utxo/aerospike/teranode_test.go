@@ -1,8 +1,12 @@
 package aerospike
 
 import (
+	"context"
 	"testing"
 
+	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util/test"
+	"github.com/bsv-blockchain/teranode/util/uaerospike"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -405,4 +409,74 @@ func TestParseLuaMapResponse_Conflicting(t *testing.T) {
 		r.Reset()
 		require.False(t, r.Conflicting)
 	})
+}
+
+func TestLuaDigest(t *testing.T) {
+	require.Equal(t, "da39a3ee5e6b4b0d3255bfef95601890afd80709", luaDigest(nil))
+	require.Equal(t, "a9993e364706816aba3e25717850c26c9cd0d89d", luaDigest([]byte("abc")))
+}
+
+func TestRegisterLuaIfNecessary_ReregistersChangedContent(t *testing.T) {
+	logger := ulogger.NewErrorTestLogger(t)
+	ctx := context.Background()
+
+	container, err := runAerospikeTestContainer(ctx)
+	test.SkipIfContainerUnavailable(t, err)
+
+	t.Cleanup(func() {
+		_ = container.Terminate(ctx)
+	})
+
+	host, err := container.Host(ctx)
+	require.NoError(t, err)
+
+	port, err := container.ServicePort(ctx)
+	require.NoError(t, err)
+
+	client, err := uaerospike.NewClient(host, port)
+	require.NoError(t, err)
+
+	t.Cleanup(client.Close)
+
+	const (
+		pkg      = "reregtest_v1"
+		filename = pkg + ".lua"
+	)
+
+	stale := []byte("function probe() return 1 end\n")
+	fresh := []byte("function probe() return 2 end\n")
+
+	_, err = registeredUDFContent(client, filename)
+	require.Error(t, err, "an unregistered file must not read as content")
+
+	require.NoError(t, registerLuaIfNecessary(logger, client, pkg, stale))
+
+	got, err := registeredUDFContent(client, filename)
+	require.NoError(t, err)
+	require.Equal(t, stale, got, "a missing package must be registered")
+
+	require.NoError(t, registerLuaIfNecessary(logger, client, pkg, fresh))
+
+	got, err = registeredUDFContent(client, filename)
+	require.NoError(t, err)
+	require.Equal(t, fresh, got, "a package with changed content must be re-registered under the same name")
+
+	require.NoError(t, registerLuaIfNecessary(logger, client, pkg, fresh))
+
+	got, err = registeredUDFContent(client, filename)
+	require.NoError(t, err)
+	require.Equal(t, fresh, got, "identical content must be left in place")
+
+	udfs, err := client.ListUDF(nil)
+	require.NoError(t, err)
+
+	count := 0
+
+	for _, udf := range udfs {
+		if udf.Filename == filename {
+			count++
+		}
+	}
+
+	require.Equal(t, 1, count)
 }
