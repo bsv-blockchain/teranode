@@ -4838,8 +4838,8 @@ func (stp *SubtreeProcessor) enforceBlockMaxSize(ctx context.Context) error {
 // its input subtrees back while they are retired, and the next block retires them a
 // second time, so without this closeRetiredSubtrees would close the same subtree twice.
 func (stp *SubtreeProcessor) retireSubtrees(subtrees ...*subtreepkg.Subtree) {
-	// a subtree that left the chain no longer needs its store: it goes last, and is dropped when
-	// the store queue needs the room
+	// a subtree that left the chain no longer needs its store: it goes last, a worker cancels it
+	// when it comes to it, and it is dropped when the store queue needs the room
 	if stp.storeQueue != nil {
 		stp.storeQueue.Stale(subtrees...)
 	}

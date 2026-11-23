@@ -5,6 +5,7 @@ import (
 	"slices"
 	"sync"
 
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
 	"github.com/bsv-blockchain/teranode/errors"
 )
@@ -56,8 +57,9 @@ func StoreRequestBytes(req NewSubtreeRequest) uint64 {
 // A request larger than the limit is admitted when nothing is held.
 //
 // Workers take snapshots first, then the chain requests that are still wanted in the order they
-// were sent, then the stale ones. A sequence number is given when a request is taken, so a request
-// removed before that leaves no gap for the in-order notification sender.
+// were sent, then the stale ones, which a worker cancels instead of storing (Take). A request a
+// worker already took before it went stale still stores. A sequence number is given when a request
+// is taken, so a request removed before that leaves no gap for the in-order notification sender.
 type StoreQueue struct {
 	mu    sync.Mutex
 	wake  chan struct{} // closed, and replaced, when a worker may find something to take
@@ -73,6 +75,10 @@ type StoreQueue struct {
 	// cleanups are the OnStorageComplete callbacks of dropped requests, for the processor to run:
 	// they read the nodes of a subtree that has left the chain and may be unmapped any moment.
 	cleanups []func()
+
+	// announceLost holds the roots of dropped requests that would have announced their subtree, until
+	// a restored chain asks for them (announceWasLost): the request it sends again must announce too.
+	announceLost map[chainhash.Hash]struct{}
 }
 
 // announceState is shared by the outstanding requests of one subtree that a reorg asked to announce:
@@ -181,8 +187,8 @@ func (q *StoreQueue) Take(ctx context.Context) (NewSubtreeRequest, uint64, bool)
 	}
 }
 
-// Stale marks the requests for subtrees that have left the chain: they are taken last, and dropped
-// when room is needed.
+// Stale marks the requests for subtrees that have left the chain: they are taken last, and a worker
+// that comes to one cancels it. They are also dropped when room is needed.
 func (q *StoreQueue) Stale(subtrees ...*subtreepkg.Subtree) {
 	q.mu.Lock()
 
@@ -237,6 +243,18 @@ func (q *StoreQueue) takeCleanups() []func() {
 	q.cleanups = nil
 
 	return c
+}
+
+// announceWasLost reports, once, whether a request that would have announced st was dropped.
+func (q *StoreQueue) announceWasLost(st *subtreepkg.Subtree) bool {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+
+	root := *st.RootHash()
+	_, lost := q.announceLost[root]
+	delete(q.announceLost, root)
+
+	return lost
 }
 
 // wasDropped reports whether the queue dropped the request.
@@ -355,6 +373,15 @@ func (q *StoreQueue) dropLocked(match func(*storeItem) bool) (dropped []*storeIt
 	for _, it := range dropped {
 		it.done = true
 		it.dropped = true
+
+		if !it.req.AnnounceOnly && !it.req.SkipNotification {
+			if q.announceLost == nil {
+				q.announceLost = make(map[chainhash.Hash]struct{})
+			}
+
+			q.announceLost[*it.req.Subtree.RootHash()] = struct{}{}
+		}
+
 		q.unregisterLocked(it)
 		close(it.first)
 

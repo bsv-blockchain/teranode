@@ -1109,6 +1109,8 @@ func TestStoreQueue_ACancelledRequestIsAnsweredCleanedUpAndLeavesNoGap(t *testin
 
 	require.Equal(t, 2*per, q.Held(), "its bytes are released while the other two are still held")
 
+	require.Zero(t, cleaned, "the cleanup does not run on the worker that cancels: the processor runs it")
+
 	for _, cleanup := range q.takeCleanups() {
 		cleanup()
 	}
@@ -1193,4 +1195,37 @@ func TestStoreQueue_WithoutAQueueARemoveStillStoresTheRetiredSubtrees(t *testing
 
 		return true
 	}, 5*time.Second, 5*time.Millisecond, "the retired subtrees and their replacements were all sent")
+}
+
+// A failed block movement retires the chain and rolls back to it. A worker that came in between
+// cancelled the requests, so the rollback sends them again, and nothing but the request announces a
+// subtree after a rollback: it must announce as the cancelled one would have.
+func TestStoreQueue_ARestoredChainRequestCancelledBeforeTheRollbackStillAnnounces(t *testing.T) {
+	q := NewStoreQueue(1 << 40)
+	stp, _ := newStoredPrefixProcessor(t, 8, NewStoredSet(), func(stp *SubtreeProcessor) { stp.storeQueue = q })
+	addStoredPrefixTxs(t, stp, 8*5)
+
+	chained := append([]*subtreepkg.Subtree(nil), stp.chainedSubtrees...)
+	require.GreaterOrEqual(t, len(chained), 4)
+
+	for _, st := range chained { // the helper's requests are silent: send announcing ones
+		q.removeQueued(st)
+		q.Push(NewSubtreeRequest{Subtree: st, ErrChan: make(chan error, 1)})
+	}
+
+	q.takeCleanups()
+
+	stp.retireSubtrees(chained...)
+
+	_, _, ok := q.Take(takeCtx(t, 200*time.Millisecond)) // an idle worker cancels every stale request
+	require.False(t, ok)
+	require.Zero(t, q.Len())
+
+	stp.wantRestored(chained)
+
+	for i, st := range chained {
+		it := q.entry(st)
+		require.NotNil(t, it, "restored subtree %d is sent again", i)
+		require.False(t, it.req.SkipNotification, "and announces when it stores")
+	}
 }
