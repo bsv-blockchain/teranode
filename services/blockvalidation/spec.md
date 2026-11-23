@@ -120,7 +120,7 @@ The service sits between block announcement (P2P, legacy netsync, Block Assembly
 
 **BV-HEADER-002.** A block's hash, read as a 256-bit little-endian integer, MUST be ≤ the target encoded by its own nBits. A violation MUST be rejected with `ERR_BLOCK_INVALID`.
 
-**BV-HEADER-003.** A block at a checkpoint height whose hash does not equal that checkpoint's hash MUST be rejected with `ERR_BLOCK_INVALID`.
+**BV-HEADER-003.** A block at a checkpoint height whose hash does not equal that checkpoint's hash MUST be rejected with `ERR_BLOCK_INVALID`. A new side block below a hardcoded checkpoint already reached by the local tip MUST also be rejected with `ERR_BLOCK_INVALID`, even when the block is not at the checkpoint height. Direct validation MUST reject it before subtree validation and re-check before storing it if the tip could have reached the checkpoint meanwhile; the verdict MUST NOT be persisted, and the invalid-block notification MUST identify the serving peer. Revalidation MUST apply the same rule before subtree work, without publishing a new verdict. A block already stored as valid below a passed checkpoint MUST be refused if it is not on the current chain; a stored current-chain ancestor MUST remain valid. Direct validation of an already stored block MUST NOT publish a new verdict or strike its serving peer. Catchup applies the rule to the first block of an offered fork, including an already stored target, and charges the peer under BV-CATCHUP-030.
 
 **BV-HEADER-004.** A block whose nBits differs from the next required work computed from its parent and its timestamp MUST be rejected with `ERR_BLOCK_INVALID`. The next required work is bitcoin-sv's `GetNextWorkRequired`:
 
@@ -138,7 +138,7 @@ This rule SHALL apply at every height. No checkpoint, quick-validation route or 
 
 **BV-HEADER-008.** A block's signed nVersion MUST be ≥ 2 from `BIP0034Height`, ≥ 3 from `BIP0066Height`, and ≥ 4 from `BIP0065Height`. A violation MUST be rejected with `ERR_BLOCK_INVALID` and reason `bad-version`. Height 0 is exempt.
 
-**BV-HEADER-009.** A header verdict under BV-HEADER-001 through BV-HEADER-005, BV-HEADER-007 or BV-HEADER-008 is final for the header and MUST NOT be persisted as an invalid block record. The service MUST publish the invalid-block notification (BV-VERDICT-011) for it, whether or not the body has been bound to the header, because the verdict depends on the header alone. BV-HEADER-006 is excluded: it is clock-dependent. (Today the default non-optimistic path publishes nothing for a BV-HEADER-007 or BV-HEADER-008 failure: GAP-BV-060.)
+**BV-HEADER-009.** A new header verdict under BV-HEADER-001 through BV-HEADER-005, BV-HEADER-007 or BV-HEADER-008 is final for the header and MUST NOT be persisted as an invalid block record. The service MUST publish the invalid-block notification (BV-VERDICT-011) for it, whether or not the body has been bound to the header, because the verdict depends on the header alone. Revalidation and an already stored valid side block refused under BV-HEADER-003 publish no new verdict. BV-HEADER-006 is excluded: it is clock-dependent. (Today the default non-optimistic path publishes nothing for a BV-HEADER-007 or BV-HEADER-008 failure: GAP-BV-060.)
 
 **BV-HEADER-010.** When the available previous-header run is too short, unanchored or unlinked to evaluate BV-HEADER-004 or BV-HEADER-007, validation MUST fail with `ERR_BLOCK_HEADER_CONTEXT`. This outcome is not a verdict on the block: it MUST NOT be persisted and MUST NOT be charged to a peer. The service SHALL re-attempt the block exactly once from scratch with a freshly built header run.
 
@@ -370,7 +370,7 @@ On success it returns `ok = true` with a message of the form `Block <summary> is
 
 **BV-CATCHUP-012.** Let T = `blockvalidation_secret_mining_threshold` (default `CoinbaseMaturity − 1`). When local best height > T and fork depth > T, and the cumulative work of the ancestor plus every offered header after it does not exceed the local tip's chainwork, the catchup MUST be rejected and the peer reported for secret mining. An offered chain with more work MUST be followed.
 
-**BV-CATCHUP-013.** When fork depth > 0, the service SHALL clear `mined_set` on the local blocks above the common ancestor and emit `BlockMinedUnset` for each. This clearing MUST NOT happen until every header-chain check in BV-CATCHUP-007 through BV-CATCHUP-012 and BV-CATCHUP-014 has passed. If reading the fork-side headers or clearing `mined_set` on any of them fails, the catchup MUST abort before any catchup block is validated, without charging the peer (the fault is local); it MUST NOT proceed with the reorg. (Today it logs and proceeds: GAP-BV-061.)
+**BV-CATCHUP-013.** When fork depth > 0, the service SHALL clear `mined_set` on the local blocks above the common ancestor and emit `BlockMinedUnset` for each. This clearing MUST NOT happen until every header-chain check in BV-CATCHUP-007 through BV-CATCHUP-012, BV-CATCHUP-014 and the passed-checkpoint fork check in BV-CATCHUP-030 has passed. If reading the fork-side headers or clearing `mined_set` on any of them fails, the catchup MUST abort before any catchup block is validated, without charging the peer (the fault is local); it MUST NOT proceed with the reorg. (Today it logs and proceeds: GAP-BV-061.)
 
 **BV-CATCHUP-014.** When quick validation is allowed (`blockvalidation_catchup_allow_quick_validation`, or the netted route, BV-QUICK-032) and fork depth is 0, every checkpoint whose height falls within the fetched header range MUST match the fetched header's hash. A mismatch MUST abort the catchup.
 
@@ -405,13 +405,13 @@ A breaker MUST always be able to return to closed.
 
 **BV-CATCHUP-026.** A circuit breaker MUST record only failures attributable to the peer. Failures of this node's own stores or services MUST NOT be recorded against it.
 
-**BV-CATCHUP-027.** A catchup whose target block already exists when the catchup starts SHALL succeed immediately without fetching.
+**BV-CATCHUP-027.** A catchup whose target block already exists when the catchup starts SHALL succeed immediately without fetching, unless the stored target is a side block below a checkpoint the local tip has reached; BV-CATCHUP-030 requires refusing and charging that fork first.
 
 **BV-CATCHUP-028.** When every offered header is one the node already holds at or below its tip, the list shows no fork, so the catchup MUST NOT compute a fork depth from it or apply BV-CATCHUP-011 through BV-CATCHUP-013. It SHALL end as a run with no new headers: success when the announced block is stored, otherwise a failure so another peer is tried. When the list was cut by this node's own header cap and starts at the first entry of the block locator it sent, the failure MUST be LOCAL (`ERR_SERVICE_ERROR`) and charge no peer. A capped list that starts anywhere else MUST be charged to the peer as an invalid response.
 
 **BV-CATCHUP-029.** On the netted route (heights at or below the highest checkpoint where the UTXO store writes blocks that only quick validation may validate, `model.NettedRouteAt`), a fork whose first block is on that route MUST be refused before any block is fetched and before `mined_set` is cleared, and charged to the peer as an invalid response. A fork rejected by BV-CATCHUP-011 on that route SHALL be refused this way instead, so the peer is rotated.
 
-**BV-CATCHUP-030.** When the header fetch reached the announced block, and an offered chain that has passed BV-CATCHUP-011, BV-CATCHUP-012 and BV-CATCHUP-029 carries less cumulative work than the local tip, the catchup SHALL end as a no-op before any block is fetched or `mined_set` is cleared, and MUST charge no peer. A chain with equal work SHALL still be fetched. A fetch that stopped on a cap before the announced block MUST NOT be weighed this way.
+**BV-CATCHUP-030.** When the header fetch reached the announced block, and an offered chain that has passed BV-CATCHUP-011, BV-CATCHUP-012, BV-CATCHUP-029 and the passed-checkpoint fork check in BV-HEADER-003 carries less cumulative work than the local tip, the catchup SHALL end as a no-op before any block is fetched or `mined_set` is cleared, and MUST charge no peer. The passed-checkpoint fork check MUST run at step 5.2, after the netted-route refusal and before this less-work decision: a fork whose first block is below a hardcoded checkpoint already reached by the local tip MUST be refused as an invalid peer response and charged to the peer, even if its offered chain has less work. No block of a fork rejected at step 5.2 may be fetched or skipped as known, and no `mined_set` may be cleared. A target already stored below a checkpoint the local tip has reached MUST be refused and charged before the already-stored success path if it is not on the current chain; a stored current-chain ancestor MAY succeed without charge. A chain with equal work SHALL still be fetched. A fetch that stopped on a cap before the announced block MUST NOT be weighed this way.
 
 ### Quick Validation Contract (`BV-QUICK-NNN`)
 
@@ -832,6 +832,10 @@ stateDiagram-v2
 
 **AC-BV-HEADER-001.1.** Given a header with nBits easier than `powLimit` and a hash meeting it, then validation MUST fail with `ERR_BLOCK_INVALID`, no subtree MUST be fetched, no block record MUST be written, and an invalid-block notification MUST be published.
 
+**AC-BV-HEADER-003.1.** Given the local tip has reached checkpoint height 120, when a peer offers a new side block at height 101, then direct validation MUST return `ERR_BLOCK_INVALID` before subtree validation, MUST NOT persist the block, and MUST publish an invalid-block notification naming that peer. If the tip reaches height 120 during validation, the block MUST still be refused before storage. Revalidation MUST refuse the same fork before subtree work without publishing a new verdict.
+
+**AC-BV-HEADER-003.2.** Given the local tip has reached checkpoint height 120, when a valid block already stored at height 101 is checked, then a side-chain block MUST be refused with `ERR_BLOCK_INVALID` without a new notification or peer strike, while a current-chain ancestor MUST remain valid.
+
 **AC-BV-HEADER-004.1.** Given a block below the highest hardcoded checkpoint whose nBits differs from the next required work, then the block MUST be refused on every route: full validation fails with `ERR_BLOCK_INVALID`; on the quick routes the block is refused before quick validation runs (catchup's header difficulty check aborts the catchup and reports the peer; the legacy unified route's header rules reject the header). (Exercising those routes needs a test checkpoint table, since they accept only checkpoint-linked blocks.)
 
 **AC-BV-HEADER-006.1.** Given a header timestamp of now + 3 h, then the block MUST NOT be accepted, no invalid record MUST be persisted, no invalid-block notification MUST be published, and the announcing peer MUST NOT be struck or reported. Given the same block is re-announced once the local clock has passed its timestamp − 7200 s, then it MUST be validated normally.
@@ -933,6 +937,8 @@ stateDiagram-v2
 **AC-BV-CATCHUP-025.1.** Given a peer's breaker opened, then after 30 s the peer completes two catchup header phases successfully, and the breaker MUST then be closed.
 
 **AC-BV-CATCHUP-026.1.** Given the local Blockchain store fails `GetBlockLocator` 5 times during header fetches from peer P, then P's circuit breaker MUST remain closed.
+
+**AC-BV-CATCHUP-030.1.** Given the local tip has reached checkpoint height 120 and a peer offers a lighter fork beginning at height 101, then catchup MUST refuse it at step 5.2 as an invalid peer response and charge the peer before the less-work no-op; no block MUST be fetched and no `mined_set` MUST be cleared. Given the target is already stored on that side chain at height 101, catchup MUST still refuse and charge the peer before reporting an already-stored success. A stored current-chain target MUST NOT be refused by this rule.
 
 **AC-BV-QUICK-001.1.** Given the highest checkpoint verified in a catchup is at height 1000 while a configured checkpoint exists at 2000 outside the fetched range, then the block at height 1001 MUST take full validation.
 
@@ -1072,7 +1078,7 @@ flowchart TD
     E -- yes --> POL[POLICY_DECLINED —<br/>per-peer budget, no strike]
     E -- no --> F{Coinbase not delivered?}
     F -- yes --> INC[INCOMPLETE — re-fetch]
-    F -- no --> D{Header gate failed?<br/>PoW, nBits, checkpoint, parent invalid}
+    F -- no --> D{Header gate failed?<br/>PoW, nBits, checkpoint hash or fork, parent invalid}
     D -- yes --> HF[INVALID header-final —<br/>notify, never persist]
     D -- no --> C{Header context too short<br/>or unlinked?}
     C -- yes --> HC[HEADER_CONTEXT — retry once from scratch]
@@ -1106,7 +1112,9 @@ flowchart TD
     H -- yes --> SM[secret mining — reject, report]
     H -- no --> NR{5.1 fork on the<br/>netted route?}
     NR -- yes --> NREF[refuse, charge peer,<br/>BV-CATCHUP-029]
-    NR -- no --> LW{5.1 offered chain<br/>has less work?}
+    NR -- no --> CP{5.2 fork below a checkpoint<br/>the tip has reached?}
+    CP -- yes --> CREF[refuse, charge peer,<br/>BV-CATCHUP-030]
+    CP -- no --> LW{5.3 offered chain<br/>has less work?}
     LW -- yes --> NOOP[no-op, no charge,<br/>BV-CATCHUP-030]
     LW -- no --> FI{6 any headers<br/>left to fetch?}
     FI -- no --> NONEW

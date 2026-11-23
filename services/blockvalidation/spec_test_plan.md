@@ -185,7 +185,7 @@ Status codes: **C** covered, **P** partial, **G** pins a gap, **N** none. Unless
 |---|---|---|---|
 | HEADER-001 | P | `TestValidateBlock_ZeroWorkHeader_IsNotPersisted`, `model` nBits tests | negative/zero/overflow nBits through `ValidateBlock`; notification |
 | HEADER-002 | C | `...ZeroWorkHeader...` second subtest, `TestValidateBlock_DoesNotMeetTargetDifficulty` | hash equal to target; notification |
-| HEADER-003 | C | `TestValidateBlock_Difficulty1Header_IsNotPersisted`, `TestCheckpointValidationCallSites` | notification |
+| HEADER-003 | P | `TestValidateBlock_Difficulty1Header_IsNotPersisted`, `TestCheckpointValidationCallSites`, `fork_below_checkpoint_test.go` (direct validation, revalidation, stored fork and tip-advance cases) | no-new-verdict assertion for stored blocks and revalidation; full notification coverage for a checkpoint-hash mismatch |
 | HEADER-004 | P | `TestValidateBlock_BelowCheckpoint_ExpectedNBitsAlwaysEnforced`, `services/blockchain` difficulty tests | quick and unified routes; fixtures are Teranode's own, not svnode `pow_tests.cpp` |
 | HEADER-005 | P | `TestValidateBlock_CheapHeader_RejectedBeforeCheckpointAndParentChecks`, `TestValidateBlock_PoWCheckedBeforeSubtreeValidation` | no UTXO-store access assertion |
 | HEADER-006 | G | `model` `TestBlock_CheckHeaderContextual` future subtest and `cheap_header_no_persist_test.go` assert `ERR_BLOCK_INVALID` | not-a-verdict outcome; no notification; later acceptance (GAP-BV-050) |
@@ -315,6 +315,7 @@ Status codes: **C** covered, **P** partial, **G** pins a gap, **N** none. Unless
 | CATCHUP-025 | P | `catchup/circuit_breaker_test.go` (config with 3 half-open slots) | production config never closes (GAP-BV-022); see section 6 |
 | CATCHUP-026 | N | — | local faults recorded against the peer (GAP-BV-023) |
 | CATCHUP-027 | P | "Already Synchronized" subtest | no-fetch assertion |
+| CATCHUP-030 (passed-checkpoint fork gate) | P | `TestCatchup_NoMinedSetChurnOnRejectedFork/ForkBelowPassedCheckpoint`, `/StoredTargetForkBelowPassedCheckpoint` | stored-target no-fetch assertion |
 
 ### Quick validation
 
