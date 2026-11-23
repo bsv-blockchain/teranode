@@ -1001,6 +1001,7 @@ func TestReaderStepFailsOnARowTheIndexRefuses(t *testing.T) {
 
 	_, err := r.step(context.Background(), chainhash.Hash{})
 	require.Error(t, err)
+	require.Contains(t, err.Error(), "does not parse", "the refused row's error, not a later one")
 
 	state, _ := r.Snapshot().Block(b2.id)
 	require.Equal(t, lane.BlockNotLoaded, state)

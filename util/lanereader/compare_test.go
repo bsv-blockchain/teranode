@@ -2,12 +2,15 @@ package lanereader
 
 import (
 	"math/rand/v2"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/RoaringBitmap/roaring/v2/roaring64"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/lane"
+	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/require"
 )
 
@@ -108,4 +111,73 @@ func BenchmarkCompareHeightParallel(b *testing.B) {
 			})
 		})
 	}
+}
+
+// warnCounter is a logger that counts its warnings.
+type warnCounter struct {
+	ulogger.TestLogger
+	warns atomic.Int64
+}
+
+func (w *warnCounter) Warnf(string, ...interface{}) { w.warns.Add(1) }
+
+// The disagreement log writes the first five of a reader and kind, then at most one a minute.
+func TestDisagreementLogIsRateLimited(t *testing.T) {
+	logger := &warnCounter{}
+	r := newReader(logger, nil, lane.DefaultSettleDepth)
+
+	// Block 1 took lane 2's position 7; today says not mined, so every answer is lanes_only.
+	idx := lane.NewIndex(lane.DefaultSettleDepth)
+	rows, err := lane.BuildMapRows(2, roaring64.BitmapOf(7))
+	require.NoError(t, err)
+	require.NoError(t, idx.AddBlock(lane.IndexBlock{ID: 1, Height: 1, Hash: benchBlockHash(1)}, rows))
+	require.NoError(t, idx.SetTip(benchBlockHash(1)))
+	r.idx.Store(idx)
+
+	for range 20 {
+		r.CompareHeight(ReaderValidator, chainhash.Hash{}, lane.Pack(2, 7), false, 0) // lanes_only
+	}
+
+	require.Equal(t, int64(disagreementsLogged), logger.warns.Load(), "the first five, then none within the minute")
+
+	// A minute later, one more.
+	g, ok := r.disagree.gates.Load(ReaderValidator + "/" + KindLanesOnly)
+	require.True(t, ok)
+	g.(*logGate).last.Store(time.Now().Add(-2 * time.Minute).UnixNano())
+
+	for range 20 {
+		r.CompareHeight(ReaderValidator, chainhash.Hash{}, lane.Pack(2, 7), false, 0)
+	}
+
+	require.Equal(t, int64(disagreementsLogged+1), logger.warns.Load())
+}
+
+// One lookup in about lookupSampleEvery is timed: neither every lookup nor none.
+func TestLookupTimesASampleOfLookups(t *testing.T) {
+	initMetrics()
+
+	r := newReader(ulogger.TestLogger{}, nil, lane.DefaultSettleDepth)
+	idx := lane.NewIndex(lane.DefaultSettleDepth)
+	require.NoError(t, idx.AddBlock(lane.IndexBlock{ID: 1, Height: 1, Hash: benchBlockHash(1)}, nil))
+	require.NoError(t, idx.SetTip(benchBlockHash(1)))
+	r.idx.Store(idx)
+
+	timed := func() uint64 {
+		m := &dto.Metric{}
+		require.NoError(t, prometheusLaneReaderLookupSeconds.Write(m))
+
+		return m.GetHistogram().GetSampleCount()
+	}
+
+	before := timed()
+
+	const lookups = 64 * 200
+
+	for range lookups {
+		r.lookup(r.MainView(), lane.Pack(1, 1))
+	}
+
+	got := timed() - before
+	require.Greater(t, got, uint64(lookups/lookupSampleEvery/4), "some lookups are timed")
+	require.Less(t, got, uint64(lookups/lookupSampleEvery*4), "only a sample is timed")
 }
