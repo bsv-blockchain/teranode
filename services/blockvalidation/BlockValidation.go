@@ -2083,7 +2083,8 @@ func (u *BlockValidation) runOncePerBlock(blockHash *chainhash.Hash, opts *Valid
 //
 // Returns an error if validation fails or nil on success.
 
-// buildAddBlockOpts returns AddBlock options for a block stored by full validation.
+// buildAddBlockOpts returns AddBlock options for a peer block, stored by full validation or by
+// optimistic mining.
 //
 // A block can reach full validation already holding an id: catch-up's quick validation
 // reserves one through AssignBlockID before it can fail locally and fall through here, and a

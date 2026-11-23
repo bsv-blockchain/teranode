@@ -252,14 +252,20 @@ func TestStoreBlockWritesLaneMapRowsOnlyWithItsBlock(t *testing.T) {
 		require.NoError(t, err)
 		requireRowsOf(t, s, idInvalid, nil)
 
-		// A child of that invalid block is stored invalid too, inherited: it takes no rows, and
-		// rows that fail their check are not counted for it.
+		// A child of that invalid block is stored invalid too, inherited, on the fork path: it
+		// takes no rows, good ones included, and is not timed. Its own child, invalid the same
+		// way, does not count rows that fail their check.
 		failures = laneMetricValue(t, "teranode_lane_row_insert_failures_total")
 
 		child := createBlock3OnFork(block2)
-		idChild, _, err := s.StoreBlock(ctx, child, "", options.WithLaneMapRows(bad))
+		idChild, _, err := s.StoreBlock(ctx, child, "", options.WithLaneMapRows(holedRows(t, 6, 1, 5)))
 		require.NoError(t, err)
 		requireRowsOf(t, s, idChild, nil)
+
+		grandchild := createBlock3OnFork(child)
+		idGrandchild, _, err := s.StoreBlock(ctx, grandchild, "", options.WithLaneMapRows(bad))
+		require.NoError(t, err)
+		requireRowsOf(t, s, idGrandchild, nil)
 		require.Equal(t, failures, laneMetricValue(t, "teranode_lane_row_insert_failures_total"))
 
 		after, _ := laneGateInsert(t)

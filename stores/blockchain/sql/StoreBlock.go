@@ -873,10 +873,11 @@ func (s *SQL) storeBlock(ctx context.Context, exec execQuerier, block *model.Blo
 		// attempt landed treat that as success, so a late caller still holding a
 		// refused id must not get the id-order refusal, nor drop a reservation.
 		//
-		// Checked before the INSERT, because the extend path auto-commits it. This
-		// runs for a block stored invalid too, unlike the BIP34 guard above: the
-		// rule is about the row's place in the parent_id graph, which the ancestry
-		// walks follow whatever the invalid flag says, not about the block's validity.
+		// Checked before the INSERT, because the extend path without lane map rows
+		// auto-commits it. This runs for a block stored invalid too, unlike the BIP34
+		// guard above: the rule is about the row's place in the parent_id graph, which
+		// the ancestry walks follow whatever the invalid flag says, not about the
+		// block's validity.
 		if err := checkBlockIDAboveParent(block, storeBlockOptions.ID, previousBlockID); err != nil && !alreadyStored {
 			// The reservation is stale. Drop it so the caller's next AssignBlockID
 			// takes a fresh id above the parent, rather than being refused with the
