@@ -22,6 +22,9 @@ import (
 // matching output: uint256 one, little-endian. It is not a hash of a preimage.
 var sigHashOne = append([]byte{1}, make([]byte, 31)...)
 
+// sigHashOneHex is sigHashOne in bitcoin-sv's uint256 hex, as the vectors write it.
+const sigHashOneHex = "0000000000000000000000000000000000000000000000000000000000000001"
+
 // TestSigHashVectors checks go-bt's signature hashes against every vector in
 // sighash.json, as bitcoin-sv's sighash_tests.cpp does: the transaction must parse,
 // serialize back to the same bytes and pass the context-free checks; then SignatureHash
@@ -80,7 +83,9 @@ func TestSigHashVectors(t *testing.T) {
 
 			require.Equal(t, test.RegularHash, regular, "SignatureHash")
 
-			if !bytes.Equal(stripped, scriptCode) {
+			// SIGHASH_SINGLE with no matching output gives the constant one, which never
+			// hashes the script code, so there is no deviation to see.
+			if !bytes.Equal(stripped, scriptCode) && test.OriginalHash != sigHashOneHex {
 				require.NotEqual(t, test.OriginalHash, sigHashHex(t, tx, test.InputIndex, scriptCode, hashType, false),
 					"go-bt's legacy preimage now drops OP_CODESEPARATOR like bitcoin-sv: remove the known deviation from this test")
 			}
@@ -205,4 +210,21 @@ func scriptOp(script []byte, pc int) (next int, op byte, ok bool) {
 	}
 
 	return pc + size, op, true
+}
+
+// TestSigHashSingleWithoutOutputIgnoresCodeSeparators covers the case TestSigHashVectors
+// leaves out of its OP_CODESEPARATOR deviation check: SIGHASH_SINGLE on an input with no
+// matching output gives the constant one whatever the script code, so stripping the
+// separators changes nothing. No vector in sighash.json has this combination.
+func TestSigHashSingleWithoutOutputIgnoresCodeSeparators(t *testing.T) {
+	tx := bt.NewTx()
+	require.NoError(t, tx.From("a6bb1b6a2cd4d8cf8ff3c1ea6af4a2a6dfcd5ae7f9b6ce6e4cb9e0bdb2ab0f6c", 0, "51", 0))
+	require.NoError(t, tx.From("a6bb1b6a2cd4d8cf8ff3c1ea6af4a2a6dfcd5ae7f9b6ce6e4cb9e0bdb2ab0f6c", 1, "51", 0))
+	require.NoError(t, tx.PayToAddress("1NRoySJ9Lvby6DuE2UQYnyT67AASwNZxGb", 1))
+
+	scriptCode := []byte{bscript.Op1, bscript.OpCODESEPARATOR, bscript.Op1}
+	hashType := uint32(sighash.Single)
+
+	require.Equal(t, sigHashOneHex, sigHashHex(t, tx, 1, scriptCode, hashType, false))
+	require.Equal(t, sigHashOneHex, sigHashHex(t, tx, 1, withoutCodeSeparators(scriptCode), hashType, false))
 }
