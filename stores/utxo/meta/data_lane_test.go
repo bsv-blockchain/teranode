@@ -396,6 +396,7 @@ func TestOwnCacheBytesViewRefusesWhatCacheBytesWouldNotWrite(t *testing.T) {
 		"zero position":          withPosition(lane.None),
 		"a lane and no position": withPosition(lane.Pack(4, 0)),
 		"the lane encoding":      laneContent,
+		"an unknown flag bit":    func() []byte { f := append([]byte(nil), content...); f[16] |= 0b100000; return f }(),
 		"empty":                  nil,
 	} {
 		_, _, err := OwnCacheBytesView(bad)
