@@ -23,12 +23,15 @@ const (
 
 // Why a block's rows were not built.
 const (
-	// MissingBitmapsAbsent: a subtree of the block has no lane bitmaps file.
+	// MissingBitmapsAbsent: a subtree of a peer's block has no lane bitmaps file, or a subtree of a
+	// block this node mined has no bitmaps kept and no storage running for it.
 	MissingBitmapsAbsent = "absent"
-	// MissingBitmapsUnreadable: a subtree's lane bitmaps file could not be read or decoded.
+	// MissingBitmapsUnreadable: a subtree's lane bitmaps file could not be read or decoded (peers'
+	// blocks only).
 	MissingBitmapsUnreadable = "unreadable"
-	// MissingBitmapsTimedOut: reading a block's lane bitmaps files ran past its deadline or was
-	// cancelled.
+	// MissingBitmapsTimedOut: reading a peer block's lane bitmaps files ran past its deadline or was
+	// cancelled, or a subtree of a block this node mined was still being stored when its wait
+	// ended.
 	MissingBitmapsTimedOut = "timed_out"
 )
 
@@ -91,7 +94,7 @@ func initRowsMetrics() {
 			Namespace: "teranode",
 			Subsystem: "lane",
 			Name:      "missing_bitmaps_total",
-			Help:      "Subtrees of a block with no usable lane bitmaps, by reason; the block's rows are not built and the block is stored as it is without lanes. For a peer's block the bitmaps are its subtrees' lane bitmaps files; for a block this node mined (block own) they are the bitmaps block assembly kept when it stored each subtree, and a missing one is absent",
+			Help:      "Subtrees of a block with no usable lane bitmaps, by reason; the block's rows are not built and the block is stored as it is without lanes. For a peer's block the bitmaps are its subtrees' lane bitmaps files: absent, unreadable, or timed_out when not read by the deadline. For a block this node mined (block own) they are the bitmaps block assembly kept in memory, not read from a file: timed_out when the subtree was still being stored as the wait ended, absent when nothing was kept and no storage was running",
 		}, []string{"block", "reason"})
 		prometheusLaneTxsNoPosition = promauto.NewCounterVec(prometheus.CounterOpts{
 			Namespace: "teranode",
