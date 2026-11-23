@@ -618,3 +618,75 @@ func TestReaderJudgesOnTheChainOfTheCallersBlockIDs(t *testing.T) {
 		})
 	})
 }
+
+// countingSource counts the header reads a Reader makes.
+type countingSource struct {
+	Source
+	headerReads int
+}
+
+func (c *countingSource) GetBlockHeaders(ctx context.Context, h *chainhash.Hash, n uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
+	c.headerReads++
+
+	return c.Source.GetBlockHeaders(ctx, h, n)
+}
+
+// A fork whose older ancestry the index has forgotten cannot say a block is not on its chain: a
+// parent mined in such a block, and a duplicate check finding nothing, count not_loaded.
+func TestReaderCountsMissesOnADisconnectedForkNotLoaded(t *testing.T) {
+	engines(t, func(t *testing.T, store blockchainstore.Store) {
+		c := newChain(t, store)
+
+		b1 := c.add(nil, takes(t, 2, 50, 60))
+		b5 := c.line(b1, 4)
+
+		r := newReader(ulogger.TestLogger{}, store, 2)
+		follow(t, r) // anchor 3
+
+		// A fork from b1, loaded for its validation, then the main chain moves on: the fork's
+		// blocks at or below the new anchor are forgotten, f5 stays with no parent loaded.
+		f := c.line(b1, 3)
+		f5 := c.add(f, takes(t, 2, 50))
+
+		_, ok := r.Prepare(context.Background(), f5.hash)
+		require.True(t, ok)
+
+		c.add(b5)
+		follow(t, r) // anchor 4
+
+		v, ok := r.Prepare(context.Background(), f5.hash)
+		require.True(t, ok)
+		require.True(t, v.Disconnected())
+
+		requireCounted(t, ReaderBlockParent, KindNotLoaded, lane.ViaNone, func() {
+			r.CompareBlocks(ReaderBlockParent, v, chainhash.Hash{}, lane.Pack(2, 60), []uint32{b1.id})
+		})
+		requireCounted(t, ReaderBlockDuplicate, KindNotLoaded, lane.ViaNone, func() {
+			r.CompareDuplicates(v, f5.hash, f5.id, true)
+		})
+	})
+}
+
+// A block below the index's start counts not_loaded at once, without walking back for an
+// ancestor the index cannot hold.
+func TestReaderCountsABlockBelowItsStartNotLoadedWithoutAWalk(t *testing.T) {
+	store := newStore(t, "sqlite")
+	c := newChain(t, store)
+
+	b1 := c.add(nil)
+	b2 := c.add(b1, takes(t, 3, 1))
+	c.line(b2, 8)
+
+	source := &countingSource{Source: store}
+	r := newReader(ulogger.TestLogger{}, source, 100)
+	r.startBlocks = 3
+	follow(t, r)
+	require.Greater(t, r.Snapshot().StartHeight(), b2.height)
+
+	reads := source.headerReads
+
+	requireCounted(t, ReaderBlockDuplicate, KindNotLoaded, lane.ViaNone, func() {
+		r.ShadowDuplicates(context.Background(), b2.hash, b2.id, false)
+	})
+	require.Equal(t, reads+1, source.headerReads, "one header read, no walk")
+}

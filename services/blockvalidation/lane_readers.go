@@ -50,8 +50,7 @@ func shadowLaneDuplicates(ctx context.Context, block *model.Block, blockID uint3
 		prepareCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), duplicatesTimeout)
 		defer cancel()
 
-		view, _ := r.Prepare(prepareCtx, hash)
-		r.CompareDuplicates(view, hash, blockID, duplicate)
+		r.ShadowDuplicates(prepareCtx, hash, blockID, duplicate)
 	}()
 
 	return err

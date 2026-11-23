@@ -68,6 +68,8 @@ type Reader struct {
 	logger      ulogger.Logger
 	source      Source
 	settleDepth uint32
+	// startBlocks is how many main-chain blocks a build loads; startBlocks outside tests.
+	startBlocks uint64
 
 	idx atomic.Pointer[lane.Index]
 	// loading holds one token while a load runs, so the follower and block validation do not
@@ -110,7 +112,7 @@ func Start(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setti
 func newReader(logger ulogger.Logger, source Source, settleDepth uint32) *Reader {
 	initMetrics()
 
-	r := &Reader{logger: logger, source: source, settleDepth: settleDepth, loading: make(chan struct{}, 1)}
+	r := &Reader{logger: logger, source: source, settleDepth: settleDepth, startBlocks: startBlocks, loading: make(chan struct{}, 1)}
 	r.idx.Store(lane.NewIndex(settleDepth))
 
 	return r
@@ -206,7 +208,7 @@ func (r *Reader) step(ctx context.Context, tip chainhash.Hash) (chainhash.Hash, 
 		return best, nil
 	}
 
-	found, err := r.loadAncestry(ctx, best)
+	found, err := r.loadAncestry(ctx, best, 0)
 	if err != nil {
 		return tip, err
 	}
@@ -251,9 +253,9 @@ func (r *Reader) unlockLoad() { <-r.loading }
 func (r *Reader) rebuild(ctx context.Context, tip chainhash.Hash, reason string) error {
 	start := time.Now()
 
-	headers, metas, err := r.source.GetBlockHeaders(ctx, &tip, startBlocks)
+	headers, metas, err := r.source.GetBlockHeaders(ctx, &tip, r.startBlocks)
 	if err != nil {
-		return errors.NewServiceError("reading the last %d block headers", startBlocks, err)
+		return errors.NewServiceError("reading the last %d block headers", r.startBlocks, err)
 	}
 
 	idx := lane.NewIndex(r.settleDepth)
@@ -276,9 +278,14 @@ func (r *Reader) rebuild(ctx context.Context, tip chainhash.Hash, reason string)
 	return nil
 }
 
+// errBehindIndex is loadAncestry's answer for a block below the lowest height the index holds:
+// no ancestor of it is loaded, so walking back would read maxWalk headers for nothing.
+var errBehindIndex = errors.NewProcessingError("block is below the lane index's start")
+
 // loadAncestry loads into the index every block from hash back to the first one it holds. It
-// reports false when it found none within maxWalk blocks. The caller holds the load token.
-func (r *Reader) loadAncestry(ctx context.Context, hash chainhash.Hash) (bool, error) {
+// reports false when it found none within maxWalk blocks, and errBehindIndex, before any walk, when
+// hash is below start. The caller holds the load token.
+func (r *Reader) loadAncestry(ctx context.Context, hash chainhash.Hash, start uint32) (bool, error) {
 	idx := r.idx.Load()
 
 	var (
@@ -295,6 +302,10 @@ func (r *Reader) loadAncestry(ctx context.Context, hash chainhash.Hash) (bool, e
 
 		if len(hs) == 0 || len(hs) != len(ms) {
 			return false, errors.NewServiceError("block headers from %s: %d headers, %d metas", from.String(), len(hs), len(ms))
+		}
+
+		if from == hash && ms[0].Height < start {
+			return false, errBehindIndex
 		}
 
 		for i, h := range hs {
@@ -372,36 +383,53 @@ func (r *Reader) load(ctx context.Context, idx *lane.Index, headers []*model.Blo
 // chain holds even before the follower has moved. It reports false when the index has no tip yet
 // or the ancestry could not be loaded before ctx ended.
 func (r *Reader) Prepare(ctx context.Context, hash chainhash.Hash) (*lane.ChainView, bool) {
+	v, _ := r.prepare(ctx, hash)
+
+	return v, v != nil
+}
+
+// prepare is Prepare that also says, when it returns no view, which kind to count for the answers
+// that needed it: not_loaded for a block below the index's start, not_ready otherwise.
+func (r *Reader) prepare(ctx context.Context, hash chainhash.Hash) (*lane.ChainView, string) {
 	if r == nil {
-		return nil, false
+		return nil, KindNotReady
 	}
 
-	if s := r.Snapshot(); s != nil {
-		if v, ok := s.ViewFrom(hash); ok {
-			return v, true
-		}
-	} else {
-		return nil, false
+	s := r.Snapshot()
+	if s == nil {
+		return nil, KindNotReady
+	}
+
+	if v, ok := s.ViewFrom(hash); ok {
+		return v, ""
 	}
 
 	if !r.lockLoad(ctx) {
-		return nil, false
+		return nil, KindNotReady
 	}
 	defer r.unlockLoad()
 
-	found, err := r.loadAncestry(ctx, hash)
+	found, err := r.loadAncestry(ctx, hash, s.StartHeight())
+	if errors.Is(err, errBehindIndex) {
+		return nil, KindNotLoaded
+	}
+
 	if err != nil || !found {
 		if err != nil && ctx.Err() == nil {
 			r.logger.Debugf("[lanereader] loading the ancestry of %s: %v", hash.String(), err)
 		}
 
-		return nil, false
+		return nil, KindNotReady
 	}
 
 	idx := r.idx.Load()
 	idx.Publish()
 
-	return idx.Snapshot().ViewFrom(hash)
+	if v, ok := idx.Snapshot().ViewFrom(hash); ok {
+		return v, ""
+	}
+
+	return nil, KindNotReady
 }
 
 func (r *Reader) publishMetrics() {

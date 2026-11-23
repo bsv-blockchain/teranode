@@ -1,6 +1,7 @@
 package lanereader
 
 import (
+	"context"
 	"sync"
 	"time"
 
@@ -157,12 +158,17 @@ func classifyHeight(s *lane.IndexSnapshot, pos uint64, a lane.Answer, todayMined
 // as the record's mined block list: today's answer is the listed blocks on v, so both answers are
 // judged against the same chain.
 func (r *Reader) CompareBlocks(reader string, v *lane.ChainView, hash chainhash.Hash, pos uint64, todayBlockIDs []uint32) {
+	r.compareBlocks(reader, v, KindNotReady, hash, pos, todayBlockIDs)
+}
+
+// compareBlocks is CompareBlocks counting noView when v is nil.
+func (r *Reader) compareBlocks(reader string, v *lane.ChainView, noView string, hash chainhash.Hash, pos uint64, todayBlockIDs []uint32) {
 	if r == nil {
 		return
 	}
 
 	if v == nil {
-		count(reader, KindNotReady, lane.ViaNone)
+		count(reader, noView, lane.ViaNone)
 
 		return
 	}
@@ -199,10 +205,17 @@ func classifyBlocks(v *lane.ChainView, a lane.Answer, todayBlockIDs []uint32) st
 			continue
 		}
 
-		if h, ok := v.Height(id); ok {
-			onChain = append(onChain, id)
-			lowestOnChain = min(lowestOnChain, h)
+		h, ok := v.Height(id)
+		if !ok {
+			// On a fork whose older ancestry the index no longer holds, a loaded block missing
+			// from the view may still be an ancestor.
+			unknown = unknown || v.Disconnected()
+
+			continue
 		}
+
+		onChain = append(onChain, id)
+		lowestOnChain = min(lowestOnChain, h)
 	}
 
 	switch {
@@ -257,12 +270,28 @@ func classifyBlocks(v *lane.ChainView, a lane.Answer, todayBlockIDs []uint32) st
 // blockID on chain v, which must include it, with today's verdict: whether setMined found a
 // transaction of the block already mined on its chain.
 func (r *Reader) CompareDuplicates(v *lane.ChainView, hash chainhash.Hash, blockID uint32, todayDuplicate bool) {
+	r.compareDuplicates(v, KindNotReady, hash, blockID, todayDuplicate)
+}
+
+// ShadowDuplicates loads the ancestry of the stored block hash, as ID blockID, and compares the
+// lane index's answer to the duplicate check with setMined's verdict. A block below the index's
+// start counts not_loaded, without a walk back.
+func (r *Reader) ShadowDuplicates(ctx context.Context, hash chainhash.Hash, blockID uint32, todayDuplicate bool) {
+	if r == nil {
+		return
+	}
+
+	v, noView := r.prepare(ctx, hash)
+	r.compareDuplicates(v, noView, hash, blockID, todayDuplicate)
+}
+
+func (r *Reader) compareDuplicates(v *lane.ChainView, noView string, hash chainhash.Hash, blockID uint32, todayDuplicate bool) {
 	if r == nil {
 		return
 	}
 
 	if v == nil {
-		count(ReaderBlockDuplicate, KindNotReady, lane.ViaNone)
+		count(ReaderBlockDuplicate, noView, lane.ViaNone)
 
 		return
 	}
@@ -292,6 +321,9 @@ func (r *Reader) CompareDuplicates(v *lane.ChainView, hash chainhash.Hash, block
 	switch {
 	case !hasRows:
 		kind = KindNoRows
+	case taken == 0 && v.Disconnected():
+		// The ancestors the view does not hold may hold the earlier copy.
+		kind = KindNotLoaded
 	case (taken > 0) == todayDuplicate:
 		kind = KindAgree
 	case taken > 0:

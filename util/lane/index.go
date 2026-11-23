@@ -393,7 +393,14 @@ type ChainView struct {
 	// ids, when set, is the chain as a set of block IDs, given by the caller, in place of fork and
 	// joinHeight.
 	ids map[uint32]bool
+	// disconnected is a fork whose ancestry leaves what the index holds before it meets the main
+	// chain: the chain's older blocks are unknown to the view.
+	disconnected bool
 }
+
+// Disconnected reports whether the view is a fork whose older ancestry the index no longer holds,
+// so a block missing from it may still be on the chain.
+func (v *ChainView) Disconnected() bool { return v.disconnected }
 
 // Snapshot is the view's snapshot.
 func (v *ChainView) Snapshot() *IndexSnapshot { return v.snap }
@@ -459,7 +466,7 @@ func (s *IndexSnapshot) ViewFrom(hash chainhash.Hash) (*ChainView, bool) {
 
 		if !b.parentLoaded {
 			// The chain leaves what the index loaded before it meets the main chain.
-			return &ChainView{snap: s, fork: fork, floorValid: false}, true
+			return &ChainView{snap: s, fork: fork, floorValid: false, disconnected: true}, true
 		}
 
 		id = b.parent
@@ -474,8 +481,12 @@ func (s *IndexSnapshot) ViewOfIDs(ids map[uint32]bool) *ChainView {
 }
 
 // Lookup answers whether the chain holds a block that took the packed lane position pos, and
-// which. pos must be a valid lane position.
+// which. A pos that is not a valid lane position is not mined.
 func (v *ChainView) Lookup(pos uint64) Answer {
+	if !Valid(pos) {
+		return Answer{}
+	}
+
 	laneNum, p := Unpack(pos)
 
 	ls := v.snap.lanes[laneNum]

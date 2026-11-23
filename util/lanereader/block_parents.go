@@ -28,9 +28,11 @@ const (
 type BlockParents struct {
 	r *Reader
 
-	mu      sync.Mutex
-	done    bool
-	view    *lane.ChainView
+	mu   sync.Mutex
+	done bool
+	view *lane.ChainView
+	// noView is the kind counted when the chain could not be loaded.
+	noView  string
 	pending []pendingParent
 }
 
@@ -53,16 +55,16 @@ func (r *Reader) BlockParents(ctx context.Context, parent chainhash.Hash) *Block
 		prepareCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), prepareTimeout)
 		defer cancel()
 
-		view, _ := r.Prepare(prepareCtx, parent)
+		view, noView := r.prepare(prepareCtx, parent)
 
 		b.mu.Lock()
-		b.done, b.view = true, view
+		b.done, b.view, b.noView = true, view, noView
 		pending := b.pending
 		b.pending = nil
 		b.mu.Unlock()
 
 		for _, p := range pending {
-			r.CompareBlocks(ReaderBlockParent, view, p.hash, p.pos, p.blockIDs)
+			r.compareBlocks(ReaderBlockParent, view, noView, p.hash, p.pos, p.blockIDs)
 		}
 	}()
 
@@ -74,10 +76,10 @@ func (b *BlockParents) ObserveParent(parentHash chainhash.Hash, lanePosition uin
 	b.mu.Lock()
 
 	if b.done {
-		view := b.view
+		view, noView := b.view, b.noView
 		b.mu.Unlock()
 
-		b.r.CompareBlocks(ReaderBlockParent, view, parentHash, lanePosition, blockIDs)
+		b.r.compareBlocks(ReaderBlockParent, view, noView, parentHash, lanePosition, blockIDs)
 
 		return
 	}

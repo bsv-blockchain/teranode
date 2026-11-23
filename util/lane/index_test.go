@@ -265,6 +265,8 @@ func TestIndexFloorDoesNotHoldOnAForkBelowTheAnchor(t *testing.T) {
 	require.False(t, v.FloorValid())
 	require.Equal(t, Answer{Mined: true, Via: ViaRow, BlockID: 102, Height: 2}, v.Lookup(Pack(4, 50)), "only its own row answers")
 	require.Equal(t, Answer{}, v.Lookup(Pack(4, 60)), "the floor does not")
+	require.False(t, v.Disconnected())
+	require.Equal(t, Answer{}, c.main().Lookup(0), "position 0 is no position, even below a floor")
 
 	byRow, byFloor, hasRows := v.TakenBefore(102)
 	require.True(t, hasRows)
@@ -282,6 +284,7 @@ func TestIndexFloorDoesNotHoldOnAForkBelowTheAnchor(t *testing.T) {
 	v, ok = c.idx.Snapshot().ViewFrom(blockHash(104))
 	require.True(t, ok)
 	require.False(t, v.FloorValid())
+	require.True(t, v.Disconnected(), "its ancestry below the anchor is gone")
 	require.Equal(t, Answer{}, v.Lookup(Pack(4, 50)))
 }
 
