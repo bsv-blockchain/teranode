@@ -1211,3 +1211,216 @@ func TestCreateFirst_OnlyTheFinalizeThatClearedTheStateOwnsTheHandOff(t *testing
 		require.False(t, utxo.IsRolledForward(err), "a later duplicate is an ordinary duplicate")
 	})
 }
+
+// wideMultiRecordChild spends output vout of parentTx and pays to five outputs, so with
+// UtxoBatchSize 2 the store writes it as a master plus pagination children.
+func wideMultiRecordChild(t *testing.T, parentTx *bt.Tx, vout uint32, version uint32) *bt.Tx {
+	t.Helper()
+
+	child := bt.NewTx()
+	require.NoError(t, child.From(
+		parentTx.TxIDChainHash().String(), vout,
+		parentTx.Outputs[vout].LockingScript.String(),
+		parentTx.Outputs[vout].Satoshis,
+	))
+
+	for i := 0; i < 5; i++ {
+		require.NoError(t, child.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", parentTx.Outputs[vout].Satoshis/10))
+	}
+
+	child.Version = version
+
+	return child
+}
+
+// TestFlagOffDuplicate_DoesNotFinaliseATokenedMultiRecordRecord is the hazard the duplicate-create
+// guard exists for, reproduced on the paginated path with create-first off. A create-only
+// duplicate has spent nothing, so it may not turn another attempt's tentative record into a
+// final one: a record that stops creating without its input spent is exactly the dangling
+// spender of #1214, and clearing the creating bin also hides it from the sweeper, which
+// selects on that bin.
+func TestFlagOffDuplicate_DoesNotFinaliseATokenedMultiRecordRecord(t *testing.T) {
+	t.Run("no rival: a record that stops creating must have its input spent, and a healer must finish it", func(t *testing.T) {
+		logger := ulogger.NewErrorTestLogger(t)
+		tSettings := test.CreateBaseTestSettings(t)
+		tSettings.UtxoStore.UtxoBatchSize = 2
+		tSettings.UtxoStore.UseCreateFirstOrder = false
+
+		client, store, ctx, deferFn := initAerospike(t, tSettings, logger)
+		t.Cleanup(deferFn)
+		cleanDB(t, client)
+
+		_, err := store.Create(ctx, tests.ParentTx, 100)
+		require.NoError(t, err)
+
+		a := wideMultiRecordChild(t, tests.ParentTx, 0, 61)
+		hash := a.TxIDChainHash()
+
+		inputs, err := utxo.GetSpends(a)
+		require.NoError(t, err)
+
+		_, err = store.Create(ctx, a, 100, utxo.WithCreating(true))
+		require.NoError(t, err)
+
+		tentative, err := store.Get(ctx, hash, fields.Creating, fields.Attempt)
+		require.NoError(t, err)
+		require.True(t, tentative.Creating)
+		require.NotEmpty(t, tentative.Attempt, "precondition: the record carries an attempt token")
+
+		_, _, err = store.SpendAndCreate(ctx, a, 101, utxo.WithCreateOnly())
+		require.ErrorIs(t, err, errors.ErrTxExists)
+
+		got := &meta.Data{}
+		require.NoError(t, store.GetMeta(ctx, hash, got))
+
+		resp, err := store.GetSpend(ctx, inputs[0])
+		require.NoError(t, err)
+
+		require.True(t, got.Creating || resp.SpendingData != nil, "SAFETY: the record is final but its input was never spent")
+
+		grandchild := spendableChildTx(t, a, 0)
+		_, err = store.Spend(ctx, grandchild, 102)
+		require.ErrorIs(t, err, errors.ErrTxCreating, "SAFETY: an output of a tx whose input is unspent must not be spendable")
+
+		stale, err := store.QueryStaleCreatingTxs(ctx, 200, 0)
+		require.NoError(t, err)
+		require.Len(t, stale, 1, "HEALER: the sweep query selects on the creating bin, so it must still find the record")
+		require.Equal(t, *hash, stale[0])
+
+		_, completed, err := utxo.RollForwardCreating(ctx, logger, store, a, tentative.Attempt, 102)
+		require.NoError(t, err)
+		require.True(t, completed, "HEALER: the roll-forward finishes the record with the flag off")
+
+		require.NoError(t, store.GetMeta(ctx, hash, got))
+		require.False(t, got.Creating)
+
+		resp, err = store.GetSpend(ctx, inputs[0])
+		require.NoError(t, err)
+		require.NotNil(t, resp.SpendingData, "HEALER: the roll-forward spent the input")
+	})
+
+	t.Run("a rival holds the input: the tentative record must not become spendable, and a healer must roll it back", func(t *testing.T) {
+		logger := ulogger.NewErrorTestLogger(t)
+		tSettings := test.CreateBaseTestSettings(t)
+		tSettings.UtxoStore.UtxoBatchSize = 2
+		tSettings.UtxoStore.UseCreateFirstOrder = false
+		tSettings.UtxoStore.SpendRollbackTimeout = 2 * time.Second
+		tSettings.UtxoStore.SpendWaitTimeout = time.Second
+
+		client, store, ctx, deferFn := initAerospike(t, tSettings, logger)
+		t.Cleanup(deferFn)
+		cleanDB(t, client)
+
+		_, err := store.Create(ctx, tests.ParentTx, 100)
+		require.NoError(t, err)
+
+		a := wideMultiRecordChild(t, tests.ParentTx, 0, 62)
+		hash := a.TxIDChainHash()
+
+		inputs, err := utxo.GetSpends(a)
+		require.NoError(t, err)
+
+		_, err = store.Create(ctx, a, 100, utxo.WithCreating(true))
+		require.NoError(t, err)
+
+		tentative, err := store.Get(ctx, hash, fields.Creating, fields.Attempt)
+		require.NoError(t, err)
+		require.NotEmpty(t, tentative.Attempt)
+
+		rival := spendableChildTx(t, tests.ParentTx, 0)
+		rival.Version = 63
+
+		_, err = store.Spend(ctx, rival, 101, utxo.IgnoreFlags{SkipUTXOHashCheck: true})
+		require.NoError(t, err, "precondition: the rival took the input")
+
+		_, _, err = store.SpendAndCreate(ctx, a, 101, utxo.WithCreateOnly(), utxo.WithConflicting(true))
+		require.ErrorIs(t, err, errors.ErrTxExists)
+
+		got := &meta.Data{}
+		require.NoError(t, store.GetMeta(ctx, hash, got))
+		require.True(t, got.Creating, "SAFETY: a duplicate that spent nothing made another attempt's tentative record final while a rival holds its input")
+
+		grandchild := spendableChildTx(t, a, 0)
+		_, spendErr := store.Spend(ctx, grandchild, 102)
+		require.ErrorIs(t, spendErr, errors.ErrTxCreating, "SAFETY: the validator guard reads !Creating, so a cleared flag makes this output spendable behind the rival")
+
+		_, completed, err := utxo.RollForwardCreating(ctx, logger, store, a, tentative.Attempt, 102)
+		require.ErrorIs(t, err, errors.ErrSpent, "HEALER: the roll-forward loses to the rival")
+		require.False(t, completed)
+
+		require.Eventually(t, func() bool {
+			live, liveErr := store.SpendLeasesLive(ctx, hash, tentative.Attempt)
+
+			return liveErr == nil && !live
+		}, 30*time.Second, 250*time.Millisecond, "the lease of the creator that never spent goes stale")
+
+		require.NoError(t, utxo.RollBackCreating(ctx, logger, store, a, tentative.Attempt))
+
+		after := &meta.Data{}
+		getErr := store.GetMeta(ctx, hash, after)
+		require.True(t, getErr != nil || after.Hold, "HEALER: the rolled back record is gone or a hold")
+
+		resp, err := store.GetSpend(ctx, inputs[0])
+		require.NoError(t, err)
+		require.NotNil(t, resp.SpendingData, "the rival's spend stands")
+		require.Equal(t, rival.TxIDChainHash().String(), resp.SpendingData.TxID.String())
+	})
+}
+
+// TestSetMined_MultiRecord_RollsForwardAfterADuplicateWithFlagOff is the multi-record
+// counterpart of TestSetMined_CreatingRecord_RollsForwardWithFlagOff with a create-only
+// duplicate arriving first. The duplicate must leave the tokened record creating, and the
+// setMined pre-flight must then roll it forward: with the flag off the healer finishes the
+// record, not the duplicate.
+func TestSetMined_MultiRecord_RollsForwardAfterADuplicateWithFlagOff(t *testing.T) {
+	for _, useExpr := range []bool{false, true} {
+		useExpr := useExpr
+
+		name := "lua"
+		if useExpr {
+			name = "filter-expression"
+		}
+
+		t.Run(name, func(t *testing.T) {
+			logger := ulogger.NewErrorTestLogger(t)
+			tSettings := test.CreateBaseTestSettings(t)
+			tSettings.UtxoStore.UtxoBatchSize = 2
+			tSettings.UtxoStore.UseCreateFirstOrder = false
+			tSettings.Aerospike.EnableSetMinedFilterExpressions = useExpr
+
+			client, store, ctx, deferFn := initAerospike(t, tSettings, logger)
+			t.Cleanup(deferFn)
+			cleanDB(t, client)
+
+			_, err := store.Create(ctx, tests.ParentTx, 100)
+			require.NoError(t, err)
+
+			creatingTx := wideMultiRecordChild(t, tests.ParentTx, 0, 64)
+			hash := creatingTx.TxIDChainHash()
+
+			_, err = store.Create(ctx, creatingTx, 101, utxo.WithCreating(true))
+			require.NoError(t, err)
+
+			_, _, err = store.SpendAndCreate(ctx, creatingTx, 101, utxo.WithCreateOnly())
+			require.ErrorIs(t, err, errors.ErrTxExists)
+
+			got := &meta.Data{}
+			require.NoError(t, store.GetMeta(ctx, hash, got))
+			require.True(t, got.Creating, "a duplicate that spent nothing must leave a tokened record creating")
+
+			_, err = store.SetMinedMulti(ctx, []*chainhash.Hash{hash}, utxo.MinedBlockInfo{
+				BlockID: 1, BlockHeight: 102, SubtreeIdx: 0, OnLongestChain: true,
+			})
+			require.NoError(t, err)
+
+			require.NoError(t, store.GetMeta(ctx, hash, got))
+			require.False(t, got.Creating, "the setMined pre-flight must roll the record forward even with the flag off")
+
+			competitor := spendableChildTx(t, tests.ParentTx, 0)
+			competitor.Version = 65
+
+			_, err = store.Spend(ctx, competitor, 103, utxo.IgnoreFlags{SkipUTXOHashCheck: true})
+			require.ErrorIs(t, err, errors.ErrSpent, "the rolled-forward tx took its input, so a competitor must be rejected")
+		})
+	}
+}
