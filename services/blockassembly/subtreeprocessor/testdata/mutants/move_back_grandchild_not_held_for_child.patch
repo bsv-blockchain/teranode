@@ -1,0 +1,12 @@
+diff --git a/services/blockassembly/subtreeprocessor/move_back_held_children.go b/services/blockassembly/subtreeprocessor/move_back_held_children.go
+index f7ff95df3..f6751ff56 100644
+--- a/services/blockassembly/subtreeprocessor/move_back_held_children.go
++++ b/services/blockassembly/subtreeprocessor/move_back_held_children.go
+@@ -88,7 +88,6 @@ func (h *heldChildren) release(dst []subtreepkg.Node, hash chainhash.Hash) []sub
+ 
+ 		dst = append(dst, h.nodes[idx])
+ 
+-		queue = append(queue, h.waiting[h.nodes[idx].Hash]...)
+ 		delete(h.waiting, h.nodes[idx].Hash)
+ 	}
+ 

@@ -63,15 +63,11 @@ func TestReorgScenario_SlowPathConsumesRemoveMapEntries(t *testing.T) {
 	}
 }
 
-// Design section 5 item 2c, plan PR 9a: C is in B and not in F or P, and spends X, which is in B and
-// P and not in F. Today's move-back skips X (it is in the tx map), builds C into the prefix and
-// leaves X at its pending position, so with a subtree boundary between them the slow path publishes
-// C before its parent X. Block validation rejects that order.
-//
-// This test pins the inversion as the order oracle's rejection. It is the red test PR 9a turns
-// green (bsv-blockchain/teranode#2268): when the slow path emits a recovered child only after its
-// last unconfirmed parent, the final assertion below flips and expectedOrderAfter gains the rule.
-func TestReorgScenario_SlowPathPublishesLostChildBeforePendingParent(t *testing.T) {
+// Design section 5 item 2c, plan PR 9a (bsv-blockchain/teranode#2268): C is in B and not in F or P,
+// and spends X, which is in B and P and not in F. X keeps its pending position, so the move-back
+// emits C only after X: it used to build C into the prefix, and with a subtree boundary between the
+// two the slow path published C before its parent X, which block validation rejects.
+func TestReorgScenario_SlowPathPublishesLostChildAfterPendingParent(t *testing.T) {
 	cfg := smallScenarioConfig()
 	cfg.lostChildOfPending = 3
 	sc := newReorgScenario(t, cfg)
@@ -79,7 +75,8 @@ func TestReorgScenario_SlowPathPublishesLostChildBeforePendingParent(t *testing.
 	require.NoError(t, sc.run(t))
 
 	nodes := assemblyNodes(sc.stp)
-	require.Equal(t, sc.expectedOrderAfter(), txHashes(nodes), "today's order: effective D1 (with C) first, then the pending set (with X)")
+	requireEveryPrefixResolves(t, sc, nodes)
+	require.Equal(t, sc.expectedOrderAfter(), txHashes(nodes), "effective D1 without the children, then the pending set with each child right after its X")
 
 	position := make(map[chainhash.Hash]int, len(nodes))
 	for i, n := range nodes {
@@ -90,15 +87,91 @@ func TestReorgScenario_SlowPathPublishesLostChildBeforePendingParent(t *testing.
 		x := sc.hash(kindRawD1 | scenarioID(j))
 		c := sc.hash(kindRawD1 | scenarioID(cfg.lostAlsoPending+cfg.pendingSpendsLost+j))
 
-		require.Less(t, position[c], position[x], "C %d is published before its parent X", j)
-		require.NotEqual(t, position[c]/cfg.subtreeSize, position[x]/cfg.subtreeSize, "a subtree boundary lies between C and X")
+		require.Equal(t, position[x]+1, position[c], "C %d is right after its parent X", j)
 	}
 
-	require.NoError(t, checkSubtreeShape(append(sc.stp.GetChainedSubtrees(), sc.stp.GetCurrentSubtree())))
-	require.ErrorContains(t, checkAssemblyOrder(nodes, sc.stp.GetCurrentTxMap().Get, sc.onChainAfter), "before its parent",
-		"the order oracle rejects the inversion; PR 9a makes this pass")
-
+	requireAssemblyValid(t, sc.stp, sc.onChainAfter)
 	require.ElementsMatch(t, sc.expectedMarkFalse(), sc.utxo.marked(false), "C and X are both marked off the longest chain")
+}
+
+// A chain of lost-block children: C spends X and D spends C. D waits for C, which waits for X, so
+// the three come out together, in that order, at X's pending position.
+func TestReorgScenario_SlowPathPublishesLostChainAfterPendingParent(t *testing.T) {
+	cfg := smallScenarioConfig()
+	cfg.lostChildOfPending = 3
+	cfg.lostChildChain = true
+	sc := newReorgScenario(t, cfg)
+
+	require.NoError(t, sc.run(t))
+
+	nodes := assemblyNodes(sc.stp)
+	requireEveryPrefixResolves(t, sc, nodes)
+	require.Equal(t, sc.expectedOrderAfter(), txHashes(nodes))
+
+	position := make(map[chainhash.Hash]int, len(nodes))
+	for i, n := range nodes {
+		position[n.Hash] = i
+	}
+
+	childBase := cfg.lostAlsoPending + cfg.pendingSpendsLost
+	x := position[sc.hash(kindRawD1)]
+
+	for j := range cfg.lostChildOfPending {
+		require.Equal(t, x+1+j, position[sc.hash(kindRawD1|scenarioID(childBase+j))], "link %d of the chain follows the one before it", j)
+	}
+
+	requireAssemblyValid(t, sc.stp, sc.onChainAfter)
+}
+
+// C spends two pending parents, X1 and X2, in different places of the pending set: it follows the
+// later one, and the pending transactions between the two keep their order.
+func TestReorgScenario_SlowPathPublishesLostChildAfterItsLastPendingParent(t *testing.T) {
+	cfg := smallScenarioConfig()
+	cfg.lostChildOfPending = 2
+	cfg.lostChildTwoParents = true
+	cfg.lostAlsoPending = 6
+	sc := newReorgScenario(t, cfg)
+
+	require.NoError(t, sc.run(t))
+
+	nodes := assemblyNodes(sc.stp)
+	requireEveryPrefixResolves(t, sc, nodes)
+	require.Equal(t, sc.expectedOrderAfter(), txHashes(nodes))
+
+	position := make(map[chainhash.Hash]int, len(nodes))
+	for i, n := range nodes {
+		position[n.Hash] = i
+	}
+
+	childBase := cfg.lostAlsoPending + cfg.pendingSpendsLost
+
+	for j := range cfg.lostChildOfPending {
+		first := position[sc.hash(kindRawD1|scenarioID(j))]
+		last := position[sc.hash(kindRawD1|scenarioID(cfg.lostChildOfPending+j))]
+
+		require.Less(t, first+1, last, "the two parents of child %d are apart", j)
+		require.Equal(t, last+1, position[sc.hash(kindRawD1|scenarioID(childBase+j))], "child %d follows its last parent", j)
+	}
+
+	requireAssemblyValid(t, sc.stp, sc.onChainAfter)
+}
+
+// requireEveryPrefixResolves checks the order rule on each prefix a miner could be given, one
+// ending at every subtree boundary: each transaction's parents are on chain or inside the prefix.
+func requireEveryPrefixResolves(t *testing.T, sc *reorgScenario, nodes []subtreepkg.Node) {
+	t.Helper()
+
+	size := sc.cfg.subtreeSize
+	require.Greater(t, len(nodes), size, "the assembly spans more than one subtree")
+
+	for end := size; ; end += size {
+		end = min(end, len(nodes))
+		require.NoError(t, checkAssemblyOrder(nodes[:end], sc.stp.GetCurrentTxMap().Get, sc.onChainAfter), "prefix of %d nodes", end)
+
+		if end == len(nodes) {
+			return
+		}
+	}
 }
 
 // Design section 5, gate on B's coinbase children and on the removeMap "including what

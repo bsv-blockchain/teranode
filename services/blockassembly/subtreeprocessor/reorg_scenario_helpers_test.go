@@ -92,6 +92,15 @@ type reorgScenarioConfig struct {
 	// TestReorgScenario_SlowPathPublishesLostChildBeforePendingParent.
 	lostChildOfPending int
 
+	// lostChildChain makes the lost-block children a chain instead of one child per X: the first
+	// spends X, and each following one spends the one before it (C spends X, D spends C).
+	lostChildChain bool
+
+	// lostChildTwoParents makes each lost-block child also spend a second X, X number
+	// lostChildOfPending+j for child j, so lostAlsoPending must cover twice the children. The
+	// second X comes later in the pending set, so the child follows the later of its two parents.
+	lostChildTwoParents bool
+
 	// coinbaseChildren is how many pending transactions spend B's coinbase. They are real
 	// transactions with records in the UTXO store, and never hits. The slow path deletes them with
 	// the coinbase (removeCoinbaseUtxos), out of the store, the assembly and the tx map, and leaves
@@ -338,8 +347,13 @@ func (sc *reorgScenario) rawD1Tx(t testing.TB, i int) *bt.Tx {
 
 	// A lost-block child of a pending X spends X's output instead of a confirmed parent.
 	childBase := sc.cfg.lostAlsoPending + sc.cfg.pendingSpendsLost
+	parents := []chainhash.Hash{parent}
+
 	if i >= childBase && i < childBase+sc.cfg.lostChildOfPending {
-		parent = *sc.rawD1Txs[i-childBase].TxIDChainHash()
+		parents = nil
+		for _, p := range sc.lostChildParents(i - childBase) {
+			parents = append(parents, *sc.rawD1Txs[p].TxIDChainHash())
+		}
 	}
 
 	// A lost-block conflict winner is the winner of a pair, which is also built here.
@@ -351,14 +365,18 @@ func (sc *reorgScenario) rawD1Tx(t testing.TB, i int) *bt.Tx {
 		return pair.winner
 	}
 
-	in := &bt.Input{PreviousTxOutIndex: 0, PreviousTxSatoshis: 10_000, SequenceNumber: 0xffffffff, UnlockingScript: bscript.NewFromBytes([]byte{})}
-	require.NoError(t, in.PreviousTxIDAdd(&parent))
+	tx := bt.NewTx()
+
+	for _, parent := range parents {
+		in := &bt.Input{PreviousTxOutIndex: 0, PreviousTxSatoshis: 10_000, SequenceNumber: 0xffffffff, UnlockingScript: bscript.NewFromBytes([]byte{})}
+		require.NoError(t, in.PreviousTxIDAdd(&parent))
+
+		tx.Inputs = append(tx.Inputs, in)
+	}
 
 	var data [8]byte
 	binary.LittleEndian.PutUint64(data[:], sc.cfg.seed<<40^uint64(i))
 
-	tx := bt.NewTx()
-	tx.Inputs = []*bt.Input{in}
 	tx.Outputs = []*bt.Output{{Satoshis: 9_000, LockingScript: bscript.NewFromBytes(append([]byte{0x6a, 0x08}, data[:]...))}}
 
 	return tx
@@ -382,6 +400,10 @@ func newReorgScenario(t testing.TB, cfg reorgScenarioConfig) *reorgScenario {
 	rawD1Count := cfg.lost - lostShared
 	require.LessOrEqual(t, cfg.lostAlsoPending, rawD1Count, "lostAlsoPending transactions are part of raw D1")
 	require.LessOrEqual(t, cfg.lostChildOfPending, cfg.lostAlsoPending, "each lost-block child spends one X")
+	if cfg.lostChildTwoParents {
+		require.LessOrEqual(t, 2*cfg.lostChildOfPending, cfg.lostAlsoPending, "each lost-block child spends two X")
+		require.False(t, cfg.lostChildChain, "a child is a chain link or has two parents, not both")
+	}
 	require.LessOrEqual(t, cfg.lostAlsoPending+cfg.pendingSpendsLost+cfg.lostChildOfPending+cfg.conflictsInLost, rawD1Count, "room for the lost-block children and conflict winners")
 
 	sc.rawD1Txs = make([]*bt.Tx, rawD1Count)
@@ -406,6 +428,7 @@ func newReorgScenario(t testing.TB, cfg reorgScenarioConfig) *reorgScenario {
 	}
 
 	rng.Shuffle(len(sc.lostIDs), func(i, j int) { sc.lostIDs[i], sc.lostIDs[j] = sc.lostIDs[j], sc.lostIDs[i] })
+	sc.orderLostChildrenAfterParents()
 
 	// The pending set, with the first lostAlsoPending raw D1 transactions spread through it.
 	sc.pendingIDs = make([]scenarioID, 0, cfg.pending)
@@ -1142,9 +1165,130 @@ func (sc *reorgScenario) winnerNotLost() []chainhash.Hash {
 // the pending transactions) in B's order, then P minus F in P's order, without the transactions the
 // removeMap or the coinbase and conflict cleanup took out.
 func (sc *reorgScenario) expectedOrderAfter() []chainhash.Hash {
-	effectiveD1 := filter(sc.lostOrder(), func(h chainhash.Hash) bool { return !sc.inWinners(h) && !sc.inPending(h) && !sc.dropped(h) })
+	children, parents := sc.heldLostChildren()
+	isHeld := sc.hashSet(nil)
 
-	return append(effectiveD1, filter(sc.pendingOrder(), func(h chainhash.Hash) bool { return !sc.inWinners(h) && !sc.dropped(h) })...)
+	for _, c := range children {
+		isHeld[c] = struct{}{}
+	}
+
+	effectiveD1 := filter(sc.lostOrder(), func(h chainhash.Hash) bool {
+		_, held := isHeld[h]
+
+		return !held && !sc.inWinners(h) && !sc.inPending(h) && !sc.dropped(h)
+	})
+	pending := filter(sc.pendingOrder(), func(h chainhash.Hash) bool { return !sc.inWinners(h) && !sc.dropped(h) })
+
+	if len(children) == 0 {
+		return append(effectiveD1, pending...)
+	}
+
+	// A held-back child follows the last of its parents in the order built so far, with the pending
+	// transactions in their own order; children that become ready together keep B's order.
+	order := effectiveD1
+	emitted := make(map[chainhash.Hash]struct{}, len(pending))
+	done := make(map[chainhash.Hash]struct{}, len(children))
+
+	ready := func(c chainhash.Hash) bool {
+		for _, p := range parents[c] {
+			if _, ok := emitted[p]; !ok {
+				return false
+			}
+		}
+
+		return true
+	}
+
+	for _, h := range pending {
+		order = append(order, h)
+		emitted[h] = struct{}{}
+
+		for released := true; released; {
+			released = false
+
+			for _, c := range children {
+				if _, already := done[c]; already || !ready(c) {
+					continue
+				}
+
+				order = append(order, c)
+				emitted[c] = struct{}{}
+				done[c] = struct{}{}
+				released = true
+			}
+		}
+	}
+
+	return order
+}
+
+// lostChildParents is the raw D1 indexes lost-block child j spends.
+func (sc *reorgScenario) lostChildParents(j int) []int {
+	cfg := sc.cfg
+	childBase := cfg.lostAlsoPending + cfg.pendingSpendsLost
+
+	switch {
+	case cfg.lostChildChain && j > 0:
+		return []int{childBase + j - 1}
+	case cfg.lostChildTwoParents:
+		return []int{j, cfg.lostChildOfPending + j}
+	default:
+		return []int{j}
+	}
+}
+
+// orderLostChildrenAfterParents puts the X transactions and the lost-block children in B in an order
+// that has every parent before its child, as a block does; the shuffle does not. It reuses the
+// positions those transactions already hold, so the rest of B keeps its order.
+func (sc *reorgScenario) orderLostChildrenAfterParents() {
+	n := sc.cfg.lostChildOfPending
+	if n == 0 {
+		return
+	}
+
+	childBase := sc.cfg.lostAlsoPending + sc.cfg.pendingSpendsLost
+	inOrder := make([]scenarioID, 0, sc.cfg.lostAlsoPending+n)
+
+	for x := range sc.cfg.lostAlsoPending {
+		inOrder = append(inOrder, kindRawD1|scenarioID(x))
+	}
+
+	for j := range n {
+		inOrder = append(inOrder, kindRawD1|scenarioID(childBase+j))
+	}
+
+	role := make(map[scenarioID]struct{}, len(inOrder))
+	for _, id := range inOrder {
+		role[id] = struct{}{}
+	}
+
+	next := 0
+
+	for i, id := range sc.lostIDs {
+		if _, ok := role[id]; ok {
+			sc.lostIDs[i] = inOrder[next]
+			next++
+		}
+	}
+}
+
+// heldLostChildren is the lost-block children the move-back holds back, in B's order, each with the
+// raw D1 transactions it spends that are not on chain after the move-back (the X and, in a chain,
+// the children before it).
+func (sc *reorgScenario) heldLostChildren() (children []chainhash.Hash, parents map[chainhash.Hash][]chainhash.Hash) {
+	parents = make(map[chainhash.Hash][]chainhash.Hash)
+	childBase := sc.cfg.lostAlsoPending + sc.cfg.pendingSpendsLost
+
+	for j := range sc.cfg.lostChildOfPending {
+		c := sc.hash(kindRawD1 | scenarioID(childBase+j))
+		children = append(children, c)
+
+		for _, p := range sc.lostChildParents(j) {
+			parents[c] = append(parents[c], sc.hash(kindRawD1|scenarioID(p)))
+		}
+	}
+
+	return children, parents
 }
 
 // expectedMarkFalse is what the reorg marks off the longest chain: raw D1, less the transactions that

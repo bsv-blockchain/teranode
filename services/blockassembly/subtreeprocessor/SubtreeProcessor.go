@@ -6478,6 +6478,9 @@ func (stp *SubtreeProcessor) moveBackBlockBulkBuild(ctx context.Context, block *
 		}
 	}
 
+	// held is nil, and costs nothing below, unless a block transaction is already pending.
+	var held *heldChildren
+
 	if len(flatHashes) > 0 {
 		wasSet := make([]bool, len(flatHashes))
 		if splitMap, ok := stp.currentTxMap.(*SplitTxInpointsMap); ok {
@@ -6488,9 +6491,22 @@ func (stp *SubtreeProcessor) moveBackBlockBulkBuild(ctx context.Context, block *
 			}
 		}
 		for i, set := range wasSet {
-			if set {
-				allNodes = append(allNodes, flatNodes[i])
+			if !set {
+				// Already pending: it keeps its pending position, and a child of it waits there.
+				if held == nil {
+					held = newHeldChildren()
+				}
+
+				held.keep(flatHashes[i])
+
+				continue
 			}
+
+			if held != nil && held.hold(flatNodes[i], flatInpoints[i].ParentTxHashes) {
+				continue
+			}
+
+			allNodes = append(allNodes, flatNodes[i])
 		}
 	}
 
@@ -6501,6 +6517,9 @@ func (stp *SubtreeProcessor) moveBackBlockBulkBuild(ctx context.Context, block *
 				continue
 			}
 			allNodes = append(allNodes, node)
+			if held != nil {
+				allNodes = held.release(allNodes, node.Hash)
+			}
 		}
 	}
 	if previousCurrentSubtree != nil {
@@ -6509,7 +6528,13 @@ func (stp *SubtreeProcessor) moveBackBlockBulkBuild(ctx context.Context, block *
 				continue
 			}
 			allNodes = append(allNodes, node)
+			if held != nil {
+				allNodes = held.release(allNodes, node.Hash)
+			}
 		}
+	}
+	if held != nil {
+		allNodes = held.flush(allNodes)
 	}
 
 	// Step 5: Determine subtree size
