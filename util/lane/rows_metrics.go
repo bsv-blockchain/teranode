@@ -24,7 +24,8 @@ const (
 // Why a block's rows were not built.
 const (
 	// MissingBitmapsAbsent: a subtree of a peer's block has no lane bitmaps file, or a subtree of a
-	// block this node mined has no bitmaps kept and no storage running for it.
+	// block this node mined has no bitmaps kept and no storage worker has taken it, which includes
+	// one still queued for storage behind a backlog.
 	MissingBitmapsAbsent = "absent"
 	// MissingBitmapsUnreadable: a subtree's lane bitmaps file could not be read or decoded (peers'
 	// blocks only).
@@ -94,7 +95,7 @@ func initRowsMetrics() {
 			Namespace: "teranode",
 			Subsystem: "lane",
 			Name:      "missing_bitmaps_total",
-			Help:      "Subtrees of a block with no usable lane bitmaps, by reason; the block's rows are not built and the block is stored as it is without lanes. For a peer's block the bitmaps are its subtrees' lane bitmaps files: absent, unreadable, or timed_out when not read by the deadline. For a block this node mined (block own) they are the bitmaps block assembly kept in memory, not read from a file: timed_out when the subtree was still being stored as the wait ended, absent when nothing was kept and no storage was running",
+			Help:      "Subtrees of a block with no usable lane bitmaps, by reason; the block's rows are not built and the block is stored as it is without lanes. For a peer's block the bitmaps are its subtrees' lane bitmaps files: absent, unreadable, or timed_out when not read by the deadline. For a block this node mined (block own) they are the bitmaps block assembly kept in memory, not read from a file: timed_out when the subtree was still being stored as the wait ended, absent when nothing was kept and no storage worker had taken it, which includes a subtree still queued for storage behind a backlog",
 		}, []string{"block", "reason"})
 		prometheusLaneTxsNoPosition = promauto.NewCounterVec(prometheus.CounterOpts{
 			Namespace: "teranode",

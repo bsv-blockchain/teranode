@@ -54,7 +54,9 @@ var ownLaneBitmapsWait = time.Second
 type ownLaneBitmaps struct {
 	mu        sync.Mutex
 	bySubtree map[chainhash.Hash]keptLaneBitmaps
-	// pending holds the subtrees handed to the storage workers whose storage has not finished.
+	// pending holds the subtrees the storage listener has taken whose storage has not finished. A
+	// subtree still queued for the listener, behind a storage backlog, is not in it yet, so a block
+	// listing it counts it absent rather than timed out.
 	pending map[chainhash.Hash]struct{}
 	// changed is closed, and replaced, whenever a subtree's bitmaps are kept or its storage ends.
 	changed chan struct{}
@@ -215,36 +217,6 @@ func (o *ownLaneBitmaps) lookupLocked(roots []*chainhash.Hash) (bitmaps []lane.L
 	}
 
 	return bitmaps, absent, timedOut
-}
-
-// get returns the kept bitmaps of each subtree in roots, in order, and how many of them have
-// none.
-func (o *ownLaneBitmaps) get(roots []*chainhash.Hash) ([]lane.LaneBitmaps, int) {
-	o.mu.Lock()
-	defer o.mu.Unlock()
-
-	bitmaps := make([]lane.LaneBitmaps, len(roots))
-	missing := 0
-
-	for i, root := range roots {
-		kept, ok := o.bySubtree[*root]
-		if !ok {
-			missing++
-			continue
-		}
-
-		bitmaps[i] = kept.lanes
-	}
-
-	return bitmaps, missing
-}
-
-// len is how many subtrees have kept bitmaps.
-func (o *ownLaneBitmaps) len() int {
-	o.mu.Lock()
-	defer o.mu.Unlock()
-
-	return len(o.bySubtree)
 }
 
 // subtreeLanePositions builds the lane bitmaps of subtree from the positions parentTxMap keeps with
