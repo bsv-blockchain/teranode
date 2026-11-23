@@ -6717,10 +6717,11 @@ func (stp *SubtreeProcessor) moveBackBlockBulkBuild(ctx context.Context, block *
 			if node.Hash.Equal(subtreepkg.CoinbasePlaceholderHashValue) {
 				continue
 			}
-			allNodes = append(allNodes, node)
 			if held != nil {
-				allNodes = held.release(allNodes, node.Hash)
+				allNodes = held.appendPending(allNodes, node, stp.currentTxMap.Get)
+				continue
 			}
+			allNodes = append(allNodes, node)
 		}
 	}
 	if previousCurrentSubtree != nil {
@@ -6728,10 +6729,11 @@ func (stp *SubtreeProcessor) moveBackBlockBulkBuild(ctx context.Context, block *
 			if node.Hash.Equal(subtreepkg.CoinbasePlaceholderHashValue) {
 				continue
 			}
-			allNodes = append(allNodes, node)
 			if held != nil {
-				allNodes = held.release(allNodes, node.Hash)
+				allNodes = held.appendPending(allNodes, node, stp.currentTxMap.Get)
+				continue
 			}
+			allNodes = append(allNodes, node)
 		}
 	}
 	if held != nil {

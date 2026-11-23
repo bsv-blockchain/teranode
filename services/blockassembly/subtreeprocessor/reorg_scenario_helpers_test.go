@@ -89,8 +89,17 @@ type reorgScenarioConfig struct {
 	// lostChildOfPending is how many lost-block transactions C (in B, not in the winners, not
 	// pending) spend a lost-block transaction X that is also pending. They come first among the X
 	// transactions, so lostAlsoPending must cover them. See the order of today's slow path in
-	// TestReorgScenario_SlowPathPublishesLostChildBeforePendingParent.
+	// TestReorgScenario_SlowPathPublishesLostChildAfterPendingParent.
 	lostChildOfPending int
+
+	// pendingSpendsLostChild makes the first of the pendingSpendsLost pending transactions spend the
+	// last lost-block child C instead of its own raw D1 parent. It sits in the pending set ahead of
+	// C's parent X, so the move-back must keep it behind C too.
+	pendingSpendsLostChild bool
+
+	// lostChildParentsInWinners puts the X transactions the lost-block children spend in the winning
+	// blocks too (B, P and F), as when the winning miner mined X as well.
+	lostChildParentsInWinners bool
 
 	// lostChildChain makes the lost-block children a chain instead of one child per X: the first
 	// spends X, and each following one spends the one before it (C spends X, D spends C).
@@ -496,6 +505,12 @@ func newReorgScenario(t testing.TB, cfg reorgScenarioConfig) *reorgScenario {
 		sc.winnerIDs = append(sc.winnerIDs, sc.pendingIDs[pos])
 	}
 
+	if cfg.lostChildParentsInWinners {
+		for x := range cfg.lostChildOfPending {
+			sc.winnerIDs = append(sc.winnerIDs, kindRawD1|scenarioID(x))
+		}
+	}
+
 	for i := range cfg.winnerOnly {
 		sc.winnerIDs = append(sc.winnerIDs, kindWinnerOnly|scenarioID(i))
 	}
@@ -715,7 +730,13 @@ func (sc *reorgScenario) addParentEdges(t testing.TB, synthetic, rawD1Count int)
 
 	for j := range cfg.pendingSpendsLost {
 		child := free((2*j + 1) * synthetic / (2 * cfg.pendingSpendsLost))
-		sc.extraParent[kindPending|scenarioID(child)] = scenarioOutpoint{kindRawD1 | scenarioID(cfg.lostAlsoPending+j), 0}
+		target := cfg.lostAlsoPending + j
+		if cfg.pendingSpendsLostChild && j == 0 {
+			require.Positive(t, cfg.lostChildOfPending, "pendingSpendsLostChild needs a lost-block child")
+			target = cfg.lostAlsoPending + cfg.pendingSpendsLost + cfg.lostChildOfPending - 1
+		}
+
+		sc.extraParent[kindPending|scenarioID(child)] = scenarioOutpoint{kindRawD1 | scenarioID(target), 0}
 	}
 
 	for j := range cfg.pendingChains {
@@ -1213,13 +1234,34 @@ func (sc *reorgScenario) expectedOrderAfter() []chainhash.Hash {
 	}
 
 	// A held-back child follows the last of its parents in the order built so far, with the pending
-	// transactions in their own order; children that become ready together keep B's order.
+	// transactions in their own order; children that become ready together keep B's order. A pending
+	// transaction that spends a held-back child waits for it the same way. A transaction a winning
+	// block mined takes its place in this walk but is not in the result.
+	isChild := make(map[chainhash.Hash]struct{}, len(children))
+	for _, c := range children {
+		isChild[c] = struct{}{}
+	}
+
+	waiting := slices.Clone(children)
+	pendingParents := make(map[chainhash.Hash][]chainhash.Hash)
+
+	for id, e := range sc.extraParent {
+		if _, ok := isChild[sc.hash(e.parent)]; ok {
+			pendingParents[sc.hash(id)] = []chainhash.Hash{sc.hash(e.parent)}
+		}
+	}
+
 	order := effectiveD1
 	emitted := make(map[chainhash.Hash]struct{}, len(pending))
 	done := make(map[chainhash.Hash]struct{}, len(children))
 
-	ready := func(c chainhash.Hash) bool {
-		for _, p := range parents[c] {
+	ready := func(h chainhash.Hash) bool {
+		ps := parents[h]
+		if ps == nil {
+			ps = pendingParents[h]
+		}
+
+		for _, p := range ps {
 			if _, ok := emitted[p]; !ok {
 				return false
 			}
@@ -1228,21 +1270,33 @@ func (sc *reorgScenario) expectedOrderAfter() []chainhash.Hash {
 		return true
 	}
 
-	for _, h := range pending {
-		order = append(order, h)
+	emit := func(h chainhash.Hash) {
 		emitted[h] = struct{}{}
+
+		if !sc.inWinners(h) {
+			order = append(order, h)
+		}
+	}
+
+	for _, h := range filter(sc.pendingOrder(), func(h chainhash.Hash) bool { return !sc.dropped(h) }) {
+		if _, spendsChild := pendingParents[h]; spendsChild && !ready(h) {
+			waiting = append(waiting, h)
+
+			continue
+		}
+
+		emit(h)
 
 		for released := true; released; {
 			released = false
 
-			for _, c := range children {
-				if _, already := done[c]; already || !ready(c) {
+			for _, w := range waiting {
+				if _, already := done[w]; already || !ready(w) {
 					continue
 				}
 
-				order = append(order, c)
-				emitted[c] = struct{}{}
-				done[c] = struct{}{}
+				emit(w)
+				done[w] = struct{}{}
 				released = true
 			}
 		}
