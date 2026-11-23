@@ -141,6 +141,29 @@ func TestStoreSubtreeFiles_WritesLaneBitmapsBeforeTheSubtree(t *testing.T) {
 	}
 }
 
+// A call that fails on its meta write returns only once the bitmaps write beside it has finished,
+// so no write outlives the call.
+func TestStoreSubtreeFiles_WaitsForTheBitmapsOnAnEarlyReturn(t *testing.T) {
+	st, m := laneBitmapsSubtree(t)
+	root := st.RootHash()
+
+	store := &recordingStore{Store: blobmemory.New(), refuse: fileformat.FileTypeSubtreeMeta, slow: fileformat.FileTypeSubtreeLaneBitmaps, slowFor: 100 * time.Millisecond}
+
+	utxoStore := &utxo.MockUtxostore{}
+	utxoStore.On("GetBlockHeight").Return(uint32(100)).Maybe()
+
+	server := &Server{logger: ulogger.TestLogger{}, settings: test.CreateBaseTestSettings(t), subtreeStore: store, utxoStore: utxoStore}
+
+	bitmaps := &lane.SubtreeBitmaps{SubtreeHash: *root, Lanes: lane.LaneBitmaps{7: bitmapOfPositions(1)}}
+	require.Error(t, server.storeSubtreeFiles(context.Background(), gocore.NewStat("test"), root, st, m, bitmaps))
+
+	store.mu.Lock()
+	defer store.mu.Unlock()
+
+	require.Len(t, store.writes, 1, "the bitmaps write had finished when the call returned")
+	require.Equal(t, fileformat.FileTypeSubtreeLaneBitmaps, store.writes[0].fileType)
+}
+
 // A lane bitmaps file already there, from an earlier validation of the same subtree, is kept.
 func TestStoreSubtreeFiles_KeepsLaneBitmapsAlreadyThere(t *testing.T) {
 	ctx := context.Background()
