@@ -339,15 +339,15 @@ var TxFundingRecordFields = []fields.FieldName{
 // output: the body (for the output's value and script), whether it is a coinbase, the blocks it was
 // mined in, since when it is unmined, and the transaction-level conflicting and locked flags. The
 // fields are named because a store's default read does not include all of them: Aerospike's default
-// leaves out UnminedSince. As in GetTxMeta, a transaction that is not the complete requested one is
-// dropped and the metadata kept.
+// leaves out UnminedSince.
+//
+// Unlike GetTxMeta, the transaction is returned as the store holds it. A record seeded from a UTXO
+// snapshot holds an outputs-only reconstruction with a nil hole at each output that was already
+// spent, and the caller needs those positions: on Aerospike a hole is a nil UTXO slot, which GetSpend
+// reads as unspent. The caller must check the transaction (meta.Data.TxIsSerializable and its txid)
+// before trusting a value or script from it, and must never marshal it.
 func (repo *Repository) GetTxFundingRecord(ctx context.Context, hash *chainhash.Hash) (*meta.Data, error) {
-	txMeta, err := repo.UtxoStore.Get(ctx, hash, TxFundingRecordFields...)
-	if err != nil {
-		return nil, err
-	}
-
-	return withoutUnserializableTx(txMeta, hash), nil
+	return repo.UtxoStore.Get(ctx, hash, TxFundingRecordFields...)
 }
 
 // GetTransaction retrieves transaction data by its hash.

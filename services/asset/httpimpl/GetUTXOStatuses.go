@@ -34,7 +34,11 @@ const (
 	// utxoStatusBodyReads bounds how many funding-record reads (each loads a full
 	// transaction body, possibly from an external blob) run at once per request.
 	// Only the requested outputs' value and script hash are kept after each read.
-	utxoStatusBodyReads = 8
+	// A store that batches reads in a time window (Aerospike's get batcher, 10 ms
+	// by default) answers about this many per window, so a lower bound costs
+	// latency on large batches: 1024 distinct funding transactions take up to
+	// 1024/utxoStatusBodyReads windows.
+	utxoStatusBodyReads = 32
 
 	// utxoStatusRecordMaxBytes is an upper bound on the JSON size of one result,
 	// used to charge asset_maxBatchResponseBytes before any lookup runs.
@@ -139,7 +143,11 @@ type UTXOStatusResponse struct {
 // An output the store never keeps as a UTXO (OP_FALSE OP_RETURN, and before
 // Genesis a bare OP_RETURN or an oversized script) is reported as unknown
 // (unspendable), because some stores answer OK for it. That check needs the
-// funding transaction body; without the body it cannot run. An output the store
+// funding transaction body; without the body it cannot run. A record seeded
+// from a UTXO snapshot holds only the outputs that were unspent then, with a
+// hole at each spent one, and Aerospike answers OK for a hole; a hole is
+// reported as unknown (output_not_found), and no value or script hash is taken
+// from a body that is not the complete requested transaction. An output the store
 // holds whose funding record cannot be read is unknown (store_unavailable), and
 // one whose record has gone is unknown (not_found_may_be_pruned), because
 // neither that check nor the coinbase maturity check could run.
@@ -316,10 +324,14 @@ type utxoStatusMetaEntry struct {
 
 // utxoStatusOutput is what an answer needs from one funding output.
 type utxoStatusOutput struct {
-	satoshis   uint64
-	scriptHash string
 	// storable is false for an output the store never keeps as a UTXO.
 	storable bool
+	// verified is true when the output comes from the complete requested
+	// transaction (serializable, and its txid matches); only then are
+	// satoshis and scriptHash set.
+	verified   bool
+	satoshis   uint64
+	scriptHash string
 }
 
 // utxoStatusFundingRecord is a funding-transaction record with the body dropped: the
@@ -328,12 +340,21 @@ type utxoStatusFundingRecord struct {
 	// meta holds IsCoinbase, BlockIDs, BlockHeights, UnminedSince, Conflicting
 	// and Locked. Its Tx is always nil.
 	meta *meta.Data
-	// hasBody is true when the store returned the transaction body.
+	// hasBody is true when the store returned the complete requested
+	// transaction, so its output count is the real one.
 	hasBody bool
+	// partial is true when the store returned a body that is not the complete
+	// requested transaction, such as the outputs-only reconstruction of a
+	// record seeded from a UTXO snapshot.
+	partial bool
 	// numOutputs is the body's output count, set only when hasBody.
 	numOutputs int
-	// outputs holds the requested outputs that exist in the body.
+	// outputs holds the requested outputs present in the body.
 	outputs map[uint32]utxoStatusOutput
+	// holes holds the requested positions where the body has no output: in a
+	// seeded record, an output that was already spent when the snapshot was
+	// taken. On Aerospike its UTXO slot is nil and GetSpend reads it as OK.
+	holes map[uint32]bool
 }
 
 // utxoStatusFundingEntry memoises one funding-record read for the request.
@@ -398,15 +419,18 @@ func (l *utxoStatusLookup) fundingRecord(ctx context.Context, hash *chainhash.Ha
 			return
 		}
 
-		e.rec = l.summarise(data, l.wanted[*hash])
+		e.rec = l.summarise(hash, data, l.wanted[*hash])
 	})
 
 	return e.rec, e.err
 }
 
 // summarise keeps what the answers need from a funding record and drops the
-// transaction body.
-func (l *utxoStatusLookup) summarise(data *meta.Data, vouts []uint32) *utxoStatusFundingRecord {
+// transaction body. A value or script hash is taken only from the complete
+// requested transaction. A body that is not (a seeded, outputs-only
+// reconstruction) still shows where outputs are missing and still gets the
+// script check, since both can only turn an answer into unknown.
+func (l *utxoStatusLookup) summarise(hash *chainhash.Hash, data *meta.Data, vouts []uint32) *utxoStatusFundingRecord {
 	rec := &utxoStatusFundingRecord{
 		meta: &meta.Data{
 			IsCoinbase:   data.IsCoinbase,
@@ -422,8 +446,15 @@ func (l *utxoStatusLookup) summarise(data *meta.Data, vouts []uint32) *utxoStatu
 		return rec
 	}
 
-	rec.hasBody = true
-	rec.numOutputs = len(data.Tx.Outputs)
+	verified := data.TxIsSerializable() && data.Tx.TxIDChainHash().IsEqual(hash)
+	stored := len(data.Tx.Outputs)
+
+	if verified {
+		rec.hasBody, rec.numOutputs = true, stored
+	} else {
+		rec.partial = true
+	}
+
 	rec.outputs = make(map[uint32]utxoStatusOutput, len(vouts))
 
 	// The script rules depend on the height: the funding block's when known,
@@ -434,7 +465,18 @@ func (l *utxoStatusLookup) summarise(data *meta.Data, vouts []uint32) *utxoStatu
 	}
 
 	for _, vout := range vouts {
-		if int(vout) >= rec.numOutputs {
+		if int(vout) >= stored {
+			continue
+		}
+
+		out := data.Tx.Outputs[vout]
+		if out == nil || out.LockingScript == nil {
+			if rec.holes == nil {
+				rec.holes = make(map[uint32]bool)
+			}
+
+			rec.holes[vout] = true
+
 			continue
 		}
 
@@ -442,14 +484,17 @@ func (l *utxoStatusLookup) summarise(data *meta.Data, vouts []uint32) *utxoStatu
 			continue
 		}
 
-		out := data.Tx.Outputs[vout]
-		sum := sha256.Sum256(*out.LockingScript)
-
-		rec.outputs[vout] = utxoStatusOutput{
-			satoshis:   out.Satoshis,
-			scriptHash: hex.EncodeToString(sum[:]),
-			storable:   utxo.ShouldStoreOutputAsUTXO(out, height, l.h.settings.ChainCfgParams.GenesisActivationHeight),
+		o := utxoStatusOutput{
+			storable: utxo.ShouldStoreOutputAsUTXO(out, height, l.h.settings.ChainCfgParams.GenesisActivationHeight),
+			verified: verified,
 		}
+
+		if verified {
+			sum := sha256.Sum256(*out.LockingScript)
+			o.satoshis, o.scriptHash = out.Satoshis, hex.EncodeToString(sum[:])
+		}
+
+		rec.outputs[vout] = o
 	}
 
 	return rec
@@ -525,20 +570,27 @@ func (l *utxoStatusLookup) record(ctx context.Context, txHash *chainhash.Hash, v
 		return rec, ctx.Err()
 	}
 
-	if metaErr == nil && fr != nil && fr.hasBody {
-		if int(vout) < fr.numOutputs {
+	if metaErr == nil && fr != nil {
+		// A seeded record has no output where one was already spent, and on
+		// Aerospike that empty UTXO slot reads as OK. Whatever the store said,
+		// there is no live output here.
+		if fr.holes[vout] {
+			return unknown(utxoReasonNoOutput)
+		}
+
+		if out, ok := fr.outputs[vout]; ok {
 			// Some stores keep no UTXO slot for an output that can never be
 			// spent and then answer OK for it. summarise applied the script rules.
-			if out, ok := fr.outputs[vout]; ok {
-				if !out.storable {
-					return unknown(utxoReasonUnspend)
-				}
+			if !out.storable {
+				return unknown(utxoReasonUnspend)
+			}
 
+			if out.verified {
 				sats := out.satoshis
 				rec.Satoshis = &sats
 				rec.LockingScriptSha256 = out.scriptHash
 			}
-		} else if notFound {
+		} else if fr.hasBody && int(vout) >= fr.numOutputs && notFound {
 			return unknown(utxoReasonVout)
 		}
 	}
@@ -550,9 +602,10 @@ func (l *utxoStatusLookup) record(ctx context.Context, txHash *chainhash.Hash, v
 			l.h.logger.Warnf("[Asset_http:GetUTXOStatuses] %s:%d meta: %v", txHash.String(), vout, metaErr)
 
 			return unknown(utxoReasonStore)
-		case rec.Satoshis != nil:
+		case rec.Satoshis != nil, fr != nil && fr.partial:
 			// The record and body are held but the store has no live entry for
-			// the output (for example after journal retention passed).
+			// the output (for example after journal retention passed, or, in a
+			// seeded record, a trailing output that was already spent).
 			return unknown(utxoReasonNoOutput)
 		default:
 			// The transaction record may be gone (pruned after spend, or never seen).
@@ -582,7 +635,9 @@ func (l *utxoStatusLookup) record(ctx context.Context, txHash *chainhash.Hash, v
 		// A spend-height hold can replace the output's own state: Aerospike sets
 		// IMMATURE over SPENT, and SQL and pebble set it after frozen, locked and
 		// conflicting. Spent and frozen outputs carry spending data (frozen as the
-		// frozen marker); locked and conflicting are flags on the transaction.
+		// frozen marker); locked and conflicting are flags on the transaction,
+		// taken from the funding-record read, which is a separate read from this
+		// one (a flag set between the two is not seen).
 		switch {
 		case sr.SpendingData != nil:
 			return unknown(utxoReasonHeld)

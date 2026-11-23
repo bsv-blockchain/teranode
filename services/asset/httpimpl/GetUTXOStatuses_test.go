@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -68,7 +69,8 @@ func statusHash(b byte) chainhash.Hash {
 	return h
 }
 
-// fundingTx returns a transaction whose output 0 is worth 1234 sat.
+// fundingTx returns a complete transaction (one input) whose output 0 is worth 1234 sat. Request it by
+// its own txid: the handler takes a value only from the complete requested transaction.
 func fundingTx(t *testing.T) (*bt.Tx, string) {
 	t.Helper()
 
@@ -76,6 +78,7 @@ func fundingTx(t *testing.T) (*bt.Tx, string) {
 	require.NoError(t, err)
 
 	tx := bt.NewTx()
+	require.NoError(t, tx.From(strings.Repeat("ab", 32), 0, "76a914000000000000000000000000000000000000000088ac", 5000))
 	tx.AddOutput(&bt.Output{Satoshis: 1234, LockingScript: script})
 
 	sum := sha256.Sum256(*script)
@@ -107,9 +110,9 @@ func callStatus(t *testing.T, httpServer *HTTP, ec echo.Context, rec *httptest.R
 func TestGetUTXOStatuses(t *testing.T) {
 	initPrometheusMetrics()
 
-	fundID := statusHash(1)
-	spenderID := statusHash(2)
 	tx, wantScriptHash := fundingTx(t)
+	fundID := *tx.TxIDChainHash()
+	spenderID := statusHash(2)
 
 	blockWithHeader := &model.Block{ID: 7, Header: testBlockHeader}
 
@@ -521,6 +524,61 @@ func TestGetUTXOStatuses(t *testing.T) {
 		require.Equal(t, uint32(850), r.Funding.BlockHeight)
 	})
 
+	// A record seeded from a UTXO snapshot holds only the outputs that were unspent then: a nil hole at
+	// each spent one, trailing spent outputs cut off, and no inputs (so it is not the requested txid). On
+	// Aerospike a hole is a nil UTXO slot, and GetSpend reads that as OK.
+	t.Run("a seeded record: a hole is output_not_found even when the store says OK", func(t *testing.T) {
+		script, err := bscript.NewFromHexString("76a914000000000000000000000000000000000000000088ac")
+		require.NoError(t, err)
+
+		seededID := statusHash(31)
+		seeded := &bt.Tx{Outputs: []*bt.Output{{Satoshis: 700, LockingScript: script}, nil, {Satoshis: 900, LockingScript: script}}}
+
+		for _, tc := range []struct {
+			name       string
+			vout       uint32
+			status     utxo.Status
+			wantStatus string
+			wantReason string
+		}{
+			{name: "hole, store OK", vout: 1, status: utxo.Status_OK, wantStatus: utxoStatusUnknown, wantReason: utxoReasonNoOutput},
+			{name: "hole, store NOT_FOUND", vout: 1, status: utxo.Status_NOT_FOUND, wantStatus: utxoStatusUnknown, wantReason: utxoReasonNoOutput},
+			{name: "trailing spent output, store NOT_FOUND", vout: 3, status: utxo.Status_NOT_FOUND, wantStatus: utxoStatusUnknown, wantReason: utxoReasonNoOutput},
+			{name: "present output, store OK", vout: 0, status: utxo.Status_OK, wantStatus: utxoStatusUnspent},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				httpServer, mockRepo, ec, rec := mockStatusHTTP(t, statusBody(statusOutpoint{seededID, tc.vout}))
+
+				bestBlockMocks(mockRepo, 900)
+				mockRepo.On("GetUtxo", mock.Anything).Return(&utxo.SpendResponse{Status: int(tc.status)}, nil)
+				mockRepo.On("GetTxFundingRecord", mock.Anything).Return(&meta.Data{Tx: seeded, UnminedSince: 899}, nil)
+
+				r := callStatus(t, httpServer, ec, rec).Results[0]
+
+				require.Equal(t, tc.wantStatus, r.Status)
+				require.Equal(t, tc.wantReason, r.Reason)
+				// No value or script hash is taken from a body that is not the requested transaction.
+				require.Nil(t, r.Satoshis)
+				require.Empty(t, r.LockingScriptSha256)
+			})
+		}
+	})
+
+	t.Run("a complete transaction under another txid gives no value", func(t *testing.T) {
+		other := statusHash(51)
+		httpServer, mockRepo, ec, rec := mockStatusHTTP(t, statusBody(statusOutpoint{other, 0}))
+
+		bestBlockMocks(mockRepo, 900)
+		mockRepo.On("GetUtxo", mock.Anything).Return(&utxo.SpendResponse{Status: int(utxo.Status_OK)}, nil)
+		mockRepo.On("GetTxFundingRecord", mock.Anything).Return(&meta.Data{Tx: tx, UnminedSince: 899}, nil)
+
+		r := callStatus(t, httpServer, ec, rec).Results[0]
+
+		require.Equal(t, utxoStatusUnspent, r.Status)
+		require.Nil(t, r.Satoshis)
+		require.Empty(t, r.LockingScriptSha256)
+	})
+
 	t.Run("output not found but body held is output_not_found", func(t *testing.T) {
 		httpServer, mockRepo, ec, rec := mockStatusHTTP(t, statusBody(statusOutpoint{fundID, 0}))
 
@@ -770,10 +828,8 @@ func TestGetUTXOStatusesFundingReads(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("a funding read keeps only the requested outputs and drops the transaction body", func(t *testing.T) {
-		id := statusHash(21)
-		httpServer, mockRepo, _, _ := mockStatusHTTP(t, statusBody(statusOutpoint{id, 0}))
-
 		big := bt.NewTx()
+		require.NoError(t, big.From(strings.Repeat("cd", 32), 1, "76a914000000000000000000000000000000000000000088ac", 9000))
 
 		for i := 1; i <= 3; i++ {
 			script, err := bscript.NewFromHexString(fmt.Sprintf("76a914%040x88ac", i))
@@ -781,6 +837,9 @@ func TestGetUTXOStatusesFundingReads(t *testing.T) {
 
 			big.AddOutput(&bt.Output{Satoshis: uint64(100 * i), LockingScript: script})
 		}
+
+		id := *big.TxIDChainHash()
+		httpServer, mockRepo, _, _ := mockStatusHTTP(t, statusBody(statusOutpoint{id, 0}))
 
 		mockRepo.On("GetTxFundingRecord", &id).Return(&meta.Data{Tx: big, BlockIDs: []uint32{7}, BlockHeights: []uint32{850}}, nil)
 
@@ -848,7 +907,25 @@ func TestGetUTXOStatusesFundingReads(t *testing.T) {
 		out := callStatus(t, httpServer, ec, rec)
 
 		require.Len(t, out.Results, n)
-		require.Equal(t, 8, utxoStatusBodyReads, "asset_reference.md documents at most 8 funding reads at once")
+		require.Equal(t, 32, utxoStatusBodyReads, "asset_reference.md documents at most 32 funding reads at once")
 		require.LessOrEqual(t, peak.Load(), int32(utxoStatusBodyReads))
 	})
+}
+
+// summarise must not dereference a missing output or script: either is a hole, never a panic.
+func TestGetUTXOStatusesSummariseHoles(t *testing.T) {
+	httpServer, _, _, _ := mockStatusHTTP(t, statusBody(statusOutpoint{statusHash(41), 0}))
+
+	lk := &utxoStatusLookup{h: httpServer, bestH: 900}
+	id := statusHash(41)
+	partial := &bt.Tx{Outputs: []*bt.Output{nil, {Satoshis: 5}}}
+
+	var fr *utxoStatusFundingRecord
+
+	require.NotPanics(t, func() { fr = lk.summarise(&id, &meta.Data{Tx: partial}, []uint32{0, 1, 7}) })
+	require.True(t, fr.partial)
+	require.False(t, fr.hasBody)
+	require.True(t, fr.holes[0])
+	require.True(t, fr.holes[1])
+	require.Empty(t, fr.outputs)
 }
