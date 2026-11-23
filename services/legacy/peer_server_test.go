@@ -1606,7 +1606,7 @@ func TestAnnounceNewTransactionsReachesPeerInBatchOrder(t *testing.T) {
 // A ban names an IP or a subnet while a peer's Addr() is "IP:port". handleBanEvent must still
 // disconnect every connected peer the ban covers, not only the first, and leave the rest.
 func TestHandleBanEvent_DisconnectsEveryPeerTheBanCovers(t *testing.T) {
-	srv := &server{logger: ulogger.TestLogger{}, query: make(chan interface{})}
+	srv := &server{logger: ulogger.TestLogger{}, query: make(chan interface{}), banList: emptyWritableBanList(t)}
 	state := newTestPeerState()
 
 	for i, addr := range []string{"10.0.0.5:8333", "10.0.0.9:51234", "192.168.1.1:8333"} {
@@ -1624,6 +1624,9 @@ func TestHandleBanEvent_DisconnectsEveryPeerTheBanCovers(t *testing.T) {
 	_, subnet, err := net.ParseCIDR("10.0.0.0/24")
 	require.NoError(t, err)
 
+	// handleBanEvent asks the ban list which peers a ban covers, so the ban is recorded first, as
+	// banList.Add does before it publishes the event
+	require.NoError(t, srv.banList.Add(t.Context(), "10.0.0.0/24", time.Now().Add(time.Hour)))
 	srv.handleBanEvent(t.Context(), p2p.BanEvent{Action: "add", IP: "10.0.0.0/24", Subnet: subnet})
 
 	remaining := state.inboundPeers.Range()
@@ -1634,6 +1637,7 @@ func TestHandleBanEvent_DisconnectsEveryPeerTheBanCovers(t *testing.T) {
 	}
 
 	// a ban of one host, which is what a misbehaviour ban publishes (no subnet)
+	require.NoError(t, srv.banList.Add(t.Context(), "192.168.1.1", time.Now().Add(time.Hour)))
 	srv.handleBanEvent(t.Context(), p2p.BanEvent{Action: "add", IP: "192.168.1.1"})
 	require.Empty(t, state.inboundPeers.Range())
 }
@@ -1665,7 +1669,7 @@ func TestHandleUnbanPeerMsg_AcceptsAnIPAndASubnet(t *testing.T) {
 
 // The same with IPv6: a peer's Addr() is "[addr]:port" and a ban is an address or a CIDR prefix.
 func TestHandleBanEvent_DisconnectsIPv6PeersInTheBannedSubnet(t *testing.T) {
-	srv := &server{logger: ulogger.TestLogger{}, query: make(chan interface{})}
+	srv := &server{logger: ulogger.TestLogger{}, query: make(chan interface{}), banList: emptyWritableBanList(t)}
 	state := newTestPeerState()
 
 	for i, addr := range []string{"[2001:db8::7]:8333", "[2001:db8:0:1::9]:8333", "[2001:db9::1]:8333", "[::ffff:10.0.0.5]:8333"} {
@@ -1682,6 +1686,7 @@ func TestHandleBanEvent_DisconnectsIPv6PeersInTheBannedSubnet(t *testing.T) {
 	_, subnet, err := net.ParseCIDR("2001:db8::/32")
 	require.NoError(t, err)
 
+	require.NoError(t, srv.banList.Add(t.Context(), "2001:db8::/32", time.Now().Add(time.Hour)))
 	srv.handleBanEvent(t.Context(), p2p.BanEvent{Action: "add", IP: "2001:db8::/32", Subnet: subnet})
 
 	remaining := map[string]bool{}
@@ -1695,6 +1700,7 @@ func TestHandleBanEvent_DisconnectsIPv6PeersInTheBannedSubnet(t *testing.T) {
 	_, v4, err := net.ParseCIDR("10.0.0.0/24")
 	require.NoError(t, err)
 
+	require.NoError(t, srv.banList.Add(t.Context(), "10.0.0.0/24", time.Now().Add(time.Hour)))
 	srv.handleBanEvent(t.Context(), p2p.BanEvent{Action: "add", IP: "10.0.0.0/24", Subnet: v4})
 	require.Len(t, state.inboundPeers.Range(), 1)
 }
