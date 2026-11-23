@@ -462,6 +462,11 @@ func (r *Reader) prepare(ctx context.Context, hash chainhash.Hash) (*lane.ChainV
 		return v, ""
 	}
 
+	// Another check of the same block may have walked and found nothing while this waited.
+	if r.isUnreachable(hash, s.TipID()) {
+		return nil, KindNotLoaded
+	}
+
 	found, err := r.loadAncestry(ctx, hash, s.StartHeight())
 	// By identity: teranode's errors.Is matches any processing error in the chain, such as a row
 	// that fails its check, which is a read error.

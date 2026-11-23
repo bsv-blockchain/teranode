@@ -895,7 +895,10 @@ func TestReaderRemembersABlockWithNoHeldAncestor(t *testing.T) {
 	c := newChain(t, store)
 
 	b1 := c.add(nil)
-	tip := c.line(b1, 8)
+	c.add(nil) // a side block, so block IDs and heights differ
+	parent := c.line(b1, 7)
+	tip := c.add(parent)
+	require.NotEqual(t, tip.id, tip.height)
 
 	source := &countingSource{Source: store}
 	r := newReader(ulogger.TestLogger{}, source, 100)
@@ -903,9 +906,9 @@ func TestReaderRemembersABlockWithNoHeldAncestor(t *testing.T) {
 	follow(t, r)
 	require.Equal(t, tip.height-2, r.Snapshot().StartHeight())
 
-	// A fork from b1, its tip above the index's start, with more blocks back to a held one than
-	// the walk looks at.
-	fork := c.line(b1, 9)
+	// A fork from b1, its tip above the index's start and below the main tip, with more blocks
+	// back to a held one than the walk looks at.
+	fork := c.line(b1, 7)
 
 	before := prepareFailures("no_held_ancestor")
 
@@ -921,15 +924,64 @@ func TestReaderRemembersABlockWithNoHeldAncestor(t *testing.T) {
 	})
 	require.Equal(t, reads, source.headerReads, "the same block at the same tip is not walked again")
 
-	// Once the tip moves, two blocks so the main chain outweighs the fork again, the block is
-	// walked again.
-	c.add(c.add(tip))
+	// A reorg to a sibling of the tip, at the same height: the block is walked again.
+	sibling := c.add(parent)
+	_, err := store.InvalidateBlock(context.Background(), &tip.hash)
+	require.NoError(t, err)
+	follow(t, r)
+	require.Equal(t, sibling.id, r.Snapshot().TipID())
+	require.Equal(t, tip.height, r.Snapshot().TipHeight())
+
+	reads = source.headerReads
+
+	r.ShadowDuplicates(context.Background(), fork.hash, fork.id, false)
+	require.Greater(t, source.headerReads, reads, "after a same-height reorg the walk runs again")
+
+	// Once the tip moves up, the block is walked again.
+	c.add(sibling)
 	follow(t, r)
 
 	reads = source.headerReads
 
 	r.ShadowDuplicates(context.Background(), fork.hash, fork.id, false)
 	require.Greater(t, source.headerReads, reads, "after the tip moved the walk runs again")
+}
+
+// Two checks of the same unreachable block that overlap walk once: the second, waiting for the
+// load token, finds the first's result when it gets it.
+func TestReaderWalksAnUnreachableBlockOnceForOverlappingChecks(t *testing.T) {
+	store := newStore(t, "sqlite")
+	c := newChain(t, store)
+
+	b1 := c.add(nil)
+	c.line(b1, 8)
+
+	source := &countingSource{Source: store}
+	r := newReader(ulogger.TestLogger{}, source, 100)
+	r.startBlocks, r.maxWalk, r.walkBatch = 3, 2, 2
+	follow(t, r)
+
+	fork := c.line(b1, 7)
+
+	// Hold the load token, start the first check, and let it queue behind the token.
+	require.True(t, r.lockLoad(context.Background()))
+
+	reads := source.headerReads
+	done := make(chan string, 2)
+
+	for range 2 {
+		go func() {
+			_, kind := r.prepare(context.Background(), fork.hash)
+			done <- kind
+		}()
+	}
+
+	time.Sleep(50 * time.Millisecond)
+	r.unlockLoad()
+
+	require.Equal(t, KindNotLoaded, <-done)
+	require.Equal(t, KindNotLoaded, <-done)
+	require.Equal(t, reads+1, source.headerReads, "one walk, not two")
 }
 
 // failingRows fails every row read with a processing error, as a stored row that fails its check

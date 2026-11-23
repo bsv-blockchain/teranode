@@ -454,6 +454,38 @@ func TestIndexRefusesHoleDataThatDoesNotParse(t *testing.T) {
 	require.False(t, idx.Has(blockHash(1)), "a refused block is not loaded")
 }
 
+// A row that is not a range, has an unknown tag, or whose bitmap is empty or does not span its
+// range is refused, and its block is not loaded.
+func TestIndexRefusesMalformedRows(t *testing.T) {
+	portable := func(positions ...uint64) []byte {
+		bm := roaring64.New()
+		bm.AddMany(positions)
+
+		data, err := bm.ToBytes()
+		require.NoError(t, err)
+
+		return data
+	}
+
+	for name, row := range map[string]MapRow{
+		"first is zero":            {Lane: 3, First: 0, Last: 9, Tag: RowTagRange},
+		"first above last":         {Lane: 3, First: 10, Last: 9, Tag: RowTagRange},
+		"last past the maximum":    {Lane: 3, First: 5, Last: MaxPosition + 1, Tag: RowTagRange},
+		"unknown tag":              {Lane: 3, First: 5, Last: 9, Tag: 7},
+		"empty bitmap":             {Lane: 3, First: 5, Last: 9, Tag: RowTagRoaring64, HoleData: portable()},
+		"bitmap below the range":   {Lane: 3, First: 6, Last: 9, FirstHole: 7, Tag: RowTagRoaring64, HoleData: portable(5, 9)},
+		"bitmap short of the last": {Lane: 3, First: 5, Last: 10, FirstHole: 6, Tag: RowTagRoaring64, HoleData: portable(5, 9)},
+	} {
+		t.Run(name, func(t *testing.T) {
+			idx := NewIndex(100)
+
+			err := idx.AddBlock(IndexBlock{ID: 1, Height: 1, Hash: blockHash(1)}, []MapRow{row})
+			require.Error(t, err)
+			require.False(t, idx.Has(blockHash(1)), "a refused block is not loaded")
+		})
+	}
+}
+
 // A refused deep reorg leaves the writer's state as it was: the next publish still has the old
 // main chain.
 func TestIndexRefusedDeepReorgLeavesTheWriterUnchanged(t *testing.T) {
