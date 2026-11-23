@@ -380,6 +380,10 @@ type SubtreeProcessor struct {
 	preparedMu sync.Mutex
 	prepared   *preparedTxMap
 
+	// preparedFork holds the sets of the blocks that would win a one-back fork reorg (a
+	// competitor of the tip, and the competitor with its child), guarded by preparedMu
+	preparedFork []*forkPrepared
+
 	// subtreeStore provides persistent storage for subtrees
 	subtreeStore blob.Store
 
