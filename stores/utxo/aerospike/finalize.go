@@ -80,7 +80,18 @@ func (s *Store) FinalizeTransaction(ctx context.Context, tx *bt.Tx, attempt, lea
 	group := completion.NewGroup(1)
 
 	// Cancel the wait the moment this item fails, matching SetLocked's fail-fast.
+	//
+	// The wait is also the deadline of the item, so a caller with no deadline of its own is bound by
+	// batcherWait too: no write of the item starts after the caller has stopped waiting, whatever the
+	// deadline of ctx and whatever the settings of the batch policy. Without it the bound of a write
+	// would hold only while batcherWait (batcherWaitFor) outlasts the deadline the caller sets.
 	waitCtx, cancel := context.WithCancel(ctx)
+	if s.batcherWait > 0 {
+		cancel()
+
+		waitCtx, cancel = context.WithTimeout(ctx, s.batcherWait)
+	}
+
 	defer cancel()
 
 	var (
@@ -168,14 +179,16 @@ func removeUnminedSinceIfMinedOp() *aerospike.Operation {
 // sendFinalizeBatch clears the creating bin for a batch of transactions. Single-record
 // txs (the overwhelmingly common case) are cleared in one BatchOperate per deadline group;
 // multi-record txs are handled inline via clearCreatingFlag, which already
-// implements the children-first-then-master ordering and FILTERED_OUT idempotency.
+// implements the children-first-then-master ordering and FILTERED_OUT idempotency, and which
+// gets the context of the item so that its master write does not start after the deadline.
 //
 // An item whose caller has given up is completed with that error and is not sent. Without that, the
 // write of a finalize that its caller abandoned would still land and clear the creating bin, and
 // stamp the record with the lease of a caller that already returned an error: the record would be
 // final, its inputs spent, and no caller would own the hand-off to block assembly. A write that is
-// sent carries only the time its callers have left (see finalizeGroups), so none starts after the
-// deadline of its caller.
+// sent carries only the time its callers have left (see finalizeGroups), and so does each write of
+// a paginated finalize (clearCreatingFlag), so none starts after the deadline of its caller. Every
+// item has a deadline: FinalizeTransaction gives one to a caller that has none.
 func (s *Store) sendFinalizeBatch(batch []*batchFinalize) {
 	// go-batcher recovers panics in this fn; re-complete every item on panic so a
 	// crash cannot orphan the waiting submitters (complete is CAS-guarded).
@@ -203,7 +216,7 @@ func (s *Store) sendFinalizeBatch(batch []*batchFinalize) {
 			// Multi-record: reuse the create-path phase-2 clearer (children first,
 			// master last) so the master's creating flag stays the atomic completion
 			// indicator, exactly as at create time.
-			item.complete(s.clearCreatingFlag(item.tx.TxIDChainHash(), numRecords, item.attempt, item.lease))
+			item.complete(s.clearCreatingFlag(item.ctx, item.tx.TxIDChainHash(), numRecords, item.attempt, item.lease))
 			continue
 		}
 

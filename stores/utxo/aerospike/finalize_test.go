@@ -8,14 +8,17 @@ import (
 
 	"github.com/bsv-blockchain/aerospike-client-go/v8"
 	"github.com/bsv-blockchain/aerospike-client-go/v8/types"
+	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
+	teranode_aerospike "github.com/bsv-blockchain/teranode/stores/utxo/aerospike"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/stores/utxo/tests"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/test"
+	"github.com/bsv-blockchain/teranode/util/uaerospike"
 	"github.com/stretchr/testify/require"
 )
 
@@ -719,4 +722,171 @@ func TestFinalizeTransaction_AFinalizeThatTimedOutIsNotSent(t *testing.T) {
 	got := &meta.Data{}
 	require.NoError(t, store.GetMeta(ctx, tx.TxIDChainHash(), got))
 	require.True(t, got.Creating, "the record is still creating: a roll-forward or the sweep owns it")
+}
+
+// countMasterWrites counts the finalize writes of the master record of hash that reach the batch
+// override, and runs after once the batch that carries the children of a paginated transaction is done.
+func countMasterWrites(t *testing.T, client *uaerospike.Client, store *teranode_aerospike.Store, hash *chainhash.Hash, after func()) *atomic.Int32 {
+	t.Helper()
+
+	master, err := aerospike.NewKey(store.GetNamespace(), store.GetName(), uaerospike.CalculateKeySourceInternal(hash, 0))
+	require.NoError(t, err)
+
+	var masterWrites atomic.Int32
+
+	store.SetBatchOperateFn(func(policy *aerospike.BatchPolicy, records []aerospike.BatchRecordIfc) aerospike.Error {
+		children := false
+
+		for _, record := range records {
+			write, ok := record.(*aerospike.BatchWrite)
+			if !ok || write.Policy == nil || write.Policy.RecordExistsAction != aerospike.UPDATE_ONLY {
+				continue
+			}
+
+			if write.Key.Equals(master) {
+				masterWrites.Add(1)
+			} else {
+				children = true
+			}
+		}
+
+		err := client.BatchOperate(policy, records)
+
+		if children && after != nil {
+			after()
+		}
+
+		return err
+	})
+	t.Cleanup(func() { store.SetBatchOperateFn(nil) })
+
+	return &masterWrites
+}
+
+// TestFinalizeTransaction_PaginatedMasterIsNotSentAfterItsCallerIsGone covers a paginated finalize
+// whose caller runs out of time while the child records are being cleared. The master write clears
+// the creating bin and stamps the lease, so it must not start after that deadline: the record would
+// be final with no caller to own the hand-off, and no recovery path selects it once the bin is gone.
+func TestFinalizeTransaction_PaginatedMasterIsNotSentAfterItsCallerIsGone(t *testing.T) {
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.UtxoStore.UtxoBatchSize = 4
+
+	client, store, ctx, deferFn := initAerospike(t, tSettings, logger)
+	t.Cleanup(deferFn)
+	cleanDB(t, client)
+
+	paginated := createTransactionWithOutputs(10)
+	hash := paginated.TxIDChainHash()
+
+	md, err := store.Create(ctx, paginated, 100, utxo.WithCreating(true))
+	require.NoError(t, err)
+
+	lease, took, err := store.TakeSpendLease(ctx, hash, md.Attempt)
+	require.NoError(t, err)
+	require.True(t, took)
+
+	callerCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+
+	masterWrites := countMasterWrites(t, client, store, hash, func() {
+		<-callerCtx.Done()
+	})
+
+	require.Error(t, store.FinalizeTransaction(callerCtx, paginated, md.Attempt, lease), "the caller ran out of time")
+	require.Zero(t, masterWrites.Load(), "no master write may start after the deadline of its caller")
+
+	got := &meta.Data{}
+	require.NoError(t, store.GetMeta(ctx, hash, got))
+	require.True(t, got.Creating, "the record is still creating: a roll-forward or the sweep owns it")
+
+	require.NoError(t, store.FinalizeTransaction(ctx, paginated, md.Attempt, lease), "a live caller still finalizes it")
+}
+
+// TestFinalizeTransaction_PaginatedFinalizeOfALiveCaller is the other half: a caller that is still
+// waiting gets its paginated finalize written, the master once.
+func TestFinalizeTransaction_PaginatedFinalizeOfALiveCaller(t *testing.T) {
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.UtxoStore.UtxoBatchSize = 4
+
+	client, store, ctx, deferFn := initAerospike(t, tSettings, logger)
+	t.Cleanup(deferFn)
+	cleanDB(t, client)
+
+	paginated := createTransactionWithOutputs(10)
+	hash := paginated.TxIDChainHash()
+
+	md, err := store.Create(ctx, paginated, 100, utxo.WithCreating(true))
+	require.NoError(t, err)
+
+	lease, took, err := store.TakeSpendLease(ctx, hash, md.Attempt)
+	require.NoError(t, err)
+	require.True(t, took)
+
+	callerCtx, cancel := context.WithTimeout(ctx, time.Minute)
+	defer cancel()
+
+	masterWrites := countMasterWrites(t, client, store, hash, nil)
+
+	require.NoError(t, store.FinalizeTransaction(callerCtx, paginated, md.Attempt, lease))
+	require.Equal(t, int32(1), masterWrites.Load())
+
+	for idx := uint32(0); idx <= 2; idx++ {
+		require.NotContains(t, recordBins(t, client, store, hash, idx, fields.Creating), fields.Creating.String(), "record %d", idx)
+	}
+}
+
+// TestFinalizeTransaction_CallerWithNoDeadlineIsBoundedByTheWait covers a caller whose context has
+// no deadline. It waits no longer than the batcher wait, so no finalize write, of a single record
+// or of a paginated transaction, may start after that: each write carries only the time left.
+func TestFinalizeTransaction_CallerWithNoDeadlineIsBoundedByTheWait(t *testing.T) {
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.UtxoStore.UtxoBatchSize = 4
+
+	client, store, ctx, deferFn := initAerospike(t, tSettings, logger)
+	t.Cleanup(deferFn)
+	cleanDB(t, client)
+
+	const wait = 20 * time.Second
+
+	store.SetBatcherWait(wait)
+
+	_, err := store.Create(ctx, tests.ParentTx, 100)
+	require.NoError(t, err)
+
+	candidates := map[string]*bt.Tx{"single record": tx, "paginated": createTransactionWithOutputs(10)}
+
+	for name, candidate := range candidates {
+		_, err = store.Create(ctx, candidate, 100, utxo.WithCreating(true))
+		require.NoError(t, err, name)
+
+		token := attemptOf(t, ctx, store, candidate.TxIDChainHash())
+
+		var (
+			finalizeWrites atomic.Int32
+			unbounded      atomic.Int32
+		)
+
+		store.SetBatchOperateFn(func(policy *aerospike.BatchPolicy, records []aerospike.BatchRecordIfc) aerospike.Error {
+			for _, record := range records {
+				if write, ok := record.(*aerospike.BatchWrite); ok && write.Policy != nil && write.Policy.RecordExistsAction == aerospike.UPDATE_ONLY {
+					finalizeWrites.Add(1)
+
+					if policy.TotalTimeout == 0 || policy.TotalTimeout > wait {
+						unbounded.Add(1)
+					}
+				}
+			}
+
+			return client.BatchOperate(policy, records)
+		})
+
+		require.NoError(t, store.FinalizeTransaction(ctx, candidate, token, token), name)
+		require.NotZero(t, finalizeWrites.Load(), name)
+		require.Zero(t, unbounded.Load(), "%s: a finalize write carries more time than the caller waits", name)
+	}
+
+	store.SetBatchOperateFn(nil)
 }

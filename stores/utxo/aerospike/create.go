@@ -1642,7 +1642,7 @@ func (s *Store) storeExternallyWithLock(
 		}
 
 		if masterToken := s.masterAttempt(bItem.txHash); len(masterToken) == 0 {
-			clearErr := unlessAlreadyFinal(s.clearCreatingFlag(bItem.txHash, len(binsToStore), masterToken, nil))
+			clearErr := unlessAlreadyFinal(s.clearCreatingFlag(context.Background(), bItem.txHash, len(binsToStore), masterToken, nil))
 			if clearErr != nil {
 				// A mined create's caller may read ErrTxExists as done: the seeder and
 				// block assembly's coinbase store do. See creatingNotClearedError.
@@ -1667,7 +1667,7 @@ func (s *Store) storeExternallyWithLock(
 		return
 	}
 
-	clearErr := unlessAlreadyFinal(s.clearCreatingFlag(bItem.txHash, len(binsToStore), bItem.attempt, nil))
+	clearErr := unlessAlreadyFinal(s.clearCreatingFlag(context.Background(), bItem.txHash, len(binsToStore), bItem.attempt, nil))
 	if clearErr != nil && len(bItem.blockIDs) > 0 {
 		// A create that carries mined block info is not reliably reached by the
 		// recovery paths listed below. See creatingNotClearedError.
@@ -1903,11 +1903,18 @@ func (s *Store) ensureCreatingBin(bins []*aerospike.Bin, creating bool) []*aeros
 // creating and rolling back, and the rollback owner removes the children and blobs and leaves a
 // hold.
 //
+// No write of either phase starts after the deadline of ctx (batchOperateWithin), and the master
+// write is the one that must not be late: it clears the creating bin and stamps the lease, so a
+// master that lands after its caller returned leaves a final record that no caller owns and no
+// recovery path selects. A child write that did not start leaves its bin set, which the
+// roll-forward and the sweep select, and a repeat of the finalize clears it. A ctx with no deadline
+// is the unbounded write the create path uses.
+//
 // A child write that is filtered out is read back (childFilteredOutResult). The child counts as
 // cleared only when it is no longer creating. One that is still creating, under another attempt's
 // token or this one, fails the call before the master is written, so the master stays creating
 // while any child is.
-func (s *Store) clearCreatingFlag(txHash *chainhash.Hash, numRecords int, attempt, lease []byte) error {
+func (s *Store) clearCreatingFlag(ctx context.Context, txHash *chainhash.Hash, numRecords int, attempt, lease []byte) error {
 	batchPolicy := util.GetAerospikeBatchPolicy(s.settings)
 
 	// Expression filter: only update records where creating bin exists, the token matches and the record is not rolling back
@@ -1952,7 +1959,7 @@ func (s *Store) clearCreatingFlag(txHash *chainhash.Hash, numRecords int, attemp
 
 	// Phase 1: Clear child records first (indices 1, 2, ..., N-1)
 	if len(childWrites) > 0 {
-		err := s.batchOperate(batchPolicy, childWrites)
+		_, err := s.batchOperateWithin(ctx, batchPolicy, childWrites)
 		if err != nil {
 			return errors.NewProcessingError("failed to unlock child records", err)
 		}
@@ -1985,7 +1992,7 @@ func (s *Store) clearCreatingFlag(txHash *chainhash.Hash, numRecords int, attemp
 	// Phase 2: Clear master record last (index 0)
 	// Only executed if children succeeded - master's creating flag becomes atomic completion indicator
 	if masterWrite != nil {
-		err := s.batchOperate(batchPolicy, []aerospike.BatchRecordIfc{masterWrite})
+		_, err := s.batchOperateWithin(ctx, batchPolicy, []aerospike.BatchRecordIfc{masterWrite})
 		if err != nil {
 			return errors.NewProcessingError("failed to unlock master record", err)
 		}
