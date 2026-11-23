@@ -2,11 +2,15 @@ package sql
 
 import (
 	"context"
+	"database/sql"
 	"net/url"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/RoaringBitmap/roaring/v2/roaring64"
+	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/stores/blockchain/options"
 	"github.com/bsv-blockchain/teranode/test/utils/postgres"
 	"github.com/bsv-blockchain/teranode/ulogger"
@@ -487,7 +491,156 @@ func TestInsertLaneMapRowsWithBlockRecordsEachAttemptAfresh(t *testing.T) {
 
 		after, _ := laneGateInsert(t)
 		require.Equal(t, inserts+1, after)
+
+		// And the other way: an attempt that leaves the rows out after one that stored them.
+		require.NoError(t, s.insertLaneMapRowsWithBlock(ctx, tx, block1, 1<<32, rows))
+		require.False(t, rows.stored, "what the earlier attempt stored does not carry over")
+		require.True(t, rows.refused)
 	})
+}
+
+// A block's insert-stage time is the in-memory check before its transaction and the insert
+// inside it, together.
+func TestLaneRowsGateTimeIsTheCheckAndTheInsert(t *testing.T) {
+	runLaneHandoutTests(t, "gate time", func(t *testing.T, s *SQL) {
+		rows, refused := s.checkedLaneMapRows(block1, options.StoreBlockOptions{LaneMapRows: blockLaneRows(t)})
+		require.False(t, refused)
+		require.Positive(t, rows.check, "the check is timed")
+
+		rows.check, rows.insert, rows.stored = 2*time.Second, 3*time.Second, true
+
+		_, before := laneGateInsert(t)
+
+		rows.observe()
+
+		_, after := laneGateInsert(t)
+		require.InDelta(t, 5, after-before, 0.001, "check and insert, in seconds")
+	})
+}
+
+// laneForkRetryLogger runs onRetry once, when StoreBlock logs that a fork block gave up a lock
+// wait and will try again: by then that attempt has inserted the block's rows, or left them
+// out, and rolled its transaction back.
+type laneForkRetryLogger struct {
+	ulogger.TestLogger
+	once    sync.Once
+	onRetry func()
+}
+
+func (l *laneForkRetryLogger) Warnf(format string, args ...interface{}) {
+	if strings.Contains(format, "could not lock a row") {
+		l.once.Do(l.onRetry)
+	}
+
+	l.TestLogger.Warnf(format, args...)
+}
+
+// lockedForkBlock is a Postgres store whose next fork block, the one returned, cannot finish its
+// first attempt: another transaction holds block3's row, which the fork's reconcile must update.
+func lockedForkBlock(t *testing.T) (*SQL, *model.Block, *sql.Tx) {
+	t.Helper()
+
+	s := newPostgresChainWriteStore(t)
+
+	alt3 := createBlock3OnFork(blockAlternative2)
+	storeBlocks(t, s, alt3)
+
+	holder, err := s.db.BeginTx(t.Context(), nil)
+	require.NoError(t, err)
+
+	t.Cleanup(func() { _ = holder.Rollback() })
+
+	_, err = holder.ExecContext(t.Context(), `UPDATE blocks SET on_main_chain = on_main_chain WHERE hash = $1`, block3.Hash().CloneBytes())
+	require.NoError(t, err)
+
+	return s, heavyForkBlock(alt3, 9), holder
+}
+
+// A fork block whose first attempt gives up a lock wait is stored by its second, so its rows are
+// checked and inserted twice. What they cost and whether they were stored is counted once, from
+// the attempt that stored the block.
+func TestStoreBlockCountsARetriedForkBlockOnce_PostgreSQL(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		rows     func(t *testing.T, s *SQL, fork *model.Block) []options.StoreBlockOption
+		timed    uint64
+		failures float64
+	}{
+		{name: "rows stored", timed: 1, rows: func(t *testing.T, _ *SQL, _ *model.Block) []options.StoreBlockOption {
+			return []options.StoreBlockOption{options.WithLaneMapRows(blockLaneRows(t))}
+		}},
+		{name: "rows that fail their check", failures: 1, rows: func(*testing.T, *SQL, *model.Block) []options.StoreBlockOption {
+			return []options.StoreBlockOption{options.WithLaneMapRows([]lane.MapRow{{Lane: 1, First: 5, Last: 4, Tag: lane.RowTagRange}})}
+		}},
+		{name: "rows whose insert fails", failures: 1, rows: func(t *testing.T, s *SQL, fork *model.Block) []options.StoreBlockOption {
+			id, err := s.AssignBlockID(t.Context(), fork.Hash())
+			require.NoError(t, err)
+			require.NoError(t, s.InsertLaneMapRows(t.Context(), uint32(id), holedRows(t, 8, 1, 4))) //nolint:gosec // a test block ID
+
+			return []options.StoreBlockOption{options.WithID(id), options.WithLaneMapRows(blockLaneRows(t))}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, fork, holder := lockedForkBlock(t)
+			opts := tc.rows(t, s, fork)
+
+			retried := false
+			s.logger = &laneForkRetryLogger{onRetry: func() {
+				retried = true
+				_ = holder.Rollback()
+			}}
+
+			inserts, _ := laneGateInsert(t)
+			failures := laneMetricValue(t, "teranode_lane_row_insert_failures_total")
+
+			ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
+			defer cancel()
+
+			_, _, err := s.StoreBlock(ctx, fork, "", opts...)
+			require.NoError(t, err)
+			require.True(t, retried, "the first attempt gave up its lock wait")
+
+			after, _ := laneGateInsert(t)
+			require.Equal(t, inserts+tc.timed, after, "timed once at most")
+			require.Equal(t, failures+tc.failures, laneMetricValue(t, "teranode_lane_row_insert_failures_total"), "counted once at most")
+		})
+	}
+}
+
+// A fork block whose store gives up, its caller's context ending while it waits to retry, counts
+// nothing for its rows, though an attempt checked and inserted them.
+func TestStoreBlockCountsNothingForAForkBlockThatGivesUp_PostgreSQL(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		rows []lane.MapRow
+	}{
+		{name: "rows that would be stored", rows: nil},
+		{name: "rows that fail their check", rows: []lane.MapRow{{Lane: 1, First: 5, Last: 4, Tag: lane.RowTagRange}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, fork, _ := lockedForkBlock(t)
+
+			rows := tc.rows
+			if rows == nil {
+				rows = blockLaneRows(t)
+			}
+
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+
+			s.logger = &laneForkRetryLogger{onRetry: cancel}
+
+			inserts, _ := laneGateInsert(t)
+			failures := laneMetricValue(t, "teranode_lane_row_insert_failures_total")
+
+			_, _, err := s.StoreBlock(ctx, fork, "", options.WithLaneMapRows(rows))
+			require.Error(t, err)
+
+			after, _ := laneGateInsert(t)
+			require.Equal(t, inserts, after)
+			require.Equal(t, failures, laneMetricValue(t, "teranode_lane_row_insert_failures_total"))
+		})
+	}
 }
 
 // DeleteBlock, which the rewind tool uses, removes the block and leaves its rows: rows are kept for
