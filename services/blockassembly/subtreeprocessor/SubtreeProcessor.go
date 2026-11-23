@@ -443,6 +443,15 @@ type SubtreeProcessor struct {
 	// MoveForwardBlock response fails; see TakeDrainResetRequested.
 	drainResetRequested atomic.Bool
 
+	// pendingReorgDrain is the queue drain a fork reorg that took the in-place fast path left for after
+	// its response (reorg_deferred_drain.go). reorgBlocks sets it when the reorg succeeded; the dispatcher
+	// runs and clears it. Only the processor goroutine touches it.
+	pendingReorgDrain *deferredBlockDrain
+
+	// reorgFilter is the union of the winning blocks of the last fast-path reorg while the queue may
+	// still hold a transaction they mined: every batch dequeued meanwhile is filtered against it.
+	reorgFilter atomic.Pointer[reorgFilterSet]
+
 	// mmapDir, when non-empty, enables mmap-backed subtree Nodes.
 	mmapDir string
 
@@ -1073,11 +1082,16 @@ func (stp *SubtreeProcessor) Start(ctx context.Context) {
 						if reorgErr == nil {
 							// run on the next loop iteration so the caller is not held up by a resize
 							stp.blockMaxSizeCheckPending.Store(true)
+
+							// set before the response goes out, as for a block's deferred drain
+							stp.announceDeferredReorgDrain()
 						}
 
 						logger.Infof("[SubtreeProcessor] reorgReq subtree processor DONE: %d, %d", len(reorgReq.moveBackBlocks), len(reorgReq.moveForwardBlocks))
 						return reorgErr
 					})
+
+					stp.runDeferredReorgDrain(processorCtx)
 
 					stp.setCurrentRunningState(StateRunning)
 
@@ -1210,6 +1224,8 @@ func (stp *SubtreeProcessor) Start(ctx context.Context) {
 
 					stp.setCurrentRunningState(StateDequeue)
 
+					stp.expireReorgFilter()
+
 					// the Load keeps the idle path to a read; Swap only runs when a check was requested
 					if stp.blockMaxSizeCheckPending.Load() && stp.blockMaxSizeCheckPending.Swap(false) {
 						stp.checkBlockMaxSize(processorCtx)
@@ -1292,6 +1308,9 @@ func (stp *SubtreeProcessor) Start(ctx context.Context) {
 					var zeroHash chainhash.Hash
 					var filterWg sync.WaitGroup
 
+					// a fast-path reorg's winners, while a transaction they mined may still be queued
+					reorgFilter := stp.reorgFilter.Load()
+
 					for _, batch := range dequeueBatches {
 						filterWg.Add(1)
 						go func(b *TxBatch) {
@@ -1306,6 +1325,11 @@ func (stp *SubtreeProcessor) Start(ctx context.Context) {
 								if mapLength > 0 && removeMap.Exists(hash) {
 									_ = removeMap.Delete(hash)
 									b.nodes[i].Hash = zeroHash // Mark as rejected
+									continue
+								}
+
+								if reorgFilter != nil && reorgFilter.exists(hash) {
+									b.nodes[i].Hash = zeroHash // Mined by a block of the last reorg
 									continue
 								}
 
@@ -2227,6 +2251,9 @@ func (stp *SubtreeProcessor) reset(blockHeader *model.BlockHeader, moveBackBlock
 	}
 
 	stp.phases.done("queue_discard")
+
+	// the queue the retained union of a fast-path reorg filtered is gone
+	stp.reorgFilter.Store(nil)
 
 	// Both reset branches complete the finished forward intents of every moveForward block. An
 	// earlier failed acknowledgement can leave one pending, even on the fast-forward branch.
@@ -5758,7 +5785,10 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveBackBlocks []*
 	// leaves everything as it found it and falls through to the loops below.
 	slowBackBlocks, slowForwardBlocks := moveBackBlocks, moveForwardBlocks
 
-	var fastMarkOnLongestChain []chainhash.Hash
+	var (
+		fastMarkOnLongestChain []chainhash.Hash
+		fastDrain              *deferredBlockDrain
+	)
 
 	if stp.settings.BlockAssembly.ReorgFastPath {
 		fast, fastErr := stp.reorgInPlace(ctx, moveBackBlocks, moveForwardBlocks, moveBackConflicting)
@@ -5770,6 +5800,7 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveBackBlocks []*
 			slowBackBlocks, slowForwardBlocks = nil, nil
 			movedBackBlockTxMap = fast.movedBack
 			fastMarkOnLongestChain = fast.markOnLongestChain
+			fastDrain = fast.drain
 		}
 	}
 
@@ -6210,6 +6241,9 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveBackBlocks []*
 	stp.drainAndLogDiskTxMapErr("reorgBlocks_commit")
 
 	stp.phases.done("finalize")
+
+	// Left for the dispatcher, which runs it after the response; only a reorg that succeeded leaves one.
+	stp.pendingReorgDrain = fastDrain
 
 	forkReorgSucceeded = true
 

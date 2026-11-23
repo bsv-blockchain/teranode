@@ -61,6 +61,8 @@ type reorgFastResult struct {
 	movedBack map[chainhash.Hash]bool
 	// markOnLongestChain is D2, the winners' transactions the lost block lacks.
 	markOnLongestChain []chainhash.Hash
+	// drain is the queue drain to run once the reorg has answered, against the union of the winners.
+	drain *deferredBlockDrain
 }
 
 // fastReorgPlan is everything list A decided, read-only until the plan is applied.
@@ -547,15 +549,6 @@ func (stp *SubtreeProcessor) applyFastReorg(ctx context.Context, plan *fastReorg
 
 	stp.phases.done("fast_apply_coinbase")
 
-	// One drain against both blocks. The slow path drains after each step against that step's block.
-	stp.phases.count("fast_drain_queue", int(stp.QueueLength()))
-
-	if err = stp.dequeueDuringBlockMovement(plan.winners, nil, nil, true); err != nil {
-		return nil, errors.NewProcessingError("[reorgInPlace][%s] error dequeueing transactions", lost.String(), err)
-	}
-
-	stp.phases.done("fast_drain")
-
 	stp.flushDiskTxMapWriters()
 	stp.drainAndLogDiskTxMapErr("reorgBlocks_inplace_commit")
 
@@ -573,7 +566,11 @@ func (stp *SubtreeProcessor) applyFastReorg(ctx context.Context, plan *fastReorg
 	stp.phases.count("remainder", plan.survivors)
 	prometheusSubtreeProcessorReorgFastPathApplied.Inc()
 
-	return &reorgFastResult{movedBack: movedBack, markOnLongestChain: plan.delta.D2}, nil
+	// One drain against both blocks, after the reorg has answered (reorg_deferred_drain.go). The slow path
+	// drains after each step against that step's block.
+	drain := &deferredBlockDrain{drainQueue: true, transactionMap: plan.winners}
+
+	return &reorgFastResult{movedBack: movedBack, markOnLongestChain: plan.delta.D2, drain: drain}, nil
 }
 
 // copySurvivors returns effective D1, then every node that stays, in pending order, in one slice sized

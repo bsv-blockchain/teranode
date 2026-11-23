@@ -1117,8 +1117,23 @@ func answerStored(req NewSubtreeRequest) {
 	}
 }
 
-// run moves B back and the winning blocks forward through reorgBlocks.
+// run moves B back and the winning blocks forward through reorgBlocks, then runs the queue drain the
+// fast path leaves for after the reorg's response, as the dispatcher does.
 func (sc *reorgScenario) run(t testing.TB) error {
+	t.Helper()
+
+	if err := sc.runWithoutDrain(t); err != nil {
+		return err
+	}
+
+	sc.stp.runDeferredReorgDrain(context.Background())
+
+	return nil
+}
+
+// runWithoutDrain is run up to the reorg's response: what block assembly sees when it publishes the
+// first template.
+func (sc *reorgScenario) runWithoutDrain(t testing.TB) error {
 	t.Helper()
 
 	return sc.stp.reorgBlocks(context.Background(), []*model.Block{sc.lost}, sc.forward)
