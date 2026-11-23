@@ -12,6 +12,7 @@ import (
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
+	"github.com/bsv-blockchain/teranode/services/validator"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/blob"
 	blobmemory "github.com/bsv-blockchain/teranode/stores/blob/memory"
@@ -193,6 +194,82 @@ func TestProcessTxMetaUsingStore_ReadsTheLanePositionAtShadow(t *testing.T) {
 			require.Equal(t, lane.Pack(4, 2), txMetaSlice[1].lanePosition)
 		})
 	}
+}
+
+// With subtreevalidation_batch_missing_transactions off, each transaction is read on its own. At
+// shadow that read asks for the batched read's fields, the lane position among them, because
+// GetMeta reads none; at off it is GetMeta as before.
+func TestProcessTxMetaUsingStore_ReadsTheLanePositionOneByOneAtShadow(t *testing.T) {
+	for _, mode := range []settings.LaneMigration{settings.LaneMigrationOff, settings.LaneMigrationShadow} {
+		t.Run(string(mode), func(t *testing.T) {
+			tSettings := test.CreateBaseTestSettings(t)
+			tSettings.UtxoStore.LaneMigration = mode
+
+			hashes := []chainhash.Hash{{0x01}, {0x02}}
+
+			var asked []fields.FieldName
+
+			store := &utxo.MockUtxostore{}
+			store.On("GetMeta", mock.Anything, mock.Anything, mock.Anything).Return(&meta.Data{Fee: 1, SizeInBytes: 1})
+
+			for i := range hashes {
+				store.On("Get", mock.Anything, &hashes[i], mock.Anything).Run(func(args mock.Arguments) {
+					asked = append(asked, args.Get(2).([]fields.FieldName)...)
+				}).Return(&meta.Data{Fee: 1, SizeInBytes: 1, LanePosition: lane.Pack(4, uint64(i)+1)}, nil) //nolint:gosec // a test index
+			}
+
+			server := &Server{logger: ulogger.TestLogger{}, settings: tSettings, utxoStore: store}
+
+			txMetaSlice := make([]metaSliceItem, len(hashes))
+			missed, err := server.processTxMetaUsingStore(context.Background(), hashes, txMetaSlice, nil, false, false, true)
+			require.NoError(t, err)
+			require.Zero(t, missed)
+			require.True(t, txMetaSlice[0].isSet)
+			require.True(t, txMetaSlice[1].isSet)
+
+			if mode == settings.LaneMigrationOff {
+				store.AssertNotCalled(t, "Get", mock.Anything, mock.Anything, mock.Anything)
+				require.Zero(t, txMetaSlice[0].lanePosition)
+
+				return
+			}
+
+			store.AssertNotCalled(t, "GetMeta", mock.Anything, mock.Anything, mock.Anything)
+			require.Contains(t, asked, fields.LanePosition)
+			require.Equal(t, lane.Pack(4, 1), txMetaSlice[0].lanePosition)
+			require.Equal(t, lane.Pack(4, 2), txMetaSlice[1].lanePosition)
+		})
+	}
+}
+
+// A transaction in neither the cache nor the store is validated here, and the position its create
+// returns goes into the subtree's metadata, so the subtree's lane bitmaps hold it.
+func TestBlessMissingTransactions_KeepsThePositionTheCreateReturns(t *testing.T) {
+	server, _, txs, _ := newUnlockFailureServer(t, true, 0)
+	server.validatorClient = &positionValidator{Interface: server.validatorClient, position: lane.Pack(8, 14)}
+
+	missing := []missingTx{{tx: txs[1], idx: 0}}
+	txMetaSlice := make([]metaSliceItem, len(missing))
+
+	require.NoError(t, server.blessMissingTransactions(context.Background(), chainhash.Hash{}, missing, "", "", txMetaSlice, 2, map[uint32]bool{}, true))
+	require.True(t, txMetaSlice[0].isSet)
+	require.Equal(t, lane.Pack(8, 14), txMetaSlice[0].lanePosition)
+}
+
+// positionValidator validates as its validator does and gives the created record position, as a
+// validator at shadow on utxoset or Aerospike does.
+type positionValidator struct {
+	validator.Interface
+	position uint64
+}
+
+func (p *positionValidator) ValidateWithOptions(ctx context.Context, tx *bt.Tx, height uint32, opts *validator.Options) (*meta.Data, error) {
+	md, err := p.Interface.ValidateWithOptions(ctx, tx, height, opts)
+	if md != nil {
+		md.LanePosition = p.position
+	}
+
+	return md, err
 }
 
 // At shadow nothing acts on lanes: a lane bitmaps file that cannot be written leaves the subtree

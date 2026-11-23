@@ -903,18 +903,33 @@ func TestServer_txmetaHandler_OwnPositionEntries(t *testing.T) {
 		t.Run("v2 at "+tc.name, func(t *testing.T) {
 			key := chainhash.Hash{7}
 
+			var cached []byte
+
 			mCache := &mockCache{}
-			mCache.On("SetCacheMultiSequentialWithHashes", [][]byte{key[:]}, [][]byte{tc.value}, []uint64{0xBEEF}).Return(nil)
+			mCache.On("SetCacheMultiSequentialWithHashes", [][]byte{key[:]}, [][]byte{tc.value}, []uint64{0xBEEF}).Run(func(args mock.Arguments) {
+				cached = args.Get(1).([][]byte)[0]
+			}).Return(nil)
 
-			server := &Server{logger: &mockLogger{}, utxoStore: mCache, settings: tc.settings}
+			mLogger := &mockLogger{}
+			mLogger.On("Debugf", mock.Anything, mock.Anything).Return()
 
-			own := laneTxMetaReceivedCount(t, "own")
+			server := &Server{logger: mLogger, utxoStore: mCache, settings: tc.settings}
 
-			msg := txmetaMessage(true, txmetaEntry{hash: key, entryHash: 0xBEEF, action: txmetacache.WireActionADDOwn, content: content})
+			own, lanes, plain := laneTxMetaReceivedCount(t, "own"), laneTxMetaReceivedCount(t, "lane"), laneTxMetaReceivedCount(t, "legacy")
+
+			// A malformed own entry follows, so the value has a neighbour it must not reach into.
+			msg := txmetaMessage(true,
+				txmetaEntry{hash: key, entryHash: 0xBEEF, action: txmetacache.WireActionADDOwn, content: content},
+				txmetaEntry{hash: chainhash.Hash{8}, entryHash: 1, action: txmetacache.WireActionADDOwn, content: legacy},
+			)
 			require.NoError(t, server.txmetaHandler(context.Background(), msg))
 			mCache.AssertExpectations(t)
 
-			require.InDelta(t, own+1, laneTxMetaReceivedCount(t, "own"), 0, "counted whatever the setting")
+			require.Equal(t, len(cached), cap(cached), "a value is capped at its entry, so an append cannot write into the next one")
+
+			require.InDelta(t, own+2, laneTxMetaReceivedCount(t, "own"), 0, "counted whatever the setting, the malformed one too")
+			require.InDelta(t, lanes, laneTxMetaReceivedCount(t, "lane"), 0, "and in no other format")
+			require.InDelta(t, plain, laneTxMetaReceivedCount(t, "legacy"), 0)
 		})
 	}
 
@@ -929,7 +944,7 @@ func TestServer_txmetaHandler_OwnPositionEntries(t *testing.T) {
 
 		server := &Server{logger: mLogger, utxoStore: mCache, settings: shadow}
 
-		errs := testutil.ToFloat64(prometheusSubtreeValidationSetTXMetaCacheKafkaErrors)
+		errs, own := testutil.ToFloat64(prometheusSubtreeValidationSetTXMetaCacheKafkaErrors), laneTxMetaReceivedCount(t, "own")
 
 		msg := txmetaMessage(false,
 			txmetaEntry{hash: bad, action: txmetacache.WireActionADDOwn, content: legacy},
@@ -939,5 +954,6 @@ func TestServer_txmetaHandler_OwnPositionEntries(t *testing.T) {
 		mCache.AssertExpectations(t)
 
 		require.InDelta(t, errs+1, testutil.ToFloat64(prometheusSubtreeValidationSetTXMetaCacheKafkaErrors), 0)
+		require.InDelta(t, own+1, laneTxMetaReceivedCount(t, "own"), 0, "the malformed own entry still counts as own")
 	})
 }

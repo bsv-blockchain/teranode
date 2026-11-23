@@ -3069,6 +3069,18 @@ func TestTxMetaPayloadCountsWhatItSends(t *testing.T) {
 		require.InDelta(t, misses+1, laneMissCount(t, txmetacache.LaneMissParent), 0)
 	})
 
+	t.Run("an own entry that cannot serialize", func(t *testing.T) {
+		// Two parents and a single vout word: the inpoints cannot serialize, so neither can the
+		// own entry, and the error goes back rather than an entry with no content.
+		broken := &meta.Data{TxInpoints: subtree.NewTxInpointsFromPacked([]chainhash.Hash{{1}, {2}}, []uint32{0}), LanePosition: lane.Pack(1, 1)}
+
+		_, wantErr := broken.MetaBytes()
+		require.Error(t, wantErr, "the fixture really fails to serialize")
+
+		_, _, err := shadow.txMetaPayload(broken, nil)
+		require.Error(t, err)
+	})
+
 	t.Run("no own position", func(t *testing.T) {
 		own, legacy, misses := laneSentCount(t, "own"), laneSentCount(t, "legacy"), laneMissCount(t, txmetacache.LaneMissOwn)
 

@@ -78,7 +78,7 @@ func initRowsMetrics() {
 			Namespace: "teranode",
 			Subsystem: "lane",
 			Name:      "row_count_mismatches_total",
-			Help:      "Blocks whose map rows hold fewer or more members than the block's transaction count less its coinbase; counted and logged, and the rows still go with the block",
+			Help:      "Blocks whose map rows hold fewer or more members than the block's transaction count less its coinbase; counted and logged, and whatever rows were built still go with the block. A block whose subtrees hold no position has no rows, and with transactions besides its coinbase it counts as fewer",
 		}, []string{"direction"})
 		prometheusLaneMissingBitmaps = promauto.NewCounterVec(prometheus.CounterOpts{
 			Namespace: "teranode",

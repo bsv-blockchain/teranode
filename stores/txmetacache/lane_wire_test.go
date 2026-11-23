@@ -107,6 +107,8 @@ func TestCountLaneTxMetaSent(t *testing.T) {
 
 	beforeLane, beforeOwn, beforeLegacy := testutil.ToFloat64(lanes), testutil.ToFloat64(own), testutil.ToFloat64(legacy)
 	beforeParent, beforeOwnMiss := testutil.ToFloat64(parentMissing), testutil.ToFloat64(ownMissing)
+	noReason := prometheusLaneTxMetaMisses.WithLabelValues("")
+	beforeNoReason := testutil.ToFloat64(noReason)
 
 	CountLaneTxMetaSent("", false)
 	CountLaneTxMetaSent(LaneMissParent, true)
@@ -117,6 +119,7 @@ func TestCountLaneTxMetaSent(t *testing.T) {
 	require.Equal(t, beforeLegacy+1, testutil.ToFloat64(legacy))
 	require.Equal(t, beforeParent+1, testutil.ToFloat64(parentMissing))
 	require.Equal(t, beforeOwnMiss+1, testutil.ToFloat64(ownMissing))
+	require.Equal(t, beforeNoReason, testutil.ToFloat64(noReason), "a full lane entry is no miss")
 }
 
 // A consumer counts each entry under its own name, by the format the entry came in.

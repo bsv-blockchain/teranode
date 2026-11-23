@@ -723,9 +723,16 @@ func TestProcessTXmetaBatchMessage_OwnPositionEntriesAreAnnounced(t *testing.T) 
 		{hash: *inBlock, action: txmetacache.WireActionADDOwn, meta: meta.Data{Fee: 500, SizeInBytes: 250, InBlock: true, LanePosition: lane.Pack(8, 15)}},
 	}
 
-	for name, build := range map[string]func(*testing.T, []txmetaTestEntry) []byte{
-		"v1": buildTXmetaBatchMessage,
-		"v2": buildTXmetaBatchMessageV2,
+	shadow := &settings.Settings{UtxoStore: settings.UtxoStoreSettings{LaneMigration: settings.LaneMigrationShadow}}
+
+	for name, tc := range map[string]struct {
+		build    func(*testing.T, []txmetaTestEntry) []byte
+		settings *settings.Settings
+	}{
+		"v1 at off":    {buildTXmetaBatchMessage, &settings.Settings{}},
+		"v2 at off":    {buildTXmetaBatchMessageV2, &settings.Settings{}},
+		"v1 at shadow": {buildTXmetaBatchMessage, shadow},
+		"v2 at shadow": {buildTXmetaBatchMessageV2, shadow},
 	} {
 		t.Run(name, func(t *testing.T) {
 			var mu sync.Mutex
@@ -733,7 +740,7 @@ func TestProcessTXmetaBatchMessage_OwnPositionEntriesAreAnnounced(t *testing.T) 
 
 			sm := &SyncManager{
 				logger:   ulogger.TestLogger{},
-				settings: &settings.Settings{},
+				settings: tc.settings,
 				txAnnounceBatcher: batcher.NewWithDeduplication[TxHashAndFee](100, 50*time.Millisecond, func(batch []*TxHashAndFee) {
 					mu.Lock()
 					announced = append(announced, batch...)
@@ -741,9 +748,9 @@ func TestProcessTXmetaBatchMessage_OwnPositionEntriesAreAnnounced(t *testing.T) 
 				}, false),
 			}
 
-			own := relayLaneCount(t, "own")
+			own, lanes, legacy := relayLaneCount(t, "own"), relayLaneCount(t, "lane"), relayLaneCount(t, "legacy")
 
-			require.NoError(t, sm.processTXmetaBatchMessage(build(t, entries)))
+			require.NoError(t, sm.processTXmetaBatchMessage(tc.build(t, entries)))
 
 			require.Eventually(t, func() bool {
 				mu.Lock()
@@ -762,7 +769,9 @@ func TestProcessTXmetaBatchMessage_OwnPositionEntriesAreAnnounced(t *testing.T) 
 			require.Equal(t, uint64(423), announced[0].Fee)
 			require.Equal(t, uint64(250), announced[0].Size)
 
-			require.InDelta(t, own+3, relayLaneCount(t, "own"), 0, "every own entry counts, the malformed one too, with relay's setting off")
+			require.InDelta(t, own+3, relayLaneCount(t, "own"), 0, "every own entry counts, the malformed one too, whatever relay's setting")
+			require.InDelta(t, lanes, relayLaneCount(t, "lane"), 0, "and in no other format")
+			require.InDelta(t, legacy, relayLaneCount(t, "legacy"), 0)
 		})
 	}
 }

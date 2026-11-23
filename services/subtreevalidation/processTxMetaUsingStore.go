@@ -253,7 +253,8 @@ func (u *Server) processTxMetaUsingStoreAllowing(ctx context.Context, txHashes [
 
 	// At shadow the same read gives each transaction's own lane position, for the subtree's lane
 	// bitmaps. A fresh slice: the field sets are shared.
-	if u.laneShadow() {
+	laneShadow := u.laneShadow()
+	if laneShadow {
 		decorateFields = append(append(make([]fields.FieldName, 0, len(decorateFields)+1), decorateFields...), fields.LanePosition)
 	}
 
@@ -404,7 +405,18 @@ func (u *Server) processTxMetaUsingStoreAllowing(ctx context.Context, txHashes [
 							// the whole block. This branch is reachable whenever
 							// subtreevalidation_batch_missing_transactions is off.
 							if err := u.withStoreRetry(gCtx, "get tx meta", func() error {
-								return store.GetMeta(gCtx, &txHash, txMeta)
+								if !laneShadow {
+									return store.GetMeta(gCtx, &txHash, txMeta)
+								}
+
+								// GetMeta reads no lane position, so at shadow this read asks
+								// for the batched branch's fields, the position among them.
+								got, err := store.Get(gCtx, &txHash, decorateFields...)
+								if err == nil {
+									*txMeta = *got
+								}
+
+								return err
 							}); err != nil {
 								if gCtx.Err() != nil {
 									return errors.NewContextCanceledError(errProcessTxMetaContextDone, gCtx.Err())
@@ -416,16 +428,15 @@ func (u *Server) processTxMetaUsingStoreAllowing(ctx context.Context, txHashes [
 							// Auto-recovery: only use txMeta if it's not in the "creating" state
 							// If Creating is true, treat as missing to trigger re-processing
 							if !txMeta.Creating {
-								// GetMeta reads no lane position, so this path leaves
-								// the transaction out of the subtree's lane bitmaps.
 								txMetaSlice[i+j] = metaSliceItem{
-									fee:         txMeta.Fee,
-									sizeInBytes: txMeta.SizeInBytes,
-									coinbase:    txMeta.IsCoinbase,
-									conflicting: txMeta.Conflicting,
-									creating:    txMeta.Creating,
-									isSet:       true,
-									txInpoints:  txMeta.TxInpoints,
+									fee:          txMeta.Fee,
+									sizeInBytes:  txMeta.SizeInBytes,
+									coinbase:     txMeta.IsCoinbase,
+									conflicting:  txMeta.Conflicting,
+									creating:     txMeta.Creating,
+									isSet:        true,
+									txInpoints:   txMeta.TxInpoints,
+									lanePosition: txMeta.LanePosition,
 								}
 
 								// The batched branch above collects these too; without it here,
