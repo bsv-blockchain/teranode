@@ -1005,6 +1005,78 @@ func TestResetFeeFilterToDefault_AdvertisesSatoshisPerKB(t *testing.T) {
 		"internal marker must record the same satoshis/kB value the peers were sent")
 }
 
+// TestResetFeeFilterToDefault_SendsOncePerChange verifies that a reset whose
+// marker already holds the policy value sends nothing. resetFeeFilterToDefault
+// is called repeatedly: from blockHandler on every message while the cached FSM
+// state still reads CATCHINGBLOCKS and the node is current, and from startSync
+// each time it elects a peer at our height. Without this guard every peer would
+// be re-sent the same feefilter on each of those calls. A sentinel feefilter
+// queued after the second reset proves no message was queued by it: the peer's
+// send queue is FIFO, so anything the reset queued would arrive before the
+// sentinel.
+func TestResetFeeFilterToDefault_SendsOncePerChange(t *testing.T) {
+	chainParams := &chaincfg.MainNetParams
+
+	sm := &SyncManager{
+		ctx:         context.Background(),
+		settings:    test.CreateBaseTestSettings(t),
+		logger:      ulogger.TestLogger{},
+		chainParams: chainParams,
+		peerStates:  txmap.NewSyncedMap[*peer.Peer, *peerSyncState](),
+	}
+	sm.settings.Policy.MinMiningTxFee = 0.000005 // 500 sat/kB
+
+	var (
+		received atomic.Int64
+		lastFee  atomic.Int64
+	)
+
+	lastFee.Store(-1)
+
+	remoteCfg := peer.Config{
+		Listeners: peer.MessageListeners{
+			OnFeeFilter: func(_ *peer.Peer, msg *wire.MsgFeeFilter) {
+				received.Add(1)
+				lastFee.Store(msg.MinFee)
+			},
+		},
+		UserAgentName:    "btcdtest",
+		UserAgentVersion: "1.0",
+		ChainParams:      chainParams,
+	}
+	localCfg := peer.Config{
+		Listeners:        peer.MessageListeners{},
+		UserAgentName:    "btcdtest",
+		UserAgentVersion: "1.0",
+		ChainParams:      chainParams,
+	}
+
+	remote, smPeer, err := MakeConnectedPeers(t, remoteCfg, localCfg, 107)
+	require.NoError(t, err)
+	require.True(t, remote.Connected())
+
+	sm.peerStates.Set(smPeer, &peerSyncState{})
+	sm.currentFeeFilter.Store(uint64(bsvutil.SatoshiPerBitcoin))
+
+	sm.resetFeeFilterToDefault()
+
+	require.True(t, WaitUntil(func() bool { return lastFee.Load() == 500 }, 2*time.Second),
+		"the first reset must lower the peer to the policy filter")
+
+	// The marker now holds 500, so this reset must not queue anything.
+	sm.resetFeeFilterToDefault()
+
+	const sentinel = 7
+
+	smPeer.QueueMessage(wire.NewMsgFeeFilter(sentinel), nil)
+
+	require.True(t, WaitUntil(func() bool { return lastFee.Load() == sentinel }, 2*time.Second),
+		"the sentinel feefilter must arrive")
+	require.Equal(t, int64(2), received.Load(),
+		"a reset with the marker already at the policy value must not re-send the feefilter")
+	require.Equal(t, uint64(500), sm.currentFeeFilter.Load())
+}
+
 // TestPolicyFeeFilterSatoshisPerKB pins the conversion and its guards: rounding
 // where truncation loses a satoshi, 0 for a negative or non-finite rate (a NaN
 // or Inf in settings.conf parses without error, and casting it is
