@@ -24,7 +24,7 @@ import (
 // distinct error rather than being hidden by a later generic invalid-block error.
 type checkpointSubtreeBoundary struct{ subtreevalidation.Interface }
 
-func (*checkpointSubtreeBoundary) CheckBlockSubtrees(context.Context, *model.Block, string, string) error {
+func (*checkpointSubtreeBoundary) CheckBlockSubtrees(context.Context, *model.Block, string, string, bool) error {
 	return errors.NewProcessingError("checkpoint subtree boundary reached")
 }
 
@@ -99,7 +99,7 @@ func TestCheckpointValidationCallSites(t *testing.T) {
 					u := NewBlockValidation(ctx, ulogger.TestLogger{}, settings, client, memory.New(), memory.New(), nil, nil, &checkpointSubtreeBoundary{})
 					t.Cleanup(func() { cancel(); u.StopCaches(); require.NoError(t, u.Close()) })
 					if worker {
-						err = u.reValidateBlock(revalidateBlockData{block: candidate})
+						err = u.reValidateBlock(context.Background(), revalidateBlockData{block: candidate})
 					} else {
 						err = u.ValidateBlockWithOptions(ctx, candidate, "", &ValidateBlockOptions{DisableOptimisticMining: true})
 					}

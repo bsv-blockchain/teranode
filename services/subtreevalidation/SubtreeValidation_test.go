@@ -32,6 +32,7 @@ import (
 	"github.com/bsv-blockchain/teranode/services/validator"
 	"github.com/bsv-blockchain/teranode/stores/blob"
 	blobmemory "github.com/bsv-blockchain/teranode/stores/blob/memory"
+	bloboptions "github.com/bsv-blockchain/teranode/stores/blob/options"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/stores/utxo/sql"
@@ -41,6 +42,7 @@ import (
 	"github.com/bsv-blockchain/teranode/util/test"
 	teranodetestutil "github.com/bsv-blockchain/teranode/util/testutil"
 	"github.com/jarcoal/httpmock"
+	"github.com/ordishs/gocore"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -1075,8 +1077,8 @@ func Test_checkCounterConflictingOnCurrentChain(t *testing.T) {
 		_, _, err = s.utxoStore.SpendAndCreate(ctx, tx1, 123, utxo.WithCreateOnly())
 		require.NoError(t, err)
 
-		// Call the checkCounterConflictingOnCurrentChain method
-		err = s.checkCounterConflictingOnCurrentChain(ctx, *tx1.TxIDChainHash(), map[uint32]bool{})
+		// Run the check blessMissingTransaction runs
+		err = s.blessConflictCheck(ctx, *tx1.TxIDChainHash(), map[uint32]bool{})
 		require.NoError(t, err)
 	})
 
@@ -1115,8 +1117,8 @@ func Test_checkCounterConflictingOnCurrentChain(t *testing.T) {
 		_, _, err = s.utxoStore.SpendAndCreate(ctx, tx1, 123, utxo.WithConflicting(true), utxo.WithCreateOnly())
 		require.NoError(t, err)
 
-		// Call the checkCounterConflictingOnCurrentChain method, should be OK since tx1DoubleSpend has not been mined
-		err = s.checkCounterConflictingOnCurrentChain(ctx, *tx1.TxIDChainHash(), map[uint32]bool{})
+		// Run the check blessMissingTransaction runs, should be OK since tx1DoubleSpend has not been mined
+		err = s.blessConflictCheck(ctx, *tx1.TxIDChainHash(), map[uint32]bool{})
 		require.NoError(t, err)
 
 		// set the tx1DoubleSpend to mined
@@ -1129,8 +1131,8 @@ func Test_checkCounterConflictingOnCurrentChain(t *testing.T) {
 		require.Len(t, blockIDsMap, 1)
 		require.Equal(t, []uint32{122}, blockIDsMap[*tx1DoubleSpend.TxIDChainHash()])
 
-		// Call the checkCounterConflictingOnCurrentChain method, should be OK since tx1DoubleSpend has not been mined
-		err = s.checkCounterConflictingOnCurrentChain(ctx, *tx1.TxIDChainHash(), map[uint32]bool{
+		// Run the check blessMissingTransaction runs, should fail now that tx1DoubleSpend is mined
+		err = s.blessConflictCheck(ctx, *tx1.TxIDChainHash(), map[uint32]bool{
 			122: true,
 		})
 		require.Error(t, err, "should be an error since tx1DoubleSpend has been mined")
@@ -1161,7 +1163,7 @@ func Test_getSubtreeMissingTxs(t *testing.T) {
 			blockchainClient: blockchainClient,
 		}
 
-		missingTxs, err := s.getSubtreeMissingTxs(t.Context(), *subtree.RootHash(), subtree, []utxo.UnresolvedMetaData{}, []chainhash.Hash{}, "test", "")
+		missingTxs, err := s.getSubtreeMissingTxs(t.Context(), *subtree.RootHash(), subtree, []utxo.UnresolvedMetaData{}, []chainhash.Hash{}, "test", "", true)
 		require.NoError(t, err, "should be no error since all txs are in the subtree")
 
 		require.Len(t, missingTxs, 0, "should be no missing txs since all txs are in the subtree")
@@ -1194,7 +1196,7 @@ func Test_getSubtreeMissingTxs(t *testing.T) {
 			httpmock.NewBytesResponder(200, append(tx1.ExtendedBytes(), tx2.ExtendedBytes()...)),
 		)
 
-		missingTxs, err := s.getSubtreeMissingTxs(t.Context(), *subtree.RootHash(), subtree, unresolved, []chainhash.Hash{}, "http://localhost:8000", "")
+		missingTxs, err := s.getSubtreeMissingTxs(t.Context(), *subtree.RootHash(), subtree, unresolved, []chainhash.Hash{}, "http://localhost:8000", "", true)
 		require.NoError(t, err, "should be no error since all txs are in the subtree")
 
 		require.Len(t, missingTxs, 2, "should be 2 missing txs since all txs are in the subtree")
@@ -1244,7 +1246,7 @@ func Test_getSubtreeMissingTxs(t *testing.T) {
 			*hash4,
 		}
 
-		missingTxs, err := s.getSubtreeMissingTxs(t.Context(), *subtree.RootHash(), subtree, unresolved, allTxs, "test", "")
+		missingTxs, err := s.getSubtreeMissingTxs(t.Context(), *subtree.RootHash(), subtree, unresolved, allTxs, "test", "", true)
 		require.NoError(t, err, "should be no error since all txs are in the subtree")
 
 		require.Len(t, missingTxs, 2, "should be 2 missing txs since all txs are in the subtree")
@@ -1295,7 +1297,7 @@ func Test_getSubtreeMissingTxs(t *testing.T) {
 			*hash3,
 		}
 
-		missingTxs, err := s.getSubtreeMissingTxs(t.Context(), *coinbaseSubtree.RootHash(), coinbaseSubtree, unresolved, allTxs, "test", "")
+		missingTxs, err := s.getSubtreeMissingTxs(t.Context(), *coinbaseSubtree.RootHash(), coinbaseSubtree, unresolved, allTxs, "test", "", true)
 		require.NoError(t, err, "should be no error since all txs are in the subtree")
 
 		require.Len(t, missingTxs, 1, "should be 1 missing txs since all txs are in the subtree")
@@ -1345,7 +1347,7 @@ func Test_getSubtreeMissingTxs(t *testing.T) {
 			*hash3,
 		}
 
-		_, err = s.getSubtreeMissingTxs(t.Context(), *coinbaseSubtree.RootHash(), coinbaseSubtree, unresolved, allTxs, "test", "")
+		_, err = s.getSubtreeMissingTxs(t.Context(), *coinbaseSubtree.RootHash(), coinbaseSubtree, unresolved, allTxs, "test", "", true)
 		require.Error(t, err, "should be an error since txs are in the wrong order")
 	})
 
@@ -1391,7 +1393,7 @@ func Test_getSubtreeMissingTxs(t *testing.T) {
 			*hash3,
 		}
 
-		_, err = s.getSubtreeMissingTxs(t.Context(), *coinbaseSubtree.RootHash(), coinbaseSubtree, unresolved, allTxs, "test", "")
+		_, err = s.getSubtreeMissingTxs(t.Context(), *coinbaseSubtree.RootHash(), coinbaseSubtree, unresolved, allTxs, "test", "", true)
 		require.Error(t, err, "should be an error since we are missing a tx")
 	})
 }
@@ -1461,7 +1463,7 @@ func Test_getSubtreeMissingTxs_testnet(t *testing.T) {
 			})
 		}
 
-		missingTxs, err := s.getSubtreeMissingTxs(t.Context(), subtreeHash, nil, unresolved, allTxs, "test", "")
+		missingTxs, err := s.getSubtreeMissingTxs(t.Context(), subtreeHash, nil, unresolved, allTxs, "test", "", true)
 		require.NoError(t, err, "should be no error since all txs are in the subtree")
 
 		require.Len(t, missingTxs, 3, "should be 3 missing txs since all txs are in the subtree")
@@ -1532,7 +1534,7 @@ func Test_getSubtreeMissingTxs_testnet(t *testing.T) {
 			})
 		}
 
-		missingTxs, err := s.getSubtreeMissingTxs(t.Context(), subtreeHash, nil, unresolved, allTxs, "test", "")
+		missingTxs, err := s.getSubtreeMissingTxs(t.Context(), subtreeHash, nil, unresolved, allTxs, "test", "", true)
 		require.NoError(t, err, "should be no error since all txs are in the subtree")
 
 		require.Len(t, missingTxs, 1024, "should be 1024 missing txs since all txs are in the subtree")
@@ -1615,7 +1617,7 @@ func Test_getSubtreeMissingTxs_InvalidSubtreeData(t *testing.T) {
 
 		// The function should not panic even when NewSubtreeDataFromReader fails for the first URL
 		// It should continue to the next URL
-		_, err = s.getSubtreeMissingTxs(context.Background(), *subtreeHash, subtree, unresolved, allTxs, "test", "")
+		_, err = s.getSubtreeMissingTxs(context.Background(), *subtreeHash, subtree, unresolved, allTxs, "test", "", true)
 
 		// The test passes if there's no panic
 		// Since we're testing error handling, we expect either success (if second URL works)
@@ -1669,7 +1671,7 @@ func Test_getSubtreeMissingTxs_InvalidSubtreeData(t *testing.T) {
 		}
 
 		// This should not panic, even though all URLs return invalid data
-		_, err = s.getSubtreeMissingTxs(context.Background(), *subtreeHash, subtree, unresolved, allTxs, "test", "")
+		_, err = s.getSubtreeMissingTxs(context.Background(), *subtreeHash, subtree, unresolved, allTxs, "test", "", true)
 
 		// We expect an error since no valid data could be retrieved
 		// The important thing is that it doesn't panic
@@ -1882,4 +1884,58 @@ func TestBlessMissing_AlreadyMinedNamesNoStoreID(t *testing.T) {
 	require.NotContains(t, err.Error(), "77123")
 
 	require.Contains(t, fmt.Sprint(logger.warned()), "77123", "the id is still recorded")
+}
+
+// metaRefusingStore fails every .subtreeMeta write and passes everything else through.
+type metaRefusingStore struct {
+	blob.Store
+}
+
+func (s *metaRefusingStore) Set(ctx context.Context, key []byte, fileType fileformat.FileType, value []byte, opts ...bloboptions.FileOption) error {
+	if fileType == fileformat.FileTypeSubtreeMeta {
+		return errors.NewStorageError("meta write refused for the test")
+	}
+
+	return s.Store.Set(ctx, key, fileType, value, opts...)
+}
+
+// TestStoreSubtreeFiles_FailedMetaWriteStoresNoSubtree pins the write order in
+// storeSubtreeFiles. The .subtree file is what every later check reads as "this subtree
+// is done", so a failed meta write must not leave one behind: written in parallel, it
+// did, and the subtree stayed without a meta for good.
+func TestStoreSubtreeFiles_FailedMetaWriteStoresNoSubtree(t *testing.T) {
+	ctx := context.Background()
+
+	subtree, err := subtreepkg.NewTreeByLeafCount(2)
+	require.NoError(t, err)
+	require.NoError(t, subtree.AddNode(chainhash.HashH([]byte{0x01}), 1, 100))
+	require.NoError(t, subtree.AddNode(chainhash.HashH([]byte{0x02}), 1, 100))
+
+	subtreeHash := subtree.RootHash()
+
+	memStore := blobmemory.New()
+
+	utxoStore := &utxo.MockUtxostore{}
+	utxoStore.On("GetBlockHeight").Return(uint32(100)).Maybe()
+
+	server := &Server{
+		logger:       ulogger.TestLogger{},
+		settings:     test.CreateBaseTestSettings(t),
+		subtreeStore: &metaRefusingStore{Store: memStore},
+		utxoStore:    utxoStore,
+	}
+
+	meta := subtreepkg.NewSubtreeMeta(subtree)
+	for i := range subtree.Nodes {
+		parent := chainhash.HashH([]byte{byte(i), 0xbb})
+		require.NoError(t, meta.SetTxInpoints(i, subtreepkg.NewTxInpointsFromPacked([]chainhash.Hash{parent}, []uint32{1, 0})))
+	}
+
+	err = server.storeSubtreeFiles(ctx, gocore.NewStat("test"), subtreeHash, subtree, meta)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "failed to store subtree meta")
+
+	exists, err := memStore.Exists(ctx, subtreeHash[:], fileformat.FileTypeSubtree)
+	require.NoError(t, err)
+	require.False(t, exists, "a subtree whose meta write failed must not be stored, or nothing writes the meta again")
 }

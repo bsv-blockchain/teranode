@@ -33,18 +33,18 @@ func mkInpoints(n int) []*subtree.TxInpoints {
 	return ips
 }
 
-// Test 1 — enqueueBatchIfRoom refuses a batch that would cross maxItems without
+// Test 1 — enqueueBatchBounded refuses a batch that would cross maxItems without
 // publishing or changing length, and admits a batch that lands exactly on the
 // limit.
-func Test_enqueueBatchIfRoom_refusesPastLimit(t *testing.T) {
+func Test_enqueueBatchBounded_refusesPastLimit(t *testing.T) {
 	q := NewLockFreeQueueWithLimit(100)
 
 	// A batch that lands exactly on the limit is admitted (100 is not > 100).
-	require.True(t, q.enqueueBatchIfRoom(mkNodes(100), mkInpoints(100)))
+	require.True(t, q.enqueueBatchBounded(mkNodes(100), mkInpoints(100), false) == Admitted)
 	require.Equal(t, int64(100), q.length())
 
 	// A further batch would cross the limit: refused, no accounting change.
-	require.False(t, q.enqueueBatchIfRoom(mkNodes(1), mkInpoints(1)))
+	require.False(t, q.enqueueBatchBounded(mkNodes(1), mkInpoints(1), false) == Admitted)
 	require.Equal(t, int64(100), q.length(), "refused batch must not change length")
 
 	// Only the first batch was ever published: draining yields exactly one.
@@ -56,23 +56,23 @@ func Test_enqueueBatchIfRoom_refusesPastLimit(t *testing.T) {
 	require.False(t, found, "the refused batch was never published")
 }
 
-// Test 2 — maxItems = 0 disables the bound entirely; enqueueBatchIfRoom never
+// Test 2 — maxItems = 0 disables the bound entirely; enqueueBatchBounded never
 // refuses. Regression guard for the opt-out path and the rollback plan.
-func Test_enqueueBatchIfRoom_unboundedNeverRefuses(t *testing.T) {
+func Test_enqueueBatchBounded_unboundedNeverRefuses(t *testing.T) {
 	q := NewLockFreeQueueWithLimit(0)
 
 	for i := 0; i < 1000; i++ {
-		require.True(t, q.enqueueBatchIfRoom(mkNodes(100), mkInpoints(100)))
+		require.True(t, q.enqueueBatchBounded(mkNodes(100), mkInpoints(100), false) == Admitted)
 	}
 
 	require.Equal(t, int64(100_000), q.length(), "unbounded queue accounts every item")
 }
 
 // Test 3 — accounting is in items, not batches: one 100-node batch is length 100.
-func Test_enqueueBatchIfRoom_accountsInItems(t *testing.T) {
+func Test_enqueueBatchBounded_accountsInItems(t *testing.T) {
 	q := NewLockFreeQueueWithLimit(1000)
 
-	require.True(t, q.enqueueBatchIfRoom(mkNodes(100), mkInpoints(100)))
+	require.True(t, q.enqueueBatchBounded(mkNodes(100), mkInpoints(100), false) == Admitted)
 	require.Equal(t, int64(100), q.length(), "length counts items, not batches")
 }
 
@@ -111,7 +111,7 @@ func Test_headAgeMillis_tracksOldestPending(t *testing.T) {
 // bound set. The number of published items never exceeds the cap, length()
 // plateaus rather than tracking offered load, and offered == accepted +
 // rejected. Proves the reservation is a hard bound. Run under -race.
-func Test_enqueueBatchIfRoom_plateauUnderContention(t *testing.T) {
+func Test_enqueueBatchBounded_plateauUnderContention(t *testing.T) {
 	t.Parallel()
 
 	const (
@@ -134,7 +134,7 @@ func Test_enqueueBatchIfRoom_plateauUnderContention(t *testing.T) {
 			defer wg.Done()
 
 			for i := 0; i < perProducer; i++ {
-				if q.enqueueBatchIfRoom(mkNodes(batchItems), mkInpoints(batchItems)) {
+				if q.enqueueBatchBounded(mkNodes(batchItems), mkInpoints(batchItems), false) == Admitted {
 					accepted.Add(1)
 				} else {
 					rejected.Add(1)
@@ -170,7 +170,7 @@ func Test_enqueueBatchIfRoom_plateauUnderContention(t *testing.T) {
 // Test 6 — interleaved reservation and rollback under contention does not
 // corrupt the counter: with a concurrent consumer, the queue drains to exactly
 // zero and every accepted item is dequeued exactly once. Run under -race.
-func Test_enqueueBatchIfRoom_rollbackDrainsToZero(t *testing.T) {
+func Test_enqueueBatchBounded_rollbackDrainsToZero(t *testing.T) {
 	t.Parallel()
 
 	const (
@@ -216,7 +216,7 @@ func Test_enqueueBatchIfRoom_rollbackDrainsToZero(t *testing.T) {
 			defer wg.Done()
 
 			for i := 0; i < perProducer; i++ {
-				if q.enqueueBatchIfRoom(mkNodes(batchItems), mkInpoints(batchItems)) {
+				if q.enqueueBatchBounded(mkNodes(batchItems), mkInpoints(batchItems), false) == Admitted {
 					accepted.Add(1)
 				}
 			}
@@ -242,7 +242,7 @@ func Test_enqueueBatchIfRoom_rollbackDrainsToZero(t *testing.T) {
 }
 
 // Test 7 — reserved-vs-published invariant (on the bounded reservation path) and
-// the drain-snapshot race. Every publish here goes through enqueueBatchIfRoom,
+// the drain-snapshot race. Every publish here goes through enqueueBatchBounded,
 // which reserves before publishing; the invariant it asserts is scoped to that
 // path (the unbounded enqueueBatch is documented not to uphold it). A loop of
 // always-failing over-cap reservations (add-then-rollback, never publish) races
@@ -253,7 +253,7 @@ func Test_enqueueBatchIfRoom_rollbackDrainsToZero(t *testing.T) {
 // published-outstanding count at any sample; (b) the drain removes exactly the
 // pre-snapshot batches; (c) the drain never dequeues the post-entry batch, which
 // remains queued. Driven through the clock seam; run under -race.
-func Test_enqueueBatchIfRoom_reservedVsPublishedInvariant(t *testing.T) {
+func Test_enqueueBatchBounded_reservedVsPublishedInvariant(t *testing.T) {
 	t.Parallel()
 
 	const (
@@ -270,7 +270,7 @@ func Test_enqueueBatchIfRoom_reservedVsPublishedInvariant(t *testing.T) {
 	q.clock = fixedClock{t: tPre}
 
 	for i := 0; i < preBatches; i++ {
-		require.True(t, q.enqueueBatchIfRoom(mkNodes(batchItems), mkInpoints(batchItems)))
+		require.True(t, q.enqueueBatchBounded(mkNodes(batchItems), mkInpoints(batchItems), false) == Admitted)
 	}
 
 	const preItems = int64(preBatches * batchItems)
@@ -287,7 +287,7 @@ func Test_enqueueBatchIfRoom_reservedVsPublishedInvariant(t *testing.T) {
 	// than chase it. This is the concrete "no chasing ingest" case.
 	tPost := time.UnixMilli(tEntry).UTC()
 	q.clock = fixedClock{t: tPost}
-	require.True(t, q.enqueueBatchIfRoom(mkNodes(batchItems), mkInpoints(batchItems)),
+	require.True(t, q.enqueueBatchBounded(mkNodes(batchItems), mkInpoints(batchItems), false) == Admitted,
 		"post-entry publish must have room")
 
 	// Churn: always-failing reservations (n > maxItems can never fit, even from
@@ -310,7 +310,7 @@ func Test_enqueueBatchIfRoom_reservedVsPublishedInvariant(t *testing.T) {
 			case <-stop:
 				return
 			default:
-				if q.enqueueBatchIfRoom(mkNodes(maxItems+1), mkInpoints(maxItems+1)) {
+				if q.enqueueBatchBounded(mkNodes(maxItems+1), mkInpoints(maxItems+1), false) == Admitted {
 					churnPublished.Store(true)
 				}
 			}
@@ -455,15 +455,15 @@ func Test_normalizeMaxQueueItems_logsEnforcedBound(t *testing.T) {
 // made progress. It is reachable by cross-process skew, because the batch size is
 // chosen by the client from its own settings context while the cap's clamp floor
 // is derived from this pod's.
-func Test_enqueueBatchIfRoom_oversizeBatchAdmittedOnEmptyQueue(t *testing.T) {
+func Test_enqueueBatchBounded_oversizeBatchAdmittedOnEmptyQueue(t *testing.T) {
 	q := NewLockFreeQueueWithLimit(10)
 
-	require.True(t, q.enqueueBatchIfRoom(mkNodes(25), mkInpoints(25)),
+	require.True(t, q.enqueueBatchBounded(mkNodes(25), mkInpoints(25), false) == Admitted,
 		"a batch bigger than the whole cap must be admitted alone rather than wedge forever")
 	require.Equal(t, int64(25), q.length(), "the ceiling is transiently exceeded by exactly this batch")
 
 	// The overshoot is bounded to one batch: the queue is no longer empty.
-	require.False(t, q.enqueueBatchIfRoom(mkNodes(25), mkInpoints(25)))
+	require.False(t, q.enqueueBatchBounded(mkNodes(25), mkInpoints(25), false) == Admitted)
 	require.Equal(t, int64(25), q.length(), "the refused batch's reservation was rolled back")
 
 	// Once drained, the next over-size batch is admitted again.
@@ -472,19 +472,19 @@ func Test_enqueueBatchIfRoom_oversizeBatchAdmittedOnEmptyQueue(t *testing.T) {
 	require.Equal(t, 25, len(batch.nodes))
 	require.Equal(t, int64(0), q.length())
 
-	require.True(t, q.enqueueBatchIfRoom(mkNodes(25), mkInpoints(25)),
+	require.True(t, q.enqueueBatchBounded(mkNodes(25), mkInpoints(25), false) == Admitted,
 		"an empty queue admits the next over-size batch, so the producer keeps making progress")
 }
 
 // The carve-out is conditioned on the queue being empty: it buys liveness for a
 // producer that could never make progress, not a licence to pile over-size
 // batches on top of a queue that is already over its ceiling.
-func Test_enqueueBatchIfRoom_oversizeBatchRefusedWhenQueueNotEmpty(t *testing.T) {
+func Test_enqueueBatchBounded_oversizeBatchRefusedWhenQueueNotEmpty(t *testing.T) {
 	q := NewLockFreeQueueWithLimit(10)
 
-	require.True(t, q.enqueueBatchIfRoom(mkNodes(5), mkInpoints(5)))
+	require.True(t, q.enqueueBatchBounded(mkNodes(5), mkInpoints(5), false) == Admitted)
 
-	require.False(t, q.enqueueBatchIfRoom(mkNodes(25), mkInpoints(25)))
+	require.False(t, q.enqueueBatchBounded(mkNodes(25), mkInpoints(25), false) == Admitted)
 	require.Equal(t, int64(5), q.length(), "the rollback is complete: only the fitting batch is accounted")
 
 	// And nothing beyond the fitting batch was published.
@@ -499,11 +499,11 @@ func Test_enqueueBatchIfRoom_oversizeBatchRefusedWhenQueueNotEmpty(t *testing.T)
 // The n > maxItems guard is what keeps the carve-out from becoming a general
 // "an empty queue admits anything" rule: an ordinary over-cap batch is still
 // refused and still relies on the bounded wait and the shed.
-func Test_enqueueBatchIfRoom_normalOverflowStillRefused(t *testing.T) {
+func Test_enqueueBatchBounded_normalOverflowStillRefused(t *testing.T) {
 	q := NewLockFreeQueueWithLimit(10)
 
-	require.True(t, q.enqueueBatchIfRoom(mkNodes(6), mkInpoints(6)))
-	require.False(t, q.enqueueBatchIfRoom(mkNodes(6), mkInpoints(6)),
+	require.True(t, q.enqueueBatchBounded(mkNodes(6), mkInpoints(6), false) == Admitted)
+	require.False(t, q.enqueueBatchBounded(mkNodes(6), mkInpoints(6), false) == Admitted,
 		"a batch that fits the cap but not the remaining room is still refused")
 	require.Equal(t, int64(6), q.length())
 }

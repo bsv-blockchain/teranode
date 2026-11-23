@@ -143,7 +143,7 @@ func TestSetTxMinedStatus_RevertFailureLeavesMinedSetFalse(t *testing.T) {
 	// A bare BlockValidation (no background setMined worker or subscription) keeps the run
 	// deterministic: the only setTxMinedStatus calls are the ones this test makes. The store writes
 	// genesis unmined, and ValidateBlock waits for the parent to be mined.
-	require.NoError(t, blockchainClient.SetBlockMinedSet(ctx, tSettings.ChainCfgParams.GenesisHash))
+	require.NoError(t, blockchainClient.SetBlockMinedSet(ctx, tSettings.ChainCfgParams.GenesisHash, 0))
 
 	bv := &BlockValidation{
 		logger:                        logger,
@@ -348,7 +348,7 @@ func TestSetTxMinedStatus_ValidPathReleasesMmapSubtreesOnMinedUpdateError(t *tes
 		uint64(subtree.Length()), uint64(coinbaseTx.Size()+txT.Size()), blockHeight, 0) //nolint:gosec
 	require.NoError(t, err)
 
-	require.NoError(t, blockchainClient.SetBlockMinedSet(ctx, tSettings.ChainCfgParams.GenesisHash))
+	require.NoError(t, blockchainClient.SetBlockMinedSet(ctx, tSettings.ChainCfgParams.GenesisHash, 0))
 
 	// mmap-backed subtrees make a leaked (unreleased) subtree observable: each
 	// leaves a backing file in this directory until it is closed.
@@ -501,7 +501,7 @@ func TestSetTxMinedStatus_ReleasesMmapSubtreesBeforeSettingMinedSet(t *testing.T
 		uint64(subtree.Length()), uint64(coinbaseTx.Size()+txT.Size()), blockHeight, 0) //nolint:gosec
 	require.NoError(t, err)
 
-	require.NoError(t, blockchainClient.SetBlockMinedSet(ctx, tSettings.ChainCfgParams.GenesisHash))
+	require.NoError(t, blockchainClient.SetBlockMinedSet(ctx, tSettings.ChainCfgParams.GenesisHash, 0))
 
 	// mmap-backed subtrees make a leaked (unreleased) subtree observable: each
 	// leaves a backing file in this directory until it is closed.
@@ -583,11 +583,11 @@ type minedSetProbeClient struct {
 	readErr         error
 }
 
-func (c *minedSetProbeClient) SetBlockMinedSet(ctx context.Context, blockHash *chainhash.Hash) error {
+func (c *minedSetProbeClient) SetBlockMinedSet(ctx context.Context, blockHash *chainhash.Hash, minedSetGeneration uint64) error {
 	c.calls++
 	c.filesAtMinedSet, c.readErr = os.ReadDir(c.mmapDir)
 
-	return c.ClientI.SetBlockMinedSet(ctx, blockHash)
+	return c.ClientI.SetBlockMinedSet(ctx, blockHash, minedSetGeneration)
 }
 
 // TestSetTxMinedStatus_CachedBlockReleasesMmapSubtreesWhenHeaderFetchFails covers

@@ -2,6 +2,7 @@
 package subtreeprocessor
 
 import (
+	"math"
 	"sync/atomic"
 
 	"github.com/bsv-blockchain/go-subtree"
@@ -49,6 +50,38 @@ func normalizeMaxQueueItems(logger ulogger.Logger, maxItems int64, sendBatchSize
 	return maxItems
 }
 
+// normalizeMaxTransactionsInMemory turns the configured in-memory transaction
+// limit into the value the queue enforces. 0 leaves the limit disabled. A limit
+// that cannot hold one drain pass plus the coinbase placeholder that every
+// subtree chain carries would refuse every batch and wedge ingest, so it is
+// clamped up to that floor. A value beyond int64 saturates instead of wrapping
+// negative. Every call logs one line stating the limit in force.
+func normalizeMaxTransactionsInMemory(logger ulogger.Logger, limit uint64, sendBatchSize int) int64 {
+	if limit == 0 {
+		logger.Infof("BlockAssembly.MaxTransactionsInMemory=0; transactions held in memory are not limited")
+		return 0
+	}
+
+	if limit > math.MaxInt64 {
+		logger.Warnf("BlockAssembly.MaxTransactionsInMemory=%d exceeds the largest supported value; using %d", limit, int64(math.MaxInt64))
+		return math.MaxInt64
+	}
+
+	maxHeld := int64(limit)
+
+	// The floor is never below 2: a sendBatchSize of 0 would otherwise give 1, and the
+	// coinbase placeholder already fills that, so every batch would be refused.
+	floor := max(int64(maxBatchesPerIteration)*int64(sendBatchSize)+1, 2)
+	if maxHeld < floor {
+		logger.Warnf("BlockAssembly.MaxTransactionsInMemory=%d is below one drain pass plus the coinbase placeholder (%d); clamping up to %d", maxHeld, floor, floor)
+		return floor
+	}
+
+	logger.Infof("BlockAssembly.MaxTransactionsInMemory=%d; ingest is refused beyond %d transactions held in memory", maxHeld, maxHeld)
+
+	return maxHeld
+}
+
 // LockFreeQueue represents a FIFO structure for batches of transactions.
 // This implementation is concurrent safe for queueing, but not for dequeueing.
 // Reference: https://www.cs.rochester.edu/research/synchronization/pseudocode/queues.html
@@ -68,6 +101,9 @@ type LockFreeQueue struct {
 	oldestPendingMillis atomic.Int64            // Timestamp of the oldest pending batch; 0 when the queue is empty
 	clock               clock                   // Source of batch timestamps; replaced in tests
 	maxItems            int64                   // Hard ceiling on published-or-reserved items; <= 0 disables the bound
+	maxHeld             int64                   // Ceiling on transactions held in memory, queued plus already in subtrees; <= 0 disables the bound
+	heldBase            func() int64            // Transactions held outside the queue, counted against maxHeld
+	unsettled           atomic.Int64            // Transactions dequeued but not yet counted by heldBase; see settle
 }
 
 // NewLockFreeQueue creates and initializes a new, unbounded LockFreeQueue instance.
@@ -96,6 +132,57 @@ func NewLockFreeQueueWithLimit(maxItems int64) *LockFreeQueue {
 	}
 }
 
+// setHeldLimit bounds the transactions held in memory in total: the queued ones
+// plus those heldBase reports as already placed in subtrees. A maxHeld <= 0
+// disables the bound. It must be called before the queue is shared.
+func (q *LockFreeQueue) setHeldLimit(maxHeld int64, heldBase func() int64) {
+	q.maxHeld = maxHeld
+	q.heldBase = heldBase
+}
+
+// heldTotal returns the transactions held in memory if queued were queued.
+//
+// The total is the queued items, the items dequeued but not yet counted by heldBase, and
+// heldBase itself. The middle term closes the window in which a drain pass has taken
+// batches off the queue but has not yet added them to the subtree count: without it the
+// total under-reads by the size of the pass, up to maxBatchesPerIteration batches, and a
+// producer landing in that window is admitted past the limit.
+func (q *LockFreeQueue) heldTotal(queued int64) int64 {
+	held := queued + q.unsettled.Load()
+
+	if q.heldBase == nil {
+		return held
+	}
+
+	return q.heldBase() + held
+}
+
+// placedTotal returns the transactions placed in subtrees plus extra, leaving out the queued
+// and unsettled items that a drain pass is about to place or drop.
+func (q *LockFreeQueue) placedTotal(extra int64) int64 {
+	if q.heldBase == nil {
+		return extra
+	}
+
+	return q.heldBase() + extra
+}
+
+// settle releases n dequeued items from the unsettled count. Every dequeue adds the size of
+// the batch to it, so every caller of dequeueBatch or dequeueBatchUntil must settle what it
+// took once heldBase accounts for it, or once it has dropped it. A dequeue that is never
+// settled leaves the total over-counting for good, and the limit then refuses for good.
+//
+// The count is released after the items are accounted, never before, so the total can
+// transiently over-count and never under-count.
+func (q *LockFreeQueue) settle(n int64) {
+	q.unsettled.Add(-n)
+}
+
+// heldCount returns the transactions held in memory right now.
+func (q *LockFreeQueue) heldCount() int64 {
+	return q.heldTotal(q.queueLength.Load())
+}
+
 // length returns the current number of transactions queued, not the number
 // of batches. enqueueBatch/dequeueBatch/dequeueBatchUntil all add or
 // subtract len(nodes) (the transaction count of a batch), never 1 per
@@ -121,7 +208,7 @@ func (q *LockFreeQueue) length() int64 {
 
 // publish links a batch into the queue in a thread-safe manner, WITHOUT
 // mutating queueLength. It is the shared tail-swap-and-link core of both
-// enqueueBatch and enqueueBatchIfRoom, each of which reserves the batch's items
+// enqueueBatch and enqueueBatchBounded, each of which reserves the batch's items
 // in queueLength before calling it. The entire batch receives a single timestamp
 // when published.
 //
@@ -191,7 +278,7 @@ func (q *LockFreeQueue) publish(nodes []subtree.Node, txInpoints []*subtree.TxIn
 
 // enqueueBatch adds a batch of transactions to the queue unconditionally,
 // accounting for its items in queueLength BEFORE publishing. It is the unbounded
-// path; it ignores maxItems but otherwise mirrors enqueueBatchIfRoom's
+// path; it ignores maxItems but otherwise mirrors enqueueBatchBounded's
 // reserve-first ordering.
 //
 // Reserving before publishing upholds the queueLength >= published-outstanding
@@ -202,7 +289,7 @@ func (q *LockFreeQueue) publish(nodes []subtree.Node, txInpoints []*subtree.TxIn
 // an empty oracle — headAgeMillis clamps to 0 when it reads 0 — so it must never
 // read 0 while a batch is linked. Every other consumer (the state-transition
 // drain snapshot, the diagnostic gauges and RPCs) already tolerates a transient
-// one-batch over-count. Callers that need the bound must use enqueueBatchIfRoom.
+// one-batch over-count. Callers that need the bound must use enqueueBatchBounded.
 //
 // Parameters:
 //   - nodes: The transaction nodes to add
@@ -212,7 +299,45 @@ func (q *LockFreeQueue) enqueueBatch(nodes []subtree.Node, txInpoints []*subtree
 	q.publish(nodes, txInpoints)
 }
 
-// enqueueBatchIfRoom adds a batch only if doing so would not push the number of
+// Admission is the outcome of offering a batch to the bounded queue. A refusal says which bound
+// refused, so a caller can tell a refusal that clears in milliseconds from one that clears only
+// when a block connects, from the same atomic reservation that made the decision.
+type Admission int
+
+const (
+	// Admitted means the batch is queued.
+	Admitted Admission = iota
+
+	// RefusedQueue means the ingest queue bound refused the batch. It clears as the dispatcher
+	// drains, so waiting for room is reasonable.
+	RefusedQueue
+
+	// RefusedHeld means the in-memory transaction limit refused the batch. It clears when a block
+	// connects, so waiting for it is not.
+	RefusedHeld
+
+	// RefusedOversize means the batch is larger than a whole bound and is admitted only onto an
+	// empty queue, so the producer waits for the queue to empty and then retries.
+	RefusedOversize
+)
+
+// String returns the name of the outcome, for logs and test failures.
+func (a Admission) String() string {
+	switch a {
+	case Admitted:
+		return "admitted"
+	case RefusedQueue:
+		return "refused by the queue bound"
+	case RefusedHeld:
+		return "refused by the in-memory limit"
+	case RefusedOversize:
+		return "refused as oversize"
+	default:
+		return "unknown"
+	}
+}
+
+// enqueueBatchBounded adds a batch only if doing so would not push the number of
 // published-or-reserved items past maxItems, and reports whether it did.
 //
 // The bound is enforced by an atomic reservation, not a load-then-compare: the
@@ -230,7 +355,7 @@ func (q *LockFreeQueue) enqueueBatch(nodes []subtree.Node, txInpoints []*subtree
 // before the batch is linked, so it never reads below the published count. The
 // unbounded enqueueBatch path now shares that ordering (see its comment).
 //
-// When maxItems <= 0 the queue is unbounded and this degrades to enqueueBatch.
+// When maxItems <= 0 and the in-memory limit is off the queue is unbounded and this degrades to enqueueBatch.
 //
 // # A batch larger than the whole cap is admitted alone onto an empty queue
 //
@@ -250,28 +375,54 @@ func (q *LockFreeQueue) enqueueBatch(nodes []subtree.Node, txInpoints []*subtree
 // anything" carve-out: an ordinary over-cap batch is still refused and still relies
 // on the bounded wait and the shed.
 //
+// The in-memory limit is checked in the same reservation. exemptHeld lifts it for this batch
+// and leaves the ingest queue bound, which is how transactions that arrived inside a block are
+// admitted. A block is the authority on what is valid, and a refused block transaction that
+// stays outside the template can leave a descendant, validated at a later level of the same
+// block or after a side-chain block unlocked its parent, entering the template without that
+// parent. That template is an invalid block. Admitting them is bounded: the block is already in
+// memory while it validates, and they count toward the total, so mempool ingest sees the node as
+// full.
+//
+// The queue bound is judged from the reservation's own read. The held bound reads the placed and
+// dequeued counts again, and leaves out every queued item, so a reservation another producer is
+// about to roll back cannot make this refusal a held one.
+//
 // Parameters:
 //   - nodes: The transaction nodes to add
 //   - txInpoints: Parent transaction references for each node
+//   - exemptHeld: Whether the in-memory limit is lifted for this batch
 //
 // Returns:
-//   - bool: true if the batch was enqueued, false if it was refused for room
-func (q *LockFreeQueue) enqueueBatchIfRoom(nodes []subtree.Node, txInpoints []*subtree.TxInpoints) bool {
+//   - Admission: Admitted, or the bound that refused the batch
+func (q *LockFreeQueue) enqueueBatchBounded(nodes []subtree.Node, txInpoints []*subtree.TxInpoints, exemptHeld bool) Admission {
 	n := int64(len(nodes)) // gosec:nolint
 
-	if q.maxItems <= 0 {
+	if q.maxItems <= 0 && (q.maxHeld <= 0 || exemptHeld) {
 		q.enqueueBatch(nodes, txInpoints)
-		return true
+		return Admitted
 	}
 
 	after := q.queueLength.Add(n) // reserve
-	if after <= q.maxItems {
+
+	queueRoom := q.maxItems <= 0 || after <= q.maxItems
+	heldRoom := exemptHeld || q.maxHeld <= 0 || q.heldTotal(after) <= q.maxHeld
+
+	if queueRoom && heldRoom {
 		q.publish(nodes, txInpoints) // reservation already accounted
 
-		return true
+		return Admitted
 	}
 
-	if n > q.maxItems && after-n == 0 {
+	// A batch larger than a whole bound can never satisfy a reservation, so it is
+	// admitted alone onto an empty queue (see above). For the in-memory limit that
+	// is allowed only while the node is not already at the limit, so repeated
+	// oversize batches cannot grow the holding without bound.
+	queueOversize := q.maxItems > 0 && n > q.maxItems
+	heldOversize := !exemptHeld && q.maxHeld > 0 && n > q.maxHeld
+	heldAtLimit := heldOversize && q.placedTotal(0) >= q.maxHeld
+
+	if after-n == 0 && (queueRoom || queueOversize) && (heldRoom || (heldOversize && !heldAtLimit)) {
 		// Nil-guarded because NewLockFreeQueue* is constructed directly by unit
 		// tests, which never run this package's metric registration.
 		if prometheusSubtreeProcessorOversizeBatchAdmitted != nil {
@@ -280,12 +431,26 @@ func (q *LockFreeQueue) enqueueBatchIfRoom(nodes []subtree.Node, txInpoints []*s
 
 		q.publish(nodes, txInpoints)
 
-		return true
+		return Admitted
 	}
 
 	q.queueLength.Add(-n) // roll back
 
-	return false
+	// The total the reservation read counts every queued item, including reservations that
+	// other producers are about to roll back, and every dequeued item a drain pass has not yet
+	// settled, so it can overstate what the node holds. The held bound is claimed only when this
+	// batch breaks it on top of what is already placed in subtrees, which is the one cause that
+	// outlasts the queue: only a connecting block shrinks it. A refusal whose excess comes from
+	// queued or unsettled items is the queue's and is classified again on a later attempt, when
+	// the dispatcher has placed the real ones or the drain pass has settled.
+	switch {
+	case heldAtLimit, !heldRoom && !heldOversize && q.placedTotal(n) > q.maxHeld:
+		return RefusedHeld
+	case queueOversize || heldOversize:
+		return RefusedOversize
+	default:
+		return RefusedQueue
+	}
 }
 
 // dequeueBatch removes and returns the next batch from the queue.
@@ -328,6 +493,7 @@ func (q *LockFreeQueue) dequeueBatch(validFromMillis int64) (*TxBatch, bool) {
 	}
 
 	q.head = next
+	q.unsettled.Add(int64(len(next.nodes)))    // gosec:nolint  count it held before it leaves the queue
 	q.queueLength.Add(-int64(len(next.nodes))) // gosec:nolint
 	q.updateOldestPending()
 
@@ -374,6 +540,7 @@ func (q *LockFreeQueue) dequeueBatchUntil(maxTimeMillis int64) (*TxBatch, bool) 
 	}
 
 	q.head = next
+	q.unsettled.Add(int64(len(next.nodes)))    // gosec:nolint  count it held before it leaves the queue
 	q.queueLength.Add(-int64(len(next.nodes))) // gosec:nolint
 	q.updateOldestPending()
 

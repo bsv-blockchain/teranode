@@ -246,3 +246,48 @@ func TestGetPeers_MinimalShapeWhenDetailOff(t *testing.T) {
 	require.NotContains(t, js, "is_banned")
 	require.NotContains(t, js, "connection refused")
 }
+
+// TestGetPeers_LastCatchupErrorDisclosure drives the detailed /peers shape end to end
+// for bitcoin-sv/teranode#4855. The catchup error is backend text from a fetch at a
+// peer-chosen URL: with asset_publicErrorDetail off it must not reach the wire at all,
+// and with it on it must still carry no IP literal, which the registry redacts on the
+// way in.
+func TestGetPeers_LastCatchupErrorDisclosure(t *testing.T) {
+	const dialErr = `Get "http://kafka:9092/headers": dial tcp 10.0.0.9:9092: connect: connection refused`
+
+	serve := func(t *testing.T, publicErrorDetail bool) PeersResponse {
+		t.Helper()
+
+		reg := blockchain.NewCentralizedPeerRegistry(blockchain.DefaultBanConfig())
+		reg.Register(&blockchain.PeerInfo{ID: "peer-a"})
+		reg.RecordCatchupError("peer-a", dialErr)
+
+		h := newPeersHandler(t, blockchain.NewLocalPeerRegistryClient(reg))
+		h.settings.Asset.PublicPeersDetail = true
+		h.settings.Asset.PublicErrorDetail = publicErrorDetail
+
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/peers", nil)
+		rec := httptest.NewRecorder()
+		require.NoError(t, h.GetPeers(h.e.NewContext(req, rec)))
+		require.Equal(t, http.StatusOK, rec.Code)
+		require.NotContains(t, rec.Body.String(), "10.0.0.9")
+
+		var out PeersResponse
+		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &out))
+		require.Len(t, out.Peers, 1)
+		require.NotZero(t, out.Peers[0].LastCatchupErrorTime, "the timestamp stays public")
+
+		return out
+	}
+
+	t.Run("detail off hides the error", func(t *testing.T) {
+		out := serve(t, false)
+		require.Empty(t, out.Peers[0].LastCatchupError)
+	})
+
+	t.Run("detail on serves it redacted", func(t *testing.T) {
+		out := serve(t, true)
+		require.Contains(t, out.Peers[0].LastCatchupError, "connection refused")
+		require.Contains(t, out.Peers[0].LastCatchupError, "<redacted-ip>")
+	})
+}

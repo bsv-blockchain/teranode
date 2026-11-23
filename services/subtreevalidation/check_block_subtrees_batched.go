@@ -140,6 +140,16 @@ func (u *Server) processTransactionsBatched(ctx context.Context, checker validat
 		}
 	}
 
+	storedConflictingOptions := validator.ProcessOptions(
+		validator.WithSkipPolicyChecks(true),
+		validator.WithCandidateBlockTime(candidateBlockTime),
+		validator.WithCandidateParentMedianTime(candidateParentMedianTime),
+	)
+
+	if err = u.checkStoredConflictingAtHeight(ctx, txHashes, txMetaSlice, allTransactions, blockHeight, storedConflictingOptions); err != nil {
+		return err
+	}
+
 	prometheusSubtreeValidationBatchStep.WithLabelValues("precheck").Observe(time.Since(start).Seconds())
 
 	if missed == 0 {
@@ -593,7 +603,8 @@ func (u *Server) writeList(ctx context.Context, checker validator.BlockBatchChec
 
 	prometheusSubtreeValidationBatchLists.Inc()
 
-	results, err := u.utxoStore.SpendAndCreateMulti(ctx, txs, blockHeight, utxo.WithTXIDs(txids), utxo.WithIgnoreLocked(true))
+	results, err := u.utxoStore.SpendAndCreateMulti(ctx, txs, blockHeight, utxo.WithTXIDs(txids), utxo.WithIgnoreLocked(true),
+		utxo.WithCaller(utxo.CallerSubtreeValidation))
 
 	switch {
 	case utxo.IsSpendAndCreateMultiRefused(err):

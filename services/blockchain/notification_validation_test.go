@@ -343,13 +343,6 @@ func TestHeightRangeBoundsRejectUnboundedRequests(t *testing.T) {
 	})
 	require.Error(t, err, "an oversized numberOfHeaders must be rejected before it reaches the store LIMIT")
 
-	_, err = b.GetBlockHeadersFromOldest(ctx, &blockchain_api.GetBlockHeadersFromOldestRequest{
-		ChainTipHash:    make([]byte, chainhash.HashSize),
-		TargetHash:      make([]byte, chainhash.HashSize),
-		NumberOfHeaders: defaultMaxBlockHeadersPerRequest + 1,
-	})
-	require.Error(t, err, "an oversized numberOfHeaders must be rejected before GetBlockHeadersFromOldest reaches the store")
-
 	_, err = b.LocateBlockHeaders(ctx, &blockchain_api.LocateBlockHeadersRequest{
 		HashStop:  make([]byte, chainhash.HashSize),
 		MaxHashes: defaultMaxBlockHeadersPerRequest + 1,

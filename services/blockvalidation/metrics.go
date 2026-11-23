@@ -73,9 +73,6 @@ var (
 	prometheusForkCreated           *prometheus.CounterVec
 	prometheusForkLifetime          prometheus.Histogram
 	prometheusForkDepth             prometheus.Histogram
-	prometheusForkResolved          *prometheus.CounterVec
-	prometheusForkResolutionDepth   prometheus.Histogram
-	prometheusOrphanedForks         prometheus.Counter
 	prometheusProcessingBlocksStuck prometheus.Gauge
 	prometheusForkAverageDepth      prometheus.Gauge
 	prometheusForkLongestDepth      prometheus.Gauge
@@ -92,6 +89,11 @@ var (
 	prometheusBlockValidationSetMinedRetries         prometheus.Counter
 	prometheusBlockValidationSetMinedDrops           prometheus.Counter
 	prometheusBlockValidationSetMinedEnqueueOverflow prometheus.Counter
+
+	// unusable-subtree counter: incremented when the invalid-block revert skips a
+	// subtree because every stored copy is corrupt. That subtree's transactions keep
+	// the invalid block's tag, so a non-zero value needs manual repair.
+	prometheusBlockValidationRevertSubtreeCorrupt prometheus.Counter
 
 	// outpoint-only fast-path counter: incremented once per block when the
 	// below-checkpoint outpoint-only path is active (setting on, height ≤ highest
@@ -260,6 +262,15 @@ func _initPrometheusMetrics() {
 		},
 	)
 
+	prometheusBlockValidationRevertSubtreeCorrupt = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "blockvalidation",
+			Name:      "revert_subtree_corrupt_total",
+			Help:      "Number of times the invalid-block revert skipped a subtree because no stored copy was usable and at least one was corrupt. A subtree is counted again on each revert attempt that reaches it. Its transactions keep the invalid block's tag; non-zero values require manual intervention, and the block and subtree hashes are in the manual_intervention_required ERROR log line.",
+		},
+	)
+
 	prometheusBlockValidationOutpointOnlyBlocks = promauto.NewCounter(
 		prometheus.CounterOpts{
 			Namespace: "teranode",
@@ -401,12 +412,13 @@ func _initPrometheusMetrics() {
 			Namespace: "teranode",
 			Subsystem: "blockvalidation",
 			Name:      "recovered_panics_total",
-			Help:      "Total number of panics recovered in block validation, by path: worker (priority-queue block worker), catchup (catchup consumer), kafka (Kafka block message handler) or block_found (blockFoundCh worker). Each one is a bug in this node. The node continues to run, and the block hash and stack are in the PANIC log line.",
+			Help:      "Total number of panics recovered in block validation, by path: worker (priority-queue block worker), catchup (catchup consumer), kafka (Kafka block message handler), block_found (blockFoundCh worker), or one of three paths for goroutines that those start: catchup_fetch (catchup fetch and validate pipeline), block_validation (parallel work inside one block validation) or service (service start and startup sweeps). Each one is a bug in this node. The node continues to run, and the block hash and stack are in the PANIC log line.",
 		},
 		[]string{"path"},
 	)
 
-	for _, path := range []string{recoveredPanicPathWorker, recoveredPanicPathCatchup, recoveredPanicPathKafka, recoveredPanicPathBlockFound} {
+	for _, path := range []string{recoveredPanicPathWorker, recoveredPanicPathCatchup, recoveredPanicPathKafka, recoveredPanicPathBlockFound,
+		recoveredPanicPathCatchupFetch, recoveredPanicPathBlockValidation, recoveredPanicPathService} {
 		prometheusRecoveredPanics.WithLabelValues(path)
 	}
 
@@ -497,35 +509,6 @@ func _initPrometheusMetrics() {
 			Name:      "fork_depth_blocks",
 			Help:      "Depth of forks in blocks",
 			Buckets:   prometheus.LinearBuckets(1, 1, 20),
-		},
-	)
-
-	prometheusForkResolved = promauto.NewCounterVec(
-		prometheus.CounterOpts{
-			Namespace: "teranode",
-			Subsystem: "blockvalidation",
-			Name:      "fork_resolved_total",
-			Help:      "Total number of forks resolved",
-		},
-		[]string{"result"},
-	)
-
-	prometheusForkResolutionDepth = promauto.NewHistogram(
-		prometheus.HistogramOpts{
-			Namespace: "teranode",
-			Subsystem: "blockvalidation",
-			Name:      "fork_resolution_depth_blocks",
-			Help:      "Depth of forks when resolved",
-			Buckets:   prometheus.LinearBuckets(1, 1, 20),
-		},
-	)
-
-	prometheusOrphanedForks = promauto.NewCounter(
-		prometheus.CounterOpts{
-			Namespace: "teranode",
-			Subsystem: "blockvalidation",
-			Name:      "fork_orphaned_total",
-			Help:      "Total number of forks marked as orphaned",
 		},
 	)
 

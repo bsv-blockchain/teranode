@@ -70,6 +70,9 @@ const (
 	Reassignments FieldName = "reassignments"
 	// DeleteAtHeight specifies the block height at which the record should be deleted
 	DeleteAtHeight FieldName = "deleteAtHeight"
+	// DAHVersion counts the writes of DeleteAtHeight on a master record. Every writer bumps it with the write,
+	// so a child page write that carries an older version can be refused.
+	DAHVersion FieldName = "dahVer"
 	// CreatedAt is the timestamp when the unmined transaction was first added to the store
 	CreatedAt FieldName = "createdAt"
 	// UnminedSince is the block height when an unmined transaction was first stored.
@@ -83,6 +86,26 @@ const (
 	PreserveUntil FieldName = "preserveUntil"
 	// DeletedChildren map of child records that have been deleted
 	DeletedChildren FieldName = "deletedChildren"
+	// LanePosition is the record's lane position (util/lane): written once at
+	// create, never updated. Absent on a record created with none (the lane
+	// migration off, before it existed, or a tool that opens its own store), and
+	// on utxoset unreadable once the row carrying it has aged out; see
+	// meta.Data.LanePosition. At shadow the daemon refuses unsupported stores.
+	// Not part of utxo.MetaFields: a caller names it.
+	LanePosition FieldName = "lanePos"
+	// SpendingLanePositions is the slot lane-position bin: a list on the master
+	// record or page record that holds the outputs, one signed 64-bit lane
+	// position per output slot of that record, in the order of its utxos bin,
+	// 0 for a slot not spent. A spend writes the spender's position in the same
+	// single-record operation as the slot's spending data, so the two cannot
+	// race; the slot's binary spending-data layout is unchanged. Installed as a
+	// format only: no writer in this build fills it.
+	SpendingLanePositions FieldName = "spendLanePos"
+	// ParentLanePositions is the child's copy of its parents' lane positions: a
+	// list on the master record, one signed 64-bit lane position per distinct
+	// parent in TxInpoints parent order. Installed as a format only: no writer
+	// in this build fills it.
+	ParentLanePositions FieldName = "parentLanePos"
 )
 
 // String returns the string representation of the FieldName.

@@ -74,7 +74,7 @@ func NewDirect(
 
 #### Methods
 
-- `Health(ctx context.Context, checkLiveness bool) (int, string, error)`: Checks the health status of the server and its dependencies. It performs both liveness and readiness checks based on the checkLiveness parameter. Liveness checks verify that the service is running, while readiness checks also verify that dependencies like blockchain client, FSM, blockchain store, and block store are available.
+- `Health(ctx context.Context, checkLiveness bool) (int, string, error)`: Checks the health status of the server and its dependencies. It performs both liveness and readiness checks based on the checkLiveness parameter. Liveness returns 503 when `utxoPersister_livenessStallTimeout` is above 0 and the main loop's heartbeat is older than it; otherwise it returns 200. Readiness checks verify that dependencies like blockchain client, FSM, blockchain store, and block store are available.
 
 - `Init(ctx context.Context) error`: Initializes the server by reading the last processed height from persistent storage. It retrieves the last block height that was successfully processed and sets it as the starting point for future processing.
 

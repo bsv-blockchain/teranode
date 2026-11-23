@@ -122,7 +122,8 @@ func TestFetchAndStoreSubtreeData_NonMinimalVarInt(t *testing.T) {
 			require.Error(t, err)
 			require.ErrorIs(t, err, bt.ErrNonMinimalVarInt, "go-bt must be what rejects it")
 
-			require.True(t, errors.Is(err, errors.ErrProcessing))
+			require.True(t, errors.Is(err, errors.ErrNetworkInvalidResponse), "a delivery fault must carry a peer code")
+			require.False(t, isLocalProcessingFault(err), "must not read as a local fault")
 			require.False(t, errors.Is(err, errors.ErrTxInvalid), "a delivery fault must not condemn the transaction")
 			require.False(t, errors.Is(err, errors.ErrBlockInvalid), "a delivery fault must not condemn the block")
 			require.False(t, errors.IsLocalError(err), "must not short-circuit the alternative-peer loop")

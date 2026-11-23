@@ -158,7 +158,7 @@ type headerCache struct {
 // The header is kept as its six wire fields, not as a wire.BlockHeader, whose
 // time.Time timestamp costs 24 bytes against the wire's 4 and pads the struct.
 // All six are kept, merkle root and nonce included, although no rule reads
-// those two: the branchSource hands the difficulty calculator and the median
+// those two: the branch source hands the difficulty calculator and the median
 // time past walk model headers, and both check each header's Hash() against
 // the hash they asked for (services/blockchain/Difficulty.go and
 // medianTimePast), which needs every byte of the 80. Fields are ordered so
@@ -711,28 +711,25 @@ func (c *headerCache) judge(ctx context.Context, plan fillPlan, headers []*wire.
 	nodes := make([]*headerNode, 0, plan.cut-plan.start)
 
 	var (
-		source  *branchSource
+		source  blockchain.HeaderSource
 		pending map[chainhash.Hash]*headerNode
 	)
 
 	if rules != nil {
 		pending = make(map[chainhash.Hash]*headerNode, plan.cut-plan.start)
-		source = &branchSource{
-			trunk: rules.trunk,
-			lookup: func(hash chainhash.Hash) (*cachedHeader, bool) {
-				node, ok := pending[hash]
-				if !ok {
-					// Read without mu: see judge's doc.
-					node, ok = c.index[hash]
-				}
+		source = blockchain.NewBranchSource(rules.trunk, func(hash chainhash.Hash) (*blockchain.BranchHeader, bool) {
+			node, ok := pending[hash]
+			if !ok {
+				// Read without mu: see judge's doc.
+				node, ok = c.index[hash]
+			}
 
-				if !ok {
-					return nil, false
-				}
+			if !ok {
+				return nil, false
+			}
 
-				return node.cached(), true
-			},
-		}
+			return node.cached(), true
+		})
 	}
 
 	prev := plan.anchor
@@ -869,9 +866,9 @@ func trunkFork(ctx context.Context, rules *headerRules, checkpoints []chaincfg.C
 	return fillResult{}
 }
 
-// cached is the node in the form branchSource reads.
-func (n *headerNode) cached() *cachedHeader {
-	return &cachedHeader{header: n.modelHeader(), height: n.height, chainWork: n.chainWork}
+// cached is the node in the form blockchain.NewBranchSource reads.
+func (n *headerNode) cached() *blockchain.BranchHeader {
+	return &blockchain.BranchHeader{Header: n.modelHeader(), Height: uint32(n.height), ChainWork: append([]byte(nil), n.chainWork[:]...)} //nolint:gosec // a cached height is above the tip, never negative
 }
 
 // installLocked holds the judged nodes and moves owner's branch to the batch's

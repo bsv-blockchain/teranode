@@ -60,6 +60,22 @@ type boundedSequentialStore struct {
 	bound time.Duration
 }
 
+type laneSequentialStore struct {
+	fakeSequentialStore
+	LanePositions
+}
+
+func TestSequentialSpendAndCreateRejectsInvalidPositionBeforeSpending(t *testing.T) {
+	f := &laneSequentialStore{}
+	f.SetLanePositionSource(fixedLanePosition(1))
+	_, _, err := SequentialSpendAndCreate(context.Background(), ulogger.TestLogger{}, f, bt.NewTx(), 100,
+		WithLanePosition(1<<56))
+	require.Error(t, err)
+	require.Zero(t, f.spendCalls, "invalid named metadata must fail before the first spend")
+	require.Zero(t, f.createCalls)
+	require.Zero(t, f.unspendCalls, "there must be nothing to roll back")
+}
+
 func (b *boundedSequentialStore) SpendRollbackTimeout() time.Duration { return b.bound }
 
 func shortenUnspendBackoff(t *testing.T) {

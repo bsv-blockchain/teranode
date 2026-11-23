@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"math/big"
 	"net/url"
@@ -99,44 +100,55 @@ func newRealTrunk(t *testing.T, params *chaincfg.Params, firstHeight int32, head
 	t.Cleanup(func() { require.NoError(t, store.Close(context.Background())) })
 
 	if len(headers) > 0 {
-		tx, err := store.GetDB().BeginTx(ctx, nil)
-		require.NoError(t, err)
-
-		defer func() { _ = tx.Rollback() }()
-
-		insert, err := tx.PrepareContext(ctx, `INSERT INTO blocks (
-			id, parent_id, hash, height, version, previous_hash, merkle_root,
-			block_time, n_bits, nonce, chain_work, tx_count, size_in_bytes,
-			subtree_count, subtrees, coinbase_tx, peer_id, on_main_chain
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 0, 80, 0, X'', X'', 'test', TRUE)`)
-		require.NoError(t, err)
-
-		defer func() { _ = insert.Close() }()
-
-		chainWork := new(big.Int)
-
-		for i, header := range headers {
-			m := modelHeader(header)
-
-			var parentID any
-			if i > 0 {
-				parentID = i
-			}
-
-			chainWork.Add(chainWork, work.CalcBlockWork(header.Bits))
-
-			_, err = insert.ExecContext(ctx, i+1, parentID, m.Hash()[:], firstHeight+int32(i), m.Version, //nolint:gosec // a fixture index
-				m.HashPrevBlock[:], m.HashMerkleRoot[:], m.Timestamp, m.Bits.CloneBytes(), m.Nonce, chainWork.FillBytes(make([]byte, 32)))
-			require.NoError(t, err)
-		}
-
-		require.NoError(t, tx.Commit())
+		// RetryTx, not one BeginTx: the store's startup goroutine rewrites
+		// on_main_chain on its own connection to the same shared-cache database,
+		// and SQLite fails one of the two transactions with SQLITE_LOCKED
+		// ("database table is locked: database is deadlocked"). When the seed is
+		// the one that loses, it is rolled back and written again.
+		require.NoError(t, store.GetDB().RetryTx(ctx, nil, func(tx *sql.Tx) error {
+			return seedTrunk(ctx, tx, firstHeight, headers)
+		}))
 	}
 
 	client, err := blockchain.NewLocalClient(ulogger.TestLogger{}, s, store, nil, nil)
 	require.NoError(t, err)
 
 	return &realTrunk{settings: s, params: params, store: store, client: client}
+}
+
+// seedTrunk writes headers into tx as main-chain blocks from firstHeight; the
+// caller commits.
+func seedTrunk(ctx context.Context, tx *sql.Tx, firstHeight int32, headers []*wire.BlockHeader) error {
+	insert, err := tx.PrepareContext(ctx, `INSERT INTO blocks (
+		id, parent_id, hash, height, version, previous_hash, merkle_root,
+		block_time, n_bits, nonce, chain_work, tx_count, size_in_bytes,
+		subtree_count, subtrees, coinbase_tx, peer_id, on_main_chain
+	) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 0, 80, 0, X'', X'', 'test', TRUE)`)
+	if err != nil {
+		return err
+	}
+
+	defer func() { _ = insert.Close() }()
+
+	chainWork := new(big.Int)
+
+	for i, header := range headers {
+		m := modelHeader(header)
+
+		var parentID any
+		if i > 0 {
+			parentID = i
+		}
+
+		chainWork.Add(chainWork, work.CalcBlockWork(header.Bits))
+
+		if _, err = insert.ExecContext(ctx, i+1, parentID, m.Hash()[:], firstHeight+int32(i), m.Version, //nolint:gosec // a fixture index
+			m.HashPrevBlock[:], m.HashMerkleRoot[:], m.Timestamp, m.Bits.CloneBytes(), m.Nonce, chainWork.FillBytes(make([]byte, 32))); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 // rules returns the header rules over this trunk with the clock fixed at now.

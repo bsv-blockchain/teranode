@@ -49,7 +49,7 @@ func TestForkManager_GetForkStats(t *testing.T) {
 
 	// Mark a block as processing in fork1
 	blockHash := fork1.Blocks[0]
-	fm.StartProcessingBlock(blockHash)
+	fm.StartProcessingBlock(blockHash, PriorityChainExtending)
 
 	// Get stats
 	stats := fm.GetForkStats()
@@ -85,52 +85,6 @@ func TestForkManager_GetForkStats(t *testing.T) {
 
 // DetermineForkID tests are complex and require full blockchain mock
 // Covered by integration tests instead
-
-// TestForkManager_CheckOrphanedForks tests orphan detection
-func TestForkManager_CheckOrphanedForks(t *testing.T) {
-	initPrometheusMetrics()
-	logger := ulogger.TestLogger{}
-	tSettings := test.CreateBaseTestSettings(t)
-	tSettings.ChainCfgParams.CoinbaseMaturity = 100
-	tSettings.BlockValidation.MaxParallelForks = 10
-	fm := NewForkManager(logger, tSettings)
-
-	// Register forks at different heights
-	baseHash1, _ := chainhash.NewHashFromStr("0000000000000000000000000000000000000000000000000000000000000001")
-	baseHash2, _ := chainhash.NewHashFromStr("0000000000000000000000000000000000000000000000000000000000000002")
-	baseHash3, _ := chainhash.NewHashFromStr("0000000000000000000000000000000000000000000000000000000000000003")
-
-	fork1 := fm.RegisterFork("old-fork", baseHash1, 500)    // Very old
-	fork2 := fm.RegisterFork("medium-fork", baseHash2, 950) // Medium
-	fork3 := fm.RegisterFork("recent-fork", baseHash3, 990) // Recent
-
-	// Set all to active
-	fork1.State = ForkStateActive
-	fork2.State = ForkStateActive
-	fork3.State = ForkStateActive
-
-	// Main chain advances to height 1000
-	fm.checkOrphanedForks(1000)
-
-	// old-fork should be orphaned (500 + 100 < 1000)
-	assert.Equal(t, ForkStateOrphaned, fork1.State)
-
-	// medium-fork should be orphaned (950 + 100 > 1000, but close)
-	// Actually 950 + 100 = 1050 > 1000, so NOT orphaned
-	assert.Equal(t, ForkStateActive, fork2.State)
-
-	// recent-fork should not be orphaned (990 + 100 > 1000)
-	assert.Equal(t, ForkStateActive, fork3.State)
-
-	// Main chain advances further to 1100
-	fm.checkOrphanedForks(1100)
-
-	// Now medium-fork should also be orphaned
-	assert.Equal(t, ForkStateOrphaned, fork2.State)
-
-	// recent-fork is borderline (990 + 100 = 1090 < 1100)
-	assert.Equal(t, ForkStateOrphaned, fork3.State)
-}
 
 // TestForkManager_ApplyRetentionPolicy tests fork retention limits
 func TestForkManager_ApplyRetentionPolicy(t *testing.T) {

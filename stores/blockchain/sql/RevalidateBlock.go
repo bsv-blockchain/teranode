@@ -2,6 +2,7 @@ package sql
 
 import (
 	"context"
+	"database/sql"
 	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
@@ -32,15 +33,30 @@ func (s *SQL) RevalidateBlock(ctx context.Context, blockHash *chainhash.Hash) er
 	s.mainChainRebuilding.Add(1)
 	defer s.mainChainRebuilding.Add(-1)
 
-	// Update the block to valid (not invalid) and clear the mined_set flag.
+	// Update the block to valid (not invalid) and clear the mined_set flag. Bump
+	// mined_set_gen so an in-flight tagging run cannot overwrite the reset.
 	q := `
 		UPDATE blocks
-		SET invalid = false, mined_set = false
+		SET invalid = false, mined_set = false, mined_set_gen = mined_set_gen + 1
 		WHERE hash = $1
 	`
-	if _, err = s.db.ExecContext(ctx, q, blockHash.CloneBytes()); err != nil {
+	// In a transaction so the shared row is locked first; see chainWriteStateKey.
+	if err = s.db.RetryTx(ctx, nil, func(tx *sql.Tx) error {
+		if lockErr := s.lockChainWrites(ctx, tx); lockErr != nil {
+			return lockErr
+		}
+
+		_, execErr := tx.ExecContext(ctx, q, blockHash.CloneBytes())
+
+		return execErr
+	}); err != nil {
 		return errors.NewStorageError("error updating block to valid", err)
 	}
+
+	// The UPDATE committed, so this call moves chain membership; see the matching note in
+	// InvalidateBlock. Deferred so it lands after the rebuild below and before slowPathMu
+	// drops. A failed UPDATE returned above and is not noted.
+	defer s.noteOnMainChainWrite(noRepairFloor)
 
 	// RevalidateBlock, like InvalidateBlock, can move the tip across an
 	// arbitrarily deep fork point. Use the full rebuild for correctness —
@@ -56,8 +72,14 @@ func (s *SQL) RevalidateBlock(ctx context.Context, blockHash *chainhash.Hash) er
 		s.resetChainWalkCache()
 	}
 
+	// The UPDATE above has committed, so a failed rebuild leaves the column describing the
+	// chain before the revalidation. Record it so the background repair retries the full
+	// walk until it lands; a rebuild that lands here satisfies any earlier owed repair.
 	if rebuildErr := s.rebuildOnMainChainFlag(rebuildCtx, true); rebuildErr != nil {
 		s.logger.Errorf("RevalidateBlock: rebuildOnMainChainFlag: %v", rebuildErr)
+		s.markOnMainChainDirty(true, noRepairFloor, "revalidate_block", rebuildErr)
+	} else {
+		s.onMainChainRepaired(true)
 	}
 
 	if s.useInMemoryChainCheck {
