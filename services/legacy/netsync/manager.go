@@ -669,6 +669,9 @@ func maxInFlightForSize(avgSize int64) int {
 	}
 }
 
+// laneTxMetaReceived counts the txmeta entries relay receives, by whether they carry lane positions.
+var laneTxMetaReceived = txmetacache.NewLaneTxMetaReceived("legacy")
+
 // SyncManager is used to communicate block related messages with peers. The
 // SyncManager is started as by executing Start() in a goroutine. Once started,
 // it selects peers to sync from and starts the initial block download. Once the
@@ -5336,7 +5339,7 @@ func (sm *SyncManager) processBlocksFinalMessage(msg *kafka.KafkaMessage) error 
 // For each entry:
 //
 //	[32 bytes] - tx hash (raw bytes)
-//	[1 byte]   - action (0=ADD, 1=DELETE)
+//	[1 byte]   - action (0=ADD, 1=DELETE, 2=ADDLane)
 //	[4 bytes]  - content length (uint32, little-endian) - 0 for DELETE
 //	[N bytes]  - content (metaBytes) - only for ADD
 func (sm *SyncManager) kafkaTXmetaListener(ctx context.Context, kafkaURL *url.URL, groupID string) {
@@ -5435,8 +5438,9 @@ func (sm *SyncManager) processTXmetaBatchMessage(data []byte) error {
 		contentLen := binary.LittleEndian.Uint32(data[offset:])
 		offset += 4
 
-		if action == txmetacache.WireActionADD {
-			// Handle ADD
+		if action == txmetacache.WireActionADD || action == txmetacache.WireActionADDLane {
+			// Handle ADD, in either encoding: the validator sends the lane one at
+			// utxostore_laneMigration shadow, and relay needs neither position.
 			if offset+int(contentLen) > len(data) {
 				sm.logger.Errorf("[kafkaTXmetaListener] truncated content at entry %d", i)
 				return nil
@@ -5444,6 +5448,20 @@ func (sm *SyncManager) processTXmetaBatchMessage(data []byte) error {
 
 			content := data[offset : offset+int(contentLen)]
 			offset += int(contentLen)
+
+			if action == txmetacache.WireActionADDLane || (sm.settings != nil && sm.settings.UtxoStore.LaneMigration.Stamps()) {
+				laneTxMetaReceived.Count(action == txmetacache.WireActionADDLane)
+			}
+
+			if action == txmetacache.WireActionADDLane {
+				legacy, err := txmetacache.LaneMetaContent(content)
+				if err != nil {
+					sm.logger.Errorf("Failed to decode lane tx meta data for %s: %v", hash, err)
+					continue
+				}
+
+				content = legacy
+			}
 
 			sm.logger.Debugf("Received tx message from Kafka: %v", hash)
 
