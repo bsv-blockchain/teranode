@@ -1198,7 +1198,10 @@ func TestProcessOrphanTransactions_RefusedOnceTheNodeStartsSyncing(t *testing.T)
 // the matching SyncManager field. SubtreeStore and TempStore are both blob.Store,
 // so swapping them compiles; the park would then write out-of-order blocks into
 // the subtree store, and no other test notices because the park only checks that
-// its store is non-nil.
+// its store is non-nil. The unmined-tx gates and the header rules also take the
+// blockchain client, and both fail open without one: a gate with no client
+// refuses nothing and newHeaderRules returns no rules, so the test checks what
+// they do, not just that New succeeded.
 func TestNew_WiresEveryDependency(t *testing.T) {
 	// New starts a goroutine that polls the blockchain client every second while
 	// ctx is alive.
@@ -1212,6 +1215,9 @@ func TestNew_WiresEveryDependency(t *testing.T) {
 		Return(bestHeader, &model.BlockHeaderMeta{Height: 800_000}, nil)
 	client.Mock.On("IsFSMCurrentState", mock.Anything, mock.Anything).Return(false, nil)
 	client.Mock.On("GetBlockHeaders", mock.Anything, mock.Anything, mock.Anything).Return([]*model.BlockHeader{}, []*model.BlockHeaderMeta{}, nil)
+
+	syncing := blockchain2.FSMStateCATCHINGBLOCKS
+	client.Mock.On("GetFSMCurrentState", mock.Anything).Return(&syncing, nil)
 
 	tSettings := &settings.Settings{}
 
@@ -1243,4 +1249,15 @@ func TestNew_WiresEveryDependency(t *testing.T) {
 
 	require.NotNil(t, sm.blockPark)
 	require.Same(t, deps.TempStore, sm.blockPark.store, "the park must write to the temp store, not the subtree store")
+
+	require.True(t, sm.txGate.Refuses(ctx, nil), "txGate must read the FSM state from the blockchain client")
+	require.True(t, sm.orphanGate.Refuses(ctx, nil), "orphanGate must read the FSM state from the blockchain client")
+	require.True(t, sm.orphanEvictionGate.Refuses(ctx, nil), "orphanEvictionGate must read the FSM state from the blockchain client")
+
+	sm.headerCache.mu.Lock()
+	rules := sm.headerCache.rules
+	sm.headerCache.mu.Unlock()
+
+	require.NotNil(t, rules, "New must build header rules from the blockchain client")
+	require.Same(t, deps.BlockchainClient, rules.trunk)
 }
