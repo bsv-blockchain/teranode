@@ -133,8 +133,8 @@ func classifyHeight(s *lane.IndexSnapshot, pos uint64, a lane.Answer, todayMined
 		return KindOffChain
 	}
 
-	// A fork block at that height whose rows are gone, such as a reorg's loser the floors have
-	// passed, may be the one today means, and the index can no longer tell.
+	// A fork block at that height the index cannot judge, one forgotten, such as a reorg's loser
+	// the floors have passed, or one with no rows, may be the one today means.
 	if s.ForkAt(todayHeight) && (a.Via != lane.ViaFloor || todayHeight > s.AnchorHeight()) {
 		return KindNotLoaded
 	}

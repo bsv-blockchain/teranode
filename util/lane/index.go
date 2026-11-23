@@ -34,8 +34,10 @@ import (
 // lane, every position is listed, so the index never calls a position settled that it did not see
 // settle. Floors from history, written by the pruner and loaded at start, are Phase 2.
 //
-// One writer (the follower, under the Index's mutex) adds blocks and moves the tip; each change is
-// published as an immutable IndexSnapshot, so a lookup takes no lock.
+// Two writers add blocks and publish: the follower, which also moves the tip, and block
+// validation loading a block's own ancestry. They take turns, one load at a time, and every change
+// is made under the Index's mutex and published as an immutable IndexSnapshot, so a lookup takes
+// no lock.
 
 // DefaultSettleDepth is how deep a main-chain block must be before its rows fold into the floor:
 // the coinbase maturity, the same depth the fork-depth check accepts.
@@ -308,7 +310,8 @@ type IndexSnapshot struct {
 	anchorID     uint32
 	// startHeight is the lowest height on the main chain the index loaded.
 	startHeight uint32
-	// forkHeights are the heights at which the index holds, or held, a block off the main chain.
+	// forkHeights are the heights of off-main blocks the index cannot judge: forgotten ones, whose
+	// rows are gone, and loaded ones with no rows.
 	forkHeights map[uint32]struct{}
 	stats       IndexStats
 	mainView    *ChainView
@@ -598,8 +601,9 @@ func (s *IndexSnapshot) TakenOffMain(pos uint64, height uint32) bool {
 	return found
 }
 
-// ForkAt reports whether the index holds, or held, a block off the main chain at height, such as
-// the loser of a reorg. A store that answers with a height alone may mean that block.
+// ForkAt reports whether the index has, at height, a block off the main chain it cannot judge: one
+// it forgot, such as a reorg's loser the floors passed, or one with no rows. A store that answers
+// with a height alone may mean that block. A loaded fork block with rows is judged by TakenOffMain.
 func (s *IndexSnapshot) ForkAt(height uint32) bool {
 	_, ok := s.forkHeights[height]
 
@@ -1012,8 +1016,9 @@ func (x *Index) publish() {
 		s.forkHeights[h] = struct{}{}
 	}
 
+	// A loaded fork block with no rows cannot be judged either.
 	for id, b := range x.blocks {
-		if _, onMain := x.main[id]; !onMain {
+		if _, onMain := x.main[id]; !onMain && !b.hasRows {
 			s.forkHeights[b.Height] = struct{}{}
 		}
 	}

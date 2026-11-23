@@ -409,6 +409,15 @@ func (r *Reader) prepare(ctx context.Context, hash chainhash.Hash) (*lane.ChainV
 	}
 	defer r.unlockLoad()
 
+	// The follower may have moved or rebuilt the index while this waited for the token.
+	if s = r.Snapshot(); s == nil {
+		return nil, KindNotReady
+	}
+
+	if v, ok := s.ViewFrom(hash); ok {
+		return v, ""
+	}
+
 	found, err := r.loadAncestry(ctx, hash, s.StartHeight())
 	if errors.Is(err, errBehindIndex) {
 		return nil, KindNotLoaded

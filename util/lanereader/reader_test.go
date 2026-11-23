@@ -721,3 +721,55 @@ func TestReaderCountsAForgottenForkHeightNotLoaded(t *testing.T) {
 		})
 	})
 }
+
+// While a reorg's loser is still loaded with its rows, it is judged: a position neither it nor the
+// winner took is a disagreement. A loaded loser with no rows cannot be judged.
+func TestReaderJudgesALoadedForkHeightByItsRows(t *testing.T) {
+	engines(t, func(t *testing.T, store blockchainstore.Store) {
+		c := newChain(t, store)
+
+		b1 := c.add(nil)
+		c.add(b1, takes(t, 4, 5))
+		lostNoRows := c.add(b1)
+
+		r := newReader(ulogger.TestLogger{}, store, 100)
+		follow(t, r)
+
+		_, ok := r.Prepare(context.Background(), lostNoRows.hash)
+		require.True(t, ok)
+
+		won := c.add(b1, takes(t, 4, 6))
+		c.line(won, 2)
+		follow(t, r)
+
+		require.False(t, r.Snapshot().ForkAt(3))
+
+		// At height 2 the losers are one with rows and one without: the height cannot be judged.
+		requireCounted(t, ReaderValidator, KindNotLoaded, lane.ViaNone, func() {
+			r.CompareHeight(ReaderValidator, chainhash.Hash{}, lane.Pack(4, 7), true, 2)
+		})
+	})
+}
+
+// Only the loser with rows at a height: a position it did not take is judged, today_only.
+func TestReaderCountsAPositionNoLoadedBlockAtTheHeightTookTodayOnly(t *testing.T) {
+	engines(t, func(t *testing.T, store blockchainstore.Store) {
+		c := newChain(t, store)
+
+		b1 := c.add(nil)
+		c.add(b1, takes(t, 4, 5))
+
+		r := newReader(ulogger.TestLogger{}, store, 100)
+		follow(t, r)
+
+		won := c.add(b1, takes(t, 4, 6))
+		c.line(won, 2)
+		follow(t, r)
+
+		require.False(t, r.Snapshot().ForkAt(2), "the loaded loser has rows")
+
+		requireCounted(t, ReaderValidator, KindTodayOnly, lane.ViaNone, func() {
+			r.CompareHeight(ReaderValidator, chainhash.Hash{}, lane.Pack(4, 7), true, 2)
+		})
+	})
+}
