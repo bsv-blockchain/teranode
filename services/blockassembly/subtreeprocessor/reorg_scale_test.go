@@ -25,6 +25,8 @@ package subtreeprocessor
 //	REORG_SCALE_SUBTREE     subtree size (default 1M)
 //	REORG_SCALE_MAP         memory (default) or disk; the disk map writes under TMPDIR
 //	REORG_SCALE_INTAKE_TPS  live intake during the timed run, tx/s (default 0)
+//	REORG_SCALE_FAST        1 to run the reorg case with blockassembly_reorgFastPath on (default off);
+//	                        the report says whether the fast path applied or declined, and why
 //	REORG_SCALE_VERIFY      1 to check the order oracle after the run (slow, needs the hash sets)
 //	REORG_SCALE_OUT         path of the JSON report (default: logged only)
 //
@@ -57,6 +59,9 @@ type reorgScaleReport struct {
 	SubtreeSize    int     `json:"subtree_size"`
 	Map            string  `json:"map"`
 	IntakeTPS      int     `json:"intake_tps"`
+	FastPath       bool    `json:"fast_path"`
+	FastApplied    bool    `json:"fast_applied"`
+	FastDeclined   string  `json:"fast_declined,omitempty"`
 	GOMAXPROCS     int     `json:"gomaxprocs"`
 	BuildSeconds   float64 `json:"build_seconds"`
 	RunSeconds     float64 `json:"run_seconds"`
@@ -158,6 +163,7 @@ func TestReorgScale(t *testing.T) {
 		SubtreeSize:   scaleEnvInt(t, "REORG_SCALE_SUBTREE", 1<<20),
 		Map:           os.Getenv("REORG_SCALE_MAP"),
 		IntakeTPS:     scaleEnvInt(t, "REORG_SCALE_INTAKE_TPS", 0),
+		FastPath:      os.Getenv("REORG_SCALE_FAST") == "1",
 		GOMAXPROCS:    runtime.GOMAXPROCS(0),
 	}
 
@@ -215,7 +221,18 @@ func TestReorgScale(t *testing.T) {
 
 	switch report.Case {
 	case "reorg":
-		err = sc.run(t)
+		var rec fastPathRun
+
+		if report.FastPath {
+			err = recordingFastPath(&rec)(t, sc)
+			report.FastApplied = rec.applied
+
+			if len(rec.reasons) > 0 {
+				report.FastDeclined = rec.reasons[0]
+			}
+		} else {
+			err = sc.run(t)
+		}
 	case "reset":
 		err = sc.stp.reset(sc.genesis, []*model.Block{sc.lost}, sc.forward, false, func() error { return nil })
 	}
