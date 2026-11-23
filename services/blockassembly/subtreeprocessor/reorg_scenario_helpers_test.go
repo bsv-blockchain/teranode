@@ -234,6 +234,12 @@ func (sc *reorgScenario) inpoints(id scenarioID) subtreepkg.TxInpoints {
 func (sc *reorgScenario) rawD1Tx(t testing.TB, i int) *bt.Tx {
 	parent := sc.confirmedParent(kindRawD1 | scenarioID(i))
 
+	// A lost-block child of a pending X spends X's output instead of a confirmed parent.
+	childBase := sc.cfg.lostAlsoPending + sc.cfg.pendingSpendsLost
+	if i >= childBase && i < childBase+sc.cfg.lostChildOfPending {
+		parent = *sc.rawD1Txs[i-childBase].TxIDChainHash()
+	}
+
 	in := &bt.Input{PreviousTxOutIndex: 0, PreviousTxSatoshis: 10_000, SequenceNumber: 0xffffffff, UnlockingScript: bscript.NewFromBytes([]byte{})}
 	require.NoError(t, in.PreviousTxIDAdd(&parent))
 
@@ -264,6 +270,8 @@ func newReorgScenario(t testing.TB, cfg reorgScenarioConfig) *reorgScenario {
 	lostShared := int(math.Round(float64(cfg.lost) * cfg.lostInWinners))
 	rawD1Count := cfg.lost - lostShared
 	require.LessOrEqual(t, cfg.lostAlsoPending, rawD1Count, "lostAlsoPending transactions are part of raw D1")
+	require.LessOrEqual(t, cfg.lostChildOfPending, cfg.lostAlsoPending, "each lost-block child spends one X")
+	require.LessOrEqual(t, cfg.lostAlsoPending+cfg.pendingSpendsLost+cfg.lostChildOfPending, rawD1Count, "room for the lost-block children")
 
 	sc.rawD1Txs = make([]*bt.Tx, rawD1Count)
 	for i := range rawD1Count {

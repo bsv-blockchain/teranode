@@ -3,6 +3,7 @@ package subtreeprocessor
 import (
 	"testing"
 
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/require"
 )
 
@@ -57,4 +58,42 @@ func TestReorgScenario_SlowPathConsumesRemoveMapEntries(t *testing.T) {
 			require.ElementsMatch(t, sc.winnerNotLost(), sc.utxo.marked(true))
 		})
 	}
+}
+
+// Design section 5 item 2c, plan PR 9a: C is in B and not in F or P, and spends X, which is in B and
+// P and not in F. Today's move-back skips X (it is in the tx map), builds C into the prefix and
+// leaves X at its pending position, so with a subtree boundary between them the slow path publishes
+// C before its parent X. Block validation rejects that order.
+//
+// This test pins the inversion as the order oracle's rejection. It is the red test PR 9a turns
+// green (bsv-blockchain/teranode#2268): when the slow path emits a recovered child only after its
+// last unconfirmed parent, the final assertion below flips and expectedOrderAfter gains the rule.
+func TestReorgScenario_SlowPathPublishesLostChildBeforePendingParent(t *testing.T) {
+	cfg := smallScenarioConfig()
+	cfg.lostChildOfPending = 3
+	sc := newReorgScenario(t, cfg)
+
+	require.NoError(t, sc.run(t))
+
+	nodes := assemblyNodes(sc.stp)
+	require.Equal(t, sc.expectedOrderAfter(), txHashes(nodes), "today's order: effective D1 (with C) first, then the pending set (with X)")
+
+	position := make(map[chainhash.Hash]int, len(nodes))
+	for i, n := range nodes {
+		position[n.Hash] = i
+	}
+
+	for j := range cfg.lostChildOfPending {
+		x := sc.hash(kindRawD1 | scenarioID(j))
+		c := sc.hash(kindRawD1 | scenarioID(cfg.lostAlsoPending+cfg.pendingSpendsLost+j))
+
+		require.Less(t, position[c], position[x], "C %d is published before its parent X", j)
+		require.NotEqual(t, position[c]/cfg.subtreeSize, position[x]/cfg.subtreeSize, "a subtree boundary lies between C and X")
+	}
+
+	require.NoError(t, checkSubtreeShape(append(sc.stp.GetChainedSubtrees(), sc.stp.GetCurrentSubtree())))
+	require.ErrorContains(t, checkAssemblyOrder(nodes, sc.stp.GetCurrentTxMap().Get, sc.onChainAfter), "before its parent",
+		"the order oracle rejects the inversion; PR 9a makes this pass")
+
+	require.ElementsMatch(t, sc.expectedMarkFalse(), sc.utxo.marked(false), "C and X are both marked off the longest chain")
 }
