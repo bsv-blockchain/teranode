@@ -62,6 +62,6 @@ func TestNonDefaultValidationOptions_CoversEveryWireField(t *testing.T) {
 
 	// Without this the walk would pass vacuously on an empty or truncated
 	// descriptor, which is the failure mode the test exists to prevent.
-	require.Equal(t, 12, covered,
-		"the guard is expected to cover 12 wire-settable fields; update this count deliberately when the proto changes")
+	require.Equal(t, 14, covered,
+		"the guard is expected to cover 14 wire-settable fields; update this count deliberately when the proto changes")
 }

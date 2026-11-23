@@ -332,6 +332,18 @@ func (s *SQL) storeBlockAttempt(ctx context.Context, block *model.Block, peerID 
 			return 0, height, s.typedStoreBlockError(err, block)
 		}
 	} else {
+		// Read the best block before the insert, so the new row cannot be its own best.
+		// slowPathMu, held for the whole call, keeps this process from moving it before
+		// the insert; reading inside the transaction while storeBlock reads its parent on
+		// another connection deadlocks SQLite. Under chain write locking it is read again
+		// in the transaction, for the other processes.
+		var bestHeight uint32
+		if !storeBlockOptions.Invalid {
+			if bestErr := s.readBestValidHeight(ctx, s.db, &bestHeight); bestErr != nil {
+				return 0, 0, errors.NewStorageError("[%s] failed to read the best block height for the checkpoint fork rule", block.Hash().String(), bestErr)
+			}
+		}
+
 		// RetryTx keeps the pool's retry and circuit-breaker behaviour, but retries
 		// the whole transaction rather than one statement: a statement that fails
 		// inside a PostgreSQL transaction aborts it, so only a fresh BEGIN can retry.
@@ -363,6 +375,15 @@ func (s *SQL) storeBlockAttempt(ctx context.Context, block *model.Block, peerID 
 				if storeErr = s.lockChainWrites(ctx, tx); storeErr != nil {
 					return storeErr
 				}
+
+				// slowPathMu keeps this process's writes off the best block, but another
+				// process can move it until this transaction holds the chain write lock. With
+				// the lock, read it again here, under the lock and before the insert.
+				if s.chainWriteLocking() {
+					if storeErr = s.readBestValidHeight(ctx, tx, &bestHeight); storeErr != nil {
+						return storeErr
+					}
+				}
 			}
 
 			newBlockID, height, _, storedInvalid, storeErr = s.storeBlock(ctx, tx, block, peerID, storeBlockOptions, onMainChain)
@@ -376,6 +397,15 @@ func (s *SQL) storeBlockAttempt(ctx context.Context, block *model.Block, peerID 
 			// statement that could only fail it.
 			if storedInvalid {
 				return nil
+			}
+
+			// Only a block that does not extend the best block can fork below a
+			// checkpoint the best chain has passed; one that extends it sits above
+			// every such checkpoint. Checked here, in the insert's transaction, so a
+			// tip that passed the checkpoint while the block was being validated is
+			// still seen.
+			if forkErr := s.rejectForkBelowPassedCheckpoint(block.Hash(), height, bestHeight); forkErr != nil {
+				return forkErr
 			}
 
 			reconcile := func() (bool, int64, error) {
@@ -697,6 +727,43 @@ func (s *SQL) getPreviousBlockInfo(ctx context.Context, prevBlockHash chainhash.
 	}
 
 	return id, chainWork, height, invalid, nil
+}
+
+// bestValidHeightQuery reads the height of the best valid block, ordered as getBestBlockID orders.
+const bestValidHeightQuery = `
+	SELECT height
+	FROM blocks
+	WHERE invalid = false
+	ORDER BY chain_work DESC, peer_id ASC, id ASC
+	LIMIT 1
+`
+
+// readBestValidHeight sets bestHeight to the height of the best valid block, or leaves it
+// at 0 on an empty store. It reads nothing when no checkpoints are configured, since the
+// checkpoint fork rule is its only user.
+func (s *SQL) readBestValidHeight(ctx context.Context, exec execQuerier, bestHeight *uint32) error {
+	if s.chainParams == nil || len(s.chainParams.Checkpoints) == 0 {
+		return nil
+	}
+
+	if err := exec.QueryRowContext(ctx, bestValidHeightQuery).Scan(bestHeight); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+
+	return nil
+}
+
+// rejectForkBelowPassedCheckpoint returns a BlockInvalid error when a block at height
+// is below a checkpoint the best valid block (at bestHeight) has reached: bitcoin-sv's
+// bad-fork-prior-to-checkpoint. Callers read bestHeight under slowPathMu, and under the chain
+// write lock where other processes write the chain, so the best block cannot move between
+// that read and their write.
+func (s *SQL) rejectForkBelowPassedCheckpoint(hash *chainhash.Hash, height, bestHeight uint32) error {
+	if s.chainParams == nil || !model.ForkBelowCheckpoint(s.chainParams.Checkpoints, height, bestHeight) {
+		return nil
+	}
+
+	return errors.NewBlockInvalidError("[%s] bad-fork-prior-to-checkpoint: block height %d is below a checkpoint the best block (height %d) has passed", hash.String(), height, bestHeight)
 }
 
 // execQuerier is the subset of database calls storeBlock needs. Both *usql.DB and

@@ -61,3 +61,20 @@ func IsTransactionFinal(tx *bt.Tx, blockHeight uint32, blockTime uint32) error {
 	// if the locktime is 0, then the transaction is final, even if the sequence numbers are not final
 	return nil
 }
+
+// BlockingLockTime returns tx's nLockTime when it can hold tx back, that is when the lock time
+// is set and some input sequence is not final, and 0 when tx is final at every height and
+// time (IsTransactionFinal).
+func BlockingLockTime(tx *bt.Tx) uint32 {
+	if tx.LockTime == 0 {
+		return 0
+	}
+
+	for _, input := range tx.Inputs {
+		if input.SequenceNumber != bt.DefaultSequenceNumber {
+			return tx.LockTime
+		}
+	}
+
+	return 0
+}

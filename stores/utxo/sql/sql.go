@@ -2131,6 +2131,9 @@ const (
 	inputsQueryOutpoints
 	// inputsQueryFull means every column is needed to rebuild the transaction.
 	inputsQueryFull
+	// inputsQueryOutpointsSequence means the outpoint and the sequence number: the unmined
+	// reload needs the sequences to tell whether the lock time can hold a transaction back.
+	inputsQueryOutpointsSequence
 )
 
 // inputsScopeFor reports which inputs columns a field set actually needs. Both
@@ -2156,8 +2159,12 @@ func inputsScopeFor(bins []fields.FieldName) inputsQueryScope {
 // input order.
 func inputsQuerySQL(scope inputsQueryScope, whereClause string) string {
 	cols := "previous_transaction_hash,previous_tx_idx"
-	if scope == inputsQueryFull {
+
+	switch scope {
+	case inputsQueryFull:
 		cols += ",previous_tx_satoshis,previous_tx_script,unlocking_script,sequence_number"
+	case inputsQueryOutpointsSequence:
+		cols += ",sequence_number"
 	}
 
 	return "SELECT " + cols + " FROM inputs WHERE " + whereClause + " ORDER BY idx"
@@ -2188,8 +2195,11 @@ func (r *inputScanRow) scanTargets(scope inputsQueryScope, leading ...interface{
 	targets = append(targets, leading...)
 	targets = append(targets, &r.prevTxHash, &r.prevTxIdx)
 
-	if scope == inputsQueryFull {
+	switch scope {
+	case inputsQueryFull:
 		targets = append(targets, &r.prevSatoshis, &r.prevScript, &r.unlocking, &r.sequence)
+	case inputsQueryOutpointsSequence:
+		targets = append(targets, &r.sequence)
 	}
 
 	return targets
@@ -2201,10 +2211,13 @@ func (r *inputScanRow) scanTargets(scope inputsQueryScope, leading ...interface{
 func (r *inputScanRow) toInput(scope inputsQueryScope) (*bt.Input, error) {
 	input := &bt.Input{PreviousTxOutIndex: uint32(r.prevTxIdx)}
 
-	if scope == inputsQueryFull {
+	switch scope {
+	case inputsQueryFull:
 		input.PreviousTxSatoshis = r.prevSatoshis
 		input.PreviousTxScript = r.prevScript
 		input.UnlockingScript = r.unlocking
+		input.SequenceNumber = r.sequence
+	case inputsQueryOutpointsSequence:
 		input.SequenceNumber = r.sequence
 	}
 
