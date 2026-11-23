@@ -791,8 +791,10 @@ func (u *Server) releaseCatchupLock(ctx *CatchupContext, err *error) {
 			isPeerError = false
 		case !isLocalCatchupFault(*err) && isInheritedInvalidError(*err):
 			// The block is invalid only because this node holds its parent invalid. The serving
-			// peer delivered an honest descendant of a block we condemned, so it is neither
-			// malicious nor at fault. Must precede the consensus case below, which reports malicious.
+			// peer delivered an honest descendant of a block we condemned, so it is not reported
+			// malicious and no peer-error text is stored. processCatchupChItem still records a
+			// generic catch-up failure for it (reportCatchupFailureForError) and rotates away from
+			// the peer. Must precede the consensus case below, which reports malicious.
 			errorType = "inherited_invalid"
 			isPeerError = false
 		case !isLocalCatchupFault(*err) && (errors.Is(*err, errors.ErrBlockInvalid) || errors.Is(*err, errors.ErrTxInvalid)):
