@@ -682,6 +682,10 @@ func TestBlockBacklog(t *testing.T) {
 	_, ok = blockBacklog(&s)
 	require.False(t, ok, "a stale peer height must not look like drain progress during catch-up")
 
+	s.Chain.PeerHeight = snapshot.Reading{Status: snapshot.StatusOK}
+	_, ok = blockBacklog(&s)
+	require.False(t, ok, "no usable peer height must not look like drain progress during catch-up")
+
 	s.Chain.BlocksWaitingCount = snapshot.Reading{Value: 120, Status: snapshot.StatusNoData, AgeSec: 30}
 	_, ok = blockBacklog(&s)
 	require.False(t, ok, "a stale count must not reach the drain estimator")

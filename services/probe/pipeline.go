@@ -442,7 +442,7 @@ func blockBacklog(s *snapshot.Snapshot) (float64, bool) {
 
 	if s.FSM == fsmCatchingBlocks {
 		p := s.Chain.PeerHeight
-		if p.Status != snapshot.StatusOK {
+		if p.Status != snapshot.StatusOK || p.Value <= 0 {
 			return 0, false
 		}
 		if p.Value > float64(s.Tip) {
