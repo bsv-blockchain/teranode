@@ -245,6 +245,20 @@ func (q *StoreQueue) takeCleanups() []func() {
 	return c
 }
 
+// announceLostCap bounds announceLost. An entry only matters to a rollback of the block movement in
+// progress, which restores at most one chain, so past the cap the set starts again rather than
+// keeping the root of every cancelled request for good.
+const announceLostCap = 1 << 16
+
+// noteAnnounceLost records that a request that would have announced root was dropped. q.mu is held.
+func (q *StoreQueue) noteAnnounceLost(root chainhash.Hash) {
+	if q.announceLost == nil || len(q.announceLost) >= announceLostCap {
+		q.announceLost = make(map[chainhash.Hash]struct{})
+	}
+
+	q.announceLost[root] = struct{}{}
+}
+
 // announceWasLost reports, once, whether a request that would have announced st was dropped.
 func (q *StoreQueue) announceWasLost(st *subtreepkg.Subtree) bool {
 	q.mu.Lock()
@@ -375,11 +389,7 @@ func (q *StoreQueue) dropLocked(match func(*storeItem) bool) (dropped []*storeIt
 		it.dropped = true
 
 		if !it.req.AnnounceOnly && !it.req.SkipNotification {
-			if q.announceLost == nil {
-				q.announceLost = make(map[chainhash.Hash]struct{})
-			}
-
-			q.announceLost[*it.req.Subtree.RootHash()] = struct{}{}
+			q.noteAnnounceLost(*it.req.Subtree.RootHash())
 		}
 
 		q.unregisterLocked(it)

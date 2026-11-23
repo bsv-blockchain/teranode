@@ -2,6 +2,7 @@ package subtreeprocessor
 
 import (
 	"context"
+	"encoding/binary"
 	"slices"
 	"sort"
 	"sync"
@@ -1228,4 +1229,21 @@ func TestReorgScenario_StoreQueue_ARestoredChainRequestCancelledBeforeTheRollbac
 		require.NotNil(t, it, "restored subtree %d is sent again", i)
 		require.False(t, it.req.SkipNotification, "and announces when it stores")
 	}
+}
+
+// The roots of dropped announcing requests are kept only for a rollback of the block movement in
+// progress, so the set is capped: past announceLostCap it starts again instead of growing for good.
+func TestStoreQueue_TheLostAnnouncementSetIsBounded(t *testing.T) {
+	q := NewStoreQueue(1 << 40)
+
+	q.mu.Lock()
+	defer q.mu.Unlock()
+
+	for i := range announceLostCap + 10 {
+		var h chainhash.Hash
+		binary.LittleEndian.PutUint64(h[:], uint64(i))
+		q.noteAnnounceLost(h)
+	}
+
+	require.LessOrEqual(t, len(q.announceLost), announceLostCap)
 }
