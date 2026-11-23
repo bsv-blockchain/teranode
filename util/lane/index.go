@@ -212,8 +212,9 @@ type laneState struct {
 
 // laneFloor is one lane's floor. Positions from seenFrom up to floor are settled unless listed.
 // Below seenFrom, where the index saw nothing fold, a position is settled only if settledBelow
-// holds it: taken by a late block that folded. A laneFloor is immutable once published; its
-// bitmaps copy on write, so the next fold's copy shares their containers.
+// holds it: taken by a late block that folded. A laneFloor is immutable once published: each fold
+// works on a full copy of its bitmaps, because Roaring's run optimisation rewrites containers it
+// shares under copy-on-write, which a lock-free reader of the published floor may be reading.
 type laneFloor struct {
 	floor        uint64
 	seenFrom     uint64
@@ -228,11 +229,7 @@ type laneFloor struct {
 // copyForFold returns a copy of f to fold into, or a new floor.
 func (f *laneFloor) copyForFold() *laneFloor {
 	if f == nil {
-		listed, settledBelow := roaring64.New(), roaring64.New()
-		listed.SetCopyOnWrite(true)
-		settledBelow.SetCopyOnWrite(true)
-
-		return &laneFloor{listed: listed, settledBelow: settledBelow}
+		return &laneFloor{listed: roaring64.New(), settledBelow: roaring64.New()}
 	}
 
 	return &laneFloor{floor: f.floor, seenFrom: f.seenFrom, listed: f.listed.Clone(), settledBelow: f.settledBelow.Clone()}

@@ -362,8 +362,8 @@ func (r *Reader) compareDuplicates(v *lane.ChainView, noView string, hash chainh
 	}
 }
 
-// disagreementLog logs the first disagreementsLogged disagreements of each reader and kind, then
-// one a minute. It takes no lock on the path that decides not to log, so a burst of disagreements
+// disagreementLog logs about the first disagreementsLogged disagreements of each reader and kind,
+// then one a minute; parent checks running at once can write a line or two past the first five. It takes no lock on the path that decides not to log, so a burst of disagreements
 // from many parent checks at once does not serialise them.
 type disagreementLog struct {
 	gates sync.Map // reader/kind to *logGate

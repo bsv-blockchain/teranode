@@ -67,7 +67,7 @@ func initMetrics() {
 			Namespace: "teranode",
 			Subsystem: "lane_reader",
 			Name:      "index_listed_positions",
-			Help:      "Positions below the lane floors that no folded row took, over every lane: holes, unmined and burnt positions, and those below the first row the index saw",
+			Help:      "Positions between each lane's first folded row and its floor that no folded row took, over every lane: holes, unmined and burnt positions. A lane's history before the first row the index folded is not held and not counted",
 		})
 		prometheusLaneReaderTipHeight = promauto.NewGauge(prometheus.GaugeOpts{
 			Namespace: "teranode",

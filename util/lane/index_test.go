@@ -638,3 +638,40 @@ func TestIndexBelowTheFirstRowCountsOnlyWhatFolded(t *testing.T) {
 	require.True(t, hasRows)
 	require.Equal(t, uint64(1), byFloor)
 }
+
+// Readers of a retained snapshot share nothing a later fold writes (run with -race): each fold
+// copies the floor's bitmaps rather than sharing their containers.
+func TestIndexFoldsDoNotWriteARetainedSnapshotsFloor(t *testing.T) {
+	c := newTestChain(t, 2)
+
+	c.add(1, 0, 1, rangeRows(t, 4, 1_000, 2_000))
+	c.line(2, 3)
+	c.tip(3)
+	c.add(4, 3, 4, rowsOf(t, 4, 600))
+	c.line(5, 6)
+	c.tip(6) // 600 settled below the lane's first row
+
+	retained := c.idx.Snapshot().Main()
+
+	var wg sync.WaitGroup
+
+	wg.Add(1)
+
+	go func() {
+		defer wg.Done()
+
+		for i := 0; i < 2_000; i++ {
+			_ = retained.Lookup(Pack(4, 600))
+			_ = retained.Lookup(Pack(4, 1_500))
+		}
+	}()
+
+	for h := uint32(7); h <= 30; h++ {
+		c.add(h, h-1, h, rowsOf(t, 4, 2_000+uint64(h), 3_000+uint64(h)))
+		c.tip(h)
+	}
+
+	wg.Wait()
+
+	require.Equal(t, ViaFloor, retained.Lookup(Pack(4, 600)).Via)
+}

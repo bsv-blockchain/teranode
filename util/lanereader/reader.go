@@ -11,9 +11,10 @@
 // main chain: once a second it reads the best block, walks back along the chain until it meets a
 // block it holds, loads the rows of every block on the way, one call per block by ID, and moves
 // its index's tip. Loading by ID along the chain is the only way rows enter the index, so the
-// rows of a block deleted before the index loaded it, which name an ID no chain reaches, never
-// enter. A block deleted after it was loaded keeps its rows in use until the next tip move, and is
-// then off the main chain (counted off_chain where a height names it) until the floors pass it.
+// rows of a block deleted before the index read its header, which name an ID no chain reaches,
+// never enter. A block deleted between the header read and the row read, or after it was loaded,
+// keeps its rows in use until the next tip move, and is then off the main chain (counted off_chain
+// where a height names it) until the floors pass it; a rewind runs with the node stopped.
 // A reorg moves the tip
 // to the new chain; one deeper than the settle depth, past rows already folded into the floors,
 // rebuilds the index. The follower reads the best block one second after each step finishes, so

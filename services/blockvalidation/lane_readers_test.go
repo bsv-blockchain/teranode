@@ -17,6 +17,7 @@ import (
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
+	"github.com/bsv-blockchain/teranode/services/blockvalidation/blockvalidation_api"
 	"github.com/bsv-blockchain/teranode/services/subtreevalidation"
 	"github.com/bsv-blockchain/teranode/settings"
 	blobmemory "github.com/bsv-blockchain/teranode/stores/blob/memory"
@@ -315,6 +316,19 @@ func countsLaneShadowsThroughTheRealHooks(t *testing.T, optimistic bool) {
 		return laneReaderAnswer(t, lanereader.ReaderBlockParent, lanereader.KindNoPosition) == noPosition+2
 	}, 10*time.Second, 10*time.Millisecond, "reValidateBlock's parent check is shadowed too")
 
+	// So is the gRPC entry point's.
+	server := &Server{logger: logger, settings: tSettings, blockValidation: bv, blockchainClient: blockchainClient,
+		subtreeStore: subtreeStore, utxoStore: realUtxoStore, stats: gocore.NewStat("test")}
+
+	blockBytes, err := block.Bytes()
+	require.NoError(t, err)
+
+	_, err = server.ValidateBlock(ctx, &blockvalidation_api.ValidateBlockRequest{Block: blockBytes, Height: 1})
+	require.NoError(t, err)
+	require.Eventually(t, func() bool {
+		return laneReaderAnswer(t, lanereader.ReaderBlockParent, lanereader.KindNoPosition) == noPosition+3
+	}, 10*time.Second, 10*time.Millisecond, "Server.ValidateBlock's parent check is shadowed too")
+
 	stop()
 
 	// The duplicate check: give the stored block rows, then start a fresh index that loads them,
@@ -352,4 +366,90 @@ func laneReaderAnswerAll(t *testing.T, reader string) float64 {
 	}
 
 	return sum
+}
+
+// gatedHeaderSource holds every header read until release is closed.
+type gatedHeaderSource struct {
+	lanereader.Source
+	release chan struct{}
+}
+
+func (g *gatedHeaderSource) GetBlockHeaders(ctx context.Context, h *chainhash.Hash, n uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
+	<-g.release
+
+	return g.Source.GetBlockHeaders(ctx, h, n)
+}
+
+// The duplicate shadow returns setMined's verdict at once, whatever its ancestry load is doing,
+// and compares once the load finishes.
+func TestShadowLaneDuplicatesDoesNotWaitForItsLoad(t *testing.T) {
+	u, err := url.Parse("sqlitememory:///")
+	require.NoError(t, err)
+
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.UtxoStore.LaneMigration = settings.LaneMigrationShadow
+
+	store, err := blockchainsql.New(ulogger.TestLogger{}, u, tSettings)
+	require.NoError(t, err)
+
+	t.Cleanup(func() { _ = store.Close(context.Background()) })
+
+	genesis, _, err := store.GetBestBlockHeader(context.Background())
+	require.NoError(t, err)
+
+	coinbase, err := bt.NewTxFromString("01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff17030100002f6d312d65752f29c267ffea1adb87f33b398fffffffff03ac505763000000001976a914c362d5af234dd4e1f2a1bfbcab90036d38b0aa9f88acaa505763000000001976a9143c22b6d9ba7b50b6d6e615c69d11ecb2ba3db14588acaa505763000000001976a914b7177c7deb43f3869eabc25cfd9f618215f34d5588ac00000000")
+	require.NoError(t, err)
+
+	bits, err := model.NewNBitFromString("207fffff")
+	require.NoError(t, err)
+
+	source := &gatedHeaderSource{Source: store, release: make(chan struct{})}
+	close(source.release)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(func() {
+		cancel()
+		lanereader.Start(context.Background(), nil, test.CreateBaseTestSettings(t), nil)
+	})
+
+	r := lanereader.Start(ctx, ulogger.TestLogger{}, tSettings, source)
+	require.Eventually(t, func() bool { return r.Snapshot() != nil }, 10*time.Second, 10*time.Millisecond)
+
+	cancel() // stop the follower, so only the shadow loads the new block
+
+	blk := &model.Block{
+		Header: &model.BlockHeader{Version: 1, Timestamp: 1729259900, Nonce: 91, HashPrevBlock: genesis.Hash(),
+			HashMerkleRoot: &chainhash.Hash{}, Bits: *bits},
+		Height:           1,
+		CoinbaseTx:       coinbase,
+		TransactionCount: 2,
+	}
+
+	rows, err := lane.BuildMapRows(3, lanePositions(5))
+	require.NoError(t, err)
+
+	id, _, err := store.StoreBlock(context.Background(), blk, "", blockchainoptions.WithLaneMapRows(rows))
+	require.NoError(t, err)
+
+	source.release = make(chan struct{})
+	agree := laneReaderAnswer(t, lanereader.ReaderBlockDuplicate, lanereader.KindAgree)
+
+	returned := make(chan error, 1)
+
+	go func() { returned <- shadowLaneDuplicates(context.Background(), blk, uint32(id), nil, nil) }() //nolint:gosec // a test block ID
+
+	select {
+	case err := <-returned:
+		require.NoError(t, err)
+	case <-time.After(2 * time.Second):
+		t.Fatal("shadowLaneDuplicates waited for its ancestry load")
+	}
+
+	require.Equal(t, agree, laneReaderAnswer(t, lanereader.ReaderBlockDuplicate, lanereader.KindAgree), "not compared before the load")
+
+	close(source.release)
+
+	require.Eventually(t, func() bool {
+		return laneReaderAnswer(t, lanereader.ReaderBlockDuplicate, lanereader.KindAgree) == agree+1
+	}, 10*time.Second, 10*time.Millisecond)
 }
