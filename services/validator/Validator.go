@@ -1483,10 +1483,11 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 		}
 
 		blockAssemblyData := &blockassembly.Data{
-			TxIDChainHash: *tx.TxIDChainHash(),
-			Fee:           txMetaData.Fee,
-			Size:          uint64(tx.Size()), // nolint:gosec
-			TxInpoints:    txInpoints,
+			TxIDChainHash:   *tx.TxIDChainHash(),
+			Fee:             txMetaData.Fee,
+			Size:            uint64(tx.Size()), // nolint:gosec
+			TxInpoints:      txInpoints,
+			ValidatedHeight: blockHeight,
 		}
 
 		// On the Kafka ingest path a queue-full shed is worth waiting out rather
@@ -2979,7 +2980,7 @@ func (v *Validator) sendToBlockAssembler(ctx context.Context, bData *blockassemb
 	v.logger.Debugf("[Validator] sending tx %s to block assembler", bData.TxIDChainHash.String())
 	// }
 
-	if _, err := v.blockAssembler.Store(ctx, &bData.TxIDChainHash, bData.Fee, bData.Size, bData.TxInpoints); err != nil {
+	if _, err := v.blockAssembler.Store(ctx, &bData.TxIDChainHash, bData.Fee, bData.Size, bData.TxInpoints, bData.ValidatedHeight); err != nil {
 		// A queue-full shed must keep its resource-exhausted classification so it
 		// surfaces as ResourceExhausted (retry gate skips it) rather than being
 		// masked as a generic service fault (Internal). Every other failure is a
@@ -3684,9 +3685,9 @@ func (v *Validator) validateTransaction(ctx context.Context, tx *bt.Tx, blockHei
 	// enabled in RUNNING for reorg resilience. The combination is safe: a
 	// floater child blessed at the candidate height and added to assembly is
 	// the same tx policy-mode admission would have accepted into assembly
-	// (policy substitutes tip+1 for unconfirmed parents — equal to the
-	// candidate height at the tip; era flags cannot differ post-Genesis), and
-	// accepted-block txs are mined-removed from assembly as always.
+	// (policy substitutes tip+1 for unconfirmed parents; block assembly drops
+	// a tx validated at a height under other transaction rules than tip+1),
+	// and accepted-block txs are mined-removed from assembly as always.
 	if validationOptions.UnconfirmedParentsAtCandidateHeight {
 		utxoHeights = resolveUnconfirmedParentsAtCandidateHeight(utxoHeights, blockHeight)
 	}
