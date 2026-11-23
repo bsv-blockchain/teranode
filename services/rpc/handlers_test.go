@@ -235,6 +235,7 @@ type voutRecordingUtxoStore struct {
 	freezeSpends   []*utxo.Spend
 	unfreezeSpends []*utxo.Spend
 	reassignSpends []*utxo.Spend
+	reassignNew    []*utxo.Spend
 }
 
 func (r *voutRecordingUtxoStore) FreezeUTXOs(_ context.Context, spends []*utxo.Spend, _ *settings.Settings) error {
@@ -249,8 +250,9 @@ func (r *voutRecordingUtxoStore) UnFreezeUTXOs(_ context.Context, spends []*utxo
 	return nil
 }
 
-func (r *voutRecordingUtxoStore) ReAssignUTXO(_ context.Context, old *utxo.Spend, _ *utxo.Spend, _ *settings.Settings) error {
+func (r *voutRecordingUtxoStore) ReAssignUTXO(_ context.Context, old *utxo.Spend, newUtxo *utxo.Spend, _ *settings.Settings) error {
 	r.reassignSpends = append(r.reassignSpends, old)
+	r.reassignNew = append(r.reassignNew, newUtxo)
 
 	return nil
 }
@@ -422,6 +424,18 @@ func TestUTXOAlertHandlers_HashArguments(t *testing.T) {
 			utxoStore: store,
 		}, store
 	}
+
+	t.Run("reassign passes the new commitment to the store", func(t *testing.T) {
+		s, store := newServer()
+
+		_, err := handleReassign(context.Background(), s, &bsvjson.ReassignCmd{
+			OldTxID: txid, OldVout: 1, OldUTXOHash: commitment, NewUTXOHash: newCommitment,
+		}, nil)
+		require.NoError(t, err)
+
+		require.Len(t, store.reassignNew, 1)
+		require.Equal(t, newCommitment, store.reassignNew[0].UTXOHash.String())
+	})
 
 	for _, h := range handlers {
 		t.Run(h.name+" passes the supplied commitment to the store", func(t *testing.T) {
