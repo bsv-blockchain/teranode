@@ -95,6 +95,7 @@ type NewSubtreeRequest struct {
 	SkipNotification  bool                                                    // Whether to skip notification to the network
 	ErrChan           chan error                                              // Channel for error reporting
 	OnStorageComplete func()                                                  // Called when storage completes to trigger cleanup
+	Result            chan StoreResult                                        // Optional: receives the final outcome of the store, once; the caller makes it buffered (capacity 1)
 }
 
 // moveBlockRequest represents a request to move a block in the chain.

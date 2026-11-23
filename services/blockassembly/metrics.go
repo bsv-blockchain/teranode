@@ -85,6 +85,11 @@ var (
 	// subtree_stored does not: subtree_stored ends when the writes start. See storeSubtreeData.
 	prometheusBlockAssemblySubtreeStoreStep *prometheus.HistogramVec
 
+	// prometheusBlockAssemblySubtreeStoreFailed counts subtree stores reported failed, whatever the
+	// cause: a write still failing after the last retry, a meta that could not be built, a subtree
+	// that could not be serialized or whose delete-at-height could not be updated.
+	prometheusBlockAssemblySubtreeStoreFailed prometheus.Counter
+
 	// prometheusBlockAssemblyHeldShed counts the subset of those sheds caused by the in-memory transaction limit rather than the ingest queue bound
 	prometheusBlockAssemblyHeldShed prometheus.Counter
 
@@ -223,6 +228,15 @@ func _initPrometheusMetrics() {
 			Buckets:   prometheus.ExponentialBuckets(0.001, 2, 16),
 		},
 		[]string{"step"},
+	)
+
+	prometheusBlockAssemblySubtreeStoreFailed = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "blockassembly",
+			Name:      "subtree_store_failed_total",
+			Help:      "Subtree stores reported failed, whatever the cause",
+		},
 	)
 
 	prometheusBlockAssemblerConflictIntentsPending = promauto.NewGauge(
