@@ -1,0 +1,13 @@
+diff --git a/services/blockassembly/subtreeprocessor/SubtreeProcessor.go b/services/blockassembly/subtreeprocessor/SubtreeProcessor.go
+index 2d7cbd297..d7745207b 100644
+--- a/services/blockassembly/subtreeprocessor/SubtreeProcessor.go
++++ b/services/blockassembly/subtreeprocessor/SubtreeProcessor.go
+@@ -8614,7 +8614,7 @@ func (stp *SubtreeProcessor) processRemainderTxHashes(ctx context.Context, chain
+ 		return errors.NewProcessingError("error collecting remainder txs", err)
+ 	}
+ 
+-	if len(conflictingHashes) > 0 {
++	if len(conflictingHashes) > 0 && false { // mutant: children of a demoted transaction are not dropped from the remainder
+ 		if err := dropConflictingDescendants(ctx, remainderSubtrees, conflictingHashes, currentTxMap, workers); err != nil {
+ 			return err
+ 		}

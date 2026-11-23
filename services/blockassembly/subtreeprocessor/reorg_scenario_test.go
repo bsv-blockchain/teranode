@@ -1,6 +1,7 @@
 package subtreeprocessor
 
 import (
+	"fmt"
 	"slices"
 	"testing"
 	"time"
@@ -72,6 +73,49 @@ func TestReorgScenario_SlowPathKeepsTheOrder(t *testing.T) {
 			require.Equal(t, sc.expectedOrderAfter(), txHashes(assemblyNodes(sc.stp)),
 				"effective D1 in the lost block's order, then the pending set minus the winners in its order")
 		})
+	}
+}
+
+// The order, the marks and the maps of a fork reorg do not depend on how many blocks the winner
+// has, where in the pending set the hits sit, or which branch of the remainder pass runs: below
+// the parallel threshold it adds node by node, at or above it inserts in parallel and compacts to
+// what was inserted. Plan PR 6 compares its fast path with the slow path on every one of these.
+func TestReorgScenario_SlowPathAcrossForkShapes(t *testing.T) {
+	for _, forwardBlocks := range []int{1, 2, 3} {
+		for _, hitsAtFront := range []bool{false, true} {
+			for _, parallel := range []bool{false, true} {
+				name := fmt.Sprintf("forward blocks %d, hits at front %t, parallel remainder %t", forwardBlocks, hitsAtFront, parallel)
+
+				t.Run(name, func(t *testing.T) {
+					cfg := smallScenarioConfig()
+					cfg.forwardBlocks = forwardBlocks
+					cfg.hitsAtFront = hitsAtFront
+
+					if parallel {
+						cfg.parallelThreshold = 1
+					}
+
+					sc := newReorgScenario(t, cfg)
+
+					logger := &phaseLogger{}
+					sc.stp.logger = logger
+
+					require.NoError(t, sc.run(t))
+
+					branch := map[bool]string{false: "remainder_add_nodes", true: "remainder_map_insert"}[parallel]
+					require.Contains(t, logger.phases("reorgBlocks"), branch, "the remainder pass ran the branch under test")
+					require.NotContains(t, logger.phases("reorgBlocks"), map[bool]string{false: "remainder_map_insert", true: "remainder_add_nodes"}[parallel])
+
+					require.Equal(t, sc.forward[len(sc.forward)-1].Header.Hash(), sc.stp.GetCurrentBlockHeader().Hash())
+					requireAssemblyValid(t, sc.stp, sc.onChainAfter)
+					require.Equal(t, sc.expectedOrderAfter(), txHashes(assemblyNodes(sc.stp)))
+					require.Equal(t, len(sc.expectedOrderAfter()), sc.stp.GetCurrentTxMap().Length(), "the tx map holds exactly what the subtrees hold")
+					require.Zero(t, sc.stp.GetRemoveMapLength())
+					require.ElementsMatch(t, sc.rawD1(), sc.utxo.marked(false))
+					require.ElementsMatch(t, sc.winnerNotLost(), sc.utxo.marked(true))
+				})
+			}
+		}
 	}
 }
 
