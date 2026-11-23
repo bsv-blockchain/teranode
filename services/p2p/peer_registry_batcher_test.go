@@ -537,6 +537,32 @@ type blockingRegistryClient struct {
 	releaseRegister chan struct{}
 }
 
+type stopBudgetCompensationRegistry struct {
+	blockchain.PeerRegistryClientI
+	batcher     *peerRegistryBatcher
+	retried     chan struct{}
+	removeCalls int
+}
+
+func (c *stopBudgetCompensationRegistry) RegisterPeer(ctx context.Context, info *blockchain.PeerInfo) error {
+	if err := c.PeerRegistryClientI.RegisterPeer(ctx, info); err != nil {
+		return err
+	}
+	c.batcher.forget(info.ID)
+	return nil
+}
+
+func (c *stopBudgetCompensationRegistry) RemovePeer(ctx context.Context, peerID string) error {
+	c.removeCalls++
+	if c.removeCalls == 1 {
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	err := c.PeerRegistryClientI.RemovePeer(ctx, peerID)
+	close(c.retried)
+	return err
+}
+
 func (c *blockingRegistryClient) RegisterPeer(ctx context.Context, info *blockchain.PeerInfo) error {
 	c.enteredRegister <- info.ID
 	<-c.releaseRegister
@@ -892,6 +918,32 @@ func TestPeerRegistryBatcher_StopHonorsBudget(t *testing.T) {
 
 	// Unwedge the in-flight flush so the goroutine can exit cleanly.
 	blocking.releaseRegister <- struct{}{}
+}
+
+func TestPeerRegistryBatcher_FinalFlushCompensationHonorsStopBudget(t *testing.T) {
+	reg := blockchain.NewCentralizedPeerRegistry(blockchain.DefaultBanConfig())
+	client := &stopBudgetCompensationRegistry{
+		PeerRegistryClientI: blockchain.NewLocalPeerRegistryClient(reg),
+		retried:             make(chan struct{}),
+	}
+	b := newPeerRegistryBatcher(context.Background(), ulogger.TestLogger{}, client, time.Hour)
+	client.batcher = b
+	peerID := mustNewPeerID(t).String()
+	b.enqueueRegister(peerID, "", 0, nil, "", false)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	b.stop(ctx)
+	require.Less(t, time.Since(start), 500*time.Millisecond, "final compensation must not extend the stop budget")
+
+	select {
+	case <-client.retried:
+	case <-time.After(time.Second):
+		t.Fatal("failed stop-budget compensation must retry asynchronously")
+	}
+	_, exists := reg.Get(peerID)
+	require.False(t, exists, "compensation retry must remove the raced registration")
 }
 
 // TestPeerRegistryBatcher_AssertStateCountBounded verifies the assert-state

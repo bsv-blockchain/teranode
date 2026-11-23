@@ -383,6 +383,7 @@ func (b *peerRegistryBatcher) forget(peerID string) {
 func (b *peerRegistryBatcher) flushOnce(ctx context.Context) {
 	b.flushMu.Lock()
 	defer b.flushMu.Unlock()
+	callerCancelable := ctx.Done() != nil
 
 	b.mu.Lock()
 	pending := b.pending
@@ -545,9 +546,12 @@ func (b *peerRegistryBatcher) flushOnce(ctx context.Context) {
 		// it now would also wipe any registry write another path (catchup
 		// penalties, sync coordinator peer info) made in the meantime.
 		if removedMidFlight && sendRegister && !reenqueued {
-			if err := b.compensateRemove(ctx, peerID); err != nil {
+			if err := b.compensateRemove(ctx, peerID, callerCancelable); err != nil {
 				rpcErrs++
 				b.logger.Warnf("[peerRegistryBatcher] compensating RemovePeer %s after mid-flush removal failed: %v", peerID, err)
+				if callerCancelable && ctx.Err() != nil {
+					go b.retryCompensatingRemove(ctx, peerID)
+				}
 			} else {
 				b.logger.Infof("[peerRegistryBatcher] removed peer %s again: its removal raced this cycle's RegisterPeer", peerID)
 			}
@@ -569,16 +573,25 @@ func (b *peerRegistryBatcher) flushOnce(ctx context.Context) {
 // cycle's RegisterPeer. Ordering is what makes it correct: the RegisterPeer
 // has returned, so the registry has applied it, and this RemovePeer is
 // therefore ordered after it regardless of how removePeer's own RemovePeer
-// interleaved. The RPC gets at least registryCompensateTimeout of budget: the
-// flush ctx is used only while that much remains on it, otherwise a detached
-// budget, so a flush that is about to expire cannot leave the ghost behind.
-func (b *peerRegistryBatcher) compensateRemove(ctx context.Context, peerID string) error {
-	if dl, ok := ctx.Deadline(); !ok || time.Until(dl) < registryCompensateTimeout {
+// interleaved. A final stop flush honors its caller's budget. A periodic flush
+// can use a detached budget to avoid leaving the peer registered.
+func (b *peerRegistryBatcher) compensateRemove(ctx context.Context, peerID string, callerCancelable bool) error {
+	if dl, ok := ctx.Deadline(); !callerCancelable && (!ok || time.Until(dl) < registryCompensateTimeout) {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(context.WithoutCancel(ctx), registryCompensateTimeout)
 		defer cancel()
 	}
 	return b.registry.RemovePeer(ctx, peerID)
+}
+
+// retryCompensatingRemove gives a stop-budget-expired removal one bounded,
+// best-effort chance to finish without holding up Server.Stop.
+func (b *peerRegistryBatcher) retryCompensatingRemove(ctx context.Context, peerID string) {
+	retryCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), registryCompensateTimeout)
+	defer cancel()
+	if err := b.registry.RemovePeer(retryCtx, peerID); err != nil {
+		b.logger.Warnf("[peerRegistryBatcher] compensating RemovePeer retry for %s failed: %v", peerID, err)
+	}
 }
 
 // isRemovedLocked reports whether the peer has a removal tombstone, either
