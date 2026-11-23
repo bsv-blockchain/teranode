@@ -229,6 +229,75 @@ func TestStoreQueueListener_ADroppedRequestLeavesNoGapInTheNotifications(t *test
 	require.True(t, announced[*kept.subtree.RootHash()])
 }
 
+// With room in the queue nothing is dropped at the limit, so a stale request is still queued when
+// a worker comes to it: the worker cancels it, never writes it, and the in-order sender announces the
+// request after it.
+func TestStoreQueueListener_AStaleRequestIsCancelledAtTakeAndTheNextOneIsAnnounced(t *testing.T) {
+	server, _ := setupServerWithSettings(t, func(s *settings.Settings) {
+		s.BlockAssembly.StoredPrefixTemplate = true
+		s.BlockAssembly.StoreQueueMaxMB = 1024
+		s.BlockAssembly.SubtreeStorageWorkers = 1
+	})
+	q := server.storeQueue
+	require.NotNil(t, q)
+
+	p := &storePipeline{announced: make(chan chainhash.Hash, 64)}
+	client := &blockchain.Mock{}
+	client.On("IsFSMCurrentState", mock.Anything, mock.Anything).Return(true, nil)
+	client.On("SendNotification", mock.Anything, mock.Anything).
+		Run(func(args mock.Arguments) {
+			n, _ := args.Get(1).(*blockchain.Notification)
+			p.announced <- chainhash.Hash(n.Hash)
+		}).
+		Return(nil)
+	server.blockchainClient = client
+	setForTest(t, &subtreeRetryBackoffUnit, time.Millisecond)
+	setForTest(t, &metaBuildBackoff, time.Millisecond)
+
+	fault := blobfault.New(server.subtreeStore)
+	release := make(chan struct{})
+	entered := make(chan struct{}, 1)
+	fault.OnSetAny(fileformat.FileTypeSubtree, blobfault.Rule{Block: release, Entered: entered})
+	server.subtreeStore = fault
+	t.Cleanup(func() {
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+	})
+
+	first := pushChain(t, q, 2, false)
+	<-entered // the only worker is writing it
+
+	stale, last := pushChain(t, q, 3, false), pushChain(t, q, 4, false)
+	q.Stale(stale.subtree)
+
+	fault.OnSetAny(fileformat.FileTypeSubtree, blobfault.Rule{})
+	close(release)
+
+	require.True(t, awaitResult(t, first.result).OK())
+	require.True(t, awaitResult(t, last.result).OK())
+	require.True(t, awaitResult(t, stale.result).Cancelled)
+
+	announced := map[chainhash.Hash]bool{}
+
+	for range 2 {
+		select {
+		case h := <-p.announced:
+			announced[h] = true
+		case <-time.After(5 * time.Second):
+			t.Fatal("a subtree after a cancelled request was never announced")
+		}
+	}
+
+	require.True(t, announced[*first.subtree.RootHash()])
+	require.True(t, announced[*last.subtree.RootHash()])
+	require.False(t, announced[*stale.subtree.RootHash()], "a cancelled request is not announced")
+	require.Zero(t, fault.SetCalls(stale.subtree.RootHash()[:], fileformat.FileTypeSubtree), "and its subtree is never written")
+	require.Eventually(t, func() bool { return q.Held() == 0 }, 5*time.Second, 10*time.Millisecond)
+}
+
 func TestStoreQueueListener_AnAnnounceOnlyRequestAnnouncesWithoutStoring(t *testing.T) {
 	server, q, p := startQueueListener(t)
 

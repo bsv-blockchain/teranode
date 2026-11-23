@@ -1023,10 +1023,41 @@ func TestStoreQueue_ACandidateWhoseSubtreeLeftTheChainStillHasItsFiles(t *testin
 
 	for _, st := range before[2:] {
 		if !slices.Contains(stp.chainedSubtrees, st) {
-			require.NotContains(t, candidate.Subtrees, st, "a request that was cancelled belongs to no template")
-			require.Zero(t, w.stores(*st.RootHash()))
+			require.NotContains(t, candidate.Subtrees, st, "a subtree that left the chain unstored belongs to no template")
 		}
 	}
+}
+
+// A cancelled request's callback reads its subtree's nodes, and the subtree is unmapped when it is
+// closed. The cancel only queues the callback, and closeRetiredSubtrees runs it before any close.
+func TestStoreQueue_ACancelledRequestsCleanupRunsBeforeItsSubtreeIsUnmapped(t *testing.T) {
+	q := NewStoreQueue(1 << 40)
+	stp, _ := newStoredPrefixProcessor(t, 8, NewStoredSet(), func(stp *SubtreeProcessor) {
+		stp.storeQueue = q
+		stp.mmapDir = t.TempDir()
+	})
+	addStoredPrefixTxs(t, stp, 8*5)
+	require.GreaterOrEqual(t, len(stp.chainedSubtrees), 4)
+
+	x := stp.chainedSubtrees[3]
+	require.True(t, x.IsMmapBacked(), "precondition: mmap mode")
+
+	hash := x.Nodes[1].Hash
+	stp.deletedTxs.Set(hash, subtreepkg.TxInpoints{})
+
+	stp.retireChainedSubtrees() // no pressure: its request stays queued, stale
+	stp.precomputedMiningData.Store(nil)
+
+	_, _, ok := q.Take(takeCtx(t, 200*time.Millisecond)) // a worker comes: every request is stale
+	require.False(t, ok)
+	require.Zero(t, q.Len(), "the requests of the retired chain were cancelled")
+	require.Nil(t, q.entry(x))
+
+	stp.closeRetiredSubtrees()
+
+	_, held := stp.deletedTxs.Get(hash)
+	require.False(t, held, "its callback ran while the subtree was mapped")
+	require.Empty(t, q.takeCleanups(), "and none is left that would read it after")
 }
 
 // A cancelled request answers ErrChan and its Result, hands its cleanup to the processor, releases its
