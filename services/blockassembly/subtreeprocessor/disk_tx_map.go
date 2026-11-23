@@ -149,11 +149,6 @@ type DiskTxMap struct {
 	// generations, for Stats.
 	bytesWritten atomic.Int64
 
-	// retainedEntries is the most entries any cleared generation held: clear()
-	// keeps each shard map's capacity, so the index holds at least that much
-	// RAM however few entries it has now.
-	retainedEntries atomic.Int64
-
 	// errMu guards err, the first storage error since the last TakeErr. Map
 	// operations have no error return, so failures are recorded here and
 	// surfaced by the subtree processor.
@@ -1049,10 +1044,6 @@ func (m *DiskTxMap) Clear() {
 		return
 	}
 
-	if n := int64(m.Length()); n > m.retainedEntries.Load() {
-		m.retainedEntries.Store(n)
-	}
-
 	m.retire(old, g)
 
 	// Reuse the old generation's buffers: nothing reads or writes old any
@@ -1076,17 +1067,26 @@ func (m *DiskTxMap) Clear() {
 // waits for every read that pinned old. Every shard is emptied before the
 // swap, so no read can pair an old entry with the next generation.
 func (m *DiskTxMap) retire(old, next *generation) {
-	// clear keeps each map's capacity: the next block refills it to a similar
-	// size, and regrowing 4096 maps from empty every block costs more than
-	// holding the memory.
-	for i := range m.shards {
-		m.shards[i].mu.Lock()
-		clear(m.shards[i].index)
-		m.shards[i].mu.Unlock()
-	}
+	m.clearIndex()
 
 	m.gen.Store(next)
 	m.waitForReaders(old.parity)
+}
+
+// clearIndex empties every index shard by giving it a new map. clear() would
+// keep each map's capacity, and a cleared half of the subtree processor's
+// double buffer sits empty for a whole block interval, so a busy node held
+// twice its index RAM. In BenchmarkDiskTxMap_IndexRefill (32M entries)
+// regrowing costs ~5ns per entry over the next block interval, and the
+// remainder share MoveFrom inserts inside moveForwardBlock was no slower.
+// Replacing a map is O(1), unlike clear(), so one goroutine does all 4096.
+// Every shard is empty when it returns.
+func (m *DiskTxMap) clearIndex() {
+	for i := range m.shards {
+		m.shards[i].mu.Lock()
+		m.shards[i].index = make(map[chainhash.Hash]uint64)
+		m.shards[i].mu.Unlock()
+	}
 }
 
 // mapWindowsLocked maps windows until they cover every written byte. A
@@ -1252,7 +1252,7 @@ func (m *DiskTxMap) UpdateSubtreeIndexBatch(nodes []subtreepkg.Node, subtreeInde
 // DiskMapStats holds lightweight metrics for a disk-backed map.
 type DiskMapStats struct {
 	Entries          int64
-	IndexMemBytes    int64 // estimated RAM held by the index, including capacity kept across Clear
+	IndexMemBytes    int64 // estimated RAM held by the index entries
 	DiskBytesWritten int64 // payload bytes written over the map's life
 }
 
@@ -1264,7 +1264,7 @@ func (m *DiskTxMap) Stats() DiskMapStats {
 
 	return DiskMapStats{
 		Entries:          entries,
-		IndexMemBytes:    max(entries, m.retainedEntries.Load()) * indexBytesPerEntry,
+		IndexMemBytes:    entries * indexBytesPerEntry,
 		DiskBytesWritten: m.bytesWritten.Load(),
 	}
 }

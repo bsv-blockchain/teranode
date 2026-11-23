@@ -271,14 +271,6 @@ func (b *Blockchain) GetBlockHeadersToCommonAncestor(ctx context.Context, req *b
 
 Retrieves block headers to find a common ancestor between two chains, typically used during chain synchronization and reorganization.
 
-### GetBlockHeadersFromTill
-
-```go
-func (b *Blockchain) GetBlockHeadersFromTill(ctx context.Context, req *blockchain_api.GetBlockHeadersFromTillRequest) (*blockchain_api.GetBlockHeadersResponse, error)
-```
-
-Retrieves block headers between two specified blocks, useful for filling gaps in blockchain data or analyzing specific ranges.
-
 ### GetBlockHeadersFromHeight
 
 ```go
@@ -352,6 +344,13 @@ func (b *Blockchain) SetBlockMinedSet(ctx context.Context, req *blockchain_api.S
 ```
 
 Marks a block as mined in the blockchain, updating its status to indicate completion of the mining process.
+
+The write is conditional when the request carries `mined_set_generation`: it only lands while the
+block's `mined_set_gen` still equals that value. `ClearBlockMinedSet`, `InvalidateBlock` and
+`RevalidateBlock` each clear `mined_set` and bump `mined_set_gen`, so a tagging run that started
+before one of them is refused with `ERR_STATE_ERROR` instead of overwriting the reset. Block
+validation re-queues the block on that error. A request without the field, as sent by a block
+validation service that predates it, is the old unconditional write.
 
 ### GetBlocksMinedNotSet
 
@@ -449,14 +448,6 @@ func (b *Blockchain) GetChainTips(ctx context.Context, _ *emptypb.Empty) (*block
 
 Retrieves information about all known tips in the block tree.
 
-### GetLatestBlockHeaderFromBlockLocatorRequest
-
-```go
-func (b *Blockchain) GetLatestBlockHeaderFromBlockLocatorRequest(ctx context.Context, request *blockchain_api.GetLatestBlockHeaderFromBlockLocatorRequest) (*blockchain_api.GetBlockHeaderResponse, error)
-```
-
-Retrieves the latest block header from a block locator request.
-
 ### SetBlockProcessedAt
 
 ```go
@@ -464,14 +455,6 @@ func (b *Blockchain) SetBlockProcessedAt(ctx context.Context, req *blockchain_ap
 ```
 
 Sets or clears the processed_at timestamp for a block. This method updates the timestamp indicating when a block was processed by the system.
-
-### GetBlockHeadersFromOldestRequest
-
-```go
-func (b *Blockchain) GetBlockHeadersFromOldestRequest(ctx context.Context, request *blockchain_api.GetBlockHeadersFromOldestRequest) (*blockchain_api.GetBlockHeadersResponse, error)
-```
-
-Retrieves block headers from the oldest request.
 
 ### GetBlockHeadersFromCommonAncestor
 

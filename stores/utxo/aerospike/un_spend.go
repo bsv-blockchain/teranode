@@ -84,6 +84,8 @@ import (
 // Parameters:
 //   - ctx: Context for cancellation
 //   - spends: Array of UTXOs to unspend
+//   - flagAsLocked: ignored. The unspend UDF never changes the locked flag,
+//     which setMined clears, and no caller in teranode passes it.
 //
 // Returns error if:
 //   - Context is cancelled
@@ -96,7 +98,9 @@ import (
 //   - Handles concurrent unspend operations
 //   - Coordinates with external storage
 func (s *Store) Unspend(ctx context.Context, spends []*utxo.Spend, flagAsLocked ...bool) (err error) {
-	return s.unspend(ctx, spends, flagAsLocked...)
+	_, err = s.unspend(ctx, spends, flagAsLocked...)
+
+	return err
 }
 
 // unspend implements the core unspend logic.
@@ -105,28 +109,81 @@ func (s *Store) Unspend(ctx context.Context, spends []*utxo.Spend, flagAsLocked 
 //  2. Logs operation details
 //  3. Executes Lua script
 //  4. Handles response
-func (s *Store) unspend(ctx context.Context, spends []*utxo.Spend, flagAsLocked ...bool) (err error) {
+//
+// This is a best-effort-over-all rollback: a failure on one spend does not
+// abort the loop, because every subsequent spend in the batch is a dangling
+// spender reference that also needs unwinding. Aborting on the first error
+// (as this used to do) leaves those later spends applied with no record to
+// point at - the exact "ghost spender" condition this rollback exists to
+// prevent. Failures are collected and returned together at the end; only a
+// cancelled/expired context stops the loop early, since further Lua calls
+// would just fail too.
+//
+// Note for callers: a returned error means "some, possibly nearly all, spends
+// were reverted", not "the first k were". A caller deciding "did this happen?"
+// from the error alone must treat a failed unspend as partially applied.
+// unspend returns how many spends could NOT be reverted alongside the aggregated
+// error, so the partial-spend rollback can count dangling refs rather than failed
+// calls — the sql store's counter of the same name is a ref count, and a fleet
+// dashboard summing the two must not mix units.
+// failed counts SPENDS that could not be reverted, not errors. The two differ on
+// the ctx.Done arm, which abandons every spend from the abort index onward after
+// appending a single marker error: those spends are still applied, so counting
+// errors there under-reports dangling refs by the whole remainder — in exactly the
+// deadline-truncation case this counter exists to measure. The marker itself is
+// not a spend, so len(errs) is wrong in the other direction too.
+func (s *Store) unspend(ctx context.Context, spends []*utxo.Spend, flagAsLocked ...bool) (failed int, err error) {
+	var errs []error
+
+loop:
 	for i, spend := range spends {
 		select {
 		case <-ctx.Done():
+			// A cancelled/expired context is the one case that still stops the
+			// loop early: further Lua calls would just fail too, so there is no
+			// rollback value in continuing. Say so clearly in the aggregated
+			// error rather than reporting it as an ordinary per-spend failure.
 			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-				return errors.NewStorageError("timeout un-spending %d of %d utxos", i, len(spends))
+				errs = append(errs, errors.NewStorageError("timeout un-spending %d of %d utxos, aborting remaining unspends early", i, len(spends)))
+			} else {
+				errs = append(errs, errors.NewStorageError("context cancelled un-spending %d of %d utxos, aborting remaining unspends early", i, len(spends)))
 			}
 
-			return errors.NewStorageError("context cancelled un-spending %d of %d utxos", i, len(spends))
+			// Everything from here on is never attempted, so it stays applied.
+			failed += len(spends) - i
+
+			break loop
 		default:
 			if spend != nil {
-				s.logger.Warnf("un-spending utxo %s of tx %s:%d, spending data: %v", spend.UTXOHash.String(), spend.TxID.String(), spend.Vout, spend.SpendingData)
+				// Debug, not Warn: rollback now fires on every error class
+				// (including the ErrTxLocked retry path), so a single wide
+				// transaction retried a few times can emit tens of thousands
+				// of these lines. The operator-facing signal is now the
+				// aggregate error returned below plus the caller's rollback
+				// counters in spend.go, so no signal is lost. This log line is
+				// shared with ProcessConflicting - kept as a deliberate,
+				// commented change rather than a silent one.
+				s.logger.Debugf("un-spending utxo %s of tx %s:%d, spending data: %v", spend.UTXOHash.String(), spend.TxID.String(), spend.Vout, spend.SpendingData)
 
 				if err = s.unspendLua(ctx, spend); err != nil {
-					// just return the raw error, should already be wrapped
-					return err
+					failed++
+
+					errs = append(errs, err)
 				}
 			}
 		}
 	}
 
-	return nil
+	if len(errs) == 0 {
+		return 0, nil
+	}
+
+	// Best-effort-over-all: every spend in the batch is attempted (unless the
+	// context aborts) even after an earlier one fails, because a spend past a
+	// failed index is exactly the dangling "ghost spender" reference this
+	// rollback exists to unwind. Aggregate with a hard cap so a mass failure
+	// on a wide transaction doesn't build an O(N^2) error chain.
+	return failed, errors.NewStorageError("error un-spending %d of %d utxos", failed, len(spends), errors.JoinCapped(maxAggregatedSpendErrs, errs...))
 }
 
 // unspendLua executes the Lua script for a single UTXO unspend.
@@ -208,6 +265,10 @@ func (s *Store) unspendLua(ctx context.Context, spend *utxo.Spend) error {
 			if err := s.handleExtraRecords(ctx, spend.TxID, -1, 0); err != nil {
 				return err
 			}
+		}
+
+		if err := s.reconcileChildDAH(spend.TxID, res, s.GetBlockHeight()); err != nil {
+			return err
 		}
 	} else if res.Status == LuaStatusError {
 		prometheusUtxoMapErrors.WithLabelValues("Reset", "error response").Inc()

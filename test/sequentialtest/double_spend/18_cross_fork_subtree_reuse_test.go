@@ -86,7 +86,7 @@ func testCrossForkSubtreeReuse(t *testing.T, utxoStoreType string) {
 	require.True(t, subtreeC.RootHash().IsEqual(subtreeS),
 		"blockC must reuse blockF's subtree verbatim for this scenario to be meaningful")
 
-	err = td.BlockValidationClient.ProcessBlock(td.Ctx, blockC, blockC.Height, "", "legacy", 0)
+	err = td.BlockValidationClient.ProcessBlock(td.Ctx, blockC, blockC.Height, "", "legacy", 0, false)
 	require.Error(t, err,
 		"a block reusing a cached subtree whose conflicting tx has a counter-spender "+
 			"confirmed in that block's own ancestry must be rejected")

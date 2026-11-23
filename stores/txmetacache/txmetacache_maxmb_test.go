@@ -1,3 +1,10 @@
+//go:build testtxmetacache
+
+// The chunk arithmetic below needs maxMB*1024*1024/BucketsCount >= ChunkSize so
+// New does not raise the bucket size to its floor; with the production
+// BucketsCount (8192) a 1-2 MB cache is below it. The 8-bucket test build is
+// the one every make target uses.
+
 package txmetacache
 
 import (

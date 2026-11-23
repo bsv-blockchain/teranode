@@ -53,7 +53,7 @@ func benchmarkCheckCallerSuppliedBlockID(b *testing.B, storeURL *url.URL) {
 
 	b.Run("reserved", func(b *testing.B) {
 		for b.Loop() {
-			if err := s.checkCallerSuppliedBlockID(ctx, block1.Hash(), reserved); err != nil {
+			if _, err := s.checkCallerSuppliedBlockID(ctx, block1.Hash(), reserved); err != nil {
 				b.Fatal(err)
 			}
 		}
@@ -64,7 +64,7 @@ func benchmarkCheckCallerSuppliedBlockID(b *testing.B, storeURL *url.URL) {
 		require.NoError(b, err)
 
 		for b.Loop() {
-			if err := s.checkCallerSuppliedBlockID(ctx, block1.Hash(), reserved); err != nil {
+			if _, err := s.checkCallerSuppliedBlockID(ctx, block1.Hash(), reserved); err != nil {
 				b.Fatal(err)
 			}
 		}

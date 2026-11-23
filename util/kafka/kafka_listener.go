@@ -5,6 +5,7 @@ import (
 	"context"
 	"net/url"
 
+	"github.com/bsv-blockchain/teranode/pkg/urlutil"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/ulogger"
 )
@@ -41,11 +42,11 @@ func StartKafkaControlledListener(ctx context.Context, logger ulogger.Logger, gr
 
 				kafkaCtx, kafkaCancel = context.WithCancel(ctx)
 
-				logger.Infof("[Legacy Manager] starting Kafka listener for %s", kafkaConfigURL.String())
+				logger.Infof("[Legacy Manager] starting Kafka listener for %s", urlutil.Redact(kafkaConfigURL))
 
 				go listener(kafkaCtx, kafkaConfigURL, groupID)
 			} else if kafkaCancel != nil {
-				logger.Infof("[Legacy Manager] stopping Kafka listener for %s", kafkaConfigURL.String())
+				logger.Infof("[Legacy Manager] stopping Kafka listener for %s", urlutil.Redact(kafkaConfigURL))
 				kafkaCancel() // Stop the listener
 				kafkaCancel = nil
 			}
@@ -69,7 +70,7 @@ func StartKafkaControlledListener(ctx context.Context, logger ulogger.Logger, gr
 func StartKafkaListener(ctx context.Context, logger ulogger.Logger, kafkaURL *url.URL, groupID string, autoCommit bool, consumerFn func(msg *KafkaMessage) error, kafkaSettings *settings.KafkaSettings) {
 	client, err := NewKafkaConsumerGroupFromURL(logger, kafkaURL, groupID, autoCommit, kafkaSettings)
 	if err != nil {
-		logger.Errorf("failed to start Kafka listener for %s: %v", kafkaURL.String(), err)
+		logger.Errorf("failed to start Kafka listener for %s: %v", urlutil.Redact(kafkaURL), err)
 		return
 	}
 

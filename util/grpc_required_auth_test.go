@@ -6,6 +6,7 @@ import (
 
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -83,4 +84,40 @@ func TestValidateRequiredAdminAPIKey(t *testing.T) {
 	for _, key := range []string{"1234567890123456", "a-random-service-test-key-with-32-chars"} {
 		require.NoError(t, ValidateRequiredAdminAPIKey(key))
 	}
+}
+
+// TestRequiredAuthRejectionsCounted pins that RequireAuthByDefault rejections
+// increment grpcAuthRejectionsTotal on the unary and stream paths, and that
+// accepted and public calls do not. Without it a mismatched admin key fails
+// every RPC with nothing to alert on.
+func TestRequiredAuthRejectionsCounted(t *testing.T) {
+	const (
+		key    = "required-auth-counter-test-key"
+		method = "/example/RequiredAuthCounted"
+		public = "/example/RequiredAuthCountedPublic"
+	)
+	unary, stream := requiredAuthInterceptors(key, map[string]bool{public: true})
+	counter := func(m string) float64 { return testutil.ToFloat64(grpcAuthRejectionsTotal.WithLabelValues(m)) }
+	handler := func(context.Context, any) (any, error) { return nil, nil }
+	streamHandler := func(any, grpc.ServerStream) error { return nil }
+	wrongCtx := metadata.NewIncomingContext(context.Background(), metadata.Pairs("x-api-key", "wrong"))
+	goodCtx := metadata.NewIncomingContext(context.Background(), metadata.Pairs("x-api-key", key))
+
+	before := counter(method)
+	for _, ctx := range []context.Context{context.Background(), wrongCtx} {
+		_, err := unary(ctx, nil, &grpc.UnaryServerInfo{FullMethod: method}, handler)
+		require.Equal(t, codes.Unauthenticated, status.Code(err))
+		err = stream(nil, authTestStream{ctx: ctx}, &grpc.StreamServerInfo{FullMethod: method}, streamHandler)
+		require.Equal(t, codes.Unauthenticated, status.Code(err))
+	}
+	require.Equal(t, before+4, counter(method), "unary and stream rejections must each count once")
+
+	_, err := unary(goodCtx, nil, &grpc.UnaryServerInfo{FullMethod: method}, handler)
+	require.NoError(t, err)
+	require.NoError(t, stream(nil, authTestStream{ctx: goodCtx}, &grpc.StreamServerInfo{FullMethod: method}, streamHandler))
+	publicBefore := counter(public)
+	_, err = unary(context.Background(), nil, &grpc.UnaryServerInfo{FullMethod: public}, handler)
+	require.NoError(t, err)
+	require.Equal(t, before+4, counter(method), "accepted calls must not count")
+	require.Equal(t, publicBefore, counter(public), "public methods must not count")
 }

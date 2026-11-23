@@ -29,6 +29,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -121,8 +122,8 @@ type Server struct {
 	// is used to send rejected transaction data to Kafka topics for monitoring and analysis.
 	rejectedTxKafkaProducerClient kafka.KafkaAsyncProducerI
 
-	// policyRejectedTxKafkaProducerClient publishes consensus-valid but policy-rejected
-	// transactions to Kafka. Subtree validation pods consume these to cache raw tx bytes.
+	// policyRejectedTxKafkaProducerClient publishes policy-rejected transactions, usually
+	// but not always consensus-valid, to Kafka. Subtree validation pods consume these to cache raw tx bytes.
 	policyRejectedTxKafkaProducerClient kafka.KafkaAsyncProducerI
 
 	// blockAssemblyClient connects to the block assembly service for mining integration,
@@ -142,6 +143,10 @@ type Server struct {
 	// mutex costs nothing on a per-service-lifecycle path.
 	consumerMu sync.Mutex
 
+	// backpressureOffWarned latches the one warning that Kafka backpressure is off while block
+	// assembly enforces an in-memory transaction limit.
+	backpressureOffWarned atomic.Bool
+
 	// consumerCtx is a cancellable child of the Start context that the Kafka
 	// message handler passes into ValidateWithOptions. Cancelling it aborts an
 	// in-place block-assembly handoff retry (WaitForBlockAssembly) promptly at
@@ -156,6 +161,13 @@ type Server struct {
 	// It is the ONLY handle on consumerCtx, which is why setConsumerContext
 	// cancels the pair it replaces rather than overwriting both fields.
 	consumerCancel context.CancelFunc
+
+	// unminedTxGate drops every transaction taken from the validator Kafka topic
+	// while the node syncs (issue 2003). Only the Kafka consumer consults it: the
+	// gRPC and HTTP endpoints also serve block and subtree validation during
+	// catch-up, which must go on validating a block's own transactions. nil
+	// accepts everything.
+	unminedTxGate *blockchain.UnminedTxGate
 }
 
 // setConsumerContext installs the consumer context and its cancel function,
@@ -234,6 +246,7 @@ func NewServer(logger ulogger.Logger, tSettings *settings.Settings, utxoStore ut
 		rejectedTxKafkaProducerClient:       rejectedTxKafkaProducerClient,
 		policyRejectedTxKafkaProducerClient: policyRejectedTxKafkaProducerClient,
 		blockAssemblyClient:                 blockAssemblyClient,
+		unminedTxGate:                       blockchain.NewUnminedTxGate(logger, blockchainClient, blockchain.UnminedTxRouteValidatorKafka),
 	}
 }
 
@@ -415,44 +428,7 @@ func (v *Server) Start(ctx context.Context, readyCh chan<- struct{}) (retErr err
 	}()
 
 	kafkaMessageHandler := func(msg *kafka.KafkaMessage) error {
-		var kafkaMsg kafkamessage.KafkaTxValidationTopicMessage
-		if err := proto.Unmarshal(msg.Value, &kafkaMsg); err != nil {
-			v.logger.Errorf("Failed to unmarshal kafka message: %v", err)
-
-			return err
-		}
-
-		tx, err := bt.NewTxFromBytes(kafkaMsg.Tx)
-		if err != nil {
-			prometheusInvalidTransactions.Inc()
-			v.logger.Errorf("[Validator] failed to parse transaction from bytes: %v", err)
-
-			return err
-		}
-
-		height := kafkaMsg.Height
-
-		options := kafkaValidationOptions(kafkaMsg.Options)
-
-		// should not pass in a height when validating from Kafka, should just be current utxo store height
-		if _, err = v.validator.ValidateWithOptions(consumerCtx, tx, height, options); err != nil {
-			// ErrTxMissingParent here means the tx merely arrived before its
-			// parent on this Kafka topic's 32 concurrent partitions - it is not
-			// evidence of an attack or a malformed tx, so count it separately
-			// from prometheusInvalidTransactions to keep that counter usable as
-			// a signal for genuinely invalid/attack traffic.
-			if errors.Is(err, errors.ErrTxMissingParent) {
-				prometheusMissingParentTransactions.Inc()
-			} else {
-				prometheusInvalidTransactions.Inc()
-			}
-
-			v.logger.Errorf("[Validator] Invalid tx: %s", err)
-
-			return err
-		}
-
-		return nil
+		return v.handleKafkaTxMessage(consumerCtx, msg)
 	}
 
 	if v.consumerClient != nil {
@@ -484,6 +460,73 @@ func (v *Server) Start(ctx context.Context, readyCh chan<- struct{}) (retErr err
 		validator_api.RegisterValidatorAPIServer(server, v)
 		closeOnce.Do(func() { close(readyCh) })
 	}, nil); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// handleKafkaTxMessage validates one transaction taken from the validator Kafka topic.
+func (v *Server) handleKafkaTxMessage(consumerCtx context.Context, msg *kafka.KafkaMessage) error {
+	var kafkaMsg kafkamessage.KafkaTxValidationTopicMessage
+	if err := proto.Unmarshal(msg.Value, &kafkaMsg); err != nil {
+		v.logger.Errorf("Failed to unmarshal kafka message: %v", err)
+
+		return err
+	}
+
+	tx, err := bt.NewTxFromBytes(kafkaMsg.Tx)
+	if err != nil {
+		prometheusInvalidTransactions.Inc()
+		v.logger.Errorf("[Validator] failed to parse transaction from bytes: %v", err)
+
+		return err
+	}
+
+	// A syncing node stores no unmined transaction (issue 2003). The message is
+	// dropped, and nil commits its offset: a transaction held until RUNNING would
+	// be hours old when the node caught up. Propagation refuses at its own intake,
+	// so this catches what was already on the topic when the sync began.
+	if v.unminedTxGate.Refuses(consumerCtx, tx.TxIDChainHash()) {
+		return nil
+	}
+
+	height := kafkaMsg.Height
+
+	options := kafkaValidationOptions(kafkaMsg.Options)
+
+	// should not pass in a height when validating from Kafka, should just be current utxo store height
+	if _, err = v.validator.ValidateWithOptions(consumerCtx, tx, height, options); err != nil {
+		// The tx was accepted, spent and created; only the unlock failed. It is already
+		// logged and counted in the validator, and the lock heals when the tx is mined.
+		if errors.Is(err, errors.ErrTxUnlockFailed) {
+			return nil
+		}
+
+		// A shed at block assembly's in-memory limit is not an invalid tx either: the
+		// validator unwound a valid transaction because the node had no room for it.
+		// It is counted on its own, and the validator already logged the drop at a
+		// bounded rate, so nil commits the offset without an error line per message.
+		if blockassembly.IsHeldLimitShed(err) {
+			prometheusHeldLimitShedTransactions.Inc()
+			v.warnBackpressureOffWithLimit(consumerCtx)
+
+			return nil
+		}
+
+		// ErrTxMissingParent here means the tx merely arrived before its
+		// parent on this Kafka topic's 32 concurrent partitions - it is not
+		// evidence of an attack or a malformed tx, so count it separately
+		// from prometheusInvalidTransactions to keep that counter usable as
+		// a signal for genuinely invalid/attack traffic.
+		if errors.Is(err, errors.ErrTxMissingParent) {
+			prometheusMissingParentTransactions.Inc()
+		} else {
+			prometheusInvalidTransactions.Inc()
+		}
+
+		v.logger.Errorf("[Validator] Invalid tx: %s", err)
+
 		return err
 	}
 
@@ -732,7 +775,10 @@ func (v *Server) validateTransaction(ctx context.Context, req *validator_api.Val
 
 	txMetaData, err := v.validator.ValidateWithOptions(ctx, tx, req.BlockHeight, validationOptions)
 	if err != nil {
-		prometheusInvalidTransactions.Inc()
+		// an accepted tx whose unlock failed is not an invalid tx
+		if !errors.Is(err, errors.ErrTxUnlockFailed) {
+			prometheusInvalidTransactions.Inc()
+		}
 
 		return &validator_api.ValidateTransactionResponse{
 			Valid: false,
@@ -990,6 +1036,10 @@ func (v *Server) handleSingleTx(ctx context.Context) echo.HandlerFunc {
 		// public code and message across instead, and leaves the status and body
 		// untouched for callers that predate it.
 		response, err := v.validateTransaction(ctx, req)
+		if errors.Is(err, errors.ErrTxUnlockFailed) {
+			return c.String(http.StatusOK, "OK")
+		}
+
 		if err != nil {
 			errors.AttachHTTPError(c.Response().Header(), err)
 			return c.String(httpStatusForTxError(err), "[handleSingleTx] Failed to process transaction: "+err.Error())
@@ -1054,6 +1104,10 @@ func (v *Server) handleMultipleTx(ctx context.Context) echo.HandlerFunc {
 			req := buildValidateTxRequest(tx.SerializeBytes(), 0, opts)
 
 			response, err := v.validateTransaction(ctx, req)
+			if errors.Is(err, errors.ErrTxUnlockFailed) {
+				continue
+			}
+
 			if err != nil {
 				return c.String(httpStatusForTxError(err), "[handleMultipleTx] Failed to process transaction: "+err.Error())
 			}

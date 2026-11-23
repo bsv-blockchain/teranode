@@ -404,7 +404,7 @@ func Test_UtxoSpentError(t *testing.T) {
 		assert.Equal(t, txID, *spendingData2.TxID)
 		assert.Equal(t, 1, spendingData2.Vin)
 
-		contains := "70: UTXO_SPENT (70): 0000000000000000000000000000000000000000000000313233343536373839:1 utxo already spent by tx 0000000000000000000000000000000000000000000000313233343536373839[1] \"utxo 0000000000000000000000000000000000000000000000313233343536373839 already spent by 0000000000000000000000000000000000000000000000313233343536373839[1]\""
+		contains := "70: 0000000000000000000000000000000000000000000000313233343536373839:1 utxo already spent by tx 0000000000000000000000000000000000000000000000313233343536373839[1] \"utxo 0000000000000000000000000000000000000000000000313233343536373839 already spent by 0000000000000000000000000000000000000000000000313233343536373839[1]\""
 
 		assert.Contains(t, unwrappedErr.Error(), contains)
 	})
@@ -1505,6 +1505,17 @@ func TestErrorCodeToGRPCCode(t *testing.T) {
 			name:     "maps ERR_UTXO_FROZEN to codes.FailedPrecondition",
 			errCode:  ERR_UTXO_FROZEN,
 			expected: codes.FailedPrecondition,
+		},
+		{
+			// ERR_TX_UNLOCK_FAILED means the transaction was accepted and only its
+			// post-acceptance unlock failed, so it must not join the
+			// FailedPrecondition family (that family means "not accepted yet"), and it
+			// must not answer codes.Internal ("this node broke") for a submission that
+			// took effect. The validator's HTTP /tx handler answers 200 OK for this
+			// same outcome; this row is the gRPC side of that decision.
+			name:     "maps ERR_TX_UNLOCK_FAILED to codes.Aborted, not FailedPrecondition or Internal",
+			errCode:  ERR_TX_UNLOCK_FAILED,
+			expected: codes.Aborted,
 		},
 		{
 			name:     "unmapped code BLOCK_NOT_FOUND defaults to codes.Internal",

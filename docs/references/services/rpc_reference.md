@@ -88,7 +88,7 @@ type RPCServer struct {
     authsha [sha256.Size]byte
 
     // limitauthsha contains the SHA256 hash of the HTTP basic auth string for limited-level access
-    // This is used for authenticating clients with restricted access (read-only operations)
+    // This is used for authenticating clients with restricted access (read-only commands and the submission commands)
     limitauthsha [sha256.Size]byte
 
     // numClients tracks the number of connected RPC clients for connection limiting
@@ -295,7 +295,7 @@ Implements the two-tier HTTP Basic authentication system for RPC clients. It val
     1. **Extracts the Authorization header** from the HTTP request
     2. **Validates the credentials** against both admin and limited-user authentication strings
     3. **Uses time-constant comparison** operations to prevent timing attacks
-    4. **Distinguishes between admin users** (who can perform state-changing operations) and limited users (who can only perform read-only operations)
+    4. **Distinguishes between admin users** (who can run every command) and limited users (who can run only the commands that `rpcAccessPolicy` does not mark admin-only)
 
 !!! warning "Security Considerations"
 
@@ -362,7 +362,7 @@ Some key handlers include:
     **Authentication Settings:**
 
     - **`rpc_user` and `rpc_pass`**: Credentials for RPC authentication with full admin privileges
-    - **`rpc_limit_user` and `rpc_limit_pass`**: Credentials for limited RPC access (read-only operations)
+    - **`rpc_limit_user` and `rpc_limit_pass`**: Credentials for limited RPC access (read-only commands plus `sendrawtransaction`, `submitblock`, `getminingcandidate` and `submitminingsolution`)
 
     **Connection Settings:**
 
@@ -409,18 +409,23 @@ Authentication is performed using HTTP Basic Auth.
 Admin users can execute all RPC commands. Limited users can execute the following commands:
 
 **Read-only commands:**
-createrawtransaction, decoderawtransaction, decodescript, estimatefee, getbestblock, getbestblockhash,
-getblock, getblockcount, getblockhash, getblockheader, getcfilter, getcfilterheader, getcurrentnet,
-getdifficulty, getheaders, getinfo, getnettotals, getnetworkhashps, getrawmempool, getrawtransaction,
-gettxout, gettxoutproof, help, searchrawtransactions, uptime, validateaddress, verifymessage,
-verifytxoutproof, version
+createrawtransaction, decoderawtransaction, decodescript, estimatefee, getbestblock,
+getbestblockhash, getblock, getblockcount, getblockhash, getblockheader, getcfilter,
+getcfilterheader, getcurrentnet, getdifficulty, getheaders, getinfo, getnettotals, getnetworkhashps,
+getrawmempool, getrawtransaction, gettxout, gettxoutproof, help, searchrawtransactions, uptime,
+validateaddress, verifymessage, verifytxoutproof, version
 
 **State-changing commands (also available to limited users):**
-sendrawtransaction, submitblock, getminingcandidate, submitminingsolution, freeze, unfreeze, reassign
+getminingcandidate, sendrawtransaction, submitblock, submitminingsolution
 
 **Admin-only commands (not available to limited users):**
-generate, generatetoaddress, getblockbyheight, getblockchaininfo, getchaintips, getmininginfo,
-getpeerinfo, invalidateblock, reconsiderblock, setban, isbanned, listbanned, clearbanned, stop
+addnode, clearbanned, debuglevel, freeze, generate, generatetoaddress, getaddednodeinfo,
+getblockbyheight, getblockchaininfo, getblocktemplate, getchaintips, getconnectioncount,
+getgenerate, gethashespersec, getmempoolinfo, getmininginfo, getpeerinfo, invalidateblock, isbanned,
+listbanned, node, ping, reassign, reconsiderblock, setban, setgenerate, stop, unfreeze, verifychain
+
+The classification lives in `rpcAccessPolicy` in `services/rpc/Server.go`. Every registered handler must
+have an entry. A method with no entry is denied to limited users.
 
 ### GRPC API Key Authentication
 
@@ -888,7 +893,7 @@ Returns information for creating a new block.
 
 1. `parameters` (object, optional):
 
-   - `provideCoinbaseTx` (boolean, optional, default=false): If true, includes the coinbase transaction in the response
+   - `provideCoinbaseTx` (boolean, optional, default=false): If true, includes the coinbase transaction in the response. This is the coinbase block assembly keeps on the candidate's job, paying the configured `miner_wallet_private_keys` addresses, and the one a solution without its own coinbase is mined with. The call fails if block assembly could not build one, for example because no miner wallet keys are configured
    - `verbosity` (numeric, optional, default=0): 0 for standard response, 1 to include subtree hashes
 
 **Returns:**
@@ -947,11 +952,13 @@ Submits a solved block to the network.
    {
        "id": "string",          // Mining candidate ID
        "nonce": number,         // Block nonce
-       "coinbase": "string",    // Coinbase transaction
+       "coinbase": "string",    // Coinbase transaction (optional, see below)
        "time": number,          // Block time
        "version": number        // Block version
    }
    ```
+
+   If `coinbase` is omitted, the block is mined with the coinbase block assembly kept on the candidate's job, the one `getminingcandidate` returns with `provideCoinbaseTx`, as in bitcoin-sv. The miner must then have hashed that coinbase. `version` goes into the block header only. Omitting `coinbase` fails if block assembly could not build one, for example because no miner wallet keys are configured.
 
 **Returns:**
 
@@ -1817,14 +1824,15 @@ The RPC service uses a standardized error handling system based on the Bitcoin C
 Standard error codes include:
 
 - -1: General error during command handling
-- -3: Wallet error (wallet functionality not implemented)
-- -5: Invalid address or key
-- -8: Out of memory or other resource exhaustion
+- -3: Unexpected type passed as a parameter
+- -5: Invalid address or key, or the named block or transaction does not exist
+- -8: Invalid, missing or out-of-range parameter
 - -20: Database inconsistency or corruption
 - -22: Error parsing or validating a block or transaction
 - -25: Transaction or block validation error
 - -26: Transaction rejected by policy rules
 - -27: Transaction already in chain
+- -28: Node still warming up - retry shortly
 - -30: RPC timeout - request exceeded configured timeout limit
 - -32600: Invalid JSON-RPC request
 - -32601: Method not found
@@ -1857,11 +1865,28 @@ Common error codes that may be returned:
 | -3        | RPC_TYPE_ERROR             | Unexpected type was passed as parameter            |
 | -5        | RPC_INVALID_ADDRESS        | Invalid address or key                             |
 | -8        | RPC_INVALID_PARAMETER      | Invalid, missing or duplicate parameter            |
+| -22       | RPC_DESERIALIZATION_ERROR  | Error parsing a block or transaction               |
+| -25       | RPC_VERIFY_ERROR           | Transaction or block failed validation             |
+| -28       | RPC_IN_WARMUP              | Node is still warming up; retry shortly            |
 | -32600    | RPC_INVALID_REQUEST        | JSON request format error                          |
 | -32601    | RPC_METHOD_NOT_FOUND       | Method not found                                   |
 | -32602    | RPC_INVALID_PARAMS         | Invalid method parameters                          |
 | -32603    | RPC_INTERNAL_ERROR         | Internal RPC error                                 |
 | -32700    | RPC_PARSE_ERROR            | Error parsing JSON request                         |
+
+Conditions that return a bitcoind-compatible code and message:
+
+| Code | Message                                     | Returned by                                                        | When                                                                                              |
+| ---- | ------------------------------------------- | ------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------- |
+| -5   | `Block not found`                           | `getblock`, `getblockheader`, `invalidateblock`, `reconsiderblock` | The named block does not exist                                                                    |
+| -5   | `No such mempool or blockchain transaction` | `getrawtransaction`                                                | The asset service reports it does not hold the transaction                                        |
+| -8   | `Block height out of range`                 | `getblockbyheight`                                                 | No block exists at the requested height                                                           |
+| -25  | `TX rejected: Missing inputs`               | `sendrawtransaction`                                               | A parent of the submitted transaction is not known yet                                            |
+| -28  | `Still loading, try again shortly`          | `submitminingsolution`, `generate`, `generatetoaddress`            | Block assembly is (re)loading unmined transactions: on startup, after a reset, during a reconcile |
+
+-28 is transient and clears on its own: retry the same request after a short delay rather than treating it as a failure. On these commands a store or service fault never returns -5, -8 or -28; it returns the command's fallback code (usually -32603) with a generic message, and the detail goes to the node's log.
+
+`getblockhash` does not follow this table yet: it answers a height with no block with -5 `Block not found`, where bitcoind and `getblockbyheight` answer -8 `Block height out of range`.
 
 ## Connection Limiting
 

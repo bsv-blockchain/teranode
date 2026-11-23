@@ -613,3 +613,40 @@ func TestRebroadcastHandler_ShutdownWaitsForLookup(t *testing.T) {
 		t.Fatal("handler did not return after its lookup finished")
 	}
 }
+
+// TestRelayTxBatch_BatchesDoNotInterleave checks that batches reach the
+// peerHandler whole and in the order they were handed over, so a parent in
+// one batch is never overtaken by a child in the next.
+func TestRelayTxBatch_BatchesDoNotInterleave(t *testing.T) {
+	s := &server{
+		ctx:      context.Background(),
+		relayInv: make(chan relayMsg), // unbuffered, so both senders contend
+		quit:     make(chan struct{}),
+	}
+	t.Cleanup(func() { close(s.quit) })
+
+	const perBatch = 100
+
+	var want []wire.InvVect
+
+	for b := byte(0); b < 3; b++ {
+		batch := make([]relayMsg, 0, perBatch)
+
+		for i := 0; i < perBatch; i++ {
+			iv := wire.InvVect{Type: wire.InvTypeTx, Hash: chainhash.Hash{b, byte(i)}}
+			batch = append(batch, relayMsg{invVect: &iv})
+			want = append(want, iv)
+		}
+
+		s.relayTxBatch(batch)
+	}
+
+	for i, iv := range want {
+		select {
+		case got := <-s.relayInv:
+			require.Equal(t, iv, *got.invVect, "position %d", i)
+		case <-time.After(2 * time.Second):
+			t.Fatalf("timed out at position %d", i)
+		}
+	}
+}

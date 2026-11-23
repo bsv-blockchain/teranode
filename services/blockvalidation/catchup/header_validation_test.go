@@ -20,7 +20,7 @@ func TestValidateHeaderProofOfWork(t *testing.T) {
 		header := createValidPoWHeader(t, "207fffff")
 
 		// This header has valid proof of work
-		err := ValidateHeaderProofOfWork(header)
+		err := ValidateHeaderProofOfWork(header, nil)
 		assert.NoError(t, err, "Valid proof of work should pass")
 	})
 
@@ -40,7 +40,7 @@ func TestValidateHeaderProofOfWork(t *testing.T) {
 		header.Bits = *bits
 
 		// The hash will be greater than this difficult target
-		err = ValidateHeaderProofOfWork(header)
+		err = ValidateHeaderProofOfWork(header, nil)
 		assert.Error(t, err, "Invalid proof of work should fail")
 		assert.Contains(t, err.Error(), "fails proof of work")
 	})
@@ -60,7 +60,7 @@ func TestValidateHeaderProofOfWork(t *testing.T) {
 		require.NoError(t, err)
 		header.Bits = *bits
 
-		err = ValidateHeaderProofOfWork(header)
+		err = ValidateHeaderProofOfWork(header, nil)
 		// This should typically pass unless we get extremely unlucky with the hash
 		// The test verifies the function handles max target correctly
 		if err != nil {
@@ -466,4 +466,52 @@ func createValidPoWHeader(t *testing.T, difficulty string) *model.BlockHeader {
 
 	t.Fatal("Could not find valid proof of work in reasonable time")
 	return nil
+}
+
+// linkedTestHeader builds a header on prevHash; nonce makes each one unique.
+func linkedTestHeader(nonce uint32, prevHash *chainhash.Hash) *model.BlockHeader {
+	return &model.BlockHeader{
+		Version:        1,
+		HashPrevBlock:  prevHash,
+		HashMerkleRoot: &chainhash.Hash{byte(nonce)},
+		Timestamp:      1000 + nonce,
+		Bits:           model.NBit{},
+		Nonce:          nonce,
+	}
+}
+
+// TestValidateChainConnection_ValidChain tests validation of a properly connected chain
+func TestValidateChainConnection_ValidChain(t *testing.T) {
+	header1 := linkedTestHeader(1, &chainhash.Hash{0})
+	header2 := linkedTestHeader(2, header1.Hash())
+	header3 := linkedTestHeader(3, header2.Hash())
+
+	headers := []*model.BlockHeader{header1, header2, header3}
+
+	require.True(t, ValidateChainConnection(headers, nil))
+	require.True(t, ValidateChainConnection(headers, &chainhash.Hash{0}))
+}
+
+// TestValidateChainConnection_InvalidConnection tests validation of improperly connected chain
+func TestValidateChainConnection_InvalidConnection(t *testing.T) {
+	header1 := linkedTestHeader(1, &chainhash.Hash{0})
+	header2 := linkedTestHeader(2, &chainhash.Hash{99}) // Wrong parent
+	header3 := linkedTestHeader(3, header2.Hash())
+
+	headers := []*model.BlockHeader{header1, header2, header3}
+
+	require.False(t, ValidateChainConnection(headers, nil))
+}
+
+// TestValidateChainConnection_WrongStartHash tests validation with wrong start hash
+func TestValidateChainConnection_WrongStartHash(t *testing.T) {
+	headers := []*model.BlockHeader{linkedTestHeader(1, &chainhash.Hash{0})}
+
+	require.False(t, ValidateChainConnection(headers, &chainhash.Hash{99}))
+}
+
+// TestValidateChainConnection_EmptyHeaders tests validation with empty header list
+func TestValidateChainConnection_EmptyHeaders(t *testing.T) {
+	require.True(t, ValidateChainConnection([]*model.BlockHeader{}, nil))
+	require.True(t, ValidateChainConnection([]*model.BlockHeader{}, &chainhash.Hash{0}))
 }

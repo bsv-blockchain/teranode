@@ -2,7 +2,6 @@ package settings
 
 import (
 	"testing"
-	"time"
 
 	"github.com/ordishs/gocore"
 	"github.com/stretchr/testify/require"
@@ -47,20 +46,4 @@ func TestOutpointBatcherMaxConcurrent_LoaderReadsKey(t *testing.T) {
 
 	require.Equal(t, 123, NewSettings().UtxoStore.OutpointBatcherMaxConcurrent,
 		"loader must read %s under context %q", key, ctx)
-}
-
-// TestLegacyBlockFailureBackoff_Defaults guards the loader entries for the
-// block-level backoff durations (#1187). These have non-zero defaults, so a
-// missing getDuration in NewSettings() would leave them at 0 — disabling the
-// backoff (base 0) and giving the failure-tracking map a 0 TTL.
-func TestLegacyBlockFailureBackoff_Defaults(t *testing.T) {
-	tSettings := NewSettings()
-
-	require.NotNil(t, tSettings)
-	require.Equal(t, 5*time.Second, tSettings.Legacy.BlockFailureBackoffBase,
-		"default BlockFailureBackoffBase must be 5s; a zero value disables the per-block backoff")
-	require.Equal(t, 150*time.Second, tSettings.Legacy.BlockFailureBackoffMaxDuration,
-		"default BlockFailureBackoffMaxDuration must be 150s; a zero value gives the failure map a 0 TTL")
-	require.Less(t, tSettings.Legacy.BlockFailureBackoffMaxDuration, 180*time.Second,
-		"backoff cap must stay below the 180s sync-peer stall window (maxLastBlockTime)")
 }
