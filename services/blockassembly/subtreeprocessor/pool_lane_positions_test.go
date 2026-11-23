@@ -373,9 +373,11 @@ func frozenEmptyHashSet() *SortedHashSet {
 	return s
 }
 
-// TestPoolKeepsLanePositionAcrossMapKinds: when a disk half of the double buffer cannot be
-// created, a block movement copies the pool between a disk map and an in-memory map, one way or
-// the other. At shadow each tx keeps its lane position across the copy.
+// TestPoolKeepsLanePositionAcrossMapKinds: the copy between halves of the double buffer handles a
+// disk map and an in-memory map of different kinds by decoding each tx and inserting it again. No
+// production path pairs them today (a disk half that cannot be created leaves both halves in
+// memory, and a reorg that cannot create one fails), but the copy must still keep each tx's lane
+// position at shadow if one ever does.
 func TestPoolKeepsLanePositionAcrossMapKinds(t *testing.T) {
 	for _, toDisk := range []bool{false, true} {
 		t.Run(map[bool]string{false: "disk to in-memory", true: "in-memory to disk"}[toDisk], func(t *testing.T) {
