@@ -248,7 +248,7 @@ func TestBlessMissingTransactions_NilTxReturnsBeforeSpawning(t *testing.T) {
 	missing := []missingTx{{tx: valid, idx: 0}, {tx: nil, idx: 1}}
 	txMetaSlice := make([]metaSliceItem, len(missing))
 
-	err := server.blessMissingTransactions(ctx, chainhash.Hash{}, missing, "", "", txMetaSlice, 2, map[uint32]bool{})
+	err := server.blessMissingTransactions(ctx, chainhash.Hash{}, missing, "", "", txMetaSlice, 2, map[uint32]bool{}, false)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "missing transaction is nil")
 
