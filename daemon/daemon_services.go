@@ -128,9 +128,7 @@ func (d *Daemon) startServices(ctx context.Context, logger ulogger.Logger, appSe
 	// At utxostore_laneMigration shadow, every process with a check that asks whether a parent is
 	// mined keeps an index of the lane map and answers it from there too (util/lanereader).
 	if startSubtreeValidation || startBlockValidation || startValidator || startPropagation || startLegacy {
-		if err := d.startLaneReader(ctx, appSettings, createLogger); err != nil {
-			return err
-		}
+		d.startLaneReader(ctx, appSettings, createLogger)
 	}
 
 	// Loop through and start each service if needed
@@ -784,22 +782,30 @@ func (d *Daemon) startBlockAssemblyService(ctx context.Context, appSettings *set
 }
 
 // startLaneReader starts the process's lane index at utxostore_laneMigration shadow; at off it
-// starts nothing and opens no connection.
-func (d *Daemon) startLaneReader(ctx context.Context, appSettings *settings.Settings, createLogger func(string) ulogger.Logger) error {
+// starts nothing and opens no connection. The index's blockchain client connects in the
+// background: creating it waits for the blockchain service, which this same process may not have
+// started yet, and the index must never hold up a service's start.
+func (d *Daemon) startLaneReader(ctx context.Context, appSettings *settings.Settings, createLogger func(string) ulogger.Logger) {
 	if !appSettings.UtxoStore.LaneMigration.Stamps() {
 		lanereader.Start(ctx, nil, appSettings, nil)
 
-		return nil
+		return
 	}
 
-	blockchainClient, err := d.daemonStores.GetBlockchainClient(ctx, createLogger(loggerBlockchainClient), appSettings, serviceLaneReader)
-	if err != nil {
-		return err
-	}
+	logger := createLogger(loggerLaneReader)
 
-	lanereader.Start(ctx, createLogger(loggerLaneReader), appSettings, blockchainClient)
+	go func() {
+		blockchainClient, err := d.daemonStores.GetBlockchainClient(ctx, createLogger(loggerBlockchainClient), appSettings, serviceLaneReader)
+		if err != nil {
+			if ctx.Err() == nil {
+				logger.Warnf("[lanereader] no lane index in this process: connecting to the blockchain service: %v", err)
+			}
 
-	return nil
+			return
+		}
+
+		lanereader.Start(ctx, logger, appSettings, blockchainClient)
+	}()
 }
 
 // startSubtreeValidationService initializes and adds the SubtreeValidation service to the ServiceManager.
