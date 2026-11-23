@@ -381,6 +381,7 @@ func TestRejectedTxHandler_NormalizesReasonAtChokepoint(t *testing.T) {
 	}{
 		{"pre-upgrade validator error text", "TX_INVALID (30): GoBDK fail to ValidateTransaction -> TX_INVALID (30): script failed: OP_RETURN <attacker blob>", "TX_INVALID"},
 		{"unlisted detail", "TX_INVALID: something the producer made up", "TX_INVALID"},
+		{"unlisted detail keeps a valid code list", "TX_INVALID/TX_POLICY: a literal from a newer release", "TX_INVALID/TX_POLICY"},
 		{"well-formed code list", "TX_INVALID/TX_POLICY", "TX_INVALID/TX_POLICY"},
 		{"well-formed detail", "TX_INVALID: bad-txns-in-belowout", "TX_INVALID: bad-txns-in-belowout"},
 	}

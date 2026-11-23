@@ -128,3 +128,25 @@ func TestValid(t *testing.T) {
 		require.Equal(t, Fallback, Normalize(r))
 	}
 }
+
+// A valid code list survives an unrecognized detail: a newer validator's
+// allowlist may hold a literal this node does not, and its codes are still
+// safe to send. Free text in the code list still collapses to Fallback.
+func TestNormalize_KeepsValidCodeListWhenOnlyDetailIsUnknown(t *testing.T) {
+	cases := []struct {
+		in   string
+		want string
+	}{
+		{"TX_INVALID/TX_POLICY: a literal from a newer release", "TX_INVALID/TX_POLICY"},
+		{"TX_INVALID/PROCESSING: " + strings.Repeat("attacker ", 64), "TX_INVALID/PROCESSING"},
+		{"TX_INVALID (30): GoBDK fail to ValidateTransaction", Fallback},
+		{"TX_INVALID/TX_INVALID: bad-txns-in-belowout", Fallback},
+		{"NOT_A_CODE: a literal from a newer release", Fallback},
+	}
+
+	for _, tc := range cases {
+		got := Normalize(tc.in)
+		require.Equal(t, tc.want, got, tc.in)
+		require.True(t, Valid(got), "Normalize must only ever return a valid reason")
+	}
+}

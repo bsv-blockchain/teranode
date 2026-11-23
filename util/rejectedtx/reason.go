@@ -171,13 +171,24 @@ func Valid(reason string) bool {
 	return true
 }
 
-// Normalize returns reason unchanged when it fits the grammar and Fallback
-// otherwise. It is the chokepoint's guard: a reason built by an un-upgraded
-// validator, or by anything else on the in-cluster topic, never leaves the
-// node as free text.
+// Normalize returns reason unchanged when it fits the grammar. Otherwise, when
+// only the detail is unrecognized and the code list before it fits on its own,
+// it returns that code list; anything else becomes Fallback. It is the
+// chokepoint's guard: a reason built by an un-upgraded validator, or by
+// anything else on the in-cluster topic, never leaves the node as free text.
+//
+// Keeping the code list covers the rolling upgrade in the other direction: a
+// newer validator whose allowlist gained a literal this node does not know
+// still has its codes announced, not just Fallback. The code list alone is
+// held to the same grammar, so pre-upgrade error text ("TX_INVALID (30): ...")
+// has no valid code list and still collapses to Fallback.
 func Normalize(reason string) string {
 	if Valid(reason) {
 		return reason
+	}
+
+	if codeList, _, hasDetail := strings.Cut(reason, detailSeparator); hasDetail && Valid(codeList) {
+		return codeList
 	}
 
 	return Fallback
