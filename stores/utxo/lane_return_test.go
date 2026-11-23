@@ -319,3 +319,187 @@ func TestReturnLanePositionCountsAnUnnamedStoreAsUnknown(t *testing.T) {
 
 	require.InDelta(t, 1, testutil.ToFloat64(returned)-before, 0)
 }
+
+// returningLaneSpender is the sequential fake with lane positions whose spend records the spender's
+// position in the parents' slots, as a LaneSpender does.
+type returningLaneSpender struct {
+	returningSequentialStore
+}
+
+func (l *returningLaneSpender) SpendWithLanePosition(ctx context.Context, tx *bt.Tx, blockHeight uint32, _ uint64, flags IgnoreFlags) ([]*Spend, error) {
+	return l.Spend(ctx, tx, blockHeight, flags)
+}
+
+var allLaneBurnReasons = []string{
+	LaneBurnExists, LaneBurnSpendRejected, LaneBurnOutcomeUnknown, LaneBurnRolledBack,
+	LaneBurnParentFailed, LaneBurnListFailed, LaneBurnTakeFailed, LaneBurnError,
+}
+
+// burnedFor reads the burn counter of one store for every reason, for the unknown caller.
+func burnedFor(store string) map[string]float64 {
+	counts := make(map[string]float64, len(allLaneBurnReasons))
+
+	for _, reason := range allLaneBurnReasons {
+		counts[reason] = testutil.ToFloat64(prometheusLanePositionsBurned.WithLabelValues(store, reason, CallerUnknown.String()))
+	}
+
+	return counts
+}
+
+// A create-first call takes its position before it picks the order, so it owns the position on
+// every exit: still carried by a record the call left (no burn, no return), burned once, or burned
+// once and returned once when the store proved no record carries it. The record of a rolled back
+// attempt becomes a hold that carries no position.
+func TestSequentialSpendAndCreateCreateFirstBurnsOrReturnsItsPositionOnce(t *testing.T) {
+	shortenUnspendBackoff(t)
+
+	tx := scriptedTwoInputTx(t)
+	two := twoInputTx()
+
+	hold := meta.Data{Creating: true, RollingBack: true, Hold: true}
+	refused := errors.NewUtxoError("1 of 2 inputs could not be spent")
+	spentErr := errors.NewUtxoSpentError(chainhash.Hash{}, 0, chainhash.Hash{}, nil)
+	marked := func() error { return MarkLanePositionUnwritten(errors.NewTxExistsError("exists")) }
+	creating := &meta.Data{Creating: true, Attempt: []byte{9}}
+
+	cases := []struct {
+		name       string
+		store      fakeSequentialStore
+		laneSpend  bool
+		tx         *bt.Tx
+		wantErr    bool
+		wantBurn   string
+		wantReturn bool
+	}{
+		{name: "a create-first success leaves the position on the record", store: fakeSequentialStore{
+			spends: []*Spend{{}, {}}, createMeta: creating,
+		}},
+		{name: "a refused spend that rolls back burns the position and returns it", store: fakeSequentialStore{
+			spends: []*Spend{{Err: spentErr}, {}}, spendErr: refused, createMeta: creating,
+		}, wantErr: true, wantBurn: LaneBurnSpendRejected, wantReturn: true},
+		{name: "a lane spend refused on every input before its write returns the position", store: fakeSequentialStore{
+			spends: []*Spend{{Err: spentErr}, {Err: spentErr}}, spendErr: refused, createMeta: creating,
+		}, laneSpend: true, wantErr: true, wantBurn: LaneBurnSpendRejected, wantReturn: true},
+		{name: "a lane spend that may have written a parent's slot keeps the position burned", store: fakeSequentialStore{
+			spends: []*Spend{{Err: spentErr}, {}}, spendErr: refused, createMeta: creating,
+		}, laneSpend: true, wantErr: true, wantBurn: LaneBurnSpendRejected},
+		{name: "a refused spend whose rollback fails leaves the position on the creating record", store: fakeSequentialStore{
+			spends: []*Spend{{Err: spentErr}, {}}, spendErr: refused, createMeta: creating,
+			beginErr: errors.NewStorageError("begin boom"),
+		}, wantErr: true},
+		{name: "a refused spend whose rollback does not begin, the record being final, leaves the position on that record", store: fakeSequentialStore{
+			spends: []*Spend{{Err: spentErr}, {}}, spendErr: refused, createMeta: creating, beginDeclined: true,
+		}, wantErr: true},
+		{name: "a failed create whose rollback does not begin, the record being final, leaves the position on that record", store: fakeSequentialStore{
+			createErr:     MarkRollBackAttempt(errors.NewProcessingError("adoption failed"), []byte{9}),
+			beginDeclined: true,
+		}, wantErr: true},
+		{name: "a spend of unknown outcome leaves the position on the creating record", store: fakeSequentialStore{
+			spends: []*Spend{{}, {}}, spendErr: context.DeadlineExceeded, createMeta: creating,
+		}, wantErr: true},
+		{name: "a spend that waits on a committing parent leaves the position on the creating record", store: fakeSequentialStore{
+			spends: []*Spend{{Err: errors.NewTxLockedError("locked")}, {Err: errors.NewTxCreatingError("creating")}}, spendErr: refused, createMeta: creating,
+		}, wantErr: true},
+		{name: "a finalize that fails leaves the position on the creating record", store: fakeSequentialStore{
+			spends: []*Spend{{}, {}}, createMeta: creating, finalizeErr: errors.NewStorageError("finalize boom"),
+		}, wantErr: true},
+		{name: "a finalize that finds the record final leaves the position on that record", store: fakeSequentialStore{
+			spends: []*Spend{{}, {}}, createMeta: creating, finalizeErr: MarkAlreadyFinal(errors.NewTxExistsError("final")),
+		}, wantErr: true},
+		{name: "a plain duplicate the store proved unwritten returns the position", store: fakeSequentialStore{
+			createErr: marked(),
+		}, wantErr: true, wantBurn: LaneBurnExists, wantReturn: true},
+		{name: "a duplicate the store did not prove unwritten stays burned", store: fakeSequentialStore{
+			createErr: errors.NewTxExistsError("exists"),
+		}, wantErr: true, wantBurn: LaneBurnExists},
+		{name: "a duplicate whose record cannot be read still burns the position", store: fakeSequentialStore{
+			createErr: errors.NewTxExistsError("exists"), getMetaErr: errors.NewStorageError("read boom"),
+		}, wantErr: true, wantBurn: LaneBurnExists},
+		{name: "a rolling back record the store proved unwritten returns the position", store: fakeSequentialStore{
+			createErr: marked(), existing: hold,
+		}, wantErr: true, wantBurn: LaneBurnExists, wantReturn: true},
+		{name: "a rolling back record that is not proven keeps the position burned", store: fakeSequentialStore{
+			createErr: errors.NewTxExistsError("exists"), existing: hold,
+		}, wantErr: true, wantBurn: LaneBurnExists},
+		{name: "a create error that is not a duplicate burns the position without returning it", store: fakeSequentialStore{
+			createErr: errors.NewStorageError("disk"),
+		}, wantErr: true, wantBurn: LaneBurnError},
+		{name: "a create of unknown outcome burns the position as outcome_unknown", store: fakeSequentialStore{
+			createErr: MarkCreateOutcomeUnknown(errors.NewServiceUnavailableError("timed out")),
+		}, wantErr: true, wantBurn: LaneBurnOutcomeUnknown},
+		{name: "a failed create whose attempt is rolled back burns the position without returning it", store: fakeSequentialStore{
+			createErr: MarkRollBackAttempt(errors.NewProcessingError("adoption failed"), []byte{9}),
+		}, wantErr: true, wantBurn: LaneBurnError},
+		{name: "a failed create whose rollback fails leaves the position on the creating record", store: fakeSequentialStore{
+			createErr: MarkRollBackAttempt(errors.NewProcessingError("adoption failed"), []byte{9}),
+			beginErr:  errors.NewStorageError("begin boom"),
+		}, wantErr: true},
+		{name: "a roll-forward that completes returns the proven position", store: fakeSequentialStore{
+			createErr: marked(), existing: meta.Data{Creating: true}, spends: []*Spend{{}, {}},
+		}, tx: two, wantErr: true, wantBurn: LaneBurnExists, wantReturn: true},
+		{name: "a roll-forward that fails returns the proven position", store: fakeSequentialStore{
+			createErr: marked(), existing: meta.Data{Creating: true},
+			spends: []*Spend{{}, {Err: spentErr}}, spendErr: refused,
+		}, tx: two, wantErr: true, wantBurn: LaneBurnExists, wantReturn: true},
+		{name: "a roll-forward after an unproven refusal keeps the position burned", store: fakeSequentialStore{
+			createErr: errors.NewTxExistsError("exists"), existing: meta.Data{Creating: true},
+			spends: []*Spend{{}, {Err: spentErr}}, spendErr: refused,
+		}, tx: two, wantErr: true, wantBurn: LaneBurnExists},
+		{name: "a hold that clears, then a create that succeeds, leaves the position on the record", store: fakeSequentialStore{
+			spends: []*Spend{{}, {}}, createErrs: []error{marked()}, createMeta: creating,
+			existing: hold, clearResult: true,
+		}},
+		{name: "a hold that clears, then a refused spend, returns the position once", store: fakeSequentialStore{
+			spends: []*Spend{{Err: spentErr}, {}}, spendErr: refused, createErrs: []error{marked()}, createMeta: creating,
+			existing: hold, clearResult: true,
+		}, wantErr: true, wantBurn: LaneBurnSpendRejected, wantReturn: true},
+		{name: "a hold the store did not prove unwritten, then a refused spend, keeps the position burned", store: fakeSequentialStore{
+			spends: []*Spend{{Err: spentErr}, {}}, spendErr: refused, createErrs: []error{errors.NewTxExistsError("held")}, createMeta: creating,
+			existing: hold, clearResult: true,
+		}, wantErr: true, wantBurn: LaneBurnSpendRejected},
+	}
+
+	for i, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			position := lane.Pack(9, uint64(60+i))
+			src := &returningSource{position: position}
+			name := fmt.Sprintf("createfirst-%d", i)
+
+			var s SequentialStore
+
+			if c.laneSpend {
+				ls := &returningLaneSpender{returningSequentialStore{fakeSequentialStore: c.store}}
+				ls.NameLaneBurns(name)
+				ls.SetLanePositionSource(src)
+				s = ls
+			} else {
+				rs := &returningSequentialStore{fakeSequentialStore: c.store}
+				rs.NameLaneBurns(name)
+				rs.SetLanePositionSource(src)
+				s = rs
+			}
+
+			callTx := tx
+			if c.tx != nil {
+				callTx = c.tx
+			}
+
+			_, _, err := SequentialSpendAndCreate(context.Background(), ulogger.TestLogger{}, s, callTx, 100, true)
+			require.Equal(t, c.wantErr, err != nil, "%v", err)
+
+			for reason, n := range burnedFor(name) {
+				if reason == c.wantBurn {
+					require.InDelta(t, 1, n, 0, "the position burns once, as %s", reason)
+				} else {
+					require.InDelta(t, 0, n, 0, "no burn as %s", reason)
+				}
+			}
+
+			if c.wantReturn {
+				require.Equal(t, []uint64{position}, src.returned)
+			} else {
+				require.Empty(t, src.returned)
+			}
+		})
+	}
+}

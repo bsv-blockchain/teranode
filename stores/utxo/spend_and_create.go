@@ -383,7 +383,7 @@ func SequentialSpendAndCreate(ctx context.Context, logger ulogger.Logger, s Sequ
 	if createFirst && !options.CreateOnly && !options.SpendOnly {
 		blockContext := options.IgnoreFlags.IgnoreLocked || len(options.MinedBlockInfos) > 0
 
-		return sequentialCreateFirst(ctx, logger, s, tx, blockHeight, options.IgnoreFlags, blockContext, spender, opts...)
+		return sequentialCreateFirst(ctx, logger, s, tx, blockHeight, options.IgnoreFlags, blockContext, spender, takenPosition{taker: taker, position: taken, caller: options.Caller}, opts...)
 	}
 
 	blockContext := options.IgnoreFlags.IgnoreLocked || len(options.MinedBlockInfos) > 0
@@ -898,6 +898,17 @@ func (r tolerantReverser) SpendRollbackTimeout() time.Duration {
 // utxostore_spendRollbackTimeout in wall-clock time, can still clear the spends of a fresh create
 // of the same txid. That is the attempt-identity gap tracked in issue 1291.
 func RollBackCreating(ctx context.Context, logger ulogger.Logger, s CreatingRollBacker, tx *bt.Tx, attempt []byte) error {
+	_, err := rollBackCreating(ctx, logger, s, tx, attempt)
+
+	return err
+}
+
+// rollBackCreating is RollBackCreating that also reports whether this call ended the rollback of
+// its record. A nil error with ended false means the rollback did not begin: the record is final,
+// gone, owned by another attempt or already rolling back under another caller, and nothing was
+// reversed. A final record of this attempt, finalized by a roll-forward, still carries the lane
+// position of its creator.
+func rollBackCreating(ctx context.Context, logger ulogger.Logger, s CreatingRollBacker, tx *bt.Tx, attempt []byte) (ended bool, err error) {
 	rbCtx, cancel := rollbackContext(ctx, s)
 	defer cancel()
 
@@ -907,13 +918,13 @@ func RollBackCreating(ctx context.Context, logger ulogger.Logger, s CreatingRoll
 	if err != nil {
 		logger.Errorf("SpendAndCreate create-first: marking %s as rolling back failed, tx left creating for recovery: %v", hash.String(), err)
 
-		return err
+		return false, err
 	}
 
 	if !began {
 		logger.Warnf("SpendAndCreate create-first: %s is not rolled back by this call: it is final, gone, owned by another attempt or already rolling back under another caller, spends left in place", hash.String())
 
-		return nil
+		return false, nil
 	}
 
 	inputs, err := GetSpends(tx)
@@ -921,7 +932,7 @@ func RollBackCreating(ctx context.Context, logger ulogger.Logger, s CreatingRoll
 		logger.Errorf("SpendAndCreate create-first: building the input spends failed for %s, tx left rolling back for the sweep: %v", hash.String(), err)
 		releaseRollbackHold(ctx, logger, s, hash, attempt)
 
-		return err
+		return false, err
 	}
 
 	if len(inputs) > 0 {
@@ -929,23 +940,23 @@ func RollBackCreating(ctx context.Context, logger ulogger.Logger, s CreatingRoll
 			logger.Errorf("SpendAndCreate create-first: reversing spends failed for %s, tx left rolling back for the sweep: %v", hash.String(), err)
 			releaseRollbackHold(ctx, logger, s, hash, attempt)
 
-			return err
+			return false, err
 		}
 	}
 
 	if err := releaseRollbackHoldStrict(ctx, s, hash, attempt); err != nil {
 		logger.Errorf("SpendAndCreate create-first: releasing the hold of %s failed, tx left rolling back for the sweep: %v", hash.String(), err)
 
-		return err
+		return false, err
 	}
 
 	if err := s.EndCreateFirstRollback(rbCtx, hash, attempt); err != nil {
 		logger.Errorf("SpendAndCreate create-first: ending the rollback failed for %s, tx left rolling back for the sweep: %v", hash.String(), err)
 
-		return err
+		return false, err
 	}
 
-	return nil
+	return true, nil
 }
 
 // CreatingRollbackFinisher is the store subset FinishRollBackCreating needs.
@@ -1161,7 +1172,7 @@ func releaseRollbackHold(ctx context.Context, logger ulogger.Logger, s rollbackH
 //     ErrTxExists roll-forward on re-encounter, the pruner sweep, or setMined. The lease is
 //     released, because the spends it covers are complete.
 func sequentialCreateFirst(ctx context.Context, logger ulogger.Logger, s SequentialStore,
-	tx *bt.Tx, blockHeight uint32, ignoreFlags IgnoreFlags, blockContext bool, spender uint64, opts ...CreateOption) (*meta.Data, []*Spend, error) {
+	tx *bt.Tx, blockHeight uint32, ignoreFlags IgnoreFlags, blockContext bool, spender uint64, taken takenPosition, opts ...CreateOption) (*meta.Data, []*Spend, error) {
 	// Force WithCreating(true) last so it cannot be overridden by a caller option (belt and
 	// suspenders alongside the caller-supplied WithCreating rejection in SequentialSpendAndCreate).
 	createOpts := append(append([]CreateOption{}, opts...), WithCreating(true))
@@ -1172,6 +1183,10 @@ func sequentialCreateFirst(ctx context.Context, logger ulogger.Logger, s Sequent
 		md            *meta.Data
 		spendDeadline time.Time
 	)
+
+	// Every Create of the call is handed the same position, so it goes back only on a terminal
+	// exit, and only when no earlier Create of the call may have written it.
+	positionClean := true
 
 	for round := 0; ; round++ {
 		// Read before the create, so the time the store writes on the lease, which is in whole
@@ -1188,24 +1203,44 @@ func sequentialCreateFirst(ctx context.Context, logger ulogger.Logger, s Sequent
 		if attempt := RollBackAttempt(err); attempt != nil {
 			releaseSpendLease(ctx, logger, s, hash, attempt, attempt)
 
-			if rollbackErr := RollBackCreating(ctx, logger, s, tx, attempt); rollbackErr != nil {
+			ended, rollbackErr := rollBackCreating(ctx, logger, s, tx, attempt)
+			if rollbackErr != nil {
 				return nil, nil, errors.NewProcessingError("SpendAndCreate create-first: rolling back the failed create of %s failed, tx left for the sweep: %v", hash.String(), rollbackErr, err)
+			}
+
+			// A rollback that ended turned the record into a hold that carries no position. One that
+			// did not begin left a record, perhaps a final one, that may carry it. The failed
+			// create's own writes are not proven absent, so the position stays burned.
+			if ended {
+				taken.burn(LaneBurnReason(err, nil))
 			}
 
 			return nil, nil, err
 		}
 
 		if !errors.Is(err, errors.ErrTxExists) {
+			// The create may have written the record with the position, and the call leaves it.
+			taken.burn(LaneBurnReason(err, nil))
+
 			return nil, nil, err
 		}
 
+		// Only the store knows whether its refused Create wrote the position: it says so by marking
+		// the error. The record found is another attempt's and carries its own position.
+		proven := LanePositionUnwritten(err)
+		exists := func() { taken.burnAndReturn(LaneBurnExists, LaneReturnExists, positionClean && proven) }
+
 		existing := &meta.Data{}
 		if getErr := s.GetMeta(ctx, hash, existing); getErr != nil {
+			exists()
+
 			return nil, nil, errors.NewProcessingError("SpendAndCreate create-first: tx %s exists but its state could not be read", hash.String(), getErr)
 		}
 
 		switch {
 		case !existing.Creating:
+			exists()
+
 			return nil, nil, err
 		case existing.RollingBack:
 			if round == 0 {
@@ -1222,13 +1257,19 @@ func sequentialCreateFirst(ctx context.Context, logger ulogger.Logger, s Sequent
 
 				cleared, clearErr := s.ClearCreateFirstHold(ctx, hash, blockContext)
 				if clearErr != nil {
+					exists()
+
 					return nil, nil, errors.NewProcessingError("SpendAndCreate create-first: tx %s is rolling back and its hold could not be cleared", hash.String(), clearErr)
 				}
 
 				if cleared {
+					positionClean = positionClean && proven
+
 					continue
 				}
 			}
+
+			exists()
 
 			return nil, nil, errors.NewProcessingError("SpendAndCreate create-first: tx %s is rolling back; retry after it completes", hash.String())
 		}
@@ -1236,6 +1277,8 @@ func sequentialCreateFirst(ctx context.Context, logger ulogger.Logger, s Sequent
 		spends, completed, rfErr := rollForwardCreating(ctx, logger, s, tx, existing.Attempt, func(rfCtx context.Context) ([]*Spend, error) {
 			return s.Spend(rfCtx, tx, blockHeight, ignoreFlags)
 		})
+		exists()
+
 		if rfErr != nil {
 			return nil, spends, rfErr
 		}
@@ -1252,7 +1295,7 @@ func sequentialCreateFirst(ctx context.Context, logger ulogger.Logger, s Sequent
 	freshFlags.RequireParentOutputs = true
 
 	spendCtx, cancelSpend := context.WithDeadline(WithLeaseBound(ctx), spendDeadline)
-	spends, _, err := spendWithPosition(spendCtx, s, tx, blockHeight, spender, freshFlags)
+	spends, laneSpend, err := spendWithPosition(spendCtx, s, tx, blockHeight, spender, freshFlags)
 
 	cancelSpend()
 
@@ -1274,9 +1317,23 @@ func sequentialCreateFirst(ctx context.Context, logger ulogger.Logger, s Sequent
 			return nil, spends, err
 		}
 
-		if rollbackErr := RollBackCreating(ctx, logger, s, tx, md.Attempt); rollbackErr != nil {
+		ended, rollbackErr := rollBackCreating(ctx, logger, s, tx, md.Attempt)
+		if rollbackErr != nil {
 			return nil, spends, errors.NewProcessingError("SpendAndCreate: error reversing utxo spends: %v", rollbackErr, err)
 		}
+
+		if !ended {
+			// The rollback did not begin: a roll-forward of this attempt may have finalized the
+			// record, which then carries the position.
+			return nil, spends, err
+		}
+
+		// The rollback turned the record into a hold that carries no position. A refused spend
+		// returns the position when no earlier Create of the call may have written it, and, for a
+		// spend that carried it into the parents' slots, only when every input was refused before
+		// its write.
+		taken.burnAndReturn(LaneBurnReason(err, spends), LaneReturnSpendRejected,
+			positionClean && RefusedSpend(err, spends) && (!laneSpend || LaneSpendWroteNothing(spends)))
 
 		return nil, spends, err
 	}
@@ -1303,6 +1360,33 @@ func sequentialCreateFirst(ctx context.Context, logger ulogger.Logger, s Sequent
 	md.Creating = false
 
 	return md, spends, nil
+}
+
+// takenPosition is the lane position a SequentialSpendAndCreate call took from the source, which the
+// call burns or returns once on the exit where no record carries it. The zero value is no position.
+type takenPosition struct {
+	taker    LanePositionTaker
+	position uint64
+	caller   Caller
+}
+
+// burn counts the position as burned. It does nothing when the call took none.
+func (p takenPosition) burn(reason string) {
+	p.burnAndReturn(reason, "", false)
+}
+
+// burnAndReturn counts the position as burned, and hands it back to the source when unwritten is
+// the caller's proof that no record carries it.
+func (p takenPosition) burnAndReturn(reason, returnReason string, unwritten bool) {
+	if p.position == lane.None {
+		return
+	}
+
+	p.taker.BurnLanePosition(p.caller, reason)
+
+	if unwritten {
+		p.taker.ReturnLanePosition(p.position, returnReason, true)
+	}
 }
 
 // spendOutcomeUnknown reports whether a failed spend may still commit after it returned: it gave
