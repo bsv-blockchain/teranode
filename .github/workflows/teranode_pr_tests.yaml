@@ -145,6 +145,11 @@ jobs:
         # seconds without.
         run: make test-heavy
 
+      - name: Run consensus vectors
+        # bitcoin-sv's script, transaction and signature hash vectors (test/consensus),
+        # which make test skips with the rest of test/. Seconds without -race.
+        run: make consensustest
+
       - name: Check consensus package coverage
         # Fails when a consensus-critical package's statement coverage in the
         # coverage.out written by make test falls below its minimum.
