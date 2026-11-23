@@ -686,7 +686,13 @@ func laneValidateBlock(t *testing.T, wrap func(blob.Store) blob.Store, seed func
 	got.mu.Lock()
 	defer got.mu.Unlock()
 
-	require.Zero(t, got.invalids, "the block is valid")
+	// Optimistic mining stores the block and returns, and validates it in the background, which
+	// nothing here waits for; only full validation has finished by now, so only there is the
+	// block known to be valid. The rows go on the first AddBlock on both paths.
+	if !optimistic {
+		require.Zero(t, got.invalids, "the block is valid")
+	}
+
 	require.Equal(t, 1, got.stores)
 
 	return got
