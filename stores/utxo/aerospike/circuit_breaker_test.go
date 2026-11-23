@@ -929,7 +929,7 @@ func TestCircuitBreakerBatchFailure(t *testing.T) {
 	t.Run("counts once in the closed state however many slots", func(t *testing.T) {
 		cb := newCircuitBreaker(3, 1, time.Hour)
 
-		cb.RecordBatchFailure([]breakerSlot{{epoch: 1, taken: true}, {}, {epoch: 3, taken: true}})
+		cb.RecordBatchFailure([]breakerSlot{{}, {epoch: 1, taken: true}, {}, {epoch: 3, taken: true}})
 		require.Equal(t, 1, cb.consecutiveFailures)
 		require.Equal(t, cbStateClosed, cb.state)
 	})

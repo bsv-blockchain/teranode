@@ -414,6 +414,9 @@ func TestSpendExpressions_CurrentProbeFailureTripsBeforeBatchSuccessCloses(t *te
 func TestSpendExpressions_ClosedMixedBatchStillCountsFailure(t *testing.T) {
 	s := newSpendBreakerTestStore(t, true)
 	cb := newCircuitBreaker(2, 1, time.Hour)
+	// One earlier failure: the batch's closed-state success must reset it
+	// before the batch's own failure counts, or the breaker trips here.
+	cb.RecordFailure(breakerSlot{})
 	s.spendCircuitBreaker = cb
 	batch, group := competingSpendBatch(distinctParents(2)...)
 	s.batchOperateFn = func(_ *aerospike.BatchPolicy, records []aerospike.BatchRecordIfc) aerospike.Error {
