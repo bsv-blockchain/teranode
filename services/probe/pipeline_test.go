@@ -604,7 +604,7 @@ func chainWithWaitingCount(count func(call int) float64) *fakeCollector {
 			s.FSM = "CATCHINGBLOCKS"
 			s.Chain.BlocksWaiting = append([]uint32(nil), heights...)
 			s.Chain.BlocksWaitingCount = snapshot.Reading{Value: count(call), Status: snapshot.StatusOK}
-			s.Chain.PeerHeight = snapshot.Reading{Value: 0, Status: snapshot.StatusOK}
+			s.Chain.PeerHeight = snapshot.Reading{Value: 1, Status: snapshot.StatusOK}
 		}, nil
 	})
 }
