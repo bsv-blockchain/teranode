@@ -7269,6 +7269,12 @@ validation, health checking, and block information retrieval.</p>
 <td>repeated</td>
 <td>Array of metadata for each transaction</td>
 </tr>
+<tr>
+<td>lane_positions</td>
+<td><a href="#uint64">uint64</a></td>
+<td>repeated</td>
+<td>Each transaction's <code>lane_position</code>, as in ValidateTransactionResponse; empty from an older server</td>
+</tr>
 </tbody>
 </table>
 <p><a name="ValidateTransactionRequest"></a></p>
@@ -7360,6 +7366,12 @@ validation, health checking, and block information retrieval.</p>
 <td><a href="#bytes">bytes</a></td>
 <td></td>
 <td>Additional metadata for the transaction</td>
+</tr>
+<tr>
+<td>lane_position</td>
+<td><a href="#uint64">uint64</a></td>
+<td></td>
+<td>The created record's own lane position at <code>utxostore_laneMigration</code> shadow, 0 when none; <code>metadata</code> does not carry it</td>
 </tr>
 </tbody>
 </table>

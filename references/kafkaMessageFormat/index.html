@@ -10668,7 +10668,12 @@ Per entry: 32-byte tx hash · 1-byte action · 4-byte LE content length · <code
 <tr>
 <td><code>WireActionADDLane</code></td>
 <td><code>0x02</code></td>
-<td><code>ADD</code> whose <code>content</code> is the lane metadata encoding, carrying the transaction's lane position and one per distinct parent. Sent only at <code>utxostore_laneMigration=shadow</code>; consumers accept both <code>ADD</code> forms.</td>
+<td><code>ADD</code> whose <code>content</code> is the lane metadata encoding, carrying the transaction's lane position and one per distinct parent. Sent only at <code>utxostore_laneMigration=shadow</code>; consumers accept every <code>ADD</code> form.</td>
+</tr>
+<tr>
+<td><code>WireActionADDOwn</code></td>
+<td><code>0x03</code></td>
+<td><code>ADD</code> whose <code>content</code> is <code>MetaBytes</code> followed by the transaction's own 8-byte lane position, the txmeta cache form. Sent only at <code>utxostore_laneMigration=shadow</code>, when the validator knows the transaction's own position but not every parent's, as for a transaction spending an output created before lane positions were on.</td>
 </tr>
 </tbody>
 </table>
@@ -10684,6 +10689,7 @@ Per entry: 32-byte tx hash · 1-byte action · 4-byte LE content length · <code
 <li>Lock time</li>
 </ul>
 <p>For <code>ADDLane</code> entries, <code>content</code> is produced by <code>(*meta.Data).LaneMetaBytesInto</code> and parsed by <code>meta.NewDataFromLaneMetaBytes</code>: a magic byte <code>0xA7</code>, a version byte <code>0x01</code> and the transaction's 8-byte lane position, then the <code>MetaBytes</code> layout (a <code>uint64</code> fee, a <code>uint64</code> size, the flags byte and the <code>TxInpoints</code>), then one 8-byte lane position per distinct parent in <code>TxInpoints</code> order. The action byte, not the magic byte, tells the two encodings apart, because a fee of 423 satoshis also begins with <code>0xA7 0x01</code>. <code>txmetacache.LaneMetaContent</code> returns the embedded <code>MetaBytes</code> without copying or allocating.</p>
+<p>For <code>ADDOwn</code> entries, <code>content</code> is produced by <code>(*meta.Data).CacheBytesInto</code> and checked by <code>meta.OwnCacheBytesView</code>: the <code>MetaBytes</code> layout, then the transaction's 8-byte lane position, which must be a valid position. The position's place is found by walking the <code>TxInpoints</code>, never by the bytes themselves. Subtree validation at shadow caches the content as it is, and with lane positions off it caches the <code>MetaBytes</code>; <code>txmetacache.OwnCacheContent</code> returns them without copying.</p>
 <h3 id="code-examples_5">Code Examples<a class="headerlink" href="#code-examples_5" title="Permanent link">&para;</a></h3>
 <h4 id="producing-messages">Producing Messages<a class="headerlink" href="#producing-messages" title="Permanent link">&para;</a></h4>
 <p>The producer is <code>services/validator/Validator.go</code> — see <code>serializeTxMetaBatch</code> (v1) and <code>serializeTxMetaBatchV2</code> (v2). The wire-format constants come from the shared package:</p>
@@ -10737,7 +10743,7 @@ Per entry: 32-byte tx hash · 1-byte action · 4-byte LE content length · <code
 <li><strong>Truncated header</strong>: buffer shorter than the minimum header (4 bytes for v1, 8 bytes for v2). Logged + acked.</li>
 <li><strong>Truncated entry</strong>: per-entry header or content runs off the end of the buffer. Logged + acked at the truncation point; preceding entries are still processed.</li>
 <li><strong>Implausible entry count</strong>: wire-side count exceeds what the buffer can hold at the minimum entry size. Logged + acked; nothing is dispatched. Protects the pool buffer from oversized pre-allocation.</li>
-<li><strong>Unknown action byte</strong> (not <code>0x00</code>, <code>0x01</code> or <code>0x02</code>): subtree validation logs the entry and skips it, and legacy relay skips it without a log; remaining entries continue to be processed.</li>
+<li><strong>Unknown action byte</strong> (not <code>0x00</code>, <code>0x01</code>, <code>0x02</code> or <code>0x03</code>): subtree validation logs the entry and skips it, and legacy relay skips it without a log; remaining entries continue to be processed.</li>
 </ul>
 <p>In all of the above the message is acknowledged (<code>return nil</code>) rather than re-delivered — a single corrupt message must not stall the topic.</p>
 <hr />
