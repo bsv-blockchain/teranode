@@ -33,6 +33,7 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo/pruner"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
+	"github.com/bsv-blockchain/teranode/util/lane"
 	"github.com/cespare/xxhash/v2"
 	"golang.org/x/sync/errgroup"
 )
@@ -100,6 +101,9 @@ type TxMetaCache struct {
 	noOfBlocksToKeepInTxMetaCache uint32                        // Cache retention horizon (blocks); kept for compatibility with the height-based expiration plumbing in ImprovedCache
 	lanes                         [writeBackLanes]writeBackLane // BatchDecorate write-back, one writer per bucket range (see writeback_lanes.go)
 	tombstones                    *tombstones                   // txs DeleteDemoted evicted; every write path evicts them again (see DeleteDemoted)
+	// laneShadow is whether lane positions are on (utxostore_laneMigration shadow or later), when
+	// an entry keeps the transaction's own lane position for the subtree's lane bitmaps.
+	laneShadow bool
 }
 
 // CacheStats provides statistical information about the current state of the cache.
@@ -273,6 +277,7 @@ func NewTxMetaCache(
 		logger:                        logger,
 		noOfBlocksToKeepInTxMetaCache: noOfBlocksToKeepInTxMetaCache,
 		tombstones:                    newTombstones(tSettings.SubtreeValidation.TxMetaTombstoneWindow, time.Now),
+		laneShadow:                    tSettings.UtxoStore.LaneMigration.Stamps(),
 	}
 
 	if bucketType == Pointer {
@@ -723,8 +728,11 @@ fromStore:
 
 	t.metrics.getOrigin.Add(1)
 
-	// add to cache, but only if the blockIDs have not been set and the tx is not conflicting
-	if len(data.BlockIDs) == 0 && !data.Conflicting {
+	// add to cache, but only if the blockIDs have not been set and the tx is not conflicting.
+	// GetMeta reads no lane position, so at shadow it caches nothing: an entry without the
+	// position would be a hit that leaves the transaction out of its subtree's lane bitmaps. The
+	// next read misses and goes to the store with the position asked for, and caches that.
+	if len(data.BlockIDs) == 0 && !data.Conflicting && (!t.laneShadow || lane.Valid(data.LanePosition)) {
 		// don't return errors from SetCache, as it is not critical if the cache fails to set
 		_ = t.SetCache(hash, data)
 	}

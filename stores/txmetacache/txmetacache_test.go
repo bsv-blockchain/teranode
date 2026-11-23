@@ -20,6 +20,7 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo/tests"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
+	"github.com/bsv-blockchain/teranode/util/lane"
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -1333,5 +1334,64 @@ func TestTxMetaCache_ConflictingTxHashesAsksTheStore(t *testing.T) {
 		require.Equal(t, store.hashes, hashes)
 		require.Equal(t, store.indexed, indexed)
 		require.Equal(t, store.err, err)
+	}
+}
+
+// GetMeta reads no lane position, so at shadow a miss caches nothing: the entry would be a hit
+// without the position, and the subtree's lane bitmaps would leave the transaction out. At off it
+// caches the entry as before. An entry already cached with its position keeps it.
+func Test_txMetaCache_GetMetaAtShadowCachesNoEntryWithoutAPosition(t *testing.T) {
+	ctx := context.Background()
+
+	stored := &meta.Data{Fee: 1, SizeInBytes: 1, TxInpoints: subtree.NewTxInpointsFromPacked([]chainhash.Hash{{0x09}}, []uint32{1, 0})}
+
+	cached := func(t *testing.T, c *TxMetaCache, h chainhash.Hash) (CachedMeta, bool) {
+		t.Helper()
+
+		out, found := make([]CachedMeta, 1), make([]bool, 1)
+		_, err := c.GetMetaCachedInto(ctx, []chainhash.Hash{h}, nil, out, found)
+		require.NoError(t, err)
+
+		return out[0], found[0]
+	}
+
+	for _, tc := range []struct {
+		mode   settings.LaneMigration
+		cached bool
+	}{
+		{mode: settings.LaneMigrationOff, cached: true},
+		{mode: settings.LaneMigrationShadow, cached: false},
+	} {
+		t.Run(string(tc.mode), func(t *testing.T) {
+			tSettings := test.CreateBaseTestSettings(t)
+			tSettings.UtxoStore.LaneMigration = tc.mode
+
+			store := &utxo.MockUtxostore{}
+			store.On("GetMeta", mock.Anything, mock.Anything, mock.Anything).Return(stored)
+
+			s, err := NewTxMetaCache(ctx, tSettings, ulogger.TestLogger{}, store, Unallocated)
+			require.NoError(t, err)
+
+			c := s.(*TxMetaCache)
+
+			h := chainhash.Hash{0x01}
+			require.NoError(t, c.GetMeta(ctx, &h, &meta.Data{}))
+
+			_, found := cached(t, c, h)
+			require.Equal(t, tc.cached, found)
+
+			// An entry cached with its position, as the Kafka handler stores it, is a hit: GetMeta
+			// leaves it, position and all.
+			positioned := chainhash.Hash{0x02}
+			withPosition := *stored
+			withPosition.LanePosition = lane.Pack(8, 14)
+			require.NoError(t, c.SetCache(&positioned, &withPosition))
+
+			require.NoError(t, c.GetMeta(ctx, &positioned, &meta.Data{}))
+
+			got, found := cached(t, c, positioned)
+			require.True(t, found)
+			require.Equal(t, lane.Pack(8, 14), got.LanePosition)
+		})
 	}
 }
