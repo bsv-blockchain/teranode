@@ -968,7 +968,8 @@ var _ utxo.MissingExternalSkipper = (*Store)(nil)
 // (blockassembly_onRestartValidateParentChain and
 // blockassembly_onRestartRemoveInvalidParentChainTxs both on). An unmined
 // record marked external whose file the external store does not have is logged,
-// counted and left out, instead of failing the scan: the file does not come
+// counted and returned as a Skip record carrying its hash, instead of failing
+// the scan, so block assembly can drop its queued children: the file does not come
 // back, so failing would stop block assembly from starting on every restart.
 // The input-validating reset loads this way too, so it leaves such a record
 // unexamined and reports it only through the log and

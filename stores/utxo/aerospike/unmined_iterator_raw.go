@@ -223,10 +223,6 @@ func (h *rawUnminedHandler) EndRecord() error {
 		return err
 	}
 
-	if tx == nil {
-		return nil
-	}
-
 	return h.add(tx)
 }
 
