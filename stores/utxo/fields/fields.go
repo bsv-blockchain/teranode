@@ -105,7 +105,11 @@ const (
 	// ParentLanePositions is the child's copy of its parents' lane positions: a
 	// list on the master record, one signed 64-bit lane position per distinct
 	// parent in TxInpoints parent order. A create with lane positions on writes
-	// it when every parent read gave a valid position.
+	// it when the list it is given is not empty, every entry is a valid position
+	// and it holds at most maxParentLanePositions (about 116,500); a longer list
+	// is left off and its parents count as not carried. The store does not check
+	// the list's length against the parent count: the caller builds one position
+	// per distinct parent.
 	ParentLanePositions FieldName = "parentLanePos"
 )
 

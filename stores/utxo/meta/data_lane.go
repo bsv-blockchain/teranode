@@ -162,10 +162,10 @@ func (d *Data) metaFlags() byte {
 
 // LaneMetaBytesView returns the MetaBytes a lane metadata encoding holds whole, between its header
 // and its parent positions, as a sub-slice of b capped at its own length, with nothing parsed into
-// objects and nothing allocated. It checks the magic and version, walks the inpoints' counts to find
-// exactly where they end, and checks that one valid position per parent follows and nothing else.
-// It is for a receiver that keeps MetaBytes and not the positions; NewDataFromLaneMetaBytes is the
-// full check.
+// objects and nothing allocated. It checks the magic, version, own position and flag bits, walks the
+// inpoints' counts to find exactly where they end, and checks that one valid position per parent
+// follows and nothing else. It is for a receiver that keeps MetaBytes and not the positions;
+// NewDataFromLaneMetaBytes is the full check.
 func LaneMetaBytesView(b []byte) ([]byte, error) {
 	if len(b) < laneMetaHeader+4 {
 		return nil, errors.NewProcessingError("lane metadata is %d bytes, too short", len(b))
@@ -173,6 +173,14 @@ func LaneMetaBytesView(b []byte) ([]byte, error) {
 
 	if b[0] != LaneMetaMagic || b[1] != LaneMetaVersion {
 		return nil, errors.NewProcessingError("lane metadata starts with %#x %#x, not the lane magic and version", b[0], b[1])
+	}
+
+	if err := lane.CheckPosition(binary.LittleEndian.Uint64(b[2:])); err != nil {
+		return nil, errors.NewProcessingError("lane metadata own position", err)
+	}
+
+	if flags := b[laneMetaHeader-1]; flags&^0b11111 != 0 {
+		return nil, errors.NewProcessingError("lane metadata has unknown flag bits %#x", flags)
 	}
 
 	size := uint64(len(b))
@@ -251,6 +259,12 @@ func OwnCacheBytesView(b []byte) ([]byte, uint64, error) {
 		return nil, 0, errors.NewProcessingError("own cache form is %d bytes, too short", len(b))
 	}
 
+	// The flags byte ends MetaBytes' header; CacheBytesInto writes only the five known bits, as
+	// LaneMetaBytesView requires of the lane encoding.
+	if flags := b[metaBytesHeader-1]; flags&^0b11111 != 0 {
+		return nil, 0, errors.NewProcessingError("own cache form has unknown flag bits %#x", flags)
+	}
+
 	size := uint64(len(b))
 	parents := uint64(binary.LittleEndian.Uint32(b[metaBytesHeader:]))
 	off := uint64(metaBytesHeader) + 4 + parents*32
@@ -276,8 +290,8 @@ func OwnCacheBytesView(b []byte) ([]byte, uint64, error) {
 }
 
 // AppendCacheFromLaneMetaBytes appends the txmeta cache form of a lane metadata encoding, its
-// MetaBytes and own position, to dst, checking the encoding as LaneMetaBytesView does and the own
-// position too.
+// MetaBytes and own position, to dst, checking the encoding, own position included, as
+// LaneMetaBytesView does.
 func AppendCacheFromLaneMetaBytes(dst, b []byte) ([]byte, error) {
 	legacy, err := LaneMetaBytesView(b)
 	if err != nil {
@@ -285,9 +299,6 @@ func AppendCacheFromLaneMetaBytes(dst, b []byte) ([]byte, error) {
 	}
 
 	own := binary.LittleEndian.Uint64(b[2:])
-	if err = lane.CheckPosition(own); err != nil {
-		return dst, errors.NewProcessingError("lane metadata own position", err)
-	}
 
 	dst = append(dst, legacy...)
 

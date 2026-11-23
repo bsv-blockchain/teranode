@@ -112,6 +112,9 @@ type SequentialStore interface {
 // interface of its own rather than a field of IgnoreFlags, because IgnoreFlags sits inside
 // CreateOptions, which every create allocates, and eight more bytes there would move it up a size
 // class.
+//
+// A LaneSpender writes no parent's slot for an input whose Spend comes back with a refusal its spend
+// script makes before it writes that output (see LaneSpendWroteNothing).
 type LaneSpender interface {
 	SpendWithLanePosition(ctx context.Context, tx *bt.Tx, blockHeight uint32, position uint64, ignoreFlags IgnoreFlags) ([]*Spend, error)
 }
@@ -202,7 +205,8 @@ func SequentialSpendAndCreate(ctx context.Context, logger ulogger.Logger, s Sequ
 		spends []*Spend
 		// spentWithLane is whether the spends carried the spender's position into the parents'
 		// slots. A refused spend of that kind may still have written a slot on a parent it spent
-		// before the refusal, so its position is burned and never returned.
+		// before the refusal, so it returns its position only when every input was refused before
+		// its write (LaneSpendWroteNothing).
 		spentWithLane bool
 	)
 
@@ -225,11 +229,12 @@ func SequentialSpendAndCreate(ctx context.Context, logger ulogger.Logger, s Sequ
 				taker.BurnLanePosition(options.Caller, reason)
 
 				// A refused plain spend wrote nothing that carries the position, so it goes back. A
-				// refused lane spend keeps it burned: on Aerospike a parent spent before the refusal
-				// keeps the position in its slot when the rollback is skipped, and a later spend of
-				// that output by the same spender writes nothing, so a reuse would leave the slot
-				// naming another transaction.
-				if RefusedSpend(err, spends) && !spentWithLane {
+				// refused lane spend goes back only when every input was refused before its write,
+				// as a double spend of one output is. Otherwise it keeps the position burned: on
+				// Aerospike a parent spent before the refusal keeps the position in its slot when
+				// the rollback is skipped or fails, and a later spend of that output by the same
+				// spender writes nothing, so a reuse would leave the slot naming another transaction.
+				if RefusedSpend(err, spends) && (!spentWithLane || LaneSpendWroteNothing(spends)) {
 					taker.ReturnLanePosition(taken, LaneReturnSpendRejected, true)
 				}
 			}

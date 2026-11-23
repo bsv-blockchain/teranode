@@ -674,6 +674,22 @@ func TestValidateWithOptions_ReturnsTheLanePositionOverGRPC(t *testing.T) {
 		require.Equal(t, position, batch[0].result.lanePosition)
 	})
 
+	t.Run("each batch item gets its own position", func(t *testing.T) {
+		c := &Client{logger: ulogger.TestLogger{}}
+
+		group := completion.NewGroup(2)
+		batch := []*batchItem{{group: group}, {group: group}}
+
+		c.processBatchResponse(batch, &validator_api.ValidateTransactionBatchResponse{
+			Errors:        []*errors.TError{errors.Wrap(nil), errors.Wrap(nil)},
+			Metadata:      [][]byte{validBatchMetadata(), validBatchMetadata()},
+			LanePositions: []uint64{lane.Pack(8, 14), lane.Pack(9, 2)},
+		})
+		require.NoError(t, group.Wait(context.Background(), 0))
+		require.Equal(t, lane.Pack(8, 14), batch[0].result.lanePosition)
+		require.Equal(t, lane.Pack(9, 2), batch[1].result.lanePosition)
+	})
+
 	t.Run("a batch from a server built before the field", func(t *testing.T) {
 		c := &Client{logger: ulogger.TestLogger{}}
 

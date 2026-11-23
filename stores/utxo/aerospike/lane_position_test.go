@@ -621,55 +621,81 @@ func TestSpendAndCreateRecordsTheCreatesPositionInTheParentsSlot(t *testing.T) {
 	require.Equal(t, int(lane.ToSigned(childPosition)), v)
 }
 
-// A spend that carried the spender's position and was refused partway keeps the position burned:
-// a parent spent before the refusal may keep it in its slot, because a rollback refused by a lock
-// is skipped, and a retry by the same spender writes nothing there. Handing the position to the
-// next create would leave that slot naming another transaction.
+// A spend that carried the spender's position and was refused partway keeps the position burned: a
+// parent spent before the refusal may keep it in its slot, because a rollback after a lock refusal is
+// skipped, a rollback after a double spend can fail, and a retry by the same spender writes nothing
+// there. Handing the position to the next create would leave that slot naming another transaction.
+// A double spend of a single output, refused before any write, returns it (the shared contract).
 func TestRefusedLaneSpendKeepsItsPositionBurned(t *testing.T) {
-	ctx := context.Background()
-	logger := ulogger.NewErrorTestLogger(t)
-	tSettings := test.CreateBaseTestSettings(t)
+	for name, tc := range map[string]struct {
+		// refuse readies the second parent so that the child's spend of it is refused.
+		refuse  func(t *testing.T, store *teranodeaerospike.Store, parent *bt.Tx)
+		wantErr error
+	}{
+		"a locked parent, rollback skipped": {
+			refuse: func(t *testing.T, store *teranodeaerospike.Store, parent *bt.Tx) {
+				_, err := store.Create(context.Background(), parent, 100, utxo.WithLocked(true))
+				require.NoError(t, err)
+			},
+			wantErr: errors.ErrTxLocked,
+		},
+		"a parent spent by another transaction, rollback runs": {
+			refuse: func(t *testing.T, store *teranodeaerospike.Store, parent *bt.Tx) {
+				_, err := store.Create(context.Background(), parent, 100)
+				require.NoError(t, err)
 
-	client, store, _, deferFn := initAerospike(t, tSettings, logger)
-	t.Cleanup(deferFn)
+				_, err = store.Spend(context.Background(), laneChild(t, parent, 0), 100)
+				require.NoError(t, err)
+			},
+			wantErr: errors.ErrSpent,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			logger := ulogger.NewErrorTestLogger(t)
+			tSettings := test.CreateBaseTestSettings(t)
 
-	free := laneParent(t, 21, 1)
-	_, err := store.Create(ctx, free, 100)
-	require.NoError(t, err)
+			client, store, _, deferFn := initAerospike(t, tSettings, logger)
+			t.Cleanup(deferFn)
 
-	locked := laneParent(t, 22, 1)
-	_, err = store.Create(ctx, locked, 100, utxo.WithLocked(true))
-	require.NoError(t, err)
+			free := laneParent(t, 21, 1)
+			_, err := store.Create(ctx, free, 100)
+			require.NoError(t, err)
 
-	position := lane.Pack(203, 7)
-	source := tests.NewReturningLanePositions(position, lane.Pack(203, 8))
-	store.SetLanePositionSource(source)
-	t.Cleanup(func() { store.SetLanePositionSource(nil) })
+			refused := laneParent(t, 22, 1)
+			tc.refuse(t, store, refused)
 
-	child := bt.NewTx()
-	for _, parent := range []*bt.Tx{free, locked} {
-		require.NoError(t, child.FromUTXOs(&bt.UTXO{
-			TxIDHash:      parent.TxIDChainHash(),
-			Vout:          0,
-			LockingScript: parent.Outputs[0].LockingScript,
-			Satoshis:      parent.Outputs[0].Satoshis,
-		}))
-	}
+			position := lane.Pack(203, 7)
+			source := tests.NewReturningLanePositions(position, lane.Pack(203, 8))
+			store.SetLanePositionSource(source)
+			t.Cleanup(func() { store.SetLanePositionSource(nil) })
 
-	require.NoError(t, child.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 500))
+			child := bt.NewTx()
+			for _, parent := range []*bt.Tx{free, refused} {
+				require.NoError(t, child.FromUTXOs(&bt.UTXO{
+					TxIDHash:      parent.TxIDChainHash(),
+					Vout:          0,
+					LockingScript: parent.Outputs[0].LockingScript,
+					Satoshis:      parent.Outputs[0].Satoshis,
+				}))
+			}
 
-	before := tests.ReadLaneReturns(t, "aerospike")
+			require.NoError(t, child.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 500))
 
-	_, _, err = store.SpendAndCreate(ctx, child, 101)
-	require.ErrorIs(t, err, errors.ErrTxLocked)
+			before := tests.ReadLaneReturns(t, "aerospike")
 
-	require.Empty(t, source.Returned(), "the refused lane spend's position is not handed out again")
-	require.Empty(t, tests.ReadLaneReturns(t, "aerospike").Since(before), "and no return is counted")
+			_, _, err = store.SpendAndCreate(ctx, child, 101)
+			require.ErrorIs(t, err, tc.wantErr)
 
-	if v, ok := recordBin(t, client, store, free, 0, fields.SpendingLanePositions); ok {
-		slot := slotLanes(t, v)
-		require.Len(t, slot, 1)
-		require.Contains(t, []uint64{lane.None, position}, slot[0], "the free parent's slot holds nothing or the burned position")
+			require.Empty(t, source.Returned(), "the refused lane spend's position is not handed out again")
+			require.Empty(t, tests.ReadLaneReturns(t, "aerospike").Since(before), "and no return is counted")
+
+			if v, ok := recordBin(t, client, store, free, 0, fields.SpendingLanePositions); ok {
+				slot := slotLanes(t, v)
+				require.Len(t, slot, 1)
+				require.Contains(t, []uint64{lane.None, position}, slot[0], "the free parent's slot holds nothing or the burned position")
+			}
+		})
 	}
 }
 
