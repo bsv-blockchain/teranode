@@ -876,6 +876,14 @@ func (c *KafkaAsyncProducer) TopicPartitionCount(ctx context.Context) (int32, er
 		return 0, errors.NewServiceError("topic %s not present in broker metadata", c.Config.Topic)
 	}
 
+	return partitionCountFromTopicDetail(detail)
+}
+
+func partitionCountFromTopicDetail(detail kadm.TopicDetail) (int32, error) {
+	if detail.Err != nil {
+		return 0, detail.Err
+	}
+
 	return int32(len(detail.Partitions)), nil
 }
 
