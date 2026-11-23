@@ -325,6 +325,12 @@ func TestReaderCountsEachKind(t *testing.T) {
 			{KindNoPosition, lane.ViaNone, 0, []uint32{b1.id}},
 			{KindNoRows, lane.ViaNone, lane.Pack(3, 99), []uint32{b3.id}},
 			{KindNotLoaded, lane.ViaNone, lane.Pack(3, 99), []uint32{b3.id + 1_000}},
+			// Two blocks on the chain: the row's block first or second still agrees, and the
+			// first block decides no_rows.
+			{KindAgree, lane.ViaRow, lane.Pack(3, 5), []uint32{b1.id, b2.id}},
+			{KindAgree, lane.ViaRow, lane.Pack(3, 5), []uint32{b2.id, b1.id}},
+			{KindNoRows, lane.ViaNone, lane.Pack(3, 99), []uint32{b3.id, b2.id}},
+			{KindTodayOnly, lane.ViaNone, lane.Pack(3, 99), []uint32{b2.id, b3.id}},
 		}
 
 		for _, tc := range listCases {

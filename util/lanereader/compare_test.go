@@ -237,40 +237,43 @@ func TestFloorAnswerDoesNotAgreeWithAnUnloadedBlock(t *testing.T) {
 }
 
 // Parent checks at once write no more than the first five lines: each is reserved before it is
-// written, and the minute starts when the gate is made.
+// written, and the minute starts when the gate is made. The race is narrow, so it runs many
+// rounds, each with a fresh gate.
 func TestDisagreementLogHoldsItsFiveLinesUnderConcurrentChecks(t *testing.T) {
-	logger := &warnCounter{}
-	r := newReader(logger, nil, lane.DefaultSettleDepth)
-
 	idx := lane.NewIndex(lane.DefaultSettleDepth)
 	rows, err := lane.BuildMapRows(2, roaring64.BitmapOf(7))
 	require.NoError(t, err)
 	require.NoError(t, idx.AddBlock(lane.IndexBlock{ID: 1, Height: 1, Hash: benchBlockHash(1)}, rows))
 	require.NoError(t, idx.SetTip(benchBlockHash(1)))
-	r.idx.Store(idx)
 
-	start := make(chan struct{})
+	for round := range 300 {
+		logger := &warnCounter{}
+		r := newReader(logger, nil, lane.DefaultSettleDepth)
+		r.idx.Store(idx)
 
-	var wg sync.WaitGroup
+		start := make(chan struct{})
 
-	for range 32 {
-		wg.Add(1)
+		var wg sync.WaitGroup
 
-		go func() {
-			defer wg.Done()
+		for range 16 {
+			wg.Add(1)
 
-			<-start
+			go func() {
+				defer wg.Done()
 
-			for range 20 {
-				r.CompareHeight(ReaderValidator, chainhash.Hash{}, lane.Pack(2, 7), false, 0) // lanes_only
-			}
-		}()
+				<-start
+
+				for range 4 {
+					r.CompareHeight(ReaderValidator, chainhash.Hash{}, lane.Pack(2, 7), false, 0) // lanes_only
+				}
+			}()
+		}
+
+		close(start)
+		wg.Wait()
+
+		require.Equal(t, int64(5), logger.warns.Load(), "round %d", round)
 	}
-
-	close(start)
-	wg.Wait()
-
-	require.Equal(t, int64(5), logger.warns.Load())
 }
 
 // A comparison against a list of block IDs allocates nothing.
