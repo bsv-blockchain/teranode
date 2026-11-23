@@ -6,6 +6,10 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
@@ -29,6 +33,10 @@ stored transaction and freeing it would let a second spender take it. It frees t
 the output still names --spender: the store's Unspend checks the stored spend before clearing it, so
 a spend that changed in the meantime is left alone. Afterwards it reads the output back and fails if
 the spend is still there. The node can keep running; the parked block is retried on its own.`
+
+// freeSpentOutputTimeout bounds the whole run, store open included. Freeing one output takes
+// milliseconds; the bound is for a lock wait that does not end.
+const freeSpentOutputTimeout = 2 * time.Minute
 
 type freeSpentOutputFlags struct {
 	parent  *string
@@ -65,14 +73,26 @@ func freeSpentOutputExecute(logger ulogger.Logger, tSettings *settings.Settings,
 			return errors.NewInvalidArgumentError("--spender is not a transaction id", err)
 		}
 
-		ctx := context.Background()
+		// Interrupt and a deadline both end the run: Unspend holds the output's row lock on SQL
+		// while it waits for the parent's transaction row, and spends of that output queue
+		// behind it, so a run that is stuck or abandoned must abort and release it.
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer stop()
+
+		ctx, cancel := context.WithTimeout(ctx, freeSpentOutputTimeout)
+		defer cancel()
 
 		store, err := utxofactory.NewStore(ctx, logger, tSettings, "free-spent-output", false)
 		if err != nil {
 			return errors.NewStorageError("failed to open the UTXO store", err)
 		}
 
-		defer func() { _ = store.Close(ctx) }()
+		defer func() {
+			closeCtx, closeCancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer closeCancel()
+
+			_ = store.Close(closeCtx)
+		}()
 
 		return freeSpentOutput(ctx, store, parent, uint32(*f.vout), spender, out) //nolint:gosec // bounded above
 	}

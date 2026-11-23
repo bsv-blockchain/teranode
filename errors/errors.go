@@ -785,8 +785,9 @@ var publicCauseCodes = map[ERR]struct{}{
 	// keeps that answer while the parent output still records it as the
 	// spender. The pruner also deletes conflicting records that were never
 	// mined, so the answer does not by itself say the transaction confirmed.
-	// The SQL and Aerospike marker messages name the parent outpoint; the
-	// Aerospike height message also names the spending transaction. The
+	// The Aerospike marker message and the SQL height message name the parent
+	// outpoint; the Aerospike height message also names the spending
+	// transaction. The
 	// submitter already sent both. No message carries node-internal state such
 	// as the recorded heights; the stores log those at Warn instead.
 	ERR_UTXO_SPENDING_TX_PRUNED: {},
