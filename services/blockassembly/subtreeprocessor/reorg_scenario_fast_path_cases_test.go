@@ -136,3 +136,67 @@ func TestReorgScenario_SlowPathRemovesCoinbaseChildren(t *testing.T) {
 	require.ElementsMatch(t, sc.expectedMarkFalse(), sc.utxo.marked(false), "the children are not marked: they are gone")
 	require.ElementsMatch(t, sc.winnerNotLost(), sc.utxo.marked(true))
 }
+
+// Plan A1 row 6: a pending hash that sits twice in the chained subtrees, as a failed path can leave
+// it. The remainder pass inserts into the fresh tx map and, above the parallel threshold, compacts
+// to what was inserted (wasInserted), so a surviving duplicate is built once, at its first position,
+// and both copies of a hit are dropped. Below the threshold addNode skips the second copy through the
+// map. Both branches give the same result.
+func TestReorgScenario_SlowPathLeavesADuplicatePendingHashOnce(t *testing.T) {
+	for _, parallel := range []bool{false, true} {
+		name := map[bool]string{false: "sequential remainder", true: "parallel remainder"}[parallel]
+
+		t.Run(name, func(t *testing.T) {
+			cfg := smallScenarioConfig()
+			cfg.duplicateInPending = 6
+
+			if parallel {
+				cfg.parallelThreshold = 1
+			}
+
+			sc := newReorgScenario(t, cfg)
+			require.Len(t, sc.dupIDs, 6)
+
+			logger := &phaseLogger{}
+			sc.stp.logger = logger
+
+			before := txHashes(assemblyNodes(sc.stp))
+			require.Len(t, before, len(sc.pendingOrder())+6, "the duplicates are in the subtrees before the reorg")
+
+			require.NoError(t, sc.run(t))
+
+			branch := map[bool]string{false: "remainder_add_nodes", true: "remainder_map_insert"}[parallel]
+			require.Contains(t, logger.phases("reorgBlocks"), branch)
+
+			after := txHashes(assemblyNodes(sc.stp))
+			requireAssemblyValid(t, sc.stp, sc.onChainAfter)
+			require.Equal(t, sc.expectedOrderAfter(), after, "each duplicate is left once, at its first position, or not at all when it is a hit")
+			require.Equal(t, len(after), sc.stp.GetCurrentTxMap().Length())
+
+			survivors := 0
+
+			for _, id := range sc.dupIDs {
+				if !sc.inWinners(sc.hash(id)) {
+					survivors++
+					require.Equal(t, 1, countHash(after, sc.hash(id)))
+				} else {
+					require.Zero(t, countHash(after, sc.hash(id)))
+				}
+			}
+
+			require.Equal(t, 3, survivors)
+		})
+	}
+}
+
+func countHash(hashes []chainhash.Hash, h chainhash.Hash) int {
+	n := 0
+
+	for _, x := range hashes {
+		if x == h {
+			n++
+		}
+	}
+
+	return n
+}

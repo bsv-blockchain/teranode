@@ -6,6 +6,7 @@ import (
 	"math"
 	"math/rand/v2"
 	"net/url"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -97,6 +98,12 @@ type reorgScenarioConfig struct {
 	// their removeMap entries behind.
 	coinbaseChildren int
 
+	// duplicateInPending is how many pending transactions appear twice in the chained subtrees: a
+	// second copy is added to the open subtree behind the tx map's back, as a failed path can leave
+	// it. Half are transactions that survive the reorg, the others hits. The remainder pass keeps one
+	// copy of a survivor, at its first position, and drops both copies of a hit.
+	duplicateInPending int
+
 	// skipStoreMarks counts the longest-chain marks instead of sending them to the UTXO store, and
 	// creates no raw D1 records. The reorgscale suite sets it to time the processor's phases; the
 	// marks are measured on their own against Aerospike.
@@ -126,6 +133,7 @@ type reorgScenario struct {
 	// removeIDs are the transactions put in the removeMap. droppedIDs are the ones the reorg must
 	// leave out of the assembly and out of the mark-false set, whatever took them out.
 	removeIDs  []scenarioID
+	dupIDs     []scenarioID
 	droppedIDs []scenarioID
 
 	// extraParent is the second parent of a pending transaction that spends another scenario
@@ -431,7 +439,7 @@ func (sc *reorgScenario) planRemoveMap(t testing.TB, hitPositions []uint32) {
 	t.Helper()
 
 	cfg := sc.cfg
-	if cfg.removeMapPending+cfg.removeMapHits+cfg.removeMapLost+cfg.removeMapD1 == 0 {
+	if cfg.removeMapPending+cfg.removeMapHits+cfg.removeMapLost+cfg.removeMapD1+cfg.duplicateInPending == 0 {
 		return
 	}
 
@@ -473,6 +481,18 @@ func (sc *reorgScenario) planRemoveMap(t testing.TB, hitPositions []uint32) {
 	sc.removeIDs = append(sc.removeIDs, pending...)
 	sc.droppedIDs = append(sc.droppedIDs, pending...)
 	sc.removeIDs = append(sc.removeIDs, pickSpread(hits, cfg.removeMapHits)...)
+
+	if cfg.duplicateInPending > 0 {
+		taken := sc.hashSet(sc.removeIDs)
+		survivors := slices.DeleteFunc(slices.Clone(plain), func(id scenarioID) bool { _, ok := taken[sc.hash(id)]; return ok })
+		keptHits := slices.DeleteFunc(slices.Clone(hits), func(id scenarioID) bool { _, ok := taken[sc.hash(id)]; return ok })
+
+		nSurvivors := (cfg.duplicateInPending + 1) / 2
+		require.LessOrEqual(t, nSurvivors, len(survivors))
+		require.LessOrEqual(t, cfg.duplicateInPending-nSurvivors, len(keptHits))
+
+		sc.dupIDs = append(pickSpread(survivors, nSurvivors), pickSpread(keptHits, cfg.duplicateInPending-nSurvivors)...)
+	}
 
 	// The X transactions a lost-block child spends come first, then the ones the removeMap takes.
 	xFirst := cfg.lostChildOfPending
@@ -739,6 +759,15 @@ func (sc *reorgScenario) buildProcessor(t testing.TB) {
 
 	for _, id := range sc.removeIDs {
 		require.NoError(t, stp.removeMap.Put(sc.hash(id), 1))
+	}
+
+	if len(sc.dupIDs) > 0 {
+		open := stp.currentSubtree.Load()
+		require.Greater(t, open.Size()-open.Length(), len(sc.dupIDs), "the open subtree has room for the duplicates")
+
+		for _, id := range sc.dupIDs {
+			require.NoError(t, open.AddSubtreeNode(sc.tx(t, id).node))
+		}
 	}
 
 	sc.stp = stp
