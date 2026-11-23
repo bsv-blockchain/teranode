@@ -301,11 +301,26 @@ type CreateOptions struct {
 	SpendOnly   bool        // skip the create phase
 	IgnoreFlags IgnoreFlags // spend-phase flags (ignored with CreateOnly)
 
+	// Caller names the service the create is made for. It only labels a burned lane position;
+	// see WithCaller. It sits after the bools so this struct does not grow.
+	Caller Caller
+
 	// LanePosition is a lane position (util/lane) the caller names for this one record, which
 	// takes the place of the one the store's source would give it. It is 8 bytes of what was
 	// padding, so this struct, which every create allocates, stays the size it was: the bools above
 	// are grouped for that reason, and TestCreateOptionsSize holds it.
 	LanePosition uint64
+
+	// ParentLanePositions is the lane position of each distinct parent of the record, in the
+	// order of its TxInpoints parents. The validator names it at utxostore_laneMigration shadow
+	// from the parent reads it already makes, with one entry per distinct parent and 0 for a
+	// parent with no position. nil means the caller read no parent positions: lane positions off,
+	// or a path that reads no parents. Utxoset writes the list beside the inpoints when it holds
+	// one valid position per distinct parent and the row stores inpoints. Aerospike writes its
+	// parentLanePos bin when every entry is valid, without checking the length against the parent
+	// count, and leaves a list too long for the record off. The SQL column is installed and not
+	// written in this build. A store never reads a parent to fill it.
+	ParentLanePositions []uint64
 }
 
 // WithMinedBlockInfo returns a CreateOption that sets the block IDs for a UTXO.
@@ -360,6 +375,7 @@ func (o *CreateOptions) ItemOptions(i int) *CreateOptions {
 	c.TxIDs = nil
 	c.SubtreeIdxs = nil
 	c.BelowCheckpoint = false
+	c.ParentLanePositions = nil
 	if o.SubtreeIdxs != nil && i < len(o.SubtreeIdxs) && len(o.MinedBlockInfos) > 0 {
 		c.MinedBlockInfos = make([]MinedBlockInfo, len(o.MinedBlockInfos))
 		copy(c.MinedBlockInfos, o.MinedBlockInfos)
@@ -432,6 +448,15 @@ func WithTXIDs(txIDs []chainhash.Hash) CreateOption {
 func WithLanePosition(position uint64) CreateOption {
 	return func(o *CreateOptions) {
 		o.LanePosition = position
+	}
+}
+
+// WithParentLanePositions names the lane positions of the record's distinct parents, in
+// TxInpoints parent order; see CreateOptions.ParentLanePositions. A list ignores it, because it
+// describes one record.
+func WithParentLanePositions(positions []uint64) CreateOption {
+	return func(o *CreateOptions) {
+		o.ParentLanePositions = positions
 	}
 }
 
@@ -565,6 +590,10 @@ type ParentOutput struct {
 	LockingScript *bscript.Script
 	// Height is the creation height, valid only when Status is ParentOutputMined.
 	Height uint32
+	// LanePosition is the parent transaction's own lane position (util/lane), read in the same
+	// call. Zero means the store did not read it or holds none: a store reads it only with lane
+	// positions on (utxostore_laneMigration shadow), and a parent created before that has none.
+	LanePosition uint64
 	// Err is set when this outpoint could not be answered; Status is then Unknown.
 	Err error
 }

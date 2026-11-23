@@ -29,10 +29,12 @@ import (
 	"net/url"
 	"os"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/bsv-blockchain/go-batcher/v2"
 	bt "github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/bscript"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
@@ -54,15 +56,20 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo/nullstore"
 	"github.com/bsv-blockchain/teranode/stores/utxo/sql"
 	"github.com/bsv-blockchain/teranode/stores/utxo/tests"
+	"github.com/bsv-blockchain/teranode/stores/utxo/utxoset"
+	tpostgres "github.com/bsv-blockchain/teranode/test/utils/postgres"
 	"github.com/bsv-blockchain/teranode/test/utils/transactions"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/kafka"
+	"github.com/bsv-blockchain/teranode/util/lane"
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/bsv-blockchain/teranode/util/tracing"
 	aeroTest "github.com/bsv-blockchain/testcontainers-aerospike-go"
 	"github.com/cespare/xxhash/v2"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/ordishs/gocore"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -2606,4 +2613,631 @@ func TestReadMTPsLocked_GuardFiresOnUnpopulatedStore(t *testing.T) {
 	require.Contains(t, err.Error(), "MTP store not loaded up to height 5")
 	require.Nil(t, utxoMTPs)
 	require.Equal(t, uint32(0), blockMTP)
+}
+
+// laneShadowValidator is parentOutputsValidator at utxostore_laneMigration shadow.
+func laneShadowValidator(t *testing.T, store utxostore.Store) *Validator {
+	t.Helper()
+
+	v := parentOutputsValidator(t, store)
+	v.settings.UtxoStore.LaneMigration = settings.LaneMigrationShadow
+
+	return v
+}
+
+// The parents' lane positions come out in the order subtree.TxInpoints lists the parents, which is
+// the order the lane txmeta encoding and the store's parent_lane_positions use.
+func TestParentLanePositionsFollowTxInpointsOrder(t *testing.T) {
+	parents := []chainhash.Hash{{3}, {1}, {3}, {2}, {1}}
+	tx := parentOutputsChild(t, parents, []uint32{0, 0, 1, 0, 1})
+
+	inputLanes := []uint64{lane.Pack(3, 1), lane.Pack(1, 1), lane.Pack(3, 1), lane.Pack(2, 1), lane.Pack(1, 1)}
+
+	inpoints, err := subtree.NewTxInpointsFromTx(tx)
+	require.NoError(t, err)
+	require.Equal(t, []chainhash.Hash{{3}, {1}, {2}}, inpoints.ParentTxHashes)
+
+	require.Equal(t, []uint64{lane.Pack(3, 1), lane.Pack(1, 1), lane.Pack(2, 1)}, parentLanePositions(tx, inputLanes))
+	require.Nil(t, parentLanePositions(tx, nil), "lane positions off")
+
+	// A wide transaction takes the set, and must give the same order.
+	wide := make([]chainhash.Hash, 0, 3*parentLaneLinearMax)
+	vouts := make([]uint32, 0, cap(wide))
+	wideLanes := make([]uint64, 0, cap(wide))
+
+	for i := 0; i < cap(wide); i++ {
+		p := chainhash.Hash{byte(i % (parentLaneLinearMax + 3))}
+		wide = append(wide, p)
+		vouts = append(vouts, uint32(i)) //nolint:gosec // i is small
+		wideLanes = append(wideLanes, lane.Pack(1, uint64(p[0])+1))
+	}
+
+	wideTx := parentOutputsChild(t, wide, vouts)
+	wideInpoints, err := subtree.NewTxInpointsFromTx(wideTx)
+	require.NoError(t, err)
+
+	want := make([]uint64, len(wideInpoints.ParentTxHashes))
+	for i, p := range wideInpoints.ParentTxHashes {
+		want[i] = lane.Pack(1, uint64(p[0])+1)
+	}
+
+	require.Equal(t, want, parentLanePositions(wideTx, wideLanes))
+}
+
+// At shadow the parents' lane positions come from the one parent read the validator already makes,
+// whether the store answers it or the caller prefetched the parent.
+func TestParentLanePositionsComeFromTheParentRead(t *testing.T) {
+	ctx := context.Background()
+	base := parentOutputsStore(t)
+
+	s0 := bscript.NewFromBytes([]byte{0x76, 0xa9, 0x00})
+	first := storedParent(t, base, 1, 120, s0, s0)
+	second := storedParent(t, base, 2, 0, s0)
+
+	positions := map[chainhash.Hash]uint64{
+		*first.TxIDChainHash():  lane.Pack(7, 100),
+		*second.TxIDChainHash(): lane.Pack(8, 200),
+	}
+
+	store := &countingParentStore{Store: base}
+	store.override = func(answers []utxostore.ParentOutput) ([]utxostore.ParentOutput, error) {
+		for i := range answers {
+			answers[i].LanePosition = positions[store.outpoints[len(store.outpoints)-len(answers)+i].TxID]
+		}
+
+		return answers, nil
+	}
+
+	tx := parentOutputsChild(t, []chainhash.Hash{*second.TxIDChainHash(), *first.TxIDChainHash(), *first.TxIDChainHash()}, []uint32{0, 0, 1})
+
+	_, parentLanes, _, err := laneShadowValidator(t, store).getTransactionInputBlockHeightsAndExtendTx(ctx, tx, tx.TxID(), &Options{})
+	require.NoError(t, err)
+	require.Equal(t, []uint64{lane.Pack(8, 200), lane.Pack(7, 100)}, parentLanes)
+	require.Equal(t, 1, store.calls, "no read is added for the positions")
+
+	t.Run("prefetched", func(t *testing.T) {
+		prefetched := map[chainhash.Hash]*meta.Data{
+			*first.TxIDChainHash(): {Tx: first, BlockHeights: []uint32{120}, LanePosition: lane.Pack(9, 1)},
+		}
+
+		calls := store.calls
+
+		_, parentLanes, _, err := laneShadowValidator(t, store).getTransactionInputBlockHeightsAndExtendTx(ctx, tx, tx.TxID(),
+			&Options{PrefetchedParents: prefetched})
+		require.NoError(t, err)
+		require.Equal(t, []uint64{lane.Pack(8, 200), lane.Pack(9, 1)}, parentLanes)
+		require.Equal(t, calls+1, store.calls, "only the parent not prefetched is read")
+	})
+
+	t.Run("off", func(t *testing.T) {
+		_, parentLanes, _, err := parentOutputsValidator(t, store).getTransactionInputBlockHeightsAndExtendTx(ctx, tx, tx.TxID(), &Options{})
+		require.NoError(t, err)
+		require.Nil(t, parentLanes)
+	})
+}
+
+// At shadow the txmeta entry carries the lane positions when every one is valid, and is the legacy
+// entry otherwise, counted with its reason; off, it is always the legacy entry.
+func TestTxMetaPayloadCarriesLanePositionsAtShadow(t *testing.T) {
+	parents := []chainhash.Hash{{1}, {2}}
+	tx := parentOutputsChild(t, parents, []uint32{0, 0})
+
+	inpoints, err := subtree.NewTxInpointsFromTx(tx)
+	require.NoError(t, err)
+
+	data := func(own uint64) *meta.Data {
+		return &meta.Data{TxInpoints: inpoints, Fee: 500, SizeInBytes: 250, LanePosition: own}
+	}
+
+	legacy, err := data(lane.Pack(1, 1)).MetaBytes()
+	require.NoError(t, err)
+
+	shadow := laneShadowValidator(t, nil)
+	good := []uint64{lane.Pack(2, 1), lane.Pack(3, 1)}
+
+	t.Run("off", func(t *testing.T) {
+		b, laneFormat, err := parentOutputsValidator(t, nil).txMetaPayload(data(lane.Pack(1, 1)), good)
+		require.NoError(t, err)
+		require.False(t, laneFormat)
+		require.Equal(t, legacy, b)
+	})
+
+	t.Run("every position valid", func(t *testing.T) {
+		b, laneFormat, err := shadow.txMetaPayload(data(lane.Pack(1, 1)), good)
+		require.NoError(t, err)
+		require.True(t, laneFormat)
+
+		var back meta.Data
+		gotParents, err := meta.NewDataFromLaneMetaBytes(b, &back)
+		require.NoError(t, err)
+		require.Equal(t, lane.Pack(1, 1), back.LanePosition)
+		require.Equal(t, good, gotParents)
+	})
+
+	for _, c := range []struct {
+		name    string
+		own     uint64
+		parents []uint64
+		reason  string
+	}{
+		{"no own position", lane.None, good, txmetacache.LaneMissOwn},
+		{"one more position than parents", lane.Pack(1, 1), []uint64{lane.Pack(2, 1), lane.Pack(3, 1), lane.Pack(4, 1)}, txmetacache.LaneMissParentsNotRead},
+		{"parents not read", lane.Pack(1, 1), nil, txmetacache.LaneMissParentsNotRead},
+		{"a parent without a position", lane.Pack(1, 1), []uint64{lane.Pack(2, 1), lane.None}, txmetacache.LaneMissParent},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			require.Equal(t, c.reason, laneTxMetaMiss(data(c.own), c.parents))
+
+			b, laneFormat, err := shadow.txMetaPayload(data(c.own), c.parents)
+			require.NoError(t, err, "a miss is counted, never an error")
+			require.False(t, laneFormat)
+
+			want, err := data(c.own).MetaBytes()
+			require.NoError(t, err)
+			require.Equal(t, want, b)
+		})
+	}
+
+	t.Run("no parents", func(t *testing.T) {
+		require.Empty(t, laneTxMetaMiss(&meta.Data{LanePosition: lane.Pack(1, 1), IsCoinbase: true}, nil))
+	})
+}
+
+// A lane entry goes on the wire with the ADDLane action, in both wire formats.
+func TestSerializeTxMetaBatchMarksLaneEntries(t *testing.T) {
+	h1, h2 := chainhash.Hash{1}, chainhash.Hash{2}
+	batch := []*txmetaBatchItem{
+		{hash: &h1, metaBytes: []byte("legacy")},
+		{hash: &h2, metaBytes: []byte("lane"), lane: true},
+	}
+
+	v1 := serializeTxMetaBatch(batch)
+	off := 4
+	require.Equal(t, txmetacache.WireActionADD, v1[off+32])
+	off += 32 + 1 + 4 + len("legacy")
+	require.Equal(t, txmetacache.WireActionADDLane, v1[off+32])
+
+	v2 := serializeTxMetaBatchV2([]txmetaItemWithHash{{item: batch[0]}, {item: batch[1]}})
+	off = txmetacache.WireV2HeaderLen
+	require.Equal(t, txmetacache.WireActionADD, v2[off+8+32])
+	off += 8 + 32 + 1 + 4 + len("legacy")
+	require.Equal(t, txmetacache.WireActionADDLane, v2[off+8+32])
+}
+
+// From the parent read to the record and the txmeta entry, on a real utxoset store at
+// utxostore_laneMigration shadow with the lane schema installed: the parent's position comes back
+// with the read, the create writes it beside the child's inpoints, and the child's txmeta entry
+// carries the child's own position and its parent's.
+func TestLanePositionsFlowThroughAUtxosetStore(t *testing.T) {
+	ctx := context.Background()
+
+	dsn, cleanup, err := tpostgres.SetupTestPostgresContainer()
+	if err != nil {
+		test.SkipIfContainerUnavailable(t, err)
+		t.Fatalf("postgres container unavailable: %v", err)
+	}
+
+	t.Cleanup(func() { _ = cleanup() })
+
+	u, err := url.Parse(dsn)
+	require.NoError(t, err)
+
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.UtxoStore.LaneMigration = settings.LaneMigrationShadow
+
+	first, err := utxoset.New(ctx, ulogger.TestLogger{}, tSettings, u)
+	require.NoError(t, err)
+	require.NoError(t, first.PrepareLaneSchema(ctx))
+	require.NoError(t, first.Close(ctx))
+
+	store, err := utxoset.New(ctx, ulogger.TestLogger{}, tSettings, u)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = store.Close(ctx) })
+	require.NoError(t, store.SetBlockHeight(200))
+
+	parentPosition, childPosition := lane.Pack(12, 1), lane.Pack(12, 2)
+	store.SetLanePositionSource(tests.NewScriptedLanePositions(parentPosition, childPosition))
+
+	parent := storedParent(t, store, 0x61, 0, bscript.NewFromBytes([]byte{0x76, 0xa9, 0x61}))
+	child := parentOutputsChild(t, []chainhash.Hash{*parent.TxIDChainHash()}, []uint32{0})
+
+	v := laneShadowValidator(t, store)
+
+	_, parentLanes, _, err := v.getTransactionInputBlockHeightsAndExtendTx(ctx, child, child.TxID(), &Options{})
+	require.NoError(t, err)
+	require.Equal(t, []uint64{parentPosition}, parentLanes, "the parent read gives the parent's position")
+
+	md, _, err := v.spendAndCreateInUtxoStore(ctx, child, 201, false, &Options{}, parentLanes)
+	require.NoError(t, err)
+	require.Equal(t, childPosition, md.LanePosition, "the create returns the position it wrote")
+
+	b, laneFormat, err := v.txMetaPayload(md, parentLanes)
+	require.NoError(t, err)
+	require.True(t, laneFormat)
+
+	var back meta.Data
+	gotParents, err := meta.NewDataFromLaneMetaBytes(b, &back)
+	require.NoError(t, err)
+	require.Equal(t, childPosition, back.LanePosition)
+	require.Equal(t, []uint64{parentPosition}, gotParents)
+
+	pool, err := pgxpool.New(ctx, dsn)
+	require.NoError(t, err)
+	t.Cleanup(pool.Close)
+
+	var stored []byte
+	require.NoError(t, pool.QueryRow(ctx, `SELECT parent_lane_positions FROM tx_ident WHERE txid = $1`,
+		child.TxIDChainHash()[:]).Scan(&stored))
+	require.Equal(t, lane.AppendPositions(nil, []uint64{parentPosition}), stored, "the record keeps its parent's position")
+}
+
+func TestCreateCaller(t *testing.T) {
+	require.Equal(t, utxostore.CallerValidator, createCaller(nil))
+	require.Equal(t, utxostore.CallerValidator, createCaller(&Options{}))
+	require.Equal(t, utxostore.CallerSubtreeValidation, createCaller(&Options{InBlock: true}))
+
+	// WithCaller sets the caller and nothing else: it changes nothing about validation.
+	named := ProcessOptions(WithCaller(utxostore.CallerBlockValidation))
+	require.Equal(t, utxostore.CallerBlockValidation, named.Caller)
+
+	named.Caller = utxostore.CallerUnknown
+	require.Equal(t, ProcessOptions(), named, "WithCaller must leave every other option as it was")
+
+	// A caller the options name wins, with or without InBlock.
+	require.Equal(t, utxostore.CallerSubtreeValidation, createCaller(&Options{Caller: utxostore.CallerSubtreeValidation}))
+	require.Equal(t, utxostore.CallerBlockValidation, createCaller(&Options{Caller: utxostore.CallerBlockValidation, InBlock: true}))
+}
+
+// A validator create names its caller on the store's burned lane position counter: its own for a
+// mempool submission, subtree validation's for a request marked InBlock.
+func TestSpendAndCreateInUtxoStoreNamesItsCaller(t *testing.T) {
+	tracing.SetupMockTracer()
+
+	ctx := context.Background()
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings := test.CreateBaseTestSettings(t)
+
+	storeURL, err := url.Parse("sqlitememory:///validator_burn_caller")
+	require.NoError(t, err)
+
+	store, err := sql.New(ctx, logger, tSettings, storeURL)
+	require.NoError(t, err)
+
+	v := &Validator{logger: logger, utxoStore: store, settings: tSettings}
+
+	for _, c := range []struct {
+		name    string
+		inBlock bool
+		named   utxostore.Caller
+		caller  string
+		seed    byte
+	}{
+		{"mempool submission", false, utxostore.CallerUnknown, "validator", 0xce},
+		{"in a block or subtree", true, utxostore.CallerUnknown, "subtree_validation", 0xcf},
+		{"a peer subtree, named without InBlock", false, utxostore.CallerSubtreeValidation, "subtree_validation", 0xd9},
+		{"a named caller wins over InBlock", true, utxostore.CallerBlockValidation, "block_validation", 0xda},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			// A transaction whose parent the store does not hold: the spend fails, and the
+			// position the call took burns.
+			tx := tests.BuildMultiWorkload(t, c.seed, 1, 1).Roots[0]
+
+			store.SetLanePositionSource(tests.NewScriptedLanePositions(lane.Pack(40, 1)))
+			t.Cleanup(func() { store.SetLanePositionSource(nil) })
+
+			before := tests.ReadLaneBurns(t, "sql")
+
+			_, _, err := v.spendAndCreateInUtxoStore(ctx, tx, 940, false, &Options{InBlock: c.inBlock, Caller: c.named}, nil)
+			require.Error(t, err)
+
+			burns := tests.ReadLaneBurns(t, "sql").Since(before)
+			require.Len(t, burns, 1, "one position burned: %v", burns)
+
+			for key, n := range burns {
+				require.Equal(t, float64(1), n)
+				require.Truef(t, strings.HasSuffix(key, "/"+c.caller), "burn %q is labelled %s", key, c.caller)
+			}
+		})
+	}
+}
+
+// createCallerRecorder remembers the caller each create-only SpendAndCreate names, by transaction,
+// then forwards the call to the real store.
+type createCallerRecorder struct {
+	utxostore.Store
+
+	mu      sync.Mutex
+	callers map[chainhash.Hash][]utxostore.Caller
+}
+
+func (r *createCallerRecorder) SpendAndCreate(ctx context.Context, tx *bt.Tx, blockHeight uint32,
+	opts ...utxostore.CreateOption) (*meta.Data, []*utxostore.Spend, error) {
+	if options, err := utxostore.ParseCreateOptions(opts...); err == nil && options.CreateOnly {
+		r.mu.Lock()
+		if r.callers == nil {
+			r.callers = map[chainhash.Hash][]utxostore.Caller{}
+		}
+
+		r.callers[*tx.TxIDChainHash()] = append(r.callers[*tx.TxIDChainHash()], options.Caller)
+		r.mu.Unlock()
+	}
+
+	return r.Store.SpendAndCreate(ctx, tx, blockHeight, opts...)
+}
+
+// createOnly returns the callers the create-only calls for txid named.
+func (r *createCallerRecorder) createOnly(txid chainhash.Hash) []utxostore.Caller {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	return append([]utxostore.Caller(nil), r.callers[txid]...)
+}
+
+// laneTxMetaCounter reads one series of a teranode_lane counter from the default registry.
+func laneTxMetaCounter(t *testing.T, name string, labels map[string]string) float64 {
+	t.Helper()
+
+	families, err := prometheus.DefaultGatherer.Gather()
+	require.NoError(t, err)
+
+	for _, family := range families {
+		if family.GetName() != name {
+			continue
+		}
+
+	metrics:
+		for _, m := range family.GetMetric() {
+			got := map[string]string{}
+			for _, l := range m.GetLabel() {
+				got[l.GetName()] = l.GetValue()
+			}
+
+			for k, v := range labels {
+				if got[k] != v {
+					continue metrics
+				}
+			}
+
+			return m.GetCounter().GetValue()
+		}
+	}
+
+	return 0
+}
+
+func laneSentCount(t *testing.T, format string) float64 {
+	return laneTxMetaCounter(t, "teranode_lane_txmeta_messages_total", map[string]string{"side": "sent", "format": format})
+}
+
+func laneMissCount(t *testing.T, reason string) float64 {
+	return laneTxMetaCounter(t, "teranode_lane_txmeta_position_misses_total", map[string]string{"reason": reason})
+}
+
+// The validator counts every entry it sends at shadow, lane or legacy, with the reason for a legacy
+// one. An entry that passes the position checks but does not encode, here because its inpoints name
+// a parent twice, goes out legacy and is counted as encode_failed.
+func TestTxMetaPayloadCountsWhatItSends(t *testing.T) {
+	parents := []chainhash.Hash{{1}, {2}}
+	tx := parentOutputsChild(t, parents, []uint32{0, 0})
+
+	inpoints, err := subtree.NewTxInpointsFromTx(tx)
+	require.NoError(t, err)
+
+	shadow := laneShadowValidator(t, nil)
+	good := []uint64{lane.Pack(2, 1), lane.Pack(3, 1)}
+
+	t.Run("lane", func(t *testing.T) {
+		lanes := laneSentCount(t, "lane")
+
+		_, laneFormat, err := shadow.txMetaPayload(&meta.Data{TxInpoints: inpoints, LanePosition: lane.Pack(1, 1)}, good)
+		require.NoError(t, err)
+		require.True(t, laneFormat)
+		require.InDelta(t, lanes+1, laneSentCount(t, "lane"), 0)
+	})
+
+	t.Run("a miss", func(t *testing.T) {
+		legacy, misses := laneSentCount(t, "legacy"), laneMissCount(t, txmetacache.LaneMissParent)
+
+		_, laneFormat, err := shadow.txMetaPayload(&meta.Data{TxInpoints: inpoints, LanePosition: lane.Pack(1, 1)}, []uint64{lane.Pack(2, 1), lane.None})
+		require.NoError(t, err)
+		require.False(t, laneFormat)
+		require.InDelta(t, legacy+1, laneSentCount(t, "legacy"), 0)
+		require.InDelta(t, misses+1, laneMissCount(t, txmetacache.LaneMissParent), 0)
+	})
+
+	t.Run("an encode failure", func(t *testing.T) {
+		twice := subtree.NewTxInpointsFromPacked([]chainhash.Hash{{1}, {1}}, []uint32{1, 0, 1, 1})
+		data := &meta.Data{TxInpoints: twice, Fee: 500, SizeInBytes: 250, LanePosition: lane.Pack(1, 1)}
+		require.Empty(t, laneTxMetaMiss(data, good), "the position checks pass")
+
+		legacy, misses := laneSentCount(t, "legacy"), laneMissCount(t, txmetacache.LaneMissEncode)
+
+		b, laneFormat, err := shadow.txMetaPayload(data, good)
+		require.NoError(t, err, "a miss is counted, never an error")
+		require.False(t, laneFormat)
+
+		want, err := data.MetaBytes()
+		require.NoError(t, err)
+		require.Equal(t, want, b)
+		require.InDelta(t, legacy+1, laneSentCount(t, "legacy"), 0)
+		require.InDelta(t, misses+1, laneMissCount(t, txmetacache.LaneMissEncode), 0)
+	})
+}
+
+// laneCaptureStore gives each parent read a lane position per parent, keeps the options of the
+// create, and gives the created record its own position, so a test can follow the positions through
+// Validate without a lane position source.
+type laneCaptureStore struct {
+	utxostore.Store
+
+	parentPositions map[chainhash.Hash]uint64
+	own             uint64
+	created         *utxostore.CreateOptions
+}
+
+func (s *laneCaptureStore) ParentOutputsForValidation(ctx context.Context, outpoints []utxostore.Outpoint, opts ...utxostore.ParentOutputOption) ([]utxostore.ParentOutput, error) {
+	answers, err := s.Store.ParentOutputsForValidation(ctx, outpoints, opts...)
+	if err != nil {
+		return nil, err
+	}
+
+	for i := range answers {
+		answers[i].LanePosition = s.parentPositions[outpoints[i].TxID]
+	}
+
+	return answers, nil
+}
+
+func (s *laneCaptureStore) SpendAndCreate(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...utxostore.CreateOption) (*meta.Data, []*utxostore.Spend, error) {
+	created, err := utxostore.ParseCreateOptions(opts...)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	s.created = created
+
+	md, spends, err := s.Store.SpendAndCreate(ctx, tx, blockHeight, opts...)
+	if md != nil {
+		md.LanePosition = s.own
+	}
+
+	return md, spends, err
+}
+
+// laneEntry reads the one entry of a v1 txmeta message: its action and its content.
+func laneEntry(t *testing.T, value []byte) (byte, []byte) {
+	t.Helper()
+
+	require.Equal(t, uint32(1), binary.LittleEndian.Uint32(value))
+
+	off := 4 + 32
+	action := value[off]
+	off++
+
+	n := int(binary.LittleEndian.Uint32(value[off:]))
+	off += 4
+	require.Len(t, value, off+n)
+
+	return action, value[off:]
+}
+
+// Through Validate at shadow, the parents' positions the parent read returned go to the create and
+// into the published txmeta entry, which carries the ADDLane action and the child's and parent's
+// positions, on the direct publish and through the batcher. A record without its own position goes
+// out as a plain ADD entry holding MetaBytes, on both paths.
+func TestValidateCarriesLanePositionsToTheCreateAndTheTxMeta(t *testing.T) {
+	tracing.SetupMockTracer()
+	initPrometheusMetrics()
+
+	ctx := context.Background()
+	base := parentOutputsStore(t)
+
+	s0 := bscript.NewFromBytes([]byte{0x76, 0xa9, 0x00})
+	parent := storedParent(t, base, 0x71, 150, s0, s0, s0, s0)
+	parentPosition := lane.Pack(14, 1)
+
+	store := &laneCaptureStore{Store: base, parentPositions: map[chainhash.Hash]uint64{*parent.TxIDChainHash(): parentPosition}}
+
+	validate := func(t *testing.T, v *Validator, vout uint32, own uint64) {
+		t.Helper()
+
+		store.own = own
+
+		child := parentOutputsChild(t, []chainhash.Hash{*parent.TxIDChainHash()}, []uint32{vout})
+		_, err := v.Validate(ctx, child, 201, WithSkipPolicyChecks(true), WithSkipScriptValidation(true), WithAddTXToBlockAssembly(false))
+		require.NoError(t, err)
+
+		require.NotNil(t, store.created)
+		require.Equal(t, []uint64{parentPosition}, store.created.ParentLanePositions, "the create gets the parent's position")
+	}
+
+	newValidator := func(t *testing.T) *Validator {
+		v := laneShadowValidator(t, store)
+		v.logger = ulogger.TestLogger{}
+		v.txValidator = NewTxValidator(ulogger.TestLogger{}, v.settings)
+		v.stats = gocore.NewStat("validator")
+
+		return v
+	}
+
+	// checkEntry checks one published entry: ADDLane with the child's and parent's positions when
+	// the child has its own position, a plain ADD holding MetaBytes when it has none.
+	checkEntry := func(t *testing.T, action byte, content []byte, own uint64) {
+		t.Helper()
+
+		if own == lane.None {
+			require.Equal(t, txmetacache.WireActionADD, action, "an entry without positions is a plain ADD")
+
+			var back meta.Data
+			require.NoError(t, meta.NewMetaDataFromBytes(content, &back), "and holds MetaBytes")
+
+			return
+		}
+
+		require.Equal(t, txmetacache.WireActionADDLane, action)
+
+		var back meta.Data
+		gotParents, err := meta.NewDataFromLaneMetaBytes(content, &back)
+		require.NoError(t, err)
+		require.Equal(t, own, back.LanePosition)
+		require.Equal(t, []uint64{parentPosition}, gotParents)
+	}
+
+	for _, tc := range []struct {
+		name string
+		vout uint32
+		own  uint64
+	}{
+		{name: "lane entry", vout: 0, own: lane.Pack(14, 2)},
+		{name: "plain entry", vout: 1, own: lane.None},
+	} {
+		t.Run("direct publish: "+tc.name, func(t *testing.T) {
+			producer := kafka.NewKafkaAsyncProducerMock()
+
+			v := newValidator(t)
+			v.txmetaKafkaProducerClient = producer
+
+			validate(t, v, tc.vout, tc.own)
+
+			require.Len(t, producer.PublishChannel(), 1)
+			msg := <-producer.PublishChannel()
+
+			action, content := laneEntry(t, msg.Value)
+			checkEntry(t, action, content, tc.own)
+		})
+
+		t.Run("batcher: "+tc.name, func(t *testing.T) {
+			var (
+				mu    sync.Mutex
+				items []*txmetaBatchItem
+			)
+
+			v := newValidator(t)
+			v.txmetaKafkaProducerClient = kafka.NewKafkaAsyncProducerMock()
+			v.txmetaKafkaBatcher = batcher.New[txmetaBatchItem](1, 10*time.Millisecond, func(batch []*txmetaBatchItem) {
+				mu.Lock()
+				items = append(items, batch...)
+				mu.Unlock()
+			}, true)
+
+			validate(t, v, tc.vout+2, tc.own)
+
+			require.Eventually(t, func() bool {
+				mu.Lock()
+				defer mu.Unlock()
+
+				return len(items) == 1
+			}, 2*time.Second, 10*time.Millisecond)
+
+			mu.Lock()
+			defer mu.Unlock()
+
+			action := txmetacache.WireActionADD
+			if items[0].lane {
+				action = txmetacache.WireActionADDLane
+			}
+
+			checkEntry(t, action, items[0].metaBytes, tc.own)
+		})
+	}
 }

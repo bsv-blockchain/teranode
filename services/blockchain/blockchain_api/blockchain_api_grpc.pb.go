@@ -182,7 +182,7 @@ type BlockchainAPIClient interface {
 	// RenewLaneLease renews a lane lease and, if asked, grants the next stretch of positions.
 	// A lease that is closed is answered with closed set, not an error, and the holder opens a new one.
 	RenewLaneLease(ctx context.Context, in *RenewLaneLeaseRequest, opts ...grpc.CallOption) (*RenewLaneLeaseResponse, error)
-	// ReleaseLaneLease closes a lane lease cleanly and records the last position its holder took.
+	// ReleaseLaneLease closes a lane lease cleanly and records the highest position its holder gave out that may carry a record (positions at the top that came back unwritten are left out).
 	ReleaseLaneLease(ctx context.Context, in *ReleaseLaneLeaseRequest, opts ...grpc.CallOption) (*ReleaseLaneLeaseResponse, error)
 	// GetBestBlockHeader retrieves the header of the current best block.
 	GetBestBlockHeader(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*GetBlockHeaderResponse, error)
@@ -1085,7 +1085,7 @@ type BlockchainAPIServer interface {
 	// RenewLaneLease renews a lane lease and, if asked, grants the next stretch of positions.
 	// A lease that is closed is answered with closed set, not an error, and the holder opens a new one.
 	RenewLaneLease(context.Context, *RenewLaneLeaseRequest) (*RenewLaneLeaseResponse, error)
-	// ReleaseLaneLease closes a lane lease cleanly and records the last position its holder took.
+	// ReleaseLaneLease closes a lane lease cleanly and records the highest position its holder gave out that may carry a record (positions at the top that came back unwritten are left out).
 	ReleaseLaneLease(context.Context, *ReleaseLaneLeaseRequest) (*ReleaseLaneLeaseResponse, error)
 	// GetBestBlockHeader retrieves the header of the current best block.
 	GetBestBlockHeader(context.Context, *emptypb.Empty) (*GetBlockHeaderResponse, error)

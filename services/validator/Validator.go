@@ -11,6 +11,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -34,6 +35,7 @@ import (
 	"github.com/bsv-blockchain/teranode/util/health"
 	"github.com/bsv-blockchain/teranode/util/kafka"
 	kafkamessage "github.com/bsv-blockchain/teranode/util/kafka/kafka_message"
+	"github.com/bsv-blockchain/teranode/util/lane"
 	"github.com/bsv-blockchain/teranode/util/tracing"
 	"github.com/cespare/xxhash/v2"
 	"github.com/ordishs/gocore"
@@ -219,6 +221,21 @@ type txmetaBatchItem struct {
 	hash      *chainhash.Hash
 	metaBytes []byte
 	isDelete  bool
+	// lane says metaBytes is the lane metadata encoding (meta.LaneMetaBytesInto), which the wire
+	// marks with txmetacache.WireActionADDLane instead of WireActionADD.
+	lane bool
+}
+
+// wireAction is the action byte the txmeta wire carries for the item.
+func (it *txmetaBatchItem) wireAction() byte {
+	switch {
+	case it.isDelete:
+		return txmetacache.WireActionDELETE
+	case it.lane:
+		return txmetacache.WireActionADDLane
+	default:
+		return txmetacache.WireActionADD
+	}
 }
 
 // Validator implements comprehensive BSV Blockchain transaction validation and manages the complete lifecycle
@@ -1038,7 +1055,12 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 		return nil, err
 	}
 
-	var utxoHeights []uint32
+	var (
+		utxoHeights []uint32
+		// parentLanes is the lane position of each distinct parent, in TxInpoints parent order,
+		// read with the parents at utxostore_laneMigration shadow; nil otherwise.
+		parentLanes []uint64
+	)
 
 	// OutpointOnlySpend: skip parent reads entirely. utxoHeights stays nil.
 	// Safe because (a) SkipScriptValidation short-circuits BDK before it indexes
@@ -1054,7 +1076,33 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 		// len(utxoHeights) == 0` pair. Extension is now unconditional, so both
 		// gates selected the same single call and the first read as a gate while
 		// gating nothing.
-		if utxoHeights, err = v.getTransactionInputBlockHeightsAndExtendTx(ctx, tx, txID, validationOptions); err != nil {
+		var allParentsMissing bool
+
+		if utxoHeights, parentLanes, allParentsMissing, err = v.getTransactionInputBlockHeightsAndExtendTx(ctx, tx, txID, validationOptions); err != nil {
+			if allParentsMissing && !validationOptions.InBlock && ctx.Err() == nil {
+				// Ingest only: block drivers skip every tx whose record resolves before
+				// the validator runs, so a block-sourced tx never has a record to bless.
+				// Every parent must be absent: a present parent still holds outputs this
+				// tx spends, and the grace records no spends.
+				// No state is written yet, so the grace keeps the caller's deadline. A
+				// done context denies the grace and the missing-parent error surfaces.
+				txMeta, graceErr := v.dahEvictedParentGrace(ctx, tx, txID)
+				if graceErr != nil {
+					// Keep missing-parent outermost: the counters, the legacy orphan
+					// pool and the HTTP 422 mapping treat it as deferrable. The wrapped
+					// node fault still marks it as ours at the RPC boundary. The original
+					// error stays in the chain, so the 422 body and the log name the parent.
+					err = errors.NewTxMissingParentError("[Validate][%s] parent missing and DAH grace undecided", txID, errors.Join(err, graceErr))
+					span.RecordError(err)
+
+					return nil, err
+				}
+
+				if txMeta != nil {
+					return txMeta, nil
+				}
+			}
+
 			err = errors.NewProcessingError("[Validate][%s] error getting transaction input block heights", txID, err)
 			span.RecordError(err)
 
@@ -1093,8 +1141,7 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 	// NOT bounded here, deliberately, and therefore reliant on the store's own
 	// client-level timeouts: the primary SpendAndCreate below, and the store reads and
 	// writes on the error and duplicate paths — the GetMeta after ErrTxExists, the
-	// conflicting-path CreateInUtxoStore and its GetMeta, MarkConflictingRecursively,
-	// and the GetMeta on the not-found path.
+	// conflicting-path CreateInUtxoStore and its GetMeta, and MarkConflictingRecursively.
 	//
 	// The exposure is real rather than theoretical. Before this context was detached,
 	// process shutdown could eventually interrupt those calls; now nothing outside the
@@ -1132,8 +1179,8 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 	//
 	// The Kafka retry loop below still honours caller cancellation, deliberately and
 	// explicitly, through its own select on ctx.
-	decoupledCtx, _, deferFn := tracing.DecoupleTracingSpan(context.WithoutCancel(ctx), "validator", "decoupledSpan")
-	defer deferFn()
+	decoupledCtx, _, decoupledDeferFn := tracing.DecoupleTracingSpan(context.WithoutCancel(ctx), "validator", "decoupledSpan")
+	defer decoupledDeferFn()
 
 	/*
 		Scenario where store is done before adding to assembly:
@@ -1173,7 +1220,7 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 	// spend the tx's inputs and create its outputs + metadata in one store
 	// operation; the store reverses the spends if the create fails (except on
 	// ErrTxExists, which leaves the spends in place and is handled below)
-	if txMetaData, spentUtxos, err = v.spendAndCreateInUtxoStore(decoupledCtx, tx, blockHeight, addToBlockAssembly, validationOptions); err != nil {
+	if txMetaData, spentUtxos, err = v.spendAndCreateInUtxoStore(decoupledCtx, tx, blockHeight, addToBlockAssembly, validationOptions, parentLanes); err != nil {
 		if errors.Is(err, errors.ErrTxExists) {
 			// create phase: the tx already exists in the store
 			v.logger.Debugf("[Validate][%s] tx already exists in store, not sending to block assembly: %v", txID, err)
@@ -1304,7 +1351,7 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 				// fallback (reached during legacy below-checkpoint catchup on a stale/double
 				// spend — see handle_block.go PreValidateTransactions, which sets both
 				// CreateConflicting and OutpointOnlySpend) does not hard-fail the block.
-				var conflictingCreateOpts []utxo.CreateOption
+				conflictingCreateOpts := []utxo.CreateOption{utxo.WithCaller(createCaller(validationOptions))}
 				if validationOptions.OutpointOnlySpend {
 					conflictingCreateOpts = append(conflictingCreateOpts, utxo.WithSkipExtendedInputs(true))
 				}
@@ -1374,30 +1421,6 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 				span.RecordError(err)
 
 				return nil, err
-			}
-		} else if errors.Is(err, errors.ErrTxNotFound) {
-			// PHASE ASSUMPTION: this branch (and the ErrUtxoError branch above) assumes the
-			// error originated in the SPEND phase of SpendAndCreate — today no create path
-			// emits ErrTxNotFound or ErrUtxoError, and no spend path emits ErrTxExists.
-			// An atomic SpendAndCreate implementation (Postgres tx, Aerospike-native) whose
-			// create phase can surface ErrTxNotFound (e.g. an internal parent lookup) MUST
-			// NOT let it escape untagged, or a failed create gets misread here as a
-			// DAH-evicted parent and the tx is wrongly treated as blessed.
-			//
-			// The parent transaction was not found. This can legitimately happen when the parent has been DAH-evicted
-			// long after the child was mined. Only short-circuit if the stored metadata confirms prior full validation:
-			//   - tx has been included in at least one block (BlockIDs non-empty), AND
-			//   - tx is NOT marked conflicting, AND
-			//   - tx is NOT locked
-			// Otherwise, surface the original ErrTxNotFound — a "tx exists in store" alone is not proof of validation
-			// (a re-org or DAH window could expose a stale or mid-flight record).
-			txMetaData = &meta.Data{}
-			if metaErr := v.utxoStore.GetMeta(decoupledCtx, tx.TxIDChainHash(), txMetaData); metaErr == nil {
-				if len(txMetaData.BlockIDs) > 0 && !txMetaData.Conflicting && !txMetaData.Locked {
-					v.logger.Warnf("[Validate][%s] parent tx DAH-evicted, child already mined and not conflicting/locked, assuming blessed (BlockIDs=%v)", txID, txMetaData.BlockIDs)
-
-					return txMetaData, nil
-				}
 			}
 		}
 
@@ -1699,7 +1722,7 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 		// announce it as a fresh mempool tx.
 		txMetaData.InBlock = validationOptions.InBlock
 
-		if txMetaErr := v.sendTxMetaToKafka(txMetaData, tx.TxIDChainHash()); txMetaErr != nil {
+		if txMetaErr := v.sendTxMetaToKafka(txMetaData, tx.TxIDChainHash(), parentLanes); txMetaErr != nil {
 			v.logger.Errorf("[Validate][%s] failed to serialize/enqueue txmeta for kafka, continuing to 2PC: %v", txID, txMetaErr)
 		}
 	}
@@ -1959,22 +1982,79 @@ func (v *Validator) unlockLockedTxOnExit(ctx context.Context, tx *bt.Tx, txID st
 	txMetaData.Locked = false
 }
 
-// getTransactionInputBlockHeights returns the block heights for each input of the transaction
-func (v *Validator) getTransactionInputBlockHeightsAndExtendTx(ctx context.Context, tx *bt.Tx, txID string, validationOptions *Options) ([]uint32, error) {
+// getTransactionInputBlockHeights returns the block heights for each input of the transaction and,
+// with lane positions on (utxostore_laneMigration shadow), the lane position of each distinct
+// parent in TxInpoints parent order, taken from the same parent reads. A parent the reads give no
+// position for is zero there.
+func (v *Validator) getTransactionInputBlockHeightsAndExtendTx(ctx context.Context, tx *bt.Tx, txID string, validationOptions *Options) ([]uint32, []uint64, bool, error) {
 	ctx, span, endSpan := tracing.Tracer("validator").Start(ctx, "getTransactionInputBlockHeightsAndExtendTx",
 		tracing.WithHistogram(getTransactionInputBlockHeights),
 	)
 	defer endSpan()
 
-	// get the utxo heights for each input
-	utxoHeights, err := v.getUtxoBlockHeightsAndExtendTx(ctx, tx, txID, validationOptions.PrefetchedParents)
-	if err != nil {
-		span.RecordError(err)
-		return nil, err
+	var inputLanes []uint64
+	if v.laneShadow() {
+		inputLanes = make([]uint64, len(tx.Inputs))
 	}
 
-	return utxoHeights, nil
+	// get the utxo heights for each input
+	utxoHeights, allParentsMissing, err := v.resolveParentOutputs(ctx, tx, txID, validationOptions.PrefetchedParents, inputLanes)
+	if err != nil {
+		span.RecordError(err)
+		return nil, nil, allParentsMissing, err
+	}
+
+	return utxoHeights, parentLanePositions(tx, inputLanes), false, nil
 }
+
+// laneShadow reports whether lane positions are on (utxostore_laneMigration shadow or later): the
+// validator then reads its parents' lane positions and publishes them in the transaction's
+// metadata. Nothing acts on them yet.
+func (v *Validator) laneShadow() bool {
+	return v.settings != nil && v.settings.UtxoStore.LaneMigration.Stamps()
+}
+
+// parentLanePositions turns one lane position per input into one per distinct parent, in the order
+// subtree.TxInpoints lists a transaction's parents: by first appearance among the inputs. It
+// returns nil for nil, and for a transaction with no inputs.
+func parentLanePositions(tx *bt.Tx, inputLanes []uint64) []uint64 {
+	if inputLanes == nil || len(tx.Inputs) == 0 {
+		return nil
+	}
+
+	positions := make([]uint64, 0, len(tx.Inputs))
+
+	// A few inputs are compared directly; a wide transaction, a consolidation of thousands of
+	// parents, uses a set so the cost stays linear in its inputs.
+	if len(tx.Inputs) <= parentLaneLinearMax {
+		parents := make([]chainhash.Hash, 0, len(tx.Inputs))
+
+		for i, input := range tx.Inputs {
+			parent := *input.PreviousTxIDChainHash()
+			if !slices.Contains(parents, parent) {
+				parents = append(parents, parent)
+				positions = append(positions, inputLanes[i])
+			}
+		}
+
+		return positions
+	}
+
+	seen := make(map[chainhash.Hash]struct{}, len(tx.Inputs))
+
+	for i, input := range tx.Inputs {
+		parent := *input.PreviousTxIDChainHash()
+		if _, ok := seen[parent]; !ok {
+			seen[parent] = struct{}{}
+			positions = append(positions, inputLanes[i])
+		}
+	}
+
+	return positions
+}
+
+// parentLaneLinearMax is the most inputs parentLanePositions compares directly.
+const parentLaneLinearMax = 16
 
 // twoPhaseCommitTransaction marks the transaction as spendable.
 //
@@ -2010,6 +2090,137 @@ func (v *Validator) twoPhaseCommitTransaction(ctx context.Context, tx *bt.Tx, tx
 	return nil
 }
 
+// dahEvictedParentGrace reports whether an ingest missing-parent failure can be
+// absorbed because the transaction itself is already mined on the CURRENT chain.
+// The caller invokes it only when every parent is absent from the UTXO store,
+// which is what DAH eviction or a lost partition leaves behind.
+//
+// The grace needs all of these:
+//   - a blockchain client (without one it denies before any store read);
+//   - a stored record for this txid with a BlockID other than 0 (see
+//     nonGenesisBlockIDs);
+//   - at least one of those blocks on the current chain (a block that lost a
+//     reorg keeps its stale ID; only invalidated blocks get BlockIDs cleared);
+//   - the record is not conflicting, not locked and not creating;
+//   - the record lists exactly this tx's outpoints (see recordSpendsTxInputs),
+//     which UTXO-set snapshot records from cmd/seeder and cmd/seedimport do not.
+//
+// A bless returns the stored record and writes nothing. The txid commits to the
+// whole transaction, so the record is for these exact bytes. Scripts are not
+// re-run and spends are not recorded: every parent is absent, so there is no
+// record to spend against.
+//
+// BlockIDs do not prove that the spends were recorded, and the stores do not
+// enforce that DAH eviction leaves only fully spent parents. A quick-validate
+// wave-1 record is created before its spends and can carry BlockIDs with no
+// spends behind it, and a conflicting record can be DAH-evicted with unspent
+// outputs. The grace accepts this: with every parent absent, this node holds no
+// output the tx could double-spend, and the record claims a block on the current
+// chain.
+//
+// The stores' own not-found-parent check (resolveSpendCompletions and its SQL
+// and Pebble mirrors) needs only that the record exists. It is looser than this
+// grace, not a precedent for it; issue 2252 tracks it.
+//
+// Finality runs earlier in precheckTransaction. Coinbase maturity is not
+// rechecked, because the tx is mined at or below the tip and maturity only grows
+// with height.
+//
+// A nil record and nil error deny the grace, as does a clean not-found of the
+// child. A store or blockchain fault returns an error with a node-fault class
+// (STORAGE_ERROR, SERVICE_UNAVAILABLE). The caller wraps it in ErrTxMissingParent,
+// so consumers that defer on missing parent still do, and the RPC layer does not
+// report it as a verdict on the transaction. A done ctx is the caller giving up,
+// not a fault: it denies the grace.
+func (v *Validator) dahEvictedParentGrace(ctx context.Context, tx *bt.Tx, txID string) (*meta.Data, error) {
+	if v.blockchainClient == nil {
+		return nil, nil
+	}
+
+	txMetaData := &meta.Data{}
+	if metaErr := v.utxoStore.GetMeta(ctx, tx.TxIDChainHash(), txMetaData); metaErr != nil {
+		if ctx.Err() != nil || errors.Is(metaErr, errors.ErrTxNotFound) {
+			return nil, nil
+		}
+
+		prometheusValidatorDAHGraceFault.WithLabelValues("meta_read").Inc()
+
+		return nil, errors.NewStorageError("[Validate][%s] DAH-evicted-parent grace: meta read failed (degraded store?)", txID, metaErr)
+	}
+
+	minedBlockIDs := nonGenesisBlockIDs(txMetaData.BlockIDs)
+
+	if len(minedBlockIDs) == 0 || txMetaData.Conflicting || txMetaData.Locked || txMetaData.Creating {
+		return nil, nil
+	}
+
+	if !recordSpendsTxInputs(txMetaData, tx) {
+		return nil, nil
+	}
+
+	onCurrentChain, chainErr := v.blockchainClient.CheckBlockIsInCurrentChain(ctx, minedBlockIDs)
+	if chainErr != nil {
+		if ctx.Err() != nil {
+			return nil, nil
+		}
+
+		prometheusValidatorDAHGraceFault.WithLabelValues("chain_check").Inc()
+
+		return nil, errors.NewServiceUnavailableError("[Validate][%s] DAH-evicted-parent grace: current-chain check failed", txID, chainErr)
+	}
+
+	if !onCurrentChain {
+		return nil, nil
+	}
+
+	prometheusValidatorDAHGraceBlessed.Inc()
+	v.logger.Debugf("[Validate][%s] all parents absent, tx mined on current chain and not conflicting/locked/creating, assuming blessed (BlockIDs=%v)", txID, txMetaData.BlockIDs)
+
+	return txMetaData, nil
+}
+
+// recordSpendsTxInputs reports whether the stored record lists exactly the
+// outpoints this tx spends. A record built from a UTXO-set snapshot (cmd/seeder,
+// cmd/seedimport) stores outputs only, so it has no inpoints: it carries a block
+// id without ever having been created from these inputs.
+func recordSpendsTxInputs(record *meta.Data, tx *bt.Tx) bool {
+	stored := record.TxInpoints.GetTxInpoints()
+	if len(stored) != len(tx.Inputs) {
+		return false
+	}
+
+	remaining := make(map[subtree.Inpoint]int, len(stored))
+	for _, inpoint := range stored {
+		remaining[inpoint]++
+	}
+
+	for _, input := range tx.Inputs {
+		inpoint := subtree.Inpoint{Hash: *input.PreviousTxIDChainHash(), Index: input.PreviousTxOutIndex}
+		if remaining[inpoint] == 0 {
+			return false
+		}
+
+		remaining[inpoint]--
+	}
+
+	return true
+}
+
+// nonGenesisBlockIDs drops block id 0. Genesis holds id 0 and is on every chain,
+// and its only transaction has no inputs, so id 0 on a record with inputs is the
+// seeder's placeholder (cmd/seeder), not evidence of a block.
+func nonGenesisBlockIDs(blockIDs []uint32) []uint32 {
+	ids := make([]uint32, 0, len(blockIDs))
+
+	for _, id := range blockIDs {
+		if id != 0 {
+			ids = append(ids, id)
+		}
+	}
+
+	return ids
+}
+
 // getUtxoBlockHeightsAndExtendTx returns the block height of each input's parent
 // and extends every input from the parent's stored output. prefetched, when
 // non-nil, supplies parent metadata already read in bulk; those parents are not
@@ -2030,6 +2241,20 @@ func (v *Validator) twoPhaseCommitTransaction(ctx context.Context, tx *bt.Tx, tx
 // genuinely unspendable output and mint coins (GHSA-v76m-6vc7-g7c7). Overwriting
 // every input from the store's own outputs closes that.
 func (v *Validator) getUtxoBlockHeightsAndExtendTx(ctx context.Context, tx *bt.Tx, txID string, prefetched map[chainhash.Hash]*meta.Data) ([]uint32, error) {
+	utxoHeights, _, err := v.resolveParentOutputs(ctx, tx, txID, prefetched, nil)
+
+	return utxoHeights, err
+}
+
+// resolveParentOutputs is getUtxoBlockHeightsAndExtendTx that also reports
+// whether the store found none of the parents. The flag is true only with an
+// ErrTxMissingParent error, when no parent came from prefetched and every
+// store answer is ParentOutputTxNotFound.
+//
+// inputLanes, when not nil, has one entry per input and receives each input's
+// parent's lane position from the same reads: the store's answer, or the
+// prefetched parent's record. No read is added for it.
+func (v *Validator) resolveParentOutputs(ctx context.Context, tx *bt.Tx, txID string, prefetched map[chainhash.Hash]*meta.Data, inputLanes []uint64) ([]uint32, bool, error) {
 	utxoHeights := make([]uint32, len(tx.Inputs))
 
 	var (
@@ -2044,7 +2269,11 @@ func (v *Validator) getUtxoBlockHeightsAndExtendTx(ctx context.Context, tx *bt.T
 		// its outputs. A missing parent or nil Data.Tx is read from the store.
 		if pf, ok := prefetched[parentTxHash]; ok && pf != nil && pf.Tx != nil {
 			if err := extendInputFromPrefetchedParent(tx, inputIdx, pf, utxoHeights); err != nil {
-				return nil, err
+				return nil, false, err
+			}
+
+			if inputLanes != nil {
+				inputLanes[inputIdx] = pf.LanePosition
 			}
 
 			continue
@@ -2055,42 +2284,64 @@ func (v *Validator) getUtxoBlockHeightsAndExtendTx(ctx context.Context, tx *bt.T
 	}
 
 	if len(outpoints) == 0 {
-		return utxoHeights, nil
+		return utxoHeights, false, nil
 	}
 
 	answers, err := v.utxoStore.ParentOutputsForValidation(ctx, outpoints)
 	if err != nil {
-		return nil, errors.NewProcessingError("[Validate][%s] error getting parent outputs", txID, err)
+		return nil, false, errors.NewProcessingError("[Validate][%s] error getting parent outputs", txID, err)
 	}
 
 	if len(answers) != len(outpoints) {
-		return nil, errors.NewProcessingError("[Validate][%s] store returned %d parent outputs for %d outpoints", txID, len(answers), len(outpoints))
+		return nil, false, errors.NewProcessingError("[Validate][%s] store returned %d parent outputs for %d outpoints", txID, len(answers), len(outpoints))
+	}
+
+	// A read fault outranks every verdict below. Found in input order instead, it
+	// would surface as a missing parent whenever an earlier parent is absent.
+	for i, answer := range answers {
+		if answer.Err != nil {
+			return nil, false, errors.NewProcessingError("[Validate][%s] error getting parent transaction %s", txID, outpoints[i].TxID, answer.Err)
+		}
 	}
 
 	for i, answer := range answers {
 		inputIdx := storeIdxs[i]
 		parentTxHash := outpoints[i].TxID
 
-		switch {
-		case answer.Err != nil:
-			return nil, errors.NewProcessingError("[Validate][%s] error getting parent transaction %s", txID, parentTxHash, answer.Err)
-		case answer.Status == utxo.ParentOutputTxNotFound:
-			return nil, errors.NewTxMissingParentError("[Validate][%s] error getting parent transaction %s", txID, parentTxHash)
-		case answer.Status == utxo.ParentOutputNoSuchIndex:
-			return nil, errors.NewTxInvalidError("[Validate][%s] parent transaction %s has no output %d", txID, parentTxHash, outpoints[i].Vout)
-		case answer.Status == utxo.ParentOutputMined:
+		switch answer.Status {
+		case utxo.ParentOutputTxNotFound:
+			allParentsMissing := len(storeIdxs) == len(tx.Inputs) && everyParentNotFound(answers)
+
+			return nil, allParentsMissing, errors.NewTxMissingParentError("[Validate][%s] error getting parent transaction %s", txID, parentTxHash)
+		case utxo.ParentOutputNoSuchIndex:
+			return nil, false, errors.NewTxInvalidError("[Validate][%s] parent transaction %s has no output %d", txID, parentTxHash, outpoints[i].Vout)
+		case utxo.ParentOutputMined:
 			utxoHeights[inputIdx] = answer.Height
-		case answer.Status == utxo.ParentOutputNotMined:
+		case utxo.ParentOutputNotMined:
 			utxoHeights[inputIdx] = unconfirmedParentHeight
 		default:
-			return nil, errors.NewProcessingError("[Validate][%s] store gave no answer for parent transaction %s", txID, parentTxHash)
+			return nil, false, errors.NewProcessingError("[Validate][%s] store gave no answer for parent transaction %s", txID, parentTxHash)
 		}
 
 		tx.Inputs[inputIdx].PreviousTxSatoshis = answer.Satoshis
 		tx.Inputs[inputIdx].PreviousTxScript = answer.LockingScript
+
+		if inputLanes != nil {
+			inputLanes[inputIdx] = answer.LanePosition
+		}
 	}
 
-	return utxoHeights, nil
+	return utxoHeights, false, nil
+}
+
+func everyParentNotFound(answers []utxo.ParentOutput) bool {
+	for _, answer := range answers {
+		if answer.Err != nil || answer.Status != utxo.ParentOutputTxNotFound {
+			return false
+		}
+	}
+
+	return true
 }
 
 // extendInputFromPrefetchedParent writes one input's height and previous output
@@ -2130,6 +2381,23 @@ func (v *Validator) TriggerBatcher() {
 	// Noop
 }
 
+// createCaller names the service a validator create is made for, for the burned lane position
+// counter. A caller the options name wins: subtree validation names itself on a peer's subtree,
+// which it validates without InBlock. Otherwise a create for a transaction that arrived in a block
+// (InBlock) is subtree validation's, since today only subtree validation sets InBlock, and every
+// other create is the validator's own, a mempool submission.
+func createCaller(validationOptions *Options) utxo.Caller {
+	if validationOptions != nil && validationOptions.Caller != utxo.CallerUnknown {
+		return validationOptions.Caller
+	}
+
+	if validationOptions != nil && validationOptions.InBlock {
+		return utxo.CallerSubtreeValidation
+	}
+
+	return utxo.CallerValidator
+}
+
 // CreateInUtxoStore stores transaction metadata in the UTXO store without
 // spending any inputs (SpendAndCreate with WithCreateOnly).
 // Returns transaction metadata and error if storage fails.
@@ -2161,10 +2429,12 @@ func (v *Validator) CreateInUtxoStore(ctx context.Context, tx *bt.Tx, blockHeigh
 	return txMetaData, nil
 }
 
-func (v *Validator) sendTxMetaToKafka(data *meta.Data, txHash *chainhash.Hash) error {
+// sendTxMetaToKafka publishes data on the txmeta topic. parentLanes is the lane position of each
+// distinct parent in TxInpoints parent order, nil when the caller read none.
+func (v *Validator) sendTxMetaToKafka(data *meta.Data, txHash *chainhash.Hash, parentLanes []uint64) error {
 	startKafka := time.Now()
 
-	metaBytes, err := data.MetaBytes()
+	metaBytes, laneFormat, err := v.txMetaPayload(data, parentLanes)
 	if err != nil {
 		return errors.NewProcessingError("error serializing tx meta data for tx %s", txHash.String(), err)
 	}
@@ -2179,6 +2449,7 @@ func (v *Validator) sendTxMetaToKafka(data *meta.Data, txHash *chainhash.Hash) e
 			hash:      txHash,
 			metaBytes: metaBytes,
 			isDelete:  false,
+			lane:      laneFormat,
 		})
 	} else {
 		// Fallback: send single item as batch format for consistency.
@@ -2186,6 +2457,7 @@ func (v *Validator) sendTxMetaToKafka(data *meta.Data, txHash *chainhash.Hash) e
 			hash:      txHash,
 			metaBytes: metaBytes,
 			isDelete:  false,
+			lane:      laneFormat,
 		}
 		if v.settings.Validator.TxMetaWireFormat == "v2" {
 			v.sendTxMetaBatchV2([]*txmetaBatchItem{item})
@@ -2203,6 +2475,55 @@ func (v *Validator) sendTxMetaToKafka(data *meta.Data, txHash *chainhash.Hash) e
 	prometheusValidatorSendToBlockValidationKafka.Observe(float64(time.Since(startKafka).Microseconds()) / 1_000_000)
 
 	return nil
+}
+
+// txMetaPayload is the content of data's txmeta entry. With lane positions on it is the lane
+// metadata encoding, carrying the transaction's own lane position and its parents', when every one
+// of them is a valid position; otherwise, and always with lane positions off, it is MetaBytes. A
+// message that goes without positions at shadow is counted with the reason, never refused: nothing
+// decides on a lane position yet, and Phase 1 measures how many messages carry them.
+func (v *Validator) txMetaPayload(data *meta.Data, parentLanes []uint64) ([]byte, bool, error) {
+	if !v.laneShadow() {
+		b, err := data.MetaBytes()
+		return b, false, err
+	}
+
+	reason := laneTxMetaMiss(data, parentLanes)
+	if reason == "" {
+		b, err := data.LaneMetaBytesInto(nil, parentLanes)
+		if err == nil {
+			txmetacache.CountLaneTxMetaSent("")
+			return b, true, nil
+		}
+
+		reason = txmetacache.LaneMissEncode
+	}
+
+	txmetacache.CountLaneTxMetaSent(reason)
+
+	b, err := data.MetaBytes()
+
+	return b, false, err
+}
+
+// laneTxMetaMiss is why data's txmeta cannot carry lane positions, or "" when it can.
+func laneTxMetaMiss(data *meta.Data, parentLanes []uint64) string {
+	if !lane.Valid(data.LanePosition) {
+		return txmetacache.LaneMissOwn
+	}
+
+	// A record with no parents, such as a coinbase, needs none, and parentLanePositions gives none.
+	if len(parentLanes) != len(data.TxInpoints.ParentTxHashes) {
+		return txmetacache.LaneMissParentsNotRead
+	}
+
+	for _, position := range parentLanes {
+		if !lane.Valid(position) {
+			return txmetacache.LaneMissParent
+		}
+	}
+
+	return ""
 }
 
 // sendTxMetaDeletesToKafka publishes txmeta DELETEs so subtree validation evicts
@@ -2326,7 +2647,7 @@ func txMetaEntrySize(item *txmetaBatchItem) int {
 // For each entry:
 //
 //	[32 bytes] - tx hash (raw bytes)
-//	[1 byte]   - action (0=ADD, 1=DELETE)
+//	[1 byte]   - action (0=ADD, 1=DELETE, 2=ADDLane)
 //	[4 bytes]  - content length (uint32, little-endian) - 0 for DELETE
 //	[N bytes]  - content (metaBytes) - only for ADD
 func serializeTxMetaBatch(batch []*txmetaBatchItem) []byte {
@@ -2353,11 +2674,7 @@ func serializeTxMetaBatch(batch []*txmetaBatchItem) []byte {
 		offset += 32
 
 		// Write action (1 byte)
-		if item.isDelete {
-			buf[offset] = txmetacache.WireActionDELETE
-		} else {
-			buf[offset] = txmetacache.WireActionADD
-		}
+		buf[offset] = item.wireAction()
 		offset++
 
 		// Write content length (4 bytes)
@@ -2396,7 +2713,7 @@ type txmetaItemWithHash struct {
 //	per entry:
 //	  [8 bytes]  xxhash(tx hash) (uint64 LE)
 //	  [32 bytes] tx hash
-//	  [1 byte]   action (0=ADD, 1=DELETE)
+//	  [1 byte]   action (0=ADD, 1=DELETE, 2=ADDLane)
 //	  [4 bytes]  content length (uint32 LE)
 //	  [N bytes]  content (only for ADD)
 //
@@ -2429,7 +2746,7 @@ func serializeTxMetaBatchV2(items []txmetaItemWithHash) []byte {
 			binary.LittleEndian.PutUint32(buf[off:], 0)
 			off += 4
 		} else {
-			buf[off] = txmetacache.WireActionADD
+			buf[off] = it.item.wireAction()
 			off++
 			binary.LittleEndian.PutUint32(buf[off:], uint32(len(it.item.metaBytes)))
 			off += 4
@@ -2543,7 +2860,7 @@ func (v *Validator) sendTxMetaBatchV2(batch []*txmetaBatchItem) {
 // SkipUTXOHashCheck must likewise be set on that path so the store resolves
 // spends via outpoint lookup without a UTXO-hash comparison.
 func (v *Validator) spendAndCreateInUtxoStore(ctx context.Context, tx *bt.Tx, blockHeight uint32,
-	addToBlockAssembly bool, validationOptions *Options) (*meta.Data, []*utxo.Spend, error) {
+	addToBlockAssembly bool, validationOptions *Options, parentLanes []uint64) (*meta.Data, []*utxo.Spend, error) {
 	// NOTE: prometheusTransactionSpendUtxos keeps its name for dashboard
 	// continuity but now measures the combined spend+create (and any rollback),
 	// not just the spend. The primary path no longer records
@@ -2556,6 +2873,7 @@ func (v *Validator) spendAndCreateInUtxoStore(ctx context.Context, tx *bt.Tx, bl
 
 	opts := []utxo.CreateOption{
 		utxo.WithIgnoreLocked(validationOptions.IgnoreLocked),
+		utxo.WithCaller(createCaller(validationOptions)),
 	}
 
 	if validationOptions.OutpointOnlySpend {
@@ -2567,6 +2885,12 @@ func (v *Validator) spendAndCreateInUtxoStore(ctx context.Context, tx *bt.Tx, bl
 	} else if addToBlockAssembly {
 		// mark the tx as locked, since we are going to add it to the block assembly
 		opts = append(opts, utxo.WithLocked(true))
+	}
+
+	// The parents' lane positions from the reads above, which a store with the column writes beside
+	// the inpoints. Only at utxostore_laneMigration shadow is the list not nil.
+	if parentLanes != nil {
+		opts = append(opts, utxo.WithParentLanePositions(parentLanes))
 	}
 
 	txMetaData, spends, err := v.utxoStore.SpendAndCreate(ctx, tx, blockHeight, opts...)

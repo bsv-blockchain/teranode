@@ -554,6 +554,18 @@ func (w *nettedWrite) runChunks(ctx context.Context, plan *chunkPlan, stats *fam
 					firstErr = err
 				}
 
+				// familyAttempt records a reason for every transaction of a chunk that failed, so
+				// this fallback does not fire today. It says outcome_unknown, not rolled_back: a
+				// rolled_back position goes back for reuse, which must never follow an error this
+				// code cannot place before the COMMIT.
+				if err != nil {
+					for _, i := range plan.chunks[idx].pos {
+						if w.burns != nil && w.burns[i] == listBurnNone {
+							w.burns[i] = listBurnOutcomeUnknown
+						}
+					}
+				}
+
 				finish(idx, err != nil)
 			}
 		}()
@@ -569,6 +581,11 @@ func (w *nettedWrite) runChunks(ctx context.Context, plan *chunkPlan, stats *fam
 // transaction rolled back whole, so the rerun starts from nothing.
 func (w *nettedWrite) runFamilyChunk(ctx context.Context, ch *familyChunk, plan *chunkPlan, stats *familyStats) error {
 	if err := ctx.Err(); err != nil {
+		// The chunk never starts, so nothing rolled back: its positions count as list_failed.
+		for _, i := range ch.pos {
+			w.setBurn(i, listBurnListFailed)
+		}
+
 		return err
 	}
 
@@ -614,6 +631,10 @@ type chunkRun struct {
 	// refused spend turned out to be its own earlier spend.
 	forcedExisted []bool
 	parentDead    []bool
+	// commitSent is true once the chunk has sent its COMMIT. From then on a failure may have
+	// landed, so recordFailedBurns counts its written transactions outcome_unknown, never
+	// rolled_back, which would send their positions back.
+	commitSent bool
 	// netted[k][vin] is true when input vin's parent is a live transaction of this same chunk.
 	netted [][]bool
 }
@@ -641,6 +662,8 @@ func (w *nettedWrite) familyAttempt(ctx context.Context, ch *familyChunk, its []
 
 		again, err := w.familyRound(ctx, run, stats)
 		if err != nil {
+			w.recordFailedBurns(run)
+
 			return err
 		}
 
@@ -771,7 +794,8 @@ func (w *nettedWrite) familyRound(ctx context.Context, run *chunkRun, stats *fam
 
 		// The commit runs on a context the caller cannot cancel; see multiCommitTimeout.
 		commitCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), multiCommitTimeout)
-		err = dbTx.Commit(commitCtx)
+		run.commitSent = true
+		err = commitCreates(commitCtx, dbTx)
 
 		cancel()
 
@@ -1163,6 +1187,39 @@ func (w *nettedWrite) createInChunk(ctx context.Context, dbTx pgx.Tx, run *chunk
 	}
 
 	return plan, planned, false, w.writeNettedJournal(ctx, dbTx, journal)
+}
+
+// recordFailedBurns records why each transaction's lane position burned when the chunk failed. A
+// transaction an earlier round settled keeps its known reason, since it was not in the write that
+// failed. One in the final write burned as rolled_back, or as outcome_unknown when the COMMIT
+// itself failed and may have landed. A later attempt that fails overwrites what an earlier one
+// recorded; one that commits leaves it set, so burnList and the list's return read a transaction's
+// result first, which settleChunk gives it.
+func (w *nettedWrite) recordFailedBurns(run *chunkRun) {
+	if w.burns == nil {
+		return
+	}
+
+	for k, it := range run.its {
+		var b listBurn
+
+		// A round marks what an earlier round found stored only after its begin and locks, so a
+		// round that fails before that still knows it from forcedExisted.
+		switch {
+		case run.forcedExisted[k], run.st[k] == chunkExisted:
+			b = listBurnExists
+		case run.st[k] == chunkParentFailed:
+			b = listBurnParentFailed
+		case run.st[k] == chunkFailed:
+			b = listBurnFor(utxo.LaneBurnReason(run.res[k].Err, run.res[k].Spends))
+		case run.commitSent:
+			b = listBurnOutcomeUnknown
+		default:
+			b = listBurnRolledBack
+		}
+
+		w.burns[it.pos] = b
+	}
 }
 
 // settleChunk gives every transaction of a settled chunk its result. It runs after the commit,
