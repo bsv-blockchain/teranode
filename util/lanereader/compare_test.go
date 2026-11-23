@@ -2,6 +2,7 @@ package lanereader
 
 import (
 	"math/rand/v2"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -233,4 +234,85 @@ func TestFloorAnswerDoesNotAgreeWithAnUnloadedBlock(t *testing.T) {
 	requireCounted(t, ReaderBlockParent, KindNotLoaded, lane.ViaFloor, func() {
 		r.CompareBlocks(ReaderBlockParent, r.MainView(), chainhash.Hash{}, lane.Pack(2, 7), []uint32{999})
 	})
+}
+
+// Parent checks at once write no more than the first five lines: each is reserved before it is
+// written, and the minute starts when the gate is made.
+func TestDisagreementLogHoldsItsFiveLinesUnderConcurrentChecks(t *testing.T) {
+	logger := &warnCounter{}
+	r := newReader(logger, nil, lane.DefaultSettleDepth)
+
+	idx := lane.NewIndex(lane.DefaultSettleDepth)
+	rows, err := lane.BuildMapRows(2, roaring64.BitmapOf(7))
+	require.NoError(t, err)
+	require.NoError(t, idx.AddBlock(lane.IndexBlock{ID: 1, Height: 1, Hash: benchBlockHash(1)}, rows))
+	require.NoError(t, idx.SetTip(benchBlockHash(1)))
+	r.idx.Store(idx)
+
+	start := make(chan struct{})
+
+	var wg sync.WaitGroup
+
+	for range 32 {
+		wg.Add(1)
+
+		go func() {
+			defer wg.Done()
+
+			<-start
+
+			for range 20 {
+				r.CompareHeight(ReaderValidator, chainhash.Hash{}, lane.Pack(2, 7), false, 0) // lanes_only
+			}
+		}()
+	}
+
+	close(start)
+	wg.Wait()
+
+	require.Equal(t, int64(5), logger.warns.Load())
+}
+
+// A comparison against a list of block IDs allocates nothing.
+func TestCompareBlocksDoesNotAllocate(t *testing.T) {
+	r := newReader(ulogger.TestLogger{}, nil, lane.DefaultSettleDepth)
+
+	idx := lane.NewIndex(lane.DefaultSettleDepth)
+	rows, err := lane.BuildMapRows(2, roaring64.BitmapOf(7))
+	require.NoError(t, err)
+	require.NoError(t, idx.AddBlock(lane.IndexBlock{ID: 1, Height: 1, Hash: benchBlockHash(1)}, rows))
+	require.NoError(t, idx.SetTip(benchBlockHash(1)))
+	r.idx.Store(idx)
+
+	v := r.MainView()
+	ids := []uint32{1}
+
+	requireCounted(t, ReaderValidator, KindAgree, lane.ViaRow, func() {
+		r.CompareBlocks(ReaderValidator, v, chainhash.Hash{}, lane.Pack(2, 7), ids)
+	})
+
+	require.Zero(t, testing.AllocsPerRun(1_000, func() {
+		r.CompareBlocks(ReaderValidator, v, chainhash.Hash{}, lane.Pack(2, 7), ids)
+	}))
+}
+
+// BenchmarkCompareBlocks times one comparison of a parent mined in one block on the chain.
+func BenchmarkCompareBlocks(b *testing.B) {
+	r := newReader(ulogger.TestLogger{}, nil, lane.DefaultSettleDepth)
+
+	idx := lane.NewIndex(lane.DefaultSettleDepth)
+	rows, err := lane.BuildMapRows(2, roaring64.BitmapOf(7))
+	require.NoError(b, err)
+	require.NoError(b, idx.AddBlock(lane.IndexBlock{ID: 1, Height: 1, Hash: benchBlockHash(1)}, rows))
+	require.NoError(b, idx.SetTip(benchBlockHash(1)))
+	r.idx.Store(idx)
+
+	v := r.MainView()
+	ids := []uint32{1}
+
+	b.ReportAllocs()
+
+	for b.Loop() {
+		r.CompareBlocks(ReaderValidator, v, chainhash.Hash{}, lane.Pack(2, 7), ids)
+	}
 }

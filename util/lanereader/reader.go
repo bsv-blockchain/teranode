@@ -60,11 +60,11 @@ const (
 
 	// maxUnreachable bounds the blocks remembered as having no held ancestor.
 	maxUnreachable = 1_024
-
-	// readTimeout bounds each read of headers or rows, so a hung call cannot keep the load token,
-	// which block validation's loads wait for, taken for ever.
-	readTimeout = 30 * time.Second
 )
+
+// readTimeout bounds each read of headers or rows, so a hung call cannot keep the load token,
+// which block validation's loads wait for, taken for ever. A variable so a test can shorten it.
+var readTimeout = 30 * time.Second
 
 // Source is what the Reader reads: the blockchain client.
 type Source interface {

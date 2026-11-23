@@ -204,7 +204,11 @@ func classifyBlocks(v *lane.ChainView, a lane.Answer, todayBlockIDs []uint32) st
 	s := v.Snapshot()
 
 	var (
-		onChain []uint32
+		// onChain is whether today names a block on the chain, firstOnChain the first such,
+		// rowBlockOnChain whether a.BlockID is one of them, and lowestOnChain the lowest height.
+		onChain         bool
+		firstOnChain    uint32
+		rowBlockOnChain bool
 		// unknown is a block today names that may be on the chain: one the index never loaded,
 		// or a known one the view cannot place. foldedOutside is the second kind for a folded
 		// block the floor's claims cover.
@@ -225,9 +229,11 @@ func classifyBlocks(v *lane.ChainView, a lane.Answer, todayBlockIDs []uint32) st
 		if !ok {
 			// A loaded block missing from the view may still be an ancestor on a fork whose older
 			// ancestry the index no longer holds, or, on a chain given as a window of block IDs,
-			// when the block is folded and so may be older than the window. The windows callers
-			// give (blockchain retention times two, 576 blocks by default) are deeper than the
-			// settle depth, so an unfolded block missing from one is off the chain: a fork.
+			// when the block is folded and so may be older than the window. An unfolded block
+			// missing from the window is treated as off the chain. At the defaults the window
+			// (blockchain retention times two, 576 blocks) is deeper than the settle depth (100),
+			// so such a block is a fork; a node configured with a window shallower than the settle
+			// depth can count an older main-chain block this way, as different_block or lanes_only.
 			if v.IDSet() && s.Folded(id) {
 				unknown, foldedOutside = true, true
 			}
@@ -237,18 +243,20 @@ func classifyBlocks(v *lane.ChainView, a lane.Answer, todayBlockIDs []uint32) st
 			continue
 		}
 
-		onChain = append(onChain, id)
+		if !onChain {
+			onChain, firstOnChain = true, id
+		}
+
+		rowBlockOnChain = rowBlockOnChain || id == a.BlockID
 		lowestOnChain = min(lowestOnChain, h)
 	}
 
 	switch {
-	case len(onChain) > 0:
+	case onChain:
 		switch a.Via {
 		case lane.ViaRow:
-			for _, id := range onChain {
-				if id == a.BlockID {
-					return KindAgree
-				}
+			if rowBlockOnChain {
+				return KindAgree
 			}
 
 			return KindDifferentBlock
@@ -260,12 +268,12 @@ func classifyBlocks(v *lane.ChainView, a lane.Answer, todayBlockIDs []uint32) st
 			return KindDifferentBlock
 		}
 
-		if state, _ := s.Block(onChain[0]); state == lane.BlockNoRows {
+		if state, _ := s.Block(firstOnChain); state == lane.BlockNoRows {
 			return KindNoRows
 		}
 
 		// On a chain the floors do not hold, a folded block's rows are no longer in memory.
-		if !v.FloorValid() && s.Folded(onChain[0]) {
+		if !v.FloorValid() && s.Folded(firstOnChain) {
 			return KindNotLoaded
 		}
 
@@ -362,9 +370,9 @@ func (r *Reader) compareDuplicates(v *lane.ChainView, noView string, hash chainh
 	}
 }
 
-// disagreementLog logs about the first disagreementsLogged disagreements of each reader and kind,
-// then one a minute; parent checks running at once can write a line or two past the first five. It takes no lock on the path that decides not to log, so a burst of disagreements
-// from many parent checks at once does not serialise them.
+// disagreementLog logs the first disagreementsLogged disagreements of each reader and kind, then
+// one a minute, however many parent checks run at once. It takes no lock on the path that decides
+// not to log, so a burst of disagreements from many parent checks at once does not serialise them.
 type disagreementLog struct {
 	gates sync.Map // reader/kind to *logGate
 }
@@ -383,26 +391,43 @@ func (d *disagreementLog) log(r *Reader, reader, kind string, hash chainhash.Has
 
 	g, ok := d.gates.Load(key)
 	if !ok {
-		g, _ = d.gates.LoadOrStore(key, &logGate{})
+		// The gate starts its minute when made, so a check that finds the first lines taken cannot
+		// log again before a minute has passed.
+		fresh := &logGate{}
+		fresh.last.Store(time.Now().UnixNano())
+		g, _ = d.gates.LoadOrStore(key, fresh)
 	}
 
 	gate := g.(*logGate)
 
-	// Past the first few, a disagreement inside the minute only reads the gate, so a run of them
-	// from many goroutines shares the cache line without writing it. seen counts the lines
-	// written; the totals are in teranode_lane_reader_answers_total.
-	if gate.seen.Load() >= disagreementsLogged {
+	// seen counts the lines written; the totals are in teranode_lane_reader_answers_total. Each of
+	// the first lines is reserved by a compare-and-swap, so checks at once cannot write more.
+	// Past them, a disagreement inside the minute only reads the gate, so a run of them from many
+	// goroutines shares the cache line without writing it.
+	var n int64
+
+	for n == 0 {
+		seen := gate.seen.Load()
+		if seen >= disagreementsLogged {
+			break
+		}
+
+		if gate.seen.CompareAndSwap(seen, seen+1) {
+			n = seen + 1
+			gate.last.Store(time.Now().UnixNano())
+		}
+	}
+
+	if n == 0 {
 		now := time.Now().UnixNano()
 		last := gate.last.Load()
 
 		if now-last < int64(time.Minute) || !gate.last.CompareAndSwap(last, now) {
 			return
 		}
-	} else {
-		gate.last.Store(time.Now().UnixNano())
-	}
 
-	n := gate.seen.Add(1)
+		n = gate.seen.Add(1)
+	}
 
 	laneNum, p := lane.Unpack(pos)
 

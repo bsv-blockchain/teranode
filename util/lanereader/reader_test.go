@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/url"
 	"runtime"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1241,4 +1242,133 @@ func TestBlockParentsGivesUpOnItsOwnDeadline(t *testing.T) {
 	require.Eventually(t, func() bool {
 		return answers(ReaderBlockParent, KindNotReady, lane.ViaNone) == before+1
 	}, 3*time.Second, 10*time.Millisecond)
+}
+
+// hangingSource holds the named read until its context ends.
+type hangingSource struct {
+	Source
+	hang atomic.Value // the method name to hold, or ""
+}
+
+func (h *hangingSource) hold(ctx context.Context, method string) error {
+	if name, _ := h.hang.Load().(string); name != method {
+		return nil
+	}
+
+	<-ctx.Done()
+
+	return ctx.Err()
+}
+
+func (h *hangingSource) GetBestBlockHeader(ctx context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
+	if err := h.hold(ctx, "best"); err != nil {
+		return nil, nil, err
+	}
+
+	return h.Source.GetBestBlockHeader(ctx)
+}
+
+func (h *hangingSource) GetBlockHeaders(ctx context.Context, hash *chainhash.Hash, n uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
+	if err := h.hold(ctx, "headers"); err != nil {
+		return nil, nil, err
+	}
+
+	return h.Source.GetBlockHeaders(ctx, hash, n)
+}
+
+func (h *hangingSource) LaneMapRows(ctx context.Context, id uint32) ([]lane.MapRow, error) {
+	if err := h.hold(ctx, "rows"); err != nil {
+		return nil, err
+	}
+
+	return h.Source.LaneMapRows(ctx, id)
+}
+
+// within runs fn and fails the test if it has not returned within five seconds.
+func within(t *testing.T, fn func()) {
+	t.Helper()
+
+	done := make(chan struct{})
+
+	go func() {
+		defer close(done)
+
+		fn()
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("a hung read was not given up")
+	}
+}
+
+// Each read the follower and a block's ancestry load make has its own deadline, so a hung read
+// ends without the caller's context ending, gives the load token back, and the next step
+// succeeds.
+func TestReaderGivesUpAHungRead(t *testing.T) {
+	saved := readTimeout
+	readTimeout = 50 * time.Millisecond
+
+	t.Cleanup(func() { readTimeout = saved })
+
+	tokenFree := func(t *testing.T, r *Reader) {
+		t.Helper()
+
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+
+		require.True(t, r.lockLoad(ctx), "the load token is given back")
+		r.unlockLoad()
+	}
+
+	for _, method := range []string{"best", "headers", "rows"} {
+		t.Run("follower "+method, func(t *testing.T) {
+			store := newStore(t, "sqlite")
+			c := newChain(t, store)
+			c.line(c.add(nil, takes(t, 2, 7)), 3)
+
+			source := &hangingSource{Source: store}
+			source.hang.Store(method)
+
+			r := newReader(ulogger.TestLogger{}, source, 100)
+
+			within(t, func() {
+				_, err := r.step(context.Background(), chainhash.Hash{})
+				require.Error(t, err)
+			})
+			tokenFree(t, r)
+
+			source.hang.Store("")
+			follow(t, r)
+		})
+	}
+
+	t.Run("ancestry walk", func(t *testing.T) {
+		store := newStore(t, "sqlite")
+		c := newChain(t, store)
+
+		b1 := c.add(nil)
+		c.line(b1, 8)
+
+		source := &hangingSource{Source: store}
+		r := newReader(ulogger.TestLogger{}, source, 100)
+		r.startBlocks = 3
+		follow(t, r)
+
+		fork := c.line(b1, 7)
+
+		source.hang.Store("headers")
+
+		within(t, func() {
+			_, kind := r.prepare(context.Background(), fork.hash)
+			require.Equal(t, KindNotReady, kind)
+		})
+		tokenFree(t, r)
+
+		source.hang.Store("")
+
+		_, kind := r.prepare(context.Background(), fork.hash)
+		require.NotEqual(t, KindNotReady, kind)
+	})
 }
