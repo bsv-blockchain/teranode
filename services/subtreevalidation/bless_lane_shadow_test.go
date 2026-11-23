@@ -9,7 +9,6 @@ import (
 	"github.com/RoaringBitmap/roaring/v2/roaring64"
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
-	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/services/validator"
 	"github.com/bsv-blockchain/teranode/settings"
@@ -26,40 +25,17 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// positionStore answers Get with a lane position, or err, and records the fields asked for.
+// positionStore answers Get with a lane position and counts the reads.
 type positionStore struct {
 	utxo.Store
 	pos   uint64
-	err   error
-	asked [][]fields.FieldName
+	reads int
 }
 
 func (s *positionStore) Get(_ context.Context, _ *chainhash.Hash, f ...fields.FieldName) (*meta.Data, error) {
-	s.asked = append(s.asked, f)
-
-	if s.err != nil {
-		return nil, s.err
-	}
+	s.reads++
 
 	return &meta.Data{LanePosition: s.pos}, nil
-}
-
-// The shadow takes a new record's position from its metadata, reads it for an existing mined
-// record whose metadata came without it, and reads nothing for an unmined one.
-func TestLaneShadowPosition(t *testing.T) {
-	store := &positionStore{pos: lane.Pack(3, 9)}
-	u := &Server{utxoStore: store}
-	hash := chainhash.Hash{1}
-
-	require.Equal(t, lane.Pack(1, 1), u.laneShadowPosition(context.Background(), &hash, &meta.Data{LanePosition: lane.Pack(1, 1), BlockIDs: []uint32{5}}))
-	require.Equal(t, uint64(0), u.laneShadowPosition(context.Background(), &hash, &meta.Data{}))
-	require.Empty(t, store.asked, "a position in hand, or an unmined record, needs no read")
-
-	require.Equal(t, lane.Pack(3, 9), u.laneShadowPosition(context.Background(), &hash, &meta.Data{BlockIDs: []uint32{5}}))
-	require.Equal(t, [][]fields.FieldName{{fields.LanePosition}}, store.asked)
-
-	store.err = errors.NewStorageError("down")
-	require.Equal(t, uint64(0), u.laneShadowPosition(context.Background(), &hash, &meta.Data{BlockIDs: []uint32{5}}))
 }
 
 // metaValidator accepts every transaction with md as its metadata.
@@ -166,12 +142,15 @@ func TestBlessMissingShadowsTheAlreadyMinedCheck(t *testing.T) {
 	r := lanereader.Start(ctx, ulogger.TestLogger{}, tSettings, chain)
 	require.Eventually(t, func() bool { return r.Snapshot() != nil && r.Snapshot().TipHeight() == 2 }, 10*time.Second, 10*time.Millisecond)
 
-	// The validator answers with a record the lane index says block b1 took, mined in b1.
+	// The validator answers with a record the lane index says block b1 took, mined in b1, the way
+	// it answers for a record that already existed: without its lane position, which the shadow
+	// reads from the store, once.
+	records := &positionStore{pos: lane.Pack(3, 5)}
 	server := &Server{
 		logger:          ulogger.TestLogger{},
 		settings:        tSettings,
-		utxoStore:       &positionStore{},
-		validatorClient: &metaValidator{md: &meta.Data{LanePosition: lane.Pack(3, 5), BlockIDs: []uint32{b1}}},
+		utxoStore:       records,
+		validatorClient: &metaValidator{md: &meta.Data{BlockIDs: []uint32{b1}}},
 	}
 
 	tx := bt.NewTx()
@@ -182,6 +161,7 @@ func TestBlessMissingShadowsTheAlreadyMinedCheck(t *testing.T) {
 	_, _, err = server.blessMissing(context.Background(), chainhash.Hash{}, chainhash.Hash{}, tx, 3, map[uint32]bool{}, validator.ProcessOptions())
 	require.NoError(t, err)
 	require.Equal(t, before+1, subtreeAlreadyMined(t, lanereader.KindAgree, "row"))
+	require.Equal(t, 1, records.reads, "the position is read once, before the check, and not again at the end")
 
 	// The caller's chain is only b2: b1 is off it for both answers, so they agree with no row.
 	before = subtreeAlreadyMined(t, lanereader.KindAgree, "none")

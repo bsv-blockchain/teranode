@@ -669,7 +669,11 @@ func (u *Server) blessMissing(ctx context.Context, blockHash chainhash.Hash, sub
 			view = r.ViewOfIDs(blockIds)
 		}
 
-		r.CompareBlocks(lanereader.ReaderSubtreeAlreadyMined, view, *tx.TxIDChainHash(), u.laneShadowPosition(ctx, tx.TxIDChainHash(), txMeta), txMeta.BlockIDs)
+		// A record that already existed comes back without its position; read it now, before the
+		// check below can reject, and keep it on txMeta so the read at the end is not repeated.
+		u.fillLanePosition(ctx, tx.TxIDChainHash(), txMeta)
+
+		r.CompareBlocks(lanereader.ReaderSubtreeAlreadyMined, view, *tx.TxIDChainHash(), txMeta.LanePosition, txMeta.BlockIDs)
 	}
 
 	// check whether this transaction was already mined on our chain by comparing the block ids
