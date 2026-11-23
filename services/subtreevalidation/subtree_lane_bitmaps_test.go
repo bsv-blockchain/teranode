@@ -197,8 +197,9 @@ func TestProcessTxMetaUsingStore_ReadsTheLanePositionAtShadow(t *testing.T) {
 }
 
 // With subtreevalidation_batch_missing_transactions off, each transaction is read on its own. At
-// shadow that read asks for the batched read's fields, the lane position among them, because
-// GetMeta reads none; at off it is GetMeta as before.
+// shadow that read is a one-transaction BatchDecorate asking for the batched read's fields, the
+// lane position among them, because GetMeta reads none; through the txmeta cache it fills the cache
+// as the batched read does. At off it is GetMeta as before.
 func TestProcessTxMetaUsingStore_ReadsTheLanePositionOneByOneAtShadow(t *testing.T) {
 	for _, mode := range []settings.LaneMigration{settings.LaneMigrationOff, settings.LaneMigrationShadow} {
 		t.Run(string(mode), func(t *testing.T) {
@@ -212,11 +213,22 @@ func TestProcessTxMetaUsingStore_ReadsTheLanePositionOneByOneAtShadow(t *testing
 			store := &utxo.MockUtxostore{}
 			store.On("GetMeta", mock.Anything, mock.Anything, mock.Anything).Return(&meta.Data{Fee: 1, SizeInBytes: 1})
 
-			for i := range hashes {
-				store.On("Get", mock.Anything, &hashes[i], mock.Anything).Run(func(args mock.Arguments) {
-					asked = append(asked, args.Get(2).([]fields.FieldName)...)
-				}).Return(&meta.Data{Fee: 1, SizeInBytes: 1, LanePosition: lane.Pack(4, uint64(i)+1)}, nil) //nolint:gosec // a test index
-			}
+			var mu sync.Mutex
+
+			store.On("BatchDecorate", mock.Anything, mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
+				items := args.Get(1).([]*utxo.UnresolvedMetaData)
+
+				mu.Lock()
+				defer mu.Unlock()
+
+				require.Len(t, items, 1, "one transaction a read")
+
+				for _, f := range args[2:] {
+					asked = append(asked, f.([]fields.FieldName)...)
+				}
+
+				items[0].Data = &meta.Data{Fee: 1, SizeInBytes: 1, LanePosition: lane.Pack(4, uint64(items[0].Hash[0]))}
+			}).Return(nil)
 
 			server := &Server{logger: ulogger.TestLogger{}, settings: tSettings, utxoStore: store}
 
@@ -228,7 +240,7 @@ func TestProcessTxMetaUsingStore_ReadsTheLanePositionOneByOneAtShadow(t *testing
 			require.True(t, txMetaSlice[1].isSet)
 
 			if mode == settings.LaneMigrationOff {
-				store.AssertNotCalled(t, "Get", mock.Anything, mock.Anything, mock.Anything)
+				store.AssertNotCalled(t, "BatchDecorate", mock.Anything, mock.Anything, mock.Anything)
 				require.Zero(t, txMetaSlice[0].lanePosition)
 
 				return
