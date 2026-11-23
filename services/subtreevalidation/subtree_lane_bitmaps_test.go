@@ -146,11 +146,39 @@ func TestStoreSubtreeFiles_KeepsLaneBitmapsAlreadyThere(t *testing.T) {
 	server := &Server{logger: ulogger.TestLogger{}, settings: test.CreateBaseTestSettings(t), subtreeStore: store, utxoStore: utxoStore}
 
 	bitmaps := &lane.SubtreeBitmaps{SubtreeHash: *root, Lanes: lane.LaneBitmaps{9: bitmapOfPositions(5)}}
+
+	writeFailed := laneMissingBitmaps(t, lane.MissingBitmapsWriteFailed)
+
 	require.NoError(t, server.storeSubtreeFiles(ctx, gocore.NewStat("test"), root, st, m, bitmaps))
 
 	got, err := store.Get(ctx, root[:], fileformat.FileTypeSubtreeLaneBitmaps)
 	require.NoError(t, err)
 	require.Equal(t, earlier, got)
+	require.Equal(t, writeFailed, laneMissingBitmaps(t, lane.MissingBitmapsWriteFailed), "a file already there is not a failed write")
+}
+
+// laneMissingBitmaps reads teranode_lane_missing_bitmaps_total for reason.
+func laneMissingBitmaps(t *testing.T, reason string) float64 {
+	t.Helper()
+
+	families, err := prometheus.DefaultGatherer.Gather()
+	require.NoError(t, err)
+
+	for _, f := range families {
+		if f.GetName() != "teranode_lane_missing_bitmaps_total" {
+			continue
+		}
+
+		for _, m := range f.GetMetric() {
+			for _, l := range m.GetLabel() {
+				if l.GetName() == "reason" && l.GetValue() == reason {
+					return m.GetCounter().GetValue()
+				}
+			}
+		}
+	}
+
+	return 0
 }
 
 // At shadow a store read asks for each transaction's own lane position and puts it in the
@@ -387,13 +415,15 @@ func TestBlessMissing_ReadsTheLanePositionBackAtShadow(t *testing.T) {
 	require.NoError(t, err)
 
 	for _, tc := range []struct {
-		name   string
-		mode   settings.LaneMigration
-		getErr error
-		want   uint64
+		name    string
+		mode    settings.LaneMigration
+		getErr  error
+		getNone bool
+		want    uint64
 	}{
 		{name: "shadow", mode: settings.LaneMigrationShadow, want: lane.Pack(8, 14)},
 		{name: "shadow, the position not read", mode: settings.LaneMigrationShadow, getErr: errors.NewStorageError("down")},
+		{name: "shadow, the store returns no record and no error", mode: settings.LaneMigrationShadow, getNone: true},
 		{name: "off", mode: settings.LaneMigrationOff},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -403,9 +433,10 @@ func TestBlessMissing_ReadsTheLanePositionBackAtShadow(t *testing.T) {
 			store := &utxo.MockUtxostore{}
 			store.On("GetMeta", mock.Anything, mock.Anything, mock.Anything).Return(&meta.Data{Fee: 1, SizeInBytes: 1, TxInpoints: inpoints})
 
-			if tc.getErr != nil {
+			switch {
+			case tc.getErr != nil, tc.getNone:
 				store.On("Get", mock.Anything, mock.Anything, []fields.FieldName{fields.LanePosition}).Return(nil, tc.getErr)
-			} else {
+			default:
 				store.On("Get", mock.Anything, mock.Anything, []fields.FieldName{fields.LanePosition}).Return(&meta.Data{LanePosition: lane.Pack(8, 14)}, nil)
 			}
 
@@ -426,6 +457,69 @@ func TestBlessMissing_ReadsTheLanePositionBackAtShadow(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A validator that finds the transaction already stored answers with metadata GetMeta read, which
+// has no lane position. At shadow subtree validation reads the position from the store; at off it
+// takes the answer as it is.
+func TestBlessMissing_ReadsThePositionOfATransactionAlreadyStored(t *testing.T) {
+	inpoints, err := subtreepkg.NewTxInpointsFromTx(tx1)
+	require.NoError(t, err)
+
+	for _, tc := range []struct {
+		mode settings.LaneMigration
+		want uint64
+	}{
+		{mode: settings.LaneMigrationShadow, want: lane.Pack(8, 14)},
+		{mode: settings.LaneMigrationOff},
+	} {
+		t.Run(string(tc.mode), func(t *testing.T) {
+			tSettings := test.CreateBaseTestSettings(t)
+			tSettings.UtxoStore.LaneMigration = tc.mode
+
+			store := &utxo.MockUtxostore{}
+			store.On("Get", mock.Anything, mock.Anything, []fields.FieldName{fields.LanePosition}).Return(&meta.Data{LanePosition: lane.Pack(8, 14)}, nil)
+
+			server := &Server{
+				logger:          ulogger.TestLogger{},
+				settings:        tSettings,
+				utxoStore:       store,
+				validatorClient: &answeringValidator{md: &meta.Data{Fee: 1, SizeInBytes: 1, TxInpoints: inpoints}},
+			}
+
+			md, _, err := server.blessMissing(context.Background(), chainhash.Hash{}, chainhash.Hash{}, tx1, 2, map[uint32]bool{}, validator.ProcessOptions())
+			require.NoError(t, err)
+			require.Equal(t, tc.want, md.LanePosition)
+		})
+	}
+}
+
+// answeringValidator answers every validation with md, as a validator does for a transaction it
+// found already stored.
+type answeringValidator struct {
+	validator.Interface
+	md *meta.Data
+}
+
+func (a *answeringValidator) ValidateWithOptions(context.Context, *bt.Tx, uint32, *validator.Options) (*meta.Data, error) {
+	md := *a.md
+	return &md, nil
+}
+
+// A record read back that already holds its lane position needs no second read for it.
+func TestReadBackMeta_ReadsNoPositionItAlreadyHas(t *testing.T) {
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.UtxoStore.LaneMigration = settings.LaneMigrationShadow
+
+	store := &utxo.MockUtxostore{}
+	store.On("GetMeta", mock.Anything, mock.Anything, mock.Anything).Return(&meta.Data{Fee: 1, LanePosition: lane.Pack(3, 7)})
+
+	server := &Server{logger: ulogger.TestLogger{}, settings: tSettings, utxoStore: store}
+
+	stored := &meta.Data{}
+	require.NoError(t, server.readBackMeta(context.Background(), &chainhash.Hash{0x01}, stored))
+	require.Equal(t, lane.Pack(3, 7), stored.LanePosition)
+	store.AssertNotCalled(t, "Get", mock.Anything, mock.Anything, mock.Anything)
 }
 
 // positionValidator validates as its validator does and gives the created record position, as a
@@ -461,11 +555,15 @@ func TestStoreSubtreeFiles_ALaneBitmapsFailureDoesNotStopTheSubtree(t *testing.T
 	server := &Server{logger: ulogger.TestLogger{}, settings: test.CreateBaseTestSettings(t), subtreeStore: store, utxoStore: utxoStore}
 
 	bitmaps := &lane.SubtreeBitmaps{SubtreeHash: *root, Lanes: lane.LaneBitmaps{7: bitmapOfPositions(1)}}
+
+	writeFailed := laneMissingBitmaps(t, lane.MissingBitmapsWriteFailed)
+
 	require.NoError(t, server.storeSubtreeFiles(ctx, gocore.NewStat("test"), root, st, m, bitmaps))
 
 	exists, err := store.Exists(ctx, root[:], fileformat.FileTypeSubtree)
 	require.NoError(t, err)
 	require.True(t, exists)
+	require.Equal(t, writeFailed+1, laneMissingBitmaps(t, lane.MissingBitmapsWriteFailed), "the failed write is counted as one")
 }
 
 // At shadow ValidateSubtreeInternal puts each member's own lane position, from the txmeta cache,

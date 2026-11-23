@@ -478,28 +478,36 @@ func (u *Server) readTxFromReader(body io.ReadCloser) (tx *bt.Tx, err error) {
 }
 
 // readBackMeta reads the record of a transaction the validator created but whose metadata did not
-// come back with its answer, as GetMeta does. At utxostore_laneMigration shadow it also reads the
-// record's own lane position, which GetMeta does not, for the subtree's lane bitmaps. The position
-// is only measured, so a failure to read it leaves it at zero, where the transaction is counted as
-// one without a position, and is not an error.
+// come back with its answer, as GetMeta does, and at utxostore_laneMigration shadow its own lane
+// position too (fillLanePosition).
 func (u *Server) readBackMeta(ctx context.Context, hash *chainhash.Hash, stored *meta.Data) error {
 	if err := u.utxoStore.GetMeta(ctx, hash, stored); err != nil {
 		return err
 	}
 
-	if !u.laneShadow() || lane.Valid(stored.LanePosition) {
-		return nil
+	u.fillLanePosition(ctx, hash, stored)
+
+	return nil
+}
+
+// fillLanePosition reads, at utxostore_laneMigration shadow, the own lane position of a record
+// whose metadata came back without one, for the subtree's lane bitmaps. That is metadata read with
+// GetMeta, which reads no position: subtree validation's own read-back, and the validator's answer
+// for a transaction it found already stored, which it reads back the same way. The position is
+// only measured, so a failure to read it leaves it at zero, where the transaction is counted as
+// one without a position, and is not an error.
+func (u *Server) fillLanePosition(ctx context.Context, hash *chainhash.Hash, md *meta.Data) {
+	if !u.laneShadow() || lane.Valid(md.LanePosition) {
+		return
 	}
 
 	withLane, err := u.utxoStore.Get(ctx, hash, fields.LanePosition)
 	if err != nil || withLane == nil {
-		u.logger.Debugf("[readBackMeta][%s] lane position not read: %v", hash.String(), err)
-		return nil
+		u.logger.Debugf("[fillLanePosition][%s] lane position not read: %v", hash.String(), err)
+		return
 	}
 
-	stored.LanePosition = withLane.LanePosition
-
-	return nil
+	md.LanePosition = withLane.LanePosition
 }
 
 // blessMissingTransaction validates a transaction and retrieves its metadata,
@@ -688,6 +696,10 @@ func (u *Server) blessMissing(ctx context.Context, blockHash chainhash.Hash, sub
 			return nil, unlockFailed, errors.NewProcessingError("[blessMissingTransaction][%s/%s][%s] failed to check counter conflicting tx on current chain", blockHash.String(), subtreeHash.String(), tx.TxID(), err)
 		}
 	}
+
+	// A validator that found the transaction already stored answers with metadata read by GetMeta,
+	// without its lane position; read the position, as for a record read back above.
+	u.fillLanePosition(ctx, tx.TxIDChainHash(), txMeta)
 
 	return txMeta, unlockFailed, nil
 }
@@ -1244,9 +1256,9 @@ const laneBitmapsService = "subtreevalidation"
 
 // storeSubtreeLaneBitmaps writes a subtree's lane bitmaps file, before its subtree file and with
 // its expiry, so the block gate finds it beside the subtree. At shadow nothing acts on lanes, so
-// a failure to write it does not stop the subtree: it is logged, and the block that lists the
-// subtree counts its bitmaps as missing and goes without rows. A file already there, from an
-// earlier validation of the same subtree, is kept.
+// a failure to write it does not stop the subtree: it is logged and counted as write_failed, and
+// the block that lists the subtree counts its bitmaps as absent and goes without rows. A file
+// already there, from an earlier validation of the same subtree, is kept.
 func (u *Server) storeSubtreeLaneBitmaps(ctx context.Context, subtreeHash *chainhash.Hash, bitmaps lane.SubtreeBitmaps, dah uint32) {
 	data, err := lane.EncodeSubtreeBitmaps(bitmaps)
 	if err == nil {
@@ -1254,6 +1266,7 @@ func (u *Server) storeSubtreeLaneBitmaps(ctx context.Context, subtreeHash *chain
 	}
 
 	if err != nil && !errors.Is(err, errors.ErrBlobAlreadyExists) {
+		lane.CountMissingBitmaps(lane.MissingBitmapsWriteFailed, 1)
 		u.logger.Warnf("[ValidateSubtreeInternal][%s] failed to store subtree lane bitmaps, its block will go without lane rows: %v", subtreeHash.String(), err)
 	}
 }

@@ -9,10 +9,14 @@ import (
 	"time"
 
 	"github.com/RoaringBitmap/roaring/v2/roaring64"
+	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	subtreepkg "github.com/bsv-blockchain/go-subtree"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
+	"github.com/bsv-blockchain/teranode/services/blockchain"
+	"github.com/bsv-blockchain/teranode/services/blockchain/blockchain_api"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/blob"
 	blobmemory "github.com/bsv-blockchain/teranode/stores/blob/memory"
@@ -22,6 +26,7 @@ import (
 	"github.com/bsv-blockchain/teranode/util/lane"
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -528,4 +533,150 @@ func TestLaneRowsStartNoReadOnceTheCallerHasGivenUp(t *testing.T) {
 		// so a slot kept here would be lost to every later block.
 		require.Empty(t, u.laneBitmapReadSlots(), "run %d: every slot is handed back", run)
 	}
+}
+
+// bitmapStallStore is a subtree store whose lane bitmaps reads return only when their context
+// ends, as a stalled disk would hold them; every other read goes through.
+type bitmapStallStore struct {
+	blob.Store
+}
+
+func (s *bitmapStallStore) Get(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...bloboptions.FileOption) ([]byte, error) {
+	if fileType == fileformat.FileTypeSubtreeLaneBitmaps {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+
+	return s.Store.Get(ctx, key, fileType, opts...)
+}
+
+// Full validation reads a block's lane bitmaps on the caller's context, before the 30 s context
+// AddBlock gets: with the reads held for their whole deadline, AddBlock still has close to 30 s
+// to store a block that has already been validated, and the block goes without rows.
+func TestValidateBlock_LaneBitmapReadsDoNotSpendTheStoreBudget(t *testing.T) {
+	initPrometheusMetrics()
+
+	saved := laneBitmapReadTimeout
+	laneBitmapReadTimeout = time.Second
+
+	t.Cleanup(func() { laneBitmapReadTimeout = saved })
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	utxoStore, subtreeValidationClient, _, txStore, subtreeStore, cleanup := setup(t)
+	defer cleanup()
+
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.UtxoStore.LaneMigration = settings.LaneMigrationShadow
+
+	coinbaseTx, err := bt.NewTxFromString(model.CoinbaseHex)
+	require.NoError(t, err)
+
+	subtree, err := subtreepkg.NewTreeByLeafCount(2)
+	require.NoError(t, err)
+	require.NoError(t, subtree.AddCoinbaseNode())
+
+	subtreeData := subtreepkg.NewSubtreeData(subtree)
+	require.NoError(t, subtreeData.AddTx(coinbaseTx, 0))
+
+	nBits, err := model.NewNBitFromString("207fffff")
+	require.NoError(t, err)
+
+	now := uint32(time.Now().Add(-time.Hour).Unix()) //nolint:gosec // a test timestamp
+
+	grandparent := &model.BlockHeader{Version: 1, HashPrevBlock: &chainhash.Hash{}, HashMerkleRoot: &chainhash.Hash{}, Timestamp: now, Bits: *nBits}
+	mineHeader(t, grandparent)
+
+	parent := &model.BlockHeader{Version: 1, HashPrevBlock: grandparent.Hash(), HashMerkleRoot: &chainhash.Hash{}, Timestamp: now + 1, Bits: *nBits}
+	mineHeader(t, parent)
+
+	run := []*model.BlockHeader{parent, grandparent}
+	runMeta := []*model.BlockHeaderMeta{{ID: 1, Height: 1}, {ID: 0, Height: 0}}
+
+	merkleRoot, err := subtree.RootHashWithReplaceRootNode(coinbaseTx.TxIDChainHash(), 0, uint64(coinbaseTx.Size())) //nolint:gosec // a test size
+	require.NoError(t, err)
+
+	blockHeader := &model.BlockHeader{Version: 1, HashPrevBlock: parent.Hash(), HashMerkleRoot: merkleRoot, Timestamp: now + 100, Bits: *nBits}
+	mineHeader(t, blockHeader)
+
+	block := &model.Block{
+		Header:           blockHeader,
+		Subtrees:         []*chainhash.Hash{subtree.RootHash()},
+		Height:           2,
+		CoinbaseTx:       coinbaseTx,
+		TransactionCount: uint64(subtree.Length()), //nolint:gosec // a test count
+		SizeInBytes:      123123,
+	}
+
+	mockBlockchain := new(blockchain.Mock)
+	mockBlockchain.On("GetBlockExists", mock.Anything, mock.Anything).Return(false, nil).Maybe()
+	mockBlockchain.On("GetBlockHeader", mock.Anything, mock.Anything).Return(parent, &model.BlockHeaderMeta{ID: 1, Height: 1}, nil).Maybe()
+	mockBlockchain.On("GetBlockHeaders", mock.Anything, mock.Anything, mock.Anything).Return(run, runMeta, nil).Maybe()
+	mockBlockchain.On("GetNextWorkRequired", mock.Anything, mock.Anything, mock.Anything).Return(nBits, nil).Maybe()
+	mockBlockchain.On("GetBlockIsMined", mock.Anything, mock.Anything).Return(true, nil).Maybe()
+	mockBlockchain.On("GetBlocksMinedNotSet", mock.Anything).Return([]*model.Block{}, nil).Maybe()
+	mockBlockchain.On("GetBlocksSubtreesNotSet", mock.Anything).Return([]*model.Block{}, nil).Maybe()
+	mockBlockchain.On("GetBestBlockHeader", mock.Anything).Return(parent, &model.BlockHeaderMeta{Height: 1}, nil).Maybe()
+	mockBlockchain.On("GetBlock", mock.Anything, mock.Anything).Return(&model.Block{Header: parent, CoinbaseTx: coinbaseTx, Subtrees: []*chainhash.Hash{}, Height: 1}, nil).Maybe()
+	mockBlockchain.On("SetBlockSubtreesSet", mock.Anything, mock.Anything).Return(nil).Maybe()
+	mockBlockchain.On("GetBlockHeaderIDs", mock.Anything, mock.Anything, mock.Anything).Return([]uint32{1, 0}, nil).Maybe()
+	mockBlockchain.On("SetBlockMinedSet", mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+	mockBlockchain.On("InvalidateBlock", mock.Anything, mock.Anything).Return([]chainhash.Hash{}, nil).Maybe()
+	mockBlockchain.On("GetBlockHeadersFromHeight", mock.Anything, mock.Anything, mock.Anything).Return(run, runMeta, nil).Maybe()
+	mockBlockchain.On("CheckBlockIsInCurrentChain", mock.Anything, mock.Anything).Return(true, nil).Maybe()
+	mockBlockchain.On("CheckBlockIsAncestorOfBlock", mock.Anything, mock.Anything, mock.Anything).Return(true, nil).Maybe()
+	mockBlockchain.On("Subscribe", mock.Anything, mock.Anything).Return(make(chan *blockchain_api.Notification, 1), nil).Maybe()
+
+	var (
+		mu       sync.Mutex
+		left     time.Duration
+		rows     []lane.MapRow
+		stores   int
+		invalids int
+	)
+
+	mockBlockchain.On("AddBlock", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Run(func(args mock.Arguments) {
+		var o blockchainoptions.StoreBlockOptions
+		for _, apply := range args.Get(3).([]blockchainoptions.StoreBlockOption) {
+			apply(&o)
+		}
+
+		mu.Lock()
+		defer mu.Unlock()
+
+		if o.Invalid {
+			invalids++
+			return
+		}
+
+		deadline, ok := args.Get(0).(context.Context).Deadline()
+		require.True(t, ok, "AddBlock's context has the store's deadline")
+
+		left, rows = time.Until(deadline), o.LaneMapRows
+		stores++
+	}).Maybe()
+
+	bv := NewBlockValidation(ctx, ulogger.TestLogger{}, tSettings, mockBlockchain, &bitmapStallStore{Store: subtreeStore}, txStore, utxoStore, nil, subtreeValidationClient)
+
+	subtreeBytes, err := subtree.Serialize()
+	require.NoError(t, err)
+	require.NoError(t, subtreeStore.Set(ctx, subtree.RootHash()[:], fileformat.FileTypeSubtree, subtreeBytes))
+
+	subtreeDataBytes, err := subtreeData.Serialize()
+	require.NoError(t, err)
+	require.NoError(t, subtreeStore.Set(ctx, subtree.RootHash()[:], fileformat.FileTypeSubtreeData, subtreeDataBytes))
+
+	timedOut := laneMetric(t, "teranode_lane_missing_bitmaps_total", "reason", lane.MissingBitmapsTimedOut)
+
+	require.NoError(t, bv.ValidateBlockWithOptions(ctx, block, "", &ValidateBlockOptions{DisableOptimisticMining: true, IsRequeuedRetry: true}))
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	require.Zero(t, invalids, "the block is valid")
+	require.Equal(t, 1, stores)
+	require.Nil(t, rows, "the bitmap reads timed out, so the block goes without rows")
+	require.Equal(t, timedOut+1, laneMetric(t, "teranode_lane_missing_bitmaps_total", "reason", lane.MissingBitmapsTimedOut))
+	require.Greater(t, left, 30*time.Second-laneBitmapReadTimeout/2, "the reads, held for their deadline, took none of the store's 30 s")
 }
