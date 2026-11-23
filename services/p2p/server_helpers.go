@@ -1174,7 +1174,16 @@ func (s *Server) isPeerIPBanned(peerID string) bool {
 // gate is what bounds the registry cost: the author of a relayed message is a
 // free-to-mint identity, so looking each one up would cost a GetPeer
 // round-trip per novel author, whereas open connections are a resource the
-// remote side pays for. Reputation scores of connected peers are cached for
+// remote side pays for.
+//
+// This is deliberate, and it has two consequences. A relayed author whose
+// registry score is below 20 has its messages processed when an honest
+// neighbour relays them; the ban gate (shouldSkipBannedPeer) still applies to
+// it. And a low-score neighbour that has just connected passes until the
+// live-connection snapshot sees it, at most liveConnMissRefreshInterval (see
+// isPeerIPBanned).
+//
+// Reputation scores of connected peers are cached for
 // reputationCacheTTL (bounded at insert) to avoid a round-trip on every pubsub
 // message; a lookup failure or an unknown peer is cached as healthy for the
 // same window, so a degraded registry is asked once per TTL per peer rather
