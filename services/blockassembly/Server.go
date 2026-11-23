@@ -19,6 +19,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -134,6 +135,12 @@ type BlockAssembly struct {
 	// storeQueue takes the subtree processor's store requests in place of newSubtreeChan, so that
 	// none of them blocks it. Nil unless blockassembly_storedPrefixTemplate is on.
 	storeQueue *subtreeprocessor.StoreQueue
+
+	// metaSem and writeSem are the slots of the two stages of a store with the store queue: the
+	// meta builds, sized to the cores, and the blob writes, sized to the storage. Nil, meaning no
+	// limit, without the queue. Set before the workers start.
+	metaSem  chan struct{}
+	writeSem chan struct{}
 
 	// blockSubmissionChan handles block submission requests
 	blockSubmissionChan chan *BlockSubmissionRequest
@@ -378,6 +385,8 @@ func (ba *BlockAssembly) Init(ctx context.Context) (err error) {
 
 		ba.storeQueue = subtreeprocessor.NewStoreQueue(uint64(max(ba.settings.BlockAssembly.StoreQueueMaxMB, 0)) << 20)
 		assemblerOpts = append(assemblerOpts, WithStoreQueue(ba.storeQueue))
+
+		ba.metaSem, ba.writeSem = ba.storeStageSlots()
 	}
 
 	ba.blockAssembler, err = NewBlockAssembler(ctx, ba.logger, ba.settings, ba.stats, ba.utxoStore, ba.subtreeStore, ba.blockchainClient, newSubtreeChan,
@@ -696,10 +705,9 @@ func (ba *BlockAssembly) runNewSubtreeListener(ctx context.Context, newSubtreeCh
 // requests from the store queue themselves, which gives each its sequence number at pickup, so a
 // request the queue drops before pickup leaves no gap for the in-order sender to wait on.
 func (ba *BlockAssembly) runStoreQueueListener(ctx context.Context, subtreeRetryChan chan *subtreeRetrySend) {
-	numWorkers := ba.settings.BlockAssembly.SubtreeStorageWorkers
-	if numWorkers <= 0 {
-		numWorkers = 4
-	}
+	// A worker holds a request through its meta build and its writes, so there are enough of them
+	// to fill both stages. What is in flight stays bounded by the queue's byte limit.
+	numWorkers := cap(ba.metaSem) + cap(ba.writeSem)
 
 	resultChan := make(chan *subtreeStorageResult, numWorkers*2)
 
@@ -1123,14 +1131,73 @@ func (ba *BlockAssembly) buildSubtreeMetaReportingReadError(subtreeRequest subtr
 	return subtreeMetaBytes, true
 }
 
+// storeStageSlots makes the slots of the meta stage and the writer stage from the settings.
+func (ba *BlockAssembly) storeStageSlots() (meta, writes chan struct{}) {
+	storageWorkers := ba.settings.BlockAssembly.SubtreeStorageWorkers
+	if storageWorkers <= 0 {
+		storageWorkers = 4
+	}
+
+	metaWidth := ba.settings.BlockAssembly.SubtreeStorageMetaWorkers
+	if metaWidth <= 0 {
+		metaWidth = runtime.GOMAXPROCS(0)
+	}
+
+	// Default: the write concurrency of the old path, where each worker has a subtree write and a
+	// meta write in flight.
+	writers := ba.settings.BlockAssembly.SubtreeStorageWriters
+	if writers <= 0 {
+		writers = 2 * storageWorkers
+	}
+
+	return make(chan struct{}, metaWidth), make(chan struct{}, writers)
+}
+
+// acquireStage takes a slot of a stage, waiting for one, and returns the function that gives it
+// back. A nil stage has no limit.
+func acquireStage(ctx context.Context, stage chan struct{}) (release func(), err error) {
+	if stage == nil {
+		return func() {}, nil
+	}
+
+	select {
+	case stage <- struct{}{}:
+		return func() { <-stage }, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+// setStaged is a write to the subtree store that holds a slot of the writer stage while it runs.
+func (ba *BlockAssembly) setStaged(ctx context.Context, key []byte, fileType fileformat.FileType, value []byte, dah uint32) error {
+	release, err := acquireStage(ctx, ba.writeSem)
+	if err != nil {
+		return err
+	}
+	defer release()
+
+	return ba.subtreeStore.Set(ctx, key, fileType, value, options.WithDeleteAt(dah))
+}
+
 // storeSubtreeMeta builds, writes and settles the meta part of a request: stored, handed to the
 // retry channel with its bytes when the write failed, or failed when the build did.
 func (ba *BlockAssembly) storeSubtreeMeta(ctx context.Context, subtreeRequest subtreeprocessor.NewSubtreeRequest, dah uint32, outcome *subtreeStoreOutcome, subtreeRetryChan chan *subtreeRetrySend) {
 	subtree := subtreeRequest.Subtree
 
+	// the slot is taken before the timer starts, so meta_build stays the build alone
+	releaseBuild, acquireErr := acquireStage(ctx, ba.metaSem)
+
 	buildStart := time.Now()
 
-	subtreeMetaBytes, ok := ba.buildSubtreeMetaWithRetry(ctx, subtreeRequest)
+	var (
+		subtreeMetaBytes []byte
+		ok               bool
+	)
+
+	if acquireErr == nil {
+		subtreeMetaBytes, ok = ba.buildSubtreeMetaWithRetry(ctx, subtreeRequest)
+		releaseBuild()
+	}
 
 	prometheusBlockAssemblySubtreeStoreStep.WithLabelValues("meta_build").Observe(time.Since(buildStart).Seconds())
 
@@ -1149,12 +1216,7 @@ func (ba *BlockAssembly) storeSubtreeMeta(ctx context.Context, subtreeRequest su
 
 	writeStart := time.Now()
 
-	err := ba.subtreeStore.Set(ctx,
-		subtree.RootHash()[:],
-		fileformat.FileTypeSubtreeMeta,
-		subtreeMetaBytes,
-		options.WithDeleteAt(dah),
-	)
+	err := ba.setStaged(ctx, subtree.RootHash()[:], fileformat.FileTypeSubtreeMeta, subtreeMetaBytes, dah)
 
 	prometheusBlockAssemblySubtreeStoreStep.WithLabelValues("meta_write").Observe(time.Since(writeStart).Seconds())
 
@@ -1282,12 +1344,7 @@ func (ba *BlockAssembly) storeSubtreeData(ctx context.Context, subtreeRequest su
 		storedOK := true
 		writeStart := time.Now()
 
-		err := ba.subtreeStore.Set(ctx,
-			subtree.RootHash()[:],
-			fileformat.FileTypeSubtree,
-			subtreeBytes,
-			options.WithDeleteAt(dah),
-		)
+		err := ba.setStaged(ctx, subtree.RootHash()[:], fileformat.FileTypeSubtree, subtreeBytes, dah)
 
 		prometheusBlockAssemblySubtreeStoreStep.WithLabelValues("subtree_write").Observe(time.Since(writeStart).Seconds())
 

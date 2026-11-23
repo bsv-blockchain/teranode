@@ -34,3 +34,15 @@ func TestBlockAssemblyStoreQueueMaxMB(t *testing.T) {
 	t.Setenv("blockassembly_storeQueueMaxMB", "512")
 	require.Equal(t, 512, NewSettings().BlockAssembly.StoreQueueMaxMB, "loader must read blockassembly_storeQueueMaxMB")
 }
+
+func TestBlockAssemblySubtreeStorageStageWidths(t *testing.T) {
+	require.Equal(t, 0, NewSettings().BlockAssembly.SubtreeStorageMetaWorkers, "0 means GOMAXPROCS")
+	require.Equal(t, 0, NewSettings().BlockAssembly.SubtreeStorageWriters, "0 means twice blockassembly_subtreeStorageWorkers")
+
+	t.Setenv("blockassembly_subtreeStorageMetaWorkers", "12")
+	t.Setenv("blockassembly_subtreeStorageWriters", "34")
+
+	s := NewSettings().BlockAssembly
+	require.Equal(t, 12, s.SubtreeStorageMetaWorkers, "loader must read blockassembly_subtreeStorageMetaWorkers")
+	require.Equal(t, 34, s.SubtreeStorageWriters, "loader must read blockassembly_subtreeStorageWriters")
+}
