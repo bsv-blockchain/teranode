@@ -149,7 +149,7 @@ func runLanePositionsScenario(t *testing.T, td *daemon.TestDaemon, restart func(
 
 	// The node keeps a lane index of the map, following the chain to its tip.
 	require.Eventually(t, func() bool {
-		s := lanereader.Current().Snapshot()
+		s := lanereader.Current().Snapshot() // nil-safe: nil until the index connects
 		return s != nil && s.TipHeight() == block4.Height
 	}, 10*time.Second, 50*time.Millisecond)
 

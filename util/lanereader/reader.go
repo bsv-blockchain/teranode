@@ -54,6 +54,10 @@ const (
 
 	// retryAfter is how long the follower waits after a failed step.
 	retryAfter = 5 * time.Second
+
+	// readTimeout bounds each read of headers or rows, so a hung call cannot keep the load token,
+	// which block validation's loads wait for, taken for ever.
+	readTimeout = 30 * time.Second
 )
 
 // Source is what the Reader reads: the blockchain client.
@@ -185,7 +189,11 @@ func sleep(ctx context.Context, d time.Duration) {
 // step reads the best block and, if it is not tip, moves the index to it, building the index
 // first if it has no tip yet. It returns the tip the index now has.
 func (r *Reader) step(ctx context.Context, tip chainhash.Hash) (chainhash.Hash, error) {
-	header, _, err := r.source.GetBestBlockHeader(ctx)
+	bestCtx, cancel := context.WithTimeout(ctx, readTimeout)
+	header, _, err := r.source.GetBestBlockHeader(bestCtx)
+
+	cancel()
+
 	if err != nil {
 		return tip, errors.NewServiceError("reading the best block", err)
 	}
@@ -253,7 +261,11 @@ func (r *Reader) unlockLoad() { <-r.loading }
 func (r *Reader) rebuild(ctx context.Context, tip chainhash.Hash, reason string) error {
 	start := time.Now()
 
-	headers, metas, err := r.source.GetBlockHeaders(ctx, &tip, r.startBlocks)
+	readCtx, cancel := context.WithTimeout(ctx, readTimeout)
+	headers, metas, err := r.source.GetBlockHeaders(readCtx, &tip, r.startBlocks)
+
+	cancel()
+
 	if err != nil {
 		return errors.NewServiceError("reading the last %d block headers", r.startBlocks, err)
 	}
@@ -295,7 +307,11 @@ func (r *Reader) loadAncestry(ctx context.Context, hash chainhash.Hash, start ui
 	)
 
 	for from := hash; len(headers) < maxWalk && !found; {
-		hs, ms, err := r.source.GetBlockHeaders(ctx, &from, walkBatch)
+		readCtx, cancel := context.WithTimeout(ctx, readTimeout)
+		hs, ms, err := r.source.GetBlockHeaders(readCtx, &from, walkBatch)
+
+		cancel()
+
 		if err != nil {
 			return false, errors.NewServiceError("reading block headers from %s", from.String(), err)
 		}
@@ -345,7 +361,11 @@ func (r *Reader) load(ctx context.Context, idx *lane.Index, headers []*model.Blo
 
 	for i := range headers {
 		g.Go(func() error {
-			got, err := r.source.LaneMapRows(gCtx, metas[i].ID)
+			readCtx, cancel := context.WithTimeout(gCtx, readTimeout)
+			got, err := r.source.LaneMapRows(readCtx, metas[i].ID)
+
+			cancel()
+
 			if err != nil {
 				prometheusLaneReaderLoads.WithLabelValues("error").Inc()
 

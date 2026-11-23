@@ -17,7 +17,7 @@ import (
 // DeleteBlock, which the rewind tool uses, removes the block and leaves its rows. Block IDs come
 // from a sequence that never hands one out again (BIGSERIAL, SQLite AUTOINCREMENT), so such rows
 // name a block ID no block has, which no chain reaches, and a reader has to resolve rows through
-// their blocks. Nothing reads the rows yet, so they are measured, never acted on: rows that fail
+// their blocks. Readers load the rows at shadow and do not act on them: rows that fail
 // their check, or whose insert fails, are rolled back to a savepoint and counted, and the block
 // commits as it would without lanes.
 

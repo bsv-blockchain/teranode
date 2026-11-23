@@ -11,8 +11,9 @@ import (
 // The Phase 1 block gate, at utxostore_laneMigration shadow: a subtree's writer collects the lane
 // positions of its transactions into one Roaring bitmap per lane (BitmapsBuilder) and saves them
 // as the subtree lane bitmaps file; the block's writer merges its subtrees' bitmaps lane by lane
-// and turns each lane's union into map rows (BuildBlockRows). Nothing reads the rows yet, so a
-// transaction without a position is counted, never refused.
+// and turns each lane's union into map rows (BuildBlockRows). Readers load the rows at shadow
+// (util/lanereader) and only count agreement, so a transaction without a position is counted,
+// never refused.
 
 // BitmapsBuilder collects one subtree's lane positions by lane. The zero value is not usable;
 // call NewBitmapsBuilder.

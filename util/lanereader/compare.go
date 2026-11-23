@@ -16,8 +16,9 @@ const (
 	// mined, and at what height. Today's answer is the store's.
 	ReaderValidator = "validator"
 	// ReaderSubtreePrefetch is the same check on parents subtree validation read in bulk for the
-	// validator (validator.Options.PrefetchedParents). Today's answer is the parent's mined
-	// heights.
+	// validator (validator.Options.PrefetchedParents). Today's answer is the parent's mined block
+	// list: the check itself uses the lowest mined height, but a height may be a fork block's, and
+	// the record carries the list.
 	ReaderSubtreePrefetch = "subtree_prefetch"
 	// ReaderSubtreeAlreadyMined is subtree validation's check that a transaction it blesses is not
 	// already mined on our chain. Today's answer is the record's mined block list.

@@ -6,8 +6,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/bscript"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/settings"
 	blockchainsql "github.com/bsv-blockchain/teranode/stores/blockchain/sql"
 	utxostore "github.com/bsv-blockchain/teranode/stores/utxo"
@@ -54,8 +56,9 @@ func laneReaderAnswers(t *testing.T, reader, kind string) (all, ofKind float64) 
 	return all, ofKind
 }
 
-// startLaneReader starts the process's lane reader at shadow on an empty SQLite blockchain store,
-// waits for its first snapshot, and clears it when the test ends.
+// startLaneReader starts the process's lane reader at shadow on a SQLite blockchain store holding
+// one block without rows at height 1, waits for the index to reach it, and clears the reader when
+// the test ends.
 func startLaneReader(t *testing.T) {
 	t.Helper()
 
@@ -66,6 +69,26 @@ func startLaneReader(t *testing.T) {
 	tSettings.UtxoStore.LaneMigration = settings.LaneMigrationShadow
 
 	store, err := blockchainsql.New(ulogger.TestLogger{}, u, tSettings)
+	require.NoError(t, err)
+
+	genesis, _, err := store.GetBestBlockHeader(context.Background())
+	require.NoError(t, err)
+
+	coinbase, err := bt.NewTxFromString("01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff17030100002f6d312d65752f29c267ffea1adb87f33b398fffffffff03ac505763000000001976a914c362d5af234dd4e1f2a1bfbcab90036d38b0aa9f88acaa505763000000001976a9143c22b6d9ba7b50b6d6e615c69d11ecb2ba3db14588acaa505763000000001976a914b7177c7deb43f3869eabc25cfd9f618215f34d5588ac00000000")
+	require.NoError(t, err)
+
+	bits, err := model.NewNBitFromString("207fffff")
+	require.NoError(t, err)
+
+	_, _, err = store.StoreBlock(context.Background(), &model.Block{
+		Header: &model.BlockHeader{
+			Version: 1, Timestamp: 1729259800, Nonce: 5, HashPrevBlock: genesis.Hash(),
+			HashMerkleRoot: &chainhash.Hash{}, Bits: *bits,
+		},
+		Height:           1,
+		CoinbaseTx:       coinbase,
+		TransactionCount: 1,
+	}, "")
 	require.NoError(t, err)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -79,7 +102,7 @@ func startLaneReader(t *testing.T) {
 		_ = store.Close(context.Background())
 	})
 
-	require.Eventually(t, func() bool { return r.Snapshot() != nil }, 10*time.Second, 10*time.Millisecond)
+	require.Eventually(t, func() bool { return r.Snapshot() != nil && r.Snapshot().TipHeight() == 1 }, 10*time.Second, 10*time.Millisecond)
 }
 
 // At shadow each distinct parent of the parent read is answered from the lane index beside the
@@ -127,19 +150,23 @@ func TestParentReadIsShadowedByTheLaneIndex(t *testing.T) {
 	require.Equal(t, agree+1, agree2)
 
 	t.Run("prefetched", func(t *testing.T) {
+		// The record names block 999, which the index never loaded, mined at height 1, where the
+		// index holds a main-chain block with no rows. Judged by its block list the parent is
+		// not_loaded; judged by its height it would be no_rows.
 		prefetched := map[chainhash.Hash]*meta.Data{
-			*mined.TxIDChainHash(): {Tx: mined, BlockIDs: []uint32{120}, BlockHeights: []uint32{120}, LanePosition: lane.Pack(9, 1)},
+			*mined.TxIDChainHash(): {Tx: mined, BlockIDs: []uint32{999}, BlockHeights: []uint32{1}, LanePosition: lane.Pack(9, 1)},
 		}
 
-		prefetchAll, _ := laneReaderAnswers(t, lanereader.ReaderSubtreePrefetch, lanereader.KindNotLoaded)
+		prefetchAll, prefetchNotLoaded := laneReaderAnswers(t, lanereader.ReaderSubtreePrefetch, lanereader.KindNotLoaded)
 		validatorAll, _ := laneReaderAnswers(t, lanereader.ReaderValidator, lanereader.KindAgree)
 
 		_, _, _, err := laneShadowValidator(t, store).getTransactionInputBlockHeightsAndExtendTx(ctx, tx, tx.TxID(), &Options{PrefetchedParents: prefetched})
 		require.NoError(t, err)
 
-		prefetchAll2, _ := laneReaderAnswers(t, lanereader.ReaderSubtreePrefetch, lanereader.KindNotLoaded)
+		prefetchAll2, prefetchNotLoaded2 := laneReaderAnswers(t, lanereader.ReaderSubtreePrefetch, lanereader.KindNotLoaded)
 		validatorAll2, _ := laneReaderAnswers(t, lanereader.ReaderValidator, lanereader.KindAgree)
 		require.Equal(t, prefetchAll+1, prefetchAll2)
+		require.Equal(t, prefetchNotLoaded+1, prefetchNotLoaded2, "judged by the block list, not the height")
 		require.Equal(t, validatorAll+1, validatorAll2)
 	})
 
