@@ -973,6 +973,35 @@ func TestAnnouncePeerMapLimits(t *testing.T) {
 		require.Empty(t, logger.warnsContaining("p2p_peer_map_max_size"),
 			"a coerced cap is not also an exceeds-the-default warning")
 	})
+
+	t.Run("a seen-hash TTL raised to the publish window says so", func(t *testing.T) {
+		// The clamp applies to the block and subtree dedup as well as the
+		// rejected-tx egress, so an operator who set 5s runs 15s everywhere.
+		tSettings := &settings.Settings{}
+		tSettings.P2P.SeenHashTTL = 5 * time.Second
+
+		logger := &recordingLogger{}
+		s := &Server{logger: logger}
+		s.applyPeerMapLimits(tSettings)
+
+		require.Equal(t, []string{fmt.Sprintf(
+			"[applyPeerMapLimits] p2p_seen_hash_ttl=%s is below the %s publish window; using %s for the block, subtree and rejected-tx dedup — a shorter TTL would expire entries before the window is consulted and switch the dedup off",
+			5*time.Second, seenHashPublishWindow, seenHashPublishWindow)},
+			logger.warnsContaining("p2p_seen_hash_ttl"))
+	})
+
+	t.Run("a seen-hash TTL at the window or unset stays quiet", func(t *testing.T) {
+		for _, ttl := range []time.Duration{0, seenHashPublishWindow, 2 * time.Minute} {
+			tSettings := &settings.Settings{}
+			tSettings.P2P.SeenHashTTL = ttl
+
+			logger := &recordingLogger{}
+			s := &Server{logger: logger}
+			s.applyPeerMapLimits(tSettings)
+
+			require.Empty(t, logger.warnsContaining("p2p_seen_hash_ttl"), "ttl %s", ttl)
+		}
+	})
 }
 
 // TestCappedPeerMapFloodEvictsFlooderNotVictim pins the fair-share rule (issue
