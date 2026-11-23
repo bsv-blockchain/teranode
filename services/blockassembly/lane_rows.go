@@ -77,8 +77,9 @@ type keptLaneBitmaps struct {
 }
 
 // put keeps the bitmaps of subtree root, stored at height, and drops entries last stored more
-// than ownLaneBitmapsKeepBlocks blocks below it.
-func (o *ownLaneBitmaps) put(root chainhash.Hash, lanes lane.LaneBitmaps, height uint32) {
+// than ownLaneBitmapsKeepBlocks blocks below it. It reports whether root was not kept before, so
+// two storage requests of one subtree count its members once.
+func (o *ownLaneBitmaps) put(root chainhash.Hash, lanes lane.LaneBitmaps, height uint32) (first bool) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 
@@ -89,15 +90,19 @@ func (o *ownLaneBitmaps) put(root chainhash.Hash, lanes lane.LaneBitmaps, height
 	// a worker that captured an older height, for a root a newer store or candidate has since
 	// kept, keeps the newer height, so the entry is not dropped while candidates list it
 	keptHeight := height
-	if kept, ok := o.bySubtree[root]; ok && kept.height > keptHeight {
+
+	kept, already := o.bySubtree[root]
+	if already && kept.height > keptHeight {
 		keptHeight = kept.height
 	}
+
+	first = !already
 
 	o.bySubtree[root] = keptLaneBitmaps{lanes: lanes, height: keptHeight}
 	o.broadcastLocked()
 
 	if height <= ownLaneBitmapsKeepBlocks {
-		return
+		return first
 	}
 
 	for hash, kept := range o.bySubtree {
@@ -109,6 +114,8 @@ func (o *ownLaneBitmaps) put(root chainhash.Hash, lanes lane.LaneBitmaps, height
 			delete(o.bySubtree, hash)
 		}
 	}
+
+	return first
 }
 
 // touch marks the kept bitmaps of subtree root as stored again at height, and reports whether
@@ -331,10 +338,12 @@ func (ba *BlockAssembly) storeLanePositionsFromPool(ctx context.Context, subtree
 func (ba *BlockAssembly) storeSubtreeLaneBitmaps(ctx context.Context, subtree *subtreepkg.Subtree, laneBits *lane.BitmapsBuilder, height, dah uint32) {
 	root := *subtree.RootHash()
 
-	lane.CountTxsWithoutPosition(laneBitmapsService, laneBits.Unpositioned())
-
+	// a second storage request of the same subtree, overlapping the first, does not count its
+	// members again
 	bitmaps := laneBits.Subtree(root)
-	ba.ownLaneBitmaps.put(root, bitmaps.Lanes, height)
+	if ba.ownLaneBitmaps.put(root, bitmaps.Lanes, height) {
+		lane.CountTxsWithoutPosition(laneBitmapsService, laneBits.Unpositioned())
+	}
 
 	ba.writeLaneBitmapsFile(ctx, bitmaps, dah)
 }

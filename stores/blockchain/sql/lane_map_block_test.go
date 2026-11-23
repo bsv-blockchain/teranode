@@ -786,3 +786,28 @@ func TestInsertLaneMapRowsWithBlockRestoresTheLockTimeout_PostgreSQL(t *testing.
 		})
 	}
 }
+
+// The rows' lock timeout is 2 s exactly: the bound the store is held for, pinned apart from any
+// timing.
+func TestLaneMapRowsLockTimeoutIsTwoSeconds_PostgreSQL(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping postgres-backed test in -short mode")
+	}
+
+	s, cleanup := setupLanePostgresStore(t)
+	defer cleanup()
+
+	ctx := t.Context()
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	require.NoError(t, err)
+
+	defer func() { _ = tx.Rollback() }()
+
+	var previous, set string
+	require.NoError(t, tx.QueryRowContext(ctx, laneMapRowsLockTimeout).Scan(&previous, &set))
+
+	var timeout string
+	require.NoError(t, tx.QueryRowContext(ctx, `SHOW lock_timeout`).Scan(&timeout))
+	require.Equal(t, "2s", timeout)
+}

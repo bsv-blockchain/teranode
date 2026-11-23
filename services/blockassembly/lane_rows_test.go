@@ -1514,3 +1514,33 @@ func TestAnEmptyCandidateKeepsThePoolsPins(t *testing.T) {
 	_, missing := server.ownLaneBitmaps.get([]*chainhash.Hash{inPool.RootHash()})
 	require.Zero(t, missing, "the pool's subtree keeps its bitmaps")
 }
+
+// TestTwoStoresOfOneSubtreeCountItsMembersOnce: two storage requests of one subtree, as a reorg can
+// queue, keep its bitmaps twice but count its members without a position once.
+func TestTwoStoresOfOneSubtreeCountItsMembersOnce(t *testing.T) {
+	server, _ := setupServerWithSettings(t, func(s *settings.Settings) { s.UtxoStore.LaneMigration = settings.LaneMigrationShadow })
+
+	st, txMap := laneSealSubtree(t, "two-stores")
+	txMap.Set(st.Nodes[2].Hash, singleParentInpointsPtr(chainhash.HashH([]byte("two-stores-parent")), 0)) // without a position
+
+	unpositioned := map[string]string{"service": laneBitmapsService}
+	before := ownLaneMetric(t, "teranode_lane_txs_without_position_total", unpositioned)
+
+	var wg sync.WaitGroup
+
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+
+		go func() {
+			defer wg.Done()
+
+			laneBits, lost := subtreeLanePositions(st, txMap, nil, nil)
+			require.Zero(t, lost)
+			server.storeSubtreeLaneBitmaps(t.Context(), st, laneBits, 1, 10)
+		}()
+	}
+
+	wg.Wait()
+
+	require.Equal(t, before+1, ownLaneMetric(t, "teranode_lane_txs_without_position_total", unpositioned))
+}
