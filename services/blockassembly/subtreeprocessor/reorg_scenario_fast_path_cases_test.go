@@ -6,6 +6,7 @@ import (
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
+	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/stretchr/testify/require"
 )
 
@@ -367,4 +368,99 @@ func TestReorgScenario_SlowPathDrainsTheQueueAroundTheReorg(t *testing.T) {
 	}
 
 	require.ElementsMatch(t, sc.rawD1(), sc.utxo.marked(false), "the queued lost-block transaction is in the assembly, so it is marked like the rest of raw D1")
+}
+
+// Design section 5 gate "no conflicting nodes in B or F": the fast path declines these, so the slow
+// path's result is the reference. A winning block's conflicting node W' demotes the pending
+// transaction L' that spends the same output: L' leaves the assembly and the tx map and is marked off
+// the longest chain, and its pending child D', which the UTXO store has no record of, is dropped by
+// the assembly's own parent links (dropConflictingDescendants), not by the store's cascade.
+func TestReorgScenario_SlowPathDemotesPendingLosersOfAWinnerConflict(t *testing.T) {
+	for _, parallel := range []bool{false, true} {
+		name := map[bool]string{false: "sequential remainder", true: "parallel remainder"}[parallel]
+
+		t.Run(name, func(t *testing.T) {
+			cfg := smallScenarioConfig()
+			cfg.conflictsInWinner = 3
+
+			if parallel {
+				cfg.parallelThreshold = 1
+			}
+
+			sc := newReorgScenario(t, cfg)
+			require.Len(t, sc.loserIDs, 3)
+			require.Equal(t, sc.pendingOrder(), txHashes(assemblyNodes(sc.stp)))
+			requireAssemblyValid(t, sc.stp, sc.onChainBefore)
+
+			require.NoError(t, sc.run(t))
+
+			after := txHashes(assemblyNodes(sc.stp))
+			requireAssemblyValid(t, sc.stp, sc.onChainAfter)
+			require.Equal(t, sc.expectedOrderAfter(), after)
+			require.Equal(t, len(after), sc.stp.GetCurrentTxMap().Length())
+			require.Zero(t, sc.stp.GetRemoveMapLength())
+
+			for _, id := range sc.droppedIDs {
+				require.NotContains(t, after, sc.hash(id), "L' and D' are gone")
+				require.False(t, sc.stp.GetCurrentTxMap().Exists(sc.hash(id)))
+			}
+
+			require.ElementsMatch(t, sc.expectedMarkFalse(), sc.utxo.marked(false), "L' is marked off the longest chain with raw D1; D' has no record and is not")
+			require.ElementsMatch(t, sc.winnerNotLost(), sc.utxo.marked(true), "W' is marked with the rest of D2")
+
+			for _, pair := range sc.winnerPairs {
+				loser, err := sc.utxo.Get(t.Context(), pair.loser.TxIDChainHash(), fields.Conflicting)
+				require.NoError(t, err)
+				require.True(t, loser.Conflicting)
+
+				winner, err := sc.utxo.Get(t.Context(), pair.winner.TxIDChainHash(), fields.Conflicting)
+				require.NoError(t, err)
+				require.False(t, winner.Conflicting)
+			}
+		})
+	}
+}
+
+// A lost block's conflicting node W (it won a conflict when B was applied) is reversed by the
+// move-back: W is conflicting again, the loser L it displaced owns the output again, and W is evicted
+// through the removeMap, so it is absent from the assembly, not marked (marks cover what the assembly
+// holds) and the removeMap entry is consumed by the first forward step. L is in no set, so it is not
+// re-added to the assembly (the documented gap in reorgBlocks).
+func TestReorgScenario_SlowPathReversesAConflictWonInTheLostBlock(t *testing.T) {
+	cfg := smallScenarioConfig()
+	cfg.conflictsInLost = 2
+	sc := newReorgScenario(t, cfg)
+
+	for _, pair := range sc.lostPairs {
+		w, err := sc.utxo.Get(t.Context(), pair.winner.TxIDChainHash(), fields.Conflicting)
+		require.NoError(t, err)
+		require.False(t, w.Conflicting, "before the reorg W won")
+	}
+
+	require.NoError(t, sc.run(t))
+
+	after := txHashes(assemblyNodes(sc.stp))
+	requireAssemblyValid(t, sc.stp, sc.onChainAfter)
+	require.Equal(t, sc.expectedOrderAfter(), after)
+	require.Equal(t, len(after), sc.stp.GetCurrentTxMap().Length())
+	require.Zero(t, sc.stp.GetRemoveMapLength())
+
+	require.ElementsMatch(t, sc.expectedMarkFalse(), sc.utxo.marked(false))
+	require.ElementsMatch(t, sc.winnerNotLost(), sc.utxo.marked(true))
+
+	for _, pair := range sc.lostPairs {
+		w := *pair.winner.TxIDChainHash()
+		l := *pair.loser.TxIDChainHash()
+
+		require.NotContains(t, after, w)
+		require.NotContains(t, after, l)
+
+		wMeta, err := sc.utxo.Get(t.Context(), &w, fields.Conflicting)
+		require.NoError(t, err)
+		require.True(t, wMeta.Conflicting, "W is conflicting again")
+
+		lMeta, err := sc.utxo.Get(t.Context(), &l, fields.Conflicting)
+		require.NoError(t, err)
+		require.False(t, lMeta.Conflicting, "L is restored")
+	}
 }

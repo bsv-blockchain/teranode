@@ -111,6 +111,19 @@ type reorgScenarioConfig struct {
 	emptyForwardFirst bool
 	emptyForwardLast  bool
 
+	// conflictsInLost is how many lost-block transactions W won a conflict when B was applied: B's
+	// subtree lists W as a conflicting node, W owns the output it shares with a loser L that is in no
+	// set, and L is conflicting in the store. W is in B only, so it is in raw D1. Moving B back
+	// reverses the conflict (W conflicting again, L restored) and evicts W through the removeMap.
+	conflictsInLost int
+
+	// conflictsInWinner is how many winning-block transactions W' are conflicting nodes of F that
+	// displace a pending transaction L' (a real transaction in the UTXO store, pending, never a hit)
+	// which has a pending child D' that the UTXO store has no record of, so only the assembly's own
+	// parent links reach it. The forward step demotes L', drops D' from the remainder, and the marks
+	// cover L'.
+	conflictsInWinner int
+
 	// skipStoreMarks counts the longest-chain marks instead of sending them to the UTXO store, and
 	// creates no raw D1 records. The reorgscale suite sets it to time the processor's phases; the
 	// marks are measured on their own against Aerospike.
@@ -137,10 +150,25 @@ type reorgScenario struct {
 	cbChildTxs   []*bt.Tx
 	lostCoinbase *bt.Tx
 
+	// conflictTxs are the real transactions of the winner-side conflicts, behind kindConflict ids:
+	// loser L' at index 2j, winner W' at 2j+1. winnerPairs holds each with its parent. lostPairs are
+	// the lost-side conflicts, W being raw D1 transaction conflictBase+j.
+	conflictTxs []*bt.Tx
+	winnerPairs []conflictPair
+	lostPairs   []conflictPair
+
+	// confirmedExtra are real transactions the scenario treats as on the chain before and after the
+	// reorg: the parents of the conflicting spends.
+	confirmedExtra map[chainhash.Hash]struct{}
+
 	// removeIDs are the transactions put in the removeMap. droppedIDs are the ones the reorg must
 	// leave out of the assembly and out of the mark-false set, whatever took them out.
-	removeIDs  []scenarioID
-	dupIDs     []scenarioID
+	removeIDs []scenarioID
+	dupIDs    []scenarioID
+
+	// loserIDs are the displaced pending transactions of the winner-side conflicts: marked off the
+	// longest chain although they leave the assembly.
+	loserIDs   []scenarioID
 	droppedIDs []scenarioID
 
 	// extraParent is the second parent of a pending transaction that spends another scenario
@@ -165,6 +193,7 @@ const (
 	kindWinnerOnly
 	kindIntake
 	kindCoinbaseChild
+	kindConflict
 )
 
 func (id scenarioID) kind() scenarioID { return id & (0xf << kindShift) }
@@ -226,6 +255,40 @@ func (sc *reorgScenario) hash(id scenarioID) chainhash.Hash {
 	return scenarioHash(sc.cfg.seed, uint64(id))
 }
 
+// conflictPair is a parent with two transactions that spend its output 0.
+type conflictPair struct{ parent, loser, winner *bt.Tx }
+
+// newConflictPair builds a parent that spends a confirmed parent, and a loser and a winner that
+// both spend its output 0. tag keeps every output script unique.
+func (sc *reorgScenario) newConflictPair(t testing.TB, tag uint64) conflictPair {
+	t.Helper()
+
+	build := func(prev chainhash.Hash, prevScript *bscript.Script, prevSatoshis, satoshis uint64, kind byte) *bt.Tx {
+		in := &bt.Input{PreviousTxOutIndex: 0, PreviousTxSatoshis: prevSatoshis, PreviousTxScript: prevScript, SequenceNumber: 0xffffffff, UnlockingScript: bscript.NewFromBytes([]byte{})}
+		require.NoError(t, in.PreviousTxIDAdd(&prev))
+
+		var data [9]byte
+		binary.LittleEndian.PutUint64(data[:8], sc.cfg.seed<<40^tag)
+		data[8] = kind
+
+		tx := bt.NewTx()
+		tx.Inputs = []*bt.Input{in}
+		tx.Outputs = []*bt.Output{{Satoshis: satoshis, LockingScript: bscript.NewFromBytes(append([]byte{0x6a, 0x09}, data[:]...))}}
+
+		return tx
+	}
+
+	parent := build(scenarioHash(sc.cfg.seed^0xc0f11c7, tag), bscript.NewFromBytes([]byte{0x51}), 200_000, 100_000, 0)
+
+	if sc.confirmedExtra == nil {
+		sc.confirmedExtra = make(map[chainhash.Hash]struct{})
+	}
+
+	sc.confirmedExtra[*parent.TxIDChainHash()] = struct{}{}
+
+	return conflictPair{parent: parent, loser: build(*parent.TxIDChainHash(), parent.Outputs[0].LockingScript, 100_000, 90_000, 1), winner: build(*parent.TxIDChainHash(), parent.Outputs[0].LockingScript, 100_000, 80_000, 2)}
+}
+
 // realTx is the real transaction behind id, or nil for a synthetic one.
 func (sc *reorgScenario) realTx(id scenarioID) *bt.Tx {
 	switch id.kind() {
@@ -233,6 +296,8 @@ func (sc *reorgScenario) realTx(id scenarioID) *bt.Tx {
 		return sc.rawD1Txs[id.index()]
 	case kindCoinbaseChild:
 		return sc.cbChildTxs[id.index()]
+	case kindConflict:
+		return sc.conflictTxs[id.index()]
 	default:
 		return nil
 	}
@@ -277,6 +342,15 @@ func (sc *reorgScenario) rawD1Tx(t testing.TB, i int) *bt.Tx {
 		parent = *sc.rawD1Txs[i-childBase].TxIDChainHash()
 	}
 
+	// A lost-block conflict winner is the winner of a pair, which is also built here.
+	conflictBase := childBase + sc.cfg.lostChildOfPending
+	if i >= conflictBase && i < conflictBase+sc.cfg.conflictsInLost {
+		pair := sc.newConflictPair(t, 1<<32|uint64(i))
+		sc.lostPairs = append(sc.lostPairs, pair)
+
+		return pair.winner
+	}
+
 	in := &bt.Input{PreviousTxOutIndex: 0, PreviousTxSatoshis: 10_000, SequenceNumber: 0xffffffff, UnlockingScript: bscript.NewFromBytes([]byte{})}
 	require.NoError(t, in.PreviousTxIDAdd(&parent))
 
@@ -308,11 +382,17 @@ func newReorgScenario(t testing.TB, cfg reorgScenarioConfig) *reorgScenario {
 	rawD1Count := cfg.lost - lostShared
 	require.LessOrEqual(t, cfg.lostAlsoPending, rawD1Count, "lostAlsoPending transactions are part of raw D1")
 	require.LessOrEqual(t, cfg.lostChildOfPending, cfg.lostAlsoPending, "each lost-block child spends one X")
-	require.LessOrEqual(t, cfg.lostAlsoPending+cfg.pendingSpendsLost+cfg.lostChildOfPending, rawD1Count, "room for the lost-block children")
+	require.LessOrEqual(t, cfg.lostAlsoPending+cfg.pendingSpendsLost+cfg.lostChildOfPending+cfg.conflictsInLost, rawD1Count, "room for the lost-block children and conflict winners")
 
 	sc.rawD1Txs = make([]*bt.Tx, rawD1Count)
 	for i := range rawD1Count {
 		sc.rawD1Txs[i] = sc.rawD1Tx(t, i)
+	}
+
+	for j := range cfg.conflictsInWinner {
+		pair := sc.newConflictPair(t, 2<<32|uint64(j))
+		sc.winnerPairs = append(sc.winnerPairs, pair)
+		sc.conflictTxs = append(sc.conflictTxs, pair.loser, pair.winner)
 	}
 
 	// The lost block, shuffled.
@@ -345,6 +425,7 @@ func newReorgScenario(t testing.TB, cfg reorgScenarioConfig) *reorgScenario {
 
 	sc.addParentEdges(t, synthetic, rawD1Count)
 	sc.placeCoinbaseChildren(t)
+	sc.placeConflictLosers(t)
 
 	// The hits: pending transactions the winners mined. Never a lostAlsoPending transaction, never a
 	// child of a raw D1 transaction (the winners do not have its parent), and never a chain child
@@ -357,7 +438,7 @@ func newReorgScenario(t testing.TB, cfg reorgScenarioConfig) *reorgScenario {
 			continue
 		}
 
-		if extra, ok := sc.extraParent[id]; ok && (extra.parent.kind() == kindRawD1 || !cfg.hitsAtFront) {
+		if extra, ok := sc.extraParent[id]; ok && (extra.parent.kind() != kindPending || !cfg.hitsAtFront) {
 			continue
 		}
 
@@ -384,6 +465,10 @@ func newReorgScenario(t testing.TB, cfg reorgScenarioConfig) *reorgScenario {
 
 	for i := range cfg.winnerOnly {
 		sc.winnerIDs = append(sc.winnerIDs, kindWinnerOnly|scenarioID(i))
+	}
+
+	for j := range cfg.conflictsInWinner {
+		sc.winnerIDs = append(sc.winnerIDs, kindConflict|scenarioID(2*j+1))
 	}
 
 	rng.Shuffle(len(sc.winnerIDs), func(i, j int) { sc.winnerIDs[i], sc.winnerIDs[j] = sc.winnerIDs[j], sc.winnerIDs[i] })
@@ -440,13 +525,57 @@ func (sc *reorgScenario) placeCoinbaseChildren(t testing.TB) {
 	}
 }
 
+// placeConflictLosers replaces spread-out pending transactions with the losers L' of the winner-side
+// conflicts and makes the next free pending transaction after each one its child D'.
+func (sc *reorgScenario) placeConflictLosers(t testing.TB) {
+	t.Helper()
+
+	n := sc.cfg.conflictsInWinner
+	if n == 0 {
+		return
+	}
+
+	hasChild := make(map[scenarioID]struct{}, len(sc.extraParent))
+	for _, edge := range sc.extraParent {
+		hasChild[edge.parent] = struct{}{}
+	}
+
+	free := func(id scenarioID) bool {
+		_, isChild := sc.extraParent[id]
+		_, isParent := hasChild[id]
+
+		return id.kind() == kindPending && !isChild && !isParent
+	}
+
+	var positions []scenarioID
+
+	for pos, id := range sc.pendingIDs {
+		// leave room for the child behind it
+		if free(id) && pos+1 < len(sc.pendingIDs) && free(sc.pendingIDs[pos+1]) {
+			positions = append(positions, scenarioID(pos))
+		}
+	}
+
+	require.LessOrEqual(t, n, len(positions))
+
+	for j, pos := range pickSpread(positions, n) {
+		loser := kindConflict | scenarioID(2*j)
+		child := sc.pendingIDs[pos+1]
+
+		sc.pendingIDs[pos] = loser
+		sc.extraParent[child] = scenarioOutpoint{loser, 0}
+		sc.droppedIDs = append(sc.droppedIDs, loser, child)
+		sc.loserIDs = append(sc.loserIDs, loser)
+	}
+}
+
 // planRemoveMap chooses the transactions the removeMap knobs name. hitPositions are the positions in
 // the pending set of the pending transactions the winners mined.
 func (sc *reorgScenario) planRemoveMap(t testing.TB, hitPositions []uint32) {
 	t.Helper()
 
 	cfg := sc.cfg
-	if cfg.removeMapPending+cfg.removeMapHits+cfg.removeMapLost+cfg.removeMapD1+cfg.duplicateInPending == 0 {
+	if cfg.removeMapPending+cfg.removeMapHits+cfg.removeMapLost+cfg.removeMapD1+cfg.duplicateInPending+cfg.conflictsInLost == 0 {
 		return
 	}
 
@@ -511,7 +640,12 @@ func (sc *reorgScenario) planRemoveMap(t testing.TB, hitPositions []uint32) {
 		sc.droppedIDs = append(sc.droppedIDs, id)
 	}
 
-	d1Base := cfg.lostAlsoPending + cfg.pendingSpendsLost + cfg.lostChildOfPending
+	conflictBase := cfg.lostAlsoPending + cfg.pendingSpendsLost + cfg.lostChildOfPending
+	for j := range cfg.conflictsInLost {
+		sc.droppedIDs = append(sc.droppedIDs, kindRawD1|scenarioID(conflictBase+j))
+	}
+
+	d1Base := cfg.lostAlsoPending + cfg.pendingSpendsLost + cfg.lostChildOfPending + cfg.conflictsInLost
 	require.LessOrEqual(t, d1Base+cfg.removeMapD1, len(sc.rawD1Txs), "removeMapD1 needs raw D1 transactions beyond the ones with a role")
 
 	for j := range cfg.removeMapD1 {
@@ -643,12 +777,52 @@ func (sc *reorgScenario) buildChain(t testing.TB) {
 
 	sc.utxo = &markSpyStore{Store: sqlStore, countOnly: sc.cfg.skipStoreMarks}
 
-	for _, tx := range sc.rawD1Txs {
+	conflictBase := sc.cfg.lostAlsoPending + sc.cfg.pendingSpendsLost + sc.cfg.lostChildOfPending
+
+	for i, tx := range sc.rawD1Txs {
 		if sc.cfg.skipStoreMarks {
 			break
 		}
 
+		if i >= conflictBase && i < conflictBase+sc.cfg.conflictsInLost {
+			continue // created below, as a conflicting winner
+		}
+
 		_, err = sqlStore.Create(ctx, tx, sc.lost.Height)
+		require.NoError(t, err)
+	}
+
+	// Winner-side conflicts: the loser owns the parent's output and is pending, the winner waits in F.
+	for _, pair := range sc.winnerPairs {
+		_, _, err = sqlStore.SpendAndCreate(ctx, pair.parent, 1, utxo.WithCreateOnly())
+		require.NoError(t, err)
+
+		_, _, err = sqlStore.SpendAndCreate(ctx, pair.loser, 2)
+		require.NoError(t, err)
+
+		_, _, err = sqlStore.SpendAndCreate(ctx, pair.winner, 2, utxo.WithCreateOnly(), utxo.WithConflicting(true))
+		require.NoError(t, err)
+	}
+
+	// Lost-side conflicts, in the state B being applied left them: the winner owns the output and the
+	// loser is conflicting.
+	winners := make([]chainhash.Hash, 0, len(sc.lostPairs))
+
+	for _, pair := range sc.lostPairs {
+		_, _, err = sqlStore.SpendAndCreate(ctx, pair.parent, 1, utxo.WithCreateOnly())
+		require.NoError(t, err)
+
+		_, _, err = sqlStore.SpendAndCreate(ctx, pair.loser, 2)
+		require.NoError(t, err)
+
+		_, _, err = sqlStore.SpendAndCreate(ctx, pair.winner, 2, utxo.WithCreateOnly(), utxo.WithConflicting(true))
+		require.NoError(t, err)
+
+		winners = append(winners, *pair.winner.TxIDChainHash())
+	}
+
+	if len(winners) > 0 {
+		_, _, err = utxo.ProcessConflicting(ctx, sqlStore, sc.lost.Height, *sc.lost.Hash(), winners, nil, utxo.NoAncestryGuard)
 		require.NoError(t, err)
 	}
 
@@ -669,6 +843,21 @@ func (sc *reorgScenario) buildChain(t testing.TB) {
 		require.NoError(t, err)
 
 		sc.cbChildTxs[i] = child
+	}
+}
+
+// isConflictNode reports whether the block holding id lists it as a conflicting node: the winner of a
+// conflict, in the lost block or in a winning block.
+func (sc *reorgScenario) isConflictNode(id scenarioID) bool {
+	conflictBase := sc.cfg.lostAlsoPending + sc.cfg.pendingSpendsLost + sc.cfg.lostChildOfPending
+
+	switch id.kind() {
+	case kindConflict:
+		return id.index()%2 == 1
+	case kindRawD1:
+		return id.index() >= conflictBase && id.index() < conflictBase+sc.cfg.conflictsInLost
+	default:
+		return false
 	}
 }
 
@@ -712,6 +901,10 @@ func (sc *reorgScenario) storeBlock(t testing.TB, height uint32, header *model.B
 		for _, id := range ids[start:end] {
 			tx := sc.tx(t, id)
 			require.NoError(t, st.AddSubtreeNode(tx.node))
+
+			if sc.isConflictNode(id) {
+				require.NoError(t, st.AddConflictingNode(tx.node.Hash))
+			}
 
 			if meta {
 				require.NoError(t, stMeta.SetTxInpoints(st.Length()-1, tx.inpoints))
@@ -957,7 +1150,7 @@ func (sc *reorgScenario) expectedOrderAfter() []chainhash.Hash {
 // expectedMarkFalse is what the reorg marks off the longest chain: raw D1, less the transactions that
 // left the assembly before the marks, which cover only what the assembly still holds.
 func (sc *reorgScenario) expectedMarkFalse() []chainhash.Hash {
-	return filter(sc.rawD1(), func(h chainhash.Hash) bool { return !sc.dropped(h) })
+	return append(filter(sc.rawD1(), func(h chainhash.Hash) bool { return !sc.dropped(h) }), sc.hashes(sc.loserIDs)...)
 }
 
 // expectedRemoveMapLength is what is left in the removeMap after the reorg: nothing the scenario
@@ -969,12 +1162,16 @@ func (sc *reorgScenario) expectedRemoveMapLength() int { return sc.cfg.coinbaseC
 // onChainBefore reports whether h's outputs are on the chain ending in B. A lost-block transaction
 // that is also pending (the X case) counts as pending, not as mined.
 func (sc *reorgScenario) onChainBefore(h chainhash.Hash) bool {
-	return isConfirmedParent(h) || (sc.inLost(h) && !sc.inPending(h)) || (sc.lostCoinbase != nil && *sc.lostCoinbase.TxIDChainHash() == h)
+	_, extra := sc.confirmedExtra[h]
+
+	return isConfirmedParent(h) || extra || (sc.inLost(h) && !sc.inPending(h)) || (sc.lostCoinbase != nil && *sc.lostCoinbase.TxIDChainHash() == h)
 }
 
 // onChainAfter reports whether h's outputs are on the chain ending in Fn.
 func (sc *reorgScenario) onChainAfter(h chainhash.Hash) bool {
-	return isConfirmedParent(h) || sc.inWinners(h)
+	_, extra := sc.confirmedExtra[h]
+
+	return isConfirmedParent(h) || extra || sc.inWinners(h)
 }
 
 // scenarioCoinbase is a coinbase transaction unique to tag, with outputs outputs (at least one).
