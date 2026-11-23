@@ -755,7 +755,6 @@ func NewSubtreeProcessor(_ context.Context, logger ulogger.Logger, tSettings *se
 		currentTxMap:                 NewSplitTxInpointsMap(splitBuckets),
 		splitMapBuckets:              splitBuckets,
 		deletedTxs:                   txmap.NewSyncedMap[chainhash.Hash, subtreepkg.TxInpoints](),
-		deletedPositions:             txmap.NewSyncedMap[chainhash.Hash, uint64](),
 		removeMap:                    txmap.NewSplitSwissMap(256, 16),
 		blockchainClient:             blockchainClient,
 		subtreeStore:                 subtreeStore,
@@ -839,6 +838,12 @@ func NewSubtreeProcessor(_ context.Context, logger ulogger.Logger, tSettings *se
 	// half could not be created, which leaves diskTxMap nil.
 	if stp.diskTxMap == nil {
 		stp.currentTxMapShadow = NewSplitTxInpointsMap(splitBuckets)
+	}
+
+	// At utxostore_laneMigration shadow a removed tx's lane position is backed up beside its
+	// inpoints; without lanes there is no backup to keep, so none is allocated or written.
+	if stp.keepsLanePositions() {
+		stp.deletedPositions = txmap.NewSyncedMap[chainhash.Hash, uint64]()
 	}
 
 	// The in-memory limit counts what the queue holds plus what has reached a subtree.
@@ -4385,15 +4390,15 @@ func (stp *SubtreeProcessor) reChainSubtrees(fromIndex int) error {
 				continue
 			}
 
-			parents, found = stp.currentTxMap.Get(node.Hash)
+			// The tx's lane position goes back with it, so the re-chained subtrees' lane bitmaps
+			// still hold it, read with its inpoints. Without lanes nothing more is read.
+			var position uint64
+
+			parents, position, found = stp.getWithLanePosition(node.Hash)
 			if !found {
 				// this should not happen, but if it does, we need to add the txInpoints to the currentTxMap
 				return errors.NewProcessingError("error getting txInpoints from currentTxMap for %s", node.Hash.String())
 			}
-
-			// The tx's lane position goes back with it, so the re-chained subtrees' lane bitmaps
-			// still hold it. Without lanes nothing more is read.
-			position := stp.lanePositionIn(stp.currentTxMap, node.Hash)
 
 			// Save to deleted backup before removing (protects brief window during delete-and-readd)
 			stp.deletedTxs.Set(node.Hash, *parents)
@@ -9969,6 +9974,32 @@ func (stp *SubtreeProcessor) lanePositionIn(m TxInpointsMap, hash chainhash.Hash
 	}
 
 	return m.Position(hash)
+}
+
+// getWithLanePosition is currentTxMap.Get that also returns the tx's lane position when the pool
+// keeps positions, read with its inpoints from one disk-map record, or 0. A disk-map read error is
+// recorded on the map, as Get records it.
+func (stp *SubtreeProcessor) getWithLanePosition(hash chainhash.Hash) (*subtreepkg.TxInpoints, uint64, bool) {
+	if !stp.keepsLanePositions() {
+		parents, found := stp.currentTxMap.Get(hash)
+
+		return parents, 0, found
+	}
+
+	if disk, ok := stp.currentTxMap.(*DiskTxMap); ok {
+		parents, position, found, err := disk.GetAtWithErr(hash)
+		if err != nil {
+			disk.recordErr(err)
+
+			return nil, 0, false
+		}
+
+		return parents, position, found
+	}
+
+	parents, found := stp.currentTxMap.Get(hash)
+
+	return parents, stp.currentTxMap.Position(hash), found
 }
 
 // keepsLanePositions reports whether the pool keeps each transaction's own lane position (util/lane)

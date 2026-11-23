@@ -43,9 +43,11 @@ const laneBitmapsService = "blockassembly"
 const ownLaneBitmapsKeepBlocks = 2
 
 // ownLaneBitmapsWait bounds how long storing our block waits for the kept bitmaps of a subtree
-// whose storage is still running. A sealed subtree joins the candidate at once and its storage
-// worker keeps its bitmaps tens of milliseconds later, so a block mined right after a seal, or
-// right after a block rebuilds the pool's subtrees, would otherwise find them missing. A variable
+// whose storage is still running. A sealed subtree joins the candidate at once, and its storage
+// worker keeps its bitmaps once the subtree's meta pass is done: measured at about 120 ms (in-memory
+// map) to 300 ms (disk map) per million transactions after a worker takes it. So a block mined
+// right after a seal, or right after a block rebuilds the pool's subtrees, would otherwise find
+// them missing. A variable
 // so a test can shorten it.
 var ownLaneBitmapsWait = time.Second
 

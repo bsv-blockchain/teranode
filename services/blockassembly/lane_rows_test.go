@@ -70,10 +70,19 @@ type ownLaneBlock struct {
 	subtreeStore *memory.Memory
 }
 
-// mineOwnLaneBlock runs block assembly at shadow or off on the blockchain store at storeURL, hands
-// it ownLaneTxs with their positions through AddTxBatchColumnar, mines the candidate and returns the
-// block, the AddBlock options and the rows the store holds for it.
-func mineOwnLaneBlock(t *testing.T, storeURL string, shadow bool) *ownLaneBlock {
+// ownLaneServer is block assembly running at shadow or off on the blockchain store at storeURL,
+// with the pieces the own-block tests read.
+type ownLaneServer struct {
+	ctx          context.Context
+	server       *BlockAssembly
+	client       blockchain.ClientI
+	spy          *addBlockOptionsSpyClient
+	store        blockchainstore.Store
+	subtreeStore *memory.Memory
+}
+
+// startOwnLaneServer starts block assembly at shadow or off on the blockchain store at storeURL.
+func startOwnLaneServer(t *testing.T, storeURL string, shadow bool) *ownLaneServer {
 	t.Helper()
 
 	initPrometheusMetrics()
@@ -125,25 +134,47 @@ func mineOwnLaneBlock(t *testing.T, storeURL string, shadow bool) *ownLaneBlock 
 		return server.blockAssembler.GetCurrentRunningState() == StateRunning
 	}, 5*time.Second, 50*time.Millisecond, "block assembler did not reach Running state")
 
-	_, err = server.AddTxBatchColumnar(ctx, ownLaneColumnarBatch(t))
+	return &ownLaneServer{ctx: ctx, server: server, client: realBlockchainClient, spy: spy, store: store, subtreeStore: subtreeStore}
+}
+
+// candidateOfTwoSubtrees hands the server ownLaneTxs through AddTxBatchColumnar and returns the
+// candidate once its two complete subtrees are stored.
+func (o *ownLaneServer) candidateOfTwoSubtrees(t *testing.T) *model.MiningCandidate {
+	t.Helper()
+
+	_, err := o.server.AddTxBatchColumnar(o.ctx, ownLaneColumnarBatch(t))
 	require.NoError(t, err)
 
 	var candidate *model.MiningCandidate
 
 	require.Eventually(t, func() bool {
-		candidate, err = server.GetMiningCandidate(ctx, &blockassembly_api.GetMiningCandidateRequest{IncludeSubtrees: true})
+		candidate, err = o.server.GetMiningCandidate(o.ctx, &blockassembly_api.GetMiningCandidateRequest{IncludeSubtrees: true})
 		if err != nil || candidate == nil || len(candidate.SubtreeHashes) != 2 {
 			return false
 		}
 
 		for _, subtreeHash := range candidate.SubtreeHashes {
-			if _, getErr := subtreeStore.Get(ctx, subtreeHash, fileformat.FileTypeSubtree); getErr != nil {
+			if _, getErr := o.subtreeStore.Get(o.ctx, subtreeHash, fileformat.FileTypeSubtree); getErr != nil {
 				return false
 			}
 		}
 
 		return true
 	}, 10*time.Second, 50*time.Millisecond, "the two complete subtrees were not stored")
+
+	return candidate
+}
+
+// mineOwnLaneBlock runs block assembly at shadow or off on the blockchain store at storeURL, hands
+// it ownLaneTxs with their positions through AddTxBatchColumnar, mines the candidate and returns the
+// block, the AddBlock options and the rows the store holds for it.
+func mineOwnLaneBlock(t *testing.T, storeURL string, shadow bool) *ownLaneBlock {
+	t.Helper()
+
+	o := startOwnLaneServer(t, storeURL, shadow)
+	ctx, server, realBlockchainClient, spy, store, subtreeStore := o.ctx, o.server, o.client, o.spy, o.store, o.subtreeStore
+
+	candidate := o.candidateOfTwoSubtrees(t)
 
 	solution, err := mining.Mine(ctx, server.settings, candidate, nil)
 	require.NoError(t, err)
@@ -1008,4 +1039,32 @@ func TestCandidateKeepsItsSubtreesLaneBitmaps(t *testing.T) {
 
 	_, missing = server.ownLaneBitmaps.get([]*chainhash.Hash{unlisted.RootHash()})
 	require.Equal(t, 1, missing, "a subtree no candidate lists ages out")
+}
+
+// TestServingACandidateKeepsItsSubtreesLaneBitmaps: serving a mining candidate after blocks that did
+// not rebuild the pool's subtrees, such as coinbase-only blocks, keeps the bitmaps of the subtrees
+// it lists, so a block mined from it still gets its rows.
+func TestServingACandidateKeepsItsSubtreesLaneBitmaps(t *testing.T) {
+	initPrometheusMetrics()
+
+	o := startOwnLaneServer(t, "sqlitememory:///", true)
+	candidate := o.candidateOfTwoSubtrees(t)
+
+	roots := make([]*chainhash.Hash, len(candidate.SubtreeHashes))
+	for i, h := range candidate.SubtreeHashes {
+		roots[i] = (*chainhash.Hash)(h)
+	}
+
+	// three blocks later, none of them rebuilding the pool's subtrees, the candidate is served again
+	height := o.server.blockAssembler.utxoStore.GetBlockHeight() + ownLaneBitmapsKeepBlocks + 1
+	require.NoError(t, o.server.blockAssembler.utxoStore.SetBlockHeight(height))
+
+	_, err := o.server.GetMiningCandidate(o.ctx, &blockassembly_api.GetMiningCandidateRequest{IncludeSubtrees: true})
+	require.NoError(t, err)
+
+	// a subtree kept at the new height drops entries older than the margin
+	o.server.ownLaneBitmaps.put(chainhash.HashH([]byte("serving-candidate-new")), lane.LaneBitmaps{}, height)
+
+	_, missing := o.server.ownLaneBitmaps.get(roots)
+	require.Zero(t, missing, "the candidate's subtrees keep their bitmaps")
 }
