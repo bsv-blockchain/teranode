@@ -25,3 +25,12 @@ func TestBlockAssemblyStoredPrefixTemplate(t *testing.T) {
 	t.Setenv("blockassembly_storedPrefixTemplate", "true")
 	require.True(t, NewSettings().BlockAssembly.StoredPrefixTemplate, "loader must read blockassembly_storedPrefixTemplate")
 }
+
+// The in-place fork reorg is off by default (issue 2269). Only a non-default override read back
+// proves NewSettings reads the key.
+func TestBlockAssemblyReorgFastPath(t *testing.T) {
+	require.False(t, NewSettings().BlockAssembly.ReorgFastPath, "off by default")
+
+	t.Setenv("blockassembly_reorgFastPath", "true")
+	require.True(t, NewSettings().BlockAssembly.ReorgFastPath, "loader must read blockassembly_reorgFastPath")
+}
