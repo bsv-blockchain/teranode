@@ -17,9 +17,15 @@ import (
 // AddBlock, which inserts them in the block's own database transaction. Nothing reads the rows
 // yet, so nothing here can stop a block: a subtree without usable bitmaps means the block is
 // stored without rows, and a count that does not match is counted and logged while whatever rows
-// were built still go with the block. A block whose subtrees hold no position has no rows to go.
+// were built still go with the block. A block whose bitmaps files were all read but hold no
+// position has no rows to go, and counts as fewer.
 
-// laneBitmapReadConcurrency bounds the subtree bitmap reads of one block.
+// laneBitmapReadConcurrency bounds the subtree bitmap reads in flight across every block, not per
+// block, and a read a block stopped waiting for keeps its slot until it returns. The file subtree
+// store's reads share one process-wide pool of read permits with the block store
+// (filestore_read_concurrency), and a read stuck on a hung disk keeps its permit until the disk
+// answers. So however many blocks give up on stuck reads, those reads hold at most this many
+// permits: a later block finds no free slot, times out and is stored without rows.
 const laneBitmapReadConcurrency = 16
 
 // laneBitmapReadTimeout bounds how long the reads of one block's lane bitmaps files may hold up
@@ -110,7 +116,7 @@ type subtreeBitmapsRead struct {
 // read for its context once the read holds its read permit: a hung disk would otherwise hold the
 // block for as long as the disk does. Each read reports on a channel with room for every subtree,
 // so a read that finishes late never blocks, and one that never finishes keeps only its own
-// goroutine and its store's read permit until the disk answers.
+// goroutine, its store's read permit and its slot of the shared pool until the disk answers.
 func (u *BlockValidation) readSubtreeLaneBitmaps(ctx context.Context, block *model.Block) ([]lane.LaneBitmaps, int, int, int) {
 	n := len(block.Subtrees)
 
@@ -160,12 +166,20 @@ func (u *BlockValidation) readSubtreeLaneBitmaps(ctx context.Context, block *mod
 	return bitmaps, missing, unreadable, timedOut
 }
 
-// dispatchSubtreeLaneBitmapReads starts one read per subtree of block, at most
-// laneBitmapReadConcurrency at a time, and each read reports once on results. It stops when
-// readCtx ends, and no read starts after that: readSubtreeLaneBitmaps, which stops waiting at the
-// same moment, counts every subtree it has no report for as timed out.
+// laneBitmapReadSlots is the slot pool every block's bitmap reads share; see
+// laneBitmapReadConcurrency.
+func (u *BlockValidation) laneBitmapReadSlots() chan struct{} {
+	u.laneBitmapSlotsOnce.Do(func() { u.laneBitmapSlots = make(chan struct{}, laneBitmapReadConcurrency) })
+
+	return u.laneBitmapSlots
+}
+
+// dispatchSubtreeLaneBitmapReads starts one read per subtree of block, each once it holds a slot
+// of the pool every block shares, and each read reports once on results and frees its slot when
+// it returns. It stops when readCtx ends, and no read starts after that: readSubtreeLaneBitmaps,
+// which stops waiting at the same moment, counts every subtree it has no report for as timed out.
 func (u *BlockValidation) dispatchSubtreeLaneBitmapReads(readCtx context.Context, block *model.Block, results chan<- subtreeBitmapsRead) {
-	slots := make(chan struct{}, laneBitmapReadConcurrency)
+	slots := u.laneBitmapReadSlots()
 
 	for i, hash := range block.Subtrees {
 		select {
@@ -175,8 +189,11 @@ func (u *BlockValidation) dispatchSubtreeLaneBitmapReads(readCtx context.Context
 		}
 
 		// A slot that came free as the deadline passed can win the select above, which picks at
-		// random between ready cases. Check again, so no read starts after the deadline.
+		// random between ready cases. Check again, so no read starts after the deadline, and hand
+		// the slot back: only the read it was taken for frees it, and every block shares the pool.
 		if readCtx.Err() != nil {
+			<-slots
+
 			return
 		}
 

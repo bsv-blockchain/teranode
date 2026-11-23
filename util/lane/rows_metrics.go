@@ -85,7 +85,7 @@ func initRowsMetrics() {
 			Namespace: "teranode",
 			Subsystem: "lane",
 			Name:      "row_count_mismatches_total",
-			Help:      "Blocks whose map rows hold fewer or more members than the block's transaction count less its coinbase; counted and logged, and whatever rows were built still go with the block. A block whose subtrees hold no position has no rows, and with transactions besides its coinbase it counts as fewer. block is peer or own",
+			Help:      "Blocks whose map rows hold fewer or more members than the block's transaction count less its coinbase; counted and logged, and whatever rows were built still go with the block. Counted only when every subtree's lane bitmaps were found: one whose bitmaps hold no position has no rows and, with transactions besides its coinbase, counts as fewer. A block with any subtree's bitmaps absent, unreadable or not read in time gets no rows and is counted in teranode_lane_missing_bitmaps_total instead. For a peer's block the bitmaps are its subtrees' lane bitmaps files; for a block this node mined they are the ones block assembly kept. block is peer or own",
 		}, []string{"block", "direction"})
 		prometheusLaneMissingBitmaps = promauto.NewCounterVec(prometheus.CounterOpts{
 			Namespace: "teranode",

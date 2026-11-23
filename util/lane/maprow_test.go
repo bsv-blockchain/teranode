@@ -667,11 +667,14 @@ func TestCheckContainersRefusesAnEmptyBucket(t *testing.T) {
 }
 
 // A block of scattered takes fills its containers with close to the canonical 2,047 runs. Each
-// decodes in microseconds, where Roaring's Validate took milliseconds a container.
+// decodes in microseconds, where Roaring's Validate, which compares every pair of runs, takes
+// milliseconds a container. The bound is relative, against Validate on the same input in the same
+// run, so a slow or instrumented runner slows both: on a laptop the decode takes about 0.3 ms and
+// Validate about 130 ms.
 func TestDecodeHoleDataOfManyFullRunContainersIsQuick(t *testing.T) {
 	bm := roaring64.New()
 
-	for chunk := uint64(0); chunk < 64; chunk++ {
+	for chunk := uint64(0); chunk < 16; chunk++ {
 		for i := uint64(0); i < maxCanonicalRuns; i++ {
 			start := chunk<<chunkBits + i*6 + 1
 			bm.AddRange(start, start+3)
@@ -685,9 +688,16 @@ func TestDecodeHoleDataOfManyFullRunContainersIsQuick(t *testing.T) {
 
 	started := time.Now()
 	got, err := DecodeHoleData(data)
+	decode := time.Since(started)
+
 	require.NoError(t, err)
 	require.True(t, got.Equals(bm))
-	require.Less(t, time.Since(started), 100*time.Millisecond, "64 containers of 2,047 runs")
+
+	started = time.Now()
+	require.NoError(t, got.Validate())
+	validate := time.Since(started)
+
+	require.Less(t, 20*decode, validate, "16 containers of 2,047 runs: the decode takes %v, Roaring's Validate %v", decode, validate)
 }
 
 // FuzzCheckContainersMatchesValidate: on any buffer Roaring parses, the linear check refuses it

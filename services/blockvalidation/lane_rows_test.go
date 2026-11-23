@@ -155,6 +155,28 @@ func TestLaneRowsCountAMismatchAndStillGoWithTheBlock(t *testing.T) {
 	}
 }
 
+// A block whose bitmaps files were all read but hold no position, as for subtrees of transactions
+// cached before they had positions, has no rows to store, so AddBlock gets none, and it counts as
+// fewer when it has transactions besides its coinbase. It is not counted as missing bitmaps.
+func TestLaneRowsOfABlockWhoseBitmapsHoldNoPosition(t *testing.T) {
+	u, block := laneRowsFixture(t, settings.LaneMigrationShadow)
+
+	for _, h := range block.Subtrees {
+		empty, err := lane.EncodeSubtreeBitmaps(lane.SubtreeBitmaps{SubtreeHash: *h})
+		require.NoError(t, err)
+		require.NoError(t, u.subtreeStore.Set(context.Background(), h[:], fileformat.FileTypeSubtreeLaneBitmaps, empty, withOverwrite()...))
+	}
+
+	block.TransactionCount = 3
+
+	fewer := laneMetric(t, "teranode_lane_row_count_mismatches_total", "direction", lane.MismatchFewer)
+	absent := laneMetric(t, "teranode_lane_missing_bitmaps_total", "reason", lane.MissingBitmapsAbsent)
+
+	require.Nil(t, u.laneRows(context.Background(), block), "nil, so AddBlock is given no rows at all")
+	require.Equal(t, fewer+1, laneMetric(t, "teranode_lane_row_count_mismatches_total", "direction", lane.MismatchFewer))
+	require.Equal(t, absent, laneMetric(t, "teranode_lane_missing_bitmaps_total", "reason", lane.MissingBitmapsAbsent))
+}
+
 func TestLaneRowsSkipABlockWithMissingBitmaps(t *testing.T) {
 	t.Run("absent", func(t *testing.T) {
 		u, block := laneRowsFixture(t, settings.LaneMigrationShadow)
@@ -287,6 +309,48 @@ func TestLaneRowsGiveUpOnAHungSubtreeStore(t *testing.T) {
 
 	require.LessOrEqual(t, runtime.NumGoroutine(), baseline, "every late read reports and ends")
 	require.Equal(t, int32(laneBitmapReadConcurrency), store.gets.Load(), "no read starts after the deadline")
+}
+
+// Reads stuck on a hung disk keep the file store's read permits, which every file read in the
+// process shares, until the disk answers. The slots bound them across blocks, not per block: once
+// one block has left laneBitmapReadConcurrency reads stuck, the next block starts no read at all,
+// times out and goes without rows, so the stuck reads never hold more permits than that. Once they
+// return, blocks read again.
+func TestLaneRowsLeaveAtMostTheSlotsStuckAcrossBlocks(t *testing.T) {
+	const subtrees = laneBitmapReadConcurrency + 4
+
+	u, block, store := hungLaneRowsBlock(t, subtrees)
+
+	saved := laneBitmapReadTimeout
+	laneBitmapReadTimeout = 50 * time.Millisecond
+
+	t.Cleanup(func() { laneBitmapReadTimeout = saved })
+
+	require.Nil(t, u.laneRows(context.Background(), block))
+	require.Equal(t, int32(laneBitmapReadConcurrency), store.gets.Load(), "the first block leaves a full pool of reads stuck")
+
+	timedOut := laneMetric(t, "teranode_lane_missing_bitmaps_total", "reason", lane.MissingBitmapsTimedOut)
+
+	next := &model.Block{Subtrees: block.Subtrees, TransactionCount: block.TransactionCount}
+
+	started := time.Now()
+	require.Nil(t, u.laneRows(context.Background(), next))
+	require.Less(t, time.Since(started), time.Second)
+	require.Equal(t, int32(laneBitmapReadConcurrency), store.gets.Load(), "the next block starts no read while the stuck ones hold every slot")
+	require.Equal(t, timedOut+subtrees, laneMetric(t, "teranode_lane_missing_bitmaps_total", "reason", lane.MissingBitmapsTimedOut))
+
+	// The disk answers: the stuck reads return and free their slots, and a block reads again.
+	store.unhang()
+
+	settle := time.Now().Add(5 * time.Second)
+	for len(u.laneBitmapReadSlots()) > 0 && time.Now().Before(settle) {
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	require.Empty(t, u.laneBitmapReadSlots(), "every slot is free once the stuck reads return")
+
+	require.Nil(t, u.laneRows(context.Background(), next), "the store now answers with an error, so still no rows")
+	require.Equal(t, int32(laneBitmapReadConcurrency+subtrees), store.gets.Load(), "but every subtree was read")
 }
 
 // A block of more subtrees than are read at once still gets its rows, well inside the deadline:
@@ -431,5 +495,9 @@ func TestLaneRowsStartNoReadOnceTheCallerHasGivenUp(t *testing.T) {
 
 		require.LessOrEqual(t, runtime.NumGoroutine(), baseline, "run %d", run)
 		require.Zero(t, store.gets.Load(), "run %d: no read starts after the context ended", run)
+
+		// A slot the dispatcher took as the context ended goes back: every block shares the pool,
+		// so a slot kept here would be lost to every later block.
+		require.Empty(t, u.laneBitmapReadSlots(), "run %d: every slot is handed back", run)
 	}
 }
