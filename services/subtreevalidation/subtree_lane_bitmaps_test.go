@@ -406,24 +406,23 @@ func TestBlessMissingTransactions_KeepsThePositionTheCreateReturns(t *testing.T)
 	require.Equal(t, lane.Pack(8, 14), txMetaSlice[0].lanePosition)
 }
 
-// A remote validator's answer to an accepted transaction whose unlock failed carries no metadata,
-// so subtree validation reads the record back. At shadow that read takes the record's own lane
-// position too, which GetMeta does not read; at off it is GetMeta alone. A failure to read the
-// position leaves it at zero and is not an error, because the position is only measured.
-func TestBlessMissing_ReadsTheLanePositionBackAtShadow(t *testing.T) {
-	inpoints, err := subtreepkg.NewTxInpointsFromTx(tx1)
-	require.NoError(t, err)
-
+// At shadow subtree validation fills the lane position of metadata that came back without one,
+// GetMeta's, from the store; a record that has its position, or lanes off, needs no read, and a
+// failure to read it leaves it at zero without an error, because the position is only measured.
+func TestFillLanePosition(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
 		mode    settings.LaneMigration
+		has     uint64
 		getErr  error
 		getNone bool
 		want    uint64
+		reads   bool
 	}{
-		{name: "shadow", mode: settings.LaneMigrationShadow, want: lane.Pack(8, 14)},
-		{name: "shadow, the position not read", mode: settings.LaneMigrationShadow, getErr: errors.NewStorageError("down")},
-		{name: "shadow, the store returns no record and no error", mode: settings.LaneMigrationShadow, getNone: true},
+		{name: "shadow", mode: settings.LaneMigrationShadow, want: lane.Pack(8, 14), reads: true},
+		{name: "shadow, the position already there", mode: settings.LaneMigrationShadow, has: lane.Pack(3, 7), want: lane.Pack(3, 7)},
+		{name: "shadow, the position not read", mode: settings.LaneMigrationShadow, getErr: errors.NewStorageError("down"), reads: true},
+		{name: "shadow, the store returns no record and no error", mode: settings.LaneMigrationShadow, getNone: true, reads: true},
 		{name: "off", mode: settings.LaneMigrationOff},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -431,7 +430,6 @@ func TestBlessMissing_ReadsTheLanePositionBackAtShadow(t *testing.T) {
 			tSettings.UtxoStore.LaneMigration = tc.mode
 
 			store := &utxo.MockUtxostore{}
-			store.On("GetMeta", mock.Anything, mock.Anything, mock.Anything).Return(&meta.Data{Fee: 1, SizeInBytes: 1, TxInpoints: inpoints})
 
 			switch {
 			case tc.getErr != nil, tc.getNone:
@@ -440,86 +438,48 @@ func TestBlessMissing_ReadsTheLanePositionBackAtShadow(t *testing.T) {
 				store.On("Get", mock.Anything, mock.Anything, []fields.FieldName{fields.LanePosition}).Return(&meta.Data{LanePosition: lane.Pack(8, 14)}, nil)
 			}
 
-			server := &Server{
-				logger:          ulogger.TestLogger{},
-				settings:        tSettings,
-				utxoStore:       store,
-				validatorClient: &failingValidator{err: errors.NewTxUnlockFailedError("unlock failed")},
-			}
+			server := &Server{logger: ulogger.TestLogger{}, settings: tSettings, utxoStore: store}
 
-			md, unlockFailed, err := server.blessMissing(context.Background(), chainhash.Hash{}, chainhash.Hash{}, tx1, 2, map[uint32]bool{}, validator.ProcessOptions())
-			require.NoError(t, err)
-			require.True(t, unlockFailed)
+			md := &meta.Data{Fee: 1, LanePosition: tc.has}
+			server.fillLanePosition(context.Background(), &chainhash.Hash{0x01}, md)
 			require.Equal(t, tc.want, md.LanePosition)
 
-			if tc.mode == settings.LaneMigrationOff {
+			if !tc.reads {
 				store.AssertNotCalled(t, "Get", mock.Anything, mock.Anything, mock.Anything)
 			}
 		})
 	}
 }
 
-// A validator that finds the transaction already stored answers with metadata GetMeta read, which
-// has no lane position. At shadow subtree validation reads the position from the store; at off it
-// takes the answer as it is.
-func TestBlessMissing_ReadsThePositionOfATransactionAlreadyStored(t *testing.T) {
-	inpoints, err := subtreepkg.NewTxInpointsFromTx(tx1)
-	require.NoError(t, err)
+// A transaction subtree validation validates itself keeps the position its record holds even when
+// the validator's answer has none, as an older remote validator's or the SQL store's create gives:
+// at shadow it is read from the store before it goes into the subtree's metadata.
+func TestBlessMissingTransactions_FillsThePositionTheAnswerLacks(t *testing.T) {
+	server, _, txs, _ := newUnlockFailureServer(t, true, 0)
+	server.settings.UtxoStore.LaneMigration = settings.LaneMigrationShadow
+	server.validatorClient = &positionValidator{Interface: server.validatorClient, position: lane.None}
+	server.utxoStore = &lanePositionStore{Store: server.utxoStore, position: lane.Pack(8, 21)}
 
-	for _, tc := range []struct {
-		mode settings.LaneMigration
-		want uint64
-	}{
-		{mode: settings.LaneMigrationShadow, want: lane.Pack(8, 14)},
-		{mode: settings.LaneMigrationOff},
-	} {
-		t.Run(string(tc.mode), func(t *testing.T) {
-			tSettings := test.CreateBaseTestSettings(t)
-			tSettings.UtxoStore.LaneMigration = tc.mode
+	missing := []missingTx{{tx: txs[1], idx: 0}}
+	txMetaSlice := make([]metaSliceItem, len(missing))
 
-			store := &utxo.MockUtxostore{}
-			store.On("Get", mock.Anything, mock.Anything, []fields.FieldName{fields.LanePosition}).Return(&meta.Data{LanePosition: lane.Pack(8, 14)}, nil)
+	require.NoError(t, server.blessMissingTransactions(context.Background(), chainhash.Hash{}, missing, "", "", txMetaSlice, 2, map[uint32]bool{}, true))
+	require.Equal(t, lane.Pack(8, 21), txMetaSlice[0].lanePosition)
+}
 
-			server := &Server{
-				logger:          ulogger.TestLogger{},
-				settings:        tSettings,
-				utxoStore:       store,
-				validatorClient: &answeringValidator{md: &meta.Data{Fee: 1, SizeInBytes: 1, TxInpoints: inpoints}},
-			}
+// lanePositionStore answers a read that names only fields.LanePosition with position, as a store
+// holding the record's position does; every other call goes through.
+type lanePositionStore struct {
+	utxo.Store
+	position uint64
+}
 
-			md, _, err := server.blessMissing(context.Background(), chainhash.Hash{}, chainhash.Hash{}, tx1, 2, map[uint32]bool{}, validator.ProcessOptions())
-			require.NoError(t, err)
-			require.Equal(t, tc.want, md.LanePosition)
-		})
+func (s *lanePositionStore) Get(ctx context.Context, hash *chainhash.Hash, f ...fields.FieldName) (*meta.Data, error) {
+	if len(f) == 1 && f[0] == fields.LanePosition {
+		return &meta.Data{LanePosition: s.position}, nil
 	}
-}
 
-// answeringValidator answers every validation with md, as a validator does for a transaction it
-// found already stored.
-type answeringValidator struct {
-	validator.Interface
-	md *meta.Data
-}
-
-func (a *answeringValidator) ValidateWithOptions(context.Context, *bt.Tx, uint32, *validator.Options) (*meta.Data, error) {
-	md := *a.md
-	return &md, nil
-}
-
-// A record read back that already holds its lane position needs no second read for it.
-func TestReadBackMeta_ReadsNoPositionItAlreadyHas(t *testing.T) {
-	tSettings := test.CreateBaseTestSettings(t)
-	tSettings.UtxoStore.LaneMigration = settings.LaneMigrationShadow
-
-	store := &utxo.MockUtxostore{}
-	store.On("GetMeta", mock.Anything, mock.Anything, mock.Anything).Return(&meta.Data{Fee: 1, LanePosition: lane.Pack(3, 7)})
-
-	server := &Server{logger: ulogger.TestLogger{}, settings: tSettings, utxoStore: store}
-
-	stored := &meta.Data{}
-	require.NoError(t, server.readBackMeta(context.Background(), &chainhash.Hash{0x01}, stored))
-	require.Equal(t, lane.Pack(3, 7), stored.LanePosition)
-	store.AssertNotCalled(t, "Get", mock.Anything, mock.Anything, mock.Anything)
+	return s.Store.Get(ctx, hash, f...)
 }
 
 // positionValidator validates as its validator does and gives the created record position, as a
