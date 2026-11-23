@@ -311,8 +311,6 @@ func TestLaneRowsGiveUpOnAHungSubtreeStore(t *testing.T) {
 	require.Equal(t, int32(laneBitmapReadConcurrency), store.gets.Load(), "no read starts after the deadline")
 }
 
-// A block of more subtrees than are read at once still gets its rows, well inside the deadline:
-// each finished read frees its slot for the next.
 // Reads stuck on a hung disk keep the file store's read permits, which every file read in the
 // process shares, until the disk answers. The slots bound them across blocks, not per block: once
 // one block has left laneBitmapReadConcurrency reads stuck, the next block starts no read at all,
@@ -355,6 +353,8 @@ func TestLaneRowsLeaveAtMostTheSlotsStuckAcrossBlocks(t *testing.T) {
 	require.Equal(t, int32(laneBitmapReadConcurrency+subtrees), store.gets.Load(), "but every subtree was read")
 }
 
+// A block of more subtrees than are read at once still gets its rows, well inside the deadline:
+// each finished read frees its slot for the next.
 func TestLaneRowsReadMoreSubtreesThanRunAtOnce(t *testing.T) {
 	const subtrees = laneBitmapReadConcurrency + 1
 
