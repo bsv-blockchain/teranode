@@ -773,7 +773,9 @@ func TestOwnLaneRowsWaitsForBitmapsStillBeingStored(t *testing.T) {
 			rows := server.ownLaneRows(t.Context(), &model.Block{Header: laneTestHeader(), Subtrees: []*chainhash.Hash{&other}, TransactionCount: 2})
 
 			require.Nil(t, rows)
-			require.GreaterOrEqual(t, time.Since(start), ownLaneBitmapsWait, "it waited")
+			waited := time.Since(start)
+			require.GreaterOrEqual(t, waited, ownLaneBitmapsWait, "it waited")
+			require.Less(t, waited, ownLaneBitmapsWait+time.Second, "it waited no longer than the bound, with scheduling slack")
 			require.Equal(t, before+1, ownLaneMetric(t, "teranode_lane_missing_bitmaps_total", labels))
 		})
 	}
@@ -1208,4 +1210,10 @@ func TestSubtreeLanePositionsReadsAMemberReAddedAfterEveryRead(t *testing.T) {
 	require.Zero(t, lost)
 	require.Zero(t, laneBits.Unpositioned())
 	require.Equal(t, []uint64{20, 21, 22}, laneBits.Subtree(*st.RootHash()).Lanes[4].ToArray())
+}
+
+// TestOwnLaneBitmapsWaitIsOneSecond pins the production bound: storing our block, and so announcing
+// it, is held back at most one second for a subtree whose bitmaps are not kept.
+func TestOwnLaneBitmapsWaitIsOneSecond(t *testing.T) {
+	require.Equal(t, time.Second, ownLaneBitmapsWait)
 }

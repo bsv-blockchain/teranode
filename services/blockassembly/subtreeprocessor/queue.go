@@ -407,6 +407,12 @@ func (q *LockFreeQueue) enqueueBatchBounded(nodes []subtree.Node, txInpoints []*
 // enqueuePositionedBatchBounded is enqueueBatchBounded for a batch that carries each node's own
 // lane position (util/lane), in positions, parallel to nodes, or nil for none.
 func (q *LockFreeQueue) enqueuePositionedBatchBounded(nodes []subtree.Node, txInpoints []*subtree.TxInpoints, exemptHeld bool, validatedHeights []uint32, positions []uint64) Admission {
+	// One position per node, or none: the drains read positions[i] for nodes[i], so a column of
+	// another length carries no positions, as the gRPC handler treats one.
+	if len(positions) != len(nodes) {
+		positions = nil
+	}
+
 	n := int64(len(nodes)) // gosec:nolint
 
 	if q.maxItems <= 0 && (q.maxHeld <= 0 || exemptHeld) {

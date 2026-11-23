@@ -1000,14 +1000,20 @@ func (ba *BlockAssembly) buildSubtreeMeta(subtreeRequest subtreeprocessor.NewSub
 			}
 
 			if !found && subtreeRequest.DeletedTxs != nil {
-				// Fallback: check if transaction was deleted during async storage
+				// Fallback: check if transaction was deleted during async storage. Its lane
+				// position is read from the backup beside it first: the backups are written
+				// position first and dropped inpoints first, so inpoints found here come with
+				// their position (see backUpLanePosition).
+				var removedPosition uint64
+				if laneBits != nil {
+					removedPosition = removedLanePosition(subtreeRequest.ParentTxMap, subtreeRequest.DeletedPositions, node.Hash)
+				}
+
 				var deletedTxInpoints subtreepkg.TxInpoints
 				deletedTxInpoints, found = subtreeRequest.DeletedTxs.Get(node.Hash)
 				if found {
 					txInpoints = &deletedTxInpoints
-
-					// and its lane position from the backup beside it
-					position = removedLanePosition(subtreeRequest.ParentTxMap, subtreeRequest.DeletedPositions, node.Hash)
+					position = removedPosition
 				}
 			}
 

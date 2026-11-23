@@ -558,3 +558,21 @@ func TestTxEraFilterKeepsEachTxsLanePosition(t *testing.T) {
 	require.Len(t, batch.nodes, 2)
 	require.Equal(t, []uint64{lane.Pack(3, 1), lane.Pack(3, 3)}, batch.positions)
 }
+
+// TestPositionsOfTheWrongLengthAreDropped: a batch whose positions column does not have one entry
+// per node is queued without positions, so the drains, which read positions[i] for nodes[i], never
+// index past it; its txs enter the pool without a position.
+func TestPositionsOfTheWrongLengthAreDropped(t *testing.T) {
+	stp, _ := lanePoolProcessor(t, false, true)
+
+	nodes := []subtreepkg.Node{
+		{Hash: lanePoolTxHash(500), Fee: 1, SizeInBytes: 1},
+		{Hash: lanePoolTxHash(501), Fee: 1, SizeInBytes: 1},
+	}
+	inpoints := []*subtreepkg.TxInpoints{lanePoolInpoints(500), lanePoolInpoints(501)}
+
+	require.Equal(t, Admitted, stp.AddPositionedBatchBounded(nodes, inpoints, false, nil, []uint64{lane.Pack(4, 1)}))
+	require.NoError(t, stp.dequeueDuringBlockMovement(nil, nil, nil, true))
+
+	requirePoolPositions(t, stp, map[chainhash.Hash]uint64{nodes[0].Hash: 0, nodes[1].Hash: 0})
+}

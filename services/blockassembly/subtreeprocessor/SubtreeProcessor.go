@@ -1639,6 +1639,12 @@ func (stp *SubtreeProcessor) forgetLanePosition(hash chainhash.Hash) {
 // backUpLanePosition saves hash's lane position beside its deletedTxs backup before the tx is
 // deleted from currentTxMap, at utxostore_laneMigration shadow, so a subtree being stored with it
 // meanwhile keeps it in its lane bitmaps.
+//
+// The two backups are written position first and dropped inpoints first (cleanupDeletedTxs), and a
+// storage worker reads the position before the inpoints. So a worker that finds the inpoints
+// backup also finds the position backup, even when another storage request's cleanup drops them
+// meanwhile: a worker whose position read comes after the drop finds no inpoints either, and its
+// meta pass fails rather than storing bitmaps without the tx.
 func (stp *SubtreeProcessor) backUpLanePosition(hash chainhash.Hash) {
 	if stp.deletedPositions == nil {
 		return
@@ -4204,10 +4210,11 @@ func (stp *SubtreeProcessor) removeTxFromSubtrees(ctx context.Context, hash chai
 			txInpoints, _ = stp.currentTxMap.Get(hash)
 		}
 
+		// the position backup goes in before the inpoints backup (see backUpLanePosition)
+		stp.backUpLanePosition(hash)
 		if txInpoints != nil {
 			stp.deletedTxs.Set(hash, *txInpoints)
 		}
-		stp.backUpLanePosition(hash)
 		stp.currentTxMap.Delete(hash)
 
 		// we found the transaction in a subtree
@@ -4294,10 +4301,11 @@ func (stp *SubtreeProcessor) removeTxsFromSubtrees(ctx context.Context, hashes [
 				txInpoints, _ = stp.currentTxMap.Get(hash)
 			}
 
+			// the position backup goes in before the inpoints backup (see backUpLanePosition)
+			stp.backUpLanePosition(hash)
 			if txInpoints != nil {
 				stp.deletedTxs.Set(hash, *txInpoints)
 			}
-			stp.backUpLanePosition(hash)
 			stp.currentTxMap.Delete(hash)
 
 			// we found the transaction in a subtree
@@ -4460,11 +4468,12 @@ func (stp *SubtreeProcessor) reChainSubtrees(fromIndex int) error {
 				return errors.NewProcessingError("error getting txInpoints from currentTxMap for %s", node.Hash.String())
 			}
 
-			// Save to deleted backup before removing (protects brief window during delete-and-readd)
-			stp.deletedTxs.Set(node.Hash, *parents)
+			// Save to deleted backup before removing (protects brief window during delete-and-readd);
+			// the position backup goes in before the inpoints backup (see backUpLanePosition)
 			if position != 0 && stp.deletedPositions != nil {
 				stp.deletedPositions.Set(node.Hash, position)
 			}
+			stp.deletedTxs.Set(node.Hash, *parents)
 
 			// Delete from currentTxMap so addNode won't skip it as a duplicate
 			stp.currentTxMap.Delete(node.Hash)
