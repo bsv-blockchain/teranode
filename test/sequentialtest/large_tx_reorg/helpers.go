@@ -10,6 +10,7 @@ import (
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/services/blockassembly/blockassembly_api"
 	"github.com/bsv-blockchain/teranode/settings"
+	"github.com/bsv-blockchain/teranode/stores/utxo"
 	aerospikestore "github.com/bsv-blockchain/teranode/stores/utxo/aerospike"
 	"github.com/bsv-blockchain/teranode/test"
 	"github.com/bsv-blockchain/teranode/util"
@@ -103,7 +104,7 @@ func verifySpentExtraRecs(t *testing.T, td *daemon.TestDaemon, tx *bt.Tx, expect
 	txID := tx.TxIDChainHash()
 
 	// Cast UTXO store to Aerospike store to access client and settings
-	aeroStore, ok := td.UtxoStore.(*aerospikestore.Store)
+	aeroStore, ok := utxo.As[*aerospikestore.Store](td.UtxoStore)
 	require.True(t, ok, "UTXO store must be Aerospike store")
 
 	// Get the underlying Aerospike client

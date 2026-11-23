@@ -134,8 +134,10 @@ func TestGetSubtreeTransactions(t *testing.T) {
 		txns, subtreeHash, repo := setupSubtreeData(t)
 
 		// Get the transactions from the repository
-		txMap, err := repo.GetSubtreeTransactions(context.Background(), subtreeHash)
+		txMap, releaseSubtreeTxs, err := repo.GetSubtreeTransactions(context.Background(), subtreeHash)
 		require.NoError(t, err)
+
+		defer releaseSubtreeTxs()
 		assert.Len(t, txMap, 2)
 
 		for _, txHash := range txns {

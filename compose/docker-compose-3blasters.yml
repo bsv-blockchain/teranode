@@ -150,6 +150,7 @@ services:
       ]
     environment:
       SETTINGS_CONTEXT: "docker.teranode1.test"
+      grpc_admin_api_key: docker-e2e-test-admin-key
       JAEGER_SERVICE_NAME: teranode1
       JAEGER_AGENT_HOST: localhost
       JAEGER_AGENT_PORT: 6831
@@ -221,6 +222,7 @@ services:
       ]
     environment:
       SETTINGS_CONTEXT: "docker.teranode2.test"
+      grpc_admin_api_key: docker-e2e-test-admin-key
       JAEGER_SERVICE_NAME: teranode2
       JAEGER_AGENT_HOST: localhost
       JAEGER_AGENT_PORT: 6831
@@ -292,6 +294,7 @@ services:
       ]
     environment:
       SETTINGS_CONTEXT: "docker.teranode3.test"
+      grpc_admin_api_key: docker-e2e-test-admin-key
       JAEGER_SERVICE_NAME: teranode3
       JAEGER_AGENT_HOST: localhost
       JAEGER_AGENT_PORT: 6831
@@ -368,6 +371,7 @@ services:
       ]
     environment:
       SETTINGS_CONTEXT: "docker.teranode1.test.coinbase"
+      grpc_admin_api_key: docker-e2e-test-admin-key
       profilerAddr: "localhost:17092"
       coinbase_rpc_url: "http://teranode1:9292"
       COINBASE_RPC_USER: "bitcoin"
@@ -428,6 +432,7 @@ services:
       ]
     environment:
       SETTINGS_CONTEXT: "docker.teranode2.test.coinbase"
+      grpc_admin_api_key: docker-e2e-test-admin-key
       profilerAddr: "localhost:27092"
       COINBASE_RPC_URL: "http://teranode2:9292"
       COINBASE_RPC_USER: "bitcoin"
@@ -483,6 +488,7 @@ services:
       ]
     environment:
       SETTINGS_CONTEXT: "docker.teranode3.test.coinbase"
+      grpc_admin_api_key: docker-e2e-test-admin-key
       profilerAddr: "localhost:37092"
       COINBASE_RPC_URL: "http://teranode3:9292"
       COINBASE_RPC_USER: "bitcoin"
@@ -509,6 +515,7 @@ services:
       - teranode1
     environment:
       SETTINGS_CONTEXT: "docker.teranode1.test.coinbase"
+      grpc_admin_api_key: docker-e2e-test-admin-key
       COINBASE_RPC_URL: "http://teranode1:9292"
       startCoinbase: "false"
       startFaucet: "false"
@@ -552,6 +559,7 @@ services:
       ]
     environment:
       SETTINGS_CONTEXT: "docker.teranode1.test.coinbase"
+      grpc_admin_api_key: docker-e2e-test-admin-key
       LOG_LEVEL: "debug"
       COINBASE_WALLET_PRIVATE_KEY: "L56TgyTpDdvL3W24SMoALYotibToSCySQeo4pThLKxw6EFR6f93Q"
     volumes:
@@ -581,6 +589,7 @@ services:
       ]
     environment:
       SETTINGS_CONTEXT: "docker.teranode2.test.coinbase"
+      grpc_admin_api_key: docker-e2e-test-admin-key
       LOG_LEVEL: "debug"
       COINBASE_WALLET_PRIVATE_KEY: "KyAwSjuXZNgj78w3W7mR1fVMbPFu2heaCJJkWK5Yy58NZ4xafV6k"
     volumes:
@@ -610,6 +619,7 @@ services:
       ]
     environment:
       SETTINGS_CONTEXT: "docker.teranode3.test.coinbase"
+      grpc_admin_api_key: docker-e2e-test-admin-key
       LOG_LEVEL: "debug"
       COINBASE_WALLET_PRIVATE_KEY: "L3NVjmwg3nC7ZPrwMVF6FXiG1a1RZ89nhizmJVctGztRKLYrhtFL"
     volumes:
@@ -626,6 +636,7 @@ services:
       - teranode2
     environment:
       SETTINGS_CONTEXT: "docker.teranode2.test.coinbase"
+      grpc_admin_api_key: docker-e2e-test-admin-key
       startCoinbase: "false"
       startFaucet: "false"
       LOG_LEVEL: "debug"
@@ -654,6 +665,7 @@ services:
       - teranode3
     environment:
       SETTINGS_CONTEXT: "docker.teranode3.test.coinbase"
+      grpc_admin_api_key: docker-e2e-test-admin-key
       startCoinbase: "false"
       startFaucet: "false"
       LOG_LEVEL: "debug"

@@ -11,7 +11,7 @@ This guide assists you in setting up the Teranode project on your machine. The b
     - [3.2 (Recommended) Use a Python Virtual Environment to install PyYAML](#32-recommended-use-a-python-virtual-environment-to-install-pyyaml)
     - [3.3 Install Dependencies Within the Virtual Environment](#33-install-dependencies-within-the-virtual-environment)
     - [3.4 Verify Installation](#34-verify-installation)
-    - [Alternative: Use pipx for CLI tools - NOT recommended for Teranode Development](#alternative-use-pipx-for-cli-tools-not-recommended-for-teranode-development)
+    - [Alternative: Use pipx for CLI tools - NOT recommended for Teranode Development](#alternative-use-pipx-for-cli-tools---not-recommended-for-teranode-development)
 4. [Clone the Project and Install Dependencies](#4-clone-the-project-and-install-dependencies)
 5. [Configure Settings](#5-configure-settings)
     - [5.1 Introducing developer-specific settings in `settings_local.conf`](#51-introducing-developer-specific-settings-in-settings_localconf)
@@ -514,6 +514,8 @@ For CI or scripting:
 ### Re-running init
 
 Running `init` again presents your previous choices as defaults - just press enter to keep them. This is useful for changing a single setting (e.g. switching from sqlite to postgres) without re-entering everything.
+
+`init` also generates `rpc_user.dev.<name>` and `rpc_pass.dev.<name>` in `settings_local.conf`, because `settings.conf` no longer ships an RPC credential pair for dev contexts. If your dev block was written by an older `init`, `teranode-dev rpc` and `teranode-dev generate` get `401 Unauthorized` until you re-run `init`; `teranode-dev doctor` reports the missing pair. Re-running keeps an existing password. The generated pair overrides any `rpc_user`/`rpc_pass` you set without a context suffix, so scripts calling the node directly should use it.
 
 ## Next Steps
 

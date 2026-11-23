@@ -24,7 +24,7 @@ import (
 // reuses the same per-record encoding (UTXOWrapper.Bytes()) that the real
 // persister writes, so the file the seeder reads back is byte-identical to
 // what production would have produced for these records.
-func writeCompleteSnapshotFile(t *testing.T, wrappers []*utxopersister.UTXOWrapper) string {
+func writeCompleteSnapshotFile(t testing.TB, wrappers []*utxopersister.UTXOWrapper) string {
 	t.Helper()
 
 	var blockHash chainhash.Hash
@@ -65,7 +65,7 @@ func writeCompleteSnapshotFile(t *testing.T, wrappers []*utxopersister.UTXOWrapp
 }
 
 // importSnapshotFile drives the file through the same functions Seeder's
-// processUTXOs uses: readUTXOWrapperFile feeds a channel that processUTXO
+// processUTXOs uses: readUTXOFrames feeds a channel of frames that are decoded and passed to processUTXO
 // drains into store, exactly as worker() does, but without the extra worker
 // pool machinery that's orthogonal to file-format correctness.
 func importSnapshotFile(t *testing.T, path string, store *utxosql.Store) error {
@@ -73,18 +73,23 @@ func importSnapshotFile(t *testing.T, path string, store *utxosql.Store) error {
 
 	f, reader := openForReading(t, path)
 
-	utxoWrapperCh := make(chan *utxopersister.UTXOWrapper, 10)
+	frameCh := make(chan []byte, 10)
 
 	readErrCh := make(chan error, 1)
 
 	go func() {
-		readErrCh <- readUTXOWrapperFile(context.Background(), ulogger.TestLogger{}, f, reader, utxoWrapperCh)
+		readErrCh <- readUTXOFrames(context.Background(), ulogger.TestLogger{}, f, reader, frameCh, "all", nil)
 	}()
 
 	var processErr error
 
-	for w := range utxoWrapperCh {
-		if err := processUTXO(context.Background(), store, w, nil); err != nil && processErr == nil {
+	for frame := range frameCh {
+		w, err := utxopersister.DecodeUTXOWrapperFrame(frame)
+		if err == nil {
+			err = processUTXO(context.Background(), store, w, nil, false)
+		}
+
+		if err != nil && processErr == nil {
 			processErr = err
 		}
 	}
@@ -100,7 +105,7 @@ func importSnapshotFile(t *testing.T, path string, store *utxosql.Store) error {
 
 // TestSeederImport_RoundTripsRealSnapshotFile writes a real .utxo-set file
 // using the persister's own UTXOWrapper record encoding, feeds it through the
-// seeder's import path (readUTXOWrapperFile -> processUTXO), and checks the
+// seeder's import path (readUTXOFrames -> DecodeUTXOWrapperFrame -> processUTXO), and checks the
 // exact record content - not just counts - survives into the UTXO store.
 // This is the round-trip half of the two tests the audit recommended
 // alongside the truncated-file regression test.

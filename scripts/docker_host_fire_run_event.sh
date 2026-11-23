@@ -18,9 +18,17 @@ wait_for_service localhost 18087
 # Send gRPC requests to each teranode container
 echo "Sending gRPC requests..."
 
-# Replace `your.package.Service/YourMethod` with the actual service and method names
-grpcurl -plaintext localhost:38087 blockchain_api.BlockchainAPI.Run
-grpcurl -plaintext localhost:28087 blockchain_api.BlockchainAPI.Run
-grpcurl -plaintext localhost:18087 blockchain_api.BlockchainAPI.Run
+# Blockchain requires x-api-key on Run and serves no reflection by default, so
+# pass the key and load the service definition from the proto files.
+api_key=${grpc_admin_api_key:-docker-e2e-test-admin-key}
+repo_root=$(cd "$(dirname "$0")/.." && pwd)
+
+for port in 38087 28087 18087; do
+  grpcurl -plaintext \
+    -H "x-api-key: $api_key" \
+    -import-path "$repo_root" \
+    -proto services/blockchain/blockchain_api/blockchain_api.proto \
+    localhost:$port blockchain_api.BlockchainAPI.Run
+done
 
 echo "gRPC requests sent."

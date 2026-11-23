@@ -109,7 +109,7 @@ func (s *SQL) GetBlockByHeight(ctx context.Context, height uint32) (*model.Block
 				SELECT b.hash
 				FROM blocks b
 				WHERE b.invalid = false
-				ORDER BY chain_work DESC, peer_id ASC, id ASC
+				ORDER BY chain_work DESC, id ASC
 				LIMIT 1
 			)
 			UNION ALL
@@ -171,6 +171,12 @@ func (s *SQL) GetBlockByHeight(ctx context.Context, height uint32) (*model.Block
 	defer rows.Close()
 
 	if !rows.Next() {
+		// Next also ends on a read error. Only an empty result is a miss; a fault
+		// read as one answers "no block at this height" for a height the node holds.
+		if err = rows.Err(); err != nil {
+			return nil, errors.NewStorageError("failed to read block by height for height %d", height, err)
+		}
+
 		return nil, errors.NewBlockNotFoundError("failed to get block by height for height %d", height, nil)
 	}
 

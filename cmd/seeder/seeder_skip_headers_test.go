@@ -84,7 +84,43 @@ func TestSeeder_SkipHeaders_CorruptedHeaderFileFailsVerification(t *testing.T) {
 	require.NoError(t, err)
 	tSettings.UtxoStore.UtxoStore = utxoStoreURL
 
-	err = Seeder(ulogger.TestLogger{}, tSettings, dir, hash, true /* skipHeaders */, false /* skipUTXOs */, false /* force */)
+	err = Seeder(ulogger.TestLogger{}, tSettings, dir, hash, true /* skipHeaders */, false /* skipUTXOs */, false /* force */, false /* recoverCheckpoint */, false /* skipChecksum */)
 	require.Error(t, err, "a corrupted headers file must not be silently consumed when -skipHeaders is set")
 	require.Contains(t, err.Error(), "checksum verification failed for headers file")
+}
+
+// -skipChecksum is for callers that already verified the snapshot sidecars
+// (seed-fetch.sh does): the seeder must not re-read the files to verify them.
+// A stale sidecar that would otherwise fail verification proves it was skipped.
+func TestSeeder_SkipChecksum_DoesNotVerifySidecars(t *testing.T) {
+	dir := t.TempDir()
+	hash := "abc123"
+
+	headerFile := filepath.Join(dir, hash+".utxo-headers")
+	utxoFile := filepath.Join(dir, hash+".utxo-set")
+	writeEmptyUTXOSetFile(t, utxoFile)
+
+	// Stale sidecars for both files: verification would reject either one.
+	require.NoError(t, os.WriteFile(headerFile, []byte("headers"), 0o644))
+
+	for _, f := range []string{headerFile, utxoFile} {
+		sum := sha256.Sum256([]byte("not the file content"))
+		sidecar := hex.EncodeToString(sum[:]) + "  " + filepath.Base(f) + "\n"
+		require.NoError(t, os.WriteFile(f+checksumSidecarExtension, []byte(sidecar), 0o644))
+	}
+
+	tSettings := test.CreateBaseTestSettings(t)
+
+	blockchainStoreURL, err := url.Parse("sqlitememory:///")
+	require.NoError(t, err)
+	tSettings.BlockChain.StoreURL = blockchainStoreURL
+
+	utxoStoreURL, err := url.Parse("sqlitememory:///")
+	require.NoError(t, err)
+	tSettings.UtxoStore.UtxoStore = utxoStoreURL
+
+	err = Seeder(ulogger.TestLogger{}, tSettings, dir, hash, true /* skipHeaders */, false /* skipUTXOs */, false /* force */, false /* recoverCheckpoint */, true /* skipChecksum */)
+	if err != nil {
+		require.NotContains(t, err.Error(), "checksum verification failed")
+	}
 }

@@ -21,7 +21,7 @@ Aerospike is a high-performance NoSQL database used as a backend for Teranode's 
 | ReadPolicyURL | *url.URL | "defaultReadPolicy" | aerospike_readPolicy | **CRITICAL** - Read operation policy URL |
 | WritePolicyURL | *url.URL | "defaultWritePolicy" | aerospike_writePolicy | **CRITICAL** - Write operation policy URL |
 | QueryPolicyURL | *url.URL | "defaultQueryPolicy" | aerospike_queryPolicy | **CRITICAL** - Query operation policy URL |
-| UseDefaultBasePolicies | bool | false | aerospike_useDefaultBasePolicies | Use Aerospike default base policies |
+| UseDefaultBasePolicies | bool | false | aerospike_useDefaultBasePolicies | Skips parsing the policy URLs; do not use (see Policy Configuration Behavior) |
 | UseDefaultPolicies | bool | false | aerospike_useDefaultPolicies | Use Aerospike default policies |
 
 ### Performance and Debugging
@@ -29,7 +29,7 @@ Aerospike is a high-performance NoSQL database used as a backend for Teranode's 
 | Setting | Type | Default | Environment Variable | Usage |
 |---------|------|---------|---------------------|-------|
 | WarmUp | bool | true | aerospike_warmUp | **CRITICAL** - Enable connection pool warm-up |
-| StoreBatcherDuration | time.Duration | 10ms | aerospike_storeBatcherDuration | Store batcher flush duration |
+| StoreBatcherDuration | time.Duration | 0 (unset) | aerospike_storeBatcherDuration | DEPRECATED: overrides `utxostore_storeBatcherDurationMillis` when set |
 | StatsRefreshDuration | time.Duration | 5s | aerospike_statsRefresh | Statistics refresh interval |
 | EnableClientMetrics | bool | true | aerospike_enable_client_metrics | Gate the `client.Stats()` polling goroutine |
 | Debug | bool | false | aerospike_debug | Enable Aerospike debug logging |
@@ -46,56 +46,66 @@ aerospike:///?MaxRetries=5&SleepBetweenRetries=500ms&TotalTimeout=1s&SocketTimeo
 
 **Supported Policy Parameters:**
 
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| MaxRetries | int | Maximum retry attempts |
-| SleepBetweenRetries | duration | Delay between retry attempts |
-| SleepMultiplier | int | Backoff multiplier for retries |
-| TotalTimeout | duration | Total operation timeout |
-| SocketTimeout | duration | Socket-level timeout |
-| ConcurrentNodes | int | Number of concurrent node connections |
+`getAerospikeClient` (`util/aerospike.go`) reads only these query keys. It ignores any other key in the URL. A key that is not set keeps the Aerospike client default.
+
+| Parameter | Type | Read | Write | Batch | Query | Description |
+|-----------|------|------|-------|-------|-------|-------------|
+| MaxRetries | int | yes | yes | yes | yes | Maximum retry attempts |
+| TotalTimeout | duration | yes | yes | yes | yes | Total operation timeout |
+| SocketTimeout | duration | yes | yes | yes | yes | Socket-level timeout |
+| SleepBetweenRetries | duration | yes | yes | yes | yes | Delay between retry attempts |
+| SleepMultiplier | float | yes | yes | yes | yes | Backoff multiplier for retries |
+| ExitFastOnExhaustedConnectionPool | bool | yes | yes | no | no | Fail at once when the connection pool is exhausted |
+| AllowInlineSSD | bool | no | no | yes | no | Process batch keys inline on SSD namespaces |
+| ConcurrentNodes | int | no | no | yes | no | Number of nodes the batch is sent to at the same time; 0 sends to all |
+
+The read mode and the commit level are not configurable:
+
+- Reads use the client default read mode: `ReadModeAP=ONE` for an available-mode namespace, and `ReadModeSC=SESSION` for a strong-consistency namespace.
+- Writes made with the write and batch write policies use `CommitLevel=COMMIT_ALL`. A write is acknowledged only when the master and every reachable replica hold it. The exception is the pruner's own record removals, which use `COMMIT_MASTER` while `pruner_relaxRemovalCommitLevel` is true (the default).
+
+For the consistency mode of the UTXO namespace, see [UTXO Store](../../../topics/stores/utxo.md#consistency-mode).
 
 ### Policy Types
 
 **Batch Policy** (for bulk operations):
 
-- Higher timeout (default: 64s total, 10s socket)
-- Used for batch read/write operations
-- ConcurrentNodes parameter controls parallelism
+- `settings.conf`: 5m total, 60s socket
+- Used for batch read and write operations
+- `ConcurrentNodes` controls how many nodes the batch is sent to at the same time
 
 **Read Policy** (for single record reads):
 
-- Lower timeout (default: 1s total, 1s socket)
-- Optimized for low-latency reads
+- `settings.conf`: 1s total, 1s socket
 - Used for UTXO lookups
 
 **Write Policy** (for single record writes):
 
-- Lower timeout (default: 1s total, 1s socket)
-- Controls write behavior (create, update, replace)
-- Used for UTXO creation and updates
+- `settings.conf`: 1s total, 1s socket
+- Used for unspend, the creation lock record, record deletes and the conflict write-ahead log
+- UTXO creation does not use it: creation is batched and uses the Batch Policy
 
 **Query Policy** (for query operations):
 
-- Timeout configuration for query operations
-- Used for database queries
+- Timeout and retry configuration for query operations
 
 ### Policy Configuration Behavior
 
 - When `UseDefaultPolicies = true`:
 
-    - Aerospike client default policies used
-    - Policy URLs are ignored
+    - The read, write, batch and query policies use the Aerospike client defaults
+    - The policy URLs are ignored
 
 - When `UseDefaultPolicies = false` (recommended):
 
-    - Custom policy URLs are parsed and applied
+    - The policy URLs are parsed and applied
     - Allows fine-tuned timeout and retry behavior
 
 - When `UseDefaultBasePolicies = true`:
 
-    - Aerospike default base policies used as foundation
-    - Custom parameters applied on top
+    - The policy URLs, and the connection settings in the Aerospike store URL, are not parsed
+    - The connection settings use the Aerospike client defaults
+    - Unless `UseDefaultPolicies` is also true, the read, write, batch and query policies are built from values that were never set: every operation runs with `TotalTimeout=0` (no timeout), `SocketTimeout=0` and `MaxRetries=0`. Do not use it; use `UseDefaultPolicies` instead.
 
 ### Connection Pool Warm-Up
 
@@ -112,11 +122,13 @@ aerospike:///?MaxRetries=5&SleepBetweenRetries=500ms&TotalTimeout=1s&SocketTimeo
 
 ### Batcher Configuration
 
-- `StoreBatcherDuration` controls flush frequency:
+- The store (Create) batcher timeout is `utxostore_storeBatcherDurationMillis`, the same key family as the get, spend and locked batchers:
 
     - Lower values (1-10ms): Lower latency, more frequent writes
     - Higher values (50-100ms): Better batching, higher throughput
     - Trade-off between latency and throughput
+
+- `aerospike_storeBatcherDuration` is deprecated. When set it still overrides `utxostore_storeBatcherDurationMillis` and logs a warning at startup.
 
 - Works in conjunction with UTXO store batcher settings
 
@@ -173,7 +185,6 @@ aerospike_useDefaultPolicies = false
 aerospike_batchPolicy = aerospike:///?MaxRetries=5&SleepBetweenRetries=500ms&TotalTimeout=64s&SocketTimeout=10s&ConcurrentNodes=4
 aerospike_readPolicy = aerospike:///?MaxRetries=3&SleepBetweenRetries=250ms&TotalTimeout=2s&SocketTimeout=1s
 aerospike_writePolicy = aerospike:///?MaxRetries=3&SleepBetweenRetries=250ms&TotalTimeout=2s&SocketTimeout=1s
-aerospike_storeBatcherDuration = 10ms
 aerospike_statsRefresh = 5s
 ```
 
@@ -181,7 +192,7 @@ aerospike_statsRefresh = 5s
 
 ```text
 aerospike_warmUp = true
-aerospike_storeBatcherDuration = 5ms
+utxostore_storeBatcherDurationMillis = 5
 aerospike_batchPolicy = aerospike:///?MaxRetries=5&TotalTimeout=30s&SocketTimeout=5s&ConcurrentNodes=8
 aerospike_statsRefresh = 10s
 ```
@@ -228,14 +239,14 @@ aerospike_queryPolicy = aerospike:///?MaxRetries=3&TotalTimeout=2s&SocketTimeout
 
 ### Latency-Optimized Configuration
 
-- Lower `StoreBatcherDuration` (5-10ms)
+- Lower `utxostore_storeBatcherDurationMillis` (5-10)
 - Lower policy timeouts (1-2s total)
 - Higher `MinConnectionsPerNode` (8-16)
 - Enable `WarmUp`
 
 ### Throughput-Optimized Configuration
 
-- Higher `StoreBatcherDuration` (50-100ms)
+- Higher `utxostore_storeBatcherDurationMillis` (50-100)
 - Higher policy timeouts (5-10s total)
 - Higher `ConnectionQueueSize` (512-1024)
 - Higher `ConcurrentNodes` in batch policy (8-16)
@@ -244,7 +255,7 @@ aerospike_queryPolicy = aerospike:///?MaxRetries=3&TotalTimeout=2s&SocketTimeout
 
 - Lower `ConnectionQueueSize` (64-128)
 - Lower `MinConnectionsPerNode` (2-4)
-- Higher `StoreBatcherDuration` (reduce write frequency)
+- Higher `utxostore_storeBatcherDurationMillis` (reduce write frequency)
 - Lower `ConcurrentNodes` (1-2)
 
 ## Monitoring and Debugging

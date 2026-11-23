@@ -9,7 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// sealDir makes dir unwritable so tempstore.New's os.MkdirAll fails, which is
+// sealDir makes dir unwritable so a new generation's os.MkdirAll fails, which is
 // how a full disk or an exhausted FD table presents to DiskTxMap.Clear.
 func sealDir(t *testing.T, dir string) {
 	t.Helper()
@@ -31,16 +31,14 @@ func requireSameMap(t *testing.T, want, got any, msgAndArgs ...any) {
 	require.Truef(t, want == got, "want map %p, got %p: %v", want, got, msgAndArgs)
 }
 
-// Clear rotates every disk shard onto a fresh Badger generation and resets the
-// cuckoo filters. If a replacement generation cannot be created it must leave
-// the map exactly as it was rather than resetting the filters over a store that
-// still holds the old keys: Get reads straight from disk without consulting the
-// filter, so a half-cleared map answers lookups that should miss with the
-// previous block's inpoints, while Length reports zero.
+// Clear moves every dir onto a fresh generation of log files and resets the
+// index. If a replacement generation cannot be created it must leave the map
+// exactly as it was rather than resetting the index while the old logs stay
+// in use, reporting an empty map that still holds the previous block.
 func TestDiskTxMap_Clear_IsAllOrNothing(t *testing.T) {
 	dir := t.TempDir()
 
-	m, err := NewDiskTxMap(DiskTxMapOptions{BasePaths: []string{dir}, Prefix: "clear-test", FilterCapacity: 1024})
+	m, err := NewDiskTxMap(DiskTxMapOptions{BasePaths: []string{dir}, Prefix: "clear-test"})
 	require.NoError(t, err)
 
 	t.Cleanup(func() { _ = m.Close() })
@@ -63,7 +61,7 @@ func TestDiskTxMap_Clear_IsAllOrNothing(t *testing.T) {
 		"a Clear that could not rotate the store must leave the map populated and consistent, "+
 			"not report an empty map that still answers Get with the old entries")
 	require.True(t, m.Exists(hash),
-		"the cuckoo filter must still agree with the store after a failed Clear")
+		"the index must still agree with the log after a failed Clear")
 }
 
 // The commit point empties the retired half so it is clean when it comes back
@@ -92,23 +90,26 @@ func TestResetSubtreeState_DiskTxMap_RefusesNonEmptyIncomingHalf(t *testing.T) {
 		"a refused reset must leave the active map in place")
 }
 
-// Both halves are allocated at full capacity and both stay resident for the
-// process lifetime, so reporting only the active half halves the filter-memory
-// gauge operators size the pod from.
+// A half keeps its index RAM until the commit point clears it, so the index
+// memory gauge covers both halves; entries come from the active half only.
 func TestDiskTxMapStats_CoversBothHalves(t *testing.T) {
 	stp := newSubtreeProcessorWithTxMapDirs(t, []string{t.TempDir()})
+
+	inp := subtreepkg.TxInpoints{}
+	stp.diskTxMap.Set(chainhash.Hash{1}, &inp)
+	stp.diskTxMapShadow.Set(chainhash.Hash{2}, &inp)
+	stp.diskTxMapShadow.Set(chainhash.Hash{3}, &inp)
 
 	active := stp.diskTxMap.Stats()
 	shadow := stp.diskTxMapShadow.Stats()
 
-	require.Positive(t, active.FilterMemBytes, "precondition: the active half reports its filter memory")
-	require.Equal(t, active.FilterMemBytes, shadow.FilterMemBytes,
-		"precondition: the shadow is allocated at the same capacity as the active half")
+	require.Positive(t, active.IndexMemBytes, "precondition: the active half reports its index memory")
+	require.Positive(t, shadow.IndexMemBytes, "precondition: the shadow half reports its index memory")
 
 	combined := stp.diskTxMapStats()
 
-	require.Equal(t, active.FilterMemBytes+shadow.FilterMemBytes, combined.FilterMemBytes,
-		"the reported filter memory must cover the whole double buffer")
+	require.Equal(t, active.IndexMemBytes+shadow.IndexMemBytes, combined.IndexMemBytes,
+		"the reported index memory must cover the whole double buffer")
 	require.Equal(t, active.Entries, combined.Entries,
 		"only the active half holds entries, so the entry count must not be doubled")
 }

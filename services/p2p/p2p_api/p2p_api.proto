@@ -36,6 +36,10 @@ message Peer {
   int32 banscore = 25;
   bool whitelisted = 26;
   int64 feeFilter = 27;
+  // Raw height the peer advertised, before the unvalidated-lead cap that
+  // produces currentHeight. Telemetry only; currentHeight still drives sync
+  // decisions. 0 for peers on older versions that do not report it.
+  uint32 advertisedHeight = 28;
   }
 
 
@@ -301,12 +305,16 @@ message AddBanScoreRequest {
     int64 subtrees_received = 31;
     int64 transactions_received = 32;
 
+    // Raw height the peer advertised, before the unvalidated-lead cap that
+    // produces `height`. Telemetry only; `height` still drives sync decisions.
+    uint32 advertised_height = 33;
+
     // Locally validated chain progress for this peer, populated by
     // ReportValidatedChainProgress. Zero/empty when no headers have been
     // validated locally from this peer.
-    uint32 validated_height = 33;
-    string validated_block_hash = 34;
-    bytes  validated_chain_work = 35;
+    uint32 validated_height = 34;
+    string validated_block_hash = 35;
+    bytes  validated_chain_work = 36;
   }
 
   message GetPeerRegistryResponse {

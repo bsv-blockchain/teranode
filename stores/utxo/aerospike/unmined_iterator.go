@@ -268,16 +268,20 @@ func (it *unminedTxIterator) partitionWorker(ctx context.Context, policy *as.Que
 			fields.BlockIDs.String(),
 			fields.UnminedSince.String(),
 			fields.IsCoinbase.String(),
-		}
-
-		if it.store.settings.BlockAssembly.StoreTxInpointsForSubtreeMeta {
-			stmt.BinNames = append(stmt.BinNames, fields.External.String())
-			stmt.BinNames = append(stmt.BinNames, fields.Inputs.String())
+			// read in every mode: block assembly keeps each tx's parent links whatever
+			// blockassembly_storeTxInpointsForSubtreeMeta says
+			fields.External.String(),
+			fields.Inputs.String(),
 		}
 	}
 
 	// Create partition filter for this range
 	partitionFilter := as.NewPartitionFilterByRange(partitionStart, partitionCount)
+
+	if !it.prunerMode && !it.conflictingMode {
+		it.queryRaw(ctx, policy, stmt, partitionFilter, partitionStart, partitionCount)
+		return
+	}
 
 	recordset, err := it.store.client.QueryPartitions(policy, stmt, partitionFilter)
 	if err != nil {
@@ -292,6 +296,54 @@ func (it *unminedTxIterator) partitionWorker(ctx context.Context, policy *as.Que
 
 	// Process records directly into batches
 	it.processRecordset(ctx, recordset.Results())
+}
+
+// queryRaw runs the block assembly scan of one partition range with
+// QueryPartitionsRawContext: records are decoded and batched inline in each
+// node command's goroutine, with no per-record channel handoff or BinMap.
+//
+// SocketTimeout is left as configured: the server also uses it as its send
+// timeout, and a handler blocked on a slow consumer isn't reading its socket.
+// Dead connections are caught by the watchdog instead, which counts only time
+// spent waiting on Aerospike and reports the stall to the iterator as soon as
+// it fires, even if the query stays blocked in a read until SocketTimeout.
+func (it *unminedTxIterator) queryRaw(ctx context.Context, policy *as.QueryPolicy, stmt *as.Statement, partitionFilter *as.PartitionFilter, partitionStart, partitionCount int) {
+	queryCtx, cancel := context.WithCancelCause(ctx)
+	defer cancel(nil)
+
+	handlers := &rawHandlerSet{it: it, ctx: queryCtx}
+
+	stopWatch := func() {}
+	if it.queryIdleTimeout > 0 {
+		stopWatch = handlers.startWatch(queryCtx, cancel, it.queryIdleTimeout)
+	}
+
+	qErr := it.store.client.QueryPartitionsRawContext(queryCtx, policy, stmt, partitionFilter, handlers.newHandler)
+
+	// Stop the watchdog before the final flush, which may wait on the consumer.
+	stopWatch()
+
+	if handlers.stallReported.Load() || ctx.Err() != nil {
+		return
+	}
+
+	var queryErr error
+	if qErr != nil {
+		queryErr = qErr
+	}
+
+	err := handlers.result(queryErr)
+
+	if err == nil || ctx.Err() != nil {
+		return
+	}
+
+	it.store.logger.Errorf("[partitionWorker] Aerospike partition query failed (partitions %d-%d): %v", partitionStart, partitionStart+partitionCount-1, err)
+
+	select {
+	case it.errorChan <- err:
+	default:
+	}
 }
 
 // processRecordset processes records from a recordset and writes batches to resultChan
@@ -545,12 +597,10 @@ func (it *unminedTxIterator) processRecord(ctx context.Context, bins map[string]
 	// pointer into a combined allocation would retain the whole record.
 	txInpoints := &subtree.TxInpoints{}
 
-	// Process external transaction if needed; otherwise the inpoints stay empty
-	if it.store.settings.BlockAssembly.StoreTxInpointsForSubtreeMeta {
-		*txInpoints, err = it.processTransactionInpoints(ctx, &txData, bins)
-		if err != nil {
-			return nil, errors.NewProcessingError("failed to process transaction inpoints for %s", txData.hash.String(), err)
-		}
+	// read the inpoints in every mode, from the external transaction when the record has one
+	*txInpoints, err = it.processTransactionInpoints(ctx, &txData, bins)
+	if err != nil {
+		return nil, errors.NewProcessingError("failed to process transaction inpoints for %s", txData.hash.String(), err)
 	}
 
 	// Extract createdAt timestamp
@@ -650,28 +700,47 @@ func (it *unminedTxIterator) Next(ctx context.Context) ([]*utxo.UnminedTransacti
 	default:
 	}
 
-	select {
-	case <-ctx.Done():
-		it.err = ctx.Err()
-		it.closeWithLogging()
-		return nil, it.err
-	case batch, ok := <-it.resultChan:
-		if !ok {
-			// resultChan closed — all workers finished. Check if any worker reported an error
-			// that arrived after our earlier non-blocking check (e.g. idle timeout error).
-			select {
-			case err := <-it.errorChan:
-				if err != nil {
-					it.err = err
-					it.closeWithLogging()
-					return nil, err
-				}
-			default:
-			}
+	// Watch errorChan too: a worker can fail while others are still running
+	// (or blocked in a socket read), and that must surface now rather than
+	// once every worker is done. Once errorChan is closed it is no longer
+	// selected (nil channel), so its closed-channel zero values can't spin.
+	errCh := it.errorChan
+
+	for {
+		select {
+		case <-ctx.Done():
+			it.err = ctx.Err()
 			it.closeWithLogging()
-			return nil, nil
+			return nil, it.err
+		case err, ok := <-errCh:
+			if !ok {
+				errCh = nil
+				continue
+			}
+
+			if err != nil {
+				it.err = err
+				it.closeWithLogging()
+				return nil, err
+			}
+		case batch, ok := <-it.resultChan:
+			if !ok {
+				// resultChan closed — all workers finished. Check if any worker reported an error
+				// that arrived after our earlier non-blocking check (e.g. idle timeout error).
+				select {
+				case err := <-it.errorChan:
+					if err != nil {
+						it.err = err
+						it.closeWithLogging()
+						return nil, err
+					}
+				default:
+				}
+				it.closeWithLogging()
+				return nil, nil
+			}
+			return batch, nil
 		}
-		return batch, nil
 	}
 }
 

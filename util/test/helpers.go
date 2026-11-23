@@ -19,6 +19,8 @@ type TestingT interface {
 func CreateBaseTestSettings(t TestingT) *settings.Settings {
 	tSettings := settings.NewSettings()
 	tSettings.DataFolder = t.TempDir()
+	// Shared only by test servers and their clients; production has no default key.
+	tSettings.GRPCAdminAPIKey = "teranode-unit-test-service-key"
 	t.Logf("using temp data folder: %s", tSettings.DataFolder)
 
 	// Create a copy of RegressionNetParams to avoid race conditions

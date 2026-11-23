@@ -132,7 +132,7 @@ The startup process of the node involves the `main.go` file calling the `p2p.New
 2. **Configuration Retrieval and Topic Registration**:
 
     - Retrieves required configuration settings like `p2p_listen_addresses` and `p2p_port`.
-    - It registers specific topic names derived from the configuration, such as `p2p_block_topic`, `p2p_subtree_topic`, `p2p_bestblock_topic`, `p2p_mining_on_topic`, and `p2p_rejected_tx_topic`.
+    - It registers specific topic names derived from the configuration, such as `p2p_block_topic`, `p2p_subtree_topic`, and `p2p_rejected_tx_topic`.
 
 3. **P2P Node Initialization**:
 
@@ -321,6 +321,19 @@ All notifications collected from the Block and Validator listeners are sent over
     - The server tracks all active client channels (`clientChannels`).
     - When a notification is received (from the block validation or transaction listeners described in the previous sections), it is sent to all connected clients.
     - The fan-out never waits on a client: sends are non-blocking, and a client whose channel buffer is full when a notification is broadcast is evicted from `clientChannels` and its connection is closed, releasing its connection slot. Evictions are counted in `teranode_p2p_websocket_clients_evicted_total`, and notifications dropped because the shared notification channel is full are counted in `teranode_p2p_websocket_notifications_dropped_total`.
+
+- Delivery guarantees:
+
+    - Delivery is **best-effort (at-most-once)**. The server sends each notification at most one time. It does not retry, it does not acknowledge, and it does not replay.
+    - A notification can be lost at three points:
+
+        - The producer drops it when the shared notification channel (1,000 entries) is full. The counter `teranode_p2p_websocket_notifications_dropped_total` records the drop.
+        - The fan-out evicts a client whose channel (100 entries) is full. The client loses that notification and every later notification until it reconnects.
+        - The server drops the initial `node_status` message if the new client's channel is full.
+    - The server does not send duplicates. A client sees a duplicate only if the producer emits the same event twice.
+    - Order is FIFO per connection while the connection stays open. Messages carry no sequence number, so a client cannot detect a gap.
+    - After a reconnect, the client must re-read the current state (for example the best block from the Asset HTTP API). It must not assume that it received every event during the disconnection.
+    - Use the WebSocket for live display and monitoring only. Consumers that need every block must walk the chain through the Asset HTTP API. Kafka is not gap-free either (see [Delivery Guarantees](../kafka/kafka.md#delivery-guarantees)).
 
 As a sequence:
 

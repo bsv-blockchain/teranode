@@ -70,6 +70,7 @@ nav:
       - Chain Integrity Testing: howto/chain-integrity-testing.md
       - Makefile Guide: howto/makefile.md
       - Bug Reporting: howto/bugReporting.md
+      - Release Process: howto/releaseProcess.md
       - Developer's Guide to Teranode-CLI: howto/developersHowToTeranodeCLI.md
       - Miners:
           - Installation:
@@ -103,7 +104,7 @@ nav:
               - Kubernetes: howto/miners/kubernetes/minersHowToSyncTheNode.md
           - Monitoring: howto/miners/minersHowToMonitoring.md
           - Additional:
-              - Backup Teranode: howto/miners/minersHowToBackup.md
+              - Back Up and Restore Teranode: howto/miners/minersHowToBackup.md
               - CPU Mining Setup: howto/miners/minersHowToCPUMiner.md
               - Teranode CLI: howto/miners/minersHowToTeranodeCLI.md
               - Managing Disk Space: howto/miners/minersManagingDiskSpace.md

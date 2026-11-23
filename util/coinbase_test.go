@@ -4,6 +4,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"math/rand"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -682,4 +683,164 @@ func TestExtractCoinbaseMinerRawJSONRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, json.Unmarshal(out, &decoded))
 	require.Equal(t, sanitized, decoded["miner"], "clean tags survive a JSON round-trip intact")
+}
+
+// bitcoinSVScriptNumSerialize ports bitcoin-sv's CScriptNum::serialize (script/script_num.h):
+// little-endian magnitude, with the sign in the top bit of the last byte, and an extra 0x00 (or
+// 0x80 for a negative value) when the magnitude's own top bit is set.
+func bitcoinSVScriptNumSerialize(value int64) []byte {
+	if value == 0 {
+		return nil
+	}
+
+	negative := value < 0
+
+	magnitude := uint64(value)
+	if negative {
+		magnitude = uint64(-value)
+	}
+
+	var result []byte
+	for magnitude > 0 {
+		result = append(result, byte(magnitude&0xff))
+		magnitude >>= 8
+	}
+
+	switch {
+	case result[len(result)-1]&0x80 != 0 && negative:
+		result = append(result, 0x80)
+	case result[len(result)-1]&0x80 != 0:
+		result = append(result, 0x00)
+	case negative:
+		result[len(result)-1] |= 0x80
+	}
+
+	return result
+}
+
+// bitcoinSVHeightPrefix ports bitcoin-sv's CScript() << nHeight (CScript::push_int64): OP_1NEGATE
+// and OP_1..OP_16 for -1 and 1..16, OP_0 for 0, and otherwise a push of the serialised CScriptNum.
+// A height serialises to at most 5 bytes, so the push is always a direct one-byte length.
+func bitcoinSVHeightPrefix(height int64) []byte {
+	switch {
+	case height == -1 || (height >= 1 && height <= 16):
+		return []byte{byte(int64(bscript.Op1) + height - 1)}
+	case height == 0:
+		return []byte{bscript.Op0}
+	}
+
+	num := bitcoinSVScriptNumSerialize(height)
+
+	return append([]byte{byte(len(num))}, num...)
+}
+
+// nonCanonicalHeightPrefixes returns pushes that a lenient decoder could read as height, or as a
+// neighbour of it, but that differ from bitcoin-sv's CScript() << height. bitcoin-sv's
+// ContextualCheckBlock requires the coinbase scriptSig to begin with exactly that prefix
+// (bad-cb-height), so every one of these must be refused.
+func nonCanonicalHeightPrefixes(height uint32) map[string][]byte {
+	canonical := bitcoinSVHeightPrefix(int64(height))
+	data := bitcoinSVScriptNumSerialize(int64(height))
+
+	out := map[string][]byte{
+		// The same number, minimally serialised, behind a longer push opcode.
+		"OP_PUSHDATA1": append([]byte{bscript.OpPUSHDATA1, byte(len(data))}, data...),
+		"OP_PUSHDATA2": append([]byte{bscript.OpPUSHDATA2, byte(len(data)), 0x00}, data...),
+		"OP_PUSHDATA4": append([]byte{bscript.OpPUSHDATA4, byte(len(data)), 0x00, 0x00, 0x00}, data...),
+		// The same number with a redundant 0x00 byte: a non-minimal CScriptNum.
+		"zero-padded number": append(append([]byte{byte(len(data) + 1)}, data...), 0x00),
+		// The same magnitude with the sign bit set: a negative number.
+		"negative number": bitcoinSVHeightPrefix(-int64(height)),
+		// Canonical pushes of the neighbouring heights.
+		"height + 1": bitcoinSVHeightPrefix(int64(height) + 1),
+		"height - 1": bitcoinSVHeightPrefix(int64(height) - 1),
+	}
+
+	// For 1..16 the canonical form is a single OP_N opcode, so a one-byte data push of the same
+	// number is a different, longer encoding.
+	if height <= 16 {
+		out["direct push instead of OP_N"] = []byte{0x01, byte(height)}
+	}
+
+	for name, prefix := range out {
+		if string(prefix) == string(canonical) {
+			delete(out, name)
+		}
+	}
+
+	return out
+}
+
+// bip34BoundaryHeights are the heights where the canonical encoding changes shape: OP_N to a data
+// push at 16/17, and one more byte (or a sign-padding byte) at each 127/128, 255/256, 32767/32768,
+// 65535/65536, 8388607/8388608 and 2147483647/2147483648 step.
+var bip34BoundaryHeights = []uint32{
+	1, 2, 15, 16, 17,
+	127, 128, 129, 255, 256, 257,
+	32767, 32768, 32769, 65535, 65536,
+	8388607, 8388608, 8388609, 16777215, 16777216,
+	2147483647, 2147483648, 4294967294,
+}
+
+// TestExtractCoinbaseHeight_AcceptsExactlyTheBitcoinSVPrefix is the BIP34 property test.
+//
+// Spec: BV-BODY-009. For height > 0, the coinbase scriptSig must begin with the canonical minimal
+// push of the height, byte-identical to bitcoin-sv's CScript() << height; bytes after that prefix
+// are unrestricted.
+//
+// For every boundary height and 2,000 heights sampled across the uint32 range (fixed seed):
+//   - the bitcoin-sv prefix, followed by any of several suffixes, decodes to exactly that height;
+//   - Teranode's own encoder produces that same prefix;
+//   - every other push of the same or a neighbouring number (longer push opcodes, a zero-padded
+//     number, the negative number, OP_N written as a data push, height ± 1) does not decode to
+//     that height.
+func TestExtractCoinbaseHeight_AcceptsExactlyTheBitcoinSVPrefix(t *testing.T) {
+	const (
+		sampleCount = 2_000
+		sampleSeed  = 34
+	)
+
+	suffixes := map[string][]byte{
+		"no suffix":              nil,
+		"miner tag":              []byte("/miner/"),
+		"suffix of push opcodes": {0x00, 0x01, 0x4c, 0xff},
+	}
+
+	heights := append([]uint32(nil), bip34BoundaryHeights...)
+
+	rng := rand.New(rand.NewSource(sampleSeed)) //nolint:gosec // reproducible sample, not security
+	for i := 0; i < sampleCount; i++ {
+		// Spread the sample across every encoded length, not just the top of the range.
+		bits := 1 + rng.Intn(32)
+		heights = append(heights, 1+uint32(rng.Int63n(int64(1)<<bits-1))) //nolint:gosec // < 2^32
+	}
+
+	decodes := func(prefix, suffix []byte) (uint32, error) {
+		script := append(append([]byte(nil), prefix...), suffix...)
+		coinbase := &bt.Tx{Inputs: []*bt.Input{{UnlockingScript: bscript.NewFromBytes(script)}}}
+
+		return ExtractCoinbaseHeight(coinbase)
+	}
+
+	for _, height := range heights {
+		canonical := bitcoinSVHeightPrefix(int64(height))
+
+		require.Equal(t, canonical, EncodeCoinbaseHeightPush(height),
+			"height %d: Teranode's encoder must produce bitcoin-sv's CScript() << height", height)
+
+		for suffixName, suffix := range suffixes {
+			decoded, err := decodes(canonical, suffix)
+			require.NoError(t, err, "height %d, %s: the bitcoin-sv prefix %x must be accepted", height, suffixName, canonical)
+			require.Equal(t, height, decoded, "height %d, %s: prefix %x", height, suffixName, canonical)
+
+			for variant, prefix := range nonCanonicalHeightPrefixes(height) {
+				decoded, err := decodes(prefix, suffix)
+				if err == nil {
+					require.NotEqual(t, height, decoded,
+						"height %d, %s: prefix %x (%s) is not CScript() << height (%x), so it must not be accepted as height %d",
+						height, suffixName, prefix, variant, canonical, height)
+				}
+			}
+		}
+	}
 }

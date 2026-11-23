@@ -3,6 +3,7 @@ package blockvalidation
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"testing"
 	"time"
 
@@ -134,4 +135,82 @@ func TestBlockProcessingWorker_CorruptBody_ClearsProcessBlockNotify(t *testing.T
 		return server.processBlockNotify.Get(*h) == nil
 	}, 3*time.Second, 10*time.Millisecond,
 		"the worker must clear processBlockNotify for a corrupt body (not take the malicious retry branch)")
+}
+
+// existsErrorClient is a real blockchain client whose GetBlockExists fails with err for one hash,
+// so processBlockFound returns that error before it fetches anything.
+type existsErrorClient struct {
+	blockchain.ClientI
+	hash chainhash.Hash
+	err  error
+}
+
+func (c *existsErrorClient) GetBlockExists(ctx context.Context, hash *chainhash.Hash) (bool, error) {
+	if *hash == c.hash {
+		return false, c.err
+	}
+
+	return c.ClientI.GetBlockExists(ctx, hash)
+}
+
+// TestProcessBlockWithPriority_LocalCorruptBlob_DoesNotWalkAlternatives pins the call site in
+// processBlockWithPriority: a block that failed on a corrupt blob in this node's own store does
+// not walk alternative sources, because each one would read the same local file. The control
+// shows a network failure from the same place still does.
+func TestProcessBlockWithPriority_LocalCorruptBlob_DoesNotWalkAlternatives(t *testing.T) {
+	initPrometheusMetrics()
+
+	tests := []struct {
+		name      string
+		err       func(t *testing.T) error
+		isClass   func(error) bool
+		walksAlts bool
+	}{
+		{"corrupt local blob", func(t *testing.T) error { return localCorruptSubtreeError(t, corruptSubtreeContents[0].contents) }, errors.IsBlobCorrupt, false},
+		{"network failure", func(*testing.T) error { return errors.NewNetworkError("connection reset") }, func(err error) bool { return errors.Is(err, errors.ErrNetworkError) }, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+			logger := ulogger.TestLogger{}
+			tSettings := test.CreateBaseTestSettings(t)
+
+			blockchainStore, err := blockchain_store.NewStore(logger, &url.URL{Scheme: "sqlitememory"}, tSettings)
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, blockchainStore.Close(ctx)) })
+
+			realClient, err := blockchain.NewLocalClient(logger, tSettings, blockchainStore, nil, nil)
+			require.NoError(t, err)
+
+			h := &chainhash.Hash{0xc0}
+			injected := tt.err(t)
+			client := &existsErrorClient{ClientI: realClient, hash: *h, err: injected}
+
+			bv := NewBlockValidation(ctx, logger, tSettings, client, memory.New(), memory.New(), &utxo.MockUtxostore{}, &validator.MockValidator{}, nil)
+
+			server := &Server{
+				logger:              logger,
+				settings:            tSettings,
+				blockchainClient:    client,
+				blockValidation:     bv,
+				blockPriorityQueue:  NewBlockPriorityQueue(logger),
+				forkManager:         NewForkManager(logger, tSettings),
+				processBlockNotify:  ttlcache.New[chainhash.Hash, bool](),
+				catchupAlternatives: ttlcache.New[chainhash.Hash, []processBlockCatchup](),
+			}
+
+			primary := processBlockFound{hash: h, baseURL: "http://primary-peer", peerID: "primary"}
+			alternative := processBlockFound{hash: h, baseURL: "http://alt-peer", peerID: "alt"}
+			server.blockPriorityQueue.Add(primary, PriorityChainExtending, 3)
+			server.blockPriorityQueue.Add(alternative, PriorityChainExtending, 3)
+
+			err = server.processBlockWithPriority(ctx, primary)
+			require.Error(t, err)
+			require.True(t, tt.isClass(err), "the injected failure's class must come back, got: %v", err)
+
+			_, hasAlt := server.blockPriorityQueue.GetAlternativeSource(h)
+			require.Equal(t, !tt.walksAlts, hasAlt, "alternative left in the queue")
+		})
+	}
 }

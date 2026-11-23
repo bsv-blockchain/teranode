@@ -8,6 +8,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"unsafe"
 
 	"github.com/stretchr/testify/require"
 )
@@ -24,9 +25,9 @@ func TestNextPow2(t *testing.T) {
 }
 
 func TestComputeLayout(t *testing.T) {
-	// expected 0 -> minimal table, K=1, slotsPerSeg=minSegSlots
+	// expected 0 -> minimal table, K=minSeg, slotsPerSeg=minSegSlots
 	l := computeLayout(0, 0.5)
-	if l.numSeg != 1 || l.slotsPerSeg != minSegSlots {
+	if l.numSeg != minSeg || l.slotsPerSeg != minSegSlots {
 		t.Fatalf("empty: got numSeg=%d slotsPerSeg=%d", l.numSeg, l.slotsPerSeg)
 	}
 	// large expected -> K clamped to maxSeg, slotsPerSeg pow2, capacity >= expected/LF
@@ -50,6 +51,19 @@ func TestComputeLayout(t *testing.T) {
 			t.Fatalf("undersized for expected=%d: total=%d capacity=%d", exp, total, uint64(float64(total)*defaultLoadFactor))
 		}
 	}
+}
+
+// TestComputeLayoutMinimumSegments: a table for a small or medium block must
+// still be split into minSeg independently-locked segments, or every worker
+// serialises on one segment lock. Above that the count follows segTarget, up
+// to maxSeg.
+func TestComputeLayoutMinimumSegments(t *testing.T) {
+	for _, exp := range []uint64{0, 1, 100, 100_000, 131_071, minSeg * segTarget} {
+		require.Equalf(t, uint64(minSeg), computeLayout(exp, defaultLoadFactor).numSeg, "expected=%d", exp)
+	}
+
+	require.Equal(t, uint64(2*minSeg), computeLayout(2*minSeg*segTarget, defaultLoadFactor).numSeg)
+	require.Equal(t, uint64(maxSeg), computeLayout(1<<40, defaultLoadFactor).numSeg)
 }
 
 func TestComputeLayoutDefaultLoadFactor(t *testing.T) {
@@ -81,12 +95,16 @@ func TestComputeLayoutClampsBadLoadFactor(t *testing.T) {
 func TestComputeLayoutMinSegSlotsFloor(t *testing.T) {
 	// small non-zero expected -> perSeg computed below minSegSlots -> floored
 	l := computeLayout(10, 0.5)
-	if l.numSeg != 1 {
-		t.Fatalf("numSeg=%d want 1", l.numSeg)
+	if l.numSeg != minSeg {
+		t.Fatalf("numSeg=%d want minSeg=%d", l.numSeg, minSeg)
 	}
 	if l.slotsPerSeg != minSegSlots {
 		t.Fatalf("slotsPerSeg=%d want minSegSlots=%d (floor not applied)", l.slotsPerSeg, minSegSlots)
 	}
+}
+
+func TestSegIsPaddedToSegSize(t *testing.T) {
+	require.Equal(t, uintptr(segSize), unsafe.Sizeof(seg{}))
 }
 
 func TestTableCreateClose(t *testing.T) {
@@ -259,9 +277,9 @@ func TestTableGrowsOnSegmentFull(t *testing.T) {
 	require.NoError(t, err)
 	defer tbl.Close()
 	require.Equal(t, uint64(minSegSlots), tbl.slotsPerSeg)
-	require.Equal(t, uint64(0), tbl.segMask) // single segment
+	require.Equal(t, uint64(minSeg-1), tbl.segMask) // the minimum segment count
 
-	const n = minSegSlots * 8 // 8x the initial single-segment capacity
+	const n = minSegSlots * 8 // 8x the hot segment's initial capacity
 	for i := uint64(0); i < n; i++ {
 		_, inserted, err := tbl.Upsert(collidingKey(i), i)
 		require.NoErrorf(t, err, "insert %d must grow, not overflow", i)
@@ -269,7 +287,7 @@ func TestTableGrowsOnSegmentFull(t *testing.T) {
 	}
 	require.Equal(t, int64(n), tbl.Len())
 	require.Greater(t, tbl.slotsPerSeg, uint64(minSegSlots), "table must have grown its per-segment capacity")
-	require.Equal(t, uint64(0), tbl.segMask, "growth keeps the segment count (and segMask) fixed")
+	require.Equal(t, uint64(minSeg-1), tbl.segMask, "growth keeps the segment count (and segMask) fixed")
 
 	// every key still resolves correctly through the grown probe chains
 	for i := uint64(0); i < n; i++ {
@@ -472,4 +490,84 @@ func TestNewCreatesMissingDir(t *testing.T) {
 	_, inserted, err := tbl.Upsert(mkKey(32, 1), 7)
 	require.NoError(t, err)
 	require.True(t, inserted)
+}
+
+// TestLookupConcurrentWithGrow runs lookups while two writers force repeated
+// grows. A lookup of a key whose insert has completed must always find it with
+// its value, whichever table generation it lands on.
+func TestLookupConcurrentWithGrow(t *testing.T) {
+	cases := []struct {
+		name     string
+		expected uint64
+		keys     uint64
+		minGrows uint64
+		key      func(uint64) []byte
+	}{
+		// Several grows, each taking all minSeg segment locks, triggered from
+		// both writers. Scrambled keys: mkKey's sequential bucket bytes build
+		// long probe runs in a full segment.
+		{name: "small_table", expected: 100, keys: 40000, minGrows: 2, key: mkBenchKey},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			tbl, err := New(Options{Dir: t.TempDir(), Prefix: "lookgrow", KeySize: 32, ValueSize: 8, Expected: tc.expected})
+			require.NoError(t, err)
+			defer tbl.Close()
+
+			// Keys [0, published) have been inserted by the sequential writer.
+			var published atomic.Uint64
+			var done atomic.Bool
+			var writers, readers sync.WaitGroup
+
+			writers.Add(2)
+			go func() {
+				defer writers.Done()
+				for i := uint64(0); i < tc.keys; i++ {
+					if _, _, err := tbl.Upsert(tc.key(i), i); err != nil {
+						t.Errorf("upsert %d: %v", i, err)
+						return
+					}
+					published.Store(i + 1)
+				}
+			}()
+			// A second writer on a disjoint key range, so grows are also
+			// triggered from another goroutine.
+			go func() {
+				defer writers.Done()
+				for i := tc.keys; i < 2*tc.keys; i++ {
+					if _, _, err := tbl.Upsert(tc.key(i), i); err != nil {
+						t.Errorf("upsert %d: %v", i, err)
+						return
+					}
+				}
+			}()
+
+			for r := 0; r < 4; r++ {
+				readers.Add(1)
+				go func(r uint64) {
+					defer readers.Done()
+					for i := r; !done.Load(); i += 7919 {
+						p := published.Load()
+						if p == 0 {
+							continue
+						}
+						k := i % p
+						v, found, err := tbl.Lookup(tc.key(k))
+						if err != nil || !found || v != k {
+							t.Errorf("lookup %d: value=%d found=%v err=%v", k, v, found, err)
+							return
+						}
+					}
+				}(uint64(r))
+			}
+
+			writers.Wait()
+			done.Store(true)
+			readers.Wait()
+
+			require.GreaterOrEqual(t, tbl.gen.Load(), tc.minGrows, "the test must exercise the grows it is sized for")
+			require.Equal(t, int64(2*tc.keys), tbl.Len())
+		})
+	}
 }

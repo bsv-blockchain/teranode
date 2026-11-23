@@ -3,6 +3,7 @@ package sql
 import (
 	"context"
 	"net/url"
+	"runtime"
 	"testing"
 
 	"github.com/bsv-blockchain/teranode/ulogger"
@@ -269,10 +270,20 @@ func TestGetBlocksByHeight_CapacityCalculation(t *testing.T) {
 
 	ctx := context.Background()
 
+	// endHeight < startHeight must not underflow the uint32 capacity: 5-10+1
+	// wraps to ~4.29 billion, which preallocated a 32 GiB slice and OOM-killed
+	// CI runners.
+	var before, after runtime.MemStats
+
+	runtime.ReadMemStats(&before)
+
 	blocks, err := s.GetBlocksByHeight(ctx, 10, 5)
+
+	runtime.ReadMemStats(&after)
 
 	require.NoError(t, err)
 	assert.Empty(t, blocks)
+	require.Less(t, after.TotalAlloc-before.TotalAlloc, uint64(64<<20), "GetBlocksByHeight(10, 5) must not preallocate for a wrapped range")
 }
 
 func TestGetBlocksByHeight_Ordering(t *testing.T) {

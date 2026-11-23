@@ -3,7 +3,6 @@ package subtreeprocessor
 import (
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -93,11 +92,9 @@ func TestDiskTxMap_SetBatchMatchesSet(t *testing.T) {
 	require.Equal(t, len(txs), batched.Length())
 }
 
-// SetBatch is bounded by entries in flight, not by channel messages: batches
-// far larger than the bound, from many goroutines at once, must neither
-// deadlock nor lose writes.
-func TestDiskTxMap_SetBatchBoundedInFlight(t *testing.T) {
-	m, err := NewDiskTxMap(DiskTxMapOptions{BasePaths: []string{t.TempDir(), t.TempDir()}, MaxPendingWrites: 64})
+// SetBatch from many goroutines at once must neither deadlock nor lose writes.
+func TestDiskTxMap_SetBatchConcurrent(t *testing.T) {
+	m, err := NewDiskTxMap(DiskTxMapOptions{BasePaths: []string{t.TempDir(), t.TempDir()}})
 	require.NoError(t, err)
 
 	defer m.Close()
@@ -124,37 +121,5 @@ func TestDiskTxMap_SetBatchBoundedInFlight(t *testing.T) {
 	for i, tx := range txs {
 		_, ok := m.Get(tx.Hash)
 		require.True(t, ok, "tx %d not written", i)
-	}
-}
-
-// SetBatch must wait for room when the disk's in-flight budget is used up,
-// and proceed once the writer releases it.
-func TestDiskTxMap_SetBatchWaitsForInFlightBudget(t *testing.T) {
-	m, err := NewDiskTxMap(DiskTxMapOptions{BasePaths: []string{t.TempDir()}, MaxPendingWrites: 8})
-	require.NoError(t, err)
-
-	defer m.Close()
-
-	disk := &m.disks[0]
-	require.True(t, disk.pending.TryAcquire(disk.pendingCap), "take the whole budget")
-
-	done := make(chan struct{})
-	go func() {
-		m.SetBatch(makeUnminedBatches(4, 4)[0])
-		close(done)
-	}()
-
-	select {
-	case <-done:
-		t.Fatal("SetBatch did not wait for in-flight budget")
-	case <-time.After(200 * time.Millisecond):
-	}
-
-	disk.pending.Release(disk.pendingCap)
-
-	select {
-	case <-done:
-	case <-time.After(2 * time.Second):
-		t.Fatal("SetBatch did not proceed once budget was released")
 	}
 }

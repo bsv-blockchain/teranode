@@ -264,3 +264,28 @@ func TestShouldSkipNotification(t *testing.T) {
 		})
 	}
 }
+
+// TestIsBlockchainSyncingOrCatchingUp_OnlyRunningIsCaughtUp: invalid-subtree
+// reports are only acted on in RUNNING. IDLE can follow an operator STOP while a
+// catchup batch is still running.
+func TestIsBlockchainSyncingOrCatchingUp_OnlyRunningIsCaughtUp(t *testing.T) {
+	for _, tt := range []struct {
+		state   blockchain.FSMStateType
+		syncing bool
+	}{
+		{blockchain.FSMStateRUNNING, false},
+		{blockchain.FSMStateCATCHINGBLOCKS, true},
+		{blockchain.FSMStateIDLE, true},
+	} {
+		t.Run(tt.state.String(), func(t *testing.T) {
+			state := tt.state
+			client := &blockchain.Mock{}
+			client.On("GetFSMCurrentState", mock.Anything).Return(&state, nil)
+			server, _ := newGateTestServer(t, client)
+
+			syncing, err := server.isBlockchainSyncingOrCatchingUp(context.Background())
+			require.NoError(t, err)
+			require.Equal(t, tt.syncing, syncing)
+		})
+	}
+}

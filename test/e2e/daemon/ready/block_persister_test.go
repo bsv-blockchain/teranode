@@ -752,7 +752,7 @@ func TestBlockPersisterUTXOAdditionsAndDeletions(t *testing.T) {
 		t.Logf("  utxo-deletions file exists")
 
 		// Read and verify UTXO additions content
-		utxoSet, err := utxopersister.GetUTXOSet(node.Ctx, node.Logger, node.Settings, blockStore, blockHash)
+		utxoSet, err := utxopersister.GetUTXOSet(node.Ctx, node.Logger, node.Settings, blockStore, blockHash, info.blockHeight)
 		require.NoError(t, err, "Failed to create UTXO set reader for block %d", i+1)
 
 		// Check additions - should contain the outputs from our transaction
