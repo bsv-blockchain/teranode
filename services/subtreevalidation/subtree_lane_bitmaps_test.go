@@ -387,13 +387,15 @@ func TestBlessMissing_ReadsTheLanePositionBackAtShadow(t *testing.T) {
 	require.NoError(t, err)
 
 	for _, tc := range []struct {
-		name   string
-		mode   settings.LaneMigration
-		getErr error
-		want   uint64
+		name    string
+		mode    settings.LaneMigration
+		getErr  error
+		getNone bool
+		want    uint64
 	}{
 		{name: "shadow", mode: settings.LaneMigrationShadow, want: lane.Pack(8, 14)},
 		{name: "shadow, the position not read", mode: settings.LaneMigrationShadow, getErr: errors.NewStorageError("down")},
+		{name: "shadow, the store returns no record and no error", mode: settings.LaneMigrationShadow, getNone: true},
 		{name: "off", mode: settings.LaneMigrationOff},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -403,9 +405,10 @@ func TestBlessMissing_ReadsTheLanePositionBackAtShadow(t *testing.T) {
 			store := &utxo.MockUtxostore{}
 			store.On("GetMeta", mock.Anything, mock.Anything, mock.Anything).Return(&meta.Data{Fee: 1, SizeInBytes: 1, TxInpoints: inpoints})
 
-			if tc.getErr != nil {
+			switch {
+			case tc.getErr != nil, tc.getNone:
 				store.On("Get", mock.Anything, mock.Anything, []fields.FieldName{fields.LanePosition}).Return(nil, tc.getErr)
-			} else {
+			default:
 				store.On("Get", mock.Anything, mock.Anything, []fields.FieldName{fields.LanePosition}).Return(&meta.Data{LanePosition: lane.Pack(8, 14)}, nil)
 			}
 
@@ -426,6 +429,22 @@ func TestBlessMissing_ReadsTheLanePositionBackAtShadow(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A record read back that already holds its lane position needs no second read for it.
+func TestReadBackMeta_ReadsNoPositionItAlreadyHas(t *testing.T) {
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.UtxoStore.LaneMigration = settings.LaneMigrationShadow
+
+	store := &utxo.MockUtxostore{}
+	store.On("GetMeta", mock.Anything, mock.Anything, mock.Anything).Return(&meta.Data{Fee: 1, LanePosition: lane.Pack(3, 7)})
+
+	server := &Server{logger: ulogger.TestLogger{}, settings: tSettings, utxoStore: store}
+
+	stored := &meta.Data{}
+	require.NoError(t, server.readBackMeta(context.Background(), &chainhash.Hash{0x01}, stored))
+	require.Equal(t, lane.Pack(3, 7), stored.LanePosition)
+	store.AssertNotCalled(t, "Get", mock.Anything, mock.Anything, mock.Anything)
 }
 
 // positionValidator validates as its validator does and gives the created record position, as a
