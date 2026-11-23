@@ -25,6 +25,7 @@ import (
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/blob"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
+	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/health"
@@ -39,6 +40,9 @@ import (
 type Interface interface {
 	Health(ctx context.Context, checkLiveness bool) (int, string, error)
 	GetTxMeta(ctx context.Context, hash *chainhash.Hash) (*meta.Data, error)
+	// GetTxBlockRefs returns only the block IDs and block heights recorded for a transaction (no body),
+	// for callers that need where it was mined rather than what it is.
+	GetTxBlockRefs(ctx context.Context, hash *chainhash.Hash) (*meta.Data, error)
 	GetTransaction(ctx context.Context, hash *chainhash.Hash) ([]byte, error)
 	GetBlockStats(ctx context.Context) (*model.BlockStats, error)
 	GetBlockGraphData(ctx context.Context, periodMillis uint64) (*model.BlockDataPoints, error)
@@ -313,6 +317,13 @@ func (repo *Repository) GetTxMeta(ctx context.Context, hash *chainhash.Hash) (*m
 	// reach a JSON marshaller — see withoutUnserializableTx. The metadata itself
 	// is still returned.
 	return withoutUnserializableTx(txMeta, hash), nil
+}
+
+// GetTxBlockRefs reads only the BlockIDs and BlockHeights fields of a transaction's record. On stores
+// that would otherwise load the transaction body with its metadata (Aerospike), this avoids reading
+// the body, and possibly an external blob, when only the mined blocks are needed.
+func (repo *Repository) GetTxBlockRefs(ctx context.Context, hash *chainhash.Hash) (*meta.Data, error) {
+	return repo.UtxoStore.Get(ctx, hash, fields.BlockIDs, fields.BlockHeights)
 }
 
 // GetTransaction retrieves transaction data by its hash.

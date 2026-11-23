@@ -22,7 +22,8 @@ import (
 const (
 	// utxoStatusMaxRecords is the hard per-request cap for POST /api/v1/utxos/status.
 	// Per record the worst case is one output-status read, one funding-record read,
-	// one spender-record read and one main-chain check per block the transaction
+	// one spender block-reference read (block IDs and heights only, no transaction
+	// body) and one main-chain check per block the transaction
 	// sits in (a remote call when the main-chain cache does not cover the height).
 	// Funding and spender records are memoised per transaction, and each distinct
 	// funding height costs one block fetch per request. The cap is far below the
@@ -188,6 +189,7 @@ func (h *HTTP) GetUTXOStatuses() func(c echo.Context) error {
 			h:      h,
 			bestH:  best.Height,
 			metas:  make(map[chainhash.Hash]*utxoStatusMetaEntry),
+			refs:   make(map[chainhash.Hash]*utxoStatusMetaEntry),
 			blocks: make(map[uint32]*utxoStatusBlockEntry),
 		}
 		results := make([]UTXOStatusRecord, numRecords)
@@ -233,7 +235,7 @@ func (h *HTTP) GetUTXOStatuses() func(c echo.Context) error {
 			return echo.NewHTTPError(http.StatusServiceUnavailable, errors.NewServiceUnavailableError("best block unavailable", err).Error())
 		}
 
-		prometheusAssetHTTPGetUTXOs.WithLabelValues("OK", "200").Add(float64(numRecords))
+		prometheusAssetHTTPGetUTXOStatuses.WithLabelValues("OK", "200").Add(float64(numRecords))
 
 		return c.JSON(http.StatusOK, UTXOStatusResponse{
 			BestBlock:        *best,
@@ -281,6 +283,7 @@ type utxoStatusLookup struct {
 	bestH  uint32
 	mu     sync.Mutex
 	metas  map[chainhash.Hash]*utxoStatusMetaEntry
+	refs   map[chainhash.Hash]*utxoStatusMetaEntry
 	blocks map[uint32]*utxoStatusBlockEntry
 }
 
@@ -299,6 +302,31 @@ func (l *utxoStatusLookup) txMeta(ctx context.Context, hash *chainhash.Hash) (*m
 
 	e.once.Do(func() {
 		e.data, e.err = l.h.repository.GetTxMeta(ctx, hash)
+		if e.err != nil && isStoreNotFound(e.err) {
+			e.data, e.err = nil, nil
+		}
+	})
+
+	return e.data, e.err
+}
+
+// blockRefs returns the (memoised) block IDs and heights recorded for a
+// transaction, without its body: the spender path only needs where the
+// spender was mined. A nil record with a nil error means the store does not
+// hold the transaction.
+func (l *utxoStatusLookup) blockRefs(ctx context.Context, hash *chainhash.Hash) (*meta.Data, error) {
+	l.mu.Lock()
+
+	e, ok := l.refs[*hash]
+	if !ok {
+		e = &utxoStatusMetaEntry{}
+		l.refs[*hash] = e
+	}
+
+	l.mu.Unlock()
+
+	e.once.Do(func() {
+		e.data, e.err = l.h.repository.GetTxBlockRefs(ctx, hash)
 		if e.err != nil && isStoreNotFound(e.err) {
 			e.data, e.err = nil, nil
 		}
@@ -412,7 +440,7 @@ func (l *utxoStatusLookup) record(ctx context.Context, txHash *chainhash.Hash, v
 
 		rec.Spender = &UTXOStatusSpender{TxID: sr.SpendingData.TxID.String(), Vin: sr.SpendingData.Vin}
 
-		if sd, sErr := l.txMeta(ctx, sr.SpendingData.TxID); sErr == nil && sd != nil {
+		if sd, sErr := l.blockRefs(ctx, sr.SpendingData.TxID); sErr == nil && sd != nil {
 			if f := l.funding(ctx, sd, false); f != nil && f.Mined {
 				rec.Spender.Mined, rec.Spender.BlockHeight = true, f.BlockHeight
 			}

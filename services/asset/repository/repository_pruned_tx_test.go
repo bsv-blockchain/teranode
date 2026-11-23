@@ -14,6 +14,7 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/blob"
 	blockchain_store "github.com/bsv-blockchain/teranode/stores/blockchain"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
+	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/test"
@@ -206,4 +207,24 @@ func TestGetTransactionMeta_KeepsUsableMetadata(t *testing.T) {
 	require.Nil(t, txMeta.Tx, "an unserializable reconstruction must not be handed to a JSON marshaller")
 	require.Equal(t, uint64(1234), txMeta.Fee)
 	require.Equal(t, []uint32{900000}, txMeta.BlockHeights)
+}
+
+// GetTxBlockRefs asks the UTXO store for exactly the block IDs and block heights, so a store that would
+// otherwise load the transaction body with its metadata (Aerospike) does not read it.
+func TestRepository_GetTxBlockRefs_requestsOnlyTheBlockFields(t *testing.T) {
+	repo, mockUtxoStore, _ := newRepoWithMockedUtxoStore(t)
+
+	hash, err := chainhash.NewHashFromStr("0202020202020202020202020202020202020202020202020202020202020202")
+	require.NoError(t, err)
+
+	want := []fields.FieldName{fields.BlockIDs, fields.BlockHeights}
+	mockUtxoStore.On("Get", mock.Anything, hash, want).
+		Return(&meta.Data{BlockIDs: []uint32{8}, BlockHeights: []uint32{870}}, nil)
+
+	got, err := repo.GetTxBlockRefs(context.Background(), hash)
+	require.NoError(t, err)
+	require.Equal(t, []uint32{8}, got.BlockIDs)
+	require.Equal(t, []uint32{870}, got.BlockHeights)
+	require.Nil(t, got.Tx)
+	mockUtxoStore.AssertExpectations(t)
 }

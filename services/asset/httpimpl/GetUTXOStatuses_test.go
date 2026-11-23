@@ -24,6 +24,7 @@ import (
 	spendpkg "github.com/bsv-blockchain/teranode/stores/utxo/spend"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/labstack/echo/v4"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
@@ -150,7 +151,7 @@ func TestGetUTXOStatuses(t *testing.T) {
 			SpendingData: spendpkg.NewSpendingData(&spenderID, 3),
 		}, nil)
 		mockRepo.On("GetTxMeta", &fundID).Return(&meta.Data{Tx: tx, BlockIDs: []uint32{7}, BlockHeights: []uint32{850}}, nil)
-		mockRepo.On("GetTxMeta", &spenderID).Return(&meta.Data{BlockIDs: []uint32{8}, BlockHeights: []uint32{870}}, nil)
+		mockRepo.On("GetTxBlockRefs", &spenderID).Return(&meta.Data{BlockIDs: []uint32{8}, BlockHeights: []uint32{870}}, nil)
 
 		bc := &blockchain.Mock{}
 		bc.On("CheckBlockIsInCurrentChain", mock.Anything, mock.Anything).Return(true, nil)
@@ -165,6 +166,31 @@ func TestGetUTXOStatuses(t *testing.T) {
 		require.Equal(t, 3, r.Spender.Vin)
 		require.True(t, r.Spender.Mined)
 		require.Equal(t, uint32(870), r.Spender.BlockHeight)
+		// the spender path reads only the block references, never the full record (no transaction body)
+		mockRepo.AssertCalled(t, "GetTxBlockRefs", &spenderID)
+		mockRepo.AssertNotCalled(t, "GetTxMeta", &spenderID)
+	})
+
+	t.Run("served records count on the route's own counter, not on POST /api/v1/utxos", func(t *testing.T) {
+		httpServer, mockRepo, ec, rec := mockStatusHTTP(t, statusBody(statusOutpoint{fundID, 0}, statusOutpoint{fundID, 1}))
+
+		bestBlockMocks(mockRepo, 900)
+		mockRepo.On("GetUtxo", mock.Anything).Return(&utxo.SpendResponse{Status: int(utxo.Status_OK)}, nil)
+		mockRepo.On("GetTxMeta", mock.Anything, mock.Anything).Return(&meta.Data{Tx: tx, BlockIDs: []uint32{7}, BlockHeights: []uint32{850}}, nil)
+
+		bc := &blockchain.Mock{}
+		bc.On("CheckBlockIsInCurrentChain", mock.Anything, mock.Anything).Return(true, nil)
+		mockRepo.On("GetBlockchainClient").Return(bc)
+		mockRepo.On("GetBlockByHeight", uint32(850)).Return(blockWithHeader, nil)
+
+		statusesBefore := testutil.ToFloat64(prometheusAssetHTTPGetUTXOStatuses.WithLabelValues("OK", "200"))
+		utxosBefore := testutil.ToFloat64(prometheusAssetHTTPGetUTXOs.WithLabelValues("OK", "200"))
+
+		out := callStatus(t, httpServer, ec, rec)
+		require.Len(t, out.Results, 2)
+
+		require.InDelta(t, statusesBefore+2, testutil.ToFloat64(prometheusAssetHTTPGetUTXOStatuses.WithLabelValues("OK", "200")), 0)
+		require.InDelta(t, utxosBefore, testutil.ToFloat64(prometheusAssetHTTPGetUTXOs.WithLabelValues("OK", "200")), 0)
 	})
 
 	t.Run("unconfirmed funding transaction is flagged", func(t *testing.T) {
