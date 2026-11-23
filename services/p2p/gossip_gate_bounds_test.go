@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -338,6 +339,57 @@ func TestLiveConnAddrs_JudgesViewAgeAfterWaitingForRebuildLock(t *testing.T) {
 	}
 
 	t.Fatal("lookup never queued on rebuildMu in three attempts")
+}
+
+// slowWalkP2PClient is a countingP2PClient whose GetPeers takes walkTime, as
+// a walk over a large tracked-author set does.
+type slowWalkP2PClient struct {
+	countingP2PClient
+	walkTime time.Duration
+}
+
+func (c *slowWalkP2PClient) GetPeers() []p2pMessageBus.PeerInfo {
+	time.Sleep(c.walkTime)
+	return c.countingP2PClient.GetPeers()
+}
+
+// Misses queued behind a walk that outlasts liveConnMissRefreshInterval must
+// share that walk's view rather than each walking again: the view is stamped
+// when the walk returns, so it is fresh to every waiter it releases.
+func TestLiveConnAddrs_QueuedMissesShareOneSlowWalk(t *testing.T) {
+	const waiters = 4
+
+	s, _ := newServerWithLocalRegistry(t)
+	client := &slowWalkP2PClient{walkTime: liveConnMissRefreshInterval + 200*time.Millisecond}
+	client.peers = []p2pMessageBus.PeerInfo{{ID: mustNewPeerID(t).String(), Addrs: []string{"/ip4/10.0.0.1/tcp/9905"}}}
+	s.P2PClient = client
+
+	unknown := make([]string, waiters)
+	for i := range unknown {
+		unknown[i] = mustNewPeerID(t).String()
+	}
+
+	var (
+		wg   sync.WaitGroup
+		live atomic.Int32
+	)
+
+	for _, id := range unknown {
+		wg.Add(1)
+
+		go func(id string) {
+			defer wg.Done()
+
+			if s.hasLiveConnection(id) {
+				live.Add(1)
+			}
+		}(id)
+	}
+
+	wg.Wait()
+
+	require.Zero(t, live.Load(), "unknown authors are not live")
+	require.Equal(t, int32(1), client.walks.Load(), "lookups queued behind one walk must share its view")
 }
 
 // A ban applied locally while a registry listing was in flight must survive
