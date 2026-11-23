@@ -262,6 +262,36 @@ func TestProcessTxMetaUsingStore_ReadsTheLanePositionOneByOneAtShadow(t *testing
 	}
 }
 
+// At shadow a one-by-one read that finds nothing, by the store's error, a per-transaction error or
+// no data, fails the read as GetMeta's error does at off, and sets nothing.
+func TestProcessTxMetaUsingStore_OneByOneReadFailsWhenTheStoreFindsNothingAtShadow(t *testing.T) {
+	for name, tc := range map[string]struct {
+		returns error
+		item    error
+	}{
+		"the store's error":       {returns: errors.NewProcessingError("store refused")},
+		"a per-transaction error": {item: errors.NewTxNotFoundError("not here")},
+		"no data":                 {},
+	} {
+		t.Run(name, func(t *testing.T) {
+			tSettings := test.CreateBaseTestSettings(t)
+			tSettings.UtxoStore.LaneMigration = settings.LaneMigrationShadow
+
+			store := &utxo.MockUtxostore{}
+			store.On("BatchDecorate", mock.Anything, mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
+				args.Get(1).([]*utxo.UnresolvedMetaData)[0].Err = tc.item
+			}).Return(tc.returns)
+
+			server := &Server{logger: ulogger.TestLogger{}, settings: tSettings, utxoStore: store}
+
+			txMetaSlice := make([]metaSliceItem, 1)
+			_, readErr := server.processTxMetaUsingStore(context.Background(), []chainhash.Hash{{0x01}}, txMetaSlice, nil, false, false, true)
+			require.Error(t, readErr)
+			require.False(t, txMetaSlice[0].isSet)
+		})
+	}
+}
+
 // A transaction in neither the cache nor the store is validated here, and the position its create
 // returns goes into the subtree's metadata, so the subtree's lane bitmaps hold it.
 func TestBlessMissingTransactions_KeepsThePositionTheCreateReturns(t *testing.T) {

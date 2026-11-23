@@ -155,6 +155,28 @@ func TestLaneRowsCountAMismatchAndStillGoWithTheBlock(t *testing.T) {
 	}
 }
 
+// A block whose bitmaps files were all read but hold no position, as for subtrees of transactions
+// cached before they had positions, has no rows to store, so AddBlock gets none, and it counts as
+// fewer when it has transactions besides its coinbase. It is not counted as missing bitmaps.
+func TestLaneRowsOfABlockWhoseBitmapsHoldNoPosition(t *testing.T) {
+	u, block := laneRowsFixture(t, settings.LaneMigrationShadow)
+
+	for _, h := range block.Subtrees {
+		empty, err := lane.EncodeSubtreeBitmaps(lane.SubtreeBitmaps{SubtreeHash: *h})
+		require.NoError(t, err)
+		require.NoError(t, u.subtreeStore.Set(context.Background(), h[:], fileformat.FileTypeSubtreeLaneBitmaps, empty, withOverwrite()...))
+	}
+
+	block.TransactionCount = 3
+
+	fewer := laneMetric(t, "teranode_lane_row_count_mismatches_total", "direction", lane.MismatchFewer)
+	absent := laneMetric(t, "teranode_lane_missing_bitmaps_total", "reason", lane.MissingBitmapsAbsent)
+
+	require.Nil(t, u.laneRows(context.Background(), block), "nil, so AddBlock is given no rows at all")
+	require.Equal(t, fewer+1, laneMetric(t, "teranode_lane_row_count_mismatches_total", "direction", lane.MismatchFewer))
+	require.Equal(t, absent, laneMetric(t, "teranode_lane_missing_bitmaps_total", "reason", lane.MissingBitmapsAbsent))
+}
+
 func TestLaneRowsSkipABlockWithMissingBitmaps(t *testing.T) {
 	t.Run("absent", func(t *testing.T) {
 		u, block := laneRowsFixture(t, settings.LaneMigrationShadow)
