@@ -88,12 +88,15 @@ func TestLaneMetaContentCountsWhatDoesNotDecode(t *testing.T) {
 		"zero position":  append(append([]byte(nil), content[:len(content)-8]...), 0, 0, 0, 0, 0, 0, 0, 0),
 		"legacy content": func() []byte { b, _ := d.MetaBytes(); return b }(),
 		"empty":          nil,
+		"zero own":       laneMetaWith(content, func(b []byte) { clear(b[2:10]) }),
+		// Byte 26 holds the flags (stores/utxo/meta/data_lane.go).
+		"unknown flag": laneMetaWith(content, func(b []byte) { b[26] |= 0b100000 }),
 	} {
 		_, err := LaneMetaContent(bad)
 		require.Error(t, err, name)
 	}
 
-	require.Equal(t, before+5, testutil.ToFloat64(prometheusLaneTxMetaMisses.WithLabelValues(LaneMissDecode)))
+	require.Equal(t, before+7, testutil.ToFloat64(prometheusLaneTxMetaMisses.WithLabelValues(LaneMissDecode)))
 }
 
 // The sender counts every entry at shadow, lane, own or legacy, and the reason for each one that
@@ -238,4 +241,12 @@ func TestAppendLaneCacheContentIsTheCacheForm(t *testing.T) {
 	require.Error(t, err)
 	require.Equal(t, []byte{1}, got)
 	require.Equal(t, before+1, testutil.ToFloat64(prometheusLaneTxMetaMisses.WithLabelValues(LaneMissDecode)))
+}
+
+// laneMetaWith returns a copy of content changed by change.
+func laneMetaWith(content []byte, change func([]byte)) []byte {
+	b := append([]byte(nil), content...)
+	change(b)
+
+	return b
 }

@@ -23,10 +23,13 @@ var probeLaneSlotPosition = lane.Pack(200, 1)
 
 // probeLaneSlotWrites reports whether the server records a spend's lane position in the parent's
 // slot, the spendLanePos bin. It writes a one-output probe record, spends it with a lane position
-// through the route real spends take (the native sub-op when that is in use, the Lua UDF
-// otherwise), reads the bin back and deletes the record. It runs only with lane positions on, and
-// its answer only decides how spends are counted: a spend carries its position either way, and a
-// server that predates the lanePos key ignores it. Every failure answers false, with a warning.
+// through spendMulti (the native sub-op when that is in use, the Lua UDF otherwise), reads the bin
+// back and deletes the record. It does not probe the expression operate
+// (Aerospike.EnableSpendFilterExpressions with utxoBatchSize 1), which sends no lane position:
+// countLaneSpends counts those spends as not carried, including a FILTERED_OUT spend retried
+// through Lua that does write the bin. It runs only with lane positions on, and its answer only
+// decides how spends are counted: a spend carries its position either way, and a server that
+// predates the lanePos key ignores it. Every failure answers false, with a warning.
 //
 // Like probeConflictingIndex, the probe record is no transaction anything else reads: it carries no
 // txID, unminedSince or createdAt bin, so block assembly's unmined iterator and the pruner's
