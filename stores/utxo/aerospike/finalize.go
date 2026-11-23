@@ -88,8 +88,12 @@ func (s *Store) FinalizeTransaction(ctx context.Context, tx *bt.Tx, attempt, lea
 		firstErr error
 	)
 
+	// The item carries waitCtx, which this function cancels on every return. A caller can give up
+	// without its own context ending: the wait below returns a timeout error while the item is
+	// still queued. The write must not land after that, because it would stamp the record with the
+	// lease of a caller that has returned an error. waitCtx has the deadline of ctx.
 	item := &batchFinalize{
-		ctx:     ctx,
+		ctx:     waitCtx,
 		tx:      tx,
 		attempt: attempt,
 		lease:   lease,

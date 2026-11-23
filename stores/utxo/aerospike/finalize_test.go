@@ -672,3 +672,51 @@ func TestFinalizeTransaction_AnAbandonedFinalizeIsNotSent(t *testing.T) {
 
 	require.NoError(t, store.FinalizeTransaction(ctx, tx, token, token), "a live caller still finalizes it")
 }
+
+// TestFinalizeTransaction_AFinalizeThatTimedOutIsNotSent covers a caller that gives up without its
+// context ending: the wait for the batcher runs out while the finalize is still queued. The write must
+// not land later, or the record would be final and stamped with the lease of a caller that returned an
+// error, and no caller would own the hand-off.
+func TestFinalizeTransaction_AFinalizeThatTimedOutIsNotSent(t *testing.T) {
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.UtxoStore.LockedBatcherDurationMillis = 400 // the finalize waits in the batcher this long
+
+	client, store, ctx, deferFn := initAerospike(t, tSettings, logger)
+	t.Cleanup(deferFn)
+	cleanDB(t, client)
+
+	_, err := store.Create(ctx, tests.ParentTx, 100)
+	require.NoError(t, err)
+
+	_, err = store.Create(ctx, tx, 100, utxo.WithCreating(true))
+	require.NoError(t, err)
+
+	token := attemptOf(t, ctx, store, tx.TxIDChainHash())
+
+	var writes atomic.Int32
+
+	store.SetBatchOperateFn(func(policy *aerospike.BatchPolicy, records []aerospike.BatchRecordIfc) aerospike.Error {
+		for _, record := range records {
+			if write, ok := record.(*aerospike.BatchWrite); ok && write.Policy != nil && write.Policy.RecordExistsAction == aerospike.UPDATE_ONLY {
+				writes.Add(1)
+			}
+		}
+
+		return client.BatchOperate(policy, records)
+	})
+	t.Cleanup(func() { store.SetBatchOperateFn(nil) })
+
+	store.SetBatcherWait(30 * time.Millisecond)
+
+	err = store.FinalizeTransaction(ctx, tx, token, token)
+	require.ErrorIs(t, err, errors.ErrServiceUnavailable, "the caller's context is live, and the wait for the batcher ran out")
+
+	time.Sleep(1200 * time.Millisecond) // the batch window of 400 ms has passed
+
+	require.Zero(t, writes.Load(), "the finalize of a caller that timed out must not be written")
+
+	got := &meta.Data{}
+	require.NoError(t, store.GetMeta(ctx, tx.TxIDChainHash(), got))
+	require.True(t, got.Creating, "the record is still creating: a roll-forward or the sweep owns it")
+}

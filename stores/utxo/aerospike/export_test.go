@@ -2,6 +2,7 @@ package aerospike
 
 import (
 	"context"
+	"time"
 
 	"github.com/bsv-blockchain/aerospike-client-go/v8"
 	"github.com/prometheus/client_golang/prometheus/testutil"
@@ -111,4 +112,9 @@ func (s *Store) FailChildAdoption(batchLevel bool) {
 // RestoreBatchOperate removes the override that FailChildAdoption installed.
 func (s *Store) RestoreBatchOperate() {
 	s.batchOperateFn = nil
+}
+
+// SetBatcherWait sets how long a submitter waits for a batcher to deliver.
+func (s *Store) SetBatcherWait(d time.Duration) {
+	s.batcherWait = d
 }
