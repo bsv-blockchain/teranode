@@ -815,6 +815,11 @@ func TestServerRejectsUnsafeFilename(t *testing.T) {
 		t.Helper()
 
 		q := url.Values{"filename": []string{filename}}
+		if method == http.MethodPatch {
+			// handleSetDAH answers 400 for a missing dah on its own; send a valid one so the
+			// filename check is what refuses the request.
+			q.Set("dah", "1000")
+		}
 
 		req, err := http.NewRequest(method, ts.URL+blobPath+"?"+q.Encode(), body)
 		require.NoError(t, err)
