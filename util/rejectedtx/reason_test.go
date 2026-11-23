@@ -2,6 +2,7 @@ package rejectedtx
 
 import (
 	"io"
+	"sort"
 	"strings"
 	"testing"
 
@@ -127,6 +128,36 @@ func TestValid(t *testing.T) {
 		require.False(t, Valid(r), r)
 		require.Equal(t, Fallback, Normalize(r))
 	}
+}
+
+// Valid bounds its work by length before splitting: an oversized reason is
+// refused outright, while the longest reason the grammar admits (MaxCodes of
+// the longest code names plus the longest detail) still fits under the bound.
+func TestValid_LengthBound(t *testing.T) {
+	names := make([]string, 0, len(errors.ERR_value))
+	for name, value := range errors.ERR_value {
+		if errors.ERR(value) != errors.ERR_UNKNOWN {
+			names = append(names, name)
+		}
+	}
+
+	sort.Slice(names, func(i, j int) bool { return len(names[i]) > len(names[j]) })
+
+	details := Details()
+	sort.Slice(details, func(i, j int) bool { return len(details[i]) > len(details[j]) })
+
+	longest := strings.Join(names[:MaxCodes], "/") + detailSeparator + details[0]
+	require.True(t, Valid(longest), "the longest reason the grammar admits must pass: %q", longest)
+	require.LessOrEqual(t, len(longest), maxReasonLen)
+
+	// Just over the bound, but otherwise shaped like a valid reason: a code
+	// list padded with slashes would cost one string header per slash.
+	slashDense := "TX_INVALID" + strings.Repeat("/", maxReasonLen)
+	require.False(t, Valid(slashDense))
+	require.Equal(t, Fallback, Normalize(slashDense))
+
+	allocs := testing.AllocsPerRun(10, func() { Valid(slashDense) })
+	require.Zero(t, allocs, "an oversized reason must be refused before any allocation")
 }
 
 // A valid code list survives an unrecognized detail: a newer validator's

@@ -79,6 +79,25 @@ var details = map[string]struct{}{
 	DetailGoBDKInvalidTx:         {},
 }
 
+// maxReasonLen is the longest reason the grammar admits: MaxCodes of the
+// longest code name joined by "/", then the separator and the longest detail.
+// Valid refuses anything longer before doing any per-code work, since the
+// chokepoint runs it on the raw Kafka field, which during a rolling upgrade is
+// a pre-upgrade validator's full err.Error() and can be very large.
+var maxReasonLen = func() int {
+	longestCode := 0
+	for _, name := range errors.ERR_name {
+		longestCode = max(longestCode, len(name))
+	}
+
+	longestDetail := 0
+	for d := range details {
+		longestDetail = max(longestDetail, len(d))
+	}
+
+	return MaxCodes*longestCode + (MaxCodes - 1) + len(detailSeparator) + longestDetail
+}()
+
 // Details returns the allowlisted detail literals, sorted, for tests that pin
 // properties of the whole set.
 func Details() []string {
@@ -140,6 +159,10 @@ func Reason(err error) string {
 // Anything else, including a pre-upgrade validator's raw error text, is not a
 // reason this package produced.
 func Valid(reason string) bool {
+	if len(reason) > maxReasonLen {
+		return false
+	}
+
 	codeList, detail, hasDetail := strings.Cut(reason, detailSeparator)
 
 	if hasDetail {
@@ -149,7 +172,7 @@ func Valid(reason string) bool {
 	}
 
 	codes := strings.Split(codeList, "/")
-	if len(codes) == 0 || len(codes) > MaxCodes {
+	if len(codes) > MaxCodes {
 		return false
 	}
 
