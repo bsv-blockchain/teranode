@@ -723,7 +723,7 @@ The service exposes 6 gRPC operations (`BlockValidationAPI`), plus one Kafka ing
 | **Consumer group** | `blockvalidation.<ClientName>`, manual commit |
 | **Valid states** | Consumed only after the FSM first leaves `IDLE` |
 | **Handling** | As `BlockFound` without `wait_to_complete`, except that a bad URL scheme is rejected with `invalid URL scheme '<scheme>' - expected http or https` (BV-INGRESS-004) |
-| **Commit semantics** | Undecodable → commit; local/transient failure → do not commit; other failure → commit and report peer failure |
+| **Commit semantics** | Undecodable → commit; local/transient failure → commit and retry in-process within the BV-INGRESS-009 bounds, without reporting a peer failure; other failure → commit and report peer failure. A message left uncommitted at shutdown is redelivered. |
 | **Requirement IDs** | BV-INGRESS-001, BV-INGRESS-007 through BV-INGRESS-010 |
 
 ### Kafka egress: invalid-blocks topic (`KAFKA_INVALID_BLOCKS`, configured by `kafka_invalidBlocksConfig`)
@@ -808,7 +808,7 @@ stateDiagram-v2
 
 **AC-BV-INGRESS-007.1.** Given the FSM is `IDLE` at start, when a block message is produced to the blocks topic, then it MUST NOT be consumed until the FSM reaches `RUNNING` or `CATCHINGBLOCKS`.
 
-**AC-BV-INGRESS-009.1.** Given the Blockchain store returns a storage error while a Kafka block message is processed, then no peer failure MUST be reported, and the block MUST be re-attempted in-process until the store recovers or the retry bound is reached.
+**AC-BV-INGRESS-009.1.** Given the Blockchain store returns a storage error while Kafka message M1 is processed, when a later message M2 on the same partition succeeds, then M1 MUST have been committed and MUST be re-attempted in-process until the store recovers or the retry bound is reached; no peer failure MUST be reported for M1. An M1 left uncommitted at shutdown MAY instead be redelivered.
 
 **AC-BV-INGRESS-013.1.** Given `ProcessBlock` is called with `block_id = 7` for a block that fails a bound-body rule, then the stored invalid record MUST have ID 7.
 
