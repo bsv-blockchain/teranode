@@ -176,6 +176,17 @@ func startLaneReaderOn(t *testing.T, tSettings *settings.Settings, store lanerea
 // block_parent, and setTxMinedStatus's duplicate check, on the block's own rows, under
 // block_duplicate.
 func TestBlockValidationCountsItsLaneShadowsThroughTheRealHooks(t *testing.T) {
+	for _, optimistic := range []bool{false, true} {
+		name := "full validation"
+		if optimistic {
+			name = "optimistic mining, validated in the background"
+		}
+
+		t.Run(name, func(t *testing.T) { countsLaneShadowsThroughTheRealHooks(t, optimistic) })
+	}
+}
+
+func countsLaneShadowsThroughTheRealHooks(t *testing.T, optimistic bool) {
 	initPrometheusMetrics()
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -183,6 +194,8 @@ func TestBlockValidationCountsItsLaneShadowsThroughTheRealHooks(t *testing.T) {
 
 	logger := ulogger.TestLogger{}
 	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.BlockValidation.OptimisticMining = optimistic
+	tSettings.BlockValidation.OptimisticMiningPeerBlocks = optimistic
 
 	blockChainStore, err := blockchain_store.NewStore(logger, &url.URL{Scheme: "sqlitememory"}, tSettings)
 	require.NoError(t, err)
@@ -190,7 +203,7 @@ func TestBlockValidationCountsItsLaneShadowsThroughTheRealHooks(t *testing.T) {
 	blockchainClient, err := blockchain.NewLocalClient(logger, tSettings, blockChainStore, nil, nil)
 	require.NoError(t, err)
 
-	utxoStoreURL, err := url.Parse("sqlitememory:///laneshadow")
+	utxoStoreURL, err := url.Parse("sqlitememory:///laneshadow" + map[bool]string{false: "full", true: "optimistic"}[optimistic])
 	require.NoError(t, err)
 
 	realUtxoStore, err := utxosql.New(ctx, logger, tSettings, utxoStoreURL)
