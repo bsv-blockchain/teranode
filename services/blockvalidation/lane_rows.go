@@ -189,8 +189,11 @@ func (u *BlockValidation) dispatchSubtreeLaneBitmapReads(readCtx context.Context
 		}
 
 		// A slot that came free as the deadline passed can win the select above, which picks at
-		// random between ready cases. Check again, so no read starts after the deadline.
+		// random between ready cases. Check again, so no read starts after the deadline, and hand
+		// the slot back: only the read it was taken for frees it, and every block shares the pool.
 		if readCtx.Err() != nil {
+			<-slots
+
 			return
 		}
 

@@ -495,5 +495,9 @@ func TestLaneRowsStartNoReadOnceTheCallerHasGivenUp(t *testing.T) {
 
 		require.LessOrEqual(t, runtime.NumGoroutine(), baseline, "run %d", run)
 		require.Zero(t, store.gets.Load(), "run %d: no read starts after the context ended", run)
+
+		// A slot the dispatcher took as the context ended goes back: every block shares the pool,
+		// so a slot kept here would be lost to every later block.
+		require.Empty(t, u.laneBitmapReadSlots(), "run %d: every slot is handed back", run)
 	}
 }
