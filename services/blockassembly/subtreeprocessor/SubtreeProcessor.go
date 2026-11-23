@@ -8085,12 +8085,18 @@ func (stp *SubtreeProcessor) WaitForPendingBlocks(ctx context.Context) error {
 }
 
 // DrainQueue is the public entry point for BlockAssembler to flush in-flight
-// children of conflicting parents from the input queue before the event-loop
+// children of conflicting or skipped parents from the input queue before the event-loop
 // goroutine starts (BA.Start path) or before the existing post-postProcess
 // drain runs (Reset path's postProcess closure).
 //
-// Internally calls dequeueDuringBlockMovement with the supplied transient
-// drop set as the filter. Non-conflicting txs in the queue are added to the
+// Internally calls dequeueDuringBlockMovementWithCutoff with the supplied
+// transient drop set as the filter. Before the consumer starts it ignores the
+// double-spend window (double_spend_window_millis), so the filter covers every
+// queued batch: with a non-empty drop set, startup places queued batches that
+// are still inside the window at once, while an empty drop set returns early
+// and leaves them to wait out the window. After the consumer starts it keeps
+// the window cutoff, so batches inside the window are left for the normal
+// dequeue, which places them without the filter. Non-conflicting txs in the queue are added to the
 // current subtree as part of the same drain — same routing as default-case
 // dequeue would have used. skipNotification=true so this is safe to invoke
 // before subtree-announcement listeners are wired up.
@@ -8098,7 +8104,10 @@ func (stp *SubtreeProcessor) DrainQueue(dropHashes map[chainhash.Hash]struct{}) 
 	if len(dropHashes) == 0 {
 		return
 	}
-	if err := stp.dequeueDuringBlockMovement(nil, nil, dropHashes, true); err != nil {
+	// Before Start, the filter is transient and the startup load must apply it
+	// to every queued batch. After Start, preserve the double-spend window for
+	// the post-block-movement drain.
+	if err := stp.dequeueDuringBlockMovementWithCutoff(nil, nil, dropHashes, true, !stp.ConsumerStarted()); err != nil {
 		stp.logger.Errorf("[SubtreeProcessor][DrainQueue] error: %v", err)
 	}
 }
@@ -8121,7 +8130,11 @@ func (stp *SubtreeProcessor) DrainQueue(dropHashes map[chainhash.Hash]struct{}) 
 // Returns:
 //   - error: Any error encountered during processing
 func (stp *SubtreeProcessor) dequeueDuringBlockMovement(transactionMap *SortedHashSet, losingTxHashesMap txmap.TxMap, conflictingHashes map[chainhash.Hash]struct{}, skipNotification bool) (err error) {
-	return stp.forEachDrainChunk(1, func(batches []*TxBatch) (int, error) {
+	return stp.dequeueDuringBlockMovementWithCutoff(transactionMap, losingTxHashesMap, conflictingHashes, skipNotification, false)
+}
+
+func (stp *SubtreeProcessor) dequeueDuringBlockMovementWithCutoff(transactionMap *SortedHashSet, losingTxHashesMap txmap.TxMap, conflictingHashes map[chainhash.Hash]struct{}, skipNotification, ignoreWindow bool) (err error) {
+	return stp.forEachDrainChunkWithCutoff(1, ignoreWindow, func(batches []*TxBatch) (int, error) {
 		placed := 0
 
 		for _, batch := range batches {
@@ -8163,11 +8176,17 @@ func (stp *SubtreeProcessor) dequeueDuringBlockMovement(transactionMap *SortedHa
 // queue length, and the backpressure that reads it, honest during the
 // drain, and bounds what a failure part-way through can lose. fn reports how
 // many of the chunk's transactions it placed in subtrees, and that number is
-// added to the subtrees count before the chunk is settled.
+// added to the subtrees count before the chunk is settled. Before the consumer
+// starts, DrainQueue ignores the time cutoff so its transient drop filter covers
+// the queue already present; after Start it keeps the double-spend window cutoff.
 func (stp *SubtreeProcessor) forEachDrainChunk(maxItems int, fn func(batches []*TxBatch) (int, error)) error {
-	// Bound the drain by two complementary cutoffs:
+	return stp.forEachDrainChunkWithCutoff(maxItems, false, fn)
+}
+
+func (stp *SubtreeProcessor) forEachDrainChunkWithCutoff(maxItems int, ignoreWindow bool, fn func(batches []*TxBatch) (int, error)) error {
+	// Bound the drain by the queue-length snapshot and, normally, a time cutoff:
 	//
-	//  1. Time: the millisecond of clock.Now() at function entry,
+	//  1. Time (unless ignoreWindow): the millisecond of clock.Now() at function entry,
 	//     inclusive, or clock.Now() - DoubleSpendWindow, exclusive, when
 	//     that filter is enabled. The drain stops at the first queued batch
 	//     the cutoff excludes (stamped after it with no window, at or after
@@ -8226,6 +8245,9 @@ func (stp *SubtreeProcessor) forEachDrainChunk(maxItems int, fn func(batches []*
 	}
 
 	dequeue := func() (*TxBatch, bool) {
+		if ignoreWindow {
+			return stp.queue.dequeueBatch(0)
+		}
 		if window > 0 {
 			return stp.queue.dequeueBatch(validFromMillis)
 		}
