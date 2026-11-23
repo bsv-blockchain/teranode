@@ -675,3 +675,69 @@ func TestIndexFoldsDoNotWriteARetainedSnapshotsFloor(t *testing.T) {
 
 	require.Equal(t, ViaFloor, retained.Lookup(Pack(4, 600)).Via)
 }
+
+// A wide sparse row, too costly as a plain bitset, keeps its Roaring bitmap: its holes stay
+// unmined before and after it folds, and the duplicate count sees only what it took.
+func TestIndexWideSparseRowKeepsItsHoles(t *testing.T) {
+	c := newTestChain(t, 2)
+
+	c.add(1, 0, 1, rowsOf(t, 5, 1, 1_000_000))
+	c.tip(1)
+
+	row := c.idx.Snapshot().lanes[5].rows[0]
+	require.Nil(t, row.bits, "the span is too wide for a plain bitset")
+	require.NotNil(t, row.taken)
+
+	v := c.main()
+	require.Equal(t, Answer{Mined: true, Via: ViaRow, BlockID: 1, Height: 1}, v.Lookup(Pack(5, 1_000_000)))
+	require.Equal(t, Answer{}, v.Lookup(Pack(5, 2)))
+
+	c.add(2, 1, 2, rowsOf(t, 5, 1_000_000, 500_000))
+	c.tip(2)
+
+	byRow, _, hasRows := c.main().TakenBefore(2)
+	require.True(t, hasRows)
+	require.Equal(t, uint64(1), byRow, "only 1,000,000 was taken before")
+
+	c.line(3, 4)
+	c.tip(4) // block 1 folded
+
+	v = c.main()
+	require.Equal(t, Answer{Mined: true, Via: ViaFloor}, v.Lookup(Pack(5, 1)))
+	require.Equal(t, Answer{}, v.Lookup(Pack(5, 2)), "a hole of the folded row stays unmined")
+	require.Equal(t, Answer{}, v.Lookup(Pack(5, 999_999)))
+}
+
+// Folded blocks' metadata is kept for keepFoldedBlocks below the tip, then dropped, while the
+// floor still answers for the positions they took.
+func TestIndexForgetsFoldedBlocksPastTheRetention(t *testing.T) {
+	c := newTestChain(t, 2)
+
+	c.add(1, 0, 1, rowsOf(t, 6, 9))
+
+	const top = keepFoldedBlocks + 10
+
+	for h := uint32(2); h <= top; h++ {
+		c.add(h, h-1, h)
+	}
+
+	c.tip(top)
+
+	s := c.idx.Snapshot()
+
+	state, _ := s.Block(1)
+	require.Equal(t, BlockNotLoaded, state, "past the retention")
+	require.False(t, c.idx.Has(blockHash(1)))
+	require.False(t, s.OnMain(1))
+
+	boundary := uint32(top - keepFoldedBlocks)
+	state, _ = s.Block(boundary)
+	require.NotEqual(t, BlockNotLoaded, state, "at the boundary the block is kept")
+	require.True(t, s.OnMain(boundary))
+
+	state, _ = s.Block(boundary - 1)
+	require.Equal(t, BlockNotLoaded, state)
+
+	require.Equal(t, Answer{Mined: true, Via: ViaFloor}, s.Main().Lookup(Pack(6, 9)), "the floor still answers")
+	require.Less(t, s.Stats().Blocks, keepFoldedBlocks+20)
+}
