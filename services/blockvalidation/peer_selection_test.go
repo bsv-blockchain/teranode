@@ -3,12 +3,18 @@ package blockvalidation
 import (
 	"context"
 	"math"
+	"net/url"
 	"testing"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/bsv-blockchain/teranode/model"
+	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/p2p"
 	"github.com/bsv-blockchain/teranode/settings"
+	blockchain_store "github.com/bsv-blockchain/teranode/stores/blockchain"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/jellydator/ttlcache/v3"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/stretchr/testify/require"
@@ -263,4 +269,204 @@ func TestSelectBestPeersForCatchup_NilLocalWorkValidatedPeerProbeEligible(t *tes
 	got, err := srv.selectBestPeersForCatchup(ctx, targetHeight, nil, localBestHeight)
 	require.NoError(t, err)
 	require.Len(t, got, 1, "validated peer must be probe-eligible when localChainWork is nil")
+}
+
+// TestSelectBestPeersForCatchup_BelowTargetOnlyViaValidatedWork verifies the target
+// floor of the probe tier: a peer advertising a height below the block we need is not
+// probed, while a peer whose locally validated work is ahead of our tip is admitted
+// whatever height it advertises, because the validated tier does not read the
+// advertised height at all.
+func TestSelectBestPeersForCatchup_BelowTargetOnlyViaValidatedWork(t *testing.T) {
+	ctx := context.Background()
+
+	validatedHash, err := chainhash.NewHashFromStr("000000000000000000000000000000000000000000000000000000000000eeee")
+	require.NoError(t, err)
+
+	const localBestHeight = uint32(1_000)
+	const targetHeight = uint32(1_005)
+
+	belowTargetProbe := &p2p.PeerInfo{
+		ID:         peer.ID("below-target-probe"),
+		Height:     targetHeight - 1,
+		DataHubURL: "http://below/api/v1",
+	}
+	belowTargetValidated := &p2p.PeerInfo{
+		ID:                 peer.ID("below-target-validated"),
+		Height:             targetHeight - 1,
+		DataHubURL:         "http://validated/api/v1",
+		ValidatedHeight:    targetHeight - 1,
+		ValidatedBlockHash: validatedHash,
+		ValidatedChainWork: []byte{0x00, 0x00, 0x09},
+	}
+
+	srv := newPeerSelectionServer([]*p2p.PeerInfo{belowTargetProbe, belowTargetValidated}, 10_000)
+	got, err := srv.selectBestPeersForCatchup(ctx, targetHeight, []byte{0x00, 0x00, 0x01}, localBestHeight)
+	require.NoError(t, err)
+	require.Len(t, got, 1, "a probe peer below the target height must not be selected")
+	require.Equal(t, peer.ID("below-target-validated").String(), got[0].ID)
+}
+
+// tipOverrideClient wraps a real sqlitememory-backed blockchain client and answers
+// GetBestBlockHeader with a fixed tip, so a test can place the local tip at a height
+// and chainwork the genesis-only store cannot reach. Everything else is delegated.
+type tipOverrideClient struct {
+	blockchain.ClientI
+
+	meta  *model.BlockHeaderMeta
+	err   error
+	calls int
+}
+
+func (c *tipOverrideClient) GetBestBlockHeader(_ context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
+	c.calls++
+
+	if c.err != nil {
+		return nil, nil, c.err
+	}
+
+	return &model.BlockHeader{}, c.meta, nil
+}
+
+func newTipOverrideClient(t *testing.T, meta *model.BlockHeaderMeta, err error) *tipOverrideClient {
+	t.Helper()
+
+	tSettings := test.CreateBaseTestSettings(t)
+
+	store, storeErr := blockchain_store.NewStore(ulogger.TestLogger{}, &url.URL{Scheme: "sqlitememory"}, tSettings)
+	require.NoError(t, storeErr)
+
+	realClient, clientErr := blockchain.NewLocalClient(ulogger.TestLogger{}, tSettings, store, nil, nil)
+	require.NoError(t, clientErr)
+
+	return &tipOverrideClient{ClientI: realClient, meta: meta, err: err}
+}
+
+// TestTryAlternativePeersForCatchup_GatesOnLocalTip drives the alternative-peer walk
+// end to end and checks that the local tip read from the blockchain client reaches the
+// selector: its chainwork admits a validated-ahead peer whose advertised height is
+// beyond the probe window, and its height opens the probe window for a peer that would
+// be out of range if the tip were read as zero. The validated-ahead peer is tried
+// first even though the p2p service lists it last; the far probe peer is never tried.
+func TestTryAlternativePeersForCatchup_GatesOnLocalTip(t *testing.T) {
+	ctx := context.Background()
+
+	validatedHash, err := chainhash.NewHashFromStr("000000000000000000000000000000000000000000000000000000000000ffff")
+	require.NoError(t, err)
+
+	const localBestHeight = uint32(500_000)
+	const maxLead = uint32(10_000)
+
+	probeNear := &p2p.PeerInfo{
+		ID:         peer.ID("probe-near"),
+		Height:     localBestHeight + 5_000,
+		DataHubURL: "http://probe-near/api/v1",
+	}
+	probeFar := &p2p.PeerInfo{
+		ID:         peer.ID("probe-far"),
+		Height:     localBestHeight + maxLead + 1,
+		DataHubURL: "http://probe-far/api/v1",
+	}
+	validatedAhead := &p2p.PeerInfo{
+		ID:                 peer.ID("validated-ahead"),
+		Height:             localBestHeight + 2*maxLead,
+		DataHubURL:         "http://validated-ahead/api/v1",
+		ValidatedHeight:    localBestHeight + 10,
+		ValidatedBlockHash: validatedHash,
+		ValidatedChainWork: []byte{0x00, 0x00, 0x11},
+	}
+
+	srv := newPeerSelectionServer([]*p2p.PeerInfo{probeNear, probeFar, validatedAhead}, maxLead)
+	srv.blockchainClient = newTipOverrideClient(t, &model.BlockHeaderMeta{
+		Height:    localBestHeight,
+		ChainWork: []byte{0x00, 0x00, 0x10},
+	}, nil)
+	srv.processBlockNotify = ttlcache.New[chainhash.Hash, bool]()
+	srv.catchupAlternatives = ttlcache.New[chainhash.Hash, []processBlockCatchup]()
+
+	var tried []string
+
+	srv.catchupFunc = func(_ context.Context, _ *model.Block, peerID, _ string) error {
+		tried = append(tried, peerID)
+
+		return errors.NewServiceError("peer %s could not serve the block", peerID)
+	}
+
+	prev := chainhash.HashH([]byte("alt-tip-prev"))
+	mr := chainhash.HashH([]byte("alt-tip-merkle"))
+	block := &model.Block{
+		Header: &model.BlockHeader{HashPrevBlock: &prev, HashMerkleRoot: &mr},
+		Height: localBestHeight + 1,
+	}
+
+	succeeded, stoppedOnLocalPanic := srv.tryAlternativePeersForCatchup(ctx, block, "")
+	require.False(t, succeeded)
+	require.False(t, stoppedOnLocalPanic)
+	require.Equal(t, []string{peer.ID("validated-ahead").String(), peer.ID("probe-near").String()}, tried,
+		"the validated-ahead peer must be tried first, the near probe second, and the far probe never")
+}
+
+// TestTryAlternativePeersForCatchup_TipReadErrorBoundsProbeAtZero pins what happens
+// when the local tip cannot be read: no work is known, so no peer is validated-ahead,
+// and the probe window is measured from height zero.
+func TestTryAlternativePeersForCatchup_TipReadErrorBoundsProbeAtZero(t *testing.T) {
+	ctx := context.Background()
+
+	const maxLead = uint32(10_000)
+
+	inWindow := &p2p.PeerInfo{
+		ID:         peer.ID("in-window"),
+		Height:     maxLead,
+		DataHubURL: "http://in-window/api/v1",
+	}
+	pastWindow := &p2p.PeerInfo{
+		ID:         peer.ID("past-window"),
+		Height:     maxLead + 1,
+		DataHubURL: "http://past-window/api/v1",
+	}
+
+	srv := newPeerSelectionServer([]*p2p.PeerInfo{inWindow, pastWindow}, maxLead)
+	tipClient := newTipOverrideClient(t, nil, errors.NewServiceError("blockchain unavailable"))
+	srv.blockchainClient = tipClient
+
+	var tried []string
+
+	srv.catchupFunc = func(_ context.Context, _ *model.Block, peerID, _ string) error {
+		tried = append(tried, peerID)
+
+		return errors.NewServiceError("peer %s could not serve the block", peerID)
+	}
+
+	prev := chainhash.HashH([]byte("alt-err-prev"))
+	mr := chainhash.HashH([]byte("alt-err-merkle"))
+	block := &model.Block{
+		Header: &model.BlockHeader{HashPrevBlock: &prev, HashMerkleRoot: &mr},
+		Height: 100,
+	}
+
+	succeeded, _ := srv.tryAlternativePeersForCatchup(ctx, block, "")
+	require.False(t, succeeded)
+	require.Equal(t, 1, tipClient.calls)
+	require.Equal(t, []string{peer.ID("in-window").String()}, tried)
+}
+
+// TestTryAlternativePeersForCatchup_NoP2PClientSkipsTipRead verifies the early return
+// when there is no p2p client: the walk cannot select anyone, so it must not spend a
+// blockchain RPC reading the local tip first.
+func TestTryAlternativePeersForCatchup_NoP2PClientSkipsTipRead(t *testing.T) {
+	tipClient := newTipOverrideClient(t, &model.BlockHeaderMeta{Height: 1}, nil)
+
+	srv := &Server{
+		logger:           ulogger.TestLogger{},
+		settings:         &settings.Settings{},
+		blockchainClient: tipClient,
+	}
+
+	prev := chainhash.HashH([]byte("alt-nop2p-prev"))
+	mr := chainhash.HashH([]byte("alt-nop2p-merkle"))
+	block := &model.Block{Header: &model.BlockHeader{HashPrevBlock: &prev, HashMerkleRoot: &mr}}
+
+	succeeded, stoppedOnLocalPanic := srv.tryAlternativePeersForCatchup(context.Background(), block, "")
+	require.False(t, succeeded)
+	require.False(t, stoppedOnLocalPanic)
+	require.Zero(t, tipClient.calls, "no tip read may happen without a p2p client")
 }
