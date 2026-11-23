@@ -337,10 +337,14 @@ type BlockAssembler struct {
 	startupLoadHeld atomic.Bool
 
 	// unminedDropHashes accumulates hashes that should be dropped from the
-	// input queue at the end of loadUnminedTransactions. Populated by
-	// markAsConflicting via the cascade returned from MarkConflictingRecursively.
-	// Read once by Start / postProcessFn after loadUnminedTransactions returns,
-	// then handed to subtreeProcessor.DrainQueue. Serialized by
+	// input queue at the end of loadUnminedTransactions. Populated during the
+	// load by markAsConflicting and applyDeferredConflictMarks (cascades of
+	// conflicting txs), by the hashes of records the scan skipped because their
+	// external file is missing, and by validateParentChain with the descendants
+	// of those skipped records it rejects. On the startup path,
+	// prepareRecoveredConflictUpdates then adds recovered conflict losers, so the
+	// set is final only when Start drains it. Read once by Start / postProcessFn
+	// and handed to subtreeProcessor.DrainQueue. Serialized by
 	// unminedTransactionsLoading; must not be touched concurrently.
 	unminedDropHashes map[chainhash.Hash]struct{}
 
@@ -4027,6 +4031,14 @@ func (b *BlockAssembler) validateParentChain(
 					// Filtering enabled - skip and track for cascade filtering of descendants
 					rejectedHashes[tx.Hash] = struct{}{}
 					skippedCount++
+
+					// A descendant of a record the scan skipped can also be queued
+					// through AddTx; drop its queued copy too. Other rejections stay
+					// out of the drop set: a child whose parent arrived while the
+					// scan ran must still be placed from the queue after its parent.
+					if descendsFromDropped(b.unminedDropHashes, parentHashes) {
+						b.unminedDropHashes[tx.Hash] = struct{}{}
+					}
 				} else {
 					// Filtering disabled (default) - keep transaction despite invalid parents
 					validTxs = append(validTxs, tx)
@@ -4495,7 +4507,7 @@ func (b *BlockAssembler) fixUnminedSinceInconsistencies(ctx context.Context) err
 // pending map error (AddDirectly/AddNodesDirectly): the map may be partially
 // populated, and a restart reloads it.
 // drainUnminedDropHashes drains the input queue with b.unminedDropHashes (set
-// by markAsConflicting during the load just completed) as the drop filter,
+// by markAsConflicting and by the skipped-parent scan during the load) as the drop filter,
 // then flushes and checks the disk tx map for DrainQueue's own writes: they
 // land after loadUnminedTransactions' own end-of-load FlushDiskTxMapForLoad
 // call, so a trailing unflushed failure there needs the same check, or it
@@ -4515,6 +4527,50 @@ func (b *BlockAssembler) drainUnminedDropHashes(where string, isReload bool) err
 	b.subtreeProcessor.DrainQueue(drop)
 
 	return b.subtreeProcessor.FlushDiskTxMapForLoad(where, isReload)
+}
+
+// descendsFromDropped reports whether any parent is in the load's drop set. The
+// parent chain check runs parents before children, so a rejected descendant
+// added here carries the drop down to its own children.
+func descendsFromDropped(drop map[chainhash.Hash]struct{}, parents []chainhash.Hash) bool {
+	if drop == nil {
+		return false
+	}
+
+	for _, parent := range parents {
+		if _, ok := drop[parent]; ok {
+			return true
+		}
+	}
+
+	return false
+}
+
+// unminedTxIteratorForLoad opens the unmined scan block assembly loads from.
+// A store that can leave out an external record whose file is missing (the
+// Aerospike store) is asked to: the file never comes back, so failing the scan
+// would stop block assembly on every restart. Other callers keep the scan that
+// fails.
+//
+// The skip is taken only when the load drops the children of a transaction it
+// did not load, which is when blockassembly_onRestartValidateParentChain and
+// blockassembly_onRestartRemoveInvalidParentChainTxs are both on. Otherwise a
+// skipped transaction's children would reach a block template without their
+// parent, so the load keeps the scan that fails. The disk-sorted load runs only
+// with the parent check off, so it always keeps the failing scan. A child queued
+// through AddTx during the load is dropped by the queue drain that follows it
+// (drainUnminedDropHashes), with one gap: on a reset, with
+// double_spend_window_millis above 0 (it is 0 by default), a child queued inside
+// the window is left for the normal dequeue and placed without the filter.
+func (b *BlockAssembler) unminedTxIteratorForLoad() (utxo.UnminedTxIterator, error) {
+	dropsOrphanedChildren := b.settings.BlockAssembly.OnRestartValidateParentChain &&
+		b.settings.BlockAssembly.OnRestartRemoveInvalidParentChainTxs
+
+	if skipper, ok := utxo.As[utxo.MissingExternalSkipper](b.utxoStore); ok && dropsOrphanedChildren {
+		return skipper.GetUnminedTxIteratorSkippingMissingExternal()
+	}
+
+	return b.utxoStore.GetUnminedTxIterator()
 }
 
 func (b *BlockAssembler) loadUnminedTransactions(ctx context.Context, isReload bool, validateInputs ...bool) (err error) {
@@ -4606,7 +4662,7 @@ func (b *BlockAssembler) loadUnminedTransactions(ctx context.Context, isReload b
 
 	b.logger.Infof("[loadUnminedTransactions] requesting unmined tx iterator from UTXO store")
 	start := time.Now()
-	it, err := b.utxoStore.GetUnminedTxIterator()
+	it, err := b.unminedTxIteratorForLoad()
 	duration := time.Since(start).Seconds()
 	if err != nil {
 		prometheusBlockAssemblerGetUnminedTxIteratorTime.WithLabelValues("false", "error").Observe(duration)
@@ -4654,6 +4710,7 @@ func (b *BlockAssembler) loadUnminedTransactions(ctx context.Context, isReload b
 		unminedTxs              []*utxo.UnminedTransaction
 		lockedTxs               []chainhash.Hash
 		markAsMinedOnLongestTxs []chainhash.Hash
+		skippedHashes           []chainhash.Hash
 	}
 	workerResults := make([]workerResult, numWorkers)
 
@@ -4673,11 +4730,17 @@ func (b *BlockAssembler) loadUnminedTransactions(ctx context.Context, isReload b
 
 			for batch := range workChan {
 				for _, unminedTransaction := range batch {
-					if unminedTransaction.Skip {
+					// A Skip record with no Node (an unmined coinbase) carries
+					// nothing else to check.
+					if unminedTransaction.Skip && unminedTransaction.Node == nil {
 						skippedCount.Add(1)
 						continue
 					}
 
+					// A hashed Skip record (an external record whose file is
+					// missing) carries its block IDs, so it goes through the
+					// already-mined check first: one mined on the best chain is
+					// repaired, not dropped with its children.
 					if len(unminedTransaction.BlockIDs) > 0 {
 						// If the transaction is already included in a block that is in the best chain, skip it
 						skipAlreadyMined := false
@@ -4698,6 +4761,13 @@ func (b *BlockAssembler) loadUnminedTransactions(ctx context.Context, isReload b
 
 							continue
 						}
+					}
+
+					if unminedTransaction.Skip {
+						skippedCount.Add(1)
+						localResult.skippedHashes = append(localResult.skippedHashes, unminedTransaction.Hash)
+
+						continue
 					}
 
 					localResult.unminedTxs = append(localResult.unminedTxs, unminedTransaction)
@@ -4756,6 +4826,9 @@ func (b *BlockAssembler) loadUnminedTransactions(ctx context.Context, isReload b
 
 	// Merge per-worker results into final slices
 	for idx := range workerResults {
+		for _, hash := range workerResults[idx].skippedHashes {
+			b.unminedDropHashes[hash] = struct{}{}
+		}
 		unminedTransactions = append(unminedTransactions, workerResults[idx].unminedTxs...)
 		workerResults[idx].unminedTxs = nil // Clear slice to release memory
 
@@ -5577,7 +5650,7 @@ func (b *BlockAssembler) loadUnminedTransactionsWithDiskSort(ctx context.Context
 
 	b.logger.Infof("[loadUnminedTransactionsWithDiskSort] requesting unmined tx iterator from UTXO store")
 	start := time.Now()
-	it, err := b.utxoStore.GetUnminedTxIterator()
+	it, err := b.unminedTxIteratorForLoad()
 	duration := time.Since(start).Seconds()
 	if err != nil {
 		prometheusBlockAssemblerGetUnminedTxIteratorTime.WithLabelValues("false", "error").Observe(duration)
