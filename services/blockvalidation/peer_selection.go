@@ -31,9 +31,11 @@ type PeerForCatchup struct {
 // A peer is eligible under a two-tier gate:
 //  1. Validated-ahead (primary): its locally-validated chainwork exceeds localChainWork.
 //  2. Probe fallback: its advertised height is at or above targetHeight AND within
-//     MaxUnvalidatedAdvertisedHeightLead of our local best height. The lead is bounded
-//     against localBestHeight (our own tip), not targetHeight, so a hostile block with
-//     a manipulated height field cannot shrink or expand the probe window.
+//     MaxUnvalidatedAdvertisedHeightLead of our local best height. The upper bound is
+//     measured from localBestHeight (our own tip), not targetHeight, so a hostile block
+//     height field cannot widen the probe window. targetHeight is still the floor: a
+//     block whose peer-supplied height is inflated leaves no probe candidates, and only
+//     validated-ahead peers remain.
 //
 // localTipKnown is false when the local tip could not be read. There is then no tip to
 // bound the probe window against, so the upper bound is skipped and any peer at or above
@@ -42,8 +44,9 @@ type PeerForCatchup struct {
 // alternative-peer catchup off until the blockchain service recovers.
 //
 // Peers with validated history that do NOT exceed the local tip remain probe-eligible —
-// they are known-good sources and may still have the block we need. The validated-work
-// gate determines tier ordering (and therefore retry priority), not admission.
+// they are known-good sources and may still have the block we need. Validated work
+// ahead of the local tip both admits a peer, whatever height it advertises, and puts
+// it in the first tier.
 //
 // Validated-ahead peers are returned before probe candidates. Both tiers preserve the
 // p2p server's reputation ordering (highest score first).
@@ -82,8 +85,9 @@ func (u *Server) selectBestPeersForCatchup(ctx context.Context, targetHeight uin
 			work.CompareChainWork(p.ValidatedChainWork, localChainWork) > 0
 
 		// Probe fallback: open to any peer (validated or not) claiming a plausible
-		// height. Bounding against localBestHeight (not targetHeight) means a hostile
-		// block height field cannot manipulate which peers are reachable. Peers with
+		// height. Bounding the top against localBestHeight (not targetHeight) means a
+		// hostile block height field cannot widen the window, though an inflated
+		// targetHeight still raises the floor past every peer. Peers with
 		// validated work that does not exceed the local tip are still known-good
 		// sources and remain probe-eligible here. With the local tip unknown there is
 		// nothing to bound against, so only the target floor applies.

@@ -253,7 +253,14 @@ func TestSelectBestPeersForCatchup_NilLocalWorkValidatedPeerProbeEligible(t *tes
 	const localBestHeight = uint32(500)
 	const targetHeight = uint32(400)
 
+	// The unvalidated peer is listed first. If nil local work were treated as "behind"
+	// the validated peer would move to the validated-ahead tier and come first.
 	peers := []*p2p.PeerInfo{
+		{
+			ID:         peer.ID("unvalidated-peer"),
+			Height:     490,
+			DataHubURL: "http://unvalidated/api/v1",
+		},
 		{
 			ID:                 peer.ID("validated-peer"),
 			Height:             490,
@@ -269,7 +276,38 @@ func TestSelectBestPeersForCatchup_NilLocalWorkValidatedPeerProbeEligible(t *tes
 	// must still admit the peer (Height 490 >= target 400 and <= 500+10000).
 	got, err := srv.selectBestPeersForCatchup(ctx, targetHeight, nil, localBestHeight, true)
 	require.NoError(t, err)
-	require.Len(t, got, 1, "validated peer must be probe-eligible when localChainWork is nil")
+	require.Len(t, got, 2, "validated peer must be probe-eligible when localChainWork is nil")
+	require.Equal(t, peer.ID("unvalidated-peer").String(), got[0].ID, "nil local work must not put the validated peer in the first tier")
+	require.Equal(t, peer.ID("validated-peer").String(), got[1].ID)
+}
+
+// TestSelectBestPeersForCatchup_WorkWithoutHashIsProbe verifies that chainwork with no
+// validated block hash does not count as validated history: the peer stays a probe and
+// keeps the p2p server's order rather than jumping to the validated-ahead tier.
+func TestSelectBestPeersForCatchup_WorkWithoutHashIsProbe(t *testing.T) {
+	ctx := context.Background()
+
+	peers := []*p2p.PeerInfo{
+		{
+			ID:         peer.ID("unvalidated-peer"),
+			Height:     490,
+			DataHubURL: "http://unvalidated/api/v1",
+		},
+		{
+			ID:                 peer.ID("work-no-hash-peer"),
+			Height:             490,
+			DataHubURL:         "http://nohash/api/v1",
+			ValidatedHeight:    490,
+			ValidatedChainWork: []byte{0xff, 0xff, 0xff},
+		},
+	}
+
+	srv := newPeerSelectionServer(peers, 10_000)
+	got, err := srv.selectBestPeersForCatchup(ctx, 400, []byte{0x01}, 500, true)
+	require.NoError(t, err)
+	require.Len(t, got, 2)
+	require.Equal(t, peer.ID("unvalidated-peer").String(), got[0].ID, "work without a validated hash must not reach the first tier")
+	require.Equal(t, peer.ID("work-no-hash-peer").String(), got[1].ID)
 }
 
 // TestSelectBestPeersForCatchup_BelowTargetOnlyViaValidatedWork verifies the target
