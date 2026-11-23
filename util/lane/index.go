@@ -628,7 +628,8 @@ func (s *IndexSnapshot) Folded(id uint32) bool {
 	return ok && b.folded
 }
 
-// ErrDeepReorg is SetTip's answer when the new main chain no longer holds the anchor: a reorg
+// ErrDeepReorg is SetTip's answer, returned unwrapped, so a caller compares it by identity:
+// teranode's errors.Is matches every processing error. It means the new main chain no longer holds the anchor: a reorg
 // deeper than the settle depth, past rows already folded. The index must be rebuilt.
 var ErrDeepReorg = errors.NewProcessingError("lane index: the main chain no longer holds the floor's anchor block")
 

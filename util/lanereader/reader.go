@@ -244,7 +244,9 @@ func (r *Reader) step(ctx context.Context, tip chainhash.Hash) (chainhash.Hash, 
 	}
 
 	if err = r.idx.Load().SetTip(best); err != nil {
-		if !errors.Is(err, lane.ErrDeepReorg) {
+		// By identity: teranode's errors.Is matches any error of the same code, and SetTip's other
+		// errors are processing errors too.
+		if err != lane.ErrDeepReorg { //nolint:errorlint // SetTip returns the sentinel unwrapped
 			return tip, err
 		}
 
@@ -458,7 +460,9 @@ func (r *Reader) prepare(ctx context.Context, hash chainhash.Hash) (*lane.ChainV
 	}
 
 	found, err := r.loadAncestry(ctx, hash, s.StartHeight())
-	if errors.Is(err, errBehindIndex) {
+	// By identity: teranode's errors.Is matches any processing error in the chain, such as a row
+	// that fails its check, which is a read error.
+	if err == errBehindIndex { //nolint:errorlint // loadAncestry returns the sentinel unwrapped
 		return nil, KindNotLoaded
 	}
 

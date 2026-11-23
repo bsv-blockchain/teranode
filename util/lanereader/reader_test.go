@@ -897,3 +897,41 @@ func TestReaderRemembersABlockWithNoHeldAncestor(t *testing.T) {
 	})
 	require.Equal(t, reads, source.headerReads, "the same block at the same tip is not walked again")
 }
+
+// failingRows fails every row read with a processing error, as a stored row that fails its check
+// does.
+type failingRows struct {
+	Source
+	failing bool
+}
+
+func (f *failingRows) LaneMapRows(ctx context.Context, id uint32) ([]lane.MapRow, error) {
+	if f.failing {
+		return nil, errors.NewServiceError("reading the lane map rows of block %d", id, errors.NewProcessingError("stored lane map row of block %d", id))
+	}
+
+	return f.Source.LaneMapRows(ctx, id)
+}
+
+// A processing error in an ancestry load is a read error, not a block below the index's start:
+// it counts as a prepare failure, and the block's checks not_ready.
+func TestReaderCountsAProcessingErrorInAnAncestryLoadAsAReadError(t *testing.T) {
+	store := newStore(t, "sqlite")
+	c := newChain(t, store)
+
+	b1 := c.add(nil)
+
+	source := &failingRows{Source: store}
+	r := newReader(ulogger.TestLogger{}, source, 100)
+	follow(t, r)
+
+	b2 := c.add(b1, takes(t, 3, 1))
+	source.failing = true
+
+	before := prepareFailures("read_error")
+
+	requireCounted(t, ReaderBlockDuplicate, KindNotReady, lane.ViaNone, func() {
+		r.ShadowDuplicates(context.Background(), b2.hash, b2.id, false)
+	})
+	require.Equal(t, before+1, prepareFailures("read_error"))
+}
