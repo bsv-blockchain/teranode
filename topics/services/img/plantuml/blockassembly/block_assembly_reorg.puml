@@ -28,7 +28,7 @@ database "SubtreeStore" as SStore
 database "UTXOStore" as UTXOStore
 entity "Block" as BlockEntity
 
-BA -> BC : GetBlockHeaders(ctx, header.Hash(), uint64(b.maxBlockReorgCatchup))
+BA -> BC : GetBlockHeaders(ctx, header.Hash(), uint64(height-commonAncestorMeta.Height))
 activate BC
 BC --> BA : newChain, _, err
 deactivate BC
