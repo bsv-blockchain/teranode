@@ -301,7 +301,7 @@ func classifyBlocks(v *lane.ChainView, a lane.Answer, todayBlockIDs []uint32) st
 
 // ShadowDuplicates loads the ancestry of the stored block hash, as ID blockID, and compares the
 // lane index's answer to the duplicate check with setMined's verdict. A block below the index's
-// start counts not_loaded, without a walk back.
+// start counts not_loaded after one batch of headers is read.
 func (r *Reader) ShadowDuplicates(ctx context.Context, hash chainhash.Hash, blockID uint32, todayDuplicate bool) {
 	if r == nil {
 		return

@@ -341,8 +341,8 @@ var errBehindIndex = errors.NewProcessingError("block is below the lane index's 
 
 // loadAncestry loads into the index every block from hash back to the first one it holds. It
 // reports false when it found none within maxWalk blocks, rounded up to whole batches of
-// walkBatch (1,024 headers at the defaults), and errBehindIndex, before any walk, when
-// hash is below start. The caller holds the load token.
+// walkBatch (1,024 headers at the defaults), and errBehindIndex, after reading the first batch,
+// when hash is below start. The caller holds the load token.
 func (r *Reader) loadAncestry(ctx context.Context, hash chainhash.Hash, start uint32) (bool, error) {
 	idx := r.idx.Load()
 
