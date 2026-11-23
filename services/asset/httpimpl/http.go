@@ -83,6 +83,7 @@ type HTTP struct {
 //	UTXO Related:
 //	- GET /api/v1/utxo/{hash}: Get UTXO information
 //	- GET /api/v1/utxos/{hash}/json: Get UTXOs by transaction
+//	- POST /api/v1/utxos/status: Bulk outpoint status with value, funding block and best block
 //	- GET /api/v1/balance: Get UTXO set balance
 //
 //	Search and Discovery:
@@ -504,6 +505,10 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, repo *repository.R
 	apiGroup.POST("/utxos", h.GetUTXOs(BINARY_STREAM), heavyMW()...)
 	apiGroup.POST("/utxos/hex", h.GetUTXOs(HEX), heavyMW()...)
 	apiGroup.POST("/utxos/json", h.GetUTXOs(JSON), heavyMW()...)
+
+	// Bulk outpoint status with value, funding block and best-block binding.
+	// Same heavy-route limiter and request body as the routes above.
+	apiGroup.POST("/utxos/status", h.GetUTXOStatuses(), heavyMW()...)
 
 	apiGroup.GET("/bestblockheader", h.GetBestBlockHeader(BINARY_STREAM))
 	apiGroup.GET("/bestblockheader/hex", h.GetBestBlockHeader(HEX))

@@ -409,6 +409,21 @@ package httpimpl
 //   413: errorResponse
 //   500: errorResponse
 
+// swagger:route POST /api/v1/utxos/status utxo getUTXOStatuses
+// Bulk outpoint status lookup for clients that run no node (JSON response).
+// Request body is identical to POST /api/v1/utxos (concatenated 36-byte records).
+// Response body is a JSON object with the best block read, a bestBlockChanged flag
+// and one result per record in input order, each with status unspent, spent or
+// unknown (with a reason), and where known the output value, the funding block and
+// the spender.
+// responses:
+//   200: utxoStatusResponse
+//   400: errorResponse
+//   413: errorResponse
+//   429: errorResponse
+//   500: errorResponse
+//   503: errorResponse
+
 // ========== Merkle Proofs ==========
 
 // swagger:route GET /api/v1/merkle_proof/{hash} proof getMerkleProof

@@ -790,6 +790,42 @@ Error responses include a JSON object with an error message:
     - Error responses: `400` (body length not a multiple of 36), `413` (body exceeds the cap), `429` (rate-limited), `500` (transport, store failure, or recovered per-record panic).
     - Known gap: the `lockTime` field in the response carries different semantics by backend (SQL: coinbase maturity height; Aerospike: the transaction's `nLockTime`). Pre-existing in `GET /api/v1/utxo`; surfaced more visibly here. Treat `lockTime == 0` as "not coinbase / unlocked" until the divergence is reconciled in a follow-up.
 
+- **POST `/api/v1/utxos/status`**
+    - Purpose: Bulk outpoint lookup for clients that hold no node (for example SPV wallets) and need to decide whether an output is still unspent. Adds the output value, the funding transaction's block, the spender's block height and the node's best block to the spend status that `POST /api/v1/utxos` gives. The existing routes are unchanged.
+    - Request body: same as `POST /api/v1/utxos`, concatenated 36-byte records `[32 bytes txid][4 bytes vout LE]`. At least 1 and at most 1024 records (or `asset_maxBatchRecords` when that is lower).
+    - Response (JSON), results in input order:
+
+        ```json
+        {
+          "bestBlock": {"hash": "<hex>", "height": 900},
+          "bestBlockChanged": false,
+          "results": [
+            {
+              "txid": "<hex>", "vout": 0,
+              "status": "unspent",
+              "satoshis": 1234,
+              "lockingScriptSha256": "<hex>",
+              "funding": {"mined": true, "unconfirmed": false, "blockHeight": 850, "blockHash": "<hex>"}
+            },
+            {
+              "txid": "<hex>", "vout": 1,
+              "status": "spent",
+              "funding": {"mined": true, "unconfirmed": false, "blockHeight": 850, "blockHash": "<hex>"},
+              "spender": {"txid": "<hex>", "vin": 3, "mined": true, "blockHeight": 870}
+            },
+            {"txid": "<hex>", "vout": 2, "status": "unknown", "reason": "not_found_may_be_pruned"}
+          ]
+        }
+        ```
+
+    - `status` is `unspent`, `spent` or `unknown`. `unknown` always has a `reason`: `not_found_may_be_pruned` (the store holds no record: the transaction may never have existed, or it may have been spent and pruned), `output_not_found` (the node holds the transaction body but the store has no live entry for that output, for example after a spend journal was trimmed), `output_index_out_of_range`, `unspendable` (the output is one the store never keeps as a UTXO, such as `OP_FALSE OP_RETURN`; this check needs the funding transaction body and cannot run without it), `store_unavailable` (that record could not be read; other records in the batch are still answered), `frozen`, `locked`, `conflicting`, or `unrecognised_store_status`. Clients must not read `unknown` as spent or as unspent.
+    - `satoshis` and `lockingScriptSha256` (SHA-256 of the locking script, hex) are present only when the node still holds the funding transaction body; absent means not known, not zero. A client that needs to trust the value should fetch the transaction and check its txid.
+    - `funding.mined` is true only when the funding transaction is in a block on the current main chain, and `blockHash` is then the main-chain block at `blockHeight`. `funding.unconfirmed` is true when the node holds the transaction but it is not in a main-chain block: it is unmined, or only in blocks that have been reorged out. It does not claim the transaction is in any mempool. `funding` is omitted when the node cannot establish where the transaction is (a failed main-chain check, no block evidence, or a recorded block ID that does not match the block at that height); omitted means unknown.
+    - `immature: true` means the output is not yet spendable (coinbase maturity, or a spend-height hold set by the alert system or a reassignment). The coinbase case is derived from the funding height and the best height, so it does not depend on which UTXO store the node uses.
+    - `bestBlock` is read before the lookups and again after them; `bestBlockChanged` is true when the two differ. Records are read one at a time, so the answer is not an atomic snapshot of the store. `bestBlockChanged: false` does not prove a consistent view: the main-chain cache window can lag the best block, the store's own height (used for immaturity and spend-height holds) is separate from the blockchain best block, and a reorg back to the same tip is not detected. A client that needs one consistent view should retry when `bestBlockChanged` is true and compare answers across operators. A client can bind the answer to its own header chain by checking `bestBlock.hash`, `funding.blockHash` and the heights against headers it has validated.
+    - Limits: the heavy-route tiered rate limiter, as for `POST /api/v1/utxos`, and `asset_maxBatchRecords` / `asset_maxBatchResponseBytes` (the response is charged at up to 600 bytes per record). Each distinct funding height costs one block fetch per request. The request reveals the queried outpoints to the node operator.
+    - Error responses: `400` (empty body, or length not a multiple of 36), `413` (too many records, or body over `asset_httpBodyLimit`), `429` (rate-limited), `503` (best block cannot be read), `500` (transport error or recovered panic).
+
 ### Subtree Endpoints
 
 - **GET `/api/v1/subtree/:hash`**

@@ -118,6 +118,13 @@ type swaggerErrorResponse struct {
 	Body errorResponse
 }
 
+// UTXO status lookup result
+// swagger:response utxoStatusResponse
+type swaggerUTXOStatusResponse struct {
+	// in: body
+	Body UTXOStatusResponse
+}
+
 // Block header in JSON format
 // swagger:response blockHeaderResponse
 type swaggerBlockHeaderResponse struct {
