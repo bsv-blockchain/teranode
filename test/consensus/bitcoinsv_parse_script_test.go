@@ -30,6 +30,8 @@ func TestParseScriptBitcoinSV(t *testing.T) {
 		{"2147483648", "050000008000"},
 		{"4294967295", "05ffffffff00"},
 		{"-2147483648", "050000008080"},
+		{"9223372036854775807", "08ffffffffffffff7f"},
+		{"-9223372036854775808", "09000000000000008080"},
 		{"-", "00"}, // bitcoin-sv's digit check passes a lone '-', and atoi64 reads 0
 
 		// 0x tokens are raw bytes, never pushed.
