@@ -39,8 +39,9 @@ func lanePositions(positions ...uint64) *roaring64.Bitmap {
 	return bm
 }
 
-// laneMetric sums a lane metric's samples whose labels include the given pair, or all of them
-// when label is "": a counter's value, or a histogram's observation count.
+// laneMetric sums a lane metric's samples for a peer's block (block="peer") whose labels include
+// the given pair, or all of them when label is "": a counter's value, or a histogram's
+// observation count.
 func laneMetric(t *testing.T, metric, label, value string) float64 {
 	t.Helper()
 
@@ -55,13 +56,19 @@ func laneMetric(t *testing.T, metric, label, value string) float64 {
 		}
 
 		for _, m := range f.GetMetric() {
-			match := label == ""
+			match, peer := label == "", false
 
 			for _, l := range m.GetLabel() {
 				if l.GetName() == label && l.GetValue() == value {
 					match = true
 				}
+
+				if l.GetName() == "block" && l.GetValue() == lane.BlockPeer {
+					peer = true
+				}
 			}
+
+			match = match && peer
 
 			if match && m.GetCounter() != nil {
 				sum += m.GetCounter().GetValue()
@@ -110,6 +117,7 @@ func TestLaneRowsAreTheBlockMembersPerLane(t *testing.T) {
 
 	mismatches := laneMetric(t, "teranode_lane_row_count_mismatches_total", "", "")
 	builds := laneMetric(t, "teranode_lane_gate_seconds", "stage", lane.GateStageBuild)
+	rowBytes := laneMetric(t, "teranode_lane_row_bytes", "", "")
 
 	rows := u.laneRows(context.Background(), block)
 	require.Len(t, rows, 2)
@@ -123,6 +131,7 @@ func TestLaneRowsAreTheBlockMembersPerLane(t *testing.T) {
 
 	require.Equal(t, mismatches, laneMetric(t, "teranode_lane_row_count_mismatches_total", "", ""), "six members for seven transactions with the coinbase is no mismatch")
 	require.Equal(t, builds+1, laneMetric(t, "teranode_lane_gate_seconds", "stage", lane.GateStageBuild), "the build stage is timed")
+	require.Equal(t, rowBytes+2, laneMetric(t, "teranode_lane_row_bytes", "", ""), "one size per lane the block took from")
 
 	// The rows go to AddBlock with the block.
 	opts := blockchainoptions.ProcessStoreBlockOptions(u.buildAddBlockOpts(context.Background(), block)...)

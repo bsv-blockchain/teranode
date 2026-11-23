@@ -1678,3 +1678,117 @@ func TestAMemberInNeitherThePoolNorTheRemovedTxsIsLost(t *testing.T) {
 	_, lost := subtreeLanePositions(st, txMap, txmap.NewSyncedMap[chainhash.Hash, subtreepkg.TxInpoints](), deletedPositions)
 	require.Equal(t, 1, lost)
 }
+
+// blockingBitmapsStore holds each lane bitmaps file write until released, and records whether a
+// delete-at update of one ran while a write was held.
+type blockingBitmapsStore struct {
+	blob.Store
+
+	entered chan struct{}
+	release chan struct{}
+
+	mu          sync.Mutex
+	writing     bool
+	dahDuringIO bool
+	dahs        []uint32
+}
+
+func (s *blockingBitmapsStore) Set(ctx context.Context, key []byte, fileType fileformat.FileType, value []byte, opts ...blobOptions.FileOption) error {
+	if fileType == fileformat.FileTypeSubtreeLaneBitmaps {
+		s.mu.Lock()
+		s.writing = true
+		s.mu.Unlock()
+
+		close(s.entered)
+		<-s.release
+
+		s.mu.Lock()
+		s.writing = false
+		s.mu.Unlock()
+	}
+
+	return s.Store.Set(ctx, key, fileType, value, opts...)
+}
+
+func (s *blockingBitmapsStore) SetDAH(ctx context.Context, key []byte, fileType fileformat.FileType, dah uint32, opts ...blobOptions.FileOption) error {
+	if fileType == fileformat.FileTypeSubtreeLaneBitmaps {
+		s.mu.Lock()
+		s.dahDuringIO = s.dahDuringIO || s.writing
+		s.dahs = append(s.dahs, dah)
+		s.mu.Unlock()
+	}
+
+	return s.Store.SetDAH(ctx, key, fileType, dah, opts...)
+}
+
+// TestALaneBitmapsFileWriteAndRefreshDoNotOverlap: a delete-at update of a subtree's lane bitmaps
+// file waits for a write of that file in flight, so it cannot land between the write's publish and
+// its own delete-at.
+func TestALaneBitmapsFileWriteAndRefreshDoNotOverlap(t *testing.T) {
+	server, memoryStore := setupServerWithSettings(t, func(s *settings.Settings) { s.UtxoStore.LaneMigration = settings.LaneMigrationShadow })
+
+	store := &blockingBitmapsStore{Store: memoryStore, entered: make(chan struct{}), release: make(chan struct{})}
+	server.subtreeStore = store
+
+	root := chainhash.HashH([]byte("write-and-refresh"))
+	server.ownLaneBitmaps.put(root, lane.LaneBitmaps{}, 1)
+
+	var wg sync.WaitGroup
+
+	wg.Add(2)
+
+	go func() {
+		defer wg.Done()
+		server.writeLaneBitmapsFile(t.Context(), lane.SubtreeBitmaps{SubtreeHash: root, Lanes: lane.LaneBitmaps{4: bitmapOfPositions(1)}}, 300)
+	}()
+
+	<-store.entered
+
+	go func() {
+		defer wg.Done()
+		require.NoError(t, server.setLaneBitmapsFileDAH(t.Context(), root, 301))
+	}()
+
+	time.Sleep(100 * time.Millisecond) // the refresh, unserialized, would run now
+	close(store.release)
+	wg.Wait()
+
+	store.mu.Lock()
+	defer store.mu.Unlock()
+
+	require.False(t, store.dahDuringIO, "the refresh waited for the write")
+	require.Equal(t, []uint32{301}, store.dahs)
+}
+
+// TestTheRecordedFileDAHIsKeptAndNeverLowered: storing a kept subtree's bitmaps again keeps the
+// delete-at height recorded for its file, and a lower one recorded later does not replace it.
+func TestTheRecordedFileDAHIsKeptAndNeverLowered(t *testing.T) {
+	var kept ownLaneBitmaps
+
+	root := chainhash.HashH([]byte("recorded-file-dah"))
+
+	kept.put(root, lane.LaneBitmaps{}, 1)
+	kept.recordFileDAH(root, 300)
+
+	kept.put(root, lane.LaneBitmaps{}, 2) // stored again
+	require.True(t, kept.fileDAHLater(root, 299), "the recorded height survives a second keep")
+
+	kept.recordFileDAH(root, 200) // an older one, recorded last
+	require.True(t, kept.fileDAHLater(root, 250), "a lower height does not replace it")
+}
+
+// lookupFailingMap holds every tx but cannot read any position.
+type lookupFailingMap struct {
+	subtreeprocessor.TxInpointsMap
+}
+
+func (lookupFailingMap) LookupPosition(chainhash.Hash) (uint64, bool, error) {
+	return lane.Pack(4, 5), true, errors.NewStorageError("disk tx map: read failed")
+}
+
+// TestAPositionLookupThatFailsIsNotAPosition: a pool lookup that returns an error counts as not
+// holding the tx, whatever position came with the error.
+func TestAPositionLookupThatFailsIsNotAPosition(t *testing.T) {
+	_, found := poolLookupPosition(lookupFailingMap{}, chainhash.HashH([]byte("lookup-fails")))
+	require.False(t, found)
+}

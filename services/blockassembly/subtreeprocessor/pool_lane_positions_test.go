@@ -648,3 +648,41 @@ func TestBackUpLanePositionRecordsOnlyWhatTheMapHolds(t *testing.T) {
 		})
 	}
 }
+
+// TestBatchRemovalBacksUpLanePositions: removing several txs at once backs up each removed tx's
+// position, as removing one does, on both maps.
+func TestBatchRemovalBacksUpLanePositions(t *testing.T) {
+	for _, disk := range []bool{false, true} {
+		t.Run(fmt.Sprintf("disk=%t", disk), func(t *testing.T) {
+			stp, _ := lanePoolProcessor(t, disk, true)
+
+			for i := 0; i < 9; i++ {
+				require.NoError(t, stp.addNodeAt(subtreepkg.Node{Hash: lanePoolTxHash(900 + i), Fee: 1, SizeInBytes: 1}, lanePoolInpoints(i), lane.Pack(6, uint64(60+i)), true))
+			}
+
+			backups := stp.deletedPositions
+			removed := []chainhash.Hash{lanePoolTxHash(901), lanePoolTxHash(907)}
+
+			require.NoError(t, stp.removeTxsFromSubtrees(context.Background(), removed))
+
+			for i, hash := range removed {
+				position, ok := backups.Get(hash)
+				require.True(t, ok, "tx %d's position is backed up", i)
+				require.Equal(t, lane.Pack(6, uint64(60+[]int{1, 7}[i])), position)
+			}
+		})
+	}
+}
+
+// TestDrainedPositionsKeepsEachBatchsOffset: the positions of several drained batches land at each
+// batch's own offset, and a batch without positions leaves its slots 0.
+func TestDrainedPositionsKeepsEachBatchsOffset(t *testing.T) {
+	batches := []*TxBatch{
+		{nodes: make([]subtreepkg.Node, 2), positions: []uint64{11, 12}},
+		{nodes: make([]subtreepkg.Node, 1)},
+		{nodes: make([]subtreepkg.Node, 2), positions: []uint64{31, 32}},
+	}
+
+	require.Equal(t, []uint64{11, 12, 0, 31, 32}, drainedPositions(batches, 5))
+	require.Nil(t, drainedPositions([]*TxBatch{{nodes: make([]subtreepkg.Node, 3)}}, 3), "no batch with positions, no positions")
+}

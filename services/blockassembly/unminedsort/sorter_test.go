@@ -816,3 +816,31 @@ func TestSorter_CarriesLanePositions(t *testing.T) {
 		})
 	}
 }
+
+// A run cut short inside a record's lane position fails the drain, as one cut anywhere else does.
+func TestSorter_TruncatedRunWithPositions(t *testing.T) {
+	dir := t.TempDir()
+	in := makeInputs(3000, false)
+
+	s, err := New(Options{Dirs: []string{dir}, BufferRecords: 1000, WithPositions: true})
+	require.NoError(t, err)
+
+	defer s.Close()
+
+	addAll(t, s, in, false)
+	require.NoError(t, s.waitSpill())
+	require.NotEmpty(t, s.runs)
+
+	info, err := os.Stat(s.runs[0])
+	require.NoError(t, err)
+	require.NoError(t, os.Truncate(s.runs[0], info.Size()-5))
+
+	err = s.Drain(context.Background(), 500, func([]*utxo.UnminedTransaction, []uint32) error { return nil })
+	require.Error(t, err)
+}
+
+// The buffer's memory counts 8 bytes for each lane position it holds.
+func TestBatchBufBytesCountsPositions(t *testing.T) {
+	b := &batchBuf{positions: make([]uint64, 3)}
+	require.Equal(t, 24, b.bytes())
+}

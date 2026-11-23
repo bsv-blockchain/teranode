@@ -42,6 +42,9 @@ func TestAddBlockStoresTheLaneMapRowsItCarries(t *testing.T) {
 	tc := setup(t)
 	blk := mockBlock(tc, t)
 
+	peerInserts := laneSeries(t, "teranode_lane_gate_seconds", lane.BlockPeer, lane.GateStageInsert)
+	ownInserts := laneSeries(t, "teranode_lane_gate_seconds", lane.BlockOwn, lane.GateStageInsert)
+
 	rows := []lane.MapRow{{Lane: 7, First: 1, Last: 90_000, Tag: lane.RowTagRange}}
 
 	subtreeHashes := make([][]byte, len(blk.Subtrees))
@@ -66,6 +69,10 @@ func TestAddBlockStoresTheLaneMapRowsItCarries(t *testing.T) {
 	got, err := tc.server.store.LaneMapRows(context.Background(), meta.ID)
 	require.NoError(t, err)
 	require.Equal(t, rows, got)
+
+	// rows without the own-block mark are a peer's: their insert is timed under block="peer"
+	require.Equal(t, peerInserts+1, laneSeries(t, "teranode_lane_gate_seconds", lane.BlockPeer, lane.GateStageInsert))
+	require.Equal(t, ownInserts, laneSeries(t, "teranode_lane_gate_seconds", lane.BlockOwn, lane.GateStageInsert))
 }
 
 // Lane 255 and tag 255 fit; only past a byte is refused.
