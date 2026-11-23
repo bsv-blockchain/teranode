@@ -8,9 +8,11 @@ import (
 
 // Lane positions on the txmeta topic, for the Phase 1 soak at utxostore_laneMigration shadow. The
 // validator sends an entry in the lane metadata encoding (WireActionADDLane) when it knows the
-// transaction's own lane position and every parent's, and a plain ADD entry otherwise, counting why.
-// A receiver takes both. Nothing decides on a lane position yet, so a missing one is counted, never
-// an error.
+// transaction's own lane position and every parent's; one with only the own position
+// (WireActionADDOwn) when it knows the own position but not every parent's; and a plain ADD entry
+// when it knows no own position. It counts why an entry goes without the parents' positions. A
+// receiver takes all three. Nothing decides on a lane position yet, so a missing one is counted,
+// never an error.
 
 // The reasons a txmeta entry goes without lane positions.
 const (
@@ -34,7 +36,7 @@ var (
 			Namespace: "teranode",
 			Subsystem: "lane",
 			Name:      "txmeta_messages_total",
-			Help:      "Txmeta entries for created transactions, by side (sent by the validator, or received by the named consumer) and format (lane: own and parent lane positions; legacy: none). The validator counts a sent entry only while its own utxostore_laneMigration is shadow or later; a consumer counts every ADDLane entry it receives, even with its own setting off, and a plain ADD entry only while its own setting is shadow or later; a malformed ADDLane entry still counts as format=lane",
+			Help:      "Txmeta entries for created transactions, by side (sent by the validator, or received by the named consumer) and format (lane: own and parent lane positions; own: the own position only; legacy: none). The validator counts a sent entry only while its own utxostore_laneMigration is shadow or later; a consumer counts every ADDLane and ADDOwn entry it receives, even with its own setting off, and a plain ADD entry only while its own setting is shadow or later; a malformed ADDLane or ADDOwn entry still counts in its format",
 		},
 		[]string{"side", "format"},
 	)
@@ -44,36 +46,46 @@ var (
 			Namespace: "teranode",
 			Subsystem: "lane",
 			Name:      "txmeta_position_misses_total",
-			Help:      "Txmeta entries that carry no lane positions, by reason; counted, never an error. The validator counts its reasons only at utxostore_laneMigration shadow or later; decode_failed is counted by any consumer that receives an ADDLane entry it cannot decode, whatever its own setting",
+			Help:      "Txmeta entries that carry no parent lane positions, by reason; counted, never an error. own_missing entries carry no position at all; the others still carry the own position (format=own). The validator counts its reasons only at utxostore_laneMigration shadow or later; decode_failed is counted by any consumer that receives an ADDLane or ADDOwn entry it cannot decode, whatever its own setting",
 		},
 		[]string{"reason"},
 	)
 )
 
 // CountLaneTxMetaSent counts one txmeta entry the validator sent at shadow: in the lane format when
-// reason is "", otherwise in the legacy format for reason.
-func CountLaneTxMetaSent(reason string) {
-	if reason == "" {
+// reason is "", otherwise for reason, in the own format when own is set and the legacy one when not.
+func CountLaneTxMetaSent(reason string, own bool) {
+	switch {
+	case reason == "":
 		prometheusLaneTxMetaMessages.WithLabelValues("sent", "lane").Inc()
 		return
+	case own:
+		prometheusLaneTxMetaMessages.WithLabelValues("sent", "own").Inc()
+	default:
+		prometheusLaneTxMetaMessages.WithLabelValues("sent", "legacy").Inc()
 	}
 
-	prometheusLaneTxMetaMessages.WithLabelValues("sent", "legacy").Inc()
 	prometheusLaneTxMetaMisses.WithLabelValues(reason).Inc()
 }
 
-// LaneTxMetaReceived counts the ADD and ADDLane entries one consumer receives, by format. The
-// counters are resolved once, so a count is one atomic add.
+// LaneTxMetaReceived counts the ADD, ADDLane and ADDOwn entries one consumer receives, by format.
+// The counters are resolved once, so a count is one atomic add.
 type LaneTxMetaReceived struct {
-	lane, legacy prometheus.Counter
+	lane, own, legacy prometheus.Counter
 }
 
 // NewLaneTxMetaReceived returns the counters of consumer.
 func NewLaneTxMetaReceived(consumer string) *LaneTxMetaReceived {
 	return &LaneTxMetaReceived{
 		lane:   prometheusLaneTxMetaMessages.WithLabelValues(consumer, "lane"),
+		own:    prometheusLaneTxMetaMessages.WithLabelValues(consumer, "own"),
 		legacy: prometheusLaneTxMetaMessages.WithLabelValues(consumer, "legacy"),
 	}
+}
+
+// CountOwn counts one entry in the own format.
+func (c *LaneTxMetaReceived) CountOwn() {
+	c.own.Inc()
 }
 
 // Count counts one entry, in the lane format or the legacy one.
@@ -112,4 +124,20 @@ func AppendLaneCacheContent(dst, content []byte) ([]byte, error) {
 	}
 
 	return out, nil
+}
+
+// OwnCacheContent checks the content of a WireActionADDOwn entry, the txmeta cache form with the
+// own lane position (meta.OwnCacheBytesView), and returns its MetaBytes, which a plain ADD entry
+// would carry, as a sub-slice of content. A receiver at shadow caches the content whole, and one
+// with lane positions off caches the MetaBytes. An entry that does not check out is counted as a
+// miss (LaneMissDecode) and returned as an error, for the receiver to drop like any malformed
+// entry.
+func OwnCacheContent(content []byte) ([]byte, error) {
+	legacy, _, err := meta.OwnCacheBytesView(content)
+	if err != nil {
+		prometheusLaneTxMetaMisses.WithLabelValues(LaneMissDecode).Inc()
+		return nil, err
+	}
+
+	return legacy, nil
 }

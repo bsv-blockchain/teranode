@@ -343,3 +343,92 @@ func TestAppendCacheFromLaneMetaBytesRefusesShortInput(t *testing.T) {
 		require.Error(t, err, "%d bytes", n)
 	}
 }
+
+// A WireActionADDOwn entry's content is the cache form, and the view gives back its MetaBytes,
+// without a copy, and its own position.
+func TestOwnCacheBytesViewReadsTheCacheForm(t *testing.T) {
+	d, _ := laneSample()
+
+	content, err := d.CacheBytes()
+	require.NoError(t, err)
+
+	legacy, err := d.MetaBytes()
+	require.NoError(t, err)
+
+	got, own, err := OwnCacheBytesView(content)
+	require.NoError(t, err)
+	require.Equal(t, legacy, got)
+	require.Equal(t, d.LanePosition, own)
+	require.Equal(t, len(got), cap(got), "an append to the MetaBytes cannot write into the position")
+	require.Same(t, &content[0], &got[0], "nothing is copied")
+
+	// A record with no parents, a coinbase's shape, has a position straight after the header.
+	coinbase := &Data{Fee: 1, SizeInBytes: 2, IsCoinbase: true, LanePosition: lane.Pack(0, 1)}
+
+	content, err = coinbase.CacheBytes()
+	require.NoError(t, err)
+
+	_, own, err = OwnCacheBytesView(content)
+	require.NoError(t, err)
+	require.Equal(t, lane.Pack(0, 1), own)
+}
+
+func TestOwnCacheBytesViewRefusesWhatCacheBytesWouldNotWrite(t *testing.T) {
+	d, parents := laneSample()
+
+	content, err := d.CacheBytes()
+	require.NoError(t, err)
+
+	legacy, err := d.MetaBytes()
+	require.NoError(t, err)
+
+	laneContent, err := d.LaneMetaBytesInto(nil, parents)
+	require.NoError(t, err)
+
+	withPosition := func(v uint64) []byte {
+		return lane.AppendPosition(append([]byte(nil), legacy...), v)
+	}
+
+	for name, bad := range map[string][]byte{
+		"MetaBytes alone":        legacy,
+		"one byte short":         content[:len(content)-1],
+		"one byte extra":         append(append([]byte(nil), content...), 0),
+		"zero position":          withPosition(lane.None),
+		"a lane and no position": withPosition(lane.Pack(4, 0)),
+		"the lane encoding":      laneContent,
+		"empty":                  nil,
+	} {
+		_, _, err := OwnCacheBytesView(bad)
+		require.Error(t, err, name)
+	}
+
+	for n := 0; n < 29; n++ {
+		_, _, err := OwnCacheBytesView(make([]byte, n))
+		require.Error(t, err, "%d zero bytes", n)
+	}
+}
+
+// Whatever the view accepts is MetaBytes and one valid position, and it never panics.
+func FuzzOwnCacheBytesView(f *testing.F) {
+	d, _ := laneSample()
+
+	content, err := d.CacheBytes()
+	require.NoError(f, err)
+
+	f.Add(content)
+	f.Add(content[:len(content)-1])
+	f.Add([]byte{})
+
+	f.Fuzz(func(t *testing.T, b []byte) {
+		legacy, own, err := OwnCacheBytesView(b)
+		if err != nil {
+			return
+		}
+
+		require.Len(t, legacy, len(b)-lane.PositionSize)
+		require.True(t, lane.Valid(own))
+
+		var back Data
+		require.NoError(t, NewMetaDataFromBytes(legacy, &back))
+	})
+}

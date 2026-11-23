@@ -90,7 +90,7 @@ func initRowsMetrics() {
 			Namespace: "teranode",
 			Subsystem: "lane",
 			Name:      "txs_without_position_total",
-			Help:      "Transactions a subtree's lane bitmaps leave out because no valid lane position was known for them, by the service that built the bitmaps; the coinbase placeholder is not counted",
+			Help:      "Transactions a subtree's lane bitmaps leave out because no valid lane position was known for them, by the service that built the bitmaps; counted each time a subtree is validated, so a transaction in several subtrees, as peers announce the same unmined transactions again, counts once for each. The coinbase placeholder is not counted",
 		}, []string{"service"})
 		prometheusLaneRowInsertFailure = promauto.NewCounter(prometheus.CounterOpts{
 			Namespace: "teranode",
@@ -137,7 +137,8 @@ func CountMissingBitmaps(reason string, n int) {
 	prometheusLaneMissingBitmaps.WithLabelValues(reason).Add(float64(n))
 }
 
-// CountTxsWithoutPosition counts n transactions left out of a subtree's bitmaps by service.
+// CountTxsWithoutPosition counts n transactions left out of a subtree's bitmaps by service. It is
+// called once per subtree validated, so a transaction counts again in every subtree it is in.
 func CountTxsWithoutPosition(service string, n int) {
 	if n <= 0 {
 		return

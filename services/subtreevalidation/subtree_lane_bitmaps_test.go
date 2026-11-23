@@ -297,6 +297,94 @@ func TestValidateSubtreeInternal_BuildsLaneBitmapsAtShadow(t *testing.T) {
 	}
 }
 
+// A transaction whose own position is known but one of whose parents has none, as on mainnet for a
+// spend of an output created before lane positions were on, reaches the cache through an
+// own-position txmeta entry and lands in the subtree's lane bitmaps. Through a plain ADD entry,
+// which the validator sent for it before WireActionADDOwn, the cache has no position, so the
+// subtree's bitmaps leave it out and count it, and its block's rows come up short.
+func TestValidateSubtreeInternal_AnOwnPositionEntryReachesTheLaneBitmaps(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		action byte
+		want   []uint64
+	}{
+		{name: "own-position entry", action: txmetacache.WireActionADDOwn, want: []uint64{10, 14}},
+		{name: "plain entry", action: txmetacache.WireActionADD, want: []uint64{10}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			InitPrometheusMetrics()
+
+			utxoStore, validatorClient, txStore, subtreeStore, blockchainClient, deferFunc := setup(t)
+			defer deferFunc()
+
+			for _, tx := range []*bt.Tx{tx1, tx2} {
+				_, _, err := utxoStore.SpendAndCreate(context.Background(), tx, 0, utxo.WithCreateOnly())
+				require.NoError(t, err)
+			}
+
+			tSettings := test.CreateBaseTestSettings(t)
+			tSettings.SubtreeValidation.TxMetaCacheEnabled = true
+			tSettings.UtxoStore.LaneMigration = settings.LaneMigrationShadow
+
+			nilConsumer := &kafka.KafkaConsumerGroup{}
+
+			server, err := New(context.Background(), ulogger.TestLogger{}, tSettings, subtreeStore, txStore, utxoStore, validatorClient, blockchainClient, nilConsumer, nilConsumer, nil, nil)
+			require.NoError(t, err)
+
+			// tx1 arrives in the lane encoding, tx2 in the entry under test, both as the validator
+			// sends them.
+			first, err := subtreepkg.NewTxInpointsFromTx(tx1)
+			require.NoError(t, err)
+
+			laneContent, err := (&meta.Data{Fee: 1, SizeInBytes: 1, TxInpoints: first, LanePosition: lane.Pack(8, 10)}).LaneMetaBytesInto(nil, []uint64{lane.Pack(8, 1)})
+			require.NoError(t, err)
+
+			second, err := subtreepkg.NewTxInpointsFromTx(tx2)
+			require.NoError(t, err)
+
+			d := &meta.Data{Fee: 1, SizeInBytes: 1, TxInpoints: second, LanePosition: lane.Pack(8, 14)}
+
+			content, err := d.CacheBytes()
+			require.NoError(t, err)
+
+			if tc.action == txmetacache.WireActionADD {
+				content, err = d.MetaBytes()
+				require.NoError(t, err)
+			}
+
+			require.NoError(t, server.txmetaHandler(context.Background(), txmetaMessage(false,
+				txmetaEntry{hash: *hash1, action: txmetacache.WireActionADDLane, content: laneContent},
+				txmetaEntry{hash: *hash2, action: tc.action, content: content},
+			)))
+
+			st, err := subtreepkg.NewTreeByLeafCount(4)
+			require.NoError(t, err)
+
+			for _, h := range []*chainhash.Hash{hash1, hash2} {
+				require.NoError(t, st.AddNode(*h, 1, 0))
+			}
+
+			unpositioned := laneTxsWithoutPosition(t)
+
+			_, err = server.ValidateSubtreeInternal(context.Background(), ValidateSubtree{
+				SubtreeHash: *st.RootHash(),
+				BaseURL:     "http://localhost:8000",
+				TxHashes:    []chainhash.Hash{*hash1, *hash2},
+				FromBlock:   true,
+			}, chaincfg.GenesisActivationHeight, nil)
+			require.NoError(t, err)
+
+			data, err := subtreeStore.Get(context.Background(), st.RootHash()[:], fileformat.FileTypeSubtreeLaneBitmaps)
+			require.NoError(t, err)
+
+			got, err := lane.DecodeSubtreeBitmaps(data)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, got.Lanes[8].ToArray())
+			require.Equal(t, unpositioned+float64(2-len(tc.want)), laneTxsWithoutPosition(t))
+		})
+	}
+}
+
 func bitmapOfPositions(positions ...uint64) *roaring64.Bitmap {
 	bm := roaring64.New()
 	bm.AddMany(positions)

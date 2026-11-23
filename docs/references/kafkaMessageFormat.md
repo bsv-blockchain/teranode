@@ -839,7 +839,8 @@ The 1-byte action enum is defined in `stores/txmetacache/wire.go`:
 |----------|-------|---------|
 | `WireActionADD` | `0x00` | Add or replace cached metadata for the given tx hash. `content` carries the serialized `meta.Data`. |
 | `WireActionDELETE` | `0x01` | Remove the entry for the given tx hash from the cache. `contLen` is `0` and no content follows. |
-| `WireActionADDLane` | `0x02` | `ADD` whose `content` is the lane metadata encoding, carrying the transaction's lane position and one per distinct parent. Sent only at `utxostore_laneMigration=shadow`; consumers accept both `ADD` forms. |
+| `WireActionADDLane` | `0x02` | `ADD` whose `content` is the lane metadata encoding, carrying the transaction's lane position and one per distinct parent. Sent only at `utxostore_laneMigration=shadow`; consumers accept every `ADD` form. |
+| `WireActionADDOwn` | `0x03` | `ADD` whose `content` is `MetaBytes` followed by the transaction's own 8-byte lane position, the txmeta cache form. Sent only at `utxostore_laneMigration=shadow`, when the validator knows the transaction's own position but not every parent's, as for a transaction spending an output created before lane positions were on. |
 
 ### Content Payload
 
@@ -854,6 +855,8 @@ For `ADD` entries, `content` is the serialized `meta.Data` for the transaction â
 - Lock time
 
 For `ADDLane` entries, `content` is produced by `(*meta.Data).LaneMetaBytesInto` and parsed by `meta.NewDataFromLaneMetaBytes`: a magic byte `0xA7`, a version byte `0x01` and the transaction's 8-byte lane position, then the `MetaBytes` layout (a `uint64` fee, a `uint64` size, the flags byte and the `TxInpoints`), then one 8-byte lane position per distinct parent in `TxInpoints` order. The action byte, not the magic byte, tells the two encodings apart, because a fee of 423 satoshis also begins with `0xA7 0x01`. `txmetacache.LaneMetaContent` returns the embedded `MetaBytes` without copying or allocating.
+
+For `ADDOwn` entries, `content` is produced by `(*meta.Data).CacheBytesInto` and checked by `meta.OwnCacheBytesView`: the `MetaBytes` layout, then the transaction's 8-byte lane position, which must be a valid position. The position's place is found by walking the `TxInpoints`, never by the bytes themselves. Subtree validation at shadow caches the content as it is, and with lane positions off it caches the `MetaBytes`; `txmetacache.OwnCacheContent` returns them without copying.
 
 ### Code Examples
 
@@ -917,7 +920,7 @@ if !isV2 {
 - **Truncated header**: buffer shorter than the minimum header (4 bytes for v1, 8 bytes for v2). Logged + acked.
 - **Truncated entry**: per-entry header or content runs off the end of the buffer. Logged + acked at the truncation point; preceding entries are still processed.
 - **Implausible entry count**: wire-side count exceeds what the buffer can hold at the minimum entry size. Logged + acked; nothing is dispatched. Protects the pool buffer from oversized pre-allocation.
-- **Unknown action byte** (not `0x00`, `0x01` or `0x02`): subtree validation logs the entry and skips it, and legacy relay skips it without a log; remaining entries continue to be processed.
+- **Unknown action byte** (not `0x00`, `0x01`, `0x02` or `0x03`): subtree validation logs the entry and skips it, and legacy relay skips it without a log; remaining entries continue to be processed.
 
 In all of the above the message is acknowledged (`return nil`) rather than re-delivered â€” a single corrupt message must not stall the topic.
 

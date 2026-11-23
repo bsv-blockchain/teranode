@@ -5438,9 +5438,9 @@ func (sm *SyncManager) processTXmetaBatchMessage(data []byte) error {
 		contentLen := binary.LittleEndian.Uint32(data[offset:])
 		offset += 4
 
-		if action == txmetacache.WireActionADD || action == txmetacache.WireActionADDLane {
-			// Handle ADD, in either encoding: the validator sends the lane one at
-			// utxostore_laneMigration shadow, and relay needs neither position.
+		if action == txmetacache.WireActionADD || action == txmetacache.WireActionADDLane || action == txmetacache.WireActionADDOwn {
+			// Handle ADD, in any of its encodings: the validator sends the lane and own ones at
+			// utxostore_laneMigration shadow, and relay needs no position.
 			if offset+int(contentLen) > len(data) {
 				sm.logger.Errorf("[kafkaTXmetaListener] truncated content at entry %d", i)
 				return nil
@@ -5449,14 +5449,26 @@ func (sm *SyncManager) processTXmetaBatchMessage(data []byte) error {
 			content := data[offset : offset+int(contentLen)]
 			offset += int(contentLen)
 
-			if action == txmetacache.WireActionADDLane || (sm.settings != nil && sm.settings.UtxoStore.LaneMigration.Stamps()) {
+			switch {
+			case action == txmetacache.WireActionADDOwn:
+				laneTxMetaReceived.CountOwn()
+			case action == txmetacache.WireActionADDLane || (sm.settings != nil && sm.settings.UtxoStore.LaneMigration.Stamps()):
 				laneTxMetaReceived.Count(action == txmetacache.WireActionADDLane)
 			}
 
-			if action == txmetacache.WireActionADDLane {
+			switch action {
+			case txmetacache.WireActionADDLane:
 				legacy, err := txmetacache.LaneMetaContent(content)
 				if err != nil {
 					sm.logger.Errorf("Failed to decode lane tx meta data for %s: %v", hash, err)
+					continue
+				}
+
+				content = legacy
+			case txmetacache.WireActionADDOwn:
+				legacy, err := txmetacache.OwnCacheContent(content)
+				if err != nil {
+					sm.logger.Errorf("Failed to decode own-position tx meta data for %s: %v", hash, err)
 					continue
 				}
 

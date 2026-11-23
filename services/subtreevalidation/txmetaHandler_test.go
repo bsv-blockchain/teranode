@@ -868,3 +868,76 @@ func TestServer_txmetaHandler_LaneEntriesKeepTheirPlace(t *testing.T) {
 		})
 	}
 }
+
+// An own-position entry, sent when the validator knows the transaction's position but not every
+// parent's, reaches the cache whole at shadow, so subtree validation finds the position when it
+// builds the subtree's lane bitmaps; with lane positions off the cache keeps its MetaBytes. A
+// malformed one is dropped without the entries after it, and counted.
+func TestServer_txmetaHandler_OwnPositionEntries(t *testing.T) {
+	tx := bt.NewTx()
+	in := &bt.Input{}
+	require.NoError(t, in.PreviousTxIDAdd(&chainhash.Hash{5}))
+	tx.Inputs = append(tx.Inputs, in)
+
+	inpoints, err := subtreepkg.NewTxInpointsFromTx(tx)
+	require.NoError(t, err)
+
+	d := &meta.Data{TxInpoints: inpoints, Fee: 423, SizeInBytes: 250, LanePosition: lane.Pack(8, 14)}
+
+	content, err := d.CacheBytes()
+	require.NoError(t, err)
+
+	legacy, err := d.MetaBytes()
+	require.NoError(t, err)
+
+	shadow := &settings.Settings{UtxoStore: settings.UtxoStoreSettings{LaneMigration: settings.LaneMigrationShadow}}
+
+	for _, tc := range []struct {
+		name     string
+		settings *settings.Settings
+		value    []byte
+	}{
+		{name: "off, the MetaBytes", settings: &settings.Settings{}, value: legacy},
+		{name: "shadow, the MetaBytes and the own position", settings: shadow, value: content},
+	} {
+		t.Run("v2 at "+tc.name, func(t *testing.T) {
+			key := chainhash.Hash{7}
+
+			mCache := &mockCache{}
+			mCache.On("SetCacheMultiSequentialWithHashes", [][]byte{key[:]}, [][]byte{tc.value}, []uint64{0xBEEF}).Return(nil)
+
+			server := &Server{logger: &mockLogger{}, utxoStore: mCache, settings: tc.settings}
+
+			own := laneTxMetaReceivedCount(t, "own")
+
+			msg := txmetaMessage(true, txmetaEntry{hash: key, entryHash: 0xBEEF, action: txmetacache.WireActionADDOwn, content: content})
+			require.NoError(t, server.txmetaHandler(context.Background(), msg))
+			mCache.AssertExpectations(t)
+
+			require.InDelta(t, own+1, laneTxMetaReceivedCount(t, "own"), 0, "counted whatever the setting")
+		})
+	}
+
+	t.Run("v1 at shadow: a malformed own entry drops only itself", func(t *testing.T) {
+		bad, good := chainhash.Hash{1}, chainhash.Hash{2}
+
+		mCache := &mockCache{}
+		mCache.On("SetCacheMultiSequential", [][]byte{good[:]}, [][]byte{legacy}).Return(nil)
+
+		mLogger := &mockLogger{}
+		mLogger.On("Debugf", mock.Anything, mock.Anything).Return()
+
+		server := &Server{logger: mLogger, utxoStore: mCache, settings: shadow}
+
+		errs := testutil.ToFloat64(prometheusSubtreeValidationSetTXMetaCacheKafkaErrors)
+
+		msg := txmetaMessage(false,
+			txmetaEntry{hash: bad, action: txmetacache.WireActionADDOwn, content: legacy},
+			txmetaEntry{hash: good, action: txmetacache.WireActionADD, content: legacy},
+		)
+		require.NoError(t, server.txmetaHandler(context.Background(), msg))
+		mCache.AssertExpectations(t)
+
+		require.InDelta(t, errs+1, testutil.ToFloat64(prometheusSubtreeValidationSetTXMetaCacheKafkaErrors), 0)
+	})
+}
