@@ -20,8 +20,9 @@ import (
 // refused. An honest retry after a failed attempt usually comes back within
 // minutes. One that comes back half the retention or more later is refused as a replay when its transaction has no record, including
 // in a block: an earlier attempt that left a spend behind (a rollback skipped
-// for a transient lock, or one that failed) and never created the transaction
-// reads the same as a pruned one.
+// for a transient lock, one that failed, or on Aerospike an input still in
+// flight when its call timed out that committed afterwards) and never created
+// the transaction reads the same as a pruned one.
 func HistoricalSpendAge(retention uint32) uint32 {
 	if age := retention / 2; age > 0 {
 		return age
