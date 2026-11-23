@@ -163,10 +163,26 @@ func TestReportCatchupFailureForError_SkipsCorrupt(t *testing.T) {
 		require.Equal(t, 0, client.failures)
 	})
 
-	t.Run("generic processing error is still charged", func(t *testing.T) {
+	t.Run("generic peer error is still charged", func(t *testing.T) {
 		u, client := newServer()
-		u.reportCatchupFailureForError(context.Background(), "peer-1", errors.NewProcessingError("something else failed"))
+		u.reportCatchupFailureForError(context.Background(), "peer-1", errors.NewNetworkInvalidResponseError("something else failed"))
 		require.Equal(t, 1, client.failures)
+	})
+
+	// Corrupt by class, but a consensus rejection on catch-up (bitcoin-sv/teranode#4844), so it is
+	// charged like a consensus-invalid block instead of taking the corrupt exemption.
+	t.Run("unbound invalid-transaction verdict is charged like a consensus rejection", func(t *testing.T) {
+		u, client := newServer()
+		u.reportCatchupFailureForError(context.Background(), "peer-1",
+			errors.NewBlockCorruptError("[ValidateBlock] block contains invalid transactions",
+				errors.NewTxInvalidError("transaction in subtree is invalid")))
+
+		control, controlClient := newServer()
+		control.reportCatchupFailureForError(context.Background(), "peer-1",
+			errors.NewBlockInvalidError("[BLOCK] block violates consensus"))
+
+		require.Equal(t, 1, client.failures)
+		require.Equal(t, controlClient.failures, client.failures)
 	})
 
 	t.Run("block incomplete is still skipped", func(t *testing.T) {

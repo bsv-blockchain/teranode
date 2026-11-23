@@ -205,10 +205,6 @@ func updateTxMinedStatus(ctx context.Context, logger ulogger.Logger, tSettings *
 	)
 	defer endSpan(err)
 
-	if !tSettings.UtxoStore.UpdateTxMinedStatus {
-		return nil
-	}
-
 	maxMinedBatchSize := tSettings.UtxoStore.MaxMinedBatchSize
 
 	g, gCtx := errgroup.WithContext(ctx)
@@ -229,7 +225,10 @@ func updateTxMinedStatus(ctx context.Context, logger ulogger.Logger, tSettings *
 
 		if subtree == nil {
 			if unsetMined {
-				// if unsetting, we can ignore missing subtrees
+				// A subtree of an invalid block that is absent from the store cannot be
+				// recovered by retrying: either it was never fetched, so no tx was tagged
+				// from it, or it has been pruned. The caller turns a transient read
+				// failure into an error before calling us, so only those cases reach here.
 				logger.Warnf("[UpdateTxMinedStatus][%s] unsetting mined status, missing subtree %d of %d - ignoring", block.String(), subtreeIdx, len(block.Subtrees))
 				continue
 			}
@@ -278,7 +277,15 @@ func updateTxMinedStatus(ctx context.Context, logger ulogger.Logger, tSettings *
 						// Phase 1: Fast path - check in-memory recent block IDs
 						if _, exists := chainBlockIDsMap[bID]; exists {
 							blockInvalidErrorMu.Lock()
-							blockInvalidError = errors.NewBlockInvalidError("[UpdateTxMinedStatus][%s] block contains a transaction already on our chain: %s, blockID %d (fast path)", block.Hash().String(), hash.String(), bID)
+							// The block id is the store's key, not a public identifier, so it
+							// is logged rather than put in the verdict. Once per block, and the
+							// first hit sets both: a block can carry this for every transaction
+							// it holds, and the verdict must name the transaction whose id was
+							// logged.
+							if blockInvalidError == nil {
+								logger.Warnf("[UpdateTxMinedStatus][%s] transaction %s is already on our chain in block ID %d (fast path)", block.Hash().String(), hash.String(), bID)
+								blockInvalidError = errors.NewBlockInvalidError("[UpdateTxMinedStatus][%s] block contains a transaction already on our chain: %s (fast path)", block.Hash().String(), hash.String())
+							}
 							blockInvalidErrorMu.Unlock()
 							continue
 						}
@@ -399,7 +406,9 @@ func updateTxMinedStatus(ctx context.Context, logger ulogger.Logger, tSettings *
 		}
 
 		if isAncestor {
-			return errors.NewBlockInvalidError("[UpdateTxMinedStatus][%s] block contains a transaction already on our chain (slow path detected, checked %d unique old block IDs)", block.Hash().String(), len(oldBlockIDsSlice))
+			logger.Warnf("[UpdateTxMinedStatus][%s] block contains a transaction already on our chain, found among %d unique old block IDs (slow path)", block.Hash().String(), len(oldBlockIDsSlice))
+
+			return errors.NewBlockInvalidError("[UpdateTxMinedStatus][%s] block contains a transaction already on our chain (slow path)", block.Hash().String())
 		}
 
 		logger.Debugf("[UpdateTxMinedStatus][%s] slow path check passed - %d old block IDs not ancestors of this block", block.Hash().String(), len(oldBlockIDsSlice))
@@ -408,23 +417,26 @@ func updateTxMinedStatus(ctx context.Context, logger ulogger.Logger, tSettings *
 	// Check if there were any SetMinedMulti errors or coverage gaps. We track these
 	// separately so operators can distinguish a store I/O failure from a postcondition
 	// violation (the store returned nil error but didn't durably tag every submitted tx).
+	//
+	// Both paths return the error. On the unset path (reverting an invalid block) a
+	// swallowed failure let the caller set mined_set, so the block was never revisited
+	// and its transactions kept the stale tag. Unset is idempotent and a missing tx is a
+	// no-op in the store, so an error here is a real store fault and a retry can clear it.
+	// Until one does, the block stays at mined_set=false and block assembly's
+	// WaitForPendingBlocks holds its Start, Reset and reorg, exactly as it already does for
+	// a valid block whose update fails. That is deliberate: reverting the tag is what marks
+	// a tx unmined again, so block assembly carrying on would reload without those txs.
+	// covGaps is always zero on the unset path: checkBatchResults skips it.
 	ioErrs := setMinedErrorCount.Load()
 	covGaps := coverageGapCount.Load()
-	if ioErrs > 0 || covGaps > 0 {
-		if unsetMined {
-			// For invalid blocks, we've already logged the errors - continue without error
-			logger.Warnf("[UpdateTxMinedStatus][%s] completed with %d SetMinedMulti errors and %d coverage gaps for invalid block (already logged)", block.Hash().String(), ioErrs, covGaps)
-		} else {
-			// For valid blocks, SetMinedMulti errors are critical - return error
-			switch {
-			case ioErrs > 0 && covGaps > 0:
-				return errors.NewProcessingError("[UpdateTxMinedStatus][%s] failed to set mined status for %d batches and %d coverage gap(s) detected", block.Hash().String(), ioErrs, covGaps)
-			case ioErrs > 0:
-				return errors.NewProcessingError("[UpdateTxMinedStatus][%s] failed to set mined status for %d batches", block.Hash().String(), ioErrs)
-			default:
-				return errors.NewProcessingError("[UpdateTxMinedStatus][%s] failed to set mined status: %d coverage gap(s) from SetMinedMulti", block.Hash().String(), covGaps)
-			}
-		}
+
+	switch {
+	case ioErrs > 0 && covGaps > 0:
+		return errors.NewProcessingError("[UpdateTxMinedStatus][%s] failed to set mined status for %d batches and %d coverage gap(s) detected", block.Hash().String(), ioErrs, covGaps)
+	case ioErrs > 0:
+		return errors.NewProcessingError("[UpdateTxMinedStatus][%s] failed to set mined status for %d batches", block.Hash().String(), ioErrs)
+	case covGaps > 0:
+		return errors.NewProcessingError("[UpdateTxMinedStatus][%s] failed to set mined status: %d coverage gap(s) from SetMinedMulti", block.Hash().String(), covGaps)
 	}
 
 	// if the block was found to be invalid, return that error

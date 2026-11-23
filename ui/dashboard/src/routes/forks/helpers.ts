@@ -1,5 +1,71 @@
 import * as d3 from 'd3'
 import type { TreeLayout } from 'd3-hierarchy'
+import { escapeHtml } from '$internal/utils/escapeHtml'
+
+/**
+ * Builds the label markup for one fork node.
+ *
+ * Every value it interpolates comes from the asset service's JSON, and the
+ * miner tag in particular is arbitrary bytes a miner wrote into a coinbase -
+ * consensus-visible chain data that legitimately contains angle brackets, and
+ * that a peer can choose outright for a block this node rejected. The result
+ * goes to D3 `.html(...)`, which parses it as markup, so every interpolated
+ * value is escaped here (bitcoin-sv/teranode#4844).
+ *
+ * `.html(...)` is deliberately kept rather than switched to `.text(...)`: the
+ * structural markup below (`div`, `b`, `br`) is ours and has to be parsed for
+ * the `foreignObject` layout to work. Escaping the DATA is the fix; rendering
+ * our own tags literally would just break the view.
+ *
+ * The escape used here covers element content only. The `style` and `class`
+ * attribute values below are numeric constants and literals, never caller data.
+ * If a future change puts an escaped value inside an attribute, quotes must be
+ * escaped too.
+ */
+export function forkNodeLabelHtml(
+  data: { miner?: string; height?: unknown; hash?: unknown; block_time?: unknown },
+  width: number,
+  height: number,
+): string {
+  // get the main domain from the url of the form http://m2.scaling.teranode.network/api/v1
+  let domain = data.miner
+  if (domain) {
+    try {
+      const url = new URL(data.miner as string)
+      domain = url.hostname.split('.')[0]
+    } catch (e) {
+      console.error(e)
+    }
+  }
+
+  const date = new Date((data.block_time as number) * 1000)
+
+  // Escape at emission, downstream of BOTH branches above: escaping earlier would
+  // corrupt a legitimate `http://host/path` miner before it is parsed, and the
+  // throw path assigns the raw attacker text.
+  const text = (value: unknown) => escapeHtml(String(value ?? ''))
+
+  return (
+    '<div style="width: ' +
+    width +
+    'px; height: ' +
+    height +
+    'px;" class="node-text wordwrap" >' +
+    '<b>Height: </b>' +
+    text(data.height) +
+    '<br>' +
+    '<b>Miner: </b>' +
+    text(domain || 'local') +
+    ' (' +
+    text(date.getHours()) +
+    ':' +
+    text(date.getMinutes().toString().padStart(2, '0')) +
+    ')<br>' +
+    text(data.hash) +
+    '<br><br>' +
+    '</div>'
+  )
+}
 
 function treeBoxes(selector, jsonData, orientation) {
   // const direction = "bottom-to-top"
@@ -240,41 +306,10 @@ function treeBoxes(selector, jsonData, orientation) {
       })
       .append('xhtml')
       .html(function (d) {
-        // get the main domain from the url of the form http://m2.scaling.teranode.network/api/v1
-        let domain = d.data.miner
-        if (domain) {
-          try {
-            const url = new URL(d.data.miner)
-            domain = url.hostname.split('.')[0]
-          } catch (e) {
-            console.error(e)
-          }
-        }
-        const date = new Date(d.data.block_time * 1000)
-
-        // replace the hash in the url with the current hash
-        //const link = document.location.href.replace(/\/forks\/\?hash=.*/, `/forks/?hash=${d.data.hash}`);
-
-        return (
-          '<div style="width: ' +
-          (rectNode.width - rectNode.textMargin * 2) +
-          'px; height: ' +
-          (rectNode.height - rectNode.textMargin * 2) +
-          'px;" class="node-text wordwrap" >' +
-          '<b>Height: </b>' +
-          d.data.height +
-          '<br>' +
-          '<b>Miner: </b>' +
-          (domain || 'local') +
-          ' (' +
-          date.getHours() +
-          ':' +
-          date.getMinutes().toString().padStart(2, '0') +
-          ')<br>' +
-          //+ '<b><a href="' + link + '">' + d.data.hash + '</a></b><br><br>'
-          d.data.hash +
-          '<br><br>' +
-          '</div>'
+        return forkNodeLabelHtml(
+          d.data,
+          rectNode.width - rectNode.textMargin * 2,
+          rectNode.height - rectNode.textMargin * 2,
         )
       })
       .on('mouseover', function (d: any) {

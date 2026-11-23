@@ -10,6 +10,7 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	safeconversion "github.com/bsv-blockchain/go-safe-conversion"
 	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/util/tracing"
 	"github.com/labstack/echo/v4"
 )
@@ -128,14 +129,18 @@ func (h *HTTP) GetNBlocks(mode ReadMode) func(c echo.Context) error {
 			if err != nil {
 				return echo.NewHTTPError(http.StatusBadRequest, errors.NewInvalidArgumentError("invalid number of blocks", err).Error())
 			}
+		}
 
-			if numberOfBlocks == 0 {
-				numberOfBlocks = 100
-			}
+		if numberOfBlocks == 0 {
+			numberOfBlocks = 100
+		}
 
-			if numberOfBlocks > 1000 {
-				numberOfBlocks = 1000
-			}
+		if numberOfBlocks > 1000 {
+			numberOfBlocks = 1000
+		}
+
+		if maxBlocks := h.settings.Asset.MaxNBlocks; maxBlocks > 0 && numberOfBlocks > maxBlocks {
+			numberOfBlocks = maxBlocks
 		}
 
 		if len(hashStr) != 64 {
@@ -169,16 +174,10 @@ func (h *HTTP) GetNBlocks(mode ReadMode) func(c echo.Context) error {
 			return c.JSONPretty(200, blocks, "  ")
 		}
 
-		bytes := make([]byte, 0, len(blocks)*32*1024)
-
-		for _, block := range blocks {
-			blockBytes, err := block.Bytes()
-			if err != nil {
-				// error is already properly formed
-				return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
-			}
-
-			bytes = append(bytes, blockBytes...)
+		bytes, err := concatBlockBytes(blocks)
+		if err != nil {
+			// error is already properly formed
+			return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 		}
 
 		switch mode {
@@ -190,4 +189,34 @@ func (h *HTTP) GetNBlocks(mode ReadMode) func(c echo.Context) error {
 			return echo.NewHTTPError(http.StatusBadRequest, errors.NewInvalidArgumentError("bad read mode").Error())
 		}
 	}
+}
+
+// concatBlockBytes serializes every block and joins the result into a single
+// buffer sized to the actual serialized length.
+//
+// The buffer is deliberately not preallocated from the block count. Reserving a
+// fixed amount per block sized the allocation from an attacker-supplied 'n'
+// rather than from the data, so a request for the maximum block count reserved
+// tens of megabytes before anything was serialized.
+func concatBlockBytes(blocks []*model.Block) ([]byte, error) {
+	serialized := make([][]byte, 0, len(blocks))
+
+	total := 0
+
+	for _, block := range blocks {
+		blockBytes, err := block.Bytes()
+		if err != nil {
+			return nil, err
+		}
+
+		serialized = append(serialized, blockBytes)
+		total += len(blockBytes)
+	}
+
+	joined := make([]byte, 0, total)
+	for _, blockBytes := range serialized {
+		joined = append(joined, blockBytes...)
+	}
+
+	return joined, nil
 }

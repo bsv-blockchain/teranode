@@ -1,6 +1,6 @@
 # How to Expose the P2P Service Publicly (Kubernetes)
 
-Last modified: 11-June-2026
+Last modified: 9-September-2026
 
 ## Why This Matters
 

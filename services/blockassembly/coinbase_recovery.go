@@ -113,10 +113,24 @@ func (b *BlockAssembler) chainStopsBelow(ctx context.Context, height uint32) boo
 	return height > meta.Height
 }
 
-// canonicalCoinbaseAt reports whether block assembly's UTXO store holds the
-// canonical coinbase transaction for the given height. It returns the
+// canonicalCoinbaseAt reports whether block assembly's UTXO store holds a RECORD
+// for the canonical coinbase transaction at the given height. It returns the
 // canonical block itself so the repair path can reuse its CoinbaseTx without
 // re-fetching from the blockchain client.
+//
+// "Present" means the store answered with a record. It deliberately does NOT mean
+// the record carries a serialized transaction body, because a body is not what
+// this is asking about: the question is whether the coinbase's coins exist, and a
+// body-less record's coins are as live as any other's.
+//
+// Reading it the other way was a real outage. A UTXO store may legitimately hold
+// a transaction with Tx nil -- once the tx_body partition has aged out, and, with
+// utxostore_skipTxBodyBelowCheckpoint on, for every transaction mined at or below
+// the hardcoded checkpoint, whose bytes are never written at all. Both return the
+// metadata with Tx nil and NO error (see stores/utxo/utxoset.Store.Get). While
+// this decided presence on txMeta.Tx, every coinbase created below the checkpoint
+// read as missing, the walk-back never found a good floor, and startup raised
+// MANUAL INTERVENTION REQUIRED against a UTXO set that was entirely intact.
 func (b *BlockAssembler) canonicalCoinbaseAt(ctx context.Context, height uint32) (present bool, canonicalBlock *model.Block, err error) {
 	blk, err := b.canonicalBlockAt(ctx, height)
 	if err != nil {
@@ -127,7 +141,21 @@ func (b *BlockAssembler) canonicalCoinbaseAt(ctx context.Context, height uint32)
 		return false, nil, errors.NewProcessingError("[coinbaseRecovery] canonical block at height %d has no coinbase", height)
 	}
 
-	txMeta, err := b.utxoStore.Get(ctx, blk.CoinbaseTx.TxIDChainHash(), fields.Tx)
+	// Ask for fields.Creating rather than fields.Tx, which reassembles the whole
+	// transaction just to be discarded. The question is whether the store holds
+	// a usable coinbase, not whether a row exists: a multi-record create that was
+	// interrupted before its flag was cleared leaves Creating=true, and spends
+	// refuse such a record. Reporting it absent sends it to the repair, whose
+	// create tolerates ErrTxExists and clears the flag on aerospike.
+	//
+	// Only aerospike populates Data.Creating. The SQL and utxoset stores never set
+	// it, so on those this probe is a plain existence check, which is no weaker than the
+	// fields.Tx probe it replaced there.
+	//
+	// An external blob that has gone missing under a record is not probed. The
+	// aerospike create writes the blob before any record, so an interrupted
+	// create cannot leave a record without one.
+	txMeta, err := b.utxoStore.Get(ctx, blk.CoinbaseTx.TxIDChainHash(), fields.Creating)
 	if err != nil {
 		// Either code means the same thing here -- the coinbase is not in the
 		// store -- and which one comes back depends on the store backend.
@@ -138,7 +166,8 @@ func (b *BlockAssembler) canonicalCoinbaseAt(ctx context.Context, height uint32)
 		return false, blk, errors.NewProcessingError("[coinbaseRecovery] error checking coinbase at height %d", height, err)
 	}
 
-	if txMeta == nil || txMeta.Tx == nil {
+	// A missing record surfaces as (nil, nil) on some backends.
+	if txMeta == nil || txMeta.Creating {
 		return false, blk, nil
 	}
 

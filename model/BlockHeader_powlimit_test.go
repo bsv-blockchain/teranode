@@ -91,3 +91,23 @@ func TestHasMetPowLimit_NilSafe(t *testing.T) {
 	var nilHeader *BlockHeader
 	require.NoError(t, nilHeader.HasMetPowLimit(&chaincfg.MainNetParams))
 }
+
+// TestPowLimitCeiling_TakesTheLooserOfPowLimitAndPowLimitBits pins the one
+// definition the three proof-of-work gates share (HasMetPowLimit, netsync's
+// streaming gate, the header cache's Fill). STN's two declarations disagree, and
+// the looser one, the target 0x207fffff encodes, is the ceiling; mainnet's agree
+// and the ceiling is PowLimit itself; no params or no PowLimit means no ceiling.
+func TestPowLimitCeiling_TakesTheLooserOfPowLimitAndPowLimitBits(t *testing.T) {
+	stnBits := nBitFor(t, "207fffff").CalculateTarget()
+	stn := PowLimitCeiling(&chaincfg.StnParams)
+	require.NotNil(t, stn)
+	require.Zero(t, stn.Cmp(stnBits), "STN's ceiling is the target its PowLimitBits encodes, which is looser than its PowLimit")
+	require.Greater(t, stn.Cmp(chaincfg.StnParams.PowLimit), 0, "sanity: the two STN declarations really do disagree")
+
+	mainnet := PowLimitCeiling(&chaincfg.MainNetParams)
+	require.NotNil(t, mainnet)
+	require.Zero(t, mainnet.Cmp(chaincfg.MainNetParams.PowLimit), "mainnet's ceiling is its PowLimit")
+
+	require.Nil(t, PowLimitCeiling(nil))
+	require.Nil(t, PowLimitCeiling(&chaincfg.Params{}), "no PowLimit, no ceiling")
+}

@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/bsv-blockchain/teranode/daemon"
+	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/test"
@@ -44,12 +45,12 @@ func Test_MultiNode_BlockAssembly_After_Sync_Manual(t *testing.T) {
 
 	block1, err := node1.BlockchainClient.GetBlockByHeight(node1.Ctx, 1)
 	require.NoError(t, err)
-	err = node2.BlockValidation.ValidateBlock(node2.Ctx, block1, node1.AssetURL, false)
+	err = node2.BlockValidation.ValidateBlock(node2.Ctx, asReceivedFromPeer(block1), node1.AssetURL, false)
 	require.NoError(t, err)
 
 	block2, err := node1.BlockchainClient.GetBlockByHeight(node1.Ctx, 2)
 	require.NoError(t, err)
-	err = node2.BlockValidation.ValidateBlock(node2.Ctx, block2, node1.AssetURL, false)
+	err = node2.BlockValidation.ValidateBlock(node2.Ctx, asReceivedFromPeer(block2), node1.AssetURL, false)
 	require.NoError(t, err)
 
 	// Phase 3: Create a chain of 10 transactions
@@ -80,7 +81,7 @@ func Test_MultiNode_BlockAssembly_After_Sync_Manual(t *testing.T) {
 	t.Log("Phase 6: Node1 mining 9 blocks...")
 	for i := 0; i < 10; i++ {
 		block := node1.MineAndWait(t, 1)
-		err := node2.BlockValidation.ValidateBlock(node2.Ctx, block, node1.AssetURL, false)
+		err := node2.BlockValidation.ValidateBlock(node2.Ctx, asReceivedFromPeer(block), node1.AssetURL, false)
 		require.NoError(t, err, "Failed to validate block %d", i)
 		node2.WaitForBlockHeight(t, block, 10*time.Second)
 	}
@@ -89,29 +90,41 @@ func Test_MultiNode_BlockAssembly_After_Sync_Manual(t *testing.T) {
 	t.Log("Phase 8: Verifying node1 block assembly is empty...")
 	node1Txs, err := node1.BlockAssemblyClient.GetTransactionHashes(node1.Ctx)
 	require.NoError(t, err)
-	assert.Len(t, node1Txs, 1, "Node1 should have 1 transaction in block assembly")
+	assert.Empty(t, node1Txs, "Node1 should have no transactions in block assembly")
 
 	// Phase 9: Check node2 has exactly 5 transactions in block assembly (txs 6-10)
-	t.Log("Phase 9: Verifying node2 has 6 transactions in block assembly...")
+	t.Log("Phase 9: Verifying node2 has 5 transactions in block assembly...")
 	node2Txs, err := node2.BlockAssemblyClient.GetTransactionHashes(node2.Ctx)
 	require.NoError(t, err)
-	assert.Len(t, node2Txs, 6, "Node2 should have 6 transactions in block assembly")
+	assert.Len(t, node2Txs, 5, "Node2 should have 5 transactions in block assembly")
 	t.Logf("PASS: Node2 has %d transactions in block assembly", len(node2Txs))
 
 	node1.WaitForPruner(t, 10*time.Second)
 	node2.WaitForPruner(t, 10*time.Second)
 
 	node2block2 := node2.MineAndWait(t, 1)
-	err = node1.BlockValidation.ValidateBlock(node1.Ctx, node2block2, node2.AssetURL, false)
+	err = node1.BlockValidation.ValidateBlock(node1.Ctx, asReceivedFromPeer(node2block2), node2.AssetURL, false)
 	require.NoError(t, err)
 
 	node1.WaitForBlock(t, node2block2, 10*time.Second)
 
 	node1Txs, err = node1.BlockAssemblyClient.GetTransactionHashes(node1.Ctx)
 	require.NoError(t, err)
-	assert.Len(t, node1Txs, 1, "Node1 should have 1 transaction in block assembly")
+	assert.Empty(t, node1Txs, "Node1 should have no transactions in block assembly")
 
 	node2Txs, err = node2.BlockAssemblyClient.GetTransactionHashes(node2.Ctx)
 	require.NoError(t, err)
-	assert.Len(t, node2Txs, 1, "Node2 should have 1 transaction in block assembly")
+	assert.Empty(t, node2Txs, "Node2 should have no transactions in block assembly")
+}
+
+// asReceivedFromPeer clears the block id the source node's store gave the block.
+// A block read from one node's blockchain store carries that node's blocks-row id,
+// which means nothing on another node. A block that arrives from a peer has no
+// id, and ValidateBlock treats a non-zero id as one this node reserved, so passing
+// the source node's id would ask the store to write the row under an id it never
+// issued, which it refuses.
+func asReceivedFromPeer(block *model.Block) *model.Block {
+	block.ID = 0
+
+	return block
 }

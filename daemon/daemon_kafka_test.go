@@ -55,3 +55,26 @@ func TestGetKafkaTxAsyncProducerUsesParsedSetting(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, consumer, "consumer must be created from the same parsed setting")
 }
+
+// TestGetKafkaTxmetaEvictionAsyncProducer pins that block assembly's txmeta producer is
+// optional (nil, nil without a txmeta topic, so the interface really is nil) and is
+// created without manual partitioning even when the validator ships v2.
+func TestGetKafkaTxmetaEvictionAsyncProducer(t *testing.T) {
+	t.Run("no txmeta topic configured gives a nil interface and no error", func(t *testing.T) {
+		producer, err := getKafkaTxmetaEvictionAsyncProducer(context.Background(), ulogger.TestLogger{}, &settings.Settings{})
+		require.NoError(t, err)
+		require.Nil(t, producer, "must be a true nil interface so block assembly skips publishing")
+	})
+
+	t.Run("txmeta topic configured gives a producer, also under the v2 wire format", func(t *testing.T) {
+		kafkaURL, err := url.Parse("memory://in-memory/txmeta")
+		require.NoError(t, err)
+
+		tSettings := &settings.Settings{Kafka: settings.KafkaSettings{TxMetaConfig: kafkaURL}}
+		tSettings.Validator.TxMetaWireFormat = "v2"
+
+		producer, err := getKafkaTxmetaEvictionAsyncProducer(context.Background(), ulogger.TestLogger{}, tSettings)
+		require.NoError(t, err)
+		require.NotNil(t, producer)
+	})
+}

@@ -200,6 +200,8 @@ If parent transactions cannot be found during extension:
 - Provides clear error message indicating which parent is missing
 - Client can retry after ensuring parent transactions are confirmed
 
+Exception, for mempool submission only: when every parent is absent and the transaction is already mined on the current chain, the validator returns its stored record as success. See the validator service documentation.
+
 Common scenarios requiring parent transactions:
 
 - Child-pays-for-parent (CPFP) transaction patterns

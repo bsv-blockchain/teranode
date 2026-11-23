@@ -180,6 +180,65 @@ export const getRenderProps = (name: any, colDef: any, idField: any, item: any) 
   return {}
 }
 
+export interface HashBadge {
+  color: string
+  count: number
+  total: number
+}
+
+const HUE_MIN = 40
+const HUE_RANGE = 280
+
+export const hueForHash = (hash: string): number => {
+  const n = parseInt(hash.slice(-8), 16)
+
+  return HUE_MIN + ((Number.isNaN(n) ? 0 : n) % HUE_RANGE)
+}
+
+export const buildHashBadges = (items: any[]): Map<string, HashBadge> => {
+  const counts = new Map<string, number>()
+  let total = 0
+
+  for (const item of items || []) {
+    const hash = item?.best_block_hash || item?.hash
+
+    if (hash) {
+      counts.set(hash, (counts.get(hash) || 0) + 1)
+      total++
+    }
+  }
+
+  const badges = new Map<string, HashBadge>()
+
+  counts.forEach((count, hash) => {
+    badges.set(hash, { color: `hsl(${hueForHash(hash)}, 75%, 55%)`, count, total })
+  })
+
+  return badges
+}
+
+export const getRenderCells = (badges: Map<string, HashBadge>) => ({
+  ...renderCells,
+  best_block_hash: (idField, item, colId) => {
+    const base = renderCells.best_block_hash(idField, item, colId)
+    const hash = item[colId] || item.hash
+    const badge = hash ? badges.get(hash) : undefined
+
+    if (!badge) {
+      return base
+    }
+
+    return {
+      ...base,
+      props: {
+        ...base.props,
+        badgeColor: badge.color,
+        badgeTooltip: `${badge.count} of ${badge.total} reporting nodes on tip ${shortHash(hash)}`,
+      },
+    }
+  },
+})
+
 export const renderCells = {
   client_name: (idField, item, colId) => {
     const clientName = item[colId] || item.client_name || '(not set)'

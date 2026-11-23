@@ -1,4 +1,3 @@
-
 # Aerospike UTXO Store
 
 This document describes the Aerospike UTXO store implementation, including the data structures and Lua User-Defined Functions (UDFs) that provide the bridge between the Go application and Aerospike.
@@ -33,7 +32,7 @@ spentExtraRecs - number of spent extra records
 utxoSpendableIn - map of UTXO-specific freeze heights
 ```
 
-### Large Transaction with External Storage (< 20,000 outputs)
+### Large Transaction with External Storage (outputs <= `utxostore_utxoBatchSize`)
 ```
 external = true
 fee
@@ -49,27 +48,31 @@ frozen
 [other fields as above]
 ```
 
-### Paginated Transaction (> 20,000 outputs)
+### Paginated Transaction (outputs > `utxostore_utxoBatchSize`)
+
+The default `utxostore_utxoBatchSize` is 128, so a transaction with 129 or more outputs is paginated.
 
 **Record 1 - Key: TXID (the _0 is implied)**
 ```
 external = true
 fee
 sizeInBytes
-utxos - utxo[0..19999]
+utxos - utxo[0..utxoBatchSize-1]
 totalUtxos - total in entire transaction
-recordUtxos - 20000 (in this record)
+recordUtxos - utxoBatchSize (in this record)
 spentUtxos - spent count in this record
 totalExtraRecs - number of additional records
 spentExtraRecs - number of fully spent extra records
+creating - true while storeExternallyWithLock writes the transaction's records (absent when not creating)
 [other fields as above]
 ```
 
 **Record 2 - Key: TXID_1**
 ```
-utxos - utxo[20000..39999]
+utxos - utxo[utxoBatchSize..2*utxoBatchSize-1]
 recordUtxos - count in this record
 spentUtxos - spent count in this record
+creating - as on the master record
 [subset of fields]
 ```
 
@@ -83,6 +86,45 @@ if recordNumber > 0 then
     key = key + "_" + recordNumber
 end
 ```
+
+## Multi-Record Creation (the `creating` bin)
+
+A transaction with many outputs is stored as a master record plus extra records. The store writes them in two phases, so a reader never sees a half-written transaction as spendable. The code is `storeExternallyWithLock` and `clearCreatingFlag` in `create.go`.
+
+`storeExternallyWithLock` sets the `creating` bin on every record that it writes. It handles two cases:
+
+- A transaction split across several records.
+- A single-record transaction that `sendStoreBatch` retries after `RECORD_TOO_BIG`. The bin is then set on its only record.
+
+The plain single-record path, including a single-record `external` transaction, does not set the bin.
+
+1. **Write phase**: the store creates every record with `creating` set to `true`.
+2. **Clear phase**: `clearCreatingFlag` deletes the bin from the extra records first. It deletes the bin from the master record only if every extra record cleared.
+
+A failure in the clear phase leaves one of these states:
+
+- The batch write to the extra records fails as a whole: every extra record and the master can stay marked.
+- Some extra records fail: those extra records and the master stay marked.
+- The master write fails: every extra record is clear, and only the master stays marked.
+
+While `creating` is `true`, the Lua `spend` function refuses to spend the record and returns the error code `CREATING`.
+
+### Recovery
+
+If the clear phase fails or the process stops, the records stay in the `creating` state. These paths act on them:
+
+1. **Subtree validation**: subtree validation reads only the master record. If the master has `Creating == true`, the transaction counts as missing, and subtree validation processes it again. See `processTxMetaUsingStore.go`.
+2. **Re-create**: a second store of a multi-record transaction goes through `storeExternallyWithLock` again. It runs `clearCreatingFlag` only when all of these are true:
+   - It gets the creation lock. A lock left by a writer that crashed blocks it until the lock TTL expires.
+   - The blob write succeeds.
+   - The record batch has no top-level error, and every record returns OK or `KEY_EXISTS_ERROR`.
+
+   A second store of a single-record transaction that went through the `RECORD_TOO_BIG` retry does not do this. It takes the plain `sendStoreBatch` put, gets `KEY_EXISTS_ERROR`, and returns `ErrTxExists` without a call to `clearCreatingFlag`. Only `setMined` recovers that case.
+3. **setMined**: when the transaction is mined, `setMined` deletes the `creating` bin from the master record and from every extra record that exists. The Lua `setMined` function or `set_mined_expressions.go` clears the master. `clearLockedOnRecordsMulti` in `set_mined.go` clears the extra records in the same write that clears `locked`. On the expressions path, a master write that comes back `FILTERED_OUT` keeps its `creating` bin, but its extra records are still cleared.
+
+One gap remains after `setMined`: an extra record that the write phase never created. `setMined` clears the master, and the clear of the missing record gets `KEY_NOT_FOUND`, which `setMined` treats as benign. The record stays missing. Subtree validation then sees a complete master and does not process the transaction again. A master record without the bin therefore does not prove that every extra record exists.
+
+The validator retry does not act on the records. A child transaction that hits `ErrTxCreating` on a parent retries validation with exponential backoff (see `ValidateWithOptions` in `Validator.go`). This covers only the window while the clear phase is still in flight. The setting `validator_txlocked_maxRetries` controls the retry count. The default is 3 (10/20/40ms, about 70ms in total), and values above 10 are clamped. The `TX_LOCKED` retry uses the same budget. If the clear phase failed for good, the child uses all of its retries and the validator rejects it. The metric `teranode_validator_parent_commit_exhausted` counts these rejections, with the label `condition="TX_CREATING"`.
 
 ## Lua Bridge Interface
 
@@ -334,6 +376,8 @@ Signals provide additional information about operations that may require follow-
 - `PRESERVE` - External files need preservation
 
 **Note:** Child count information is now returned as a separate `childCount` field in the response, not embedded in the signal string.
+
+**Delete-at-height floor:** The Lua `setDeleteAtHeight` raises every stamp to the record's highest mined block height plus retention, so a lagging cached tip cannot stamp a mined record for deletion inside its retention window. With a `DAHSET` signal the response also carries a `deleteAtHeight` field holding the master's stamp, and the Go side stamps pagination (child) records with that value so they are never pruned before the master. The spend, setMined, SetConflicting, unspend and increment-spent-extra-records paths all propagate it, and a `DAHUNSET` clears the pages the same way. The `setConflicting` and `unspend` responses for a paginated master always carry `childCount`, the current `deleteAtHeight` (absent when unset) and `dahVer`. The Go side reconciles the pages on every `SetConflicting` and `Unspend` evaluation of the master: it writes them on every such response for a master with children, whatever the signal, and a response with no signal and no stamp clears them. A lost response or a crash between the master write and the page write on those two paths is therefore repaired by the next `SetConflicting` or `Unspend` of that master, for example the caller's retry. The spend and setMined paths write pages only on a `DAHSET` or `DAHUNSET` signal, so a lost response there is not repaired by a signal-less retry; that is the known limit of those two paths. The write is versioned, so a page that already holds the response's version or a newer one refuses it as `FILTERED_OUT`, which counts as success. The cost is one filtered round trip per page per evaluation. The `dahVer` master bin is bumped on every evaluation of the master's `deleteAtHeight`, not only when a stamp is written: every Lua path that sets, raises or clears the stamp bumps it, and every expression path bumps it whether or not the stamp changes. The writers are: the Lua `setDeleteAtHeight`, preserve and lock paths, the setMined, spend, longest-chain, preserve and expired-preservation expressions, their restores, the master write of the setDAH batcher and the pruner's clear of a protected unmined master all increment it. A lock also clears the pages of the locked master with the master's version, from the `setLocked` response. The initial create is the one exception: it leaves the bin absent, which counts as 0. A pagination record never stamps or versions itself, whatever conflicting flag it was created with. The version counts master writes and expression evaluations, so an expression setMined or longest-chain call that changes no stamp still bumps it, while a Lua call that leaves the stamp alone does not. With `aerospike_use_native_teranode_ops` the server dispatcher neither bumps nor reports `dahVer`, so page writes after a native-op call are not ordered and the page-first rule is not applied natively. A page write carries the version its response reported. It is applied only when the page has no version or an older one, and it stamps the version on the page, so a response from before a later transition cannot overwrite the pages that transition wrote. Every follow-up that writes pages (spend, setMined, SetConflicting, unspend, longest chain, preserve, expired preservation and the pruner's unmined clear) carries the version of the master write it follows. Only a write from a Lua package or server that reports no version stays unconditional. A `DAHSET` that raises a conflicting master, which is prunable whatever its spent state, also carries `conflicting=true`, so the increment handler stamps the pages without the all-spent verification and does not clear the master as counter drift. A package that omits the field makes the Go side fall back to the caller's height plus retention. With `aerospike_use_native_teranode_ops` enabled the native dispatcher in the aerospike-server fork does not apply the floor yet, so keep native ops off where a lagging tip matters.
 
 ## Error Handling
 

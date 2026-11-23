@@ -5,6 +5,8 @@ import (
 	"net/url"
 	"testing"
 
+	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/stretchr/testify/assert"
@@ -542,4 +544,24 @@ func TestGetBlockHeadersFromHeight_HeightCalculations(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, headers) // No blocks at max height
 	assert.Empty(t, metas)
+}
+
+// TestGetBlockHeadersFromHeight_RowErrorIsReturned: an error part way through the rows is
+// returned, not a short list that is then cached.
+func TestGetBlockHeadersFromHeight_RowErrorIsReturned(t *testing.T) {
+	s, mock, err := createMockSQL()
+	require.NoError(t, err)
+	defer s.db.Close()
+
+	rows := sqlmock.NewRows([]string{
+		"version", "block_time", "nonce", "previous_hash", "merkle_root", "n_bits",
+		"id", "height", "tx_count", "size_in_bytes", "peer_id", "block_time", "inserted_at", "median_time_past",
+	}).
+		AddRow(1, int64(0), uint32(0), []byte{}, []byte{}, []byte{}, uint32(1), uint32(1), int64(1), int64(1), "", int64(0), nil, uint32(0)).
+		RowError(0, errors.NewStorageError("connection reset"))
+
+	mock.ExpectQuery(`SELECT(.+)FROM blocks b(.+)`).WillReturnRows(rows)
+
+	_, _, err = s.GetBlockHeadersFromHeight(context.Background(), 1, 2)
+	require.ErrorContains(t, err, "connection reset")
 }
