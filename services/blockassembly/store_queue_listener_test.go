@@ -236,7 +236,9 @@ func TestStoreQueueListener_AStaleRequestIsCancelledAtTakeAndTheNextOneIsAnnounc
 	server, _ := setupServerWithSettings(t, func(s *settings.Settings) {
 		s.BlockAssembly.StoredPrefixTemplate = true
 		s.BlockAssembly.StoreQueueMaxMB = 1024
-		s.BlockAssembly.SubtreeStorageWorkers = 1
+		// 2 workers (meta stage plus writer stage), both held by the requests below
+		s.BlockAssembly.SubtreeStorageMetaWorkers = 1
+		s.BlockAssembly.SubtreeStorageWriters = 1
 	})
 	q := server.storeQueue
 	require.NotNil(t, q)
@@ -268,7 +270,10 @@ func TestStoreQueueListener_AStaleRequestIsCancelledAtTakeAndTheNextOneIsAnnounc
 	})
 
 	first := pushChain(t, q, 2, false)
-	<-entered // the only worker is writing it
+	<-entered // a worker is writing it, holding the only writer slot
+
+	second := pushChain(t, q, 5, false)
+	require.Eventually(t, func() bool { return q.Len() == 0 }, 5*time.Second, 5*time.Millisecond, "the other worker took the second request")
 
 	stale, last := pushChain(t, q, 3, false), pushChain(t, q, 4, false)
 	q.Stale(stale.subtree)
@@ -277,12 +282,13 @@ func TestStoreQueueListener_AStaleRequestIsCancelledAtTakeAndTheNextOneIsAnnounc
 	close(release)
 
 	require.True(t, awaitResult(t, first.result).OK())
+	require.True(t, awaitResult(t, second.result).OK())
 	require.True(t, awaitResult(t, last.result).OK())
 	require.True(t, awaitResult(t, stale.result).Cancelled)
 
 	announced := map[chainhash.Hash]bool{}
 
-	for range 2 {
+	for range 3 {
 		select {
 		case h := <-p.announced:
 			announced[h] = true
@@ -292,6 +298,7 @@ func TestStoreQueueListener_AStaleRequestIsCancelledAtTakeAndTheNextOneIsAnnounc
 	}
 
 	require.True(t, announced[*first.subtree.RootHash()])
+	require.True(t, announced[*second.subtree.RootHash()])
 	require.True(t, announced[*last.subtree.RootHash()])
 	require.False(t, announced[*stale.subtree.RootHash()], "a cancelled request is not announced")
 	require.Zero(t, fault.SetCalls(stale.subtree.RootHash()[:], fileformat.FileTypeSubtree), "and its subtree is never written")
