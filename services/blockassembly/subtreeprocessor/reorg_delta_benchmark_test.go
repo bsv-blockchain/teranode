@@ -91,7 +91,7 @@ func BenchmarkReorgDelta(b *testing.B) {
 
 				var err error
 
-				winners, err = stp.buildUnionSet(context.Background(), d.winners)
+				winners, _, err = stp.buildUnionSet(context.Background(), d.winners)
 				require.NoError(b, err)
 
 				for _, st := range d.lostLeaves[0] {

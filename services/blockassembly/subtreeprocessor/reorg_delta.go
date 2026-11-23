@@ -35,8 +35,8 @@ type reorgDelta struct {
 // buildUnionSet builds one frozen set of every leaf of the blocks' subtrees, with the
 // reading and bucketing of CreateTransactionMap. The coinbase placeholder is in it once
 // per block, so with several blocks the set has duplicates; Find and IterPositions
-// treat them as one hash.
-func (stp *SubtreeProcessor) buildUnionSet(ctx context.Context, blocks []*model.Block) (*SortedHashSet, error) {
+// treat them as one hash. It also returns the conflicting nodes the subtrees list.
+func (stp *SubtreeProcessor) buildUnionSet(ctx context.Context, blocks []*model.Block) (*SortedHashSet, []chainhash.Hash, error) {
 	subtrees := make(map[chainhash.Hash]int)
 
 	var txCount uint64
@@ -52,12 +52,12 @@ func (stp *SubtreeProcessor) buildUnionSet(ctx context.Context, blocks []*model.
 		}
 	}
 
-	set, _, err := stp.CreateTransactionMap(ctx, subtrees, len(subtrees), txCount)
+	set, conflicting, err := stp.CreateTransactionMap(ctx, subtrees, len(subtrees), txCount)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
-	return set, nil
+	return set, conflicting, nil
 }
 
 // computeReorgDelta probes every node of the lost blocks against the frozen winners

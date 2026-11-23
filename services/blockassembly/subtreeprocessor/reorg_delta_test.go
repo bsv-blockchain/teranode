@@ -163,7 +163,7 @@ func requireDeltaMatchesReference(t testing.TB, stp *SubtreeProcessor, d *deltaB
 
 	ctx := context.Background()
 
-	winners, err := stp.buildUnionSet(ctx, d.winners)
+	winners, _, err := stp.buildUnionSet(ctx, d.winners)
 	require.NoError(t, err)
 
 	got, err := stp.computeReorgDelta(ctx, d.lost, winners, workers)
@@ -210,7 +210,7 @@ func TestReorgDelta_Duplicates(t *testing.T) {
 	c := deltaCase{lostBlocks: 1, winBlocks: 3, subtrees: 2, subtreeSize: 64, overlap: 0.5, seed: 7, dupAcrossWinners: true}
 	d := newDeltaBlocks(t, store, c)
 
-	winners, err := stp.buildUnionSet(context.Background(), d.winners)
+	winners, _, err := stp.buildUnionSet(context.Background(), d.winners)
 	require.NoError(t, err)
 	require.Less(t, winners.Length(), int(winners.Positions()), "the fixture must have duplicates")
 
@@ -242,7 +242,7 @@ func TestReorgDelta_DuplicateWinnerThatWasLost(t *testing.T) {
 	require.Equal(t, dup, d.winnerLeaves[1][0][1])
 	require.Equal(t, dup, d.lostLeaves[0][0][1])
 
-	winners, err := stp.buildUnionSet(context.Background(), d.winners)
+	winners, _, err := stp.buildUnionSet(context.Background(), d.winners)
 	require.NoError(t, err)
 
 	got, err := stp.computeReorgDelta(context.Background(), d.lost, winners, 3)
@@ -268,7 +268,7 @@ func TestReorgDelta_ManyPartitions(t *testing.T) {
 			overlap: overlap, seed: 31 + int64(overlap*10), dupAcrossWinners: true, dupIsLost: true,
 		})
 
-		winners, err := stp.buildUnionSet(context.Background(), d.winners)
+		winners, _, err := stp.buildUnionSet(context.Background(), d.winners)
 		require.NoError(t, err)
 		require.Greater(t, winners.Partitions(), 1)
 
@@ -294,7 +294,7 @@ func TestReorgDelta_UnreadableSubtreeFails(t *testing.T) {
 	ctx := context.Background()
 	d := newDeltaBlocks(t, store, deltaCase{lostBlocks: 2, winBlocks: 1, subtrees: 3, subtreeSize: 32, overlap: 0.5, seed: 11})
 
-	winners, err := stp.buildUnionSet(ctx, d.winners)
+	winners, _, err := stp.buildUnionSet(ctx, d.winners)
 	require.NoError(t, err)
 
 	missing := chainhash.Hash{0xde, 0xad}
@@ -311,7 +311,7 @@ func TestReorgDelta_UnreadableSubtreeFails(t *testing.T) {
 		})
 
 		t.Run("winner "+name, func(t *testing.T) {
-			set, err := stp.buildUnionSet(ctx, []*model.Block{{Subtrees: []*chainhash.Hash{d.winners[0].Subtrees[0], bad}}})
+			set, _, err := stp.buildUnionSet(ctx, []*model.Block{{Subtrees: []*chainhash.Hash{d.winners[0].Subtrees[0], bad}}})
 			require.Error(t, err)
 			require.Nil(t, set)
 		})

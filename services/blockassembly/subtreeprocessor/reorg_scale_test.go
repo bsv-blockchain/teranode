@@ -313,7 +313,7 @@ func runReorgScaleDelta(t *testing.T, report *reorgScaleReport) {
 
 	stopHeap := sampleHeap()
 	start = time.Now()
-	winners, err := stp.buildUnionSet(ctx, d.winners)
+	winners, _, err := stp.buildUnionSet(ctx, d.winners)
 	report.SetBuildSeconds = time.Since(start).Seconds()
 	require.NoError(t, err)
 
