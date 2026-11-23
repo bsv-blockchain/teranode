@@ -1,0 +1,16 @@
+diff --git a/services/blockassembly/subtreeprocessor/reorg_fast_path.go b/services/blockassembly/subtreeprocessor/reorg_fast_path.go
+index cdac49551..fd9bed343 100644
+--- a/services/blockassembly/subtreeprocessor/reorg_fast_path.go
++++ b/services/blockassembly/subtreeprocessor/reorg_fast_path.go
+@@ -237,9 +237,9 @@ func (stp *SubtreeProcessor) planFastReorg(ctx context.Context, moveBackBlocks,
+ 	for _, node := range plan.delta.D1 {
+ 		if stp.currentTxMap.Exists(node.Hash) {
+ 			suppressed[node.Hash] = struct{}{}
+-		} else {
+-			effective = append(effective, node)
+ 		}
++
++		effective = append(effective, node) // mutant: raw D1 is built, not effective D1
+ 	}
+ 
+ 	found, survivors, deletes := stp.flagPending(plan, suppressed, workers)

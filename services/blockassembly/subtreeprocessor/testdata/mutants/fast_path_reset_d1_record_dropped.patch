@@ -1,0 +1,13 @@
+diff --git a/services/blockassembly/subtreeprocessor/reorg_fast_path.go b/services/blockassembly/subtreeprocessor/reorg_fast_path.go
+index cdac49551..60e6eda44 100644
+--- a/services/blockassembly/subtreeprocessor/reorg_fast_path.go
++++ b/services/blockassembly/subtreeprocessor/reorg_fast_path.go
+@@ -441,7 +441,7 @@ func (stp *SubtreeProcessor) applyFastReorg(ctx context.Context, plan *fastReorg
+ 		d1Hashes[i] = plan.d1Nodes[i].Hash
+ 	}
+ 
+-	stp.reorgPendingD1 = d1Hashes
++	_ = d1Hashes // mutant: nothing is recorded for the reset
+ 
+ 	removeMapLength := stp.removeMap.Length()
+ 	txMapLength := stp.currentTxMap.Length()

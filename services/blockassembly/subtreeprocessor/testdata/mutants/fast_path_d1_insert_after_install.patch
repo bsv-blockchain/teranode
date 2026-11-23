@@ -1,0 +1,47 @@
+diff --git a/services/blockassembly/subtreeprocessor/reorg_fast_path.go b/services/blockassembly/subtreeprocessor/reorg_fast_path.go
+index cdac49551..061b6cd27 100644
+--- a/services/blockassembly/subtreeprocessor/reorg_fast_path.go
++++ b/services/blockassembly/subtreeprocessor/reorg_fast_path.go
+@@ -464,20 +464,6 @@ func (stp *SubtreeProcessor) applyFastReorg(ctx context.Context, plan *fastReorg
+ 	stp.phases.done("fast_remove_coinbase")
+ 	stp.reportProgressUnlessDone(ctx)
+ 
+-	// Effective D1 goes into the map before the subtrees are built and sent: the meta of a subtree
+-	// that holds one reads its inpoints from the map.
+-	for i := range plan.d1Nodes {
+-		if _, inserted := stp.currentTxMap.SetIfNotExists(plan.d1Nodes[i].Hash, &plan.d1Inpoints[i]); !inserted {
+-			return nil, errors.NewProcessingError("[reorgInPlace][%s] effective D1 transaction %s is already in the tx map", lost.String(), plan.d1Nodes[i].Hash.String())
+-		}
+-	}
+-
+-	stp.flushDiskTxMapWriters()
+-
+-	if mapErr := stp.diskTxMapErr(); mapErr != nil {
+-		return nil, errors.NewStorageError("[reorgInPlace][%s] disk tx map storage error after inserting D1", lost.String(), mapErr)
+-	}
+-
+ 	stp.phases.done("fast_d1_insert")
+ 	stp.reportProgressUnlessDone(ctx)
+ 
+@@ -527,6 +513,21 @@ func (stp *SubtreeProcessor) applyFastReorg(ctx context.Context, plan *fastReorg
+ 
+ 	stp.deleteFlaggedEntries(plan, workers)
+ 
++	// mutant: effective D1 goes into the map after the subtrees are installed: the meta of a subtree
++	// that holds one reads its inpoints from the map.
++	for i := range plan.d1Nodes {
++		if _, inserted := stp.currentTxMap.SetIfNotExists(plan.d1Nodes[i].Hash, &plan.d1Inpoints[i]); !inserted {
++			return nil, errors.NewProcessingError("[reorgInPlace][%s] effective D1 transaction %s is already in the tx map", lost.String(), plan.d1Nodes[i].Hash.String())
++		}
++	}
++
++	stp.flushDiskTxMapWriters()
++
++	if mapErr := stp.diskTxMapErr(); mapErr != nil {
++		return nil, errors.NewStorageError("[reorgInPlace][%s] disk tx map storage error after inserting D1", lost.String(), mapErr)
++	}
++
++
+ 	stp.flushDiskTxMapWriters()
+ 
+ 	if mapErr := stp.diskTxMapErr(); mapErr != nil {

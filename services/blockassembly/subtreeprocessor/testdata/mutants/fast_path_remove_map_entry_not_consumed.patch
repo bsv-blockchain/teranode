@@ -1,0 +1,13 @@
+diff --git a/services/blockassembly/subtreeprocessor/reorg_fast_path.go b/services/blockassembly/subtreeprocessor/reorg_fast_path.go
+index cdac49551..d14688751 100644
+--- a/services/blockassembly/subtreeprocessor/reorg_fast_path.go
++++ b/services/blockassembly/subtreeprocessor/reorg_fast_path.go
+@@ -609,7 +609,7 @@ func (stp *SubtreeProcessor) copySurvivors(plan *fastReorgPlan, workers int) []s
+ 					kept[pos] = node
+ 					pos++
+ 				case f&fastFlagRemoveMap != 0:
+-					_ = stp.removeMap.Delete(node.Hash)
++					// mutant: the removeMap entry stays
+ 				}
+ 			}
+ 
