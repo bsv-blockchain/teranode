@@ -638,11 +638,6 @@ func (ba *BlockAssembly) runNewSubtreeListener(ctx context.Context, newSubtreeCh
 		case newSubtreeRequest := <-newSubtreeChan:
 			ba.logger.Infof("[runNewSubtreeListener][%s] New subtree request: %d", newSubtreeRequest.Subtree.RootHash().String(), seq)
 
-			// at shadow a block listing this subtree waits for its lane bitmaps while it is stored
-			if ba.keepsLanePositions() {
-				ba.ownLaneBitmaps.expect(*newSubtreeRequest.Subtree.RootHash())
-			}
-
 			work := &subtreeStorageWork{
 				seq:     seq,
 				request: newSubtreeRequest,
@@ -674,6 +669,11 @@ func (ba *BlockAssembly) subtreeStorageWorker(ctx context.Context, workChan <-ch
 		}
 
 		ba.logger.Infof("[subtreeStorageWorker][%s] Storing subtree (seq=%d)", work.request.Subtree.RootHash().String(), work.seq)
+
+		// at shadow a block listing this subtree waits for its lane bitmaps while it is stored
+		if ba.keepsLanePositions() {
+			ba.ownLaneBitmaps.expect(*work.request.Subtree.RootHash())
+		}
 
 		// Store subtree and meta
 		subtreeDone, allDone, err := ba.storeSubtreeData(ctx, work.request, subtreeRetryChan)

@@ -34,9 +34,9 @@ const (
 	// cancelled, or a subtree of a block this node mined was still being stored when its wait
 	// ended.
 	MissingBitmapsTimedOut = "timed_out"
-	// MissingBitmapsWriteFailed: subtree validation failed to write a subtree's lane bitmaps file.
-	// It is counted when the write fails, so a block that later lists the subtree counts it again,
-	// as absent.
+	// MissingBitmapsWriteFailed: a subtree's lane bitmaps file could not be encoded or written, by
+	// subtree validation (block peer) or block assembly (block own). It is counted when the write
+	// fails, so a peer's block that later lists the subtree counts it again, as absent.
 	MissingBitmapsWriteFailed = "write_failed"
 )
 

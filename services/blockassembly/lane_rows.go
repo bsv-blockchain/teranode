@@ -54,8 +54,8 @@ var ownLaneBitmapsWait = time.Second
 type ownLaneBitmaps struct {
 	mu        sync.Mutex
 	bySubtree map[chainhash.Hash]keptLaneBitmaps
-	// pending holds the subtrees the storage listener has taken whose storage has not finished. A
-	// subtree still queued for the listener, behind a storage backlog, is not in it yet, so a block
+	// pending holds the subtrees a storage worker has taken whose storage has not finished. A
+	// subtree still queued for a worker, behind a storage backlog, is not in it yet, so a block
 	// listing it counts it absent rather than timed out.
 	pending map[chainhash.Hash]struct{}
 	// changed is closed, and replaced, whenever a subtree's bitmaps are kept or its storage ends.
@@ -113,8 +113,8 @@ func (o *ownLaneBitmaps) touch(root chainhash.Hash, height uint32) bool {
 	return ok
 }
 
-// expect marks subtree root as handed to a storage worker, so a block that lists it before its
-// bitmaps are kept waits for them.
+// expect marks subtree root as being stored by a storage worker, so a block that lists it before
+// its bitmaps are kept counts it as timed out, not absent.
 func (o *ownLaneBitmaps) expect(root chainhash.Hash) {
 	o.mu.Lock()
 	defer o.mu.Unlock()

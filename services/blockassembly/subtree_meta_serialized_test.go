@@ -9,6 +9,7 @@ import (
 	txmap "github.com/bsv-blockchain/go-tx-map"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/services/blockassembly/subtreeprocessor"
+	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/lane"
 	"github.com/stretchr/testify/require"
 )
@@ -336,4 +337,81 @@ func TestBuildSubtreeMetaBytesCollectsEveryNodesLanePosition(t *testing.T) {
 	bitmaps := laneBits.Subtree(*subtree.RootHash())
 	require.Equal(t, []uint64{100, 101, 102}, bitmaps.Lanes[8].ToArray(), "node 0 is a real tx and keeps its position, and a removed node keeps its backed-up one")
 	require.Equal(t, 1, laneBits.Unpositioned(), "the removed node without a backed-up position has none")
+}
+
+// BenchmarkBuildSubtreeMetaDiskTxMap is BenchmarkBuildSubtreeMeta on the disk map, which reads and
+// decodes each tx's record: the meta pass without lanes (off), the same pass collecting each
+// position into the lane bitmaps (shadow), and the positions-only pass that runs when no meta file
+// is written (positions_only). At shadow the subtree file waits for the pass and the bitmaps write.
+func BenchmarkBuildSubtreeMetaDiskTxMap(b *testing.B) {
+	const leaves = 1 << 16
+
+	subtree, err := subtreepkg.NewTreeByLeafCount(leaves)
+	require.NoError(b, err)
+
+	m, err := subtreeprocessor.NewDiskTxMap(subtreeprocessor.DiskTxMapOptions{BasePaths: []string{b.TempDir()}})
+	require.NoError(b, err)
+
+	b.Cleanup(func() { _ = m.Close() })
+
+	r := rand.New(rand.NewSource(1))
+
+	for i := 0; i < leaves; i++ {
+		h := metaTestHash(i)
+		require.NoError(b, subtree.AddNode(h, uint64(i), uint64(i)))
+
+		p := subtreepkg.NewTxInpointsFromPacked([]chainhash.Hash{metaTestHash(i + leaves)}, []uint32{1, r.Uint32() % 4})
+		m.SetAt(h, &p, lane.Pack(uint8(i%17), uint64(i/17+1))) //nolint:gosec // i%17 < 17
+	}
+
+	require.NoError(b, m.Flush())
+
+	ba := &BlockAssembly{logger: ulogger.TestLogger{}}
+	request := subtreeprocessor.NewSubtreeRequest{Subtree: subtree, ParentTxMap: m}
+
+	report := func(b *testing.B) {
+		b.ReportMetric(float64(b.N*leaves)/b.Elapsed().Seconds()/1e6, "Mtx/s")
+	}
+
+	b.Run("off", func(b *testing.B) {
+		b.ReportAllocs()
+
+		for i := 0; i < b.N; i++ {
+			if _, ok := ba.buildSubtreeMeta(request, nil); !ok {
+				b.Fatal("failed")
+			}
+		}
+
+		report(b)
+	})
+
+	b.Run("shadow", func(b *testing.B) {
+		b.ReportAllocs()
+
+		for i := 0; i < b.N; i++ {
+			laneBits := lane.NewBitmapsBuilder()
+			if _, ok := ba.buildSubtreeMeta(request, laneBits); !ok {
+				b.Fatal("failed")
+			}
+
+			if _, err := lane.EncodeSubtreeBitmaps(laneBits.Subtree(*subtree.RootHash())); err != nil {
+				b.Fatal(err)
+			}
+		}
+
+		report(b)
+	})
+
+	b.Run("positions_only", func(b *testing.B) {
+		b.ReportAllocs()
+
+		for i := 0; i < b.N; i++ {
+			laneBits := subtreeLanePositions(subtree, m, nil)
+			if _, err := lane.EncodeSubtreeBitmaps(laneBits.Subtree(*subtree.RootHash())); err != nil {
+				b.Fatal(err)
+			}
+		}
+
+		report(b)
+	})
 }
