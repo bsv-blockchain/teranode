@@ -30,6 +30,10 @@ const (
 	// MissingBitmapsTimedOut: reading a block's lane bitmaps files ran past its deadline or was
 	// cancelled.
 	MissingBitmapsTimedOut = "timed_out"
+	// MissingBitmapsWriteFailed: subtree validation failed to write a subtree's lane bitmaps file.
+	// It is counted when the write fails, so a block that later lists the subtree counts it again,
+	// as absent.
+	MissingBitmapsWriteFailed = "write_failed"
 )
 
 // Directions of a count mismatch: the rows hold fewer members than the block has transactions
@@ -84,7 +88,7 @@ func initRowsMetrics() {
 			Namespace: "teranode",
 			Subsystem: "lane",
 			Name:      "missing_bitmaps_total",
-			Help:      "Subtrees of a block with no usable lane bitmaps file, by reason; the block's rows are not built and the block is stored as it is without lanes",
+			Help:      "Subtrees without a usable lane bitmaps file, by reason. absent, unreadable and timed_out are counted by block validation for the subtrees of a block it stores without lane rows; write_failed is counted by subtree validation when it fails to write a subtree's file, and a block that later lists that subtree counts it again as absent",
 		}, []string{"reason"})
 		prometheusLaneTxsNoPosition = promauto.NewCounterVec(prometheus.CounterOpts{
 			Namespace: "teranode",

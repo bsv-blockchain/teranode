@@ -146,11 +146,39 @@ func TestStoreSubtreeFiles_KeepsLaneBitmapsAlreadyThere(t *testing.T) {
 	server := &Server{logger: ulogger.TestLogger{}, settings: test.CreateBaseTestSettings(t), subtreeStore: store, utxoStore: utxoStore}
 
 	bitmaps := &lane.SubtreeBitmaps{SubtreeHash: *root, Lanes: lane.LaneBitmaps{9: bitmapOfPositions(5)}}
+
+	writeFailed := laneMissingBitmaps(t, lane.MissingBitmapsWriteFailed)
+
 	require.NoError(t, server.storeSubtreeFiles(ctx, gocore.NewStat("test"), root, st, m, bitmaps))
 
 	got, err := store.Get(ctx, root[:], fileformat.FileTypeSubtreeLaneBitmaps)
 	require.NoError(t, err)
 	require.Equal(t, earlier, got)
+	require.Equal(t, writeFailed, laneMissingBitmaps(t, lane.MissingBitmapsWriteFailed), "a file already there is not a failed write")
+}
+
+// laneMissingBitmaps reads teranode_lane_missing_bitmaps_total for reason.
+func laneMissingBitmaps(t *testing.T, reason string) float64 {
+	t.Helper()
+
+	families, err := prometheus.DefaultGatherer.Gather()
+	require.NoError(t, err)
+
+	for _, f := range families {
+		if f.GetName() != "teranode_lane_missing_bitmaps_total" {
+			continue
+		}
+
+		for _, m := range f.GetMetric() {
+			for _, l := range m.GetLabel() {
+				if l.GetName() == "reason" && l.GetValue() == reason {
+					return m.GetCounter().GetValue()
+				}
+			}
+		}
+	}
+
+	return 0
 }
 
 // At shadow a store read asks for each transaction's own lane position and puts it in the
@@ -480,11 +508,15 @@ func TestStoreSubtreeFiles_ALaneBitmapsFailureDoesNotStopTheSubtree(t *testing.T
 	server := &Server{logger: ulogger.TestLogger{}, settings: test.CreateBaseTestSettings(t), subtreeStore: store, utxoStore: utxoStore}
 
 	bitmaps := &lane.SubtreeBitmaps{SubtreeHash: *root, Lanes: lane.LaneBitmaps{7: bitmapOfPositions(1)}}
+
+	writeFailed := laneMissingBitmaps(t, lane.MissingBitmapsWriteFailed)
+
 	require.NoError(t, server.storeSubtreeFiles(ctx, gocore.NewStat("test"), root, st, m, bitmaps))
 
 	exists, err := store.Exists(ctx, root[:], fileformat.FileTypeSubtree)
 	require.NoError(t, err)
 	require.True(t, exists)
+	require.Equal(t, writeFailed+1, laneMissingBitmaps(t, lane.MissingBitmapsWriteFailed), "the failed write is counted as one")
 }
 
 // At shadow ValidateSubtreeInternal puts each member's own lane position, from the txmeta cache,

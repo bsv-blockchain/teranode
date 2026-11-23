@@ -58,9 +58,10 @@ func (r *laneRowsToStore) observe() {
 }
 
 // checkedLaneMapRows returns the rows StoreBlock is to insert with block, checked with
-// lane.CheckMapRows, or nil when there are none or the block is stored as invalid. refused is
-// whether the rows failed their check, which is logged here; StoreBlock counts it once the block
-// is stored.
+// lane.CheckMapRows, or nil when there are none or the block is asked to be stored as invalid. A
+// block stored as invalid because its parent is invalid is caught later: StoreBlock skips its
+// insert and counts nothing for it. refused is whether the rows failed their check, which is
+// logged here; StoreBlock counts it once the block is stored valid.
 func (s *SQL) checkedLaneMapRows(block *model.Block, o options.StoreBlockOptions) (rows *laneRowsToStore, refused bool) {
 	if len(o.LaneMapRows) == 0 || o.Invalid {
 		return nil, false

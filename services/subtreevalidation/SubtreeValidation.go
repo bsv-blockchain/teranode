@@ -1231,9 +1231,9 @@ const laneBitmapsService = "subtreevalidation"
 
 // storeSubtreeLaneBitmaps writes a subtree's lane bitmaps file, before its subtree file and with
 // its expiry, so the block gate finds it beside the subtree. At shadow nothing acts on lanes, so
-// a failure to write it does not stop the subtree: it is logged, and the block that lists the
-// subtree counts its bitmaps as missing and goes without rows. A file already there, from an
-// earlier validation of the same subtree, is kept.
+// a failure to write it does not stop the subtree: it is logged and counted as write_failed, and
+// the block that lists the subtree counts its bitmaps as absent and goes without rows. A file
+// already there, from an earlier validation of the same subtree, is kept.
 func (u *Server) storeSubtreeLaneBitmaps(ctx context.Context, subtreeHash *chainhash.Hash, bitmaps lane.SubtreeBitmaps, dah uint32) {
 	data, err := lane.EncodeSubtreeBitmaps(bitmaps)
 	if err == nil {
@@ -1241,6 +1241,7 @@ func (u *Server) storeSubtreeLaneBitmaps(ctx context.Context, subtreeHash *chain
 	}
 
 	if err != nil && !errors.Is(err, errors.ErrBlobAlreadyExists) {
+		lane.CountMissingBitmaps(lane.MissingBitmapsWriteFailed, 1)
 		u.logger.Warnf("[ValidateSubtreeInternal][%s] failed to store subtree lane bitmaps, its block will go without lane rows: %v", subtreeHash.String(), err)
 	}
 }
