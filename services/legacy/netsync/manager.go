@@ -4948,7 +4948,9 @@ type Dependencies struct {
 	// SubtreeStore holds merkle subtree blob data.
 	SubtreeStore blob.Store
 
-	// TempStore parks out-of-order blocks on disk. It must be a file:// store.
+	// TempStore holds out-of-order blocks parked until their parent arrives.
+	// New also needs tSettings.Legacy.TempStore to be a file:// URL, so a restart
+	// can find what an earlier run parked.
 	TempStore blob.Store
 
 	// SubtreeValidation verifies merkle proofs and block structure.
