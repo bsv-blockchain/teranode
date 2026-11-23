@@ -246,9 +246,10 @@ func TestSpendBatchBulkUpdateFailureDoesNotInventConflict(t *testing.T) {
 	rows := sqlmock.NewRows([]string{
 		"batch_idx", "transaction_id", "coinbase_spending_height", "utxo_hash",
 		"spending_data", "frozen", "conflicting", "locked", "spendableIn",
+		"spending_height", "spender_exists",
 	})
 	for i, item := range batch {
-		rows.AddRow(i, 1, 0, item.spend.UTXOHash[:], nil, false, false, false, nil)
+		rows.AddRow(i, 1, 0, item.spend.UTXOHash[:], nil, false, false, false, nil, nil, false)
 	}
 	mock.ExpectBegin()
 	mock.ExpectQuery("SELECT v.batch_idx").WillReturnRows(rows)
@@ -291,14 +292,15 @@ func TestSpendBatchBulkRollbackAfterUpdateDoesNotInventConflict(t *testing.T) {
 			rows := sqlmock.NewRows([]string{
 				"batch_idx", "transaction_id", "coinbase_spending_height", "utxo_hash",
 				"spending_data", "frozen", "conflicting", "locked", "spendableIn",
+				"spending_height", "spender_exists",
 			})
 			for i, item := range batch {
-				rows.AddRow(i, 1, 0, item.spend.UTXOHash[:], nil, false, false, false, nil)
+				rows.AddRow(i, 1, 0, item.spend.UTXOHash[:], nil, false, false, false, nil, nil, false)
 			}
 
 			mock.ExpectBegin()
 			mock.ExpectQuery("SELECT v.batch_idx").WillReturnRows(rows)
-			mock.ExpectQuery("UPDATE outputs o").WillReturnRows(sqlmock.NewRows([]string{"batch_idx"}).AddRow(0))
+			mock.ExpectQuery("UPDATE outputs o").WillReturnRows(sqlmock.NewRows([]string{"batch_idx", "was_idem", "spending_height", "spender_exists"}).AddRow(0, false, nil, false))
 
 			if exit == "DAH recompute fails" {
 				mock.ExpectQuery("count").WillReturnError(errors.NewStorageError("forced DAH failure"))
@@ -360,16 +362,17 @@ func TestSpendBatchPerRowRollbackDoesNotInventConflict(t *testing.T) {
 			columns := []string{
 				"transaction_id", "coinbase_spending_height", "utxo_hash",
 				"spending_data", "frozen", "conflicting", "locked", "spendableIn",
+				"spending_height", "spender_exists",
 			}
 			unspentRow := func(item *batchSpend) *sqlmock.Rows {
-				return sqlmock.NewRows(columns).AddRow(1, 0, item.spend.UTXOHash[:], nil, false, false, false, nil)
+				return sqlmock.NewRows(columns).AddRow(1, 0, item.spend.UTXOHash[:], nil, false, false, false, nil, nil, false)
 			}
 
 			mock.ExpectBegin()
 			mock.ExpectQuery("o.transaction_id").WillReturnRows(unspentRow(batch[0]))
 			mock.ExpectExec("UPDATE outputs").WillReturnResult(sqlmock.NewResult(0, 1))
 			mock.ExpectQuery("o.transaction_id").WillReturnRows(sqlmock.NewRows(columns).AddRow(
-				1, 0, batch[1].spend.UTXOHash[:], winner[0].SpendingData.Bytes(), false, false, false, nil))
+				1, 0, batch[1].spend.UTXOHash[:], winner[0].SpendingData.Bytes(), false, false, false, nil, nil, false))
 
 			switch exit {
 			case exitLaterItemFails:
@@ -426,16 +429,17 @@ func TestSpendBatchPerRowRollbackKeepsCommittedOwnerConflict(t *testing.T) {
 	columns := []string{
 		"transaction_id", "coinbase_spending_height", "utxo_hash",
 		"spending_data", "frozen", "conflicting", "locked", "spendableIn",
+		"spending_height", "spender_exists",
 	}
 
 	mock.ExpectBegin()
 	mock.ExpectQuery("o.transaction_id").WillReturnRows(sqlmock.NewRows(columns).AddRow(
-		1, 0, batch[0].spend.UTXOHash[:], nil, false, false, false, nil))
+		1, 0, batch[0].spend.UTXOHash[:], nil, false, false, false, nil, nil, false))
 	mock.ExpectExec("UPDATE outputs").WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectQuery("o.transaction_id").WillReturnRows(sqlmock.NewRows(columns).AddRow(
-		1, 0, batch[1].spend.UTXOHash[:], winner[0].SpendingData.Bytes(), false, false, false, nil))
+		1, 0, batch[1].spend.UTXOHash[:], winner[0].SpendingData.Bytes(), false, false, false, nil, nil, false))
 	mock.ExpectQuery("o.transaction_id").WillReturnRows(sqlmock.NewRows(columns).AddRow(
-		1, 0, batch[2].spend.UTXOHash[:], committedOwner[0].SpendingData.Bytes(), false, false, false, nil))
+		1, 0, batch[2].spend.UTXOHash[:], committedOwner[0].SpendingData.Bytes(), false, false, false, nil, nil, false))
 	mock.ExpectCommit().WillReturnError(errors.NewStorageError("forced commit failure"))
 
 	require.False(t, store.trySendSpendBatchPerRow(context.Background(), batch))
