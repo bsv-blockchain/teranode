@@ -1092,6 +1092,8 @@ func (r *CentralizedPeerRegistry) ReconsiderBadPeers(cooldown time.Duration) int
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
+	r.expireBansLocked()
+
 	peersRecovered := 0
 	now := time.Now()
 
@@ -1100,13 +1102,12 @@ func (r *CentralizedPeerRegistry) ReconsiderBadPeers(cooldown time.Duration) int
 			continue
 		}
 
-		// Peers with outstanding ban score are excluded from automatic recovery:
-		// a non-zero score means confirmed misbehaviour (consensus-invalid block,
-		// checkpoint violation, protocol violation) that has not yet decayed.
-		// Without this gate a peer feeding invalid blocks during catchup would be
-		// readmitted as a sync candidate every cooldown window (issue #1161).
-		// Ban score decays on its own schedule (StartBanDecay), so recovery is
-		// merely deferred, not permanently denied.
+		// A peer with an active ban, or with ban score that has not decayed, is
+		// excluded from automatic recovery. Ban score comes from any ban reason,
+		// not only from catchup. Without this gate a peer that feeds invalid blocks
+		// would be readmitted as a sync candidate every cooldown window (issue 1161).
+		// Ban score decays on its own schedule (StartBanDecay) and an expired ban is
+		// cleared above, so recovery is deferred, not denied.
 		if entry, ok := r.banScores[peerID]; ok && (entry.Banned || entry.Score > 0) {
 			continue
 		}

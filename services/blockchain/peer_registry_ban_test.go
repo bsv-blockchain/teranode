@@ -436,6 +436,42 @@ func TestBanReconsiderBadPeers_SkipsBannedPeers(t *testing.T) {
 	require.Equal(t, 0, r.ReconsiderBadPeers(1*time.Hour))
 }
 
+// TestBanReconsiderBadPeers_SkipsActiveBanWithZeroScore covers the Banned clause of
+// the recovery gate on its own. With the default config a banned peer sits at
+// score 0 for most of its 24h ban, so the score clause cannot be what refuses it.
+func TestBanReconsiderBadPeers_SkipsActiveBanWithZeroScore(t *testing.T) {
+	r := NewCentralizedPeerRegistry(DefaultBanConfig())
+
+	r.Register(&PeerInfo{ID: "banned-zero-score"})
+	r.UpdateMetrics("banned-zero-score", 0, 0, 0, false, false, true, 0)
+
+	r.mu.Lock()
+	r.banScores["banned-zero-score"] = &banEntry{Banned: true, Score: 0, BanUntil: time.Now().Add(time.Hour), LastDecay: time.Now()}
+	r.peers["banned-zero-score"].LastInteractionFailure = time.Now().Add(-2 * time.Hour)
+	r.mu.Unlock()
+
+	require.Equal(t, 0, r.ReconsiderBadPeers(1*time.Hour), "an active ban must keep the peer out even at score 0")
+
+	got, _ := r.Get("banned-zero-score")
+	require.Less(t, got.ReputationScore, 20.0, "reputation must stay unchanged")
+}
+
+// TestBanReconsiderBadPeers_RecoversAfterBanExpiry covers an expired ban that no
+// other call has swept yet: the recovery sweep must clear it, not stay blocked.
+func TestBanReconsiderBadPeers_RecoversAfterBanExpiry(t *testing.T) {
+	r := NewCentralizedPeerRegistry(DefaultBanConfig())
+
+	r.Register(&PeerInfo{ID: "expired-ban"})
+	r.UpdateMetrics("expired-ban", 0, 0, 0, false, false, true, 0)
+
+	r.mu.Lock()
+	r.banScores["expired-ban"] = &banEntry{Banned: true, Score: 0, BanUntil: time.Now().Add(-time.Minute), LastDecay: time.Now().Add(-25 * time.Hour)}
+	r.peers["expired-ban"].LastInteractionFailure = time.Now().Add(-2 * time.Hour)
+	r.mu.Unlock()
+
+	require.Equal(t, 1, r.ReconsiderBadPeers(1*time.Hour), "an expired ban must not block recovery")
+}
+
 // TestBanScoreAccumulatesToBanForRepeatedInvalidBlocks documents the escalation
 // path for a peer repeatedly delivering consensus-invalid blocks during catchup.
 func TestBanScoreAccumulatesToBanForRepeatedInvalidBlocks(t *testing.T) {
