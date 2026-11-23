@@ -115,7 +115,7 @@ func TestShadowLaneDuplicatesComparesSetMinedsVerdict(t *testing.T) {
 	require.Eventually(t, func() bool { return r.Snapshot() != nil }, 10*time.Second, 10*time.Millisecond)
 
 	agree := laneReaderAnswer(t, lanereader.ReaderBlockDuplicate, lanereader.KindAgree)
-	todayOnly := laneReaderAnswer(t, lanereader.ReaderBlockDuplicate, lanereader.KindTodayOnly)
+	notLoaded := laneReaderAnswer(t, lanereader.ReaderBlockDuplicate, lanereader.KindNotLoaded)
 
 	require.NoError(t, shadowLaneDuplicates(ctx, blk, uint32(id), nil, nil)) //nolint:gosec // a test block ID
 	require.Eventually(t, func() bool {
@@ -125,7 +125,7 @@ func TestShadowLaneDuplicatesComparesSetMinedsVerdict(t *testing.T) {
 	verdict := errors.NewBlockInvalidError("contains a transaction already on our chain")
 	require.Equal(t, verdict, shadowLaneDuplicates(ctx, blk, uint32(id), nil, verdict)) //nolint:gosec // a test block ID
 	require.Eventually(t, func() bool {
-		return laneReaderAnswer(t, lanereader.ReaderBlockDuplicate, lanereader.KindTodayOnly) == todayOnly+1
+		return laneReaderAnswer(t, lanereader.ReaderBlockDuplicate, lanereader.KindNotLoaded) == notLoaded+1
 	}, 10*time.Second, 10*time.Millisecond)
 
 	// Neither an unset nor a processing error is compared.
@@ -135,7 +135,7 @@ func TestShadowLaneDuplicatesComparesSetMinedsVerdict(t *testing.T) {
 
 	time.Sleep(100 * time.Millisecond)
 	require.Equal(t, agree+1, laneReaderAnswer(t, lanereader.ReaderBlockDuplicate, lanereader.KindAgree))
-	require.Equal(t, todayOnly+1, laneReaderAnswer(t, lanereader.ReaderBlockDuplicate, lanereader.KindTodayOnly))
+	require.Equal(t, notLoaded+1, laneReaderAnswer(t, lanereader.ReaderBlockDuplicate, lanereader.KindNotLoaded))
 
 	// The parent check's context carries the shadow at shadow.
 	require.NotEqual(t, ctx, laneParentsContext(ctx, blk))

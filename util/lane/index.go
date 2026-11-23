@@ -489,12 +489,12 @@ func (v *ChainView) Lookup(pos uint64) Answer {
 }
 
 // TakenBefore counts the positions block id took that one of its ancestors on the chain also
-// took, by row or below the floor: a block re-including a mined transaction. hasRows is false when the index
-// holds no rows of the block.
-func (v *ChainView) TakenBefore(id uint32) (count uint64, hasRows bool) {
+// took: a block re-including a mined transaction. byRow counts those an ancestor's row took and
+// byFloor those below the floor. hasRows is false when the index holds no rows of the block.
+func (v *ChainView) TakenBefore(id uint32) (byRow, byFloor uint64, hasRows bool) {
 	b, ok := v.snap.blocks[id]
 	if !ok || !b.hasRows || b.folded {
-		return 0, false
+		return 0, 0, false
 	}
 
 	for i, own := range b.rows {
@@ -514,7 +514,7 @@ func (v *ChainView) TakenBefore(id uint32) (count uint64, hasRows bool) {
 				below.AndNot(ls.listed)
 			}
 
-			count += below.GetCardinality()
+			byFloor += below.GetCardinality()
 		}
 
 		for _, r := range ls.rows {
@@ -527,11 +527,48 @@ func (v *ChainView) TakenBefore(id uint32) (count uint64, hasRows bool) {
 				continue
 			}
 
-			count += ownBits.AndCardinality(r.bitmap())
+			byRow += ownBits.AndCardinality(r.bitmap())
 		}
 	}
 
-	return count, true
+	return byRow, byFloor, true
+}
+
+// TakenOffMain reports whether a loaded block at height that is not on the main chain took the
+// packed lane position pos: a fork block, such as one a reorg replaced.
+func (s *IndexSnapshot) TakenOffMain(pos uint64, height uint32) bool {
+	laneNum, p := Unpack(pos)
+
+	ls := s.lanes[laneNum]
+	if ls == nil {
+		return false
+	}
+
+	found := false
+
+	ls.covering(p, func(r *indexRow) bool {
+		b, ok := s.blocks[r.blockID]
+		if !ok || b.height != height || !r.takes(p) {
+			return true
+		}
+
+		if _, onMain := s.main[r.blockID]; onMain {
+			return true
+		}
+
+		found = true
+
+		return false
+	})
+
+	return found
+}
+
+// Folded reports whether block id's rows were folded into the floors and left memory.
+func (s *IndexSnapshot) Folded(id uint32) bool {
+	b, ok := s.blocks[id]
+
+	return ok && b.folded
 }
 
 // ErrDeepReorg is SetTip's answer when the new main chain no longer holds the anchor: a reorg

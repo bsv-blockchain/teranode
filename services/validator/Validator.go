@@ -2267,6 +2267,7 @@ func (v *Validator) resolveParentOutputs(ctx context.Context, tx *bt.Tx, txID st
 
 	if inputLanes != nil {
 		shadow.reader = lanereader.Current()
+		shadow.view = shadow.reader.MainView()
 	}
 
 	for inputIdx, input := range tx.Inputs {
@@ -2281,7 +2282,7 @@ func (v *Validator) resolveParentOutputs(ctx context.Context, tx *bt.Tx, txID st
 
 			if inputLanes != nil {
 				inputLanes[inputIdx] = pf.LanePosition
-				shadow.compare(lanereader.ReaderSubtreePrefetch, parentTxHash, pf.LanePosition, len(pf.BlockHeights) > 0, utxoHeights[inputIdx])
+				shadow.compareBlocks(lanereader.ReaderSubtreePrefetch, parentTxHash, pf.LanePosition, pf.BlockIDs)
 			}
 
 			continue

@@ -19,7 +19,6 @@ package lanereader
 
 import (
 	"context"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -66,9 +65,10 @@ type Reader struct {
 	settleDepth uint32
 
 	idx atomic.Pointer[lane.Index]
-	// loadMu serialises loads, so the follower and block validation do not read the same rows
-	// twice.
-	loadMu sync.Mutex
+	// loading holds one token while a load runs, so the follower and block validation do not
+	// read the same rows twice. It is a channel, not a mutex, so a caller waiting for it gives up
+	// when its context ends.
+	loading chan struct{}
 
 	lookups  atomic.Uint64
 	disagree disagreementLog
@@ -105,7 +105,7 @@ func Start(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setti
 func newReader(logger ulogger.Logger, source Source, settleDepth uint32) *Reader {
 	initMetrics()
 
-	r := &Reader{logger: logger, source: source, settleDepth: settleDepth}
+	r := &Reader{logger: logger, source: source, settleDepth: settleDepth, loading: make(chan struct{}, 1)}
 	r.idx.Store(lane.NewIndex(settleDepth))
 
 	return r
@@ -178,8 +178,10 @@ func (r *Reader) step(ctx context.Context, tip chainhash.Hash) (chainhash.Hash, 
 		return tip, nil
 	}
 
-	r.loadMu.Lock()
-	defer r.loadMu.Unlock()
+	if !r.lockLoad(ctx) {
+		return tip, ctx.Err()
+	}
+	defer r.unlockLoad()
 
 	if r.Snapshot() == nil {
 		if err = r.rebuild(ctx, best, "start"); err != nil {
@@ -217,8 +219,20 @@ func (r *Reader) step(ctx context.Context, tip chainhash.Hash) (chainhash.Hash, 
 	return best, nil
 }
 
+// lockLoad takes the load token, or reports false if ctx ends first.
+func (r *Reader) lockLoad(ctx context.Context) bool {
+	select {
+	case r.loading <- struct{}{}:
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+
+func (r *Reader) unlockLoad() { <-r.loading }
+
 // rebuild replaces the index with one built from the startBlocks main-chain blocks ending at tip.
-// The caller holds loadMu.
+// The caller holds the load token.
 func (r *Reader) rebuild(ctx context.Context, tip chainhash.Hash, reason string) error {
 	start := time.Now()
 
@@ -248,7 +262,7 @@ func (r *Reader) rebuild(ctx context.Context, tip chainhash.Hash, reason string)
 }
 
 // loadAncestry loads into the index every block from hash back to the first one it holds. It
-// reports false when it found none within maxWalk blocks. The caller holds loadMu.
+// reports false when it found none within maxWalk blocks. The caller holds the load token.
 func (r *Reader) loadAncestry(ctx context.Context, hash chainhash.Hash) (bool, error) {
 	idx := r.idx.Load()
 
@@ -355,8 +369,10 @@ func (r *Reader) Prepare(ctx context.Context, hash chainhash.Hash) (*lane.ChainV
 		return nil, false
 	}
 
-	r.loadMu.Lock()
-	defer r.loadMu.Unlock()
+	if !r.lockLoad(ctx) {
+		return nil, false
+	}
+	defer r.unlockLoad()
 
 	found, err := r.loadAncestry(ctx, hash)
 	if err != nil || !found {

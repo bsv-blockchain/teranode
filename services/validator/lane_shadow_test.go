@@ -128,7 +128,7 @@ func TestParentReadIsShadowedByTheLaneIndex(t *testing.T) {
 
 	t.Run("prefetched", func(t *testing.T) {
 		prefetched := map[chainhash.Hash]*meta.Data{
-			*mined.TxIDChainHash(): {Tx: mined, BlockHeights: []uint32{120}, LanePosition: lane.Pack(9, 1)},
+			*mined.TxIDChainHash(): {Tx: mined, BlockIDs: []uint32{120}, BlockHeights: []uint32{120}, LanePosition: lane.Pack(9, 1)},
 		}
 
 		prefetchAll, _ := laneReaderAnswers(t, lanereader.ReaderSubtreePrefetch, lanereader.KindNotLoaded)

@@ -2,6 +2,7 @@ package validator
 
 import (
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/teranode/util/lane"
 	"github.com/bsv-blockchain/teranode/util/lanereader"
 )
 
@@ -14,6 +15,9 @@ const parentShadowLinearMax = 16
 // no lane index, at off, it does nothing.
 type parentShadow struct {
 	reader *lanereader.Reader
+	// view is the main chain as the index held it when the read began, for answers given as a
+	// block list.
+	view   *lane.ChainView
 	seen   []chainhash.Hash
 	seenAt map[chainhash.Hash]struct{}
 }
@@ -25,6 +29,17 @@ func (s *parentShadow) compare(reader string, parent chainhash.Hash, pos uint64,
 	}
 
 	s.reader.CompareHeight(reader, parent, pos, mined, height)
+}
+
+// compareBlocks answers parent, at lane position pos, beside today's answer given as its mined
+// block list: a prefetched parent's record carries the list, which a height alone cannot stand in
+// for, since the lowest height may be a fork block's.
+func (s *parentShadow) compareBlocks(reader string, parent chainhash.Hash, pos uint64, blockIDs []uint32) {
+	if s.reader == nil || s.repeat(parent) {
+		return
+	}
+
+	s.reader.CompareBlocks(reader, s.view, parent, pos, blockIDs)
 }
 
 // repeat reports whether parent was seen before, and records it.

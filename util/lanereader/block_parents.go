@@ -10,8 +10,9 @@ import (
 )
 
 const (
-	// prepareTimeout bounds how long loading a block's ancestry for its parent check may take. The
-	// load runs beside the block's validation, never in its way.
+	// prepareTimeout bounds how long loading a block's ancestry for its parent check may take,
+	// waiting for another load included. The load runs beside the block's validation, never in its
+	// way.
 	prepareTimeout = 10 * time.Second
 
 	// maxPendingParents bounds the parents a block's check holds while its ancestry loads; past it

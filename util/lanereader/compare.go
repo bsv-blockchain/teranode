@@ -53,9 +53,13 @@ const (
 	KindNotLoaded = "not_loaded"
 	// KindNotReady: the index had not loaded the chain to judge against yet.
 	KindNotReady = "not_ready"
+	// KindOffChain: today's answer is a height, and a loaded block at that height off the main
+	// chain took the position, such as one a reorg replaced: the store's height is the lowest it
+	// recorded, from any chain. Not a disagreement.
+	KindOffChain = "off_chain"
 )
 
-var kinds = []string{KindAgree, KindLanesOnly, KindTodayOnly, KindDifferentBlock, KindNoPosition, KindNoRows, KindNotLoaded, KindNotReady}
+var kinds = []string{KindAgree, KindLanesOnly, KindTodayOnly, KindDifferentBlock, KindNoPosition, KindNoRows, KindNotLoaded, KindNotReady, KindOffChain}
 
 // isDisagreement reports whether kind is one the soak must explain.
 func isDisagreement(kind string) bool {
@@ -100,7 +104,7 @@ func (r *Reader) CompareHeight(reader string, hash chainhash.Hash, pos uint64, t
 	}
 
 	a := r.lookup(s.Main(), pos)
-	kind := classifyHeight(s, a, todayMined, todayHeight)
+	kind := classifyHeight(s, pos, a, todayMined, todayHeight)
 	count(reader, kind, a.Via)
 
 	if isDisagreement(kind) {
@@ -108,7 +112,7 @@ func (r *Reader) CompareHeight(reader string, hash chainhash.Hash, pos uint64, t
 	}
 }
 
-func classifyHeight(s *lane.IndexSnapshot, a lane.Answer, todayMined bool, todayHeight uint32) string {
+func classifyHeight(s *lane.IndexSnapshot, pos uint64, a lane.Answer, todayMined bool, todayHeight uint32) string {
 	if !todayMined {
 		if a.Mined {
 			return KindLanesOnly
@@ -117,12 +121,17 @@ func classifyHeight(s *lane.IndexSnapshot, a lane.Answer, todayMined bool, today
 		return KindAgree
 	}
 
+	if a.Via == lane.ViaRow && a.Height == todayHeight {
+		return KindAgree
+	}
+
+	// The height alone does not name a block: a fork block at it may be the one today means.
+	if s.TakenOffMain(pos, todayHeight) {
+		return KindOffChain
+	}
+
 	switch a.Via {
 	case lane.ViaRow:
-		if a.Height == todayHeight {
-			return KindAgree
-		}
-
 		return KindDifferentBlock
 	case lane.ViaFloor:
 		if todayHeight <= s.AnchorHeight() {
@@ -219,6 +228,11 @@ func classifyBlocks(v *lane.ChainView, a lane.Answer, todayBlockIDs []uint32) st
 			return KindNoRows
 		}
 
+		// On a chain the floors do not hold, a folded block's rows are no longer in memory.
+		if !v.FloorValid() && s.Folded(onChain[0]) {
+			return KindNotLoaded
+		}
+
 		return KindTodayOnly
 	case unknown:
 		// Today names a block the index never loaded: older than its start, or forgotten.
@@ -253,7 +267,17 @@ func (r *Reader) CompareDuplicates(v *lane.ChainView, hash chainhash.Hash, block
 		return
 	}
 
-	taken, hasRows := v.TakenBefore(blockID)
+	byRow, byFloor, hasRows := v.TakenBefore(blockID)
+	taken := byRow + byFloor
+
+	via := lane.ViaNone
+
+	switch {
+	case byRow > 0:
+		via = lane.ViaRow
+	case byFloor > 0:
+		via = lane.ViaFloor
+	}
 
 	var kind string
 
@@ -265,10 +289,12 @@ func (r *Reader) CompareDuplicates(v *lane.ChainView, hash chainhash.Hash, block
 	case taken > 0:
 		kind = KindLanesOnly
 	default:
-		kind = KindTodayOnly
+		// setMined checks every ancestor; the index holds only what it loaded, so the earlier
+		// block may be older than its start, and the verdict does not say which block it was.
+		kind = KindNotLoaded
 	}
 
-	count(ReaderBlockDuplicate, kind, lane.ViaRow)
+	count(ReaderBlockDuplicate, kind, via)
 
 	if isDisagreement(kind) {
 		r.disagree.log(r, ReaderBlockDuplicate, kind, hash, 0, lane.Answer{Mined: taken > 0, BlockID: blockID}, v.Snapshot(), "duplicate", todayDuplicate, uint32(min(taken, uint64(^uint32(0)))), nil)

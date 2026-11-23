@@ -266,9 +266,12 @@ func TestIndexFloorDoesNotHoldOnAForkBelowTheAnchor(t *testing.T) {
 	require.Equal(t, Answer{Mined: true, Via: ViaRow, BlockID: 102, Height: 2}, v.Lookup(Pack(4, 50)), "only its own row answers")
 	require.Equal(t, Answer{}, v.Lookup(Pack(4, 60)), "the floor does not")
 
-	count, hasRows := v.TakenBefore(102)
+	byRow, byFloor, hasRows := v.TakenBefore(102)
 	require.True(t, hasRows)
-	require.Equal(t, uint64(0), count, "the floor is not counted on this chain")
+	require.Equal(t, uint64(0), byRow)
+	require.Equal(t, uint64(0), byFloor, "the floor is not counted on this chain")
+	require.True(t, c.idx.Snapshot().Folded(1))
+	require.False(t, c.idx.Snapshot().Folded(102))
 
 	// After the next tip, the fork's ancestry below the anchor is gone: the chain leaves what the
 	// index holds, and the floor still does not hold.
@@ -308,19 +311,35 @@ func TestIndexTakenBefore(t *testing.T) {
 	c.add(5, 4, 5, rowsOf(t, 4, 50, 102, 103))
 	c.tip(5)
 
-	count, hasRows := c.main().TakenBefore(5)
+	byRow, byFloor, hasRows := c.main().TakenBefore(5)
 	require.True(t, hasRows)
-	require.Equal(t, uint64(2), count)
+	require.Equal(t, uint64(1), byRow, "102, block 4's")
+	require.Equal(t, uint64(1), byFloor, "50, below the floor")
 
-	count, hasRows = c.main().TakenBefore(4)
+	byRow, byFloor, hasRows = c.main().TakenBefore(4)
 	require.True(t, hasRows)
-	require.Equal(t, uint64(0), count)
+	require.Equal(t, uint64(0), byRow+byFloor)
 
 	c.add(6, 5, 6)
 	c.tip(6)
 
-	_, hasRows = c.main().TakenBefore(6)
+	_, _, hasRows = c.main().TakenBefore(6)
 	require.False(t, hasRows)
+}
+
+func TestIndexTakenOffMain(t *testing.T) {
+	c := newTestChain(t, 100)
+
+	c.line(1, 1)
+	c.add(2, 1, 2, rowsOf(t, 3, 7))
+	c.add(102, 1, 2, rowsOf(t, 3, 8))
+	c.tip(2)
+
+	s := c.idx.Snapshot()
+	require.True(t, s.TakenOffMain(Pack(3, 8), 2), "the fork block at height 2 took 8")
+	require.False(t, s.TakenOffMain(Pack(3, 7), 2), "the main block took 7")
+	require.False(t, s.TakenOffMain(Pack(3, 8), 3), "another height")
+	require.False(t, s.TakenOffMain(Pack(5, 8), 2), "another lane")
 }
 
 func TestIndexIntervalTreeFindsEveryCoveringRow(t *testing.T) {

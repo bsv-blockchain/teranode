@@ -341,6 +341,17 @@ func TestReaderFollowsAReorg(t *testing.T) {
 		requireCounted(t, ReaderValidator, KindAgree, lane.ViaRow, func() {
 			r.CompareHeight(ReaderValidator, chainhash.Hash{}, lane.Pack(4, 6), true, 2)
 		})
+
+		// A store still reporting the replaced block's height is not a disagreement: its block at
+		// that height, off the main chain now, took the position.
+		requireCounted(t, ReaderValidator, KindOffChain, lane.ViaNone, func() {
+			r.CompareHeight(ReaderValidator, chainhash.Hash{}, lane.Pack(4, 5), true, 2)
+		})
+
+		// Judged by block list, the replaced block is simply off the chain.
+		requireCounted(t, ReaderSubtreePrefetch, KindAgree, lane.ViaNone, func() {
+			r.CompareBlocks(ReaderSubtreePrefetch, v, chainhash.Hash{}, lane.Pack(4, 5), []uint32{b2.id})
+		})
 	})
 }
 
@@ -443,10 +454,12 @@ func TestReaderPrepareLoadsAnAncestryTheFollowerHasNotSeen(t *testing.T) {
 		v, ok = r.Prepare(context.Background(), b3.hash)
 		require.True(t, ok)
 
-		requireCounted(t, ReaderBlockDuplicate, KindTodayOnly, lane.ViaRow, func() {
+		// setMined found a duplicate the index cannot see: its earlier block may be older than the
+		// index's start.
+		requireCounted(t, ReaderBlockDuplicate, KindNotLoaded, lane.ViaNone, func() {
 			r.CompareDuplicates(v, b3.hash, b3.id, true)
 		})
-		requireCounted(t, ReaderBlockDuplicate, KindNoRows, lane.ViaRow, func() {
+		requireCounted(t, ReaderBlockDuplicate, KindNoRows, lane.ViaNone, func() {
 			r.CompareDuplicates(v, b1.hash, b1.id, false)
 		})
 	})
@@ -505,4 +518,57 @@ func TestReaderRebuildsOnAReorgPastTheAnchor(t *testing.T) {
 		require.Equal(t, lane.Answer{}, v.Lookup(lane.Pack(9, 1)))
 		require.Equal(t, lane.Answer{Mined: true, Via: lane.ViaFloor}, v.Lookup(lane.Pack(9, 2)))
 	})
+}
+
+// A fork that leaves the main chain below the anchor cannot use the floors, and a parent mined in
+// a folded block on it is counted not_loaded, not as a disagreement: its rows are no longer in
+// memory.
+func TestReaderCountsAFoldedAncestorOnAForkBelowTheAnchorNotLoaded(t *testing.T) {
+	engines(t, func(t *testing.T, store blockchainstore.Store) {
+		c := newChain(t, store)
+
+		b1 := c.add(nil, takes(t, 2, 50))
+		c.line(b1, 4)
+
+		r := newReader(ulogger.TestLogger{}, store, 2)
+		follow(t, r)
+		require.True(t, r.Snapshot().Folded(b1.id))
+
+		fork := c.add(b1)
+
+		v, ok := r.Prepare(context.Background(), fork.hash)
+		require.True(t, ok)
+		require.False(t, v.FloorValid())
+
+		requireCounted(t, ReaderBlockParent, KindNotLoaded, lane.ViaNone, func() {
+			r.CompareBlocks(ReaderBlockParent, v, chainhash.Hash{}, lane.Pack(2, 50), []uint32{b1.id})
+		})
+	})
+}
+
+// A load waiting for another gives up when its caller's context ends.
+func TestReaderPrepareGivesUpWaitingForAnotherLoad(t *testing.T) {
+	store := newStore(t, "sqlite")
+	c := newChain(t, store)
+	b1 := c.add(nil)
+
+	r := newReader(ulogger.TestLogger{}, store, 100)
+	follow(t, r)
+
+	b2 := c.add(b1)
+
+	r.loading <- struct{}{} // another load holds the token
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	start := time.Now()
+	_, ok := r.Prepare(ctx, b2.hash)
+	require.False(t, ok)
+	require.Less(t, time.Since(start), 5*time.Second)
+
+	<-r.loading
+
+	_, ok = r.Prepare(context.Background(), b2.hash)
+	require.True(t, ok)
 }

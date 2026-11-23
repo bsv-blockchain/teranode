@@ -781,6 +781,10 @@ func (d *Daemon) startBlockAssemblyService(ctx context.Context, appSettings *set
 	))
 }
 
+// laneReaderConnectRetry is how long the lane index waits before connecting to the blockchain
+// service again.
+const laneReaderConnectRetry = 5 * time.Second
+
 // startLaneReader starts the process's lane index at utxostore_laneMigration shadow; at off it
 // starts nothing and opens no connection. The index's blockchain client connects in the
 // background: creating it waits for the blockchain service, which this same process may not have
@@ -795,16 +799,26 @@ func (d *Daemon) startLaneReader(ctx context.Context, appSettings *settings.Sett
 	logger := createLogger(loggerLaneReader)
 
 	go func() {
-		blockchainClient, err := d.daemonStores.GetBlockchainClient(ctx, createLogger(loggerBlockchainClient), appSettings, serviceLaneReader)
-		if err != nil {
-			if ctx.Err() == nil {
-				logger.Warnf("[lanereader] no lane index in this process: connecting to the blockchain service: %v", err)
+		for {
+			blockchainClient, err := d.daemonStores.GetBlockchainClient(ctx, createLogger(loggerBlockchainClient), appSettings, serviceLaneReader)
+			if err == nil {
+				lanereader.Start(ctx, logger, appSettings, blockchainClient)
+
+				return
 			}
 
-			return
-		}
+			if ctx.Err() != nil {
+				return
+			}
 
-		lanereader.Start(ctx, logger, appSettings, blockchainClient)
+			logger.Warnf("[lanereader] connecting to the blockchain service for the lane index, retrying in %s: %v", laneReaderConnectRetry, err)
+
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(laneReaderConnectRetry):
+			}
+		}
 	}()
 }
 
