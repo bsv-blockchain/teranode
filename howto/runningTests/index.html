@@ -879,6 +879,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Soak Test">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#sensitivity" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Sensitivity
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -6886,6 +6903,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Soak Test">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#sensitivity" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Sensitivity
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -7161,10 +7195,17 @@
 <div class="language-shell highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>make<span class="w"> </span>longtest<span class="w">  </span><span class="c1"># Executes long-running tests in test/longtest/ with a 10-minute timeout.</span>
 </span></code></pre></div>
 <h2 id="soak-test">Soak Test<a class="headerlink" href="#soak-test" title="Permanent link">&para;</a></h2>
-<p>The soak test runs the in-process daemon under steady transaction load for a long wall-clock duration and fails if heap or goroutine counts trend upward, which is how slow leaks and unbounded caches show up. It samples <code>runtime.ReadMemStats</code> (after a forced GC) and <code>runtime.NumGoroutine()</code> at a fixed interval, discards a warm-up window, and fails a metric only when both its least-squares growth across the run and its last-quarter-minus-first-quarter mean exceed the tolerance. It is behind the <code>soak</code> build tag, so no other suite runs it. The nightly workflow runs it for two hours.</p>
+<p>The soak test runs the in-process daemon under steady transaction load for a long wall-clock duration. It fails if heap or goroutine counts trend upward, which is how slow leaks and unbounded caches show up. It is behind the <code>soak</code> build tag, so no other suite runs it. The nightly workflow runs it for two hours.</p>
+<ul>
+<li><strong>Services.</strong> It runs propagation, validator, block assembly, block and subtree validation, blockchain, block persister and pruner. The pruner keeps the UTXO store bounded by <code>global_blockHeightRetention</code> (288 by default). It is triggered by the block persister. The test fails if the pruner deleted no records.</li>
+<li><strong>Sampling.</strong> It samples <code>runtime.ReadMemStats</code> (after a forced GC) and <code>runtime.NumGoroutine()</code> at a fixed interval.</li>
+<li><strong>Warm-up.</strong> Samples before the warm-up are discarded. The warm-up ends at the later of <code>SOAK_WARMUP</code> and the chain reaching retention blocks past the first spend. Retention-bounded state is still filling until then, and that ramp is counted in blocks, not minutes.</li>
+<li><strong>Failure rule.</strong> A metric fails only when both its least-squares growth across the window and its last-quarter-minus-first-quarter mean exceed the allowed growth. The allowed growth is <code>max(tolerance × first-quarter mean, floor)</code>.</li>
+</ul>
 <div class="language-shell highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>make<span class="w"> </span>soaktest<span class="w">                                          </span><span class="c1"># 30 minute run (default)</span>
 </span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>make<span class="w"> </span>soaktest<span class="w"> </span><span class="nv">SOAK_DURATION</span><span class="o">=</span>2h<span class="w"> </span><span class="nv">SOAK_TIMEOUT</span><span class="o">=</span>150m<span class="w">       </span><span class="c1"># nightly length; SOAK_TIMEOUT must exceed SOAK_DURATION by 10m+</span>
-</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>make<span class="w"> </span>soaktest<span class="w"> </span><span class="nv">SOAK_DURATION</span><span class="o">=</span>4m<span class="w"> </span><span class="nv">SOAK_TIMEOUT</span><span class="o">=</span>20m<span class="w"> </span><span class="nv">SOAK_WARMUP</span><span class="o">=</span>1m<span class="w"> </span><span class="nv">SOAK_SAMPLE_INTERVAL</span><span class="o">=</span>10s<span class="w"> </span><span class="nv">SOAK_INJECT_LEAK</span><span class="o">=</span><span class="m">1</span><span class="w">  </span><span class="c1"># confirm a leak fails it</span>
+</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="c1"># Quick check that a leak fails it: a low retention lets the chain reach steady state in under a minute.</span>
+</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="nv">global_blockHeightRetention</span><span class="o">=</span><span class="m">20</span><span class="w"> </span><span class="nv">SOAK_INJECT_LEAK</span><span class="o">=</span><span class="m">1</span><span class="w"> </span><span class="nv">SOAK_WARMUP</span><span class="o">=</span>1m<span class="w"> </span><span class="nv">SOAK_SAMPLE_INTERVAL</span><span class="o">=</span>10s<span class="w"> </span>make<span class="w"> </span>soaktest<span class="w"> </span><span class="nv">SOAK_DURATION</span><span class="o">=</span>5m<span class="w"> </span><span class="nv">SOAK_TIMEOUT</span><span class="o">=</span>20m
 </span></code></pre></div>
 <table>
 <thead>
@@ -7183,7 +7224,7 @@
 <tr>
 <td><code>SOAK_WARMUP</code></td>
 <td>larger of 5m and 20% of the duration, at most half of it</td>
-<td>Samples before this are ignored</td>
+<td>Minimum warm-up; the run also waits for the steady-state block height</td>
 </tr>
 <tr>
 <td><code>SOAK_SAMPLE_INTERVAL</code></td>
@@ -7201,14 +7242,19 @@
 <td><code>aerospike</code> or <code>postgres</code> run the store in a container, so its memory is not measured</td>
 </tr>
 <tr>
-<td><code>SOAK_HEAP_TOLERANCE</code> / <code>SOAK_GOROUTINE_TOLERANCE</code></td>
-<td><code>0.10</code> / <code>0.05</code></td>
-<td>Allowed growth as a fraction of the mean (floors of 16 MiB and 20 goroutines)</td>
+<td><code>SOAK_HEAP_TOLERANCE</code> / <code>SOAK_HEAP_TOLERANCE_MIB</code></td>
+<td><code>0.10</code> / <code>16</code></td>
+<td>Allowed heap growth: fraction of the first-quarter mean, and its floor in MiB</td>
+</tr>
+<tr>
+<td><code>SOAK_GOROUTINE_TOLERANCE</code> / <code>SOAK_GOROUTINE_TOLERANCE_ABS</code></td>
+<td><code>0.05</code> / <code>20</code></td>
+<td>Allowed goroutine growth: fraction of the first-quarter mean, and its floor</td>
 </tr>
 <tr>
 <td><code>SOAK_OUTPUT_DIR</code></td>
 <td>a temp dir</td>
-<td>Where <code>soak-samples.csv</code> and, on failure, heap and goroutine profiles are written</td>
+<td>Where <code>soak-samples.csv</code>, the end-of-warm-up <code>soak-heap-baseline.pprof</code> and, on failure, heap and goroutine profiles are written</td>
 </tr>
 <tr>
 <td><code>SOAK_INJECT_LEAK</code></td>
@@ -7217,7 +7263,35 @@
 </tr>
 </tbody>
 </table>
-<p>Only the Go heap is measured: memory held outside it, such as C allocations or containerised stores, is not.</p>
+<h3 id="sensitivity">Sensitivity<a class="headerlink" href="#sensitivity" title="Permanent link">&para;</a></h3>
+<p>A steady leak at rate <code>r</code> over an analysis window <code>w</code> raises the last-quarter mean over the first by about <code>0.75 × r × w</code>. That is the binding condition, so the slowest leak a run fails is <code>allowed / (0.75 × w)</code>. Every run logs this as <code>min_detectable</code> per metric.</p>
+<p>The figures below assume a heap of about 285 MiB and about 690 goroutines, the levels the soak daemon settles at. In both cases a ~285 MiB heap makes 10% (28.5 MiB) the binding allowance, above the 16 MiB floor.</p>
+<table>
+<thead>
+<tr>
+<th>Run</th>
+<th>Analysis window</th>
+<th>Heap leak caught</th>
+<th>Goroutine leak caught</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>make soaktest</code> (30m)</td>
+<td>about 20m (warm-up ends at height 292, about 10m in)</td>
+<td>about 114 MiB/h</td>
+<td>about 138/h (5% / 20)</td>
+</tr>
+<tr>
+<td>Nightly (2h)</td>
+<td>96m (24m warm-up)</td>
+<td>about 24 MiB/h</td>
+<td>about 12/h (2% / 12)</td>
+</tr>
+</tbody>
+</table>
+<p>The nightly job sets the tighter goroutine tolerance. With the default it would pass a leak of up to about 29 goroutines an hour, such as one goroutine per 100 blocks. A slower leak than the figures above passes. For a leak per transaction: the soak sends about 240 transactions a second (about 860,000 an hour). The nightly run therefore catches retention of about 30 bytes or more per transaction, and the 30-minute run about 140 bytes or more. Any retained transaction or hash structure is well above both.</p>
+<p>Only the Go heap is measured. Memory held outside it, such as C allocations or containerised stores, is not. The UTXO store gains one row per block for the never-spent coinbase output. That row lives in the store, not the Go heap.</p>
 <h2 id="smoke-tests">Smoke Tests<a class="headerlink" href="#smoke-tests" title="Permanent link">&para;</a></h2>
 <div class="language-shell highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>make<span class="w"> </span>smoketest<span class="w">  </span><span class="c1"># Runs E2E smoke tests in test/e2e/daemon/ready/ focused on basic functionality.</span>
 </span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>
