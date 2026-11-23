@@ -608,6 +608,8 @@ func TestS3_GetObjectKey_SubDirectoryShapes(t *testing.T) {
 		want   string
 	}{
 		{"", hashKey},
+		{".", hashKey},
+		{"./", hashKey},
 		{"blocks", "blocks/" + hashKey},
 		{"blocks/", "blocks/" + hashKey},
 		{"/blocks", "/blocks/" + hashKey},
