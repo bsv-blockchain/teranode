@@ -34,6 +34,12 @@ import (
 // lane, every position is listed, so the index never calls a position settled that it did not see
 // settle. Floors from history, written by the pruner and loaded at start, are Phase 2.
 //
+// The listed positions are never trimmed: every hole a folded row leaves stays listed until a
+// later block takes it, for as long as the process runs. That covers burnt positions, positions
+// never mined, and every position of a block with no rows. So the floors grow with uptime, not
+// with the two days of rows the index holds; teranode_lane_reader_index_listed_positions shows by
+// how much.
+//
 // Two writers add blocks and publish: the follower, which also moves the tip, and block
 // validation loading a block's own ancestry. They take turns, one load at a time, and every change
 // is made under the Index's mutex and published as an immutable IndexSnapshot, so a lookup takes
@@ -108,7 +114,7 @@ type indexRow struct {
 }
 
 // Plain bitsets: a row gets one when it costs at most plainBitsetSlack times its Roaring bitmap
-// plus plainBitsetAllowance, and its block took at most plainBitsetMaxTaken positions, which bounds
+// plus plainBitsetAllowance, and the row holds at most plainBitsetMaxTaken positions, which bounds
 // what building it costs.
 const (
 	plainBitsetSlack     = 2

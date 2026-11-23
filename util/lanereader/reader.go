@@ -19,7 +19,7 @@
 // rebuilds the index. The follower reads the best block one second after each step finishes, so
 // while it is idle it is about a second behind; during a load of many blocks or a rebuild, readers
 // keep the previous snapshot until that step finishes. Block validation therefore loads a block's
-// own ancestry the same way before it judges it (Prepare).
+// own ancestry the same way before it judges it (BlockParents and ShadowDuplicates).
 package lanereader
 
 import (
@@ -88,7 +88,6 @@ type Reader struct {
 	// when its context ends.
 	loading chan struct{}
 
-	lookups  atomic.Uint64
 	disagree disagreementLog
 
 	// unreachable holds blocks whose walk back found no held block, by hash, with the tip height
@@ -413,17 +412,18 @@ func (r *Reader) load(ctx context.Context, idx *lane.Index, headers []*model.Blo
 	return nil
 }
 
-// Prepare loads the ancestry of block hash, which must be stored, into the index and returns the
-// view of the chain ending at it, so block validation judges a block against rows its parent's
-// chain holds even before the follower has moved. It reports false when the index has no tip yet
-// or the ancestry could not be loaded before ctx ended.
-func (r *Reader) Prepare(ctx context.Context, hash chainhash.Hash) (*lane.ChainView, bool) {
+// prepareView loads the ancestry of block hash, which must be stored, into the index and returns
+// the view of the chain ending at it, so block validation judges a block against rows its
+// parent's chain holds even before the follower has moved. It reports false when the index has no
+// tip yet or the ancestry could not be loaded before ctx ended. Block validation reaches it
+// through BlockParents and ShadowDuplicates.
+func (r *Reader) prepareView(ctx context.Context, hash chainhash.Hash) (*lane.ChainView, bool) {
 	v, _ := r.prepare(ctx, hash)
 
 	return v, v != nil
 }
 
-// prepare is Prepare that also says, when it returns no view, which kind to count for the answers
+// prepare is prepareView that also says, when it returns no view, which kind to count for the answers
 // that needed it: not_loaded for a block below the index's start, not_ready otherwise.
 func (r *Reader) prepare(ctx context.Context, hash chainhash.Hash) (*lane.ChainView, string) {
 	if r == nil {

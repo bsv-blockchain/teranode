@@ -2,7 +2,9 @@ package lanereader
 
 import (
 	"context"
+	"math/rand/v2"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
@@ -70,9 +72,10 @@ func isDisagreement(kind string) bool {
 	return kind == KindLanesOnly || kind == KindTodayOnly || kind == KindDifferentBlock
 }
 
-// lookup answers pos on v, timing one lookup in lookupSampleEvery.
+// lookup answers pos on v, timing one lookup in lookupSampleEvery, chosen at random so the hot
+// path shares no counter between goroutines.
 func (r *Reader) lookup(v *lane.ChainView, pos uint64) lane.Answer {
-	if r.lookups.Add(1)%lookupSampleEvery != 0 {
+	if rand.Uint64()%lookupSampleEvery != 0 {
 		return v.Lookup(pos)
 	}
 
@@ -278,13 +281,6 @@ func classifyBlocks(v *lane.ChainView, a lane.Answer, todayBlockIDs []uint32) st
 	}
 }
 
-// CompareDuplicates compares the lanes answer to block validation's duplicate check for block
-// blockID on chain v, which must include it, with today's verdict: whether setMined found a
-// transaction of the block already mined on its chain.
-func (r *Reader) CompareDuplicates(v *lane.ChainView, hash chainhash.Hash, blockID uint32, todayDuplicate bool) {
-	r.compareDuplicates(v, KindNotReady, hash, blockID, todayDuplicate)
-}
-
 // ShadowDuplicates loads the ancestry of the stored block hash, as ID blockID, and compares the
 // lane index's answer to the duplicate check with setMined's verdict. A block below the index's
 // start counts not_loaded, without a walk back.
@@ -297,6 +293,9 @@ func (r *Reader) ShadowDuplicates(ctx context.Context, hash chainhash.Hash, bloc
 	r.compareDuplicates(v, noView, hash, blockID, todayDuplicate)
 }
 
+// compareDuplicates compares the lanes answer to block validation's duplicate check for block
+// blockID on chain v, which must include it, with today's verdict: whether setMined found a
+// transaction of the block already mined on its chain. With v nil it counts noView.
 func (r *Reader) compareDuplicates(v *lane.ChainView, noView string, hash chainhash.Hash, blockID uint32, todayDuplicate bool) {
 	if r == nil {
 		return
@@ -354,11 +353,16 @@ func (r *Reader) compareDuplicates(v *lane.ChainView, noView string, hash chainh
 }
 
 // disagreementLog logs the first disagreementsLogged disagreements of each reader and kind, then
-// one a minute.
+// one a minute. It takes no lock on the path that decides not to log, so a burst of disagreements
+// from many parent checks at once does not serialise them.
 type disagreementLog struct {
-	mu   sync.Mutex
-	seen map[string]int
-	last map[string]time.Time
+	gates sync.Map // reader/kind to *logGate
+}
+
+// logGate is one reader and kind's count and the time of its last log line, in Unix nanoseconds.
+type logGate struct {
+	seen atomic.Int64
+	last atomic.Int64
 }
 
 const disagreementsLogged = 5
@@ -367,23 +371,24 @@ func (d *disagreementLog) log(r *Reader, reader, kind string, hash chainhash.Has
 	todayForm string, todayMined bool, todayValue uint32, todayBlockIDs []uint32) {
 	key := reader + "/" + kind
 
-	d.mu.Lock()
-
-	if d.seen == nil {
-		d.seen, d.last = map[string]int{}, map[string]time.Time{}
+	g, ok := d.gates.Load(key)
+	if !ok {
+		g, _ = d.gates.LoadOrStore(key, &logGate{})
 	}
 
-	d.seen[key]++
-	n := d.seen[key]
+	gate := g.(*logGate)
+	n := gate.seen.Add(1)
 
-	if n > disagreementsLogged && time.Since(d.last[key]) < time.Minute {
-		d.mu.Unlock()
+	if n > disagreementsLogged {
+		now := time.Now().UnixNano()
+		last := gate.last.Load()
 
-		return
+		if now-last < int64(time.Minute) || !gate.last.CompareAndSwap(last, now) {
+			return
+		}
+	} else {
+		gate.last.Store(time.Now().UnixNano())
 	}
-
-	d.last[key] = time.Now()
-	d.mu.Unlock()
 
 	laneNum, p := lane.Unpack(pos)
 

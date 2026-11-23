@@ -234,12 +234,13 @@ func TestReaderAtOffDoesNothing(t *testing.T) {
 	require.Nil(t, r.MainView())
 	require.Nil(t, r.BlockParents(t.Context(), chainhash.Hash{}))
 
-	_, ok := r.Prepare(t.Context(), chainhash.Hash{})
+	_, ok := r.prepareView(t.Context(), chainhash.Hash{})
 	require.False(t, ok)
 
+	r.BlockParents(t.Context(), chainhash.Hash{}).ObserveParent(chainhash.Hash{}, lane.Pack(1, 1), []uint32{1})
 	r.CompareHeight(ReaderValidator, chainhash.Hash{}, lane.Pack(1, 1), true, 1)
 	r.CompareBlocks(ReaderBlockParent, nil, chainhash.Hash{}, lane.Pack(1, 1), []uint32{1})
-	r.CompareDuplicates(nil, chainhash.Hash{}, 1, false)
+	r.compareDuplicates(nil, KindNotReady, chainhash.Hash{}, 1, false)
 }
 
 // Each kind of comparison is counted once, under its reader and what answered.
@@ -415,7 +416,7 @@ func TestReaderUsesOnlyRowsOfBlocksOnTheJudgedChain(t *testing.T) {
 		require.Equal(t, lane.Answer{}, v.Lookup(lane.Pack(5, 7)), "the deleted block's row")
 		require.Equal(t, lane.Answer{}, v.Lookup(lane.Pack(5, 8)), "the fork block's row, off the main chain")
 
-		forkView, ok := r.Prepare(context.Background(), fork.hash)
+		forkView, ok := r.prepareView(context.Background(), fork.hash)
 		require.True(t, ok)
 		require.Equal(t, lane.Answer{Mined: true, Via: lane.ViaRow, BlockID: fork.id, Height: 2}, forkView.Lookup(lane.Pack(5, 8)))
 		require.Equal(t, lane.Answer{}, forkView.Lookup(lane.Pack(5, 7)))
@@ -435,33 +436,33 @@ func TestReaderPrepareLoadsAnAncestryTheFollowerHasNotSeen(t *testing.T) {
 		b2 := c.add(b1, takes(t, 6, 1, 2))
 		b3 := c.add(b2, takes(t, 6, 3))
 
-		v, ok := r.Prepare(context.Background(), b3.hash)
+		v, ok := r.prepareView(context.Background(), b3.hash)
 		require.True(t, ok)
 		require.Equal(t, lane.Answer{Mined: true, Via: lane.ViaRow, BlockID: b2.id, Height: 2}, v.Lookup(lane.Pack(6, 2)))
 
 		// A block re-taking b2's position 2 is counted as a duplicate on its chain.
 		b4 := c.add(b3, takes(t, 6, 2, 4))
 
-		v, ok = r.Prepare(context.Background(), b4.hash)
+		v, ok = r.prepareView(context.Background(), b4.hash)
 		require.True(t, ok)
 
 		requireCounted(t, ReaderBlockDuplicate, KindAgree, lane.ViaRow, func() {
-			r.CompareDuplicates(v, b4.hash, b4.id, true)
+			r.compareDuplicates(v, KindNotReady, b4.hash, b4.id, true)
 		})
 		requireCounted(t, ReaderBlockDuplicate, KindLanesOnly, lane.ViaRow, func() {
-			r.CompareDuplicates(v, b4.hash, b4.id, false)
+			r.compareDuplicates(v, KindNotReady, b4.hash, b4.id, false)
 		})
 
-		v, ok = r.Prepare(context.Background(), b3.hash)
+		v, ok = r.prepareView(context.Background(), b3.hash)
 		require.True(t, ok)
 
 		// setMined found a duplicate the index cannot see: its earlier block may be older than the
 		// index's start.
 		requireCounted(t, ReaderBlockDuplicate, KindNotLoaded, lane.ViaNone, func() {
-			r.CompareDuplicates(v, b3.hash, b3.id, true)
+			r.compareDuplicates(v, KindNotReady, b3.hash, b3.id, true)
 		})
 		requireCounted(t, ReaderBlockDuplicate, KindNoRows, lane.ViaNone, func() {
-			r.CompareDuplicates(v, b1.hash, b1.id, false)
+			r.compareDuplicates(v, KindNotReady, b1.hash, b1.id, false)
 		})
 	})
 }
@@ -537,7 +538,7 @@ func TestReaderCountsAFoldedAncestorOnAForkBelowTheAnchorNotLoaded(t *testing.T)
 
 		fork := c.add(b1)
 
-		v, ok := r.Prepare(context.Background(), fork.hash)
+		v, ok := r.prepareView(context.Background(), fork.hash)
 		require.True(t, ok)
 		require.False(t, v.FloorValid())
 
@@ -564,13 +565,13 @@ func TestReaderPrepareGivesUpWaitingForAnotherLoad(t *testing.T) {
 	defer cancel()
 
 	start := time.Now()
-	_, ok := r.Prepare(ctx, b2.hash)
+	_, ok := r.prepareView(ctx, b2.hash)
 	require.False(t, ok)
 	require.Less(t, time.Since(start), 5*time.Second)
 
 	<-r.loading
 
-	_, ok = r.Prepare(context.Background(), b2.hash)
+	_, ok = r.prepareView(context.Background(), b2.hash)
 	require.True(t, ok)
 }
 
@@ -589,7 +590,7 @@ func TestReaderCountsTheDuplicateCheckOfAFoldedBlockNotLoaded(t *testing.T) {
 
 		for _, verdict := range []bool{false, true} {
 			requireCounted(t, ReaderBlockDuplicate, KindNotLoaded, lane.ViaNone, func() {
-				r.CompareDuplicates(r.MainView(), b1.hash, b1.id, verdict)
+				r.compareDuplicates(r.MainView(), KindNotReady, b1.hash, b1.id, verdict)
 			})
 		}
 	})
@@ -649,13 +650,13 @@ func TestReaderCountsMissesOnADisconnectedForkNotLoaded(t *testing.T) {
 		f := c.line(b1, 3)
 		f5 := c.add(f, takes(t, 2, 50))
 
-		_, ok := r.Prepare(context.Background(), f5.hash)
+		_, ok := r.prepareView(context.Background(), f5.hash)
 		require.True(t, ok)
 
 		c.add(b5)
 		follow(t, r) // anchor 4
 
-		v, ok := r.Prepare(context.Background(), f5.hash)
+		v, ok := r.prepareView(context.Background(), f5.hash)
 		require.True(t, ok)
 		require.True(t, v.Disconnected())
 
@@ -663,7 +664,7 @@ func TestReaderCountsMissesOnADisconnectedForkNotLoaded(t *testing.T) {
 			r.CompareBlocks(ReaderBlockParent, v, chainhash.Hash{}, lane.Pack(2, 60), []uint32{b1.id})
 		})
 		requireCounted(t, ReaderBlockDuplicate, KindNotLoaded, lane.ViaNone, func() {
-			r.CompareDuplicates(v, f5.hash, f5.id, true)
+			r.compareDuplicates(v, KindNotReady, f5.hash, f5.id, true)
 		})
 	})
 }
@@ -736,7 +737,7 @@ func TestReaderJudgesALoadedForkHeightByItsRows(t *testing.T) {
 		r := newReader(ulogger.TestLogger{}, store, 100)
 		follow(t, r)
 
-		_, ok := r.Prepare(context.Background(), lostNoRows.hash)
+		_, ok := r.prepareView(context.Background(), lostNoRows.hash)
 		require.True(t, ok)
 
 		won := c.add(b1, takes(t, 4, 6))
@@ -811,7 +812,7 @@ func TestReaderCountsAForkMinedParentOnAnIDWindowAgree(t *testing.T) {
 		r := newReader(ulogger.TestLogger{}, store, 100)
 		follow(t, r)
 
-		_, ok := r.Prepare(context.Background(), rival.hash)
+		_, ok := r.prepareView(context.Background(), rival.hash)
 		require.True(t, ok)
 
 		requireCounted(t, ReaderSubtreeAlreadyMined, KindAgree, lane.ViaNone, func() {

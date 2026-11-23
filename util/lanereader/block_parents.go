@@ -3,6 +3,7 @@ package lanereader
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
@@ -28,12 +29,17 @@ const (
 type BlockParents struct {
 	r *Reader
 
-	mu   sync.Mutex
-	done bool
-	view *lane.ChainView
-	// noView is the kind counted when the chain could not be loaded.
-	noView  string
+	// loaded is set once the chain's load has ended; after that a parent is answered without the
+	// mutex, which guards only pending.
+	loaded  atomic.Pointer[loadedChain]
+	mu      sync.Mutex
 	pending []pendingParent
+}
+
+// loadedChain is how a block's chain load ended: its view, or nil and the kind to count instead.
+type loadedChain struct {
+	view   *lane.ChainView
+	noView string
 }
 
 type pendingParent struct {
@@ -43,7 +49,7 @@ type pendingParent struct {
 }
 
 // BlockParents starts the shadow of the parent check of a block whose parent is parent. On a nil
-// Reader it returns nil, which model.ContextWithLaneParentObserver ignores.
+// Reader it returns nil, whose ObserveParent does nothing.
 func (r *Reader) BlockParents(ctx context.Context, parent chainhash.Hash) *BlockParents {
 	if r == nil {
 		return nil
@@ -58,7 +64,7 @@ func (r *Reader) BlockParents(ctx context.Context, parent chainhash.Hash) *Block
 		view, noView := r.prepare(prepareCtx, parent)
 
 		b.mu.Lock()
-		b.done, b.view, b.noView = true, view, noView
+		b.loaded.Store(&loadedChain{view: view, noView: noView})
 		pending := b.pending
 		b.pending = nil
 		b.mu.Unlock()
@@ -71,15 +77,24 @@ func (r *Reader) BlockParents(ctx context.Context, parent chainhash.Hash) *Block
 	return b
 }
 
-// ObserveParent answers one parent, or holds it until the chain's rows are in.
+// ObserveParent answers one parent, or holds it until the chain's rows are in. On a nil
+// BlockParents it does nothing.
 func (b *BlockParents) ObserveParent(parentHash chainhash.Hash, lanePosition uint64, blockIDs []uint32) {
+	if b == nil {
+		return
+	}
+
+	if l := b.loaded.Load(); l != nil {
+		b.r.compareBlocks(ReaderBlockParent, l.view, l.noView, parentHash, lanePosition, blockIDs)
+
+		return
+	}
+
 	b.mu.Lock()
 
-	if b.done {
-		view, noView := b.view, b.noView
+	if l := b.loaded.Load(); l != nil {
 		b.mu.Unlock()
-
-		b.r.compareBlocks(ReaderBlockParent, view, noView, parentHash, lanePosition, blockIDs)
+		b.r.compareBlocks(ReaderBlockParent, l.view, l.noView, parentHash, lanePosition, blockIDs)
 
 		return
 	}
