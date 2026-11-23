@@ -414,19 +414,11 @@ func (r *Reader) load(ctx context.Context, idx *lane.Index, headers []*model.Blo
 	return nil
 }
 
-// prepareView loads the ancestry of block hash, which must be stored, into the index and returns
-// the view of the chain ending at it, so block validation judges a block against rows its
-// parent's chain holds even before the follower has moved. It reports false when the index has no
-// tip yet or the ancestry could not be loaded before ctx ended. Block validation reaches it
-// through BlockParents and ShadowDuplicates.
-func (r *Reader) prepareView(ctx context.Context, hash chainhash.Hash) (*lane.ChainView, bool) {
-	v, _ := r.prepare(ctx, hash)
-
-	return v, v != nil
-}
-
-// prepare is prepareView that also says, when it returns no view, which kind to count for the answers
-// that needed it: not_loaded for a block below the index's start, not_ready otherwise.
+// prepare loads the ancestry of block hash, which must be stored, into the index and returns the
+// view of the chain ending at it, so block validation judges a block against rows its parent's
+// chain holds even before the follower has moved. Block validation calls it through BlockParents
+// and ShadowDuplicates. With no view it says which kind to count for the answers that needed it:
+// not_loaded for a block below the index's start or with no held ancestor, not_ready otherwise.
 func (r *Reader) prepare(ctx context.Context, hash chainhash.Hash) (*lane.ChainView, string) {
 	if r == nil {
 		return nil, KindNotReady

@@ -234,7 +234,7 @@ func TestReaderAtOffDoesNothing(t *testing.T) {
 	require.Nil(t, r.MainView())
 	require.Nil(t, r.BlockParents(t.Context(), chainhash.Hash{}))
 
-	_, ok := r.prepareView(t.Context(), chainhash.Hash{})
+	_, ok := prepareView(r, t.Context(), chainhash.Hash{})
 	require.False(t, ok)
 
 	r.BlockParents(t.Context(), chainhash.Hash{}).ObserveParent(chainhash.Hash{}, lane.Pack(1, 1), []uint32{1})
@@ -416,7 +416,7 @@ func TestReaderUsesOnlyRowsOfBlocksOnTheJudgedChain(t *testing.T) {
 		require.Equal(t, lane.Answer{}, v.Lookup(lane.Pack(5, 7)), "the deleted block's row")
 		require.Equal(t, lane.Answer{}, v.Lookup(lane.Pack(5, 8)), "the fork block's row, off the main chain")
 
-		forkView, ok := r.prepareView(context.Background(), fork.hash)
+		forkView, ok := prepareView(r, context.Background(), fork.hash)
 		require.True(t, ok)
 		require.Equal(t, lane.Answer{Mined: true, Via: lane.ViaRow, BlockID: fork.id, Height: 2}, forkView.Lookup(lane.Pack(5, 8)))
 		require.Equal(t, lane.Answer{}, forkView.Lookup(lane.Pack(5, 7)))
@@ -436,14 +436,14 @@ func TestReaderPrepareLoadsAnAncestryTheFollowerHasNotSeen(t *testing.T) {
 		b2 := c.add(b1, takes(t, 6, 1, 2))
 		b3 := c.add(b2, takes(t, 6, 3))
 
-		v, ok := r.prepareView(context.Background(), b3.hash)
+		v, ok := prepareView(r, context.Background(), b3.hash)
 		require.True(t, ok)
 		require.Equal(t, lane.Answer{Mined: true, Via: lane.ViaRow, BlockID: b2.id, Height: 2}, v.Lookup(lane.Pack(6, 2)))
 
 		// A block re-taking b2's position 2 is counted as a duplicate on its chain.
 		b4 := c.add(b3, takes(t, 6, 2, 4))
 
-		v, ok = r.prepareView(context.Background(), b4.hash)
+		v, ok = prepareView(r, context.Background(), b4.hash)
 		require.True(t, ok)
 
 		requireCounted(t, ReaderBlockDuplicate, KindAgree, lane.ViaRow, func() {
@@ -453,7 +453,7 @@ func TestReaderPrepareLoadsAnAncestryTheFollowerHasNotSeen(t *testing.T) {
 			r.compareDuplicates(v, KindNotReady, b4.hash, b4.id, false)
 		})
 
-		v, ok = r.prepareView(context.Background(), b3.hash)
+		v, ok = prepareView(r, context.Background(), b3.hash)
 		require.True(t, ok)
 
 		// setMined found a duplicate the index cannot see: its earlier block may be older than the
@@ -538,7 +538,7 @@ func TestReaderCountsAFoldedAncestorOnAForkBelowTheAnchorNotLoaded(t *testing.T)
 
 		fork := c.add(b1)
 
-		v, ok := r.prepareView(context.Background(), fork.hash)
+		v, ok := prepareView(r, context.Background(), fork.hash)
 		require.True(t, ok)
 		require.False(t, v.FloorValid())
 
@@ -565,13 +565,13 @@ func TestReaderPrepareGivesUpWaitingForAnotherLoad(t *testing.T) {
 	defer cancel()
 
 	start := time.Now()
-	_, ok := r.prepareView(ctx, b2.hash)
+	_, ok := prepareView(r, ctx, b2.hash)
 	require.False(t, ok)
 	require.Less(t, time.Since(start), 5*time.Second)
 
 	<-r.loading
 
-	_, ok = r.prepareView(context.Background(), b2.hash)
+	_, ok = prepareView(r, context.Background(), b2.hash)
 	require.True(t, ok)
 }
 
@@ -650,13 +650,13 @@ func TestReaderCountsMissesOnADisconnectedForkNotLoaded(t *testing.T) {
 		f := c.line(b1, 3)
 		f5 := c.add(f, takes(t, 2, 50))
 
-		_, ok := r.prepareView(context.Background(), f5.hash)
+		_, ok := prepareView(r, context.Background(), f5.hash)
 		require.True(t, ok)
 
 		c.add(b5)
 		follow(t, r) // anchor 4
 
-		v, ok := r.prepareView(context.Background(), f5.hash)
+		v, ok := prepareView(r, context.Background(), f5.hash)
 		require.True(t, ok)
 		require.True(t, v.Disconnected())
 
@@ -740,7 +740,7 @@ func TestReaderJudgesALoadedForkHeightByItsRows(t *testing.T) {
 		r := newReader(ulogger.TestLogger{}, store, 100)
 		follow(t, r)
 
-		_, ok := r.prepareView(context.Background(), lostNoRows.hash)
+		_, ok := prepareView(r, context.Background(), lostNoRows.hash)
 		require.True(t, ok)
 
 		won := c.add(b1, takes(t, 4, 6))
@@ -815,7 +815,7 @@ func TestReaderCountsAForkMinedParentOnAnIDWindowAgree(t *testing.T) {
 		r := newReader(ulogger.TestLogger{}, store, 100)
 		follow(t, r)
 
-		_, ok := r.prepareView(context.Background(), rival.hash)
+		_, ok := prepareView(r, context.Background(), rival.hash)
 		require.True(t, ok)
 
 		requireCounted(t, ReaderSubtreeAlreadyMined, KindAgree, lane.ViaNone, func() {
@@ -1028,4 +1028,11 @@ func TestReaderRebuildsWhenTheNewTipIsOutOfReach(t *testing.T) {
 	require.Equal(t, rebuilds+1, testutil.ToFloat64(prometheusLaneReaderRebuilds.WithLabelValues("gap")))
 	require.Equal(t, tip.height, r.Snapshot().TipHeight())
 	require.Equal(t, lane.Answer{Mined: true, Via: lane.ViaRow, BlockID: b2.id, Height: b2.height}, r.MainView().Lookup(lane.Pack(6, 3)))
+}
+
+// prepareView is prepare reporting whether a view came back, for the tests.
+func prepareView(r *Reader, ctx context.Context, hash chainhash.Hash) (*lane.ChainView, bool) {
+	v, _ := r.prepare(ctx, hash)
+
+	return v, v != nil
 }

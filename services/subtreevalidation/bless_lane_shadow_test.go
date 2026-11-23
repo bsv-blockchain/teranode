@@ -188,4 +188,13 @@ func TestBlessMissingShadowsTheAlreadyMinedCheck(t *testing.T) {
 	_, _, err = server.blessMissing(context.Background(), chainhash.Hash{}, chainhash.Hash{}, tx, 3, map[uint32]bool{b2: true}, validator.ProcessOptions())
 	require.NoError(t, err, "b1 is not on the caller's chain, so the transaction is not already mined there")
 	require.Equal(t, before+1, subtreeAlreadyMined(t, lanereader.KindAgree, "none"))
+
+	// A record with no mined block, such as a new one on the block path, needs no position for
+	// the check, so the shadow reads nothing.
+	reads := records.laneReads
+	server.validatorClient = &metaValidator{md: &meta.Data{}}
+
+	_, _, err = server.blessMissing(context.Background(), chainhash.Hash{}, chainhash.Hash{}, tx, 3, map[uint32]bool{}, validator.ProcessOptions())
+	require.NoError(t, err)
+	require.Equal(t, reads, records.laneReads)
 }

@@ -123,9 +123,9 @@ func TestIndexFoldsSettledBlocksIntoTheFloor(t *testing.T) {
 	require.Equal(t, Answer{Mined: true, Via: ViaFloor}, v.Lookup(Pack(2, 12)))
 	require.Equal(t, Answer{Mined: true, Via: ViaFloor}, v.Lookup(Pack(2, 20)))
 	require.Equal(t, Answer{}, v.Lookup(Pack(2, 15)), "a hole stays listed")
-	require.Equal(t, Answer{}, v.Lookup(Pack(2, 5)), "below the first row seen is listed")
+	require.Equal(t, Answer{}, v.Lookup(Pack(2, 5)), "below the first row seen is not settled")
 	require.Equal(t, Answer{}, v.Lookup(Pack(2, 21)), "above the floor")
-	require.Equal(t, uint64(9+1), snap.Stats().Listed)
+	require.Equal(t, uint64(1), snap.Stats().Listed, "only the hole is listed, not the history before the first row")
 
 	state, height := snap.Block(1)
 	require.Equal(t, BlockHasRows, state)
@@ -532,4 +532,46 @@ func TestIndexConcurrentWritersAndReaders(t *testing.T) {
 
 	wg.Wait()
 	c.tip(1)
+}
+
+// A lane whose positions are already high when the index starts holds nothing for its history: the
+// floor's memory follows the rows folded, not how high their positions are.
+func TestIndexFloorHoldsNothingForALanesHistory(t *testing.T) {
+	c := newTestChain(t, 2)
+
+	const start = uint64(53_000_000_000) // a thousand design-rate blocks into the lane
+
+	c.add(1, 0, 1, rangeRows(t, 4, start, start+1_000))
+	c.line(2, 3)
+	c.tip(3)
+
+	s := c.idx.Snapshot()
+	require.Equal(t, ViaFloor, s.Main().Lookup(Pack(4, start+10)).Via)
+	require.Equal(t, uint64(0), s.Stats().Listed)
+	require.Less(t, s.Stats().Bytes, uint64(64<<10), "no memory for the positions below the first row")
+}
+
+// A block taking a position below the first row the lane folded settles it once that block folds.
+func TestIndexLateBlockSettlesAPositionBelowTheLanesFirstRow(t *testing.T) {
+	c := newTestChain(t, 2)
+
+	c.add(1, 0, 1, rangeRows(t, 4, 1_000, 2_000))
+	c.line(2, 3)
+	c.tip(3) // block 1 folded: the lane's floor starts at 1,000
+
+	c.add(4, 3, 4, rowsOf(t, 4, 600))
+	c.line(5, 6)
+	c.tip(6) // block 4 folded
+
+	v := c.main()
+	require.Equal(t, Answer{Mined: true, Via: ViaFloor}, v.Lookup(Pack(4, 600)))
+	require.Equal(t, Answer{}, v.Lookup(Pack(4, 601)))
+
+	// Block 7 re-takes 600: the duplicate count finds it below the lane's first row.
+	c.add(7, 6, 7, rowsOf(t, 4, 600))
+	c.tip(7)
+
+	_, byFloor, hasRows := c.main().TakenBefore(7)
+	require.True(t, hasRows)
+	require.Equal(t, uint64(1), byFloor)
 }

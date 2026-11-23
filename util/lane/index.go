@@ -31,8 +31,10 @@ import (
 // the floor's list.
 //
 // The floor is built only from the rows this index loaded. Below the first row it folded for a
-// lane, every position is listed, so the index never calls a position settled that it did not see
-// settle. Floors from history, written by the pruner and loaded at start, are Phase 2.
+// lane, where it saw nothing settle, no position counts as settled unless a later block that took
+// it folds, so the index never calls a position settled that it did not see settle, and holds
+// nothing for the lane's history before it started. Floors from history, written by the pruner
+// and loaded at start, are Phase 2.
 //
 // The listed positions are never trimmed: every hole a folded row leaves stays listed until a
 // later block takes it, for as long as the process runs. That covers burnt positions, positions
@@ -204,12 +206,97 @@ type laneState struct {
 	// maxLast[i] is the highest last position in the subtree rooted at rows[i], where the root of
 	// rows[lo:hi] is rows[(lo+hi)/2].
 	maxLast []uint64
-	// floor: every position below it is settled unless listed. Zero means no floor yet.
-	floor  uint64
-	listed *roaring64.Bitmap
+	// fl is the lane's floor, nil before its first fold.
+	fl *laneFloor
 }
 
-func newLaneState(rows []*indexRow, floor uint64, listed *roaring64.Bitmap) *laneState {
+// laneFloor is one lane's floor. Positions from seenFrom up to floor are settled unless listed.
+// Below seenFrom, where the index saw nothing fold, a position is settled only if settledBelow
+// holds it: taken by a late block that folded. A laneFloor is immutable once published; its
+// bitmaps copy on write, so the next fold's copy shares their containers.
+type laneFloor struct {
+	floor        uint64
+	seenFrom     uint64
+	listed       *roaring64.Bitmap
+	settledBelow *roaring64.Bitmap
+	// listedCount and bytes are listed's cardinality and both bitmaps' size, kept so a publish
+	// does not walk the bitmaps.
+	listedCount uint64
+	bytes       uint64
+}
+
+// copyForFold returns a copy of f to fold into, or a new floor.
+func (f *laneFloor) copyForFold() *laneFloor {
+	if f == nil {
+		listed, settledBelow := roaring64.New(), roaring64.New()
+		listed.SetCopyOnWrite(true)
+		settledBelow.SetCopyOnWrite(true)
+
+		return &laneFloor{listed: listed, settledBelow: settledBelow}
+	}
+
+	return &laneFloor{floor: f.floor, seenFrom: f.seenFrom, listed: f.listed.Clone(), settledBelow: f.settledBelow.Clone()}
+}
+
+// fold folds one row's taken positions into f.
+func (f *laneFloor) fold(r *indexRow) {
+	if f.floor == 0 {
+		// The first row this lane folds: nothing below it was seen, so nothing below it is
+		// settled unless a later fold says so.
+		f.floor, f.seenFrom = r.first, r.first
+	}
+
+	if r.last+1 > f.floor {
+		f.listed.AddRange(f.floor, r.last+1)
+		f.floor = r.last + 1
+	}
+
+	taken := r.bitmap()
+	f.listed.AndNot(taken)
+
+	if r.first < f.seenFrom {
+		below := taken.Clone()
+		below.RemoveRange(f.seenFrom, MaxPosition+1)
+		f.settledBelow.Or(below)
+	}
+}
+
+// seal measures f once it is folded.
+func (f *laneFloor) seal() {
+	f.listed.RunOptimize()
+	f.settledBelow.RunOptimize()
+	f.listedCount = f.listed.GetCardinality()
+	f.bytes = f.listed.GetSizeInBytes() + f.settledBelow.GetSizeInBytes()
+}
+
+// settled reports whether p is settled by this floor.
+func (f *laneFloor) settled(p uint64) bool {
+	if f == nil || p >= f.floor {
+		return false
+	}
+
+	if p < f.seenFrom {
+		return f.settledBelow.Contains(p)
+	}
+
+	return !f.listed.Contains(p)
+}
+
+// settledIn returns the positions of bm the floor settles.
+func (f *laneFloor) settledIn(bm *roaring64.Bitmap) *roaring64.Bitmap {
+	out := bm.Clone()
+	out.RemoveRange(f.floor, MaxPosition+1)
+	out.RemoveRange(0, f.seenFrom)
+	out.AndNot(f.listed)
+
+	below := bm.Clone()
+	below.And(f.settledBelow)
+	out.Or(below)
+
+	return out
+}
+
+func newLaneState(rows []*indexRow, fl *laneFloor) *laneState {
 	slices.SortFunc(rows, func(a, b *indexRow) int {
 		switch {
 		case a.first != b.first:
@@ -229,7 +316,7 @@ func newLaneState(rows []*indexRow, floor uint64, listed *roaring64.Bitmap) *lan
 		}
 	})
 
-	ls := &laneState{rows: rows, maxLast: make([]uint64, len(rows)), floor: floor, listed: listed}
+	ls := &laneState{rows: rows, maxLast: make([]uint64, len(rows)), fl: fl}
 	ls.build(0, len(rows))
 
 	return ls
@@ -280,9 +367,9 @@ func (ls *laneState) visit(lo, hi int, p uint64, fn func(*indexRow) bool) bool {
 	return true
 }
 
-// belowFloor reports whether p is below the lane's floor and not listed: settled.
+// belowFloor reports whether the lane's floor settles p.
 func (ls *laneState) belowFloor(p uint64) bool {
-	return p < ls.floor && (ls.listed == nil || !ls.listed.Contains(p))
+	return ls.fl.settled(p)
 }
 
 // snapshotBlock is a block as a snapshot holds it.
@@ -554,15 +641,8 @@ func (v *ChainView) TakenBefore(id uint32) (byRow, byFloor uint64, hasRows bool)
 
 		ownBits := own.bitmap()
 
-		if v.floorValid && ls.floor > own.first {
-			below := ownBits.Clone()
-			below.RemoveRange(ls.floor, MaxPosition+1)
-
-			if ls.listed != nil {
-				below.AndNot(ls.listed)
-			}
-
-			byFloor += below.GetCardinality()
+		if v.floorValid && ls.fl != nil && ls.fl.floor > own.first {
+			byFloor += ls.fl.settledIn(ownBits).GetCardinality()
 		}
 
 		for _, r := range ls.rows {
@@ -766,9 +846,8 @@ func (x *Index) replaceLane(l uint8, add []*indexRow, drop map[*indexRow]bool) {
 	old := x.lanes[l]
 
 	var (
-		rows   []*indexRow
-		floor  uint64
-		listed *roaring64.Bitmap
+		rows []*indexRow
+		fl   *laneFloor
 	)
 
 	if old != nil {
@@ -780,11 +859,11 @@ func (x *Index) replaceLane(l uint8, add []*indexRow, drop map[*indexRow]bool) {
 			}
 		}
 
-		floor, listed = old.floor, old.listed
+		fl = old.fl
 	}
 
 	rows = append(rows, add...)
-	x.lanes[l] = newLaneState(rows, floor, listed)
+	x.lanes[l] = newLaneState(rows, fl)
 }
 
 // SetTip makes the loaded block hash the main chain's tip, folds every main-chain block at least
@@ -860,9 +939,8 @@ func (x *Index) fold() {
 
 	// Fold every due block into fresh floors, then rebuild each lane it touched once.
 	type laneFold struct {
-		floor  uint64
-		listed *roaring64.Bitmap
-		drop   map[*indexRow]bool
+		fl   *laneFloor
+		drop map[*indexRow]bool
 	}
 
 	folds := map[uint8]*laneFold{}
@@ -873,39 +951,16 @@ func (x *Index) fold() {
 
 			f, ok := folds[l]
 			if !ok {
-				f = &laneFold{drop: map[*indexRow]bool{}}
-
-				if old := x.lanes[l]; old != nil {
-					f.floor = old.floor
-
-					if old.listed != nil {
-						f.listed = old.listed.Clone()
-					}
+				var old *laneFloor
+				if ls := x.lanes[l]; ls != nil {
+					old = ls.fl
 				}
 
-				if f.listed == nil {
-					f.listed = roaring64.New()
-				}
-
+				f = &laneFold{fl: old.copyForFold(), drop: map[*indexRow]bool{}}
 				folds[l] = f
 			}
 
-			if f.floor == 0 {
-				// Nothing below this row was seen to settle: list all of it.
-				f.floor = FirstPosition
-			}
-
-			if r.last+1 > f.floor {
-				f.listed.AddRange(f.floor, r.last+1)
-				f.floor = r.last + 1
-			}
-
-			if r.bits == nil && r.taken == nil {
-				f.listed.RemoveRange(r.first, r.last+1)
-			} else {
-				f.listed.AndNot(r.bitmap())
-			}
-
+			f.fl.fold(r)
 			f.drop[r] = true
 		}
 
@@ -918,7 +973,7 @@ func (x *Index) fold() {
 	}
 
 	for l, f := range folds {
-		f.listed.RunOptimize()
+		f.fl.seal()
 
 		old := x.lanes[l]
 		rows := make([]*indexRow, 0, len(old.rows))
@@ -929,7 +984,7 @@ func (x *Index) fold() {
 			}
 		}
 
-		x.lanes[l] = newLaneState(rows, f.floor, f.listed)
+		x.lanes[l] = newLaneState(rows, f.fl)
 	}
 }
 
@@ -1049,9 +1104,9 @@ func (x *Index) publish() {
 			s.stats.Bytes += r.bytes()
 		}
 
-		if ls.listed != nil {
-			s.stats.Bytes += ls.listed.GetSizeInBytes()
-			s.stats.Listed += ls.listed.GetCardinality()
+		if ls.fl != nil {
+			s.stats.Bytes += ls.fl.bytes
+			s.stats.Listed += ls.fl.listedCount
 		}
 	}
 
