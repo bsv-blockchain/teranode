@@ -372,31 +372,32 @@ func (d *Daemon) Start(logger ulogger.Logger, args []string, appSettings *settin
 		readyChInternal = readyChannel[0]
 	}
 
-	startErr := d.startServices(sm.Ctx, logger, appSettings, sm, args, readyChInternal)
-
-	// Whether this process's own context was already cancelled when startup
-	// failed: a signal, Stop(), or the errgroup after a running service
-	// failed. It must be read here, because the ForceShutdown below cancels
-	// sm.Ctx on every start failure.
-	cancelledDuringStart := startErr != nil && sm.Ctx.Err() != nil
-
-	d.startErrMu.Lock()
-	d.startErr = startErr
-	d.startErrMu.Unlock()
-
-	if startErr != nil {
-		logger.Errorf("error starting services: %v", startErr)
-		sm.ForceShutdown()
-		d.closeDoneOnce.Do(func() { close(d.doneCh) })
-	}
-
 	util.RegisterPrometheusMetrics()
 
 	const defaultHealthTimeout = 5 * time.Second
 
+	// Serve liveness before dependency initialization so a separate alert daemon
+	// can unblock blockchain startup while its blockchain client is connecting.
+	// Do not inspect the service list until registration has finished.
+	var initialized atomic.Bool
+
 	mux := http.NewServeMux()
 	healthFunc := func(liveness bool) func(http.ResponseWriter, *http.Request) {
 		return func(w http.ResponseWriter, r *http.Request) {
+			if sm.Ctx.Err() != nil {
+				http.Error(w, "daemon is stopping", http.StatusServiceUnavailable)
+				return
+			}
+
+			if !initialized.Load() {
+				if liveness {
+					w.WriteHeader(http.StatusOK)
+				} else {
+					http.Error(w, "services are initializing", http.StatusServiceUnavailable)
+				}
+				return
+			}
+
 			timeout := defaultHealthTimeout
 			if v := r.URL.Query().Get("timeout"); v != "" {
 				if parsed, parseErr := time.ParseDuration(v); parseErr == nil && parsed > 0 {
@@ -458,6 +459,26 @@ func (d *Daemon) Start(logger ulogger.Logger, args []string, appSettings *settin
 	}()
 
 	logger.Infof("Health check endpoint listening on %s", listenAddress)
+
+	startErr := d.startServices(sm.Ctx, logger, appSettings, sm, args, readyChInternal)
+
+	// Whether this process's own context was already cancelled when startup
+	// failed: a signal, Stop(), or the errgroup after a running service
+	// failed. It must be read here, because the ForceShutdown below cancels
+	// sm.Ctx on every start failure.
+	cancelledDuringStart := startErr != nil && sm.Ctx.Err() != nil
+
+	d.startErrMu.Lock()
+	d.startErr = startErr
+	d.startErrMu.Unlock()
+
+	if startErr != nil {
+		logger.Errorf("error starting services: %v", startErr)
+		sm.ForceShutdown()
+		d.closeDoneOnce.Do(func() { close(d.doneCh) })
+	}
+
+	initialized.Store(true)
 
 	// Create a channel to receive the wait result
 	waitErr := make(chan error, 1)

@@ -17,6 +17,7 @@
 | StoreDBTimeoutMillis | int | 5000 | blockchain_store_dbTimeoutMillis | Per-operation FSM checkpoint-read and persistence timeout; non-positive uses 5000 ms |
 | InitializeNodeInState | string | "" (`IDLE` for `operator`/`docker.m`) | blockchain_initializeNodeInState | Fresh-node FSM state: IDLE, CATCHINGBLOCKS, or RUNNING. Empty means CATCHINGBLOCKS; persisted state takes precedence and bypasses this setting’s validation; invalid values fail fresh-node startup |
 | PostgresPool | *PostgresSettings | (see below) | blockchain_postgres_pool | PostgreSQL connection pool settings |
+| RequireAlertSystem | bool | true (`false` for `docker`/`dev.system.test`/`operator`) | blockchain_requireAlertSystem | The blockchain service does not start unless the alert service runs in the same process or answers on `alert_healthAddress` (see [Alert settings](alert_settings.md#startup-requirement)) |
 
 **Configured RUNNING:** on a checkpointed network, use only with a pre-seeded
 store whose tip is at or above the highest checkpoint. A lower tip or a tip-read

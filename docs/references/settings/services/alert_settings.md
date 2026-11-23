@@ -16,6 +16,21 @@
 | P2PAllowPrivateIPs | bool | false | alert_p2p_allow_private_ips | Allow dialing/accepting/advertising RFC1918 addresses on the alert network |
 | P2PPeerDiscoveryInterval | time.Duration | 10m | alert_p2p_peer_discovery_interval | Peer discovery and alert sync cadence |
 | P2PDHTMode | string | "client" | alert_p2p_dht_mode | Kademlia DHT mode: `client` or `server` |
+| HealthAddress | string | "" | alert_healthAddress | Health listener URL (`http://host:port`) of a separately run alert service; the blockchain service polls `/health/liveness` there before it starts |
+| StartupTimeout | time.Duration | 5m | alert_startupTimeout | How long the blockchain service waits for `alert_healthAddress` before it fails to start |
+
+## Startup Requirement
+
+With `blockchain_requireAlertSystem = true` (the default), the daemon checks the alert system before it
+starts the blockchain service:
+
+- If the alert service runs in the same process (`-alert=1` or `startAlert`), the check passes.
+- Otherwise `alert_healthAddress` must be set. The daemon polls `/health/liveness` on it every 2s until it
+  answers 200. If the address is unset or invalid, or the alert system does not answer within
+  `alert_startupTimeout`, the blockchain service and the process fail to start.
+
+The check uses liveness, not readiness, because the alert service's readiness depends on the blockchain
+service. It proves the alert process is up, not that it is synced with the alert network.
 
 ## Network-Specific Behavior
 

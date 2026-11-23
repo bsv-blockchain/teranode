@@ -207,6 +207,8 @@ func NewSettings(alternativeContext ...string) *Settings {
 			P2PAllowPrivateIPs:       getBool("alert_p2p_allow_private_ips", false, alternativeContext...),
 			P2PPeerDiscoveryInterval: getDuration("alert_p2p_peer_discovery_interval", 10*time.Minute, alternativeContext...),
 			P2PDHTMode:               getString("alert_p2p_dht_mode", "client", alternativeContext...),
+			HealthAddress:            getString("alert_healthAddress", "", alternativeContext...),
+			StartupTimeout:           getDuration("alert_startupTimeout", 5*time.Minute, alternativeContext...),
 		},
 		Asset: AssetSettings{
 			APIPrefix:               getString("asset_apiPrefix", "/api/v1", alternativeContext...),
@@ -398,6 +400,7 @@ func NewSettings(alternativeContext ...string) *Settings {
 			LaneLeaseCloseAfter:        getDuration("blockchain_laneLeaseCloseAfter", 3*time.Minute, alternativeContext...),
 			LaneGrantMin:               getUint64AtLeast("blockchain_laneGrantMin", 10_000, 1, alternativeContext...),
 			LaneGrantDuration:          getDuration("blockchain_laneGrantDuration", 2*time.Minute, alternativeContext...),
+			RequireAlertSystem:         getBool("blockchain_requireAlertSystem", true, alternativeContext...),
 		},
 		BlockValidation: BlockValidationSettings{
 			MaxRetries:                                getInt("blockValidationMaxRetries", 3, alternativeContext...),
