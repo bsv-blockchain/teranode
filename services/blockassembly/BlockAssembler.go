@@ -4470,14 +4470,17 @@ func (b *BlockAssembler) loadUnminedTransactions(ctx context.Context, isReload b
 
 			for batch := range workChan {
 				for _, unminedTransaction := range batch {
-					if unminedTransaction.Skip {
+					// A Skip record with no Node (an unmined coinbase) carries
+					// nothing else to check.
+					if unminedTransaction.Skip && unminedTransaction.Node == nil {
 						skippedCount.Add(1)
-						if unminedTransaction.Node != nil {
-							localResult.skippedHashes = append(localResult.skippedHashes, unminedTransaction.Hash)
-						}
 						continue
 					}
 
+					// A hashed Skip record (an external record whose file is
+					// missing) carries its block IDs, so it goes through the
+					// already-mined check first: one mined on the best chain is
+					// repaired, not dropped with its children.
 					if len(unminedTransaction.BlockIDs) > 0 {
 						// If the transaction is already included in a block that is in the best chain, skip it
 						skipAlreadyMined := false
@@ -4498,6 +4501,13 @@ func (b *BlockAssembler) loadUnminedTransactions(ctx context.Context, isReload b
 
 							continue
 						}
+					}
+
+					if unminedTransaction.Skip {
+						skippedCount.Add(1)
+						localResult.skippedHashes = append(localResult.skippedHashes, unminedTransaction.Hash)
+
+						continue
 					}
 
 					localResult.unminedTxs = append(localResult.unminedTxs, unminedTransaction)

@@ -3522,6 +3522,58 @@ func TestLoadUnminedTransactionsDropsQueuedChildOfMissingExternalParent(t *testi
 	require.True(t, unrelatedPlaced, "the drain must still admit unrelated queued transactions")
 }
 
+// minedSkipStore hands the load one fixed batch through the skipping scan and
+// records which hashes the load asks it to mark as mined on the longest chain.
+type minedSkipStore struct {
+	utxoStore.Store
+	batch  []*utxoStore.UnminedTransaction
+	marked []chainhash.Hash
+}
+
+func (s *minedSkipStore) GetUnminedTxIteratorSkippingMissingExternal() (utxoStore.UnminedTxIterator, error) {
+	return &sliceUnminedIterator{batches: [][]*utxoStore.UnminedTransaction{s.batch}}, nil
+}
+
+func (s *minedSkipStore) MarkTransactionsOnLongestChain(_ context.Context, hashes []chainhash.Hash, _ bool) error {
+	s.marked = append(s.marked, hashes...)
+
+	return nil
+}
+
+// A record whose external file is missing but which is already mined on the
+// best chain, with a stale unmined_since, is repaired by the load like any
+// other such record. It must not join the drop set, or its valid children
+// would be dropped on every load.
+func TestLoadUnminedTransactionsRepairsAMinedSkipRecord(t *testing.T) {
+	initPrometheusMetrics()
+	ctx := t.Context()
+	items := setupBlockAssemblyTest(t, func(s *settings.Settings) {
+		s.BlockAssembly.OnRestartValidateParentChain = true
+		s.BlockAssembly.OnRestartRemoveInvalidParentChainTxs = true
+	})
+	ba := items.blockAssembler
+
+	mined := chainhash.HashH([]byte("mined-record-missing-file"))
+	unmined := chainhash.HashH([]byte("unmined-record-missing-file"))
+	bestHeader, bestMeta, err := items.blockchainClient.GetBestBlockHeader(ctx)
+	require.NoError(t, err)
+	ba.setBestBlockHeader(bestHeader, bestMeta.Height)
+	bestIDs, err := items.blockchainClient.GetBlockHeaderIDs(ctx, bestHeader.Hash(), uint64(bestMeta.Height)+1)
+	require.NoError(t, err)
+	require.NotEmpty(t, bestIDs)
+	genesisID := bestIDs[len(bestIDs)-1] // a block on the load's best chain
+
+	store := &minedSkipStore{Store: items.utxoStore, batch: []*utxoStore.UnminedTransaction{
+		{Node: &subtreepkg.Node{Hash: mined}, Skip: true, UnminedSince: 1, BlockIDs: []uint32{genesisID}},
+		{Node: &subtreepkg.Node{Hash: unmined}, Skip: true, UnminedSince: 1},
+	}}
+	ba.utxoStore = store
+
+	require.NoError(t, ba.loadUnminedTransactions(ctx, false))
+	require.Equal(t, []chainhash.Hash{mined}, store.marked, "the mined record is repaired")
+	require.Equal(t, map[chainhash.Hash]struct{}{unmined: {}}, ba.unminedDropHashes, "only the unmined record's children are dropped")
+}
+
 // The in-memory load with the parent check on opens the scan that skips a
 // missing external file. The disk-sorted load, which runs only with the parent
 // check off, and the in-memory load with it off keep the plain scan, because

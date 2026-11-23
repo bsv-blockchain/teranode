@@ -724,7 +724,9 @@ func TestRawUnminedHandler_SkipsExternalRecordWithMissingFile(t *testing.T) {
 
 	skippedBefore := testutil.ToFloat64(prometheusUnminedMissingExternalSkipped)
 
-	require.NoError(t, feed(t, h, rawExternalRecordBins(1)))
+	// block IDs as the server sends them: a msgpack array of one fixint
+	missingBins := append(rawExternalRecordBins(1), rawBin{fields.BlockIDs.String(), particle_type.LIST, []byte{0x91, 7}})
+	require.NoError(t, feed(t, h, missingBins))
 	require.InDelta(t, skippedBefore+1, testutil.ToFloat64(prometheusUnminedMissingExternalSkipped), 0)
 
 	// The skip must not leave the handler marked busy, or the idle watchdog
@@ -741,6 +743,8 @@ func TestRawUnminedHandler_SkipsExternalRecordWithMissingFile(t *testing.T) {
 	var missing chainhash.Hash
 	binary.LittleEndian.PutUint64(missing[:], 2)
 	require.Equal(t, missing, txs[0].Hash, "block assembly needs the missing parent hash to filter queued children")
+	require.Equal(t, []uint32{7}, txs[0].BlockIDs, "block assembly repairs a skipped record already mined on the best chain")
+	require.Equal(t, 10, txs[0].UnminedSince)
 
 	var want chainhash.Hash
 	binary.LittleEndian.PutUint64(want[:], 3)

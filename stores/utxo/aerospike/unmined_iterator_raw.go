@@ -290,7 +290,15 @@ func (h *rawUnminedHandler) buildTx() (*utxo.UnminedTransaction, error) {
 			prometheusUnminedMissingExternalSkipped.Inc()
 			h.it.store.logger.Errorf("[unminedTxIterator][%s] skipping unmined transaction: its record is external but the external store has no file for it: %v", r.txid.String(), err)
 
-			return &utxo.UnminedTransaction{Node: &subtree.Node{Hash: r.txid}, Skip: true}, nil
+			// The block IDs and unmined_since go with it: a record already mined on
+			// the best chain with a stale unmined_since is repaired by the load as
+			// usual, file or no file, and its children stay valid.
+			return &utxo.UnminedTransaction{
+				Node:         &subtree.Node{Hash: r.txid},
+				Skip:         true,
+				UnminedSince: r.unminedSince,
+				BlockIDs:     blockIDs,
+			}, nil
 		}
 	case r.fastInputs:
 		*txInpoints, err = h.txInpointsFromBuffer()

@@ -34,9 +34,11 @@ type InconsistentTxRecord struct {
 
 // MissingExternalSkipper is a store that offers block assembly's load scan: an
 // unmined record marked external whose file the external store does not have is
-// counted and returned as a Skip record carrying its hash (Node.Hash), instead of
-// failing the scan. Block assembly adds that hash to the drop filter of the queue
-// drain after the load, so an implementation must not omit the record. Block
+// counted and returned as a Skip record carrying its hash (Node.Hash), block IDs
+// and unmined_since, instead of failing the scan. Block assembly repairs such a
+// record if it is already mined on the best chain, and otherwise adds the hash to
+// the drop filter of the queue drain after the load, so an implementation must
+// not omit the record. Block
 // assembly finds it with
 // As, and uses it only while its parent chain check drops a skipped record's
 // children. It falls back to GetUnminedTxIterator otherwise, and on a store
