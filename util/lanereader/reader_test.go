@@ -10,6 +10,7 @@ import (
 	"github.com/RoaringBitmap/roaring/v2/roaring64"
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
 	blockchainstore "github.com/bsv-blockchain/teranode/stores/blockchain"
 	"github.com/bsv-blockchain/teranode/stores/blockchain/options"
@@ -817,4 +818,81 @@ func TestReaderCountsAForkMinedParentOnAnIDWindowAgree(t *testing.T) {
 			r.CompareBlocks(ReaderSubtreeAlreadyMined, r.ViewOfIDs(map[uint32]bool{b1.id: true, b2.id: true}), chainhash.Hash{}, lane.Pack(2, 70), []uint32{rival.id})
 		})
 	})
+}
+
+// failingHeaders fails every header read once failing is set.
+type failingHeaders struct {
+	Source
+	failing bool
+}
+
+func (f *failingHeaders) GetBlockHeaders(ctx context.Context, h *chainhash.Hash, n uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
+	if f.failing {
+		return nil, nil, errors.NewServiceError("blockchain service down")
+	}
+
+	return f.Source.GetBlockHeaders(ctx, h, n)
+}
+
+func prepareFailures(reason string) float64 {
+	initMetrics()
+
+	return testutil.ToFloat64(prometheusLaneReaderPrepareFailures.WithLabelValues(reason))
+}
+
+// A failed read while loading a block's ancestry is counted as a prepare failure, and the block's
+// checks not_ready.
+func TestReaderCountsAFailedAncestryReadAsAPrepareFailure(t *testing.T) {
+	store := newStore(t, "sqlite")
+	c := newChain(t, store)
+
+	b1 := c.add(nil)
+
+	source := &failingHeaders{Source: store}
+	r := newReader(ulogger.TestLogger{}, source, 100)
+	follow(t, r)
+
+	b2 := c.add(b1)
+	source.failing = true
+
+	before := prepareFailures("read_error")
+
+	requireCounted(t, ReaderBlockDuplicate, KindNotReady, lane.ViaNone, func() {
+		r.ShadowDuplicates(context.Background(), b2.hash, b2.id, false)
+	})
+	require.Equal(t, before+1, prepareFailures("read_error"))
+}
+
+// A walk that finds no held block within its limit counts not_loaded and a prepare failure, and
+// a later check of the same block does not walk again until the tip moves.
+func TestReaderRemembersABlockWithNoHeldAncestor(t *testing.T) {
+	store := newStore(t, "sqlite")
+	c := newChain(t, store)
+
+	b1 := c.add(nil)
+	tip := c.line(b1, 8)
+
+	source := &countingSource{Source: store}
+	r := newReader(ulogger.TestLogger{}, source, 100)
+	r.startBlocks, r.maxWalk, r.walkBatch = 3, 2, 2
+	follow(t, r)
+	require.Equal(t, tip.height-2, r.Snapshot().StartHeight())
+
+	// A fork from b1, its tip above the index's start, with more blocks back to a held one than
+	// the walk looks at.
+	fork := c.line(b1, 9)
+
+	before := prepareFailures("no_held_ancestor")
+
+	requireCounted(t, ReaderBlockDuplicate, KindNotLoaded, lane.ViaNone, func() {
+		r.ShadowDuplicates(context.Background(), fork.hash, fork.id, false)
+	})
+	require.Equal(t, before+1, prepareFailures("no_held_ancestor"))
+
+	reads := source.headerReads
+
+	requireCounted(t, ReaderBlockDuplicate, KindNotLoaded, lane.ViaNone, func() {
+		r.ShadowDuplicates(context.Background(), fork.hash, fork.id, false)
+	})
+	require.Equal(t, reads, source.headerReads, "the same block at the same tip is not walked again")
 }

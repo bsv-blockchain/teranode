@@ -24,6 +24,7 @@ package lanereader
 
 import (
 	"context"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -55,6 +56,9 @@ const (
 	// retryAfter is how long the follower waits after a failed step.
 	retryAfter = 5 * time.Second
 
+	// maxUnreachable bounds the blocks remembered as having no held ancestor.
+	maxUnreachable = 1_024
+
 	// readTimeout bounds each read of headers or rows, so a hung call cannot keep the load token,
 	// which block validation's loads wait for, taken for ever.
 	readTimeout = 30 * time.Second
@@ -72,8 +76,11 @@ type Reader struct {
 	logger      ulogger.Logger
 	source      Source
 	settleDepth uint32
-	// startBlocks is how many main-chain blocks a build loads; startBlocks outside tests.
+	// startBlocks is how many main-chain blocks a build loads, and maxWalk how far a walk back
+	// looks for a held block; startBlocks and maxWalk outside tests.
 	startBlocks uint64
+	maxWalk     int
+	walkBatch   uint64
 
 	idx atomic.Pointer[lane.Index]
 	// loading holds one token while a load runs, so the follower and block validation do not
@@ -83,6 +90,14 @@ type Reader struct {
 
 	lookups  atomic.Uint64
 	disagree disagreementLog
+
+	// unreachable holds blocks whose walk back found no held block, by hash, with the tip height
+	// the index had then, so a later block on the same fork does not repeat the walk until the
+	// tip moves. It is bounded by maxUnreachable.
+	unreachableMu sync.Mutex
+	unreachable   map[chainhash.Hash]uint32
+
+	prepareWarned map[string]time.Time
 }
 
 var current atomic.Pointer[Reader]
@@ -116,7 +131,7 @@ func Start(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setti
 func newReader(logger ulogger.Logger, source Source, settleDepth uint32) *Reader {
 	initMetrics()
 
-	r := &Reader{logger: logger, source: source, settleDepth: settleDepth, startBlocks: startBlocks, loading: make(chan struct{}, 1)}
+	r := &Reader{logger: logger, source: source, settleDepth: settleDepth, startBlocks: startBlocks, maxWalk: maxWalk, walkBatch: walkBatch, loading: make(chan struct{}, 1)}
 	r.idx.Store(lane.NewIndex(settleDepth))
 
 	return r
@@ -306,9 +321,9 @@ func (r *Reader) loadAncestry(ctx context.Context, hash chainhash.Hash, start ui
 		found   bool
 	)
 
-	for from := hash; len(headers) < maxWalk && !found; {
+	for from := hash; len(headers) < r.maxWalk && !found; {
 		readCtx, cancel := context.WithTimeout(ctx, readTimeout)
-		hs, ms, err := r.source.GetBlockHeaders(readCtx, &from, walkBatch)
+		hs, ms, err := r.source.GetBlockHeaders(readCtx, &from, r.walkBatch)
 
 		cancel()
 
@@ -335,7 +350,7 @@ func (r *Reader) loadAncestry(ctx context.Context, hash chainhash.Hash, start ui
 		}
 
 		last := hs[len(hs)-1]
-		if len(hs) < walkBatch || last.HashPrevBlock == nil {
+		if uint64(len(hs)) < r.walkBatch || last.HashPrevBlock == nil {
 			// The walk reached genesis.
 			found = true
 
@@ -424,6 +439,10 @@ func (r *Reader) prepare(ctx context.Context, hash chainhash.Hash) (*lane.ChainV
 		return v, ""
 	}
 
+	if r.isUnreachable(hash, s.TipHeight()) {
+		return nil, KindNotLoaded
+	}
+
 	if !r.lockLoad(ctx) {
 		return nil, KindNotReady
 	}
@@ -443,12 +462,19 @@ func (r *Reader) prepare(ctx context.Context, hash chainhash.Hash) (*lane.ChainV
 		return nil, KindNotLoaded
 	}
 
-	if err != nil || !found {
-		if err != nil && ctx.Err() == nil {
-			r.logger.Debugf("[lanereader] loading the ancestry of %s: %v", hash.String(), err)
+	if err != nil {
+		if ctx.Err() == nil {
+			r.prepareFailed("read_error", "[lanereader] loading the ancestry of %s for block validation: %v", hash.String(), err)
 		}
 
 		return nil, KindNotReady
+	}
+
+	if !found {
+		r.markUnreachable(hash, s.TipHeight())
+		r.prepareFailed("no_held_ancestor", "[lanereader] block %s has no block the lane index holds within %d blocks back; its checks count not_loaded until the tip moves", hash.String(), r.maxWalk)
+
+		return nil, KindNotLoaded
 	}
 
 	idx := r.idx.Load()
@@ -459,6 +485,52 @@ func (r *Reader) prepare(ctx context.Context, hash chainhash.Hash) (*lane.ChainV
 	}
 
 	return nil, KindNotReady
+}
+
+// isUnreachable reports whether hash's walk back found no held block at this tip height.
+func (r *Reader) isUnreachable(hash chainhash.Hash, tipHeight uint32) bool {
+	r.unreachableMu.Lock()
+	defer r.unreachableMu.Unlock()
+
+	h, ok := r.unreachable[hash]
+
+	return ok && h == tipHeight
+}
+
+func (r *Reader) markUnreachable(hash chainhash.Hash, tipHeight uint32) {
+	r.unreachableMu.Lock()
+	defer r.unreachableMu.Unlock()
+
+	if r.unreachable == nil || len(r.unreachable) >= maxUnreachable {
+		r.unreachable = map[chainhash.Hash]uint32{}
+	}
+
+	r.unreachable[hash] = tipHeight
+}
+
+// prepareFailed counts a failed load of a block's ancestry by reason and warns, at most once a
+// minute per reason.
+func (r *Reader) prepareFailed(reason, format string, args ...any) {
+	prometheusLaneReaderPrepareFailures.WithLabelValues(reason).Inc()
+
+	r.unreachableMu.Lock()
+
+	if r.prepareWarned == nil {
+		r.prepareWarned = map[string]time.Time{}
+	}
+
+	last := r.prepareWarned[reason]
+	warn := time.Since(last) >= time.Minute
+
+	if warn {
+		r.prepareWarned[reason] = time.Now()
+	}
+
+	r.unreachableMu.Unlock()
+
+	if warn {
+		r.logger.Warnf(format, args...)
+	}
 }
 
 func (r *Reader) publishMetrics() {

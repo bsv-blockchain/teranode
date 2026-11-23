@@ -21,6 +21,8 @@ var (
 	prometheusLaneReaderRebuilds      *prometheus.CounterVec
 	prometheusLaneReaderFollowErrors  prometheus.Counter
 
+	prometheusLaneReaderPrepareFailures *prometheus.CounterVec
+
 	// answerCounters holds every reader, kind and via's counter, resolved once, so counting an
 	// answer is an atomic add rather than a label lookup.
 	answerCounters map[string]map[string][3]prometheus.Counter
@@ -97,6 +99,13 @@ func initMetrics() {
 			Name:      "follow_errors_total",
 			Help:      "Failed steps of the lane index following the main chain; each is retried",
 		})
+
+		prometheusLaneReaderPrepareFailures = promauto.NewCounterVec(prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "lane_reader",
+			Name:      "prepare_failures_total",
+			Help:      "Failed loads of a block's ancestry for block validation's lanes shadow, by reason: read_error (a header or row read failed) and no_held_ancestor (no block the index holds within 1,000 blocks back; the block's checks count not_loaded until the tip moves)",
+		}, []string{"reason"})
 
 		answerCounters = make(map[string]map[string][3]prometheus.Counter, len(readers))
 
