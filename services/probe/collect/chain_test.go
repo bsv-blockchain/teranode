@@ -230,12 +230,17 @@ type countingClient struct {
 	blockchain.ClientI
 	notPersistedCalls int
 	failBacklog       bool
+	failErr           error
 }
 
 func (c *countingClient) GetBlocksNotPersisted(ctx context.Context, limit int) ([]*model.Block, error) {
 	c.notPersistedCalls++
 
 	if c.failBacklog {
+		if c.failErr != nil {
+			return nil, c.failErr
+		}
+
 		return nil, errors.NewServiceError("backlog unavailable")
 	}
 
@@ -305,8 +310,30 @@ func TestBacklogFailureKeepsFSMAndTipLive(t *testing.T) {
 	require.Equal(t, uint32(1), s.Tip)
 	require.Equal(t, snapshot.StatusNoData, s.Chain.PersisterBehind.Status)
 	require.Equal(t, snapshot.StatusNoData, s.Chain.BlocksWaitingCount.Status)
+	require.Equal(t, noteBacklogStale, s.Chain.BlocksWaitingCount.Note)
+	require.Equal(t, noteBacklogStale, s.Chain.PersisterBehind.Note)
+	require.Zero(t, s.Chain.BlocksWaitingCount.AgeSec, "a backlog that never had a good read has no age")
+	require.Zero(t, s.Chain.PersisterBehind.AgeSec)
 	require.NotNil(t, s.Chain.BlocksWaiting)
 	require.Empty(t, s.Chain.BlocksWaiting)
+}
+
+func TestBacklogFailureLogRedactsCredentials(t *testing.T) {
+	rig, cc, _ := newCountingRig(t)
+	logger := &chainLogger{}
+	rig.chain.logger = logger
+
+	rig.addBlock(t, 1)
+
+	cc.failBacklog = true
+	cc.failErr = errors.NewServiceError("dial postgres://probe:s3cret-pass@db.internal:5432/teranode refused")
+
+	collectSnapshot(t, rig.chain)
+
+	warns := logger.matching("WARN", "chain backlog has no data")
+	require.Len(t, warns, 1)
+	require.NotContains(t, warns[0], "s3cret-pass")
+	require.Contains(t, warns[0], "db.internal")
 }
 
 func TestBacklogFailureWaitsTenSecondsBeforeRetry(t *testing.T) {

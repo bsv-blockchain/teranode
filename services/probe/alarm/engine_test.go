@@ -1250,3 +1250,19 @@ func TestMinToleranceAppliesToRedThreshold(t *testing.T) {
 		require.Equal(t, want[rule.ID], rule.MinTolerance, rule.ID)
 	}
 }
+
+func TestFloorBelowTheReadingDoesNotClearABaselineAlarm(t *testing.T) {
+	r := newRig(t, map[string]float64{keyLatency: 100.0})
+	readyBaseline(r.b, "validator-latency-p99", 1.0, e0)
+
+	start := e0.Add(tick)
+	far := map[string]float64{keyLatency: 5.0}
+
+	s := r.run(start, start.Add(sec(60)), far)
+	require.Equal(t, "crit", find(s, "validator-latency-p99").Severity)
+
+	s = r.run(start.Add(sec(62)), start.Add(sec(600)), far)
+	a := find(s, "validator-latency-p99")
+	require.NotNil(t, a, "a floor adds a limit; it must not clear an alarm the baseline raised")
+	require.Equal(t, "crit", a.Severity)
+}

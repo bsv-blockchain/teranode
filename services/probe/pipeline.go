@@ -224,6 +224,8 @@ func newPipeline(s *Server, set collectorSet, store *alarm.Store, f *faults) (*p
 		opts = append(opts, alarm.WithLogRetention(cfg.AlarmLogRetention))
 	}
 
+	store.SetRecorder(f.pipeline.fatal())
+
 	engine := alarm.NewEngine(alarm.DefaultRules, baseline, store, floors, cfg.SnoozeDefault, opts...)
 
 	sampler := NewSampler(set.fast, set.slow, cfg.SampleInterval, cfg.SlowSampleInterval, s.nodeName(),

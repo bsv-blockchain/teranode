@@ -76,3 +76,26 @@ func TestTopicsFromSettingsOmitsTxInputWhenKafkaPathUnset(t *testing.T) {
 
 	require.Empty(t, TopicsFromSettings(k))
 }
+
+func TestTopicNamesFollowTheConfigURLPath(t *testing.T) {
+	k := settings.KafkaSettings{
+		Subtrees:            "name-st",
+		TxMeta:              "name-tm",
+		Blocks:              "name-bl",
+		BlocksFinal:         "name-bf",
+		InvalidBlocks:       "name-ib",
+		SubtreesConfig:      &url.URL{Scheme: "kafka", Host: "b:9092", Path: "/url-st"},
+		TxMetaConfig:        &url.URL{Scheme: "kafka", Host: "b:9092"},
+		BlocksConfig:        &url.URL{Scheme: "kafka", Host: "b:9092", Path: "/url-bl"},
+		BlocksFinalConfig:   &url.URL{Scheme: "kafka", Host: "b:9092", Path: "/url-bf"},
+		InvalidBlocksConfig: &url.URL{Scheme: "kafka", Host: "b:9092", Path: "/url-ib"},
+	}
+
+	require.Equal(t, map[string]string{
+		snapshot.FlowSubtrees:    "url-st",
+		snapshot.FlowTxMeta:      "name-tm",
+		snapshot.FlowBlocks:      "url-bl",
+		snapshot.FlowBlocksFinal: "url-bf",
+	}, TopicsFromSettings(k))
+	require.Equal(t, []string{"name-tm", "url-bf", "url-bl", "url-ib", "url-st"}, WatchedTopics(k))
+}

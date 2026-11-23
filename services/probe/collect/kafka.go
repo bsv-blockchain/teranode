@@ -2,6 +2,7 @@ package collect
 
 import (
 	"context"
+	"net/url"
 	"sort"
 	"strings"
 	"time"
@@ -50,10 +51,10 @@ func NewKafka(hosts []string, topics map[string]string, timeout time.Duration, o
 
 func TopicsFromSettings(k settings.KafkaSettings) map[string]string {
 	topics := map[string]string{
-		snapshot.FlowSubtrees:    k.Subtrees,
-		snapshot.FlowTxMeta:      k.TxMeta,
-		snapshot.FlowBlocks:      k.Blocks,
-		snapshot.FlowBlocksFinal: k.BlocksFinal,
+		snapshot.FlowSubtrees:    topicName(k.SubtreesConfig, k.Subtrees),
+		snapshot.FlowTxMeta:      topicName(k.TxMetaConfig, k.TxMeta),
+		snapshot.FlowBlocks:      topicName(k.BlocksConfig, k.Blocks),
+		snapshot.FlowBlocksFinal: topicName(k.BlocksFinalConfig, k.BlocksFinal),
 	}
 
 	if k.ValidatorTxsConfig != nil {
@@ -69,10 +70,27 @@ func TopicsFromSettings(k settings.KafkaSettings) map[string]string {
 	return topics
 }
 
+func topicName(cfg *url.URL, name string) string {
+	if cfg != nil {
+		if path := strings.TrimPrefix(cfg.Path, "/"); path != "" {
+			return path
+		}
+	}
+
+	return name
+}
+
 func WatchedTopics(k settings.KafkaSettings) []string {
 	names := []string{
-		k.Subtrees, k.TxMeta, k.Blocks, k.BlocksFinal, k.InvalidBlocks,
-		k.InvalidSubtrees, k.LegacyInv, k.RejectedTx, k.TxPolicyRejected,
+		topicName(k.SubtreesConfig, k.Subtrees),
+		topicName(k.TxMetaConfig, k.TxMeta),
+		topicName(k.BlocksConfig, k.Blocks),
+		topicName(k.BlocksFinalConfig, k.BlocksFinal),
+		topicName(k.InvalidBlocksConfig, k.InvalidBlocks),
+		topicName(k.InvalidSubtreesConfig, k.InvalidSubtrees),
+		topicName(k.LegacyInvConfig, k.LegacyInv),
+		topicName(k.RejectedTxConfig, k.RejectedTx),
+		topicName(k.TxPolicyRejectedConfig, k.TxPolicyRejected),
 	}
 
 	if k.ValidatorTxsConfig != nil {

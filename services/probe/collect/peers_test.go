@@ -123,15 +123,32 @@ func TestPeersWithoutAHeightAreSkipped(t *testing.T) {
 
 func TestPeersIgnoresBannedPeers(t *testing.T) {
 	p := NewPeers(&fakePeers{peers: []*p2p.PeerInfo{
-		{Height: 40},
-		{Height: 900, IsBanned: true},
+		{Height: 100},
+		{Height: 200},
+		{Height: 300, IsBanned: true},
 	}})
 
 	s, err := collectPeers(t, p)
 	require.NoError(t, err)
 
-	require.Equal(t, uint32(40), s.PeerTip)
-	require.Equal(t, snapshot.Reading{Value: 40, Status: snapshot.StatusOK}, s.Chain.PeerHeight)
+	require.Equal(t, uint32(100), s.PeerTip, "counting the banned peer would move the lower median to 200")
+	require.Equal(t, snapshot.Reading{Value: 100, Status: snapshot.StatusOK}, s.Chain.PeerHeight)
+}
+
+func TestPeersWithNoUsableHeightSayWhy(t *testing.T) {
+	for name, peers := range map[string][]*p2p.PeerInfo{
+		"all banned":   {{Height: 500, IsBanned: true}, {Height: 600, IsBanned: true}},
+		"no heights":   {{Height: 0}, {Height: 0}},
+		"banned, zero": {{Height: 500, IsBanned: true}, {Height: 0}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			s, err := collectPeers(t, NewPeers(&fakePeers{peers: peers}))
+			require.NoError(t, err)
+
+			require.Equal(t, uint32(0), s.PeerTip)
+			require.Equal(t, snapshot.Reading{Value: 0, Status: snapshot.StatusOK, Note: "no usable peer height"}, s.Chain.PeerHeight)
+		})
+	}
 }
 
 func TestPeersWithNoPeersIsLiveZero(t *testing.T) {

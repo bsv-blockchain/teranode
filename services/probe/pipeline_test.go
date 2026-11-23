@@ -671,7 +671,11 @@ func TestBlockBacklog(t *testing.T) {
 	v, _ = blockBacklog(&s)
 	require.Equal(t, 500.0, v)
 
-	s.Chain.PeerHeight.Status = snapshot.StatusNoData
+	s.Chain.PeerHeight = snapshot.Reading{Value: 1050, Status: snapshot.StatusOK}
+	v, _ = blockBacklog(&s)
+	require.Equal(t, 120.0, v, "a peer gap smaller than the queued count must not shrink it")
+
+	s.Chain.PeerHeight = snapshot.Reading{Value: 1500, Status: snapshot.StatusNoData}
 	_, ok = blockBacklog(&s)
 	require.False(t, ok, "a stale peer height must not look like drain progress during catch-up")
 

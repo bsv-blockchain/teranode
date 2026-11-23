@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/bsv-blockchain/teranode/services/probe/guard"
 	"github.com/bsv-blockchain/teranode/services/probe/snapshot"
 )
 
@@ -48,6 +49,14 @@ type Store struct {
 	dirty        bool
 	lastWrite    time.Time
 	beforeRename func() error
+	recorder     guard.Recorder
+}
+
+func (s *Store) SetRecorder(rec guard.Recorder) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.recorder = rec
 }
 
 func OpenStore(path string, opts ...StoreOption) (*Store, error) {
@@ -255,6 +264,12 @@ func (s *Store) markDirtyLocked() error {
 }
 
 func (s *Store) trailingFlush(gen uint64) {
+	s.mu.Lock()
+	rec := s.recorder
+	s.mu.Unlock()
+
+	defer guard.Recover(rec, "state flush")
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 

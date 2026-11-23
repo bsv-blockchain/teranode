@@ -8,7 +8,10 @@ import (
 	"github.com/bsv-blockchain/teranode/services/probe/snapshot"
 )
 
-const notePeersNone = "no peers"
+const (
+	notePeersNone     = "no peers"
+	notePeersNoHeight = "no usable peer height"
+)
 
 type Peers struct {
 	p2pc p2p.ClientI
@@ -34,8 +37,11 @@ func (p *Peers) Collect(ctx context.Context) (snapshot.Patch, error) {
 	tip := medianHeight(peers)
 
 	height := snapshot.Reading{Value: float64(tip), Status: snapshot.StatusOK}
-	if len(peers) == 0 {
+	switch {
+	case len(peers) == 0:
 		height.Note = notePeersNone
+	case tip == 0:
+		height.Note = notePeersNoHeight
 	}
 
 	return func(s *snapshot.Snapshot) {

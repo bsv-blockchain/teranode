@@ -153,13 +153,13 @@ The validated tx/s reading comes from `teranode_validator_transactions_validate`
 The arrows between the stages are the Kafka flow strips. Each strip shows a rate from the service metrics.
 The probe also reads the consumer-group lag of the matching Kafka topic. The lag is the sum, over all partitions and all groups that read the topic, of the end offset minus the committed offset.
 
-The probe reads these topics from the Kafka settings:
+The probe reads these topics from the Kafka settings. For each topic, the probe takes the path of the Kafka config URL, as the producers and consumers do. If the URL is not set or has no path, the probe uses the name setting:
 
-- `tx-input`: the topic in `kafka_validatortxsConfig`
-- `subtrees`: `KAFKA_SUBTREES`
-- `txmeta`: `KAFKA_TXMETA`
-- `blocks`: `KAFKA_BLOCKS`
-- `blocks-final`: `KAFKA_BLOCKS_FINAL`
+- `tx-input`: the path of `kafka_validatortxsConfig`
+- `subtrees`: the path of `kafka_subtreesConfig`, else `KAFKA_SUBTREES`
+- `txmeta`: the path of `kafka_txmetaConfig`, else `KAFKA_TXMETA`
+- `blocks`: the path of `kafka_blocksConfig`, else `KAFKA_BLOCKS`
+- `blocks-final`: the path of `kafka_blocksFinalConfig`, else `KAFKA_BLOCKS_FINAL`
 
 A group that has subscribed but has not committed an offset shows the full topic length as lag.
 

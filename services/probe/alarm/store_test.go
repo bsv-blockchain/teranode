@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/bsv-blockchain/teranode/services/probe/guard"
 	"github.com/bsv-blockchain/teranode/services/probe/snapshot"
 	"github.com/stretchr/testify/require"
 )
@@ -424,5 +425,28 @@ func TestFailedTrailingFlushStaysDirtyAndIsReported(t *testing.T) {
 	require.Equal(t, 2, diskCount(t, path))
 
 	require.NoError(t, s.Flush())
+	require.NoError(t, s.Close())
+}
+
+func TestTrailingFlushPanicIsReportedNotRaised(t *testing.T) {
+	clk := &fakeClock{t: t0}
+	ft := &fakeTimers{}
+	s, _ := openTemp(t, WithClock(clk.now), withTimer(ft.after))
+
+	var component string
+
+	s.SetRecorder(guard.RecorderFunc(func(c string, _ any) { component = c }))
+
+	require.NoError(t, s.AppendAlarm(alarmAt("1", t0)))
+	clk.advance(100 * time.Millisecond)
+	require.NoError(t, s.AppendAlarm(alarmAt("2", t0.Add(time.Second))))
+
+	s.beforeRename = func() error { panic("disk driver fault") }
+
+	clk.advance(900 * time.Millisecond)
+	require.NotPanics(t, func() { ft.fire(0) })
+	require.Equal(t, "state flush", component)
+
+	s.beforeRename = nil
 	require.NoError(t, s.Close())
 }
