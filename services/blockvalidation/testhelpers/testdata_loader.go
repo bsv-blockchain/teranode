@@ -186,8 +186,9 @@ func GetTestBlocks(t *testing.T, count int, startHeight uint32) []*model.Block {
 
 	for i, header := range headers {
 		blocks[i] = &model.Block{
-			Header: header,
-			Height: startHeight + uint32(i),
+			Header:           header,
+			TransactionCount: 1,
+			Height:           startHeight + uint32(i),
 		}
 	}
 
@@ -212,8 +213,9 @@ func GetTestBlocksRange(t *testing.T, start, end int, startHeight uint32) []*mod
 
 	for i, header := range headers {
 		blocks[i] = &model.Block{
-			Header: header,
-			Height: startHeight + uint32(i),
+			Header:           header,
+			TransactionCount: 1,
+			Height:           startHeight + uint32(i),
 		}
 	}
 

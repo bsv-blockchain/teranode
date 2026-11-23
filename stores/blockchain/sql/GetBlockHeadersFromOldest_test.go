@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/go-chaincfg"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/test/utils/postgres"
 	"github.com/bsv-blockchain/teranode/ulogger"
@@ -368,4 +369,38 @@ func BenchmarkGetBlockHeadersFromOldest(b *testing.B) {
 		_, _, err = s.GetBlockHeadersFromOldest(ctx, block2.Hash(), tSettings.ChainCfgParams.GenesisHash, 3)
 		require.NoError(b, err)
 	}
+}
+
+func generateBlockHeaders(t *testing.T, s *SQL, numberOfBlocks uint32) []*model.BlockHeader {
+	prevBlockHash := chaincfg.RegressionNetParams.GenesisBlock.BlockHash()
+	bits, _ = model.NewNBitFromString("207fffff")
+
+	blockHeaders := make([]*model.BlockHeader, 0, numberOfBlocks)
+
+	for i := uint32(0); i < numberOfBlocks; i++ {
+		prevHash := prevBlockHash
+		block := &model.Block{
+			Header: &model.BlockHeader{
+				Version:        i,
+				Timestamp:      i,
+				Nonce:          i,
+				HashPrevBlock:  &prevHash,
+				HashMerkleRoot: &chainhash.Hash{},
+				Bits:           *bits,
+			},
+			CoinbaseTx:       coinbaseTx,
+			TransactionCount: 1,
+			Subtrees:         []*chainhash.Hash{},
+		}
+
+		_, _, err := s.StoreBlock(context.Background(), block, "test")
+
+		blockHeaders = append(blockHeaders, block.Header)
+
+		prevBlockHash = *block.Hash()
+
+		require.NoError(t, err)
+	}
+
+	return blockHeaders
 }

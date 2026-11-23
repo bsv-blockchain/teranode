@@ -284,115 +284,109 @@ var rpcUnimplemented = map[string]struct{}{
 	"preciousblock": {},
 }
 
-// rpcMethodAccess is the privilege a JSON-RPC method requires. Every method in
-// rpcHandlersBeforeInit must appear in rpcMethodPolicy; a regression test
-// enforces this so a new handler cannot be served to the limited
-// role by accident, and an unclassified method is treated as admin-only.
-type rpcMethodAccess int
+// rpcAccess classifies who may call an RPC method.
+type rpcAccess int
 
 const (
-	// rpcAccessAdmin: only rpc_user/rpc_pass may call the method. Default for
-	// anything unclassified.
-	rpcAccessAdmin rpcMethodAccess = iota
+	// rpcAccessAdmin methods are callable only with the admin credential.
+	rpcAccessAdmin rpcAccess = iota
 
-	// rpcAccessLimitedRead: read-only query, available to rpc_limit_user.
-	rpcAccessLimitedRead
+	// rpcAccessReadOnly methods are queries callable by the limited credential. A query may
+	// have a side effect: getrawmempool with verbose=true requests a mining candidate.
+	rpcAccessReadOnly
 
-	// rpcAccessLimitedWrite: changes node or network state but is deliberately
-	// exposed to rpc_limit_user as a documented capability (relaying
-	// transactions, submitting mining work). Keep this list short and explicit.
+	// rpcAccessLimitedWrite methods change node or network state but are
+	// intentionally exposed to the limited credential (transaction and block submission, mining).
 	rpcAccessLimitedWrite
 )
 
-// limitedMayCall reports whether rpc_limit_user is authorized for this access level.
-func (a rpcMethodAccess) limitedMayCall() bool {
-	return a == rpcAccessLimitedRead || a == rpcAccessLimitedWrite
+// rpcAccessPolicy is the single authorisation table. Every registered handler
+// must appear here. A method that is absent from the table is denied to a limited user.
+var rpcAccessPolicy = map[string]rpcAccess{
+	"addnode":               rpcAccessAdmin,
+	"clearbanned":           rpcAccessAdmin,
+	"debuglevel":            rpcAccessAdmin,
+	"freeze":                rpcAccessAdmin,
+	"generate":              rpcAccessAdmin,
+	"generatetoaddress":     rpcAccessAdmin,
+	"getaddednodeinfo":      rpcAccessAdmin,
+	"getblockbyheight":      rpcAccessAdmin,
+	"getblockchaininfo":     rpcAccessAdmin,
+	"getblocktemplate":      rpcAccessAdmin,
+	"getchaintips":          rpcAccessAdmin,
+	"getconnectioncount":    rpcAccessAdmin,
+	"getgenerate":           rpcAccessAdmin,
+	"gethashespersec":       rpcAccessAdmin,
+	"getmempoolinfo":        rpcAccessAdmin,
+	"getmininginfo":         rpcAccessAdmin,
+	"getpeerinfo":           rpcAccessAdmin,
+	"invalidateblock":       rpcAccessAdmin,
+	"isbanned":              rpcAccessAdmin,
+	"listbanned":            rpcAccessAdmin,
+	"node":                  rpcAccessAdmin,
+	"ping":                  rpcAccessAdmin,
+	"reassign":              rpcAccessAdmin,
+	"reconsiderblock":       rpcAccessAdmin,
+	"setban":                rpcAccessAdmin,
+	"setgenerate":           rpcAccessAdmin,
+	"stop":                  rpcAccessAdmin,
+	"unfreeze":              rpcAccessAdmin,
+	"verifychain":           rpcAccessAdmin,
+	"createrawtransaction":  rpcAccessReadOnly,
+	"decoderawtransaction":  rpcAccessReadOnly,
+	"decodescript":          rpcAccessReadOnly,
+	"estimatefee":           rpcAccessReadOnly,
+	"getbestblock":          rpcAccessReadOnly,
+	"getbestblockhash":      rpcAccessReadOnly,
+	"getblock":              rpcAccessReadOnly,
+	"getblockcount":         rpcAccessReadOnly,
+	"getblockhash":          rpcAccessReadOnly,
+	"getblockheader":        rpcAccessReadOnly,
+	"getcfilter":            rpcAccessReadOnly,
+	"getcfilterheader":      rpcAccessReadOnly,
+	"getcurrentnet":         rpcAccessReadOnly,
+	"getdifficulty":         rpcAccessReadOnly,
+	"getheaders":            rpcAccessReadOnly,
+	"getinfo":               rpcAccessReadOnly,
+	"getnettotals":          rpcAccessReadOnly,
+	"getnetworkhashps":      rpcAccessReadOnly,
+	"getrawmempool":         rpcAccessReadOnly,
+	"getrawtransaction":     rpcAccessReadOnly,
+	"gettxout":              rpcAccessReadOnly,
+	"gettxoutproof":         rpcAccessReadOnly,
+	"help":                  rpcAccessReadOnly,
+	"loadtxfilter":          rpcAccessReadOnly,
+	"notifyblocks":          rpcAccessReadOnly,
+	"notifynewtransactions": rpcAccessReadOnly,
+	"notifyreceived":        rpcAccessReadOnly,
+	"notifyspent":           rpcAccessReadOnly,
+	"rescan":                rpcAccessReadOnly,
+	"rescanblocks":          rpcAccessReadOnly,
+	"searchrawtransactions": rpcAccessReadOnly,
+	"session":               rpcAccessReadOnly,
+	"uptime":                rpcAccessReadOnly,
+	"validateaddress":       rpcAccessReadOnly,
+	"verifymessage":         rpcAccessReadOnly,
+	"verifytxoutproof":      rpcAccessReadOnly,
+	"version":               rpcAccessReadOnly,
+	"getminingcandidate":    rpcAccessLimitedWrite,
+	"sendrawtransaction":    rpcAccessLimitedWrite,
+	"submitblock":           rpcAccessLimitedWrite,
+	"submitminingsolution":  rpcAccessLimitedWrite,
 }
 
-// rpcMethodPolicy is the single source of truth for method authorization.
-var rpcMethodPolicy = map[string]rpcMethodAccess{
-	// Read-only, available to the limited role
-	"createrawtransaction":  rpcAccessLimitedRead,
-	"decoderawtransaction":  rpcAccessLimitedRead,
-	"decodescript":          rpcAccessLimitedRead,
-	"estimatefee":           rpcAccessLimitedRead,
-	"getbestblock":          rpcAccessLimitedRead,
-	"getbestblockhash":      rpcAccessLimitedRead,
-	"getblock":              rpcAccessLimitedRead,
-	"getblockcount":         rpcAccessLimitedRead,
-	"getblockhash":          rpcAccessLimitedRead,
-	"getblockheader":        rpcAccessLimitedRead,
-	"getcfilter":            rpcAccessLimitedRead,
-	"getcfilterheader":      rpcAccessLimitedRead,
-	"getcurrentnet":         rpcAccessLimitedRead,
-	"getdifficulty":         rpcAccessLimitedRead,
-	"getheaders":            rpcAccessLimitedRead,
-	"getinfo":               rpcAccessLimitedRead,
-	"getnettotals":          rpcAccessLimitedRead,
-	"getnetworkhashps":      rpcAccessLimitedRead,
-	"getrawmempool":         rpcAccessLimitedRead,
-	"getrawtransaction":     rpcAccessLimitedRead,
-	"gettxout":              rpcAccessLimitedRead,
-	"gettxoutproof":         rpcAccessLimitedRead,
-	"help":                  rpcAccessLimitedRead,
-	"searchrawtransactions": rpcAccessLimitedRead,
-	"uptime":                rpcAccessLimitedRead,
-	"validateaddress":       rpcAccessLimitedRead,
-	"verifymessage":         rpcAccessLimitedRead,
-	"verifytxoutproof":      rpcAccessLimitedRead,
-	"version":               rpcAccessLimitedRead,
+// Commands that are available to a limited user, derived from rpcAccessPolicy.
+var rpcLimited = func() map[string]struct{} {
+	limited := make(map[string]struct{}, len(rpcAccessPolicy))
 
-	// State-changing, intentionally available to the limited role
-	"getminingcandidate":   rpcAccessLimitedWrite,
-	"sendrawtransaction":   rpcAccessLimitedWrite,
-	"submitblock":          rpcAccessLimitedWrite,
-	"submitminingsolution": rpcAccessLimitedWrite,
-
-	// Admin-only
-	"addnode":            rpcAccessAdmin,
-	"clearbanned":        rpcAccessAdmin,
-	"debuglevel":         rpcAccessAdmin,
-	"generate":           rpcAccessAdmin,
-	"generatetoaddress":  rpcAccessAdmin,
-	"getaddednodeinfo":   rpcAccessAdmin,
-	"getblockbyheight":   rpcAccessAdmin,
-	"getblockchaininfo":  rpcAccessAdmin,
-	"getblocktemplate":   rpcAccessAdmin,
-	"getchaintips":       rpcAccessAdmin,
-	"getconnectioncount": rpcAccessAdmin,
-	"getgenerate":        rpcAccessAdmin,
-	"gethashespersec":    rpcAccessAdmin,
-	"getmempoolinfo":     rpcAccessAdmin,
-	"getmininginfo":      rpcAccessAdmin,
-	"getpeerinfo":        rpcAccessAdmin,
-	"invalidateblock":    rpcAccessAdmin,
-	"isbanned":           rpcAccessAdmin,
-	"listbanned":         rpcAccessAdmin,
-	"node":               rpcAccessAdmin,
-	"ping":               rpcAccessAdmin,
-	"reconsiderblock":    rpcAccessAdmin,
-	"setban":             rpcAccessAdmin,
-	"setgenerate":        rpcAccessAdmin,
-	"stop":               rpcAccessAdmin,
-	"verifychain":        rpcAccessAdmin,
-
-	// BSV alert administration: mutates consensus-relevant UTXO state and is
-	// persisted across restarts. Never available to the limited role.
-	"freeze":   rpcAccessAdmin,
-	"unfreeze": rpcAccessAdmin,
-	"reassign": rpcAccessAdmin,
-}
-
-// methodAccess returns the classification for a method, defaulting to admin-only
-// for anything not explicitly listed.
-func methodAccess(method string) rpcMethodAccess {
-	access, ok := rpcMethodPolicy[method]
-	if !ok {
-		return rpcAccessAdmin
+	for method, access := range rpcAccessPolicy {
+		if access != rpcAccessAdmin {
+			limited[method] = struct{}{}
+		}
 	}
 
-	return access
-}
+	return limited
+}()
 
 // builderScript is a convenience function which is used for hard-coded scripts
 // built with the script builder.   Any errors are converted to a panic since it
@@ -689,7 +683,7 @@ type RPCServer struct {
 	authsha [sha256.Size]byte
 
 	// limitauthsha contains the SHA256 hash of the HTTP basic auth string for limited-level access
-	// This is used for authenticating clients with restricted access (read-only operations)
+	// This is used for authenticating clients with restricted access (read-only commands and the submission commands)
 	limitauthsha [sha256.Size]byte
 
 	// numClients tracks the number of connected RPC clients for connection limiting
@@ -770,6 +764,10 @@ type RPCServer struct {
 	// validatorClient provides access to the transaction validator service
 	// Used for synchronous transaction validation in sendrawtransaction RPC
 	validatorClient validator.Interface
+
+	// unminedTxGate makes sendrawtransaction refuse a transaction while the node
+	// syncs (issue 2003). nil accepts everything.
+	unminedTxGate *blockchain.UnminedTxGate
 }
 
 // httpStatusLine returns a response Status-Line (RFC 2616 Section 6.1)
@@ -1144,7 +1142,16 @@ func (s *RPCServer) createMarshalledReply(id, result interface{}, replyErr error
 		if jErr, ok := replyErr.(*bsvjson.RPCError); ok {
 			jsonErr = jErr
 		} else {
-			jsonErr = s.internalRPCError(replyErr.Error(), "")
+			// A handler returned a bare Go error. Hand the caller the trimmed
+			// form rather than replyErr.Error(), which put internal service
+			// names and the storage layer's own text across the API boundary.
+			// s.rpcError logs the full chain, so nothing diagnostic is lost.
+			//
+			// No not-found mapping here: this site has no idea what the
+			// request asked for, and "the block you asked for does not exist"
+			// is the wrong answer to a request that named no block. Handlers
+			// that do name one opt in with s.rpcLookupError. See rpc_errors.go.
+			jsonErr = s.rpcError(replyErr, bsvjson.ErrRPCInternal.Code, "")
 		}
 	}
 
@@ -1270,13 +1277,13 @@ func (s *RPCServer) jsonRPCRead(w http.ResponseWriter, r *http.Request, isAdmin 
 			}
 		}()
 
-		// Check if the user is limited and set error if method unauthorized.
-		// Unclassified methods are admin-only, so the limited role can never
-		// reach a handler the policy table does not explicitly grant.
-		if !isAdmin && !methodAccess(request.Method).limitedMayCall() {
-			jsonErr = &bsvjson.RPCError{
-				Code:    bsvjson.ErrRPCInvalidParams.Code,
-				Message: "limited user not authorized for this method",
+		// Check if the user is limited and set error if method unauthorized
+		if !isAdmin {
+			if _, ok := rpcLimited[request.Method]; !ok {
+				jsonErr = &bsvjson.RPCError{
+					Code:    bsvjson.ErrRPCInvalidParams.Code,
+					Message: "limited user not authorized for this method",
+				}
 			}
 		}
 
@@ -1513,6 +1520,7 @@ func NewServer(logger ulogger.Logger, tSettings *settings.Settings, blockchainCl
 		p2pClient:              p2pClient,
 		txStore:                txStore,
 		validatorClient:        validatorClient,
+		unminedTxGate:          blockchain.NewUnminedTxGate(logger, blockchainClient, blockchain.UnminedTxRouteRPCSendRawTx),
 	}
 
 	rpcUser := tSettings.RPC.RPCUser

@@ -448,6 +448,7 @@ func TestGRPC_PeerInfoProtoRoundTrip(t *testing.T) {
 		TransportType:             blockchain_api.TransportType_TRANSPORT_WIRE_PROTOCOL,
 		ClientName:                "test-client/1.0",
 		Height:                    654321,
+		AdvertisedHeight:          962710,
 		DataHubURL:                "http://data.example.com",
 		NetworkAddress:            "192.168.1.100:8333",
 		IsBanned:                  true,
@@ -486,6 +487,8 @@ func TestGRPC_PeerInfoProtoRoundTrip(t *testing.T) {
 	require.Equal(t, original.TransportType, roundTripped.TransportType)
 	require.Equal(t, original.ClientName, roundTripped.ClientName)
 	require.Equal(t, original.Height, roundTripped.Height)
+	require.Equal(t, original.AdvertisedHeight, roundTripped.AdvertisedHeight,
+		"the raw advertised height must survive the proto round-trip, not collapse into Height")
 	require.Equal(t, original.DataHubURL, roundTripped.DataHubURL)
 	require.Equal(t, original.NetworkAddress, roundTripped.NetworkAddress)
 	require.Equal(t, original.IsBanned, roundTripped.IsBanned)

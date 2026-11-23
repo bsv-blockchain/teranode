@@ -74,6 +74,10 @@ type consolidator struct {
 	// firstBlockHeight stores the height of the first block in range - The first block height in the range (startHeight)
 	firstBlockHeight uint32
 
+	// firstBlockHeightKnown records that firstBlockHeight was set. Zero is a real height,
+	// so it cannot stand for "unknown".
+	firstBlockHeightKnown bool
+
 	// firstPreviousBlockHash stores the hash of the block before the first block
 	// This is the hash of the previous block of the first block in the range (will be used to copy the last UTXOSet)
 	firstPreviousBlockHash *chainhash.Hash
@@ -89,6 +93,41 @@ type consolidator struct {
 
 	// acc accumulates the MuHash set commitment over the full materialized set.
 	acc *muhash.MuHash3072
+
+	// progress, when set, is called as a long roll-up or set write advances, so
+	// the owning loop's liveness heartbeat can tell slow work from a wedge
+	// (issue 1447). Nil does nothing.
+	progress func()
+
+	// recordsSinceBeat counts records handled since progress was last called.
+	recordsSinceBeat int
+
+	// beatEvery is how many records pass between progress calls. Zero means
+	// progressBeatEvery; tests set it to 1.
+	beatEvery int
+}
+
+// beat reports progress to the owning loop, if there is one.
+func (c *consolidator) beat() {
+	if c.progress != nil {
+		c.progress()
+	}
+}
+
+// recordDone counts one record and reports progress every beatEvery records
+// (progressBeatEvery unless a test set it).
+func (c *consolidator) recordDone() {
+	c.recordsSinceBeat++
+
+	every := c.beatEvery
+	if every <= 0 {
+		every = progressBeatEvery
+	}
+
+	if c.recordsSinceBeat >= every {
+		c.recordsSinceBeat = 0
+		c.beat()
+	}
 }
 
 // Addition represents a UTXO addition.
@@ -196,6 +235,7 @@ func (c *consolidator) ConsolidateBlockRange(ctx context.Context, startBlock, en
 	}
 
 	c.firstBlockHeight = startBlock
+	c.firstBlockHeightKnown = true
 
 	for i := 0; i < len(headers); i++ {
 		header := headers[i]
@@ -212,7 +252,7 @@ func (c *consolidator) ConsolidateBlockRange(ctx context.Context, startBlock, en
 		}
 
 		// Get the last 2 block headers from this last processed height
-		us, _, err := GetUTXOSetWithExistCheck(ctx, c.logger, c.settings, c.blockStore, hash)
+		us, _, err := GetUTXOSetWithExistCheck(ctx, c.logger, c.settings, c.blockStore, hash, height)
 		if err != nil {
 			return err
 		}
@@ -230,6 +270,8 @@ func (c *consolidator) ConsolidateBlockRange(ctx context.Context, startBlock, en
 		if err := c.consumeAdditions(ctx, us); err != nil {
 			return err
 		}
+
+		c.beat()
 
 		c.lastBlockHeight = height
 		c.lastBlockHash = hash
@@ -293,6 +335,8 @@ func (c *consolidator) processDeletionsFromReader(ctx context.Context, r io.Read
 			} else {
 				c.deletions[*outpoint] = struct{}{}
 			}
+
+			c.recordDone()
 		}
 	}
 }
@@ -315,6 +359,8 @@ func (c *consolidator) processAdditionsFromReader(ctx context.Context, r io.Read
 
 				return err
 			}
+
+			c.recordDone()
 
 			txid := &wrapper.TxID
 

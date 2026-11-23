@@ -22,7 +22,7 @@
 
 ### Authentication System
 - `RPCUser` and `RPCPass` provide full access to all RPC commands
-- `RPCLimitUser` and `RPCLimitPass` provide limited access to the methods classified as limited-read or limited-write in `rpcMethodPolicy` (`services/rpc/Server.go`); unclassified methods and the alert-system methods `freeze`, `unfreeze` and `reassign` are admin-only
+- `RPCLimitUser` and `RPCLimitPass` provide limited access to the methods classified as read-only or limited-write in `rpcAccessPolicy` (`services/rpc/Server.go`); unclassified methods and the alert-system methods `freeze`, `unfreeze` and `reassign` are admin-only
 - Two-tier authentication system with different access levels
 
 ### Response Caching
@@ -74,8 +74,8 @@ rpc_max_clients = 10
 ```text
 rpc_user = "admin"
 rpc_pass = "secure_password"
-rpc_limit_user = "readonly"
-rpc_limit_pass = "readonly_password"
+rpc_limit_user = "limited"
+rpc_limit_pass = "limited_password"
 ```
 
 ### Performance Tuning

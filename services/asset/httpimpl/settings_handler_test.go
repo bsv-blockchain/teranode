@@ -19,6 +19,7 @@ func TestIsSensitiveKey(t *testing.T) {
 		{"coinbaseDBUserPwd", true},
 		{"database_password", true},
 		{"slack_token", true},
+		{"asset_legacyPeerPoolToken", true},
 		{"api_key_external", true},
 		{"auth_key_setting", true},
 		{"secret_mining_threshold", true},

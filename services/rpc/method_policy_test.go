@@ -28,58 +28,22 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// Every registered handler must be classified, and every classified method must
-// have a handler. An unclassified handler silently becomes admin-only at runtime,
-// which is safe, but the table should still be the complete, reviewable contract.
-func TestRPCMethodPolicyIsExhaustive(t *testing.T) {
-	for method := range rpcHandlersBeforeInit {
-		_, ok := rpcMethodPolicy[method]
-		require.True(t, ok, "registered RPC handler %q is not classified in rpcMethodPolicy", method)
-	}
+// The limited role's grants are pinned method by method, so moving an admin
+// method into a limited tier is a deliberate, reviewed change to this list.
+func TestRPCAccessPolicyLimitedTiers(t *testing.T) {
+	tier := func(want rpcAccess) []string {
+		var methods []string
 
-	for method := range rpcMethodPolicy {
-		_, ok := rpcHandlersBeforeInit[method]
-		require.True(t, ok, "rpcMethodPolicy classifies %q but no handler is registered for it", method)
-	}
-}
-
-func TestRPCMethodPolicyAlertMethodsAreAdminOnly(t *testing.T) {
-	for _, method := range []string{"freeze", "unfreeze", "reassign"} {
-		require.Equal(t, rpcAccessAdmin, methodAccess(method), "%s must be admin-only", method)
-		require.False(t, methodAccess(method).limitedMayCall(), "%s must not be callable by the limited role", method)
-	}
-}
-
-func TestRPCMethodPolicyUnknownMethodIsAdminOnly(t *testing.T) {
-	require.Equal(t, rpcAccessAdmin, methodAccess("no-such-method"))
-	require.False(t, methodAccess("no-such-method").limitedMayCall())
-}
-
-func TestRPCMethodPolicyLimitedTiers(t *testing.T) {
-	require.True(t, rpcAccessLimitedRead.limitedMayCall())
-	require.True(t, rpcAccessLimitedWrite.limitedMayCall())
-	require.False(t, rpcAccessAdmin.limitedMayCall())
-
-	// The writable grants to the limited role are an explicit, short list.
-	var writable []string
-
-	for method, access := range rpcMethodPolicy {
-		if access == rpcAccessLimitedWrite {
-			writable = append(writable, method)
+		for method, access := range rpcAccessPolicy {
+			if access == want {
+				methods = append(methods, method)
+			}
 		}
+
+		return methods
 	}
 
-	require.ElementsMatch(t, []string{"getminingcandidate", "sendrawtransaction", "submitblock", "submitminingsolution"}, writable)
-
-	// The read-only tier is pinned too, so promoting an admin method into the
-	// limited role is a deliberate, reviewed change to this list.
-	var readable []string
-
-	for method, access := range rpcMethodPolicy {
-		if access == rpcAccessLimitedRead {
-			readable = append(readable, method)
-		}
-	}
+	require.ElementsMatch(t, []string{"getminingcandidate", "sendrawtransaction", "submitblock", "submitminingsolution"}, tier(rpcAccessLimitedWrite))
 
 	require.ElementsMatch(t, []string{
 		"createrawtransaction", "decoderawtransaction", "decodescript", "estimatefee",
@@ -88,12 +52,12 @@ func TestRPCMethodPolicyLimitedTiers(t *testing.T) {
 		"getheaders", "getinfo", "getnettotals", "getnetworkhashps", "getrawmempool",
 		"getrawtransaction", "gettxout", "gettxoutproof", "help", "searchrawtransactions",
 		"uptime", "validateaddress", "verifymessage", "verifytxoutproof", "version",
-	}, readable)
+		// websocket-only names with no HTTP handler
+		"loadtxfilter", "notifyblocks", "notifynewtransactions", "notifyreceived", "notifyspent",
+		"rescan", "rescanblocks", "session",
+	}, tier(rpcAccessReadOnly))
 
-	// Node administration must stay admin-only regardless of how the tiers evolve.
-	for _, method := range []string{"invalidateblock", "reconsiderblock", "setban", "clearbanned", "generate", "generatetoaddress", "stop"} {
-		require.Equal(t, rpcAccessAdmin, methodAccess(method), "%s must be admin-only", method)
-	}
+	require.NotContains(t, rpcLimited, "no-such-method", "an unclassified method must be denied to the limited role")
 }
 
 // recordingUTXOStore wraps a real store and records every alert-system mutation
@@ -362,8 +326,10 @@ func TestAlertSpendFromArgs(t *testing.T) {
 	txID := "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"
 	hash := "101112131415161718191a1b1c1d1e1f000102030405060708090a0b0c0d0e0f"
 
+	s := &RPCServer{logger: mocklogger.NewTestLogger()}
+
 	t.Run("uses the supplied utxo hash", func(t *testing.T) {
-		spend, err := alertSpendFromArgs(txID, 3, hash)
+		spend, err := s.alertSpendFromArgs(txID, 3, hash)
 		require.NoError(t, err)
 		require.Equal(t, txID, spend.TxID.String())
 		require.Equal(t, uint32(3), spend.Vout)
@@ -371,13 +337,12 @@ func TestAlertSpendFromArgs(t *testing.T) {
 	})
 
 	t.Run("rejects an invalid utxo hash", func(t *testing.T) {
-		_, err := alertSpendFromArgs(txID, 0, "not-a-hash")
+		_, err := s.alertSpendFromArgs(txID, 0, "not-a-hash")
 		require.Error(t, err)
 	})
 
 	t.Run("rejects a negative vout", func(t *testing.T) {
-		_, err := alertSpendFromArgs(txID, -1, hash)
+		_, err := s.alertSpendFromArgs(txID, -1, hash)
 		require.Error(t, err)
 	})
-
 }

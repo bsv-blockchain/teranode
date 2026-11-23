@@ -91,7 +91,8 @@ func TestReleaseCatchupLock_ClassifiesLocalPolicyDeclineWithoutPeerPenalty(t *te
 		recorder := newPeerFailureRecordingP2PClient()
 		u := &Server{logger: ulogger.TestLogger{}, p2pClient: recorder}
 		cctx := newCtx()
-		err := error(errors.NewProcessingError("some generic terminal error"))
+		// Not a ProcessingError: that code is local and skips the peer-error report.
+		err := error(errors.NewInvalidArgumentError("some generic terminal error"))
 
 		u.releaseCatchupLock(cctx, &err)
 

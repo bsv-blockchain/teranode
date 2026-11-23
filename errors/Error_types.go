@@ -9,14 +9,17 @@ import stderrors "errors"
 //	processing error -> error when manipulating data, i.e., when processing a block, a transaction, etc., inside the method/function.
 var (
 	ErrBlobAlreadyExists          = New(ERR_BLOB_EXISTS, "blob already exists")
+	ErrBlobCorrupt                = New(ERR_BLOB_CORRUPT, "blob corrupt")
 	ErrBlobError                  = New(ERR_BLOB_ERROR, "blob error")
 	ErrBlobNotFound               = New(ERR_BLOB_NOT_FOUND, "blob not found")
 	ErrBlockAssemblyReset         = New(ERR_BLOCK_ASSEMBLY_RESET, "block assembly reset")
+	ErrBlockBodyMismatch          = New(ERR_BLOCK_BODY_MISMATCH, "the body is not the body its header commits to")
 	ErrBlockCoinbaseMissingHeight = New(ERR_BLOCK_COINBASE_MISSING_HEIGHT, "the coinbase signature script doesn't have the block height")
 	ErrBlockCorrupt               = New(ERR_BLOCK_CORRUPT, "block corrupt")
 	ErrBlockPolicyDeclined        = New(ERR_BLOCK_POLICY_DECLINED, "block declined by local policy")
 	ErrBlockError                 = New(ERR_BLOCK_ERROR, "block error")
 	ErrBlockExists                = New(ERR_BLOCK_EXISTS, "block exists")
+	ErrBlockIDOrder               = New(ERR_BLOCK_ID_ORDER, "block id is not above its parent's id")
 	ErrBlockHeaderContext         = New(ERR_BLOCK_HEADER_CONTEXT, "block header context invalid")
 	ErrBlockIncomplete            = New(ERR_BLOCK_INCOMPLETE, "block incomplete")
 	ErrBlockInvalid               = New(ERR_BLOCK_INVALID, "block invalid")
@@ -37,6 +40,8 @@ var (
 	ErrServiceError               = New(ERR_SERVICE_ERROR, "service error")
 	ErrServiceNotStarted          = New(ERR_SERVICE_NOT_STARTED, "service not started")
 	ErrServiceUnavailable         = New(ERR_SERVICE_UNAVAILABLE, "service unavailable")
+	ErrServiceRateLimited         = New(ERR_SERVICE_RATE_LIMITED, "service rate limited")
+	ErrServiceNotReady            = New(ERR_SERVICE_NOT_READY, "service not ready")
 	ErrFrozen                     = New(ERR_UTXO_FROZEN, "tx is frozen")
 	ErrNonFinal                   = New(ERR_UTXO_NON_FINAL, "tx is non-final")
 	ErrSpent                      = New(ERR_UTXO_SPENT, "utxo already spent")
@@ -58,6 +63,7 @@ var (
 	ErrThresholdExceeded          = New(ERR_THRESHOLD_EXCEEDED, "threshold exceeded")
 	ErrTxCoinbaseImmature         = New(ERR_TX_COINBASE_IMMATURE, "coinbase is not spendable yet")
 	ErrTxConflicting              = New(ERR_TX_CONFLICTING, "tx conflicting")
+	ErrTxRejectedConflicting      = New(ERR_TX_REJECTED_CONFLICTING, "tx rejected as conflicting")
 	ErrTxError                    = New(ERR_TX_ERROR, "tx error")
 	ErrTxExists                   = New(ERR_TX_EXISTS, "tx already exists")
 	ErrTxInvalid                  = New(ERR_TX_INVALID, "tx invalid")
@@ -68,6 +74,7 @@ var (
 	ErrTxPolicy                   = New(ERR_TX_POLICY, "tx policy error")
 	ErrTxLocked                   = New(ERR_TX_LOCKED, "tx locked")
 	ErrTxCreating                 = New(ERR_TX_CREATING, "tx creating")
+	ErrTxUnlockFailed             = New(ERR_TX_UNLOCK_FAILED, "tx unlock failed")
 	ErrUnknown                    = New(ERR_UNKNOWN, "unknown error")
 	ErrNetworkError               = New(ERR_NETWORK_ERROR, "network error")
 	ErrNetworkTimeout             = New(ERR_NETWORK_TIMEOUT, "network timeout")
@@ -285,6 +292,37 @@ func NewBlockPolicyDeclinedError(message string, params ...interface{}) *Error {
 	return New(ERR_BLOCK_POLICY_DECLINED, message, params...)
 }
 
+// NewBlockIDOrderError creates a new error for a block whose id is not above its parent's id.
+// StoreBlock refuses such a block: the ancestry queries bound their walk by the gap between two
+// ids, so a child stored below its parent would make them answer "not an ancestor" for a true
+// ancestor. Callers match it with Is(err, ErrBlockIDOrder).
+func NewBlockIDOrderError(message string, params ...interface{}) *Error {
+	return New(ERR_BLOCK_ID_ORDER, message, params...)
+}
+
+// IsBlockBodyMismatch reports whether err carries ERR_BLOCK_BODY_MISMATCH anywhere
+// in its chain: a block body that was read to its declared end and cannot be the
+// block its header names (wrong merkle root, duplicate transaction, no coinbase).
+//
+// The code is a marker, not a verdict of its own. The sites that raise it (the
+// legacy pipeline sink and its stream builder and transaction stream,
+// services/legacy/netsync) wrap ErrBlockBodyMismatch inside their
+// NewBlockInvalidError, so the outermost code stays ERR_BLOCK_INVALID and every
+// reader of that verdict is unchanged; this marker is what lets the legacy peer
+// server tell those three refusals, which SV Node scores DoS(100), from every
+// other invalid verdict, which it does not ban for. A delivery that ended early
+// never carries it: those sites judge only a body that parsed to its end. The
+// marker alone is not grounds for a ban: SV Node scores those three only after
+// the message checksum passed, and the legacy streaming path cannot check that
+// checksum yet (peer.BlockBodyRejectedError.ProvenBad).
+func IsBlockBodyMismatch(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	return Is(err, ErrBlockBodyMismatch)
+}
+
 // IsBlockCorrupt reports whether err (or anything it wraps, including across a gRPC
 // boundary) is a block-corrupt error. Callers gate the re-download / peer-strike path
 // on this and must check it BEFORE any generic ErrBlockInvalid handling so a corrupt
@@ -362,6 +400,12 @@ func NewTxConflictingError(message string, params ...interface{}) *Error {
 	return New(ERR_TX_CONFLICTING, message, params...)
 }
 
+// NewTxRejectedConflictingError creates a new error with the transaction rejected as
+// conflicting error code: every input that failed to spend conflicts with an accepted tx.
+func NewTxRejectedConflictingError(message string, params ...interface{}) *Error {
+	return New(ERR_TX_REJECTED_CONFLICTING, message, params...)
+}
+
 // NewTxLockedError creates a new error with the transaction locked error code.
 func NewTxLockedError(message string, params ...interface{}) *Error {
 	return New(ERR_TX_LOCKED, message, params...)
@@ -370,6 +414,13 @@ func NewTxLockedError(message string, params ...interface{}) *Error {
 // NewTxCreatingError creates a new error with the transaction creating error code.
 func NewTxCreatingError(message string, params ...interface{}) *Error {
 	return New(ERR_TX_CREATING, message, params...)
+}
+
+// NewTxUnlockFailedError creates a new error with the transaction unlock failed error code.
+// It marks a transaction that was accepted, spent and created, but whose two-phase-commit
+// unlock did not complete, so the record stays locked until it is mined.
+func NewTxUnlockFailedError(message string, params ...interface{}) *Error {
+	return New(ERR_TX_UNLOCK_FAILED, message, params...)
 }
 
 // NewTxCoinbaseImmatureError creates a new error with the transaction coinbase immature error code.
@@ -385,6 +436,28 @@ func NewTxError(message string, params ...interface{}) *Error {
 // NewServiceUnavailableError creates a new error with the service unavailable error code.
 func NewServiceUnavailableError(message string, params ...interface{}) *Error {
 	return New(ERR_SERVICE_UNAVAILABLE, message, params...)
+}
+
+// NewServiceRateLimitedError creates a new error with the service rate limited error code.
+//
+// This is a REMOTE admission decision: the server we called answered 429 because we
+// exceeded its rate limit. It is deliberately distinct from ERR_SERVICE_UNAVAILABLE,
+// which IsTransientLocalError treats as a fault in this node's own stack and which
+// legacy block sync uses to decide whether to keep a delivering peer. A single 429 is
+// not the peer's fault; retry with backoff.
+func NewServiceRateLimitedError(message string, params ...interface{}) *Error {
+	return New(ERR_SERVICE_RATE_LIMITED, message, params...)
+}
+
+// NewServiceNotReadyError creates a new error with the service not ready error code.
+//
+// The service is up but still loading state it needs, and refuses work it will
+// accept shortly; nothing is broken. It is distinct from ERR_SERVICE_NOT_STARTED,
+// whose producers report a service that failed to start, and from
+// ERR_SERVICE_UNAVAILABLE, which callers treat as a fault. It carries no gRPC
+// status of its own (codes.Internal), so it does not wake the client retry gate.
+func NewServiceNotReadyError(message string, params ...interface{}) *Error {
+	return New(ERR_SERVICE_NOT_READY, message, params...)
 }
 
 // NewServiceNotStartedError creates a new error with the service not started error code.
@@ -493,6 +566,28 @@ func NewBlobNotFoundError(message string, params ...interface{}) *Error {
 // NewBlobError creates a new error with the blob error code.
 func NewBlobError(message string, params ...interface{}) *Error {
 	return New(ERR_BLOB_ERROR, message, params...)
+}
+
+// NewBlobCorruptError creates an error for a stored blob whose bytes are present but unusable,
+// such as a missing, truncated or wrong-type header. Stores write blobs whole (temp file then
+// rename, or a single S3 put), so such a blob stays broken and a retry of the same read cannot
+// help. A store keeps its StorageError and adds this as the cause, so the StorageError and
+// IsRetryableError checks are unchanged. The rendered message contains BLOB_CORRUPT, which the
+// substring match in IsMaliciousResponseError catches, so a caller that must not retry checks
+// IsBlobCorrupt first. Block validation's priority-queue worker does: it neither requeues a block
+// that failed on one nor tries another source for it. Catchup and the legacy park do not check it
+// yet; they treat it as a local storage fault and retry the block later.
+func NewBlobCorruptError(message string, params ...interface{}) *Error {
+	return New(ERR_BLOB_CORRUPT, message, params...)
+}
+
+// IsBlobCorrupt reports whether err, or anything it wraps, is a blob-corrupt error.
+func IsBlobCorrupt(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	return Is(err, ErrBlobCorrupt)
 }
 
 // NewBlobFooterSizeMismatchError creates a new error with the blob footer size mismatch error code.
