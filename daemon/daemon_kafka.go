@@ -5,6 +5,7 @@ import (
 	"net/url"
 
 	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/bsv-blockchain/teranode/pkg/urlutil"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/kafka"
@@ -85,6 +86,29 @@ func getKafkaTxmetaAsyncProducer(ctx context.Context, logger ulogger.Logger,
 	return kafka.NewKafkaAsyncProducerFromURL(ctx, logger, kafkaTxmetaConfig, &settings.Kafka, opts...)
 }
 
+// getKafkaTxmetaEvictionAsyncProducer creates the txmeta producer block assembly uses to
+// publish DELETEs for txs it demotes to conflicting. It returns nil, nil when no txmeta
+// topic is configured, in which case block assembly simply publishes nothing.
+//
+// Unlike the validator's producer this never uses manual partitioning, even when
+// Validator.TxMetaWireFormat is "v2": the DELETEs are v1-format messages keyed by tx
+// hash, which subtreevalidation's txmetaHandler detects per message, so they need no
+// xxhash bucket routing.
+func getKafkaTxmetaEvictionAsyncProducer(ctx context.Context, logger ulogger.Logger,
+	settings *settings.Settings) (kafka.KafkaAsyncProducerI, error) {
+	kafkaTxmetaConfig := settings.Kafka.TxMetaConfig
+	if kafkaTxmetaConfig == nil {
+		return nil, nil
+	}
+
+	producer, err := getKafkaAsyncProducer(ctx, logger, kafkaTxmetaConfig, &settings.Kafka)
+	if err != nil {
+		return nil, errors.NewServiceError("could not create txmeta kafka producer for block assembly", err)
+	}
+
+	return producer, nil
+}
+
 // getKafkaTxAsyncProducer creates a new Kafka async producer for validator transactions using the configuration from settings.
 //
 // This must read the same parsed setting as getKafkaTxConsumerGroup: the raw gocore
@@ -110,7 +134,7 @@ func getKafkaConsumerGroup(logger ulogger.Logger, url *url.URL, consumerGroupID 
 	autoCommit bool, kafkaSettings *settings.KafkaSettings) (*kafka.KafkaConsumerGroup, error) {
 	consumer, err := kafka.NewKafkaConsumerGroupFromURL(logger, url, consumerGroupID, autoCommit, kafkaSettings)
 	if err != nil {
-		return nil, errors.NewConfigurationError("missing Kafka URL for "+url.String(), err)
+		return nil, errors.NewConfigurationError("missing Kafka URL for "+urlutil.Redact(url), err)
 	}
 
 	return consumer, nil

@@ -312,12 +312,12 @@ func TestDrainQueueAfterBlock_MatchesSequentialDrain(t *testing.T) {
 		}
 	}
 
-	transactionMap := NewSplitSwissMap(4, len(inBlock))
+	transactionMap := NewSortedHashSet(len(inBlock))
 	for _, h := range inBlock {
 		require.NoError(t, transactionMap.Put(h))
 	}
 
-	transactionMap.Freeze()
+	require.NoError(t, transactionMap.Freeze(1))
 
 	losingMap := txmap.NewSplitSwissMap(4)
 	require.NoError(t, losingMap.Put(losing, 0))
@@ -411,9 +411,9 @@ func enqueueDrainTest(stp *SubtreeProcessor, parent chainhash.Hash, hashes ...ch
 	time.Sleep(10 * time.Millisecond)
 }
 
-func emptyBlockTxMap() *SplitSwissMap {
-	m := NewSplitSwissMap(4, 1)
-	m.Freeze()
+func emptyBlockTxMap() *SortedHashSet {
+	m := NewSortedHashSet(1)
+	_ = m.Freeze(1)
 
 	return m
 }
@@ -430,9 +430,9 @@ func TestForEachDrainChunk_DequeuesAsItGoes(t *testing.T) {
 
 	var seen []int64
 
-	require.NoError(t, stp.forEachDrainChunk(2, func(batches []*TxBatch) error {
+	require.NoError(t, stp.forEachDrainChunk(2, func(batches []*TxBatch) (int, error) {
 		seen = append(seen, stp.queue.length())
-		return nil
+		return 0, nil
 	}))
 
 	require.Equal(t, []int64{4, 2, 0}, seen, "each chunk must leave the rest in the queue")
@@ -572,12 +572,33 @@ func TestHandleMoveForwardRequest_ServesLeftoverSnapshotDuringDrain(t *testing.T
 	}()
 	t.Cleanup(func() { close(newSubtreeChan) })
 
+	// Hold the drain as it starts. The snapshot is stored over newSubtreeChan, the same channel
+	// the drain announces its subtrees on, so without the hold, whichever got to the reader first
+	// decided whether the snapshot request waited behind the gate for the whole drain.
+	drainHeld, releaseDrain := make(chan struct{}), make(chan struct{})
+
+	var releaseOnce, gateOnce sync.Once
+
+	drainStartHook = func() {
+		close(drainHeld)
+		<-releaseDrain
+	}
+
 	errChan := make(chan error, 1)
 
 	var handlerDone sync.WaitGroup
 
 	handlerDone.Go(func() {
 		stp.handleMoveForwardRequest(context.Background(), moveBlockRequest{block: block, errChan: errChan})
+	})
+
+	// On any exit, failed assertions included, let the drain finish before the channel closes.
+	t.Cleanup(func() {
+		releaseOnce.Do(func() { close(releaseDrain) })
+		gateOnce.Do(func() { close(gate) })
+		handlerDone.Wait()
+
+		drainStartHook = nil
 	})
 
 	select {
@@ -589,6 +610,12 @@ func TestHandleMoveForwardRequest_ServesLeftoverSnapshotDuringDrain(t *testing.T
 
 	require.Zero(t, incompleteStored.Load(), "the snapshot must not be stored until a caller asks for it")
 
+	select {
+	case <-drainHeld:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the deferred drain did not start")
+	}
+
 	start := time.Now()
 	data := stp.GetIncompleteSubtreeMiningData(context.Background())
 	require.Less(t, time.Since(start), time.Second, "the snapshot request waited behind the deferred drain")
@@ -599,10 +626,15 @@ func TestHandleMoveForwardRequest_ServesLeftoverSnapshotDuringDrain(t *testing.T
 	require.True(t, data.Subtrees[0].HasNode(leftover.Hash), "the snapshot must hold the leftover tx")
 	require.Equal(t, block.Header.Hash(), data.PreviousHeader.Hash(), "the snapshot must build on the new block")
 
+	require.True(t, stp.DrainingAfterBlock(), "precondition: the drain is still held for the second request")
 	require.Same(t, data, stp.GetIncompleteSubtreeMiningData(context.Background()), "later callers get the same snapshot")
 	require.Equal(t, int32(1), incompleteStored.Load(), "the snapshot is stored once, when first asked for")
 
-	close(gate)
+	// Only now let the drain go: the gate does not hold it (its one complete subtree's store is
+	// acknowledged asynchronously), so released earlier the handler could finish, clear the
+	// snapshot, and leave the second request above to time out with nil.
+	releaseOnce.Do(func() { close(releaseDrain) })
+	gateOnce.Do(func() { close(gate) })
 	handlerDone.Wait()
 }
 

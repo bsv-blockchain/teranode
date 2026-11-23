@@ -12,6 +12,7 @@
     - [Additional Kafka Topics](#additional-kafka-topics)
 3. [Reliability and Recoverability](#3-reliability-and-recoverability)
     - [Consumer Resilience](#consumer-resilience)
+    - [Delivery Guarantees](#delivery-guarantees)
 4. [Configuration](#4-configuration)
     - [TLS and Authentication](#tls-and-authentication)
     - [Trust Model and Network Isolation](#trust-model-and-network-isolation)
@@ -59,14 +60,14 @@ The table below enumerates every Kafka topic actually wired into Teranode's Go c
 | `subtrees` (`KAFKA_SUBTREES` → `subtrees`) | P2P service | Subtree Validation service (`subtreevalidation.<client>`) | Subtree hash, DataHub base URL, originating peer ID | 1,800,000 ms |
 | `txmeta` (`KAFKA_TXMETA` → `txmeta`) | Validator service | Subtree Validation service (`subtreevalidation.<client>.<random>`) **and** Legacy P2P service (`txmeta.legacy.<client>`, replay disabled) | Raw-byte batch of up to `validator_txmeta_kafka_batchSize` entries (default 1024), each `[tx hash][ADD/DELETE action][content length][tx meta bytes]`. Two layouts selected by `validator_txmeta_wireFormat`: v1 (default, one record per batch) and v2 (0xFF/0x02 header, per-entry xxhash prefix, one record per partition with the partition set explicitly). Not a protobuf message — `KafkaTxMetaTopicMessage` in the `.proto` is generated but unused by any producer or consumer | 60,000 ms |
 | `validatortxs` (`KAFKA_VALIDATORTXS` → `validatortxs`) | Propagation service | Validator service (`validator.<client>`) | New transaction (raw/extended tx bytes) | 60,000 ms (only when `kafka_validatortxsConfig` is set — empty by default, non-empty in the `.operator` context; otherwise Propagation invokes the Validator directly in-process — a local validator, or a gRPC client, depending on configuration) |
-| `tx-policy-rejected` (`KAFKA_TX_POLICY_REJECTED` → `tx-policy-rejected`) | Validator service | Subtree Validation service (`subtreevalidation.<client>.<random>`) | Full raw transaction bytes for txs that are consensus-valid but fail local mining policy (e.g. zero-fee) — cached but not "blessed", still fully validated on use | Not set by default (`kafka_txPolicyRejectedConfig` has no default URL, so the topic is disabled unless explicitly configured); recommended 10-30 min when enabled |
+| `tx-policy-rejected` (`KAFKA_TX_POLICY_REJECTED` → `tx-policy-rejected`) | Validator service **and** Subtree Validation service | Subtree Validation service (`subtreevalidation.<client>.<random>`) | Full raw transaction bytes for txs that fail local mining policy (e.g. zero-fee), usually but not always consensus-valid, txs the validator rejected as conflicting (`conflicting` set), and txs subtree validation kept aside from a peer subtree after context-free checks only (`keptAside` set) — cached but not "blessed", still fully validated on use | Not set by default (`kafka_txPolicyRejectedConfig` has no default URL, so the topic is disabled unless explicitly configured); recommended 10-30 min when enabled |
 | `unittest` (`KAFKA_UNITTEST` → `unittest`) | Test code only | Test code only | Arbitrary test payloads | 600,000 ms — **not used in production** |
 
 Notes on the table:
 
 - The `blocks-final` topic is **not** consumed via the `getKafkaBlocksFinalConsumerGroup` helper in `daemon/daemon_kafka.go` — that function exists but is commented out/unused. Its only real Kafka consumer is the Legacy P2P service. The Block Persister does **not** consume this topic either — it polls the Blockchain service over gRPC (`GetBlocksNotPersisted`) on a `blockpersister_persistSleep` interval (default 10s); see the Blockchain section below. Block Assembly gets finalized-block notifications via a direct gRPC subscription (`blockchainClient.Subscribe`) to the Blockchain service, not Kafka.
 - `invalid-blocks` and `invalid-subtrees` are both produced and consumed for peer reputation/banning purposes in P2P — Block Validation and Subtree Validation are the producers, P2P is the sole consumer of each.
-- `tx-policy-rejected` was previously undocumented; it is real and wired in `daemon/daemon_kafka.go` (`getKafkaTxPolicyRejectedAsyncProducer` / `getKafkaTxPolicyRejectedConsumerGroup`), `services/validator/Validator.go` (producer), and `services/subtreevalidation/Server.go` (consumer).
+- `tx-policy-rejected` was previously undocumented; it is real and wired in `daemon/daemon_kafka.go` (`getKafkaTxPolicyRejectedAsyncProducer` / `getKafkaTxPolicyRejectedConsumerGroup`), `services/validator/Validator.go` (producer), and `services/subtreevalidation/Server.go` (consumer, and producer of kept-aside txs). With topic ACLs, Subtree Validation needs write access to it too.
 
 ### Propagation Service
 
@@ -134,9 +135,9 @@ Beyond the main processing topics described above, Teranode uses additional Kafk
 
 #### Policy-Rejected Transactions
 
-- **kafka_tx_policy_rejected** (`KAFKA_TX_POLICY_REJECTED` in settings, topic `tx-policy-rejected`): Distributes raw bytes for transactions that are consensus-valid but rejected by local mining policy (e.g. zero-fee)
-    - **Purpose**: Lets Subtree Validation resolve a missing transaction referenced by a subtree from a policy-rejected cache instead of re-fetching it from the originating peer; cached transactions still undergo full validation before use
-    - **Producer**: Validator service
+- **kafka_tx_policy_rejected** (`KAFKA_TX_POLICY_REJECTED` in settings, topic `tx-policy-rejected`): Distributes raw bytes for transactions rejected by local mining policy (e.g. zero-fee), usually but not always consensus-valid, rejected as conflicting, or kept aside from a peer subtree
+    - **Purpose**: Lets Subtree Validation resolve a missing transaction referenced by a subtree from a policy-rejected cache instead of re-fetching it from the originating peer, and keep a conflicting transaction and its descendants aside instead of writing them to the UTXO store; cached transactions still undergo full validation before use
+    - **Producers**: Validator service (policy and conflicting rejections) and Subtree Validation service (kept-aside transactions, flagged `keptAside`; these passed context-free checks only and go to a separate cache)
     - **Consumer**: Subtree Validation service (consumer group `subtreevalidation.<client>.<random>`)
     - **Disabled by default**: `kafka_txPolicyRejectedConfig` has no default URL in `settings.conf` and must be explicitly configured to activate this topic
     - **Also gated by**: `subtreevalidation_txPolicyRejectedCacheEnabled` (default `true`) on the consumer — the consumer only starts when both the Kafka client and the cache are non-nil; on the producer side, `publishPolicyRejectedTx` stays silent while the FSM is `CATCHINGBLOCKS`, skips transactions above `validator_kafka_maxMessageBytes`, and drops the message (non-blocking) rather than stalling validation when its producer buffer is full — all of which fall back to the ordinary HTTP fetch path on a cache miss
@@ -175,6 +176,49 @@ Teranode handles offset out of range errors automatically:
 - **Detection**: franz-go detects offset out of range internally
 - **Recovery**: The `offsetReset` configuration resets to the configured offset (typically "latest")
 - **No Data Loss**: For critical topics, longer retention periods prevent offset expiration
+
+### Delivery Guarantees
+
+Kafka in Teranode gives **at-least-once delivery for each record that a handler processes without error**, ordered within a partition. It does **not** give exactly-once delivery, and it does **not** give gap-free delivery. Every consumer must tolerate duplicate records and missing records.
+
+#### Ordering
+
+- Within one partition, the handler receives records in offset order. The consumer marks and commits them in the same order.
+- Across partitions there is no ordering. A topic with more than one partition can deliver records in a different order from the publish order.
+- The producer keeps one produce request in flight per broker (the franz-go default). A produce retry therefore does not reorder records within a partition.
+
+#### Duplicates
+
+A record can arrive more than once:
+
+- The consumer commits an offset only after the handler for that record returns. A crash, a kill or a consumer-group rebalance between the handler and the commit re-delivers the record.
+    - Auto-commit consumers: franz-go commits the marked records every 5 seconds.
+    - Manual-commit consumers: the consumer commits at most once a minute and at graceful shutdown. It checks the one-minute timer only after a fetch returns, and a fetch blocks while the topic is idle. On a quiet topic a crash can therefore re-deliver every record handled since the last commit, however long ago that was.
+- Idempotent producer writes are disabled (`kgo.DisableIdempotentWrite()` in `util/kafka/kafka_producer_async.go`). A produce retry after a lost broker acknowledgement can write the same record twice.
+
+#### Loss
+
+A record can be lost on the producer side:
+
+- The async producer logs a record that franz-go cannot deliver (`Failed to deliver message to topic ...`). It does not retry the record after franz-go gives up.
+- A crash or kill loses every record that is still in the publish channel, the batch buffer or the franz-go buffer. No log line records the loss.
+- A slow graceful shutdown can lose the same records. `StopProducerCtx` returns when its context expires, and the stop is then unfinished.
+- `TryPublish` drops the record when the publish channel is full. The P2P service uses it for `blocks` and `subtrees`. The Validator and Subtree Validation use it for `tx-policy-rejected`. Block Assembly uses it for the txmeta DELETE hints on `txmeta`; the counter `teranode_subtreeprocessor_txmeta_delete_dropped_total` records those drops.
+- `Publish` and `TryPublish` drop the record when the producer is shutting down.
+
+A record can be lost on the consumer side:
+
+- No production consumer uses `WithRetryAndStop`. Most consumers use `WithLogErrorAndMoveOn()`. The P2P `invalid-blocks` consumer uses `WithRetryAndMoveOn(2, 2, time.Second)`. The legacy `netsync` listeners and `aerospikekafkaconnector` set no error option.
+- When a handler fails (after the retries, where configured), the consumer logs the record and skips it. A later commit moves the offset past it.
+- With no error option, a handler error abandons the rest of its fetch batch. The next batch of the partition commits past the abandoned records, so the consumer skips them too.
+- A handler panic is recovered, logged and counted in `teranode_kafka_consumer_panics_recovered_total`. The consumer commits the record and does not re-deliver it, whatever the error option.
+- A handler error during shutdown is the only failure that leaves the record uncommitted. The record is re-delivered after restart.
+- A consumer that is offline for longer than the topic retention loses the expired records (see [Offset Out of Range Handling](#offset-out-of-range-handling)). Several default retentions are 60 seconds or less (see the [Topic Reference Table](#topic-reference-table)).
+
+#### Requirements for consumers
+
+- Make each handler idempotent. Two deliveries of a record must have the same effect as one delivery.
+- Do not use Kafka as the only source of completeness. Each consumer needs a recovery path outside Kafka for a missed record. For example, Block Validation catch-up fetches the missing parents when a later block arrives, and the unmined-transaction reload in Block Assembly recovers a transaction that a skipped Validator record left half-applied.
 
 ## 4. Configuration
 
@@ -377,7 +421,7 @@ requirements, should not rely on network isolation alone.** On top of the Networ
     - Monitor consumer lag to detect processing issues
 
 3. **Error Handling**
-    - Services have different retry policies based on criticality
+    - Only the P2P `invalid-blocks` consumer uses the consumer-level retry option; a record that still fails after the handler's own handling is logged and skipped — see [Delivery Guarantees](#delivery-guarantees)
     - Block Validation uses manual commits (`autoCommit=false`); Subtree Validation's `subtrees` consumer uses auto-commit (`autoCommit=true`) — see [Auto-Commit Behavior by Service Criticality](#auto-commit-behavior-by-service-criticality)
 
 ### Monitoring
@@ -496,32 +540,25 @@ kafka://localhost:9092/blocks?offsetReset=earliest
 
 ### Auto-Commit Behavior by Service Criticality
 
-Auto-commit in Kafka is a consumer configuration that determines when and how message offsets are committed (marked as processed) back to Kafka. When auto-commit is enabled, Kafka automatically commits message offsets at regular intervals (default is every 5 seconds). When auto-commit is disabled, it is the responsibility of the application to manually commit offsets after successfully processing messages.
+The `autoCommit` flag selects how the consumer commits offsets. It does not change the delivery guarantee. In both modes the consumer commits a record only after its handler returns, so both modes give at-least-once delivery for records that a handler processes without error. Neither mode gives exactly-once delivery. See [Delivery Guarantees](#delivery-guarantees).
 
-Kafka consumer auto-commit behavior varies by service based on processing criticality:
+- `autoCommit=true` (`kgo.AutoCommitMarks()`): the consumer marks each record after its handler returns. franz-go commits the marked offsets every 5 seconds.
+- `autoCommit=false` (`kgo.DisableAutoCommit()`): the consumer collects the processed records and commits them at most once a minute, after the next fetch returns, and at graceful shutdown. The re-delivery window after a crash is therefore longer, and on a quiet topic it has no fixed bound.
 
-#### Auto-Commit Enabled Services
+| Consumer | Topic | `autoCommit` | Error option |
+|---|---|---|---|
+| Block Validation | `blocks` | `false` | `WithLogErrorAndMoveOn()` |
+| Validator | `validatortxs` | `true` | `WithLogErrorAndMoveOn()` |
+| Subtree Validation | `subtrees` | `true` | `WithLogErrorAndMoveOn()` |
+| Subtree Validation | `txmeta` | `true` | `WithLogErrorAndMoveOn()` |
+| Subtree Validation | `tx-policy-rejected` | `true` | `WithLogErrorAndMoveOn()` |
+| P2P | `rejectedtx` | `true` | `WithLogErrorAndMoveOn()` |
+| P2P | `invalid-blocks` | `true` | `WithRetryAndMoveOn(2, 2, time.Second)` |
+| P2P | `invalid-subtrees` | `true` | `WithLogErrorAndMoveOn()` |
+| Legacy P2P (`netsync`) | `legacy-inv`, `blocks-final`, `txmeta` | `true` | none |
+| `aerospikekafkaconnector` | configured topic | `false` | none |
 
-These services can tolerate potential message loss for performance:
-
-- **TxMeta Cache (Subtree Validation)**: `autoCommit=true`
-    - Rationale: Metadata can be regenerated if lost
-    - Performance priority over strict delivery guarantees
-
-- **Rejected Transactions (P2P)**: `autoCommit=true`
-    - Rationale: Rejection notifications are not critical for consistency
-    - Network efficiency prioritized
-
-- **Subtree Notifications (Subtree Validation)**: `autoCommit=true` (`getKafkaSubtreesConsumerGroup`, `daemon/daemon_kafka.go`)
-    - Rationale: reprocessing a redelivered subtree announcement is harmless — the handler treats an already-validated/already-stored subtree as a benign no-op, so strict offset tracking isn't required for correctness
-
-#### Auto-Commit Disabled Services
-
-These services require exactly-once processing guarantees:
-
-- **Block Validation**: `autoCommit=false`
-    - Rationale: Block processing affects consensus
-    - Manual commit prevents duplicate processing
+Every handler must be idempotent. A redelivered `subtrees` record is an example of a safe duplicate: the handler treats a subtree that is already validated or already stored as a no-op.
 
 Note: the Block Persister has no Kafka consumer at all — it polls the Blockchain service over gRPC (see §2 "Blockchain"), so auto-commit does not apply to it.
 
@@ -535,7 +572,7 @@ Note: the Block Persister has no Kafka consumer at all — it polls the Blockcha
 
 **There is no `consumer_ratio` parameter.** It appears in older documentation and example URLs but is not read anywhere in the code — no `consumer_ratio`, `ConsumerRatio` or `consumerRatio` identifier exists, and it is not picked up by the generic URL-parameter helpers (`util.GetQueryParam*`) that parse every recognised Kafka URL parameter. Unknown query parameters are silently ignored, so leaving it in a URL is inert rather than harmful — but it does not scale consumers.
 
-Likewise, the service-specific `*_kafkaWorkers` settings (`validator_kafkaWorkers`, `blockvalidation_kafkaWorkers`, `block_kafkaWorkers`) are loaded into the settings structs but are not read by any consumer code path. They do not currently affect consumer concurrency either.
+Likewise, there are no `*_kafkaWorkers` settings (`validator_kafkaWorkers`, `blockvalidation_kafkaWorkers`, `block_kafkaWorkers`): they were loaded into the settings structs but never read by any consumer code path, and have been removed. A leftover key in `settings_local.conf` is silently ignored.
 
 ### Service-Specific Performance Settings
 
@@ -548,9 +585,7 @@ Likewise, the service-specific `*_kafkaWorkers` settings (`validator_kafkaWorker
 
 #### Validator Service Settings
 
-- **`validator_kafkaWorkers`**: declared but inert
-    - **Status**: The setting is defined and loaded (`settings/validator_settings.go`, `settings/settings.go`) but no code reads it, so changing it has no effect. The same applies to `blockvalidation_kafkaWorkers` and `block_kafkaWorkers`.
-    - **Use instead**: raise the topic's `partitions` and/or run more service instances in the same consumer group — see [Kafka Consumer Concurrency](#kafka-consumer-concurrency)
+The validator has no Kafka worker-count setting (`validator_kafkaWorkers` was removed). To raise consumer throughput, raise the topic's `partitions` and/or run more service instances in the same consumer group - see [Kafka Consumer Concurrency](#kafka-consumer-concurrency).
 
 ### Configuration Examples by Service
 

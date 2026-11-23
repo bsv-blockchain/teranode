@@ -48,6 +48,10 @@ var (
 	prometheusCatchupActive         prometheus.Gauge
 	prometheusCatchupPeerHealthGate *prometheus.CounterVec
 
+	// prometheusRecoveredPanics counts the panics that the four BV-STARTUP-007 recovers caught,
+	// by path. The block hash and the stack are in the PANIC log line.
+	prometheusRecoveredPanics *prometheus.CounterVec
+
 	// catch-up subtree-data prefetch budget metrics. Aggregate counters with no block-hash
 	// label, for the cardinality reason recorded below; the block hash is in the log line
 	// each of these accompanies.
@@ -69,9 +73,6 @@ var (
 	prometheusForkCreated           *prometheus.CounterVec
 	prometheusForkLifetime          prometheus.Histogram
 	prometheusForkDepth             prometheus.Histogram
-	prometheusForkResolved          *prometheus.CounterVec
-	prometheusForkResolutionDepth   prometheus.Histogram
-	prometheusOrphanedForks         prometheus.Counter
 	prometheusProcessingBlocksStuck prometheus.Gauge
 	prometheusForkAverageDepth      prometheus.Gauge
 	prometheusForkLongestDepth      prometheus.Gauge
@@ -89,10 +90,21 @@ var (
 	prometheusBlockValidationSetMinedDrops           prometheus.Counter
 	prometheusBlockValidationSetMinedEnqueueOverflow prometheus.Counter
 
+	// unusable-subtree counter: incremented when the invalid-block revert skips a
+	// subtree because every stored copy is corrupt. That subtree's transactions keep
+	// the invalid block's tag, so a non-zero value needs manual repair.
+	prometheusBlockValidationRevertSubtreeCorrupt prometheus.Counter
+
 	// outpoint-only fast-path counter: incremented once per block when the
 	// below-checkpoint outpoint-only path is active (setting on, height ≤ highest
 	// checkpoint). A rising rate indicates the fast path is in use during IBD.
 	prometheusBlockValidationOutpointOnlyBlocks prometheus.Counter
+
+	// quick-validation commit tail: per-step timings for commitBlock, the shared
+	// final commit for the quick-validation path.
+	prometheusBlockValidationQuickCommitAddBlock    prometheus.Histogram
+	prometheusBlockValidationQuickCommitUnlock      prometheus.Histogram
+	prometheusBlockValidationQuickCommitBlockExists prometheus.Histogram
 )
 
 var (
@@ -250,6 +262,15 @@ func _initPrometheusMetrics() {
 		},
 	)
 
+	prometheusBlockValidationRevertSubtreeCorrupt = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "blockvalidation",
+			Name:      "revert_subtree_corrupt_total",
+			Help:      "Number of times the invalid-block revert skipped a subtree because no stored copy was usable and at least one was corrupt. A subtree is counted again on each revert attempt that reaches it. Its transactions keep the invalid block's tag; non-zero values require manual intervention, and the block and subtree hashes are in the manual_intervention_required ERROR log line.",
+		},
+	)
+
 	prometheusBlockValidationOutpointOnlyBlocks = promauto.NewCounter(
 		prometheus.CounterOpts{
 			Namespace: "teranode",
@@ -265,6 +286,36 @@ func _initPrometheusMetrics() {
 			Subsystem: "blockvalidation",
 			Name:      "setmined_enqueue_overflow_total",
 			Help:      "Total number of setMined enqueues parked in the overflow set because setMinedChan was full. A sustained rise means producers are outpacing the serial setMined worker; the overflow set is deduped by block hash, so memory stays bounded by the number of distinct blocks.",
+		},
+	)
+
+	prometheusBlockValidationQuickCommitAddBlock = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "teranode",
+			Subsystem: "blockvalidation",
+			Name:      "quick_commit_add_block_seconds",
+			Help:      "AddBlock duration in the quick-validation commit tail",
+			Buckets:   util.MetricsBucketsSeconds,
+		},
+	)
+
+	prometheusBlockValidationQuickCommitUnlock = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "teranode",
+			Subsystem: "blockvalidation",
+			Name:      "quick_commit_unlock_seconds",
+			Help:      "Unlock pass duration in the quick-validation commit tail",
+			Buckets:   util.MetricsBucketsSeconds,
+		},
+	)
+
+	prometheusBlockValidationQuickCommitBlockExists = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "teranode",
+			Subsystem: "blockvalidation",
+			Name:      "quick_commit_block_exists_seconds",
+			Help:      "SetBlockExists duration in the quick-validation commit tail",
+			Buckets:   util.MetricsBucketsSeconds,
 		},
 	)
 
@@ -356,6 +407,21 @@ func _initPrometheusMetrics() {
 		[]string{"reason"},
 	)
 
+	prometheusRecoveredPanics = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "blockvalidation",
+			Name:      "recovered_panics_total",
+			Help:      "Total number of panics recovered in block validation, by path: worker (priority-queue block worker), catchup (catchup consumer), kafka (Kafka block message handler), block_found (blockFoundCh worker), or one of three paths for goroutines that those start: catchup_fetch (catchup fetch and validate pipeline), block_validation (parallel work inside one block validation) or service (service start and startup sweeps). Each one is a bug in this node. The node continues to run, and the block hash and stack are in the PANIC log line.",
+		},
+		[]string{"path"},
+	)
+
+	for _, path := range []string{recoveredPanicPathWorker, recoveredPanicPathCatchup, recoveredPanicPathKafka, recoveredPanicPathBlockFound,
+		recoveredPanicPathCatchupFetch, recoveredPanicPathBlockValidation, recoveredPanicPathService} {
+		prometheusRecoveredPanics.WithLabelValues(path)
+	}
+
 	// Initialize priority queue metrics
 	prometheusBlockPriorityQueueSize = promauto.NewGaugeVec(
 		prometheus.GaugeOpts{
@@ -443,35 +509,6 @@ func _initPrometheusMetrics() {
 			Name:      "fork_depth_blocks",
 			Help:      "Depth of forks in blocks",
 			Buckets:   prometheus.LinearBuckets(1, 1, 20),
-		},
-	)
-
-	prometheusForkResolved = promauto.NewCounterVec(
-		prometheus.CounterOpts{
-			Namespace: "teranode",
-			Subsystem: "blockvalidation",
-			Name:      "fork_resolved_total",
-			Help:      "Total number of forks resolved",
-		},
-		[]string{"result"},
-	)
-
-	prometheusForkResolutionDepth = promauto.NewHistogram(
-		prometheus.HistogramOpts{
-			Namespace: "teranode",
-			Subsystem: "blockvalidation",
-			Name:      "fork_resolution_depth_blocks",
-			Help:      "Depth of forks when resolved",
-			Buckets:   prometheus.LinearBuckets(1, 1, 20),
-		},
-	)
-
-	prometheusOrphanedForks = promauto.NewCounter(
-		prometheus.CounterOpts{
-			Namespace: "teranode",
-			Subsystem: "blockvalidation",
-			Name:      "fork_orphaned_total",
-			Help:      "Total number of forks marked as orphaned",
 		},
 	)
 

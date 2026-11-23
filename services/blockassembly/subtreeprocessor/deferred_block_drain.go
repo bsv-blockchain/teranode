@@ -9,6 +9,7 @@ import (
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
 	txmap "github.com/bsv-blockchain/go-tx-map"
 	"github.com/bsv-blockchain/teranode/model"
+	"github.com/bsv-blockchain/teranode/stores/utxo"
 )
 
 // deferredBlockDrain is the end of a moveForwardBlock that the caller runs
@@ -26,9 +27,13 @@ import (
 // holds.
 type deferredBlockDrain struct {
 	drainQueue        bool // false on the own-block path, which never drains
-	transactionMap    *SplitSwissMap
+	transactionMap    *SortedHashSet
 	losingTxHashesMap txmap.TxMap
 	conflictingHashes map[chainhash.Hash]struct{}
+	// ackConflictIntents is set when the block has conflicting nodes, so ProcessConflicting ran
+	// for it and left a forward intent to acknowledge. It does not depend on how many
+	// transactions the operation demoted, which can be none.
+	ackConflictIntents bool
 }
 
 // runDeferredBlockDrain runs the end of a moveForwardBlock that
@@ -38,6 +43,10 @@ type deferredBlockDrain struct {
 // reloads the unmined transactions from the UTXO store. Storage errors seen by
 // the flush keep the disk tx map's own reset path.
 func (stp *SubtreeProcessor) runDeferredBlockDrain(ctx context.Context, block *model.Block, drain *deferredBlockDrain) {
+	if drainStartHook != nil {
+		drainStartHook()
+	}
+
 	if drain.drainQueue {
 		if err := stp.runHandlerWithRecover("deferredBlockDrain", func() error {
 			return stp.drainQueueAfterBlock(ctx, drain)
@@ -67,6 +76,13 @@ func (stp *SubtreeProcessor) runDeferredBlockDrain(ctx context.Context, block *m
 	// The clear is moveForwardBlock's commit point, so a storage error from it
 	// keeps the label it had when the clear ran inside moveForwardBlock.
 	stp.drainAndLogDiskTxMapErr("moveForwardBlock_commit")
+	if !stp.drainResetRequested.Load() && drain.ackConflictIntents {
+		// The block is committed. A failed acknowledgement is only reported, as in moveForwardBlock:
+		// the finished intent stays pending, and the next startup replays and acknowledges it.
+		if err := utxo.CompleteConflictIntentsForBlock(ctx, stp.utxoStore, *block.Hash()); err != nil {
+			stp.logger.Errorf("[SubtreeProcessor][%s] conflict WAL acknowledgement failed after commit; the intent stays pending until startup recovery: %v", block.String(), err)
+		}
+	}
 }
 
 // drainQueueAfterBlock drains the queue as dequeueDuringBlockMovement does -
@@ -84,10 +100,18 @@ func (stp *SubtreeProcessor) drainQueueAfterBlock(ctx context.Context, drain *de
 		return stp.dequeueDuringBlockMovement(drain.transactionMap, drain.losingTxHashesMap, drain.conflictingHashes, false)
 	}
 
-	return stp.forEachDrainChunk(drainChunkItems, func(batches []*TxBatch) error {
+	return stp.forEachDrainChunk(drainChunkItems, func(batches []*TxBatch) (int, error) {
 		return stp.addDrainedBatches(ctx, batches, drain)
 	})
 }
+
+// drainStartHook, when set, runs as the deferred drain starts. Nil in production; tests set it
+// to hold the drain where they need it, which ordering on newSubtreeChan cannot do reliably when
+// a test reads that channel with one gated goroutine. Production is not order-sensitive here:
+// runNewSubtreeListener (services/blockassembly/Server.go) hands each request to one of the
+// parallel storage workers and answers its ErrChan from there, so a snapshot store waits only
+// for its own write.
+var drainStartHook func()
 
 // drainChunkItems is about how many txs drainQueueAfterBlock takes off the
 // queue at a time: enough to keep every core busy, few enough that the queue
@@ -95,8 +119,8 @@ func (stp *SubtreeProcessor) drainQueueAfterBlock(ctx context.Context, drain *de
 var drainChunkItems = 1 << 20 // a var so tests can make the drain cross chunks
 
 // addDrainedBatches adds one chunk of drained batches, in parallel unless a
-// tx in it has no inpoints.
-func (stp *SubtreeProcessor) addDrainedBatches(ctx context.Context, batches []*TxBatch, drain *deferredBlockDrain) error {
+// tx in it has no inpoints. It reports how many it placed in subtrees.
+func (stp *SubtreeProcessor) addDrainedBatches(ctx context.Context, batches []*TxBatch, drain *deferredBlockDrain) (int, error) {
 	total := 0
 	for _, batch := range batches {
 		total += len(batch.nodes)
@@ -132,13 +156,22 @@ func (stp *SubtreeProcessor) addDrainedBatches(ctx context.Context, batches []*T
 
 	prometheusSubtreeProcessorDequeuedTxs.Add(float64(total))
 
-	return stp.parallelBuildRemainderSubtrees(ctx, kept, false)
+	if err := stp.parallelBuildRemainderSubtrees(ctx, kept, false); err != nil {
+		return 0, err
+	}
+
+	return len(kept), nil
 }
 
 // addDrainedNodesSequentially is dequeueDuringBlockMovement's per-tx loop
-// for nodes already taken from the queue, without conflicting hashes.
+// for nodes already taken from the queue, without conflicting hashes. It
+// reports how many it placed in subtrees: a duplicate that placeNode skipped
+// is not counted, and a node that placeNode put in a subtree is counted even
+// when completing that subtree failed.
 func (stp *SubtreeProcessor) addDrainedNodesSequentially(nodes []subtreepkg.Node, inpoints []*subtreepkg.TxInpoints,
-	transactionMap *SplitSwissMap, losingTxHashesMap txmap.TxMap) error {
+	transactionMap *SortedHashSet, losingTxHashesMap txmap.TxMap) (int, error) {
+	placed := 0
+
 	for i, node := range nodes {
 		if transactionMap != nil && transactionMap.Exists(node.Hash) {
 			continue
@@ -148,19 +181,24 @@ func (stp *SubtreeProcessor) addDrainedNodesSequentially(nodes []subtreepkg.Node
 			continue
 		}
 
-		if err := stp.addNode(node, inpoints[i], false); err != nil {
+		wasPlaced, err := stp.placeNode(node, inpoints[i], false)
+		if err != nil {
 			stp.logger.Errorf("[SubtreeProcessor] error adding node %s during sequential remainder processing: %v", node.Hash.String(), err)
+		}
+
+		if wasPlaced {
+			placed++
 		}
 	}
 
 	prometheusSubtreeProcessorDequeuedTxs.Add(float64(len(nodes)))
 
-	return nil
+	return placed, nil
 }
 
 // filterDrainedNodes reports, per node, whether it is neither in the block
 // nor on the losing side of a conflict. Both maps are read-only here.
-func filterDrainedNodes(nodes []subtreepkg.Node, transactionMap *SplitSwissMap, losingTxHashesMap txmap.TxMap) []bool {
+func filterDrainedNodes(nodes []subtreepkg.Node, transactionMap *SortedHashSet, losingTxHashesMap txmap.TxMap) []bool {
 	keep := make([]bool, len(nodes))
 
 	forEachChunk(len(nodes), func(start, end int) {

@@ -1,0 +1,66 @@
+name: Stale PRs
+
+# Labels and closes pull requests with no human activity. The rules live in
+# .github/scripts/stale-prs.js and are documented in CONTRIBUTING.md
+# ("Inactive pull requests").
+#
+# Writes (labels, comments, closes) happen only when the repository variable
+# STALE_PRS_ENABLED is 'true' and the run is not a dry run. With the variable
+# unset, every run is a dry run that only writes the job summary.
+
+on:
+  schedule:
+    - cron: '0 6 * * *'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Report only: no labels, comments or closes'
+        type: boolean
+        default: true
+  # Path-filtered self-check, as in fuzz.yaml: a change to this job runs its
+  # tests and a dry run in the PR that makes it. Always a dry run.
+  pull_request:
+    paths:
+      - '.github/workflows/stale_prs.yaml'
+      - '.github/scripts/stale-prs.js'
+      - '.github/scripts/stale-prs.test.js'
+
+concurrency:
+  # The schedule and workflow_dispatch share one group and never cancel each
+  # other, so two runs never act on the same PRs at once. PR self-checks get
+  # their own group per ref.
+  group: ${{ github.event_name == 'pull_request' && format('stale-prs-{0}', github.ref) || 'stale-prs' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  # checks: read for the head commit's check suites, which date the last push.
+  checks: read
+  contents: read
+  pull-requests: write
+  issues: write
+
+jobs:
+  stale-prs:
+    name: stale-prs
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+        with:
+          persist-credentials: false
+
+      - name: Test decision logic
+        if: github.event_name == 'pull_request'
+        run: node --test .github/scripts/stale-prs.test.js
+
+      - name: Label and close inactive PRs
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        env:
+          # inputs.dry_run is null on schedule, so a scheduled run is live
+          # once the variable is set.
+          STALE_PRS_LIVE: ${{ vars.STALE_PRS_ENABLED == 'true' && github.event_name != 'pull_request' && inputs.dry_run != true }}
+        with:
+          script: |
+            const stale = require('./.github/scripts/stale-prs.js');
+            await stale.run({ github, context, core, live: process.env.STALE_PRS_LIVE === 'true' });

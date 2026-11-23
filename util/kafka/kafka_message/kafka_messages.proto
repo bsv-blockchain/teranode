@@ -53,6 +53,8 @@ message KafkaTxPolicyRejectedTopicMessage {
   bytes txHash = 1;    // 32-byte raw tx hash
   bytes rawTx = 2;     // Full serialized transaction bytes
   string reason = 3;   // Policy rejection reason
+  bool conflicting = 4; // Rejected because an input is already spent by a different tx (not a policy rejection)
+  bool keptAside = 5;   // Kept aside by subtree validation as a descendant of a conflicting tx; only context-free checked
 }
 
 enum KafkaTxMetaActionType {

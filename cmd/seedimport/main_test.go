@@ -1,0 +1,80 @@
+package main
+
+import (
+	"context"
+	"net/url"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/bsv-blockchain/teranode/settings"
+	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util/test"
+	"github.com/stretchr/testify/require"
+)
+
+func TestRunRefusesLaneEnabledImportBeforeOpeningStores(t *testing.T) {
+	s := test.CreateBaseTestSettings(t)
+	s.UtxoStore.LaneMigration = settings.LaneMigrationShadow
+	s.UtxoStore.UtxoStore = &url.URL{Scheme: "sqlitememory"}
+	s.BlockChain.StoreURL = &url.URL{Scheme: "sqlitememory"}
+	seedPath := filepath.Join(t.TempDir(), "seed")
+	seedURL := (&url.URL{Scheme: "file", Path: seedPath}).String()
+	err := run(context.Background(), ulogger.TestLogger{}, s,
+		"0000000000000000000000000000000000000000000000000000000000000001",
+		seedURL, "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798")
+	require.ErrorIs(t, err, errors.ErrConfiguration)
+	require.NoDirExists(t, seedPath)
+}
+
+// TestRunRejectsUnparseableSeedURLWithoutEchoingIt covers the credential half
+// of an invalid --seed-url. The flag can carry userinfo, and url.Parse embeds
+// the string it was given verbatim in its error, so neither the value nor that
+// error may reach the message.
+func TestRunRejectsUnparseableSeedURLWithoutEchoingIt(t *testing.T) {
+	const password = "canary-seed-url-password"
+
+	// A space in the host is what makes url.Parse refuse it.
+	seedURL := "http://teranode:" + password + "@blob server:8080/seed"
+
+	// The secp256k1 generator point, compressed. Any valid pubkey will do: it
+	// only has to get run() past the trusted-key check and as far as the URL.
+	const authorityPubKey = "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"
+
+	err := run(context.Background(), ulogger.TestLogger{}, &settings.Settings{},
+		"0000000000000000000000000000000000000000000000000000000000000001", seedURL, authorityPubKey)
+	require.Error(t, err)
+
+	require.NotContains(t, err.Error(), password, "the seed URL password reached the error message")
+	require.NotContains(t, err.Error(), "teranode:", "the seed URL userinfo reached the error message")
+
+	// The operator still learns why it was rejected. Asserting only the prefix
+	// let this test pass on "invalid --seed-url: %v -> ...", where the verb
+	// survived unrendered because errors.NewConfigurationError takes a trailing
+	// error as the wrapped error and then never reaches fmt.Errorf. Pin the
+	// reason and the absence of a verb, not the prefix.
+	require.True(t, strings.Contains(err.Error(), "invalid --seed-url"),
+		"expected the parse failure to be reported, got: %v", err)
+	require.Contains(t, strings.ToLower(err.Error()), "invalid character",
+		"expected the parse failure reason to survive, got: %v", err)
+	require.NotContains(t, err.Error(), "%", "the message renders a format verb literally")
+}
+
+// TestRunRejectsSeedURLWithDelimiterInPasswordWithoutQuotingIt covers the case
+// the space-in-host canary above cannot see. A raw "/" in the password ends
+// the authority there, and url.Parse's own reason, `invalid port ":canary-seed"
+// after host`, quotes everything before it. The assertion is on that prefix,
+// because the full password is never in the message either way.
+func TestRunRejectsSeedURLWithDelimiterInPasswordWithoutQuotingIt(t *testing.T) {
+	const authorityPubKey = "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"
+
+	err := run(context.Background(), ulogger.TestLogger{}, &settings.Settings{},
+		"0000000000000000000000000000000000000000000000000000000000000001",
+		"http://teranode:canary-seed/url-password@blobserver:8080/seed", authorityPubKey)
+	require.Error(t, err)
+
+	require.NotContains(t, err.Error(), "canary-seed", "the start of the seed URL password reached the error message")
+	require.Contains(t, err.Error(), "invalid --seed-url")
+	require.Contains(t, err.Error(), "percent-encode", "expected the fixed reason, got: %v", err)
+}

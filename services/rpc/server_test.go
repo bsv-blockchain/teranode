@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -18,6 +19,7 @@ import (
 	"github.com/bsv-blockchain/teranode/services/blockchain/blockchain_api"
 	"github.com/bsv-blockchain/teranode/services/rpc/bsvjson"
 	"github.com/bsv-blockchain/teranode/settings"
+	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/util/test/mocklogger"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -1101,4 +1103,129 @@ func TestStandardCmdResult_PanicRecovery(t *testing.T) {
 	require.Error(t, err)
 	assert.Nil(t, result)
 	assert.Contains(t, err.Error(), "internal error: RPC handler panicked")
+}
+
+func TestRPCAccessPolicyCoversEveryHandler(t *testing.T) {
+	for method := range rpcHandlersBeforeInit {
+		_, ok := rpcAccessPolicy[method]
+		require.True(t, ok, "handler %q is not classified in rpcAccessPolicy", method)
+	}
+}
+
+func TestRPCLimitedExcludesAdminMethods(t *testing.T) {
+	for _, method := range []string{"freeze", "unfreeze", "reassign", "stop", "setban", "invalidateblock", "generate"} {
+		require.Equal(t, rpcAccessAdmin, rpcAccessPolicy[method], method)
+		require.NotContains(t, rpcLimited, method)
+	}
+
+	for method, access := range rpcAccessPolicy {
+		_, limited := rpcLimited[method]
+		require.Equal(t, access != rpcAccessAdmin, limited, method)
+	}
+}
+
+type utxoMutationSpy struct {
+	utxo.Store
+	freezes   atomic.Int32
+	unfreezes atomic.Int32
+	reassigns atomic.Int32
+}
+
+func (u *utxoMutationSpy) FreezeUTXOs(context.Context, []*utxo.Spend, *settings.Settings) error {
+	u.freezes.Add(1)
+	return nil
+}
+
+func (u *utxoMutationSpy) UnFreezeUTXOs(context.Context, []*utxo.Spend, *settings.Settings) error {
+	u.unfreezes.Add(1)
+	return nil
+}
+
+func (u *utxoMutationSpy) ReAssignUTXO(context.Context, *utxo.Spend, *utxo.Spend, *settings.Settings) error {
+	u.reassigns.Add(1)
+	return nil
+}
+
+type rpcReply struct {
+	Error *struct {
+		Code    int    `json:"code"`
+		Message string `json:"message"`
+	} `json:"error"`
+}
+
+func TestUTXOAlertMethodsAreAdminOnly(t *testing.T) {
+	adminAuth := "Basic " + base64.StdEncoding.EncodeToString([]byte("admin:adminpass"))
+	limitAuth := "Basic " + base64.StdEncoding.EncodeToString([]byte("limited:limitpass"))
+
+	spy := &utxoMutationSpy{}
+	s := &RPCServer{
+		logger:       mocklogger.NewTestLogger(),
+		authsha:      sha256.Sum256([]byte(adminAuth)),
+		limitauthsha: sha256.Sum256([]byte(limitAuth)),
+		utxoStore:    spy,
+		statusLines:  make(map[int]string),
+		settings: &settings.Settings{
+			RPC: settings.RPCSettings{RPCTimeout: 5 * time.Second},
+		},
+	}
+	require.NoError(t, s.Init(context.Background()))
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, isAdmin, err := s.checkAuth(r, true)
+		if err != nil {
+			jsonAuthFail(w)
+			return
+		}
+
+		s.jsonRPCRead(w, r, isAdmin)
+	}))
+	defer srv.Close()
+
+	call := func(t *testing.T, auth, body string) rpcReply {
+		req, err := http.NewRequest(http.MethodPost, srv.URL, strings.NewReader(body))
+		require.NoError(t, err)
+		req.Header.Set("Authorization", auth)
+
+		resp, err := http.DefaultClient.Do(req)
+		require.NoError(t, err)
+
+		defer resp.Body.Close()
+
+		raw, err := io.ReadAll(resp.Body)
+		require.NoError(t, err)
+
+		var reply rpcReply
+		require.NoError(t, json.Unmarshal(raw, &reply), string(raw))
+
+		return reply
+	}
+
+	txid := strings.Repeat("ab", 32)
+	hash := strings.Repeat("cd", 32)
+
+	tests := []struct {
+		method string
+		params string
+		calls  *atomic.Int32
+	}{
+		{method: "freeze", params: `["` + txid + `",0,"` + hash + `"]`, calls: &spy.freezes},
+		{method: "unfreeze", params: `["` + txid + `",0,"` + hash + `"]`, calls: &spy.unfreezes},
+		{method: "reassign", params: `["` + txid + `",0,"` + hash + `","` + hash + `"]`, calls: &spy.reassigns},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.method, func(t *testing.T) {
+			body := `{"jsonrpc":"1.0","id":1,"method":"` + tt.method + `","params":` + tt.params + `}`
+
+			limited := call(t, limitAuth, body)
+			require.NotNil(t, limited.Error, "limited user must be refused")
+			require.Equal(t, int(bsvjson.ErrRPCInvalidParams.Code), limited.Error.Code)
+			require.Equal(t, "limited user not authorized for this method", limited.Error.Message)
+			require.Zero(t, tt.calls.Load(), "a limited call must not reach the store")
+
+			admin := call(t, adminAuth, body)
+			require.Nil(t, admin.Error, "admin call must succeed")
+			require.Equal(t, int32(1), tt.calls.Load(), "an admin call must reach the store once")
+		})
+	}
 }

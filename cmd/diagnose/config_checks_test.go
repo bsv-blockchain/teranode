@@ -1,6 +1,7 @@
 package diagnose
 
 import (
+	"net/url"
 	"testing"
 
 	"github.com/bsv-blockchain/teranode/settings"
@@ -20,6 +21,25 @@ func findResult(t *testing.T, results []ConfigResult, label string) ConfigResult
 	require.FailNowf(t, "check not found", "no ConfigResult for %q", label)
 
 	return ConfigResult{}
+}
+
+// TestCheckObservabilityNeverShowsCollectorPassword pins the redaction of the
+// tracing collector URL. It is redacted into a ConfigResult.Value that the
+// diagnose report prints, and the logging-call guard in pkg/urlutil cannot see
+// a struct field, so only this test holds it.
+func TestCheckObservabilityNeverShowsCollectorPassword(t *testing.T) {
+	const password = "canary-collector-password"
+
+	collectorURL, err := url.Parse("http://otel:" + password + "@collector.example:4318/v1/traces")
+	require.NoError(t, err)
+
+	s := &settings.Settings{TracingEnabled: true, TracingSampleRate: 0.5, TracingCollectorURL: collectorURL}
+
+	tracing := findResult(t, checkObservability(s), "Tracing")
+
+	require.NotContains(t, tracing.Value, password, "the tracing check shows the collector password")
+	require.Contains(t, tracing.Value, "collector.example:4318", "the redacted URL lost its host")
+	require.Contains(t, tracing.Value, "otel:xxxxx@", "the username should survive redaction")
 }
 
 func TestCheckSecurityAdminAPIKey(t *testing.T) {

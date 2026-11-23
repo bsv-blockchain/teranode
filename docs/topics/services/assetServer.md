@@ -437,14 +437,15 @@ The Asset Server provides health check endpoints for monitoring and orchestratio
     - Response: Plain text with uptime information
     - Status: 200 OK when service is alive
 
-- **GET /health**: Readiness probe endpoint
-    - Checks readiness of all service dependencies
-    - Verifies HTTP server, UTXO store, transaction store, block persister store, and blockchain client
-    - Returns 200 OK when all dependencies are ready
-    - Returns 503 Service Unavailable if any dependency is not ready
-    - Response includes details about dependency status
+- **GET /health**: Dependency status endpoint
+    - Checks HTTP server, UTXO store, transaction store, block persister store, and blockchain client
+    - **By default it always returns 200 OK**, with each dependency's status in the body; a failing dependency does not change the status code
+    - Returns 503 Service Unavailable when a dependency is not ready **only if `asset_healthStrictStatus = true`**
+    - The body is the dependency JSON by default; with `asset_publicHealthDetail = false` it is the plain string `OK` or `UNAVAILABLE`
 
 **Kubernetes Integration Example:**
+
+Operator-managed deployments probe the service health port instead (`/health/readiness` and `/health/liveness` on port 8000), which already returns 503 when a dependency is unhealthy. The example below probes the Asset HTTP port directly. With the default `asset_healthStrictStatus = false`, the readiness probe on `/health` never fails. Setting it to `true` makes the probe fail whenever a dependency is unhealthy: a UTXO-store outage such as Aerospike `stop_writes` then removes every Asset pod from its Service, and peers catching up from this node lose their block and subtree source until the dependency recovers.
 
 ```yaml
 livenessProbe:
@@ -557,6 +558,12 @@ Any centrifuge-compatible client (`centrifuge-go`, `centrifuge-js`, `centrifuge-
 - **Auto-subscription**: Upon connection, clients are automatically subscribed to all available channels
 - **Reconnection**: Clients should implement reconnection logic with exponential backoff
 - **Status Caching**: New clients immediately receive the cached current node status upon connection
+- **Delivery Guarantees**: delivery is best-effort (at-most-once), with no history and no recovery.
+    - The Asset service relays the P2P WebSocket feed, so all loss points of [P2P WebSocket notifications](p2p.md#26-websocket-notifications) apply first.
+    - When the Asset service loses its connection to the P2P service, it reconnects with backoff (1 s to 60 s). Notifications sent during the gap are lost.
+    - The channels publish without Centrifuge history, so a reconnecting client cannot recover missed publications.
+    - Centrifuge disconnects a client whose outbound queue exceeds 1 MB (the `ClientQueueMaxSize` default).
+    - After a reconnect, re-read the current state from the HTTP API. Do not use this socket as a complete record of blocks or subtrees.
 
 ## 5. Technology
 

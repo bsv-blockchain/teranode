@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/bsv-blockchain/teranode/pkg/urlutil"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/util"
 )
@@ -763,13 +764,13 @@ func checkObservability(s *settings.Settings) []ConfigResult {
 	if s.TracingEnabled {
 		collectorURL := ""
 		if s.TracingCollectorURL != nil {
-			collectorURL = s.TracingCollectorURL.String()
+			collectorURL = urlutil.Redact(s.TracingCollectorURL)
 		}
 
 		results = append(results, ConfigResult{
 			Severity: SeverityINFO,
 			Check:    "Tracing",
-			Value:    fmt.Sprintf("enabled, sample_rate=%.2f, collector=%s", s.TracingSampleRate, collectorURL),
+			Value:    fmt.Sprintf("enabled, sample_rate=%.2f, collector=%s", s.TracingSampleRate, collectorURL), // urlsafe: collectorURL is urlutil.Redact output, six lines up
 		})
 	} else {
 		results = append(results, ConfigResult{

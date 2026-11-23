@@ -72,10 +72,11 @@ func StartGRPCServer(ctx context.Context, l ulogger.Logger, tSettings *settings.
 	}
 
 	// Create server options
-	var serverOptions []grpc.ServerOption
+	serverOptions := make([]grpc.ServerOption, 0, 2)
 
-	// Collect unary interceptors: auth + extras
-	var unaryInterceptors []grpc.UnaryServerInterceptor
+	// Collect unary interceptors: panic recovery first, then auth + extras.
+	// Recovery has to sit outermost so it also covers the interceptors after it.
+	unaryInterceptors := []grpc.UnaryServerInterceptor{CreatePanicRecoveryUnaryInterceptor(l, serviceName)}
 
 	if authOptions != nil {
 		if authOptions.RequireAuthByDefault {
@@ -88,9 +89,10 @@ func StartGRPCServer(ctx context.Context, l ulogger.Logger, tSettings *settings.
 		unaryInterceptors = append(unaryInterceptors, authOptions.ExtraUnaryInterceptors...)
 	}
 
-	if len(unaryInterceptors) > 0 {
-		serverOptions = append(serverOptions, grpc.ChainUnaryInterceptor(unaryInterceptors...))
-	}
+	serverOptions = append(serverOptions,
+		grpc.ChainUnaryInterceptor(unaryInterceptors...),
+		grpc.ChainStreamInterceptor(CreatePanicRecoveryStreamInterceptor(l, serviceName)),
+	)
 
 	connectionOptions := &ConnectionOptions{
 		SecurityLevel: securityLevel,
@@ -197,10 +199,16 @@ func RemoveListener(settingsContext string, serviceName string, schema string) {
 // CleanupListeners closes and removes all listeners associated with a settings context.
 // Returns the keys of the listeners that were cleaned up.
 // Used during shutdown to ensure all listeners for a context are properly closed.
+//
+// It matches the context exactly, not as a substring: test daemons in one
+// process have contexts such as "x-testdaemon-1" and "x-testdaemon-10", and
+// stopping the first must not close the second's listeners.
 func CleanupListeners(settingsContext string) []string {
+	prefix := settingsContext + "!"
+
 	var keys []string
 	listeners.Range(func(k, v interface{}) bool {
-		if !strings.Contains(k.(string), settingsContext) {
+		if !strings.HasPrefix(k.(string), prefix) {
 			return true
 		}
 

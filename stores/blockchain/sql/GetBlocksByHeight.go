@@ -78,13 +78,7 @@ func (s *SQL) GetBlocksByHeight(ctx context.Context, startHeight, endHeight uint
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	// Calculate capacity safely, avoiding uint32 underflow when startHeight > endHeight
-	var capacity uint32 = 1
-	if endHeight >= startHeight {
-		capacity = max(1, endHeight-startHeight+1)
-	}
-
-	blocks := make([]*model.Block, 0, capacity)
+	blocks := make([]*model.Block, 0, preallocForRange(startHeight, endHeight))
 
 	var q string
 	if s.mainChainRebuilding.Load() > 0 {
@@ -97,7 +91,7 @@ func (s *SQL) GetBlocksByHeight(ctx context.Context, startHeight, endHeight uint
 				SELECT b.hash
 				FROM blocks b
 				WHERE b.invalid = false
-				ORDER BY chain_work DESC, peer_id ASC, id ASC
+				ORDER BY chain_work DESC, id ASC
 				LIMIT 1
 			)
 			UNION ALL

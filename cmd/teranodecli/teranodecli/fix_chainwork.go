@@ -14,7 +14,9 @@ import (
 	"syscall"
 
 	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/bsv-blockchain/teranode/pkg/urlutil"
 	"github.com/bsv-blockchain/teranode/services/blockchain/work"
+	"github.com/bsv-blockchain/teranode/util"
 	_ "github.com/lib/pq"
 	_ "modernc.org/sqlite"
 )
@@ -37,16 +39,28 @@ type errorRecord struct {
 	Difference       *big.Int
 }
 
-// buildPostgresConnString builds a PostgreSQL connection string from a URL
-// This matches the logic in util/sql.go InitPostgresDB
-func buildPostgresConnString(storeURL *url.URL) string {
+// buildPostgresConnString builds a PostgreSQL connection string from a URL.
+// Values are quoted with util.QuotePostgresConnValue, the same helper
+// util/sql.go uses, so a value containing a space, quote, backslash or '='
+// cannot truncate the string or inject another keyword (#1877).
+//
+// A URL without a database name is an error. An empty dbname is not "no value"
+// to Postgres: it means the user name, and it overrides PGDATABASE, so the
+// command would write chainwork into a database the caller never named.
+func buildPostgresConnString(storeURL *url.URL) (string, error) {
 	dbHost := storeURL.Hostname()
 	port := storeURL.Port()
 	dbPort := 5432
 	if port != "" {
 		dbPort, _ = strconv.Atoi(port)
 	}
-	dbName := storeURL.Path[1:]
+	// TrimPrefix, not Path[1:], so a URL with no path ("postgres://host:5432")
+	// is reported as a missing database name instead of panicking on the empty
+	// string.
+	dbName := strings.TrimPrefix(storeURL.Path, "/")
+	if dbName == "" {
+		return "", errors.NewProcessingError("database URL has no database name, expected postgres://user:password@host:port/dbname")
+	}
 	dbUser := ""
 	dbPassword := ""
 
@@ -64,28 +78,34 @@ func buildPostgresConnString(storeURL *url.URL) string {
 		sslMode = val[0] // Use the first value if multiple are provided
 	}
 
-	// Build connection string, only include password if it's not empty
+	// Build connection string, only include password if it's not empty. Every
+	// value is quoted; port is an int and needs none.
 	connStr := fmt.Sprintf("host=%s port=%d dbname=%s sslmode=%s",
-		dbHost, dbPort, dbName, sslMode)
+		util.QuotePostgresConnValue(dbHost), dbPort, util.QuotePostgresConnValue(dbName), util.QuotePostgresConnValue(sslMode))
 
 	// Only add user if it's not empty
 	if dbUser != "" {
-		connStr = fmt.Sprintf("%s user=%s", connStr, dbUser)
+		connStr = fmt.Sprintf("%s user=%s", connStr, util.QuotePostgresConnValue(dbUser)) // urlsafe: builds the DSN handed to sql.Open; the caller never logs it
 	}
 
 	// Only add password if it's not empty
 	if dbPassword != "" {
-		connStr = fmt.Sprintf("%s password=%s", connStr, dbPassword)
+		connStr = fmt.Sprintf("%s password=%s", connStr, util.QuotePostgresConnValue(dbPassword)) // urlsafe: builds the DSN handed to sql.Open; the caller never logs it
 	}
 
-	return connStr
+	return connStr, nil
 }
 
 func fixChainwork(dbURL string, dryRun bool, batchSize int, startHeight, endHeight uint32) error {
 	// Parse database URL
 	parsedURL, err := url.Parse(dbURL)
 	if err != nil {
-		return errors.NewProcessingError("failed to parse database URL", err)
+		// --db-url is a postgres DSN carrying its password in the userinfo, and
+		// url.Parse embeds the string it was given verbatim in its error. This
+		// error is printed to stdout by cli.go, which is container logs in
+		// practice. Even net/url's bare reason can quote part of the password, so
+		// report a fixed reason.
+		return errors.NewProcessingError("failed to parse database URL", urlutil.ParseErrorReason(err))
 	}
 
 	// Determine database type and connection string
@@ -98,7 +118,10 @@ func fixChainwork(dbURL string, dryRun bool, batchSize int, startHeight, endHeig
 	case "postgres", "postgresql":
 		dbType = "postgres"
 		// Use the same connection string building logic as teranode
-		connStr = buildPostgresConnString(parsedURL)
+		connStr, err = buildPostgresConnString(parsedURL)
+		if err != nil {
+			return err
+		}
 	default:
 		return errors.NewProcessingError("unsupported database type: %s", parsedURL.Scheme)
 	}

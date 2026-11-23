@@ -69,6 +69,15 @@ var commandHelp = map[string]string{
 	"monitor":                 "Live TUI dashboard for monitoring node status",
 	"logs":                    "Interactive log viewer with filtering and search",
 	"diagnose":                "Diagnose node health and validate configuration",
+	"audit-mined-set":         "List blocks stored with mined_set true whose transactions lack the block id or are still locked (read-only; remedy is a resync)",
+	"prepare-lane-schema":     "Install the UTXO store's lane columns, empty, at lane migration step off (node must be stopped)",
+}
+
+// commandLongHelp is printed by <command> --help above the flags, for a command whose
+// one-line description in commandHelp is not enough to use it safely.
+var commandLongHelp = map[string]string{
+	"audit-mined-set":     minedSetAuditLongHelp,
+	"prepare-lane-schema": laneSchemaLongHelp,
 }
 
 var dangerousCommands = map[string]bool{}
@@ -290,7 +299,8 @@ func Start(args []string, version, commit string) {
 		hash := cmd.FlagSet.String("hash", "", "Hash of the UTXO set / headers to process.")
 		skipHeaders := cmd.FlagSet.Bool("skipHeaders", false, "Skip processing headers.")
 		skipUTXOs := cmd.FlagSet.Bool("skipUTXOs", false, "Skip processing UTXOs.")
-		force := cmd.FlagSet.Bool("force", false, "Force processing even if lastProcessed.dat or BlockAssembler state already exists.")
+		force := cmd.FlagSet.Bool("force", false, "Always re-import the UTXO set, even if lastProcessed.dat or BlockAssembler state already exists. Use this after wiping or recreating the UTXO store. Cannot be combined with -skipUTXOs.")
+		recoverCheckpoint := cmd.FlagSet.Bool("recover-checkpoint", false, "Write the missing BlockAssembler checkpoint WITHOUT importing, when lastProcessed.dat proves a completed import of this exact snapshot (tip height and hash). Dangerous: nothing in the UTXO store is checked, so never use it after wiping or recreating the UTXO store; use -force then. Mutually exclusive with -force. Cannot be combined with -skipUTXOs.")
 		skipChecksum := cmd.FlagSet.Bool("skipChecksum", false, "Skip verifying the snapshot files against their .sha256 sidecars (only when the caller already verified them).")
 		cmd.Execute = func(args []string) error {
 			if *inputDir == "" {
@@ -301,7 +311,7 @@ func Start(args []string, version, commit string) {
 				return errors.NewProcessingError("Please provide a hash")
 			}
 
-			return seeder.Seeder(logger, tSettings, *inputDir, *hash, *skipHeaders, *skipUTXOs, *force, *skipChecksum)
+			return seeder.Seeder(logger, tSettings, *inputDir, *hash, *skipHeaders, *skipUTXOs, *force, *recoverCheckpoint, *skipChecksum)
 		}
 	case "bitcointoutxoset":
 		blockchainDir := cmd.FlagSet.String("bitcoinDir", "", "Location of bitcoin data")
@@ -498,6 +508,10 @@ func Start(args []string, version, commit string) {
 		}
 	case "rewindblockchain":
 		cmd.Execute = rewindExecute(logger, tSettings, registerRewindFlags(cmd.FlagSet))
+	case "audit-mined-set":
+		cmd.Execute = minedSetAuditExecute(logger, tSettings, registerMinedSetAuditFlags(cmd.FlagSet))
+	case "prepare-lane-schema":
+		cmd.Execute = laneSchemaExecute(logger, tSettings, os.Stdout)
 	case "validate-utxo-set":
 		verbose := cmd.FlagSet.Bool("verbose", false, "verbose output showing individual UTXOs")
 
@@ -599,6 +613,11 @@ func Start(args []string, version, commit string) {
 	// Check for help flag
 	if help := cmd.FlagSet.Lookup("help"); help != nil && help.Value.String() == "true" {
 		fmt.Printf("Usage of %s:\n", cmd.Name)
+
+		if long, ok := commandLongHelp[cmd.Name]; ok {
+			fmt.Println(long)
+		}
+
 		cmd.FlagSet.PrintDefaults()
 		os.Exit(0)
 	}

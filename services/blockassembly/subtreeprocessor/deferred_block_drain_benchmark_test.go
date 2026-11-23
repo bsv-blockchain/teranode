@@ -43,8 +43,8 @@ func BenchmarkDrainQueueAfterBlock(b *testing.B) {
 					inpoints[i] = &ip
 				}
 
-				transactionMap := NewSplitSwissMap(1024, 1)
-				transactionMap.Freeze()
+				transactionMap := NewSortedHashSet(1)
+				require.NoError(b, transactionMap.Freeze(1))
 
 				b.ResetTimer()
 

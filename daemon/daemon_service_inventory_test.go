@@ -1,11 +1,13 @@
 package daemon
 
 import (
+	"bufio"
 	"go/ast"
 	"go/parser"
 	"go/token"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -168,4 +170,114 @@ func shouldStartServiceIdents(t *testing.T) map[string]struct{} {
 	require.NotEmpty(t, idents, "found no service identifiers among %s.shouldStart call sites in %s", daemonReceiverIdent, daemonPackageDir)
 
 	return idents
+}
+
+// settingsConfPath is settings.conf relative to the daemon package directory.
+const settingsConfPath = "../settings.conf"
+
+// startKeyPattern matches a settings.conf base key with the shape shouldStart's
+// fmt.Sprintf("start%s", app) construction produces for a real service:
+// "start" followed by an uppercase letter. CLI-only switches dispatched
+// through shouldStart with a lowercase argument (help, wait_for_postgres)
+// never match this shape.
+var startKeyPattern = regexp.MustCompile(`^start([A-Z][A-Za-z0-9]*)$`)
+
+// nonServiceStartConfigKeys documents the settings.conf keys that shouldStart's
+// CLI-only, non-service arguments would produce if they were ever set via
+// config instead of a command-line flag. Neither currently appears in
+// settings.conf, but they are excluded here explicitly - rather than relying
+// on startKeyPattern's uppercase rule alone - so a future rename of one of
+// these switches to an uppercase-leading spelling fails loudly here instead of
+// silently joining the service inventory.
+var nonServiceStartConfigKeys = map[string]struct{}{
+	"starthelp":              {},
+	"startwait_for_postgres": {},
+}
+
+// settingsConfStartKeys parses settings.conf directly (not via gocore, so the
+// guard cannot be defeated by a gocore singleton already loaded with a
+// different context elsewhere in the test binary) and returns the set of
+// distinct base keys - context suffixes such as ".operator" stripped -
+// matching startKeyPattern.
+func settingsConfStartKeys(t *testing.T) map[string]struct{} {
+	t.Helper()
+
+	f, err := os.Open(settingsConfPath)
+	require.NoError(t, err, "failed to open %s", settingsConfPath)
+
+	defer f.Close()
+
+	keys := make(map[string]struct{})
+
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := scanner.Text()
+
+		line, _, _ = strings.Cut(line, "#")
+
+		rawKey, _, found := strings.Cut(line, "=")
+		if !found {
+			continue
+		}
+
+		key := strings.TrimSpace(rawKey)
+		if key == "" {
+			continue
+		}
+
+		// Strip any context suffix (e.g. "startP2P.operator" -> "startP2P").
+		if i := strings.Index(key, "."); i >= 0 {
+			key = key[:i]
+		}
+
+		if _, exempt := nonServiceStartConfigKeys[key]; exempt {
+			continue
+		}
+
+		if startKeyPattern.MatchString(key) {
+			keys[key] = struct{}{}
+		}
+	}
+
+	require.NoError(t, scanner.Err(), "failed to scan %s", settingsConfPath)
+
+	return keys
+}
+
+// TestServiceInventory_MatchesSettingsConf extends the daemonServiceNames
+// cross-check to settings.conf: every "^start[A-Z]" key in the base config
+// must correspond to a real shouldStart() dispatch, and every dispatched
+// service must have a matching "start<Formal>" key in settings.conf. This is
+// the check that would have caught startFaucet/startCoinbase lingering in
+// settings.conf for services the daemon can no longer start.
+//
+// shouldStart builds the config key as "start" + the formal name verbatim
+// (fmt.Sprintf("start%s", app)), and gocore is case-sensitive, so this is a
+// byte-for-byte match, not a case-insensitive one: if a formal name and its
+// settings.conf key ever drift apart in case, this test is what catches it.
+func TestServiceInventory_MatchesSettingsConf(t *testing.T) {
+	confKeys := settingsConfStartKeys(t)
+
+	wantKeys := make(map[string]struct{}, len(daemonServiceNames))
+	for _, formal := range daemonServiceNames {
+		wantKeys["start"+formal] = struct{}{}
+	}
+
+	// Direction 1: every "start<X>" key in settings.conf must be a service the
+	// daemon actually dispatches.
+	for key := range confKeys {
+		_, ok := wantKeys[key]
+		require.True(t, ok,
+			"settings.conf defines %q but no daemon shouldStart() call site dispatches it: "+
+				"remove the key from settings.conf, or add the service to daemonServiceNames "+
+				"and daemon_services.go if it is real", key)
+	}
+
+	// Direction 2: every service the daemon dispatches must have a settings.conf key.
+	for key := range wantKeys {
+		_, ok := confKeys[key]
+		require.True(t, ok,
+			"daemon dispatches a service expecting settings.conf key %q, but it is missing from "+
+				"settings.conf: operators have no way to enable/disable it via config", key)
+	}
 }

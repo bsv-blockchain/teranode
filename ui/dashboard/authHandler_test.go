@@ -2,10 +2,14 @@ package dashboard
 
 import (
 	"crypto/tls"
+	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/bsv-blockchain/teranode/settings"
@@ -343,4 +347,363 @@ func TestWebSocketConfigHandler_ProtocolDetection(t *testing.T) {
 				"Expected protocol %s, got URL: %s", tt.expectedProto, websocketURL)
 		})
 	}
+}
+
+// captureLogger records every formatted log line so tests can assert on their content,
+// keeping per-level buckets so tests can also assert on the level a line was logged at.
+type captureLogger struct {
+	ulogger.TestLogger
+
+	mu         sync.Mutex
+	debugLines []string
+	infoLines  []string
+	warnLines  []string
+	errorLines []string
+}
+
+func (l *captureLogger) record(bucket *[]string, format string, args ...interface{}) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	*bucket = append(*bucket, fmt.Sprintf(format, args...))
+}
+
+func (l *captureLogger) Debugf(format string, args ...interface{}) {
+	l.record(&l.debugLines, format, args...)
+}
+func (l *captureLogger) Infof(format string, args ...interface{}) {
+	l.record(&l.infoLines, format, args...)
+}
+func (l *captureLogger) Warnf(format string, args ...interface{}) {
+	l.record(&l.warnLines, format, args...)
+}
+func (l *captureLogger) Errorf(format string, args ...interface{}) {
+	l.record(&l.errorLines, format, args...)
+}
+
+// output returns every recorded line, in the order each level was appended:
+// debug, info, warn, error. Recording order within a level is preserved;
+// order across levels is lost, since each level has its own bucket.
+func (l *captureLogger) output() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	all := make([]string, 0, len(l.debugLines)+len(l.infoLines)+len(l.warnLines)+len(l.errorLines))
+	all = append(all, l.debugLines...)
+	all = append(all, l.infoLines...)
+	all = append(all, l.warnLines...)
+	all = append(all, l.errorLines...)
+
+	return strings.Join(all, "\n")
+}
+
+// TestCaptureLogger_DoesNotDoubleRecordInfoAndError — Infof and Errorf must
+// each record a line exactly once. They previously appended to a shared
+// aggregate slice both directly and through record(), so every Info/Error line
+// was recorded twice; each level now has its own bucket.
+func TestCaptureLogger_DoesNotDoubleRecordInfoAndError(t *testing.T) {
+	logger := &captureLogger{}
+
+	logger.Infof("info line")
+	logger.Errorf("error line")
+
+	require.Equal(t, []string{"info line"}, logger.infoLines)
+	require.Equal(t, []string{"error line"}, logger.errorLines)
+	require.Equal(t, "info line\nerror line", logger.output())
+}
+
+func newCredentialAuthHandler(logger ulogger.Logger, user, pass string, requireCredentials, secureCookies bool) *AuthHandler {
+	testSettings := &settings.Settings{
+		Asset: settings.AssetSettings{
+			RequireAuthCredentials: requireCredentials,
+			SecureCookies:          secureCookies,
+		},
+		RPC: settings.RPCSettings{
+			RPCUser: user,
+			RPCPass: pass,
+		},
+	}
+
+	return NewAuthHandler(logger, testSettings)
+}
+
+func basicHeader(user, pass string) string {
+	return "Basic " + base64.StdEncoding.EncodeToString([]byte(user+":"+pass))
+}
+
+func TestCheckAuth_MissingCredentials(t *testing.T) {
+	tests := []struct {
+		name               string
+		user               string
+		pass               string
+		requireCredentials bool
+		expected           bool
+	}{
+		{name: "both empty, warn-only", user: "", pass: "", requireCredentials: false, expected: true},
+		{name: "empty user, warn-only", user: "", pass: "secret", requireCredentials: false, expected: true},
+		{name: "empty pass, warn-only", user: "admin", pass: "", requireCredentials: false, expected: true},
+		{name: "both empty, fail closed", user: "", pass: "", requireCredentials: true, expected: false},
+		{name: "empty user, fail closed", user: "", pass: "secret", requireCredentials: true, expected: false},
+		{name: "empty pass, fail closed", user: "admin", pass: "", requireCredentials: true, expected: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h := newCredentialAuthHandler(ulogger.TestLogger{}, tt.user, tt.pass, tt.requireCredentials, false)
+
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/fsm/state", nil)
+			require.Equal(t, tt.expected, h.CheckAuth(req))
+		})
+	}
+}
+
+func TestCheckAuth_ConfiguredCredentials(t *testing.T) {
+	h := newCredentialAuthHandler(ulogger.TestLogger{}, "admin", "secret", false, false)
+
+	t.Run("no credentials supplied", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/fsm/state", nil)
+		require.False(t, h.CheckAuth(req))
+	})
+
+	t.Run("wrong credentials", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/fsm/state", nil)
+		req.Header.Set("Authorization", basicHeader("admin", "wrong"))
+		require.False(t, h.CheckAuth(req))
+	})
+
+	t.Run("correct credentials", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/fsm/state", nil)
+		req.Header.Set("Authorization", basicHeader("admin", "secret"))
+		require.True(t, h.CheckAuth(req))
+	})
+
+	t.Run("correct credentials in cookie", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/fsm/state", nil)
+		req.AddCookie(&http.Cookie{Name: cookieName, Value: basicHeader("admin", "secret")})
+		require.True(t, h.CheckAuth(req))
+	})
+}
+
+func TestCheckAuthHandler_ShortAuthorizationHeader(t *testing.T) {
+	// Headers shorter than ten bytes must not panic the request.
+	for _, header := range []string{"x", "Basic", "Basic ab"} {
+		t.Run(header, func(t *testing.T) {
+			h := newCredentialAuthHandler(ulogger.TestLogger{}, "admin", "secret", false, false)
+
+			e := echo.New()
+			req := httptest.NewRequest(http.MethodGet, "/api/auth/check", nil)
+			req.Header.Set("Authorization", header)
+			rec := httptest.NewRecorder()
+
+			require.NotPanics(t, func() {
+				require.NoError(t, h.CheckAuthHandler(e.NewContext(req, rec)))
+			})
+			require.Equal(t, http.StatusUnauthorized, rec.Code)
+		})
+	}
+}
+
+func TestCheckAuthHandler_DoesNotLogCredentialMaterial(t *testing.T) {
+	logger := &captureLogger{}
+	h := newCredentialAuthHandler(logger, "admin", "sup3rsecret", false, false)
+
+	authHeader := basicHeader("admin", "sup3rsecret")
+
+	e := echo.New()
+	req := httptest.NewRequest(http.MethodGet, "/api/auth/check", nil)
+	req.Header.Set("Authorization", authHeader)
+	rec := httptest.NewRecorder()
+
+	require.NoError(t, h.CheckAuthHandler(e.NewContext(req, rec)))
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	logged := logger.output()
+	encoded := strings.TrimPrefix(authHeader, "Basic ")
+
+	require.NotContains(t, logged, "sup3rsecret")
+	require.NotContains(t, logged, encoded)
+	// Not even a prefix of the encoded credential may be logged.
+	require.NotContains(t, logged, encoded[:4])
+}
+
+func TestCheckAuth_PerRequestFailOpenLogsAtDebugNotWarn(t *testing.T) {
+	logger := &captureLogger{}
+	h := newCredentialAuthHandler(logger, "", "", false, false)
+
+	// NewAuthHandler already logged a startup Warnf for the fail-open configuration;
+	// only per-request logging is under test here.
+	startupWarnCount := len(logger.warnLines)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/some/unmatched/path", nil)
+	require.True(t, h.CheckAuth(req))
+
+	require.Len(t, logger.warnLines, startupWarnCount,
+		"per-request fail-open logging must stay at Debug: it also fires on unmatched /api/v1/* paths and doubles WARN volume on scanner traffic")
+	require.NotEmpty(t, logger.debugLines)
+}
+
+func TestCheckAuth_PerRequestFailClosedLogsAtDebugNotWarn(t *testing.T) {
+	logger := &captureLogger{}
+	h := newCredentialAuthHandler(logger, "", "", true, false)
+
+	// NewAuthHandler already logged a startup Warnf for the fail-closed configuration;
+	// only per-request logging is under test here.
+	startupWarnCount := len(logger.warnLines)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/some/unmatched/path", nil)
+	require.False(t, h.CheckAuth(req))
+
+	require.Len(t, logger.warnLines, startupWarnCount,
+		"per-request rejection logging must stay at Debug: it also fires on unmatched /api/v1/* paths and doubles WARN volume on scanner traffic")
+	require.NotEmpty(t, logger.debugLines)
+}
+
+func TestLoginHandler_SecureCookie(t *testing.T) {
+	tests := []struct {
+		name          string
+		secureCookies bool
+	}{
+		{name: "secure cookies disabled", secureCookies: false},
+		{name: "secure cookies enabled", secureCookies: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h := newCredentialAuthHandler(ulogger.TestLogger{}, "admin", "secret", false, tt.secureCookies)
+
+			e := echo.New()
+
+			t.Run("form login", func(t *testing.T) {
+				form := url.Values{"username": {"admin"}, "password": {"secret"}}
+				req := httptest.NewRequest(http.MethodPost, "/api/auth/login", strings.NewReader(form.Encode()))
+				req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationForm)
+				rec := httptest.NewRecorder()
+
+				require.NoError(t, h.LoginHandler(e.NewContext(req, rec)))
+				require.Equal(t, http.StatusOK, rec.Code)
+				requireAuthCookieSecure(t, rec, tt.secureCookies)
+			})
+
+			t.Run("header login", func(t *testing.T) {
+				req := httptest.NewRequest(http.MethodPost, "/api/auth/login", nil)
+				req.Header.Set("Authorization", basicHeader("admin", "secret"))
+				rec := httptest.NewRecorder()
+
+				require.NoError(t, h.LoginHandler(e.NewContext(req, rec)))
+				require.Equal(t, http.StatusOK, rec.Code)
+				requireAuthCookieSecure(t, rec, tt.secureCookies)
+			})
+
+			t.Run("logout", func(t *testing.T) {
+				req := httptest.NewRequest(http.MethodPost, "/api/auth/logout", nil)
+				rec := httptest.NewRecorder()
+
+				require.NoError(t, h.LogoutHandler(e.NewContext(req, rec)))
+				require.Equal(t, http.StatusOK, rec.Code)
+				requireAuthCookieSecure(t, rec, tt.secureCookies)
+			})
+		})
+	}
+}
+
+func requireAuthCookieSecure(t *testing.T, rec *httptest.ResponseRecorder, expected bool) {
+	t.Helper()
+
+	for _, cookie := range rec.Result().Cookies() {
+		if cookie.Name == cookieName {
+			require.Equal(t, expected, cookie.Secure)
+			return
+		}
+	}
+
+	t.Fatalf("no %s cookie was set", cookieName)
+}
+
+// A cookie is ambient: the browser attaches it to a no-cors POST from any page on
+// the same site, without a preflight. CheckAuth must refuse a cookie-authenticated
+// state-changing request that the browser marks as coming from another origin.
+func TestCheckAuth_CookieRejectsForeignOrigin(t *testing.T) {
+	h := newCredentialAuthHandler(ulogger.TestLogger{}, "admin", "secret", false, false)
+	h.SetTrustedOrigins([]string{"http://localhost:5173"})
+
+	cookieReq := func(method string, headers map[string]string) *http.Request {
+		req := httptest.NewRequest(method, "http://node.example.com:8090/api/p2p/reset-reputation", nil)
+		req.AddCookie(&http.Cookie{Name: cookieName, Value: basicHeader("admin", "secret")})
+
+		for k, v := range headers {
+			req.Header.Set(k, v)
+		}
+
+		return req
+	}
+
+	tests := []struct {
+		name     string
+		method   string
+		headers  map[string]string
+		expected bool
+	}{
+		{name: "same origin", method: http.MethodPost, headers: map[string]string{"Origin": "http://node.example.com:8090"}, expected: true},
+		{name: "same origin, different case", method: http.MethodPost, headers: map[string]string{"Origin": "HTTP://Node.Example.com:8090"}, expected: true},
+		{name: "same host behind a TLS proxy", method: http.MethodPost, headers: map[string]string{"Origin": "https://node.example.com:8090"}, expected: true},
+		{name: "trusted origin", method: http.MethodPost, headers: map[string]string{"Origin": "http://localhost:5173"}, expected: true},
+		{name: "same-site other origin", method: http.MethodPost, headers: map[string]string{"Origin": "http://evil.example.com"}, expected: false},
+		{name: "same host other port", method: http.MethodPost, headers: map[string]string{"Origin": "http://node.example.com:9999"}, expected: false},
+		{name: "null origin", method: http.MethodPost, headers: map[string]string{"Origin": "null"}, expected: false},
+		{name: "DELETE from other origin", method: http.MethodDelete, headers: map[string]string{"Origin": "http://evil.example.com"}, expected: false},
+		{name: "no Origin, Sec-Fetch-Site same-site", method: http.MethodPost, headers: map[string]string{"Sec-Fetch-Site": "same-site"}, expected: false},
+		{name: "no Origin, Sec-Fetch-Site cross-site", method: http.MethodPost, headers: map[string]string{"Sec-Fetch-Site": "cross-site"}, expected: false},
+		{name: "no Origin, Sec-Fetch-Site same-origin", method: http.MethodPost, headers: map[string]string{"Sec-Fetch-Site": "same-origin"}, expected: true},
+		{name: "no browser headers", method: http.MethodPost, headers: nil, expected: true},
+		{name: "GET from other origin", method: http.MethodGet, headers: map[string]string{"Origin": "http://evil.example.com"}, expected: true},
+		{name: "PUT from other origin", method: http.MethodPut, headers: map[string]string{"Origin": "http://evil.example.com"}, expected: false},
+		{name: "PATCH from other origin", method: http.MethodPatch, headers: map[string]string{"Origin": "http://evil.example.com"}, expected: false},
+		{name: "no Origin, Sec-Fetch-Site none", method: http.MethodPost, headers: map[string]string{"Sec-Fetch-Site": "none"}, expected: true},
+		{name: "proxy rewrote Host, X-Forwarded-Host matches", method: http.MethodPost, headers: map[string]string{"Origin": "https://public.example.com", "X-Forwarded-Host": "public.example.com"}, expected: true},
+		{name: "proxy rewrote Host, X-Forwarded-Host differs", method: http.MethodPost, headers: map[string]string{"Origin": "https://evil.example.com", "X-Forwarded-Host": "public.example.com"}, expected: false},
+		{name: "http origin on an https-proxied request", method: http.MethodPost, headers: map[string]string{"Origin": "http://node.example.com:8090", "X-Forwarded-Proto": "https"}, expected: false},
+		{name: "https origin on an https-proxied request", method: http.MethodPost, headers: map[string]string{"Origin": "https://node.example.com:8090", "X-Forwarded-Proto": "https"}, expected: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.expected, h.CheckAuth(cookieReq(tt.method, tt.headers)))
+		})
+	}
+}
+
+// An Authorization header is never attached by the browser on its own, so the
+// origin check does not apply to it.
+func TestCheckAuth_AuthorizationHeaderIgnoresOrigin(t *testing.T) {
+	h := newCredentialAuthHandler(ulogger.TestLogger{}, "admin", "secret", false, false)
+
+	req := httptest.NewRequest(http.MethodPost, "http://node.example.com:8090/api/v1/fsm/state", nil)
+	req.Header.Set("Authorization", basicHeader("admin", "secret"))
+	req.Header.Set("Origin", "http://evil.example.com")
+
+	require.True(t, h.CheckAuth(req))
+}
+
+func TestCheckAuth_CookieOriginHostForms(t *testing.T) {
+	h := newCredentialAuthHandler(ulogger.TestLogger{}, "admin", "secret", false, false)
+	h.SetTrustedOrigins([]string{"https://ops.example.com"})
+
+	check := func(target, origin string, tls bool) bool {
+		req := httptest.NewRequest(http.MethodPost, target, nil)
+		req.AddCookie(&http.Cookie{Name: cookieName, Value: basicHeader("admin", "secret")})
+		req.Header.Set("Origin", origin)
+
+		if !tls {
+			req.TLS = nil
+		}
+
+		return h.CheckAuth(req)
+	}
+
+	require.True(t, check("http://node.example.com:80/x", "http://node.example.com", false), "default port in Host")
+	require.True(t, check("http://[::1]:8090/x", "http://[::1]:8090", false), "IPv6 host")
+	require.False(t, check("http://[::1]:8090/x", "http://[::2]:8090", false), "other IPv6 host")
+	require.True(t, check("http://node.example.com/x", "https://ops.example.com:443", false), "trusted origin written with its default port")
+	require.False(t, check("https://node.example.com/x", "http://node.example.com", true), "http origin on a TLS request")
+	require.True(t, check("https://node.example.com/x", "https://node.example.com", true), "https origin on a TLS request")
 }

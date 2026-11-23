@@ -376,3 +376,33 @@ func TestParseLuaMapResponse_EdgeCases(t *testing.T) {
 		assert.Contains(t, err.Error(), "invalid error offset type: string")
 	})
 }
+
+func TestParseLuaMapResponse_Conflicting(t *testing.T) {
+	s := &Store{}
+
+	tests := []struct {
+		name     string
+		response interface{}
+		want     bool
+	}{
+		{"udf shape true", map[interface{}]interface{}{"status": "OK", "signal": "DAHSET", "conflicting": true}, true},
+		{"native shape true", map[string]interface{}{"status": "OK", "signal": "DAHSET", "conflicting": true}, true},
+		{"explicit false", map[interface{}]interface{}{"status": "OK", "signal": "DAHSET", "conflicting": false}, false},
+		{"absent", map[interface{}]interface{}{"status": "OK", "signal": "DAHSET"}, false},
+		{"non bool ignored", map[interface{}]interface{}{"status": "OK", "conflicting": 1}, false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			res, err := s.ParseLuaMapResponse(tc.response)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, res.Conflicting)
+		})
+	}
+
+	t.Run("reset clears", func(t *testing.T) {
+		r := &LuaMapResponse{Conflicting: true}
+		r.Reset()
+		require.False(t, r.Conflicting)
+	})
+}

@@ -20,6 +20,7 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/health"
+	"github.com/bsv-blockchain/teranode/util/lane"
 )
 
 const errNotImplemented = "not implemented"
@@ -176,6 +177,18 @@ func (c *LocalClient) AssignBlockID(ctx context.Context, blockHash *chainhash.Ha
 	return c.store.AssignBlockID(ctx, blockHash)
 }
 
+func (c *LocalClient) OpenLaneLease(ctx context.Context, holder string) (lane.LeaseID, lane.Grant, error) {
+	return openLaneLease(ctx, c.store, c.settings, holder)
+}
+
+func (c *LocalClient) RenewLaneLease(ctx context.Context, r lane.Renewal) (lane.RenewResult, error) {
+	return renewLaneLease(ctx, c.store, c.settings, r)
+}
+
+func (c *LocalClient) ReleaseLaneLease(ctx context.Context, r lane.Release) (bool, error) {
+	return releaseLaneLease(ctx, c.store, r)
+}
+
 func (c *LocalClient) GetBlockStats(ctx context.Context) (*model.BlockStats, error) {
 	return c.store.GetBlockStats(ctx)
 }
@@ -225,12 +238,20 @@ func (c *LocalClient) GetBestBlockHeader(ctx context.Context) (*model.BlockHeade
 	return c.store.GetBestBlockHeader(ctx)
 }
 
+func (c *LocalClient) GetBestBlockHeaderUncached(ctx context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
+	return c.store.GetBestBlockHeaderUncached(ctx)
+}
+
 func (c *LocalClient) GetBlockHeader(ctx context.Context, blockHash *chainhash.Hash) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
 	return c.store.GetBlockHeader(ctx, blockHash)
 }
 
 func (c *LocalClient) GetBlockHeaders(ctx context.Context, blockHash *chainhash.Hash, numberOfHeaders uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
 	return c.store.GetBlockHeaders(ctx, blockHash, numberOfHeaders)
+}
+
+func (c *LocalClient) GetBlockHeadersByParentLinks(ctx context.Context, blockHash *chainhash.Hash, numberOfHeaders uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
+	return c.store.GetBlockHeadersByParentLinks(ctx, blockHash, numberOfHeaders)
 }
 
 func (c *LocalClient) GetBlockHeadersToCommonAncestor(ctx context.Context, hashTarget *chainhash.Hash, blockLocatorHashes []*chainhash.Hash, maxHeaders uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
@@ -243,20 +264,6 @@ func (c *LocalClient) GetBlockHeadersFromCommonAncestor(ctx context.Context, cha
 	return getBlockHeadersFromCommonAncestor(ctx, c.store, chainTipHash, blockLocatorHashes, maxHeaders)
 }
 
-// GetLatestBlockHeaderFromBlockLocator retrieves the latest block header from a block locator.
-func (c *LocalClient) GetLatestBlockHeaderFromBlockLocator(ctx context.Context, bestBlockHash *chainhash.Hash, blockLocator []chainhash.Hash) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
-	return c.store.GetLatestBlockHeaderFromBlockLocator(ctx, bestBlockHash, blockLocator)
-}
-
-// GetBlockHeadersFromOldest retrieves block headers starting from the oldest block.
-func (c *LocalClient) GetBlockHeadersFromOldest(ctx context.Context, chainTipHash, targetHash *chainhash.Hash, numberOfHeaders uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
-	return c.store.GetBlockHeadersFromOldest(ctx, chainTipHash, targetHash, numberOfHeaders)
-}
-
-func (c *LocalClient) GetBlockHeadersFromTill(ctx context.Context, blockHashFrom *chainhash.Hash, blockHashTill *chainhash.Hash) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
-	return c.store.GetBlockHeadersFromTill(ctx, blockHashFrom, blockHashTill)
-}
-
 func (c *LocalClient) CheckBlockIsInCurrentChain(ctx context.Context, blockIDs []uint32) (bool, error) {
 	return c.store.CheckBlockIsInCurrentChain(ctx, blockIDs)
 }
@@ -267,6 +274,14 @@ func (c *LocalClient) CheckBlockIsAncestorOfBlock(ctx context.Context, blockIDs 
 
 func (c *LocalClient) GetBlockHeadersFromHeight(ctx context.Context, height, limit uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
 	return c.store.GetBlockHeadersFromHeight(ctx, height, limit)
+}
+
+func (c *LocalClient) BlocksBetterThan(ctx context.Context, after model.BestTipKey, from *model.BestTipKey, minHeight, limit uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, bool, error) {
+	return blocksBetterThanPage(ctx, c.store, after, from, minHeight, limit)
+}
+
+func (c *LocalClient) ClearBestTipLowWater(ctx context.Context, expected []byte) error {
+	return c.store.ClearBestTipLowWater(ctx, expected)
 }
 
 func (c *LocalClient) GetBlockHeadersByHeight(ctx context.Context, startHeight, endHeight uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
@@ -388,8 +403,8 @@ func (c *LocalClient) GetBlockIsMined(ctx context.Context, blockHash *chainhash.
 	return c.store.GetBlockIsMined(ctx, blockHash)
 }
 
-func (c *LocalClient) SetBlockMinedSet(ctx context.Context, blockHash *chainhash.Hash) error {
-	return c.store.SetBlockMinedSet(ctx, blockHash)
+func (c *LocalClient) SetBlockMinedSet(ctx context.Context, blockHash *chainhash.Hash, minedSetGeneration uint64) error {
+	return c.store.SetBlockMinedSet(ctx, blockHash, &minedSetGeneration)
 }
 
 func (c *LocalClient) ClearBlockMinedSet(ctx context.Context, blockHash *chainhash.Hash) error {
@@ -619,7 +634,7 @@ func (c *LocalClient) GetMedianTimePastForHeights(ctx context.Context, heights [
 		}
 	}
 
-	_, metas, err := c.store.GetBlockHeadersByHeight(ctx, minHeight, maxHeight)
+	_, metas, err := c.store.GetBlockHeadersByHeight(ctx, readFromForMTP(minHeight), maxHeight)
 	if err != nil {
 		return nil, errors.NewProcessingError("[LocalClient][GetMedianTimePastForHeights] failed to get block headers from %d to %d", minHeight, maxHeight, err)
 	}
@@ -627,6 +642,14 @@ func (c *LocalClient) GetMedianTimePastForHeights(ctx context.Context, heights [
 	mtpByHeight := make(map[uint32]uint32, len(metas))
 	for _, meta := range metas {
 		mtpByHeight[meta.Height] = meta.MedianTimePast
+	}
+
+	if _, ok := mtpByHeight[maxHeight]; !ok {
+		computed, err := computeMTPForMissingHeight(metas, maxHeight)
+		if err != nil {
+			return nil, err
+		}
+		mtpByHeight[maxHeight] = computed
 	}
 
 	mtps := make([]uint32, len(heights))
@@ -652,14 +675,16 @@ func (c *LocalClient) GetMedianTimePastRange(ctx context.Context, fromHeight, to
 		return []uint32{}, nil
 	}
 
-	_, metas, err := c.store.GetBlockHeadersByHeight(ctx, fromHeight, toHeight)
+	_, metas, err := c.store.GetBlockHeadersByHeight(ctx, readFromForMTP(fromHeight), toHeight)
 	if err != nil {
 		return nil, errors.NewProcessingError("[LocalClient][GetMedianTimePastRange] failed to get block headers from %d to %d", fromHeight, toHeight, err)
 	}
 
 	result := make([]uint32, toHeight-fromHeight+1)
 	for _, meta := range metas {
-		result[meta.Height-fromHeight] = meta.MedianTimePast
+		if meta.Height >= fromHeight && meta.Height <= toHeight {
+			result[meta.Height-fromHeight] = meta.MedianTimePast
+		}
 	}
 
 	// If the top height is not in the database (block not yet persisted), compute its MTP

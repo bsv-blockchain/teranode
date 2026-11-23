@@ -99,6 +99,8 @@ func BenchmarkDiskTxMap_ExistenceOnly(b *testing.B) {
 // TestDiskTxMap_ThroughputTarget verifies >1M ops/sec for SetIfNotExists.
 // Pre-computes hashes to measure map performance, not SHA256 throughput.
 func TestDiskTxMap_ThroughputTarget(t *testing.T) {
+	skipUnlessHeavyTests(t)
+
 	const (
 		numGoroutines = 16
 		opsPerWorker  = 100_000
@@ -161,6 +163,8 @@ func TestDiskTxMap_ThroughputTarget(t *testing.T) {
 
 // TestDiskTxMap_MultiDiskThroughput tests with multiple Badger disk shards.
 func TestDiskTxMap_MultiDiskThroughput(t *testing.T) {
+	skipUnlessHeavyTests(t)
+
 	const (
 		numGoroutines = 16
 		opsPerWorker  = 100_000
@@ -230,6 +234,8 @@ func TestDiskTxMap_MultiDiskThroughput(t *testing.T) {
 // shard lock + filter + map layer (no serialization, no Badger).
 // This is what determines the dedup ceiling.
 func TestDiskTxMap_ExistenceLayerThroughput(t *testing.T) {
+	skipUnlessHeavyTests(t)
+
 	const (
 		numGoroutines = 16
 		opsPerWorker  = 500_000
@@ -295,43 +301,4 @@ func TestDiskTxMap_ExistenceLayerThroughput(t *testing.T) {
 	}
 	require.Greaterf(t, opsPerSec, floorOpsPerSec,
 		"existence layer throughput collapsed: %.0f ops/sec is below the %.0f floor (target %.0f); this indicates an order-of-magnitude regression, not runner noise", opsPerSec, floorOpsPerSec, targetOpsPerSec)
-}
-
-// BenchmarkDiskTxMap_ClearIndex measures emptying an index that holds size
-// entries, as Clear does at every block. Go's clear returns at once on an
-// empty map, so the index is refilled before every timed clear.
-func BenchmarkDiskTxMap_ClearIndex(b *testing.B) {
-	for _, size := range []int{1 << 20, 32 << 20} {
-		b.Run(fmt.Sprintf("%dM", size>>20), func(b *testing.B) {
-			if size > 1<<20 && testing.Short() {
-				b.Skip("large index, skipped in short mode")
-			}
-
-			m, err := NewDiskTxMap(DiskTxMapOptions{BasePath: b.TempDir(), Prefix: "bench"})
-			require.NoError(b, err)
-
-			defer m.Close()
-
-			hashes := genBenchHashes(size, 1)
-
-			b.ResetTimer()
-
-			for i := 0; i < b.N; i++ {
-				b.StopTimer()
-
-				for _, h := range hashes {
-					s := &m.shards[shardOf(h)]
-					s.index[h] = packEntry(0, 0)
-				}
-
-				b.StartTimer()
-
-				m.clearIndex()
-			}
-
-			b.StopTimer()
-
-			require.Zero(b, m.Length())
-		})
-	}
 }

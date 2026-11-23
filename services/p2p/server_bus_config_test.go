@@ -6,8 +6,11 @@ import (
 	"net"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/bsv-blockchain/go-chaincfg"
+	p2pMessageBus "github.com/bsv-blockchain/go-p2p-message-bus"
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
@@ -220,6 +223,112 @@ func TestBuildP2PMessageBusConfig_MeshProtection(t *testing.T) {
 		conf, err := buildP2PMessageBusConfig(ulogger.TestLogger{}, build(true, true, false), privKey, "proto", "off", nil)
 		require.NoError(t, err)
 		require.Empty(t, conf.AllowedPublisherIDs)
+	})
+}
+
+// TestBuildP2PMessageBusConfig_ConnectionLimits guards the mapping of the
+// connection manager watermarks and libp2p resource manager overrides from
+// settings into the message bus config. Each field gets a distinct value so a
+// dropped or swapped mapping line fails the test.
+func TestBuildP2PMessageBusConfig_ConnectionLimits(t *testing.T) {
+	privKey, _, err := crypto.GenerateEd25519Key(rand.Reader)
+	require.NoError(t, err)
+
+	t.Run("settings defaults leave every limit at the library default", func(t *testing.T) {
+		// A node that sets none of the new keys must build the same config as
+		// before they existed: zero watermarks, and a zero ResourceLimits, which
+		// leaves the resource manager entirely to go-libp2p.
+		s := settings.NewSettings()
+		conf, err := buildP2PMessageBusConfig(ulogger.TestLogger{}, s, privKey, "proto", "off", nil)
+		require.NoError(t, err)
+		require.Zero(t, conf.MaxConnections)
+		require.Zero(t, conf.MinConnections)
+		require.Zero(t, conf.ConnectionGracePeriod)
+		require.Equal(t, p2pMessageBus.ResourceLimits{}, conf.ResourceLimits)
+		require.Nil(t, conf.ResourceLimits.IPv4SubnetLimits)
+		require.Nil(t, conf.ResourceLimits.IPv6SubnetLimits)
+	})
+
+	t.Run("every field maps through", func(t *testing.T) {
+		s := settings.NewSettings()
+		s.P2P.MaxConnections = 400
+		s.P2P.MinConnections = 300
+		s.P2P.ConnectionGracePeriod = 45 * time.Second
+		s.P2P.RcmgrConns = 5001
+		s.P2P.RcmgrConnsInbound = 4002
+		s.P2P.RcmgrConnsOutbound = 1003
+		s.P2P.RcmgrStreams = 20004
+		s.P2P.RcmgrStreamsInbound = 10005
+		s.P2P.RcmgrStreamsOutbound = 9006
+		s.P2P.RcmgrFD = 8007
+		s.P2P.RcmgrPeerConns = 17
+		s.P2P.RcmgrPeerConnsInbound = 9
+		s.P2P.RcmgrPeerStreamsInbound = 511
+		s.P2P.RcmgrIPv4SubnetLimits = []string{"32:8", "24:32"}
+		s.P2P.RcmgrIPv6SubnetLimits = []string{"56:6", "48:48"}
+
+		conf, err := buildP2PMessageBusConfig(ulogger.TestLogger{}, s, privKey, "proto", "off", nil)
+		require.NoError(t, err)
+		require.Equal(t, 400, conf.MaxConnections)
+		require.Equal(t, 300, conf.MinConnections)
+		require.Equal(t, 45*time.Second, conf.ConnectionGracePeriod)
+		require.Equal(t, p2pMessageBus.ResourceLimits{
+			Conns:              5001,
+			ConnsInbound:       4002,
+			ConnsOutbound:      1003,
+			Streams:            20004,
+			StreamsInbound:     10005,
+			StreamsOutbound:    9006,
+			FD:                 8007,
+			PeerConns:          17,
+			PeerConnsInbound:   9,
+			PeerStreamsInbound: 511,
+			IPv4SubnetLimits:   []p2pMessageBus.SubnetConnLimit{{PrefixLength: 32, Conns: 8}, {PrefixLength: 24, Conns: 32}},
+			IPv6SubnetLimits:   []p2pMessageBus.SubnetConnLimit{{PrefixLength: 56, Conns: 6}, {PrefixLength: 48, Conns: 48}},
+		}, conf.ResourceLimits)
+	})
+
+	t.Run("contradictory limits fail with a configuration error", func(t *testing.T) {
+		s := settings.NewSettings()
+		s.P2P.RcmgrConns = 100
+		s.P2P.RcmgrConnsInbound = 200
+
+		_, err := buildP2PMessageBusConfig(ulogger.TestLogger{}, s, privKey, "proto", "off", nil)
+		require.Error(t, err)
+		require.True(t, errors.Is(err, errors.ErrConfiguration), "got %v", err)
+		require.Contains(t, err.Error(), "p2p_rcmgr_conns_inbound (200) exceeds p2p_rcmgr_conns (100)")
+	})
+
+	t.Run("a malformed subnet entry fails with a configuration error", func(t *testing.T) {
+		s := settings.NewSettings()
+		s.P2P.RcmgrIPv6SubnetLimits = []string{"56:8", "200:4"}
+
+		_, err := buildP2PMessageBusConfig(ulogger.TestLogger{}, s, privKey, "proto", "off", nil)
+		require.Error(t, err)
+		require.True(t, errors.Is(err, errors.ErrConfiguration), "got %v", err)
+		require.Contains(t, err.Error(), "p2p_rcmgr_ipv6_subnet_limits")
+	})
+
+	// An inbound limit raised above the auto-scaled total can only be caught by
+	// the bus, which knows the host's auto-scaled limits. This pins that the
+	// mapped config is rejected at client construction (so NewServer fails)
+	// with an error that says what to set, rather than libp2p silently capping
+	// the inbound limit at the total.
+	t.Run("inbound limit above the auto-scaled total fails client construction", func(t *testing.T) {
+		s := settings.NewSettings()
+		s.ClientName = "connection-limits-test"
+		s.P2P.RcmgrConnsInbound = 1 << 30
+
+		conf, err := buildP2PMessageBusConfig(ulogger.TestLogger{}, s, privKey, "proto", "off", nil)
+		require.NoError(t, err, "only the bus can compare against auto-scaled limits")
+
+		client, err := p2pMessageBus.NewClient(conf)
+		if client != nil {
+			_ = client.Close()
+		}
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "ConnsInbound")
+		require.Contains(t, err.Error(), "set Conns as well")
 	})
 }
 
