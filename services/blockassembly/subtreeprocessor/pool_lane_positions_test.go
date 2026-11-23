@@ -451,3 +451,24 @@ func TestConflictRemovalBacksUpLanePositions(t *testing.T) {
 	_, ok = backups.Get(removed)
 	require.False(t, ok, "the backup goes once the subtree is stored")
 }
+
+// TestMoveBackReadsLanePositionsInConcurrentBatches: a move-back's position reads, split into
+// batches that run at once, each land on their own tx.
+func TestMoveBackReadsLanePositionsInConcurrentBatches(t *testing.T) {
+	stp, store := lanePoolProcessor(t, false, true)
+
+	previous := moveBackStoreReadBatchSize
+	moveBackStoreReadBatchSize = 1
+
+	t.Cleanup(func() { moveBackStoreReadBatchSize = previous })
+
+	hashes := make([]chainhash.Hash, 3)
+	want := make([]uint64, 3)
+
+	for i := range hashes {
+		want[i] = lane.Pack(uint8(20+i), uint64(i+1))
+		hashes[i] = createWithLanePosition(t, store, byte(30+i), want[i])
+	}
+
+	require.Equal(t, want, stp.lanePositionsFromUtxoStore(context.Background(), &model.Block{Header: prevBlockHeader}, hashes))
+}

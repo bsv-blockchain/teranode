@@ -6937,14 +6937,23 @@ func (stp *SubtreeProcessor) lanePositionsFromUtxoStore(ctx context.Context, blo
 		unresolved[i] = &utxostore.UnresolvedMetaData{Hash: hashes[i], Idx: i}
 	}
 
+	// the batches run concurrently, bounded as the subtree reads of a move-back are
+	g := errgroup.Group{}
+	util.SafeSetLimit(stp.logger, &g, stp.settings.BlockAssembly.MoveBackBlockConcurrency)
+
 	for start := 0; start < len(unresolved); start += moveBackStoreReadBatchSize {
 		end := min(start+moveBackStoreReadBatchSize, len(unresolved))
 
-		if err := stp.utxoStore.BatchDecorate(ctx, unresolved[start:end], fields.LanePosition); err != nil {
-			stp.logger.Warnf("[moveBackBlock][%s] returning %d txs to block assembly without lane positions, which could not be read: %v", block.String(), end-start, err)
-			continue
-		}
+		g.Go(func() error {
+			if err := stp.utxoStore.BatchDecorate(ctx, unresolved[start:end], fields.LanePosition); err != nil {
+				stp.logger.Warnf("[moveBackBlock][%s] returning %d txs to block assembly without lane positions, which could not be read: %v", block.String(), end-start, err)
+			}
+
+			return nil
+		})
 	}
+
+	_ = g.Wait()
 
 	for _, item := range unresolved {
 		if item.Err == nil && item.Data != nil {

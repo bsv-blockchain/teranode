@@ -1949,6 +1949,12 @@ func (ba *BlockAssembly) GetMiningCandidate(ctx context.Context, req *blockassem
 
 	ba.storeJobWithCoinbase(id, miningCandidate, subtrees)
 
+	// at shadow the lane bitmaps of a candidate's subtrees stay kept while candidates list them,
+	// even across blocks that do not rebuild the pool's subtrees, such as a coinbase-only block
+	if ba.keepsLanePositions() {
+		ba.keepCandidateLaneBitmaps(subtrees)
+	}
+
 	if includeSubtreeHashes {
 		miningCandidate.SubtreeHashes = make([][]byte, len(subtrees))
 		for i, subtree := range subtrees {

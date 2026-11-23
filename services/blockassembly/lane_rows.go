@@ -32,14 +32,14 @@ import (
 const laneBitmapsService = "blockassembly"
 
 // ownLaneBitmapsKeepBlocks is how many blocks the kept bitmaps of a subtree outlive the height
-// they were last stored at. A candidate is cut from subtrees sealed since the last block, some of
-// them possibly still being stored (see ownLaneBitmapsWait): when a
-// block moves the pool on, every transaction left is built into new subtrees, which are stored and
-// kept again, and a candidate cut before that block is stale. So an entry older than this serves
-// nothing, and it is dropped when the next one is kept. This bounds the memory to the subtrees
-// stored at the last ownLaneBitmapsKeepBlocks+1 heights, three generations of the pool's
-// subtrees: about 0.5 KB per million-transaction subtree whose lanes are contiguous runs, which is
-// how block assembly fills its subtrees from the queue.
+// they were last stored at, or last listed in a mining candidate. A block that moves the pool on
+// usually rebuilds every transaction left into new subtrees, which are stored and kept again; a
+// coinbase-only block does not, so the pool's subtrees stay as they were, and serving them in a
+// candidate is what keeps their entries current (keepCandidateLaneBitmaps). An entry older than
+// this is in no current candidate, and it is dropped when the next one is kept. This bounds the
+// memory to the subtrees stored or listed at the last ownLaneBitmapsKeepBlocks+1 heights: about
+// 0.5 KB per million-transaction subtree whose lanes are contiguous runs, which is how block
+// assembly fills its subtrees from the queue.
 const ownLaneBitmapsKeepBlocks = 2
 
 // ownLaneBitmapsWait bounds how long storing our block waits for the kept bitmaps of a subtree
@@ -319,6 +319,20 @@ func (ba *BlockAssembly) keepExistingSubtreeLaneBitmaps(ctx context.Context, sub
 		ba.storeSubtreeLaneBitmaps(ctx, subtree, subtreeLanePositions(subtree, subtreeRequest.ParentTxMap, subtreeRequest.DeletedPositions), height, dah)
 	case err != nil:
 		ba.logger.Warnf("[BlockAssembly:storeSubtreeData][%s] the lane bitmaps file may now expire before its subtree, whose DAH update failed: %v", root.String(), err)
+	}
+}
+
+// keepCandidateLaneBitmaps marks the kept bitmaps of a mining candidate's subtrees as current, so
+// they outlive blocks that do not rebuild the pool's subtrees.
+func (ba *BlockAssembly) keepCandidateLaneBitmaps(subtrees []*subtreepkg.Subtree) {
+	if ba.blockAssembler == nil || ba.blockAssembler.utxoStore == nil {
+		return
+	}
+
+	height := ba.blockAssembler.utxoStore.GetBlockHeight()
+
+	for _, st := range subtrees {
+		ba.ownLaneBitmaps.touch(*st.RootHash(), height)
 	}
 }
 

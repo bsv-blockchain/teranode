@@ -983,3 +983,29 @@ func TestStoreSubtreeDataCountsAFailedLaneBitmapsWrite(t *testing.T) {
 	_, missing := server.ownLaneBitmaps.get([]*chainhash.Hash{st.RootHash()})
 	require.Zero(t, missing, "its bitmaps are still kept")
 }
+
+// TestCandidateKeepsItsSubtreesLaneBitmaps: a subtree a mining candidate still lists keeps its
+// bitmaps across blocks that do not rebuild the pool's subtrees, such as coinbase-only blocks, while
+// one no candidate lists ages out.
+func TestCandidateKeepsItsSubtreesLaneBitmaps(t *testing.T) {
+	server, _ := setupServerWithSettings(t, func(s *settings.Settings) { s.UtxoStore.LaneMigration = settings.LaneMigrationShadow })
+
+	listed, _ := laneSealSubtree(t, "candidate-listed")
+	unlisted, _ := laneSealSubtree(t, "candidate-unlisted")
+
+	server.ownLaneBitmaps.put(*listed.RootHash(), lane.LaneBitmaps{}, 100)
+	server.ownLaneBitmaps.put(*unlisted.RootHash(), lane.LaneBitmaps{}, 100)
+
+	// three coinbase-only blocks later, a candidate still lists the first subtree
+	require.NoError(t, server.blockAssembler.utxoStore.SetBlockHeight(103))
+	server.keepCandidateLaneBitmaps([]*subtreepkg.Subtree{listed})
+
+	// a new subtree is kept at that height, which drops entries older than the margin
+	server.ownLaneBitmaps.put(chainhash.HashH([]byte("candidate-new")), lane.LaneBitmaps{}, 103)
+
+	_, missing := server.ownLaneBitmaps.get([]*chainhash.Hash{listed.RootHash()})
+	require.Zero(t, missing, "the listed subtree keeps its bitmaps")
+
+	_, missing = server.ownLaneBitmaps.get([]*chainhash.Hash{unlisted.RootHash()})
+	require.Equal(t, 1, missing, "a subtree no candidate lists ages out")
+}
