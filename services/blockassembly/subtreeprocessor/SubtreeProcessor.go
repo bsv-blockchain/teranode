@@ -4394,14 +4394,31 @@ func (stp *SubtreeProcessor) reChainSubtrees(fromIndex int) error {
 }
 
 // storeAndAnnounceChainedSubtrees sends every chained subtree to newSubtreeChan, which
-// stores it in the subtree store and announces it, and waits until the first wait
-// subtrees are stored; the results of the rest are logged asynchronously. Sends happen
-// in a batch before waiting, overlapping send and receive.
-func (stp *SubtreeProcessor) storeAndAnnounceChainedSubtrees(ctx context.Context, caller string, wait int) error {
+// stores it in the subtree store and, unless skipNotification is set, announces it, and waits
+// until the first wait subtrees are stored; the results of the rest are logged asynchronously.
+// Sends happen in a batch before waiting, overlapping send and receive.
+//
+// With a deadline the wait is for the typed StoreResult of each of the first wait subtrees, and a
+// store that failed, was cancelled, or did not finish within deadline of the send is an error.
+// Without one the wait is for ErrChan, which a failed write answers with nil.
+func (stp *SubtreeProcessor) storeAndAnnounceChainedSubtrees(ctx context.Context, caller string, wait int, skipNotification bool, deadline time.Duration) error {
+	wait = min(wait, len(stp.chainedSubtrees))
+
+	var results []chan StoreResult
+	if deadline > 0 {
+		results = make([]chan StoreResult, wait)
+	}
+
 	errChs := make([]chan error, len(stp.chainedSubtrees))
 	for i, subtree := range stp.chainedSubtrees {
 		errChs[i] = make(chan error, 1)
 		st := subtree // capture for closure
+
+		var result chan StoreResult
+		if i < len(results) {
+			results[i] = make(chan StoreResult, 1)
+			result = results[i]
+		}
 
 		// Respect context cancellation while sending: a full newSubtreeChan
 		// buffer during a large (>1000 subtree) reorg must not block this
@@ -4414,15 +4431,16 @@ func (stp *SubtreeProcessor) storeAndAnnounceChainedSubtrees(ctx context.Context
 			superseded:  stp.supersedeToken(),
 			DeletedTxs:  stp.deletedTxs,
 			ErrChan:     errChs[i],
+			Result:      result,
 			OnStorageComplete: func() {
 				stp.cleanupDeletedTxs(st)
 			},
+			SkipNotification: skipNotification,
 		}:
 		case <-ctx.Done():
 			return errors.NewProcessingError("[%s] context cancelled while announcing subtrees", caller, ctx.Err())
 		}
 	}
-	wait = min(wait, len(errChs))
 
 	// the storage workers may be hashing these subtrees right now and RootHash() caches
 	// without a lock, so the async log names the subtree by its index only
@@ -4438,6 +4456,10 @@ func (stp *SubtreeProcessor) storeAndAnnounceChainedSubtrees(ctx context.Context
 		}(errChs[i], i)
 	}
 
+	if deadline > 0 {
+		return awaitStoreResults(ctx, caller, results, deadline)
+	}
+
 	for _, errCh := range errChs[:wait] {
 		select {
 		case err := <-errCh:
@@ -4446,6 +4468,31 @@ func (stp *SubtreeProcessor) storeAndAnnounceChainedSubtrees(ctx context.Context
 			}
 		case <-ctx.Done():
 			return errors.NewProcessingError("[%s] context cancelled while awaiting subtree announcements", caller, ctx.Err())
+		}
+	}
+
+	return nil
+}
+
+// awaitStoreResults waits for every result until deadline has passed, and fails on the first store
+// that did not store its subtree. The deadline only ends the wait: a write in progress keeps running.
+func awaitStoreResults(ctx context.Context, caller string, results []chan StoreResult, deadline time.Duration) error {
+	timer := time.NewTimer(deadline)
+	defer timer.Stop()
+
+	for i, result := range results {
+		select {
+		case r := <-result:
+			switch {
+			case r.Err != nil:
+				return errors.NewStorageError("[%s] subtree %d was not stored", caller, i, r.Err)
+			case r.Cancelled || !r.SubtreeStored:
+				return errors.NewStorageError("[%s] subtree %d was not stored (cancelled %t)", caller, i, r.Cancelled)
+			}
+		case <-timer.C:
+			return errors.NewStorageError("[%s] subtree %d did not finish storing within %s", caller, i, deadline)
+		case <-ctx.Done():
+			return errors.NewProcessingError("[%s] context cancelled while awaiting subtree stores", caller, ctx.Err())
 		}
 	}
 
@@ -4671,7 +4718,7 @@ func (stp *SubtreeProcessor) enforceBlockMaxSize(ctx context.Context) error {
 		wait++
 	}
 
-	err = stp.storeAndAnnounceChainedSubtrees(ctx, "enforceBlockMaxSize", wait)
+	err = stp.storeAndAnnounceChainedSubtrees(ctx, "enforceBlockMaxSize", wait, false, 0)
 
 	stp.updatePrecomputedMiningData()
 
@@ -5989,6 +6036,17 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveBackBlocks []*
 	stp.phases.count("mark_false", len(allMarkFalse))
 	stp.phases.done("mark_sets")
 
+	// Store the subtrees this reorg built before any longest-chain mark, and announce them only
+	// after the marks (issue 2269, decision 2). With blockassembly_reorgStoreDeadline set, a store
+	// that failed or did not finish in time fails the reorg here, before anything irreversible
+	// below, and a reset follows (failedForkReorgNeedsReset). At 0 the wait is as before and never
+	// fails on a store.
+	if err = stp.storeAndAnnounceChainedSubtrees(ctx, "reorgBlocks", len(stp.chainedSubtrees), true, stp.settings.BlockAssembly.ReorgStoreDeadline); err != nil {
+		return err
+	}
+
+	stp.phases.done("store_wait")
+
 	// Run mark(true) and mark(false) concurrently — they operate on disjoint tx hash sets
 	// (guaranteed by partitionLongestChainMarks above).
 	markGroup, markCtx := errgroup.WithContext(ctx)
@@ -6014,13 +6072,13 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveBackBlocks []*
 
 	stp.phases.done("marks")
 
-	// announce all the subtrees to the network
-	// this will also store it by the Server in the subtree store
-	if err = stp.storeAndAnnounceChainedSubtrees(ctx, "reorgBlocks", len(stp.chainedSubtrees)); err != nil {
+	// Announce the subtrees stored above. They are in the store, so the store's Exists path
+	// announces them; nothing waits for it.
+	if err = stp.storeAndAnnounceChainedSubtrees(ctx, "reorgBlocks", 0, false, 0); err != nil {
 		return err
 	}
 
-	stp.phases.done("store_wait")
+	stp.phases.done("announce")
 
 	// Mark all the moveForwardBlocks as processed
 	for _, block := range moveForwardBlocks {

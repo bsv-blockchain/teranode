@@ -69,6 +69,13 @@ type reorgScenarioConfig struct {
 	// creates no raw D1 records. The reorgscale suite sets it to time the processor's phases; the
 	// marks are measured on their own against Aerospike.
 	skipStoreMarks bool
+
+	// reorgStoreDeadline sets blockassembly_reorgStoreDeadline.
+	reorgStoreDeadline time.Duration
+
+	// storeConsumer, when set, answers every store request in place of the default listener,
+	// which answers ErrChan and Result as stored.
+	storeConsumer func(req NewSubtreeRequest)
 }
 
 type reorgScenario struct {
@@ -491,6 +498,7 @@ func (sc *reorgScenario) buildProcessor(t testing.TB) {
 	tSettings := test.CreateBaseTestSettings(t)
 	tSettings.BlockAssembly.InitialMerkleItemsPerSubtree = sc.cfg.subtreeSize
 	tSettings.BlockAssembly.UseDynamicSubtreeSize = false
+	tSettings.BlockAssembly.ReorgStoreDeadline = sc.cfg.reorgStoreDeadline
 
 	var opts []Options
 	if sc.cfg.diskTxMap {
@@ -503,10 +511,13 @@ func (sc *reorgScenario) buildProcessor(t testing.TB) {
 	go func() {
 		defer close(listenerDone)
 
+		consume := sc.cfg.storeConsumer
+		if consume == nil {
+			consume = answerStored
+		}
+
 		for req := range newSubtreeChan {
-			if req.ErrChan != nil {
-				req.ErrChan <- nil
-			}
+			consume(req)
 		}
 	}()
 
@@ -579,6 +590,17 @@ func (sc *reorgScenario) startIntake(tps int) (stop func() int) {
 	return func() int {
 		close(done)
 		return <-sent
+	}
+}
+
+// answerStored answers a store request as a store that stored it.
+func answerStored(req NewSubtreeRequest) {
+	if req.Result != nil {
+		req.Result <- StoreResult{SubtreeStored: true, MetaNotApplicable: true}
+	}
+
+	if req.ErrChan != nil {
+		req.ErrChan <- nil
 	}
 }
 

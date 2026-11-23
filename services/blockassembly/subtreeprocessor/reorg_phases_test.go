@@ -144,7 +144,7 @@ func TestReorgBlocks_LogsEachPhaseOnceInOrder(t *testing.T) {
 		want = append(want, forwardStepPhases...)
 	}
 
-	want = append(want, "mark_sets", "marks", "store_wait", "processed_at", "finalize", "after_last_phase")
+	want = append(want, "mark_sets", "store_wait", "marks", "announce", "processed_at", "finalize", "after_last_phase")
 
 	require.Equal(t, want, logger.phases("reorgBlocks"))
 }
