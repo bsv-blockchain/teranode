@@ -663,8 +663,14 @@ func (v *ChainView) TakenBefore(id uint32) (byRow, byFloor uint64, hasRows bool)
 }
 
 // TakenOffMain reports whether a loaded block at height that is not on the main chain took the
-// packed lane position pos: a fork block, such as one a reorg replaced.
+// packed lane position pos: a fork block, such as one a reorg replaced. A height above the tip is
+// never one: a block there is a new tip block validation loaded before the follower moved, or a
+// fork about to become the main chain.
 func (s *IndexSnapshot) TakenOffMain(pos uint64, height uint32) bool {
+	if height > s.tipHeight {
+		return false
+	}
+
 	laneNum, p := Unpack(pos)
 
 	ls := s.lanes[laneNum]

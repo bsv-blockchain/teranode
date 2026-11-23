@@ -1037,3 +1037,30 @@ func prepareView(r *Reader, ctx context.Context, hash chainhash.Hash) (*lane.Cha
 
 	return v, v != nil
 }
+
+// A block block validation loaded before the follower moved the tip is not a reorg's loser: a
+// parent the store says is mined at its height counts not_loaded, not off_chain, until the tip
+// moves.
+func TestReaderDoesNotCountANewBlockAboveTheTipAsOffChain(t *testing.T) {
+	store := newStore(t, "sqlite")
+	c := newChain(t, store)
+
+	b1 := c.add(nil)
+
+	r := newReader(ulogger.TestLogger{}, store, 100)
+	follow(t, r)
+
+	b2 := c.add(b1, takes(t, 4, 5))
+
+	r.ShadowDuplicates(context.Background(), b2.hash, b2.id, false) // loads b2 ahead of the follower
+
+	requireCounted(t, ReaderValidator, KindNotLoaded, lane.ViaNone, func() {
+		r.CompareHeight(ReaderValidator, chainhash.Hash{}, lane.Pack(4, 5), true, b2.height)
+	})
+
+	follow(t, r)
+
+	requireCounted(t, ReaderValidator, KindAgree, lane.ViaRow, func() {
+		r.CompareHeight(ReaderValidator, chainhash.Hash{}, lane.Pack(4, 5), true, b2.height)
+	})
+}
