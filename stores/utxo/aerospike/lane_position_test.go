@@ -43,6 +43,30 @@ func TestLanePositionContract(t *testing.T) {
 	t.Run("returns", func(t *testing.T) { tests.LanePositionReturns(t, store, "aerospike", tests.LaneReturnRules{}, nil) })
 }
 
+// TestLanePositionInUnminedIterator: block assembly's reload reads each unmined transaction's own
+// lane position from a real Aerospike at shadow, through the raw query, and none at off, where the
+// query names the bins it always did.
+func TestLanePositionInUnminedIterator(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		shadow bool
+	}{{"shadow", true}, {"off", false}} {
+		t.Run(tc.name, func(t *testing.T) {
+			logger := ulogger.NewErrorTestLogger(t)
+			tSettings := test.CreateBaseTestSettings(t)
+
+			if tc.shadow {
+				tSettings.UtxoStore.LaneMigration = settings.LaneMigrationShadow
+			}
+
+			_, store, _, deferFn := initAerospike(t, tSettings, logger)
+			t.Cleanup(deferFn)
+
+			tests.LanePositionInUnminedIterator(t, store, tc.shadow)
+		})
+	}
+}
+
 // TestLanePositionBin checks what the contract cannot see: the raw bin, on the
 // master record only, for the paths that store a transaction outside the
 // record.

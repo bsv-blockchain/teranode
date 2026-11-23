@@ -17,11 +17,13 @@ import (
 	"github.com/bsv-blockchain/teranode/services/blockassembly/blockassembly_api"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util/lane"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 )
 
 func createTestClient(mockClient *mockBlockAssemblyAPIClient, batchSize int) *Client {
@@ -1364,4 +1366,56 @@ func TestClient_QueueStatsCarriesHeldCount(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, int64(70), stats.HeldCount)
 	require.Equal(t, int64(100), stats.MaxHeld)
+}
+
+// TestClient_SendsLanePositionsOnlyWhenATxHasOne: a tx handed over without a lane position, as at
+// utxostore_laneMigration off, is the same on the wire as without lanes, unary and columnar; one
+// with a position carries it, and a columnar batch then carries one per tx.
+func TestClient_SendsLanePositionsOnlyWhenATxHasOne(t *testing.T) {
+	empty := subtree.NewTxInpoints()
+
+	inpoints, err := empty.Serialize()
+	require.NoError(t, err)
+
+	request := func(i byte, position uint64) *blockassembly_api.AddTxRequest {
+		txid := make([]byte, 32)
+		txid[0] = i
+
+		return &blockassembly_api.AddTxRequest{Txid: txid, Fee: 1, Size: 100, TxInpoints: inpoints, LanePosition: position}
+	}
+
+	plain := request(1, 0)
+	withoutField := &blockassembly_api.AddTxRequest{Txid: plain.Txid, Fee: 1, Size: 100, TxInpoints: inpoints}
+
+	plainBytes, err := proto.Marshal(plain)
+	require.NoError(t, err)
+
+	withoutBytes, err := proto.Marshal(withoutField)
+	require.NoError(t, err)
+	require.Equal(t, withoutBytes, plainBytes, "position 0 is not sent")
+
+	c := &Client{}
+
+	offBatch, err := c.convertToColumnarFormat([]*batchItem{{req: request(1, 0)}, {req: request(2, 0)}})
+	require.NoError(t, err)
+	require.Nil(t, offBatch.LanePositions, "a batch without positions sends no column")
+
+	shadowBatch, err := c.convertToColumnarFormat([]*batchItem{{req: request(1, 0)}, {req: request(2, lane.Pack(4, 9))}})
+	require.NoError(t, err)
+	require.Equal(t, []uint64{0, lane.Pack(4, 9)}, shadowBatch.LanePositions, "one position per tx, 0 for none")
+
+	t.Run("unary", func(t *testing.T) {
+		mockClient := &mockBlockAssemblyAPIClient{}
+		client := createTestClient(mockClient, 0)
+
+		mockClient.On("AddTx", mock.Anything, mock.MatchedBy(func(req *blockassembly_api.AddTxRequest) bool {
+			return req.LanePosition == lane.Pack(4, 9)
+		}), mock.Anything).Return(&blockassembly_api.AddTxResponse{Ok: true}, nil)
+
+		hash := chainhash.Hash{0x09}
+		ok, err := client.Store(context.Background(), &hash, 1, 100, subtree.NewTxInpoints(), lane.Pack(4, 9))
+		require.NoError(t, err)
+		require.True(t, ok)
+		mockClient.AssertExpectations(t)
+	})
 }

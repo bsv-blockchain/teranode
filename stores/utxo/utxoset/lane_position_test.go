@@ -2784,3 +2784,19 @@ func TestLaneSchemaInstalledAtOffKeepsDisabledWritersWorking(t *testing.T) {
 	require.NoError(t, s.Unspend(ctx, spends))
 	require.Equal(t, 2, utxoCount(t, s, ctx, parent), "the carried row rebuilds the coin")
 }
+
+// TestLanePositionInUnminedIteratorUtxoset: block assembly's reload reads each unmined
+// transaction's own lane position at shadow, and none at off.
+func TestLanePositionInUnminedIteratorUtxoset(t *testing.T) {
+	t.Run("shadow", func(t *testing.T) {
+		s, _ := newUncheckpointedLaneStore(t)
+		tests.LanePositionInUnminedIterator(t, s, true)
+	})
+
+	t.Run("off", func(t *testing.T) {
+		s, _ := newTestStoreWith(t, func(ts *settings.Settings) {
+			withCheckpoints(ts, nil)
+		})
+		tests.LanePositionInUnminedIterator(t, s, false)
+	})
+}

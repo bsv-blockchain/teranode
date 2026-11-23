@@ -981,10 +981,11 @@ func TestIsFinalb633531280f980108329e3e0b9335b2290892d120916f9e17a9e3033bde1260b
 
 // txFeeSize represents transaction metadata for block assembly testing.
 type txFeeSize struct {
-	txHash     *chainhash.Hash
-	fee        uint64
-	size       uint64
-	txInpoints subtree.TxInpoints
+	txHash       *chainhash.Hash
+	fee          uint64
+	size         uint64
+	txInpoints   subtree.TxInpoints
+	lanePosition uint64
 }
 
 // MockBlockAssemblyStore provides a test double for block assembly storage operations.
@@ -995,7 +996,7 @@ type MockBlockAssemblyStore struct {
 	removedTxs   []chainhash.Hash
 }
 
-func (s *MockBlockAssemblyStore) Store(_ context.Context, hash *chainhash.Hash, fee, size uint64, txInpoints subtree.TxInpoints, _ uint64) (bool, error) {
+func (s *MockBlockAssemblyStore) Store(_ context.Context, hash *chainhash.Hash, fee, size uint64, txInpoints subtree.TxInpoints, lanePosition uint64) (bool, error) {
 	if s.panicOnStore {
 		// Simulates a nil/misconfigured block-assembly client panicking mid-delivery,
 		// e.g. inside the real gRPC client's Store() call.
@@ -1011,10 +1012,11 @@ func (s *MockBlockAssemblyStore) Store(_ context.Context, hash *chainhash.Hash, 
 	}
 
 	s.storedTxs = append(s.storedTxs, txFeeSize{
-		txHash:     hash,
-		fee:        fee,
-		size:       size,
-		txInpoints: txInpoints,
+		txHash:       hash,
+		fee:          fee,
+		size:         size,
+		txInpoints:   txInpoints,
+		lanePosition: lanePosition,
 	})
 
 	return true, nil
@@ -3102,6 +3104,56 @@ func (s *laneCaptureStore) SpendAndCreate(ctx context.Context, tx *bt.Tx, blockH
 	}
 
 	return md, spends, err
+}
+
+// TestValidateHandsTheLanePositionToBlockAssembly: at shadow the validator hands block assembly
+// the lane position the create gave the record, and 0 for a record without one; at off it hands
+// over 0 even when the store returns a position.
+func TestValidateHandsTheLanePositionToBlockAssembly(t *testing.T) {
+	tracing.SetupMockTracer()
+	initPrometheusMetrics()
+
+	ctx := context.Background()
+	base := parentOutputsStore(t)
+
+	s0 := bscript.NewFromBytes([]byte{0x76, 0xa9, 0x00})
+	parent := storedParent(t, base, 0x72, 150, s0, s0, s0, s0)
+	store := &laneCaptureStore{Store: base, parentPositions: map[chainhash.Hash]uint64{*parent.TxIDChainHash(): lane.Pack(14, 1)}}
+
+	for _, tc := range []struct {
+		name   string
+		shadow bool
+		vout   uint32
+		own    uint64
+		handed uint64
+	}{
+		{name: "shadow", shadow: true, vout: 0, own: lane.Pack(14, 3), handed: lane.Pack(14, 3)},
+		{name: "shadow, a record without a position", shadow: true, vout: 1, own: lane.None, handed: lane.None},
+		{name: "off", shadow: false, vout: 2, own: lane.Pack(14, 4), handed: lane.None},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			v := parentOutputsValidator(t, store)
+			if tc.shadow {
+				v = laneShadowValidator(t, store)
+			}
+
+			v.logger = ulogger.TestLogger{}
+			v.txValidator = NewTxValidator(ulogger.TestLogger{}, v.settings)
+			v.stats = gocore.NewStat("validator")
+
+			blockAssembly := &MockBlockAssemblyStore{}
+			v.blockAssembler = blockAssembly
+
+			store.own = tc.own
+
+			child := parentOutputsChild(t, []chainhash.Hash{*parent.TxIDChainHash()}, []uint32{tc.vout})
+			_, err := v.Validate(ctx, child, 201, WithSkipPolicyChecks(true), WithSkipScriptValidation(true), WithAddTXToBlockAssembly(true))
+			require.NoError(t, err)
+
+			require.Len(t, blockAssembly.storedTxs, 1)
+			require.Equal(t, tc.handed, blockAssembly.storedTxs[0].lanePosition)
+		})
+	}
 }
 
 // laneEntry reads the one entry of a v1 txmeta message: its action and its content.

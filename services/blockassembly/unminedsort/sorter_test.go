@@ -735,3 +735,67 @@ func TestSorter_SpillsOnBytesWithLargeInpoints(t *testing.T) {
 	out, _ := drainAll(t, s, 50)
 	requireOrder(t, in, out, true)
 }
+
+// TestSorter_CarriesLanePositions: WithPositions, each tx comes out with the lane position it went
+// in with, from memory and from spilled runs, and without it every tx comes out with none.
+func TestSorter_CarriesLanePositions(t *testing.T) {
+	positionOf := func(i int) uint64 {
+		if i%5 == 0 {
+			return 0 // a tx without a position
+		}
+
+		return uint64(i)<<8 | 0xff
+	}
+
+	for _, tc := range []struct {
+		name          string
+		dirs          bool
+		withPositions bool
+	}{
+		{"in memory", false, true},
+		{"spilled", true, true},
+		{"without positions", true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			in := makeInputs(20_000, true)
+
+			opts := Options{BufferRecords: 1 << 30, WithInpoints: true, WithPositions: tc.withPositions}
+			if tc.dirs {
+				opts.Dirs = []string{t.TempDir()}
+				opts.BufferRecords = 3_000
+			}
+
+			s, err := New(opts)
+			require.NoError(t, err)
+
+			defer func() { _ = s.Close() }()
+
+			byHash := make(map[chainhash.Hash]uint64, len(in))
+
+			for i := range in {
+				inpoints := in[i].inpoints
+				require.NoError(t, s.AddAt(in[i].createdAt, in[i].node, &inpoints, positionOf(i)))
+				byHash[in[i].node.Hash] = positionOf(i)
+			}
+
+			drainedCount := 0
+
+			require.NoError(t, s.Drain(context.Background(), 1_000, func(batch []*utxo.UnminedTransaction) error {
+				for _, tx := range batch {
+					want := byHash[tx.Hash]
+					if !tc.withPositions {
+						want = 0
+					}
+
+					require.Equal(t, want, tx.LanePosition, "tx %s", tx.Hash)
+				}
+
+				drainedCount += len(batch)
+
+				return nil
+			}))
+
+			require.Equal(t, len(in), drainedCount)
+		})
+	}
+}

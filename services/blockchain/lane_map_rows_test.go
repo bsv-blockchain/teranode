@@ -141,14 +141,100 @@ func TestAddBlockStoresTheBlockWhenItsLaneMapRowsDoNotParse(t *testing.T) {
 func laneInsertFailures(t *testing.T) float64 {
 	t.Helper()
 
+	return laneSeries(t, "teranode_lane_row_insert_failures_total", lane.BlockPeer, "")
+}
+
+// laneSeries is the counter value, or the histogram's observation count, of metric's series for
+// block and, when not empty, stage.
+func laneSeries(t *testing.T, metric, block, stage string) float64 {
+	t.Helper()
+
 	families, err := prometheus.DefaultGatherer.Gather()
 	require.NoError(t, err)
 
+	var sum float64
+
 	for _, f := range families {
-		if f.GetName() == "teranode_lane_row_insert_failures_total" {
-			return f.GetMetric()[0].GetCounter().GetValue()
+		if f.GetName() != metric {
+			continue
+		}
+
+		for _, m := range f.GetMetric() {
+			labels := map[string]string{}
+			for _, l := range m.GetLabel() {
+				labels[l.GetName()] = l.GetValue()
+			}
+
+			if labels["block"] != block || (stage != "" && labels["stage"] != stage) {
+				continue
+			}
+
+			if m.GetCounter() != nil {
+				sum += m.GetCounter().GetValue()
+			}
+
+			if m.GetHistogram() != nil {
+				sum += float64(m.GetHistogram().GetSampleCount())
+			}
 		}
 	}
 
-	return 0
+	return sum
+}
+
+// The client marks rows given WithOwnBlockLaneMapRows as our own block's, and sends the mark only
+// with rows, so a block stored without lanes is the same on the wire.
+func TestClientAddBlockMarksOurOwnBlocksLaneMapRows(t *testing.T) {
+	tc := setup(t)
+	blk := mockBlock(tc, t)
+
+	rows := []lane.MapRow{{Lane: 7, First: 1, Last: 9, Tag: lane.RowTagRange}}
+
+	capture := &addBlockCapture{}
+	c := &Client{client: capture, logger: tc.logger}
+
+	require.NoError(t, c.AddBlock(context.Background(), blk, "", options.WithOwnBlockLaneMapRows(rows)))
+	require.True(t, capture.req.GetLaneMapRowsOwnBlock())
+	require.Len(t, capture.req.GetLaneMapRows(), 1)
+
+	require.NoError(t, c.AddBlock(context.Background(), blk, "peer", options.WithLaneMapRows(rows)))
+	require.False(t, capture.req.GetLaneMapRowsOwnBlock(), "a peer's block")
+
+	require.NoError(t, c.AddBlock(context.Background(), blk, "", options.WithOwnBlockLaneMapRows(nil)))
+	require.False(t, capture.req.GetLaneMapRowsOwnBlock(), "no mark without rows")
+}
+
+// The server stores our own block's rows and the store times their insert under block="own".
+func TestAddBlockCountsOurOwnBlocksLaneMapRowsAsOwn(t *testing.T) {
+	tc := setup(t)
+	blk := mockBlock(tc, t)
+
+	subtreeHashes := make([][]byte, len(blk.Subtrees))
+	for i, hash := range blk.Subtrees {
+		subtreeHashes[i] = hash[:]
+	}
+
+	own := laneSeries(t, "teranode_lane_gate_seconds", lane.BlockOwn, lane.GateStageInsert)
+	peer := laneSeries(t, "teranode_lane_gate_seconds", lane.BlockPeer, lane.GateStageInsert)
+
+	_, err := tc.server.AddBlock(context.Background(), &blockchain_api.AddBlockRequest{
+		Header:              blk.Header.Bytes(),
+		CoinbaseTx:          blk.CoinbaseTx.Bytes(),
+		SubtreeHashes:       subtreeHashes,
+		TransactionCount:    blk.TransactionCount,
+		SizeInBytes:         blk.SizeInBytes,
+		LaneMapRows:         []*blockchain_api.LaneMapRow{{Lane: 7, First: 1, Last: 9, Tag: uint32(lane.RowTagRange)}},
+		LaneMapRowsOwnBlock: true,
+	})
+	require.NoError(t, err)
+
+	require.Equal(t, own+1, laneSeries(t, "teranode_lane_gate_seconds", lane.BlockOwn, lane.GateStageInsert))
+	require.Equal(t, peer, laneSeries(t, "teranode_lane_gate_seconds", lane.BlockPeer, lane.GateStageInsert))
+
+	_, meta, err := tc.server.store.GetBlockHeader(context.Background(), blk.Hash())
+	require.NoError(t, err)
+
+	got, err := tc.server.store.LaneMapRows(context.Background(), meta.ID)
+	require.NoError(t, err)
+	require.Len(t, got, 1)
 }
