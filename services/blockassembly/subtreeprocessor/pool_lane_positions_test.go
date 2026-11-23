@@ -372,3 +372,45 @@ func frozenEmptyHashSet() *SortedHashSet {
 
 	return s
 }
+
+// TestPoolKeepsLanePositionAcrossMapKinds: when a disk half of the double buffer cannot be
+// created, a block movement copies the pool between a disk map and an in-memory map, one way or
+// the other. At shadow each tx keeps its lane position across the copy.
+func TestPoolKeepsLanePositionAcrossMapKinds(t *testing.T) {
+	for _, toDisk := range []bool{false, true} {
+		t.Run(map[bool]string{false: "disk to in-memory", true: "in-memory to disk"}[toDisk], func(t *testing.T) {
+			stp, _ := lanePoolProcessor(t, toDisk, true)
+
+			var src TxInpointsMap = NewSplitTxInpointsMap(16)
+
+			if !toDisk {
+				m, err := NewDiskTxMap(DiskTxMapOptions{BasePaths: []string{t.TempDir()}})
+				require.NoError(t, err)
+				t.Cleanup(func() { _ = m.Close() })
+
+				src = m
+			}
+
+			nodes := make([]subtreepkg.Node, 0, 4)
+			want := make(map[chainhash.Hash]uint64)
+
+			for i := 0; i < 4; i++ {
+				hash := lanePoolTxHash(700 + i)
+				position := lane.Pack(12, uint64(300+i))
+
+				src.SetAt(hash, lanePoolInpoints(i), position)
+				nodes = append(nodes, subtreepkg.Node{Hash: hash, Fee: 1, SizeInBytes: 1})
+				want[hash] = position
+			}
+
+			wasInserted := make([]bool, len(nodes))
+			require.NoError(t, stp.parallelGetAndSetIfNotExists(nodes, src, 0, 2, wasInserted))
+
+			for i := range wasInserted {
+				require.True(t, wasInserted[i])
+			}
+
+			requirePoolPositions(t, stp, want)
+		})
+	}
+}

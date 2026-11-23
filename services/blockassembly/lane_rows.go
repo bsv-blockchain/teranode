@@ -124,8 +124,17 @@ func (o *ownLaneBitmaps) len() int {
 // its transactions, for a subtree whose meta pass did not collect them (no meta is written, or
 // building it failed). A transaction the map no longer holds has no position here: it is counted as
 // without one, as a transaction that arrived without one is. The coinbase placeholder is skipped.
+//
+// It runs on a subtree storage worker, beside the processor, so the disk map is read with
+// PositionWithErr: a read error that Position recorded on the map would be taken by the
+// processor's next check for its own, and fail that block movement into a reset. A position that
+// cannot be read is none, and counted.
 func subtreeLanePositions(subtree *subtreepkg.Subtree, parentTxMap subtreeprocessor.TxInpointsMap) *lane.BitmapsBuilder {
 	laneBits := lane.NewBitmapsBuilder()
+
+	withErr, readsWithErr := parentTxMap.(interface {
+		PositionWithErr(hash chainhash.Hash) (uint64, error)
+	})
 
 	for _, node := range subtree.Nodes {
 		if node.Hash.Equal(subtreepkg.CoinbasePlaceholderHashValue) {
@@ -133,7 +142,11 @@ func subtreeLanePositions(subtree *subtreepkg.Subtree, parentTxMap subtreeproces
 		}
 
 		var position uint64
-		if parentTxMap != nil {
+
+		switch {
+		case readsWithErr:
+			position, _ = withErr.PositionWithErr(node.Hash)
+		case parentTxMap != nil:
 			position = parentTxMap.Position(node.Hash)
 		}
 

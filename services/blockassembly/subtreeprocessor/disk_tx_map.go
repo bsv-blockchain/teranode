@@ -1064,22 +1064,34 @@ func (m *DiskTxMap) GetAtWithErr(hash chainhash.Hash) (*subtreepkg.TxInpoints, u
 // Position returns the lane position kept with hash, or 0 when the map does not hold hash, keeps
 // no position for it, or cannot read its record (an error recorded on the map, as Get records it).
 func (m *DiskTxMap) Position(hash chainhash.Hash) uint64 {
+	position, err := m.PositionWithErr(hash)
+	if err != nil {
+		m.recordErr(err)
+		return 0
+	}
+
+	return position
+}
+
+// PositionWithErr is Position returning a read error instead of recording it on the map. A caller
+// that runs beside the processor, such as the subtree storage worker, uses it, so a read error it
+// causes is not taken by the processor's next check for its own, as GetWithErr does for Get.
+func (m *DiskTxMap) PositionWithErr(hash chainhash.Hash) (uint64, error) {
 	s, g, entry, exists := m.pinEntry(hash)
 	if !exists {
-		return 0
+		return 0, nil
 	}
 
 	defer unpin(s, g)
 
 	payload, magic, err := readRecord(g, g.logOf(hash), entryOffset(entry))
 	if err != nil {
-		m.recordErr(err)
-		return 0
+		return 0, err
 	}
 
 	_, position := splitPositioned(payload, magic)
 
-	return position
+	return position, nil
 }
 
 // readEntry reads and decodes the record of hash's entry in g, which the caller has pinned.

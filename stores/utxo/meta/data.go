@@ -92,8 +92,10 @@ type Data struct {
 	// from the store. The one exception is on utxoset, where a GetMeta that shares
 	// a get batch with a read that named the field can get the position, because
 	// the batch reads the column if any item asked, so a non-zero value on a read
-	// that did not name the field is not an answer to it. Nothing reads the field
-	// yet; a reader must ask the store with fields.LanePosition.
+	// that did not name the field is not an answer to it. The validator's handoff
+	// to block assembly reads the position a create returned on this struct
+	// (lanes Phase 1, P2b); any other reader must ask the store with
+	// fields.LanePosition.
 	LanePosition uint64 `json:"lanePosition,omitempty"`
 
 	// Frozen is a flag indicating if the transaction is frozen

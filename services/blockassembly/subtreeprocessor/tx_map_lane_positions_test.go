@@ -7,6 +7,7 @@ import (
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/util/lane"
 	"github.com/stretchr/testify/require"
 )
@@ -307,4 +308,30 @@ func BenchmarkTxMapLanePositionFootprint(b *testing.B) {
 			}
 		}
 	}
+}
+
+// TestDiskTxMapPositionWithErrLeavesNoErrorOnTheMap: a position read that fails returns its error
+// to a caller beside the processor and records nothing on the map, while Position records it as Get
+// does, for the processor's own reads.
+func TestDiskTxMapPositionWithErrLeavesNoErrorOnTheMap(t *testing.T) {
+	m := newErrTestDiskTxMap(t)
+
+	hash := batchTestHash(1)
+	m.SetAt(hash, laneTestInpoints(1), lanePositionSample)
+	require.NoError(t, m.Flush())
+	require.NoError(t, m.TakeErr())
+
+	position, err := m.PositionWithErr(hash)
+	require.NoError(t, err)
+	require.Equal(t, lanePositionSample, position)
+
+	failDiskTxMapLogs(m, 0, errors.NewStorageError("read failed"))
+
+	position, err = m.PositionWithErr(hash)
+	require.Error(t, err)
+	require.Zero(t, position)
+	require.NoError(t, m.TakeErr(), "nothing is left on the map for the processor to take")
+
+	require.Zero(t, m.Position(hash))
+	require.Error(t, m.TakeErr(), "the processor's own read records it")
 }

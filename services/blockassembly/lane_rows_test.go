@@ -525,3 +525,30 @@ func TestStoreSubtreeDataAtOffWritesNoLaneBitmaps(t *testing.T) {
 	require.Error(t, err)
 	require.Zero(t, server.ownLaneBitmaps.len())
 }
+
+// failingPositionMap is a pool map whose position reads fail, as a disk map's do when a record is
+// lost, and that refuses the read that records the error on the map.
+type failingPositionMap struct {
+	subtreeprocessor.TxInpointsMap
+}
+
+func (failingPositionMap) PositionWithErr(chainhash.Hash) (uint64, error) {
+	return 0, errors.NewStorageError("disk tx map: read failed")
+}
+
+func (failingPositionMap) Position(chainhash.Hash) uint64 {
+	panic("the storage worker must not record a read error on the pool map")
+}
+
+// TestSubtreeLanePositionsReadsWithoutRecordingErrors: the storage worker reads positions with
+// PositionWithErr, so a failed read leaves no error on the pool map for the processor to take for
+// its own; the tx is counted as without a position.
+func TestSubtreeLanePositionsReadsWithoutRecordingErrors(t *testing.T) {
+	st, err := subtreepkg.NewTreeByLeafCount(4)
+	require.NoError(t, err)
+	require.NoError(t, st.AddCoinbaseNode())
+	require.NoError(t, st.AddNode(chainhash.HashH([]byte("lane-failing-read")), 1, 1))
+
+	laneBits := subtreeLanePositions(st, failingPositionMap{TxInpointsMap: subtreeprocessor.NewSplitTxInpointsMap(1)})
+	require.Equal(t, 1, laneBits.Unpositioned())
+}
