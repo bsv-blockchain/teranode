@@ -146,6 +146,33 @@ func TestHandleSubtreeTopic_ConnectedLowReputationPeerStillGated(t *testing.T) {
 	require.Equal(t, 1, s.reputationCache.Len())
 }
 
+// A relayed low-reputation author (known to the registry, no open connection)
+// is deliberately not reputation-gated: looking it up would cost a GetPeer
+// round-trip per novel author, the amplification the gate exists to avoid.
+// Its messages are processed, nothing is looked up and nothing is cached. The
+// ban gate still applies to relayed authors.
+func TestShouldSkipUnhealthyPeer_RelayedLowReputationAuthorNotGated(t *testing.T) {
+	s, _, _, _, _ := newGateBoundsTestServer(t, 1)
+	reg := blockchain.NewCentralizedPeerRegistry(blockchain.DefaultBanConfig())
+	counting := newCountingRegistryClient(blockchain.NewLocalPeerRegistryClient(reg))
+	s.peerRegistry = counting
+
+	relayed := mustNewPeerID(t)
+	reg.Register(&blockchain.PeerInfo{ID: relayed.String()})
+	reg.UpdateMetrics(relayed.String(), 0, 0, 0, false, false, true, 0)
+
+	info, ok := reg.Get(relayed.String())
+	require.True(t, ok)
+	require.Less(t, info.ReputationScore, 20.0, "fixture: the author is below the reputation threshold")
+
+	for i := 0; i < 20; i++ {
+		require.False(t, s.shouldSkipUnhealthyPeer(relayed.String(), "test"), "relayed author is not reputation-gated")
+	}
+
+	require.Zero(t, counting.callCount("GetPeer"), "no registry lookup for an unconnected author")
+	require.Zero(t, s.reputationCache.Len(), "no reputation entry for an unconnected author")
+}
+
 // The reputation cache is bounded at insert: more connected peers than the cap
 // rotate the cache instead of growing it.
 func TestReputationCache_BoundedAtInsert(t *testing.T) {
