@@ -1179,7 +1179,9 @@ func TestBlockParentsHoldsUpToItsCapWhileTheChainLoads(t *testing.T) {
 
 	bp := r.BlockParents(context.Background(), b2.hash)
 
-	for i := 0; i <= maxPendingParents; i++ {
+	const held = 100_000 // the cap the design states, written out so a changed cap fails here
+
+	for i := 0; i <= held; i++ {
 		bp.ObserveParent(chainhash.Hash{2}, lane.Pack(8, 9), []uint32{b2.id})
 	}
 
@@ -1189,11 +1191,11 @@ func TestBlockParentsHoldsUpToItsCapWhileTheChainLoads(t *testing.T) {
 	close(source.release)
 
 	require.Eventually(t, func() bool {
-		return answers(ReaderBlockParent, KindAgree, lane.ViaRow) == agree+maxPendingParents
+		return answers(ReaderBlockParent, KindAgree, lane.ViaRow) == agree+held
 	}, 10*time.Second, 10*time.Millisecond)
 
 	time.Sleep(50 * time.Millisecond)
-	require.Equal(t, agree+maxPendingParents, answers(ReaderBlockParent, KindAgree, lane.ViaRow), "each held parent answered once")
+	require.Equal(t, agree+held, answers(ReaderBlockParent, KindAgree, lane.ViaRow), "each held parent answered once")
 }
 
 // A load for block validation publishes the index's size, though the tip has not moved.
@@ -1377,4 +1379,30 @@ func TestReaderGivesUpAHungRead(t *testing.T) {
 		_, kind := r.prepare(context.Background(), fork.hash)
 		require.NotEqual(t, KindNotReady, kind)
 	})
+}
+
+// A walk back whose batch is full and ends at genesis has reached the start of the chain: it loads
+// the blocks it read rather than asking for genesis's parent.
+func TestReaderWalkEndsAtGenesisInAFullBatch(t *testing.T) {
+	store := newStore(t, "sqlite")
+	c := newChain(t, store)
+
+	c.line(c.add(nil), 11) // the main chain, 12 blocks
+
+	r := newReader(ulogger.TestLogger{}, store, 100)
+	r.startBlocks = 3
+	follow(t, r)
+	require.Equal(t, uint32(10), r.Snapshot().StartHeight())
+
+	// A fork of 10 blocks from genesis: the walk from its tip reads them and genesis, 11 headers,
+	// exactly one batch.
+	fork := c.line(c.add(nil, takes(t, 4, 3)), 9)
+	require.Equal(t, uint32(10), fork.height)
+
+	r.maxWalk, r.walkBatch = 11, 11
+
+	v, kind := r.prepare(context.Background(), fork.hash)
+	require.Empty(t, kind)
+	require.NotNil(t, v)
+	require.True(t, v.Lookup(lane.Pack(4, 3)).Mined, "the fork's rows are loaded")
 }

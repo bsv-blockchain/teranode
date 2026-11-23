@@ -354,9 +354,10 @@ func (r *Reader) loadAncestry(ctx context.Context, hash chainhash.Hash, start ui
 			headers, metas = append(headers, h), append(metas, ms[i])
 		}
 
+		// The walk reached genesis: a short batch, or a full one that ends at it, whose parent
+		// hash is all zeros.
 		last := hs[len(hs)-1]
-		if uint64(len(hs)) < r.walkBatch || last.HashPrevBlock == nil {
-			// The walk reached genesis.
+		if uint64(len(hs)) < r.walkBatch || last.HashPrevBlock == nil || last.HashPrevBlock.IsEqual(&chainhash.Hash{}) {
 			found = true
 
 			break
