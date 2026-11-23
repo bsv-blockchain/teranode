@@ -19,7 +19,9 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
+	"math"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -45,6 +47,7 @@ import (
 	"github.com/bsv-blockchain/teranode/util/health"
 	"github.com/bsv-blockchain/teranode/util/kafka"
 	kafkamessage "github.com/bsv-blockchain/teranode/util/kafka/kafka_message"
+	"github.com/bsv-blockchain/teranode/util/lane"
 	"github.com/bsv-blockchain/teranode/util/tracing"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
@@ -406,6 +409,10 @@ func (b *Blockchain) HealthGRPC(ctx context.Context, _ *emptypb.Empty) (*blockch
 // Returns:
 // - Error if initialization fails, nil on success
 func (b *Blockchain) Init(ctx context.Context) error {
+	if err := b.settings.BlockChain.CheckLaneLease(); err != nil {
+		return err
+	}
+
 	b.finiteStateMachine = b.NewFiniteStateMachine()
 
 	// check if we are in local testing mode with a defined target state for the FSM
@@ -527,7 +534,7 @@ const (
 	maxNotificationMetadataFieldLen = 256
 
 	// maxBlockHeadersPerRequest bounds the header-only RPCs' (GetBlockHeaders,
-	// GetBlockHeadersFromOldest, GetBlockHeadersToCommonAncestor,
+	// GetBlockHeadersToCommonAncestor,
 	// GetBlockHeadersFromCommonAncestor, GetBlockHeadersFromHeight,
 	// LocateBlockHeaders) caller-supplied header counts. The store's
 	// preallocFor already bounds the initial slice capacity, but not the
@@ -746,6 +753,9 @@ func (b *Blockchain) Start(ctx context.Context, readyCh chan<- struct{}) error {
 
 	// Start batch token cleanup
 	go b.cleanupExpiredBatchTokens()
+
+	// Close lane leases whose holders went silent.
+	go b.startLaneLeaseSweep(ctx)
 
 	if err := b.startHTTP(ctx); err != nil {
 		return errors.WrapGRPC(err)
@@ -1628,6 +1638,223 @@ func (b *Blockchain) AssignBlockID(ctx context.Context, req *blockchain_api.Assi
 	return &blockchain_api.AssignBlockIDResponse{BlockId: id}, nil
 }
 
+// maxLaneHolderBytes is the longest holder name a hand-out accepts. Each hand-out keeps its holder
+// for ever in the insert-only lane_handout table, so the length has to be bounded.
+const maxLaneHolderBytes = 256
+
+// OpenLaneLease opens a lease on a free lane for a record-creating process, with its first grant.
+func (b *Blockchain) OpenLaneLease(ctx context.Context, req *blockchain_api.OpenLaneLeaseRequest) (*blockchain_api.LaneLeaseGrant, error) {
+	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "OpenLaneLease",
+		tracing.WithParentStat(b.stats),
+		tracing.WithDebugLogMessage(b.logger, "[OpenLaneLease] called by %s", req.GetHolder()),
+	)
+	defer deferFn()
+
+	id, g, err := openLaneLease(ctx, b.store, b.settings, req.GetHolder())
+	if err != nil {
+		return nil, errors.WrapGRPC(err)
+	}
+
+	return &blockchain_api.LaneLeaseGrant{LeaseId: id[:], Lane: uint32(g.Lane), First: g.First, Last: g.Last}, nil
+}
+
+// RenewLaneLease renews a lane lease and, if asked, grants the next stretch of positions.
+func (b *Blockchain) RenewLaneLease(ctx context.Context, req *blockchain_api.RenewLaneLeaseRequest) (*blockchain_api.RenewLaneLeaseResponse, error) {
+	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "RenewLaneLease",
+		tracing.WithParentStat(b.stats),
+	)
+	defer deferFn()
+
+	id, l, err := leaseFromRequest(req.GetLeaseId(), req.GetLane())
+	if err != nil {
+		return nil, errors.WrapGRPC(err)
+	}
+
+	res, err := renewLaneLease(ctx, b.store, b.settings, lane.Renewal{
+		Lease:     id,
+		Lane:      l,
+		Rate:      req.GetRate(),
+		WantGrant: req.GetWantGrant(),
+		Settles:   lane.Settles{First: req.GetSettlesFirst(), LastTaken: req.GetSettlesLastTaken()},
+	})
+	if err != nil {
+		return nil, errors.WrapGRPC(err)
+	}
+
+	return &blockchain_api.RenewLaneLeaseResponse{Closed: res.Closed, Granted: res.Granted, First: res.Grant.First, Last: res.Grant.Last}, nil
+}
+
+// ReleaseLaneLease closes a lane lease cleanly.
+func (b *Blockchain) ReleaseLaneLease(ctx context.Context, req *blockchain_api.ReleaseLaneLeaseRequest) (*blockchain_api.ReleaseLaneLeaseResponse, error) {
+	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "ReleaseLaneLease",
+		tracing.WithParentStat(b.stats),
+	)
+	defer deferFn()
+
+	id, l, err := leaseFromRequest(req.GetLeaseId(), req.GetLane())
+	if err != nil {
+		return nil, errors.WrapGRPC(err)
+	}
+
+	already, err := releaseLaneLease(ctx, b.store, lane.Release{
+		Lease:     id,
+		Lane:      l,
+		LastTaken: req.GetLastTaken(),
+		Settles:   lane.Settles{First: req.GetSettlesFirst(), LastTaken: req.GetSettlesLastTaken()},
+	})
+	if err != nil {
+		return nil, errors.WrapGRPC(err)
+	}
+
+	return &blockchain_api.ReleaseLaneLeaseResponse{AlreadyClosed: already}, nil
+}
+
+// leaseFromRequest checks the lease ID and lane a request names.
+func leaseFromRequest(leaseID []byte, l uint32) (lane.LeaseID, uint8, error) {
+	var id lane.LeaseID
+
+	if len(leaseID) != len(id) {
+		return id, 0, errors.NewInvalidArgumentError("lane lease id is %d bytes, not %d", len(leaseID), len(id))
+	}
+
+	if l > lane.MaxLane {
+		return id, 0, errors.NewInvalidArgumentError("lane %d is above %d", l, lane.MaxLane)
+	}
+
+	copy(id[:], leaseID)
+
+	return id, uint8(l), nil
+}
+
+// openLaneLease fills the grant size and close time from settings and the height from the best
+// block, then asks the store. The Server and the LocalClient share it and the two below.
+func openLaneLease(ctx context.Context, store blockchain_store.Store, tSettings *settings.Settings, holder string) (lane.LeaseID, lane.Grant, error) {
+	// A LocalClient reaches this with no Server or gRPC Client built, and neither of those
+	// registers the metrics for it.
+	initPrometheusMetrics()
+
+	if len(holder) > maxLaneHolderBytes {
+		return lane.LeaseID{}, lane.Grant{}, errors.NewInvalidArgumentError("lane lease holder is %d bytes, above %d", len(holder), maxLaneHolderBytes)
+	}
+
+	_, meta, err := store.GetBestBlockHeader(ctx)
+	if err != nil {
+		return lane.LeaseID{}, lane.Grant{}, err
+	}
+
+	id, g, lapsed, err := store.OpenLaneLease(ctx, blockchainoptions.LaneLeaseOpen{
+		Holder:     holder,
+		Height:     meta.Height,
+		GrantMin:   tSettings.BlockChain.LaneGrantMin,
+		CloseAfter: tSettings.BlockChain.LaneLeaseCloseAfter,
+	})
+	if err != nil {
+		return lane.LeaseID{}, lane.Grant{}, err
+	}
+
+	prometheusBlockchainLaneLeaseOpens.Inc()
+	// An open closes stale leases before it chooses a lane; after an outage most lapses happen here
+	// rather than in the sweep, so they feed the sweep's counter.
+	prometheusBlockchainLaneLeaseCloses.WithLabelValues("lapsed").Add(float64(lapsed))
+	prometheusBlockchainLaneLeaseGrants.WithLabelValues(strconv.Itoa(int(g.Lane))).Inc()
+
+	return id, g, nil
+}
+
+func renewLaneLease(ctx context.Context, store blockchain_store.Store, tSettings *settings.Settings, r lane.Renewal) (lane.RenewResult, error) {
+	initPrometheusMetrics()
+
+	req := blockchainoptions.LaneLeaseRenew{
+		Lease:         r.Lease,
+		Lane:          r.Lane,
+		Rate:          r.Rate,
+		WantGrant:     r.WantGrant,
+		Settles:       r.Settles,
+		GrantMin:      tSettings.BlockChain.LaneGrantMin,
+		GrantDuration: tSettings.BlockChain.LaneGrantDuration,
+	}
+
+	if r.WantGrant {
+		_, meta, err := store.GetBestBlockHeader(ctx)
+		if err != nil {
+			return lane.RenewResult{}, err
+		}
+
+		req.Height = meta.Height
+	}
+
+	g, granted, closed, err := store.RenewLaneLease(ctx, req)
+	if err != nil {
+		return lane.RenewResult{}, err
+	}
+
+	if granted {
+		prometheusBlockchainLaneLeaseGrants.WithLabelValues(strconv.Itoa(int(g.Lane))).Inc()
+	}
+
+	return lane.RenewResult{Closed: closed, Granted: granted, Grant: g}, nil
+}
+
+func releaseLaneLease(ctx context.Context, store blockchain_store.Store, r lane.Release) (bool, error) {
+	initPrometheusMetrics()
+
+	already, err := store.ReleaseLaneLease(ctx, blockchainoptions.LaneLeaseRelease{Lease: r.Lease, Lane: r.Lane, LastTaken: r.LastTaken, Settles: r.Settles})
+	if err != nil {
+		return false, err
+	}
+
+	if !already {
+		prometheusBlockchainLaneLeaseCloses.WithLabelValues("clean").Inc()
+	}
+
+	return already, nil
+}
+
+// startLaneLeaseSweep closes silent leases every renewal interval until ctx ends. Several
+// blockchain pods may sweep at once; each lease still closes once.
+func (b *Blockchain) startLaneLeaseSweep(ctx context.Context) {
+	ticker := time.NewTicker(b.settings.BlockChain.LaneLeaseRenewInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			b.sweepLaneLeases(ctx)
+		}
+	}
+}
+
+// laneSweepMinTimeout is the least time one sweep gets, however short the renewal interval is.
+const laneSweepMinTimeout = 10 * time.Second
+
+// sweepLaneLeases runs one sweep. It holds row locks that every lease open needs, so it gets a
+// deadline and a stalled sweep lets go of them.
+func (b *Blockchain) sweepLaneLeases(ctx context.Context) {
+	timeout := b.settings.BlockChain.LaneLeaseRenewInterval
+	if timeout < laneSweepMinTimeout {
+		timeout = laneSweepMinTimeout
+	}
+
+	sweepCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	n, err := b.store.CloseStaleLaneLeases(sweepCtx, b.settings.BlockChain.LaneLeaseCloseAfter)
+	if err != nil {
+		if ctx.Err() == nil {
+			b.logger.Warnf("[Blockchain] could not close stale lane leases: %v", err)
+		}
+
+		return
+	}
+
+	if n > 0 {
+		b.logger.Infof("[Blockchain] closed %d lane leases with no renewal in %s", n, b.settings.BlockChain.LaneLeaseCloseAfter)
+		prometheusBlockchainLaneLeaseCloses.WithLabelValues("lapsed").Add(float64(n))
+	}
+}
+
 // GetBlockStats retrieves statistical information about the blockchain.
 func (b *Blockchain) GetBlockStats(ctx context.Context, _ *emptypb.Empty) (*model.BlockStats, error) {
 	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "GetBlockStats",
@@ -1780,89 +2007,6 @@ func (b *Blockchain) GetHashOfAncestorBlock(ctx context.Context, request *blockc
 	}, nil
 }
 
-func (b *Blockchain) GetLatestBlockHeaderFromBlockLocator(ctx context.Context, request *blockchain_api.GetLatestBlockHeaderFromBlockLocatorRequest) (*blockchain_api.GetBlockHeaderResponse, error) {
-	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "GetLatestBlockHeaderFromBlockLocator",
-		tracing.WithParentStat(b.stats),
-		tracing.WithHistogram(prometheusBlockchainGetLatestBlockHeaderFromBlockLocator),
-	)
-	defer deferFn()
-
-	bestBlockHash, err := chainhash.NewHash(request.BestBlockHash)
-	if err != nil {
-		return nil, errors.WrapGRPC(errors.NewInvalidArgumentError("[Blockchain][GetLatestBlockHeaderFromBlockLocator] request's best block hash is not valid", err))
-	}
-
-	locatorHashes := make([]chainhash.Hash, len(request.BlockLocatorHashes))
-	for i, hashBytes := range request.BlockLocatorHashes {
-		hash, err := chainhash.NewHash(hashBytes)
-		if err != nil {
-			return nil, errors.WrapGRPC(errors.NewInvalidArgumentError("[Blockchain][GetLatestBlockHeaderFromBlockLocator] request's block locator hash is not valid", err))
-		}
-
-		locatorHashes[i] = *hash
-	}
-
-	blockHeader, meta, err := b.store.GetLatestBlockHeaderFromBlockLocator(ctx, bestBlockHash, locatorHashes)
-	if err != nil {
-		return nil, errors.WrapGRPC(err)
-	}
-
-	return &blockchain_api.GetBlockHeaderResponse{
-		BlockHeader:    blockHeader.Bytes(),
-		Height:         meta.Height,
-		TxCount:        meta.TxCount,
-		SizeInBytes:    meta.SizeInBytes,
-		Miner:          meta.Miner,
-		ChainWork:      meta.ChainWork,
-		BlockTime:      meta.BlockTime,
-		Timestamp:      meta.Timestamp,
-		MedianTimePast: meta.MedianTimePast,
-	}, nil
-}
-
-func (b *Blockchain) GetBlockHeadersFromOldest(ctx context.Context, request *blockchain_api.GetBlockHeadersFromOldestRequest) (*blockchain_api.GetBlockHeadersResponse, error) {
-	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "GetBlockHeadersFromOldest",
-		tracing.WithParentStat(b.stats),
-		tracing.WithHistogram(prometheusBlockchainGetBlockHeadersFromOldest),
-	)
-	defer deferFn()
-
-	chainTipHash, err := chainhash.NewHash(request.ChainTipHash)
-	if err != nil {
-		return nil, errors.WrapGRPC(errors.NewInvalidArgumentError("[Blockchain][GetBlockHeadersFromOldest] request's start hash is not valid", err))
-	}
-
-	targetHash, err := chainhash.NewHash(request.TargetHash)
-	if err != nil {
-		return nil, errors.WrapGRPC(errors.NewInvalidArgumentError("[Blockchain][GetBlockHeadersFromOldest] request's target hash is not valid", err))
-	}
-
-	if uint64(request.NumberOfHeaders) > b.maxBlockHeadersPerRequest() {
-		return nil, errors.WrapGRPC(errors.NewInvalidArgumentError("[Blockchain][GetBlockHeadersFromOldest] %d headers requested, maximum is %d", request.NumberOfHeaders, b.maxBlockHeadersPerRequest()))
-	}
-
-	blockHeaders, blockHeaderMetas, err := b.store.GetBlockHeadersFromOldest(ctx, chainTipHash, targetHash, request.GetNumberOfHeaders())
-	if err != nil {
-		return nil, errors.WrapGRPC(err)
-	}
-
-	blockHeaderBytes := make([][]byte, len(blockHeaders))
-
-	for i, blockHeader := range blockHeaders {
-		blockHeaderBytes[i] = blockHeader.Bytes()
-	}
-
-	blockHeaderMetaBytes := make([][]byte, len(blockHeaderMetas))
-	for i, meta := range blockHeaderMetas {
-		blockHeaderMetaBytes[i] = meta.Bytes()
-	}
-
-	return &blockchain_api.GetBlockHeadersResponse{
-		BlockHeaders: blockHeaderBytes,
-		Metas:        blockHeaderMetaBytes,
-	}, nil
-}
-
 // GetBlockExists checks if a block with the given hash exists in the blockchain.
 func (b *Blockchain) GetBlockExists(ctx context.Context, request *blockchain_api.GetBlockRequest) (*blockchain_api.GetBlockExistsResponse, error) {
 	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "GetBlockExists",
@@ -1908,6 +2052,38 @@ func (b *Blockchain) GetBestBlockHeader(ctx context.Context, empty *emptypb.Empt
 		BlockTime:      meta.BlockTime,
 		Timestamp:      meta.Timestamp,
 		ChainWork:      meta.ChainWork,
+		MedianTimePast: meta.MedianTimePast,
+	}, nil
+}
+
+// GetBestBlockHeaderUncached is GetBestBlockHeader with the store's response cache left out,
+// and with the block id and mined flag carried on the response.
+func (b *Blockchain) GetBestBlockHeaderUncached(ctx context.Context, _ *emptypb.Empty) (*blockchain_api.GetBlockHeaderResponse, error) {
+	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "GetBestBlockHeaderUncached",
+		tracing.WithParentStat(b.stats),
+		tracing.WithHistogram(prometheusBlockchainGetBestBlockHeader),
+	)
+	defer deferFn()
+
+	chainTip, meta, err := b.store.GetBestBlockHeaderUncached(ctx)
+	if err != nil {
+		return nil, errors.WrapGRPC(err)
+	}
+
+	return &blockchain_api.GetBlockHeaderResponse{
+		BlockHeader:    chainTip.Bytes(),
+		Id:             meta.ID,
+		Height:         meta.Height,
+		TxCount:        meta.TxCount,
+		SizeInBytes:    meta.SizeInBytes,
+		Miner:          meta.Miner,
+		PeerId:         meta.PeerID,
+		BlockTime:      meta.BlockTime,
+		Timestamp:      meta.Timestamp,
+		ChainWork:      meta.ChainWork,
+		MinedSet:       meta.MinedSet,
+		SubtreesSet:    meta.SubtreesSet,
+		Invalid:        meta.Invalid,
 		MedianTimePast: meta.MedianTimePast,
 	}, nil
 }
@@ -2011,6 +2187,8 @@ func (b *Blockchain) GetBlockHeader(ctx context.Context, req *blockchain_api.Get
 		Invalid:        meta.Invalid,
 		ProcessedAt:    processedAt,
 		MedianTimePast: meta.MedianTimePast,
+
+		MinedSetGeneration: meta.MinedSetGeneration,
 	}, nil
 }
 
@@ -2032,6 +2210,41 @@ func (b *Blockchain) GetBlockHeaders(ctx context.Context, req *blockchain_api.Ge
 	}
 
 	blockHeaders, blockHeaderMetas, err := b.store.GetBlockHeaders(ctx, startHash, req.NumberOfHeaders)
+	if err != nil {
+		return nil, errors.WrapGRPC(err)
+	}
+
+	blockHeaderBytes := make([][]byte, len(blockHeaders))
+	for i, blockHeader := range blockHeaders {
+		blockHeaderBytes[i] = blockHeader.Bytes()
+	}
+
+	blockHeaderMetaBytes := make([][]byte, len(blockHeaders))
+	for i, meta := range blockHeaderMetas {
+		blockHeaderMetaBytes[i] = meta.Bytes()
+	}
+
+	return &blockchain_api.GetBlockHeadersResponse{
+		BlockHeaders: blockHeaderBytes,
+		Metas:        blockHeaderMetaBytes,
+	}, nil
+}
+
+// GetBlockHeadersByParentLinks retrieves headers by walking parent links back from a hash,
+// never by the main-chain flag and never from a cache.
+func (b *Blockchain) GetBlockHeadersByParentLinks(ctx context.Context, req *blockchain_api.GetBlockHeadersRequest) (*blockchain_api.GetBlockHeadersResponse, error) {
+	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "GetBlockHeadersByParentLinks",
+		tracing.WithParentStat(b.stats),
+		tracing.WithHistogram(prometheusBlockchainGetBlockHeaders),
+	)
+	defer deferFn()
+
+	startHash, err := chainhash.NewHash(req.StartHash)
+	if err != nil {
+		return nil, errors.WrapGRPC(errors.NewBlockNotFoundError("[Blockchain][GetBlockHeadersByParentLinks] request's hash is not valid", err))
+	}
+
+	blockHeaders, blockHeaderMetas, err := b.store.GetBlockHeadersByParentLinks(ctx, startHash, req.NumberOfHeaders)
 	if err != nil {
 		return nil, errors.WrapGRPC(err)
 	}
@@ -2100,45 +2313,6 @@ func (b *Blockchain) GetBlockHeadersToCommonAncestor(ctx context.Context, req *b
 	}, nil
 }
 
-// GetBlockHeadersFromTill retrieves block headers between two specified blocks.
-func (b *Blockchain) GetBlockHeadersFromTill(ctx context.Context, req *blockchain_api.GetBlockHeadersFromTillRequest) (*blockchain_api.GetBlockHeadersResponse, error) {
-	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "GetBlockHeadersFromTill",
-		tracing.WithParentStat(b.stats),
-		tracing.WithHistogram(prometheusBlockchainGetBlockHeaders),
-	)
-	defer deferFn()
-
-	startHash, err := chainhash.NewHash(req.StartHash)
-	if err != nil {
-		return nil, errors.WrapGRPC(errors.NewBlockNotFoundError("[Blockchain][GetBlockHeadersFromTill] request's start hash is not valid", err))
-	}
-
-	endHash, err := chainhash.NewHash(req.EndHash)
-	if err != nil {
-		return nil, errors.WrapGRPC(errors.NewBlockNotFoundError("[Blockchain][GetBlockHeadersFromTill] request's end hash is not valid", err))
-	}
-
-	blockHeaders, blockHeaderMetas, err := b.store.GetBlockHeadersFromTill(ctx, startHash, endHash)
-	if err != nil {
-		return nil, errors.WrapGRPC(err)
-	}
-
-	blockHeaderBytes := make([][]byte, len(blockHeaders))
-	for i, blockHeader := range blockHeaders {
-		blockHeaderBytes[i] = blockHeader.Bytes()
-	}
-
-	blockHeaderMetaBytes := make([][]byte, len(blockHeaders))
-	for i, meta := range blockHeaderMetas {
-		blockHeaderMetaBytes[i] = meta.Bytes()
-	}
-
-	return &blockchain_api.GetBlockHeadersResponse{
-		BlockHeaders: blockHeaderBytes,
-		Metas:        blockHeaderMetaBytes,
-	}, nil
-}
-
 // GetBlockHeadersFromHeight retrieves block headers starting from a specific height.
 func (b *Blockchain) GetBlockHeadersFromHeight(ctx context.Context, req *blockchain_api.GetBlockHeadersFromHeightRequest) (*blockchain_api.GetBlockHeadersFromHeightResponse, error) {
 	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "GetBlockHeadersFromHeight",
@@ -2170,6 +2344,96 @@ func (b *Blockchain) GetBlockHeadersFromHeight(ctx context.Context, req *blockch
 		BlockHeaders: blockHeaderBytes,
 		Metas:        metasBytes,
 	}, nil
+}
+
+// BlocksBetterThan returns the valid blocks that sort better than a key in the best-tip order, worst first.
+func (b *Blockchain) BlocksBetterThan(ctx context.Context, req *blockchain_api.BlocksBetterThanRequest) (*blockchain_api.BlocksBetterThanResponse, error) {
+	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "BlocksBetterThan",
+		tracing.WithParentStat(b.stats),
+	)
+	defer deferFn()
+
+	if req.Limit == 0 {
+		return nil, errors.WrapGRPC(errors.NewInvalidArgumentError("[Blockchain][BlocksBetterThan] invalid limit %d, must be 1 to %d", req.Limit, b.maxBlockHeadersPerRequest()))
+	}
+
+	after, err := model.NewCurrentBestTipKeyFromBytes(req.After)
+	if err != nil {
+		return nil, errors.WrapGRPC(errors.NewInvalidArgumentError("[Blockchain][BlocksBetterThan] invalid after key", err))
+	}
+
+	var from *model.BestTipKey
+
+	if len(req.From) > 0 {
+		key, keyErr := model.NewCurrentBestTipKeyFromBytes(req.From)
+		if keyErr != nil {
+			return nil, errors.WrapGRPC(errors.NewInvalidArgumentError("[Blockchain][BlocksBetterThan] invalid from key", keyErr))
+		}
+
+		from = &key
+	}
+
+	// Return a bounded page instead of rejecting a first-party caller's larger
+	// preferred page size. The caller continues from the last block it handled.
+	limit := req.Limit
+	if maximum := b.maxBlockHeadersPerRequest(); uint64(limit) > maximum {
+		limit = uint32(maximum) //nolint:gosec // maximum is smaller than the uint32 request
+	}
+
+	blockHeaders, metas, more, err := blocksBetterThanPage(ctx, b.store, after, from, req.MinHeight, limit)
+	if err != nil {
+		return nil, errors.WrapGRPC(err)
+	}
+
+	blockHeaderBytes := make([][]byte, len(blockHeaders))
+	for i, blockHeader := range blockHeaders {
+		blockHeaderBytes[i] = blockHeader.Bytes()
+	}
+
+	metasBytes := make([][]byte, len(metas))
+	for i, meta := range metas {
+		metasBytes[i] = meta.Bytes()
+	}
+
+	return &blockchain_api.BlocksBetterThanResponse{
+		BlockHeaders: blockHeaderBytes,
+		Metas:        metasBytes,
+		More:         more,
+	}, nil
+}
+
+// blocksBetterThanPage reads one page of BlocksBetterThan and whether more blocks follow it, by
+// asking the store for one block past the page.
+func blocksBetterThanPage(ctx context.Context, store blockchain_store.Store, after model.BestTipKey, from *model.BestTipKey, minHeight, limit uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, bool, error) {
+	probe := limit
+	if probe < math.MaxUint32 {
+		probe++
+	}
+
+	headers, metas, err := store.BlocksBetterThan(ctx, after, from, minHeight, probe)
+	if err != nil {
+		return nil, nil, false, err
+	}
+
+	if uint64(len(headers)) <= uint64(limit) {
+		return headers, metas, false, nil
+	}
+
+	return headers[:limit], metas[:limit], true, nil
+}
+
+// ClearBestTipLowWater deletes the best tip's low-water mark if it still holds the expected bytes.
+func (b *Blockchain) ClearBestTipLowWater(ctx context.Context, req *blockchain_api.ClearBestTipLowWaterRequest) (*emptypb.Empty, error) {
+	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "ClearBestTipLowWater",
+		tracing.WithParentStat(b.stats),
+	)
+	defer deferFn()
+
+	if err := b.store.ClearBestTipLowWater(ctx, req.Expected); err != nil {
+		return nil, errors.WrapGRPC(err)
+	}
+
+	return &emptypb.Empty{}, nil
 }
 
 // GetBlockHeadersByHeight retrieves block headers between two specified heights.
@@ -2978,7 +3242,9 @@ func (b *Blockchain) SetBlockMinedSet(ctx context.Context, req *blockchain_api.S
 		return nil, errors.WrapGRPC(errors.NewInvalidArgumentError("[Blockchain][SetBlockMinedSet] hash must be %d bytes, got %d", chainhash.HashSize, len(req.BlockHash)))
 	}
 
-	err = b.store.SetBlockMinedSet(ctx, blockHash)
+	// An absent generation comes from a blockvalidation that predates it; keep the
+	// unconditional write it relied on rather than refuse every call during a rolling upgrade.
+	err = b.store.SetBlockMinedSet(ctx, blockHash, req.MinedSetGeneration)
 	if err != nil {
 		return nil, errors.WrapGRPC(err)
 	}

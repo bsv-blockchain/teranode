@@ -9,10 +9,13 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-chaincfg"
 	"github.com/bsv-blockchain/teranode/model"
+	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/stores/blob"
+	"github.com/bsv-blockchain/teranode/stores/blob/memory"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -157,4 +160,47 @@ func TestGetSortedUTXOWrappers(t *testing.T) {
 	assert.Equal(t, wrappers[0].UTXOs[1].Index, uint32(2))
 	assert.Equal(t, wrappers[0].UTXOs[2].Index, uint32(4))
 	assert.Equal(t, wrappers[1].UTXOs[0].Index, uint32(1))
+}
+
+// A roll-up reports progress once per block, so a liveness heartbeat can tell a
+// long catch-up from a wedge (issue 1447).
+func TestConsolidateBlockRange_ReportsProgressPerBlock(t *testing.T) {
+	ctx := context.Background()
+	store := memory.New()
+	tSettings := test.CreateBaseTestSettings(t)
+
+	headers, metas, byH := buildChainHeaders(t, tSettings.ChainCfgParams.GenesisHash, 3)
+
+	for h := uint32(1); h <= 3; h++ {
+		stageBlockDeltas(t, ctx, tSettings, store, byH[h], h, p2pkhTx(t, byte(h), 1000))
+	}
+
+	mockClient := &blockchain.Mock{}
+	mockClient.On("GetBlockHeadersByHeight", mock.Anything, uint32(1), uint32(3)).Return(headers, metas, nil)
+
+	c := NewConsolidator(ulogger.TestLogger{}, tSettings, nil, mockClient, store, tSettings.ChainCfgParams.GenesisHash)
+
+	beats := 0
+	c.progress = func() { beats++ }
+
+	require.NoError(t, c.ConsolidateBlockRange(ctx, 1, 3))
+	require.Equal(t, 3, beats)
+}
+
+// Records report progress once every progressBeatEvery, not on each one, so
+// beating costs nothing next to the records themselves.
+func TestConsolidatorRecordDone_ReportsEveryBatch(t *testing.T) {
+	c := &consolidator{}
+
+	beats := 0
+	c.progress = func() { beats++ }
+
+	for range 2*progressBeatEvery + 1 {
+		c.recordDone()
+	}
+
+	require.Equal(t, 2, beats)
+
+	// No progress callback, as in a consolidator nobody watches, is a no-op.
+	(&consolidator{}).recordDone()
 }

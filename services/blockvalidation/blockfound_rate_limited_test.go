@@ -118,6 +118,7 @@ func newBlockFoundFetchServer(t *testing.T) (*Server, *catchupErrorRecordingP2PC
 		stats:                    gocore.NewStat("test"),
 		announcedBlockRateLimits: newAnnouncedBlockRateLimitCache(),
 		blockPriorityQueue:       NewBlockPriorityQueue(ulogger.TestLogger{}),
+		forkManager:              NewForkManager(ulogger.TestLogger{}, tSettings),
 		blockFoundCh:             make(chan processBlockFound, 10),
 	}
 
@@ -125,24 +126,25 @@ func newBlockFoundFetchServer(t *testing.T) (*Server, *catchupErrorRecordingP2PC
 }
 
 // announce runs addBlockToPriorityQueue for hash announced by "announcer" at baseURL and returns
-// the error delivered on errCh.
+// the answer it gave a waiting caller. Every path these tests take ends before the queue, so the
+// answer is there when the call returns.
 func announce(t *testing.T, u *Server, hash *chainhash.Hash, baseURL string) error {
 	t.Helper()
 
-	errCh := make(chan error, 1)
+	reply := newBlockFoundReply()
 
 	u.addBlockToPriorityQueue(context.Background(), processBlockFound{
 		hash:    hash,
 		baseURL: baseURL,
 		peerID:  "announcer",
-		errCh:   errCh,
+		reply:   reply,
 	})
 
 	select {
-	case err := <-errCh:
+	case err := <-reply.ch:
 		return err
 	default:
-		t.Fatal("addBlockToPriorityQueue returned without delivering a result on errCh")
+		t.Fatal("addBlockToPriorityQueue returned without answering the waiting caller")
 		return nil
 	}
 }
@@ -161,7 +163,7 @@ func TestAddBlockToPriorityQueue_RateLimitedFetchDoesNotChargeAnnouncer(t *testi
 
 	fetchErr := announce(t, u, testHash("blockfound-rate-limited"), announcer.url)
 
-	require.ErrorIs(t, fetchErr, errors.ErrServiceRateLimited, "the 429 must reach errCh as ErrServiceRateLimited through fetchSingleBlock's wrapping")
+	require.ErrorIs(t, fetchErr, errors.ErrServiceRateLimited, "the 429 must reach the caller as ErrServiceRateLimited through fetchSingleBlock's wrapping")
 	require.Equal(t, int64(1), announcer.gets.Load(), "the blockFound fetch must not retry")
 	require.Equal(t, 0, p2pClient.charged("announcer"), "a 429 within the allowance must not record a catchup failure against the announcer")
 	require.Empty(t, p2pClient.recordedErrors("announcer"), "a 429 within the allowance must not set a catchup error on the announcer")
@@ -417,18 +419,18 @@ func TestProcessBlockFoundChannel_CatchupBranchFetchFailureChargesAnnouncer(t *t
 	}
 
 	announcer := newStatusPeer(t, http.StatusInternalServerError)
-	errCh := make(chan error, 1)
+	reply := newBlockFoundReply()
 
 	err := u.processBlockFoundChannel(context.Background(), processBlockFound{
 		hash:    testHash("catchup-branch"),
 		baseURL: announcer.url,
 		peerID:  "announcer",
-		errCh:   errCh,
+		reply:   reply,
 	})
 
 	require.Error(t, err)
 	require.Equal(t, int64(1), announcer.gets.Load(), "the catchup branch must have done the fetch")
-	require.Error(t, <-errCh)
+	require.Error(t, <-reply.ch)
 	require.Equal(t, 1, p2pClient.charged("announcer"))
 	require.Len(t, p2pClient.recordedErrors("announcer"), 1)
 }
@@ -489,7 +491,8 @@ func requireCatchupSource(t *testing.T, u *Server, hash *chainhash.Hash, alt *co
 func TestAddBlockToPriorityQueue_RateLimitedFallbackHandsOnAlternativeSource(t *testing.T) {
 	u, hash, announcer, alt := rateLimitedAnnouncementWithAlternative(t)
 
-	require.NoError(t, announce(t, u, hash, announcer.url))
+	// The block went to catchup, not validation, so a waiting caller gets a retry-later error.
+	require.True(t, errors.Is(announce(t, u, hash, announcer.url), errors.ErrServiceError))
 	requireCatchupSource(t, u, hash, alt)
 	require.Equal(t, int64(1), alt.gets.Load())
 }
@@ -505,17 +508,17 @@ func TestProcessBlockFoundChannel_CatchupBranchRateLimitedFallbackHandsOnAlterna
 		u.blockFoundCh <- processBlockFound{}
 	}
 
-	errCh := make(chan error, 1)
+	reply := newBlockFoundReply()
 
 	err := u.processBlockFoundChannel(context.Background(), processBlockFound{
 		hash:    hash,
 		baseURL: announcer.url,
 		peerID:  peer.ID("announcer").String(),
-		errCh:   errCh,
+		reply:   reply,
 	})
 
 	require.NoError(t, err)
-	require.NoError(t, <-errCh)
+	require.True(t, errors.Is(<-reply.ch, errors.ErrServiceError), "a block handed to catchup was not validated, so the caller must not get nil")
 	requireCatchupSource(t, u, hash, alt)
 	require.Equal(t, int64(1), alt.gets.Load())
 }
@@ -548,17 +551,17 @@ func TestProcessBlockFoundChannel_CatchupBranchFallThroughDoesNotRefetch(t *test
 		u.blockFoundCh <- processBlockFound{}
 	}
 
-	errCh := make(chan error, 1)
+	reply := newBlockFoundReply()
 
 	err = u.processBlockFoundChannel(context.Background(), processBlockFound{
 		hash:    block.Hash(),
 		baseURL: announcer.url,
 		peerID:  peer.ID("announcer").String(),
-		errCh:   errCh,
+		reply:   reply,
 	})
 
 	require.NoError(t, err)
-	require.NoError(t, <-errCh)
+	require.False(t, reply.isAnswered(), "a queued block is answered by the worker that validates it, not at enqueue")
 	require.Equal(t, int64(1), announcer.gets.Load(), "the announcer must be asked once")
 	require.Equal(t, int64(1), alt.gets.Load(), "the block already fetched from the alternative must not be fetched again")
 

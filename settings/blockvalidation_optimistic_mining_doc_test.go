@@ -10,13 +10,12 @@ import (
 )
 
 // TestOptimisticMiningDocNoStalePhrases guards against the optimistic-mining prose
-// regressing back to phrasing that named script validation, rather than the
-// block-level checks (merkle root, coinbase/BIP34, duplicate transactions,
-// transaction ordering and parent-spend checks, and the old-block-ID scan), as the
-// work deferred to the background. CheckBlockSubtrees() runs synchronously, ahead
-// of the optimistic AddBlock, so subtree (transaction and script) validation is
-// already done by the time a block is optimistically added - only the block-level
-// checks continue in the background. Both the settings reference doc and the
+// regressing back to phrasing that named script validation, rather than the full
+// block validation, as the work deferred to the background. CheckBlockSubtrees()
+// runs synchronously, ahead of the optimistic AddBlock, so subtree (transaction and
+// script) validation is already done by the time a block is optimistically added.
+// The merkle binding and the coinbase rules also run before the add, in the
+// integrity floor, so the prose must not list them as deferred either. Both the settings reference doc and the
 // struct tag longdesc in blockvalidation_settings.go described this incorrectly
 // once; this test fails loudly if either regresses.
 //
@@ -45,6 +44,9 @@ func TestOptimisticMiningDocNoStalePhrases(t *testing.T) {
 		// "runs in the background" have been in the tree, so anchoring on either
 		// one alone would let the other back in.
 		"subtree validation runs in",
+		// The integrity floor runs the merkle binding and the coinbase rules before the add.
+		"merkle root, coinbase/BIP34 checks",
+		"merkle root, coinbase and BIP34 checks",
 	}
 
 	for _, phrase := range stalePhrases {

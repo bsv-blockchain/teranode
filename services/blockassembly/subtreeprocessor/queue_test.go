@@ -158,26 +158,24 @@ func Test_queueClockOverride(t *testing.T) {
 	require.Equal(t, fixed.UnixMilli(), batch.time)
 }
 
-// Test_zeroWindowFormulasAgree asserts parity between the two
-// validFromMillis formulas inside SubtreeProcessor at DoubleSpendWindow=0
-// (the documented default - see BlockAssembly.DoubleSpendWindow in
-// settings/blockassembly_settings.go).
-// Both call sites now zero-guard the calculation, so neither activates
-// the queue filter in LockFreeQueue.dequeueBatch and both admit same-millisecond
-// batches.
+// Test_zeroWindowFormulasAgree pins, on a bare queue, the dequeue each
+// SubtreeProcessor call site uses at DoubleSpendWindow=0 (the documented
+// default - see BlockAssembly.DoubleSpendWindow in
+// settings/blockassembly_settings.go): both admit a same-millisecond batch.
+// The subtests mirror the call sites rather than run them;
+// TestDequeueDuringBlockMovement_DrainCutoffAtClockNow pins the drain call
+// site itself.
 //
 //	Start loop (the default: branch of SubtreeProcessor.Start):
-//	  validFromMillis = 0                              if DoubleSpendWindow == 0
-//	  validFromMillis = (now - window).UnixMilli()     otherwise
+//	  dequeueBatch(0)                                  if DoubleSpendWindow <= 0
+//	  dequeueBatch((now - window).UnixMilli())         if DoubleSpendWindow > 0
 //
-//	SubtreeProcessor.dequeueDuringBlockMovement:
-//	  validFromMillis = 0                              if DoubleSpendWindow == 0
-//	  validFromMillis = (now - window).UnixMilli()     otherwise
+//	SubtreeProcessor.forEachDrainChunk (block-movement drains):
+//	  dequeueBatchUntil(now.UnixMilli())               if DoubleSpendWindow <= 0
+//	  dequeueBatch((now - window).UnixMilli())         if DoubleSpendWindow > 0
 //
-// Before the fix, the drain formula was unconditional, which held back
-// same-millisecond batches under the default config. This test pins the
-// post-fix parity. If a future change removes either zero-guard, the
-// corresponding subtest will fail.
+// The Start loop disables the time filter; the drain keeps one, inclusive
+// of its own millisecond, so it still does not chase fresh ingest.
 func Test_zeroWindowFormulasAgree(t *testing.T) {
 	fixed := time.Date(2030, 1, 2, 3, 4, 5, 0, time.UTC)
 	window := time.Duration(0)
@@ -206,16 +204,13 @@ func Test_zeroWindowFormulasAgree(t *testing.T) {
 	})
 
 	t.Run("drain_formula_admits_same_millisecond_batch", func(t *testing.T) {
-		// Mirror of the formula in SubtreeProcessor.dequeueDuringBlockMovement.
-		drainValidFromMillis := int64(0)
-		if window > 0 {
-			drainValidFromMillis = fixed.Add(-window).UnixMilli()
-		}
+		// Mirror of the window-0 dequeue in SubtreeProcessor.forEachDrainChunk.
+		require.Zero(t, window)
 
 		q := enqueueAtFixed()
-		batch, found := q.dequeueBatch(drainValidFromMillis)
+		batch, found := q.dequeueBatchUntil(fixed.UnixMilli())
 		require.True(t, found, "drain must admit same-ms batch at window=0 "+
-			"(zero-guard parity with the Start loop)")
+			"(parity with the Start loop)")
 		require.Equal(t, fixed.UnixMilli(), batch.time)
 	})
 }

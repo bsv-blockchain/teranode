@@ -8,6 +8,7 @@ import (
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util/lane"
 )
 
 // unspendRetryBackoffBase is the base delay for the exponential backoff between
@@ -30,11 +31,13 @@ type spendRollbackBounded interface {
 // createOutcomeUnknownKey is the error-data key MarkCreateOutcomeUnknown sets.
 const createOutcomeUnknownKey = "createOutcomeUnknown"
 
-// MarkCreateOutcomeUnknown marks err as returned by a Create that stopped
-// waiting for its write while the write could still commit: the store's own
-// wait for its batch ran out, not the batch failing. SequentialSpendAndCreate
-// keeps the spends for such an error, as it does for a context error. It
-// returns err.
+// MarkCreateOutcomeUnknown marks err as returned by a Create whose write may
+// have committed: the store stopped waiting for a write that could still
+// commit, as when its own wait for its batch ran out, or the write failed in a
+// way that leaves its commit unknown, as when a reply was lost after the write
+// was sent. A store marks an error only when the write may exist; a failure the
+// store knows wrote nothing stays unmarked. SequentialSpendAndCreate keeps the
+// spends for a marked error, as it does for a context error. It returns err.
 func MarkCreateOutcomeUnknown(err *errors.Error) *errors.Error {
 	if err != nil {
 		err.SetData(createOutcomeUnknownKey, true)
@@ -101,6 +104,21 @@ type SequentialStore interface {
 	Unspend(ctx context.Context, spends []*Spend, flagAsLocked ...bool) error
 }
 
+// LaneSpender is a SequentialStore whose spend can record the spender's lane position (util/lane)
+// in each parent's slot, in the same write that marks the output spent. SequentialSpendAndCreate
+// calls it, in place of Spend, when the call has a spender position: the one it just took for the
+// record it creates, or the one a spend-only caller names for a record already written. With lane
+// positions off every spend goes through Spend exactly as before. It is an
+// interface of its own rather than a field of IgnoreFlags, because IgnoreFlags sits inside
+// CreateOptions, which every create allocates, and eight more bytes there would move it up a size
+// class.
+//
+// A LaneSpender writes no parent's slot for an input whose Spend comes back with a refusal its spend
+// script makes before it writes that output (see LaneSpendWroteNothing).
+type LaneSpender interface {
+	SpendWithLanePosition(ctx context.Context, tx *bt.Tx, blockHeight uint32, position uint64, ignoreFlags IgnoreFlags) ([]*Spend, error)
+}
+
 // SequentialSpendAndCreate implements the Store.SpendAndCreate contract as the
 // original two-call sequence: spend the inputs, create the outputs, and roll the
 // spends back (with retries) when the create definitely failed. Concrete stores
@@ -113,7 +131,11 @@ type SequentialStore interface {
 // a caller that stops waiting for its item returns at once, while the batch can
 // still commit the record. That happens when the caller's context ends, and on
 // Aerospike also when the store's own batcher wait runs out, which returns a
-// ServiceUnavailable error marked with MarkCreateOutcomeUnknown. Unspending then would leave a record whose
+// ServiceUnavailable error marked with MarkCreateOutcomeUnknown. A write that
+// failed after it was sent can also have committed: an Aerospike write in
+// doubt, timed out or cut by a network error, or a Postgres write whose
+// connection was lost before the commit was confirmed. The stores mark those
+// errors too. Unspending then would leave a record whose
 // inputs are unspent, which a repeat never heals, since a repeat drops a
 // transaction whose record exists. Keeping the spends leaves either a written
 // transaction or a parent naming a spender with no record yet, and a repeat of
@@ -136,11 +158,87 @@ func SequentialSpendAndCreate(ctx context.Context, logger ulogger.Logger, s Sequ
 		return nil, nil, err
 	}
 
-	var spends []*Spend
+	// The position is taken before the first spend, so a create that cannot get one fails having
+	// spent nothing, rather than spending, failing and rolling the spends back.
+	//
+	// A position taken here from the source is this call's to record if it burns, and to return if
+	// the create provably wrote nothing. The store's Create is handed it as a named position, so it
+	// records and returns nothing for it.
+	var (
+		taker LanePositionTaker
+		taken uint64
+		// spender is the record's position, which a LaneSpender records in each parent's slot;
+		// zero with lane positions off, so the spends go out exactly as before.
+		spender uint64
+	)
+
+	if !options.SpendOnly {
+		var ok bool
+		if taker, ok = s.(LanePositionTaker); ok {
+			position, takeErr := taker.TakeLanePosition(ctx, options)
+			if takeErr != nil {
+				return nil, nil, takeErr
+			}
+
+			if position != options.LanePosition {
+				opts = WithTakenLanePosition(opts, position)
+			}
+
+			if TookLanePosition(options.LanePosition, position) {
+				taken = position
+			}
+
+			spender = position
+		}
+	} else if options.LanePosition != lane.None {
+		// A spend-only call creates nothing, so it takes, burns and returns no position. A caller
+		// that has already written the record, as a below-checkpoint list's second wave has, names
+		// that record's position so its spends record it in each parent's slot.
+		if err := lane.CheckPosition(options.LanePosition); err != nil {
+			return nil, nil, errors.NewInvalidArgumentError("[SequentialSpendAndCreate] spender lane position", err)
+		}
+
+		spender = options.LanePosition
+	}
+
+	var (
+		spends []*Spend
+		// spentWithLane is whether the spends carried the spender's position into the parents'
+		// slots. A refused spend of that kind may still have written a slot on a parent it spent
+		// before the refusal, so it returns its position only when every input was refused before
+		// its write (LaneSpendWroteNothing).
+		spentWithLane bool
+	)
 
 	if !options.CreateOnly {
-		spends, err = s.Spend(ctx, tx, blockHeight, options.IgnoreFlags)
+		if laneSpender, ok := s.(LaneSpender); ok && spender != lane.None {
+			spentWithLane = true
+			spends, err = laneSpender.SpendWithLanePosition(ctx, tx, blockHeight, spender, options.IgnoreFlags)
+		} else {
+			spends, err = s.Spend(ctx, tx, blockHeight, options.IgnoreFlags)
+		}
 		if err != nil {
+			if taken != lane.None {
+				// The spend half failed, so the create never ran and its outcome is known even
+				// when the spend's was not.
+				reason := LaneBurnReason(err, spends)
+				if reason == LaneBurnOutcomeUnknown {
+					reason = LaneBurnError
+				}
+
+				taker.BurnLanePosition(options.Caller, reason)
+
+				// A refused plain spend wrote nothing that carries the position, so it goes back. A
+				// refused lane spend goes back only when every input was refused before its write,
+				// as a double spend of one output is. Otherwise it keeps the position burned: on
+				// Aerospike a parent spent before the refusal keeps the position in its slot when
+				// the rollback is skipped or fails, and a later spend of that output by the same
+				// spender writes nothing, so a reuse would leave the slot naming another transaction.
+				if RefusedSpend(err, spends) && (!spentWithLane || LaneSpendWroteNothing(spends)) {
+					taker.ReturnLanePosition(taken, LaneReturnSpendRejected, true)
+				}
+			}
+
 			return nil, spends, err
 		}
 
@@ -151,6 +249,14 @@ func SequentialSpendAndCreate(ctx context.Context, logger ulogger.Logger, s Sequ
 
 	md, err := s.Create(ctx, tx, blockHeight, opts...)
 	if err != nil {
+		if taken != lane.None {
+			taker.BurnLanePosition(options.Caller, LaneBurnReason(err, nil))
+
+			// Only the store knows whether its failed Create wrote the position; it says so by
+			// marking the error.
+			taker.ReturnLanePosition(taken, LaneReturnExists, errors.Is(err, errors.ErrTxExists) && LanePositionUnwritten(err))
+		}
+
 		if errors.Is(err, errors.ErrTxExists) {
 			// the tx already exists; leave the spends in place for the caller to decide
 			return nil, spends, err

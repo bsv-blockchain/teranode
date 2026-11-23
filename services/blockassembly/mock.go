@@ -8,6 +8,7 @@ package blockassembly
 
 import (
 	"context"
+	"strings"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-subtree"
@@ -52,7 +53,7 @@ func (m *Mock) Health(ctx context.Context, checkLiveness bool) (int, string, err
 	return args.Int(0), args.String(1), args.Error(2)
 }
 
-func (m *Mock) Store(ctx context.Context, hash *chainhash.Hash, fee, size uint64, txInpoints subtree.TxInpoints) (bool, error) {
+func (m *Mock) Store(ctx context.Context, hash *chainhash.Hash, fee, size uint64, txInpoints subtree.TxInpoints, _ uint32) (bool, error) {
 	args := m.Called(ctx, hash, fee, size, txInpoints)
 
 	if args.Error(1) != nil {
@@ -157,7 +158,22 @@ func (m *Mock) GetBlockAssemblyState(ctx context.Context) (*blockassembly_api.St
 	return args.Get(0).(*blockassembly_api.StateMessage), nil
 }
 
-func (m *Mock) GetBlockAssemblyQueueStats(ctx context.Context) (QueueStats, error) {
+// GetBlockAssemblyQueueStats returns the stats a test registered. A test that registered none
+// gets empty stats, which report no in-memory limit, because the validator's held-limit gate
+// polls this call in the background without the test ever asking for it.
+func (m *Mock) GetBlockAssemblyQueueStats(ctx context.Context) (stats QueueStats, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			if msg, ok := r.(string); ok && strings.Contains(msg, "GetBlockAssemblyQueueStats") {
+				stats, err = QueueStats{}, nil
+
+				return
+			}
+
+			panic(r)
+		}
+	}()
+
 	args := m.Called(ctx)
 
 	if args.Error(1) != nil {

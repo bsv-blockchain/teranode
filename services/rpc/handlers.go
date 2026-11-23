@@ -890,6 +890,16 @@ func handleSendRawTransaction(ctx context.Context, s *RPCServer, cmd interface{}
 
 	s.logger.Debugf("tx to send: %v", tx)
 
+	// A syncing node stores no unmined transaction, not even the blob (issue
+	// 2003). -10 is the code bitcoind uses for a call it refuses during initial
+	// block download, so a client already handling that one needs no change.
+	if s.unminedTxGate.Refuses(ctx, tx.TxIDChainHash()) {
+		return nil, &bsvjson.RPCError{
+			Code:    bsvjson.ErrRPCClientInInitialDownload,
+			Message: "node is syncing and accepts no unmined transactions until it reaches the chain tip",
+		}
+	}
+
 	// Store the transaction in blob store first (following the pattern from propagation service)
 	if s.txStore != nil {
 		err = s.txStore.Set(ctx, tx.TxIDChainHash().CloneBytes(), fileformat.FileTypeTx, tx.SerializeBytes())
@@ -1180,12 +1190,15 @@ func handleGetMiningCandidate(ctx context.Context, s *RPCServer, cmd interface{}
 	}
 
 	if c.ProvideCoinbaseTx != nil && *c.ProvideCoinbaseTx {
-		coinbaseTx, err := mc.CreateCoinbaseTxCandidate(s.settings, true)
-		if err != nil {
-			return nil, err
+		// The coinbase block assembly keeps on the candidate's job, as bitcoin-sv returns the
+		// candidate block's own coinbase. A solution submitted without a coinbase is mined with
+		// this one, so a miner that hashes it and omits it from submitminingsolution gets the block
+		// it hashed. A coinbase built here instead would be one block assembly never sees.
+		if len(mc.CoinbaseTx) == 0 {
+			return nil, bsvjson.NewRPCError(bsvjson.ErrRPCInternal.Code, "block assembly returned the candidate without its coinbase: it could not build one from miner_wallet_private_keys, or it is an older or other implementation that does not set coinbase_tx")
 		}
 
-		jsonMap["coinbase"] = hex.EncodeToString(coinbaseTx.Bytes())
+		jsonMap["coinbase"] = hex.EncodeToString(mc.CoinbaseTx)
 	}
 
 	if *c.Verbosity == uint32(1) {
@@ -2770,7 +2783,12 @@ func handleFreeze(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan s
 		return nil, rpcDecodeHexError(c.TxID)
 	}
 
-	if err = s.utxoStore.FreezeUTXOs(ctx, []*utxo.Spend{{TxID: h, Vout: uint32(c.Vout), UTXOHash: h}}, s.settings); err != nil { // nolint:gosec
+	vout, err := safeconversion.IntToUint32(c.Vout)
+	if err != nil {
+		return nil, s.rpcInputError(err, bsvjson.ErrRPCInvalidParameter, "")
+	}
+
+	if err = s.utxoStore.FreezeUTXOs(ctx, []*utxo.Spend{{TxID: h, Vout: vout, UTXOHash: h}}, s.settings); err != nil {
 		return nil, err
 	}
 
@@ -2819,7 +2837,12 @@ func handleUnfreeze(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan
 		return nil, rpcDecodeHexError(c.TxID)
 	}
 
-	if err = s.utxoStore.UnFreezeUTXOs(ctx, []*utxo.Spend{{TxID: h, Vout: uint32(c.Vout), UTXOHash: h}}, s.settings); err != nil { // nolint:gosec
+	vout, err := safeconversion.IntToUint32(c.Vout)
+	if err != nil {
+		return nil, s.rpcInputError(err, bsvjson.ErrRPCInvalidParameter, "")
+	}
+
+	if err = s.utxoStore.UnFreezeUTXOs(ctx, []*utxo.Spend{{TxID: h, Vout: vout, UTXOHash: h}}, s.settings); err != nil {
 		return nil, err
 	}
 
@@ -2879,8 +2902,13 @@ func handleReassign(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan
 		return nil, rpcDecodeHexError(c.NewUTXOHash)
 	}
 
+	oldVout, err := safeconversion.IntToUint32(c.OldVout)
+	if err != nil {
+		return nil, s.rpcInputError(err, bsvjson.ErrRPCInvalidParameter, "")
+	}
+
 	if err = s.utxoStore.ReAssignUTXO(ctx,
-		&utxo.Spend{TxID: oldTXIDHash, Vout: uint32(c.OldVout), UTXOHash: oldUTXOHash}, // nolint:gosec
+		&utxo.Spend{TxID: oldTXIDHash, Vout: oldVout, UTXOHash: oldUTXOHash},
 		&utxo.Spend{UTXOHash: newUTXOHash}, s.settings); err != nil {
 		return nil, err
 	}

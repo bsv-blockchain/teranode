@@ -88,9 +88,7 @@ func TestBlockHandlerWithMaliciousPeer(t *testing.T) {
 			assert.Equal(t, "malicious_peer_123", blockFound.peerID)
 
 			// Send success response
-			if blockFound.errCh != nil {
-				blockFound.errCh <- nil
-			}
+			blockFound.reply.answer(nil)
 			handled <- true
 		case <-time.After(2 * time.Second):
 			t.Error("Timeout waiting for blockFound message")
@@ -422,12 +420,12 @@ func TestBlockFoundChannelErrorHandling(t *testing.T) {
 	}
 
 	t.Run("Error_Channel_Response", func(t *testing.T) {
-		errCh := make(chan error, 1)
+		reply := newBlockFoundReply()
 		blockFound := processBlockFound{
 			hash:    &chainhash.Hash{0x0a},
 			baseURL: "invalid://url",
 			peerID:  "test",
-			errCh:   errCh,
+			reply:   reply,
 		}
 
 		// Process should send error to channel
@@ -436,7 +434,7 @@ func TestBlockFoundChannelErrorHandling(t *testing.T) {
 
 		// Should receive error on channel
 		select {
-		case receivedErr := <-errCh:
+		case receivedErr := <-reply.ch:
 			require.Error(t, receivedErr)
 			assert.Contains(t, receivedErr.Error(), "invalid baseURL")
 		case <-time.After(1 * time.Second):
