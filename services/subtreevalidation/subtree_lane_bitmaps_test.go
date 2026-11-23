@@ -459,6 +459,53 @@ func TestBlessMissing_ReadsTheLanePositionBackAtShadow(t *testing.T) {
 	}
 }
 
+// A validator that finds the transaction already stored answers with metadata GetMeta read, which
+// has no lane position. At shadow subtree validation reads the position from the store; at off it
+// takes the answer as it is.
+func TestBlessMissing_ReadsThePositionOfATransactionAlreadyStored(t *testing.T) {
+	inpoints, err := subtreepkg.NewTxInpointsFromTx(tx1)
+	require.NoError(t, err)
+
+	for _, tc := range []struct {
+		mode settings.LaneMigration
+		want uint64
+	}{
+		{mode: settings.LaneMigrationShadow, want: lane.Pack(8, 14)},
+		{mode: settings.LaneMigrationOff},
+	} {
+		t.Run(string(tc.mode), func(t *testing.T) {
+			tSettings := test.CreateBaseTestSettings(t)
+			tSettings.UtxoStore.LaneMigration = tc.mode
+
+			store := &utxo.MockUtxostore{}
+			store.On("Get", mock.Anything, mock.Anything, []fields.FieldName{fields.LanePosition}).Return(&meta.Data{LanePosition: lane.Pack(8, 14)}, nil)
+
+			server := &Server{
+				logger:          ulogger.TestLogger{},
+				settings:        tSettings,
+				utxoStore:       store,
+				validatorClient: &answeringValidator{md: &meta.Data{Fee: 1, SizeInBytes: 1, TxInpoints: inpoints}},
+			}
+
+			md, _, err := server.blessMissing(context.Background(), chainhash.Hash{}, chainhash.Hash{}, tx1, 2, map[uint32]bool{}, validator.ProcessOptions())
+			require.NoError(t, err)
+			require.Equal(t, tc.want, md.LanePosition)
+		})
+	}
+}
+
+// answeringValidator answers every validation with md, as a validator does for a transaction it
+// found already stored.
+type answeringValidator struct {
+	validator.Interface
+	md *meta.Data
+}
+
+func (a *answeringValidator) ValidateWithOptions(context.Context, *bt.Tx, uint32, *validator.Options) (*meta.Data, error) {
+	md := *a.md
+	return &md, nil
+}
+
 // A record read back that already holds its lane position needs no second read for it.
 func TestReadBackMeta_ReadsNoPositionItAlreadyHas(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings(t)

@@ -1355,19 +1355,25 @@ func Test_txMetaCache_GetMetaAtShadowCachesNoEntryWithoutAPosition(t *testing.T)
 		return out[0], found[0]
 	}
 
+	withPosition := *stored
+	withPosition.LanePosition = lane.Pack(8, 14)
+
 	for _, tc := range []struct {
+		name   string
 		mode   settings.LaneMigration
+		read   *meta.Data
 		cached bool
 	}{
-		{mode: settings.LaneMigrationOff, cached: true},
-		{mode: settings.LaneMigrationShadow, cached: false},
+		{name: "off", mode: settings.LaneMigrationOff, read: stored, cached: true},
+		{name: "shadow", mode: settings.LaneMigrationShadow, read: stored, cached: false},
+		{name: "shadow, the position read with it", mode: settings.LaneMigrationShadow, read: &withPosition, cached: true},
 	} {
-		t.Run(string(tc.mode), func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			tSettings := test.CreateBaseTestSettings(t)
 			tSettings.UtxoStore.LaneMigration = tc.mode
 
 			store := &utxo.MockUtxostore{}
-			store.On("GetMeta", mock.Anything, mock.Anything, mock.Anything).Return(stored)
+			store.On("GetMeta", mock.Anything, mock.Anything, mock.Anything).Return(tc.read)
 
 			s, err := NewTxMetaCache(ctx, tSettings, ulogger.TestLogger{}, store, Unallocated)
 			require.NoError(t, err)
@@ -1377,19 +1383,21 @@ func Test_txMetaCache_GetMetaAtShadowCachesNoEntryWithoutAPosition(t *testing.T)
 			h := chainhash.Hash{0x01}
 			require.NoError(t, c.GetMeta(ctx, &h, &meta.Data{}))
 
-			_, found := cached(t, c, h)
+			got, found := cached(t, c, h)
 			require.Equal(t, tc.cached, found)
+
+			if found {
+				require.Equal(t, tc.read.LanePosition, got.LanePosition)
+			}
 
 			// An entry cached with its position, as the Kafka handler stores it, is a hit: GetMeta
 			// leaves it, position and all.
 			positioned := chainhash.Hash{0x02}
-			withPosition := *stored
-			withPosition.LanePosition = lane.Pack(8, 14)
 			require.NoError(t, c.SetCache(&positioned, &withPosition))
 
 			require.NoError(t, c.GetMeta(ctx, &positioned, &meta.Data{}))
 
-			got, found := cached(t, c, positioned)
+			got, found = cached(t, c, positioned)
 			require.True(t, found)
 			require.Equal(t, lane.Pack(8, 14), got.LanePosition)
 		})

@@ -729,9 +729,10 @@ fromStore:
 	t.metrics.getOrigin.Add(1)
 
 	// add to cache, but only if the blockIDs have not been set and the tx is not conflicting.
-	// GetMeta reads no lane position, so at shadow it caches nothing: an entry without the
-	// position would be a hit that leaves the transaction out of its subtree's lane bitmaps. The
-	// next read misses and goes to the store with the position asked for, and caches that.
+	// GetMeta reads no lane position, so at shadow it caches nothing unless the position came with
+	// it: an entry without the position would be a hit that leaves the transaction out of its
+	// subtree's lane bitmaps. Every GetMeta for the transaction reads the store until a read that
+	// names fields.LanePosition, subtree validation's BatchDecorate, caches it with its position.
 	if len(data.BlockIDs) == 0 && !data.Conflicting && (!t.laneShadow || lane.Valid(data.LanePosition)) {
 		// don't return errors from SetCache, as it is not critical if the cache fails to set
 		_ = t.SetCache(hash, data)
