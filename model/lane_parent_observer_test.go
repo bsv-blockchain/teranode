@@ -94,3 +94,40 @@ func TestCheckParentExistsOnChainTakesTheObserverFromItsContext(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, observer.seen, 1)
 }
+
+// failingGetStore fails every Get.
+type failingGetStore struct{ utxo.Store }
+
+func (failingGetStore) Get(context.Context, *chainhash.Hash, ...fields.FieldName) (*meta.Data, error) {
+	return nil, errors.NewStorageError("store down")
+}
+
+// A failed parent read is not told to the observer, and the check's error is the same with it.
+func TestParentCheckDoesNotTellTheObserverOfAFailedRead(t *testing.T) {
+	parent := missingParentTx{parentTxHash: chainhash.Hash{7}, txHash: chainhash.Hash{8}}
+	observer := &recordingObserver{}
+
+	_, errWith := getParentTxMetaBlockIDs(context.Background(), failingGetStore{}, parent, observer)
+	_, errWithout := getParentTxMetaBlockIDs(context.Background(), failingGetStore{}, parent, nil)
+
+	require.Error(t, errWith)
+	require.Equal(t, errWithout.Error(), errWith.Error())
+	require.Empty(t, observer.seen)
+}
+
+// The observer never changes the check's verdict: a parent mined in a block outside the recent
+// ancestors is handed back for the deeper check, the same with or without it.
+func TestParentCheckVerdictIsTheSameWithTheObserver(t *testing.T) {
+	parent := missingParentTx{parentTxHash: chainhash.Hash{7}, txHash: chainhash.Hash{8}}
+	store := &fieldsRecordingStore{data: &meta.Data{BlockIDs: []uint32{40}, LanePosition: 42}}
+	b := &Block{Header: newTestBlockHeader(t)}
+	recent := map[uint32]struct{}{90: {}, 91: {}}
+
+	without, errWithout := b.checkParentExistsOnChainObserved(context.Background(), ulogger.TestLogger{}, store, parent, recent, nil)
+	with, errWith := b.checkParentExistsOnChainObserved(context.Background(), ulogger.TestLogger{}, store, parent, recent, &recordingObserver{})
+
+	require.NoError(t, errWithout)
+	require.NoError(t, errWith)
+	require.Equal(t, []uint32{40}, without)
+	require.Equal(t, without, with)
+}

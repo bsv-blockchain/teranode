@@ -670,7 +670,8 @@ func (u *Server) blessMissing(ctx context.Context, blockHash chainhash.Hash, sub
 		}
 
 		// A record that already existed comes back without its position; read it now, before the
-		// check below can reject, and keep it on txMeta so the read at the end is not repeated.
+		// check below can reject, and keep it on txMeta so the read at the end is not repeated
+		// when the record has one. A record with no position is read again there.
 		u.fillLanePosition(ctx, tx.TxIDChainHash(), txMeta)
 
 		r.CompareBlocks(lanereader.ReaderSubtreeAlreadyMined, view, *tx.TxIDChainHash(), txMeta.LanePosition, txMeta.BlockIDs)

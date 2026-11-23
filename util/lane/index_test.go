@@ -1,6 +1,7 @@
 package lane
 
 import (
+	"sync"
 	"testing"
 
 	"github.com/RoaringBitmap/roaring/v2/roaring64"
@@ -429,4 +430,106 @@ func TestIndexStopsAtABlockNamingItselfAsParent(t *testing.T) {
 	v, ok := c.idx.Snapshot().ViewFrom(blockHash(5))
 	require.True(t, ok)
 	require.Equal(t, Answer{}, v.Lookup(Pack(1, 1)))
+}
+
+// Loading a block twice changes nothing: its rows are not added to the lanes again.
+func TestIndexAddBlockTwiceAddsItsRowsOnce(t *testing.T) {
+	c := newTestChain(t, 100)
+
+	c.add(1, 0, 1, rowsOf(t, 3, 7))
+	c.add(1, 0, 1, rowsOf(t, 3, 8))
+	c.tip(1)
+
+	require.Equal(t, 1, c.idx.Snapshot().Stats().Rows)
+	require.Equal(t, Answer{}, c.main().Lookup(Pack(3, 8)), "the second load's rows are ignored")
+}
+
+// A row whose hole data does not parse is refused.
+func TestIndexRefusesHoleDataThatDoesNotParse(t *testing.T) {
+	idx := NewIndex(100)
+
+	err := idx.AddBlock(IndexBlock{ID: 1, Height: 1, Hash: blockHash(1)}, []MapRow{{Lane: 3, First: 5, Last: 9, FirstHole: 6, Tag: RowTagRoaring64, HoleData: []byte{1, 2, 3}}})
+	require.Error(t, err)
+	require.False(t, idx.Has(blockHash(1)), "a refused block is not loaded")
+}
+
+// A refused deep reorg leaves the writer's state as it was: the next publish still has the old
+// main chain.
+func TestIndexRefusedDeepReorgLeavesTheWriterUnchanged(t *testing.T) {
+	c := newTestChain(t, 2)
+
+	c.line(1, 5)
+	c.tip(5)
+
+	c.add(103, 2, 3)
+	c.add(104, 103, 4)
+	c.add(105, 104, 5)
+	c.add(106, 105, 6)
+	require.ErrorIs(t, c.idx.SetTip(blockHash(106)), ErrDeepReorg)
+
+	c.idx.Publish()
+
+	s := c.idx.Snapshot()
+	require.True(t, s.OnMain(5))
+	require.False(t, s.OnMain(106))
+	require.Equal(t, uint32(5), s.TipHeight())
+}
+
+// A main-chain block below the anchor does not hold the anchor, so the floors do not hold on the
+// chain ending at it.
+func TestIndexFloorDoesNotHoldOnAMainBlockBelowTheAnchor(t *testing.T) {
+	c := newTestChain(t, 2)
+
+	c.add(1, 0, 1, rangeRows(t, 4, 1, 100))
+	c.line(2, 5)
+	c.tip(5) // anchor 3
+
+	v, ok := c.idx.Snapshot().ViewFrom(blockHash(2))
+	require.True(t, ok)
+	require.False(t, v.FloorValid())
+	require.Equal(t, Answer{}, v.Lookup(Pack(4, 50)))
+
+	v, ok = c.idx.Snapshot().ViewFrom(blockHash(3))
+	require.True(t, ok)
+	require.True(t, v.FloorValid())
+}
+
+// Many goroutines loading, moving the tip and publishing at once, with lookups running, share no
+// state unsafely (run with -race).
+func TestIndexConcurrentWritersAndReaders(t *testing.T) {
+	c := newTestChain(t, 5)
+	c.add(1, 0, 1, rowsOf(t, 2, 1))
+	c.tip(1)
+
+	var wg sync.WaitGroup
+
+	for w := uint32(0); w < 4; w++ {
+		wg.Add(1)
+
+		go func() {
+			defer wg.Done()
+
+			for i := uint32(0); i < 50; i++ {
+				id := 1_000*(w+1) + i
+				_ = c.idx.AddBlock(IndexBlock{ID: id, Height: 2, Hash: blockHash(id), Parent: blockHash(1)}, rowsOf(t, uint8(w), uint64(i)+1)) //nolint:gosec // w is small
+				c.idx.Publish()
+				_ = c.idx.Has(blockHash(id))
+			}
+		}()
+	}
+
+	wg.Add(1)
+
+	go func() {
+		defer wg.Done()
+
+		for i := 0; i < 200; i++ {
+			if s := c.idx.Snapshot(); s != nil {
+				_ = s.Main().Lookup(Pack(2, 1))
+			}
+		}
+	}()
+
+	wg.Wait()
+	c.tip(1)
 }

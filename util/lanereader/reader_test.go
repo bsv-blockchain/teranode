@@ -691,6 +691,9 @@ func TestReaderCountsABlockBelowItsStartNotLoadedWithoutAWalk(t *testing.T) {
 		r.ShadowDuplicates(context.Background(), b2.hash, b2.id, false)
 	})
 	require.Equal(t, reads+1, source.headerReads, "one header read, no walk")
+
+	state, _ := r.Snapshot().Block(b2.id)
+	require.Equal(t, lane.BlockNotLoaded, state, "nothing below the start is loaded")
 }
 
 // Once a reorg's losing block leaves the index, a store still reporting its height cannot be told
@@ -896,6 +899,16 @@ func TestReaderRemembersABlockWithNoHeldAncestor(t *testing.T) {
 		r.ShadowDuplicates(context.Background(), fork.hash, fork.id, false)
 	})
 	require.Equal(t, reads, source.headerReads, "the same block at the same tip is not walked again")
+
+	// Once the tip moves, two blocks so the main chain outweighs the fork again, the block is
+	// walked again.
+	c.add(c.add(tip))
+	follow(t, r)
+
+	reads = source.headerReads
+
+	r.ShadowDuplicates(context.Background(), fork.hash, fork.id, false)
+	require.Greater(t, source.headerReads, reads, "after the tip moved the walk runs again")
 }
 
 // failingRows fails every row read with a processing error, as a stored row that fails its check
@@ -934,4 +947,85 @@ func TestReaderCountsAProcessingErrorInAnAncestryLoadAsAReadError(t *testing.T) 
 		r.ShadowDuplicates(context.Background(), b2.hash, b2.id, false)
 	})
 	require.Equal(t, before+1, prepareFailures("read_error"))
+}
+
+// A block whose chain cannot be loaded has its held and later parents counted not_ready.
+func TestBlockParentsCountsNotReadyWhenTheChainCannotLoad(t *testing.T) {
+	store := newStore(t, "sqlite")
+	c := newChain(t, store)
+	c.add(nil)
+
+	r := newReader(ulogger.TestLogger{}, store, 100)
+	follow(t, r)
+
+	before := answers(ReaderBlockParent, KindNotReady, lane.ViaNone)
+
+	bp := r.BlockParents(context.Background(), chainhash.Hash{9, 9})
+	bp.ObserveParent(chainhash.Hash{2}, lane.Pack(8, 9), []uint32{1})
+
+	require.Eventually(t, func() bool {
+		return answers(ReaderBlockParent, KindNotReady, lane.ViaNone) == before+1
+	}, 5*time.Second, 10*time.Millisecond)
+
+	bp.ObserveParent(chainhash.Hash{3}, lane.Pack(8, 9), []uint32{1})
+	require.Equal(t, before+2, answers(ReaderBlockParent, KindNotReady, lane.ViaNone))
+}
+
+// badRows hands back a row the index refuses for block id bad.
+type badRows struct {
+	Source
+	bad uint32
+}
+
+func (b *badRows) LaneMapRows(ctx context.Context, id uint32) ([]lane.MapRow, error) {
+	if id == b.bad {
+		return []lane.MapRow{{Lane: 3, First: 5, Last: 9, FirstHole: 6, Tag: lane.RowTagRoaring64, HoleData: []byte{1, 2, 3}}}, nil
+	}
+
+	return b.Source.LaneMapRows(ctx, id)
+}
+
+// A row the index refuses fails the follower's step, and the block is not loaded.
+func TestReaderStepFailsOnARowTheIndexRefuses(t *testing.T) {
+	store := newStore(t, "sqlite")
+	c := newChain(t, store)
+
+	b1 := c.add(nil)
+
+	source := &badRows{Source: store, bad: ^uint32(0)}
+	r := newReader(ulogger.TestLogger{}, source, 100)
+	follow(t, r)
+
+	b2 := c.add(b1)
+	source.bad = b2.id
+
+	_, err := r.step(context.Background(), chainhash.Hash{})
+	require.Error(t, err)
+
+	state, _ := r.Snapshot().Block(b2.id)
+	require.Equal(t, lane.BlockNotLoaded, state)
+}
+
+// A new tip with no held block within the walk's reach, as after a fast catch-up between polls,
+// rebuilds the index on it instead of leaving it on the old tip.
+func TestReaderRebuildsWhenTheNewTipIsOutOfReach(t *testing.T) {
+	store := newStore(t, "sqlite")
+	c := newChain(t, store)
+
+	b1 := c.add(nil)
+
+	r := newReader(ulogger.TestLogger{}, store, 100)
+	r.maxWalk, r.walkBatch = 2, 2
+	follow(t, r)
+
+	b2 := c.add(b1, takes(t, 6, 3))
+	tip := c.line(b2, 4)
+
+	rebuilds := testutil.ToFloat64(prometheusLaneReaderRebuilds.WithLabelValues("gap"))
+
+	follow(t, r)
+
+	require.Equal(t, rebuilds+1, testutil.ToFloat64(prometheusLaneReaderRebuilds.WithLabelValues("gap")))
+	require.Equal(t, tip.height, r.Snapshot().TipHeight())
+	require.Equal(t, lane.Answer{Mined: true, Via: lane.ViaRow, BlockID: b2.id, Height: b2.height}, r.MainView().Lookup(lane.Pack(6, 3)))
 }

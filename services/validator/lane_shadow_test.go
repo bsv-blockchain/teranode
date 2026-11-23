@@ -138,8 +138,15 @@ func TestParentReadIsShadowedByTheLaneIndex(t *testing.T) {
 	all, notLoaded := laneReaderAnswers(t, lanereader.ReaderValidator, lanereader.KindNotLoaded)
 	_, agree := laneReaderAnswers(t, lanereader.ReaderValidator, lanereader.KindAgree)
 
-	_, _, _, err := laneShadowValidator(t, store).getTransactionInputBlockHeightsAndExtendTx(ctx, tx, tx.TxID(), &Options{})
+	heights, _, _, err := laneShadowValidator(t, store).getTransactionInputBlockHeightsAndExtendTx(ctx, tx, tx.TxID(), &Options{})
 	require.NoError(t, err)
+
+	// The shadow never changes the read's result: the inputs are extended from the parents and the
+	// heights are the store's.
+	require.Equal(t, []uint32{unconfirmedParentHeight, 120, 120}, heights)
+	require.Equal(t, mined.Outputs[0].Satoshis, tx.Inputs[1].PreviousTxSatoshis)
+	require.Equal(t, mined.Outputs[1].Satoshis, tx.Inputs[2].PreviousTxSatoshis)
+	require.Equal(t, unmined.Outputs[0].Satoshis, tx.Inputs[0].PreviousTxSatoshis)
 
 	// The index holds no block at height 120, so the mined parent is not_loaded; both say the
 	// unmined one is not mined.

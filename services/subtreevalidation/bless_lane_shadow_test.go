@@ -8,6 +8,7 @@ import (
 
 	"github.com/RoaringBitmap/roaring/v2/roaring64"
 	"github.com/bsv-blockchain/go-bt/v2"
+	"github.com/bsv-blockchain/go-bt/v2/bscript"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/services/validator"
@@ -17,6 +18,7 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
+	utxosql "github.com/bsv-blockchain/teranode/stores/utxo/sql"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/lane"
 	"github.com/bsv-blockchain/teranode/util/lanereader"
@@ -25,17 +27,20 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// positionStore answers Get with a lane position and counts the reads.
-type positionStore struct {
+// laneReadCountingStore is a real UTXO store that counts the reads asking for the lane position.
+type laneReadCountingStore struct {
 	utxo.Store
-	pos   uint64
-	reads int
+	laneReads int
 }
 
-func (s *positionStore) Get(_ context.Context, _ *chainhash.Hash, f ...fields.FieldName) (*meta.Data, error) {
-	s.reads++
+func (s *laneReadCountingStore) Get(ctx context.Context, hash *chainhash.Hash, f ...fields.FieldName) (*meta.Data, error) {
+	for _, name := range f {
+		if name == fields.LanePosition {
+			s.laneReads++
+		}
+	}
 
-	return &meta.Data{LanePosition: s.pos}, nil
+	return s.Store.Get(ctx, hash, f...)
 }
 
 // metaValidator accepts every transaction with md as its metadata.
@@ -142,10 +147,26 @@ func TestBlessMissingShadowsTheAlreadyMinedCheck(t *testing.T) {
 	r := lanereader.Start(ctx, ulogger.TestLogger{}, tSettings, chain)
 	require.Eventually(t, func() bool { return r.Snapshot() != nil && r.Snapshot().TipHeight() == 2 }, 10*time.Second, 10*time.Millisecond)
 
-	// The validator answers with a record the lane index says block b1 took, mined in b1, the way
-	// it answers for a record that already existed: without its lane position, which the shadow
-	// reads from the store, once.
-	records := &positionStore{pos: lane.Pack(3, 5)}
+	// The transaction's record already exists in a real SQLite UTXO store, at lane position 3/5,
+	// which block b1's row took. The validator answers the way it does for a record that already
+	// existed: mined in b1, without the position, which the shadow reads from the store, once.
+	utxoURL, err := url.Parse("sqlitememory:///blesslaneshadow")
+	require.NoError(t, err)
+
+	realStore, err := utxosql.New(context.Background(), ulogger.TestLogger{}, tSettings, utxoURL)
+	require.NoError(t, err)
+
+	t.Cleanup(func() { _ = realStore.Close(context.Background()) })
+
+	tx := bt.NewTx()
+	require.NoError(t, tx.From("4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda33b", 0, "76a91476a04053bda0a88bda5177b86a15c3b29f55987388ac", 2_000))
+	tx.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{0x01, 0x01})
+	require.NoError(t, tx.AddP2PKHOutputFromAddress("1BgGZ9tcN4rm9KBzDn7KprQz87SZ26SAMH", 1_000))
+
+	_, _, err = realStore.SpendAndCreate(context.Background(), tx, 0, utxo.WithCreateOnly(), utxo.WithLanePosition(lane.Pack(3, 5)))
+	require.NoError(t, err)
+
+	records := &laneReadCountingStore{Store: realStore}
 	server := &Server{
 		logger:          ulogger.TestLogger{},
 		settings:        tSettings,
@@ -153,15 +174,13 @@ func TestBlessMissingShadowsTheAlreadyMinedCheck(t *testing.T) {
 		validatorClient: &metaValidator{md: &meta.Data{BlockIDs: []uint32{b1}}},
 	}
 
-	tx := bt.NewTx()
-
 	// No block IDs from the caller: judged on the main chain, which holds b1, so the row agrees.
 	before := subtreeAlreadyMined(t, lanereader.KindAgree, "row")
 
 	_, _, err = server.blessMissing(context.Background(), chainhash.Hash{}, chainhash.Hash{}, tx, 3, map[uint32]bool{}, validator.ProcessOptions())
 	require.NoError(t, err)
 	require.Equal(t, before+1, subtreeAlreadyMined(t, lanereader.KindAgree, "row"))
-	require.Equal(t, 1, records.reads, "the position is read once, before the check, and not again at the end")
+	require.Equal(t, 1, records.laneReads, "the position is read from the store once, before the check, and not again at the end")
 
 	// The caller's chain is only b2: b1 is off it for both answers, so they agree with no row.
 	before = subtreeAlreadyMined(t, lanereader.KindAgree, "none")

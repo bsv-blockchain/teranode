@@ -74,6 +74,8 @@ func TestLaneReadersDoNothingAtOff(t *testing.T) {
 	blk := &model.Block{Header: &model.BlockHeader{HashPrevBlock: &chainhash.Hash{1}}}
 
 	require.Equal(t, ctx, laneParentsContext(ctx, blk))
+	require.Equal(t, ctx, laneParentsContext(ctx, &model.Block{}), "a block without a header")
+	require.Equal(t, ctx, laneParentsContext(ctx, nil))
 
 	verdict := errors.NewBlockInvalidError("duplicate")
 	require.Equal(t, verdict, shadowLaneDuplicates(ctx, blk, 1, nil, verdict))
@@ -152,8 +154,11 @@ func TestShadowLaneDuplicatesComparesSetMinedsVerdict(t *testing.T) {
 	require.Equal(t, agree+1, laneReaderAnswer(t, lanereader.ReaderBlockDuplicate, lanereader.KindAgree))
 	require.Equal(t, notLoaded+1, laneReaderAnswer(t, lanereader.ReaderBlockDuplicate, lanereader.KindNotLoaded))
 
-	// The parent check's context carries the shadow at shadow.
+	// The parent check's context carries the shadow at shadow, but not for a block it cannot name
+	// a parent of.
 	require.NotEqual(t, ctx, laneParentsContext(ctx, blk))
+	require.Equal(t, ctx, laneParentsContext(ctx, &model.Block{}))
+	require.Equal(t, ctx, laneParentsContext(ctx, &model.Block{Header: &model.BlockHeader{}}))
 }
 
 // startLaneReaderOn starts the process's lane reader at shadow on store and waits for its first
@@ -295,10 +300,20 @@ func countsLaneShadowsThroughTheRealHooks(t *testing.T, optimistic bool) {
 	// the shadow, which counts it under block_parent.
 	_, stop := startLaneReaderOn(t, tSettings, blockChainStore)
 
-	parentAnswers := laneReaderAnswerAll(t, lanereader.ReaderBlockParent)
+	// fundingTx's record has no lane position (the UTXO store here runs at off), so the answer is
+	// no_position; a shadow judged on the wrong chain, one that never loads, would be not_ready.
+	noPosition := laneReaderAnswer(t, lanereader.ReaderBlockParent, lanereader.KindNoPosition)
 
 	require.NoError(t, bv.ValidateBlock(ctx, block, "test"))
-	require.Eventually(t, func() bool { return laneReaderAnswerAll(t, lanereader.ReaderBlockParent) == parentAnswers+1 }, 10*time.Second, 10*time.Millisecond)
+	require.Eventually(t, func() bool {
+		return laneReaderAnswer(t, lanereader.ReaderBlockParent, lanereader.KindNoPosition) == noPosition+1
+	}, 10*time.Second, 10*time.Millisecond)
+
+	// Revalidating the stored block runs the parent check, and its shadow, again.
+	_ = bv.reValidateBlock(ctx, revalidateBlockData{block: block, baseURL: "test"})
+	require.Eventually(t, func() bool {
+		return laneReaderAnswer(t, lanereader.ReaderBlockParent, lanereader.KindNoPosition) == noPosition+2
+	}, 10*time.Second, 10*time.Millisecond, "reValidateBlock's parent check is shadowed too")
 
 	stop()
 
