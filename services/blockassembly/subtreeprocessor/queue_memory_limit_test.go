@@ -2,6 +2,7 @@ package subtreeprocessor
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"sync"
 	"sync/atomic"
@@ -755,6 +756,41 @@ func TestDrainQueueHonorsDoubleSpendWindowWithDropHashes(t *testing.T) {
 
 	require.Equal(t, int64(1), stp.queue.length(), "post-block-movement drain must honor the double-spend window")
 	require.NotContains(t, collectSubtreeHashes(stp), unrelated)
+}
+
+// The block-movement drains outside DrainQueue, sequential and the parallel
+// deferred drain after a block, keep the double-spend window whether or not the
+// consumer has started: only DrainQueue before Start ignores it. A recent batch
+// stays queued for the normal dequeue.
+func TestBlockMovementDrainsHonorDoubleSpendWindow(t *testing.T) {
+	drains := map[string]func(stp *SubtreeProcessor) error{
+		"sequential": func(stp *SubtreeProcessor) error { return stp.dequeueDuringBlockMovement(nil, nil, nil, true) },
+		"deferred after a block": func(stp *SubtreeProcessor) error {
+			return stp.drainQueueAfterBlock(context.Background(), &deferredBlockDrain{drainQueue: true})
+		},
+	}
+
+	for name, drain := range drains {
+		for _, started := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s, consumer started=%t", name, started), func(t *testing.T) {
+				stp := newTestProcessorNoStart(t)
+				stp.settings.BlockAssembly.DoubleSpendWindow = time.Second
+				stp.consumerStarted.Store(started)
+
+				enqueuedAt := time.Date(2030, 1, 2, 3, 4, 5, 0, time.UTC)
+				stp.queue.clock = fixedClock{t: enqueuedAt}
+				stp.clock = fixedClock{t: enqueuedAt.Add(500 * time.Millisecond)}
+
+				recent := chainhash.HashH([]byte("recent-transaction-in-window"))
+				stp.queue.enqueueBatch([]subtree.Node{{Hash: recent, Fee: 1, SizeInBytes: 250}}, []*subtree.TxInpoints{{}})
+
+				require.NoError(t, drain(stp))
+
+				require.Equal(t, int64(1), stp.queue.length(), "the block-movement drain must honor the double-spend window")
+				require.NotContains(t, collectSubtreeHashes(stp), recent)
+			})
+		}
+	}
 }
 
 func TestSubtreeProcessor_DequeueDuringBlockMovementCountsANodeWhoseSubtreeFailedToComplete(t *testing.T) {
