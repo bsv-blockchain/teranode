@@ -128,6 +128,7 @@ func startMainChild(t *testing.T, env ...string) *mainChild {
 		"health_check_httpListenAddress=127.0.0.1:0",
 		"blockchain_grpcListenAddress=127.0.0.1:0",
 		"blockchain_httpListenAddress=127.0.0.1:0",
+		"blockchain_requireAlertSystem=false",
 		"grpc_admin_api_key=exit-status-test-key-0123456789abcdef",
 		"profilerAddr=",
 		"prometheusEndpoint=",
