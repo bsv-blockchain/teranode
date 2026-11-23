@@ -194,7 +194,7 @@ reorg-mutants:
 # REORG_SCALE_* variables documented in services/blockassembly/subtreeprocessor/reorg_scale_test.go
 .PHONY: reorg-scale
 reorg-scale:
-	SETTINGS_CONTEXT=test go test -tags "reorgscale testtxmetacache" -count=1 -timeout=4h -run '^TestReorgScale$$' -v ./services/blockassembly/subtreeprocessor
+	SETTINGS_CONTEXT=test go test -tags "reorgscale testtxmetacache" -count=1 -timeout=4h -run '^TestReorgScale$$' -v ./services/blockassembly/subtreeprocessor ./services/blockassembly
 
 # run tagged service regressions and tests in the test/longtest directory
 .PHONY: longtest

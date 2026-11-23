@@ -13,6 +13,9 @@ package subtreeprocessor
 //	                        reset times the processor's part of a reset; the reload of the unmined
 //	                        transactions that follows it is BlockAssembler.loadUnminedTransactions,
 //	                        timed by BenchmarkLoadUnminedTransactions
+//	                        store (a test of services/blockassembly, which has the store workers;
+//	                        this one skips) times the store step of a forward block, see
+//	                        reorg_store_stage_scale_test.go there
 //	REORG_SCALE_P           pending transactions (default 10M)
 //	REORG_SCALE_LOST_RATIO  lost block size as a multiple of P (default 1)
 //	REORG_SCALE_LOST_IN_F   fraction of the lost block in the winners (default 0.995)
@@ -151,6 +154,10 @@ func TestReorgScale(t *testing.T) {
 
 	if report.Map == "" {
 		report.Map = "memory"
+	}
+
+	if report.Case == "store" {
+		t.Skip("REORG_SCALE_CASE=store runs in services/blockassembly")
 	}
 
 	require.Contains(t, []string{"reorg", "reset"}, report.Case, "REORG_SCALE_CASE")
