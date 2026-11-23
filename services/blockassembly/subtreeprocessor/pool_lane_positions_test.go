@@ -306,3 +306,69 @@ func TestPoolKeepsNoLanePositionAtOff(t *testing.T) {
 	require.Zero(t, stp.currentTxMap.Position(first), "at off the pool keeps no position")
 	require.Empty(t, recording.reads, "at off a move-back reads nothing from the UTXO store for lanes")
 }
+
+// TestPoolKeepsLanePositionThroughTheSequentialCopyAfterABlock: after a block, fewer pool txs than
+// blockassembly_parallelSetIfNotExistsThreshold are copied into the new half of the double buffer
+// one at a time, on our own block's path and on the remainder path of a peer's block. Each keeps
+// its lane position, on both maps; at off none is copied.
+func TestPoolKeepsLanePositionThroughTheSequentialCopyAfterABlock(t *testing.T) {
+	for _, disk := range []bool{false, true} {
+		for _, shadow := range []bool{true, false} {
+			name := map[bool]string{false: "in-memory map", true: "disk map"}[disk] + map[bool]string{true: ", shadow", false: ", off"}[shadow]
+
+			t.Run(name, func(t *testing.T) {
+				for _, path := range []string{"own block", "peer block remainder"} {
+					stp, _ := lanePoolProcessor(t, disk, shadow)
+					require.Greater(t, stp.settings.BlockAssembly.ParallelSetIfNotExistsThreshold, 3)
+
+					// the half the block found the pool in, holding three txs with positions
+					var old TxInpointsMap = NewSplitTxInpointsMap(16)
+
+					if disk {
+						m, err := NewDiskTxMap(DiskTxMapOptions{BasePaths: []string{t.TempDir()}})
+						require.NoError(t, err)
+						t.Cleanup(func() { _ = m.Close() })
+
+						old = m
+					}
+
+					st, err := subtreepkg.NewTreeByLeafCount(4)
+					require.NoError(t, err)
+
+					want := make(map[chainhash.Hash]uint64)
+
+					for i := 0; i < 3; i++ {
+						hash := lanePoolTxHash(600 + i)
+						position := lane.Pack(11, uint64(70+i))
+
+						require.NoError(t, st.AddNode(hash, 1, 1))
+						old.SetAt(hash, lanePoolInpoints(i), position)
+
+						want[hash] = position
+						if !shadow {
+							want[hash] = 0
+						}
+					}
+
+					block := &model.Block{Header: prevBlockHeader}
+
+					if path == "own block" {
+						require.NoError(t, stp.processOwnBlockSubtreeNodes(block, st.Nodes, old, 0, nil, true))
+					} else {
+						require.NoError(t, stp.processRemainderTxHashes(context.Background(), []*subtreepkg.Subtree{st}, frozenEmptyHashSet(), nil, nil, old, true))
+					}
+
+					requirePoolPositions(t, stp, want)
+				}
+			})
+		}
+	}
+}
+
+// frozenEmptyHashSet is a block's transaction set holding none of the pool's txs.
+func frozenEmptyHashSet() *SortedHashSet {
+	s := NewSortedHashSet(0)
+	_ = s.Freeze(1)
+
+	return s
+}

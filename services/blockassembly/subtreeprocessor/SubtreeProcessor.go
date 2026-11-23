@@ -6592,7 +6592,20 @@ func (stp *SubtreeProcessor) applyCoinbaseUtxos(ctx context.Context, block *mode
 		return nil
 	}
 
-	for _, tx := range restored {
+	// At utxostore_laneMigration shadow a restored tx goes back into block assembly with the lane
+	// position its recreated record holds, so the subtree it lands in keeps complete lane bitmaps.
+	var positions []uint64
+
+	if stp.keepsLanePositions() && len(restored) > 0 {
+		hashes := make([]chainhash.Hash, len(restored))
+		for i, tx := range restored {
+			hashes[i] = *tx.TxIDChainHash()
+		}
+
+		positions = stp.lanePositionsFromUtxoStore(ctx, block, hashes)
+	}
+
+	for i, tx := range restored {
 		hash := *tx.TxIDChainHash()
 
 		_ = stp.removeMap.Delete(hash)
@@ -6604,7 +6617,12 @@ func (stp *SubtreeProcessor) applyCoinbaseUtxos(ctx context.Context, block *mode
 
 		node := subtreepkg.Node{Hash: hash, Fee: tx.TotalInputSatoshis() - tx.TotalOutputSatoshis(), SizeInBytes: uint64(tx.Size())} //nolint:gosec // size is non-negative
 
-		if err = stp.addNode(node, &inpoints, skipNotification); err != nil {
+		var position uint64
+		if positions != nil {
+			position = positions[i]
+		}
+
+		if err = stp.addNodeAt(node, &inpoints, position, skipNotification); err != nil {
 			return errors.NewProcessingError("[applyCoinbaseUtxos][%s] error adding restored tx %s to block assembly", block.String(), hash.String(), err)
 		}
 	}
@@ -7628,7 +7646,8 @@ func (stp *SubtreeProcessor) processOwnBlockSubtreeNodes(block *model.Block, nod
 					return errors.NewProcessingError("[moveForwardBlock][%s] error getting node txInpoints from currentTxMap for %s", block.String(), node.Hash.String())
 				}
 
-				if err := stp.addNode(node, nodeParents, skipNotification); err != nil {
+				// the tx's lane position goes into the new map with it, at utxostore_laneMigration shadow
+				if err := stp.addNodeAt(node, nodeParents, stp.lanePositionIn(currentTxMap, node.Hash), skipNotification); err != nil {
 					return errors.NewProcessingError("[moveForwardBlock][%s] error adding node %s to subtree", block.String(), node.Hash.String(), err)
 				}
 			}
@@ -8697,7 +8716,8 @@ func (stp *SubtreeProcessor) processRemainderTxHashes(ctx context.Context, chain
 					return errors.NewProcessingError("[processRemainderTxHashes] error getting node txInpoints from currentTxMap for %s", node.Hash.String())
 				}
 
-				if addErr := stp.addNode(node, parents, skipNotification); addErr != nil {
+				// the tx's lane position goes into the new map with it, at utxostore_laneMigration shadow
+				if addErr := stp.addNodeAt(node, parents, stp.lanePositionIn(currentTxMap, node.Hash), skipNotification); addErr != nil {
 					stp.logger.Errorf("[processRemainderTxHashes] error adding node %s: %v", node.Hash.String(), addErr)
 				}
 			}
@@ -9890,6 +9910,16 @@ func (stp *SubtreeProcessor) MarkRecoveredConflicts(ctx context.Context, hashes 
 // It resolves block IDs so a forward rollback accepts the winners' own block.
 func (stp *SubtreeProcessor) currentChainGuard() utxostore.CurrentChainGuard {
 	return CurrentChainGuard(stp.blockchainClient)
+}
+
+// lanePositionIn returns the lane position m keeps for hash when the pool keeps positions, or 0. A
+// copy of a tx from one half of the double buffer to the other passes it on with the tx.
+func (stp *SubtreeProcessor) lanePositionIn(m TxInpointsMap, hash chainhash.Hash) uint64 {
+	if !stp.keepsLanePositions() {
+		return 0
+	}
+
+	return m.Position(hash)
 }
 
 // keepsLanePositions reports whether the pool keeps each transaction's own lane position (util/lane)
