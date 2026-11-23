@@ -36,6 +36,13 @@ const (
 	// WireActionDELETE signals that the entry's hash should be removed from
 	// the cache. Content length is zero for DELETE entries.
 	WireActionDELETE = byte(1)
+	// WireActionADDLane is WireActionADD whose content is the lane metadata
+	// encoding (meta.LaneMetaBytesInto): the transaction's own lane position and
+	// one per distinct parent around the same fields. The action byte, not the
+	// content, says which encoding an entry holds, because the lane encoding's
+	// magic byte can also begin a MetaBytes fee. The validator sends it only at
+	// utxostore_laneMigration shadow; a receiver accepts both (see LaneMetaContent).
+	WireActionADDLane = byte(2)
 
 	// WireV2Magic is the first byte of a v2 batch message. Not a unique
 	// discriminator on its own — see the package comment above.

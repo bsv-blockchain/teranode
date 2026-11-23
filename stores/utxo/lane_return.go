@@ -20,7 +20,11 @@ const (
 	// the refusal wrote no record carrying the position.
 	LaneReturnExists = "exists"
 
-	// LaneReturnSpendRejected: an input's spend was refused before any create ran.
+	// LaneReturnSpendRejected: an input's spend was refused before any create ran, and the spend
+	// wrote nothing that carries the position: a plain spend, a store whose spends and create roll
+	// back together, or a lane spend whose every input was refused before its write. A refused lane
+	// spend that may have recorded the spender's position in a parent's slot keeps it burned (see
+	// SequentialSpendAndCreate).
 	LaneReturnSpendRejected = "spend_rejected"
 
 	// LaneReturnRolledBack: the database transaction holding the create failed before its COMMIT

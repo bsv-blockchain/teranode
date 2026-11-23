@@ -9,6 +9,7 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2/bscript"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/bsv-blockchain/teranode/settings"
 	utxostore "github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
@@ -306,4 +307,34 @@ func Test_prefetchLevelParents_AbortsOnRealItemError(t *testing.T) {
 	_, err := server.prefetchLevelParents(ctx, levelTxs)
 	require.Error(t, err, "a real per-item store error must abort the level, not be swallowed")
 	require.True(t, errors.Is(err, errors.ErrStorageError), "abort must surface as a storage error")
+}
+
+// At utxostore_laneMigration shadow the prefetch also asks for each parent's lane position, which
+// the validator copies onto the child from the same read; with lane positions off it does not.
+func Test_prefetchLevelParents_AsksForLanePositionsOnlyAtShadow(t *testing.T) {
+	for _, shadow := range []bool{false, true} {
+		ctx := context.Background()
+
+		server, cleanup := setupTestServer(t)
+
+		levelTxs := []missingTx{{tx: mkExtendedTx(t, "0000000000000000000000000000000000000000000000000000000000000002", 0), idx: 0}}
+		parent := *levelTxs[0].tx.Inputs[0].PreviousTxIDChainHash()
+
+		store := &recordingParentStore{
+			MockUtxostore: &utxostore.MockUtxostore{},
+			resolve:       map[chainhash.Hash]*meta.Data{parent: {BlockHeights: []uint32{100}, LanePosition: 77}},
+		}
+		server.utxoStore = store
+
+		if shadow {
+			server.settings.UtxoStore.LaneMigration = settings.LaneMigrationShadow
+		}
+
+		got, err := server.prefetchLevelParents(ctx, levelTxs)
+		require.NoError(t, err)
+		require.Equal(t, shadow, store.hasField(fields.LanePosition), "shadow=%v", shadow)
+		require.Equal(t, uint64(77), got[parent].LanePosition, "the prefetch hands the read's position on")
+
+		cleanup()
+	}
 }
