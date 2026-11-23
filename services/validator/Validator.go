@@ -221,9 +221,10 @@ type txmetaBatchItem struct {
 	hash      *chainhash.Hash
 	metaBytes []byte
 	isDelete  bool
-	// lane says metaBytes is the lane metadata encoding (meta.LaneMetaBytesInto), which the wire
-	// marks with txmetacache.WireActionADDLane instead of WireActionADD.
-	lane bool
+	// action is the wire action of an entry that is not a delete: txmetacache.WireActionADD for
+	// MetaBytes, WireActionADDLane for the lane metadata encoding (meta.LaneMetaBytesInto), or
+	// WireActionADDOwn for MetaBytes with the own lane position (meta.CacheBytesInto).
+	action byte
 }
 
 // wireAction is the action byte the txmeta wire carries for the item.
@@ -231,10 +232,8 @@ func (it *txmetaBatchItem) wireAction() byte {
 	switch {
 	case it.isDelete:
 		return txmetacache.WireActionDELETE
-	case it.lane:
-		return txmetacache.WireActionADDLane
 	default:
-		return txmetacache.WireActionADD
+		return it.action
 	}
 }
 
@@ -2435,7 +2434,7 @@ func (v *Validator) CreateInUtxoStore(ctx context.Context, tx *bt.Tx, blockHeigh
 func (v *Validator) sendTxMetaToKafka(data *meta.Data, txHash *chainhash.Hash, parentLanes []uint64) error {
 	startKafka := time.Now()
 
-	metaBytes, laneFormat, err := v.txMetaPayload(data, parentLanes)
+	metaBytes, action, err := v.txMetaPayload(data, parentLanes)
 	if err != nil {
 		return errors.NewProcessingError("error serializing tx meta data for tx %s", txHash.String(), err)
 	}
@@ -2450,7 +2449,7 @@ func (v *Validator) sendTxMetaToKafka(data *meta.Data, txHash *chainhash.Hash, p
 			hash:      txHash,
 			metaBytes: metaBytes,
 			isDelete:  false,
-			lane:      laneFormat,
+			action:    action,
 		})
 	} else {
 		// Fallback: send single item as batch format for consistency.
@@ -2458,7 +2457,7 @@ func (v *Validator) sendTxMetaToKafka(data *meta.Data, txHash *chainhash.Hash, p
 			hash:      txHash,
 			metaBytes: metaBytes,
 			isDelete:  false,
-			lane:      laneFormat,
+			action:    action,
 		}
 		if v.settings.Validator.TxMetaWireFormat == "v2" {
 			v.sendTxMetaBatchV2([]*txmetaBatchItem{item})
@@ -2478,33 +2477,45 @@ func (v *Validator) sendTxMetaToKafka(data *meta.Data, txHash *chainhash.Hash, p
 	return nil
 }
 
-// txMetaPayload is the content of data's txmeta entry. With lane positions on it is the lane
-// metadata encoding, carrying the transaction's own lane position and its parents', when every one
-// of them is a valid position; otherwise, and always with lane positions off, it is MetaBytes. A
-// message that goes without positions at shadow is counted with the reason, never refused: nothing
-// decides on a lane position yet, and Phase 1 measures how many messages carry them.
-func (v *Validator) txMetaPayload(data *meta.Data, parentLanes []uint64) ([]byte, bool, error) {
+// txMetaPayload is the content of data's txmeta entry and its wire action. With lane positions on
+// it is the lane metadata encoding (WireActionADDLane), carrying the transaction's own lane
+// position and its parents', when every one of them is a valid position. When only the own
+// position is valid, as for a transaction spending an output created before lane positions were
+// on, it is MetaBytes followed by the own position (WireActionADDOwn), which subtree validation
+// caches as it is and reads when it builds the subtree's lane bitmaps. Otherwise, and always with
+// lane positions off, it is MetaBytes (WireActionADD). An entry that goes without the parents'
+// positions at shadow is counted with the reason, never refused: nothing decides on a lane
+// position yet, and Phase 1 measures how many entries carry them.
+func (v *Validator) txMetaPayload(data *meta.Data, parentLanes []uint64) ([]byte, byte, error) {
 	if !v.laneShadow() {
 		b, err := data.MetaBytes()
-		return b, false, err
+		return b, txmetacache.WireActionADD, err
 	}
 
 	reason := laneTxMetaMiss(data, parentLanes)
 	if reason == "" {
 		b, err := data.LaneMetaBytesInto(nil, parentLanes)
 		if err == nil {
-			txmetacache.CountLaneTxMetaSent("")
-			return b, true, nil
+			txmetacache.CountLaneTxMetaSent("", false)
+			return b, txmetacache.WireActionADDLane, nil
 		}
 
 		reason = txmetacache.LaneMissEncode
 	}
 
-	txmetacache.CountLaneTxMetaSent(reason)
+	if lane.Valid(data.LanePosition) {
+		txmetacache.CountLaneTxMetaSent(reason, true)
+
+		b, err := data.CacheBytesInto(nil)
+
+		return b, txmetacache.WireActionADDOwn, err
+	}
+
+	txmetacache.CountLaneTxMetaSent(reason, false)
 
 	b, err := data.MetaBytes()
 
-	return b, false, err
+	return b, txmetacache.WireActionADD, err
 }
 
 // laneTxMetaMiss is why data's txmeta cannot carry lane positions, or "" when it can.
@@ -2648,9 +2659,11 @@ func txMetaEntrySize(item *txmetaBatchItem) int {
 // For each entry:
 //
 //	[32 bytes] - tx hash (raw bytes)
-//	[1 byte]   - action (0=ADD, 1=DELETE, 2=ADDLane)
+//	[1 byte]   - action (0=ADD, 1=DELETE, 2=ADDLane, 3=ADDOwn)
 //	[4 bytes]  - content length (uint32, little-endian) - 0 for DELETE
-//	[N bytes]  - content (metaBytes) - only for ADD
+//	[N bytes]  - content - for every ADD form, none for DELETE: MetaBytes for ADD, the lane
+//	             encoding for ADDLane, MetaBytes and the own position for ADDOwn
+//	             (docs/references/kafkaMessageFormat.md)
 func serializeTxMetaBatch(batch []*txmetaBatchItem) []byte {
 	// Calculate total size
 	size := 4 // entry count
@@ -2714,9 +2727,9 @@ type txmetaItemWithHash struct {
 //	per entry:
 //	  [8 bytes]  xxhash(tx hash) (uint64 LE)
 //	  [32 bytes] tx hash
-//	  [1 byte]   action (0=ADD, 1=DELETE, 2=ADDLane)
+//	  [1 byte]   action (0=ADD, 1=DELETE, 2=ADDLane, 3=ADDOwn)
 //	  [4 bytes]  content length (uint32 LE)
-//	  [N bytes]  content (only for ADD)
+//	  [N bytes]  content, for every ADD form and none for DELETE, as in v1
 //
 // Putting the pre-computed xxhash on the wire lets the receiver skip its own
 // xxhash on every entry — a small per-entry saving that compounds at the

@@ -266,11 +266,13 @@ FUZZ_TARGETS = \
 	services/rpc/bsvjson:FuzzUnmarshalCmd \
 	util/lane:FuzzDecodeDiskPayload \
 	util/lane:FuzzDecodeHoleData \
+	util/lane:FuzzCheckContainersMatchesValidate \
 	util/lane:FuzzDecodeSubtreePositions \
 	util/lane:FuzzDecodeProofFile \
 	util/lane:FuzzDecodeSubtreeBitmaps \
 	util/lane/backfill:FuzzOpenManifest \
-	stores/utxo/meta:FuzzNewDataFromLaneMetaBytes
+	stores/utxo/meta:FuzzNewDataFromLaneMetaBytes \
+	stores/utxo/meta:FuzzOwnCacheBytesView
 
 # Per-target budget. The nightly workflow uses 5m; the default here is kept
 # short so `make fuzz` is usable as a pre-push check.

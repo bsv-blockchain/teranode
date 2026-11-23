@@ -23,6 +23,7 @@ import (
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/blockchain/options"
 	"github.com/bsv-blockchain/teranode/util"
+	"github.com/bsv-blockchain/teranode/util/lane"
 	"github.com/bsv-blockchain/teranode/util/tracing"
 	"github.com/bsv-blockchain/teranode/util/usql"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -316,8 +317,9 @@ func (s *SQL) storeBlockAttempt(ctx context.Context, block *model.Block, peerID 
 	// transaction grows with the fork's depth but not with the size of the blocks: it
 	// touches block rows only, never transactions or coins.
 	//
-	// The common extend keeps its single auto-committed INSERT, which already writes
-	// the correct flag and needs no repair.
+	// The common extend without lane map rows keeps its single auto-committed INSERT,
+	// which already writes the correct flag and needs no repair. With rows, at
+	// utxostore_laneMigration shadow, it is one transaction holding the INSERT and the rows.
 	var (
 		newBlockID    uint64
 		height        uint32
@@ -326,7 +328,34 @@ func (s *SQL) storeBlockAttempt(ctx context.Context, block *model.Block, peerID 
 		err           error
 	)
 
-	if onMainChain {
+	// The block's lane map rows, at utxostore_laneMigration shadow, go in the block's own
+	// transaction (insertLaneMapRowsWithBlock). An invalid block gets none.
+	laneRows, laneRowsRefused := s.checkedLaneMapRows(block, storeBlockOptions)
+
+	if laneRows != nil {
+		// On SQLite the lane write lock is a process mutex only the holder of the whole
+		// transaction can take, before it begins: see insertLaneMapRowsTx.
+		unlockLanes := s.lockLaneProcess()
+		defer unlockLanes()
+	}
+
+	if onMainChain && laneRows != nil {
+		// The common extend, with its rows: one transaction holding the INSERT and the rows,
+		// instead of the auto-committed INSERT below.
+		err = s.db.RetryTx(ctx, nil, func(tx *sql.Tx) error {
+			var storeErr error
+
+			newBlockID, height, _, storedInvalid, storeErr = s.storeBlock(ctx, tx, block, peerID, storeBlockOptions, onMainChain)
+			if storeErr != nil || storedInvalid {
+				return storeErr
+			}
+
+			return s.insertLaneMapRowsWithBlock(ctx, tx, block, newBlockID, laneRows)
+		})
+		if err != nil {
+			return 0, height, s.typedStoreBlockError(err, block)
+		}
+	} else if onMainChain {
 		newBlockID, height, _, storedInvalid, err = s.storeBlock(ctx, s.db, block, peerID, storeBlockOptions, onMainChain)
 		if err != nil {
 			return 0, height, s.typedStoreBlockError(err, block)
@@ -412,6 +441,12 @@ func (s *SQL) storeBlockAttempt(ctx context.Context, block *model.Block, peerID 
 				return forkErr
 			}
 
+			if laneRows != nil {
+				if storeErr = s.insertLaneMapRowsWithBlock(ctx, tx, block, newBlockID, laneRows); storeErr != nil {
+					return storeErr
+				}
+			}
+
 			reconcile := func() (bool, int64, error) {
 				changed, floor, err := s.reconcileOnMainChainRows(ctx, tx)
 				if err != nil || changed == 0 {
@@ -488,6 +523,19 @@ func (s *SQL) storeBlockAttempt(ctx context.Context, block *model.Block, peerID 
 			}
 
 			return 0, height, s.typedStoreBlockError(err, block)
+		}
+	}
+
+	// The block is stored: count what this attempt did with its rows, once. A block stored as
+	// invalid, asked for or inherited from an invalid parent, takes no rows, so it counts nothing,
+	// whatever an earlier attempt of the same store did with them.
+	if !storedInvalid {
+		if laneRowsRefused {
+			lane.CountRowInsertFailure()
+		}
+
+		if laneRows != nil {
+			laneRows.observe()
 		}
 	}
 
@@ -897,10 +945,11 @@ func (s *SQL) storeBlock(ctx context.Context, exec execQuerier, block *model.Blo
 		// attempt landed treat that as success, so a late caller still holding a
 		// refused id must not get the id-order refusal, nor drop a reservation.
 		//
-		// Checked before the INSERT, because the extend path auto-commits it. This
-		// runs for a block stored invalid too, unlike the BIP34 guard above: the
-		// rule is about the row's place in the parent_id graph, which the ancestry
-		// walks follow whatever the invalid flag says, not about the block's validity.
+		// Checked before the INSERT, because the extend path without lane map rows
+		// auto-commits it. This runs for a block stored invalid too, unlike the BIP34
+		// guard above: the rule is about the row's place in the parent_id graph, which
+		// the ancestry walks follow whatever the invalid flag says, not about the
+		// block's validity.
 		if err := checkBlockIDAboveParent(block, storeBlockOptions.ID, previousBlockID); err != nil && !alreadyStored {
 			// The reservation is stale. Drop it so the caller's next AssignBlockID
 			// takes a fresh id above the parent, rather than being refused with the
