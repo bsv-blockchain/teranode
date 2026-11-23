@@ -696,6 +696,10 @@ func (ba *BlockAssembly) subtreeStorageWorker(ctx context.Context, workChan <-ch
 		select {
 		case resultChan <- result:
 		case <-ctx.Done():
+			if ba.keepsLanePositions() {
+				ba.ownLaneBitmaps.settle(*work.request.Subtree.RootHash())
+			}
+
 			return
 		}
 

@@ -1414,3 +1414,83 @@ func TestCandidateSubtreesOutliveBlocksWithNoCandidateServed(t *testing.T) {
 	_, missing = kept.get([]*chainhash.Hash{&inPool})
 	require.Equal(t, 1, missing)
 }
+
+// missingFileDAHStore answers SetDAH for a lane bitmaps file it does not hold with ErrNotFound, as
+// the file store does.
+type missingFileDAHStore struct {
+	blob.Store
+}
+
+func (s missingFileDAHStore) SetDAH(ctx context.Context, key []byte, fileType fileformat.FileType, dah uint32, opts ...blobOptions.FileOption) error {
+	if fileType == fileformat.FileTypeSubtreeLaneBitmaps {
+		exists, err := s.Exists(ctx, key, fileType)
+		if err != nil {
+			return err
+		}
+
+		if !exists {
+			return errors.NewNotFoundError("no lane bitmaps file")
+		}
+	}
+
+	return s.Store.SetDAH(ctx, key, fileType, dah, opts...)
+}
+
+// TestRepairingALaneBitmapsFileCountsNoMemberTwice: a subtree whose lane bitmaps file failed to
+// write, stored again, gets the file written from its kept bitmaps; its member without a position
+// was counted when the bitmaps were collected and is not counted again.
+func TestRepairingALaneBitmapsFileCountsNoMemberTwice(t *testing.T) {
+	server, memoryStore := setupServerWithSettings(t, func(s *settings.Settings) { s.UtxoStore.LaneMigration = settings.LaneMigrationShadow })
+	server.subtreeStore = failingBitmapsWriteStore{Store: memoryStore}
+
+	st, txMap := laneSealSubtree(t, "repair-file")
+	txMap.Set(st.Nodes[2].Hash, singleParentInpointsPtr(chainhash.HashH([]byte("repair-parent")), 0)) // without a position
+
+	unpositioned := map[string]string{"service": laneBitmapsService}
+	before := ownLaneMetric(t, "teranode_lane_txs_without_position_total", unpositioned)
+
+	request := subtreeprocessor.NewSubtreeRequest{Subtree: st, ParentTxMap: txMap}
+
+	subtreeDone, allDone, err := server.storeSubtreeData(t.Context(), request, make(chan *subtreeRetrySend, 10))
+	require.NoError(t, err)
+	require.True(t, <-subtreeDone)
+	<-allDone
+
+	require.Equal(t, before+1, ownLaneMetric(t, "teranode_lane_txs_without_position_total", unpositioned))
+
+	// stored again, with a store that takes the file
+	server.subtreeStore = missingFileDAHStore{Store: memoryStore}
+	server.keepExistingSubtreeLaneBitmaps(t.Context(), request, 1, 10)
+
+	stored, err := memoryStore.Get(t.Context(), st.RootHash()[:], fileformat.FileTypeSubtreeLaneBitmaps)
+	require.NoError(t, err, "the file is written")
+
+	decoded, err := lane.DecodeSubtreeBitmaps(stored)
+	require.NoError(t, err)
+	require.Equal(t, []uint64{20, 22}, decoded.Lanes[4].ToArray())
+
+	require.Equal(t, before+1, ownLaneMetric(t, "teranode_lane_txs_without_position_total", unpositioned), "the member is not counted again")
+}
+
+// TestOverlappingStoresOfOneSubtreeKeepItPending: two storage requests of one subtree in flight
+// at once keep it as being stored until both end, so one ending without bitmaps does not make a
+// block listing it count it absent while the other still runs.
+func TestOverlappingStoresOfOneSubtreeKeepItPending(t *testing.T) {
+	var kept ownLaneBitmaps
+
+	root := chainhash.HashH([]byte("overlapping-stores"))
+
+	kept.expect(root)
+	kept.expect(root)
+	kept.settle(root) // the first ends without keeping bitmaps
+
+	_, absent, timedOut := kept.waitFor(t.Context(), []*chainhash.Hash{&root}, time.Millisecond)
+	require.Zero(t, absent)
+	require.Equal(t, 1, timedOut, "the second is still storing it")
+
+	kept.settle(root)
+
+	_, absent, timedOut = kept.waitFor(t.Context(), []*chainhash.Hash{&root}, time.Millisecond)
+	require.Equal(t, 1, absent, "no storage runs once both have ended")
+	require.Zero(t, timedOut)
+}

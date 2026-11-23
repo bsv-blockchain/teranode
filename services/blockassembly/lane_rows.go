@@ -61,7 +61,9 @@ type ownLaneBitmaps struct {
 	// pending holds the subtrees a storage worker has taken whose storage has not finished. A
 	// subtree still queued for a worker, behind a storage backlog, is not in it yet, so a block
 	// listing it counts it absent rather than timed out.
-	pending map[chainhash.Hash]struct{}
+	// It counts the storage requests in flight per subtree, so one that ends does not hide another
+	// of the same subtree still running.
+	pending map[chainhash.Hash]int
 	// changed is closed, and replaced, whenever a subtree's bitmaps are kept or its storage ends.
 	changed chan struct{}
 	// listed holds the subtrees the latest mining candidate lists, whose entries are not dropped.
@@ -92,7 +94,6 @@ func (o *ownLaneBitmaps) put(root chainhash.Hash, lanes lane.LaneBitmaps, height
 	}
 
 	o.bySubtree[root] = keptLaneBitmaps{lanes: lanes, height: keptHeight}
-	delete(o.pending, root)
 	o.broadcastLocked()
 
 	if height <= ownLaneBitmapsKeepBlocks {
@@ -123,11 +124,20 @@ func (o *ownLaneBitmaps) touch(root chainhash.Hash, height uint32) bool {
 	}
 
 	if ok {
-		delete(o.pending, root)
 		o.broadcastLocked()
 	}
 
 	return ok
+}
+
+// lookup returns the kept bitmaps of subtree root, and whether any are kept.
+func (o *ownLaneBitmaps) lookup(root chainhash.Hash) (lane.LaneBitmaps, bool) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+
+	kept, ok := o.bySubtree[root]
+
+	return kept.lanes, ok
 }
 
 // list records roots as the subtrees the latest mining candidate lists, which put does not drop,
@@ -154,29 +164,29 @@ func (o *ownLaneBitmaps) expect(root chainhash.Hash) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 
-	if _, kept := o.bySubtree[root]; kept {
-		return
-	}
-
 	if o.pending == nil {
-		o.pending = make(map[chainhash.Hash]struct{})
+		o.pending = make(map[chainhash.Hash]int)
 	}
 
-	o.pending[root] = struct{}{}
+	o.pending[root]++
 
 	// a waiter that counted this subtree before its storage began counts it again
 	o.broadcastLocked()
 }
 
-// settle marks the storage of subtree root as finished, kept or not, so nothing waits for it.
+// settle marks one storage request of subtree root, the one expect counted, as finished, kept or
+// not; once none is left, nothing waits for it.
 func (o *ownLaneBitmaps) settle(root chainhash.Hash) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 
-	if _, ok := o.pending[root]; ok {
+	if o.pending[root] <= 1 {
 		delete(o.pending, root)
-		o.broadcastLocked()
+	} else {
+		o.pending[root]--
 	}
+
+	o.broadcastLocked()
 }
 
 // broadcastLocked wakes every waiter; the caller holds o.mu.
@@ -263,7 +273,9 @@ func (o *ownLaneBitmaps) lookupLocked(roots []*chainhash.Hash) (bitmaps []lane.L
 // kept. The coinbase placeholder is skipped.
 //
 // It runs on a subtree storage worker, beside the processor, so the disk map is read with
-// PositionWithErr (see poolLanePosition). A position that cannot be read is none, and counted.
+// PositionWithErr (see poolLanePosition). A position that cannot be read, and is in neither the
+// removal backup nor a second pool read, is unknown: the member is lost, so the subtree gets no
+// bitmaps, and it is not counted as a member without a position.
 func subtreeLanePositions(subtree *subtreepkg.Subtree, parentTxMap subtreeprocessor.TxInpointsMap,
 	deletedTxs *txmap.SyncedMap[chainhash.Hash, subtreepkg.TxInpoints], deletedPositions *txmap.SyncedMap[chainhash.Hash, uint64]) (laneBits *lane.BitmapsBuilder, lost int) {
 	laneBits = lane.NewBitmapsBuilder()
@@ -324,6 +336,14 @@ func (ba *BlockAssembly) storeSubtreeLaneBitmaps(ctx context.Context, subtree *s
 	bitmaps := laneBits.Subtree(root)
 	ba.ownLaneBitmaps.put(root, bitmaps.Lanes, height)
 
+	ba.writeLaneBitmapsFile(ctx, bitmaps, dah)
+}
+
+// writeLaneBitmapsFile writes a subtree's lane bitmaps file, to live until dah. A file already
+// there gets dah; a file that cannot be encoded or written is counted under block="own".
+func (ba *BlockAssembly) writeLaneBitmapsFile(ctx context.Context, bitmaps lane.SubtreeBitmaps, dah uint32) {
+	root := bitmaps.SubtreeHash
+
 	data, err := lane.EncodeSubtreeBitmaps(bitmaps)
 	if err != nil {
 		lane.CountMissingBitmaps(lane.BlockOwn, lane.MissingBitmapsWriteFailed, 1)
@@ -365,8 +385,13 @@ func (ba *BlockAssembly) keepExistingSubtreeLaneBitmaps(ctx context.Context, sub
 
 	switch {
 	case errors.Is(err, errors.ErrNotFound):
-		// an earlier write of the file failed while its bitmaps were kept: write it now
-		ba.storeLanePositionsFromPool(ctx, subtreeRequest, height, dah)
+		// an earlier write of the file failed while its bitmaps were kept: write it now from the
+		// kept bitmaps, whose members were counted when they were collected
+		if lanes, kept := ba.ownLaneBitmaps.lookup(root); kept {
+			ba.writeLaneBitmapsFile(ctx, lane.SubtreeBitmaps{SubtreeHash: root, Lanes: lanes}, dah)
+		} else {
+			ba.storeLanePositionsFromPool(ctx, subtreeRequest, height, dah)
+		}
 	case err != nil:
 		ba.logger.Warnf("[BlockAssembly:storeSubtreeData][%s] the lane bitmaps file may now expire before its subtree, whose DAH update failed: %v", root.String(), err)
 	}

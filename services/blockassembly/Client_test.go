@@ -2,6 +2,7 @@ package blockassembly
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"sync"
 	"sync/atomic"
@@ -1418,4 +1419,83 @@ func TestClient_SendsLanePositionsOnlyWhenATxHasOne(t *testing.T) {
 		require.True(t, ok)
 		mockClient.AssertExpectations(t)
 	})
+
+	positions := []uint64{0, lane.Pack(4, 9), lane.Pack(5, 11)}
+
+	t.Run("unary sends each call's own position, and none for 0", func(t *testing.T) {
+		mockClient := &mockBlockAssemblyAPIClient{}
+		client := createTestClient(mockClient, 0)
+
+		var sent []*blockassembly_api.AddTxRequest
+
+		mockClient.On("AddTx", mock.Anything, mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
+			sent = append(sent, args.Get(1).(*blockassembly_api.AddTxRequest))
+		}).Return(&blockassembly_api.AddTxResponse{Ok: true}, nil)
+
+		for i, position := range positions {
+			hash := chainhash.Hash{0x0a, byte(i)}
+			_, err := client.Store(context.Background(), &hash, 1, 100, subtree.NewTxInpoints(), 0, position)
+			require.NoError(t, err)
+		}
+
+		require.Len(t, sent, len(positions))
+
+		for i, req := range sent {
+			require.Equal(t, positions[i], req.GetLanePosition())
+		}
+
+		zeroBytes, err := proto.Marshal(sent[0])
+		require.NoError(t, err)
+
+		withoutBytes, err := proto.Marshal(&blockassembly_api.AddTxRequest{Txid: sent[0].Txid, Fee: 1, Size: 100, TxInpoints: sent[0].TxInpoints})
+		require.NoError(t, err)
+		require.Equal(t, withoutBytes, zeroBytes, "a Store with position 0 sends no position field")
+	})
+
+	for _, columnar := range []bool{false, true} {
+		t.Run(fmt.Sprintf("a batch sends each tx's own position, columnar=%t", columnar), func(t *testing.T) {
+			mockClient := &mockBlockAssemblyAPIClient{}
+			client := createTestClient(mockClient, len(positions))
+			client.settings.BlockAssembly.UseColumnarBatch = columnar
+
+			sent := make(chan map[byte]uint64, 1)
+
+			mockClient.On("AddTxBatch", mock.Anything, mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
+				byTx := make(map[byte]uint64)
+				for _, req := range args.Get(1).(*blockassembly_api.AddTxBatchRequest).GetTxRequests() {
+					byTx[req.GetTxid()[1]] = req.GetLanePosition()
+				}
+				sent <- byTx
+			}).Return(&blockassembly_api.AddTxBatchResponse{Ok: true}, nil)
+
+			mockClient.On("AddTxBatchColumnar", mock.Anything, mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
+				req := args.Get(1).(*blockassembly_api.AddTxBatchColumnarRequest)
+				byTx := make(map[byte]uint64)
+				for i, position := range req.GetLanePositions() {
+					byTx[req.GetTxidsPacked()[i*32+1]] = position
+				}
+				sent <- byTx
+			}).Return(&blockassembly_api.AddTxBatchResponse{Ok: true}, nil)
+
+			var wg sync.WaitGroup
+
+			for i, position := range positions {
+				wg.Add(1)
+
+				go func() {
+					defer wg.Done()
+
+					hash := chainhash.Hash{0x0b, byte(i)}
+					_, _ = client.Store(context.Background(), &hash, 1, 100, subtree.NewTxInpoints(), 0, position)
+				}()
+			}
+
+			byTx := <-sent
+			wg.Wait()
+
+			for i, position := range positions {
+				require.Equal(t, position, byTx[byte(i)], "tx %d", i)
+			}
+		})
+	}
 }
