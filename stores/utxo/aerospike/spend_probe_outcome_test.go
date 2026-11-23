@@ -1,6 +1,7 @@
 package aerospike
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -195,6 +196,41 @@ func TestSpend_WholeBatchNonInfrastructureErrorReleasesProbeSlots(t *testing.T) 
 
 			require.Equal(t, cbStateHalfOpen, cb.state)
 			require.Equal(t, 0, cb.halfOpenAttempts)
+		})
+	}
+}
+
+func TestSpend_ExpiredContextBeforeBatchOperateDoesNotTripBreaker(t *testing.T) {
+	for _, halfOpen := range []bool{false, true} {
+		t.Run(map[bool]string{false: "closed", true: "half-open"}[halfOpen], func(t *testing.T) {
+			s := newSpendBreakerTestStore(t, false)
+			cb := newCircuitBreaker(1, 1, time.Hour)
+			if halfOpen {
+				cb = probeBreaker(t, 1)
+			}
+			s.spendCircuitBreaker = cb
+
+			batch, _ := competingSpendBatch(distinctParents(1)...)
+			if halfOpen {
+				admitProbes(t, cb, batch)
+			}
+			called := false
+			s.batchOperateFn = func(*aerospike.BatchPolicy, []aerospike.BatchRecordIfc) aerospike.Error {
+				called = true
+				return nil
+			}
+
+			ctx, cancel := context.WithDeadline(t.Context(), time.Now().Add(-time.Second))
+			defer cancel()
+			require.ErrorIs(t, s.executeSpendBatchContext(ctx, nil, batch, 1), context.DeadlineExceeded)
+			require.False(t, called)
+			if halfOpen {
+				require.Equal(t, cbStateHalfOpen, cb.state, "preflight must release the probe without tripping")
+				require.Zero(t, cb.halfOpenAttempts)
+			} else {
+				require.Equal(t, cbStateClosed, cb.state, "closed breaker must not trip on caller preflight")
+				require.Zero(t, cb.consecutiveFailures)
+			}
 		})
 	}
 }

@@ -1262,6 +1262,7 @@ func (s *Store) executeSpendBatch(batchRecords []aerospike.BatchRecordIfc, batch
 func (s *Store) executeSpendBatchContext(ctx context.Context, batchRecords []aerospike.BatchRecordIfc, batch []*batchSpend, batchID uint64) error {
 	batchPolicy := util.GetAerospikeBatchPolicy(s.settings)
 	err := boundConflictBatchPolicy(ctx, batchPolicy)
+	batchSent := err == nil
 	if err == nil {
 		err = s.batchOperate(batchPolicy, batchRecords)
 	}
@@ -1274,7 +1275,11 @@ func (s *Store) executeSpendBatchContext(ctx context.Context, batchRecords []aer
 			bItem.complete(sendErr)
 		}
 
-		s.recordSpendOutcome(err, takeSlots(batch))
+		if batchSent {
+			s.recordSpendOutcome(err, takeSlots(batch))
+		} else {
+			s.releaseSlots(takeSlots(batch))
+		}
 
 		return err
 	}
