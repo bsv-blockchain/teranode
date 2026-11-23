@@ -1162,8 +1162,24 @@ func (u *Server) storeSubtreeFiles(ctx context.Context, stat *gocore.Stat, subtr
 
 	dah := u.utxoStore.GetBlockHeight() + u.settings.GetSubtreeValidationBlockHeightRetention()
 
+	// The lane bitmaps file only has to exist before the subtree file, which the block gate reads
+	// as "this subtree is done", so it is written beside the meta rather than before it: at
+	// shadow a subtree waits for no extra write in turn. Every return waits for it, so no write
+	// outlives the call.
+	waitForBitmaps := func() {}
+
 	if laneBitmaps != nil {
-		u.storeSubtreeLaneBitmaps(ctx, subtreeHash, *laneBitmaps, dah)
+		bitmapsWritten := make(chan struct{})
+
+		go func() {
+			defer close(bitmapsWritten)
+
+			u.storeSubtreeLaneBitmaps(ctx, subtreeHash, *laneBitmaps, dah)
+		}()
+
+		defer func() { <-bitmapsWritten }()
+
+		waitForBitmaps = func() { <-bitmapsWritten }
 	}
 
 	// The meta is written before the subtree, not beside it. The .subtree file is what
@@ -1202,6 +1218,8 @@ func (u *Server) storeSubtreeFiles(ctx context.Context, stat *gocore.Stat, subtr
 	if err != nil {
 		return errors.NewProcessingError("[ValidateSubtreeInternal][%s] failed to serialize subtree", subtreeHash.String(), err)
 	}
+
+	waitForBitmaps()
 
 	u.logger.Debugf("[ValidateSubtreeInternal][%s] store subtree", subtreeHash.String())
 

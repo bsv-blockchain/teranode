@@ -4,6 +4,7 @@ import (
 	"context"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/RoaringBitmap/roaring/v2/roaring64"
 	"github.com/bsv-blockchain/go-bt/v2"
@@ -39,6 +40,9 @@ type recordingStore struct {
 	mu     sync.Mutex
 	writes []recordedWrite
 	refuse fileformat.FileType
+	// slow is a file type whose write takes slowFor longer.
+	slow    fileformat.FileType
+	slowFor time.Duration
 }
 
 type recordedWrite struct {
@@ -46,16 +50,23 @@ type recordedWrite struct {
 	dah      uint32
 }
 
+// Set records each write once it has completed, in the order writes complete.
 func (s *recordingStore) Set(ctx context.Context, key []byte, fileType fileformat.FileType, value []byte, opts ...bloboptions.FileOption) error {
 	if fileType == s.refuse {
 		return errors.NewStorageError("refused for the test")
 	}
 
+	if fileType == s.slow {
+		time.Sleep(s.slowFor)
+	}
+
+	err := s.Store.Set(ctx, key, fileType, value, opts...)
+
 	s.mu.Lock()
 	s.writes = append(s.writes, recordedWrite{fileType: fileType, dah: bloboptions.NewFileOptions(opts...).DAH})
 	s.mu.Unlock()
 
-	return s.Store.Set(ctx, key, fileType, value, opts...)
+	return err
 }
 
 func laneBitmapsSubtree(t *testing.T) (*subtreepkg.Subtree, *subtreepkg.Meta) {
@@ -75,8 +86,9 @@ func laneBitmapsSubtree(t *testing.T) (*subtreepkg.Subtree, *subtreepkg.Meta) {
 	return st, m
 }
 
-// The lane bitmaps are written before the subtree file, with the same expiry, so a stored subtree
-// always has them; with no bitmaps, as at utxostore_laneMigration off, nothing extra is written.
+// The lane bitmaps are written beside the meta and before the subtree file, with the same expiry,
+// so a stored subtree always has them and the meta never waits for them; with no bitmaps, as at
+// utxostore_laneMigration off, nothing extra is written.
 func TestStoreSubtreeFiles_WritesLaneBitmapsBeforeTheSubtree(t *testing.T) {
 	ctx := context.Background()
 
@@ -86,13 +98,15 @@ func TestStoreSubtreeFiles_WritesLaneBitmapsBeforeTheSubtree(t *testing.T) {
 		want    []fileformat.FileType
 	}{
 		{"off", nil, []fileformat.FileType{fileformat.FileTypeSubtreeMeta, fileformat.FileTypeSubtree}},
-		{"shadow", &lane.SubtreeBitmaps{}, []fileformat.FileType{fileformat.FileTypeSubtreeLaneBitmaps, fileformat.FileTypeSubtreeMeta, fileformat.FileTypeSubtree}},
+		// The bitmaps write is held back, so it finishes after the meta, which does not wait for
+		// it, and before the subtree, which does.
+		{"shadow", &lane.SubtreeBitmaps{}, []fileformat.FileType{fileformat.FileTypeSubtreeMeta, fileformat.FileTypeSubtreeLaneBitmaps, fileformat.FileTypeSubtree}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			st, m := laneBitmapsSubtree(t)
 			root := st.RootHash()
 
-			store := &recordingStore{Store: blobmemory.New()}
+			store := &recordingStore{Store: blobmemory.New(), slow: fileformat.FileTypeSubtreeLaneBitmaps, slowFor: 100 * time.Millisecond}
 
 			utxoStore := &utxo.MockUtxostore{}
 			utxoStore.On("GetBlockHeight").Return(uint32(100)).Maybe()
