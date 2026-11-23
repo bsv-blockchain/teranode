@@ -2173,7 +2173,7 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 					// Inherited only when the parent is invalid too. A peer that serves its own bad
 					// block again has a valid parent here, so it stays chargeable.
 					if _, parentMeta, parentErr := u.blockchainClient.GetBlockHeader(ctx, block.Header.HashPrevBlock); parentErr == nil && u.checkParentInvalid(parentMeta) {
-						markInheritedInvalid(existsInvalidErr)
+						existsInvalidErr = markInheritedInvalid(existsInvalidErr)
 					}
 
 					return existsInvalidErr
