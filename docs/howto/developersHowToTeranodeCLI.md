@@ -308,7 +308,7 @@ Free one output of the UTXO store that is still spent by a transaction the store
 SETTINGS_CONTEXT=dev.[YOUR_CONTEXT] ./teranode-cli free-spent-output --parent <txid> --vout <n> --spender <txid>
 ```
 
-This clears the stall a left-behind spend causes: a block that mines the spender is refused with error 78 (`ERR_UTXO_SPENDING_TX_PRUNED`) on every retry. First tell that stall apart from a real replay, which must stay refused, as "When a spend is refused with error 78" in `docs/topics/stores/utxo.md` describes. The command refuses when the spender has a record, frees the output only while it still names the spender, and reads it back afterwards. It works on SQL and Aerospike, and the node can keep running.
+This clears the stall a left-behind spend causes: a block that mines the spender is refused with error 78 (`ERR_UTXO_SPENDING_TX_PRUNED`) on every retry. First tell that stall apart from a real replay, which must stay refused, as "When a spend is refused with error 78" in `docs/topics/stores/utxo.md` describes. The command refuses when the spender has a record, frees the output only while it still names the spender, and reads it back afterwards. It works on SQL and Aerospike. Stop every service that writes to the UTXO store before running it, because a running node could create the spender between the command's check and its unspend.
 
 Options:
 

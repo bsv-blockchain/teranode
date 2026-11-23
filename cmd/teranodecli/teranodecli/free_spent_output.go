@@ -32,7 +32,13 @@ The command refuses to act when the spender's record exists, because the output 
 stored transaction and freeing it would let a second spender take it. It frees the output only while
 the output still names --spender: the store's Unspend checks the stored spend before clearing it, so
 a spend that changed in the meantime is left alone. Afterwards it reads the output back and fails if
-the spend is still there. The node can keep running; the parked block is retried on its own.`
+the spend is still there.
+
+Stop every teranode service that writes to the UTXO store first, and start them again afterwards.
+The check that the spender has no record and the unspend are separate steps. A running node can
+retry the parked block between them, create the spender and spend the output, and the command would
+then free an output a stored transaction spends. Once the services start, the parked block is
+retried on its own.`
 
 // freeSpentOutputTimeout bounds the whole run, store open included. Freeing one output takes
 // milliseconds; the bound is for a lock wait that does not end.
@@ -146,7 +152,7 @@ func freeSpentOutput(ctx context.Context, store utxostore.Store, parent *chainha
 		return errors.NewProcessingError("%s:%d still records %s after the unspend; the spend changed while the command ran", parent, vout, describeSpender(after))
 	}
 
-	_, _ = fmt.Fprintf(out, "Freed %s:%d, which was spent by %s (input %d). A parked block that mines %s is retried on its own.\n",
+	_, _ = fmt.Fprintf(out, "Freed %s:%d, which was spent by %s (input %d). Start the services again; a parked block that mines %s is retried on its own.\n",
 		parent, vout, spender, current.SpendingData.Vin, spender)
 
 	return nil
