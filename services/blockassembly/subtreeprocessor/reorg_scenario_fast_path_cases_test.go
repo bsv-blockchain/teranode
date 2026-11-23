@@ -97,3 +97,42 @@ func TestReorgScenario_SlowPathPublishesLostChildBeforePendingParent(t *testing.
 
 	require.ElementsMatch(t, sc.expectedMarkFalse(), sc.utxo.marked(false), "C and X are both marked off the longest chain")
 }
+
+// Design section 5, gate on B's coinbase children and on the removeMap "including what
+// removeCoinbaseUtxos will add". Pending transactions that spend B's coinbase are deleted with it:
+// out of the UTXO store (saved to the reorg journal), out of the assembly and out of the tx map,
+// and every other pending transaction keeps its order. Their removeMap entries are not consumed:
+// the entries were made after the children left the subtrees, so no remainder pass meets them, and
+// they stay to keep the same transactions out of the queue.
+func TestReorgScenario_SlowPathRemovesCoinbaseChildren(t *testing.T) {
+	cfg := smallScenarioConfig()
+	cfg.coinbaseChildren = 4
+	sc := newReorgScenario(t, cfg)
+
+	require.Equal(t, sc.pendingOrder(), txHashes(assemblyNodes(sc.stp)), "the children are pending before the reorg")
+	requireAssemblyValid(t, sc.stp, sc.onChainBefore)
+
+	require.NoError(t, sc.run(t))
+
+	requireAssemblyValid(t, sc.stp, sc.onChainAfter)
+	require.Equal(t, sc.expectedOrderAfter(), txHashes(assemblyNodes(sc.stp)))
+	require.Equal(t, len(sc.expectedOrderAfter()), sc.stp.GetCurrentTxMap().Length())
+	require.Equal(t, 4, sc.stp.GetRemoveMapLength(), "one leftover removeMap entry per coinbase child")
+
+	for _, tx := range sc.cbChildTxs {
+		h := *tx.TxIDChainHash()
+
+		require.False(t, sc.stp.GetCurrentTxMap().Exists(h))
+		require.NotContains(t, txHashes(assemblyNodes(sc.stp)), h)
+		require.True(t, sc.stp.removeMap.Exists(h))
+
+		_, err := sc.utxo.Get(t.Context(), &h)
+		require.Error(t, err, "the child is deleted from the UTXO store")
+	}
+
+	_, err := sc.utxo.Get(t.Context(), sc.lost.CoinbaseTx.TxIDChainHash())
+	require.Error(t, err, "and so is B's coinbase")
+
+	require.ElementsMatch(t, sc.expectedMarkFalse(), sc.utxo.marked(false), "the children are not marked: they are gone")
+	require.ElementsMatch(t, sc.winnerNotLost(), sc.utxo.marked(true))
+}

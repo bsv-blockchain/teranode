@@ -91,6 +91,12 @@ type reorgScenarioConfig struct {
 	// TestReorgScenario_SlowPathPublishesLostChildBeforePendingParent.
 	lostChildOfPending int
 
+	// coinbaseChildren is how many pending transactions spend B's coinbase. They are real
+	// transactions with records in the UTXO store, and never hits. The slow path deletes them with
+	// the coinbase (removeCoinbaseUtxos), out of the store, the assembly and the tx map, and leaves
+	// their removeMap entries behind.
+	coinbaseChildren int
+
 	// skipStoreMarks counts the longest-chain marks instead of sending them to the UTXO store, and
 	// creates no raw D1 records. The reorgscale suite sets it to time the processor's phases; the
 	// marks are measured on their own against Aerospike.
@@ -111,6 +117,11 @@ type reorgScenario struct {
 	pendingIDs []scenarioID
 	winnerIDs  []scenarioID
 	rawD1Txs   []*bt.Tx
+
+	// cbChildTxs are the pending transactions that spend the lost block's coinbase, and
+	// lostCoinbase is that coinbase.
+	cbChildTxs   []*bt.Tx
+	lostCoinbase *bt.Tx
 
 	// removeIDs are the transactions put in the removeMap. droppedIDs are the ones the reorg must
 	// leave out of the assembly and out of the mark-false set, whatever took them out.
@@ -138,6 +149,7 @@ const (
 	kindPending
 	kindWinnerOnly
 	kindIntake
+	kindCoinbaseChild
 )
 
 func (id scenarioID) kind() scenarioID { return id & (0xf << kindShift) }
@@ -192,18 +204,28 @@ func (sc *reorgScenario) confirmedParent(id scenarioID) chainhash.Hash {
 
 // hash is the transaction hash of id.
 func (sc *reorgScenario) hash(id scenarioID) chainhash.Hash {
-	if id.kind() == kindRawD1 {
-		return *sc.rawD1Txs[id.index()].TxIDChainHash()
+	if real := sc.realTx(id); real != nil {
+		return *real.TxIDChainHash()
 	}
 
 	return scenarioHash(sc.cfg.seed, uint64(id))
 }
 
+// realTx is the real transaction behind id, or nil for a synthetic one.
+func (sc *reorgScenario) realTx(id scenarioID) *bt.Tx {
+	switch id.kind() {
+	case kindRawD1:
+		return sc.rawD1Txs[id.index()]
+	case kindCoinbaseChild:
+		return sc.cbChildTxs[id.index()]
+	default:
+		return nil
+	}
+}
+
 // tx is the node and inpoints of id.
 func (sc *reorgScenario) tx(t testing.TB, id scenarioID) scenarioTx {
-	if id.kind() == kindRawD1 {
-		real := sc.rawD1Txs[id.index()]
-
+	if real := sc.realTx(id); real != nil {
 		inpoints, err := subtreepkg.NewTxInpointsFromTx(real)
 		require.NoError(t, err)
 
@@ -307,6 +329,7 @@ func newReorgScenario(t testing.TB, cfg reorgScenarioConfig) *reorgScenario {
 	}
 
 	sc.addParentEdges(t, synthetic, rawD1Count)
+	sc.placeCoinbaseChildren(t)
 
 	// The hits: pending transactions the winners mined. Never a lostAlsoPending transaction, never a
 	// child of a raw D1 transaction (the winners do not have its parent), and never a chain child
@@ -366,6 +389,40 @@ func pickSpread(ids []scenarioID, n int) []scenarioID {
 	}
 
 	return out
+}
+
+// placeCoinbaseChildren replaces spread-out pending transactions that have no parent or child in the
+// scenario with the coinbase children. They are never hits, which only take kindPending ones.
+func (sc *reorgScenario) placeCoinbaseChildren(t testing.TB) {
+	t.Helper()
+
+	if sc.cfg.coinbaseChildren == 0 {
+		return
+	}
+
+	hasChild := make(map[scenarioID]struct{}, len(sc.extraParent))
+	for _, edge := range sc.extraParent {
+		hasChild[edge.parent] = struct{}{}
+	}
+
+	var positions []scenarioID
+
+	for pos, id := range sc.pendingIDs {
+		_, isChild := sc.extraParent[id]
+		_, isParent := hasChild[id]
+
+		if id.kind() == kindPending && !isChild && !isParent {
+			positions = append(positions, scenarioID(pos))
+		}
+	}
+
+	require.LessOrEqual(t, sc.cfg.coinbaseChildren, len(positions))
+
+	for j, pos := range pickSpread(positions, sc.cfg.coinbaseChildren) {
+		id := kindCoinbaseChild | scenarioID(j)
+		sc.pendingIDs[pos] = id
+		sc.droppedIDs = append(sc.droppedIDs, id)
+	}
 }
 
 // planRemoveMap chooses the transactions the removeMap knobs name. hitPositions are the positions in
@@ -509,6 +566,7 @@ func (sc *reorgScenario) buildChain(t testing.TB) {
 
 	nonce := uint32(sc.cfg.seed%1000)*100 + 1
 	sc.lost = sc.storeBlock(t, 1, childHeader(sc.genesis, nonce), sc.lostIDs, true)
+	sc.lostCoinbase = sc.lost.CoinbaseTx
 	require.NoError(t, sc.client.AddBlock(ctx, sc.lost, "", blockchainoptions.WithMinedSet(true)))
 
 	parent := sc.genesis
@@ -541,6 +599,22 @@ func (sc *reorgScenario) buildChain(t testing.TB) {
 
 	_, _, err = sqlStore.SpendAndCreate(ctx, sc.lost.CoinbaseTx, sc.lost.Height, utxo.WithCreateOnly())
 	require.NoError(t, err)
+
+	// The coinbase children spend one coinbase output each, at the height the output matures.
+	spendHeight := sc.lost.Height + uint32(tSettings.ChainCfgParams.CoinbaseMaturity) //nolint:gosec // small chain constant
+	sc.cbChildTxs = make([]*bt.Tx, sc.cfg.coinbaseChildren)
+
+	for i := range sc.cbChildTxs {
+		child := bt.NewTx()
+		require.NoError(t, child.From(sc.lost.CoinbaseTx.TxIDChainHash().String(), uint32(i), sc.lost.CoinbaseTx.Outputs[i].LockingScript.String(), sc.lost.CoinbaseTx.Outputs[i].Satoshis)) //nolint:gosec // small index
+		child.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{})
+		child.Outputs = []*bt.Output{{Satoshis: 49_0000_0000, LockingScript: bscript.NewFromBytes([]byte{0x6a, 0x08, byte(i), byte(i >> 8), 0, 0, 0, 0, 0, 0})}}
+
+		_, _, err = sqlStore.SpendAndCreate(ctx, child, spendHeight)
+		require.NoError(t, err)
+
+		sc.cbChildTxs[i] = child
+	}
 }
 
 // storeBlock stores ids as the block's subtrees (coinbase placeholder first) and, with meta set,
@@ -553,7 +627,7 @@ func (sc *reorgScenario) storeBlock(t testing.TB, height uint32, header *model.B
 	block := &model.Block{
 		Height:           height,
 		Header:           header,
-		CoinbaseTx:       scenarioCoinbase(t, height, uint64(header.Nonce)),
+		CoinbaseTx:       scenarioCoinbase(t, height, uint64(header.Nonce), map[bool]int{true: sc.cfg.coinbaseChildren}[meta]),
 		TransactionCount: uint64(len(ids) + 1),
 		SizeInBytes:      uint64(len(ids)*250 + 200),
 		Subtrees:         []*chainhash.Hash{},
@@ -823,13 +897,15 @@ func (sc *reorgScenario) expectedMarkFalse() []chainhash.Hash {
 }
 
 // expectedRemoveMapLength is what is left in the removeMap after the reorg: nothing the scenario
-// put there.
-func (sc *reorgScenario) expectedRemoveMapLength() int { return 0 }
+// put there, but the entries removeCoinbaseUtxos made for the coinbase children, which are no longer
+// in any subtree for the remainder pass to consume them from (design 5, gate on removeMap and what
+// removeCoinbaseUtxos adds).
+func (sc *reorgScenario) expectedRemoveMapLength() int { return sc.cfg.coinbaseChildren }
 
 // onChainBefore reports whether h's outputs are on the chain ending in B. A lost-block transaction
 // that is also pending (the X case) counts as pending, not as mined.
 func (sc *reorgScenario) onChainBefore(h chainhash.Hash) bool {
-	return isConfirmedParent(h) || (sc.inLost(h) && !sc.inPending(h))
+	return isConfirmedParent(h) || (sc.inLost(h) && !sc.inPending(h)) || (sc.lostCoinbase != nil && *sc.lostCoinbase.TxIDChainHash() == h)
 }
 
 // onChainAfter reports whether h's outputs are on the chain ending in Fn.
@@ -837,8 +913,8 @@ func (sc *reorgScenario) onChainAfter(h chainhash.Hash) bool {
 	return isConfirmedParent(h) || sc.inWinners(h)
 }
 
-// scenarioCoinbase is a coinbase transaction unique to tag.
-func scenarioCoinbase(t testing.TB, height uint32, tag uint64) *bt.Tx {
+// scenarioCoinbase is a coinbase transaction unique to tag, with outputs outputs (at least one).
+func scenarioCoinbase(t testing.TB, height uint32, tag uint64, outputs int) *bt.Tx {
 	t.Helper()
 
 	var script [13]byte
@@ -851,7 +927,9 @@ func scenarioCoinbase(t testing.TB, height uint32, tag uint64) *bt.Tx {
 
 	tx := bt.NewTx()
 	tx.Inputs = []*bt.Input{in}
-	tx.Outputs = []*bt.Output{{Satoshis: 50_0000_0000, LockingScript: bscript.NewFromBytes([]byte{0x51})}}
+	for range max(outputs, 1) {
+		tx.Outputs = append(tx.Outputs, &bt.Output{Satoshis: 50_0000_0000, LockingScript: bscript.NewFromBytes([]byte{0x51})})
+	}
 
 	return tx
 }
