@@ -286,7 +286,7 @@ func TestStoredPrefixWatch_ARootIsNotSentAgainWhileItsLastSendIsOutstanding(t *t
 		stp.maintainStoredPrefix(t0.Add(time.Duration(i) * 31 * time.Second))
 	}
 
-	time.Sleep(30 * time.Millisecond)
+	require.Eventually(t, func() bool { return len(requests.snapshot()) == 2 }, 5*time.Second, 10*time.Millisecond)
 
 	first := requests.snapshot()
 	require.Equal(t, []chainhash.Hash{chainRoot(stp, 2), chainRoot(stp, 0)}, first)

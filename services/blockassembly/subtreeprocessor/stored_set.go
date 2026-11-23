@@ -120,13 +120,6 @@ func (s *StoredSet) Retrying(root chainhash.Hash) bool {
 	return s.retrying[root] > 0
 }
 
-// ClearFailed forgets that root's store failed, when it is sent again: a new failure notes it again.
-func (s *StoredSet) ClearFailed(root chainhash.Hash) {
-	s.mu.Lock()
-	delete(s.failed, root)
-	s.mu.Unlock()
-}
-
 // HasFailed reports whether root's store ended failed for good and has not been stored since.
 func (s *StoredSet) HasFailed(root chainhash.Hash) bool {
 	s.mu.RLock()

@@ -163,8 +163,6 @@ func (stp *SubtreeProcessor) sendChainedSubtreeAgain(i int, root chainhash.Hash,
 		w.lastSent[root] = now
 		w.pending[root] = result
 
-		stp.storedSet.ClearFailed(root)
-
 		stp.logger.Warnf("[SubtreeProcessor] chained subtree %d is not stored, sending it to the store again", i)
 	default:
 	}
