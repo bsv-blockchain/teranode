@@ -1,8 +1,8 @@
 diff --git a/services/blockassembly/subtreeprocessor/reorg_fast_path.go b/services/blockassembly/subtreeprocessor/reorg_fast_path.go
-index cdac49551..c5164c787 100644
+index 1a3dc0855..95ab89b51 100644
 --- a/services/blockassembly/subtreeprocessor/reorg_fast_path.go
 +++ b/services/blockassembly/subtreeprocessor/reorg_fast_path.go
-@@ -191,7 +191,7 @@ func (stp *SubtreeProcessor) planFastReorg(ctx context.Context, moveBackBlocks,
+@@ -193,7 +193,7 @@ func (stp *SubtreeProcessor) planFastReorg(ctx context.Context, moveBackBlocks,
  		err         error
  	)
  
