@@ -443,16 +443,16 @@ func (stp *SubtreeProcessor) applyFastReorg(ctx context.Context, plan *fastReorg
 
 	stp.reorgPendingD1 = d1Hashes
 
-	removeMapLength := stp.removeMap.Length()
 	txMapLength := stp.currentTxMap.Length()
 
 	if err = stp.removeCoinbaseUtxos(ctx, lost); err != nil && !errors.Is(err, errors.ErrTxNotFound) {
 		return nil, errors.NewProcessingError("[reorgInPlace][%s] error removing coinbase utxo", lost.String(), err)
 	}
 
-	// No children, so nothing should have left the assembly or entered the removeMap; if something
-	// did, the flags are stale.
-	if stp.removeMap.Length() != removeMapLength || stp.currentTxMap.Length() != txMapLength {
+	// No children, so nothing should have left the assembly; if something did, the flags are stale. The
+	// removeMap is not checked: Remove writes it from any goroutine, and a removal accepted after the flag
+	// pass is applied by the processor's removal channel once it resumes, as after any other block move.
+	if stp.currentTxMap.Length() != txMapLength {
 		return nil, errors.NewProcessingError("[reorgInPlace][%s] removing the coinbase changed the assembly, the flags are stale", lost.String())
 	}
 

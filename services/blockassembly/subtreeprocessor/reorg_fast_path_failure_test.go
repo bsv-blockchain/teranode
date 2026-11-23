@@ -122,11 +122,7 @@ func TestReorgScenario_FastPathFailedCoinbaseApplicationEndsInAResetThatSweepsTh
 		}
 	})
 
-	err := sc.stp.reorgBlocks(ctx, []*model.Block{sc.lost}, sc.forward)
-	if err == nil {
-		t.Skip("the store ignored the cancelled context; the failure cannot be injected this way")
-	}
-
+	require.Error(t, sc.stp.reorgBlocks(ctx, []*model.Block{sc.lost}, sc.forward), "the cancelled context fails the coinbase application")
 	require.Empty(t, sc.stp.reorgPendingD1)
 	requireResetRecoversEveryUnminedTx(t, sc)
 }

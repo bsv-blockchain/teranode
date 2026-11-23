@@ -5,6 +5,7 @@ import (
 	"math"
 	"math/rand/v2"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -185,8 +186,16 @@ func requireDeclinedLikeSlow(t *testing.T, cfg reorgScenarioConfig, setup func(s
 		return
 	}
 
+	// Which subtree of a block fails first is not fixed, so only the outer layers of the error are compared.
 	require.Error(t, fastErr)
-	require.Equal(t, slowErr.Error(), fastErr.Error())
+	require.Equal(t, outerErrorLayers(slowErr), outerErrorLayers(fastErr))
+}
+
+// outerErrorLayers is the first two layers of err's chain, before the part that names a subtree or a hash.
+func outerErrorLayers(err error) string {
+	layers := strings.SplitN(err.Error(), " -> ", 3)
+
+	return strings.Join(layers[:min(2, len(layers))], " -> ")
 }
 
 // A decline falls through to the move-back loop: the reset-flag defer of reorgBlocks is armed before
@@ -398,6 +407,44 @@ func TestReorgScenario_FastPathDeclinesASuppressingMapEntryNoSubtreeHolds(t *tes
 		orphan := voutZeroInpoints(chainhash.Hash{9})
 		sc.stp.currentTxMap.Set(d1, &orphan)
 	}, "suppressed_not_pending")
+}
+
+// A lost block whose subtree holds effective D1 but has no meta file cannot be read: the fast path
+// declines, and the slow path then fails on the same file.
+func TestReorgScenario_FastPathDeclinesAnUnreadableLostSubtree(t *testing.T) {
+	requireDeclinedLikeSlow(t, smallScenarioConfig(), func(sc *reorgScenario) {
+		for _, st := range sc.lost.Subtrees {
+			require.NoError(t, sc.blobStore.Del(t.Context(), st[:], fileformat.FileTypeSubtreeMeta))
+		}
+	}, "read_failed")
+}
+
+// The disk tx map keeps a hint of the chained subtree each transaction is in, and a removal reads it. The
+// rebuild gives every chained node the hint of its new subtree, so the first removal after the reorg is
+// as cheap as before it.
+func TestReorgScenario_FastPathLeavesEveryChainedNodeWithItsSubtreeHint(t *testing.T) {
+	cfg := smallScenarioConfig()
+	cfg.diskTxMap = true
+
+	sc := newReorgScenario(t, cfg)
+
+	var rec fastPathRun
+
+	require.NoError(t, recordingFastPath(&rec)(t, sc))
+	require.True(t, rec.applied, "declined: %v", rec.reasons)
+	require.NotEmpty(t, sc.stp.chainedSubtrees)
+
+	for k, st := range sc.stp.chainedSubtrees {
+		for _, node := range st.Nodes {
+			if node.Hash == subtreepkg.CoinbasePlaceholderHashValue {
+				continue
+			}
+
+			p, ok := sc.stp.currentTxMap.Get(node.Hash)
+			require.True(t, ok)
+			require.Equal(t, int16(k+1), p.SubtreeIndex, "node %s of chained subtree %d", node.Hash, k)
+		}
+	}
 }
 
 // The memory gate: live heap plus the set plus the pending set at 48 bytes each must stay within three
