@@ -654,6 +654,20 @@ func (s *Sampler) recordEvaluated(snap snapshot.Snapshot) {
 	}
 }
 
+func (s *Sampler) markDropped(at time.Time) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for i := range s.ring {
+		if s.ring[i].Time.Equal(at) {
+			s.ring[i].EachReading(func(_ string, r *snapshot.Reading) {
+				*r = snapshot.Reading{Status: snapshot.StatusNoData, Note: "sample not evaluated"}
+			})
+			return
+		}
+	}
+}
+
 func (s *Sampler) offer(snap snapshot.Snapshot) {
 	select {
 	case s.updates <- snap:
@@ -662,7 +676,8 @@ func (s *Sampler) offer(snap snapshot.Snapshot) {
 	}
 
 	select {
-	case <-s.updates:
+	case dropped := <-s.updates:
+		s.markDropped(dropped.Time)
 	default:
 	}
 

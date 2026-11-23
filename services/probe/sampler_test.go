@@ -367,6 +367,24 @@ func TestHistoryWindow(t *testing.T) {
 	require.Len(t, s.History(10*time.Minute), 1)
 }
 
+func TestHistoryMarksDroppedUpdatesNoData(t *testing.T) {
+	clock := newFakeClock()
+	s := NewSampler([]Collector{newFake("metrics", okPatch(func(s *snapshot.Snapshot) {
+		s.Cache.HitRate = snapshot.Reading{Value: 0.9, Status: snapshot.StatusOK}
+	}))}, nil, 2*time.Second, time.Hour, "n", WithClock(clock.Now))
+
+	for i := 0; i < 3; i++ {
+		clock.Advance(2 * time.Second)
+		s.fastTick(context.Background())
+	}
+
+	history := s.History(time.Minute)
+	require.Len(t, history, 3)
+	require.Equal(t, snapshot.StatusNoData, history[0].Cache.HitRate.Status)
+	require.Equal(t, snapshot.StatusNoData, history[1].Cache.HitRate.Status)
+	require.Equal(t, snapshot.StatusOK, history[2].Cache.HitRate.Status)
+}
+
 func TestHistoryWindowHoldsTenMinutesUnderTriggers(t *testing.T) {
 	clock := newFakeClock()
 	fastEvery := 2 * time.Second
