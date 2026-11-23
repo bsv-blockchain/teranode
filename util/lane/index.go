@@ -430,6 +430,9 @@ func (s *IndexSnapshot) TipHeight() uint32 { return s.tipHeight }
 // AnchorHeight is the height of the newest folded block, 0 before any fold.
 func (s *IndexSnapshot) AnchorHeight() uint32 { return s.anchorHeight }
 
+// TipID is the block ID of the main chain's tip.
+func (s *IndexSnapshot) TipID() uint32 { return s.tipID }
+
 // StartHeight is the lowest main-chain height the index loaded.
 func (s *IndexSnapshot) StartHeight() uint32 { return s.startHeight }
 

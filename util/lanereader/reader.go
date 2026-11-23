@@ -91,9 +91,10 @@ type Reader struct {
 
 	disagree disagreementLog
 
-	// unreachable holds blocks whose walk back found no held block, by hash, with the tip height
+	// unreachable holds blocks whose walk back found no held block, by hash, with the tip block
 	// the index had then, so another check of the same block does not repeat the walk until the
-	// tip moves. A later block on that fork is walked again. It is bounded by maxUnreachable.
+	// tip changes, a same-height reorg included. A later block on that fork is walked again. It is
+	// bounded by maxUnreachable.
 	unreachableMu sync.Mutex
 	unreachable   map[chainhash.Hash]uint32
 
@@ -434,7 +435,7 @@ func (r *Reader) prepare(ctx context.Context, hash chainhash.Hash) (*lane.ChainV
 		return v, ""
 	}
 
-	if r.isUnreachable(hash, s.TipHeight()) {
+	if r.isUnreachable(hash, s.TipID()) {
 		return nil, KindNotLoaded
 	}
 
@@ -468,7 +469,7 @@ func (r *Reader) prepare(ctx context.Context, hash chainhash.Hash) (*lane.ChainV
 	}
 
 	if !found {
-		r.markUnreachable(hash, s.TipHeight())
+		r.markUnreachable(hash, s.TipID())
 		r.prepareFailed("no_held_ancestor", "[lanereader] block %s has no block the lane index holds within %d blocks back; its checks count not_loaded until the tip moves", hash.String(), r.maxWalk)
 
 		return nil, KindNotLoaded
@@ -485,17 +486,17 @@ func (r *Reader) prepare(ctx context.Context, hash chainhash.Hash) (*lane.ChainV
 	return nil, KindNotReady
 }
 
-// isUnreachable reports whether hash's walk back found no held block at this tip height.
-func (r *Reader) isUnreachable(hash chainhash.Hash, tipHeight uint32) bool {
+// isUnreachable reports whether hash's walk back found no held block at this tip.
+func (r *Reader) isUnreachable(hash chainhash.Hash, tipID uint32) bool {
 	r.unreachableMu.Lock()
 	defer r.unreachableMu.Unlock()
 
-	h, ok := r.unreachable[hash]
+	tip, ok := r.unreachable[hash]
 
-	return ok && h == tipHeight
+	return ok && tip == tipID
 }
 
-func (r *Reader) markUnreachable(hash chainhash.Hash, tipHeight uint32) {
+func (r *Reader) markUnreachable(hash chainhash.Hash, tipID uint32) {
 	r.unreachableMu.Lock()
 	defer r.unreachableMu.Unlock()
 
@@ -503,7 +504,7 @@ func (r *Reader) markUnreachable(hash chainhash.Hash, tipHeight uint32) {
 		r.unreachable = map[chainhash.Hash]uint32{}
 	}
 
-	r.unreachable[hash] = tipHeight
+	r.unreachable[hash] = tipID
 }
 
 // prepareFailed counts a failed load of a block's ancestry by reason and warns, at most once a
