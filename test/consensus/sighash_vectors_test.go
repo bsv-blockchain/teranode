@@ -71,7 +71,8 @@ func TestSigHashVectors(t *testing.T) {
 			require.Less(t, test.InputIndex, len(tx.Inputs), "bad test")
 
 			hashType := uint32(test.HashType) //nolint:gosec // a 32-bit hash type, negative ones included, as bitcoin-sv reads it
-			stripped := withoutCodeSeparators(scriptCode)
+			stripped, err := withoutCodeSeparators(scriptCode)
+			require.NoError(t, err, "unsupported test script code")
 
 			original := sigHashHex(t, tx, test.InputIndex, stripped, hashType, false)
 			require.Equal(t, test.OriginalHash, original, "SignatureHashOriginal")
@@ -133,21 +134,24 @@ func sigHashHex(t *testing.T, tx *bt.Tx, i int, scriptCode []byte, hashType uint
 // withoutCodeSeparators is the script code bitcoin-sv's original algorithm hashes
 // (CTransactionSignatureSerializer::SerializeScriptCode): the bytes between
 // OP_CODESEPARATORs, walking the script with GetOp. When GetOp stops at a truncated push,
-// bitcoin-sv writes up to where it stopped, so the same happens here.
-func withoutCodeSeparators(script []byte) []byte {
+// bitcoin-sv writes up to where it stopped but declares the full remaining length.
+// go-bt computes the length from the copied bytes instead, so this adapter only supports
+// complete pushes and rejects truncated ones rather than hashing a different preimage.
+func withoutCodeSeparators(script []byte) ([]byte, error) {
 	var (
 		out   []byte
 		begin int
 		pc    int
 	)
 
-	for {
+	for pc < len(script) {
 		next, op, ok := scriptOp(script, pc)
-		pc = next
 
 		if !ok {
-			break
+			return nil, fmt.Errorf("unsupported truncated push in script code at byte %d", pc)
 		}
+
+		pc = next
 
 		if op == bscript.OpCODESEPARATOR {
 			out = append(out, script[begin:pc-1]...)
@@ -159,7 +163,41 @@ func withoutCodeSeparators(script []byte) []byte {
 		out = append(out, script[begin:pc]...)
 	}
 
-	return out
+	return out, nil
+}
+
+func TestWithoutCodeSeparators(t *testing.T) {
+	for _, raw := range []string{"02aa", "02ab", "ab02aa", "4c", "4c02aa", "4d01", "4d0200aa", "4e010000", "4e02000000aa"} {
+		t.Run("truncated_"+raw, func(t *testing.T) {
+			script, err := hex.DecodeString(raw)
+			require.NoError(t, err)
+
+			_, err = withoutCodeSeparators(script)
+			require.ErrorContains(t, err, "unsupported truncated push")
+		})
+	}
+
+	for _, tt := range []struct {
+		script string
+		want   string
+	}{
+		{"", ""},
+		{"ab", ""},
+		{"51ab51", "5151"},
+		{"01ab", "01ab"},
+		{"ab4c01abab", "4c01ab"},
+		{"4d0100ab", "4d0100ab"},
+		{"4e01000000ab", "4e01000000ab"},
+	} {
+		t.Run("complete_"+tt.script, func(t *testing.T) {
+			script, err := hex.DecodeString(tt.script)
+			require.NoError(t, err)
+
+			stripped, err := withoutCodeSeparators(script)
+			require.NoError(t, err)
+			require.Equal(t, tt.want, hex.EncodeToString(stripped))
+		})
+	}
 }
 
 // scriptOp is bitcoin-sv's GetScriptOp: it reads the opcode at pc and skips its push data,
@@ -226,5 +264,7 @@ func TestSigHashSingleWithoutOutputIgnoresCodeSeparators(t *testing.T) {
 	hashType := uint32(sighash.Single)
 
 	require.Equal(t, sigHashOneHex, sigHashHex(t, tx, 1, scriptCode, hashType, false))
-	require.Equal(t, sigHashOneHex, sigHashHex(t, tx, 1, withoutCodeSeparators(scriptCode), hashType, false))
+	stripped, err := withoutCodeSeparators(scriptCode)
+	require.NoError(t, err)
+	require.Equal(t, sigHashOneHex, sigHashHex(t, tx, 1, stripped, hashType, false))
 }
