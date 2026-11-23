@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/bsv-blockchain/teranode/services/blockchain"
+	"github.com/bsv-blockchain/teranode/services/blockchain/blockchain_api"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/kafka"
@@ -145,6 +147,33 @@ func TestRejectedTxHandler_PublishFailureAllowsRetry(t *testing.T) {
 
 	require.NoError(t, handler(internalRejection(t, testBlockHashHex)))
 	require.Equal(t, 1, *published, "once published the txid is deduplicated")
+}
+
+// A publish the chokepoint drops on policy, here the FSM leaving RUNNING
+// between the handler's pre-check and publishToNetwork, did no publish work,
+// so it returns both the dedup slot and the rate token: with a burst of one on
+// a frozen clock, the next rejection of the same txid goes straight out.
+func TestRejectedTxHandler_PolicyDropReturnsTokenAndDedupSlot(t *testing.T) {
+	running := blockchain_api.FSMStateType_RUNNING
+	catching := blockchain_api.FSMStateType_CATCHINGBLOCKS
+
+	client := &blockchain.Mock{}
+	client.On("GetFSMCurrentState", mock.Anything).Return(&running, nil).Once()
+	client.On("GetFSMCurrentState", mock.Anything).Return(&catching, nil).Once()
+	client.On("GetFSMCurrentState", mock.Anything).Return(&running, nil)
+
+	s, published := countingPublishServer(t, nil, 0)
+	s.blockchainClient = client
+	s.rejectedTxEgress.setLimits(1, 1, 0, 0)
+	s.rejectedTxEgress.clock = newFakeClock().read
+
+	handler := s.rejectedTxHandler(context.Background())
+
+	require.NoError(t, handler(internalRejection(t, testBlockHashHex)))
+	require.Equal(t, 0, *published, "the chokepoint drops the publish in CATCHINGBLOCKS")
+
+	require.NoError(t, handler(internalRejection(t, testBlockHashHex)))
+	require.Equal(t, 1, *published, "the dropped publish returned its token and dedup slot, so the retry goes out at once")
 }
 
 // While every publish errors (mesh down, topic not joined) the gate must still
@@ -584,6 +613,28 @@ func TestCleanupPeerMaps_SweepsRejectedTxDedup(t *testing.T) {
 	s.cleanupPeerMaps()
 
 	require.Equal(t, 0, s.rejectedTxEgress.size(), "expired dedup entries must be released by the sweep")
+}
+
+// Stop releases the dedup entries with the other seen-hash caches but keeps
+// the bucket: a refilled bucket would only widen the burst.
+func TestServerStop_ClearsRejectedTxDedupKeepsBucket(t *testing.T) {
+	s := &Server{logger: ulogger.TestLogger{}}
+	s.rejectedTxEgress.setLimits(1, 2, 0, time.Minute)
+	s.rejectedTxEgress.clock = newFakeClock().read
+
+	for i := 0; i < 2; i++ {
+		grant, _ := s.rejectedTxEgress.allow(distinctTxID(i), "self")
+		require.NotNil(t, grant)
+	}
+	require.Equal(t, 2, s.rejectedTxEgress.size())
+
+	require.NoError(t, s.Stop(context.Background()))
+
+	require.Zero(t, s.rejectedTxEgress.size(), "Stop must release the dedup entries")
+
+	grant, why := s.rejectedTxEgress.allow(distinctTxID(0), "self")
+	require.Nil(t, grant, "the bucket must survive Stop")
+	require.Equal(t, rejectedTxSuppressedRateLimited, why, "the cleared entry is fresh again, so the refusal is the spent bucket")
 }
 
 // A refund never lifts the bucket above burst and time never runs backwards:
