@@ -56,6 +56,7 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/blob/options"
 	"github.com/bsv-blockchain/teranode/stores/txmetacache"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
+	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/lane"
@@ -507,6 +508,32 @@ func (u *Server) readTxFromReader(body io.ReadCloser) (tx *bt.Tx, err error) {
 // Returns:
 //   - *meta.Data: Transaction metadata structure if validation succeeds, nil otherwise
 //   - error: Detailed error information if validation fails for any reason
+//
+// readBackMeta reads the record of a transaction the validator created but whose metadata did not
+// come back with its answer, as GetMeta does. At utxostore_laneMigration shadow it also reads the
+// record's own lane position, which GetMeta does not, for the subtree's lane bitmaps. The position
+// is only measured, so a failure to read it leaves it at zero, where the transaction is counted as
+// one without a position, and is not an error.
+func (u *Server) readBackMeta(ctx context.Context, hash *chainhash.Hash, stored *meta.Data) error {
+	if err := u.utxoStore.GetMeta(ctx, hash, stored); err != nil {
+		return err
+	}
+
+	if !u.laneShadow() || lane.Valid(stored.LanePosition) {
+		return nil
+	}
+
+	withLane, err := u.utxoStore.Get(ctx, hash, fields.LanePosition)
+	if err != nil || withLane == nil {
+		u.logger.Debugf("[readBackMeta][%s] lane position not read: %v", hash.String(), err)
+		return nil
+	}
+
+	stored.LanePosition = withLane.LanePosition
+
+	return nil
+}
+
 func (u *Server) blessMissingTransaction(ctx context.Context, blockHash chainhash.Hash, subtreeHash chainhash.Hash, tx *bt.Tx, blockHeight uint32,
 	blockIds map[uint32]bool, validationOptions *validator.Options) (*meta.Data, error) {
 	txMeta, _, err := u.blessMissing(ctx, blockHash, subtreeHash, tx, blockHeight, blockIds, validationOptions)
@@ -554,7 +581,7 @@ func (u *Server) blessMissing(ctx context.Context, blockHash chainhash.Hash, sub
 		if txMeta == nil {
 			// the response metadata does not survive a gRPC error, so read the accepted record back
 			stored := &meta.Data{}
-			if getErr := u.utxoStore.GetMeta(ctx, tx.TxIDChainHash(), stored); getErr != nil {
+			if getErr := u.readBackMeta(ctx, tx.TxIDChainHash(), stored); getErr != nil {
 				// Report the accept anyway. The transaction was spent, created and delivered to
 				// block assembly; only the proof metadata could not be read, and the one thing the
 				// caller still has to do for it is retry the unlock. Returning unlockFailed=false
@@ -596,7 +623,7 @@ func (u *Server) blessMissing(ctx context.Context, blockHash chainhash.Hash, sub
 	// deepest public cause, refuses createConflicting (validator http_options_guard.go).
 	if err != nil && txMeta == nil && validationOptions.CreateConflicting {
 		stored := &meta.Data{}
-		if getErr := u.utxoStore.GetMeta(ctx, tx.TxIDChainHash(), stored); getErr != nil {
+		if getErr := u.readBackMeta(ctx, tx.TxIDChainHash(), stored); getErr != nil {
 			return nil, false, errors.NewProcessingError("[blessMissingTransaction][%s/%s][%s] failed to read meta of transaction created as conflicting", blockHash.String(), subtreeHash.String(), tx.TxID(), getErr)
 		}
 

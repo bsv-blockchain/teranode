@@ -3,21 +3,28 @@ package validator
 import (
 	"context"
 	"encoding/binary"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"sync/atomic"
 	"testing"
+	"time"
 
+	"github.com/bsv-blockchain/go-batcher/v2"
 	"github.com/bsv-blockchain/go-batcher/v2/completion"
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/services/validator/validator_api"
+	utxometa "github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util/lane"
+	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
 )
 
@@ -565,4 +572,120 @@ func TestBatchValidation_DispatcherPanic(t *testing.T) {
 // Helper for creating bool pointers
 func boolPtr(b bool) *bool {
 	return &b
+}
+
+// laneServer is the validator's own gRPC server, behind a real loopback connection, answering
+// every validation with a record that holds position: what a remote validator at
+// utxostore_laneMigration shadow returns for a transaction it created.
+func laneServer(t *testing.T, position uint64) validator_api.ValidatorAPIClient {
+	t.Helper()
+
+	server := NewServer(ulogger.TestLogger{}, test.CreateBaseTestSettings(t), nil, nil, nil, nil, nil, nil, nil)
+	server.validator = &MockValidator{
+		ValidateFunc: func(context.Context, *bt.Tx) (*utxometa.Data, error) {
+			return &utxometa.Data{Fee: 1000, SizeInBytes: 250, LanePosition: position}, nil
+		},
+	}
+
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+
+	srv := grpc.NewServer()
+	validator_api.RegisterValidatorAPIServer(srv, server)
+
+	go func() { _ = srv.Serve(lis) }()
+
+	conn, err := grpc.NewClient(lis.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	require.NoError(t, err)
+
+	t.Cleanup(func() {
+		_ = conn.Close()
+		srv.Stop()
+	})
+
+	return validator_api.NewValidatorAPIClient(conn)
+}
+
+// The metadata a remote validator returns does not carry the created record's lane position, so
+// the response carries it beside the metadata, and the client puts it back on the record it
+// returns, whether the transaction went alone or in a batch. Without it, subtree validation with
+// useLocalValidator off left every transaction it validated out of the subtree's lane bitmaps.
+func TestValidateWithOptions_ReturnsTheLanePositionOverGRPC(t *testing.T) {
+	position := lane.Pack(8, 14)
+	tx := createTestTransaction(t)
+
+	t.Run("alone", func(t *testing.T) {
+		c := &Client{client: laneServer(t, position), logger: ulogger.TestLogger{}}
+
+		md, err := c.ValidateWithOptions(context.Background(), tx, 100, NewDefaultOptions())
+		require.NoError(t, err)
+		require.Equal(t, position, md.LanePosition)
+	})
+
+	t.Run("in a batch", func(t *testing.T) {
+		c := &Client{client: laneServer(t, position), logger: ulogger.TestLogger{}}
+
+		group := completion.NewGroup(2)
+		batch := []*batchItem{
+			{req: buildValidateTxRequest(tx.SerializeBytes(), 100, NewDefaultOptions()), group: group},
+			{req: buildValidateTxRequest(tx.SerializeBytes(), 100, NewDefaultOptions()), group: group},
+		}
+
+		c.sendBatchToValidator(context.Background(), batch)
+		require.NoError(t, group.Wait(context.Background(), 0))
+
+		for i, item := range batch {
+			require.NoError(t, item.result.err, "item %d", i)
+			require.Equal(t, position, item.result.lanePosition, "item %d", i)
+		}
+	})
+
+	t.Run("through the batcher", func(t *testing.T) {
+		c := &Client{client: laneServer(t, position), logger: ulogger.TestLogger{}, batchSize: 1}
+		c.batcher = batcher.New(1, 10*time.Millisecond, func(b []*batchItem) {
+			c.sendBatchToValidator(context.Background(), b)
+		}, true)
+		t.Cleanup(c.batcher.Close)
+
+		md, err := c.ValidateWithOptions(context.Background(), tx, 100, NewDefaultOptions())
+		require.NoError(t, err)
+		require.Equal(t, position, md.LanePosition)
+	})
+
+	t.Run("retried alone after an oversized batch", func(t *testing.T) {
+		c := &Client{
+			client: &MockValidatorAPIClient{
+				validateBatchFunc: func(context.Context, *validator_api.ValidateTransactionBatchRequest) (*validator_api.ValidateTransactionBatchResponse, error) {
+					return nil, status.Error(codes.ResourceExhausted, "grpc: received message larger than max")
+				},
+				validateTxFunc: func(context.Context, *validator_api.ValidateTransactionRequest) (*validator_api.ValidateTransactionResponse, error) {
+					return &validator_api.ValidateTransactionResponse{Valid: true, Metadata: validBatchMetadata(), LanePosition: position}, nil
+				},
+			},
+			logger: ulogger.TestLogger{},
+		}
+
+		group := completion.NewGroup(1)
+		batch := []*batchItem{{req: buildValidateTxRequest(tx.SerializeBytes(), 100, NewDefaultOptions()), group: group}}
+
+		c.sendBatchToValidator(context.Background(), batch)
+		require.NoError(t, group.Wait(context.Background(), 0))
+		require.NoError(t, batch[0].result.err)
+		require.Equal(t, position, batch[0].result.lanePosition)
+	})
+
+	t.Run("a batch from a server built before the field", func(t *testing.T) {
+		c := &Client{logger: ulogger.TestLogger{}}
+
+		group := completion.NewGroup(1)
+		batch := []*batchItem{{group: group}}
+
+		c.processBatchResponse(batch, &validator_api.ValidateTransactionBatchResponse{
+			Errors:   []*errors.TError{errors.Wrap(nil)},
+			Metadata: [][]byte{validBatchMetadata()},
+		})
+		require.NoError(t, group.Wait(context.Background(), 0))
+		require.NoError(t, batch[0].result.err, "no positions is not an error")
+		require.Zero(t, batch[0].result.lanePosition)
+	})
 }

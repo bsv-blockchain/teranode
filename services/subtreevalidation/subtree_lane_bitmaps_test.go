@@ -378,10 +378,59 @@ func TestBlessMissingTransactions_KeepsThePositionTheCreateReturns(t *testing.T)
 	require.Equal(t, lane.Pack(8, 14), txMetaSlice[0].lanePosition)
 }
 
-// positionValidator validates as its validator does and gives the created record position, as an
-// in-process validator (useLocalValidator true) at shadow on utxoset or Aerospike does. It stands in
-// for that validator only: over gRPC the response carries no lane position, so a remote validator
-// returns zero and the transaction is left out of the bitmaps, a known limit of this phase.
+// A remote validator's answer to an accepted transaction whose unlock failed carries no metadata,
+// so subtree validation reads the record back. At shadow that read takes the record's own lane
+// position too, which GetMeta does not read; at off it is GetMeta alone. A failure to read the
+// position leaves it at zero and is not an error, because the position is only measured.
+func TestBlessMissing_ReadsTheLanePositionBackAtShadow(t *testing.T) {
+	inpoints, err := subtreepkg.NewTxInpointsFromTx(tx1)
+	require.NoError(t, err)
+
+	for _, tc := range []struct {
+		name   string
+		mode   settings.LaneMigration
+		getErr error
+		want   uint64
+	}{
+		{name: "shadow", mode: settings.LaneMigrationShadow, want: lane.Pack(8, 14)},
+		{name: "shadow, the position not read", mode: settings.LaneMigrationShadow, getErr: errors.NewStorageError("down")},
+		{name: "off", mode: settings.LaneMigrationOff},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tSettings := test.CreateBaseTestSettings(t)
+			tSettings.UtxoStore.LaneMigration = tc.mode
+
+			store := &utxo.MockUtxostore{}
+			store.On("GetMeta", mock.Anything, mock.Anything, mock.Anything).Return(&meta.Data{Fee: 1, SizeInBytes: 1, TxInpoints: inpoints})
+
+			if tc.getErr != nil {
+				store.On("Get", mock.Anything, mock.Anything, []fields.FieldName{fields.LanePosition}).Return(nil, tc.getErr)
+			} else {
+				store.On("Get", mock.Anything, mock.Anything, []fields.FieldName{fields.LanePosition}).Return(&meta.Data{LanePosition: lane.Pack(8, 14)}, nil)
+			}
+
+			server := &Server{
+				logger:          ulogger.TestLogger{},
+				settings:        tSettings,
+				utxoStore:       store,
+				validatorClient: &failingValidator{err: errors.NewTxUnlockFailedError("unlock failed")},
+			}
+
+			md, unlockFailed, err := server.blessMissing(context.Background(), chainhash.Hash{}, chainhash.Hash{}, tx1, 2, map[uint32]bool{}, validator.ProcessOptions())
+			require.NoError(t, err)
+			require.True(t, unlockFailed)
+			require.Equal(t, tc.want, md.LanePosition)
+
+			if tc.mode == settings.LaneMigrationOff {
+				store.AssertNotCalled(t, "Get", mock.Anything, mock.Anything, mock.Anything)
+			}
+		})
+	}
+}
+
+// positionValidator validates as its validator does and gives the created record position, as a
+// validator at shadow on utxoset or Aerospike does, in process or over gRPC (the validate response
+// carries the position beside the metadata; services/validator's client tests pin that).
 type positionValidator struct {
 	validator.Interface
 	position uint64
