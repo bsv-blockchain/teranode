@@ -103,6 +103,9 @@ const (
 	PreserveUntil FieldName = "preserveUntil"
 	// DeletedChildren map of child records that have been deleted
 	DeletedChildren FieldName = "deletedChildren"
+	// SpendHeights holds the block height of each output's spend, 4 little-endian bytes per output
+	// in output order; zero means none was recorded
+	SpendHeights FieldName = "spendHeights"
 	// LanePosition is the record's lane position (util/lane): written once at
 	// create, never updated. Absent on a record created with none (the lane
 	// migration off, before it existed, or a tool that opens its own store), and

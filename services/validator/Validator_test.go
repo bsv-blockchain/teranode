@@ -274,6 +274,7 @@ func TestValidate_BlockAssemblyAndTxMetaChannels(t *testing.T) {
 	assert.Equal(t, tx.TxID(), blockAssembler.storedTxs[0].txHash.String())
 	assert.Equal(t, txMeta.Fee, blockAssembler.storedTxs[0].fee)
 	assert.Equal(t, txMeta.SizeInBytes, blockAssembler.storedTxs[0].size)
+	assert.Equal(t, uint32(257727), blockAssembler.storedTxs[0].validatedHeight, "block assembly is told the height the tx was validated at")
 }
 
 func TestValidate_RejectedTransactionChannel(t *testing.T) {
@@ -981,10 +982,11 @@ func TestIsFinalb633531280f980108329e3e0b9335b2290892d120916f9e17a9e3033bde1260b
 
 // txFeeSize represents transaction metadata for block assembly testing.
 type txFeeSize struct {
-	txHash     *chainhash.Hash
-	fee        uint64
-	size       uint64
-	txInpoints subtree.TxInpoints
+	txHash          *chainhash.Hash
+	fee             uint64
+	size            uint64
+	txInpoints      subtree.TxInpoints
+	validatedHeight uint32
 }
 
 // MockBlockAssemblyStore provides a test double for block assembly storage operations.
@@ -995,7 +997,7 @@ type MockBlockAssemblyStore struct {
 	removedTxs   []chainhash.Hash
 }
 
-func (s *MockBlockAssemblyStore) Store(_ context.Context, hash *chainhash.Hash, fee, size uint64, txInpoints subtree.TxInpoints) (bool, error) {
+func (s *MockBlockAssemblyStore) Store(_ context.Context, hash *chainhash.Hash, fee, size uint64, txInpoints subtree.TxInpoints, validatedHeight uint32) (bool, error) {
 	if s.panicOnStore {
 		// Simulates a nil/misconfigured block-assembly client panicking mid-delivery,
 		// e.g. inside the real gRPC client's Store() call.
@@ -1011,10 +1013,11 @@ func (s *MockBlockAssemblyStore) Store(_ context.Context, hash *chainhash.Hash, 
 	}
 
 	s.storedTxs = append(s.storedTxs, txFeeSize{
-		txHash:     hash,
-		fee:        fee,
-		size:       size,
-		txInpoints: txInpoints,
+		txHash:          hash,
+		fee:             fee,
+		size:            size,
+		txInpoints:      txInpoints,
+		validatedHeight: validatedHeight,
 	})
 
 	return true, nil
@@ -2007,12 +2010,12 @@ func Test_serializeTxMetaBatchV2(t *testing.T) {
 		{item: &txmetaBatchItem{hash: &h2, isDelete: true}, h: 0x0102030405060708},
 	}
 
-	data := serializeTxMetaBatchV2(items)
+	data := serializeTxMetaBatchV2(items, txmetacache.BucketsCount)
 
 	assert.Equal(t, byte(0xFF), data[0], "magic byte")
 	assert.Equal(t, byte(0x02), data[1], "version byte")
-	assert.Equal(t, byte(0x00), data[2], "reserved")
-	assert.Equal(t, byte(0x00), data[3], "reserved")
+	assert.Equal(t, uint16(txmetacache.BucketsCount), binary.LittleEndian.Uint16(data[2:4]),
+		"producer BucketsCount in the header")
 	assert.Equal(t, uint32(2), binary.LittleEndian.Uint32(data[4:]), "entry count")
 
 	// Entry 1 (ADD).
@@ -2736,16 +2739,16 @@ func TestTxMetaPayloadCarriesLanePositionsAtShadow(t *testing.T) {
 	good := []uint64{lane.Pack(2, 1), lane.Pack(3, 1)}
 
 	t.Run("off", func(t *testing.T) {
-		b, laneFormat, err := parentOutputsValidator(t, nil).txMetaPayload(data(lane.Pack(1, 1)), good)
+		b, action, err := parentOutputsValidator(t, nil).txMetaPayload(data(lane.Pack(1, 1)), good)
 		require.NoError(t, err)
-		require.False(t, laneFormat)
+		require.Equal(t, txmetacache.WireActionADD, action)
 		require.Equal(t, legacy, b)
 	})
 
 	t.Run("every position valid", func(t *testing.T) {
-		b, laneFormat, err := shadow.txMetaPayload(data(lane.Pack(1, 1)), good)
+		b, action, err := shadow.txMetaPayload(data(lane.Pack(1, 1)), good)
 		require.NoError(t, err)
-		require.True(t, laneFormat)
+		require.Equal(t, txmetacache.WireActionADDLane, action)
 
 		var back meta.Data
 		gotParents, err := meta.NewDataFromLaneMetaBytes(b, &back)
@@ -2768,13 +2771,31 @@ func TestTxMetaPayloadCarriesLanePositionsAtShadow(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			require.Equal(t, c.reason, laneTxMetaMiss(data(c.own), c.parents))
 
-			b, laneFormat, err := shadow.txMetaPayload(data(c.own), c.parents)
+			b, action, err := shadow.txMetaPayload(data(c.own), c.parents)
 			require.NoError(t, err, "a miss is counted, never an error")
-			require.False(t, laneFormat)
 
-			want, err := data(c.own).MetaBytes()
+			if c.own == lane.None {
+				require.Equal(t, txmetacache.WireActionADD, action, "with no own position the entry is MetaBytes")
+
+				want, err := data(c.own).MetaBytes()
+				require.NoError(t, err)
+				require.Equal(t, want, b)
+
+				return
+			}
+
+			// The own position still goes, after MetaBytes: the cache form subtree validation
+			// keeps for the subtree's lane bitmaps.
+			require.Equal(t, txmetacache.WireActionADDOwn, action)
+
+			want, err := data(c.own).CacheBytes()
 			require.NoError(t, err)
 			require.Equal(t, want, b)
+
+			legacyPart, own, err := meta.OwnCacheBytesView(b)
+			require.NoError(t, err)
+			require.Equal(t, c.own, own)
+			require.Equal(t, legacy, legacyPart)
 		})
 	}
 
@@ -2785,10 +2806,11 @@ func TestTxMetaPayloadCarriesLanePositionsAtShadow(t *testing.T) {
 
 // A lane entry goes on the wire with the ADDLane action, in both wire formats.
 func TestSerializeTxMetaBatchMarksLaneEntries(t *testing.T) {
-	h1, h2 := chainhash.Hash{1}, chainhash.Hash{2}
+	h1, h2, h3 := chainhash.Hash{1}, chainhash.Hash{2}, chainhash.Hash{3}
 	batch := []*txmetaBatchItem{
 		{hash: &h1, metaBytes: []byte("legacy")},
-		{hash: &h2, metaBytes: []byte("lane"), lane: true},
+		{hash: &h2, metaBytes: []byte("lane"), action: txmetacache.WireActionADDLane},
+		{hash: &h3, metaBytes: []byte("own"), action: txmetacache.WireActionADDOwn},
 	}
 
 	v1 := serializeTxMetaBatch(batch)
@@ -2796,12 +2818,16 @@ func TestSerializeTxMetaBatchMarksLaneEntries(t *testing.T) {
 	require.Equal(t, txmetacache.WireActionADD, v1[off+32])
 	off += 32 + 1 + 4 + len("legacy")
 	require.Equal(t, txmetacache.WireActionADDLane, v1[off+32])
+	off += 32 + 1 + 4 + len("lane")
+	require.Equal(t, txmetacache.WireActionADDOwn, v1[off+32])
 
-	v2 := serializeTxMetaBatchV2([]txmetaItemWithHash{{item: batch[0]}, {item: batch[1]}})
+	v2 := serializeTxMetaBatchV2([]txmetaItemWithHash{{item: batch[0]}, {item: batch[1]}, {item: batch[2]}}, txmetacache.BucketsCount)
 	off = txmetacache.WireV2HeaderLen
 	require.Equal(t, txmetacache.WireActionADD, v2[off+8+32])
 	off += 8 + 32 + 1 + 4 + len("legacy")
 	require.Equal(t, txmetacache.WireActionADDLane, v2[off+8+32])
+	off += 8 + 32 + 1 + 4 + len("lane")
+	require.Equal(t, txmetacache.WireActionADDOwn, v2[off+8+32])
 }
 
 // From the parent read to the record and the txmeta entry, on a real utxoset store at
@@ -2851,9 +2877,9 @@ func TestLanePositionsFlowThroughAUtxosetStore(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, childPosition, md.LanePosition, "the create returns the position it wrote")
 
-	b, laneFormat, err := v.txMetaPayload(md, parentLanes)
+	b, action, err := v.txMetaPayload(md, parentLanes)
 	require.NoError(t, err)
-	require.True(t, laneFormat)
+	require.Equal(t, txmetacache.WireActionADDLane, action)
 
 	var back meta.Data
 	gotParents, err := meta.NewDataFromLaneMetaBytes(b, &back)
@@ -3029,20 +3055,44 @@ func TestTxMetaPayloadCountsWhatItSends(t *testing.T) {
 	t.Run("lane", func(t *testing.T) {
 		lanes := laneSentCount(t, "lane")
 
-		_, laneFormat, err := shadow.txMetaPayload(&meta.Data{TxInpoints: inpoints, LanePosition: lane.Pack(1, 1)}, good)
+		_, action, err := shadow.txMetaPayload(&meta.Data{TxInpoints: inpoints, LanePosition: lane.Pack(1, 1)}, good)
 		require.NoError(t, err)
-		require.True(t, laneFormat)
+		require.Equal(t, txmetacache.WireActionADDLane, action)
 		require.InDelta(t, lanes+1, laneSentCount(t, "lane"), 0)
 	})
 
-	t.Run("a miss", func(t *testing.T) {
-		legacy, misses := laneSentCount(t, "legacy"), laneMissCount(t, txmetacache.LaneMissParent)
+	t.Run("a parent miss", func(t *testing.T) {
+		own, legacy, misses := laneSentCount(t, "own"), laneSentCount(t, "legacy"), laneMissCount(t, txmetacache.LaneMissParent)
 
-		_, laneFormat, err := shadow.txMetaPayload(&meta.Data{TxInpoints: inpoints, LanePosition: lane.Pack(1, 1)}, []uint64{lane.Pack(2, 1), lane.None})
+		_, action, err := shadow.txMetaPayload(&meta.Data{TxInpoints: inpoints, LanePosition: lane.Pack(1, 1)}, []uint64{lane.Pack(2, 1), lane.None})
 		require.NoError(t, err)
-		require.False(t, laneFormat)
-		require.InDelta(t, legacy+1, laneSentCount(t, "legacy"), 0)
+		require.Equal(t, txmetacache.WireActionADDOwn, action)
+		require.InDelta(t, own+1, laneSentCount(t, "own"), 0)
+		require.InDelta(t, legacy, laneSentCount(t, "legacy"), 0)
 		require.InDelta(t, misses+1, laneMissCount(t, txmetacache.LaneMissParent), 0)
+	})
+
+	t.Run("an own entry that cannot serialize", func(t *testing.T) {
+		// Two parents and a single vout word: the inpoints cannot serialize, so neither can the
+		// own entry, and the error goes back rather than an entry with no content.
+		broken := &meta.Data{TxInpoints: subtree.NewTxInpointsFromPacked([]chainhash.Hash{{1}, {2}}, []uint32{0}), LanePosition: lane.Pack(1, 1)}
+
+		_, wantErr := broken.MetaBytes()
+		require.Error(t, wantErr, "the fixture really fails to serialize")
+
+		_, _, err := shadow.txMetaPayload(broken, nil)
+		require.Error(t, err)
+	})
+
+	t.Run("no own position", func(t *testing.T) {
+		own, legacy, misses := laneSentCount(t, "own"), laneSentCount(t, "legacy"), laneMissCount(t, txmetacache.LaneMissOwn)
+
+		_, action, err := shadow.txMetaPayload(&meta.Data{TxInpoints: inpoints}, good)
+		require.NoError(t, err)
+		require.Equal(t, txmetacache.WireActionADD, action)
+		require.InDelta(t, own, laneSentCount(t, "own"), 0)
+		require.InDelta(t, legacy+1, laneSentCount(t, "legacy"), 0)
+		require.InDelta(t, misses+1, laneMissCount(t, txmetacache.LaneMissOwn), 0)
 	})
 
 	t.Run("an encode failure", func(t *testing.T) {
@@ -3050,16 +3100,16 @@ func TestTxMetaPayloadCountsWhatItSends(t *testing.T) {
 		data := &meta.Data{TxInpoints: twice, Fee: 500, SizeInBytes: 250, LanePosition: lane.Pack(1, 1)}
 		require.Empty(t, laneTxMetaMiss(data, good), "the position checks pass")
 
-		legacy, misses := laneSentCount(t, "legacy"), laneMissCount(t, txmetacache.LaneMissEncode)
+		own, misses := laneSentCount(t, "own"), laneMissCount(t, txmetacache.LaneMissEncode)
 
-		b, laneFormat, err := shadow.txMetaPayload(data, good)
+		b, action, err := shadow.txMetaPayload(data, good)
 		require.NoError(t, err, "a miss is counted, never an error")
-		require.False(t, laneFormat)
+		require.Equal(t, txmetacache.WireActionADDOwn, action, "the own position still goes")
 
-		want, err := data.MetaBytes()
+		want, err := data.CacheBytes()
 		require.NoError(t, err)
 		require.Equal(t, want, b)
-		require.InDelta(t, legacy+1, laneSentCount(t, "legacy"), 0)
+		require.InDelta(t, own+1, laneSentCount(t, "own"), 0)
 		require.InDelta(t, misses+1, laneMissCount(t, txmetacache.LaneMissEncode), 0)
 	})
 }
@@ -3232,12 +3282,7 @@ func TestValidateCarriesLanePositionsToTheCreateAndTheTxMeta(t *testing.T) {
 			mu.Lock()
 			defer mu.Unlock()
 
-			action := txmetacache.WireActionADD
-			if items[0].lane {
-				action = txmetacache.WireActionADDLane
-			}
-
-			checkEntry(t, action, items[0].metaBytes, tc.own)
+			checkEntry(t, items[0].wireAction(), items[0].metaBytes, tc.own)
 		})
 	}
 }

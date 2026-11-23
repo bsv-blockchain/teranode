@@ -87,13 +87,21 @@ type Data struct {
 	// Bytes ends with an unlengthed run of 4-byte block IDs read to EOF, and the
 	// Meta pair has a fixed header with no version, so eight more bytes would
 	// decode as block IDs or shift fields rather than fail. Carrying it needs a
-	// versioned encoding. The consequence: the txmeta cache does not keep it, and
-	// utxo.MetaFields does not name it, so GetMeta returns zero, from the cache or
-	// from the store. The one exception is on utxoset, where a GetMeta that shares
-	// a get batch with a read that named the field can get the position, because
-	// the batch reads the column if any item asked, so a non-zero value on a read
-	// that did not name the field is not an answer to it. Nothing reads the field
-	// yet; a reader must ask the store with fields.LanePosition.
+	// versioned encoding: the lane metadata encoding (LaneMetaBytesInto) on the
+	// txmeta topic, and the txmeta cache form (CacheBytesInto), which at
+	// utxostore_laneMigration shadow puts the own position after MetaBytes, where
+	// a decoder that walks the inpoints finds it.
+	//
+	// So at shadow the txmeta cache keeps it. GetMetaCachedInto and the pointer
+	// cache return the cached position, and subtree validation reads it from
+	// there when it builds a subtree's lane bitmaps. The byte backends' Get and
+	// GetMeta decode with NewMetaDataFromBytes and return zero. utxo.MetaFields
+	// does not name it, so GetMeta from the store returns zero too; a store read
+	// returns it only when the caller names fields.LanePosition. The one exception
+	// is on utxoset, where a GetMeta that shares a get batch with a read that
+	// named the field can get the position, because the batch reads the column if
+	// any item asked, so a non-zero value on a read that did not name the field is
+	// not an answer to it.
 	LanePosition uint64 `json:"lanePosition,omitempty"`
 
 	// Frozen is a flag indicating if the transaction is frozen

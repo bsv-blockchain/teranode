@@ -53,7 +53,7 @@ func TestGetCandidateBlock(t *testing.T) {
 				Hash:        txHash,
 				Fee:         uint64(100),
 				SizeInBytes: uint64(250),
-			}}, []*subtreepkg.TxInpoints{{}}, false))
+			}}, []*subtreepkg.TxInpoints{{}}, false, nil))
 		}
 
 		time.Sleep(50 * time.Millisecond)

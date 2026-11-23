@@ -274,7 +274,7 @@ func (s *Server) sweepCreatingTxs(ctx context.Context, blockHeight uint32) {
 			continue
 		}
 
-		if _, storeErr := s.blockAssemblyClient.Store(ctx, &hash, md.Fee, md.SizeInBytes, md.TxInpoints); storeErr != nil {
+		if _, storeErr := s.blockAssemblyClient.Store(ctx, &hash, md.Fee, md.SizeInBytes, md.TxInpoints, 0); storeErr != nil {
 			s.logger.Errorf("[pruner][creating-sweep][%d] announce %s to block assembly failed, leaving it locked: %v", blockHeight, hash, storeErr)
 			prunerCreatingSweepFailures.Inc()
 

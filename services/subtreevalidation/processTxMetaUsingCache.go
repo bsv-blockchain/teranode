@@ -411,9 +411,10 @@ func probeIndices(ctx context.Context, cache *txmetacache.TxMetaCache, sc *probe
 				coinbase:    txMeta.IsCoinbase,
 				conflicting: txMeta.Conflicting,
 				// Creating entries are rejected above, so a copied entry is never creating.
-				creating:   false,
-				isSet:      true,
-				txInpoints: txMeta.TxInpoints,
+				creating:     false,
+				isSet:        true,
+				txInpoints:   txMeta.TxInpoints,
+				lanePosition: txMeta.LanePosition,
 			}
 
 			continue
