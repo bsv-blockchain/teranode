@@ -330,8 +330,15 @@ func TestOwnBlockLaneRows(t *testing.T) {
 			})
 
 			t.Run("off: nothing written or sent", func(t *testing.T) {
+				own := map[string]string{"block": lane.BlockOwn}
+				missing := ownLaneMetric(t, "teranode_lane_missing_bitmaps_total", own)
+				builds := ownLaneMetric(t, "teranode_lane_gate_seconds", own)
+
 				// the client sends positions, as a validator at shadow would; block assembly at off keeps none
 				mined := mineOwnLaneBlock(t, storeURL(t), false)
+
+				require.Equal(t, missing, ownLaneMetric(t, "teranode_lane_missing_bitmaps_total", own), "at off nothing is looked for")
+				require.Equal(t, builds, ownLaneMetric(t, "teranode_lane_gate_seconds", own), "nor timed")
 
 				require.Equal(t, uint64(len(ownLaneTxs)+1), mined.block.TransactionCount)
 

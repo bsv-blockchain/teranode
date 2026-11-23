@@ -2788,9 +2788,36 @@ func TestLaneSchemaInstalledAtOffKeepsDisabledWritersWorking(t *testing.T) {
 // TestLanePositionInUnminedIteratorUtxoset: block assembly's reload reads each unmined
 // transaction's own lane position at shadow, and none at off.
 func TestLanePositionInUnminedIteratorUtxoset(t *testing.T) {
-	t.Run("shadow", func(t *testing.T) {
-		s, _ := newUncheckpointedLaneStore(t)
+	t.Run("shadow, then off on the same database", func(t *testing.T) {
+		s, ctx := newUncheckpointedLaneStore(t)
 		tests.LanePositionInUnminedIterator(t, s, true)
+
+		// The column outlives the flag, and at off the reload's query stays the one without it.
+		off := reopenWithFlag(t, s, false)
+		require.True(t, off.laneColumn)
+
+		it, err := off.GetUnminedTxIterator()
+		require.NoError(t, err)
+
+		defer func() { _ = it.Close() }()
+
+		seen := 0
+
+		for {
+			batch, err := it.Next(ctx)
+			require.NoError(t, err)
+
+			if batch == nil {
+				break
+			}
+
+			for _, u := range batch {
+				require.Zero(t, u.LanePosition, "tx %s", u.Hash)
+				seen++
+			}
+		}
+
+		require.Positive(t, seen)
 	})
 
 	t.Run("off", func(t *testing.T) {

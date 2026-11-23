@@ -688,10 +688,22 @@ func splitPositioned(payload []byte, magic byte) ([]byte, uint64) {
 // magic its record starts with: the serialized inpoints alone under recordMagic when position is
 // 0, or followed by the position under recordMagicPositioned. A TxInpoints that can't be
 // serialized is stored as serializePayload stores it, without the position.
+//
+// The positioned payload is serialized into one allocation sized for the position too, so keeping
+// a position costs no second allocation per tx.
 func (m *DiskTxMap) positionedPayload(hash chainhash.Hash, inpoints *subtreepkg.TxInpoints, position uint64) ([]byte, byte) {
-	payload := m.serializePayload(hash, inpoints)
-	if position == 0 || payload == nil {
-		return payload, recordMagic
+	if position == 0 {
+		return m.serializePayload(hash, inpoints), recordMagic
+	}
+
+	size, err := inpoints.SerializedSize()
+	if err != nil {
+		return m.serializePayload(hash, inpoints), recordMagic
+	}
+
+	payload, err := inpoints.AppendSerialized(make([]byte, 0, size+recordPositionSize))
+	if err != nil {
+		return m.serializePayload(hash, inpoints), recordMagic
 	}
 
 	return binary.LittleEndian.AppendUint64(payload, position), recordMagicPositioned
