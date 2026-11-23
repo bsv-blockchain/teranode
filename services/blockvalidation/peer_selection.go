@@ -218,4 +218,3 @@ func (u *Server) tryAlternativePeersForCatchup(ctx context.Context, block *model
 
 	return false, false
 }
-
