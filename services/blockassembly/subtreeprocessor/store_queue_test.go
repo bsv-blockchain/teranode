@@ -1063,7 +1063,7 @@ func TestStoreQueue_ACancelledRequestsCleanupRunsBeforeItsSubtreeIsUnmapped(t *t
 // A cancelled request answers ErrChan and its Result, hands its cleanup to the processor, releases its
 // bytes and takes no sequence number, so the requests after it are numbered without a gap for the
 // in-order notification sender to wait on.
-func TestStoreQueue_ACancelledRequestIsAnsweredCleanedUpAndLeavesNoGap(t *testing.T) {
+func TestReorgScenario_StoreQueue_ACancelledRequestIsAnsweredCleanedUpAndLeavesNoGap(t *testing.T) {
 	per := StoreRequestBytes(chainRequest(t, 1))
 	q := NewStoreQueue(10 * per)
 
@@ -1200,7 +1200,7 @@ func TestStoreQueue_WithoutAQueueARemoveStillStoresTheRetiredSubtrees(t *testing
 // A failed block movement retires the chain and rolls back to it. A worker that came in between
 // cancelled the requests, so the rollback sends them again, and nothing but the request announces a
 // subtree after a rollback: it must announce as the cancelled one would have.
-func TestStoreQueue_ARestoredChainRequestCancelledBeforeTheRollbackStillAnnounces(t *testing.T) {
+func TestReorgScenario_StoreQueue_ARestoredChainRequestCancelledBeforeTheRollbackStillAnnounces(t *testing.T) {
 	q := NewStoreQueue(1 << 40)
 	stp, _ := newStoredPrefixProcessor(t, 8, NewStoredSet(), func(stp *SubtreeProcessor) { stp.storeQueue = q })
 	addStoredPrefixTxs(t, stp, 8*5)
