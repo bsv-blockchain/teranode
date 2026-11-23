@@ -1383,14 +1383,17 @@ func (s *Server) rejectedTxHandler(ctx context.Context) func(msg *kafka.KafkaMes
 		// publishToNetwork.
 		s.logger.Debugf("[rejectedTxHandler] publishing rejectedTxMessage to p2p network")
 
+		// A re-broadcast that did not reach the network must not leave the txid
+		// marked as announced. A publish error keeps its rate token, so a mesh
+		// outage cannot switch the gate off and this error line stays bounded
+		// by the egress rate; a policy drop did no publish work and returns it.
 		sent, err := s.publishToNetwork(ctx, s.rejectedTxTopicName, msgBytes)
-		if err != nil {
-			s.logger.Errorf("[rejectedTxHandler] publish error: %v", err)
-		}
 
-		// A re-broadcast the gate dropped or the network refused must not leave
-		// the txid marked as announced, nor keep the rate token it did not use.
-		if !sent {
+		switch {
+		case err != nil:
+			grant.publishErrored()
+			s.logger.Errorf("[rejectedTxHandler] publish error: %v", err)
+		case !sent:
 			grant.publishFailed()
 		}
 

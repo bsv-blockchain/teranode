@@ -44,14 +44,24 @@ const (
 //     the configured rate and burst regardless of how fast the validator
 //     rejects.
 //
-// Both limits charge for network egress, so a grant whose publish never
-// reached the network is handed back in full (rejectedTxGrant.publishFailed):
-// the dedup slot so the txid can retry, and the rate token so a burst during a
-// brief mesh outage does not throttle the first rejections that can actually
-// be published once it clears. The bucket is this package's own rather than
-// golang.org/x/time/rate because that limiter cannot return a token once the
-// reservation's act time has passed, which is always the case by the time a
-// publish is known to have failed.
+// A grant whose publish never reached the network gives back its dedup slot,
+// so the txid can retry. Whether the rate token comes back depends on why:
+//
+//   - a policy drop (the publish gate refused it: listen mode, FSM state,
+//     unknown topic) did no publish work and is handed back in full
+//     (rejectedTxGrant.publishFailed);
+//   - a publish error (rejectedTxGrant.publishErrored) keeps the token. While
+//     the mesh is down or the topic is not joined every publish errors, and a
+//     full refund would leave the bucket permanently full: the gate would
+//     never engage, and every rejection in a junk flood would cost the full
+//     publish work and an error log line. Keeping the token holds both to the
+//     configured rate. The price is that the bucket starts an outage's
+//     recovery partly drained.
+//
+// The bucket is this package's own rather than golang.org/x/time/rate because
+// that limiter cannot return a token once the reservation's act time has
+// passed, which is always the case by the time a publish is known to have
+// been dropped.
 //
 // Dedup period. The seenHashCache window is seenHashPublishWindow (15s), but
 // with one announcer the observed period is longer: a repeat inside the window
@@ -213,12 +223,20 @@ func (g *rejectedTxEgressGate) allow(txID, selfID string) (grant *rejectedTxGran
 	return &rejectedTxGrant{gate: g, bucket: bucket, txID: txID, selfID: selfID}, ""
 }
 
-// publishFailed returns the grant after a re-broadcast that allow approved did
-// not actually reach the network: the dedup slot, so the next rejection of the
-// same txid can retry rather than being suppressed as a duplicate, and the
-// rate token, since nothing was sent.
+// publishFailed returns the grant after a re-broadcast that allow approved was
+// dropped before any publish was attempted: the dedup slot, so the next
+// rejection of the same txid can retry rather than being suppressed as a
+// duplicate, and the rate token, since no publish work was done.
 func (gr *rejectedTxGrant) publishFailed() {
 	gr.bucket.refund(gr.gate.now())
+	gr.gate.seen.PublishFailed(gr.txID, gr.selfID)
+}
+
+// publishErrored returns the dedup slot after a publish that was attempted and
+// errored, so the txid can retry, but keeps the rate token: a persistently
+// failing publish must stay rate limited rather than turning the gate into a
+// no-op (see rejectedTxEgressGate).
+func (gr *rejectedTxGrant) publishErrored() {
 	gr.gate.seen.PublishFailed(gr.txID, gr.selfID)
 }
 

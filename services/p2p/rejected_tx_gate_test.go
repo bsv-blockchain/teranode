@@ -121,12 +121,15 @@ func TestRejectedTxHandler_RepeatedTxIDPublishedOnce(t *testing.T) {
 }
 
 // A re-broadcast the network refused must not leave the txid marked as
-// announced, and must not keep the rate token: the next rejection of the same
-// txid retries, and with a burst of one it can only do so if the failed
-// attempt's token came back.
+// announced, but keeps its rate token: with a burst of one the immediate retry
+// is rate limited, and once the bucket refills it goes out rather than being
+// suppressed as a duplicate.
 func TestRejectedTxHandler_PublishFailureAllowsRetry(t *testing.T) {
 	s, published := countingPublishServer(t, errors.NewServiceError("mesh unavailable"), 1)
 	s.rejectedTxEgress.setLimits(1, 1, 0, 0)
+
+	clock := newFakeClock()
+	s.rejectedTxEgress.clock = clock.read
 
 	handler := s.rejectedTxHandler(context.Background())
 
@@ -134,10 +137,35 @@ func TestRejectedTxHandler_PublishFailureAllowsRetry(t *testing.T) {
 	require.Equal(t, 0, *published, "first publish fails")
 
 	require.NoError(t, handler(internalRejection(t, testBlockHashHex)))
-	require.Equal(t, 1, *published, "the retry must not be suppressed as a duplicate or rate limited")
+	require.Equal(t, 0, *published, "the errored publish kept its token, so the immediate retry is rate limited")
+
+	clock.advance(time.Second)
+	require.NoError(t, handler(internalRejection(t, testBlockHashHex)))
+	require.Equal(t, 1, *published, "the retry must not be suppressed as a duplicate once a token is back")
 
 	require.NoError(t, handler(internalRejection(t, testBlockHashHex)))
 	require.Equal(t, 1, *published, "once published the txid is deduplicated")
+}
+
+// While every publish errors (mesh down, topic not joined) the gate must still
+// engage: a distinct-txid flood reaches Publish at most burst times, not once
+// per rejection, so neither the publish work nor the error log line scales
+// with the flood.
+func TestRejectedTxHandler_PersistentPublishErrorStaysRateLimited(t *testing.T) {
+	const flood = 500
+
+	s, published := countingPublishServer(t, errors.NewServiceError("mesh unavailable"), flood)
+	s.rejectedTxEgress.setLimits(1, 5, 0, 0)
+	s.rejectedTxEgress.clock = newFakeClock().read
+
+	handler := s.rejectedTxHandler(context.Background())
+
+	for i := 0; i < flood; i++ {
+		require.NoError(t, handler(internalRejection(t, distinctTxID(i))))
+	}
+
+	require.Equal(t, 0, *published)
+	s.P2PClient.(*MockServerP2PClient).AssertNumberOfCalls(t, "Publish", 5)
 }
 
 // A message the publish gate drops (silent listen mode reached via the
@@ -246,6 +274,32 @@ func TestRejectedTxEgressGate_PublishFailedReturnsToken(t *testing.T) {
 
 	granted, why := g.allow("b", "self")
 	require.NotNil(t, granted, "the failed publish's token must be back: %s", why)
+}
+
+// An errored publish returns only the dedup slot: the same txid may retry,
+// but the rate token stays spent, so with a burst of one nothing else is
+// granted until the bucket refills.
+func TestRejectedTxEgressGate_PublishErroredKeepsToken(t *testing.T) {
+	g, clock := gateWithClock()
+	g.setLimits(1, 1, 0, 0)
+
+	grant, _ := g.allow("a", "self")
+	require.NotNil(t, grant)
+
+	grant.publishErrored()
+
+	refused, why := g.allow("b", "self")
+	require.Nil(t, refused, "the errored publish's token must stay spent")
+	require.Equal(t, rejectedTxSuppressedRateLimited, why)
+
+	refused, why = g.allow("a", "self")
+	require.Nil(t, refused)
+	require.Equal(t, rejectedTxSuppressedRateLimited, why, "the dedup slot came back, so the retry is refused on rate, not as a duplicate")
+
+	clock.advance(time.Second)
+
+	granted, why := g.allow("a", "self")
+	require.NotNil(t, granted, "the txid retries once the bucket refills: %s", why)
 }
 
 // publishFailed reads the gate's clock, not the wall clock: on a synthetic
