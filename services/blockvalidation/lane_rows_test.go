@@ -550,25 +550,35 @@ func (s *bitmapStallStore) Get(ctx context.Context, key []byte, fileType filefor
 	return s.Store.Get(ctx, key, fileType, opts...)
 }
 
-// Full validation reads a block's lane bitmaps on the caller's context, before the 30 s context
-// AddBlock gets: with the reads held for their whole deadline, AddBlock still has close to 30 s
-// to store a block that has already been validated, and the block goes without rows.
-func TestValidateBlock_LaneBitmapReadsDoNotSpendTheStoreBudget(t *testing.T) {
+// laneAddBlock is what AddBlock was given for the block a laneValidateBlock run stores.
+type laneAddBlock struct {
+	mu       sync.Mutex
+	left     time.Duration
+	rows     []lane.MapRow
+	stores   int
+	invalids int
+}
+
+// laneValidateBlock validates a one-subtree block, the coinbase alone, at
+// utxostore_laneMigration shadow through ValidateBlockWithOptions, with the subtree store wrap
+// makes of the real one, after seed has written what it needs beside the subtree. With optimistic
+// set the block takes the optimistic-mining store path, otherwise full validation's. It returns
+// what AddBlock was given for the block once the block is stored.
+func laneValidateBlock(t *testing.T, wrap func(blob.Store) blob.Store, seed func(context.Context, blob.Store, *chainhash.Hash), optimistic bool) *laneAddBlock {
+	t.Helper()
+
 	initPrometheusMetrics()
 
-	saved := laneBitmapReadTimeout
-	laneBitmapReadTimeout = time.Second
-
-	t.Cleanup(func() { laneBitmapReadTimeout = saved })
-
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	t.Cleanup(cancel)
 
 	utxoStore, subtreeValidationClient, _, txStore, subtreeStore, cleanup := setup(t)
-	defer cleanup()
+	t.Cleanup(cleanup)
 
 	tSettings := test.CreateBaseTestSettings(t)
 	tSettings.UtxoStore.LaneMigration = settings.LaneMigrationShadow
+	tSettings.BlockValidation.OptimisticMining = optimistic
+	tSettings.BlockValidation.OptimisticMiningPeerBlocks = optimistic
 
 	coinbaseTx, err := bt.NewTxFromString(model.CoinbaseHex)
 	require.NoError(t, err)
@@ -628,13 +638,7 @@ func TestValidateBlock_LaneBitmapReadsDoNotSpendTheStoreBudget(t *testing.T) {
 	mockBlockchain.On("CheckBlockIsAncestorOfBlock", mock.Anything, mock.Anything, mock.Anything).Return(true, nil).Maybe()
 	mockBlockchain.On("Subscribe", mock.Anything, mock.Anything).Return(make(chan *blockchain_api.Notification, 1), nil).Maybe()
 
-	var (
-		mu       sync.Mutex
-		left     time.Duration
-		rows     []lane.MapRow
-		stores   int
-		invalids int
-	)
+	got := &laneAddBlock{}
 
 	mockBlockchain.On("AddBlock", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Run(func(args mock.Arguments) {
 		var o blockchainoptions.StoreBlockOptions
@@ -642,22 +646,23 @@ func TestValidateBlock_LaneBitmapReadsDoNotSpendTheStoreBudget(t *testing.T) {
 			apply(&o)
 		}
 
-		mu.Lock()
-		defer mu.Unlock()
+		got.mu.Lock()
+		defer got.mu.Unlock()
 
 		if o.Invalid {
-			invalids++
+			got.invalids++
 			return
 		}
 
-		deadline, ok := args.Get(0).(context.Context).Deadline()
-		require.True(t, ok, "AddBlock's context has the store's deadline")
+		if deadline, ok := args.Get(0).(context.Context).Deadline(); ok {
+			got.left = time.Until(deadline)
+		}
 
-		left, rows = time.Until(deadline), o.LaneMapRows
-		stores++
+		got.rows = o.LaneMapRows
+		got.stores++
 	}).Maybe()
 
-	bv := NewBlockValidation(ctx, ulogger.TestLogger{}, tSettings, mockBlockchain, &bitmapStallStore{Store: subtreeStore}, txStore, utxoStore, nil, subtreeValidationClient)
+	bv := NewBlockValidation(ctx, ulogger.TestLogger{}, tSettings, mockBlockchain, wrap(subtreeStore), txStore, utxoStore, nil, subtreeValidationClient)
 
 	subtreeBytes, err := subtree.Serialize()
 	require.NoError(t, err)
@@ -667,16 +672,62 @@ func TestValidateBlock_LaneBitmapReadsDoNotSpendTheStoreBudget(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, subtreeStore.Set(ctx, subtree.RootHash()[:], fileformat.FileTypeSubtreeData, subtreeDataBytes))
 
+	seed(ctx, subtreeStore, subtree.RootHash())
+
+	require.NoError(t, bv.ValidateBlockWithOptions(ctx, block, "", &ValidateBlockOptions{DisableOptimisticMining: !optimistic, IsRequeuedRetry: true}))
+
+	require.Eventually(t, func() bool {
+		got.mu.Lock()
+		defer got.mu.Unlock()
+
+		return got.stores > 0
+	}, 10*time.Second, 10*time.Millisecond, "the block is stored")
+
+	got.mu.Lock()
+	defer got.mu.Unlock()
+
+	require.Zero(t, got.invalids, "the block is valid")
+	require.Equal(t, 1, got.stores)
+
+	return got
+}
+
+// Full validation reads a block's lane bitmaps on the caller's context, before the 30 s context
+// AddBlock gets: with the reads held for their whole deadline, AddBlock still has close to 30 s
+// to store a block that has already been validated, and the block goes without rows.
+func TestValidateBlock_LaneBitmapReadsDoNotSpendTheStoreBudget(t *testing.T) {
+	saved := laneBitmapReadTimeout
+	laneBitmapReadTimeout = time.Second
+
+	t.Cleanup(func() { laneBitmapReadTimeout = saved })
+
 	timedOut := laneMetric(t, "teranode_lane_missing_bitmaps_total", "reason", lane.MissingBitmapsTimedOut)
 
-	require.NoError(t, bv.ValidateBlockWithOptions(ctx, block, "", &ValidateBlockOptions{DisableOptimisticMining: true, IsRequeuedRetry: true}))
+	got := laneValidateBlock(t, func(s blob.Store) blob.Store { return &bitmapStallStore{Store: s} }, func(context.Context, blob.Store, *chainhash.Hash) {}, false)
 
-	mu.Lock()
-	defer mu.Unlock()
-
-	require.Zero(t, invalids, "the block is valid")
-	require.Equal(t, 1, stores)
-	require.Nil(t, rows, "the bitmap reads timed out, so the block goes without rows")
+	require.Nil(t, got.rows, "the bitmap reads timed out, so the block goes without rows")
 	require.Equal(t, timedOut+1, laneMetric(t, "teranode_lane_missing_bitmaps_total", "reason", lane.MissingBitmapsTimedOut))
-	require.Greater(t, left, 30*time.Second-laneBitmapReadTimeout/2, "the reads, held for their deadline, took none of the store's 30 s")
+	require.Greater(t, got.left, 30*time.Second-laneBitmapReadTimeout/2, "the reads, held for their deadline, took none of the store's 30 s")
+}
+
+// Both store paths hand AddBlock the block's lane rows: optimistic mining, which stores the block
+// before validating it, as well as full validation.
+func TestValidateBlock_LaneRowsReachAddBlockOnBothStorePaths(t *testing.T) {
+	seed := func(ctx context.Context, store blob.Store, subtreeHash *chainhash.Hash) {
+		data, err := lane.EncodeSubtreeBitmaps(lane.SubtreeBitmaps{SubtreeHash: *subtreeHash, Lanes: lane.LaneBitmaps{7: lanePositions(5)}})
+		require.NoError(t, err)
+		require.NoError(t, store.Set(ctx, subtreeHash[:], fileformat.FileTypeSubtreeLaneBitmaps, data))
+	}
+
+	for _, optimistic := range []bool{true, false} {
+		name := "full validation"
+		if optimistic {
+			name = "optimistic mining"
+		}
+
+		t.Run(name, func(t *testing.T) {
+			got := laneValidateBlock(t, func(s blob.Store) blob.Store { return s }, seed, optimistic)
+			require.Equal(t, []lane.MapRow{{Lane: 7, First: 5, Last: 5, Tag: lane.RowTagRange}}, got.rows)
+		})
+	}
 }

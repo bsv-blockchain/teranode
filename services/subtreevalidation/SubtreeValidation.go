@@ -477,25 +477,14 @@ func (u *Server) readTxFromReader(body io.ReadCloser) (tx *bt.Tx, err error) {
 	return tx, nil
 }
 
-// readBackMeta reads the record of a transaction the validator created but whose metadata did not
-// come back with its answer, as GetMeta does, and at utxostore_laneMigration shadow its own lane
-// position too (fillLanePosition).
-func (u *Server) readBackMeta(ctx context.Context, hash *chainhash.Hash, stored *meta.Data) error {
-	if err := u.utxoStore.GetMeta(ctx, hash, stored); err != nil {
-		return err
-	}
-
-	u.fillLanePosition(ctx, hash, stored)
-
-	return nil
-}
-
 // fillLanePosition reads, at utxostore_laneMigration shadow, the own lane position of a record
 // whose metadata came back without one, for the subtree's lane bitmaps. That is metadata read with
-// GetMeta, which reads no position: subtree validation's own read-back, and the validator's answer
-// for a transaction it found already stored, which it reads back the same way. The position is
-// only measured, so a failure to read it leaves it at zero, where the transaction is counted as
-// one without a position, and is not an error.
+// GetMeta, which reads no position: the read-back of a record whose metadata did not come back with
+// the validator's answer, the validator's answer for a transaction it found already stored, an
+// older remote validator's answer, and the SQL store's create. blessMissingTransactions calls it,
+// where the position goes into the subtree; the block path's levels, which drop the metadata, do
+// not. The position is only measured, so a failure to read it leaves it at zero, where the
+// transaction is counted as one without a position, and is not an error.
 func (u *Server) fillLanePosition(ctx context.Context, hash *chainhash.Hash, md *meta.Data) {
 	if !u.laneShadow() || lane.Valid(md.LanePosition) {
 		return
@@ -589,7 +578,7 @@ func (u *Server) blessMissing(ctx context.Context, blockHash chainhash.Hash, sub
 		if txMeta == nil {
 			// the response metadata does not survive a gRPC error, so read the accepted record back
 			stored := &meta.Data{}
-			if getErr := u.readBackMeta(ctx, tx.TxIDChainHash(), stored); getErr != nil {
+			if getErr := u.utxoStore.GetMeta(ctx, tx.TxIDChainHash(), stored); getErr != nil {
 				// Report the accept anyway. The transaction was spent, created and delivered to
 				// block assembly; only the proof metadata could not be read, and the one thing the
 				// caller still has to do for it is retry the unlock. Returning unlockFailed=false
@@ -631,7 +620,7 @@ func (u *Server) blessMissing(ctx context.Context, blockHash chainhash.Hash, sub
 	// deepest public cause, refuses createConflicting (validator http_options_guard.go).
 	if err != nil && txMeta == nil && validationOptions.CreateConflicting {
 		stored := &meta.Data{}
-		if getErr := u.readBackMeta(ctx, tx.TxIDChainHash(), stored); getErr != nil {
+		if getErr := u.utxoStore.GetMeta(ctx, tx.TxIDChainHash(), stored); getErr != nil {
 			return nil, false, errors.NewProcessingError("[blessMissingTransaction][%s/%s][%s] failed to read meta of transaction created as conflicting", blockHash.String(), subtreeHash.String(), tx.TxID(), getErr)
 		}
 
@@ -670,8 +659,9 @@ func (u *Server) blessMissing(ctx context.Context, blockHash chainhash.Hash, sub
 		}
 
 		// A record that already existed comes back without its position; read it now, before the
-		// check below can reject, and keep it on txMeta so the read at the end is not repeated
-		// when the record has one. A record with no position is read again there.
+		// check below can reject, and keep it on txMeta so the read where the transaction goes
+		// into the subtree's metadata is not repeated when the record has one. A record with no
+		// position is read again there.
 		u.fillLanePosition(ctx, tx.TxIDChainHash(), txMeta)
 
 		r.CompareBlocks(lanereader.ReaderSubtreeAlreadyMined, view, *tx.TxIDChainHash(), txMeta.LanePosition, txMeta.BlockIDs)
@@ -701,10 +691,6 @@ func (u *Server) blessMissing(ctx context.Context, blockHash chainhash.Hash, sub
 			return nil, unlockFailed, errors.NewProcessingError("[blessMissingTransaction][%s/%s][%s] failed to check counter conflicting tx on current chain", blockHash.String(), subtreeHash.String(), tx.TxID(), err)
 		}
 	}
-
-	// A validator that found the transaction already stored answers with metadata read by GetMeta,
-	// without its lane position; read the position, as for a record read back above.
-	u.fillLanePosition(ctx, tx.TxIDChainHash(), txMeta)
 
 	return txMeta, unlockFailed, nil
 }
@@ -1659,6 +1645,10 @@ func (u *Server) blessMissingTransactions(ctx context.Context, subtreeHash chain
 
 						return nil
 					}
+
+					// The position goes into the subtree's lane bitmaps; fill it if the answer
+					// came without one.
+					u.fillLanePosition(gCtx, tx.TxIDChainHash(), txMeta)
 
 					txMetaSlice[txIdx] = metaSliceItem{
 						fee:          txMeta.Fee,

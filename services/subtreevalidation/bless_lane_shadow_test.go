@@ -180,7 +180,7 @@ func TestBlessMissingShadowsTheAlreadyMinedCheck(t *testing.T) {
 	_, _, err = server.blessMissing(context.Background(), chainhash.Hash{}, chainhash.Hash{}, tx, 3, map[uint32]bool{}, validator.ProcessOptions())
 	require.NoError(t, err)
 	require.Equal(t, before+1, subtreeAlreadyMined(t, lanereader.KindAgree, "row"))
-	require.Equal(t, 1, records.laneReads, "the position is read from the store once, before the check, and not again at the end")
+	require.Equal(t, 1, records.laneReads, "the position is read from the store once, before the check")
 
 	// The caller's chain is only b2: b1 is off it for both answers, so they agree with no row.
 	before = subtreeAlreadyMined(t, lanereader.KindAgree, "none")
