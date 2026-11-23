@@ -5071,6 +5071,9 @@ func TestHandleGetchaintipsComprehensive(t *testing.T) {
 
 	t.Run("blockchain client returns error", func(t *testing.T) {
 		mockClient := &blockchain.Mock{}
+		mockClient.On("GetBestBlockHeader", mock.Anything).Return(
+			(*model.BlockHeader)(nil), (*model.BlockHeaderMeta)(nil), errors.New(errors.ERR_ERROR, "no header"),
+		)
 		mockClient.On("GetChainTips", mock.Anything).Return(
 			([]*model.ChainTip)(nil), errors.New(errors.ERR_ERROR, "no chain tips"),
 		)
@@ -5090,6 +5093,154 @@ func TestHandleGetchaintipsComprehensive(t *testing.T) {
 		rpcErr, ok := err.(*bsvjson.RPCError)
 		require.True(t, ok)
 		assert.Equal(t, bsvjson.ErrRPCInternal.Code, rpcErr.Code)
+	})
+
+	// The cached answer records the best block hash so a new block or reorg
+	// retires it immediately; repeated polling within one tip must be
+	// served from the cache, and a moved tip must not be.
+	t.Run("cache is keyed to the best tip and serves repeats", func(t *testing.T) {
+		hashA := chainhash.DoubleHashH([]byte("tips-cache-tip-a"))
+		headerA := &model.BlockHeader{HashPrevBlock: &hashA, HashMerkleRoot: &hashA}
+
+		mockClient := &blockchain.Mock{}
+		mockClient.On("GetBestBlockHeader", mock.Anything).Return(
+			headerA, &model.BlockHeaderMeta{}, nil,
+		)
+		mockClient.On("GetChainTips", mock.Anything).Return(
+			[]*model.ChainTip{{Height: 5, Hash: hashA.String(), Branchlen: 0, Status: "active"}}, nil,
+		).Once()
+
+		s := &RPCServer{
+			logger:           logger,
+			blockchainClient: mockClient,
+			settings: &settings.Settings{
+				ChainCfgParams: &chaincfg.MainNetParams,
+				RPC:            settings.RPCSettings{CacheEnabled: true},
+			},
+		}
+
+		cmd := &bsvjson.GetChainTipsCmd{}
+		first, err := handleGetchaintips(context.Background(), s, cmd, nil)
+		require.NoError(t, err)
+		require.NotNil(t, first)
+
+		second, err := handleGetchaintips(context.Background(), s, cmd, nil)
+		require.NoError(t, err)
+		require.NotNil(t, second)
+
+		mockClient.AssertNumberOfCalls(t, "GetChainTips", 1)
+		mockClient.AssertNumberOfCalls(t, "GetBestBlockHeader", 2)
+	})
+
+	t.Run("cache misses when the tip moves", func(t *testing.T) {
+		hashB := chainhash.DoubleHashH([]byte("tips-cache-tip-b"))
+		hashC := chainhash.DoubleHashH([]byte("tips-cache-tip-c"))
+
+		mockClient := &blockchain.Mock{}
+		header := &model.BlockHeader{HashPrevBlock: &hashB, HashMerkleRoot: &hashB}
+		mockClient.On("GetBestBlockHeader", mock.Anything).Return(
+			header, &model.BlockHeaderMeta{}, nil,
+		)
+		tips := []*model.ChainTip{{Height: 6, Hash: hashB.String(), Branchlen: 0, Status: "active"}}
+		mockClient.On("GetChainTips", mock.Anything).Return(tips, nil)
+
+		s := &RPCServer{
+			logger:           logger,
+			blockchainClient: mockClient,
+			settings: &settings.Settings{
+				ChainCfgParams: &chaincfg.MainNetParams,
+				RPC:            settings.RPCSettings{CacheEnabled: true},
+			},
+		}
+
+		cmd := &bsvjson.GetChainTipsCmd{}
+		_, err := handleGetchaintips(context.Background(), s, cmd, nil)
+		require.NoError(t, err)
+
+		// Tip moves (new block or reorg): the cached answer must not be reused.
+		moved := hashC
+		header.HashPrevBlock = &moved
+		_, err = handleGetchaintips(context.Background(), s, cmd, nil)
+		require.NoError(t, err)
+
+		mockClient.AssertNumberOfCalls(t, "GetChainTips", 2)
+	})
+
+	// A side-branch block never moves the best tip, so the operator's own
+	// invalidateblock must retire the cached answer even though the tip is unchanged.
+	t.Run("invalidateblock retires the cached answer at an unchanged tip", func(t *testing.T) {
+		hashD := chainhash.DoubleHashH([]byte("tips-cache-tip-d"))
+		header := &model.BlockHeader{HashPrevBlock: &hashD, HashMerkleRoot: &hashD}
+
+		mockClient := &blockchain.Mock{}
+		mockClient.On("GetBestBlockHeader", mock.Anything).Return(header, &model.BlockHeaderMeta{}, nil)
+		mockClient.On("GetChainTips", mock.Anything).Return(
+			[]*model.ChainTip{{Height: 7, Hash: hashD.String(), Branchlen: 0, Status: "active"}}, nil,
+		)
+		mockClient.On("InvalidateBlock", mock.Anything, mock.Anything).Return([]chainhash.Hash{}, nil)
+
+		s := &RPCServer{
+			logger:           logger,
+			blockchainClient: mockClient,
+			settings: &settings.Settings{
+				ChainCfgParams: &chaincfg.MainNetParams,
+				RPC:            settings.RPCSettings{CacheEnabled: true},
+			},
+		}
+
+		cmd := &bsvjson.GetChainTipsCmd{}
+		_, err := handleGetchaintips(context.Background(), s, cmd, nil)
+		require.NoError(t, err)
+		_, err = handleGetchaintips(context.Background(), s, cmd, nil)
+		require.NoError(t, err)
+		mockClient.AssertNumberOfCalls(t, "GetChainTips", 1)
+
+		_, err = handleInvalidateBlock(context.Background(), s, bsvjson.NewInvalidateBlockCmd(hashD.String()), nil)
+		require.NoError(t, err)
+
+		_, err = handleGetchaintips(context.Background(), s, cmd, nil)
+		require.NoError(t, err)
+		mockClient.AssertNumberOfCalls(t, "GetChainTips", 2)
+	})
+
+	// invalidateblock can finish while a getchaintips walk is still reading the old
+	// tips. That walk must not store its result after the clear, or the stale answer
+	// is served until the TTL expires.
+	t.Run("a walk that overlaps an invalidation does not repopulate the cache", func(t *testing.T) {
+		hashE := chainhash.DoubleHashH([]byte("tips-cache-tip-e"))
+		header := &model.BlockHeader{HashPrevBlock: &hashE, HashMerkleRoot: &hashE}
+
+		mockClient := &blockchain.Mock{}
+		mockClient.On("GetBestBlockHeader", mock.Anything).Return(header, &model.BlockHeaderMeta{}, nil)
+		mockClient.On("GetChainTips", mock.Anything).Return(
+			[]*model.ChainTip{{Height: 8, Hash: hashE.String(), Branchlen: 0, Status: "active"}}, nil,
+		).Run(func(mock.Arguments) {
+			clearChainTipsCache()
+		}).Once()
+		mockClient.On("GetChainTips", mock.Anything).Return(
+			[]*model.ChainTip{{Height: 8, Hash: hashE.String(), Branchlen: 0, Status: "active"}}, nil,
+		).Once()
+
+		s := &RPCServer{
+			logger:           logger,
+			blockchainClient: mockClient,
+			settings: &settings.Settings{
+				ChainCfgParams: &chaincfg.MainNetParams,
+				RPC:            settings.RPCSettings{CacheEnabled: true},
+			},
+		}
+
+		cmd := &bsvjson.GetChainTipsCmd{}
+		_, err := handleGetchaintips(context.Background(), s, cmd, nil)
+		require.NoError(t, err)
+
+		_, err = handleGetchaintips(context.Background(), s, cmd, nil)
+		require.NoError(t, err)
+		mockClient.AssertNumberOfCalls(t, "GetChainTips", 2)
+
+		_, err = handleGetchaintips(context.Background(), s, cmd, nil)
+		require.NoError(t, err)
+		mockClient.AssertNumberOfCalls(t, "GetChainTips", 2)
 	})
 }
 

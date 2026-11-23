@@ -11,10 +11,11 @@ import (
 // pruner_relaxRemovalCommitLevel=false puts them back on COMMIT_ALL without a
 // code change, for when the relaxation has to be ruled out in the field.
 //
-// This applies to the pruner's own record removals ONLY. Parent updates (the
-// deletedChildren map writes and the addDeletedChildren UDF) mutate records that
-// survive the prune, so they keep COMMIT_ALL, as does every write outside the
-// pruner — see util.GetAerospikeWritePolicy.
+// This applies to the pruner's own record removals ONLY. The pruner still
+// writes records it keeps: it clears deleteAtHeight on an unmined record, and in
+// defensive mode it unspends a conflicting transaction's inputs on the surviving
+// parents. Those writes, and every write outside the pruner, keep COMMIT_ALL;
+// see util.GetAerospikeWritePolicy.
 
 // removalCommitLevel maps pruner_relaxRemovalCommitLevel onto the commit level
 // used for the pruner's own record removals.

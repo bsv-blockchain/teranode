@@ -71,6 +71,7 @@ var commandHelp = map[string]string{
 	"diagnose":                "Diagnose node health and validate configuration",
 	"audit-mined-set":         "List blocks stored with mined_set true whose transactions lack the block id or are still locked (read-only; remedy is a resync)",
 	"prepare-lane-schema":     "Install the UTXO store's lane columns, empty, at lane migration step off (node must be stopped)",
+	"free-spent-output":       "Free one output still spent by a transaction the UTXO store has no record of (the error 78 stall; see --help)",
 }
 
 // commandLongHelp is printed by <command> --help above the flags, for a command whose
@@ -78,6 +79,7 @@ var commandHelp = map[string]string{
 var commandLongHelp = map[string]string{
 	"audit-mined-set":     minedSetAuditLongHelp,
 	"prepare-lane-schema": laneSchemaLongHelp,
+	"free-spent-output":   freeSpentOutputLongHelp,
 }
 
 var dangerousCommands = map[string]bool{}
@@ -512,6 +514,8 @@ func Start(args []string, version, commit string) {
 		cmd.Execute = minedSetAuditExecute(logger, tSettings, registerMinedSetAuditFlags(cmd.FlagSet))
 	case "prepare-lane-schema":
 		cmd.Execute = laneSchemaExecute(logger, tSettings, os.Stdout)
+	case "free-spent-output":
+		cmd.Execute = freeSpentOutputExecute(logger, tSettings, registerFreeSpentOutputFlags(cmd.FlagSet), os.Stdout)
 	case "validate-utxo-set":
 		verbose := cmd.FlagSet.Bool("verbose", false, "verbose output showing individual UTXOs")
 
