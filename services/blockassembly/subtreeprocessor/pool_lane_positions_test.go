@@ -3,7 +3,9 @@ package subtreeprocessor
 import (
 	"context"
 	"net/url"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/bscript"
@@ -452,8 +454,56 @@ func TestConflictRemovalBacksUpLanePositions(t *testing.T) {
 	require.False(t, ok, "the backup goes once the subtree is stored")
 }
 
-// TestMoveBackReadsLanePositionsInConcurrentBatches: a move-back's position reads, split into
-// batches that run at once, each land on their own tx.
+// overlapProbeStore records how many BatchDecorate calls run at once. The first `limit` calls
+// each wait until all of them have started, so calls that never overlap show as a wait that runs
+// out.
+type overlapProbeStore struct {
+	utxo.Store
+
+	limit    int
+	mu       sync.Mutex
+	inFlight int
+	maxSeen  int
+	started  int
+	allIn    chan struct{}
+	timedOut bool
+}
+
+func (s *overlapProbeStore) BatchDecorate(ctx context.Context, unresolved []*utxo.UnresolvedMetaData, fieldsToRead ...fields.FieldName) error {
+	s.mu.Lock()
+	s.inFlight++
+	s.maxSeen = max(s.maxSeen, s.inFlight)
+	s.started++
+
+	if s.started == s.limit {
+		close(s.allIn)
+	}
+
+	waits := s.started <= s.limit
+	s.mu.Unlock()
+
+	if waits {
+		select {
+		case <-s.allIn:
+		case <-time.After(5 * time.Second):
+			s.mu.Lock()
+			s.timedOut = true
+			s.mu.Unlock()
+		}
+	}
+
+	err := s.Store.BatchDecorate(ctx, unresolved, fieldsToRead...)
+
+	s.mu.Lock()
+	s.inFlight--
+	s.mu.Unlock()
+
+	return err
+}
+
+// TestMoveBackReadsLanePositionsInConcurrentBatches: a move-back's position reads run as
+// concurrent batches, as many at once as blockassembly_moveBackBlockConcurrency and no more, and
+// each batch's positions land on its own txs.
 func TestMoveBackReadsLanePositionsInConcurrentBatches(t *testing.T) {
 	stp, store := lanePoolProcessor(t, false, true)
 
@@ -462,8 +512,15 @@ func TestMoveBackReadsLanePositionsInConcurrentBatches(t *testing.T) {
 
 	t.Cleanup(func() { moveBackStoreReadBatchSize = previous })
 
-	hashes := make([]chainhash.Hash, 3)
-	want := make([]uint64, 3)
+	const limit = 2
+
+	stp.settings.BlockAssembly.MoveBackBlockConcurrency = limit
+
+	probe := &overlapProbeStore{Store: store, limit: limit, allIn: make(chan struct{})}
+	stp.utxoStore = probe
+
+	hashes := make([]chainhash.Hash, 5)
+	want := make([]uint64, 5)
 
 	for i := range hashes {
 		want[i] = lane.Pack(uint8(20+i), uint64(i+1))
@@ -471,4 +528,6 @@ func TestMoveBackReadsLanePositionsInConcurrentBatches(t *testing.T) {
 	}
 
 	require.Equal(t, want, stp.lanePositionsFromUtxoStore(context.Background(), &model.Block{Header: prevBlockHeader}, hashes))
+	require.False(t, probe.timedOut, "the first batches ran at the same time")
+	require.Equal(t, limit, probe.maxSeen, "no more batches at once than the limit")
 }

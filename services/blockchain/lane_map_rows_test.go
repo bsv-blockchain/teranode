@@ -2,6 +2,7 @@ package blockchain
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/bsv-blockchain/teranode/services/blockchain/blockchain_api"
@@ -106,36 +107,49 @@ func TestClientAddBlockSendsTheLaneMapRows(t *testing.T) {
 	require.Empty(t, capture.req.GetLaneMapRows())
 }
 
-// Rows that do not parse are dropped and counted, and the block is stored without them.
+// Rows that do not parse are dropped and counted under the block they came with, our own or a
+// peer's, and the block is stored without them.
 func TestAddBlockStoresTheBlockWhenItsLaneMapRowsDoNotParse(t *testing.T) {
-	tc := setup(t)
-	blk := mockBlock(tc, t)
+	for _, own := range []bool{false, true} {
+		t.Run(fmt.Sprintf("own=%t", own), func(t *testing.T) {
+			tc := setup(t)
+			blk := mockBlock(tc, t)
 
-	subtreeHashes := make([][]byte, len(blk.Subtrees))
-	for i, hash := range blk.Subtrees {
-		subtreeHashes[i] = hash[:]
+			subtreeHashes := make([][]byte, len(blk.Subtrees))
+			for i, hash := range blk.Subtrees {
+				subtreeHashes[i] = hash[:]
+			}
+
+			counted, other := lane.BlockPeer, lane.BlockOwn
+			if own {
+				counted, other = lane.BlockOwn, lane.BlockPeer
+			}
+
+			failures := laneSeries(t, "teranode_lane_row_insert_failures_total", counted, "")
+			otherFailures := laneSeries(t, "teranode_lane_row_insert_failures_total", other, "")
+
+			_, err := tc.server.AddBlock(context.Background(), &blockchain_api.AddBlockRequest{
+				Header:              blk.Header.Bytes(),
+				CoinbaseTx:          blk.CoinbaseTx.Bytes(),
+				SubtreeHashes:       subtreeHashes,
+				TransactionCount:    blk.TransactionCount,
+				SizeInBytes:         blk.SizeInBytes,
+				PeerId:              "test-peer",
+				LaneMapRows:         []*blockchain_api.LaneMapRow{{Lane: 256, First: 1, Last: 1}},
+				LaneMapRowsOwnBlock: own,
+			})
+			require.NoError(t, err, "the block is stored")
+			require.Equal(t, failures+1, laneSeries(t, "teranode_lane_row_insert_failures_total", counted, ""))
+			require.Equal(t, otherFailures, laneSeries(t, "teranode_lane_row_insert_failures_total", other, ""))
+
+			_, meta, err := tc.server.store.GetBlockHeader(context.Background(), blk.Hash())
+			require.NoError(t, err)
+
+			got, err := tc.server.store.LaneMapRows(context.Background(), meta.ID)
+			require.NoError(t, err)
+			require.Empty(t, got)
+		})
 	}
-
-	failures := laneInsertFailures(t)
-
-	_, err := tc.server.AddBlock(context.Background(), &blockchain_api.AddBlockRequest{
-		Header:           blk.Header.Bytes(),
-		CoinbaseTx:       blk.CoinbaseTx.Bytes(),
-		SubtreeHashes:    subtreeHashes,
-		TransactionCount: blk.TransactionCount,
-		SizeInBytes:      blk.SizeInBytes,
-		PeerId:           "test-peer",
-		LaneMapRows:      []*blockchain_api.LaneMapRow{{Lane: 256, First: 1, Last: 1}},
-	})
-	require.NoError(t, err, "the block is stored")
-	require.Equal(t, failures+1, laneInsertFailures(t))
-
-	_, meta, err := tc.server.store.GetBlockHeader(context.Background(), blk.Hash())
-	require.NoError(t, err)
-
-	got, err := tc.server.store.LaneMapRows(context.Background(), meta.ID)
-	require.NoError(t, err)
-	require.Empty(t, got)
 }
 
 func laneInsertFailures(t *testing.T) float64 {

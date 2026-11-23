@@ -80,7 +80,14 @@ func (o *ownLaneBitmaps) put(root chainhash.Hash, lanes lane.LaneBitmaps, height
 		o.bySubtree = make(map[chainhash.Hash]keptLaneBitmaps)
 	}
 
-	o.bySubtree[root] = keptLaneBitmaps{lanes: lanes, height: height}
+	// a worker that captured an older height, for a root a newer store or candidate has since
+	// kept, keeps the newer height, so the entry is not dropped while candidates list it
+	keptHeight := height
+	if kept, ok := o.bySubtree[root]; ok && kept.height > keptHeight {
+		keptHeight = kept.height
+	}
+
+	o.bySubtree[root] = keptLaneBitmaps{lanes: lanes, height: keptHeight}
 	delete(o.pending, root)
 	o.broadcastLocked()
 
@@ -247,9 +254,17 @@ func subtreeLanePositions(subtree *subtreepkg.Subtree, parentTxMap subtreeproces
 			position = removedLanePosition(parentTxMap, deletedPositions, node.Hash)
 		}
 
-		if position == 0 && (parentTxMap == nil || !parentTxMap.Exists(node.Hash)) && (deletedTxs == nil || !deletedTxs.Exists(node.Hash)) {
-			lost++
-			continue
+		// still none: a member back in the pool was re-added after the reads above (another
+		// storage request that shares it finished and dropped its backup meanwhile), so it is read
+		// once more; one in neither the pool nor the backup is lost
+		if position == 0 {
+			switch {
+			case parentTxMap != nil && parentTxMap.Exists(node.Hash):
+				position = poolLanePosition(parentTxMap, node.Hash)
+			case deletedTxs == nil || !deletedTxs.Exists(node.Hash):
+				lost++
+				continue
+			}
 		}
 
 		laneBits.Add(position)
@@ -388,7 +403,8 @@ func (ba *BlockAssembly) ownLaneRows(ctx context.Context, block *model.Block) []
 }
 
 // checkOwnLaneRowCount compares the members of a block's rows with its transactions less the
-// coinbase, which takes no position from a lane, and counts and logs a difference. A transaction
+// coinbase, and counts and logs a difference. The coinbase does take a position when its outputs
+// are created, but it is not in the bitmaps: a stored subtree holds its placeholder. A transaction
 // that reached block assembly without a position is one fewer member.
 func (ba *BlockAssembly) checkOwnLaneRowCount(block *model.Block, members uint64) {
 	var want uint64

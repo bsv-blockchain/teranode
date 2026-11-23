@@ -1506,6 +1506,13 @@ func (a *afterBlockSnapshot) storeOnce(ctx context.Context, stp *SubtreeProcesso
 			ErrChan:     make(chan error, 1), // the worker never blocks on a caller that gave up
 		}
 
+		// at shadow a member removed from the pool before this snapshot is stored keeps its
+		// position from the removal backup, as on the other incomplete-subtree stores
+		if stp.keepsLanePositions() {
+			send.DeletedTxs = stp.deletedTxs
+			send.DeletedPositions = stp.deletedPositions
+		}
+
 		select {
 		case stp.newSubtreeChan <- send:
 			a.pending = send.ErrChan
@@ -6927,31 +6934,42 @@ func (stp *SubtreeProcessor) txInpointsFromUtxoStore(ctx context.Context, nodes 
 // that a move-back returns to block assembly, has in the UTXO store, 0 for one it has none for, or
 // nil when the pool keeps no positions (utxostore_laneMigration off). The subtree files a block
 // comes back from carry no positions, so at shadow this reads the store, one read per tx, in the
-// batches the parent-link read uses. A failed read is logged and leaves positions 0: at shadow a
-// lanes read never stops a reorg, and the txs are counted as without position when their subtree
-// is sealed.
+// batches the parent-link read uses, run concurrently up to blockassembly_moveBackBlockConcurrency.
+// Each batch allocates its own read entries and drops them once its positions are copied, so the
+// memory held is the batches in flight, not the block. A failed batch call is logged; an entry
+// that fails on its own (a missing record, a per-record error) also leaves its position 0. At
+// shadow a lanes read never stops a reorg: the txs are counted as without position when their
+// subtree is stored.
 func (stp *SubtreeProcessor) lanePositionsFromUtxoStore(ctx context.Context, block *model.Block, hashes []chainhash.Hash) []uint64 {
 	if !stp.keepsLanePositions() || stp.utxoStore == nil || len(hashes) == 0 {
 		return nil
 	}
 
 	positions := make([]uint64, len(hashes))
-	unresolved := make([]*utxostore.UnresolvedMetaData, len(hashes))
-
-	for i := range hashes {
-		unresolved[i] = &utxostore.UnresolvedMetaData{Hash: hashes[i], Idx: i}
-	}
 
 	// the batches run concurrently, bounded as the subtree reads of a move-back are
 	g := errgroup.Group{}
 	util.SafeSetLimit(stp.logger, &g, stp.settings.BlockAssembly.MoveBackBlockConcurrency)
 
-	for start := 0; start < len(unresolved); start += moveBackStoreReadBatchSize {
-		end := min(start+moveBackStoreReadBatchSize, len(unresolved))
+	for start := 0; start < len(hashes); start += moveBackStoreReadBatchSize {
+		end := min(start+moveBackStoreReadBatchSize, len(hashes))
 
 		g.Go(func() error {
-			if err := stp.utxoStore.BatchDecorate(ctx, unresolved[start:end], fields.LanePosition); err != nil {
+			unresolved := make([]*utxostore.UnresolvedMetaData, end-start)
+			for i := range unresolved {
+				unresolved[i] = &utxostore.UnresolvedMetaData{Hash: hashes[start+i], Idx: start + i}
+			}
+
+			if err := stp.utxoStore.BatchDecorate(ctx, unresolved, fields.LanePosition); err != nil {
 				stp.logger.Warnf("[moveBackBlock][%s] returning %d txs to block assembly without lane positions, which could not be read: %v", block.String(), end-start, err)
+				return nil
+			}
+
+			// each batch writes its own range of positions
+			for _, item := range unresolved {
+				if item.Err == nil && item.Data != nil {
+					positions[item.Idx] = item.Data.LanePosition
+				}
 			}
 
 			return nil
@@ -6959,12 +6977,6 @@ func (stp *SubtreeProcessor) lanePositionsFromUtxoStore(ctx context.Context, blo
 	}
 
 	_ = g.Wait()
-
-	for _, item := range unresolved {
-		if item.Err == nil && item.Data != nil {
-			positions[item.Idx] = item.Data.LanePosition
-		}
-	}
 
 	return positions
 }

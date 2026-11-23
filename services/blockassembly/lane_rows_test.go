@@ -1164,3 +1164,48 @@ func TestRemovedLanePositionReadsThePoolAgain(t *testing.T) {
 	require.Equal(t, lane.Pack(4, 21), removedLanePosition(txMap, txmap.NewSyncedMap[chainhash.Hash, uint64](), st.Nodes[2].Hash))
 	require.Zero(t, removedLanePosition(nil, nil, st.Nodes[2].Hash))
 }
+
+// TestOwnLaneBitmapsPutKeepsTheNewerHeight: a storage worker that captured an older height, and
+// keeps a subtree's bitmaps after a newer store or candidate kept them, leaves the newer height, so
+// the entry is not dropped while candidates list it.
+func TestOwnLaneBitmapsPutKeepsTheNewerHeight(t *testing.T) {
+	var kept ownLaneBitmaps
+
+	root := chainhash.HashH([]byte("newer-height"))
+
+	kept.put(root, lane.LaneBitmaps{}, 103)
+	kept.put(root, lane.LaneBitmaps{}, 100) // the older worker finishes last
+
+	kept.put(chainhash.HashH([]byte("newer-height-next")), lane.LaneBitmaps{}, 105)
+
+	_, missing := kept.get([]*chainhash.Hash{&root})
+	require.Zero(t, missing, "kept at 103, inside the margin of 105")
+}
+
+// reAddedLateMap reads no position for a member on its first two reads and holds it from then on:
+// another storage request that shares it dropped its backup, and the processor put it back only
+// after the worker had read both the map and the backup.
+type reAddedLateMap struct {
+	subtreeprocessor.TxInpointsMap
+	reads map[chainhash.Hash]int
+}
+
+func (m reAddedLateMap) PositionWithErr(hash chainhash.Hash) (uint64, error) {
+	m.reads[hash]++
+	if m.reads[hash] <= 2 {
+		return 0, nil
+	}
+
+	return m.TxInpointsMap.Position(hash), nil
+}
+
+// TestSubtreeLanePositionsReadsAMemberReAddedAfterEveryRead: a member back in the pool after the
+// map, the backup and the map again all missed it is read once more and keeps its position.
+func TestSubtreeLanePositionsReadsAMemberReAddedAfterEveryRead(t *testing.T) {
+	st, txMap := laneSealSubtree(t, "re-added-late")
+
+	laneBits, lost := subtreeLanePositions(st, reAddedLateMap{TxInpointsMap: txMap, reads: map[chainhash.Hash]int{}}, nil, txmap.NewSyncedMap[chainhash.Hash, uint64]())
+	require.Zero(t, lost)
+	require.Zero(t, laneBits.Unpositioned())
+	require.Equal(t, []uint64{20, 21, 22}, laneBits.Subtree(*st.RootHash()).Lanes[4].ToArray())
+}
