@@ -9,6 +9,7 @@ import (
 	txmap "github.com/bsv-blockchain/go-tx-map"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/services/blockassembly/subtreeprocessor"
+	"github.com/bsv-blockchain/teranode/util/lane"
 	"github.com/stretchr/testify/require"
 )
 
@@ -254,6 +255,33 @@ func BenchmarkBuildSubtreeMeta(b *testing.B) {
 		for i := 0; i < b.N; i++ {
 			if _, ok := legacyMetaBytes(subtree, m, nil); !ok {
 				b.Fatal("failed")
+			}
+		}
+
+		b.ReportMetric(float64(b.N*leaves)/b.Elapsed().Seconds()/1e6, "Mtx/s")
+	})
+
+	// serialized_lanes is the same pass at utxostore_laneMigration shadow: every record keeps a lane
+	// position, read with its inpoints, and the subtree's lane bitmaps are built from them.
+	positioned := subtreeprocessor.NewSplitTxInpointsMap(16384)
+
+	for i := 0; i < leaves; i++ {
+		h := metaTestHash(i)
+		p := subtreepkg.NewTxInpointsFromPacked([]chainhash.Hash{metaTestHash(i + leaves)}, []uint32{1, r.Uint32() % 4})
+		positioned.SetAt(h, &p, lane.Pack(uint8(i%17), uint64(i/17+1))) //nolint:gosec // i%17 < 17
+	}
+
+	b.Run("serialized_lanes", func(b *testing.B) {
+		b.ReportAllocs()
+
+		for i := 0; i < b.N; i++ {
+			laneBits := lane.NewBitmapsBuilder()
+			if _, err := buildSubtreeMetaBytes(subtree, positioned, nil, laneBits); err != nil {
+				b.Fatal(err)
+			}
+
+			if _, err := lane.EncodeSubtreeBitmaps(laneBits.Subtree(*subtree.RootHash())); err != nil {
+				b.Fatal(err)
 			}
 		}
 

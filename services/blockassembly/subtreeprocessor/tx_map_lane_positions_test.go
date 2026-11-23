@@ -1,6 +1,8 @@
 package subtreeprocessor
 
 import (
+	"fmt"
+	"runtime"
 	"testing"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
@@ -235,4 +237,74 @@ func TestTxMapCopiesCarryLanePosition(t *testing.T) {
 			require.Equal(t, laneTestInpoints(uint64(i)).ParentTxHashes, got.ParentTxHashes)
 		}
 	})
+}
+
+// BenchmarkTxMapLanePositionFootprint fills each pool map with a million txs, without and with a
+// lane position each, and reports what the pool keeps per tx: heap bytes and, for the disk map,
+// bytes written to its log files. The difference is the cost of keeping positions at
+// utxostore_laneMigration shadow. Run with -benchtime=1x.
+//
+// The in-memory map's heap moves in steps, because each of its buckets grows its arena by doubling
+// chunks: arenaUsedB/tx is what the records take, arenaCapB/tx what the chunks hold, so a fill
+// level that tips a bucket into its next chunk shows more than the eight bytes a position adds.
+func BenchmarkTxMapLanePositionFootprint(b *testing.B) {
+	for _, total := range []int{1 << 20, 4 << 20} {
+		for _, disk := range []bool{false, true} {
+			for _, lanes := range []bool{false, true} {
+				name := fmt.Sprintf("%dM/", total>>20) + map[bool]string{false: "split", true: "disk"}[disk] + map[bool]string{false: "/off", true: "/shadow"}[lanes]
+
+				b.Run(name, func(b *testing.B) {
+					for i := 0; i < b.N; i++ {
+						baseBytes, _ := heapStats()
+
+						var (
+							m    TxInpointsMap
+							dm   *DiskTxMap
+							fill func(hash chainhash.Hash, inpoints *subtreepkg.TxInpoints, position uint64)
+						)
+
+						if disk {
+							var err error
+
+							dm, err = NewDiskTxMap(DiskTxMapOptions{BasePaths: []string{b.TempDir()}})
+							require.NoError(b, err)
+
+							m = dm
+						} else {
+							m = NewSplitTxInpointsMap(16384)
+						}
+
+						fill = func(hash chainhash.Hash, inpoints *subtreepkg.TxInpoints, position uint64) {
+							m.SetIfNotExistsAt(hash, inpoints, position)
+						}
+
+						for j := 0; j < total; j++ {
+							var position uint64
+							if lanes {
+								position = lane.Pack(uint8(j%17), uint64(j/17+1)) //nolint:gosec // j%17 < 17
+							}
+
+							fill(benchTxHash(j), benchTxInpoints(j), position)
+						}
+
+						bytes, _ := heapStats()
+						b.ReportMetric(float64(bytes-baseBytes)/float64(total), "heapB/tx")
+
+						if dm != nil {
+							require.NoError(b, dm.Flush())
+							b.ReportMetric(float64(dm.bytesWritten.Load())/float64(total), "diskB/tx")
+							_ = dm.Close()
+						}
+
+						if split, ok := m.(*SplitTxInpointsMap); ok {
+							b.ReportMetric(float64(split.usedBytes())/float64(total), "arenaUsedB/tx")
+							b.ReportMetric(float64(split.retainedBytes())/float64(total), "arenaCapB/tx")
+						}
+
+						runtime.KeepAlive(m)
+					}
+				})
+			}
+		}
+	}
 }

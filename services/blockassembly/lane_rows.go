@@ -31,10 +31,13 @@ import (
 const laneBitmapsService = "blockassembly"
 
 // ownLaneBitmapsKeepBlocks is how many blocks the kept bitmaps of a subtree outlive the height
-// they were last stored at. A candidate is cut from subtrees stored since the last block, and every
-// subtree is stored again, which refreshes its entry, when a block moves the pool on; the margin
-// covers a slow miner. An entry older than this is dropped when the next one is kept.
-const ownLaneBitmapsKeepBlocks = 10
+// they were last stored at. A candidate is cut from subtrees stored since the last block: when a
+// block moves the pool on, every transaction left is built into new subtrees, which are stored and
+// kept again, and a candidate cut before that block is stale. So an entry older than this serves
+// nothing, and it is dropped when the next one is kept. This bounds the memory to about two
+// blocks' subtrees: about 0.5 KB per million-transaction subtree whose lanes are contiguous runs,
+// which is how block assembly fills its subtrees from the queue.
+const ownLaneBitmapsKeepBlocks = 2
 
 // ownLaneBitmaps keeps the lane bitmaps of the subtrees block assembly stored, by subtree root
 // hash, for the rows of the blocks it mines. The zero value is ready to use.
