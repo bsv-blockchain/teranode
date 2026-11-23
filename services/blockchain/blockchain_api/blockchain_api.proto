@@ -3,6 +3,13 @@ syntax = "proto3";
 option go_package = "./;blockchain_api";
 
 // Package blockchain_api defines the gRPC service interface for blockchain operations.
+//
+// Version: v1 (implicit). No version suffix; the unsuffixed name IS v1. This
+// package has already had a breaking change handled via `reserved` enum
+// values without a version bump (see FSMEventType / FSMStateType below) --
+// reserving prevents wire corruption but is not the same as version
+// coexistence. A version bump (v2) is for changes reserved values can't
+// express -- see docs/references/protoVersioning.md.
 package blockchain_api;
 
 import "google/protobuf/timestamp.proto";
@@ -56,12 +63,6 @@ service BlockchainAPI {
   // GetHashOfAncestorBlock retrieves the hash of an ancestor block at a specified depth.
   rpc GetHashOfAncestorBlock (GetHashOfAncestorBlockRequest) returns (GetHashOfAncestorBlockResponse) {}
 
-  // GetLatestBlockHeaderFromBlockLocator retrieves the latest block header using a block locator.
-  rpc GetLatestBlockHeaderFromBlockLocator (GetLatestBlockHeaderFromBlockLocatorRequest) returns (GetBlockHeaderResponse) {}
-
-  // GetBlockHeadersFromOldest retrieves block headers starting from the oldest block.
-  rpc GetBlockHeadersFromOldest (GetBlockHeadersFromOldestRequest) returns (GetBlockHeadersResponse) {}
-
   // GetNextWorkRequired calculates the required proof of work for the next block.
   rpc GetNextWorkRequired (GetNextWorkRequiredRequest) returns (GetNextWorkRequiredResponse) {}
 
@@ -71,17 +72,31 @@ service BlockchainAPI {
   // GetBlockHeaders retrieves headers for multiple blocks.
   rpc GetBlockHeaders(GetBlockHeadersRequest) returns (GetBlockHeadersResponse) {}
 
+  // GetBestBlockHeaderUncached is GetBestBlockHeader with the response cache left out on both
+  // sides, and with the block id filled in. A block store clears the cache only after its own
+  // commit, so the cached call can be one block stale; a caller that writes the tip into
+  // permanent state reads it here.
+  rpc GetBestBlockHeaderUncached(google.protobuf.Empty) returns (GetBlockHeaderResponse) {}
+
+  // GetBlockHeadersByParentLinks retrieves headers by walking parent links back from a hash.
+  // It never selects rows by the on_main_chain flag and never reads or writes a cache, so it
+  // is the fetch a chain answer is proven against.
+  rpc GetBlockHeadersByParentLinks(GetBlockHeadersRequest) returns (GetBlockHeadersResponse) {}
+
   // GetBlockHeadersToCommonAncestor retrieves headers from a block to its common ancestor.
   rpc GetBlockHeadersToCommonAncestor(GetBlockHeadersToCommonAncestorRequest) returns (GetBlockHeadersResponse) {}
 
   // GetBlockHeadersFromCommonAncestor retrieves headers from a common ancestor to a target block.
   rpc GetBlockHeadersFromCommonAncestor(GetBlockHeadersFromCommonAncestorRequest) returns (GetBlockHeadersResponse) {}
 
-  // GetBlockHeadersFromTill retrieves block headers between two specified blocks.
-  rpc GetBlockHeadersFromTill(GetBlockHeadersFromTillRequest) returns (GetBlockHeadersResponse) {}
-
   // GetBlockHeadersFromHeight retrieves block headers starting from a specific height.
   rpc GetBlockHeadersFromHeight(GetBlockHeadersFromHeightRequest) returns (GetBlockHeadersFromHeightResponse) {}
+
+  // BlocksBetterThan returns the valid blocks that sort better than a key in the best-tip order, worst first.
+  rpc BlocksBetterThan(BlocksBetterThanRequest) returns (BlocksBetterThanResponse) {}
+
+  // ClearBestTipLowWater deletes the best tip's low-water mark if it still holds the expected bytes.
+  rpc ClearBestTipLowWater(ClearBestTipLowWaterRequest) returns (google.protobuf.Empty) {}
 
   // GetBlockHeadersByHeight retrieves block headers between two specified heights.
   rpc GetBlockHeadersByHeight(GetBlockHeadersByHeightRequest) returns (GetBlockHeadersByHeightResponse) {}
@@ -98,6 +113,16 @@ service BlockchainAPI {
 
   // GetBlockHeaderIDs retrieves block header IDs for a range of blocks.
   rpc GetBlockHeaderIDs(GetBlockHeadersRequest) returns (GetBlockHeaderIDsResponse) {}
+
+  // OpenLaneLease opens a lease on a free lane for a record-creating process, with its first grant of positions.
+  rpc OpenLaneLease(OpenLaneLeaseRequest) returns (LaneLeaseGrant) {}
+
+  // RenewLaneLease renews a lane lease and, if asked, grants the next stretch of positions.
+  // A lease that is closed is answered with closed set, not an error, and the holder opens a new one.
+  rpc RenewLaneLease(RenewLaneLeaseRequest) returns (RenewLaneLeaseResponse) {}
+
+  // ReleaseLaneLease closes a lane lease cleanly and records the highest position its holder gave out that may carry a record (positions at the top that came back unwritten are left out).
+  rpc ReleaseLaneLease(ReleaseLaneLeaseRequest) returns (ReleaseLaneLeaseResponse) {}
 
   // GetBestBlockHeader retrieves the header of the current best block.
   rpc GetBestBlockHeader(google.protobuf.Empty) returns (GetBlockHeaderResponse) {}
@@ -360,12 +385,6 @@ message GetBlockHeadersResponse {
   repeated bytes metas = 2;         // List of serialized metadata
 }
 
-// GetBlockHeadersFromTillRequest requests headers between two blocks.
-message GetBlockHeadersFromTillRequest {
-  bytes startHash = 1;  // Starting block hash
-  bytes endHash = 2;    // Ending block hash
-}
-
 // GetBlockHeadersFromHeightRequest requests headers starting from a height.
 message GetBlockHeadersFromHeightRequest {
   uint32 startHeight = 1;  // Starting height
@@ -376,6 +395,26 @@ message GetBlockHeadersFromHeightRequest {
 message GetBlockHeadersFromHeightResponse {
   repeated bytes blockHeaders = 1;  // List of serialized block headers
   repeated bytes metas = 2;         // List of serialized metadata
+}
+
+// BlocksBetterThanRequest requests the valid blocks that sort better than a key in the best-tip order.
+message BlocksBetterThanRequest {
+  bytes after = 1;       // Serialised model.BestTipKey: return blocks that sort better than it
+  bytes from = 2;        // Optional serialised model.BestTipKey: also return blocks at or above it
+  uint32 minHeight = 3;  // Skip blocks below this height
+  uint32 limit = 4;      // Maximum number of blocks to return
+}
+
+// BlocksBetterThanResponse contains the blocks, worst first.
+message BlocksBetterThanResponse {
+  repeated bytes blockHeaders = 1;  // List of serialized block headers
+  repeated bytes metas = 2;         // List of serialized metadata
+  bool more = 3;                    // More blocks sort better than the last one returned
+}
+
+// ClearBestTipLowWaterRequest names the low-water mark bytes the caller read.
+message ClearBestTipLowWaterRequest {
+  bytes expected = 1;  // The mark is deleted only if it still holds these bytes
 }
 
 // GetBlockHeadersByHeightRequest requests headers between two heights.
@@ -474,6 +513,7 @@ message GetBlockHeaderResponse {
   bool invalid = 13;          // Validity status
   google.protobuf.Timestamp processed_at = 14; // Timestamp when block was processed
   uint32 median_time_past = 15; // Median Time Past (MTP) - median of last 11 block timestamps (BIP113)
+  uint64 mined_set_generation = 16; // Bumped by every write that clears mined_set; SetBlockMinedSet compares against it
 }
 
 // CheckBlockIsCurrentChainResponse indicates if blocks are in the main chain.
@@ -579,19 +619,6 @@ message GetHashOfAncestorBlockRequest {
   uint32 depth = 2;   // Number of generations to go back
 }
 
-// GetLatestBlockHeaderFromBlockLocatorRequest
-message GetLatestBlockHeaderFromBlockLocatorRequest {
-  bytes bestBlockHash = 1;                // Best block hash
-  repeated bytes blockLocatorHashes = 2;  // Block locator hashes
-}
-
-// GetBlockHeadersFromOldestRequest retrieves block headers starting from the oldest block.
-message GetBlockHeadersFromOldestRequest {
-  bytes chainTipHash = 1;     // Chain tip hash
-  bytes targetHash = 2;       // Target block hash
-  uint64 numberOfHeaders = 3; // Maximum number of hashes to return
-}
-
 // GetHashOfAncestorBlockResponse contains an ancestor block hash.
 message GetHashOfAncestorBlockResponse {
   bytes hash = 1;  // Ancestor block hash
@@ -611,6 +638,12 @@ message GetNextWorkRequiredResponse {
 // SetBlockMinedSetRequest marks a block as mined.
 message SetBlockMinedSetRequest {
   bytes blockHash = 1;  // Hash of the mined block
+  // The block's mined_set generation (GetBlockHeaderResponse.mined_set_generation)
+  // when the caller's tagging run started. Every writer that clears mined_set bumps
+  // it, so the write is refused with ERR_STATE_ERROR if it has changed since.
+  // Absent means a caller that predates the field: the write is unconditional, as
+  // it was before.
+  optional uint64 mined_set_generation = 2;
 }
 
 message ClearBlockMinedSetRequest {
@@ -810,6 +843,12 @@ message PeerRegistryInfo {
 
   // Wire-protocol-only fields. Absent (nil) for libp2p peers.
   LegacyPeerInfo legacy = 46;
+
+  // Raw height the peer advertised, before the unvalidated-lead cap that
+  // produces `height`. Telemetry only: `height` remains the value sync
+  // decisions read. While this node catches up the two differ, and reporting
+  // only the capped one makes every peer appear to sit at local+max_lead.
+  uint32 advertised_height = 47;
 }
 
 // RegisterPeerRequest registers or updates a peer in the centralized registry.
@@ -1131,6 +1170,7 @@ message AcquireBlobDeletionBatchRequest {
   uint32 height = 1;
   int32 limit = 2;
   int32 lock_timeout_seconds = 3;  // Optional: how long to hold the lock (default: 300s)
+  repeated int32 exclude_store_types = 4;  // Optional: store types to leave out of the batch
 }
 
 message AcquireBlobDeletionBatchResponse {
@@ -1163,4 +1203,49 @@ message LegacyPeerInfo {
   int32 starting_height = 6;                    // Peer height at handshake
   bool is_sync_peer = 7;                        // The legacy sync manager selected this peer
   google.protobuf.Timestamp time_connected = 8; // When the wire connection opened
+}
+
+// OpenLaneLeaseRequest asks for a lease on a free lane.
+message OpenLaneLeaseRequest {
+  string holder = 1;  // Names the process asking; recorded with the lease and its grants
+}
+
+// LaneLeaseGrant is a new lease and its first grant.
+message LaneLeaseGrant {
+  bytes lease_id = 1;  // 16 random bytes naming the lease
+  uint32 lane = 2;
+  uint64 first = 3;    // First position, inclusive
+  uint64 last = 4;     // Last position, inclusive
+}
+
+// RenewLaneLeaseRequest renews a lease, reports the holder's rate and may ask for the next grant.
+message RenewLaneLeaseRequest {
+  bytes lease_id = 1;
+  uint32 lane = 2;
+  uint64 rate = 3;                // Positions taken per second, as the holder measured it
+  bool want_grant = 4;            // Asks for the next grant
+  uint64 settles_first = 5;       // With want_grant: first position of the oldest grant the holder has left and not yet reported; 0 for none
+  uint64 settles_last_taken = 6;  // Its final number: its last position if used up, else the highest taken, lowered past positions at the top that came back unwritten. 0 with settles_first set when every position the grant gave out came back
+}
+
+// RenewLaneLeaseResponse answers a renewal. closed means the lease is closed and nothing was recorded.
+message RenewLaneLeaseResponse {
+  bool closed = 1;
+  bool granted = 2;  // first and last name a new grant
+  uint64 first = 3;
+  uint64 last = 4;
+}
+
+// ReleaseLaneLeaseRequest ends a lease cleanly.
+message ReleaseLaneLeaseRequest {
+  bytes lease_id = 1;
+  uint32 lane = 2;
+  uint64 last_taken = 3;          // Highest position this lease gave out that may carry a record: positions at the top that came back unwritten are left out; 0 when this lease gave none out or every one of them came back
+  uint64 settles_first = 4;
+  uint64 settles_last_taken = 5;
+}
+
+// ReleaseLaneLeaseResponse answers a release.
+message ReleaseLaneLeaseResponse {
+  bool already_closed = 1;  // The lease was closed before this release
 }

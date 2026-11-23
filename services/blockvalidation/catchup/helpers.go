@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/go-chaincfg"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/ulogger"
@@ -42,6 +43,7 @@ func ValidateBlockHeaderBytes(headerBytes []byte) error {
 //
 // Parameters:
 //   - headerBytes: Raw header bytes to parse
+//   - params: Chain parameters whose proof-of-work limit bounds each declared target (nil: no bound)
 //
 // Returns:
 //   - []*model.BlockHeader: Successfully parsed headers (nil if error)
@@ -49,7 +51,7 @@ func ValidateBlockHeaderBytes(headerBytes []byte) error {
 //
 // Returns immediately on first error to simplify debugging.
 // Validates proof of work, merkle root, and timestamp for each header.
-func ParseBlockHeaders(headerBytes []byte) ([]*model.BlockHeader, error) {
+func ParseBlockHeaders(headerBytes []byte, params *chaincfg.Params) ([]*model.BlockHeader, error) {
 	if len(headerBytes) == 0 {
 		return nil, nil
 	}
@@ -71,7 +73,7 @@ func ParseBlockHeaders(headerBytes []byte) ([]*model.BlockHeader, error) {
 		}
 
 		// Perform basic header validation
-		if err = ValidateHeaderProofOfWork(header); err != nil {
+		if err = ValidateHeaderProofOfWork(header, params); err != nil {
 			// Return immediately on first validation error
 			return nil, err
 		}
@@ -124,6 +126,7 @@ func BuildBlockLocatorString(locatorHashes []*chainhash.Hash) string {
 //   - logger: Logger for retry attempts
 //   - url: URL to fetch headers from
 //   - maxRetries: Maximum retry attempts
+//   - maxBytes: Cap on the response body, enforced before it is read into memory
 //
 // Returns:
 //   - []byte: Raw header bytes
@@ -131,9 +134,16 @@ func BuildBlockLocatorString(locatorHashes []*chainhash.Hash) string {
 //
 // Uses exponential backoff with 2x factor, max 30s between retries.
 // Categorizes errors (timeout, connection refused, generic network) for proper handling.
-func FetchHeadersWithRetry(ctx context.Context, logger ulogger.Logger, url string, maxRetries int) ([]byte, error) {
+//
+// maxBytes bounds the read: this sits inside a retry.Retry loop, so an unbounded
+// util.DoHTTPRequest would give a hostile peer several unbounded reads per catchup
+// iteration (bitcoin-sv/teranode#4742). Unlike a block, a header response has a
+// caller-known exact size - the caller requests a fixed count and each header is a
+// fixed model.BlockHeaderSize bytes - so, unlike the block-fetch paths, a byte cap is
+// the right fit here and needs no invented constant.
+func FetchHeadersWithRetry(ctx context.Context, logger ulogger.Logger, url string, maxRetries int, maxBytes int64) ([]byte, error) {
 	return retry.Retry(ctx, logger, func() ([]byte, error) {
-		headerBytes, err := util.DoHTTPRequest(ctx, url)
+		headerBytes, err := util.DoHTTPRequestBounded(ctx, url, maxBytes)
 		if err != nil {
 			// If already a typed error, return as-is
 			var tErr *errors.Error

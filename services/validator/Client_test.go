@@ -261,12 +261,14 @@ func TestValidateWithOptions_HTTPFallback(t *testing.T) {
 	client, server := setupTestClient(t, mockClient)
 	defer server.Close()
 
-	// Create test transaction and options
+	// Create test transaction and options. Height 0 is what every production
+	// caller that can reach the fallback actually passes; a non-zero height is
+	// now refused before transmission (see nonDefaultValidationOptions).
 	tx := createTestTransaction(t)
 	opts := NewDefaultOptions()
 
 	// Call the method under test
-	result, err := client.ValidateWithOptions(context.Background(), tx, 100, opts)
+	result, err := client.ValidateWithOptions(context.Background(), tx, 0, opts)
 
 	// Assert results
 	assert.NoError(t, err) // HTTP fallback should succeed
@@ -299,8 +301,9 @@ func TestHandleValidationError_HTTPFallbackSuccess(t *testing.T) {
 	tx := createTestTransaction(t)
 	opts := NewDefaultOptions()
 
-	// Call the method under test
-	resultErr := client.handleValidationError(context.Background(), tx, 100, opts, originalErr)
+	// Call the method under test. Height 0: a caller-asserted height cannot be
+	// sent over the HTTP fallback any more.
+	resultErr := client.handleValidationError(context.Background(), tx, 0, opts, originalErr)
 
 	// The HTTP fallback should succeed and return nil error
 	assert.NoError(t, resultErr)
@@ -317,8 +320,9 @@ func TestHandleValidationError_HTTPServerFail(t *testing.T) {
 	tx := createTestTransaction(t)
 	opts := NewDefaultOptions()
 
-	// Call the method under test
-	resultErr := client.handleValidationError(context.Background(), tx, 100, opts, originalErr)
+	// Call the method under test. Height 0 so the error under test is the HTTP
+	// failure, not the client-side option refusal.
+	resultErr := client.handleValidationError(context.Background(), tx, 0, opts, originalErr)
 
 	// The method should return an error due to HTTP failure
 	assert.Error(t, resultErr)
@@ -350,7 +354,7 @@ func TestHandleValidationError_HTTPFallbackSurfacesVerdict(t *testing.T) {
 		validatorHTTPAddr: validatorHTTPAddr,
 	}
 
-	resultErr := client.handleValidationError(context.Background(), createTestTransaction(t), 100, NewDefaultOptions(),
+	resultErr := client.handleValidationError(context.Background(), createTestTransaction(t), 0, NewDefaultOptions(),
 		status.Error(codes.ResourceExhausted, "message too large"))
 
 	require.Error(t, resultErr)
@@ -442,9 +446,18 @@ func TestBatchValidation(t *testing.T) {
 }
 
 func TestBatchValidation_ResourceExhausted(t *testing.T) {
-	// Create mock client that returns ResourceExhausted error
+	// Create mock client that returns ResourceExhausted error.
+	//
+	// The unary stub reports the same oversize, which is what keeps this test on
+	// the HTTP arm: an oversized batch is now retried item by item over gRPC
+	// first, and only an item that is ALSO too large on its own reaches the HTTP
+	// fallback. The gRPC arm is covered by
+	// TestBatchOversized_NonDefaultOptionsRetriedOverGRPC.
 	mockClient := &MockValidatorAPIClient{
 		validateBatchFunc: func(ctx context.Context, in *validator_api.ValidateTransactionBatchRequest) (*validator_api.ValidateTransactionBatchResponse, error) {
+			return nil, status.Error(codes.ResourceExhausted, "message too large")
+		},
+		validateTxFunc: func(ctx context.Context, in *validator_api.ValidateTransactionRequest) (*validator_api.ValidateTransactionResponse, error) {
 			return nil, status.Error(codes.ResourceExhausted, "message too large")
 		},
 	}
@@ -459,12 +472,17 @@ func TestBatchValidation_ResourceExhausted(t *testing.T) {
 	txBytes := tx.Bytes()
 
 	// Create test batch with valid transaction data sharing one completion group.
+	// Height 0 and default options: the batch fallback funnels through the same
+	// validateTransactionViaHTTP as the unary one, which refuses a caller-asserted
+	// height before sending. The refusal itself is pinned by
+	// TestValidateTransactionViaHTTP_RefusesNonDefaultOptions; this test's subject
+	// is the batch plumbing succeeding, which is coverage nothing else provides.
 	group := completion.NewGroup(1)
 	batch := []*batchItem{
 		{
 			req: &validator_api.ValidateTransactionRequest{
 				TransactionData:      txBytes,
-				BlockHeight:          100,
+				BlockHeight:          0,
 				SkipUtxoCreation:     boolPtr(false),
 				AddTxToBlockAssembly: boolPtr(true),
 				SkipPolicyChecks:     boolPtr(false),
@@ -535,8 +553,13 @@ func TestBatchValidation_DispatcherPanic(t *testing.T) {
 	require.NotPanics(t, func() { client.sendBatchToValidator(context.Background(), batch) })
 
 	require.NoError(t, group.Wait(context.Background(), 0))
-	require.Error(t, batch[0].result.err)
-	require.Error(t, batch[1].result.err)
+
+	// The sweep is shared (util.SignalBatchPanic); the error text it builds must
+	// stay "panic in <fnName>: <recovered>", as the hand-rolled sweep produced.
+	for i, item := range batch {
+		require.Error(t, item.result.err, "batch item %d must be completed, not stranded", i)
+		require.Contains(t, item.result.err.Error(), "panic in sendBatchToValidator")
+	}
 }
 
 // Helper for creating bool pointers

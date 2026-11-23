@@ -17,7 +17,8 @@ const (
 	TxID FieldName = "txID"
 	// Inputs represents the transaction inputs data
 	Inputs FieldName = "inputs"
-	// Outputs represents the transaction outputs data
+	// Outputs populates Data.Tx with the parent outputs. Data.Tx may be a partial
+	// projection: do not hash or serialize it as a complete transaction.
 	Outputs FieldName = "outputs"
 	// External indicates external data associated with the transaction
 	External FieldName = "external"
@@ -69,6 +70,9 @@ const (
 	Reassignments FieldName = "reassignments"
 	// DeleteAtHeight specifies the block height at which the record should be deleted
 	DeleteAtHeight FieldName = "deleteAtHeight"
+	// DAHVersion counts the writes of DeleteAtHeight on a master record. Every writer bumps it with the write,
+	// so a child page write that carries an older version can be refused.
+	DAHVersion FieldName = "dahVer"
 	// CreatedAt is the timestamp when the unmined transaction was first added to the store
 	CreatedAt FieldName = "createdAt"
 	// UnminedSince is the block height when an unmined transaction was first stored.
@@ -82,6 +86,31 @@ const (
 	PreserveUntil FieldName = "preserveUntil"
 	// DeletedChildren map of child records that have been deleted
 	DeletedChildren FieldName = "deletedChildren"
+	// LanePosition is the record's lane position (util/lane): written once at
+	// create, never updated. Absent on a record created with none (the lane
+	// migration off, before it existed, or a tool that opens its own store), and
+	// on utxoset unreadable once the row carrying it has aged out; see
+	// meta.Data.LanePosition. At shadow the daemon refuses unsupported stores.
+	// Not part of utxo.MetaFields: a caller names it.
+	LanePosition FieldName = "lanePos"
+	// SpendingLanePositions is the slot lane-position bin: a byte string on the
+	// master or page record that holds the outputs, eight little-endian bytes
+	// per output in output order, beside the utxos bin, zero for an output with
+	// no position. A fresh Lua or native spend that carries the spender's lane
+	// position writes it in the same record write as the slot's spending data,
+	// growing the bin to cover that output; the expression operate writes no bin.
+	// The slot's binary spending-data layout is unchanged.
+	// It has the spendHeights bin's shape. See stores/utxo/aerospike/lane_bins.go.
+	SpendingLanePositions FieldName = "spendLanePos"
+	// ParentLanePositions is the child's copy of its parents' lane positions: a
+	// list on the master record, one signed 64-bit lane position per distinct
+	// parent in TxInpoints parent order. A create with lane positions on writes
+	// it when the list it is given is not empty, every entry is a valid position
+	// and it holds at most maxParentLanePositions (about 116,500); a longer list
+	// is left off and its parents count as not carried. The store does not check
+	// the list's length against the parent count: the caller builds one position
+	// per distinct parent.
+	ParentLanePositions FieldName = "parentLanePos"
 )
 
 // String returns the string representation of the FieldName.

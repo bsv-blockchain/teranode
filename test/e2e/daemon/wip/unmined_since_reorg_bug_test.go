@@ -117,8 +117,11 @@ func runReorgScenario(t *testing.T, storeType, scenario string, expectedBefore, 
 	// Step 1: Mine to height > 1000 (required for large reorg path)
 	t.Log("Step 1: Mining to height > 1000...")
 	var forkPointHeight uint32
-	_, err := td.CallRPC(ctx, "generate", []any{1005})
-	require.NoError(t, err)
+	// In chunks: a single generate of 1005 blocks outlasts the 30s RPC timeout on Aerospike.
+	for range 5 {
+		_, err := td.CallRPC(ctx, "generate", []any{201})
+		require.NoError(t, err)
+	}
 
 	currentHeight, _, err := td.BlockchainClient.GetBestHeightAndTime(ctx)
 	require.NoError(t, err)
@@ -166,7 +169,7 @@ func testSideToMain(t *testing.T, td *daemon.TestDaemon, ctx context.Context, te
 	t.Logf("Mining %d blocks on main chain (without test tx)...", testCoinbaseMaturity+1)
 	for i := 0; i < testCoinbaseMaturity+1; i++ {
 		_, mainBlock := createTestBlockWithCorrectSubsidy(t, td, forkPointBlock, uint32(10000+i), nil)
-		require.NoError(t, td.BlockValidationClient.ProcessBlock(ctx, mainBlock, mainBlock.Height, "", "legacy", 0))
+		require.NoError(t, td.BlockValidationClient.ProcessBlock(ctx, mainBlock, mainBlock.Height, "", "legacy", 0, false))
 		forkPointBlock = mainBlock
 	}
 
@@ -183,7 +186,7 @@ func testSideToMain(t *testing.T, td *daemon.TestDaemon, ctx context.Context, te
 	td.WaitForBlockAssemblyToProcessTx(t, testTxHash.String())
 
 	_, sideBlock1 := createTestBlockWithCorrectSubsidy(t, td, forkPointBlock, uint32(20000), []*bt.Tx{testTx})
-	require.NoError(t, td.BlockValidationClient.ProcessBlock(ctx, sideBlock1, sideBlock1.Height, "", "legacy", 0))
+	require.NoError(t, td.BlockValidationClient.ProcessBlock(ctx, sideBlock1, sideBlock1.Height, "", "legacy", 0, false))
 
 	// Wait for mined_set background job to complete
 	td.WaitForBlockBeingMined(t, sideBlock1)
@@ -203,18 +206,26 @@ func testSideToMain(t *testing.T, td *daemon.TestDaemon, ctx context.Context, te
 	prevBlock := sideBlock1
 	for i := 1; i < testCoinbaseMaturity+2; i++ {
 		_, sideBlock := createTestBlockWithCorrectSubsidy(t, td, prevBlock, uint32(20000+i), nil)
-		require.NoError(t, td.BlockValidationClient.ProcessBlock(ctx, sideBlock, sideBlock.Height, "", "legacy", 0))
+		require.NoError(t, td.BlockValidationClient.ProcessBlock(ctx, sideBlock, sideBlock.Height, "", "legacy", 0, false))
 		prevBlock = sideBlock
 	}
 
 	// Wait for reorg to complete - verify we're at expected height with expected block
 	td.WaitForBlockHeight(t, prevBlock, 30*time.Second)
 
-	// Verify AFTER reorg
-	meta, err = td.UtxoStore.Get(ctx, testTxHash, fields.UnminedSince, fields.BlockIDs)
-	require.NoError(t, err)
+	// Verify AFTER reorg. Block validation clears unmined_since for the side chain's blocks in
+	// its mined_set background job, after block assembly reaches the height, so wait for it.
+	require.Eventually(t, func() bool {
+		if meta, err = td.UtxoStore.Get(ctx, testTxHash, fields.UnminedSince, fields.BlockIDs); err != nil {
+			return false
+		}
 
-	onChain, err = td.BlockchainClient.CheckBlockIsInCurrentChain(ctx, meta.BlockIDs)
+		if onChain, err = td.BlockchainClient.CheckBlockIsInCurrentChain(ctx, meta.BlockIDs); err != nil {
+			return false
+		}
+
+		return onChain && meta.UnminedSince == 0
+	}, 30*time.Second, 100*time.Millisecond, "the side chain's tx is marked mined after it becomes the main chain")
 	require.NoError(t, err)
 
 	t.Logf("AFTER reorg - unmined_since: %d, onChain: %t, blockIDs: %v", meta.UnminedSince, onChain, meta.BlockIDs)
@@ -277,7 +288,7 @@ func testMainToSideAfterSideToMain(t *testing.T, td *daemon.TestDaemon, ctx cont
 	prevBlock := parentBlock
 	for i := 0; i < testCoinbaseMaturity+1; i++ {
 		_, sideBlock := createTestBlockWithCorrectSubsidy(t, td, prevBlock, uint32(30000+i), nil)
-		require.NoError(t, td.BlockValidationClient.ProcessBlock(ctx, sideBlock, sideBlock.Height, "", "legacy", 0))
+		require.NoError(t, td.BlockValidationClient.ProcessBlock(ctx, sideBlock, sideBlock.Height, "", "legacy", 0, false))
 		prevBlock = sideBlock
 		t.Logf("Side chain block %d/%d mined at height %d", i+1, testCoinbaseMaturity+1, sideBlock.Height)
 	}
@@ -285,12 +296,21 @@ func testMainToSideAfterSideToMain(t *testing.T, td *daemon.TestDaemon, ctx cont
 	// Wait for reorg to complete - verify we're at expected height
 	td.WaitForBlockHeight(t, prevBlock, 30*time.Second)
 
-	// Verify AFTER reorg - tx now on orphaned side chain
-	meta, err = td.UtxoStore.Get(ctx, testTx2Hash, fields.UnminedSince, fields.BlockIDs)
+	// Verify AFTER reorg - tx now on orphaned side chain. Block assembly marks it while it
+	// finishes the reorg, so wait for the mark.
+	require.Eventually(t, func() bool {
+		if meta, err = td.UtxoStore.Get(ctx, testTx2Hash, fields.UnminedSince, fields.BlockIDs); err != nil {
+			return false
+		}
+
+		if onChain, err = td.BlockchainClient.CheckBlockIsInCurrentChain(ctx, meta.BlockIDs); err != nil {
+			return false
+		}
+
+		return !onChain && meta.UnminedSince != 0
+	}, 30*time.Second, 100*time.Millisecond, "the orphaned tx is marked unmined")
 	require.NoError(t, err)
 
-	onChain, err = td.BlockchainClient.CheckBlockIsInCurrentChain(ctx, meta.BlockIDs)
-	require.NoError(t, err)
 	t.Logf("AFTER reorg - unmined_since: %d, onChain: %t, blockIDs: %v", meta.UnminedSince, onChain, meta.BlockIDs)
 
 	assert.False(t, onChain, "Transaction should NOT be on main chain after reorg (orphaned)")

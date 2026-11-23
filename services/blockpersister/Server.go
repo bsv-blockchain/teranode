@@ -19,11 +19,13 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
+	"net"
 	"net/http"
 	"strconv"
 	"sync"
 	"time"
 
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
@@ -210,6 +212,18 @@ func (u *Server) getNextBlockToProcess(ctx context.Context) (*model.Block, error
 	return blocks[0], nil
 }
 
+// sleepUnlessDone waits PersistSleep, or until ctx is done. The processing loop checks ctx at the
+// top of every iteration, so a shutdown stops it at once instead of after the sleep.
+func (u *Server) sleepUnlessDone(ctx context.Context) {
+	timer := time.NewTimer(u.settings.BlockPersister.PersistSleep)
+	defer timer.Stop()
+
+	select {
+	case <-ctx.Done():
+	case <-timer.C:
+	}
+}
+
 // Start initializes and begins the block persister service operations.
 //
 // This method starts the main processing loop and sets up HTTP services if configured.
@@ -269,7 +283,14 @@ func (u *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 
 		u.logger.Infof("[BlockPersister] HTTP server listening on %s", address)
 
-		blobStoreServer, err := blob.NewHTTPBlobServer(u.logger, blockStoreURL, options.WithHashPrefix(hashPrefix))
+		authToken := u.settings.BlockPersister.HTTPAuthToken
+		if authToken == "" {
+			u.logger.Warnf("[BlockPersister] HTTP blob API is read-only: blockpersister_httpAuthToken is not set")
+		} else if !isLoopbackListener(listener) {
+			u.logger.Warnf("[BlockPersister] HTTP blob API listens on %s with no TLS: the auth token crosses the network in the clear", listener.Addr())
+		}
+
+		blobStoreServer, err := blob.NewHTTPBlobServer(u.logger, blockStoreURL, authToken, options.WithHashPrefix(hashPrefix))
 		if err != nil {
 			return errors.NewServiceError("failed to create blob store server", err)
 		}
@@ -344,13 +365,13 @@ func (u *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 				block, err := u.getNextBlockToProcess(ctx)
 				if err != nil {
 					u.logger.Errorf("[BlockPersister] Error getting next block to process: %v", err)
-					time.Sleep(u.settings.BlockPersister.PersistSleep) // Sleep after error
+					u.sleepUnlessDone(ctx) // Sleep after error
 
 					continue
 				}
 
 				if block == nil {
-					time.Sleep(u.settings.BlockPersister.PersistSleep) // Sleep when no blocks available
+					u.sleepUnlessDone(ctx) // Sleep when no blocks available
 
 					continue
 				}
@@ -363,18 +384,19 @@ func (u *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 				blockBytes, err := block.Bytes()
 				if err != nil {
 					u.logger.Errorf("[BlockPersister] Failed to get block bytes: %v", err)
-					time.Sleep(u.settings.BlockPersister.PersistSleep)
+					u.sleepUnlessDone(ctx)
 
 					continue
 				}
 
 				// Process the block
 				if err = u.persistBlock(ctx, block.Hash(), blockBytes); err != nil {
-					if errors.Is(err, errors.NewBlobAlreadyExistsError("")) {
+					if u.blockAlreadyPersisted(ctx, block.Hash(), err) {
 						// We log the error but continue processing
 						u.logger.Infof("[BlockPersister] Block %s already exists, skipping...", block.String())
 					} else {
 						u.logger.Errorf("[BlockPersister] Failed to persist block %s: %v", block.String(), err)
+						u.sleepUnlessDone(ctx) // The next attempt is the same block
 
 						continue
 					}
@@ -383,6 +405,7 @@ func (u *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 				// Mark block as persisted in database
 				if err = u.blockchainClient.SetBlockPersistedAt(ctx, block.Hash()); err != nil {
 					u.logger.Errorf("[BlockPersister] Failed to mark block %s as persisted: %v", block.String(), err)
+					u.sleepUnlessDone(ctx)
 
 					continue
 				}
@@ -450,4 +473,31 @@ func (u *Server) Stop(_ context.Context) error {
 	// flushing store, Kafka producer, or batcher that would need draining here.
 	// If one is ever added, drain it in this method (see DC11/DC15).
 	return nil
+}
+
+// isLoopbackListener reports whether a listener is bound to a loopback address. It looks at the
+// address actually bound rather than the configured string, so "localhost:" or a hostname that
+// resolves to loopback is recognised, and an unspecified address such as ":8083" is not.
+func isLoopbackListener(listener net.Listener) bool {
+	tcpAddr, ok := listener.Addr().(*net.TCPAddr)
+
+	return ok && tcpAddr.IP.IsLoopback()
+}
+
+// blockAlreadyPersisted reports whether err, returned by persistBlock, means an earlier attempt
+// already persisted the block. BLOB_EXISTS alone is not enough, because it can come from any file
+// an attempt writes, so the block's files are checked as persistBlock checks them.
+func (u *Server) blockAlreadyPersisted(ctx context.Context, hash *chainhash.Hash, err error) bool {
+	if !errors.Is(err, errors.ErrBlobAlreadyExists) {
+		return false
+	}
+
+	persisted, checkErr := u.blockPersisted(ctx, hash)
+	if checkErr != nil {
+		u.logger.Warnf("[BlockPersister] error checking for the files of block %s: %v", hash.String(), checkErr)
+
+		return false
+	}
+
+	return persisted
 }

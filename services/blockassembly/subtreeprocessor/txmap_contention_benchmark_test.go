@@ -12,7 +12,6 @@ import (
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
-	txmap "github.com/bsv-blockchain/go-tx-map"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	blob_memory "github.com/bsv-blockchain/teranode/stores/blob/memory"
 	"github.com/bsv-blockchain/teranode/stores/blob/options"
@@ -27,24 +26,19 @@ import (
 //
 //   - Phase A (CreateTransactionMap): many concurrent per-subtree goroutines,
 //     each spawning one goroutine per non-empty bucket, all contending on the
-//     1024 bucket mutexes of a shared SplitSwissMap.
-//   - Phase B (processRemainderTxHashes): NumCPU readers probing the same map
-//     via Exists, each taking the bucket RWMutex read lock although the map is
-//     read-only for the whole phase.
+//     bucket mutexes of a shared set.
+//   - Phase B (processRemainderTxHashes): NumCPU readers probing the same set
+//     via Exists, which is read-only for the whole phase.
 //
-// Baselines are recorded before the contention fix and compared after; see the
-// PR description for the numbers.
-
-// contentionBenchBuckets matches the bucket count used by the production
-// txMapPool (NewSplitSwissMap(1024, ...) in CreateTransactionMap).
-const contentionBenchBuckets = 1024
+// The set is a SortedHashSet: its partitions are chosen from the capacity, so the
+// per-subtree batches are bucketed with the set's own Partition.
 
 // benchConcurrentSubtreeReads mirrors the blockassembly_subtreeProcessorConcurrentReads
 // default that bounds the per-subtree goroutines in CreateTransactionMap.
 const benchConcurrentSubtreeReads = 375
 
 // genBenchHashes deterministically generates n pseudo-random 32-byte hashes.
-// PCG is ~50x faster than hashing real data and the SplitSwissMap only cares
+// PCG is ~50x faster than hashing real data and the SortedHashSet only cares
 // about key distribution, which PCG output matches.
 func genBenchHashes(n int, seed uint64) []chainhash.Hash {
 	rng := rand.New(rand.NewPCG(seed, seed^0x9e3779b97f4a7c15))
@@ -61,16 +55,16 @@ func genBenchHashes(n int, seed uint64) []chainhash.Hash {
 }
 
 // bucketizeBySubtree splits hashes into numSubtrees groups, each pre-bucketed
-// per Bytes2Uint16Buckets — the shape DeserializeHashesFromReaderIntoBuckets
-// hands to the insert stage in CreateTransactionMap.
-func bucketizeBySubtree(hashes []chainhash.Hash, numSubtrees int) []map[uint16][]chainhash.Hash {
+// per partition of m — the shape deserializeHashesIntoBuckets hands to the insert
+// stage in CreateTransactionMap.
+func bucketizeBySubtree(hashes []chainhash.Hash, numSubtrees int, m *SortedHashSet) []map[uint16][]chainhash.Hash {
 	perSubtree := len(hashes) / numSubtrees
 	out := make([]map[uint16][]chainhash.Hash, numSubtrees)
 
 	for s := range out {
-		buckets := make(map[uint16][]chainhash.Hash, contentionBenchBuckets)
+		buckets := make(map[uint16][]chainhash.Hash, m.Partitions())
 		for _, h := range hashes[s*perSubtree : (s+1)*perSubtree] {
-			bucket := txmap.Bytes2Uint16Buckets(h, contentionBenchBuckets)
+			bucket := uint16(m.Partition(h))
 			buckets[bucket] = append(buckets[bucket], h)
 		}
 
@@ -80,14 +74,14 @@ func bucketizeBySubtree(hashes []chainhash.Hash, numSubtrees int) []map[uint16][
 	return out
 }
 
-// fillMapUncontended prefills m with hashes using one goroutine per bucket
+// fillSetUncontended prefills m with hashes using one goroutine per partition
 // (setup helper, not the measured path).
-func fillMapUncontended(b *testing.B, m *SplitSwissMap, hashes []chainhash.Hash) {
+func fillSetUncontended(b *testing.B, m *SortedHashSet, hashes []chainhash.Hash) {
 	b.Helper()
 
-	grouped := make(map[uint16][]chainhash.Hash, contentionBenchBuckets)
+	grouped := make(map[int][]chainhash.Hash, m.Partitions())
 	for _, h := range hashes {
-		bucket := txmap.Bytes2Uint16Buckets(h, contentionBenchBuckets)
+		bucket := m.Partition(h)
 		grouped[bucket] = append(grouped[bucket], h)
 	}
 
@@ -107,13 +101,14 @@ func fillMapUncontended(b *testing.B, m *SplitSwissMap, hashes []chainhash.Hash)
 // exists today: per-subtree goroutines (bounded like SubtreeProcessorConcurrentReads)
 // each spawning one PutMultiBucket goroutine per non-empty bucket of a shared map.
 func benchmarkPhaseAInsert(b *testing.B, totalTx, numSubtrees int) {
-	subtreeBuckets := bucketizeBySubtree(genBenchHashes(totalTx, 1), numSubtrees)
-	m := NewSplitSwissMap(contentionBenchBuckets, totalTx)
+	subtreeBuckets := bucketizeBySubtree(genBenchHashes(totalTx, 1), numSubtrees, NewSortedHashSet(totalTx))
+
+	var m *SortedHashSet
 
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
-		m.Clear()
+		m = NewSortedHashSet(totalTx)
 
 		g := errgroup.Group{}
 		g.SetLimit(benchConcurrentSubtreeReads)
@@ -123,7 +118,7 @@ func benchmarkPhaseAInsert(b *testing.B, totalTx, numSubtrees int) {
 				bucketG := errgroup.Group{}
 				for bucket, hashes := range buckets {
 					bucketG.Go(func() error {
-						return m.PutMultiBucket(bucket, hashes)
+						return m.PutMultiBucket(int(bucket), hashes)
 					})
 				}
 
@@ -132,6 +127,10 @@ func benchmarkPhaseAInsert(b *testing.B, totalTx, numSubtrees int) {
 		}
 
 		if err := g.Wait(); err != nil {
+			b.Fatal(err)
+		}
+
+		if err := m.Freeze(runtime.GOMAXPROCS(0)); err != nil {
 			b.Fatal(err)
 		}
 	}
@@ -172,13 +171,14 @@ func BenchmarkPhaseAInsertCurrent(b *testing.B) {
 // benchmarkPhaseAInsertOwners drives the same input through the bucketInserter:
 // per-subtree submitter goroutines, one exclusive writer per bucket stripe.
 func benchmarkPhaseAInsertOwners(b *testing.B, totalTx, numSubtrees int) {
-	subtreeBuckets := bucketizeBySubtree(genBenchHashes(totalTx, 1), numSubtrees)
-	m := NewSplitSwissMap(contentionBenchBuckets, totalTx)
+	subtreeBuckets := bucketizeBySubtree(genBenchHashes(totalTx, 1), numSubtrees, NewSortedHashSet(totalTx))
+
+	var m *SortedHashSet
 
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
-		m.Clear()
+		m = NewSortedHashSet(totalTx)
 
 		ins := newBucketInserter(m, runtime.GOMAXPROCS(0))
 
@@ -196,6 +196,10 @@ func benchmarkPhaseAInsertOwners(b *testing.B, totalTx, numSubtrees int) {
 		}
 
 		if err := ins.closeAndWait(); err != nil {
+			b.Fatal(err)
+		}
+
+		if err := m.Freeze(runtime.GOMAXPROCS(0)); err != nil {
 			b.Fatal(err)
 		}
 	}
@@ -221,15 +225,14 @@ func BenchmarkPhaseAInsertOwners(b *testing.B) {
 }
 
 // benchmarkPhaseBExists replicates the processRemainderTxHashes membership scan:
-// all CPUs probing a fully-built (read-only) map, ~50% hit ratio. With frozen
-// set, the map is frozen first so Exists takes the lock-free path.
-func benchmarkPhaseBExists(b *testing.B, totalTx int, frozen bool) {
+// all CPUs probing a fully-built (frozen, read-only) set, ~50% hit ratio.
+func benchmarkPhaseBExists(b *testing.B, totalTx int) {
 	hashes := genBenchHashes(totalTx, 1)
-	m := NewSplitSwissMap(contentionBenchBuckets, totalTx)
-	fillMapUncontended(b, m, hashes)
+	m := NewSortedHashSet(totalTx)
+	fillSetUncontended(b, m, hashes)
 
-	if frozen {
-		m.Freeze()
+	if err := m.Freeze(runtime.GOMAXPROCS(0)); err != nil {
+		b.Fatal(err)
 	}
 
 	// Probe set: half present, half absent, deterministically shuffled.
@@ -260,33 +263,21 @@ func benchmarkPhaseBExists(b *testing.B, totalTx int, frozen bool) {
 	b.ReportMetric(float64(b.N)/b.Elapsed().Seconds(), "ops/s")
 }
 
-func BenchmarkPhaseBExists(b *testing.B) {
-	for _, totalTx := range []int{4_000_000, 16_000_000} {
-		b.Run(fmt.Sprintf("tx=%dM", totalTx/1_000_000), func(b *testing.B) {
-			if totalTx > 4_000_000 && testing.Short() {
-				b.Skip("skipping large Exists benchmark in short mode")
-			}
-
-			benchmarkPhaseBExists(b, totalTx, false)
-		})
-	}
-}
-
 func BenchmarkPhaseBExistsFrozen(b *testing.B) {
-	for _, totalTx := range []int{4_000_000, 16_000_000} {
-		b.Run(fmt.Sprintf("tx=%dM", totalTx/1_000_000), func(b *testing.B) {
+	for _, totalTx := range []int{100_000, 1_000_000, 4_000_000, 16_000_000} {
+		b.Run(fmt.Sprintf("tx=%d", totalTx), func(b *testing.B) {
 			if totalTx > 4_000_000 && testing.Short() {
 				b.Skip("skipping large Exists benchmark in short mode")
 			}
 
-			benchmarkPhaseBExists(b, totalTx, true)
+			benchmarkPhaseBExists(b, totalTx)
 		})
 	}
 }
 
 // BenchmarkCreateTransactionMapE2E drives the real CreateTransactionMap
 // (subtree files in a memory blob store → deserialize → insert) at CI scale,
-// pooled-map reuse across iterations as in production.
+// a fresh set per iteration.
 func BenchmarkCreateTransactionMapE2E(b *testing.B) {
 	const (
 		numSubtrees   = 16

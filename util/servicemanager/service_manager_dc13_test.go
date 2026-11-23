@@ -200,3 +200,38 @@ func TestWait_OriginalErrorMatchableWhenJoinedWithStopError(t *testing.T) {
 	require.True(t, errors.Is(err, startSentinel), "original Wait error identity must be preserved")
 	require.True(t, errors.Is(err, stopSentinel), "Stop error must also be surfaced")
 }
+
+// TestWait_KillSkipsStop: after Kill the services' context is cancelled, Start
+// returns, and Wait returns without calling any service's Stop().
+func TestWait_KillSkipsStop(t *testing.T) {
+	sm := newTestServiceManager(t)
+
+	svc1 := &stubService{}
+	svc2 := &stubService{stopErr: errors.NewProcessingError("must-not-run")}
+
+	require.NoError(t, sm.AddService("svc1", svc1))
+	require.NoError(t, sm.AddService("svc2", svc2))
+
+	sm.Kill()
+
+	require.NoError(t, sm.Wait())
+	require.ErrorIs(t, sm.Ctx.Err(), context.Canceled)
+	require.False(t, svc1.stopCalled.Load(), "Kill must skip svc1.Stop")
+	require.False(t, svc2.stopCalled.Load(), "Kill must skip svc2.Stop")
+}
+
+// TestWait_KillKeepsStartError: a real Start failure is still returned after Kill.
+func TestWait_KillKeepsStartError(t *testing.T) {
+	sm := newTestServiceManager(t)
+
+	startSentinel := errors.NewProcessingError("start-boom")
+	svc := &stubService{startErr: startSentinel}
+
+	require.NoError(t, sm.AddService("svc", svc))
+
+	sm.Kill()
+
+	err := sm.Wait()
+	require.True(t, errors.Is(err, startSentinel), "Wait must surface the Start() error")
+	require.False(t, svc.stopCalled.Load())
+}

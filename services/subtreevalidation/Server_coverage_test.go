@@ -184,7 +184,7 @@ func TestServerNew(t *testing.T) {
 		subtreeConsumer := &mockKafkaConsumer{}
 		txmetaConsumer := &mockKafkaConsumer{}
 
-		server, err := New(common.Ctx, common.Logger, tSettings, subtreeStore, txStore, utxoStore,
+		server, err := New(newCancelCtx(t), common.Logger, tSettings, subtreeStore, txStore, utxoStore,
 			validatorClient, blockchainClient, subtreeConsumer, txmetaConsumer, nil, nil)
 
 		require.Error(t, err)
@@ -211,7 +211,7 @@ func TestServerNew(t *testing.T) {
 		subtreeConsumer := setupMemoryKafkaConsumer(t, "subtrees-topic")
 		txmetaConsumer := setupMemoryKafkaConsumer(t, "txmeta-topic")
 
-		server, err := New(common.Ctx, common.Logger, tSettings, subtreeStore, txStore, utxoStore,
+		server, err := New(newCancelCtx(t), common.Logger, tSettings, subtreeStore, txStore, utxoStore,
 			validatorClient, blockchainClient, subtreeConsumer, txmetaConsumer, nil, nil)
 
 		require.NoError(t, err)
@@ -245,7 +245,7 @@ func TestServerNew(t *testing.T) {
 		subtreeConsumer := setupMemoryKafkaConsumer(t, "subtrees-topic-cache")
 		txmetaConsumer := setupMemoryKafkaConsumer(t, "txmeta-topic-cache")
 
-		server, err := New(common.Ctx, common.Logger, tSettings, subtreeStore, txStore, utxoStore,
+		server, err := New(newCancelCtx(t), common.Logger, tSettings, subtreeStore, txStore, utxoStore,
 			validatorClient, blockchainClient, subtreeConsumer, txmetaConsumer, nil, nil)
 
 		require.NoError(t, err)
@@ -273,7 +273,7 @@ func TestServerNew(t *testing.T) {
 		subtreeConsumer := setupMemoryKafkaConsumer(t, "subtrees-topic-invalid")
 		txmetaConsumer := setupMemoryKafkaConsumer(t, "txmeta-topic-invalid")
 
-		server, err := New(common.Ctx, common.Logger, tSettings, subtreeStore, txStore, utxoStore,
+		server, err := New(newCancelCtx(t), common.Logger, tSettings, subtreeStore, txStore, utxoStore,
 			validatorClient, blockchainClient, subtreeConsumer, txmetaConsumer, nil, nil)
 
 		require.NoError(t, err)
@@ -591,6 +591,38 @@ func TestPublishInvalidSubtree(t *testing.T) {
 		require.True(t, publishCalled) // With nil blockchain client, message should be published
 	})
 
+	t.Run("publishes only in RUNNING", func(t *testing.T) {
+		// IDLE is suppressed: an operator STOP can land while catchup is running.
+		for _, tt := range []struct {
+			state     blockchain.FSMStateType
+			published bool
+		}{
+			{blockchain.FSMStateRUNNING, true},
+			{blockchain.FSMStateCATCHINGBLOCKS, false},
+			{blockchain.FSMStateIDLE, false},
+		} {
+			t.Run(tt.state.String(), func(t *testing.T) {
+				state := tt.state
+				blockchainClient := &blockchain.Mock{}
+				blockchainClient.On("GetFSMCurrentState", mock.Anything).Return(&state, nil)
+
+				publishCalled := false
+				server := &Server{
+					logger:           ulogger.TestLogger{},
+					blockchainClient: blockchainClient,
+					invalidSubtreeKafkaProducer: &mockKafkaAsyncProducer{
+						publishFunc: func(msg *kafka.Message) { publishCalled = true },
+					},
+					invalidSubtreeDeDuplicateMap: expiringmap.New[string, struct{}](time.Minute),
+				}
+				defer server.invalidSubtreeDeDuplicateMap.Stop()
+
+				server.publishInvalidSubtree(context.Background(), "hash", "peer", "", "reason")
+				require.Equal(t, tt.published, publishCalled)
+			})
+		}
+	})
+
 	t.Run("successful publish", func(t *testing.T) {
 		var publishedMsg *kafka.Message
 		server := &Server{
@@ -738,6 +770,8 @@ func TestResolveTxMetaCacheBucketType(t *testing.T) {
 		{"Native", txmetacache.Native},
 		{"pointer", txmetacache.Pointer},
 		{"Pointer", txmetacache.Pointer},
+		{"lockfree", txmetacache.Lockfree},
+		{"LockFree", txmetacache.Lockfree},
 		{"gibberish", txmetacache.Unallocated}, // unknown → fallback
 	}
 

@@ -5,6 +5,7 @@ import (
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-subtree"
+	terr "github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -18,18 +19,13 @@ type MockMerkleProofConstructor struct {
 	subtrees          map[string]*subtree.Subtree
 	mainChainBlockIDs map[uint32]bool
 
-	// Override for FindBlocksContainingSubtree. When nil, returns default
-	// single-entry data; when set, returns the contents verbatim. Set
-	// blockIDs to an empty slice to simulate SQL main-chain filter excluding
-	// orphans.
-	findBlocksOverride *findBlocksReturn
-}
+	// missingBlockIDs are ids GetBlockByID reports as not found, as for an id no
+	// block is stored under.
+	missingBlockIDs map[uint32]bool
 
-type findBlocksReturn struct {
-	blockIDs       []uint32
-	blockHeights   []uint32
-	subtreeIndices []int
-	err            error
+	// subtreeLoads counts complete-subtree deserializations, the cost the
+	// block-roots cache exists to cut.
+	subtreeLoads int
 }
 
 func (m *MockMerkleProofConstructor) GetTxMeta(txHash *chainhash.Hash) (*TxMetaData, error) {
@@ -37,6 +33,10 @@ func (m *MockMerkleProofConstructor) GetTxMeta(txHash *chainhash.Hash) (*TxMetaD
 }
 
 func (m *MockMerkleProofConstructor) GetBlockByID(id uint64) (*model.Block, error) {
+	if m.missingBlockIDs[uint32(id)] { //nolint:gosec // test ids are small
+		return nil, terr.NewBlockNotFoundError("block %d not found", id)
+	}
+
 	return m.block, nil
 }
 
@@ -45,6 +45,8 @@ func (m *MockMerkleProofConstructor) GetBlockHeader(blockHash *chainhash.Hash) (
 }
 
 func (m *MockMerkleProofConstructor) GetSubtree(subtreeHash *chainhash.Hash) (*subtree.Subtree, error) {
+	m.subtreeLoads++
+
 	if st, ok := m.subtrees[subtreeHash.String()]; ok {
 		return st, nil
 	}
@@ -52,10 +54,6 @@ func (m *MockMerkleProofConstructor) GetSubtree(subtreeHash *chainhash.Hash) (*s
 }
 
 func (m *MockMerkleProofConstructor) FindBlocksContainingSubtree(subtreeHash *chainhash.Hash) ([]uint32, []uint32, []int, error) {
-	if m.findBlocksOverride != nil {
-		o := m.findBlocksOverride
-		return o.blockIDs, o.blockHeights, o.subtreeIndices, o.err
-	}
 	// Return mock data for testing
 	return []uint32{1}, []uint32{100}, []int{0}, nil
 }
@@ -542,6 +540,28 @@ func TestConstructMerkleProof_MainChainFilter(t *testing.T) {
 		assert.Equal(t, uint32(101), proof.BlockHeight, "must pick the main-chain entry, not BlockIDs[0]")
 	})
 
+	t.Run("id with no stored block is skipped", func(t *testing.T) {
+		// BlockIDs[0]=7 is an id no block is stored under, left by a quick-validation
+		// retry after its reservation was swept. The chain check reports it on chain.
+		mock := &MockMerkleProofConstructor{
+			txMeta: &TxMetaData{
+				BlockIDs:     []uint32{7, 99},
+				BlockHeights: []uint32{100, 101},
+				SubtreeIdxs:  []int{0, 0},
+			},
+			block:             block,
+			blockHeader:       blockHeader,
+			subtrees:          map[string]*subtree.Subtree{subtreeRoot.String(): st},
+			mainChainBlockIDs: map[uint32]bool{7: true, 99: true},
+			missingBlockIDs:   map[uint32]bool{7: true},
+		}
+
+		proof, err := ConstructMerkleProof(txHash, mock)
+		require.NoError(t, err)
+		require.NotNil(t, proof)
+		require.Equal(t, uint32(101), proof.BlockHeight, "must use the id the block is stored under")
+	})
+
 	t.Run("tx only in orphan returns not-found", func(t *testing.T) {
 		mock := &MockMerkleProofConstructor{
 			txMeta: &TxMetaData{
@@ -600,28 +620,6 @@ func TestConstructMerkleProof_MainChainFilter(t *testing.T) {
 		require.NotNil(t, proof)
 		assert.Equal(t, uint32(101), proof.BlockHeight)
 	})
-}
-
-func TestConstructSubtreeMerkleProof_OrphanOnlySubtree_NotFound(t *testing.T) {
-	// Subtree only in orphan blocks: SQL gate (WHERE on_main_chain = true)
-	// excludes it, repository returns empty, ConstructSubtreeMerkleProof must
-	// return a not-found error so the HTTP handler returns 404 — never an
-	// orphan-anchored proof.
-	subtreeHash, _ := chainhash.NewHashFromStr("1111111111111111111111111111111111111111111111111111111111111111")
-
-	mock := &MockMerkleProofConstructor{
-		findBlocksOverride: &findBlocksReturn{
-			blockIDs:       []uint32{},
-			blockHeights:   []uint32{},
-			subtreeIndices: []int{},
-			err:            nil,
-		},
-	}
-
-	proof, err := ConstructSubtreeMerkleProof(subtreeHash, mock)
-	assert.Nil(t, proof)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "not found in any block")
 }
 
 func TestMerkleProofWithRealTransaction(t *testing.T) {

@@ -192,35 +192,52 @@ func testBlessedSubtreeStaleConflictingNodesAfterMinedTx(t *testing.T, utxoStore
 	require.NotNil(t, block102b)
 
 	_, block103b := td.CreateTestBlock(t, block102b, 65301)
-	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block103b, block103b.Height, "", "legacy", 0))
+	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block103b, block103b.Height, "", "legacy", 0, false))
 	td.WaitForBlockHeight(t, block103b, helperBlockWait, true)
 
 	// txA is now conflicting in UTXO store; the pre-created subtree has ConflictingNodes=[]
 	td.VerifyConflictingInUtxoStore(t, true, txA)
 	td.VerifyConflictingInUtxoStore(t, false, txB)
 
-	// SUBMIT the pre-blessed block (subtrees already in storage → early-return path fires).
-	// The block is at the same height as block103b — it's a competing fork.
-	// CheckBlockSubtrees: subtrees exist in storage → blessed=true (stale ConflictingNodes=[])
-	// Block validation continues: checkOldBlockIDs passes (txA's parent is on common prefix)
-	err := td.BlockValidationClient.ProcessBlock(td.Ctx, blockWithTxA, blockWithTxA.Height, "", "legacy", 0)
+	// SUBMIT the pre-blessed block. Its subtrees are already in storage, so
+	// CheckBlockSubtrees takes the cached path — but the cached verdict is no
+	// longer reused blindly: the subtree's conflicting-node trailer is re-checked
+	// against THIS block's ancestry.
+	err := td.BlockValidationClient.ProcessBlock(td.Ctx, blockWithTxA, blockWithTxA.Height, "", "legacy", 0, false)
 
-	// Block is ACCEPTED (by design — competing forks with conflicting txs are accepted)
-	require.NoError(t, err,
-		"block referencing pre-blessed subtree (stale ConflictingNodes=[]) must be ACCEPTED")
+	// The block must be REJECTED — but note WHICH rule fires, because it is not
+	// the double spend. setupDoubleSpendTest mines txA into block102a (it asserts
+	// TransactionCount == 2), and blockWithTxA is built ON block102a while also
+	// containing txA. So txA is already confirmed in this block's own ancestry,
+	// and the cached-subtree check rejects it as a DUPLICATE transaction: the
+	// counter-conflicting walk seeds its result with the transaction it was asked
+	// about, so txA's own block id is tested against the candidate's ancestry and
+	// matches.
+	//
+	// The double-spend rule is exercised separately, by
+	// testBlessingFailsWhenCounterConflictIsMinedMidValidation below and by
+	// TestCrossForkSubtreeReuse in file 18.
+	//
+	// This assertion is inverted from what it was. The previous expectation
+	// ("must be ACCEPTED") described the early-return path reusing a cached
+	// verdict across chain contexts, which is precisely the defect this suite now
+	// guards against.
+	require.Error(t, err,
+		"block whose cached subtree conflicts with its own ancestry must be rejected")
 
-	// txA's ConflictingNodes state: the subtree has ConflictingNodes=[] (stale, blessed before txB was mined)
-	// But the UTXO store correctly reflects txA as conflicting
-	td.VerifyConflictingInUtxoStore(t, true, txA) // UTXO store is correct
+	// The chain must not have moved onto the rejected block.
+	td.WaitForBlockHeight(t, block103b, helperBlockWait, true)
 
-	// CRITICAL: block assembly must not include txA — it checks the UTXO store, not the stale subtree
+	// UTXO state is unchanged by the rejection: chain B is still the winner.
+	td.VerifyConflictingInUtxoStore(t, true, txA)
+	td.VerifyConflictingInUtxoStore(t, false, txB)
+
 	td.VerifyNotInBlockAssembly(t, txA)
 
-	// The subtree for the pre-blessed block may show stale ConflictingNodes=[]
-	// This is acceptable because block assembly uses the UTXO store as source of truth.
-	// Log the actual ConflictingNodes for documentation purposes:
-	t.Logf("Pre-blessed subtree hash: %s (ConflictingNodes may be stale [])",
-		subtreeA.RootHash().String())
+	// The trailer is not the stale empty list the old expectation assumed:
+	// markConflictingTxsInSubtrees rewrote it when chain B won, which is what the
+	// cached-subtree check reads.
+	td.VerifyConflictingInSubtrees(t, subtreeA.RootHash(), txA)
 }
 
 // testTwoCompetingMinerSubtreesConflicting simulates two miners building competing
@@ -251,7 +268,7 @@ func testTwoCompetingMinerSubtreesConflicting(t *testing.T, utxoStoreType string
 
 	// Miner 2 extends their chain to win
 	_, block103b := td.CreateTestBlock(t, block102b, 60300)
-	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block103b, block103b.Height, "", "legacy", 0))
+	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block103b, block103b.Height, "", "legacy", 0, false))
 	td.WaitForBlockHeight(t, block103b, helperBlockWait, true)
 
 	// Miner 2's chain wins: txB is valid, txA is conflicting
@@ -290,7 +307,7 @@ func testBlessedSubtreeWithOrphanedParent(t *testing.T, utxoStoreType string) {
 	require.NotNil(t, block102b)
 
 	_, block103b := td.CreateTestBlock(t, block102b, 61300)
-	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block103b, block103b.Height, "", "legacy", 0))
+	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block103b, block103b.Height, "", "legacy", 0, false))
 	td.WaitForBlockHeight(t, block103b, helperBlockWait, true)
 
 	// txParent is now orphaned (conflicting on chain B); txC is the winner
@@ -302,7 +319,7 @@ func testBlessedSubtreeWithOrphanedParent(t *testing.T, utxoStoreType string) {
 
 	// Create a block on chain B with txChild
 	_, block104child := td.CreateTestBlock(t, block103b, 61400, txChild)
-	err := td.BlockValidationClient.ProcessBlock(td.Ctx, block104child, block104child.Height, "", "legacy", 0)
+	err := td.BlockValidationClient.ProcessBlock(td.Ctx, block104child, block104child.Height, "", "legacy", 0, false)
 	require.Error(t, err,
 		"block with txChild (whose parent txParent is on orphaned chain A) must be rejected — "+
 			"checkOldBlockIDs must verify parent's block ID is on current chain even for pre-blessed subtrees")
@@ -397,7 +414,7 @@ func testSubtreeConflictingNodeAlreadySetRemainsAccurate(t *testing.T, utxoStore
 
 	// Extend chain B to make txB the winner
 	_, block103b := td.CreateTestBlock(t, block102b, 62300)
-	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block103b, block103b.Height, "", "legacy", 0))
+	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block103b, block103b.Height, "", "legacy", 0, false))
 	td.WaitForBlockHeight(t, block103b, helperBlockWait, true)
 
 	// After chain B wins:
@@ -416,8 +433,8 @@ func testSubtreeConflictingNodeAlreadySetRemainsAccurate(t *testing.T, utxoStore
 }
 
 // testBlessingFailsWhenCounterConflictIsMinedMidValidation tests that submitting a block
-// containing txA (where txA's counter-conflicting tx is already mined on the current
-// chain) with NEW subtrees (not yet in storage) causes the block to be REJECTED.
+// containing txA (where txA's counter-conflicting tx is already mined in that block's
+// own ancestry) with NEW subtrees (not yet in storage) causes the block to be REJECTED.
 //
 // This is distinct from the "stale subtree" scenario: here the subtrees are NOT yet
 // in storage, so CheckBlockSubtrees runs full validation (no early return). During
@@ -434,7 +451,7 @@ func testBlessingFailsWhenCounterConflictIsMinedMidValidation(t *testing.T, utxo
 	require.NotNil(t, block102b)
 
 	_, block103b := td.CreateTestBlock(t, block102b, 67300)
-	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block103b, block103b.Height, "", "legacy", 0))
+	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block103b, block103b.Height, "", "legacy", 0, false))
 	td.WaitForBlockHeight(t, block103b, helperBlockWait, true)
 
 	// txA is now conflicting; txB is mined on the current chain
@@ -447,19 +464,23 @@ func testBlessingFailsWhenCounterConflictIsMinedMidValidation(t *testing.T, utxo
 	// Since the subtrees are fresh (not in storage), CheckBlockSubtrees runs full validation.
 	// During validation: checkCounterConflictingOnCurrentChain finds txB on current chain → FAIL.
 	_, block104b_withTxA := td.CreateTestBlock(t, block103b, 67400, txA)
-	err := td.BlockValidationClient.ProcessBlock(td.Ctx, block104b_withTxA, block104b_withTxA.Height, "", "legacy", 0)
+	err := td.BlockValidationClient.ProcessBlock(td.Ctx, block104b_withTxA, block104b_withTxA.Height, "", "legacy", 0, false)
 
-	// The block is ACCEPTED (by design) — the system accepts blocks with conflicting txs
-	// and stores them as conflicting in ConflictingNodes. The "full validation" path
-	// also accepts the block; checkCounterConflictingOnCurrentChain is called but
-	// the subtree stores txA as conflicting rather than rejecting the block.
-	require.NoError(t, err,
-		"block with txA (conflicting, counter-conflict mined) must be ACCEPTED — "+
-			"the system stores txA as conflicting in ConflictingNodes, not reject the block")
+	// The block must be REJECTED, which is what this test's name has always said.
+	// block104b extends block103b -> block102b, and block102b confirms txB. txA
+	// spends the same outpoint as txB, so txA is a double spend of a transaction
+	// confirmed in block104b's OWN ancestry — not a competing fork, where
+	// accepting it would be correct.
+	//
+	// This assertion is inverted from what it was. Accepting the block left the
+	// node holding a chain containing a spend it treats as conflicting, and gave
+	// block assembly a conflict resolution that would reverse a confirmed spend.
+	require.Error(t, err,
+		"block containing a double spend of a transaction confirmed in its own ancestry must be rejected")
 
-	// txA must be stored as conflicting in the subtree
-	td.VerifyConflictingInSubtrees(t, block104b_withTxA.Subtrees[0], txA)
+	// The rejection must not disturb the winner already established on this chain.
 	td.VerifyConflictingInUtxoStore(t, true, txA)
+	td.VerifyConflictingInUtxoStore(t, false, txB)
 	td.VerifyNotInBlockAssembly(t, txA)
 }
 
@@ -518,10 +539,10 @@ func testBlessedSubtreeReusedAcrossMultipleBlocks(t *testing.T, utxoStoreType st
 	// Create block103a and block103b BOTH containing tx1Conflicting
 	// (same tx in both competing blocks — this is the "same subtree reuse" scenario)
 	_, block103a := td.CreateTestBlock(t, block102a, 64300, tx1Conflicting)
-	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block103a, block103a.Height, "", "legacy", 0))
+	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block103a, block103a.Height, "", "legacy", 0, false))
 
 	_, block103b := td.CreateTestBlock(t, block102a, 64301, tx1Conflicting)
-	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block103b, block103b.Height, "", "legacy", 0))
+	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block103b, block103b.Height, "", "legacy", 0, false))
 
 	td.WaitForBlockHeight(t, block103a, helperBlockWait)
 

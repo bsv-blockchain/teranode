@@ -13,6 +13,7 @@ import (
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/blockchain/blockchain_api"
 	"github.com/bsv-blockchain/teranode/services/p2p/p2p_api"
+	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/kafka"
 	kafkamessage "github.com/bsv-blockchain/teranode/util/kafka/kafka_message"
 	"github.com/libp2p/go-libp2p/core/peer"
@@ -31,6 +32,7 @@ func (s *Server) handleBlockTopic(ctx context.Context, m []byte, fromID string) 
 	var (
 		blockMessage BlockMessage
 		hash         *chainhash.Hash
+		heights      peerHeightClaim
 		err          error
 	)
 
@@ -90,7 +92,9 @@ func (s *Server) handleBlockTopic(ctx context.Context, m []byte, fromID string) 
 	// The spoof check above proved fromID == blockMessage.PeerID, so the
 	// sender comparison alone decides self.
 	isSelf := fromID == s.P2PClient.GetID()
-	advertisedHeight := blockMessage.Height
+
+	// heights is only ever produced by sanitizeAdvertisedTip: the isSelf branch
+	// returns before addPeer, so its zero value never reaches the registry.
 	if isSelf {
 		hash, err = s.parseHash(blockMessage.Hash, "handleBlockTopic")
 		if err != nil {
@@ -98,7 +102,7 @@ func (s *Server) handleBlockTopic(ctx context.Context, m []byte, fromID string) 
 		}
 	} else {
 		var ok bool
-		advertisedHeight, hash, ok = s.sanitizeAdvertisedTip(blockMessage.PeerID, blockMessage.Height, blockMessage.Hash, s.getLocalHeight(ctx))
+		heights, hash, ok = s.sanitizeAdvertisedTip(blockMessage.PeerID, blockMessage.Height, blockMessage.Hash, s.getLocalHeight(ctx))
 		if !ok {
 			return
 		}
@@ -109,7 +113,7 @@ func (s *Server) handleBlockTopic(ctx context.Context, m []byte, fromID string) 
 		Timestamp:  time.Now().UTC().Format(isoFormat),
 		Type:       "block",
 		Hash:       hash.String(),
-		Height:     advertisedHeight,
+		Height:     blockMessage.Height, // what the peer advertised; only the registry copy is capped
 		BaseURL:    blockMessage.DataHubURL,
 		PeerID:     blockMessage.PeerID,
 		ClientName: blockMessage.ClientName,
@@ -138,7 +142,7 @@ func (s *Server) handleBlockTopic(ctx context.Context, m []byte, fromID string) 
 
 	// Store using the originator's peer ID
 	if peerID, err := peer.Decode(blockMessage.PeerID); err == nil {
-		s.addPeer(peerID, blockMessage.ClientName, advertisedHeight, hash, blockMessage.DataHubURL)
+		s.addPeer(peerID, blockMessage.ClientName, heights, hash, blockMessage.DataHubURL)
 		s.logger.Debugf("[handleBlockTopic] Stored latest block hash %s for peer %s", blockMessage.Hash, peerID)
 	}
 
@@ -156,6 +160,27 @@ func (s *Server) handleBlockTopic(ctx context.Context, m []byte, fromID string) 
 	// their subtrees directly over HTTP (not via the gossip subtree handler), so
 	// the reputation filter retained in handleSubtreeTopic does not affect catchup.
 
+	// Suppress replayed announcements before the Kafka publish (issue: gossip
+	// ingest amplification). GossipSub only dedups on message ID (sender +
+	// seqno), so byte-identical announcements with fresh seqnos arrive as new
+	// messages, and each publish below is amplified downstream into gRPC
+	// round-trips, a store lookup and a peer-controlled HTTP fetch. Only the
+	// first few DISTINCT announcers per hash are published per window, keeping
+	// block validation's alternative-source failover fed; the peer bookkeeping
+	// above still ran, so registry state and ban attribution stay fresh for
+	// suppressed announcements. A peer that keeps re-announcing the same hash
+	// is surfaced to the operator once per threshold-multiple of repeats —
+	// deliberately not auto-scored, see seenHashRepeatWarnThreshold.
+	publish, peerRepeats := s.blockSeenHashes.Check(hash.String(), fromID, now)
+	if peerRepeats > 0 && peerRepeats%seenHashRepeatWarnThreshold == 0 {
+		s.logger.Warnf("[handleBlockTopic] peer %s re-announced block %s %d times within the seen-hash TTL", fromID, hash.String(), peerRepeats)
+	}
+
+	if !publish {
+		s.logger.Debugf("[handleBlockTopic] suppressing duplicate announcement of block %s from peer %s", hash.String(), fromID)
+		return
+	}
+
 	// Always send block to kafka - let block validation service decide what to do based on sync state
 	// send block to kafka, if configured
 	if s.blocksKafkaProducerClient != nil {
@@ -169,14 +194,26 @@ func (s *Server) handleBlockTopic(ctx context.Context, m []byte, fromID string) 
 
 		value, err := proto.Marshal(msg)
 		if err != nil {
+			s.blockSeenHashes.PublishFailed(hash.String(), fromID)
 			s.logger.Errorf("[handleBlockTopic] error marshaling KafkaBlockTopicMessage: %v", err)
 			return
 		}
 
-		s.blocksKafkaProducerClient.Publish(&kafka.Message{
+		// Non-blocking publish: a blocking send here would let broker
+		// backpressure stall the whole gossip worker pool. On a drop, return
+		// the publish grant so a later announcement of the hash can retry.
+		if !s.blocksKafkaProducerClient.TryPublish(&kafka.Message{
 			Key:   []byte(hash.String()),
 			Value: value,
-		})
+		}) {
+			s.blockSeenHashes.PublishFailed(hash.String(), fromID)
+			gossipPublishDropped("block")
+			s.logger.Debugf("[handleBlockTopic] kafka blocks producer backlogged, dropped announcement of block %s from peer %s", hash.String(), fromID)
+		}
+	} else {
+		// No producer configured: nothing was published, so return the grant
+		// to keep the accounting honest.
+		s.blockSeenHashes.PublishFailed(hash.String(), fromID)
 	}
 }
 
@@ -286,6 +323,20 @@ func (s *Server) handleSubtreeTopic(_ context.Context, m []byte, fromID string) 
 	s.storePeerMapEntry(&s.subtreePeerMap, hash.String(), fromID, now)
 	s.logger.Debugf("[handleSubtreeTopic] storing peer %s for subtree %s", fromID, subtreeMessage.Hash)
 
+	// Suppress replayed announcements before the Kafka publish, mirroring
+	// handleBlockTopic. The check sits AFTER the unhealthy-peer gate above so
+	// an announcement that gate drops does not mark the hash seen and thereby
+	// suppress a later, healthy announcement of the same subtree.
+	publish, peerRepeats := s.subtreeSeenHashes.Check(hash.String(), fromID, now)
+	if peerRepeats > 0 && peerRepeats%seenHashRepeatWarnThreshold == 0 {
+		s.logger.Warnf("[handleSubtreeTopic] peer %s re-announced subtree %s %d times within the seen-hash TTL", fromID, hash.String(), peerRepeats)
+	}
+
+	if !publish {
+		s.logger.Debugf("[handleSubtreeTopic] suppressing duplicate announcement of subtree %s from peer %s", hash.String(), fromID)
+		return
+	}
+
 	if s.subtreeKafkaProducerClient != nil { // tests may not set this
 		msg := &kafkamessage.KafkaSubtreeTopicMessage{
 			Hash:   hash.String(),
@@ -295,20 +346,31 @@ func (s *Server) handleSubtreeTopic(_ context.Context, m []byte, fromID string) 
 
 		value, err := proto.Marshal(msg)
 		if err != nil {
+			s.subtreeSeenHashes.PublishFailed(hash.String(), fromID)
 			s.logger.Errorf("[handleSubtreeTopic] error marshaling KafkaSubtreeTopicMessage: %v", err)
 			return
 		}
 
-		s.subtreeKafkaProducerClient.Publish(&kafka.Message{
+		// Non-blocking publish, as in handleBlockTopic: drop under producer
+		// backpressure and return the grant so a later announcement can retry.
+		if !s.subtreeKafkaProducerClient.TryPublish(&kafka.Message{
 			Key:   []byte(hash.String()),
 			Value: value,
-		})
+		}) {
+			s.subtreeSeenHashes.PublishFailed(hash.String(), fromID)
+			gossipPublishDropped("subtree")
+			s.logger.Debugf("[handleSubtreeTopic] kafka subtrees producer backlogged, dropped announcement of subtree %s from peer %s", hash.String(), fromID)
+		}
+	} else {
+		// No producer configured (tests): return the grant to keep the
+		// accounting honest.
+		s.subtreeSeenHashes.PublishFailed(hash.String(), fromID)
 	}
 }
 
 // addProtocolViolation records a protocol violation against a peer.
 func (s *Server) addProtocolViolation(peerID string) {
-	s.applyBanScore(peerID, ReasonProtocolViolation)
+	_ = s.applyBanScore(peerID, ReasonProtocolViolation)
 }
 
 // isBlacklistedBaseURL checks the given baseURL against the operator-configured
@@ -441,6 +503,13 @@ func (s *Server) validateDataHubURL(urlStr string) error {
 	hostname := strings.ToLower(strings.TrimRight(parsed.Hostname(), "."))
 	if hostname == "" {
 		return errors.NewInvalidArgumentError("DataHubURL has no hostname")
+	}
+
+	// Every fetch joins protocol paths onto this URL, so it must be a clean base: a query
+	// would turn those paths into query data aimed at a path the peer chose (issue 4843).
+	// This is about shape, not address, so it applies even when private IPs are allowed.
+	if err := util.ValidatePeerBaseURL(urlStr); err != nil {
+		return errors.NewInvalidArgumentError("DataHubURL is not a usable base URL", err)
 	}
 
 	// Skip SSRF checks when private/localhost IPs are allowed (e.g. local dev with host networking)
@@ -627,7 +696,29 @@ func (s *Server) getLocalHeight(ctx context.Context) uint32 {
 	return height
 }
 
-func (s *Server) sanitizeAdvertisedTip(peerID string, advertisedHeight uint32, advertisedHash string, localHeight uint32) (uint32, *chainhash.Hash, bool) {
+// maxPlausibleAdvertisedHeight is an absolute sanity ceiling on what a peer
+// may advertise — at BSV's ~10-minute block interval it is millennia away.
+// It is not tied to local progress: a catching-up node legitimately sees
+// peers hundreds of thousands of blocks ahead. A claim above it, and above the
+// local+lead window, is a protocol violation: the tip is rejected and the peer
+// is scored. Claims at or below it are reported as advertised.
+const maxPlausibleAdvertisedHeight = 500_000_000
+
+// peerHeightClaim pairs a peer's sync-decision height with its raw advertised
+// claim. registerPeer / addPeer / addConnectedPeer / enqueueRegister take this
+// struct rather than two adjacent positional uint32s so a transposed call
+// cannot silently swap the sync-decision value and the operator-facing one.
+type peerHeightClaim struct {
+	// Height is capped against local progress; it drives sync decisions.
+	Height uint32
+	// AdvertisedHeight is the height the peer actually claimed; it is
+	// reported to operators.
+	AdvertisedHeight uint32
+}
+
+// sanitizeAdvertisedTip validates a peer's advertised tip. On success it
+// returns the claim both capped for sync decisions and as advertised.
+func (s *Server) sanitizeAdvertisedTip(peerID string, advertisedHeight uint32, advertisedHash string, localHeight uint32) (peerHeightClaim, *chainhash.Hash, bool) {
 	hash, err := chainhash.NewHashFromStr(advertisedHash)
 	if err != nil {
 		// Log the length, never the value: node_status deliberately feeds the
@@ -635,7 +726,7 @@ func (s *Server) sanitizeAdvertisedTip(peerID string, advertisedHeight uint32, a
 		// the peer actually sent), so this is the one place a peer-controlled
 		// string of near-message-cap size could otherwise reach the logs.
 		s.logger.Warnf("[sanitizeAdvertisedTip] rejecting advertised tip from peer %s: invalid block hash (len %d): %v", peerID, len(advertisedHash), err)
-		return 0, nil, false
+		return peerHeightClaim{}, nil, false
 	}
 
 	maxLead := uint32(0)
@@ -648,20 +739,34 @@ func (s *Server) sanitizeAdvertisedTip(peerID string, advertisedHeight uint32, a
 		maxAcceptedHeight = uint64(^uint32(0))
 	}
 
-	if uint64(advertisedHeight) > maxAcceptedHeight {
-		cappedHeight := uint32(maxAcceptedHeight)
-		s.logger.Warnf("[sanitizeAdvertisedTip] capped advertised height for peer %s from %d to %d (local height %d, max lead %d)", peerID, advertisedHeight, cappedHeight, localHeight, maxLead)
-		return cappedHeight, hash, true
+	// Debug, not Warn: a peer that lies keeps lying on every message, and
+	// applyBanScore already logs each charge until the peer is banned.
+	if advertisedHeight > maxPlausibleAdvertisedHeight && uint64(advertisedHeight) > maxAcceptedHeight {
+		s.logger.Debugf("[sanitizeAdvertisedTip] rejecting implausible advertised height from peer %s: %d exceeds plausibility ceiling %d (local height %d)", peerID, advertisedHeight, maxPlausibleAdvertisedHeight, localHeight)
+		s.addProtocolViolation(peerID)
+
+		return peerHeightClaim{}, nil, false
 	}
 
-	return advertisedHeight, hash, true
+	heights := peerHeightClaim{Height: advertisedHeight, AdvertisedHeight: advertisedHeight}
+
+	if uint64(advertisedHeight) > maxAcceptedHeight {
+		heights.Height = uint32(maxAcceptedHeight)
+		// Debug, not Warn: the cap is a routine bound on what an unvalidated
+		// claim may influence during catchup, not a statement about the peer.
+		// A node syncing from genesis hits this on nearly every gossip message
+		// for as long as catchup runs.
+		s.logger.Debugf("[sanitizeAdvertisedTip] capped advertised height for peer %s from %d to %d (local height %d, max lead %d)", peerID, advertisedHeight, heights.Height, localHeight, maxLead)
+	}
+
+	return heights, hash, true
 }
 
 // registerPeer is a fire-and-forget shorthand for the centralized registry's
 // RegisterPeer RPC, building the PeerInfo struct from libp2p-source data.
 // Used by addPeer / addConnectedPeer / InjectPeerForTesting which previously
 // shared a single Put helper on the local registry.
-func (s *Server) registerPeer(peerID peer.ID, clientName string, height uint32, blockHash *chainhash.Hash, dataHubURL string) {
+func (s *Server) registerPeer(peerID peer.ID, clientName string, heights peerHeightClaim, blockHash *chainhash.Hash, dataHubURL string) {
 	if s.peerRegistry == nil {
 		return
 	}
@@ -670,7 +775,8 @@ func (s *Server) registerPeer(peerID peer.ID, clientName string, height uint32, 
 		TransportType:    blockchain_api.TransportType_TRANSPORT_HTTP,
 		TransportTypeSet: true,
 		ClientName:       clientName,
-		Height:           height,
+		Height:           heights.Height,
+		AdvertisedHeight: heights.AdvertisedHeight,
 		BlockHash:        blockHash,
 		DataHubURL:       dataHubURL,
 	}
@@ -679,21 +785,21 @@ func (s *Server) registerPeer(peerID peer.ID, clientName string, height uint32, 
 	}
 }
 
-func (s *Server) addPeer(peerID peer.ID, clientName string, height uint32, blockHash *chainhash.Hash, dataHubURL string) {
+func (s *Server) addPeer(peerID peer.ID, clientName string, heights peerHeightClaim, blockHash *chainhash.Hash, dataHubURL string) {
 	if s.registryBatcher != nil {
-		s.registryBatcher.enqueueRegister(peerID.String(), clientName, height, blockHash, dataHubURL, false)
+		s.registryBatcher.enqueueRegister(peerID.String(), clientName, heights, blockHash, dataHubURL, false)
 		return
 	}
-	s.registerPeer(peerID, clientName, height, blockHash, dataHubURL)
+	s.registerPeer(peerID, clientName, heights, blockHash, dataHubURL)
 }
 
 // addConnectedPeer adds a peer and marks it as directly connected
-func (s *Server) addConnectedPeer(peerID peer.ID, clientName string, height uint32, blockHash *chainhash.Hash, dataHubURL string) {
+func (s *Server) addConnectedPeer(peerID peer.ID, clientName string, heights peerHeightClaim, blockHash *chainhash.Hash, dataHubURL string) {
 	if s.registryBatcher != nil {
-		s.registryBatcher.enqueueRegister(peerID.String(), clientName, height, blockHash, dataHubURL, true)
+		s.registryBatcher.enqueueRegister(peerID.String(), clientName, heights, blockHash, dataHubURL, true)
 		return
 	}
-	s.registerPeer(peerID, clientName, height, blockHash, dataHubURL)
+	s.registerPeer(peerID, clientName, heights, blockHash, dataHubURL)
 	if s.peerRegistry == nil {
 		return
 	}
@@ -710,7 +816,7 @@ func (s *Server) InjectPeerForTesting(peerID peer.ID, clientName, dataHubURL str
 		return
 	}
 
-	s.registerPeer(peerID, clientName, height, blockHash, dataHubURL)
+	s.registerPeer(peerID, clientName, peerHeightClaim{Height: height, AdvertisedHeight: height}, blockHash, dataHubURL)
 	if err := s.peerRegistry.UpdateStorage(s.gCtx, peerID.String(), "full"); err != nil {
 		s.logger.Warnf("[InjectPeerForTesting] UpdateStorage %s failed: %v", peerID, err)
 	}
@@ -926,8 +1032,8 @@ func (s *Server) isBlockchainSyncingOrCatchingUp(ctx context.Context) (bool, err
 		}
 	}
 
-	if *state == blockchain_api.FSMStateType_CATCHINGBLOCKS {
-		// ignore notifications while syncing or catching up
+	if *state != blockchain_api.FSMStateType_RUNNING {
+		// ignore notifications unless caught up (IDLE can follow a STOP mid-catchup)
 		return true, nil
 	}
 
@@ -953,6 +1059,15 @@ func (s *Server) cleanupPeerMaps() {
 	blockExpired := s.blockPeerMap.DeleteExpired(ttlCutoff)
 	subtreeExpired := s.subtreePeerMap.DeleteExpired(ttlCutoff)
 	s.reportedInvalidBlocks.DeleteExpired(ttlCutoff)
+
+	// Sweep the seen-hash caches too. They self-bound at insert and expire
+	// lazily on Check, so this only reclaims memory for hashes that stopped
+	// being announced.
+	seenBlockExpired := s.blockSeenHashes.DeleteExpired(now)
+	seenSubtreeExpired := s.subtreeSeenHashes.DeleteExpired(now)
+	if seenBlockExpired > 0 || seenSubtreeExpired > 0 {
+		s.logger.Infof("[cleanupPeerMaps] removed %d expired seen-block-hash entries, %d expired seen-subtree-hash entries", seenBlockExpired, seenSubtreeExpired)
+	}
 
 	// Evict expired reputationCache entries. shouldSkipUnhealthyPeer only ever
 	// inserts; without this sweep the map would grow once per unique peer ID
@@ -1037,8 +1152,8 @@ func (s *Server) cleanupPeerMaps() {
 	}
 
 	// Log current sizes
-	s.logger.Infof("[cleanupPeerMaps] current map sizes - blocks: %d, subtrees: %d",
-		s.blockPeerMap.Len(), s.subtreePeerMap.Len())
+	s.logger.Infof("[cleanupPeerMaps] current map sizes - blocks: %d, subtrees: %d, seen block hashes: %d, seen subtree hashes: %d",
+		s.blockPeerMap.Len(), s.subtreePeerMap.Len(), s.blockSeenHashes.Len(), s.subtreeSeenHashes.Len())
 }
 
 // startPeerMapCleanup starts the periodic cleanup goroutine

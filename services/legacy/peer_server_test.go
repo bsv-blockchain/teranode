@@ -2,7 +2,11 @@ package legacy
 
 import (
 	"context"
+	"fmt"
 	"net"
+	"runtime"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -15,6 +19,7 @@ import (
 	"github.com/bsv-blockchain/teranode/services/legacy/addrmgr"
 	"github.com/bsv-blockchain/teranode/services/legacy/netsync"
 	"github.com/bsv-blockchain/teranode/services/legacy/peer"
+	"github.com/bsv-blockchain/teranode/services/p2p"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/test"
@@ -193,6 +198,10 @@ func (m *mockServerPeer) QueueInventory(invVect *wire.InvVect) {
 	m.Called(invVect)
 }
 
+func (m *mockServerPeer) RequeueInventory(invVect *wire.InvVect) {
+	m.Called(invVect)
+}
+
 // TestHandleRelayBlockInvMsg verifies that a newly-relayed block is announced
 // via a plain inventory message to peers that have NOT negotiated sendheaders.
 // handleRelayInvMsg only special-cases InvTypeBlock when sp.WantsHeaders() is
@@ -236,21 +245,51 @@ func (c *tcpAddrConn) RemoteAddr() net.Addr { return c.remote }
 // fallback branch, a non-sendheaders peer gets no announcement for the block at
 // all and no inv is ever written.
 func TestHandleRelayInvMsgBlockToNonSendHeadersPeer(t *testing.T) {
+	invReceived := make(chan *wire.MsgInv, 1)
+
+	s, state, sp := newRelayTestServerPeer(t, func(_ *peer.Peer, msg *wire.MsgInv) {
+		select {
+		case invReceived <- msg:
+		default:
+		}
+	})
+
+	// Precondition for the fallback: this peer did not negotiate sendheaders.
+	require.False(t, sp.WantsHeaders())
+	require.True(t, sp.Connected())
+
+	blockHash := chainhash.Hash{0x0a, 0x0b, 0x0c}
+	invVect := wire.NewInvVect(wire.InvTypeBlock, &blockHash)
+
+	// No msg.data: a non-sendheaders peer must be announced the block by
+	// inventory, which needs nothing but the inv vector. If the dispatch ever
+	// routes this peer to handleRelayBlockMsg instead, that path bails out on the
+	// missing block header and nothing is sent.
+	s.handleRelayInvMsg(state, relayMsg{invVect: invVect})
+
+	select {
+	case msg := <-invReceived:
+		require.Len(t, msg.InvList, 1)
+		require.Equal(t, wire.InvTypeBlock, msg.InvList[0].Type)
+		require.Equal(t, blockHash, msg.InvList[0].Hash)
+	case <-time.After(10 * time.Second):
+		t.Fatal("no inv message relayed to the non-sendheaders peer")
+	}
+}
+
+// newRelayTestServerPeer connects a serverPeer to a real remote peer over a
+// pipe, waits for the version handshake, and registers it in a peerState.
+// onInv receives every inv message the remote end is sent. Neither side sends
+// "sendheaders", so WantsHeaders() stays false on both peers.
+func newRelayTestServerPeer(t *testing.T, onInv func(*peer.Peer, *wire.MsgInv)) (*server, *peerState, *serverPeer) {
+	t.Helper()
+
 	tSettings := test.CreateBaseTestSettings(t)
 	logger := ulogger.TestLogger{}
 
-	invReceived := make(chan *wire.MsgInv, 1)
-
-	// The remote end records the inv messages it receives. Neither side sends
-	// "sendheaders", so WantsHeaders() stays false on both peers.
 	remoteCfg := &peer.Config{
 		Listeners: peer.MessageListeners{
-			OnInv: func(_ *peer.Peer, msg *wire.MsgInv) {
-				select {
-				case invReceived <- msg:
-				default:
-				}
-			},
+			OnInv: onInv,
 		},
 		UserAgentName:          "remote",
 		UserAgentVersion:       "1.0",
@@ -285,6 +324,8 @@ func TestHandleRelayInvMsgBlockToNonSendHeadersPeer(t *testing.T) {
 	t.Cleanup(func() {
 		localPeer.DisconnectWithInfo("test cleanup")
 		remotePeer.DisconnectWithInfo("test cleanup")
+		localPeer.WaitForDisconnect()
+		remotePeer.WaitForDisconnect()
 	})
 
 	// The inv is dropped by the peer's queue handler until the version handshake
@@ -294,17 +335,13 @@ func TestHandleRelayInvMsgBlockToNonSendHeadersPeer(t *testing.T) {
 			remotePeer.VersionKnown() && remotePeer.VerAckReceived()
 	}, 10*time.Second, 10*time.Millisecond, "peers did not complete the version handshake")
 
-	s := &server{logger: logger}
+	s := &server{logger: logger, relayInv: make(chan relayMsg, 16)}
 
 	sp := &serverPeer{
 		Peer:   localPeer,
 		server: s,
 		quit:   make(chan struct{}),
 	}
-
-	// Precondition for the fallback: this peer did not negotiate sendheaders.
-	require.False(t, sp.WantsHeaders())
-	require.True(t, sp.Connected())
 
 	state := &peerState{
 		inboundPeers:    txmap.NewSyncedMap[int32, *serverPeer](),
@@ -314,23 +351,108 @@ func TestHandleRelayInvMsgBlockToNonSendHeadersPeer(t *testing.T) {
 	}
 	state.inboundPeers.Set(1, sp)
 
-	blockHash := chainhash.Hash{0x0a, 0x0b, 0x0c}
-	invVect := wire.NewInvVect(wire.InvTypeBlock, &blockHash)
+	return s, state, sp
+}
 
-	// No msg.data: a non-sendheaders peer must be announced the block by
-	// inventory, which needs nothing but the inv vector. If the dispatch ever
-	// routes this peer to handleRelayBlockMsg instead, that path bails out on the
-	// missing block header and nothing is sent.
-	s.handleRelayInvMsg(state, relayMsg{invVect: invVect})
+// TestRebroadcastTickReachesPeerThatAlreadySawInv covers issue 1825. The first
+// announce adds the inv to the peer's known inventory, and a plain
+// QueueInventory drops any later attempt, so a rebroadcast used to reach only
+// peers that connected after the first announce. Drives the real announce and
+// rebroadcast paths (RelayInventory, rebroadcastQueue.retry with
+// relayTxBatch, handleRelayInvMsg) over a real connected peer.
+func TestRebroadcastTickReachesPeerThatAlreadySawInv(t *testing.T) {
+	invReceived := make(chan *wire.MsgInv, 10)
 
-	select {
-	case msg := <-invReceived:
-		require.Len(t, msg.InvList, 1)
-		require.Equal(t, wire.InvTypeBlock, msg.InvList[0].Type)
-		require.Equal(t, blockHash, msg.InvList[0].Hash)
-	case <-time.After(10 * time.Second):
-		t.Fatal("no inv message relayed to the non-sendheaders peer")
+	s, state, _ := newRelayTestServerPeer(t, func(_ *peer.Peer, msg *wire.MsgInv) {
+		invReceived <- msg
+	})
+
+	txHash := chainhash.Hash{0xde, 0xad}
+	iv := wire.NewInvVect(wire.InvTypeTx, &txHash)
+	data := &netsync.TxHashAndFee{TxHash: txHash, Fee: 1, Size: 100}
+
+	// deliver plays the peerHandler's part: take what the relay entry points
+	// queued on relayInv and dispatch it to the connected peers.
+	deliver := func() {
+		t.Helper()
+		select {
+		case msg := <-s.relayInv:
+			s.handleRelayInvMsg(state, msg)
+		case <-time.After(time.Second):
+			t.Fatal("nothing queued on relayInv")
+		}
 	}
+
+	expectInv := func(msg string) {
+		t.Helper()
+		select {
+		case got := <-invReceived:
+			require.Len(t, got.InvList, 1, msg)
+			require.Equal(t, *iv, *got.InvList[0], msg)
+		case <-time.After(5 * time.Second):
+			t.Fatal(msg)
+		}
+	}
+
+	expectNoInv := func(msg string) {
+		t.Helper()
+		select {
+		case got := <-invReceived:
+			t.Fatalf("%s: unexpected inv %v", msg, got.InvList)
+		case <-time.After(200 * time.Millisecond):
+		}
+	}
+
+	s.RelayInventory(iv, data)
+	deliver()
+	expectInv("first announce not received")
+
+	// A second plain relay is filtered by the peer's known inventory.
+	s.RelayInventory(iv, data)
+	deliver()
+	expectNoInv("plain relay re-sent a known inv")
+
+	queue := newRebroadcastQueue(maxRebroadcastInventory)
+	mustAdd(t, queue, *iv, data)
+
+	for retry := 1; retry <= 2; retry++ {
+		relayed, _ := queue.retry(maxRebroadcastTips, s.relayTxBatch)
+		require.Equal(t, 1, relayed)
+		deliver()
+		expectInv(fmt.Sprintf("rebroadcast retry %d did not reach the peer", retry))
+	}
+}
+
+// TestHandleRelayTxMsgRequeue checks that a rebroadcast relay bypasses the
+// peer's known-inventory filter but still honours its fee filter.
+func TestHandleRelayTxMsgRequeue(t *testing.T) {
+	txHash := chainhash.Hash{0x01, 0x02, 0x03}
+	invVect := wire.NewInvVect(wire.InvTypeTx, &txHash)
+	s := &server{}
+
+	t.Run("requeues", func(t *testing.T) {
+		sp := &mockServerPeer{}
+		sp.Mock.On("RequeueInventory", invVect).Return()
+
+		s.handleRelayTxMsg(sp, relayMsg{invVect: invVect, requeue: true}, 0)
+
+		sp.AssertCalled(t, "RequeueInventory", invVect)
+		sp.AssertNotCalled(t, "QueueInventory", invVect)
+	})
+
+	t.Run("fee filter still applies", func(t *testing.T) {
+		sp := &mockServerPeer{}
+
+		msg := relayMsg{
+			invVect: invVect,
+			data:    &netsync.TxHashAndFee{Fee: 1000, Size: 1000},
+			requeue: true,
+		}
+		s.handleRelayTxMsg(sp, msg, 2000)
+
+		sp.AssertNotCalled(t, "RequeueInventory", invVect)
+		sp.AssertNotCalled(t, "QueueInventory", invVect)
+	})
 }
 
 // TestHandleRelayTxMsg tests the handleRelayTxMsg function's behavior with various fee filter scenarios
@@ -545,7 +667,6 @@ func TestServerNetTotals(t *testing.T) {
 	assert.Equal(t, uint64(3000), totalBytes, "Total bytes should be 3000")
 }
 
-// TestEnforceNodeBloomFlagBasic tests the enforceNodeBloomFlag method exists
 func TestEnforceNodeBloomFlagBasic(t *testing.T) {
 	// This function requires a fully initialized peer, which is complex to set up
 	// We'll just test that the method exists on serverPeer
@@ -850,102 +971,6 @@ func TestBroadcastMessage_BroadcastsRegardlessOfListenMode(t *testing.T) {
 	}
 }
 
-// TestTryAddRebroadcast_PreservesAttemptsOnReadd locks in the invariant that
-// re-adding an iv already present in pendingInvs does NOT reset its retry
-// counter — otherwise a Kafka replay (or any duplicate hit) could refresh
-// the retry budget of a tx that should have aged out, defeating the
-// maxRebroadcastAttempts ceiling.
-func TestTryAddRebroadcast_PreservesAttemptsOnReadd(t *testing.T) {
-	pending := map[wire.InvVect]*rebroadcastEntry{}
-	iv := wire.InvVect{Type: wire.InvTypeTx, Hash: chainhash.Hash{0x01}}
-
-	require.True(t, tryAddRebroadcast(pending, 10, iv, "first"))
-	pending[iv].attempts = 3 // simulate three retry ticks
-
-	require.True(t, tryAddRebroadcast(pending, 10, iv, "second"),
-		"re-add of an existing iv must be accepted (returns true)")
-	require.Equal(t, 3, pending[iv].attempts,
-		"re-add must preserve the existing attempts counter")
-	require.Equal(t, "second", pending[iv].data,
-		"re-add must refresh the data payload")
-	require.Len(t, pending, 1)
-}
-
-// TestTryAddRebroadcast_DropsAtCap covers the bounded-memory contract for the
-// rebroadcast queue: once pendingInvs has `capacity` entries, new (non-update)
-// adds must be rejected. Older entries keep their retry budget rather than
-// being evicted by churn from fresh adds that haven't yet failed.
-func TestTryAddRebroadcast_DropsAtCap(t *testing.T) {
-	const capacity = 4
-	pending := map[wire.InvVect]*rebroadcastEntry{}
-
-	// Fill to capacity.
-	for i := 0; i < capacity; i++ {
-		iv := wire.InvVect{Type: wire.InvTypeTx, Hash: chainhash.Hash{byte(i + 1)}}
-		require.True(t, tryAddRebroadcast(pending, capacity, iv, i),
-			"add #%d below cap must be accepted", i)
-	}
-	require.Len(t, pending, capacity)
-
-	// One more — must be rejected.
-	overflow := wire.InvVect{Type: wire.InvTypeTx, Hash: chainhash.Hash{0xff}}
-	require.False(t, tryAddRebroadcast(pending, capacity, overflow, "overflow"),
-		"add beyond cap must be rejected")
-	require.Len(t, pending, capacity, "rejected add must not mutate the map")
-	_, present := pending[overflow]
-	require.False(t, present, "overflow entry must not be inserted")
-
-	// Update of an existing key must still succeed at cap.
-	existing := wire.InvVect{Type: wire.InvTypeTx, Hash: chainhash.Hash{0x01}}
-	require.True(t, tryAddRebroadcast(pending, capacity, existing, "updated"),
-		"update of existing key must succeed even at cap")
-	require.Equal(t, "updated", pending[existing].data)
-}
-
-// TestProcessRebroadcastTick_AgesOutAfterMaxAttempts asserts the per-entry
-// retry budget: after `maxAttempts` ticks, the entry is removed even if
-// nothing called RemoveRebroadcastInventory. This is the only mechanism
-// bounding the queue from below, because TransactionConfirmed is dead code
-// in this codebase.
-func TestProcessRebroadcastTick_AgesOutAfterMaxAttempts(t *testing.T) {
-	const maxAttempts = 3
-	pending := map[wire.InvVect]*rebroadcastEntry{}
-	iv := wire.InvVect{Type: wire.InvTypeTx, Hash: chainhash.Hash{0x77}}
-	require.True(t, tryAddRebroadcast(pending, 10, iv, "data"))
-
-	var relayed int
-	relay := func(*wire.InvVect, interface{}) { relayed++ }
-
-	for i := 1; i < maxAttempts; i++ {
-		processRebroadcastTick(pending, maxAttempts, relay)
-		require.Len(t, pending, 1, "entry must remain at tick %d", i)
-		require.Equal(t, i, pending[iv].attempts)
-	}
-
-	// Final tick — entry retries one more time, then ages out.
-	processRebroadcastTick(pending, maxAttempts, relay)
-	require.Empty(t, pending, "entry must be deleted after maxAttempts ticks")
-	require.Equal(t, maxAttempts, relayed, "relay must fire exactly maxAttempts times")
-}
-
-// TestProcessRebroadcastTick_KeepsEntriesUnderBudget guards against an
-// off-by-one in the aging logic: an entry must survive ticks until its
-// attempt count actually *reaches* maxAttempts.
-func TestProcessRebroadcastTick_KeepsEntriesUnderBudget(t *testing.T) {
-	const maxAttempts = 6
-	pending := map[wire.InvVect]*rebroadcastEntry{}
-	iv := wire.InvVect{Type: wire.InvTypeTx, Hash: chainhash.Hash{0x88}}
-	require.True(t, tryAddRebroadcast(pending, 10, iv, "data"))
-
-	noop := func(*wire.InvVect, interface{}) {}
-	for i := 0; i < maxAttempts-1; i++ {
-		processRebroadcastTick(pending, maxAttempts, noop)
-	}
-
-	require.Len(t, pending, 1, "entry must still be present below budget")
-	require.Equal(t, maxAttempts-1, pending[iv].attempts)
-}
-
 // TestAddRebroadcastInventory_BumpsDropCounterOnFullChannel asserts the
 // observability contract: when modifyRebroadcastInv is saturated, the
 // non-blocking send drops AND increments droppedRebroadcastAdds. Silent
@@ -1218,34 +1243,79 @@ func TestServerTransactionConfirmed(t *testing.T) {
 	// Since we don't have full setup, we just test it doesn't panic
 }
 
-// TestServerGetTxFromStoreExists tests the getTxFromStore method exists
-func TestServerGetTxFromStoreExists(t *testing.T) {
-	// This method requires complex setup with stores and blockchain state
-	// We'll just verify the method exists on server
-	s := &server{}
-	assert.NotNil(t, s.getTxFromStore)
-}
-
 // TestServerUpdatePeerHeights tests the UpdatePeerHeights method
 func TestServerUpdatePeerHeights(t *testing.T) {
 	s := &server{
 		peerHeightsUpdate: make(chan updatePeerHeightsMsg, 1),
+		quit:              make(chan struct{}),
 	}
 
 	hash := &chainhash.Hash{4, 5, 6}
 	height := int32(12345)
 
-	// Test updating peer heights (should not panic)
 	s.UpdatePeerHeights(hash, height, nil)
 
-	// Verify a message was sent to the channel
 	select {
 	case msg := <-s.peerHeightsUpdate:
-		assert.Equal(t, hash, msg.newHash)
-		assert.Equal(t, height, msg.newHeight)
-	default:
-		t.Error("Expected message to be sent to peerHeightsUpdate channel")
+		require.Equal(t, hash, msg.newHash)
+		require.Equal(t, height, msg.newHeight)
+	case <-time.After(5 * time.Second):
+		t.Fatal("Expected message to be sent to peerHeightsUpdate channel")
 	}
+}
+
+// The Kafka blocks-final consumer calls UpdatePeerHeights for every finalised block. The
+// channel is unbuffered and only peerHandler reads it, so the call must return while nobody is
+// reading, deliver once peerHandler reads, and, after the server quits (peerHandler gone), leave
+// no goroutine waiting on a send that nobody will ever take.
+func TestServerUpdatePeerHeightsNeverBlocksCaller(t *testing.T) {
+	s := &server{
+		peerHeightsUpdate: make(chan updatePeerHeightsMsg),
+		quit:              make(chan struct{}),
+	}
+
+	hash := &chainhash.Hash{7, 8, 9}
+
+	returned := make(chan struct{})
+
+	go func() {
+		s.UpdatePeerHeights(hash, 42, nil)
+		close(returned)
+	}()
+
+	select {
+	case <-returned:
+	case <-time.After(5 * time.Second):
+		t.Fatal("UpdatePeerHeights blocked the caller while peerHandler was not reading")
+	}
+
+	// peerHandler reads later and still gets the update.
+	select {
+	case msg := <-s.peerHeightsUpdate:
+		require.Equal(t, hash, msg.newHash)
+		require.Equal(t, int32(42), msg.newHeight)
+	case <-time.After(5 * time.Second):
+		t.Fatal("the height update was lost instead of being delivered to a late reader")
+	}
+
+	// After quit, nobody reads the channel again. The call must still return and its sender
+	// must exit rather than wait forever.
+	before := runtime.NumGoroutine()
+
+	close(s.quit)
+
+	for i := 0; i < 50; i++ {
+		s.UpdatePeerHeights(hash, 43, nil)
+	}
+
+	// Polled by hand: require.Eventually runs its condition on a goroutine of its own, which
+	// would count against the total.
+	deadline := time.Now().Add(5 * time.Second)
+	for runtime.NumGoroutine() > before && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	require.LessOrEqual(t, runtime.NumGoroutine(), before, "senders left waiting on peerHeightsUpdate after the server quit")
 }
 
 // TestServerAddPeer tests the AddPeer method
@@ -1336,25 +1406,6 @@ func TestHasServices(t *testing.T) {
 	}
 }
 
-// TestRandomUint16Number tests the randomUint16Number function
-func TestRandomUint16Number(t *testing.T) {
-	tests := []struct {
-		name string
-		max  uint16
-	}{
-		{"small max", 10},
-		{"medium max", 1000},
-		{"large max", 65535},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := randomUint16Number(tt.max)
-			assert.True(t, result < tt.max, "Random number should be less than max")
-		})
-	}
-}
-
 // TestDirectionStringFunc tests the directionString utility
 func TestDirectionStringFunc(t *testing.T) {
 	tests := []struct {
@@ -1415,232 +1466,6 @@ func TestMergeCheckpointsFunc(t *testing.T) {
 	assert.Equal(t, int32(200), merged[1].Height)
 	assert.Equal(t, int32(300), merged[2].Height)
 	assert.Equal(t, int32(400), merged[3].Height)
-}
-
-// TestShouldDisconnectOnBlockErr verifies the block-processing error policy that
-// both the synchronous and the async-prefetch ingestion paths in OnBlock share:
-// validation failures rotate the sync peer, local infrastructure errors do not.
-func TestShouldDisconnectOnBlockErr(t *testing.T) {
-	// No error: nothing to disconnect for.
-	require.False(t, shouldDisconnectOnBlockErr(nil))
-
-	// Local infrastructure problems must NOT churn the sync peer.
-	require.False(t, shouldDisconnectOnBlockErr(errors.NewServiceError("grpc down")))
-	require.False(t, shouldDisconnectOnBlockErr(errors.NewStorageError("db unavailable")))
-
-	// #1187: the per-block backoff skip returns ErrServiceUnavailable on every
-	// in-window re-delivery, and ErrStorageUnavailable is "no aerospike nodes
-	// available" — both are our local fault, not the peer's, so they must NOT
-	// disconnect the delivering peer (this is the regression that churned peers).
-	require.False(t, shouldDisconnectOnBlockErr(errors.NewServiceUnavailableError("in backoff")))
-	require.False(t, shouldDisconnectOnBlockErr(errors.NewStorageUnavailableError("no aerospike nodes available")))
-
-	// Wrapped transient-local errors are still suppressed (chain is walked).
-	require.False(t, shouldDisconnectOnBlockErr(errors.NewProcessingError("wrap", errors.NewStorageError("inner"))))
-
-	// A genuine block validation failure rotates the peer.
-	require.True(t, shouldDisconnectOnBlockErr(errors.NewBlockInvalidError("bad merkle root")))
-}
-
-// TestCheckBannedBounded verifies the bounded ban-check round-trip extracted from
-// OnBlock's pre-admission phase. Under prefetch the per-message watchdog is
-// disarmed for block messages and the netsync stall detector only watches the
-// sync peer, so a wedged query goroutine must NOT be allowed to park the
-// read-loop: the round-trip returns ok=false (drop the block) when the query send
-// or its reply cannot complete within the context, and (banned, true) when the
-// query goroutine answers.
-func TestCheckBannedBounded(t *testing.T) {
-	t.Run("send times out when nobody services the query", func(t *testing.T) {
-		// Unbuffered query with no reader: the send can never complete, so an
-		// already-cancelled context must make the round-trip bail with ok=false.
-		sp := &serverPeer{server: &server{query: make(chan interface{})}}
-
-		ctx, cancel := context.WithCancel(context.Background())
-		cancel()
-
-		banned, ok := sp.checkBannedBounded(ctx, "127.0.0.1")
-		require.False(t, ok, "a never-serviced query send must return ok=false")
-		require.False(t, banned)
-	})
-
-	t.Run("reply times out when the query is read but never answered", func(t *testing.T) {
-		s := &server{query: make(chan interface{})}
-		sp := &serverPeer{server: s}
-
-		// Drain the send but never reply, forcing the second select to wait out
-		// the context — the wedged-query-goroutine case this bound exists for.
-		go func() { <-s.query }()
-
-		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
-		defer cancel()
-
-		banned, ok := sp.checkBannedBounded(ctx, "127.0.0.1")
-		require.False(t, ok, "a missing reply must return ok=false")
-		require.False(t, banned)
-	})
-
-	t.Run("returns the ban verdict when the query goroutine answers", func(t *testing.T) {
-		for _, want := range []bool{true, false} {
-			s := &server{query: make(chan interface{})}
-			sp := &serverPeer{server: s}
-
-			go func() {
-				msg := (<-s.query).(*isPeerBannedMsg)
-				msg.reply <- want
-			}()
-
-			banned, ok := sp.checkBannedBounded(context.Background(), "127.0.0.1")
-			require.True(t, ok, "a serviced round-trip must return ok=true")
-			require.Equal(t, want, banned)
-		}
-	})
-}
-
-// TestPreAdmitTimedOut verifies the deadline-vs-cancel policy OnBlock uses to
-// decide whether a failed pre-admission call (ban-check ok=false, or a
-// GetBlockHeader that erred under preAdmitCtx) should rotate the sync peer.
-// Only a genuine deadline (the wedged-local-round-trip case that strands a
-// requested block) returns true; a parent or direct cancel — daemon shutdown /
-// peer teardown — returns false so the block is dropped without a disconnect
-// storm across every peer that happens to be inside OnBlock.
-func TestPreAdmitTimedOut(t *testing.T) {
-	t.Run("deadline exceeded → rotate", func(t *testing.T) {
-		// Already-past deadline: Err() latches context.DeadlineExceeded.
-		ctx, cancel := context.WithTimeout(context.Background(), time.Nanosecond)
-		defer cancel()
-
-		<-ctx.Done()
-		require.ErrorIs(t, ctx.Err(), context.DeadlineExceeded)
-		require.True(t, preAdmitTimedOut(ctx))
-	})
-
-	t.Run("parent cancelled → drop, no rotate", func(t *testing.T) {
-		// The daemon-shutdown shape: sp.ctx (parent) is cancelled, so the
-		// derived preAdmitCtx reports Canceled, not DeadlineExceeded.
-		parent, cancelParent := context.WithCancel(context.Background())
-		child, cancelChild := context.WithTimeout(parent, time.Hour)
-		defer cancelChild()
-
-		cancelParent()
-
-		<-child.Done()
-		require.ErrorIs(t, child.Err(), context.Canceled)
-		require.False(t, preAdmitTimedOut(child))
-	})
-
-	t.Run("direct cancel → drop, no rotate", func(t *testing.T) {
-		ctx, cancel := context.WithCancel(context.Background())
-		cancel()
-
-		require.False(t, preAdmitTimedOut(ctx))
-	})
-
-	t.Run("live context → no rotate (defensive; callers gate on failure)", func(t *testing.T) {
-		require.False(t, preAdmitTimedOut(context.Background()))
-	})
-}
-
-// TestBlockAdmissionWeight verifies the prefetch-budget weight selection used by
-// OnBlock: the wire-measured payload size is preferred, then the raw buffer
-// length, and only as a last resort the O(all-tx) SerializeSize() walk.
-func TestBlockAdmissionWeight(t *testing.T) {
-	msg := wire.NewMsgBlock(wire.NewBlockHeader(1, &chainhash.Hash{}, &chainhash.Hash{}, 1, 1))
-	fallback := int64(msg.SerializeSize())
-	require.Positive(t, fallback, "empty block must still serialize to a positive size")
-
-	// Wire measurement present: used even when buf is also non-nil.
-	require.Equal(t, int64(1000), blockAdmissionWeight(1000, make([]byte, 200), msg))
-
-	// No wire measurement, but the raw buffer is available: use its length.
-	require.Equal(t, int64(200), blockAdmissionWeight(0, make([]byte, 200), msg))
-
-	// Neither available: fall back to SerializeSize().
-	require.Equal(t, fallback, blockAdmissionWeight(0, nil, msg))
-
-	// A non-positive wire measurement must not be trusted; fall through.
-	require.Equal(t, fallback, blockAdmissionWeight(-1, nil, msg))
-}
-
-// TestMisbehaviorDisconnectTarget verifies the unrequested-block eviction
-// resolves a stream sub-peer to its association primary (so the whole
-// association is torn down), while a peer with no association disconnects
-// itself. This mirrors handleBlockMsg's stream-peer → primary resolution.
-func TestMisbehaviorDisconnectTarget(t *testing.T) {
-	tSettings := test.CreateBaseTestSettings(t)
-	newPeer := func() *peer.Peer {
-		return peer.NewInboundPeer(ulogger.TestLogger{}, tSettings, &peer.Config{})
-	}
-
-	// A peer with no association is its own disconnect target.
-	lone := newPeer()
-	require.Same(t, lone, misbehaviorDisconnectTarget(lone))
-
-	// A stream sub-peer resolves to the association primary.
-	primary := newPeer()
-	assoc := peer.NewAssociation([]byte{0x01, 0x02, 0x03}, primary)
-	primary.SetAssociation(assoc)
-
-	dataStream := newPeer()
-	require.True(t, assoc.AddStream(wire.StreamTypeData1, dataStream))
-	dataStream.SetAssociation(assoc)
-
-	require.Same(t, primary, misbehaviorDisconnectTarget(dataStream))
-
-	// The primary itself resolves to itself.
-	require.Same(t, primary, misbehaviorDisconnectTarget(primary))
-}
-
-// TestDisconnectMisbehaving verifies the shared misbehaviour-eviction helper used
-// at all three disconnect sites: for a stream sub-peer it disconnects BOTH the
-// association primary (whose disconnect drives handleDonePeerMsg's
-// associationMgr.Remove, rotating the sync peer) AND the stream's own connection;
-// for a lone peer it disconnects only that peer, exactly once (idempotent guard).
-// DisconnectWithWarning closes the peer's quit channel, so WaitForDisconnect
-// returning is the observable disconnect signal.
-func TestDisconnectMisbehaving(t *testing.T) {
-	tSettings := test.CreateBaseTestSettings(t)
-	newPeer := func() *peer.Peer {
-		return peer.NewInboundPeer(ulogger.TestLogger{}, tSettings, &peer.Config{})
-	}
-
-	// disconnected reports whether p was disconnected within a short window
-	// (DisconnectWithWarning closes p.quit, which WaitForDisconnect awaits).
-	disconnected := func(p *peer.Peer) bool {
-		done := make(chan struct{})
-		go func() {
-			p.WaitForDisconnect()
-			close(done)
-		}()
-
-		select {
-		case <-done:
-			return true
-		case <-time.After(100 * time.Millisecond):
-			return false
-		}
-	}
-
-	t.Run("stream sub-peer evicts both the primary and the stream", func(t *testing.T) {
-		primary := newPeer()
-		assoc := peer.NewAssociation([]byte{0x01, 0x02, 0x03}, primary)
-		primary.SetAssociation(assoc)
-
-		dataStream := newPeer()
-		require.True(t, assoc.AddStream(wire.StreamTypeData1, dataStream))
-		dataStream.SetAssociation(assoc)
-
-		disconnectMisbehaving(&serverPeer{Peer: dataStream}, "bad block")
-
-		require.True(t, disconnected(primary), "the association primary must be disconnected to rotate the sync peer")
-		require.True(t, disconnected(dataStream), "the stream sub-peer's own connection must be disconnected too")
-	})
-
-	t.Run("lone peer disconnects only itself", func(t *testing.T) {
-		lone := newPeer()
-
-		require.NotPanics(t, func() { disconnectMisbehaving(&serverPeer{Peer: lone}, "bad block") })
-		require.True(t, disconnected(lone))
-	})
 }
 
 // TestTearDownAssociationStreams verifies the primary-disconnect teardown that
@@ -1717,132 +1542,486 @@ func TestTearDownAssociationStreams(t *testing.T) {
 	})
 }
 
-// TestAwaitBlockResult_ReleasesAndExitsOnTeardown covers the prefetch teardown
-// path: awaitBlockResult must hold the reserved budget until the block actually
-// finishes processing — even after the peer is torn down (sp.quit) — because the
-// block's memory is still live in the netsync pipeline. It releases (via defer)
-// only when done arrives, or, as a shutdown-race backstop, when sp.ctx (the
-// ServiceManager errgroup Init context, cancelled on daemon shutdown) fires. A
-// nil prefetch budget makes ReleaseBlockPrefetch a no-op, so this exercises the
-// control flow without standing up a full SyncManager.
-func TestAwaitBlockResult_ReleasesAndExitsOnTeardown(t *testing.T) {
-	newPeer := func(ctx context.Context) *serverPeer {
-		return &serverPeer{
-			server: &server{syncManager: &netsync.SyncManager{}, logger: ulogger.TestLogger{}},
-			ctx:    ctx,
-			quit:   make(chan struct{}),
+// TestAnnounceNewTransactionsReachesPeerInBatchOrder checks that a first
+// announce reaches a real peer in batch order, which netsync sorts parents
+// first. It used to go out through a goroutine per inv, in no set order.
+func TestAnnounceNewTransactionsReachesPeerInBatchOrder(t *testing.T) {
+	var (
+		mu   sync.Mutex
+		seen []chainhash.Hash
+	)
+
+	s, state, _ := newRelayTestServerPeer(t, func(_ *peer.Peer, msg *wire.MsgInv) {
+		mu.Lock()
+		defer mu.Unlock()
+
+		for _, iv := range msg.InvList {
+			seen = append(seen, iv.Hash)
+		}
+	})
+	s.modifyRebroadcastInv = make(chan interface{}, modifyRebroadcastInvBuffer)
+
+	// Play the peerHandler's part until the test ends.
+	stop := make(chan struct{})
+	t.Cleanup(func() { close(stop) })
+
+	go func() {
+		for {
+			select {
+			case msg := <-s.relayInv:
+				s.handleRelayInvMsg(state, msg)
+			case <-stop:
+				return
+			}
+		}
+	}()
+
+	const n = 200
+
+	txns := make([]*netsync.TxHashAndFee, n)
+	want := make([]chainhash.Hash, n)
+
+	for i := range txns {
+		// Hash order differs from batch order.
+		want[i] = chainhash.Hash{byte(n - i), byte(i * 7), 0xab}
+		txns[i] = &netsync.TxHashAndFee{TxHash: want[i], Fee: 1, Size: 100}
+	}
+
+	s.AnnounceNewTransactions(txns[:n/2])
+	s.AnnounceNewTransactions(txns[n/2:])
+
+	require.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+
+		return len(seen) == n
+	}, 10*time.Second, 10*time.Millisecond)
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	require.Equal(t, want, seen)
+}
+
+// A ban recorded while the server is running reaches the peer loop, which is what disconnects a
+// connected peer at the banned address. Start used to run the peer loop in the foreground and only
+// launch the ban listener after it, so the listener started at shutdown: nothing drained the ban
+// list's subscription, and once its buffer filled every further ban parked a goroutine for good.
+// A mainnet node held 694 of them after a month.
+func TestServerStart_BanReachesThePeerLoopWhileRunning(t *testing.T) {
+	bl := emptyWritableBanList(t)
+
+	s := &server{
+		ctx:                  t.Context(),
+		logger:               ulogger.TestLogger{},
+		banList:              bl,
+		banChan:              bl.Subscribe(),
+		query:                make(chan interface{}),
+		modifyRebroadcastInv: make(chan interface{}, modifyRebroadcastInvBuffer),
+		rebroadcastTip:       make(chan struct{}, 1),
+		relayInv:             make(chan relayMsg, 16),
+		quit:                 make(chan struct{}),
+	}
+
+	disconnects := make(chan disconnectNodeMsg, 1)
+
+	s.runPeerLoop = func() {
+		defer s.wg.Done()
+
+		for {
+			select {
+			case q := <-s.query:
+				if msg, ok := q.(disconnectNodeMsg); ok {
+					// No peers are connected, so answer as peerHandler would.
+					msg.reply <- errors.NewProcessingError("peer not found")
+
+					select {
+					case disconnects <- msg:
+					default:
+					}
+				}
+			case <-s.quit:
+				return
+			}
 		}
 	}
 
-	t.Run("holds after sp.quit until the block completes", func(t *testing.T) {
-		sp := newPeer(context.Background())
-		done := make(chan error, 1)
+	stopped := make(chan struct{})
 
-		finished := make(chan struct{})
-		go func() {
-			sp.awaitBlockResult(done, 0, &chainhash.Hash{})
-			close(finished)
-		}()
+	go func() {
+		s.Start()
+		close(stopped)
+	}()
 
-		// Peer torn down, but the block is still queued: must NOT return yet
-		// (that would release the budget while the block's memory is still live).
-		close(sp.quit)
-		select {
-		case <-finished:
-			t.Fatal("awaitBlockResult released on sp.quit instead of holding until the block completed")
-		case <-time.After(50 * time.Millisecond):
-		}
-
-		// Block finishes processing: now it releases and exits.
-		done <- nil
-		select {
-		case <-finished:
-		case <-time.After(time.Second):
-			t.Fatal("awaitBlockResult did not exit after the block completed")
-		}
+	t.Cleanup(func() {
+		close(s.quit)
+		<-stopped
 	})
 
-	t.Run("sp.ctx is the shutdown-race backstop after sp.quit", func(t *testing.T) {
-		ctx, cancel := context.WithCancel(context.Background())
-		sp := newPeer(ctx)
-		done := make(chan error, 1) // reply never arrives (shutdown drain race)
+	require.NoError(t, bl.Add(t.Context(), "10.0.0.1", time.Now().Add(time.Hour)))
 
-		finished := make(chan struct{})
-		go func() {
-			sp.awaitBlockResult(done, 0, &chainhash.Hash{})
-			close(finished)
-		}()
+	select {
+	case <-disconnects:
+	case <-time.After(5 * time.Second):
+		t.Fatal("a ban recorded while the server runs must reach the peer loop")
+	}
+}
 
-		close(sp.quit)
-		select {
-		case <-finished:
-			t.Fatal("awaitBlockResult returned before the block completed or ctx cancelled")
-		case <-time.After(50 * time.Millisecond):
-		}
+// A ban disconnects the connected peers it covers and no others. A peer's address carries its port
+// and a ban names a bare host or a subnet, so comparing the two as they stood matched nothing: the
+// ban was recorded, but the banned peer stayed connected.
+func TestBanListEvent_DisconnectsTheBannedPeers(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		ban           string
+		banned        []string // outbound peers
+		bannedInbound []string
+		spared        []string
+	}{
+		{
+			name:   "a host ban disconnects the peer at that host",
+			ban:    "10.0.0.1",
+			banned: []string{"10.0.0.1:8333"},
+			spared: []string{"10.0.0.2:8333"},
+		},
+		{
+			name:   "a subnet ban disconnects every peer inside it",
+			ban:    "10.0.1.0/24",
+			banned: []string{"10.0.1.7:8333", "10.0.1.9:18333"},
+			spared: []string{"10.0.2.7:8333"},
+		},
+		{
+			name:   "an IPv6 host ban disconnects the peer at that host",
+			ban:    "2001:db8::1",
+			banned: []string{"[2001:db8::1]:8333"},
+			spared: []string{"[2001:db8::2]:8333"},
+		},
+		{
+			// The peer loop answers one request by disconnecting one inbound
+			// peer and stops there, so the outbound peer at the same host is
+			// only reached by asking again.
+			name:          "a host ban disconnects both the inbound and the outbound peer at that host",
+			ban:           "10.0.0.1",
+			banned:        []string{"10.0.0.1:8333"},
+			bannedInbound: []string{"10.0.0.1:50000"},
+			spared:        []string{"10.0.0.2:8333"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			bl := emptyWritableBanList(t)
 
-		cancel() // daemon shutdown cancels the errgroup ctx
-		select {
-		case <-finished:
-		case <-time.After(time.Second):
-			t.Fatal("awaitBlockResult did not exit on sp.ctx cancellation")
-		}
-	})
+			s := &server{
+				ctx:     t.Context(),
+				logger:  ulogger.TestLogger{},
+				banList: bl,
+				banChan: bl.Subscribe(),
+				query:   make(chan interface{}),
+				quit:    make(chan struct{}),
+			}
 
-	t.Run("completes when the reply arrives", func(t *testing.T) {
-		sp := newPeer(context.Background())
-		done := make(chan error, 1)
-		done <- nil // successful processing, no disconnect
+			state := newTestPeerState()
 
-		finished := make(chan struct{})
-		go func() {
-			sp.awaitBlockResult(done, 0, &chainhash.Hash{})
-			close(finished)
-		}()
+			// Keyed by position: a peer with no connection has no ID of its own yet.
+			keys := make(map[string]int32)
 
-		select {
-		case <-finished:
-		case <-time.After(time.Second):
-			t.Fatal("awaitBlockResult did not return after the reply arrived")
-		}
-	})
+			for i, addr := range append(append([]string{}, tc.banned...), tc.spared...) {
+				keys[addr] = int32(i)
+				state.outboundPeers.Set(int32(i), newTestOutboundPeer(t, s, addr))
+			}
 
-	t.Run("validation failure after sp.quit does not disconnect", func(t *testing.T) {
-		sp := newPeer(context.Background())
-		done := make(chan error, 1)
+			for i, addr := range tc.bannedInbound {
+				state.inboundPeers.Set(int32(i), newTestInboundPeer(t, s, addr))
+			}
 
-		// Recover in the goroutine and assert on the test goroutine: a
-		// disconnect-worthy validation error arriving after teardown must be
-		// logged but NOT disconnect the already-gone peer. The embedded
-		// *peer.Peer is nil, so reaching DisconnectWithWarning would panic —
-		// a nil recovered value therefore proves the disconnect path is skipped.
-		panicked := make(chan any, 1)
-		finished := make(chan struct{})
-		go func() {
-			defer func() {
-				panicked <- recover()
-				close(finished)
+			// Serve the peer loop's query channel, as peerHandler does.
+			go func() {
+				for {
+					select {
+					case q := <-s.query:
+						s.handleQuery(state, q)
+					case <-s.quit:
+						return
+					}
+				}
 			}()
-			sp.awaitBlockResult(done, 0, &chainhash.Hash{})
-		}()
 
-		// Tear down with done still empty so the goroutine must take the sp.quit
-		// branch and park in its inner wait (rather than racing the outer <-done).
-		close(sp.quit)
-		select {
-		case <-finished:
-			t.Fatal("awaitBlockResult returned before the late reply arrived")
-		case <-time.After(50 * time.Millisecond):
-		}
+			go s.listenForBanEvents(t.Context())
 
-		// The late validation failure now arrives: logged, but must not disconnect.
-		done <- errors.NewBlockInvalidError("bad block after teardown")
+			t.Cleanup(func() { close(s.quit) })
 
-		select {
-		case <-finished:
-		case <-time.After(time.Second):
-			t.Fatal("awaitBlockResult did not return after the late reply")
-		}
+			require.NoError(t, bl.Add(t.Context(), tc.ban, time.Now().Add(time.Hour)))
 
-		require.Nil(t, <-panicked, "awaitBlockResult must not disconnect (panic) a torn-down peer")
+			for _, addr := range tc.banned {
+				id := keys[addr]
+
+				require.Eventually(t, func() bool {
+					_, still := state.outboundPeers.Get(id)
+					return !still
+				}, 5*time.Second, 10*time.Millisecond, "the peer at %s is banned and must be disconnected", addr)
+			}
+
+			for i, addr := range tc.bannedInbound {
+				require.Eventually(t, func() bool {
+					_, still := state.inboundPeers.Get(int32(i))
+					return !still
+				}, 5*time.Second, 10*time.Millisecond, "the inbound peer at %s is banned and must be disconnected", addr)
+			}
+
+			for _, addr := range tc.spared {
+				_, still := state.outboundPeers.Get(keys[addr])
+				require.True(t, still, "the peer at %s is not covered by the ban", addr)
+			}
+		})
+	}
+}
+
+// An "add" event for a ban that no longer holds disconnects nothing. Add and Remove publish from
+// separate goroutines, so the add can arrive after the ban is gone, and Add takes an expiry already
+// in the past, as a BanPeer request with an "until" in the past sends. Matching the event's host
+// disconnected the peer anyway.
+func TestBanListEvent_AStaleBanDisconnectsNothing(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		ban  func(t *testing.T, bl *p2p.BanList)
+	}{
+		{
+			name: "a ban that has already expired",
+			ban: func(t *testing.T, bl *p2p.BanList) {
+				require.NoError(t, bl.Add(t.Context(), "10.0.0.1", time.Now().Add(-time.Minute)))
+			},
+		},
+		{
+			name: "a ban removed before its event was handled",
+			ban: func(t *testing.T, bl *p2p.BanList) {
+				require.NoError(t, bl.Add(t.Context(), "10.0.0.1", time.Now().Add(time.Hour)))
+				require.NoError(t, bl.Remove(t.Context(), "10.0.0.1"))
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			bl := emptyWritableBanList(t)
+
+			s := &server{
+				ctx:     t.Context(),
+				logger:  ulogger.TestLogger{},
+				banList: bl,
+				banChan: bl.Subscribe(),
+				query:   make(chan interface{}),
+				quit:    make(chan struct{}),
+			}
+
+			state := newTestPeerState()
+			state.outboundPeers.Set(0, newTestOutboundPeer(t, s, "10.0.0.1:8333"))
+			state.inboundPeers.Set(0, newTestInboundPeer(t, s, "10.0.0.1:50000"))
+
+			go func() {
+				for {
+					select {
+					case q := <-s.query:
+						s.handleQuery(state, q)
+					case <-s.quit:
+						return
+					}
+				}
+			}()
+
+			t.Cleanup(func() { close(s.quit) })
+
+			tc.ban(t, bl)
+
+			// A remove event may come first; the add is the one under test.
+			var event p2p.BanEvent
+
+			for event.Action != "add" {
+				select {
+				case event = <-s.banChan:
+				case <-time.After(5 * time.Second):
+					t.Fatal("the ban list must publish the add")
+				}
+			}
+
+			// Synchronous: once it returns, any disconnect it asked for is done.
+			s.handleBanEvent(t.Context(), event)
+
+			_, outbound := state.outboundPeers.Get(0)
+			require.True(t, outbound, "the outbound peer is not banned and must stay connected")
+
+			_, inbound := state.inboundPeers.Get(0)
+			require.True(t, inbound, "the inbound peer is not banned and must stay connected")
+		})
+	}
+}
+
+// Banning a peer never stalls the peer loop, however far behind the ban listener is. The ban
+// handlers used to send the ban event themselves, blocking, from inside peerHandler, on the same
+// channel the ban list publishes to a moment later. With that channel full, as it was for weeks on
+// a mainnet node, the first misbehaving peer or setban would have frozen the whole peer loop.
+func TestBanHandlers_DoNotBlockThePeerLoopWhenTheBanListenerIsBehind(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		ban  func(s *server, state *peerState, sp *serverPeer)
+	}{
+		{
+			name: "a misbehaving peer",
+			ban:  func(s *server, state *peerState, sp *serverPeer) { s.handleBanPeerMsg(state, sp) },
+		},
+		{
+			name: "a ban for a set duration",
+			ban: func(s *server, state *peerState, sp *serverPeer) {
+				s.handleBanPeerForDurationMsg(state, sp, time.Now().Add(time.Hour).Unix())
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			origCfg := cfg
+			cfg = &config{BanDuration: 24 * time.Hour}
+
+			t.Cleanup(func() { cfg = origCfg })
+
+			bl := emptyWritableBanList(t)
+
+			s := &server{
+				ctx:     t.Context(),
+				logger:  ulogger.TestLogger{},
+				banList: bl,
+				banChan: bl.Subscribe(),
+			}
+
+			// The listener is behind: its subscription is full. Each bl.Add below
+			// therefore leaves its publishing goroutine blocked for the rest of the
+			// test binary, by design: that is the production state being modelled.
+			for len(s.banChan) < cap(s.banChan) {
+				s.banChan <- p2p.BanEvent{Action: "add", IP: "192.0.2.1"}
+			}
+
+			state := newTestPeerState()
+			sp := newTestOutboundPeer(t, s, "10.0.0.1:8333")
+			sp.ctx = t.Context()
+
+			done := make(chan struct{})
+
+			go func() {
+				tc.ban(s, state, sp)
+				close(done)
+			}()
+
+			select {
+			case <-done:
+			case <-time.After(5 * time.Second):
+				t.Fatal("banning a peer must not block the peer loop")
+			}
+
+			_, banned := state.banned.Get("10.0.0.1")
+			require.True(t, banned, "the host is banned in the peer loop's own state")
+			require.True(t, bl.IsBanned("10.0.0.1:8333"), "and on the shared ban list")
+		})
+	}
+}
+
+// newTestInboundPeer builds an inbound serverPeer whose connection reports addr as its remote end.
+// An inbound peer only learns its address from its connection.
+func newTestInboundPeer(t *testing.T, srv *server, addr string) *serverPeer {
+	t.Helper()
+
+	remote, err := net.ResolveTCPAddr("tcp", addr)
+	require.NoError(t, err)
+
+	ours, theirs := net.Pipe()
+
+	t.Cleanup(func() {
+		_ = ours.Close()
+		_ = theirs.Close()
 	})
+
+	p := peer.NewInboundPeer(ulogger.TestLogger{}, settings.NewSettings(), &peer.Config{})
+	p.AssociateConnection(addressedConn{Conn: ours, remote: remote})
+
+	return &serverPeer{Peer: p, server: srv}
+}
+
+// A ban landing while the server shuts down never strands the listener. With the peer loop gone
+// nothing serves s.query, so a plain send on it would block the listener for good.
+func TestBanListEvent_ListenerGivesUpAtShutdown(t *testing.T) {
+	bl := emptyWritableBanList(t)
+
+	s := &server{
+		ctx:     t.Context(),
+		logger:  ulogger.TestLogger{},
+		banList: bl,
+		banChan: bl.Subscribe(),
+		query:   make(chan interface{}),
+		quit:    make(chan struct{}),
+	}
+
+	close(s.quit)
+
+	require.NoError(t, bl.Add(t.Context(), "10.0.0.1", time.Now().Add(time.Hour)))
+
+	var event p2p.BanEvent
+
+	select {
+	case event = <-s.banChan:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the ban list must publish the ban")
+	}
+
+	done := make(chan struct{})
+
+	go func() {
+		s.handleBanEvent(context.Background(), event)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the ban listener must give up once the server is shutting down")
+	}
+}
+
+// lookupFailingNAT maps the port but never reports an external address, as a gateway that
+// accepts AddPortMapping and errors on GetExternalIPAddress does.
+type lookupFailingNAT struct {
+	mappings atomic.Int32
+}
+
+func (n *lookupFailingNAT) GetExternalAddress() (net.IP, error) {
+	return nil, errors.NewProcessingError("no external address")
+}
+
+func (n *lookupFailingNAT) AddPortMapping(string, int, int, string, int) (int, error) {
+	n.mappings.Add(1)
+	return 8333, nil
+}
+
+func (n *lookupFailingNAT) DeletePortMapping(string, int, int) error { return nil }
+
+// A failed external-address lookup does not stop the UPnP thread renewing the port mapping. The
+// lookup failure skipped the timer reset, and with the timer already fired the thread waited only
+// for shutdown, so the 20-minute lease lapsed and was never renewed.
+func TestUPnPUpdateThread_KeepsRenewingAfterAFailedAddressLookup(t *testing.T) {
+	origInterval := upnpRenewInterval
+	upnpRenewInterval = 10 * time.Millisecond
+
+	t.Cleanup(func() { upnpRenewInterval = origInterval })
+
+	nat := &lookupFailingNAT{}
+
+	s := &server{
+		logger: ulogger.TestLogger{},
+		nat:    nat,
+		quit:   make(chan struct{}),
+	}
+
+	s.wg.Add(1)
+
+	go s.upnpUpdateThread()
+
+	t.Cleanup(func() {
+		close(s.quit)
+		s.wg.Wait()
+	})
+
+	require.Eventually(t, func() bool { return nat.mappings.Load() >= 3 }, 5*time.Second, 10*time.Millisecond,
+		"the port mapping must be renewed after a failed address lookup")
 }

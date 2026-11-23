@@ -1,6 +1,7 @@
 package validator
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -76,26 +77,45 @@ func TestHTTPHandlerPath_ProtobufBody_EndToEnd(t *testing.T) {
 	require.Equal(t, uint32(1234567), gotOpts.CandidateParentMedianTime)
 }
 
-// TestHTTPHandlerPath_LegacyOctetStream_BackwardCompat pins that the legacy
-// /tx path (Content-Type: application/octet-stream + raw tx body + scalar
-// query params) still works: the query params project into Options and the
-// shared request builder + server projection round-trip without error.
+// TestHTTPHandlerPath_LegacyOctetStream_BackwardCompat drives handleSingleTx to pin
+// the legacy /tx contract as it now stands: a non-protobuf body — an explicit
+// application/octet-stream, or no Content-Type at all — is still accepted and still
+// carries raw transaction bytes through to the validator, but it projects to block
+// height 0 and NewDefaultOptions() whatever the caller put in the query string.
+// Height 0 makes the validator derive the height from its own chain state instead of
+// honouring a caller assertion. Every assertion is on what the validator actually
+// received, not on a request this test built itself.
 func TestHTTPHandlerPath_LegacyOctetStream_BackwardCompat(t *testing.T) {
-	e := echo.New()
-	ctx, err := echoRequestWithQuery(e, "blockHeight=42")
-	require.NoError(t, err)
+	cases := []struct {
+		name        string
+		contentType string
+	}{
+		{"octet-stream", "application/octet-stream"},
+		{"no content type", ""},
+	}
 
-	require.False(t, isProtobufContentType(ctx.Request().Header.Get("Content-Type")),
-		"legacy path must not be misclassified as protobuf")
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			require.False(t, isProtobufContentType(tc.contentType),
+				"legacy path must not be misclassified as protobuf")
 
-	blockHeight, opts := extractValidationParams(ctx)
-	require.Equal(t, uint32(42), blockHeight)
+			srv, rec := newTrustFlagServer(t)
+			handler := srv.HTTP().HandleSingleTx(context.Background())
 
-	// The legacy path subsequently calls buildValidateTxRequest + optionsFromValidateRequest.
-	// The projection must not error on the legacy shape.
-	req := buildValidateTxRequest([]byte{1, 2, 3}, blockHeight, opts)
-	_, err = optionsFromValidateRequest(req)
-	require.NoError(t, err)
+			tx := newTinyTx(t)
+			res := postToHandler(t, handler, "/tx?"+attackQueryString, tc.contentType, tx.SerializeBytes())
+
+			require.Equal(t, http.StatusOK, res.Code, "body: %s", res.Body.String())
+			require.Equal(t, 1, rec.calls)
+			require.NotNil(t, rec.lastTx)
+			require.Equal(t, tx.TxID(), rec.lastTx.TxID(),
+				"the legacy body shape must still deliver the raw transaction bytes")
+			require.Equal(t, uint32(0), rec.lastHeight,
+				"the legacy path must not carry a caller-asserted block height")
+			require.Equal(t, NewDefaultOptions(), rec.lastOptions,
+				"no query parameter may select a validation option")
+		})
+	}
 }
 
 // TestUnconfirmedParentsAtCandidateHeight_WireRoundTrip pins the
