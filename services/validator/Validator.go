@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"net/http"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -221,9 +222,10 @@ type txmetaBatchItem struct {
 	hash      *chainhash.Hash
 	metaBytes []byte
 	isDelete  bool
-	// lane says metaBytes is the lane metadata encoding (meta.LaneMetaBytesInto), which the wire
-	// marks with txmetacache.WireActionADDLane instead of WireActionADD.
-	lane bool
+	// action is the wire action of an entry that is not a delete: txmetacache.WireActionADD for
+	// MetaBytes, WireActionADDLane for the lane metadata encoding (meta.LaneMetaBytesInto), or
+	// WireActionADDOwn for MetaBytes with the own lane position (meta.CacheBytesInto).
+	action byte
 }
 
 // wireAction is the action byte the txmeta wire carries for the item.
@@ -231,10 +233,8 @@ func (it *txmetaBatchItem) wireAction() byte {
 	switch {
 	case it.isDelete:
 		return txmetacache.WireActionDELETE
-	case it.lane:
-		return txmetacache.WireActionADDLane
 	default:
-		return txmetacache.WireActionADD
+		return it.action
 	}
 }
 
@@ -519,7 +519,80 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 		}
 	}
 
+	// v2 txmeta routing partitions records by a configured count; the topic has
+	// its own partition count from a different setting (kafka_txmetaConfig),
+	// and the async producer contract is "MUST set Partition" with no fallback.
+	// Reconcile the two once, loudly, at start-up instead of shipping records
+	// to non-existent partitions forever.
+	if tSettings.Validator.TxMetaWireFormat == "v2" {
+		v.checkTxMetaPartitionAgreement(ctx)
+	}
+
 	return v, nil
+}
+
+// txmetaTopicMetadataTimeout bounds the start-up topic metadata request so an
+// unreachable broker cannot stall validator construction.
+var txmetaTopicMetadataTimeout = 10 * time.Second
+
+// checkTxMetaPartitionAgreement reconciles validator_txmeta_numPartitions
+// against everything it must match for v2 txmeta routing to be sound:
+// the cache bucket count (the routing divides BucketsCount into partition
+// ranges, so an exact multiple is a correctness constraint, not a style
+// preference) and the topic's partition count. The topic count is taken from
+// the producer via metadata where the producer can answer (real clients can;
+// test doubles need not), and falls back to the partitions parameter of the
+// kafka_txmetaConfig URL - the number that topic is created with. Disagreement
+// is reported as an error, not a warning, and does not stop the service:
+// routing named partitions 8-31 on an 8-partition topic in the default
+// settings context (numPartitions 32, KAFKA_PARTITIONS_HIGH 8), a mismatch
+// that must be impossible to miss because the failure it causes - records to
+// unknown partitions from a producer with no fallback - is a data-loss path.
+func (v *Validator) checkTxMetaPartitionAgreement(ctx context.Context) {
+	numPartitions := v.settings.Validator.TxMetaNumPartitions
+	if numPartitions <= 0 {
+		numPartitions = 1
+	}
+
+	if txmetacache.BucketsCount%numPartitions != 0 {
+		v.logger.Errorf("[Validator] validator_txmeta_numPartitions=%d does not divide the txmeta cache BucketsCount=%d; v2 routing ranges would overlap - choose a divisor",
+			numPartitions, txmetacache.BucketsCount)
+	}
+
+	// Preferred source: ask the broker what the topic actually has.
+	if counter, ok := v.txmetaKafkaProducerClient.(kafka.TopicPartitionCounter); ok && counter != nil {
+		metaCtx, cancel := context.WithTimeout(ctx, txmetaTopicMetadataTimeout)
+		count, err := counter.TopicPartitionCount(metaCtx)
+		cancel()
+
+		if err != nil {
+			v.logger.Warnf("[Validator] cannot verify txmeta topic partition count against validator_txmeta_numPartitions=%d: %v", numPartitions, err)
+			return
+		}
+		if int(count) != numPartitions {
+			v.logger.Errorf("[Validator] validator_txmeta_numPartitions=%d but the txmeta topic has %d partitions: v2 routing will name partitions the topic does not have and the async producer has no fallback - align validator_txmeta_numPartitions with the topic (kafka_txmetaConfig partitions)",
+				numPartitions, count)
+		}
+		return
+	}
+
+	// Fallback source: the partitions parameter the topic is created from.
+	if v.settings.Kafka.TxMetaConfig != nil {
+		if p := v.settings.Kafka.TxMetaConfig.Query().Get("partitions"); p != "" {
+			topicPartitions, err := strconv.Atoi(p)
+			if err != nil {
+				v.logger.Warnf("[Validator] kafka_txmetaConfig partitions=%q is not a number; cannot verify against validator_txmeta_numPartitions=%d", p, numPartitions)
+				return
+			}
+			if topicPartitions != numPartitions {
+				v.logger.Errorf("[Validator] validator_txmeta_numPartitions=%d but kafka_txmetaConfig creates the topic with partitions=%d: v2 routing will name partitions the topic does not have and the async producer has no fallback",
+					numPartitions, topicPartitions)
+			}
+			return
+		}
+	}
+
+	v.logger.Infof("[Validator] txmeta v2 partition agreement not verifiable here (no broker metadata, no partitions parameter in kafka_txmetaConfig); validator_txmeta_numPartitions=%d stands unverified", numPartitions)
 }
 
 // Close releases the resources the Validator owns: the tx-meta batcher and the
@@ -2435,7 +2508,7 @@ func (v *Validator) CreateInUtxoStore(ctx context.Context, tx *bt.Tx, blockHeigh
 func (v *Validator) sendTxMetaToKafka(data *meta.Data, txHash *chainhash.Hash, parentLanes []uint64) error {
 	startKafka := time.Now()
 
-	metaBytes, laneFormat, err := v.txMetaPayload(data, parentLanes)
+	metaBytes, action, err := v.txMetaPayload(data, parentLanes)
 	if err != nil {
 		return errors.NewProcessingError("error serializing tx meta data for tx %s", txHash.String(), err)
 	}
@@ -2450,7 +2523,7 @@ func (v *Validator) sendTxMetaToKafka(data *meta.Data, txHash *chainhash.Hash, p
 			hash:      txHash,
 			metaBytes: metaBytes,
 			isDelete:  false,
-			lane:      laneFormat,
+			action:    action,
 		})
 	} else {
 		// Fallback: send single item as batch format for consistency.
@@ -2458,7 +2531,7 @@ func (v *Validator) sendTxMetaToKafka(data *meta.Data, txHash *chainhash.Hash, p
 			hash:      txHash,
 			metaBytes: metaBytes,
 			isDelete:  false,
-			lane:      laneFormat,
+			action:    action,
 		}
 		if v.settings.Validator.TxMetaWireFormat == "v2" {
 			v.sendTxMetaBatchV2([]*txmetaBatchItem{item})
@@ -2478,33 +2551,45 @@ func (v *Validator) sendTxMetaToKafka(data *meta.Data, txHash *chainhash.Hash, p
 	return nil
 }
 
-// txMetaPayload is the content of data's txmeta entry. With lane positions on it is the lane
-// metadata encoding, carrying the transaction's own lane position and its parents', when every one
-// of them is a valid position; otherwise, and always with lane positions off, it is MetaBytes. A
-// message that goes without positions at shadow is counted with the reason, never refused: nothing
-// decides on a lane position yet, and Phase 1 measures how many messages carry them.
-func (v *Validator) txMetaPayload(data *meta.Data, parentLanes []uint64) ([]byte, bool, error) {
+// txMetaPayload is the content of data's txmeta entry and its wire action. With lane positions on
+// it is the lane metadata encoding (WireActionADDLane), carrying the transaction's own lane
+// position and its parents', when every one of them is a valid position. When only the own
+// position is valid, as for a transaction spending an output created before lane positions were
+// on, it is MetaBytes followed by the own position (WireActionADDOwn), which subtree validation
+// caches as it is and reads when it builds the subtree's lane bitmaps. Otherwise, and always with
+// lane positions off, it is MetaBytes (WireActionADD). An entry that goes without the parents'
+// positions at shadow is counted with the reason, never refused: nothing decides on a lane
+// position yet, and Phase 1 measures how many entries carry them.
+func (v *Validator) txMetaPayload(data *meta.Data, parentLanes []uint64) ([]byte, byte, error) {
 	if !v.laneShadow() {
 		b, err := data.MetaBytes()
-		return b, false, err
+		return b, txmetacache.WireActionADD, err
 	}
 
 	reason := laneTxMetaMiss(data, parentLanes)
 	if reason == "" {
 		b, err := data.LaneMetaBytesInto(nil, parentLanes)
 		if err == nil {
-			txmetacache.CountLaneTxMetaSent("")
-			return b, true, nil
+			txmetacache.CountLaneTxMetaSent("", false)
+			return b, txmetacache.WireActionADDLane, nil
 		}
 
 		reason = txmetacache.LaneMissEncode
 	}
 
-	txmetacache.CountLaneTxMetaSent(reason)
+	if lane.Valid(data.LanePosition) {
+		txmetacache.CountLaneTxMetaSent(reason, true)
+
+		b, err := data.CacheBytesInto(nil)
+
+		return b, txmetacache.WireActionADDOwn, err
+	}
+
+	txmetacache.CountLaneTxMetaSent(reason, false)
 
 	b, err := data.MetaBytes()
 
-	return b, false, err
+	return b, txmetacache.WireActionADD, err
 }
 
 // laneTxMetaMiss is why data's txmeta cannot carry lane positions, or "" when it can.
@@ -2648,9 +2733,11 @@ func txMetaEntrySize(item *txmetaBatchItem) int {
 // For each entry:
 //
 //	[32 bytes] - tx hash (raw bytes)
-//	[1 byte]   - action (0=ADD, 1=DELETE, 2=ADDLane)
+//	[1 byte]   - action (0=ADD, 1=DELETE, 2=ADDLane, 3=ADDOwn)
 //	[4 bytes]  - content length (uint32, little-endian) - 0 for DELETE
-//	[N bytes]  - content (metaBytes) - only for ADD
+//	[N bytes]  - content - for every ADD form, none for DELETE: MetaBytes for ADD, the lane
+//	             encoding for ADDLane, MetaBytes and the own position for ADDOwn
+//	             (docs/references/kafkaMessageFormat.md)
 func serializeTxMetaBatch(batch []*txmetaBatchItem) []byte {
 	// Calculate total size
 	size := 4 // entry count
@@ -2701,6 +2788,14 @@ type txmetaItemWithHash struct {
 	h    uint64
 }
 
+// The v2 header carries txmetacache.BucketsCount as a uint16 that receivers
+// accept only when it is zero or a power of two. Both assertions fail the build,
+// not a running node, if a cache build tag ever selects a count outside that.
+var (
+	_ = [1]struct{}{}[txmetacache.BucketsCount>>16]
+	_ = [1]struct{}{}[txmetacache.BucketsCount&(txmetacache.BucketsCount-1)]
+)
+
 // serializeTxMetaBatchV2 writes a v2-format txmeta Kafka payload for a set of
 // items that have already been grouped into a single Kafka partition.
 //
@@ -2714,15 +2809,15 @@ type txmetaItemWithHash struct {
 //	per entry:
 //	  [8 bytes]  xxhash(tx hash) (uint64 LE)
 //	  [32 bytes] tx hash
-//	  [1 byte]   action (0=ADD, 1=DELETE, 2=ADDLane)
+//	  [1 byte]   action (0=ADD, 1=DELETE, 2=ADDLane, 3=ADDOwn)
 //	  [4 bytes]  content length (uint32 LE)
-//	  [N bytes]  content (only for ADD)
+//	  [N bytes]  content, for every ADD form and none for DELETE, as in v1
 //
 // Putting the pre-computed xxhash on the wire lets the receiver skip its own
 // xxhash on every entry — a small per-entry saving that compounds at the
 // production rates this is designed for.
-func serializeTxMetaBatchV2(items []txmetaItemWithHash) []byte {
-	size := 8 // header: magic + version + 2 reserved + count
+func serializeTxMetaBatchV2(items []txmetaItemWithHash, bucketsCount int) []byte {
+	size := 8 // header: magic + version + uint16 BucketsCount + count
 	for _, it := range items {
 		size += 8 + 32 + 1 + 4
 		if !it.item.isDelete {
@@ -2733,6 +2828,12 @@ func serializeTxMetaBatchV2(items []txmetaItemWithHash) []byte {
 	buf := make([]byte, size)
 	buf[0] = txmetacache.WireV2Magic
 	buf[1] = txmetacache.WireV2Version
+	// Build-tag-selected cache geometry, on the wire: receivers compare it
+	// against their own and can name the disagreement instead of silently
+	// sharing buckets across partitions. The header holds a uint16 and receivers
+	// accept only zero or a power of two, which the compile-time assertion on
+	// txmetacache.BucketsCount below guarantees for every build tag.
+	binary.LittleEndian.PutUint16(buf[txmetacache.WireV2BucketsOffset:], uint16(bucketsCount)) //nolint:gosec // bounded by the BucketsCount assertion
 	binary.LittleEndian.PutUint32(buf[4:], uint32(len(items)))
 	off := 8
 
@@ -2839,7 +2940,7 @@ func (v *Validator) sendTxMetaBatchV2(batch []*txmetaBatchItem) {
 		}
 		v.txmetaKafkaProducerClient.Publish(&kafka.Message{
 			Partition: int32(p), //nolint:gosec // p < numPartitions, bounded by setting
-			Value:     serializeTxMetaBatchV2(items),
+			Value:     serializeTxMetaBatchV2(items, txmetacache.BucketsCount),
 		})
 	}
 }
