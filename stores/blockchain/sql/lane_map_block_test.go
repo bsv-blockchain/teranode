@@ -228,6 +228,18 @@ func TestStoreBlockWritesLaneMapRowsOnlyWithItsBlock(t *testing.T) {
 		require.Error(t, err)
 		require.Equal(t, len(rows), laneMapRowCount(t, s))
 
+		// Nor does a store that fails count rows that fail their check: they are counted only
+		// with a block that is stored.
+		bad := []lane.MapRow{{Lane: 1, First: 5, Last: 4, Tag: lane.RowTagRange}}
+		failures := laneMetricValue(t, "teranode_lane_row_insert_failures_total")
+
+		_, _, err = s.StoreBlock(ctx, block1, "", options.WithLaneMapRows(bad))
+		require.Error(t, err, "block1 is already stored")
+
+		_, _, err = s.StoreBlock(ctx, orphan, "", options.WithLaneMapRows(bad))
+		require.Error(t, err)
+		require.Equal(t, failures, laneMetricValue(t, "teranode_lane_row_insert_failures_total"))
+
 		// A block stored as invalid gets no rows and is not timed.
 		idInvalid, _, err := s.StoreBlock(ctx, block2, "", options.WithInvalid(true), options.WithLaneMapRows(holedRows(t, 5, 1, 5)))
 		require.NoError(t, err)
