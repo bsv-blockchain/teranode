@@ -1396,8 +1396,9 @@ func takeRecordSlots(batchByKey []aerospike.MapValue, batch []*batchSpend) []bre
 }
 
 // releaseUnsettledSlots gives back every probe slot in batch that no outcome
-// has taken: items completed before they reached the backend, a status this
-// store does not know, or a panic part way through the results.
+// has taken: items completed before they reached the backend, or items whose
+// record was not reached before a panic. A record whose slots were already
+// taken when the panic hit keeps them until the half-open backstop.
 func (s *Store) releaseUnsettledSlots(batch []*batchSpend) {
 	for _, item := range batch {
 		s.spendCircuitBreaker.Release(takeSlot(item))
@@ -1412,7 +1413,8 @@ func (s *Store) releaseSlots(slots []breakerSlot) {
 }
 
 // recordSpendSuccess reports a successful round trip. In the closed state it
-// resets the failure count once. In the half-open state each probe slot of the
+// resets the failure count once, when at least one item was admitted while
+// closed. In the half-open state each probe slot of the
 // current epoch counts toward closing.
 func (s *Store) recordSpendSuccess(slots []breakerSlot) {
 	probed := false

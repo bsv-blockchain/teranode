@@ -269,7 +269,8 @@ func (cb *circuitBreaker) Release(slot breakerSlot) {
 }
 
 // RecordSuccess reports a successful outcome of the request admitted with slot.
-// In the closed state it resets the failure count. In the half-open state it
+// In the closed state it resets the failure count, unless slot is a probe slot
+// left over from half-open. In the half-open state it
 // counts toward closing only when slot is a probe slot of the current half-open
 // epoch; an outcome of a request admitted while closed, or in an earlier epoch,
 // is ignored.
