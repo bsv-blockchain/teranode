@@ -26,8 +26,8 @@ const unverifiedLRUCapacity = 50_000
 // maxRetryAfterSeconds caps the Retry-After a 429 may advertise. Only a bucket
 // configured far below one request per hour can reach it; the cap exists so a
 // misconfiguration cannot hand a client an absurd — or numerically unusable — wait.
-// Teranode's own retry helpers (util.DoHTTPRequestBodyReaderWithRetry and
-// util.DoHTTPRequestBoundedWithRetry) ignore any Retry-After above their 5s maxDelay
+// Teranode's own retry helpers (util.DoHTTPRequestBodyReaderWithRetry,
+// util.DoHTTPRequestBoundedWithRetry and util.DoLocalServiceHTTPRequestBodyReaderWithRetry) ignore any Retry-After above their 5s maxDelay
 // and fall back to their own ladder delay instead, so this cap is for other,
 // non-Teranode clients that may honour it verbatim.
 const maxRetryAfterSeconds = 3600

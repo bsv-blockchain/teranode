@@ -1334,7 +1334,8 @@ func doHTTPRequestWithRetryAfter(ctx context.Context, timeoutMs int, rawURL stri
 }
 
 // doRequestWithRetryAfter is doHTTPRequestWithRetryAfter on the given client, with headers set
-// on the request as-is, and without the URL check, which is the caller's job.
+// on the request as-is, and without the URL check, which is the caller's job. Never pass it a
+// peer-supplied URL with localServiceHTTPClient: that client has no SSRF dial guard.
 func doRequestWithRetryAfter(ctx context.Context, timeoutMs int, client *http.Client, rawURL string, headers map[string]string, requestBody ...[]byte) (io.ReadCloser, time.Duration, int, error) {
 	cancelFn := func() {}
 	if _, ok := ctx.Deadline(); !ok {

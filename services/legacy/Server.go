@@ -394,7 +394,7 @@ func (s *Server) Init(ctx context.Context) error {
 	legacypeer.RegisterStreamingBlockHandler()
 
 	if s.settings.Asset.LegacyPeerPoolToken == "" && s.settings.Asset.HTTPHeavyRateLimit > 0 {
-		s.logger.Warnf("[Legacy Server] asset_legacyPeerPoolToken is not set, so blocks served to legacy peers are fetched from the asset service under its per-IP heavy rate limit (asset_httpHeavyRateLimit=%d req/s); set the token to the same value on the legacy and asset services to exempt them", s.settings.Asset.HTTPHeavyRateLimit)
+		s.logger.Warnf("[Legacy Server] asset_legacyPeerPoolToken is not set, so blocks served to legacy peers are fetched from the asset service under its per-IP heavy rate limit (asset_httpHeavyRateLimit=%d req/s); set the token to the same value on the legacy and asset services to exempt them, and consider a finite asset_concurrency_get_legacy_block_reader_peer", s.settings.Asset.HTTPHeavyRateLimit)
 	}
 
 	// get the public IP and listen on it
