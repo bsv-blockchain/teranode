@@ -48,6 +48,26 @@ func BenchmarkReorgPath(b *testing.B) {
 	}
 }
 
+// BenchmarkReorgPathUnderIntake is BenchmarkReorgPath's fast=on case while transactions arrive at 0.3,
+// 0.75 and 1.3M tx/s, the rates of the design's drain estimate. critical_path_ms is what block
+// assembly waits for (every phase of the reorgBlocks op); drain_off_path_ms is the queue drain that runs
+// after the reorg has answered (the reorgDrain op), which is zero while the drain is still part of the
+// reorg. ns/pending_tx covers both, and the intake generator's own shutdown.
+func BenchmarkReorgPathUnderIntake(b *testing.B) {
+	cfg := reorgPathBenchConfig(256<<10, 0.3, false)
+
+	for _, tps := range []int{300_000, 750_000, 1_300_000} {
+		b.Run(fmt.Sprintf("intake=%dK/fast=on", tps/1000), func(b *testing.B) {
+			benchmarkReorgPath(b, cfg, func(t testing.TB, sc *reorgScenario) error {
+				stop := sc.startIntake(tps)
+				defer stop()
+
+				return fastReorgPath(t, sc)
+			})
+		})
+	}
+}
+
 func reorgPathBenchConfig(pending int, hits float64, disk bool) reorgScenarioConfig {
 	return reorgScenarioConfig{
 		seed:             uint64(pending) ^ uint64(hits*100),
@@ -73,12 +93,14 @@ func benchmarkReorgPath(b *testing.B, cfg reorgScenarioConfig, path reorgPath) {
 	var total time.Duration
 
 	phases := make(map[string]float64)
+	offPath := 0.0
 	appliedBefore := readFastPathCounts().applied
 
 	for i := 0; i < b.N; i++ {
 		b.StopTimer()
 		sc := newReorgScenario(b, cfg)
 		before := reorgPhaseSeconds("reorgBlocks")
+		drainBefore := reorgPhaseSeconds("reorgDrain")
 		b.StartTimer()
 
 		start := time.Now()
@@ -94,6 +116,10 @@ func benchmarkReorgPath(b *testing.B, cfg reorgScenarioConfig, path reorgPath) {
 		for phase, seconds := range reorgPhaseSeconds("reorgBlocks") {
 			phases[phase] += seconds - before[phase]
 		}
+
+		for phase, seconds := range reorgPhaseSeconds("reorgDrain") {
+			offPath += seconds - drainBefore[phase]
+		}
 	}
 
 	b.ReportMetric(float64(total.Nanoseconds())/float64(b.N)/float64(cfg.pending), "ns/pending_tx")
@@ -104,6 +130,14 @@ func benchmarkReorgPath(b *testing.B, cfg reorgScenarioConfig, path reorgPath) {
 	for _, phase := range slices.Sorted(maps.Keys(phases)) {
 		b.ReportMetric(phases[phase]*1000/float64(b.N), phase+"_ms")
 	}
+
+	critical := 0.0
+	for _, seconds := range phases {
+		critical += seconds
+	}
+
+	b.ReportMetric(critical*1000/float64(b.N), "critical_path_ms")
+	b.ReportMetric(offPath*1000/float64(b.N), "drain_off_path_ms")
 }
 
 // reorgPhaseSeconds is the total time reorg_phase_seconds has recorded for each phase of op.
