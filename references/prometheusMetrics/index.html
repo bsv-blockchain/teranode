@@ -9286,6 +9286,11 @@
 <td>Duration of setting an external transaction to the blob store</td>
 </tr>
 <tr>
+<td><code>teranode_aerospike_unmined_missing_external_skipped</code></td>
+<td>Counter</td>
+<td>Unmined transactions left out of block assembly's unmined load (start, reload, reset) because their record is external and the blob store has no file for it. Only with <code>blockassembly_onRestartValidateParentChain</code> and <code>blockassembly_onRestartRemoveInvalidParentChainTxs</code> on; otherwise the load fails on the record</td>
+</tr>
+<tr>
 <td><code>teranode_aerospike_txmeta_get_counter_conflicting</code></td>
 <td>Histogram</td>
 <td>Duration of getting counter conflicting transactions from the blob store</td>
