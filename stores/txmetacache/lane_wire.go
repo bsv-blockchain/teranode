@@ -46,7 +46,7 @@ var (
 			Namespace: "teranode",
 			Subsystem: "lane",
 			Name:      "txmeta_position_misses_total",
-			Help:      "Txmeta entries that carry no parent lane positions, by reason; counted, never an error. own_missing entries carry no position at all; the others still carry the own position (format=own). The validator counts its reasons only at utxostore_laneMigration shadow or later; decode_failed is counted by any consumer that receives an ADDLane or ADDOwn entry it cannot decode, whatever its own setting",
+			Help:      "Txmeta entries that carry no parent lane positions, by reason; counted, never an error. own_missing entries carry no position at all; parents_not_read, parent_missing and encode_failed entries are sent as format=own and still carry the own position. The validator counts those reasons only at utxostore_laneMigration shadow or later. decode_failed is counted by any consumer, whatever its own setting, for an ADDLane or ADDOwn entry it could not decode, which it counted in that entry's format and then drops",
 		},
 		[]string{"reason"},
 	)
