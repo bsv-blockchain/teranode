@@ -1,6 +1,7 @@
 package blockassembly
 
 import (
+	"context"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -284,4 +285,142 @@ func TestStoreStages_TheByteLimitBindsWithManyWriters(t *testing.T) {
 	}
 
 	require.Eventually(t, func() bool { return server.storeQueue.Held() == 0 }, 5*time.Second, 5*time.Millisecond)
+}
+
+// The subtree processor waits for a snapshot, so its writes must not queue behind the chain writes of a
+// reorg for a writer slot.
+func TestStoreStages_ASnapshotWriteDoesNotWaitBehindChainWrites(t *testing.T) {
+	server := startStagedListener(t, true, 2, 1, 64) // 3 workers, 1 writer slot
+
+	fault := blobfault.New(server.subtreeStore)
+	gate := make(chan struct{})
+	entered := make(chan struct{}, 16)
+	fault.OnSetAny(fileformat.FileTypeSubtree, blobfault.Rule{Block: gate, Entered: entered})
+	fault.OnSetAny(fileformat.FileTypeSubtreeMeta, blobfault.Rule{Block: gate, Entered: entered})
+
+	snapshot, snapshotMap := makeSubtree(t, 99)
+	fault.OnSet(snapshot.RootHash()[:], fileformat.FileTypeSubtree, blobfault.Rule{})
+	fault.OnSet(snapshot.RootHash()[:], fileformat.FileTypeSubtreeMeta, blobfault.Rule{})
+
+	server.subtreeStore = fault
+	t.Cleanup(closeOnce(gate))
+
+	pushChain(t, server.storeQueue, 1, true)
+	pushChain(t, server.storeQueue, 2, true)
+
+	require.Eventually(t, func() bool { return len(entered) == 1 }, 5*time.Second, 5*time.Millisecond, "a chain write holds the writer slot")
+
+	result := make(chan subtreeprocessor.StoreResult, 1)
+	server.storeQueue.Push(subtreeprocessor.NewSubtreeRequest{
+		Subtree:     snapshot,
+		ParentTxMap: snapshotMap,
+		Class:       subtreeprocessor.StoreClassSnapshot,
+		ErrChan:     make(chan error, 1),
+		Result:      result,
+	})
+
+	select {
+	case res := <-result:
+		require.True(t, res.OK())
+	case <-time.After(5 * time.Second):
+		t.Fatal("the snapshot waited behind the chain writes")
+	}
+}
+
+// The meta slot is for the build alone: the next build starts while the previous meta is being written.
+func TestStoreStages_TheMetaSlotIsFreeOnceTheBuildIsDone(t *testing.T) {
+	server := startStagedListener(t, true, 1, 4, 64)
+
+	fault := blobfault.New(server.subtreeStore)
+	gate := make(chan struct{})
+	entered := make(chan struct{}, 16)
+	fault.OnSetAny(fileformat.FileTypeSubtreeMeta, blobfault.Rule{Block: gate, Entered: entered})
+	server.subtreeStore = fault
+	t.Cleanup(closeOnce(gate))
+
+	pushChain(t, server.storeQueue, 1, true)
+	pushChain(t, server.storeQueue, 2, true)
+
+	require.Eventually(t, func() bool { return len(entered) == 2 }, 5*time.Second, 5*time.Millisecond,
+		"both metas are being written though the meta stage is one wide")
+}
+
+func TestStoreStages_AcquireGivesUpWhenItsContextEnds(t *testing.T) {
+	stage := make(chan struct{}, 1)
+	stage <- struct{}{}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	done := make(chan error, 1)
+
+	go func() {
+		_, err := acquireStage(ctx, stage)
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(5 * time.Second):
+		t.Fatal("acquireStage ignored its cancelled context")
+	}
+}
+
+func TestStoreStages_ACancelledWaitForTheMetaSlotCancelsTheStoreAndTimesNoBuild(t *testing.T) {
+	server := startStagedListener(t, true, 1, 1, 64)
+	server.metaSem <- struct{}{} // the only slot is taken
+
+	subtree, txMap := makeSubtree(t, 1)
+	result := make(chan subtreeprocessor.StoreResult, 1)
+	req := subtreeprocessor.NewSubtreeRequest{Subtree: subtree, ParentTxMap: txMap, Result: result}
+	outcome := newSubtreeStoreOutcome(req, true, nil)
+	before := storeStep(t, "meta_build")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	server.storeSubtreeMeta(ctx, req, 1, outcome, make(chan *subtreeRetrySend, 1))
+	outcome.subtreeStored(false)
+
+	res := <-result
+	require.True(t, res.Cancelled, "a wait that ended with its context is cancelled, not failed")
+	require.Equal(t, before.count, storeStep(t, "meta_build").count, "no meta_build sample")
+}
+
+func TestStoreStages_ARetryHandOffGivesUpWhenItsContextEnds(t *testing.T) {
+	full := make(chan *subtreeRetrySend)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	done := make(chan struct{})
+
+	go func() {
+		sendRetry(ctx, full, &subtreeRetrySend{})
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("sendRetry blocked on a full channel after its context ended")
+	}
+}
+
+// The permits the store hands out stay bounded by the writers, the DAH update of an existing subtree
+// included.
+func TestStoreStages_TheDAHUpdateOfAnExistingSubtreeTakesAWriterSlot(t *testing.T) {
+	server := startStagedListener(t, true, 1, 1, 64)
+
+	subtree, txMap := makeSubtree(t, 1)
+	require.NoError(t, server.subtreeStore.Set(t.Context(), subtree.RootHash()[:], fileformat.FileTypeSubtree, []byte("x")))
+
+	server.writeSem <- struct{}{} // the only slot is taken
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, _, err := server.storeSubtreeData(ctx, subtreeprocessor.NewSubtreeRequest{Subtree: subtree, ParentTxMap: txMap}, make(chan *subtreeRetrySend, 1))
+	require.ErrorIs(t, err, context.Canceled, "the DAH update waited for a slot")
 }

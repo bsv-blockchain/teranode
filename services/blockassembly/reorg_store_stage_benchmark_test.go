@@ -93,9 +93,10 @@ type storeStagePath struct {
 	writers int // blockassembly_subtreeStorageWriters, staged only
 }
 
-// run stores every subtree into a fresh file blob store under blobDir and returns the time from the
-// first request to the last settled result. The server is made outside the timer.
-func (fx *storeStageFixture) run(t *testing.T, path storeStagePath, blobDir string) time.Duration {
+// runner makes the server of a path once and returns a function that stores every subtree into a fresh
+// file blob store under the directory it is given, and returns the time from the first request to the
+// last settled result. The server is made outside the timer, and once per path, not per run.
+func (fx *storeStageFixture) runner(t *testing.T, path storeStagePath) func(blobDir string) time.Duration {
 	t.Helper()
 
 	server, _ := setupServerWithSettings(t, func(s *settings.Settings) {
@@ -103,14 +104,6 @@ func (fx *storeStageFixture) run(t *testing.T, path storeStagePath, blobDir stri
 		s.BlockAssembly.SubtreeStorageWorkers = path.workers
 		s.BlockAssembly.SubtreeStorageWriters = path.writers
 	})
-
-	storeURL, err := url.Parse("file://" + blobDir)
-	require.NoError(t, err)
-
-	store, err := blob.NewStore(server.logger, storeURL, options.WithBlobDeletionScheduler(noDeletionScheduler{}))
-	require.NoError(t, err)
-
-	server.subtreeStore = store
 
 	var push func(subtreeprocessor.NewSubtreeRequest)
 
@@ -137,27 +130,37 @@ func (fx *storeStageFixture) run(t *testing.T, path storeStagePath, blobDir stri
 		push = func(r subtreeprocessor.NewSubtreeRequest) { in <- r }
 	}
 
-	results := make([]chan subtreeprocessor.StoreResult, len(fx.subtrees))
+	return func(blobDir string) time.Duration {
+		storeURL, err := url.Parse("file://" + blobDir)
+		require.NoError(t, err)
 
-	start := time.Now()
+		store, err := blob.NewStore(server.logger, storeURL, options.WithBlobDeletionScheduler(noDeletionScheduler{}))
+		require.NoError(t, err)
 
-	for i, subtree := range fx.subtrees {
-		results[i] = make(chan subtreeprocessor.StoreResult, 1)
-		push(subtreeprocessor.NewSubtreeRequest{
-			Subtree:          subtree,
-			ParentTxMap:      fx.parents,
-			SkipNotification: true,
-			ErrChan:          make(chan error, 1),
-			Result:           results[i],
-		})
+		server.subtreeStore = store
+
+		results := make([]chan subtreeprocessor.StoreResult, len(fx.subtrees))
+
+		start := time.Now()
+
+		for i, subtree := range fx.subtrees {
+			results[i] = make(chan subtreeprocessor.StoreResult, 1)
+			push(subtreeprocessor.NewSubtreeRequest{
+				Subtree:          subtree,
+				ParentTxMap:      fx.parents,
+				SkipNotification: true,
+				ErrChan:          make(chan error, 1),
+				Result:           results[i],
+			})
+		}
+
+		for i, r := range results {
+			res := <-r
+			require.True(t, res.OK(), fmt.Sprintf("subtree %d: %+v", i, res))
+		}
+
+		return time.Since(start)
 	}
-
-	for i, r := range results {
-		res := <-r
-		require.True(t, res.OK(), fmt.Sprintf("subtree %d: %+v", i, res))
-	}
-
-	return time.Since(start)
 }
 
 // BenchmarkReorgStoreStage compares 4 workers on the old path with the staged path (CPU-wide meta
@@ -182,10 +185,12 @@ func BenchmarkReorgStoreStage(b *testing.B) {
 		b.Run(c.name, func(b *testing.B) {
 			var total time.Duration
 
+			// setupServerWithSettings wants a *testing.T; the cleanups of this one never run, as in
+			// BenchmarkAddTxBatchColumnar_Validation, so the server is made once per sub-benchmark
+			run := fx.runner(&testing.T{}, c.path)
+
 			for range b.N {
-				// setupServerWithSettings wants a *testing.T; the cleanups of this one never run, as in
-				// BenchmarkAddTxBatchColumnar_Validation
-				total += fx.run(&testing.T{}, c.path, b.TempDir())
+				total += run(b.TempDir())
 			}
 
 			b.ReportMetric(float64(subtrees*b.N)/total.Seconds(), "subtrees/s")

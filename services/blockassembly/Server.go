@@ -1171,8 +1171,8 @@ func acquireStage(ctx context.Context, stage chan struct{}) (release func(), err
 // setStaged is a write to the subtree store that holds a slot of the writer stage while it runs. It
 // observes the step metric of the write (subtree_write, meta_write) from the moment it has the slot,
 // so the metric is the write alone, as meta_build is the build alone.
-func (ba *BlockAssembly) setStaged(ctx context.Context, step string, key []byte, fileType fileformat.FileType, value []byte, dah uint32) error {
-	release, err := acquireStage(ctx, ba.writeSem)
+func (ba *BlockAssembly) setStaged(ctx context.Context, stage chan struct{}, step string, key []byte, fileType fileformat.FileType, value []byte, dah uint32) error {
+	release, err := acquireStage(ctx, stage)
 	if err != nil {
 		return err
 	}
@@ -1186,25 +1186,57 @@ func (ba *BlockAssembly) setStaged(ctx context.Context, step string, key []byte,
 	return ba.subtreeStore.Set(ctx, key, fileType, value, options.WithDeleteAt(dah))
 }
 
+// stagesFor is the meta and writer slots a request goes through. A snapshot has none: the subtree
+// processor waits for it, so it must not queue behind the chain writes of a reorg.
+func (ba *BlockAssembly) stagesFor(req subtreeprocessor.NewSubtreeRequest) (meta, writes chan struct{}) {
+	if req.Class == subtreeprocessor.StoreClassSnapshot {
+		return nil, nil
+	}
+
+	return ba.metaSem, ba.writeSem
+}
+
+// setDAHStaged is SetDAH holding a slot of the writer stage, so the permits the store hands out stay
+// bounded by the writers.
+func (ba *BlockAssembly) setDAHStaged(ctx context.Context, stage chan struct{}, key []byte, fileType fileformat.FileType, dah uint32) error {
+	release, err := acquireStage(ctx, stage)
+	if err != nil {
+		return err
+	}
+	defer release()
+
+	return ba.subtreeStore.SetDAH(ctx, key, fileType, dah)
+}
+
+// sendRetry hands an entry to the retry processor, giving up when ctx ends so shutdown cannot hang on
+// a full channel.
+func sendRetry(ctx context.Context, ch chan *subtreeRetrySend, entry *subtreeRetrySend) {
+	select {
+	case ch <- entry:
+	case <-ctx.Done():
+	}
+}
+
 // storeSubtreeMeta builds, writes and settles the meta part of a request: stored, handed to the
 // retry channel with its bytes when the write failed, or failed when the build did.
 func (ba *BlockAssembly) storeSubtreeMeta(ctx context.Context, subtreeRequest subtreeprocessor.NewSubtreeRequest, dah uint32, outcome *subtreeStoreOutcome, subtreeRetryChan chan *subtreeRetrySend) {
 	subtree := subtreeRequest.Subtree
 
+	metaStage, writeStage := ba.stagesFor(subtreeRequest)
+
 	// the slot is taken before the timer starts, so meta_build stays the build alone
-	releaseBuild, acquireErr := acquireStage(ctx, ba.metaSem)
+	releaseBuild, acquireErr := acquireStage(ctx, metaStage)
+	if acquireErr != nil {
+		// ctx ended while waiting for a slot: nothing was built, which is no store failure
+		outcome.cancel(errors.NewProcessingError("[BlockAssembly:storeSubtreeData][%s] subtree meta not built: %s", subtree.RootHash().String(), acquireErr.Error()))
+
+		return
+	}
 
 	buildStart := time.Now()
 
-	var (
-		subtreeMetaBytes []byte
-		ok               bool
-	)
-
-	if acquireErr == nil {
-		subtreeMetaBytes, ok = ba.buildSubtreeMetaWithRetry(ctx, subtreeRequest)
-		releaseBuild()
-	}
+	subtreeMetaBytes, ok := ba.buildSubtreeMetaWithRetry(ctx, subtreeRequest)
+	releaseBuild()
 
 	prometheusBlockAssemblySubtreeStoreStep.WithLabelValues("meta_build").Observe(time.Since(buildStart).Seconds())
 
@@ -1221,7 +1253,7 @@ func (ba *BlockAssembly) storeSubtreeMeta(ctx context.Context, subtreeRequest su
 		return
 	}
 
-	err := ba.setStaged(ctx, "meta_write", subtree.RootHash()[:], fileformat.FileTypeSubtreeMeta, subtreeMetaBytes, dah)
+	err := ba.setStaged(ctx, writeStage, "meta_write", subtree.RootHash()[:], fileformat.FileTypeSubtreeMeta, subtreeMetaBytes, dah)
 
 	if err != nil {
 		if errors.Is(err, errors.ErrBlobAlreadyExists) {
@@ -1230,14 +1262,14 @@ func (ba *BlockAssembly) storeSubtreeMeta(ctx context.Context, subtreeRequest su
 		} else {
 			ba.logger.Errorf("[BlockAssembly:storeSubtreeData][%s] failed to store subtree meta: %s", subtree.RootHash().String(), err)
 			outcome.toRetry()
-			subtreeRetryChan <- &subtreeRetrySend{
+			sendRetry(ctx, subtreeRetryChan, &subtreeRetrySend{
 				subtreeHash:      *subtree.RootHash(),
 				subtreeMetaBytes: subtreeMetaBytes,
 				retries:          0,
 				outcome:          outcome,
 				silent:           true, // the subtree was announced when its own write succeeded
 				lastErr:          err,
-			}
+			})
 		}
 
 		return
@@ -1277,17 +1309,19 @@ func (ba *BlockAssembly) storeSubtreeData(ctx context.Context, subtreeRequest su
 		outcome.track(ba.storedSet, *subtree.RootHash())
 	}
 
+	_, writeStage := ba.stagesFor(subtreeRequest)
+
 	// Check whether this subtree already exists in the store
 	if ok, _ := ba.subtreeStore.Exists(ctx, subtree.RootHash()[:], fileformat.FileTypeSubtree); ok {
 		ba.logger.Debugf("[BlockAssembly:storeSubtreeData][%s] subtree already exists, updating DeleteAtHeight", subtree.RootHash().String())
 		dah := ba.blockAssembler.utxoStore.GetBlockHeight() + ba.settings.GlobalBlockHeightRetention
-		if err := ba.subtreeStore.SetDAH(ctx, subtree.RootHash()[:], fileformat.FileTypeSubtree, dah); err != nil {
+		if err := ba.setDAHStaged(ctx, writeStage, subtree.RootHash()[:], fileformat.FileTypeSubtree, dah); err != nil {
 			err = errors.NewProcessingError("[BlockAssembly:storeSubtreeData][%s] failed to update subtree DAH", subtree.RootHash().String(), err)
 			outcome.abort(err)
 
 			return nil, nil, err
 		}
-		if err := ba.subtreeStore.SetDAH(ctx, subtree.RootHash()[:], fileformat.FileTypeSubtreeMeta, dah); err != nil {
+		if err := ba.setDAHStaged(ctx, writeStage, subtree.RootHash()[:], fileformat.FileTypeSubtreeMeta, dah); err != nil {
 			ba.logger.Debugf("[BlockAssembly:storeSubtreeData][%s] could not update subtree meta DAH (meta may not exist): %s", subtree.RootHash().String(), err)
 		}
 
@@ -1345,7 +1379,7 @@ func (ba *BlockAssembly) storeSubtreeData(ctx context.Context, subtreeRequest su
 	go func() {
 		defer close(subtreeStorageDone) // Signal coordinator when done
 		storedOK := true
-		err := ba.setStaged(ctx, "subtree_write", subtree.RootHash()[:], fileformat.FileTypeSubtree, subtreeBytes, dah)
+		err := ba.setStaged(ctx, writeStage, "subtree_write", subtree.RootHash()[:], fileformat.FileTypeSubtree, subtreeBytes, dah)
 
 		if err != nil {
 			if errors.Is(err, errors.ErrBlobAlreadyExists) {
@@ -1354,13 +1388,13 @@ func (ba *BlockAssembly) storeSubtreeData(ctx context.Context, subtreeRequest su
 			} else {
 				ba.logger.Errorf("[BlockAssembly:storeSubtreeData][%s] failed to store subtree: %s", subtree.RootHash().String(), err)
 				outcome.toRetry()
-				subtreeRetryChan <- &subtreeRetrySend{
+				sendRetry(ctx, subtreeRetryChan, &subtreeRetrySend{
 					subtreeHash:  *subtree.RootHash(),
 					subtreeBytes: subtreeBytes,
 					retries:      0,
 					outcome:      outcome,
 					lastErr:      err,
-				}
+				})
 				storedOK = false
 			}
 		} else {

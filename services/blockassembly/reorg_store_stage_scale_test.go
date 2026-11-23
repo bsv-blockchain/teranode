@@ -86,7 +86,7 @@ func TestReorgScale(t *testing.T) {
 		dir := filepath.Join(base, name)
 		require.NoError(t, os.MkdirAll(dir, 0o755))
 
-		seconds := fx.run(t, path, dir).Seconds()
+		seconds := fx.runner(t, path)(dir).Seconds()
 		require.NoError(t, os.RemoveAll(dir))
 
 		report.Rows = append(report.Rows, storeScaleRow{Path: name, Workers: path.workers, Writers: path.writers, Seconds: seconds, SubtreesPerSec: float64(subtrees) / seconds})
