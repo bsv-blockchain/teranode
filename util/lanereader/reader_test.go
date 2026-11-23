@@ -796,3 +796,25 @@ func TestReaderTreatsAFoldedBlockOutsideTheCallersWindowAsUnknown(t *testing.T) 
 		})
 	})
 }
+
+// On a chain given as a window of block IDs, a parent mined only in a rival block, loaded and not
+// yet folded, is off the chain: both answers say not mined, and agree.
+func TestReaderCountsAForkMinedParentOnAnIDWindowAgree(t *testing.T) {
+	engines(t, func(t *testing.T, store blockchainstore.Store) {
+		c := newChain(t, store)
+
+		b1 := c.add(nil)
+		b2 := c.add(b1)
+		rival := c.add(b1, takes(t, 2, 70))
+
+		r := newReader(ulogger.TestLogger{}, store, 100)
+		follow(t, r)
+
+		_, ok := r.Prepare(context.Background(), rival.hash)
+		require.True(t, ok)
+
+		requireCounted(t, ReaderSubtreeAlreadyMined, KindAgree, lane.ViaNone, func() {
+			r.CompareBlocks(ReaderSubtreeAlreadyMined, r.ViewOfIDs(map[uint32]bool{b1.id: true, b2.id: true}), chainhash.Hash{}, lane.Pack(2, 70), []uint32{rival.id})
+		})
+	})
+}

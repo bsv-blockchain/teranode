@@ -216,9 +216,12 @@ func classifyBlocks(v *lane.ChainView, a lane.Answer, todayBlockIDs []uint32) st
 
 		h, ok := v.Height(id)
 		if !ok {
-			// On a fork whose older ancestry the index no longer holds, a loaded block missing
-			// from the view may still be an ancestor.
-			unknown = unknown || v.Disconnected()
+			// A loaded block missing from the view may still be an ancestor on a fork whose older
+			// ancestry the index no longer holds, or, on a chain given as a window of block IDs,
+			// when the block is folded and so may be older than the window. The windows callers
+			// give (blockchain retention times two, 576 blocks by default) are deeper than the
+			// settle depth, so an unfolded block missing from one is off the chain: a fork.
+			unknown = unknown || v.Disconnected() || (v.IDSet() && s.Folded(id))
 
 			continue
 		}
