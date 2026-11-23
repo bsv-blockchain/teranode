@@ -441,16 +441,82 @@ func TestIsPeerIPBanned_NewNeighbourCaughtWithinMissRefreshInterval(t *testing.T
 	banned := mustNewPeerID(t)
 	client.peers = append(client.peers, p2pMessageBus.PeerInfo{ID: banned.String(), Addrs: []string{"/ip4/198.51.100.9/tcp/9905"}})
 
-	require.False(t, s.isPeerIPBanned(banned.String()), "inside the window the miss is served from the snapshot")
-	require.Equal(t, int32(1), client.walks.Load(), "a miss inside the window does not walk")
+	// Inside the window the miss is served from the snapshot, without a walk.
+	// The assertion only holds if the check ran inside the window, so it is
+	// skipped when the test itself stalled past it.
+	walks := client.walks.Load()
+	stamped := freshLiveConnView(t, s)
+	got := s.isPeerIPBanned(banned.String())
 
-	// Age the snapshot to the end of the window.
+	if time.Since(stamped) < liveConnMissRefreshInterval {
+		require.False(t, got, "inside the window the miss is served from the snapshot")
+		require.Equal(t, walks, client.walks.Load(), "a miss inside the window does not walk")
+	}
+
+	// The first miss after the window rebuilds and catches the banned IP.
+	walks = client.walks.Load()
+	agedLiveConnView(t, s)
+
+	require.True(t, s.isPeerIPBanned(banned.String()), "the first miss after the window rebuilds and catches the banned IP")
+	require.Equal(t, walks+1, client.walks.Load())
+}
+
+// A low-reputation neighbour that connects just after the live-connection
+// snapshot was taken passes the reputation gate, with no registry lookup, until
+// liveConnMissRefreshInterval has passed; the first message after that
+// rebuilds the snapshot, finds the connection and gates it.
+func TestShouldSkipUnhealthyPeer_NewLowReputationNeighbourGatedAfterMissRefreshInterval(t *testing.T) {
+	s, _, client, neighbour, _ := newGateBoundsTestServer(t, 1)
+	reg := blockchain.NewCentralizedPeerRegistry(blockchain.DefaultBanConfig())
+	counting := newCountingRegistryClient(blockchain.NewLocalPeerRegistryClient(reg))
+	s.peerRegistry = counting
+
+	// Take the snapshot.
+	require.True(t, s.hasLiveConnection(neighbour.String()))
+
+	// A low-reputation neighbour connects after it.
+	fresh := mustNewPeerID(t)
+	reg.Register(&blockchain.PeerInfo{ID: fresh.String()})
+	reg.UpdateMetrics(fresh.String(), 0, 0, 0, false, false, true, 0)
+	client.peers = append(client.peers, p2pMessageBus.PeerInfo{ID: fresh.String(), Addrs: []string{"/ip4/10.0.0.3/tcp/9905"}})
+
+	stamped := freshLiveConnView(t, s)
+	got := s.shouldSkipUnhealthyPeer(fresh.String(), "test")
+
+	if time.Since(stamped) < liveConnMissRefreshInterval {
+		require.False(t, got, "inside the window the new neighbour is not yet seen as connected")
+		require.Zero(t, counting.callCount("GetPeer"), "and costs no registry lookup")
+	}
+
+	agedLiveConnView(t, s)
+	lookups := counting.callCount("GetPeer")
+
+	require.True(t, s.shouldSkipUnhealthyPeer(fresh.String(), "test"), "after the window the connected low-reputation peer is gated")
+	require.Equal(t, lookups+1, counting.callCount("GetPeer"))
+}
+
+// freshLiveConnView re-stamps the current live-connection view as just taken
+// and returns the stamp.
+func freshLiveConnView(t *testing.T, s *Server) time.Time {
+	t.Helper()
+
+	v := s.liveConns.view.Load()
+	require.NotNil(t, v)
+
+	now := time.Now()
+	s.liveConns.view.Store(&liveConnView{addrs: v.addrs, takenAt: now})
+
+	return now
+}
+
+// agedLiveConnView re-stamps the current live-connection view as taken exactly
+// liveConnMissRefreshInterval ago, so the next miss rebuilds it.
+func agedLiveConnView(t *testing.T, s *Server) {
+	t.Helper()
+
 	v := s.liveConns.view.Load()
 	require.NotNil(t, v)
 	s.liveConns.view.Store(&liveConnView{addrs: v.addrs, takenAt: time.Now().Add(-liveConnMissRefreshInterval)})
-
-	require.True(t, s.isPeerIPBanned(banned.String()), "the first miss after the window rebuilds and catches the banned IP")
-	require.Equal(t, int32(2), client.walks.Load())
 }
 
 // A ban applied locally while a registry listing was in flight must survive
