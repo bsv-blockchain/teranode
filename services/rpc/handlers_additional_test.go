@@ -5174,8 +5174,9 @@ func TestHandleFreezeComprehensive(t *testing.T) {
 		}
 
 		cmd := &bsvjson.FreezeCmd{
-			TxID: "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
-			Vout: 0,
+			TxID:     "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+			Vout:     0,
+			UTXOHash: "101112131415161718191a1b1c1d1e1f000102030405060708090a0b0c0d0e0f",
 		}
 
 		// This should panic when utxoStore is nil
@@ -5218,8 +5219,9 @@ func TestHandleUnfreezeComprehensive(t *testing.T) {
 		}
 
 		cmd := &bsvjson.UnfreezeCmd{
-			TxID: "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
-			Vout: 0,
+			TxID:     "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+			Vout:     0,
+			UTXOHash: "101112131415161718191a1b1c1d1e1f000102030405060708090a0b0c0d0e0f",
 		}
 
 		// This should panic when utxoStore is nil
@@ -5313,7 +5315,7 @@ func TestHandleReassignComprehensive(t *testing.T) {
 			OldTxID:     "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
 			OldVout:     0,
 			OldUTXOHash: "101112131415161718191a1b1c1d1e1f000102030405060708090a0b0c0d0e0f",
-			NewUTXOHash: "1f1e1d1c1b1a19181716151413121110f0e0d0c0b0a09080706050403020100",
+			NewUTXOHash: "1f1e1d1c1b1a191817161514131211100f0e0d0c0b0a09080706050403020100",
 		}
 
 		// This should panic when utxoStore is nil
