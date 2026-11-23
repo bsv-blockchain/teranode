@@ -18,7 +18,8 @@ type LanePositionSource interface {
 // takes the position before it spends or opens a database transaction, so a wait for one holds
 // nothing, and a create that cannot get one fails having written nothing. A store that plans a write
 // again after a rollback keeps the positions it took. A position taken for a write that is then
-// refused, such as a transaction that exists already, is burned, which is safe: no record carries it.
+// refused, such as a transaction that exists already, is burned, which is safe because no record
+// carries it, unless the store proves that and hands it back for reuse (ReturnLanePosition).
 // There is no wrapper around the store, because a wrapper has to scan and extend the options on
 // every create, and it hides what the wrapped store can do.
 //
@@ -29,17 +30,33 @@ type LanePositionTaker interface {
 
 	// TakeLanePosition returns the position for the record that o describes; see LanePositions.Take.
 	TakeLanePosition(ctx context.Context, o *CreateOptions) (uint64, error)
+
+	// BurnLanePosition counts a position taken from the source that no record carries; see
+	// LanePositions.BurnLanePosition.
+	BurnLanePosition(caller Caller, reason string)
+
+	// ReturnLanePosition hands back a position taken from the source that the caller proved no
+	// record carries; see LanePositions.ReturnLanePosition.
+	ReturnLanePosition(position uint64, reason string, unwritten bool)
 }
 
 // LanePositions is the part of a store that implements LanePositionTaker. With no source set, which
 // is every store with lane positions off, a create pays one nil check.
 type LanePositions struct {
 	source LanePositionSource
+
+	// burnStore labels the positions this store burns; see NameLaneBurns.
+	burnStore string
+	// returner is source when it takes positions back, and nil otherwise.
+	returner LanePositionReturner
+	// returnStore labels the positions this store returns; see NameLaneReturns.
+	returnStore string
 }
 
 // SetLanePositionSource implements LanePositionTaker.
 func (l *LanePositions) SetLanePositionSource(source LanePositionSource) {
 	l.source = source
+	l.returner, _ = source.(LanePositionReturner)
 }
 
 // Take returns the position for the record that o describes: the caller's own if it named one,
@@ -73,6 +90,30 @@ func (l *LanePositions) TakeLanePosition(ctx context.Context, o *CreateOptions) 
 
 // TakeLanePositions takes n positions, one per transaction of a list, or returns nil with no source.
 func (l *LanePositions) TakeLanePositions(ctx context.Context, n int) ([]uint64, error) {
+	positions, err := l.takeLanePositions(ctx, n)
+	if err != nil {
+		return nil, err
+	}
+
+	return positions, nil
+}
+
+// TakeListLanePositions is TakeLanePositions for the transactions of list. A take that fails leaves
+// the positions taken before it unused, so it records them as burned before it returns nil.
+func (l *LanePositions) TakeListLanePositions(ctx context.Context, list *SpendAndCreateMultiList) ([]uint64, error) {
+	positions, err := l.takeLanePositions(ctx, len(list.TxIDs))
+	if err != nil {
+		l.BurnLanePositions(list.Options.Caller, LaneBurnTakeFailed, len(positions))
+
+		return nil, err
+	}
+
+	return positions, nil
+}
+
+// takeLanePositions takes n positions. On a failure it returns the positions it took before the
+// failure with the error.
+func (l *LanePositions) takeLanePositions(ctx context.Context, n int) ([]uint64, error) {
 	if l.source == nil {
 		return nil, nil
 	}
@@ -82,7 +123,7 @@ func (l *LanePositions) TakeLanePositions(ctx context.Context, n int) ([]uint64,
 	for i := range positions {
 		p, err := l.Take(ctx, &CreateOptions{})
 		if err != nil {
-			return nil, err
+			return positions[:i], err
 		}
 
 		positions[i] = p
@@ -129,4 +170,19 @@ func WithTakenLanePosition(opts []CreateOption, position uint64) []CreateOption 
 	}
 
 	return append(opts[:len(opts):len(opts)], WithLanePosition(position))
+}
+
+// LaneSchemaPreparer is a store whose database needs lane columns installed before the historical
+// conversion numbers anything. PrepareLaneSchema installs them, nullable and empty, at any lane
+// migration step, off included; it writes no row and is safe to run again. Restart every process
+// of the node afterwards so each one sees the same schema. Find it with As. Aerospike has no
+// schema to install: its lane bins are written by the records that carry them.
+type LaneSchemaPreparer interface {
+	PrepareLaneSchema(ctx context.Context) error
+}
+
+// LaneSchemaChecker is a store that can report whether every one of its lane columns is installed,
+// which teranode-cli prepare-lane-schema checks after PrepareLaneSchema returns. Find it with As.
+type LaneSchemaChecker interface {
+	LaneSchemaInstalled(ctx context.Context) (bool, error)
 }

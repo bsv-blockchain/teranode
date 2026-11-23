@@ -71,6 +71,15 @@ func (s *Store) QueryConflictWALIndex(ctx context.Context) (int, bool, error) {
 	return len(records), readable, err
 }
 
+// SetMaxParentLanePositions lowers the most parent lane positions a create writes, and returns the
+// function that puts it back.
+func SetMaxParentLanePositions(n int) (restore func()) {
+	was := maxParentLanePositions
+	maxParentLanePositions = n
+
+	return func() { maxParentLanePositions = was }
+}
+
 // ConflictWALFallbackScans is the number of WAL reads that scanned the set, for this process.
 func ConflictWALFallbackScans() float64 {
 	return testutil.ToFloat64(prometheusConflictWALFallbackScans)
