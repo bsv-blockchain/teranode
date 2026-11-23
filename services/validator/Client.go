@@ -659,8 +659,9 @@ func (c *Client) processBatchResponse(batch []*batchItem, resp *validator_api.Va
 			// on *errors.Error downstream.
 			item.complete(validateBatchResponse{metaData: nil, err: errors.UnwrapTError(resp.Errors[i])})
 		} else {
-			// A server built before lane_positions sends none: those records read as having no
-			// position, which subtree validation counts and leaves out of the lane bitmaps.
+			// A server built before lane_positions sends none, so these records come back with
+			// position 0; at shadow subtree validation then reads each one's position from the
+			// store (fillLanePosition), one extra read per transaction.
 			var lanePosition uint64
 			if i < len(resp.LanePositions) {
 				lanePosition = resp.LanePositions[i]
