@@ -155,7 +155,7 @@ func TestDisagreementLogIsRateLimited(t *testing.T) {
 		r.CompareHeight(ReaderValidator, chainhash.Hash{}, lane.Pack(2, 7), false, 0) // lanes_only
 	}
 
-	require.Equal(t, int64(disagreementsLogged), logger.warns.Load(), "the first five, then none within the minute")
+	require.Equal(t, int64(5), logger.warns.Load(), "the first five, then none within the minute")
 
 	// A minute later, one more.
 	g, ok := r.disagree.gates.Load(ReaderValidator + "/" + KindLanesOnly)
@@ -166,7 +166,7 @@ func TestDisagreementLogIsRateLimited(t *testing.T) {
 		r.CompareHeight(ReaderValidator, chainhash.Hash{}, lane.Pack(2, 7), false, 0)
 	}
 
-	require.Equal(t, int64(disagreementsLogged+1), logger.warns.Load())
+	require.Equal(t, int64(6), logger.warns.Load(), "one more a minute later")
 }
 
 // One lookup in about lookupSampleEvery is timed: neither every lookup nor none.
