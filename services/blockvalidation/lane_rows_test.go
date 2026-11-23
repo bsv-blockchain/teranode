@@ -353,6 +353,34 @@ func TestLaneRowsLeaveAtMostTheSlotsStuckAcrossBlocks(t *testing.T) {
 	require.Equal(t, int32(laneBitmapReadConcurrency+subtrees), store.gets.Load(), "but every subtree was read")
 }
 
+// Blocks validated at the same time share one slot pool, made by whichever comes first; under
+// -race, two first calls at once must not race on making it.
+func TestLaneRowsOfBlocksValidatedAtOnceShareOnePool(t *testing.T) {
+	u, block := laneRowsFixture(t, settings.LaneMigrationShadow)
+
+	var wg sync.WaitGroup
+
+	got := make([][]lane.MapRow, 4)
+
+	for i := range got {
+		wg.Add(1)
+
+		go func() {
+			defer wg.Done()
+
+			got[i] = u.laneRows(context.Background(), block)
+		}()
+	}
+
+	wg.Wait()
+
+	for i := range got {
+		require.Len(t, got[i], 2, "call %d", i)
+	}
+
+	require.Empty(t, u.laneBitmapReadSlots(), "every read handed its slot back")
+}
+
 // A block of more subtrees than are read at once still gets its rows, well inside the deadline:
 // each finished read frees its slot for the next.
 func TestLaneRowsReadMoreSubtreesThanRunAtOnce(t *testing.T) {

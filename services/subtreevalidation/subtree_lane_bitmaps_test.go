@@ -293,6 +293,37 @@ func TestProcessTxMetaUsingStore_OneByOneReadFailsWhenTheStoreFindsNothingAtShad
 	}
 }
 
+// A one-by-one read the store fails transiently is retried with a fresh request, so what the failed
+// attempt left on its item cannot fail the retry that found the transaction.
+func TestProcessTxMetaUsingStore_OneByOneReadRetriesWithAFreshRequest(t *testing.T) {
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.UtxoStore.LaneMigration = settings.LaneMigrationShadow
+	tSettings.BlockValidation.ProcessTxMetaUsingStoreRetries = 2
+
+	calls := 0
+
+	store := &utxo.MockUtxostore{}
+	store.On("BatchDecorate", mock.Anything, mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
+		item := args.Get(1).([]*utxo.UnresolvedMetaData)[0]
+
+		calls++
+		if calls == 1 {
+			item.Err = errors.NewServiceUnavailableError("busy")
+			return
+		}
+
+		item.Data = &meta.Data{Fee: 1, SizeInBytes: 1, LanePosition: lane.Pack(4, 9)}
+	}).Return(nil)
+
+	server := &Server{logger: ulogger.TestLogger{}, settings: tSettings, utxoStore: store}
+
+	txMetaSlice := make([]metaSliceItem, 1)
+	_, err := server.processTxMetaUsingStore(context.Background(), []chainhash.Hash{{0x01}}, txMetaSlice, nil, false, false, true)
+	require.NoError(t, err)
+	require.Equal(t, 2, calls, "the transient failure was retried")
+	require.Equal(t, lane.Pack(4, 9), txMetaSlice[0].lanePosition)
+}
+
 // Through the txmeta cache, the shadow one-by-one read fills the cache as GetMeta did, now with the
 // own lane position, so the transaction is read from the cache next time. The shared field set it
 // builds its fields from is left as it was.
@@ -347,8 +378,10 @@ func TestBlessMissingTransactions_KeepsThePositionTheCreateReturns(t *testing.T)
 	require.Equal(t, lane.Pack(8, 14), txMetaSlice[0].lanePosition)
 }
 
-// positionValidator validates as its validator does and gives the created record position, as a
-// validator at shadow on utxoset or Aerospike does.
+// positionValidator validates as its validator does and gives the created record position, as an
+// in-process validator (useLocalValidator true) at shadow on utxoset or Aerospike does. It stands in
+// for that validator only: over gRPC the response carries no lane position, so a remote validator
+// returns zero and the transaction is left out of the bitmaps, a known limit of this phase.
 type positionValidator struct {
 	validator.Interface
 	position uint64

@@ -2667,7 +2667,9 @@ func txMetaEntrySize(item *txmetaBatchItem) int {
 //	[32 bytes] - tx hash (raw bytes)
 //	[1 byte]   - action (0=ADD, 1=DELETE, 2=ADDLane, 3=ADDOwn)
 //	[4 bytes]  - content length (uint32, little-endian) - 0 for DELETE
-//	[N bytes]  - content (metaBytes) - only for ADD
+//	[N bytes]  - content - for every ADD form, none for DELETE: MetaBytes for ADD, the lane
+//	             encoding for ADDLane, MetaBytes and the own position for ADDOwn
+//	             (docs/references/kafkaMessageFormat.md)
 func serializeTxMetaBatch(batch []*txmetaBatchItem) []byte {
 	// Calculate total size
 	size := 4 // entry count
@@ -2733,7 +2735,7 @@ type txmetaItemWithHash struct {
 //	  [32 bytes] tx hash
 //	  [1 byte]   action (0=ADD, 1=DELETE, 2=ADDLane, 3=ADDOwn)
 //	  [4 bytes]  content length (uint32 LE)
-//	  [N bytes]  content (only for ADD)
+//	  [N bytes]  content, for every ADD form and none for DELETE, as in v1
 //
 // Putting the pre-computed xxhash on the wire lets the receiver skip its own
 // xxhash on every entry — a small per-entry saving that compounds at the
