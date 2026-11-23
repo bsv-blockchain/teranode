@@ -106,6 +106,12 @@ func (s *Server) liveConnAddrs(peerID string) ([]string, bool) {
 	s.liveConns.rebuildMu.Lock()
 	defer s.liveConns.rebuildMu.Unlock()
 
+	// Re-read the clock: the wait for rebuildMu can be as long as another
+	// worker's walk, and judging that worker's view against the pre-wait time
+	// would make it look younger than it is, while stamping our own rebuild
+	// with it would publish a view already partway through its TTL.
+	now = time.Now()
+
 	// Another worker may have rebuilt while we waited for the lock; its view
 	// is at least as fresh as the one we would build.
 	if v := s.liveConns.view.Load(); v != nil {
@@ -153,7 +159,7 @@ func (s *Server) hasLiveConnection(peerID string) bool {
 
 // snapshotLiveConnIDs rebuilds the live-connection snapshot and returns the
 // set of peer IDs with an open libp2p connection. Liveness comes from
-// P2PClient.GetPeers(): verified against go-p2p-message-bus v0.1.23
+// P2PClient.GetPeers(): verified against go-p2p-message-bus v0.3.1
 // (client.go GetPeers), Addrs is built from host.Network().ConnsToPeer — open
 // connections only, not the peerstore — while the peer list itself is every
 // peer that ever authored a message on a subscribed topic (gossip-only
