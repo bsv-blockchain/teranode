@@ -1046,10 +1046,10 @@ func (s *Store) unspendRollback(rbCtx context.Context, tx *bt.Tx, rollback []*ut
 // published), and reading spend.Err before observing published==true would
 // race. Observing published==true synchronizes-with that item's complete()
 // store, which is sequenced after the slot write, so the slot is safely
-// readable for exactly the items this loop processes. When onlyCompleted is
-// false (the normal, non-abort path), group.Wait having returned nil already
-// guarantees every item completed, so the flag is a no-op safety check here,
-// not the source of truth.
+// readable for exactly the items this loop processes. The flag is read once per
+// item, and the age rule and the rollback lists use that one set. When
+// onlyCompleted is false (the normal, non-abort path), group.Wait having
+// returned nil already guarantees every item completed, so the flag is not read.
 //
 // An idempotent match that is historical (utxo.IsHistoricalSpend: its recorded
 // spend is at least utxo.HistoricalSpendAge blocks older than this call's) is
@@ -1071,7 +1071,14 @@ func (s *Store) unspendRollback(rbCtx context.Context, tx *bt.Tx, rollback []*ut
 func (s *Store) resolveSpendCompletions(ctx context.Context, tx *bt.Tx, items []*batchSpend, onlyCompleted bool) *spendCompletionResult {
 	result := &spendCompletionResult{spentSpends: make([]*utxo.Spend, 0, len(items))}
 
-	historical := s.refuseHistoricalReplays(ctx, tx, items, onlyCompleted, result)
+	// On the abort path the dispatcher may publish an item at any moment, so which items are
+	// complete is read once and both passes below use that one set. Read per pass, an item
+	// published between them would be skipped by the age rule and then taken as a young match
+	// by the second pass, so a rollback could reverse a historical match: a confirmed spend.
+	completed := items
+	if onlyCompleted {
+		completed = make([]*batchSpend, 0, len(items))
+	}
 
 	for _, item := range items {
 		// Set when the call was built, never written by the dispatcher, so it
@@ -1080,7 +1087,13 @@ func (s *Store) resolveSpendCompletions(ctx context.Context, tx *bt.Tx, items []
 			result.requireParentOutput = true
 		}
 
-		if onlyCompleted && !item.published.Load() {
+		if !onlyCompleted {
+			continue
+		}
+
+		if item.published.Load() {
+			completed = append(completed, item)
+		} else {
 			result.unresolved++
 
 			// This item is invisible to sawTransientLock, sawTransientCreating and
@@ -1099,10 +1112,16 @@ func (s *Store) resolveSpendCompletions(ctx context.Context, tx *bt.Tx, items []
 			if prometheusUtxoSpendAbortInFlight != nil {
 				prometheusUtxoSpendAbortInFlight.Inc()
 			}
-
-			continue
 		}
+	}
 
+	historical := s.refuseHistoricalReplays(ctx, tx, completed, onlyCompleted, result)
+
+	if afterAgeRuleHook != nil {
+		afterAgeRuleHook()
+	}
+
+	for _, item := range completed {
 		spend := item.spend
 
 		// A blessed input wrote nothing: its parent record is gone. It counts as
@@ -1204,6 +1223,10 @@ func (s *Store) resolveSpendCompletions(ctx context.Context, tx *bt.Tx, items []
 	return result
 }
 
+// afterAgeRuleHook runs in resolveSpendCompletions between the age rule and the pass that builds
+// the rollback lists. Tests only: it lets a test publish an item at exactly that point.
+var afterAgeRuleHook func()
+
 // refuseHistoricalReplays applies the age rule to the call's idempotent matches and returns the
 // items whose match is historical.
 //
@@ -1227,13 +1250,9 @@ func (s *Store) refuseHistoricalReplays(ctx context.Context, tx *bt.Tx, items []
 		haveRetain bool
 	)
 
+	// items holds only completed items: on the abort path the caller passes the set it read once,
+	// so this pass and the caller's agree on which items count.
 	for _, item := range items {
-		// idempotent and the recorded height are written before the item is published, and
-		// spend.Err is read only once it is: an unpublished item's slot may still be written.
-		if onlyCompleted && !item.published.Load() {
-			continue
-		}
-
 		if !item.idempotent || item.spend.Err != nil {
 			continue
 		}

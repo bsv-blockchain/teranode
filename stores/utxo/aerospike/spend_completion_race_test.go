@@ -177,6 +177,41 @@ func TestAbortPathKeepsAHistoricalMatchOutOfTheRollbackWithoutReading(t *testing
 	require.NoError(t, historical.spend.Err, "nothing is refused on the abort path")
 }
 
+// TestAbortPathAHistoricalMatchPublishedAfterTheAgeRuleIsNotReversed: on the abort path the
+// dispatcher publishes a historical match after the age rule has looked at the items and before
+// the rollback lists are built. Read per pass, that item was skipped by the age rule and then taken
+// as a young match, so the rollback reversed a confirmed spend: a replay of pruned C freed C's
+// spend of P:0. Both passes now use the set of items complete when the first one ran.
+func TestAbortPathAHistoricalMatchPublishedAfterTheAgeRuleIsNotReversed(t *testing.T) {
+	s := newTestStoreForGet(t)
+	s.settings.GlobalBlockHeightRetention = 288
+
+	// recorded 1,000 blocks before the call spends: history
+	late := mkSpendItem(1, nil)
+	late.idempotent = true
+	late.blockHeight = 2001
+	late.recordedHeight = 1000
+	late.hasRecordedHeight = true
+
+	spent := mkSpendItem(4, nil)
+	spent.spend.Err = errors.NewUtxoSpentError(*spent.spend.TxID, spent.spend.Vout, *spent.spend.UTXOHash, spendpkg.NewSpendingData(spent.spend.TxID, 0))
+	spent.completed.Store(true)
+	spent.published.Store(true)
+
+	afterAgeRuleHook = func() {
+		late.completed.Store(true)
+		late.published.Store(true)
+	}
+	t.Cleanup(func() { afterAgeRuleHook = nil })
+
+	res := s.resolveSpendCompletions(context.Background(), bt.NewTx(), []*batchSpend{late, spent}, true)
+
+	require.True(t, res.rollbackNeeded, "fixture: the ErrSpent input warrants a rollback")
+	require.Empty(t, res.idempotentSpends, "the late historical match is not a young match")
+	require.Equal(t, 1, res.unresolved, "the late item was not complete when the call looked")
+	require.Empty(t, res.rollbackSet(), "nothing this call wrote, and no match is reversed")
+}
+
 // TestHistoricalMatchWhoseSpenderCannotBeReadFailsTheInput: the existence read cannot answer, so the
 // historical inputs are neither accepted nor refused as a replay. They fail with a storage error
 // that is not a replay answer, and the call's other matches are held back, not reversed, since an
