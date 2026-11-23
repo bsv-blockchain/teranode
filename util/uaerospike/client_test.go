@@ -741,7 +741,8 @@ func TestBatchPolicyBefore(t *testing.T) {
 func TestBatchOperateBefore_SendsNothingAfterTheDeadline(t *testing.T) {
 	c := &Client{}
 
-	err := c.BatchOperateBefore(time.Now().Add(-time.Second), aerospike.NewBatchPolicy(), nil)
+	sent, err := c.BatchOperateBefore(time.Now().Add(-time.Second), aerospike.NewBatchPolicy(), nil)
 	require.NotNil(t, err)
 	require.True(t, err.Matches(types.TIMEOUT))
+	require.False(t, sent, "the caller must be able to tell a refusal from an answer of the server")
 }

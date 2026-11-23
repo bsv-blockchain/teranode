@@ -287,7 +287,7 @@ func (s *Store) sendFinalizeGroup(items []*batchFinalize, records []aerospike.Ba
 		writeCtx, cancel = context.WithDeadline(context.Background(), earliest)
 	}
 
-	err := s.batchOperateWithin(writeCtx, util.GetAerospikeBatchPolicy(s.settings), groupRecords)
+	_, err := s.batchOperateWithin(writeCtx, util.GetAerospikeBatchPolicy(s.settings), groupRecords)
 
 	cancel()
 

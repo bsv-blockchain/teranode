@@ -1757,12 +1757,7 @@ func (s *Store) executeSpendBatch(batchRecords []aerospike.BatchRecordIfc, batch
 }
 
 func (s *Store) executeSpendBatchContext(ctx context.Context, batchRecords []aerospike.BatchRecordIfc, batch []*batchSpend, batchID uint64) error {
-	batchPolicy := util.GetAerospikeBatchPolicy(s.settings)
-	err := boundConflictBatchPolicy(ctx, batchPolicy)
-	batchSent := err == nil
-	if err == nil {
-		err = s.batchOperateWithin(ctx, batchPolicy, batchRecords)
-	}
+	batchSent, err := s.batchOperateWithin(ctx, util.GetAerospikeBatchPolicy(s.settings), batchRecords)
 	if err != nil {
 		// complete is CAS-guarded: items already completed in prepareSpendBatches
 		// (key-creation/validation failures) are simply no-ops here, so this
