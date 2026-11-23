@@ -79,6 +79,10 @@ func TestSyncManager_ARejectedParkedBlockTellsThePeerWhy(t *testing.T) {
 	}{
 		"bad merkle root": {errors.NewBlockInvalidError("merkle root does not match header's", errors.ErrBlockBodyMismatch), "bad-txnmrklroot"},
 		"unclassified":    {errors.NewBlockInvalidError("this block is not one we can take"), "block rejected"},
+		// A transaction verdict is not a block verdict, so it lands on the default
+		// row, which rejects without dropping the peer (PushRejectMsg, not
+		// rejectThenDropPeer). The reason still reaches the peer on that path.
+		"transaction verdict": {errors.NewTxInvalidError("GoBDK -> UNKNOWN (0): bad-txns-inputs-duplicate"), "bad-txns-inputs-duplicate"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			h := newParkWiringHarnessInState(t, true, blockchain2.FSMStateRUNNING)
