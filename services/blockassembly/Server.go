@@ -917,9 +917,9 @@ func (ba *BlockAssembly) sendSubtreeNotification(ctx context.Context, subtreeHas
 // request, or false, after logging why, when it cannot be built.
 //
 // With laneBits, at utxostore_laneMigration shadow, it adds the lane position of every node but
-// the coinbase placeholder to laneBits in the same pass, read with its inpoints where the map
-// allows (see buildSubtreeMetaBytes for the in-memory map's first node). laneBits is complete only
-// when it reports true.
+// the coinbase placeholder to laneBits in the same pass. Both pool maps return each position with
+// its inpoints, from one lock or one disk read; any other map is asked for it after. laneBits is
+// complete only when it reports true.
 func (ba *BlockAssembly) buildSubtreeMeta(subtreeRequest subtreeprocessor.NewSubtreeRequest, laneBits *lane.BitmapsBuilder) ([]byte, bool) {
 	subtree := subtreeRequest.Subtree
 

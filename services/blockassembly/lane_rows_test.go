@@ -53,9 +53,12 @@ func (c *addBlockOptionsSpyClient) lastOpts() *options.StoreBlockOptions {
 // ownLaneTxs is the block's transactions after its coinbase: four subtrees' worth at four nodes a
 // subtree, so the candidate is two complete subtrees. One has no position, which block assembly
 // counts and still mines, and lanes 3 and 9 each have a hole.
+//
+// The second subtree's first node, ownLaneTxs[3], is a real transaction with a position: only a
+// block's first subtree starts with the coinbase placeholder.
 var ownLaneTxs = []uint64{
 	lane.Pack(3, 10), lane.Pack(3, 11), lane.Pack(9, 500),
-	0, lane.Pack(3, 12), lane.Pack(9, 502), lane.Pack(3, 14),
+	lane.Pack(3, 12), lane.Pack(9, 502), 0, lane.Pack(3, 14),
 }
 
 // ownLaneBlock is what mining a block from ownLaneTxs left behind.

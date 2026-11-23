@@ -288,3 +288,41 @@ func BenchmarkBuildSubtreeMeta(b *testing.B) {
 		b.ReportMetric(float64(b.N*leaves)/b.Elapsed().Seconds()/1e6, "Mtx/s")
 	})
 }
+
+// TestBuildSubtreeMetaBytesCollectsEveryNodesLanePosition: at shadow the meta pass adds every
+// node's lane position to the subtree's lane bitmaps, node 0 of a subtree that is not its block's
+// first included, since that node is a real tx; a node already removed from the map and found only
+// in deletedTxs is counted as without a position.
+func TestBuildSubtreeMetaBytesCollectsEveryNodesLanePosition(t *testing.T) {
+	subtree, err := subtreepkg.NewTreeByLeafCount(4)
+	require.NoError(t, err)
+
+	m := subtreeprocessor.NewSplitTxInpointsMap(16)
+	deleted := txmap.NewSyncedMap[chainhash.Hash, subtreepkg.TxInpoints]()
+
+	positions := []uint64{lane.Pack(8, 100), lane.Pack(8, 101), lane.Pack(8, 102)}
+
+	for i, position := range positions {
+		h := metaTestHash(9_000 + i)
+		require.NoError(t, subtree.AddNode(h, 1, 1))
+
+		p := subtreepkg.NewTxInpointsFromPacked([]chainhash.Hash{metaTestHash(9_100 + i)}, []uint32{1, 0})
+		m.SetAt(h, &p, position)
+	}
+
+	// the last node was removed while the subtree was being stored
+	removed := metaTestHash(9_002)
+	p, ok := m.Get(removed)
+	require.True(t, ok)
+	deleted.Set(removed, *p)
+	require.True(t, m.Delete(removed))
+
+	laneBits := lane.NewBitmapsBuilder()
+
+	_, err = buildSubtreeMetaBytes(subtree, m, deleted, laneBits)
+	require.NoError(t, err)
+
+	bitmaps := laneBits.Subtree(*subtree.RootHash())
+	require.Equal(t, []uint64{100, 101}, bitmaps.Lanes[8].ToArray(), "node 0 is a real tx and keeps its position")
+	require.Equal(t, 1, laneBits.Unpositioned(), "the removed node has none")
+}
