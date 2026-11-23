@@ -257,6 +257,33 @@ func (u *Server) txmetaHandler(ctx context.Context, msg *kafka.KafkaMessage) err
 			if isV2 {
 				bufs.hashes = append(bufs.hashes, entryHash)
 			}
+		case txmetacache.WireActionADDOwn:
+			// MetaBytes and the own position, sent at shadow when the validator knows the own
+			// position but not every parent's. It is already the cache form, so at shadow the
+			// cache keeps it whole; with lane positions off it keeps the MetaBytes. An entry
+			// that does not check out is dropped and counted, as a malformed ADDLane entry is.
+			laneTxMetaReceived.CountOwn()
+
+			end := offset + int(contentLen)
+
+			legacy, err := txmetacache.OwnCacheContent(data[offset:end:end])
+			if err != nil {
+				prometheusSubtreeValidationSetTXMetaCacheKafkaErrors.Inc()
+				u.logger.Debugf("[txmetaHandler] dropping own-position txmeta entry %d: %v", i, err)
+
+				break
+			}
+
+			value := legacy
+			if laneShadow {
+				value = data[offset:end:end]
+			}
+
+			bufs.keys = append(bufs.keys, key)
+			bufs.values = append(bufs.values, value)
+			if isV2 {
+				bufs.hashes = append(bufs.hashes, entryHash)
+			}
 		case txmetacache.WireActionDELETE:
 			// chainhash.Hash is a value type: the copy does not reference
 			// msg.Value.

@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/url"
 	"testing"
+	"time"
 
 	"github.com/RoaringBitmap/roaring/v2/roaring64"
 	"github.com/bsv-blockchain/teranode/stores/blockchain/options"
@@ -138,6 +139,62 @@ func TestStoreBlockCommitsLaneMapRowsWithTheBlock(t *testing.T) {
 
 		require.Equal(t, len(rows)+len(forkRows), laneMapRowCount(t, s))
 	})
+}
+
+// The common extend's rows go in the block's own transaction, so the block and its rows commit
+// together. On Postgres the rows' insert first takes its block's lane write lock; held here from
+// another transaction, it stops the store after the block's INSERT and before the commit. Another
+// connection then cannot see the block, and sees it with its rows once the lock is released.
+func TestStoreBlockCommitsTheBlockAndItsRowsTogether(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping postgres-backed test in -short mode")
+	}
+
+	s, cleanup := setupLanePostgresStore(t)
+	defer cleanup()
+
+	ctx := t.Context()
+	rows := blockLaneRows(t)
+
+	id, err := s.AssignBlockID(ctx, block1.Hash())
+	require.NoError(t, err)
+
+	holder, err := s.db.BeginTx(ctx, nil)
+	require.NoError(t, err)
+
+	defer func() { _ = holder.Rollback() }()
+
+	_, err = holder.ExecContext(ctx, `SELECT pg_advisory_xact_lock($1, $2)`, laneMapLockClass, int32(id)) //nolint:gosec // a test block ID
+	require.NoError(t, err)
+
+	done := make(chan error, 1)
+
+	go func() {
+		_, _, storeErr := s.StoreBlock(ctx, block1, "", options.WithID(id), options.WithLaneMapRows(rows))
+		done <- storeErr
+	}()
+
+	require.Eventually(t, func() bool {
+		var waiting int
+		require.NoError(t, s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM pg_locks WHERE locktype = 'advisory' AND NOT granted`).Scan(&waiting))
+
+		return waiting > 0
+	}, 10*time.Second, 10*time.Millisecond, "the store waits on the block's lane write lock")
+
+	blockRows := func() int {
+		var n int
+		require.NoError(t, s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM blocks WHERE hash = $1`, block1.Hash().CloneBytes()).Scan(&n))
+
+		return n
+	}
+
+	require.Zero(t, blockRows(), "the block's INSERT is not committed before its rows are in")
+
+	require.NoError(t, holder.Commit())
+	require.NoError(t, <-done)
+
+	require.Equal(t, 1, blockRows())
+	requireRowsOf(t, s, id, rows)
 }
 
 func TestStoreBlockWritesLaneMapRowsOnlyWithItsBlock(t *testing.T) {

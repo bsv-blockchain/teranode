@@ -248,6 +248,11 @@ type BlockValidation struct {
 	// subtreeStore provides persistent storage for block subtrees
 	subtreeStore blob.Store
 
+	// laneBitmapSlots bounds the lane bitmap reads in flight across every block, those a block
+	// stopped waiting for included (lane_rows.go); laneBitmapReadSlots makes it.
+	laneBitmapSlots     chan struct{}
+	laneBitmapSlotsOnce sync.Once
+
 	// subtreeBlockHeightRetention specifies how long subtrees should be retained
 	subtreeBlockHeightRetention uint32
 
@@ -2096,7 +2101,8 @@ func (u *BlockValidation) runOncePerBlock(blockHash *chainhash.Hash, opts *Valid
 // aerospike_enable_setmined_filter_expressions on: that path filters out a record already
 // holding the id and only unlocks it.
 //
-// For a block with no id (block.ID == 0) this returns nil and the store assigns one.
+// A block with no id (block.ID == 0) gets no WithID, so the store assigns one. The result is nil
+// only when there is no option at all: at shadow it can hold just WithLaneMapRows.
 func (u *BlockValidation) buildAddBlockOpts(ctx context.Context, block *model.Block) []blockchainoptions.StoreBlockOption {
 	var opts []blockchainoptions.StoreBlockOption
 

@@ -239,6 +239,42 @@ func CachedLanePosition(rest []byte) uint64 {
 	return binary.LittleEndian.Uint64(rest)
 }
 
+// metaBytesHeader is MetaBytes' fee (8), size (8) and flags (1), before its TxInpoints.
+const metaBytesHeader = 17
+
+// OwnCacheBytesView checks b, a txmeta cache form that carries an own lane position, and returns
+// its MetaBytes, as a sub-slice of b with nothing copied, and the position. It refuses b unless
+// its TxInpoints end exactly one position before its end and that position is valid: the content
+// of a WireActionADDOwn entry, which CacheBytesInto writes for a record with a position.
+func OwnCacheBytesView(b []byte) ([]byte, uint64, error) {
+	if len(b) < metaBytesHeader+4+lane.PositionSize {
+		return nil, 0, errors.NewProcessingError("own cache form is %d bytes, too short", len(b))
+	}
+
+	size := uint64(len(b))
+	parents := uint64(binary.LittleEndian.Uint32(b[metaBytesHeader:]))
+	off := uint64(metaBytesHeader) + 4 + parents*32
+
+	for i := uint64(0); i < parents; i++ {
+		if off+4 > size {
+			return nil, 0, errors.NewProcessingError("own cache form inpoints truncated at parent %d", i)
+		}
+
+		off += 4 + 4*uint64(binary.LittleEndian.Uint32(b[off:]))
+	}
+
+	if off > size || size-off != lane.PositionSize {
+		return nil, 0, errors.NewProcessingError("own cache form has %d bytes after its inpoints, not one lane position", int64(size)-int64(off))
+	}
+
+	own := binary.LittleEndian.Uint64(b[off:])
+	if err := lane.CheckPosition(own); err != nil {
+		return nil, 0, errors.NewProcessingError("own cache form position", err)
+	}
+
+	return b[:off:off], own, nil
+}
+
 // AppendCacheFromLaneMetaBytes appends the txmeta cache form of a lane metadata encoding, its
 // MetaBytes and own position, to dst, checking the encoding as LaneMetaBytesView does and the own
 // position too.
