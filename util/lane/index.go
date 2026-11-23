@@ -443,8 +443,9 @@ func (v *ChainView) Height(id uint32) (uint32, bool) {
 // Main is the view of the main chain.
 func (s *IndexSnapshot) Main() *ChainView { return s.mainView }
 
-// ViewFrom is the view of the chain ending at the loaded block hash, or false if hash, or one of
-// its ancestors back to the main chain, is not loaded.
+// ViewFrom is the view of the chain ending at the loaded block hash, and false only when hash
+// itself is not loaded. When the walk back leaves the loaded blocks before it meets the main
+// chain, it returns a disconnected view, on which the floors do not hold.
 func (s *IndexSnapshot) ViewFrom(hash chainhash.Hash) (*ChainView, bool) {
 	id, ok := s.byHash[hash]
 	if !ok {
