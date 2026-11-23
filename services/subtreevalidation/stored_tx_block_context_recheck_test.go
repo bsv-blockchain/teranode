@@ -32,7 +32,7 @@ import (
 )
 
 // TestKnownDefect_TxSeenBeforeIsNotRecheckedForFinalityInALowerBlock is the plain, step-by-step
-// version of the GAP-BV-047 proof (bitcoin-sv/teranode#5000). Everything is set up inline; the only
+// version of the GAP-BV-047 proof. Everything is set up inline; the only
 // code called is production code.
 //
 // The rule (bitcoin-sv IsFinalTx): a tx with nLockTime = 101 and a non-final input sequence may go

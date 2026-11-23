@@ -122,8 +122,8 @@ func requireBoundNonFinal(t *testing.T, valid bool, err error) {
 	require.Contains(t, err.Error(), "bad-txns-nonfinal")
 }
 
-// TestBlock_Valid_NonFinalCoinbaseRejected is bitcoin-sv/teranode#4981 (GAP-BV-045, BV-BODY-019,
-// AC-BV-BODY-019.1): bitcoin-sv applies IsFinalTx to the coinbase in ContextualCheckBlock, and
+// TestBlock_Valid_NonFinalCoinbaseRejected covers GAP-BV-045 (BV-BODY-019, AC-BV-BODY-019.1):
+// bitcoin-sv applies IsFinalTx to the coinbase in ContextualCheckBlock, and
 // Teranode's only finality check was in the validator, which never sees a coinbase. A bound block at
 // height H whose coinbase has nLockTime = H and input sequence 0 is non-final and must be rejected;
 // with sequence 0xFFFFFFFF the same coinbase is final.

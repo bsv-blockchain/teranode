@@ -412,7 +412,8 @@ func validateBlockWithSigOps(t *testing.T, genesisActivationHeight uint32, txSpe
 		}
 
 		// Trim the last padding transaction until the block is exactly targetSize bytes. The
-		// output script length varint does not change size across the trim (all >= 65,536).
+		// output script length varint shrinks when the last script drops below 65,536 (or 253)
+		// bytes, so one trim can miss by its width change; the loop re-measures and corrects it.
 		for range 4 {
 			size := sigOpLimitWireSize(append(append([]*bt.Tx{coinbase}, txs...), paddingTxs...))
 			if size == targetSize {

@@ -289,8 +289,8 @@ func requireRejectedAsBIP30Violation(t *testing.T, err error, height uint32) {
 // see bip30Harness.mineBlockOn), so the exemption must not reach past block 91842 itself.
 //
 // Today: no BIP30 check exists anywhere on the block path (model.Block.Valid and
-// BlockValidation.ValidateBlock check duplicate txids only within one block, model/Block.go
-// ~1706/1738), so the block is accepted. Where the colliding transaction is created, the collision is
+// BlockValidation.ValidateBlock check duplicate txids only within one block, in
+// model.Block.checkDuplicateTransactions), so the block is accepted. Where the colliding transaction is created, the collision is
 // swallowed: block assembly's SubtreeProcessor.processCoinbaseUtxos logs "already exist. Skipping"
 // on ErrTxExists, quick validation's applyOneByOne calls collectExisting, and subtree validation's
 // check_block_subtrees.go treats TX_EXISTS as already validated.
@@ -415,8 +415,8 @@ func buildBIP34CoinbaseCollisionChain(t *testing.T, harness *bip30Harness, block
 // earlier outputs this way.
 //
 // Today: block validation accepts block 3 (correctly), and block assembly's
-// SubtreeProcessor.processCoinbaseUtxos (services/blockassembly/subtreeprocessor/SubtreeProcessor.go
-// ~7206-7226) gets ErrTxExists from SpendAndCreate(WithCreateOnly) and skips, logging "coinbase
+// SubtreeProcessor.processCoinbaseUtxos (services/blockassembly/subtreeprocessor/SubtreeProcessor.go)
+// gets ErrTxExists from SpendAndCreate(WithCreateOnly) and skips, logging "coinbase
 // utxos for ... already exist. Skipping". Block 1's outputs stay, maturing at 1 + 1 = 2, so they can
 // be spent at height 2, where the new coinbase's outputs (mature at 3 + 1 = 4) cannot.
 //
