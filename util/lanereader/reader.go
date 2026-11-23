@@ -92,8 +92,8 @@ type Reader struct {
 	disagree disagreementLog
 
 	// unreachable holds blocks whose walk back found no held block, by hash, with the tip height
-	// the index had then, so a later block on the same fork does not repeat the walk until the
-	// tip moves. It is bounded by maxUnreachable.
+	// the index had then, so another check of the same block does not repeat the walk until the
+	// tip moves. A later block on that fork is walked again. It is bounded by maxUnreachable.
 	unreachableMu sync.Mutex
 	unreachable   map[chainhash.Hash]uint32
 
