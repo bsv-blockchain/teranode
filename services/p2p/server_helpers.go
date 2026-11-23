@@ -1149,6 +1149,16 @@ func (s *Server) shouldSkipBannedPeer(from string, messageType string) bool {
 // addresses come from the live-connection snapshot, so a gossip-relayed author
 // (no open connection, hence no addresses) is answered without a GetPeers
 // walk and without caching anything under its ID.
+//
+// Accepted window: a neighbour that connects just after the snapshot was
+// taken is a miss, and misses are served from the snapshot for up to
+// liveConnMissRefreshInterval (1s) before one rebuilds it. A banned IP that
+// reconnects under a fresh peer ID therefore gets at most that long of
+// gossip accepted per connection. Rebuilding on every miss would close the
+// window but cost a GetPeers walk, linear in every author the message bus has
+// tracked, per message from an unknown author. Closing it needs a per-peer
+// connectedness lookup from go-p2p-message-bus, which its client does not
+// expose yet.
 func (s *Server) isPeerIPBanned(peerID string) bool {
 	if s.banList == nil || s.P2PClient == nil {
 		return false
