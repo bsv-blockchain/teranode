@@ -1145,8 +1145,9 @@ func (u *Server) waitForRetryOrPriority(ctx context.Context, subtreeHash string,
 	}
 }
 
-// storeSubtreeFiles writes a validated subtree's files: its lane bitmaps when laneBitmaps is not
-// nil (utxostore_laneMigration shadow), then its meta, then the subtree file, all with one expiry.
+// storeSubtreeFiles writes a validated subtree's files, all with one expiry: its meta, and beside it
+// its lane bitmaps when laneBitmaps is not nil (utxostore_laneMigration shadow), then the subtree
+// file once both are written.
 func (u *Server) storeSubtreeFiles(ctx context.Context, stat *gocore.Stat, subtreeHash *chainhash.Hash, subtree *subtreepkg.Subtree, subtreeMeta *subtreepkg.Meta, laneBitmaps *lane.SubtreeBitmaps) error {
 	ctx, _, deferFn := tracing.Tracer("subtreevalidation").Start(ctx, "storeSubtreeFiles",
 		tracing.WithParentStat(stat),
