@@ -3,21 +3,28 @@ package validator
 import (
 	"context"
 	"encoding/binary"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"sync/atomic"
 	"testing"
+	"time"
 
+	"github.com/bsv-blockchain/go-batcher/v2"
 	"github.com/bsv-blockchain/go-batcher/v2/completion"
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/services/validator/validator_api"
+	utxometa "github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util/lane"
+	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
 )
 
@@ -261,12 +268,14 @@ func TestValidateWithOptions_HTTPFallback(t *testing.T) {
 	client, server := setupTestClient(t, mockClient)
 	defer server.Close()
 
-	// Create test transaction and options
+	// Create test transaction and options. Height 0 is what every production
+	// caller that can reach the fallback actually passes; a non-zero height is
+	// now refused before transmission (see nonDefaultValidationOptions).
 	tx := createTestTransaction(t)
 	opts := NewDefaultOptions()
 
 	// Call the method under test
-	result, err := client.ValidateWithOptions(context.Background(), tx, 100, opts)
+	result, err := client.ValidateWithOptions(context.Background(), tx, 0, opts)
 
 	// Assert results
 	assert.NoError(t, err) // HTTP fallback should succeed
@@ -299,8 +308,9 @@ func TestHandleValidationError_HTTPFallbackSuccess(t *testing.T) {
 	tx := createTestTransaction(t)
 	opts := NewDefaultOptions()
 
-	// Call the method under test
-	resultErr := client.handleValidationError(context.Background(), tx, 100, opts, originalErr)
+	// Call the method under test. Height 0: a caller-asserted height cannot be
+	// sent over the HTTP fallback any more.
+	resultErr := client.handleValidationError(context.Background(), tx, 0, opts, originalErr)
 
 	// The HTTP fallback should succeed and return nil error
 	assert.NoError(t, resultErr)
@@ -317,8 +327,9 @@ func TestHandleValidationError_HTTPServerFail(t *testing.T) {
 	tx := createTestTransaction(t)
 	opts := NewDefaultOptions()
 
-	// Call the method under test
-	resultErr := client.handleValidationError(context.Background(), tx, 100, opts, originalErr)
+	// Call the method under test. Height 0 so the error under test is the HTTP
+	// failure, not the client-side option refusal.
+	resultErr := client.handleValidationError(context.Background(), tx, 0, opts, originalErr)
 
 	// The method should return an error due to HTTP failure
 	assert.Error(t, resultErr)
@@ -350,7 +361,7 @@ func TestHandleValidationError_HTTPFallbackSurfacesVerdict(t *testing.T) {
 		validatorHTTPAddr: validatorHTTPAddr,
 	}
 
-	resultErr := client.handleValidationError(context.Background(), createTestTransaction(t), 100, NewDefaultOptions(),
+	resultErr := client.handleValidationError(context.Background(), createTestTransaction(t), 0, NewDefaultOptions(),
 		status.Error(codes.ResourceExhausted, "message too large"))
 
 	require.Error(t, resultErr)
@@ -442,9 +453,18 @@ func TestBatchValidation(t *testing.T) {
 }
 
 func TestBatchValidation_ResourceExhausted(t *testing.T) {
-	// Create mock client that returns ResourceExhausted error
+	// Create mock client that returns ResourceExhausted error.
+	//
+	// The unary stub reports the same oversize, which is what keeps this test on
+	// the HTTP arm: an oversized batch is now retried item by item over gRPC
+	// first, and only an item that is ALSO too large on its own reaches the HTTP
+	// fallback. The gRPC arm is covered by
+	// TestBatchOversized_NonDefaultOptionsRetriedOverGRPC.
 	mockClient := &MockValidatorAPIClient{
 		validateBatchFunc: func(ctx context.Context, in *validator_api.ValidateTransactionBatchRequest) (*validator_api.ValidateTransactionBatchResponse, error) {
+			return nil, status.Error(codes.ResourceExhausted, "message too large")
+		},
+		validateTxFunc: func(ctx context.Context, in *validator_api.ValidateTransactionRequest) (*validator_api.ValidateTransactionResponse, error) {
 			return nil, status.Error(codes.ResourceExhausted, "message too large")
 		},
 	}
@@ -459,12 +479,17 @@ func TestBatchValidation_ResourceExhausted(t *testing.T) {
 	txBytes := tx.Bytes()
 
 	// Create test batch with valid transaction data sharing one completion group.
+	// Height 0 and default options: the batch fallback funnels through the same
+	// validateTransactionViaHTTP as the unary one, which refuses a caller-asserted
+	// height before sending. The refusal itself is pinned by
+	// TestValidateTransactionViaHTTP_RefusesNonDefaultOptions; this test's subject
+	// is the batch plumbing succeeding, which is coverage nothing else provides.
 	group := completion.NewGroup(1)
 	batch := []*batchItem{
 		{
 			req: &validator_api.ValidateTransactionRequest{
 				TransactionData:      txBytes,
-				BlockHeight:          100,
+				BlockHeight:          0,
 				SkipUtxoCreation:     boolPtr(false),
 				AddTxToBlockAssembly: boolPtr(true),
 				SkipPolicyChecks:     boolPtr(false),
@@ -535,11 +560,148 @@ func TestBatchValidation_DispatcherPanic(t *testing.T) {
 	require.NotPanics(t, func() { client.sendBatchToValidator(context.Background(), batch) })
 
 	require.NoError(t, group.Wait(context.Background(), 0))
-	require.Error(t, batch[0].result.err)
-	require.Error(t, batch[1].result.err)
+
+	// The sweep is shared (util.SignalBatchPanic); the error text it builds must
+	// stay "panic in <fnName>: <recovered>", as the hand-rolled sweep produced.
+	for i, item := range batch {
+		require.Error(t, item.result.err, "batch item %d must be completed, not stranded", i)
+		require.Contains(t, item.result.err.Error(), "panic in sendBatchToValidator")
+	}
 }
 
 // Helper for creating bool pointers
 func boolPtr(b bool) *bool {
 	return &b
+}
+
+// laneServer is the validator's own gRPC server, behind a real loopback connection, answering
+// every validation with a record that holds position: what a remote validator at
+// utxostore_laneMigration shadow returns for a transaction it created.
+func laneServer(t *testing.T, position uint64) validator_api.ValidatorAPIClient {
+	t.Helper()
+
+	server := NewServer(ulogger.TestLogger{}, test.CreateBaseTestSettings(t), nil, nil, nil, nil, nil, nil, nil)
+	server.validator = &MockValidator{
+		ValidateFunc: func(context.Context, *bt.Tx) (*utxometa.Data, error) {
+			return &utxometa.Data{Fee: 1000, SizeInBytes: 250, LanePosition: position}, nil
+		},
+	}
+
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+
+	srv := grpc.NewServer()
+	validator_api.RegisterValidatorAPIServer(srv, server)
+
+	go func() { _ = srv.Serve(lis) }()
+
+	conn, err := grpc.NewClient(lis.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	require.NoError(t, err)
+
+	t.Cleanup(func() {
+		_ = conn.Close()
+		srv.Stop()
+	})
+
+	return validator_api.NewValidatorAPIClient(conn)
+}
+
+// The metadata a remote validator returns does not carry the created record's lane position, so
+// the response carries it beside the metadata, and the client puts it back on the record it
+// returns, whether the transaction went alone or in a batch. Without it, subtree validation with
+// useLocalValidator off left every transaction it validated out of the subtree's lane bitmaps.
+func TestValidateWithOptions_ReturnsTheLanePositionOverGRPC(t *testing.T) {
+	position := lane.Pack(8, 14)
+	tx := createTestTransaction(t)
+
+	t.Run("alone", func(t *testing.T) {
+		c := &Client{client: laneServer(t, position), logger: ulogger.TestLogger{}}
+
+		md, err := c.ValidateWithOptions(context.Background(), tx, 100, NewDefaultOptions())
+		require.NoError(t, err)
+		require.Equal(t, position, md.LanePosition)
+	})
+
+	t.Run("in a batch", func(t *testing.T) {
+		c := &Client{client: laneServer(t, position), logger: ulogger.TestLogger{}}
+
+		group := completion.NewGroup(2)
+		batch := []*batchItem{
+			{req: buildValidateTxRequest(tx.SerializeBytes(), 100, NewDefaultOptions()), group: group},
+			{req: buildValidateTxRequest(tx.SerializeBytes(), 100, NewDefaultOptions()), group: group},
+		}
+
+		c.sendBatchToValidator(context.Background(), batch)
+		require.NoError(t, group.Wait(context.Background(), 0))
+
+		for i, item := range batch {
+			require.NoError(t, item.result.err, "item %d", i)
+			require.Equal(t, position, item.result.lanePosition, "item %d", i)
+		}
+	})
+
+	t.Run("through the batcher", func(t *testing.T) {
+		c := &Client{client: laneServer(t, position), logger: ulogger.TestLogger{}, batchSize: 1}
+		c.batcher = batcher.New(1, 10*time.Millisecond, func(b []*batchItem) {
+			c.sendBatchToValidator(context.Background(), b)
+		}, true)
+		t.Cleanup(c.batcher.Close)
+
+		md, err := c.ValidateWithOptions(context.Background(), tx, 100, NewDefaultOptions())
+		require.NoError(t, err)
+		require.Equal(t, position, md.LanePosition)
+	})
+
+	t.Run("retried alone after an oversized batch", func(t *testing.T) {
+		c := &Client{
+			client: &MockValidatorAPIClient{
+				validateBatchFunc: func(context.Context, *validator_api.ValidateTransactionBatchRequest) (*validator_api.ValidateTransactionBatchResponse, error) {
+					return nil, status.Error(codes.ResourceExhausted, "grpc: received message larger than max")
+				},
+				validateTxFunc: func(context.Context, *validator_api.ValidateTransactionRequest) (*validator_api.ValidateTransactionResponse, error) {
+					return &validator_api.ValidateTransactionResponse{Valid: true, Metadata: validBatchMetadata(), LanePosition: position}, nil
+				},
+			},
+			logger: ulogger.TestLogger{},
+		}
+
+		group := completion.NewGroup(1)
+		batch := []*batchItem{{req: buildValidateTxRequest(tx.SerializeBytes(), 100, NewDefaultOptions()), group: group}}
+
+		c.sendBatchToValidator(context.Background(), batch)
+		require.NoError(t, group.Wait(context.Background(), 0))
+		require.NoError(t, batch[0].result.err)
+		require.Equal(t, position, batch[0].result.lanePosition)
+	})
+
+	t.Run("each batch item gets its own position", func(t *testing.T) {
+		c := &Client{logger: ulogger.TestLogger{}}
+
+		group := completion.NewGroup(2)
+		batch := []*batchItem{{group: group}, {group: group}}
+
+		c.processBatchResponse(batch, &validator_api.ValidateTransactionBatchResponse{
+			Errors:        []*errors.TError{errors.Wrap(nil), errors.Wrap(nil)},
+			Metadata:      [][]byte{validBatchMetadata(), validBatchMetadata()},
+			LanePositions: []uint64{lane.Pack(8, 14), lane.Pack(9, 2)},
+		})
+		require.NoError(t, group.Wait(context.Background(), 0))
+		require.Equal(t, lane.Pack(8, 14), batch[0].result.lanePosition)
+		require.Equal(t, lane.Pack(9, 2), batch[1].result.lanePosition)
+	})
+
+	t.Run("a batch from a server built before the field", func(t *testing.T) {
+		c := &Client{logger: ulogger.TestLogger{}}
+
+		group := completion.NewGroup(1)
+		batch := []*batchItem{{group: group}}
+
+		c.processBatchResponse(batch, &validator_api.ValidateTransactionBatchResponse{
+			Errors:   []*errors.TError{errors.Wrap(nil)},
+			Metadata: [][]byte{validBatchMetadata()},
+		})
+		require.NoError(t, group.Wait(context.Background(), 0))
+		require.NoError(t, batch[0].result.err, "no positions is not an error")
+		require.Zero(t, batch[0].result.lanePosition)
+	})
 }

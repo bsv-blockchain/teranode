@@ -1,6 +1,17 @@
 x-teranode-base:
   &teranode-base
   image: ghcr.io/bsv-blockchain/teranode:v0.14.4
+  init: true
+  # The file store's default semaphore budget (filestore_read_concurrency 768 /
+  # filestore_write_concurrency 256) assumes a 1024+ open-file limit, plus room for
+  # sockets, database pools and log files. A container's default soft nofile is far
+  # below that; with the default filestore_use_system_limits=true the node clamps the
+  # budget down to fit and logs one INFO line - it works, but throughput is silently
+  # reduced. Raise the limit explicitly instead of discovering the clamp later.
+  ulimits:
+    nofile:
+      soft: 8192
+      hard: 65536
   networks:
     - teranode-network
   volumes:
@@ -9,6 +20,7 @@ x-teranode-base:
     - ./settings_local.conf:/app/settings_local.conf
     - ${DATA_PATH}/teranode:/app/data
   environment:
+    grpc_admin_api_key: ${grpc_admin_api_key:?Set a shared random grpc_admin_api_key for all Teranode services}
     SETTINGS_CONTEXT: ${SETTINGS_CONTEXT_1:-docker.m}
     USE_LOCAL_AEROSPIKE: true
     USE_LOCAL_POSTGRES: true
@@ -22,7 +34,7 @@ services:
     entrypoint: [ "/app/entrypoint.sh" ]
     command: [ "-blockchain=1" ]
     healthcheck:
-      test: [ "CMD-SHELL", "netstat", "-ltn", "|", "grep", "-c", "8087" ]
+      test: [ "CMD-SHELL", "netstat -ltn | grep -c 8087" ]
       interval: 5s
       timeout: 30s
       retries: 10
@@ -41,7 +53,7 @@ services:
       blockchain:
         condition: service_healthy
     healthcheck:
-      test: [ "CMD-SHELL", "netstat", "-ltn", "|", "grep", "-c", "8091" ]
+      test: [ "CMD-SHELL", "netstat -ltn | grep -c 8090" ]
       interval: 5s
       timeout: 30s
       retries: 10
@@ -72,7 +84,7 @@ services:
       blockchain:
         condition: service_healthy
     healthcheck:
-      test: [ "CMD-SHELL", "netstat", "-ltn", "|", "grep", "-c", "8086" ]
+      test: [ "CMD-SHELL", "netstat -ltn | grep -c 8086" ]
       interval: 5s
       timeout: 30s
       retries: 10
@@ -90,7 +102,7 @@ services:
       blockchain:
         condition: service_healthy
     healthcheck:
-      test: [ "CMD-SHELL", "netstat", "-ltn", "|", "grep", "-c", "8088" ]
+      test: [ "CMD-SHELL", "netstat -ltn | grep -c 8088" ]
       interval: 5s
       timeout: 30s
       retries: 10
@@ -107,7 +119,7 @@ services:
       blockchain:
         condition: service_healthy
     healthcheck:
-      test: [ "CMD-SHELL", "netstat", "-ltn", "|", "grep", "-c", "8085" ]
+      test: [ "CMD-SHELL", "netstat -ltn | grep -c 8085" ]
       interval: 5s
       timeout: 30s
       retries: 10
@@ -143,7 +155,7 @@ services:
       blockassembly:
         condition: service_healthy
     healthcheck:
-      test: [ "CMD-SHELL", "netstat", "-ltn", "|", "grep", "-c", "8084" ]
+      test: [ "CMD-SHELL", "netstat -ltn | grep -c 8084" ]
       interval: 5s
       timeout: 30s
       retries: 10
@@ -162,7 +174,7 @@ services:
       blockchain:
         condition: service_healthy
     healthcheck:
-      test: [ "CMD-SHELL", "netstat", "-ltn", "|", "grep", "-c", "9905" ]
+      test: [ "CMD-SHELL", "netstat -ltn | grep -c 9905" ]
       interval: 5s
       timeout: 30s
       retries: 10
@@ -192,7 +204,7 @@ services:
       blockchain:
         condition: service_healthy
     healthcheck:
-      test: [ "CMD-SHELL", "netstat", "-ltn", "|", "grep", "-c", "8096" ]
+      test: [ "CMD-SHELL", "netstat -ltn | grep -c 8096" ]
       interval: 5s
       timeout: 30s
       retries: 10

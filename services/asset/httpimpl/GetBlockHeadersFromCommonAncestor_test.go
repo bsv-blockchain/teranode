@@ -152,6 +152,28 @@ func TestGetBlockHeadersFromCommonAncestor(t *testing.T) {
 		mockRepo.AssertExpectations(t)
 	})
 
+	t.Run("Asset.MaxBlockHeaders does not clamp the From route", func(t *testing.T) {
+		httpServer, mockRepo, echoContext, responseRecorder := GetMockHTTP(t, nil)
+		httpServer.settings.Asset.MaxBlockHeaders = 500
+
+		// The From route serves peer catchup, which always asks for 10,000. The operator
+		// cap must not apply here: a short reply makes the catchup client think it has
+		// reached the chain tip and it stops walking after one batch.
+		mockRepo.On("GetBlockHeadersFromCommonAncestor", mock.Anything, mock.Anything, uint32(10_000)).Return([]*model.BlockHeader{testBlockHeader}, []*model.BlockHeaderMeta{testBlockHeaderMeta}, nil)
+
+		echoContext.SetPath("/block/headersFromCommonAncestor/:hash")
+		echoContext.SetParamNames("hash")
+		echoContext.SetParamValues("9d45ad79ad3c6baecae872c0e35022d60c3bbbd024ccce06690321ece15ea995")
+		echoContext.QueryParams().Set("block_locator_hashes", "000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f")
+		echoContext.QueryParams().Set("n", "10000")
+
+		err := httpServer.GetBlockHeadersFromCommonAncestor(JSON)(echoContext)
+		require.NoError(t, err)
+
+		assert.Equal(t, http.StatusOK, responseRecorder.Code)
+		mockRepo.AssertExpectations(t)
+	})
+
 	t.Run("Multiple block locator hashes", func(t *testing.T) {
 		httpServer, mockRepo, echoContext, responseRecorder := GetMockHTTP(t, nil)
 
@@ -227,6 +249,48 @@ func TestGetBlockHeadersFromCommonAncestor(t *testing.T) {
 		require.True(t, ok)
 		assert.Equal(t, http.StatusBadRequest, echoErr.Code)
 		assert.Contains(t, echoErr.Message, "block locator hashes length must be a multiple of 64")
+	})
+
+	t.Run("Negative number of headers is rejected", func(t *testing.T) {
+		httpServer, _, echoContext, _ := GetMockHTTP(t, nil)
+
+		echoContext.SetPath("/block/headersFromCommonAncestor/:hash")
+		echoContext.SetParamNames("hash")
+		echoContext.SetParamValues("9d45ad79ad3c6baecae872c0e35022d60c3bbbd024ccce06690321ece15ea995")
+		echoContext.QueryParams().Set("block_locator_hashes", "000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f")
+		echoContext.QueryParams().Set("n", "-1")
+
+		err := httpServer.GetBlockHeadersFromCommonAncestor(JSON)(echoContext)
+
+		assert.NotNil(t, err)
+		echoErr, ok := err.(*echo.HTTPError)
+		require.True(t, ok)
+		assert.Equal(t, http.StatusBadRequest, echoErr.Code)
+		assert.Equal(t, "INVALID_ARGUMENT (1): number of headers must not be negative", echoErr.Message)
+	})
+
+	t.Run("Too many block locator hashes is rejected", func(t *testing.T) {
+		httpServer, _, echoContext, _ := GetMockHTTP(t, nil)
+
+		hash := "000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f"
+
+		locator := ""
+		for i := 0; i < maxBlockLocatorHashes+1; i++ {
+			locator += hash
+		}
+
+		echoContext.SetPath("/block/headersFromCommonAncestor/:hash")
+		echoContext.SetParamNames("hash")
+		echoContext.SetParamValues("9d45ad79ad3c6baecae872c0e35022d60c3bbbd024ccce06690321ece15ea995")
+		echoContext.QueryParams().Set("block_locator_hashes", locator)
+
+		err := httpServer.GetBlockHeadersFromCommonAncestor(JSON)(echoContext)
+
+		assert.NotNil(t, err)
+		echoErr, ok := err.(*echo.HTTPError)
+		require.True(t, ok)
+		assert.Equal(t, http.StatusBadRequest, echoErr.Code)
+		assert.Equal(t, "INVALID_ARGUMENT (1): too many block locator hashes", echoErr.Message)
 	})
 
 	t.Run("Invalid number of headers parameter", func(t *testing.T) {

@@ -241,8 +241,7 @@ The Alert Service uses a configuration structure (`config.Config`) that includes
 
 - IP and port settings
 - DHT mode
-- Protocol ID (defaults to system default if not specified)
-- Topic name (network-dependent: "bitcoin_alert_system_[network]" for non-mainnet)
+- Protocol ID, topic name and genesis keys (empty settings take the per-network default for mainnet/testnet/stn; see [Alert Settings](../settings/services/alert_settings.md))
 - Private key management
 - Peer discovery interval
 
@@ -317,6 +316,12 @@ Core alert data structure containing:
 #### 3. UTXO-Related Alert Data
 
 For UTXO freeze, unfreeze, and reassignment operations:
+
+**Known regression:** an applied ownership-changing reassignment can leave the
+output unspendable by both owners, even after maturity. Do not treat processing
+status as proof of spendability. See the
+[reassignment limitation](../../topics/services/alert.md#24-utxo-reassignment) and
+[issue 1725](https://github.com/bsv-blockchain/teranode/issues/1725).
 
 - **UTXO Identifiers**:
 

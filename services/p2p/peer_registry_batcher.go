@@ -9,6 +9,7 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/blockchain/blockchain_api"
+	"github.com/bsv-blockchain/teranode/services/p2p/peerregistry"
 	"github.com/bsv-blockchain/teranode/ulogger"
 )
 
@@ -27,8 +28,10 @@ const (
 	// assertion is considered fresh. Within this window a peer that keeps
 	// gossiping does not get re-registered or re-marked connected on every
 	// flush; only meaningful new registration data (client name, height,
-	// block hash, DataHub URL) forces a RegisterPeer earlier.
-	registryReassertTTL = time.Minute
+	// block hash, DataHub URL) forces a RegisterPeer earlier. It is the
+	// shared cadence constant the Blockchain registry's TTL floor is derived
+	// from (services/p2p/peerregistry), not a private batcher tuning value.
+	registryReassertTTL = peerregistry.RegistryReassertTTL
 
 	// registryAssertStatePruneAge is how long an idle peer's assert-state
 	// entry survives before the flush loop prunes it. Must exceed
@@ -60,6 +63,7 @@ const (
 type pendingPeerUpdate struct {
 	clientName       string
 	height           uint32
+	advertisedHeight uint32
 	blockHash        *chainhash.Hash
 	dataHubURL       string
 	storage          string
@@ -87,11 +91,22 @@ func (u *pendingPeerUpdate) merge(from *pendingPeerUpdate) {
 	}
 	if from.height > u.height {
 		u.height = from.height
+	}
+
+	// The raw claim orders the observations in both cases: the capped value is
+	// derived from a ceiling that moves during catchup, so it cannot decide
+	// which claim a peer actually made last. A losing observation must not
+	// displace the winner's claim or its hash.
+	switch {
+	case from.advertisedHeight > u.advertisedHeight:
+		u.advertisedHeight = from.advertisedHeight
 		if from.blockHash != nil {
 			u.blockHash = from.blockHash
 		}
-	} else if from.height == u.height && from.blockHash != nil {
-		u.blockHash = from.blockHash
+	case from.advertisedHeight == u.advertisedHeight:
+		if from.blockHash != nil {
+			u.blockHash = from.blockHash
+		}
 	}
 	if from.dataHubURL != "" {
 		u.dataHubURL = from.dataHubURL
@@ -111,7 +126,7 @@ func (u *pendingPeerUpdate) merge(from *pendingPeerUpdate) {
 // hasInfo reports whether the update carries registration data worth pushing
 // even when the peer was registered recently.
 func (u *pendingPeerUpdate) hasInfo() bool {
-	return u.clientName != "" || u.height > 0 || u.blockHash != nil || u.dataHubURL != ""
+	return u.clientName != "" || u.height > 0 || u.advertisedHeight > 0 || u.blockHash != nil || u.dataHubURL != ""
 }
 
 // registryAssertState remembers when RegisterPeer / UpdateConnectionState were
@@ -270,13 +285,14 @@ func (b *peerRegistryBatcher) enqueue(peerID string, from *pendingPeerUpdate) bo
 
 // enqueueRegister records the peer's latest registration data, optionally
 // marking it as directly connected. Mirrors addPeer/addConnectedPeer.
-func (b *peerRegistryBatcher) enqueueRegister(peerID, clientName string, height uint32, blockHash *chainhash.Hash, dataHubURL string, connected bool) {
+func (b *peerRegistryBatcher) enqueueRegister(peerID, clientName string, heights peerHeightClaim, blockHash *chainhash.Hash, dataHubURL string, connected bool) {
 	b.enqueue(peerID, &pendingPeerUpdate{
-		clientName:    clientName,
-		height:        height,
-		blockHash:     blockHash,
-		dataHubURL:    dataHubURL,
-		markConnected: connected,
+		clientName:       clientName,
+		height:           heights.Height,
+		advertisedHeight: heights.AdvertisedHeight,
+		blockHash:        blockHash,
+		dataHubURL:       dataHubURL,
+		markConnected:    connected,
 	})
 }
 
@@ -430,6 +446,7 @@ func (b *peerRegistryBatcher) flushOnce(ctx context.Context) {
 				TransportTypeSet: true,
 				ClientName:       u.clientName,
 				Height:           u.height,
+				AdvertisedHeight: u.advertisedHeight,
 				BlockHash:        u.blockHash,
 				DataHubURL:       u.dataHubURL,
 			}

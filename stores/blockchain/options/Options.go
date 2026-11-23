@@ -12,6 +12,8 @@
 // numerous method overloads or complex parameter structs.
 package options
 
+import "github.com/bsv-blockchain/teranode/util/lane"
+
 // StoreBlockOptions defines the configuration parameters for storing blocks.
 // It controls metadata flags that affect how blocks are processed and stored.
 type StoreBlockOptions struct {
@@ -25,6 +27,10 @@ type StoreBlockOptions struct {
 	Invalid bool
 	// ID is an optional identifier for the block, instead of incrementing the last known block ID
 	ID uint64
+	// LaneMapRows are the block's lane map rows, inserted in the block's own database
+	// transaction at utxostore_laneMigration shadow. Nil stores the block as it is stored
+	// without lanes.
+	LaneMapRows []lane.MapRow
 }
 
 // StoreBlockOption is a function type that modifies StoreBlockOptions.
@@ -105,7 +111,13 @@ func WithInvalid(b bool) StoreBlockOption {
 }
 
 // WithID creates an option that sets the ID field.
-// This option specifies the unique identifier for a block.
+// This option specifies the unique identifier for a block. If the block's hash
+// is already stored, the id is not checked and StoreBlock returns ErrBlockExists.
+// Otherwise, for any block other than genesis, the id must not be one another
+// stored block has, and must be the id AssignBlockID reserved for the hash or,
+// once that reservation has been swept, an id the sequence has issued that no
+// other hash has reserved. Any other id is refused with a StorageError (see
+// blockchain.Store.StoreBlock).
 //
 // Parameters:
 //   - id: Integer value to set for ID field

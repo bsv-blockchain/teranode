@@ -133,40 +133,45 @@ Transition Matrix: running → reorging: 0.05/sec
 
 ### Alerting Rules
 
-**Example Prometheus alerts:**
+The block-assembler alert rules (stuck-state, slow tip advance, frequent
+reorgs, tip lag, repeated processing failures) live in a single canonical file,
+[`deploy/docker/base/blockassembly.rules.yml`](../../../deploy/docker/base/blockassembly.rules.yml).
+Edit that file to change the rules — this README no longer carries a copy.
 
-`teranode_blockassembly_current_state` is a numeric gauge, so compare it against
-the state number (`running` is `1`) — a string comparison such as
-`!= "running"` is not valid PromQL.
+Every Prometheus config that a stack in this repo actually mounts references it
+via `rule_files` and bind-mounts it at `/etc/prometheus/blockassembly.rules.yml`
+(`compose/prometheus/prometheus.yml` and `prometheus-microservices.yml` are not
+wired into any compose file and are left alone):
 
-```yaml
-# Alert if stuck in any non-running state for >30s
-- alert: BlockAssemblerStuckInState
-  expr: |
-    teranode_blockassembly_current_state != 1
-    and
-    (time() - timestamp(teranode_blockassembly_current_state) > 30)
-  for: 1m
-  annotations:
-    summary: "BlockAssembler stuck in non-running state"
+| Stack | Config |
+| --- | --- |
+| Local / mainnet / testnet docker | [`deploy/docker/base/prometheus.yml`](../../../deploy/docker/base/prometheus.yml) |
+| Monitoring-only docker | [`deploy/docker/monitoring/prometheus.yml`](../../../deploy/docker/monitoring/prometheus.yml) |
+| 3-node compose (`docker-compose-ss.yml`, `docker-compose-3blasters.yml`) | [`prometheus-1.yml`](../../prometheus/prometheus-1.yml), `-2`, `-3` |
+| Host-network tests (`test/docker-compose-host.yml`) | [`prometheus-host-1.yml`](../../prometheus/prometheus-host-1.yml), `-2`, `-3` |
 
-# Alert if movingUp P95 > 1s
-- alert: SlowTipAdvance
-  expr: |
-    histogram_quantile(0.95,
-      sum(rate(teranode_blockassembly_state_duration_seconds_bucket{state="movingUp"}[5m])) by (le)
-    ) > 1
-  for: 5m
-  annotations:
-    summary: "Block assembly tip advance is slow (P95 > 1s)"
+Alert *delivery* is only wired in the `deploy/docker/base` stack, which runs an
+Alertmanager (UI on <http://localhost:9094>) configured in
+[`deploy/docker/base/alertmanager.yml`](../../../deploy/docker/base/alertmanager.yml).
+That Alertmanager has **no notifier attached** — firing alerts are visible in
+its UI and in Prometheus (`/alerts`), but nothing is sent anywhere until a
+receiver is added. In the other stacks the rules are evaluated and visible in
+the Prometheus UI, but there is no Alertmanager at all.
 
-# Alert if reorg frequency is high
-- alert: FrequentReorgs
-  expr: |
-    sum(rate(teranode_blockassembly_state_transitions_total{to="reorging"}[5m])) > 0.1
-  for: 5m
-  annotations:
-    summary: "Reorgs happening more than once per 10 seconds"
+Note: `teranode_blockassembly_current_state` is a numeric gauge, so the
+`BlockAssemblerStuckInState` rule compares it against the state number
+(`running` is `1`) — a string comparison such as `!= "running"` is not valid
+PromQL.
+
+Changes to the rules are covered by unit tests in
+[`deploy/docker/base/blockassembly.rules_test.yml`](../../../deploy/docker/base/blockassembly.rules_test.yml),
+run in CI by
+[`.github/workflows/prometheus_rules.yaml`](../../../.github/workflows/prometheus_rules.yaml)
+and locally with:
+
+```bash
+promtool check rules deploy/docker/base/blockassembly.rules.yml
+cd deploy/docker/base && promtool test rules blockassembly.rules_test.yml
 ```
 
 ### Import Instructions

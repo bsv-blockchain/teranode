@@ -236,13 +236,12 @@ When a transaction remains unmined for a long time, its parent transactions (UTX
 5. For each record to delete:
 
     - If defensive mode enabled: Verify all spending children are stable
-    - If external transaction data exists: Delete `.tx` or `.outputs` file from Blob Store
-    - Update parent records with deleted children information
     - Delete UTXO record from database
+    - If external transaction data exists: Delete `.tx` or `.outputs` file from Blob Store once the record delete is confirmed
 
 6. Pruner updates metrics
-    - `pruner_duration_seconds{operation="dah_pruner"}`
-    - `pruner_processed_total`
+    - `teranode_pruner_duration_seconds{operation="dah_pruner"}`
+    - `teranode_pruner_deleting_children_total`
     - `utxo_cleanup_batch_duration_seconds`
 
 **Chunk Processing Configuration:**
@@ -351,13 +350,15 @@ For large transactions stored externally in Blob Store (S3 or filesystem), the P
 
     - Has inputs → FileTypeTx (`.tx` file)
     - No inputs → FileTypeOutputs (`.outputs` file)
-3. Delete file from Blob Store before deleting Aerospike record
-4. If file already deleted (by previous cleanup), proceed with Aerospike deletion
+3. Delete the Aerospike record, and delete the file from Blob Store only once that delete is confirmed
+4. If file already deleted (by previous cleanup), treat the cleanup as done
 
 **Error Handling:**
 
-- If file deletion fails: Log error and skip Aerospike record deletion
-- If file not found (ErrNotFound): Proceed with Aerospike deletion (file already cleaned up)
+- If the record delete fails or its outcome is unknown: Keep the file
+- If file deletion fails: Log the error; the record is already gone, so the file is left behind
+- If file not found (ErrNotFound): Treat as cleaned up
+- With `pruner_skipDeletions` on, neither records nor files are deleted
 
 ### 2.7 Channel-Based Deduplication
 
@@ -435,7 +436,7 @@ For large transactions stored externally:
 
 ## 4. Technology
 
-- **Language**: Go 1.26+
+- **Language**: Go 1.27+
 - **Communication**: gRPC (port 8096), Protocol Buffers
 - **Storage**: Store-agnostic (Aerospike or SQL via interface)
 - **Metrics**: Prometheus
@@ -530,7 +531,6 @@ For complete settings reference, see [Pruner Settings Reference](../../reference
 |---------|------|---------|-------------|
 | `startPruner` | bool | `true` | Enable/disable Pruner service |
 | `pruner_grpcPort` | int | `8096` | gRPC server port |
-| `pruner_jobTimeout` | duration | `10m` | Timeout for pruning operation completion |
 
 ### Chunk Processing Settings
 

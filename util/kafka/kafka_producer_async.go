@@ -19,6 +19,7 @@ import (
 
 	safeconversion "github.com/bsv-blockchain/go-safe-conversion"
 	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/bsv-blockchain/teranode/pkg/urlutil"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
@@ -48,6 +49,16 @@ type KafkaAsyncProducerI interface {
 	// down. Use for best-effort topics where blocking the caller's hot path on Kafka
 	// back-pressure is worse than losing a message.
 	TryPublish(msg *Message) bool
+}
+
+// TopicPartitionCounter is an optional capability of an async producer: it can
+// ask the broker how many partitions its topic actually has. Services that
+// partition by a configured count - the validator's v2 txmeta routing, for
+// one - reconcile their number against reality through this at start-up.
+// Optional so test doubles and in-memory implementations need not carry it;
+// callers must degrade to "cannot verify", never to "assumed agree".
+type TopicPartitionCounter interface {
+	TopicPartitionCount(ctx context.Context) (int32, error)
 }
 
 // defaultOuterBatcherLinger is the default time the outer async batcher
@@ -149,6 +160,24 @@ type KafkaAsyncProducer struct {
 	adaptiveSlow   atomic.Bool         // Flag enabling adaptive batching during constrained bandwidth
 	channelMu      sync.RWMutex        // Mutex to protect publishChannel access
 	publishWg      sync.WaitGroup      // WaitGroup to track publish goroutine
+
+	// lifecycleMu serialises Start against Stop. Without it the two interleave: a Stop that
+	// runs before Start has stored the publish channel sees a nil field, closes nothing, and
+	// then blocks in publishWg.Wait() on a publish goroutine whose channel is never closed.
+	//
+	// Lock order is lifecycleMu -> channelMu; nothing acquires them the other way round, and
+	// the goroutines Start goes on to spawn never take lifecycleMu before signalling Start,
+	// so there is no cycle. It is NOT held for a bounded time though: Stop keeps it across
+	// publishWg.Wait() and an untimed client.Flush(), which is why Stop's idempotent fast
+	// path deliberately sits in front of this mutex rather than behind it.
+	lifecycleMu sync.Mutex
+
+	// stopped marks a producer whose Stop() has run. Stop closes the underlying client
+	// (franz-go's Close, or InMemoryAsyncProducer.Close, which closes its input channel under
+	// a sync.Once) — both terminal. Start must refuse a stopped producer rather than reset
+	// shuttingDown/closed and hand the publish loop a corpse whose first send panics with
+	// "send on closed channel".
+	stopped atomic.Bool
 
 	// For in-memory support
 	inMemoryProducer *inmemorykafka.InMemoryAsyncProducer
@@ -259,7 +288,7 @@ func clampBatchMaxBytes(flushBytes int) int32 {
 
 // NewKafkaAsyncProducer creates a new async producer with the given configuration using franz-go.
 func NewKafkaAsyncProducer(logger ulogger.Logger, cfg KafkaProducerConfig) (*KafkaAsyncProducer, error) {
-	logger.Debugf("Starting async kafka producer for %v", cfg.URL)
+	logger.Debugf("Starting async kafka producer for %s", urlutil.Redact(cfg.URL))
 
 	producer := &KafkaAsyncProducer{
 		Config: cfg,
@@ -590,6 +619,15 @@ func (c *KafkaAsyncProducer) Start(ctx context.Context, ch chan *Message) {
 	if c == nil {
 		return
 	}
+
+	c.lifecycleMu.Lock()
+	defer c.lifecycleMu.Unlock()
+
+	if c.stopped.Load() {
+		c.Config.Logger.Errorf("[kafka] Start called on a producer already stopped for topic %s, ignoring", c.Config.Topic)
+		return
+	}
+
 	c.shuttingDown.Store(false)
 	c.closed.Store(false)
 
@@ -615,10 +653,10 @@ func (c *KafkaAsyncProducer) Start(ctx context.Context, ch chan *Message) {
 			defer c.publishWg.Done()
 			wg.Done()
 
-			c.channelMu.RLock()
-			ch := c.publishChannel
-			c.channelMu.RUnlock()
-
+			// Range over the ch we were handed, not c.publishChannel: Stop() nils that field
+			// under the write lock, so re-reading it here races Stop() and can yield nil — a
+			// nil channel never ranges, so publishWg.Done() never runs and Stop() blocks
+			// forever in publishWg.Wait().
 			c.runProducerWorker(internalCtx, ch)
 		}()
 
@@ -632,16 +670,33 @@ func (c *KafkaAsyncProducer) Start(ctx context.Context, ch chan *Message) {
 
 		select {
 		case <-signals:
-			c.Config.Logger.Infof("[kafka] Received signal, shutting down producer %v ...", c.Config.URL)
+			c.Config.Logger.Infof("[kafka] Received signal, shutting down producer %s ...", urlutil.Redact(c.Config.URL))
 			cancel()
 		case <-internalCtx.Done():
-			c.Config.Logger.Infof("[kafka] Context done, shutting down producer %v ...", c.Config.URL)
+			c.Config.Logger.Infof("[kafka] Context done, shutting down producer %s ...", urlutil.Redact(c.Config.URL))
 		}
 
 		_ = c.Stop()
 	}()
 
 	wg.Wait()
+}
+
+// runInMemoryPublishLoop drains ch into the in-memory broker until ch is closed or the
+// producer is marked closed.
+//
+// It ranges over the ch it is handed, never over c.publishChannel. Stop() nils that field
+// under the write lock, so re-reading it here would race Stop() and could yield nil — and a
+// nil channel never ranges, so the caller's deferred publishWg.Done() would never run and
+// Stop() would block forever in publishWg.Wait().
+func (c *KafkaAsyncProducer) runInMemoryPublishLoop(ch chan *Message) {
+	for msgBytes := range ch {
+		if c.closed.Load() {
+			return
+		}
+
+		c.inMemoryProducer.Produce(c.Config.Topic, msgBytes.Key, msgBytes.Value)
+	}
 }
 
 // startInMemory handles the in-memory producer case
@@ -662,17 +717,7 @@ func (c *KafkaAsyncProducer) startInMemory(ctx context.Context, ch chan *Message
 			defer c.publishWg.Done()
 			wg.Done()
 
-			c.channelMu.RLock()
-			ch := c.publishChannel
-			c.channelMu.RUnlock()
-
-			for msgBytes := range ch {
-				if c.closed.Load() {
-					break
-				}
-
-				c.inMemoryProducer.Produce(c.Config.Topic, msgBytes.Key, msgBytes.Value)
-			}
+			c.runInMemoryPublishLoop(ch)
 		}()
 
 		// Handle successes
@@ -694,10 +739,10 @@ func (c *KafkaAsyncProducer) startInMemory(ctx context.Context, ch chan *Message
 
 		select {
 		case <-signals:
-			c.Config.Logger.Infof("[kafka] Received signal, shutting down producer %v ...", c.Config.URL)
+			c.Config.Logger.Infof("[kafka] Received signal, shutting down producer %s ...", urlutil.Redact(c.Config.URL))
 			cancel()
 		case <-internalCtx.Done():
-			c.Config.Logger.Infof("[kafka] Context done, shutting down producer %v ...", c.Config.URL)
+			c.Config.Logger.Infof("[kafka] Context done, shutting down producer %s ...", urlutil.Redact(c.Config.URL))
 		}
 
 		_ = c.Stop()
@@ -712,11 +757,26 @@ func (c *KafkaAsyncProducer) Stop() error {
 		return nil
 	}
 
+	// Check shuttingDown BEFORE taking lifecycleMu, not just under it. StopProducerCtx
+	// abandons a Stop that outruns its deadline, and that orphan keeps running — holding
+	// lifecycleMu across publishWg.Wait() and an untimed client.Flush(). If the idempotent
+	// fast path sat behind the mutex, every later Stop() and Start() would block on that
+	// orphan forever. The re-check under the lock is what actually serialises; this one only
+	// keeps a second Stop cheap. It does not weaken the Start/Stop ordering fix: in that race
+	// the flag is still false here, so Stop goes on to take the mutex.
+	if c.shuttingDown.Load() {
+		return nil
+	}
+
+	c.lifecycleMu.Lock()
+	defer c.lifecycleMu.Unlock()
+
 	if c.shuttingDown.Load() {
 		return nil
 	}
 
 	c.shuttingDown.Store(true)
+	c.stopped.Store(true)
 
 	if c.closed.Load() {
 		return nil
@@ -793,6 +853,38 @@ func (c *KafkaAsyncProducer) TryPublish(msg *Message) bool {
 	}
 
 	return util.TrySend(c.publishChannel, msg)
+}
+
+// TopicPartitionCount asks the broker, via topic metadata, how many partitions
+// the producer's configured topic actually has. Satisfies TopicPartitionCounter.
+// This is a start-up reconciliation aid, not a hot path: it performs one
+// metadata request and returns any broker error rather than guessing.
+func (c *KafkaAsyncProducer) TopicPartitionCount(ctx context.Context) (int32, error) {
+	if c.client == nil {
+		return 0, errors.NewServiceError("kafka producer has no live client")
+	}
+
+	admin := kadm.NewClient(c.client)
+
+	meta, err := admin.Metadata(ctx, c.Config.Topic)
+	if err != nil {
+		return 0, errors.NewServiceError("topic metadata request failed for %s: %v", c.Config.Topic, err)
+	}
+
+	detail, ok := meta.Topics[c.Config.Topic]
+	if !ok {
+		return 0, errors.NewServiceError("topic %s not present in broker metadata", c.Config.Topic)
+	}
+
+	return partitionCountFromTopicDetail(detail)
+}
+
+func partitionCountFromTopicDetail(detail kadm.TopicDetail) (int32, error) {
+	if detail.Err != nil {
+		return 0, detail.Err
+	}
+
+	return int32(len(detail.Partitions)), nil
 }
 
 // createTopicWithFranz creates a new Kafka topic with the specified configuration.

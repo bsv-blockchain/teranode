@@ -15,15 +15,34 @@ func TestPeerResourceURL(t *testing.T) {
 	hash := chainhash.HashH([]byte("subtree-1368"))
 	base := "http://peer:8000/api/v1"
 
-	plain := server.peerResourceURL(base, "subtree_data", &hash, false)
+	plain, err := server.peerResourceURL(base, "subtree_data", &hash, false)
+	require.NoError(t, err)
 	require.Equal(t, fmt.Sprintf("%s/subtree_data/%s", base, hash.String()), plain)
 
 	// Each bypass gets a distinct query string so a proxy_cache keyed on
 	// $request_uri cannot serve the same (possibly poisoned) entry twice.
-	first := server.peerResourceURL(base, "subtree_data", &hash, true)
-	second := server.peerResourceURL(base, "subtree", &hash, true)
+	first, err := server.peerResourceURL(base, "subtree_data", &hash, true)
+	require.NoError(t, err)
+	second, err := server.peerResourceURL(base, "subtree", &hash, true)
+	require.NoError(t, err)
 	require.Equal(t, fmt.Sprintf("%s/subtree_data/%s?cachebust=1", base, hash.String()), first)
 	require.Equal(t, fmt.Sprintf("%s/subtree/%s?cachebust=2", base, hash.String()), second)
+}
+
+// TestPeerResourceURL_RejectsQuerySmugglingBase covers issue 4843: a base ending in "?x="
+// used to turn the resource path into query data aimed at a path the peer chose.
+func TestPeerResourceURL_RejectsQuerySmugglingBase(t *testing.T) {
+	server := &Server{}
+	hash := chainhash.HashH([]byte("subtree-4843"))
+
+	for _, base := range []string{
+		"http://attacker.example:9644/v1/debug/bundle?x=",
+		"http://attacker.example:9644/v1/debug/bundle#",
+	} {
+		got, err := server.peerResourceURL(base, "subtree", &hash, true)
+		require.Error(t, err, base)
+		require.Empty(t, got)
+	}
 }
 
 func TestPoisonedSubtreeDataError(t *testing.T) {

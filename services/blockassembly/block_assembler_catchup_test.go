@@ -291,6 +291,34 @@ func TestProcessNewBlockAnnouncement_CatchupVsReorg(t *testing.T) {
 			"large reorg must return ErrBlockAssemblyReset, got: %v", err)
 	})
 
+	// A reorg that reaches the UTXO retention must reset even at low height: the
+	// moveForward txs may already be pruned, which reorgBlocks cannot handle.
+	t.Run("reorg at retention below height 1000 triggers reset", func(t *testing.T) {
+		items := setupBlockAssemblyTest(t)
+		genesis := genesisHeader(t, items)
+
+		a1 := buildChain(genesis, 1, 610)[0]
+		b1 := buildChain(genesis, 1, 710)[0]
+		require.NoError(t, items.addBlock(t.Context(), a1))
+		require.NoError(t, items.addBlock(t.Context(), b1))
+
+		mockStp := &subtreeprocessor.MockSubtreeProcessor{}
+		mockStp.On("WaitForPendingBlocks", mock.Anything).Return(nil)
+		mockStp.On("Reset", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+			Return(subtreeprocessor.ResetResponse{})
+		injectMockStp(t, items, mockStp)
+
+		items.blockAssembler.settings.GlobalBlockHeightRetention = 1
+		items.blockAssembler.settings.UtxoStore.BlockHeightRetentionAdjustment = 0
+		items.blockAssembler.setBestBlockHeader(a1, 1)
+
+		err := items.blockAssembler.handleReorg(t.Context(), b1, 1)
+
+		require.True(t, errors.Is(err, errors.ErrBlockAssemblyReset),
+			"reorg at retention must reset at low height, got: %v", err)
+		mockStp.AssertNotCalled(t, "Reorg", mock.Anything, mock.Anything)
+	})
+
 	// Catch-up where Reorg returns an error (mid-loop failure rolls back inside stp):
 	// BA must remain at pre-catchup tip — no setBestBlockHeader fired on error path.
 	t.Run("catch-up mid-error stops", func(t *testing.T) {

@@ -2,9 +2,12 @@ package util
 
 import (
 	"context"
+	"crypto/subtle"
 	"crypto/tls"
 	"crypto/x509"
 	"os"
+	"runtime/debug"
+	"strings"
 	"sync"
 	"time"
 
@@ -96,6 +99,38 @@ var grpcClientRetriesTotal = prometheusgolang.NewCounterVec(
 		Help:      "Total number of gRPC client retry attempts by caller service and status code",
 	},
 	[]string{"grpc_caller", "grpc_code"},
+)
+
+// grpcPanicsRecoveredTotal counts handler panics recovered by
+// CreatePanicRecoveryUnaryInterceptor / CreatePanicRecoveryStreamInterceptor.
+// The caller already gets an Internal error for these, so the counter is not
+// about the caller - it is what makes a recovered panic observable by an
+// operator instead of only appearing as a log line among many.
+var grpcPanicsRecoveredTotal = prometheusgolang.NewCounterVec(
+	prometheusgolang.CounterOpts{
+		Namespace: "teranode",
+		Name:      "grpc_panics_recovered_total",
+		Help:      "Total number of gRPC handler panics recovered by the panic recovery interceptor, by service and method",
+	},
+	[]string{"grpc_service", "grpc_method"},
+)
+
+// grpcAuthRejectionsTotal counts requests rejected by either admin API key
+// auth path: CreateAuthInterceptor (protected-method list, unary) and the
+// RequireAuthByDefault interceptors (every method except the public list,
+// unary and stream). A rejection means missing metadata, a missing API key,
+// or an API key that does not match. The two paths are mutually exclusive in
+// StartGRPCServer, so a request is counted at most once.
+// A misconfigured/mismatched admin API key across services makes every
+// protected RPC fail while HealthGRPC and Health stay green, so this counter
+// is the signal an operator watches during a rollout to notice that case.
+var grpcAuthRejectionsTotal = prometheusgolang.NewCounterVec(
+	prometheusgolang.CounterOpts{
+		Namespace: "teranode",
+		Name:      "grpc_auth_rejections_total",
+		Help:      "Total number of gRPC requests rejected by the admin API key auth interceptors (protected-method and require-by-default paths, unary and stream), by method",
+	},
+	[]string{"grpc_method"},
 )
 
 // ---------------------------------------------------------------------
@@ -334,12 +369,25 @@ func RegisterPrometheusMetrics() {
 	prometheusRegisterServerOnce.Do(func() {
 		prometheusgolang.MustRegister(prometheusMetrics)
 		prometheusgolang.MustRegister(grpcClientRetriesTotal)
+		prometheusgolang.MustRegister(grpcPanicsRecoveredTotal)
+		prometheusgolang.MustRegister(grpcAuthRejectionsTotal)
 	})
 }
 
 // retryInterceptor creates a gRPC unary client interceptor that implements retry logic
 // for transient errors. It retries requests that fail with codes.Unavailable or
 // codes.DeadlineExceeded, with a fixed backoff delay between attempts.
+//
+// Retries stop as soon as the caller's context is cancelled or its deadline passes.
+// Callers bound their own deadlines (for example settings.RPC.ClientCallTimeout, 5s by
+// default), and those deadlines are not ours to override: without this check the loop
+// spent grpc_max_retries * grpc_retry_backoff — 40 * 250ms = ~10s at the defaults —
+// retrying a call whose caller had already given up (#1538). The error returned in that
+// case is a gRPC status derived from the context error, so callers that branch on
+// status.Code(err) see DeadlineExceeded/Canceled exactly as they would from a direct call.
+//
+// A codes.DeadlineExceeded raised by the *server* on a context that still has time left
+// is still retried: that is a genuine transient failure, not the caller's own deadline.
 //
 // Parameters:
 //   - maxAttempts: Total number of attempts including the initial call (e.g. 3 means 1 initial + 2 retries).
@@ -361,6 +409,13 @@ func retryInterceptor(maxAttempts int, retryBackoff time.Duration, callerName st
 		var err error
 
 		for i := 0; i < maxAttempts; i++ {
+			// A previous attempt exhausted the caller's deadline, or the caller
+			// gave up between attempts. Report that rather than the last transient
+			// status, which would misreport a local timeout as a remote failure.
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return status.FromContextError(ctxErr).Err()
+			}
+
 			err = invoker(ctx, method, req, reply, cc, opts...)
 			if err == nil {
 				return nil
@@ -371,10 +426,28 @@ func retryInterceptor(maxAttempts int, retryBackoff time.Duration, callerName st
 				break
 			}
 
+			// Check again if the caller's context ended after the invoker call but before the potential retry.
+			// This closes the final-attempt gap: with maxAttempts=1 and a cancel during the invoke,
+			// the interceptor must return Canceled, not Unavailable.
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return status.FromContextError(ctxErr).Err()
+			}
+
 			// Only count and sleep if there is a subsequent attempt
 			if i < maxAttempts-1 {
 				grpcClientRetriesTotal.WithLabelValues(callerName, status.Code(err).String()).Inc()
-				time.Sleep(retryBackoff)
+
+				// Back off, but return promptly if the caller's context ends during
+				// the wait. A bare time.Sleep ignores cancellation, so it kept the
+				// retry loop alive for its full budget past the deadline.
+				timer := time.NewTimer(retryBackoff)
+				select {
+				case <-ctx.Done():
+					timer.Stop()
+
+					return status.FromContextError(ctx.Err()).Err()
+				case <-timer.C:
+				}
 			}
 		}
 
@@ -514,9 +587,18 @@ func loadTLSCredentials(connectionData *ConnectionOptions, isServer bool) (crede
 
 // InitGRPCResolver configures the gRPC resolver based on the environment.
 // It supports different resolver configurations:
-//   - k8s: Kubernetes resolver using default scheme
-//   - kubernetes: In-cluster Kubernetes resolver
+//   - k8s: the in-repo pkg/k8sresolver, as default scheme
+//   - kubernetes: the upstream in-cluster resolver, registered under scheme k8s
 //   - default: Standard gRPC resolver
+//
+// The two Kubernetes cases run DIFFERENT implementations under the same
+// scheme name: the registry is a map keyed by scheme, so registering twice
+// (which this function used to do in the kubernetes case) silently keeps
+// only the last builder. Production contexts select kubernetes, so the
+// in-repo resolver runs today only where the k8s case is configured -
+// nothing in settings.conf or deploy/ does. Wiring the in-repo resolver
+// into production, or retiring the package, is open question 57; until
+// then this function must not pretend otherwise.
 //
 // Parameters:
 //   - logger: Logger for resolver configuration messages
@@ -524,15 +606,18 @@ func loadTLSCredentials(connectionData *ConnectionOptions, isServer bool) (crede
 func InitGRPCResolver(logger ulogger.Logger, grpcResolver string) {
 	switch grpcResolver {
 	case "k8s":
-		logger.Infof("[VALIDATOR] Using k8s resolver for clients")
+		logger.Infof("Using in-repo k8s resolver for clients")
 		resolver.Register(k8sresolver.NewBuilder(logger))
 		resolver.SetDefaultScheme("k8s")
 	case "kubernetes":
-		logger.Infof("[VALIDATOR] Using kubernetes resolver for clients")
-		resolver.Register(k8sresolver.NewBuilder(logger))
+		logger.Infof("Using upstream kubernetes in-cluster resolver for clients")
+		// Registers builder(s) for scheme "k8s" itself. Registering the
+		// in-repo builder here first was a silent overwrite: same scheme
+		// key, map assignment, the in-repo resolver was constructed and
+		// discarded on every start.
 		kuberesolver.RegisterInClusterWithSchema("k8s")
 	default:
-		logger.Infof("[VALIDATOR] Using default resolver for clients")
+		logger.Infof("Using default resolver for clients")
 	}
 }
 
@@ -540,6 +625,7 @@ func InitGRPCResolver(logger ulogger.Logger, grpcResolver string) {
 // It validates API keys in request metadata and only applies authentication to specified methods.
 // Non-protected methods bypass authentication entirely.
 func CreateAuthInterceptor(apiKey string, protectedMethods map[string]bool) grpc.UnaryServerInterceptor {
+	apiKeyBytes := []byte(apiKey)
 	return func(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
 		// Skip authentication for non-protected methods
 		if !protectedMethods[info.FullMethod] {
@@ -549,17 +635,21 @@ func CreateAuthInterceptor(apiKey string, protectedMethods map[string]bool) grpc
 		// Extract metadata from context
 		md, ok := metadata.FromIncomingContext(ctx)
 		if !ok {
+			grpcAuthRejectionsTotal.WithLabelValues(info.FullMethod).Inc()
 			return nil, status.Error(codes.Unauthenticated, "missing metadata")
 		}
 
 		// Get API key from metadata
 		keys := md.Get(apiKeyHeader)
 		if len(keys) == 0 {
+			grpcAuthRejectionsTotal.WithLabelValues(info.FullMethod).Inc()
 			return nil, status.Error(codes.Unauthenticated, "missing API key")
 		}
 
-		// Validate API key
-		if keys[0] != apiKey {
+		// Compare equal-length keys in constant time. Different lengths are
+		// rejected immediately, so this does not hide the configured key length.
+		if subtle.ConstantTimeCompare([]byte(keys[0]), apiKeyBytes) != 1 {
+			grpcAuthRejectionsTotal.WithLabelValues(info.FullMethod).Inc()
 			return nil, status.Error(codes.Unauthenticated, "invalid API key")
 		}
 
@@ -569,4 +659,54 @@ func CreateAuthInterceptor(apiKey string, protectedMethods map[string]bool) grpc
 		// Proceed with the handler
 		return handler(newCtx, req)
 	}
+}
+
+// CreatePanicRecoveryUnaryInterceptor returns a unary server interceptor that
+// turns a panicking handler into an Internal gRPC error instead of letting the
+// panic unwind through grpc-go, which does not recover handler panics and would
+// take the whole process down. A malformed request that trips a bug in a single
+// handler must not be able to kill a service that owns chain state.
+func CreatePanicRecoveryUnaryInterceptor(logger ulogger.Logger, serviceName string) grpc.UnaryServerInterceptor {
+	return func(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (resp interface{}, err error) {
+		defer func() {
+			if r := recover(); r != nil {
+				grpcPanicsRecoveredTotal.WithLabelValues(serviceName, info.FullMethod).Inc()
+
+				if logger != nil {
+					logger.Errorf("[%s] panic recovered in %s: %v - %s", serviceName, info.FullMethod, r, singleLineStack())
+				}
+
+				resp = nil
+				err = status.Error(codes.Internal, "internal error")
+			}
+		}()
+
+		return handler(ctx, req)
+	}
+}
+
+// CreatePanicRecoveryStreamInterceptor is the streaming counterpart of
+// CreatePanicRecoveryUnaryInterceptor.
+func CreatePanicRecoveryStreamInterceptor(logger ulogger.Logger, serviceName string) grpc.StreamServerInterceptor {
+	return func(srv interface{}, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) (err error) {
+		defer func() {
+			if r := recover(); r != nil {
+				grpcPanicsRecoveredTotal.WithLabelValues(serviceName, info.FullMethod).Inc()
+
+				if logger != nil {
+					logger.Errorf("[%s] panic recovered in %s: %v - %s", serviceName, info.FullMethod, r, singleLineStack())
+				}
+
+				err = status.Error(codes.Internal, "internal error")
+			}
+		}()
+
+		return handler(srv, ss)
+	}
+}
+
+// singleLineStack renders the current stack trace on one line, so a recovered
+// panic still produces a single-line log message per the logging convention.
+func singleLineStack() string {
+	return strings.ReplaceAll(string(debug.Stack()), "\n", " | ")
 }

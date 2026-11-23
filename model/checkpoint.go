@@ -43,6 +43,30 @@ func BelowCheckpoint(checkpoints []chaincfg.Checkpoint, height uint32) bool {
 	return highest > 0 && height > 0 && height <= highest
 }
 
+// ForkBelowCheckpoint reports whether a block at blockHeight forks the chain below a
+// checkpoint the tip (tipHeight) has already reached: bitcoin-sv's
+// bad-fork-prior-to-checkpoint. Checkpoints above the tip do not count, so initial sync
+// is unaffected. A block AT a checkpoint height is left to the exact hash check
+// (catchup.ValidateHeaderAgainstCheckpoints). Genesis (height 0) has no parent to fork
+// from, as in BelowCheckpoint.
+func ForkBelowCheckpoint(checkpoints []chaincfg.Checkpoint, blockHeight, tipHeight uint32) bool {
+	if blockHeight == 0 {
+		return false
+	}
+
+	for _, cp := range checkpoints {
+		if cp.Height < 0 {
+			continue
+		}
+
+		if h := uint32(cp.Height); h <= tipHeight && blockHeight < h {
+			return true
+		}
+	}
+
+	return false
+}
+
 // OutpointOnlyEligible is the single eligibility gate for the below-checkpoint
 // outpoint-only fast path (PR 1178): the operator opted in, the UTXO store supports
 // outpoint-only spends (Stage A is SQL-only; Aerospike deferred to Stage B), chain
@@ -51,8 +75,14 @@ func BelowCheckpoint(checkpoints []chaincfg.Checkpoint, height uint32) bool {
 // closed (fail-safe, invariant I2). Chain params are passed explicitly because
 // callers legitimately source them differently (netsync holds *chaincfg.Params
 // directly; blockvalidation and model read settings.ChainCfgParams).
+//
+// A store that nets below the checkpoint (utxoset) is always opted in, whatever
+// blockvalidation_outpoint_only_below_checkpoint says: it writes those blocks only through
+// the netted route, so the answer must come from the store, the checkpoint table and the
+// height alone. Every service then reaches the same answer, even when its copy of the
+// setting differs from another service's.
 func OutpointOnlyEligible(tSettings *settings.Settings, store utxo.Store, params *chaincfg.Params, height uint32) bool {
-	if tSettings == nil || !tSettings.BlockValidation.OutpointOnlyBelowCheckpoint {
+	if tSettings == nil || (!tSettings.BlockValidation.OutpointOnlyBelowCheckpoint && !utxo.NetsBelowCheckpoint(store)) {
 		return false
 	}
 

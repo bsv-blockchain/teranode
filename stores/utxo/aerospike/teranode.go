@@ -74,9 +74,14 @@ import (
 var teranodeLUA []byte
 
 var (
-	LuaPackage      = "teranode_v61" // N.B. Do not have any "." in this string
+	LuaPackage      = "teranode_v71" // N.B. Do not have any "." in this string
 	LuaPackageMined = LuaPackage + "_mined"
 )
+
+// spendHeightSize is the width of one output's slot in the spendHeights bin: the block height of
+// the output's spend as a little-endian uint32, at offset*4. Zero means none was recorded. See
+// setSpendHeight in teranode.lua for why the height lives in its own bin and not in the utxos entry.
+const spendHeightSize = 4
 
 // frozenUTXOBytes which is FF...FF, which is equivalent to a coinbase placeholder
 var frozenUTXOBytes = subtree.FrozenBytes[:]
@@ -275,6 +280,32 @@ type LuaMapResponse struct {
 	BlockIDs   []int                `json:"blockIDs,omitempty"`
 	Errors     map[int]LuaErrorInfo `json:"errors,omitempty"`
 	ChildCount int                  `json:"childCount,omitempty"`
+	// Idempotent lists the spend indexes whose utxo already recorded exactly this
+	// spend, so the Lua wrote nothing for them. They succeed, and a rollback
+	// reverses them only as utxo.RollbackSet allows, since the spend they matched
+	// may be a confirmed, historical one. A native-op server that does not
+	// report it fails probeNativeReplayProtection, and spend and spendMulti then
+	// run on the UDF path.
+	Idempotent []int `json:"idempotent,omitempty"`
+	// IdempotentHeights holds, for each idempotent index whose entry recorded one, the block height
+	// of the spend it matched. An index with no entry here matched a spend written without a height,
+	// which never counts as historical (utxo.IsHistoricalSpend). A native-op server that does not
+	// report it fails probeNativeReplayProtection.
+	IdempotentHeights map[int]uint32 `json:"-"`
+	// DeleteAtHeight is the master record's stamped delete-at-height, present only with a DAHSET signal from a Lua package that reports it.
+	DeleteAtHeight    int  `json:"deleteAtHeight,omitempty"`
+	HasDeleteAtHeight bool `json:"-"`
+	// DAHVersion is the master's deleteAtHeight version after the update, present with a DAHSET or DAHUNSET signal and with a paginated master's page state.
+	DAHVersion    int64 `json:"dahVer,omitempty"`
+	HasDAHVersion bool  `json:"-"`
+	// Conflicting is true when a DAHSET signal comes from a conflicting master, which is prunable whatever its spent state.
+	Conflicting bool `json:"conflicting,omitempty"`
+	// OldDeleteAtHeight and OldUnminedSince are the values the native longest-chain mark (sub-op 14)
+	// replaced on an external master whose signal fired, for the master restore after a failed page write.
+	OldDeleteAtHeight    int  `json:"oldDeleteAtHeight,omitempty"`
+	HasOldDeleteAtHeight bool `json:"-"`
+	OldUnminedSince      int  `json:"oldUnminedSince,omitempty"`
+	HasOldUnminedSince   bool `json:"-"`
 	// Debug      string               `json:"debug,omitempty"`
 }
 
@@ -297,6 +328,8 @@ type LuaMapResponse struct {
 // scalar fields rather than relying on r.Errors == nil semantics.
 func (r *LuaMapResponse) Reset() {
 	r.Status = ""
+	r.Idempotent = nil
+	r.IdempotentHeights = nil
 	r.ErrorCode = ""
 	r.Message = ""
 	r.Signal = ""
@@ -307,6 +340,15 @@ func (r *LuaMapResponse) Reset() {
 		}
 	}
 	r.ChildCount = 0
+	r.DeleteAtHeight = 0
+	r.HasDeleteAtHeight = false
+	r.DAHVersion = 0
+	r.HasDAHVersion = false
+	r.Conflicting = false
+	r.OldDeleteAtHeight = 0
+	r.HasOldDeleteAtHeight = false
+	r.OldUnminedSince = 0
+	r.HasOldUnminedSince = false
 }
 
 // luaMapResponsePool reuses LuaMapResponse structs across set_mined batch records,
@@ -387,7 +429,7 @@ func (s *Store) parseLuaMapResponseInto(response interface{}, result *LuaMapResp
 	// — yields a non-nil result.BlockIDs (the helper returns make([]int, 0)
 	// for an empty input), matching the existing observable contract.
 	if blockIDs, ok := respMap["blockIDs"]; ok {
-		ids, err := luaResponseIntSlice(blockIDs)
+		ids, err := luaResponseIntSlice("blockIDs", blockIDs)
 		if err != nil {
 			return err
 		}
@@ -439,10 +481,81 @@ func (s *Store) parseLuaMapResponseInto(response interface{}, result *LuaMapResp
 		}
 	}
 
+	// Parse idempotent list for spendMulti
+	// Parsed like blockIDs, through luaResponseIntSlice, because the native
+	// dispatcher may encode it as a typed integer slice such as []int64. A bare
+	// []interface{} assertion failed that shape. A parse failure completes every
+	// spend in the record with a processing error. It does not demote the native
+	// path, so every later spend on that dispatcher fails the same way.
+	if idempotentField, ok := respMap["idempotent"]; ok {
+		offsets, err := luaResponseIntSlice("idempotent", idempotentField)
+		if err != nil {
+			return errors.NewProcessingError("invalid idempotent list (%T)", idempotentField, err)
+		}
+
+		result.Idempotent = append(result.Idempotent[:0], offsets...)
+	}
+
+	// Parse the heights recorded with the idempotent matches, keyed by index.
+	if heightsField, ok := respMap["idempotentHeights"]; ok {
+		heightsMap, ok := luaResponseMap(heightsField)
+		if !ok {
+			return errors.NewProcessingError("invalid idempotentHeights (%T)", heightsField)
+		}
+
+		result.IdempotentHeights = make(map[int]uint32, len(heightsMap))
+
+		for k, v := range heightsMap {
+			idx, ok := luaResponseInt(k)
+			if !ok {
+				return errors.NewProcessingError("invalid idempotentHeights index type: %T", k)
+			}
+
+			height, ok := luaResponseInt(v)
+			if !ok || height < 0 || height > math.MaxUint32 {
+				return errors.NewProcessingError("invalid idempotentHeights height for index %d: %v (%T)", idx, v, v)
+			}
+
+			result.IdempotentHeights[idx] = uint32(height)
+		}
+	}
+
 	// Parse childCount
 	if childCount, ok := respMap["childCount"]; ok {
 		if count, ok := luaResponseInt(childCount); ok {
 			result.ChildCount = count
+		}
+	}
+
+	if dah, ok := respMap["deleteAtHeight"]; ok {
+		if height, ok := luaResponseInt(dah); ok {
+			result.DeleteAtHeight = height
+			result.HasDeleteAtHeight = true
+		}
+	}
+
+	if ver, ok := respMap["dahVer"]; ok {
+		if version, ok := luaResponseInt(ver); ok {
+			result.DAHVersion = int64(version)
+			result.HasDAHVersion = true
+		}
+	}
+
+	if conflicting, ok := respMap["conflicting"].(bool); ok {
+		result.Conflicting = conflicting
+	}
+
+	if dah, ok := respMap["oldDeleteAtHeight"]; ok {
+		if height, ok := luaResponseInt(dah); ok {
+			result.OldDeleteAtHeight = height
+			result.HasOldDeleteAtHeight = true
+		}
+	}
+
+	if since, ok := respMap["oldUnminedSince"]; ok {
+		if height, ok := luaResponseInt(since); ok {
+			result.OldUnminedSince = height
+			result.HasOldUnminedSince = true
 		}
 	}
 
@@ -473,24 +586,27 @@ func luaResponseMap(v interface{}) (map[interface{}]interface{}, bool) {
 	}
 }
 
-func luaResponseIntSlice(v interface{}) ([]int, error) {
-	// Reject byte slices explicitly: a msgpack `bin`-encoded blockIDs would
-	// otherwise decode byte-by-byte into garbage block IDs and return success.
-	// blockIDs must arrive as a list of integers on both transports.
+// luaResponseIntSlice parses one integer-list field of a Lua or native
+// response. field is the response key being parsed, so a malformed payload
+// names the field that is actually wrong.
+func luaResponseIntSlice(field string, v interface{}) ([]int, error) {
+	// Reject byte slices explicitly: a msgpack `bin`-encoded list would
+	// otherwise decode byte-by-byte into garbage integers and return success.
+	// These fields must arrive as a list of integers on both transports.
 	if _, isBytes := v.([]byte); isBytes {
-		return nil, errors.NewProcessingError("invalid blockIDs type: %T", v)
+		return nil, errors.NewProcessingError("invalid %s type: %T", field, v)
 	}
 
 	rv := reflect.ValueOf(v)
 	if !rv.IsValid() || (rv.Kind() != reflect.Slice && rv.Kind() != reflect.Array) {
-		return nil, errors.NewProcessingError("invalid blockIDs type: %T", v)
+		return nil, errors.NewProcessingError("invalid %s type: %T", field, v)
 	}
 
 	result := make([]int, rv.Len())
 	for i := 0; i < rv.Len(); i++ {
 		idInt, ok := luaResponseInt(rv.Index(i).Interface())
 		if !ok {
-			return nil, errors.NewProcessingError("invalid blockID at index %d", i)
+			return nil, errors.NewProcessingError("invalid %s entry at index %d", field, i)
 		}
 		result[i] = idInt
 	}

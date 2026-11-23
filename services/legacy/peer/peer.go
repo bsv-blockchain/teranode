@@ -10,10 +10,13 @@ import (
 	"container/list"
 	"crypto/rand"
 	"encoding/binary"
+	stderrors "errors"
 	"fmt"
 	"io"
+	"math"
 	"math/big"
 	"net"
+	"runtime/debug"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -75,6 +78,19 @@ const (
 	// stallResponseTimeoutBlocks is the maximum amount of time a peer will
 	// wait for a block message to be received after sending a getdata
 	// message.
+	//
+	// Do not shorten this on the belief that a peer silent this long is broken.
+	// An SV Node peer can send nothing for many minutes while it serves blocks
+	// queued ahead of ours, or reads a multi-GB block from disk to compute its
+	// checksum before the first byte, holding the one thread that serves all its
+	// peers. On mainnet on 2026-09-25 a peer sent nothing for about 22 minutes and
+	// then delivered a 4 GB block at 38 MB/s. The full account, with SV Node
+	// source references, is on blockRequestRetryInterval in
+	// services/legacy/netsync/block_download_tracker.go.
+	//
+	// A getdata is not held to this: it arms blockDownloadBudget, SV Node's own
+	// limit for a block in flight, with this as the floor (maybeAddDeadline).
+	// This is still the deadline for the inv answering a getblocks.
 	stallResponseTimeoutBlocks = 5 * time.Minute
 
 	// minBlockDownloadBytesPerSec is the association-wide read throughput, in
@@ -85,17 +101,53 @@ const (
 	// peer that is making real progress. Mirrors the netsync default
 	// minSyncPeerNetworkSpeed (50 KiB/s) — comfortably above ping/inv chatter,
 	// far below real block-transfer rates.
+	//
+	// Half of svnode's equivalent floor, -blockstallingmindownloadspeed, which
+	// defaults to 100 KB/s. So a peer this node still counts as making progress
+	// is one svnode would already have judged stalled. Deliberately not changed
+	// here: raising it disconnects peers that today survive, which is a decision
+	// to take with numbers from a real sync rather than for symmetry.
 	minBlockDownloadBytesPerSec = 51200
 
-	// MaxBlockDownloadTime is the absolute wall-clock ceiling on how long a
+	// MaxBlockDownloadTime is the wall-clock floor AND fallback for how long a
 	// single block fetch may be kept alive by throughput-based deadline
-	// extension. Without a cap, a malicious peer could dribble bytes at just
+	// extension. Without such a cap a malicious peer could dribble bytes at just
 	// above minBlockDownloadBytesPerSec indefinitely — never completing a valid
-	// block — and hold the single sync-peer slot, stalling IBD. Past this cap
-	// the block deadline is enforced (and, in netsync, the sync peer rotated)
-	// regardless of throughput. Generous for honest fat blocks: a 4 GB block
-	// need only average ~2.3 MB/s to finish inside the window. Shared with the
-	// netsync sync-peer rotation cap so both layers agree.
+	// block — and hold the single sync-peer slot, stalling IBD. Generous for
+	// honest fat blocks: a 4 GB block need only average ~2.3 MB/s to finish
+	// inside the window, and that example still describes the shortest window
+	// any fetch gets, because blockDownloadBudget floors on this value.
+	//
+	// blockDownloadBudget scales the ceiling with the chain's block interval,
+	// whether we are catching up, and how many peers we are downloading from,
+	// and then takes the larger of that and this constant. The floor exists
+	// because the scaling is only ever meant to WIDEN the deadline for
+	// multi-peer IBD: at the tip the scaled value is 100% of a ten-minute block
+	// interval, which would have narrowed the shipped ceiling threefold and left
+	// the 4 GB example above describing a value nothing used. The cost of the
+	// floor is that legacy_blockDownloadTimeoutBasePercent can no longer narrow
+	// the tip ceiling below thirty minutes; it can still widen it.
+	//
+	// It is also the flat cap on netsync's sync-peer rotation, which is NOT
+	// scaled (SyncManager.CheckSyncPeer). With the floor in place the two layers
+	// can only disagree one way round: the peer layer is at least as patient as
+	// netsync everywhere, so netsync rotates a stalled sync peer before the peer
+	// layer would disconnect it, during catch-up and at the tip alike.
+	//
+	// This floor is not the recovery path for a peer that accepted a getdata
+	// and sends nothing. netsync re-asks such a block of another peer after
+	// blockRequestRetryInterval in both sync modes (assignWantedBlocks,
+	// services/legacy/netsync/wanted_range_assign.go: from the header cache
+	// below the last checkpoint, from the download ledger above it), so the
+	// floor bounds only how long the quiet peer stays connected. SV Node's
+	// equivalent is in two parts: a parallel fetch of a stalling peer's first
+	// in-flight block after 30 s (net_processing.cpp:462-507), and a disconnect
+	// timeout of nPowTargetSpacing * (base + perPeer * others) with no floor,
+	// ten minutes at the tip (DetectStalling, net_processing.cpp:5483-5496).
+	// The thirty-minute floor is the deliberate difference, dated 2026-08-25
+	// (67e459c20): it exists so the percentage settings cannot narrow the
+	// shipped ceiling threefold, and lifting it would cut a healthy multi-GB
+	// tip transfer under about 7 MB/s at ten minutes.
 	MaxBlockDownloadTime = 30 * time.Minute
 )
 
@@ -148,6 +200,20 @@ type MessageListeners struct {
 	// header), 0 when the size was not measured; it lets the handler weight the
 	// block without an O(all-tx) SerializeSize() walk on the read-loop.
 	OnBlock func(p *Peer, msg *wire.MsgBlock, buf []byte, payloadSize int64)
+
+	// OnBlockOnDisk is invoked for a block whose body was streamed to the park
+	// rather than decoded. Its transactions are not in memory; the listener
+	// reads them back from the park if it needs them.
+	OnBlockOnDisk func(p *Peer, msg *MsgBlockOnDisk)
+
+	// OnBlockBodyRejected is invoked, on the peer's read loop, when the body
+	// this peer streamed for a block was refused by the installed sink as the
+	// peer's fault (see BlockBodyRejectedError). By the time it is called the
+	// peer package has decided the connection's fate: once the listener
+	// returns a reject naming the block is sent and the whole association is
+	// disconnected through its primary. What the listener owns is the ban, and
+	// only on rejected.ProvenBad(); it must not disconnect anything itself.
+	OnBlockBodyRejected func(p *Peer, rejected *BlockBodyRejectedError)
 
 	// OnCFilter is invoked when a peer receives a cfilter bitcoin message.
 	OnCFilter func(p *Peer, msg *wire.MsgCFilter)
@@ -289,6 +355,20 @@ type Config struct {
 	// '/', ':', '(', ')'.
 	UserAgentComments []string
 
+	// CatchingUp reports whether the node is still catching up with the chain.
+	// A block download is given a far longer ceiling while this is true, because
+	// historical blocks are large and our own validation backpressure delays the
+	// read loop. Nil means "assume we are at the tip", which is the conservative
+	// choice: the shorter ceiling.
+	CatchingUp func() bool
+
+	// PeersWithBlockDownloads reports how many peers currently have a block
+	// request outstanding, this one included. Downloading from several peers at
+	// once makes each transfer legitimately slower because our own downstream
+	// link is shared, so the ceiling widens with the count. Nil means "just this
+	// peer", which adds no compensation.
+	PeersWithBlockDownloads func() int
+
 	// ChainParams identifies which chain parameters the peer is associated
 	// with.  It is highly recommended to specify this field, however it can
 	// be omitted in which case the test network will be used.
@@ -324,6 +404,11 @@ type Config struct {
 	// AllowBlockPriority is used to signal that the peer has the ability to
 	// receive block priority messages via connection streaming.
 	AllowBlockPriority bool
+
+	// Whitelisted records that the peer's address is in the operator's
+	// whitelist (the whitelist setting). The peer server reads it from the
+	// connection's remote address before it builds the peer.
+	Whitelisted bool
 }
 
 // minUint32 is a helper function to return the minimum of two uint32s.
@@ -708,6 +793,14 @@ func (p *Peer) Addr() string {
 // This function is safe for concurrent access.
 func (p *Peer) Inbound() bool {
 	return p.inbound
+}
+
+// Whitelisted returns whether the peer's address is in the operator's
+// whitelist, as set in its Config when it was built.
+//
+// This function is safe for concurrent access.
+func (p *Peer) Whitelisted() bool {
+	return p.cfg.Whitelisted
 }
 
 // Services returns the services flag of the remote peer.
@@ -1123,16 +1216,90 @@ func (p *Peer) PushGetHeadersMsg(locator blockchain.BlockLocator, stopHash *chai
 	return nil
 }
 
+// ForgetLastHeadersRequest clears the remembered (begin hash, stop hash) pair
+// that PushGetHeadersMsg uses to filter a repeat request, so the next call is
+// never mistaken for an accidental duplicate.
+//
+// The filter exists to stop us spamming a peer with the same getheaders by
+// accident; it has no way to tell that apart from a deliberate retry, where
+// the caller already knows the last request was unusable or never answered
+// and is asking again on purpose. This gives such a caller a way to say so.
+// A caller that wants the filter's protection, because it is not making that
+// judgement, simply never calls this.
+//
+// This function is safe for concurrent access.
+func (p *Peer) ForgetLastHeadersRequest() {
+	p.prevGetHdrsMtx.Lock()
+	p.prevGetHdrsBegin = nil
+	p.prevGetHdrsStop = nil
+	p.prevGetHdrsMtx.Unlock()
+}
+
 // PushRejectMsg sends a reject message for the provided command, reject code,
 // reject reason, and hash.  The hash will only be used when the command is a tx
 // or block and should be nil in other cases.  The wait parameter will cause the
 // function to block until the reject message has actually been sent.
 //
+// The wait has no bound: it returns when the write to the connection returns,
+// and the connection has no write deadline, so a remote that has stopped
+// reading holds the caller until the socket is closed. Call it with wait only
+// from a goroutine that belongs to this peer, such as its own read loop, or
+// use QueueRejectMsg and bound the wait yourself.
+//
 // This function is safe for concurrent access.
 func (p *Peer) PushRejectMsg(command string, code wire.RejectCode, reason string, hash *chainhash.Hash, wait bool) {
+	// Send the message without waiting if the caller has not requested it.
+	if !wait {
+		p.QueueRejectMsg(command, code, reason, hash, nil)
+		return
+	}
+
+	// Send the message and block until it has been sent before returning.
+	doneChan := make(chan struct{}, 1)
+	p.QueueRejectMsg(command, code, reason, hash, doneChan)
+	<-doneChan
+}
+
+// rejectWriteBound is how long a reject is waited for before the peer is dropped without it, as
+// netsync's parkRejectWriteBound bounds the park's reject.
+const rejectWriteBound = 2 * time.Second
+
+// pushRejectWithin queues a reject and waits at most bound for it to be written. It reports
+// whether the write finished, or will never happen, within the bound. The connection has no
+// write deadline, so a remote that has stopped reading holds an unbounded wait until the socket
+// closes; the caller disconnects next, which ends the hung write either way.
+func (p *Peer) pushRejectWithin(command string, code wire.RejectCode, reason string, hash *chainhash.Hash, bound time.Duration) bool {
+	done := make(chan struct{}, 1)
+	p.QueueRejectMsg(command, code, reason, hash, done)
+
+	timer := time.NewTimer(bound)
+	defer timer.Stop()
+
+	select {
+	case <-done:
+		return true
+	case <-timer.C:
+		return false
+	}
+}
+
+// QueueRejectMsg queues the reject message PushRejectMsg sends and returns at
+// once. doneChan, when not nil, receives one value when the message has been
+// written, or when it will never be: the peer disconnected first, the write
+// failed, or the remote's protocol version predates reject messages. It should
+// be buffered so a late signal does not block the output handler.
+//
+// This function is safe for concurrent access.
+func (p *Peer) QueueRejectMsg(command string, code wire.RejectCode, reason string, hash *chainhash.Hash, doneChan chan<- struct{}) {
 	// Don't bother sending the reject message if the protocol version
 	// is too low.
 	if p.VersionKnown() && p.ProtocolVersion() < wire.RejectVersion {
+		if doneChan != nil {
+			go func() {
+				doneChan <- struct{}{}
+			}()
+		}
+
 		return
 	}
 
@@ -1150,16 +1317,7 @@ func (p *Peer) PushRejectMsg(command string, code wire.RejectCode, reason string
 		msg.Hash = *hash
 	}
 
-	// Send the message without waiting if the caller has not requested it.
-	if !wait {
-		p.QueueMessage(msg, nil)
-		return
-	}
-
-	// Send the message and block until it has been sent before returning.
-	doneChan := make(chan struct{}, 1)
 	p.QueueMessage(msg, doneChan)
-	<-doneChan
 }
 
 // handlePingMsg is invoked when a peer receives a ping bitcoin message.  For
@@ -1234,13 +1392,47 @@ func (p *Peer) handleAuthChMsg(msg *wire.MsgAuthch) {
 	p.logger.Debugf("Ignoring authch message from %v - this node does not have MinerID configured", p)
 }
 
+// maxHandshakePayload is the largest payload any message read before the read
+// loop starts may have: the version or createstream a connection opens with,
+// and the streamack answering a createstream. Each is a few hundred bytes.
+func maxHandshakePayload(pver uint32) uint64 {
+	return max((&wire.MsgVersion{}).MaxPayloadLength(pver),
+		(&wire.MsgCreateStream{}).MaxPayloadLength(pver),
+		(&wire.MsgStreamAck{}).MaxPayloadLength(pver))
+}
+
+// ReadHandshakeMessage reads one message through go-wire's buffered
+// ReadMessageWithEncodingN, which MsgVersion needs (its Bsvdecode requires a
+// *bytes.Buffer), after refusing a declared payload larger than any handshake
+// message can have. ReadMessageWithEncodingN allocates the whole declared
+// payload before reading a byte of it, bounded only by the type's own
+// MaxPayloadLength, which is the 4 GB excessive block size for tx and block, so
+// without this bound a 24-byte header from anyone who can open a connection
+// made this node allocate gigabytes. from is the peer the bytes come from, or
+// nil when there is none yet (DeliveredBy).
+func ReadHandshakeMessage(r io.Reader, from *Peer, pver uint32, bsvnet wire.BitcoinNet, enc wire.MessageEncoding) (int, wire.Message, []byte, error) {
+	var hdr [wire.MessageHeaderSize]byte
+
+	n, err := io.ReadFull(r, hdr[:])
+	if err != nil {
+		return n, nil, nil, err
+	}
+
+	// The length field sits after the 4-byte magic and the 12-byte command.
+	if length, limit := uint64(binary.LittleEndian.Uint32(hdr[16:20])), maxHandshakePayload(pver); length > limit {
+		return n, nil, nil, errors.NewNetworkInvalidResponseError("handshake message %q declares a %d-byte payload, above the %d bytes any handshake message can have",
+			bytes.TrimRight(hdr[4:16], "\x00"), length, limit)
+	}
+
+	return wire.ReadMessageWithEncodingN(&deliveryReader{r: io.MultiReader(bytes.NewReader(hdr[:]), r), from: from}, pver, bsvnet, enc)
+}
+
 // readMessage reads the next bitcoin message from the peer with logging.
 // It buffers the full payload before decoding and returns the raw payload
-// bytes. Use this for messages whose Bsvdecode requires a *bytes.Buffer
-// (notably MsgVersion) or whose raw bytes are needed downstream.
+// bytes. It serves only the handshake, so the message is bounded by
+// ReadHandshakeMessage.
 func (p *Peer) readMessage(encoding wire.MessageEncoding) (wire.Message, []byte, error) {
-	n, msg, buf, err := wire.ReadMessageWithEncodingN(p.conn,
-		p.ProtocolVersion(), p.cfg.ChainParams.Net, encoding)
+	n, msg, buf, err := ReadHandshakeMessage(p.conn, p, p.ProtocolVersion(), p.cfg.ChainParams.Net, encoding)
 	atomic.AddUint64(&p.bytesReceived, uint64(n))
 
 	if p.cfg.Listeners.OnRead != nil {
@@ -1272,8 +1464,7 @@ func (p *Peer) readMessage(encoding wire.MessageEncoding) (wire.Message, []byte,
 // its reader to *bytes.Buffer; go-wire rejects CmdVersion explicitly with a
 // *wire.MessageError.
 func (p *Peer) readMessageStreaming(encoding wire.MessageEncoding) (int, wire.Message, error) {
-	n, msg, err := wire.ReadMessageStreamingN(p.conn,
-		p.ProtocolVersion(), p.cfg.ChainParams.Net, encoding)
+	n, msg, err := p.readWireMessageStreaming(encoding)
 	atomic.AddUint64(&p.bytesReceived, uint64(n))
 
 	if p.cfg.Listeners.OnRead != nil {
@@ -1286,6 +1477,35 @@ func (p *Peer) readMessageStreaming(encoding wire.MessageEncoding) (int, wire.Me
 
 	p.logReadMessage(msg, nil)
 	return n, msg, nil
+}
+
+// readWireMessageStreaming is the go-wire streaming read with any panic under it
+// turned into an error. The bytes being decoded are the remote peer's choice, so
+// a panic here costs that peer its connection (the read loop answers the error
+// with a reject and a disconnect) rather than taking the process down.
+//
+// The streaming block handler runs the block sink on this goroutine. The sync
+// manager's sink turns a panic under its conversion into a local fault itself
+// (netsync pipelineBlockSink), so it never reaches here; one that does is from
+// code outside that boundary, and whatever that code held is not released. An
+// out-of-memory failure is fatal in Go and is not caught; go-wire bounding its
+// allocations by the bytes actually read is what prevents that.
+func (p *Peer) readWireMessageStreaming(encoding wire.MessageEncoding) (n int, msg wire.Message, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			p.logger.Errorf("[readMessageStreaming][%s] recovered panic reading a message: %q stack=%q", p, fmt.Sprint(r), debug.Stack())
+
+			// Answered as the peer's: under this read the sync manager's sink handles
+			// its own panics, so what is left is go-wire decoding the bytes the peer
+			// sent, or a wrapper of ours around them. The panic value stays in the log
+			// above, out of the error, whose text the read loop sends back in its reject.
+			msg = nil
+			err = errors.NewNetworkInvalidResponseError("[readMessageStreaming][%s] could not decode a message", p)
+		}
+	}()
+
+	return wire.ReadMessageStreamingN(&deliveryReader{r: p.conn, from: p},
+		p.ProtocolVersion(), p.cfg.ChainParams.Net, encoding)
 }
 
 // logReadMessage emits the debug logging that readMessage / readMessageStreaming
@@ -1350,8 +1570,11 @@ func (p *Peer) writeMessage(msg wire.Message, enc wire.MessageEncoding) error {
 		}))
 	}
 
-	// Write the message to the peer.
-	n, err := wire.WriteMessageWithEncodingN(p.conn, msg, p.ProtocolVersion(), p.cfg.ChainParams.Net, enc)
+	// Write the message to the peer. The progress writer fails the write when
+	// the socket accepts nothing for a whole send-timeout window, so a peer that stopped
+	// reading is disconnected by outHandler instead of parking it forever.
+	w := &sendProgressWriter{conn: p.conn, timeout: p.sendTimeout()}
+	n, err := wire.WriteMessageWithEncodingN(w, msg, p.ProtocolVersion(), p.cfg.ChainParams.Net, enc)
 	atomic.AddUint64(&p.bytesSent, uint64(n))
 
 	if p.cfg.Listeners.OnWrite != nil {
@@ -1359,6 +1582,69 @@ func (p *Peer) writeMessage(msg wire.Message, enc wire.MessageEncoding) error {
 	}
 
 	return err
+}
+
+// sendTimeout is the window a socket write gets to have any bytes accepted
+// before the peer is disconnected. It follows SV Node's "socket sending
+// timeout" (-p2ptimeout, default 20 minutes); sendProgressWriter says where
+// the bound differs.
+func (p *Peer) sendTimeout() time.Duration {
+	if p.settings == nil || p.settings.Legacy.PeerSendTimeout <= 0 {
+		return DefaultPeerSendTimeout
+	}
+
+	return p.settings.Legacy.PeerSendTimeout
+}
+
+// DefaultPeerSendTimeout is the send timeout used when legacy_peerSendTimeout
+// is not positive. It matches SV Node's DEFAULT_P2P_TIMEOUT_INTERVAL.
+const DefaultPeerSendTimeout = 20 * time.Minute
+
+// sendProgressWriter arms a write deadline before each socket write and
+// re-arms it whenever the write timed out after the socket had accepted some
+// bytes. A write therefore fails only when a whole timeout window passes with
+// no bytes accepted, so a slow peer that keeps reading is never cut off,
+// however large the message. The check runs once per window, so a peer that
+// stalls partway through a window is dropped after between one and two times
+// the timeout with no bytes accepted. SV Node compares the clock with its last
+// send and drops it after one.
+type sendProgressWriter struct {
+	conn    net.Conn
+	timeout time.Duration
+}
+
+// Write implements io.Writer.
+func (w *sendProgressWriter) Write(b []byte) (int, error) {
+	written := 0
+
+	for {
+		if err := w.conn.SetWriteDeadline(time.Now().Add(w.timeout)); err != nil {
+			// A connection that cannot take a deadline is written as it was
+			// before the send timeout existed. A closed socket also lands
+			// here, and its write below fails at once.
+			n, writeErr := w.conn.Write(b[written:])
+
+			return written + n, writeErr
+		}
+
+		n, err := w.conn.Write(b[written:])
+		written += n
+
+		if err == nil {
+			return written, nil
+		}
+
+		var netErr net.Error
+		if !errors.As(err, &netErr) || !netErr.Timeout() {
+			return written, err
+		}
+
+		if n == 0 {
+			return written, errors.NewNetworkTimeoutError("socket sending timeout: no bytes accepted for %s", w.timeout, err)
+		}
+		// The socket took some bytes before the deadline: the peer is still
+		// reading, so re-arm the deadline and send the rest.
+	}
 }
 
 // isAllowedReadError returns whether or not the passed error is allowed without
@@ -1448,10 +1734,18 @@ func (p *Peer) maybeAddDeadline(pendingResponses map[string]time.Time, msgCmd st
 
 	case wire.CmdGetData:
 		// Expects a block, merkleblock, tx, or notfound message.
-		pendingResponses[wire.CmdBlock] = blockDeadline
-		pendingResponses[wire.CmdMerkleBlock] = blockDeadline
-		pendingResponses[wire.CmdTx] = blockDeadline
-		pendingResponses[wire.CmdNotFound] = blockDeadline
+		//
+		// The peer gets SV Node's whole block download budget to answer, never less than
+		// stallResponseTimeoutBlocks: base plus per-peer percent of the block interval, 95
+		// minutes while catching up with eight peers (src/net/net_processing.cpp:5474-5500 in
+		// SV Node). It used to get five minutes, and an SV Node peer can send nothing for far
+		// longer while it serves blocks queued ahead of ours or reads a multi-GB block from
+		// disk before its first byte; see stallResponseTimeoutBlocks.
+		getDataDeadline := time.Now().Add(max(stallResponseTimeoutBlocks, p.blockDownloadBudget()))
+		pendingResponses[wire.CmdBlock] = getDataDeadline
+		pendingResponses[wire.CmdMerkleBlock] = getDataDeadline
+		pendingResponses[wire.CmdTx] = getDataDeadline
+		pendingResponses[wire.CmdNotFound] = getDataDeadline
 
 	case wire.CmdGetHeaders:
 		// Expects a headers message.  Use a longer deadline since it
@@ -1538,14 +1832,207 @@ func blockResponsePending(pending map[string]time.Time) bool {
 	return false
 }
 
+// blockDownloadBudget is the wall-clock ceiling on a single block transfer.
+//
+// It is a percentage of the chain's target block interval rather than a fixed
+// duration, so one setting is correct on any chain, and it widens on two counts:
+// while we are catching up (historical blocks are large and our own validation
+// backpressure delays the read loop), and once per other peer we are downloading
+// from (our downstream link is shared between them, so each transfer is honestly
+// slower). This mirrors svnode, which computes
+//
+//	nPowTargetSpacing * (timeoutBase + timeoutPerPeer * nOtherPeers) / 100
+//
+// with base 100%/600% for tip/catch-up and 50% per other peer.
+//
+// Only peers with a genuine outstanding request are counted, so a peer cannot
+// inflate our patience by advertising blocks it does not have.
+//
+// The result is floored at MaxBlockDownloadTime, so this calculation can only
+// widen the deadline, never narrow it. See that constant for why.
+//
+// It is also capped at MaxBlockDownloadBudget, the largest value these same
+// settings can produce. svnode keeps one clock: the figure that bounds a
+// download is the figure the timeout fires on, because its BlockDownloadTracker
+// has no expiry of its own at all. This node holds a second record of who owes
+// what, and that record's ceiling is derived from MaxBlockDownloadBudget too, so
+// capping here is what stops the two clocks disagreeing when the number of peers
+// downloading exceeds what the node's own download window and per-peer depth
+// imply. At shipped settings the cap never binds: it is 375 minutes against a
+// realistic catch-up budget of 95.
+func (p *Peer) blockDownloadBudget() time.Duration {
+	if p.cfg.ChainParams == nil || p.settings == nil {
+		return MaxBlockDownloadTime
+	}
+
+	interval := p.cfg.ChainParams.TargetTimePerBlock
+	if interval <= 0 {
+		return MaxBlockDownloadTime
+	}
+
+	base := p.settings.Legacy.BlockDownloadTimeoutBasePercent
+	if p.cfg.CatchingUp != nil && p.cfg.CatchingUp() {
+		base = p.settings.Legacy.BlockDownloadTimeoutBaseIBDPercent
+	}
+
+	// Count only OTHER peers: this peer's own download is what the ceiling is
+	// being computed for, and svnode excludes it for the same reason.
+	others := 0
+	if p.cfg.PeersWithBlockDownloads != nil {
+		if n := p.cfg.PeersWithBlockDownloads() - 1; n > 0 {
+			others = n
+		}
+	}
+
+	budget := scaledBlockDownloadBudget(interval, base, p.settings.Legacy.BlockDownloadTimeoutPerPeerPercent, int64(others))
+
+	return min(budget, MaxBlockDownloadBudget(p.settings, interval))
+}
+
+// maxPeersWithBlockDownloads is the number of peers the node's own configuration
+// lets hold a block download at once, and so the bound on the "other peers
+// downloading" term of the budget.
+//
+// The scheduler will not place a block once the ledger holds
+// legacy_blockDownloadWindow of them, and each peer carries at most
+// legacy_maxBlocksInTransitPerPeer, so the window divided by that depth is how
+// many peers it takes to fill the window. At shipped settings that is
+// 1024/16 = 64.
+//
+// It is NOT a bound on the live count. fetchHeaderBlocks fans out to every
+// eligible peer (block_scheduler.go), so with more than 64 eligible peers, more
+// than 64 can each hold a block. That is why blockDownloadBudget caps itself at
+// MaxBlockDownloadBudget: a runtime peer count above this figure narrows the
+// budget rather than escaping the ledger's ownership ceiling, which is derived
+// from the same figure (TestBlockDownloadBudgetNeverExceedsItsDerivedMaximum).
+// It is a configuration figure, not a runtime measurement, so both clocks get
+// the same answer at any moment.
+func maxPeersWithBlockDownloads(s *settings.Settings) int {
+	if s == nil {
+		return 1
+	}
+
+	window := max(1, s.Legacy.BlockDownloadWindow)
+
+	perPeer := max(1, s.Legacy.MaxBlocksInTransitPerPeer)
+
+	// Written as a division and a remainder rather than (window+perPeer-1)/perPeer,
+	// which overflows on a window set near MaxInt.
+	peers := window / perPeer
+	if window%perPeer != 0 {
+		peers++
+	}
+
+	return max(1, peers)
+}
+
+// MaxBlockDownloadBudget is the largest wall-clock ceiling blockDownloadBudget
+// can return for these settings on a chain with this target block interval.
+//
+// The download ledger in netsync uses it to size how long a peer stays on the
+// hook for a block it was asked for. That has to be at least this, or a transfer
+// the peer layer legitimately keeps alive outlives the record saying we asked
+// for it, and the finished block arrives looking unrequested: the peer loses its
+// whole association and the completed download is thrown away.
+//
+// Maximising over both bases and over the peer bound rather than reading the
+// live state keeps it a pure function of settings, so both callers get the same
+// answer at any moment. A negative per-peer percentage is read as zero here,
+// because with one the budget shrinks as peers are added and the maximum is the
+// no-other-peers case.
+//
+// Both terms are held to what the arithmetic can carry. The formula falls back
+// to MaxBlockDownloadTime when a percentage would overflow the interval
+// multiply, and a maximum that took that fallback would be SHORTER than the live
+// budget of a configuration that does not overflow, which would turn the cap in
+// blockDownloadBudget into a narrowing. Clamping instead returns the largest
+// ceiling the arithmetic can express, which no live budget can exceed.
+func MaxBlockDownloadBudget(s *settings.Settings, interval time.Duration) time.Duration {
+	if s == nil || interval <= 0 {
+		return MaxBlockDownloadTime
+	}
+
+	// The largest percentage total this interval can carry, from the same bound
+	// scaledBlockDownloadBudget applies to the product.
+	maxTotal := int64(math.MaxInt64) / int64(interval)
+
+	base := min(maxTotal, max(s.Legacy.BlockDownloadTimeoutBasePercent, s.Legacy.BlockDownloadTimeoutBaseIBDPercent))
+	perPeer := max(int64(0), s.Legacy.BlockDownloadTimeoutPerPeerPercent)
+	others := int64(maxPeersWithBlockDownloads(s) - 1)
+
+	if perPeer > 0 {
+		if room := (maxTotal - base) / perPeer; others > room {
+			others = room
+		}
+	}
+
+	return scaledBlockDownloadBudget(interval, base, perPeer, others)
+}
+
+// scaledBlockDownloadBudget is svnode's
+//
+//	nPowTargetSpacing * (timeoutBase + timeoutPerPeer * nOtherPeers) / 100
+//
+// with this node's floor and misconfiguration fallbacks applied. It is shared by
+// the live budget and by the maximum the ledger derives its ceiling from, so
+// there is one formula rather than two that can be edited apart.
+func scaledBlockDownloadBudget(interval time.Duration, base, perPeer, others int64) time.Duration {
+	if interval <= 0 {
+		return MaxBlockDownloadTime
+	}
+
+	// Bound this multiply rather than inspecting its result, for the reason the
+	// interval multiply below is bounded: an overflowed product is as likely to
+	// look small and plausible as to look wrong. The headroom is measured against
+	// a base of zero when the base is negative, so the guard itself cannot
+	// overflow on a misconfigured base; a negative base only makes the sum
+	// smaller, which the total check below already handles.
+	if perPeer > 0 && others > (math.MaxInt64-max(int64(0), base))/perPeer {
+		return MaxBlockDownloadTime
+	}
+
+	total := base + perPeer*others
+	if total <= 0 {
+		// A misconfiguration must never produce a zero ceiling, which would
+		// disconnect every peer immediately. Fall back to the old constant.
+		return MaxBlockDownloadTime
+	}
+
+	// Bound the multiply rather than inspecting its result. An overflowing
+	// product wraps to a small POSITIVE duration as readily as to a negative
+	// one — 30744574% of a ten-minute interval wraps to 3.26 seconds — and a
+	// three-second ceiling disconnects every peer just as surely as a zero
+	// would, while sailing straight past any check on the sign. Both operands
+	// are positive here, so this division is the exact largest total that
+	// cannot overflow.
+	if total > math.MaxInt64/int64(interval) {
+		return MaxBlockDownloadTime
+	}
+
+	// The product cannot overflow now, but a chain whose interval is shorter
+	// than the percentage divisor can still floor to zero.
+	budget := time.Duration(total) * interval / 100
+	if budget <= 0 {
+		return MaxBlockDownloadTime
+	}
+
+	// Widen only. At the tip the scaled value is base (100%) of the block
+	// interval with no other peers to add, which on every chain here is ten
+	// minutes: a third of the ceiling this code replaced. Nothing in the
+	// multi-peer work wanted the tip narrowed, so the shipped value is kept as
+	// the floor and the scaling does its widening above it. During catch-up the
+	// floor never binds: 600% of ten minutes is an hour.
+	return max(budget, MaxBlockDownloadTime)
+}
+
 // shouldExtendBlockDeadline reports whether an expired block-response deadline
 // should be extended (because the block is still actively arriving) rather than
 // treated as a stall. Extension is allowed only while throughput is healthy AND
-// the fetch has been in flight for less than MaxBlockDownloadTime — the
-// wall-clock cap that stops a peer dribbling bytes forever from holding the
-// sync slot indefinitely. blockFetchStart is the zero value when no block fetch
-// is in flight.
-func shouldExtendBlockDeadline(command string, healthyDownload bool, blockFetchStart, now time.Time) bool {
+// the fetch has been in flight for less than budget — the wall-clock ceiling
+// that stops a peer dribbling bytes forever from holding the sync slot
+// indefinitely, supplied by blockDownloadBudget. blockFetchStart is the zero
+// value when no block fetch is in flight.
+func shouldExtendBlockDeadline(command string, healthyDownload bool, blockFetchStart, now time.Time, budget time.Duration) bool {
 	if !isBlockResponseCommand(command) || !healthyDownload {
 		return false
 	}
@@ -1554,7 +2041,7 @@ func shouldExtendBlockDeadline(command string, healthyDownload bool, blockFetchS
 		return false
 	}
 
-	return now.Sub(blockFetchStart) < MaxBlockDownloadTime
+	return now.Sub(blockFetchStart) < budget
 }
 
 // responseStallBudget returns the deadline allowance a pending response of the
@@ -1588,6 +2075,90 @@ func responseStallBudget(cmd string) time.Duration {
 // deadline would otherwise fire mid-download and disconnect a perfectly healthy
 // sync peer. Liveness during a block fetch is gated instead by the block's own
 // (much longer) deadline.
+// shouldDeferQueuedResponse reports whether an expired non-block reply is queued behind blocks
+// rather than stalled. A getdata can ask for several blocks, and the first to arrive clears the
+// whole block-reply group, so the other deadlines count down again while the peer sends the rest.
+// A connection still receiving at a healthy rate is delivering; its reply is behind those bytes.
+//
+// The rate is the whole association's, so transaction relay alone can keep it healthy with no
+// block in flight, and a reply the peer never sends would be deferred for good. deferredFor is
+// how long this reply has already been deferred, and past maxDeferral it is judged a stall: a
+// reply queued behind blocks waits at most for those blocks, whose download is bounded by the
+// same budget (blockDownloadBudget).
+func shouldDeferQueuedResponse(command string, healthyDownload bool, deferredFor, maxDeferral time.Duration) bool {
+	return healthyDownload && !isBlockResponseCommand(command) && deferredFor < maxDeferral
+}
+
+// stallTickVerdict is what one stall tick decided about the peer's pending responses.
+type stallTickVerdict int
+
+const (
+	// stallTickNone: no pending response is past its deadline.
+	stallTickNone stallTickVerdict = iota
+	// stallTickExtendBlock: a block is still arriving at a healthy rate within its wall-clock
+	// cap, and the block-response group's deadlines were extended.
+	stallTickExtendBlock
+	// stallTickDefer: a non-block reply is late while bytes still arrive at a healthy rate, so it
+	// is queued behind blocks; its deadline was pushed out, within its deferral bound.
+	stallTickDefer
+	// stallTickDisconnect: the peer is stalled.
+	stallTickDisconnect
+)
+
+// judgeStallTick is the decision of one stallHandler tick, on the handler's own state: the
+// pending response deadlines and, for each non-block reply deferred as queued behind blocks, when
+// it was first deferred. It updates both maps as the tick does and returns the late command and
+// the verdict. A reply's first deferral is stamped once and never moved, so its deferral is
+// bounded by budget however many ticks defer it; stallHandler clears the stamp when the reply
+// arrives. budgetFor is asked for the block download budget only when a response is late, and
+// the budget it gave is returned for the log.
+func judgeStallTick(pending, deferredSince map[string]time.Time, now time.Time, offset time.Duration, healthyDownload bool, blockFetchStart time.Time, budgetFor func() time.Duration) (string, stallTickVerdict, time.Duration) {
+	command, stalled := expiredStallResponse(pending, now, offset)
+	if !stalled {
+		return "", stallTickNone, 0
+	}
+
+	budget := budgetFor()
+
+	if shouldExtendBlockDeadline(command, healthyDownload, blockFetchStart, now, budget) {
+		// The block is still actively arriving at a healthy rate and within the wall-clock
+		// cap; extend the whole block-response group (armed together) rather than disconnect a
+		// peer making real progress on a large (multi-GB) block.
+		refreshed := now.Add(stallResponseTimeoutBlocks)
+		for cmd := range pending {
+			if isBlockResponseCommand(cmd) {
+				pending[cmd] = refreshed
+			}
+		}
+
+		return command, stallTickExtendBlock, budget
+	}
+
+	if since, deferred := deferredSince[command]; shouldDeferQueuedResponse(command, healthyDownload, deferredDuration(since, deferred, now), budget) {
+		// Bytes are still arriving at a healthy rate, so the reply is queued behind blocks the
+		// peer is sending, not stalled.
+		if !deferred {
+			deferredSince[command] = now
+		}
+
+		pending[command] = now.Add(stallResponseTimeout)
+
+		return command, stallTickDefer, budget
+	}
+
+	return command, stallTickDisconnect, budget
+}
+
+// deferredDuration is how long a reply first deferred at since has been deferred by now, or zero
+// when it has not been deferred.
+func deferredDuration(since time.Time, deferred bool, now time.Time) time.Duration {
+	if !deferred {
+		return 0
+	}
+
+	return now.Sub(since)
+}
+
 func expiredStallResponse(pending map[string]time.Time, now time.Time, offset time.Duration) (string, bool) {
 	blockPending := blockResponsePending(pending)
 
@@ -1661,6 +2232,11 @@ func (p *Peer) stallHandler() {
 	// pendingResponses tracks the expected response deadline times.
 	pendingResponses := make(map[string]time.Time)
 
+	// deferredSince is when each pending non-block reply was first deferred as queued behind
+	// blocks (shouldDeferQueuedResponse), so the deferral is bounded. Cleared when the reply
+	// arrives.
+	deferredSince := make(map[string]time.Time)
+
 	// stallTicker is used to periodically check pending responses that have
 	// exceeded the expected deadline and disconnect the peer due to
 	// stalling.
@@ -1676,8 +2252,8 @@ func (p *Peer) stallHandler() {
 	lastAssocReadBytes := p.AssociationReadBytes()
 
 	// blockFetchStart records when the current block fetch first went in flight.
-	// It bounds how long throughput-based extension can keep a block alive
-	// (MaxBlockDownloadTime); zero when no block fetch is outstanding.
+	// It bounds how long throughput-based extension can keep a block alive (see
+	// blockDownloadBudget); zero when no block fetch is outstanding.
 	var blockFetchStart time.Time
 out:
 	for {
@@ -1715,6 +2291,7 @@ out:
 					}
 				default:
 					delete(pendingResponses, msgCmd)
+					delete(deferredSince, msgCmd)
 				}
 
 			case sccHandlerStart:
@@ -1782,25 +2359,16 @@ out:
 			// Disconnect the peer if a pending response has not arrived by
 			// its adjusted deadline. While a block fetch is in flight,
 			// non-block deadlines are suppressed (see expiredStallResponse).
-			if command, stalled := expiredStallResponse(pendingResponses, now, offset); stalled {
-				if shouldExtendBlockDeadline(command, healthyDownload, blockFetchStart, now) {
-					// The block is still actively arriving at a healthy rate and
-					// within the wall-clock cap; extend the whole block-response
-					// group (armed together) rather than disconnect a peer
-					// making real progress on a large (multi-GB) block.
-					refreshed := now.Add(stallResponseTimeoutBlocks)
-					for cmd := range pendingResponses {
-						if isBlockResponseCommand(cmd) {
-							pendingResponses[cmd] = refreshed
-						}
-					}
-
-					p.logger.Debugf("Extending block deadline for %s: downloading at %d B/s (%.0fs into fetch, cap %s)",
-						p, recvDelta/uint64(stallTickInterval.Seconds()), now.Sub(blockFetchStart).Seconds(), MaxBlockDownloadTime)
-				} else {
-					reason := fmt.Sprintf("Peer appears to be stalled or misbehaving, %s timeout", command)
-					p.DisconnectWithInfo(reason)
-				}
+			switch command, verdict, budget := judgeStallTick(pendingResponses, deferredSince, now, offset, healthyDownload, blockFetchStart, p.blockDownloadBudget); verdict {
+			case stallTickExtendBlock:
+				p.logger.Debugf("Extending block deadline for %s: downloading at %d B/s (%.0fs into fetch, cap %s)",
+					p, recvDelta/uint64(stallTickInterval.Seconds()), now.Sub(blockFetchStart).Seconds(), budget)
+			case stallTickDefer:
+				p.logger.Debugf("Deferring %s deadline for %s: still receiving at %d B/s", command, p, recvDelta/uint64(stallTickInterval.Seconds()))
+			case stallTickDisconnect:
+				reason := fmt.Sprintf("Peer appears to be stalled or misbehaving, %s timeout", command)
+				p.DisconnectWithInfo(reason)
+			case stallTickNone:
 			}
 
 			// Reset the deadline offset for the next tick.
@@ -1838,36 +2406,37 @@ cleanup:
 }
 
 // UseBlockPrefetchIngestion reports whether bounded async block prefetch
-// ingestion is active for the given budget and network: a positive budget AND
-// off regression net. regtest always takes the synchronous submit-then-query
-// path the block-acceptance tooling depends on, so it is excluded regardless of
-// budget. This is the single source of truth for the prefetch-mode predicate,
-// shared by the read-loop (shouldArmProcessingTimer) and the sync manager
-// (netsync.SyncManager.UsePrefetchIngestion) so both agree on when prefetch is
-// active — netsync imports this package, so it calls this directly rather than
-// re-implementing the rule.
-func UseBlockPrefetchIngestion(budgetBytes int64, net wire.BitcoinNet) bool {
-	return budgetBytes > 0 && net != wire.RegTestNet
+// ingestion is active for the given network: off regression net. regtest
+// always takes the synchronous submit-then-query path the block-acceptance
+// tooling depends on, so it is excluded regardless. This is the single source
+// of truth for the prefetch-mode predicate, read only by shouldArmProcessingTimer
+// below.
+func UseBlockPrefetchIngestion(net wire.BitcoinNet) bool {
+	return net != wire.RegTestNet
 }
 
 // shouldArmProcessingTimer reports whether the per-message processing watchdog
-// should run for this command. With block prefetch ingestion active, OnBlock
-// legitimately blocks in AcquireBlockPrefetch under budget backpressure for
-// longer than PeerProcessingTimeout; block-stall detection is owned by the
-// netsync stall detector, the idle timer, and MaxBlockDownloadTime, so the
-// watchdog is not armed for block messages in that mode. It shares the
-// UseBlockPrefetchIngestion predicate with netsync.SyncManager.UsePrefetchIngestion
-// so the read-loop and sync manager agree on when prefetch is active — regtest
-// always takes the synchronous path and keeps the watchdog for blocks. It still
-// arms for all other commands, and for every command (including blocks) when
-// ingestion is not active.
-func shouldArmProcessingTimer(cmd string, prefetchBudgetBytes int64, net wire.BitcoinNet) bool {
-	return !UseBlockPrefetchIngestion(prefetchBudgetBytes, net) || cmd != wire.CmdBlock
+// should run for this command. With block prefetch ingestion active, the
+// pipeline sink legitimately blocks in AcquireBlockPrefetch under admission
+// backpressure for longer than PeerProcessingTimeout; block-stall detection is
+// owned by the netsync stall detector, the idle timer, and the block-download
+// budget, so the watchdog is not armed for block messages in that mode. It
+// still arms for all other commands, and for every command (including blocks)
+// on regtest, which keeps the watchdog for blocks.
+func shouldArmProcessingTimer(cmd string, net wire.BitcoinNet) bool {
+	return !UseBlockPrefetchIngestion(net) || cmd != wire.CmdBlock
 }
 
 // inHandler handles all incoming messages for the peer.  It must be run as a goroutine.
 func (p *Peer) inHandler() {
 	// The timer is stopped when a new message is received and reset after it is processed.
+	//
+	// An SV Node peer answers pings on the same single thread that serves every
+	// peer's getdata, and that thread can be held for minutes while it reads a
+	// multi-GB block from disk before sending it. A peer that goes quiet here is
+	// often busy, not gone; see blockRequestRetryInterval in
+	// services/legacy/netsync/block_download_tracker.go before shortening
+	// legacy_peerIdleTimeout.
 	var idleTimer *time.Timer
 	idleTimer = time.AfterFunc(p.settings.Legacy.PeerIdleTimeout, func() {
 		// For multistream associations, check if any other stream has
@@ -1937,6 +2506,37 @@ out:
 			// local peer is not forcibly disconnecting and the
 			// remote peer has not disconnected.
 			if p.shouldHandleReadError(err) {
+				// A body the sink refused as the peer's fault, read to the end
+				// or not. This is a judgement on a named block, not a message
+				// that would not parse, so the peer is told which block and
+				// why, and the whole association goes, not only the stream the
+				// body came in on: under BlockPriority that stream is a DATA1
+				// sub-peer, and dropping it alone leaves the primary as sync
+				// peer with every block it owed still owed (netsync only
+				// releases a primary). Checked by type before the "malformed"
+				// path so that path is unchanged for every other error.
+				// stderrors.As, not errors.As: teranode's As stops at the first
+				// *Error it finds inside and never tries the outer type.
+				var rejected *BlockBodyRejectedError
+				if stderrors.As(err, &rejected) {
+					p.logger.Warnf("[%s] rejected the body of block %s (truncated=%t): %v", p, rejected.Hash, rejected.Truncated, rejected.Err)
+
+					if p.cfg.Listeners.OnBlockBodyRejected != nil {
+						p.cfg.Listeners.OnBlockBodyRejected(p, rejected)
+					}
+
+					// Bounded: the connection has no write deadline, so a remote that has
+					// stopped reading our socket held this wait, and with it the disconnect,
+					// for as long as it kept the socket open.
+					if !p.pushRejectWithin(wire.CmdBlock, wire.RejectInvalid, "block body rejected", &rejected.Hash, rejectWriteBound) {
+						p.logger.Warnf("[%s] the reject for block %s was not written within %s; dropping the association without it", p, rejected.Hash, rejectWriteBound)
+					}
+
+					p.DisconnectAssociation("block body rejected")
+
+					break out
+				}
+
 				errMsg := fmt.Sprintf("Can't read message from %s: %v", p, err)
 				if err != io.ErrUnexpectedEOF {
 					p.logger.Errorf("%s", errMsg)
@@ -1970,12 +2570,12 @@ out:
 		p.currentProcessingMsgCmd = rmsg.Command()
 		p.processingCmdMtx.Unlock()
 
-		// With block prefetch enabled, OnBlock legitimately parks in
-		// AcquireBlockPrefetch under budget backpressure for longer than
+		// With block prefetch enabled, the pipeline sink legitimately parks in
+		// AcquireBlockPrefetch under admission backpressure for longer than
 		// PeerProcessingTimeout; block-stall detection is then owned by the
-		// netsync stall detector, the idle timer, and MaxBlockDownloadTime, so the
-		// per-message watchdog must not fire for block messages in that mode.
-		if shouldArmProcessingTimer(rmsg.Command(), p.settings.Legacy.BlockPrefetchBufferBytes, p.cfg.ChainParams.Net) {
+		// netsync stall detector, the idle timer, and the block-download budget, so
+		// the per-message watchdog must not fire for block messages in that mode.
+		if shouldArmProcessingTimer(rmsg.Command(), p.cfg.ChainParams.Net) {
 			processingTimer.Reset(p.settings.Legacy.PeerProcessingTimeout)
 		}
 
@@ -2058,6 +2658,21 @@ out:
 				// hurt the download/processing overlap this feature exists for.
 				p.cfg.Listeners.OnBlock(p, msg, nil, int64(n-wire.MessageHeaderSize))
 			}
+
+		case *MsgBlockOnDisk:
+			if p.cfg.Listeners.OnBlockOnDisk != nil {
+				p.cfg.Listeners.OnBlockOnDisk(p, msg)
+			}
+
+		case *MsgBlockDiscarded:
+			// A block this node did not ask for, or one its own block policy
+			// declines on size. SV Node neither disconnects nor scores a peer
+			// for an unrequested block: it is usually a block announced and
+			// pushed before our getdata, or a second copy after we stopped
+			// wanting it. A policy decline is this node's configuration, not
+			// the peer's conduct. The body has already been drained, so the
+			// connection carries on either way.
+			p.logger.Debugf("[%s] discarded block %s, %d bytes: %s", p, msg.Hash, msg.Size, msg.Reason)
 
 		case *wire.MsgInv:
 			if p.cfg.Listeners.OnInv != nil {
@@ -2517,6 +3132,22 @@ func (p *Peer) QueueInventory(invVect *wire.InvVect) {
 	p.outputInvChan <- invVect
 }
 
+// RequeueInventory is QueueInventory for an inv that must be re-announced
+// even though the peer is already known to have it, such as a tx rebroadcast
+// after the peer rejected or dropped it. It forgets the inv from the peer's
+// known inventory first, so neither QueueInventory nor the trickle drain
+// filters it out.
+//
+// Delete and QueueInventory are not atomic. If the peer announces or sends
+// the same tx in between, it is marked known again and this requeue is a
+// no-op. That is correct, since the peer has the tx, so no locking is needed.
+//
+// This function is safe for concurrent access.
+func (p *Peer) RequeueInventory(invVect *wire.InvVect) {
+	p.knownInventory.Delete(invVect)
+	p.QueueInventory(invVect)
+}
+
 // Connected returns whether or not the peer is currently connected.
 //
 // This function is safe for concurrent access.
@@ -2534,6 +3165,35 @@ func (p *Peer) DisconnectWithInfo(reason string) {
 
 func (p *Peer) DisconnectWithWarning(reason string) {
 	p.DisconnectWithLogFunc(reason, p.logger.Warnf)
+}
+
+// DisconnectAssociation disconnects this peer and, when it is a stream sub-peer
+// of a multistream association, the association's primary as well, at warning
+// level with reason.
+//
+// It is the one way to drop a peer for misbehaviour. Under BlockPriority a
+// block body arrives on a DATA1 sub-peer, and a sub-peer is not what the sync
+// manager knows: it is never in netsync's peerStates and never owns a block in
+// the download ledger, both of which are kept under the primary. Disconnecting
+// only the sub-peer therefore left the primary as sync peer with every block it
+// owed still owed, and nothing re-opens a lost DATA1 (openRequiredStreams runs
+// once, from OnProtoconf). Disconnecting the primary is what drives the peer
+// server's association teardown and netsync's handleDonePeerMsg, which
+// releases the ledger and rotates the sync peer.
+//
+// The primary goes first so its done message is what the peer server acts on;
+// this peer's own disconnect then finds the association already being torn
+// down. DisconnectWithLogFunc is idempotent, so the overlap with the server's
+// tearDownAssociationStreams costs a debug line. A peer with no association,
+// or that is itself the primary, is simply disconnected.
+func (p *Peer) DisconnectAssociation(reason string) {
+	if assoc := p.AssociationRef(); assoc != nil {
+		if primary := assoc.PrimaryPeer(); primary != nil && primary != p {
+			primary.DisconnectWithWarning(reason + " (received on its stream " + strconv.Itoa(int(p.StreamType())) + ")")
+		}
+	}
+
+	p.DisconnectWithWarning(reason)
 }
 
 func (p *Peer) DisconnectWithLogFunc(reason string, logFunc func(format string, args ...interface{})) {

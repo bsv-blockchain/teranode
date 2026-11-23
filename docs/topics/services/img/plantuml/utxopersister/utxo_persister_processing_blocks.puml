@@ -70,8 +70,8 @@ else s.lastHeight < maxHeight
     UTXOSet --> Server : UTXO set created
     deactivate UTXOSet
 
-    Server -> BlockStore : Delete previous block's UTXOSet\n(if skipDeletePreviousBlock is false)
     Server -> Server : writeLastHeight(s.lastHeight)
+    Server -> BlockStore : Delete previous block's UTXOSet\n(if skipDeletePreviousBlock is false)
     Server -> Server : Trigger next block processing
 end
 

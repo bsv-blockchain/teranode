@@ -1,6 +1,7 @@
 package aerospike
 
 import (
+	"context"
 	"fmt"
 	"testing"
 
@@ -11,7 +12,10 @@ import (
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util/test"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
+	"github.com/vmihailenco/msgpack/v5"
 )
 
 func aeroErr(code types.ResultCode) *aerospike.AerospikeError {
@@ -37,8 +41,11 @@ func TestDemoteNativeOnUnsupported(t *testing.T) {
 	// batchRec.Err / opErr, never a teranode-wrapped one. fmt.Errorf is used
 	// deliberately: it is the only stdlib way to build a chain that keeps the
 	// aerospike type reachable, mirroring the client's own wrapping.
+	s.nativeReplayProtection.Store(true)
+
 	s.demoteNativeOnUnsupported(fmt.Errorf("op failed: %w", aeroErr(types.PARAMETER_ERROR))) //nolint:forbidigo // std %w chain needed; errors.New* erases the aerospike type
 	require.False(t, s.useNativeTeranodeOps.Load(), "wrapped PARAMETER_ERROR must demote")
+	require.False(t, s.nativeReplayProtection.Load(), "demotion clears the replay-protection verdict, so a stale true cannot re-arm the fenced sub-ops")
 
 	// Demoting again is a no-op (CAS already false).
 	s.demoteNativeOnUnsupported(aeroErr(types.PARAMETER_ERROR))
@@ -182,10 +189,10 @@ func TestHandleBatchRecordErrorSetMined(t *testing.T) {
 // msgpack bin-encoded (byte slice) blockIDs must be a parse error, never a
 // byte-per-ID success.
 func TestLuaResponseIntSliceRejectsByteSlice(t *testing.T) {
-	_, err := luaResponseIntSlice([]byte{1, 2, 3})
+	_, err := luaResponseIntSlice("blockIDs", []byte{1, 2, 3})
 	require.Error(t, err)
 
-	ids, err := luaResponseIntSlice([]int64{1, 2})
+	ids, err := luaResponseIntSlice("blockIDs", []int64{1, 2})
 	require.NoError(t, err)
 	require.Equal(t, []int{1, 2}, ids)
 
@@ -195,4 +202,183 @@ func TestLuaResponseIntSliceRejectsByteSlice(t *testing.T) {
 		"blockIDs": []byte{10, 20},
 	})
 	require.Error(t, err)
+}
+
+// TestParseLuaMapResponseNamesMalformedIdempotentField pins that a malformed
+// idempotent payload is reported as an idempotent problem. The shared integer
+// list parser used to hardcode blockIDs in its errors, so this case read as a
+// blockIDs fault during diagnosis.
+func TestParseLuaMapResponseNamesMalformedIdempotentField(t *testing.T) {
+	s := &Store{}
+
+	for name, payload := range map[string]interface{}{
+		"wrong type":  "not-a-list",
+		"bad element": []interface{}{1, "two"},
+		"bin-encoded": []byte{1, 2},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := s.ParseLuaMapResponse(map[string]interface{}{
+				"status":     "OK",
+				"idempotent": payload,
+			})
+			require.Error(t, err)
+			require.Contains(t, err.Error(), "idempotent")
+			require.NotContains(t, err.Error(), "blockID")
+		})
+	}
+}
+
+// TestEncodeMarkLongestChainPayload pins the sub-op 14 wire payload
+// [14, [onLongestChain, baseHeight, retention, unminedSinceStamp]] the C module reads positionally.
+func TestEncodeMarkLongestChainPayload(t *testing.T) {
+	payload, err := encodeMarkLongestChainPayload(true, 467, 6, 458)
+	require.NoError(t, err)
+
+	var decoded []any
+	require.NoError(t, msgpack.Unmarshal(payload, &decoded))
+	require.Len(t, decoded, 2)
+	require.EqualValues(t, subOpMarkLongestChain, decoded[0])
+	require.EqualValues(t, 14, decoded[0])
+
+	args, ok := decoded[1].([]any)
+	require.True(t, ok)
+	require.Len(t, args, 4)
+	require.Equal(t, true, args[0])
+	require.EqualValues(t, 467, args[1])
+	require.EqualValues(t, 6, args[2])
+	require.EqualValues(t, 458, args[3])
+}
+
+// TestParseLuaMapResponseOldMarkFields checks the two fields only sub-op 14 reports are parsed when
+// present, absent otherwise, and cleared by Reset.
+func TestParseLuaMapResponseOldMarkFields(t *testing.T) {
+	s := &Store{logger: ulogger.TestLogger{}}
+
+	var res LuaMapResponse
+	require.NoError(t, s.parseLuaMapResponseInto(map[interface{}]interface{}{
+		"status": "OK", "signal": "DAHUNSET", "oldDeleteAtHeight": 470, "oldUnminedSince": 450,
+	}, &res))
+	require.True(t, res.HasOldDeleteAtHeight)
+	require.Equal(t, 470, res.OldDeleteAtHeight)
+	require.True(t, res.HasOldUnminedSince)
+	require.Equal(t, 450, res.OldUnminedSince)
+
+	res.Reset()
+	require.False(t, res.HasOldDeleteAtHeight)
+	require.False(t, res.HasOldUnminedSince)
+
+	require.NoError(t, s.parseLuaMapResponseInto(map[interface{}]interface{}{"status": "OK"}, &res))
+	require.False(t, res.HasOldDeleteAtHeight)
+	require.False(t, res.HasOldUnminedSince)
+}
+
+// levelLogger records what a store logs at Warn and at Error.
+type levelLogger struct {
+	ulogger.TestLogger
+	warns, errs []string
+}
+
+func (l *levelLogger) Warnf(format string, args ...interface{}) {
+	l.warns = append(l.warns, fmt.Sprintf(format, args...))
+}
+
+func (l *levelLogger) Errorf(format string, args ...interface{}) {
+	l.errs = append(l.errs, fmt.Sprintf(format, args...))
+}
+
+func nativeRoutingGauge(route string) float64 {
+	return testutil.ToFloat64(prometheusAerospikeNativeRouting.WithLabelValues(route))
+}
+
+// TestRecordReplayProtection: a native-ops deployment whose server fails the replay-protection
+// probe runs spendMulti, spend and addDeletedChildren on the UDF path for the life of the
+// process, and nothing but a log line used to say so. The verdict decides the routing, and the
+// log level says which failure it was: a server that answered wrongly is an Error, because the
+// build has to be replaced, and a probe that could not finish is a Warn. The routing gauge is
+// published by initNativeTeranodeOps, not here: see TestInitNativeTeranodeOpsPublishesRouting.
+func TestRecordReplayProtection(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		verdict   replayProbeVerdict
+		wantNativ bool
+		wantErrs  int
+		wantWarns int
+	}{
+		{name: "proven", verdict: replayProbeProven, wantNativ: true},
+		{name: "the server answered wrongly", verdict: replayProbeMismatch, wantErrs: 1},
+		{name: "the probe could not finish", verdict: replayProbeUnavailable, wantWarns: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			logger := &levelLogger{}
+			s := &Store{logger: logger}
+
+			s.recordReplayProtection(tc.verdict)
+
+			require.Equal(t, tc.wantNativ, s.nativeReplayProtection.Load())
+			require.Len(t, logger.errs, tc.wantErrs)
+			require.Len(t, logger.warns, tc.wantWarns)
+		})
+	}
+}
+
+// TestInitNativeTeranodeOpsPublishesRouting: the replay-protection verdict is recorded inside
+// detectNativeTeranodeOpSupport, before initNativeTeranodeOps stores useNativeTeranodeOps, so only
+// the publish at the end of initNativeTeranodeOps sees the whole decision. A healthy native
+// cluster reports 1, a server that fails the probe reports 0, and native ops off reports 0,
+// whatever the gauge held before.
+func TestInitNativeTeranodeOpsPublishesRouting(t *testing.T) {
+	InitPrometheusMetrics()
+
+	yes := func(context.Context) bool { return true }
+	no := func(context.Context) bool { return false }
+
+	for _, tc := range []struct {
+		name       string
+		ops        bool
+		replay     replayProbeVerdict
+		wantReplay float64
+	}{
+		{name: "native ops and the probe proven", ops: true, replay: replayProbeProven, wantReplay: 1},
+		{name: "replay protection not proven", ops: true, replay: replayProbeMismatch, wantReplay: 0},
+		{name: "native ops off", ops: false, replay: replayProbeProven, wantReplay: 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := &Store{logger: ulogger.TestLogger{}, settings: test.CreateBaseTestSettings(t)}
+
+			// The opposite of what the run should publish, so a missing publish shows.
+			prometheusAerospikeNativeRouting.WithLabelValues(nativeRouteReplayProtection).Set(1 - tc.wantReplay)
+
+			opsProbe := no
+			if tc.ops {
+				opsProbe = func(context.Context) bool {
+					s.recordReplayProtection(tc.replay)
+
+					return true
+				}
+			}
+
+			s.nativeProbes = &nativeSupportProbes{ops: opsProbe, markLongestChain: yes}
+
+			s.initNativeTeranodeOps(context.Background())
+
+			require.Equal(t, tc.wantReplay, nativeRoutingGauge(nativeRouteReplayProtection))
+		})
+	}
+}
+
+// TestNativeRoutingGaugeFollowsDemotion: a runtime PARAMETER_ERROR turns native ops off and the
+// gauge follows it.
+func TestNativeRoutingGaugeFollowsDemotion(t *testing.T) {
+	InitPrometheusMetrics()
+
+	s := &Store{logger: ulogger.TestLogger{}}
+	s.useNativeTeranodeOps.Store(true)
+	s.nativeReplayProtection.Store(true)
+	s.publishNativeRouting()
+
+	require.Equal(t, 1.0, nativeRoutingGauge(nativeRouteReplayProtection))
+
+	s.demoteNativeOnUnsupported(aeroErr(types.PARAMETER_ERROR))
+
+	require.Equal(t, 0.0, nativeRoutingGauge(nativeRouteReplayProtection), "native ops are off")
 }

@@ -16,6 +16,7 @@ import (
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/libp2p/go-libp2p/core/peer"
 	ma "github.com/multiformats/go-multiaddr"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
@@ -223,6 +224,46 @@ func TestServer_ConnectPeer_AllowsCircuitViaDNSAddrOfBannedRelay(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, resp.Success, "the DNS name in a circuit addr is the relay's, not the dial target's")
 	client.AssertExpectations(t)
+}
+
+// TestOnPeerBanned_IncrementsBanEventsCounter confirms the score-threshold
+// ban path increments prometheusP2PBanEvents under the actual reason label,
+// and that an out-of-band reason (a caller not going through the known
+// AddBanScore constants) is bounded to ReasonUnknown rather than minting a
+// new label value.
+func TestOnPeerBanned_IncrementsBanEventsCounter(t *testing.T) {
+	initPrometheusMetrics()
+
+	s, _ := newServerWithLocalRegistry(t)
+	s.banList = &recordingBanList{}
+	s.P2PClient = &MockServerP2PClient{}
+
+	spamBefore := testutil.ToFloat64(prometheusP2PBanEvents.WithLabelValues(ReasonSpam))
+	unknownBefore := testutil.ToFloat64(prometheusP2PBanEvents.WithLabelValues(ReasonUnknown))
+
+	s.onPeerBanned(mustNewPeerID(t).String(), ReasonSpam)
+	require.Equal(t, spamBefore+1, testutil.ToFloat64(prometheusP2PBanEvents.WithLabelValues(ReasonSpam)))
+
+	s.onPeerBanned(mustNewPeerID(t).String(), "not_a_known_reason")
+	require.Equal(t, unknownBefore+1, testutil.ToFloat64(prometheusP2PBanEvents.WithLabelValues(ReasonUnknown)),
+		"an unrecognised reason must be bounded to ReasonUnknown, not minted as a new label value")
+}
+
+// TestBanPeer_IncrementsBanEventsCounter confirms the operator BanPeer RPC —
+// which bypasses AddBanScore/onPeerBanned entirely — still increments
+// prometheusP2PBanEvents, under a distinguishing "operator_ban" reason.
+func TestBanPeer_IncrementsBanEventsCounter(t *testing.T) {
+	initPrometheusMetrics()
+
+	s, _ := newServerWithLocalRegistry(t)
+	s.banList = &recordingBanList{}
+
+	before := testutil.ToFloat64(prometheusP2PBanEvents.WithLabelValues(ReasonOperatorBan))
+
+	resp, err := s.BanPeer(context.Background(), &p2p_api.BanPeerRequest{Addr: "203.0.113.9", Until: time.Now().Add(time.Hour).Unix()})
+	require.NoError(t, err)
+	require.True(t, resp.Ok)
+	require.Equal(t, before+1, testutil.ToFloat64(prometheusP2PBanEvents.WithLabelValues(ReasonOperatorBan)))
 }
 
 func TestHandleBanEvent_IPOnlyEventDisconnectsMatchingPeer(t *testing.T) {

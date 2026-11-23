@@ -10,6 +10,7 @@ For every transaction, a UTXO record is stored in the database. The record conta
 | **utxoSpendableIn**     | `Map<Integer, Integer>`              | A map where the key is the UTXO offset and the value is the block height after which the UTXO is spendable.                                                                                                                                                                                                                                                                         |
 | **recordUtxos**         | `Integer`                            | Total number of UTXOs in this record.                                                                                                                                                                                                                                                                                                                                               |
 | **spentUtxos**          | `Integer`                            | Number of UTXOs that have been spent in this record.                                                                                                                                                                                                                                                                                                                                |
+| **spendHeights**        | `Byte[4 per output]`                 | The block height of each output's spend, as 4 little-endian bytes per output in output order (output 3 is bytes 12 to 15). Grows to cover the highest output spent. Zero means none was recorded: an output not spent, or spent by a version that did not record heights. The spend uses it to tell an earlier attempt at the same spend from a replay of a transaction the pruner removed. It lives outside **utxos** so a spent entry stays the 68 bytes an older version reads as spent. |
 | **frozen**              | `Boolean`                            | Indicates whether the UTXO or transaction is frozen.                                                                                                                                                                                                                                                                                                                                |
 | **locked**              | `Boolean`                            | Indicates whether the transaction outputs can be spent. Part of the two-phase commit protocol. Set to true during initial creation when the transaction is validated. Set to false in two scenarios: (1) after successful addition to block assembly, or (2) when mined via `SetMinedMulti`. See [Two-Phase Commit Process](../features/two_phase_commit.md) for complete workflow. |
 | **spendingDatas**       | `[]*spendpkg.SpendingData`           | Array tracking which transactions spent which outputs. Each element corresponds to an output index and contains the spending transaction ID and input index. Nil for unspent outputs. Critical for validation and reorganization handling.                                                                                                                                          |
@@ -486,6 +487,7 @@ Contains complete transaction metadata and first UTXO batch:
 | `spentUtxos` | Number of spent UTXOs in THIS record | Always |
 | `spentExtraRecs` | Number of child records fully spent | If outputs > `utxoBatchSize` |
 | `blockIDs`, `blockHeights`, `subtreeIdxs` | Block references | Always |
+| `dahVer` | Count of the master's `deleteAtHeight` writes and expression evaluations, not only changes: an expression setMined or longest-chain call with no stamp change still bumps it. Every writer bumps it, so page writes can be ordered. Absent means 0 | After the first evaluation of the master's `deleteAtHeight` |
 | `fee`, `sizeInBytes`, `isCoinbase`, etc. | Transaction metadata | Always |
 
 #### Child Records (Index 1+)
@@ -498,6 +500,7 @@ Contain UTXO batches with minimal metadata:
 | `recordUtxos` | Number of non-nil UTXOs in THIS child record | Always |
 | `spentUtxos` | Number of spent UTXOs in THIS child record | Always |
 | `deleteAtHeight` | Cleanup trigger for this record | When set |
+| `dahVer` | The master's `dahVer` at the write that last set or cleared this record's `deleteAtHeight`. A page write is refused when the page already holds that version or a later one. A page never counts its own | After a versioned page write |
 | Common metadata | Version, locktime, fee, isCoinbase, locked, conflicting | Always |
 
 **Child Record DAH Management:**
@@ -505,6 +508,7 @@ Contain UTXO batches with minimal metadata:
 - When master record's UTXOs all spent → `SetDAHForChildRecords()` sets DAH on all children
 - When master record unspentalready → `SetDAHForChildRecords()` with DAH=0 clears DAH on all children
 - Enables coordinated cleanup of entire transaction across all pagination records
+- A child record never stamps or versions itself; its `deleteAtHeight` only ever comes from its master
 
 #### Pagination Example
 
