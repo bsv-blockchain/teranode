@@ -235,7 +235,7 @@ func _initPrometheusMetrics() {
 			Namespace: "teranode",
 			Subsystem: "subtreeprocessor",
 			Name:      "reorg_tip_to_start_seconds",
-			Help:      "Time from block assembly first seeing a tip change to the processor starting the fork reorg that follows it",
+			Help:      "Time from the start of the block-announcement pass that leads to a fork reorg (a tip change or a best-tip replay) to the processor starting that reorg",
 			Buckets:   prometheus.ExponentialBuckets(0.01, 2, 19),
 		},
 	)
