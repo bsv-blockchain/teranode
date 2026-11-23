@@ -18,8 +18,9 @@ import (
 // from a sequence that never hands one out again (BIGSERIAL, SQLite AUTOINCREMENT), so such rows
 // name a block ID no block has, which no chain reaches, and a reader has to resolve rows through
 // their blocks. Nothing reads the rows yet, so they are measured, never acted on: rows that fail
-// their check, or whose insert fails, are rolled back to a savepoint and counted, and the block
-// commits as it would without lanes.
+// their check, or whose insert fails, are rolled back to a savepoint, and the block commits as it
+// would without lanes. What is measured is counted once the block is stored, from the attempt that
+// stored it, so a store that is retried, or that fails, adds nothing for the attempts it gave up.
 
 // laneMapRowsSavepoint brackets a block's rows inside its transaction. Postgres aborts the whole
 // transaction on a failed statement; rolling back to the savepoint keeps the block's own writes.
@@ -30,46 +31,68 @@ const (
 )
 
 // laneRowsToStore is the rows StoreBlock is to insert with its block, already checked, and what
-// the check and the insert took.
+// the last attempt to insert them did. insertLaneMapRowsWithBlock sets insert, stored and refused
+// afresh on each attempt, so after the attempt that commits they describe that attempt alone.
 type laneRowsToStore struct {
-	rows    []lane.MapRow
-	elapsed time.Duration
+	rows []lane.MapRow
+	// check is what the in-memory check took, before the block's transaction began.
+	check time.Duration
+	// insert is what the insert took in the last attempt.
+	insert time.Duration
+	// stored is whether the last attempt stored the rows.
+	stored bool
+	// refused is whether the last attempt left the rows out: a block ID too wide for the map, or
+	// an insert rolled back to its savepoint.
+	refused bool
 	// block is the lane metrics' block label, lane.BlockPeer or lane.BlockOwn.
 	block string
 }
 
+// observe records what the committed attempt did with the rows: their gate time when it stored
+// them, a failure when it left them out.
+func (r *laneRowsToStore) observe() {
+	switch {
+	case r.stored:
+		lane.ObserveGate(r.block, lane.GateStageInsert, r.check+r.insert)
+	case r.refused:
+		lane.CountRowInsertFailure(r.block)
+	}
+}
+
 // checkedLaneMapRows returns the rows StoreBlock is to insert with block, checked with
-// lane.CheckMapRows, or nil when there are none, the block is stored as invalid, or the check
-// fails, which is counted and logged.
-func (s *SQL) checkedLaneMapRows(block *model.Block, o options.StoreBlockOptions) *laneRowsToStore {
+// lane.CheckMapRows, or nil when there are none or the block is stored as invalid. refused is
+// whether the rows failed their check, which is logged here; StoreBlock counts it once the block
+// is stored.
+func (s *SQL) checkedLaneMapRows(block *model.Block, o options.StoreBlockOptions) (rows *laneRowsToStore, refused bool) {
 	if len(o.LaneMapRows) == 0 || o.Invalid {
-		return nil
+		return nil, false
 	}
 
 	start := time.Now()
 
 	if err := lane.CheckMapRows(o.LaneMapRows); err != nil {
-		lane.CountRowInsertFailure(o.LaneMetricsBlock())
 		s.logger.Warnf("[StoreBlock][%s] storing the block without its lane map rows, which fail their check: %v", block.Hash().String(), err)
 
-		return nil
+		return nil, true
 	}
 
-	return &laneRowsToStore{rows: o.LaneMapRows, elapsed: time.Since(start), block: o.LaneMetricsBlock()}
+	return &laneRowsToStore{rows: o.LaneMapRows, check: time.Since(start), block: o.LaneMetricsBlock()}, false
 }
 
 // insertLaneMapRowsWithBlock inserts rows for the block just written as blockID, inside tx, under
-// a savepoint. A failed insert is rolled back to the savepoint, counted and logged, and returns
-// nil, so tx commits the block alone; only a failure of the savepoint itself, which leaves tx
-// unusable, is returned. The time taken is added to rows.elapsed, which StoreBlock reports once
-// the block commits.
+// a savepoint. A failed insert is rolled back to the savepoint and logged, and returns nil, so tx
+// commits the block alone; only a failure of the savepoint itself, which leaves tx unusable, is
+// returned. It records in rows what this attempt did, for StoreBlock to report once the block
+// commits (laneRowsToStore.observe).
 func (s *SQL) insertLaneMapRowsWithBlock(ctx context.Context, tx *sql.Tx, block *model.Block, blockID uint64, rows *laneRowsToStore) error {
 	start := time.Now()
 
-	defer func() { rows.elapsed += time.Since(start) }()
+	rows.stored, rows.refused = false, false
+
+	defer func() { rows.insert = time.Since(start) }()
 
 	if blockID > math.MaxUint32 {
-		lane.CountRowInsertFailure(rows.block)
+		rows.refused = true
 		s.logger.Warnf("[StoreBlock][%s] storing the block without its lane map rows: block ID %d is wider than the map's 32 bits", block.Hash().String(), blockID)
 
 		return nil
@@ -84,11 +107,15 @@ func (s *SQL) insertLaneMapRowsWithBlock(ctx context.Context, tx *sql.Tx, block 
 			return rbErr
 		}
 
-		lane.CountRowInsertFailure(rows.block)
+		rows.refused = true
 		s.logger.Warnf("[StoreBlock][%s] storing the block without its lane map rows, whose insert failed: %v", block.Hash().String(), err)
 	}
 
-	_, err := tx.ExecContext(ctx, laneMapRowsReleaseSavepoint)
+	if _, err := tx.ExecContext(ctx, laneMapRowsReleaseSavepoint); err != nil {
+		return err
+	}
 
-	return err
+	rows.stored = !rows.refused
+
+	return nil
 }

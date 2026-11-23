@@ -67,7 +67,7 @@ func initRowsMetrics() {
 			Namespace: "teranode",
 			Subsystem: "lane",
 			Name:      "gate_seconds",
-			Help:      "Time per block of the lane gate at utxostore_laneMigration shadow, by stage: build (merging the subtrees' lane bitmaps into rows, in block validation for a peer's block, after reading them from the subtree store, and in block assembly for its own, from the bitmaps it kept when it stored each subtree) and insert (in the blockchain store, checking the rows in memory before the block's database transaction begins, then inserting them inside it); a block's gate time is the sum. The block's own INSERT and the commit are not included. block is peer or own",
+			Help:      "Time per block of the lane gate at utxostore_laneMigration shadow, by stage: build (merging the subtrees' lane bitmaps into rows, in block validation for a peer's block, after reading them from the subtree store, and in block assembly for its own, from the bitmaps it kept when it stored each subtree) and insert (in the blockchain store, checking the rows in memory before the block's database transaction begins, then inserting them inside it, observed once the block is stored and only when its rows were, with the insert of the attempt that stored it); a block's gate time is the sum. The block's own INSERT and the commit are not included. block is peer or own",
 			Buckets:   prometheus.ExponentialBuckets(0.0001, 4, 12),
 		}, []string{"block", "stage"})
 		prometheusLaneRowBytes = promauto.NewHistogramVec(prometheus.HistogramOpts{
@@ -106,7 +106,7 @@ func initRowsMetrics() {
 			Namespace: "teranode",
 			Subsystem: "lane",
 			Name:      "row_insert_failures_total",
-			Help:      "Blocks whose attempted map rows were not stored, so the block's store could go on: the rows could not be built (block validation or block assembly), parsed (the blockchain service) or checked (the blockchain store), the block ID does not fit the map, or their insert failed and was rolled back to its savepoint. Rows already stored for that block ID are left in place. The count is not undone if that store then fails for another reason; a failure of the savepoint itself aborts the block's transaction and is not counted. block is peer or own",
+			Help:      "Blocks whose attempted map rows were not stored, so the block's store could go on: the rows could not be built (block validation or block assembly), parsed (the blockchain service) or checked (the blockchain store), the block ID does not fit the map, or their insert failed and was rolled back to its savepoint. Rows already stored for that block ID are left in place. In the blockchain store a block is counted once it is stored, from the attempt that stored it, so a retried store counts once and a store that fails counts nothing; a failure of the savepoint itself aborts the block's transaction and is not counted. block is peer or own",
 		}, []string{"block"})
 	})
 }
@@ -164,7 +164,8 @@ func CountTxsWithoutPosition(service string, n int) {
 // CountRowInsertFailure counts a block whose attempted rows were not stored, so its store could go
 // on: they could not be built, parsed or checked, its block ID does not fit the map, or their
 // insert failed and was rolled back to its savepoint, which leaves rows already stored for the
-// block ID in place. It is not undone if the store then fails. block is BlockPeer or BlockOwn.
+// block ID in place. The blockchain store calls it once the block is stored, once per block. block
+// is BlockPeer or BlockOwn.
 func CountRowInsertFailure(block string) {
 	initRowsMetrics()
 	prometheusLaneRowInsertFailure.WithLabelValues(block).Inc()

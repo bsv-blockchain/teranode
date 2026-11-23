@@ -330,7 +330,7 @@ func (s *SQL) storeBlockAttempt(ctx context.Context, block *model.Block, peerID 
 
 	// The block's lane map rows, at utxostore_laneMigration shadow, go in the block's own
 	// transaction (insertLaneMapRowsWithBlock). An invalid block gets none.
-	laneRows := s.checkedLaneMapRows(block, storeBlockOptions)
+	laneRows, laneRowsRefused := s.checkedLaneMapRows(block, storeBlockOptions)
 
 	if laneRows != nil {
 		// On SQLite the lane write lock is a process mutex only the holder of the whole
@@ -492,8 +492,13 @@ func (s *SQL) storeBlockAttempt(ctx context.Context, block *model.Block, peerID 
 		}
 	}
 
+	// The block is stored: count what this attempt did with its rows, once.
+	if laneRowsRefused {
+		lane.CountRowInsertFailure(storeBlockOptions.LaneMetricsBlock())
+	}
+
 	if laneRows != nil {
-		lane.ObserveGate(laneRows.block, lane.GateStageInsert, laneRows.elapsed)
+		laneRows.observe()
 	}
 
 	// Cache the timestamp only once the row is committed. Doing it inside storeBlock

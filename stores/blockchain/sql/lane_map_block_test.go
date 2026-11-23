@@ -44,12 +44,18 @@ func laneMetricValue(t *testing.T, name string) float64 {
 	return sum
 }
 
-// laneGateInsert is the insert stage's observation count and its summed seconds.
+// laneGateInsert is the insert stage's observation count and its summed seconds, over every block
+// label.
 func laneGateInsert(t *testing.T) (uint64, float64) {
 	t.Helper()
 
 	families, err := prometheus.DefaultGatherer.Gather()
 	require.NoError(t, err)
+
+	var (
+		count uint64
+		sum   float64
+	)
 
 	for _, f := range families {
 		if f.GetName() != "teranode_lane_gate_seconds" {
@@ -59,13 +65,14 @@ func laneGateInsert(t *testing.T) (uint64, float64) {
 		for _, m := range f.GetMetric() {
 			for _, l := range m.GetLabel() {
 				if l.GetName() == "stage" && l.GetValue() == lane.GateStageInsert {
-					return m.GetHistogram().GetSampleCount(), m.GetHistogram().GetSampleSum()
+					count += m.GetHistogram().GetSampleCount()
+					sum += m.GetHistogram().GetSampleSum()
 				}
 			}
 		}
 	}
 
-	return 0, 0
+	return count, sum
 }
 
 // blockLaneRows is a block's rows: lane 7 taken whole from 1 to 90,000 and lane 200 with holes.
@@ -257,9 +264,14 @@ func TestStoreBlockStoresTheBlockWhenItsLaneMapRowsFail(t *testing.T) {
 		earlier := holedRows(t, 8, 1, 4)
 		require.NoError(t, s.InsertLaneMapRows(ctx, uint32(reusedID), earlier)) //nolint:gosec // a test block ID
 
+		inserts, _ := laneGateInsert(t)
+
 		id2, _, err := s.StoreBlock(ctx, block2, "", options.WithID(reusedID), options.WithLaneMapRows(blockLaneRows(t)))
 		require.NoError(t, err)
 		require.Equal(t, reusedID, id2)
+
+		afterInserts, _ := laneGateInsert(t)
+		require.Equal(t, inserts, afterInserts, "rows rolled back to their savepoint are not timed")
 		requireRowsOf(t, s, id2, earlier)
 		require.Equal(t, failures+2, laneMetricValue(t, "teranode_lane_row_insert_failures_total"))
 
@@ -421,19 +433,67 @@ func TestInsertLaneMapRowsWithBlockReturnsASavepointFailureUncounted(t *testing.
 	})
 }
 
-// A block ID wider than the map's 32 bits is counted, and the block's transaction goes on.
+// A block ID wider than the map's 32 bits leaves the rows out, and the block's transaction goes on.
+// The attempt records it, and it is counted only when StoreBlock reports the attempt that stored
+// the block (observe), once however many attempts ran.
 func TestInsertLaneMapRowsWithBlockCountsABlockIDTooWide(t *testing.T) {
 	runLaneHandoutTests(t, "wide ID", func(t *testing.T, s *SQL) {
 		ctx := t.Context()
 		failures := laneMetricValue(t, "teranode_lane_row_insert_failures_total")
+		inserts, _ := laneGateInsert(t)
 
 		tx, err := s.db.BeginTx(ctx, nil)
 		require.NoError(t, err)
 
 		defer func() { _ = tx.Rollback() }()
 
-		require.NoError(t, s.insertLaneMapRowsWithBlock(ctx, tx, block1, 1<<32, &laneRowsToStore{rows: blockLaneRows(t)}))
-		require.Equal(t, failures+1, laneMetricValue(t, "teranode_lane_row_insert_failures_total"))
+		rows := &laneRowsToStore{rows: blockLaneRows(t)}
+
+		require.NoError(t, s.insertLaneMapRowsWithBlock(ctx, tx, block1, 1<<32, rows))
+		require.NoError(t, s.insertLaneMapRowsWithBlock(ctx, tx, block1, 1<<32, rows), "a retried attempt")
+		require.True(t, rows.refused)
+		require.False(t, rows.stored)
+		require.Equal(t, failures, laneMetricValue(t, "teranode_lane_row_insert_failures_total"), "nothing is counted before the block is stored")
+
+		rows.observe()
+		require.Equal(t, failures+1, laneMetricValue(t, "teranode_lane_row_insert_failures_total"), "counted once")
+
+		after, _ := laneGateInsert(t)
+		require.Equal(t, inserts, after, "rows left out are not timed")
+	})
+}
+
+// Each attempt records afresh what it did: an attempt that stores the rows after one that left
+// them out reports them stored, timed by its own insert alone.
+func TestInsertLaneMapRowsWithBlockRecordsEachAttemptAfresh(t *testing.T) {
+	runLaneHandoutTests(t, "attempts", func(t *testing.T, s *SQL) {
+		ctx := t.Context()
+
+		tx, err := s.db.BeginTx(ctx, nil)
+		require.NoError(t, err)
+
+		defer func() { _ = tx.Rollback() }()
+
+		rows := &laneRowsToStore{rows: blockLaneRows(t)}
+
+		require.NoError(t, s.insertLaneMapRowsWithBlock(ctx, tx, block1, 1<<32, rows))
+		require.True(t, rows.refused)
+
+		rows.insert = time.Hour // what an earlier attempt took must not be added in
+
+		require.NoError(t, s.insertLaneMapRowsWithBlock(ctx, tx, block1, 6, rows))
+		require.True(t, rows.stored)
+		require.False(t, rows.refused)
+		require.Less(t, rows.insert, time.Minute, "the last attempt's insert alone")
+
+		failures := laneMetricValue(t, "teranode_lane_row_insert_failures_total")
+		inserts, _ := laneGateInsert(t)
+
+		rows.observe()
+		require.Equal(t, failures, laneMetricValue(t, "teranode_lane_row_insert_failures_total"))
+
+		after, _ := laneGateInsert(t)
+		require.Equal(t, inserts+1, after)
 	})
 }
 
