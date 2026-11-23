@@ -47,9 +47,12 @@ var emptyInpointsWire = [4]byte{} // TxInpoints.Serialize of inpoints without pa
 // that cannot be serialized, or parent hashes that were never set on any node
 // but the first.
 //
-// With laneBits, at utxostore_laneMigration shadow, it also adds every node's lane position to
-// laneBits, from the same read when parents keeps positions; a node found only in deletedTxs has
-// none. laneBits is complete only when it returns no error.
+// With laneBits, at utxostore_laneMigration shadow, it also adds the lane position of every node
+// but the coinbase placeholder to laneBits. When parents keeps positions, a node after the first
+// gets its position from the read of its inpoints, under the same lock. Node 0 of a subtree that
+// is not its block's first is a real tx read with AppendSerialized, and its position comes from a
+// following Position call; a removal between the two leaves it without one, which is counted. A
+// node found only in deletedTxs has none. laneBits is complete only when it returns no error.
 func buildSubtreeMetaBytes(subtree *subtreepkg.Subtree, parents serializedInpointsMap, deletedTxs *txmap.SyncedMap[chainhash.Hash, subtreepkg.TxInpoints], laneBits *lane.BitmapsBuilder) ([]byte, error) {
 	nodes := subtree.Nodes
 

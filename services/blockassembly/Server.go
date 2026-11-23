@@ -916,8 +916,10 @@ func (ba *BlockAssembly) sendSubtreeNotification(ctx context.Context, subtreeHas
 // buildSubtreeMeta returns the serialized subtree meta of the subtree in the
 // request, or false, after logging why, when it cannot be built.
 //
-// With laneBits, at utxostore_laneMigration shadow, it adds every node's lane position to laneBits
-// in the same pass, read with its inpoints. laneBits is complete only when it reports true.
+// With laneBits, at utxostore_laneMigration shadow, it adds the lane position of every node but
+// the coinbase placeholder to laneBits in the same pass, read with its inpoints where the map
+// allows (see buildSubtreeMetaBytes for the in-memory map's first node). laneBits is complete only
+// when it reports true.
 func (ba *BlockAssembly) buildSubtreeMeta(subtreeRequest subtreeprocessor.NewSubtreeRequest, laneBits *lane.BitmapsBuilder) ([]byte, bool) {
 	subtree := subtreeRequest.Subtree
 
@@ -1080,9 +1082,12 @@ func (ba *BlockAssembly) storeSubtreeData(ctx context.Context, subtreeRequest su
 	metaDoneCh := make(chan struct{})
 	allDoneCh := make(chan struct{})
 
-	// laneBitmapsDone is closed once the subtree's lane bitmaps are stored. The subtree file waits
-	// for it, so, as subtree validation does for a peer's subtree, a stored subtree always has its
-	// lane bitmaps. Without lanes it is closed now and nothing waits.
+	// laneBitmapsDone is closed once the write of the subtree's lane bitmaps has finished or failed.
+	// The subtree file waits for it, as subtree validation's does, so a subtree file is never
+	// written before its lane bitmaps are. A failed encode or write is logged and the subtree is
+	// still stored, as subtree validation does at shadow, so a stored subtree can lack the file,
+	// and a block that lists it then counts its bitmaps as missing. Without lanes it is closed now
+	// and nothing waits.
 	laneBitmapsDone := make(chan struct{})
 	if !lanes {
 		close(laneBitmapsDone)
