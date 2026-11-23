@@ -130,7 +130,7 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, repo *repository.R
 	e.HideBanner = true
 	e.HidePort = true
 
-	// Configure real IP extraction for reverse proxy deployments. When
+	// Configure real IP and scheme extraction for reverse proxy deployments. When
 	// asset_trustedProxyCIDRs is non-empty but no valid CIDRs are parsed,
 	// fail loudly rather than silently falling back to "trust all private
 	// ranges" — operator typos must not weaken the trust boundary.
@@ -178,8 +178,14 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, repo *repository.R
 			)
 		}
 		e.IPExtractor = echo.ExtractIPFromXFFHeader(trustOpts...)
+		// Since echo v4.16.0, Context.Scheme trusts X-Forwarded-Proto only from
+		// peers its SchemeExtractor trusts, separately from IPExtractor. Give it
+		// the same trust list, so a TLS-terminating proxy listed here still gets
+		// wss:// from the dashboard's WebSocket config.
+		e.SchemeExtractor = echo.ExtractSchemeFromHeaders(trustOpts...)
 	} else {
 		e.IPExtractor = echo.ExtractIPFromXFFHeader()
+		e.SchemeExtractor = echo.ExtractSchemeFromHeaders()
 	}
 
 	e.HTTPErrorHandler = customHTTPErrorHandler(logger, tSettings)
