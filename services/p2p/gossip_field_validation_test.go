@@ -646,12 +646,16 @@ func TestHandleTopics_MalformedInnerJSONScored(t *testing.T) {
 			server, remotePeerID, _, _ := newGossipFieldTestServer(t)
 			capture := &errorCaptureLogger{}
 			server.logger = capture
-			marker := strings.Repeat("7", 4000)
-			mismatch := []byte(`{"PeerID":"` + remotePeerID.String() + `","Hash":` + marker + `,"TxID":` + marker + `,"fee_policy":` + marker + `}`)
+			marker := strings.Repeat("7", 512)
+			// Height and best_height overflow errors include the numeric literal.
+			// String field type errors do not, but still exercise the same log branch.
+			mismatch := []byte(`{"PeerID":"` + remotePeerID.String() + `","Height":` + marker + `,"best_height":` + marker + `,"Hash":` + marker + `,"TxID":` + marker + `,"fee_policy":` + marker + `}`)
 			require.True(t, json.Valid(mismatch))
+			require.Less(t, len(mismatch), 8192, "fixture must reach json.Unmarshal for every topic")
 
 			handler(server, context.Background(), mismatch, remotePeerID.String())
 
+			require.Contains(t, capture.errors(), "field type mismatch, dropped unscored", "fixture must reach the decode-error branch")
 			require.NotContains(t, capture.errors(), marker[:64], "type-mismatch log must not echo peer-controlled bytes")
 		})
 
