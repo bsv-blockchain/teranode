@@ -492,13 +492,17 @@ func (s *SQL) storeBlockAttempt(ctx context.Context, block *model.Block, peerID 
 		}
 	}
 
-	// The block is stored: count what this attempt did with its rows, once.
-	if laneRowsRefused {
-		lane.CountRowInsertFailure(storeBlockOptions.LaneMetricsBlock())
-	}
+	// The block is stored: count what this attempt did with its rows, once. A block stored as
+	// invalid, asked for or inherited from an invalid parent, takes no rows, so it counts nothing,
+	// whatever an earlier attempt of the same store did with them.
+	if !storedInvalid {
+		if laneRowsRefused {
+			lane.CountRowInsertFailure(storeBlockOptions.LaneMetricsBlock())
+		}
 
-	if laneRows != nil {
-		laneRows.observe()
+		if laneRows != nil {
+			laneRows.observe()
+		}
 	}
 
 	// Cache the timestamp only once the row is committed. Doing it inside storeBlock

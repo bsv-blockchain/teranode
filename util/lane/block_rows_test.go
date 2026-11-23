@@ -285,5 +285,5 @@ func BenchmarkLaneGateBuild(b *testing.B) {
 
 // The reasons a block goes without rows are label values operators query; they stay as they are.
 func TestMissingBitmapsReasonsAreDistinctLabels(t *testing.T) {
-	require.Equal(t, []string{"absent", "unreadable", "timed_out"}, []string{MissingBitmapsAbsent, MissingBitmapsUnreadable, MissingBitmapsTimedOut})
+	require.Equal(t, []string{"absent", "unreadable", "timed_out", "write_failed"}, []string{MissingBitmapsAbsent, MissingBitmapsUnreadable, MissingBitmapsTimedOut, MissingBitmapsWriteFailed})
 }
