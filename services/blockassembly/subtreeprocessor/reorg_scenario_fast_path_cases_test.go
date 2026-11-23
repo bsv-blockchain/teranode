@@ -200,3 +200,70 @@ func countHash(hashes []chainhash.Hash, h chainhash.Hash) int {
 
 	return n
 }
+
+// Plan A1 row 6: an empty forward block, first and last. Its step creates the block's coinbase and
+// returns before resetSubtreeState, so it neither drains nor resizes the subtrees.
+//
+// Finding (design item: empty and empty-last forward block): the subtree size is set by the LAST
+// forward step, which resets with the configured size; every earlier step, and the move-back, build
+// 1,048,576-leaf subtrees. With an empty last block no step does, so the reorg ends with a single
+// 1,048,576-leaf open subtree where the configured size is smaller. Pinned as it is today; the fast
+// path must match it or the finding must be fixed first.
+func TestReorgScenario_SlowPathWithEmptyForwardBlocks(t *testing.T) {
+	const moveBackSize = 1024 * 1024
+
+	for _, tc := range []struct {
+		name          string
+		first, last   bool
+		forwardBlocks int
+		wantSize      int
+	}{
+		{"empty first", true, false, 2, 64},
+		{"empty first, one block with winners", true, false, 1, 64},
+		{"empty last", false, true, 2, moveBackSize},
+		{"empty last, one block with winners", false, true, 1, moveBackSize},
+		{"empty first and last", true, true, 2, moveBackSize},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := smallScenarioConfig()
+			cfg.forwardBlocks = tc.forwardBlocks
+			cfg.emptyForwardFirst, cfg.emptyForwardLast = tc.first, tc.last
+			sc := newReorgScenario(t, cfg)
+
+			require.Len(t, sc.forward, tc.forwardBlocks+btoi(tc.first)+btoi(tc.last))
+
+			if tc.first {
+				require.Empty(t, sc.forward[0].Subtrees)
+			}
+
+			if tc.last {
+				require.Empty(t, sc.forward[len(sc.forward)-1].Subtrees)
+			}
+
+			require.NoError(t, sc.run(t))
+
+			require.Equal(t, sc.forward[len(sc.forward)-1].Header.Hash(), sc.stp.GetCurrentBlockHeader().Hash())
+			requireAssemblyValid(t, sc.stp, sc.onChainAfter)
+			require.Equal(t, sc.expectedOrderAfter(), txHashes(assemblyNodes(sc.stp)))
+			require.Equal(t, len(sc.expectedOrderAfter()), sc.stp.GetCurrentTxMap().Length())
+			require.Zero(t, sc.stp.GetRemoveMapLength())
+			require.ElementsMatch(t, sc.expectedMarkFalse(), sc.utxo.marked(false))
+			require.ElementsMatch(t, sc.winnerNotLost(), sc.utxo.marked(true))
+
+			for _, block := range sc.forward {
+				_, err := sc.utxo.Get(t.Context(), block.CoinbaseTx.TxIDChainHash())
+				require.NoError(t, err, "every forward block's coinbase is created, an empty block's too")
+			}
+
+			require.Equal(t, tc.wantSize, sc.stp.GetCurrentSubtree().Size(), "the subtree size the reorg leaves behind")
+		})
+	}
+}
+
+func btoi(b bool) int {
+	if b {
+		return 1
+	}
+
+	return 0
+}

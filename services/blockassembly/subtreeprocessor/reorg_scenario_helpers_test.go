@@ -104,6 +104,13 @@ type reorgScenarioConfig struct {
 	// copy of a survivor, at its first position, and drops both copies of a hit.
 	duplicateInPending int
 
+	// emptyForwardFirst and emptyForwardLast add a forward block without subtrees before the
+	// forwardBlocks blocks that hold the winners, and after them. An empty forward block only creates
+	// its coinbase: it returns before resetSubtreeState, so it leaves the assembly and the subtree
+	// size as they were.
+	emptyForwardFirst bool
+	emptyForwardLast  bool
+
 	// skipStoreMarks counts the longest-chain marks instead of sending them to the UTXO store, and
 	// creates no raw D1 records. The reorgscale suite sets it to time the processor's phases; the
 	// marks are measured on their own against Aerospike.
@@ -590,11 +597,39 @@ func (sc *reorgScenario) buildChain(t testing.TB) {
 	require.NoError(t, sc.client.AddBlock(ctx, sc.lost, "", blockchainoptions.WithMinedSet(true)))
 
 	parent := sc.genesis
-	sc.forward = make([]*model.Block, 0, sc.cfg.forwardBlocks)
+	total := sc.cfg.forwardBlocks
+	sc.forward = make([]*model.Block, 0, total+2)
 
-	for i := range sc.cfg.forwardBlocks {
-		lo, hi := i*len(sc.winnerIDs)/sc.cfg.forwardBlocks, (i+1)*len(sc.winnerIDs)/sc.cfg.forwardBlocks
-		block := sc.storeBlock(t, uint32(i+1), childHeader(parent, nonce+uint32(i)+1), sc.winnerIDs[lo:hi], false)
+	if sc.cfg.emptyForwardFirst {
+		total++
+	}
+
+	if sc.cfg.emptyForwardLast {
+		total++
+	}
+
+	withWinners := 0
+
+	for i := range total {
+		header := childHeader(parent, nonce+uint32(i)+1)
+
+		var block *model.Block
+
+		if (sc.cfg.emptyForwardFirst && i == 0) || (sc.cfg.emptyForwardLast && i == total-1) {
+			block = &model.Block{
+				Height:           uint32(i + 1), //nolint:gosec // small index
+				Header:           header,
+				CoinbaseTx:       scenarioCoinbase(t, uint32(i+1), uint64(header.Nonce), 1), //nolint:gosec // small index
+				TransactionCount: 1,
+				SizeInBytes:      200,
+				Subtrees:         []*chainhash.Hash{},
+			}
+		} else {
+			lo, hi := withWinners*len(sc.winnerIDs)/sc.cfg.forwardBlocks, (withWinners+1)*len(sc.winnerIDs)/sc.cfg.forwardBlocks
+			block = sc.storeBlock(t, uint32(i+1), header, sc.winnerIDs[lo:hi], false) //nolint:gosec // small index
+			withWinners++
+		}
+
 		require.NoError(t, sc.client.AddBlock(ctx, block, "", blockchainoptions.WithMinedSet(true)))
 		sc.forward = append(sc.forward, block)
 		parent = block.Header
