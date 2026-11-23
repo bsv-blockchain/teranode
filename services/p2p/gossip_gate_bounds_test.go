@@ -284,6 +284,62 @@ func TestLiveConnSnapshot_WalksAreThrottled(t *testing.T) {
 	require.Equal(t, []string{"/ip4/10.0.0.2/tcp/9905"}, addrs)
 }
 
+// A lookup that waited on rebuildMu must judge the view it finds against the
+// time it acquired the lock, not the time it started waiting. Otherwise a view
+// published while it waited looks younger than it is, and a miss is answered
+// "not live" from a view already past liveConnMissRefreshInterval instead of
+// rebuilding and finding a neighbour that connected in the meantime.
+func TestLiveConnAddrs_JudgesViewAgeAfterWaitingForRebuildLock(t *testing.T) {
+	const wait = liveConnMissRefreshInterval + 200*time.Millisecond
+
+	for attempt := 0; attempt < 3; attempt++ {
+		s, _ := newServerWithLocalRegistry(t)
+		neighbour := mustNewPeerID(t)
+		client := &countingP2PClient{}
+		client.peers = []p2pMessageBus.PeerInfo{{ID: neighbour.String(), Addrs: []string{"/ip4/10.0.0.1/tcp/9905"}}}
+		s.P2PClient = client
+
+		// Hold the rebuild lock as a slow walk would. With no view yet, the
+		// lookup cannot decide and queues on the lock.
+		s.liveConns.rebuildMu.Lock()
+
+		type result struct {
+			live    bool
+			elapsed time.Duration
+		}
+
+		done := make(chan result, 1)
+
+		go func() {
+			start := time.Now()
+			_, live := s.liveConnAddrs(neighbour.String())
+			done <- result{live: live, elapsed: time.Since(start)}
+		}()
+
+		time.Sleep(100 * time.Millisecond)
+
+		// The slow walk publishes a view that misses the neighbour, then
+		// holds the lock past liveConnMissRefreshInterval.
+		s.liveConns.view.Store(&liveConnView{addrs: map[string][]string{}, takenAt: time.Now()})
+		time.Sleep(wait)
+		s.liveConns.rebuildMu.Unlock()
+
+		r := <-done
+		if r.elapsed < wait/2 {
+			// The goroutine ran its first lookup after the view was stored
+			// and never queued on the lock; the scenario did not happen.
+			continue
+		}
+
+		require.True(t, r.live, "a view older than liveConnMissRefreshInterval at lock acquisition must be rebuilt on a miss")
+		require.Equal(t, int32(1), client.walks.Load())
+
+		return
+	}
+
+	t.Fatal("lookup never queued on rebuildMu in three attempts")
+}
+
 // A ban applied locally while a registry listing was in flight must survive
 // the listing being installed without it.
 func TestBannedPeerMirror_LocalBanSurvivesStraddlingRefresh(t *testing.T) {
