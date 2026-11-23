@@ -4,7 +4,6 @@ import (
 	"context"
 	"slices"
 	"sync"
-	"sync/atomic"
 
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
 	"github.com/bsv-blockchain/teranode/errors"
@@ -78,14 +77,14 @@ type StoreQueue struct {
 
 // storeItem is a request in the queue, until its store is settled or it is dropped.
 type storeItem struct {
-	req      NewSubtreeRequest
-	bytes    uint64
-	stale    bool
-	charged  bool
-	done     bool
-	dropped  bool
-	taken    bool        // a worker has it
-	announce atomic.Bool // announce on success, whatever SkipNotification says
+	req     NewSubtreeRequest
+	bytes   uint64
+	stale   bool
+	charged bool
+	done    bool
+	dropped bool
+	taken   bool // a worker has it
+	wants   bool // announce on success, whatever SkipNotification says; under the queue's lock
 
 	// first is closed once ErrChan was answered, with the error in firstErr; result is the request's
 	// Result. A reorg that finds its subtree already sent waits on these instead of sending it again.
@@ -109,8 +108,7 @@ func (q *StoreQueue) Push(req NewSubtreeRequest) {
 
 	it.result = req.Result
 	req.answered = func(err error) { q.answered(it, err) }
-	req.settled = func() { q.settled(it) }
-	req.wantAnnounce = it.announce.Load
+	req.settled = func(ok bool) bool { return q.settled(it, ok) }
 	it.req = req
 
 	q.mu.Lock()
@@ -376,7 +374,8 @@ func (q *StoreQueue) queued(st *subtreepkg.Subtree) bool {
 // AnnounceOnSuccess makes the outstanding request for st announce its subtree when it is stored,
 // whatever its SkipNotification says, and reports whether there was one. A fork reorg's forward steps
 // send silently and the reorg announces after its marks, which a subtree still being written, or
-// retried, would otherwise miss.
+// retried, would otherwise miss. When it reports false the request has settled, and the caller
+// announces a stored subtree itself.
 func (q *StoreQueue) AnnounceOnSuccess(st *subtreepkg.Subtree) bool {
 	q.mu.Lock()
 	defer q.mu.Unlock()
@@ -386,9 +385,7 @@ func (q *StoreQueue) AnnounceOnSuccess(st *subtreepkg.Subtree) bool {
 		return false
 	}
 
-	for _, it := range items {
-		it.announce.Store(true)
-	}
+	items[len(items)-1].wants = true
 
 	return true
 }
@@ -426,17 +423,21 @@ func (q *StoreQueue) answered(it *storeItem, err error) {
 	}
 }
 
-// settled ends the request's charge, and admits what now fits.
-func (q *StoreQueue) settled(it *storeItem) {
+// settled ends the request's charge, and admits what now fits. It reports whether the request was
+// stored (ok) and was told to announce its subtree (AnnounceOnSuccess): the caller announces it, and
+// since the flag is read and the request unregistered under one lock, a request is announced either
+// here or by the announce-only request of a reorg that found it stored, never both or neither.
+func (q *StoreQueue) settled(it *storeItem, ok bool) (announce bool) {
 	q.mu.Lock()
 
 	if it.done {
 		q.mu.Unlock()
 
-		return
+		return false
 	}
 
 	it.done = true
+	announce, it.wants = ok && it.wants, false
 
 	if it.charged {
 		q.held -= it.bytes
@@ -450,6 +451,8 @@ func (q *StoreQueue) settled(it *storeItem) {
 	q.mu.Unlock()
 
 	finishDropped(dropped)
+
+	return announce
 }
 
 // finishDropped answers the callers of dropped requests: ErrChan with nil, as a retry that is still
@@ -492,20 +495,14 @@ func (r NewSubtreeRequest) Answered(err error) {
 	}
 }
 
-// WantsAnnounce reports whether the queue was told to announce the request's subtree once it is stored.
-func (r NewSubtreeRequest) WantsAnnounce() bool { return r.wantAnnounce != nil && r.wantAnnounce() }
+// SettledFunc is the request's settle hook, or nil without a queue, so a request that has none costs a
+// holder of it nothing. It takes whether the store succeeded and reports whether to announce.
+func (r NewSubtreeRequest) SettledFunc() func(ok bool) bool { return r.settled }
 
-// WantsAnnounceFunc is WantsAnnounce as a function, or nil without a queue.
-func (r NewSubtreeRequest) WantsAnnounceFunc() func() bool { return r.wantAnnounce }
-
-// SettledFunc is Settled as a function, or nil without a queue, so a request that has none costs a
-// holder of it nothing.
-func (r NewSubtreeRequest) SettledFunc() func() { return r.settled }
-
-// Settled is called when the request's store is settled, stored or failed for good: the queue
-// stops counting its bytes. Without a queue it does nothing.
+// Settled is called when the request's store is settled without success (tests, aborted paths): the
+// queue stops counting its bytes. Without a queue it does nothing.
 func (r NewSubtreeRequest) Settled() {
 	if r.settled != nil {
-		r.settled()
+		r.settled(false)
 	}
 }

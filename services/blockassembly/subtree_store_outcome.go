@@ -35,15 +35,12 @@ type subtreeStoreOutcome struct {
 	// skip is the request's SkipNotification, honoured by a late announcement.
 	skip bool
 
-	// wants is the request's WantsAnnounce: a fork reorg switches a silent request to announcing.
-	wants func() bool
-
 	// late is the notification sender's input for the announcement of a subtree a retry stored.
 	// Nil when no sender runs, in which case the announcement is sent directly.
 	late chan<- chainhash.Hash
 
 	// settled is the request's Settled: the store queue's charge for it ends with its store.
-	settled func()
+	settled func(ok bool) bool
 
 	// set is the stored set the settled request reports to, with the request's root, when
 	// blockassembly_storedPrefixTemplate is on; nil otherwise.
@@ -54,7 +51,7 @@ type subtreeStoreOutcome struct {
 }
 
 func newSubtreeStoreOutcome(request subtreeprocessor.NewSubtreeRequest, metaApplicable bool, late chan<- chainhash.Hash) *subtreeStoreOutcome {
-	o := &subtreeStoreOutcome{result: request.Result, skip: request.SkipNotification, late: late, pending: 1, settled: request.SettledFunc(), wants: request.WantsAnnounceFunc()}
+	o := &subtreeStoreOutcome{result: request.Result, skip: request.SkipNotification, late: late, pending: 1, settled: request.SettledFunc()}
 	if metaApplicable {
 		o.pending++
 	} else {
@@ -94,8 +91,15 @@ func (o *subtreeStoreOutcome) settle(apply func(r *subtreeprocessor.StoreResult)
 			}
 		}
 
-		if o.settled != nil {
-			o.settled()
+		// a silent request a fork reorg asked to announce is announced here, when it is stored,
+		// whichever path stored it: the retry paths of a meta or of a subtree found stored are silent
+		if o.settled != nil && o.settled(o.res.OK()) && o.skip && o.late != nil {
+			go func(root chainhash.Hash, late chan<- chainhash.Hash) {
+				select {
+				case late <- root:
+				case <-time.After(time.Minute):
+				}
+			}(o.root, o.late)
 		}
 	}
 }
@@ -207,7 +211,7 @@ func (r *subtreeRetrySend) exhausted() {
 // announcements of subtrees stored later.
 func (ba *BlockAssembly) announceLate(ctx context.Context, subtreeRetry *subtreeRetrySend) {
 	if o := subtreeRetry.outcome; o != nil {
-		if o.skip && (o.wants == nil || !o.wants()) {
+		if o.skip {
 			return
 		}
 

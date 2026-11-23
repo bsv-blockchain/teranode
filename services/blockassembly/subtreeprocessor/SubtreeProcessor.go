@@ -101,10 +101,8 @@ type NewSubtreeRequest struct {
 
 	superseded *atomic.Bool // set by reset() when the state this request was built from is retired; see Superseded
 
-	answered func(err error) // set by a StoreQueue: see Answered
-	settled  func()          // set by a StoreQueue: see Settled
-
-	wantAnnounce func() bool // set by a StoreQueue: see WantsAnnounce
+	answered func(err error)    // set by a StoreQueue: see Answered
+	settled  func(ok bool) bool // set by a StoreQueue: see Settled
 }
 
 // moveBlockRequest represents a request to move a block in the chain.

@@ -251,21 +251,53 @@ func TestStoreQueueListener_WithoutAQueueTheOutcomeHoldsNoSettledHook(t *testing
 	require.Nil(t, newSubtreeStoreOutcome(subtreeprocessor.NewSubtreeRequest{}, true, nil).settled)
 }
 
-// A fork reorg's forward steps send silently. A subtree whose first write failed is still being
-// retried when the reorg announces: it is announced when the retry stores it.
-func TestStoreQueueListener_ARetriedSubtreeIsAnnouncedOnceTheReorgAsksForIt(t *testing.T) {
-	server, q, p := startQueueListener(t)
+// A fork reorg's forward steps send silently. A subtree that is not stored when the reorg asks for its
+// announcement is announced once, when it settles stored, whichever path stored it.
+func TestStoreQueueListener_ASilentRequestIsAnnouncedOnceWhenItSettlesAfterTheReorgAsked(t *testing.T) {
+	for name, run := range map[string]func(t *testing.T, server *BlockAssembly, fault *blobfault.Store, subtree *subtreepkg.Subtree, ask func()){
+		// the subtree is written, the meta is not: the meta retry is silent
+		"meta retry": func(t *testing.T, server *BlockAssembly, fault *blobfault.Store, subtree *subtreepkg.Subtree, ask func()) {
+			fault.OnSet(subtree.RootHash()[:], fileformat.FileTypeSubtreeMeta, blobfault.Rule{FailTimes: blobfault.Always})
+			require.Eventually(t, func() bool { return exists(t, server.subtreeStore, subtree, fileformat.FileTypeSubtree) }, 5*time.Second, 5*time.Millisecond)
+			ask()
+			fault.OnSet(subtree.RootHash()[:], fileformat.FileTypeSubtreeMeta, blobfault.Rule{})
+		},
+		// the write failed, then the subtree turned up in the store: the retry finds it stored and is silent
+		"retry finds it stored": func(t *testing.T, server *BlockAssembly, fault *blobfault.Store, subtree *subtreepkg.Subtree, ask func()) {
+			fault.OnSet(subtree.RootHash()[:], fileformat.FileTypeSubtree, blobfault.Rule{FailTimes: blobfault.Always})
+			require.Eventually(t, func() bool { return fault.SetCalls(subtree.RootHash()[:], fileformat.FileTypeSubtree) > 0 }, 5*time.Second, 5*time.Millisecond)
 
-	fault := blobfault.New(server.subtreeStore)
-	server.subtreeStore = fault
+			bytes, err := subtree.Serialize()
+			require.NoError(t, err)
+			require.NoError(t, fault.Store.Set(t.Context(), subtree.RootHash()[:], fileformat.FileTypeSubtree, bytes))
 
-	subtree, txMap := makeSubtree(t, 2)
-	fault.OnSet(subtree.RootHash()[:], fileformat.FileTypeSubtree, blobfault.Rule{FailTimes: 2})
-	result := make(chan subtreeprocessor.StoreResult, 1)
+			ask()
+			fault.OnSet(subtree.RootHash()[:], fileformat.FileTypeSubtree, blobfault.Rule{})
+		},
+		"retry": func(t *testing.T, server *BlockAssembly, fault *blobfault.Store, subtree *subtreepkg.Subtree, ask func()) {
+			fault.OnSet(subtree.RootHash()[:], fileformat.FileTypeSubtree, blobfault.Rule{FailTimes: blobfault.Always})
+			require.Eventually(t, func() bool { return fault.SetCalls(subtree.RootHash()[:], fileformat.FileTypeSubtree) > 0 }, 5*time.Second, 5*time.Millisecond)
+			ask()
+			fault.OnSet(subtree.RootHash()[:], fileformat.FileTypeSubtree, blobfault.Rule{})
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			server, q, p := startQueueListener(t)
 
-	q.Push(subtreeprocessor.NewSubtreeRequest{Subtree: subtree, ParentTxMap: txMap, SkipNotification: true, ErrChan: make(chan error, 1), Result: result})
-	require.True(t, q.AnnounceOnSuccess(subtree), "the request is outstanding")
+			fault := blobfault.New(server.subtreeStore)
+			server.subtreeStore = fault
+			setForTest(t, &subtreeRetryLimit, 100000)
 
-	require.True(t, awaitResult(t, result).OK())
-	p.requireAnnounced(t, subtree.RootHash())
+			subtree, txMap := makeSubtree(t, 2)
+			subtree.RootHash() // cached before the workers read it
+			result := make(chan subtreeprocessor.StoreResult, 1)
+
+			q.Push(subtreeprocessor.NewSubtreeRequest{Subtree: subtree, ParentTxMap: txMap, SkipNotification: true, ErrChan: make(chan error, 1), Result: result})
+
+			run(t, server, fault, subtree, func() { require.True(t, q.AnnounceOnSuccess(subtree), "the request is outstanding") })
+
+			require.True(t, awaitResult(t, result).OK())
+			p.requireAnnounced(t, subtree.RootHash())
+		})
+	}
 }

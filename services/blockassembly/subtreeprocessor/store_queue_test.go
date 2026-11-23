@@ -735,7 +735,7 @@ func TestStoreQueue_ASubtreeStillBeingStoredIsNotSentAgain(t *testing.T) {
 
 	first, _, ok := q.Take(ctx)
 	require.True(t, ok)
-	require.True(t, first.WantsAnnounce(), "and it announces once it is stored, though the forward step sent it silently")
+	require.True(t, first.SettledFunc()(true), "and it announces once it is stored, though the forward step sent it silently")
 
 	stp.sendChainedSubtreeAgain(1, chainRoot(stp, 1), time.Now())
 	require.Equal(t, before-1, q.Len(), "the watch did not send a queued subtree again")
@@ -849,5 +849,41 @@ func TestStoreQueue_AFailedMoveForwardLeavesItsRestoredChainWanted(t *testing.T)
 		it := q.entry(st)
 		require.NotNil(t, it, "restored subtree %d has a request", i)
 		require.False(t, it.stale, "and it is wanted")
+	}
+}
+
+// With a deadline a request dropped a second time, after the reorg sent it again, fails the reorg.
+func TestStoreQueue_AReorgWaitingForARequestDroppedTwiceFailsWithADeadline(t *testing.T) {
+	q := NewStoreQueue(StoreRequestBytes(chainRequest(t, 1)))
+	set := NewStoredSet()
+	stp, _ := newStoredPrefixProcessor(t, 8, set, func(stp *SubtreeProcessor) { stp.storeQueue = q })
+	addStoredPrefixTxs(t, stp, 8*5)
+	require.GreaterOrEqual(t, len(stp.chainedSubtrees), 4)
+
+	done := make(chan error, 1)
+
+	go func() { done <- stp.awaitQueuedStores(context.Background(), "test", 10*time.Second) }()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	time.Sleep(200 * time.Millisecond)
+
+	first, _, ok := q.Take(ctx)
+	require.True(t, ok)
+	answerFromQueue(first, set, StoreResult{SubtreeStored: true, MetaNotApplicable: true})
+
+	require.Eventually(t, func() bool { return q.Len() > 0 && q.Held() > 0 }, 5*time.Second, 5*time.Millisecond)
+
+	second := stp.chainedSubtrees[1]
+	q.Stale(second) // dropped the first time
+	require.Eventually(t, func() bool { return q.entry(second) != nil }, 5*time.Second, 5*time.Millisecond, "the reorg sent it again")
+	q.Stale(second) // and the second time
+
+	select {
+	case err := <-done:
+		require.ErrorContains(t, err, "dropped twice")
+	case <-time.After(10 * time.Second):
+		t.Fatal("the reorg kept waiting for a request dropped twice")
 	}
 }

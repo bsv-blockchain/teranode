@@ -67,7 +67,15 @@ func (stp *SubtreeProcessor) awaitQueuedStores(ctx context.Context, caller strin
 				return err
 			}
 
-			if !dropped || resent {
+			if !dropped {
+				break
+			}
+
+			if resent {
+				if deadline > 0 {
+					return errors.NewStorageError("[%s] subtree %d was not stored: its request was dropped twice", caller, i)
+				}
+
 				break
 			}
 
@@ -149,11 +157,11 @@ func (stp *SubtreeProcessor) announceChainedSubtrees(ctx context.Context, caller
 		stored := stp.storedSet != nil && stp.storedSet.Has(*st.RootHash())
 
 		if !stored && stp.storeQueue.AnnounceOnSuccess(st) {
-			// it may have been stored while it was being marked
-			if stored = stp.storedSet != nil && stp.storedSet.Has(*st.RootHash()); !stored {
-				continue
-			}
+			continue // announced when it settles
 		}
+
+		// otherwise there is no request: stored, or settled since the check above
+		stored = stored || (stp.storedSet != nil && stp.storedSet.Has(*st.RootHash()))
 
 		req := NewSubtreeRequest{Subtree: st, AnnounceOnly: true}
 
@@ -201,8 +209,9 @@ func (stp *SubtreeProcessor) wantRestored(chained []*subtreepkg.Subtree) {
 
 // runDroppedCleanups runs the deletedTxs cleanups of the requests the queue dropped. It runs on the
 // processor goroutine, which is the one that unmaps a retired subtree, and closeRetiredSubtrees takes
-// a subtree's queued requests out, and runs their cleanups, before it unmaps it: a request for a
-// subtree that is closed holds no callback.
+// a subtree's queued requests out, and runs their cleanups, before it unmaps it: a request that no
+// worker has taken holds no callback for a closed subtree. A request a worker has taken can still
+// read its subtree after the close; that is the mmap hazard of bsv-blockchain/teranode#2287.
 func (stp *SubtreeProcessor) runDroppedCleanups() {
 	for _, cleanup := range stp.storeQueue.takeCleanups() {
 		cleanup()
