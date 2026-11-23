@@ -1002,6 +1002,38 @@ func TestAnnouncePeerMapLimits(t *testing.T) {
 			require.Empty(t, logger.warnsContaining("p2p_seen_hash_ttl"), "ttl %s", ttl)
 		}
 	})
+
+	t.Run("a coerced non-positive rejected-tx rate or burst says so", func(t *testing.T) {
+		tSettings := &settings.Settings{}
+		tSettings.P2P.RejectedTxPublishRate = 0
+		tSettings.P2P.RejectedTxPublishBurst = -1
+
+		logger := &recordingLogger{}
+		s := &Server{logger: logger}
+		s.applyPeerMapLimits(tSettings)
+
+		require.Equal(t, []string{fmt.Sprintf(
+			"[applyPeerMapLimits] p2p_rejected_tx_publish_rate=%d is not a usable rate; using the %d default — there is no unlimited mode",
+			0, defaultRejectedTxPublishRate)},
+			logger.infosContaining("p2p_rejected_tx_publish_rate"))
+
+		require.Equal(t, []string{fmt.Sprintf(
+			"[applyPeerMapLimits] p2p_rejected_tx_publish_burst=%d is not a usable burst; using the %d default — there is no unlimited mode",
+			-1, defaultRejectedTxPublishBurst)},
+			logger.infosContaining("p2p_rejected_tx_publish_burst"))
+	})
+
+	t.Run("a configured rejected-tx rate and burst stay quiet", func(t *testing.T) {
+		tSettings := &settings.Settings{}
+		tSettings.P2P.RejectedTxPublishRate = 1
+		tSettings.P2P.RejectedTxPublishBurst = 1
+
+		logger := &recordingLogger{}
+		s := &Server{logger: logger}
+		s.applyPeerMapLimits(tSettings)
+
+		require.Empty(t, logger.infosContaining("p2p_rejected_tx_publish"))
+	})
 }
 
 // TestCappedPeerMapFloodEvictsFlooderNotVictim pins the fair-share rule (issue

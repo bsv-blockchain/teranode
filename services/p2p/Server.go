@@ -918,8 +918,8 @@ func (s *Server) applyPeerMapLimits(tSettings *settings.Settings) {
 // enforcement", so an operator can reasonably set 0 expecting that and get a
 // bound they did not ask for. A silently-coerced value looks exactly like a
 // value that was never read, which is the bug this change just finished fixing.
-// The same holds for the seen-hash TTL raised to the publish window, so that is
-// announced too.
+// The same holds for the seen-hash TTL raised to the publish window and for a
+// non-positive rejected-tx egress rate or burst, so those are announced too.
 func (s *Server) announcePeerMapLimits(tSettings *settings.Settings, maxSize int) {
 	if tSettings.P2P.PeerMapMaxSize <= 0 {
 		s.logger.Infof("[applyPeerMapLimits] p2p_peer_map_max_size=%d is not a usable cap; using the %d default — there is no unbounded mode",
@@ -945,6 +945,16 @@ func (s *Server) announcePeerMapLimits(tSettings *settings.Settings, maxSize int
 	if ttl := tSettings.P2P.SeenHashTTL; ttl > 0 && ttl < seenHashPublishWindow {
 		s.logger.Warnf("[applyPeerMapLimits] p2p_seen_hash_ttl=%s is below the %s publish window; using %s for the block, subtree and rejected-tx dedup — a shorter TTL would expire entries before the window is consulted and switch the dedup off",
 			ttl, seenHashPublishWindow, seenHashPublishWindow)
+	}
+
+	if tSettings.P2P.RejectedTxPublishRate <= 0 {
+		s.logger.Infof("[applyPeerMapLimits] p2p_rejected_tx_publish_rate=%d is not a usable rate; using the %d default — there is no unlimited mode",
+			tSettings.P2P.RejectedTxPublishRate, defaultRejectedTxPublishRate)
+	}
+
+	if tSettings.P2P.RejectedTxPublishBurst <= 0 {
+		s.logger.Infof("[applyPeerMapLimits] p2p_rejected_tx_publish_burst=%d is not a usable burst; using the %d default — there is no unlimited mode",
+			tSettings.P2P.RejectedTxPublishBurst, defaultRejectedTxPublishBurst)
 	}
 }
 
