@@ -70,6 +70,27 @@ type reorgScenarioConfig struct {
 	// compaction; a scenario of a few thousand transactions needs it lowered to run that branch.
 	parallelThreshold int
 
+	// The removeMap knobs put transactions in the processor's removeMap before the reorg, the way
+	// Remove does for a transaction it cannot find yet. Each is a count; all four are disjoint:
+	//   - removeMapPending: synthetic pending transactions that are not hits and have no child
+	//   - removeMapHits: pending transactions the winners mined
+	//   - removeMapLost: lost-block transactions that are also pending (X), beyond the first
+	//     lostChildOfPending of them, which have a child that must stay valid
+	//   - removeMapD1: lost-block transactions that are neither pending nor in the winners
+	// The reorg consumes every entry: the transaction is absent from the assembly and the tx map
+	// afterwards, and a removed lost-block transaction is not marked off the longest chain, because
+	// that mark covers only what the assembly still holds.
+	removeMapPending int
+	removeMapHits    int
+	removeMapLost    int
+	removeMapD1      int
+
+	// lostChildOfPending is how many lost-block transactions C (in B, not in the winners, not
+	// pending) spend a lost-block transaction X that is also pending. They come first among the X
+	// transactions, so lostAlsoPending must cover them. See the order of today's slow path in
+	// TestReorgScenario_SlowPathPublishesLostChildBeforePendingParent.
+	lostChildOfPending int
+
 	// skipStoreMarks counts the longest-chain marks instead of sending them to the UTXO store, and
 	// creates no raw D1 records. The reorgscale suite sets it to time the processor's phases; the
 	// marks are measured on their own against Aerospike.
@@ -91,6 +112,11 @@ type reorgScenario struct {
 	winnerIDs  []scenarioID
 	rawD1Txs   []*bt.Tx
 
+	// removeIDs are the transactions put in the removeMap. droppedIDs are the ones the reorg must
+	// leave out of the assembly and out of the mark-false set, whatever took them out.
+	removeIDs  []scenarioID
+	droppedIDs []scenarioID
+
 	// extraParent is the second parent of a pending transaction that spends another scenario
 	// transaction, with the output it spends.
 	extraParent map[scenarioID]scenarioOutpoint
@@ -99,6 +125,7 @@ type reorgScenario struct {
 	lostSet    map[chainhash.Hash]struct{}
 	pendingSet map[chainhash.Hash]struct{}
 	winnerSet  map[chainhash.Hash]struct{}
+	droppedSet map[chainhash.Hash]struct{}
 }
 
 // scenarioID names a scenario transaction: its kind in the top four bits, its index below.
@@ -297,6 +324,8 @@ func newReorgScenario(t testing.TB, cfg reorgScenarioConfig) *reorgScenario {
 
 	require.LessOrEqual(t, hitCount, len(candidates))
 
+	sc.planRemoveMap(t, candidates[:hitCount])
+
 	// The winners, shuffled: B's shared part, the hits and the winner-only transactions.
 	sc.winnerIDs = make([]scenarioID, 0, lostShared+hitCount+cfg.winnerOnly)
 	for i := range lostShared {
@@ -317,6 +346,87 @@ func newReorgScenario(t testing.TB, cfg reorgScenarioConfig) *reorgScenario {
 	sc.buildProcessor(t)
 
 	return sc
+}
+
+// pickSpread returns n of ids, spread evenly through them, in order. It draws nothing from the
+// scenario's random source, so a scenario without the knob that calls it is unchanged.
+func pickSpread(ids []scenarioID, n int) []scenarioID {
+	out := make([]scenarioID, 0, n)
+
+	for j := range n {
+		out = append(out, ids[(2*j+1)*len(ids)/(2*n)])
+	}
+
+	return out
+}
+
+// planRemoveMap chooses the transactions the removeMap knobs name. hitPositions are the positions in
+// the pending set of the pending transactions the winners mined.
+func (sc *reorgScenario) planRemoveMap(t testing.TB, hitPositions []uint32) {
+	t.Helper()
+
+	cfg := sc.cfg
+	if cfg.removeMapPending+cfg.removeMapHits+cfg.removeMapLost+cfg.removeMapD1 == 0 {
+		return
+	}
+
+	isHit := make(map[scenarioID]struct{}, len(hitPositions))
+	for _, pos := range hitPositions {
+		isHit[sc.pendingIDs[pos]] = struct{}{}
+	}
+
+	hasChild := make(map[scenarioID]struct{}, len(sc.extraParent))
+	for _, edge := range sc.extraParent {
+		hasChild[edge.parent] = struct{}{}
+	}
+
+	var plain, hits []scenarioID
+
+	for _, id := range sc.pendingIDs {
+		if id.kind() != kindPending {
+			continue
+		}
+
+		if _, ok := isHit[id]; ok {
+			hits = append(hits, id)
+
+			continue
+		}
+
+		_, isChild := sc.extraParent[id]
+		_, isParent := hasChild[id]
+
+		if !isChild && !isParent {
+			plain = append(plain, id)
+		}
+	}
+
+	require.LessOrEqual(t, cfg.removeMapPending, len(plain), "removeMapPending needs pending transactions that are not hits and have no parent or child in the scenario")
+	require.LessOrEqual(t, cfg.removeMapHits, len(hits))
+
+	pending := pickSpread(plain, cfg.removeMapPending)
+	sc.removeIDs = append(sc.removeIDs, pending...)
+	sc.droppedIDs = append(sc.droppedIDs, pending...)
+	sc.removeIDs = append(sc.removeIDs, pickSpread(hits, cfg.removeMapHits)...)
+
+	// The X transactions a lost-block child spends come first, then the ones the removeMap takes.
+	xFirst := cfg.lostChildOfPending
+	require.LessOrEqual(t, xFirst+cfg.removeMapLost, cfg.lostAlsoPending, "removeMapLost needs lostAlsoPending transactions the lost-block children do not spend")
+
+	for j := range cfg.removeMapLost {
+		id := kindRawD1 | scenarioID(xFirst+j)
+		sc.removeIDs = append(sc.removeIDs, id)
+		sc.droppedIDs = append(sc.droppedIDs, id)
+	}
+
+	d1Base := cfg.lostAlsoPending + cfg.pendingSpendsLost + cfg.lostChildOfPending
+	require.LessOrEqual(t, d1Base+cfg.removeMapD1, len(sc.rawD1Txs), "removeMapD1 needs raw D1 transactions beyond the ones with a role")
+
+	for j := range cfg.removeMapD1 {
+		id := kindRawD1 | scenarioID(d1Base+j)
+		sc.removeIDs = append(sc.removeIDs, id)
+		sc.droppedIDs = append(sc.droppedIDs, id)
+	}
 }
 
 // addParentEdges picks the pending transactions that spend another scenario transaction: first the
@@ -545,6 +655,10 @@ func (sc *reorgScenario) buildProcessor(t testing.TB) {
 		require.NoError(t, stp.AddNodesDirectly(batch, true))
 	}
 
+	for _, id := range sc.removeIDs {
+		require.NoError(t, stp.removeMap.Put(sc.hash(id), 1))
+	}
+
 	sc.stp = stp
 }
 
@@ -621,6 +735,7 @@ func (sc *reorgScenario) ensureSets() {
 		sc.lostSet = sc.hashSet(sc.lostIDs)
 		sc.pendingSet = sc.hashSet(sc.pendingIDs)
 		sc.winnerSet = sc.hashSet(sc.winnerIDs)
+		sc.droppedSet = sc.hashSet(sc.droppedIDs)
 	})
 }
 
@@ -641,6 +756,13 @@ func (sc *reorgScenario) inPending(h chainhash.Hash) bool {
 func (sc *reorgScenario) inLost(h chainhash.Hash) bool {
 	sc.ensureSets()
 	_, ok := sc.lostSet[h]
+
+	return ok
+}
+
+func (sc *reorgScenario) dropped(h chainhash.Hash) bool {
+	sc.ensureSets()
+	_, ok := sc.droppedSet[h]
 
 	return ok
 }
@@ -678,12 +800,23 @@ func (sc *reorgScenario) winnerNotLost() []chainhash.Hash {
 }
 
 // expectedOrderAfter is the order design section 1 owes after the reorg: effective D1 (raw D1 minus
-// the pending transactions) in B's order, then P minus F in P's order.
+// the pending transactions) in B's order, then P minus F in P's order, without the transactions the
+// removeMap or the coinbase and conflict cleanup took out.
 func (sc *reorgScenario) expectedOrderAfter() []chainhash.Hash {
-	effectiveD1 := filter(sc.lostOrder(), func(h chainhash.Hash) bool { return !sc.inWinners(h) && !sc.inPending(h) })
+	effectiveD1 := filter(sc.lostOrder(), func(h chainhash.Hash) bool { return !sc.inWinners(h) && !sc.inPending(h) && !sc.dropped(h) })
 
-	return append(effectiveD1, filter(sc.pendingOrder(), func(h chainhash.Hash) bool { return !sc.inWinners(h) })...)
+	return append(effectiveD1, filter(sc.pendingOrder(), func(h chainhash.Hash) bool { return !sc.inWinners(h) && !sc.dropped(h) })...)
 }
+
+// expectedMarkFalse is what the reorg marks off the longest chain: raw D1, less the transactions that
+// left the assembly before the marks, which cover only what the assembly still holds.
+func (sc *reorgScenario) expectedMarkFalse() []chainhash.Hash {
+	return filter(sc.rawD1(), func(h chainhash.Hash) bool { return !sc.dropped(h) })
+}
+
+// expectedRemoveMapLength is what is left in the removeMap after the reorg: nothing the scenario
+// put there.
+func (sc *reorgScenario) expectedRemoveMapLength() int { return 0 }
 
 // onChainBefore reports whether h's outputs are on the chain ending in B. A lost-block transaction
 // that is also pending (the X case) counts as pending, not as mined.
