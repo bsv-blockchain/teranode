@@ -181,7 +181,7 @@ The Teranode RPC server provides a JSON-RPC interface for interacting with the n
 
         - `txid` (string, required): The transaction ID of the UTXO
         - `vout` (numeric, required): The output index
-        - `utxohash` (string, required): The UTXO commitment of the output, as a hex hash
+        - `utxohash` (string, required): The UTXO commitment of the output, as a 64-character hex hash
 
     - Returns: `null` on success; an error if hash parsing or the store operation fails
     - Note: Frozen UTXOs remain frozen until explicitly unfrozen
@@ -191,7 +191,7 @@ The Teranode RPC server provides a JSON-RPC interface for interacting with the n
 
         - `txid` (string, required): The transaction ID of the frozen UTXO
         - `vout` (numeric, required): The output index
-        - `utxohash` (string, required): The UTXO commitment of the output, as a hex hash
+        - `utxohash` (string, required): The UTXO commitment of the output, as a 64-character hex hash
 
     - Returns: `null` on success; an error if hash parsing or the store operation fails
 

@@ -1474,7 +1474,7 @@ Freezes a specific UTXO, preventing it from being spent. Admin-only.
 
 1. `txid` (string, required) - Transaction ID of the output to freeze
 2. `vout` (numeric, required) - Output index to freeze
-3. `utxohash` (string, required) - UTXO commitment of the output, as a hex hash. The
+3. `utxohash` (string, required) - UTXO commitment of the output, as a 64-character hex hash. The
    Aerospike backend verifies it against the stored output and rejects a mismatch; the
    SQL backend locates the output by `txid`/`vout` alone.
 
@@ -1515,7 +1515,7 @@ Unfreezes a previously frozen UTXO, allowing it to be spent. Admin-only.
 
 1. `txid` (string, required) - Transaction ID of the frozen output
 2. `vout` (numeric, required) - Output index to unfreeze
-3. `utxohash` (string, required) - UTXO commitment of the output, as a hex hash (see `freeze`)
+3. `utxohash` (string, required) - UTXO commitment of the output, as a 64-character hex hash (see `freeze`)
 
 **Returns:**
 

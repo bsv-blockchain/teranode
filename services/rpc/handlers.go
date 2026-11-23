@@ -2794,17 +2794,18 @@ func handleFreeze(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan s
 // backend verifies it against the stored output and a txid would never match,
 // while the SQL backend ignores it, so synthesising hid a backend divergence.
 //
-// A malformed hash returns rpcDecodeHexError naming that argument; a vout outside
-// the uint32 range returns ErrRPCInvalidParameter. Either way the store is not called.
+// A malformed hash returns rpcDecodeHexError naming that argument; a hash shorter
+// than 64 hex characters or a vout outside the uint32 range returns
+// ErrRPCInvalidParameter. Either way the store is not called.
 func (s *RPCServer) alertSpendFromArgs(txID string, vout int, utxoHash string) (*utxo.Spend, error) {
-	txHash, err := chainhash.NewHashFromStr(txID)
+	txHash, err := parseAlertHash("txid", txID)
 	if err != nil {
-		return nil, rpcDecodeHexError(txID)
+		return nil, err
 	}
 
-	hash, err := chainhash.NewHashFromStr(utxoHash)
+	hash, err := parseAlertHash("utxohash", utxoHash)
 	if err != nil {
-		return nil, rpcDecodeHexError(utxoHash)
+		return nil, err
 	}
 
 	outputIndex, err := safeconversion.IntToUint32(vout)
@@ -2813,6 +2814,25 @@ func (s *RPCServer) alertSpendFromArgs(txID string, vout int, utxoHash string) (
 	}
 
 	return &utxo.Spend{TxID: txHash, Vout: outputIndex, UTXOHash: hash}, nil
+}
+
+// parseAlertHash parses a txid or UTXO commitment argument of the alert RPCs.
+// chainhash.NewHashFromStr left-pads a short string, so "deadbeef" would name a
+// different record or commitment from the one the caller meant, and the Aerospike
+// freeze treats a missing record as success. Both are always full length, so a
+// short one is refused. Hex first and then length, as getrawtransaction does.
+func parseAlertHash(name, value string) (*chainhash.Hash, error) {
+	hash, err := chainhash.NewHashFromStr(value)
+	if err != nil {
+		return nil, rpcDecodeHexError(value)
+	}
+
+	if len(value) != chainhash.MaxHashStringSize {
+		return nil, bsvjson.NewRPCError(bsvjson.ErrRPCInvalidParameter,
+			fmt.Sprintf("%s must be of length %d (not %d)", name, chainhash.MaxHashStringSize, len(value)))
+	}
+
+	return hash, nil
 }
 
 // handleUnfreeze implements the unfreeze command, which removes the frozen status from
@@ -2903,9 +2923,9 @@ func handleReassign(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan
 		return nil, err
 	}
 
-	newUTXOHash, err := chainhash.NewHashFromStr(c.NewUTXOHash)
+	newUTXOHash, err := parseAlertHash("newutxohash", c.NewUTXOHash)
 	if err != nil {
-		return nil, rpcDecodeHexError(c.NewUTXOHash)
+		return nil, err
 	}
 
 	if err = s.utxoStore.ReAssignUTXO(ctx, oldSpend, &utxo.Spend{UTXOHash: newUTXOHash}, s.settings); err != nil {

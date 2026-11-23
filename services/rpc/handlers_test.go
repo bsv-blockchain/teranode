@@ -272,7 +272,7 @@ func TestUTXOAlertHandlers_VoutRange(t *testing.T) {
 		{
 			name: "freeze",
 			call: func(s *RPCServer, vout int) error {
-				_, err := handleFreeze(context.Background(), s, &bsvjson.FreezeCmd{TxID: hash, Vout: vout}, nil)
+				_, err := handleFreeze(context.Background(), s, &bsvjson.FreezeCmd{TxID: hash, Vout: vout, UTXOHash: hash}, nil)
 
 				return err
 			},
@@ -281,7 +281,7 @@ func TestUTXOAlertHandlers_VoutRange(t *testing.T) {
 		{
 			name: "unfreeze",
 			call: func(s *RPCServer, vout int) error {
-				_, err := handleUnfreeze(context.Background(), s, &bsvjson.UnfreezeCmd{TxID: hash, Vout: vout}, nil)
+				_, err := handleUnfreeze(context.Background(), s, &bsvjson.UnfreezeCmd{TxID: hash, Vout: vout, UTXOHash: hash}, nil)
 
 				return err
 			},
@@ -338,6 +338,129 @@ func TestUTXOAlertHandlers_VoutRange(t *testing.T) {
 				spends := h.spends(store)
 				require.Len(t, spends, 1)
 				require.Equal(t, uint32(vout), spends[0].Vout) // nolint:gosec
+			})
+		}
+	}
+}
+
+// TestUTXOAlertHandlers_HashArguments checks the txid and UTXO hash arguments of
+// freeze, unfreeze and reassign. A short hex string parses as a left-padded hash, so
+// it names a record or commitment the caller did not mean; it must be refused as a
+// parameter error before the store sees it. A full-length commitment must reach the
+// store unchanged, not be replaced by the txid.
+func TestUTXOAlertHandlers_HashArguments(t *testing.T) {
+	txid := strings.Repeat("ab", 32)
+	commitment := strings.Repeat("cd", 32)
+	newCommitment := strings.Repeat("ef", 32)
+
+	type args struct{ txid, utxoHash, newUTXOHash string }
+
+	handlers := []struct {
+		name   string
+		call   func(s *RPCServer, a args) error
+		spends func(r *voutRecordingUtxoStore) []*utxo.Spend
+		// fields lists which arguments the handler takes, in the order the tests vary them.
+		fields []string
+	}{
+		{
+			name: "freeze",
+			call: func(s *RPCServer, a args) error {
+				_, err := handleFreeze(context.Background(), s, &bsvjson.FreezeCmd{TxID: a.txid, Vout: 1, UTXOHash: a.utxoHash}, nil)
+
+				return err
+			},
+			spends: func(r *voutRecordingUtxoStore) []*utxo.Spend { return r.freezeSpends },
+			fields: []string{"txid", "utxohash"},
+		},
+		{
+			name: "unfreeze",
+			call: func(s *RPCServer, a args) error {
+				_, err := handleUnfreeze(context.Background(), s, &bsvjson.UnfreezeCmd{TxID: a.txid, Vout: 1, UTXOHash: a.utxoHash}, nil)
+
+				return err
+			},
+			spends: func(r *voutRecordingUtxoStore) []*utxo.Spend { return r.unfreezeSpends },
+			fields: []string{"txid", "utxohash"},
+		},
+		{
+			name: "reassign",
+			call: func(s *RPCServer, a args) error {
+				_, err := handleReassign(context.Background(), s, &bsvjson.ReassignCmd{
+					OldTxID: a.txid, OldVout: 1, OldUTXOHash: a.utxoHash, NewUTXOHash: a.newUTXOHash,
+				}, nil)
+
+				return err
+			},
+			spends: func(r *voutRecordingUtxoStore) []*utxo.Spend { return r.reassignSpends },
+			fields: []string{"txid", "utxohash", "newutxohash"},
+		},
+	}
+
+	valid := args{txid: txid, utxoHash: commitment, newUTXOHash: newCommitment}
+
+	with := func(field, value string) args {
+		a := valid
+
+		switch field {
+		case "txid":
+			a.txid = value
+		case "utxohash":
+			a.utxoHash = value
+		case "newutxohash":
+			a.newUTXOHash = value
+		}
+
+		return a
+	}
+
+	newServer := func() (*RPCServer, *voutRecordingUtxoStore) {
+		store := &voutRecordingUtxoStore{}
+
+		return &RPCServer{
+			logger:    newCapturingLogger(),
+			settings:  &settings.Settings{ChainCfgParams: &chaincfg.MainNetParams},
+			utxoStore: store,
+		}, store
+	}
+
+	for _, h := range handlers {
+		t.Run(h.name+" passes the supplied commitment to the store", func(t *testing.T) {
+			s, store := newServer()
+
+			require.NoError(t, h.call(s, valid))
+
+			spends := h.spends(store)
+			require.Len(t, spends, 1)
+			require.Equal(t, txid, spends[0].TxID.String())
+			require.Equal(t, commitment, spends[0].UTXOHash.String(), "the commitment must be the caller's utxohash, not the txid")
+		})
+
+		for _, field := range h.fields {
+			for _, short := range []string{"", "0", "deadbeef", strings.Repeat("ab", 31)} {
+				t.Run(fmt.Sprintf("%s rejects a %d-character %s", h.name, len(short), field), func(t *testing.T) {
+					s, store := newServer()
+
+					err := h.call(s, with(field, short))
+					require.Error(t, err)
+
+					var rpcErr *bsvjson.RPCError
+					require.ErrorAs(t, err, &rpcErr)
+					require.Equal(t, bsvjson.ErrRPCInvalidParameter, rpcErr.Code)
+					require.Contains(t, rpcErr.Message, field)
+					require.Zero(t, store.calls())
+				})
+			}
+
+			t.Run(fmt.Sprintf("%s rejects a non-hex %s", h.name, field), func(t *testing.T) {
+				s, store := newServer()
+
+				err := h.call(s, with(field, strings.Repeat("zz", 32)))
+				require.Error(t, err)
+
+				var rpcErr *bsvjson.RPCError
+				require.ErrorAs(t, err, &rpcErr)
+				require.Equal(t, bsvjson.ErrRPCDecodeHexString, rpcErr.Code)
+				require.Zero(t, store.calls())
 			})
 		}
 	}
