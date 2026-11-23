@@ -12,9 +12,10 @@ import (
 // and a subtree boundary between the two lets a miner be given the child without the parent.
 //
 // A held-back transaction is emitted right after the last of its parents, so the pending
-// transactions keep their relative order. A held-back transaction's own children wait for it. The
-// maps hold the pending transactions that came from the block and the held-back ones, not the
-// pending set.
+// transactions keep their relative order. A held-back transaction's own children wait for it, and
+// so does a pending transaction that spends one: while anything is held back, the pending
+// transactions are checked too (appendPending). The maps hold the kept block transactions and the
+// held-back ones, not the pending set.
 //
 // It relies on a block listing a parent before its child, which block validation enforces.
 type heldChildren struct {
@@ -23,6 +24,10 @@ type heldChildren struct {
 	waiting   map[chainhash.Hash][]int
 	nodes     []subtreepkg.Node
 	remaining []int // per held-back node, the parents not emitted yet
+
+	// unreleased is how many held-back nodes are still waiting. At zero the pending transactions
+	// pass straight through, without a tx map lookup.
+	unreleased int
 }
 
 func newHeldChildren() *heldChildren {
@@ -49,6 +54,7 @@ func (h *heldChildren) hold(node subtreepkg.Node, parents []chainhash.Hash) bool
 			idx = len(h.nodes)
 			h.nodes = append(h.nodes, node)
 			h.remaining = append(h.remaining, 0)
+			h.unreleased++
 		}
 
 		if n := len(children); n > 0 && children[n-1] == idx {
@@ -63,9 +69,25 @@ func (h *heldChildren) hold(node subtreepkg.Node, parents []chainhash.Hash) bool
 		return false
 	}
 
-	h.waiting[node.Hash] = nil
+	// A pending node can already have children waiting for it.
+	if _, ok := h.waiting[node.Hash]; !ok {
+		h.waiting[node.Hash] = nil
+	}
 
 	return true
+}
+
+// appendPending appends a previous pending node to dst, unless it spends a held-back node, and then
+// releases what the node frees. parents gives the node's parents from the tx map.
+func (h *heldChildren) appendPending(dst []subtreepkg.Node, node subtreepkg.Node,
+	parents func(chainhash.Hash) (*subtreepkg.TxInpoints, bool)) []subtreepkg.Node {
+	if h.unreleased > 0 {
+		if inpoints, ok := parents(node.Hash); ok && inpoints != nil && h.hold(node, inpoints.ParentTxHashes) {
+			return dst
+		}
+	}
+
+	return h.release(append(dst, node), node.Hash)
 }
 
 // release appends to dst every held-back transaction whose last parent is hash, and then whatever
@@ -87,6 +109,7 @@ func (h *heldChildren) release(dst []subtreepkg.Node, hash chainhash.Hash) []sub
 		}
 
 		dst = append(dst, h.nodes[idx])
+		h.unreleased--
 
 		queue = append(queue, h.waiting[h.nodes[idx].Hash]...)
 		delete(h.waiting, h.nodes[idx].Hash)
