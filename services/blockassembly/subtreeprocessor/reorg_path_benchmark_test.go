@@ -54,6 +54,10 @@ func BenchmarkReorgPath(b *testing.B) {
 // after the reorg has answered (the reorgDrain op), which is zero while the drain is still part of the
 // reorg. ns/pending_tx covers both, and the intake generator's own shutdown.
 func BenchmarkReorgPathUnderIntake(b *testing.B) {
+	if testing.Short() {
+		b.Skip("three intake rates; the benchmark-compare job runs with -short")
+	}
+
 	cfg := reorgPathBenchConfig(256<<10, 0.3, false)
 
 	for _, tps := range []int{300_000, 750_000, 1_300_000} {

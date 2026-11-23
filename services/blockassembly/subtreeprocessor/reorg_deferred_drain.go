@@ -12,8 +12,7 @@ import (
 // 0.3 to 1.3M tx/s it took 6 to 27 s of the critical path. The template is published after the marks, and
 // the queue that built up meanwhile is drained against the union of the winning blocks afterwards.
 //
-// The mark-false set is read before the drain, so a transaction drained after the commit is in none of the
-// marks: a lost transaction that is removed and queued again is no longer marked off the longest chain.
+// The mark-false set is read before the drain, so what the drain adds is in none of the marks.
 //
 // A failure of the drain cannot undo the reorg. It is logged and requests a reset, as the single-block
 // drain does, which reloads the unmined transactions from the store.
@@ -66,6 +65,10 @@ func (stp *SubtreeProcessor) runDeferredReorgDrain(ctx context.Context) {
 	defer stp.setCurrentRunningState(stp.GetCurrentRunningState())
 
 	stp.setCurrentRunningState(StateDequeue)
+
+	if drainStartHook != nil {
+		drainStartHook()
+	}
 
 	defer stp.startPhases("reorgDrain")()
 

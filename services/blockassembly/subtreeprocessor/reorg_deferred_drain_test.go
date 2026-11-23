@@ -266,3 +266,61 @@ func TestReorgScenario_FastPathFiltersALateBatchAgainstTheRetainedUnion(t *testi
 	require.Eventually(t, func() bool { return sc.stp.reorgFilter.Load() == nil }, 5*time.Second, time.Millisecond,
 		"the union is released once the queue is empty")
 }
+
+// Through the dispatcher: the reorg answers while the drain is still held, block assembly is told the
+// processor is busy with it, a mining candidate asked for meanwhile is answered at once, and the drain then
+// runs to the end.
+func TestReorgScenario_FastPathDispatcherAnswersBeforeTheDrainRuns(t *testing.T) {
+	sc, _ := newDeferredDrainScenario(t)
+
+	held, release := make(chan struct{}), make(chan struct{})
+
+	drainStartHook = func() {
+		close(held)
+		<-release
+	}
+
+	t.Cleanup(func() { drainStartHook = nil })
+
+	var arrivals []scenarioID
+
+	onFirstFastBeat(sc, func() { arrivals = queueIntake(t, sc, 0, 30) })
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	sc.stp.Start(ctx)
+
+	reorgDone := make(chan error, 1)
+	go func() { reorgDone <- sc.stp.Reorg([]*model.Block{sc.lost}, sc.forward) }()
+
+	select {
+	case <-held:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the drain never started")
+	}
+
+	select {
+	case err := <-reorgDone:
+		require.NoError(t, err, "the reorg answers while the drain is held")
+	case <-time.After(5 * time.Second):
+		t.Fatal("the reorg was held back by its drain")
+	}
+
+	require.True(t, sc.stp.DrainingAfterBlock(), "block assembly is told the drain is running")
+	require.EqualValues(t, 30, sc.stp.QueueLength(), "the queue is still full")
+
+	start := time.Now()
+	_ = sc.stp.GetIncompleteSubtreeMiningData(ctx)
+	require.Less(t, time.Since(start), time.Second, "a mining candidate asked for meanwhile is not held behind the drain")
+
+	close(release)
+
+	require.Eventually(t, func() bool { return !sc.stp.DrainingAfterBlock() && sc.stp.QueueLength() == 0 }, 5*time.Second, time.Millisecond)
+
+	hashes := sc.stp.GetTransactionHashes(ctx)
+
+	for _, id := range arrivals {
+		require.Contains(t, hashes, sc.hash(id))
+	}
+}
