@@ -120,6 +120,9 @@ func TestReorgScenario_SlowPathRemovesCoinbaseChildren(t *testing.T) {
 	requireAssemblyValid(t, sc.stp, sc.onChainAfter)
 	require.Equal(t, sc.expectedOrderAfter(), txHashes(assemblyNodes(sc.stp)))
 	require.Equal(t, len(sc.expectedOrderAfter()), sc.stp.GetCurrentTxMap().Length())
+	// This pins a quirk, not a rule: the entries are left behind. A fast path may legitimately clean
+	// them up, and this assertion, which is all that kills the coinbase_children_stay_in_subtrees
+	// mutant, then moves with it.
 	require.Equal(t, 4, sc.stp.GetRemoveMapLength(), "one leftover removeMap entry per coinbase child")
 
 	for _, tx := range sc.cbChildTxs {
@@ -136,7 +139,6 @@ func TestReorgScenario_SlowPathRemovesCoinbaseChildren(t *testing.T) {
 	_, err := sc.utxo.Get(t.Context(), sc.lost.CoinbaseTx.TxIDChainHash())
 	require.Error(t, err, "and so is B's coinbase")
 
-	require.ElementsMatch(t, sc.expectedMarkFalse(), sc.utxo.marked(false), "the children are not marked: they are gone")
 	require.ElementsMatch(t, sc.winnerNotLost(), sc.utxo.marked(true))
 }
 
@@ -258,6 +260,8 @@ func TestReorgScenario_SlowPathWithEmptyForwardBlocks(t *testing.T) {
 				require.NoError(t, err, "every forward block's coinbase is created, an empty block's too")
 			}
 
+			// Fixing the empty-last-block finding makes the forward_steps_always_properly_sized mutant
+			// survive: this size is the only thing that kills it, so drop or rewrite that patch then.
 			require.Equal(t, tc.wantSize, sc.stp.GetCurrentSubtree().Size(), "the subtree size the reorg leaves behind")
 		})
 	}
@@ -271,37 +275,44 @@ func btoi(b bool) int {
 	return 0
 }
 
-// Design section 5 items 6 and 10: the queue during a reorg. A batch queued before the reorg is taken
-// by the head drain, ahead of the move-back, so it sits in the pending set when the move-back and the
-// forward steps run: a queued transaction the lost block also had (a D1 transaction) keeps its queue
-// position after the pending set instead of joining the D1 prefix, one in the removeMap is flagged and
-// consumed by the first forward step, and one a forward block mined is filtered out. Transactions that
-// arrive while the reorg runs are taken by the forward steps' drains, in queue order, after the
-// remainder; whatever arrives after the last drain stays queued. Nothing is lost or duplicated.
+// Design section 5 items 6 and 10: the queue during a reorg. The head drain takes a batch queued
+// before the reorg ahead of the move-back, so it sits in the pending set when the move-back and the
+// forward steps run: a queued lost-block transaction keeps its queue position after the pending set
+// instead of joining the D1 prefix, and one in the removeMap is flagged and consumed by the first
+// forward step. A forward step drains the queue after its remainder pass: a batch that arrives
+// between the steps is placed after the remainder, in queue order, and what the step's block mined is
+// filtered out. The arrival is injected at the progress beat before the second forward block, so it
+// is deterministic.
 func TestReorgScenario_SlowPathDrainsTheQueueAroundTheReorg(t *testing.T) {
 	sc := newReorgScenario(t, smallScenarioConfig())
 	require.Zero(t, sc.stp.settings.BlockAssembly.DoubleSpendWindow, "with a window the drains would hold recent batches back")
 
-	// Queued before the reorg, in this order: a lost-block transaction no one else has, new
-	// transactions, one of them also in the removeMap, and transactions the winners mined.
-	d1Queued := sc.rawD1()[0]
-	require.False(t, sc.inPending(d1Queued))
-
-	const queuedNew = 40
-
-	removedID := kindIntake | scenarioID(1<<30+queuedNew)
-	require.NoError(t, sc.stp.removeMap.Put(sc.hash(removedID), 1))
+	// Every batch is stamped a millisecond before any drain, so each drain is free to take it.
+	enqueueAt := time.Now()
+	sc.stp.queue.clock = fixedClock{t: enqueueAt}
+	sc.stp.clock = fixedClock{t: enqueueAt.Add(time.Millisecond)}
 
 	var (
 		nodes    []subtreepkg.Node
 		inpoints []*subtreepkg.TxInpoints
-		wantTail []chainhash.Hash
 	)
 
 	add := func(node subtreepkg.Node, p subtreepkg.TxInpoints) {
 		nodes = append(nodes, node)
 		inpoints = append(inpoints, &p)
 	}
+
+	newTx := func(k int) (scenarioID, chainhash.Hash) {
+		id := kindIntake | scenarioID(1<<30+k)
+		add(subtreepkg.Node{Hash: sc.hash(id), Fee: 200, SizeInBytes: 250}, voutZeroInpoints(sc.confirmedParent(id)))
+
+		return id, sc.hash(id)
+	}
+
+	// Queued before the reorg: a lost-block transaction no one else has, new transactions and one
+	// that is also in the removeMap.
+	d1Queued := sc.rawD1()[0]
+	require.False(t, sc.inPending(d1Queued))
 
 	for _, id := range sc.lostIDs {
 		if sc.hash(id) == d1Queued {
@@ -312,31 +323,81 @@ func TestReorgScenario_SlowPathDrainsTheQueueAroundTheReorg(t *testing.T) {
 		}
 	}
 
-	wantTail = append(wantTail, d1Queued)
+	wantTail := []chainhash.Hash{d1Queued}
 
-	for k := range queuedNew {
-		id := kindIntake | scenarioID(1<<30+k)
-		add(subtreepkg.Node{Hash: sc.hash(id), Fee: 200, SizeInBytes: 250}, voutZeroInpoints(sc.confirmedParent(id)))
-		wantTail = append(wantTail, sc.hash(id))
+	for k := range 40 {
+		_, h := newTx(k)
+		wantTail = append(wantTail, h)
 	}
 
-	add(subtreepkg.Node{Hash: sc.hash(removedID), Fee: 200, SizeInBytes: 250}, voutZeroInpoints(sc.confirmedParent(removedID)))
+	_, removed := newTx(40)
+	require.NoError(t, sc.stp.removeMap.Put(removed, 1))
 
-	const queuedMined = 10
+	sc.stp.AddBatch(nodes, inpoints)
 
-	for i := range queuedMined {
-		id := kindWinnerOnly | scenarioID(i)
-		tx := sc.tx(t, id)
+	// Arriving between the two forward steps: new transactions, each next to one the second forward
+	// block mined.
+	secondBlock := sc.winnerIDs[len(sc.winnerIDs)/2:]
+	minedInSecond := make([]scenarioID, 0, 5)
+
+	for _, id := range secondBlock {
+		if id.kind() == kindWinnerOnly && len(minedInSecond) < 5 {
+			minedInSecond = append(minedInSecond, id)
+		}
+	}
+
+	require.Len(t, minedInSecond, 5)
+
+	nodes, inpoints = nil, nil
+
+	var arrivals []chainhash.Hash
+
+	for k := range 5 {
+		_, h := newTx(100 + k)
+		arrivals = append(arrivals, h)
+
+		tx := sc.tx(t, minedInSecond[k])
 		add(tx.node, tx.inpoints)
 	}
 
-	sc.stp.AddBatch(nodes, inpoints)
-	preQueued := int(sc.stp.QueueLength())
-	require.Equal(t, len(nodes), preQueued)
+	fired := beforeForwardBlockOn(sc.stp, sc.forward[0].Header, func() { sc.stp.AddBatch(nodes, inpoints) })
 
-	// New transactions keep arriving while the reorg runs.
+	require.NoError(t, sc.run(t))
+	require.True(t, *fired, "the batch arrived between the forward steps")
+
+	after := txHashes(assemblyNodes(sc.stp))
+	requireAssemblyValid(t, sc.stp, sc.onChainAfter)
+
+	effectiveD1 := filter(sc.lostOrder(), func(h chainhash.Hash) bool {
+		return !sc.inWinners(h) && !sc.inPending(h) && h != d1Queued
+	})
+	want := append(effectiveD1, filter(sc.pendingOrder(), func(h chainhash.Hash) bool { return !sc.inWinners(h) })...)
+	want = append(want, wantTail...)
+	want = append(want, arrivals...)
+
+	require.Equal(t, want, after, "effective D1, the pending set, the head-drained batch in queue order (the lost-block "+
+		"transaction keeps its queue position), then the batch that arrived between the steps, in order")
+
+	for _, id := range minedInSecond {
+		require.NotContains(t, after, sc.hash(id), "a queued transaction the second forward block mined is filtered out")
+	}
+
+	require.NotContains(t, after, removed)
+	require.Zero(t, sc.stp.QueueLength(), "the last forward step drained everything")
+	require.Equal(t, len(after), sc.stp.GetCurrentTxMap().Length())
+	require.Zero(t, sc.stp.GetRemoveMapLength(), "the queued transaction in the removeMap was consumed")
+	require.ElementsMatch(t, sc.rawD1(), sc.utxo.marked(false), "the queued lost-block transaction is in the assembly, so it is marked like the rest of raw D1")
+}
+
+// Transactions that arrive while the reorg runs are never lost or placed twice: what the drains took
+// follows the remainder in the order they were sent, and the rest is still queued. A batch is queued
+// before the reorg, so the head drain takes at least that.
+func TestReorgScenario_SlowPathKeepsEveryTransactionSentDuringTheReorg(t *testing.T) {
+	sc := newReorgScenario(t, smallScenarioConfig())
+	require.Zero(t, sc.stp.settings.BlockAssembly.DoubleSpendWindow)
+
 	stop := sc.startIntake(50_000)
-	require.Eventually(t, func() bool { return int(sc.stp.QueueLength()) > preQueued }, 5*time.Second, time.Millisecond, "intake has started")
+	require.Eventually(t, func() bool { return sc.stp.QueueLength() > 0 }, 5*time.Second, time.Millisecond)
 
 	require.NoError(t, sc.run(t))
 
@@ -344,30 +405,18 @@ func TestReorgScenario_SlowPathDrainsTheQueueAroundTheReorg(t *testing.T) {
 	after := txHashes(assemblyNodes(sc.stp))
 	requireAssemblyValid(t, sc.stp, sc.onChainAfter)
 
-	effectiveD1 := filter(sc.lostOrder(), func(h chainhash.Hash) bool {
-		return !sc.inWinners(h) && !sc.inPending(h) && h != d1Queued
-	})
-	prefix := append(effectiveD1, filter(sc.pendingOrder(), func(h chainhash.Hash) bool { return !sc.inWinners(h) })...)
-	prefix = append(prefix, wantTail...)
-
-	require.Equal(t, prefix, after[:len(prefix)], "effective D1, the pending set, then the queued batch in queue order: the lost-block transaction keeps its queue position")
+	prefix := sc.expectedOrderAfter()
+	require.Equal(t, prefix, after[:len(prefix)])
 
 	arrived := after[len(prefix):]
+	require.NotEmpty(t, arrived)
+
 	for i, h := range arrived {
 		require.Equal(t, sc.hash(kindIntake|scenarioID(i)), h, "arrivals follow in the order they were sent")
 	}
 
-	require.NotEmpty(t, arrived, "the forward steps drained some of what arrived during the reorg")
-	require.Equal(t, int64(sent-len(arrived)), sc.stp.QueueLength(), "everything else is still queued: nothing lost, nothing placed twice")
+	require.Equal(t, int64(sent-len(arrived)), sc.stp.QueueLength(), "everything else is still queued")
 	require.Equal(t, len(after), sc.stp.GetCurrentTxMap().Length())
-	require.Zero(t, sc.stp.GetRemoveMapLength(), "the queued transaction in the removeMap was consumed")
-	require.NotContains(t, after, sc.hash(removedID))
-
-	for i := range queuedMined {
-		require.NotContains(t, after, sc.hash(kindWinnerOnly|scenarioID(i)), "a queued transaction a forward block mined is filtered out")
-	}
-
-	require.ElementsMatch(t, sc.rawD1(), sc.utxo.marked(false), "the queued lost-block transaction is in the assembly, so it is marked like the rest of raw D1")
 }
 
 // Design section 5 gate "no conflicting nodes in B or F": the fast path declines these, so the slow

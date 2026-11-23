@@ -1,0 +1,13 @@
+diff --git a/services/blockassembly/subtreeprocessor/SubtreeProcessor.go b/services/blockassembly/subtreeprocessor/SubtreeProcessor.go
+index 2d7cbd297..b404d80ac 100644
+--- a/services/blockassembly/subtreeprocessor/SubtreeProcessor.go
++++ b/services/blockassembly/subtreeprocessor/SubtreeProcessor.go
+@@ -5816,7 +5816,7 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveBackBlocks []*
+ 		// step's drain before. A tx that arrives after its own block's step
+ 		// still reaches only later blocks' filters, as it does outside a reorg,
+ 		// and so does one a positive double-spend window holds back past it.
+-		if transactionMap, losingTxHashesMap, err = stp.moveForwardBlock(ctx, block, true, processedConflictingHashesMap, false, lastMoveForwardBlock); err != nil {
++		if transactionMap, losingTxHashesMap, err = stp.moveForwardBlock(ctx, block, true, processedConflictingHashesMap, true /* mutant: no forward step drains the queue */, lastMoveForwardBlock); err != nil {
+ 			return err
+ 		}
+ 
