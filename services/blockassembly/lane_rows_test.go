@@ -1665,3 +1665,16 @@ func TestAPendingSubtreeKeepsItsFileDAH(t *testing.T) {
 
 	require.Empty(t, recording.dahs, "the older delete-at is not applied")
 }
+
+// TestAMemberInNeitherThePoolNorTheRemovedTxsIsLost: a member the pool does not hold and that has
+// no inpoints backup is lost, even when a position backup for it remains.
+func TestAMemberInNeitherThePoolNorTheRemovedTxsIsLost(t *testing.T) {
+	st, txMap := laneSealSubtree(t, "neither")
+	require.True(t, txMap.Delete(st.Nodes[1].Hash))
+
+	deletedPositions := txmap.NewSyncedMap[chainhash.Hash, uint64]()
+	deletedPositions.Set(st.Nodes[1].Hash, lane.Pack(4, 20))
+
+	_, lost := subtreeLanePositions(st, txMap, txmap.NewSyncedMap[chainhash.Hash, subtreepkg.TxInpoints](), deletedPositions)
+	require.Equal(t, 1, lost)
+}

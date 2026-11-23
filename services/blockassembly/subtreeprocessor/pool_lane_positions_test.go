@@ -2,6 +2,7 @@ package subtreeprocessor
 
 import (
 	"context"
+	"fmt"
 	"net/url"
 	"sync"
 	"testing"
@@ -616,4 +617,34 @@ func TestMoveBackKeepsTxsWhoseLanePositionReadFails(t *testing.T) {
 	stp.utxoStore = failingBatchStore{Store: store, failHash: hashes[1]}
 
 	require.Equal(t, []uint64{positions[0], 0, positions[2]}, stp.lanePositionsFromUtxoStore(context.Background(), &model.Block{Header: prevBlockHeader}, hashes))
+}
+
+// TestBackUpLanePositionRecordsOnlyWhatTheMapHolds: the removal backup records a positioned tx's
+// position and 0 for a tx the map holds without one, and nothing for a tx the map does not hold,
+// on both maps.
+func TestBackUpLanePositionRecordsOnlyWhatTheMapHolds(t *testing.T) {
+	for _, disk := range []bool{false, true} {
+		t.Run(fmt.Sprintf("disk=%t", disk), func(t *testing.T) {
+			stp, _ := lanePoolProcessor(t, disk, true)
+
+			positioned, plain, absent := lanePoolTxHash(700), lanePoolTxHash(701), lanePoolTxHash(702)
+			stp.currentTxMap.SetAt(positioned, lanePoolInpoints(700), lane.Pack(4, 7))
+			stp.currentTxMap.Set(plain, lanePoolInpoints(701))
+
+			for _, hash := range []chainhash.Hash{positioned, plain, absent} {
+				stp.backUpLanePosition(hash)
+			}
+
+			position, ok := stp.deletedPositions.Get(positioned)
+			require.True(t, ok)
+			require.Equal(t, lane.Pack(4, 7), position)
+
+			position, ok = stp.deletedPositions.Get(plain)
+			require.True(t, ok, "a tx without a position is backed up as 0")
+			require.Zero(t, position)
+
+			_, ok = stp.deletedPositions.Get(absent)
+			require.False(t, ok, "a tx the map does not hold gets no backup")
+		})
+	}
 }

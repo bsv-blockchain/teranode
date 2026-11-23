@@ -1652,8 +1652,23 @@ func (stp *SubtreeProcessor) backUpLanePosition(hash chainhash.Hash) {
 		return
 	}
 
-	// 0 is recorded too, so a reader can tell a tx without a position from a backup it missed
-	stp.deletedPositions.Set(hash, stp.lanePositionIn(stp.currentTxMap, hash))
+	// 0 is recorded for a tx the map holds without a position. A tx the map does not hold, or
+	// whose record cannot be read, gets no entry, so a reader finds its position unknown.
+	lookup, ok := stp.currentTxMap.(interface {
+		LookupPosition(hash chainhash.Hash) (uint64, bool, error)
+	})
+	if !ok {
+		// a map without LookupPosition is read with Position
+		stp.deletedPositions.Set(hash, stp.lanePositionIn(stp.currentTxMap, hash))
+		return
+	}
+
+	position, found, err := lookup.LookupPosition(hash)
+	if err != nil || !found {
+		return
+	}
+
+	stp.deletedPositions.Set(hash, position)
 }
 
 // GetCurrentRunningState returns the current operational state of the processor.
@@ -4211,9 +4226,10 @@ func (stp *SubtreeProcessor) removeTxFromSubtrees(ctx context.Context, hash chai
 			txInpoints, _ = stp.currentTxMap.Get(hash)
 		}
 
-		// the position backup goes in before the inpoints backup (see backUpLanePosition)
-		stp.backUpLanePosition(hash)
+		// the position backup goes in before the inpoints backup, and only beside one (see
+		// backUpLanePosition)
 		if txInpoints != nil {
+			stp.backUpLanePosition(hash)
 			stp.deletedTxs.Set(hash, *txInpoints)
 		}
 		stp.currentTxMap.Delete(hash)
@@ -4302,9 +4318,10 @@ func (stp *SubtreeProcessor) removeTxsFromSubtrees(ctx context.Context, hashes [
 				txInpoints, _ = stp.currentTxMap.Get(hash)
 			}
 
-			// the position backup goes in before the inpoints backup (see backUpLanePosition)
-			stp.backUpLanePosition(hash)
+			// the position backup goes in before the inpoints backup, and only beside one (see
+			// backUpLanePosition)
 			if txInpoints != nil {
+				stp.backUpLanePosition(hash)
 				stp.deletedTxs.Set(hash, *txInpoints)
 			}
 			stp.currentTxMap.Delete(hash)

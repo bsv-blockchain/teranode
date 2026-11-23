@@ -346,7 +346,7 @@ func subtreeLanePositions(subtree *subtreepkg.Subtree, parentTxMap subtreeproces
 			inPool := parentTxMap != nil && parentTxMap.Exists(node.Hash)
 			inRemoved := deletedTxs != nil && deletedTxs.Exists(node.Hash)
 
-			if !known || (deletedPositions == nil && !inPool && !inRemoved) {
+			if !known || (!inPool && !inRemoved) {
 				lost++
 				continue
 			}

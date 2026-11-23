@@ -90,8 +90,8 @@ func (s *SQL) checkedLaneMapRows(block *model.Block, o options.StoreBlockOptions
 
 // insertLaneMapRowsWithBlock inserts rows for the block just written as blockID, inside tx, under
 // a savepoint. A failed insert is rolled back to the savepoint and logged, and returns nil, so tx
-// commits the block alone; only a failure of the savepoint itself, which leaves tx unusable, is
-// returned. It records in rows what this attempt did, for StoreBlock to report once the block
+// commits the block alone. A failure that leaves tx unusable is returned: the savepoint's own, or,
+// on Postgres, putting back the transaction's lock timeout after the rows went in. It records in rows what this attempt did, for StoreBlock to report once the block
 // commits (laneRowsToStore.observe).
 func (s *SQL) insertLaneMapRowsWithBlock(ctx context.Context, tx *sql.Tx, block *model.Block, blockID uint64, rows *laneRowsToStore) error {
 	start := time.Now()
