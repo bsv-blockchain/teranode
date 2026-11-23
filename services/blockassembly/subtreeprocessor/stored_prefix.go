@@ -57,6 +57,10 @@ func (stp *SubtreeProcessor) maintainStoredPrefix(now time.Time) {
 
 	set.Retain(keep)
 
+	if stp.storeQueue != nil {
+		stp.runDroppedCleanups()
+	}
+
 	for root := range w.firstSeen {
 		if _, ok := keep[root]; !ok {
 			delete(w.firstSeen, root)
@@ -134,6 +138,10 @@ func (stp *SubtreeProcessor) sendChainedSubtreeAgain(i int, root chainhash.Hash,
 	}
 
 	if stp.storeQueue != nil {
+		if stp.storeQueue.entry(st) != nil {
+			return // still queued or being stored
+		}
+
 		stp.storeQueue.Push(req)
 	} else {
 		select {

@@ -4496,11 +4496,11 @@ func (stp *SubtreeProcessor) reChainSubtrees(fromIndex int) error {
 func (stp *SubtreeProcessor) storeAndAnnounceChainedSubtrees(ctx context.Context, caller string, wait int, skipNotification bool, deadline time.Duration) error {
 	// With a store queue the reorg's two calls (wait with no announcement, announce with no wait)
 	// do not send the chain again: it was sent as it was built.
-	if stp.storeQueue != nil && wait > 0 && skipNotification {
+	if stp.storeQueue != nil && caller == "reorgBlocks" && wait > 0 && skipNotification {
 		return stp.awaitQueuedStores(ctx, caller, deadline)
 	}
 
-	if stp.storeQueue != nil && wait == 0 && !skipNotification {
+	if stp.storeQueue != nil && caller == "reorgBlocks" && wait == 0 && !skipNotification {
 		return stp.announceChainedSubtrees(ctx, caller)
 	}
 
@@ -4818,6 +4818,12 @@ func (stp *SubtreeProcessor) enforceBlockMaxSize(ctx context.Context) error {
 		wait++
 	}
 
+	// with a store queue the processor waits for nothing: the template stays at the stored prefix
+	// until the new subtrees are stored, and in an outage the wait would be the retry backoff
+	if stp.storeQueue != nil {
+		wait = 0
+	}
+
 	err = stp.storeAndAnnounceChainedSubtrees(ctx, "enforceBlockMaxSize", wait, false, 0)
 
 	stp.updatePrecomputedMiningData()
@@ -4867,6 +4873,11 @@ func (stp *SubtreeProcessor) retireSubtrees(subtrees ...*subtreepkg.Subtree) {
 // the precomputed mining data may still point at a retired one, so those are kept
 // for a later close rather than unmapped under a reader.
 func (stp *SubtreeProcessor) closeRetiredSubtrees() {
+	// the cleanups of dropped store requests read subtrees that are about to be unmapped
+	if stp.storeQueue != nil {
+		stp.runDroppedCleanups()
+	}
+
 	if len(stp.retiredSubtrees) == 0 {
 		return
 	}
@@ -5229,6 +5240,10 @@ func (stp *SubtreeProcessor) handleMoveForwardRequest(processorCtx context.Conte
 			stp.restoreCurrentTxMap(originalCurrentTxMap)
 			stp.currentBlockHeader.Store(currentBlockHeader)
 			stp.setTxCountFromSubtrees()
+
+			if stp.storeQueue != nil {
+				stp.wantRestored(originalChainedSubtrees)
+			}
 		}
 
 		// Defer panic-aware rollback so a panic in moveForwardBlock unwinds
@@ -5668,6 +5683,10 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveBackBlocks []*
 			stp.currentTxMap = originalCurrentTxMap
 			stp.currentBlockHeader.Store(currentBlockHeader)
 			stp.setTxCountFromSubtrees()
+
+			if stp.storeQueue != nil {
+				stp.wantRestored(originalChainedSubtrees)
+			}
 		}
 
 		// Defer panic-aware rollback so a panic mid-loop unwinds the partial

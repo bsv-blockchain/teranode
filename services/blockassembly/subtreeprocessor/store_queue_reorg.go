@@ -72,6 +72,10 @@ func (stp *SubtreeProcessor) awaitQueuedStores(ctx context.Context, caller strin
 		if deadline == 0 {
 			select {
 			case <-it.first:
+				if q.wasDropped(it) {
+					return errors.NewStorageError("[%s] subtree %d was not stored: its request was dropped", caller, i)
+				}
+
 				if it.firstErr != nil {
 					return errors.NewProcessingError("[%s] error sending subtree to the store queue", caller, it.firstErr)
 				}
@@ -105,6 +109,11 @@ func (stp *SubtreeProcessor) announceChainedSubtrees(ctx context.Context, caller
 		req := NewSubtreeRequest{Subtree: st, AnnounceOnly: true}
 
 		if stp.storedSet == nil || !stp.storedSet.Has(*st.RootHash()) {
+			if stp.storeQueue.entry(st) != nil {
+				// still being stored, or retried: another full store would only add to the backlog
+				continue
+			}
+
 			req = NewSubtreeRequest{
 				Subtree:           st,
 				ParentTxMap:       stp.currentTxMap,
@@ -143,5 +152,13 @@ func (stp *SubtreeProcessor) wantRestored(chained []*subtreepkg.Subtree) {
 			ErrChan:           make(chan error, 1),
 			OnStorageComplete: func() { stp.cleanupDeletedTxs(st) },
 		})
+	}
+}
+
+// runDroppedCleanups runs the deletedTxs cleanups of the requests the queue dropped. It runs on the
+// processor goroutine, which is the one that unmaps a retired subtree, so it never reads a closed one.
+func (stp *SubtreeProcessor) runDroppedCleanups() {
+	for _, cleanup := range stp.storeQueue.takeCleanups() {
+		cleanup()
 	}
 }

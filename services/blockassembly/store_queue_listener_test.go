@@ -244,3 +244,9 @@ func TestStoreQueueListener_AnAnnounceOnlyRequestAnnouncesWithoutStoring(t *test
 
 	require.Equal(t, 1, fault.SetCalls(stored.subtree.RootHash()[:], fileformat.FileTypeSubtree), "announced, not stored again")
 }
+
+// With the flag off no request carries a settled hook: nothing holds the request for a retry's
+// whole backoff on account of a queue that is not there.
+func TestStoreQueueListener_WithoutAQueueTheOutcomeHoldsNoSettledHook(t *testing.T) {
+	require.Nil(t, newSubtreeStoreOutcome(subtreeprocessor.NewSubtreeRequest{}, true, nil).settled)
+}

@@ -51,7 +51,7 @@ type subtreeStoreOutcome struct {
 }
 
 func newSubtreeStoreOutcome(request subtreeprocessor.NewSubtreeRequest, metaApplicable bool, late chan<- chainhash.Hash) *subtreeStoreOutcome {
-	o := &subtreeStoreOutcome{result: request.Result, skip: request.SkipNotification, late: late, pending: 1, settled: request.Settled}
+	o := &subtreeStoreOutcome{result: request.Result, skip: request.SkipNotification, late: late, pending: 1, settled: request.SettledFunc()}
 	if metaApplicable {
 		o.pending++
 	} else {

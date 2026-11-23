@@ -69,6 +69,10 @@ type StoreQueue struct {
 	ready     []*storeItem // admitted and charged, not yet taken
 	waiting   []*storeItem // not admitted: no room
 	byTree    map[*subtreepkg.Subtree][]*storeItem
+
+	// cleanups are the OnStorageComplete callbacks of dropped requests, for the processor to run:
+	// they read the nodes of a subtree that has left the chain and may be unmapped any moment.
+	cleanups []func()
 }
 
 // storeItem is a request in the queue, until its store is settled or it is dropped.
@@ -78,6 +82,7 @@ type storeItem struct {
 	stale   bool
 	charged bool
 	done    bool
+	dropped bool
 
 	// first is closed once ErrChan was answered, with the error in firstErr; result is the request's
 	// Result. A reorg that finds its subtree already sent waits on these instead of sending it again.
@@ -115,7 +120,13 @@ func (q *StoreQueue) Push(req NewSubtreeRequest) {
 			q.byTree[req.Subtree] = append(q.byTree[req.Subtree], it)
 		}
 
-		q.waiting = append(q.waiting, it)
+		if it.bytes == 0 {
+			// holds nothing, so it never waits for room
+			it.charged = true
+			q.ready = append(q.ready, it)
+		} else {
+			q.waiting = append(q.waiting, it)
+		}
 	}
 
 	dropped := q.admitLocked()
@@ -195,6 +206,25 @@ func (q *StoreQueue) Len() int {
 	defer q.mu.Unlock()
 
 	return len(q.snapshots) + len(q.ready) + len(q.waiting)
+}
+
+// takeCleanups returns, once, the cleanups of the requests dropped since the last call.
+func (q *StoreQueue) takeCleanups() []func() {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+
+	c := q.cleanups
+	q.cleanups = nil
+
+	return c
+}
+
+// wasDropped reports whether the queue dropped the request.
+func (q *StoreQueue) wasDropped(it *storeItem) bool {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+
+	return it.dropped
 }
 
 // entry is the newest request of st whose store is not settled, or nil.
@@ -288,8 +318,13 @@ func (q *StoreQueue) dropStaleLocked() (dropped []*storeItem) {
 
 	for _, it := range dropped {
 		it.done = true
+		it.dropped = true
 		q.unregisterLocked(it)
 		close(it.first)
+
+		if it.req.OnStorageComplete != nil {
+			q.cleanups = append(q.cleanups, it.req.OnStorageComplete)
+		}
 	}
 
 	return dropped
@@ -393,6 +428,10 @@ func (r NewSubtreeRequest) Answered(err error) {
 		r.answered(err)
 	}
 }
+
+// SettledFunc is Settled as a function, or nil without a queue, so a request that has none costs a
+// holder of it nothing.
+func (r NewSubtreeRequest) SettledFunc() func() { return r.settled }
 
 // Settled is called when the request's store is settled, stored or failed for good: the queue
 // stops counting its bytes. Without a queue it does nothing.

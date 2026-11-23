@@ -10,6 +10,7 @@ import (
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
+	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -25,6 +26,8 @@ type takenStore struct {
 	root         chainhash.Hash
 	announceOnly bool
 	snapshot     bool
+	announces    bool // the request would announce its subtree
+	marks        int  // longest-chain marks written when it was taken
 }
 
 // queueWorkers are n workers that take requests from a StoreQueue the way the block assembly
@@ -36,7 +39,7 @@ type queueWorkers struct {
 
 // startQueueWorkers runs n workers on q until the test ends. hold, when not nil, is waited for after
 // a request is taken and before it is answered.
-func startQueueWorkers(t testing.TB, q *StoreQueue, set *StoredSet, n int, hold <-chan struct{}) *queueWorkers {
+func startQueueWorkers(t testing.TB, q *StoreQueue, set *StoredSet, n int, hold <-chan struct{}, marks ...func() int) *queueWorkers {
 	t.Helper()
 
 	w := &queueWorkers{}
@@ -58,8 +61,14 @@ func startQueueWorkers(t testing.TB, q *StoreQueue, set *StoredSet, n int, hold 
 
 				root := *req.Subtree.RootHash()
 
+				written := 0
+				if len(marks) > 0 {
+					written = marks[0]()
+				}
+
 				w.mu.Lock()
-				w.taken = append(w.taken, takenStore{seq: seq, root: root, announceOnly: req.AnnounceOnly, snapshot: req.Class == StoreClassSnapshot})
+				w.taken = append(w.taken, takenStore{seq: seq, root: root, announceOnly: req.AnnounceOnly, snapshot: req.Class == StoreClassSnapshot,
+					announces: req.AnnounceOnly || !req.SkipNotification, marks: written})
 				w.mu.Unlock()
 
 				if hold != nil {
@@ -223,8 +232,9 @@ func TestStoreQueue_ASnapshotIsServedAheadOfABacklog(t *testing.T) {
 	require.Same(t, snap.Subtree, got.Subtree)
 }
 
-// With no queue (blockassembly_storedPrefixTemplate off) the send is the blocking one it always was.
-func TestStoreQueue_WithoutAQueueTheSendBlocksOnAFullChannel(t *testing.T) {
+// A characterization test, not a red one: it pins the blocking send that blockassembly_storedPrefixTemplate
+// off keeps, and passes on the base too.
+func TestStoreQueue_CharacterizationWithoutAQueueTheSendBlocksOnAFullChannel(t *testing.T) {
 	stp := &SubtreeProcessor{newSubtreeChan: make(chan NewSubtreeRequest, 1)}
 
 	require.NoError(t, stp.sendNewSubtree(context.Background(), NewSubtreeRequest{}))
@@ -589,4 +599,169 @@ func TestStoreQueue_AFailedAfterBlockSnapshotIsNotSentAgainByEveryCaller(t *test
 
 	require.False(t, snapshot.storeOnce(ctx2, stp))
 	require.Equal(t, 1, q.Len(), "the next caller sends it again")
+}
+
+// Nothing is announced before the reorg's marks: the forward steps send silently and the announce
+// comes after the marks.
+func TestReorgScenario_StoreQueue_NothingIsAnnouncedBeforeTheMarks(t *testing.T) {
+	q := NewStoreQueue(1 << 40)
+	set := NewStoredSet()
+	cfg := smallScenarioConfig()
+	cfg.storeQueue, cfg.storedSet = q, set
+	sc := newReorgScenario(t, cfg)
+
+	workers := startQueueWorkers(t, q, set, 4, nil, func() int { return sc.utxo.markCount(true) + sc.utxo.markCount(false) })
+
+	require.NoError(t, sc.run(t))
+
+	require.Eventually(t, func() bool {
+		for _, tk := range workers.bySeq() {
+			if tk.announceOnly {
+				return true
+			}
+		}
+
+		return false
+	}, 10*time.Second, 5*time.Millisecond)
+
+	for _, tk := range workers.bySeq() {
+		if tk.announces {
+			require.Positive(t, tk.marks, "an announcement was taken before the marks")
+		}
+	}
+}
+
+// Rolled back to the chain a catch-up started from, after the first block retired it: the requests of
+// that chain must not be taken last or dropped at the limit.
+func TestStoreQueue_ACatchUpThatFailedLeavesItsRestoredChainWanted(t *testing.T) {
+	q := NewStoreQueue(StoreRequestBytes(chainRequest(t, 1))) // room for one request
+	f := newCatchUpQueueFixture(t, false, WithStoreQueue(q), WithStoredSet(NewStoredSet()))
+
+	small, err := f.stp.newSubtree(8)
+	require.NoError(t, err)
+	f.stp.currentSubtree.Store(small)
+	addStoredPrefixTxs(t, f.stp, 8*5)
+
+	chained := append([]*subtreepkg.Subtree(nil), f.stp.chainedSubtrees...)
+	require.GreaterOrEqual(t, len(chained), 4)
+
+	require.Error(t, f.stp.reorgBlocks(t.Context(), []*model.Block{}, []*model.Block{f.block1, f.block2}), "block2's subtree is missing")
+
+	for i, st := range chained {
+		it := q.entry(st)
+		require.NotNil(t, it, "restored subtree %d has a request", i)
+		require.False(t, it.stale, "and it is wanted")
+	}
+}
+
+// A dropped request never stores, so its callback never runs; the processor cleans up for it, before
+// the subtree can be unmapped.
+func TestStoreQueue_ADroppedRequestsDeletedTxsAreCleanedUp(t *testing.T) {
+	q := NewStoreQueue(StoreRequestBytes(chainRequest(t, 1))) // room for one request
+	stp, _ := newStoredPrefixProcessor(t, 8, NewStoredSet(), func(stp *SubtreeProcessor) { stp.storeQueue = q })
+	addStoredPrefixTxs(t, stp, 8*5)
+	require.GreaterOrEqual(t, len(stp.chainedSubtrees), 4)
+
+	hash := stp.chainedSubtrees[3].Nodes[1].Hash
+	stp.deletedTxs.Set(hash, subtreepkg.TxInpoints{})
+
+	before := q.Len()
+	stp.retireChainedSubtrees() // at the limit: the waiting requests of the retired chain are dropped
+	require.Less(t, q.Len(), before)
+
+	stp.closeRetiredSubtrees()
+
+	_, held := stp.deletedTxs.Get(hash)
+	require.False(t, held, "the dropped request's deletedTxs entry is gone")
+}
+
+func TestStoreQueue_AZeroByteRequestDoesNotWaitBehindOneThatDoesNotFit(t *testing.T) {
+	q := NewStoreQueue(StoreRequestBytes(chainRequest(t, 1)))
+	a, b := chainRequest(t, 1), chainRequest(t, 2)
+	q.Push(a)
+	q.Push(b) // does not fit: waits
+	announce := NewSubtreeRequest{Subtree: b.Subtree, AnnounceOnly: true}
+	q.Push(announce)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	first, _, ok := q.Take(ctx)
+	require.True(t, ok)
+	require.Same(t, a.Subtree, first.Subtree)
+
+	second, _, ok := q.Take(ctx)
+	require.True(t, ok)
+	require.True(t, second.AnnounceOnly, "the announcement holds nothing, so it did not wait for room")
+}
+
+// With a queue enforceBlockMaxSize waits for nothing: in an outage the first attempt of its new
+// subtrees would not end for as long as the retries hold the limit.
+func TestStoreQueue_EnforceBlockMaxSizeDoesNotWaitForTheStores(t *testing.T) {
+	q := NewStoreQueue(1 << 40) // nothing takes a request
+	stp, _ := newBlockMaxSizeProcessor(t, 64, model.BlockHeaderSize+blockMaxSizeTestBudget, WithStoreQueue(q))
+	addBlockMaxSizeTestTxs(t, stp, sizes(200, blockMaxSizeTestTxSize)...)
+	require.Greater(t, stp.chainedSubtrees[0].SizeInBytes, uint64(blockMaxSizeTestBudget), "precondition: first subtree must be oversized")
+
+	done := make(chan error, 1)
+
+	go func() { done <- stp.enforceBlockMaxSize(t.Context()) }()
+
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(20 * time.Second):
+		t.Fatal("enforceBlockMaxSize waited for a store nothing performs")
+	}
+}
+
+// A subtree whose request is still queued or being retried is not sent again, by the announce after
+// the marks or by the watch.
+func TestStoreQueue_ASubtreeStillBeingStoredIsNotSentAgain(t *testing.T) {
+	q := NewStoreQueue(1 << 40)
+	stp, _ := newStoredPrefixProcessor(t, 8, NewStoredSet(), func(stp *SubtreeProcessor) { stp.storeQueue = q })
+	addStoredPrefixTxs(t, stp, 8*5)
+	require.GreaterOrEqual(t, len(stp.chainedSubtrees), 4)
+
+	before := q.Len()
+
+	require.NoError(t, stp.announceChainedSubtrees(context.Background(), "test"))
+	require.Equal(t, before, q.Len(), "the announce did not send a second store")
+
+	stp.sendChainedSubtreeAgain(0, chainRoot(stp, 0), time.Now())
+	require.Equal(t, before, q.Len(), "the watch did not send it again either")
+}
+
+// A request dropped while the reorg waits for it did not store: with no deadline the reorg used to
+// count its ErrChan answer as stored.
+func TestStoreQueue_AReorgWaitingForADroppedRequestReportsItNotStored(t *testing.T) {
+	q := NewStoreQueue(StoreRequestBytes(chainRequest(t, 1)))
+	stp, _ := newStoredPrefixProcessor(t, 8, NewStoredSet(), func(stp *SubtreeProcessor) { stp.storeQueue = q })
+	addStoredPrefixTxs(t, stp, 8*5)
+	require.GreaterOrEqual(t, len(stp.chainedSubtrees), 4)
+
+	done := make(chan error, 1)
+
+	go func() { done <- stp.awaitQueuedStores(context.Background(), "test", 0) }()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	time.Sleep(200 * time.Millisecond) // the reorg is waiting for the first request
+
+	// the first request stores; the second is admitted when it settles, and is then dropped
+	first, _, ok := q.Take(ctx)
+	require.True(t, ok)
+	first.Answered(nil)
+	first.Settled()
+
+	require.Eventually(t, func() bool { return q.Len() > 0 && q.Held() > 0 }, 5*time.Second, 5*time.Millisecond)
+	q.Stale(stp.chainedSubtrees[1])
+
+	select {
+	case err := <-done:
+		require.ErrorContains(t, err, "dropped")
+	case <-time.After(10 * time.Second):
+		t.Fatal("the reorg kept waiting for a dropped request")
+	}
 }
