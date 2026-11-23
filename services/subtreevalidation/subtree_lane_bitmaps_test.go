@@ -197,9 +197,10 @@ func TestProcessTxMetaUsingStore_ReadsTheLanePositionAtShadow(t *testing.T) {
 }
 
 // With subtreevalidation_batch_missing_transactions off, each transaction is read on its own. At
-// shadow that read is a one-transaction BatchDecorate asking for the batched read's fields, the
-// lane position among them, because GetMeta reads none; through the txmeta cache it fills the cache
-// as the batched read does. At off it is GetMeta as before.
+// shadow that read is a one-transaction BatchDecorate asking for GetMeta's fields and the lane
+// position, which GetMeta does not read; through the txmeta cache it fills the cache as the
+// batched read does. It keeps GetMeta's coinbase flag, which makes a subtree listing a coinbase
+// invalid. At off it is GetMeta as before.
 func TestProcessTxMetaUsingStore_ReadsTheLanePositionOneByOneAtShadow(t *testing.T) {
 	for _, mode := range []settings.LaneMigration{settings.LaneMigrationOff, settings.LaneMigrationShadow} {
 		t.Run(string(mode), func(t *testing.T) {
@@ -227,7 +228,7 @@ func TestProcessTxMetaUsingStore_ReadsTheLanePositionOneByOneAtShadow(t *testing
 					asked = append(asked, f.([]fields.FieldName)...)
 				}
 
-				items[0].Data = &meta.Data{Fee: 1, SizeInBytes: 1, LanePosition: lane.Pack(4, uint64(items[0].Hash[0]))}
+				items[0].Data = &meta.Data{Fee: 1, SizeInBytes: 1, IsCoinbase: items[0].Hash[0] == 2, LanePosition: lane.Pack(4, uint64(items[0].Hash[0]))}
 			}).Return(nil)
 
 			server := &Server{logger: ulogger.TestLogger{}, settings: tSettings, utxoStore: store}
@@ -248,6 +249,13 @@ func TestProcessTxMetaUsingStore_ReadsTheLanePositionOneByOneAtShadow(t *testing
 
 			store.AssertNotCalled(t, "GetMeta", mock.Anything, mock.Anything, mock.Anything)
 			require.Contains(t, asked, fields.LanePosition)
+
+			for _, f := range utxo.MetaFields {
+				require.Contains(t, asked, f, "everything GetMeta reads is still read")
+			}
+
+			require.False(t, txMetaSlice[0].coinbase)
+			require.True(t, txMetaSlice[1].coinbase, "the coinbase flag comes through")
 			require.Equal(t, lane.Pack(4, 1), txMetaSlice[0].lanePosition)
 			require.Equal(t, lane.Pack(4, 2), txMetaSlice[1].lanePosition)
 		})

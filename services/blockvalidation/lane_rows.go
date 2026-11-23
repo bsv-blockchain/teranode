@@ -17,7 +17,8 @@ import (
 // AddBlock, which inserts them in the block's own database transaction. Nothing reads the rows
 // yet, so nothing here can stop a block: a subtree without usable bitmaps means the block is
 // stored without rows, and a count that does not match is counted and logged while whatever rows
-// were built still go with the block. A block whose subtrees hold no position has no rows to go.
+// were built still go with the block. A block whose bitmaps files were all read but hold no
+// position has no rows to go, and counts as fewer.
 
 // laneBitmapReadConcurrency bounds the subtree bitmap reads of one block.
 const laneBitmapReadConcurrency = 16

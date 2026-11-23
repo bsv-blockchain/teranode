@@ -317,8 +317,9 @@ func (s *SQL) storeBlockAttempt(ctx context.Context, block *model.Block, peerID 
 	// transaction grows with the fork's depth but not with the size of the blocks: it
 	// touches block rows only, never transactions or coins.
 	//
-	// The common extend keeps its single auto-committed INSERT, which already writes
-	// the correct flag and needs no repair.
+	// The common extend without lane map rows keeps its single auto-committed INSERT,
+	// which already writes the correct flag and needs no repair. With rows, at
+	// utxostore_laneMigration shadow, it is one transaction holding the INSERT and the rows.
 	var (
 		newBlockID    uint64
 		height        uint32
