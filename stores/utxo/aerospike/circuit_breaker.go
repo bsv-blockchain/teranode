@@ -283,7 +283,9 @@ func (cb *circuitBreaker) RecordSuccess(slot breakerSlot) {
 
 	switch cb.state {
 	case cbStateClosed:
-		cb.consecutiveFailures = 0
+		if !slot.taken {
+			cb.consecutiveFailures = 0
+		}
 	case cbStateHalfOpen:
 		if !cb.currentProbe(slot) {
 			return
@@ -304,7 +306,7 @@ func (cb *circuitBreaker) RecordFailure(slot breakerSlot) {
 
 // RecordBatchFailure reports one infrastructure failure that covers the requests
 // admitted with slots, for example the batch they travelled in. In the closed
-// state it counts once toward tripping, whatever the slots. In the half-open
+// state it counts once when a request was admitted while closed. In the half-open
 // state it trips the breaker when any slot is a probe slot of the current epoch,
 // and is ignored otherwise. The success count is zeroed only when the breaker
 // trips or resets, never by an ignored or closed-state failure.
@@ -318,9 +320,14 @@ func (cb *circuitBreaker) RecordBatchFailure(slots []breakerSlot) {
 
 	switch cb.state {
 	case cbStateClosed:
-		cb.consecutiveFailures++
-		if cb.consecutiveFailures >= cb.failureThreshold {
-			cb.trip()
+		for _, slot := range slots {
+			if !slot.taken {
+				cb.consecutiveFailures++
+				if cb.consecutiveFailures >= cb.failureThreshold {
+					cb.trip()
+				}
+				break
+			}
 		}
 	case cbStateHalfOpen:
 		for _, slot := range slots {
