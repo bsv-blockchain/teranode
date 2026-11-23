@@ -8010,8 +8010,14 @@ func (stp *SubtreeProcessor) WaitForPendingBlocks(ctx context.Context) error {
 // goroutine starts (BA.Start path) or before the existing post-postProcess
 // drain runs (Reset path's postProcess closure).
 //
-// Internally calls dequeueDuringBlockMovement with the supplied transient
-// drop set as the filter. Non-conflicting txs in the queue are added to the
+// Internally calls dequeueDuringBlockMovementWithCutoff with the supplied
+// transient drop set as the filter. Before the consumer starts it ignores the
+// double-spend window (double_spend_window_millis), so the filter covers every
+// queued batch: with a non-empty drop set, startup places queued batches that
+// are still inside the window at once, while an empty drop set returns early
+// and leaves them to wait out the window. After the consumer starts it keeps
+// the window cutoff, so batches inside the window are left for the normal
+// dequeue, which places them without the filter. Non-conflicting txs in the queue are added to the
 // current subtree as part of the same drain — same routing as default-case
 // dequeue would have used. skipNotification=true so this is safe to invoke
 // before subtree-announcement listeners are wired up.
@@ -8091,8 +8097,9 @@ func (stp *SubtreeProcessor) dequeueDuringBlockMovementWithCutoff(transactionMap
 // queue length, and the backpressure that reads it, honest during the
 // drain, and bounds what a failure part-way through can lose. fn reports how
 // many of the chunk's transactions it placed in subtrees, and that number is
-// added to the subtrees count before the chunk is settled. DrainQueue ignores
-// the time cutoff so its transient drop filter covers the queue already present.
+// added to the subtrees count before the chunk is settled. Before the consumer
+// starts, DrainQueue ignores the time cutoff so its transient drop filter covers
+// the queue already present; after Start it keeps the double-spend window cutoff.
 func (stp *SubtreeProcessor) forEachDrainChunk(maxItems int, fn func(batches []*TxBatch) (int, error)) error {
 	return stp.forEachDrainChunkWithCutoff(maxItems, false, fn)
 }

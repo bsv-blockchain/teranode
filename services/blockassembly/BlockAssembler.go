@@ -4285,7 +4285,11 @@ func (b *BlockAssembler) drainUnminedDropHashes(where string, isReload bool) err
 // blockassembly_onRestartRemoveInvalidParentChainTxs are both on. Otherwise a
 // skipped transaction's children would reach a block template without their
 // parent, so the load keeps the scan that fails. The disk-sorted load runs only
-// with the parent check off, so it always keeps the failing scan.
+// with the parent check off, so it always keeps the failing scan. A child queued
+// through AddTx during the load is dropped by the queue drain that follows it
+// (drainUnminedDropHashes), with one gap: on a reset, with
+// double_spend_window_millis above 0 (it is 0 by default), a child queued inside
+// the window is left for the normal dequeue and placed without the filter.
 func (b *BlockAssembler) unminedTxIteratorForLoad() (utxo.UnminedTxIterator, error) {
 	dropsOrphanedChildren := b.settings.BlockAssembly.OnRestartValidateParentChain &&
 		b.settings.BlockAssembly.OnRestartRemoveInvalidParentChainTxs
