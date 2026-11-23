@@ -734,7 +734,16 @@ func (sc *SyncCoordinator) HandlePeerDisconnected(peerID peer.ID) {
 				return
 			}
 
-			_ = sc.TriggerSync()
+			// Stop may begin after the timer wins (or while this goroutine
+			// waits for another decision). Check at the decision boundary.
+			sc.decisionMu.Lock()
+			sc.lifecycleMu.Lock()
+			stopping := sc.stopping
+			sc.lifecycleMu.Unlock()
+			if !stopping {
+				_ = sc.triggerSyncLocked()
+			}
+			sc.decisionMu.Unlock()
 		}) {
 			sc.logger.Debugf("[SyncCoordinator] coordinator stopping, not re-selecting a sync peer after %s disconnected", idStr)
 		}

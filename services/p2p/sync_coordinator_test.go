@@ -2241,6 +2241,37 @@ func TestSyncCoordinator_HandlePeerDisconnected_ReselectIsTrackedAndCancellable(
 	require.Zero(t, localHeightCalls.Load(), "no sync decision may run after Stop")
 }
 
+// The timer may already have fired while another decision holds decisionMu.
+// Stop must still prevent the delayed decision when that lock becomes free.
+func TestSyncCoordinator_HandlePeerDisconnected_ReselectBlockedAtStopBoundary(t *testing.T) {
+	sc, _ := newTestSyncCoordinator(t)
+	pid := mustNewPeerID(t)
+	var localHeightCalls atomic.Int32
+	sc.SetGetLocalHeightCallback(func(context.Context) uint32 {
+		localHeightCalls.Add(1)
+		return 0
+	})
+
+	sc.mu.Lock()
+	sc.currentSyncPeer = pid.String()
+	sc.mu.Unlock()
+	sc.HandlePeerDisconnected(pid)
+
+	sc.decisionMu.Lock()
+	time.Sleep(syncPeerReselectDelay + 100*time.Millisecond)
+	stopCtx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	sc.Stop(stopCtx)
+	cancel()
+	sc.decisionMu.Unlock()
+
+	select {
+	case <-sc.drained:
+	case <-time.After(time.Second):
+		t.Fatal("delayed reselect did not drain after Stop")
+	}
+	require.Zero(t, localHeightCalls.Load(), "timer-ready reselect must not start a decision after Stop")
+}
+
 // After Stop has begun, a late libp2p disconnect callback must not spawn a
 // tracked goroutine: wg.Add racing wg.Wait is a WaitGroup misuse panic.
 func TestSyncCoordinator_GoTracked_RefusedAfterStop(t *testing.T) {
