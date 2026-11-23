@@ -33,6 +33,10 @@ func newWatchedProcessor(t *testing.T, mutate ...func(*SubtreeProcessor)) (*Subt
 
 	requests.reset()
 
+	requests.mu.Lock()
+	requests.results = nil
+	requests.mu.Unlock()
+
 	return stp, set, requests
 }
 
@@ -40,7 +44,22 @@ func (r *storeRequests) reset() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	r.roots = nil
+	r.roots = nil // the results stay: a test settles the sends of earlier rounds
+}
+
+// settleAll settles every send so far, as failed: the store ended and the watch may send again.
+func (r *storeRequests) settleAll() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	for _, result := range r.results {
+		if result != nil {
+			select {
+			case result <- StoreResult{Err: errors.NewStorageError("settled")}:
+			default:
+			}
+		}
+	}
 }
 
 func (r *storeRequests) snapshot() []chainhash.Hash {
@@ -72,13 +91,12 @@ func TestStoredPrefixWatch_PrunesTheSetToTheChain(t *testing.T) {
 	stranger := chainhash.HashH([]byte("a subtree that left the chain"))
 	set.Add(stranger)
 	set.Add(chainRoot(stp, 0))
-	set.Finish(chainhash.HashH([]byte("another stranger")), StoreResult{Err: errors.NewStorageError("x")}, false, 0)
+	set.Finish(chainhash.HashH([]byte("another stranger")), StoreResult{Err: errors.NewStorageError("x")}, false)
 
 	stp.maintainStoredPrefix(time.Now())
 
 	require.False(t, set.Has(stranger), "a root that left the chain is dropped, so the set cannot outgrow it")
 	require.True(t, set.Has(chainRoot(stp, 0)))
-	require.Equal(t, 1, set.Len())
 	require.False(t, set.HasFailed(chainhash.HashH([]byte("another stranger"))))
 }
 
@@ -141,33 +159,16 @@ func TestStoredPrefixWatch_AdvancingPrefixIsLeftAlone(t *testing.T) {
 	requests.requireNoneSent(t)
 }
 
-func TestStoredPrefixWatch_TheStallTimeIsThreeMedianStoresWhenThatIsLonger(t *testing.T) {
-	stp, set, requests := newWatchedProcessor(t)
-	t0 := time.Now()
-
-	for range 5 {
-		set.Finish(chainhash.HashH([]byte("done")), StoreResult{SubtreeStored: true, MetaNotApplicable: true}, false, 100*time.Second)
-	}
-
-	stp.maintainStoredPrefix(t0)
-	stp.maintainStoredPrefix(t0.Add(299 * time.Second))
-	requests.requireNoneSent(t)
-
-	// the stored count advanced by the stores above, before t0; nothing since
-	stp.maintainStoredPrefix(t0.Add(301 * time.Second))
-	requests.requireSent(t, chainRoot(stp, 0))
-}
-
 func TestStoredPrefixWatch_NothingIsSentWhileARetryIsInFlight(t *testing.T) {
 	stp, set, requests := newWatchedProcessor(t)
 	t0 := time.Now()
 
-	set.RetryStarted()
+	set.RetryStarted(chainRoot(stp, 0))
 	stp.maintainStoredPrefix(t0)
 	stp.maintainStoredPrefix(t0.Add(400 * time.Second))
 	requests.requireNoneSent(t)
 
-	set.Finish(chainRoot(stp, 0), StoreResult{Err: errors.NewStorageError("exhausted")}, true, time.Second)
+	set.Finish(chainRoot(stp, 0), StoreResult{Err: errors.NewStorageError("exhausted")}, true)
 	stp.maintainStoredPrefix(t0.Add(401 * time.Second))
 	requests.requireSent(t, chainRoot(stp, 0)) // failed for good, and the retry is over
 }
@@ -176,21 +177,22 @@ func TestStoredPrefixWatch_ASubtreeWhoseRetriesRanOutIsSentAgainAtOnceWhileItIsC
 	stp, set, requests := newWatchedProcessor(t)
 	t0 := time.Now()
 
-	set.Finish(chainRoot(stp, 2), StoreResult{Err: errors.NewStorageError("exhausted")}, true, time.Second)
+	set.Finish(chainRoot(stp, 2), StoreResult{Err: errors.NewStorageError("exhausted")}, true)
 
 	stp.maintainStoredPrefix(t0)
 	requests.requireSent(t, chainRoot(stp, 2))
 
 	// a deterministic failure does not spin
-	set.Finish(chainRoot(stp, 2), StoreResult{Err: errors.NewStorageError("exhausted")}, false, time.Second)
+	set.Finish(chainRoot(stp, 2), StoreResult{Err: errors.NewStorageError("exhausted")}, false)
 	stp.maintainStoredPrefix(t0.Add(time.Second))
 	requests.requireNoneSent(t)
 
+	requests.settleAll()
 	stp.maintainStoredPrefix(t0.Add(31 * time.Second))
 	requests.requireSent(t, chainRoot(stp, 2))
 
 	// one that left the chain is not sent
-	set.Finish(chainhash.HashH([]byte("gone")), StoreResult{Err: errors.NewStorageError("exhausted")}, false, time.Second)
+	set.Finish(chainhash.HashH([]byte("gone")), StoreResult{Err: errors.NewStorageError("exhausted")}, false)
 	stp.maintainStoredPrefix(t0.Add(40 * time.Second))
 	requests.requireNoneSent(t)
 }
@@ -199,7 +201,7 @@ func TestStoredPrefixWatch_ARequestIsSentWithoutWaitingForTheStore(t *testing.T)
 	stp, set, _ := newWatchedProcessor(t)
 	stp.newSubtreeChan = make(chan NewSubtreeRequest) // nobody receives: the store queue is full
 
-	set.Finish(chainRoot(stp, 0), StoreResult{Err: errors.NewStorageError("exhausted")}, false, time.Second)
+	set.Finish(chainRoot(stp, 0), StoreResult{Err: errors.NewStorageError("exhausted")}, false)
 
 	done := make(chan struct{})
 
@@ -240,4 +242,64 @@ func TestStoredPrefixWatch_TheProcessorRunsItOnATick(t *testing.T) {
 
 	require.Eventually(t, func() bool { return requests.has(chainRoot(stp, 0)) }, 5*time.Second, 5*time.Millisecond,
 		"a stuck prefix is sent again without anything poking the processor")
+}
+
+// A hole at the front stays a hole while later subtrees store: the stall is the first unstored
+// root's, not the set's.
+func TestStoredPrefixWatch_AHoleAtTheFrontIsSentAgainWhileLaterRootsStore(t *testing.T) {
+	stp, set, requests := newWatchedProcessor(t)
+	t0 := time.Now()
+
+	stp.maintainStoredPrefix(t0)
+
+	set.Add(chainRoot(stp, 1))
+	stp.maintainStoredPrefix(t0.Add(100 * time.Second))
+
+	set.Add(chainRoot(stp, 2))
+	stp.maintainStoredPrefix(t0.Add(149 * time.Second))
+	requests.requireNoneSent(t)
+
+	stp.maintainStoredPrefix(t0.Add(151 * time.Second))
+	requests.requireSent(t, chainRoot(stp, 0))
+}
+
+func TestStoredPrefixWatch_ARetryOfAnotherRootDoesNotHoldTheHoleBack(t *testing.T) {
+	stp, set, requests := newWatchedProcessor(t)
+	t0 := time.Now()
+
+	set.RetryStarted(chainRoot(stp, 3))
+	stp.maintainStoredPrefix(t0)
+	stp.maintainStoredPrefix(t0.Add(151 * time.Second))
+	requests.requireSent(t, chainRoot(stp, 0))
+}
+
+// In an outage every send holds bytes in the retry channel for about 100 s; a root is not sent
+// again until its last send has settled.
+func TestStoredPrefixWatch_ARootIsNotSentAgainWhileItsLastSendIsOutstanding(t *testing.T) {
+	stp, set, requests := newWatchedProcessor(t)
+	t0 := time.Now()
+
+	failed := StoreResult{Err: errors.NewStorageError("outage")}
+	set.Finish(chainRoot(stp, 2), failed, false)
+
+	for i := range 12 { // 6 minutes of ticks, the writes blocked: nothing settles
+		stp.maintainStoredPrefix(t0.Add(time.Duration(i) * 31 * time.Second))
+	}
+
+	time.Sleep(30 * time.Millisecond)
+
+	first := requests.snapshot()
+	require.Equal(t, []chainhash.Hash{chainRoot(stp, 2), chainRoot(stp, 0)}, first)
+
+	requests.mu.Lock()
+	last := requests.results[0]
+	requests.mu.Unlock()
+	require.NotNil(t, last, "a re-send asks for its result, to know when it settles")
+	requests.reset()
+
+	// the send settles failed: now it may be sent again
+	last <- failed
+	set.Finish(chainRoot(stp, 2), failed, false)
+	stp.maintainStoredPrefix(t0.Add(400 * time.Second))
+	requests.requireSent(t, chainRoot(stp, 2))
 }

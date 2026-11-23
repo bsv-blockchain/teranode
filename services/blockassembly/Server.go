@@ -1167,11 +1167,14 @@ func (ba *BlockAssembly) storeSubtreeData(ctx context.Context, subtreeRequest su
 
 		if metaApplicable {
 			// Stored means both files: report whether the meta is there, checked only for a caller
-			// that reads the result or the stored set. A missing one is not rebuilt, which would read
-			// the request's maps after the caller moved on (that needs pinning), unless the stored
+			// that reads the result or the stored set. A missing one is not rebuilt, unless the stored
 			// set needs it: a subtree whose file landed and whose meta failed is sent again by the
-			// processor and would never reach the set otherwise. The build is inline, before the
-			// caller is answered, so the request's maps are still in use.
+			// processor and would never reach the set otherwise. The build runs here, before the
+			// caller is answered, but nobody makes it wait: the processor's re-send does not, and
+			// reads the live maps like every first-write meta build. A reset that clears them
+			// supersedes the request, and the build then ends as cancelled, not failed. It also
+			// delays the ordered announcements behind this request by one meta build; only a
+			// re-send, which does not announce, or a rare late send finds a subtree without its meta.
 			if subtreeRequest.Result == nil && ba.storedSet == nil {
 				outcome.metaAbsent()
 			} else if metaExists, _ := ba.subtreeStore.Exists(ctx, subtree.RootHash()[:], fileformat.FileTypeSubtreeMeta); metaExists {
