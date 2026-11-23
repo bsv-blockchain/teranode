@@ -313,6 +313,48 @@ func TestLaneRowsGiveUpOnAHungSubtreeStore(t *testing.T) {
 
 // A block of more subtrees than are read at once still gets its rows, well inside the deadline:
 // each finished read frees its slot for the next.
+// Reads stuck on a hung disk keep the file store's read permits, which every file read in the
+// process shares, until the disk answers. The slots bound them across blocks, not per block: once
+// one block has left laneBitmapReadConcurrency reads stuck, the next block starts no read at all,
+// times out and goes without rows, so the stuck reads never hold more permits than that. Once they
+// return, blocks read again.
+func TestLaneRowsLeaveAtMostTheSlotsStuckAcrossBlocks(t *testing.T) {
+	const subtrees = laneBitmapReadConcurrency + 4
+
+	u, block, store := hungLaneRowsBlock(t, subtrees)
+
+	saved := laneBitmapReadTimeout
+	laneBitmapReadTimeout = 50 * time.Millisecond
+
+	t.Cleanup(func() { laneBitmapReadTimeout = saved })
+
+	require.Nil(t, u.laneRows(context.Background(), block))
+	require.Equal(t, int32(laneBitmapReadConcurrency), store.gets.Load(), "the first block leaves a full pool of reads stuck")
+
+	timedOut := laneMetric(t, "teranode_lane_missing_bitmaps_total", "reason", lane.MissingBitmapsTimedOut)
+
+	next := &model.Block{Subtrees: block.Subtrees, TransactionCount: block.TransactionCount}
+
+	started := time.Now()
+	require.Nil(t, u.laneRows(context.Background(), next))
+	require.Less(t, time.Since(started), time.Second)
+	require.Equal(t, int32(laneBitmapReadConcurrency), store.gets.Load(), "the next block starts no read while the stuck ones hold every slot")
+	require.Equal(t, timedOut+subtrees, laneMetric(t, "teranode_lane_missing_bitmaps_total", "reason", lane.MissingBitmapsTimedOut))
+
+	// The disk answers: the stuck reads return and free their slots, and a block reads again.
+	store.unhang()
+
+	settle := time.Now().Add(5 * time.Second)
+	for len(u.laneBitmapReadSlots()) > 0 && time.Now().Before(settle) {
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	require.Empty(t, u.laneBitmapReadSlots(), "every slot is free once the stuck reads return")
+
+	require.Nil(t, u.laneRows(context.Background(), next), "the store now answers with an error, so still no rows")
+	require.Equal(t, int32(laneBitmapReadConcurrency+subtrees), store.gets.Load(), "but every subtree was read")
+}
+
 func TestLaneRowsReadMoreSubtreesThanRunAtOnce(t *testing.T) {
 	const subtrees = laneBitmapReadConcurrency + 1
 

@@ -419,7 +419,7 @@ func (u *Server) processTxMetaUsingStoreAllowing(ctx context.Context, txHashes [
 								// one-transaction BatchDecorate for GetMeta's fields and the
 								// position. Through the txmeta cache it fills the cache,
 								// position included, as GetMeta would have.
-								one := []*utxo.UnresolvedMetaData{{Hash: txHash, Idx: i + j}}
+								one := []*utxo.UnresolvedMetaData{{Hash: txHash}}
 								if err := store.BatchDecorate(gCtx, one, oneByOneFields...); err != nil {
 									return err
 								}

@@ -268,10 +268,11 @@ func TestProcessTxMetaUsingStore_OneByOneReadFailsWhenTheStoreFindsNothingAtShad
 	for name, tc := range map[string]struct {
 		returns error
 		item    error
+		want    error
 	}{
-		"the store's error":       {returns: errors.NewProcessingError("store refused")},
-		"a per-transaction error": {item: errors.NewTxNotFoundError("not here")},
-		"no data":                 {},
+		"the store's error":       {returns: errors.NewInvalidArgumentError("store refused"), want: errors.ErrInvalidArgument},
+		"a per-transaction error": {item: errors.NewProcessingError("bad record"), want: errors.ErrProcessing},
+		"no data":                 {want: errors.ErrTxNotFound},
 	} {
 		t.Run(name, func(t *testing.T) {
 			tSettings := test.CreateBaseTestSettings(t)
@@ -286,10 +287,50 @@ func TestProcessTxMetaUsingStore_OneByOneReadFailsWhenTheStoreFindsNothingAtShad
 
 			txMetaSlice := make([]metaSliceItem, 1)
 			_, readErr := server.processTxMetaUsingStore(context.Background(), []chainhash.Hash{{0x01}}, txMetaSlice, nil, false, false, true)
-			require.Error(t, readErr)
+			require.ErrorIs(t, readErr, tc.want, "the store's own reason comes back")
 			require.False(t, txMetaSlice[0].isSet)
 		})
 	}
+}
+
+// Through the txmeta cache, the shadow one-by-one read fills the cache as GetMeta did, now with the
+// own lane position, so the transaction is read from the cache next time. The shared field set it
+// builds its fields from is left as it was.
+func TestProcessTxMetaUsingStore_OneByOneReadFillsTheCacheAtShadow(t *testing.T) {
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.UtxoStore.LaneMigration = settings.LaneMigrationShadow
+
+	metaFields := append([]fields.FieldName(nil), utxo.MetaFields...)
+
+	store := &utxo.MockUtxostore{}
+	store.On("BatchDecorate", mock.Anything, mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
+		args.Get(1).([]*utxo.UnresolvedMetaData)[0].Data = &meta.Data{
+			Fee:          1,
+			SizeInBytes:  1,
+			TxInpoints:   subtreepkg.NewTxInpointsFromPacked([]chainhash.Hash{{0x09}}, []uint32{1, 0}),
+			LanePosition: lane.Pack(4, 1),
+		}
+	}).Return(nil)
+
+	cache, err := txmetacache.NewTxMetaCache(context.Background(), tSettings, ulogger.TestLogger{}, store, txmetacache.Unallocated)
+	require.NoError(t, err)
+
+	server := &Server{logger: ulogger.TestLogger{}, settings: tSettings, utxoStore: cache}
+
+	hashes := []chainhash.Hash{{0x01}}
+	txMetaSlice := make([]metaSliceItem, len(hashes))
+
+	_, err = server.processTxMetaUsingStore(context.Background(), hashes, txMetaSlice, nil, false, false, false)
+	require.NoError(t, err)
+	require.Equal(t, lane.Pack(4, 1), txMetaSlice[0].lanePosition)
+
+	out, found := make([]txmetacache.CachedMeta, 1), make([]bool, 1)
+	_, err = cache.(*txmetacache.TxMetaCache).GetMetaCachedInto(context.Background(), hashes, nil, out, found)
+	require.NoError(t, err)
+	require.True(t, found[0], "the read filled the cache")
+	require.Equal(t, lane.Pack(4, 1), out[0].LanePosition, "with the own position")
+
+	require.Equal(t, metaFields, utxo.MetaFields, "utxo.MetaFields is shared and left as it was")
 }
 
 // A transaction in neither the cache nor the store is validated here, and the position its create
