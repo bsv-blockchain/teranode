@@ -485,7 +485,13 @@ func TestCreateFirstLifecycle(t *testing.T) {
 		_, err = store.Create(ctx, child, 131, utxo.WithCreating(true))
 		require.NoError(t, err)
 
-		_, err = store.Spend(ctx, child, 131, utxo.IgnoreFlags{RequireParentOutputs: true})
+		// The first spend of a create-first attempt runs under the lease of its record. The store
+		// leaves the spends of such a call to the rollback of that record.
+		spendCtx, cancelSpend := context.WithDeadline(utxo.WithLeaseBound(ctx), time.Now().Add(time.Minute))
+		_, err = store.Spend(spendCtx, child, 131, utxo.IgnoreFlags{RequireParentOutputs: true})
+
+		cancelSpend()
+
 		require.ErrorIs(t, err, wantErr, "the spend must fail on the bad input")
 
 		inputs, err := utxo.GetSpends(child)

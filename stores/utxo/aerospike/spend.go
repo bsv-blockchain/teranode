@@ -744,6 +744,9 @@ type spendCompletionResult struct {
 	// requireParentOutput mirrors the batchSpend field for the call; see
 	// rollbackPartialSpends and rollbackSet.
 	requireParentOutput bool
+	// leaseBound is true for a call that holds a create-first spend lease
+	// (batchSpend.deadline); see rollbackPartialSpends.
+	leaseBound bool
 
 	spenderChecked bool
 	spenderExists  bool
@@ -890,7 +893,13 @@ func (s *Store) rollbackPartialSpends(tx *bt.Tx, result *spendCompletionResult, 
 	// failure, either pruned-replay answer included, reverses what the call
 	// wrote, while an infrastructure error leaves it for the retry to match
 	// idempotently.
-	if result.requireParentOutput {
+	//
+	// A call that holds a create-first spend lease is not that caller. Its
+	// record is the tentative one, and its owner reverses the spends only after
+	// it has marked the record rolling back (utxo.RollBackCreating), so that no
+	// roll-forward can finalize the record beside the reversal. It takes the
+	// probe below, which finds that record and leaves the spends.
+	if result.requireParentOutput && !result.leaseBound {
 		if !result.rollbackNeeded {
 			return
 		}
@@ -1174,6 +1183,10 @@ func (s *Store) resolveSpendCompletions(ctx context.Context, tx *bt.Tx, items []
 		// is safe to read on an unpublished item too.
 		if item.requireParentOutput {
 			result.requireParentOutput = true
+		}
+
+		if !item.deadline.IsZero() {
+			result.leaseBound = true
 		}
 
 		if !onlyCompleted {
