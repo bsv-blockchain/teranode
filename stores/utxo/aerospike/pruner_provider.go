@@ -53,9 +53,11 @@ func (s *Store) GetPrunerService() (pruner.Service, error) {
 		return prunerServiceInstance, prunerServiceError
 	}
 
-	// Create options for the pruner service. The pruner only deletes: it writes no replay
-	// markers, so it makes no native-op or UDF call and needs no demotion hook. A replay of a
-	// pruned transaction is refused when it is spent, from the height stored with the spend.
+	// Create options for the pruner service. The pruner writes no replay markers: a replay of a
+	// pruned transaction is refused when it is spent, from the height stored with the spend. It
+	// still writes records it keeps (clearUnminedDAH, and in defensive mode ClearParentRefs, which
+	// unspends through the store's UDF-only Unspend), so it makes no native-op call of its own and
+	// needs no demotion hook.
 	opts := aeropruner.Options{
 		Logger:        s.logger,
 		Ctx:           s.ctx,
