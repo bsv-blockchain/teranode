@@ -1116,35 +1116,31 @@ func TestStoreQueue_ASnapshotIsNeverCancelled(t *testing.T) {
 	require.False(t, ok, "only the chain request was cancelled")
 }
 
-// A rollback marks the restored chain wanted again before a worker takes it, and the request is
-// stored.
-func TestStoreQueue_ARequestWantedAgainBeforeItIsTakenIsStored(t *testing.T) {
+// A stale request waits behind the wanted ones, so a rollback that marks the restored chain wanted
+// again before a worker comes to it finds it still queued, and it is stored.
+func TestReorgScenario_StoreQueue_ARequestWantedAgainBeforeItIsTakenIsStored(t *testing.T) {
 	q := NewStoreQueue(1 << 40)
 	a, b := chainRequest(t, 1), chainRequest(t, 2)
 	q.Push(a)
 	q.Push(b)
-
-	q.Stale(a.Subtree, b.Subtree)
-	q.Wanted(b.Subtree)
+	q.Stale(a.Subtree)
 
 	first, _, ok := q.Take(takeCtx(t, 5*time.Second))
 	require.True(t, ok)
-	require.Same(t, b.Subtree, first.Subtree, "the wanted request is taken first")
-
-	_, _, ok = q.Take(takeCtx(t, 100*time.Millisecond))
-	require.False(t, ok, "a is still stale: cancelled")
+	require.Same(t, b.Subtree, first.Subtree, "the wanted request is taken before the stale one")
 
 	select {
 	case <-a.ErrChan:
+		t.Fatal("the stale request is cancelled when a worker comes to it, not before")
 	default:
-		t.Fatal("the stale request was cancelled")
+		require.NotNil(t, q.entry(a.Subtree))
 	}
 
-	select {
-	case <-b.ErrChan:
-		t.Fatal("the wanted request was not answered: a worker has it")
-	default:
-	}
+	q.Wanted(a.Subtree) // the block movement failed and put the chain back
+
+	second, _, ok := q.Take(takeCtx(t, 5*time.Second))
+	require.True(t, ok)
+	require.Same(t, a.Subtree, second.Subtree, "wanted again: stored, not cancelled")
 }
 
 // Without blockassembly_storedPrefixTemplate there is no queue, and a Remove sends the requests of the
