@@ -773,3 +773,26 @@ func TestReaderCountsAPositionNoLoadedBlockAtTheHeightTookTodayOnly(t *testing.T
 		})
 	})
 }
+
+// Subtree validation's block-ID set covers a recent window. A parent mined in a folded block
+// outside it, answered by the floor, agrees, rather than reading as off the chain.
+func TestReaderTreatsAFoldedBlockOutsideTheCallersWindowAsUnknown(t *testing.T) {
+	engines(t, func(t *testing.T, store blockchainstore.Store) {
+		c := newChain(t, store)
+
+		b1 := c.add(nil, takes(t, 2, 50))
+		b2 := c.add(b1)
+		b3 := c.add(b2)
+		b4 := c.add(b3)
+		b5 := c.add(b4)
+
+		r := newReader(ulogger.TestLogger{}, store, 2)
+		follow(t, r) // anchor 3: b1 folded
+
+		window := map[uint32]bool{b3.id: true, b4.id: true, b5.id: true}
+
+		requireCounted(t, ReaderSubtreeAlreadyMined, KindAgree, lane.ViaFloor, func() {
+			r.CompareBlocks(ReaderSubtreeAlreadyMined, r.ViewOfIDs(window), chainhash.Hash{}, lane.Pack(2, 50), []uint32{b1.id})
+		})
+	})
+}

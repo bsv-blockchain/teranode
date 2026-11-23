@@ -635,7 +635,7 @@ func (u *Server) blessMissing(ctx context.Context, blockHash chainhash.Hash, sub
 			view = r.ViewOfIDs(blockIds)
 		}
 
-		r.CompareBlocks(lanereader.ReaderSubtreeAlreadyMined, view, *tx.TxIDChainHash(), txMeta.LanePosition, txMeta.BlockIDs)
+		r.CompareBlocks(lanereader.ReaderSubtreeAlreadyMined, view, *tx.TxIDChainHash(), u.laneShadowPosition(ctx, tx.TxIDChainHash(), txMeta), txMeta.BlockIDs)
 	}
 
 	// check whether this transaction was already mined on our chain by comparing the block ids

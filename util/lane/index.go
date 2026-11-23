@@ -403,9 +403,10 @@ type ChainView struct {
 	disconnected bool
 }
 
-// Disconnected reports whether the view is a fork whose older ancestry the index no longer holds,
-// so a block missing from it may still be on the chain.
-func (v *ChainView) Disconnected() bool { return v.disconnected }
+// Disconnected reports whether the view may be missing blocks of its chain, so a block missing
+// from it may still be on the chain: a fork whose older ancestry the index no longer holds, or a
+// chain given as a set of block IDs, which a caller may have cut to a recent window.
+func (v *ChainView) Disconnected() bool { return v.disconnected || v.ids != nil }
 
 // Snapshot is the view's snapshot.
 func (v *ChainView) Snapshot() *IndexSnapshot { return v.snap }
