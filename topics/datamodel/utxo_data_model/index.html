@@ -8010,6 +8010,11 @@
 <td>Number of UTXOs that have been spent in this record.</td>
 </tr>
 <tr>
+<td><strong>spendHeights</strong></td>
+<td><code>Byte[4 per output]</code></td>
+<td>The block height of each output's spend, as 4 little-endian bytes per output in output order (output 3 is bytes 12 to 15). Grows to cover the highest output spent. Zero means none was recorded: an output not spent, or spent by a version that did not record heights. The spend uses it to tell an earlier attempt at the same spend from a replay of a transaction the pruner removed. It lives outside <strong>utxos</strong> so a spent entry stays the 68 bytes an older version reads as spent.</td>
+</tr>
+<tr>
 <td><strong>frozen</strong></td>
 <td><code>Boolean</code></td>
 <td>Indicates whether the UTXO or transaction is frozen.</td>

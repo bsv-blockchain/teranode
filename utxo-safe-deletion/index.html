@@ -7911,14 +7911,14 @@
 </ul>
 <p><strong>Current approach (all cases):</strong></p>
 <ul>
-<li>Spend: 1 read (parent), 1 write (set DAH)</li>
-<li>Cleanup: 1 read (parent + UTXOs), N reads (verify N children via BatchGet), 1 delete, M writes (deletedChildren)</li>
-<li><strong>Total: 2+N reads, 1+M writes</strong></li>
+<li>Spend: 1 read (parent), 1 write (set DAH; the same write records the spend's block height)</li>
+<li>Cleanup: 1 read (parent + UTXOs), N reads (verify N children via BatchGet, only with defensive mode on), 1 delete. No replay-marker writes: a replay of a pruned transaction is refused at the spend, from the recorded spend height. Defensive mode still unspends a conflicting record's inputs on its surviving parents before the delete</li>
+<li><strong>Total: 2+N reads, 1 write</strong> (more on a conflicting record with defensive mode on)</li>
 </ul>
 <p>Where:</p>
 <ul>
 <li>N = unique children for this parent (typically 2-3, up to 100+)</li>
-<li>M = number of inputs (parents to update with deletedChildren) - same in both approaches</li>
+<li>M = number of inputs (parents the previous approach updated with deletedChildren)</li>
 <li>K = number of cleanup skip attempts in previous preservation case</li>
 </ul>
 <p><strong>Analysis:</strong></p>

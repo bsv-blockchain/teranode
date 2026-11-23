@@ -1334,6 +1334,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#free-spent-output" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Free Spent Output
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -7585,6 +7596,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#free-spent-output" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Free Spent Output
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -8018,10 +8040,21 @@
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-24-1"><a id="__codelineno-24-1" name="__codelineno-24-1" href="#__codelineno-24-1"></a><span class="nv">SETTINGS_CONTEXT</span><span class="o">=</span>dev.<span class="o">[</span>YOUR_CONTEXT<span class="o">]</span><span class="w"> </span>./teranode-cli<span class="w"> </span>prepare-lane-schema
 </span></code></pre></div>
 <p>Run it at <code>utxostore_laneMigration=off</code>, with every teranode process of the node stopped, as a database role that owns the tables. It takes no arguments and is safe to run again. It adds nullable, empty lane columns and fills no existing row. It opens the store the way the node does first, and on a new database that normal startup can create the store's base schema and its metadata rows. Start the node's processes afterwards so each sees the same schema. On utxoset it adds the eight lane columns that opening the store at <code>off</code> never adds. The SQL store already adds its columns at every open, and Aerospike has no schema to install. The blockchain store's lane tables are not this command's: every start of the blockchain service creates them when its role may <code>CREATE</code>.</p>
+<h4 id="free-spent-output">Free Spent Output<a class="headerlink" href="#free-spent-output" title="Permanent link">&para;</a></h4>
+<p>Free one output of the UTXO store that is still spent by a transaction the store has no record of:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-25-1"><a id="__codelineno-25-1" name="__codelineno-25-1" href="#__codelineno-25-1"></a><span class="nv">SETTINGS_CONTEXT</span><span class="o">=</span>dev.<span class="o">[</span>YOUR_CONTEXT<span class="o">]</span><span class="w"> </span>./teranode-cli<span class="w"> </span>free-spent-output<span class="w"> </span>--parent<span class="w"> </span>&lt;txid&gt;<span class="w"> </span>--vout<span class="w"> </span>&lt;n&gt;<span class="w"> </span>--spender<span class="w"> </span>&lt;txid&gt;
+</span></code></pre></div>
+<p>This clears the stall a left-behind spend causes: a block that mines the spender is refused with error 78 (<code>ERR_UTXO_SPENDING_TX_PRUNED</code>) on every retry. First tell that stall apart from a real replay, which must stay refused, as "When a spend is refused with error 78" in <code>docs/topics/stores/utxo.md</code> describes. The command refuses when the spender has a record, frees the output only while it still names the spender, and reads it back afterwards. It works on SQL and Aerospike. Stop every service that writes to the UTXO store before running it, because a running node could create the spender between the command's check and its unspend.</p>
+<p>Options:</p>
+<ul>
+<li><code>--parent</code> - Transaction id of the parent whose output is spent (required)</li>
+<li><code>--vout</code> - Output index in the parent (default: 0)</li>
+<li><code>--spender</code> - Transaction id the output names as its spender (required)</li>
+</ul>
 <h3 id="benchmarking-tools">Benchmarking Tools<a class="headerlink" href="#benchmarking-tools" title="Permanent link">&para;</a></h3>
 <p>Four profiling commands for measuring block assembly performance. Each writes CPU and memory profiles to disk.</p>
 <h4 id="subtree-benchmark">Subtree Benchmark<a class="headerlink" href="#subtree-benchmark" title="Permanent link">&para;</a></h4>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-25-1"><a id="__codelineno-25-1" name="__codelineno-25-1" href="#__codelineno-25-1"></a><span class="nv">SETTINGS_CONTEXT</span><span class="o">=</span>dev.<span class="o">[</span>YOUR_CONTEXT<span class="o">]</span><span class="w"> </span>./teranode-cli<span class="w"> </span>subtreebench<span class="w"> </span><span class="o">[</span>options<span class="o">]</span>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-26-1"><a id="__codelineno-26-1" name="__codelineno-26-1" href="#__codelineno-26-1"></a><span class="nv">SETTINGS_CONTEXT</span><span class="o">=</span>dev.<span class="o">[</span>YOUR_CONTEXT<span class="o">]</span><span class="w"> </span>./teranode-cli<span class="w"> </span>subtreebench<span class="w"> </span><span class="o">[</span>options<span class="o">]</span>
 </span></code></pre></div>
 <p>Options:</p>
 <ul>
@@ -8033,7 +8066,7 @@
 <li><code>--mem-profile</code> - Memory profile output file (default: <code>mem.prof</code>)</li>
 </ul>
 <h4 id="load-unmined-benchmark">Load Unmined Benchmark<a class="headerlink" href="#load-unmined-benchmark" title="Permanent link">&para;</a></h4>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-26-1"><a id="__codelineno-26-1" name="__codelineno-26-1" href="#__codelineno-26-1"></a><span class="nv">SETTINGS_CONTEXT</span><span class="o">=</span>dev.<span class="o">[</span>YOUR_CONTEXT<span class="o">]</span><span class="w"> </span>./teranode-cli<span class="w"> </span>loadunminedbench<span class="w"> </span><span class="o">[</span>options<span class="o">]</span>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-27-1"><a id="__codelineno-27-1" name="__codelineno-27-1" href="#__codelineno-27-1"></a><span class="nv">SETTINGS_CONTEXT</span><span class="o">=</span>dev.<span class="o">[</span>YOUR_CONTEXT<span class="o">]</span><span class="w"> </span>./teranode-cli<span class="w"> </span>loadunminedbench<span class="w"> </span><span class="o">[</span>options<span class="o">]</span>
 </span></code></pre></div>
 <p>Options:</p>
 <ul>
@@ -8044,7 +8077,7 @@
 <li><code>--mem-profile</code> - Memory profile output file (default: <code>loadunmined_mem.prof</code>)</li>
 </ul>
 <h4 id="transaction-map-benchmark">Transaction Map Benchmark<a class="headerlink" href="#transaction-map-benchmark" title="Permanent link">&para;</a></h4>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-27-1"><a id="__codelineno-27-1" name="__codelineno-27-1" href="#__codelineno-27-1"></a><span class="nv">SETTINGS_CONTEXT</span><span class="o">=</span>dev.<span class="o">[</span>YOUR_CONTEXT<span class="o">]</span><span class="w"> </span>./teranode-cli<span class="w"> </span>txmapbench<span class="w"> </span><span class="o">[</span>options<span class="o">]</span>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-28-1"><a id="__codelineno-28-1" name="__codelineno-28-1" href="#__codelineno-28-1"></a><span class="nv">SETTINGS_CONTEXT</span><span class="o">=</span>dev.<span class="o">[</span>YOUR_CONTEXT<span class="o">]</span><span class="w"> </span>./teranode-cli<span class="w"> </span>txmapbench<span class="w"> </span><span class="o">[</span>options<span class="o">]</span>
 </span></code></pre></div>
 <p>Options:</p>
 <ul>
@@ -8054,7 +8087,7 @@
 <li><code>--mem-profile</code> - Memory profile output file (default: <code>createtransactionmap_mem.prof</code>)</li>
 </ul>
 <h4 id="remainder-benchmark">Remainder Benchmark<a class="headerlink" href="#remainder-benchmark" title="Permanent link">&para;</a></h4>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-28-1"><a id="__codelineno-28-1" name="__codelineno-28-1" href="#__codelineno-28-1"></a><span class="nv">SETTINGS_CONTEXT</span><span class="o">=</span>dev.<span class="o">[</span>YOUR_CONTEXT<span class="o">]</span><span class="w"> </span>./teranode-cli<span class="w"> </span>remainderbench<span class="w"> </span><span class="o">[</span>options<span class="o">]</span>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-29-1"><a id="__codelineno-29-1" name="__codelineno-29-1" href="#__codelineno-29-1"></a><span class="nv">SETTINGS_CONTEXT</span><span class="o">=</span>dev.<span class="o">[</span>YOUR_CONTEXT<span class="o">]</span><span class="w"> </span>./teranode-cli<span class="w"> </span>remainderbench<span class="w"> </span><span class="o">[</span>options<span class="o">]</span>
 </span></code></pre></div>
 <p>Options:</p>
 <ul>
@@ -8067,7 +8100,7 @@
 <p>The CLI includes two TUI (Terminal User Interface) tools for real-time monitoring and debugging.</p>
 <h4 id="log-viewer">Log Viewer<a class="headerlink" href="#log-viewer" title="Permanent link">&para;</a></h4>
 <p>View and filter logs in real-time with the interactive log viewer:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-29-1"><a id="__codelineno-29-1" name="__codelineno-29-1" href="#__codelineno-29-1"></a><span class="nv">SETTINGS_CONTEXT</span><span class="o">=</span>dev.<span class="o">[</span>YOUR_CONTEXT<span class="o">]</span><span class="w"> </span>./teranode-cli<span class="w"> </span>logs
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-30-1"><a id="__codelineno-30-1" name="__codelineno-30-1" href="#__codelineno-30-1"></a><span class="nv">SETTINGS_CONTEXT</span><span class="o">=</span>dev.<span class="o">[</span>YOUR_CONTEXT<span class="o">]</span><span class="w"> </span>./teranode-cli<span class="w"> </span>logs
 </span></code></pre></div>
 <p>Options:</p>
 <ul>
@@ -8086,7 +8119,7 @@
 <p>Press <code>?</code> for full keyboard shortcuts or <code>q</code> to quit.</p>
 <h4 id="node-monitor">Node Monitor<a class="headerlink" href="#node-monitor" title="Permanent link">&para;</a></h4>
 <p>Monitor node status with a live dashboard:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-30-1"><a id="__codelineno-30-1" name="__codelineno-30-1" href="#__codelineno-30-1"></a><span class="nv">SETTINGS_CONTEXT</span><span class="o">=</span>dev.<span class="o">[</span>YOUR_CONTEXT<span class="o">]</span><span class="w"> </span>./teranode-cli<span class="w"> </span>monitor
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-31-1"><a id="__codelineno-31-1" name="__codelineno-31-1" href="#__codelineno-31-1"></a><span class="nv">SETTINGS_CONTEXT</span><span class="o">=</span>dev.<span class="o">[</span>YOUR_CONTEXT<span class="o">]</span><span class="w"> </span>./teranode-cli<span class="w"> </span>monitor
 </span></code></pre></div>
 <p>The monitor displays:</p>
 <ul>
@@ -8109,22 +8142,22 @@
 <ol>
 <li>
 <p>Start your Teranode node:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-31-1"><a id="__codelineno-31-1" name="__codelineno-31-1" href="#__codelineno-31-1"></a><span class="nv">SETTINGS_CONTEXT</span><span class="o">=</span>dev.<span class="o">[</span>YOUR_CONTEXT<span class="o">]</span><span class="w"> </span>go<span class="w"> </span>run<span class="w"> </span>.
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-32-1"><a id="__codelineno-32-1" name="__codelineno-32-1" href="#__codelineno-32-1"></a><span class="nv">SETTINGS_CONTEXT</span><span class="o">=</span>dev.<span class="o">[</span>YOUR_CONTEXT<span class="o">]</span><span class="w"> </span>go<span class="w"> </span>run<span class="w"> </span>.
 </span></code></pre></div>
 </li>
 <li>
 <p>Check the initial FSM state:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-32-1"><a id="__codelineno-32-1" name="__codelineno-32-1" href="#__codelineno-32-1"></a><span class="nv">SETTINGS_CONTEXT</span><span class="o">=</span>dev.<span class="o">[</span>YOUR_CONTEXT<span class="o">]</span><span class="w"> </span>./teranode-cli<span class="w"> </span>getfsmstate
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-33-1"><a id="__codelineno-33-1" name="__codelineno-33-1" href="#__codelineno-33-1"></a><span class="nv">SETTINGS_CONTEXT</span><span class="o">=</span>dev.<span class="o">[</span>YOUR_CONTEXT<span class="o">]</span><span class="w"> </span>./teranode-cli<span class="w"> </span>getfsmstate
 </span></code></pre></div>
 </li>
 <li>
 <p>Transition to RUNNING state:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-33-1"><a id="__codelineno-33-1" name="__codelineno-33-1" href="#__codelineno-33-1"></a><span class="nv">SETTINGS_CONTEXT</span><span class="o">=</span>dev.<span class="o">[</span>YOUR_CONTEXT<span class="o">]</span><span class="w"> </span>./teranode-cli<span class="w"> </span>setfsmstate<span class="w"> </span>--fsmstate<span class="w"> </span>running
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-34-1"><a id="__codelineno-34-1" name="__codelineno-34-1" href="#__codelineno-34-1"></a><span class="nv">SETTINGS_CONTEXT</span><span class="o">=</span>dev.<span class="o">[</span>YOUR_CONTEXT<span class="o">]</span><span class="w"> </span>./teranode-cli<span class="w"> </span>setfsmstate<span class="w"> </span>--fsmstate<span class="w"> </span>running
 </span></code></pre></div>
 </li>
 <li>
 <p>Verify the FSM state change:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-34-1"><a id="__codelineno-34-1" name="__codelineno-34-1" href="#__codelineno-34-1"></a><span class="nv">SETTINGS_CONTEXT</span><span class="o">=</span>dev.<span class="o">[</span>YOUR_CONTEXT<span class="o">]</span><span class="w"> </span>./teranode-cli<span class="w"> </span>getfsmstate
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-35-1"><a id="__codelineno-35-1" name="__codelineno-35-1" href="#__codelineno-35-1"></a><span class="nv">SETTINGS_CONTEXT</span><span class="o">=</span>dev.<span class="o">[</span>YOUR_CONTEXT<span class="o">]</span><span class="w"> </span>./teranode-cli<span class="w"> </span>getfsmstate
 </span></code></pre></div>
 </li>
 </ol>

@@ -8037,8 +8037,6 @@ the <code>delete_at_height</code> partition scan on the next session and re-prun
 full-replication ACK buys no correctness, only latency in the per-block removal burst.</p>
 <p><strong>Scope</strong> - record removal only:</p>
 <ul>
-<li>Pruner <strong>parent updates</strong> (the <code>deletedChildren</code> map writes and the <code>addDeletedChildren</code> UDF)
-  mutate records that survive the prune and always use <code>COMMIT_ALL</code>.</li>
 <li>Every write <strong>outside</strong> the pruner always uses <code>COMMIT_ALL</code>. There is no cluster-wide commit-level
   setting: UTXO record creation, the transaction-creation lock, the conflict WAL, setMined, unspend
   and the preserve / delete-at-height writes are none of them self-healing, so relaxing them would

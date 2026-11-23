@@ -8134,9 +8134,8 @@
 <p>For each record to delete:</p>
 <ul>
 <li>If defensive mode enabled: Verify all spending children are stable</li>
-<li>If external transaction data exists: Delete <code>.tx</code> or <code>.outputs</code> file from Blob Store</li>
-<li>Update parent records with deleted children information</li>
 <li>Delete UTXO record from database</li>
+<li>If external transaction data exists: Delete <code>.tx</code> or <code>.outputs</code> file from Blob Store once the record delete is confirmed</li>
 </ul>
 </li>
 <li>
@@ -8263,15 +8262,17 @@
 <ul>
 <li>Has inputs → FileTypeTx (<code>.tx</code> file)</li>
 <li>No inputs → FileTypeOutputs (<code>.outputs</code> file)</li>
-<li>Delete file from Blob Store before deleting Aerospike record</li>
-<li>If file already deleted (by previous cleanup), proceed with Aerospike deletion</li>
+<li>Delete the Aerospike record, and delete the file from Blob Store only once that delete is confirmed</li>
+<li>If file already deleted (by previous cleanup), treat the cleanup as done</li>
 </ul>
 </li>
 </ol>
 <p><strong>Error Handling:</strong></p>
 <ul>
-<li>If file deletion fails: Log error and skip Aerospike record deletion</li>
-<li>If file not found (ErrNotFound): Proceed with Aerospike deletion (file already cleaned up)</li>
+<li>If the record delete fails or its outcome is unknown: Keep the file</li>
+<li>If file deletion fails: Log the error; the record is already gone, so the file is left behind</li>
+<li>If file not found (ErrNotFound): Treat as cleaned up</li>
+<li>With <code>pruner_skipDeletions</code> on, neither records nor files are deleted</li>
 </ul>
 <h3 id="27-channel-based-deduplication">2.7 Channel-Based Deduplication<a class="headerlink" href="#27-channel-based-deduplication" title="Permanent link">&para;</a></h3>
 <p>The Pruner uses a buffered channel (size 1) to handle pruning requests efficiently:</p>
