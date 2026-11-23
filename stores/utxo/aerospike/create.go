@@ -1641,7 +1641,7 @@ func (s *Store) storeExternallyWithLock(
 			s.logger.Warnf("[%s] Transaction %s exists but its child records could not be given the token of its master: %v", funcName, bItem.txHash, alignErr)
 		}
 
-		if masterToken := s.masterAttempt(bItem.txHash); len(masterToken) == 0 || !s.settings.UtxoStore.UseCreateFirstOrder {
+		if masterToken := s.masterAttempt(bItem.txHash); len(masterToken) == 0 {
 			clearErr := unlessAlreadyFinal(s.clearCreatingFlag(bItem.txHash, len(binsToStore), masterToken, nil))
 			if clearErr != nil {
 				// A mined create's caller may read ErrTxExists as done: the seeder and

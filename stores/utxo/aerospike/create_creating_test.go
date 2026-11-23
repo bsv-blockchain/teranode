@@ -102,8 +102,9 @@ func TestCreateWithCreating_MultiRecord(t *testing.T) {
 }
 
 // TestCreateOnlyDuplicate_MultiRecord_CreatingFlag verifies the duplicate-create guard on the
-// paginated path: with create-first on, a CreateOnly duplicate that does not carry WithCreating
-// must leave another attempt's tentative flag alone; with it off, the legacy recovery clears it.
+// paginated path: a record that carries an attempt token is a tentative record of some
+// attempt, so a CreateOnly duplicate that spent nothing leaves its creating state alone
+// whatever the setting says. Only FinalizeTransaction and the roll-forward healers finish it.
 func TestCreateOnlyDuplicate_MultiRecord_CreatingFlag(t *testing.T) {
 	for _, createFirst := range []bool{true, false} {
 		name := "create-first-off"
@@ -124,8 +125,9 @@ func TestCreateOnlyDuplicate_MultiRecord_CreatingFlag(t *testing.T) {
 			_, err := store.Create(ctx, tests.ParentTx, 100)
 			require.NoError(t, err)
 
-			_, err = store.Create(ctx, tx, 100, utxo.WithCreating(true))
+			md, err := store.Create(ctx, tx, 100, utxo.WithCreating(true))
 			require.NoError(t, err)
+			require.NotEmpty(t, md.Attempt, "precondition: a tentative record carries an attempt token")
 
 			_, err = store.Create(ctx, tx, 100, utxo.WithCreateOnly())
 			require.Error(t, err)
@@ -133,7 +135,62 @@ func TestCreateOnlyDuplicate_MultiRecord_CreatingFlag(t *testing.T) {
 
 			got := &meta.Data{}
 			require.NoError(t, store.GetMeta(ctx, tx.TxIDChainHash(), got))
-			require.Equal(t, createFirst, got.Creating, "a duplicate create must clear the creating flag only when create-first is off")
+			require.True(t, got.Creating, "a duplicate create leaves a record that carries an attempt token creating, whatever the setting says")
+			require.Equal(t, md.Attempt, got.Attempt, "the duplicate must not take ownership of another attempt's record")
+
+			// The record is still tentative, so its outputs stay gated: this caller spent nothing.
+			child := spendableChildTx(t, tx, 0)
+			_, err = store.Spend(ctx, child, 101)
+			require.ErrorIs(t, err, errors.ErrTxCreating, "an output of a tentative record must not be spendable")
+
+			inputs, err := utxo.GetSpends(tx)
+			require.NoError(t, err)
+			resp, err := store.GetSpend(ctx, inputs[0])
+			require.NoError(t, err)
+			require.Nil(t, resp.SpendingData, "nothing spent this record's input, so it may not be final")
+		})
+	}
+}
+
+// TestCreateOnlyDuplicate_ClearsATokenlessCreatingRecord verifies the other half of the rule:
+// a creating record with no attempt token came from a create that did not defer the spend of
+// its inputs - a coinbase or a seeded transaction - and its own clear failed. No create-first
+// healer reaches it, because none of them looks for a record without a token, so a duplicate
+// clears it whatever the setting says.
+func TestCreateOnlyDuplicate_ClearsATokenlessCreatingRecord(t *testing.T) {
+	for _, createFirst := range []bool{true, false} {
+		name := "create-first-off"
+		if createFirst {
+			name = "create-first-on"
+		}
+
+		t.Run(name, func(t *testing.T) {
+			logger := ulogger.NewErrorTestLogger(t)
+			tSettings := test.CreateBaseTestSettings(t)
+			tSettings.UtxoStore.UtxoBatchSize = 2
+			tSettings.UtxoStore.UseCreateFirstOrder = createFirst
+
+			client, store, ctx, deferFn := initAerospike(t, tSettings, logger)
+			t.Cleanup(deferFn)
+			cleanDB(t, client)
+
+			_, err := store.Create(ctx, tests.ParentTx, 100)
+			require.NoError(t, err)
+
+			md, err := store.Create(ctx, tx, 100, utxo.WithCreating(true))
+			require.NoError(t, err)
+			require.NotEmpty(t, md.Attempt, "precondition: the create wrote a token to remove")
+
+			// Reproduce the state the store cannot reach through its own API: creating, no token.
+			writeRawBins(t, client, store, tx.TxIDChainHash(), 0, aerospike.NewBin(fields.Attempt.String(), nil))
+
+			_, err = store.Create(ctx, tx, 100, utxo.WithCreateOnly())
+			require.Error(t, err)
+			require.True(t, errors.Is(err, errors.ErrTxExists), "expected ErrTxExists, got: %v", err)
+
+			got := &meta.Data{}
+			require.NoError(t, store.GetMeta(ctx, tx.TxIDChainHash(), got))
+			require.False(t, got.Creating, "a record with no attempt token is cleared by a duplicate whatever the setting says")
 		})
 	}
 }
