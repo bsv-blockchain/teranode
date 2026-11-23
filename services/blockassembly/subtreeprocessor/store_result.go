@@ -24,8 +24,8 @@ type StoreResult struct {
 	// ExistedAlready is true when the subtree file was already in the store.
 	ExistedAlready bool
 
-	// Cancelled is true when the store ended because block assembly was shutting down, not
-	// because a write failed.
+	// Cancelled is true when the store ended because block assembly was shutting down, or a
+	// reset retired the state the request was built from, not because a write failed.
 	Cancelled bool
 
 	// Err is why the store failed, when it did.

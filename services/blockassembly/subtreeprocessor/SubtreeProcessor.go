@@ -96,6 +96,8 @@ type NewSubtreeRequest struct {
 	ErrChan           chan error                                              // Channel for error reporting
 	OnStorageComplete func()                                                  // Called when storage completes to trigger cleanup
 	Result            chan StoreResult                                        // Optional: receives the final outcome of the store, once; the caller makes it buffered (capacity 1)
+
+	superseded *atomic.Bool // set by reset() when the state this request was built from is retired; see Superseded
 }
 
 // moveBlockRequest represents a request to move a block in the chain.
@@ -305,6 +307,9 @@ type SubtreeProcessor struct {
 
 	// newSubtreeChan receives notifications about new subtrees
 	newSubtreeChan chan NewSubtreeRequest
+
+	// supersedeFlag is shared by the store requests made since the last reset; see supersedeStoreRequests
+	supersedeFlag atomic.Pointer[atomic.Bool]
 
 	// chainedSubtrees stores the ordered list of completed subtrees
 	// chainedSubtreesMu protects chainedSubtrees from races between Stop() and retireChainedSubtrees()
@@ -949,6 +954,7 @@ func (stp *SubtreeProcessor) Start(ctx context.Context) {
 						send := NewSubtreeRequest{
 							Subtree:     incompleteSubtree,
 							ParentTxMap: stp.currentTxMap,
+							superseded:  stp.supersedeToken(),
 							DeletedTxs:  stp.deletedTxs,
 							ErrChan:     make(chan error),
 							OnStorageComplete: func() {
@@ -1139,6 +1145,7 @@ func (stp *SubtreeProcessor) Start(ctx context.Context) {
 						send := NewSubtreeRequest{
 							Subtree:     incompleteSubtree,
 							ParentTxMap: stp.currentTxMap,
+							superseded:  stp.supersedeToken(),
 							DeletedTxs:  stp.deletedTxs,
 							ErrChan:     make(chan error),
 							OnStorageComplete: func() {
@@ -1448,6 +1455,7 @@ func (stp *SubtreeProcessor) storeIncompleteSnapshot(ctx context.Context, incomp
 	send := NewSubtreeRequest{
 		Subtree:     incompleteSubtree,
 		ParentTxMap: parentTxMap,
+		superseded:  stp.supersedeToken(),
 		ErrChan:     make(chan error, 1),
 	}
 
@@ -1802,6 +1810,7 @@ func (stp *SubtreeProcessor) reset(blockHeader *model.BlockHeader, moveBackBlock
 	// still populated fails reset outright instead of silently reloading on
 	// top of stale entries (SetIfNotExists would report them as "already
 	// exists" and drop the corresponding fresh reload data).
+	stp.supersedeStoreRequests()
 	stp.currentTxMap.Clear()
 
 	if diskMap, ok := stp.currentTxMap.(*DiskTxMap); ok {
@@ -3256,6 +3265,7 @@ func (stp *SubtreeProcessor) processCompleteSubtree(skipNotification bool) (err 
 	req := NewSubtreeRequest{
 		Subtree:          oldSubtree,
 		ParentTxMap:      stp.currentTxMap,
+		superseded:       stp.supersedeToken(),
 		DeletedTxs:       stp.deletedTxs,
 		SkipNotification: skipNotification,
 		ErrChan:          errCh,
@@ -4401,6 +4411,7 @@ func (stp *SubtreeProcessor) storeAndAnnounceChainedSubtrees(ctx context.Context
 		case stp.newSubtreeChan <- NewSubtreeRequest{
 			Subtree:     subtree,
 			ParentTxMap: stp.currentTxMap,
+			superseded:  stp.supersedeToken(),
 			DeletedTxs:  stp.deletedTxs,
 			ErrChan:     errChs[i],
 			OnStorageComplete: func() {
@@ -8937,6 +8948,7 @@ func (stp *SubtreeProcessor) parallelBuildRemainderSubtrees(ctx context.Context,
 		req := NewSubtreeRequest{
 			Subtree:           oldSubtree,
 			ParentTxMap:       stp.currentTxMap,
+			superseded:        stp.supersedeToken(),
 			DeletedTxs:        stp.deletedTxs,
 			SkipNotification:  skipNotification,
 			ErrChan:           errCh,

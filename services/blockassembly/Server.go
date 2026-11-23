@@ -1060,7 +1060,14 @@ func (ba *BlockAssembly) storeSubtreeMeta(ctx context.Context, subtreeRequest su
 	prometheusBlockAssemblySubtreeStoreStep.WithLabelValues("meta_build").Observe(time.Since(buildStart).Seconds())
 
 	if !ok {
-		outcome.fail(errors.NewProcessingError("[BlockAssembly:storeSubtreeData][%s] failed to build subtree meta", subtree.RootHash().String()))
+		err := errors.NewProcessingError("[BlockAssembly:storeSubtreeData][%s] failed to build subtree meta", subtree.RootHash().String())
+
+		// a reset cleared the map the meta is built from: its own side effect, not a store failure
+		if subtreeRequest.Superseded() {
+			outcome.cancel(err)
+		} else {
+			outcome.fail(err)
+		}
 
 		return
 	}

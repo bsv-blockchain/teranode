@@ -122,7 +122,7 @@ func (o *subtreeStoreOutcome) abort(err error) {
 	}
 }
 
-// cancel settles a part as cancelled by shutdown.
+// cancel settles a part as cancelled: by shutdown, or because a reset superseded its request.
 func (o *subtreeStoreOutcome) cancel(err error) {
 	o.settle(func(r *subtreeprocessor.StoreResult) {
 		r.Cancelled = true
@@ -189,7 +189,7 @@ func (ba *BlockAssembly) buildSubtreeMetaWithRetry(ctx context.Context, request 
 
 		// A parent that is not found is deterministic and fails at once; only a read error of the
 		// disk tx map can clear.
-		if !readErr || attempt == metaBuildRetries {
+		if !readErr || attempt == metaBuildRetries || request.Superseded() {
 			return nil, false
 		}
 
