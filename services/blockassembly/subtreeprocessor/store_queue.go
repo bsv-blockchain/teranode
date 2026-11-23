@@ -143,12 +143,15 @@ func (q *StoreQueue) Push(req NewSubtreeRequest) {
 }
 
 // Take returns the next request and its sequence number, waiting until there is one. It reports
-// false when ctx ends first.
+// false when ctx ends first. A chain request whose subtree has left the chain is cancelled when it
+// comes up instead of being returned: it is dropped as at the byte limit, and as it never had a
+// sequence number it leaves no gap for the in-order sender.
 func (q *StoreQueue) Take(ctx context.Context) (NewSubtreeRequest, uint64, bool) {
 	for {
 		q.mu.Lock()
 
-		if it := q.pickLocked(); it != nil {
+		it, cancelled := q.pickLocked()
+		if it != nil {
 			seq := q.seq
 			q.seq++
 			q.mu.Unlock()
@@ -157,7 +160,18 @@ func (q *StoreQueue) Take(ctx context.Context) (NewSubtreeRequest, uint64, bool)
 		}
 
 		wake := q.wake
+
+		if len(cancelled) > 0 {
+			q.signalLocked() // room was made: another worker may find a request to take
+		}
+
 		q.mu.Unlock()
+
+		if len(cancelled) > 0 {
+			finishDropped(cancelled)
+
+			continue
+		}
 
 		select {
 		case <-wake:
@@ -246,18 +260,21 @@ func (q *StoreQueue) entry(st *subtreepkg.Subtree) *storeItem {
 	return items[len(items)-1]
 }
 
-// pickLocked removes and returns the request a worker takes next.
-func (q *StoreQueue) pickLocked() *storeItem {
+// pickLocked removes and returns the request a worker takes next. A stale chain request is not
+// returned: it is dropped (a callback for the processor, see takeCleanups) and returned in cancelled,
+// which the caller finishes after unlocking. The callback is not run here, so the subtree is still
+// mapped: the processor runs it before it unmaps the subtree.
+func (q *StoreQueue) pickLocked() (it *storeItem, cancelled []*storeItem) {
 	if len(q.snapshots) > 0 {
 		it := q.snapshots[0]
 		q.snapshots = removeAt(q.snapshots, 0)
 		it.taken = true
 
-		return it
+		return it, nil
 	}
 
 	if len(q.ready) == 0 {
-		return nil
+		return nil, nil
 	}
 
 	i := slices.IndexFunc(q.ready, func(it *storeItem) bool { return !it.stale })
@@ -265,11 +282,18 @@ func (q *StoreQueue) pickLocked() *storeItem {
 		i = 0
 	}
 
-	it := q.ready[i]
+	it = q.ready[i]
+
+	if it.stale {
+		cancelled = q.dropLocked(func(other *storeItem) bool { return other == it })
+
+		return nil, append(cancelled, q.admitLocked()...)
+	}
+
 	q.ready = removeAt(q.ready, i)
 	it.taken = true
 
-	return it
+	return it, nil
 }
 
 // admitLocked moves waiting requests to ready while they fit, wanted ones first. When the next one

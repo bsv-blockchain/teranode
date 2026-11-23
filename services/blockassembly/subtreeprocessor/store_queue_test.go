@@ -910,3 +910,260 @@ func TestStoreQueue_TheOlderOfTwoRequestsForASubtreeAnnouncesOnce(t *testing.T) 
 	require.True(t, first.SettledFunc()(true), "the older request stored it: it announces")
 	require.False(t, second.SettledFunc()(true), "the newer one stays silent")
 }
+
+// Issue 2269, plan PR 4c: a worker that takes a chain request whose subtree has left the chain
+// cancels it instead of storing it. The queue only exists with blockassembly_storedPrefixTemplate on.
+
+// takeCtx is a context for a Take that must not wait long.
+func takeCtx(t testing.TB, d time.Duration) context.Context {
+	t.Helper()
+
+	ctx, cancel := context.WithTimeout(context.Background(), d)
+	t.Cleanup(cancel)
+
+	return ctx
+}
+
+// A Remove into chained subtree 1 during a backlog retires it and every subtree after it, and chains
+// new ones in their place. The workers then take the backlog: the retired subtrees are not stored,
+// the new ones are.
+func TestReorgScenario_StoreQueue_ARemoveCancelsTheRequestsOfTheSubtreesItRetired(t *testing.T) {
+	q := NewStoreQueue(1 << 40)
+	set := NewStoredSet()
+	stp, _ := newStoredPrefixProcessor(t, 8, set, func(stp *SubtreeProcessor) { stp.storeQueue = q })
+	addStoredPrefixTxs(t, stp, 8*5)
+	require.GreaterOrEqual(t, len(stp.chainedSubtrees), 4)
+
+	before := append([]*subtreepkg.Subtree(nil), stp.chainedSubtrees...)
+	oldItems := make(map[*subtreepkg.Subtree]*storeItem, len(before))
+
+	for _, st := range before {
+		oldItems[st] = q.entry(st)
+		require.NotNil(t, oldItems[st], "the backlog holds a request per chained subtree")
+	}
+
+	require.NoError(t, stp.removeTxFromSubtrees(context.Background(), before[1].Nodes[1].Hash))
+
+	var retired []*subtreepkg.Subtree
+
+	for _, st := range before {
+		if !slices.Contains(stp.chainedSubtrees, st) {
+			retired = append(retired, st)
+		}
+	}
+
+	require.NotEmpty(t, retired, "the Remove rebuilt the chain from subtree 1")
+	require.NotContains(t, retired, before[0], "subtree 0 is untouched")
+
+	w := startQueueWorkers(t, q, set, 2, nil)
+
+	require.Eventually(t, func() bool {
+		for _, st := range stp.chainedSubtrees {
+			if !set.Has(*st.RootHash()) {
+				return false
+			}
+		}
+
+		return q.Len() == 0 && q.Held() == 0
+	}, 10*time.Second, 5*time.Millisecond, "every subtree of the chain is stored and nothing is held")
+
+	for _, st := range retired {
+		require.Zero(t, w.stores(*st.RootHash()), "a retired subtree is not stored")
+
+		select {
+		case r := <-oldItems[st].result:
+			require.True(t, r.Cancelled, "its request reports cancelled")
+		case <-time.After(5 * time.Second):
+			t.Fatal("a cancelled request must report its result")
+		}
+	}
+
+	for _, st := range stp.chainedSubtrees {
+		require.Equal(t, 1, w.stores(*st.RootHash()), "a subtree of the chain is stored once")
+	}
+}
+
+// A candidate published before the Remove holds only stored subtrees, because the template is cut at
+// the stored prefix. The cancelled requests are the ones of subtrees no template ever referenced, so a
+// later SubmitMiningSolution on that candidate finds its files. Nothing in the cancel keeps this true:
+// the cut does, and this test pins it (it passes before the cancel exists).
+func TestStoreQueue_ACandidateWhoseSubtreeLeftTheChainStillHasItsFiles(t *testing.T) {
+	q := NewStoreQueue(1 << 40)
+	set := NewStoredSet()
+	stp, _ := newStoredPrefixProcessor(t, 8, set, func(stp *SubtreeProcessor) { stp.storeQueue = q })
+	addStoredPrefixTxs(t, stp, 8*5)
+	require.GreaterOrEqual(t, len(stp.chainedSubtrees), 4)
+
+	for range 2 { // the first two subtrees are stored, the rest wait
+		req, _, ok := q.Take(takeCtx(t, 5*time.Second))
+		require.True(t, ok)
+		answerFromQueue(req, set, StoreResult{SubtreeStored: true, MetaNotApplicable: true})
+	}
+
+	stp.updatePrecomputedMiningData()
+
+	candidate := stp.GetPrecomputedMiningData()
+	require.NotNil(t, candidate)
+	require.Len(t, candidate.Subtrees, 2, "the template is cut at the stored prefix")
+
+	before := append([]*subtreepkg.Subtree(nil), stp.chainedSubtrees...)
+	require.NoError(t, stp.removeTxFromSubtrees(context.Background(), before[1].Nodes[1].Hash))
+	stp.updatePrecomputedMiningData()
+
+	requireTemplateStored(t, stp, set)
+
+	w := startQueueWorkers(t, q, set, 2, nil)
+
+	require.Eventually(t, func() bool { return q.Len() == 0 && q.Held() == 0 }, 10*time.Second, 5*time.Millisecond)
+
+	for _, st := range candidate.Subtrees {
+		require.True(t, set.Has(*st.RootHash()), "a subtree of the candidate stays stored")
+		require.Zero(t, w.stores(*st.RootHash()), "and the backlog did not store it again: it was stored before the workers started")
+	}
+
+	for _, st := range before[2:] {
+		if !slices.Contains(stp.chainedSubtrees, st) {
+			require.NotContains(t, candidate.Subtrees, st, "a request that was cancelled belongs to no template")
+			require.Zero(t, w.stores(*st.RootHash()))
+		}
+	}
+}
+
+// A cancelled request answers ErrChan and its Result, hands its cleanup to the processor, releases its
+// bytes and takes no sequence number, so the requests after it are numbered without a gap for the
+// in-order notification sender to wait on.
+func TestStoreQueue_ACancelledRequestIsAnsweredCleanedUpAndLeavesNoGap(t *testing.T) {
+	per := StoreRequestBytes(chainRequest(t, 1))
+	q := NewStoreQueue(10 * per)
+
+	cleaned := 0
+	a, b, c, d := chainRequest(t, 1), chainRequest(t, 2), chainRequest(t, 3), chainRequest(t, 4)
+	b.Result = make(chan StoreResult, 1)
+	b.OnStorageComplete = func() { cleaned++ }
+
+	q.Push(a)
+	q.Push(b)
+	q.Push(c)
+	q.Stale(b.Subtree) // its subtree left the chain; the queue is not at its limit, so nothing is dropped here
+	require.Equal(t, 3*per, q.Held())
+
+	first, seq0, ok := q.Take(takeCtx(t, 5*time.Second))
+	require.True(t, ok)
+	require.Same(t, a.Subtree, first.Subtree)
+	require.Zero(t, seq0)
+
+	second, seq1, ok := q.Take(takeCtx(t, 5*time.Second))
+	require.True(t, ok)
+	require.Same(t, c.Subtree, second.Subtree, "the wanted request is taken before the stale one")
+	require.Equal(t, uint64(1), seq1)
+
+	// only the stale request is left: a worker that takes it cancels it, and has nothing to store
+	_, _, ok = q.Take(takeCtx(t, 100*time.Millisecond))
+	require.False(t, ok, "the stale request is not handed to a worker")
+
+	select {
+	case err := <-b.ErrChan:
+		require.NoError(t, err, "ErrChan is answered, as a retry that is still going would")
+	default:
+		t.Fatal("a cancelled request answers ErrChan")
+	}
+
+	select {
+	case r := <-b.Result:
+		require.True(t, r.Cancelled)
+		require.False(t, r.OK())
+	default:
+		t.Fatal("a cancelled request reports cancelled")
+	}
+
+	require.Equal(t, 2*per, q.Held(), "its bytes are released while the other two are still held")
+
+	for _, cleanup := range q.takeCleanups() {
+		cleanup()
+	}
+
+	require.Equal(t, 1, cleaned, "its deletedTxs cleanup is handed to the processor")
+
+	q.Push(d)
+
+	third, seq2, ok := q.Take(takeCtx(t, 5*time.Second))
+	require.True(t, ok)
+	require.Same(t, d.Subtree, third.Subtree)
+	require.Equal(t, uint64(2), seq2, "the cancelled request left no gap in the sequence")
+}
+
+func TestStoreQueue_ASnapshotIsNeverCancelled(t *testing.T) {
+	q := NewStoreQueue(1 << 40)
+
+	st := chainRequest(t, 1)
+	snap := NewSubtreeRequest{Subtree: st.Subtree, Class: StoreClassSnapshot, ErrChan: make(chan error, 1), Result: make(chan StoreResult, 1)}
+
+	q.Push(snap)
+	q.Push(st)
+	q.Stale(st.Subtree) // the subtree left the chain: its chain request is stale, its snapshot is not a chain request
+
+	got, _, ok := q.Take(takeCtx(t, 5*time.Second))
+	require.True(t, ok)
+	require.Equal(t, StoreClassSnapshot, got.Class, "the snapshot is handed to a worker")
+
+	select {
+	case r := <-snap.Result:
+		t.Fatalf("a snapshot is not settled by the queue: %+v", r)
+	default:
+	}
+
+	_, _, ok = q.Take(takeCtx(t, 100*time.Millisecond))
+	require.False(t, ok, "only the chain request was cancelled")
+}
+
+// A rollback marks the restored chain wanted again before a worker takes it, and the request is
+// stored.
+func TestStoreQueue_ARequestWantedAgainBeforeItIsTakenIsStored(t *testing.T) {
+	q := NewStoreQueue(1 << 40)
+	a, b := chainRequest(t, 1), chainRequest(t, 2)
+	q.Push(a)
+	q.Push(b)
+
+	q.Stale(a.Subtree, b.Subtree)
+	q.Wanted(b.Subtree)
+
+	first, _, ok := q.Take(takeCtx(t, 5*time.Second))
+	require.True(t, ok)
+	require.Same(t, b.Subtree, first.Subtree, "the wanted request is taken first")
+
+	_, _, ok = q.Take(takeCtx(t, 100*time.Millisecond))
+	require.False(t, ok, "a is still stale: cancelled")
+
+	select {
+	case <-a.ErrChan:
+	default:
+		t.Fatal("the stale request was cancelled")
+	}
+
+	select {
+	case <-b.ErrChan:
+		t.Fatal("the wanted request was not answered: a worker has it")
+	default:
+	}
+}
+
+// Without blockassembly_storedPrefixTemplate there is no queue, and a Remove sends the requests of the
+// retired subtrees and of their replacements down the channel as before: nothing cancels.
+func TestStoreQueue_WithoutAQueueARemoveStillStoresTheRetiredSubtrees(t *testing.T) {
+	stp, sent := newStoredPrefixProcessor(t, 8, nil)
+	addStoredPrefixTxs(t, stp, 8*5)
+	require.GreaterOrEqual(t, len(stp.chainedSubtrees), 4)
+
+	before := append([]*subtreepkg.Subtree(nil), stp.chainedSubtrees...)
+	require.NoError(t, stp.removeTxFromSubtrees(context.Background(), before[1].Nodes[1].Hash))
+
+	require.Eventually(t, func() bool {
+		for _, st := range append(append([]*subtreepkg.Subtree(nil), before[:len(before)-1]...), stp.chainedSubtrees...) {
+			if !sent.has(*st.RootHash()) {
+				return false
+			}
+		}
+
+		return true
+	}, 5*time.Second, 5*time.Millisecond, "the retired subtrees and their replacements were all sent")
+}
