@@ -476,6 +476,31 @@ func (u *Server) readTxFromReader(body io.ReadCloser) (tx *bt.Tx, err error) {
 	return tx, nil
 }
 
+// readBackMeta reads the record of a transaction the validator created but whose metadata did not
+// come back with its answer, as GetMeta does. At utxostore_laneMigration shadow it also reads the
+// record's own lane position, which GetMeta does not, for the subtree's lane bitmaps. The position
+// is only measured, so a failure to read it leaves it at zero, where the transaction is counted as
+// one without a position, and is not an error.
+func (u *Server) readBackMeta(ctx context.Context, hash *chainhash.Hash, stored *meta.Data) error {
+	if err := u.utxoStore.GetMeta(ctx, hash, stored); err != nil {
+		return err
+	}
+
+	if !u.laneShadow() || lane.Valid(stored.LanePosition) {
+		return nil
+	}
+
+	withLane, err := u.utxoStore.Get(ctx, hash, fields.LanePosition)
+	if err != nil || withLane == nil {
+		u.logger.Debugf("[readBackMeta][%s] lane position not read: %v", hash.String(), err)
+		return nil
+	}
+
+	stored.LanePosition = withLane.LanePosition
+
+	return nil
+}
+
 // blessMissingTransaction validates a transaction and retrieves its metadata,
 // performing the core consensus validation operations required for blockchain inclusion.
 //
@@ -508,32 +533,6 @@ func (u *Server) readTxFromReader(body io.ReadCloser) (tx *bt.Tx, err error) {
 // Returns:
 //   - *meta.Data: Transaction metadata structure if validation succeeds, nil otherwise
 //   - error: Detailed error information if validation fails for any reason
-//
-// readBackMeta reads the record of a transaction the validator created but whose metadata did not
-// come back with its answer, as GetMeta does. At utxostore_laneMigration shadow it also reads the
-// record's own lane position, which GetMeta does not, for the subtree's lane bitmaps. The position
-// is only measured, so a failure to read it leaves it at zero, where the transaction is counted as
-// one without a position, and is not an error.
-func (u *Server) readBackMeta(ctx context.Context, hash *chainhash.Hash, stored *meta.Data) error {
-	if err := u.utxoStore.GetMeta(ctx, hash, stored); err != nil {
-		return err
-	}
-
-	if !u.laneShadow() || lane.Valid(stored.LanePosition) {
-		return nil
-	}
-
-	withLane, err := u.utxoStore.Get(ctx, hash, fields.LanePosition)
-	if err != nil || withLane == nil {
-		u.logger.Debugf("[readBackMeta][%s] lane position not read: %v", hash.String(), err)
-		return nil
-	}
-
-	stored.LanePosition = withLane.LanePosition
-
-	return nil
-}
-
 func (u *Server) blessMissingTransaction(ctx context.Context, blockHash chainhash.Hash, subtreeHash chainhash.Hash, tx *bt.Tx, blockHeight uint32,
 	blockIds map[uint32]bool, validationOptions *validator.Options) (*meta.Data, error) {
 	txMeta, _, err := u.blessMissing(ctx, blockHash, subtreeHash, tx, blockHeight, blockIds, validationOptions)
