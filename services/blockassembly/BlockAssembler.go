@@ -329,12 +329,13 @@ type BlockAssembler struct {
 
 	// unminedDropHashes accumulates hashes that should be dropped from the
 	// input queue at the end of loadUnminedTransactions. Populated during the
-	// load by markAsConflicting (the cascade returned from
-	// MarkConflictingRecursively), by the hashes of records the scan skipped
-	// because their external file is missing, and by validateParentChain with
-	// the descendants of those skipped records it rejects.
-	// Read once by Start / postProcessFn after loadUnminedTransactions returns,
-	// then handed to subtreeProcessor.DrainQueue. Serialized by
+	// load by markAsConflicting and applyDeferredConflictMarks (cascades of
+	// conflicting txs), by the hashes of records the scan skipped because their
+	// external file is missing, and by validateParentChain with the descendants
+	// of those skipped records it rejects. On the startup path,
+	// prepareRecoveredConflictUpdates then adds recovered conflict losers, so the
+	// set is final only when Start drains it. Read once by Start / postProcessFn
+	// and handed to subtreeProcessor.DrainQueue. Serialized by
 	// unminedTransactionsLoading; must not be touched concurrently.
 	unminedDropHashes map[chainhash.Hash]struct{}
 
