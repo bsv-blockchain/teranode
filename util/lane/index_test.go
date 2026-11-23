@@ -227,12 +227,59 @@ func TestIndexForgetsForkRowsThePassesFloor(t *testing.T) {
 
 	c.line(1, 2)
 	c.add(102, 1, 2, rowsOf(t, 1, 5))
+	c.add(103, 102, 3, rowsOf(t, 1, 6))
+	c.add(104, 103, 4, rowsOf(t, 1, 7))
 	c.line(3, 5)
+	c.tip(5) // anchor 3
+
+	s := c.idx.Snapshot()
+
+	state, _ := s.Block(102)
+	require.Equal(t, BlockNotLoaded, state, "a fork block below the anchor is forgotten")
+
+	state, _ = s.Block(103)
+	require.Equal(t, BlockNotLoaded, state, "a fork block at the anchor's height is forgotten")
+
+	state, _ = s.Block(104)
+	require.Equal(t, BlockHasRows, state, "a fork block above the anchor stays")
+	require.Equal(t, 1, s.Stats().Rows)
+}
+
+// A chain that leaves the main chain below the anchor cannot use the floors: the floor's claims
+// rest on the anchor, which that chain does not hold.
+func TestIndexFloorDoesNotHoldOnAForkBelowTheAnchor(t *testing.T) {
+	c := newTestChain(t, 2)
+
+	c.add(1, 0, 1, rangeRows(t, 4, 1, 100))
+	c.line(2, 5)
+	c.tip(5) // anchor 3: block 1 folded, 1 to 100 below the floor
+
+	require.Equal(t, ViaFloor, c.main().Lookup(Pack(4, 50)).Via)
+
+	// Block 102 forks from block 1, below the anchor, and re-takes 50.
+	c.add(102, 1, 2, rowsOf(t, 4, 50))
+	c.idx.Publish()
+
+	v, ok := c.idx.Snapshot().ViewFrom(blockHash(102))
+	require.True(t, ok)
+	require.False(t, v.FloorValid())
+	require.Equal(t, Answer{Mined: true, Via: ViaRow, BlockID: 102, Height: 2}, v.Lookup(Pack(4, 50)), "only its own row answers")
+	require.Equal(t, Answer{}, v.Lookup(Pack(4, 60)), "the floor does not")
+
+	count, hasRows := v.TakenBefore(102)
+	require.True(t, hasRows)
+	require.Equal(t, uint64(0), count, "the floor is not counted on this chain")
+
+	// After the next tip, the fork's ancestry below the anchor is gone: the chain leaves what the
+	// index holds, and the floor still does not hold.
+	c.add(103, 102, 3, rowsOf(t, 4, 60))
+	c.add(104, 103, 4)
 	c.tip(5)
 
-	state, _ := c.idx.Snapshot().Block(102)
-	require.Equal(t, BlockNotLoaded, state, "a fork block at or below the anchor is forgotten")
-	require.Equal(t, 0, c.idx.Snapshot().Stats().Rows)
+	v, ok = c.idx.Snapshot().ViewFrom(blockHash(104))
+	require.True(t, ok)
+	require.False(t, v.FloorValid())
+	require.Equal(t, Answer{}, v.Lookup(Pack(4, 50)))
 }
 
 func TestIndexBlockWithoutRows(t *testing.T) {

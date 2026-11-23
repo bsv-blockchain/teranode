@@ -366,6 +366,14 @@ func TestReaderFloorAnswersBelowIt(t *testing.T) {
 		requireCounted(t, ReaderValidator, KindAgree, lane.ViaFloor, func() {
 			r.CompareHeight(ReaderValidator, chainhash.Hash{}, lane.Pack(2, 13), true, b1.height)
 		})
+
+		// Today's block at the anchor's height is settled too; one above it is not.
+		requireCounted(t, ReaderValidator, KindAgree, lane.ViaFloor, func() {
+			r.CompareHeight(ReaderValidator, chainhash.Hash{}, lane.Pack(2, 13), true, s.AnchorHeight())
+		})
+		requireCounted(t, ReaderValidator, KindDifferentBlock, lane.ViaFloor, func() {
+			r.CompareHeight(ReaderValidator, chainhash.Hash{}, lane.Pack(2, 13), true, s.AnchorHeight()+1)
+		})
 	})
 }
 
