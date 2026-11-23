@@ -75,6 +75,10 @@ type StoreQueue struct {
 	cleanups []func()
 }
 
+// announceState is shared by the outstanding requests of one subtree that a reorg asked to announce:
+// the first to settle stored claims the announcement, the others stay silent.
+type announceState struct{ claimed bool }
+
 // storeItem is a request in the queue, until its store is settled or it is dropped.
 type storeItem struct {
 	req     NewSubtreeRequest
@@ -83,8 +87,8 @@ type storeItem struct {
 	charged bool
 	done    bool
 	dropped bool
-	taken   bool // a worker has it
-	wants   bool // announce on success, whatever SkipNotification says; under the queue's lock
+	taken   bool           // a worker has it
+	ann     *announceState // set by AnnounceOnSuccess, shared by the requests of one subtree; under the queue's lock
 
 	// first is closed once ErrChan was answered, with the error in firstErr; result is the request's
 	// Result. A reorg that finds its subtree already sent waits on these instead of sending it again.
@@ -385,7 +389,10 @@ func (q *StoreQueue) AnnounceOnSuccess(st *subtreepkg.Subtree) bool {
 		return false
 	}
 
-	items[len(items)-1].wants = true
+	ann := &announceState{}
+	for _, it := range items {
+		it.ann = ann
+	}
 
 	return true
 }
@@ -425,7 +432,7 @@ func (q *StoreQueue) answered(it *storeItem, err error) {
 
 // settled ends the request's charge, and admits what now fits. It reports whether the request was
 // stored (ok) and was told to announce its subtree (AnnounceOnSuccess): the caller announces it, and
-// since the flag is read and the request unregistered under one lock, a request is announced either
+// since the flag is claimed and the request unregistered under one lock, a request is announced either
 // here or by the announce-only request of a reorg that found it stored, never both or neither.
 func (q *StoreQueue) settled(it *storeItem, ok bool) (announce bool) {
 	q.mu.Lock()
@@ -437,7 +444,11 @@ func (q *StoreQueue) settled(it *storeItem, ok bool) (announce bool) {
 	}
 
 	it.done = true
-	announce, it.wants = ok && it.wants, false
+
+	if ok && it.ann != nil && !it.ann.claimed {
+		it.ann.claimed = true
+		announce = true
+	}
 
 	if it.charged {
 		q.held -= it.bytes

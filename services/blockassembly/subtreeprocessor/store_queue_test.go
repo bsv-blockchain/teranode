@@ -887,3 +887,26 @@ func TestStoreQueue_AReorgWaitingForARequestDroppedTwiceFailsWithADeadline(t *te
 		t.Fatal("the reorg kept waiting for a request dropped twice")
 	}
 }
+
+// Two requests for one subtree are outstanding when the reorg asks for its announcement. Whichever
+// stores first announces it, once, even if it is the older one.
+func TestStoreQueue_TheOlderOfTwoRequestsForASubtreeAnnouncesOnce(t *testing.T) {
+	q := NewStoreQueue(1 << 40)
+	older := chainRequest(t, 1)
+	newer := NewSubtreeRequest{Subtree: older.Subtree, ErrChan: make(chan error, 1)}
+	q.Push(older)
+	q.Push(newer)
+
+	require.True(t, q.AnnounceOnSuccess(older.Subtree))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	first, _, ok := q.Take(ctx)
+	require.True(t, ok)
+	second, _, ok := q.Take(ctx)
+	require.True(t, ok)
+
+	require.True(t, first.SettledFunc()(true), "the older request stored it: it announces")
+	require.False(t, second.SettledFunc()(true), "the newer one stays silent")
+}
