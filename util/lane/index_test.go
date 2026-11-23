@@ -400,3 +400,33 @@ func TestIndexViewOfIDs(t *testing.T) {
 
 	require.Equal(t, Answer{}, s.ViewOfIDs(map[uint32]bool{6: true}).Lookup(Pack(4, 200)), "the fork block is not in the set")
 }
+
+// Genesis is block ID 0: an index whose tip is genesis still publishes the blocks added after it.
+func TestIndexPublishesWithGenesisAsTheTip(t *testing.T) {
+	c := newTestChain(t, 100)
+
+	// Genesis's parent is the all-zero hash, which names no block.
+	require.NoError(t, c.idx.AddBlock(IndexBlock{ID: 0, Height: 0, Hash: blockHash(0)}, nil))
+	c.tip(0)
+
+	c.add(1, 0, 1, rowsOf(t, 3, 7))
+	c.idx.Publish()
+
+	v, ok := c.idx.Snapshot().ViewFrom(blockHash(1))
+	require.True(t, ok)
+	require.Equal(t, Answer{Mined: true, Via: ViaRow, BlockID: 1, Height: 1}, v.Lookup(Pack(3, 7)))
+}
+
+// A block that names itself as its parent ends the walk along the chain instead of looping.
+func TestIndexStopsAtABlockNamingItselfAsParent(t *testing.T) {
+	c := newTestChain(t, 100)
+
+	c.add(5, 5, 5)
+	c.tip(5)
+
+	require.True(t, c.idx.Snapshot().OnMain(5))
+
+	v, ok := c.idx.Snapshot().ViewFrom(blockHash(5))
+	require.True(t, ok)
+	require.Equal(t, Answer{}, v.Lookup(Pack(1, 1)))
+}

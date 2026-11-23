@@ -800,7 +800,8 @@ func (x *Index) SetTip(hash chainhash.Hash) error {
 		main[id] = b.Height
 
 		parent, ok := x.byHash[b.Parent]
-		if !ok {
+		if !ok || parent == id {
+			// The walk leaves what the index loaded; a block naming itself as parent ends it too.
 			break
 		}
 
@@ -969,7 +970,8 @@ func (x *Index) Publish() {
 	x.mu.Lock()
 	defer x.mu.Unlock()
 
-	if x.tipID != 0 {
+	// Genesis has block ID 0, so a published snapshot, not the tip's ID, says the index has a tip.
+	if x.cur.Load() != nil {
 		x.publish()
 	}
 }
@@ -1002,7 +1004,7 @@ func (x *Index) publish() {
 	for id, b := range x.blocks {
 		sb := &snapshotBlock{id: id, height: b.Height, hasRows: b.hasRows, folded: b.folded, rows: b.rows, lanes: b.lanes}
 
-		if p, ok := x.byHash[b.Parent]; ok {
+		if p, ok := x.byHash[b.Parent]; ok && p != id {
 			sb.parent, sb.parentLoaded = p, true
 		}
 
