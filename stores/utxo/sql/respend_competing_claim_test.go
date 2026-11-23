@@ -398,6 +398,63 @@ func TestSpendBatchPerRowRollbackDoesNotInventConflict(t *testing.T) {
 	}
 }
 
+// Per-row: a rollback drops only the conflicts that name a winner from this
+// transaction. A conflict with an owner committed before the batch still
+// stands, so that claim keeps UTXO_SPENT naming the committed owner.
+func TestSpendBatchPerRowRollbackKeepsCommittedOwnerConflict(t *testing.T) {
+	store, mock := CreateMockStore(ulogger.TestLogger{})
+	t.Cleanup(func() { _ = store.db.Close() })
+	store.settings = test.CreateBaseTestSettings(t)
+	store.settings.GlobalBlockHeightRetention = 0
+	store.settings.UtxoStore.BlockHeightRetentionAdjustment = 0
+
+	winner, err := utxo.GetSpends(spendOf(t, tests.Tx, 1, 0))
+	require.NoError(t, err)
+	loser, err := utxo.GetSpends(spendOf(t, tests.Tx, 2, 0))
+	require.NoError(t, err)
+	lateClaim, err := utxo.GetSpends(spendOf(t, tests.Tx, 3, 1))
+	require.NoError(t, err)
+	committedOwner, err := utxo.GetSpends(spendOf(t, tests.Tx, 4, 1))
+	require.NoError(t, err)
+
+	batch := []*batchSpend{
+		{spend: winner[0], blockHeight: 2, errCh: make(chan error, 1)},
+		{spend: loser[0], blockHeight: 2, errCh: make(chan error, 1)},
+		{spend: lateClaim[0], blockHeight: 2, errCh: make(chan error, 1)},
+	}
+
+	columns := []string{
+		"transaction_id", "coinbase_spending_height", "utxo_hash",
+		"spending_data", "frozen", "conflicting", "locked", "spendableIn",
+	}
+
+	mock.ExpectBegin()
+	mock.ExpectQuery("o.transaction_id").WillReturnRows(sqlmock.NewRows(columns).AddRow(
+		1, 0, batch[0].spend.UTXOHash[:], nil, false, false, false, nil))
+	mock.ExpectExec("UPDATE outputs").WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery("o.transaction_id").WillReturnRows(sqlmock.NewRows(columns).AddRow(
+		1, 0, batch[1].spend.UTXOHash[:], winner[0].SpendingData.Bytes(), false, false, false, nil))
+	mock.ExpectQuery("o.transaction_id").WillReturnRows(sqlmock.NewRows(columns).AddRow(
+		1, 0, batch[2].spend.UTXOHash[:], committedOwner[0].SpendingData.Bytes(), false, false, false, nil))
+	mock.ExpectCommit().WillReturnError(errors.NewStorageError("forced commit failure"))
+
+	require.False(t, store.trySendSpendBatchPerRow(context.Background(), batch))
+
+	for i := range batch[:2] {
+		result := <-batch[i].errCh
+		require.ErrorIs(t, result, errors.ErrStorageError, "batch item %d", i)
+		require.NotErrorIs(t, result, errors.ErrSpent, "batch item %d must not name an uncommitted owner", i)
+	}
+
+	result := <-batch[2].errCh
+	require.ErrorIs(t, result, errors.ErrSpent, "a conflict with a committed owner survives the rollback")
+	var data *errors.UtxoSpentErrData
+	require.True(t, errors.AsData(result, &data))
+	require.Equal(t, committedOwner[0].SpendingData.TxID.String(), data.SpendingData.TxID.String())
+
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
 // Alternating claims on one unspent outpoint: the first claim wins in the
 // store, and every competing claim is refused naming it.
 func TestSpendBatchAlternatingClaimsNameTheWinner(t *testing.T) {
