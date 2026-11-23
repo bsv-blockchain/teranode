@@ -53,12 +53,12 @@ func (g *gatedInpoints) Get(hash chainhash.Hash) (*subtreepkg.TxInpoints, bool) 
 	return g.TxInpointsMap.Get(hash)
 }
 
-func startStagedListener(t *testing.T, flag bool, metaWorkers, writers int) *BlockAssembly {
+func startStagedListener(t *testing.T, flag bool, metaWorkers, writers, queueMB int) *BlockAssembly {
 	t.Helper()
 
 	server, _ := setupServerWithSettings(t, func(s *settings.Settings) {
 		s.BlockAssembly.StoredPrefixTemplate = flag
-		s.BlockAssembly.StoreQueueMaxMB = 64
+		s.BlockAssembly.StoreQueueMaxMB = queueMB
 		s.BlockAssembly.SubtreeStorageWorkers = 4
 		s.BlockAssembly.SubtreeStorageMetaWorkers = metaWorkers
 		s.BlockAssembly.SubtreeStorageWriters = writers
@@ -98,7 +98,7 @@ func TestStoreStages_MetaBuildsRunUpToTheMetaWidthWhileWritesStayWithinTheWriter
 		requests  = 24
 	)
 
-	server := startStagedListener(t, true, metaWidth, writers)
+	server := startStagedListener(t, true, metaWidth, writers, 64)
 	fault := blobfault.New(server.subtreeStore)
 	writeGate := make(chan struct{})
 	entered := make(chan struct{}, 4*requests)
@@ -155,7 +155,7 @@ func TestStoreStages_MetaBuildsRunUpToTheMetaWidthWhileWritesStayWithinTheWriter
 func TestStoreStages_ABurstIsAnnouncedInOrderAndLeavesNoBytesHeld(t *testing.T) {
 	const requests = 40
 
-	server := startStagedListener(t, true, 8, 2)
+	server := startStagedListener(t, true, 8, 2, 64)
 
 	announced := make(chan chainhash.Hash, requests)
 	server.blockchainClient = announceTo(announced)
@@ -214,7 +214,7 @@ func TestStoreStages_ABurstIsAnnouncedInOrderAndLeavesNoBytesHeld(t *testing.T) 
 }
 
 func TestStoreStages_WithTheFlagOffTheWorkersKeepTheirOwnWidth(t *testing.T) {
-	server := startStagedListener(t, false, 1, 1)
+	server := startStagedListener(t, false, 1, 1, 64)
 	require.Nil(t, server.storeQueue)
 
 	fault := blobfault.New(server.subtreeStore)
@@ -247,4 +247,41 @@ func TestStoreStages_WithTheFlagOffTheWorkersKeepTheirOwnWidth(t *testing.T) {
 	// the 4 workers each build at once and each has a write in flight, whatever the stage settings
 	require.Eventually(t, func() bool { return inFlight.Load() == 4 }, 5*time.Second, 5*time.Millisecond)
 	require.Eventually(t, func() bool { return len(entered) == 4 }, 5*time.Second, 5*time.Millisecond)
+}
+
+// With 64 writers the stages are wide, so the queue's byte limit is what bounds memory: at a limit of
+// one request's bytes, one request at a time is in the stages, charged until it is written.
+func TestStoreStages_TheByteLimitBindsWithManyWriters(t *testing.T) {
+	server := startStagedListener(t, true, 64, 64, 0)
+
+	fault := blobfault.New(server.subtreeStore)
+	release := make(chan struct{})
+	entered := make(chan struct{}, 64)
+	fault.OnSetAny(fileformat.FileTypeSubtree, blobfault.Rule{Block: release, Entered: entered})
+	fault.OnSetAny(fileformat.FileTypeSubtreeMeta, blobfault.Rule{Block: release, Entered: entered})
+	server.subtreeStore = fault
+	openRelease := closeOnce(release)
+	t.Cleanup(openRelease)
+
+	subtree, txMap := makeSubtree(t, 1)
+	one := subtreeprocessor.StoreRequestBytes(subtreeprocessor.NewSubtreeRequest{Subtree: subtree, ParentTxMap: txMap})
+
+	var results []queuedRequest
+
+	for seed := 1; seed <= 20; seed++ {
+		results = append(results, pushChain(t, server.storeQueue, seed, true))
+	}
+
+	require.Eventually(t, func() bool { return len(entered) == 2 }, 5*time.Second, 5*time.Millisecond, "the admitted request writes its subtree and its meta")
+	time.Sleep(100 * time.Millisecond)
+	require.Equal(t, 2, len(entered), "the 19 others wait in the queue, not in the stages")
+	require.Equal(t, one, server.storeQueue.Held())
+
+	openRelease()
+
+	for _, r := range results {
+		require.True(t, awaitResult(t, r.result).OK())
+	}
+
+	require.Eventually(t, func() bool { return server.storeQueue.Held() == 0 }, 5*time.Second, 5*time.Millisecond)
 }

@@ -1168,13 +1168,20 @@ func acquireStage(ctx context.Context, stage chan struct{}) (release func(), err
 	}
 }
 
-// setStaged is a write to the subtree store that holds a slot of the writer stage while it runs.
-func (ba *BlockAssembly) setStaged(ctx context.Context, key []byte, fileType fileformat.FileType, value []byte, dah uint32) error {
+// setStaged is a write to the subtree store that holds a slot of the writer stage while it runs. It
+// observes the step metric of the write (subtree_write, meta_write) from the moment it has the slot,
+// so the metric is the write alone, as meta_build is the build alone.
+func (ba *BlockAssembly) setStaged(ctx context.Context, step string, key []byte, fileType fileformat.FileType, value []byte, dah uint32) error {
 	release, err := acquireStage(ctx, ba.writeSem)
 	if err != nil {
 		return err
 	}
 	defer release()
+
+	writeStart := time.Now()
+	defer func() {
+		prometheusBlockAssemblySubtreeStoreStep.WithLabelValues(step).Observe(time.Since(writeStart).Seconds())
+	}()
 
 	return ba.subtreeStore.Set(ctx, key, fileType, value, options.WithDeleteAt(dah))
 }
@@ -1214,11 +1221,7 @@ func (ba *BlockAssembly) storeSubtreeMeta(ctx context.Context, subtreeRequest su
 		return
 	}
 
-	writeStart := time.Now()
-
-	err := ba.setStaged(ctx, subtree.RootHash()[:], fileformat.FileTypeSubtreeMeta, subtreeMetaBytes, dah)
-
-	prometheusBlockAssemblySubtreeStoreStep.WithLabelValues("meta_write").Observe(time.Since(writeStart).Seconds())
+	err := ba.setStaged(ctx, "meta_write", subtree.RootHash()[:], fileformat.FileTypeSubtreeMeta, subtreeMetaBytes, dah)
 
 	if err != nil {
 		if errors.Is(err, errors.ErrBlobAlreadyExists) {
@@ -1342,11 +1345,7 @@ func (ba *BlockAssembly) storeSubtreeData(ctx context.Context, subtreeRequest su
 	go func() {
 		defer close(subtreeStorageDone) // Signal coordinator when done
 		storedOK := true
-		writeStart := time.Now()
-
-		err := ba.setStaged(ctx, subtree.RootHash()[:], fileformat.FileTypeSubtree, subtreeBytes, dah)
-
-		prometheusBlockAssemblySubtreeStoreStep.WithLabelValues("subtree_write").Observe(time.Since(writeStart).Seconds())
+		err := ba.setStaged(ctx, "subtree_write", subtree.RootHash()[:], fileformat.FileTypeSubtree, subtreeBytes, dah)
 
 		if err != nil {
 			if errors.Is(err, errors.ErrBlobAlreadyExists) {
