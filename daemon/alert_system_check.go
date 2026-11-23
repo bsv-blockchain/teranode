@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/bsv-blockchain/teranode/pkg/urlutil"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/ulogger"
 )
@@ -39,11 +40,11 @@ func checkAlertSystem(ctx context.Context, logger ulogger.Logger, tSettings *set
 
 	u, err := url.Parse(address)
 	if err != nil {
-		return errors.NewConfigurationError("alert_healthAddress %q is not a valid URL", address, err)
+		return errors.NewConfigurationError("alert_healthAddress %q is not a valid URL", urlutil.RedactString(address), urlutil.ParseErrorReason(err))
 	}
 
 	if (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
-		return errors.NewConfigurationError("alert_healthAddress %q must be an http:// or https:// URL with a host", address)
+		return errors.NewConfigurationError("alert_healthAddress %q must be an http:// or https:// URL with a host", urlutil.RedactString(address))
 	}
 
 	livenessURL := address + "/health/liveness"
@@ -52,7 +53,7 @@ func checkAlertSystem(ctx context.Context, logger ulogger.Logger, tSettings *set
 		return errors.NewConfigurationError("alert_startupTimeout must be positive, got %s", timeout)
 	}
 
-	logger.Infof("[Alert] waiting up to %s for the alert system at %s", timeout, livenessURL)
+	logger.Infof("[Alert] waiting up to %s for the alert system at %s", timeout, urlutil.RedactString(livenessURL))
 
 	waitCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -66,17 +67,17 @@ func checkAlertSystem(ctx context.Context, logger ulogger.Logger, tSettings *set
 
 	for {
 		if lastErr = probeAlertLiveness(waitCtx, client, livenessURL); lastErr == nil {
-			logger.Infof("[Alert] alert system is live at %s", livenessURL)
+			logger.Infof("[Alert] alert system is live at %s", urlutil.RedactString(livenessURL))
 			return nil
 		}
 
 		select {
 		case <-waitCtx.Done():
 			if ctx.Err() != nil {
-				return errors.NewContextCanceledError("stopped waiting for the alert system at %s", livenessURL, ctx.Err())
+				return errors.NewContextCanceledError("stopped waiting for the alert system at %s", urlutil.RedactString(livenessURL), ctx.Err())
 			}
 
-			return errors.NewServiceUnavailableError("the alert system at %s did not answer within alert_startupTimeout (%s), not starting the blockchain service", livenessURL, timeout, lastErr)
+			return errors.NewServiceUnavailableError("the alert system at %s did not answer within alert_startupTimeout (%s), not starting the blockchain service", urlutil.RedactString(livenessURL), timeout, lastErr)
 		case <-ticker.C:
 		}
 	}
@@ -86,12 +87,13 @@ func checkAlertSystem(ctx context.Context, logger ulogger.Logger, tSettings *set
 func probeAlertLiveness(ctx context.Context, client *http.Client, livenessURL string) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, livenessURL, nil)
 	if err != nil {
-		return err
+		return errors.NewConfigurationError("invalid alert liveness URL", urlutil.ParseErrorReason(err))
 	}
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return err
+		// Transport and redirect errors can echo credentials outside URL tokens.
+		return errors.NewServiceUnavailableError("alert system liveness request failed")
 	}
 
 	_ = resp.Body.Close()

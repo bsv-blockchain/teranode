@@ -1,9 +1,11 @@
 package daemon
 
 import (
+	"bytes"
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -30,6 +32,70 @@ func alertCheckSettings(t *testing.T, healthAddress string) *settings.Settings {
 	tSettings.Alert.StartupTimeout = 2 * time.Second
 
 	return tSettings
+}
+
+func TestCheckAlertSystemRedactsCredentials(t *testing.T) {
+	t.Setenv("PRETTY_LOGS", "false")
+	const password = "health-password-secret"
+	for _, scenario := range []string{"live", "timeout", "cancelled", "unreachable", "malformed", "invalid scheme"} {
+		t.Run(scenario, func(t *testing.T) {
+			var authenticated atomic.Bool
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				user, pass, ok := r.BasicAuth()
+				authenticated.Store(ok && user == "health-user" && pass == password)
+				if scenario != "live" {
+					w.WriteHeader(http.StatusServiceUnavailable)
+				}
+			}))
+			t.Cleanup(srv.Close)
+			address := strings.Replace(srv.URL, "http://", "http://health-user:"+password+"@", 1)
+			ctx := t.Context()
+			switch scenario {
+			case "unreachable":
+				srv.Close()
+			case "malformed":
+				address = "http://health-user:" + password + "%zz@localhost"
+			case "invalid scheme":
+				address = "ftp://health-user:" + password + "@localhost"
+			case "cancelled":
+				var cancel context.CancelFunc
+				ctx, cancel = context.WithCancel(ctx)
+				cancel()
+			}
+
+			tSettings := alertCheckSettings(t, address)
+			tSettings.Alert.StartupTimeout = 30 * time.Millisecond
+			var logs bytes.Buffer
+			logger := ulogger.New("alert-check-test", ulogger.WithWriter(&logs), ulogger.WithLevel("INFO"))
+			err := checkAlertSystem(ctx, logger, tSettings, false)
+			if scenario == "live" {
+				require.NoError(t, err)
+				require.True(t, authenticated.Load(), "the request must retain its credentials")
+				require.Contains(t, logs.String(), "alert system is live")
+			} else {
+				require.Error(t, err)
+				require.NotContains(t, err.Error(), password)
+			}
+			require.NotContains(t, logs.String(), password)
+		})
+	}
+}
+
+func TestProbeAlertLivenessRedactsCredentials(t *testing.T) {
+	const password = "redirect-password-secret"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		// The unescaped question mark makes net/url echo the password as an
+		// invalid port in the nested redirect error, outside the URL itself.
+		w.Header().Set("Location", "http://health-user:"+password+"?@localhost")
+		w.WriteHeader(http.StatusFound)
+	}))
+	t.Cleanup(srv.Close)
+
+	for _, address := range []string{srv.URL, "http://health-user:" + password + "%zz@localhost"} {
+		err := probeAlertLiveness(t.Context(), srv.Client(), address)
+		require.Error(t, err)
+		require.NotContains(t, err.Error(), password)
+	}
 }
 
 // livenessServer answers /health/liveness with 503 for the first failures requests, then 200.
