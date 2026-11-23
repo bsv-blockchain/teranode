@@ -419,6 +419,40 @@ func TestLiveConnAddrs_QueuedMissesShareOneSlowWalk(t *testing.T) {
 	require.Equal(t, int32(1), client.walks.Load(), "lookups queued behind one walk must share its view")
 }
 
+// A neighbour at a banned IP that connects just after a snapshot was taken is
+// not seen by the IP-ban check until liveConnMissRefreshInterval has passed:
+// misses inside that window are answered from the snapshot, so a flood of
+// unknown authors cannot force a GetPeers walk per message. This pins both
+// edges of that accepted window: the miss inside it is not walked, and the
+// first miss after it rebuilds and catches the ban.
+func TestIsPeerIPBanned_NewNeighbourCaughtWithinMissRefreshInterval(t *testing.T) {
+	s, _ := newServerWithLocalRegistry(t)
+	s.banList = &recordingBanList{banned: map[string]bool{"198.51.100.9": true}}
+
+	client := &countingP2PClient{}
+	client.peers = []p2pMessageBus.PeerInfo{{ID: mustNewPeerID(t).String(), Addrs: []string{"/ip4/10.0.0.1/tcp/9905"}}}
+	s.P2PClient = client
+
+	// Take the snapshot.
+	require.False(t, s.hasLiveConnection(mustNewPeerID(t).String()))
+	require.Equal(t, int32(1), client.walks.Load())
+
+	// A neighbour at a banned IP connects after it.
+	banned := mustNewPeerID(t)
+	client.peers = append(client.peers, p2pMessageBus.PeerInfo{ID: banned.String(), Addrs: []string{"/ip4/198.51.100.9/tcp/9905"}})
+
+	require.False(t, s.isPeerIPBanned(banned.String()), "inside the window the miss is served from the snapshot")
+	require.Equal(t, int32(1), client.walks.Load(), "a miss inside the window does not walk")
+
+	// Age the snapshot to the end of the window.
+	v := s.liveConns.view.Load()
+	require.NotNil(t, v)
+	s.liveConns.view.Store(&liveConnView{addrs: v.addrs, takenAt: time.Now().Add(-liveConnMissRefreshInterval)})
+
+	require.True(t, s.isPeerIPBanned(banned.String()), "the first miss after the window rebuilds and catches the banned IP")
+	require.Equal(t, int32(2), client.walks.Load())
+}
+
 // A ban applied locally while a registry listing was in flight must survive
 // the listing being installed without it.
 func TestBannedPeerMirror_LocalBanSurvivesStraddlingRefresh(t *testing.T) {
