@@ -583,19 +583,69 @@ func TestSequentialSpendAndCreate(t *testing.T) {
 		require.Equal(t, 0, f.clearCalls, "a duplicate is not a hold")
 	})
 
-	t.Run("create ErrTxExists whose record cannot be read keeps the spends in place", func(t *testing.T) {
-		f := &fakeSequentialStore{
-			spends:     []*Spend{{}},
-			createErr:  errors.NewTxExistsError("already there"),
-			getMetaErr: errors.NewStorageError("read boom"),
+	t.Run("create ErrTxExists whose record cannot be read keeps the spends and is not reported as a stored transaction", func(t *testing.T) {
+		for name, getErr := range map[string]error{
+			"storage error": errors.NewStorageError("read boom"),
+			"context error": context.DeadlineExceeded,
+		} {
+			f := &fakeSequentialStore{
+				spends:     []*Spend{{}},
+				createErr:  errors.NewTxExistsError("already there"),
+				getMetaErr: getErr,
+				existing:   meta.Data{Creating: true, RollingBack: true, Hold: true},
+			}
+
+			md, spends, err := SequentialSpendAndCreate(ctx, logger, f, tx, 100, false)
+			require.ErrorIs(t, err, errors.ErrProcessing, name)
+			require.NotErrorIs(t, err, errors.ErrTxExists, "%s: the record may be a hold that carries no transaction", name)
+			require.Nil(t, md, name)
+			require.Len(t, spends, 1, "%s: the spends stay in effect, as for any outcome the call cannot settle", name)
+			require.Equal(t, 0, f.unspendCalls, name)
+			require.Equal(t, 0, f.clearCalls, name)
+			require.Equal(t, 1, f.createCalls, name)
+		}
+	})
+
+	t.Run("create ErrTxExists whose read runs after the caller's context ended still tells a duplicate from a hold", func(t *testing.T) {
+		ended, cancel := context.WithCancel(ctx)
+		cancel()
+
+		final := &deadCtxStore{
+			fakeSequentialStore: fakeSequentialStore{
+				spends:    []*Spend{{}},
+				createErr: errors.NewTxExistsError("already there"),
+				existing:  meta.Data{},
+			},
 		}
 
-		_, spends, err := SequentialSpendAndCreate(ctx, logger, f, tx, 100, false)
-		require.ErrorIs(t, err, errors.ErrTxExists)
+		_, spends, err := SequentialSpendAndCreate(ended, logger, final, tx, 100, false)
+		require.ErrorIs(t, err, errors.ErrTxExists, "a stored transaction is a duplicate whether or not the caller is still waiting")
 		require.Len(t, spends, 1)
-		require.Equal(t, 0, f.unspendCalls)
-		require.Equal(t, 0, f.clearCalls)
-		require.Equal(t, 1, f.createCalls)
+		require.Equal(t, 0, final.unspendCalls)
+
+		held := &deadCtxStore{
+			fakeSequentialStore: fakeSequentialStore{
+				spends:    []*Spend{{}},
+				createErr: errors.NewTxExistsError("held"),
+				existing:  meta.Data{Creating: true, RollingBack: true, Hold: true},
+			},
+		}
+
+		_, spends, err = SequentialSpendAndCreate(ended, logger, held, tx, 100, false)
+		require.Error(t, err)
+		require.NotErrorIs(t, err, errors.ErrTxExists, "a hold carries no transaction")
+		require.Len(t, spends, 1, "the spends the call could not reverse stay in effect")
+
+		heldCreateOnly := &deadCtxStore{
+			fakeSequentialStore: fakeSequentialStore{
+				createErr: errors.NewTxExistsError("held"),
+				existing:  meta.Data{Creating: true, RollingBack: true, Hold: true},
+			},
+		}
+
+		_, _, err = SequentialSpendAndCreate(ended, logger, heldCreateOnly, tx, 100, false, WithCreateOnly())
+		require.ErrorIs(t, err, errors.ErrProcessing)
+		require.NotErrorIs(t, err, errors.ErrTxExists, "a hold carries no transaction")
 	})
 
 	t.Run("create over a hold that is cleared spends again and then creates", func(t *testing.T) {
@@ -1029,13 +1079,29 @@ func TestSequentialSpendAndCreate(t *testing.T) {
 		require.Equal(t, []string{"create", "getmeta"}, f.callSeq, "no clear, no unspend: a create-only call made no spend")
 	})
 
-	t.Run("a create-only duplicate, or one whose record cannot be read, returns ErrTxExists unchanged", func(t *testing.T) {
-		for name, f := range map[string]*fakeSequentialStore{
-			"duplicate":  {createErr: errors.NewTxExistsError("there")},
-			"read error": {createErr: errors.NewTxExistsError("there"), getMetaErr: errors.NewStorageError("read boom"), existing: meta.Data{RollingBack: true, Hold: true}},
+	t.Run("a create-only duplicate returns ErrTxExists unchanged", func(t *testing.T) {
+		f := &fakeSequentialStore{createErr: errors.NewTxExistsError("there")}
+
+		_, _, err := SequentialSpendAndCreate(ctx, logger, f, tx, 100, false, WithCreateOnly())
+		require.ErrorIs(t, err, errors.ErrTxExists)
+		require.Equal(t, []string{"create", "getmeta"}, f.callSeq)
+	})
+
+	t.Run("a create-only call whose record cannot be read does not report a stored transaction", func(t *testing.T) {
+		for name, getErr := range map[string]error{
+			"storage error": errors.NewStorageError("read boom"),
+			"context error": context.Canceled,
 		} {
-			_, _, err := SequentialSpendAndCreate(ctx, logger, f, tx, 100, false, WithCreateOnly())
-			require.ErrorIs(t, err, errors.ErrTxExists, name)
+			f := &fakeSequentialStore{
+				createErr:  errors.NewTxExistsError("there"),
+				getMetaErr: getErr,
+				existing:   meta.Data{Creating: true, RollingBack: true, Hold: true},
+			}
+
+			_, spends, err := SequentialSpendAndCreate(ctx, logger, f, tx, 100, false, WithCreateOnly())
+			require.ErrorIs(t, err, errors.ErrProcessing, name)
+			require.NotErrorIs(t, err, errors.ErrTxExists, "%s: the record may be a hold, and a caller that reads ErrTxExists as done would spend under it", name)
+			require.Nil(t, spends, name)
 			require.Equal(t, []string{"create", "getmeta"}, f.callSeq, name)
 		}
 	})

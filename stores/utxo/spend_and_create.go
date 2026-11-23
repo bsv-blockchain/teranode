@@ -546,8 +546,9 @@ const (
 // run its spend and its create once more, and otherwise the spends still in effect and the error
 // to return.
 //
-// A record that is not rolling back is a duplicate: existsErr is returned with the spends, as it
-// is when the record cannot be read. A record that is rolling back, a hold included, is not a
+// A record that is not rolling back is a duplicate: existsErr is returned with the spends. A record
+// that cannot be read is not known to be one, so a retryable error that does not carry ErrTxExists
+// is returned with the spends. A record that is rolling back, a hold included, is not a
 // stored transaction, and its rollback reverses the inputs of the txid. Spends are the txid and
 // the input index, so that reversal also clears the spends this call made, and this call's own
 // reversal would clear the spends of a create that adopted the hold. Two rules follow.
@@ -566,9 +567,22 @@ const (
 func (r *rollbackInTheWay) resolve(ctx context.Context, logger ulogger.Logger, s SequentialStore, tx *bt.Tx, blockContext, createOnly bool, spends []*Spend, existsErr error) (bool, []*Spend, error) {
 	hash := tx.TxIDChainHash()
 
+	// The read runs under a context of its own: a caller whose context ended during the round
+	// would otherwise get no answer, and the record may be a hold, which a duplicate is not.
 	existing := &meta.Data{}
-	if getErr := s.GetMeta(ctx, hash, existing); getErr != nil || !existing.RollingBack {
+
+	readCtx, cancel := rollbackContext(ctx, s)
+	getErr := s.GetMeta(readCtx, hash, existing)
+
+	cancel()
+
+	switch {
+	case errors.Is(getErr, errors.ErrTxNotFound), getErr == nil && !existing.RollingBack:
 		return false, spends, existsErr
+	case getErr != nil:
+		// What is at the txid is not known, and it may be a hold that carries no transaction, so
+		// the call does not report one. The spends stay in effect, as when the call cannot settle.
+		return false, spends, errors.NewProcessingError("SpendAndCreate: tx %s exists but its record could not be read, so it is not known to be a stored transaction; retry", hash.String(), getErr)
 	}
 
 	clearHold := func() bool {
