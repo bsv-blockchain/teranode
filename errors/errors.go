@@ -785,10 +785,10 @@ var publicCauseCodes = map[ERR]struct{}{
 	// keeps that answer while the parent output still records it as the
 	// spender. The pruner also deletes conflicting records that were never
 	// mined, so the answer does not by itself say the transaction confirmed.
-	// Every producer's message names the transaction, and
-	// the outpoint where the answer is per input, both of which the submitter
-	// already sent, and carries no node-internal state; the stores log the
-	// detail instead.
+	// The SQL and Aerospike marker messages name the parent outpoint; the
+	// Aerospike height message also names the spending transaction. The
+	// submitter already sent both. No message carries node-internal state such
+	// as the recorded heights; the stores log those at Warn instead.
 	ERR_UTXO_SPENDING_TX_PRUNED: {},
 	// ERR_TX_CREATING is the same kind of verdict as ERR_TX_LOCKED: the parent
 	// tx this one spends from is still completing its own commit. It carries no
