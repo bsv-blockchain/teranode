@@ -404,6 +404,12 @@ func (ba *BlockAssembly) keepCandidateLaneBitmaps(subtrees []*subtreepkg.Subtree
 		return
 	}
 
+	// an empty candidate, served while a block moves the pool, lists none of the pool's subtrees
+	// and keeps the pins of the last candidate that did
+	if len(subtrees) == 0 {
+		return
+	}
+
 	roots := make([]chainhash.Hash, len(subtrees))
 	for i, st := range subtrees {
 		roots[i] = *st.RootHash()

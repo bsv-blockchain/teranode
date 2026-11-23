@@ -47,6 +47,12 @@ const (
 	BlockOwn  = "own"
 )
 
+// knownBlock reports whether block is BlockPeer or BlockOwn. The helpers below record nothing for
+// any other value, so a wrong label never starts a third series a dashboard does not expect.
+func knownBlock(block string) bool {
+	return block == BlockPeer || block == BlockOwn
+}
+
 // Directions of a count mismatch: the rows hold fewer members than the block has transactions
 // besides its coinbase, or more.
 const (
@@ -118,12 +124,20 @@ func initRowsMetrics() {
 
 // ObserveGate records one block's time in a gate stage; block is BlockPeer or BlockOwn.
 func ObserveGate(block, stage string, d time.Duration) {
+	if !knownBlock(block) {
+		return
+	}
+
 	initRowsMetrics()
 	prometheusLaneGateSeconds.WithLabelValues(block, stage).Observe(d.Seconds())
 }
 
 // ObserveBlockRows records the size and holes of one block's rows; block is BlockPeer or BlockOwn.
 func ObserveBlockRows(block string, rows BlockRows) {
+	if !knownBlock(block) {
+		return
+	}
+
 	initRowsMetrics()
 
 	holes := prometheusLaneRowHoles.WithLabelValues(block)
@@ -140,6 +154,10 @@ func ObserveBlockRows(block string, rows BlockRows) {
 // CountRowMismatch counts a block whose rows hold members other than its transactions less the
 // coinbase, in direction MismatchFewer or MismatchMore; block is BlockPeer or BlockOwn.
 func CountRowMismatch(block, direction string) {
+	if !knownBlock(block) {
+		return
+	}
+
 	initRowsMetrics()
 	prometheusLaneRowMismatches.WithLabelValues(block, direction).Inc()
 }
@@ -147,7 +165,7 @@ func CountRowMismatch(block, direction string) {
 // CountMissingBitmaps counts n subtrees of a block without usable lane bitmaps, for reason; block
 // is BlockPeer or BlockOwn.
 func CountMissingBitmaps(block, reason string, n int) {
-	if n <= 0 {
+	if n <= 0 || !knownBlock(block) {
 		return
 	}
 
@@ -172,6 +190,10 @@ func CountTxsWithoutPosition(service string, n int) {
 // block ID in place. The blockchain store calls it once the block is stored, once per block. block
 // is BlockPeer or BlockOwn.
 func CountRowInsertFailure(block string) {
+	if !knownBlock(block) {
+		return
+	}
+
 	initRowsMetrics()
 	prometheusLaneRowInsertFailure.WithLabelValues(block).Inc()
 }

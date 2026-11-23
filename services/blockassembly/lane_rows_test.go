@@ -1494,3 +1494,23 @@ func TestOverlappingStoresOfOneSubtreeKeepItPending(t *testing.T) {
 	require.Equal(t, 1, absent, "no storage runs once both have ended")
 	require.Zero(t, timedOut)
 }
+
+// TestAnEmptyCandidateKeepsThePoolsPins: an empty mining candidate, served while a block moves the
+// pool, does not unpin the subtrees the last full candidate listed, so coinbase-only blocks after
+// it do not age them out.
+func TestAnEmptyCandidateKeepsThePoolsPins(t *testing.T) {
+	server, _ := setupServerWithSettings(t, func(s *settings.Settings) { s.UtxoStore.LaneMigration = settings.LaneMigrationShadow })
+
+	inPool, _ := laneSealSubtree(t, "empty-candidate")
+
+	require.NoError(t, server.blockAssembler.utxoStore.SetBlockHeight(100))
+	server.ownLaneBitmaps.put(*inPool.RootHash(), lane.LaneBitmaps{}, 100)
+	server.keepCandidateLaneBitmaps([]*subtreepkg.Subtree{inPool})
+
+	// an empty candidate, then three coinbase-only blocks and a new subtree kept at 103
+	server.keepCandidateLaneBitmaps(nil)
+	server.ownLaneBitmaps.put(chainhash.HashH([]byte("empty-candidate-later")), lane.LaneBitmaps{}, 103)
+
+	_, missing := server.ownLaneBitmaps.get([]*chainhash.Hash{inPool.RootHash()})
+	require.Zero(t, missing, "the pool's subtree keeps its bitmaps")
+}

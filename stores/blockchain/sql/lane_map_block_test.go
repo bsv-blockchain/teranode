@@ -457,7 +457,7 @@ func TestInsertLaneMapRowsWithBlockReturnsASavepointFailureUncounted(t *testing.
 		require.NoError(t, err)
 		require.NoError(t, tx.Rollback()) // every statement on tx now fails, SAVEPOINT first
 
-		rows := &laneRowsToStore{rows: blockLaneRows(t)}
+		rows := &laneRowsToStore{rows: blockLaneRows(t), block: lane.BlockPeer}
 
 		err = s.insertLaneMapRowsWithBlock(ctx, tx, block1, 5, rows)
 		require.Error(t, err)
@@ -480,7 +480,7 @@ func TestInsertLaneMapRowsWithBlockCountsABlockIDTooWide(t *testing.T) {
 
 		defer func() { _ = tx.Rollback() }()
 
-		rows := &laneRowsToStore{rows: blockLaneRows(t)}
+		rows := &laneRowsToStore{rows: blockLaneRows(t), block: lane.BlockPeer}
 
 		require.NoError(t, s.insertLaneMapRowsWithBlock(ctx, tx, block1, 1<<32, rows))
 		require.NoError(t, s.insertLaneMapRowsWithBlock(ctx, tx, block1, 1<<32, rows), "a retried attempt")
@@ -507,7 +507,7 @@ func TestInsertLaneMapRowsWithBlockRecordsEachAttemptAfresh(t *testing.T) {
 
 		defer func() { _ = tx.Rollback() }()
 
-		rows := &laneRowsToStore{rows: blockLaneRows(t)}
+		rows := &laneRowsToStore{rows: blockLaneRows(t), block: lane.BlockPeer}
 
 		require.NoError(t, s.insertLaneMapRowsWithBlock(ctx, tx, block1, 1<<32, rows))
 		require.True(t, rows.refused)
@@ -730,8 +730,8 @@ func TestStoreBlockBoundsItsLaneMapRowsLockWait_PostgreSQL(t *testing.T) {
 	id, _, err := s.StoreBlock(storeCtx, block1, "", options.WithLaneMapRows(blockLaneRows(t)))
 	require.NoError(t, err, "the block stores although its rows wait on a lock")
 	waited := time.Since(start)
-	require.GreaterOrEqual(t, waited, 1500*time.Millisecond, "the rows waited for the lock")
-	require.Less(t, waited, 6*time.Second, "the rows' lock wait is bounded at 2 s, with scheduling slack")
+	require.GreaterOrEqual(t, waited, 1800*time.Millisecond, "the rows waited for the lock")
+	require.Less(t, waited, 4*time.Second, "the rows' lock wait is bounded at 2 s, with scheduling slack")
 
 	require.NoError(t, holder.Rollback())
 
