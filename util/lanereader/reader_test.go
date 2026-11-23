@@ -690,3 +690,34 @@ func TestReaderCountsABlockBelowItsStartNotLoadedWithoutAWalk(t *testing.T) {
 	})
 	require.Equal(t, reads+1, source.headerReads, "one header read, no walk")
 }
+
+// Once a reorg's losing block leaves the index, a store still reporting its height cannot be told
+// from the winner at that height: it counts not_loaded, not a disagreement.
+func TestReaderCountsAForgottenForkHeightNotLoaded(t *testing.T) {
+	engines(t, func(t *testing.T, store blockchainstore.Store) {
+		c := newChain(t, store)
+
+		b1 := c.add(nil)
+		lost := c.add(b1, takes(t, 4, 5))
+
+		r := newReader(ulogger.TestLogger{}, store, 2)
+		follow(t, r)
+
+		won := c.add(b1, takes(t, 4, 6))
+		c.line(won, 3)
+		follow(t, r)
+
+		state, _ := r.Snapshot().Block(lost.id)
+		require.Equal(t, lane.BlockNotLoaded, state, "the losing block is forgotten")
+		require.True(t, r.Snapshot().ForkAt(2))
+
+		requireCounted(t, ReaderValidator, KindNotLoaded, lane.ViaNone, func() {
+			r.CompareHeight(ReaderValidator, chainhash.Hash{}, lane.Pack(4, 5), true, 2)
+		})
+
+		// The winner's own position at that height still agrees, below the floor.
+		requireCounted(t, ReaderValidator, KindAgree, lane.ViaFloor, func() {
+			r.CompareHeight(ReaderValidator, chainhash.Hash{}, lane.Pack(4, 6), true, 2)
+		})
+	})
+}

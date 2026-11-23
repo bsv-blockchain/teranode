@@ -49,8 +49,10 @@ const (
 	// KindNoRows: today says mined in a block the map has no rows for (quick validation, or our own
 	// block until block assembly writes rows), and lanes says not. Not a disagreement.
 	KindNoRows = "no_rows"
-	// KindNotLoaded: today says mined in a block the index never loaded, older than its start, and
-	// lanes says not. Not a disagreement.
+	// KindNotLoaded: the index cannot judge the check. The block today names is outside what the
+	// index loaded or has been forgotten, a height names a fork block whose rows are gone, the
+	// chain's older ancestry is not held, or the duplicate check cannot place the earlier copy.
+	// Counted whether or not today says mined. Not a disagreement.
 	KindNotLoaded = "not_loaded"
 	// KindNotReady: the index had not loaded the chain to judge against yet.
 	KindNotReady = "not_ready"
@@ -129,6 +131,12 @@ func classifyHeight(s *lane.IndexSnapshot, pos uint64, a lane.Answer, todayMined
 	// The height alone does not name a block: a fork block at it may be the one today means.
 	if s.TakenOffMain(pos, todayHeight) {
 		return KindOffChain
+	}
+
+	// A fork block at that height whose rows are gone, such as a reorg's loser the floors have
+	// passed, may be the one today means, and the index can no longer tell.
+	if s.ForkAt(todayHeight) && (a.Via != lane.ViaFloor || todayHeight > s.AnchorHeight()) {
+		return KindNotLoaded
 	}
 
 	switch a.Via {

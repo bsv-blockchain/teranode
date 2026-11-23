@@ -308,6 +308,8 @@ type IndexSnapshot struct {
 	anchorID     uint32
 	// startHeight is the lowest height on the main chain the index loaded.
 	startHeight uint32
+	// forkHeights are the heights at which the index holds, or held, a block off the main chain.
+	forkHeights map[uint32]struct{}
 	stats       IndexStats
 	mainView    *ChainView
 }
@@ -596,6 +598,14 @@ func (s *IndexSnapshot) TakenOffMain(pos uint64, height uint32) bool {
 	return found
 }
 
+// ForkAt reports whether the index holds, or held, a block off the main chain at height, such as
+// the loser of a reorg. A store that answers with a height alone may mean that block.
+func (s *IndexSnapshot) ForkAt(height uint32) bool {
+	_, ok := s.forkHeights[height]
+
+	return ok
+}
+
 // Folded reports whether block id's rows were folded into the floors and left memory.
 func (s *IndexSnapshot) Folded(id uint32) bool {
 	b, ok := s.blocks[id]
@@ -619,6 +629,9 @@ type Index struct {
 	main      map[uint32]uint32
 	tipID     uint32
 	tipHeight uint32
+	// forkHeights are the heights of off-main blocks forget dropped, kept as long as folded
+	// blocks' metadata.
+	forkHeights map[uint32]struct{}
 	// anchored is whether any block has folded; anchorID and anchorH are the newest folded block.
 	anchored bool
 	anchorID uint32
@@ -644,6 +657,7 @@ func NewIndex(settleDepth uint32) *Index {
 		blocks:      map[uint32]*indexBlockState{},
 		byHash:      map[chainhash.Hash]uint32{},
 		main:        map[uint32]uint32{},
+		forkHeights: map[uint32]struct{}{},
 	}
 }
 
@@ -911,6 +925,8 @@ func (x *Index) forget() {
 		_, onMain := x.main[id]
 
 		if !onMain && x.anchored && b.Height <= x.anchorH {
+			x.forkHeights[b.Height] = struct{}{}
+
 			for i, r := range b.rows {
 				if drops[b.lanes[i]] == nil {
 					drops[b.lanes[i]] = map[*indexRow]bool{}
@@ -934,6 +950,12 @@ func (x *Index) forget() {
 
 	for l, d := range drops {
 		x.replaceLane(l, nil, d)
+	}
+
+	for h := range x.forkHeights {
+		if x.tipHeight > keepFoldedBlocks && h < x.tipHeight-keepFoldedBlocks {
+			delete(x.forkHeights, h)
+		}
 	}
 }
 
@@ -984,6 +1006,17 @@ func (x *Index) publish() {
 	}
 
 	s.stats.Blocks = len(x.blocks)
+
+	s.forkHeights = make(map[uint32]struct{}, len(x.forkHeights))
+	for h := range x.forkHeights {
+		s.forkHeights[h] = struct{}{}
+	}
+
+	for id, b := range x.blocks {
+		if _, onMain := x.main[id]; !onMain {
+			s.forkHeights[b.Height] = struct{}{}
+		}
+	}
 
 	for _, ls := range x.lanes {
 		if ls == nil {
