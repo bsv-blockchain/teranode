@@ -1,5 +1,3 @@
-// //go:build aerospike
-
 // Package aerospike provides an Aerospike-based implementation of the UTXO store interface.
 // It offers high performance, distributed storage capabilities with support for large-scale
 // UTXO sets and complex operations like freezing, reassignment, and batch processing.
@@ -339,8 +337,9 @@ func (s *Store) processBatchResultsForSetMined(ctx context.Context, batchRecords
 	// tip lags behind the block being validated during catchup/sync, which would
 	// stamp the DAH too low and let the pruner delete the record before the
 	// retention window elapsed. Computed once for the batch (block height and
-	// retention are fixed for the duration of SetMinedMulti) and used for the
-	// child/pagination records; it matches the master DAH set by the setMined UDF.
+	// retention are fixed for the duration of SetMinedMulti). It is only the fallback
+	// for the child/pagination records: the setMined UDF floors the master stamp at its
+	// highest mined height, so the master's reported DAH is used when present.
 	dahHeight, dahEnabled := s.deleteAtHeightFor(minedBlockInfo.BlockHeight)
 
 	// Reuse a single LuaMapResponse across all per-record parses in this batch.
@@ -405,11 +404,16 @@ func (s *Store) processBatchResultsForSetMined(ctx context.Context, batchRecords
 			case LuaSignalDAHSet:
 				// Only set DAH if retention is configured
 				if dahEnabled {
-					childDAH.addSet(hashes[idx], res.ChildCount, dahHeight)
+					childDAHHeight := dahHeight
+					if reported, ok := reportedDeleteAtHeight(res); ok {
+						childDAHHeight = reported
+					}
+
+					childDAH.addSet(hashes[idx], res.ChildCount, childDAHHeight, reportedDAHVersion(res))
 					// External store DAH is disabled - lifecycle managed by pruner service
 				}
 			case LuaSignalDAHUnset:
-				childDAH.addUnset(hashes[idx], res.ChildCount)
+				childDAH.addUnset(hashes[idx], res.ChildCount, reportedDAHVersion(res))
 				// External store DAH is disabled - lifecycle managed by pruner service
 			}
 		}
@@ -423,7 +427,7 @@ func (s *Store) processBatchResultsForSetMined(ctx context.Context, batchRecords
 	var postErr error
 
 	if len(extraRecords) > 0 {
-		if err := s.IncrementSpentRecordsMulti(extraRecords, 1, minedBlockInfo.BlockHeight); err != nil {
+		if err := s.IncrementSpentRecordsMulti(ctx, extraRecords, 1, minedBlockInfo.BlockHeight); err != nil {
 			postErr = errors.Join(postErr, err)
 		}
 	}
@@ -527,8 +531,11 @@ func (s *Store) handleBatchRecordError(batchRecord aerospike.BatchRecordIfc, err
 }
 
 // lockClearItem identifies a transaction whose pagination/extra records must
-// have the `locked` flag cleared as part of marking the transaction mined. The
-// master record's lock is cleared by the setMined UDF / expression write itself.
+// have the `locked` flag and the `creating` bin cleared as part of marking the
+// transaction mined. When the setMined UDF or expression write runs, it clears
+// the master's `locked` and `creating` itself. On the expression path's
+// FILTERED_OUT branch the master's `locked` is cleared by SetLocked(false), and
+// its `creating` is not cleared.
 type lockClearItem struct {
 	txID       *chainhash.Hash
 	childCount int // number of pagination/extra records, cleared at indices 1..childCount
@@ -555,8 +562,26 @@ func (s *Store) applyLockClearWork(ctx context.Context, work lockClearWork) erro
 	// which would wrap it in a stdlib joinError and drop the rich *errors.Error type.
 	var err error
 
-	if clearErr := s.clearLockedOnRecordsMulti(work.items); clearErr != nil {
-		err = clearErr
+	items := work.items
+
+	// SetLocked below clears `locked` on the fullUnlock transactions but never
+	// touches `creating`, so their extra records also go through the clear here.
+	// Their child count was not returned by the FILTERED_OUT write, so read it.
+	if len(work.fullUnlock) > 0 {
+		extraItems, readErr := s.readExtraRecordCounts(work.fullUnlock)
+		if readErr != nil {
+			err = readErr
+		}
+
+		items = append(items, extraItems...)
+	}
+
+	if clearErr := s.clearLockedOnRecordsMulti(items); clearErr != nil {
+		if err == nil {
+			err = clearErr
+		} else {
+			err = errors.Join(err, clearErr)
+		}
 	}
 
 	if len(work.fullUnlock) > 0 {
@@ -572,8 +597,68 @@ func (s *Store) applyLockClearWork(ctx context.Context, work lockClearWork) erro
 	return err
 }
 
-// clearLockedOnRecordsMulti clears the `locked` flag on the requested records in
-// a single unfiltered BatchOperate.
+// readExtraRecordCounts reads the extra record count from the master record of
+// each transaction and returns a lockClearItem for each one that has extra
+// records. A master that no longer exists has no extra records to clear.
+func (s *Store) readExtraRecordCounts(txIDs []chainhash.Hash) ([]lockClearItem, error) {
+	readPolicy := aerospike.NewBatchReadPolicy()
+	records := make([]aerospike.BatchRecordIfc, 0, len(txIDs))
+	ids := make([]*chainhash.Hash, 0, len(txIDs))
+
+	for i := range txIDs {
+		txID := &txIDs[i]
+
+		key, err := aerospike.NewKey(s.namespace, s.setName, txID[:])
+		if err != nil {
+			return nil, errors.NewProcessingError("[readExtraRecordCounts][%s] failed to create key", txID.String(), err)
+		}
+
+		records = append(records, aerospike.NewBatchRead(readPolicy, key, []string{fields.TotalExtraRecs.String()}))
+		ids = append(ids, txID)
+	}
+
+	if err := s.batchOperate(util.GetAerospikeBatchPolicy(s.settings), records); err != nil {
+		return nil, errors.NewStorageError("[readExtraRecordCounts] failed to read the extra record count of %d txs", len(ids), err)
+	}
+
+	return extraRecordItems(records, ids)
+}
+
+// extraRecordItems turns the batch read of readExtraRecordCounts into one
+// lockClearItem per transaction with extra records. A master that comes back
+// KEY_NOT_FOUND is skipped. Any other read error, or a record that came back
+// with neither data nor an error, is reported, so a transaction whose extra
+// records were not cleared is never dropped silently.
+func extraRecordItems(records []aerospike.BatchRecordIfc, ids []*chainhash.Hash) ([]lockClearItem, error) {
+	var (
+		items   []lockClearItem
+		readErr []error
+	)
+
+	for i, rec := range records {
+		br := rec.BatchRec()
+
+		switch {
+		case br.Err != nil && isKeyNotFound(br.Err):
+			continue
+		case br.Err != nil:
+			readErr = append(readErr, errors.NewStorageError("[readExtraRecordCounts][%s] failed to read the extra record count", ids[i].String(), br.Err))
+			continue
+		case br.Record == nil:
+			readErr = append(readErr, errors.NewStorageError("[readExtraRecordCounts][%s] no record and no error returned for the extra record count", ids[i].String()))
+			continue
+		}
+
+		if extraRecs, ok := br.Record.Bins[fields.TotalExtraRecs.String()].(int); ok && extraRecs > 0 {
+			items = append(items, lockClearItem{txID: ids[i], childCount: extraRecs})
+		}
+	}
+
+	return items, errors.JoinCapped(10, readErr...)
+}
+
+// clearLockedOnRecordsMulti clears the `locked` flag and deletes the `creating`
+// bin on the requested records in a single unfiltered BatchOperate.
 //
 // Why this exists (issue #1037): a transaction created WithLocked(true) — by the
 // block-validation quick-validate pipeline (services/blockvalidation/quick_validate.go)
@@ -587,6 +672,18 @@ func (s *Store) applyLockClearWork(ctx context.Context, work lockClearWork) erro
 // outputs spendable, SetMinedMulti must clear the lock on every record — otherwise
 // a child spending an output that lives on a pagination record (vout >=
 // utxoBatchSize) fails permanently with TX_LOCKED, wedging legacy sync.
+//
+// The `creating` bin has the same gap. Create sets it on every record and
+// clearCreatingFlag clears the extra records in one batch and the master last,
+// and skips the master if any extra record fails, which leaves `creating` on the
+// master and on each extra record that failed. setMined then deletes it from the
+// master only, so the master looks complete and nothing re-runs the create,
+// while every output on a stuck extra record is refused with CREATING. Deleting
+// the bin here, in the same write as the lock clear, makes those outputs
+// spendable once the transaction is mined. Deleting the bin never exposes a
+// half-written record, since create writes each record with its full data in one
+// put and this write is UPDATE_ONLY. A record the create never wrote stays
+// missing and comes back KEY_NOT_FOUND below; this clear does not repair it.
 //
 // A KEY_NOT_FOUND on any record is treated as benign: a record that does not exist
 // cannot be holding a lock.
@@ -604,7 +701,9 @@ func (s *Store) clearLockedOnRecordsMulti(items []lockClearItem) error {
 
 	batchWritePolicy := util.GetAerospikeBatchWritePolicy(s.settings)
 	batchWritePolicy.RecordExistsAction = aerospike.UPDATE_ONLY
-	clearOp := aerospike.PutOp(aerospike.NewBin(fields.Locked.String(), false))
+	clearLockedOp := aerospike.PutOp(aerospike.NewBin(fields.Locked.String(), false))
+	// A nil value deletes the bin, matching clearCreatingFlag and setMined.
+	clearCreatingOp := aerospike.PutOp(aerospike.NewBin(fields.Creating.String(), nil))
 
 	batchRecords := make([]aerospike.BatchRecordIfc, 0, total)
 
@@ -616,7 +715,7 @@ func (s *Store) clearLockedOnRecordsMulti(items []lockClearItem) error {
 			return errors.NewProcessingError("[clearLockedOnRecordsMulti][%s] failed to create key for record %d", txID.String(), idx, err)
 		}
 
-		batchRecords = append(batchRecords, aerospike.NewBatchWrite(batchWritePolicy, key, clearOp))
+		batchRecords = append(batchRecords, aerospike.NewBatchWrite(batchWritePolicy, key, clearLockedOp, clearCreatingOp))
 
 		return nil
 	}

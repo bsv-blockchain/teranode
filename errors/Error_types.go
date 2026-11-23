@@ -9,6 +9,7 @@ import stderrors "errors"
 //	processing error -> error when manipulating data, i.e., when processing a block, a transaction, etc., inside the method/function.
 var (
 	ErrBlobAlreadyExists          = New(ERR_BLOB_EXISTS, "blob already exists")
+	ErrBlobCorrupt                = New(ERR_BLOB_CORRUPT, "blob corrupt")
 	ErrBlobError                  = New(ERR_BLOB_ERROR, "blob error")
 	ErrBlobNotFound               = New(ERR_BLOB_NOT_FOUND, "blob not found")
 	ErrBlockAssemblyReset         = New(ERR_BLOCK_ASSEMBLY_RESET, "block assembly reset")
@@ -18,6 +19,7 @@ var (
 	ErrBlockPolicyDeclined        = New(ERR_BLOCK_POLICY_DECLINED, "block declined by local policy")
 	ErrBlockError                 = New(ERR_BLOCK_ERROR, "block error")
 	ErrBlockExists                = New(ERR_BLOCK_EXISTS, "block exists")
+	ErrBlockIDOrder               = New(ERR_BLOCK_ID_ORDER, "block id is not above its parent's id")
 	ErrBlockHeaderContext         = New(ERR_BLOCK_HEADER_CONTEXT, "block header context invalid")
 	ErrBlockIncomplete            = New(ERR_BLOCK_INCOMPLETE, "block incomplete")
 	ErrBlockInvalid               = New(ERR_BLOCK_INVALID, "block invalid")
@@ -47,6 +49,7 @@ var (
 	ErrUtxoInvalidSize            = New(ERR_UTXO_INVALID_SIZE, "utxo invalid size")
 	ErrUtxoUnspent                = New(ERR_UTXO_UNSPENT, "utxo is unspent")
 	ErrUtxoWalkLimitExceeded      = New(ERR_UTXO_WALK_LIMIT_EXCEEDED, "utxo walk limit exceeded")
+	ErrUtxoSpendingTxPruned       = New(ERR_UTXO_SPENDING_TX_PRUNED, "spending transaction was pruned")
 	ErrUtxoError                  = New(ERR_UTXO_ERROR, "utxo error")
 	ErrStateError                 = New(ERR_STATE_ERROR, "error in state")
 	ErrStateInitialization        = New(ERR_STATE_INITIALIZATION, "error initializing state")
@@ -290,6 +293,14 @@ func NewBlockPolicyDeclinedError(message string, params ...interface{}) *Error {
 	return New(ERR_BLOCK_POLICY_DECLINED, message, params...)
 }
 
+// NewBlockIDOrderError creates a new error for a block whose id is not above its parent's id.
+// StoreBlock refuses such a block: the ancestry queries bound their walk by the gap between two
+// ids, so a child stored below its parent would make them answer "not an ancestor" for a true
+// ancestor. Callers match it with Is(err, ErrBlockIDOrder).
+func NewBlockIDOrderError(message string, params ...interface{}) *Error {
+	return New(ERR_BLOCK_ID_ORDER, message, params...)
+}
+
 // IsBlockBodyMismatch reports whether err carries ERR_BLOCK_BODY_MISMATCH anywhere
 // in its chain: a block body that was read to its declared end and cannot be the
 // block its header names (wrong merkle root, duplicate transaction, no coinbase).
@@ -523,6 +534,25 @@ func NewUtxoWalkLimitExceededError(message string, params ...interface{}) *Error
 	return New(ERR_UTXO_WALK_LIMIT_EXCEEDED, message, params...)
 }
 
+// NewUtxoSpendingTxPrunedError creates a new error indicating that the
+// transaction attempting to spend an output is one the pruner has already
+// removed. It has two producers. In both stores, the output still names the
+// transaction as its spender, the spend was recorded long enough ago to be
+// history (utxo.IsHistoricalSpend), and the transaction has no record. In the
+// Aerospike store it is also the answer to a deletedChildren marker the pruner
+// wrote before spend heights were recorded (Lua INVALID_SPEND), which checks
+// neither the height nor whether the transaction's record exists. Without this answer the spend would succeed as an
+// idempotent re-spend and let the caller recreate the pruned transaction.
+//
+// It carries its own code rather than ERR_UTXO_ERROR because callers have to
+// tell it apart from the generic utxo error: it is one of the rejections that
+// must roll back the sibling spends of the same transaction (see
+// utxo.IsSpendRollbackError / utxo.NeedsSpendRollback in
+// stores/utxo/rollback_set.go).
+func NewUtxoSpendingTxPrunedError(message string, params ...interface{}) *Error {
+	return New(ERR_UTXO_SPENDING_TX_PRUNED, message, params...)
+}
+
 // NewUtxoError creates a new generic utxo error.
 func NewUtxoError(message string, params ...interface{}) *Error {
 	return New(ERR_UTXO_ERROR, message, params...)
@@ -556,6 +586,28 @@ func NewBlobNotFoundError(message string, params ...interface{}) *Error {
 // NewBlobError creates a new error with the blob error code.
 func NewBlobError(message string, params ...interface{}) *Error {
 	return New(ERR_BLOB_ERROR, message, params...)
+}
+
+// NewBlobCorruptError creates an error for a stored blob whose bytes are present but unusable,
+// such as a missing, truncated or wrong-type header. Stores write blobs whole (temp file then
+// rename, or a single S3 put), so such a blob stays broken and a retry of the same read cannot
+// help. A store keeps its StorageError and adds this as the cause, so the StorageError and
+// IsRetryableError checks are unchanged. The rendered message contains BLOB_CORRUPT, which the
+// substring match in IsMaliciousResponseError catches, so a caller that must not retry checks
+// IsBlobCorrupt first. Block validation's priority-queue worker does: it neither requeues a block
+// that failed on one nor tries another source for it. Catchup and the legacy park do not check it
+// yet; they treat it as a local storage fault and retry the block later.
+func NewBlobCorruptError(message string, params ...interface{}) *Error {
+	return New(ERR_BLOB_CORRUPT, message, params...)
+}
+
+// IsBlobCorrupt reports whether err, or anything it wraps, is a blob-corrupt error.
+func IsBlobCorrupt(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	return Is(err, ErrBlobCorrupt)
 }
 
 // NewBlobFooterSizeMismatchError creates a new error with the blob footer size mismatch error code.

@@ -51,6 +51,13 @@ func TestFetchAndValidateBlocks_AllHeadersStored_SkipsCatchingBlocks(t *testing.
 	require.Empty(t, catchupCtx.blockHeaders)
 }
 
+// expectFSMRunning serves RUNNING to the state read a catchup run makes before CATCHINGBLOCKS,
+// where it decides the block assembly hand-off (issue 2067).
+func expectFSMRunning(m *blockchain.Mock) {
+	running := blockchain.FSMStateRUNNING
+	m.On("GetFSMCurrentState", mock.Anything).Return(&running, nil).Maybe()
+}
+
 // TestFetchAndValidateBlocks_DropsStoredPrefixOnly: stored blocks at the front are dropped, the
 // rest are still caught up.
 func TestFetchAndValidateBlocks_DropsStoredPrefixOnly(t *testing.T) {
@@ -64,6 +71,8 @@ func TestFetchAndValidateBlocks_DropsStoredPrefixOnly(t *testing.T) {
 	// Stop at the FSM transition: the test only needs to see what catchup would fetch.
 	mockBlockchainClient.ExpectedCalls = filterMockCalls(mockBlockchainClient.ExpectedCalls, "CatchUpBlocks")
 	mockBlockchainClient.On("CatchUpBlocks", mock.Anything).Return(errors.NewStateError("stop here"))
+
+	expectFSMRunning(mockBlockchainClient)
 
 	catchupCtx := &CatchupContext{
 		blockUpTo:    blocks[3],
@@ -84,6 +93,8 @@ func TestFetchAndValidateBlocks_StoredInvalidBlockIsKept(t *testing.T) {
 	mockBlockchainClient.On("GetBlockHeader", mock.Anything, mock.Anything).Return(blocks[1].Header, &model.BlockHeaderMeta{Height: 1, Invalid: true}, nil)
 	mockBlockchainClient.ExpectedCalls = filterMockCalls(mockBlockchainClient.ExpectedCalls, "CatchUpBlocks")
 	mockBlockchainClient.On("CatchUpBlocks", mock.Anything).Return(errors.NewStateError("stop here"))
+
+	expectFSMRunning(mockBlockchainClient)
 
 	catchupCtx := &CatchupContext{
 		blockUpTo:    blocks[2],
@@ -261,6 +272,7 @@ func TestFetchAndValidateBlocks_TrimmedPrefixKeepsHeights(t *testing.T) {
 	mockBlockchainClient.On("GetBlockHeader", mock.Anything, mock.Anything).Return(nil, nil, errors.NewBlockNotFoundError("not stored"))
 	mockBlockchainClient.ExpectedCalls = filterMockCalls(mockBlockchainClient.ExpectedCalls, "CatchUpBlocks")
 	mockBlockchainClient.On("CatchUpBlocks", mock.Anything).Return(errors.NewStateError("stop here"))
+	expectFSMRunning(mockBlockchainClient)
 
 	catchupCtx := &CatchupContext{
 		blockUpTo:          blocks[3],

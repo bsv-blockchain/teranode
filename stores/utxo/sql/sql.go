@@ -72,6 +72,7 @@ import (
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/batchermetrics"
+	"github.com/bsv-blockchain/teranode/util/lane"
 	"github.com/bsv-blockchain/teranode/util/tracing"
 	"github.com/bsv-blockchain/teranode/util/usql"
 	"github.com/jackc/pgx/v5"
@@ -87,31 +88,88 @@ const (
 	errOutputNotFound           = "output %s:%d not found"
 	errFailedCreateSpendingData = "failed to create spending data from bytes"
 	errSQLUpdatingTransactions  = "SQL error updating transactions: %v"
+	errSpendUtxoFrozen          = "[Spend] utxo is frozen for %s:%d"
+	errSpendTxPruned            = "[Spend] invalid spend for %s:%d: spending transaction was pruned"
 )
 
 // batchSpend represents a single UTXO spend request in a batch.
 // Mirrors aerospike/spend.go batchSpend struct.
 type batchSpend struct {
+	call *spendCall
+	// execution transfers ownership from the waiting caller to the callback.
+	// A queued caller can abandon its item; an executing caller instead waits
+	// for settled, so it cannot return before a commit or rollback finishes.
+	execution         atomic.Uint32
+	settled           <-chan struct{}
+	interrupted       bool        // A canceled batch may not have reached this input's replay check.
 	spend             *utxo.Spend // UTXO to spend
 	blockHeight       uint32      // Current block height
 	errCh             chan error  // Channel for completion notification
 	ignoreConflicting bool
 	ignoreLocked      bool
 	skipUTXOHashCheck bool
+	// idempotent is set by the batch when the output already recorded exactly
+	// this spend, so nothing was written. Spend reverses such an input on a
+	// later failure only when utxo.RollbackSet allows it: no input of the call
+	// got the pruned-replay answer and none was left unanswered. Otherwise the
+	// match may be a confirmed historical spend, and reversing it would hand a
+	// confirmed output to any new spender.
+	idempotent bool
+	// historical is set when the output already recorded exactly this spend at
+	// least utxo.HistoricalSpendAge blocks before this spend, and the spender's
+	// record is still stored. An aged match whose spender has no record is
+	// refused as a pruned replay and does not set it. A spend written without a
+	// height is never historical. Such
+	// a match is a confirmed spend, so it never joins a rollback, and it is not
+	// idempotent either: idempotent matches are the young ones, which may be
+	// an earlier failed attempt at this call.
+	historical bool
 }
+
+// spendCall shares caller cancellation across the inputs of one Spend call.
+type spendCall struct {
+	ctx context.Context
+}
+
+const (
+	spendQueued uint32 = iota
+	spendExecuting
+	spendAbandoned
+)
 
 // Store implements the UTXO store interface using a SQL database backend.
 type Store struct {
-	logger        ulogger.Logger
-	settings      *settings.Settings
-	db            *usql.DB
-	storeURL      *url.URL
-	engine        string
-	ctx           context.Context
-	spendBatcher  *batcher.Batcher[batchSpend]
-	getBatcher    *batcher.Batcher[batchGetItem]
-	createBatcher *batcher.Batcher[batchCreateItem]
-	unlockBatcher *batcher.Batcher[batchUnlockItem]
+	utxo.LanePositions
+
+	logger ulogger.Logger
+	// parentOutputsReadHook, when set by a test, runs before each parent-output chunk read
+	// and fails the read with its error. Always nil in production.
+	parentOutputsReadHook func() error
+	settings              *settings.Settings
+	db                    *usql.DB
+	storeURL              *url.URL
+	engine                string
+	ctx                   context.Context
+	spendBatcher          *batcher.Batcher[batchSpend]
+	getBatcher            *batcher.Batcher[batchGetItem]
+	createBatcher         *batcher.Batcher[batchCreateItem]
+	unlockBatcher         *batcher.Batcher[batchUnlockItem]
+
+	// afterSpendSelect, when set, runs between a spend batch's
+	// SELECT and its UPDATE, on the batcher goroutine with the spend
+	// transaction open. It is nil outside tests, which use it to commit a
+	// concurrent write inside that window. It is a field rather than a package
+	// variable so a test sets it on its own store only; the write happens
+	// before the Spend call that hands the batch to the batcher goroutine, so
+	// that hand-off orders it before the read.
+	afterSpendSelect func()
+	// conflictingIndexCancel and conflictingIndexDone stop and await the
+	// background px_transactions_conflicting build (Postgres only).
+	conflictingIndexCancel context.CancelFunc
+	conflictingIndexDone   chan struct{}
+	// conflictingIndexReady is whether px_transactions_conflicting is known to
+	// be valid; ConflictingTxHashes answers not indexed until it is.
+	conflictingIndexReady atomic.Bool
 
 	// utxo.BlockStateFields supplies the chain-tip height and median block time
 	// as one atomic snapshot, and with them the Store interface's six
@@ -180,7 +238,7 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 
 	switch storeURL.Scheme {
 	case "postgres":
-		if err = createPostgresSchema(db); err != nil {
+		if err = createPostgresSchema(ctx, logger, db); err != nil {
 			return nil, errors.NewStorageError("failed to create postgres schema", err)
 		}
 
@@ -201,6 +259,9 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 		engine:   storeURL.Scheme,
 		ctx:      ctx,
 	}
+
+	s.NameLaneBurns("sql")
+	s.NameLaneReturns("sql")
 
 	otelTracer := tracing.Tracer("utxo").OTelTracer()
 	batcherOpts := func(name string) []batcher.Option {
@@ -274,6 +335,13 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 		}
 	}
 
+	if storeURL.Scheme == "postgres" {
+		s.startPostgresConflictingIndexBuild(ctx)
+	} else {
+		// SQLite creates the index with the schema.
+		s.conflictingIndexReady.Store(true)
+	}
+
 	return s, nil
 }
 
@@ -333,6 +401,10 @@ func (s *Store) Close(ctx context.Context) error {
 
 	go func() {
 		defer close(done)
+
+		// The index build uses the pool, so it stops before the DB closes.
+		s.stopPostgresConflictingIndexBuild()
+
 		// Drain in dependency order: state-mutating writers last so they
 		// have the best chance of committing before the deadline.
 		if s.unlockBatcher != nil {
@@ -382,31 +454,57 @@ func (s *Store) Health(ctx context.Context, checkLiveness bool) (int, string, er
 
 // Create stores a new transaction's outputs as UTXOs.
 // For coinbase transactions, it sets the maturity period to 100 blocks.
-func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...utxo.CreateOption) (*meta.Data, error) {
+func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...utxo.CreateOption) (txMeta *meta.Data, err error) {
 	options := &utxo.CreateOptions{}
 	for _, opt := range opts {
 		opt(options)
 	}
+
+	position, takeErr := s.Take(ctx, options)
+	if takeErr != nil {
+		return nil, takeErr
+	}
+
+	// A position this call took from the source is its own to record if the create fails, and to
+	// return for reuse when the create was refused in a way markRefusedCreate proves wrote nothing.
+	// A caller that stopped waiting for the batcher gets a context error while the batch may still
+	// write the record, and LaneBurnReason says so. A position the caller named is the caller's.
+	if utxo.TookLanePosition(options.LanePosition, position) {
+		defer func() {
+			s.BurnCreateLanePosition(options, position, err, nil)
+
+			if err != nil {
+				s.ReturnLanePosition(position, utxo.LaneReturnExists, utxo.LanePositionUnwritten(err))
+			}
+		}()
+	}
+
+	options.LanePosition = position
 
 	ctx, _, deferFn := tracing.Tracer("utxo").Start(ctx, "sql:Create")
 	defer deferFn()
 
 	// Postgres with createBatcher: enqueue and wait for batch callback
 	if s.createBatcher != nil {
-		return s.createBatched(ctx, tx, blockHeight, options)
+		txMeta, err = s.createBatched(ctx, tx, blockHeight, options)
+		return txMeta, markRefusedCreate(err, false)
 	}
 
-	// Try the operation with retry logic for lock errors
-	var txMeta *meta.Data
-	var err error
+	// An attempt whose outcome is unknown, or that failed after its record committed, may have
+	// written this position, and then a later attempt's ErrTxExists is this create's own record.
+	mayHaveCommitted := false
 
+	// Try the operation with retry logic for lock errors
 	for attempt := 0; attempt <= 3; attempt++ {
 		txMeta, err = s.createWithRetry(ctx, tx, blockHeight, options)
 
 		// If no error or not a lock error, return immediately
 		if err == nil || !isLockError(err) {
-			return txMeta, err
+			return txMeta, markRefusedCreate(err, mayHaveCommitted)
 		}
+
+		_, committed := err.(*createCommittedError)
+		mayHaveCommitted = mayHaveCommitted || committed || utxo.IsCreateOutcomeUnknown(err)
 
 		// For lock errors, retry with backoff
 		if attempt < 3 {
@@ -423,6 +521,24 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 	}
 
 	return txMeta, err
+}
+
+// markRefusedCreate marks err as proof that the create wrote no record carrying its lane position
+// (utxo.MarkLanePositionUnwritten) when it is ErrTxExists and no earlier attempt of the create may
+// have committed. Such a refusal proves it: the per-statement path meets the unique violation, or
+// the duplicate in a child table, inside its database transaction and rolls it back, and the CTE
+// paths, single and batched, insert with ON CONFLICT DO NOTHING and gate the inputs, outputs and
+// block ids on the transaction row they inserted, so a refused create writes no row carrying its
+// lane position. The batch's later conflict-link write can still add a parent's link for a refused
+// conflicting create, but that table has no lane position. A retry after an attempt that may have
+// committed can meet this create's own record, which carries the position, so its ErrTxExists is
+// left unmarked.
+func markRefusedCreate(err error, mayHaveCommitted bool) error {
+	if mayHaveCommitted || !errors.Is(err, errors.ErrTxExists) {
+		return err
+	}
+
+	return utxo.MarkLanePositionUnwritten(err)
 }
 
 // createBatched enqueues a Create request into the createBatcher for bulk processing.
@@ -536,21 +652,19 @@ func (s *Store) createWithRetry(ctx context.Context, tx *bt.Tx, blockHeight uint
 
 	var transactionID int
 
-	err = txn.QueryRowContext(
-		ctx,
-		q,
-		txHash[:],
-		tx.Version,
-		tx.LockTime,
-		txMeta.Fee,
-		txMeta.SizeInBytes,
-		isCoinbase,
-		options.Frozen,
-		options.Conflicting,
-		options.Locked,
-		unminedSince,
-		deleteAtHeight,
-	).Scan(&transactionID)
+	// A lane position is written in this same INSERT. Without one this is the statement and the call
+	// that ran before the column existed, so a record with none allocates what it always did.
+	if options.LanePosition == lane.None {
+		err = txn.QueryRowContext(ctx, q, txHash[:], tx.Version, tx.LockTime, txMeta.Fee, txMeta.SizeInBytes,
+			isCoinbase, options.Frozen, options.Conflicting, options.Locked, unminedSince, deleteAtHeight,
+		).Scan(&transactionID)
+	} else {
+		err = txn.QueryRowContext(ctx, insertTransactionWithLanePositionSQL, txHash[:], tx.Version, tx.LockTime, txMeta.Fee, txMeta.SizeInBytes,
+			isCoinbase, options.Frozen, options.Conflicting, options.Locked, unminedSince, deleteAtHeight,
+			lane.ToSigned(options.LanePosition),
+		).Scan(&transactionID)
+	}
+
 	if err != nil {
 		if pgErr := asPgUniqueViolation(err); pgErr != nil {
 			return nil, errors.NewTxExistsError("Transaction already exists in postgres store (coinbase=%v):", tx.IsCoinbase(), err)
@@ -595,10 +709,65 @@ func (s *Store) createWithRetry(ctx context.Context, tx *bt.Tx, blockHeight uint
 	}
 
 	if err = txn.Commit(); err != nil {
+		if s.engine == string(util.Postgres) && pgCreateMayHaveCommitted(err) {
+			return nil, utxo.MarkCreateOutcomeUnknown(errors.NewStorageError("failed to commit the create", err))
+		}
+
 		return nil, err
 	}
 
 	return txMeta, nil
+}
+
+// insertTransactionWithLanePositionSQL is the plain transaction-row INSERT of
+// createWithRetry with lane_position as $12. It is used only for a record that
+// has a lane position; otherwise the original statement runs unchanged.
+const insertTransactionWithLanePositionSQL = `
+	INSERT INTO transactions (
+	 hash
+	,version
+	,lock_time
+	,fee
+	,size_in_bytes
+	,coinbase
+	,frozen
+	,conflicting
+	,locked
+	,unmined_since
+	,delete_at_height
+	,lane_position
+  ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+	RETURNING id
+`
+
+// pgCreateMayHaveCommitted reports whether a Postgres create write that failed
+// with cause may still have committed. A pgx batch runs as one implicit
+// transaction, and only br.Close, reading the batch to its end, confirms the
+// commit, so a create that reported its row inserted is not known committed
+// before then. Two
+// failures are certain: an error the server reported, which rolls the
+// transaction back, and one pgconn says happened before anything was sent. Any
+// other failure, a dropped connection or a lost reply, can come after the
+// commit. utxo.SequentialSpendAndCreate unspends the inputs of a create that
+// failed for certain, and doing that for a create that committed leaves a
+// stored transaction with live inputs that nothing heals.
+func pgCreateMayHaveCommitted(cause error) bool {
+	var pgErr *pgconn.PgError
+
+	return !errors.As(cause, &pgErr) && !pgconn.SafeToRetry(cause)
+}
+
+// pgCreateError wraps cause, the failure of a batched Postgres create, as a
+// storage error, marked outcome-unknown when pgCreateMayHaveCommitted says the
+// create may have committed, so the spends stay, as for a context error, until
+// a repeat of the write finds the record or creates it.
+func pgCreateError(msg string, cause error) error {
+	err := errors.NewStorageError(msg, cause)
+	if pgCreateMayHaveCommitted(cause) {
+		return utxo.MarkCreateOutcomeUnknown(err)
+	}
+
+	return err
 }
 
 // unspendableMinedTxDAH returns the delete_at_height to assign at creation time
@@ -774,7 +943,8 @@ func (s *Store) createBlockIDsBatched(ctx context.Context, txn *sql.Tx, transact
 // createCTESQL is the single CTE statement that inserts a transaction + all its inputs,
 // outputs, and block_ids in one round-trip. UNNEST with array parameters means the SQL
 // string is always identical regardless of transaction size — perfect for statement caching.
-// Parameters: $1-$10 = transaction scalars, $11-$17 = input arrays, $18-$22 = output arrays, $23-$25 = block_id arrays.
+// Parameters: $1-$10 = transaction scalars, $11-$17 = input arrays, $18-$22 = output arrays,
+// $23-$25 = block_id arrays, $26 = delete_at_height.
 const createCTESQL = `
 WITH new_tx AS (
 	INSERT INTO transactions (hash,version,lock_time,fee,size_in_bytes,coinbase,frozen,conflicting,locked,unmined_since,delete_at_height)
@@ -800,6 +970,33 @@ WITH new_tx AS (
 SELECT id FROM new_tx
 `
 
+// createCTEWithLanePositionSQL is createCTESQL with lane_position as $27. It is
+// used only for a record that carries a lane position; every other record runs
+// createCTESQL unchanged, so the common statement and its argument list do not
+// grow for callers that do not use lane positions.
+var createCTEWithLanePositionSQL = withLanePositionColumn(createCTESQL)
+
+func withLanePositionColumn(stmt string) string {
+	out := strings.Replace(stmt, "unmined_since,delete_at_height)", "unmined_since,delete_at_height,lane_position)", 1)
+	out = strings.Replace(out, "$10,$26)", "$10,$26,$27)", 1)
+
+	if strings.Count(out, "lane_position") != 1 || strings.Count(out, "$27") != 1 {
+		panic("createCTESQL changed shape: cannot add lane_position")
+	}
+
+	return out
+}
+
+// createCTEStatement returns the CTE statement for a record and how many arguments it takes: 26
+// without a lane position, 27 with one, so the arguments are sized once for what the record needs.
+func createCTEStatement(position uint64) (string, int) {
+	if position == lane.None {
+		return createCTESQL, 26
+	}
+
+	return createCTEWithLanePositionSQL, 27
+}
+
 // createCTE executes a single CTE statement with UNNEST arrays to insert a transaction
 // and all its inputs/outputs/block_ids in one network round-trip (postgres only).
 // No explicit transaction needed — a single statement is auto-atomic.
@@ -822,7 +1019,8 @@ func (s *Store) createCTE(ctx context.Context, btTx *bt.Tx, blockHeight uint32, 
 	var inserted bool
 	err = sqlConn.Raw(func(driverConn interface{}) error {
 		pgxConn := driverConn.(*stdlib.Conn).Conn()
-		rows, execErr := pgxConn.Query(ctx, createCTESQL,
+		stmt, argCount := createCTEStatement(options.LanePosition)
+		args := append(make([]any, 0, argCount),
 			// $1-$10: transaction scalars
 			txHash[:], btTx.Version, btTx.LockTime, txMeta.Fee, txMeta.SizeInBytes,
 			isCoinbase, options.Frozen, options.Conflicting, options.Locked, unminedSince,
@@ -838,15 +1036,28 @@ func (s *Store) createCTE(ctx context.Context, btTx *bt.Tx, blockHeight uint32, 
 			// $26: delete_at_height for a mined tx with no spendable outputs
 			s.unspendableMinedTxDAH(btTx, blockHeight, options),
 		)
+		if options.LanePosition != lane.None {
+			args = append(args, lane.ToSigned(options.LanePosition))
+		}
+
+		rows, execErr := pgxConn.Query(ctx, stmt, args...)
 		if execErr != nil {
 			return execErr
 		}
-		defer rows.Close()
-		inserted = rows.Next() // true if new_tx returned a row (insert succeeded)
+		inserted = rows.Next() // true if new_tx returned a row
+
+		// The row arrives before the commit: the statement commits after
+		// sending its rows, and only the reply's end confirms it, so the
+		// connection can drop between the row and the commit. Close reads the
+		// reply to its end and records that error, so Err is read after Close.
+		rows.Close()
+
 		return rows.Err()
 	})
 	if err != nil {
-		return nil, errors.NewStorageError("Failed to create UTXO", err)
+		// The statement auto-commits, so a connection lost after it was sent
+		// can follow the commit.
+		return nil, pgCreateError("Failed to create UTXO", err)
 	}
 	if !inserted {
 		return nil, errors.NewTxExistsError("Transaction already exists in postgres store (coinbase=%v):", isCoinbase)
@@ -854,13 +1065,34 @@ func (s *Store) createCTE(ctx context.Context, btTx *bt.Tx, blockHeight uint32, 
 
 	// Handle conflicting children (rare path — separate round-trip only when needed)
 	if txMeta.Conflicting {
-		if err = s.insertConflictingChildrenPgx(ctx, btTx, txHash); err != nil {
-			return nil, err
+		if conflictingChildrenFault != nil {
+			err = conflictingChildrenFault()
+		} else {
+			err = s.insertConflictingChildrenPgx(ctx, btTx, txHash)
+		}
+
+		if err != nil {
+			// The record and its lane position are committed; see createCommittedError.
+			return nil, &createCommittedError{err}
 		}
 	}
 
 	return txMeta, nil
 }
+
+// conflictingChildrenFault, when set, replaces createCTE's conflicting-children write with its
+// error. A test hook; nil in production.
+var conflictingChildrenFault func() error
+
+// createCommittedError is an error from the part of a create that runs after the record committed:
+// createCTE's conflicting-children write, a transaction of its own. Create may retry it as a lock
+// error, and the retry then meets this create's own record, so a later ErrTxExists proves nothing
+// about the lane position. It wraps the error unchanged.
+type createCommittedError struct{ err error }
+
+func (e *createCommittedError) Error() string { return e.err.Error() }
+
+func (e *createCommittedError) Unwrap() error { return e.err }
 
 // inputArrayParams holds parallel arrays for UNNEST input insertion.
 type inputArrayParams struct {
@@ -1130,7 +1362,8 @@ func (s *Store) sendCreateBatch(batch []*batchCreateItem) {
 		for _, idx := range validIndices {
 			p := &prepared[idx]
 			item := batch[idx]
-			pgxBatch.Queue(createCTESQL,
+			stmt, argCount := createCTEStatement(item.options.LanePosition)
+			args := append(make([]any, 0, argCount),
 				// $1-$10: transaction scalars
 				p.txHash[:], item.tx.Version, item.tx.LockTime,
 				p.txMeta.Fee, p.txMeta.SizeInBytes,
@@ -1150,14 +1383,19 @@ func (s *Store) sendCreateBatch(batch []*batchCreateItem) {
 				// $26: delete_at_height for a mined tx with no spendable outputs
 				s.unspendableMinedTxDAH(item.tx, item.blockHeight, item.options),
 			)
+			if item.options.LanePosition != lane.None {
+				args = append(args, lane.ToSigned(item.options.LanePosition))
+			}
+
+			pgxBatch.Queue(stmt, args...)
 		}
 
 		br := pgxConn.SendBatch(s.ctx, pgxBatch)
 
 		// Read results — collect but don't send to callers yet.
-		// We must call br.Close() before signalling callers, because
-		// pipelined auto-committed statements may not be fully visible
-		// to other connections until the batch reader is closed.
+		// We must call br.Close() before signalling callers: the batch
+		// runs as one implicit transaction, and only br.Close(), reading
+		// the batch to its end, confirms that the transaction committed.
 		type batchResult struct {
 			idx      int
 			result   batchCreateResult
@@ -1178,7 +1416,7 @@ func (s *Store) sendCreateBatch(batch []*batchCreateItem) {
 			}
 			if queryErr != nil {
 				results = append(results, batchResult{idx: idx, result: batchCreateResult{
-					Err: errors.NewStorageError("Failed to create UTXO", queryErr),
+					Err: pgCreateError("Failed to create UTXO", queryErr),
 				}, logError: true})
 			} else if !inserted {
 				// ON CONFLICT (hash) DO NOTHING — new_tx returned 0 rows, tx already exists
@@ -1202,7 +1440,7 @@ func (s *Store) sendCreateBatch(batch []*batchCreateItem) {
 		for _, r := range results {
 			if closeErr != nil && r.result.Err == nil {
 				batch[r.idx].done <- batchCreateResult{
-					Err: errors.NewStorageError("batch close failed, results may not be visible", closeErr),
+					Err: pgCreateError("batch close failed, results may not be visible", closeErr),
 				}
 				continue
 			}
@@ -1595,6 +1833,13 @@ func (s *Store) getUnbatched(ctx context.Context, hash *chainhash.Hash, bins []f
 		WHERE hash = $1
 	`
 
+	// lane_position is read only when the caller names it, so every other Get
+	// runs the statement it always did.
+	wantLanePosition := contains(bins, fields.LanePosition)
+	if wantLanePosition {
+		q = strings.Replace(q, ",inserted_at", ",inserted_at\n\t\t,lane_position", 1)
+	}
+
 	data := &meta.Data{}
 
 	var (
@@ -1609,7 +1854,16 @@ func (s *Store) getUnbatched(ctx context.Context, hash *chainhash.Hash, bins []f
 		insertedAt any
 	)
 
-	err := s.db.QueryRowContext(ctx, q, hash[:]).Scan(&id, &version, &lockTime, &data.Fee, &data.SizeInBytes, &data.IsCoinbase, &data.Frozen, &data.Conflicting, &data.Locked, &unminedSince, &insertedAt)
+	dest := []any{&id, &version, &lockTime, &data.Fee, &data.SizeInBytes, &data.IsCoinbase, &data.Frozen, &data.Conflicting, &data.Locked, &unminedSince, &insertedAt}
+
+	// Allocated only when asked for, so every other Get allocates what it always did.
+	var lanePosition *sql.NullInt64
+	if wantLanePosition {
+		lanePosition = new(sql.NullInt64)
+		dest = append(dest, lanePosition)
+	}
+
+	err := s.db.QueryRowContext(ctx, q, hash[:]).Scan(dest...)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, errors.NewTxNotFoundError("transaction %s not found", hash, err)
@@ -1624,6 +1878,10 @@ func (s *Store) getUnbatched(ctx context.Context, hash *chainhash.Hash, bins []f
 		if unminedSince.Int64 >= 0 && unminedSince.Int64 <= maxUint32 {
 			data.UnminedSince = uint32(unminedSince.Int64)
 		}
+	}
+
+	if lanePosition != nil && lanePosition.Valid {
+		data.LanePosition = lane.FromSigned(lanePosition.Int64)
 	}
 
 	// CreatedAt mirrors the aerospike bin: Unix milliseconds, set once at insert.
@@ -2094,6 +2352,9 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 	useIgnoreConflicting := len(ignoreFlags) > 0 && ignoreFlags[0].IgnoreConflicting
 	useIgnoreLocked := len(ignoreFlags) > 0 && ignoreFlags[0].IgnoreLocked
 	useSkipUTXOHashCheck := len(ignoreFlags) > 0 && ignoreFlags[0].SkipUTXOHashCheck
+	// RequireParentOutputs turns the bless off and decides the rollback by error
+	// class. The record may be a live transaction's, so a failed call reverses
+	// what it wrote and leaves its idempotent matches.
 	useRequireParentOutputs := len(ignoreFlags) > 0 && ignoreFlags[0].RequireParentOutputs
 
 	if useSkipUTXOHashCheck {
@@ -2112,10 +2373,16 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 	// Mirrors aerospike spend.go:287-420 — enqueue each spend into the batcher,
 	// wait for batch callback to signal completion via errCh.
 	var (
-		mu              sync.Mutex
-		txAlreadyExists bool
-		spentSpends     = make([]*utxo.Spend, 0, len(spends))
-		g               errgroup.Group
+		mu               sync.Mutex
+		txAlreadyExists  bool
+		succeeded        int
+		spentSpends      = make([]*utxo.Spend, 0, len(spends)) // written by this call
+		idempotentSpends = make([]*utxo.Spend, 0, len(spends)) // already recorded; this call wrote nothing
+		// unresolved counts abandoned or interrupted inputs whose replay
+		// verdict is unknown. A refusal as a pruned replay would have kept the
+		// idempotent matches out of the rollback, so they stay out; see utxo.RollbackSet.
+		unresolved int
+		g          errgroup.Group
 	)
 
 	// Cap per-tx concurrency into the spend batcher. Without this, a single tx
@@ -2126,6 +2393,24 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 	// matches the pattern used in services/legacy/netsync/handle_block.go.
 	if limit := s.settings.UtxoStore.SpendBatcherSize * s.settings.UtxoStore.SpendBatcherConcurrency; limit > 0 {
 		g.SetLimit(limit)
+	}
+
+	// Fail closed on missing spending data before any spend is dispatched, as the
+	// Aerospike store does (validateSpendItem). Both spend paths write and
+	// compare spend.SpendingData.Bytes(), and the replay check refuses a spend
+	// only when the output already records exactly that spending data, so a
+	// spend with none is malformed.
+	for _, spend := range spends {
+		if spend != nil && (spend.SpendingData == nil || spend.SpendingData.TxID == nil) {
+			return nil, errors.NewProcessingError("spend of %s:%d carries no spending data", spend.TxID, spend.Vout)
+		}
+	}
+	callCtx, cancelCall := context.WithCancel(s.ctx)
+	defer cancelCall()
+	call := &spendCall{ctx: callCtx}
+	if ctx.Done() != nil {
+		stop := context.AfterFunc(ctx, cancelCall)
+		defer stop()
 	}
 
 	for idx, spend := range spends {
@@ -2144,57 +2429,87 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 				handleSpendPanic(recover(), &spends[idx].Err, s.logger)
 			}()
 
+			spendTimeout := s.settings.UtxoStore.SpendWaitTimeout
+			if spendTimeout <= 0 {
+				spendTimeout = 30 * time.Second
+			}
 			errCh := make(chan error, 1)
-			s.spendBatcher.PutCtx(ctx, &batchSpend{
+			item := &batchSpend{
+				call:              call,
 				spend:             spend,
 				blockHeight:       blockHeight,
 				errCh:             errCh,
 				ignoreConflicting: useIgnoreConflicting,
 				ignoreLocked:      useIgnoreLocked,
 				skipUTXOHashCheck: useSkipUTXOHashCheck,
-			})
-
-			// Wait for batch response with timeout to prevent indefinite blocking
-			spendTimeout := s.settings.UtxoStore.SpendWaitTimeout
-			if spendTimeout <= 0 {
-				spendTimeout = 30 * time.Second
 			}
-
-			timer := time.NewTimer(spendTimeout)
+			// Reuse the input's wait timer to cancel this call's database
+			// work too. A batch holding only this call's inputs aborts at
+			// once. A batch shared with other calls aborts only once every
+			// call in it has ended (mixedSpendBatchContext), and until then
+			// this caller waits for the batch's answer.
+			timer := time.AfterFunc(spendTimeout, cancelCall)
 			defer timer.Stop()
+			s.spendBatcher.PutCtx(callCtx, item)
 
 			var batchErr error
 			select {
 			case batchErr = <-errCh:
 				// Batch completed successfully or with error
-			case <-ctx.Done():
-				// Known residual window (#1291, store-level atomic Spend /
-				// reverse-on-abort): this item is still enqueued in the batcher and
-				// will be committed by the callback under the store's own context,
-				// not this caller ctx. A straggler UPDATE can land after we give up
-				// here and after the rollback below has already run, leaving exactly
-				// the #1214 dangling ref. Not fixed here — counted below so it is
-				// at least observable.
+			case <-callCtx.Done():
 				prometheusUtxoSpendAbortInFlight.Inc()
-				spends[idx].Err = errors.NewContextCanceledError("[SPEND][%s:%d] context canceled while waiting for batch response", spend.TxID.String(), spend.Vout)
-				return nil
-			case <-timer.C:
-				// Known residual window (#1291, store-level atomic Spend /
-				// reverse-on-abort): same straggler risk as the ctx.Done() arm
-				// above — the item remains enqueued and can still commit under the
-				// store's own context after this per-item wait gives up and after
-				// the rollback below has run. Not fixed here — counted below so it
-				// is at least observable.
-				prometheusUtxoErrors.WithLabelValues("Spend", "BatchTimeout").Inc()
-				prometheusUtxoSpendAbortInFlight.Inc()
-				spends[idx].Err = errors.NewServiceUnavailableError("[SPEND][%s:%d] batch operation timed out after %s", spend.TxID.String(), spend.Vout, spendTimeout)
-				return nil
+				if item.execution.CompareAndSwap(spendQueued, spendAbandoned) {
+					// Execution cannot start after this handoff is abandoned.
+					if ctx.Err() != nil || s.ctx.Err() != nil {
+						spends[idx].Err = errors.NewContextCanceledError("[SPEND][%s:%d] context canceled while waiting for batch response", spend.TxID.String(), spend.Vout)
+					} else {
+						prometheusUtxoErrors.WithLabelValues("Spend", "BatchTimeout").Inc()
+						spends[idx].Err = errors.NewServiceUnavailableError("[SPEND][%s:%d] batch operation timed out after %s", spend.TxID.String(), spend.Vout, spendTimeout)
+					}
+					mu.Lock()
+					unresolved++
+					mu.Unlock()
+					return nil
+				}
+				// The callback owns this item. Cancellation aborts its SQL;
+				// wait for cleanup and its actual answer before rollback.
+				// Every answer is sent before settled closes, so an empty
+				// errCh here means the batch ended without answering, as a
+				// panic the batcher recovered does. Waiting on errCh then
+				// would hang this call for good.
+				<-item.settled
+				select {
+				case batchErr = <-errCh:
+				default:
+					batchErr = errors.NewStorageError("[SPEND][%s:%d] the spend batch ended without answering this input", spend.TxID.String(), spend.Vout)
+					item.interrupted = true
+				}
+			}
+			if item.settled != nil {
+				<-item.settled
+			}
+			if item.interrupted {
+				// Cancellation may precede this input's replay check, and a
+				// refusal would have kept the idempotent matches out of the rollback.
+				// Its verdict is unknown, so keep those matches while reversing only
+				// acknowledged fresh writes.
+				mu.Lock()
+				unresolved++
+				mu.Unlock()
 			}
 
 			// Handle "already blessed" — parent tx not found but spending tx exists.
-			// Mirrors aerospike resolveSpendCompletions. Not with RequireParentOutputs:
-			// there the spending tx's record was created before this spend, so it
-			// proves nothing about the spend.
+			// Mirrors aerospike spend.go resolveSpendCompletions. Not with
+			// RequireParentOutputs, the second wave of DefaultSpendAndCreateMulti:
+			// its first wave may have written the spender, so its presence is not
+			// prior validation.
+			//
+			// A blessed input wrote nothing: its parent row is gone. It counts as
+			// succeeded but goes into neither rollback list, because Unspend
+			// answers NotFound for it and that error aborted the whole rollback,
+			// leaving the sibling spends this call did write in place.
+			blessed := false
+
 			if batchErr != nil && errors.Is(batchErr, errors.ErrTxNotFound) && !useRequireParentOutputs {
 				mu.Lock()
 				exists := txAlreadyExists
@@ -2202,6 +2517,7 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 
 				if exists {
 					batchErr = nil
+					blessed = true
 				} else {
 					var spendingTxExists bool
 					if scanErr := s.db.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM transactions WHERE hash = $1)", tx.TxIDChainHash()[:]).Scan(&spendingTxExists); scanErr != nil {
@@ -2210,6 +2526,7 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 					if spendingTxExists {
 						s.logger.Warnf("[Spend][%s] parent tx not found, but tx already exists in store, assuming already blessed", tx.TxID())
 						batchErr = nil
+						blessed = true
 
 						mu.Lock()
 						txAlreadyExists = true
@@ -2232,7 +2549,22 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 			}
 
 			mu.Lock()
-			spentSpends = append(spentSpends, spend)
+			succeeded++
+
+			// An idempotent match wrote nothing: the output already recorded this
+			// exact spend, recently. Kept apart from the fresh spends because whether
+			// it may be reversed depends on why the call failed; see utxo.RollbackSet.
+			// A blessed input and a historical match wrote nothing and are never
+			// reversed.
+			switch {
+			case blessed, item.historical:
+				// Wrote nothing, and a historical match is a confirmed spend that no
+				// rollback may reverse.
+			case item.idempotent:
+				idempotentSpends = append(idempotentSpends, spend)
+			default:
+				spentSpends = append(spentSpends, spend)
+			}
 			mu.Unlock()
 
 			return nil
@@ -2250,7 +2582,7 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 		return nil, errors.NewError("error in sql spend (batched mode)", err)
 	}
 
-	if len(spends) != len(spentSpends) {
+	if succeeded != len(spends) {
 		// Atomicity contract (mirrors aerospike/spend.go rollbackPartialSpends):
 		// roll back the spends that succeeded, whatever the error class of the
 		// ones that failed, so no parent is left naming a spender whose record is
@@ -2272,85 +2604,37 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 		// that reasoning and what covers this flavour of #1214 instead.
 		//
 		// That exclusion does not hold once the batch ALSO contains ErrSpent,
-		// ErrTxConflicting, ErrFrozen, or ErrUtxoHashMismatch: a concurrent attempt
+		// ErrTxConflicting, ErrFrozen, ErrUtxoHashMismatch, or a pruned-replay
+		// refusal (ErrUtxoSpendingTxPruned): a concurrent attempt
 		// at this same txid sees the same outpoints and hits the same unwinnable
 		// failure, so it can never reach Create either — nobody can be a
 		// legitimate owner of the partial spends, and the rollback is both safe
 		// and required. See hasUnwinnableFailure.
+		//
+		// The set reversed is utxo.RollbackSet's, as on Aerospike: what this
+		// call wrote, plus its idempotent matches unless an input was answered
+		// with a pruned-replay answer or never answered at all, since such a
+		// match may be a confirmed historical spend.
+		//
+		// RequireParentOutputs, on DefaultSpendAndCreateMulti's second wave,
+		// takes spendRollbackSet's rule instead: it spends a record its first
+		// wave wrote or found, so the existence probe would always find it and
+		// never fire.
 		sawTransientLock := hasTransientLockFailure(spends)
 		sawTransientCreating := hasTransientCreatingFailure(spends)
+		rollback := utxo.RollbackSet(spentSpends, idempotentSpends, utxo.AnyPrunedReplay(spends) || unresolved > 0)
 
-		if len(spentSpends) > 0 && (!(sawTransientLock || sawTransientCreating) || hasUnwinnableFailure(spends)) {
-			// Wrapped in a closure so rbCancel can be deferred: Spend has a parent
-			// recover() (see the top of this function), and a panic between
-			// context.WithTimeout and a bare inline rbCancel() call would unwind
-			// past it, leaking the timer until it fires on its own. Scoping the
-			// defer to this closure keeps the leak-proofing without extending
-			// rbCtx's lifetime past this block, as a function-level defer would.
-			func() {
-				rollback := false
-
-				// Detached from the caller's ctx (on the context-cancel path it is
-				// already dead, and that is exactly a case where the partial spends
-				// must still be cleaned up) but bounded, so a wedged database cannot
-				// pin this goroutine forever. Deliberately not derived from the store's
-				// context either: that is canceled on shutdown, which would make the
-				// probe below fail as "indeterminate" and skip the rollback exactly
-				// when a shutdown races in-flight spends. Mirrors the aerospike store.
-				//
-				// Deliberately re-queried here rather than reusing txAlreadyExists: a
-				// stale "exists" memo is exactly what would let this rollback clear a
-				// slot a live spender still owns, and a stale "not found" memo is
-				// exactly what would leave a dangling ref behind. The extra query is
-				// the price of the freshest possible answer at the one point where
-				// getting it wrong is the failure mode we're rolling back to fix
-				// (#1214). Do not "optimise" this back to the memo.
-				//
-				// Uses SpendRollbackTimeout, not SpendWaitTimeout: SpendWaitTimeout
-				// is the end-to-end budget for ONE batched spend, while this budget
-				// covers the existence probe plus rollbackSpendChunks' sequence of
-				// chunked Unspend calls over spentSpends — a multiple of that
-				// single-spend cost on a wide transaction. On overrun the loop
-				// aborts and the remaining spends stay applied, counted via
-				// prometheusUtxoSpendRollbackFailed below.
-				rbTimeout := s.settings.UtxoStore.SpendRollbackTimeout
-				if rbTimeout <= 0 {
-					rbTimeout = 120 * time.Second
-				}
-
-				rbCtx, rbCancel := context.WithTimeout(context.Background(), rbTimeout)
-				defer rbCancel()
-
-				var spendingTxExists bool
-				if scanErr := s.db.QueryRowContext(rbCtx, "SELECT EXISTS(SELECT 1 FROM transactions WHERE hash = $1)", tx.TxIDChainHash()[:]).Scan(&spendingTxExists); scanErr != nil {
-					s.logger.Errorf("[SPEND][%s] cannot determine whether spender exists, skipping rollback of %d partial spend(s): %v", tx.TxID(), len(spentSpends), scanErr)
-					prometheusUtxoPartialSpendRollbacks.WithLabelValues(utxo.RollbackOutcomeIndeterminate).Inc()
-				} else {
-					rollback = !spendingTxExists
-
-					if rollback {
-						prometheusUtxoPartialSpendRollbacks.WithLabelValues(utxo.RollbackOutcomeFired).Inc()
-					} else {
-						prometheusUtxoPartialSpendRollbacks.WithLabelValues(utxo.RollbackOutcomeSpenderExists).Inc()
-					}
-				}
-
-				if rollback {
-					reverted, unspendErr := s.rollbackSpendChunks(rbCtx, spentSpends)
-					if unspendErr != nil {
-						left := len(spentSpends) - reverted
-						s.logger.Errorf("[SPEND][%s] error in sql unspend (batched mode): reverted %d of %d partial spend(s), %d left dangling: %v",
-							tx.TxID(), reverted, len(spentSpends), left, unspendErr)
-						// Counted per dangling spend left behind, not per call: with
-						// chunking, one failing chunk no longer means the whole
-						// rollback failed, so this is read as a ref count.
-						prometheusUtxoSpendRollbackFailed.Add(float64(left))
-					} else {
-						s.logger.Warnf("[SPEND][%s] rolled back %d partial spend(s) (batched mode)", tx.TxID(), reverted)
-					}
-				}
-			}()
-		} else if len(spentSpends) > 0 {
+		switch {
+		case useRequireParentOutputs:
+			if rollback = spendRollbackSet(spends, spentSpends); len(rollback) > 0 {
+				prometheusUtxoPartialSpendRollbacks.WithLabelValues(utxo.RollbackOutcomeFired).Inc()
+				s.rollbackPartialSpends(tx, rollback)
+			}
+		case len(rollback) == 0:
+			// Nothing this call wrote, so nothing to reverse or probe for.
+		case !(sawTransientLock || sawTransientCreating) || hasUnwinnableFailure(spends):
+			s.probeAndRollbackPartialSpends(tx, rollback)
+		default:
 			// Transient suppression: record the outcome so this store's dashboard
 			// signal has the same value set as aerospike's — a suppressed
 			// rollback here would otherwise be invisible next to aerospike's
@@ -2385,6 +2669,131 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 	return spends, nil
 }
 
+// probeAndRollbackPartialSpends reverses rollback unless the spending
+// transaction has a record. With a record present the ref is not dangling and
+// the rollback would instead clear a slot a live tx legitimately owns; an
+// indeterminate lookup skips the rollback.
+//
+// rollback holds no historical match: those are classified by age when the
+// input is answered, and never enter it.
+func (s *Store) probeAndRollbackPartialSpends(tx *bt.Tx, rollback []*utxo.Spend) {
+	if spendBeforeRollbackProbe != nil {
+		spendBeforeRollbackProbe()
+	}
+
+	rbCtx, rbCancel := s.spendRollbackContext()
+	defer rbCancel()
+
+	// Detached from the caller's ctx (on the context-cancel path it is
+	// already dead, and that is exactly a case where the partial spends
+	// must still be cleaned up) but bounded, so a wedged database cannot
+	// pin this goroutine forever. Deliberately not derived from the store's
+	// context either: that is canceled on shutdown, which would make the
+	// probe below fail as "indeterminate" and skip the rollback exactly
+	// when a shutdown races in-flight spends. Mirrors the aerospike store.
+	//
+	// Deliberately re-queried here rather than reusing txAlreadyExists: a
+	// stale "exists" memo is exactly what would let this rollback clear a
+	// slot a live spender still owns, and a stale "not found" memo is
+	// exactly what would leave a dangling ref behind. The extra query is
+	// the price of the freshest possible answer at the one point where
+	// getting it wrong is the failure mode we're rolling back to fix
+	// (#1214). Do not "optimise" this back to the memo.
+	//
+	// Uses SpendRollbackTimeout, not SpendWaitTimeout: SpendWaitTimeout
+	// is the end-to-end budget for ONE batched spend, while this budget
+	// covers the existence probe plus rollbackSpendChunks' sequence of
+	// chunked Unspend calls over the rollback set — a multiple of that
+	// single-spend cost on a wide transaction. On overrun the loop
+	// aborts and the remaining spends stay applied, counted via
+	// prometheusUtxoSpendRollbackFailed below.
+	var spendingTxExists bool
+	if scanErr := s.db.QueryRowContext(rbCtx, "SELECT EXISTS(SELECT 1 FROM transactions WHERE hash = $1)", tx.TxIDChainHash()[:]).Scan(&spendingTxExists); scanErr != nil {
+		s.logger.Errorf("[SPEND][%s] cannot determine whether spender exists, skipping rollback of %d partial spend(s): %v", tx.TxID(), len(rollback), scanErr)
+		prometheusUtxoPartialSpendRollbacks.WithLabelValues(utxo.RollbackOutcomeIndeterminate).Inc()
+
+		return
+	}
+
+	if spendingTxExists {
+		prometheusUtxoPartialSpendRollbacks.WithLabelValues(utxo.RollbackOutcomeSpenderExists).Inc()
+
+		return
+	}
+
+	prometheusUtxoPartialSpendRollbacks.WithLabelValues(utxo.RollbackOutcomeFired).Inc()
+
+	s.unspendRollback(rbCtx, tx, rollback)
+}
+
+// rollbackPartialSpends reverses rollback with no existence probe, for a caller
+// that wrote the spending transaction's record itself (see Spend).
+func (s *Store) rollbackPartialSpends(tx *bt.Tx, rollback []*utxo.Spend) {
+	rbCtx, rbCancel := s.spendRollbackContext()
+	defer rbCancel()
+
+	s.unspendRollback(rbCtx, tx, rollback)
+}
+
+// spendRollbackContext is the bounded, detached context a rollback runs under;
+// see probeAndRollbackPartialSpends for why.
+func (s *Store) spendRollbackContext() (context.Context, context.CancelFunc) {
+	rbTimeout := s.settings.UtxoStore.SpendRollbackTimeout
+	if rbTimeout <= 0 {
+		rbTimeout = 120 * time.Second
+	}
+
+	return context.WithTimeout(context.Background(), rbTimeout)
+}
+
+// unspendRollback reverses rollback in chunks and reports the outcome.
+func (s *Store) unspendRollback(rbCtx context.Context, tx *bt.Tx, rollback []*utxo.Spend) {
+	reverted, unspendErr := s.rollbackSpendChunks(rbCtx, rollback)
+	if unspendErr != nil {
+		left := len(rollback) - reverted
+		s.logger.Errorf("[SPEND][%s] error in sql unspend (batched mode): reverted %d of %d partial spend(s), %d left dangling: %v",
+			tx.TxID(), reverted, len(rollback), left, unspendErr)
+		// Counted per dangling spend left behind, not per call: with
+		// chunking, one failing chunk no longer means the whole
+		// rollback failed, so this is read as a ref count.
+		prometheusUtxoSpendRollbackFailed.Add(float64(left))
+
+		return
+	}
+
+	s.logger.Warnf("[SPEND][%s] rolled back %d partial spend(s) (batched mode)", tx.TxID(), reverted)
+}
+
+// spendRollbackSet is what a failed batched Spend reverses for a
+// RequireParentOutputs caller: nothing unless an input failed with a genuine
+// validation error (utxo.NeedsSpendRollback), and then only the inputs this call
+// wrote. Every idempotent match is held back: the record may be a live
+// transaction's, and its matches are that transaction's own spends, as on
+// Aerospike (spendCompletionResult.rollbackSet).
+func spendRollbackSet(spends, written []*utxo.Spend) []*utxo.Spend {
+	if !utxo.NeedsSpendRollback(spends, true) {
+		return nil
+	}
+
+	return written
+}
+
+// deadlockRetriesExhaustedError is the error a retry loop returns after it gave up on a deadlock. It
+// carries the last deadlock as its cause. isDeadlock reports false for it, so a caller that retries on
+// isDeadlock does not retry an operation that has already used its retry budget, even though the cause
+// in the message still names the deadlock.
+type deadlockRetriesExhaustedError struct {
+	err *errors.Error
+}
+
+func (e *deadlockRetriesExhaustedError) Error() string {
+	return e.err.Error()
+}
+
+func (e *deadlockRetriesExhaustedError) Unwrap() error {
+	return e.err
+}
+
 // isDeadlock reports whether a database error is a lock the spend batch should
 // retry: a PostgreSQL deadlock (SQLSTATE 40P01), or a SQLite BUSY or LOCKED
 // result. The SQLite arm matches the result code, as isLockError below and
@@ -2394,11 +2803,18 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 // table is locked: database is deadlocked". This used to match the BUSY message
 // alone, so a spend batch that collided with a create's transaction was aborted
 // instead of retried (see is_deadlock_sqlite_test.go). The message check stays
-// as the fallback for a driver error that is not a *sqlite.Error.
+// as the fallback for a driver error that is not a *sqlite.Error. The message check also
+// matches a PostgreSQL deadlock by its SQLSTATE, because a teranode error wrap keeps only
+// the driver error's text, so errors.As cannot find the driver error behind it.
 func isDeadlock(err error) bool {
 	if err == nil {
 		return false
 	}
+
+	if _, exhausted := err.(*deadlockRetriesExhaustedError); exhausted {
+		return false
+	}
+
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) && pgErr.Code == usql.PgErrDeadlockDetected {
 		return true
@@ -2415,7 +2831,114 @@ func isDeadlock(err error) bool {
 		return true
 	}
 	msg := err.Error()
-	return strings.Contains(msg, "database is locked") || strings.Contains(msg, "database table is locked")
+	return strings.Contains(msg, "SQLSTATE "+usql.PgErrDeadlockDetected) ||
+		strings.Contains(msg, "database is locked") || strings.Contains(msg, "database table is locked")
+}
+
+// retryOnLockError runs op up to attempts times while it fails with an error
+// isDeadlock recognises, and returns its last error. backoff gives the wait
+// after the given failed attempt, counting from 1. what names the operation in
+// the warning logged before each retry. op must be safe to run again after such
+// a failure: a failed statement or rolled-back transaction holds no locks.
+func retryOnLockError(ctx context.Context, logger ulogger.Logger, attempts int, backoff func(attempt int) time.Duration, what string, op func() error) error {
+	for attempt := 1; ; attempt++ {
+		err := op()
+		if err == nil || !isDeadlock(err) || attempt >= attempts {
+			return err
+		}
+
+		logger.Warnf("%s lock error (attempt %d/%d), retrying: %v", what, attempt, attempts, err)
+
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(backoff(attempt)):
+		}
+	}
+}
+
+// linearLockBackoff waits 10ms more after each failed attempt.
+func linearLockBackoff(attempt int) time.Duration {
+	return time.Duration(attempt) * 10 * time.Millisecond
+}
+
+// setMinedMultiLockBackoff is Create's lock retry budget: 100ms, 200ms, 400ms. On
+// sqlitememory a lock error is the engine breaking a cycle with a concurrent create,
+// and a wave of concurrent creates re-forms that cycle faster than a 10-20ms backoff
+// lets them finish.
+func setMinedMultiLockBackoff(attempt int) time.Duration {
+	return 100 * time.Millisecond << (attempt - 1)
+}
+
+// sqlRows is the part of *sql.Rows the row readers below use.
+type sqlRows interface {
+	Next() bool
+	Scan(dest ...any) error
+	Err() error
+	Close() error
+}
+
+// readExistingHashes reads the hash column of every row and closes rows. An error
+// part way through the rows would otherwise read as missing rows, which an UnsetMined
+// write tolerates; returned, it fails the chunk, and a lock error retries it.
+func readExistingHashes(rows sqlRows) (map[chainhash.Hash]bool, error) {
+	defer func() {
+		_ = rows.Close()
+	}()
+
+	existingHashes := make(map[chainhash.Hash]bool)
+
+	for rows.Next() {
+		var hb []byte
+		if err := rows.Scan(&hb); err != nil {
+			return nil, errors.NewStorageError("SQL error scanning existing hash: %v", err)
+		}
+
+		var h chainhash.Hash
+		copy(h[:], hb)
+		existingHashes[h] = true
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, errors.NewStorageError("SQL error reading existing hashes: %v", err)
+	}
+
+	return existingHashes, nil
+}
+
+// readBlockIDs reads (hash, nullable block id) rows into each hash's block ids and
+// closes rows. A hash with no block id is in the map with none. An error part way
+// through the rows is returned rather than read as a short list.
+func readBlockIDs(rows sqlRows) (map[chainhash.Hash][]uint32, error) {
+	defer func() {
+		_ = rows.Close()
+	}()
+
+	blockIDsMap := make(map[chainhash.Hash][]uint32)
+
+	for rows.Next() {
+		var hb []byte
+		var blockID *uint32 // nullable from LEFT JOIN
+		if err := rows.Scan(&hb, &blockID); err != nil {
+			return nil, errors.NewStorageError("SQL error scanning block IDs: %v", err)
+		}
+
+		var h chainhash.Hash
+		copy(h[:], hb)
+
+		if blockID != nil {
+			blockIDsMap[h] = append(blockIDsMap[h], *blockID)
+		} else if _, exists := blockIDsMap[h]; !exists {
+			// Ensure the hash is in the map even with no block_ids
+			blockIDsMap[h] = nil
+		}
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, errors.NewStorageError("SQL error reading block IDs: %v", err)
+	}
+
+	return blockIDsMap, nil
 }
 
 // sendSpendBatch is the batcher callback that processes a batch of spend operations
@@ -2424,7 +2947,8 @@ func isDeadlock(err error) bool {
 // Mirrors aerospike/spend.go sendSpendBatchLua.
 //
 // Single-phase design: SELECT + UPDATE outputs (validates and marks each output as spent).
-// DAH updates are handled separately by SetMinedMulti and setDAH, not during Spend.
+// Parents this batch spent or matched then have delete_at_height recomputed by
+// setDAHIfPresent, in the same transaction and after the output update.
 //
 // The batcher is configured with background=false so batch callbacks are serialized.
 // This prevents PostgreSQL deadlocks that occur when concurrent batches lock
@@ -2432,6 +2956,55 @@ func isDeadlock(err error) bool {
 // Aerospike doesn't need this because it uses optimistic single-key operations
 // without DB-level row locking.
 func (s *Store) sendSpendBatch(batch []*batchSpend) {
+	settled := make(chan struct{})
+	defer close(settled)
+	active := make([]*batchSpend, 0, len(batch))
+	for _, item := range batch {
+		if item == nil {
+			continue
+		}
+		// Publish settled before the handoff. A failed caller CAS then sees
+		// the initialized channel and waits for transaction cleanup.
+		item.settled = settled
+		if !item.execution.CompareAndSwap(spendQueued, spendExecuting) {
+			continue
+		}
+		active = append(active, item)
+	}
+	batch = active
+	if len(batch) == 0 {
+		return
+	}
+	// A batch containing one call uses that call's cancellation directly.
+	// A mixed batch is aborted only once every call in it has ended. One
+	// caller's cancellation or wait timeout must not fail the spends of the
+	// others: they are still waiting for an answer, and a client that
+	// disconnects could otherwise abort every transaction batched with its
+	// own. A call that ended before the batch finishes still gets the
+	// batch's real answer, since its caller waits for it before any rollback.
+	ctx := s.ctx
+	primary := batch[0].call
+	singleCall := primary != nil
+	for _, item := range batch {
+		if item.call != primary {
+			singleCall = false
+			break
+		}
+	}
+	if singleCall {
+		ctx = primary.ctx
+	} else {
+		var release func()
+		ctx, release = s.mixedSpendBatchContext(batch)
+		defer release()
+	}
+	defer func() {
+		if ctx.Err() != nil {
+			for _, item := range active {
+				item.interrupted = true
+			}
+		}
+	}()
 	batch = utxo.FilterConflictingDuplicateSpendClaims(batch,
 		func(item *batchSpend) *utxo.Spend {
 			if item == nil {
@@ -2447,13 +3020,58 @@ func (s *Store) sendSpendBatch(batch []*batchSpend) {
 		return
 	}
 
-	s.retrySpendBatch(batch, s.trySendSpendBatch)
+	s.retrySpendBatchContext(ctx, batch, func(batch []*batchSpend) bool {
+		return s.trySendSpendBatch(ctx, batch)
+	})
+}
+
+// mixedSpendBatchContext returns the context a batch holding several calls runs
+// under: the store's, cancelled once every call in the batch has ended. An item
+// with no call has no caller that can end, so a batch holding one never aborts.
+// The caller defers release once the batch is done.
+func (s *Store) mixedSpendBatchContext(batch []*batchSpend) (ctx context.Context, release func()) {
+	calls := make(map[*spendCall]struct{})
+
+	for _, item := range batch {
+		if item.call == nil {
+			return s.ctx, func() {}
+		}
+
+		calls[item.call] = struct{}{}
+	}
+
+	ctx, cancel := context.WithCancel(s.ctx)
+
+	var remaining atomic.Int64
+	remaining.Store(int64(len(calls)))
+
+	stops := make([]func() bool, 0, len(calls))
+
+	for call := range calls {
+		stops = append(stops, context.AfterFunc(call.ctx, func() {
+			if remaining.Add(-1) == 0 {
+				cancel()
+			}
+		}))
+	}
+
+	return ctx, func() {
+		for _, stop := range stops {
+			stop()
+		}
+
+		cancel()
+	}
 }
 
 // retrySpendBatch runs try over batch until it reports no lock error, and
 // answers every item itself when the retries run out or the store context is
 // cancelled while waiting.
 func (s *Store) retrySpendBatch(batch []*batchSpend, try func([]*batchSpend) bool) {
+	s.retrySpendBatchContext(s.ctx, batch, try)
+}
+
+func (s *Store) retrySpendBatchContext(ctx context.Context, batch []*batchSpend, try func([]*batchSpend) bool) {
 	// Same budget as Create's lock retry (100ms, 200ms, 400ms). On sqlitememory a
 	// lock error is the engine breaking a cycle with a concurrent create, and a
 	// wave of concurrent creates re-forms that cycle faster than a 10-20ms
@@ -2463,6 +3081,14 @@ func (s *Store) retrySpendBatch(batch []*batchSpend, try func([]*batchSpend) boo
 	const maxRetries = 3
 
 	for attempt := 0; ; attempt++ {
+		// A retried attempt starts from the store's current state: an input
+		// classified idempotent last time may be written fresh this time, and a
+		// stale flag would then keep a spend this call wrote out of the rollback.
+		for _, item := range batch {
+			item.idempotent = false
+			item.historical = false
+		}
+
 		retryable := try(batch)
 		if !retryable {
 			return
@@ -2473,12 +3099,12 @@ func (s *Store) retrySpendBatch(batch []*batchSpend, try func([]*batchSpend) boo
 		}
 
 		backoff := time.Duration(100<<attempt) * time.Millisecond
-		s.logger.Warnf("[Spend] deadlock detected (attempt %d/%d), retrying batch of %d items in %v", attempt+1, maxRetries+1, len(batch), backoff)
+		s.logger.Warnf("[Spend] deadlock or lifted freeze detected (attempt %d/%d), retrying batch of %d items in %v", attempt+1, maxRetries+1, len(batch), backoff)
 
 		select {
-		case <-s.ctx.Done():
+		case <-ctx.Done():
 			for _, item := range batch {
-				item.errCh <- errors.NewStorageError("[Spend] deadlock retry cancelled", s.ctx.Err())
+				item.errCh <- errors.NewStorageError("[Spend] deadlock retry cancelled", ctx.Err())
 			}
 
 			return
@@ -2487,7 +3113,7 @@ func (s *Store) retrySpendBatch(batch []*batchSpend, try func([]*batchSpend) boo
 	}
 	// Exhausted retries — send error to all items
 	for _, item := range batch {
-		item.errCh <- errors.NewStorageError("[Spend] deadlock persisted after %d retries", maxRetries)
+		item.errCh <- errors.NewStorageError("[Spend] deadlock or lifted freeze persisted after %d retries", maxRetries)
 	}
 }
 
@@ -2495,11 +3121,11 @@ func (s *Store) retrySpendBatch(batch []*batchSpend, try func([]*batchSpend) boo
 // Returns true if the error was a retryable deadlock and the batch should be retried.
 // Returns false if the batch completed (success or non-retryable error) and results
 // have been sent to all item errCh channels.
-func (s *Store) trySendSpendBatch(batch []*batchSpend) (retryable bool) {
+func (s *Store) trySendSpendBatch(ctx context.Context, batch []*batchSpend) (retryable bool) {
 	if s.settings.UtxoStore.BatchSQLOperations && s.engine == "postgres" {
-		return s.trySendSpendBatchBulk(batch)
+		return s.trySendSpendBatchBulk(ctx, batch)
 	}
-	return s.trySendSpendBatchPerRow(batch)
+	return s.trySendSpendBatchPerRow(ctx, batch)
 }
 
 // spendUpdateRow is one output row the bulk spend UPDATE sets spending data on.
@@ -2508,6 +3134,7 @@ type spendUpdateRow struct {
 	transactionID int
 	vout          uint32
 	spendingData  []byte
+	blockHeight   uint32
 }
 
 // sortSpendUpdateRows orders rows by (transaction_id, idx), the order every bulk
@@ -2529,15 +3156,50 @@ type spendSelectResult struct {
 	coinbaseSpendingHeight uint32
 	utxoHash               []byte
 	spendingDataBytes      []byte
+	spendingHeight         sql.NullInt64 // the height recorded with spendingDataBytes, NULL when none
+	spenderExists          bool          // a transactions row exists for the spender spendingDataBytes names
 	frozen                 bool
 	conflicting            bool
 	locked                 bool
 	spendableIn            *uint32
 }
 
+// classifyIdempotentMatch answers an input whose output already records exactly
+// its spend. recorded is the height stored with that spend and spenderExists
+// says whether the spender's transactions row is in the store.
+//
+// A match is historical by its age (utxo.IsHistoricalSpend); a match with no
+// recorded height never is. A historical match
+// whose spender has no record is a replay of a transaction the pruner removed,
+// and refused. A historical match whose spender is stored is an ordinary match,
+// for a transaction that outlived the retention (one that waited unmined, say),
+// and reports historical so that no rollback reverses it. A young match is an
+// earlier attempt at this call and reports not historical.
+func (s *Store) classifyIdempotentMatch(item *batchSpend, recorded sql.NullInt64, spenderExists bool) (historical bool, refused error) {
+	retention := s.settings.GetUtxoStoreBlockHeightRetention()
+	if !utxo.IsHistoricalSpend(uint32(recorded.Int64), recorded.Valid, item.blockHeight, retention) {
+		return false, nil
+	}
+
+	if !spenderExists {
+		// The output names a spender with no record, recorded long ago. That is
+		// a pruned replay, or an earlier attempt that left the spend behind and
+		// never created its transaction. Name both heights, so an operator can
+		// find and free the output if it is the second.
+		s.logger.Warnf("[Spend] refusing %s:%d as a replay of pruned transaction %s: spend recorded at %d, incoming at %d, spender has no record",
+			item.spend.TxID, item.spend.Vout, item.spend.SpendingData.TxID, recorded.Int64, item.blockHeight)
+
+		return false, errors.NewUtxoSpendingTxPrunedError(errSpendTxPruned, item.spend.TxID, item.spend.Vout)
+	}
+
+	return true, nil
+}
+
 // trySendSpendBatchBulk uses bulk SELECT + bulk UPDATE for PostgreSQL.
-func (s *Store) trySendSpendBatchBulk(batch []*batchSpend) (retryable bool) {
-	txn, err := s.db.BeginTx(s.ctx, nil)
+func (s *Store) trySendSpendBatchBulk(ctx context.Context, batch []*batchSpend) (retryable bool) {
+	// The rechecks after the initial SELECT must see commits made since it,
+	// regardless of the PostgreSQL role or database's default isolation.
+	txn, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
 	if err != nil {
 		for _, item := range batch {
 			item.errCh <- errors.NewStorageError("[Spend] failed to begin transaction", err)
@@ -2551,10 +3213,17 @@ func (s *Store) trySendSpendBatchBulk(batch []*batchSpend) (retryable bool) {
 	// Phase 1: Bulk SELECT — fetch all output states in one query
 	// Build VALUES list: (hash, idx, batch_idx)
 	var sb strings.Builder
+	// The height the output's spend was recorded at, and whether the spender
+	// that spend names has a record, come back with the output. Phase 2 uses
+	// them only when that recorded spend is exactly the incoming one (see
+	// classifyIdempotentMatch). The join finds nothing for an unspent output,
+	// whose spending_data is NULL, and Unspend clears the height with the
+	// spending data, so a replay after an Unspend meets a free output.
 	sb.WriteString(`
 		SELECT v.batch_idx,
 		       o.transaction_id, o.coinbase_spending_height, o.utxo_hash,
-		       o.spending_data, o.frozen OR t.frozen AS frozen, t.conflicting, t.locked, o.spendableIn
+		       o.spending_data, o.frozen OR t.frozen AS frozen, t.conflicting, t.locked, o.spendableIn,
+		       o.spending_height, st.id IS NOT NULL
 		FROM (VALUES `)
 	args := make([]interface{}, 0, len(batch)*3)
 	paramIdx := 1
@@ -2563,14 +3232,16 @@ func (s *Store) trySendSpendBatchBulk(batch []*batchSpend) (retryable bool) {
 			sb.WriteByte(',')
 		}
 		sb.WriteString(fmt.Sprintf("($%d::bytea,$%d::int,$%d::int)", paramIdx, paramIdx+1, paramIdx+2))
+
 		args = append(args, item.spend.TxID[:], item.spend.Vout, i)
 		paramIdx += 3
 	}
 	sb.WriteString(`) AS v(hash,idx,batch_idx)
 		JOIN transactions t ON t.hash = v.hash
-		JOIN outputs o ON o.transaction_id = t.id AND o.idx = v.idx`)
+		JOIN outputs o ON o.transaction_id = t.id AND o.idx = v.idx
+		LEFT JOIN transactions st ON st.hash = substring(o.spending_data from 1 for 32)`)
 
-	rows, err := txn.QueryContext(s.ctx, sb.String(), args...)
+	rows, err := txn.QueryContext(ctx, sb.String(), args...)
 	if err != nil {
 		if isDeadlock(err) {
 			return true
@@ -2586,7 +3257,7 @@ func (s *Store) trySendSpendBatchBulk(batch []*batchSpend) (retryable bool) {
 	for rows.Next() {
 		r := &spendSelectResult{}
 		if err := rows.Scan(&r.batchIdx, &r.transactionID, &r.coinbaseSpendingHeight,
-			&r.utxoHash, &r.spendingDataBytes, &r.frozen, &r.conflicting, &r.locked, &r.spendableIn); err != nil {
+			&r.utxoHash, &r.spendingDataBytes, &r.frozen, &r.conflicting, &r.locked, &r.spendableIn, &r.spendingHeight, &r.spenderExists); err != nil {
 			rows.Close()
 			if isDeadlock(err) {
 				return true
@@ -2606,6 +3277,10 @@ func (s *Store) trySendSpendBatchBulk(batch []*batchSpend) (retryable bool) {
 			item.errCh <- errors.NewStorageError("[Spend] failed: closing bulk SELECT results", err)
 		}
 		return false
+	}
+
+	if s.afterSpendSelect != nil {
+		s.afterSpendSelect()
 	}
 
 	// Phase 2: Validate each item and build the bulk UPDATE set
@@ -2635,7 +3310,7 @@ func (s *Store) trySendSpendBatchBulk(batch []*batchSpend) (retryable bool) {
 		}
 
 		if r.frozen {
-			validationErrors[i] = errors.NewUtxoFrozenError("[Spend] utxo is frozen for %s:%d", spend.TxID, spend.Vout)
+			validationErrors[i] = errors.NewUtxoFrozenError(errSpendUtxoFrozen, spend.TxID, spend.Vout)
 			continue
 		}
 		if r.conflicting && !item.ignoreConflicting {
@@ -2656,20 +3331,32 @@ func (s *Store) trySendSpendBatchBulk(batch []*batchSpend) (retryable bool) {
 		}
 
 		// Check if already spent by a different transaction
-		if len(r.spendingDataBytes) > 0 {
-			if spend.SpendingData != nil && !bytes.Equal(r.spendingDataBytes, spend.SpendingData.Bytes()) {
-				existingSpendData, parseErr := spendpkg.NewSpendingDataFromBytes(r.spendingDataBytes)
-				if parseErr != nil {
-					validationErrors[i] = errors.NewProcessingError(errFailedCreateSpendingData, parseErr)
-					continue
-				}
-				validationErrors[i] = errors.NewUtxoSpentError(*spend.TxID, spend.Vout, *spend.UTXOHash, existingSpendData)
+		if len(r.spendingDataBytes) > 0 && spend.SpendingData != nil && !bytes.Equal(r.spendingDataBytes, spend.SpendingData.Bytes()) {
+			existingSpendData, parseErr := spendpkg.NewSpendingDataFromBytes(r.spendingDataBytes)
+			if parseErr != nil {
+				validationErrors[i] = errors.NewProcessingError(errFailedCreateSpendingData, parseErr)
 				continue
 			}
+			validationErrors[i] = errors.NewUtxoSpentError(*spend.TxID, spend.Vout, *spend.UTXOHash, existingSpendData)
+			continue
+		}
+
+		if len(r.spendingDataBytes) > 0 {
+			// The output records exactly this spend. A historical record whose
+			// spender has no record of its own is a replay of a transaction the
+			// pruner removed: refused, and nothing is written.
+			historical, refused := s.classifyIdempotentMatch(item, r.spendingHeight, r.spenderExists)
+			if refused != nil {
+				validationErrors[i] = refused
+				continue
+			}
+
 			// Idempotent re-spend: same spending data — treat as success without UPDATE.
 			// Record the parent so DAH can still be (re)evaluated and heal NULL DAHs
 			// left by spends that happened before the DAH-on-spend fix landed.
 			idempotentParentIDs[r.transactionID] = struct{}{}
+			item.idempotent = !historical
+			item.historical = historical
 			continue
 		}
 
@@ -2687,6 +3374,7 @@ func (s *Store) trySendSpendBatchBulk(batch []*batchSpend) (retryable bool) {
 			transactionID: r.transactionID,
 			vout:          spend.Vout,
 			spendingData:  spend.SpendingData.Bytes(),
+			blockHeight:   item.blockHeight,
 		})
 	}
 
@@ -2735,39 +3423,76 @@ func (s *Store) trySendSpendBatchBulk(batch []*batchSpend) (retryable bool) {
 	// settled first-arrival-wins, so sorting here changes no outcome.
 	sortSpendUpdateRows(dedupedUpdate)
 
-	// Bulk UPDATE with optimistic locking.
+	// Bulk UPDATE with optimistic locking. Every write of a NULL spending_data
+	// also requires frozen = false, so a freeze that commits after the bulk
+	// SELECT stops the spend: Postgres re-checks the WHERE against the newest
+	// committed row under READ COMMITTED. transactions.frozen is only set when
+	// the row is created, so the SELECT's read of it cannot go stale.
+	//
+	// upd_idem, the arm for an output that already records this spend, and the
+	// re-check below catch a concurrent attempt at the same spend that committed
+	// after the SELECT. That attempt may have run at a different height, so both
+	// read the recorded height and whether the spender exists, and classify the
+	// match by age as the SELECT does (lateMatch).
+	//
 	// When retention > 0, the UPDATE is wrapped in a CTE that also runs a DAH
 	// recompute on any parent tx whose last unspent output was just drained.
 	// Mirrors aerospike's inline setDeleteAtHeight Lua call; without this, mined
 	// txs spent gradually over time never get a DAH and disk usage grows unbounded.
 	updatedSet := make(map[int]bool) // batchIdx -> updated
+
+	// lateMatch answers an output that records exactly this spend, written by a
+	// concurrent attempt after the SELECT. That attempt's height may be far below
+	// this call's, so the match is classified by age as the SELECT's are: a
+	// historical one with no spender is refused, and a historical one with a
+	// spender is kept out of any rollback.
+	lateMatch := func(bIdx int, recorded sql.NullInt64, spenderExists, healDAH bool) {
+		item := batch[bIdx]
+
+		historical, refused := s.classifyIdempotentMatch(item, recorded, spenderExists)
+		if refused != nil {
+			validationErrors[bIdx] = refused
+			return
+		}
+
+		updatedSet[bIdx] = true
+
+		if healDAH {
+			idempotentParentIDs[resultMap[bIdx].transactionID] = struct{}{}
+		}
+
+		item.idempotent = !historical
+		item.historical = historical
+	}
 	if len(dedupedUpdate) > 0 {
 		retention := s.settings.GetUtxoStoreBlockHeightRetention()
 		wrapDAH := retention > 0
 
 		var ub strings.Builder
-		if wrapDAH {
-			ub.WriteString(`WITH v(transaction_id,idx,spending_data,batch_idx) AS (VALUES `)
-		} else {
-			ub.WriteString(`
-			UPDATE outputs o
-			SET spending_data = v.spending_data
-			FROM (VALUES `)
-		}
-		updateArgs := make([]interface{}, 0, len(dedupedUpdate)*4+1)
+		// Both shapes open the same CTE over the VALUES list. The non-DAH branch
+		// used to be a single UPDATE ... RETURNING, which cannot report whether a
+		// row was already spent by this same spender: RETURNING evaluates against
+		// the POST-update row on both engines, so the comparison it returned was
+		// unconditionally true and every fresh write came back flagged idempotent.
+		// Splitting the write from the already-matching rows is the only way to
+		// read that distinction, so both branches now do it.
+		ub.WriteString(`WITH v(transaction_id,idx,spending_data,batch_idx,spending_height) AS (VALUES `)
+		updateArgs := make([]interface{}, 0, len(dedupedUpdate)*5+1)
 		pidx := 1
 		for j, u := range dedupedUpdate {
 			if j > 0 {
 				ub.WriteByte(',')
 			}
-			ub.WriteString(fmt.Sprintf("($%d::int,$%d::int,$%d::bytea,$%d::int)", pidx, pidx+1, pidx+2, pidx+3))
-			updateArgs = append(updateArgs, u.transactionID, u.vout, u.spendingData, u.batchIdx)
-			pidx += 4
+			ub.WriteString(fmt.Sprintf("($%d::int,$%d::int,$%d::bytea,$%d::int,$%d::int)", pidx, pidx+1, pidx+2, pidx+3, pidx+4))
+			updateArgs = append(updateArgs, u.transactionID, u.vout, u.spendingData, u.batchIdx, u.blockHeight)
+			pidx += 5
 		}
 		if wrapDAH {
 			newDAH := int64(s.GetBlockHeight() + 1 + retention)
 			dahIdx := pidx
 			updateArgs = append(updateArgs, newDAH)
+			// In-statement stamp for this path; setDAH below skips when it already holds it.
+			flooredDAH := flooredDAHSQL("p.transaction_id", fmt.Sprintf("$%d", dahIdx), retention)
 			// Postgres CTEs share a snapshot, so the count(*) over outputs inside
 			// dah_upd sees the PRE-update state. "unspent-before == spent_in_batch"
 			// ⇔ this batch just drained the tx's last unspent output.
@@ -2789,13 +3514,15 @@ func (s *Store) trySendSpendBatchBulk(batch []*batchSpend) (retryable bool) {
 			// concurrent-idempotent re-check below.
 			ub.WriteString(fmt.Sprintf(`),
 			upd_spent AS (
-				UPDATE outputs o SET spending_data = v.spending_data FROM v
+				UPDATE outputs o SET spending_data = v.spending_data, spending_height = v.spending_height FROM v
 				WHERE o.transaction_id = v.transaction_id AND o.idx = v.idx
 				  AND o.spending_data IS NULL
+				  AND o.frozen = false
 				RETURNING v.batch_idx, o.transaction_id
 			),
 			upd_idem AS (
-				SELECT v.batch_idx
+				SELECT v.batch_idx, o.spending_height,
+				       EXISTS(SELECT 1 FROM transactions st WHERE st.hash = substring(o.spending_data from 1 for 32)) AS spender_exists
 				FROM v
 				JOIN outputs o
 				  ON o.transaction_id = v.transaction_id AND o.idx = v.idx
@@ -2816,9 +3543,13 @@ func (s *Store) trySendSpendBatchBulk(batch []*batchSpend) (retryable bool) {
 				WHERE o.spending_data IS NULL
 				GROUP BY o.transaction_id
 			),
-			dah_upd AS (
-				UPDATE transactions t SET delete_at_height = $%d
+			parent_dah AS (
+				SELECT p.transaction_id, p.spent_in_batch, %s AS new_dah
 				FROM parents p
+			),
+			dah_upd AS (
+				UPDATE transactions t SET delete_at_height = p.new_dah
+				FROM parent_dah p
 				LEFT JOIN unspent_before u ON u.transaction_id = p.transaction_id
 				WHERE t.id = p.transaction_id
 				  AND t.preserve_until IS NULL
@@ -2826,55 +3557,85 @@ func (s *Store) trySendSpendBatchBulk(batch []*batchSpend) (retryable bool) {
 				  AND NOT t.conflicting
 				  AND EXISTS (SELECT 1 FROM block_ids bi WHERE bi.transaction_id = t.id)
 				  AND COALESCE(u.n_unspent, 0) = p.spent_in_batch
-				  AND (t.delete_at_height IS NULL OR t.delete_at_height < $%d)
+				  AND (t.delete_at_height IS NULL OR t.delete_at_height < p.new_dah)
 				RETURNING 1
 			)
-			SELECT batch_idx FROM upd_spent
+			-- The two arms are reported apart, not unioned blind. upd_idem is a
+			-- row whose output already recorded exactly this spend at the
+			-- statement's snapshot (committed between the SELECT phase and this
+			-- statement), so this call wrote nothing for it. A match committed
+			-- after the snapshot is answered by the missed-row re-check below.
+			-- Reported as a fresh write it would
+			-- join the rollback set and a later failure on a sibling input would
+			-- reverse a spend this call never made. See utxo.RollbackSet.
+			SELECT batch_idx, false AS idempotent, NULL::bigint AS spending_height, false AS spender_exists FROM upd_spent
 			UNION ALL
-			SELECT batch_idx FROM upd_idem`, dahIdx, dahIdx))
+			SELECT batch_idx, true AS idempotent, spending_height::bigint, spender_exists FROM upd_idem`, flooredDAH))
 		} else {
-			ub.WriteString(`) AS v(transaction_id,idx,spending_data,batch_idx)
-			WHERE o.transaction_id = v.transaction_id AND o.idx = v.idx
-			AND (o.spending_data IS NULL OR o.spending_data = v.spending_data)
-			RETURNING v.batch_idx`)
+			ub.WriteString(`),
+			upd_spent AS (
+				UPDATE outputs o
+				SET spending_data = v.spending_data, spending_height = v.spending_height
+				FROM v
+				WHERE o.transaction_id = v.transaction_id AND o.idx = v.idx
+				  AND o.spending_data IS NULL
+				  AND o.frozen = false
+				RETURNING v.batch_idx
+			),
+			upd_idem AS (
+				SELECT v.batch_idx, o.spending_height,
+				       EXISTS(SELECT 1 FROM transactions st WHERE st.hash = substring(o.spending_data from 1 for 32)) AS spender_exists
+				FROM v
+				JOIN outputs o
+				  ON o.transaction_id = v.transaction_id AND o.idx = v.idx
+				WHERE o.spending_data = v.spending_data
+			)
+			SELECT batch_idx, false AS idempotent, NULL::bigint AS spending_height, false AS spender_exists FROM upd_spent
+			UNION ALL
+			SELECT batch_idx, true AS idempotent, spending_height::bigint, spender_exists FROM upd_idem`)
 		}
 
-		uRows, err := txn.QueryContext(s.ctx, ub.String(), updateArgs...)
+		if spendBeforeWrite != nil {
+			spendBeforeWrite()
+		}
+
+		uRows, err := txn.QueryContext(ctx, ub.String(), updateArgs...)
 		if err != nil {
 			if isDeadlock(err) {
 				return true
 			}
-			for i, item := range batch {
-				if valErr, ok := validationErrors[i]; ok {
-					item.errCh <- valErr
-				} else {
-					item.errCh <- errors.NewStorageError("[Spend] failed: bulk UPDATE outputs", err)
-				}
-			}
+			failSpendBatch(batch, validationErrors, "[Spend] failed: bulk UPDATE outputs", err)
 			return false
 		}
 
 		for uRows.Next() {
-			var bIdx int
-			if err := uRows.Scan(&bIdx); err != nil {
+			var (
+				bIdx          int
+				wasIdem       bool
+				recorded      sql.NullInt64
+				spenderExists bool
+			)
+
+			if err := uRows.Scan(&bIdx, &wasIdem, &recorded, &spenderExists); err != nil {
 				uRows.Close()
 				if isDeadlock(err) {
 					return true
 				}
-				for _, item := range batch {
-					item.errCh <- errors.NewStorageError("[Spend] failed: scanning bulk UPDATE results", err)
-				}
+				failSpendBatch(batch, validationErrors, "[Spend] failed: scanning bulk UPDATE results", err)
 				return false
 			}
+			if wasIdem && bIdx >= 0 && bIdx < len(batch) && batch[bIdx] != nil {
+				lateMatch(bIdx, recorded, spenderExists, false)
+				continue
+			}
+
 			updatedSet[bIdx] = true
 		}
 		if err := uRows.Close(); err != nil {
 			if isDeadlock(err) {
 				return true
 			}
-			for _, item := range batch {
-				item.errCh <- errors.NewStorageError("[Spend] failed: closing bulk UPDATE results", err)
-			}
+			failSpendBatch(batch, validationErrors, "[Spend] failed: closing bulk UPDATE results", err)
 			return false
 		}
 
@@ -2900,9 +3661,29 @@ func (s *Store) trySendSpendBatchBulk(batch []*batchSpend) (retryable bool) {
 		// Run a second, fresh-snapshot SELECT over the missed rows to catch
 		// those concurrent idempotent commits. Anything whose current
 		// spending_data matches ours is a successful idempotent spend.
+		//
+		// The same re-check finds rows a freeze committed after the bulk
+		// SELECT: the UPDATE's frozen guard skipped them, and they are still
+		// unspent and now frozen. Those get UtxoFrozenError, not UtxoSpentError.
+		//
+		// A row that is unspent and unfrozen at the re-check had a freeze that made
+		// the write miss and was lifted before the re-check. The coin is spendable
+		// again, so the batch is retried rather than reporting it spent.
+		frozenSet := make(map[int]bool)
 		if len(missedIdxs) > 0 {
+			if spendBeforeRecheck != nil {
+				spendBeforeRecheck()
+			}
+
 			var sb strings.Builder
-			sb.WriteString(`SELECT v.batch_idx FROM (VALUES `)
+			// A row that now records exactly this spend was written by a concurrent
+			// attempt at it after the SELECT found the output unspent. It is
+			// classified by age like any match (lateMatch). Any other row
+			// is a concurrent spend, a freeze, or a lifted freeze to retry.
+			sb.WriteString(`SELECT v.batch_idx,
+			       o.spending_data = v.spending_data, o.frozen, o.spending_height::bigint,
+			       EXISTS(SELECT 1 FROM transactions st WHERE st.hash = substring(o.spending_data from 1 for 32))
+			FROM (VALUES `)
 			args := make([]interface{}, 0, len(missedIdxs)*4)
 			pidx := 1
 			for i, bIdx := range missedIdxs {
@@ -2917,62 +3698,108 @@ func (s *Store) trySendSpendBatchBulk(batch []*batchSpend) (retryable bool) {
 			}
 			sb.WriteString(`) AS v(transaction_id,idx,spending_data,batch_idx)
 			JOIN outputs o ON o.transaction_id = v.transaction_id AND o.idx = v.idx
-			WHERE o.spending_data = v.spending_data`)
+			WHERE o.spending_data = v.spending_data
+			   OR o.spending_data IS NULL`)
 
-			iRows, err := txn.QueryContext(s.ctx, sb.String(), args...)
+			iRows, err := txn.QueryContext(ctx, sb.String(), args...)
 			if err != nil {
 				if isDeadlock(err) {
 					return true
 				}
-				for _, item := range batch {
-					item.errCh <- errors.NewStorageError("[Spend] failed: concurrent-idempotent re-check", err)
-				}
+				failSpendBatch(batch, validationErrors, "[Spend] failed: concurrent-idempotent re-check", err)
 				return false
 			}
 			for iRows.Next() {
-				var bIdx int
-				if err := iRows.Scan(&bIdx); err != nil {
+				var (
+					bIdx          int
+					idem          sql.NullBool
+					nowFrozen     bool
+					recorded      sql.NullInt64
+					spenderExists bool
+				)
+				if err := iRows.Scan(&bIdx, &idem, &nowFrozen, &recorded, &spenderExists); err != nil {
 					iRows.Close()
 					if isDeadlock(err) {
 						return true
 					}
-					for _, item := range batch {
-						item.errCh <- errors.NewStorageError("[Spend] failed: scanning concurrent-idempotent re-check", err)
-					}
+					failSpendBatch(batch, validationErrors, "[Spend] failed: scanning concurrent-idempotent re-check", err)
 					return false
 				}
-				updatedSet[bIdx] = true
+				if !idem.Valid { // spending_data IS NULL: unspent now
+					if nowFrozen {
+						frozenSet[bIdx] = true
+						continue
+					}
+					iRows.Close()
+					return true
+				}
+				if !idem.Bool {
+					continue
+				}
 				// Parent has just had its output confirmed-spent by someone
 				// else with our exact spending_data. Treat it as an idempotent
-				// match for DAH-healing purposes, same as the in-statement path.
-				idempotentParentIDs[resultMap[bIdx].transactionID] = struct{}{}
+				// match for DAH-healing purposes too.
+				lateMatch(bIdx, recorded, spenderExists, true)
 			}
 			if err := iRows.Close(); err != nil {
 				if isDeadlock(err) {
 					return true
 				}
-				for _, item := range batch {
-					item.errCh <- errors.NewStorageError("[Spend] failed: closing concurrent-idempotent re-check", err)
-				}
+				failSpendBatch(batch, validationErrors, "[Spend] failed: closing concurrent-idempotent re-check", err)
 				return false
 			}
 		}
 
-		// Anything still not in updatedSet after the re-check is a genuine
-		// UtxoSpentError (row was concurrently spent by a DIFFERENT spender).
+		// Anything still not in updatedSet after the re-check, and not already
+		// answered (a vanished parent, say), is either frozen by a concurrent
+		// freeze or a genuine UtxoSpentError (row was concurrently spent by a
+		// DIFFERENT spender). Pruned replays never get here: they are refused
+		// before the update, from the age of the recorded spend.
 		for _, u := range dedupedUpdate {
+			if _, answered := validationErrors[u.batchIdx]; answered {
+				continue
+			}
 			if !updatedSet[u.batchIdx] {
 				spend := batch[u.batchIdx].spend
+				if frozenSet[u.batchIdx] {
+					validationErrors[u.batchIdx] = errors.NewUtxoFrozenError(errSpendUtxoFrozen, spend.TxID, spend.Vout)
+					continue
+				}
 				validationErrors[u.batchIdx] = errors.NewUtxoSpentError(*spend.TxID, spend.Vout, *spend.UTXOHash, spend.SpendingData)
 			}
 		}
-		// Mark idempotent duplicate batch entries as successful (same UTXO, same spending data).
-		// Double-spend duplicates (different spending data) are already in validationErrors — skip them.
+		// A duplicate (same UTXO, same spending data) takes its representative's
+		// answer, whatever it was. Double-spend duplicates (different spending
+		// data) are already in validationErrors and are skipped. The
+		// representative can be refused after the dedup: as frozen, or as spent
+		// by a concurrent spender. Promoting only successes left a refused
+		// representative's duplicate with no entry, so it was signalled nil, and
+		// its caller went on as if the spend had succeeded.
+		// The duplicate gets its own error value: Spend() joins a tx's input
+		// errors in place, so a shared value would chain two callers' errors together.
 		for _, u := range toUpdate {
 			key := utxoKey{u.transactionID, u.vout}
 			if entry, ok := seenKeys[key]; ok && entry.batchIdx != u.batchIdx {
-				if bytes.Equal(entry.spendingData, u.spendingData) && updatedSet[entry.batchIdx] {
+				if !bytes.Equal(entry.spendingData, u.spendingData) {
+					continue
+				}
+
+				if updatedSet[entry.batchIdx] {
 					updatedSet[u.batchIdx] = true
+					// The duplicate wrote nothing itself; it is idempotent exactly
+					// when its representative is, which decides its rollback.
+					batch[u.batchIdx].idempotent = batch[entry.batchIdx].idempotent
+					batch[u.batchIdx].historical = batch[entry.batchIdx].historical
+				} else if repErr, refused := validationErrors[entry.batchIdx]; refused {
+					spend := batch[u.batchIdx].spend
+					switch {
+					case errors.Is(repErr, errors.ErrUtxoSpendingTxPruned):
+						validationErrors[u.batchIdx] = errors.NewUtxoSpendingTxPrunedError(errSpendTxPruned, spend.TxID, spend.Vout)
+					case frozenSet[entry.batchIdx]:
+						validationErrors[u.batchIdx] = errors.NewUtxoFrozenError(errSpendUtxoFrozen, spend.TxID, spend.Vout)
+					default:
+						validationErrors[u.batchIdx] = errors.NewUtxoSpentError(*spend.TxID, spend.Vout, *spend.UTXOHash, spend.SpendingData)
+					}
 				}
 			}
 		}
@@ -2984,15 +3811,14 @@ func (s *Store) trySendSpendBatchBulk(batch []*batchSpend) (retryable bool) {
 	// spends of different outputs of the same parent: each statement only sees
 	// its own snapshot, so both observe unspent_before > spent_in_batch, skip
 	// dah_upd, and leave DAH NULL even though the parent is fully drained
-	// after both commits. Calling setDAH afterwards runs a fresh statement
-	// under READ COMMITTED that sees (a) the latest committed writes of any
-	// concurrent spend plus (b) this transaction's own pending writes — so
-	// whoever commits last correctly deterministically sets DAH.
+	// after both commits. Calling setDAH afterwards locks the row and then reads
+	// in a fresh statement under READ COMMITTED, which sees (a) the latest
+	// committed writes of any concurrent spend plus (b) this transaction's own
+	// pending writes — so whoever commits last correctly deterministically sets DAH.
 	//
 	// setDAH is idempotent w.r.t. the CTE: if the CTE already set DAH to
-	// newDAH, setDAH sees conditions met + existingDAH == newDAH and writes
-	// the same value (no-op). Extra round-trip cost is O(distinct parents),
-	// bounded by batch size.
+	// newDAH, setDAH sees conditions met + existingDAH >= newDAH and skips the
+	// write. Extra round-trip cost is O(distinct parents), bounded by batch size.
 	//
 	// The set also includes idempotent parents (Phase 1 SELECT already showed
 	// the output spent with matching spending_data — the CTE skips them).
@@ -3021,18 +3847,30 @@ func (s *Store) trySendSpendBatchBulk(batch []*batchSpend) (retryable bool) {
 		}
 		sort.Ints(sortedParents)
 		for _, parentID := range sortedParents {
-			if err := s.setDAH(s.ctx, txn, parentID); err != nil {
+			present, err := s.setDAHIfPresent(ctx, txn, parentID)
+			if err != nil {
 				if isDeadlock(err) {
 					return true
 				}
+				failSpendBatch(batch, validationErrors, "[Spend] failed to recompute DAH for bulk spend fallback", err)
+				return false
+			}
+
+			if !present {
+				// The pruner deleted this parent while the batch waited for its row lock.
+				// Only the spends of that parent are affected: they get the answer a
+				// parent that was already gone gives, and the rest of the batch commits.
 				for i, item := range batch {
-					if valErr, ok := validationErrors[i]; ok {
-						item.errCh <- valErr
-					} else {
-						item.errCh <- errors.NewStorageError("[Spend] failed to recompute DAH for bulk spend fallback", err)
+					if _, answered := validationErrors[i]; answered {
+						continue
+					}
+
+					if r, ok := resultMap[i]; ok && r.transactionID == parentID {
+						validationErrors[i] = errors.NewTxNotFoundError(errOutputNotFound, item.spend.TxID, item.spend.Vout)
+						item.idempotent = false
+						item.historical = false
 					}
 				}
-				return false
 			}
 		}
 	}
@@ -3042,13 +3880,7 @@ func (s *Store) trySendSpendBatchBulk(batch []*batchSpend) (retryable bool) {
 		if isDeadlock(err) {
 			return true
 		}
-		for i, item := range batch {
-			if valErr, ok := validationErrors[i]; ok {
-				item.errCh <- valErr
-			} else {
-				item.errCh <- errors.NewStorageError("[Spend] failed to commit transaction", err)
-			}
-		}
+		failSpendBatch(batch, validationErrors, "[Spend] failed to commit transaction", err)
 		return false
 	}
 
@@ -3063,10 +3895,33 @@ func (s *Store) trySendSpendBatchBulk(batch []*batchSpend) (retryable bool) {
 	return false
 }
 
+// failSpendBatch answers every item of a bulk spend batch after a statement of
+// the batch failed. An item the batch has already refused keeps its refusal,
+// and every other item gets a storage error built from msg and err. Every
+// failure arm of the bulk path that runs once validationErrors exists goes
+// through here. Overwriting a refusal with a storage error turned a final
+// rejection into one the caller retries, and it hid a pruned-replay answer from
+// utxo.AnyPrunedReplay, so the rollback reversed idempotent matches that are
+// confirmed historical spends (utxo.RollbackSet).
+func failSpendBatch(batch []*batchSpend, validationErrors map[int]error, msg string, err error) {
+	for i, item := range batch {
+		if valErr, ok := validationErrors[i]; ok {
+			item.errCh <- valErr
+		} else {
+			item.errCh <- errors.NewStorageError(msg, err)
+		}
+	}
+}
+
 // trySendSpendBatchPerRow processes a spend batch with per-row SELECT+UPDATE (original behavior).
 // Used for SQLite or when BatchSQLOperations is disabled.
-func (s *Store) trySendSpendBatchPerRow(batch []*batchSpend) (retryable bool) {
-	txn, err := s.db.BeginTx(s.ctx, nil)
+func (s *Store) trySendSpendBatchPerRow(ctx context.Context, batch []*batchSpend) (retryable bool) {
+	var txOptions *sql.TxOptions
+	if s.engine == "postgres" {
+		// Match the bulk path's isolation; keep SQLite's defaults.
+		txOptions = &sql.TxOptions{Isolation: sql.LevelReadCommitted}
+	}
+	txn, err := s.db.BeginTx(ctx, txOptions)
 	if err != nil {
 		for _, item := range batch {
 			item.errCh <- errors.NewStorageError("[Spend] failed to begin transaction", err)
@@ -3087,24 +3942,46 @@ func (s *Store) trySendSpendBatchPerRow(batch []*batchSpend) (retryable bool) {
 		,t.conflicting
 		,t.locked
 		,o.spendableIn
+		,o.spending_height
+		,EXISTS (SELECT 1 FROM transactions st WHERE st.hash = substr(o.spending_data, 1, 32))
 		FROM outputs o
 		JOIN transactions t ON o.transaction_id = t.id
 		WHERE t.hash = $1
 		AND o.idx = $2
 	`
 
-	// Optimistic locking: spending_data IS NULL guard prevents concurrent double-spend
+	// Optimistic locking: spending_data IS NULL guard prevents concurrent double-spend.
+	// The frozen guard makes the write re-check a freeze that committed after q1 read
+	// the row: under READ COMMITTED Postgres re-evaluates this WHERE against the newest
+	// committed row, so the spend writes nothing instead of spending a frozen coin.
+	// transactions.frozen is only set when the row is created, so q1's read of it
+	// cannot go stale and needs no guard here. A concurrent attempt at
+	// the same spend that commits after q1 saw the output unspent makes this
+	// write miss. The recheck below then reads that match's height and spender
+	// and classifies it by age, as q1's matches and the bulk path's are.
 	q2 := `
 		UPDATE outputs
-		SET spending_data = $1
+		SET spending_data = $1, spending_height = $4
 		WHERE transaction_id = $2
 		AND idx = $3
 		AND spending_data IS NULL
+		AND frozen = false
+	`
+
+	// qRow reads the row again when q2 wrote nothing, to tell a freeze from a spend.
+	qRow := `
+		SELECT spending_data, frozen, spending_height,
+		       EXISTS (SELECT 1 FROM transactions st WHERE st.hash = substr(spending_data, 1, 32))
+		FROM outputs
+		WHERE transaction_id = $1
+		AND idx = $2
 	`
 
 	successItems := make([]*batchSpend, 0, len(batch))
-	spentParentIDs := make(map[int]struct{}, len(batch)) // distinct parent tx ids whose outputs were just spent
-	validationErrors := make(map[int]error)              // index -> validation error (non-retryable)
+	spentParentIDs := make(map[int]struct{}, len(batch))  // distinct parent tx ids whose outputs were just spent
+	parentOfItem := make(map[*batchSpend]int, len(batch)) // the parent each success item spends
+	vanished := make(map[*batchSpend]error)               // success items whose parent the prune deleted
+	validationErrors := make(map[int]error)               // index -> validation error (non-retryable)
 	aborted := false
 
 	// Phase 1: SELECT + validate + UPDATE outputs
@@ -3121,16 +3998,21 @@ func (s *Store) trySendSpendBatchPerRow(batch []*batchSpend) (retryable bool) {
 			coinbaseSpendingHeight uint32
 			utxoHash               []byte
 			spendingDataBytes      []byte
+			spendingHeight         sql.NullInt64
+			spenderExists          bool
 			frozen                 bool
 			conflicting            bool
 			locked                 bool
 			spendableIn            *uint32
 		)
 
-		err = txn.QueryRowContext(s.ctx, q1, spend.TxID[:], spend.Vout).Scan(
+		err = txn.QueryRowContext(ctx, q1, spend.TxID[:], spend.Vout).Scan(
 			&transactionID, &coinbaseSpendingHeight, &utxoHash,
-			&spendingDataBytes, &frozen, &conflicting, &locked, &spendableIn,
+			&spendingDataBytes, &frozen, &conflicting, &locked, &spendableIn, &spendingHeight, &spenderExists,
 		)
+		if s.afterSpendSelect != nil {
+			s.afterSpendSelect()
+		}
 		if err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				validationErrors[i] = errors.NewTxNotFoundError(errOutputNotFound, spend.TxID, spend.Vout)
@@ -3146,7 +4028,7 @@ func (s *Store) trySendSpendBatchPerRow(batch []*batchSpend) (retryable bool) {
 
 		// Validate the UTXO state
 		if frozen {
-			validationErrors[i] = errors.NewUtxoFrozenError("[Spend] utxo is frozen for %s:%d", spend.TxID, spend.Vout)
+			validationErrors[i] = errors.NewUtxoFrozenError(errSpendUtxoFrozen, spend.TxID, spend.Vout)
 			continue
 		}
 
@@ -3170,14 +4052,24 @@ func (s *Store) trySendSpendBatchPerRow(batch []*batchSpend) (retryable bool) {
 		}
 
 		// Check if already spent by a different transaction
-		if len(spendingDataBytes) > 0 {
-			if spend.SpendingData != nil && !bytes.Equal(spendingDataBytes, spend.SpendingData.Bytes()) {
-				existingSpendData, parseErr := spendpkg.NewSpendingDataFromBytes(spendingDataBytes)
-				if parseErr != nil {
-					validationErrors[i] = errors.NewProcessingError(errFailedCreateSpendingData, parseErr)
-					continue
-				}
-				validationErrors[i] = errors.NewUtxoSpentError(*spend.TxID, spend.Vout, *spend.UTXOHash, existingSpendData)
+		if len(spendingDataBytes) > 0 && spend.SpendingData != nil && !bytes.Equal(spendingDataBytes, spend.SpendingData.Bytes()) {
+			existingSpendData, parseErr := spendpkg.NewSpendingDataFromBytes(spendingDataBytes)
+			if parseErr != nil {
+				validationErrors[i] = errors.NewProcessingError(errFailedCreateSpendingData, parseErr)
+				continue
+			}
+			validationErrors[i] = errors.NewUtxoSpentError(*spend.TxID, spend.Vout, *spend.UTXOHash, existingSpendData)
+			continue
+		}
+
+		// The output records exactly this spend: refuse it when it is a historical
+		// match with no spender record, a replay of a transaction the pruner
+		// removed. See classifyIdempotentMatch.
+		matchHistorical := false
+		if len(spendingDataBytes) > 0 && spend.SpendingData != nil {
+			var refused error
+			if matchHistorical, refused = s.classifyIdempotentMatch(item, spendingHeight, spenderExists); refused != nil {
+				validationErrors[i] = refused
 				continue
 			}
 		}
@@ -3194,8 +4086,12 @@ func (s *Store) trySendSpendBatchPerRow(batch []*batchSpend) (retryable bool) {
 			continue
 		}
 
+		if spendBeforeWrite != nil {
+			spendBeforeWrite()
+		}
+
 		// UPDATE outputs with optimistic locking
-		result, err := txn.ExecContext(s.ctx, q2, spend.SpendingData.Bytes(), transactionID, spend.Vout)
+		result, err := txn.ExecContext(ctx, q2, spend.SpendingData.Bytes(), transactionID, spend.Vout, item.blockHeight)
 		if err != nil {
 			if isDeadlock(err) {
 				return true // retryable
@@ -3217,11 +4113,71 @@ func (s *Store) trySendSpendBatchPerRow(batch []*batchSpend) (retryable bool) {
 			// Still record the parent so DAH can be (re)evaluated — this heals DAHs
 			// that an earlier spend (before the DAH-on-spend fix) failed to set.
 			if len(spendingDataBytes) > 0 && spend.SpendingData != nil && bytes.Equal(spendingDataBytes, spend.SpendingData.Bytes()) {
+				item.idempotent = !matchHistorical
+				item.historical = matchHistorical
 				successItems = append(successItems, item)
+				parentOfItem[item] = transactionID
 				spentParentIDs[transactionID] = struct{}{}
 				continue
 			}
-			// Concurrently spent by a different tx between SELECT and UPDATE.
+			// Frozen or spent by a different tx between SELECT and UPDATE. Read the
+			// row again, in a fresh statement snapshot, to say which.
+			if spendBeforeRecheck != nil {
+				spendBeforeRecheck()
+			}
+
+			var (
+				currentSpendingData   []byte
+				currentFrozen         bool
+				currentHeight         sql.NullInt64
+				currentSpenderPresent bool
+			)
+
+			if err = txn.QueryRowContext(ctx, qRow, transactionID, spend.Vout).Scan(&currentSpendingData, &currentFrozen, &currentHeight, &currentSpenderPresent); err != nil {
+				// The output was deleted after q1 read it: fail this item only, as q1 does.
+				if errors.Is(err, sql.ErrNoRows) {
+					validationErrors[i] = errors.NewTxNotFoundError(errOutputNotFound, spend.TxID, spend.Vout)
+					continue
+				}
+				if isDeadlock(err) {
+					return true // retryable
+				}
+				item.errCh <- errors.NewStorageError("[Spend] failed: re-reading output %s:%d", spend.TxID, spend.Vout, err)
+				aborted = true
+				continue
+			}
+
+			if len(currentSpendingData) == 0 {
+				if currentFrozen {
+					validationErrors[i] = errors.NewUtxoFrozenError(errSpendUtxoFrozen, spend.TxID, spend.Vout)
+					continue
+				}
+
+				// A freeze made the write miss and was lifted before this read, so the
+				// coin is unspent and spendable again. Reporting it spent would mark the
+				// spending tx as conflicting, so retry the batch instead.
+				return true
+			}
+
+			if spend.SpendingData != nil && bytes.Equal(currentSpendingData, spend.SpendingData.Bytes()) {
+				// A concurrent attempt at this same spend committed after q1. It may
+				// have run at a much lower height, so classify it by age as q1's
+				// matches are: a historical match with no spender is refused, and one
+				// with a spender stays out of any rollback.
+				historical, refused := s.classifyIdempotentMatch(item, currentHeight, currentSpenderPresent)
+				if refused != nil {
+					validationErrors[i] = refused
+					continue
+				}
+
+				item.idempotent = !historical
+				item.historical = historical
+				successItems = append(successItems, item)
+				parentOfItem[item] = transactionID
+				spentParentIDs[transactionID] = struct{}{}
+				continue
+			}
+
 			// spendingDataBytes was NULL from SELECT (WHERE spending_data IS NULL),
 			// so we don't have the actual conflicting spender — use current spend data.
 			validationErrors[i] = errors.NewUtxoSpentError(*spend.TxID, spend.Vout, *spend.UTXOHash, spend.SpendingData)
@@ -3229,6 +4185,7 @@ func (s *Store) trySendSpendBatchPerRow(batch []*batchSpend) (retryable bool) {
 		}
 
 		successItems = append(successItems, item)
+		parentOfItem[item] = transactionID
 		spentParentIDs[transactionID] = struct{}{}
 	}
 
@@ -3261,7 +4218,8 @@ func (s *Store) trySendSpendBatchPerRow(batch []*batchSpend) (retryable bool) {
 	}
 	sort.Ints(sortedSpentParents)
 	for _, parentID := range sortedSpentParents {
-		if err := s.setDAH(s.ctx, txn, parentID); err != nil {
+		present, err := s.setDAHIfPresent(ctx, txn, parentID)
+		if err != nil {
 			if isDeadlock(err) {
 				return true
 			}
@@ -3274,6 +4232,19 @@ func (s *Store) trySendSpendBatchPerRow(batch []*batchSpend) (retryable bool) {
 				item.errCh <- errors.NewStorageError("[Spend] failed to recompute DAH", err)
 			}
 			return false
+		}
+
+		if !present {
+			// The pruner deleted this parent while the batch waited for its row lock. Only
+			// the spends of that parent are affected: they get the answer a parent that was
+			// already gone gives, and the rest of the batch commits.
+			for _, item := range successItems {
+				if parentOfItem[item] == parentID {
+					vanished[item] = errors.NewTxNotFoundError(errOutputNotFound, item.spend.TxID, item.spend.Vout)
+					item.idempotent = false
+					item.historical = false
+				}
+			}
 		}
 	}
 
@@ -3300,14 +4271,101 @@ func (s *Store) trySendSpendBatchPerRow(batch []*batchSpend) (retryable bool) {
 		}
 	}
 	for _, item := range successItems {
-		item.errCh <- nil
+		item.errCh <- vanished[item]
 	}
 	return false
 }
 
+// minedFloorSQL returns a SQL expression for the lowest delete_at_height a row may
+// carry once it has been mined: its highest block height plus retention. It is NULL
+// for a row with no block_ids rows, so a comparison against it is never true and
+// callers fall through to their unfloored branch. retention is an integer, not user
+// input, so it is formatted in rather than bound.
+func minedFloorSQL(txIDExpr string, retention uint32) string {
+	return fmt.Sprintf("(SELECT MAX(bi.block_height) + %d FROM block_ids bi WHERE bi.transaction_id = %s)", retention, txIDExpr)
+}
+
+// flooredDAHSQL wraps a delete_at_height stamp so it is never below the row's mined
+// floor. A stamp taken from the store's cached tip lags the block being processed,
+// and the pruner deletes purely on the stamp, so a record could be pruned inside the
+// retention window of the block it was mined in. The floor only ever raises a stamp.
+func flooredDAHSQL(txIDExpr, newDAHExpr string, retention uint32) string {
+	floor := minedFloorSQL(txIDExpr, retention)
+
+	return fmt.Sprintf("CASE WHEN %[1]s > %[2]s THEN %[1]s ELSE %[2]s END", floor, newDAHExpr)
+}
+
+// setDAHBeforeWrite runs between the eligibility read and the write in setDAH. It is nil
+// outside tests, which use it to interleave a competing writer.
+var setDAHBeforeWrite func()
+
+// setDAHAfterRead runs in setDAH right after the eligibility read, before any decision.
+// It is nil outside tests. Unlike setDAHBeforeWrite it also runs when setDAH decides to
+// write nothing.
+var setDAHAfterRead func()
+
+// setMinedAfterBlockIDs runs in setMinedMultiChunk between the block_ids write and the
+// transactions UPDATE. It is nil outside tests, which use it to run a spend's setDAH
+// inside that window.
+var setMinedAfterBlockIDs func()
+
+// spendBeforeWrite runs in both spend paths after the outputs have been read and
+// checked and before the spend is written. It is nil outside tests, which use it to
+// commit a freeze inside that gap.
+var spendBeforeWrite func()
+
+// spendBeforeRecheck runs in both spend paths after a guarded write missed a row and
+// before the row is read again. It is nil outside tests, which use it to undo a freeze
+// inside that gap.
+var spendBeforeRecheck func()
+
+// spendBeforeRollbackProbe runs when a failed Spend hands its rollback set to
+// probeAndRollbackPartialSpends, before the existence probe. It is nil outside
+// tests, which use it to commit a concurrent change after the spend's reads.
+var spendBeforeRollbackProbe func()
+
+// setDAHAfterLock runs in setDAH right after the Postgres row lock is taken and before
+// the eligibility read. It is nil outside tests, which use it to observe lock order and
+// to complete a lock cycle.
+var setDAHAfterLock func(transactionID int)
+
+// setDAH recomputes the delete_at_height of one transaction row. A row that is gone has
+// nothing to stamp, so that is not an error: see setDAHIfPresent.
 func (s *Store) setDAH(ctx context.Context, txn *sql.Tx, transactionID int) error {
+	_, err := s.setDAHIfPresent(ctx, txn, transactionID)
+
+	return err
+}
+
+// setDAHIfPresent is setDAH, and reports whether the row was there. The row is gone when the
+// pruner deleted it while this transaction waited for the row lock (the pruner locks every
+// candidate until it commits), or on SQLite when it was deleted before the read. A deleted
+// row has nothing to stamp. Failing on it would answer every other spend of a batch with a
+// storage error for a parent that only one of them touched, so the caller decides what the
+// spends on that parent get.
+func (s *Store) setDAHIfPresent(ctx context.Context, txn *sql.Tx, transactionID int) (present bool, err error) {
 	if s.settings.GetUtxoStoreBlockHeightRetention() == 0 {
-		return nil
+		return true, nil
+	}
+
+	// Postgres: lock the row in its own statement before the read below, so the read
+	// sees every committed writer and none can change eligibility until this
+	// transaction ends. SQLite takes no lock: its single writer and the caller's open
+	// write transaction already serialise these writers.
+	if s.engine == "postgres" {
+		var lockedID int
+
+		if lockErr := txn.QueryRowContext(ctx, "SELECT id FROM transactions WHERE id = $1 FOR NO KEY UPDATE", transactionID).Scan(&lockedID); lockErr != nil {
+			if errors.Is(lockErr, sql.ErrNoRows) {
+				return false, nil
+			}
+
+			return false, errors.NewStorageError("[setDAH] error locking transaction %d", transactionID, lockErr)
+		}
+
+		if setDAHAfterLock != nil {
+			setDAHAfterLock(transactionID)
+		}
 	}
 
 	// Check transaction state: unspent outputs, conflicting, mined status, longest chain.
@@ -3317,7 +4375,8 @@ func (s *Store) setDAH(ctx context.Context, txn *sql.Tx, transactionID int) erro
 		SELECT count(o.idx), t.conflicting, t.preserve_until IS NOT NULL,
 		       EXISTS(SELECT 1 FROM block_ids WHERE transaction_id = t.id) AS has_blocks,
 		       t.unmined_since IS NULL AS is_on_longest_chain,
-		       t.delete_at_height
+		       t.delete_at_height,
+		       (SELECT MAX(bi.block_height) FROM block_ids bi WHERE bi.transaction_id = t.id) AS max_block_height
 		FROM transactions t
 		LEFT JOIN outputs o ON t.id = o.transaction_id
 		   AND o.spending_data IS NULL
@@ -3332,16 +4391,25 @@ func (s *Store) setDAH(ctx context.Context, txn *sql.Tx, transactionID int) erro
 		hasBlocks            bool
 		isOnLongestChain     bool
 		existingDAH          sql.NullInt64
+		maxBlockHeight       sql.NullInt64
 		deleteAtHeightOrNull sql.NullInt64
 	)
 
-	if err := txn.QueryRowContext(ctx, qUnspent, transactionID).Scan(&unspent, &conflicting, &hasPreserveUntil, &hasBlocks, &isOnLongestChain, &existingDAH); err != nil {
-		return errors.NewStorageError("[setDAH] error checking for unspent outputs for %d", transactionID, err)
+	if scanErr := txn.QueryRowContext(ctx, qUnspent, transactionID).Scan(&unspent, &conflicting, &hasPreserveUntil, &hasBlocks, &isOnLongestChain, &existingDAH, &maxBlockHeight); scanErr != nil {
+		if errors.Is(scanErr, sql.ErrNoRows) {
+			return false, nil
+		}
+
+		return false, errors.NewStorageError("[setDAH] error checking for unspent outputs for %d", transactionID, scanErr)
+	}
+
+	if setDAHAfterRead != nil {
+		setDAHAfterRead()
 	}
 
 	// If preserve_until is set, don't touch DAH (mirrors aerospike)
 	if hasPreserveUntil {
-		return nil
+		return true, nil
 	}
 
 	retention := s.settings.GetUtxoStoreBlockHeightRetention()
@@ -3349,10 +4417,23 @@ func (s *Store) setDAH(ctx context.Context, txn *sql.Tx, transactionID int) erro
 	// and lags behind during block processing (mirrors aerospike set_mined.go:162)
 	newDAH := int64(s.GetBlockHeight() + 1 + retention)
 
+	// never stamp a mined record below its highest block height + retention: the cached
+	// tip above lags the block being processed and the pruner deletes purely on the stamp
+	minedFloor := int64(-1)
+	if maxBlockHeight.Valid {
+		minedFloor = maxBlockHeight.Int64 + int64(retention)
+		if minedFloor > newDAH {
+			newDAH = minedFloor
+		}
+	}
+
 	if conflicting {
-		// Conflicting: set DAH only if not already set (mirrors aerospike line 944-951)
+		// Conflicting: set DAH only if not already set (mirrors aerospike line 944-951),
+		// but raise one stamped from a lagging tip before the record was mined
 		if !existingDAH.Valid {
 			_ = deleteAtHeightOrNull.Scan(newDAH)
+		} else if existingDAH.Int64 < minedFloor {
+			_ = deleteAtHeightOrNull.Scan(minedFloor)
 		} else {
 			// Keep existing DAH
 			deleteAtHeightOrNull = existingDAH
@@ -3373,46 +4454,82 @@ func (s *Store) setDAH(ctx context.Context, txn *sql.Tx, transactionID int) erro
 	}
 	// else: conditions not met and no existing DAH, leave as NULL
 
-	// Short-circuit: if the computed DAH equals what's already stored (including
-	// NULL→NULL), skip the UPDATE entirely. Avoids taking a row lock, writing a
-	// new row version and generating WAL for a no-op — matters on the spend hot
-	// path where setDAH is called for every touched parent per batch.
-	if dahUnchanged(existingDAH, deleteAtHeightOrNull) {
-		return nil
+	// Write only to raise or clear. A decision at or below the stored stamp, or a NULL
+	// over a NULL, writes nothing, which saves a needless write on the bulk path.
+	if !deleteAtHeightOrNull.Valid && !existingDAH.Valid {
+		return true, nil
 	}
 
-	// Update delete_at_height
-	qUpdate := `
+	if deleteAtHeightOrNull.Valid && existingDAH.Valid && existingDAH.Int64 >= deleteAtHeightOrNull.Int64 {
+		return true, nil
+	}
+
+	if setDAHBeforeWrite != nil {
+		setDAHBeforeWrite()
+	}
+
+	return true, s.writeDAH(ctx, txn, transactionID, deleteAtHeightOrNull, retention)
+}
+
+// writeDAH stores a delete_at_height decision taken under the row lock (Postgres). A
+// value is raised to the row's mined floor and never lowers a stamp already stored, as
+// a second guard. The query text is constant and the retention is bound as $3. A NULL
+// clears the stamp. A row that PreserveTransactions protects is left untouched.
+func (s *Store) writeDAH(ctx context.Context, txn *sql.Tx, transactionID int, value sql.NullInt64, retention uint32) error {
+	const qUpdate = `
 		UPDATE transactions
-		SET delete_at_height = $2
+		SET delete_at_height = CASE
+		        WHEN preserve_until IS NOT NULL THEN delete_at_height
+		        WHEN CAST($2 AS BIGINT) IS NULL THEN NULL
+		        WHEN delete_at_height IS NOT NULL AND delete_at_height > (
+		            CASE WHEN (SELECT MAX(bi.block_height) + CAST($3 AS BIGINT) FROM block_ids bi WHERE bi.transaction_id = transactions.id) > CAST($2 AS BIGINT) THEN (SELECT MAX(bi.block_height) + CAST($3 AS BIGINT) FROM block_ids bi WHERE bi.transaction_id = transactions.id) ELSE CAST($2 AS BIGINT) END
+		        ) THEN delete_at_height
+		        ELSE (
+		            CASE WHEN (SELECT MAX(bi.block_height) + CAST($3 AS BIGINT) FROM block_ids bi WHERE bi.transaction_id = transactions.id) > CAST($2 AS BIGINT) THEN (SELECT MAX(bi.block_height) + CAST($3 AS BIGINT) FROM block_ids bi WHERE bi.transaction_id = transactions.id) ELSE CAST($2 AS BIGINT) END
+		        )
+		    END
 		WHERE id = $1
 	`
 
-	if _, err := txn.ExecContext(ctx, qUpdate, transactionID, deleteAtHeightOrNull); err != nil {
+	if _, err := txn.ExecContext(ctx, qUpdate, transactionID, value, int64(retention)); err != nil {
 		return errors.NewStorageError("[setDAH] error setting DAH for %d", transactionID, err)
 	}
 
 	return nil
 }
 
-// dahUnchanged reports whether two sql.NullInt64 DAH values are equivalent.
-// NULL==NULL is true; NULL vs valid and valid vs valid with different values
-// are false; valid vs valid with same value is true.
-func dahUnchanged(a, b sql.NullInt64) bool {
-	if a.Valid != b.Valid {
-		return false
-	}
-	if !a.Valid {
-		return true
-	}
-	return a.Int64 == b.Int64
-}
-
 // Unspend reverses a previous spend operation, marking UTXOs as unspent.
 // This removes the spending transaction ID and any expiration timestamp.
 // Commonly used during blockchain reorganizations.
+//
+// The parents' locked flag and deletion date are written once per parent in
+// ascending id order, the order the spend batches lock them in, and the whole
+// transaction retries a PostgreSQL deadlock with the spend batch's budget.
 func (s *Store) Unspend(ctx context.Context, spends []*utxo.Spend, flagAsLocked ...bool) error {
+	const maxRetries = 3
 
+	for attempt := 0; ; attempt++ {
+		err := s.unspendOnce(ctx, spends, flagAsLocked...)
+		if !isDeadlock(err) {
+			return err
+		}
+
+		if attempt >= maxRetries {
+			return &deadlockRetriesExhaustedError{errors.NewStorageError("[Unspend] deadlock persisted after %d retries", maxRetries, err)}
+		}
+
+		backoff := time.Duration(100<<attempt) * time.Millisecond
+		s.logger.Warnf("[Unspend] deadlock detected (attempt %d/%d), retrying %d spends in %v", attempt+1, maxRetries+1, len(spends), backoff)
+
+		select {
+		case <-ctx.Done():
+			return errors.NewStorageError("[Unspend] deadlock retry cancelled", ctx.Err())
+		case <-time.After(backoff):
+		}
+	}
+}
+
+func (s *Store) unspendOnce(ctx context.Context, spends []*utxo.Spend, flagAsLocked ...bool) error {
 	txn, err := s.db.Begin()
 	if err != nil {
 		return err
@@ -3429,7 +4546,7 @@ func (s *Store) Unspend(ctx context.Context, spends []*utxo.Spend, flagAsLocked 
 	// Spend()/SetConflicting()/GetSpends(), all of which populate it.
 	q1 := `
 		UPDATE outputs
-		SET spending_data = NULL
+		SET spending_data = NULL, spending_height = NULL
 		WHERE transaction_id IN (
 			SELECT id FROM transactions WHERE hash = $1
 		)
@@ -3458,8 +4575,8 @@ func (s *Store) Unspend(ctx context.Context, spends []*utxo.Spend, flagAsLocked 
 	// so a plain spend-rollback (no flagAsLocked) must leave locked untouched here
 	// too — otherwise an overlapping rollback would clear an independently-set 2PC
 	// locked flag and make a parent's outputs spendable before 2PC completes.
-	// Callers that intend to change locked pass it explicitly: ProcessConflicting
-	// locks affected parents (true) and ReverseProcessConflicting unlocks them (false).
+	// No caller in teranode passes the flag: conflict processing locks and
+	// unlocks parents through SetConflictLocks, which checks the lock's owner.
 	flagLockedProvided := len(flagAsLocked) > 0
 
 	locked := false
@@ -3470,9 +4587,11 @@ func (s *Store) Unspend(ctx context.Context, spends []*utxo.Spend, flagAsLocked 
 	q2 := `
 		UPDATE transactions
 		SET
-			locked = $2
+			locked = $2, conflict_owner = NULL
 		WHERE id = $1
 	`
+
+	parentIDs := make(map[int]struct{}, len(spends))
 
 	for _, spend := range spends {
 		select {
@@ -3508,22 +4627,37 @@ func (s *Store) Unspend(ctx context.Context, spends []*utxo.Spend, flagAsLocked 
 				}
 			}
 
-			if flagLockedProvided {
-				if _, err = txn.ExecContext(ctx, q2, transactionID, locked); err != nil {
-					return errors.NewStorageError("[Unspend] error removing tombstone for %s:%d", spend.TxID, spend.Vout, err)
-				}
-			}
+			parentIDs[transactionID] = struct{}{}
+		}
+	}
 
-			if err = s.setDAH(ctx, txn, transactionID); err != nil {
-				return err
-			}
+	sortedIDs := make([]int, 0, len(parentIDs))
+	for id := range parentIDs {
+		sortedIDs = append(sortedIDs, id)
+	}
 
-			prometheusUtxoReset.Inc()
+	sort.Ints(sortedIDs)
+
+	for _, transactionID := range sortedIDs {
+		if flagLockedProvided {
+			if _, err = txn.ExecContext(ctx, q2, transactionID, locked); err != nil {
+				return errors.NewStorageError("[Unspend] error removing tombstone for transaction %d", transactionID, err)
+			}
+		}
+
+		if err = s.setDAH(ctx, txn, transactionID); err != nil {
+			return err
 		}
 	}
 
 	if err = txn.Commit(); err != nil {
 		return err
+	}
+
+	for _, spend := range spends {
+		if spend != nil {
+			prometheusUtxoReset.Inc()
+		}
 	}
 
 	return nil
@@ -3532,7 +4666,16 @@ func (s *Store) Unspend(ctx context.Context, spends []*utxo.Spend, flagAsLocked 
 // Delete removes a transaction and all its associated data.
 // This includes inputs, outputs, and block references.
 func (s *Store) Delete(ctx context.Context, hash *chainhash.Hash) error {
+	// No single lock order suits every writer of a transaction's rows: the
+	// pruner locks the row and then cascades into outputs, while Spend and
+	// Unspend lock outputs and then the row. So Delete retries a deadlock, with
+	// Unspend's budget, as those writers do.
+	return retryOnLockError(ctx, s.logger, setMinedMultiRetries, setMinedMultiLockBackoff, "[Delete]", func() error {
+		return s.deleteOnce(ctx, hash)
+	})
+}
 
+func (s *Store) deleteOnce(ctx context.Context, hash *chainhash.Hash) error {
 	// Start a database transaction
 	txn, err := s.db.Begin()
 	if err != nil {
@@ -3543,54 +4686,54 @@ func (s *Store) Delete(ctx context.Context, hash *chainhash.Hash) error {
 		_ = txn.Rollback()
 	}()
 
-	// Delete the block_ids
-	q := `
+	deleteBlockIDs := `
 		DELETE FROM block_ids
 		WHERE transaction_id IN (
 			SELECT id FROM transactions WHERE hash = $1
 		)
 	`
-
-	_, err = txn.ExecContext(ctx, q, hash[:])
-	if err != nil {
-		return err
-	}
-
-	// Delete the outputs
-	q = `
+	deleteOutputs := `
 		DELETE FROM outputs
 		WHERE transaction_id IN (
 			SELECT id FROM transactions WHERE hash = $1
 		)
 	`
-
-	_, err = txn.ExecContext(ctx, q, hash[:])
-	if err != nil {
-		return err
-	}
-
-	// Delete the inputs
-	q = `
+	deleteInputs := `
 		DELETE FROM inputs
 		WHERE transaction_id IN (
 			SELECT id FROM transactions WHERE hash = $1
 		)
 	`
-
-	_, err = txn.ExecContext(ctx, q, hash[:])
-	if err != nil {
-		return err
-	}
-
-	// Delete the transaction
-	q = `
+	deleteTransaction := `
 		DELETE FROM transactions
 		WHERE hash = $1
 	`
 
-	_, err = txn.ExecContext(ctx, q, hash[:])
-	if err != nil {
-		return err
+	statements := []string{deleteBlockIDs, deleteOutputs, deleteInputs, deleteTransaction}
+
+	if s.engine == "postgres" {
+		// Postgres row locks should follow the order the other writers use, or
+		// Delete deadlocks with them more often. Delete still retries a deadlock
+		// that happens (see Delete). Spend and
+		// Unspend lock outputs and then the transaction row (setDAH); mining
+		// locks the transaction row and then block_ids. So Delete removes the
+		// outputs and inputs first, then locks the transaction row inside the
+		// block_ids statement, then deletes the row. Same four statements.
+		statements = []string{
+			deleteOutputs,
+			deleteInputs,
+			`DELETE FROM block_ids
+			WHERE transaction_id IN (
+				SELECT id FROM transactions WHERE hash = $1 FOR UPDATE
+			)`,
+			deleteTransaction,
+		}
+	}
+
+	for _, q := range statements {
+		if _, err = txn.ExecContext(ctx, q, hash[:]); err != nil {
+			return err
+		}
 	}
 
 	// Commit the transaction
@@ -3631,8 +4774,15 @@ func (s *Store) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, min
 		default:
 		}
 
-		chunkResult, err := s.setMinedMultiChunk(ctx, hashes[i:end], minedBlockInfo)
+		var chunkResult map[chainhash.Hash][]uint32
 
+		err := retryOnLockError(ctx, s.logger, setMinedMultiRetries, setMinedMultiLockBackoff, "[SetMinedMulti] chunk", func() error {
+			var err error
+
+			chunkResult, err = s.setMinedMultiChunk(ctx, hashes[i:end], minedBlockInfo)
+
+			return err
+		})
 		if err != nil {
 			return nil, errors.NewStorageError("SQL error in SetMinedMulti (chunk %d-%d): %v", i, end-1, err)
 		}
@@ -3644,6 +4794,11 @@ func (s *Store) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, min
 
 	return resultMap, nil
 }
+
+// setMinedMultiRetries bounds how many times one SetMinedMulti chunk is tried
+// when the database refuses it with a lock error: once and three retries, as
+// Create does.
+const setMinedMultiRetries = 4
 
 // setMinedMultiChunk processes a single chunk of hashes (up to maxINClauseSize).
 // Uses portable IN ($1,$2,...,$N) clauses that work on both PostgreSQL and SQLite.
@@ -3669,27 +4824,34 @@ func (s *Store) setMinedMultiChunk(ctx context.Context, hashes []*chainhash.Hash
 		}
 	}()
 
-	// Step 1: Check which transactions exist using IN clause
+	// Step 1: Check which transactions exist using IN clause.
+	//
+	// Postgres: take the row locks here, in ascending id, before anything is
+	// written. The block_ids INSERT below only takes FOR KEY SHARE on each row
+	// through its foreign key, and setDAH's FOR NO KEY UPDATE does not conflict
+	// with that. Without this lock a spend of a parent's last output could run
+	// setDAH between the INSERT and the UPDATE below, read the uncommitted
+	// block_ids as absent, write nothing, and then make the UPDATE's own
+	// stale snapshot still see the output unspent, leaving a mined, fully spent
+	// parent with no delete_at_height for good. Taking the lock first makes
+	// setDAH and this call serialise on the row in both orders, and the writes
+	// below start from a snapshot that includes every committed spend.
 	inClause, inArgs := buildINClause(hashBytes, 1)
 	qCheckExists := fmt.Sprintf(`SELECT hash FROM transactions WHERE hash IN %s`, inClause)
+
+	if s.engine == "postgres" {
+		qCheckExists = fmt.Sprintf(`SELECT hash FROM transactions WHERE hash IN %s ORDER BY id FOR NO KEY UPDATE`, inClause)
+	}
 
 	rows, err := txn.QueryContext(ctx, qCheckExists, inArgs...)
 	if err != nil {
 		return nil, errors.NewStorageError("SQL error checking transaction existence: %v", err)
 	}
 
-	existingHashes := make(map[chainhash.Hash]bool)
-	for rows.Next() {
-		var hb []byte
-		if err := rows.Scan(&hb); err != nil {
-			rows.Close()
-			return nil, errors.NewStorageError("SQL error scanning existing hash: %v", err)
-		}
-		var h chainhash.Hash
-		copy(h[:], hb)
-		existingHashes[h] = true
+	existingHashes, err := readExistingHashes(rows)
+	if err != nil {
+		return nil, err
 	}
-	rows.Close()
 
 	// Postcondition (see stores/utxo/Interface.go SetMinedMulti docstring): when
 	// !UnsetMined every submitted hash MUST exist in the transactions table.
@@ -3750,6 +4912,10 @@ func (s *Store) setMinedMultiChunk(ctx context.Context, hashes []*chainhash.Hash
 		}
 	}
 
+	if setMinedAfterBlockIDs != nil {
+		setMinedAfterBlockIDs()
+	}
+
 	// Step 3: Update transaction fields (locked, unmined_since, delete_at_height)
 	// Mirrors aerospike's setMined->setDeleteAtHeight behavior
 	var retention uint32
@@ -3772,23 +4938,24 @@ func (s *Store) setMinedMultiChunk(ctx context.Context, hashes []*chainhash.Hash
 			// 3. If DAH is NULL and all UTXOs are spent -> set DAH for the first time
 			// 4. Otherwise -> leave DAH unchanged
 			inClause3, inArgs3 := buildINClause(existingHashBytes, 2)
+			flooredDAH := flooredDAHSQL("transactions.id", "$1", retention)
 			qUpdate := fmt.Sprintf(`
 				UPDATE transactions
-				SET locked = false
+				SET conflict_owner = NULL, locked = false
 				   ,unmined_since = NULL
 				   ,delete_at_height = CASE
 				        WHEN preserve_until IS NOT NULL THEN delete_at_height
-				        WHEN delete_at_height IS NOT NULL AND delete_at_height < $1 THEN $1
+				        WHEN delete_at_height IS NOT NULL AND delete_at_height < %[1]s THEN %[1]s
 				        WHEN delete_at_height IS NULL
 				             AND NOT EXISTS (
 				                 SELECT 1 FROM outputs o
 				                 WHERE o.transaction_id = transactions.id AND o.spending_data IS NULL
 				             )
-				             THEN $1
+				             THEN %[1]s
 				        ELSE delete_at_height
 				    END
-				WHERE hash IN %s
-			`, inClause3)
+				WHERE hash IN %[2]s
+			`, flooredDAH, inClause3)
 			args := append([]interface{}{newDAH}, inArgs3...)
 			if _, err = txn.ExecContext(ctx, qUpdate, args...); err != nil {
 				return nil, errors.NewStorageError(errSQLUpdatingTransactions, err)
@@ -3797,7 +4964,7 @@ func (s *Store) setMinedMultiChunk(ctx context.Context, hashes []*chainhash.Hash
 			inClause3, inArgs3 := buildINClause(existingHashBytes, 1)
 			qUpdate := fmt.Sprintf(`
 				UPDATE transactions
-				SET locked = false, unmined_since = NULL
+				SET conflict_owner = NULL, locked = false, unmined_since = NULL
 				WHERE hash IN %s
 			`, inClause3)
 			if _, err = txn.ExecContext(ctx, qUpdate, inArgs3...); err != nil {
@@ -3828,7 +4995,7 @@ func (s *Store) setMinedMultiChunk(ctx context.Context, hashes []*chainhash.Hash
 			inClause3, inArgs3 := buildINClause(existingHashBytes, 1)
 			qUpdate := fmt.Sprintf(`
 				UPDATE transactions
-				SET locked = false
+				SET conflict_owner = NULL, locked = false
 				WHERE hash IN %s
 			`, inClause3)
 			if _, err = txn.ExecContext(ctx, qUpdate, inArgs3...); err != nil {
@@ -3860,7 +5027,7 @@ func (s *Store) setMinedMultiChunk(ctx context.Context, hashes []*chainhash.Hash
 			inClause3, inArgs3 := buildINClause(existingHashBytes, 1)
 			qUpdate := fmt.Sprintf(`
 				UPDATE transactions
-				SET locked = false
+				SET conflict_owner = NULL, locked = false
 				WHERE hash IN %s
 			`, inClause3)
 			if _, err = txn.ExecContext(ctx, qUpdate, inArgs3...); err != nil {
@@ -3883,20 +5050,24 @@ func (s *Store) setMinedMultiChunk(ctx context.Context, hashes []*chainhash.Hash
 				UPDATE transactions
 				SET delete_at_height = CASE
 				        WHEN preserve_until IS NOT NULL THEN delete_at_height
-				        WHEN conflicting THEN COALESCE(delete_at_height, $1)
+				        WHEN conflicting THEN CASE
+				             WHEN delete_at_height IS NULL THEN %[3]s
+				             WHEN delete_at_height < %[2]s THEN %[2]s
+				             ELSE delete_at_height
+				        END
 				        WHEN unmined_since IS NULL
 				             AND NOT EXISTS (
 				                 SELECT 1 FROM outputs o
 				                 WHERE o.transaction_id = transactions.id AND o.spending_data IS NULL
 				             )
 				             THEN CASE
-				                 WHEN delete_at_height IS NULL OR delete_at_height < $1 THEN $1
+				                 WHEN delete_at_height IS NULL OR delete_at_height < %[3]s THEN %[3]s
 				                 ELSE delete_at_height
 				             END
 				        ELSE NULL
 				    END
-				WHERE hash IN %s
-			`, inClause3c)
+				WHERE hash IN %[1]s
+			`, inClause3c, minedFloorSQL("transactions.id", retention), flooredDAHSQL("transactions.id", "$1", retention))
 			args := append([]interface{}{newDAH}, inArgs3c...)
 			if _, err = txn.ExecContext(ctx, qDAH, args...); err != nil {
 				return nil, errors.NewStorageError(errSQLUpdatingTransactions, err)
@@ -3919,24 +5090,10 @@ func (s *Store) setMinedMultiChunk(ctx context.Context, hashes []*chainhash.Hash
 		return nil, errors.NewStorageError("SQL error fetching block IDs: %v", err)
 	}
 
-	blockIDsMap := make(map[chainhash.Hash][]uint32)
-	for rows.Next() {
-		var hb []byte
-		var blockID *uint32 // nullable from LEFT JOIN
-		if err := rows.Scan(&hb, &blockID); err != nil {
-			rows.Close()
-			return nil, errors.NewStorageError("SQL error scanning block IDs: %v", err)
-		}
-		var h chainhash.Hash
-		copy(h[:], hb)
-		if blockID != nil {
-			blockIDsMap[h] = append(blockIDsMap[h], *blockID)
-		} else if _, exists := blockIDsMap[h]; !exists {
-			// Ensure the hash is in the map even with no block_ids
-			blockIDsMap[h] = nil
-		}
+	blockIDsMap, err := readBlockIDs(rows)
+	if err != nil {
+		return nil, err
 	}
-	rows.Close()
 
 	if err = txn.Commit(); err != nil {
 		return nil, errors.NewStorageError("SQL error committing SetMinedMulti transaction: %v", err)
@@ -4103,7 +5260,14 @@ func (s *Store) batchDecorateChunk(ctx context.Context, items []*utxo.Unresolved
 	// Query 1: Bulk fetch from transactions table
 	inClause, inArgs := buildINClause(hashes, 1)
 
-	q := `SELECT hash, id, version, lock_time, fee, size_in_bytes, coinbase, frozen, conflicting, locked, unmined_since, inserted_at FROM transactions WHERE hash IN ` + inClause
+	// lane_position is selected last, and only when the caller names it.
+	wantLanePosition := contains(bins, fields.LanePosition)
+	laneColumn := ""
+	if wantLanePosition {
+		laneColumn = ", lane_position"
+	}
+
+	q := `SELECT hash, id, version, lock_time, fee, size_in_bytes, coinbase, frozen, conflicting, locked, unmined_since, inserted_at` + laneColumn + ` FROM transactions WHERE hash IN ` + inClause
 
 	rows, err := s.db.QueryContext(ctx, q, inArgs...)
 	if err != nil {
@@ -4123,9 +5287,21 @@ func (s *Store) batchDecorateChunk(ctx context.Context, items []*utxo.Unresolved
 		)
 
 		row := &batchDecorateTxRow{data: &meta.Data{}}
-		if err := rows.Scan(&hashBytes, &row.id, &row.version, &row.lockTime, &row.data.Fee, &row.data.SizeInBytes, &row.data.IsCoinbase, &row.data.Frozen, &row.data.Conflicting, &row.data.Locked, &unminedSince, &insertedAt); err != nil {
+		dest := []any{&hashBytes, &row.id, &row.version, &row.lockTime, &row.data.Fee, &row.data.SizeInBytes, &row.data.IsCoinbase, &row.data.Frozen, &row.data.Conflicting, &row.data.Locked, &unminedSince, &insertedAt}
+
+		var lanePosition *sql.NullInt64
+		if wantLanePosition {
+			lanePosition = new(sql.NullInt64)
+			dest = append(dest, lanePosition)
+		}
+
+		if err := rows.Scan(dest...); err != nil {
 			rows.Close()
 			return err
+		}
+
+		if lanePosition != nil && lanePosition.Valid {
+			row.data.LanePosition = lane.FromSigned(lanePosition.Int64)
 		}
 
 		copy(row.hash[:], hashBytes)
@@ -4821,16 +5997,33 @@ func (s *Store) SetConflicting(ctx context.Context, txHashes []chainhash.Hash, s
 	// When clearing conflicting: clear DAH (conditions for deletion no longer met).
 	var qUpdate string
 	if setValue {
-		qUpdate = `
-			UPDATE transactions SET
-			 conflicting = $2
-			,delete_at_height = CASE
-			     WHEN preserve_until IS NOT NULL THEN delete_at_height
-			     ELSE COALESCE(delete_at_height, $3)
-			 END
-			WHERE hash = $1
-			RETURNING id
-		`
+		if retention := s.settings.GetUtxoStoreBlockHeightRetention(); retention > 0 {
+			// the stamp is never below the row's highest block height + retention, and a
+			// stamp written earlier from a lagging tip is raised once the record is mined
+			qUpdate = fmt.Sprintf(`
+				UPDATE transactions SET
+				 conflicting = $2
+				,delete_at_height = CASE
+				     WHEN preserve_until IS NOT NULL THEN delete_at_height
+				     WHEN delete_at_height IS NULL THEN %[1]s
+				     WHEN delete_at_height < %[2]s THEN %[2]s
+				     ELSE delete_at_height
+				 END
+				WHERE hash = $1
+				RETURNING id
+			`, flooredDAHSQL("transactions.id", "$3", retention), minedFloorSQL("transactions.id", retention))
+		} else {
+			qUpdate = `
+				UPDATE transactions SET
+				 conflicting = $2
+				,delete_at_height = CASE
+				     WHEN preserve_until IS NOT NULL THEN delete_at_height
+				     ELSE COALESCE(delete_at_height, $3)
+				 END
+				WHERE hash = $1
+				RETURNING id
+			`
+		}
 	} else {
 		qUpdate = `
 			UPDATE transactions SET
@@ -4877,9 +6070,13 @@ func (s *Store) SetConflicting(ctx context.Context, txHashes []chainhash.Hash, s
 
 	for idx, conflictingTxHash := range txHashes {
 		// get the extended tx
-		txMeta, err := s.Get(ctx, &conflictingTxHash)
+		txMeta, err := s.Get(ctx, &conflictingTxHash, fields.Tx, fields.Utxos)
 		if err != nil {
 			return nil, nil, err
+		}
+
+		if txMeta == nil || txMeta.Tx == nil {
+			return nil, nil, errors.NewProcessingError("[SetConflicting][%s] record carries no transaction body, so its inputs and outputs cannot be resolved", conflictingTxHash.String())
 		}
 
 		parentHashes[idx] = parentHashesOf(txMeta.Tx)
@@ -4900,39 +6097,13 @@ func (s *Store) SetConflicting(ctx context.Context, txHashes []chainhash.Hash, s
 			affectedParentSpends = append(affectedParentSpends, spend)
 		}
 
-		for vOut, output := range txMeta.Tx.Outputs {
-			if output == nil {
-				// A hole: Outputs is indexed by vout, and a snapshot-seeded
-				// transaction has no row for the vouts already spent when the
-				// snapshot was taken. There is no output to derive a utxo hash from
-				// and nothing to unspend.
-				continue
-			}
-
-			vOutUint32, err := safeconversion.IntToUint32(vOut)
-			if err != nil {
-				return nil, nil, err
-			}
-
-			utxoHash, err = util.UTXOHashFromOutput(&conflictingTxHash, output, vOutUint32)
-			if err != nil {
-				return nil, nil, err
-			}
-
-			spend := &utxo.Spend{
-				TxID:     &conflictingTxHash,
-				Vout:     vOutUint32,
-				UTXOHash: utxoHash,
-			}
-
-			// optimize to get all in 1 query
-			spendResponse, err := s.GetSpend(ctx, spend)
-			if err != nil {
-				return nil, nil, err
-			}
-
-			if spendResponse.Status == int(utxo.Status_SPENT) && spendResponse.SpendingData != nil && spendResponse.SpendingData.TxID != nil {
-				spendingTxHashes = append(spendingTxHashes, *spendResponse.SpendingData.TxID)
+		// Read the actual spend edges, independent of the parent's flags.
+		// GetSpend reports CONFLICTING while clearing a conflict, hiding the
+		// SPENT status and preventing UnmarkConflictingRecursively from reaching
+		// descendants. The full metadata already contains the stored edges.
+		for _, spendingData := range txMeta.SpendingDatas {
+			if spendingData != nil && spendingData.TxID != nil && !spendingData.TxID.IsEqual(&subtree.FrozenBytesTxHash) {
+				spendingTxHashes = append(spendingTxHashes, *spendingData.TxID)
 			}
 		}
 	}
@@ -4980,7 +6151,7 @@ func (s *Store) setLockedPipelined(ctx context.Context, txHashes []chainhash.Has
 		pgxConn := driverConn.(*stdlib.Conn).Conn()
 
 		batch := &pgx.Batch{}
-		q := `UPDATE transactions SET locked = true, delete_at_height = NULL WHERE hash = $1`
+		q := `UPDATE transactions SET conflict_owner = NULL, locked = true, delete_at_height = NULL WHERE hash = $1`
 		for i := range txHashes {
 			batch.Queue(q, txHashes[i][:])
 		}
@@ -5007,7 +6178,7 @@ func (s *Store) SetLocked(ctx context.Context, txHashes []chainhash.Hash, setVal
 		// SQLite: sequential updates
 		q := `
 			UPDATE transactions
-			SET locked = true, delete_at_height = NULL
+			SET conflict_owner = NULL, locked = true, delete_at_height = NULL
 			WHERE hash = $1
 		`
 		for _, txHash := range txHashes {
@@ -5050,7 +6221,7 @@ func (s *Store) SetLocked(ctx context.Context, txHashes []chainhash.Hash, setVal
 
 	q := `
 		UPDATE transactions
-		SET locked = false
+		SET conflict_owner = NULL, locked = false
 		WHERE hash = $1
 		RETURNING id
 	`
@@ -5102,7 +6273,7 @@ func (s *Store) setUnlockedBulk(ctx context.Context, txHashes []chainhash.Hash) 
 		if retention == 0 {
 			// No DAH needed — simple bulk unlock
 			inClause, args := buildINClause(hashBytes, 1)
-			q := fmt.Sprintf(`UPDATE transactions SET locked = false WHERE hash IN %s`, inClause)
+			q := fmt.Sprintf(`UPDATE transactions SET conflict_owner = NULL, locked = false WHERE hash IN %s`, inClause)
 			if _, err := s.db.ExecContext(ctx, q, args...); err != nil {
 				return errors.NewStorageError("failed to bulk unlock transactions", err)
 			}
@@ -5133,20 +6304,21 @@ func (s *Store) setUnlockedBulk(ctx context.Context, txHashes []chainhash.Hash) 
 					WHERE t.hash IN %s
 				)
 				UPDATE transactions t
-				SET locked = false,
+				SET conflict_owner = NULL, locked = false,
 				    delete_at_height = CASE
 				        WHEN s.has_preserve THEN t.delete_at_height
-				        WHEN s.conflicting AND t.delete_at_height IS NULL THEN $1
+				        WHEN s.conflicting AND t.delete_at_height IS NULL THEN %[2]s
+				        WHEN s.conflicting AND t.delete_at_height < %[3]s THEN %[3]s
 				        WHEN s.conflicting THEN t.delete_at_height
 				        WHEN s.unspent = 0 AND s.has_blocks AND s.on_longest_chain
-				             AND (t.delete_at_height IS NULL OR t.delete_at_height < $1) THEN $1
+				             AND (t.delete_at_height IS NULL OR t.delete_at_height < %[2]s) THEN %[2]s
 				        WHEN s.unspent = 0 AND s.has_blocks AND s.on_longest_chain THEN t.delete_at_height
 				        WHEN t.delete_at_height IS NOT NULL THEN NULL
 				        ELSE t.delete_at_height
 				    END
 				FROM tx_state s
 				WHERE t.id = s.id
-			`, inClause)
+			`, inClause, flooredDAHSQL("t.id", "$1", retention), minedFloorSQL("t.id", retention))
 
 			if _, err := s.db.ExecContext(ctx, q, args...); err != nil {
 				return errors.NewStorageError("failed to bulk unlock+DAH transactions", err)
@@ -5291,14 +6463,13 @@ func (s *Store) MarkTransactionsOnLongestChain(ctx context.Context, txHashes []c
 				// the setMined value or later.
 				//
 				// Same rules as Lua setDeleteAtHeight and the Aerospike path: a preserved tx is left
-				// alone; a conflicting tx gets a DAH if it has none and keeps an existing one; any other
+				// alone; a conflicting tx gets a DAH if it has none, raised to the mined floor if lower; any other
 				// tx gets the DAH (set if none, raised if lower, never lowered) when it is in a block and
 				// has no unspent output, and a stale DAH is cleared when it is not.
 				// Current height is $1, retention $2, hashes start at $3.
 				inClause, inArgs := buildINClause(chunk, 3)
-				newDAH := `(CASE WHEN COALESCE((SELECT MAX(b.block_height) FROM block_ids b WHERE b.transaction_id = transactions.id), 0) > CAST($1 AS BIGINT)
-				                 THEN (SELECT MAX(b.block_height) FROM block_ids b WHERE b.transaction_id = transactions.id)
-				                 ELSE CAST($1 AS BIGINT) END + CAST($2 AS BIGINT))`
+				newDAH := flooredDAHSQL("transactions.id", "CAST($1 AS BIGINT) + CAST($2 AS BIGINT)", retention)
+				minedFloor := minedFloorSQL("transactions.id", retention)
 				eligible := `(EXISTS (SELECT 1 FROM block_ids b WHERE b.transaction_id = transactions.id)
 				              AND NOT EXISTS (SELECT 1 FROM outputs o WHERE o.transaction_id = transactions.id AND o.spending_data IS NULL))`
 				q = fmt.Sprintf(`
@@ -5306,13 +6477,17 @@ func (s *Store) MarkTransactionsOnLongestChain(ctx context.Context, txHashes []c
 					SET unmined_since = NULL
 					   ,delete_at_height = CASE
 					        WHEN preserve_until IS NOT NULL THEN delete_at_height
-					        WHEN conflicting THEN COALESCE(delete_at_height, %[1]s)
+					        WHEN conflicting THEN CASE
+					            WHEN delete_at_height IS NULL THEN %[1]s
+					            WHEN delete_at_height < %[4]s THEN %[4]s
+					            ELSE delete_at_height
+					        END
 					        WHEN %[3]s THEN
 					            CASE WHEN delete_at_height IS NULL OR delete_at_height < %[1]s THEN %[1]s ELSE delete_at_height END
 					        ELSE NULL
 					    END
 					WHERE hash IN %[2]s
-				`, newDAH, inClause, eligible)
+				`, newDAH, inClause, eligible, minedFloor)
 				args = append([]interface{}{int64(currentBlockHeight) + 1, int64(retention)}, inArgs...)
 			} else {
 				// hashes start at $1
@@ -5408,14 +6583,224 @@ type DBExecutor interface {
 // Advisory lock ID for UTXO schema creation serialization across pods.
 const utxoSchemaLockID int64 = 7_265_726_117 // "tera" + "ux" in ASCII-ish
 
-func createPostgresSchema(db *usql.DB) error {
-	return usql.WithAdvisoryLock(context.Background(), db, utxoSchemaLockID, func() error {
-		return createPostgresSchemaImpl(db)
-	})
+// createPostgresSchema creates the schema holding the index build lock and the
+// schema lock, both on one connection that also runs the schema statements, so
+// startup needs a single connection from the pool. The database is closed if it
+// fails.
+func createPostgresSchema(ctx context.Context, logger ulogger.Logger, db *usql.DB) error {
+	if err := createPostgresSchemaOnOneConn(ctx, logger, db); err != nil {
+		_ = db.Close()
+		return err
+	}
+
+	return nil
+}
+
+func createPostgresSchemaOnOneConn(ctx context.Context, logger ulogger.Logger, db *usql.DB) error {
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		return errors.NewStorageError("could not get a connection for schema creation", err)
+	}
+
+	defer func() {
+		_ = conn.Close()
+	}()
+
+	release, err := holdConflictingIndexBuildLock(ctx, logger, conn)
+	if err != nil {
+		return err
+	}
+
+	defer release()
+
+	// Serializes with processes running a release that does not take the
+	// build lock.
+	if _, err = conn.ExecContext(ctx, `SELECT pg_advisory_lock($1)`, utxoSchemaLockID); err != nil {
+		return errors.NewStorageError("could not take the schema lock", err)
+	}
+
+	defer func() {
+		unlockCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		_, _ = conn.ExecContext(unlockCtx, `SELECT pg_advisory_unlock($1)`, utxoSchemaLockID)
+	}()
+
+	return createPostgresSchemaImpl(connExecutor{ctx: ctx, conn: conn}, logger)
+}
+
+// connExecutor runs the schema statements on the connection that holds the
+// schema locks. Close does nothing: closing the connection would hand it back to
+// the pool still holding the locks; createPostgresSchema closes the database on
+// failure instead.
+type connExecutor struct {
+	ctx  context.Context
+	conn *sql.Conn
+}
+
+func (c connExecutor) Exec(query string, args ...interface{}) (sql.Result, error) {
+	return c.conn.ExecContext(c.ctx, query, args...)
+}
+
+func (c connExecutor) Close() error { return nil }
+
+// sqlLaneColumn is one nullable lane column of the SQL UTXO store.
+type sqlLaneColumn struct{ table, column, postgresType, sqliteType string }
+
+// sqlLaneColumns are the store's lane columns, added to a database created before them at every
+// open, at every lane migration step, as lane_position on transactions always has been. Each is
+// nullable with no default, so Postgres only changes its catalog and does not rewrite the table,
+// and every row already stored reads NULL, meaning no position.
+//
+//   - transactions.lane_position is the record's own lane position.
+//   - transactions.parent_lane_positions is the child's copy of its parents' positions, eight
+//     bytes per distinct parent in TxInpoints parent order (util/lane).
+//   - outputs.spending_lane_position is the spender's lane position, written beside
+//     spending_data by the spend that writes it.
+//
+// Nothing in this build writes the last two; the step that makes them mandatory does.
+var sqlLaneColumns = []sqlLaneColumn{
+	{"transactions", "lane_position", "BIGINT", "BIGINT"},
+	{"transactions", "parent_lane_positions", "BYTEA", "BLOB"},
+	{"outputs", "spending_lane_position", "BIGINT", "BIGINT"},
+}
+
+// spendingHeightColumn is outputs.spending_height, the block height of the spend
+// recorded in spending_data, which the replay check reads.
+var spendingHeightColumn = sqlLaneColumn{"outputs", "spending_height", "INTEGER", "INTEGER"}
+
+// addLaneColumnSQL adds one lane column when it is missing. The catalog check skips the lock on a
+// current schema; IF NOT EXISTS makes a second process that passed the check at the same moment a
+// no-op instead of a duplicate-column error. lock_timeout bounds the wait for the
+// table lock: ADD COLUMN needs ACCESS EXCLUSIVE, and while it waits behind an open transaction on
+// the table (a pruner batch on a pod still running the old build, say) every later read and write
+// on the table queues behind it.
+func addLaneColumnSQL(c sqlLaneColumn) string {
+	return `
+		DO $$
+		BEGIN
+			IF NOT EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = '` + c.table + `'::regclass AND attname = '` + c.column + `' AND NOT attisdropped) THEN
+				PERFORM set_config('lock_timeout', '200ms', true);
+				ALTER TABLE ` + c.table + ` ADD COLUMN IF NOT EXISTS ` + c.column + ` ` + c.postgresType + `;
+			END IF;
+		END $$;
+	`
+}
+
+// laneColumnMigrationLimit is how long addLanePositionColumn retries, across all the lane
+// columns together, before the store refuses to open. At open, outputs.spending_height shares the
+// same deadline. It only matters on the first start of a
+// build against a database from before the columns, beside a process that keeps a transaction open
+// on transactions or outputs for all of this time. Other processes opening the store wait on the
+// schema lock for at most this long too, plus one last attempt.
+var laneColumnMigrationLimit = 5 * time.Minute
+
+// addLanePositionColumn adds every lane column, under one deadline limit from now. For each, when
+// the table lock is not granted within the lock_timeout it backs off and tries again until the
+// deadline has passed. Each attempt is its own statement, so between attempts nothing holds or
+// waits for a lock on the table. The attempts take ACCESS EXCLUSIVE on transactions and, for
+// spending_lane_position, on outputs, each only for its 200ms lock_timeout when not granted.
+func addLanePositionColumn(db DBExecutor, limit time.Duration) error {
+	deadline := time.Now().Add(limit)
+
+	for _, c := range sqlLaneColumns {
+		if err := addLaneColumn(db, c, deadline); err != nil {
+			return errors.NewStorageError("could not add %s column to %s table", c.column, c.table, err)
+		}
+	}
+
+	return nil
+}
+
+func addLaneColumn(db DBExecutor, c sqlLaneColumn, deadline time.Time) error {
+	ctx := context.Background()
+
+	switch e := db.(type) {
+	case connExecutor:
+		ctx = e.ctx
+	case dbExecutor:
+		ctx = e.ctx
+	}
+
+	backoff := 50 * time.Millisecond
+	stmt := addLaneColumnSQL(c)
+
+	for {
+		_, err := db.Exec(stmt)
+		if err == nil || !isLockNotAvailable(err) || time.Now().After(deadline) {
+			return err
+		}
+
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(backoff):
+		}
+
+		backoff = min(2*backoff, 2*time.Second)
+	}
+}
+
+// addSqliteLaneColumns is addLanePositionColumn for SQLite, which has no lock to wait for.
+func addSqliteLaneColumns(ctx context.Context, db *usql.DB) error {
+	for _, c := range sqlLaneColumns {
+		var n int
+		if err := db.QueryRowContext(ctx, `SELECT count(*) FROM pragma_table_info('`+c.table+`') WHERE name = $1`, c.column).Scan(&n); err != nil {
+			return errors.NewStorageError("could not check %s table for %s column", c.table, c.column, err)
+		}
+
+		if n > 0 {
+			continue
+		}
+
+		if _, err := db.ExecContext(ctx, `ALTER TABLE `+c.table+` ADD COLUMN `+c.column+` `+c.sqliteType); err != nil {
+			return errors.NewStorageError("could not add %s column to %s table", c.column, c.table, err)
+		}
+	}
+
+	return nil
+}
+
+// PrepareLaneSchema installs the store's lane columns. Every open already does; this is the
+// explicit form an operator runs at off before the historical conversion. Restart every process
+// of the node afterwards.
+func (s *Store) PrepareLaneSchema(ctx context.Context) error {
+	if s.engine != string(util.Postgres) {
+		return addSqliteLaneColumns(ctx, s.db)
+	}
+
+	return addLanePositionColumn(dbExecutor{ctx: ctx, db: s.db}, laneColumnMigrationLimit)
+}
+
+// dbExecutor runs statements on the pool with a context.
+type dbExecutor struct {
+	ctx context.Context
+	db  *usql.DB
+}
+
+func (d dbExecutor) Exec(query string, args ...interface{}) (sql.Result, error) {
+	return d.db.ExecContext(d.ctx, query, args...)
+}
+
+func (d dbExecutor) Close() error { return nil }
+
+// isLockNotAvailable reports a Postgres lock_timeout (55P03) from either driver.
+func isLockNotAvailable(err error) bool {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) {
+		return pgErr.Code == usql.PgErrLockNotAvailable
+	}
+
+	var pqErr *pq.Error
+	if errors.As(err, &pqErr) {
+		return pqErr.Code == usql.PgErrLockNotAvailable
+	}
+
+	return false
 }
 
 // createPostgresSchemaImpl contains the actual implementation, now testable
-func createPostgresSchemaImpl(db DBExecutor) error {
+func createPostgresSchemaImpl(db DBExecutor, logger ulogger.Logger) error {
 	if _, err := db.Exec(`
       CREATE TABLE IF NOT EXISTS transactions (
          id               BIGSERIAL PRIMARY KEY
@@ -5431,6 +6816,7 @@ func createPostgresSchemaImpl(db DBExecutor) error {
         ,delete_at_height BIGINT
         ,unmined_since    BIGINT
         ,preserve_until   BIGINT
+        ,lane_position    BIGINT
         ,inserted_at      TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 	  );
 	`); err != nil {
@@ -5501,6 +6887,7 @@ func createPostgresSchemaImpl(db DBExecutor) error {
         ,spending_data            BYTEA
         ,frozen                   BOOLEAN DEFAULT FALSE
         ,spendableIn              INT
+        ,spending_height          INTEGER
         ,PRIMARY KEY (transaction_id, idx)
 	  );
 	`); err != nil {
@@ -5580,6 +6967,23 @@ func createPostgresSchemaImpl(db DBExecutor) error {
 		return errors.NewStorageError("could not add preserve_until column to transactions table - [%+v]", err)
 	}
 
+	// One deadline bounds every column migration of this open, the lane columns
+	// and spending_height together.
+	migrationDeadline := time.Now().Add(laneColumnMigrationLimit)
+
+	if err := addLanePositionColumn(db, time.Until(migrationDeadline)); err != nil {
+		_ = db.Close()
+		return err
+	}
+
+	// The block height of the spend recorded in spending_data. NULL for an output
+	// unspent or spent by a build that did not record it. It is not a lane column,
+	// but it is added the same way: nullable, no default, a bounded lock wait.
+	if err := addLaneColumn(db, spendingHeightColumn, migrationDeadline); err != nil {
+		_ = db.Close()
+		return errors.NewStorageError("could not add spending_height column to outputs table - [%+v]", err)
+	}
+
 	// Ensure block_ids FK has ON DELETE CASCADE — only drop+recreate if it exists without CASCADE
 	if _, err := db.Exec(`
 		DO $$
@@ -5644,6 +7048,17 @@ func createPostgresSchemaImpl(db DBExecutor) error {
 		return errors.NewStorageError("could not create conflict_intents table - [%+v]", err)
 	}
 
+	if _, err := db.Exec(`ALTER TABLE transactions ADD COLUMN IF NOT EXISTS conflict_owner BYTEA`); err != nil {
+		return err
+	}
+	if _, err := db.Exec(`ALTER TABLE conflict_intents ADD COLUMN IF NOT EXISTS recovery BYTEA`); err != nil {
+		return errors.NewStorageError("could not add conflict recovery column", err)
+	}
+
+	// px_transactions_conflicting is not created here: New builds it in the
+	// background with CREATE INDEX CONCURRENTLY, outside the schema lock (see
+	// conflicting_index.go).
+
 	return nil
 }
 
@@ -5663,6 +7078,7 @@ func createSqliteSchema(db *usql.DB) error {
         ,delete_at_height BIGINT
         ,unmined_since    BIGINT
         ,preserve_until   BIGINT
+        ,lane_position    BIGINT
         ,inserted_at      TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 	  );
 	`); err != nil {
@@ -5712,6 +7128,7 @@ func createSqliteSchema(db *usql.DB) error {
         ,spending_data            BLOB
         ,frozen                   BOOLEAN DEFAULT FALSE
         ,spendableIn              INT
+        ,spending_height          INTEGER
         ,PRIMARY KEY (transaction_id, idx)
 	  );
 	`); err != nil {
@@ -5941,6 +7358,29 @@ func createSqliteSchema(db *usql.DB) error {
 		}
 	}
 
+	// Add the nullable lane columns to a database created before them. No
+	// default and no backfill: NULL reads as no lane position.
+	if err := addSqliteLaneColumns(context.Background(), db); err != nil {
+		_ = db.Close()
+		return err
+	}
+
+	// Add the nullable spending_height column to an outputs table created before
+	// it existed. No default and no backfill: NULL reads as a spend recorded
+	// without a height.
+	var spendingHeightColumns int
+	if err := db.QueryRow(`SELECT count(*) FROM pragma_table_info('outputs') WHERE name = 'spending_height'`).Scan(&spendingHeightColumns); err != nil {
+		_ = db.Close()
+		return errors.NewStorageError("could not check outputs table for spending_height column - [%+v]", err)
+	}
+
+	if spendingHeightColumns == 0 {
+		if _, err := db.Exec(`ALTER TABLE outputs ADD COLUMN spending_height INTEGER`); err != nil {
+			_ = db.Close()
+			return errors.NewStorageError("could not add spending_height column to outputs table - [%+v]", err)
+		}
+	}
+
 	// conflict_intents — conflict-resolution write-ahead log (#861). See the
 	// postgres schema for the rationale; SQLite mirror with BLOB columns.
 	if _, err := db.Exec(`
@@ -5955,6 +7395,32 @@ func createSqliteSchema(db *usql.DB) error {
 	`); err != nil {
 		_ = db.Close()
 		return errors.NewStorageError("could not create conflict_intents table - [%+v]", err)
+	}
+
+	var ownerColumns int
+	if err := db.QueryRow(`SELECT count(*) FROM pragma_table_info('transactions') WHERE name = 'conflict_owner'`).Scan(&ownerColumns); err != nil {
+		return err
+	}
+	if ownerColumns == 0 {
+		if _, err := db.Exec(`ALTER TABLE transactions ADD COLUMN conflict_owner BLOB`); err != nil {
+			return err
+		}
+	}
+	var recoveryColumns int
+	if err := db.QueryRow(`SELECT count(*) FROM pragma_table_info('conflict_intents') WHERE name = 'recovery'`).Scan(&recoveryColumns); err != nil {
+		return err
+	}
+	if recoveryColumns == 0 {
+		if _, err := db.Exec(`ALTER TABLE conflict_intents ADD COLUMN recovery BLOB`); err != nil {
+			return errors.NewStorageError("could not add conflict recovery column", err)
+		}
+	}
+
+	// Serves ConflictingTxHashes: block validation reads the conflicting set once
+	// per block instead of one row per transaction of an already-validated subtree.
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS px_transactions_conflicting ON transactions (hash) WHERE conflicting = true;`); err != nil {
+		_ = db.Close()
+		return errors.NewStorageError("could not create px_transactions_conflicting index - [%+v]", err)
 	}
 
 	return nil
@@ -6123,16 +7589,17 @@ func (s *Store) ProcessExpiredPreservations(ctx context.Context, currentHeight u
 	query := `
 		UPDATE transactions
 		SET delete_at_height = CASE
-			WHEN conflicting THEN $1
+			WHEN conflicting THEN %[1]s
 			WHEN unmined_since IS NULL
 			     AND EXISTS(SELECT 1 FROM block_ids b WHERE b.transaction_id = transactions.id)
 			     AND NOT EXISTS(SELECT 1 FROM outputs o WHERE o.transaction_id = transactions.id AND o.spending_data IS NULL)
-			THEN $1
+			THEN %[1]s
 			ELSE NULL
 		END,
 		preserve_until = NULL
 		WHERE preserve_until IS NOT NULL AND preserve_until <= $2
 	`
+	query = fmt.Sprintf(query, flooredDAHSQL("transactions.id", "$1", retention))
 
 	result, err := s.db.ExecContext(ctx, query, deleteAtHeight, currentHeight)
 	if err != nil {
@@ -6323,4 +7790,24 @@ func (s *Store) sendUnlockBatch(batch []*batchUnlockItem) {
 	for _, item := range batch {
 		item.done <- err
 	}
+}
+
+// SpendsMadeBy returns the coins this transaction consumed, as records Unspend can restore.
+//
+// This store keeps transactions in extended form, meaning each input carries the amount and
+// locking script of the output it spends, so the answer comes straight off the transaction
+// through the shared helper. That helper is the same loop this store's SetConflicting runs, and
+// the same one the conflict undo used to run inline, so the records are identical to what the
+// undo built for itself before it started asking the store.
+func (s *Store) SpendsMadeBy(ctx context.Context, txHash chainhash.Hash) ([]*utxo.Spend, error) {
+	txMeta, err := s.Get(ctx, &txHash, fields.Tx)
+	if err != nil {
+		return nil, err
+	}
+
+	if txMeta == nil || txMeta.Tx == nil {
+		return nil, errors.NewTxNotFoundError("[SpendsMadeBy][%s] no transaction", txHash.String())
+	}
+
+	return utxo.SpendsForTx(txMeta.Tx)
 }

@@ -263,9 +263,14 @@ type CheckBlockSubtreesRequest struct {
 	// base_url specifies the endpoint for retrieving missing transaction data
 	BaseUrl string `protobuf:"bytes,2,opt,name=base_url,json=baseUrl,proto3" json:"base_url,omitempty"`
 	// peer_id is the P2P peer identifier used for peer reputation tracking
-	PeerId        string `protobuf:"bytes,3,opt,name=peer_id,json=peerId,proto3" json:"peer_id,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	PeerId string `protobuf:"bytes,3,opt,name=peer_id,json=peerId,proto3" json:"peer_id,omitempty"`
+	// keep_block_assembly_handoff asks subtree validation to hand the block's unseen
+	// transactions to block assembly even though the FSM is in CATCHINGBLOCKS. Block
+	// validation sets it for a short catch-up that started from RUNNING. Unset reads as
+	// false, so an older block validation keeps the hand-off off during catch-up.
+	KeepBlockAssemblyHandoff bool `protobuf:"varint,4,opt,name=keep_block_assembly_handoff,json=keepBlockAssemblyHandoff,proto3" json:"keep_block_assembly_handoff,omitempty"`
+	unknownFields            protoimpl.UnknownFields
+	sizeCache                protoimpl.SizeCache
 }
 
 func (x *CheckBlockSubtreesRequest) Reset() {
@@ -317,6 +322,13 @@ func (x *CheckBlockSubtreesRequest) GetPeerId() string {
 		return x.PeerId
 	}
 	return ""
+}
+
+func (x *CheckBlockSubtreesRequest) GetKeepBlockAssemblyHandoff() bool {
+	if x != nil {
+		return x.KeepBlockAssemblyHandoff
+	}
+	return false
 }
 
 // CheckBlockSubtreesResponse contains the validation results for subtrees in a block.
@@ -383,11 +395,12 @@ const file_services_subtreevalidation_subtreevalidation_api_subtreevalidation_ap
 	"block_hash\x18\x04 \x01(\fR\tblockHash\x12.\n" +
 	"\x13previous_block_hash\x18\x05 \x01(\fR\x11previousBlockHash\"9\n" +
 	"\x1dCheckSubtreeFromBlockResponse\x12\x18\n" +
-	"\ablessed\x18\x01 \x01(\bR\ablessed\"e\n" +
+	"\ablessed\x18\x01 \x01(\bR\ablessed\"\xa4\x01\n" +
 	"\x19CheckBlockSubtreesRequest\x12\x14\n" +
 	"\x05block\x18\x01 \x01(\fR\x05block\x12\x19\n" +
 	"\bbase_url\x18\x02 \x01(\tR\abaseUrl\x12\x17\n" +
-	"\apeer_id\x18\x03 \x01(\tR\x06peerId\"6\n" +
+	"\apeer_id\x18\x03 \x01(\tR\x06peerId\x12=\n" +
+	"\x1bkeep_block_assembly_handoff\x18\x04 \x01(\bR\x18keepBlockAssemblyHandoff\"6\n" +
 	"\x1aCheckBlockSubtreesResponse\x12\x18\n" +
 	"\ablessed\x18\x01 \x01(\bR\ablessed2\xf6\x02\n" +
 	"\x14SubtreeValidationAPI\x12Z\n" +

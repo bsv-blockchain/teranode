@@ -264,6 +264,58 @@ Options:
 
 **Warning**: Always run with `--dry-run=true` first to preview changes.
 
+#### Audit Mined Set
+
+List main-chain blocks stored with `mined_set` true whose transactions do not carry the block's ID in the UTXO store, or carry it with their outputs still locked:
+
+```bash
+SETTINGS_CONTEXT=dev.[YOUR_CONTEXT] ./teranode-cli audit-mined-set --start-height=<height> --end-height=<height> [--max-blocks=<n>]
+```
+
+Releases before PR 2180 could store such a block in two ways: a catch-up block fell from quick validation to full validation after quick validation had reserved its ID, or a `ProcessBlock` caller supplied a `block_id` and the block took full validation. The setMined worker skips every block already marked `mined_set`, so nothing tags the rest of those transactions, and a later block spending one of their outputs can fail with empty parent block IDs or a locked output.
+
+The audit changes no data. It needs the blockchain service running and reads blocks through it. It opens the UTXO store and the subtree store from the node's settings; opening the UTXO store runs that store's normal startup, which creates any missing schema and, on Postgres, can start the index build the node itself runs.
+
+For each block it samples two transactions: the first after the coinbase, and the first transaction of the last subtree, because a failed quick-validation attempt stamps subtrees in order and leaves the later ones untagged. Each block prints as `AFFECTED` or `UNCHECKED`, followed by a summary. `AFFECTED` means a sampled transaction lacks the block's ID, or carries it with its outputs still locked: quick validation creates transactions locked and unlocks them only after the block commits, so an attempt that fell through to full validation left the ones it had stamped locked, as does a commit whose unlock failed after the block was stored. `UNCHECKED` means the subtree file is gone, unreadable or malformed, or no sampled transaction is in the UTXO store, and it is not a pass. A malformed file includes one whose embedded root is not the subtree's hash, one whose node count is too small for the block's transaction count, and a first subtree whose node 0 is not the coinbase placeholder. A block reported as tagged is not proven clean either, since only two transactions are read. Blocks on a netting UTXO store's below-checkpoint route are skipped, because full validation never stores them. Quick validation stores a block with `mined_set` true and unlocks its outputs just after, so a block being committed while the audit runs can show as locked; run the audit again for that height before acting on it.
+
+Each audited block costs two blockchain gRPC calls, at most two subtree file reads of under 200 bytes each, and at most two UTXO store reads. `--max-blocks` (default 10,000) refuses a wider range unless raised.
+
+Remedy: there is no in-place repair. If the audit reports an affected block, resync the node.
+
+Exit codes: 0 when no block is affected and at least one block was checked, or there was nothing to audit; 1 when it finds an affected block or the run fails; 2 when no block is affected but every audited block is `UNCHECKED`, as with a missing subtree store or a fully pruned range. Exit 2 is not a pass.
+
+Options:
+
+- `--start-height` - First main-chain height to audit (default: 0)
+- `--end-height` - Last main-chain height to audit (required)
+- `--max-blocks` - Refuse a range holding more heights than this (default: 10000)
+
+#### Prepare Lane Schema
+
+Install the configured UTXO store's lane columns before the historical lane conversion:
+
+```bash
+SETTINGS_CONTEXT=dev.[YOUR_CONTEXT] ./teranode-cli prepare-lane-schema
+```
+
+Run it at `utxostore_laneMigration=off`, with every teranode process of the node stopped, as a database role that owns the tables. It takes no arguments and is safe to run again. It adds nullable, empty lane columns and fills no existing row. It opens the store the way the node does first, and on a new database that normal startup can create the store's base schema and its metadata rows. Start the node's processes afterwards so each sees the same schema. On utxoset it adds the eight lane columns that opening the store at `off` never adds. The SQL store already adds its columns at every open, and Aerospike has no schema to install. The blockchain store's lane tables are not this command's: every start of the blockchain service creates them when its role may `CREATE`.
+
+#### Free Spent Output
+
+Free one output of the UTXO store that is still spent by a transaction the store has no record of:
+
+```bash
+SETTINGS_CONTEXT=dev.[YOUR_CONTEXT] ./teranode-cli free-spent-output --parent <txid> --vout <n> --spender <txid>
+```
+
+This clears the stall a left-behind spend causes: a block that mines the spender is refused with error 78 (`ERR_UTXO_SPENDING_TX_PRUNED`) on every retry. First tell that stall apart from a real replay, which must stay refused, as "When a spend is refused with error 78" in `docs/topics/stores/utxo.md` describes. The command refuses when the spender has a record, frees the output only while it still names the spender, and reads it back afterwards. It works on SQL and Aerospike. Stop every service that writes to the UTXO store before running it, because a running node could create the spender between the command's check and its unspend.
+
+Options:
+
+- `--parent` - Transaction id of the parent whose output is spent (required)
+- `--vout` - Output index in the parent (default: 0)
+- `--spender` - Transaction id the output names as its spender (required)
+
 ### Benchmarking Tools
 
 Four profiling commands for measuring block assembly performance. Each writes CPU and memory profiles to disk.

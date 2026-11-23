@@ -15,6 +15,7 @@ import (
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/validator"
+	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/util/kafka"
 	kafkamessage "github.com/bsv-blockchain/teranode/util/kafka/kafka_message"
 	"github.com/bsv-blockchain/teranode/util/tracing"
@@ -163,6 +164,10 @@ func (u *Server) subtreesHandler(ctx context.Context, receivedAt time.Time, hash
 		return err
 	}
 
+	if result == peerSubtreeRecentlyFailed {
+		return nil
+	}
+
 	if result != peerSubtreeStored {
 		return errors.NewSubtreeExistsError("[subtreesHandler] Subtree lock %s already exists", hash.String())
 	}
@@ -198,11 +203,20 @@ const (
 	// peerSubtreeLocked: another validation holds the subtree's quorum lock and nothing is stored
 	// yet, so nothing was done. That validation may still fail.
 	peerSubtreeLocked
+
+	// peerSubtreeRecentlyFailed: the subtree, fetched from the same URL, failed validation within
+	// subtreevalidation_failedSubtreeNegativeCacheTTL, so nothing was done.
+	peerSubtreeRecentlyFailed
 )
 
 // validateAdmittedPeerSubtree validates a peer subtree that holds an admission slot, on a node
 // that is RUNNING.
 func (u *Server) validateAdmittedPeerSubtree(ctx context.Context, hash *chainhash.Hash, baseURL *url.URL, peerID string, validationOptions ...validator.Option) (peerSubtreeResult, error) {
+	// A peer's subtree, live or replayed after a catch-up, is validated without InBlock, so the
+	// validator would label its creates as its own on the burned lane position counter. It names
+	// subtree validation instead. First, so an option the caller passes still wins.
+	validationOptions = append([]validator.Option{validator.WithCaller(utxo.CallerSubtreeValidation)}, validationOptions...)
+
 	// The span starts after the wait, so the handler histogram measures
 	// validation only; the wait has its own metric.
 	ctx, _, deferFn := tracing.Tracer("subtreevalidation").Start(ctx, "subtreesHandler",
@@ -222,6 +236,16 @@ func (u *Server) validateAdmittedPeerSubtree(ctx context.Context, hash *chainhas
 	bestBlockHeaderMeta := u.bestBlockHeaderMeta.Load()
 	if bestBlockHeaderMeta == nil {
 		return 0, errors.NewProcessingError("[subtreesHandler] failed to get best block header meta during subtree validation")
+	}
+
+	// Before the lock: a subtree that failed a moment ago from this URL is not fetched or
+	// validated again, and block validation, which does not consult the cache, is not made to
+	// wait on it.
+	if code, failed := u.recentlyFailedPeerSubtree(hash, baseURL.String()); failed {
+		prometheusRecentlyFailedPeerSubtreesSkipped.Inc()
+		u.logger.Debugf("[subtreesHandler][%s] skipping subtree from peer %s (url %s): failed validation within %s with %s", hash.String(), peerID, baseURL.String(), u.settings.SubtreeValidation.FailedSubtreeNegativeCacheTTL, code)
+
+		return peerSubtreeRecentlyFailed, nil
 	}
 
 	gotLock, exists, releaseLockFunc, err := u.quorum.TryLockIfFileNotExists(ctx, hash, fileformat.FileTypeSubtree)
@@ -252,6 +276,8 @@ func (u *Server) validateAdmittedPeerSubtree(ctx context.Context, hash *chainhas
 	// goroutine completed the write between TryLockIfFileNotExists and the in-store existence
 	// check. Nothing to clean up, and it is stored either way.
 	if _, err = u.ValidateSubtreeInternal(ctx, v, bestBlockHeaderMeta.Height+1, *blockIDsMap, validationOptions...); err != nil {
+		u.recordFailedPeerSubtree(ctx, hash, v.BaseURL, err)
+
 		return 0, err
 	}
 

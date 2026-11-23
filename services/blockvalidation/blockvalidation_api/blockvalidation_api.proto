@@ -43,7 +43,12 @@ message ProcessBlockRequest {
   uint32 height = 2;
   string base_url = 3;
   string peer_id = 4; // P2P peer identifier for peer tracking via P2P service
-  uint32 block_id = 5; // Pre-assigned block ID from legacy netsync (0 = not pre-assigned, blockchain will auto-assign)
+  // Block ID to store the block under; 0 means none, and the blockchain service assigns one.
+  // A non-zero ID should be the one AssignBlockID returns for the block's hash. Quick
+  // validation refuses any other before it touches the UTXO store. On full validation the
+  // blockchain store refuses an ID another block holds or has reserved, or one its ID
+  // sequence has not issued yet. Legacy netsync always sends 0.
+  uint32 block_id = 5;
   // True only when legacy netsync can show the block's hash sits at or below a pinned
   // checkpoint hash matched in an internally linked header run (headerCache.Proven).
   // Absent or false means no proof: block validation must not take the below-checkpoint

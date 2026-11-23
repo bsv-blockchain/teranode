@@ -290,7 +290,7 @@ func TestSyncManager_AParkedBlockSurvivesAParentThatIsSlowToBeMarkedMined(t *tes
 
 	// setTxMined finishes for the parent, and the next sweep pass resubmits the
 	// kept block.
-	require.NoError(t, h.chain.SetBlockMinedSet(h.sm.ctx, &parent))
+	require.NoError(t, h.chain.SetBlockMinedSet(h.sm.ctx, &parent, 0))
 
 	h.sm.sweepParkedBlocks(time.Now().Add(2*parkStuckThreshold + time.Second))
 
@@ -439,6 +439,56 @@ func TestParkCommitFailure_AMissingParentOutputKeepsTheBlockAndBlamesNobody(t *t
 	require.NotEqual(t, parkDispositionLocalUtxoFault, parkCommitFailure(fileMiss), "a missing file is not a missing output")
 }
 
+// TestParkCommitFailure_AMissingFileOutranksAMissingOutput: one failure can
+// name both a missing subtree file and a missing parent output, as a join of
+// two subtrees' errors does. The files go first. Dropping the record makes the
+// sink rewrite them on the next download, and an output that is still missing
+// then lands on the LocalUtxoFault row. Keeping the record for the UTXO fault
+// instead would retry a block whose files are gone for as long as it stays
+// parked, and never download them again.
+func TestParkCommitFailure_AMissingFileOutranksAMissingOutput(t *testing.T) {
+	both := parkCommitChain(errors.Join(
+		errors.NewNotFoundError("[readSubtree/hash] failed to get subtree data", errors.ErrNotFound),
+		errors.NewTxNotFoundError("output %d of %s not found", 0, "abcd"),
+	))
+
+	require.True(t, errors.Is(both, errors.ErrTxNotFound), "fixture: the failure carries the missing output")
+	require.Equal(t, parkDispositionFilesGone, parkCommitFailure(both))
+
+	withReplay := parkCommitChain(errors.Join(
+		errors.NewNotFoundError("[readSubtree/hash] failed to get subtree data", errors.ErrNotFound),
+		errors.NewUtxoSpendingTxPrunedError("[Spend] invalid spend for %s:%d: spending transaction was pruned", "ef01", 0),
+	))
+	require.Equal(t, parkDispositionFilesGone, parkCommitFailure(withReplay), "and the pruned-replay answer")
+}
+
+// TestParkCommitFailure_APrunedReplayAnswerIsALocalUtxoFault: the marker
+// answer a replay of a pruned transaction gets is the sibling of the code-30
+// miss above, and lands on the same row when it reaches the table unwrapped.
+// Below the checkpoint the block is certified, so the replay says the store is
+// ahead of the chain, not that the peer sent a bad block.
+func TestParkCommitFailure_APrunedReplayAnswerIsALocalUtxoFault(t *testing.T) {
+	replay := parkCommitChain(errors.NewProcessingError("transaction %s could not be applied", "abcd",
+		errors.NewUtxoSpendingTxPrunedError("[Spend] invalid spend for %s:%d: spending transaction was pruned", "ef01", 0)))
+
+	d := parkCommitFailure(replay)
+	require.Equal(t, parkDispositionLocalUtxoFault, d)
+	require.False(t, d.markFailed, "the block is canonical below the checkpoint")
+	require.False(t, d.blamePeer, "the peer sent a good block")
+
+	// The full route wraps the store's answer in a ServiceError. It is still
+	// this node's UTXO fault, so the drain stamps it and waits before the next
+	// try instead of re-dispatching it on every turn. A verdict that happens to
+	// wrap the answer stays a verdict, and so does a corrupt body.
+	pruned := errors.NewUtxoSpendingTxPrunedError("[Spend] invalid spend for %s:%d: spending transaction was pruned", "ef01", 0)
+	require.Equal(t, parkDispositionLocalUtxoFault, parkCommitFailure(parkCommitChain(errors.NewServiceError("[processBlockFound] failed", pruned))),
+		"the full route's ServiceError wrap is this node's UTXO fault, not a transient retry")
+	require.Equal(t, parkDispositionRecordCorrupt, parkCommitFailure(parkCommitChain(errors.NewBlockCorruptError("[processBlockFound] corrupt", pruned))),
+		"a corrupt body that wraps the answer is still corrupt")
+	require.Equal(t, parkDispositionBlockInvalid, parkCommitFailure(parkCommitChain(errors.NewBlockInvalidError("[ValidateBlock] invalid", pruned))),
+		"a verdict that wraps the answer is still a verdict")
+}
+
 // TestParkCommitFailure_TheFullRoutesInvalidTransactionVerdictIsAJudgement pins
 // the shape block validation's full route returns for a legacy block whose fault
 // is a consensus-invalid transaction: ErrBlockInvalid around subtree validation's
@@ -465,6 +515,27 @@ func TestParkCommitFailure_TheFullRoutesInvalidTransactionVerdictIsAJudgement(t 
 			errors.NewTxInvalidError("transaction in subtree is invalid"))))
 	require.Equal(t, parkDispositionRecordCorrupt, parkCommitFailure(p2p),
 		"the p2p route's corrupt-coded shape is the RecordCorrupt row; the producer must not raise it on the legacy route")
+}
+
+// TestParkCommitFailure_ALocalDecodeFaultInTheConflictCheckIsRetried pins the
+// shape the full route returns when this node reads but cannot decode its own
+// UTXO record during the conflict check: subtree validation wraps the store's
+// TX_INVALID in a storage error, so the chain carries ErrTxInvalid AND
+// ErrStorageError with no corrupt or invalid code. It lands on RetryLater, not
+// BlockInvalid: the fault is this node's own, so the hash is not written off and
+// the peer that delivered the block is kept.
+func TestParkCommitFailure_ALocalDecodeFaultInTheConflictCheckIsRetried(t *testing.T) {
+	decodeFault := parkCommitChain(errors.NewStorageError("[checkCounterConflictingOnCurrentChainBatch][hash] failed to get the inpoints of the transaction",
+		errors.NewTxInvalidError("could not process tx inpoints")))
+	require.True(t, errors.Is(decodeFault, errors.ErrTxInvalid), "fixture: the store's code is still in the chain")
+	require.False(t, errors.IsBlockCorrupt(decodeFault), "fixture: no corrupt code")
+	require.False(t, errors.Is(decodeFault, errors.ErrBlockInvalid), "fixture: no invalid verdict")
+
+	d := parkCommitFailure(decodeFault)
+	require.Equal(t, parkDispositionRetryLater, d)
+	require.False(t, d.markFailed, "a local store fault does not write the hash off")
+	require.False(t, d.blamePeer, "and the peer that delivered the block is not blamed for it")
+	require.False(t, d.dropPeer)
 }
 
 // TestSyncManager_ARejectedParkedBlockDropsItsPeerInEveryState pins the drain's
@@ -564,6 +635,33 @@ func TestSyncManager_ARejectedParkedBlockDropsItsPeerInEveryState(t *testing.T) 
 		require.True(t, unclassified.blamePeer, "the default arm still sends the reject, as it always did")
 		require.False(t, unclassified.dropPeer, "an error nobody has classified must not rotate the sync peer")
 	})
+}
+
+// TestParkCommitFailure_ABlockIDOrderRefusalKeepsTheBlock pins how the park reads
+// the blockchain store refusing an id that is not above the parent's. The cause
+// is a stale id reservation in this node's own database, so the block is kept,
+// not written off, and the peer is not blamed.
+func TestParkCommitFailure_ABlockIDOrderRefusalKeepsTheBlock(t *testing.T) {
+	refusal := errors.NewBlockIDOrderError("block id 5 is not above its parent's id 6")
+
+	for _, tc := range []struct {
+		name string
+		err  error
+	}{
+		{name: "plain", err: refusal},
+		{name: "wrapped by netsync", err: errors.NewProcessingError("failed to process block", errors.NewProcessingError("commit failed", refusal))},
+		{name: "through block validation and gRPC", err: parkCommitChain(refusal)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := parkCommitFailure(tc.err)
+
+			require.Equal(t, parkDispositionRetryLater, d)
+			require.Equal(t, parkBlobKeep, d.blob, "the downloaded block must stay parked")
+			require.False(t, d.markFailed, "a stale reservation says nothing about the block")
+			require.False(t, d.blamePeer, "the stale reservation is this node's fault, not the peer's")
+			require.False(t, d.dropPeer, "the peer sent a good block")
+		})
+	}
 }
 
 // TestParkCommitFailure_AMissingParentRefusalKeepsTheBlock pins how the park reads block

@@ -83,9 +83,9 @@ func (h *HTTP) GetCatchupStatus(c echo.Context) error {
 // applyCatchupStatusProjection adds back the fields that are only public when
 // the operator leaves the corresponding detail switch on.
 //
-// error_message is the failed attempt's raw wrapped error, assigned verbatim in
-// the block-validation catchup path, so it carries store URLs, local paths and
-// internal host:port pairs; error_type stays public and is the coarse
+// error_message is the failed attempt's wrapped error. The block-validation
+// catchup path redacts IP addresses and caps its length, but it still carries
+// store URLs, local paths and internal hostnames; error_type stays public and is the coarse
 // classification an operator actually reads. The peer URLs are the peer's own
 // advertised DataHub address, but which one this node currently trusts is not
 // something an anonymous caller needs.

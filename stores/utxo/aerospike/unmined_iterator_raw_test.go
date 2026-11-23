@@ -1,16 +1,24 @@
 package aerospike
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
+	"io"
 	"testing"
 	"time"
 
 	as "github.com/bsv-blockchain/aerospike-client-go/v8"
 	particle_type "github.com/bsv-blockchain/aerospike-client-go/v8/types/particle_type"
+	"github.com/bsv-blockchain/go-bt/v2"
+	"github.com/bsv-blockchain/go-bt/v2/bscript"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/bsv-blockchain/teranode/stores/blob"
+	"github.com/bsv-blockchain/teranode/stores/blob/memory"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
+	"github.com/prometheus/client_golang/prometheus/testutil"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -37,6 +45,47 @@ type rawBin struct {
 	value []byte
 }
 
+// rawParentOf is the parent tx the fixture record's one input spends.
+func rawParentOf(i int) chainhash.Hash {
+	var parent chainhash.Hash
+	binary.LittleEndian.PutUint64(parent[:], uint64(i)+1_000_000)
+
+	return parent
+}
+
+// encInputs encodes extended inputs as the server sends a LIST bin: a
+// msgpack array of byte strings, each prefixed with the BLOB particle type.
+func encInputs(inputs ...[]byte) []byte {
+	out := []byte{0x90 | byte(len(inputs))}
+
+	for _, in := range inputs {
+		n := len(in) + 1
+
+		switch {
+		case n < 32:
+			out = append(out, 0xa0|byte(n))
+		case n < 256:
+			out = append(out, 0xd9, byte(n))
+		default:
+			out = append(out, 0xda, byte(n>>8), byte(n))
+		}
+
+		out = append(out, particle_type.BLOB)
+		out = append(out, in...)
+	}
+
+	return out
+}
+
+func rawInputsBin(i int) rawBin {
+	parent := rawParentOf(i)
+
+	input := &bt.Input{PreviousTxOutIndex: 1, PreviousTxSatoshis: 100}
+	_ = input.PreviousTxIDAdd(&parent)
+
+	return rawBin{fields.Inputs.String(), particle_type.LIST, encInputs(input.ExtendedBytes(false))}
+}
+
 func rawMainRecordBins(i int) []rawBin {
 	var txid chainhash.Hash
 	binary.LittleEndian.PutUint64(txid[:], uint64(i)+1)
@@ -47,6 +96,7 @@ func rawMainRecordBins(i int) []rawBin {
 		{fields.SizeInBytes.String(), particle_type.INTEGER, encInt(250)},
 		{fields.CreatedAt.String(), particle_type.INTEGER, encInt(1_700_000_000_000 + int64(i))},
 		{fields.UnminedSince.String(), particle_type.INTEGER, encInt(10)},
+		rawInputsBin(i),
 	}
 }
 
@@ -109,6 +159,8 @@ func TestRawUnminedHandler_DecodesMainRecord(t *testing.T) {
 	require.True(t, tx.Locked)
 	require.False(t, tx.Skip)
 	require.NotNil(t, tx.TxInpoints)
+	require.Equal(t, []chainhash.Hash{rawParentOf(7)}, tx.TxInpoints.GetParentTxHashes())
+	require.Equal(t, uint32(1), tx.TxInpoints.GetTxInpoints()[0].Index)
 	require.Empty(t, tx.BlockIDs)
 }
 
@@ -268,9 +320,11 @@ func TestRawUnminedHandler_StopsOnCancel(t *testing.T) {
 	require.ErrorIs(t, err, context.Canceled)
 }
 
-// The raw path exists to take per-record allocation off the scan: a record
-// may cost the transaction+node pair and its inpoints, nothing else.
-func TestRawUnminedHandler_TwoAllocationsPerRecord(t *testing.T) {
+// The raw path exists to take per-record allocation off the scan. A record
+// costs the transaction+node pair, the inpoints struct, and its parent-hash and
+// vout slices, whatever its input count: the inputs bin is read in place, with
+// no scripts or bt.Input decoded. The full parse cost 20 for one input.
+func TestRawUnminedHandler_FourAllocationsPerRecord(t *testing.T) {
 	it := newHotpathTestIterator(1024, time.Second)
 	h := it.newRawUnminedHandler(context.Background())
 
@@ -293,7 +347,7 @@ func TestRawUnminedHandler_TwoAllocationsPerRecord(t *testing.T) {
 		h.buf = h.buf[:0]
 	})
 
-	require.LessOrEqual(t, allocs, 2.0)
+	require.LessOrEqual(t, allocs, 4.0)
 }
 
 func newWatchdogSet(it *unminedTxIterator, n int) *rawHandlerSet {
@@ -554,4 +608,175 @@ func TestRawHandlerSet_ExactlyOnceAcrossRetry(t *testing.T) {
 	for h, n := range seen {
 		require.Equal(t, 1, n, "%s delivered %d times", h, n)
 	}
+}
+
+func rawTestInput(t *testing.T, parent byte, vout uint32, unlockLen, lockLen int) []byte {
+	t.Helper()
+
+	var hash chainhash.Hash
+	hash[0], hash[31] = parent, parent
+
+	unlock := bscript.Script(bytes.Repeat([]byte{0x51}, unlockLen))
+	lock := bscript.Script(bytes.Repeat([]byte{0x52}, lockLen))
+
+	input := &bt.Input{
+		PreviousTxOutIndex: vout,
+		PreviousTxSatoshis: 1234,
+		UnlockingScript:    &unlock,
+		PreviousTxScript:   &lock,
+		SequenceNumber:     0xfffffffe,
+	}
+	require.NoError(t, input.PreviousTxIDAdd(&hash))
+
+	return input.ExtendedBytes(false)
+}
+
+// The fast read of the inputs bin must give exactly the parent links the full
+// parse gives: same parents, same order, same deduplication, same vouts.
+func TestRawUnminedHandler_FastInputsMatchTheFullParse(t *testing.T) {
+	cases := map[string][][]byte{
+		"no inputs":         {},
+		"one input":         {rawTestInput(t, 1, 0, 107, 25)},
+		"same parent twice": {rawTestInput(t, 1, 3, 107, 25), rawTestInput(t, 2, 0, 0, 0), rawTestInput(t, 1, 1, 72, 25)},
+		// a 300-byte unlocking script takes a 3-byte varint and a 0xda string header
+		"long script": {rawTestInput(t, 4, 7, 300, 25)},
+	}
+
+	for name, inputs := range cases {
+		t.Run(name, func(t *testing.T) {
+			wire := encInputs(inputs...)
+
+			fast, ok := appendRawInpoints(nil, wire)
+			require.True(t, ok)
+
+			_, h := newRawTestHandler(t)
+			h.inpoints = fast
+			got, err := h.txInpointsFromBuffer()
+			require.NoError(t, err)
+
+			decoded, err := as.DecodeParticle(particle_type.LIST, wire)
+			require.NoError(t, err)
+
+			it, _ := newRawTestHandler(t)
+			want, err := it.processInternalTransactionInpoints(as.BinMap{rawBinInputs: decoded})
+			require.NoError(t, err)
+
+			require.Equal(t, want.GetParentTxHashes(), got.GetParentTxHashes())
+			require.Equal(t, want.GetTxInpoints(), got.GetTxInpoints())
+		})
+	}
+}
+
+// Any shape the fast read does not expect goes to the full parse, so a bad
+// inputs bin still fails the record as it always did.
+func TestRawUnminedHandler_FastInputsFallBackOnUnexpectedShape(t *testing.T) {
+	whole := rawTestInput(t, 1, 0, 10, 25)
+
+	notBlob := encInputs(whole)
+	notBlob[2] = particle_type.STRING
+
+	cases := map[string][]byte{
+		"truncated input":    encInputs(whole[:len(whole)-1]),
+		"only txid and vout": encInputs(whole[:36]),
+		"not a blob":         notBlob,
+		"ordered list":       append([]byte{0x92, 0xd4, 0xff, 0x01}, encInputs(whole)[1:]...),
+		"trailing bytes":     append(encInputs(whole), 0x00),
+	}
+
+	for name, wire := range cases {
+		t.Run(name, func(t *testing.T) {
+			_, ok := appendRawInpoints(nil, wire)
+			require.False(t, ok)
+		})
+	}
+
+	t.Run("a truncated input still fails the record", func(t *testing.T) {
+		_, h := newRawTestHandler(t)
+
+		bins := withBin(rawMainRecordBins(1), fields.Inputs.String(), particle_type.LIST, encInputs(whole[:len(whole)-1]))
+		require.ErrorContains(t, feed(t, h, bins), "failed to process transaction inpoints")
+	})
+}
+
+// rawExternalRecordBins is record i stored externally: no inputs bin, so its
+// inpoints can only come from the external store.
+func rawExternalRecordBins(i int) []rawBin {
+	var bins []rawBin
+
+	for _, b := range rawMainRecordBins(i) {
+		if b.name != fields.Inputs.String() {
+			bins = append(bins, b)
+		}
+	}
+
+	return append(bins, rawBin{fields.External.String(), particle_type.BOOL, encBool(true)})
+}
+
+// An external record whose file is gone can never be read, so block assembly's
+// scan leaves it out, counts it and goes on: one such record must not stop
+// block assembly loading every other unmined transaction.
+func TestRawUnminedHandler_SkipsExternalRecordWithMissingFile(t *testing.T) {
+	InitPrometheusMetrics()
+
+	it, h := newRawTestHandler(t)
+	it.store.externalStore = memory.New()
+	it.skipMissingExternal = true
+
+	skippedBefore := testutil.ToFloat64(prometheusUnminedMissingExternalSkipped)
+
+	// block IDs as the server sends them: a msgpack array of one fixint
+	missingBins := append(rawExternalRecordBins(1), rawBin{fields.BlockIDs.String(), particle_type.LIST, []byte{0x91, 7}})
+	require.NoError(t, feed(t, h, missingBins))
+	require.InDelta(t, skippedBefore+1, testutil.ToFloat64(prometheusUnminedMissingExternalSkipped), 0)
+
+	// The skip must not leave the handler marked busy, or the idle watchdog
+	// would take a later stall on Aerospike for time spent on the external store.
+	require.False(t, h.busy.Load())
+
+	require.NoError(t, feed(t, h, rawMainRecordBins(2)))
+	require.NoError(t, h.flush())
+
+	txs := collectResults(it)
+	require.Len(t, txs, 2)
+	require.True(t, txs[0].Skip)
+	require.NotNil(t, txs[0].Node)
+	var missing chainhash.Hash
+	binary.LittleEndian.PutUint64(missing[:], 2)
+	require.Equal(t, missing, txs[0].Hash, "block assembly needs the missing parent hash to filter queued children")
+	require.Equal(t, []uint32{7}, txs[0].BlockIDs, "block assembly repairs a skipped record already mined on the best chain")
+	require.Equal(t, 10, txs[0].UnminedSince)
+
+	var want chainhash.Hash
+	binary.LittleEndian.PutUint64(want[:], 3)
+	require.Equal(t, want, txs[1].Hash)
+	require.Equal(t, int64(1), it.missingExternalSkipped.Load())
+}
+
+// Without the opt-in, as for the rewind tool, a missing file still fails the
+// scan, so no caller reports success over a record it could not read.
+func TestRawUnminedHandler_MissingExternalFileFailsWithoutOptIn(t *testing.T) {
+	InitPrometheusMetrics()
+
+	it, h := newRawTestHandler(t)
+	it.store.externalStore = memory.New()
+
+	err := feed(t, h, rawExternalRecordBins(1))
+	require.ErrorIs(t, err, errors.ErrNotFound)
+	require.Zero(t, it.missingExternalSkipped.Load())
+}
+
+// Any other external store failure may pass, so it still fails the scan
+// rather than dropping a transaction that could be read on the next attempt.
+func TestRawUnminedHandler_ExternalStoreErrorStillFails(t *testing.T) {
+	InitPrometheusMetrics()
+
+	it, h := newRawTestHandler(t)
+
+	externalStore := &blob.MockStore{}
+	externalStore.On("GetIoReader", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		Return(io.NopCloser(bytes.NewReader(nil)), errors.NewStorageError("disk unavailable"))
+	it.store.externalStore = externalStore
+	it.skipMissingExternal = true
+
+	require.ErrorContains(t, feed(t, h, rawExternalRecordBins(1)), "failed to process transaction inpoints")
 }

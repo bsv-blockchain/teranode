@@ -138,7 +138,7 @@ func _initPrometheusMetrics() {
 			Namespace: "teranode",
 			Subsystem: "sql",
 			Name:      "utxo_spend_abort_in_flight",
-			Help:      "Spend items still in flight when the batch aborted, excluded from the rollback set and applied by the batcher afterwards (residual dangling-ref window, see #1291)",
+			Help:      "Spend inputs whose caller was cancelled or timed out before the batch answered. A queued input is abandoned and never runs; an executing one is waited for and its answer joins the rollback decision",
 		},
 	)
 

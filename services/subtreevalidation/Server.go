@@ -172,6 +172,12 @@ type Server struct {
 	// validation once it is RUNNING again.
 	skippedSubtrees skippedSubtrees
 
+	// failedPeerSubtrees keeps the hash and DataHub URL of each peer subtree that failed
+	// validation, with the code of the failure, for subtreevalidation_failedSubtreeNegativeCacheTTL;
+	// a re-announcement of that hash with that URL in the window is skipped. Nil when the cache is
+	// off. See recordFailedPeerSubtree.
+	failedPeerSubtrees *expiringmap.ExpiringMap[failedPeerSubtreeKey, string]
+
 	// replaySubtreeFn replaces the validation of a replayed subtree, after its admission, age and
 	// RUNNING checks; nil in production.
 	replaySubtreeFn func(ctx context.Context, hash *chainhash.Hash, baseURL *url.URL, peerID string) error
@@ -236,6 +242,7 @@ func New(
 		txmetaConsumerClient:              txmetaConsumerClient,
 		policyRejectedTxConsumerClient:    policyRejectedTxConsumerClient,
 		invalidSubtreeDeDuplicateMap:      expiringmap.New[string, struct{}](time.Minute * 1),
+		failedPeerSubtrees:                newFailedPeerSubtreeCache(tSettings.SubtreeValidation.FailedSubtreeNegativeCacheTTL),
 		p2pClient:                         p2pClient,
 	}
 
@@ -708,6 +715,10 @@ func (u *Server) Stop(ctx context.Context) error {
 		u.invalidSubtreeDeDuplicateMap.Stop()
 	}
 
+	if u.failedPeerSubtrees != nil {
+		u.failedPeerSubtrees.Stop()
+	}
+
 	return nil
 }
 
@@ -968,8 +979,9 @@ func (u *Server) checkSubtreeFromBlock(ctx context.Context, request *subtreevali
 		// enabled in RUNNING): a floater child blessed at the candidate
 		// height and added to assembly is the same transaction policy-mode
 		// admission would have accepted into assembly anyway (policy
-		// substitutes tip+1 for unconfirmed parents — equal to the candidate
-		// height at the tip, and era flags cannot differ post-Genesis).
+		// substitutes tip+1 for unconfirmed parents). Block assembly drops a
+		// tx validated at a height under other transaction rules than tip+1;
+		// see feedsBlockAssembly.
 		// Accepted-block txs are mined-removed from assembly as always.
 		validatorOptions := []validator.Option{
 			validator.WithSkipPolicyChecks(true),
@@ -987,10 +999,15 @@ func (u *Server) checkSubtreeFromBlock(ctx context.Context, request *subtreevali
 
 		// While catching up blocks, disable adding transactions to block
 		// assembly: bulk-history txs do not belong in our template. In
-		// RUNNING, assembly stays enabled so txs from a legacy-bridge tip
-		// block survive in the mempool if the block loses a reorg.
-		// IDLE is included: an operator STOP can land while catchup is running.
-		if *currentState != blockchain.FSMStateRUNNING {
+		// RUNNING, assembly stays enabled so txs from a legacy-bridge block
+		// survive in the mempool if the block loses a reorg, unless the block
+		// is above tip+1. See feedsBlockAssembly.
+		feeds, err := u.feedsBlockAssembly(ctx, *currentState == blockchain.FSMStateRUNNING, request.BlockHeight)
+		if err != nil {
+			return false, errors.NewProcessingError("[CheckSubtree] Failed to decide block assembly feed", err)
+		}
+
+		if !feeds {
 			validatorOptions = append(validatorOptions, validator.WithAddTXToBlockAssembly(false))
 		}
 
@@ -1019,6 +1036,30 @@ func (u *Server) checkSubtreeFromBlock(ctx context.Context, request *subtreevali
 		FromBlock:     true,
 	}
 
+	peerValidatorOptions := []validator.Option{
+		validator.WithSkipPolicyChecks(true),
+		validator.WithInBlock(true),
+		validator.WithCreateConflicting(true),
+		validator.WithIgnoreLocked(true),
+		validator.WithCandidateParentMedianTime(candidateParentMedianTime),
+	}
+
+	// The same gate as the legacy branch: the block's txs feed block assembly only when the
+	// node is RUNNING and the block is not above tip+1 (feedsBlockAssembly).
+	peerState, err := u.blockchainClient.GetFSMCurrentState(ctx)
+	if err != nil {
+		return false, errors.NewProcessingError("[CheckSubtree] Failed to get FSM current state", err)
+	}
+
+	peerFeeds, err := u.feedsBlockAssembly(ctx, *peerState == blockchain.FSMStateRUNNING, request.BlockHeight)
+	if err != nil {
+		return false, errors.NewProcessingError("[CheckSubtree] Failed to decide block assembly feed", err)
+	}
+
+	if !peerFeeds {
+		peerValidatorOptions = append(peerValidatorOptions, validator.WithAddTXToBlockAssembly(false))
+	}
+
 	// Call the ValidateSubtreeInternal method
 	// Options.CandidateBlockTime intentionally not populated (no candidate
 	// block header in the peer-facing request); Options.CandidateParentMedianTime
@@ -1029,11 +1070,7 @@ func (u *Server) checkSubtreeFromBlock(ctx context.Context, request *subtreevali
 		v,
 		request.BlockHeight,
 		blockIds,
-		validator.WithSkipPolicyChecks(true),
-		validator.WithInBlock(true),
-		validator.WithCreateConflicting(true),
-		validator.WithIgnoreLocked(true),
-		validator.WithCandidateParentMedianTime(candidateParentMedianTime),
+		peerValidatorOptions...,
 	); err != nil {
 		return false, errors.NewProcessingError("[CheckSubtree] Failed to validate subtree %s", hash.String(), err)
 	}

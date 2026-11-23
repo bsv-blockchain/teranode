@@ -30,8 +30,10 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
+	"github.com/bsv-blockchain/teranode/stores/utxo/pruner"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
+	"github.com/bsv-blockchain/teranode/util/lane"
 	"github.com/cespare/xxhash/v2"
 	"golang.org/x/sync/errgroup"
 )
@@ -99,6 +101,9 @@ type TxMetaCache struct {
 	noOfBlocksToKeepInTxMetaCache uint32                        // Cache retention horizon (blocks); kept for compatibility with the height-based expiration plumbing in ImprovedCache
 	lanes                         [writeBackLanes]writeBackLane // BatchDecorate write-back, one writer per bucket range (see writeback_lanes.go)
 	tombstones                    *tombstones                   // txs DeleteDemoted evicted; every write path evicts them again (see DeleteDemoted)
+	// laneShadow is whether lane positions are on (utxostore_laneMigration shadow or later), when
+	// an entry keeps the transaction's own lane position for the subtree's lane bitmaps.
+	laneShadow bool
 }
 
 // CacheStats provides statistical information about the current state of the cache.
@@ -272,6 +277,7 @@ func NewTxMetaCache(
 		logger:                        logger,
 		noOfBlocksToKeepInTxMetaCache: noOfBlocksToKeepInTxMetaCache,
 		tombstones:                    newTombstones(tSettings.SubtreeValidation.TxMetaTombstoneWindow, time.Now),
+		laneShadow:                    tSettings.UtxoStore.LaneMigration.Stamps(),
 	}
 
 	if bucketType == Pointer {
@@ -722,8 +728,12 @@ fromStore:
 
 	t.metrics.getOrigin.Add(1)
 
-	// add to cache, but only if the blockIDs have not been set and the tx is not conflicting
-	if len(data.BlockIDs) == 0 && !data.Conflicting {
+	// add to cache, but only if the blockIDs have not been set and the tx is not conflicting.
+	// GetMeta reads no lane position, so at shadow it caches nothing unless the position came with
+	// it: an entry without the position would be a hit that leaves the transaction out of its
+	// subtree's lane bitmaps. Every GetMeta for the transaction reads the store until a read that
+	// names fields.LanePosition, subtree validation's BatchDecorate, caches it with its position.
+	if len(data.BlockIDs) == 0 && !data.Conflicting && (!t.laneShadow || lane.Valid(data.LanePosition)) {
 		// don't return errors from SetCache, as it is not critical if the cache fails to set
 		_ = t.SetCache(hash, data)
 	}
@@ -814,7 +824,7 @@ func (t *TxMetaCache) BatchDecorate(ctx context.Context, hashes []*utxo.Unresolv
 	t.metrics.getOrigin.Add(uint64(len(hashes)))
 
 	// Batch cache population: build keys/values once and hand them to writeBack.
-	// Note: values are serialized the same way SetCache() does (via MetaBytes).
+	// Note: values are serialized the same way SetCache() does (meta.CacheBytesInto).
 	keys := make([][]byte, 0, len(hashes))
 	values := make([][]byte, 0, len(hashes))
 
@@ -861,7 +871,8 @@ func (t *TxMetaCache) BatchDecorate(ctx context.Context, hashes []*utxo.Unresolv
 		// Serialize into a pooled buffer; the cache copies it on insert.
 		bufPtr := metaBytesBufPool.Get().(*[]byte)
 
-		txMetaBytes, err := data.Data.MetaBytesInto((*bufPtr)[:0])
+		// The cache form: MetaBytes, and the own lane position when the read asked for it.
+		txMetaBytes, err := data.Data.CacheBytesInto((*bufPtr)[:0])
 		if err != nil {
 			putMetaBytesBuf(bufPtr)
 
@@ -1002,6 +1013,11 @@ func (t *TxMetaCache) GetPrunableUnminedTxIterator(cutoffBlockHeight uint32) (ut
 
 func (t *TxMetaCache) GetConflictingTxIterator() (utxo.UnminedTxIterator, error) {
 	return t.utxoStore.GetConflictingTxIterator()
+}
+
+// ConflictingTxHashes asks the underlying store; the cache holds no conflicting set.
+func (t *TxMetaCache) ConflictingTxHashes(ctx context.Context) ([]chainhash.Hash, bool, error) {
+	return t.utxoStore.ConflictingTxHashes(ctx)
 }
 
 func (t *TxMetaCache) RemoveFromConflictingChildren(ctx context.Context, removals []utxo.ConflictingChildRemoval) error {
@@ -1222,6 +1238,11 @@ func (t *TxMetaCache) Health(ctx context.Context, checkLiveness bool) (int, stri
 // SupportsOutpointOnlySpend delegates to the wrapped store.
 func (t *TxMetaCache) SupportsOutpointOnlySpend() bool {
 	return t.utxoStore.SupportsOutpointOnlySpend()
+}
+
+// NetsBelowCheckpoint forwards the wrapped store's answer.
+func (t *TxMetaCache) NetsBelowCheckpoint() bool {
+	return utxo.NetsBelowCheckpoint(t.utxoStore)
 }
 
 // Close delegates to the wrapped UTXO store so its in-flight batched writes
@@ -1575,6 +1596,11 @@ func (t *TxMetaCache) GetBlockState() utxo.BlockState {
 	return t.utxoStore.GetBlockState()
 }
 
+// Stamper forwards to the underlying UTXO store, whose stamp it is.
+func (t *TxMetaCache) Stamper() pruner.Stamper {
+	return t.utxoStore.Stamper()
+}
+
 // QueryOldUnminedTransactions forwards the query request to the underlying UTXO store.
 // The cache doesn't directly manage unmined transactions, so this is a pass-through operation.
 func (t *TxMetaCache) QueryOldUnminedTransactions(ctx context.Context, cutoffBlockHeight uint32) ([]chainhash.Hash, error) {
@@ -1591,4 +1617,28 @@ func (t *TxMetaCache) PreserveTransactions(ctx context.Context, txIDs []chainhas
 // The cache doesn't directly manage preservation expiry, so this is a pass-through operation.
 func (t *TxMetaCache) ProcessExpiredPreservations(ctx context.Context, currentHeight uint32) error {
 	return t.utxoStore.ProcessExpiredPreservations(ctx, currentHeight)
+}
+
+// SpendsMadeBy passes through. There is nothing to cache: it is asked only when undoing a
+// conflict resolution, which is a reorg or a crash replay, and the answer describes coins whose
+// state the same operation is about to change.
+func (t *TxMetaCache) SpendsMadeBy(ctx context.Context, txHash chainhash.Hash) ([]*utxo.Spend, error) {
+	return t.utxoStore.SpendsMadeBy(ctx, txHash)
+}
+
+func (t *TxMetaCache) LoadConflictRecovery(ctx context.Context, id chainhash.Hash) (*utxo.ConflictRecovery, error) {
+	return t.utxoStore.LoadConflictRecovery(ctx, id)
+}
+func (t *TxMetaCache) SaveConflictRecovery(ctx context.Context, id chainhash.Hash, r *utxo.ConflictRecovery) error {
+	return t.utxoStore.SaveConflictRecovery(ctx, id, r)
+}
+func (t *TxMetaCache) RestoreConflictSpends(ctx context.Context, spends []*utxo.Spend, height uint32) error {
+	return t.utxoStore.RestoreConflictSpends(ctx, spends, height)
+}
+func (t *TxMetaCache) SetConflictLocks(ctx context.Context, id chainhash.Hash, parents []chainhash.Hash, locked bool) error {
+	return t.utxoStore.SetConflictLocks(ctx, id, parents, locked)
+}
+
+func (t *TxMetaCache) ReleaseConflictLocks(ctx context.Context, id chainhash.Hash, parents []chainhash.Hash) error {
+	return t.utxoStore.ReleaseConflictLocks(ctx, id, parents)
 }

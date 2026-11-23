@@ -237,7 +237,7 @@ func TestLastDequeueTime_StopsAdvancingWhileConsumerParked(t *testing.T) {
 // or blockchain methods are expected to be called by these tests: batches
 // are pushed straight into stp.queue and only ever reach the in-memory
 // subtree-building path, not decoration or persistence.
-func newTestSubtreeProcessorForDequeueStaleness(t *testing.T, ctx context.Context) *SubtreeProcessor {
+func newTestSubtreeProcessorForDequeueStaleness(t testing.TB, ctx context.Context) *SubtreeProcessor {
 	t.Helper()
 
 	logger := ulogger.TestLogger{}

@@ -263,7 +263,10 @@ func (tc *TestContainer) StartNode(t *testing.T, nodeName string) {
 }
 
 func (tc *TestContainer) Cleanup(t *testing.T) {
-	err := tc.Compose.Down(tc.Ctx, compose.RemoveOrphans(true))
+	// RemoveVolumes also drops the anonymous volumes that images such as
+	// redpanda and bitcoin-sv declare; the project name is unique per run, so
+	// nothing would ever reuse them.
+	err := tc.Compose.Down(tc.Ctx, compose.RemoveOrphans(true), compose.RemoveVolumes(true))
 	require.NoError(t, err)
 
 	// Wait for configured health check and service ports to be free before continuing

@@ -8,6 +8,7 @@ import (
 	"unsafe"
 
 	as "github.com/bsv-blockchain/aerospike-client-go/v8"
+	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
@@ -16,11 +17,15 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// unminedTestBins returns the bin set the default (block assembly) scan mode
-// reads for one main record.
+// unminedTestBins returns the bin set the block assembly scan reads for one
+// main record with one input.
 func unminedTestBins(i int) as.BinMap {
 	var txid chainhash.Hash
 	binary.LittleEndian.PutUint64(txid[:], uint64(i)+1)
+
+	parent := rawParentOf(i)
+	input := &bt.Input{PreviousTxOutIndex: 1, PreviousTxSatoshis: 100}
+	_ = input.PreviousTxIDAdd(&parent)
 
 	return as.BinMap{
 		fields.TxID.String():         txid[:],
@@ -28,6 +33,7 @@ func unminedTestBins(i int) as.BinMap {
 		fields.SizeInBytes.String():  250,
 		fields.CreatedAt.String():    1_700_000_000_000 + i,
 		fields.UnminedSince.String(): 10,
+		fields.Inputs.String():       []interface{}{input.ExtendedBytes(false)},
 	}
 }
 
@@ -160,9 +166,11 @@ func Test_processRecordset_ExitsOnCancelWhileWaiting(t *testing.T) {
 }
 
 // processRecord runs once per unmined record, billions of times on a large
-// reload. Two allocations: the transaction+node pair, and the inpoints, which
-// must stay separate because the subtree processor's tx map retains them.
-func Test_processRecord_TwoAllocations(t *testing.T) {
+// reload. A one-input record costs the transaction+node pair, the inpoints
+// (separate because the subtree processor's tx map retains them) and the decode
+// of that input into parent links, 16 in all. Block assembly needs the parent
+// links in every mode, so the decode stays.
+func Test_processRecord_AllocationsPerOneInputRecord(t *testing.T) {
 	it := newHotpathTestIterator(1, time.Second)
 	bins := unminedTestBins(1)
 	ctx := context.Background()
@@ -174,7 +182,7 @@ func Test_processRecord_TwoAllocations(t *testing.T) {
 		}
 	})
 
-	require.LessOrEqual(t, allocs, 2.0)
+	require.LessOrEqual(t, allocs, 16.0)
 }
 
 func BenchmarkProcessRecordset(b *testing.B) {
