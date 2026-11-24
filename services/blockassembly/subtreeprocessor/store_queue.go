@@ -388,7 +388,7 @@ func (q *StoreQueue) dropLocked(match func(*storeItem) bool) (dropped []*storeIt
 		it.done = true
 		it.dropped = true
 
-		if !it.req.AnnounceOnly && !it.req.SkipNotification {
+		if !it.req.AnnounceOnly && (!it.req.SkipNotification || (it.ann != nil && !it.ann.claimed)) {
 			q.noteAnnounceLost(*it.req.Subtree.RootHash())
 		}
 
@@ -509,6 +509,12 @@ func (q *StoreQueue) settled(it *storeItem, ok bool) (announce bool) {
 	if ok && it.ann != nil && !it.ann.claimed {
 		it.ann.claimed = true
 		announce = true
+	}
+
+	// a request told to announce that failed for good takes the announcement with it: the subtree
+	// is sent again by the stored-prefix watch, which asks announceWasLost
+	if !ok && it.ann != nil && !it.ann.claimed && !it.req.AnnounceOnly {
+		q.noteAnnounceLost(*it.req.Subtree.RootHash())
 	}
 
 	if it.charged {

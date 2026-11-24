@@ -30,11 +30,12 @@ type gatedStores struct {
 	tail   chan struct{}
 	result func(i, attempt int) StoreResult
 
-	mu       sync.Mutex
-	index    map[chainhash.Hash]int
-	attempts map[chainhash.Hash]int
-	taken    []chainhash.Hash // roots of the stores taken, in order
-	cuts     []int            // subtrees in the template after each store settled
+	mu        sync.Mutex
+	index     map[chainhash.Hash]int
+	attempts  map[chainhash.Hash]int
+	announced map[chainhash.Hash]int
+	taken     []chainhash.Hash // roots of the stores taken, in order
+	cuts      []int            // subtrees in the template after each store settled
 }
 
 // startGatedStores starts workers for the chain stp holds now.
@@ -42,7 +43,7 @@ func startGatedStores(t testing.TB, stp *SubtreeProcessor, q *StoreQueue, set *S
 	t.Helper()
 
 	g := &gatedStores{stp: stp, set: set, k0: k0, tail: make(chan struct{}, 1<<16), result: result,
-		index: make(map[chainhash.Hash]int), attempts: make(map[chainhash.Hash]int)}
+		index: make(map[chainhash.Hash]int), attempts: make(map[chainhash.Hash]int), announced: make(map[chainhash.Hash]int)}
 
 	for i, st := range stp.chainedSubtrees {
 		g.index[*st.RootHash()] = i
@@ -79,6 +80,10 @@ func startGatedStores(t testing.TB, stp *SubtreeProcessor, q *StoreQueue, set *S
 
 func (g *gatedStores) serve(ctx context.Context, req NewSubtreeRequest) {
 	if req.AnnounceOnly || req.Class == StoreClassSnapshot {
+		if req.AnnounceOnly {
+			g.noteAnnounced(*req.Subtree.RootHash())
+		}
+
 		answerFromQueue(req, g.set, StoreResult{SubtreeStored: true, MetaNotApplicable: true})
 
 		return
@@ -106,7 +111,19 @@ func (g *gatedStores) serve(ctx context.Context, req NewSubtreeRequest) {
 		res = g.result(i, attempt)
 	}
 
-	answerFromQueue(req, g.set, res)
+	// the way the block assembly worker settles: with the result, and announcing when the queue says so
+	g.set.Finish(root, res, false, 0)
+
+	if req.Result != nil {
+		req.Result <- res
+	}
+
+	req.ErrChan <- nil
+	req.Answered(nil)
+
+	if req.SettledFunc()(res.OK()) || (res.OK() && !req.SkipNotification) {
+		g.noteAnnounced(root)
+	}
 
 	cut := 0
 	if data := g.stp.GetPrecomputedMiningData(); data != nil {
@@ -116,6 +133,22 @@ func (g *gatedStores) serve(ctx context.Context, req NewSubtreeRequest) {
 	g.mu.Lock()
 	g.cuts = append(g.cuts, cut)
 	g.mu.Unlock()
+}
+
+func (g *gatedStores) noteAnnounced(root chainhash.Hash) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	g.announced[root]++
+}
+
+// announcements is how many times the subtree was announced: by an announce-only request, by a store
+// that announces, or by a store the queue told to announce when it settled.
+func (g *gatedStores) announcements(root chainhash.Hash) int {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	return g.announced[root]
 }
 
 func (g *gatedStores) takes(root chainhash.Hash) int {
@@ -271,6 +304,7 @@ func TestReorgScenario_AwaitedSubtrees_AwaitedSubtreesCoupledToTheCut(t *testing
 		{"the setting", 3, true, true, 0, chain(1, 1, 1, 1, 1, 1), 3},
 		{"the chain is shorter", 8, true, true, 0, chain(1, 1, 1), 3},
 		{"the block-size prefix is shorter", 5, true, true, header + 250, chain(100, 100, 100, 100, 100, 100), 2},
+		{"the prefix fills the budget exactly", 5, true, true, header + 200, chain(100, 100, 100, 100, 100, 100), 2},
 		{"no subtree fits a block: the first is still awaited", 5, true, true, header + 50, chain(100, 100, 100), 1},
 		{"an empty chain", 3, true, true, 0, nil, 0},
 	}
@@ -310,8 +344,15 @@ func requireK0WaitAndGrowth(t *testing.T, fast bool) {
 	a := newAwaitedScenario(t, awaitedK0, 0, true)
 	a.sc.stp.settings.BlockAssembly.ReorgFastPath = fast
 
+	before := readFastPathCounts()
+
 	done, g := a.start(t, 1, nil)
 	require.NoError(t, requireDone(t, done), "the tail is held and the reorg still commits")
+
+	if fast {
+		after := readFastPathCounts()
+		require.Greater(t, after.applied, before.applied, "the fast path applied: %v", after.declinedSince(before))
+	}
 
 	chain := a.sc.stp.chainedSubtrees
 	require.Greater(t, len(chain), awaitedK0+4, "the chain has a tail")
@@ -400,6 +441,9 @@ func TestReorgScenario_AwaitedSubtrees_AFailureBeyondK0ReEnqueuesAndNeverResets(
 
 	require.Eventually(t, func() bool { return a.set.PrefixLen(chain) == len(chain) }, 10*time.Second, time.Millisecond, "the subtree is stored by its second request")
 	require.Equal(t, 2, g.takes(root), "the failed subtree was sent again once")
+	require.Eventually(t, func() bool { return g.announcements(root) >= 1 }, 10*time.Second, time.Millisecond, "the subtree is announced when it is stored again")
+	time.Sleep(50 * time.Millisecond)
+	require.Equal(t, 1, g.announcements(root), "and announced once")
 	require.False(t, stp.failedForkReorgNeedsReset.Load(), "still no reset")
 }
 

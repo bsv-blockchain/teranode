@@ -143,6 +143,9 @@ func (stp *SubtreeProcessor) sendChainedSubtreeAgain(i int, root chainhash.Hash,
 			return
 		}
 
+		// a request that was to announce and failed for good announces when this one stores
+		req.SkipNotification = !stp.storeQueue.announceWasLost(st)
+
 		stp.storeQueue.Push(req)
 	} else {
 		select {
