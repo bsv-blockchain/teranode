@@ -62,6 +62,32 @@ SELECT k.txid, $3::int, $4::int, $5::int, p.created_height, p.size_in_bytes, p.f
  ) AS p
 ON CONFLICT (txid, mined_height, block_id) DO NOTHING`
 
+// recordMinedLaneSQL is recordMinedSQL carrying lane_position, for a database that has the column.
+var recordMinedLaneSQL = laneStatement(recordMinedSQL,
+	"created_at, flags)\nSELECT k.txid", "created_at, flags, lane_position)\nSELECT k.txid",
+	"p.tx_inpoints, p.locktime, p.created_at, p.flags\n", "p.tx_inpoints, p.locktime, p.created_at, p.flags, p.lane_position\n",
+	"i.created_at, i.flags\n", "i.created_at, i.flags, i.lane_position\n",
+	"m.created_at, m.flags\n", "m.created_at, m.flags, m.lane_position\n",
+)
+
+// recordMinedLaneParentSQL is recordMinedLaneSQL also copying parent_lane_positions beside the
+// inpoints, for a database with that column (Store.laneParentColumn).
+var recordMinedLaneParentSQL = laneStatement(recordMinedLaneSQL,
+	"created_at, flags, lane_position)\nSELECT k.txid", "created_at, flags, lane_position, parent_lane_positions)\nSELECT k.txid",
+	"p.tx_inpoints, p.locktime, p.created_at, p.flags, p.lane_position\n", "p.tx_inpoints, p.locktime, p.created_at, p.flags, p.lane_position, p.parent_lane_positions\n",
+	"i.created_at, i.flags, i.lane_position\n", "i.created_at, i.flags, i.lane_position, i.parent_lane_positions\n",
+	"m.created_at, m.flags, m.lane_position\n", "m.created_at, m.flags, m.lane_position, m.parent_lane_positions\n",
+)
+
+// recordMinedForm is the recordMined statement for this database's lane columns.
+func (s *Store) recordMinedForm() string {
+	if s.laneParentColumn {
+		return recordMinedLaneParentSQL
+	}
+
+	return s.laneForm(recordMinedSQL, recordMinedLaneSQL)
+}
+
 // clearMarkerSQL clears the unmined marker of every listed identity row, because the caller
 // has said a block on the longest chain contains the transaction. A transaction with no
 // identity row has no marker to clear and is untouched. Same key shape as recordMinedSQL.
@@ -505,7 +531,7 @@ func (s *Store) recordMined(ctx context.Context, txids [][]byte, info utxo.Mined
 
 	for _, g := range leafGroups(txids) {
 		if insert {
-			if _, err := dbTx.Exec(ctx, recordMinedSQL, g.leaf, g.txids,
+			if _, err := dbTx.Exec(ctx, s.recordMinedForm(), g.leaf, g.txids,
 				int32(info.BlockHeight), int32(info.BlockID), int32(info.SubtreeIdx), floor); err != nil { //nolint:gosec // heights and ids fit
 				return false, errors.NewStorageError("[utxoset][SetMinedMulti] record mined", err)
 			}

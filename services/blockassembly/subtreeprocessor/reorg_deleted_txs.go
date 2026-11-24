@@ -214,7 +214,7 @@ func (stp *SubtreeProcessor) restoreReorgDeletedTxs(ctx context.Context, block *
 
 		onLongestChain := false
 
-		var createOpts []utxostore.CreateOption
+		createOpts := []utxostore.CreateOption{utxostore.WithCaller(utxostore.CallerBlockAssembly)}
 		if len(saved.mined) > 0 {
 			blockIDs := make([]uint32, len(saved.mined))
 			for i := range saved.mined {

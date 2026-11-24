@@ -13,6 +13,7 @@ import (
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util/lane"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/require"
 )
@@ -65,25 +66,59 @@ func benchTx(n int) *bt.Tx {
 func benchStore(b *testing.B) (*Store, context.Context) {
 	b.Helper()
 
+	return openBenchStore(b, false)
+}
+
+// benchLaneStore is benchStore with lane positions on, which gives the database the column.
+func benchLaneStore(b *testing.B) (*Store, context.Context) {
+	b.Helper()
+
+	return openBenchStore(b, true)
+}
+
+// benchLaneStoreKeep opens the bench database again with lane positions on, keeping its tables, as a
+// restart would.
+func benchLaneStoreKeep(b *testing.B) (*Store, context.Context) {
+	b.Helper()
+
+	return openBenchStoreOn(b, true, false)
+}
+
+func openBenchStore(b *testing.B, lanePositions bool) (*Store, context.Context) {
+	b.Helper()
+
+	return openBenchStoreOn(b, lanePositions, true)
+}
+
+func openBenchStoreOn(b *testing.B, lanePositions, fresh bool) (*Store, context.Context) {
+	b.Helper()
+
 	ctx := context.Background()
 	dsn := testDSN(b)
 
-	pool, err := pgxpool.New(ctx, dsn)
-	require.NoError(b, err)
-	require.NoError(b, pool.Ping(ctx))
+	if fresh {
+		pool, err := pgxpool.New(ctx, dsn)
+		require.NoError(b, err)
+		require.NoError(b, pool.Ping(ctx))
 
-	_, _ = pool.Exec(ctx, `DROP TABLE IF EXISTS utxo CASCADE;
-	                       DROP TABLE IF EXISTS spend_journal CASCADE;
-	                       DROP TABLE IF EXISTS tx_ident CASCADE;
-	                       DROP TABLE IF EXISTS tx_body CASCADE;
-	                       DROP TABLE IF EXISTS applied_block CASCADE;
-	                       DROP TABLE IF EXISTS applied_chunk CASCADE;`)
-	pool.Close()
+		_, _ = pool.Exec(ctx, `DROP TABLE IF EXISTS utxo CASCADE;
+		                       DROP TABLE IF EXISTS spend_journal CASCADE;
+		                       DROP TABLE IF EXISTS tx_ident CASCADE;
+		                       DROP TABLE IF EXISTS tx_body CASCADE;
+		                       DROP TABLE IF EXISTS applied_block CASCADE;
+		                       DROP TABLE IF EXISTS applied_chunk CASCADE;`)
+		pool.Close()
+	}
 
 	u, err := url.Parse(dsn)
 	require.NoError(b, err)
 
-	s, err := New(ctx, ulogger.TestLogger{}, settings.NewSettings(), u)
+	tSettings := settings.NewSettings()
+	if lanePositions {
+		tSettings.UtxoStore.LaneMigration = settings.LaneMigrationShadow
+	}
+
+	s, err := New(ctx, ulogger.TestLogger{}, tSettings, u)
 	require.NoError(b, err)
 
 	b.Cleanup(func() { _ = s.Close(ctx) })
@@ -210,6 +245,35 @@ func BenchmarkSpend(b *testing.B) {
 func BenchmarkSpendAndCreate(b *testing.B) {
 	s, ctx := benchStore(b)
 
+	runSpendAndCreateBench(b, s, ctx)
+}
+
+// BenchmarkSpendAndCreateLanePosition is BenchmarkSpendAndCreate with a lane position on every
+// created record: the store's own cost of lane positions being on.
+func BenchmarkSpendAndCreateLanePosition(b *testing.B) {
+	s, ctx := benchLaneStore(b)
+
+	runSpendAndCreateBench(b, s, ctx, utxo.WithLanePosition(lane.Pack(7, 1)))
+}
+
+// BenchmarkSpendAndCreateLaneCopies is BenchmarkSpendAndCreateLanePosition on a database with the
+// whole lane schema (prepare-lane-schema), with the parent's position named as the validator names
+// it: each output row carries its creator's position, the spend copies it into the journal, and
+// the child's record keeps its parent's position beside its inpoints.
+func BenchmarkSpendAndCreateLaneCopies(b *testing.B) {
+	s, ctx := benchLaneStore(b)
+	require.NoError(b, s.PrepareLaneSchema(ctx))
+	require.NoError(b, s.Close(ctx))
+
+	s, ctx = benchLaneStoreKeep(b)
+	require.True(b, s.laneParentColumn && s.laneCoinColumn)
+
+	parent := lane.Pack(7, 1)
+
+	runSpendAndCreateBench(b, s, ctx, utxo.WithLanePosition(lane.Pack(7, 2)), utxo.WithParentLanePositions([]uint64{parent}))
+}
+
+func runSpendAndCreateBench(b *testing.B, s *Store, ctx context.Context, opts ...utxo.CreateOption) {
 	b.ReportAllocs()
 
 	children := make([]*bt.Tx, b.N)
@@ -233,16 +297,19 @@ func BenchmarkSpendAndCreate(b *testing.B) {
 		children[i] = child
 	}
 
+	walBefore := walPosition(b, s, ctx)
+
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
-		if _, _, err := s.SpendAndCreate(ctx, children[i], 700_000); err != nil {
+		if _, _, err := s.SpendAndCreate(ctx, children[i], 700_000, opts...); err != nil {
 			b.Fatalf("spendAndCreate: %v", err)
 		}
 	}
 
 	b.StopTimer()
 	b.ReportMetric(float64(b.Elapsed().Nanoseconds())/float64(b.N), "ns/tx")
+	b.ReportMetric(float64(walPosition(b, s, ctx)-walBefore)/float64(b.N), "walB/tx")
 	wipe(b, s, ctx)
 }
 
@@ -429,7 +496,21 @@ func BenchmarkCreatePaths(b *testing.B) {
 	}
 }
 
-func runCreatePathBench(b *testing.B, s *Store, ctx context.Context, n int, mined bool) {
+// BenchmarkCreatePathsLanePosition is BenchmarkCreatePaths with a lane position on every row.
+func BenchmarkCreatePathsLanePosition(b *testing.B) {
+	s, ctx := benchLaneStore(b)
+
+	for _, n := range []int{100, 500, 1024, 2048} {
+		b.Run(fmt.Sprintf("Plain/%d", n), func(b *testing.B) {
+			runCreatePathBench(b, s, ctx, n, false, lane.Pack(7, 1))
+		})
+		b.Run(fmt.Sprintf("Mined/%d", n), func(b *testing.B) {
+			runCreatePathBench(b, s, ctx, n, true, lane.Pack(7, 1))
+		})
+	}
+}
+
+func runCreatePathBench(b *testing.B, s *Store, ctx context.Context, n int, mined bool, lanePosition ...uint64) {
 	b.ReportAllocs()
 	b.ResetTimer()
 
@@ -449,6 +530,10 @@ func runCreatePathBench(b *testing.B, s *Store, ctx context.Context, n int, mine
 				opts.MinedBlockInfos = []utxo.MinedBlockInfo{{
 					BlockID: 1, BlockHeight: 1, OnLongestChain: true,
 				}}
+			}
+
+			if len(lanePosition) > 0 {
+				opts.LanePosition = lanePosition[0] + uint64(j) //nolint:gosec // j counts up from 0
 			}
 
 			batch[j] = &createItem{
@@ -473,4 +558,17 @@ func runCreatePathBench(b *testing.B, s *Store, ctx context.Context, n int, mine
 
 	b.StopTimer()
 	b.ReportMetric(float64(b.Elapsed().Nanoseconds())/float64(b.N)/float64(n), "ns/row")
+}
+
+// walPosition is the database's current write-ahead log position in bytes, so a benchmark can
+// report how much log its writes cost: the bytes every write of a spend or create pays on disk,
+// which a wall-clock time dominated by the commit's flush hides. Nothing else writes to the bench
+// database while it runs.
+func walPosition(b *testing.B, s *Store, ctx context.Context) int64 {
+	b.Helper()
+
+	var lsn int64
+	require.NoError(b, s.pool.QueryRow(ctx, `SELECT (pg_current_wal_lsn() - '0/0'::pg_lsn)::bigint`).Scan(&lsn))
+
+	return lsn
 }

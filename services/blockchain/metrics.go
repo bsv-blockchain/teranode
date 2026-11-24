@@ -71,6 +71,9 @@ var (
 	prometheusBlockchainSubscriberPendingFull *prometheus.CounterVec
 	prometheusBlockchainSubscriberSendErrors  *prometheus.CounterVec
 	prometheusBlockchainWatchdogFires         *prometheus.CounterVec
+	prometheusBlockchainLaneLeaseOpens        prometheus.Counter
+	prometheusBlockchainLaneLeaseGrants       *prometheus.CounterVec
+	prometheusBlockchainLaneLeaseCloses       *prometheus.CounterVec
 
 	// Notifications dropped because the notification channel was full. A drop
 	// means the RPC returned success while the event never reached any
@@ -531,6 +534,35 @@ func _initPrometheusMetrics() {
 			Help:      "Number of times the client-side stream-progress watchdog cancelled a stale gRPC subscription stream (issue #872 zombie-stream detector).",
 		},
 		[]string{"source"},
+	)
+
+	prometheusBlockchainLaneLeaseOpens = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "blockchain",
+			Name:      "lane_lease_opens_total",
+			Help:      "Number of lane leases opened.",
+		},
+	)
+
+	prometheusBlockchainLaneLeaseGrants = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "blockchain",
+			Name:      "lane_lease_grants_total",
+			Help:      "Number of grants of lane positions recorded, by lane.",
+		},
+		[]string{"lane"},
+	)
+
+	prometheusBlockchainLaneLeaseCloses = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "blockchain",
+			Name:      "lane_lease_closes_total",
+			Help:      "Number of lane leases closed, by kind: clean for a release, lapsed for a lease with no renewal in blockchain_laneLeaseCloseAfter.",
+		},
+		[]string{"kind"},
 	)
 }
 

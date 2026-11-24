@@ -410,6 +410,10 @@ jobs:
           make soaktest SOAK_DURATION=2h SOAK_TIMEOUT=150m 2>&1 | tee /tmp/teranode-soak/soaktest-results.txt
         env:
           SOAK_OUTPUT_DIR: /tmp/teranode-soak
+          # Tighter than the 5% / 20 default so a goroutine leak of roughly 12 an hour fails the 96-minute
+          # analysis window; the default would pass anything under about 29 an hour.
+          SOAK_GOROUTINE_TOLERANCE: '0.02'
+          SOAK_GOROUTINE_TOLERANCE_ABS: '12'
         continue-on-error: false
 
       - name: Upload soaktest results

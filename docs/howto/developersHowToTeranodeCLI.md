@@ -290,6 +290,32 @@ Options:
 - `--end-height` - Last main-chain height to audit (required)
 - `--max-blocks` - Refuse a range holding more heights than this (default: 10000)
 
+#### Prepare Lane Schema
+
+Install the configured UTXO store's lane columns before the historical lane conversion:
+
+```bash
+SETTINGS_CONTEXT=dev.[YOUR_CONTEXT] ./teranode-cli prepare-lane-schema
+```
+
+Run it at `utxostore_laneMigration=off`, with every teranode process of the node stopped, as a database role that owns the tables. It takes no arguments and is safe to run again. It adds nullable, empty lane columns and fills no existing row. It opens the store the way the node does first, and on a new database that normal startup can create the store's base schema and its metadata rows. Start the node's processes afterwards so each sees the same schema. On utxoset it adds the eight lane columns that opening the store at `off` never adds. The SQL store already adds its columns at every open, and Aerospike has no schema to install. The blockchain store's lane tables are not this command's: every start of the blockchain service creates them when its role may `CREATE`.
+
+#### Free Spent Output
+
+Free one output of the UTXO store that is still spent by a transaction the store has no record of:
+
+```bash
+SETTINGS_CONTEXT=dev.[YOUR_CONTEXT] ./teranode-cli free-spent-output --parent <txid> --vout <n> --spender <txid>
+```
+
+This clears the stall a left-behind spend causes: a block that mines the spender is refused with error 78 (`ERR_UTXO_SPENDING_TX_PRUNED`) on every retry. First tell that stall apart from a real replay, which must stay refused, as "When a spend is refused with error 78" in `docs/topics/stores/utxo.md` describes. The command refuses when the spender has a record, frees the output only while it still names the spender, and reads it back afterwards. It works on SQL and Aerospike. Stop every service that writes to the UTXO store before running it, because a running node could create the spender between the command's check and its unspend.
+
+Options:
+
+- `--parent` - Transaction id of the parent whose output is spent (required)
+- `--vout` - Output index in the parent (default: 0)
+- `--spender` - Transaction id the output names as its spender (required)
+
 ### Benchmarking Tools
 
 Four profiling commands for measuring block assembly performance. Each writes CPU and memory profiles to disk.

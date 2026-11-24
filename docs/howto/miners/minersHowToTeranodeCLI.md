@@ -26,11 +26,13 @@ Usage: teranode-cli <command> [options]
     export-blocks        Export blockchain to CSV
     filereader           File Reader
     fix-chainwork        Fix incorrect chainwork values in blockchain database
+    free-spent-output    Free one output still spent by a transaction the UTXO store has no record of (the error 78 stall; see --help)
     getfsmstate          Get the current FSM State
     import-blocks        Import blockchain from CSV
     loadunminedbench     Benchmark loadUnminedTransactions with CPU and memory profiling
     logs                 Interactive log viewer with filtering and search
     monitor              Live TUI dashboard for monitoring node status
+    prepare-lane-schema  Install the UTXO store's lane columns, empty, at lane migration step off (node must be stopped)
     reconsiderblock      Reconsider a block that was previously marked as invalid
     remainderbench       Benchmark processRemainderTransactionsAndDequeue with CPU and memory profiling
     resetblockassembly   Reset block assembly state
@@ -110,6 +112,12 @@ Usage: teranode-cli <command> [options]
 | `audit-mined-set`    | List blocks stored with mined_set true whose   | `--start-height` - First height to audit (default: 0)           |
 |                      | sampled transactions lack the block ID or are  | `--end-height` - Last height to audit (required)                |
 |                      | still locked (read-only; remedy is a resync)   | `--max-blocks` - Refuse a wider range (default: 10000)          |
+| `free-spent-output`  | Free one output still spent by a transaction   | `--parent` - Parent transaction id (required)                    |
+|                      | the store has no record of (error 78 stall;    | `--vout` - Output index (default: 0)                             |
+|                      | see docs/topics/stores/utxo.md first)          | `--spender` - Spender transaction id (required)                  |
+| `prepare-lane-schema`| Install the UTXO store's lane columns, empty,  | none                                                             |
+|                      | at lane migration step off (node must be       |                                                                  |
+|                      | stopped; run as the tables' owner)             |                                                                  |
 | `rewindblockchain`   | Rewind blockchain DB, UTXO store and subtree   | `--target-height` - Height to rewind to (default: Block Assembly's saved height) |
 |                      | blobs to Block Assembly's persisted height     | `--dry-run` - Report the plan without modifying any store        |
 |                      | (DESTRUCTIVE - node must be stopped)           | `--assume-yes` - Skip the interactive confirmation               |

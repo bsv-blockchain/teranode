@@ -5,9 +5,12 @@
 package blockchain
 
 import (
+	"net"
 	"strconv"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/require"
 )
 
 // TestMedianTime tests the medianTime implementation.
@@ -106,4 +109,33 @@ func TestMedianTime(t *testing.T) {
 			continue
 		}
 	}
+}
+
+// TestMedianTimeOneSamplePerHost checks that one host contributes one sample
+// however many ports it connects from, as SV Node's AddTimeData does. Five
+// connections from one host would otherwise reach the five-sample minimum and
+// set the offset on their own.
+func TestMedianTimeOneSamplePerHost(t *testing.T) {
+	filter := NewMedianTime()
+	now := time.Unix(time.Now().Unix(), 0)
+
+	for port := 50000; port < 50005; port++ {
+		filter.AddTimeSample(net.JoinHostPort("203.0.113.5", strconv.Itoa(port)), now.Add(30*time.Minute))
+	}
+
+	require.Equal(t, time.Duration(0), filter.Offset(), "one host on five ports must count as one sample")
+
+	for i := 1; i <= 4; i++ {
+		filter.AddTimeSample(net.JoinHostPort("203.0.113."+strconv.Itoa(10+i), "8333"), now.Add(30*time.Minute))
+	}
+
+	// One sample from the first host plus four distinct hosts reaches five.
+	offset := filter.Offset()
+	require.InDelta(t, float64(30*time.Minute), float64(offset), float64(time.Second))
+}
+
+func TestTimeSampleSourceKey(t *testing.T) {
+	require.Equal(t, "203.0.113.5", timeSampleSourceKey("203.0.113.5:8333"))
+	require.Equal(t, "2001:db8::1", timeSampleSourceKey("[2001:db8::1]:8333"))
+	require.Equal(t, "7", timeSampleSourceKey("7"), "an id that is not host:port is used as given")
 }

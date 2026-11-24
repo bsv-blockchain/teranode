@@ -32,7 +32,19 @@ func NewSettings(alternativeContext ...string) *Settings {
 
 	globalBlockHeightRetention := getUint32("global_blockHeightRetention", blocksInADayOnAverage*2, alternativeContext...)
 
-	doubleSpendWindowMillis := getInt("double_spend_window_millis", 0, alternativeContext...)
+	// The double-spend window governs two behaviours: the mining hold-back in
+	// queue eligibility and the time bound of the subtree-processor drain
+	// (see BlockAssembly.DoubleSpendWindow longdesc). This key predates the
+	// blockassembly_* naming convention; the prefixed key is canonical now
+	// and the unprefixed one keeps working as a deprecated alias, so an
+	// operator searching the config for the service name finds it.
+	doubleSpendWindowMillis := getInt("blockassembly_doubleSpendWindowMillis", -1, alternativeContext...)
+	if doubleSpendWindowMillis < 0 {
+		doubleSpendWindowMillis = getInt("double_spend_window_millis", 0, alternativeContext...)
+	}
+	if doubleSpendWindowMillis < 0 {
+		doubleSpendWindowMillis = 0 // milliseconds are never negative; treat as 0
+	}
 	doubleSpendWindow := time.Duration(doubleSpendWindowMillis) * time.Millisecond
 
 	blacklistMap := getMultiStringMap("subtreevalidation_blacklisted_baseurls", "|", []string{}, alternativeContext...)
@@ -197,16 +209,17 @@ func NewSettings(alternativeContext ...string) *Settings {
 			OverloadRetryMaxBackoff:         getDuration("aerospike_overload_retry_max_backoff", 5*time.Second, alternativeContext...),
 		},
 		Alert: AlertSettings{
-			GenesisKeys:              getMultiString("alert_genesis_keys", "|", []string{}, alternativeContext...),
-			P2PPrivateKey:            getString("alert_p2p_private_key", "", alternativeContext...),
-			ProtocolID:               getString("alert_protocol_id", "", alternativeContext...),
-			StoreURL:                 getURL("alert_store", "sqlite:///alert", alternativeContext...),
-			TopicName:                getString("alert_topic_name", "", alternativeContext...),
-			P2PPort:                  getPort("ALERT_P2P_PORT", 9908, alternativeContext...),
-			P2PBootstrapPeer:         getString("alert_p2p_bootstrap_peer", "", alternativeContext...),
-			P2PAllowPrivateIPs:       getBool("alert_p2p_allow_private_ips", false, alternativeContext...),
-			P2PPeerDiscoveryInterval: getDuration("alert_p2p_peer_discovery_interval", 10*time.Minute, alternativeContext...),
-			P2PDHTMode:               getString("alert_p2p_dht_mode", "client", alternativeContext...),
+			GenesisKeys:                            getMultiString("alert_genesis_keys", "|", []string{}, alternativeContext...),
+			P2PPrivateKey:                          getString("alert_p2p_private_key", "", alternativeContext...),
+			ProtocolID:                             getString("alert_protocol_id", "", alternativeContext...),
+			StoreURL:                               getURL("alert_store", "sqlite:///alert", alternativeContext...),
+			TopicName:                              getString("alert_topic_name", "", alternativeContext...),
+			P2PPort:                                getPort("ALERT_P2P_PORT", 9908, alternativeContext...),
+			P2PBootstrapPeer:                       getString("alert_p2p_bootstrap_peer", "", alternativeContext...),
+			P2PAllowPrivateIPs:                     getBool("alert_p2p_allow_private_ips", false, alternativeContext...),
+			P2PPeerDiscoveryInterval:               getDuration("alert_p2p_peer_discovery_interval", 10*time.Minute, alternativeContext...),
+			P2PDHTMode:                             getString("alert_p2p_dht_mode", "client", alternativeContext...),
+			ConfiscationAllowReassignWithoutScript: getBool("alert_confiscationAllowReassignWithoutScript", false, alternativeContext...),
 		},
 		Asset: AssetSettings{
 			APIPrefix:               getString("asset_apiPrefix", "/api/v1", alternativeContext...),
@@ -295,6 +308,7 @@ func NewSettings(alternativeContext ...string) *Settings {
 			QuorumTimeout:                         getDuration("block_quorum_timeout", 10*time.Second, alternativeContext...),
 			ProcessTxMetaUsingStoreBatchSize:      getInt("blockvalidation_processTxMetaUsingStore_BatchSize", 1024, alternativeContext...),
 			UTXOPersisterBufferSize:               getString("utxoPersister_buffer_size", "256KB", alternativeContext...),
+			UTXOPersisterLivenessStallTimeout:     getDuration("utxoPersister_livenessStallTimeout", 0, alternativeContext...),
 			UTXOPersisterDirect:                   getBool("direct", true, alternativeContext...),
 			TxStore:                               getURL("txstore", "", alternativeContext...),
 			UtxoStore:                             getURL("txmeta_store", "", alternativeContext...),
@@ -364,6 +378,7 @@ func NewSettings(alternativeContext ...string) *Settings {
 			IdleSleepDuration:                    getDuration("blockassembly_idle_sleep_duration", 10*time.Millisecond, alternativeContext...),
 			MaxQueueItems:                        getInt64("blockassembly_maxQueueItems", 0, alternativeContext...),
 			QueueFullWaitTimeout:                 getDuration("blockassembly_queueFullWaitTimeout", 100*time.Millisecond, alternativeContext...),
+			MinedTxSetRetention:                  getDuration("blockassembly_minedTxSetRetention", 10*time.Second, alternativeContext...),
 			MaxTransactionsInMemory:              getUint64("blockassembly_maxTransactionsInMemory", 0, alternativeContext...),
 			TxMapDirs:                            getMultiString("blockassembly_txMapDirs", "|", []string{}, alternativeContext...),
 			SubtreeMmapDir:                       getString("blockassembly_subtreeMmapDir", "", alternativeContext...),
@@ -392,6 +407,11 @@ func NewSettings(alternativeContext ...string) *Settings {
 			MaxBlocksByHeightRange:     getInt("blockchain_maxBlocksByHeightRange", 2000, alternativeContext...),
 			GenerationalCacheCapacity:  getInt("blockchain_generationalCacheCapacity", 100000, alternativeContext...),
 			MaxInvalidBlocksPerRequest: getInt("blockchain_maxInvalidBlocksPerRequest", 10000, alternativeContext...),
+			LaneLeaseRenewInterval:     getDuration("blockchain_laneLeaseRenewInterval", 30*time.Second, alternativeContext...),
+			LaneLeaseStopAfter:         getDuration("blockchain_laneLeaseStopAfter", 2*time.Minute, alternativeContext...),
+			LaneLeaseCloseAfter:        getDuration("blockchain_laneLeaseCloseAfter", 3*time.Minute, alternativeContext...),
+			LaneGrantMin:               getUint64AtLeast("blockchain_laneGrantMin", 10_000, 1, alternativeContext...),
+			LaneGrantDuration:          getDuration("blockchain_laneGrantDuration", 2*time.Minute, alternativeContext...),
 		},
 		BlockValidation: BlockValidationSettings{
 			MaxRetries:                                getInt("blockValidationMaxRetries", 3, alternativeContext...),
@@ -585,6 +605,7 @@ func NewSettings(alternativeContext ...string) *Settings {
 			IncrementBatcherTickerIntervalMillis:    getInt("utxostore_incrementBatcherTickerIntervalMillis", 0, alternativeContext...),
 			SetDAHBatcherTickerIntervalMillis:       getInt("utxostore_setDAHBatcherTickerIntervalMillis", 0, alternativeContext...),
 			LockedBatcherTickerIntervalMillis:       getInt("utxostore_lockedBatcherTickerIntervalMillis", 0, alternativeContext...),
+			LaneMigration:                           LaneMigration(getString("utxostore_laneMigration", string(LaneMigrationOff), alternativeContext...)),
 		},
 		P2P: P2PSettings{
 			BlockTopic:          getString("p2p_block_topic", "", alternativeContext...),

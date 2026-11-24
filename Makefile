@@ -97,6 +97,10 @@ clean_backup:
 	@rm -f settings_local.conf.bak
 
 
+# Note: the aerospike tag below no longer gates the Aerospike store (it has been
+# always-compiled since; see docs/topics/microservicesReconciliationNotes.md
+# section 72). It is passed through so tag-gated test code still compiles in
+# tagged contexts; removing it from build targets changes nothing in the binary.
 .PHONY: build-teranode-with-dashboard
 build-teranode-with-dashboard: set_debug_flags set_txmetacache_flag build-dashboard
 	CGO_ENABLED=$(CGO_ENABLED) GOOS=$(GOOS) GOARCH=$(GOARCH) go build -mod=readonly -tags aerospike,${TXMETA_TAG} --trimpath -ldflags="-X main.commit=${GIT_COMMIT} -X main.version=${GIT_VERSION} -X main.StartFromState=${START_FROM_STATE}"  -gcflags "all=${DEBUG_FLAGS}" -o teranode.run .
@@ -174,6 +178,9 @@ install-tools:
 	go install github.com/ctrf-io/go-ctrf-json-reporter/cmd/go-ctrf-json-reporter@latest
 	go install gotest.tools/gotestsum@latest
 
+# -timeout is per package. stores/utxo/aerospike runs its testcontainer suite
+# under -race and coverage, which took 9m20s on main by itself in October 2026,
+# so 10m left no room for new container tests there.
 .PHONY: test
 test:
 	@command -v gotestsum >/dev/null 2>&1 || { echo "gotestsum not found. Installing..."; $(MAKE) install-tools; }
@@ -184,6 +191,22 @@ test:
 .PHONY: test-heavy
 test-heavy:
 	SETTINGS_CONTEXT=test TERANODE_HEAVY_TESTS=1 go test -tags "testtxmetacache" -count=1 -timeout=10m -run '^(TestSortedHashSet_|Test_queueLarge$$|TestDiskTxMap_(ExistenceLayerThroughput|ThroughputTarget|MultiDiskThroughput)$$|TestSubtreeProcessorSizePerformance$$|TestDirectSubtreeCreationPerformance$$|TestOverheadBreakdownDetailed$$)' ./services/blockassembly/subtreeprocessor
+
+# run the Block Validation known-defect proofs (services/blockvalidation/spec.md, Conformance Gaps).
+# Each is a TestKnownDefect_* test behind the bvgaps build tag that asserts spec-correct behaviour
+# and FAILS until its defect is fixed, so this target is not part of `make test`. When a defect is
+# fixed, drop the bvgaps tag and the TestKnownDefect_ prefix so the test becomes a regression test.
+# ./services/subtreevalidation/... has no proofs until bsv-blockchain/teranode#2124 (test task T08)
+# merges; it holds the GAP-BV-047 proofs. Until then `go test` reports no tests to run there.
+.PHONY: test-bvgaps
+test-bvgaps:
+	SETTINGS_CONTEXT=test go test -race -count=1 -tags "bvgaps testtxmetacache" -run '^TestKnownDefect_' ./model/... ./services/blockvalidation/... ./services/subtreevalidation/...
+
+# compile and vet the gap-proof tests without running them, so a rename in the code they exercise
+# breaks the build here (and in CI) instead of silently when a gap is fixed.
+.PHONY: vet-bvgaps
+vet-bvgaps:
+	go vet -tags "bvgaps testtxmetacache" ./model/... ./services/blockvalidation/... ./services/subtreevalidation/...
 
 # run tagged service regressions and tests in the test/longtest directory
 .PHONY: longtest
@@ -196,7 +219,8 @@ longtest:
 # run the soak test: the in-process daemon under steady tx load for SOAK_DURATION, failing if heap or goroutine
 # counts trend upward. No -race: the detector skews memory and throughput, which is what this test measures.
 # SOAK_TIMEOUT must exceed SOAK_DURATION by at least 10m. Other knobs (SOAK_WARMUP, SOAK_SAMPLE_INTERVAL,
-# SOAK_TXS_PER_CYCLE, SOAK_UTXO_STORE, SOAK_OUTPUT_DIR, SOAK_INJECT_LEAK) are read from the environment.
+# SOAK_TXS_PER_CYCLE, SOAK_UTXO_STORE, SOAK_OUTPUT_DIR, SOAK_INJECT_LEAK and the SOAK_*_TOLERANCE* settings) are
+# read from the environment; see docs/howto/runningTests.md.
 # Example: make soaktest SOAK_DURATION=2h SOAK_TIMEOUT=150m
 SOAK_DURATION ?= 30m
 SOAK_TIMEOUT ?= 60m
@@ -259,7 +283,16 @@ FUZZ_TARGETS = \
 	services/legacy/peer:FuzzReadWireMessage \
 	services/legacy/peer:FuzzStreamingBlockFraming \
 	services/rpc/bsvjson:FuzzParseRPCRequest \
-	services/rpc/bsvjson:FuzzUnmarshalCmd
+	services/rpc/bsvjson:FuzzUnmarshalCmd \
+	util/lane:FuzzDecodeDiskPayload \
+	util/lane:FuzzDecodeHoleData \
+	util/lane:FuzzCheckContainersMatchesValidate \
+	util/lane:FuzzDecodeSubtreePositions \
+	util/lane:FuzzDecodeProofFile \
+	util/lane:FuzzDecodeSubtreeBitmaps \
+	util/lane/backfill:FuzzOpenManifest \
+	stores/utxo/meta:FuzzNewDataFromLaneMetaBytes \
+	stores/utxo/meta:FuzzOwnCacheBytesView
 
 # Per-target budget. The nightly workflow uses 5m; the default here is kept
 # short so `make fuzz` is usable as a pre-push check.
@@ -562,7 +595,7 @@ install-lint:
 # lint will check the changed files in the current branch compared to main, including commits and unstaged/untracked changes
 # It will show new linting errors/warnings, by updating local copy of origin/main with the latest state of the remote main branch.
 .PHONY: lint
-lint: lint-tracing-info
+lint: lint-tracing-info vet-bvgaps
 	git fetch origin main
 	golangci-lint run ./... --new-from-rev origin/main --disable gosec --disable prealloc # TODO: re-enable gosec once gosec >v2.23.0 is released (fixes float constant panic)
 

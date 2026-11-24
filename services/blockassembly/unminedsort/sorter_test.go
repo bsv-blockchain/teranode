@@ -18,9 +18,10 @@ import (
 )
 
 type input struct {
-	createdAt int64
-	node      subtreepkg.Node
-	inpoints  subtreepkg.TxInpoints
+	createdAt       int64
+	node            subtreepkg.Node
+	inpoints        subtreepkg.TxInpoints
+	validatedHeight uint32
 }
 
 func hashOf(i int) chainhash.Hash {
@@ -44,6 +45,7 @@ func makeInputs(n int, withInpoints bool) []input {
 				Fee:         rng.Uint64N(1 << 40),
 				SizeInBytes: 100 + rng.Uint64N(1<<20),
 			},
+			validatedHeight: rng.Uint32(),
 		}
 
 		if withInpoints && i > 0 {
@@ -71,9 +73,10 @@ func expectedOrder(in []input) []int {
 }
 
 type drained struct {
-	createdAt int64
-	node      subtreepkg.Node
-	inpoints  *subtreepkg.TxInpoints
+	createdAt       int64
+	node            subtreepkg.Node
+	inpoints        *subtreepkg.TxInpoints
+	validatedHeight uint32
 }
 
 func drainAll(t *testing.T, s *Sorter, batchSize int) ([]drained, [][]int64) {
@@ -84,10 +87,12 @@ func drainAll(t *testing.T, s *Sorter, batchSize int) ([]drained, [][]int64) {
 		batches [][]int64
 	)
 
-	err := s.Drain(context.Background(), batchSize, func(batch []*utxo.UnminedTransaction) error {
+	err := s.Drain(context.Background(), batchSize, func(batch []*utxo.UnminedTransaction, validatedHeights []uint32) error {
+		require.Len(t, validatedHeights, len(batch), "one validated height per transaction")
+
 		created := make([]int64, 0, len(batch))
-		for _, tx := range batch {
-			out = append(out, drained{createdAt: int64(tx.CreatedAt), node: *tx.Node, inpoints: tx.TxInpoints})
+		for i, tx := range batch {
+			out = append(out, drained{createdAt: int64(tx.CreatedAt), node: *tx.Node, inpoints: tx.TxInpoints, validatedHeight: validatedHeights[i]})
 			created = append(created, int64(tx.CreatedAt))
 		}
 
@@ -109,6 +114,7 @@ func requireOrder(t *testing.T, in []input, out []drained, withInpoints bool) {
 	for pos, i := range want {
 		require.Equal(t, in[i].createdAt, out[pos].createdAt, "createdAt at %d", pos)
 		require.Equal(t, in[i].node, out[pos].node, "node at %d", pos)
+		require.Equal(t, in[i].validatedHeight, out[pos].validatedHeight, "validated height at %d", pos)
 		require.NotNil(t, out[pos].inpoints)
 
 		if withInpoints {
@@ -140,7 +146,7 @@ func addAll(t *testing.T, s *Sorter, in []input, withInpoints bool) {
 			inp = &in[i].inpoints
 		}
 
-		require.NoError(t, s.Add(in[i].createdAt, in[i].node, inp))
+		require.NoError(t, s.Add(in[i].createdAt, in[i].node, inp, in[i].validatedHeight))
 	}
 }
 
@@ -228,6 +234,8 @@ func TestSorter_RunEncodingIsCompact(t *testing.T) {
 	for i := range in {
 		in[i].node.Fee = 50 + uint64(i%1000)
 		in[i].node.SizeInBytes = 200 + uint64(i%500)
+		// A mainnet height, as nearly every transaction has.
+		in[i].validatedHeight = 950_000
 	}
 
 	s, err := New(Options{Dirs: []string{dir}, BufferRecords: 10_000})
@@ -236,6 +244,9 @@ func TestSorter_RunEncodingIsCompact(t *testing.T) {
 	defer s.Close()
 
 	addAll(t, s, in, false)
+
+	// A spill writes in the background; measure the runs once it is done.
+	require.NoError(t, s.waitSpill())
 
 	var total int64
 
@@ -255,8 +266,10 @@ func TestSorter_RunEncodingIsCompact(t *testing.T) {
 	})
 	require.NoError(t, err)
 
+	// About 37 bytes for the timestamp delta, hash, fee and size, plus 3 for a mainnet
+	// validated height.
 	perRecord := float64(total) / float64(len(in)-s.buffered())
-	require.Less(t, perRecord, 40.0)
+	require.Less(t, perRecord, 43.0)
 }
 
 // Every drained tx must get its own TxInpoints: the subtree processor keeps the
@@ -273,7 +286,7 @@ func TestSorter_FreshInpointsPerTx(t *testing.T) {
 	addAll(t, s, in, false)
 
 	seen := make(map[*subtreepkg.TxInpoints]struct{}, len(in))
-	err = s.Drain(context.Background(), 256, func(batch []*utxo.UnminedTransaction) error {
+	err = s.Drain(context.Background(), 256, func(batch []*utxo.UnminedTransaction, _ []uint32) error {
 		for _, tx := range batch {
 			_, dup := seen[tx.TxInpoints]
 			require.False(t, dup, "TxInpoints pointer reused")
@@ -299,7 +312,7 @@ func TestSorter_CallbackErrorAborts(t *testing.T) {
 	boom := errors.NewProcessingError("boom")
 	calls := 0
 
-	err = s.Drain(context.Background(), 100, func([]*utxo.UnminedTransaction) error {
+	err = s.Drain(context.Background(), 100, func([]*utxo.UnminedTransaction, []uint32) error {
 		calls++
 		return boom
 	})
@@ -320,7 +333,7 @@ func TestSorter_ContextCancelAborts(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	err = s.Drain(ctx, 100, func([]*utxo.UnminedTransaction) error { return nil })
+	err = s.Drain(ctx, 100, func([]*utxo.UnminedTransaction, []uint32) error { return nil })
 	require.ErrorIs(t, err, context.Canceled)
 }
 
@@ -355,7 +368,7 @@ func TestSorter_Empty(t *testing.T) {
 	defer s.Close()
 
 	calls := 0
-	require.NoError(t, s.Drain(context.Background(), 10, func([]*utxo.UnminedTransaction) error {
+	require.NoError(t, s.Drain(context.Background(), 10, func([]*utxo.UnminedTransaction, []uint32) error {
 		calls++
 		return nil
 	}))
@@ -375,12 +388,12 @@ func BenchmarkSorter_SpillAndDrain(b *testing.B) {
 		}
 
 		for j := range in {
-			if err := s.Add(in[j].createdAt, in[j].node, nil); err != nil {
+			if err := s.Add(in[j].createdAt, in[j].node, nil, 0); err != nil {
 				b.Fatal(err)
 			}
 		}
 
-		if err := s.Drain(context.Background(), 1<<20, func([]*utxo.UnminedTransaction) error { return nil }); err != nil {
+		if err := s.Drain(context.Background(), 1<<20, func([]*utxo.UnminedTransaction, []uint32) error { return nil }); err != nil {
 			b.Fatal(err)
 		}
 
@@ -452,7 +465,7 @@ func TestSorter_DrainReleasesSpareBuffer(t *testing.T) {
 
 	addAll(t, s, in, false)
 
-	require.NoError(t, s.Drain(context.Background(), 1000, func([]*utxo.UnminedTransaction) error { return nil }))
+	require.NoError(t, s.Drain(context.Background(), 1000, func([]*utxo.UnminedTransaction, []uint32) error { return nil }))
 	require.Nil(t, s.spare)
 }
 
@@ -474,9 +487,9 @@ func TestSorter_AddAndDrainAfterDrain(t *testing.T) {
 
 	defer s.Close()
 
-	require.NoError(t, s.Drain(context.Background(), 10, func([]*utxo.UnminedTransaction) error { return nil }))
-	require.Error(t, s.Add(1, subtreepkg.Node{}, nil), "Add after Drain")
-	require.Error(t, s.Drain(context.Background(), 10, func([]*utxo.UnminedTransaction) error { return nil }), "second Drain")
+	require.NoError(t, s.Drain(context.Background(), 10, func([]*utxo.UnminedTransaction, []uint32) error { return nil }))
+	require.Error(t, s.Add(1, subtreepkg.Node{}, nil, 0), "Add after Drain")
+	require.Error(t, s.Drain(context.Background(), 10, func([]*utxo.UnminedTransaction, []uint32) error { return nil }), "second Drain")
 }
 
 // A spill that can't be written must fail the sorter, not lose the run.
@@ -506,13 +519,13 @@ func TestSorter_SpillWriteFailure(t *testing.T) {
 
 	var addErr error
 	for i := range in {
-		if addErr = s.Add(in[i].createdAt, in[i].node, nil); addErr != nil {
+		if addErr = s.Add(in[i].createdAt, in[i].node, nil, 0); addErr != nil {
 			break
 		}
 	}
 
 	if addErr == nil {
-		addErr = s.Drain(context.Background(), 100, func([]*utxo.UnminedTransaction) error { return nil })
+		addErr = s.Drain(context.Background(), 100, func([]*utxo.UnminedTransaction, []uint32) error { return nil })
 	}
 
 	require.Error(t, addErr)
@@ -539,7 +552,7 @@ func TestSorter_TruncatedRun(t *testing.T) {
 			require.NoError(t, err)
 			require.NoError(t, os.Truncate(s.runs[0], info.Size()-5))
 
-			err = s.Drain(context.Background(), 500, func([]*utxo.UnminedTransaction) error { return nil })
+			err = s.Drain(context.Background(), 500, func([]*utxo.UnminedTransaction, []uint32) error { return nil })
 			require.Error(t, err)
 		})
 	}
@@ -559,7 +572,7 @@ func TestSorter_CorruptInpoints(t *testing.T) {
 		s.cur.arena[i] = 0xFF
 	}
 
-	err = s.Drain(context.Background(), 10, func([]*utxo.UnminedTransaction) error { return nil })
+	err = s.Drain(context.Background(), 10, func([]*utxo.UnminedTransaction, []uint32) error { return nil })
 	require.Error(t, err)
 }
 
@@ -584,7 +597,7 @@ func TestSorter_RunCutAtRecordBoundary(t *testing.T) {
 
 				require.NoError(t, os.Truncate(s.runs[0], keep))
 
-				err = s.Drain(context.Background(), 500, func([]*utxo.UnminedTransaction) error { return nil })
+				err = s.Drain(context.Background(), 500, func([]*utxo.UnminedTransaction, []uint32) error { return nil })
 				require.Error(t, err)
 			})
 		}
@@ -662,7 +675,7 @@ func TestSorter_DrainFailsWhenCountDiffers(t *testing.T) {
 	addAll(t, s, makeInputs(10, false), false)
 	s.spilledCount++ // one transaction that no source holds
 
-	err = s.Drain(context.Background(), 10, func([]*utxo.UnminedTransaction) error { return nil })
+	err = s.Drain(context.Background(), 10, func([]*utxo.UnminedTransaction, []uint32) error { return nil })
 	require.Error(t, err)
 }
 
@@ -690,7 +703,7 @@ func TestSorter_SpillErrorIsSticky(t *testing.T) {
 
 	next := 0
 	for ; next < len(in) && addErr == nil; next++ {
-		addErr = s.Add(in[next].createdAt, in[next].node, nil)
+		addErr = s.Add(in[next].createdAt, in[next].node, nil, 0)
 	}
 
 	require.Error(t, addErr, "the second spill surfaces the first one's failure")
@@ -699,8 +712,8 @@ func TestSorter_SpillErrorIsSticky(t *testing.T) {
 		require.NoError(t, os.Chmod(d, 0o755))
 	}
 
-	require.Error(t, s.Add(in[next].createdAt, in[next].node, nil), "an Add after a failed spill fails too")
-	require.Error(t, s.Drain(context.Background(), 100, func([]*utxo.UnminedTransaction) error { return nil }))
+	require.Error(t, s.Add(in[next].createdAt, in[next].node, nil, 0), "an Add after a failed spill fails too")
+	require.Error(t, s.Drain(context.Background(), 100, func([]*utxo.UnminedTransaction, []uint32) error { return nil }))
 }
 
 // Inpoints are buffered too, so a buffer also spills once its bytes reach what

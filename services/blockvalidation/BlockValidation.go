@@ -248,6 +248,11 @@ type BlockValidation struct {
 	// subtreeStore provides persistent storage for block subtrees
 	subtreeStore blob.Store
 
+	// laneBitmapSlots bounds the lane bitmap reads in flight across every block, those a block
+	// stopped waiting for included (lane_rows.go); laneBitmapReadSlots makes it.
+	laneBitmapSlots     chan struct{}
+	laneBitmapSlotsOnce sync.Once
+
 	// subtreeBlockHeightRetention specifies how long subtrees should be retained
 	subtreeBlockHeightRetention uint32
 
@@ -1595,10 +1600,20 @@ func subtreeAbsent(err error) bool {
 }
 
 // reloadSubtreesForInvalidBlock reloads an invalid block's subtrees from the
-// store. A subtree that is absent or does not parse is left nil, because an
-// invalid block legitimately may not have all of them and a retry cannot bring
-// one back. Any other read failure is returned: it may be transient, and
+// store. Each subtree is read as FileTypeSubtree and then as
+// FileTypeSubtreeToCheck, and the first copy that reads, parses and whose root
+// matches the subtree hash is used. A subtree with no usable copy is left nil,
+// because a retry cannot bring one back: an absent copy stays absent, and a
+// corrupt one (a bad header, a body that does not parse, or a body whose nodes
+// hash to another root) reads the same bytes every time, since the stores
+// write blobs whole. Any other read failure is returned: it may be transient, and
 // skipping it would let the revert finish with that subtree's tags in place.
+//
+// A skipped subtree whose copies were corrupt, not just absent, leaves its
+// transactions tagged with the invalid block, so it is logged with
+// manual_intervention_required and counted in revert_subtree_corrupt_total.
+// Retrying instead would keep the block at mined_set=false and hold block
+// assembly's WaitForPendingBlocks until an operator repaired the file.
 //
 // On that error the subtrees already loaded are closed before returning. They
 // never reach the block, and an mmap-backed subtree has no finalizer, so they
@@ -1619,32 +1634,12 @@ func (u *BlockValidation) reloadSubtreesForInvalidBlock(ctx context.Context, blo
 	}()
 
 	for subtreeIdx, subtreeHash := range block.Subtrees {
-		subtreeBytes, err := u.subtreeStore.Get(ctx, subtreeHash[:], fileformat.FileTypeSubtree)
+		subtree, err := u.reloadSubtreeForInvalidBlock(ctx, block, subtreeIdx, subtreeHash)
 		if err != nil {
-			if !subtreeAbsent(err) {
-				return errors.NewProcessingError("[setTxMined][%s] failed to read subtree %d/%s", block.Hash().String(), subtreeIdx, subtreeHash.String(), err)
-			}
-
-			subtreeBytes, err = u.subtreeStore.Get(ctx, subtreeHash[:], fileformat.FileTypeSubtreeToCheck)
-			if err != nil {
-				if !subtreeAbsent(err) {
-					return errors.NewProcessingError("[setTxMined][%s] failed to read subtree %d/%s", block.Hash().String(), subtreeIdx, subtreeHash.String(), err)
-				}
-
-				u.logger.Warnf("[setTxMined][%s] subtree %d/%s not in store: %s", block.Hash().String(), subtreeIdx, subtreeHash.String(), err)
-				continue
-			}
-		}
-
-		subtree, err := u.newSubtreeFromBytes(subtreeBytes)
-		if err != nil {
-			u.logger.Warnf("[setTxMined][%s] failed to parse subtree %d/%s: %s", block.Hash().String(), subtreeIdx, subtreeHash.String(), err)
-			continue
+			return err
 		}
 
 		reloaded[subtreeIdx] = subtree
-
-		u.logger.Debugf("[setTxMined][%s] loaded subtree %d/%s from store", block.Hash().String(), subtreeIdx, subtreeHash.String())
 	}
 
 	// Built locally and swapped in under the block's mutex. The store reads above
@@ -1654,6 +1649,67 @@ func (u *BlockValidation) reloadSubtreesForInvalidBlock(ctx context.Context, blo
 	block.ReplaceSubtreeSlices(reloaded)
 
 	return nil
+}
+
+// reloadSubtreeForInvalidBlock reads one subtree of an invalid block for the
+// revert, trying FileTypeSubtree and then FileTypeSubtreeToCheck. It returns
+// the first copy that reads, parses and whose root matches subtreeHash, nil
+// with no error when no copy is
+// usable, and an error only for a read failure a retry might clear. See
+// reloadSubtreesForInvalidBlock for the rule.
+func (u *BlockValidation) reloadSubtreeForInvalidBlock(ctx context.Context, block *model.Block, subtreeIdx int, subtreeHash *chainhash.Hash) (*subtreepkg.Subtree, error) {
+	var corrupt []string
+
+	for _, fileType := range []fileformat.FileType{fileformat.FileTypeSubtree, fileformat.FileTypeSubtreeToCheck} {
+		subtreeBytes, err := u.subtreeStore.Get(ctx, subtreeHash[:], fileType)
+		if err != nil {
+			switch {
+			case errors.IsBlobCorrupt(err):
+				corrupt = append(corrupt, fmt.Sprintf("%s: %v", fileType, err))
+				continue
+			case subtreeAbsent(err):
+				continue
+			default:
+				return nil, errors.NewProcessingError("[setTxMined][%s] failed to read subtree %d/%s as %s", block.Hash().String(), subtreeIdx, subtreeHash.String(), fileType, err)
+			}
+		}
+
+		subtree, err := u.newSubtreeFromBytes(subtreeBytes)
+		if err != nil {
+			corrupt = append(corrupt, fmt.Sprintf("%s: failed to parse: %v", fileType, err))
+			continue
+		}
+
+		// The revert unmines the transactions this list names, so it must be the subtree the
+		// block commits to. A copy whose nodes hash to another root is as unusable as one that
+		// does not parse.
+		// ValidateSubtreeNodesMatchKey hashes the node list: a deserialized subtree's RootHash
+		// is the root field stored in the file, which damaged node bytes would leave intact.
+		if err := model.ValidateSubtreeNodesMatchKey(subtree, subtreeHash); err != nil {
+			corrupt = append(corrupt, fmt.Sprintf("%s: %v", fileType, err))
+
+			if closeErr := subtree.Close(); closeErr != nil {
+				u.logger.Warnf("[setTxMined][%s] failed closing mismatched subtree %d/%s: %v", block.Hash().String(), subtreeIdx, subtreeHash.String(), closeErr)
+			}
+
+			continue
+		}
+
+		u.logger.Debugf("[setTxMined][%s] loaded subtree %d/%s from store as %s", block.Hash().String(), subtreeIdx, subtreeHash.String(), fileType)
+
+		return subtree, nil
+	}
+
+	if len(corrupt) == 0 {
+		u.logger.Warnf("[setTxMined][%s] subtree %d/%s not in store", block.Hash().String(), subtreeIdx, subtreeHash.String())
+		return nil, nil
+	}
+
+	prometheusBlockValidationRevertSubtreeCorrupt.Inc()
+
+	u.logger.Errorf("[setTxMined][%s] manual_intervention_required: subtree %d/%s has no usable copy, its transactions keep this invalid block's tag: %s", block.Hash().String(), subtreeIdx, subtreeHash.String(), strings.Join(corrupt, "; "))
+
+	return nil, nil
 }
 
 // setTxMinedStatus marks all transactions within a block as mined in the blockchain system.
@@ -2027,7 +2083,8 @@ func (u *BlockValidation) runOncePerBlock(blockHash *chainhash.Hash, opts *Valid
 //
 // Returns an error if validation fails or nil on success.
 
-// buildAddBlockOpts returns AddBlock options for a block stored by full validation.
+// buildAddBlockOpts returns AddBlock options for a peer block, stored by full validation or by
+// optimistic mining.
 //
 // A block can reach full validation already holding an id: catch-up's quick validation
 // reserves one through AssignBlockID before it can fail locally and fall through here, and a
@@ -2045,15 +2102,22 @@ func (u *BlockValidation) runOncePerBlock(blockHash *chainhash.Hash, opts *Valid
 // aerospike_enable_setmined_filter_expressions on: that path filters out a record already
 // holding the id and only unlocks it.
 //
-// For a block with no id (block.ID == 0) this returns nil and the store assigns one.
-func (u *BlockValidation) buildAddBlockOpts(block *model.Block) []blockchainoptions.StoreBlockOption {
-	if block.ID == 0 {
-		return nil
+// A block with no id (block.ID == 0) gets no WithID, so the store assigns one. The result is nil
+// only when there is no option at all: at shadow it can hold just WithLaneMapRows.
+func (u *BlockValidation) buildAddBlockOpts(ctx context.Context, block *model.Block) []blockchainoptions.StoreBlockOption {
+	var opts []blockchainoptions.StoreBlockOption
+
+	if block.ID != 0 {
+		opts = append(opts, blockchainoptions.WithID(uint64(block.ID)))
 	}
 
-	return []blockchainoptions.StoreBlockOption{
-		blockchainoptions.WithID(uint64(block.ID)),
+	// At utxostore_laneMigration shadow the block's lane map rows, stored in the block's own
+	// transaction; see laneRows.
+	if rows := u.laneRows(ctx, block); rows != nil {
+		opts = append(opts, blockchainoptions.WithLaneMapRows(rows))
 	}
+
+	return opts
 }
 
 func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block, baseURL string, disableOptimisticMining ...bool) error {
@@ -2117,6 +2181,14 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 				if blockMeta != nil && blockMeta.Invalid {
 					ctxLogger.Warnf("[ValidateBlock][%s] block already exists and is marked as invalid", block.Header.Hash().String())
 					return errors.NewBlockInvalidError("[ValidateBlock][%s] block already exists as invalid", block.Header.Hash().String())
+				}
+
+				// A stored valid block can be a fork accepted before the tip passed a
+				// checkpoint above it. It is not validated again, but it is no longer valid.
+				if blockMeta != nil {
+					if err = u.rejectStoredForkBelowCheckpoint(ctx, block.Header, blockMeta.Height); err != nil {
+						return err
+					}
 				}
 
 				ctxLogger.Warnf("[ValidateBlock][%s] tried to validate existing valid block", block.Header.Hash().String())
@@ -2256,14 +2328,21 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 		// and the operator revalidation endpoint carry authoritative heights), so this reads a
 		// trusted height. Run before the (expensive) header/subtree work so a checkpoint-
 		// conflicting block costs nothing. On the catchup path the header was already checked,
-		// so this is a cheap, harmless re-assertion. (Rejecting sub-checkpoint forks at
-		// non-checkpoint heights — the fork-depth rule — is a separate, broader change.)
+		// so this is a cheap, harmless re-assertion. Forks below a checkpoint at non-checkpoint
+		// heights are rejected by rejectForkBelowCheckpoint, right below.
 		if err = catchup.ValidateHeaderAgainstCheckpoints(block.Header, block.Height, u.settings.ChainCfgParams.Checkpoints); err != nil {
 			if !opts.IsRevalidation {
 				u.rejectFinalHeaderVerdict(block, opts.PeerID, baseURL, err.Error())
 			}
 
 			return errors.NewBlockInvalidError("[ValidateBlock][%s] block conflicts with hardcoded checkpoint", block.Hash().String(), err)
+		}
+
+		// Fork-below-checkpoint rule, before any subtree work. The non-optimistic path runs it
+		// again just before the block is stored, in case the tip passes a checkpoint while the
+		// subtrees validate.
+		if err = u.rejectForkBelowCheckpoint(ctx, block, opts, baseURL); err != nil {
+			return err
 		}
 
 		// Use cached headers if available (during catchup), otherwise fetch from blockchain.
@@ -2705,9 +2784,9 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 				ctxLogger.Warnf("[ValidateBlock][%s] failed to compute coinbase BUMP: %v", block.Hash().String(), err)
 			}
 
-			addBlockOpts := u.buildAddBlockOpts(block)
+			addBlockOpts := u.buildAddBlockOpts(ctx, block)
 			if err = u.blockchainClient.AddBlock(ctx, block, opts.PeerID, addBlockOpts...); err != nil {
-				return errors.NewServiceError("[ValidateBlock][%s] failed to store block", block.Hash().String(), err)
+				return u.storeBlockError(block, opts, baseURL, err)
 			}
 
 			ctxLogger.Infof("[ValidateBlock][%s] adding block optimistically to blockchain DONE", block.Hash().String())
@@ -3012,6 +3091,18 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 
 			u.logger.Infof("[ValidateBlock][%s] validating block DONE", block.Hash().String())
 
+			// Re-check the checkpoint fork rule: the tip can pass a checkpoint while the
+			// subtrees validate. Like the store below, it must not fail on a cancelled
+			// parent context after the subtree work is done.
+			recheckCtx, recheckCancel := context.WithTimeout(context.Background(), 30*time.Second)
+			err = u.rejectForkBelowCheckpoint(recheckCtx, block, opts, baseURL)
+			recheckCancel()
+
+			if err != nil {
+				releaseBlockNodes(block)
+				return err
+			}
+
 			// if valid, store the block (or update it if revalidating)
 			u.logger.Infof("[ValidateBlock][%s] adding block to blockchain", block.Hash().String())
 
@@ -3032,6 +3123,12 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 				}
 			} else {
 				// Normal case - add new block
+				// The options are built first, on the caller's context: at utxostore_laneMigration
+				// shadow they read the subtrees' lane bitmaps, for up to laneBitmapReadTimeout, and
+				// that time must not come out of the store's own budget below. A cancelled caller
+				// only leaves the block without lane rows.
+				addBlockOpts := u.buildAddBlockOpts(ctx, block)
+
 				// Use background context for critical database operation
 				// This prevents cascading cancellation from parent operations (e.g., fetch timeouts)
 				// ensuring data consistency by completing the write even if catchup is canceled
@@ -3042,10 +3139,9 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 					u.logger.Warnf("[ValidateBlock][%s] failed to compute coinbase BUMP: %v", block.Hash().String(), err)
 				}
 
-				addBlockOpts := u.buildAddBlockOpts(block)
 				if err = u.blockchainClient.AddBlock(storeCtx, block, opts.PeerID, addBlockOpts...); err != nil {
 					releaseBlockNodes(block)
-					return errors.NewServiceError("[ValidateBlock][%s] failed to store block", block.Hash().String(), err)
+					return u.storeBlockError(block, opts, baseURL, err)
 				}
 			}
 
@@ -3117,10 +3213,38 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 //
 // So the block goes to whichever side removes it from the cache. If this call
 // removes it, it releases it, as the old Delete-then-release did. If the entry is
-// already gone, the setMined worker or the cache's eviction function has it and
-// releases it, and the caller must not touch the block's subtrees again. A block
-// that was never cached (cached false) is still only ValidateBlock's, so it is
-// released directly.
+// already gone, the caller must not touch the block's subtrees again. The setMined
+// worker, the cache's eviction function, or a reclaim call for another object
+// with the same hash may have removed it. Another validation may also have
+// overwritten it. Some worker early returns skip release (a separate cleanup
+// bug). A block that was never cached (cached false) is still only ValidateBlock's,
+// so it is released directly.
+//
+// The cache can also hold a different object for the same hash: a revalidation of
+// the block, or the optimistic-mining goroutine, which runs outside
+// runOncePerBlock, cached its own. Set overwrites without calling the eviction
+// function, so this call cannot tell whether block was replaced while it sat in
+// the cache or the setMined worker took it first and the other object was cached
+// after. The worker may still be reading block's subtrees, so only the object this
+// call removed is released, and block is left as if taken. If it was really
+// replaced, nobody releases it: heap-backed nodes go to the GC, and an mmap-backed
+// subtree keeps its mapping until the process exits and leaves its
+// subtree-nodes-* temp file in blockvalidation_subtreeMmapDir after that, since
+// nothing removes those files at startup. An operator invalidate and reconsider
+// can cache a second object before the worker takes the first, even when the
+// validation calls do not overlap and optimistic mining is disabled. The
+// optimistic-mining goroutine also caches outside runOncePerBlock, so it can
+// overwrite an entry while another validation is still running. An overwrite
+// does not need a failed SetBlockSubtreesSet: if both calls succeed, this helper
+// never runs and an overwritten, untaken block leaks without a warning. A lost
+// reply can instead let the worker take block before the overwrite, in which
+// case the worker owns block.
+// After an overwrite, the other object can itself be taken or evicted before this
+// call, which then finds the entry gone, as if the worker had taken block.
+// A possible leak is the safe side of the trade against tagging another block's
+// hashes. Both exits here that leave block unreleased log at Warn with the block
+// hash and say a leak is possible. These warnings do not trace overwrites on the
+// successful validation path.
 func (u *BlockValidation) reclaimBlockAfterFailedSubtreesSet(block *model.Block, cached bool) bool {
 	if !cached {
 		releaseBlockNodes(block)
@@ -3129,16 +3253,15 @@ func (u *BlockValidation) reclaimBlockAfterFailedSubtreesSet(block *model.Block,
 
 	taken, removed := u.lastValidatedBlocks.GetAndDelete(*block.Hash())
 	if !removed {
-		u.logger.Warnf("[ValidateBlock][%s] block already taken from the validated-blocks cache after a failed subtrees_set, leaving its release to the taker", block.Hash().String())
+		u.logger.Warnf("[ValidateBlock][%s] block already taken from the validated-blocks cache after a failed subtrees_set, leaving its release to the taker; if another validation overwrote it first, its subtrees are never released", block.Hash().String())
 		return false
 	}
 
 	releaseBlockNodes(taken)
 
-	// Another Set for the same hash replaced our entry: ours left the cache without
-	// an owner, so it is still ours to release.
 	if taken != block {
-		releaseBlockNodes(block)
+		u.logger.Warnf("[ValidateBlock][%s] validated-blocks cache held another object for this block after a failed subtrees_set, released that one and left ours to the setMined worker; if no worker took it, its subtrees are never released", block.Hash().String())
+		return false
 	}
 
 	return true
@@ -3254,6 +3377,94 @@ func (u *BlockValidation) storeInvalidBlock(ctx context.Context, block *model.Bl
 	}
 
 	u.kafkaNotifyBlockInvalid(block, reason, peerID, peerURL)
+}
+
+// rejectForkBelowCheckpoint applies bitcoin-sv's bad-fork-prior-to-checkpoint rule
+// (gap-analysis 4697): a block below a checkpoint the tip has already passed is invalid.
+// Such a block is validated at its own height, so below Genesis or Chronicle its txs get
+// the older script rules. Only blocks at or below the highest checkpoint can
+// trip it, so the tip lookup is skipped for every block above it. ValidateBlock runs it
+// before subtree work and, on the non-optimistic path, again just before storing the
+// block, since the tip can pass a checkpoint in between during initial sync. The
+// optimistic path stores the block before any subtree work, right after the first check.
+func (u *BlockValidation) rejectForkBelowCheckpoint(ctx context.Context, block *model.Block, opts *ValidateBlockOptions, baseURL string) error {
+	checkpoints := u.settings.ChainCfgParams.Checkpoints
+	if !model.BelowCheckpoint(checkpoints, block.Height) {
+		return nil
+	}
+
+	_, tipMeta, err := u.blockchainClient.GetBestBlockHeader(ctx)
+	if err != nil {
+		return errors.NewServiceError("[ValidateBlock][%s] failed to get best block header for the checkpoint fork rule", block.Hash().String(), err)
+	}
+
+	if !model.ForkBelowCheckpoint(checkpoints, block.Height, tipMeta.Height) {
+		return nil
+	}
+
+	reason := fmt.Sprintf("bad-fork-prior-to-checkpoint: block height %d is below a checkpoint the tip (height %d) has passed", block.Height, tipMeta.Height)
+
+	if !opts.IsRevalidation {
+		u.rejectFinalHeaderVerdict(block, opts.PeerID, baseURL, reason)
+	}
+
+	return errors.NewBlockInvalidError("[ValidateBlock][%s] %s", block.Hash().String(), reason)
+}
+
+// storeBlockError returns the error for a failed AddBlock. The store rejects a fork below a
+// checkpoint the best block has passed as BlockInvalid, under its own lock, so it catches a tip
+// that passes the checkpoint after rejectForkBelowCheckpoint ran. That is a verdict on the block:
+// it is sent to p2p like rejectForkBelowCheckpoint's and returned as BlockInvalid. Any other
+// failure is this node's own.
+func (u *BlockValidation) storeBlockError(block *model.Block, opts *ValidateBlockOptions, baseURL string, err error) error {
+	if errors.Is(err, errors.ErrBlockInvalid) {
+		if !opts.IsRevalidation {
+			u.rejectFinalHeaderVerdict(block, opts.PeerID, baseURL, err.Error())
+		}
+
+		return errors.NewBlockInvalidError("[ValidateBlock][%s] the store rejected the block", block.Hash().String(), err)
+	}
+
+	return errors.NewServiceError("[ValidateBlock][%s] failed to store block", block.Hash().String(), err)
+}
+
+// rejectStoredForkBelowCheckpoint applies the checkpoint fork rule to a block already stored as
+// valid at height: one below a checkpoint the tip has passed that is not the main-chain block
+// at its height is a fork, and is refused. A main-chain block there is an ancestor of the
+// checkpoint and passes. Nothing is persisted and no peer is struck: the block was valid when
+// it was stored.
+func (u *BlockValidation) rejectStoredForkBelowCheckpoint(ctx context.Context, header *model.BlockHeader, height uint32) error {
+	checkpoints := u.settings.ChainCfgParams.Checkpoints
+	if !model.BelowCheckpoint(checkpoints, height) {
+		return nil
+	}
+
+	_, tipMeta, err := u.blockchainClient.GetBestBlockHeader(ctx)
+	if err != nil {
+		return errors.NewServiceError("[ValidateBlock][%s] failed to get best block header for the checkpoint fork rule", header.Hash().String(), err)
+	}
+
+	if !model.ForkBelowCheckpoint(checkpoints, height, tipMeta.Height) {
+		return nil
+	}
+
+	// The block's own id, then whether that id is on the main chain. Height alone does not
+	// say: the store keeps fork blocks at the same heights.
+	ids, err := u.blockchainClient.GetBlockHeaderIDs(ctx, header.Hash(), 1)
+	if err != nil || len(ids) == 0 {
+		return errors.NewServiceError("[ValidateBlock][%s] failed to get the block id for the checkpoint fork rule", header.Hash().String(), err)
+	}
+
+	onMainChain, err := u.blockchainClient.CheckBlockIsInCurrentChain(ctx, ids[:1])
+	if err != nil {
+		return errors.NewServiceError("[ValidateBlock][%s] failed to check the block is on the main chain for the checkpoint fork rule", header.Hash().String(), err)
+	}
+
+	if onMainChain {
+		return nil
+	}
+
+	return errors.NewBlockInvalidError("[ValidateBlock][%s] bad-fork-prior-to-checkpoint: stored block at height %d is below a checkpoint the tip (height %d) has passed and is not on the main chain", header.Hash().String(), height, tipMeta.Height)
 }
 
 // rejectFinalHeaderVerdict handles a FINAL verdict reached before the body is bound to the
@@ -3886,6 +4097,27 @@ func (u *BlockValidation) reValidateBlock(ctx context.Context, blockData revalid
 	// Server.deriveBlockHeight). No storeInvalidBlock: this is a revalidation path.
 	if err := catchup.ValidateHeaderAgainstCheckpoints(blockData.block.Header, blockData.block.Height, u.settings.ChainCfgParams.Checkpoints); err != nil {
 		return errors.NewBlockInvalidError("[reValidateBlock][%s] block conflicts with hardcoded checkpoint", blockData.block.Hash().String(), err)
+	}
+
+	// The checkpoint fork rule, before the subtree work below, as ValidateBlockWithOptions
+	// applies it. A revalidation: no verdict is sent for it. The optimistic paths queue blocks
+	// they already stored, and height alone does not tell a stored main-chain block, an
+	// ancestor of the checkpoint, from a fork.
+	if model.BelowCheckpoint(u.settings.ChainCfgParams.Checkpoints, blockData.block.Height) {
+		stored, err := u.blockchainClient.GetBlockExists(ctx, blockData.block.Hash())
+		if err != nil {
+			return errors.NewServiceError("[reValidateBlock][%s] failed to check whether the block is stored for the checkpoint fork rule", blockData.block.Hash().String(), err)
+		}
+
+		if stored {
+			err = u.rejectStoredForkBelowCheckpoint(ctx, blockData.block.Header, blockData.block.Height)
+		} else {
+			err = u.rejectForkBelowCheckpoint(ctx, blockData.block, &ValidateBlockOptions{IsRevalidation: true}, blockData.baseURL)
+		}
+
+		if err != nil {
+			return err
+		}
 	}
 
 	// The header hash must meet the target its own nBits declares, below checkpoint or not

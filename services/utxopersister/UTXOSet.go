@@ -825,6 +825,8 @@ func (us *UTXOSet) CreateUTXOSet(ctx context.Context, c *consolidator) (err erro
 				recordsRead++
 				utxosRead += uint64(len(utxoWrapper.UTXOs))
 
+				c.recordDone()
+
 				// Filter UTXOs based on the deletions map
 				utxoWrapper.UTXOs = filterUTXOs(utxoWrapper.UTXOs, c.deletions, &utxoWrapper.TxID)
 
@@ -851,6 +853,8 @@ func (us *UTXOSet) CreateUTXOSet(ctx context.Context, c *consolidator) (err erro
 	sortedAdditions := c.getSortedUTXOWrappers()
 
 	for _, utxoWrapper := range sortedAdditions {
+		c.recordDone()
+
 		// Filter UTXOs based on the deletions map
 		utxoWrapper.UTXOs = filterUTXOs(utxoWrapper.UTXOs, c.deletions, &utxoWrapper.TxID)
 

@@ -85,7 +85,7 @@ func (v *Validator) PublishTxMeta(txMeta *meta.Data, txHash *chainhash.Hash, inB
 
 	txMeta.InBlock = inBlock
 
-	if err := v.sendTxMetaToKafka(txMeta, txHash); err != nil {
+	if err := v.sendTxMetaToKafka(txMeta, txHash, nil); err != nil {
 		v.logger.Errorf("[PublishTxMeta][%s] failed to serialize/enqueue txmeta for kafka: %v", txHash, err)
 	}
 }

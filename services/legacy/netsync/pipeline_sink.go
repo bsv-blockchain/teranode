@@ -509,8 +509,10 @@ func (sm *SyncManager) convertStreamedBlock(hash chainhash.Hash, header *wire.Bl
 	// universal "assign server-side" convention. Below the checkpoint,
 	// quickValidateBlock assigns it and does the UTXO create/spend the record
 	// carries no other way to do. Above it, buildAddBlockOpts
-	// (services/blockvalidation/BlockValidation.go) returns nil for a zero ID
-	// and AddBlock behaves exactly as it does for any other peer-fetched block,
+	// (services/blockvalidation/BlockValidation.go) adds no WithID for a zero ID,
+	// so the store assigns one; at utxostore_laneMigration shadow its options can
+	// still hold the block's lane rows. AddBlock behaves exactly as it does for any
+	// other peer-fetched block,
 	// which is never pre-assigned one either — see Step 1's finding in the task
 	// report for the file:line evidence.
 	verified, err := model.NewBlock(modelHeader, coinbase, subtreeHashPointers, stream.TxCount(), uint64(n), height, 0)

@@ -36,6 +36,25 @@ type querier interface {
 // so the store-agnostic conformance suite in stores/utxo/tests applies to it unchanged.
 // That suite is the specification: M1 is complete when it passes.
 type Store struct {
+	utxo.LanePositions
+
+	// laneColumn is whether this database has lane_position, read once at open. Without it the
+	// store runs the statements main runs and writes no position. See openLaneColumns.
+	laneColumn bool
+
+	// laneParentColumn is whether this database also has parent_lane_positions on tx_ident,
+	// tx_mined and preserved_parent, and laneCoinColumn whether it has lane_position on utxo and
+	// spend_journal; both need laneColumn. They are read once at open, at any step, because the
+	// copies follow the columns: teranode-cli prepare-lane-schema installs them, and opening the
+	// store never adds them. See openLaneCopyColumns.
+	laneParentColumn bool
+	laneCoinColumn   bool
+
+	// laneShadow is whether lane positions are on (utxostore_laneMigration shadow or later). Only
+	// then does ParentOutputsForValidation read each parent's own position, and does the store
+	// count lane position coverage.
+	laneShadow bool
+
 	logger   ulogger.Logger
 	settings *settings.Settings
 	pool     *pgxpool.Pool
@@ -234,6 +253,14 @@ var poolTracer pgx.QueryTracer
 // which surfaces as a baffling "unrecognized configuration parameter" against the wrong
 // host. So normalise it here, at the one place that owns the connection.
 func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, storeURL *url.URL) (*Store, error) {
+	// A stamping step this build does not implement is refused before any connection, so a tool
+	// that opens the store without the daemon never adds the lane columns for it.
+	if tSettings.UtxoStore.LaneMigration.Stamps() {
+		if err := settings.CheckLaneMigration(tSettings.UtxoStore.LaneMigration); err != nil {
+			return nil, err
+		}
+	}
+
 	dsn := *storeURL
 	if dsn.Scheme == "utxoset" {
 		dsn.Scheme = "postgres"
@@ -321,6 +348,9 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 		utxoIndexDecider: utxoIndexNeedsRebuild,
 		seeding:          seeding}
 
+	s.NameLaneBurns(laneStoreName)
+	s.NameLaneReturns(laneStoreName)
+
 	if seeding {
 		logger.Warnf("[utxoset] seeding mode is on (seeding=true on the store URL): seeded creates write coins only, with their block height and no containment or identity row. Use it only for a seed from a UTXO snapshot, never for a running node")
 	}
@@ -375,6 +405,25 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 	if err := CreateSchema(ctx, pool); err != nil {
 		pool.Close()
 		return nil, errors.NewStorageError("[utxoset] create schema", err)
+	}
+
+	laneColumn, err := openLaneColumns(ctx, pool, tSettings.UtxoStore.LaneMigration.Stamps())
+	if err != nil {
+		pool.Close()
+		return nil, errors.NewStorageError("[utxoset] lane position columns", err)
+	}
+
+	s.laneColumn = laneColumn
+	s.laneShadow = tSettings.UtxoStore.LaneMigration.Stamps()
+
+	if s.laneParentColumn, s.laneCoinColumn, err = openLaneCopyColumns(ctx, pool, laneColumn); err != nil {
+		pool.Close()
+		return nil, errors.NewStorageError("[utxoset] lane copy columns", err)
+	}
+
+	if s.laneShadow && (!s.laneParentColumn || !s.laneCoinColumn) {
+		logger.Warnf("[utxoset] lane positions are on but the lane schema is not fully installed (parent_lane_positions %t, utxo and spend_journal lane_position %t): records go without the missing copies, counted in teranode_lane_record_positions_total and teranode_lane_spend_positions_total; run teranode-cli prepare-lane-schema with the node stopped to install them",
+			s.laneParentColumn, s.laneCoinColumn)
 	}
 
 	if err := s.loadOldestUndoLeaf(ctx); err != nil {

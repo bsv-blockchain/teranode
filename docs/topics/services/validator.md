@@ -375,6 +375,8 @@ If parent transactions cannot be found during the extension process:
 - Provides clear error message indicating which parent transaction is missing
 - Client can retry after ensuring parent transactions are validated/confirmed
 
+One exception applies to mempool submission only (`InBlock` false). When every parent is absent and the transaction's own record is mined on the current chain, the validator returns that record and reports success. DAH eviction or a lost UTXO partition causes this case. The record must not be conflicting, locked or creating. It must list exactly the transaction's inputs, so a UTXO-set snapshot record from the seeder or seedimport never qualifies. Block id 0 is ignored, because the seeder uses it as a placeholder. A store or blockchain fault during that check returns `ErrTxMissingParent` with a wrapped `STORAGE_ERROR` or `SERVICE_UNAVAILABLE`.
+
 **Common scenarios requiring parent transactions:**
 
 - **Child-pays-for-parent (CPFP)**: Transaction chains where child hasn't been validated yet

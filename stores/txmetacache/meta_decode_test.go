@@ -7,6 +7,7 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-subtree"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
+	"github.com/bsv-blockchain/teranode/util/lane"
 	"github.com/stretchr/testify/require"
 )
 
@@ -98,4 +99,36 @@ func FuzzDecodeCachedMeta(f *testing.F) {
 	f.Fuzz(func(t *testing.T, b []byte) {
 		checkDecodeMatchesReference(t, b)
 	})
+}
+
+// The cache form carries the own lane position after the inpoints; plain MetaBytes carry none.
+func TestDecodeCachedMeta_ReadsTheOwnLanePosition(t *testing.T) {
+	for name, d := range map[string]*meta.Data{
+		"with parents": {
+			Fee:          9,
+			SizeInBytes:  10,
+			TxInpoints:   subtree.NewTxInpointsFromPacked([]chainhash.Hash{{1}, {2}}, []uint32{1, 0, 2, 3, 4}),
+			LanePosition: lane.Pack(7, 123),
+		},
+		"coinbase, no parents": {IsCoinbase: true, LanePosition: lane.Pack(254, 1)},
+	} {
+		t.Run(name, func(t *testing.T) {
+			cached, err := d.CacheBytes()
+			require.NoError(t, err)
+
+			parents, vouts := metaArenaNeed(cached)
+			m, _, _, err := decodeCachedMeta(cached, make([]chainhash.Hash, parents), make([]uint32, vouts))
+			require.NoError(t, err)
+			require.Equal(t, d.LanePosition, m.LanePosition)
+			require.Equal(t, d.Fee, m.Fee)
+
+			legacy, err := d.MetaBytes()
+			require.NoError(t, err)
+
+			parents, vouts = metaArenaNeed(legacy)
+			m, _, _, err = decodeCachedMeta(legacy, make([]chainhash.Hash, parents), make([]uint32, vouts))
+			require.NoError(t, err)
+			require.Zero(t, m.LanePosition)
+		})
+	}
 }

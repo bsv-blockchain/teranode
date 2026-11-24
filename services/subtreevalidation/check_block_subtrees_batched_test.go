@@ -41,10 +41,21 @@ var opTrue = bscript.NewFromBytes([]byte{0x51})
 type countingStore struct {
 	utxo.Store
 	multiCalls atomic.Int64
+
+	// callers are the callers the lists named, in order.
+	mu      sync.Mutex
+	callers []utxo.Caller
 }
 
 func (c *countingStore) SpendAndCreateMulti(ctx context.Context, txs []*bt.Tx, blockHeight uint32, opts ...utxo.CreateOption) ([]utxo.SpendAndCreateMultiResult, error) {
 	c.multiCalls.Add(1)
+
+	if options, err := utxo.ParseCreateOptions(opts...); err == nil {
+		c.mu.Lock()
+		c.callers = append(c.callers, options.Caller)
+		c.mu.Unlock()
+	}
+
 	return c.Store.SpendAndCreateMulti(ctx, txs, blockHeight, opts...)
 }
 
@@ -117,7 +128,7 @@ func newBatchedFixture(t *testing.T, state blockchain.FSMStateType) *batchedFixt
 	localClient, err := blockchain.NewLocalClient(logger, tSettings, &blockchainstore.MockStore{}, subtreeStore, base)
 	require.NoError(t, err)
 
-	blockchainClient := &fsmStateOverrideClient{ClientI: localClient, state: state}
+	blockchainClient := &fsmStateOverrideClient{ClientI: localClient, state: state, tipHeight: batchedTestHeight - 1}
 
 	txmeta := kafka.NewKafkaAsyncProducerMockWithBuffer(10_000)
 
@@ -347,6 +358,12 @@ func TestCheckBlockSubtreesBatched_WritesThroughSpendAndCreateMulti(t *testing.T
 
 	require.NoError(t, checkBlock(t, f, storeBlock(t, f, txs, false)))
 	require.Positive(t, f.store.multiCalls.Load(), "catch-up above the checkpoint must take the batch path")
+
+	f.store.mu.Lock()
+	for i, c := range f.store.callers {
+		require.Equal(t, utxo.CallerSubtreeValidation, c, "list %d names subtree validation for the burned lane position counter", i)
+	}
+	f.store.mu.Unlock()
 
 	requireCreatedUnmined(t, f, txs)
 

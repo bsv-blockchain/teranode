@@ -37,6 +37,7 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	spendpkg "github.com/bsv-blockchain/teranode/stores/utxo/spend"
+	"github.com/bsv-blockchain/teranode/util/lane"
 	"github.com/bsv-blockchain/teranode/util/uaerospike"
 	"github.com/vmihailenco/msgpack/v5"
 )
@@ -78,62 +79,6 @@ func encodeNativeOpPayload(subOp uint8, args []any) ([]byte, error) {
 	return msgpack.Marshal([]any{subOp, args})
 }
 
-// encodeAddDeletedChildrenPayload writes the addDeletedChildren native-op
-// payload directly. The bytes are identical to
-// encodeNativeOpPayload(subOpAddDeletedChildren, []any{hexHashes}), where
-// hexHashes holds each child's chainhash.Hash.String(): one argument, a list of
-// 64-character hex txids in display (byte-reversed) order. Writing them here
-// avoids the hex strings, the []any boxing and msgpack's reflection, which were
-// ~7% of the pruner's CPU at 2M deletes/s. TestEncodeAddDeletedChildrenPayload
-// pins the equality.
-func encodeAddDeletedChildrenPayload(children []*chainhash.Hash) []byte {
-	const hexDigits = "0123456789abcdef"
-
-	const hexLen = chainhash.HashSize * 2
-
-	// fixarray(2) + uint8(subOp) + fixarray(1) + array header (up to 5 bytes)
-	// + per child: str8 header (2 bytes) + 64 hex digits.
-	buf := make([]byte, 0, 1+2+1+5+len(children)*(2+hexLen))
-
-	buf = append(buf, 0x92, 0xcc, subOpAddDeletedChildren, 0x91)
-
-	switch n := len(children); {
-	case n < 16:
-		buf = append(buf, 0x90|byte(n))
-	case n <= 0xffff:
-		buf = append(buf, 0xdc, byte(n>>8), byte(n))
-	default:
-		buf = append(buf, 0xdd, byte(n>>24), byte(n>>16), byte(n>>8), byte(n))
-	}
-
-	for _, h := range children {
-		buf = append(buf, 0xd9, hexLen)
-
-		for i := chainhash.HashSize - 1; i >= 0; i-- {
-			buf = append(buf, hexDigits[h[i]>>4], hexDigits[h[i]&0x0f])
-		}
-	}
-
-	return buf
-}
-
-// prunerAddDeletedChildrenRecord builds the pruner's per-parent
-// addDeletedChildren record. On the native path it encodes the payload directly
-// with encodeAddDeletedChildrenPayload; on the UDF path it builds the same
-// single list-of-hex-strings argument teranodeBatchRecord would.
-func (s *Store) prunerAddDeletedChildrenRecord(policy *aerospike.BatchUDFPolicy, key *aerospike.Key, children []*chainhash.Hash) aerospike.BatchRecordIfc {
-	if s.useNativeForSubOp(subOpAddDeletedChildren) {
-		return s.nativeOpBatchWrite(policy, key, encodeAddDeletedChildrenPayload(children))
-	}
-
-	hexHashes := make([]interface{}, len(children))
-	for i, h := range children {
-		hexHashes[i] = h.String()
-	}
-
-	return s.teranodeBatchUDFRecord(policy, LuaPackage, key, "addDeletedChildren", []any{hexHashes})
-}
-
 // useNativeForSubOp decides whether a given mod-teranode sub-op may use the
 // native operate-path. It requires the setting+capability flag, and additionally
 // FENCES unspend (subOpUnspend) to the UDF/Lua path regardless of the flag.
@@ -150,8 +95,32 @@ func (s *Store) prunerAddDeletedChildrenRecord(policy *aerospike.BatchUDFPolicy,
 // ProcessConflicting / catchup path, so unspend stays on the UDF path. An
 // ownership-rejection probe analogous to the spend probe could un-fence it in
 // a follow-up once that scenario is exercised end-to-end.
+//
+// The sub-ops that carry replay protection are fenced separately, on the
+// outcome of probeNativeReplayProtection rather than for everyone: spendMulti
+// and the single-output spend must consult the replay marker, report idempotent
+// matches and record and report each spend's height. addDeletedChildren, which
+// nothing in production calls, stays fenced with them. A fork build that passes
+// the first-seen probe but predates those semantics keeps the native path for
+// every other sub-op and runs these three through the UDF. Those other sub-ops
+// do not read the spend heights, which live in their own bin, so an older
+// dispatcher serves them correctly.
 func (s *Store) useNativeForSubOp(subOp uint8) bool {
-	return s.useNativeTeranodeOps.Load() && subOp != subOpUnspend
+	if !s.useNativeTeranodeOps.Load() || subOp == subOpUnspend {
+		return false
+	}
+
+	if isReplayProtectionSubOp(subOp) {
+		return s.nativeReplayProtection.Load()
+	}
+
+	return true
+}
+
+// isReplayProtectionSubOp reports whether subOp carries replay-protection
+// semantics that only probeNativeReplayProtection can vouch for.
+func isReplayProtectionSubOp(subOp uint8) bool {
+	return subOp == subOpSpendMulti || subOp == subOpSpend || subOp == subOpAddDeletedChildren
 }
 
 // useNativeMarkLongestChain reports whether MarkTransactionsOnLongestChain sends native sub-op 14.
@@ -254,6 +223,11 @@ func (s *Store) demoteNativeOnUnsupported(err error) {
 	}
 
 	if hasResultCode(err, types.PARAMETER_ERROR) && s.useNativeTeranodeOps.CompareAndSwap(true, false) {
+		// Clear the replay-protection verdict too. useNativeForSubOp checks
+		// useNativeTeranodeOps first, so this is not load-bearing today, but a
+		// stale true would re-arm the fenced sub-ops if that order ever changed.
+		s.nativeReplayProtection.Store(false)
+		s.publishNativeRouting()
 		s.logger.Errorf("[teranode-native-op] server rejected a native op with PARAMETER_ERROR; demoting to the UDF path for the rest of this process")
 	}
 }
@@ -602,6 +576,13 @@ func (s *Store) detectNativeTeranodeOpSupport(ctx context.Context) bool {
 			return false
 		}
 
+		// First-seen enforcement is not the only semantics spendMulti carries.
+		// The pruner's replay marker and the idempotent-match report are both
+		// enforced in teranode.lua, and neither is exercised above. A dispatcher
+		// that fails this keeps the native path for every other sub-op; only the
+		// replay-protection sub-ops are fenced (useNativeForSubOp).
+		s.recordReplayProtection(s.probeNativeReplayProtectionVerdict(ctx, policy))
+
 		return true
 	}
 
@@ -647,86 +628,15 @@ func (s *Store) probeNativeSpendSemantics(ctx context.Context, policy *aerospike
 		return false
 	}
 
-	lockingScript, scriptErr := bscript.NewFromHexString("76a914000000000000000000000000000000000000000088ac")
-	if scriptErr != nil {
-		s.logger.Warnf("[teranode-native-op] spend probe script build failed: %v; falling back to UDF path", scriptErr)
+	key, utxoHashes, cleanup, built := s.buildProbeRecord(policy, "spend probe", probeBlockHeight, probeVout)
+	if !built {
 		return false
 	}
 
-	tx := bt.NewTx()
-	tx.Outputs = append(tx.Outputs, &bt.Output{
-		// Per-process entropy → unique txid → unique record key, so two
-		// instances probing the same cluster never interleave on one record.
-		Satoshis:      (uint64(os.Getpid())<<32 | uint64(time.Now().UnixNano())&0xFFFFFFFF) | 1,
-		LockingScript: lockingScript,
-	})
-
-	txHash := tx.TxIDChainHash()
-
-	utxoHashes, hashErr := utxo.GetUtxoHashes(tx, txHash)
-	if hashErr != nil || len(utxoHashes) != 1 {
-		s.logger.Warnf("[teranode-native-op] spend probe utxo hash failed (%v, %d hashes); falling back to UDF path", hashErr, len(utxoHashes))
-		return false
-	}
-
-	bins, binsErr := s.GetBinsToStore(tx, probeBlockHeight, nil, nil, nil, false, txHash, false, false, false, nil)
-	if binsErr != nil || len(bins) != 1 {
-		s.logger.Warnf("[teranode-native-op] spend probe record build failed (%v, %d batches); falling back to UDF path", binsErr, len(bins))
-		return false
-	}
-
-	key, keyErr := aerospike.NewKey(s.namespace, s.setName, uaerospike.CalculateKeySource(txHash, probeVout, s.utxoBatchSize))
-	if keyErr != nil {
-		s.logger.Warnf("[teranode-native-op] spend probe key creation failed: %v; falling back to UDF path", keyErr)
-		return false
-	}
-
-	if putErr := s.client.PutBins(policy, key, bins[0]...); putErr != nil {
-		s.logger.Warnf("[teranode-native-op] spend probe record setup failed: %v; falling back to UDF path", putErr)
-		return false
-	}
-	defer func() {
-		_, _ = s.client.Delete(policy, key)
-	}()
+	defer cleanup()
 
 	spendOnce := func(spendingData *spendpkg.SpendingData) (*LuaMapResponse, bool) {
-		if ctx.Err() != nil {
-			s.logger.Warnf("[teranode-native-op] spend probe aborted by context: %v; falling back to UDF path", ctx.Err())
-			return nil, false
-		}
-
-		items := []aerospike.MapValue{aerospike.NewMapValue(map[any]any{
-			"idx":          0,
-			"offset":       s.calculateOffsetForOutput(probeVout),
-			"vOut":         probeVout,
-			"utxoHash":     utxoHashes[0][:],
-			"spendingData": spendingData.Bytes(),
-		})}
-
-		payload, encErr := encodeNativeOpPayload(subOpSpendMulti, []any{
-			items, false, false, probeBlockHeight, s.settings.GetUtxoStoreBlockHeightRetention(),
-		})
-		if encErr != nil {
-			s.logger.Warnf("[teranode-native-op] spend probe payload encode failed: %v; falling back to UDF path", encErr)
-			return nil, false
-		}
-
-		rec, opErr := s.client.Operate(policy, key, aerospike.TeranodeModifyOp(nativeOpResultBin, payload))
-		if opErr != nil {
-			s.logger.Warnf("[teranode-native-op] spend probe operate failed: %v; falling back to UDF path", opErr)
-			return nil, false
-		}
-		if rec == nil || rec.Bins == nil || rec.Bins[nativeOpResultBin] == nil {
-			s.logger.Warnf("[teranode-native-op] spend probe returned no %q bin; %s; falling back to UDF path", nativeOpResultBin, describeAerospikeRecord(rec))
-			return nil, false
-		}
-
-		res, parseErr := s.ParseLuaMapResponse(rec.Bins[nativeOpResultBin])
-		if parseErr != nil {
-			s.logger.Warnf("[teranode-native-op] spend probe returned unparsable response (value %s): %v; falling back to UDF path", describeAerospikeValue(rec.Bins[nativeOpResultBin]), parseErr)
-			return nil, false
-		}
-		return res, true
+		return s.nativeProbeSpend(ctx, policy, "spend probe", key, utxoHashes[0], spendingData, probeBlockHeight, probeVout)
 	}
 
 	firstRes, ok := spendOnce(spendpkg.NewSpendingData(&chainhash.Hash{0x01}, 0))
@@ -748,18 +658,19 @@ func (s *Store) probeNativeSpendSemantics(ctx context.Context, policy *aerospike
 		return false
 	}
 
-	spentRejected := secondRes.ErrorCode == LuaErrorCodeSpent
-	for _, e := range secondRes.Errors {
-		if e.ErrorCode == LuaErrorCodeSpent {
-			spentRejected = true
-		}
-	}
-	if !spentRejected {
+	if !rejectsWith(secondRes, LuaErrorCodeSpent) {
 		s.logger.Warnf("[teranode-native-op] spend probe double-spend rejected with wrong error (%+v), want %s; falling back to UDF path", secondRes, LuaErrorCodeSpent)
 		return false
 	}
 
 	return true
+}
+
+// nativeSupportProbes are the start-up probes initNativeTeranodeOps runs: the
+// native opcode and spend semantics (which record the replay-protection verdict),
+// then an independent longest-chain probe gated on that first result.
+type nativeSupportProbes struct {
+	ops, markLongestChain func(ctx context.Context) bool
 }
 
 // initNativeTeranodeOps caches the native-op decision on the store and
@@ -771,9 +682,18 @@ func (s *Store) probeNativeSpendSemantics(ctx context.Context, policy *aerospike
 // client only reads from this policy during BatchOperate, so concurrent reads
 // from many goroutines are safe. Do NOT mutate the policy after this call.
 func (s *Store) initNativeTeranodeOps(ctx context.Context) {
-	supported := s.detectNativeTeranodeOpSupport(ctx)
+	probes := nativeSupportProbes{
+		ops:              s.detectNativeTeranodeOpSupport,
+		markLongestChain: s.detectNativeMarkLongestChainSupport,
+	}
+
+	if s.nativeProbes != nil {
+		probes = *s.nativeProbes
+	}
+
+	supported := probes.ops(ctx)
 	s.useNativeTeranodeOps.Store(supported)
-	s.useNativeMarkLongestChain.Store(supported && s.detectNativeMarkLongestChainSupport(ctx))
+	s.useNativeMarkLongestChain.Store(supported && probes.markLongestChain(ctx))
 	s.nativeOpBatchWritePolicy = aerospike.NewBatchWritePolicy()
 	// UPDATE_ONLY: a mod-teranode invocation must never create a record. On
 	// the UDF path a missing key runs the Lua function against no record and
@@ -789,4 +709,420 @@ func (s *Store) initNativeTeranodeOps(ctx context.Context) {
 	} else if supported {
 		s.logger.Infof("[teranode-native-op] enabled (op type 200, sub_op_id wire format)")
 	}
+
+	s.publishNativeRouting()
+}
+
+// buildProbeRecord writes a throwaway single-UTXO record through the production
+// GetBinsToStore path, so a probe exercises exactly the record layout real
+// transactions get. Returns the record's key, its UTXO hashes, and a cleanup
+// that removes it; the 60s TTL on the probe policy bounds residue if that fails.
+//
+// The synthetic transaction's satoshi value carries per-process entropy, so its
+// txid and therefore its record key are unique and two instances booting against
+// one cluster never contend on the same probe record.
+func (s *Store) buildProbeRecord(policy *aerospike.WritePolicy, label string, blockHeight uint32, vout uint32) (*aerospike.Key, []*chainhash.Hash, func(), bool) {
+	noop := func() {}
+
+	if s.utxoBatchSize <= 0 {
+		s.logger.Warnf("[teranode-native-op] %s skipped: invalid utxoBatchSize %d; falling back to UDF path", label, s.utxoBatchSize)
+		return nil, nil, noop, false
+	}
+
+	lockingScript, scriptErr := bscript.NewFromHexString("76a914000000000000000000000000000000000000000088ac")
+	if scriptErr != nil {
+		s.logger.Warnf("[teranode-native-op] %s script build failed: %v; falling back to UDF path", label, scriptErr)
+		return nil, nil, noop, false
+	}
+
+	tx := bt.NewTx()
+	tx.Outputs = append(tx.Outputs, &bt.Output{
+		Satoshis:      (uint64(os.Getpid())<<32 | uint64(time.Now().UnixNano())&0xFFFFFFFF) | 1,
+		LockingScript: lockingScript,
+	})
+
+	txHash := tx.TxIDChainHash()
+
+	utxoHashes, hashErr := utxo.GetUtxoHashes(tx, txHash)
+	if hashErr != nil || len(utxoHashes) != 1 {
+		s.logger.Warnf("[teranode-native-op] %s utxo hash failed (%v, %d hashes); falling back to UDF path", label, hashErr, len(utxoHashes))
+		return nil, nil, noop, false
+	}
+
+	bins, binsErr := s.GetBinsToStore(tx, blockHeight, nil, nil, nil, false, txHash, false, false, false, lane.None, nil)
+	if binsErr != nil || len(bins) != 1 {
+		s.logger.Warnf("[teranode-native-op] %s record build failed (%v, %d batches); falling back to UDF path", label, binsErr, len(bins))
+		return nil, nil, noop, false
+	}
+
+	key, keyErr := aerospike.NewKey(s.namespace, s.setName, uaerospike.CalculateKeySource(txHash, vout, s.utxoBatchSize))
+	if keyErr != nil {
+		s.logger.Warnf("[teranode-native-op] %s key creation failed: %v; falling back to UDF path", label, keyErr)
+		return nil, nil, noop, false
+	}
+
+	if putErr := s.client.PutBins(policy, key, bins[0]...); putErr != nil {
+		s.logger.Warnf("[teranode-native-op] %s record setup failed: %v; falling back to UDF path", label, putErr)
+		return nil, nil, noop, false
+	}
+
+	return key, utxoHashes, func() { _, _ = s.client.Delete(policy, key) }, true
+}
+
+// probeSpendIdx is the batch index the probe gives its one spend. It is deliberately not 0:
+// the probe record's offset and vOut are both 0, and a dispatcher that reports a match or an
+// error under the offset or the vout instead of the idx would otherwise read as correct. The
+// store keys everything a spendMulti reports by this idx, so the probe has to tell them apart.
+const probeSpendIdx = 7
+
+// probeSpendItem builds the probe's one spend item. Its idx differs from its offset and vOut.
+func (s *Store) probeSpendItem(utxoHash *chainhash.Hash, spendingData *spendpkg.SpendingData, vout uint32) aerospike.MapValue {
+	return aerospike.NewMapValue(map[any]any{
+		"idx":          probeSpendIdx,
+		"offset":       s.calculateOffsetForOutput(vout),
+		"vOut":         vout,
+		"utxoHash":     utxoHash[:],
+		"spendingData": spendingData.Bytes(),
+	})
+}
+
+// nativeProbeSpend issues one spendMulti through the native dispatcher against a
+// probe record and returns the parsed response.
+func (s *Store) nativeProbeSpend(ctx context.Context, policy *aerospike.WritePolicy, label string, key *aerospike.Key,
+	utxoHash *chainhash.Hash, spendingData *spendpkg.SpendingData, blockHeight uint32, vout uint32) (*LuaMapResponse, bool) {
+	if ctx.Err() != nil {
+		s.logger.Warnf("[teranode-native-op] %s aborted by context: %v; falling back to UDF path", label, ctx.Err())
+		return nil, false
+	}
+
+	items := []aerospike.MapValue{s.probeSpendItem(utxoHash, spendingData, vout)}
+
+	payload, encErr := encodeNativeOpPayload(subOpSpendMulti, []any{
+		items, false, false, blockHeight, s.settings.GetUtxoStoreBlockHeightRetention(),
+	})
+	if encErr != nil {
+		s.logger.Warnf("[teranode-native-op] %s payload encode failed: %v; falling back to UDF path", label, encErr)
+		return nil, false
+	}
+
+	rec, opErr := s.client.Operate(policy, key, aerospike.TeranodeModifyOp(nativeOpResultBin, payload))
+	if opErr != nil {
+		s.logger.Warnf("[teranode-native-op] %s operate failed: %v; falling back to UDF path", label, opErr)
+		return nil, false
+	}
+
+	if rec == nil || rec.Bins == nil || rec.Bins[nativeOpResultBin] == nil {
+		s.logger.Warnf("[teranode-native-op] %s returned no %q bin; %s; falling back to UDF path", label, nativeOpResultBin, describeAerospikeRecord(rec))
+		return nil, false
+	}
+
+	res, parseErr := s.ParseLuaMapResponse(rec.Bins[nativeOpResultBin])
+	if parseErr != nil {
+		s.logger.Warnf("[teranode-native-op] %s returned unparsable response (value %s): %v; falling back to UDF path", label, describeAerospikeValue(rec.Bins[nativeOpResultBin]), parseErr)
+		return nil, false
+	}
+
+	return res, true
+}
+
+// replayProbeVerdict is what probeNativeReplayProtectionVerdict concluded.
+type replayProbeVerdict uint8
+
+const (
+	// replayProbeProven: the dispatcher enforces the replay marker and reports idempotent matches.
+	replayProbeProven replayProbeVerdict = iota
+	// replayProbeMismatch: the server answered the probe, and the answer says the dispatcher
+	// predates one of the semantics. That is a server build older than this release.
+	replayProbeMismatch
+	// replayProbeUnavailable: the probe could not finish, for a setup or transport failure, a
+	// refused opcode or a cancelled context. It says nothing about the server build.
+	replayProbeUnavailable
+)
+
+// recordReplayProtection stores the probe's verdict and says what happened. The verdict is final
+// for the life of the process, so a mismatch is an Error that names the cost, and a probe that
+// could not finish is a Warn that says it is not retried. It does not publish the routing gauge:
+// it runs inside the probe, before initNativeTeranodeOps has stored useNativeTeranodeOps, so a
+// publish here would write 0 for the route. initNativeTeranodeOps publishes once the whole
+// decision is made.
+func (s *Store) recordReplayProtection(verdict replayProbeVerdict) {
+	s.nativeReplayProtection.Store(verdict == replayProbeProven)
+
+	switch verdict {
+	case replayProbeMismatch:
+		s.logger.Errorf("[teranode-native-op] native ops are enabled but the dispatcher does not prove replay protection (it does not enforce the replay marker, does not report idempotent matches or does not record and report the spend height); spendMulti, spend and addDeletedChildren run on the UDF path for the life of this process, slower but correct. Deploy the mod-teranode build that records the spend height. Every other sub-op keeps its routing and unspend is always UDF")
+	case replayProbeUnavailable:
+		s.logger.Warnf("[teranode-native-op] the replay-protection probe could not finish (see the probe message above); spendMulti, spend and addDeletedChildren run on the UDF path for the life of this process because the verdict is not retried, every other sub-op keeps its routing and unspend is always UDF")
+	}
+}
+
+// The routes of the native routing gauge.
+const (
+	nativeRouteReplayProtection = "replay_protection"
+)
+
+// publishNativeRouting sets the native routing gauge from the store's current decisions.
+// It is called wherever one of them changes.
+func (s *Store) publishNativeRouting() {
+	if prometheusAerospikeNativeRouting == nil {
+		return
+	}
+
+	set := func(route string, native bool) {
+		value := 0.0
+		if native {
+			value = 1
+		}
+
+		prometheusAerospikeNativeRouting.WithLabelValues(route).Set(value)
+	}
+
+	set(nativeRouteReplayProtection, s.useNativeTeranodeOps.Load() && s.nativeReplayProtection.Load())
+}
+
+// probeNativeReplayProtection reports whether probeNativeReplayProtectionVerdict proved the
+// dispatcher.
+func (s *Store) probeNativeReplayProtection(ctx context.Context, policy *aerospike.WritePolicy) bool {
+	return s.probeNativeReplayProtectionVerdict(ctx, policy) == replayProbeProven
+}
+
+// probeNativeReplayProtectionVerdict proves the native dispatcher honours the three
+// spendMulti semantics replay protection depends on, before spendMulti is allowed
+// onto the native path: the deletedChildren refusal, the idempotent list, and the
+// spend height in idempotentHeights.
+//
+// All three are enforced in teranode.lua and none is visible to the client, so
+// like the first-seen probe beside it they are exercised rather than assumed.
+// A Lua change is version-gated by bumping LuaPackage; the native dispatcher
+// lives in the server fork and has no such gate, so a build that predates any
+// of them is indistinguishable from one that implements it except by asking.
+//
+//  1. The replay marker. A pruner before the spend height wrote the pruned
+//     child's txid into the parent's deletedChildren bin before deleting it, and
+//     a later spend by that child of an output that still names it must be
+//     rejected; teranode.lua still does, for the children those pruners marked.
+//     A dispatcher that ignores the bin accepts the replay and recreates a mined,
+//     fully spent transaction with unspent outputs. The expression fast path does not save
+//     us: a re-spend there is FILTERED_OUT and re-issued through this same sub-op.
+//
+//  2. The idempotent report. A re-spend by the same spender writes nothing, and
+//     the response says so in its idempotent list. Spend uses that to keep a
+//     historical confirmed spend out of the rollback set when another input of
+//     the same transaction fails; a dispatcher that omits the list makes the
+//     store unspend a confirmed output, which is a double-spend of it.
+//
+//  3. The spend height. A fresh spend records its block height in the spendHeights bin,
+//     and an idempotent match reports the height it recorded, in idempotentHeights
+//     keyed by the spend's idx. The store refuses a replay of a pruned
+//     transaction from that height (utxo.IsHistoricalSpend). A dispatcher that
+//     records and reports none makes every match count as young, so no replay of a
+//     pruned transaction would ever be refused.
+//
+// A failure keeps spendMulti, spend and addDeletedChildren on the UDF path,
+// where all of this is enforced in-repo; every other sub-op keeps its routing,
+// and unspend is always UDF. That is the whole point: the native path stays
+// available to a fork build that implements them, rather than being fenced off
+// for everyone.
+func (s *Store) probeNativeReplayProtectionVerdict(ctx context.Context, policy *aerospike.WritePolicy) replayProbeVerdict {
+	const (
+		probeBlockHeight       = uint32(1)
+		probeRepeatBlockHeight = uint32(5)
+		probeVout              = uint32(0)
+	)
+
+	// Stage 1: a spend by a child the parent records as already pruned.
+	markerKey, markerHashes, markerCleanup, built := s.buildProbeRecord(policy, "replay-marker probe", probeBlockHeight, probeVout)
+	if !built {
+		return replayProbeUnavailable
+	}
+
+	defer markerCleanup()
+
+	prunedChild := spendpkg.NewSpendingData(&chainhash.Hash{0x03}, 0)
+
+	// The child's original spend, so the output names it, as it does for every
+	// child the pruner marks.
+	spentRes, ok := s.nativeProbeSpend(ctx, policy, "replay-marker probe", markerKey, markerHashes[0],
+		prunedChild, probeBlockHeight, probeVout)
+	if !ok {
+		return replayProbeUnavailable
+	}
+
+	if spentRes.Status != LuaStatusOK || len(spentRes.Errors) != 0 {
+		s.logger.Warnf("[teranode-native-op] replay-marker probe: the child's first spend was not accepted (%+v); falling back to UDF path", spentRes)
+		return replayProbeMismatch
+	}
+
+	// Planted with the pruner's own write, so the probe proves the native spend
+	// reads the marker in the key format and value the pruner writes.
+	if !s.probePlantMarker(ctx, policy, markerKey, prunedChild.TxID) {
+		return replayProbeUnavailable
+	}
+
+	markerRes, ok := s.nativeProbeSpend(ctx, policy, "replay-marker probe", markerKey, markerHashes[0],
+		prunedChild, probeBlockHeight, probeVout)
+	if !ok {
+		return replayProbeUnavailable
+	}
+
+	if markerRes.Status != LuaStatusError {
+		s.logger.Warnf("[teranode-native-op] replay-marker probe: a spend by an already-pruned child was NOT rejected (%+v); "+
+			"the native dispatcher does not enforce %q, so pruning is not replay-safe on it; falling back to UDF path",
+			markerRes, fields.DeletedChildren.String())
+		return replayProbeMismatch
+	}
+
+	if !probeReplayRejected(markerRes) {
+		s.logger.Warnf("[teranode-native-op] replay-marker probe: pruned-child spend rejected with the wrong error (%+v), want %s; falling back to UDF path",
+			markerRes, LuaErrorCodeInvalidSpend)
+		return replayProbeMismatch
+	}
+
+	// Stage 2: a re-spend by the same spender must be reported as idempotent.
+	idemKey, idemHashes, idemCleanup, built := s.buildProbeRecord(policy, "idempotent-report probe", probeBlockHeight, probeVout)
+	if !built {
+		return replayProbeUnavailable
+	}
+
+	defer idemCleanup()
+
+	spender := spendpkg.NewSpendingData(&chainhash.Hash{0x04}, 0)
+
+	firstRes, ok := s.nativeProbeSpend(ctx, policy, "idempotent-report probe", idemKey, idemHashes[0], spender, probeBlockHeight, probeVout)
+	if !ok {
+		return replayProbeUnavailable
+	}
+
+	if firstRes.Status != LuaStatusOK || len(firstRes.Errors) != 0 {
+		s.logger.Warnf("[teranode-native-op] idempotent-report probe: first spend not accepted (%+v); falling back to UDF path", firstRes)
+		return replayProbeMismatch
+	}
+
+	// The repeat comes at a later height than the first spend, so a dispatcher that echoes the
+	// incoming height instead of reporting the one it recorded cannot pass.
+	repeatRes, ok := s.nativeProbeSpend(ctx, policy, "idempotent-report probe", idemKey, idemHashes[0], spender, probeRepeatBlockHeight, probeVout)
+	if !ok {
+		return replayProbeUnavailable
+	}
+
+	if repeatRes.Status != LuaStatusOK || len(repeatRes.Errors) != 0 {
+		s.logger.Warnf("[teranode-native-op] idempotent-report probe: re-spend by the same spender was not accepted (%+v); falling back to UDF path", repeatRes)
+		return replayProbeMismatch
+	}
+
+	if !probeReportsIdempotent(repeatRes) {
+		s.logger.Warnf("[teranode-native-op] idempotent-report probe: a re-spend by the same spender was accepted but not reported as idempotent (%+v); "+
+			"the rollback would reverse a confirmed spend on this dispatcher; falling back to UDF path", repeatRes)
+		return replayProbeMismatch
+	}
+
+	// Stage 3: the match must carry the height the first spend recorded. The store refuses a
+	// replay of a pruned transaction from that height. A match reported without one never counts
+	// as history, so on a dispatcher that does not record and report it every match is young and
+	// no replay of a pruned transaction is refused. The UDF path records the height.
+	if !probeReportsHeight(repeatRes, probeBlockHeight) {
+		s.logger.Warnf("[teranode-native-op] spend-height probe: the re-spend was reported as idempotent without the height the first spend recorded (%+v, want %d); "+
+			"the dispatcher does not record and report the spend height, so no replay of a pruned transaction would be refused; falling back to UDF path", repeatRes, probeBlockHeight)
+		return replayProbeMismatch
+	}
+
+	return replayProbeProven
+}
+
+// probePlantMarker records child as pruned on a probe record with the marker an older pruner
+// left, {child.String(): true} in the deletedChildren bin, written here as a plain MapPutItems.
+// The pruner no longer writes it, but the Lua spend still refuses a child marked by a pruner that
+// did, so the native spend must too.
+func (s *Store) probePlantMarker(ctx context.Context, policy *aerospike.WritePolicy, key *aerospike.Key, child *chainhash.Hash) bool {
+	if ctx.Err() != nil {
+		s.logger.Warnf("[teranode-native-op] replay-marker probe aborted by context: %v", ctx.Err())
+		return false
+	}
+
+	items := map[interface{}]interface{}{child.String(): true}
+
+	if _, opErr := s.client.Operate(policy, key, aerospike.MapPutItemsOp(aerospike.DefaultMapPolicy(), fields.DeletedChildren.String(), items)); opErr != nil {
+		s.logger.Warnf("[teranode-native-op] replay-marker probe could not write %q: %v", fields.DeletedChildren.String(), opErr)
+		return false
+	}
+
+	return true
+}
+
+// rejectsWith reports whether a spend response is a rejection carrying code,
+// either as the whole-response code or against one of the spends in the batch.
+// Extracted so a probe verdict can be tested without a server: a stock container
+// refuses the opcode outright, so the probe demotes long before it reaches these
+// decisions, and only a fork image exercises them end to end.
+func rejectsWith(res *LuaMapResponse, code LuaErrorCode) bool {
+	if res == nil || res.Status != LuaStatusError {
+		return false
+	}
+
+	if res.ErrorCode == code {
+		return true
+	}
+
+	for _, e := range res.Errors {
+		if e.ErrorCode == code {
+			return true
+		}
+	}
+
+	return false
+}
+
+// rejectsItemWith reports whether a spend response is a rejection that carries code against
+// the spend at idx, the way teranode.lua reports it. A whole-response code, or an entry under
+// any other key, does not count: the store reads per-spend errors by idx, so a dispatcher that
+// keys them differently has to fail the probe.
+func rejectsItemWith(res *LuaMapResponse, idx int, code LuaErrorCode) bool {
+	if res == nil || res.Status != LuaStatusError {
+		return false
+	}
+
+	e, ok := res.Errors[idx]
+
+	return ok && e.ErrorCode == code
+}
+
+// probeReplayRejected is the replay-marker stage's verdict on the reply to the replayed spend: the
+// marker rejection, under the probe spend's idx.
+func probeReplayRejected(res *LuaMapResponse) bool {
+	return rejectsItemWith(res, probeSpendIdx, LuaErrorCodeInvalidSpend)
+}
+
+// probeReportsIdempotent is the idempotent-report stage's verdict on the reply to the repeated
+// spend: a match reported under the probe spend's idx.
+func probeReportsIdempotent(res *LuaMapResponse) bool {
+	return reportsIdempotent(res, probeSpendIdx)
+}
+
+// probeReportsHeight is the spend-height stage's verdict on the reply to the repeated spend: the
+// match carries, under the probe spend's idx, the height the first spend recorded.
+func probeReportsHeight(res *LuaMapResponse, want uint32) bool {
+	if res == nil || res.Status != LuaStatusOK {
+		return false
+	}
+
+	got, ok := res.IdempotentHeights[probeSpendIdx]
+
+	return ok && got == want
+}
+
+// reportsIdempotent reports whether a successful spend response says the spend
+// at idx matched what the output already recorded and therefore wrote nothing.
+// See rejectsWith for why this is a separate function.
+func reportsIdempotent(res *LuaMapResponse, idx int) bool {
+	if res == nil || res.Status != LuaStatusOK {
+		return false
+	}
+
+	for _, got := range res.Idempotent {
+		if got == idx {
+			return true
+		}
+	}
+
+	return false
 }

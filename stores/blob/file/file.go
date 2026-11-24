@@ -632,6 +632,16 @@ func newStore(logger ulogger.Logger, storeURL *url.URL, opts ...options.StoreOpt
 		checksum:              parsedChecksum,
 	}
 
+	// Say out loud what the default retention state is. With BlockHeightRetention
+	// unset (the default) a Put without an explicit delete-at-height is permanent:
+	// the global retention setting does not reach files written through this store,
+	// and only writers that pass their own DAH get scheduled deletion. Permanent-
+	// by-default may be exactly what an archive wants, but it should be a state an
+	// operator can read at start-up, not infer from disk usage later.
+	if !storeOpts.DisableDAH && storeOpts.BlockHeightRetention == 0 {
+		logger.Infof("[File] store %s: no default retention is in force - writes without an explicit delete-at-height are kept forever", path)
+	}
+
 	// Check if longterm storage options are provided
 	if storeOpts.PersistSubDir != "" {
 		// Validate PersistSubDir doesn't contain path traversal sequences
@@ -1337,16 +1347,21 @@ func (s *File) GetIoReader(ctx context.Context, key []byte, fileType fileformat.
 		return nil, err
 	}
 
-	f, err := s.openFileWithFallback(ctx, merged, fileName, key, fileType, opts...)
+	f, fromLongterm, err := s.openFileWithFallback(ctx, merged, fileName, key, fileType, opts...)
 	if err != nil {
 		return nil, err
 	}
 
-	if err := s.validateFileHeader(f, fileName, fileType); err != nil {
-		if closeErr := f.Close(); closeErr != nil {
-			s.logger.Warnf("[File][GetIoReader] failed to close file after header validation error: %v", closeErr)
+	// A reader from the longterm client has already had its header read and checked by that
+	// store, so only a file opened from local disk still starts with one. Reading again would take
+	// body bytes as a header and report a healthy longterm blob as corrupt.
+	if !fromLongterm {
+		if err := s.validateFileHeader(f, fileName, fileType); err != nil {
+			if closeErr := f.Close(); closeErr != nil {
+				s.logger.Warnf("[File][GetIoReader] failed to close file after header validation error: %v", closeErr)
+			}
+			return nil, err
 		}
-		return nil, err
 	}
 
 	s.debugf("[File] GetIoReader result key=%s type=%s filename=%s", keyHex, fileType, fileName)
@@ -1357,34 +1372,48 @@ func (s *File) GetReader(ctx context.Context, key []byte, fileType fileformat.Fi
 	return s.GetIoReader(ctx, key, fileType)
 }
 
-// validateFileHeader reads and validates the file header.
+// validateFileHeader reads and validates the header of a file opened from local disk.
+//
+// A header that is short, has unknown magic or names another file type is a corrupt file, and
+// the error carries a BlobCorrupt cause beside the StorageError. Writes go to a temp file that is
+// renamed into place, so a reader never sees a half-written file and a retry would read the same
+// bytes. Any other read failure (an I/O error from the disk) is left as a plain StorageError,
+// because the file itself may be fine.
 func (s *File) validateFileHeader(f io.Reader, fileName string, fileType fileformat.FileType) error {
 	header := &fileformat.Header{}
 	if err := header.Read(f); err != nil {
-		return errors.NewStorageError("[File][GetIoReader] [%s] missing or invalid header: %v", fileName, err)
+		if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, fileformat.ErrUnknownMagic) {
+			return errors.NewStorageError("[File][GetIoReader] [%s] missing or invalid header", fileName,
+				errors.NewBlobCorruptError("header unreadable", err))
+		}
+
+		return errors.NewStorageError("[File][GetIoReader] [%s] missing or invalid header", fileName, err)
 	}
 
 	if header.FileType() != fileType {
-		return errors.NewStorageError("[File][GetIoReader] [%s] header filetype mismatch: got %s, want %s", fileName, header.FileType(), fileType)
+		return errors.NewStorageError("[File][GetIoReader] [%s] header filetype mismatch", fileName,
+			errors.NewBlobCorruptError("got %s, want %s", header.FileType(), fileType))
 	}
 
 	return nil
 }
 
 // openFileWithFallback tries to open the primary file, then persistSubDir, then longtermClient if available.
-func (s *File) openFileWithFallback(ctx context.Context, merged *options.Options, fileName string, key []byte, fileType fileformat.FileType, opts ...options.FileOption) (io.ReadCloser, error) {
+// fromLongterm reports that the reader came from longtermClient, whose GetIoReader has already
+// read and checked the header.
+func (s *File) openFileWithFallback(ctx context.Context, merged *options.Options, fileName string, key []byte, fileType fileformat.FileType, opts ...options.FileOption) (_ io.ReadCloser, fromLongterm bool, _ error) {
 	if err := acquireReadPermit(ctx); err != nil {
-		return nil, errors.NewStorageError("[File][openFileWithFallback] failed to acquire read permit", err)
+		return nil, false, errors.NewStorageError("[File][openFileWithFallback] failed to acquire read permit", err)
 	}
 
 	f, err := os.Open(fileName)
 	if err == nil {
-		return &semaphoreReadCloser{ReadCloser: f}, nil
+		return &semaphoreReadCloser{ReadCloser: f}, false, nil
 	}
 
 	if !errors.Is(err, os.ErrNotExist) {
 		releaseReadPermit()
-		return nil, errors.NewStorageError("[File][openFileWithFallback] [%s] failed to open file", fileName, err)
+		return nil, false, errors.NewStorageError("[File][openFileWithFallback] [%s] failed to open file", fileName, err)
 	}
 
 	// Try persistSubDir if set
@@ -1392,17 +1421,17 @@ func (s *File) openFileWithFallback(ctx context.Context, merged *options.Options
 		persistedFilename, err := merged.ConstructFilename(filepath.Join(s.path, s.persistSubDir), key, fileType)
 		if err != nil {
 			releaseReadPermit()
-			return nil, err
+			return nil, false, err
 		}
 
 		persistFile, err := os.Open(persistedFilename)
 		if err == nil {
-			return &semaphoreReadCloser{ReadCloser: persistFile}, nil
+			return &semaphoreReadCloser{ReadCloser: persistFile}, false, nil
 		}
 
 		if !errors.Is(err, os.ErrNotExist) {
 			releaseReadPermit()
-			return nil, errors.NewStorageError("[File][openFileWithFallback] [%s] failed to open file in persist directory", persistedFilename, err)
+			return nil, false, errors.NewStorageError("[File][openFileWithFallback] [%s] failed to open file in persist directory", persistedFilename, err)
 		}
 	}
 
@@ -1420,17 +1449,17 @@ func (s *File) openFileWithFallback(ctx context.Context, merged *options.Options
 			// aerospike UTXO store, for one — would then treat a routine miss as
 			// this node's disk being broken.
 			if errors.Is(err, os.ErrNotExist) || errors.Is(err, errors.ErrNotFound) {
-				return nil, errors.ErrNotFound
+				return nil, false, errors.ErrNotFound
 			}
 
-			return nil, errors.NewStorageError("[File][openFileWithFallback] [%s] unable to open longterm storage file", fileName, err)
+			return nil, false, errors.NewStorageError("[File][openFileWithFallback] [%s] unable to open longterm storage file", fileName, err)
 		}
 
-		return fileReader, nil
+		return fileReader, true, nil
 	}
 
 	releaseReadPermit()
-	return nil, errors.ErrNotFound
+	return nil, false, errors.ErrNotFound
 }
 
 // Get retrieves a blob from the file store.
