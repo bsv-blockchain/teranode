@@ -362,6 +362,10 @@ type SubtreeProcessor struct {
 	// reorgs — reorgBlocks runs serialised on stp.reorgBlockChan.
 	reverseCascadedConflictingSet map[chainhash.Hash]struct{}
 
+	// parallelReorgDrain is set while a fork reorg runs: its queue drains then run on every core when no
+	// conflict is in play (dequeueDuringReorg). Only the processor goroutine touches it.
+	parallelReorgDrain bool
+
 	// blockchainClient provides access to blockchain data
 	blockchainClient blockchain.ClientI
 
@@ -5659,6 +5663,10 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveBackBlocks []*
 		// (issue 2269). A catch-up above is not timed.
 		defer stp.startPhases("reorgBlocks")()
 
+		// the queue drains of this reorg run on every core where no conflict is in play
+		stp.parallelReorgDrain = true
+		defer func() { stp.parallelReorgDrain = false }()
+
 		stp.reportTipToStart()
 
 		// other operation, wait for all blocks to be processed first, mined_set etc.
@@ -5700,7 +5708,7 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveBackBlocks []*
 	stp.phases.done("upfront_reads")
 
 	// dequeueDuringBlockMovement all transactions that are in the queue
-	if err = stp.dequeueDuringBlockMovement(nil, nil, nil, true); err != nil {
+	if err = stp.dequeueDuringReorg(ctx, nil, nil, nil, true); err != nil {
 		return errors.NewProcessingError("[reorgBlocks] error dequeueing transactions during block movement", err)
 	}
 
@@ -7770,7 +7778,7 @@ func (stp *SubtreeProcessor) processRemainderTransactionsAndDequeue(ctx context.
 		if !params.SkipDequeue {
 			stp.phases.count("drain_queue", int(stp.QueueLength()))
 
-			if err := stp.dequeueDuringBlockMovement(params.TransactionMap, params.LosingTxHashesMap, params.ConflictingHashes, params.SkipNotification); err != nil {
+			if err := stp.dequeueDuringReorg(ctx, params.TransactionMap, params.LosingTxHashesMap, params.ConflictingHashes, params.SkipNotification); err != nil {
 				return errors.NewProcessingError("[moveForwardBlock][%s] error moving up block deQueue", params.Block.String(), err)
 			}
 		}
