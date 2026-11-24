@@ -39,7 +39,7 @@ func setupStoreForLockTest(t *testing.T) (*Store, *uaerospike.Client) {
 	logger := ulogger.NewErrorTestLogger(t)
 	tSettings := test.CreateBaseTestSettings(t)
 
-	container, err := aeroTest.RunContainer(ctx, aeroTest.WithTTLSupport("test"))
+	container, err := runAerospikeTestContainer(ctx, aeroTest.WithTTLSupport("test"))
 	if err != nil {
 		t.Skipf("Skipping: Aerospike container not available (%v)", err)
 	}

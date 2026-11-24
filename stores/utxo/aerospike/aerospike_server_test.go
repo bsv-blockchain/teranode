@@ -2629,11 +2629,15 @@ func TestDeleteByBin(t *testing.T) {
 		deferFn()
 	})
 
-	putBins(t, client, aerospike.NewWritePolicy(0, 0), "key1", aerospike.BinMap{"ID": 1})
-	putBins(t, client, aerospike.NewWritePolicy(0, 0), "key2", aerospike.BinMap{"ID": 2})
-	putBins(t, client, aerospike.NewWritePolicy(0, aerospike.TTLDontExpire), "key3", aerospike.BinMap{"ID": 3})
+	// A set of its own: the store's UTXO set also holds the conflicting index self-test's probe
+	// record while that test runs, which a count over the whole set would include.
+	const set = "delete_by_bin"
 
-	statement := aerospike.NewStatement("test", "test")
+	putBins(t, client, aerospike.NewWritePolicy(0, 0), set, "key1", aerospike.BinMap{"ID": 1})
+	putBins(t, client, aerospike.NewWritePolicy(0, 0), set, "key2", aerospike.BinMap{"ID": 2})
+	putBins(t, client, aerospike.NewWritePolicy(0, aerospike.TTLDontExpire), set, "key3", aerospike.BinMap{"ID": 3})
+
+	statement := aerospike.NewStatement(aerospikeNamespace, set)
 
 	recordSet, err := client.Query(nil, statement)
 	require.NoError(t, err)
@@ -2709,8 +2713,8 @@ func TestDeleteByBin(t *testing.T) {
 	}, 500*time.Millisecond, 100*time.Millisecond, "Background deletes completed but not yet visible to queries")
 }
 
-func putBins(t *testing.T, client *uaerospike.Client, wp *aerospike.WritePolicy, akey string, bins aerospike.BinMap) {
-	key, err := aerospike.NewKey("test", "test", akey)
+func putBins(t *testing.T, client *uaerospike.Client, wp *aerospike.WritePolicy, set, akey string, bins aerospike.BinMap) {
+	key, err := aerospike.NewKey(aerospikeNamespace, set, akey)
 	require.NoError(t, err)
 
 	err = client.Put(wp, key, bins)

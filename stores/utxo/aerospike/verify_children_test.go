@@ -24,7 +24,7 @@ func setupStoreForVerifyTest(t *testing.T) (*Store, *uaerospike.Client) {
 	ctx := context.Background()
 	tSettings := test.CreateBaseTestSettings(t)
 
-	container, err := aeroTest.RunContainer(ctx,
+	container, err := runAerospikeTestContainer(ctx,
 		aeroTest.WithTTLSupport("test"),
 	)
 	if err != nil {

@@ -38,12 +38,7 @@ func initAerospikeBench(b *testing.B, settings *settings.Settings, logger ulogge
 				err = errors.NewError("container startup panic: %v", r)
 			}
 		}()
-		var opts []testcontainers.ContainerCustomizer
-		if aerospikeContainerImage != "" {
-			opts = append(opts, aeroTest.WithImage(aerospikeContainerImage))
-		}
-
-		c, e := aeroTest.RunContainer(ctx, opts...)
+		c, e := aeroTest.RunContainer(ctx, aeroTest.WithImage(aerospikeContainerImage))
 		if e != nil {
 			err = e
 			return

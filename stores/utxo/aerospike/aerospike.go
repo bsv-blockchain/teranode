@@ -511,8 +511,8 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 					}
 				}
 
-				// Read by ConflictingTxHashes. A server that cannot hold an
-				// expression index (before 8.1) leaves block validation on its
+				// Read by ConflictingTxHashes. Without it (no right to create
+				// indexes, or a failed create) block validation stays on its
 				// per-transaction fallback, which is correct but slow.
 				exists, err = s.indexExists(conflictingIndexName)
 				if err != nil {
@@ -522,7 +522,7 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 
 				if !exists {
 					if err := s.createExpressionIndexIfNotExists(conflictingIndexName, conflictingIndexExpression()); err != nil {
-						s.logger.Warnf("Failed to create %s (expression indexes need Aerospike 8.1 or later); block validation will read every transaction of an already-validated subtree: %v", conflictingIndexName, err)
+						s.logger.Warnf("Failed to create %s; block validation will read every transaction of an already-validated subtree: %v", conflictingIndexName, err)
 					}
 				}
 			}

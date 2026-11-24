@@ -10,6 +10,10 @@ import (
 	"github.com/testcontainers/testcontainers-go"
 )
 
+// AerospikeImage is the Aerospike server image that tests run against unless they choose
+// another. Teranode needs Aerospike 8.1 or later, so no test runs on an older server.
+const AerospikeImage = "aerospike/aerospike-server:8.1"
+
 type TestingT interface {
 	Errorf(format string, args ...interface{})
 	Logf(format string, args ...interface{})

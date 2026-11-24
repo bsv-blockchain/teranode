@@ -265,18 +265,6 @@ func TestConflictingTxHashes_MatchesTheFlagOnEveryRecord(t *testing.T) {
 	}
 }
 
-// TestConflictingTxHashes_ServerWithoutExpressionIndexes pins the answer from a
-// server that cannot hold the index: not indexed, no error, so the caller falls
-// back instead of reading "nothing is conflicting".
-func TestConflictingTxHashes_ServerWithoutExpressionIndexes(t *testing.T) {
-	store, ctx := initAerospikeImage(t, "aerospike/aerospike-server:8.0", test.CreateBaseTestSettings(t))
-
-	hashes, indexed, err := store.ConflictingTxHashes(ctx)
-	require.NoError(t, err)
-	require.False(t, indexed)
-	require.Nil(t, hashes)
-}
-
 // setNamespaceConfig applies a dynamic namespace setting on every node.
 func setNamespaceConfig(t *testing.T, client *uaerospike.Client, setting string) {
 	t.Helper()
