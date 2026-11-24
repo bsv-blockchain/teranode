@@ -273,6 +273,26 @@ func callStatus(t *testing.T, httpServer *HTTP, ec echo.Context, rec *httptest.R
 	return out
 }
 
+// blockingFundingRepo answers GetTxFundingRecord like Aerospike's get(): it returns as soon as the
+// context it is given is cancelled, or when release is closed.
+type blockingFundingRepo struct {
+	*repository.Mock
+	entered chan struct{}
+	release chan struct{}
+	data    *meta.Data
+}
+
+func (r *blockingFundingRepo) GetTxFundingRecord(ctx context.Context, _ *chainhash.Hash) (*meta.Data, error) {
+	close(r.entered)
+
+	select {
+	case <-ctx.Done():
+	case <-r.release:
+	}
+
+	return r.data, nil
+}
+
 // countingLogger counts Warnf calls.
 type countingLogger struct {
 	ulogger.Logger
@@ -674,6 +694,40 @@ func TestGetUTXOStatuses(t *testing.T) {
 		}
 	})
 
+	// The flags are on Aerospike's master record only: a spent output on a child page reads SPENT with a
+	// spender, where SQL and pebble answer conflicting.
+	t.Run("a spent output of a conflicting or locked transaction past the batch size is unknown", func(t *testing.T) {
+		wide := wideTx(t, 130)
+		wideID := *wide.TxIDChainHash()
+
+		for _, tc := range []struct {
+			conflicting, locked bool
+			reason              string
+		}{
+			{conflicting: true, reason: utxoReasonConflict},
+			{locked: true, reason: utxoReasonLocked},
+		} {
+			httpServer, mockRepo, ec, rec, _ := statusHTTP(t, ch, statusBody(statusOutpoint{wideID, 129}))
+
+			data := ch.minedAt(wide, 50)
+			data.Conflicting, data.Locked = tc.conflicting, tc.locked
+
+			bestBlockMocks(mockRepo, statusChainTip)
+			mockRepo.On("GetUtxo", mock.Anything).Return(&utxo.SpendResponse{
+				Status:       int(utxo.Status_SPENT),
+				SpendingData: spendpkg.NewSpendingData(&spenderID, 3),
+			}, nil)
+			mockRepo.On("GetTxBlockRefs", mock.Anything).Return(nil, errors.NewTxNotFoundError("x"))
+			mockRepo.On("GetTxFundingRecord", mock.Anything, mock.Anything).Return(data, nil)
+
+			r := callStatus(t, httpServer, ec, rec).Results[0]
+
+			require.Equal(t, utxoStatusUnknown, r.Status)
+			require.Equal(t, tc.reason, r.Reason)
+			require.Nil(t, r.Spender)
+		}
+	})
+
 	t.Run("OP_FALSE OP_RETURN output is unknown even when the store says OK", func(t *testing.T) {
 		httpServer, mockRepo, ec, rec, _ := statusHTTP(t, ch, statusBody(statusOutpoint{fundID, 0}))
 
@@ -741,6 +795,24 @@ func TestGetUTXOStatuses(t *testing.T) {
 		mockRepo.On("GetTxFundingRecord", mock.Anything, mock.Anything).Return(ch.minedAt(tx, 50), nil)
 
 		cc.checkErr = errors.NewServiceUnavailableError("down")
+
+		r := callStatus(t, httpServer, ec, rec).Results[0]
+
+		require.Equal(t, utxoStatusUnspent, r.Status)
+		require.Nil(t, r.Funding)
+	})
+
+	t.Run("block IDs and heights of different lengths leave funding unknown, not unconfirmed", func(t *testing.T) {
+		httpServer, mockRepo, ec, rec, _ := statusHTTP(t, ch, statusBody(statusOutpoint{fundID, 0}))
+
+		bestBlockMocks(mockRepo, statusChainTip)
+		mockRepo.On("GetUtxo", mock.Anything).Return(&utxo.SpendResponse{Status: int(utxo.Status_OK)}, nil)
+		// The one paired block is off the main chain; the second ID has no height.
+		mockRepo.On("GetTxFundingRecord", mock.Anything, mock.Anything).Return(&meta.Data{
+			Tx:           tx,
+			BlockIDs:     []uint32{ch.forkID, ch.ids[50]},
+			BlockHeights: []uint32{statusForkHeight},
+		}, nil)
 
 		r := callStatus(t, httpServer, ec, rec).Results[0]
 
@@ -932,7 +1004,8 @@ func TestGetUTXOStatuses(t *testing.T) {
 		require.Equal(t, utxoReasonStore, r.Reason)
 	})
 
-	t.Run("a held output whose funding record has gone is not_found_may_be_pruned", func(t *testing.T) {
+	// The funding record is read first, so absent-then-held means it appeared between the two reads.
+	t.Run("a held output whose funding record was absent when read first is changed_during_read", func(t *testing.T) {
 		httpServer, mockRepo, ec, rec, _ := statusHTTP(t, ch, statusBody(statusOutpoint{fundID, 0}))
 
 		bestBlockMocks(mockRepo, statusChainTip)
@@ -942,7 +1015,7 @@ func TestGetUTXOStatuses(t *testing.T) {
 		r := callStatus(t, httpServer, ec, rec).Results[0]
 
 		require.Equal(t, utxoStatusUnknown, r.Status)
-		require.Equal(t, utxoReasonPruned, r.Reason)
+		require.Equal(t, "changed_during_read", r.Reason)
 	})
 
 	t.Run("spent with nil spending data is unknown", func(t *testing.T) {
@@ -987,6 +1060,30 @@ func TestGetUTXOStatuses(t *testing.T) {
 		ec.Request().Method = http.MethodPost
 
 		require.Error(t, httpServer.GetUTXOStatuses()(ec))
+	})
+
+	// After a client cancels, records that have not started a funding read must not start one: the read
+	// is detached from cancellation, so a started read would run to completion for nobody. When a slot is
+	// free and the context is done, both cases of a select are ready, so each record is tried.
+	t.Run("a cancelled request starts no further funding reads", func(t *testing.T) {
+		httpServer, mockRepo, _, _, _ := statusHTTP(t, ch, statusBody())
+
+		mockRepo.On("GetTxFundingRecord", mock.Anything).Return(&meta.Data{Tx: tx, UnminedSince: 150}, nil)
+
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		lk := newUTXOStatusLookup(httpServer, statusChainTip, nil)
+
+		for i := 0; i < 200; i++ {
+			hash := chainhash.HashH([]byte{byte(i), byte(i >> 8)})
+
+			_, err := lk.fundingRecord(ctx, &hash)
+			require.ErrorIs(t, err, context.Canceled)
+		}
+
+		mockRepo.AssertNotCalled(t, "GetTxFundingRecord", mock.Anything)
+		require.Equal(t, 0, len(utxoStatusBodySem))
 	})
 
 	t.Run("a configured response-byte cap applies", func(t *testing.T) {

@@ -994,19 +994,115 @@ func TestRepository_GetTxFundingRecord_takesTheTransactionMetaPermit(t *testing.
 
 	var wg sync.WaitGroup
 
-	for i := 0; i < 12; i++ {
+	errs := make([]error, 12)
+
+	for i := range errs {
 		wg.Add(1)
 
 		go func(i int) {
 			defer wg.Done()
 
 			hash := chainhash.HashH([]byte{byte(i)})
-			_, err := repo.GetTxFundingRecord(context.Background(), &hash)
-			assert.NoError(t, err)
+			_, errs[i] = repo.GetTxFundingRecord(context.Background(), &hash)
 		}(i)
 	}
 
 	wg.Wait()
 
+	for _, err := range errs {
+		require.NoError(t, err)
+	}
+
 	require.Equal(t, int32(2), peak.Load(), "at most two funding reads may run at once, and the limit is reached")
+}
+
+// A store can return from a cancelled read while its batch and external-blob work carries on under its
+// own context. The permit is the process-wide bound, so GetTxFundingRecord must hold it until the store
+// has finished, whatever happens to the caller's context.
+func TestRepository_GetTxFundingRecord_holdsThePermitUntilTheStoreHasFinished(t *testing.T) {
+	repo, mockUtxoStore, _ := newRepoWithMockedUtxoStoreWith(t, func(s *settings.Settings) {
+		s.Asset.ConcurrencyGetTransactionMeta = 1
+	})
+
+	entered, release := make(chan struct{}), make(chan struct{})
+
+	mockUtxoStore.On("Get", mock.Anything, mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
+		close(entered)
+
+		// Like Aerospike's get(): return as soon as the context is cancelled.
+		select {
+		case <-args.Get(0).(context.Context).Done():
+		case <-release:
+		}
+	}).Return(&meta.Data{}, nil)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	hash := chainhash.HashH([]byte{1})
+	done := make(chan error, 1)
+
+	go func() {
+		_, err := repo.GetTxFundingRecord(ctx, &hash)
+		done <- err
+	}()
+
+	<-entered
+	cancel()
+
+	select {
+	case <-done:
+		t.Fatal("GetTxFundingRecord returned, and freed its permit, before the store finished the read")
+	case <-time.After(150 * time.Millisecond):
+	}
+
+	close(release)
+	require.NoError(t, <-done)
+}
+
+// The wait for the permit honours the caller's context; only the read, once the permit is taken, is
+// detached from it.
+func TestRepository_GetTxFundingRecord_permitWaitHonoursTheCallersContext(t *testing.T) {
+	repo, mockUtxoStore, _ := newRepoWithMockedUtxoStoreWith(t, func(s *settings.Settings) {
+		s.Asset.ConcurrencyGetTransactionMeta = 1
+	})
+
+	entered, release := make(chan struct{}), make(chan struct{})
+
+	mockUtxoStore.On("Get", mock.Anything, mock.Anything, mock.Anything).Run(func(mock.Arguments) {
+		close(entered)
+		<-release
+	}).Return(&meta.Data{}, nil)
+
+	first := chainhash.HashH([]byte{1})
+	firstDone := make(chan error, 1)
+
+	go func() {
+		_, err := repo.GetTxFundingRecord(context.Background(), &first)
+		firstDone <- err
+	}()
+
+	<-entered
+
+	ctx, cancel := context.WithCancel(context.Background())
+	second := chainhash.HashH([]byte{2})
+	secondDone := make(chan error, 1)
+
+	go func() {
+		_, err := repo.GetTxFundingRecord(ctx, &second)
+		secondDone <- err
+	}()
+
+	cancel()
+
+	select {
+	case err := <-secondDone:
+		require.Error(t, err, "a cancelled wait for the permit fails")
+	case <-time.After(5 * time.Second):
+		t.Fatal("the permit wait ignored the caller's cancellation")
+	}
+
+	close(release)
+	require.NoError(t, <-firstDone)
+	mockUtxoStore.AssertNumberOfCalls(t, "Get", 1)
 }

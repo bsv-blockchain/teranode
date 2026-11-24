@@ -68,6 +68,7 @@ const (
 	utxoReasonHeld     = "held"
 	utxoReasonReassign = "reassigned"
 	utxoReasonScript   = "script_rules_unknown"
+	utxoReasonChanged  = "changed_during_read"
 )
 
 // utxoStatusBodySem bounds the funding-record reads of every
@@ -123,8 +124,8 @@ type UTXOStatusRecord struct {
 	// state, are reported as unknown instead.
 	Immature bool `json:"immature,omitempty"`
 	// Funding is absent when the node cannot establish where the funding
-	// transaction is (a failed main-chain check, no block evidence, or a block
-	// whose ID and height disagree). Absent means unknown, not "unconfirmed".
+	// transaction is (a failed main-chain check, no block evidence, block IDs and
+	// heights of different lengths, or a block whose ID and height disagree). Absent means unknown, not "unconfirmed".
 	Funding *UTXOStatusFunding `json:"funding,omitempty"`
 	Spender *UTXOStatusSpender `json:"spender,omitempty"`
 }
@@ -168,8 +169,10 @@ type UTXOStatusResponse struct {
 // without a body) is unknown (output_not_found); not_found_may_be_pruned is kept
 // for a transaction whose record the store does not hold. An output the store
 // holds whose funding record cannot be read is unknown (store_unavailable), and
-// one whose record has gone is unknown (not_found_may_be_pruned), because
-// neither that check nor the coinbase maturity check could run.
+// one whose record was absent when it was read first but is held by the time
+// the output is read is unknown (changed_during_read), because neither the
+// script check nor the coinbase maturity check could run; asking again settles
+// it.
 //
 // The script rules differ before and after Genesis. Where they give different
 // answers for an output, the funding block must be placed on the main chain
@@ -183,9 +186,9 @@ type UTXOStatusResponse struct {
 // output no longer belongs to the script the body names.
 //
 // A transaction marked conflicting or locked is unknown with that reason even
-// where the store answers OK for the output: on Aerospike those flags live on
-// the transaction's master record, and an output held on a child page
-// (vout >= utxoBatchSize) reads OK without them.
+// where the store answers OK or spent for the output: on Aerospike those flags
+// live on the transaction's master record, and an output held on a child page
+// (vout >= utxoBatchSize) reads OK or spent without them.
 //
 // Coinbase maturity is derived from the funding block height and the best
 // height, because Aerospike's GetSpend does not apply it. A coinbase output
@@ -472,6 +475,14 @@ func (l *utxoStatusLookup) fundingRecord(ctx context.Context, hash *chainhash.Ha
 	l.mu.Unlock()
 
 	e.once.Do(func() {
+		// After the request is cancelled no new read is started: when a slot is
+		// free and the context is done both select cases are ready, so the
+		// context is checked before and after.
+		if err := ctx.Err(); err != nil {
+			e.err = err
+			return
+		}
+
 		select {
 		case utxoStatusBodySem <- struct{}{}:
 		case <-ctx.Done():
@@ -481,6 +492,13 @@ func (l *utxoStatusLookup) fundingRecord(ctx context.Context, hash *chainhash.Ha
 
 		defer func() { <-utxoStatusBodySem }()
 
+		if err := ctx.Err(); err != nil {
+			e.err = err
+			return
+		}
+
+		// The repository detaches the store read from the request's
+		// cancellation, so this slot is held until the store's read returns.
 		data, err := l.h.repository.GetTxFundingRecord(ctx, hash)
 
 		switch {
@@ -747,8 +765,10 @@ func (l *utxoStatusLookup) record(ctx context.Context, txHash *chainhash.Hash, v
 
 		return unknown(utxoReasonStore)
 	case fr == nil:
-		// The record was gone by the time it was read (pruned after a spend).
-		return unknown(utxoReasonPruned)
+		// The funding record is read first, so it was absent then and the store
+		// holds the output now: the record appeared between the two reads (or
+		// the store is inconsistent). Neither "pruned" nor a guess; ask again.
+		return unknown(utxoReasonChanged)
 	}
 
 	rec.Funding = placeFunding()
@@ -791,6 +811,16 @@ func (l *utxoStatusLookup) record(ctx context.Context, txHash *chainhash.Hash, v
 
 		rec.Status, rec.Immature = utxoStatusUnspent, true
 	case utxo.Status_SPENT:
+		// The same transaction-level flags as above: on Aerospike they sit on
+		// the master record only, so a spent output on a child page reads SPENT
+		// with a spender while SQL and pebble answer conflicting.
+		switch {
+		case fr.meta.Conflicting:
+			return unknown(utxoReasonConflict)
+		case fr.meta.Locked:
+			return unknown(utxoReasonLocked)
+		}
+
 		rec.Status = utxoStatusSpent
 
 		if sr.SpendingData == nil || sr.SpendingData.TxID == nil {
@@ -870,18 +900,21 @@ func (l *utxoStatusLookup) storable(out utxoStatusOutput, place func() *UTXOStat
 
 // funding reports where the transaction record sits. It returns nil (unknown)
 // when that cannot be established: a main-chain check failed, the record has no
-// block evidence and is not marked unmined, or a block's ID does not match the
+// block evidence and is not marked unmined, the block IDs and heights differ in
+// length, or a block's ID does not match the
 // main-chain block at its recorded height. Unconfirmed is set only when every
 // block was checked and found off the main chain, or the record says the
 // transaction is unmined. The main-chain header at the recorded height is looked
 // up once per height per request; it confirms the (ID, height) pair and supplies
 // the hash.
 func (l *utxoStatusLookup) funding(ctx context.Context, data *meta.Data) *UTXOStatusFunding {
-	n := len(data.BlockIDs)
-	if len(data.BlockHeights) < n {
-		n = len(data.BlockHeights)
+	// IDs and heights are parallel. Lengths that differ mean the record cannot
+	// be trusted to say where the transaction is, so the placement is unknown.
+	if len(data.BlockIDs) != len(data.BlockHeights) {
+		return nil
 	}
 
+	n := len(data.BlockIDs)
 	unknown := false
 
 	for i := 0; i < n; i++ {

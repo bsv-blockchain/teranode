@@ -357,7 +357,16 @@ func (repo *Repository) GetTxFundingRecord(ctx context.Context, hash *chainhash.
 	}
 	defer releaseSemaphorePermit(repo.semGetTransactionMeta)
 
-	return repo.UtxoStore.Get(ctx, hash, TxFundingRecordFields...)
+	// A store may return from a cancelled read while its batch and external
+	// blob work carries on under its own context. The permit is the
+	// process-wide bound, so the read is detached from the caller's
+	// cancellation: the permit is held until the store's read returns. How long
+	// that takes is bounded by the store itself (for Aerospike, its batch
+	// timeout, 5 minutes by default, and its batch-completion guard). The wait
+	// for the permit above still honours the caller's context.
+	readCtx := context.WithoutCancel(ctx)
+
+	return repo.UtxoStore.Get(readCtx, hash, TxFundingRecordFields...)
 }
 
 // GetTransaction retrieves transaction data by its hash.
