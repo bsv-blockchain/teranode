@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
 	"github.com/stretchr/testify/require"
 )
@@ -28,7 +29,7 @@ func queueIntake(sc *reorgScenario, first, n int) {
 // drain, and each later batch repeats the last ten of the one before, which the drain before it placed;
 // the first copy wins. It records whether each drain ran in parallel, or, with parallel off, runs them
 // all on one goroutine.
-func queuedDuringReorg(t testing.TB, parallel bool, modes *[]bool) reorgPath {
+func queuedDuringReorg(t testing.TB, parallel bool, modes *[]bool, shape *[]chainhash.Hash) reorgPath {
 	return func(t testing.TB, sc *reorgScenario) error {
 		prevHook, prevParallel := reorgDrainHook, reorgParallelDrain
 		defer func() { reorgDrainHook, reorgParallelDrain = prevHook, prevParallel }()
@@ -46,24 +47,42 @@ func queuedDuringReorg(t testing.TB, parallel bool, modes *[]bool) reorgPath {
 			queued += 100
 		}
 
-		return sc.run(t)
+		err := sc.run(t)
+
+		// where the subtrees end, not only the order of their leaves: the roots of the chained
+		// subtrees, then the length of the open one
+		*shape = nil
+		for _, st := range sc.stp.chainedSubtrees {
+			*shape = append(*shape, *st.RootHash())
+		}
+
+		*shape = append(*shape, chainhash.Hash{byte(sc.stp.currentSubtree.Load().Length())})
+
+		return err
 	}
 }
 
 func TestReorgParallelDrain_RunsOnEveryCoreWhenNothingConflicts(t *testing.T) {
-	cfg := smallScenarioConfig()
-	cfg.parallelThreshold = 1
+	for _, disk := range []bool{false, true} {
+		t.Run(map[bool]string{false: "in-memory map", true: "disk map"}[disk], func(t *testing.T) {
+			cfg := smallScenarioConfig()
+			cfg.parallelThreshold = 1
+			cfg.diskTxMap = disk
 
-	var modes []bool
+			var modes, sequential []bool
 
-	// the reference drains every queued transaction one at a time
-	var sequential []bool
+			var shape, sequentialShape []chainhash.Hash
 
-	requireReorgEquivalent(t, cfg, queuedDuringReorg(t, false, &sequential), queuedDuringReorg(t, true, &modes))
+			// the reference drains every queued transaction one at a time
+			requireReorgEquivalent(t, cfg, queuedDuringReorg(t, false, &sequential, &sequentialShape), queuedDuringReorg(t, true, &modes, &shape))
 
-	// the head drain, then the drain of each of the two forward steps
-	require.Equal(t, []bool{true, true, true}, modes)
-	require.Equal(t, []bool{false, false, false}, sequential)
+			// the head drain, then the drain of each of the two forward steps
+			require.Equal(t, []bool{true, true, true}, modes)
+			require.Equal(t, []bool{false, false, false}, sequential)
+			require.NotEmpty(t, shape)
+			require.Equal(t, sequentialShape, shape, "the same subtrees, not only the same leaves in the same order")
+		})
+	}
 }
 
 // A drain is skipped by a conflict in the order of the queue: a tx is dropped when an earlier queued
@@ -76,7 +95,7 @@ func TestReorgParallelDrain_StaysSequentialInAStepWithConflicts(t *testing.T) {
 
 	var modes, sequential []bool
 
-	requireReorgEquivalent(t, cfg, queuedDuringReorg(t, false, &sequential), queuedDuringReorg(t, true, &modes))
+	requireReorgEquivalent(t, cfg, queuedDuringReorg(t, false, &sequential, new([]chainhash.Hash)), queuedDuringReorg(t, true, &modes, new([]chainhash.Hash)))
 
 	require.Len(t, modes, 3)
 	require.True(t, modes[0], "the head drain has no filter")
@@ -92,7 +111,7 @@ func TestReorgParallelDrain_ARevertedLostConflictAloneDoesNotBlockIt(t *testing.
 
 	var modes, sequential []bool
 
-	requireReorgEquivalent(t, cfg, queuedDuringReorg(t, false, &sequential), queuedDuringReorg(t, true, &modes))
+	requireReorgEquivalent(t, cfg, queuedDuringReorg(t, false, &sequential, new([]chainhash.Hash)), queuedDuringReorg(t, true, &modes, new([]chainhash.Hash)))
 
 	require.Equal(t, []bool{true, true, true}, modes)
 }
@@ -102,6 +121,11 @@ func TestReorgParallelDrain_ARevertedLostConflictAloneDoesNotBlockIt(t *testing.
 // drain of the queue before the move-back; the queueing itself is in the iteration's time, not in the
 // phase. Without a queue the drains cost nothing and the two runs are the same.
 func BenchmarkReorgDrain(b *testing.B) {
+	queued := 512 << 10
+	if testing.Short() { // the benchmark-compare job runs with -short
+		queued = 64 << 10
+	}
+
 	for _, parallel := range []bool{false, true} {
 		b.Run(fmt.Sprintf("parallel=%v", parallel), func(b *testing.B) {
 			benchmarkReorgPath(b, reorgPathBenchConfig(256<<10, 0.3, false), func(t testing.TB, sc *reorgScenario) error {
@@ -110,7 +134,7 @@ func BenchmarkReorgDrain(b *testing.B) {
 
 				reorgParallelDrain = parallel
 
-				queueIntake(sc, 0, 512<<10)
+				queueIntake(sc, 0, queued)
 
 				return sc.run(t)
 			})

@@ -143,7 +143,10 @@ func TestMovedBackMarks_HoldsFewerBytesThanAGoMap(t *testing.T) {
 // block assembly still holds. gomap is what the slow path did before issue 2269 (PR 9): a Go map of hash
 // to bool filled and probed by one goroutine. frozen is movedBackMarks.
 func BenchmarkReorgMovedBackMarks(b *testing.B) {
-	const lostN, winnersN = 1 << 20, 4 << 20
+	lostN, winnersN := 1<<20, 4<<20
+	if testing.Short() { // the benchmark-compare job runs with -short
+		lostN, winnersN = 1<<16, 1<<18
+	}
 
 	hashes := randHashes(winnersN+lostN/2, 9)
 	lost := hashes[winnersN-lostN/2:] // half of the lost block is in the winners
