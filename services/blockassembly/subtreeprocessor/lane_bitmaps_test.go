@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"math/rand"
+	"runtime"
 	"slices"
 	"sync"
 	"testing"
@@ -949,4 +950,22 @@ func TestAnAbandonedRecordsPositionsDoNotReachTheNext(t *testing.T) {
 
 	require.Same(t, b, stp.laneFill.subtree)
 	require.Equal(t, []uint64{3}, stp.laneFill.lanes[6])
+}
+
+// A lane whose few positions span most of a 2^32 window is not built from a bitset of that span:
+// two positions 2^31 apart cost well under a megabyte, not the 256 MB such a bitset would take.
+func TestASparseLaneIsNotBuiltFromAWideBitset(t *testing.T) {
+	positions := []uint64{1<<33 + 5, 1<<33 + 1<<31 + 5}
+
+	var before, after runtime.MemStats
+
+	runtime.GC()
+	runtime.ReadMemStats(&before)
+
+	bm := laneBitmap(append([]uint64(nil), positions...))
+
+	runtime.ReadMemStats(&after)
+
+	require.Equal(t, positions, bm.ToArray())
+	require.Less(t, after.TotalAlloc-before.TotalAlloc, uint64(1<<20))
 }
