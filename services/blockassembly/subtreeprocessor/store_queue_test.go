@@ -758,7 +758,9 @@ func TestStoreQueue_AReorgWaitingForADroppedRequestSendsItAgain(t *testing.T) {
 
 			done := make(chan error, 1)
 
-			go func() { done <- stp.awaitQueuedStores(context.Background(), "test", deadline) }()
+			go func() {
+				done <- stp.awaitQueuedStores(context.Background(), "test", len(stp.chainedSubtrees), deadline)
+			}()
 
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
@@ -863,7 +865,9 @@ func TestStoreQueue_AReorgWaitingForARequestDroppedTwiceFailsWithADeadline(t *te
 
 	done := make(chan error, 1)
 
-	go func() { done <- stp.awaitQueuedStores(context.Background(), "test", 10*time.Second) }()
+	go func() {
+		done <- stp.awaitQueuedStores(context.Background(), "test", len(stp.chainedSubtrees), 10*time.Second)
+	}()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()

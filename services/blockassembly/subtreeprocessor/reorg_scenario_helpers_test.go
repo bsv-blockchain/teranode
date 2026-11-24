@@ -150,6 +150,9 @@ type reorgScenarioConfig struct {
 	// reorgStoreDeadline sets blockassembly_reorgStoreDeadline.
 	reorgStoreDeadline time.Duration
 
+	// reorgAwaitedSubtrees sets blockassembly_reorgAwaitedSubtrees.
+	reorgAwaitedSubtrees int
+
 	// storeConsumer, when set, answers every store request in place of the default listener,
 	// which answers ErrChan and Result as stored.
 	storeConsumer func(req NewSubtreeRequest)
@@ -995,6 +998,7 @@ func (sc *reorgScenario) buildProcessor(t testing.TB) {
 	tSettings.BlockAssembly.InitialMerkleItemsPerSubtree = sc.cfg.subtreeSize
 	tSettings.BlockAssembly.UseDynamicSubtreeSize = false
 	tSettings.BlockAssembly.ReorgStoreDeadline = sc.cfg.reorgStoreDeadline
+	tSettings.BlockAssembly.ReorgAwaitedSubtrees = sc.cfg.reorgAwaitedSubtrees
 
 	if sc.cfg.parallelThreshold > 0 {
 		tSettings.BlockAssembly.ParallelSetIfNotExistsThreshold = sc.cfg.parallelThreshold

@@ -4509,7 +4509,7 @@ func (stp *SubtreeProcessor) storeAndAnnounceChainedSubtrees(ctx context.Context
 	// With a store queue the reorg's two calls (wait with no announcement, announce with no wait)
 	// do not send the chain again: it was sent as it was built.
 	if stp.storeQueue != nil && caller == "reorgBlocks" && wait > 0 && skipNotification {
-		return stp.awaitQueuedStores(ctx, caller, deadline)
+		return stp.awaitQueuedStores(ctx, caller, wait, deadline)
 	}
 
 	if stp.storeQueue != nil && caller == "reorgBlocks" && wait == 0 && !skipNotification {
@@ -6251,7 +6251,7 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveBackBlocks []*
 	// that failed or did not finish in time fails the reorg here, before anything irreversible
 	// below, and a reset follows (failedForkReorgNeedsReset). At 0 the wait is as before and never
 	// fails on a store.
-	if err = stp.storeAndAnnounceChainedSubtrees(ctx, "reorgBlocks", len(stp.chainedSubtrees), true, stp.settings.BlockAssembly.ReorgStoreDeadline); err != nil {
+	if err = stp.storeAndAnnounceChainedSubtrees(ctx, "reorgBlocks", stp.reorgAwaitedSubtrees(), true, stp.settings.BlockAssembly.ReorgStoreDeadline); err != nil {
 		return err
 	}
 

@@ -18,10 +18,11 @@ import (
 // typed result and a store that did not finish within it, failed, or left the meta unwritten fails
 // the reorg; without one the wait is for ErrChan, as it always was, which a failed write answers
 // with nil, and a store never fails the reorg. A request dropped while the reorg waits for it is sent
-// again, once.
-func (stp *SubtreeProcessor) awaitQueuedStores(ctx context.Context, caller string, deadline time.Duration) error {
+// again, once. Only the first wait subtrees are waited for (reorgAwaitedSubtrees): the others are
+// already queued, and announceChainedSubtrees sees to the ones that are not.
+func (stp *SubtreeProcessor) awaitQueuedStores(ctx context.Context, caller string, wait int, deadline time.Duration) error {
 	q := stp.storeQueue
-	waits := make([]*storeItem, len(stp.chainedSubtrees))
+	waits := make([]*storeItem, min(wait, len(stp.chainedSubtrees)))
 
 	var timer <-chan time.Time
 
@@ -32,7 +33,9 @@ func (stp *SubtreeProcessor) awaitQueuedStores(ctx context.Context, caller strin
 		timer = t.C
 	}
 
-	for i, st := range stp.chainedSubtrees {
+	for i := range waits {
+		st := stp.chainedSubtrees[i]
+
 		if waits[i] = q.entry(st); waits[i] != nil {
 			continue
 		}
@@ -217,4 +220,37 @@ func (stp *SubtreeProcessor) runDroppedCleanups() {
 	for _, cleanup := range stp.storeQueue.takeCleanups() {
 		cleanup()
 	}
+}
+
+// reorgAwaitedSubtrees is how many of the chained subtrees a fork reorg waits to have stored. With
+// the stored-prefix cut on it is K0 = min(chain length, the leading subtrees that fit in a block,
+// blockassembly_reorgAwaitedSubtrees), and at least one subtree of a chain: the rest store behind
+// the template, which the cut keeps at the stored prefix, and a subtree beyond the block-size prefix
+// is not in this block's template at all. With the cut off, or the setting 0, it is the whole chain:
+// a template published over subtrees that are not stored would name files nothing can read.
+func (stp *SubtreeProcessor) reorgAwaitedSubtrees() int {
+	n := len(stp.chainedSubtrees)
+	k0 := stp.settings.BlockAssembly.ReorgAwaitedSubtrees
+
+	if k0 <= 0 || stp.storedSet == nil || stp.storeQueue == nil || n == 0 {
+		return n
+	}
+
+	if budget, ok := stp.blockMaxSizeBudget(); ok {
+		var total uint64
+
+		fit := 0
+
+		for _, st := range stp.chainedSubtrees {
+			if total += st.SizeInBytes; total > budget {
+				break
+			}
+
+			fit++
+		}
+
+		n = min(n, max(fit, 1))
+	}
+
+	return min(n, k0)
 }
