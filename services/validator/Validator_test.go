@@ -2455,16 +2455,10 @@ func TestEnsureMTPLoaded_CrossBlockReadersAndWritersDoNotRace(t *testing.T) {
 					return
 				default:
 				}
-				// Mimic validateTransaction's read pattern: take RLock,
-				// snapshot len, index a few entries.
-				v.mtpMu.RLock()
-				storeLen := uint32(len(v.mtpStore))
-				if storeLen > 0 {
-					_ = v.mtpStore[0]
-					_ = v.mtpStore[storeLen-1]
-					_ = v.mtpStore[storeLen/2]
-				}
-				v.mtpMu.RUnlock()
+				// Read through validateTransaction's own reader, so the test
+				// fails under -race if readMTPsLocked stops taking the lock.
+				// initialHeight-1 sits in the overlap the extension patches.
+				_, _ = v.readMTPsLocked(initialHeight, 1, []uint32{0, initialHeight / 2, initialHeight - 1})
 			}
 		}()
 	}
