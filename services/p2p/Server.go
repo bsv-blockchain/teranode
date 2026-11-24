@@ -3325,13 +3325,15 @@ func (s *Server) ResetReputation(ctx context.Context, req *p2p_api.ResetReputati
 		return nil, errors.WrapGRPCPublic(errors.NewServiceError("reset reputation", err))
 	}
 
-	// Drop the mirrored ban status so a reset (which may unban) takes effect
-	// immediately instead of after the mirror's next refresh.
+	// A reputation reset does not lift bans: the registry's ResetReputation
+	// leaves ban scores alone. Re-read the registry on the next lookup, but keep
+	// the mirror's view in force until that listing lands, so no ban goes
+	// unenforced while it is in flight or if it fails.
+	s.bannedPeers.invalidate()
+
 	if req.PeerId == "" {
-		s.bannedPeers.clear()
 		s.logger.Infof("[ResetReputation] Reset reputation for all peers. Count: %d", peersReset)
 	} else {
-		s.bannedPeers.remove(req.PeerId)
 		s.logger.Infof("[ResetReputation] Reset reputation for peer %s", req.PeerId)
 	}
 

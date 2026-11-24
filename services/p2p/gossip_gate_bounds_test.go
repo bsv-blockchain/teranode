@@ -552,17 +552,13 @@ func TestBannedPeerMirror_LocalBanSurvivesStraddlingRefresh(t *testing.T) {
 
 	require.True(t, m.replace(nil, now.Add(bannedPeerRefreshInterval), gen))
 	require.False(t, m.contains(pid), "once the registry has had a full interval to report it, the registry's view wins")
-
-	m.add(pid, now)
-	m.remove(pid)
-	require.False(t, m.contains(pid), "an unban is immediate")
 }
 
-// An unban applied locally while a registry listing was in flight must not be
-// undone by that listing landing afterwards: the pre-reset listing still
-// names the peer, and installing it would re-ban the peer for a full refresh
-// interval right after the operator lifted the ban.
-func TestBannedPeerMirror_UnbanSurvivesStraddlingRefresh(t *testing.T) {
+// A listing that was in flight when the mirror was invalidated predates the
+// request for a fresh one, so it must be discarded and leave the mirror due a
+// re-list. The view in force before the invalidation keeps enforcing until
+// that re-list lands.
+func TestBannedPeerMirror_InvalidateDiscardsStraddlingListing(t *testing.T) {
 	var m bannedPeerMirror
 	now := time.Now()
 	pid := mustNewPeerID(t).String()
@@ -571,24 +567,18 @@ func TestBannedPeerMirror_UnbanSurvivesStraddlingRefresh(t *testing.T) {
 	require.True(t, m.replace([]string{pid}, now, gen))
 	require.True(t, m.contains(pid))
 
-	// A refresh starts (captures gen), then the operator unbans, then the
-	// refresh's listing arrives, still naming the peer.
+	// A refresh starts (captures gen), the mirror is invalidated, then the
+	// refresh's listing arrives.
 	_, inFlight := m.state(now)
-	m.remove(pid)
-	require.False(t, m.replace([]string{pid}, now.Add(time.Millisecond), inFlight), "a listing that straddled an unban must be discarded")
-	require.False(t, m.contains(pid), "the unban must hold")
+	m.invalidate()
+	require.False(t, m.replace(nil, now.Add(time.Millisecond), inFlight), "a listing that straddled an invalidation must be discarded")
+	require.True(t, m.contains(pid), "the previous view stays in force until a re-list lands")
 
 	stale, next := m.state(now.Add(time.Millisecond))
 	require.True(t, stale, "the discarded listing must leave the mirror due a re-list")
 
-	// The re-list, started after the unban, is installed normally.
+	// The re-list, started after the invalidation, is installed normally.
 	require.True(t, m.replace(nil, now.Add(2*time.Millisecond), next))
-	require.False(t, m.contains(pid))
-
-	// clear is an unban of everything and invalidates in-flight listings too.
-	_, inFlight = m.state(now)
-	m.clear()
-	require.False(t, m.replace([]string{pid}, now, inFlight))
 	require.False(t, m.contains(pid))
 }
 
