@@ -9206,7 +9206,7 @@ func (stp *SubtreeProcessor) parallelBuildRemainderSubtrees(ctx context.Context,
 			}
 
 			// A full chunk whose subtree holds only its own nodes has its bitmaps built straight
-			// from the positions the copy carried, sorted in place, with no per-lane lists.
+			// from the positions the copy carried, grouped by lane in place, with no per-lane lists.
 			if i < fullCount && c.lanes != nil && c.lanes.added == 0 && laneMembers(c.subtree) == len(c.nodes) {
 				_ = c.subtree.RootHash()
 

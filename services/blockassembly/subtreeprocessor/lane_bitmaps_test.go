@@ -517,10 +517,25 @@ func BenchmarkSealLaneBitmaps(b *testing.B) {
 		sparse[i] = lane.Pack(uint8(l), sparseNext[l]) //nolint:gosec // l < 17
 	}
 
+	// the same positions with every lane past 2^33, as a lane is after about a day at scale
+	past := func(packed []uint64) []uint64 {
+		out := make([]uint64, len(packed))
+		for i, v := range packed {
+			l, p := lane.Unpack(v)
+			out[i] = lane.Pack(l, p+1<<33)
+		}
+
+		return out
+	}
+
 	for _, order := range []struct {
 		name      string
 		positions []uint64
-	}{{"arrival", positions}, {"jittered", jittered}, {"shuffled", shuffled}, {"sparse", sparse}} {
+	}{
+		{"arrival", positions}, {"jittered", jittered}, {"shuffled", shuffled}, {"sparse", sparse},
+		{"arrival past 2^33", past(positions)}, {"jittered past 2^33", past(jittered)},
+		{"shuffled past 2^33", past(shuffled)}, {"sparse past 2^33", past(sparse)},
+	} {
 		b.Run(order.name, func(b *testing.B) {
 			for i := 0; i < b.N; i++ {
 				b.StopTimer()
@@ -821,10 +836,7 @@ func TestLaneBitmapBuildsMatchAddMany(t *testing.T) {
 	}
 }
 
-// laneBitmap's range and bitset paths match AddMany for the positions production lanes hold:
-// long ascending runs, as the dequeue loop fills a subtree, and dense positions far past the
-// first container, including one lane whose lowest is not on a container boundary and one that
-// ends at MaxUint32.
+// laneBitmap's range, bitset and AddMany paths match AddMany, in the first 2^32 window and above it.
 func TestLaneBitmapPathsMatchAddMany(t *testing.T) {
 	r := rand.New(rand.NewSource(11))
 
@@ -863,6 +875,21 @@ func TestLaneBitmapPathsMatchAddMany(t *testing.T) {
 		"dense past 2^20": dense(1<<20+12_345, 3000),
 		// the bitset path on a container boundary
 		"dense on a boundary": dense(7<<16, 3000),
+		// the bitset path in a window above 2^32, off a container boundary
+		"dense past 2^33": dense(1<<33+1<<20+12_345, 3000),
+		// sparse and shuffled above 2^33: the sorted AddMany path
+		"sparse past 2^33": func() []uint64 {
+			positions := make([]uint64, 0, 2000)
+			for p := uint64(1<<33 + 7); len(positions) < 2000; p += uint64(100 + r.Intn(900)) { //nolint:gosec // small
+				positions = append(positions, p)
+			}
+
+			r.Shuffle(len(positions), func(i, j int) { positions[i], positions[j] = positions[j], positions[i] })
+
+			return positions
+		}(),
+		// dense but across the 2^32 boundary: not one window, so the sorted AddMany path
+		"dense across 2^32": dense(1<<32-1500, 3000),
 		// the bitset path ending at MaxUint32
 		"dense to MaxUint32": func() []uint64 {
 			positions := make([]uint64, 0, 5000)

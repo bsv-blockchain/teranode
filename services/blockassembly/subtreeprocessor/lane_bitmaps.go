@@ -1,8 +1,10 @@
 package subtreeprocessor
 
 import (
-	"math"
+	"bytes"
+	"encoding/binary"
 	"runtime"
+	"slices"
 
 	"github.com/RoaringBitmap/roaring/v2"
 	"github.com/RoaringBitmap/roaring/v2/roaring64"
@@ -169,8 +171,9 @@ const laneRunFactor = 64
 // laneBitmap builds one lane's bitmap from positions within the lane, in any order. One pass finds
 // their lowest, highest and how many runs of consecutive positions they come in. Few long runs are
 // added as ranges. Otherwise, when the positions fit in 32 bits and span at most laneDenseFactor
-// times their number, they are set in a bitset, whatever their order, and the bitmap is built from
-// its words; failing that they are added with AddMany.
+// times their number within one 2^32 window, they are set in a bitset, whatever their order, and the
+// bitmap is built from its words; failing that they are sorted, in a copy when out of order, and
+// added with AddMany.
 func laneBitmap(positions []uint64) *roaring64.Bitmap {
 	bm := roaring64.New()
 	if len(positions) == 0 {
@@ -199,9 +202,14 @@ func laneBitmap(positions []uint64) *roaring64.Bitmap {
 				start = i
 			}
 		}
-	case highest <= math.MaxUint32 && highest-(lowest&^0xFFFF) < uint64(len(positions))*laneDenseFactor:
+	case lowest>>32 == highest>>32 && highest-(lowest&^0xFFFF) < uint64(len(positions))*laneDenseFactor:
 		return denseLaneBitmap(positions, lowest, highest)
 	default:
+		if !slices.IsSorted(positions) {
+			positions = slices.Clone(positions)
+			slices.Sort(positions)
+		}
+
 		bm.AddMany(positions)
 	}
 
@@ -210,9 +218,10 @@ func laneBitmap(positions []uint64) *roaring64.Bitmap {
 	return bm
 }
 
-// denseLaneBitmap builds the bitmap of positions, which run from lowest to highest, at most
-// MaxUint32, from a bitset that starts on the container boundary at or below lowest.
+// denseLaneBitmap builds the bitmap of positions, which run from lowest to highest inside one 2^32
+// window, from a bitset that starts on the container boundary at or below lowest.
 func denseLaneBitmap(positions []uint64, lowest, highest uint64) *roaring64.Bitmap {
+	window := lowest &^ 0xFFFFFFFF
 	base := lowest &^ 0xFFFF
 
 	words := make([]uint64, (highest-base+64)/64)
@@ -222,13 +231,41 @@ func denseLaneBitmap(positions []uint64, lowest, highest uint64) *roaring64.Bitm
 	}
 
 	bm32 := roaring.FromDense(words, false)
-	if base != 0 {
-		bm32 = roaring.AddOffset(bm32, uint32(base)) //nolint:gosec // base <= lowest <= MaxUint32
+	if base != window {
+		bm32 = roaring.AddOffset(bm32, uint32(base-window)) //nolint:gosec // base-window < 2^32
 	}
 
 	bm32.RunOptimize()
 
-	return roaring64.Roaring32AsRoaring64(bm32)
+	if window == 0 {
+		return roaring64.Roaring32AsRoaring64(bm32)
+	}
+
+	return roaring32InWindow(bm32, uint32(window>>32)) //nolint:gosec // window>>32 < 2^32
+}
+
+// roaring32InWindow returns bm32 as the 64-bit bitmap whose values carry high as their upper 32
+// bits, through roaring64's serialized form: a bucket count, then each bucket's key and its 32-bit
+// bitmap.
+func roaring32InWindow(bm32 *roaring.Bitmap, high uint32) *roaring64.Bitmap {
+	var buf bytes.Buffer
+
+	var head [12]byte
+
+	binary.LittleEndian.PutUint64(head[:8], 1)
+	binary.LittleEndian.PutUint32(head[8:], high)
+	buf.Write(head[:])
+
+	if _, err := bm32.WriteTo(&buf); err != nil {
+		panic(err) // a bytes.Buffer write does not fail
+	}
+
+	bm := roaring64.New()
+	if _, err := bm.ReadFrom(&buf); err != nil {
+		panic(err) // the bytes were written just above
+	}
+
+	return bm
 }
 
 // laneKey is the bucket bitmapsFromPositions groups position v into: 0 for none, or its lane + 1.
@@ -243,7 +280,7 @@ func laneKey(v uint64) int {
 // bitmapsFromPositions builds the lane bitmaps of subtree root from positions, one per member, 0
 // or another invalid one for none, and counts the members without one. It groups positions by lane
 // in place, in one counting pass and one swapping pass, so the caller must not read positions
-// afterwards; it allocates nothing besides the bitmaps.
+// afterwards; it allocates the bitmaps, and a sorted copy of a lane laneBitmap adds with AddMany.
 func bitmapsFromPositions(root chainhash.Hash, positions []uint64) (lane.SubtreeBitmaps, int) {
 	const keys = lane.MaxLane + 2
 
