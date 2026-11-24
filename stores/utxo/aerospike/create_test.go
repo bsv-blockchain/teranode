@@ -990,3 +990,21 @@ func TestCreateMinedReportsCreatingNotCleared(t *testing.T) {
 		require.ErrorIs(t, err, errors.ErrTxNotFound, "the failed lock write stores nothing")
 	})
 }
+
+// TestPlaceholderKeyIsTheStoresOwn pins that a store fills unused batch slots with a key in its own
+// namespace, from New and from SetNamespace alike, and not one another store set.
+func TestPlaceholderKeyIsTheStoresOwn(t *testing.T) {
+	t.Parallel()
+
+	_, store, _, deferFn := initAerospike(t, test.CreateBaseTestSettings(t), ulogger.NewErrorTestLogger(t))
+	t.Cleanup(deferFn)
+
+	require.NotNil(t, store.PlaceholderKey())
+	require.Equal(t, store.GetNamespace(), store.PlaceholderKey().Namespace())
+	require.Equal(t, "placeholderKey", store.PlaceholderKey().SetName())
+
+	other := &teranodeaerospike.Store{}
+	other.SetNamespace("another-namespace")
+	require.Equal(t, "another-namespace", other.PlaceholderKey().Namespace())
+	require.Equal(t, store.GetNamespace(), store.PlaceholderKey().Namespace(), "another store's namespace must not reach this one")
+}

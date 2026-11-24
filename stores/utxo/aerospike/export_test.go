@@ -6,6 +6,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/bsv-blockchain/aerospike-client-go/v8"
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/prometheus/client_golang/prometheus/testutil"
@@ -187,4 +188,9 @@ func UsePrunerServiceForTest(t testing.TB) {
 		prunerServiceHolderMu.Unlock()
 		prunerServiceHolderCond.Broadcast()
 	})
+}
+
+// PlaceholderKey is the key the store puts in a batch slot an item does not use.
+func (s *Store) PlaceholderKey() *aerospike.Key {
+	return s.placeholderKey
 }

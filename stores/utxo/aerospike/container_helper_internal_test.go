@@ -422,3 +422,26 @@ func runAerospikeTestContainer(t testing.TB, ctx context.Context, opts ...testco
 
 	return aeroTest.RunContainer(ctx, opts...)
 }
+
+// TestSharedTestServerRunsAerospike81OrLater pins that the tests run on Aerospike 8.1 or later, the
+// minimum Teranode supports, whatever image the default or an override names.
+func TestSharedTestServerRunsAerospike81OrLater(t *testing.T) {
+	t.Parallel()
+
+	server := acquireSharedTestServerForInternalTests(t, test.CreateBaseTestSettings(t).UtxoStore.UtxoBatchSize)
+
+	client, aeroErr := uaerospike.NewClient(server.Host, server.Port)
+	require.NoError(t, aeroErr)
+	t.Cleanup(client.Close)
+
+	node, err := client.Cluster().GetRandomNode()
+	require.NoError(t, err)
+
+	info, err := node.RequestInfo(aerospike.NewInfoPolicy(), "build")
+	require.NoError(t, err)
+
+	var major, minor int
+	_, scanErr := fmt.Sscanf(info["build"], "%d.%d", &major, &minor)
+	require.NoError(t, scanErr, "build %q", info["build"])
+	require.True(t, major > 8 || (major == 8 && minor >= 1), "server build %q is older than 8.1", info["build"])
+}

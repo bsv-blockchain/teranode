@@ -548,6 +548,129 @@ func TestAerospikePolicyReadsDoNotRaceClientCreation(t *testing.T) {
 	require.Equal(t, values.readTimeout, GetAerospikeReadPolicy(tSettings).TotalTimeout)
 }
 
+// usePublishedPolicies publishes values for the rest of the test and restores what was published
+// before.
+func usePublishedPolicies(t *testing.T, values *aerospikePolicyValues) {
+	t.Helper()
+
+	previous := aerospikePolicies.Load()
+	t.Cleanup(func() { aerospikePolicies.Store(previous) })
+	aerospikePolicies.Store(values)
+}
+
+func mustParsePolicyURL(t *testing.T, query string) *url.URL {
+	t.Helper()
+
+	u, err := url.Parse("aerospike:///?" + query)
+	require.NoError(t, err)
+
+	return u
+}
+
+// TestLoadAerospikePolicyValuesReachTheGetters pins that every policy setting is parsed and that
+// the Get*Policy functions hand out what was parsed.
+func TestLoadAerospikePolicyValuesReachTheGetters(t *testing.T) {
+	tSettings := settings.NewSettings()
+	tSettings.Aerospike.UseDefaultPolicies = false
+	tSettings.Aerospike.ReadPolicyURL = mustParsePolicyURL(t, "MaxRetries=7&TotalTimeout=7s&SocketTimeout=6s&SleepBetweenRetries=5ms&SleepMultiplier=1.5&ExitFastOnExhaustedConnectionPool=true")
+	tSettings.Aerospike.WritePolicyURL = mustParsePolicyURL(t, "MaxRetries=8&TotalTimeout=8s&SocketTimeout=4s&SleepBetweenRetries=6ms&SleepMultiplier=2.5&ExitFastOnExhaustedConnectionPool=true")
+	tSettings.Aerospike.BatchPolicyURL = mustParsePolicyURL(t, "MaxRetries=9&TotalTimeout=9s&SocketTimeout=3s&SleepBetweenRetries=7ms&SleepMultiplier=3.5&AllowInlineSSD=true&ConcurrentNodes=4")
+	tSettings.Aerospike.QueryPolicyURL = mustParsePolicyURL(t, "MaxRetries=10&TotalTimeout=10s&SocketTimeout=2s&SleepBetweenRetries=8ms&SleepMultiplier=4.5")
+
+	values, err := loadAerospikePolicyValues(ulogger.New("test"), tSettings)
+	require.NoError(t, err)
+	usePublishedPolicies(t, values)
+
+	read := GetAerospikeReadPolicy(tSettings)
+	require.Equal(t, 7, read.MaxRetries)
+	require.Equal(t, 7*time.Second, read.TotalTimeout)
+	require.Equal(t, 6*time.Second, read.SocketTimeout)
+	require.Equal(t, 5*time.Millisecond, read.SleepBetweenRetries)
+	require.InDelta(t, 1.5, read.SleepMultiplier, 0)
+	require.True(t, read.ExitFastOnExhaustedConnectionPool)
+
+	write := GetAerospikeWritePolicy(tSettings, 0)
+	require.Equal(t, 8, write.MaxRetries)
+	require.Equal(t, 8*time.Second, write.TotalTimeout)
+	require.Equal(t, 4*time.Second, write.SocketTimeout)
+	require.Equal(t, 6*time.Millisecond, write.SleepBetweenRetries)
+	require.InDelta(t, 2.5, write.SleepMultiplier, 0)
+	require.True(t, write.ExitFastOnExhaustedConnectionPool)
+
+	batch := GetAerospikeBatchPolicy(tSettings)
+	require.Equal(t, 9, batch.MaxRetries)
+	require.Equal(t, 9*time.Second, batch.TotalTimeout)
+	require.Equal(t, 3*time.Second, batch.SocketTimeout)
+	require.Equal(t, 7*time.Millisecond, batch.SleepBetweenRetries)
+	require.InDelta(t, 3.5, batch.SleepMultiplier, 0)
+	require.True(t, batch.AllowInlineSSD)
+	require.Equal(t, 4, batch.ConcurrentNodes)
+
+	query := GetAerospikeQueryPolicy(tSettings)
+	require.Equal(t, 10, query.MaxRetries)
+	require.Equal(t, 10*time.Second, query.TotalTimeout)
+	require.Equal(t, 2*time.Second, query.SocketTimeout)
+	require.Equal(t, 8*time.Millisecond, query.SleepBetweenRetries)
+	require.InDelta(t, 4.5, query.SleepMultiplier, 0)
+}
+
+// TestLoadAerospikePolicyValuesDefaults pins the aerospike client's own defaults for a setting
+// the policy URL leaves out, and for a query policy that is not configured at all.
+func TestLoadAerospikePolicyValuesDefaults(t *testing.T) {
+	tSettings := settings.NewSettings()
+	tSettings.Aerospike.ReadPolicyURL = mustParsePolicyURL(t, "")
+	tSettings.Aerospike.WritePolicyURL = mustParsePolicyURL(t, "")
+	tSettings.Aerospike.BatchPolicyURL = mustParsePolicyURL(t, "")
+	tSettings.Aerospike.QueryPolicyURL = nil
+
+	values, err := loadAerospikePolicyValues(ulogger.New("test"), tSettings)
+	require.NoError(t, err)
+
+	require.Equal(t, aerospike.NewPolicy().MaxRetries, values.readMaxRetries)
+	require.Equal(t, aerospike.NewWritePolicy(0, 0).TotalTimeout, values.writeTimeout)
+	require.Equal(t, aerospike.NewBatchPolicy().SocketTimeout, values.batchSocketTimeout)
+	require.Equal(t, aerospike.NewQueryPolicy().MaxRetries, values.queryMaxRetries)
+	require.Equal(t, aerospike.NewQueryPolicy().TotalTimeout, values.queryTotalTimeout)
+}
+
+// TestLoadAerospikePolicyValuesRefusesABadValue pins that a value that does not parse fails the
+// load rather than falling back to a default.
+func TestLoadAerospikePolicyValuesRefusesABadValue(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		apply func(*settings.Settings)
+	}{
+		{"read MaxRetries", func(s *settings.Settings) { s.Aerospike.ReadPolicyURL = mustParsePolicyURL(t, "MaxRetries=many") }},
+		{"batch ConcurrentNodes", func(s *settings.Settings) { s.Aerospike.BatchPolicyURL = mustParsePolicyURL(t, "ConcurrentNodes=many") }},
+		{"batch SocketTimeout", func(s *settings.Settings) { s.Aerospike.BatchPolicyURL = mustParsePolicyURL(t, "SocketTimeout=soon") }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tSettings := settings.NewSettings()
+			tc.apply(tSettings)
+
+			_, err := loadAerospikePolicyValues(ulogger.New("test"), tSettings)
+			require.Error(t, err)
+		})
+	}
+}
+
+// TestGetAerospikeClientPublishesThePolicies pins that creating a client publishes the policy
+// values it parsed; here the connection itself then fails, as nothing listens.
+func TestGetAerospikeClientPublishesThePolicies(t *testing.T) {
+	tSettings := settings.NewSettings()
+	tSettings.Aerospike.UseDefaultBasePolicies = false
+	tSettings.Aerospike.ReadPolicyURL = mustParsePolicyURL(t, "MaxRetries=11")
+
+	usePublishedPolicies(t, &aerospikePolicyValues{})
+
+	storeURL, err := url.Parse("aerospike://127.0.0.1:1/test?Timeout=200ms")
+	require.NoError(t, err)
+
+	_, _ = getAerospikeClient(ulogger.New("test"), storeURL, tSettings)
+
+	require.Equal(t, 11, currentAerospikePolicies().readMaxRetries)
+}
+
 func TestGetAerospikeReadPolicy(t *testing.T) {
 	tests := []struct {
 		name               string
