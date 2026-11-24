@@ -202,7 +202,7 @@ Malicious peers can be reconsidered after a cooldown period through the `Reconsi
 
 The P2P service stops acting on gossip from a peer whose score is below 20.0, but only when that peer is a direct neighbour with an open libp2p connection. Its subtree announcements are not passed on for validation, its rejected-transaction messages are dropped, and its node-status messages do not update the stored data for that peer. Its subtree and node-status notifications still reach WebSocket subscribers, and its messages still count toward its activity and bytes received. Messages relayed from authors we are not connected to are not reputation-gated, so a low-score author's messages are processed when an honest neighbour relays them. The author ID of a relayed message costs nothing to create, and looking up each new one in the registry would cost a round-trip per message. Bans still apply to relayed authors.
 
-A low-score neighbour that has just connected can pass the gate until the service's view of open connections is refreshed: about one second, plus the time that refresh takes. The refresh walks every message author the P2P message bus has tracked, and go-p2p-message-bus v0.3.1 never prunes that set, so the second part has no fixed bound: it grows with the number of distinct authors the node has heard from.
+Whether a peer is a direct neighbour is asked of the P2P message bus's connection table on each message, so a low-score neighbour is gated from its first message after it connects.
 
 ## 5. Peer Selection Strategy
 

@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -76,7 +75,7 @@ func blockAnnouncement(t *testing.T, from peer.ID, i int) []byte {
 // A stream of well-formed announcements from distinct, never-before-seen
 // authors (relayed, no connection) must not cost a registry round-trip or a
 // cache entry per author: the ban gate is answered from the mirrored banned
-// set, liveness from the connection snapshot, and the reputation gate does
+// set, liveness from the bus's connection table, and the reputation gate does
 // not apply to relayed authors. Before this, each such message cost an
 // IsPeerBanned round-trip, a GetPeers walk, and inserts into the gate's
 // per-author caches, keyed by an identity the sender mints for free.
@@ -94,13 +93,13 @@ func TestHandleBlockTopic_FreshAuthorsCostNoPerAuthorLookupsOrCacheEntries(t *te
 
 	require.Len(t, producer.PublishChannel(), flood, "well-formed announcements from unknown authors are still forwarded")
 
-	// The registry and walk budgets are one per interval plus the initial
-	// load, however long the loop took: they must not track flood.
+	// The registry budget is one listing per interval plus the initial load,
+	// however long the loop took: it must not track flood.
 	require.Zero(t, counting.callCount("IsPeerBanned"), "the ban gate must not look authors up one by one")
 	require.LessOrEqual(t, counting.callCount("ListBannedPeers"), 1+int(elapsed/bannedPeerRefreshInterval), "the banned set is listed once per refresh interval, not per author")
 	require.Zero(t, counting.callCount("GetPeer"), "relayed authors must not cost a reputation lookup")
 	require.Zero(t, s.reputationCache.Len(), "relayed authors must not occupy reputation cache entries")
-	require.LessOrEqual(t, int(client.walks.Load()), 1+int(elapsed/liveConnMissRefreshInterval), "GetPeers walks must not scale with the number of unknown authors")
+	require.Zero(t, client.walks.Load(), "unknown authors must not cost GetPeers walks")
 }
 
 // A message that fails field validation from an unknown author must leave no
@@ -126,7 +125,7 @@ func TestHandleBlockTopic_InvalidFieldsFromUnknownAuthorLeaveNoGateState(t *test
 	require.Zero(t, counting.callCount("IsPeerBanned"))
 	require.Zero(t, counting.callCount("GetPeer"))
 	require.Zero(t, s.reputationCache.Len(), "no reputation entry may be left behind for the author")
-	require.LessOrEqual(t, int(client.walks.Load()), 1)
+	require.Zero(t, client.walks.Load())
 }
 
 // A directly connected low-reputation peer is still gated, from a cache entry
@@ -298,153 +297,33 @@ func TestBoundedTTLCache_LoweredCapDrainsOnInsert(t *testing.T) {
 	require.Equal(t, 4, c.Len(), "a new key drains an over-cap cache down to the cap")
 }
 
-// The live-connection snapshot is rebuilt at most once per
-// liveConnMissRefreshInterval on misses, so unknown authors cannot each force
-// a GetPeers walk; hits never walk.
-func TestLiveConnSnapshot_WalksAreThrottled(t *testing.T) {
+// Liveness is asked of the bus's connection table per peer, so neither a
+// flood of unknown authors nor a stream of messages from a neighbour costs a
+// GetPeers walk, and a neighbour that connects later is seen at once.
+func TestLiveConnAddrs_AsksTheConnectionTableWithoutWalking(t *testing.T) {
 	s, _ := newServerWithLocalRegistry(t)
 	neighbour := mustNewPeerID(t)
 	client := &countingP2PClient{}
 	client.peers = []p2pMessageBus.PeerInfo{{ID: neighbour.String(), Addrs: []string{"/ip4/10.0.0.1/tcp/9905"}}}
 	s.P2PClient = client
 
-	start := time.Now()
 	for i := 0; i < 100; i++ {
 		require.False(t, s.hasLiveConnection(mustNewPeerID(t).String()))
-	}
-	require.LessOrEqual(t, int(client.walks.Load()), 1+int(time.Since(start)/liveConnMissRefreshInterval), "misses must not each walk GetPeers")
-
-	before := client.walks.Load()
-	for i := 0; i < 100; i++ {
 		require.True(t, s.hasLiveConnection(neighbour.String()))
 	}
-	require.Equal(t, before, client.walks.Load(), "hits are served from the snapshot")
 
-	// A neighbour that connects after the snapshot is found once the snapshot
-	// is rebuilt.
 	late := mustNewPeerID(t)
 	client.peers = append(client.peers, p2pMessageBus.PeerInfo{ID: late.String(), Addrs: []string{"/ip4/10.0.0.2/tcp/9905"}})
-	s.liveConns.invalidate()
-	require.True(t, s.hasLiveConnection(late.String()))
+
 	addrs, live := s.liveConnAddrs(late.String())
-	require.True(t, live)
+	require.True(t, live, "a neighbour that connected after the last lookup is seen on its first lookup")
 	require.Equal(t, []string{"/ip4/10.0.0.2/tcp/9905"}, addrs)
+	require.Zero(t, client.walks.Load(), "per-peer liveness must never walk GetPeers")
 }
 
-// A lookup that waited on rebuildMu must judge the view it finds against the
-// time it acquired the lock, not the time it started waiting. Otherwise a view
-// published while it waited looks younger than it is, and a miss is answered
-// "not live" from a view already past liveConnMissRefreshInterval instead of
-// rebuilding and finding a neighbour that connected in the meantime.
-func TestLiveConnAddrs_JudgesViewAgeAfterWaitingForRebuildLock(t *testing.T) {
-	const wait = liveConnMissRefreshInterval + 200*time.Millisecond
-
-	for attempt := 0; attempt < 3; attempt++ {
-		s, _ := newServerWithLocalRegistry(t)
-		neighbour := mustNewPeerID(t)
-		client := &countingP2PClient{}
-		client.peers = []p2pMessageBus.PeerInfo{{ID: neighbour.String(), Addrs: []string{"/ip4/10.0.0.1/tcp/9905"}}}
-		s.P2PClient = client
-
-		// Hold the rebuild lock as a slow walk would. With no view yet, the
-		// lookup cannot decide and queues on the lock.
-		s.liveConns.rebuildMu.Lock()
-
-		type result struct {
-			live    bool
-			elapsed time.Duration
-		}
-
-		done := make(chan result, 1)
-
-		go func() {
-			start := time.Now()
-			_, live := s.liveConnAddrs(neighbour.String())
-			done <- result{live: live, elapsed: time.Since(start)}
-		}()
-
-		time.Sleep(100 * time.Millisecond)
-
-		// The slow walk publishes a view that misses the neighbour, then
-		// holds the lock past liveConnMissRefreshInterval.
-		s.liveConns.view.Store(&liveConnView{addrs: map[string][]string{}, takenAt: time.Now()})
-		time.Sleep(wait)
-		s.liveConns.rebuildMu.Unlock()
-
-		r := <-done
-		if r.elapsed < wait/2 {
-			// The goroutine ran its first lookup after the view was stored
-			// and never queued on the lock; the scenario did not happen.
-			continue
-		}
-
-		require.True(t, r.live, "a view older than liveConnMissRefreshInterval at lock acquisition must be rebuilt on a miss")
-		require.Equal(t, int32(1), client.walks.Load())
-
-		return
-	}
-
-	t.Fatal("lookup never queued on rebuildMu in three attempts")
-}
-
-// slowWalkP2PClient is a countingP2PClient whose GetPeers takes walkTime, as
-// a walk over a large tracked-author set does.
-type slowWalkP2PClient struct {
-	countingP2PClient
-	walkTime time.Duration
-}
-
-func (c *slowWalkP2PClient) GetPeers() []p2pMessageBus.PeerInfo {
-	time.Sleep(c.walkTime)
-	return c.countingP2PClient.GetPeers()
-}
-
-// Misses queued behind a walk that outlasts liveConnMissRefreshInterval must
-// share that walk's view rather than each walking again: the view is stamped
-// when the walk returns, so it is fresh to every waiter it releases.
-func TestLiveConnAddrs_QueuedMissesShareOneSlowWalk(t *testing.T) {
-	const waiters = 4
-
-	s, _ := newServerWithLocalRegistry(t)
-	client := &slowWalkP2PClient{walkTime: liveConnMissRefreshInterval + 200*time.Millisecond}
-	client.peers = []p2pMessageBus.PeerInfo{{ID: mustNewPeerID(t).String(), Addrs: []string{"/ip4/10.0.0.1/tcp/9905"}}}
-	s.P2PClient = client
-
-	unknown := make([]string, waiters)
-	for i := range unknown {
-		unknown[i] = mustNewPeerID(t).String()
-	}
-
-	var (
-		wg   sync.WaitGroup
-		live atomic.Int32
-	)
-
-	for _, id := range unknown {
-		wg.Add(1)
-
-		go func(id string) {
-			defer wg.Done()
-
-			if s.hasLiveConnection(id) {
-				live.Add(1)
-			}
-		}(id)
-	}
-
-	wg.Wait()
-
-	require.Zero(t, live.Load(), "unknown authors are not live")
-	require.Equal(t, int32(1), client.walks.Load(), "lookups queued behind one walk must share its view")
-}
-
-// A neighbour at a banned IP that connects just after a snapshot was taken is
-// not seen by the IP-ban check until liveConnMissRefreshInterval has passed:
-// misses inside that window are answered from the snapshot, so a flood of
-// unknown authors cannot force a GetPeers walk per message. This pins both
-// edges of that accepted window: the miss inside it is not walked, and the
-// first miss after it rebuilds and catches the ban.
-func TestIsPeerIPBanned_NewNeighbourCaughtWithinMissRefreshInterval(t *testing.T) {
+// A neighbour at a banned IP is caught by the message-level IP check on its
+// first message, however recently it connected.
+func TestIsPeerIPBanned_NewNeighbourCaughtOnFirstMessage(t *testing.T) {
 	s, _ := newServerWithLocalRegistry(t)
 	s.banList = &recordingBanList{banned: map[string]bool{"198.51.100.9": true}}
 
@@ -452,90 +331,32 @@ func TestIsPeerIPBanned_NewNeighbourCaughtWithinMissRefreshInterval(t *testing.T
 	client.peers = []p2pMessageBus.PeerInfo{{ID: mustNewPeerID(t).String(), Addrs: []string{"/ip4/10.0.0.1/tcp/9905"}}}
 	s.P2PClient = client
 
-	// Take the snapshot.
 	require.False(t, s.hasLiveConnection(mustNewPeerID(t).String()))
-	require.Equal(t, int32(1), client.walks.Load())
 
-	// A neighbour at a banned IP connects after it.
 	banned := mustNewPeerID(t)
 	client.peers = append(client.peers, p2pMessageBus.PeerInfo{ID: banned.String(), Addrs: []string{"/ip4/198.51.100.9/tcp/9905"}})
 
-	// Inside the window the miss is served from the snapshot, without a walk.
-	// The assertion only holds if the check ran inside the window, so it is
-	// skipped when the test itself stalled past it.
-	walks := client.walks.Load()
-	stamped := freshLiveConnView(t, s)
-	got := s.isPeerIPBanned(banned.String())
-
-	if time.Since(stamped) < liveConnMissRefreshInterval {
-		require.False(t, got, "inside the window the miss is served from the snapshot")
-		require.Equal(t, walks, client.walks.Load(), "a miss inside the window does not walk")
-	}
-
-	// The first miss after the window rebuilds and catches the banned IP.
-	walks = client.walks.Load()
-	agedLiveConnView(t, s)
-
-	require.True(t, s.isPeerIPBanned(banned.String()), "the first miss after the window rebuilds and catches the banned IP")
-	require.Equal(t, walks+1, client.walks.Load())
+	require.True(t, s.isPeerIPBanned(banned.String()))
+	require.Zero(t, client.walks.Load())
 }
 
-// A low-reputation neighbour that connects just after the live-connection
-// snapshot was taken passes the reputation gate, with no registry lookup, until
-// liveConnMissRefreshInterval has passed; the first message after that
-// rebuilds the snapshot, finds the connection and gates it.
-func TestShouldSkipUnhealthyPeer_NewLowReputationNeighbourGatedAfterMissRefreshInterval(t *testing.T) {
+// A low-reputation neighbour is reputation-gated from its first message after
+// it connects.
+func TestShouldSkipUnhealthyPeer_NewLowReputationNeighbourGatedOnFirstMessage(t *testing.T) {
 	s, _, client, neighbour, _ := newGateBoundsTestServer(t, 1)
 	reg := blockchain.NewCentralizedPeerRegistry(blockchain.DefaultBanConfig())
 	counting := newCountingRegistryClient(blockchain.NewLocalPeerRegistryClient(reg))
 	s.peerRegistry = counting
 
-	// Take the snapshot.
 	require.True(t, s.hasLiveConnection(neighbour.String()))
 
-	// A low-reputation neighbour connects after it.
 	fresh := mustNewPeerID(t)
 	reg.Register(&blockchain.PeerInfo{ID: fresh.String()})
 	reg.UpdateMetrics(fresh.String(), 0, 0, 0, false, false, true, 0)
 	client.peers = append(client.peers, p2pMessageBus.PeerInfo{ID: fresh.String(), Addrs: []string{"/ip4/10.0.0.3/tcp/9905"}})
 
-	stamped := freshLiveConnView(t, s)
-	got := s.shouldSkipUnhealthyPeer(fresh.String(), "test")
-
-	if time.Since(stamped) < liveConnMissRefreshInterval {
-		require.False(t, got, "inside the window the new neighbour is not yet seen as connected")
-		require.Zero(t, counting.callCount("GetPeer"), "and costs no registry lookup")
-	}
-
-	agedLiveConnView(t, s)
-	lookups := counting.callCount("GetPeer")
-
-	require.True(t, s.shouldSkipUnhealthyPeer(fresh.String(), "test"), "after the window the connected low-reputation peer is gated")
-	require.Equal(t, lookups+1, counting.callCount("GetPeer"))
-}
-
-// freshLiveConnView re-stamps the current live-connection view as just taken
-// and returns the stamp.
-func freshLiveConnView(t *testing.T, s *Server) time.Time {
-	t.Helper()
-
-	v := s.liveConns.view.Load()
-	require.NotNil(t, v)
-
-	now := time.Now()
-	s.liveConns.view.Store(&liveConnView{addrs: v.addrs, takenAt: now})
-
-	return now
-}
-
-// agedLiveConnView re-stamps the current live-connection view as taken exactly
-// liveConnMissRefreshInterval ago, so the next miss rebuilds it.
-func agedLiveConnView(t *testing.T, s *Server) {
-	t.Helper()
-
-	v := s.liveConns.view.Load()
-	require.NotNil(t, v)
-	s.liveConns.view.Store(&liveConnView{addrs: v.addrs, takenAt: time.Now().Add(-liveConnMissRefreshInterval)})
+	require.True(t, s.shouldSkipUnhealthyPeer(fresh.String(), "test"), "the connected low-reputation peer is gated on its first message")
+	require.Equal(t, 1, counting.callCount("GetPeer"))
 }
 
 // A ban applied locally while a registry listing was in flight must survive

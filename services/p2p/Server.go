@@ -225,15 +225,8 @@ type Server struct {
 	peerMapCleanupTicker *time.Ticker  // Ticker for periodic cleanup of peer maps
 	peerMapTTL           time.Duration // Time-to-live for peer map entries; the size cap lives in cappedPeerMap.maxSize
 
-	// liveConns is the snapshot of open libp2p connections (peer ID ->
-	// connected multiaddrs) the gossip hot path reads for liveness and IP-ban
-	// checks: updatePeerLastMessageTime consults it so gossip-relayed
-	// publishers are never marked IsConnected while a freshly connected
-	// neighbour is flagged on its first message. Its size is bounded by open
-	// connections, not by distinct authors seen; see liveConnSnapshot.
 	// reconcileInFlight keeps ticker-driven reconcile passes from piling up
 	// when the registry is slow.
-	liveConns         liveConnSnapshot
 	reconcileInFlight atomic.Bool
 
 	invalidPolicyWarnOnce sync.Once // Emits the invalid-fee-policy warning at most once per process to avoid log spam
@@ -2331,11 +2324,8 @@ func (s *Server) getNodeStatusMessage(ctx context.Context) *notificationMsg {
 	// Precisely: peers with an open libp2p connection that have authored at
 	// least one gossip message since process start — liveness derives from
 	// the message bus's topic-peer set, so a connected-but-silent peer is
-	// invisible until its first message. A flag can lag reality after a
-	// connect by up to liveConnMissRefreshInterval plus one GetPeers walk,
-	// which grows with every author the message bus has tracked (unbounded at
-	// go-p2p-message-bus v0.3.1), and by up to one cleanup interval after a
-	// disconnect.
+	// invisible until its first message. A flag is set on the first message
+	// after a connect and can lag a disconnect by up to one cleanup interval.
 	// The two transports are counted separately: ConnectedPeersCount keeps
 	// its established libp2p-only meaning for every node already consuming
 	// this gossip message, and legacy peers get their own figure.

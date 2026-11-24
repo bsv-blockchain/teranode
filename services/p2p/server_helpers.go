@@ -1078,8 +1078,8 @@ func (s *Server) cleanupPeerMaps() {
 	// Sweep the reputation cache. It is bounded at insert and expires lazily
 	// on lookup, so this only reclaims entries for peers that stopped
 	// gossiping. The ban gate and the liveness checks keep no per-author state
-	// any more (bannedPeerMirror, liveConnSnapshot), so there is nothing else
-	// to sweep here.
+	// any more (bannedPeerMirror, liveConnAddrs), so there is nothing else to
+	// sweep here.
 	reputationExpired := s.reputationCache.DeleteExpired(now)
 
 	// Log cleanup stats
@@ -1125,8 +1125,10 @@ func (s *Server) cleanupPeerMaps() {
 // per-author allocation on the gossip path: registry bans are answered from
 // the banned-peer mirror (refreshed once per bannedPeerRefreshInterval, with
 // local ban transitions applied immediately by onPeerBanned) and IP bans from
-// the live-connection snapshot, so a flood of never-before-seen authors — the
-// identities being free to mint — costs the same as a flood from one peer.
+// the bus's connection table (liveConnAddrs), so a flood of never-before-seen
+// authors — the identities being free to mint — costs the same as a flood from
+// one peer. Both checks sit behind connection admission, which refuses banned
+// peers and addresses outright (syncAdmissionBans).
 // Registry failures are tolerated (the mirror keeps serving its last view) so
 // a transient registry blip doesn't drop traffic silently.
 func (s *Server) shouldSkipBannedPeer(from string, messageType string) bool {
@@ -1144,29 +1146,20 @@ func (s *Server) shouldSkipBannedPeer(from string, messageType string) bool {
 }
 
 // isPeerIPBanned reports whether any of the peer's connected addresses match
-// an entry in the IP/subnet ban list. This is what keeps operator IP bans
-// effective for gossip: the current P2P client cannot sever the libp2p
-// connection, so a banned peer stays connected and must be filtered here. The
-// addresses come from the live-connection snapshot, so a gossip-relayed author
-// (no open connection, hence no addresses) is answered without a GetPeers
-// walk and without caching anything under its ID.
+// an entry in the IP/subnet ban list. Connection admission is the primary
+// enforcement of IP bans: the bus refuses connections from a banned address or
+// subnet and closes the open ones when the rule is applied
+// (syncAdmissionBans). This check is defence in depth behind it, for a
+// connection whose rule has not been applied yet (a ban another process wrote
+// reaches admission within one banSweepInterval) or whose Block* call failed.
+// The addresses come from the bus's connection table (liveConnAddrs), so a
+// neighbour is checked from its first message and a gossip-relayed author (no
+// open connection, hence no addresses) costs one table miss.
 //
-// Accepted window: a neighbour that connects just after the snapshot was
-// taken is a miss, and misses are served from the snapshot until it is
-// liveConnMissRefreshInterval (1s) old. The snapshot is stamped when its walk
-// returns, so the window is that interval plus one walk. The walk is linear in
-// every author the message bus has tracked, a set go-p2p-message-bus v0.3.1
-// never prunes, so that part of the window grows with the bus's history and
-// has no fixed bound. A banned IP that reconnects under a fresh peer ID gets
-// that long of gossip accepted per connection. Rebuilding on every miss would
-// close the window but cost a GetPeers walk per message from an unknown
-// author. Removing it needs bans enforced at connection admission in
-// go-p2p-message-bus; a per-peer connectedness lookup would only narrow it.
-//
-// The check covers authors with an open connection only. A connected banned
-// host that signs gossip under fresh author keys is never IP-checked here,
-// because those authors have no addresses; that gap predates the snapshot and
-// also needs admission enforcement to close.
+// The check covers authors with an open connection only. A banned host that
+// signs gossip under fresh author keys has no connection under those keys, so
+// it is never IP-checked here; admission is what keeps it out, since its own
+// connection is refused.
 //
 // IsBanned runs per message per address. The ban list files single-address
 // bans by address, so a clean lookup costs one map read plus a scan of the
@@ -1198,13 +1191,10 @@ func (s *Server) isPeerIPBanned(peerID string) bool {
 // round-trip per novel author, whereas open connections are a resource the
 // remote side pays for.
 //
-// This is deliberate, and it has two consequences. A relayed author whose
-// registry score is below 20 has its messages processed when an honest
-// neighbour relays them; the ban gate (shouldSkipBannedPeer) still applies to
-// it. And a low-score neighbour that has just connected passes until the
-// live-connection snapshot sees it: liveConnMissRefreshInterval plus one walk,
-// and the walk grows with every author the message bus has tracked (see
-// isPeerIPBanned).
+// This is deliberate: a relayed author whose registry score is below 20 has
+// its messages processed when an honest neighbour relays them; the ban gate
+// (shouldSkipBannedPeer) still applies to it. A neighbour is seen as connected
+// from its first message (liveConnAddrs).
 //
 // Reputation scores of connected peers are cached for
 // reputationCacheTTL (bounded at insert) to avoid a round-trip on every pubsub
@@ -1346,18 +1336,15 @@ const reconcileTimeout = 30 * time.Second
 // entries with no live connection and sets it on live peers the hot path
 // missed (their messages arrived before the liveness snapshot included them).
 // Nothing else ever clears the flag: go-p2p-message-bus exposes no disconnect
-// callback (see networkDisconnector) and the only other clearing site is the
-// ban path (removePeer), so without this sweep every flagged peer would stay
-// cleanup-exempt in the registry for the life of the process.
+// callback and the only other clearing site is the ban path (removePeer), so
+// without this sweep every flagged peer would stay cleanup-exempt in the
+// registry for the life of the process.
 func (s *Server) reconcileConnectionStates(ctx context.Context) {
 	if s.P2PClient == nil || s.peerRegistry == nil {
 		return
 	}
 
-	// This rebuilds the live-connection snapshot the hot path reads, so a peer
-	// this pass is about to clear cannot be re-flagged off a stale view in the
-	// seconds that follow.
-	live := s.snapshotLiveConnIDs()
+	live := s.liveConnIDs()
 
 	ctx, cancel := context.WithTimeout(ctx, reconcileTimeout)
 	defer cancel()
