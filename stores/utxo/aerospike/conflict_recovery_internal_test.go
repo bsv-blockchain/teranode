@@ -53,6 +53,8 @@ func restoreTestTxs(t *testing.T, s *Store, outputs int) (parent, child *bt.Tx) 
 // RestoreConflictSpends writes the recorded spends with one Lua batch, not one round trip per
 // outpoint: a wide cascade restores thousands of outpoints.
 func TestRestoreConflictSpends_OneRoundTripPerBatch(t *testing.T) {
+	t.Parallel()
+
 	s, _ := setupStoreForLockTest(t)
 	ctx := t.Context()
 
@@ -88,6 +90,8 @@ func TestRestoreConflictSpends_OneRoundTripPerBatch(t *testing.T) {
 
 // Only the phase of a published checklist changes, so a phase save must not rewrite its chunks.
 func TestSaveConflictRecovery_PhaseSaveKeepsChunks(t *testing.T) {
+	t.Parallel()
+
 	s, client := setupStoreForLockTest(t)
 	ctx := t.Context()
 
@@ -166,6 +170,8 @@ func TestConflictBatchPolicyDeadline(t *testing.T) {
 // LoadConflictRecovery refuses a root record whose checklist reference or chunks are damaged, and
 // SaveConflictRecovery refuses a checklist for an intent that does not exist.
 func TestConflictRecovery_DamagedRecords(t *testing.T) {
+	t.Parallel()
+
 	s, _ := setupStoreForLockTest(t)
 	ctx := t.Context()
 
@@ -244,6 +250,8 @@ func TestConflictRecovery_DamagedRecords(t *testing.T) {
 // At shadow every spend RestoreConflictSpends writes counts once as not carrying a lane position,
 // across batches; with lane positions off nothing is counted, and a batch that fails counts nothing.
 func TestRestoreConflictSpendsCountsEachRestoredSpend(t *testing.T) {
+	t.Parallel()
+
 	s, _ := setupStoreForLockTest(t)
 	ctx := t.Context()
 

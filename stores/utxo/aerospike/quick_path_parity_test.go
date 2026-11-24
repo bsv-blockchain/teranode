@@ -22,6 +22,8 @@ import (
 // error, which would let this parity case silently stop running on a CI box where
 // Docker is present but the image is not.
 func TestQuickPathParity(t *testing.T) {
+	t.Parallel()
+
 	logger := ulogger.NewErrorTestLogger(t)
 	ctx := context.Background()
 	tSettings := test.CreateBaseTestSettings(t)

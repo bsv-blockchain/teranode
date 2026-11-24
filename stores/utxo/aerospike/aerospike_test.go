@@ -131,6 +131,8 @@ func TestCalculateOffsetOutput(t *testing.T) {
 }
 
 func TestUnmined(t *testing.T) {
+	t.Parallel()
+
 	logger := ulogger.NewErrorTestLogger(t)
 	ctx := context.Background()
 

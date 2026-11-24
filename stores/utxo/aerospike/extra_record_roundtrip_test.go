@@ -27,6 +27,8 @@ import (
 // them, which is exactly why the reader is entitled to treat a zero-length
 // element as damage rather than as an unspent output.
 func TestUnspendableOutputSlotRoundTrip(t *testing.T) {
+	t.Parallel()
+
 	ctx := context.Background()
 
 	container, err := runAerospikeTestContainer(ctx)
@@ -102,6 +104,8 @@ func TestUnspendableOutputSlotRoundTrip(t *testing.T) {
 // and the reader's count check would reject perfectly healthy data. Nothing in
 // our own code decides this, so it is pinned against the real thing.
 func TestTrailingNilSlotsSurviveRoundTrip(t *testing.T) {
+	t.Parallel()
+
 	ctx := context.Background()
 
 	container, err := runAerospikeTestContainer(ctx)

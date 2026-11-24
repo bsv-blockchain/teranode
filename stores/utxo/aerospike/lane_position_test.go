@@ -28,6 +28,8 @@ import (
 // TestLanePositionContract runs the shared lane position contract on a real
 // Aerospike.
 func TestLanePositionContract(t *testing.T) {
+	t.Parallel()
+
 	logger := ulogger.NewErrorTestLogger(t)
 	tSettings := test.CreateBaseTestSettings(t)
 
@@ -47,6 +49,8 @@ func TestLanePositionContract(t *testing.T) {
 // master record only, for the paths that store a transaction outside the
 // record.
 func TestLanePositionBin(t *testing.T) {
+	t.Parallel()
+
 	ctx := context.Background()
 	logger := ulogger.NewErrorTestLogger(t)
 	tSettings := test.CreateBaseTestSettings(t)
@@ -75,7 +79,6 @@ func TestLanePositionBin(t *testing.T) {
 	position := lane.Pack(200, 12345)
 
 	t.Run("a transaction over the in-record size limit goes external and keeps the bin", func(t *testing.T) {
-		cleanDB(t, client)
 
 		// The test batch size is small, so reach the size limit with a few large
 		// scripts rather than many outputs.
@@ -103,7 +106,6 @@ func TestLanePositionBin(t *testing.T) {
 	})
 
 	t.Run("a transaction split across records writes the bin on the master only", func(t *testing.T) {
-		cleanDB(t, client)
 
 		tx := createTransactionWithOutputs(tSettings.UtxoStore.UtxoBatchSize + 1)
 
@@ -127,7 +129,6 @@ func TestLanePositionBin(t *testing.T) {
 	// lane position again. No configuration in the repo makes the server refuse one, so the batch
 	// answers RECORD_TOO_BIG once and the rebuild then runs against the real server.
 	t.Run("a record the server refuses as too big keeps the bin when it is rebuilt", func(t *testing.T) {
-		cleanDB(t, client)
 
 		tx := createTransactionWithOutputs(3)
 
@@ -160,7 +161,6 @@ func TestLanePositionBin(t *testing.T) {
 	})
 
 	t.Run("a create without the option writes no bin", func(t *testing.T) {
-		cleanDB(t, client)
 
 		for name, tx := range map[string]*bt.Tx{
 			"small":    createTransactionWithOutputs(3),
@@ -185,14 +185,14 @@ func TestLanePositionBin(t *testing.T) {
 // was never written. SpendAndCreate takes its position before it calls Create, so only a direct
 // Create reaches this order.
 func TestLanePositionCreateConflictingWithNoPositionLeavesParentsAlone(t *testing.T) {
+	t.Parallel()
+
 	ctx := context.Background()
 	logger := ulogger.NewErrorTestLogger(t)
 	tSettings := test.CreateBaseTestSettings(t)
 
-	client, store, _, deferFn := initAerospike(t, tSettings, logger)
+	_, store, _, deferFn := initAerospike(t, tSettings, logger)
 	t.Cleanup(deferFn)
-
-	cleanDB(t, client)
 
 	parent := createTransactionWithOutputs(1)
 	_, err := store.Create(ctx, parent, 1)
@@ -219,7 +219,7 @@ func TestLanePositionCreateConflictingWithNoPositionLeavesParentsAlone(t *testin
 func laneParent(t *testing.T, seed uint32, n int) *bt.Tx {
 	t.Helper()
 
-	tx := bt.NewTx()
+	tx := uniqueTx(bt.NewTx())
 	require.NoError(t, tx.From("00000000000000000000000000000000000000000000000000000000000000aa", seed,
 		"76a914000000000000000000000000000000000000000088ac", 1_000_000))
 
@@ -288,6 +288,8 @@ func slotLanes(t *testing.T, v interface{}) []uint64 {
 // writes nothing, Unspend clears the position, and a spend without one leaves the record exactly as
 // before, with no slot bin at all.
 func TestSpendRecordsTheSpenderLanePositionInTheSlot(t *testing.T) {
+	t.Parallel()
+
 	ctx := context.Background()
 	logger := ulogger.NewErrorTestLogger(t)
 	tSettings := test.CreateBaseTestSettings(t)
@@ -365,6 +367,8 @@ func TestSpendRecordsTheSpenderLanePositionInTheSlot(t *testing.T) {
 // A create names its parents' positions on the master record, and the validator's parent read
 // gives back the parent's own position, at shadow only.
 func TestParentLanePositionsOnAerospike(t *testing.T) {
+	t.Parallel()
+
 	ctx := context.Background()
 	logger := ulogger.NewErrorTestLogger(t)
 	tSettings := test.CreateBaseTestSettings(t)
@@ -568,6 +572,8 @@ func TestCreateLeavesOffAParentListTooLongForTheRecord(t *testing.T) {
 // the position the create then writes: the parent's slot, the child's own lanePos bin and the
 // position the create returns are one value.
 func TestSpendAndCreateRecordsTheCreatesPositionInTheParentsSlot(t *testing.T) {
+	t.Parallel()
+
 	ctx := context.Background()
 	logger := ulogger.NewErrorTestLogger(t)
 	tSettings := test.CreateBaseTestSettings(t)
@@ -603,6 +609,8 @@ func TestSpendAndCreateRecordsTheCreatesPositionInTheParentsSlot(t *testing.T) {
 // there. Handing the position to the next create would leave that slot naming another transaction.
 // A double spend of a single output, refused before any write, returns it (the shared contract).
 func TestRefusedLaneSpendKeepsItsPositionBurned(t *testing.T) {
+	t.Parallel()
+
 	for name, tc := range map[string]struct {
 		// refuse readies the second parent so that the child's spend of it is refused.
 		refuse  func(t *testing.T, store *teranodeaerospike.Store, parent *bt.Tx)
@@ -678,6 +686,8 @@ func TestRefusedLaneSpendKeepsItsPositionBurned(t *testing.T) {
 // A below-checkpoint list creates a child of a parent in the list first and spends its inputs in a
 // second wave; that spend records the position the child was created with in the parent's slot.
 func TestBelowCheckpointListRecordsTheChildsPositionInTheParentsSlot(t *testing.T) {
+	t.Parallel()
+
 	ctx := context.Background()
 	logger := ulogger.NewErrorTestLogger(t)
 	tSettings := test.CreateBaseTestSettings(t)

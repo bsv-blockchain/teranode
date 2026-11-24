@@ -25,6 +25,8 @@ import (
 // carries a deleteAtHeight when the spend makes it fully spent. Lua's setDeleteAtHeight raises
 // but never lowers an existing DAH, and clears a stale DAH when the record is not eligible.
 func TestSpendDAHParity(t *testing.T) {
+	t.Parallel()
+
 	if testing.Short() {
 		t.Skip("Skipping Aerospike integration test in short mode")
 	}
@@ -66,11 +68,10 @@ func TestSpendDAHParity(t *testing.T) {
 
 			client, store, ctx, cleanup := initAerospike(t, tSettings, logger)
 			defer cleanup()
-			cleanDB(t, client)
 
 			for i, c := range cases {
 				t.Run(c.name, func(t *testing.T) {
-					parent := bt.NewTx()
+					parent := uniqueTx(bt.NewTx())
 					require.NoError(t, parent.From(
 						"1111111111111111111111111111111111111111111111111111111111111111", uint32(i), //nolint:gosec
 						"76a914000000000000000000000000000000000000000088ac", 100000))
@@ -120,6 +121,10 @@ func TestSpendDAHParity(t *testing.T) {
 // an eligible record keeps a higher existing DAH (never lowered), an ineligible one has a stale
 // DAH cleared.
 func TestExpiredPreservationDAHParity(t *testing.T) {
+	t.Parallel()
+
+	fx := newTxFixtures(t)
+
 	if testing.Short() {
 		t.Skip("Skipping Aerospike integration test in short mode")
 	}
@@ -129,18 +134,18 @@ func TestExpiredPreservationDAHParity(t *testing.T) {
 	tSettings.GlobalBlockHeightRetention = 100
 	tSettings.UtxoStore.BlockHeightRetentionAdjustment = 0
 
-	client, store, ctx, cleanup := initAerospike(t, tSettings, logger)
+	client, store, ctx, cleanup := initAerospikeOwnServer(t, tSettings, logger)
 	defer cleanup()
 
 	const currentHeight = uint32(200)
 
-	txKey, err := aerospike.NewKey(store.GetNamespace(), store.GetName(), tx.TxIDChainHash().CloneBytes())
+	txKey, err := aerospike.NewKey(store.GetNamespace(), store.GetName(), fx.tx.TxIDChainHash().CloneBytes())
 	require.NoError(t, err)
 
 	run := func(t *testing.T, eligible bool, dah *int, want *int) {
 		cleanDB(t, client)
 
-		_, err := store.Create(ctx, tx, 0)
+		_, err := store.Create(ctx, fx.tx, 0)
 		require.NoError(t, err)
 
 		wp := util.GetAerospikeWritePolicy(tSettings, 0)
@@ -188,6 +193,8 @@ func TestExpiredPreservationDAHParity(t *testing.T) {
 // TestExpiredPreservationChildDAH covers the pagination-record follow-up of the expiry path for
 // an external master: a stamped master stamps its child, a cleared master clears its child.
 func TestExpiredPreservationChildDAH(t *testing.T) {
+	t.Parallel()
+
 	if testing.Short() {
 		t.Skip("Skipping Aerospike integration test in short mode")
 	}
@@ -198,7 +205,7 @@ func TestExpiredPreservationChildDAH(t *testing.T) {
 	tSettings.UtxoStore.BlockHeightRetentionAdjustment = 0
 	tSettings.UtxoStore.UtxoBatchSize = 4
 
-	client, store, ctx, cleanup := initAerospike(t, tSettings, logger)
+	client, store, ctx, cleanup := initAerospikeOwnServer(t, tSettings, logger)
 	defer cleanup()
 
 	const currentHeight = uint32(200)
@@ -264,6 +271,8 @@ func TestExpiredPreservationChildDAH(t *testing.T) {
 // expressions) for an external master: a master that gets a DAH sets its child, a master whose
 // stale DAH is cleared clears its child.
 func TestSpendChildDAH(t *testing.T) {
+	t.Parallel()
+
 	if testing.Short() {
 		t.Skip("Skipping Aerospike integration test in short mode")
 	}
@@ -286,9 +295,8 @@ func TestSpendChildDAH(t *testing.T) {
 			defer cleanup()
 
 			run := func(t *testing.T, idx int, mined bool, dah *int, wantMaster, wantChild *int) {
-				cleanDB(t, client)
 
-				parent := bt.NewTx()
+				parent := uniqueTx(bt.NewTx())
 				require.NoError(t, parent.From(
 					"1111111111111111111111111111111111111111111111111111111111111111", uint32(idx), //nolint:gosec
 					"76a914000000000000000000000000000000000000000088ac", 100000))
@@ -369,7 +377,8 @@ func newExpiredFailureHarness(t *testing.T) *expiredFailureHarness {
 	tSettings.UtxoStore.BlockHeightRetentionAdjustment = 0
 	tSettings.UtxoStore.UtxoBatchSize = 4
 
-	client, store, ctx, cleanup := initAerospike(t, tSettings, logger)
+	// Its run calls ProcessExpiredPreservations, which sweeps the whole set.
+	client, store, ctx, cleanup := initAerospikeOwnServer(t, tSettings, logger)
 	t.Cleanup(cleanup)
 
 	return &expiredFailureHarness{client: client, store: store, ctx: ctx}
@@ -488,6 +497,8 @@ func (h *expiredFailureHarness) bins(t *testing.T) (master, child aerospike.BinM
 // pruner can delete. The path must retry the unset once, and if it still fails restore the
 // master (preserveUntil and DAH) so the next run redoes the whole transition.
 func TestExpiredPreservationChildUnsetFailure(t *testing.T) {
+	t.Parallel()
+
 	if testing.Short() {
 		t.Skip("Skipping Aerospike integration test in short mode")
 	}
@@ -575,6 +586,8 @@ func restoreFailedMetric(t *testing.T) float64 {
 // another writer changes the master. The restore must only apply to the known post-write state
 // (preserveUntil absent and DAH as the expiry left it); otherwise someone else owns the record.
 func TestExpiredPreservationRestoreLeavesConcurrentWriter(t *testing.T) {
+	t.Parallel()
+
 	if testing.Short() {
 		t.Skip("Skipping Aerospike integration test in short mode")
 	}
@@ -615,6 +628,8 @@ func TestExpiredPreservationRestoreLeavesConcurrentWriter(t *testing.T) {
 // fails leaves the children at the lower X, so they could be pruned before the master. The
 // expiry path must treat it like a failed unset: retry, then restore the master.
 func TestExpiredPreservationChildRaiseFailure(t *testing.T) {
+	t.Parallel()
+
 	if testing.Short() {
 		t.Skip("Skipping Aerospike integration test in short mode")
 	}
@@ -644,6 +659,8 @@ func TestExpiredPreservationChildRaiseFailure(t *testing.T) {
 // master is protected. Preserving must clear the pages' DAH, and re-preserving (the pruner re-runs
 // it every cycle) must heal pages that still carry one.
 func TestPreserveChildDAH(t *testing.T) {
+	t.Parallel()
+
 	if testing.Short() {
 		t.Skip("Skipping Aerospike integration test in short mode")
 	}
@@ -664,7 +681,6 @@ func TestPreserveChildDAH(t *testing.T) {
 			defer cleanup()
 
 			setup := func(t *testing.T, idx int, external bool, masterDAH, pageDAH int) (k0, k1 *aerospike.Key, hash *chainhash.Hash) {
-				cleanDB(t, client)
 
 				hash = dahParityCreatePaginatedTx(ctx, t, store, idx)
 
@@ -771,6 +787,8 @@ func TestPreserveChildDAH(t *testing.T) {
 // deleteAtHeight when the preservation expires, because the pruner skips records without a txid
 // and would never remove it.
 func TestExpiredPreservationDoesNotRecreateDeletedPages(t *testing.T) {
+	t.Parallel()
+
 	if testing.Short() {
 		t.Skip("Skipping Aerospike integration test in short mode")
 	}
@@ -781,7 +799,7 @@ func TestExpiredPreservationDoesNotRecreateDeletedPages(t *testing.T) {
 	tSettings.UtxoStore.BlockHeightRetentionAdjustment = 0
 	tSettings.UtxoStore.UtxoBatchSize = 4
 
-	client, store, ctx, cleanup := initAerospike(t, tSettings, logger)
+	client, store, ctx, cleanup := initAerospikeOwnServer(t, tSettings, logger)
 	defer cleanup()
 
 	const currentHeight = uint32(200)

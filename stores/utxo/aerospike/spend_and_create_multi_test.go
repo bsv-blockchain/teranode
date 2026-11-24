@@ -9,6 +9,8 @@ import (
 )
 
 func TestSpendAndCreateMulti(t *testing.T) {
+	t.Parallel()
+
 	logger := ulogger.NewErrorTestLogger(t)
 	tSettings := test.CreateBaseTestSettings(t)
 

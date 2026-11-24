@@ -39,6 +39,8 @@ func parentKeyForOutput(t *testing.T, store *astore.Store, txID *chainhash.Hash,
 // the second wave of a below-checkpoint list, whose first wave may have written
 // the record itself.
 func TestSpendDoesNotBlessWithRequireParentOutputs(t *testing.T) {
+	t.Parallel()
+
 	logger := ulogger.New("spend-bless-test")
 	s := test.CreateBaseTestSettings(t)
 	s.Aerospike.EnableSpendFilterExpressions = true
@@ -47,7 +49,7 @@ func TestSpendDoesNotBlessWithRequireParentOutputs(t *testing.T) {
 	t.Cleanup(cleanup)
 	require.NoError(t, store.SetBlockHeight(1000))
 
-	parent := bt.NewTx()
+	parent := uniqueTx(bt.NewTx())
 	require.NoError(t, parent.From("1111111111111111111111111111111111111111111111111111111111111111", 0, "51", 30000))
 	require.NoError(t, parent.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 4000))
 	_, err := store.Create(ctx, parent, 1000)
@@ -78,13 +80,15 @@ func TestSpendDoesNotBlessWithRequireParentOutputs(t *testing.T) {
 // since that is what a rolled-back spend leaves; for a conflicting loser it
 // would hold it back forever. A replay of X meets W's spend, so X is pruned.
 func TestPrunerDeletesConflictingLoserWithReleasedUncontestedInput(t *testing.T) {
+	t.Parallel()
+
 	logger := ulogger.New("pruner-conflicting-loser-test")
 	s := test.CreateBaseTestSettings(t)
 	s.UtxoStore.DisableDAHCleaner = false
 	s.Pruner.UTXODefensiveEnabled = false
 	s.Aerospike.EnableSpendFilterExpressions = true
 
-	client, store, ctx, cleanup := initAerospike(t, s, logger)
+	client, store, ctx, cleanup := initAerospikeOwnServer(t, s, logger)
 	t.Cleanup(cleanup)
 	require.NoError(t, store.SetBlockHeight(1000))
 
@@ -194,6 +198,8 @@ func spendOf(t *testing.T, parent *bt.Tx, vout uint32, child *bt.Tx, vin int) *u
 // decides by error class instead: a validation failure reverses what it
 // wrote, and an infrastructure failure leaves it for the retry to match.
 func TestRollbackOfARequireParentOutputsCall(t *testing.T) {
+	t.Parallel()
+
 	s := test.CreateBaseTestSettings(t)
 
 	_, store, ctx, cleanup := initAerospike(t, s, ulogger.New("require-parent-outputs-rollback-test"))
@@ -239,6 +245,8 @@ func TestRollbackOfARequireParentOutputsCall(t *testing.T) {
 // transaction the store already holds, is blessed: it counts as succeeded but
 // wrote nothing, so a later rollback must not try to reverse it.
 func TestBlessedInputIsNotAWrittenSpend(t *testing.T) {
+	t.Parallel()
+
 	s := test.CreateBaseTestSettings(t)
 
 	_, store, ctx, cleanup := initAerospike(t, s, ulogger.New("blessed-input-test"))

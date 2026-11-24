@@ -124,7 +124,7 @@ func benchmarkSetMinedMultiWithMode(b *testing.B, tSettings *settings.Settings, 
 	// Create transactions - use coinbase tx to avoid fee validation issues
 	txHashes := make([]*chainhash.Hash, batchSize)
 	for i := 0; i < batchSize; i++ {
-		txLocal, err := bt.NewTxFromString(coinbaseTx.String())
+		txLocal, err := bt.NewTxFromString(fixtureCoinbaseTxHex)
 		require.NoError(b, err)
 		// Modify output to make each transaction unique
 		txLocal.Outputs[0].Satoshis = txLocal.Outputs[0].Satoshis + uint64(i)
@@ -183,7 +183,7 @@ func benchmarkSetMinedMultiAlreadyMinedWithMode(b *testing.B, tSettings *setting
 
 	txHashes := make([]*chainhash.Hash, batchSize)
 	for i := 0; i < batchSize; i++ {
-		txLocal, err := bt.NewTxFromString(coinbaseTx.String())
+		txLocal, err := bt.NewTxFromString(fixtureCoinbaseTxHex)
 		require.NoError(b, err)
 		txLocal.Outputs[0].Satoshis = txLocal.Outputs[0].Satoshis + uint64(i)
 

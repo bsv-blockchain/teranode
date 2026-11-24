@@ -59,6 +59,8 @@ func newLayoutTestStore(t *testing.T, batchSize int) (*Store, *aerospike.Client,
 
 // A first open records the batch size it was configured with.
 func TestLayoutMarker_FirstOpenRecordsBatchSize(t *testing.T) {
+	t.Parallel()
+
 	store, client, _, _ := newLayoutTestStore(t, 128)
 	if store == nil {
 		t.Skip("store open failed")
@@ -75,6 +77,8 @@ func TestLayoutMarker_FirstOpenRecordsBatchSize(t *testing.T) {
 
 // Reopening with the same batch size is silent and accepted.
 func TestLayoutMarker_SameSizeReopenAccepted(t *testing.T) {
+	t.Parallel()
+
 	store, _, tSettings, endpoint := newLayoutTestStore(t, 512)
 	if store == nil {
 		t.Skip("store open failed")
@@ -96,6 +100,8 @@ func TestLayoutMarker_SameSizeReopenAccepted(t *testing.T) {
 // vs docker.m (512) context swap from the notes - must refuse the store and
 // name both numbers.
 func TestLayoutMarker_DifferentSizeReopenRefused(t *testing.T) {
+	t.Parallel()
+
 	store, _, tSettings, endpoint := newLayoutTestStore(t, 512)
 	if store == nil {
 		t.Skip("store open failed")
@@ -118,6 +124,8 @@ func TestLayoutMarker_DifferentSizeReopenRefused(t *testing.T) {
 // loser path without a genuine race: the pre-write wins, the open re-reads,
 // agrees, and proceeds.
 func TestLayoutMarker_PreexistingSameValueAccepted(t *testing.T) {
+	t.Parallel()
+
 	store, client, _, _ := newLayoutTestStore(t, 64)
 	if store == nil {
 		t.Skip("store open failed")
@@ -138,6 +146,8 @@ func TestLayoutMarker_PreexistingSameValueAccepted(t *testing.T) {
 // different value directly, then calling writeLayoutBatchSize (which re-reads
 // and must report the disagreement naming the winner's number).
 func TestLayoutMarker_WriteRaceReportsWinner(t *testing.T) {
+	t.Parallel()
+
 	store, client, _, _ := newLayoutTestStore(t, 128)
 	if store == nil {
 		t.Skip("store open failed")

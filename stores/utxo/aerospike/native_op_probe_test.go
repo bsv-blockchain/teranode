@@ -27,6 +27,8 @@ import (
 // native path: the probe must succeed (including the double-spend rejection
 // stage) and executeTeranodeOp must run natively.
 func TestNativeTeranodeOpProbe_Container(t *testing.T) {
+	t.Parallel()
+
 	logger := ulogger.NewErrorTestLogger(t)
 	ctx := context.Background()
 

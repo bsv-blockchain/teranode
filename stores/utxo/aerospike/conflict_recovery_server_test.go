@@ -19,7 +19,11 @@ import (
 // The conflict recovery cases share one Aerospike container. Every case starts from empty UTXO,
 // WAL and checklist sets, so the order of the cases does not matter.
 func TestAerospikeConflictRecovery(t *testing.T) {
-	client, store, _, deferFn := initAerospike(t, test.CreateBaseTestSettings(t), ulogger.NewErrorTestLogger(t))
+	t.Parallel()
+	// Reads or adds to the process-wide conflict WAL fallback scan count.
+	lockConflictWALScans(t)
+
+	client, store, _, deferFn := initAerospikeOwnServer(t, test.CreateBaseTestSettings(t), ulogger.NewErrorTestLogger(t))
 	t.Cleanup(deferFn)
 
 	cases := []struct {
@@ -345,6 +349,10 @@ const conflictWALIndexCommand = "sindex-create:namespace=<ns>;set=<set>_conflict
 // The documented manual command creates the index the store reads through: the startup read then
 // uses it without a scan.
 func TestConflictWALIndex_ManualCreateCommand(t *testing.T) {
+	t.Parallel()
+	// Reads or adds to the process-wide conflict WAL fallback scan count.
+	lockConflictWALScans(t)
+
 	client, store, ctx := initAerospikeImageWith(t, "aerospike/aerospike-server:8.1", test.CreateBaseTestSettings(t), nil)
 	walSet := store.GetName() + "_conflictwal"
 

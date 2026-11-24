@@ -100,6 +100,8 @@ func lockTokenOf(t *testing.T, store *Store, client *uaerospike.Client, txHash *
 // writer's deferred release must not evict it. Before the fence that release deleted by key
 // alone and would have let a third writer in while the second still believed it held the lock.
 func TestLockFence(t *testing.T) {
+	t.Parallel()
+
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}

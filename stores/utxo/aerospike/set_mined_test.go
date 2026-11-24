@@ -32,6 +32,8 @@ func txWithOutputs(t *testing.T, numOutputs int) *bt.Tx {
 // TestReadExtraRecordCounts checks that only a transaction with extra records
 // comes back, with its count, and that a missing master is skipped quietly.
 func TestReadExtraRecordCounts(t *testing.T) {
+	t.Parallel()
+
 	if testing.Short() {
 		t.Skip("Skipping Aerospike integration test in short mode")
 	}
@@ -105,6 +107,8 @@ func TestExtraRecordItemsReportsReadFailures(t *testing.T) {
 // otherwise healthy batch: the failure reaches the caller with its txid, and
 // the other transaction's extra records still lose `creating`.
 func TestApplyLockClearWorkClearsHealthyTxWhenASiblingReadFails(t *testing.T) {
+	t.Parallel()
+
 	if testing.Short() {
 		t.Skip("Skipping Aerospike integration test in short mode")
 	}
@@ -171,6 +175,8 @@ func TestApplyLockClearWorkClearsHealthyTxWhenASiblingReadFails(t *testing.T) {
 // TestApplyLockClearWorkReportsEveryFailure checks that a failed read of the
 // extra record count, a failed clear and a failed unlock all reach the caller.
 func TestApplyLockClearWorkReportsEveryFailure(t *testing.T) {
+	t.Parallel()
+
 	if testing.Short() {
 		t.Skip("Skipping Aerospike integration test in short mode")
 	}

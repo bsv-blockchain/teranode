@@ -58,6 +58,8 @@ func setupStoreForVerifyTest(t *testing.T) (*Store, *uaerospike.Client) {
 }
 
 func TestHandleExtraRecords_DAHSetWithDrift(t *testing.T) {
+	t.Parallel()
+
 	store, client := setupStoreForVerifyTest(t)
 	ctx := context.Background()
 
@@ -115,6 +117,8 @@ func TestHandleExtraRecords_DAHSetWithDrift(t *testing.T) {
 }
 
 func TestHandleExtraRecords_DAHSetAllSpent(t *testing.T) {
+	t.Parallel()
+
 	store, client := setupStoreForVerifyTest(t)
 	ctx := context.Background()
 
@@ -174,6 +178,8 @@ func TestHandleExtraRecords_DAHSetAllSpent(t *testing.T) {
 }
 
 func TestVerifyAllChildrenSpent(t *testing.T) {
+	t.Parallel()
+
 	store, client := setupStoreForVerifyTest(t)
 
 	txID := chainhash.HashH([]byte("test-verify-children"))

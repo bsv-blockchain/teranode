@@ -21,6 +21,8 @@ import (
 // removes every reference a surviving parent holds to a conflicting loser before it deletes the
 // loser: the parent output spend and the parent conflictingChildren entry.
 func TestPrunerClearsParentRefsOfReapedConflictingLoser(t *testing.T) {
+	t.Parallel()
+
 	for _, defensive := range []bool{false, true} {
 		t.Run(fmt.Sprintf("defensive=%v", defensive), func(t *testing.T) {
 			logger := ulogger.NewErrorTestLogger(t)
@@ -28,7 +30,7 @@ func TestPrunerClearsParentRefsOfReapedConflictingLoser(t *testing.T) {
 			s.UtxoStore.DisableDAHCleaner = false
 			s.Pruner.UTXODefensiveEnabled = defensive
 
-			client, store, ctx, cleanup := initAerospike(t, s, logger)
+			client, store, ctx, cleanup := initAerospikeOwnServer(t, s, logger)
 			t.Cleanup(cleanup)
 
 			require.NoError(t, store.SetBlockHeight(1000))

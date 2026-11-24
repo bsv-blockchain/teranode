@@ -16,6 +16,8 @@ import (
 )
 
 func TestCreateIndexIfNotExists(t *testing.T) {
+	t.Parallel()
+
 	logger := ulogger.NewVerboseTestLogger(t)
 	ctx := context.Background()
 
@@ -72,6 +74,8 @@ func TestCreateIndexIfNotExists(t *testing.T) {
 }
 
 func TestWaitForIndexReady(t *testing.T) {
+	t.Parallel()
+
 	logger := ulogger.NewVerboseTestLogger(t)
 	ctx := context.Background()
 
@@ -129,6 +133,8 @@ func TestWaitForIndexReady(t *testing.T) {
 }
 
 func TestIndexWaiterAdapter(t *testing.T) {
+	t.Parallel()
+
 	logger := ulogger.NewVerboseTestLogger(t)
 	ctx := context.Background()
 

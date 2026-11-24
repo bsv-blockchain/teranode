@@ -129,3 +129,12 @@ func (s *Store) ResolveSpendCompletionsForTest(ctx context.Context, tx *bt.Tx, s
 
 	return res.spentSpends, res.succeeded
 }
+
+// LeaveSharedClientOpenOnClose makes Close and CloseClient leave the process-wide client cache
+// alone. GetAerospikeClient hands every store on one host the same client, so a test store on a
+// server other tests share must not close that client for all of them; TestMain closes it.
+func (s *Store) LeaveSharedClientOpenOnClose() {
+	u := *s.url
+	u.Host = "client-shared-with-other-test-stores"
+	s.url = &u
+}

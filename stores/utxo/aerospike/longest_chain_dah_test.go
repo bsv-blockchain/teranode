@@ -21,12 +21,14 @@ import (
 // marked unmined (its DAH is kept), the pruner clears that DAH, and marking it on the longest chain
 // again must stamp a DAH so the tx is still pruned.
 func TestMarkTransactionsOnLongestChain_RestampsDAH(t *testing.T) {
+	t.Parallel()
+
 	logger := ulogger.NewErrorTestLogger(t)
 	s := test.CreateBaseTestSettings(t)
 	s.UtxoStore.DisableDAHCleaner = false
 	s.Pruner.UTXODefensiveEnabled = false
 
-	client, store, ctx, cleanup := initAerospike(t, s, logger)
+	client, store, ctx, cleanup := initAerospikeOwnServer(t, s, logger)
 	t.Cleanup(cleanup)
 
 	require.NoError(t, store.SetBlockHeight(1000))
@@ -108,6 +110,8 @@ func TestMarkTransactionsOnLongestChain_RestampsDAH(t *testing.T) {
 // TestMarkTransactionsOnLongestChain_RestampsPageDAH checks that the DAH set on a large tx's master
 // is propagated to its pagination records.
 func TestMarkTransactionsOnLongestChain_RestampsPageDAH(t *testing.T) {
+	t.Parallel()
+
 	logger := ulogger.NewErrorTestLogger(t)
 	s := test.CreateBaseTestSettings(t)
 
@@ -159,6 +163,8 @@ func TestMarkTransactionsOnLongestChain_RestampsPageDAH(t *testing.T) {
 // TestMarkTransactionsOnLongestChain_DAHRules pins the DAH that marking on the longest chain stamps,
 // including the cases where it must stamp none and the ones where it must leave an existing one alone.
 func TestMarkTransactionsOnLongestChain_DAHRules(t *testing.T) {
+	t.Parallel()
+
 	logger := ulogger.NewErrorTestLogger(t)
 	s := test.CreateBaseTestSettings(t)
 
@@ -236,6 +242,8 @@ func TestMarkTransactionsOnLongestChain_DAHRules(t *testing.T) {
 // TestMarkTransactionsOnLongestChain_PageFollowUp checks the pagination records follow the master:
 // a cleared master DAH clears the pages, and an unchanged master DAH writes no pages.
 func TestMarkTransactionsOnLongestChain_PageFollowUp(t *testing.T) {
+	t.Parallel()
+
 	logger := ulogger.NewErrorTestLogger(t)
 	s := test.CreateBaseTestSettings(t)
 
@@ -310,6 +318,8 @@ func TestMarkTransactionsOnLongestChain_PageFollowUp(t *testing.T) {
 // TestSetDAHForChildRecordsMulti_MissingPage checks a pagination record that is gone is not an error
 // and is not created as an empty record.
 func TestSetDAHForChildRecordsMulti_MissingPage(t *testing.T) {
+	t.Parallel()
+
 	logger := ulogger.NewErrorTestLogger(t)
 	s := test.CreateBaseTestSettings(t)
 
@@ -335,6 +345,8 @@ func TestSetDAHForChildRecordsMulti_MissingPage(t *testing.T) {
 // TestMarkTransactionsOnLongestChain_BlockHeightsFallback: a missing or empty blockHeights bin while
 // blockIDs is present falls back to the store height.
 func TestMarkTransactionsOnLongestChain_BlockHeightsFallback(t *testing.T) {
+	t.Parallel()
+
 	logger := ulogger.NewErrorTestLogger(t)
 	s := test.CreateBaseTestSettings(t)
 
@@ -425,6 +437,8 @@ func (h *childDAHHarness) dah(key *aerospike.Key) interface{} {
 
 // TestMarkTransactionsOnLongestChain_ChildDAHOrder: unsets are applied before sets on this path.
 func TestMarkTransactionsOnLongestChain_ChildDAHOrder(t *testing.T) {
+	t.Parallel()
+
 	logger := ulogger.NewErrorTestLogger(t)
 	s := test.CreateBaseTestSettings(t)
 
@@ -463,6 +477,8 @@ func TestMarkTransactionsOnLongestChain_ChildDAHOrder(t *testing.T) {
 // the retry, the master gets its previous DAH back so a retry of the call redoes the transition
 // instead of leaving stale-DAH pages under a master with no DAH.
 func TestMarkTransactionsOnLongestChain_FailedUnsetRestoresMaster(t *testing.T) {
+	t.Parallel()
+
 	logger := ulogger.NewErrorTestLogger(t)
 	s := test.CreateBaseTestSettings(t)
 
@@ -506,6 +522,8 @@ func TestMarkTransactionsOnLongestChain_FailedUnsetRestoresMaster(t *testing.T) 
 // X -> Y) still fails after the retry, the master goes back to X and gets its unmined_since back. A
 // failed first-time set (no previous DAH) is not restored: the master keeps the DAH it was given.
 func TestMarkTransactionsOnLongestChain_FailedRaiseRestoresMaster(t *testing.T) {
+	t.Parallel()
+
 	logger := ulogger.NewErrorTestLogger(t)
 	s := test.CreateBaseTestSettings(t)
 
@@ -568,6 +586,8 @@ func TestMarkTransactionsOnLongestChain_FailedRaiseRestoresMaster(t *testing.T) 
 // TestSetDAHForChildRecordsMulti_MixedPages: a present page is updated and a missing one is skipped,
 // without error and without creating it.
 func TestSetDAHForChildRecordsMulti_MixedPages(t *testing.T) {
+	t.Parallel()
+
 	logger := ulogger.NewErrorTestLogger(t)
 	s := test.CreateBaseTestSettings(t)
 
@@ -602,6 +622,8 @@ func TestSetDAHForChildRecordsMulti_MixedPages(t *testing.T) {
 // TestSetDAHForChildRecords_MissingPage: the singular batcher path also skips a missing page and does
 // not create it.
 func TestSetDAHForChildRecords_MissingPage(t *testing.T) {
+	t.Parallel()
+
 	logger := ulogger.NewErrorTestLogger(t)
 	s := test.CreateBaseTestSettings(t)
 
@@ -623,6 +645,8 @@ func TestSetDAHForChildRecords_MissingPage(t *testing.T) {
 // TestMarkTransactionsOnLongestChain_RestoreSkippedWhenPreserved: a preservation that lands between the
 // master write and the restore is not overwritten.
 func TestMarkTransactionsOnLongestChain_RestoreSkippedWhenPreserved(t *testing.T) {
+	t.Parallel()
+
 	logger := ulogger.NewErrorTestLogger(t)
 	s := test.CreateBaseTestSettings(t)
 

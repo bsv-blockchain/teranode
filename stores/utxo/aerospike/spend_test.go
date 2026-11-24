@@ -26,6 +26,8 @@ import (
 // go test -v -tags test_aerospike ./test/...
 
 func TestStore_SpendBatchRejectsDuplicateDifferentSpenders(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name              string
 		enableExpressions bool
@@ -36,6 +38,8 @@ func TestStore_SpendBatchRejectsDuplicateDifferentSpenders(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			fx := newTxFixtures(t)
+
 			logger := ulogger.NewErrorTestLogger(t)
 			tSettings := test.CreateBaseTestSettings(t)
 			tSettings.UtxoStore.UtxoBatchSize = 1
@@ -48,13 +52,12 @@ func TestStore_SpendBatchRejectsDuplicateDifferentSpenders(t *testing.T) {
 			t.Cleanup(func() {
 				deferFn()
 			})
-			cleanDB(t, client)
 
-			_, err := store.Create(ctx, tx, 101)
+			_, err := store.Create(ctx, fx.tx, 101)
 			require.NoError(t, err)
 
-			winnerCandidate := spendTx.Clone()
-			loserCandidate := spendTx2.Clone()
+			winnerCandidate := fx.spendTx.Clone()
+			loserCandidate := fx.spendTx2.Clone()
 			loserCandidate.Version = winnerCandidate.Version + 1
 
 			outcomes := spendConcurrently(t, store, winnerCandidate, loserCandidate)
@@ -87,7 +90,7 @@ func TestStore_SpendBatchRejectsDuplicateDifferentSpenders(t *testing.T) {
 			require.NotNil(t, loserSpend.ConflictingTxID)
 			require.Equal(t, winner.TxIDChainHash().String(), loserSpend.ConflictingTxID.String())
 
-			keySource := uaerospike.CalculateKeySource(tx.TxIDChainHash(), 0, store.GetUtxoBatchSize())
+			keySource := uaerospike.CalculateKeySource(fx.tx.TxIDChainHash(), 0, store.GetUtxoBatchSize())
 			key, err := aerospike.NewKey(store.GetNamespace(), store.GetName(), keySource)
 			require.NoError(t, err)
 
@@ -128,6 +131,10 @@ func spendConcurrently(t *testing.T, store *teranode_aerospike.Store, txs ...*bt
 }
 
 func TestStore_SpendMultiRecord(t *testing.T) {
+	t.Parallel()
+
+	fx := newTxFixtures(t)
+
 	logger := ulogger.NewErrorTestLogger(t)
 	tSettings := test.CreateBaseTestSettings(t)
 
@@ -139,44 +146,44 @@ func TestStore_SpendMultiRecord(t *testing.T) {
 
 	t.Run("Spent tx id", func(t *testing.T) {
 		// clean up the externalStore, if needed
-		_ = store.GetExternalStore().Del(ctx, tx.TxIDChainHash().CloneBytes(), fileformat.FileTypeTx)
+		_ = store.GetExternalStore().Del(ctx, fx.tx.TxIDChainHash().CloneBytes(), fileformat.FileTypeTx)
 
 		// create a tx
-		_, err := store.Create(ctx, tx, 101)
+		_, err := store.Create(ctx, fx.tx, 101)
 		require.NoError(t, err)
 
 		// spend the tx
-		_, err = store.Spend(ctx, spendTx, store.GetBlockHeight()+1)
+		_, err = store.Spend(ctx, fx.spendTx, store.GetBlockHeight()+1)
 		require.NoError(t, err)
 
 		// spend again, should not return an error
-		_, err = store.Spend(ctx, spendTx, store.GetBlockHeight()+1)
+		_, err = store.Spend(ctx, fx.spendTx, store.GetBlockHeight()+1)
 		require.NoError(t, err)
 
 		// try to spend the tx with a different tx, check the spending tx ID
-		spends, err := store.Spend(ctx, spendTx2, store.GetBlockHeight()+1)
+		spends, err := store.Spend(ctx, fx.spendTx2, store.GetBlockHeight()+1)
 		require.Error(t, err)
 
 		var tErr *errors.Error
 		require.ErrorAs(t, err, &tErr)
 		require.Equal(t, errors.ERR_UTXO_ERROR, tErr.Code())
 		require.ErrorIs(t, spends[0].Err, errors.ErrSpent)
-		require.Equal(t, spendTx.TxIDChainHash().String(), spends[0].ConflictingTxID.String())
+		require.Equal(t, fx.spendTx.TxIDChainHash().String(), spends[0].ConflictingTxID.String())
 	})
 
 	t.Run("SpendMultiRecord LUA", func(t *testing.T) {
-		cleanDB(t, client)
+		*fx = *newTxFixtures(t)
 
 		store.SetUtxoBatchSize(1)
 
 		// clean up the externalStore, if needed
-		_ = store.GetExternalStore().Del(ctx, tx.TxIDChainHash().CloneBytes(), fileformat.FileTypeTx)
+		_ = store.GetExternalStore().Del(ctx, fx.tx.TxIDChainHash().CloneBytes(), fileformat.FileTypeTx)
 
 		// create a tx
-		_, err := store.Create(ctx, tx, 101)
+		_, err := store.Create(ctx, fx.tx, 101)
 		require.NoError(t, err)
 
-		keyTx, err := aerospike.NewKey(store.GetNamespace(), store.GetName(), tx.TxIDChainHash().CloneBytes())
+		keyTx, err := aerospike.NewKey(store.GetNamespace(), store.GetName(), fx.tx.TxIDChainHash().CloneBytes())
 		require.NoError(t, err)
 
 		resp, err := client.Get(nil, keyTx)
@@ -191,19 +198,19 @@ func TestStore_SpendMultiRecord(t *testing.T) {
 		assert.False(t, ok)
 
 		// mine the tx
-		blockIDsMap, err := store.SetMinedMulti(ctx, []*chainhash.Hash{tx.TxIDChainHash()}, utxo.MinedBlockInfo{BlockID: 101, BlockHeight: 101, SubtreeIdx: 101, OnLongestChain: true})
+		blockIDsMap, err := store.SetMinedMulti(ctx, []*chainhash.Hash{fx.tx.TxIDChainHash()}, utxo.MinedBlockInfo{BlockID: 101, BlockHeight: 101, SubtreeIdx: 101, OnLongestChain: true})
 		require.NoError(t, err)
 		assert.Len(t, blockIDsMap, 1)
-		assert.Equal(t, uint32(101), blockIDsMap[*tx.TxIDChainHash()][0])
+		assert.Equal(t, uint32(101), blockIDsMap[*fx.tx.TxIDChainHash()][0])
 
-		utxoHashes := make([]*chainhash.Hash, len(tx.Outputs))
-		for vOut, txOut := range tx.Outputs {
+		utxoHashes := make([]*chainhash.Hash, len(fx.tx.Outputs))
+		for vOut, txOut := range fx.tx.Outputs {
 			//nolint:gosec
-			utxoHashes[vOut], err = util.UTXOHashFromOutput(tx.TxIDChainHash(), txOut, uint32(vOut))
+			utxoHashes[vOut], err = util.UTXOHashFromOutput(fx.tx.TxIDChainHash(), txOut, uint32(vOut))
 			require.NoError(t, err)
 
 			//nolint:gosec
-			keySource := uaerospike.CalculateKeySource(tx.TxIDChainHash(), uint32(vOut), store.GetUtxoBatchSize())
+			keySource := uaerospike.CalculateKeySource(fx.tx.TxIDChainHash(), uint32(vOut), store.GetUtxoBatchSize())
 			key, err := aerospike.NewKey(store.GetNamespace(), store.GetName(), keySource)
 			require.NoError(t, err)
 
@@ -232,19 +239,19 @@ func TestStore_SpendMultiRecord(t *testing.T) {
 		}
 
 		// check we created the tx in the external store
-		exists, err := store.GetExternalStore().Exists(ctx, tx.TxIDChainHash().CloneBytes(), fileformat.FileTypeTx)
+		exists, err := store.GetExternalStore().Exists(ctx, fx.tx.TxIDChainHash().CloneBytes(), fileformat.FileTypeTx)
 		require.NoError(t, err)
 		require.True(t, exists)
 
 		// DAH is now managed centrally by pruner service, not by blob stores
 		// External store DAH checks removed
 
-		keySource := uaerospike.CalculateKeySource(tx.TxIDChainHash(), uint32(0), 1)
+		keySource := uaerospike.CalculateKeySource(fx.tx.TxIDChainHash(), uint32(0), 1)
 		mainRecordKey, err := aerospike.NewKey(store.GetNamespace(), store.GetName(), keySource)
 		require.NoError(t, err)
 
 		// spend 1,2,3,4
-		_, err = store.Spend(ctx, spendTxRemaining, store.GetBlockHeight()+1)
+		_, err = store.Spend(ctx, fx.spendTxRemaining, store.GetBlockHeight()+1)
 		require.NoError(t, err)
 
 		// give the db time to update the main record
@@ -260,7 +267,7 @@ func TestStore_SpendMultiRecord(t *testing.T) {
 		assert.Equal(t, 4, resp.Bins[fields.SpentExtraRecs.String()])
 
 		// spend 0
-		_, err = store.Spend(ctx, spendTx, store.GetBlockHeight()+1)
+		_, err = store.Spend(ctx, fx.spendTx, store.GetBlockHeight()+1)
 		require.NoError(t, err)
 
 		resp, err = client.Get(nil, mainRecordKey)
@@ -277,6 +284,10 @@ func TestStore_SpendMultiRecord(t *testing.T) {
 }
 
 func TestStore_IncrementSpentRecords(t *testing.T) {
+	t.Parallel()
+
+	fx := newTxFixtures(t)
+
 	logger := ulogger.NewErrorTestLogger(t)
 
 	tSettings := test.CreateBaseTestSettings(t)
@@ -284,19 +295,28 @@ func TestStore_IncrementSpentRecords(t *testing.T) {
 
 	client, store, ctx, deferFn := initAerospike(t, tSettings, logger)
 
-	txKey, err := aerospike.NewKey(store.GetNamespace(), store.GetName(), tx.TxIDChainHash().CloneBytes())
+	txKey, err := aerospike.NewKey(store.GetNamespace(), store.GetName(), fx.tx.TxIDChainHash().CloneBytes())
 	require.NoError(t, err)
+
+	// Each subtest starts from fixtures of its own, as it used to start from an emptied set,
+	// and the keys follow them.
+	resetFixtures := func(t *testing.T) {
+		*fx = *newTxFixtures(t)
+
+		txKey, err = aerospike.NewKey(store.GetNamespace(), store.GetName(), fx.tx.TxIDChainHash().CloneBytes())
+		require.NoError(t, err)
+	}
 
 	t.Cleanup(func() {
 		deferFn()
 	})
 
 	t.Run("Increment spentExtraRecs", func(t *testing.T) {
-		cleanDB(t, client)
+		resetFixtures(t)
 
-		txID := tx.TxIDChainHash()
+		txID := fx.tx.TxIDChainHash()
 
-		_, err := store.Create(ctx, tx, 101)
+		_, err := store.Create(ctx, fx.tx, 101)
 		require.NoError(t, err)
 
 		// Increment spentExtraRecs by 1
@@ -335,15 +355,15 @@ func TestStore_IncrementSpentRecords(t *testing.T) {
 	})
 
 	t.Run("Increment spentExtraRecs - set DAH", func(t *testing.T) {
-		txID := tx.TxIDChainHash()
+		txID := fx.tx.TxIDChainHash()
 
 		key, aErr := aerospike.NewKey(store.GetNamespace(), store.GetName(), txID.CloneBytes())
 		require.NoError(t, aErr)
 
 		// Clean up the database
-		cleanDB(t, client)
+		resetFixtures(t)
 
-		_, err := store.Create(ctx, tx, 101)
+		_, err := store.Create(ctx, fx.tx, 101)
 		require.NoError(t, err)
 
 		// force the values we expect to be set
@@ -403,15 +423,15 @@ func TestStore_IncrementSpentRecords(t *testing.T) {
 	})
 
 	t.Run("Increment totalExtraRecs - multi", func(t *testing.T) {
-		txID := tx.TxIDChainHash()
+		txID := fx.tx.TxIDChainHash()
 
 		key, aErr := aerospike.NewKey(store.GetNamespace(), store.GetName(), txID.CloneBytes())
 		require.NoError(t, aErr)
 
 		// Clean up the database
-		cleanDB(t, client)
+		resetFixtures(t)
 
-		_, err := store.Create(ctx, tx, 101)
+		_, err := store.Create(ctx, fx.tx, 101)
 		require.NoError(t, err)
 
 		// We have a master record and 2 extra records
@@ -431,25 +451,29 @@ func TestStore_IncrementSpentRecords(t *testing.T) {
 }
 
 func TestStore_IncrementSpentRecords_Timeout(t *testing.T) {
+	t.Parallel()
+
+	fx := newTxFixtures(t)
+
 	logger := ulogger.NewErrorTestLogger(t)
 
 	tSettings := test.CreateBaseTestSettings(t)
 
-	client, store, ctx, deferFn := initAerospike(t, tSettings, logger)
+	_, store, ctx, deferFn := initAerospike(t, tSettings, logger)
 
 	t.Cleanup(func() {
 		deferFn()
 	})
 
-	cleanDB(t, client)
+	*fx = *newTxFixtures(t)
 
-	_, err := store.Create(ctx, tx, 101)
+	_, err := store.Create(ctx, fx.tx, 101)
 	require.NoError(t, err)
 
 	// Set an extremely short timeout so the batcher can't respond in time
 	tSettings.UtxoStore.SpendWaitTimeout = time.Nanosecond
 
-	_, err = store.IncrementSpentRecords(tx.TxIDChainHash(), 1, 0)
+	_, err = store.IncrementSpentRecords(fx.tx.TxIDChainHash(), 1, 0)
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, errors.ErrServiceUnavailable), "expected service unavailable error, got: %v", err)
 }
@@ -465,6 +489,8 @@ func TestStore_IncrementSpentRecords_Timeout(t *testing.T) {
 // spentExtraRecs == totalExtraRecs, sets DAH → Go verifies children →
 // finds they're NOT all-spent → clears the master DAH.
 func TestDriftedCounterDoesNotSetDAH(t *testing.T) {
+	t.Parallel()
+
 	batchSize := 2
 	numOutputs := 10
 
@@ -478,7 +504,7 @@ func TestDriftedCounterDoesNotSetDAH(t *testing.T) {
 	})
 
 	// Build a transaction with many outputs spanning multiple child records
-	largeTx := bt.NewTx()
+	largeTx := uniqueTx(bt.NewTx())
 	err := largeTx.From(
 		"1111111111111111111111111111111111111111111111111111111111111111",
 		0,
@@ -553,10 +579,14 @@ func TestDriftedCounterDoesNotSetDAH(t *testing.T) {
 }
 
 func TestStore_Unspend(t *testing.T) {
+	t.Parallel()
+
+	fx := newTxFixtures(t)
+
 	logger := ulogger.NewErrorTestLogger(t)
 	tSettings := test.CreateBaseTestSettings(t)
 
-	client, store, ctx, deferFn := initAerospike(t, tSettings, logger)
+	_, store, ctx, deferFn := initAerospike(t, tSettings, logger)
 
 	t.Cleanup(func() {
 		deferFn()
@@ -564,14 +594,14 @@ func TestStore_Unspend(t *testing.T) {
 
 	t.Run("Successfully unspend a spent tx", func(t *testing.T) {
 		// Clean up any existing data
-		_ = store.GetExternalStore().Del(ctx, tx.TxIDChainHash().CloneBytes(), fileformat.FileTypeTx)
+		_ = store.GetExternalStore().Del(ctx, fx.tx.TxIDChainHash().CloneBytes(), fileformat.FileTypeTx)
 
 		// Create a tx
-		_, err := store.Create(ctx, tx, 101)
+		_, err := store.Create(ctx, fx.tx, 101)
 		require.NoError(t, err)
 
 		// Spend the tx
-		spends, err := store.Spend(ctx, spendTx, store.GetBlockHeight()+1)
+		spends, err := store.Spend(ctx, fx.spendTx, store.GetBlockHeight()+1)
 		require.NoError(t, err)
 		require.Len(t, spends, 1)
 
@@ -580,25 +610,25 @@ func TestStore_Unspend(t *testing.T) {
 		require.NoError(t, err)
 
 		// Verify we can now spend it again with a different tx
-		spends, err = store.Spend(ctx, spendTx2, store.GetBlockHeight()+1)
+		spends, err = store.Spend(ctx, fx.spendTx2, store.GetBlockHeight()+1)
 		require.NoError(t, err)
 		require.Len(t, spends, 1)
 	})
 
 	t.Run("Unspend a non-spent tx", func(t *testing.T) {
 		// Clean up the database
-		cleanDB(t, client)
+		*fx = *newTxFixtures(t)
 
 		// Clean up any existing data
-		_ = store.GetExternalStore().Del(ctx, tx.TxIDChainHash().CloneBytes(), fileformat.FileTypeTx)
+		_ = store.GetExternalStore().Del(ctx, fx.tx.TxIDChainHash().CloneBytes(), fileformat.FileTypeTx)
 
 		// Create a tx
-		_, err := store.Create(ctx, tx, 101)
+		_, err := store.Create(ctx, fx.tx, 101)
 		require.NoError(t, err)
 
 		utxoHash, err := util.UTXOHashFromOutput(
-			tx.TxIDChainHash(),
-			tx.Outputs[0],
+			fx.tx.TxIDChainHash(),
+			fx.tx.Outputs[0],
 			0,
 		)
 		require.NoError(t, err)
@@ -609,7 +639,7 @@ func TestStore_Unspend(t *testing.T) {
 		someTxHash := chainhash.HashH([]byte("some-other-tx"))
 		err = store.Unspend(ctx, []*utxo.Spend{
 			{
-				TxID:         tx.TxIDChainHash(),
+				TxID:         fx.tx.TxIDChainHash(),
 				Vout:         0,
 				UTXOHash:     utxoHash,
 				SpendingData: spendpkg.NewSpendingData(&someTxHash, 0),
@@ -618,7 +648,7 @@ func TestStore_Unspend(t *testing.T) {
 		require.NoError(t, err)
 
 		// Verify we can still spend the UTXO normally.
-		spends, err := store.Spend(ctx, spendTx, store.GetBlockHeight()+1)
+		spends, err := store.Spend(ctx, fx.spendTx, store.GetBlockHeight()+1)
 		require.NoError(t, err)
 		require.Len(t, spends, 1)
 	})
@@ -629,6 +659,8 @@ func TestStore_Unspend(t *testing.T) {
 // covers the defer/named-return/&err plumbing in Spend itself rather than just
 // the helper unit-tested in spend_panic_test.go.
 func TestStore_SpendNilTxPanicRecovery(t *testing.T) {
+	t.Parallel()
+
 	logger := ulogger.NewErrorTestLogger(t)
 	tSettings := test.CreateBaseTestSettings(t)
 
