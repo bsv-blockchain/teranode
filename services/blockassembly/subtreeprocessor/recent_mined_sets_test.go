@@ -1,6 +1,7 @@
 package subtreeprocessor
 
 import (
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -288,4 +289,85 @@ func TestReset_ClearsKeptMinedSets(t *testing.T) {
 	b := batchOf(h)
 	require.Equal(t, Admitted, stp.AddBatchBounded(b.nodes, b.txInpoints, false, b.validatedHeights))
 	require.Equal(t, int64(1), stp.queue.length(), "the transaction is queued again after the reset")
+}
+
+// The arrival check leaves the caller's slices as they were: block assembly's server sends the same
+// slices again after a refusal, and a second call must queue only the survivors again.
+func TestAddBatchBounded_ArrivalCheckLeavesCallerSlicesUnchanged(t *testing.T) {
+	stp, _ := newMinedSetProcessor(t, 10*time.Second)
+	a, b, c := chainhash.HashH([]byte("a")), chainhash.HashH([]byte("b")), chainhash.HashH([]byte("c"))
+	stp.keepMinedSet(minedSetBlock(1), frozenHashSet(t, a))
+
+	batch := batchOf(a, b, c)
+	nodes, inpoints, heights := batch.nodes, batch.txInpoints, batch.validatedHeights
+
+	require.Equal(t, Admitted, stp.AddBatchBounded(nodes, inpoints, false, heights))
+	require.Equal(t, []chainhash.Hash{a, b, c}, batchHashes(&TxBatch{nodes: nodes}), "the caller's nodes are unchanged")
+	require.Equal(t, []uint32{100, 101, 102}, heights)
+
+	require.Equal(t, Admitted, stp.AddBatchBounded(nodes, inpoints, false, heights))
+	require.Equal(t, int64(4), stp.queue.length(), "each call queues b and c once")
+}
+
+// processorWithMovableClock is a started processor whose clock a test moves while its dequeue
+// loop runs.
+func processorWithMovableClock(t *testing.T, retention time.Duration) (*SubtreeProcessor, *atomic.Int64) {
+	t.Helper()
+
+	stp, _ := newMinedSetProcessor(t, retention)
+
+	var nowNanos atomic.Int64
+	nowNanos.Store(time.Now().UnixNano())
+	stp.clock = clockFunc(func() time.Time { return time.Unix(0, nowNanos.Load()) })
+
+	stp.Start(t.Context())
+
+	return stp, &nowNanos
+}
+
+// A transaction queued without the arrival check, as one queued before its block's set was kept
+// is, is dropped by the dequeue loop when it is placed.
+func TestDequeueLoop_DropsKeptSetTransactionWhenPlaced(t *testing.T) {
+	stp, _ := processorWithMovableClock(t, 10*time.Second)
+	mined, unmined := chainhash.HashH([]byte("mined-queued-early")), chainhash.HashH([]byte("unmined-queued-early"))
+	stp.keepMinedSet(minedSetBlock(1), frozenHashSet(t, mined))
+
+	stp.queue.enqueueBatch(
+		[]subtreepkg.Node{{Hash: mined, Fee: 1, SizeInBytes: 1}, {Hash: unmined, Fee: 1, SizeInBytes: 1}},
+		[]*subtreepkg.TxInpoints{inpointsPtr(), inpointsPtr()},
+	)
+
+	require.Eventually(t, func() bool {
+		return stp.queue.length() == 0 && stp.GetCurrentTxMap().Exists(unmined)
+	}, 5*time.Second, time.Millisecond)
+	require.False(t, stp.GetCurrentTxMap().Exists(mined))
+}
+
+// A drain drops a transaction another block's kept set holds, while skipping its own block's set.
+func TestDrain_DropsOtherKeptSetTransactionWhenPlaced(t *testing.T) {
+	stp, _ := newMinedSetProcessor(t, 10*time.Second)
+	mined, unmined := chainhash.HashH([]byte("mined-by-earlier-block")), chainhash.HashH([]byte("unmined-drained"))
+	stp.keepMinedSet(minedSetBlock(1), frozenHashSet(t, mined))
+
+	stp.queue.enqueueBatch(
+		[]subtreepkg.Node{{Hash: mined, Fee: 1, SizeInBytes: 1}, {Hash: unmined, Fee: 1, SizeInBytes: 1}},
+		[]*subtreepkg.TxInpoints{inpointsPtr(), inpointsPtr()},
+	)
+
+	ownBlock := frozenHashSet(t, chainhash.HashH([]byte("the-draining-block")))
+	require.NoError(t, stp.dequeueDuringBlockMovementWithCutoff(ownBlock, nil, nil, true, true))
+
+	require.True(t, stp.currentTxMap.Exists(unmined))
+	require.False(t, stp.currentTxMap.Exists(mined), "the earlier block's kept set drops it in the drain")
+}
+
+// An idle node frees a kept set once its retention has passed, with no further block.
+func TestDequeueLoop_PrunesExpiredSetsWhenIdle(t *testing.T) {
+	stp, nowNanos := processorWithMovableClock(t, 10*time.Second)
+	stp.keepMinedSet(minedSetBlock(1), frozenHashSet(t, chainhash.HashH([]byte("x"))))
+	require.Equal(t, 1, stp.keptMinedSetCount())
+
+	nowNanos.Add(int64(10 * time.Second))
+
+	require.Eventually(t, func() bool { return stp.keptMinedSetCount() == 0 }, 5*time.Second, time.Millisecond)
 }

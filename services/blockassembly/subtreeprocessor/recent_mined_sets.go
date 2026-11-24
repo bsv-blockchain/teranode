@@ -186,62 +186,10 @@ func (stp *SubtreeProcessor) keptMinedSetCount() int {
 // because the drain checks that set itself. It runs before any of them is added to the tx map, on
 // every path that places queued transactions: the dequeue loop and each drain (runDrainChunk).
 // A set past its retention but not yet pruned still filters, which only keeps out a transaction
-// that block mined. The lookups run in parallel; with no set kept it returns at once.
+// that block mined. With no set kept it returns at once.
 func (stp *SubtreeProcessor) filterRecentlyMined(batches []*TxBatch, skip *SortedHashSet) {
-	all := stp.recentMined.load()
-	if len(all) == 0 || len(batches) == 0 {
-		return
-	}
-
-	sets := make([]*SortedHashSet, 0, len(all))
-
-	for i := range all {
-		if all[i].txs != skip {
-			sets = append(sets, all[i].txs)
-		}
-	}
-
-	if len(sets) == 0 {
-		return
-	}
-
-	offsets := make([]int, len(batches)+1)
-	for i, b := range batches {
-		offsets[i+1] = offsets[i] + len(b.nodes)
-	}
-
-	total := offsets[len(batches)]
-	if total == 0 {
-		return
-	}
-
-	mined := make([]bool, total)
-
-	var anyMined atomic.Bool
-
-	forEachChunk(total, func(start, end int) {
-		// the batch holding flat index start: the last offset at or below it
-		bi := sort.Search(len(batches), func(i int) bool { return offsets[i+1] > start })
-
-		for idx := start; idx < end; idx++ {
-			for idx >= offsets[bi+1] {
-				bi++
-			}
-
-			h := batches[bi].nodes[idx-offsets[bi]].Hash
-
-			for k := range sets {
-				if sets[k].Exists(h) {
-					mined[idx] = true
-					anyMined.Store(true)
-
-					break
-				}
-			}
-		}
-	})
-
-	if !anyMined.Load() {
+	mined, offsets := stp.lookupRecentlyMined(batches, skip)
+	if mined == nil {
 		return
 	}
 
@@ -281,21 +229,115 @@ func (stp *SubtreeProcessor) filterRecentlyMined(batches []*TxBatch, skip *Sorte
 		b.txInpoints = b.txInpoints[:kept]
 	}
 
+	countLateMinedDropped(dropped)
+}
+
+// lookupRecentlyMined looks up every transaction of the batches in the kept sets other than skip,
+// in parallel. It returns, by flat position, whether each is mined, with each batch's first flat
+// position, or a nil slice when none is.
+func (stp *SubtreeProcessor) lookupRecentlyMined(batches []*TxBatch, skip *SortedHashSet) (mined []bool, offsets []int) {
+	all := stp.recentMined.load()
+	if len(all) == 0 || len(batches) == 0 {
+		return nil, nil
+	}
+
+	sets := make([]*SortedHashSet, 0, len(all))
+
+	for i := range all {
+		if all[i].txs != skip {
+			sets = append(sets, all[i].txs)
+		}
+	}
+
+	if len(sets) == 0 {
+		return nil, nil
+	}
+
+	offsets = make([]int, len(batches)+1)
+	for i, b := range batches {
+		offsets[i+1] = offsets[i] + len(b.nodes)
+	}
+
+	total := offsets[len(batches)]
+	if total == 0 {
+		return nil, nil
+	}
+
+	mined = make([]bool, total)
+
+	var anyMined atomic.Bool
+
+	forEachChunk(total, func(start, end int) {
+		// the batch holding flat index start: the last offset at or below it
+		bi := sort.Search(len(batches), func(i int) bool { return offsets[i+1] > start })
+
+		for idx := start; idx < end; idx++ {
+			for idx >= offsets[bi+1] {
+				bi++
+			}
+
+			h := batches[bi].nodes[idx-offsets[bi]].Hash
+
+			for _, set := range sets {
+				if set.Exists(h) {
+					mined[idx] = true
+					anyMined.Store(true)
+
+					break
+				}
+			}
+		}
+	})
+
+	if !anyMined.Load() {
+		return nil, nil
+	}
+
+	return mined, offsets
+}
+
+func countLateMinedDropped(dropped int) {
 	if dropped > 0 && prometheusSubtreeProcessorLateMinedDropped != nil {
 		prometheusSubtreeProcessorLateMinedDropped.Add(float64(dropped))
 	}
 }
 
-// filterHandOff removes, in place, every transaction of a batch arriving at the queue that a
-// kept block set holds, and returns what is left, so a hand-off is checked against the sets kept
-// when it arrives. validatedHeights may be nil.
+// filterHandOff returns a batch arriving at the queue without the transactions a kept block set
+// holds, so a hand-off is checked against the sets kept when it arrives. It never changes the
+// caller's slices, which a refused hand-off sends again: when it drops anything it returns new
+// ones. validatedHeights may be nil.
 func (stp *SubtreeProcessor) filterHandOff(nodes []subtreepkg.Node, txInpoints []*subtreepkg.TxInpoints, validatedHeights []uint32) ([]subtreepkg.Node, []*subtreepkg.TxInpoints, []uint32) {
-	if len(stp.recentMined.load()) == 0 || len(nodes) == 0 || len(nodes) != len(txInpoints) {
+	if len(nodes) == 0 || len(nodes) != len(txInpoints) {
 		return nodes, txInpoints, validatedHeights
 	}
 
-	b := &TxBatch{nodes: nodes, txInpoints: txInpoints, validatedHeights: validatedHeights}
-	stp.filterRecentlyMined([]*TxBatch{b}, nil)
+	mined, _ := stp.lookupRecentlyMined([]*TxBatch{{nodes: nodes, txInpoints: txInpoints}}, nil)
+	if mined == nil {
+		return nodes, txInpoints, validatedHeights
+	}
 
-	return b.nodes, b.txInpoints, b.validatedHeights
+	keptNodes := make([]subtreepkg.Node, 0, len(nodes))
+	keptInpoints := make([]*subtreepkg.TxInpoints, 0, len(nodes))
+
+	var keptHeights []uint32
+	if len(validatedHeights) == len(nodes) {
+		keptHeights = make([]uint32, 0, len(nodes))
+	}
+
+	for i := range nodes {
+		if mined[i] {
+			continue
+		}
+
+		keptNodes = append(keptNodes, nodes[i])
+		keptInpoints = append(keptInpoints, txInpoints[i])
+
+		if keptHeights != nil {
+			keptHeights = append(keptHeights, validatedHeights[i])
+		}
+	}
+
+	countLateMinedDropped(len(nodes) - len(keptNodes))
+
+	return keptNodes, keptInpoints, keptHeights
 }
