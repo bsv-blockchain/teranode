@@ -1081,12 +1081,13 @@ const resetExistenceChunkSize = 10_000
 
 // dropPrunedTxs returns hashes without the ones the UTXO store reports as not
 // found (pruned), in order. Any other per-tx error is no evidence the record is
-// gone, so that hash is kept: dropping a live tx would leave it flagged mined while
-// its block is off the chain, and nothing repairs that later. A failing lookup
-// call, or a cancelled ctx, returns an error.
+// gone, and no answer either: it is returned, as a failing lookup call or a
+// cancelled ctx is. Keeping such a hash would mark a transaction the check
+// against the best chain cannot read back, and dropping it would leave a live tx
+// flagged mined while its block is off the chain.
 func (b *BlockAssembler) dropPrunedTxs(ctx context.Context, hashes []chainhash.Hash) ([]chainhash.Hash, error) {
 	kept := make([]chainhash.Hash, 0, len(hashes))
-	pruned, unverified := 0, 0
+	pruned := 0
 
 	for start := 0; start < len(hashes); start += resetExistenceChunkSize {
 		if err := ctx.Err(); err != nil {
@@ -1113,15 +1114,13 @@ func (b *BlockAssembler) dropPrunedTxs(ctx context.Context, hashes []chainhash.H
 			case errors.Is(u.Err, errors.ErrTxNotFound):
 				pruned++
 			default:
-				unverified++
-
-				kept = append(kept, chunk[i])
+				return nil, errors.NewProcessingError("[Reset] error looking up moveBack transaction %s", chunk[i], u.Err)
 			}
 		}
 	}
 
-	if pruned > 0 || unverified > 0 {
-		b.logger.Warnf("[BlockAssembler][Reset] moveBack transactions before the unmined mark: %d pruned (no record) left out, %d with a lookup error kept", pruned, unverified)
+	if pruned > 0 {
+		b.logger.Warnf("[BlockAssembler][Reset] moveBack transactions before the unmined mark: %d pruned (no record) left out", pruned)
 	}
 
 	return kept, nil
@@ -1237,120 +1236,14 @@ func (b *BlockAssembler) resetToBlockWithResponse(ctx context.Context, bestBlock
 	// - unmined_since is automatically cleared
 	// - No action needed from reset()
 	if len(moveBackBlocksWithMeta) > 0 {
-		// First, build a map of transactions in moveForward blocks
-		// These are transactions that are ALSO in the new main chain (don't need unmined_since set)
-		// Even though BlockValidation handles moveForward, we need this map to avoid marking
-		// transactions that appear in BOTH moveBack and moveForward as unmined
-		moveForwardTxMap := make(map[chainhash.Hash]struct{})
-		moveForwardMapComplete := true
-
-		// This loop and the moveBack one below run one GetSubtrees per block
-		// inside a single pass of the main select, so each iteration beats at the
-		// top, proving the previous block's read returned (issue 1447). A reset
-		// can move hundreds of blocks and persists state only at the end, so a
-		// probe kill part-way through would restart straight into the same reset.
-		for _, blockWithMeta := range moveForwardBlocksWithMeta {
-			b.heartbeat.BeatIfStarted()
-
-			if blockWithMeta.meta.Invalid {
-				continue
-			}
-
-			block := blockWithMeta.block
-			blockSubtrees, err := block.GetSubtrees(ctx, b.logger, b.subtreeStore, b.settings.Block.GetAndValidateSubtreesConcurrency)
-			if err != nil {
-				// Without this block's txs in moveForwardTxMap, the moveBack filter
-				// below will treat its txs as net-unmined and write unmined_since
-				// on entries that ARE in the new main chain. BlockValidation's
-				// background job (which clears unmined_since for moveForward txs)
-				// races with that write, so the corruption can persist for a full
-				// reconcile cycle. Mark the map untrusted and skip the moveBack
-				// marker entirely - on next reconcile, GetSubtrees usually
-				// succeeds and the marker runs correctly.
-				b.logger.Warnf("[BlockAssembler][Reset] error getting subtrees for moveForward block %s: %v (skipping moveBack unmined_since marker for this reset cycle; next reconcile will retry)", block.Hash().String(), err)
-				moveForwardMapComplete = false
-				continue
-			}
-
-			for _, st := range blockSubtrees {
-				for _, node := range st.Nodes {
-					if !node.Hash.IsEqual(subtree.CoinbasePlaceholderHash) {
-						moveForwardTxMap[node.Hash] = struct{}{}
-					}
-				}
-			}
-		}
-
-		// Only write unmined_since markers when we trust the moveForward map.
-		// If any moveForward block's GetSubtrees failed above, moveForwardTxMap
-		// is incomplete: the moveBack filter would treat its txs as net-unmined
-		// and write unmined_since on entries that ARE in the new main chain.
-		// loadUnminedTransactions still runs after subtreeProcessor.Reset and
-		// recovers what is already flagged unmined; the next reconcile cycle
-		// retries and usually succeeds.
-		if moveForwardMapComplete {
-			// Now collect moveBack transactions, excluding those in moveForward
-			// Net unmined = transactions ONLY in moveBack (not also in moveForward)
-			moveBackTxs := make([]chainhash.Hash, 0, len(moveBackBlocksWithMeta)*100)
-
-			for _, blockWithMeta := range moveBackBlocksWithMeta {
-				b.heartbeat.BeatIfStarted()
-
-				if blockWithMeta.meta.Invalid {
-					// Skip invalid blocks — BlockValidation has already handled them via
-					// setTxMinedStatus(unsetMined=true) which we waited for above.
-					continue
-				}
-
-				block := blockWithMeta.block
-				blockSubtrees, err := block.GetSubtrees(ctx, b.logger, b.subtreeStore, b.settings.Block.GetAndValidateSubtreesConcurrency)
-				if err != nil {
-					b.logger.Warnf("[BlockAssembler][Reset] error getting subtrees for moveBack block %s: %v (will skip)", block.Hash().String(), err)
-					continue
-				}
-
-				for _, st := range blockSubtrees {
-					for _, node := range st.Nodes {
-						if !node.Hash.IsEqual(subtree.CoinbasePlaceholderHash) {
-							// Only add if NOT in moveForward (these are net unmined)
-							if _, inForward := moveForwardTxMap[node.Hash]; !inForward {
-								moveBackTxs = append(moveBackTxs, node.Hash)
-							}
-						}
-					}
-				}
-			}
-
-			// Leave out moveBack txs the UTXO store has already pruned. A moveBack block can
-			// sit deeper than the retention window, so its fully spent txs may be gone, and
-			// the store treats marking a missing record as fatal. A pruned tx was mined
-			// deeper than the retention window and has no record left to re-add to assembly;
-			// its live children stay protected by the pruner's parent preservation.
-			kept, existsErr := b.dropPrunedTxs(ctx, moveBackTxs)
-
-			switch {
-			case existsErr == nil:
-				moveBackTxs = kept
-			case ctx.Err() != nil:
-				return resp, existsErr
-			default:
-				// Cannot tell pruned from live: mark them all, as before the lookup existed.
-				// Leaving them out would strand live txs flagged mined with their block off
-				// the chain; a pruned tx among them still hits the store's fatal, as before.
-				b.logger.Errorf("[BlockAssembler][Reset] error checking moveBack transactions exist, marking all %d: %v", len(moveBackTxs), existsErr)
-			}
-
-			// Mark net unmined transactions as NOT on longest chain (set unmined_since)
-			if len(moveBackTxs) > 0 {
-				// Proves the last moveBack read returned; the mark is one store call.
-				b.heartbeat.BeatIfStarted()
-
-				if err = b.utxoStore.MarkTransactionsOnLongestChain(ctx, moveBackTxs, false); err != nil {
-					b.logger.Errorf("[BlockAssembler][Reset] error marking moveBack transactions as unmined: %v", err)
-				} else {
-					b.logger.Infof("[BlockAssembler][Reset] marked %d net unmined transactions (moveBack minus moveForward)", len(moveBackTxs))
-				}
-			}
+		// Net unmined = the transactions of the moveBack blocks that no moveForward
+		// block has. They are ALSO in the new main chain when a moveForward block has
+		// them, and BlockValidation handles those. The set is computed in bounded
+		// memory, on disk when the moveForward blocks are too large to hold: a reset
+		// can span billions of transactions. A failed mark fails the reset here,
+		// before the tx map rotation.
+		if err = b.markNetUnminedMoveBackTxs(ctx, moveBackBlocksWithMeta, moveForwardBlocksWithMeta); err != nil {
+			return resp, err
 		}
 	}
 

@@ -1432,7 +1432,11 @@ func ReadHandshakeMessage(r io.Reader, from *Peer, pver uint32, bsvnet wire.Bitc
 // bytes. It serves only the handshake, so the message is bounded by
 // ReadHandshakeMessage.
 func (p *Peer) readMessage(encoding wire.MessageEncoding) (wire.Message, []byte, error) {
-	n, msg, buf, err := ReadHandshakeMessage(p.conn, p, p.ProtocolVersion(), p.cfg.ChainParams.Net, encoding)
+	// reader records what the connection itself returns, the header read included, so
+	// classifyReadError can tell a decode that ran off a complete payload from a hang-up.
+	reader := &deliveryReader{r: p.conn, from: p}
+	n, msg, buf, err := ReadHandshakeMessage(reader, p, p.ProtocolVersion(), p.cfg.ChainParams.Net, encoding)
+	err = reader.classifyReadError(err)
 	atomic.AddUint64(&p.bytesReceived, uint64(n))
 
 	if p.cfg.Listeners.OnRead != nil {
@@ -1504,8 +1508,11 @@ func (p *Peer) readWireMessageStreaming(encoding wire.MessageEncoding) (n int, m
 		}
 	}()
 
-	return wire.ReadMessageStreamingN(&deliveryReader{r: p.conn, from: p},
+	reader := &deliveryReader{r: p.conn, from: p}
+	n, msg, err = wire.ReadMessageStreamingN(reader,
 		p.ProtocolVersion(), p.cfg.ChainParams.Net, encoding)
+
+	return n, msg, reader.classifyReadError(err)
 }
 
 // logReadMessage emits the debug logging that readMessage / readMessageStreaming
