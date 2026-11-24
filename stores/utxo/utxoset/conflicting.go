@@ -124,7 +124,7 @@ ON CONFLICT DO NOTHING`
 // the wait: it missed the coin, and a live coin of a conflict loser kept no conflicting bit, so the
 // spend path's flag mask let a mempool transaction spend it. Nothing corrected the coin after
 // that. As a later statement this update takes its snapshot after the wait and finds the coin
-// (TestSetConflictingRacingAnUnspendWaitsForIt and its siblings in unspend_test.go). The other
+// (TestSetConflictingRacingAnUnspend in unspend_test.go). The other
 // order needs nothing from here: a restore that starts after the flips waits on its share lock
 // and reads the bit they leave.
 //
@@ -141,11 +141,11 @@ ON CONFLICT DO NOTHING`
 // UTXOs stay spendable. The UTXO bit is what makes the spend statement's flag mask refuse the
 // delete.
 //
-// The statement runs ONCE PER LEAF GROUP, in ascending leaf order, with the leaf as a scalar
-// and every array a bound constant. That is what keeps each arm keyed and linear whatever the
-// planner's estimates say, because no arm joins anything to a table.
+// This statement and setConflictingIdentSQL run ONCE PER LEAF GROUP, in ascending leaf order,
+// with the leaf as a scalar and every array a bound constant. That keeps them keyed and linear
+// whatever the planner's estimates say, because neither joins anything to a table.
 //
-// The UTXO arm finds its rows in two steps inside one statement. The ARRAY sub-select walks each
+// This statement finds its rows in two steps. The ARRAY sub-select walks each
 // transaction's packed-key range through a LATERAL with OFFSET 0, which can only be planned as a
 // per-key index probe on this leaf's partition, with the full 32-byte id rechecked on the heap.
 // The update then takes those keys as an index condition, one descent per distinct key, and
@@ -178,17 +178,16 @@ ON CONFLICT DO NOTHING`
 // identity one in setLockedIdentSQL's leaf-scalar shape, and
 // TestConflictingStatementsNeverScanTheirTables pins all three.
 //
-// The flag is flipped on THREE things, not two, for the same reason setLockedSQL flips three:
-// this statement and the two that run before it.
-// A transaction lives in exactly one of tx_ident and tx_mined and this statement does not know
-// which; a contested parent is very often mined, which is the whole reason the note itself
+// The flag is flipped on THREE things, not two, for the same reason setLockedSQL flips three.
+// A transaction lives in exactly one of tx_ident and tx_mined and SetConflicting does not know
+// which, so it runs both setConflictingIdentSQL and setConflictingMinedSQL; a contested parent is
+// very often mined, which is the whole reason the note itself
 // became a side table. minedRow.toMeta reads Conflicting straight off tx_mined.flags, copied
-// once by the move and updated by nothing afterwards, so without the membership arm marking a
+// once by the move and updated by nothing afterwards, so without setConflictingMinedSQL marking a
 // mined transaction conflicting set the UTXO bit and not the bit Get reports -- the mirror
-// image of the failure setLockedSQL's own comment warns about. The membership arm is a plain
-// txid equality because tx_mined's primary key leads with txid.
+// image of the failure setLockedSQL's own comment warns about.
 //
-// Every arm writes ONLY ROWS WHOSE BIT CHANGES, as setLockedSQL and clearMarkerSQL do. A cascade
+// All three statements write ONLY ROWS WHOSE BIT CHANGES, as setLockedSQL and clearMarkerSQL do. A cascade
 // revisits shared descendants and a clear runs over rows that are already clear, and rewriting
 // those rows would lock them for nothing and widen the overlap with SetLocked and the mine that
 // withDeadlockRetry has to cure. Skipping them does not weaken the wait described above. A UTXO
@@ -205,8 +204,8 @@ ON CONFLICT DO NOTHING`
 // SKIPPING UNCHANGED ROWS MEANS OPPOSITE FLIPS NO LONGER SERIALIZE. The reasoning above covers
 // in-flight spends only, not an in-flight flip in the other direction. Say a clear of a
 // transaction is running and not yet committed when a set of the same transaction starts. The
-// set's snapshot still shows the bit set, so every arm skips the row without waiting on the
-// clear's row lock, and the clear's value is what stands once it commits. When every arm wrote
+// set's snapshot still shows the bit set, so each statement skips the row without waiting on the
+// clear's row lock, and the clear's value is what stands once it commits. When every statement wrote
 // its rows, the set waited on the clear, re-checked the row and applied its own value. Nothing
 // in this store serializes the two calls, so a caller of SetConflicting must not run opposite
 // flips on the same transaction at the same time: the losing call would act on its affected
