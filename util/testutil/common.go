@@ -55,7 +55,7 @@ func NewSQLiteMemoryUTXOStore(ctx context.Context, logger ulogger.Logger, settin
 	utxoStore, err = sql.New(ctx, logger, settings, utxoStoreURL)
 	require.NoError(t, err)
 	// Close at test end: an open store keeps its batcher workers, and the
-	// ~30 MB of queue each pins, alive until the test binary exits.
+	// queue each one pins, alive until the test binary exits.
 	t.Cleanup(func() { _ = utxoStore.Close(context.Background()) })
 
 	return utxoStore
