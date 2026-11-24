@@ -929,3 +929,24 @@ func TestLaneBitmapPathsMatchAddMany(t *testing.T) {
 		})
 	}
 }
+
+// A record that borrowed the last sealed record's lists and was left for another subtree does not
+// hand its positions on: the next record starts empty.
+func TestAnAbandonedRecordsPositionsDoNotReachTheNext(t *testing.T) {
+	stp, _ := keptLanePoolProcessor(t, false)
+
+	a, err := subtreepkg.NewTreeByLeafCount(4)
+	require.NoError(t, err)
+
+	b, err := subtreepkg.NewTreeByLeafCount(4)
+	require.NoError(t, err)
+
+	stp.laneSpare = new([lane.MaxLane + 1][]uint64)
+
+	stp.recordLanePosition(a, lane.Pack(6, 1))
+	stp.recordLanePosition(a, lane.Pack(6, 2))
+	stp.recordLanePosition(b, lane.Pack(6, 3))
+
+	require.Same(t, b, stp.laneFill.subtree)
+	require.Equal(t, []uint64{3}, stp.laneFill.lanes[6])
+}
