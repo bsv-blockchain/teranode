@@ -100,6 +100,24 @@ Test file layout:
   consensus-vector, long-running, sequential, chaos and soak suites.
 - Search production code first and open tests only when needed. Most hits for a
   common identifier are in tests: `git grep <name> -- ':!*_test.go'`.
+- Add to an existing test, not only an existing file. When a test already reaches
+  the code, add an assertion there. When only the inputs or the entry point differ
+  (a sync and an async version, two handlers with the same failure), add a row to
+  that test's table. Write a new Test function only for a genuinely new setup.
+- When a PR adds a second test whose setup repeats an existing one, or a third case
+  that differs only in inputs, turn them into a table or move the shared setup into
+  the package's fixture in the same PR. A package with no table or fixture gets one
+  the first time a PR adds tests there.
+- Where a shared fixture uses a mock, it registers every expectation a test relies
+  on as required, never `.Maybe()`, so a call the code stops making still fails.
+- A store test that must pass on SQLite and PostgreSQL is one test body over a
+  backend loop, with a per-case timeout so a hang fails by name. No `_SQLite` and
+  `_Postgres` copies. Start PostgreSQL with `test/utils/postgres`, not
+  testcontainers' `postgres.Run`, except in a test of server configuration that
+  needs its own container settings.
+- A comment above a test is at most three lines: the behaviour it pins and why it
+  matters. Incident history, mutation proofs and review discussion go in the PR
+  body. Never put an issue number from a private tracker in a code comment.
 
 Test tags: `testtxmetacache` (small cache for testing), `largetxmetacache`
 (production cache size), `aerospike` (gates one native-ops integration test; the

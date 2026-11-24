@@ -207,7 +207,6 @@ Ensure code meets production Go standards.
 Quality verification:
 - gofmt formatting applied
 - golangci-lint passes
-- Test coverage > 80%
 - Benchmarks documented
 - Race detector clean
 - No goroutine leaks
