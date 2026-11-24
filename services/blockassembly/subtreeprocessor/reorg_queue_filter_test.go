@@ -1,6 +1,7 @@
 package subtreeprocessor
 
 import (
+	"slices"
 	"testing"
 	"time"
 
@@ -126,4 +127,101 @@ func TestReorgBlocks_Fork_SameMillisecondBatchIsFilteredAgainstItsForwardBlock(t
 			require.Contains(t, hashes, unmined, "a same-millisecond tx no block mined must be kept")
 		})
 	}
+}
+
+// A transaction handed to block assembly after its own forward block's step, and before a later
+// forward block's step, is checked against the earlier block's kept set too. B's drain alone only
+// knows B, so without the kept set the transaction A mined goes back into block assembly.
+func TestReorgBlocks_Fork_LateArrivalAfterItsForwardBlockStaysOut(t *testing.T) {
+	cases := map[string]struct {
+		retention time.Duration
+		reEnters  bool
+	}{
+		"kept_set_drops_it":          {retention: 10 * time.Second},
+		"retention_off_lets_it_back": {retention: 0, reEnters: true},
+	}
+
+	for variant, opts := range catchUpTxMapVariants(t) {
+		for name, tc := range cases {
+			t.Run(variant+"/"+name, func(t *testing.T) {
+				stp, store, subtreeStore, chain := newResetWALTestProcessor(t, false, opts...)
+				stp.settings.BlockAssembly.MinedTxSetRetention = tc.retention
+
+				minedInFirstTx, _ := createResetWALConflict(t, store, 25)
+				minedInLastTx, _ := createResetWALConflict(t, store, 26)
+				minedInFirst := *minedInFirstTx.TxIDChainHash()
+				unmined := chainhash.HashH([]byte("fork-reorg-late-not-mined"))
+
+				back := moveToBlockAbove(t, stp, chain)
+				chain.moveForward[0].Subtrees = []*chainhash.Hash{storeTestSubtree(t, subtreeStore, false, minedInFirstTx)}
+				chain.moveForward[1].Subtrees = []*chainhash.Hash{storeTestSubtree(t, subtreeStore, false, minedInLastTx)}
+
+				enqueueAt := time.Now()
+				stp.queue.clock = fixedClock{t: enqueueAt}
+				stp.clock = fixedClock{t: enqueueAt.Add(time.Millisecond)}
+
+				// Block A's step, and its drain, are done; block B's is next.
+				fired := beforeForwardBlockOn(stp, chain.moveForward[0].Header, func() {
+					stp.AddBatch(
+						[]subtreepkg.Node{{Hash: minedInFirst, Fee: 1, SizeInBytes: 1}, {Hash: unmined, Fee: 1, SizeInBytes: 1}},
+						[]*subtreepkg.TxInpoints{inpointsPtr(), inpointsPtr()},
+					)
+				})
+
+				require.NoError(t, stp.reorgBlocks(t.Context(), []*model.Block{back}, chain.moveForward))
+				require.True(t, *fired, "the batch must arrive after the first forward block's step")
+				require.Zero(t, stp.queue.length(), "the last step's drain takes the late batch")
+
+				hashes := collectSubtreeHashes(stp)
+				require.Equal(t, tc.reEnters, slices.Contains(hashes, minedInFirst))
+				require.Equal(t, tc.reEnters, stp.currentTxMap.Exists(minedInFirst))
+				require.Contains(t, hashes, unmined, "a late transaction no block mined must be kept")
+				require.Equal(t, uint64(len(hashes)), stp.txCount.Load(), "the transaction count must equal what the subtrees hold") // nolint:gosec
+			})
+		}
+	}
+}
+
+// A reorg keeps every forward block's set until it ends and starts their retention then. It
+// forgets a moved-back block's set, so a late hand-off of a transaction that block mined, and no
+// forward block mines, is placed.
+func TestReorgBlocks_Fork_KeepsForwardSetsAndForgetsMovedBack(t *testing.T) {
+	stp, store, subtreeStore, chain := newResetWALTestProcessor(t, false)
+	stp.settings.BlockAssembly.MinedTxSetRetention = 10 * time.Second
+
+	firstTx, _ := createResetWALConflict(t, store, 27)
+	lastTx, _ := createResetWALConflict(t, store, 28)
+	onlyInBack := chainhash.HashH([]byte("mined-only-by-the-moved-back-block"))
+
+	back := moveToBlockAbove(t, stp, chain)
+	// As if block assembly had moved forward onto the block it now moves back.
+	stp.keepMinedSet(back, frozenHashSet(t, onlyInBack))
+
+	chain.moveForward[0].Subtrees = []*chainhash.Hash{storeTestSubtree(t, subtreeStore, false, firstTx)}
+	chain.moveForward[1].Subtrees = []*chainhash.Hash{storeTestSubtree(t, subtreeStore, false, lastTx)}
+
+	now := time.Now()
+	stp.queue.clock = fixedClock{t: now}
+	stp.clock = clockFunc(func() time.Time { return now.Add(time.Millisecond) })
+
+	fired := beforeForwardBlockOn(stp, chain.genesis, func() {
+		stp.AddBatch([]subtreepkg.Node{{Hash: onlyInBack, Fee: 1, SizeInBytes: 1}}, []*subtreepkg.TxInpoints{inpointsPtr()})
+
+		// The reorg has run for an hour by the time it moves forward: a pinned set must not expire.
+		now = now.Add(time.Hour)
+	})
+
+	require.NoError(t, stp.reorgBlocks(t.Context(), []*model.Block{back}, chain.moveForward))
+	require.True(t, *fired)
+
+	require.Contains(t, collectSubtreeHashes(stp), onlyInBack, "the moved-back block's set must not keep its transaction out")
+	require.Equal(t, 2, stp.keptMinedSetCount(), "both forward blocks' sets are kept after the reorg")
+
+	b := batchOf(*firstTx.TxIDChainHash(), *lastTx.TxIDChainHash())
+	stp.filterRecentlyMined([]*TxBatch{b})
+	require.Empty(t, b.nodes, "both forward blocks' transactions are still kept out")
+
+	now = now.Add(10 * time.Second)
+	stp.pruneMinedSets()
+	require.Zero(t, stp.keptMinedSetCount(), "the retention starts when the reorg ends")
 }

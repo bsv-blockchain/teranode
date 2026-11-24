@@ -1,0 +1,263 @@
+package subtreeprocessor
+
+import (
+	"testing"
+	"time"
+
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	subtreepkg "github.com/bsv-blockchain/go-subtree"
+	"github.com/bsv-blockchain/teranode/model"
+	"github.com/stretchr/testify/require"
+)
+
+func frozenHashSet(t *testing.T, hashes ...chainhash.Hash) *SortedHashSet {
+	t.Helper()
+
+	set := NewSortedHashSet(len(hashes))
+	for _, h := range hashes {
+		require.NoError(t, set.Put(h))
+	}
+
+	require.NoError(t, set.Freeze(1))
+
+	return set
+}
+
+func minedSetBlock(nonce uint32) *model.Block {
+	return &model.Block{Header: &model.BlockHeader{Version: 1, Nonce: nonce, HashPrevBlock: &chainhash.Hash{}, HashMerkleRoot: &chainhash.Hash{}}}
+}
+
+func newMinedSetProcessor(t *testing.T, retention time.Duration) (*SubtreeProcessor, *time.Time) {
+	t.Helper()
+
+	stp, _, _, _ := newResetWALTestProcessor(t, false)
+	stp.settings.BlockAssembly.MinedTxSetRetention = retention
+
+	now := time.Date(2030, 1, 2, 3, 4, 5, 0, time.UTC)
+	stp.clock = clockFunc(func() time.Time { return now })
+
+	return stp, &now
+}
+
+// clockFunc is a clock a test moves by changing the time its function returns.
+type clockFunc func() time.Time
+
+func (c clockFunc) Now() time.Time { return c() }
+
+func batchOf(hashes ...chainhash.Hash) *TxBatch {
+	b := &TxBatch{}
+	for i, h := range hashes {
+		b.nodes = append(b.nodes, subtreepkg.Node{Hash: h, Fee: 1, SizeInBytes: 1})
+		b.txInpoints = append(b.txInpoints, inpointsPtr())
+		b.validatedHeights = append(b.validatedHeights, uint32(100+i)) //nolint:gosec // small test index
+	}
+
+	return b
+}
+
+func batchHashes(b *TxBatch) []chainhash.Hash {
+	out := make([]chainhash.Hash, len(b.nodes))
+	for i := range b.nodes {
+		out[i] = b.nodes[i].Hash
+	}
+
+	return out
+}
+
+// A queued transaction a kept block set holds is dropped, and the rest keep their order and
+// their own inpoints and validated heights.
+func TestFilterRecentlyMined_DropsMinedAndKeepsOrder(t *testing.T) {
+	stp, _ := newMinedSetProcessor(t, 10*time.Second)
+
+	a, b, c, d, e := chainhash.HashH([]byte("a")), chainhash.HashH([]byte("b")), chainhash.HashH([]byte("c")), chainhash.HashH([]byte("d")), chainhash.HashH([]byte("e"))
+	stp.keepMinedSet(minedSetBlock(1), frozenHashSet(t, b))
+	stp.keepMinedSet(minedSetBlock(2), frozenHashSet(t, e))
+
+	first, second := batchOf(a, b, c), batchOf(d, e)
+	cInpoints := first.txInpoints[2]
+
+	stp.filterRecentlyMined([]*TxBatch{first, second})
+
+	require.Equal(t, []chainhash.Hash{a, c}, batchHashes(first))
+	require.Equal(t, []uint32{100, 102}, first.validatedHeights, "each kept transaction keeps its own validated height")
+	require.Same(t, cInpoints, first.txInpoints[1], "each kept transaction keeps its own inpoints")
+	require.Equal(t, []chainhash.Hash{d}, batchHashes(second), "a set from any kept block filters")
+	require.Equal(t, []uint32{100}, second.validatedHeights)
+}
+
+// The lookups run in parallel chunks across batch boundaries; every position must still map to
+// its own batch.
+func TestFilterRecentlyMined_ManyBatchesAcrossChunks(t *testing.T) {
+	stp, _ := newMinedSetProcessor(t, 10*time.Second)
+
+	minedHashes := make([]chainhash.Hash, 0, 300)
+
+	batches := make([]*TxBatch, 0, 300)
+	for i := range 300 {
+		h1 := chainhash.HashH([]byte{byte(i), byte(i >> 8), 1})
+		h2 := chainhash.HashH([]byte{byte(i), byte(i >> 8), 2})
+		h3 := chainhash.HashH([]byte{byte(i), byte(i >> 8), 3})
+		batches = append(batches, batchOf(h1, h2, h3))
+		minedHashes = append(minedHashes, h2)
+	}
+
+	stp.keepMinedSet(minedSetBlock(1), frozenHashSet(t, minedHashes...))
+	stp.filterRecentlyMined(batches)
+
+	for i, b := range batches {
+		require.Equal(t, []chainhash.Hash{
+			chainhash.HashH([]byte{byte(i), byte(i >> 8), 1}),
+			chainhash.HashH([]byte{byte(i), byte(i >> 8), 3}),
+		}, batchHashes(b), "batch %d", i)
+	}
+}
+
+// A set is dropped once its retention has passed, which frees it, and a retention of 0 keeps
+// nothing.
+func TestKeepMinedSet_RetentionAndPrune(t *testing.T) {
+	stp, now := newMinedSetProcessor(t, 10*time.Second)
+	h := chainhash.HashH([]byte("mined"))
+
+	stp.keepMinedSet(minedSetBlock(1), frozenHashSet(t, h))
+	require.Equal(t, 1, stp.keptMinedSetCount())
+
+	*now = now.Add(10*time.Second - time.Millisecond)
+	stp.pruneMinedSets()
+	require.Equal(t, 1, stp.keptMinedSetCount(), "kept until the retention has passed")
+
+	*now = now.Add(time.Millisecond)
+	stp.pruneMinedSets()
+	require.Zero(t, stp.keptMinedSetCount(), "dropped once the retention has passed")
+
+	b := batchOf(h)
+	stp.filterRecentlyMined([]*TxBatch{b})
+	require.Equal(t, []chainhash.Hash{h}, batchHashes(b), "a dropped set filters nothing")
+
+	stp.settings.BlockAssembly.MinedTxSetRetention = 0
+	stp.keepMinedSet(minedSetBlock(2), frozenHashSet(t, h))
+	require.Zero(t, stp.keptMinedSetCount(), "a retention of 0 keeps nothing")
+
+	stp.settings.BlockAssembly.MinedTxSetRetention = time.Second
+	stp.keepMinedSet(minedSetBlock(3), nil)
+	stp.keepMinedSet(minedSetBlock(4), frozenHashSet(t))
+	require.Zero(t, stp.keptMinedSetCount(), "a block with no transaction set keeps nothing")
+}
+
+// Keeping the same block again replaces its set rather than holding two.
+func TestKeepMinedSet_SameBlockReplaces(t *testing.T) {
+	stp, _ := newMinedSetProcessor(t, 10*time.Second)
+	first, second := chainhash.HashH([]byte("first")), chainhash.HashH([]byte("second"))
+
+	stp.keepMinedSet(minedSetBlock(1), frozenHashSet(t, first))
+	stp.keepMinedSet(minedSetBlock(1), frozenHashSet(t, second))
+	require.Equal(t, 1, stp.keptMinedSetCount())
+
+	b := batchOf(first, second)
+	stp.filterRecentlyMined([]*TxBatch{b})
+	require.Equal(t, []chainhash.Hash{first}, batchHashes(b))
+}
+
+// While pinned, a kept set does not expire. A finish that succeeded starts its retention then; a
+// failed one drops the sets kept while pinned and leaves the earlier ones.
+func TestPinMinedSets(t *testing.T) {
+	t.Run("success_starts_retention_at_finish", func(t *testing.T) {
+		stp, now := newMinedSetProcessor(t, 10*time.Second)
+
+		finish := stp.pinMinedSets()
+		stp.keepMinedSet(minedSetBlock(1), frozenHashSet(t, chainhash.HashH([]byte("x"))))
+
+		*now = now.Add(time.Hour)
+		stp.pruneMinedSets()
+		require.Equal(t, 1, stp.keptMinedSetCount(), "a pinned set does not expire")
+
+		finish(false)
+
+		*now = now.Add(10*time.Second - time.Millisecond)
+		stp.pruneMinedSets()
+		require.Equal(t, 1, stp.keptMinedSetCount(), "the retention starts when the pin ends")
+
+		*now = now.Add(time.Millisecond)
+		stp.pruneMinedSets()
+		require.Zero(t, stp.keptMinedSetCount())
+	})
+
+	t.Run("failure_drops_only_sets_kept_while_pinned", func(t *testing.T) {
+		stp, _ := newMinedSetProcessor(t, 10*time.Second)
+		before, during := chainhash.HashH([]byte("before")), chainhash.HashH([]byte("during"))
+
+		stp.keepMinedSet(minedSetBlock(1), frozenHashSet(t, before))
+
+		finish := stp.pinMinedSets()
+		stp.keepMinedSet(minedSetBlock(2), frozenHashSet(t, during))
+		finish(true)
+
+		b := batchOf(before, during)
+		stp.filterRecentlyMined([]*TxBatch{b})
+		require.Equal(t, []chainhash.Hash{during}, batchHashes(b), "the set kept before the pin stays, the failed one's goes")
+	})
+}
+
+// A moved-back block's set is forgotten, and a reset forgets every set.
+func TestForgetAndClearMinedSets(t *testing.T) {
+	stp, _ := newMinedSetProcessor(t, 10*time.Second)
+	first, second := chainhash.HashH([]byte("first")), chainhash.HashH([]byte("second"))
+	firstBlock, secondBlock := minedSetBlock(1), minedSetBlock(2)
+
+	stp.keepMinedSet(firstBlock, frozenHashSet(t, first))
+	stp.keepMinedSet(secondBlock, frozenHashSet(t, second))
+
+	stp.forgetMinedSets([]*model.Block{firstBlock})
+
+	b := batchOf(first, second)
+	stp.filterRecentlyMined([]*TxBatch{b})
+	require.Equal(t, []chainhash.Hash{first}, batchHashes(b), "a moved-back block's transactions are placed again")
+
+	stp.clearMinedSets()
+	require.Zero(t, stp.keptMinedSetCount())
+}
+
+// An ordinary block move: a transaction the block mined whose hand-off reaches the queue after
+// the block's drain is dropped by the steady-state dequeue loop. Its batch is stamped before the
+// block, as a batch stamped before its block's drain and linked after it is.
+func TestMoveForwardBlock_LateHandOffOfMinedTxStaysOut(t *testing.T) {
+	cases := map[string]struct {
+		retention time.Duration
+		reEnters  bool
+	}{
+		"kept_set_drops_it":          {retention: 10 * time.Second},
+		"retention_off_lets_it_back": {retention: 0, reEnters: true},
+	}
+
+	for variant, opts := range catchUpTxMapVariants(t) {
+		for name, tc := range cases {
+			t.Run(variant+"/"+name, func(t *testing.T) {
+				stp, store, subtreeStore, chain := newResetWALTestProcessor(t, false, opts...)
+				stp.settings.BlockAssembly.MinedTxSetRetention = tc.retention
+
+				minedTx, _ := createResetWALConflict(t, store, 31)
+				mined := *minedTx.TxIDChainHash()
+				unmined := chainhash.HashH([]byte("late-hand-off-not-mined"))
+
+				chain.moveForward[0].Subtrees = []*chainhash.Hash{storeTestSubtree(t, subtreeStore, false, minedTx)}
+				stp.queue.clock = fixedClock{t: time.Now().Add(-time.Second)}
+
+				stp.Start(t.Context())
+
+				require.NoError(t, stp.MoveForwardBlock(chain.moveForward[0]))
+				require.Eventually(t, func() bool { return !stp.DrainingAfterBlock() }, 5*time.Second, time.Millisecond,
+					"the block's own drain must end before the hand-off arrives")
+
+				stp.AddBatch(
+					[]subtreepkg.Node{{Hash: mined, Fee: 1, SizeInBytes: 1}, {Hash: unmined, Fee: 1, SizeInBytes: 1}},
+					[]*subtreepkg.TxInpoints{inpointsPtr(), inpointsPtr()},
+				)
+
+				require.Eventually(t, func() bool {
+					return stp.queue.length() == 0 && stp.GetCurrentTxMap().Exists(unmined)
+				}, 5*time.Second, time.Millisecond, "the dequeue loop must place the unmined transaction")
+
+				require.Equal(t, tc.reEnters, stp.GetCurrentTxMap().Exists(mined))
+			})
+		}
+	}
+}

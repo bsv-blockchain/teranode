@@ -214,6 +214,11 @@ type SubtreeProcessor struct {
 	droppedTxs   map[chainhash.Hash]struct{}
 	droppedCount atomic.Int64
 
+	// recentMined holds the transaction sets of the blocks block assembly moved forward onto
+	// in the last blockassembly_minedTxSetRetention, so a late hand-off of a transaction one
+	// of them mined stays out. See recent_mined_sets.go.
+	recentMined recentMinedSets
+
 	// currentItemsPerFile specifies the maximum number of items per subtree file
 	currentItemsPerFile atomic.Int32
 
@@ -1204,6 +1209,11 @@ func (stp *SubtreeProcessor) Start(ctx context.Context) {
 						dequeuedItems += int64(len(batch.nodes))
 					}
 
+					// A transaction a recently applied block mined is dropped first, so the era
+					// filter below never records it as kept out.
+					stp.pruneMinedSets()
+					stp.filterRecentlyMined(dequeueBatches)
+
 					// Before the parallel filter: descendants are found in queue order. After
 					// the count above, which settles what the queue handed out, kept or not.
 					stp.filterTxEra(dequeueBatches)
@@ -1689,6 +1699,10 @@ func (stp *SubtreeProcessor) reset(blockHeader *model.BlockHeader, moveBackBlock
 
 	stp.SetUnminedLoading(true)
 	defer stp.SetUnminedLoading(false)
+
+	// A reset can move back any block and rebuilds block assembly from the UTXO store, so no
+	// kept block set is known to still hold mined transactions only.
+	stp.clearMinedSets()
 
 	// reset has no rollback: it commits to a new state (clearing currentTxMap
 	// below, then reloading) unconditionally, unlike moveForwardBlock/
@@ -5365,6 +5379,21 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveBackBlocks []*
 		return err
 	}
 
+	// Every forward block's transaction set stays kept until the reorg ends, so a late hand-off
+	// of a transaction an earlier forward block mined is dropped at a later step's drain too. A
+	// reorg that fails or panics drops the sets it kept: a failed catch-up rolls its blocks back,
+	// and a failed fork reorg is followed by a reset.
+	finishMinedSets := stp.pinMinedSets()
+
+	defer func() {
+		r := recover()
+		finishMinedSets(err != nil || r != nil)
+
+		if r != nil {
+			panic(r)
+		}
+	}()
+
 	// A failed step puts back the map it captured, and a failed catch-up the
 	// map from before it, so a captured map must stay unchanged after the next
 	// step's reset. The double-buffer swap pattern breaks that across multiple
@@ -5521,6 +5550,10 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveBackBlocks []*
 		if err = stp.WaitForPendingBlocks(ctx); err != nil {
 			return errors.NewProcessingError("[reorgBlocks] error waiting for blocks being mined", err)
 		}
+
+		// The moved-back blocks no longer mine their transactions on the chain block assembly
+		// follows, so a late hand-off of one of them must be placed, not dropped.
+		stp.forgetMinedSets(moveBackBlocks)
 	}
 
 	// Check the moveForward subtrees open, read every moveBack block's
@@ -7884,6 +7917,9 @@ func (stp *SubtreeProcessor) moveForwardBlockDeferringDrain(ctx context.Context,
 		}
 	}
 
+	// Kept for late hand-offs of the transactions this block mined (recent_mined_sets.go).
+	stp.keepMinedSet(block, transactionMap)
+
 	return transactionMap, losingTxHashesMap, drain, nil
 }
 
@@ -8307,6 +8343,9 @@ func (stp *SubtreeProcessor) runDrainChunk(chunk []*TxBatch, chunkItems int, fn 
 
 	// Before fn, in queue order, so descendants are found. chunkItems was counted before it,
 	// as the queue handed the chunk out, so the settle above releases what was dropped too.
+	// A transaction a block applied in the last blockassembly_minedTxSetRetention mined is
+	// dropped first: fn filters only against the block this drain moves, if any.
+	stp.filterRecentlyMined(chunk)
 	stp.filterTxEra(chunk)
 
 	placed, err = fn(chunk)
