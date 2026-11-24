@@ -460,3 +460,32 @@ func TestDequeueLoop_ChecksOnlySetsKeptAfterArrival(t *testing.T) {
 	mined, _ := stp.lookupRecentlyMined([]*TxBatch{b}, nil)
 	require.Nil(t, mined)
 }
+
+// A drain also checks the kept sets before the era filter, so a mined transaction is not recorded as
+// kept out by the era filter there either.
+func TestDrain_KeptSetCheckRunsBeforeTheEraFilter(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	stp := newTestSubtreeProcessorForDequeueStaleness(t, ctx)
+	stp.settings.BlockAssembly.MinedTxSetRetention = 10 * time.Second
+	stp.SetTxEra(150)
+
+	mined, inEra := chainhash.HashH([]byte("drain-mined-and-out-of-era")), chainhash.HashH([]byte("drain-in-era"))
+	stp.keepMinedSet(minedSetBlock(1), frozenHashSet(t, mined))
+
+	require.Equal(t, Admitted, stp.queue.enqueueBatchBounded(
+		[]subtreepkg.Node{{Hash: mined, Fee: 1, SizeInBytes: 1}, {Hash: inEra, Fee: 1, SizeInBytes: 1}},
+		[]*subtreepkg.TxInpoints{{}, {}},
+		false,
+		[]uint32{99, 150},
+	))
+
+	require.NoError(t, stp.dequeueDuringBlockMovementWithCutoff(nil, nil, nil, true, true))
+	require.True(t, stp.currentTxMap.Exists(inEra))
+
+	stp.droppedMu.Lock()
+	_, recorded := stp.droppedTxs[mined]
+	stp.droppedMu.Unlock()
+	require.False(t, recorded, "a mined transaction must not be recorded as kept out by the era filter")
+}
