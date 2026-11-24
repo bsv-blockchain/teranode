@@ -394,7 +394,9 @@ func TestLaneRowsOfBlocksValidatedAtOnceShareOnePool(t *testing.T) {
 		require.Len(t, got[i], 2, "call %d", i)
 	}
 
-	require.Empty(t, u.laneBitmapReadSlots(), "every read handed its slot back")
+	// A read reports its result before it frees its slot, so the last slot can come free just after
+	// laneRows returns.
+	require.Eventually(t, func() bool { return len(u.laneBitmapReadSlots()) == 0 }, time.Second, time.Millisecond, "every read handed its slot back")
 }
 
 // A block of more subtrees than are read at once still gets its rows, well inside the deadline:
