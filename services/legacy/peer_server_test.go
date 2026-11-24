@@ -2061,3 +2061,35 @@ func TestPushBlockMsg_RetriesRateLimitedAssetFetch(t *testing.T) {
 	require.False(t, errors.Is(err, errors.ErrServiceRateLimited), "the error returned must be the answer after the retry")
 	require.Len(t, doneChan, 1, "a failed fetch must still signal doneChan")
 }
+
+// TestPushBlockMsg_GivesUpOnPersistentRateLimit covers the other end of the retry: an asset
+// service that keeps answering 429. pushBlockMsg must stop within its budget and return the
+// rate-limit error, so OnGetData answers the SV peer with notfound, and still signal doneChan.
+// The service context's 1 s deadline gives the retry ladder 0.5 s: one retry after the 250 ms
+// first step (up to 375 ms with jitter), then it stops before the 500 ms second step.
+func TestPushBlockMsg_GivesUpOnPersistentRateLimit(t *testing.T) {
+	var requests atomic.Int32
+
+	asset := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests.Add(1)
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	defer asset.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	s := &server{
+		ctx:              ctx,
+		settings:         &settings.Settings{},
+		logger:           ulogger.TestLogger{},
+		assetHTTPAddress: asset.URL + "/api/v1",
+	}
+	sp := &serverPeer{server: s}
+	doneChan := make(chan struct{}, 1)
+
+	err := s.pushBlockMsg(sp, &chainhash.Hash{}, doneChan, nil, wire.BaseEncoding)
+	require.ErrorIs(t, err, errors.ErrServiceRateLimited)
+	require.Equal(t, int32(2), requests.Load(), "one retry fits the budget, the next step does not")
+	require.Len(t, doneChan, 1, "a failed fetch must still signal doneChan")
+}

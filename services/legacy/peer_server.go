@@ -1833,6 +1833,17 @@ func legacyPeerPoolHeaders(tSettings *settings.Settings) map[string]string {
 	return map[string]string{legacyInternalTokenHeader: token}
 }
 
+// warnIfLegacyPeerPoolTokenUnset warns that pushBlockMsg's fetches from Asset are charged to
+// Asset's per-IP heavy rate limit, which only asset_legacyPeerPoolToken exempts them from. It is
+// silent when the token is set or the heavy limit is off.
+func warnIfLegacyPeerPoolTokenUnset(logger ulogger.Logger, tSettings *settings.Settings) {
+	if tSettings.Asset.LegacyPeerPoolToken != "" || tSettings.Asset.HTTPHeavyRateLimit <= 0 {
+		return
+	}
+
+	logger.Warnf("[Legacy Server] asset_legacyPeerPoolToken is not set, so blocks served to legacy peers are fetched from the asset service under its per-IP heavy rate limit (asset_httpHeavyRateLimit=%d req/s); set the token to the same value on the legacy and asset services to exempt them, and consider a finite asset_concurrency_get_legacy_block_reader_peer", tSettings.Asset.HTTPHeavyRateLimit)
+}
+
 // pushBlockMsg sends a block message for the provided block hash to the
 // connected peer.  An error is returned if the block hash is not known.
 func (s *server) pushBlockMsg(sp *serverPeer, hash *chainhash.Hash, doneChan chan<- struct{},
