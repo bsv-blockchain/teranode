@@ -3,6 +3,7 @@ package subtreeprocessor
 import (
 	"runtime"
 
+	"github.com/RoaringBitmap/roaring/v2/roaring64"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
 	"github.com/bsv-blockchain/teranode/util/lane"
@@ -30,11 +31,33 @@ type LaneBitmapsKeeper interface {
 // laneFill holds the lane positions recorded for the members of one open subtree.
 type laneFill struct {
 	subtree *subtreepkg.Subtree
-	builder *lane.BitmapsBuilder
+	// lanes holds the recorded positions within each lane, indexed by lane, so recording one is
+	// an append with no map lookup.
+	lanes *[lane.MaxLane + 1][]uint64
+	// unpositioned counts the members recorded without a valid position.
+	unpositioned int
 	// added counts the members recorded, with a position or without one.
 	added int
 	// removed holds the positions of recorded members taken out of the subtree again.
 	removed []uint64
+}
+
+// newLaneFill starts an empty record for st.
+func newLaneFill(st *subtreepkg.Subtree) laneFill {
+	return laneFill{subtree: st, lanes: new([lane.MaxLane + 1][]uint64)}
+}
+
+// add records one member's position, 0 or another invalid one for none.
+func (f *laneFill) add(position uint64) {
+	f.added++
+
+	if !lane.Valid(position) {
+		f.unpositioned++
+		return
+	}
+
+	l, p := lane.Unpack(position)
+	f.lanes[l] = append(f.lanes[l], p)
 }
 
 // keepsLaneBitmaps reports whether the processor builds lane bitmaps for its subtrees: at shadow,
@@ -50,12 +73,11 @@ func (stp *SubtreeProcessor) recordLanePosition(st *subtreepkg.Subtree, position
 		return
 	}
 
-	if stp.laneFill.subtree != st || stp.laneFill.builder == nil {
-		stp.laneFill = laneFill{subtree: st, builder: lane.NewBitmapsBuilder()}
+	if stp.laneFill.subtree != st || stp.laneFill.lanes == nil {
+		stp.laneFill = newLaneFill(st)
 	}
 
-	stp.laneFill.builder.Add(position)
-	stp.laneFill.added++
+	stp.laneFill.add(position)
 }
 
 // recordLaneMemberRemoved notes that to replaced from as the open subtree without the member whose
@@ -77,7 +99,7 @@ func (stp *SubtreeProcessor) recordLaneMemberRemoved(from, to *subtreepkg.Subtre
 
 // matches reports whether the record holds a position, or none, for each member of st.
 func (f *laneFill) matches(st *subtreepkg.Subtree) bool {
-	return f.subtree == st && f.builder != nil && f.added-len(f.removed) == laneMembers(st)
+	return f.subtree == st && f.lanes != nil && f.added-len(f.removed) == laneMembers(st)
 }
 
 // laneMembers is the number of st's members, leaving out the coinbase placeholder.
@@ -93,8 +115,19 @@ func laneMembers(st *subtreepkg.Subtree) int {
 // bitmaps builds the record's lane bitmaps for subtree root, and the count of its members
 // without a position.
 func (f *laneFill) bitmaps(root chainhash.Hash) (lane.SubtreeBitmaps, int) {
-	bitmaps := f.builder.Subtree(root)
-	unpositioned := f.builder.Unpositioned()
+	bitmaps := lane.SubtreeBitmaps{SubtreeHash: root, Lanes: lane.LaneBitmaps{}}
+	unpositioned := f.unpositioned
+
+	for l, positions := range f.lanes {
+		if len(positions) == 0 {
+			continue
+		}
+
+		bm := roaring64.New()
+		bm.AddMany(positions)
+		bm.RunOptimize()
+		bitmaps.Lanes[uint8(l)] = bm //nolint:gosec // l is at most MaxLane
+	}
 
 	for _, position := range f.removed {
 		if !lane.Valid(position) {

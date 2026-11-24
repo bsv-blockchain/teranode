@@ -44,7 +44,6 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
-	"github.com/bsv-blockchain/teranode/util/lane"
 	"github.com/bsv-blockchain/teranode/util/retry"
 	"github.com/bsv-blockchain/teranode/util/tracing"
 	"github.com/ordishs/gocore"
@@ -9072,14 +9071,16 @@ func (stp *SubtreeProcessor) parallelBuildRemainderSubtrees(ctx context.Context,
 	if stp.keepsLaneBitmaps() {
 		switch {
 		case laneMembers(currentSubtree) == 0:
-			chunks[0].lanes = &laneFill{subtree: currentSubtree, builder: lane.NewBitmapsBuilder()}
+			fill := newLaneFill(currentSubtree)
+			chunks[0].lanes = &fill
 		case stp.laneFill.matches(currentSubtree):
 			fill := stp.laneFill
 			chunks[0].lanes = &fill
 		}
 
 		for i := 1; i < len(chunks); i++ {
-			chunks[i].lanes = &laneFill{subtree: chunks[i].subtree, builder: lane.NewBitmapsBuilder()}
+			fill := newLaneFill(chunks[i].subtree)
+			chunks[i].lanes = &fill
 		}
 
 		stp.laneFill = laneFill{}
@@ -9123,8 +9124,7 @@ func (stp *SubtreeProcessor) parallelBuildRemainderSubtrees(ctx context.Context,
 						break
 					}
 
-					c.lanes.builder.Add(position)
-					c.lanes.added++
+					c.lanes.add(position)
 				}
 			}
 

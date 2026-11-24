@@ -319,7 +319,7 @@ func TestOffRecordsNoLanePositions(t *testing.T) {
 
 	require.Len(t, stp.chainedSubtrees, 2)
 	require.Empty(t, keeper.bitmaps)
-	require.Nil(t, stp.laneFill.builder)
+	require.Nil(t, stp.laneFill.lanes)
 }
 
 // BenchmarkSealLaneBitmaps measures building one 1M-member subtree's lane bitmaps from its
@@ -348,10 +348,9 @@ func BenchmarkSealLaneBitmaps(b *testing.B) {
 			for i := 0; i < b.N; i++ {
 				b.StopTimer()
 
-				fill := laneFill{builder: lane.NewBitmapsBuilder()}
+				fill := newLaneFill(nil)
 				for _, p := range order.positions {
-					fill.builder.Add(p)
-					fill.added++
+					fill.add(p)
 				}
 
 				b.StartTimer()
