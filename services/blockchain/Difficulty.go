@@ -355,6 +355,16 @@ func (d *Difficulty) calcHistoricalWorkRequired(ctx context.Context, src HeaderS
 // This implements the DAA (Difficulty Adjustment Algorithm) as used in bitcoin-sv.
 // The algorithm uses chainwork differences to calculate the new target, similar to
 // the ComputeTarget function in bitcoin-sv's pow.cpp.
+//
+// SIBLING IMPLEMENTATION: services/svp2p/protocol/difficulty.go carries a second
+// port of this same bitcoin-sv pow.cpp ComputeTarget arithmetic, used to validate
+// the nBits of headers received from legacy P2P peers. It does not call this one
+// because the svp2p protocol package must hold no Teranode service dependency
+// (svp2p spec §4.4), and this method reaches for the Difficulty settings and
+// model.SuitableBlock. The two agree on every reachable input; that file's
+// header comment lists the degenerate branches where they differ and why none is
+// reachable. A CHANGE TO THIS ARITHMETIC BELONGS IN BOTH.
+//
 // Parameters:
 //   - suitableFirstBlock: First block in the difficulty adjustment window
 //   - suitableLastBlock: Last block in the difficulty adjustment window
