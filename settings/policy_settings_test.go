@@ -1,6 +1,7 @@
 package settings
 
 import (
+	"reflect"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -164,6 +165,29 @@ func TestPolicySettings_ScriptSettings(t *testing.T) {
 		testValue := int64(4294967295)
 		ps.SetMaxTxSigopsCountsPolicy(testValue)
 		assert.Equal(t, testValue, ps.GetMaxTxSigopsCountsPolicy())
+	})
+}
+
+// The multisig public-key surcharge can make the operation count exceed the
+// script's byte length, so the operator documentation must not equate the limits.
+func TestPolicySettings_MaxOpsDocumentation(t *testing.T) {
+	field, ok := reflect.TypeOf(PolicySettings{}).FieldByName("MaxOpsPerScriptPolicy")
+	require.True(t, ok)
+	description := field.Tag.Get("longdesc")
+
+	t.Run("MultisigSurcharge", func(t *testing.T) {
+		require.Contains(t, description, "OP_CHECKMULTISIG and OP_CHECKMULTISIGVERIFY")
+		require.Contains(t, description, "add the number of public keys to the operation count")
+		require.Contains(t, description, "operation count can exceed script size")
+	})
+
+	t.Run("NoByteBound", func(t *testing.T) {
+		require.NotContains(t, description, "count is bounded above by script size")
+	})
+
+	t.Run("NoCoupledTuning", func(t *testing.T) {
+		require.NotContains(t, description, "lower it only together with maxscriptsizepolicy")
+		require.NotContains(t, description, "the two bound the same work")
 	})
 }
 
