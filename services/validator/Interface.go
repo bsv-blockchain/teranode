@@ -117,7 +117,8 @@ type Interface interface {
 	// This must be called once per block, before concurrent per-transaction goroutines start,
 	// so that BIP68 MTP lookups inside each goroutine are pure array reads with no gRPC calls.
 	//
-	// If BIP68 is not yet active (blockHeight < CSVHeight) or no blockchain client is
+	// If BIP68 is not enforced at blockHeight (below CSVHeight, or at or above
+	// GenesisActivationHeight, where BIP68 is a no-op) or no blockchain client is
 	// configured, this is a no-op.
 	//
 	// When the store already covers the needed range this is a fast O(1) no-op.

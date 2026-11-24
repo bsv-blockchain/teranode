@@ -2336,6 +2336,11 @@ func TestEnsureMTPLoaded_ConcurrentCallsNeitherHangsNorRaces(t *testing.T) {
 		Return(mtpValues, nil).Once()
 
 	tSettings := test.CreateBaseTestSettings(t)
+	// Keep the load height inside the BIP68 range: regtest's Genesis height (100) is
+	// below its CSV height (576), so EnsureMTPLoaded would otherwise load nothing.
+	params := *tSettings.ChainCfgParams
+	params.GenesisActivationHeight = ^uint32(0)
+	tSettings.ChainCfgParams = &params
 
 	v := &Validator{
 		logger:           ulogger.TestLogger{},
@@ -2415,6 +2420,11 @@ func TestEnsureMTPLoaded_CrossBlockReadersAndWritersDoNotRace(t *testing.T) {
 		Return(extendedMTPs, nil).Once()
 
 	tSettings := test.CreateBaseTestSettings(t)
+	// Keep the load height inside the BIP68 range: regtest's Genesis height (100) is
+	// below its CSV height (576), so EnsureMTPLoaded would otherwise load nothing.
+	params := *tSettings.ChainCfgParams
+	params.GenesisActivationHeight = ^uint32(0)
+	tSettings.ChainCfgParams = &params
 
 	v := &Validator{
 		logger:           ulogger.TestLogger{},
@@ -2496,16 +2506,15 @@ func TestReadMTPsLocked_HappyPath(t *testing.T) {
 		},
 	}
 
-	utxoMTPs, blockMTP, err := v.readMTPsLocked(4, []uint32{0, 2, 3})
+	utxoMTPs, err := v.readMTPsLocked(4, 1_800_000_000, []uint32{0, 2, 3})
 	require.NoError(t, err)
 	require.Equal(t, []uint32{1_700_000_000, 1_700_000_020, 1_700_000_030}, utxoMTPs)
-	require.Equal(t, uint32(1_700_000_040), blockMTP)
 }
 
 // TestReadMTPsLocked_ClampsOutOfRangeUTXOs verifies that utxoHeights at or above
-// the store length fall back to the blockMTP value (matches the production
-// behaviour for unconfirmed parents whose effective height is blockState.Height+1
-// and may exceed blockMTPHeight).
+// the block height take the caller's blockMTP, the candidate's parent MTP: a
+// same-block parent's ancestor is the candidate's parent, and the unconfirmed
+// sentinel sits far above any height. mtpStore[blockHeight] is never read.
 func TestReadMTPsLocked_ClampsOutOfRangeUTXOs(t *testing.T) {
 	v := &Validator{
 		logger: ulogger.TestLogger{},
@@ -2516,10 +2525,9 @@ func TestReadMTPsLocked_ClampsOutOfRangeUTXOs(t *testing.T) {
 		},
 	}
 
-	utxoMTPs, blockMTP, err := v.readMTPsLocked(2, []uint32{0, 99, 1})
+	utxoMTPs, err := v.readMTPsLocked(2, 1_800_000_000, []uint32{0, 99, 1, 2})
 	require.NoError(t, err)
-	require.Equal(t, []uint32{1_700_000_000, 1_700_000_020, 1_700_000_010}, utxoMTPs)
-	require.Equal(t, uint32(1_700_000_020), blockMTP)
+	require.Equal(t, []uint32{1_700_000_000, 1_800_000_000, 1_700_000_010, 1_800_000_000}, utxoMTPs)
 }
 
 // TestValidateTransaction_BIP68PathReadsMTPStore drives validateTransaction
@@ -2564,7 +2572,7 @@ func TestValidateTransaction_BIP68PathReadsMTPStore(t *testing.T) {
 
 	// utxoHeight at blockHeight-1 is well within the populated range so the
 	// per-input MTP lookup uses mtpStore[h] (the in-range branch).
-	err = v.validateTransaction(ctx, tx, blockHeight, []uint32{blockHeight - 1}, &Options{SkipPolicyChecks: true})
+	err = v.validateTransaction(ctx, tx, blockHeight, []uint32{blockHeight - 1}, &Options{SkipPolicyChecks: true, CandidateParentMedianTime: 1_700_000_000 + blockHeight})
 	require.NoError(t, err)
 }
 
@@ -2596,9 +2604,135 @@ func TestValidateTransaction_BIP68GuardFiresOnUnpopulatedStore(t *testing.T) {
 	ctx, _, endSpan := tracing.Tracer("validator").Start(context.Background(), "Test")
 	defer endSpan()
 
-	err = v.validateTransaction(ctx, tx, blockHeight, []uint32{blockHeight - 1}, &Options{SkipPolicyChecks: true})
+	err = v.validateTransaction(ctx, tx, blockHeight, []uint32{blockHeight - 1}, &Options{SkipPolicyChecks: true, CandidateParentMedianTime: 1_700_000_000})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "MTP store not loaded up to height")
+}
+
+// bip68ForkValidator builds a validator whose mtpStore holds the main chain's medians,
+// MTP(h) = 1_700_000_000 + h for every h up to blockHeight, with mainnet parameters so
+// blockHeight is inside the BIP68 range.
+func bip68ForkValidator(t *testing.T, blockHeight uint32) *Validator {
+	t.Helper()
+	initPrometheusMetrics()
+
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.ChainCfgParams, _ = chaincfg.GetChainParams("mainnet")
+
+	mtpStore := make([]uint32, blockHeight+1)
+	for i := range mtpStore {
+		mtpStore[i] = uint32(1_700_000_000 + i)
+	}
+
+	v := &Validator{
+		logger:           ulogger.TestLogger{},
+		settings:         tSettings,
+		txValidator:      NewTxValidator(ulogger.TestLogger{}, tSettings),
+		blockchainClient: &blockchain.Mock{},
+		stats:            gocore.NewStat("validator_test"),
+		mtpStore:         mtpStore,
+	}
+	v.txValidator.(*TxValidator).bdk = noopBDKValidator{}
+
+	return v
+}
+
+// bip68TimeLockedTx returns a version 2 tx whose only input carries a time-based relative
+// lock of one 512-second unit.
+func bip68TimeLockedTx(t *testing.T) *bt.Tx {
+	t.Helper()
+
+	tx, err := bt.NewTxFromString("010000000000000000ef01f80f63b70d76242a60f6a222e536f1383b6ac11ff69bb0b026871dfe8255ae5e010000006a47304402204dcc5d16184a0f5b73a56a9984de0156e60f486af4b9feb304c1e7a0bebeba50022029d2c4f7614438a3bb33b90ea6251aa760a2e6645068338faab2e65f7a54ca700121033ce8391ba0f2ffa4b39947920a28958b14569c382dab826e3e86253d6f2d6be6ffffffff906ca312000000001976a9143a570d7cd342bb8cf54193d2919d12f1b85f03cc88ac022000fc09000000001976a914dc1b13bfce97785162b14dc583947bc2e379eaa288ac501ea708000000001976a9144e70c86128dc5d236d7d79bd9e011e25ce9295aa88ac00000000")
+	require.NoError(t, err)
+
+	tx.Version = 2
+	tx.Inputs[0].SequenceNumber = SequenceLockTimeTypeFlag | 1
+
+	return tx
+}
+
+// TestValidateTransaction_BIP68BlockTimeFollowsCandidateBranch checks that a time-based
+// relative lock is judged against the candidate's own parent median
+// (Options.CandidateParentMedianTime), not the main chain's median at the candidate's
+// height. The coin sits one block below the candidate, so its coin time is
+// MTP(H-1) = 1_700_000_000 + H - 1, and the lock needs a block time of at least
+// coin time + 512.
+//
+// A fork candidate at height H has a different parent from the main-chain block at H, so
+// the two medians differ. Each case puts the verdict on the opposite side of the lock from
+// what mtpStore[H] would give.
+func TestValidateTransaction_BIP68BlockTimeFollowsCandidateBranch(t *testing.T) {
+	const blockHeight = uint32(500_000)
+
+	coinTime := uint32(1_700_000_000) + blockHeight - 1
+
+	ctx, _, endSpan := tracing.Tracer("validator").Start(context.Background(), "Test")
+	defer endSpan()
+
+	t.Run("candidate branch meets the lock the main chain does not", func(t *testing.T) {
+		v := bip68ForkValidator(t, blockHeight)
+		// main chain: MTP(H) = coin time + 1, short of the 512 seconds the lock needs
+
+		err := v.validateTransaction(ctx, bip68TimeLockedTx(t), blockHeight, []uint32{blockHeight - 1},
+			&Options{SkipPolicyChecks: true, CandidateParentMedianTime: coinTime + 10_000})
+		require.NoError(t, err)
+	})
+
+	t.Run("candidate branch misses the lock the main chain meets", func(t *testing.T) {
+		v := bip68ForkValidator(t, blockHeight)
+		v.mtpStore[blockHeight] = coinTime + 10_000
+
+		err := v.validateTransaction(ctx, bip68TimeLockedTx(t), blockHeight, []uint32{blockHeight - 1},
+			&Options{SkipPolicyChecks: true, CandidateParentMedianTime: coinTime + 1})
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "transaction sequence lock time not satisfied")
+	})
+}
+
+// TestValidateTransaction_BIP68RequiresCandidateParentMedianTime checks that a block
+// inside the BIP68 range with no candidate-parent MTP fails rather than judging time
+// locks against zero.
+func TestValidateTransaction_BIP68RequiresCandidateParentMedianTime(t *testing.T) {
+	const blockHeight = uint32(500_000)
+
+	v := bip68ForkValidator(t, blockHeight)
+
+	ctx, _, endSpan := tracing.Tracer("validator").Start(context.Background(), "Test")
+	defer endSpan()
+
+	err := v.validateTransaction(ctx, bip68TimeLockedTx(t), blockHeight, []uint32{blockHeight - 1}, &Options{SkipPolicyChecks: true})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "BIP68 requires Options.CandidateParentMedianTime")
+}
+
+// TestValidateTransaction_PostGenesisSkipsMTPReads checks that a block at or above
+// GenesisActivationHeight reads no MTPs: BIP68 is a no-op there, so an empty mtpStore
+// and a missing candidate-parent MTP must not fail the transaction.
+func TestValidateTransaction_PostGenesisSkipsMTPReads(t *testing.T) {
+	v := bip68ForkValidator(t, 0)
+	v.mtpStore = nil
+
+	blockHeight := v.settings.ChainCfgParams.GenesisActivationHeight
+
+	ctx, _, endSpan := tracing.Tracer("validator").Start(context.Background(), "Test")
+	defer endSpan()
+
+	err := v.validateTransaction(ctx, bip68TimeLockedTx(t), blockHeight, []uint32{blockHeight - 1}, &Options{SkipPolicyChecks: true})
+	require.NoError(t, err)
+}
+
+// TestEnsureMTPLoaded_PostGenesisFetchesNothing checks that the MTP pre-warm is a no-op at
+// and above GenesisActivationHeight. The blockchain mock has no expectations, so any
+// fetch would panic.
+func TestEnsureMTPLoaded_PostGenesisFetchesNothing(t *testing.T) {
+	v := bip68ForkValidator(t, 0)
+	v.mtpStore = nil
+
+	genesis := v.settings.ChainCfgParams.GenesisActivationHeight
+
+	require.NoError(t, v.EnsureMTPLoaded(context.Background(), genesis))
+	require.NoError(t, v.EnsureMTPLoaded(context.Background(), genesis+100_000))
+	require.Empty(t, v.mtpStore)
 }
 
 // TestReadMTPsLocked_GuardFiresOnUnpopulatedStore verifies the guard returns a
@@ -2611,11 +2745,10 @@ func TestReadMTPsLocked_GuardFiresOnUnpopulatedStore(t *testing.T) {
 		mtpStore: []uint32{1_700_000_000, 1_700_000_010}, // length 2, asking for height 5
 	}
 
-	utxoMTPs, blockMTP, err := v.readMTPsLocked(5, []uint32{0})
+	utxoMTPs, err := v.readMTPsLocked(5, 1_800_000_000, []uint32{0})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "MTP store not loaded up to height 5")
 	require.Nil(t, utxoMTPs)
-	require.Equal(t, uint32(0), blockMTP)
 }
 
 // laneShadowValidator is parentOutputsValidator at utxostore_laneMigration shadow.

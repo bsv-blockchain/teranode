@@ -3590,7 +3590,8 @@ const mtpReorgOverlap = 12
 // This must be called once per block, before concurrent per-transaction goroutines start,
 // so that BIP68 MTP lookups inside each goroutine are pure array reads with no gRPC calls.
 //
-// If BIP68 is not yet active (blockHeight < CSVHeight) or no blockchain client is
+// If BIP68 is not enforced at blockHeight (below CSVHeight, or at or above
+// GenesisActivationHeight, where BIP68 is a no-op) or no blockchain client is
 // configured, this is a no-op.
 //
 // When the store already covers the needed range this is a fast O(1) no-op.
@@ -3599,8 +3600,7 @@ const mtpReorgOverlap = 12
 // the freshly fetched ones (reorg-invalidated) are corrected in-place before the
 // new tail is appended.
 func (v *Validator) EnsureMTPLoaded(ctx context.Context, blockHeight uint32) error {
-	csvHeight := uint32(v.settings.ChainCfgParams.CSVHeight)
-	if v.blockchainClient == nil || blockHeight == 0 || blockHeight < csvHeight {
+	if v.blockchainClient == nil || blockHeight == 0 || !v.bip68Active(blockHeight) {
 		return nil
 	}
 
@@ -3810,27 +3810,45 @@ func (v *Validator) validateTransaction(ctx context.Context, tx *bt.Tx, blockHei
 	// check already certified by the pinned hardcoded checkpoint, and validateInternal
 	// intentionally left utxoHeights empty — so skip BIP68 here (its only consumer of
 	// utxoHeights). Same basis as skipping script validation below checkpoint.
-	if validationOptions.OutpointOnlySpend || !validationOptions.SkipPolicyChecks || v.blockchainClient == nil || blockHeight < uint32(v.settings.ChainCfgParams.CSVHeight) {
+	//
+	// Post-Genesis BIP68 is a no-op (TxValidator.sequenceLocks returns early), so the MTP
+	// reads below are skipped there too, together with EnsureMTPLoaded's pre-warm.
+	if validationOptions.OutpointOnlySpend || !validationOptions.SkipPolicyChecks || v.blockchainClient == nil || !v.bip68Active(blockHeight) {
 		return nil
 	}
 
-	// Build utxoMTPs and blockMTP from the pre-loaded mtpStore (populated by EnsureMTPLoaded).
-	//
 	// Teranode stores MTP(H) = median of block timestamps [H-11, H-1].
 	// BSV's GetMedianTimePast() at block H = median of [H-11, H-1] (per BIP113, block H
 	// itself is never included), so BSV MTP(H) == Teranode stored_mtp(H).
 	//
+	// For block time: BSV uses block.GetPrev()->GetMedianTimePast(), the median along the
+	// candidate's OWN parent chain. Options.CandidateParentMedianTime is exactly that value:
+	// block-validation callers compute it by hash from the candidate's parent, so a fork
+	// candidate gets its own branch's median. mtpStore[blockHeight] would not do: it is
+	// filled by height from the main chain, so for a fork candidate it holds the median
+	// behind the main-chain block at that height instead.
+	//
 	// For UTXO coin time: BSV uses GetAncestor(nCoinHeight-1)->GetMedianTimePast()
 	//   = median of [nCoinHeight-11, nCoinHeight-1]
 	//   = Teranode stored_mtp(nCoinHeight) → use utxoHeight directly.
+	// A coin at the candidate's own height (a same-block parent) has the candidate's parent
+	// as its ancestor, so its coin time is the block time above.
 	//
-	// For block time: BSV uses block.GetPrev()->GetMedianTimePast()
-	//   = median of [blockHeight-11, blockHeight-1]
-	//   = Teranode stored_mtp(blockHeight). Block N is not yet persisted during
-	//   validation, so stored_mtp(N) is not in the DB; GetMedianTimePastRange
-	//   computes it on the fly from the block_time values of [N-11, N-1] which
-	//   ARE in the DB, and EnsureMTPLoaded stores the result at mtpStore[blockHeight].
-	blockMTPHeight := blockHeight
+	// Known limit: a coin below the candidate's height is read from mtpStore, which is
+	// filled from the main chain. For a fork candidate, a coin created above the fork
+	// point therefore gets the main chain's median at that height, not its own branch's.
+	// That cannot change a verdict on any configured network: BIP68 only applies from
+	// CSVHeight up to GenesisActivationHeight, and on mainnet and testnet that whole range
+	// is below the highest hardcoded checkpoint, so a fork there is refused once the tip
+	// passes the next checkpoint and its branch can never pass a checkpoint hash. On
+	// regtest the range is empty; on stn and teratestnet it covers only the first blocks.
+	blockMTP := validationOptions.CandidateParentMedianTime
+	if blockMTP == 0 {
+		err := errors.NewProcessingError("[Validator][validateTransaction] BIP68 requires Options.CandidateParentMedianTime, got zero (block height: %d)", blockHeight)
+		span.RecordError(err)
+
+		return err
+	}
 
 	// Hold the read lock only for the MTP lookups themselves, not for the subsequent
 	// ValidateBIP68 call which works on the copied utxoMTPs / blockMTP values. This
@@ -3839,7 +3857,7 @@ func (v *Validator) validateTransaction(ctx context.Context, tx *bt.Tx, blockHei
 	// goroutines read it) without holding the lock through ECDSA / sequence-lock
 	// arithmetic. RLock is uncontended in the steady-state path where EnsureMTPLoaded
 	// has already populated the range.
-	utxoMTPs, blockMTP, err := v.readMTPsLocked(blockMTPHeight, utxoHeights)
+	utxoMTPs, err := v.readMTPsLocked(blockHeight, blockMTP, utxoHeights)
 	if err != nil {
 		span.RecordError(err)
 		return err
@@ -3848,32 +3866,42 @@ func (v *Validator) validateTransaction(ctx context.Context, tx *bt.Tx, blockHei
 	return v.txValidator.ValidateBIP68(tx, blockHeight, utxoHeights, utxoMTPs, blockMTP)
 }
 
-// readMTPsLocked returns the per-input MTP values and the block MTP for use by
-// validateTransaction. It takes the mtpStore read lock for the duration of the
-// reads only and releases it before returning. The caller is free to use the
-// returned slice / value without further synchronisation.
-func (v *Validator) readMTPsLocked(blockMTPHeight uint32, utxoHeights []uint32) ([]uint32, uint32, error) {
+// readMTPsLocked returns the per-input MTP values for use by validateTransaction.
+// A coin below blockHeight reads mtpStore; a coin at or above it (a same-block
+// parent, or the unconfirmed-parent sentinel) takes blockMTP, the candidate's
+// parent MTP. It takes the mtpStore read lock for the duration of the reads only
+// and releases it before returning. The caller is free to use the returned slice
+// without further synchronisation.
+func (v *Validator) readMTPsLocked(blockHeight uint32, blockMTP uint32, utxoHeights []uint32) ([]uint32, error) {
 	v.mtpMu.RLock()
 	defer v.mtpMu.RUnlock()
 
 	// Guard against a missing EnsureMTPLoaded call. In normal operation this cannot
 	// happen because Server.go calls EnsureMTPLoaded before spawning goroutines.
-	if uint32(len(v.mtpStore)) <= blockMTPHeight {
-		return nil, 0, errors.NewProcessingError("[Validator][validateTransaction] MTP store not loaded up to height %d (store length %d); EnsureMTPLoaded must be called before block validation", blockMTPHeight, len(v.mtpStore))
+	if uint32(len(v.mtpStore)) <= blockHeight {
+		return nil, errors.NewProcessingError("[Validator][validateTransaction] MTP store not loaded up to height %d (store length %d); EnsureMTPLoaded must be called before block validation", blockHeight, len(v.mtpStore))
 	}
 
-	storeLen := uint32(len(v.mtpStore))
 	utxoMTPs := make([]uint32, len(utxoHeights))
 
 	for i, h := range utxoHeights {
-		if h >= storeLen {
-			utxoMTPs[i] = v.mtpStore[blockMTPHeight]
+		if h >= blockHeight {
+			utxoMTPs[i] = blockMTP
 		} else {
 			utxoMTPs[i] = v.mtpStore[h]
 		}
 	}
 
-	return utxoMTPs, v.mtpStore[blockMTPHeight], nil
+	return utxoMTPs, nil
+}
+
+// bip68Active reports whether relative lock times (BIP68) are enforced for a block at
+// blockHeight: from CSVHeight up to, but not including, GenesisActivationHeight. It is
+// the same range TxValidator.sequenceLocks enforces, and the only range that reads MTPs.
+func (v *Validator) bip68Active(blockHeight uint32) bool {
+	params := v.settings.ChainCfgParams
+
+	return blockHeight >= params.CSVHeight && blockHeight < params.GenesisActivationHeight
 }
 
 // knownTxResubmission recognises a transaction the store already holds when its spend fails
