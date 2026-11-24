@@ -38,6 +38,9 @@ type countingRegistryClient struct {
 	// is returned; tests use it to hold a refresh in flight.
 	onListBannedPeers   func()
 	failListBannedPeers error
+	// onGetPeer runs during GetPeer, before failGetPeer is returned.
+	onGetPeer   func()
+	failGetPeer error
 }
 
 func newCountingRegistryClient(inner blockchain.PeerRegistryClientI) *countingRegistryClient {
@@ -119,6 +122,12 @@ func (c *countingRegistryClient) ListBannedPeers(ctx context.Context) ([]string,
 
 func (c *countingRegistryClient) GetPeer(ctx context.Context, peerID string) (*blockchain.PeerInfo, bool, error) {
 	c.count("GetPeer")
+	if c.onGetPeer != nil {
+		c.onGetPeer()
+	}
+	if c.failGetPeer != nil {
+		return nil, false, c.failGetPeer
+	}
 	return c.PeerRegistryClientI.GetPeer(ctx, peerID)
 }
 

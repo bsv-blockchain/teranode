@@ -774,3 +774,27 @@ func TestRefreshBannedPeers_FailureAcrossResetStillReLists(t *testing.T) {
 	require.True(t, s.isRegistryBanned(pid.String()), "the re-list after the reset reads the registry, which still bans the peer")
 	require.Equal(t, 3, counting.callCount("ListBannedPeers"), "the lookup after the reset re-lists")
 }
+
+// A failed reputation lookup is cached for a full reputationCacheTTL from
+// when the lookup returned, so a registry slower than the TTL is still asked
+// once per TTL rather than once per message.
+func TestShouldSkipUnhealthyPeer_FailureCachedFromWhenLookupReturned(t *testing.T) {
+	s, _, _, neighbour, _ := newGateBoundsTestServer(t, 1)
+	reg := blockchain.NewCentralizedPeerRegistry(blockchain.DefaultBanConfig())
+	counting := newCountingRegistryClient(blockchain.NewLocalPeerRegistryClient(reg))
+	counting.failGetPeer = errors.NewServiceError("registry unavailable")
+
+	var returned time.Time
+
+	counting.onGetPeer = func() {
+		time.Sleep(50 * time.Millisecond)
+		returned = time.Now()
+	}
+	s.peerRegistry = counting
+
+	require.False(t, s.shouldSkipUnhealthyPeer(neighbour.String(), "test"), "a failed lookup treats the peer as healthy")
+	require.Equal(t, 1, counting.callCount("GetPeer"))
+
+	_, cached := s.reputationCache.Get(neighbour.String(), returned.Add(reputationCacheTTL-time.Millisecond))
+	require.True(t, cached, "the failure must stay cached for a full TTL from when the lookup returned")
+}
