@@ -240,6 +240,34 @@ func TestRejectedTxEgressGate_ZeroValueUsesDefaults(t *testing.T) {
 	require.NotNil(t, grant, "tokens must refill over time: %s", why)
 }
 
+// A non-positive rate or burst passed through setLimits selects the defaults,
+// as the settings document, rather than a bucket that never refills or never
+// holds a token.
+func TestRejectedTxEgressGate_NonPositiveLimitsSelectDefaults(t *testing.T) {
+	g, clock := gateWithClock()
+	g.setLimits(0, -1, 0, 0)
+
+	allowed := 0
+	for i := 0; i < defaultRejectedTxPublishBurst*3; i++ {
+		if grant, _ := g.allow(distinctTxID(i), "self"); grant != nil {
+			allowed++
+		}
+	}
+
+	require.Equal(t, defaultRejectedTxPublishBurst, allowed, "a non-positive burst must select the default burst")
+
+	clock.advance(time.Second)
+
+	refilled := 0
+	for i := 0; i < defaultRejectedTxPublishRate*3; i++ {
+		if grant, _ := g.allow(distinctTxID(10_000+i), "self"); grant != nil {
+			refilled++
+		}
+	}
+
+	require.Equal(t, defaultRejectedTxPublishRate, refilled, "a non-positive rate must select the default rate")
+}
+
 // Suppression reasons are distinguishable so operators can tell a duplicate
 // storm from a distinct-txid flood.
 func TestRejectedTxEgressGate_Reasons(t *testing.T) {

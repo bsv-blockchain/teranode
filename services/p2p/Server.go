@@ -1357,7 +1357,8 @@ func (s *Server) rejectedTxHandler(ctx context.Context) func(msg *kafka.KafkaMes
 		// Every internal rejection is attacker-triggerable for the price of one
 		// invalid transaction, and each re-broadcast is fanned out to the whole
 		// mesh, so the egress is deduplicated per txid and rate limited before
-		// any publish work. Suppression is counted, not logged per message.
+		// any publish work. Suppression is counted in a metric and logged per
+		// message only at debug level.
 		grant, why := s.rejectedTxEgress.allow(txID, selfID)
 		if grant == nil {
 			rejectedTxPublishSuppressed(why)
