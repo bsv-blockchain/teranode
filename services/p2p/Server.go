@@ -1172,7 +1172,9 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 
 	// Load the registry's banned set before any gossip can arrive, so a peer
 	// banned before this process started is dropped from its first message.
-	// The gossip path itself never waits on a refresh; see bannedPeerMirror.
+	// This must stay before the topic subscriptions below: after them, the
+	// first messages would read an empty mirror. A gossip worker never waits
+	// on another worker's refresh; see bannedPeerMirror.
 	s.primeBannedPeers()
 
 	// Subscribe to all topics

@@ -1046,10 +1046,10 @@ func (s *Server) isBlockchainSyncingOrCatchingUp(ctx context.Context) (bool, err
 	return false, nil
 }
 
-// cleanupPeerMaps performs periodic cleanup of blockPeerMap and subtreePeerMap
-// and of the reputation, IP-ban and ban-status caches. It removes entries older
-// than their TTL; size is enforced at insert instead (issue 1409), so there is
-// no size pass here.
+// cleanupPeerMaps performs periodic cleanup of the attribution maps
+// (blockPeerMap, subtreePeerMap, reportedInvalidBlocks), the seen-hash caches
+// and the reputation cache. It removes entries older than their TTL; size is
+// enforced at insert instead (issue 1409), so there is no size pass here.
 func (s *Server) cleanupPeerMaps() {
 	now := time.Now()
 
@@ -1322,9 +1322,8 @@ func (s *Server) startPeerMapCleanup(ctx context.Context) {
 			case <-s.peerMapCleanupTicker.C:
 				s.cleanupPeerMaps()
 				// Reconcile on its own goroutine so a slow registry can never
-				// delay the cache sweep above (the only expirer of the
-				// reputation/ban caches); skip the tick if the previous pass
-				// is still running.
+				// delay the sweep above, the only expirer of the attribution
+				// maps; skip the tick if the previous pass is still running.
 				if s.reconcileInFlight.CompareAndSwap(false, true) {
 					go func() {
 						defer s.reconcileInFlight.Store(false)
