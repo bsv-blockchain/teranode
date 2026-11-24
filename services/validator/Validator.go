@@ -3604,13 +3604,10 @@ func (v *Validator) EnsureMTPLoaded(ctx context.Context, blockHeight uint32) err
 		return nil
 	}
 
-	// The highest MTP index we guarantee is blockHeight:
-	//   - blockMTPHeight = blockHeight: GetMedianTimePastRange computes stored_mtp(N)
-	//     on the fly for the not-yet-persisted block N from block_time values [N-11, N-1].
-	//   - utxoHeights *may* exceed blockHeight: unconfirmed parents are stamped with the
-	//     unconfirmedParentHeight sentinel (0xFFFFFFFF). In consensus mode BDK rejects
-	//     before BIP68 runs; in policy mode BIP68 is gated out — so readMTPsLocked never
-	//     actually sees the sentinel, but its `h >= storeLen` clamp still protects.
+	// The store is loaded through blockHeight so readMTPsLocked's guard (len > blockHeight)
+	// holds. Coins below blockHeight read mtpStore[h]. The block MTP, and the MTP of any
+	// coin at or above blockHeight (a same-block parent or the unconfirmedParentHeight
+	// sentinel), come from Options.CandidateParentMedianTime, not from this array.
 
 	needed := blockHeight
 
@@ -3777,9 +3774,10 @@ func (v *Validator) validateTransaction(ctx context.Context, tx *bt.Tx, blockHei
 	}
 
 	// Phase 2: BIP68 sequence-lock validation — only for block context
-	// (SkipPolicyChecks == true) and only when BIP68 is active
-	// (blockHeight >= CSVHeight). Performed after phase 1 so that MTP lookups
-	// are skipped for invalid transactions.
+	// (SkipPolicyChecks == true) and only when BIP68 is enforced
+	// (CSVHeight <= blockHeight < GenesisActivationHeight, see bip68Active).
+	// Performed after phase 1 so that MTP lookups are skipped for invalid
+	// transactions.
 	//
 	// Policy mode (peer-received txs) deliberately does NOT run BIP68 — this
 	// is a stable design decision, not a missing check. Two reasons:
