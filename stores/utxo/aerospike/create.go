@@ -59,6 +59,7 @@ import (
 	"crypto/rand"
 	"os"
 	"runtime/debug"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -80,6 +81,12 @@ import (
 	"github.com/bsv-blockchain/teranode/util/tracing"
 	"github.com/bsv-blockchain/teranode/util/uaerospike"
 	"github.com/ordishs/gocore"
+)
+
+// Used for NOOP batch operations. New sets it once, in the namespace of the first store.
+var (
+	placeholderKey     *aerospike.Key
+	placeholderKeyOnce sync.Once
 )
 
 // LockRecordIndex is a special index value for lock records
@@ -497,7 +504,7 @@ func (s *Store) sendStoreBatch(batch []*BatchStoreItem) {
 			resultHandledElsewhere[idx] = true
 
 			// NOOP for this record
-			batchRecords[idx] = aerospike.NewBatchRead(nil, s.placeholderKey, nil)
+			batchRecords[idx] = aerospike.NewBatchRead(nil, placeholderKey, nil)
 
 			continue
 		}
@@ -536,7 +543,7 @@ func (s *Store) sendStoreBatch(batch []*BatchStoreItem) {
 			resultHandledElsewhere[idx] = true
 
 			// NOOP for this record
-			batchRecords[idx] = aerospike.NewBatchRead(nil, s.placeholderKey, nil)
+			batchRecords[idx] = aerospike.NewBatchRead(nil, placeholderKey, nil)
 
 			continue
 		}
@@ -555,13 +562,13 @@ func (s *Store) sendStoreBatch(batch []*BatchStoreItem) {
 			if err != nil {
 				bItem.complete(errors.NewProcessingError("could not rebuild bins for external store", err))
 				resultHandledElsewhere[idx] = true
-				batchRecords[idx] = aerospike.NewBatchRead(nil, s.placeholderKey, nil)
+				batchRecords[idx] = aerospike.NewBatchRead(nil, placeholderKey, nil)
 
 				continue
 			}
 
 			// Make this batch item a NOOP and persist all of these to be written via a queue
-			batchRecords[idx] = aerospike.NewBatchRead(nil, s.placeholderKey, nil)
+			batchRecords[idx] = aerospike.NewBatchRead(nil, placeholderKey, nil)
 			// Goroutine takes ownership of bItem's completion; the per-record loop must not touch it.
 			resultHandledElsewhere[idx] = true
 
@@ -616,7 +623,7 @@ func (s *Store) sendStoreBatch(batch []*BatchStoreItem) {
 					bItem.complete(errors.NewStorageError("error writing outputs to external store [%s]", bItem.txHash.String(), err))
 					resultHandledElsewhere[idx] = true
 					// NOOP for this record
-					batchRecords[idx] = aerospike.NewBatchRead(nil, s.placeholderKey, nil)
+					batchRecords[idx] = aerospike.NewBatchRead(nil, placeholderKey, nil)
 
 					continue
 				}
@@ -635,7 +642,7 @@ func (s *Store) sendStoreBatch(batch []*BatchStoreItem) {
 					bItem.complete(errors.NewStorageError("[sendStoreBatch] error batch writing transaction to external store [%s]", bItem.txHash.String(), err))
 					resultHandledElsewhere[idx] = true
 					// NOOP for this record
-					batchRecords[idx] = aerospike.NewBatchRead(nil, s.placeholderKey, nil)
+					batchRecords[idx] = aerospike.NewBatchRead(nil, placeholderKey, nil)
 
 					continue
 				}
@@ -1831,9 +1838,4 @@ func writeMayHaveApplied(rec *aerospike.BatchRecord) bool {
 // write: written now, in doubt, or left by an earlier attempt (KEY_EXISTS).
 func recordMayExist(rec *aerospike.BatchRecord) bool {
 	return writeMayHaveApplied(rec) || isKeyExists(rec.Err)
-}
-
-// newPlaceholderKey returns the key of the NOOP read that fills an unused batch slot, in namespace.
-func newPlaceholderKey(namespace string) (*aerospike.Key, error) {
-	return aerospike.NewKey(namespace, "placeholderKey", "placeHolderKey")
 }

@@ -2349,7 +2349,7 @@ func (s *Store) sendIncrementBatch(batch []*batchIncrement) {
 			item.complete(nil, errors.NewProcessingError("failed to init new aerospike key for txMeta", err))
 
 			handled[i] = true
-			batchRecords[i] = aerospike.NewBatchRead(nil, s.placeholderKey, nil)
+			batchRecords[i] = aerospike.NewBatchRead(nil, placeholderKey, nil)
 
 			continue
 		}
@@ -2456,7 +2456,7 @@ func (s *Store) sendSetDAHBatch(batch []*batchDAH) {
 			b.complete(errors.NewProcessingError("[SetDAHBatch] failed to create key", err))
 
 			handled[i] = true
-			batchRecords[i] = aerospike.NewBatchRead(nil, s.placeholderKey, nil)
+			batchRecords[i] = aerospike.NewBatchRead(nil, placeholderKey, nil)
 
 			continue
 		}

@@ -98,7 +98,6 @@ func (s *Store) SetSettings(v *settings.Settings) {
 // SetNamespace was implemented to facilitate testing
 func (s *Store) SetNamespace(v string) {
 	s.namespace = v
-	s.placeholderKey, _ = newPlaceholderKey(v)
 }
 
 // GetName was implemented to facilitate testing
