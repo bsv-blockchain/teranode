@@ -1,8 +1,8 @@
 diff --git a/services/blockassembly/subtreeprocessor/SubtreeProcessor.go b/services/blockassembly/subtreeprocessor/SubtreeProcessor.go
-index a4a5c1340..eff108f66 100644
+index b0706abb5..0580ee30e 100644
 --- a/services/blockassembly/subtreeprocessor/SubtreeProcessor.go
 +++ b/services/blockassembly/subtreeprocessor/SubtreeProcessor.go
-@@ -6718,7 +6718,7 @@ func (stp *SubtreeProcessor) moveBackBlockBulkBuild(ctx context.Context, block *
+@@ -6716,7 +6716,7 @@ func (stp *SubtreeProcessor) moveBackBlockBulkBuild(ctx context.Context, block *
  				_, wasSet[i] = stp.currentTxMap.SetIfNotExists(hash, flatInpoints[i])
  			}
  		}
@@ -10,4 +10,4 @@ index a4a5c1340..eff108f66 100644
 +		streamed = true || !slices.Contains(wasSet, false) // mutant: stream even when a block transaction is already pending
  
  		if !streamed {
- 			allNodes = make([]subtreepkg.Node, 0, totalBlockNodes+totalPreviousNodes)
+ 			// the held walk indexes the block's nodes, coinbase left out, as the arrays above do
