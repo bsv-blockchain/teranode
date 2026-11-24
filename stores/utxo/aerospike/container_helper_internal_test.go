@@ -1,6 +1,7 @@
 package aerospike
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"net/url"
@@ -53,6 +54,40 @@ type sharedServerKey struct {
 	image     string
 	platform  string
 	batchSize int
+	// generation is how many times this test ran before in this process (go test -count). A test
+	// may build the same transactions every time it runs, and must not meet its own records.
+	generation int
+}
+
+// testRuns remembers, per test name, the last run (its *testing.T) and that run's generation.
+var (
+	testRunsMu sync.Mutex
+	testRuns   = map[string]testRun{}
+)
+
+type testRun struct {
+	t          testing.TB
+	generation int
+}
+
+// testGeneration returns 0 for a test's first run in this process, 1 for its second, and so on. A
+// test that asks again in the same run gets the same generation.
+func testGeneration(t testing.TB) int {
+	testRunsMu.Lock()
+	defer testRunsMu.Unlock()
+
+	run, seen := testRuns[t.Name()]
+
+	switch {
+	case !seen:
+		run = testRun{t: t}
+	case run.t != t:
+		run = testRun{t: t, generation: run.generation + 1}
+	}
+
+	testRuns[t.Name()] = run
+
+	return run.generation
 }
 
 type sharedServer struct {
@@ -72,8 +107,10 @@ var (
 )
 
 // AcquireSharedTestServer returns the server that every test asking for the same image, platform and
-// batch size shares, starting it on first use. An empty image means test.AerospikeImage. It skips the
-// test when no container runtime is available, as starting a container of its own would.
+// batch size shares, starting it on first use. A test run again in the same process (go test
+// -count) gets the next set of servers, so it never meets its own records. An empty image means
+// test.AerospikeImage. It skips the test when no container runtime is available, as starting a
+// container of its own would.
 //
 // A test on a shared server must not depend on what else is in the namespace: its transactions must
 // be its own (no other test creates them), it must not clear, scan or count a whole set, and it must
@@ -85,7 +122,7 @@ func AcquireSharedTestServer(t testing.TB, image, platform string, batchSize int
 		image = test.AerospikeImage
 	}
 
-	key := sharedServerKey{image: image, platform: platform, batchSize: batchSize}
+	key := sharedServerKey{image: image, platform: platform, batchSize: batchSize, generation: testGeneration(t)}
 
 	sharedServersMu.Lock()
 	entry, ok := sharedServers[key]
@@ -291,6 +328,21 @@ func WaitForWritesReady(client *uaerospike.Client, namespace, set string) error 
 	}
 
 	return errors.NewProcessingError("aerospike namespace %q did not become write-ready after %v", namespace, time.Duration(attempts)*delay, lastErr)
+}
+
+// acquireSharedTestServerForInternalTests is AcquireSharedTestServer with the image the internal
+// tests run on (see runAerospikeTestContainer) and the default utxostore_utxoBatchSize.
+func acquireSharedTestServerForInternalTests(t *testing.T) SharedTestServer {
+	t.Helper()
+
+	image := os.Getenv("AEROSPIKE_CONTAINER_IMAGE")
+
+	platform := ""
+	if image != "" {
+		platform = cmp.Or(os.Getenv("AEROSPIKE_CONTAINER_PLATFORM"), "linux/amd64")
+	}
+
+	return AcquireSharedTestServer(t, image, platform, test.CreateBaseTestSettings(t).UtxoStore.UtxoBatchSize)
 }
 
 // runAerospikeTestContainer starts an Aerospike server for a test: test.AerospikeImage, or the

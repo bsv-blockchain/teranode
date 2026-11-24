@@ -1,7 +1,6 @@
 package aerospike
 
 import (
-	"context"
 	"testing"
 
 	"github.com/bsv-blockchain/aerospike-client-go/v8"
@@ -29,22 +28,10 @@ import (
 func TestUnspendableOutputSlotRoundTrip(t *testing.T) {
 	t.Parallel()
 
-	ctx := context.Background()
+	// The keys are this test's own, in a set no store uses, so the server can be shared.
+	server := acquireSharedTestServerForInternalTests(t)
 
-	container, err := runAerospikeTestContainer(ctx)
-	if err != nil {
-		t.Skipf("Skipping Aerospike integration test: container not available (%v)", err)
-	}
-
-	defer func() { _ = container.Terminate(ctx) }()
-
-	host, err := container.Host(ctx)
-	require.NoError(t, err)
-
-	port, err := container.ServicePort(ctx)
-	require.NoError(t, err)
-
-	client, aErr := aerospike.NewClient(host, port)
+	client, aErr := aerospike.NewClient(server.Host, server.Port)
 	require.Nil(t, aErr)
 
 	defer client.Close()
@@ -106,22 +93,10 @@ func TestUnspendableOutputSlotRoundTrip(t *testing.T) {
 func TestTrailingNilSlotsSurviveRoundTrip(t *testing.T) {
 	t.Parallel()
 
-	ctx := context.Background()
+	// The keys are this test's own, in a set no store uses, so the server can be shared.
+	server := acquireSharedTestServerForInternalTests(t)
 
-	container, err := runAerospikeTestContainer(ctx)
-	if err != nil {
-		t.Skipf("Skipping Aerospike integration test: container not available (%v)", err)
-	}
-
-	defer func() { _ = container.Terminate(ctx) }()
-
-	host, err := container.Host(ctx)
-	require.NoError(t, err)
-
-	port, err := container.ServicePort(ctx)
-	require.NoError(t, err)
-
-	client, aErr := aerospike.NewClient(host, port)
+	client, aErr := aerospike.NewClient(server.Host, server.Port)
 	require.Nil(t, aErr)
 
 	defer client.Close()

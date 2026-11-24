@@ -250,8 +250,7 @@ func TestConflictRecovery_DamagedRecords(t *testing.T) {
 // At shadow every spend RestoreConflictSpends writes counts once as not carrying a lane position,
 // across batches; with lane positions off nothing is counted, and a batch that fails counts nothing.
 func TestRestoreConflictSpendsCountsEachRestoredSpend(t *testing.T) {
-	t.Parallel()
-
+	// Not parallel: it reads the process-wide lane spend counts, which other tests' spends add to.
 	s, _ := setupStoreForLockTest(t)
 	ctx := t.Context()
 

@@ -28,8 +28,8 @@ import (
 // TestLanePositionContract runs the shared lane position contract on a real
 // Aerospike.
 func TestLanePositionContract(t *testing.T) {
-	t.Parallel()
-
+	// Not parallel: its burns and returns cases read the process-wide lane position counters,
+	// which other tests' creates and spends add to.
 	logger := ulogger.NewErrorTestLogger(t)
 	tSettings := test.CreateBaseTestSettings(t)
 

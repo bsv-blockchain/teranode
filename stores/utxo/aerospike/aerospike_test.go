@@ -60,6 +60,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -360,6 +361,8 @@ func TestUnmined(t *testing.T) {
 }
 
 func TestLargeTxStoresExternally(t *testing.T) {
+	t.Parallel()
+
 	logger := ulogger.NewErrorTestLogger(t)
 	ctx := context.Background()
 
@@ -379,7 +382,10 @@ func TestLargeTxStoresExternally(t *testing.T) {
 	port, err := container.ServicePort(ctx)
 	require.NoError(t, err)
 
-	aeroURL, err := url.Parse(fmt.Sprintf("aerospike://%s:%d/test?set=utxo&externalStore=file://./data/external?hashPrefix=2", host, port))
+	// An external store directory of its own, so the test can run beside the others.
+	externalDir := t.TempDir()
+
+	aeroURL, err := url.Parse(fmt.Sprintf("aerospike://%s:%d/test?set=utxo&externalStore=file://%s?hashPrefix=2", host, port, externalDir))
 	require.NoError(t, err)
 
 	store, err := New(ctx, logger, tSettings, aeroURL)
@@ -392,7 +398,7 @@ func TestLargeTxStoresExternally(t *testing.T) {
 	require.NoError(t, err)
 
 	// Remove the external store
-	err = os.RemoveAll("./data/external")
+	err = os.RemoveAll(externalDir)
 	require.NoError(t, err)
 
 	// tx.Outputs[0] carries a ~40KB locking script. Pre-Genesis that exceeds
@@ -405,7 +411,7 @@ func TestLargeTxStoresExternally(t *testing.T) {
 	require.NoError(t, err)
 
 	// check that the tx is stored externally
-	_, err = os.Stat("./data/external/01/01d29b3fd5f2629c3b6586790312ee4a16039d8033e35a6ad0dcfa0235a39400.tx")
+	_, err = os.Stat(filepath.Join(externalDir, "01", "01d29b3fd5f2629c3b6586790312ee4a16039d8033e35a6ad0dcfa0235a39400.tx"))
 	require.NoError(t, err)
 
 	// Create a transaction that spends the 2 outputs of tx
@@ -429,7 +435,7 @@ func TestLargeTxStoresExternally(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify DAH file does not exist (external store has DisableDAH=true)
-	_, err = os.Stat("./data/external/01/01d29b3fd5f2629c3b6586790312ee4a16039d8033e35a6ad0dcfa0235a39400.tx.dah")
+	_, err = os.Stat(filepath.Join(externalDir, "01", "01d29b3fd5f2629c3b6586790312ee4a16039d8033e35a6ad0dcfa0235a39400.tx.dah"))
 	require.Error(t, err) // DAH should not exist before SetMined
 
 	err = store.SetBlockHeight(100_000)
@@ -449,7 +455,7 @@ func TestLargeTxStoresExternally(t *testing.T) {
 
 	// Verify DAH file still does not exist after SetMined
 	// External store has DisableDAH=true - lifecycle managed by pruner service
-	_, err = os.Stat("./data/external/01/01d29b3fd5f2629c3b6586790312ee4a16039d8033e35a6ad0dcfa0235a39400.tx.dah")
+	_, err = os.Stat(filepath.Join(externalDir, "01", "01d29b3fd5f2629c3b6586790312ee4a16039d8033e35a6ad0dcfa0235a39400.tx.dah"))
 	require.Error(t, err) // DAH should NOT be created for external stores
 }
 

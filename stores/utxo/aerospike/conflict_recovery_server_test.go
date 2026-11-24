@@ -20,8 +20,6 @@ import (
 // WAL and checklist sets, so the order of the cases does not matter.
 func TestAerospikeConflictRecovery(t *testing.T) {
 	t.Parallel()
-	// Reads or adds to the process-wide conflict WAL fallback scan count.
-	lockConflictWALScans(t)
 
 	client, store, _, deferFn := initAerospikeOwnServer(t, test.CreateBaseTestSettings(t), ulogger.NewErrorTestLogger(t))
 	t.Cleanup(deferFn)
@@ -31,10 +29,11 @@ func TestAerospikeConflictRecovery(t *testing.T) {
 		run  func(t *testing.T)
 	}{
 		// Must run first: later cases drop and recreate the index themselves.
-		{"WALIndexFromNew", func(t *testing.T) { conflictWALIndexFromNew(t, store) }},
-		{"WALPendingScan", func(t *testing.T) { conflictWALPendingScan(t, client, store) }},
-		{"WALIndex", func(t *testing.T) { conflictWALIndex(t, client, store) }},
-		{"WALRootWriters", func(t *testing.T) { conflictWALRootWriters(t, client, store) }},
+		// These read the process-wide fallback scan count, or drop the index and so add to it.
+		{"WALIndexFromNew", func(t *testing.T) { lockConflictWALScans(t); conflictWALIndexFromNew(t, store) }},
+		{"WALPendingScan", func(t *testing.T) { lockConflictWALScans(t); conflictWALPendingScan(t, client, store) }},
+		{"WALIndex", func(t *testing.T) { lockConflictWALScans(t); conflictWALIndex(t, client, store) }},
+		{"WALRootWriters", func(t *testing.T) { lockConflictWALScans(t); conflictWALRootWriters(t, client, store) }},
 		{"WideCascade", func(t *testing.T) { tests.ConflictRecoveryWideCascade(t, store) }},
 		{"LateLoserChild", func(t *testing.T) { tests.ConflictRecoveryLateLoserChild(t, store) }},
 		{"LateFreeInputSpender", func(t *testing.T) { tests.ConflictRecoveryLateFreeInputSpender(t, store) }},

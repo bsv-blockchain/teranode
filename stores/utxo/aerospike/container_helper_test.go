@@ -200,9 +200,9 @@ func initAerospikeWithURL(t *testing.T, settings *settings.Settings, logger ulog
 
 // ownServerSlots bounds how many tests run on a server of their own at once: each one is a
 // container, and the parallel tests already share the machine with the shared servers.
-var ownServerSlots = make(chan struct{}, 4)
+var ownServerSlots = make(chan struct{}, 8)
 
-// conflictWALScansMu is held for the whole of every test that reads the process-wide count of
+// conflictWALScansMu is held by every test or subtest that reads the process-wide count of
 // conflict WAL fallback scans or can add to it, so no such test sees another's scans.
 var conflictWALScansMu sync.Mutex
 
@@ -296,6 +296,10 @@ func openStore(t *testing.T, host string, port int, shared bool, settings *setti
 
 	if shared {
 		db.LeaveSharedClientOpenOnClose()
+	} else {
+		// Close the store's cached client before the container stops (cleanups run last first), so
+		// it does not keep reconnecting to a server that is gone for the rest of the run.
+		t.Cleanup(func() { util.CloseAerospikeClient(aeroURL.Host) })
 	}
 
 	return client, db, ctx, func() {

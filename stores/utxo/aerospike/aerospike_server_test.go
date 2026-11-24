@@ -1623,8 +1623,6 @@ func TestStoreDecorate(t *testing.T) {
 
 func TestSmokeTests(t *testing.T) {
 	t.Parallel()
-	// Reads or adds to the process-wide conflict WAL fallback scan count.
-	lockConflictWALScans(t)
 
 	logger := ulogger.NewErrorTestLogger(t)
 	tSettings := test.CreateBaseTestSettings(t)
@@ -1685,6 +1683,8 @@ func TestSmokeTests(t *testing.T) {
 	})
 
 	t.Run("aerospike_conflict_WAL", func(t *testing.T) {
+		lockConflictWALScans(t) // a WAL read can add to the process-wide fallback scan count
+
 		tests.ConflictWAL(t, store)
 	})
 
@@ -1756,6 +1756,8 @@ func TestSmokeTests(t *testing.T) {
 	})
 
 	t.Run("aerospike_conflict_WAL_crash_recovery", func(t *testing.T) {
+		lockConflictWALScans(t) // a WAL read can add to the process-wide fallback scan count
+
 		tests.ConflictWALCrashRecovery(t, store)
 	})
 

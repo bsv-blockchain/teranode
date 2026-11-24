@@ -17,8 +17,7 @@ import (
 // store that probed false counts its spends as not carrying one. The server here runs a copy of
 // teranode.lua with the slot write taken out, the shape of a server that predates the lanePos key.
 func TestLaneSlotProbeAnswersFalseWithoutProof(t *testing.T) {
-	t.Parallel()
-
+	// Not parallel: it reads the process-wide lane spend counts, which other tests' spends add to.
 	s, client := setupStoreForLockTest(t)
 	ctx := t.Context()
 
