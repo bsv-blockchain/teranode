@@ -541,7 +541,7 @@ func (c *Client) shouldAttemptHTTPFallback(err error) bool {
 // gRPC message limit in AGGREGATE far more often than any single transaction in it
 // does, and gRPC is the transport that carries every validation option. Going
 // straight to HTTP would not downgrade such an item, it would refuse it outright —
-// the HTTP surface carries transaction bytes only (issue 4840) — so a
+// the HTTP surface carries transaction bytes only — so a
 // block-validation or legacy-sync item, which travels with SkipPolicyChecks,
 // InBlock and the candidate times, would hard-fail even though it fits comfortably
 // in a request of its own.
@@ -742,7 +742,6 @@ func (c *Client) validateTransactionViaHTTP(ctx context.Context, tx *bt.Tx, bloc
 	// runs; it does not make the property hold generally. The guarantee against an
 	// arbitrary HTTP caller lands when the SERVER is upgraded, because an
 	// un-upgraded validator still parses the old query string for anyone who asks.
-	// Issue 4840, finding B-022.
 	if reason := nonDefaultValidationOptions(vreq); reason != "" {
 		return errors.NewServiceError(
 			"[ValidateWithOptions][%s] transaction exceeds the gRPC message limit and %s cannot be sent "+

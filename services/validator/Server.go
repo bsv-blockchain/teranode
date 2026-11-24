@@ -974,7 +974,7 @@ func httpStatusForTxError(err error) int {
 // consensus-affecting flag. The gRPC listener is not itself authenticated on the
 // shipped profile either (security_level_grpc defaults to 0 and no auth
 // interceptor is installed), so this removes the HTTP route rather than removing
-// the capability from unauthenticated callers. Issue 4840, finding B-022.
+// the capability from unauthenticated callers.
 //
 // Parameters:
 //   - ctx: Context for the handler operation, passed through to validation
@@ -1088,7 +1088,7 @@ func (v *Server) handleMultipleTx(ctx context.Context) echo.HandlerFunc {
 	return func(c echo.Context) error {
 		// Plain mempool-submission semantics for every transaction in the stream.
 		// Hoisted out of the loop: it is the same value for every request, and no
-		// caller input contributes to it. Issue 4840, finding B-022.
+		// caller input contributes to it.
 		opts := NewDefaultOptions()
 
 		// Read transactions with the bt reader in a loop
