@@ -336,9 +336,9 @@ func (s *Store) batchOperate(policy *aerospike.BatchPolicy, records []aerospike.
 // batchOperateWithin runs a batch write that must not start after the deadline of ctx. A ctx with
 // no deadline is the plain batchOperate. See uaerospike.Client.BatchOperateBefore.
 //
-// The first result reports whether a send started. When it is false nothing reached the backend:
-// the context of the caller had ended, or its deadline left no time for the write. The error is
-// then no answer of the backend.
+// The first result reports whether the outcome is an answer of the backend. It is false when the
+// context of the caller had ended, or when its deadline left no time for the write or for the
+// repeat of an overloaded one. The error is then the refusal of this side.
 func (s *Store) batchOperateWithin(ctx context.Context, policy *aerospike.BatchPolicy, records []aerospike.BatchRecordIfc) (bool, error) {
 	if err := boundConflictBatchPolicy(ctx, policy); err != nil {
 		return false, err

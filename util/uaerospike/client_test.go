@@ -741,8 +741,44 @@ func TestBatchPolicyBefore(t *testing.T) {
 func TestBatchOperateBefore_SendsNothingAfterTheDeadline(t *testing.T) {
 	c := &Client{}
 
-	sent, err := c.BatchOperateBefore(time.Now().Add(-time.Second), aerospike.NewBatchPolicy(), nil)
+	answered, err := c.BatchOperateBefore(time.Now().Add(-time.Second), aerospike.NewBatchPolicy(), nil)
 	require.NotNil(t, err)
 	require.True(t, err.Matches(types.TIMEOUT))
-	require.False(t, sent, "the caller must be able to tell a refusal from an answer of the server")
+	require.False(t, answered, "the caller must be able to tell a refusal from an answer of the server")
+}
+
+// A repeat of an overloaded batch that the deadline refuses is the refusal of this client. The only
+// answer of the server was the overload, so the caller must not read the TIMEOUT as one.
+func TestBatchOperateBefore_ARepeatRefusedForTheDeadlineIsNotAnAnswerOfTheServer(t *testing.T) {
+	c := newOverloadTestClient(time.Second, time.Millisecond, time.Millisecond)
+
+	deadline := time.Now().Add(20 * time.Millisecond)
+	sends := 0
+
+	answered, err := c.batchOperateBefore(deadline, aerospike.NewBatchPolicy(), newTestBatchRecords(t, 1), func(*aerospike.BatchPolicy, []aerospike.BatchRecordIfc) aerospike.Error {
+		sends++
+
+		// The answer comes back after the deadline, so a repeat has no time left.
+		time.Sleep(time.Until(deadline) + 5*time.Millisecond)
+
+		return overloadErr(types.DEVICE_OVERLOAD)
+	})
+
+	require.Equal(t, 1, sends, "no repeat starts after the deadline")
+	require.NotNil(t, err)
+	require.True(t, err.Matches(types.TIMEOUT))
+	require.False(t, answered, "the refusal of a repeat is not an answer of the server")
+}
+
+// A TIMEOUT that the server side of a send produced is an answer, and the caller counts it.
+func TestBatchOperateBefore_AFailedSendIsAnAnswerOfTheServer(t *testing.T) {
+	c := newOverloadTestClient(time.Second, time.Millisecond, time.Millisecond)
+
+	answered, err := c.batchOperateBefore(time.Now().Add(time.Minute), aerospike.NewBatchPolicy(), newTestBatchRecords(t, 1), func(*aerospike.BatchPolicy, []aerospike.BatchRecordIfc) aerospike.Error {
+		return overloadErr(types.TIMEOUT)
+	})
+
+	require.NotNil(t, err)
+	require.True(t, err.Matches(types.TIMEOUT))
+	require.True(t, answered)
 }

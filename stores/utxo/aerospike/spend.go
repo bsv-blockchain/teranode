@@ -1770,7 +1770,7 @@ func (s *Store) executeSpendBatch(batchRecords []aerospike.BatchRecordIfc, batch
 }
 
 func (s *Store) executeSpendBatchContext(ctx context.Context, batchRecords []aerospike.BatchRecordIfc, batch []*batchSpend, batchID uint64) error {
-	batchSent, err := s.batchOperateWithin(ctx, util.GetAerospikeBatchPolicy(s.settings), batchRecords)
+	answered, err := s.batchOperateWithin(ctx, util.GetAerospikeBatchPolicy(s.settings), batchRecords)
 	if err != nil {
 		// complete is CAS-guarded: items already completed in prepareSpendBatches
 		// (key-creation/validation failures) are simply no-ops here, so this
@@ -1780,7 +1780,7 @@ func (s *Store) executeSpendBatchContext(ctx context.Context, batchRecords []aer
 			bItem.complete(sendErr)
 		}
 
-		if batchSent {
+		if answered {
 			s.recordSpendOutcome(err, takeSlots(batch))
 		} else {
 			s.releaseSlots(takeSlots(batch))

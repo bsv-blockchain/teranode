@@ -597,9 +597,18 @@ func (c *Client) BatchOperate(policy *aerospike.BatchPolicy, records []aerospike
 // total and socket timeout. The client stops at that timeout, and the server does not start a
 // command whose timeout has passed, so a write of this batch does not start after deadline. A
 // call that finds deadline passed returns a TIMEOUT error and sends nothing. The first result
-// reports whether a send started: when it is false the error is the refusal of this client, not an
-// answer of the server.
+// reports whether the outcome is an answer of the server. It is false when the error is the refusal
+// of this client: no permit came in time, or the deadline left no time for the batch, or for the
+// repeat of one that the server answered with an overload.
 func (c *Client) BatchOperateBefore(deadline time.Time, policy *aerospike.BatchPolicy, records []aerospike.BatchRecordIfc) (bool, aerospike.Error) {
+	return c.batchOperateBefore(deadline, policy, records, func(p *aerospike.BatchPolicy, recs []aerospike.BatchRecordIfc) aerospike.Error {
+		return c.Client.BatchOperate(p, recs)
+	})
+}
+
+// batchOperateBefore is BatchOperateBefore with the send of one batch as a parameter.
+func (c *Client) batchOperateBefore(deadline time.Time, policy *aerospike.BatchPolicy, records []aerospike.BatchRecordIfc,
+	send func(*aerospike.BatchPolicy, []aerospike.BatchRecordIfc) aerospike.Error) (bool, aerospike.Error) {
 	bounded, err := batchPolicyBefore(policy, deadline)
 	if err != nil {
 		return false, err
@@ -618,21 +627,21 @@ func (c *Client) BatchOperateBefore(deadline time.Time, policy *aerospike.BatchP
 		c.stats.batchOperateStat.AddTimeForRange(start, len(records))
 	}()
 
-	sent := false
+	refused := false
 
 	err = c.retryBatchOnOverload(records, func(recs []aerospike.BatchRecordIfc) aerospike.Error {
 		// The time left is read again for every send: a repeat starts later than the first one.
 		p, err := batchPolicyBefore(policy, deadline)
 		if err != nil {
+			refused = true
+
 			return err
 		}
 
-		sent = true
-
-		return c.Client.BatchOperate(p, recs)
+		return send(p, recs)
 	})
 
-	return sent, err
+	return !refused, err
 }
 
 // batchPolicyBefore returns a copy of policy whose timeouts do not run past deadline, or a

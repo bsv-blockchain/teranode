@@ -374,7 +374,7 @@ func (s *Store) SpendMultiWithExpressions(ctx context.Context, batch []*batchSpe
 	}
 
 	writeCtx, cancelWrite := spendWriteContext(ctx, batch)
-	batchSent, err := s.batchOperateWithin(writeCtx, util.GetAerospikeBatchPolicy(s.settings), batchRecords)
+	answered, err := s.batchOperateWithin(writeCtx, util.GetAerospikeBatchPolicy(s.settings), batchRecords)
 
 	cancelWrite()
 
@@ -386,7 +386,7 @@ func (s *Store) SpendMultiWithExpressions(ctx context.Context, batch []*batchSpe
 			bItem.complete(errors.NewStorageError("[SPEND_BATCH_EXP] failed to batch spend", err))
 		}
 
-		if batchSent {
+		if answered {
 			s.recordSpendOutcome(err, takeSlots(batch))
 		} else {
 			s.releaseSlots(takeSlots(batch))
