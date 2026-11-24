@@ -638,23 +638,70 @@ func TestBoundedTTLCache_CountsEvictions(t *testing.T) {
 }
 
 // An operator reset re-reads the registry's ban state at once instead of
-// serving the mirror's previous view for the rest of its refresh interval.
+// serving the mirror's previous view for the rest of its refresh interval,
+// for one peer and for all peers.
 func TestResetReputation_RereadsBanStateImmediately(t *testing.T) {
-	s, reg := newServerWithLocalRegistry(t)
-	pid := mustNewPeerID(t)
+	for _, allPeers := range []bool{false, true} {
+		t.Run(fmt.Sprintf("allPeers=%v", allPeers), func(t *testing.T) {
+			s, reg := newServerWithLocalRegistry(t)
+			pid := mustNewPeerID(t)
 
-	banPeerInRegistry(t, reg, pid)
-	s.bannedPeers.invalidate()
-	require.True(t, s.shouldSkipBannedPeer(pid.String(), "test"), "precondition: registry ban is enforced")
+			banPeerInRegistry(t, reg, pid)
+			s.bannedPeers.invalidate()
+			require.True(t, s.shouldSkipBannedPeer(pid.String(), "test"), "precondition: registry ban is enforced")
 
-	// The registry lifts the ban; the mirror still holds the old view.
-	reg.ClearBannedPeers()
-	require.True(t, s.shouldSkipBannedPeer(pid.String(), "test"), "precondition: mirror serves its last view within the interval")
+			// The registry lifts the ban; the mirror still holds the old view.
+			reg.ClearBannedPeers()
+			require.True(t, s.shouldSkipBannedPeer(pid.String(), "test"), "precondition: mirror serves its last view within the interval")
 
-	_, err := s.ResetReputation(context.Background(), &p2p_api.ResetReputationRequest{PeerId: pid.String()})
-	require.NoError(t, err)
+			req := &p2p_api.ResetReputationRequest{PeerId: pid.String()}
+			if allPeers {
+				req.PeerId = ""
+			}
 
-	require.False(t, s.shouldSkipBannedPeer(pid.String(), "test"), "a reset must re-read the registry rather than serve the stale ban")
+			_, err := s.ResetReputation(context.Background(), req)
+			require.NoError(t, err)
+
+			require.False(t, s.shouldSkipBannedPeer(pid.String(), "test"), "a reset must re-read the registry rather than serve the stale ban")
+		})
+	}
+}
+
+// A reputation reset does not lift registry bans, so it must not stop the
+// mirror enforcing them: while the forced re-list is in flight, or after it
+// fails, the mirror's previous view stays in force.
+func TestResetReputation_KeepsEnforcingBansUntilReListLands(t *testing.T) {
+	for _, allPeers := range []bool{false, true} {
+		t.Run(fmt.Sprintf("allPeers=%v", allPeers), func(t *testing.T) {
+			s, reg := newServerWithLocalRegistry(t)
+			pid := mustNewPeerID(t)
+			banPeerInRegistry(t, reg, pid)
+
+			counting := newCountingRegistryClient(s.peerRegistry)
+			s.peerRegistry = counting
+			s.primeBannedPeers()
+
+			req := &p2p_api.ResetReputationRequest{PeerId: pid.String()}
+			if allPeers {
+				req.PeerId = ""
+			}
+
+			// Hold the forced re-list in flight: a concurrent lookup answers
+			// from the mirror's view.
+			s.bannedPeers.refreshMu.Lock()
+
+			_, err := s.ResetReputation(context.Background(), req)
+			require.NoError(t, err)
+			require.True(t, s.isRegistryBanned(pid.String()), "a ban must stay enforced while the re-list after a reset is in flight")
+
+			s.bannedPeers.refreshMu.Unlock()
+
+			// Let the re-list fail: the previous view stays in force.
+			counting.failListBannedPeers = errors.NewServiceError("registry unavailable")
+			require.True(t, s.isRegistryBanned(pid.String()), "a ban must stay enforced when the re-list after a reset fails")
+			require.Equal(t, 2, counting.callCount("ListBannedPeers"), "the reset forced one re-list")
+		})
+	}
 }
 
 // A failed refresh keeps the last good banned set in force and is not retried
