@@ -89,6 +89,14 @@ type Server struct {
 	stamper     pruner.Stamper
 	stampNotify chan pruneSignal
 	stampRetry  time.Duration
+
+	// The creating sweep's retry list: records it rolled forward whose hand-off to block
+	// assembly did not complete. handOffDelay and handOffLimit are zero in production, which
+	// means the defaults in creating_sweep.go.
+	handOffMu    sync.Mutex
+	handOffs     []handOff
+	handOffDelay time.Duration
+	handOffLimit int
 }
 
 // New creates a new Pruner server instance with the provided dependencies.

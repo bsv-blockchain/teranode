@@ -2,8 +2,10 @@ package pruner
 
 import (
 	"context"
+	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/go-subtree"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
@@ -14,6 +16,23 @@ import (
 // the serial roll-forward loop so neither grows with the unmined backlog after a crash
 // burst; any remainder is swept on the next block.
 const defaultCreatingSweepMaxPerPass = 1000
+
+type handOffStage uint8
+
+const (
+	stageAnnounce handOffStage = iota
+	stageUnlock
+)
+
+// handOff is a rolled-forward record whose hand-off to block assembly is not complete. stage is
+// the step that is still owed. validatedHeight is the value of the first attempt.
+type handOff struct {
+	hash            chainhash.Hash
+	stage           handOffStage
+	fee, size       uint64
+	inpoints        subtree.TxInpoints
+	validatedHeight uint32
+}
 
 // sweepCreatingTxs heals transactions abandoned in the create-first "creating" state. A
 // record still creating is rolled forward: the sweep re-runs the input spends from the
@@ -36,9 +55,11 @@ const defaultCreatingSweepMaxPerPass = 1000
 // markers first and the transaction only when the record needs a roll-forward or a reversal. Records it cannot roll forward for another reason (e.g. a
 // locked parent, or a finalize that fails) are left creating, gated (unspendable), and retried on a later pass. After finalizing, the
 // sweep hands the tx to block assembly and only then unlocks it, the order
-// loadUnminedTransactions uses. When the announce fails, or no block assembly client is
-// configured, the record stays finalized and locked so the next unmined reload restores it.
-// Runs whatever the value of utxostore_useCreateFirstOrder, so records stranded before the
+// loadUnminedTransactions uses. Each of the two steps is tried a few times in the pass. A record
+// whose announce or unlock still failed goes on a bounded in-memory list, which the next pass
+// drains before its query; the list is lost on restart, and block assembly's reload then announces
+// and unlocks the record as before. With no block assembly client configured the record stays
+// finalized and locked for that reload and is not listed. Runs whatever the value of utxostore_useCreateFirstOrder, so records stranded before the
 // flag was turned off still heal.
 func (s *Server) sweepCreatingTxs(ctx context.Context, blockHeight uint32) {
 	minAge := s.settings.Pruner.CreatingTxSweepMinAgeBlocks
@@ -50,6 +71,10 @@ func (s *Server) sweepCreatingTxs(ctx context.Context, blockHeight uint32) {
 	if maxPerPass == 0 {
 		maxPerPass = defaultCreatingSweepMaxPerPass
 	}
+
+	pass := &handOffPass{sleepLeft: handOffSleepBudgetDelays * s.handOffBackoff()}
+
+	s.drainHandOffs(ctx, blockHeight, pass)
 
 	hashes, err := s.utxoStore.QueryStaleCreatingTxs(ctx, blockHeight-minAge, maxPerPass)
 	if err != nil {
@@ -248,21 +273,17 @@ func (s *Server) sweepCreatingTxs(ctx context.Context, blockHeight uint32) {
 			continue
 		}
 
-		validatedHeight := utxo.UnminedValidatedHeight(md.UnminedSince, blockHeight, s.settings.UtxoStore.UnminedTxRetention)
-
-		if _, storeErr := s.blockAssemblyClient.Store(ctx, &hash, md.Fee, md.SizeInBytes, md.TxInpoints, validatedHeight); storeErr != nil {
-			s.logger.Errorf("[pruner][creating-sweep][%d] announce %s to block assembly failed, leaving it locked: %v", blockHeight, hash, storeErr)
-			prunerCreatingSweepFailures.Inc()
-
-			continue
+		entry := handOff{
+			hash:            hash,
+			stage:           stageAnnounce,
+			fee:             md.Fee,
+			size:            md.SizeInBytes,
+			inpoints:        md.TxInpoints,
+			validatedHeight: utxo.UnminedValidatedHeight(md.UnminedSince, blockHeight, s.settings.UtxoStore.UnminedTxRetention),
 		}
 
-		// FinalizeTransaction clears creating but not the lock; the tentative create carried
-		// WithLocked(true) on the block-assembly path, so without this the "rolled forward"
-		// record stays locked=true and its outputs remain unspendable. Clear it (idempotent).
-		if unlockErr := s.utxoStore.SetLocked(ctx, []chainhash.Hash{hash}, false); unlockErr != nil {
-			s.logger.Errorf("[pruner][creating-sweep][%d] unlock %s failed: %v", blockHeight, hash, unlockErr)
-			prunerCreatingSweepFailures.Inc()
+		if !s.completeHandOff(ctx, blockHeight, &entry, pass) {
+			s.queueHandOff(blockHeight, entry)
 
 			continue
 		}
@@ -347,6 +368,226 @@ func (s *Server) parentBlockedForAtLeast(ctx context.Context, blockHeight uint32
 	}
 
 	return md.UnminedSince > 1 && md.UnminedSince <= blockHeight && blockHeight-md.UnminedSince >= age
+}
+
+const (
+	// handOffAttempts is how often a pass tries the announce, and then the unlock, of one record.
+	handOffAttempts = 3
+
+	// defaultHandOffBackoff is the wait before the second attempt; the wait before the third is twice
+	// that. A pass sleeps at most handOffSleepBudgetDelays times one backoff in all, and an announce or
+	// unlock that fails for good is not tried again for the rest of the pass, so a block assembly or
+	// store outage costs a pass about 0.6 s of waiting and not a wait per record.
+	defaultHandOffBackoff    = 100 * time.Millisecond
+	handOffSleepBudgetDelays = 20
+	defaultHandOffRetryLimit = 10000
+)
+
+// handOffPass is the state of one sweep pass for the hand-off to block assembly.
+type handOffPass struct {
+	sleepLeft    time.Duration
+	announceDown bool
+	unlockDown   bool
+}
+
+func (s *Server) handOffBackoff() time.Duration {
+	if s.handOffDelay > 0 {
+		return s.handOffDelay
+	}
+
+	return defaultHandOffBackoff
+}
+
+// retryHandOff runs op up to handOffAttempts times, waiting between attempts and giving up when ctx
+// ends or the pass has used its sleep budget.
+func (s *Server) retryHandOff(ctx context.Context, pass *handOffPass, op func() error) error {
+	delay := s.handOffBackoff()
+
+	var err error
+
+	for attempt := 0; attempt < handOffAttempts; attempt++ {
+		if attempt > 0 {
+			if delay > pass.sleepLeft {
+				return err
+			}
+
+			pass.sleepLeft -= delay
+
+			timer := time.NewTimer(delay)
+
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+
+				return err
+			case <-timer.C:
+			}
+
+			delay *= 2
+		}
+
+		if err = op(); err == nil {
+			return nil
+		}
+	}
+
+	return err
+}
+
+// completeHandOff announces a rolled-forward record to block assembly and then unlocks it, from
+// the stage the entry still owes. FinalizeTransaction clears creating but not the lock: the
+// tentative create carried WithLocked(true) on the block-assembly path, so without the unlock the
+// record stays locked and its outputs unspendable. Both steps are idempotent, and the entry keeps
+// the stage reached, so an announce that succeeded is not made again. It reports whether the
+// hand-off is complete.
+func (s *Server) completeHandOff(ctx context.Context, blockHeight uint32, e *handOff, pass *handOffPass) bool {
+	if e.stage == stageAnnounce {
+		if pass.announceDown {
+			return false
+		}
+
+		err := s.retryHandOff(ctx, pass, func() error {
+			_, storeErr := s.blockAssemblyClient.Store(ctx, &e.hash, e.fee, e.size, e.inpoints, e.validatedHeight)
+
+			return storeErr
+		})
+		if err != nil {
+			s.logger.Errorf("[pruner][creating-sweep][%d] announce %s to block assembly failed, leaving it locked for a later pass: %v", blockHeight, e.hash, err)
+			prunerCreatingSweepFailures.Inc()
+
+			pass.announceDown = true
+
+			return false
+		}
+
+		e.stage = stageUnlock
+	}
+
+	if pass.unlockDown {
+		return false
+	}
+
+	err := s.retryHandOff(ctx, pass, func() error {
+		return s.utxoStore.SetLocked(ctx, []chainhash.Hash{e.hash}, false)
+	})
+	if err != nil {
+		s.logger.Errorf("[pruner][creating-sweep][%d] unlock %s failed, leaving it locked for a later pass: %v", blockHeight, e.hash, err)
+		prunerCreatingSweepFailures.Inc()
+
+		pass.unlockDown = true
+
+		return false
+	}
+
+	return true
+}
+
+// queueHandOff puts an entry on the retry list. A full list loses its oldest entry, which is logged
+// and counted: block assembly's reload still completes that record.
+func (s *Server) queueHandOff(blockHeight uint32, e handOff) {
+	limit := s.handOffLimit
+	if limit <= 0 {
+		limit = defaultHandOffRetryLimit
+	}
+
+	var (
+		dropped    handOff
+		didDrop    bool
+		listLength int
+	)
+
+	s.handOffMu.Lock()
+
+	if len(s.handOffs) >= limit {
+		dropped, didDrop = s.handOffs[0], true
+
+		copy(s.handOffs, s.handOffs[1:])
+		s.handOffs[len(s.handOffs)-1] = handOff{}
+		s.handOffs = s.handOffs[:len(s.handOffs)-1]
+	}
+
+	s.handOffs = append(s.handOffs, e)
+	listLength = len(s.handOffs)
+
+	s.handOffMu.Unlock()
+
+	prunerCreatingSweepHandOffPending.Set(float64(listLength))
+
+	if didDrop {
+		prunerCreatingSweepHandOffDropped.Inc()
+		s.logger.Warnf("[pruner][creating-sweep][%d] the retry list of %d entries is full, dropping its oldest, %s, which stays locked until block assembly reloads", blockHeight, limit, dropped.hash)
+	}
+}
+
+// drainHandOffs finishes the entries of earlier passes. It reads each record first: one that is
+// gone, mined or no longer locked was finished by another component and its entry is dropped, and
+// one that shows anything else is kept and logged. The passes run one after the other in the pruner
+// processor, so the list has one writer at a time; the lock covers any other caller.
+func (s *Server) drainHandOffs(ctx context.Context, blockHeight uint32, pass *handOffPass) {
+	s.handOffMu.Lock()
+	entries := s.handOffs
+	s.handOffs = nil
+	s.handOffMu.Unlock()
+
+	if len(entries) == 0 {
+		return
+	}
+
+	for i := range entries {
+		if ctx.Err() != nil {
+			for _, rest := range entries[i:] {
+				s.queueHandOff(blockHeight, rest)
+			}
+
+			break
+		}
+
+		if s.resumeHandOff(ctx, blockHeight, &entries[i], pass) {
+			s.queueHandOff(blockHeight, entries[i])
+		}
+	}
+
+	s.handOffMu.Lock()
+	listLength := len(s.handOffs)
+	s.handOffMu.Unlock()
+
+	prunerCreatingSweepHandOffPending.Set(float64(listLength))
+}
+
+// resumeHandOff reports whether the entry stays on the list.
+func (s *Server) resumeHandOff(ctx context.Context, blockHeight uint32, e *handOff, pass *handOffPass) bool {
+	md, err := s.utxoStore.Get(ctx, &e.hash, fields.Locked, fields.Creating, fields.Conflicting, fields.BlockIDs)
+
+	switch {
+	case err != nil && errors.Is(err, errors.ErrTxNotFound):
+		s.logger.Infof("[pruner][creating-sweep][%d] dropped the hand-off of %s: the record is gone", blockHeight, e.hash)
+
+		return false
+	case err != nil:
+		s.logger.Warnf("[pruner][creating-sweep][%d] reading %s for its hand-off failed, will retry next block: %v", blockHeight, e.hash, err)
+
+		return true
+	case len(md.BlockIDs) > 0 || !md.Locked:
+		s.logger.Infof("[pruner][creating-sweep][%d] dropped the hand-off of %s: it is mined or no longer locked, so another component finished it", blockHeight, e.hash)
+
+		return false
+	case md.Creating || md.Conflicting:
+		s.logger.Warnf("[pruner][creating-sweep][%d] the record of %s, whose hand-off is owed, is creating %t and conflicting %t; keeping the entry", blockHeight, e.hash, md.Creating, md.Conflicting)
+
+		return true
+	}
+
+	if s.blockAssemblyClient == nil {
+		return true
+	}
+
+	if !s.completeHandOff(ctx, blockHeight, e, pass) {
+		return true
+	}
+
+	s.logger.Infof("[pruner][creating-sweep][%d] completed the hand-off of %s from an earlier pass", blockHeight, e.hash)
+
+	return false
 }
 
 // isTransientSpendError reports whether a spend error says that a parent is committing: its record

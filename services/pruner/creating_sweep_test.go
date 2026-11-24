@@ -69,10 +69,13 @@ type fakeSweepStore struct {
 	unlocked       []chainhash.Hash
 	lastLimit      int
 	onUnlock       func()
-	onGet          func()
-	txUnreadable   map[chainhash.Hash]bool
-	endErr         error
-	releaseErr     error
+	// unlockErrs is popped once per SetLocked(false) call; a nil entry or an empty list succeeds.
+	unlockErrs   []error
+	unlockCalls  int
+	onGet        func()
+	txUnreadable map[chainhash.Hash]bool
+	endErr       error
+	releaseErr   error
 
 	// leaseDeclined makes TakeSpendLease refuse a record it would otherwise grant, and leaseErr
 	// makes it fail. Without them the fake grants a lease as the store does: only for a record that
@@ -147,6 +150,17 @@ func (f *fakeSweepStore) SpendLeasesLive(_ context.Context, _ *chainhash.Hash, _
 
 func (f *fakeSweepStore) SetLocked(_ context.Context, txHashes []chainhash.Hash, value bool) error {
 	if !value {
+		f.unlockCalls++
+
+		if len(f.unlockErrs) > 0 {
+			err := f.unlockErrs[0]
+			f.unlockErrs = f.unlockErrs[1:]
+
+			if err != nil {
+				return err
+			}
+		}
+
 		if f.onUnlock != nil {
 			f.onUnlock()
 		}
@@ -302,9 +316,10 @@ func newSweepServer(t *testing.T, store utxo.Store) *Server {
 	tSettings.Pruner.CreatingTxSweepMinAgeBlocks = 2
 
 	return &Server{
-		logger:    ulogger.NewErrorTestLogger(t),
-		settings:  tSettings,
-		utxoStore: store,
+		logger:       ulogger.NewErrorTestLogger(t),
+		settings:     tSettings,
+		utxoStore:    store,
+		handOffDelay: time.Millisecond,
 	}
 }
 
@@ -1643,4 +1658,267 @@ func TestSweepCreatingTxsAnnouncesTheHeightTheTransactionWasValidatedAt(t *testi
 			require.Equal(t, []uint32{tc.want}, ba.heights)
 		})
 	}
+}
+
+// flakyBlockAssembly fails the first failures Store calls, or all of them when failures is negative,
+// and records each call with the validated height it named.
+type flakyBlockAssembly struct {
+	*blockassembly.Mock
+
+	failures int
+	calls    int
+	heights  []uint32
+	onStore  func()
+}
+
+func (f *flakyBlockAssembly) Store(_ context.Context, _ *chainhash.Hash, _, _ uint64, _ subtree.TxInpoints, validatedHeight uint32) (bool, error) {
+	f.calls++
+	f.heights = append(f.heights, validatedHeight)
+
+	if f.onStore != nil {
+		f.onStore()
+	}
+
+	if f.failures != 0 {
+		if f.failures > 0 {
+			f.failures--
+		}
+
+		return false, errors.NewServiceError("ba down")
+	}
+
+	return true, nil
+}
+
+// handOffSweep returns a server and store with one creating record that rolls forward, and the
+// block assembly client it announces to.
+func handOffSweep(t *testing.T, failures int) (*Server, *fakeSweepStore, *flakyBlockAssembly, chainhash.Hash) {
+	t.Helper()
+
+	ns, err := nullstore.NewNullStore()
+	require.NoError(t, err)
+
+	txA := oneOutputTx(1)
+	hashA := *txA.TxIDChainHash()
+
+	store := &fakeSweepStore{
+		NullStore: ns,
+		stale:     []chainhash.Hash{hashA},
+		getResp:   map[chainhash.Hash]*meta.Data{hashA: {Creating: true, Attempt: sweepToken, Tx: txA, UnminedSince: 99, Fee: 7, SizeInBytes: 99}},
+	}
+
+	ba := &flakyBlockAssembly{Mock: blockassembly.NewMock(), failures: failures}
+
+	s := newSweepServer(t, store)
+	s.blockAssemblyClient = ba
+
+	return s, store, ba, hashA
+}
+
+// afterRollForward is what the store holds for the record once the sweep has finalized it: final and
+// still locked, so it no longer comes back from the query for creating records.
+func afterRollForward(store *fakeSweepStore, hash chainhash.Hash, md *meta.Data) {
+	store.stale = nil
+	store.getResp[hash] = md
+}
+
+func TestSweepCreatingTxsRetriesAFailedAnnounceInThePass(t *testing.T) {
+	s, store, ba, hashA := handOffSweep(t, 1)
+
+	s.sweepCreatingTxs(context.Background(), 100)
+
+	require.Equal(t, 2, ba.calls, "the announce that failed is tried again")
+	require.Equal(t, []chainhash.Hash{hashA}, store.unlocked)
+	require.Empty(t, s.handOffs, "nothing is owed")
+}
+
+func TestSweepCreatingTxsKeepsAFailingAnnounceOnTheRetryListAndFinishesItNextPass(t *testing.T) {
+	s, store, ba, hashA := handOffSweep(t, -1)
+
+	s.sweepCreatingTxs(context.Background(), 100)
+
+	require.Equal(t, 3, ba.calls, "a bounded number of attempts in the pass")
+	require.Empty(t, store.unlocked, "a record that is not announced stays locked")
+	require.Len(t, s.handOffs, 1)
+	require.Equal(t, hashA, s.handOffs[0].hash)
+	require.Equal(t, stageAnnounce, s.handOffs[0].stage)
+	require.Equal(t, []chainhash.Hash{hashA}, store.spends)
+
+	ba.failures = 0
+	ba.calls = 0
+	ba.heights = nil
+
+	afterRollForward(store, hashA, &meta.Data{Locked: true})
+	store.queryErr = errors.NewStorageError("query boom")
+
+	// 300 is far past the retention of the validated height, so a value worked out again would be 0.
+	s.sweepCreatingTxs(context.Background(), 300)
+
+	require.Equal(t, 1, ba.calls)
+	require.Equal(t, []uint32{99}, ba.heights, "the retry names the height of the first attempt")
+	require.Equal(t, []chainhash.Hash{hashA}, store.unlocked, "the list is drained before the query, which failed")
+	require.Empty(t, s.handOffs)
+	require.Equal(t, []chainhash.Hash{hashA}, store.spends, "the record is not rolled forward a second time")
+	require.Equal(t, []chainhash.Hash{hashA}, store.finalized)
+}
+
+func TestSweepCreatingTxsRetriesAFailedUnlockWithoutAnnouncingAgain(t *testing.T) {
+	t.Run("in the pass", func(t *testing.T) {
+		s, store, ba, hashA := handOffSweep(t, 0)
+		store.unlockErrs = []error{errors.NewStorageError("unlock boom")}
+
+		s.sweepCreatingTxs(context.Background(), 100)
+
+		require.Equal(t, 1, ba.calls)
+		require.Equal(t, 2, store.unlockCalls)
+		require.Equal(t, []chainhash.Hash{hashA}, store.unlocked)
+		require.Empty(t, s.handOffs)
+	})
+
+	t.Run("on the next pass", func(t *testing.T) {
+		s, store, ba, hashA := handOffSweep(t, 0)
+		boom := errors.NewStorageError("unlock boom")
+		store.unlockErrs = []error{boom, boom, boom}
+
+		s.sweepCreatingTxs(context.Background(), 100)
+
+		require.Equal(t, 1, ba.calls)
+		require.Equal(t, 3, store.unlockCalls, "a bounded number of attempts in the pass")
+		require.Empty(t, store.unlocked)
+		require.Len(t, s.handOffs, 1)
+		require.Equal(t, stageUnlock, s.handOffs[0].stage)
+
+		afterRollForward(store, hashA, &meta.Data{Locked: true})
+		s.sweepCreatingTxs(context.Background(), 101)
+
+		require.Equal(t, 1, ba.calls, "the announce already succeeded and is not repeated")
+		require.Equal(t, []chainhash.Hash{hashA}, store.unlocked)
+		require.Empty(t, s.handOffs)
+	})
+}
+
+// An entry is acted on only after its record is read. A record that is gone, mined or no longer
+// locked was finished by another component and is dropped. A record that shows anything else is
+// left on the list and logged.
+func TestSweepCreatingTxsDrainReadsTheRecordFirst(t *testing.T) {
+	cases := []struct {
+		name     string
+		state    *meta.Data
+		readErr  error
+		wantKept bool
+	}{
+		{name: "the record is gone"},
+		{name: "the record is mined", state: &meta.Data{Locked: true, BlockIDs: []uint32{3}}},
+		{name: "the record is no longer locked", state: &meta.Data{}},
+		{name: "the record is creating again", state: &meta.Data{Locked: true, Creating: true}, wantKept: true},
+		{name: "the record is conflicting", state: &meta.Data{Locked: true, Conflicting: true}, wantKept: true},
+		{name: "the record cannot be read", readErr: errors.NewStorageError("read boom"), wantKept: true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s, store, ba, hashA := handOffSweep(t, 0)
+
+			store.stale = nil
+			delete(store.getResp, hashA)
+
+			if tc.state != nil {
+				store.getResp[hashA] = tc.state
+			}
+
+			if tc.readErr != nil {
+				store.getErrs = map[chainhash.Hash]error{hashA: tc.readErr}
+			}
+
+			s.handOffs = []handOff{{hash: hashA, stage: stageAnnounce, validatedHeight: 99}}
+
+			recorder := &sweepLogRecorder{}
+			s.logger = recorder
+
+			s.sweepCreatingTxs(context.Background(), 100)
+
+			require.Zero(t, ba.calls, "nothing is announced for a record that this entry no longer describes")
+			require.Empty(t, store.unlocked)
+
+			if tc.wantKept {
+				require.Len(t, s.handOffs, 1)
+				require.True(t, recorder.contains(hashA.String()), "the unexpected state is logged")
+			} else {
+				require.Empty(t, s.handOffs)
+			}
+		})
+	}
+}
+
+func TestSweepCreatingTxsRetryListIsBounded(t *testing.T) {
+	ns, err := nullstore.NewNullStore()
+	require.NoError(t, err)
+
+	txs := []*bt.Tx{oneOutputTx(1), oneOutputTx(2), oneOutputTx(3)}
+	store := &fakeSweepStore{NullStore: ns, getResp: map[chainhash.Hash]*meta.Data{}}
+
+	for _, tx := range txs {
+		hash := *tx.TxIDChainHash()
+		store.stale = append(store.stale, hash)
+		store.getResp[hash] = &meta.Data{Creating: true, Attempt: sweepToken, Tx: tx}
+	}
+
+	ba := &flakyBlockAssembly{Mock: blockassembly.NewMock(), failures: -1}
+
+	s := newSweepServer(t, store)
+	s.blockAssemblyClient = ba
+	s.handOffLimit = 2
+
+	recorder := &sweepLogRecorder{}
+	s.logger = recorder
+	before := testutil.ToFloat64(prunerCreatingSweepHandOffDropped)
+
+	s.sweepCreatingTxs(context.Background(), 100)
+
+	require.Len(t, s.handOffs, 2)
+	require.Equal(t, store.stale[1], s.handOffs[0].hash, "the oldest entry is the one that goes")
+	require.Equal(t, store.stale[2], s.handOffs[1].hash)
+	require.Equal(t, before+1, testutil.ToFloat64(prunerCreatingSweepHandOffDropped))
+	require.True(t, recorder.contains(store.stale[0].String()), "the dropped record is logged")
+	require.Equal(t, 3, ba.calls, "once the announce has failed for good the rest of the pass does not try it again")
+	require.Equal(t, float64(2), testutil.ToFloat64(prunerCreatingSweepHandOffPending))
+}
+
+// A missing block assembly client is a setting of this node and does not change while it runs, so
+// a list would only hold records that nothing can complete. They stay locked for the reload.
+func TestSweepCreatingTxsNoBlockAssemblyClientQueuesNothing(t *testing.T) {
+	s, store, _, hashA := handOffSweep(t, 0)
+	s.blockAssemblyClient = nil
+
+	s.sweepCreatingTxs(context.Background(), 100)
+
+	require.Equal(t, []chainhash.Hash{hashA}, store.finalized)
+	require.Empty(t, s.handOffs)
+	require.Empty(t, store.unlocked)
+}
+
+func TestSweepCreatingTxsRetryHonoursTheContext(t *testing.T) {
+	s, store, ba, hashA := handOffSweep(t, -1)
+	s.handOffDelay = time.Hour
+
+	ctx, cancel := context.WithCancel(context.Background())
+	ba.onStore = cancel
+
+	done := make(chan struct{})
+
+	go func() {
+		s.sweepCreatingTxs(ctx, 100)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		require.FailNow(t, "the retry slept through a cancelled context")
+	}
+
+	require.Equal(t, 1, ba.calls)
+	require.Empty(t, store.unlocked)
+	require.Len(t, s.handOffs, 1)
+	require.Equal(t, hashA, s.handOffs[0].hash)
 }

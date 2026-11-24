@@ -25,6 +25,9 @@ var (
 	prunerCreatingBacklog       prometheus.Gauge
 	prunerCreatingSweepFailures prometheus.Counter
 
+	prunerCreatingSweepHandOffPending prometheus.Gauge
+	prunerCreatingSweepHandOffDropped prometheus.Counter
+
 	// Blob deletion metrics
 	blobDeletionScheduledTotal  *prometheus.CounterVec
 	blobDeletionCancelledTotal  *prometheus.CounterVec
@@ -155,6 +158,24 @@ func _initPrometheusMetrics() {
 			Subsystem: "pruner",
 			Name:      "creating_sweep_failures_total",
 			Help:      "Total create-first records the sweep could not roll forward (left creating for a later pass); a sustained non-zero rate means records are stuck (e.g. a permanently locked parent)",
+		},
+	)
+
+	prunerCreatingSweepHandOffPending = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "teranode",
+			Subsystem: "pruner",
+			Name:      "creating_sweep_handoff_pending",
+			Help:      "Records the creating sweep rolled forward whose announce to block assembly or unlock is still owed; they stay locked until a later pass or a block assembly reload completes them",
+		},
+	)
+
+	prunerCreatingSweepHandOffDropped = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "pruner",
+			Name:      "creating_sweep_handoff_dropped_total",
+			Help:      "Records dropped from the full retry list of the creating sweep; block assembly's reload at start or reset still announces and unlocks them",
 		},
 	)
 
