@@ -1,13 +1,13 @@
 diff --git a/services/blockassembly/subtreeprocessor/reorg_parallel_drain.go b/services/blockassembly/subtreeprocessor/reorg_parallel_drain.go
-index b132b70ae..b9e27eed3 100644
+index c225b4848..4036ecf00 100644
 --- a/services/blockassembly/subtreeprocessor/reorg_parallel_drain.go
 +++ b/services/blockassembly/subtreeprocessor/reorg_parallel_drain.go
-@@ -38,7 +38,7 @@ func (stp *SubtreeProcessor) dequeueDuringReorg(ctx context.Context, transaction
- 	open := stp.currentSubtree.Load()
- 	roomInOpen := open != nil && !open.IsComplete()
+@@ -39,7 +39,7 @@ func (stp *SubtreeProcessor) dequeueDuringReorg(ctx context.Context, transaction
+ 	// into it with only a log line.
+ 	hasOpen := stp.currentSubtree.Load() != nil
  
--	parallel := reorgParallelDrain && roomInOpen && len(conflictingHashes) == 0 && (losingTxHashesMap == nil || losingTxHashesMap.Length() == 0)
-+	parallel := reorgParallelDrain && roomInOpen // mutant: a step with conflicts drains in parallel too
+-	parallel := reorgParallelDrain && hasOpen && len(conflictingHashes) == 0 && (losingTxHashesMap == nil || losingTxHashesMap.Length() == 0)
++	parallel := reorgParallelDrain && hasOpen // mutant: a step with conflicts drains in parallel too
  
  	if reorgDrainHook != nil {
  		reorgDrainHook(parallel)
