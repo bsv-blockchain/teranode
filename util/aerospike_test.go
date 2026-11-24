@@ -511,6 +511,43 @@ func TestGetAerospikeClient_MultipleHosts(t *testing.T) {
 	}
 }
 
+// TestAerospikePolicyReadsDoNotRaceClientCreation pins that creating a client, which parses and
+// publishes the policy values, can run while stores read policies: tests sharing one Aerospike
+// server create clients while other tests' stores read. Run with -race.
+func TestAerospikePolicyReadsDoNotRaceClientCreation(t *testing.T) {
+	tSettings := settings.NewSettings()
+	logger := ulogger.New("test")
+
+	done := make(chan struct{})
+
+	go func() {
+		defer close(done)
+
+		for range 200 {
+			values, err := loadAerospikePolicyValues(logger, tSettings)
+			if err != nil {
+				t.Error(err)
+				return
+			}
+
+			aerospikePolicies.Store(values)
+		}
+	}()
+
+	for range 200 {
+		_ = GetAerospikeReadPolicy(tSettings)
+		_ = GetAerospikeWritePolicy(tSettings, 0)
+		_ = GetAerospikeBatchPolicy(tSettings)
+		_ = GetAerospikeQueryPolicy(tSettings)
+	}
+
+	<-done
+
+	values, err := loadAerospikePolicyValues(logger, tSettings)
+	require.NoError(t, err)
+	require.Equal(t, values.readTimeout, GetAerospikeReadPolicy(tSettings).TotalTimeout)
+}
+
 func TestGetAerospikeReadPolicy(t *testing.T) {
 	tests := []struct {
 		name               string
@@ -535,9 +572,9 @@ func TestGetAerospikeReadPolicy(t *testing.T) {
 			options:            nil,
 			validatePolicy: func(t *testing.T, policy *aerospike.BasePolicy) {
 				// Should use configured global values
-				assert.Equal(t, readMaxRetries, policy.MaxRetries)
-				assert.Equal(t, readTimeout, policy.TotalTimeout)
-				assert.Equal(t, readSocketTimeout, policy.SocketTimeout)
+				assert.Equal(t, currentAerospikePolicies().readMaxRetries, policy.MaxRetries)
+				assert.Equal(t, currentAerospikePolicies().readTimeout, policy.TotalTimeout)
+				assert.Equal(t, currentAerospikePolicies().readSocketTimeout, policy.SocketTimeout)
 			},
 		},
 		{
@@ -596,8 +633,8 @@ func TestGetAerospikeWritePolicy(t *testing.T) {
 			options:            nil,
 			validatePolicy: func(t *testing.T, policy *aerospike.WritePolicy) {
 				assert.Equal(t, uint32(10), policy.Generation)
-				assert.Equal(t, writeMaxRetries, policy.MaxRetries)
-				assert.Equal(t, writeTimeout, policy.TotalTimeout)
+				assert.Equal(t, currentAerospikePolicies().writeMaxRetries, policy.MaxRetries)
+				assert.Equal(t, currentAerospikePolicies().writeTimeout, policy.TotalTimeout)
 				assert.Equal(t, aerospike.COMMIT_ALL, policy.CommitLevel)
 			},
 		},
@@ -652,11 +689,11 @@ func TestGetAerospikeBatchPolicy(t *testing.T) {
 			name:               "custom policies",
 			useDefaultPolicies: false,
 			validatePolicy: func(t *testing.T, policy *aerospike.BatchPolicy) {
-				assert.Equal(t, batchTotalTimeout, policy.TotalTimeout)
-				assert.Equal(t, batchSocketTimeout, policy.SocketTimeout)
-				assert.Equal(t, batchAllowInlineSSD, policy.AllowInlineSSD)
-				assert.Equal(t, concurrentNodes, policy.ConcurrentNodes)
-				assert.Equal(t, batchMaxRetries, policy.MaxRetries)
+				assert.Equal(t, currentAerospikePolicies().batchTotalTimeout, policy.TotalTimeout)
+				assert.Equal(t, currentAerospikePolicies().batchSocketTimeout, policy.SocketTimeout)
+				assert.Equal(t, currentAerospikePolicies().batchAllowInlineSSD, policy.AllowInlineSSD)
+				assert.Equal(t, currentAerospikePolicies().concurrentNodes, policy.ConcurrentNodes)
+				assert.Equal(t, currentAerospikePolicies().batchMaxRetries, policy.MaxRetries)
 			},
 		},
 	}
