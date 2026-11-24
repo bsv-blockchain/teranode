@@ -6145,7 +6145,7 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveBackBlocks []*
 		movedBackAssemblyHashes = movedBackStillInAssembly(movedBackBlockTxMap, stp.currentTxMap)
 	}
 
-	movedBackBlockTxMap, slowMarks = nil, nil // free up memory
+	movedBackBlockTxMap, slowMarks = nil, nil //nolint:ineffassign,wastedassign // free up memory
 
 	// Partition into the two mark sets. partitionLongestChainMarks guarantees the
 	// returned slices are disjoint and de-duplicated, which is the precondition for
