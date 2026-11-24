@@ -30,6 +30,9 @@ package subtreeprocessor
 //	REORG_SCALE_PREPARED    1 to prepare the set of the winning blocks before the timed run, as PrepareBlock
 //	                        does while they are validated (issue 2269, PR 8); needs REORG_SCALE_FAST=1.
 //	                        The set is built before the timer starts and its time is in prepare_seconds
+//	REORG_SCALE_LOST_DELTA  1 to also probe the lost block against the first winner's set before the timer
+//	                        starts, as the competitor's preparation does (issue 2269, PR 8b); needs
+//	                        REORG_SCALE_PREPARED=1. The probe's time is in prepare_seconds
 //	REORG_SCALE_VERIFY      1 to check the order oracle after the run (slow, needs the hash sets)
 //	REORG_SCALE_OUT         path of the JSON report (default: logged only)
 //
@@ -67,6 +70,7 @@ type reorgScaleReport struct {
 	FastDeclined   string  `json:"fast_declined,omitempty"`
 	Prepared       bool    `json:"prepared,omitempty"`
 	PrepareSeconds float64 `json:"prepare_seconds,omitempty"`
+	LostDelta      bool    `json:"lost_delta,omitempty"`
 	GOMAXPROCS     int     `json:"gomaxprocs"`
 	BuildSeconds   float64 `json:"build_seconds"`
 	RunSeconds     float64 `json:"run_seconds"`
@@ -211,7 +215,14 @@ func TestReorgScale(t *testing.T) {
 
 		start = time.Now()
 		sc.stp.settings.BlockAssembly.ReorgFastPath = true
-		sc.prepareForwardSet(t, len(sc.forward))
+
+		if os.Getenv("REORG_SCALE_LOST_DELTA") == "1" {
+			sc.prepareForwardSetWithLostDelta(t, len(sc.forward))
+			report.LostDelta = true
+		} else {
+			sc.prepareForwardSet(t, len(sc.forward))
+		}
+
 		report.Prepared, report.PrepareSeconds = true, time.Since(start).Seconds()
 	}
 

@@ -162,7 +162,7 @@ func (stp *SubtreeProcessor) planFastReorg(ctx context.Context, moveBackBlocks, 
 
 	// A set prepared while the winners were validated is not read again below. The gate charges it all
 	// the same: the live figure is the heap the last GC found, which need not include a set built since.
-	preparedWinners, preparedConflicting, usePrepared := stp.takePreparedForkSet(moveForwardBlocks)
+	prepared := stp.takePreparedFork(moveForwardBlocks)
 
 	var setBytes uint64
 
@@ -200,8 +200,8 @@ func (stp *SubtreeProcessor) planFastReorg(ctx context.Context, moveBackBlocks, 
 		err         error
 	)
 
-	if usePrepared {
-		plan.winners, conflicting = preparedWinners, preparedConflicting
+	if prepared != nil {
+		plan.winners, conflicting = prepared.txMap, prepared.conflicting
 	} else if plan.winners, conflicting, err = stp.buildUnionSet(ctx, moveForwardBlocks); err != nil {
 		stp.logger.Warnf("[reorgInPlace] cannot build the set of the winning blocks, declining: %v", err)
 
@@ -214,10 +214,13 @@ func (stp *SubtreeProcessor) planFastReorg(ctx context.Context, moveBackBlocks, 
 
 	workers := remainderWorkers(stp.settings.BlockAssembly.ProcessRemainderTxHashesConcurrency)
 
-	if plan.delta, err = stp.computeReorgDelta(ctx, moveBackBlocks, plan.winners, workers); err != nil {
-		stp.logger.Warnf("[reorgInPlace] cannot read the lost block, declining: %v", err)
+	// the lost block was probed against the first winner's set while it was the tip, if it still is
+	if plan.delta = prepared.lostDelta(lost, plan.winners, workers); plan.delta == nil {
+		if plan.delta, err = stp.computeReorgDelta(ctx, moveBackBlocks, plan.winners, workers); err != nil {
+			stp.logger.Warnf("[reorgInPlace] cannot read the lost block, declining: %v", err)
 
-		return nil, "read_failed"
+			return nil, "read_failed"
+		}
 	}
 
 	rawD1 := make(map[chainhash.Hash]struct{}, len(plan.delta.D1))

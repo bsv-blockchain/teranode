@@ -4,6 +4,7 @@ import (
 	"context"
 	"runtime"
 	"slices"
+	"sync/atomic"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
@@ -29,6 +30,12 @@ type forkPrepared struct {
 	txMap       *SortedHashSet
 	conflicting []chainhash.Hash
 	err         error
+
+	// lost is the lost block's delta against the competitor's set, started when the competitor's set
+	// is built and shared with its child. firstMask is the competitor's hashes in the child's set,
+	// which only a child that keeps lost has.
+	lost      *forkLostDelta
+	firstMask []atomic.Uint64
 }
 
 // forkPrepareWorkers is how many workers a prepare for a fork builds with: a quarter of the cores,
@@ -130,6 +137,18 @@ func (stp *SubtreeProcessor) prepareForkBlock(block *model.Block) {
 	var ctx context.Context
 
 	ctx, e.cancel = context.WithCancel(context.Background())
+
+	// the lost block's probe is the competitor's, and its child holds it too
+	if parent == nil {
+		e.lost = newForkLostDelta()
+	} else if e.lost = parent.lost; e.lost != nil {
+		e.lost.refs.Add(1)
+	}
+
+	if e.lost != nil {
+		e.cancel = e.lost.holdBy(e.cancel)
+	}
+
 	stp.preparedFork = append(stp.preparedFork, e)
 	stp.preparedMu.Unlock()
 
@@ -145,6 +164,8 @@ func (stp *SubtreeProcessor) runForkPrepare(ctx context.Context, e *forkPrepared
 	if e.err != nil {
 		stp.logger.Warnf("[PrepareBlock][%s] not preparing the block for a fork reorg: %v", block.String(), e.err)
 		stp.removeFork(e)
+	} else if parent == nil {
+		go stp.runForkLostDelta(e)
 	}
 }
 
@@ -188,11 +209,26 @@ func (stp *SubtreeProcessor) buildForkSet(ctx context.Context, e *forkPrepared, 
 		return errors.NewProcessingError("not enough memory to prepare the block")
 	}
 
+	// The competitor's set is kept through this build only to mark its hashes in this one's, for the
+	// lost block's delta, and only if that delta is ready and the room is there.
+	keepFirst := parent != nil && e.lost.ready() && stp.forkSetFits(e.txCount*fastPathSetBytesPerHash+parent.txCount*fastPathSetBytesPerHash)
+	if parent != nil && !keepFirst {
+		// a probe still running is not waited for: it would compete with this build
+		e.lost.cancel()
+		e.lost = nil
+	}
+
 	if parent != nil {
 		stp.removeFork(parent)
 	}
 
-	return stp.buildForkTxMap(ctx, e)
+	if err := stp.buildForkTxMap(ctx, e); err != nil || !keepFirst {
+		return err
+	}
+
+	e.firstMask = markFirstSet(parent.txMap, e.txMap, forkPrepareWorkers())
+
+	return nil
 }
 
 // buildForkTxMap builds the set of every subtree of e's blocks, bounded to a quarter of the cores,
@@ -281,6 +317,16 @@ func (stp *SubtreeProcessor) releaseForkPrepared() {
 // is still being built is not waited for: it runs on a quarter of the cores and the reorg's own
 // build runs on all of them. Every prepared set is let go, taken or not.
 func (stp *SubtreeProcessor) takePreparedForkSet(blocks []*model.Block) (*SortedHashSet, []chainhash.Hash, bool) {
+	taken := stp.takePreparedFork(blocks)
+	if taken == nil {
+		return nil, nil, false
+	}
+
+	return taken.txMap, taken.conflicting, true
+}
+
+// takePreparedFork is takePreparedForkSet that returns the entry, nil when there is none to use.
+func (stp *SubtreeProcessor) takePreparedFork(blocks []*model.Block) *forkPrepared {
 	stp.preparedMu.Lock()
 	entries := stp.preparedFork
 	stp.preparedFork = nil
@@ -298,7 +344,7 @@ func (stp *SubtreeProcessor) takePreparedForkSet(blocks []*model.Block) (*Sorted
 	}
 
 	if taken == nil {
-		return nil, nil, false
+		return nil
 	}
 
 	defer taken.cancel()
@@ -306,14 +352,14 @@ func (stp *SubtreeProcessor) takePreparedForkSet(blocks []*model.Block) (*Sorted
 	select {
 	case <-taken.done:
 	default:
-		return nil, nil, false
+		return nil
 	}
 
 	if taken.err != nil || stp.forkStale(taken) {
-		return nil, nil, false
+		return nil
 	}
 
-	return taken.txMap, taken.conflicting, true
+	return taken
 }
 
 // matches reports whether e was prepared for exactly these blocks and subtree lists.

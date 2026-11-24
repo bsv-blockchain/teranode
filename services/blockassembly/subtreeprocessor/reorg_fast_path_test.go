@@ -734,6 +734,34 @@ func (sc *reorgScenario) prepareForwardSet(t testing.TB, n int) {
 	sc.stp.preparedMu.Unlock()
 }
 
+// prepareForwardSetWithLostDelta is prepareForwardSet as the slot holds it for a competitor and its
+// child: the first winner's set, with the lost block probed against it, and for n = 2 the set over both
+// with the first winner's hashes marked in it. The first winner's own entry is let go as the child's
+// build lets it go.
+func (sc *reorgScenario) prepareForwardSetWithLostDelta(t testing.TB, n int) {
+	t.Helper()
+
+	sc.prepareForwardSet(t, 1)
+
+	first := forkEntries(sc.stp)[0]
+	first.lost = newForkLostDelta()
+
+	require.NoError(t, sc.stp.probeLostAgainstFirst(context.Background(), first, sc.lost))
+	close(first.lost.done)
+
+	if n == 1 {
+		return
+	}
+
+	sc.stp.releaseForkPrepared()
+
+	sc.prepareForwardSet(t, n)
+
+	child := forkEntries(sc.stp)[0]
+	child.lost = first.lost
+	child.firstMask = markFirstSet(first.txMap, child.txMap, forkPrepareWorkers())
+}
+
 // With the winning blocks' set prepared, the fast path uses it: the winners' subtrees are not read
 // again, and the reorg ends as it does without the set.
 func TestReorgFastPath_UsesTheSetPreparedForTheWinners(t *testing.T) {

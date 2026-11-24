@@ -10,8 +10,11 @@ import (
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
+	"github.com/bsv-blockchain/teranode/services/blockchain"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -37,8 +40,23 @@ func newForkFixture(t *testing.T) *forkFixture {
 		Nonce:          99,
 	}
 	f.stp.currentBlockHeader.Store(f.tip)
+	f.serveTip(nil)
 
 	return f
+}
+
+// serveTip makes the blockchain client answer a read of the tip with block, or with an error when it
+// is nil: the tip has no block behind it, so no probe of the lost block is made.
+func (f *forkFixture) serveTip(block *model.Block) {
+	client := &blockchain.Mock{}
+
+	if block == nil {
+		client.On("GetBlock", mock.Anything, mock.Anything).Return(nil, errors.NewProcessingError("no block for the tip"))
+	} else {
+		client.On("GetBlock", mock.Anything, mock.Anything).Return(block, nil)
+	}
+
+	f.stp.blockchainClient = client
 }
 
 // child is a block on top of parent whose two subtrees are stored and bound to its header.

@@ -178,19 +178,28 @@ func (stp *SubtreeProcessor) computeReorgDelta(ctx context.Context, lost []*mode
 		d1[j] = nil // not held twice while the rest are copied
 	}
 
+	delta.D2 = unsetPositions(winners, bitmap, workers)
+
+	return delta, nil
+}
+
+// unsetPositions is the hashes of the set whose bit in the bitmap over its positions is unset, each
+// once, ascending, without the coinbase placeholder.
+func unsetPositions(set *SortedHashSet, bitmap []atomic.Uint64, workers int) []chainhash.Hash {
 	// each partition is walked by one goroutine, and partition p holds the hashes below
 	// those of p+1, so the per-partition lists join in order
-	d2 := make([][]chainhash.Hash, winners.Partitions())
+	parts := make([][]chainhash.Hash, set.Partitions())
 
-	winners.IterPositions(workers, func(part int, pos uint64, h *chainhash.Hash) {
+	set.IterPositions(workers, func(part int, pos uint64, h *chainhash.Hash) {
 		if bitmap[pos/64].Load()&(1<<(pos%64)) == 0 && *h != subtreepkg.CoinbasePlaceholderHashValue {
-			d2[part] = append(d2[part], *h)
+			parts[part] = append(parts[part], *h)
 		}
 	})
 
-	for _, p := range d2 {
-		delta.D2 = append(delta.D2, p...)
+	var out []chainhash.Hash
+	for _, p := range parts {
+		out = append(out, p...)
 	}
 
-	return delta, nil
+	return out
 }
