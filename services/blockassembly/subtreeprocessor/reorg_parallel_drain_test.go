@@ -142,40 +142,60 @@ func BenchmarkReorgDrain(b *testing.B) {
 	}
 }
 
-// The parallel build fills the open subtree from where it stands and needs room in it. A drain that
-// finds the open subtree full, or none, places what is queued one node at a time, as it did before the
-// parallel drain, instead of failing the reorg.
-func TestReorgParallelDrain_StaysSequentialWithoutRoomInTheOpenSubtree(t *testing.T) {
-	for _, name := range []string{"full", "none"} {
-		t.Run(name, func(t *testing.T) {
-			cfg := smallScenarioConfig()
-			cfg.parallelThreshold = 1
-			sc := newReorgScenario(t, cfg)
+// The parallel build continues the open subtree and needs one. A drain that finds none places what
+// is queued one node at a time, as it did before the parallel drain, instead of failing the reorg.
+func TestReorgParallelDrain_StaysSequentialWithoutAnOpenSubtree(t *testing.T) {
+	sc, modes := drainWithOpenSubtree(t, func(sc *reorgScenario) { sc.stp.currentSubtree.Store(nil) })
 
-			prevHook := reorgDrainHook
-			defer func() { reorgDrainHook = prevHook }()
+	require.NoError(t, sc.stp.dequeueDuringReorg(t.Context(), nil, nil, nil, false))
+	require.Equal(t, []bool{false}, *modes)
+	require.Zero(t, sc.stp.queue.length())
 
-			var modes []bool
-
-			reorgDrainHook = func(p bool) { modes = append(modes, p) }
-
-			if name == "full" {
-				open := sc.stp.currentSubtree.Load()
-				for i := 0; !open.IsComplete(); i++ {
-					require.NoError(t, open.AddSubtreeNode(subtreepkg.Node{Hash: chainhash.HashH([]byte(fmt.Sprintf("fill-%d", i))), Fee: 1, SizeInBytes: 250}))
-				}
-			} else {
-				sc.stp.currentSubtree.Store(nil)
-			}
-
-			queueIntake(sc, 0, 10)
-
-			sc.stp.parallelReorgDrain = true
-			defer func() { sc.stp.parallelReorgDrain = false }()
-
-			require.NoError(t, sc.stp.dequeueDuringReorg(t.Context(), nil, nil, nil, false))
-			require.Equal(t, []bool{false}, modes)
-			require.Zero(t, sc.stp.queue.length())
-		})
+	// placed, not only taken off the queue: the sequential drain logs a node it fails to add
+	placed := make(map[chainhash.Hash]struct{})
+	for _, n := range assemblyNodes(sc.stp) {
+		placed[n.Hash] = struct{}{}
 	}
+
+	for i := range 10 {
+		h := sc.hash(kindIntake | scenarioID(i))
+		require.Contains(t, placed, h, "queued tx %d is in a subtree", i)
+		require.True(t, sc.stp.GetCurrentTxMap().Exists(h), "queued tx %d is in the tx map", i)
+	}
+}
+
+// A full open subtree fails the reorg. The sequential drain would log every queued node as not added
+// and return no error, losing them without a reset.
+func TestReorgParallelDrain_FailsOnAFullOpenSubtree(t *testing.T) {
+	sc, modes := drainWithOpenSubtree(t, func(sc *reorgScenario) {
+		open := sc.stp.currentSubtree.Load()
+		for i := 0; !open.IsComplete(); i++ {
+			require.NoError(t, open.AddSubtreeNode(subtreepkg.Node{Hash: chainhash.HashH([]byte(fmt.Sprintf("fill-%d", i))), Fee: 1, SizeInBytes: 250}))
+		}
+	})
+
+	require.Error(t, sc.stp.dequeueDuringReorg(t.Context(), nil, nil, nil, false))
+	require.Equal(t, []bool{true}, *modes)
+}
+
+// drainWithOpenSubtree is a scenario inside a fork reorg's drain, with ten transactions queued and its
+// open subtree set up by prepare. It returns the drain modes the hook saw.
+func drainWithOpenSubtree(t *testing.T, prepare func(sc *reorgScenario)) (*reorgScenario, *[]bool) {
+	cfg := smallScenarioConfig()
+	cfg.parallelThreshold = 1
+	sc := newReorgScenario(t, cfg)
+
+	prevHook := reorgDrainHook
+	t.Cleanup(func() { reorgDrainHook = prevHook })
+
+	modes := new([]bool)
+	reorgDrainHook = func(p bool) { *modes = append(*modes, p) }
+
+	prepare(sc)
+	queueIntake(sc, 0, 10)
+
+	sc.stp.parallelReorgDrain = true
+	t.Cleanup(func() { sc.stp.parallelReorgDrain = false })
+
+	return sc, modes
 }
