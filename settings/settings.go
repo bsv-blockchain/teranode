@@ -320,6 +320,7 @@ func NewSettings(alternativeContext ...string) *Settings {
 			StoreQueueMaxMB:                      getInt("blockassembly_storeQueueMaxMB", 4096, alternativeContext...),
 			StoredPrefixTemplate:                 getBool("blockassembly_storedPrefixTemplate", false, alternativeContext...),
 			ReorgFastPath:                        getBool("blockassembly_reorgFastPath", false, alternativeContext...),
+			ReorgAwaitedSubtrees:                 getInt("blockassembly_reorgAwaitedSubtrees", 0, alternativeContext...),
 			ReconcileInterval:                    getDuration("blockassembly_reconcileInterval", 30*time.Second, alternativeContext...),
 			Disabled:                             getBool("blockassembly_disabled", false, alternativeContext...),
 			GenerateTipWaitTimeout:               getDuration("blockassembly_generateTipWaitTimeout", DefaultGenerateTipWaitTimeout, alternativeContext...),

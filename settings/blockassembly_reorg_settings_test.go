@@ -55,3 +55,12 @@ func TestBlockAssemblyReorgFastPath(t *testing.T) {
 	t.Setenv("blockassembly_reorgFastPath", "true")
 	require.True(t, NewSettings().BlockAssembly.ReorgFastPath, "loader must read blockassembly_reorgFastPath")
 }
+
+// The reorg's awaited subtrees default to 0, the full wait (issue 2269). Only a non-default override
+// read back proves NewSettings reads the key.
+func TestBlockAssemblyReorgAwaitedSubtrees(t *testing.T) {
+	require.Zero(t, NewSettings().BlockAssembly.ReorgAwaitedSubtrees, "the full wait by default")
+
+	t.Setenv("blockassembly_reorgAwaitedSubtrees", "4")
+	require.Equal(t, 4, NewSettings().BlockAssembly.ReorgAwaitedSubtrees, "loader must read blockassembly_reorgAwaitedSubtrees")
+}
