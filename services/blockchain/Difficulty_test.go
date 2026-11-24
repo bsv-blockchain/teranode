@@ -210,10 +210,13 @@ func TestComputeTarget_NegativeTimespanClampsToMinimum(t *testing.T) {
 	tSettings.ChainCfgParams = &chaincfg.MainNetParams
 	spacing := uint32(tSettings.ChainCfgParams.TargetTimePerBlock.Seconds())
 
+	d, err := NewDifficulty(nil, ulogger.TestLogger{}, tSettings)
+	require.NoError(t, err)
+
 	computeAt := func(t *testing.T, firstTime, lastTime uint32) model.NBit {
 		first := &model.SuitableBlock{NBits: firstBits.CloneBytes(), Time: firstTime, ChainWork: firstChainwork}
 		last := &model.SuitableBlock{NBits: lastBits.CloneBytes(), Time: lastTime, ChainWork: lastChainwork}
-		nBits, err := ComputeTarget(tSettings, first, last)
+		nBits, err := d.computeTarget(first, last)
 		require.NoError(t, err)
 
 		return *nBits
