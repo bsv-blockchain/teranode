@@ -7418,6 +7418,7 @@ returned as a configuration error.</p>
 <li>Shutdown timeout: 5 seconds</li>
 </ul>
 <p>Query parameters are automatically converted to <code>options.FileOption</code> using <code>options.QueryToFileOptions()</code> for per-request configuration.</p>
+<p>The <code>filename</code> query parameter is untrusted input and is validated by <code>options.ValidateFilename()</code> before any backend sees it. It must be a single portable basename: non-empty, at most 255 bytes, not <code>.</code> or <code>..</code>, and free of slashes, backslashes, NUL bytes, colons and percent-encoded separators. Requests that fail this check receive <code>400 Bad Request</code>; for <code>POST</code>, <code>PATCH</code> and <code>DELETE</code> the check runs after the token check, so an unauthenticated mutation is refused with <code>401</code> first. The file and S3 backends apply the same rule to <code>WithFilename</code> internally, and the S3 backend additionally verifies that the final object key stays under the configured <code>subDirectory</code>.</p>
 <h2 id="streaming-write-safety-setfromreader">Streaming Write Safety (SetFromReader)<a class="headerlink" href="#streaming-write-safety-setfromreader" title="Permanent link">&para;</a></h2>
 <p>The <code>SetFromReader</code> method provides safe streaming writes with automatic error recovery:</p>
 <h3 id="atomic-write-pattern">Atomic Write Pattern<a class="headerlink" href="#atomic-write-pattern" title="Permanent link">&para;</a></h3>
