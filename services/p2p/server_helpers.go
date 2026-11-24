@@ -1236,10 +1236,13 @@ func (s *Server) shouldSkipUnhealthyPeer(from string, messageType string) bool {
 		return false
 	}
 
-	// Cache miss or expired — fetch from registry.
-	expiresAt := now.Add(reputationCacheTTL)
-
+	// Cache miss or expired — fetch from registry. The entry's TTL runs from
+	// when the lookup returns: GetPeer has no deadline of its own, and a TTL
+	// started before it would leave a lookup slower than the TTL caching
+	// nothing, so a slow registry would be asked once per message.
 	peerInfo, exists, err := s.peerRegistry.GetPeer(s.gCtx, idStr)
+	expiresAt := time.Now().Add(reputationCacheTTL)
+
 	if err != nil {
 		s.reputationCache.Set(idStr, reputationCacheEntry{}, expiresAt)
 		s.logger.Warnf("[shouldSkipUnhealthyPeer] GetPeer %s failed (treating as healthy for %s): %v", peerID, reputationCacheTTL, err)
