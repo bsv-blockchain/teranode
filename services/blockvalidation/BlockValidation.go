@@ -248,6 +248,11 @@ type BlockValidation struct {
 	// subtreeStore provides persistent storage for block subtrees
 	subtreeStore blob.Store
 
+	// laneBitmapSlots bounds the lane bitmap reads in flight across every block, those a block
+	// stopped waiting for included (lane_rows.go); laneBitmapReadSlots makes it.
+	laneBitmapSlots     chan struct{}
+	laneBitmapSlotsOnce sync.Once
+
 	// subtreeBlockHeightRetention specifies how long subtrees should be retained
 	subtreeBlockHeightRetention uint32
 
@@ -2078,7 +2083,8 @@ func (u *BlockValidation) runOncePerBlock(blockHash *chainhash.Hash, opts *Valid
 //
 // Returns an error if validation fails or nil on success.
 
-// buildAddBlockOpts returns AddBlock options for a block stored by full validation.
+// buildAddBlockOpts returns AddBlock options for a peer block, stored by full validation or by
+// optimistic mining.
 //
 // A block can reach full validation already holding an id: catch-up's quick validation
 // reserves one through AssignBlockID before it can fail locally and fall through here, and a
@@ -2096,15 +2102,22 @@ func (u *BlockValidation) runOncePerBlock(blockHash *chainhash.Hash, opts *Valid
 // aerospike_enable_setmined_filter_expressions on: that path filters out a record already
 // holding the id and only unlocks it.
 //
-// For a block with no id (block.ID == 0) this returns nil and the store assigns one.
-func (u *BlockValidation) buildAddBlockOpts(block *model.Block) []blockchainoptions.StoreBlockOption {
-	if block.ID == 0 {
-		return nil
+// A block with no id (block.ID == 0) gets no WithID, so the store assigns one. The result is nil
+// only when there is no option at all: at shadow it can hold just WithLaneMapRows.
+func (u *BlockValidation) buildAddBlockOpts(ctx context.Context, block *model.Block) []blockchainoptions.StoreBlockOption {
+	var opts []blockchainoptions.StoreBlockOption
+
+	if block.ID != 0 {
+		opts = append(opts, blockchainoptions.WithID(uint64(block.ID)))
 	}
 
-	return []blockchainoptions.StoreBlockOption{
-		blockchainoptions.WithID(uint64(block.ID)),
+	// At utxostore_laneMigration shadow the block's lane map rows, stored in the block's own
+	// transaction; see laneRows.
+	if rows := u.laneRows(ctx, block); rows != nil {
+		opts = append(opts, blockchainoptions.WithLaneMapRows(rows))
 	}
+
+	return opts
 }
 
 func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block, baseURL string, disableOptimisticMining ...bool) error {
@@ -2771,7 +2784,7 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 				ctxLogger.Warnf("[ValidateBlock][%s] failed to compute coinbase BUMP: %v", block.Hash().String(), err)
 			}
 
-			addBlockOpts := u.buildAddBlockOpts(block)
+			addBlockOpts := u.buildAddBlockOpts(ctx, block)
 			if err = u.blockchainClient.AddBlock(ctx, block, opts.PeerID, addBlockOpts...); err != nil {
 				return u.storeBlockError(block, opts, baseURL, err)
 			}
@@ -3110,6 +3123,12 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 				}
 			} else {
 				// Normal case - add new block
+				// The options are built first, on the caller's context: at utxostore_laneMigration
+				// shadow they read the subtrees' lane bitmaps, for up to laneBitmapReadTimeout, and
+				// that time must not come out of the store's own budget below. A cancelled caller
+				// only leaves the block without lane rows.
+				addBlockOpts := u.buildAddBlockOpts(ctx, block)
+
 				// Use background context for critical database operation
 				// This prevents cascading cancellation from parent operations (e.g., fetch timeouts)
 				// ensuring data consistency by completing the write even if catchup is canceled
@@ -3120,7 +3139,6 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 					u.logger.Warnf("[ValidateBlock][%s] failed to compute coinbase BUMP: %v", block.Hash().String(), err)
 				}
 
-				addBlockOpts := u.buildAddBlockOpts(block)
 				if err = u.blockchainClient.AddBlock(storeCtx, block, opts.PeerID, addBlockOpts...); err != nil {
 					releaseBlockNodes(block)
 					return u.storeBlockError(block, opts, baseURL, err)

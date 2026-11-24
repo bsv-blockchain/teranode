@@ -216,11 +216,12 @@ func (q *LockFreeQueue) length() int64 {
 //   - nodes: The transaction nodes to add
 //   - txInpoints: Parent transaction references for each node
 //   - validatedHeights: Height each node was validated at, or nil when untagged
-func (q *LockFreeQueue) publish(nodes []subtree.Node, txInpoints []*subtree.TxInpoints, validatedHeights []uint32) {
+func (q *LockFreeQueue) publish(nodes []subtree.Node, txInpoints []*subtree.TxInpoints, validatedHeights []uint32, checkedSeq uint64) {
 	batch := &TxBatch{
 		nodes:            nodes,
 		txInpoints:       txInpoints,
 		validatedHeights: validatedHeights,
+		checkedSeq:       checkedSeq,
 		time:             q.clock.Now().UnixMilli(),
 	}
 	batch.next.Store(nil)
@@ -297,8 +298,14 @@ func (q *LockFreeQueue) publish(nodes []subtree.Node, txInpoints []*subtree.TxIn
 //   - nodes: The transaction nodes to add
 //   - txInpoints: Parent transaction references for each node
 func (q *LockFreeQueue) enqueueBatch(nodes []subtree.Node, txInpoints []*subtree.TxInpoints) {
+	q.enqueueCheckedBatch(nodes, txInpoints, 0)
+}
+
+// enqueueCheckedBatch is enqueueBatch for a batch already checked against the kept block sets up
+// to checkedSeq (TxBatch.checkedSeq).
+func (q *LockFreeQueue) enqueueCheckedBatch(nodes []subtree.Node, txInpoints []*subtree.TxInpoints, checkedSeq uint64) {
 	q.queueLength.Add(int64(len(nodes))) // gosec:nolint  reserve before publishing
-	q.publish(nodes, txInpoints, nil)
+	q.publish(nodes, txInpoints, nil, checkedSeq)
 }
 
 // Admission is the outcome of offering a batch to the bounded queue. A refusal says which bound
@@ -399,11 +406,17 @@ func (a Admission) String() string {
 // Returns:
 //   - Admission: Admitted, or the bound that refused the batch
 func (q *LockFreeQueue) enqueueBatchBounded(nodes []subtree.Node, txInpoints []*subtree.TxInpoints, exemptHeld bool, validatedHeights []uint32) Admission {
+	return q.enqueueCheckedBatchBounded(nodes, txInpoints, exemptHeld, validatedHeights, 0)
+}
+
+// enqueueCheckedBatchBounded is enqueueBatchBounded for a batch already checked against the kept
+// block sets up to checkedSeq (TxBatch.checkedSeq).
+func (q *LockFreeQueue) enqueueCheckedBatchBounded(nodes []subtree.Node, txInpoints []*subtree.TxInpoints, exemptHeld bool, validatedHeights []uint32, checkedSeq uint64) Admission {
 	n := int64(len(nodes)) // gosec:nolint
 
 	if q.maxItems <= 0 && (q.maxHeld <= 0 || exemptHeld) {
 		q.queueLength.Add(n) // reserve before publishing
-		q.publish(nodes, txInpoints, validatedHeights)
+		q.publish(nodes, txInpoints, validatedHeights, checkedSeq)
 
 		return Admitted
 	}
@@ -414,7 +427,7 @@ func (q *LockFreeQueue) enqueueBatchBounded(nodes []subtree.Node, txInpoints []*
 	heldRoom := exemptHeld || q.maxHeld <= 0 || q.heldTotal(after) <= q.maxHeld
 
 	if queueRoom && heldRoom {
-		q.publish(nodes, txInpoints, validatedHeights) // reservation already accounted
+		q.publish(nodes, txInpoints, validatedHeights, checkedSeq) // reservation already accounted
 
 		return Admitted
 	}
@@ -434,7 +447,7 @@ func (q *LockFreeQueue) enqueueBatchBounded(nodes []subtree.Node, txInpoints []*
 			prometheusSubtreeProcessorOversizeBatchAdmitted.Inc()
 		}
 
-		q.publish(nodes, txInpoints, validatedHeights)
+		q.publish(nodes, txInpoints, validatedHeights, checkedSeq)
 
 		return Admitted
 	}

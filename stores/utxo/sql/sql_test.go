@@ -1985,7 +1985,7 @@ func TestCreatePostgresSchema(t *testing.T) {
 	SetupCreatePostgresSchemaSuccessMocks(mockDB)
 
 	// Call the function under test using the mock
-	err := createPostgresSchemaImpl(mockDB)
+	err := createPostgresSchemaImpl(mockDB, ulogger.TestLogger{})
 
 	// Verify success
 	assert.NoError(t, err)

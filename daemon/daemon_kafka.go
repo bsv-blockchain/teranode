@@ -216,6 +216,16 @@ func nonNilConsumerGroup(group *kafka.KafkaConsumerGroup) kafka.KafkaConsumerGro
 	return group
 }
 
+// nonNilAsyncProducer returns the producer as an interface, mapping a typed nil
+// to a true nil so downstream nil checks behave correctly.
+func nonNilAsyncProducer(producer *kafka.KafkaAsyncProducer) kafka.KafkaAsyncProducerI {
+	if producer == nil {
+		return nil
+	}
+
+	return producer
+}
+
 func getKafkaInvalidBlocksConsumerGroup(logger ulogger.Logger, settings *settings.Settings, consumerGroupID string) (*kafka.KafkaConsumerGroup, error) {
 	kafkaInvalidBlocksConfig := settings.Kafka.InvalidBlocksConfig
 	if kafkaInvalidBlocksConfig == nil {

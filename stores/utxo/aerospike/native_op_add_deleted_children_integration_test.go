@@ -67,13 +67,10 @@ func sumNamespaceStat(t *testing.T, db *Store, stat string) int64 {
 
 // TestNativeOp_AddDeletedChildren_Integration verifies against a real Teraspike
 // server (the BSV fork of aerospike-server with native operate-path support,
-// wire op 200) that the pruner's addDeletedChildren parent-update runs as a
-// NATIVE batch write (zero batch_sub_udf), correctly mutates the parent's
-// deletedChildren map, and answers with a response the pruner can actually read.
-//
-// It builds the record via prunerAddDeletedChildrenRecord, the function
-// GetPrunerService installs as BuildAddDeletedChildrenRecord, so the server sees
-// the hand-encoded payload the pruner actually sends. Skips cleanly on a stock Aerospike image (native-op probe
+// wire op 200) that the addDeletedChildren op, which the replay-protection probe
+// writes its marker with, runs as a NATIVE batch write (zero batch_sub_udf),
+// correctly mutates the record's deletedChildren map, and answers with a
+// readable response. Skips cleanly on a stock Aerospike image (native-op probe
 // fails); point at a Teraspike build with AEROSPIKE_CONTAINER_IMAGE to run it.
 func TestNativeOp_AddDeletedChildren_Integration(t *testing.T) {
 	InitPrometheusMetrics()
@@ -112,13 +109,13 @@ func TestNativeOp_AddDeletedChildren_Integration(t *testing.T) {
 	var childHash chainhash.Hash
 	childHash[0] = 0xCD
 
-	// buildRecord calls the pruner's own builder, so the test exercises the
-	// record the pruner actually emits rather than a lookalike: the hand-encoded
-	// payload from encodeAddDeletedChildrenPayload, and the shared UPDATE_ONLY
-	// policy initNativeTeranodeOps installs, which is what stops a missing parent
-	// from being created.
+	// buildRecord goes through the store's own builder, so the record carries
+	// the shared UPDATE_ONLY policy initNativeTeranodeOps installs, which is what
+	// stops a missing parent from being created. The child list is the op's one
+	// argument, a list of hex txids.
 	buildRecord := func(key *aerospike.Key) aerospike.BatchRecordIfc {
-		return db.prunerAddDeletedChildrenRecord(aerospike.NewBatchUDFPolicy(), key, []*chainhash.Hash{&childHash})
+		return db.teranodeBatchRecord(aerospike.NewBatchUDFPolicy(), LuaPackage, key,
+			subOpAddDeletedChildren, "addDeletedChildren", []any{childHash.String()})
 	}
 
 	t.Run("existing parent is mutated natively", func(t *testing.T) {
@@ -165,12 +162,10 @@ func TestNativeOp_AddDeletedChildren_Integration(t *testing.T) {
 		require.Equalf(t, udfBefore, udfAfter, "addDeletedChildren must NOT invoke a Lua UDF on a native-op store (batch_sub_udf_complete went %d -> %d)", udfBefore, udfAfter)
 	})
 
-	// The routine case for the pruner: the parent was already deleted, normally by
-	// the pruner itself. The Lua path this replaces returns TX_NOT_FOUND and writes
+	// A missing parent: the Lua path returns TX_NOT_FOUND and writes
 	// nothing. The native path must not create the record instead — a resurrected
 	// parent would hold only deletedChildren (no txid, no deleteAtHeight), so the
-	// DAH scan could never reclaim it and any later read would fail in
-	// extractTxHash. This is what the updateOnly policy exists to guarantee, and it
+	// DAH scan could never reclaim it. This is what the updateOnly policy exists to guarantee, and it
 	// holds regardless of how the server-fork dispatcher handles a missing record.
 	t.Run("missing parent is not created", func(t *testing.T) {
 		var absentHash chainhash.Hash

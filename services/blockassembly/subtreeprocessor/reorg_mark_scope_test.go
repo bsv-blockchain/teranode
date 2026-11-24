@@ -488,8 +488,13 @@ func beforeForwardBlockOn(stp *SubtreeProcessor, parent *model.BlockHeader, fn f
 // A moved-back tx that a forward block mined can come back into block assembly through the queue
 // before the last forward block, whose map does not hold it. It is then both in block assembly and
 // mined, and only movedBackBlockTxMap's flag keeps it from being marked not on the longest chain.
+//
+// The kept block sets (recent_mined_sets.go) now keep such a late transaction out, so this test
+// turns them off: it pins the marking guard on its own, with the transaction back in block
+// assembly. TestReorgBlocks_LateForwardTxStaysOutAndIsNotMarkedFalse covers the default.
 func TestReorgBlocks_RequeuedForwardTxIsNotMarkedFalse(t *testing.T) {
 	stp, store, subtreeStore, chain := newReorgMarkFixture(t)
+	stp.settings.BlockAssembly.MinedTxSetRetention = 0
 
 	sharedTx, _ := createResetWALConflict(t, store, 11)
 	goneTx, _ := createResetWALConflict(t, store, 12)
@@ -515,6 +520,38 @@ func TestReorgBlocks_RequeuedForwardTxIsNotMarkedFalse(t *testing.T) {
 	require.True(t, *fired, "the batch must be queued before the last forward block")
 
 	require.True(t, stp.currentTxMap.Exists(shared), "the mined tx must be back in block assembly, or nothing but the tx map keeps it unmarked")
+	require.False(t, store.markedFalse(shared), "a forward block mined this tx, so it stays on the longest chain")
+	require.True(t, store.markedFalse(gone), "no forward block mined this moved-back tx")
+}
+
+// With the kept block sets on, the same late transaction stays out of block assembly, and the
+// reorg still leaves it marked on the longest chain, since a forward block mined it.
+func TestReorgBlocks_LateForwardTxStaysOutAndIsNotMarkedFalse(t *testing.T) {
+	stp, store, subtreeStore, chain := newReorgMarkFixture(t)
+	stp.settings.BlockAssembly.MinedTxSetRetention = 10 * time.Second
+
+	sharedTx, _ := createResetWALConflict(t, store, 14)
+	goneTx, _ := createResetWALConflict(t, store, 15)
+	otherTx, _ := createResetWALConflict(t, store, 16)
+	shared, gone := *sharedTx.TxIDChainHash(), *goneTx.TxIDChainHash()
+
+	back := moveToBlockAbove(t, stp, chain, storeTestSubtree(t, subtreeStore, false, sharedTx, goneTx))
+	chain.moveForward[0].Subtrees = []*chainhash.Hash{storeTestSubtree(t, subtreeStore, false, sharedTx)}
+	chain.moveForward[1].Subtrees = []*chainhash.Hash{storeTestSubtree(t, subtreeStore, false, otherTx)}
+
+	enqueueAt := time.Now()
+	stp.queue.clock = fixedClock{t: enqueueAt}
+	stp.clock = fixedClock{t: enqueueAt.Add(time.Millisecond)}
+
+	fired := beforeForwardBlockOn(stp, chain.moveForward[0].Header, func() {
+		inpoints := subtreepkg.NewTxInpoints()
+		stp.AddBatch([]subtreepkg.Node{{Hash: shared, Fee: 1, SizeInBytes: 1}}, []*subtreepkg.TxInpoints{&inpoints})
+	})
+
+	require.NoError(t, stp.reorgBlocks(t.Context(), []*model.Block{back}, chain.moveForward))
+	require.True(t, *fired, "the batch must be queued before the last forward block")
+
+	require.False(t, stp.currentTxMap.Exists(shared), "the first forward block mined this tx, so it must stay out of block assembly")
 	require.False(t, store.markedFalse(shared), "a forward block mined this tx, so it stays on the longest chain")
 	require.True(t, store.markedFalse(gone), "no forward block mined this moved-back tx")
 }

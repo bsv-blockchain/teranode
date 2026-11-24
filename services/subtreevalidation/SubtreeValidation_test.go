@@ -1931,7 +1931,7 @@ func TestStoreSubtreeFiles_FailedMetaWriteStoresNoSubtree(t *testing.T) {
 		require.NoError(t, meta.SetTxInpoints(i, subtreepkg.NewTxInpointsFromPacked([]chainhash.Hash{parent}, []uint32{1, 0})))
 	}
 
-	err = server.storeSubtreeFiles(ctx, gocore.NewStat("test"), subtreeHash, subtree, meta)
+	err = server.storeSubtreeFiles(ctx, gocore.NewStat("test"), subtreeHash, subtree, meta, nil)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "failed to store subtree meta")
 
