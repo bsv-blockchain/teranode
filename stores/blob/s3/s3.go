@@ -678,6 +678,10 @@ func (g *S3) getObjectKey(hash []byte, fileType fileformat.FileType, o *options.
 
 	objectKey := path.Join(subDir, prefix, key)
 
+	// Defence in depth, unreachable with today's inputs: subDir is cleaned and has no ".."
+	// segment, key is a validated basename or a hex hash plus extension, and prefix is hex or
+	// empty, so the joined key always starts with subDir. It guards against a later change to
+	// any of those three, which is why no test can reach it through getObjectKey.
 	requiredPrefix := subDir
 	if requiredPrefix != "" && !strings.HasSuffix(requiredPrefix, "/") {
 		requiredPrefix += "/"
