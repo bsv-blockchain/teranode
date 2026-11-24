@@ -92,9 +92,11 @@ Test file layout:
 - A test for code in `foo.go` goes in `foo_test.go`, including a test for a new
   behaviour or a bug fix. Create a new `_test.go` file only alongside a new
   production file.
-- The one exception is a test that needs its own build tag, because Go applies
-  build tags per file. Name that file for the tag (`foo_integration_test.go`).
-  Benchmarks also go in `foo_test.go`.
+- There are two exceptions. A test that needs its own build tag gets its own file,
+  because Go applies build tags per file; name it for the tag
+  (`foo_integration_test.go`). A package's shared test code gets its own file too:
+  `main_test.go` for `TestMain`, `helpers_test.go` for the package fixture,
+  `export_test.go`. Benchmarks also go in `foo_test.go`.
 - Never name a test file by how it was written: no `_additional`, `_coverage`,
   `_extra`, `_more`, `_new` or numeric suffixes.
 - Existing split files stay as they are. A PR that adds tests to code with several
