@@ -100,6 +100,9 @@ func (stp *SubtreeProcessor) drainQueueAfterBlock(ctx context.Context, drain *de
 		return stp.dequeueDuringBlockMovement(drain.transactionMap, drain.losingTxHashesMap, drain.conflictingHashes, false)
 	}
 
+	stp.drainingBlockSet = drain.transactionMap
+	defer func() { stp.drainingBlockSet = nil }()
+
 	return stp.forEachDrainChunk(drainChunkItems, func(batches []*TxBatch) (int, error) {
 		return stp.addDrainedBatches(ctx, batches, drain)
 	})

@@ -18,7 +18,11 @@ type TxBatch struct {
 	// at, so the processor can drop one validated under other rules than the next block's.
 	// Nil, or 0 for a node, means untagged: the node is admitted as before.
 	validatedHeights []uint32
-	positions        []uint64                // Own lane position of each node (util/lane), 0 for none; nil when the batch carries none
-	time             int64                   // Single timestamp for the entire batch
-	next             atomic.Pointer[TxBatch] // Pointer to next batch in queue
+	positions        []uint64 // Own lane position of each node (util/lane), 0 for none; nil when the batch carries none
+	// checkedSeq is the newest kept block set (recent_mined_sets.go) the batch was checked
+	// against when it arrived, so placement checks it only against sets kept after that. 0 for a
+	// batch queued without that check.
+	checkedSeq uint64
+	time       int64                   // Single timestamp for the entire batch
+	next       atomic.Pointer[TxBatch] // Pointer to next batch in queue
 }

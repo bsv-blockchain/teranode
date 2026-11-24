@@ -686,3 +686,42 @@ func TestDrainedPositionsKeepsEachBatchsOffset(t *testing.T) {
 	require.Equal(t, []uint64{11, 12, 0, 31, 32}, drainedPositions(batches, 5))
 	require.Nil(t, drainedPositions([]*TxBatch{{nodes: make([]subtreepkg.Node, 3)}}, 3), "no batch with positions, no positions")
 }
+
+// A transaction a kept block set holds is dropped from a positioned hand-off with its own
+// position, so each transaction left keeps its own, and the queued batch is checked up to the
+// newest kept set.
+func TestPositionedHandOffDropsAMinedTxWithItsPosition(t *testing.T) {
+	stp, _ := newMinedSetProcessor(t, 10*time.Second)
+
+	a, b, c := chainhash.HashH([]byte("a")), chainhash.HashH([]byte("b")), chainhash.HashH([]byte("c"))
+	stp.keepMinedSet(minedSetBlock(1), frozenHashSet(t, b))
+
+	in := batchOf(a, b, c)
+	positions := []uint64{lane.Pack(1, 11), lane.Pack(1, 12), lane.Pack(1, 13)}
+
+	require.Equal(t, Admitted, stp.AddPositionedBatchBounded(in.nodes, in.txInpoints, false, in.validatedHeights, positions))
+
+	queued := stp.queue.head.next.Load()
+	require.NotNil(t, queued)
+	require.Equal(t, []chainhash.Hash{a, c}, batchHashes(queued))
+	require.Equal(t, []uint64{lane.Pack(1, 11), lane.Pack(1, 13)}, queued.positions)
+	require.Equal(t, uint64(1), queued.checkedSeq)
+	require.Equal(t, []uint64{lane.Pack(1, 11), lane.Pack(1, 12), lane.Pack(1, 13)}, positions, "the caller's positions are left as they were")
+}
+
+// A queued transaction a block kept after its batch arrived is dropped when placed, with its own
+// position.
+func TestPlacementDropsAMinedTxWithItsPosition(t *testing.T) {
+	stp, _ := newMinedSetProcessor(t, 10*time.Second)
+
+	a, b, c := chainhash.HashH([]byte("a")), chainhash.HashH([]byte("b")), chainhash.HashH([]byte("c"))
+	stp.keepMinedSet(minedSetBlock(1), frozenHashSet(t, b))
+
+	batch := batchOf(a, b, c)
+	batch.positions = []uint64{lane.Pack(2, 21), lane.Pack(2, 22), lane.Pack(2, 23)}
+
+	stp.filterRecentlyMined([]*TxBatch{batch}, nil)
+
+	require.Equal(t, []chainhash.Hash{a, c}, batchHashes(batch))
+	require.Equal(t, []uint64{lane.Pack(2, 21), lane.Pack(2, 23)}, batch.positions)
+}

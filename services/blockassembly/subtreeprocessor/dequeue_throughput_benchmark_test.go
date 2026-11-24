@@ -9,6 +9,7 @@ import (
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
+	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/util/lane"
 )
 
@@ -94,6 +95,78 @@ func BenchmarkDequeueThroughput(b *testing.B) {
 				b.ReportMetric(float64(b.N*total)/b.Elapsed().Seconds(), "txs/s")
 			})
 		}
+	}
+}
+
+// BenchmarkDequeueThroughputWithKeptSet measures the steady-state dequeue loop while a block's
+// transaction set is kept (recent_mined_sets.go), against none. The set is kept before the
+// batches arrive, so every transaction is looked up on arrival and placement skips the set: this
+// measures the arrival lookup. The kept set holds keptSetSize hashes that none of the queued
+// transactions match, so this is the lookup cost alone.
+//
+// Run with -benchtime=1x; each iteration pushes total transactions.
+func BenchmarkDequeueThroughputWithKeptSet(b *testing.B) {
+	const (
+		batchSize       = 1024
+		itemsPerSubtree = 1 << 20
+		total           = 8 << 20
+		keptSetSize     = 32 << 20
+	)
+
+	nodes, inpoints := makeDequeueBenchBatches(total, batchSize)
+
+	kept := NewSortedHashSet(keptSetSize)
+	for i := 0; i < keptSetSize; i++ {
+		var h chainhash.Hash
+
+		binary.LittleEndian.PutUint64(h[:], 0x85ebca6b*uint64(i+1))
+		binary.LittleEndian.PutUint64(h[16:], ^uint64(i))
+
+		if err := kept.Put(h); err != nil {
+			b.Fatal(err)
+		}
+	}
+
+	if err := kept.Freeze(8); err != nil {
+		b.Fatal(err)
+	}
+
+	for _, withSet := range []bool{false, true} {
+		b.Run(fmt.Sprintf("keptSet=%t", withSet), func(b *testing.B) {
+			b.ReportAllocs()
+			b.ResetTimer()
+
+			for i := 0; i < b.N; i++ {
+				b.StopTimer()
+
+				stp, cleanup := newAddNodesBenchProcessor(b, itemsPerSubtree)
+				stp.settings.BlockAssembly.MinedTxSetRetention = time.Hour
+
+				if withSet {
+					stp.keepMinedSet(&model.Block{Header: &model.BlockHeader{Version: 1, HashPrevBlock: &chainhash.Hash{}, HashMerkleRoot: &chainhash.Hash{}}}, kept)
+				}
+
+				stp.Start(context.Background())
+
+				want := stp.TxCount() + uint64(total)
+
+				b.StartTimer()
+
+				for j := range nodes {
+					stp.AddBatch(nodes[j], inpoints[j])
+				}
+
+				for stp.TxCount() < want {
+					time.Sleep(time.Millisecond)
+				}
+
+				b.StopTimer()
+				cleanup()
+				b.StartTimer()
+			}
+
+			b.ReportMetric(float64(b.N*total)/b.Elapsed().Seconds(), "txs/s")
+		})
 	}
 }
 
