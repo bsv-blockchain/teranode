@@ -46,3 +46,12 @@ func TestBlockAssemblySubtreeStorageStageWidths(t *testing.T) {
 	require.Equal(t, 12, s.SubtreeStorageMetaWorkers, "loader must read blockassembly_subtreeStorageMetaWorkers")
 	require.Equal(t, 34, s.SubtreeStorageWriters, "loader must read blockassembly_subtreeStorageWriters")
 }
+
+// The in-place fork reorg is off by default (issue 2269). Only a non-default override read back
+// proves NewSettings reads the key.
+func TestBlockAssemblyReorgFastPath(t *testing.T) {
+	require.False(t, NewSettings().BlockAssembly.ReorgFastPath, "off by default")
+
+	t.Setenv("blockassembly_reorgFastPath", "true")
+	require.True(t, NewSettings().BlockAssembly.ReorgFastPath, "loader must read blockassembly_reorgFastPath")
+}

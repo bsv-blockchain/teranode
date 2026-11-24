@@ -491,6 +491,12 @@ type SubtreeProcessor struct {
 	// and only the processor goroutine reads it.
 	reorgTipSeenAt time.Time
 
+	// reorgPendingD1 is the transactions a fork reorg moved back that the fast path flagged mined and
+	// has not put in the installed subtrees yet: the ones only the lost block had and the pending set
+	// did not. reset() sweeps them next to the installed subtrees, and clears it once it has. Only the
+	// processor goroutine touches it.
+	reorgPendingD1 []chainhash.Hash
+
 	// diskTxMapShadow is the inactive half of the double-buffered disk-backed
 	// currentTxMap, mirroring currentTxMapShadow for the in-memory path. It is
 	// always empty while inactive: resetSubtreeState swaps it in, and the commit
@@ -1871,12 +1877,18 @@ func (stp *SubtreeProcessor) reset(blockHeader *model.BlockHeader, moveBackBlock
 			}
 		}
 
+		// A failed in-place fork reorg (reorgInPlace) flagged the lost block's transactions mined and has
+		// not put them in the subtrees above yet.
+		assemblyTxHashes = append(assemblyTxHashes, stp.reorgPendingD1...)
+
 		if len(assemblyTxHashes) > 0 {
 			stp.logger.Infof("[SubtreeProcessor][reset] marking %d assembly txs as not on longest chain before clearing state", len(assemblyTxHashes))
 			if err := stp.markNotOnLongestChain(ctx, nil, nil, assemblyTxHashes); err != nil {
 				return errors.NewProcessingError("[SubtreeProcessor][reset] error marking assembly txs as not on longest chain before reset", err)
 			}
 		}
+
+		stp.reorgPendingD1 = nil
 	}
 
 	stp.phases.done("mark_assembly")
@@ -5853,9 +5865,28 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveBackBlocks []*
 		stp.reverseCascadedConflictingSet = nil
 	}()
 
+	// The in-place fast path (issue 2269) takes the whole move back and forward when it applies. A decline
+	// leaves everything as it found it and falls through to the loops below.
+	slowBackBlocks, slowForwardBlocks := moveBackBlocks, moveForwardBlocks
+
+	var fastMarkOnLongestChain []chainhash.Hash
+
+	if stp.settings.BlockAssembly.ReorgFastPath {
+		fast, fastErr := stp.reorgInPlace(ctx, moveBackBlocks, moveForwardBlocks, moveBackConflicting)
+		if fastErr != nil {
+			return fastErr
+		}
+
+		if fast != nil {
+			slowBackBlocks, slowForwardBlocks = nil, nil
+			movedBackBlockTxMap = fast.movedBack
+			fastMarkOnLongestChain = fast.markOnLongestChain
+		}
+	}
+
 	var reversedBlocks []chainhash.Hash
 
-	for _, block := range moveBackBlocks {
+	for _, block := range slowBackBlocks {
 		stp.reportProgressUnlessDone(ctx)
 
 		// move back the block, getting all the transactions in the block and any conflicting hashes
@@ -6028,7 +6059,7 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveBackBlocks []*
 		stp.logger.Warnf("[reorgBlocks] could not retire the forward conflict checklists of %d reversed blocks: %v", len(reversedBlocks), retireErr)
 	}
 
-	if len(moveBackBlocks) > 0 {
+	if len(slowBackBlocks) > 0 {
 		// we've moved back x blocks, we need to set the current block header to the parent of the last block we moved back
 		lastMoveBackBlock := moveBackBlocks[len(moveBackBlocks)-1]
 		parentHeader, _, err := stp.blockchainClient.GetBlockHeader(ctx, lastMoveBackBlock.Header.HashPrevBlock)
@@ -6055,13 +6086,15 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveBackBlocks []*
 		rawLosingTxHashes  = make([]chainhash.Hash, 0, 1024)
 	)
 
+	markOnLongestChain = append(markOnLongestChain, fastMarkOnLongestChain...)
+
 	stp.reorgForwardTxMapSubtrees = []chainhash.Hash{}
 	defer func() { stp.reorgForwardTxMapSubtrees = nil }()
 
-	for blockIdx, block := range moveForwardBlocks {
+	for blockIdx, block := range slowForwardBlocks {
 		stp.reportProgressUnlessDone(ctx)
 
-		lastMoveForwardBlock := blockIdx == len(moveForwardBlocks)-1
+		lastMoveForwardBlock := blockIdx == len(slowForwardBlocks)-1
 		// we skip the notifications for now and do them all at the end
 		// transactionMap is returned so we can check which transactions need to be marked as on the longest chain
 		//
@@ -6757,6 +6790,9 @@ func (stp *SubtreeProcessor) moveBackBlockBulkBuild(ctx context.Context, block *
 		}
 	}
 
+	// held is nil, and costs nothing below, unless a block transaction is already pending.
+	var held *heldChildren
+
 	if len(flatHashes) > 0 {
 		wasSet := make([]bool, len(flatHashes))
 		if splitMap, ok := stp.currentTxMap.(*SplitTxInpointsMap); ok {
@@ -6767,9 +6803,22 @@ func (stp *SubtreeProcessor) moveBackBlockBulkBuild(ctx context.Context, block *
 			}
 		}
 		for i, set := range wasSet {
-			if set {
-				allNodes = append(allNodes, flatNodes[i])
+			if !set {
+				// Already pending: it keeps its pending position, and a child of it waits there.
+				if held == nil {
+					held = newHeldChildren()
+				}
+
+				held.keep(flatHashes[i])
+
+				continue
 			}
+
+			if held != nil && held.hold(flatNodes[i], flatInpoints[i].ParentTxHashes) {
+				continue
+			}
+
+			allNodes = append(allNodes, flatNodes[i])
 		}
 	}
 
@@ -6777,6 +6826,10 @@ func (stp *SubtreeProcessor) moveBackBlockBulkBuild(ctx context.Context, block *
 	for _, st := range previousChainedSubtrees {
 		for _, node := range st.Nodes {
 			if node.Hash.Equal(subtreepkg.CoinbasePlaceholderHashValue) {
+				continue
+			}
+			if held != nil {
+				allNodes = held.appendPending(allNodes, node, stp.currentTxMap.Get)
 				continue
 			}
 			allNodes = append(allNodes, node)
@@ -6787,8 +6840,15 @@ func (stp *SubtreeProcessor) moveBackBlockBulkBuild(ctx context.Context, block *
 			if node.Hash.Equal(subtreepkg.CoinbasePlaceholderHashValue) {
 				continue
 			}
+			if held != nil {
+				allNodes = held.appendPending(allNodes, node, stp.currentTxMap.Get)
+				continue
+			}
 			allNodes = append(allNodes, node)
 		}
+	}
+	if held != nil {
+		allNodes = held.flush(allNodes)
 	}
 
 	// Step 5: Determine subtree size

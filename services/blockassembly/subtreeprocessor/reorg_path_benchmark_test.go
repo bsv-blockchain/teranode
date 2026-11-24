@@ -36,6 +36,13 @@ func BenchmarkReorgPath(b *testing.B) {
 				b.Run(name, func(b *testing.B) {
 					benchmarkReorgPath(b, cfg, slowReorgPath)
 				})
+
+				// The fast path (blockassembly_reorgFastPath) declines when the winners mine more of the
+				// pending set than is left, so the 90% cases measure a decline plus the slow path; the
+				// fast_applied metric says which of the two ran.
+				b.Run(name+"/fast=on", func(b *testing.B) {
+					benchmarkReorgPath(b, cfg, fastReorgPath)
+				})
 			}
 		}
 	}
@@ -66,6 +73,7 @@ func benchmarkReorgPath(b *testing.B, cfg reorgScenarioConfig, path reorgPath) {
 	var total time.Duration
 
 	phases := make(map[string]float64)
+	appliedBefore := readFastPathCounts().applied
 
 	for i := 0; i < b.N; i++ {
 		b.StopTimer()
@@ -89,6 +97,9 @@ func benchmarkReorgPath(b *testing.B, cfg reorgScenarioConfig, path reorgPath) {
 	}
 
 	b.ReportMetric(float64(total.Nanoseconds())/float64(b.N)/float64(cfg.pending), "ns/pending_tx")
+
+	// the fraction of iterations the fast path applied: 0 on the slow path and when it declined
+	b.ReportMetric((readFastPathCounts().applied-appliedBefore)/float64(b.N), "fast_applied")
 
 	for _, phase := range slices.Sorted(maps.Keys(phases)) {
 		b.ReportMetric(phases[phase]*1000/float64(b.N), phase+"_ms")

@@ -1,0 +1,15 @@
+diff --git a/services/blockassembly/subtreeprocessor/reorg_fast_path.go b/services/blockassembly/subtreeprocessor/reorg_fast_path.go
+index cdac49551..b9fe0f190 100644
+--- a/services/blockassembly/subtreeprocessor/reorg_fast_path.go
++++ b/services/blockassembly/subtreeprocessor/reorg_fast_path.go
+@@ -225,9 +225,7 @@ func (stp *SubtreeProcessor) planFastReorg(ctx context.Context, moveBackBlocks,
+ 			return overlap
+ 		})
+ 
+-		if overlap {
+-			return nil, "remove_map_overlap"
+-		}
++		_ = overlap // mutant: no decline on a removeMap entry in D1 or the winners
+ 	}
+ 
+ 	// Effective D1 is raw D1 minus what the tx map holds, membership only, as the move-back's dedup.
