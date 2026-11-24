@@ -47,21 +47,6 @@ func (r *recordingBanList) addedEntries() []string {
 	return append([]string(nil), r.added...)
 }
 
-// disconnectCapableClient simulates a future go-p2p-message-bus client that
-// implements the networkDisconnector capability.
-type disconnectCapableClient struct {
-	MockServerP2PClient
-	mu           sync.Mutex
-	disconnected []peer.ID
-}
-
-func (d *disconnectCapableClient) DisconnectPeer(_ context.Context, pid peer.ID) error {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	d.disconnected = append(d.disconnected, pid)
-	return nil
-}
-
 func TestExtractIPFromMultiaddr(t *testing.T) {
 	tests := []struct {
 		addr string
@@ -319,38 +304,6 @@ func TestServer_DisconnectPeer_InvalidPeerID(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, resp.Success)
 	require.NotEmpty(t, resp.Error)
-}
-
-func TestDisconnectBannedPeerByID_UsesNetworkDisconnectWhenAvailable(t *testing.T) {
-	s, _ := newServerWithLocalRegistry(t)
-	pid := mustNewPeerID(t)
-
-	client := &disconnectCapableClient{}
-	s.P2PClient = client
-
-	s.disconnectBannedPeerByID(context.Background(), pid, "test")
-
-	require.Equal(t, []peer.ID{pid}, client.disconnected,
-		"ban path must sever the libp2p connection when the client supports it")
-}
-
-func TestDisconnectPeersOnBanList_SeversConnectionEvenWhenNotInRegistry(t *testing.T) {
-	s, reg := newServerWithLocalRegistry(t)
-	pid := mustNewPeerID(t)
-	require.Equal(t, 0, reg.Count(), "peer intentionally absent from the registry")
-
-	s.banList = &recordingBanList{banned: map[string]bool{"198.51.100.9": true}}
-	client := &disconnectCapableClient{}
-	client.peers = []p2pMessageBus.PeerInfo{{
-		ID:    pid.String(),
-		Addrs: []string{fmt.Sprintf("/ip4/198.51.100.9/tcp/9905/p2p/%s", pid)},
-	}}
-	s.P2PClient = client
-
-	s.disconnectPeersOnBanList(context.Background(), "sweep")
-
-	require.Equal(t, []peer.ID{pid}, client.disconnected,
-		"sweep must still sever the libp2p connection when the client supports it")
 }
 
 func TestServer_ConnectPeer_RefusesBannedAddress(t *testing.T) {

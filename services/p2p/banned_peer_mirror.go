@@ -72,6 +72,20 @@ func (m *bannedPeerMirror) contains(peerID string) bool {
 	return ok
 }
 
+// bannedIDs returns a copy of the mirrored banned set, for the admission
+// sync (syncAdmissionBans).
+func (m *bannedPeerMirror) bannedIDs() []string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	ids := make([]string, 0, len(m.ids))
+	for id := range m.ids {
+		ids = append(ids, id)
+	}
+
+	return ids
+}
+
 // state returns whether the mirror is due a refresh at now, and the
 // invalidation generation a refresh started now must hand back to replace
 // and markAttempt.
@@ -180,9 +194,24 @@ func (s *Server) isRegistryBanned(peerID string) bool {
 	return s.bannedPeers.contains(peerID)
 }
 
+// refreshBannedPeersIfStale re-lists the registry if the mirror is due a
+// refresh and no other refresh is in flight, without waiting for one. The ban
+// sweep calls it so a registry ban that lapses reaches the admission rules
+// even while no gossip arrives to refresh the mirror.
+func (s *Server) refreshBannedPeersIfStale() {
+	if s.peerRegistry == nil {
+		return
+	}
+
+	if stale, _ := s.bannedPeers.state(time.Now()); stale {
+		s.refreshBannedPeers(false)
+	}
+}
+
 // primeBannedPeers loads the banned-peer mirror once, waiting for the
 // round-trip, so the gossip gate enforces pre-existing registry bans from the
-// first message it sees. Called from Start before the topic subscriptions.
+// first message it sees and the admission sync that follows can block them.
+// Called from Start before the topic subscriptions (startGossipIntake).
 func (s *Server) primeBannedPeers() {
 	if s.peerRegistry == nil {
 		return

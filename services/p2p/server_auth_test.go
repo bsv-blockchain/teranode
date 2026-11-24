@@ -124,6 +124,7 @@ var readOnlyMethodsByField = map[string]map[string]bool{
 	"bannedPeers":      {},
 	"reputationCache":  {},
 	"liveConns":        {},
+	"admission":        {},
 	"blockPeerMap":     {},
 	"subtreePeerMap":   {},
 	"localHeightCache": {},

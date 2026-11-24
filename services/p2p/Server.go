@@ -65,9 +65,11 @@ const logProcessingNotification = "[processBlockchainNotification] Processing %s
 const (
 	banActionAdd = "add" // Action constant for adding a ban
 
-	// banSweepInterval is how often connected peers are re-checked against the
-	// IP ban list. Without a libp2p connection gater banned peers can redial at
-	// will, so the sweep re-disconnects them at the application layer.
+	// banSweepInterval is how often the admission rules are re-synced with
+	// the bans in force and connected peers are re-checked against the IP ban
+	// list. The sync is what applies changes that raise no ban-list event (an
+	// expiry, bans another process wrote, a registry ban that lapsed), so they
+	// reach connection admission within one interval.
 	banSweepInterval = 1 * time.Minute
 
 	// Default values for peer map cleanup (reduced to prevent memory exhaustion)
@@ -269,6 +271,10 @@ type Server struct {
 	// instead of one IsPeerBanned round-trip per distinct author; local ban
 	// transitions (onPeerBanned) are applied to it immediately.
 	bannedPeers bannedPeerMirror
+	// admission records the ban rules applied to the message bus's
+	// connection gater, the primary enforcement of IP, subnet and peer-ID
+	// bans; see syncAdmissionBans.
+	admission admissionBans
 	// registryBatcher coalesces the per-message peer-registry writes from the
 	// gossip handlers into one batch of RPCs per peer per flush interval. Nil
 	// in tests that construct Server directly; helpers then fall back to
@@ -765,6 +771,13 @@ func NewServer(
 		preAnnouncedBlockHashes:           expiringmap.New[chainhash.Hash, struct{}](preAnnouncedBlockHashTTL).WithMaxSize(preAnnouncedBlockHashMaxSize),
 	}
 
+	// The bus holds admission rules in memory only and the client is already
+	// listening and dialling, so re-apply the persisted IP and subnet bans
+	// now rather than in Start: a connection admitted in between is closed
+	// by the Block* call that covers it. Peer-ID bans need the registry and
+	// are applied in Start (startGossipIntake).
+	p2pServer.syncAdmissionBans()
+
 	initPrometheusMetrics()
 
 	p2pServer.applyPeerMapLimits(tSettings)
@@ -1171,18 +1184,7 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 	// sweep is about expiry and visibility rather than about the bound.
 	s.startPeerMapCleanup(ctx)
 
-	// Load the registry's banned set before any gossip can arrive, so a peer
-	// banned before this process started is dropped from its first message.
-	// This must stay before the topic subscriptions below: after them, the
-	// first messages would read an empty mirror. A gossip worker never waits
-	// on another worker's refresh; see bannedPeerMirror.
-	s.primeBannedPeers()
-
-	// Subscribe to all topics
-	s.subscribeToTopic(ctx, s.blockTopicName, s.handleBlockTopic)
-	s.subscribeToTopic(ctx, s.subtreeTopicName, s.handleSubtreeTopic)
-	s.subscribeToTopic(ctx, s.nodeStatusTopicName, s.handleNodeStatusTopic)
-	s.subscribeToTopic(ctx, s.rejectedTxTopicName, s.handleRejectedTxTopic)
+	s.startGossipIntake(ctx)
 
 	// Start blockchain subscription before marking service as ready
 	// This ensures we don't miss any block notifications
@@ -1227,6 +1229,25 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 	<-ctx.Done()
 
 	return nil
+}
+
+// startGossipIntake enforces the bans already in force and then subscribes to
+// the gossip topics. Both ban steps must stay before the subscriptions:
+//   - primeBannedPeers loads the registry's banned set, so a peer banned before
+//     this process started is dropped from its first message rather than read
+//     against an empty mirror. A gossip worker never waits on another worker's
+//     refresh; see bannedPeerMirror.
+//   - syncAdmissionBans then blocks those peer IDs at connection admission,
+//     closing their open connections. NewServer already applied the IP and
+//     subnet bans right after creating the client.
+func (s *Server) startGossipIntake(ctx context.Context) {
+	s.primeBannedPeers()
+	s.syncAdmissionBans()
+
+	s.subscribeToTopic(ctx, s.blockTopicName, s.handleBlockTopic)
+	s.subscribeToTopic(ctx, s.subtreeTopicName, s.handleSubtreeTopic)
+	s.subscribeToTopic(ctx, s.nodeStatusTopicName, s.handleNodeStatusTopic)
+	s.subscribeToTopic(ctx, s.rejectedTxTopicName, s.handleRejectedTxTopic)
 }
 
 func (s *Server) subscribeToTopic(ctx context.Context, topicName string, handler func(context.Context, []byte, string)) {
@@ -3122,6 +3143,9 @@ func (s *Server) BanPeer(ctx context.Context, peer *p2p_api.BanPeerRequest) (*p2
 	// be invisible to the metric despite its name implying all ban events.
 	prometheusP2PBanEvents.WithLabelValues(ReasonOperatorBan).Inc()
 
+	// Enforce at admission before replying; the ban-list event syncs again.
+	s.syncAdmissionBans()
+
 	return &p2p_api.BanPeerResponse{Ok: true}, nil
 }
 
@@ -3130,6 +3154,9 @@ func (s *Server) UnbanPeer(ctx context.Context, peer *p2p_api.UnbanPeerRequest) 
 	if err != nil {
 		return nil, errors.WrapGRPCPublic(err)
 	}
+
+	// Lift the admission rules no remaining ban covers before replying.
+	s.syncAdmissionBans()
 
 	return &p2p_api.UnbanPeerResponse{Ok: true}, nil
 }
@@ -3158,16 +3185,16 @@ func (s *Server) ConnectPeer(ctx context.Context, req *p2p_api.ConnectPeerReques
 	return &p2p_api.ConnectPeerResponse{Success: true}, nil
 }
 
-// DisconnectPeer disconnects a peer by ID: it is removed from the peer
-// registry and sync coordinator, and the libp2p connection is closed when the
-// P2P client supports it (go-p2p-message-bus does not yet expose a network
-// disconnect; see networkDisconnector).
+// DisconnectPeer disconnects a peer by ID: its libp2p connections are closed
+// (severPeer) and it is removed from the peer registry and sync coordinator.
+// It is not a ban, so the peer may reconnect.
 func (s *Server) DisconnectPeer(ctx context.Context, req *p2p_api.DisconnectPeerRequest) (*p2p_api.DisconnectPeerResponse, error) {
 	pid, err := peer.Decode(req.PeerId)
 	if err != nil {
 		return &p2p_api.DisconnectPeerResponse{Success: false, Error: fmt.Sprintf("invalid peer ID %s: %v", req.PeerId, err)}, nil
 	}
 
+	s.severPeer(pid.String())
 	s.disconnectBannedPeerByID(ctx, pid, "operator disconnect request")
 
 	return &p2p_api.DisconnectPeerResponse{Success: true}, nil
@@ -3195,6 +3222,9 @@ func (s *Server) ListBanned(ctx context.Context, _ *emptypb.Empty) (*p2p_api.Lis
 
 func (s *Server) ClearBanned(ctx context.Context, _ *emptypb.Empty) (*p2p_api.ClearBannedResponse, error) {
 	s.banList.Clear()
+	// Clear raises no ban-list event, so lift the IP and subnet rules here.
+	s.syncAdmissionBans()
+
 	return &p2p_api.ClearBannedResponse{Ok: true}, nil
 }
 
@@ -3246,8 +3276,9 @@ func (s *Server) applyBanScore(peerID, reason string) error {
 }
 
 // onPeerBanned reacts to a NEW ban transition (score crossed threshold this
-// call) by adding the peer's IP to the local banList and disconnecting it.
-// Replaces the old BanEventHandler indirection.
+// call): it adds the peer's IPs to the local banList, blocks the peer ID and
+// those IPs at connection admission, which closes its connections, and drops
+// it at the application layer. Replaces the old BanEventHandler indirection.
 func (s *Server) onPeerBanned(peerID, reason string) {
 	// Honor the configured ban duration so the address-level ban list and the
 	// centralized peer registry agree on how long the ban lasts. Fall back to
@@ -3275,30 +3306,29 @@ func (s *Server) onPeerBanned(peerID, reason string) {
 
 	// Ban the peer's addresses by literal IP: the ban list stores IPs/subnets,
 	// so multiaddr strings ("/ip4/1.2.3.4/tcp/9905/p2p/...") must be reduced to
-	// their IP component or they would never match a lookup.
+	// their IP component or they would never match a lookup. The addresses
+	// are read before the block below closes the connections that carry them.
+	var bannedIPs []net.IP
 	if s.P2PClient != nil && s.banList != nil {
 		seen := make(map[string]struct{})
-		for _, p := range s.P2PClient.GetPeers() {
-			if p.ID != pid.String() {
+		for _, addr := range s.P2PClient.PeerAddrs(pid.String()) {
+			ip := extractIPFromMultiaddr(addr)
+			if ip == "" {
 				continue
 			}
-			for _, addr := range p.Addrs {
-				ip := extractIPFromMultiaddr(addr)
-				if ip == "" {
-					continue
-				}
-				if _, dup := seen[ip]; dup {
-					continue
-				}
-				seen[ip] = struct{}{}
-				if err := s.banList.Add(context.Background(), ip, until); err != nil {
-					s.logger.Errorf("[onPeerBanned] failed to add %s to ban list: %v", ip, err)
-				}
+			if _, dup := seen[ip]; dup {
+				continue
 			}
-			break
+			seen[ip] = struct{}{}
+			if err := s.banList.Add(context.Background(), ip, until); err != nil {
+				s.logger.Errorf("[onPeerBanned] failed to add %s to ban list: %v", ip, err)
+				continue
+			}
+			bannedIPs = append(bannedIPs, net.ParseIP(ip))
 		}
 	}
 
+	s.blockBannedPeer(pid.String(), bannedIPs)
 	s.disconnectBannedPeerByID(s.gCtx, pid, reason)
 }
 

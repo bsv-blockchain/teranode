@@ -1419,9 +1419,10 @@ func (s *Server) reconcileConnectionStates(ctx context.Context) {
 // is intentionally deferred to a follow-up PR; the Cleanup method itself ships in PR1).
 
 func (s *Server) listenForBanEvents(ctx context.Context) {
-	// Without a libp2p connection gater we cannot refuse dials from banned
-	// addresses, so periodically re-check connected peers against the ban list
-	// to catch peers that reconnected after the initial ban event.
+	// Ban-list events cover local adds and removes only. The sweep re-syncs
+	// the admission rules for everything else (expiry, bans another process
+	// wrote, registry bans that lapsed), and drops at the application layer
+	// any registry entry still connected from a banned address.
 	sweep := time.NewTicker(banSweepInterval)
 	defer sweep.Stop()
 
@@ -1432,14 +1433,21 @@ func (s *Server) listenForBanEvents(ctx context.Context) {
 		case event := <-s.banChan:
 			s.handleBanEvent(ctx, event)
 		case <-sweep.C:
+			s.refreshBannedPeersIfStale()
+			s.syncAdmissionBans()
 			s.disconnectPeersOnBanList(ctx, "address on ban list")
 		}
 	}
 }
 
 func (s *Server) handleBanEvent(ctx context.Context, event BanEvent) {
+	// Adds and removes both move the admission rules. Events are delivered
+	// from separate goroutines in no guaranteed order, which is why this
+	// re-syncs from the list rather than applying the event itself.
+	s.syncAdmissionBans()
+
 	if event.Action != banActionAdd {
-		return // we only care about new bans
+		return
 	}
 
 	if event.PeerID != "" {
@@ -1457,8 +1465,8 @@ func (s *Server) handleBanEvent(ctx context.Context, event BanEvent) {
 	}
 
 	// IP/subnet ban with no PeerID (operator BanPeer RPC, startup replay). The
-	// ban list has already been updated, so disconnect every connected peer
-	// whose address matches an entry.
+	// sync above closed the connections at admission; drop the matching
+	// peers at the application layer too.
 	s.disconnectPeersOnBanList(ctx, event.Reason)
 }
 
@@ -1556,18 +1564,17 @@ func (s *Server) checkMultiaddrBanned(ctx context.Context, addrStr string) (bool
 	return false, nil
 }
 
-// disconnectPeersOnBanList disconnects every connected peer whose multiaddr IP
-// matches an entry (IP or subnet) in the IP-based ban list.
+// disconnectPeersOnBanList drops at the application layer every registry
+// peer still connected from an address on the IP-based ban list. Admission
+// closes those connections when their rule is applied (syncAdmissionBans),
+// so normally nothing matches here; a match is a connection whose rule has
+// not been applied yet or whose Block* call failed, and the sync retries
+// that. Peers not in the registry are left alone, so a connection that
+// outlives a failed block is not re-reported on every sweep.
 func (s *Server) disconnectPeersOnBanList(ctx context.Context, reason string) {
 	if s.P2PClient == nil || s.banList == nil {
 		return
 	}
-
-	// Without network severance a banned peer stays connected at the libp2p
-	// layer forever, so the periodic sweep would re-match it on every pass.
-	// Only act when there is something to do: the peer re-entered the registry
-	// or the client can actually close the connection.
-	_, canSever := s.P2PClient.(networkDisconnector)
 
 	for _, p := range s.P2PClient.GetPeers() {
 		for _, addr := range p.Addrs {
@@ -1582,7 +1589,7 @@ func (s *Server) disconnectPeersOnBanList(ctx context.Context, reason string) {
 				break
 			}
 
-			if _, inRegistry := s.getPeer(pid); inRegistry || canSever {
+			if _, inRegistry := s.getPeer(pid); inRegistry {
 				s.disconnectBannedPeerByID(ctx, pid, reason)
 			}
 
@@ -1591,26 +1598,13 @@ func (s *Server) disconnectPeersOnBanList(ctx context.Context, reason string) {
 	}
 }
 
-// networkDisconnector is implemented by P2P clients that can sever the
-// underlying libp2p connection. go-p2p-message-bus does not implement it as of
-// v0.1.17 (nothing up to v0.1.23 exposes the host, a gater, or a disconnect);
-// once the library gains this capability, network-layer ban enforcement starts
-// working here without further changes.
-type networkDisconnector interface {
-	DisconnectPeer(ctx context.Context, peerID peer.ID) error
-}
-
 // disconnectBannedPeerByID drops a peer at the application layer (registry +
-// sync coordinator) and, when the P2P client supports it, closes the libp2p
-// connection as well.
-func (s *Server) disconnectBannedPeerByID(ctx context.Context, peerID peer.ID, reason string) {
+// sync coordinator). Closing its connections is the caller's part, through
+// the bus: a ban blocks the peer or its address at admission, which closes
+// them (onPeerBanned, syncAdmissionBans), and an operator disconnect severs
+// them (severPeer).
+func (s *Server) disconnectBannedPeerByID(_ context.Context, peerID peer.ID, reason string) {
 	s.logger.Infof("[disconnectBannedPeerByID] Disconnecting banned peer %s (reason: %s)", peerID, reason)
-
-	if nd, ok := s.P2PClient.(networkDisconnector); ok {
-		if err := nd.DisconnectPeer(ctx, peerID); err != nil {
-			s.logger.Errorf("[disconnectBannedPeerByID] network disconnect of %s failed: %v", peerID, err)
-		}
-	}
 
 	s.removePeer(peerID)
 }

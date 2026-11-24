@@ -2,6 +2,7 @@ package p2p
 
 import (
 	"context"
+	"net"
 	"reflect"
 	"strings"
 	"testing"
@@ -359,5 +360,6 @@ func (noopBanList) Remove(_ context.Context, _ string) error           { return 
 func (noopBanList) Clear()                                             {}
 func (noopBanList) IsBanned(string) bool                               { return false }
 func (noopBanList) ListBanned() []string                               { return nil }
+func (noopBanList) ActiveNetworks() []*net.IPNet                       { return nil }
 func (noopBanList) Subscribe() chan BanEvent                           { return make(chan BanEvent, 1) }
 func (noopBanList) Unsubscribe(chan BanEvent)                          {}

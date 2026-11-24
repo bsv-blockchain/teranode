@@ -550,6 +550,27 @@ func (b *BanList) ListBanned() []string {
 	return banned
 }
 
+// ActiveNetworks returns the network of every ban whose expiration is still
+// ahead. It filters on expiration itself, so an entry that has lapsed but not
+// been purged yet is left out. It is linear in the entries: it is meant for
+// callers that mirror the list elsewhere (the p2p service's connection
+// admission), not for per-message checks.
+func (b *BanList) ActiveNetworks() []*net.IPNet {
+	now := time.Now()
+
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+
+	active := make([]*net.IPNet, 0, len(b.bannedPeers))
+	for _, info := range b.bannedPeers {
+		if info.Subnet != nil && info.ExpirationTime.After(now) {
+			active = append(active, info.Subnet)
+		}
+	}
+
+	return active
+}
+
 func (b *BanList) Subscribe() chan BanEvent {
 	b.mu.Lock()
 	defer b.mu.Unlock()

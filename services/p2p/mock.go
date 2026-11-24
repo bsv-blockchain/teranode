@@ -183,6 +183,11 @@ func (m *MockBanList) ListBanned() []string {
 	return args.Get(0).([]string)
 }
 
+func (m *MockBanList) ActiveNetworks() []*net.IPNet {
+	args := m.Called()
+	return args.Get(0).([]*net.IPNet)
+}
+
 func (m *MockBanList) Subscribe() chan BanEvent {
 	args := m.Called()
 	return args.Get(0).(chan BanEvent)
