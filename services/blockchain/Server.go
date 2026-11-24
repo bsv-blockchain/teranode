@@ -744,7 +744,8 @@ func (b *Blockchain) Start(ctx context.Context, readyCh chan<- struct{}) error {
 
 	// Start TTL+LRU cleanup so the registry can't grow unboundedly under
 	// peer churn. The driver loop is owned by the registry; we just feed it
-	// the operator-configured cadence and bounds. A zero interval disables.
+	// the operator-configured cadence and bounds. A zero interval disables the
+	// loop only: Register still enforces maxSize at insert.
 	b.peerRegistry.StartCleanup(ctx, cleanupInterval, registryTTL, maxSize)
 
 	go b.startSubscriptions()

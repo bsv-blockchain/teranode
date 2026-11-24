@@ -1499,6 +1499,117 @@ func TestCentralizedPeerRegistry_Register_TrimsOverCapRegistryInOneCall(t *testi
 	require.True(t, ok, "the new peer must be inserted")
 }
 
+// The bulk trim starts only when a new peer arrives at the cap, and then frees
+// maxSize/10 slots, so the next maxSize/10 - 1 new peers insert without
+// evicting anything.
+func TestCentralizedPeerRegistry_Register_BulkTrimStartsAtCapAndLeavesHeadroom(t *testing.T) {
+	const maxSize = 100
+	r := NewCentralizedPeerRegistry(DefaultBanConfig())
+	configureInlineCap(t, r, maxSize)
+
+	for i := 0; i < maxSize; i++ {
+		r.Register(&PeerInfo{ID: fmt.Sprintf("p-%03d", i)})
+		backdate(r, fmt.Sprintf("p-%03d", i), time.Duration(maxSize-i)*time.Second)
+	}
+	require.Equal(t, maxSize, r.Count(), "nothing is evicted below the cap")
+
+	r.Register(&PeerInfo{ID: "trigger"})
+	require.Equal(t, inlineTrimTarget(maxSize)+1, r.Count(), "the peer arriving at the cap trims to 90% and is inserted")
+	for i := 0; i < maxSize/10; i++ {
+		_, ok := r.Get(fmt.Sprintf("p-%03d", i))
+		require.False(t, ok, "the oldest peers are trimmed first")
+	}
+
+	for i := 0; i < maxSize/10-1; i++ {
+		before := r.Count()
+		r.Register(&PeerInfo{ID: fmt.Sprintf("after-%d", i)})
+		require.Equal(t, before+1, r.Count(), "inserts inside the freed headroom must not evict")
+	}
+	require.Equal(t, maxSize, r.Count())
+}
+
+// The optional part of the bulk trim (below maxSize-1) only removes peers with
+// no history. When higher tiers fill more than 90% of the cap, a new peer must
+// evict just enough to fit, and penalised records must survive: their penalty
+// lives only in PeerInfo.
+func TestCentralizedPeerRegistry_Register_BulkTrimStopsAtNoHistoryBoundary(t *testing.T) {
+	const maxSize = 100
+	r := NewCentralizedPeerRegistry(DefaultBanConfig())
+	configureInlineCap(t, r, maxSize)
+
+	penaltyUntil := time.Now().Add(time.Hour)
+	r.Register(&PeerInfo{ID: "storage-penalised", FullStoragePenaltyUntil: penaltyUntil})
+	r.Register(&PeerInfo{ID: "malicious"})
+	r.UpdateMetrics("malicious", 0, 0, 0, false, false, true, 0)
+	backdate(r, "storage-penalised", 3*time.Hour)
+	backdate(r, "malicious", 3*time.Hour)
+
+	for i := 0; i < 93; i++ {
+		id := fmt.Sprintf("served-%02d", i)
+		r.Register(&PeerInfo{ID: id})
+		r.RecordBlockReceived(id, 100)
+		backdate(r, id, 2*time.Hour)
+	}
+	for i := 0; i < 5; i++ {
+		r.Register(&PeerInfo{ID: fmt.Sprintf("none-%d", i)})
+	}
+	require.Equal(t, maxSize, r.Count())
+
+	r.Register(&PeerInfo{ID: "new"})
+
+	require.Equal(t, maxSize-5+1, r.Count(), "only the 5 history-less peers are trimmed")
+	got, ok := r.Get("storage-penalised")
+	require.True(t, ok, "the optional trim must not evict a penalised record")
+	require.True(t, got.FullStoragePenaltyUntil.Equal(penaltyUntil), "the storage penalty must survive")
+	got, ok = r.Get("malicious")
+	require.True(t, ok)
+	require.Equal(t, int64(1), got.MaliciousCount)
+
+	// Re-registering with full storage while penalised must not promote it.
+	r.Register(&PeerInfo{ID: "storage-penalised", Storage: "full"})
+	got, _ = r.Get("storage-penalised")
+	require.Empty(t, got.Storage, "an active storage penalty must keep blocking full-storage promotion")
+}
+
+// With no history-less peers left, the new peer still gets in by evicting
+// exactly one entry, the lowest-tier oldest one.
+func TestCentralizedPeerRegistry_Register_NoHistoryExhaustedEvictsExactlyOne(t *testing.T) {
+	const maxSize = 20
+	r := NewCentralizedPeerRegistry(DefaultBanConfig())
+	configureInlineCap(t, r, maxSize)
+
+	for i := 0; i < maxSize; i++ {
+		id := fmt.Sprintf("served-%02d", i)
+		r.Register(&PeerInfo{ID: id})
+		r.RecordBlockReceived(id, 100)
+		backdate(r, id, time.Duration(maxSize-i)*time.Second)
+	}
+
+	r.Register(&PeerInfo{ID: "new"})
+
+	require.Equal(t, maxSize, r.Count(), "exactly one peer makes room for the new one")
+	_, ok := r.Get("served-00")
+	require.False(t, ok, "the oldest peer of the lowest tier present is the one evicted")
+	_, ok = r.Get("new")
+	require.True(t, ok)
+}
+
+// When connected, active peers alone exceed maxSize, Cleanup evicts only what it
+// can and reports that number, not the shortfall.
+func TestCentralizedPeerRegistry_Cleanup_ReportsActualEvictionsWhenExemptExceedCap(t *testing.T) {
+	r := NewCentralizedPeerRegistry(DefaultBanConfig())
+
+	for _, id := range []string{"c1", "c2", "c3"} {
+		r.Register(&PeerInfo{ID: id})
+		r.UpdateConnectionState(id, true)
+	}
+	r.Register(&PeerInfo{ID: "idle"})
+
+	_, lru := r.Cleanup(1, 24*time.Hour)
+	require.Equal(t, 1, lru, "only the one non-exempt peer can be evicted")
+	require.Equal(t, 3, r.Count())
+}
+
 func TestEvictionTier(t *testing.T) {
 	now := time.Now()
 	work := []byte{0x01}
@@ -1635,6 +1746,33 @@ func BenchmarkCentralizedPeerRegistry_RegisterAtCap(b *testing.B) {
 	for i := 0; i < maxSize; i++ {
 		r.Register(&PeerInfo{ID: fmt.Sprintf("seed-%05d", i)})
 	}
+
+	ids := make([]string, b.N)
+	for i := range ids {
+		ids[i] = fmt.Sprintf("flood-%09d", i)
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		r.Register(&PeerInfo{ID: ids[i]})
+	}
+}
+
+// BenchmarkCentralizedPeerRegistry_RegisterAtCapMostlyConnected is the worst
+// case for the inline trim: connected, active peers fill all but one slot, so
+// every new peer frees only its own slot and pays a full scan.
+func BenchmarkCentralizedPeerRegistry_RegisterAtCapMostlyConnected(b *testing.B) {
+	const maxSize = 10000
+	r := NewCentralizedPeerRegistry(DefaultBanConfig())
+	r.StartCleanup(context.Background(), 0, 24*time.Hour, maxSize)
+	defer r.Close()
+
+	for i := 0; i < maxSize-1; i++ {
+		id := fmt.Sprintf("connected-%05d", i)
+		r.Register(&PeerInfo{ID: id})
+		r.UpdateConnectionState(id, true)
+	}
+	r.Register(&PeerInfo{ID: "disposable"})
 
 	ids := make([]string, b.N)
 	for i := range ids {

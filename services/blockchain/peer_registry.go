@@ -244,6 +244,10 @@ type CentralizedPeerRegistry struct {
 	maxSize int
 	sizeTTL time.Duration
 
+	// evictBuf is evictToSizeLocked's scratch slice, reused across calls so a
+	// trim allocates nothing. Guarded by mu.
+	evictBuf []evictionCandidate
+
 	// saveMu serializes Save() so concurrent callers (periodic ticker +
 	// shutdown) cannot persist an older snapshot over a newer one. Without
 	// it, two saves can each take their own consistent state-snapshot, then
@@ -345,9 +349,11 @@ func (r *CentralizedPeerRegistry) SaveDisabled() bool {
 // minted offline for free, so between sweeps the map would otherwise grow as
 // fast as a flooder can sign messages. A new peer arriving at the cap evicts
 // rather than being refused, because refusing would let a flooder pre-fill the
-// map and lock honest peers out. Eviction trims to inlineTrimTarget in one
-// sorted pass (see evictToSizeLocked), so the cost is paid once per
-// maxSize/inlineTrimDivisor inserts instead of on every insert.
+// map and lock honest peers out. One sorted pass (see evictToSizeLocked) frees
+// the slot for the new peer from whichever tier is lowest, then keeps trimming
+// down to inlineTrimTarget through peers with no history only, so their
+// eviction cost is shared by the inserts that follow. Penalised records are
+// never trimmed for headroom: their penalty lives only in PeerInfo.
 func (r *CentralizedPeerRegistry) Register(info *PeerInfo) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -358,7 +364,7 @@ func (r *CentralizedPeerRegistry) Register(info *PeerInfo) {
 	if !exists {
 		if r.maxSize > 0 && len(r.peers) >= r.maxSize {
 			r.expireBansLocked()
-			r.evictToSizeLocked(inlineTrimTarget(r.maxSize), now, r.sizeTTL)
+			r.evictToSizeLocked(r.maxSize-1, inlineTrimTarget(r.maxSize), now, r.sizeTTL)
 		}
 
 		entry := clonePeerInfo(info)
@@ -1467,13 +1473,16 @@ func (r *CentralizedPeerRegistry) Cleanup(maxSize int, ttl time.Duration) (int, 
 		return expired, 0
 	}
 
-	return expired, r.evictToSizeLocked(maxSize, now, ttl)
+	return expired, r.evictToSizeLocked(maxSize, maxSize, now, ttl)
 }
 
-// inlineTrimDivisor sets how far below the cap Register trims once the cap is
-// reached: to maxSize - maxSize/inlineTrimDivisor. Trimming in bulk amortises
-// the sorted pass over that many inserts, so a flood at the cap does not pay a
-// full scan under the write lock per new peer.
+// inlineTrimDivisor sets how far below the cap Register may trim once the cap
+// is reached: to maxSize - maxSize/inlineTrimDivisor, through peers with no
+// history only. Trimming in bulk amortises the sorted pass over the inserts
+// that fill the freed slots, so a flood at the cap does not pay a full scan
+// under the write lock per new peer. When connected peers and peers with
+// history fill all but a few slots, few slots are freed and the scan runs
+// correspondingly more often, up to once per new peer.
 const inlineTrimDivisor = 10
 
 // inlineTrimTarget is the size Register trims the registry to when a new peer
@@ -1482,36 +1491,30 @@ func inlineTrimTarget(maxSize int) int {
 	return maxSize - max(1, maxSize/inlineTrimDivisor)
 }
 
-// evictToSizeLocked evicts peers until at most size remain, or until only
-// connected peers active within ttl are left; those are never evicted for
-// size. Returns the number evicted. The caller must hold the write lock and
-// have normalised expired bans (expireBansLocked), so a stale IsBanned flag
-// does not keep an idle peer in the negative tier.
+// evictToSizeLocked evicts peers until at most size remain, then keeps
+// evicting peers with no history until at most noHistorySize remain
+// (noHistorySize <= size). Connected peers active within ttl are never evicted
+// for size, so either bound may be missed. Returns the number evicted. The
+// caller must hold the write lock and have normalised expired bans
+// (expireBansLocked), so a stale IsBanned flag does not keep an idle peer in
+// the negative tier.
 //
 // Eviction order is evictionTier first, then least recently active within a
 // tier. The tiers are what keep a rotating-identity flood from washing honest
 // peers out; see evictionTier for the order and why.
-func (r *CentralizedPeerRegistry) evictToSizeLocked(size int, now time.Time, ttl time.Duration) int {
-	toEvict := len(r.peers) - size
+func (r *CentralizedPeerRegistry) evictToSizeLocked(size, noHistorySize int, now time.Time, ttl time.Duration) int {
+	required := len(r.peers) - size
+	toEvict := len(r.peers) - noHistorySize
 	if toEvict <= 0 {
 		return 0
 	}
 
-	type candidate struct {
-		id   string
-		tier int
-		last time.Time
-	}
-	candidates := make([]candidate, 0, len(r.peers))
+	candidates := r.evictBuf[:0]
 	for id, info := range r.peers {
 		if isConnectedAndActive(info, now, ttl) {
 			continue
 		}
-		candidates = append(candidates, candidate{id: id, tier: evictionTier(info, now), last: peerActivity(info)})
-	}
-
-	if toEvict > len(candidates) {
-		toEvict = len(candidates)
+		candidates = append(candidates, evictionCandidate{id: id, tier: evictionTier(info, now), last: peerActivity(info)})
 	}
 
 	sort.Slice(candidates, func(i, j int) bool {
@@ -1521,11 +1524,26 @@ func (r *CentralizedPeerRegistry) evictToSizeLocked(size int, now time.Time, ttl
 		return candidates[i].last.Before(candidates[j].last)
 	})
 
-	for i := 0; i < toEvict; i++ {
-		delete(r.peers, candidates[i].id)
+	evicted := 0
+	for _, c := range candidates {
+		if evicted == toEvict || (evicted >= required && c.tier != evictionTierNoHistory) {
+			break
+		}
+		delete(r.peers, c.id)
+		evicted++
 	}
 
-	return toEvict
+	clear(candidates) // drop references to evicted peer IDs
+	r.evictBuf = candidates[:0]
+
+	return evicted
+}
+
+// evictionCandidate is one peer considered by evictToSizeLocked.
+type evictionCandidate struct {
+	id   string
+	tier int
+	last time.Time
 }
 
 // Eviction tiers for evictToSizeLocked, lowest evicted first.
