@@ -359,6 +359,7 @@ func (c *Client) AddBlock(ctx context.Context, block *model.Block, peerID string
 		OptionInvalid:     storeBlockOptions.Invalid,
 		OptionID:          storeBlockOptions.ID,
 		CoinbaseBump:      block.CoinbaseBUMP,
+		LaneMapRows:       laneMapRowsToProto(storeBlockOptions.LaneMapRows),
 	}
 
 	for _, subtreeHash := range block.Subtrees {
