@@ -1,11 +1,11 @@
 diff --git a/services/blockassembly/subtreeprocessor/reorg_fast_path.go b/services/blockassembly/subtreeprocessor/reorg_fast_path.go
-index 396db0b79..62db0b7c4 100644
+index 04cca29c7..1b5cdc778 100644
 --- a/services/blockassembly/subtreeprocessor/reorg_fast_path.go
 +++ b/services/blockassembly/subtreeprocessor/reorg_fast_path.go
-@@ -204,7 +204,7 @@ func (stp *SubtreeProcessor) planFastReorg(ctx context.Context, moveBackBlocks,
+@@ -202,7 +202,7 @@ func (stp *SubtreeProcessor) planFastReorg(ctx context.Context, moveBackBlocks,
  
- 	if usePrepared {
- 		plan.winners, conflicting = preparedWinners, preparedConflicting
+ 	if prepared != nil {
+ 		plan.winners, conflicting = prepared.txMap, prepared.conflicting
 -	} else if plan.winners, conflicting, err = stp.buildUnionSet(ctx, moveForwardBlocks); err != nil {
 +	} else if plan.winners, conflicting, err = stp.buildUnionSet(ctx, moveForwardBlocks[len(moveForwardBlocks)-1:]); err != nil {
  		stp.logger.Warnf("[reorgInPlace] cannot build the set of the winning blocks, declining: %v", err)

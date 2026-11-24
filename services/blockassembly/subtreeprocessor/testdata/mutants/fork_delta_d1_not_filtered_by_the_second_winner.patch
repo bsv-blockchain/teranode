@@ -1,0 +1,13 @@
+diff --git a/services/blockassembly/subtreeprocessor/fork_lost_delta.go b/services/blockassembly/subtreeprocessor/fork_lost_delta.go
+index 45a5be01a..cd196c015 100644
+--- a/services/blockassembly/subtreeprocessor/fork_lost_delta.go
++++ b/services/blockassembly/subtreeprocessor/fork_lost_delta.go
+@@ -186,7 +186,7 @@ func deriveForkDelta(pre *reorgDelta, mask []atomic.Uint64, union *SortedHashSet
+ 		g.Go(func() error {
+ 			for _, node := range pre.D1[c*forkDeltaChunk : min((c+1)*forkDeltaChunk, len(pre.D1))] {
+ 				pos, ok := union.Find(node.Hash)
+-				if !ok {
++				if !ok || pre != nil {
+ 					chunks[c] = append(chunks[c], node)
+ 					continue
+ 				}

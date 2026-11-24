@@ -1,0 +1,13 @@
+diff --git a/services/blockassembly/subtreeprocessor/fork_lost_delta.go b/services/blockassembly/subtreeprocessor/fork_lost_delta.go
+index 45a5be01a..5a7b1b53c 100644
+--- a/services/blockassembly/subtreeprocessor/fork_lost_delta.go
++++ b/services/blockassembly/subtreeprocessor/fork_lost_delta.go
+@@ -210,7 +210,7 @@ func deriveForkDelta(pre *reorgDelta, mask []atomic.Uint64, union *SortedHashSet
+ 	}
+ 
+ 	delta.Hits = pre.Hits + uint64(len(pre.D1)-len(delta.D1))
+-	delta.D2 = unsetPositions(union, bitmap, workers)
++	delta.D2 = pre.D2
+ 
+ 	return delta
+ }
