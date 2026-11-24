@@ -253,37 +253,29 @@ func TestInMemoryConsumer_CloseCancelsTheInternalContext(t *testing.T) {
 	require.NoError(t, consumer.Close())
 	require.True(t, consumer.isClosed())
 
-	// The consumer channel is still registered — InMemoryConsumerGroup.Close() never
-	// closes it — so records produced now are still delivered to the handler.
-	require.NoError(t, broker.Produce(context.Background(), topic, []byte("fail-2"), []byte("v")))
+	// The claim stops on the cancelled internal context, so the consume goroutine unwinds
+	// and removes its channel from the topic with no further message. On the unfixed code
+	// Close() cancelled nothing and the channel stayed registered for good.
+	require.Eventually(t, func() bool { return !broker.HasConsumer(topic) }, 5*time.Second, 5*time.Millisecond,
+		"Close() must cancel the internal context, so the consumer unregisters from the topic")
 
-	require.Eventually(t, func() bool { return seenCount() == 3 }, 5*time.Second, 5*time.Millisecond,
-		"the record after Close is still delivered")
-
-	// That failure was returned rather than skipped, because the internal context is now
-	// done — which ends ConsumeClaim. Nothing produced afterwards can be handled. On the
-	// unfixed code Close() cancelled nothing, the failure was skipped, and this record
-	// WOULD have been handled.
 	require.NoError(t, broker.Produce(context.Background(), topic, []byte("ok-2"), []byte("v")))
-
-	require.Never(t, func() bool { return seenCount() > 3 }, 500*time.Millisecond, 20*time.Millisecond,
-		"Close() must cancel the internal context, so a post-Close failure is returned and stops the consumer")
+	require.Never(t, func() bool { return seenCount() > 2 }, 500*time.Millisecond, 20*time.Millisecond,
+		"no record produced after Close() may reach the handler")
 }
 
 // TestInMemoryConsumer_CloseDoesNotJoinTheConsumeGoroutine pins what Close() on the
-// in-memory path does and does not do, because the comment describing it had drifted
-// and the consumer group carried a WaitGroup that made the stronger reading look true.
+// in-memory path does and does not do.
 //
-// Close() cancels the internal context and marks the group closed. It does NOT join
-// the consume goroutine, and it must not try to: that goroutine is parked in
-// `range claim.Messages()` and nothing wakes it until a further message arrives, so a
-// join would block for as long as the topic stays quiet. The WaitGroup that suggested
-// otherwise was never Add()-ed — its Wait() returned immediately — and has been
-// removed rather than left implying a guarantee it never provided.
+// Close() cancels the internal context and marks the group closed. It does NOT join the
+// consume goroutine: a handler can be inside a message when Close() runs, and a join
+// would wait on it. The goroutine unwinds by itself instead, because the claim stops
+// forwarding on the cancelled context, and Consume then removes its channel from the
+// topic.
 //
-// Asserted behaviourally, on a message counter, rather than on runtime.NumGoroutine():
-// a goroutine count sampled inside require.Eventually is measured from a goroutine
-// that require.Eventually itself spawned, which cancels out the very exit under test.
+// Asserted behaviourally, on a blocked handler and on the broker's consumer list, rather
+// than on runtime.NumGoroutine(): a goroutine count sampled inside require.Eventually is
+// measured from a goroutine that require.Eventually itself spawned.
 func TestInMemoryConsumer_CloseDoesNotJoinTheConsumeGoroutine(t *testing.T) {
 	const topic = "close-does-not-join-topic"
 
@@ -309,6 +301,15 @@ func TestInMemoryConsumer_CloseDoesNotJoinTheConsumeGoroutine(t *testing.T) {
 		return len(seen)
 	}
 
+	release := make(chan struct{})
+	t.Cleanup(func() {
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+	})
+
 	// Deliberately not cancellable, so the promptness assertion below is about Close()
 	// on its own and not about a parent cancellation racing it.
 	consumer.Start(context.Background(), func(msg *KafkaMessage) error {
@@ -318,12 +319,8 @@ func TestInMemoryConsumer_CloseDoesNotJoinTheConsumeGoroutine(t *testing.T) {
 		seen = append(seen, key)
 		mu.Unlock()
 
-		// Enough work per message that the goroutine is demonstrably handling records
-		// rather than draining a channel instantly.
-		time.Sleep(5 * time.Millisecond)
-
-		if strings.HasPrefix(key, "fail") {
-			return errors.NewProcessingError("handler refused %s", key)
+		if key == "slow" {
+			<-release
 		}
 
 		return nil
@@ -331,30 +328,27 @@ func TestInMemoryConsumer_CloseDoesNotJoinTheConsumeGoroutine(t *testing.T) {
 
 	require.Eventually(t, func() bool { return broker.HasConsumer(topic) }, 2*time.Second, 5*time.Millisecond)
 
-	// Put one record through, so the consume goroutine is known to be running and is
-	// now parked between messages — the state in which a join would never return.
-	require.NoError(t, broker.Produce(context.Background(), topic, []byte("ok-1"), []byte("v")))
+	// Put the consume goroutine inside a handler that does not return until released:
+	// the state in which a joining Close() could never return.
+	require.NoError(t, broker.Produce(context.Background(), topic, []byte("slow"), []byte("v")))
 	require.Eventually(t, func() bool { return seenCount() == 1 }, 5*time.Second, 5*time.Millisecond,
-		"precondition: the consume goroutine is live and has parked waiting for the next record")
+		"precondition: the handler is running and blocked")
 
 	start := time.Now()
 	require.NoError(t, consumer.Close())
-	require.Less(t, time.Since(start), 2*time.Second, "Close must not wait on the parked consume goroutine")
+	require.Less(t, time.Since(start), 2*time.Second, "Close must not wait on the consume goroutine")
 	require.True(t, consumer.isClosed(), "Close marks the group closed even though the goroutine outlives it")
 
-	// The goroutine outlived Close(): its channel is still registered on the topic and
-	// the next record still reaches the handler. A Close() that joined could not
-	// produce this observation.
-	require.NoError(t, broker.Produce(context.Background(), topic, []byte("fail-after-close"), []byte("v")))
-	require.Eventually(t, func() bool { return seenCount() == 2 }, 5*time.Second, 5*time.Millisecond,
-		"Close does not end the consume goroutine; the record after it is still delivered")
+	// Once the handler returns, the goroutine unwinds on the cancelled context, with no
+	// further message needed, and the topic has no consumer left.
+	close(release)
 
-	// That record is where it unwinds: with the internal context done, the wrapper
-	// returns the handler failure instead of skipping it, and the returned error ends
-	// ConsumeClaim. So the unwind is driven by the next message, not by Close itself.
-	require.NoError(t, broker.Produce(context.Background(), topic, []byte("ok-2"), []byte("v")))
-	require.Never(t, func() bool { return seenCount() > 2 }, 500*time.Millisecond, 20*time.Millisecond,
-		"the goroutine unwinds on the message after Close, not on Close")
+	require.Eventually(t, func() bool { return !broker.HasConsumer(topic) }, 5*time.Second, 5*time.Millisecond,
+		"the consume goroutine must unwind and unregister after Close")
+
+	require.NoError(t, broker.Produce(context.Background(), topic, []byte("ok-after-close"), []byte("v")))
+	require.Never(t, func() bool { return seenCount() > 1 }, 500*time.Millisecond, 20*time.Millisecond,
+		"no record produced after the unwind may reach the handler")
 }
 
 // TestInMemoryConsumer_HandlerContextErrorDoesNotSkipRecordsOrKillConsumer drives the

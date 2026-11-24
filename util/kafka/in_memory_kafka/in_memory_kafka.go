@@ -321,7 +321,8 @@ func (mcg *InMemoryConsumerGroup) Errors() <-chan error {
 }
 
 // Close cancels the consume context and marks the group closed. It does not wait for
-// the consume goroutine to finish — see the comment inside.
+// the consume goroutine: that goroutine stops on the cancelled context and unregisters
+// from the topic by itself.
 func (mcg *InMemoryConsumerGroup) Close() error {
 	mcg.mu.Lock()
 	if !mcg.isRunning {
@@ -335,10 +336,10 @@ func (mcg *InMemoryConsumerGroup) Close() error {
 		if mcg.cancelConsume != nil {
 			mcg.cancelConsume()
 		}
-		// Close cancels and marks the group closed; it does NOT join the consume
-		// goroutine. That goroutine is parked in `range claim.Messages()` and only
-		// unwinds once a further message arrives and its handler fails, so there is
-		// nothing here that can wait for it without risking a wait that never ends.
+		// Close does NOT join the consume goroutine. A handler can still be inside
+		// one message when Close runs, and a join would wait on that handler. The
+		// claim stops forwarding on the cancelled context instead, so the goroutine
+		// unwinds without a further message.
 		close(mcg.errors)
 		close(mcg.closed)
 		mcg.isRunning = false
@@ -421,6 +422,7 @@ func (mcg *InMemoryConsumerGroup) Consume(ctx context.Context, topics []string, 
 		topic:     topicToConsume,
 		partition: 0,
 		messages:  ch,
+		ctx:       internalCtx,
 		isPausedFunc: func() bool {
 			mcg.mu.Lock()
 			defer mcg.mu.Unlock()
@@ -504,6 +506,11 @@ type InMemoryConsumerGroupClaim struct {
 	partition    int32
 	messages     <-chan *Message
 	isPausedFunc func() bool
+
+	// ctx is Consume's internal context. Messages stops forwarding when it is done, so
+	// ConsumeClaim returns and Consume unregisters its channel from the topic. A nil ctx
+	// never stops, which is the behaviour of a claim built directly in a test.
+	ctx context.Context
 }
 
 func (c *InMemoryConsumerGroupClaim) Topic() string        { return c.topic }
@@ -515,15 +522,52 @@ func (c *InMemoryConsumerGroupClaim) HighWaterMarkOffset() int64 {
 func (c *InMemoryConsumerGroupClaim) Messages() <-chan *Message {
 	// Create a filtered channel that respects pause state
 	filtered := make(chan *Message, 100)
+	done := c.doneCh()
+
 	go func() {
 		defer close(filtered)
-		for msg := range c.messages {
-			// Wait while paused
-			for c.isPausedFunc != nil && c.isPausedFunc() {
-				time.Sleep(10 * time.Millisecond)
+
+		for {
+			// Receive before the pause check, so a message taken while unpaused is held
+			// across a pause that starts before it is delivered, not dropped.
+			var msg *Message
+
+			select {
+			case <-done:
+				return
+			case m, ok := <-c.messages:
+				if !ok {
+					return
+				}
+
+				msg = m
 			}
-			filtered <- msg
+
+			for c.isPausedFunc != nil && c.isPausedFunc() {
+				select {
+				case <-done:
+					return
+				case <-time.After(10 * time.Millisecond):
+				}
+			}
+
+			select {
+			case filtered <- msg:
+			case <-done:
+				return
+			}
 		}
 	}()
+
 	return filtered
+}
+
+// doneCh returns c.ctx.Done(), or nil when no ctx was set. A nil channel is never ready,
+// so a claim without a ctx forwards until its source channel closes.
+func (c *InMemoryConsumerGroupClaim) doneCh() <-chan struct{} {
+	if c.ctx == nil {
+		return nil
+	}
+
+	return c.ctx.Done()
 }
