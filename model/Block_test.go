@@ -1166,8 +1166,9 @@ func TestBlock_ValidWithOneTransaction(t *testing.T) {
 	coinbase, err := bt.NewTxFromString(CoinbaseHex)
 	require.NoError(t, err)
 
+	// A coinbase-only body is bound to its header by the coinbase txid.
 	b, err := NewBlock(
-		blockHeader,
+		bindCoinbaseOnlyHeader(t, blockHeader, coinbase),
 		coinbase,
 		[]*chainhash.Hash{},
 		1,
@@ -1342,7 +1343,7 @@ func TestBlock_Valid_DupTxDetected_NilSubtreeStore(t *testing.T) {
 	valid, err := b.Valid(context.Background(), ulogger.TestLogger{}, nil, nil, oldBlockIDs, currentChain, currentChainIDs, tSettings, nil)
 	require.False(t, valid)
 	require.Error(t, err)
-	require.True(t, errors.Is(err, errors.ErrBlockInvalid), "expected ErrBlockInvalid, got %v", err)
+	require.True(t, errors.IsBlockCorrupt(err), "expected a corrupt-body error, got %v", err)
 	require.Contains(t, err.Error(), "duplicate transaction")
 }
 
@@ -1712,7 +1713,7 @@ func TestBlock_CheckBlockRewardAndFees(t *testing.T) {
 		require.NoError(t, err)
 
 		// Test the function exists and handles basic input
-		err = block.checkBlockRewardAndFees(&chaincfg.MainNetParams)
+		err = block.checkBlockRewardAndFees(&chaincfg.MainNetParams, true)
 		require.NoError(t, err)
 	})
 }
@@ -2123,7 +2124,7 @@ func TestBlock_CheckMerkleRoot_DuplicateSubtreeRoots(t *testing.T) {
 
 	err = block.CheckMerkleRoot(context.Background())
 	require.Error(t, err)
-	require.True(t, errors.Is(err, errors.ErrBlockInvalid), "expected BlockInvalidError, got %v", err)
+	require.True(t, errors.IsBlockCorrupt(err), "expected a corrupt-body error, got %v", err)
 	require.Contains(t, err.Error(), "duplicate")
 	require.Contains(t, err.Error(), rootHash1.String())
 }
@@ -2162,7 +2163,7 @@ func TestBlock_CheckRewardAndFees_WithHeight(t *testing.T) {
 
 		// Test with a height that triggers the reward calculation logic
 		// This should error because coinbase output is too high
-		err = block.checkBlockRewardAndFees(&chaincfg.MainNetParams)
+		err = block.checkBlockRewardAndFees(&chaincfg.MainNetParams, true)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "coinbase output")
 	})
@@ -2508,7 +2509,9 @@ func TestTargetedCoverageIncrease(t *testing.T) {
 
 	t.Run("Valid function path coverage", func(t *testing.T) {
 		tSettings := test.CreateBaseTestSettings(t)
-		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{}, 1, 123, 0, 0)
+		// A coinbase-only body is bound to its header by the coinbase txid.
+		boundHeader := *blockHeader
+		block, err := NewBlock(bindCoinbaseOnlyHeader(t, &boundHeader, coinbase), coinbase, []*chainhash.Hash{}, 1, 123, 0, 0)
 		require.NoError(t, err)
 
 		ctx := context.Background()
@@ -4751,7 +4754,7 @@ func TestCheckMerkleRoot_RejectsMidStreamIncompleteSubtree(t *testing.T) {
 
 	err := block.CheckMerkleRoot(context.Background())
 	require.Error(t, err)
-	require.True(t, errors.Is(err, errors.ErrBlockInvalid), "expected BlockInvalidError, got %v", err)
+	require.True(t, errors.IsBlockCorrupt(err), "expected a corrupt-body error, got %v", err)
 	require.Contains(t, err.Error(), "only the final subtree may be incomplete")
 }
 
@@ -4765,7 +4768,7 @@ func TestCheckMerkleRoot_RejectsFinalSubtreeLargerThanFirst(t *testing.T) {
 
 	err := block.CheckMerkleRoot(context.Background())
 	require.Error(t, err)
-	require.True(t, errors.Is(err, errors.ErrBlockInvalid), "expected BlockInvalidError, got %v", err)
+	require.True(t, errors.IsBlockCorrupt(err), "expected a corrupt-body error, got %v", err)
 	require.Contains(t, err.Error(), "final subtree exceeds first subtree size")
 }
 
@@ -4798,7 +4801,7 @@ func TestCheckMerkleRoot_RejectsFirstSubtreeNotPowerOfTwo(t *testing.T) {
 
 	err := block.CheckMerkleRoot(context.Background())
 	require.Error(t, err)
-	require.True(t, errors.Is(err, errors.ErrBlockInvalid), "expected BlockInvalidError, got %v", err)
+	require.True(t, errors.IsBlockCorrupt(err), "expected a corrupt-body error, got %v", err)
 	require.Contains(t, err.Error(), "first subtree leaf count is not a power of two")
 }
 

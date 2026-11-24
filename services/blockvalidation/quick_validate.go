@@ -761,7 +761,7 @@ func (u *BlockValidation) validateSubtrees(ctx context.Context, block *model.Blo
 
 	// Verify merkle root
 	if err := block.CheckMerkleRoot(ctx); err != nil {
-		return 0, errors.NewProcessingError("[validateSubtrees][%s] merkle root mismatch", block.Hash().String(), err)
+		return 0, errors.NewProcessingError("[validateSubtrees][%s] merkle root mismatch", block.Hash().String(), model.CorruptAsInvalid(err))
 	}
 
 	return existingBlockID, nil
@@ -1687,12 +1687,14 @@ func (u *BlockValidation) authenticateQuickBlockBody(ctx context.Context, block 
 			unboundFiles = append(unboundFiles, catchupArtifactKey{hash: *hash, kind: fileformat.FileTypeSubtreeToCheck})
 		}
 	}
+	// The header is certified by a checkpoint, so a body that fails these checks keeps this
+	// path's invalid-body handling rather than the corrupt classification.
 	if err := model.CheckSubtreeSlicesForDuplicateTxs(body.SubtreeSlices); err != nil {
-		return cleanup, unboundCatchupArtifactsError(ctx, unboundFiles, err)
+		return cleanup, unboundCatchupArtifactsError(ctx, unboundFiles, model.CorruptAsInvalid(err))
 	}
 	if err := body.CheckMerkleRoot(ctx); err != nil {
 		return cleanup, unboundCatchupArtifactsError(ctx, unboundFiles,
-			errors.NewBlockInvalidError("[quickValidateBlock][%s] body does not match header merkle root", block.Hash().String(), err))
+			errors.NewBlockInvalidError("[quickValidateBlock][%s] body does not match header merkle root", block.Hash().String(), model.CorruptAsInvalid(err)))
 	}
 	var authenticatedCount uint64
 	// CheckMerkleRoot above already enforces subtree lengths and partitioning.

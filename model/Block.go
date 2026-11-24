@@ -475,40 +475,28 @@ func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore S
 		}
 	}
 
-	// 4. Check that the coinbase transaction is valid (reward checked later).
+	// 4. A body with no coinbase is a broken body, not a verdict on the block hash.
 	if b.CoinbaseTx == nil {
-		return false, errors.NewBlockInvalidError("[BLOCK][%s] block has no coinbase tx", b.String())
+		return false, errors.NewBlockCorruptError("[BLOCK][%s] block has no coinbase tx", b.String())
 	}
 
-	if !b.CoinbaseTx.IsCoinbase() {
-		return false, errors.NewBlockInvalidError("[BLOCK][%s] block coinbase tx is not a valid coinbase tx", b.String())
-	}
+	// From here until the body is bound to the header (the merkle root over the subtrees, or the
+	// coinbase txid for a body with no subtrees), a failed check cannot tell an honest block that
+	// was corrupted or doctored on the way to us apart from an invalid one. Such failures are
+	// classified corrupt: the caller re-downloads and charges the serving peer, and the block hash
+	// is never marked invalid. merkleRootChecked records that the binding ran.
+	merkleRootChecked := false
 
-	// We can only calculate the height from coinbase transactions in block versions 2 and higher
-
-	// https://en.bitcoin.it/wiki/BIP_0034
-	// BIP-34 was created to force miners to add the block height to the coinbase tx.
-	// This BIP came into effect at block 227,835, which is after the first halving
-	// at block 210,000.  Therefore, until this happened, we do not know the actual
-	// height of the block we are checking for.
-
-	// TODO - do this another way, if necessary
-
-	// 5. Check that the coinbase transaction includes the correct block height.
-	if b.Header.Version > 1 && b.Height > LastV1Block {
-		height, err := b.ExtractCoinbaseHeight()
-		if err != nil {
-			return false, errors.NewBlockInvalidError("[BLOCK][%s] error extracting coinbase height", b.String(), err)
+	if len(b.Subtrees) == 0 {
+		if err = b.checkCoinbaseOnlyBodyBound(); err != nil {
+			return false, err
 		}
 
-		if height != b.Height {
-			return false, errors.NewBlockInvalidError("[BLOCK][%s] block height in coinbase tx (%d) does not match block height in block header (%d)", b.String(), height, b.Height)
-		}
-	}
-
-	// only do the subtree checks if we have a subtree store
-	// missing the subtreeStore should only happen when we are validating an internal block
-	if subtreeStore != nil && len(b.Subtrees) > 0 {
+		merkleRootChecked = true
+	} else if subtreeStore != nil {
+		// only do the subtree checks if we have a subtree store
+		// missing the subtreeStore should only happen when we are validating an internal block
+		//
 		// 6. Get and validate any missing subtrees.
 		if err = b.GetAndValidateSubtrees(ctx, logger, subtreeStore, settings.Block.GetAndValidateSubtreesConcurrency); err != nil {
 			return false, err
@@ -516,12 +504,12 @@ func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore S
 
 		// Verify that we have at least one subtree and that it has at least one node
 		if len(b.SubtreeSlices) == 0 || len(b.SubtreeSlices[0].Nodes) == 0 {
-			return false, errors.NewBlockInvalidError("[BLOCK][%s] first subtree has no nodes", b.String())
+			return false, errors.NewBlockCorruptError("[BLOCK][%s] first subtree has no nodes", b.String())
 		}
 
 		// 7. Check that the first transaction in the first subtree is a coinbase placeholder (zeros)
 		if !b.SubtreeSlices[0].Nodes[0].Hash.Equal(subtreepkg.CoinbasePlaceholder) {
-			return false, errors.NewBlockInvalidError("[BLOCK][%s] first transaction in first subtree is not a coinbase placeholder: %s", b.String(), b.SubtreeSlices[0].Nodes[0].Hash.String())
+			return false, errors.NewBlockCorruptError("[BLOCK][%s] first transaction in first subtree is not a coinbase placeholder: %s", b.String(), b.SubtreeSlices[0].Nodes[0].Hash.String())
 		}
 
 		// 8. Calculate the merkle root of the list of subtrees and check it matches the MR in the block header.
@@ -529,21 +517,22 @@ func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore S
 		if err = b.CheckMerkleRoot(ctx); err != nil {
 			return false, err
 		}
+
+		merkleRootChecked = true
 	}
 
-	// 9. Check that the total fees of the block are less than or equal to the block reward.
-	// 10. Check that the coinbase transaction includes the correct block reward.
-	if b.Height > 0 {
-		err = b.checkBlockRewardAndFees(settings.ChainCfgParams)
-		if err != nil {
-			return false, err
-		}
+	// bindErr classifies the body-derived failures below: invalid once the body is bound to the
+	// header (it is then the miner's committed body), corrupt otherwise.
+	bindErr := func(format string, args ...interface{}) error {
+		return bindClassifiedError(merkleRootChecked, format, args...)
 	}
 
 	// 11. Check that there are no duplicate transactions in the block.
 	// CVE-2012-2459 guard — runs unconditionally so future callers passing nil subtreeStore
 	// don't silently skip dedup. checkDuplicateTransactions iterates SubtreeSlices in memory
-	// and does not need the subtree store directly.
+	// and does not need the subtree store directly. A duplicate-last mutation keeps the merkle
+	// root, so this runs before the coinbase and fee checks: a body that is both mutated and
+	// fee-wrong is reported as corrupt (re-download) rather than invalid.
 	//
 	// b.txMap is allocated inside checkDuplicateTransactions (possibly mid-execution
 	// when a worker fails). The deferred releaseTxMap below ensures the pooled
@@ -567,6 +556,53 @@ func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore S
 
 	if diskMap, ok := b.txMap.(*DiskTxMapUint64); ok {
 		ReportTxMapStats(diskMap.Stats())
+	}
+
+	// 4a. Check that the first transaction really is a coinbase. Runs after the binding: on a bound
+	// body the coinbase is the one the miner committed to, so a failure condemns the block.
+	if !b.CoinbaseTx.IsCoinbase() {
+		return false, bindErr("[BLOCK][%s] block coinbase tx is not a valid coinbase tx", b.String())
+	}
+
+	// 4b. Check that the coinbase scriptSig length is within consensus bounds (bad-cb-length):
+	// inclusive 2 <= size <= MaxCoinbaseScriptSigSize. IsCoinbase above guarantees one input; a
+	// nil UnlockingScript counts as length 0.
+	scriptSigLen := 0
+	if us := b.CoinbaseTx.Inputs[0].UnlockingScript; us != nil {
+		scriptSigLen = len(*us)
+	}
+
+	if scriptSigLen < 2 || scriptSigLen > int(settings.ChainCfgParams.MaxCoinbaseScriptSigSize) {
+		return false, bindErr("[BLOCK][%s] bad coinbase length", b.String())
+	}
+
+	// https://en.bitcoin.it/wiki/BIP_0034
+	// BIP-34 was created to force miners to add the block height to the coinbase tx.
+	// This BIP came into effect at block 227,835, which is after the first halving
+	// at block 210,000.  Therefore, until this happened, we do not know the actual
+	// height of the block we are checking for.
+	//
+	// 5. Check that the coinbase transaction includes the correct block height. Only the cause's
+	// text is passed on, so a typed cause can never make an unbound (corrupt) verdict also match
+	// ErrBlockInvalid.
+	if b.Header.Version > 1 && b.Height > LastV1Block {
+		height, err := b.ExtractCoinbaseHeight()
+		if err != nil {
+			return false, bindErr("[BLOCK][%s] error extracting coinbase height: %s", b.String(), err.Error())
+		}
+
+		if height != b.Height {
+			return false, bindErr("[BLOCK][%s] block height in coinbase tx (%d) does not match block height in block header (%d)", b.String(), height, b.Height)
+		}
+	}
+
+	// 9. Check that the total fees of the block are less than or equal to the block reward.
+	// 10. Check that the coinbase transaction includes the correct block reward.
+	if b.Height > 0 {
+		err = b.checkBlockRewardAndFees(settings.ChainCfgParams, merkleRootChecked)
+		if err != nil {
+			return false, err
+		}
 	}
 
 	// 12. Check that all transactions are in the valid order and blessed
@@ -618,14 +654,62 @@ func (b *Block) releaseTxMap() {
 	b.txMap = nil
 }
 
+// bindClassifiedError classifies a body-derived failure by whether the body was bound to the
+// header. A bound body is the miner's committed body, so the failure is genuine invalidity. An
+// unbound body is equally consistent with corruption in transit or a doctored body, so the
+// failure is corrupt and must never persist the invalid flag. Callers must not instead wrap an
+// invalid error inside a corrupt one: (*Error).Is walks the wrapped chain.
+func bindClassifiedError(merkleRootChecked bool, format string, args ...interface{}) error {
+	if merkleRootChecked {
+		return errors.NewBlockInvalidError(format, args...)
+	}
+
+	return errors.NewBlockCorruptError(format, args...)
+}
+
+// CorruptAsInvalid converts a corrupt-body error into a plain invalid-block error carrying the
+// same text, and returns any other error unchanged. It is for callers that keep their own
+// invalid-body handling and never persist the invalid flag for it: checkpoint quick validation,
+// whose header is certified by a checkpoint, and the legacy block path, which rejects the message.
+func CorruptAsInvalid(err error) error {
+	if !errors.IsBlockCorrupt(err) {
+		return err
+	}
+
+	return errors.NewBlockInvalidError("%s", err.Error())
+}
+
+// checkCoinbaseOnlyBodyBound binds a body that carries no subtrees to its header; bodies with
+// subtrees are bound by CheckMerkleRoot instead.
+//
+// A body with no subtrees claims the block holds only the coinbase, and for a single-transaction
+// block the merkle root is the coinbase txid. Without this check an honest multi-transaction
+// block served with an emptied subtree list reached the fee arithmetic with an unbound coinbase
+// and was condemned invalid. The caller must guarantee a non-nil CoinbaseTx.
+func (b *Block) checkCoinbaseOnlyBodyBound() error {
+	if !b.Header.HashMerkleRoot.IsEqual(b.CoinbaseTx.TxIDChainHash()) {
+		return errors.NewBlockCorruptError("[BLOCK][%s] body carries no subtrees but the header merkle root is not the coinbase txid", b.String())
+	}
+
+	// A body with no subtrees that claims more than one transaction contradicts itself.
+	if b.TransactionCount > 1 {
+		return errors.NewBlockCorruptError("[BLOCK][%s] body carries no subtrees but claims %d transactions", b.String(), b.TransactionCount)
+	}
+
+	return nil
+}
+
 // https://en.bitcoin.it/wiki/BIP_0034
 // BIP-34 was created to force miners to add the block height to the coinbase tx.
 // This BIP came into effect at block 227,835, which is after the first halving
 // at block 210,000.  Therefore, until this happened, we do not know the actual
 // height of the block we are checking for.
-
+//
+// merkleRootChecked selects the classification of the verdict via bindClassifiedError: the
+// coinbase outputs and subtree fee totals come from the received body.
+//
 // TODO - do this another way, if necessary
-func (b *Block) checkBlockRewardAndFees(params *chaincfg.Params) error {
+func (b *Block) checkBlockRewardAndFees(params *chaincfg.Params, merkleRootChecked bool) error {
 	if b.Height == 0 {
 		return nil // Skip this check
 	}
@@ -645,7 +729,7 @@ func (b *Block) checkBlockRewardAndFees(params *chaincfg.Params) error {
 	coinbaseReward := util.GetBlockSubsidyForHeight(b.Height, params)
 
 	if coinbaseOutputSatoshis > subtreeFees+coinbaseReward {
-		return errors.NewBlockInvalidError("[checkBlockRewardAndFees][%s] coinbase output (%d) is greater than the fees + block subsidy (%d)", b.String(), coinbaseOutputSatoshis, subtreeFees+coinbaseReward)
+		return bindClassifiedError(merkleRootChecked, "[checkBlockRewardAndFees][%s] coinbase output (%d) is greater than the fees + block subsidy (%d)", b.String(), coinbaseOutputSatoshis, subtreeFees+coinbaseReward)
 	}
 
 	return nil
@@ -755,7 +839,9 @@ func (b *Block) checkDuplicateTransactionsInSubtree(subtree *subtreepkg.Subtree,
 		// in a tx map, Put is mutually exclusive, can only be called once per key
 		if err = b.txMap.Put(subtreeNode.Hash, idx64); err != nil {
 			if errors.Is(err, errors.ErrTxExists) || strings.Contains(err.Error(), "hash already exists in map") {
-				return errors.NewBlockInvalidError("[BLOCK][%s] block contains duplicate transaction %s", b.String(), subtreeNode.Hash.String())
+				// A duplicate-last mutation keeps the merkle root, so the body is not proven to
+				// be the miner's: corrupt, not invalid.
+				return errors.NewBlockCorruptError("[BLOCK][%s] block contains duplicate transaction %s", b.String(), subtreeNode.Hash.String())
 			}
 
 			return errors.NewStorageError("[BLOCK][%s] error adding transaction %s to txMap", b.String(), subtreeNode.Hash.String(), err)
@@ -1301,13 +1387,18 @@ func (b *Block) GetAndValidateSubtrees(ctx context.Context, logger ulogger.Logge
 	for sIdx := 0; sIdx < len(b.SubtreeSlices); sIdx++ {
 		subtree := b.SubtreeSlices[sIdx]
 		if subtree == nil {
-			return errors.NewBlockInvalidError("[BLOCK][%s][ID %d] subtree %d of %d was loaded but is nil", b.String(), b.ID, sIdx, nrOfSubtrees)
+			// Every loaded index is assigned or the load errors out above, so a nil here is a
+			// local invariant break, not peer data.
+			//
+			// b.Hash().String(), not b.String(): subtreeSlicesMu is held for this whole function
+			// and String() takes it again, which deadlocks.
+			return errors.NewProcessingError("[BLOCK][%s][ID %d] subtree %d of %d was loaded but is nil", b.Hash().String(), b.ID, sIdx, nrOfSubtrees)
 		}
 		if sIdx == 0 {
 			subtreeSize = subtree.Length()
 		} else if subtree.Length() != subtreeSize && sIdx != nrOfSubtrees-1 {
 			// all subtrees need to be the same size as the first tree, except the last one
-			return errors.NewBlockInvalidError("[BLOCK][%s][ID %d] subtree %d has length %d, expected %d", b.String(), b.ID, sIdx, subtree.Length(), subtreeSize)
+			return errors.NewBlockCorruptError("[BLOCK][%s][ID %d] subtree %d has length %d, expected %d", b.Hash().String(), b.ID, sIdx, subtree.Length(), subtreeSize)
 		}
 	}
 
@@ -1425,7 +1516,7 @@ func (b *Block) CheckMerkleRoot(ctx context.Context) (err error) {
 		// non-power-of-two first subtree (e.g. lengths [3, 2]) and produce a
 		// merkle root that a canonical SV Node validator would not agree with.
 		if !subtreepkg.IsPowerOfTwo(targetLength) {
-			return errors.NewBlockInvalidError(
+			return errors.NewBlockCorruptError(
 				"[BLOCK][%s] first subtree leaf count is not a power of two: %d",
 				b.String(), targetLength,
 			)
@@ -1435,14 +1526,14 @@ func (b *Block) CheckMerkleRoot(ctx context.Context) (err error) {
 			isLast := i == len(b.SubtreeSlices)-1
 
 			if !isLast && sub.Length() != targetLength {
-				return errors.NewBlockInvalidError(
+				return errors.NewBlockCorruptError(
 					"[BLOCK][%s] only the final subtree may be incomplete (index %d, length %d, targetLength %d)",
 					b.String(), i, sub.Length(), targetLength,
 				)
 			}
 
 			if isLast && sub.Length() > targetLength {
-				return errors.NewBlockInvalidError(
+				return errors.NewBlockCorruptError(
 					"[BLOCK][%s] final subtree exceeds first subtree size (length %d, targetLength %d)",
 					b.String(), sub.Length(), targetLength,
 				)
@@ -1477,7 +1568,7 @@ func (b *Block) CheckMerkleRoot(ctx context.Context) (err error) {
 
 		for _, hash := range hashes {
 			if _, dup := seen[hash]; dup {
-				return errors.NewBlockInvalidError("[BLOCK][%s] duplicate subtree root hash in top-level merkle tree: %s", b.String(), hash.String())
+				return errors.NewBlockCorruptError("[BLOCK][%s] duplicate subtree root hash in top-level merkle tree: %s", b.String(), hash.String())
 			}
 
 			seen[hash] = struct{}{}
@@ -1498,8 +1589,10 @@ func (b *Block) CheckMerkleRoot(ctx context.Context) (err error) {
 		calculatedMerkleRootHash = b.CoinbaseTx.TxIDChainHash()
 	}
 
+	// Every failure in this function means the received body does not hash to the header, so
+	// none of them can condemn the block hash: they are corrupt, never invalid.
 	if !b.Header.HashMerkleRoot.IsEqual(calculatedMerkleRootHash) {
-		return errors.NewBlockInvalidError("[BLOCK][%s] merkle root does not match", b.String())
+		return errors.NewBlockCorruptError("[BLOCK][%s] merkle root does not match", b.String())
 	}
 
 	return nil

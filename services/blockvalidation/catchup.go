@@ -343,6 +343,10 @@ func (u *Server) releaseCatchupLock(ctx *CatchupContext, err *error) {
 
 		// TODO: all of these should be using error types, and not checking the strings (!)
 		switch {
+		case errors.IsBlockCorrupt(*err):
+			// The serving peer was already charged where the corrupt body was found, and the
+			// block was not stored as invalid. Classify it without charging the peer twice.
+			errorType = "corrupt_block_body"
 		case errors.Is(*err, errors.ErrBlockInvalid) || errors.Is(*err, errors.ErrTxInvalid):
 			errorType = "validation_failure"
 			// Mark peer as malicious for validation failure
@@ -884,9 +888,9 @@ func (u *Server) fetchAndValidateBlocks(ctx context.Context, catchupCtx *Catchup
 	// Wait for both operations to complete
 	err := errorGroup.Wait()
 	if err != nil {
-		// Discard rejected bodies, but retain partial downloads after transient
-		// failures (such as peer rate limits) so the next attempt can progress.
-		if errors.Is(err, errors.ErrBlockInvalid) || errors.Is(err, errors.ErrTxInvalid) {
+		// Discard rejected bodies, including corrupt ones, but retain partial downloads
+		// after transient failures (such as peer rate limits) so the next attempt can progress.
+		if errors.Is(err, errors.ErrBlockInvalid) || errors.Is(err, errors.ErrTxInvalid) || errors.IsBlockCorrupt(err) {
 			artifacts.cleanup(u.logger)
 		} else {
 			// Evict identified corrupt cached files, while preserving downloads
@@ -1116,6 +1120,12 @@ func (u *Server) validateBlocksOnChannel(validateBlocksChan chan blockForValidat
 					// Failure reporting is handled by the caller (Server.go / peer_selection.go)
 					if errors.Is(err, errors.ErrBlockIncomplete) {
 						u.logger.Warnf("[catchup:validateBlocksOnChannel][%s] block %s from peer %s is incomplete, aborting catchup", blockUpTo.Hash().String(), block.Hash().String(), peerID)
+					} else if errors.IsBlockCorrupt(err) {
+						// The peer served a body that does not belong to the block hash. The block
+						// was not stored as invalid; charge the peer and abort so the catchup loop
+						// tries another peer.
+						u.logger.Warnf("[catchup:validateBlocksOnChannel][%s] block %s from peer %s has a corrupt body, aborting catchup", blockUpTo.Hash().String(), block.Hash().String(), peerID)
+						u.reportCatchupMalicious(gCtx, peerID, "corrupt_block_body")
 					} else if errors.Is(err, errors.ErrBlockInvalid) || errors.Is(err, errors.ErrTxInvalid) {
 						// ValidateBlockWithOptions already stored the block as invalid if it's a consensus violation
 						u.logger.Warnf("[catchup:validateBlocksOnChannel][%s] block %s violates consensus rules (already stored as invalid by ValidateBlockWithOptions)", blockUpTo.Hash().String(), block.Hash().String())

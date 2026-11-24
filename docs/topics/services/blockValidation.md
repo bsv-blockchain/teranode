@@ -131,8 +131,9 @@ The optimistic path is implemented in `ValidateBlock()` (services/blockvalidatio
 **Configuration:**
 
 - **Setting**: `blockvalidation_optimistic_mining` (default: `true`)
+- **Peer-served blocks**: Also require `blockvalidation_optimistic_mining_peer_blocks` (default: `false`). Optimistic mining adds the body to the chain before it is checked, so a peer that replays an honest header with a doctored body can only be undone with `InvalidateBlock`, which marks the honest block hash invalid on this node. With the default, peer-served blocks are validated first and a doctored body is re-downloaded instead.
 - **Runtime Override**: Can be disabled per-block via `ValidateBlockOptions.DisableOptimisticMining`
-- **Automatic Disable**: Always disabled during catchup mode for better reliability
+- **Automatic Disable**: Always disabled during catchup mode and for legacy blocks
 
 **Performance Benefits:**
 
@@ -296,8 +297,9 @@ The system detects and records:
 
 1. **Secret Mining**: Common ancestor more than `secret_mining_threshold` blocks behind (default: 10)
 2. **Coinbase Maturity Violation**: Fork depth exceeds coinbase maturity (default: 100 blocks)
-3. **Invalid Block Propagation**: Blocks that fail consensus validation (PoW, merkle root, timestamps)
-4. **Checkpoint Mismatch**: Peer provides chain with incorrect checkpoint hashes
+3. **Invalid Block Propagation**: Blocks that fail consensus validation (PoW, timestamps)
+4. **Corrupt Block Bodies**: A body that does not belong to the announced block hash (merkle root mismatch, duplicate subtree or transaction, no coinbase placeholder, a coinbase that is not the one the header commits to, an invalid transaction in a subtree list that is not yet bound to the header, a declared size above `excessiveblocksize`). The block hash is not marked invalid; the peer is charged and the block is fetched again from another peer.
+5. **Checkpoint Mismatch**: Peer provides chain with incorrect checkpoint hashes
 
 **Metrics Recording:**
 
@@ -832,7 +834,7 @@ The service tracks peers that provide:
 - Blocks that fail consensus validation
 - Blocks with invalid proof of work
 - Blocks that violate checkpoint hashes
-- Blocks that fail merkle root verification
+- Block bodies that fail merkle root verification (charged to the peer, but the block hash is not marked invalid)
 
 ##### Peer Quality Metrics
 

@@ -335,6 +335,7 @@ func NewSettings(alternativeContext ...string) *Settings {
 			ValidationMaxRetries:                      getInt("blockvalidation_validation_max_retries", 3, alternativeContext...),
 			ValidationRetrySleep:                      getDuration("blockvalidation_validation_retry_sleep", 5*time.Second, alternativeContext...),
 			OptimisticMining:                          getBool("blockvalidation_optimistic_mining", true, alternativeContext...),
+			OptimisticMiningPeerBlocks:                getBool("blockvalidation_optimistic_mining_peer_blocks", false, alternativeContext...),
 			IsParentMinedRetryMaxRetry:                getInt("blockvalidation_isParentMined_retry_max_retry", 45, alternativeContext...),
 			IsParentMinedRetryBackoffMultiplier:       getInt("blockvalidation_isParentMined_retry_backoff_multiplier", 4, alternativeContext...),
 			IsParentMinedRetryBackoffDuration:         getDuration("blockvalidation_isParentMined_retry_backoff_duration", 20*time.Millisecond, alternativeContext...),
