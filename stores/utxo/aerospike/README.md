@@ -566,6 +566,25 @@ hand-off, and a hand-off is not lost with an answer. What stays open: three trie
 with the store unreachable leave the caller with an error and the record possibly final, and
 the transaction then waits for the unmined reload.
 
+### Replay of a pruned transaction and the create-first record
+
+A replay of a transaction that was mined and pruned matches the spends it made long ago. Main
+refuses it with `ErrUtxoSpendingTxPruned` when the spending transaction has no record. A
+create-first attempt writes its tentative record first, so it follows one rule: a tentative record
+owns only the spends recorded at or after the height it was created at (its `unminedSince`).
+
+- The refusal reads the state of the spender record, once, when a historical match turns up. An
+  absent record, a hold and a record that is rolling back refuse the match. A final record accepts
+  it. A tentative record accepts it only when the spend was recorded at or after its `unminedSince`.
+- The refusal is a verdict, so the attempt rolls its record back.
+- The rollback keeps a spend that predates the record and is also history. The unspend UDF takes an
+  optional `keepBelowHeight`, and a spend recorded below it stays, with `kept` in the response. The
+  reversals of a create-first rollback run under `utxo.WithReversedRecord`, and the store reads the
+  `unminedSince` of the record and passes the lower of it and the first height that is not history
+  (`utxo.KeepBelowHeight`). A spend with no recorded height is cleared, as are the spends of the
+  record itself and young leftovers of an earlier attempt. Every other caller of `Unspend` passes no
+  argument.
+
 ### Rollback of a failed create-first spend
 
 A spend that fails after the tentative create is rolled back by `utxo.RollBackCreating`. The

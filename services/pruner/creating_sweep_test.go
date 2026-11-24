@@ -607,7 +607,7 @@ func TestSweepCreatingTxsRollbackThatDidNotBeginIsNoProgress(t *testing.T) {
 }
 
 func TestSweepCreatingTxsEveryUnwinnableErrorRollsBack(t *testing.T) {
-	for _, spendErr := range []error{errors.ErrSpent, errors.ErrTxConflicting, errors.ErrFrozen, errors.ErrUtxoHashMismatch, errors.ErrTxNotFound} {
+	for _, spendErr := range []error{errors.ErrSpent, errors.ErrTxConflicting, errors.ErrFrozen, errors.ErrUtxoHashMismatch, errors.ErrTxNotFound, errors.ErrUtxoSpendingTxPruned} {
 		ns, err := nullstore.NewNullStore()
 		require.NoError(t, err)
 

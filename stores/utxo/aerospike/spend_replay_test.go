@@ -51,6 +51,7 @@ type replayFixture struct {
 	child       *bt.Tx
 	childKey    *aerospike.Key
 	outputIndex uint32
+	createFirst bool
 }
 
 func newReplayFixture(t *testing.T, cfg replayConfig) *replayFixture {
@@ -62,7 +63,17 @@ func newReplayFixture(t *testing.T, cfg replayConfig) *replayFixture {
 	s.Pruner.UTXODefensiveEnabled = cfg.defensive
 	s.Pruner.UTXOSetTTL = cfg.ttl
 	s.Aerospike.EnableSpendFilterExpressions = true
-	s.UtxoStore.UseCreateFirstOrder = cfg.createFirst
+
+	// the settings library reads utxostore_useCreateFirstOrder from the environment first, so a case
+	// that does not ask for create-first keeps whatever the environment says
+	if cfg.createFirst {
+		s.UtxoStore.UseCreateFirstOrder = true
+	}
+
+	// a create-first rollback leaves a hold that a replay must wait out
+	if s.UtxoStore.UseCreateFirstOrder {
+		s.UtxoStore.SpendRollbackTimeout = 3 * time.Second
+	}
 
 	var outputIndex uint32
 
@@ -88,7 +99,7 @@ func newReplayFixture(t *testing.T, cfg replayConfig) *replayFixture {
 		cfg.parents = 1
 	}
 
-	f := &replayFixture{t: t, client: client, store: store, ctx: ctx, settings: s, outputIndex: outputIndex}
+	f := &replayFixture{t: t, client: client, store: store, ctx: ctx, settings: s, outputIndex: outputIndex, createFirst: s.UtxoStore.UseCreateFirstOrder}
 	child := bt.NewTx()
 
 	for i := 0; i < cfg.parents; i++ {
@@ -263,7 +274,25 @@ func TestPrunedReplayIsRefusedAtSpend_Aerospike(t *testing.T) {
 
 			// the refusal wrote nothing, so a second replay is refused the same way
 			_, _, err = f.store.SpendAndCreate(f.ctx, f.child, replayBlock+1)
-			require.ErrorIs(t, err, errors.ErrUtxoSpendingTxPruned)
+
+			if f.createFirst {
+				// the refused attempt rolled its record back and left a hold for the txid. A replay
+				// meets the hold, which is no stored transaction, and waits it out; once it has
+				// expired the replay is refused again.
+				require.Error(t, err)
+				require.False(t, f.childStored(), "the hold is not a stored transaction")
+				f.requireStillSpentByChild(0)
+
+				require.Eventually(t, func() bool {
+					_, _, replayErr := f.store.SpendAndCreate(f.ctx, f.child, replayBlock+1)
+
+					return errors.Is(replayErr, errors.ErrUtxoSpendingTxPruned)
+				}, 30*time.Second, 250*time.Millisecond, "once the hold has expired a replay is refused again")
+				require.False(t, f.childStored())
+			} else {
+				require.ErrorIs(t, err, errors.ErrUtxoSpendingTxPruned)
+			}
+
 			f.requireStillSpentByChild(0)
 		})
 	}

@@ -600,12 +600,13 @@ func isTransientSpendError(err error) bool {
 }
 
 // isUnwinnableSpendError reports whether a spend error means the tx can never be
-// completed: an input is spent by another tx, conflicting, frozen, does not match or names
-// an output that does not exist.
+// completed: an input is spent by another tx, conflicting, frozen, does not match, names
+// an output that does not exist, or is a spend of a transaction that was mined and pruned.
 func isUnwinnableSpendError(err error) bool {
 	return errors.Is(err, errors.ErrSpent) ||
 		errors.Is(err, errors.ErrTxNotFound) ||
 		errors.Is(err, errors.ErrTxConflicting) ||
 		errors.Is(err, errors.ErrFrozen) ||
-		errors.Is(err, errors.ErrUtxoHashMismatch)
+		errors.Is(err, errors.ErrUtxoHashMismatch) ||
+		errors.Is(err, errors.ErrUtxoSpendingTxPruned)
 }

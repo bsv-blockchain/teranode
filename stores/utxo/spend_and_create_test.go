@@ -1294,6 +1294,7 @@ var spendVerdicts = map[string]error{
 	"hash mismatch":     errors.ErrUtxoHashMismatch,
 	"invalid size":      errors.NewUtxoInvalidSize("output has a bad size"),
 	"coinbase immature": errors.ErrTxCoinbaseImmature,
+	"pruned replay":     errors.ErrUtxoSpendingTxPruned,
 }
 
 // spendFaults are per-input errors that are not a verdict: the write of that input may be in doubt.
@@ -2970,6 +2971,7 @@ func TestSpendOutcomeUnknown(t *testing.T) {
 	require.True(t, spendOutcomeUnknown([]*Spend{{}, nil}, failed), "a failure that names no input and is not a verdict itself")
 	require.True(t, spendOutcomeUnknown([]*Spend{{}}, errors.NewStorageError("fault")), "a storage fault that names no input")
 	require.False(t, spendOutcomeUnknown([]*Spend{{}, nil}, errors.NewUtxoError("spent", errors.ErrSpent)), "a failure that names no input and is a verdict itself")
+	require.False(t, spendOutcomeUnknown([]*Spend{{}, nil}, errors.NewUtxoSpendingTxPrunedError("replay")), "the refusal of a replay of a pruned transaction is a verdict itself")
 
 	for name, verdict := range spendVerdicts {
 		require.False(t, spendOutcomeUnknown([]*Spend{{}, {Err: verdict}}, failed), name)
@@ -3097,4 +3099,14 @@ func TestCreateFirstReversalsCarryTheReversalGuard(t *testing.T) {
 		require.Equal(t, 1, f.unguardedUnspends, "main's reversal clears what it is told to, as before")
 		require.Empty(t, f.unspendGuards)
 	})
+}
+
+func TestIsSpendVerdictKnowsThePrunedReplayRefusal(t *testing.T) {
+	refusal := errors.NewUtxoSpendingTxPrunedError("[SPEND] invalid spend: spending transaction was pruned")
+
+	require.True(t, isSpendVerdict(refusal), "the store evaluated the spend and refused it before any write could land")
+	require.True(t, isSpendVerdict(errors.NewUtxoError("wrapped", refusal)))
+	require.False(t, spendFailureTransient([]*Spend{{Err: refusal}}), "the refusal does not end by itself, so the record is rolled back")
+	require.True(t, RefusedSpend(errors.NewUtxoError("spend failed", refusal), []*Spend{{Err: refusal}}), "the lane position is counted as refused")
+	require.False(t, LaneSpendWroteNothing([]*Spend{{Err: refusal}}), "an input beside the refusal may have been written, so the position stays burned")
 }

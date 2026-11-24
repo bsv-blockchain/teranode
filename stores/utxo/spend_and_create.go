@@ -1470,8 +1470,9 @@ func spendFailureTransient(spends []*Spend) bool {
 }
 
 // isSpendVerdict reports whether the error of one input is the store's answer about that input:
-// the write was evaluated and refused, so it cannot still land. Any other error, a storage fault
-// or a timeout among them, may belong to a write that is still in doubt.
+// the write was evaluated and refused, so it cannot still land. The refusal of a replay of a pruned
+// transaction is one: it is made before the input is written and never ends by itself. Any other
+// error, a storage fault or a timeout among them, may belong to a write that is still in doubt.
 func isSpendVerdict(err error) bool {
 	return errors.Is(err, errors.ErrSpent) ||
 		errors.Is(err, errors.ErrTxNotFound) ||
@@ -1482,7 +1483,8 @@ func isSpendVerdict(err error) bool {
 		errors.Is(err, errors.ErrFrozen) ||
 		errors.Is(err, errors.ErrUtxoHashMismatch) ||
 		errors.Is(err, errors.ErrUtxoInvalidSize) ||
-		errors.Is(err, errors.ErrTxCoinbaseImmature)
+		errors.Is(err, errors.ErrTxCoinbaseImmature) ||
+		errors.Is(err, errors.ErrUtxoSpendingTxPruned)
 }
 
 // isInvalidSpend reports whether the error of one input is the store's refusal of an invalid

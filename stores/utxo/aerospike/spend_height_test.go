@@ -297,13 +297,14 @@ func unspendUDF(t *testing.T, store *teranode_aerospike.Store, parent *bt.Tx, sp
 
 	tSettings := test.CreateBaseTestSettings(t)
 
-	args := []aerospike.Value{
+	args := make([]aerospike.Value, 0, 5+len(keepBelow))
+	args = append(args,
 		aerospike.NewIntegerValue(int(spend.Vout)),
 		aerospike.NewValue(spend.UTXOHash[:]),
 		aerospike.NewValue(spend.SpendingData.Bytes()),
 		aerospike.NewValue(1300),
 		aerospike.NewValue(spendHeightRetention),
-	}
+	)
 
 	for _, keep := range keepBelow {
 		args = append(args, aerospike.NewIntegerValue(keep))
