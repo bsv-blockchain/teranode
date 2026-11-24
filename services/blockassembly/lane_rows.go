@@ -241,10 +241,11 @@ func (ba *BlockAssembly) writeLaneBitmapsFile(ctx context.Context, bitmaps lane.
 
 // writeKeptLaneBitmapsFile writes the kept lane bitmaps of subtree root as its lane bitmaps file,
 // to live until dah, and marks them as stored at height. A subtree with no bitmaps kept gets no
-// file, which is logged.
+// file, which is counted as write_failed under block="own" and logged.
 func (ba *BlockAssembly) writeKeptLaneBitmapsFile(ctx context.Context, root chainhash.Hash, height, dah uint32) {
 	lanes, kept := ba.ownLaneBitmaps.lookup(root)
 	if !kept {
+		lane.CountMissingBitmaps(lane.BlockOwn, lane.MissingBitmapsWriteFailed, 1)
 		ba.logger.Warnf("[BlockAssembly:storeSubtreeData][%s] storing the subtree without its lane bitmaps file: it has no lane bitmaps kept", root.String())
 		return
 	}

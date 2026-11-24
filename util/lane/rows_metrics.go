@@ -33,8 +33,9 @@ const (
 	// cancelled (peers' blocks only).
 	MissingBitmapsTimedOut = "timed_out"
 	// MissingBitmapsWriteFailed: a subtree's lane bitmaps file could not be encoded or written, by
-	// subtree validation (block peer) or block assembly (block own). It is counted when the write
-	// fails, so a peer's block that later lists the subtree counts it again, as absent.
+	// subtree validation (block peer) or block assembly (block own), or block assembly stored a
+	// subtree with no bitmaps kept to write. It is counted when the write fails, so a peer's block
+	// that later lists the subtree counts it again, as absent.
 	MissingBitmapsWriteFailed = "write_failed"
 )
 

@@ -1186,9 +1186,13 @@ func TestOwnLaneRowsDoNotWait(t *testing.T) {
 }
 
 // TestStoreSubtreeDataWithoutKeptBitmapsWritesNoFile: a subtree with no lane bitmaps kept is stored
-// without a lane bitmaps file; the storage worker does not build bitmaps from the pool.
+// without a lane bitmaps file, counted as write_failed; the storage worker does not build bitmaps
+// from the pool.
 func TestStoreSubtreeDataWithoutKeptBitmapsWritesNoFile(t *testing.T) {
 	server, memoryStore := setupServerWithSettings(t, func(s *settings.Settings) { s.UtxoStore.LaneMigration = settings.LaneMigrationShadow })
+
+	writeFailed := map[string]string{"block": lane.BlockOwn, "reason": lane.MissingBitmapsWriteFailed}
+	before := ownLaneMetric(t, "teranode_lane_missing_bitmaps_total", writeFailed)
 
 	st, txMap := laneSealSubtree(t, "not-kept")
 
@@ -1200,6 +1204,7 @@ func TestStoreSubtreeDataWithoutKeptBitmapsWritesNoFile(t *testing.T) {
 	_, err = memoryStore.Get(t.Context(), st.RootHash()[:], fileformat.FileTypeSubtreeLaneBitmaps)
 	require.Error(t, err)
 	require.Zero(t, server.ownLaneBitmaps.len())
+	require.Equal(t, before+1, ownLaneMetric(t, "teranode_lane_missing_bitmaps_total", writeFailed))
 }
 
 // stuckStorageStore holds every subtree storage at its first store call until release is closed.
