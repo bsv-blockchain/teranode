@@ -1020,17 +1020,78 @@ func TestSequentialSpendAndCreate(t *testing.T) {
 		}
 	})
 
-	t.Run("create ErrTxExists on a record that is creating and not rolling back keeps the spends in place", func(t *testing.T) {
+	t.Run("a spend-first call whose create finds a record that is creating rolls it forward and says so", func(t *testing.T) {
 		f := &fakeSequentialStore{
-			spends:    []*Spend{{}},
+			spends:    []*Spend{{}, {}},
 			createErr: errors.NewTxExistsError("tentative"),
-			existing:  meta.Data{Creating: true},
+			existing:  meta.Data{Creating: true, Attempt: []byte{0x01}},
 		}
 
-		_, spends, err := SequentialSpendAndCreate(ctx, logger, f, tx, 100, false)
+		_, spends, err := SequentialSpendAndCreate(ctx, logger, f, twoInputTx(), 100, false)
 		require.ErrorIs(t, err, errors.ErrTxExists)
-		require.Len(t, spends, 1)
-		require.Equal(t, []string{"spend", "create", "getmeta"}, f.callSeq)
+		require.True(t, IsRolledForward(err), "the validator accepts a creating record only when the store rolled it forward")
+		require.Len(t, spends, 2)
+		require.Equal(t, []string{"spend", "create", "getmeta", "lease", "spend", "finalize"}, f.callSeq)
+		require.Equal(t, [][]byte{{0x01}}, f.finalizeTokens, "the finalize carries the attempt read from the record")
+		require.Equal(t, [][]byte{fakeLease}, f.finalizeLeases)
+	})
+
+	t.Run("a spend-first call over a creating record whose lease is refused because it is final is a plain duplicate", func(t *testing.T) {
+		f := &fakeSequentialStore{
+			spends:        []*Spend{{}, {}},
+			createErr:     errors.NewTxExistsError("tentative"),
+			leaseDeclined: true,
+			existingSeq:   []meta.Data{{Creating: true, Attempt: []byte{0x01}}, {}},
+		}
+
+		_, spends, err := SequentialSpendAndCreate(ctx, logger, f, twoInputTx(), 100, false)
+		require.ErrorIs(t, err, errors.ErrTxExists)
+		require.False(t, IsRolledForward(err), "another actor completed it and owns the hand-off")
+		require.Len(t, spends, 2)
+		require.Equal(t, 0, f.finalizeCalls)
+	})
+
+	t.Run("a spend-first call over a creating record that cannot be rolled forward keeps the spends and does not report a stored transaction", func(t *testing.T) {
+		for name, f := range map[string]*fakeSequentialStore{
+			"lease refused, owned by another attempt": {
+				leaseDeclined: true,
+				existingSeq:   []meta.Data{{Creating: true, Attempt: []byte{0x01}}, {Creating: true, Attempt: []byte{0x02}}},
+			},
+			"lease refused, rolling back": {
+				leaseDeclined: true,
+				existingSeq:   []meta.Data{{Creating: true, Attempt: []byte{0x01}}, {Creating: true, RollingBack: true, Attempt: []byte{0x01}}},
+			},
+			"finalize fails": {
+				existing:    meta.Data{Creating: true, Attempt: []byte{0x01}},
+				finalizeErr: errors.NewStorageError("finalize boom"),
+			},
+			"the re-spend fails": {
+				existing:  meta.Data{Creating: true, Attempt: []byte{0x01}},
+				spendErrs: []error{nil, errors.NewStorageError("respend boom")},
+			},
+		} {
+			f.spends = []*Spend{{}, {}}
+			f.createErr = errors.NewTxExistsError("tentative")
+
+			_, spends, err := SequentialSpendAndCreate(ctx, logger, f, twoInputTx(), 100, false)
+			require.Error(t, err, name)
+			require.NotErrorIs(t, err, errors.ErrTxExists, name)
+			require.False(t, IsRolledForward(err), name)
+			require.Len(t, spends, 2, name)
+			require.Equal(t, 0, f.unspendCalls, name)
+		}
+	})
+
+	t.Run("a create-only call over a creating record that is not rolling back is a duplicate and rolls nothing forward", func(t *testing.T) {
+		f := &fakeSequentialStore{
+			createErr: errors.NewTxExistsError("tentative"),
+			existing:  meta.Data{Creating: true, Attempt: []byte{0x01}},
+		}
+
+		_, _, err := SequentialSpendAndCreate(ctx, logger, f, tx, 100, false, WithCreateOnly())
+		require.ErrorIs(t, err, errors.ErrTxExists)
+		require.False(t, IsRolledForward(err))
+		require.Equal(t, []string{"create", "getmeta"}, f.callSeq)
 	})
 
 	t.Run("a create-only call over a hold that is cleared creates again", func(t *testing.T) {

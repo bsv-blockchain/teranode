@@ -471,7 +471,7 @@ func SequentialSpendAndCreate(ctx context.Context, logger ulogger.Logger, s Sequ
 		}
 
 		if errors.Is(err, errors.ErrTxExists) {
-			again, keptSpends, resolveErr := inTheWay.resolve(WithReversalCallHeight(ctx, blockHeight), logger, s, tx, blockContext, options.CreateOnly, spends, err)
+			again, keptSpends, resolveErr := inTheWay.resolve(WithReversalCallHeight(ctx, blockHeight), logger, s, tx, blockHeight, options.IgnoreFlags, blockContext, options.CreateOnly, spends, err)
 			if again {
 				positionClean = positionClean && proven
 
@@ -546,8 +546,10 @@ const (
 // run its spend and its create once more, and otherwise the spends still in effect and the error
 // to return.
 //
-// A record that is not rolling back is a duplicate: existsErr is returned with the spends. A record
-// that cannot be read is not known to be one, so a retryable error that does not carry ErrTxExists
+// A record that is not rolling back is a duplicate: existsErr is returned with the spends. When it is
+// still creating, its attempt was abandoned in the tentative state by a create-first call, and this
+// call rolls it forward (rollForward), so a block that holds the transaction does not wait for the
+// pruner sweep, which waits for the chain to advance. A record that cannot be read is not known to be one, so a retryable error that does not carry ErrTxExists
 // is returned with the spends. A record that is rolling back, a hold included, is not a
 // stored transaction, and its rollback reverses the inputs of the txid. Spends are the txid and
 // the input index, so that reversal also clears the spends this call made, and this call's own
@@ -564,7 +566,7 @@ const (
 //
 // A create-only call made no spend: it creates again over a hold it may clear and otherwise
 // returns existsErr.
-func (r *rollbackInTheWay) resolve(ctx context.Context, logger ulogger.Logger, s SequentialStore, tx *bt.Tx, blockContext, createOnly bool, spends []*Spend, existsErr error) (bool, []*Spend, error) {
+func (r *rollbackInTheWay) resolve(ctx context.Context, logger ulogger.Logger, s SequentialStore, tx *bt.Tx, blockHeight uint32, ignoreFlags IgnoreFlags, blockContext, createOnly bool, spends []*Spend, existsErr error) (bool, []*Spend, error) {
 	hash := tx.TxIDChainHash()
 
 	// The read runs under a context of its own: a caller whose context ended during the round
@@ -577,6 +579,8 @@ func (r *rollbackInTheWay) resolve(ctx context.Context, logger ulogger.Logger, s
 	cancel()
 
 	switch {
+	case getErr == nil && existing.Creating && !existing.RollingBack && !createOnly:
+		return false, spends, r.rollForward(ctx, logger, s, tx, blockHeight, ignoreFlags, existing.Attempt, spends, existsErr)
 	case errors.Is(getErr, errors.ErrTxNotFound), getErr == nil && !existing.RollingBack:
 		return false, spends, existsErr
 	case getErr != nil:
@@ -623,6 +627,28 @@ func (r *rollbackInTheWay) resolve(ctx context.Context, logger ulogger.Logger, s
 	default:
 		return false, spends, errors.NewProcessingError("SpendAndCreate: tx %s is being rolled back by a create-first attempt and the spends of this call could not be reversed under its hold; they are left in place", hash.String(), err)
 	}
+}
+
+// rollForward completes the creating record that a spend-first create found, with the rule the
+// create-first path and the sweep use, under this call's ignore flags. The returned error is
+// ErrTxExists marked as rolled forward when this call finalized the record, which tells the caller
+// it owns the hand-off; existsErr, unmarked, when another actor had already completed it; and
+// otherwise the error of the roll-forward, which does not carry ErrTxExists, so a caller never reads
+// a record that is still creating as a stored transaction. The spends of this call stay in place in
+// every case: they are the spends of the record.
+func (r *rollbackInTheWay) rollForward(ctx context.Context, logger ulogger.Logger, s SequentialStore, tx *bt.Tx, blockHeight uint32, ignoreFlags IgnoreFlags, attempt []byte, spends []*Spend, existsErr error) error {
+	_, completed, err := rollForwardCreating(ctx, logger, s, tx, attempt, func(rfCtx context.Context) ([]*Spend, error) {
+		return s.Spend(rfCtx, tx, blockHeight, ignoreFlags)
+	})
+	if err != nil {
+		return err
+	}
+
+	if !completed {
+		return existsErr
+	}
+
+	return MarkRolledForward(errors.NewTxExistsError("SpendAndCreate: tx %s was creating and has been rolled forward", tx.TxIDChainHash().String()))
 }
 
 // reverseCarried runs when the spend of a later round failed. The spends of the earlier round are

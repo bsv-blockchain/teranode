@@ -1373,6 +1373,68 @@ func TestFlagOffDuplicate_DoesNotFinaliseATokenedMultiRecordRecord(t *testing.T)
 	})
 }
 
+// TestFlagOffSpendFirst_RollsForwardACreatingRecord is the strand of a block that holds a
+// transaction whose record a create-first attempt left creating. With create-first off, the
+// spend-first SpendAndCreate of the block's validation finds that record at its create. It must
+// finish the record itself, because the pruner sweep that would is driven by the chain height and a
+// block that cannot validate stops the chain. A record that stays creating without the mark makes
+// the validator fail closed on every attempt.
+func TestFlagOffSpendFirst_RollsForwardACreatingRecord(t *testing.T) {
+	for name, wide := range map[string]bool{"single record": false, "multi record": true} {
+		t.Run(name, func(t *testing.T) {
+			logger := ulogger.NewErrorTestLogger(t)
+			tSettings := test.CreateBaseTestSettings(t)
+			tSettings.UtxoStore.UseCreateFirstOrder = false
+
+			if wide {
+				tSettings.UtxoStore.UtxoBatchSize = 2
+			}
+
+			client, store, ctx, deferFn := initAerospike(t, tSettings, logger)
+			t.Cleanup(deferFn)
+			cleanDB(t, client)
+
+			_, err := store.Create(ctx, tests.ParentTx, 100)
+			require.NoError(t, err)
+
+			child := spendableChildTx(t, tests.ParentTx, 0)
+			if wide {
+				child = wideMultiRecordChild(t, tests.ParentTx, 0, 71)
+			}
+
+			hash := child.TxIDChainHash()
+
+			inputs, err := utxo.GetSpends(child)
+			require.NoError(t, err)
+
+			_, err = store.Create(ctx, child, 100, utxo.WithCreating(true))
+			require.NoError(t, err)
+
+			tentative := &meta.Data{}
+			require.NoError(t, store.GetMeta(ctx, hash, tentative))
+			require.True(t, tentative.Creating, "precondition: the record is tentative")
+
+			_, spends, err := store.SpendAndCreate(ctx, child, 101)
+			require.ErrorIs(t, err, errors.ErrTxExists)
+			require.True(t, utxo.IsRolledForward(err), "the store says it finished the record, so the validator accepts it")
+			require.Len(t, spends, len(inputs))
+
+			got := &meta.Data{}
+			require.NoError(t, store.GetMeta(ctx, hash, got))
+			require.False(t, got.Creating, "the record is final")
+
+			resp, err := store.GetSpend(ctx, inputs[0])
+			require.NoError(t, err)
+			require.NotNil(t, resp.SpendingData, "the input of the finished record is spent")
+			require.Equal(t, hash.String(), resp.SpendingData.TxID.String())
+
+			_, _, err = store.SpendAndCreate(ctx, child, 102)
+			require.ErrorIs(t, err, errors.ErrTxExists)
+			require.False(t, utxo.IsRolledForward(err), "a second call finds a final record: a plain duplicate")
+		})
+	}
+}
+
 // TestSetMined_MultiRecord_RollsForwardAfterADuplicateWithFlagOff is the multi-record
 // counterpart of TestSetMined_CreatingRecord_RollsForwardWithFlagOff with a create-only
 // duplicate arriving first. The duplicate must leave the tokened record creating, and the
