@@ -161,3 +161,25 @@ func TestTopicKindCaps_WithinGossipCeiling(t *testing.T) {
 		require.Positive(t, capBytes, "topic %s cap must be positive", kind)
 	}
 }
+
+// TestGossipTopicValidators_CapEveryTopicBeforeRelay pins that every gossip
+// topic gets a pre-relay validator carrying the same cap the handlers apply,
+// keyed by the full wire topic name. A topic left out would go back to being
+// relayed up to libp2p's 1MiB default before any Teranode check runs.
+func TestGossipTopicValidators_CapEveryTopicBeforeRelay(t *testing.T) {
+	names := map[topicKind]string{
+		topicKindBlock:      "test-block",
+		topicKindSubtree:    "test-subtree",
+		topicKindRejectedTx: "test-rejected_tx",
+		topicKindNodeStatus: "test-node_status",
+	}
+
+	validators := gossipTopicValidators(names)
+
+	require.Len(t, validators, len(topicKindCaps))
+
+	for kind, name := range names {
+		require.Contains(t, validators, name)
+		require.Equal(t, topicKindCaps[kind], validators[name].MaxPayloadSize, "topic %s", kind)
+	}
+}

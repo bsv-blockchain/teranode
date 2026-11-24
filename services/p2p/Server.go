@@ -102,11 +102,11 @@ const (
 	// gossip payloads are small JSON announcements, realistically ~1KB, so
 	// nothing legitimate comes near 10KB.
 	//
-	// This ceiling is NOT enforced on the wire. go-p2p-message-bus exposes
-	// neither pubsub.WithMaxMessageSize nor RegisterTopicValidator, so the
-	// libp2p default (1MiB) is the only pre-relay check and the per-topic caps
-	// below run in the subscription handlers, after gossipsub has already
-	// forwarded the message to the mesh. See docs/p2p-libp2p-review.md.
+	// The per-topic caps below are enforced before relay by the bus's topic
+	// validators (gossipTopicValidators), and again in the topic handlers. The
+	// pubsub wire limit is deliberately left at libp2p's 1MiB default: it
+	// bounds whole RPC frames, and a frame over it resets the sending peer's
+	// stream, so lowering it would drop traffic from peers on the default.
 	maxGossipMessageSize = 10 * 1024 // 10KB
 
 	// Per-topic size limits. Each topic's payload is well-bounded, so these are
@@ -618,6 +618,13 @@ func NewServer(
 		nodeStatusTopic = "node_status" // Default value for backward compatibility
 	}
 
+	topicNames := map[topicKind]string{
+		topicKindBlock:      fmt.Sprintf("%s-%s", topicPrefix, blockTopic),
+		topicKindSubtree:    fmt.Sprintf("%s-%s", topicPrefix, subtreeTopic),
+		topicKindRejectedTx: fmt.Sprintf("%s-%s", topicPrefix, rejectedTxTopic),
+		topicKindNodeStatus: fmt.Sprintf("%s-%s", topicPrefix, nodeStatusTopic),
+	}
+
 	listenMode := tSettings.P2P.ListenMode
 	if listenMode != settings.ListenModeFull && listenMode != settings.ListenModeListenOnly && listenMode != settings.ListenModeSilent {
 		return nil, errors.NewConfigurationError("listen_mode must be one of '%s', '%s', or '%s' (got '%s')", settings.ListenModeFull, settings.ListenModeListenOnly, settings.ListenModeSilent, listenMode)
@@ -728,6 +735,8 @@ func NewServer(
 		return nil, err
 	}
 
+	conf.TopicValidators = gossipTopicValidators(topicNames)
+
 	p2pClient, err := p2pMessageBus.NewClient(conf)
 	if err != nil {
 		return nil, errors.NewServiceError("failed to create p2p client", err)
@@ -755,11 +764,11 @@ func NewServer(
 		subtreeKafkaProducerClient:        subtreeKafkaProducerClient,
 		blocksKafkaProducerClient:         blocksKafkaProducerClient,
 		gCtx:                              ctx,
-		blockTopicName:                    fmt.Sprintf("%s-%s", topicPrefix, blockTopic),
-		subtreeTopicName:                  fmt.Sprintf("%s-%s", topicPrefix, subtreeTopic),
-		rejectedTxTopicName:               fmt.Sprintf("%s-%s", topicPrefix, rejectedTxTopic),
+		blockTopicName:                    topicNames[topicKindBlock],
+		subtreeTopicName:                  topicNames[topicKindSubtree],
+		rejectedTxTopicName:               topicNames[topicKindRejectedTx],
 		invalidSubtreeTopicName:           tSettings.Kafka.InvalidSubtrees,
-		nodeStatusTopicName:               fmt.Sprintf("%s-%s", topicPrefix, nodeStatusTopic),
+		nodeStatusTopicName:               topicNames[topicKindNodeStatus],
 		topicPrefix:                       topicPrefix,
 		startTime:                         time.Now(),
 		preAnnouncedBlockHashes:           expiringmap.New[chainhash.Hash, struct{}](preAnnouncedBlockHashTTL).WithMaxSize(preAnnouncedBlockHashMaxSize),
