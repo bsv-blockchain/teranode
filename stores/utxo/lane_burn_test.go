@@ -76,6 +76,7 @@ func TestLaneSpendWroteNothing(t *testing.T) {
 		{"a refusal wrapped in a storage error may have written", []*Spend{{Err: errors.NewStorageError("disk", errors.NewTxNotFoundError("missing"))}}, false},
 		{"the context ending may have written", []*Spend{{Err: errors.NewContextCanceledError("cancelled")}}, false},
 		{"an invalid spend is not on the list", []*Spend{{Err: errors.NewUtxoError("invalid spend")}}, false},
+		{"the refusal of a replay of a pruned transaction is made before any write", []*Spend{{Err: errors.NewUtxoSpendingTxPrunedError("pruned")}}, true},
 	}
 
 	for _, c := range cases {

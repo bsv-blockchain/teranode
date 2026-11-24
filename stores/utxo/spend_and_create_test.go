@@ -3108,5 +3108,6 @@ func TestIsSpendVerdictKnowsThePrunedReplayRefusal(t *testing.T) {
 	require.True(t, isSpendVerdict(errors.NewUtxoError("wrapped", refusal)))
 	require.False(t, spendFailureTransient([]*Spend{{Err: refusal}}), "the refusal does not end by itself, so the record is rolled back")
 	require.True(t, RefusedSpend(errors.NewUtxoError("spend failed", refusal), []*Spend{{Err: refusal}}), "the lane position is counted as refused")
-	require.False(t, LaneSpendWroteNothing([]*Spend{{Err: refusal}}), "an input beside the refusal may have been written, so the position stays burned")
+	require.True(t, LaneSpendWroteNothing([]*Spend{{Err: refusal}}), "the refusal is made before any write, and an idempotent match writes no lane slot")
+	require.False(t, LaneSpendWroteNothing([]*Spend{{}, {Err: refusal}}), "an input beside the refusal that was spent may have written its lane slot, so the position stays burned")
 }

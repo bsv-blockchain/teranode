@@ -190,7 +190,8 @@ func refusedBeforeWrite(err error) bool {
 	return errors.Is(err, errors.ErrSpent) || errors.Is(err, errors.ErrTxConflicting) ||
 		errors.Is(err, errors.ErrFrozen) || errors.Is(err, errors.ErrUtxoHashMismatch) ||
 		errors.Is(err, errors.ErrTxLocked) || errors.Is(err, errors.ErrTxCreating) ||
-		errors.Is(err, errors.ErrTxNotFound) || errors.Is(err, errors.ErrTxCoinbaseImmature)
+		errors.Is(err, errors.ErrTxNotFound) || errors.Is(err, errors.ErrTxCoinbaseImmature) ||
+		errors.Is(err, errors.ErrUtxoSpendingTxPruned)
 }
 
 // TookLanePosition reports whether a create that named the position named, and holds position after
