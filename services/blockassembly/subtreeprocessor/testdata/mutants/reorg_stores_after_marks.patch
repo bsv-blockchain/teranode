@@ -6,7 +6,7 @@ index 6396edc30..a21700334 100644
  	// that failed or did not finish in time fails the reorg here, before anything irreversible
  	// below, and a reset follows (failedForkReorgNeedsReset). At 0 the wait is as before and never
  	// fails on a store.
--	if err = stp.storeAndAnnounceChainedSubtrees(ctx, "reorgBlocks", len(stp.chainedSubtrees), true, stp.settings.BlockAssembly.ReorgStoreDeadline); err != nil {
+-	if err = stp.storeAndAnnounceChainedSubtrees(ctx, "reorgBlocks", stp.reorgAwaitedSubtrees(), true, stp.settings.BlockAssembly.ReorgStoreDeadline); err != nil {
 -		return err
 -	}
  
@@ -17,7 +17,7 @@ index 6396edc30..a21700334 100644
  	}
  
 +	// mutant: the stores run after the marks
-+	if err = stp.storeAndAnnounceChainedSubtrees(ctx, "reorgBlocks", len(stp.chainedSubtrees), true, stp.settings.BlockAssembly.ReorgStoreDeadline); err != nil {
++	if err = stp.storeAndAnnounceChainedSubtrees(ctx, "reorgBlocks", stp.reorgAwaitedSubtrees(), true, stp.settings.BlockAssembly.ReorgStoreDeadline); err != nil {
 +		return err
 +	}
 +
