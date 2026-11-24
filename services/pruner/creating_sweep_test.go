@@ -1484,3 +1484,63 @@ func TestSweepCreatingTxsKeepsLeaseOfSpendWithAnInputInDoubt(t *testing.T) {
 	require.Empty(t, store.leasesFreed)
 	require.Empty(t, store.began)
 }
+
+// heightRecordingBlockAssembly records the height each Store call names as the one the transaction
+// was validated at, which the shared mock drops.
+type heightRecordingBlockAssembly struct {
+	*blockassembly.Mock
+
+	heights []uint32
+}
+
+func (h *heightRecordingBlockAssembly) Store(ctx context.Context, hash *chainhash.Hash, fee, size uint64, txInpoints subtree.TxInpoints, validatedHeight uint32) (bool, error) {
+	h.heights = append(h.heights, validatedHeight)
+
+	return h.Mock.Store(ctx, hash, fee, size, txInpoints, validatedHeight)
+}
+
+// The sweep tells block assembly the height the transaction was validated at, by the rule that block
+// assembly applies to an unmined transaction on reload.
+func TestSweepCreatingTxsAnnouncesTheHeightTheTransactionWasValidatedAt(t *testing.T) {
+	ns, err := nullstore.NewNullStore()
+	require.NoError(t, err)
+
+	const (
+		sweepHeight = uint32(500)
+		retention   = uint32(144)
+	)
+
+	cases := map[string]struct {
+		unminedSince uint32
+		want         uint32
+	}{
+		"inside the retention":      {unminedSince: 490, want: 490},
+		"the oldest inside":         {unminedSince: sweepHeight - retention + 1, want: sweepHeight - retention + 1},
+		"backdated":                 {unminedSince: utxo.BackdatedUnminedSince(sweepHeight, retention), want: 0},
+		"outside the retention":     {unminedSince: 100, want: 0},
+		"the floor of a backdating": {unminedSince: 1, want: 0},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			txA := oneOutputTx(1)
+			hashA := *txA.TxIDChainHash()
+
+			store := &fakeSweepStore{
+				NullStore: ns,
+				stale:     []chainhash.Hash{hashA},
+				getResp:   map[chainhash.Hash]*meta.Data{hashA: {Creating: true, Attempt: sweepToken, Tx: txA, UnminedSince: tc.unminedSince}},
+			}
+
+			ba := &heightRecordingBlockAssembly{Mock: blockassembly.NewMock()}
+			ba.On("Store", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(true, nil)
+
+			s := newSweepServer(t, store)
+			s.settings.UtxoStore.UnminedTxRetention = retention
+			s.blockAssemblyClient = ba
+			s.sweepCreatingTxs(context.Background(), sweepHeight)
+
+			require.Equal(t, []uint32{tc.want}, ba.heights)
+		})
+	}
+}
