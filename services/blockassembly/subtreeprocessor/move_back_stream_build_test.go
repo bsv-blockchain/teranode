@@ -43,37 +43,42 @@ func requireSameSubtrees(t *testing.T, want, got *SubtreeProcessor) {
 // bulkBuildSubtrees leaves for the same nodes in one slice: whole subtrees, a partial one, none, and
 // the edge where the open subtree fills exactly.
 func TestStreamBuildSubtrees_MatchesBulkBuild(t *testing.T) {
-	const size = 64
+	// the open subtree of a new processor holds the coinbase placeholder, so it takes size-1 nodes; a
+	// size of 1 is full from the start
+	for _, size := range []int{1, 2, 64} {
+		for _, n := range []int{0, 1, size - 2, size - 1, size, 2*size - 2, 2*size - 1, 2 * size, 5*size + 7, 6*size - 1} {
+			if n < 0 {
+				continue
+			}
 
-	// the open subtree of a new processor holds the coinbase placeholder, so it takes size-1 nodes
-	for _, n := range []int{0, 1, size - 2, size - 1, size, 2*size - 2, 2*size - 1, 2 * size, 5*size + 7, 6*size - 1} {
-		for _, cuts := range [][]int{nil, {n / 2}, {n / 3, 2 * n / 3}, {0, n}} {
-			for _, disk := range []bool{false, true} {
-				var opts []Options
-				if disk {
-					opts = append(opts, WithTxMapDirs([]string{t.TempDir(), t.TempDir()}))
-				}
+			for _, cuts := range [][]int{nil, {n / 2}, {n / 3, 2 * n / 3}, {0, n}} {
+				for _, disk := range []bool{false, true} {
+					var opts []Options
+					if disk {
+						opts = append(opts, WithTxMapDirs([]string{t.TempDir(), t.TempDir()}))
+					}
 
-				nodes := batchTestNodes(0, n)
+					nodes := batchTestNodes(0, n)
 
-				bulk, cleanupBulk := newAddNodesBenchProcessor(t, size, opts...)
-				defer cleanupBulk()
+					bulk, cleanupBulk := newAddNodesBenchProcessor(t, size, opts...)
+					defer cleanupBulk()
 
-				stream, cleanupStream := newAddNodesBenchProcessor(t, size, opts...)
-				defer cleanupStream()
+					stream, cleanupStream := newAddNodesBenchProcessor(t, size, opts...)
+					defer cleanupStream()
 
-				if disk {
-					setAll(bulk, nodes)
-					setAll(stream, nodes)
-				}
+					if disk {
+						setAll(bulk, nodes)
+						setAll(stream, nodes)
+					}
 
-				require.NoError(t, bulk.bulkBuildSubtrees(context.Background(), nodes, size))
-				require.NoError(t, stream.streamBuildSubtrees(context.Background(), splitRuns(nodes, cuts...), size))
+					require.NoError(t, bulk.bulkBuildSubtrees(context.Background(), nodes, size), "size %d, %d nodes", size, n)
+					require.NoError(t, stream.streamBuildSubtrees(context.Background(), splitRuns(nodes, cuts...), size), "size %d, %d nodes", size, n)
 
-				requireSameSubtrees(t, bulk, stream)
+					requireSameSubtrees(t, bulk, stream)
 
-				if disk && n > size {
-					require.Positive(t, requireIndexesMatchChain(t, stream))
+					if disk && n > size {
+						require.Positive(t, requireIndexesMatchChain(t, stream))
+					}
 				}
 			}
 		}
@@ -165,11 +170,10 @@ func TestStreamBuildSubtrees_FailureInstallsNothingAndRetiresWhatItBuilt(t *test
 // every move-back did before PR 9). The subtrees are mapped outside the heap, so B/op is the list and the
 // block's arrays.
 func BenchmarkReorgMoveBackBuild(b *testing.B) {
-	const (
-		size    = 1 << 14
-		pending = 1 << 20
-		lost    = 1 << 16
-	)
+	size, pending, lost := 1<<14, 1<<20, 1<<16
+	if testing.Short() { // the benchmark-compare job runs with -short
+		size, pending, lost = 1<<12, 1<<17, 1<<13
+	}
 
 	for _, tc := range []struct {
 		name           string

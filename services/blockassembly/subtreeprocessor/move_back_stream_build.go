@@ -76,16 +76,11 @@ func (stp *SubtreeProcessor) streamBuildSubtrees(ctx context.Context, runs [][]s
 		full   bool // the subtree is complete once it holds the chunk
 	}
 
-	// the open subtree takes what it has room for, then whole subtrees, then a partial one
-	var chunks []chunk
-
-	pos := 0
-
-	if room := subtreeSize - len(currentSt.Nodes); room > 0 {
-		fill := min(room, list.total)
-		chunks = append(chunks, chunk{st: currentSt, lo: 0, hi: fill, full: fill == room})
-		pos = fill
-	}
+	// the open subtree takes what it has room for (none, if it is full already, and it is chained as
+	// it is), then whole subtrees, then a partial one
+	fill := min(max(subtreeSize-len(currentSt.Nodes), 0), list.total)
+	chunks := []chunk{{st: currentSt, lo: 0, hi: fill, full: len(currentSt.Nodes)+fill == currentSt.Size()}}
+	pos := fill
 
 	for ; pos < list.total; pos += subtreeSize {
 		hi := min(pos+subtreeSize, list.total)
@@ -143,11 +138,6 @@ func (stp *SubtreeProcessor) streamBuildSubtrees(ctx context.Context, runs [][]s
 
 	if err := g.Wait(); err != nil {
 		return fail(err)
-	}
-
-	// The open subtree fills exactly, or the nodes ran out first; a node left over has no subtree to be in.
-	if !chunks[len(chunks)-1].full && len(chunks) > 1 && chunks[len(chunks)-1].st == currentSt {
-		return fail(errors.NewProcessingError("[streamBuildSubtrees] the open subtree is not complete but nodes are left"))
 	}
 
 	var open *subtreepkg.Subtree
