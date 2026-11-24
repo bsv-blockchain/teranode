@@ -30,6 +30,14 @@ package subtreeprocessor
 //	REORG_SCALE_INTAKE_TPS  live intake during the timed run, tx/s (default 0)
 //	REORG_SCALE_FAST        1 to run the reorg case with blockassembly_reorgFastPath on (default off);
 //	                        the report says whether the fast path applied or declined, and why
+//	REORG_SCALE_K0          set (0 = every subtree) to run the reorg case with blockassembly_storedPrefixTemplate on
+//	                        and blockassembly_reorgAwaitedSubtrees = n, and to report the template over time:
+//	                        tip change to the first non-empty template and to 50, 90 and 100% of the template's
+//	                        bytes. Four workers write each subtree's file (no meta) into a file blob store under
+//	                        REORG_SCALE_BLOB (default TMPDIR)
+//	REORG_SCALE_WRITE_DELAY a duration (default 0) each subtree write waits first, to stand in for a slower
+//	                        store than the local disk, where the stores finish inside the rebuild
+//	REORG_SCALE_BLOB        file:// path the K0 case writes the subtree files under (default: TMPDIR)
 //	REORG_SCALE_VERIFY      1 to check the order oracle after the run (slow, needs the hash sets)
 //	REORG_SCALE_OUT         path of the JSON report (default: logged only)
 //
@@ -40,15 +48,21 @@ package subtreeprocessor
 import (
 	"context"
 	"encoding/json"
+	"net/url"
 	"os"
 	"runtime"
 	"runtime/metrics"
 	"strconv"
+	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/bsv-blockchain/teranode/model"
+	"github.com/bsv-blockchain/teranode/pkg/fileformat"
+	"github.com/bsv-blockchain/teranode/stores/blob"
+	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/stretchr/testify/require"
 )
 
@@ -76,6 +90,16 @@ type reorgScaleReport struct {
 	IntakeSent     int     `json:"intake_sent"`
 	AssemblyLength int     `json:"assembly_length"`
 	OrderVerified  bool    `json:"order_verified"`
+
+	// K0 case: the template over time, from the start of the reorg (the tip change). Bytes are the
+	// subtrees' sizes in the template, against the whole chain when every store is done.
+	K0                *int    `json:"k0,omitempty"`
+	TemplateFirstSecs float64 `json:"template_first_seconds,omitempty"`
+	Template50Secs    float64 `json:"template_50pct_seconds,omitempty"`
+	Template90Secs    float64 `json:"template_90pct_seconds,omitempty"`
+	Template100Secs   float64 `json:"template_100pct_seconds,omitempty"`
+	TemplateBytes     uint64  `json:"template_bytes,omitempty"`
+	TemplateSteps     int     `json:"template_steps,omitempty"`
 
 	// delta case: the real sizes after rounding up to whole subtrees, the two timings, the probe
 	// rate of the delta and the sizes of its answer
@@ -192,8 +216,17 @@ func TestReorgScale(t *testing.T) {
 		return
 	}
 
+	var k0 *templateTimeline
+	if v, ok := os.LookupEnv("REORG_SCALE_K0"); ok && report.Case == "reorg" {
+		n, err := strconv.Atoi(v)
+		require.NoError(t, err, "REORG_SCALE_K0")
+
+		k0 = newTemplateTimeline(n)
+		report.K0 = &n
+	}
+
 	start := time.Now()
-	sc := newReorgScenario(t, reorgScenarioConfig{
+	cfg := reorgScenarioConfig{
 		seed:             2269,
 		pending:          report.Pending,
 		lost:             report.Lost,
@@ -205,7 +238,13 @@ func TestReorgScale(t *testing.T) {
 		subtreeSize:      report.SubtreeSize,
 		diskTxMap:        report.Map == "disk",
 		skipStoreMarks:   true,
-	})
+	}
+
+	if k0 != nil {
+		cfg.storeQueue, cfg.storedSet, cfg.reorgAwaitedSubtrees = k0.q, k0.set, k0.k0
+	}
+
+	sc := newReorgScenario(t, cfg)
 	report.BuildSeconds = time.Since(start).Seconds()
 
 	runtime.GC()
@@ -223,6 +262,10 @@ func TestReorgScale(t *testing.T) {
 
 	stopHeap := sampleHeap()
 	start = time.Now()
+
+	if k0 != nil {
+		k0.start(t, sc, start)
+	}
 
 	var err error
 
@@ -244,8 +287,16 @@ func TestReorgScale(t *testing.T) {
 		err = sc.stp.reset(sc.genesis, []*model.Block{sc.lost}, sc.forward, false, func() error { return nil })
 	}
 
+	if k0 != nil {
+		k0.committed.Store(true)
+	}
+
 	report.RunSeconds = time.Since(start).Seconds()
 	report.PeakHeapBytes = stopHeap()
+
+	if k0 != nil {
+		k0.finish(t, sc, &report)
+	}
 
 	report.PhaseSeconds = make(map[string]float64)
 	for phase, seconds := range reorgPhaseSeconds(phaseOp) {
@@ -359,4 +410,169 @@ func runReorgScaleDelta(t *testing.T, report *reorgScaleReport) {
 	report.NumGC = after.NumGC - before.NumGC
 
 	require.Equal(t, report.LostNodes, int(delta.Hits)+len(delta.D1), "every lost node is a hit or in D1")
+}
+
+// templateTimeline is the K0 case: a store queue with workers that write each subtree's file into a
+// file blob store, and a sampler that watches the template the processor serves. It measures how long
+// after the tip change a miner gets a first template and the rest of it, which the wait for the stores
+// before the marks decides.
+type templateTimeline struct {
+	k0  int
+	q   *StoreQueue
+	set *StoredSet
+
+	// committed is set when the reorg returns. The block assembler serves a template of the new tip
+	// only once its best block header has moved, which is after the reorg returned, so the sampler
+	// counts nothing before it (the processor publishes the data at every forward step).
+	committed atomic.Bool
+
+	mu      sync.Mutex
+	steps   []templateStep
+	stopped chan struct{}
+	done    sync.WaitGroup
+	cancel  context.CancelFunc
+}
+
+type templateStep struct {
+	at    time.Duration
+	bytes uint64
+}
+
+func newTemplateTimeline(k0 int) *templateTimeline {
+	return &templateTimeline{k0: k0, q: NewStoreQueue(1 << 40), set: NewStoredSet(), stopped: make(chan struct{})}
+}
+
+// start runs the workers and the sampler from the tip change at t0. The sampler counts a template
+// only once it is on the new tip and the reorg has returned.
+func (tl *templateTimeline) start(t *testing.T, sc *reorgScenario, t0 time.Time) {
+	t.Helper()
+
+	base := strings.TrimPrefix(os.Getenv("REORG_SCALE_BLOB"), "file://")
+	if base == "" {
+		base = os.TempDir()
+	}
+
+	dir, err := os.MkdirTemp(base, "reorgscale-k0-")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+
+	storeURL, err := url.Parse("file://" + dir)
+	require.NoError(t, err)
+
+	store, err := blob.NewStore(ulogger.TestLogger{}, storeURL)
+	require.NoError(t, err)
+
+	delay, err := time.ParseDuration(os.Getenv("REORG_SCALE_WRITE_DELAY"))
+	if os.Getenv("REORG_SCALE_WRITE_DELAY") == "" {
+		delay, err = 0, nil
+	}
+
+	require.NoError(t, err, "REORG_SCALE_WRITE_DELAY")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	tl.cancel = cancel
+
+	for range 4 {
+		tl.done.Add(1)
+
+		go func() {
+			defer tl.done.Done()
+
+			for {
+				req, _, ok := tl.q.Take(ctx)
+				if !ok {
+					return
+				}
+
+				res := StoreResult{SubtreeStored: true, MetaNotApplicable: true}
+
+				if !req.AnnounceOnly {
+					time.Sleep(delay)
+
+					b, err := req.Subtree.Serialize()
+					if err == nil {
+						err = store.Set(ctx, req.Subtree.RootHash()[:], fileformat.FileTypeSubtree, b)
+					}
+
+					if err != nil {
+						res = StoreResult{Err: err}
+					}
+				}
+
+				answerFromQueue(req, tl.set, res)
+			}
+		}()
+	}
+
+	tip := sc.forward[len(sc.forward)-1].Header.Hash()
+
+	tl.done.Add(1)
+
+	go func() {
+		defer tl.done.Done()
+
+		var seen int
+
+		for {
+			if data := sc.stp.GetPrecomputedMiningData(); tl.committed.Load() && data != nil && data.PreviousHeader != nil && *data.PreviousHeader.Hash() == *tip && len(data.Subtrees) != seen {
+				seen = len(data.Subtrees)
+
+				var bytes uint64
+				for _, st := range data.Subtrees {
+					bytes += st.SizeInBytes
+				}
+
+				tl.mu.Lock()
+				tl.steps = append(tl.steps, templateStep{at: time.Since(t0), bytes: bytes})
+				tl.mu.Unlock()
+			}
+
+			select {
+			case <-tl.stopped:
+				return
+			case <-time.After(time.Millisecond):
+			}
+		}
+	}()
+
+	t.Cleanup(func() {
+		tl.cancel()
+		tl.done.Wait()
+	})
+}
+
+// finish waits for every store of the chain, stops the sampler and fills the report.
+func (tl *templateTimeline) finish(t *testing.T, sc *reorgScenario, report *reorgScaleReport) {
+	t.Helper()
+
+	chain := sc.stp.chainedSubtrees
+	require.Eventually(t, func() bool { return tl.set.PrefixLen(chain) == len(chain) }, 4*time.Hour, 20*time.Millisecond, "every subtree stored")
+	time.Sleep(20 * time.Millisecond) // the sampler sees the last step
+	close(tl.stopped)
+
+	var total uint64
+	for _, st := range chain {
+		total += st.SizeInBytes
+	}
+
+	tl.mu.Lock()
+	defer tl.mu.Unlock()
+
+	report.TemplateBytes, report.TemplateSteps = total, len(tl.steps)
+
+	at := func(pct float64) float64 {
+		for _, step := range tl.steps {
+			if float64(step.bytes) >= pct*float64(total) {
+				return step.at.Seconds()
+			}
+		}
+
+		return 0
+	}
+
+	if len(tl.steps) > 0 {
+		report.TemplateFirstSecs = tl.steps[0].at.Seconds()
+	}
+
+	report.Template50Secs, report.Template90Secs, report.Template100Secs = at(0.5), at(0.9), at(1)
 }
