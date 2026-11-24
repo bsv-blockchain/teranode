@@ -37,9 +37,9 @@ type fakeSweepStore struct {
 	stale           []chainhash.Hash
 	queryErr        error
 	queryBefore     []uint32
-	veryStale       []chainhash.Hash
-	veryStaleErr    error
 	getResp         map[chainhash.Hash]*meta.Data
+	getErrs         map[chainhash.Hash]error
+	getReads        []chainhash.Hash
 	spendErr        error
 	spendIncomplete bool
 	spendSpends     []*utxo.Spend
@@ -161,17 +161,16 @@ func (f *fakeSweepStore) QueryStaleCreatingTxs(_ context.Context, before uint32,
 	f.lastLimit = limit
 	f.queryBefore = append(f.queryBefore, before)
 
-	// The query for the records that are much older than the sweep's age asks for a height well
-	// below the one of the plain query. These tests sweep at height 100 with a minimum age of 2, so
-	// that is 80 against 98.
-	if before < 90 {
-		return f.veryStale, f.veryStaleErr
-	}
-
 	return f.stale, f.queryErr
 }
 
 func (f *fakeSweepStore) Get(_ context.Context, hash *chainhash.Hash, requested ...fields.FieldName) (*meta.Data, error) {
+	f.getReads = append(f.getReads, *hash)
+
+	if err, ok := f.getErrs[*hash]; ok {
+		return nil, err
+	}
+
 	if f.txUnreadable[*hash] && slices.Contains(requested, fields.Tx) {
 		return nil, errors.NewStorageError("the external transaction blob of %s is gone", hash.String())
 	}
@@ -626,64 +625,165 @@ func TestSweepCreatingTxsLockedParentRetriesNextBlock(t *testing.T) {
 	require.Empty(t, store.unlocked)
 }
 
-// A parent that stays locked is transient only for a while. A record that has waited for it for ten
-// times the age at which the sweep first saw it is rolled back: it is not waiting for a commit, and
-// it keeps the inputs that did spend, and its own outputs, unspendable for as long as the lock lasts.
-func TestSweepCreatingTxsRollsBackARecordThatAParentHasLockedForLong(t *testing.T) {
+// txWithParents returns a tx that spends one output of each given parent. The vout of the first
+// input makes the txid distinct.
+func txWithParents(vout uint32, parents ...chainhash.Hash) *bt.Tx {
+	tx := oneOutputTx(vout)
+	tx.Inputs = nil
+
+	for i := range parents {
+		in := &bt.Input{PreviousTxOutIndex: vout + uint32(i), PreviousTxSatoshis: 1000, PreviousTxScript: bscript.NewFromBytes([]byte{0x51}), UnlockingScript: bscript.NewFromBytes([]byte{})} //nolint:gosec // small test index
+		_ = in.PreviousTxIDAdd(&parents[i])
+		tx.Inputs = append(tx.Inputs, in)
+	}
+
+	return tx
+}
+
+// blockedParent is one parent that fails the re-spend of a creating record. state is what the
+// store holds for the parent, and a nil state is a parent that is not in the store. spendErr is
+// the error of its input (a locked parent when nil), and noTxID leaves the parent out of the
+// result of the spend.
+type blockedParent struct {
+	state    *meta.Data
+	readErr  error
+	spendErr error
+	noTxID   bool
+}
+
+// A record that only a parent blocks is retried on every pass. With pruner_creatingTxSweepBlockedAgeBlocks
+// above 0 it is rolled back when it is older than that age and every parent that blocked it in this pass
+// has itself been blocked for at least that age. The age of the parent is read from its own record.
+func TestSweepCreatingTxsRollsBackARecordOnlyWhenItsParentsHaveBlockedItForLong(t *testing.T) {
 	ns, err := nullstore.NewNullStore()
 	require.NoError(t, err)
 
-	txA := oneOutputTx(1)
-	hashA := *txA.TxIDChainHash()
+	const (
+		height = uint32(100)
+		age    = uint32(20)
+	)
 
-	for name, transient := range map[string]error{"locked": errors.ErrTxLocked, "creating": errors.ErrTxCreating} {
-		t.Run(name+" and long stale", func(t *testing.T) {
-			store := &fakeSweepStore{
-				NullStore:   ns,
-				stale:       []chainhash.Hash{hashA},
-				veryStale:   []chainhash.Hash{hashA},
-				getResp:     map[chainhash.Hash]*meta.Data{hashA: {Creating: true, Attempt: sweepToken, Tx: txA}},
-				spendErr:    transient,
-				spendSpends: []*utxo.Spend{{Err: transient}},
-			}
+	parentA := chainhash.HashH([]byte("parent a"))
+	parentB := chainhash.HashH([]byte("parent b"))
 
-			newSweepServer(t, store).sweepCreatingTxs(context.Background(), 100)
+	locked := func(since uint32) *meta.Data { return &meta.Data{Locked: true, UnminedSince: since} }
+	creating := func(since uint32) *meta.Data { return &meta.Data{Creating: true, UnminedSince: since} }
 
-			require.Equal(t, []chainhash.Hash{hashA}, store.began, "a record that a parent has blocked for long is rolled back")
-			require.Len(t, store.queryBefore, 2)
-			require.Less(t, store.queryBefore[1], store.queryBefore[0], "the second query reads the older records")
-		})
-
-		t.Run(name+" and not yet long stale", func(t *testing.T) {
-			store := &fakeSweepStore{
-				NullStore:   ns,
-				stale:       []chainhash.Hash{hashA},
-				getResp:     map[chainhash.Hash]*meta.Data{hashA: {Creating: true, Attempt: sweepToken, Tx: txA}},
-				spendErr:    transient,
-				spendSpends: []*utxo.Spend{{Err: transient}},
-			}
-
-			newSweepServer(t, store).sweepCreatingTxs(context.Background(), 100)
-
-			require.Empty(t, store.began, "a parent that may still be committing leaves the record creating")
-		})
+	cases := []struct {
+		name         string
+		setting      uint32
+		childSince   uint32
+		parents      []blockedParent
+		wantRollback bool
+		noParentRead bool
+	}{
+		{name: "the rule is off", setting: 0, childSince: 10, parents: []blockedParent{{state: locked(10)}}, noParentRead: true},
+		{name: "a locked parent has blocked it for long", setting: age, childSince: 70, parents: []blockedParent{{state: locked(60)}}, wantRollback: true},
+		{name: "a creating parent has blocked it for long", setting: age, childSince: 70, parents: []blockedParent{{state: creating(60), spendErr: errors.ErrTxCreating}}, wantRollback: true},
+		{name: "a parent has blocked it for exactly the age", setting: age, childSince: 70, parents: []blockedParent{{state: locked(height - age)}}, wantRollback: true},
+		{name: "a parent has blocked it for one block less than the age", setting: age, childSince: 70, parents: []blockedParent{{state: locked(height - age + 1)}}},
+		{name: "a parent became blocked recently", setting: age, childSince: 70, parents: []blockedParent{{state: locked(95)}}},
+		{name: "the record is one block older than the age", setting: age, childSince: height - age - 1, parents: []blockedParent{{state: locked(10)}}, wantRollback: true},
+		{name: "the record is exactly the age", setting: age, childSince: height - age, parents: []blockedParent{{state: locked(10)}}},
+		{name: "the record is younger than the age", setting: age, childSince: 85, parents: []blockedParent{{state: locked(10)}}},
+		{name: "the record has no age", setting: age, childSince: 0, parents: []blockedParent{{state: locked(10)}}},
+		{name: "the parent is not in the store", setting: age, childSince: 70, parents: []blockedParent{{}}},
+		{name: "the parent cannot be read", setting: age, childSince: 70, parents: []blockedParent{{readErr: errors.NewStorageError("read boom")}}},
+		{name: "the parent no longer blocks", setting: age, childSince: 70, parents: []blockedParent{{state: &meta.Data{UnminedSince: 10}}}},
+		{name: "the parent has no unminedSince", setting: age, childSince: 70, parents: []blockedParent{{state: locked(0)}}},
+		{name: "the parent has the floor of a backdated unminedSince", setting: age, childSince: 70, parents: []blockedParent{{state: locked(1)}}},
+		{name: "the spend does not name the parent", setting: age, childSince: 70, parents: []blockedParent{{state: locked(10), noTxID: true}}},
+		{name: "two parents have blocked it for long", setting: age, childSince: 70, parents: []blockedParent{{state: locked(10)}, {state: creating(20), spendErr: errors.ErrTxCreating}}, wantRollback: true},
+		{name: "one of two parents became blocked recently", setting: age, childSince: 70, parents: []blockedParent{{state: locked(10)}, {state: locked(95)}}},
+		{name: "one of two parents cannot be read", setting: age, childSince: 70, parents: []blockedParent{{state: locked(10)}, {}}},
+		{name: "another input failed for a reason that is not a parent in flight", setting: age, childSince: 70, parents: []blockedParent{{state: locked(10)}, {state: locked(10), spendErr: errors.NewStorageError("write timed out")}}},
 	}
 
-	t.Run("a failed read of the older records rolls nothing back", func(t *testing.T) {
-		store := &fakeSweepStore{
-			NullStore:    ns,
-			stale:        []chainhash.Hash{hashA},
-			veryStale:    []chainhash.Hash{hashA},
-			veryStaleErr: errors.NewStorageError("read boom"),
-			getResp:      map[chainhash.Hash]*meta.Data{hashA: {Creating: true, Attempt: sweepToken, Tx: txA}},
-			spendErr:     errors.ErrTxLocked,
-			spendSpends:  []*utxo.Spend{{Err: errors.ErrTxLocked}},
-		}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			hashes := []chainhash.Hash{parentA, parentB}[:len(tc.parents)]
 
-		newSweepServer(t, store).sweepCreatingTxs(context.Background(), 100)
+			txA := txWithParents(1, hashes...)
+			hashA := *txA.TxIDChainHash()
 
-		require.Empty(t, store.began)
-	})
+			getResp := map[chainhash.Hash]*meta.Data{hashA: {Creating: true, Attempt: sweepToken, Tx: txA, UnminedSince: tc.childSince}}
+			getErrs := map[chainhash.Hash]error{}
+			spends := make([]*utxo.Spend, len(tc.parents))
+
+			for i, p := range tc.parents {
+				if p.state != nil {
+					getResp[hashes[i]] = p.state
+				}
+
+				if p.readErr != nil {
+					getErrs[hashes[i]] = p.readErr
+				}
+
+				spendErr := p.spendErr
+				if spendErr == nil {
+					spendErr = errors.ErrTxLocked
+				}
+
+				spends[i] = &utxo.Spend{Err: spendErr}
+				if !p.noTxID {
+					spends[i].TxID = &hashes[i]
+				}
+			}
+
+			store := &fakeSweepStore{
+				NullStore:   ns,
+				stale:       []chainhash.Hash{hashA},
+				getResp:     getResp,
+				getErrs:     getErrs,
+				spendErr:    errors.ErrTxLocked,
+				spendSpends: spends,
+			}
+
+			s := newSweepServer(t, store)
+			s.settings.Pruner.CreatingTxSweepBlockedAgeBlocks = tc.setting
+			s.sweepCreatingTxs(context.Background(), height)
+
+			if tc.wantRollback {
+				require.Equal(t, []chainhash.Hash{hashA}, store.began, "the record is rolled back")
+			} else {
+				require.Empty(t, store.began, "the record is left creating for the next pass")
+				require.Empty(t, store.events)
+			}
+
+			if tc.noParentRead {
+				for _, parent := range hashes {
+					require.NotContains(t, store.getReads, parent, "the rule is off, so no parent is read")
+				}
+			}
+
+			require.Len(t, store.queryBefore, 1, "the child's age comes from its own record, not from a second query")
+		})
+	}
+}
+
+// A record that lost a double-spend is rolled back whatever the setting is, and without reading any parent.
+func TestSweepCreatingTxsRollsBackAnUnwinnableRecordWithTheBlockedAgeOff(t *testing.T) {
+	ns, err := nullstore.NewNullStore()
+	require.NoError(t, err)
+
+	parent := chainhash.HashH([]byte("parent"))
+	txA := txWithParents(1, parent)
+	hashA := *txA.TxIDChainHash()
+
+	store := &fakeSweepStore{
+		NullStore:   ns,
+		stale:       []chainhash.Hash{hashA},
+		getResp:     map[chainhash.Hash]*meta.Data{hashA: {Creating: true, Attempt: sweepToken, Tx: txA, UnminedSince: 99}},
+		spendErr:    errors.ErrSpent,
+		spendSpends: []*utxo.Spend{{TxID: &parent, Err: errors.ErrSpent}},
+	}
+
+	s := newSweepServer(t, store)
+	require.Equal(t, uint32(0), s.settings.Pruner.CreatingTxSweepBlockedAgeBlocks, "the rule is off unless it is set")
+	s.sweepCreatingTxs(context.Background(), 100)
+
+	require.Equal(t, []chainhash.Hash{hashA}, store.began)
+	require.NotContains(t, store.getReads, parent)
 }
 
 func TestSweepCreatingTxsRollForwardDoesNotIgnoreLocks(t *testing.T) {

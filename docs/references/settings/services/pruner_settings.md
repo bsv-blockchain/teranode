@@ -29,6 +29,7 @@ Settings are organized under the `Pruner` struct in `settings.Settings`.
 | SkipPreserveParents | bool | false | pruner_skipPreserveParents | Skip Phase 1 - parent preservation for unmined transactions |
 | SkipProcessExpiredPreservations | bool | false | pruner_skipProcessExpiredPreservations | Skip Phase 1b - expiry of old parent preservations |
 | MinBlockHeight | uint32 | 0 | pruner_min_block_height | Skip all pruning until block height exceeds this value |
+| CreatingTxSweepBlockedAgeBlocks | uint32 | 0 (off) | pruner_creatingTxSweepBlockedAgeBlocks | Age in blocks after which the creating sweep rolls back a record that only a locked or creating parent blocks, once every such parent has been blocked as long. The rollback deletes the record and its transaction, unspends its inputs and holds the txid. 0 turns the rule off: the record is retried on every pass |
 | SkipDeletions | bool | false | pruner_skipDeletions | Skip deletion operations during pruning |
 
 ### Service Control

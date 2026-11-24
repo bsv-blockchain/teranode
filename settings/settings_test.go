@@ -235,4 +235,14 @@ func TestCreateFirstSettingsWired(t *testing.T) {
 		"pruner_creatingTxSweepMaxPerPass must be wired in NewSettings (default 1000), else the cap is zero")
 	require.False(t, tSettings.UtxoStore.UseCreateFirstOrder,
 		"utxostore_useCreateFirstOrder must be wired in NewSettings (default false)")
+	require.Equal(t, uint32(0), tSettings.Pruner.CreatingTxSweepBlockedAgeBlocks,
+		"pruner_creatingTxSweepBlockedAgeBlocks must default to 0, which turns the rollback of a transaction blocked by a parent off")
+}
+
+// A default of 0 cannot show that a setting is read, so this sets the key and expects the value.
+func TestCreatingTxSweepBlockedAgeBlocksIsRead(t *testing.T) {
+	t.Setenv("pruner_creatingTxSweepBlockedAgeBlocks", "37")
+
+	require.Equal(t, uint32(37), NewSettings().Pruner.CreatingTxSweepBlockedAgeBlocks,
+		"pruner_creatingTxSweepBlockedAgeBlocks must be wired in NewSettings, else the operator has no lever")
 }

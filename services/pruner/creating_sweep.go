@@ -20,9 +20,9 @@ const defaultCreatingSweepMaxPerPass = 1000
 // stored tx bytes and finalizes it. Spends are idempotent for the same spender, so
 // re-spending inputs an earlier attempt already spent is safe. The roll-forward does not
 // ignore locks: a locked parent is the hand-off barrier, so ErrTxLocked leaves the record
-// creating and it is retried on a later pass, until the record is older than
-// lockedParentRollbackAgeMultiple times the age at which the sweep first sees it. A parent that
-// still blocks it then is not committing, and the record is rolled back. A tx that lost a double-spend (ErrSpent,
+// creating and it is retried on every pass. Only when pruner_creatingTxSweepBlockedAgeBlocks is set
+// is such a record rolled back, and then only when it is older than that age and every parent that
+// blocked it has been blocked that long too (blockedByParentsForLong). A tx that lost a double-spend (ErrSpent,
 // ErrTxConflicting, ErrFrozen, ErrUtxoHashMismatch), or that spends a missing parent or a vout
 // that does not exist (ErrTxNotFound), is rolled back by
 // utxo.RollBackCreating: the record is marked rolling back, every input of the tx is
@@ -75,35 +75,9 @@ func (s *Server) sweepCreatingTxs(ctx context.Context, blockHeight uint32) {
 	progressed := 0
 	warnedNoBlockAssembly := false
 
-	// longStale reports whether a record is old enough that a parent which still blocks it is not
-	// committing. The records older than that are read once per pass, and only when one needs it.
-	var (
-		veryStale       map[chainhash.Hash]struct{}
-		veryStaleLoaded bool
-	)
-
-	longStale := func(hash chainhash.Hash) bool {
-		if !veryStaleLoaded {
-			veryStaleLoaded = true
-
-			bound := uint64(minAge) * lockedParentRollbackAgeMultiple
-			if uint64(blockHeight) > bound {
-				older, queryErr := s.utxoStore.QueryStaleCreatingTxs(ctx, blockHeight-uint32(bound), maxPerPass) //nolint:gosec // bound < blockHeight
-				if queryErr != nil {
-					s.logger.Warnf("[pruner][creating-sweep][%d] reading the records older than %d blocks failed, none is rolled back for a locked parent this pass: %v", blockHeight, bound, queryErr)
-				} else {
-					veryStale = make(map[chainhash.Hash]struct{}, len(older))
-					for _, h := range older {
-						veryStale[h] = struct{}{}
-					}
-				}
-			}
-		}
-
-		_, ok := veryStale[hash]
-
-		return ok
-	}
+	// parentBlocked caches, for this pass, whether a parent has been locked or creating for at least
+	// pruner_creatingTxSweepBlockedAgeBlocks. Many records can wait on one parent.
+	parentBlocked := make(map[chainhash.Hash]bool)
 
 	for _, hash := range hashes {
 		hash := hash
@@ -218,14 +192,14 @@ func (s *Server) sweepCreatingTxs(ctx context.Context, blockHeight uint32) {
 		// bypassed. The rule takes a spend lease first, which the store refuses for a record
 		// that is rolling back, and a rollback that begins later waits for the lease and then
 		// reverses the spends this pass made.
-		_, completed, rfErr := utxo.RollForwardCreating(ctx, s.logger, s.utxoStore, md.Tx, md.Attempt, blockHeight)
+		rfSpends, completed, rfErr := utxo.RollForwardCreating(ctx, s.logger, s.utxoStore, md.Tx, md.Attempt, blockHeight)
 		if rfErr != nil {
-			// A locked or creating parent is transient, and the record waits for it. A parent that
-			// stays that way for lockedParentRollbackAgeMultiple times the age at which the sweep
-			// first sees a record is not committing, and a record that waits on it would keep the
-			// inputs that did spend, and every output of its own, unspendable for as long as the lock
-			// lasts. Such a record is rolled back like any other that can never be completed.
-			if isUnwinnableSpendError(rfErr) || (isTransientSpendError(rfErr) && longStale(hash)) {
+			// A locked or creating parent is transient, and the record waits for it. Only when
+			// pruner_creatingTxSweepBlockedAgeBlocks is set is such a record rolled back, and then only
+			// when the record is that old and every parent that blocked it has been blocked for that
+			// long too: one that is not committing keeps the inputs that did spend, and every output of
+			// the record, unspendable for as long as it lasts.
+			if isUnwinnableSpendError(rfErr) || (isTransientSpendError(rfErr) && s.blockedByParentsForLong(ctx, blockHeight, md.UnminedSince, rfSpends, parentBlocked)) {
 				// A lease that is still live belongs to a spender that returned with an unknown
 				// outcome or crashed. The rollback would wait for it, so the record is left for a
 				// later pass, when the lease is stale.
@@ -306,10 +280,74 @@ func (s *Server) sweepCreatingTxs(ctx context.Context, blockHeight uint32) {
 	}
 }
 
-// lockedParentRollbackAgeMultiple is how many times the age at which the sweep first sees a record
-// (pruner_creatingTxSweepMinAgeBlocks) a record may wait for a locked or creating parent before the
-// sweep rolls it back.
-const lockedParentRollbackAgeMultiple = 10
+// blockedByParentsForLong reports whether a creating record that failed its re-spend only because
+// parents are in flight may be rolled back for its age. It is false when
+// pruner_creatingTxSweepBlockedAgeBlocks is 0, which is the default. Otherwise the record must be
+// older than that age, and every parent that gave a transient answer in this pass must be read as
+// still locked or creating and as having been so for at least that age. A failure of any other kind
+// on an input, a spend that does not name its parent, a parent that cannot be read and a parent whose
+// age cannot be established all leave the record for the next pass.
+func (s *Server) blockedByParentsForLong(ctx context.Context, blockHeight, unminedSince uint32, spends []*utxo.Spend, verified map[chainhash.Hash]bool) bool {
+	age := s.settings.Pruner.CreatingTxSweepBlockedAgeBlocks
+	if age == 0 {
+		return false
+	}
+
+	if unminedSince == 0 || unminedSince >= blockHeight || blockHeight-unminedSince <= age {
+		return false
+	}
+
+	var parents []chainhash.Hash
+
+	for _, sp := range spends {
+		if sp == nil || sp.Err == nil {
+			continue
+		}
+
+		if !isTransientSpendError(sp.Err) || sp.TxID == nil {
+			return false
+		}
+
+		parents = append(parents, *sp.TxID)
+	}
+
+	if len(parents) == 0 {
+		return false
+	}
+
+	for _, parent := range parents {
+		long, known := verified[parent]
+		if !known {
+			long = s.parentBlockedForAtLeast(ctx, blockHeight, parent, age)
+			verified[parent] = long
+		}
+
+		if !long {
+			return false
+		}
+	}
+
+	return true
+}
+
+// parentBlockedForAtLeast reads the record of a parent and reports whether it is still locked or
+// creating and was stamped with an unminedSince at least age blocks below blockHeight. An unminedSince
+// of 0 means mined, and 1 is the floor of a backdated value (utxo.BackdatedUnminedSince), so neither
+// says when the parent was stored.
+func (s *Server) parentBlockedForAtLeast(ctx context.Context, blockHeight uint32, parent chainhash.Hash, age uint32) bool {
+	md, err := s.utxoStore.Get(ctx, &parent, fields.UnminedSince, fields.Locked, fields.Creating)
+	if err != nil {
+		s.logger.Warnf("[pruner][creating-sweep][%d] reading the parent %s of a blocked record failed, the record is left for the next pass: %v", blockHeight, parent, err)
+
+		return false
+	}
+
+	if !md.Locked && !md.Creating {
+		return false
+	}
+
+	return md.UnminedSince > 1 && md.UnminedSince <= blockHeight && blockHeight-md.UnminedSince >= age
+}
 
 // isTransientSpendError reports whether a spend error says that a parent is committing: its record
 // is locked, or still creating.

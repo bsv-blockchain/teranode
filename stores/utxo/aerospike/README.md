@@ -672,10 +672,11 @@ from touching the next.
   `utxostore_spendRollbackTimeout`, which a retry of the same transaction meets before the parent
   has committed. A repeat finds the record, spends again and finalizes it, and the sweep does the
   same or rolls it back once an input can no longer be spent. One input with any other error
-  decides for the rollback. A parent that stays locked or creating is not committing: the sweep
-  rolls such a record back once it is older than ten times `pruner_creatingTxSweepMinAgeBlocks`
-  (`lockedParentRollbackAgeMultiple`), because until then it keeps the inputs that did spend,
-  and its own outputs, unspendable for as long as the lock lasts.
+  decides for the rollback. The sweep retries such a record on every pass. Only when
+  `pruner_creatingTxSweepBlockedAgeBlocks` is above 0 (it is 0, off, by default) does it roll the
+  record back for its age: the record must be older than that, and every parent that gave the
+  transient answer in the pass must be read as still locked or creating, with an `unminedSince`
+  at least that many blocks old.
 - **Expiry.** A hold expires with its time to live. `ClearCreateFirstHold(hash, adopt)` deletes
   one earlier, or one that has no time to live, filtered on `hold` and on the `holdUntil` that
   was read. Without `adopt` it goes
