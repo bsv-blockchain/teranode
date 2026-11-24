@@ -3,6 +3,7 @@ package subtreeprocessor
 import (
 	"context"
 	"fmt"
+	"math"
 	"math/rand"
 	"slices"
 	"sync"
@@ -817,5 +818,87 @@ func TestLaneBitmapBuildsMatchAddMany(t *testing.T) {
 			require.Equal(t, bm.ToArray(), got.Lanes[l].ToArray(), "round %d lane %d", round, l)
 			require.Equal(t, bm.ToArray(), fromFill.Lanes[l].ToArray(), "round %d lane %d from the record", round, l)
 		}
+	}
+}
+
+// laneBitmap's range and bitset paths match AddMany for the positions production lanes hold:
+// long ascending runs, as the dequeue loop fills a subtree, and dense positions far past the
+// first container, including one lane whose lowest is not on a container boundary and one that
+// ends at MaxUint32.
+func TestLaneBitmapPathsMatchAddMany(t *testing.T) {
+	r := rand.New(rand.NewSource(11))
+
+	runs := func(starts []uint64, lengths []int) []uint64 {
+		var positions []uint64
+
+		for i, start := range starts {
+			for j := 0; j < lengths[i]; j++ {
+				positions = append(positions, start+uint64(j)) //nolint:gosec // small
+			}
+		}
+
+		return positions
+	}
+
+	dense := func(lowest uint64, n int) []uint64 {
+		positions := make([]uint64, 0, n)
+		p := lowest
+
+		for i := 0; i < n; i++ {
+			positions = append(positions, p)
+			p += uint64(1 + r.Intn(3)) //nolint:gosec // small
+		}
+
+		r.Shuffle(len(positions), func(i, j int) { positions[i], positions[j] = positions[j], positions[i] })
+
+		return positions
+	}
+
+	cases := map[string][]uint64{
+		// four runs, the last one position long: the range path, trailing run included
+		"long runs": runs([]uint64{5_000_000, 5_000_900, 5_002_000, 5_003_000}, []int{700, 700, 699, 1}),
+		// runs starting past the first container, off a boundary
+		"long runs past 2^20": runs([]uint64{1<<20 + 12_345, 1<<20 + 20_000}, []int{1500, 1500}),
+		// shuffled, short gaps: the bitset path with a base past the first container, off a boundary
+		"dense past 2^20": dense(1<<20+12_345, 3000),
+		// the bitset path on a container boundary
+		"dense on a boundary": dense(7<<16, 3000),
+		// the bitset path ending at MaxUint32
+		"dense to MaxUint32": func() []uint64 {
+			positions := make([]uint64, 0, 5000)
+			for p := uint64(math.MaxUint32); len(positions) < 5000; p -= 2 {
+				positions = append(positions, p)
+			}
+
+			r.Shuffle(len(positions), func(i, j int) { positions[i], positions[j] = positions[j], positions[i] })
+
+			return positions
+		}(),
+	}
+
+	for name, positions := range cases {
+		t.Run(name, func(t *testing.T) {
+			want := roaring64.New()
+			want.AddMany(positions)
+
+			require.Equal(t, want.ToArray(), laneBitmap(append([]uint64(nil), positions...)).ToArray())
+
+			packed := make([]uint64, len(positions))
+			for i, p := range positions {
+				packed[i] = lane.Pack(4, p)
+			}
+
+			got, unpositioned := bitmapsFromPositions(chainhash.Hash{1}, append([]uint64(nil), packed...))
+			require.Zero(t, unpositioned)
+			require.Equal(t, want.ToArray(), got.Lanes[4].ToArray(), "bitmapsFromPositions")
+
+			fill := newLaneFill(nil)
+			for _, p := range packed {
+				fill.add(p)
+			}
+
+			fromFill, _ := fill.bitmaps(chainhash.Hash{1})
+			require.Equal(t, want.ToArray(), fromFill.Lanes[4].ToArray(), "the record")
+		})
 	}
 }
