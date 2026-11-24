@@ -293,9 +293,15 @@ func TestReorgDifferential_FastPathMatchesSlowPath(t *testing.T) {
 }
 
 // Random forks over every knob the fast path accepts: overlap 0 to 100 percent, one to three winning
-// blocks, scattered or front-clustered hits.
+// blocks, scattered or front-clustered hits. Six seeds under `make test`; all 24 under heavy tests
+// (`make test-heavy`, the mutant script).
 func TestReorgDifferential_FastPathMatchesSlowPathOnRandomForks(t *testing.T) {
-	for seed := range uint64(24) {
+	seeds := uint64(6)
+	if heavyTests() {
+		seeds = 24
+	}
+
+	for seed := range seeds {
 		rng := rand.New(rand.NewPCG(seed, 0x6))
 
 		cfg := smallScenarioConfig()
@@ -348,9 +354,15 @@ func fastPathDeclineCases() map[string]struct {
 	}
 }
 
+// No decline reason depends on the map type, so the disk map runs only under heavy tests.
 func TestReorgDifferential_FastPathDeclinesWhatItCannotProve(t *testing.T) {
+	disks := []bool{false}
+	if heavyTests() {
+		disks = append(disks, true)
+	}
+
 	for name, c := range fastPathDeclineCases() {
-		for _, disk := range []bool{false, true} {
+		for _, disk := range disks {
 			t.Run(fmt.Sprintf("%s/disk=%v", name, disk), func(t *testing.T) {
 				cfg := smallScenarioConfig()
 				cfg.diskTxMap = disk
