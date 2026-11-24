@@ -1037,10 +1037,7 @@ func (d *Daemon) startValidatorService(
 		return err
 	}
 	// Keep the interface nil when the optional producer is not configured.
-	var policyRejectedTxKafkaProducerClient kafka.KafkaAsyncProducerI
-	if policyRejectedProducer != nil {
-		policyRejectedTxKafkaProducerClient = policyRejectedProducer
-	}
+	policyRejectedTxKafkaProducerClient := nonNilAsyncProducer(policyRejectedProducer)
 
 	// Create the BlockAssembly client for the Validator service
 	var blockAssemblyClient *blockassembly.Client
