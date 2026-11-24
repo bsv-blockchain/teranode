@@ -414,6 +414,10 @@ const MaxFilenameLength = 255
 // downstream decoder could turn back into a real one). The check is deliberately a fixed
 // deny-list on the raw string: it does not clean or normalise the input, so there is no
 // ambiguity between what was validated and what is used.
+//
+// The guarantee covers the name used whole. An accepted name may still start or end with "..",
+// so a caller that cuts further path components out of it must check those itself, as
+// ConstructFilename does for its hash-prefix folder.
 func ValidateFilename(name string) error {
 	if name == "" {
 		return errors.NewInvalidArgumentError("filename must not be empty")
