@@ -367,7 +367,7 @@ func TestPrepareForkBlock_ToCheckSubtreeWithChangedLeafIsRejected(t *testing.T) 
 // The child's gate counts the competitor's set as freed, since the union is built from the store and the
 // competitor's set is let go before the build: at the design's shape a child fits where the competitor
 // did, and does not where the live heap, competitor's set included, would have it over.
-func TestPrepareForkBlock_ChildGateCountsTheCompetitorsSetAsFreed(t *testing.T) {
+func TestPrepareForkBlock_ChildGateCountsTheCompetitorsSetUntilAGCFreesIt(t *testing.T) {
 	const (
 		blockTxs = 8
 		pending  = 5
@@ -378,11 +378,12 @@ func TestPrepareForkBlock_ChildGateCountsTheCompetitorsSetAsFreed(t *testing.T) 
 
 	for _, tc := range []struct {
 		name  string
-		extra int64 // limit above what the union needs, with the competitor's set freed
+		extra int64 // limit above what the union needs alone
 		built bool
 	}{
-		{"fits once the competitor's set is freed", 0, true},
-		{"one step short", -4, false},
+		// the live figure is the last GC's, so the competitor's set still counts while the child builds
+		{"the competitor's set still counts", 0, false},
+		{"fits with the competitor's set counted", int64((solo+2)/3*4) + 4, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newForkFixture(t)

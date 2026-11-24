@@ -160,16 +160,14 @@ func (stp *SubtreeProcessor) planFastReorg(ctx context.Context, moveBackBlocks, 
 		return nil, "tx_map_length"
 	}
 
-	// A set prepared while the winners were validated is in the live heap already, so the gate does
-	// not charge it again, and it is not read again below.
+	// A set prepared while the winners were validated is not read again below. The gate charges it all
+	// the same: the live figure is the heap the last GC found, which need not include a set built since.
 	preparedWinners, preparedConflicting, usePrepared := stp.takePreparedForkSet(moveForwardBlocks)
 
 	var setBytes uint64
 
-	if !usePrepared {
-		for _, block := range moveForwardBlocks {
-			setBytes += block.TransactionCount * fastPathSetBytesPerHash
-		}
+	for _, block := range moveForwardBlocks {
+		setBytes += block.TransactionCount * fastPathSetBytesPerHash
 	}
 
 	// The pending set is charged twice: the flat copy of the survivors (copySurvivors) is alive while the

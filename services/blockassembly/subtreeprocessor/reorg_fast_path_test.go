@@ -816,9 +816,9 @@ func TestReorgFastPath_LetsGoOfThePreparedSetsWhenItDeclines(t *testing.T) {
 	}
 }
 
-// The memory gate charges the winners' set only when the fast path has to build it: a prepared set is
-// in the live heap already.
-func TestReorgFastPath_MemoryGateDoesNotChargeAPreparedSetTwice(t *testing.T) {
+// The memory gate charges the winners' set whether the fast path builds it or takes a prepared one: the
+// live figure is the heap the last GC found, which need not include a set built since.
+func TestReorgFastPath_MemoryGateChargesAPreparedSetToo(t *testing.T) {
 	sc := newReorgScenario(t, smallScenarioConfig())
 
 	var setBytes uint64
@@ -847,7 +847,7 @@ func TestReorgFastPath_MemoryGateDoesNotChargeAPreparedSetTwice(t *testing.T) {
 	rec = fastPathRun{}
 
 	require.NoError(t, recordingFastPath(&rec)(t, prepared))
-	require.True(t, rec.applied, "prepared, the set is not charged again: %v", rec.reasons)
+	require.Equal(t, []string{"memory"}, rec.reasons, "prepared, the set is charged all the same")
 }
 
 // The differential harness still matches the slow path on prepared sets, over what the fast path's own

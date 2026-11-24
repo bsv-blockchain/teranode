@@ -38,18 +38,17 @@ func forkPrepareWorkers() int {
 	return max(1, runtime.GOMAXPROCS(0)/4)
 }
 
-// forkSetFits is the memory gate before a set is built: the heap the last GC found live, less the
-// bytes that are let go before the build, plus the set's bytes and the pending set's 48 bytes a
-// transaction, must stay within three quarters of the memory limit. An unset limit passes, as in the
-// fast path. The pending count is the processor's atomic one: the tx map itself is swapped by the
-// processor goroutine.
-func (stp *SubtreeProcessor) forkSetFits(setBytes, releasing uint64) bool {
+// forkSetFits is the memory gate before a set is built: the heap the last GC found live, plus the
+// set's bytes and the pending set's 48 bytes a transaction, must stay within three quarters of the
+// memory limit. Bytes about to be let go are not subtracted: the live figure is the last GC's, and
+// the memory is not free before a GC finds it. An unset limit passes, as in the fast path. The
+// pending count is the processor's atomic one: the tx map itself is swapped by the processor
+// goroutine.
+func (stp *SubtreeProcessor) forkSetFits(setBytes uint64) bool {
 	live, limit := reorgMemoryStats()
 	if limit <= 0 || limit >= 1<<62 {
 		return true
 	}
-
-	live -= min(live, releasing)
 
 	return live+setBytes+stp.TxCount()*fastPathBytesPerPending <= uint64(limit)/4*3 //nolint:gosec // limit is positive
 }
@@ -176,17 +175,16 @@ func (stp *SubtreeProcessor) buildForkSet(ctx context.Context, e *forkPrepared, 
 	}
 
 	// The set over both blocks is built from the store, not from the competitor's set, which is let
-	// go before the build: the gate counts it as freed. The reorg of the competitor alone is then
-	// not prepared, which a reorg onto its child makes unlikely to matter.
-	var releasing uint64
-
+	// go before the build. The gate still counts the competitor's set: the live figure is the last
+	// GC's. The reorg of the competitor alone is then not prepared, which a reorg onto its child makes
+	// unlikely to matter.
 	setBytes := 2 * e.txCount * fastPathSetBytesPerHash // this set and the room for its child's
 
 	if parent != nil {
-		releasing, setBytes = parent.txCount*fastPathSetBytesPerHash, e.txCount*fastPathSetBytesPerHash
+		setBytes = e.txCount * fastPathSetBytesPerHash
 	}
 
-	if !stp.forkSetFits(setBytes, releasing) {
+	if !stp.forkSetFits(setBytes) {
 		return errors.NewProcessingError("not enough memory to prepare the block")
 	}
 
