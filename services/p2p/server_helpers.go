@@ -1103,11 +1103,12 @@ func (s *Server) cleanupPeerMaps() {
 			blockEvictions.total, blockEvictions, subtreeEvictions.total, subtreeEvictions)
 	}
 
-	// The reputation cache only holds directly connected peers, so it sits at
-	// capacity only when more peers are connected than the cap allows; that
-	// means the cap is undersized for this node, not that gossip is flooding.
+	// The reputation cache only holds peers that had a direct connection when
+	// looked up, each for reputationCacheTTL, so it reaches capacity when more
+	// peers than the cap were connected within one TTL: the cap is undersized
+	// for this node or connections are churning, not gossip flooding.
 	if reputationEvictions := s.reputationCache.EvictionsSinceLastRead(); reputationEvictions > 0 {
-		s.logger.Warnf("[cleanupPeerMaps] reputation cache at capacity since the last sweep: evicted %d entries; more connected peers than p2p_peer_map_max_size allows", reputationEvictions)
+		s.logger.Warnf("[cleanupPeerMaps] reputation cache at capacity since the last sweep: evicted %d entries; more peers connected within %s than p2p_peer_map_max_size allows", reputationEvictions, reputationCacheTTL)
 	}
 
 	// Log current sizes
@@ -1197,8 +1198,9 @@ func (s *Server) isPeerIPBanned(peerID string) bool {
 // Reputation scores of connected peers are cached for
 // reputationCacheTTL (bounded at insert) to avoid a round-trip on every pubsub
 // message; a lookup failure or an unknown peer is cached as healthy for the
-// same window, so a degraded registry is asked once per TTL per peer rather
-// than once per message.
+// same window, so a degraded registry is asked about a cached peer once per
+// TTL rather than once per message. Concurrent misses for one peer can each
+// ask, and a peer evicted at the cap is asked again.
 func (s *Server) shouldSkipUnhealthyPeer(from string, messageType string) bool {
 	if s.peerRegistry == nil {
 		return false

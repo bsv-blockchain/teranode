@@ -25,19 +25,20 @@ const (
 // of IsPeerBanned lookups: that cache needed one registry round-trip and one
 // map entry per distinct author, and the author of a gossip message is an
 // identity a remote party mints offline for free, so a rotating-identity flood
-// missed it on every message. The banned set, by contrast, is small, bounded
-// by the registry rather than by the attacker, and cheap to list: refreshing
-// it once per bannedPeerRefreshInterval costs one round-trip however many
-// distinct authors arrive in between, and a lookup for an unknown author
-// allocates nothing.
+// missed it on every message. The banned set, by contrast, is listed once per
+// bannedPeerRefreshInterval for one round-trip however many distinct authors
+// arrive in between, and a lookup for an unknown author allocates nothing.
+// The set is not bounded against an attacker: each fresh identity that earns
+// a ban adds an entry for the ban's duration, and every refresh copies the
+// whole set.
 //
-// Refreshes are single-flight and never block a lookup: the worker that finds
-// the mirror stale re-lists inline while concurrent workers read the previous
-// view. Server.Start primes the mirror before subscribing to any topic so a
-// peer banned before this process started is dropped from its very first
-// message; should that priming fail or be skipped (tests that construct
-// Server directly), lookups fail open on the empty view until the first
-// refresh lands. A failed refresh keeps the last good view and is not retried
+// Refreshes are single-flight: the worker that finds the mirror stale
+// re-lists inline, waiting up to bannedPeerRefreshTimeout, while concurrent
+// workers read the previous view without waiting. Server.Start primes the
+// mirror before subscribing to any topic so a peer banned before this process
+// started is dropped from its very first message; should that priming fail
+// or be skipped (tests that construct Server directly), lookups fail open on
+// the empty view until the first refresh lands. A failed refresh keeps the last good view and is not retried
 // until the next interval (fail open for bans it has not yet seen, the same
 // breaker the per-peer cache applied).
 //

@@ -14,9 +14,10 @@ import (
 // growing the map, so a stream of never-before-seen authors rotates the cache
 // but cannot grow it between sweeps.
 //
-// Every entry carries the same TTL and Set refreshes an updated key's position,
-// so insertion order is expiry order and the eviction victim is always the
-// entry closest to expiring. Get treats an expired entry as a miss and drops
+// Set refreshes an updated key's position, so the eviction victim is the entry
+// set longest ago. Callers give every entry the same TTL, so that is close to
+// expiry order but not exact: an expiry computed before a slow lookup can be
+// set after a later one. Get treats an expired entry as a miss and drops
 // it; DeleteExpired is the periodic sweep that reclaims entries nobody looks
 // up again.
 //

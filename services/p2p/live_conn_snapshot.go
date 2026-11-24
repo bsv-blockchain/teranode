@@ -140,7 +140,9 @@ func (s *Server) liveConnAddrs(peerID string) ([]string, bool) {
 // own.
 func (s *Server) rebuildLiveConnsLocked() *liveConnView {
 	peers := s.P2PClient.GetPeers()
-	addrs := make(map[string][]string, len(peers))
+	// No size hint: peers lists every author the message bus has tracked,
+	// connected or not, and the view must stay sized to open connections.
+	addrs := make(map[string][]string)
 
 	for _, p := range peers {
 		if len(p.Addrs) > 0 {

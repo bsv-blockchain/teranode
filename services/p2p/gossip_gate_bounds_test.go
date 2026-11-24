@@ -12,6 +12,7 @@ import (
 	p2pMessageBus "github.com/bsv-blockchain/go-p2p-message-bus"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/p2p/p2p_api"
+	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/kafka"
 	"github.com/libp2p/go-libp2p/core/peer"
@@ -76,8 +77,8 @@ func blockAnnouncement(t *testing.T, from peer.ID, i int) []byte {
 // cache entry per author: the ban gate is answered from the mirrored banned
 // set, liveness from the connection snapshot, and the reputation gate does
 // not apply to relayed authors. Before this, each such message cost an
-// IsPeerBanned and a GetPeer round-trip, a GetPeers walk, and four map inserts
-// keyed by an identity the sender mints for free.
+// IsPeerBanned round-trip, a GetPeers walk, and inserts into the gate's
+// per-author caches, keyed by an identity the sender mints for free.
 func TestHandleBlockTopic_FreshAuthorsCostNoPerAuthorLookupsOrCacheEntries(t *testing.T) {
 	const flood = 200
 
@@ -171,6 +172,23 @@ func TestShouldSkipUnhealthyPeer_RelayedLowReputationAuthorNotGated(t *testing.T
 
 	require.Zero(t, counting.callCount("GetPeer"), "no registry lookup for an unconnected author")
 	require.Zero(t, s.reputationCache.Len(), "no reputation entry for an unconnected author")
+}
+
+// p2p_peer_map_max_size reaches the reputation cache through
+// applyPeerMapLimits, not only the attribution maps.
+func TestApplyPeerMapLimits_BoundsReputationCache(t *testing.T) {
+	tSettings := &settings.Settings{}
+	tSettings.P2P.PeerMapMaxSize = 7
+
+	s := &Server{logger: ulogger.TestLogger{}}
+	s.applyPeerMapLimits(tSettings)
+
+	expiresAt := time.Now().Add(time.Minute)
+	for i := 0; i < 20; i++ {
+		s.reputationCache.Set(fmt.Sprintf("peer-%d", i), reputationCacheEntry{}, expiresAt)
+	}
+
+	require.Equal(t, 7, s.reputationCache.Len(), "the configured p2p_peer_map_max_size must bound the reputation cache")
 }
 
 // The reputation cache is bounded at insert: more connected peers than the cap

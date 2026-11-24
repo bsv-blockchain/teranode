@@ -890,7 +890,7 @@ func (s *Server) applyPeerMapLimits(tSettings *settings.Settings) {
 
 	// The per-peer reputation cache shares the cap: it is keyed by peer ID
 	// rather than by hash, so the same figure bounds it far more loosely, but
-	// one knob keeps every gossip-driven map under one documented limit.
+	// reusing the attribution maps' cap avoids another setting.
 	s.reputationCache.setMaxSize(maxSize)
 
 	// The seen-hash dedup caches take their limits from the same call: their
