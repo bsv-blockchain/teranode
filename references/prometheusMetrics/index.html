@@ -9440,6 +9440,11 @@
 <td>Counter</td>
 <td>Txmeta cache DELETEs for txs demoted to conflicting that block assembly dropped because the txmeta producer buffer was full or stopped. Each one can leave subtree validation caching that tx as non-conflicting until the cache rotates it out, so alert on any increase</td>
 </tr>
+<tr>
+<td><code>teranode_subtreeprocessor_late_mined_dropped_total</code></td>
+<td>Counter</td>
+<td>Handed-off transactions dropped, on arrival or when placed, because a block applied within <code>blockassembly_minedTxSetRetention</code> already mined them. Each one would otherwise have gone back into block assembly</td>
+</tr>
 </tbody>
 </table>
 
