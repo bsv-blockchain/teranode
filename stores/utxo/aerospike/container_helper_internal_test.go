@@ -135,7 +135,7 @@ func AcquireSharedTestServer(t testing.TB, image, platform string, batchSize int
 	sharedServersMu.Unlock()
 
 	entry.once.Do(func() {
-		entry.container, entry.server, entry.err = startSharedTestServer(key)
+		entry.container, entry.server, entry.err = startSharedTestServer(t, key)
 	})
 
 	// Skips only when the container runtime is unreachable; any other failure fails the test, so a
@@ -148,7 +148,7 @@ func AcquireSharedTestServer(t testing.TB, image, platform string, batchSize int
 // startSharedTestServer starts the container, waits until its namespace accepts writes and opens one
 // store on it, so the UDF modules, the layout marker and the store's indexes exist before tests open
 // stores of their own in parallel.
-func startSharedTestServer(key sharedServerKey) (*aeroTest.Container, SharedTestServer, error) {
+func startSharedTestServer(t testing.TB, key sharedServerKey) (*aeroTest.Container, SharedTestServer, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
@@ -167,7 +167,7 @@ func startSharedTestServer(key sharedServerKey) (*aeroTest.Container, SharedTest
 
 	CountContainerStart("shared", fmt.Sprintf("%s batch size %d generation %d", key.image, key.batchSize, key.generation))
 
-	server, err := warmUpSharedTestServer(ctx, container, key.batchSize)
+	server, err := warmUpSharedTestServer(ctx, t, container, key.batchSize)
 	if err != nil {
 		_ = container.Terminate(context.Background())
 		return nil, SharedTestServer{}, err
@@ -176,7 +176,7 @@ func startSharedTestServer(key sharedServerKey) (*aeroTest.Container, SharedTest
 	return container, server, nil
 }
 
-func warmUpSharedTestServer(ctx context.Context, container *aeroTest.Container, batchSize int) (SharedTestServer, error) {
+func warmUpSharedTestServer(ctx context.Context, t testing.TB, container *aeroTest.Container, batchSize int) (SharedTestServer, error) {
 	host, err := container.Host(ctx)
 	if err != nil {
 		return SharedTestServer{}, err
@@ -197,7 +197,9 @@ func warmUpSharedTestServer(ctx context.Context, container *aeroTest.Container, 
 		return SharedTestServer{}, err
 	}
 
-	tSettings := settings.NewSettings()
+	// The tests' own settings: creating the store's client publishes its policy values to every
+	// store in the process (util.GetAerospikeClient), so they must be the ones the tests use.
+	tSettings := test.CreateBaseTestSettings(t)
 	tSettings.UtxoStore.UtxoBatchSize = batchSize
 
 	storeURL, err := url.Parse(fmt.Sprintf("aerospike://%s:%d/%s?set=%s&externalStore=file://./data/externalStore", host, port, SharedTestNamespace, SharedTestSet))

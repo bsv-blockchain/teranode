@@ -310,11 +310,6 @@ func getAerospikeClient(logger ulogger.Logger, url *url.URL, tSettings *settings
 	return client, nil
 }
 
-// aerospikePolicySummary returns a log-safe summary of an aerospike.ClientPolicy.
-// The Password field is never printed. The selected fields are the ones useful
-// for diagnosing connection-pool and authentication configuration without
-// revealing secrets; the full ClientPolicy has many more fields not deemed
-// useful enough to log here. Add fields here if a debug session needs them.
 // loadAerospikePolicyValues parses the read, write, batch and query policy settings.
 func loadAerospikePolicyValues(logger ulogger.Logger, tSettings *settings.Settings) (*aerospikePolicyValues, error) {
 	values := &aerospikePolicyValues{}
@@ -479,6 +474,11 @@ func loadAerospikePolicyValues(logger ulogger.Logger, tSettings *settings.Settin
 	return values, nil
 }
 
+// aerospikePolicySummary returns a log-safe summary of an aerospike.ClientPolicy.
+// The Password field is never printed. The selected fields are the ones useful
+// for diagnosing connection-pool and authentication configuration without
+// revealing secrets; the full ClientPolicy has many more fields not deemed
+// useful enough to log here. Add fields here if a debug session needs them.
 func aerospikePolicySummary(p *aerospike.ClientPolicy) string {
 	if p == nil {
 		return "<nil>"
