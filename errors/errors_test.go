@@ -2585,6 +2585,34 @@ func TestWrapGRPC_PlainWrappedErrorDoesNotHang(t *testing.T) {
 	st, ok := status.FromError(result)
 	require.True(t, ok, "WrapGRPC result should be a gRPC status error")
 	require.Len(t, st.Details(), 2)
+
+	// The plain error is the last detail: generic ERR_ERROR code, original message.
+	plainAny, ok := st.Details()[1].(*anypb.Any)
+	require.True(t, ok, "plain detail should be *anypb.Any, got %T", st.Details()[1])
+
+	plain := &TError{}
+	require.NoError(t, plainAny.UnmarshalTo(plain))
+	require.Equal(t, ERR_ERROR, plain.Code)
+	require.Equal(t, "raw plain error", plain.Message)
+}
+
+// TestWrapGRPC_PlainWrappedErrorInvalidUTF8DoesNotHang covers a plain wrapped
+// error whose message is not valid UTF-8, which protobuf refuses to serialize.
+// It asserts only that WrapGRPC returns an error instead of hanging; what that
+// error carries is deliberately left open.
+func TestWrapGRPC_PlainWrappedErrorInvalidUTF8DoesNotHang(t *testing.T) {
+	e := NewProcessingError("outer")
+	e.SetWrappedErr(errors.New("raw\xffplain")) // invalid UTF-8 in a plain, non-*Error error
+
+	done := make(chan error, 1)
+	go func() { done <- WrapGRPC(e) }()
+
+	select {
+	case result := <-done:
+		require.Error(t, result)
+	case <-time.After(5 * time.Second):
+		t.Fatal("WrapGRPC did not return within 5s on an *Error wrapping a plain error with invalid UTF-8")
+	}
 }
 
 // TestWrapGRPCPublic tests the WrapGRPCPublic function for proper gRPC wrapping without internal details.
