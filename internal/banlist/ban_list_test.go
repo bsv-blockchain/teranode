@@ -538,3 +538,22 @@ func TestBanList_ConcurrentAccess(t *testing.T) {
 
 	wg.Wait()
 }
+
+// ActiveNetworks lists the network of every ban still in force, hosts and
+// subnets alike, and leaves out a lapsed entry no lookup has purged yet.
+func TestBanList_ActiveNetworksOmitsLapsedEntries(t *testing.T) {
+	ctx := context.Background()
+	bl := newTestBanList(t)
+
+	require.NoError(t, bl.Add(ctx, "198.51.100.9", time.Now().Add(time.Hour)))
+	require.NoError(t, bl.Add(ctx, "203.0.113.0/24", time.Now().Add(time.Hour)))
+	require.NoError(t, bl.Add(ctx, "192.0.2.7", time.Now().Add(-time.Minute)))
+	require.Len(t, bl.BannedPeers(), 3, "the lapsed entry is still held until a lookup purges it")
+
+	var got []string
+	for _, n := range bl.ActiveNetworks() {
+		got = append(got, n.String())
+	}
+
+	require.ElementsMatch(t, []string{"198.51.100.9/32", "203.0.113.0/24"}, got)
+}
