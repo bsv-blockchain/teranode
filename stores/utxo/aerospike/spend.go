@@ -57,6 +57,7 @@ package aerospike
 
 import (
 	"context"
+	"fmt"
 	"runtime/debug"
 	"sort"
 	"strings"
@@ -1346,11 +1347,18 @@ var afterAgeRuleHook func()
 //
 // A match is historical when its recorded spend is at least utxo.HistoricalSpendAge blocks
 // older than the incoming one. A match with no recorded height is never historical. The call's spender is the transaction being
-// spent for, so one existence read of its record answers for every historical match of the call:
-// absent, each of them is a replay of a transaction the pruner removed and fails with
-// ErrUtxoSpendingTxPruned, which writes nothing; present, they are ordinary matches (a stored
-// transaction resubmitted after waiting unmined, or a block re-applying one). The read is made
-// only when a historical match turns up, so a spend that meets none costs nothing extra.
+// spent for, so one read of its record answers for every historical match of the call. The record
+// is evidence for a match only when it owns the spend (spenderOwnsSpend):
+//   - absent, a hold, or rolling back: nothing owns it. Each historical match is a replay of a
+//     transaction the pruner removed and fails with ErrUtxoSpendingTxPruned, which writes nothing;
+//   - final: an ordinary match (a stored transaction resubmitted after waiting unmined, or a block
+//     re-applying one);
+//   - tentative (create-first, still creating): the record owns only the spends recorded at or
+//     after the height it was created at. A spend recorded before it was made by another record
+//     of the txid, a confirmed one that was pruned, so it is a replay and fails the same way.
+//
+// The read is made only when a historical match turns up, so a spend that meets none costs nothing
+// extra.
 //
 // A read that cannot answer fails the historical inputs with a storage error and counts them as
 // unanswered (result.unresolved), so the rest of the call's matches are held back, not reversed.
@@ -1391,7 +1399,7 @@ func (s *Store) refuseHistoricalReplays(ctx context.Context, tx *bt.Tx, items []
 		return historical
 	}
 
-	exists, err := s.spenderRecordExists(ctx, tx.TxIDChainHash())
+	state, err := s.spenderRecordState(ctx, tx.TxIDChainHash())
 
 	for item := range historical {
 		switch {
@@ -1400,12 +1408,12 @@ func (s *Store) refuseHistoricalReplays(ctx context.Context, tx *bt.Tx, items []
 
 			item.spend.Err = errors.NewStorageError("[SPEND][%s] cannot tell whether the spending transaction exists, so cannot tell whether vout %d of %s is a replay of a pruned transaction: %v",
 				tx.TxID(), item.spend.Vout, item.spend.TxID.String(), err)
-		case !exists:
+		case !spenderOwnsSpend(state, item):
 			// A pruned replay, or an earlier attempt that left the spend behind and never
 			// created its transaction. Name both heights, so an operator can find and free the
 			// output if it is the second.
-			s.logger.Warnf("[SPEND][%s] refusing vout %d of %s as a replay of a pruned transaction: spend recorded at %d, incoming at %d, spender has no record",
-				tx.TxID(), item.spend.Vout, item.spend.TxID.String(), item.recordedHeight, item.blockHeight)
+			s.logger.Warnf("[SPEND][%s] refusing vout %d of %s as a replay of a pruned transaction: spend recorded at %d, incoming at %d, %s",
+				tx.TxID(), item.spend.Vout, item.spend.TxID.String(), item.recordedHeight, item.blockHeight, state.describe())
 
 			item.spend.Err = errors.NewUtxoSpendingTxPrunedError("[SPEND][%s] invalid spend for vout %d of %s: spending transaction was pruned",
 				tx.TxID(), item.spend.Vout, item.spend.TxID.String())
@@ -1415,24 +1423,50 @@ func (s *Store) refuseHistoricalReplays(ctx context.Context, tx *bt.Tx, items []
 	return historical
 }
 
-// spenderRecordExists reads whether the transaction has a record in the store: one existence read
-// of its master record, the key every transaction's own record lives under.
-func (s *Store) spenderRecordExists(ctx context.Context, txHash *chainhash.Hash) (bool, error) {
+// spenderOwnsSpend reports whether the record of the spender stands behind the historical match of
+// item. A tentative record owns the spends recorded at or after its own height: it was created
+// after every spend of an earlier record of the txid, and a spend of the attempt that wrote it is
+// recorded after that. A tentative record that carries no height owns none, because nothing then
+// separates its spends from a pruned record's.
+func spenderOwnsSpend(state creatingState, item *batchSpend) bool {
+	switch {
+	case state.absent, state.hold, state.rollingBack:
+		return false
+	case !state.creating:
+		return true
+	default:
+		return state.hasUnminedSince && state.unminedSince >= 0 && item.hasRecordedHeight && uint64(item.recordedHeight) >= uint64(state.unminedSince)
+	}
+}
+
+// describe says in a log line what the state of a spender record is.
+func (c creatingState) describe() string {
+	switch {
+	case c.absent:
+		return "spender has no record"
+	case c.hold:
+		return "spender record is a hold"
+	case c.rollingBack:
+		return "spender record is rolling back"
+	default:
+		return fmt.Sprintf("spender record is tentative, created at %d", c.unminedSince)
+	}
+}
+
+// spenderRecordState reads the creating state of the spender's master record, the key every
+// transaction's own record lives under: one read, whose answer for an absent record is not an
+// error.
+func (s *Store) spenderRecordState(ctx context.Context, txHash *chainhash.Hash) (creatingState, error) {
 	if err := ctx.Err(); err != nil {
-		return false, err
+		return creatingState{}, err
 	}
 
 	key, err := aerospike.NewKey(s.namespace, s.setName, uaerospike.CalculateKeySource(txHash, 0, s.utxoBatchSize))
 	if err != nil {
-		return false, err
+		return creatingState{}, err
 	}
 
-	exists, aErr := s.client.Exists(util.GetAerospikeReadPolicy(s.settings), key)
-	if aErr != nil {
-		return false, aErr
-	}
-
-	return exists, nil
+	return s.readCreatingState(key)
 }
 
 type keyIgnoreLocked struct {
