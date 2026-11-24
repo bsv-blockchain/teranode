@@ -94,6 +94,7 @@ local FIELD_DELETE_AT_HEIGHT = "deleteAtHeight"
 local FIELD_DAH_VERSION = "dahVer"
 local FIELD_CONFLICTING = "conflicting"
 local FIELD_SPENDING_DATA = "spendingData"
+local FIELD_KEPT = "kept"                 -- unspend: the spend was recorded below keepBelowHeight and stays
 local FIELD_IDEMPOTENT = "idempotent"      -- spend: indexes whose utxo already recorded exactly this spend (nothing written)
 local FIELD_IDEMPOTENT_HEIGHTS = "idempotentHeights" -- spend: index -> block height recorded with that spend; absent for an entry written without one
 
@@ -724,6 +725,9 @@ end
 --                               caller owns the spend it's clearing.
 -- currentBlockHeight number - the current block height
 -- blockHeightRetention number - the retention period for the UTXO record
+-- keepBelowHeight number - optional. When the spend being cleared has a recorded height below it,
+--                          the spend stays and the response carries kept = true. A spend with no
+--                          recorded height is cleared. Absent, the function behaves as without it.
 --           ____                       _
 --  _   _ _ __ / ___| _ __   ___ _ __   __| |
 -- | | | | '_ \\___ \| '_ \ / _ \ '_ \ / _` |
@@ -731,7 +735,7 @@ end
 --  \__,_|_| |_|____/| .__/ \___|_| |_|\__,_|
 --                   |_|
 --
-function unspend(rec, offset, utxoHash, expectedSpendingData, currentBlockHeight, blockHeightRetention)
+function unspend(rec, offset, utxoHash, expectedSpendingData, currentBlockHeight, blockHeightRetention, keepBelowHeight)
     local response = map()
 
     if not aerospike:exists(rec) then
@@ -770,15 +774,26 @@ function unspend(rec, offset, utxoHash, expectedSpendingData, currentBlockHeight
     local callerOwnsSpend = existingSpendingData ~= nil
         and bytes_equal(existingSpendingData, expectedSpendingData)
 
-    if callerOwnsSpend then
-        if isFrozen(existingSpendingData) then
-            response[FIELD_STATUS] = STATUS_ERROR
-            response[FIELD_ERROR_CODE] = ERROR_CODE_FROZEN
-            response[FIELD_MESSAGE] = ERR_UTXO_IS_FROZEN
+    if callerOwnsSpend and isFrozen(existingSpendingData) then
+        response[FIELD_STATUS] = STATUS_ERROR
+        response[FIELD_ERROR_CODE] = ERROR_CODE_FROZEN
+        response[FIELD_MESSAGE] = ERR_UTXO_IS_FROZEN
 
-            return response
+        return response
+    end
+
+    -- A spend recorded below keepBelowHeight stays. The caller reverses the spends of a record it
+    -- created at that height, and a spend recorded earlier than the record is not its own.
+    if callerOwnsSpend and keepBelowHeight ~= nil then
+        local recordedHeight = getSpendHeight(rec[BIN_SPEND_HEIGHTS], offset)
+
+        if recordedHeight ~= nil and recordedHeight < keepBelowHeight then
+            callerOwnsSpend = false
+            response[FIELD_KEPT] = true
         end
+    end
 
+    if callerOwnsSpend then
         local newUtxo = createUTXOWithSpendingData(utxoHash, nil)
 
         -- Update the record

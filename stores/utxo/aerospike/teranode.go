@@ -79,7 +79,7 @@ import (
 var teranodeLUA []byte
 
 var (
-	LuaPackage      = "teranode_v72" // N.B. Do not have any "." in this string
+	LuaPackage      = "teranode_v73" // N.B. Do not have any "." in this string
 	LuaPackageMined = LuaPackage + "_mined"
 )
 
@@ -343,6 +343,9 @@ type LuaMapResponse struct {
 	// which never counts as historical (utxo.IsHistoricalSpend). A native-op server that does not
 	// report it fails probeNativeReplayProtection.
 	IdempotentHeights map[int]uint32 `json:"-"`
+	// Kept is true when an unspend that carried keepBelowHeight left the spend in place, because
+	// the spend was recorded below it. The unspend is then a success that cleared nothing.
+	Kept bool `json:"kept,omitempty"`
 	// DeleteAtHeight is the master record's stamped delete-at-height, present only with a DAHSET signal from a Lua package that reports it.
 	DeleteAtHeight    int  `json:"deleteAtHeight,omitempty"`
 	HasDeleteAtHeight bool `json:"-"`
@@ -381,6 +384,7 @@ func (r *LuaMapResponse) Reset() {
 	r.Status = ""
 	r.Idempotent = nil
 	r.IdempotentHeights = nil
+	r.Kept = false
 	r.ErrorCode = ""
 	r.Message = ""
 	r.Signal = ""
@@ -569,6 +573,10 @@ func (s *Store) parseLuaMapResponseInto(response interface{}, result *LuaMapResp
 
 			result.IdempotentHeights[idx] = uint32(height)
 		}
+	}
+
+	if kept, ok := respMap["kept"].(bool); ok {
+		result.Kept = kept
 	}
 
 	// Parse childCount

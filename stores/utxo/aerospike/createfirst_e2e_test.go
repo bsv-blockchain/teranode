@@ -1430,3 +1430,113 @@ func TestSetMined_MultiRecord_RollsForwardAfterADuplicateWithFlagOff(t *testing.
 		})
 	}
 }
+
+// TestRollBack_KeepsTheHistoricalSpendsThatPredateTheRecord pins what a create-first reversal
+// clears. The record owns the spends recorded at or after the height it was created at, and one
+// recorded before it stays when it is also history (utxo.IsHistoricalSpend): a replay of a pruned
+// transaction matches such a spend, and clearing it hands a confirmed output to anyone. A spend that
+// is old but young by that rule, and one an old attempt of the same record made, is still cleared.
+// Retention 288 makes a spend history from 144 blocks before the current height.
+func TestRollBack_KeepsTheHistoricalSpendsThatPredateTheRecord(t *testing.T) {
+	const recordHeight = uint32(900)
+
+	for _, tc := range []struct {
+		name         string
+		storeHeight  uint32
+		callHeight   uint32
+		spendHeights []uint32
+		wantKept     []bool
+	}{
+		{
+			name:         "below the record and history is kept, the rest is cleared",
+			storeHeight:  1000,
+			spendHeights: []uint32{100, 856, 857, 890, 900, 950},
+			wantKept:     []bool{true, true, false, false, false, false},
+		},
+		{
+			name:         "a stale attempt of the same record, rolled back much later, is reversed",
+			storeHeight:  5000,
+			spendHeights: []uint32{900, 901, 950},
+			wantKept:     []bool{false, false, false},
+		},
+		{
+			name:         "a call height beyond the store height counts history from it",
+			storeHeight:  1000,
+			callHeight:   1100,
+			spendHeights: []uint32{100, 856, 857, 890, 900, 950},
+			wantKept:     []bool{true, true, true, true, false, false},
+		},
+	} {
+		for _, finish := range []bool{false, true} {
+			name := tc.name + "/RollBackCreating"
+			if finish {
+				name = tc.name + "/FinishRollBackCreating"
+			}
+
+			t.Run(name, func(t *testing.T) {
+				logger := ulogger.NewErrorTestLogger(t)
+				tSettings := test.CreateBaseTestSettings(t)
+				tSettings.GlobalBlockHeightRetention = 288
+
+				client, store, ctx, deferFn := initAerospike(t, tSettings, logger)
+				t.Cleanup(deferFn)
+				cleanDB(t, client)
+
+				parent := conflictingIndexParent(t, ctx, store, 7201, len(tc.spendHeights))
+
+				vouts := make([]uint32, len(tc.spendHeights))
+				for i := range vouts {
+					vouts[i] = uint32(i)
+				}
+
+				child := conflictingIndexTx(t, parent, vouts, 1)
+				hash := child.TxIDChainHash()
+				inputs := spendHeightSpendsOf(t, child)
+
+				for i, height := range tc.spendHeights {
+					res := spendHeightUDF(t, store, parent, inputs[i], height)
+					require.Equal(t, teranode_aerospike.LuaStatusOK, res.Status)
+				}
+
+				md, err := store.Create(ctx, child, recordHeight, utxo.WithCreating(true))
+				require.NoError(t, err)
+
+				require.NoError(t, store.SetBlockHeight(tc.storeHeight))
+
+				rbCtx := ctx
+				if tc.callHeight != 0 {
+					rbCtx = utxo.WithReversalCallHeight(ctx, tc.callHeight)
+				}
+
+				if finish {
+					began, beginErr := beginAsCreator(rbCtx, store, hash, md.Attempt)
+					require.NoError(t, beginErr)
+					require.True(t, began)
+					require.NoError(t, store.ReleaseRollbackHold(rbCtx, hash, md.Attempt))
+
+					finished, finErr := utxo.FinishRollBackCreating(rbCtx, logger, store, child, md.Attempt, false)
+					require.NoError(t, finErr, "a kept spend is not a failure of the rollback")
+					require.True(t, finished)
+				} else {
+					require.NoError(t, rollBackAsCreator(rbCtx, logger, store, child, md.Attempt), "a kept spend is not a failure of the rollback")
+				}
+
+				requireHeld(t, ctx, store, hash, "the rollback ended and left a hold")
+
+				for i := range inputs {
+					resp, getErr := store.GetSpend(ctx, inputs[i])
+					require.NoError(t, getErr)
+
+					if tc.wantKept[i] {
+						require.NotNil(t, resp.SpendingData, "the spend recorded at %d predates the record and is history: it stays", tc.spendHeights[i])
+						require.Equal(t, *hash, *resp.SpendingData.TxID)
+
+						continue
+					}
+
+					require.Nil(t, resp.SpendingData, "the spend recorded at %d is the record's own or young: it is reversed", tc.spendHeights[i])
+				}
+			})
+		}
+	}
+}

@@ -172,7 +172,7 @@ func (s *Server) sweepCreatingTxs(ctx context.Context, blockHeight uint32) {
 		}
 
 		if md.RollingBack {
-			finished, finishErr := utxo.FinishRollBackCreating(ctx, s.logger, s.utxoStore, md.Tx, md.Attempt, false)
+			finished, finishErr := utxo.FinishRollBackCreating(utxo.WithReversalCallHeight(ctx, blockHeight), s.logger, s.utxoStore, md.Tx, md.Attempt, false)
 			if finishErr != nil {
 				s.logger.Errorf("[pruner][creating-sweep][%d] finishing rollback of %s failed, will retry next block: %v", blockHeight, hash, finishErr)
 				prunerCreatingSweepFailures.Inc()
@@ -235,7 +235,7 @@ func (s *Server) sweepCreatingTxs(ctx context.Context, blockHeight uint32) {
 					continue
 				}
 
-				ended, rbErr := utxo.RollBackCreatingEnded(ctx, s.logger, s.utxoStore, md.Tx, md.Attempt)
+				ended, rbErr := utxo.RollBackCreatingEnded(utxo.WithReversalCallHeight(ctx, blockHeight), s.logger, s.utxoStore, md.Tx, md.Attempt)
 				if rbErr != nil {
 					s.logger.Errorf("[pruner][creating-sweep][%d] rollback of %s failed, will retry next block: %v", blockHeight, hash, rbErr)
 					prunerCreatingSweepFailures.Inc()

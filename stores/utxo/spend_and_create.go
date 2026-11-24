@@ -471,7 +471,7 @@ func SequentialSpendAndCreate(ctx context.Context, logger ulogger.Logger, s Sequ
 		}
 
 		if errors.Is(err, errors.ErrTxExists) {
-			again, keptSpends, resolveErr := inTheWay.resolve(ctx, logger, s, tx, blockContext, options.CreateOnly, spends, err)
+			again, keptSpends, resolveErr := inTheWay.resolve(WithReversalCallHeight(ctx, blockHeight), logger, s, tx, blockContext, options.CreateOnly, spends, err)
 			if again {
 				positionClean = positionClean && proven
 
@@ -659,7 +659,7 @@ func (r *rollbackInTheWay) reverseCarried(ctx context.Context, logger ulogger.Lo
 	r.deadline = time.Now().Add(2 * bound)
 
 	for round := 0; round < reverseCarriedRounds; round++ {
-		outcome, err := r.settle(rbCtx, logger, s, hash, r.carried, nil)
+		outcome, err := r.settle(WithReversalCallHeight(rbCtx, blockHeight), logger, s, hash, r.carried, nil)
 
 		switch outcome {
 		case rollbackReversed, rollbackReplaced:
@@ -714,7 +714,7 @@ func claimAndRollBack(ctx context.Context, logger ulogger.Logger, s SequentialSt
 
 	releaseSpendLease(ctx, logger, s, hash, md.Attempt, md.Attempt)
 
-	if rollbackErr := RollBackCreating(ctx, logger, s, tx, md.Attempt); rollbackErr != nil {
+	if rollbackErr := RollBackCreating(WithReversalCallHeight(ctx, blockHeight), logger, s, tx, md.Attempt); rollbackErr != nil {
 		return true, errors.NewProcessingError("SpendAndCreate: rolling back the claim of %s failed, tx left for the sweep", hash.String(), rollbackErr)
 	}
 
@@ -758,7 +758,7 @@ func (r *rollbackInTheWay) settle(ctx context.Context, logger ulogger.Logger, s 
 		}
 
 		if took {
-			unspendErr := unspendDetached(ctx, logger, tolerantReverser{s}, spends)
+			unspendErr := unspendDetached(WithReversedRecord(ctx, hash), logger, tolerantReverser{s}, spends)
 
 			releaseRollbackHold(ctx, logger, s, hash, existing.Attempt)
 
@@ -869,6 +869,12 @@ func (r tolerantReverser) SpendRollbackTimeout() time.Duration {
 // rolled back record. The store's ownership check makes an unspend of an input that tx does not
 // own a no-op, so a rival's spend is never cleared.
 //
+// The unspend runs under WithReversedRecord, so a store that supports it keeps a spend that predates
+// the record and is history (KeepBelowHeight). The record owns only the spends recorded at or after
+// its own height, and a replay of a pruned transaction matches a confirmed spend recorded long
+// before: clearing it would free an output that a confirmed transaction spent. A kept spend is
+// not a failure of the rollback.
+//
 // The marker and the leases are what make the order safe. Every actor that spends the inputs of a
 // creating record holds a lease on it: the attempt that created it from its create on, and a
 // roll-forward from TakeSpendLease on, which refuses a record that carries the marker. The marker
@@ -958,7 +964,7 @@ func rollBackCreating(ctx context.Context, logger ulogger.Logger, s CreatingRoll
 	}
 
 	if len(inputs) > 0 {
-		if err := unspendWithRetry(rbCtx, logger, tolerantReverser{s}, inputs); err != nil {
+		if err := unspendWithRetry(WithReversedRecord(rbCtx, hash), logger, tolerantReverser{s}, inputs); err != nil {
 			logger.Errorf("SpendAndCreate create-first: reversing spends failed for %s, tx left rolling back for the sweep: %v", hash.String(), err)
 			releaseRollbackHold(ctx, logger, s, hash, attempt)
 
@@ -1022,7 +1028,7 @@ func FinishRollBackCreating(ctx context.Context, logger ulogger.Logger, s Creati
 		inputs, err := GetSpends(tx)
 		if err == nil && len(inputs) > 0 {
 			rbCtx, cancel := rollbackContext(ctx, s)
-			err = UnspendTolerantOfMissingParents(rbCtx, s, inputs)
+			err = UnspendTolerantOfMissingParents(WithReversedRecord(rbCtx, hash), s, inputs)
 
 			cancel()
 		}
@@ -1225,7 +1231,7 @@ func sequentialCreateFirst(ctx context.Context, logger ulogger.Logger, s Sequent
 		if attempt := RollBackAttempt(err); attempt != nil {
 			releaseSpendLease(ctx, logger, s, hash, attempt, attempt)
 
-			ended, rollbackErr := rollBackCreating(ctx, logger, s, tx, attempt)
+			ended, rollbackErr := rollBackCreating(WithReversalCallHeight(ctx, blockHeight), logger, s, tx, attempt)
 			if rollbackErr != nil {
 				return nil, nil, errors.NewProcessingError("SpendAndCreate create-first: rolling back the failed create of %s failed, tx left for the sweep: %v", hash.String(), rollbackErr, err)
 			}
@@ -1272,7 +1278,7 @@ func sequentialCreateFirst(ctx context.Context, logger ulogger.Logger, s Sequent
 				// call finishes the rollback when it can. A failure changes nothing: the transient
 				// error below is returned and the sweep remains.
 				if !existing.Hold {
-					if _, finishErr := FinishRollBackCreating(ctx, logger, s, tx, existing.Attempt, existing.Reversed); finishErr != nil {
+					if _, finishErr := FinishRollBackCreating(WithReversalCallHeight(ctx, blockHeight), logger, s, tx, existing.Attempt, existing.Reversed); finishErr != nil {
 						logger.Warnf("SpendAndCreate create-first: finishing the open rollback of %s failed, left for the sweep: %v", hash.String(), finishErr)
 					}
 				}
@@ -1339,7 +1345,7 @@ func sequentialCreateFirst(ctx context.Context, logger ulogger.Logger, s Sequent
 			return nil, spends, err
 		}
 
-		ended, rollbackErr := rollBackCreating(ctx, logger, s, tx, md.Attempt)
+		ended, rollbackErr := rollBackCreating(WithReversalCallHeight(ctx, blockHeight), logger, s, tx, md.Attempt)
 		if rollbackErr != nil {
 			return nil, spends, errors.NewProcessingError("SpendAndCreate: error reversing utxo spends: %v", rollbackErr, err)
 		}

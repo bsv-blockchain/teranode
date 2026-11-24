@@ -32,7 +32,7 @@ const (
 )
 
 type replayConfig struct {
-	paginated, ttl, expressions, defensive bool
+	paginated, ttl, expressions, defensive, createFirst bool
 	// parents is how many parents the child spends one output of; default 1.
 	parents int
 }
@@ -61,6 +61,7 @@ func newReplayFixture(t *testing.T, cfg replayConfig) *replayFixture {
 	s.Pruner.UTXODefensiveEnabled = cfg.defensive
 	s.Pruner.UTXOSetTTL = cfg.ttl
 	s.Aerospike.EnableSpendFilterExpressions = true
+	s.UtxoStore.UseCreateFirstOrder = cfg.createFirst
 
 	var outputIndex uint32
 
@@ -359,6 +360,49 @@ func TestFailedReplayKeepsItsHistoricalMatch_Aerospike(t *testing.T) {
 
 	_, _, err = f.store.SpendAndCreate(f.ctx, thief, replayBlock+1)
 	require.ErrorIs(t, err, errors.ErrSpent)
+}
+
+// TestFailedReplayBesideARivalKeepsItsHistoricalMatch_Aerospike: C spent two parents' outputs. P:0
+// is still spent by C. Q:0 was released by a rolled-back reorg and a rival then spent it. The
+// replay of the pruned C matches P:0, which is history, and loses Q:0 to the rival, so the call
+// fails. Whatever the order of create and spend, the failed call must leave P:0 spent by the
+// confirmed C: releasing it hands a confirmed output to anyone.
+func TestFailedReplayBesideARivalKeepsItsHistoricalMatch_Aerospike(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		cfg  replayConfig
+	}{
+		{name: "spend_first", cfg: replayConfig{parents: 2}},
+		{name: "create_first", cfg: replayConfig{parents: 2, createFirst: true}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newReplayFixture(t, tc.cfg)
+			f.prune(replayPruneBlock)
+
+			// release Q:0 as a reorg would, then let a rival take it
+			require.NoError(t, f.store.Unspend(f.ctx, []*utxo.Spend{f.spendOf(1)}))
+
+			rival := bt.NewTx()
+			require.NoError(t, rival.From(f.parents[1].TxID(), f.outputIndex, f.parents[1].Outputs[f.outputIndex].LockingScript.String(), f.parents[1].Outputs[f.outputIndex].Satoshis))
+			require.NoError(t, rival.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 3998))
+
+			_, _, err := f.store.SpendAndCreate(f.ctx, rival, replayBlock)
+			require.NoError(t, err, "fixture: the rival spends Q:0")
+
+			_, _, err = f.store.SpendAndCreate(f.ctx, f.child, replayBlock)
+			require.Error(t, err, "the replay of the pruned C must fail")
+
+			f.requireStillSpentByChild(0)
+
+			// a new spender must not be able to take the confirmed output
+			thief := bt.NewTx()
+			require.NoError(t, thief.From(f.parents[0].TxID(), f.outputIndex, f.parents[0].Outputs[f.outputIndex].LockingScript.String(), f.parents[0].Outputs[f.outputIndex].Satoshis))
+			require.NoError(t, thief.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 3999))
+
+			_, _, err = f.store.SpendAndCreate(f.ctx, thief, replayBlock+1)
+			require.ErrorIs(t, err, errors.ErrSpent)
+		})
+	}
 }
 
 // TestPreUpgradeEntryWithoutSpenderIsAccepted_Aerospike: an output spent before heights were

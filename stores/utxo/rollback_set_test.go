@@ -1,6 +1,7 @@
 package utxo
 
 import (
+	"context"
 	"testing"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
@@ -115,4 +116,80 @@ func TestIsHistoricalSpend(t *testing.T) {
 	}
 
 	require.Equal(t, uint32(144), HistoricalSpendAge(288))
+}
+
+// TestKeepBelowHeight pins the height below which a create-first reversal leaves a spend in place.
+// Retention 288 makes HistoricalSpendAge 144, so a spend is history from 144 blocks before the
+// current height, and the bound is the lower of the record's height and the first height that is
+// not history.
+func TestKeepBelowHeight(t *testing.T) {
+	const retention = 288
+
+	for _, tc := range []struct {
+		name         string
+		recordHeight uint32
+		current      uint32
+		retention    uint32
+		want         uint32
+	}{
+		{name: "record older than the age rule: the record height bounds", recordHeight: 500, current: 1000, retention: retention, want: 500},
+		{name: "record newer than the age rule: the age rule bounds", recordHeight: 900, current: 1000, retention: retention, want: 857},
+		{name: "record exactly at the first height that is not history", recordHeight: 857, current: 1000, retention: retention, want: 857},
+		{name: "record one below it", recordHeight: 856, current: 1000, retention: retention, want: 856},
+		{name: "record one above it", recordHeight: 858, current: 1000, retention: retention, want: 857},
+		{name: "record height unknown: the age rule alone", recordHeight: 0, current: 1000, retention: retention, want: 857},
+		{name: "chain as old as the age: no height can be history", recordHeight: 900, current: 144, retention: retention, want: 1},
+		{name: "chain younger than the age: nothing is kept", recordHeight: 900, current: 143, retention: retention, want: 0},
+		{name: "retention 0: nothing is ever history", recordHeight: 900, current: 100000, retention: 0, want: 0},
+		{name: "retention 1: the age clamps to 1 block", recordHeight: 5000, current: 1000, retention: 1, want: 1000},
+		{name: "height at the top of the range does not wrap", recordHeight: 0, current: 4294967295, retention: retention, want: 4294967295 - 144 + 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, KeepBelowHeight(tc.recordHeight, tc.current, tc.retention))
+		})
+	}
+}
+
+// TestKeepBelowHeightKeepsExactlyTheHistoricalSpendsThatPredateTheRecord checks the bound against
+// IsHistoricalSpend for every spend height around each boundary: a spend is kept when it is both
+// history at the current height and older than the record, and cleared otherwise.
+func TestKeepBelowHeightKeepsExactlyTheHistoricalSpendsThatPredateTheRecord(t *testing.T) {
+	for _, retention := range []uint32{0, 1, 2, 3, 288} {
+		for _, current := range []uint32{0, 1, 2, 143, 144, 145, 1000} {
+			for _, recordHeight := range []uint32{0, 1, 2, 500, 856, 857, 858, 1000, 1001} {
+				keepBelow := KeepBelowHeight(recordHeight, current, retention)
+
+				for spendHeight := uint32(1); spendHeight <= 1100; spendHeight++ {
+					kept := spendHeight < keepBelow
+					want := IsHistoricalSpend(spendHeight, true, current, retention) && (recordHeight == 0 || spendHeight < recordHeight)
+
+					require.Equal(t, want, kept, "retention %d, current %d, record %d, spend %d", retention, current, recordHeight, spendHeight)
+				}
+			}
+		}
+	}
+}
+
+// TestReversalGuardContext pins what the guard helpers carry, and that each one keeps what the other set.
+func TestReversalGuardContext(t *testing.T) {
+	hash := chainhash.HashH([]byte("record"))
+
+	_, ok := ReversalGuardFrom(context.Background())
+	require.False(t, ok, "a context that no reversal set carries no guard")
+
+	ctx := WithReversalCallHeight(context.Background(), 700)
+
+	guard, ok := ReversalGuardFrom(ctx)
+	require.True(t, ok)
+	require.Nil(t, guard.Record, "a call height alone guards nothing")
+	require.Equal(t, uint32(700), guard.CallHeight)
+
+	guard, ok = ReversalGuardFrom(WithReversedRecord(ctx, &hash))
+	require.True(t, ok)
+	require.Equal(t, hash, *guard.Record)
+	require.Equal(t, uint32(700), guard.CallHeight, "naming the record keeps the call height")
+
+	guard, _ = ReversalGuardFrom(WithReversalCallHeight(WithReversedRecord(context.Background(), &hash), 9))
+	require.Equal(t, hash, *guard.Record, "setting the call height keeps the record")
+	require.Equal(t, uint32(9), guard.CallHeight)
 }

@@ -69,30 +69,34 @@ type fakeSequentialStore struct {
 	// endErr is what EndCreateFirstRollback answers.
 	endErr error
 
-	spendCalls      int
-	createCalls     int
-	unspendCalls    int
-	finalizeCalls   int
-	deleteCalls     int
-	deletedHashes   []*chainhash.Hash
-	unspentWith     []*Spend
-	unspentBatches  [][]*Spend
-	spendFlags      []IgnoreFlags
-	spendLeaseBound []bool
-	beginCalls      int
-	leaseCalls      int
-	unleaseCalls    int
-	leasesCalls     int
-	releaseCalls    int
-	releaseErr      error
-	clearCalls      int
-	clearAdopt      []bool
-	finalizeTokens  [][]byte
-	finalizeLeases  [][]byte
-	beginTokens     [][]byte
-	endTokens       [][]byte
-	leaseTokens     [][]byte
-	leasesTokens    [][]byte
+	spendCalls    int
+	createCalls   int
+	unspendCalls  int
+	finalizeCalls int
+	deleteCalls   int
+	deletedHashes []*chainhash.Hash
+	unspentWith   []*Spend
+	// unspendGuards holds the reversal guard of each Unspend that ran under one that names a record;
+	// unguardedUnspends counts the others.
+	unspendGuards     []ReversalGuard
+	unguardedUnspends int
+	unspentBatches    [][]*Spend
+	spendFlags        []IgnoreFlags
+	spendLeaseBound   []bool
+	beginCalls        int
+	leaseCalls        int
+	unleaseCalls      int
+	leasesCalls       int
+	releaseCalls      int
+	releaseErr        error
+	clearCalls        int
+	clearAdopt        []bool
+	finalizeTokens    [][]byte
+	finalizeLeases    [][]byte
+	beginTokens       [][]byte
+	endTokens         [][]byte
+	leaseTokens       [][]byte
+	leasesTokens      [][]byte
 	// unleased holds, per ReleaseSpendLease call, the attempt and the lease it named.
 	unleased       [][2][]byte
 	spendDeadlines []time.Time
@@ -146,7 +150,14 @@ func (f *fakeSequentialStore) Create(_ context.Context, _ *bt.Tx, _ uint32, opts
 	return f.createMeta, f.createErr
 }
 
-func (f *fakeSequentialStore) Unspend(_ context.Context, spends []*Spend, _ ...bool) error {
+func (f *fakeSequentialStore) Unspend(ctx context.Context, spends []*Spend, _ ...bool) error {
+	guard, guarded := ReversalGuardFrom(ctx)
+	if guarded && guard.Record != nil {
+		f.unspendGuards = append(f.unspendGuards, guard)
+	} else {
+		f.unguardedUnspends++
+	}
+
 	f.unspendCalls++
 	f.unspentWith = spends
 	f.unspentBatches = append(f.unspentBatches, spends)
@@ -2972,4 +2983,118 @@ func TestSpendOutcomeUnknown(t *testing.T) {
 
 	// INVALID_SPEND reaches the caller as a UTXO error with no cause. On one input it is a verdict.
 	require.False(t, spendOutcomeUnknown([]*Spend{{Err: errors.NewUtxoError("invalid spend for vout 1")}}, failed))
+}
+
+// TestCreateFirstReversalsCarryTheReversalGuard pins that every create-first reversal runs its
+// Unspend under the guard that names the tentative record and the height of the call, so a store
+// can keep the spends that predate the record, and that no other reversal does.
+func TestCreateFirstReversalsCarryTheReversalGuard(t *testing.T) {
+	ctx := context.Background()
+	logger := ulogger.TestLogger{}
+	tx := scriptedTwoInputTx(t)
+	hash := tx.TxIDChainHash()
+
+	const callHeight = uint32(100)
+
+	requireGuarded := func(t *testing.T, f *fakeSequentialStore, wantCallHeight uint32) {
+		t.Helper()
+
+		require.NotEmpty(t, f.unspendGuards, "the reversal ran")
+		require.Zero(t, f.unguardedUnspends, "no reversal of the rollback ran without the guard")
+
+		for _, guard := range f.unspendGuards {
+			require.NotNil(t, guard.Record)
+			require.Equal(t, *hash, *guard.Record, "the guard names the record being rolled back")
+			require.Equal(t, wantCallHeight, guard.CallHeight)
+		}
+	}
+
+	t.Run("RollBackCreating names the record, with the call height when the caller sets it", func(t *testing.T) {
+		f := &fakeSequentialStore{}
+
+		require.NoError(t, RollBackCreating(WithReversalCallHeight(ctx, callHeight), logger, f, tx, []byte{1}))
+		requireGuarded(t, f, callHeight)
+
+		bare := &fakeSequentialStore{}
+
+		require.NoError(t, RollBackCreating(ctx, logger, bare, tx, []byte{1}))
+		requireGuarded(t, bare, 0)
+	})
+
+	t.Run("FinishRollBackCreating names the record", func(t *testing.T) {
+		f := &fakeSequentialStore{}
+
+		finished, err := FinishRollBackCreating(WithReversalCallHeight(ctx, callHeight), logger, f, tx, []byte{9}, false)
+		require.NoError(t, err)
+		require.True(t, finished)
+		requireGuarded(t, f, callHeight)
+	})
+
+	t.Run("a create-first spend that fails rolls back under the guard", func(t *testing.T) {
+		f := &fakeSequentialStore{
+			spends:     []*Spend{{Err: errors.NewTxNotFoundError("gone")}},
+			spendErr:   errors.NewUtxoSpendingTxPrunedError("replay"),
+			createMeta: &meta.Data{Creating: true, Attempt: []byte{2}},
+		}
+
+		_, _, err := SequentialSpendAndCreate(ctx, logger, f, tx, callHeight, true)
+		require.ErrorIs(t, err, errors.ErrUtxoSpendingTxPruned)
+		requireGuarded(t, f, callHeight)
+	})
+
+	t.Run("a spend-first call settles the record of a rollback under the guard", func(t *testing.T) {
+		shortenUnspendBackoff(t)
+
+		earlier := []*Spend{{Vout: 0}, {Vout: 1}}
+		spendErr := errors.NewStorageError("the spend of the second round failed")
+
+		back := &fakeSequentialStore{
+			spendsSeq:   [][]*Spend{earlier, {{Vout: 0}}},
+			spendErrs:   []error{nil, spendErr},
+			createErr:   errors.NewTxExistsError("held"),
+			existingSeq: []meta.Data{{Creating: true, RollingBack: true, Hold: true}, {Creating: true, RollingBack: true, Hold: true}},
+			existing:    meta.Data{Creating: true, RollingBack: true, Attempt: []byte{6}},
+			clearResult: true,
+		}
+
+		_, _, err := SequentialSpendAndCreate(ctx, logger, back, tx, callHeight, false)
+		require.ErrorIs(t, err, spendErr)
+		require.Equal(t, earlier, back.unspentWith)
+		requireGuarded(t, back, callHeight)
+	})
+
+	t.Run("a spend-first call that claims the txid to reverse an earlier round rolls back under the guard", func(t *testing.T) {
+		shortenUnspendBackoff(t)
+
+		earlier := []*Spend{{Vout: 0}, {Vout: 1}}
+		spendErr := errors.NewStorageError("the spend of the second round failed")
+
+		gone := &fakeSequentialStore{
+			spendsSeq:   [][]*Spend{earlier, {{Vout: 0}}},
+			spendErrs:   []error{nil, spendErr},
+			createErrs:  []error{errors.NewTxExistsError("held")},
+			createMeta:  &meta.Data{Creating: true, Attempt: []byte{3}},
+			existing:    meta.Data{Creating: true, RollingBack: true, Hold: true},
+			clearResult: true,
+			getMetaErrs: []error{nil, nil, errors.NewTxNotFoundError("no record")},
+		}
+
+		_, _, err := SequentialSpendAndCreate(ctx, logger, gone, tx, callHeight, false)
+		require.ErrorIs(t, err, spendErr)
+		requireGuarded(t, gone, callHeight)
+	})
+
+	t.Run("the reversal of a spend-first create that failed has no record to guard", func(t *testing.T) {
+		shortenUnspendBackoff(t)
+
+		f := &fakeSequentialStore{
+			spends:    []*Spend{{Vout: 0}},
+			createErr: errors.NewStorageError("create failed"),
+		}
+
+		_, _, err := SequentialSpendAndCreate(ctx, logger, f, tx, callHeight, false)
+		require.ErrorIs(t, err, errors.ErrStorageError)
+		require.Equal(t, 1, f.unguardedUnspends, "main's reversal clears what it is told to, as before")
+		require.Empty(t, f.unspendGuards)
+	})
 }
