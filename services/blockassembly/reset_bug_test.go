@@ -55,6 +55,7 @@ func setupBlockAssemblyTestWithUtxoStore(t *testing.T, withSettings ...func(*set
 
 	utxo, err := utxostoresql.New(ctx, logger, tSettings, utxoStoreURL)
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = utxo.Close(context.Background()) })
 	items.utxoStore = utxo
 
 	storeURL, err := url.Parse("sqlitememory://")
