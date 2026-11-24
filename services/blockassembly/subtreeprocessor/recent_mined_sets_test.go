@@ -76,7 +76,7 @@ func TestFilterRecentlyMined_DropsMinedAndKeepsOrder(t *testing.T) {
 	first, second := batchOf(a, b, c), batchOf(d, e)
 	cInpoints := first.txInpoints[2]
 
-	stp.filterRecentlyMined([]*TxBatch{first, second})
+	stp.filterRecentlyMined([]*TxBatch{first, second}, nil)
 
 	require.Equal(t, []chainhash.Hash{a, c}, batchHashes(first))
 	require.Equal(t, []uint32{100, 102}, first.validatedHeights, "each kept transaction keeps its own validated height")
@@ -102,7 +102,7 @@ func TestFilterRecentlyMined_ManyBatchesAcrossChunks(t *testing.T) {
 	}
 
 	stp.keepMinedSet(minedSetBlock(1), frozenHashSet(t, minedHashes...))
-	stp.filterRecentlyMined(batches)
+	stp.filterRecentlyMined(batches, nil)
 
 	for i, b := range batches {
 		require.Equal(t, []chainhash.Hash{
@@ -130,7 +130,7 @@ func TestKeepMinedSet_RetentionAndPrune(t *testing.T) {
 	require.Zero(t, stp.keptMinedSetCount(), "dropped once the retention has passed")
 
 	b := batchOf(h)
-	stp.filterRecentlyMined([]*TxBatch{b})
+	stp.filterRecentlyMined([]*TxBatch{b}, nil)
 	require.Equal(t, []chainhash.Hash{h}, batchHashes(b), "a dropped set filters nothing")
 
 	stp.settings.BlockAssembly.MinedTxSetRetention = 0
@@ -153,7 +153,7 @@ func TestKeepMinedSet_SameBlockReplaces(t *testing.T) {
 	require.Equal(t, 1, stp.keptMinedSetCount())
 
 	b := batchOf(first, second)
-	stp.filterRecentlyMined([]*TxBatch{b})
+	stp.filterRecentlyMined([]*TxBatch{b}, nil)
 	require.Equal(t, []chainhash.Hash{first}, batchHashes(b))
 }
 
@@ -178,6 +178,19 @@ func TestAddBatchBounded_DropsKeptSetTransactionsOnArrival(t *testing.T) {
 	require.Equal(t, int64(1), stp.queue.length(), "AddBatch checks on arrival too")
 }
 
+// A drain skips its own block's set, which it checks itself, and still checks the other kept sets.
+func TestFilterRecentlyMined_SkipsTheDrainingBlocksSet(t *testing.T) {
+	stp, _ := newMinedSetProcessor(t, 10*time.Second)
+	own, other := chainhash.HashH([]byte("own")), chainhash.HashH([]byte("other"))
+	ownSet := frozenHashSet(t, own)
+	stp.keepMinedSet(minedSetBlock(1), ownSet)
+	stp.keepMinedSet(minedSetBlock(2), frozenHashSet(t, other))
+
+	b := batchOf(own, other)
+	stp.filterRecentlyMined([]*TxBatch{b}, ownSet)
+	require.Equal(t, []chainhash.Hash{own}, batchHashes(b))
+}
+
 // With no kept set holding any of its transactions, the filter leaves a batch's slices as they were.
 func TestFilterRecentlyMined_NothingMinedLeavesBatchUnchanged(t *testing.T) {
 	stp, _ := newMinedSetProcessor(t, 10*time.Second)
@@ -186,7 +199,7 @@ func TestFilterRecentlyMined_NothingMinedLeavesBatchUnchanged(t *testing.T) {
 	b := batchOf(chainhash.HashH([]byte("a")), chainhash.HashH([]byte("b")))
 	nodes := b.nodes
 
-	stp.filterRecentlyMined([]*TxBatch{b})
+	stp.filterRecentlyMined([]*TxBatch{b}, nil)
 	require.Len(t, b.nodes, 2)
 	require.Same(t, &nodes[0], &b.nodes[0])
 }
@@ -203,7 +216,7 @@ func TestForgetAndClearMinedSets(t *testing.T) {
 	stp.forgetMinedSets([]*model.Block{firstBlock})
 
 	b := batchOf(first, second)
-	stp.filterRecentlyMined([]*TxBatch{b})
+	stp.filterRecentlyMined([]*TxBatch{b}, nil)
 	require.Equal(t, []chainhash.Hash{first}, batchHashes(b), "a moved-back block's transactions are placed again")
 
 	stp.clearMinedSets()

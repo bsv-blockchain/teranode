@@ -218,6 +218,9 @@ type SubtreeProcessor struct {
 	// in the last blockassembly_minedTxSetRetention, so a late hand-off of a transaction one
 	// of them mined stays out. See recent_mined_sets.go.
 	recentMined recentMinedSets
+	// drainingBlockSet is the transaction set of the block whose drain is running, which the
+	// drain checks itself, so filterRecentlyMined skips it. Processor goroutine only.
+	drainingBlockSet *SortedHashSet
 
 	// currentItemsPerFile specifies the maximum number of items per subtree file
 	currentItemsPerFile atomic.Int32
@@ -1212,7 +1215,7 @@ func (stp *SubtreeProcessor) Start(ctx context.Context) {
 					// A transaction a recently applied block mined is dropped first, so the era
 					// filter below never records it as kept out.
 					stp.pruneMinedSets()
-					stp.filterRecentlyMined(dequeueBatches)
+					stp.filterRecentlyMined(dequeueBatches, nil)
 
 					// Before the parallel filter: descendants are found in queue order. After
 					// the count above, which settles what the queue handed out, kept or not.
@@ -8168,6 +8171,9 @@ func (stp *SubtreeProcessor) dequeueDuringBlockMovement(transactionMap *SortedHa
 }
 
 func (stp *SubtreeProcessor) dequeueDuringBlockMovementWithCutoff(transactionMap *SortedHashSet, losingTxHashesMap txmap.TxMap, conflictingHashes map[chainhash.Hash]struct{}, skipNotification, ignoreWindow bool) (err error) {
+	stp.drainingBlockSet = transactionMap
+	defer func() { stp.drainingBlockSet = nil }()
+
 	return stp.forEachDrainChunkWithCutoff(1, ignoreWindow, func(batches []*TxBatch) (int, error) {
 		placed := 0
 
@@ -8342,8 +8348,8 @@ func (stp *SubtreeProcessor) runDrainChunk(chunk []*TxBatch, chunkItems int, fn 
 	// Before fn, in queue order, so descendants are found. chunkItems was counted before it,
 	// as the queue handed the chunk out, so the settle above releases what was dropped too.
 	// A transaction a block applied in the last blockassembly_minedTxSetRetention mined is
-	// dropped first: fn filters only against the block this drain moves, if any.
-	stp.filterRecentlyMined(chunk)
+	// dropped first. fn checks the block this drain moves, if any, so its set is skipped here.
+	stp.filterRecentlyMined(chunk, stp.drainingBlockSet)
 	stp.filterTxEra(chunk)
 
 	placed, err = fn(chunk)

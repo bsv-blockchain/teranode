@@ -182,13 +182,26 @@ func (stp *SubtreeProcessor) keptMinedSetCount() int {
 }
 
 // filterRecentlyMined removes from the dequeued batches, in place and keeping queue order, every
-// transaction a kept block set holds. It runs before any of them is added to the tx map, on
+// transaction a kept block set other than skip holds. A drain passes its own block's set as skip,
+// because the drain checks that set itself. It runs before any of them is added to the tx map, on
 // every path that places queued transactions: the dequeue loop and each drain (runDrainChunk).
 // A set past its retention but not yet pruned still filters, which only keeps out a transaction
 // that block mined. The lookups run in parallel; with no set kept it returns at once.
-func (stp *SubtreeProcessor) filterRecentlyMined(batches []*TxBatch) {
-	sets := stp.recentMined.load()
-	if len(sets) == 0 || len(batches) == 0 {
+func (stp *SubtreeProcessor) filterRecentlyMined(batches []*TxBatch, skip *SortedHashSet) {
+	all := stp.recentMined.load()
+	if len(all) == 0 || len(batches) == 0 {
+		return
+	}
+
+	sets := make([]*SortedHashSet, 0, len(all))
+
+	for i := range all {
+		if all[i].txs != skip {
+			sets = append(sets, all[i].txs)
+		}
+	}
+
+	if len(sets) == 0 {
 		return
 	}
 
@@ -218,7 +231,7 @@ func (stp *SubtreeProcessor) filterRecentlyMined(batches []*TxBatch) {
 			h := batches[bi].nodes[idx-offsets[bi]].Hash
 
 			for k := range sets {
-				if sets[k].txs.Exists(h) {
+				if sets[k].Exists(h) {
 					mined[idx] = true
 					anyMined.Store(true)
 
@@ -282,7 +295,7 @@ func (stp *SubtreeProcessor) filterHandOff(nodes []subtreepkg.Node, txInpoints [
 	}
 
 	b := &TxBatch{nodes: nodes, txInpoints: txInpoints, validatedHeights: validatedHeights}
-	stp.filterRecentlyMined([]*TxBatch{b})
+	stp.filterRecentlyMined([]*TxBatch{b}, nil)
 
 	return b.nodes, b.txInpoints, b.validatedHeights
 }
