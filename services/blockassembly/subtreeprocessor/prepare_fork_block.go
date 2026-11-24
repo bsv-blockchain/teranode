@@ -235,7 +235,7 @@ func (stp *SubtreeProcessor) buildForkSet(ctx context.Context, e *forkPrepared, 
 		return err
 	}
 
-	e.firstMask = markFirstSet(first, e.txMap, forkPrepareWorkers())
+	e.firstMask, _ = markFirstSet(first, e.txMap, forkPrepareWorkers())
 
 	return nil
 }

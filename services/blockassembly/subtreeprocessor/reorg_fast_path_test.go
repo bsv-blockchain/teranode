@@ -771,7 +771,7 @@ func (sc *reorgScenario) prepareForwardSetWithLostDelta(t testing.TB, n int) {
 
 	child := forkEntries(sc.stp)[0]
 	child.lost = first.lost
-	child.firstMask = markFirstSet(first.txMap, child.txMap, forkPrepareWorkers())
+	child.firstMask, _ = markFirstSet(first.txMap, child.txMap, forkPrepareWorkers())
 }
 
 // With the winning blocks' set prepared, the fast path uses it: the winners' subtrees are not read

@@ -4,9 +4,12 @@ import (
 	"context"
 	"fmt"
 	"math/rand"
+	"runtime"
 	"slices"
+	"sync/atomic"
 	"testing"
 	"time"
+	"weak"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
@@ -78,7 +81,11 @@ func TestReorgScenario_ForkLostDeltaMatchesComputeReorgDelta(t *testing.T) {
 
 						got := pre
 						if winners == 2 {
-							got = deriveForkDelta(pre, markFirstSet(first, union, 4), union, 4)
+							mask, ok := markFirstSet(first, union, 4)
+							require.True(t, ok)
+
+							got = deriveForkDelta(pre, mask, union, 4)
+							require.NotNil(t, got)
 						}
 
 						require.Equal(t, want.Hits, got.Hits)
@@ -348,4 +355,132 @@ func TestForkLostDelta_NotProbedWhenTheMemoryGateFails(t *testing.T) {
 	waitLostDelta(t, competitor.lost)
 	require.False(t, competitor.lost.ready())
 	require.Nil(t, competitor.lostDelta(f.block, competitor.txMap, 2))
+}
+
+// A hash of the first winner that the union lacks cannot happen with sets built from the same blocks, so
+// it means something is wrong: the mask and the derivation refuse, and the reorg reads the lost block.
+func TestReorgScenario_ForkLostDeltaRefusesWhenTheUnionMissesAHash(t *testing.T) {
+	stp, store := newTxMapTestProcessor(t)
+	ctx := context.Background()
+	pool := randHashes(150, 9)
+	fresh := 0
+	r := rand.New(rand.NewSource(5)) //nolint:gosec // deterministic test data
+
+	lost := storeDeltaBlock(t, store, forkLeaves(r, pool, 0.5, &fresh))
+	first := storeDeltaBlock(t, store, forkLeaves(r, pool, 0.5, &fresh))
+	second := storeDeltaBlock(t, store, forkLeaves(r, pool, 0.5, &fresh))
+
+	firstSet, _, err := stp.buildUnionSet(ctx, []*model.Block{first})
+	require.NoError(t, err)
+
+	// a union of the second block alone lacks the first's hashes
+	secondOnly, _, err := stp.buildUnionSet(ctx, []*model.Block{second})
+	require.NoError(t, err)
+
+	mask, ok := markFirstSet(firstSet, secondOnly, 2)
+	require.False(t, ok)
+	require.Nil(t, mask)
+
+	pre, err := stp.computeReorgDelta(ctx, []*model.Block{lost}, firstSet, 2)
+	require.NoError(t, err)
+	require.NotEmpty(t, pre.D2)
+
+	// pre.D2 holds hashes of the first block, which this union lacks
+	require.Nil(t, deriveForkDelta(pre, make([]atomic.Uint64, (secondOnly.Positions()+63)/64), secondOnly, 2))
+}
+
+// The tests run the derivation over several chunks of candidates: the concatenation keeps the order.
+func TestReorgScenario_ForkLostDeltaKeepsOrderAcrossChunks(t *testing.T) {
+	old := forkDeltaChunk
+	forkDeltaChunk = 7
+
+	defer func() { forkDeltaChunk = old }()
+
+	stp, store := newTxMapTestProcessor(t)
+	pool := randHashes(150, 11)
+	fresh := 0
+
+	for seed := int64(1); seed <= 6; seed++ {
+		r := rand.New(rand.NewSource(seed)) //nolint:gosec // deterministic test data
+		lost := storeDeltaBlock(t, store, forkLeaves(r, pool, 0.4, &fresh))
+		blocks := []*model.Block{
+			storeDeltaBlock(t, store, forkLeaves(r, pool, 0.5, &fresh)),
+			storeDeltaBlock(t, store, forkLeaves(r, pool, 0.5, &fresh)),
+		}
+
+		requireDerivedMatches(t, stp, lost, blocks)
+	}
+}
+
+// The two winners share a subtree: its root is one key, read once into the union, and its hashes belong to
+// both blocks.
+func TestReorgScenario_ForkLostDeltaWithASubtreeBothWinnersHold(t *testing.T) {
+	stp, store := newTxMapTestProcessor(t)
+	pool := randHashes(150, 13)
+	fresh := 0
+
+	for seed := int64(1); seed <= 6; seed++ {
+		r := rand.New(rand.NewSource(seed)) //nolint:gosec // deterministic test data
+		lost := storeDeltaBlock(t, store, forkLeaves(r, pool, 0.6, &fresh))
+		firstLeaves := forkLeaves(r, pool, 0.5, &fresh)
+		secondLeaves := [][]chainhash.Hash{forkLeaves(r, pool, 0.5, &fresh)[0], firstLeaves[1]}
+
+		first, second := storeDeltaBlock(t, store, firstLeaves), storeDeltaBlock(t, store, secondLeaves)
+		require.Equal(t, *first.Subtrees[1], *second.Subtrees[1], "one root in both blocks")
+
+		requireDerivedMatches(t, stp, lost, []*model.Block{first, second})
+	}
+}
+
+// requireDerivedMatches checks the derivation for two winners against computeReorgDelta over the union.
+func requireDerivedMatches(t *testing.T, stp *SubtreeProcessor, lost *model.Block, blocks []*model.Block) {
+	t.Helper()
+
+	ctx := context.Background()
+
+	first, _, err := stp.buildUnionSet(ctx, blocks[:1])
+	require.NoError(t, err)
+
+	union, _, err := stp.buildUnionSet(ctx, blocks)
+	require.NoError(t, err)
+
+	pre, err := stp.computeReorgDelta(ctx, []*model.Block{lost}, first, 4)
+	require.NoError(t, err)
+
+	want, err := stp.computeReorgDelta(ctx, []*model.Block{lost}, union, 4)
+	require.NoError(t, err)
+
+	mask, ok := markFirstSet(first, union, 4)
+	require.True(t, ok)
+
+	got := deriveForkDelta(pre, mask, union, 4)
+	require.NotNil(t, got)
+	require.Greater(t, len(want.D1), 14, "several chunks")
+	require.Equal(t, want.Hits, got.Hits)
+	require.True(t, slices.Equal(want.D1, got.D1))
+	require.True(t, slices.Equal(want.D2, got.D2))
+}
+
+// heldByTheEntry is where the test keeps a hold, on the heap, as an entry's cancel is kept.
+var heldByTheEntry context.CancelFunc
+
+// An entry holds the probe through a closure that must not keep its result alive: a child that drops the
+// probe because its gate failed keeps the closure for the entry's life.
+func TestForkLostDelta_HoldDoesNotKeepTheResultAlive(t *testing.T) {
+	l := newForkLostDelta()
+	l.delta = &reorgDelta{D1: make([]reorgDeltaNode, 1000)}
+	hold := l.holdBy(func() {})
+	heldByTheEntry = hold
+	w := weak.Make(l.delta)
+
+	l = nil
+
+	for range 3 {
+		runtime.GC()
+	}
+
+	require.Nil(t, w.Value(), "the delta is let go while the hold is alive")
+
+	heldByTheEntry()
+	heldByTheEntry = nil
 }

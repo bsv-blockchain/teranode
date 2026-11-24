@@ -37,7 +37,7 @@ type forkLostDelta struct {
 	cancel context.CancelFunc
 	ctx    context.Context
 	// refs is the entries holding it: it is cancelled when the last lets go
-	refs atomic.Int32
+	refs *atomic.Int32
 	// done is closed when the fields below are set
 	done chan struct{}
 
@@ -49,7 +49,7 @@ type forkLostDelta struct {
 }
 
 func newForkLostDelta() *forkLostDelta {
-	l := &forkLostDelta{done: make(chan struct{})}
+	l := &forkLostDelta{done: make(chan struct{}), refs: new(atomic.Int32)}
 	l.ctx, l.cancel = context.WithCancel(context.Background())
 	l.refs.Store(1)
 
@@ -73,14 +73,19 @@ func (l *forkLostDelta) ready() bool {
 // holdBy returns cancel for an entry that holds l: the probe stops when every entry that holds it has
 // been cancelled. The competitor's entry is cancelled when its child's set starts to build, which must
 // not stop the probe its child inherits.
+//
+// The closure holds only the count and the stop, not l: an entry that dropped the probe keeps its cancel
+// for its life, and must not keep the delta alive with it.
 func (l *forkLostDelta) holdBy(cancel context.CancelFunc) context.CancelFunc {
 	var once sync.Once
+
+	refs, stop := l.refs, l.cancel
 
 	return func() {
 		cancel()
 		once.Do(func() {
-			if l.refs.Add(-1) == 0 {
-				l.cancel()
+			if refs.Add(-1) == 0 {
+				stop()
 			}
 		})
 	}
@@ -141,35 +146,51 @@ func (stp *SubtreeProcessor) probeLostAgainstFirst(ctx context.Context, e *forkP
 	return nil
 }
 
-// markFirstSet is one bit for every position of union, set for the hashes of first.
-func markFirstSet(first, union *SortedHashSet, workers int) []atomic.Uint64 {
+// markFirstSet is one bit for every position of union, set for the hashes of first. A hash of first that
+// union lacks cannot be: it returns false then, and the mask is not to be used.
+func markFirstSet(first, union *SortedHashSet, workers int) ([]atomic.Uint64, bool) {
 	mask := make([]atomic.Uint64, (union.Positions()+63)/64)
 
+	var missed atomic.Bool
+
 	first.IterPositions(workers, func(_ int, _ uint64, h *chainhash.Hash) {
-		if pos, ok := union.Find(*h); ok {
-			word, bit := &mask[pos/64], uint64(1)<<(pos%64)
-			if word.Load()&bit == 0 {
-				word.Or(bit)
-			}
+		pos, ok := union.Find(*h)
+		if !ok {
+			missed.Store(true)
+			return
+		}
+
+		word, bit := &mask[pos/64], uint64(1)<<(pos%64)
+		if word.Load()&bit == 0 {
+			word.Or(bit)
 		}
 	})
 
-	return mask
+	if missed.Load() {
+		return nil, false
+	}
+
+	return mask, true
 }
 
 // forkDeltaChunk is how many candidates one task of the probe against the union covers.
-const forkDeltaChunk = 64 << 10
+// A variable so a test can run several chunks over a small delta.
+var forkDeltaChunk = 64 << 10
 
 // deriveForkDelta is the delta of the lost block against union, the first winner and the one after it,
 // from pre, the lost block's delta against the first winner's set, and mask, the first winner's hashes
-// in union. It equals computeReorgDelta over the lost block and union.
+// in union. It equals computeReorgDelta over the lost block and union, and is nil if a hash of the first
+// winner's is not in union, which cannot be.
 func deriveForkDelta(pre *reorgDelta, mask []atomic.Uint64, union *SortedHashSet, workers int) *reorgDelta {
 	bitmap := make([]atomic.Uint64, len(mask))
 	for i := range mask {
 		bitmap[i].Store(mask[i].Load())
 	}
 
-	var g errgroup.Group
+	var (
+		g      errgroup.Group
+		missed atomic.Bool
+	)
 
 	g.SetLimit(max(1, workers))
 
@@ -178,9 +199,13 @@ func deriveForkDelta(pre *reorgDelta, mask []atomic.Uint64, union *SortedHashSet
 	for start := 0; start < len(pre.D2); start += forkDeltaChunk {
 		g.Go(func() error {
 			for _, h := range pre.D2[start:min(start+forkDeltaChunk, len(pre.D2))] {
-				if pos, ok := union.Find(h); ok {
-					bitmap[pos/64].And(^(uint64(1) << (pos % 64)))
+				pos, ok := union.Find(h)
+				if !ok {
+					missed.Store(true)
+					continue
 				}
+
+				bitmap[pos/64].And(^(uint64(1) << (pos % 64)))
 			}
 
 			return nil
@@ -209,6 +234,10 @@ func deriveForkDelta(pre *reorgDelta, mask []atomic.Uint64, union *SortedHashSet
 	}
 
 	_ = g.Wait()
+
+	if missed.Load() {
+		return nil
+	}
 
 	delta := &reorgDelta{}
 
