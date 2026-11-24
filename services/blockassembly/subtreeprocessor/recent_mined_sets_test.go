@@ -157,44 +157,38 @@ func TestKeepMinedSet_SameBlockReplaces(t *testing.T) {
 	require.Equal(t, []chainhash.Hash{first}, batchHashes(b))
 }
 
-// While pinned, a kept set does not expire. A finish that succeeded starts its retention then; a
-// failed one drops the sets kept while pinned and leaves the earlier ones.
-func TestPinMinedSets(t *testing.T) {
-	t.Run("success_starts_retention_at_finish", func(t *testing.T) {
-		stp, now := newMinedSetProcessor(t, 10*time.Second)
+// A hand-off is checked against the kept sets when it arrives: a transaction a kept set holds never
+// reaches the queue, and a batch left empty is admitted without taking queue room. This is what
+// keeps such a transaction out when the set is dropped before the next drain, as in a catch-up of
+// three or more slow blocks.
+func TestAddBatchBounded_DropsKeptSetTransactionsOnArrival(t *testing.T) {
+	stp, _ := newMinedSetProcessor(t, 10*time.Second)
+	a, b := chainhash.HashH([]byte("a")), chainhash.HashH([]byte("b"))
+	stp.keepMinedSet(minedSetBlock(1), frozenHashSet(t, b))
 
-		finish := stp.pinMinedSets()
-		stp.keepMinedSet(minedSetBlock(1), frozenHashSet(t, chainhash.HashH([]byte("x"))))
+	first := batchOf(a, b)
+	require.Equal(t, Admitted, stp.AddBatchBounded(first.nodes, first.txInpoints, false, first.validatedHeights))
+	require.Equal(t, int64(1), stp.queue.length(), "only the transaction no kept set holds is queued")
 
-		*now = now.Add(time.Hour)
-		stp.pruneMinedSets()
-		require.Equal(t, 1, stp.keptMinedSetCount(), "a pinned set does not expire")
+	onlyMined := batchOf(b)
+	require.Equal(t, Admitted, stp.AddBatchBounded(onlyMined.nodes, onlyMined.txInpoints, false, onlyMined.validatedHeights))
+	require.Equal(t, int64(1), stp.queue.length(), "a batch left empty is admitted and queues nothing")
 
-		finish(false)
+	stp.AddBatch([]subtreepkg.Node{{Hash: b, Fee: 1, SizeInBytes: 1}}, []*subtreepkg.TxInpoints{inpointsPtr()})
+	require.Equal(t, int64(1), stp.queue.length(), "AddBatch checks on arrival too")
+}
 
-		*now = now.Add(10*time.Second - time.Millisecond)
-		stp.pruneMinedSets()
-		require.Equal(t, 1, stp.keptMinedSetCount(), "the retention starts when the pin ends")
+// With no kept set holding any of its transactions, the filter leaves a batch's slices as they were.
+func TestFilterRecentlyMined_NothingMinedLeavesBatchUnchanged(t *testing.T) {
+	stp, _ := newMinedSetProcessor(t, 10*time.Second)
+	stp.keepMinedSet(minedSetBlock(1), frozenHashSet(t, chainhash.HashH([]byte("elsewhere"))))
 
-		*now = now.Add(time.Millisecond)
-		stp.pruneMinedSets()
-		require.Zero(t, stp.keptMinedSetCount())
-	})
+	b := batchOf(chainhash.HashH([]byte("a")), chainhash.HashH([]byte("b")))
+	nodes := b.nodes
 
-	t.Run("failure_drops_only_sets_kept_while_pinned", func(t *testing.T) {
-		stp, _ := newMinedSetProcessor(t, 10*time.Second)
-		before, during := chainhash.HashH([]byte("before")), chainhash.HashH([]byte("during"))
-
-		stp.keepMinedSet(minedSetBlock(1), frozenHashSet(t, before))
-
-		finish := stp.pinMinedSets()
-		stp.keepMinedSet(minedSetBlock(2), frozenHashSet(t, during))
-		finish(true)
-
-		b := batchOf(before, during)
-		stp.filterRecentlyMined([]*TxBatch{b})
-		require.Equal(t, []chainhash.Hash{during}, batchHashes(b), "the set kept before the pin stays, the failed one's goes")
-	})
+	stp.filterRecentlyMined([]*TxBatch{b})
+	require.Len(t, b.nodes, 2)
+	require.Same(t, &nodes[0], &b.nodes[0])
 }
 
 // A moved-back block's set is forgotten, and a reset forgets every set.
@@ -260,4 +254,25 @@ func TestMoveForwardBlock_LateHandOffOfMinedTxStaysOut(t *testing.T) {
 			})
 		}
 	}
+}
+
+// A reset forgets every kept set, so a hand-off of a transaction a block it may have moved back
+// mined is queued again.
+func TestReset_ClearsKeptMinedSets(t *testing.T) {
+	stp, _ := newMinedSetProcessor(t, 10*time.Second)
+	h := chainhash.HashH([]byte("mined-before-reset"))
+	stp.keepMinedSet(minedSetBlock(1), frozenHashSet(t, h))
+
+	require.NoError(t, stp.reset(&model.BlockHeader{
+		Version:        1,
+		HashPrevBlock:  &chainhash.Hash{},
+		HashMerkleRoot: &chainhash.Hash{},
+		Nonce:          2240,
+	}, nil, nil, false, func() error { return nil }))
+
+	require.Zero(t, stp.keptMinedSetCount())
+
+	b := batchOf(h)
+	require.Equal(t, Admitted, stp.AddBatchBounded(b.nodes, b.txInpoints, false, b.validatedHeights))
+	require.Equal(t, int64(1), stp.queue.length(), "the transaction is queued again after the reset")
 }

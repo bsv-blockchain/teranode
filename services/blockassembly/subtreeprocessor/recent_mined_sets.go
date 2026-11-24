@@ -7,19 +7,25 @@ import (
 	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	subtreepkg "github.com/bsv-blockchain/go-subtree"
 	"github.com/bsv-blockchain/teranode/model"
 )
 
 // recentMinedSet is the transaction set of a block that block assembly moved forward onto. It is
 // kept for a short time after the move (blockassembly_minedTxSetRetention), so a transaction the
-// block mined stays out of assembly when its hand-off reaches the queue after the block's drain.
+// block mined stays out of assembly when its hand-off reaches block assembly after the block's
+// drain.
 //
 // Such a late hand-off is normal, not a fault. The validator creates a transaction's record
 // before it hands the transaction to block assembly, and a block from a peer can mine the
 // transaction in between. A hand-off waits up to about 0.6 s per attempt and is retried for up to
-// 2 s, and an abandoned hand-off can still be sent after that. Without the kept set, the steady
-// state dequeue loop placed such a transaction with no block check, and in a fork reorg a later
-// forward block's drain checked it against that block alone.
+// 2 s. Without the kept set, the steady-state dequeue loop placed such a transaction with no
+// block check, and in a fork reorg a later forward block's drain checked it against that block
+// alone.
+//
+// A hand-off is checked when it arrives (AddBatch, AddBatchBounded), against the sets kept at that
+// moment, and again when it is placed. Checking on arrival is what lets a set go after its
+// retention even when a long reorg leaves the hand-off queued for longer than that.
 //
 // Meant to be replaced: if lanes becomes the way teranode records mined state, a block's lane
 // map rows answer the same question exactly, from a position the hand-off carries, with no copy
@@ -28,20 +34,15 @@ import (
 type recentMinedSet struct {
 	blockHash chainhash.Hash
 	txs       *SortedHashSet
-	// seq orders the sets by when they were kept, so a failed reorg can drop its own.
-	seq uint64
-	// expires is when the set is dropped. It is zero while the reorg that kept it runs, so
-	// every forward block of a long reorg stays checked until the reorg ends.
+	// expires is when the set is dropped.
 	expires time.Time
 }
 
 // recentMinedSets holds the kept sets. Readers load the slice without a lock; writers replace
 // it under mu, so a slice once loaded never changes.
 type recentMinedSets struct {
-	mu      sync.Mutex
-	sets    atomic.Pointer[[]recentMinedSet]
-	nextSeq uint64 // guarded by mu
-	pinned  int    // reorgs running; guarded by mu
+	mu   sync.Mutex
+	sets atomic.Pointer[[]recentMinedSet]
 }
 
 func (r *recentMinedSets) load() []recentMinedSet {
@@ -62,9 +63,10 @@ func (r *recentMinedSets) storeLocked(sets []recentMinedSet) {
 	r.sets.Store(&sets)
 }
 
-// keepMinedSet keeps the transaction set of a block just moved forward onto. Outside a reorg it
-// is dropped once the retention has passed; inside one, when the reorg ends (unpin). A nil or
-// empty set, or a retention of 0, keeps nothing.
+// keepMinedSet keeps the transaction set of a block just moved forward onto until the retention
+// has passed, and drops the sets whose retention has passed, so a reorg or catch-up holds only the
+// sets of the blocks it moved in the last retention plus the newest. A nil or empty set, or a
+// retention of 0, keeps nothing.
 func (stp *SubtreeProcessor) keepMinedSet(block *model.Block, txs *SortedHashSet) {
 	retention := stp.settings.BlockAssembly.MinedTxSetRetention
 	if retention <= 0 || block == nil || txs == nil || txs.Length() == 0 {
@@ -77,12 +79,7 @@ func (stp *SubtreeProcessor) keepMinedSet(block *model.Block, txs *SortedHashSet
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	r.nextSeq++
-
-	entry := recentMinedSet{blockHash: *block.Hash(), txs: txs, seq: r.nextSeq}
-	if r.pinned == 0 {
-		entry.expires = now.Add(retention)
-	}
+	entry := recentMinedSet{blockHash: *block.Hash(), txs: txs, expires: now.Add(retention)}
 
 	old := r.load()
 	sets := make([]recentMinedSet, 0, len(old)+1)
@@ -97,48 +94,7 @@ func (stp *SubtreeProcessor) keepMinedSet(block *model.Block, txs *SortedHashSet
 }
 
 func (s *recentMinedSet) expired(now time.Time) bool {
-	return !s.expires.IsZero() && !now.Before(s.expires)
-}
-
-// pinMinedSets holds every set kept from now on until the returned finish runs, as reorgBlocks
-// does for its forward blocks. finish(false) starts their retention; finish(true) drops them,
-// because the blocks they belong to were not applied (a failed catch-up rolls back, and a failed
-// fork reorg is followed by a reset).
-func (stp *SubtreeProcessor) pinMinedSets() (finish func(failed bool)) {
-	r := &stp.recentMined
-	r.mu.Lock()
-	r.pinned++
-	fromSeq := r.nextSeq
-	r.mu.Unlock()
-
-	return func(failed bool) {
-		now := stp.clock.Now()
-		retention := stp.settings.BlockAssembly.MinedTxSetRetention
-
-		r.mu.Lock()
-		defer r.mu.Unlock()
-
-		r.pinned--
-
-		old := r.load()
-		sets := make([]recentMinedSet, 0, len(old))
-
-		for _, s := range old {
-			if s.seq > fromSeq && s.expires.IsZero() {
-				if failed {
-					continue
-				}
-
-				if r.pinned == 0 {
-					s.expires = now.Add(retention)
-				}
-			}
-
-			sets = append(sets, s)
-		}
-
-		r.storeLocked(sets)
-	}
+	return !now.Before(s.expires)
 }
 
 // forgetMinedSets drops the sets of blocks that are moved back: their transactions are no longer
@@ -248,6 +204,8 @@ func (stp *SubtreeProcessor) filterRecentlyMined(batches []*TxBatch) {
 
 	mined := make([]bool, total)
 
+	var anyMined atomic.Bool
+
 	forEachChunk(total, func(start, end int) {
 		// the batch holding flat index start: the last offset at or below it
 		bi := sort.Search(len(batches), func(i int) bool { return offsets[i+1] > start })
@@ -262,11 +220,17 @@ func (stp *SubtreeProcessor) filterRecentlyMined(batches []*TxBatch) {
 			for k := range sets {
 				if sets[k].txs.Exists(h) {
 					mined[idx] = true
+					anyMined.Store(true)
+
 					break
 				}
 			}
 		}
 	})
+
+	if !anyMined.Load() {
+		return
+	}
 
 	dropped := 0
 
@@ -307,4 +271,18 @@ func (stp *SubtreeProcessor) filterRecentlyMined(batches []*TxBatch) {
 	if dropped > 0 && prometheusSubtreeProcessorLateMinedDropped != nil {
 		prometheusSubtreeProcessorLateMinedDropped.Add(float64(dropped))
 	}
+}
+
+// filterHandOff removes, in place, every transaction of a batch arriving at the queue that a
+// kept block set holds, and returns what is left, so a hand-off is checked against the sets kept
+// when it arrives. validatedHeights may be nil.
+func (stp *SubtreeProcessor) filterHandOff(nodes []subtreepkg.Node, txInpoints []*subtreepkg.TxInpoints, validatedHeights []uint32) ([]subtreepkg.Node, []*subtreepkg.TxInpoints, []uint32) {
+	if len(stp.recentMined.load()) == 0 || len(nodes) == 0 || len(nodes) != len(txInpoints) {
+		return nodes, txInpoints, validatedHeights
+	}
+
+	b := &TxBatch{nodes: nodes, txInpoints: txInpoints, validatedHeights: validatedHeights}
+	stp.filterRecentlyMined([]*TxBatch{b})
+
+	return b.nodes, b.txInpoints, b.validatedHeights
 }

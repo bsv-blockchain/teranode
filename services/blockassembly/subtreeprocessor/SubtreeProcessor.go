@@ -3507,6 +3507,12 @@ func (stp *SubtreeProcessor) updateChainedSubtreeCounts() {
 //   - nodes: Transaction nodes to add
 //   - txInpoints: Parent transaction references for each node
 func (stp *SubtreeProcessor) AddBatch(nodes []subtreepkg.Node, txInpoints []*subtreepkg.TxInpoints) {
+	// A transaction a recently applied block mined stays out (recent_mined_sets.go).
+	nodes, txInpoints, _ = stp.filterHandOff(nodes, txInpoints, nil)
+	if len(nodes) == 0 {
+		return
+	}
+
 	stp.queue.enqueueBatch(nodes, txInpoints)
 }
 
@@ -3523,6 +3529,13 @@ func (stp *SubtreeProcessor) AddBatch(nodes []subtreepkg.Node, txInpoints []*sub
 // Returns:
 //   - Admission: Admitted, or the bound that refused the batch
 func (stp *SubtreeProcessor) AddBatchBounded(nodes []subtreepkg.Node, txInpoints []*subtreepkg.TxInpoints, inBlock bool, validatedHeights []uint32) Admission {
+	// A transaction a recently applied block mined stays out (recent_mined_sets.go). A batch
+	// left empty is admitted: block assembly has nothing to hold for it.
+	nodes, txInpoints, validatedHeights = stp.filterHandOff(nodes, txInpoints, validatedHeights)
+	if len(nodes) == 0 {
+		return Admitted
+	}
+
 	return stp.queue.enqueueBatchBounded(nodes, txInpoints, inBlock, validatedHeights)
 }
 
@@ -5378,21 +5391,6 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveBackBlocks []*
 	if err = stp.refuseUntilReset("reorgBlocks"); err != nil {
 		return err
 	}
-
-	// Every forward block's transaction set stays kept until the reorg ends, so a late hand-off
-	// of a transaction an earlier forward block mined is dropped at a later step's drain too. A
-	// reorg that fails or panics drops the sets it kept: a failed catch-up rolls its blocks back,
-	// and a failed fork reorg is followed by a reset.
-	finishMinedSets := stp.pinMinedSets()
-
-	defer func() {
-		r := recover()
-		finishMinedSets(err != nil || r != nil)
-
-		if r != nil {
-			panic(r)
-		}
-	}()
 
 	// A failed step puts back the map it captured, and a failed catch-up the
 	// map from before it, so a captured map must stay unchanged after the next
