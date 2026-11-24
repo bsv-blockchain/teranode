@@ -9411,14 +9411,17 @@ have an entry. A method with no entry is denied to limited users.</p>
 </span></code></pre></div>
 <h3 id="freeze">freeze<a class="headerlink" href="#freeze" title="Permanent link">&para;</a></h3>
 <p>Freezes a specific UTXO, preventing it from being spent.</p>
-<p><strong>Parameters:</strong></p>
+<p><strong>Parameters</strong> (positional, in this order):</p>
 <ol>
 <li><code>txid</code> (string, required) - Transaction ID of the output to freeze</li>
 <li><code>vout</code> (numeric, required) - Output index to freeze</li>
+<li><code>utxohash</code> (string, required) - UTXO commitment of the output, as a 64-character hex hash. The
+   Aerospike backend verifies it against the stored output and rejects a mismatch; the
+   SQL backend locates the output by <code>txid</code>/<code>vout</code> alone.</li>
 </ol>
 <p><strong>Returns:</strong></p>
 <ul>
-<li><code>boolean</code> - True if the UTXO was successfully frozen</li>
+<li><code>null</code> on success; an error if hash parsing or the store operation fails</li>
 </ul>
 <p><strong>Example Request:</strong></p>
 <div class="language-json highlight"><pre><span></span><code><span id="__span-64-1"><a id="__codelineno-64-1" name="__codelineno-64-1" href="#__codelineno-64-1"></a><span class="p">{</span>
@@ -9427,27 +9430,29 @@ have an entry. A method with no entry is denied to limited users.</p>
 </span><span id="__span-64-4"><a id="__codelineno-64-4" name="__codelineno-64-4" href="#__codelineno-64-4"></a><span class="w">    </span><span class="nt">"method"</span><span class="p">:</span><span class="w"> </span><span class="s2">"freeze"</span><span class="p">,</span>
 </span><span id="__span-64-5"><a id="__codelineno-64-5" name="__codelineno-64-5" href="#__codelineno-64-5"></a><span class="w">    </span><span class="nt">"params"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
 </span><span id="__span-64-6"><a id="__codelineno-64-6" name="__codelineno-64-6" href="#__codelineno-64-6"></a><span class="w">        </span><span class="s2">"a08e6907dbbd3d809776dbfc5d82e371b764ed838b5655e72f463568df1aadf0"</span><span class="p">,</span>
-</span><span id="__span-64-7"><a id="__codelineno-64-7" name="__codelineno-64-7" href="#__codelineno-64-7"></a><span class="w">        </span><span class="mi">1</span>
-</span><span id="__span-64-8"><a id="__codelineno-64-8" name="__codelineno-64-8" href="#__codelineno-64-8"></a><span class="w">    </span><span class="p">]</span>
-</span><span id="__span-64-9"><a id="__codelineno-64-9" name="__codelineno-64-9" href="#__codelineno-64-9"></a><span class="p">}</span>
+</span><span id="__span-64-7"><a id="__codelineno-64-7" name="__codelineno-64-7" href="#__codelineno-64-7"></a><span class="w">        </span><span class="mi">1</span><span class="p">,</span>
+</span><span id="__span-64-8"><a id="__codelineno-64-8" name="__codelineno-64-8" href="#__codelineno-64-8"></a><span class="w">        </span><span class="s2">"4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda33b"</span>
+</span><span id="__span-64-9"><a id="__codelineno-64-9" name="__codelineno-64-9" href="#__codelineno-64-9"></a><span class="w">    </span><span class="p">]</span>
+</span><span id="__span-64-10"><a id="__codelineno-64-10" name="__codelineno-64-10" href="#__codelineno-64-10"></a><span class="p">}</span>
 </span></code></pre></div>
 <p><strong>Example Response:</strong></p>
 <div class="language-json highlight"><pre><span></span><code><span id="__span-65-1"><a id="__codelineno-65-1" name="__codelineno-65-1" href="#__codelineno-65-1"></a><span class="p">{</span>
-</span><span id="__span-65-2"><a id="__codelineno-65-2" name="__codelineno-65-2" href="#__codelineno-65-2"></a><span class="w">    </span><span class="nt">"result"</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+</span><span id="__span-65-2"><a id="__codelineno-65-2" name="__codelineno-65-2" href="#__codelineno-65-2"></a><span class="w">    </span><span class="nt">"result"</span><span class="p">:</span><span class="w"> </span><span class="kc">null</span><span class="p">,</span>
 </span><span id="__span-65-3"><a id="__codelineno-65-3" name="__codelineno-65-3" href="#__codelineno-65-3"></a><span class="w">    </span><span class="nt">"error"</span><span class="p">:</span><span class="w"> </span><span class="kc">null</span><span class="p">,</span>
 </span><span id="__span-65-4"><a id="__codelineno-65-4" name="__codelineno-65-4" href="#__codelineno-65-4"></a><span class="w">    </span><span class="nt">"id"</span><span class="p">:</span><span class="w"> </span><span class="s2">"curltest"</span>
 </span><span id="__span-65-5"><a id="__codelineno-65-5" name="__codelineno-65-5" href="#__codelineno-65-5"></a><span class="p">}</span>
 </span></code></pre></div>
 <h3 id="unfreeze">unfreeze<a class="headerlink" href="#unfreeze" title="Permanent link">&para;</a></h3>
 <p>Unfreezes a previously frozen UTXO, allowing it to be spent.</p>
-<p><strong>Parameters:</strong></p>
+<p><strong>Parameters</strong> (positional, in this order):</p>
 <ol>
 <li><code>txid</code> (string, required) - Transaction ID of the frozen output</li>
 <li><code>vout</code> (numeric, required) - Output index to unfreeze</li>
+<li><code>utxohash</code> (string, required) - UTXO commitment of the output, as a 64-character hex hash (see <code>freeze</code>)</li>
 </ol>
 <p><strong>Returns:</strong></p>
 <ul>
-<li><code>boolean</code> - True if the UTXO was successfully unfrozen</li>
+<li><code>null</code> on success; an error if hash parsing or the store operation fails</li>
 </ul>
 <p><strong>Example Request:</strong></p>
 <div class="language-json highlight"><pre><span></span><code><span id="__span-66-1"><a id="__codelineno-66-1" name="__codelineno-66-1" href="#__codelineno-66-1"></a><span class="p">{</span>
@@ -9456,13 +9461,14 @@ have an entry. A method with no entry is denied to limited users.</p>
 </span><span id="__span-66-4"><a id="__codelineno-66-4" name="__codelineno-66-4" href="#__codelineno-66-4"></a><span class="w">    </span><span class="nt">"method"</span><span class="p">:</span><span class="w"> </span><span class="s2">"unfreeze"</span><span class="p">,</span>
 </span><span id="__span-66-5"><a id="__codelineno-66-5" name="__codelineno-66-5" href="#__codelineno-66-5"></a><span class="w">    </span><span class="nt">"params"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
 </span><span id="__span-66-6"><a id="__codelineno-66-6" name="__codelineno-66-6" href="#__codelineno-66-6"></a><span class="w">        </span><span class="s2">"a08e6907dbbd3d809776dbfc5d82e371b764ed838b5655e72f463568df1aadf0"</span><span class="p">,</span>
-</span><span id="__span-66-7"><a id="__codelineno-66-7" name="__codelineno-66-7" href="#__codelineno-66-7"></a><span class="w">        </span><span class="mi">1</span>
-</span><span id="__span-66-8"><a id="__codelineno-66-8" name="__codelineno-66-8" href="#__codelineno-66-8"></a><span class="w">    </span><span class="p">]</span>
-</span><span id="__span-66-9"><a id="__codelineno-66-9" name="__codelineno-66-9" href="#__codelineno-66-9"></a><span class="p">}</span>
+</span><span id="__span-66-7"><a id="__codelineno-66-7" name="__codelineno-66-7" href="#__codelineno-66-7"></a><span class="w">        </span><span class="mi">1</span><span class="p">,</span>
+</span><span id="__span-66-8"><a id="__codelineno-66-8" name="__codelineno-66-8" href="#__codelineno-66-8"></a><span class="w">        </span><span class="s2">"4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda33b"</span>
+</span><span id="__span-66-9"><a id="__codelineno-66-9" name="__codelineno-66-9" href="#__codelineno-66-9"></a><span class="w">    </span><span class="p">]</span>
+</span><span id="__span-66-10"><a id="__codelineno-66-10" name="__codelineno-66-10" href="#__codelineno-66-10"></a><span class="p">}</span>
 </span></code></pre></div>
 <p><strong>Example Response:</strong></p>
 <div class="language-json highlight"><pre><span></span><code><span id="__span-67-1"><a id="__codelineno-67-1" name="__codelineno-67-1" href="#__codelineno-67-1"></a><span class="p">{</span>
-</span><span id="__span-67-2"><a id="__codelineno-67-2" name="__codelineno-67-2" href="#__codelineno-67-2"></a><span class="w">    </span><span class="nt">"result"</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+</span><span id="__span-67-2"><a id="__codelineno-67-2" name="__codelineno-67-2" href="#__codelineno-67-2"></a><span class="w">    </span><span class="nt">"result"</span><span class="p">:</span><span class="w"> </span><span class="kc">null</span><span class="p">,</span>
 </span><span id="__span-67-3"><a id="__codelineno-67-3" name="__codelineno-67-3" href="#__codelineno-67-3"></a><span class="w">    </span><span class="nt">"error"</span><span class="p">:</span><span class="w"> </span><span class="kc">null</span><span class="p">,</span>
 </span><span id="__span-67-4"><a id="__codelineno-67-4" name="__codelineno-67-4" href="#__codelineno-67-4"></a><span class="w">    </span><span class="nt">"id"</span><span class="p">:</span><span class="w"> </span><span class="s2">"curltest"</span>
 </span><span id="__span-67-5"><a id="__codelineno-67-5" name="__codelineno-67-5" href="#__codelineno-67-5"></a><span class="p">}</span>

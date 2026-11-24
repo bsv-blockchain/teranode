@@ -7370,14 +7370,15 @@
 <p><code>freeze</code>: Freezes a specific UTXO, preventing it from being spent</p>
 <ul>
 <li>
-<p>Parameters:</p>
+<p>Parameters (positional, in this order):</p>
 <ul>
 <li><code>txid</code> (string, required): The transaction ID of the UTXO</li>
 <li><code>vout</code> (numeric, required): The output index</li>
+<li><code>utxohash</code> (string, required): The UTXO commitment of the output, as a 64-character hex hash</li>
 </ul>
 </li>
 <li>
-<p>Returns: Boolean <code>true</code> if successful</p>
+<p>Returns: <code>null</code> on success; an error if hash parsing or the store operation fails</p>
 </li>
 <li>Note: Frozen UTXOs remain frozen until explicitly unfrozen</li>
 </ul>
@@ -7386,14 +7387,15 @@
 <p><code>unfreeze</code>: Unfreezes a previously frozen UTXO, allowing it to be spent</p>
 <ul>
 <li>
-<p>Parameters:</p>
+<p>Parameters (positional, in this order):</p>
 <ul>
 <li><code>txid</code> (string, required): The transaction ID of the frozen UTXO</li>
 <li><code>vout</code> (numeric, required): The output index</li>
+<li><code>utxohash</code> (string, required): The UTXO commitment of the output, as a 64-character hex hash</li>
 </ul>
 </li>
 <li>
-<p>Returns: Boolean <code>true</code> if successful</p>
+<p>Returns: <code>null</code> on success; an error if hash parsing or the store operation fails</p>
 </li>
 </ul>
 </li>
