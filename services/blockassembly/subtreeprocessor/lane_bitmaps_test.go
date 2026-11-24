@@ -4,8 +4,10 @@ import (
 	"context"
 	"fmt"
 	"math/rand"
+	"slices"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
@@ -581,5 +583,143 @@ func TestBitmapsFromPositionsMatchesTheRecord(t *testing.T) {
 
 	for l, bm := range want.Lanes {
 		require.Equal(t, bm.ToArray(), got.Lanes[l].ToArray(), "lane %d", l)
+	}
+}
+
+// startedLanePool starts stp's processing loop and returns a stop that waits for it to end, so the
+// test can then read the processor's state.
+func startedLanePool(t *testing.T, stp *SubtreeProcessor) (stop func()) {
+	t.Helper()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	stp.Start(ctx)
+
+	stopped := false
+
+	stop = func() {
+		if stopped {
+			return
+		}
+
+		stopped = true
+
+		cancel()
+		require.Eventually(t, stp.stopped.Load, 5*time.Second, time.Millisecond)
+	}
+
+	t.Cleanup(stop)
+
+	return stop
+}
+
+// A mining candidate's subtrees, served through the processing loop, have their bitmaps kept
+// before the candidate gets them, including subtrees a bulk rebuild chained.
+func TestACandidatesSubtreesHaveTheirBitmapsWhenServed(t *testing.T) {
+	stp, keeper := keptLanePoolProcessor(t, false)
+
+	nodes := make([]subtreepkg.Node, 0, 7)
+
+	for i := 1; i <= 7; i++ {
+		hash := lanePoolTxHash(700 + i)
+		stp.currentTxMap.SetAt(hash, lanePoolInpoints(i), lane.Pack(15, uint64(i))) //nolint:gosec // small test index
+		nodes = append(nodes, subtreepkg.Node{Hash: hash, Fee: 1, SizeInBytes: 1})
+	}
+
+	require.NoError(t, stp.bulkBuildSubtrees(context.Background(), nodes, 4))
+	require.False(t, keeper.HasLaneBitmaps(*stp.chainedSubtrees[0].RootHash()))
+
+	startedLanePool(t, stp)
+
+	subtrees := stp.GetCompletedSubtreesForMiningCandidate()
+	require.Len(t, subtrees, 2)
+
+	require.Equal(t, []uint64{lane.Pack(15, 1), lane.Pack(15, 2), lane.Pack(15, 3)}, keeper.positions(t, *subtrees[0].RootHash()))
+	require.Equal(t, []uint64{lane.Pack(15, 4), lane.Pack(15, 5), lane.Pack(15, 6), lane.Pack(15, 7)}, keeper.positions(t, *subtrees[1].RootHash()))
+}
+
+// Transactions placed by the processing loop keep their positions in the pool, so a later re-chain
+// after a conflict removal, which takes each position from the pool, rebuilds the subtrees'
+// bitmaps with them.
+func TestDequeuedTxsKeepTheirPositionsForALaterReChain(t *testing.T) {
+	for _, disk := range []bool{false, true} {
+		t.Run(fmt.Sprintf("disk=%t", disk), func(t *testing.T) {
+			stp, keeper := keptLanePoolProcessor(t, disk)
+
+			nodes := make([]subtreepkg.Node, 0, 7)
+			inpoints := make([]*subtreepkg.TxInpoints, 0, 7)
+			positions := make([]uint64, 0, 7)
+
+			for i := 1; i <= 7; i++ {
+				nodes = append(nodes, subtreepkg.Node{Hash: lanePoolTxHash(800 + i), Fee: 1, SizeInBytes: 1})
+				inpoints = append(inpoints, lanePoolInpoints(800+i))
+				positions = append(positions, lane.Pack(16, uint64(i))) //nolint:gosec // small test index
+			}
+
+			startedLanePool(t, stp)
+
+			require.Equal(t, Admitted, stp.AddPositionedBatchBounded(nodes, inpoints, false, nil, positions))
+			require.Eventually(t, func() bool { return stp.TxCount() >= 8 }, 5*time.Second, time.Millisecond, "the coinbase placeholder and 7 txs placed")
+
+			// the processing loop removes the tx and re-chains the subtrees from the pool
+			require.NoError(t, stp.Remove(context.Background(), lanePoolTxHash(802)))
+
+			want := []uint64{lane.Pack(16, 1), lane.Pack(16, 3), lane.Pack(16, 4)}
+
+			require.Eventually(t, func() bool {
+				subtrees := stp.GetCompletedSubtreesForMiningCandidate()
+				if len(subtrees) != 1 || !keeper.HasLaneBitmaps(*subtrees[0].RootHash()) {
+					return false
+				}
+
+				return slices.Equal(want, keeper.positions(t, *subtrees[0].RootHash()))
+			}, 5*time.Second, 5*time.Millisecond, "the re-chained subtree's bitmaps hold the pool's positions")
+		})
+	}
+}
+
+// The rebuild after a peer's block gives the remaining txs' subtrees the positions the copy
+// carried out of the old pool half.
+func TestRemainderRebuildCarriesThePositions(t *testing.T) {
+	for _, disk := range []bool{false, true} {
+		t.Run(fmt.Sprintf("disk=%t", disk), func(t *testing.T) {
+			stp, keeper := keptLanePoolProcessor(t, disk)
+			stp.settings.BlockAssembly.ParallelSetIfNotExistsThreshold = 1
+
+			old := NewSplitTxInpointsMap(16)
+
+			st, err := subtreepkg.NewTreeByLeafCount(4)
+			require.NoError(t, err)
+			require.NoError(t, st.AddCoinbaseNode())
+
+			chained := []*subtreepkg.Subtree{st}
+
+			mined := NewSortedHashSet(4)
+
+			for i := 1; i <= 7; i++ {
+				hash := lanePoolTxHash(900 + i)
+				old.SetAt(hash, lanePoolInpoints(900+i), lane.Pack(17, uint64(i))) //nolint:gosec // small test index
+
+				if st.IsComplete() {
+					st, err = subtreepkg.NewTreeByLeafCount(4)
+					require.NoError(t, err)
+
+					chained = append(chained, st)
+				}
+
+				require.NoError(t, st.AddSubtreeNode(subtreepkg.Node{Hash: hash, Fee: 1, SizeInBytes: 1}))
+
+				if i%2 == 0 {
+					require.NoError(t, mined.Put(hash))
+				}
+			}
+
+			require.NoError(t, mined.Freeze(1))
+
+			require.NoError(t, stp.processRemainderTxHashes(context.Background(), chained, mined, nil, nil, old, true))
+
+			// 1, 3, 5 and 7 remain: the coinbase placeholder and 3 make the first subtree
+			require.Len(t, stp.chainedSubtrees, 1)
+			require.Equal(t, []uint64{lane.Pack(17, 1), lane.Pack(17, 3), lane.Pack(17, 5)}, keeper.positions(t, *stp.chainedSubtrees[0].RootHash()))
+		})
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/url"
 	"runtime"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -834,4 +835,74 @@ func TestValidateBlock_StoresTheBlocksLaneRows(t *testing.T) {
 			require.Equal(t, []lane.MapRow{{Lane: 7, First: 5, Last: 5, Tag: lane.RowTagRange}}, rows)
 		})
 	}
+}
+
+// ownLaneTotal sums every lane metric's samples under block="own": counters' values and
+// histograms' observation counts.
+func ownLaneTotal(t *testing.T) float64 {
+	t.Helper()
+
+	families, err := prometheus.DefaultGatherer.Gather()
+	require.NoError(t, err)
+
+	var sum float64
+
+	for _, f := range families {
+		if !strings.HasPrefix(f.GetName(), "teranode_lane_") {
+			continue
+		}
+
+		for _, m := range f.GetMetric() {
+			own := false
+
+			for _, l := range m.GetLabel() {
+				if l.GetName() == "block" && l.GetValue() == lane.BlockOwn {
+					own = true
+				}
+			}
+
+			if !own {
+				continue
+			}
+
+			if m.GetCounter() != nil {
+				sum += m.GetCounter().GetValue()
+			}
+
+			if m.GetHistogram() != nil {
+				sum += float64(m.GetHistogram().GetSampleCount())
+			}
+		}
+	}
+
+	return sum
+}
+
+// A peer's block records its rows, or its missing bitmaps, under block="peer" alone: nothing goes
+// under block="own", which counts the blocks this node mined.
+func TestAPeersBlockRecordsNothingAsOwn(t *testing.T) {
+	t.Run("rows built", func(t *testing.T) {
+		u, block := laneRowsFixture(t, settings.LaneMigrationShadow)
+
+		own := ownLaneTotal(t)
+		builds := laneMetric(t, "teranode_lane_gate_seconds", "stage", lane.GateStageBuild)
+
+		require.Len(t, u.laneRows(context.Background(), block), 2)
+		require.Equal(t, builds+1, laneMetric(t, "teranode_lane_gate_seconds", "stage", lane.GateStageBuild))
+		require.Equal(t, own, ownLaneTotal(t))
+	})
+
+	t.Run("bitmaps missing", func(t *testing.T) {
+		u, block := laneRowsFixture(t, settings.LaneMigrationShadow)
+
+		third := chainhash.Hash{0x54}
+		block.Subtrees = append(block.Subtrees, &third)
+
+		own := ownLaneTotal(t)
+		absent := laneMetric(t, "teranode_lane_missing_bitmaps_total", "reason", lane.MissingBitmapsAbsent)
+
+		require.Nil(t, u.laneRows(context.Background(), block))
+		require.Equal(t, absent+1, laneMetric(t, "teranode_lane_missing_bitmaps_total", "reason", lane.MissingBitmapsAbsent))
+		require.Equal(t, own, ownLaneTotal(t))
+	})
 }

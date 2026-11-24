@@ -1278,3 +1278,39 @@ func TestOwnBlockGetsItsRowsWhileSubtreeStorageIsStuck(t *testing.T) {
 		require.True(t, same, "row %d: want %+v, sent %+v", i, want[i], opts.LaneMapRows[i])
 	}
 }
+
+// TestKeptLaneBitmapsTakeTheUtxoStoreHeight: bitmaps the subtree processor keeps are kept at the
+// UTXO store's block height, so they age out by the blocks since then, not from height 0.
+func TestKeptLaneBitmapsTakeTheUtxoStoreHeight(t *testing.T) {
+	server, _ := setupServerWithSettings(t, func(s *settings.Settings) { s.UtxoStore.LaneMigration = settings.LaneMigrationShadow })
+	require.NoError(t, server.blockAssembler.utxoStore.SetBlockHeight(500))
+
+	root := chainhash.HashH([]byte("kept-at-store-height"))
+	server.ownLaneBitmaps.KeepLaneBitmaps(lane.SubtreeBitmaps{SubtreeHash: root, Lanes: lane.LaneBitmaps{}}, 0)
+
+	// a subtree kept ownLaneBitmapsKeepBlocks blocks later drops entries kept before 500
+	server.ownLaneBitmaps.put(chainhash.HashH([]byte("kept-later")), lane.LaneBitmaps{}, 500+ownLaneBitmapsKeepBlocks)
+
+	_, missing := server.ownLaneBitmaps.get([]*chainhash.Hash{&root})
+	require.Zero(t, missing, "kept at 500, inside the margin")
+}
+
+// TestWritingOverAnExistingLaneBitmapsFileMovesItsDeleteAt: a lane bitmaps file already in the
+// store, written by subtree validation or before a restart, gets the subtree's delete-at height
+// when block assembly writes the subtree's bitmaps, so it lives as long as the subtree.
+func TestWritingOverAnExistingLaneBitmapsFileMovesItsDeleteAt(t *testing.T) {
+	server, memoryStore := setupServerWithSettings(t, func(s *settings.Settings) { s.UtxoStore.LaneMigration = settings.LaneMigrationShadow })
+	store := &setOrderStore{Store: memoryStore}
+	server.subtreeStore = store
+
+	st, txMap := laneSealSubtree(t, "existing-file")
+	keepSealed(server, st, txMap)
+
+	old, err := lane.EncodeSubtreeBitmaps(lane.SubtreeBitmaps{SubtreeHash: *st.RootHash(), Lanes: lane.LaneBitmaps{}})
+	require.NoError(t, err)
+	require.NoError(t, memoryStore.Set(t.Context(), st.RootHash()[:], fileformat.FileTypeSubtreeLaneBitmaps, old, blobOptions.WithDeleteAt(5)))
+
+	server.writeKeptLaneBitmapsFile(t.Context(), *st.RootHash(), 1, 300)
+
+	require.Equal(t, uint32(300), store.dah(fileformat.FileTypeSubtreeLaneBitmaps))
+}
