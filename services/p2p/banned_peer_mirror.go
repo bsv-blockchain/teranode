@@ -168,10 +168,16 @@ func (m *bannedPeerMirror) replace(banned []string, now time.Time, gen uint64) b
 
 // markAttempt records a failed refresh so the registry is not retried until
 // the next interval. The current view (empty on a first-load failure) stays
-// in force.
-func (m *bannedPeerMirror) markAttempt(now time.Time) {
+// in force. Like replace, it does nothing if gen has moved since the refresh
+// captured it: a reset during the failed round-trip asked for a re-list on the
+// next lookup, and stamping the mirror fresh would swallow that.
+func (m *bannedPeerMirror) markAttempt(now time.Time, gen uint64) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
+	if m.gen != gen {
+		return
+	}
 
 	m.refreshedAt = now
 	m.loaded = true
@@ -233,7 +239,7 @@ func (s *Server) refreshBannedPeers(wait bool) {
 
 	banned, err := s.peerRegistry.ListBannedPeers(ctx)
 	if err != nil {
-		s.bannedPeers.markAttempt(time.Now())
+		s.bannedPeers.markAttempt(time.Now(), gen)
 		s.logger.Warnf("[refreshBannedPeers] ListBannedPeers failed (serving the previous banned set for %s): %v", bannedPeerRefreshInterval, err)
 
 		return
