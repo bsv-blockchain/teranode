@@ -172,3 +172,21 @@ func (s *Store) ResolveSpendCompletionsForTest(ctx context.Context, tx *bt.Tx, s
 
 	return res.spentSpends, res.succeeded
 }
+
+// SpenderState is the creating state of the record of a spender, as spenderOwnsSpend reads it.
+type SpenderState struct {
+	Absent          bool
+	Creating        bool
+	RollingBack     bool
+	Hold            bool
+	HasUnminedSince bool
+	UnminedSince    int
+}
+
+// SpenderOwnsSpend runs spenderOwnsSpend for a match recorded at recordedHeight.
+func SpenderOwnsSpend(st SpenderState, recordedHeight uint32, hasRecordedHeight bool) bool {
+	return spenderOwnsSpend(
+		creatingState{absent: st.Absent, creating: st.Creating, rollingBack: st.RollingBack, hold: st.Hold, hasUnminedSince: st.HasUnminedSince, unminedSince: st.UnminedSince},
+		&batchSpend{recordedHeight: recordedHeight, hasRecordedHeight: hasRecordedHeight},
+	)
+}

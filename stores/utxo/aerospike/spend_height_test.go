@@ -395,3 +395,35 @@ func TestUnspendKeepBelowHeight_Aerospike(t *testing.T) {
 		require.Len(t, spendHeightEntry(t, store, parent.TxIDChainHash(), 3), 68)
 	})
 }
+
+// TestSpenderOwnsSpend pins when the record of a spender stands behind a spend that matches a
+// historical one. A final record owns it. A tentative record owns the spends recorded at or after
+// its own height, and none when it carries no height, because nothing then separates its spends
+// from those of a pruned record. An absent record, a hold and a rollback own nothing.
+func TestSpenderOwnsSpend(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		state    teranode_aerospike.SpenderState
+		recorded uint32
+		hasRec   bool
+		want     bool
+	}{
+		{name: "a final record owns it", state: teranode_aerospike.SpenderState{}, recorded: 10, hasRec: true, want: true},
+		{name: "a final record owns it even when the height is not known", state: teranode_aerospike.SpenderState{}, want: true},
+		{name: "an absent record owns nothing", state: teranode_aerospike.SpenderState{Absent: true}, recorded: 1000, hasRec: true, want: false},
+		{name: "a hold owns nothing", state: teranode_aerospike.SpenderState{Creating: true, Hold: true, HasUnminedSince: true, UnminedSince: 100}, recorded: 1000, hasRec: true, want: false},
+		{name: "a rollback owns nothing", state: teranode_aerospike.SpenderState{Creating: true, RollingBack: true, HasUnminedSince: true, UnminedSince: 100}, recorded: 1000, hasRec: true, want: false},
+		{name: "a tentative record owns a spend recorded after it", state: teranode_aerospike.SpenderState{Creating: true, HasUnminedSince: true, UnminedSince: 100}, recorded: 101, hasRec: true, want: true},
+		{name: "a tentative record owns a spend recorded at its height", state: teranode_aerospike.SpenderState{Creating: true, HasUnminedSince: true, UnminedSince: 100}, recorded: 100, hasRec: true, want: true},
+		{name: "a tentative record does not own a spend recorded before it", state: teranode_aerospike.SpenderState{Creating: true, HasUnminedSince: true, UnminedSince: 100}, recorded: 99, hasRec: true, want: false},
+		{name: "a tentative record owns no spend whose height is not known", state: teranode_aerospike.SpenderState{Creating: true, HasUnminedSince: true, UnminedSince: 100}, want: false},
+		{name: "a tentative record at height 0 owns no spend whose height is not known", state: teranode_aerospike.SpenderState{Creating: true, HasUnminedSince: true, UnminedSince: 0}, want: false},
+		{name: "a tentative record that carries no height owns none", state: teranode_aerospike.SpenderState{Creating: true}, recorded: 1000, hasRec: true, want: false},
+		{name: "a tentative record whose height is 0 owns every spend that has a height", state: teranode_aerospike.SpenderState{Creating: true, HasUnminedSince: true, UnminedSince: 0}, recorded: 5, hasRec: true, want: true},
+		{name: "a tentative record with a negative height owns none", state: teranode_aerospike.SpenderState{Creating: true, HasUnminedSince: true, UnminedSince: -1}, recorded: 5, hasRec: true, want: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, teranode_aerospike.SpenderOwnsSpend(tc.state, tc.recorded, tc.hasRec))
+		})
+	}
+}

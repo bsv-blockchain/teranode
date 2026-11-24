@@ -1424,3 +1424,39 @@ func Test_txMetaCache_GetMetaAtShadowCachesNoEntryWithoutAPosition(t *testing.T)
 		})
 	}
 }
+
+// guardRecorder is a store whose Unspend records the reversal guard of its context.
+type guardRecorder struct {
+	*nullstore.NullStore
+
+	guard utxo.ReversalGuard
+	calls int
+}
+
+func (g *guardRecorder) Unspend(ctx context.Context, _ []*utxo.Spend, _ ...bool) error {
+	g.guard, _ = utxo.ReversalGuardFrom(ctx)
+	g.calls++
+
+	return nil
+}
+
+// The cache hands the context of Unspend on unchanged, so a create-first reversal still reaches the
+// store that reverses the spends with the record it undoes and the call height.
+func TestTxMetaCache_UnspendKeepsTheReversalGuard(t *testing.T) {
+	ns, err := nullstore.NewNullStore()
+	require.NoError(t, err)
+
+	inner := &guardRecorder{NullStore: ns}
+
+	c, err := NewTxMetaCache(context.Background(), settings.NewSettings(), ulogger.TestLogger{}, inner, Unallocated)
+	require.NoError(t, err)
+
+	hash := chainhash.Hash{7}
+	ctx := utxo.WithReversalCallHeight(utxo.WithReversedRecord(context.Background(), &hash), 321)
+
+	require.NoError(t, c.Unspend(ctx, nil))
+	require.Equal(t, 1, inner.calls)
+	require.NotNil(t, inner.guard.Record)
+	require.Equal(t, hash, *inner.guard.Record)
+	require.Equal(t, uint32(321), inner.guard.CallHeight)
+}

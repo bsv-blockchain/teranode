@@ -11,6 +11,7 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/stores/utxo/spend"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -369,4 +370,27 @@ func TestProcessConflicting_FinishedRecordAcceptsAppliedExtraWinner(t *testing.T
 	require.Equal(t, []chainhash.Hash{loser}, marked)
 	require.True(t, losers.Exists(loser))
 	require.Equal(t, 1, completed)
+}
+
+// A store that wraps another must hand the context of Unspend on unchanged. A create-first reversal
+// tells the store that reverses its spends which record it undoes and at what height the call ran,
+// through the context, and a wrapper that builds a new one makes the store clear spends it must keep.
+func TestChainProtectedConflictStoreUnspendKeepsTheReversalGuard(t *testing.T) {
+	hash := chainhash.Hash{7}
+
+	var seen ReversalGuard
+
+	inner := &MockUtxostore{}
+	inner.On("Unspend", mock.Anything, mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
+		seen, _ = ReversalGuardFrom(args.Get(0).(context.Context))
+	}).Return(nil)
+
+	guard := NewCurrentChainGuard(func(context.Context, []uint32) (bool, error) { return false, nil })
+	ctx := WithReversalCallHeight(WithReversedRecord(context.Background(), &hash), 321)
+
+	require.NoError(t, guard.protect(inner).Unspend(ctx, nil))
+	inner.AssertNumberOfCalls(t, "Unspend", 1)
+	require.NotNil(t, seen.Record)
+	require.Equal(t, hash, *seen.Record)
+	require.Equal(t, uint32(321), seen.CallHeight)
 }

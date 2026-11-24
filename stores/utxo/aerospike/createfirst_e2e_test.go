@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bsv-blockchain/aerospike-client-go/v8"
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
@@ -1500,14 +1501,18 @@ func TestSetMined_MultiRecord_RollsForwardAfterADuplicateWithFlagOff(t *testing.
 // is old but young by that rule, and one an old attempt of the same record made, is still cleared.
 // Retention 288 makes a spend history from 144 blocks before the current height.
 func TestRollBack_KeepsTheHistoricalSpendsThatPredateTheRecord(t *testing.T) {
-	const recordHeight = uint32(900)
+	const defaultRecordHeight = uint32(900)
 
 	for _, tc := range []struct {
 		name         string
-		storeHeight  uint32
-		callHeight   uint32
-		spendHeights []uint32
-		wantKept     []bool
+		recordHeight uint32
+		// noRecordHeight removes the unminedSince of the tentative record, as a record that
+		// carries none.
+		noRecordHeight bool
+		storeHeight    uint32
+		callHeight     uint32
+		spendHeights   []uint32
+		wantKept       []bool
 	}{
 		{
 			name:         "below the record and history is kept, the rest is cleared",
@@ -1527,6 +1532,40 @@ func TestRollBack_KeepsTheHistoricalSpendsThatPredateTheRecord(t *testing.T) {
 			callHeight:   1100,
 			spendHeights: []uint32{100, 856, 857, 890, 900, 950},
 			wantKept:     []bool{true, true, true, true, false, false},
+		},
+		// Known limit. A spend recorded below the record's height is kept as history once the tip
+		// is a full history age past it, whoever made it, because the record cannot tell its own
+		// early spend from a pruned record's. It takes a gap of HistoricalSpendAge (144) blocks
+		// between the height of the call and the record's.
+		{
+			name:         "limit: an own spend recorded two blocks below the record is kept once the tip is a history age past it",
+			storeHeight:  1042,
+			spendHeights: []uint32{898},
+			wantKept:     []bool{true},
+		},
+		{
+			name:         "limit: the same spend is reversed one block before that",
+			storeHeight:  1041,
+			spendHeights: []uint32{898},
+			wantKept:     []bool{false},
+		},
+		{
+			name:         "limit: a call that ran below the record, at a tip far above it, keeps its own spends",
+			recordHeight: 910,
+			callHeight:   900,
+			storeHeight:  1200,
+			spendHeights: []uint32{900},
+			wantKept:     []bool{true},
+		},
+		// A record that carries no height leaves the age rule alone to decide, so a spend recorded
+		// at or after where the record would have been is kept when it is old enough, and a young
+		// one is reversed.
+		{
+			name:           "a record that carries no height reverses by the age rule alone",
+			noRecordHeight: true,
+			storeHeight:    1200,
+			spendHeights:   []uint32{100, 950, 1056, 1057, 1100},
+			wantKept:       []bool{true, true, true, false, false},
 		},
 	} {
 		for _, finish := range []bool{false, true} {
@@ -1560,8 +1599,24 @@ func TestRollBack_KeepsTheHistoricalSpendsThatPredateTheRecord(t *testing.T) {
 					require.Equal(t, teranode_aerospike.LuaStatusOK, res.Status)
 				}
 
+				recordHeight := defaultRecordHeight
+				if tc.recordHeight != 0 {
+					recordHeight = tc.recordHeight
+				}
+
 				md, err := store.Create(ctx, child, recordHeight, utxo.WithCreating(true))
 				require.NoError(t, err)
+
+				if tc.noRecordHeight {
+					key := spendHeightKey(t, store, hash)
+
+					_, opErr := client.Operate(nil, key, aerospike.PutOp(aerospike.NewBin(fields.UnminedSince.String(), nil)))
+					require.NoError(t, opErr)
+
+					rec, getErr := client.Get(nil, key, fields.UnminedSince.String())
+					require.NoError(t, getErr)
+					require.Nil(t, rec.Bins[fields.UnminedSince.String()], "precondition: the record carries no height")
+				}
 
 				require.NoError(t, store.SetBlockHeight(tc.storeHeight))
 

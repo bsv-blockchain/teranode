@@ -58,10 +58,12 @@ type fakeSweepStore struct {
 	events    []string
 	began     []chainhash.Hash
 	unspent   [][]*utxo.Spend
-	unspendFn func(spends []*utxo.Spend) error
-	ended     []chainhash.Hash
-	taken     [][]byte
-	cleared   []chainhash.Hash
+	// unspendGuards holds, per Unspend call, the reversal guard its context carried.
+	unspendGuards []utxo.ReversalGuard
+	unspendFn     func(spends []*utxo.Spend) error
+	ended         []chainhash.Hash
+	taken         [][]byte
+	cleared       []chainhash.Hash
 
 	spends         []chainhash.Hash
 	finalized      []chainhash.Hash
@@ -259,8 +261,11 @@ func (f *fakeSweepStore) BeginCreateFirstRollback(_ context.Context, hash *chain
 
 func (f *fakeSweepStore) SpendWaitTimeout() time.Duration { return f.spendWait }
 
-func (f *fakeSweepStore) Unspend(_ context.Context, spends []*utxo.Spend, _ ...bool) error {
+func (f *fakeSweepStore) Unspend(ctx context.Context, spends []*utxo.Spend, _ ...bool) error {
 	f.record("unspend")
+
+	guard, _ := utxo.ReversalGuardFrom(ctx)
+	f.unspendGuards = append(f.unspendGuards, guard)
 	f.unspent = append(f.unspent, spends)
 
 	if f.unspendFn != nil {
@@ -888,6 +893,58 @@ func TestSweepCreatingTxsFinishesAbandonedRollback(t *testing.T) {
 	require.Equal(t, []chainhash.Hash{hashA}, store.ended)
 	require.Empty(t, store.spends, "a rolling-back record must never be re-spent")
 	require.Empty(t, store.finalized)
+}
+
+// A rollback the sweep runs reverses the spends of a record the pruner does not own. The store
+// keeps the historical spends that predate the record, and counts history from the larger of its
+// own height and the height of the call. The sweep names both: the record it rolls back, and the
+// pruner height it runs at. A store that is not told keeps no spend, or counts history from a
+// tip that lags behind the pruner.
+func TestSweepCreatingTxsReversesUnderTheRecordAndThePrunerHeight(t *testing.T) {
+	const prunerHeight = uint32(137)
+
+	for name, tc := range map[string]struct {
+		meta      func(tx *bt.Tx) *meta.Data
+		configure func(*fakeSweepStore)
+	}{
+		"a loser rolled back": {
+			meta: func(tx *bt.Tx) *meta.Data { return &meta.Data{Creating: true, Attempt: sweepToken, Tx: tx} },
+			configure: func(f *fakeSweepStore) {
+				f.spendErr = errors.ErrSpent
+				f.spendSpends = []*utxo.Spend{{Vout: 8, Err: errors.ErrSpent}}
+			},
+		},
+		"an abandoned rollback finished": {
+			meta: func(tx *bt.Tx) *meta.Data {
+				return &meta.Data{Creating: true, Attempt: sweepToken, RollingBack: true, Tx: tx}
+			},
+			configure: func(*fakeSweepStore) {},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			ns, err := nullstore.NewNullStore()
+			require.NoError(t, err)
+
+			tx := oneOutputTx(1)
+			tx.Inputs[0].PreviousTxScript = bscript.NewFromBytes([]byte{0x51})
+			tx.Inputs[0].PreviousTxSatoshis = 2000
+			hash := *tx.TxIDChainHash()
+
+			store := &fakeSweepStore{
+				NullStore: ns,
+				stale:     []chainhash.Hash{hash},
+				getResp:   map[chainhash.Hash]*meta.Data{hash: tc.meta(tx)},
+			}
+			tc.configure(store)
+
+			newSweepServer(t, store).sweepCreatingTxs(context.Background(), prunerHeight)
+
+			require.Len(t, store.unspendGuards, 1, "the rollback reversed the spends once")
+			require.NotNil(t, store.unspendGuards[0].Record, "the reversal names the record whose spends it undoes")
+			require.Equal(t, hash, *store.unspendGuards[0].Record)
+			require.Equal(t, prunerHeight, store.unspendGuards[0].CallHeight, "the reversal counts history from the pruner height")
+		})
+	}
 }
 
 func TestSweepCreatingTxsFinishesRollbackPastUnspendableInput(t *testing.T) {
