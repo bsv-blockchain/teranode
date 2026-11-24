@@ -2305,9 +2305,11 @@ func (s *Server) getNodeStatusMessage(ctx context.Context) *notificationMsg {
 	// Precisely: peers with an open libp2p connection that have authored at
 	// least one gossip message since process start — liveness derives from
 	// the message bus's topic-peer set, so a connected-but-silent peer is
-	// invisible until its first message. A flag can lag reality by up to
-	// liveConnMissRefreshInterval after a connect and by up to one cleanup
-	// interval after a disconnect.
+	// invisible until its first message. A flag can lag reality after a
+	// connect by up to liveConnMissRefreshInterval plus one GetPeers walk,
+	// which grows with every author the message bus has tracked (unbounded at
+	// go-p2p-message-bus v0.3.1), and by up to one cleanup interval after a
+	// disconnect.
 	// The two transports are counted separately: ConnectedPeersCount keeps
 	// its established libp2p-only meaning for every node already consuming
 	// this gossip message, and legacy peers get their own figure.

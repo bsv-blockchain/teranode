@@ -1154,13 +1154,23 @@ func (s *Server) shouldSkipBannedPeer(from string, messageType string) bool {
 // Accepted window: a neighbour that connects just after the snapshot was
 // taken is a miss, and misses are served from the snapshot until it is
 // liveConnMissRefreshInterval (1s) old. The snapshot is stamped when its walk
-// returns, so the window is that interval plus one walk. A banned IP that
-// reconnects under a fresh peer ID gets that long of gossip accepted per
-// connection. Rebuilding on every miss would close the
-// window but cost a GetPeers walk, linear in every author the message bus has
-// tracked, per message from an unknown author. Closing it needs a per-peer
-// connectedness lookup from go-p2p-message-bus, which its client does not
-// expose yet.
+// returns, so the window is that interval plus one walk. The walk is linear in
+// every author the message bus has tracked, a set go-p2p-message-bus v0.3.1
+// never prunes, so that part of the window grows with the bus's history and
+// has no fixed bound. A banned IP that reconnects under a fresh peer ID gets
+// that long of gossip accepted per connection. Rebuilding on every miss would
+// close the window but cost a GetPeers walk per message from an unknown
+// author. Removing it needs bans enforced at connection admission in
+// go-p2p-message-bus; a per-peer connectedness lookup would only narrow it.
+//
+// The check covers authors with an open connection only. A connected banned
+// host that signs gossip under fresh author keys is never IP-checked here,
+// because those authors have no addresses; that gap predates the snapshot and
+// also needs admission enforcement to close.
+//
+// IsBanned runs per message per address. The ban list files single-address
+// bans by address, so a clean lookup costs one map read plus a scan of the
+// banned subnets, however many hosts are banned.
 func (s *Server) isPeerIPBanned(peerID string) bool {
 	if s.banList == nil || s.P2PClient == nil {
 		return false
@@ -1192,8 +1202,9 @@ func (s *Server) isPeerIPBanned(peerID string) bool {
 // registry score is below 20 has its messages processed when an honest
 // neighbour relays them; the ban gate (shouldSkipBannedPeer) still applies to
 // it. And a low-score neighbour that has just connected passes until the
-// live-connection snapshot sees it: liveConnMissRefreshInterval plus one walk
-// (see isPeerIPBanned).
+// live-connection snapshot sees it: liveConnMissRefreshInterval plus one walk,
+// and the walk grows with every author the message bus has tracked (see
+// isPeerIPBanned).
 //
 // Reputation scores of connected peers are cached for
 // reputationCacheTTL (bounded at insert) to avoid a round-trip on every pubsub

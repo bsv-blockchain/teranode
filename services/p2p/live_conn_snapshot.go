@@ -22,8 +22,10 @@ const (
 	// bus has ever tracked, not just in open connections. Rebuilding at most
 	// once per interval bounds that work to one walk per interval however many
 	// novel authors arrive, while a neighbour that has just connected is still
-	// seen live on its first message in the quiet case and within one interval
-	// under load.
+	// seen live on its first message in the quiet case, and under load within
+	// one interval plus one walk. The walk has no fixed bound: it grows with
+	// every author the message bus has tracked, and go-p2p-message-bus v0.3.1
+	// never prunes that set.
 	liveConnMissRefreshInterval = time.Second
 )
 
