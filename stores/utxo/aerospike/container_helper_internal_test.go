@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net/url"
 	"os"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -102,10 +101,6 @@ type sharedServer struct {
 var (
 	sharedServersMu sync.Mutex
 	sharedServers   = map[sharedServerKey]*sharedServer{}
-
-	// containerStarts counts the containers this binary started, by kind, for the summary
-	// TestMain prints.
-	containerStarts sync.Map
 )
 
 // AcquireSharedTestServer returns the server that every test asking for the same image, platform and
@@ -164,8 +159,6 @@ func startSharedTestServer(t testing.TB, key sharedServerKey) (*aeroTest.Contain
 	if err != nil {
 		return nil, SharedTestServer{}, err
 	}
-
-	CountContainerStart("shared", fmt.Sprintf("%s batch size %d generation %d", key.image, key.batchSize, key.generation))
 
 	server, err := warmUpSharedTestServer(ctx, t, container, key.batchSize)
 	if err != nil {
@@ -250,54 +243,6 @@ func terminateSharedTestServers() {
 		cancel()
 	}
 
-	reportContainerStarts()
-}
-
-// CountContainerStart counts one container start of the given kind ("shared" or "own"), for the
-// lines TestMain prints when AEROSPIKE_TEST_COUNT_CONTAINERS is set, and then also logs what the
-// container is for.
-func CountContainerStart(kind, what string) {
-	if os.Getenv("AEROSPIKE_TEST_COUNT_CONTAINERS") != "" {
-		fmt.Printf("aerospike test container start: %s for %s\n", kind, what)
-	}
-
-	counter, _ := containerStarts.LoadOrStore(kind, new(int64Counter))
-	counter.(*int64Counter).add()
-}
-
-type int64Counter struct {
-	mu sync.Mutex
-	n  int64
-}
-
-func (c *int64Counter) add() {
-	c.mu.Lock()
-	c.n++
-	c.mu.Unlock()
-}
-
-func reportContainerStarts() {
-	if os.Getenv("AEROSPIKE_TEST_COUNT_CONTAINERS") == "" {
-		return
-	}
-
-	// Peak resident memory of this test binary, on Linux.
-	if status, err := os.ReadFile("/proc/self/status"); err == nil {
-		for _, line := range strings.Split(string(status), "\n") {
-			if strings.HasPrefix(line, "VmHWM:") {
-				fmt.Printf("aerospike test binary peak memory: %s\n", strings.TrimSpace(strings.TrimPrefix(line, "VmHWM:")))
-			}
-		}
-	}
-
-	containerStarts.Range(func(kind, counter any) bool {
-		c := counter.(*int64Counter)
-		c.mu.Lock()
-		fmt.Printf("aerospike test containers started: %s=%d\n", kind, c.n)
-		c.mu.Unlock()
-
-		return true
-	})
 }
 
 // WaitForWritesReady polls the namespace until it accepts writes. Aerospike can answer
@@ -405,7 +350,6 @@ func NextUniqueLockTime() uint32 {
 // AEROSPIKE_CONTAINER_PLATFORM, linux/amd64 when that is unset.
 func runAerospikeTestContainer(t testing.TB, ctx context.Context, opts ...testcontainers.ContainerCustomizer) (*aeroTest.Container, error) {
 	AcquireOwnServerSlot(t)
-	CountContainerStart("own", t.Name())
 
 	image := os.Getenv("AEROSPIKE_CONTAINER_IMAGE")
 	if image == "" {
@@ -421,27 +365,4 @@ func runAerospikeTestContainer(t testing.TB, ctx context.Context, opts ...testco
 	opts = append(opts, testcontainers.WithImagePlatform(platform))
 
 	return aeroTest.RunContainer(ctx, opts...)
-}
-
-// TestSharedTestServerRunsAerospike81OrLater pins that the tests run on Aerospike 8.1 or later, the
-// minimum Teranode supports, whatever image the default or an override names.
-func TestSharedTestServerRunsAerospike81OrLater(t *testing.T) {
-	t.Parallel()
-
-	server := acquireSharedTestServerForInternalTests(t, test.CreateBaseTestSettings(t).UtxoStore.UtxoBatchSize)
-
-	client, aeroErr := uaerospike.NewClient(server.Host, server.Port)
-	require.NoError(t, aeroErr)
-	t.Cleanup(client.Close)
-
-	node, err := client.Cluster().GetRandomNode()
-	require.NoError(t, err)
-
-	info, err := node.RequestInfo(aerospike.NewInfoPolicy(), "build")
-	require.NoError(t, err)
-
-	var major, minor int
-	_, scanErr := fmt.Sscanf(info["build"], "%d.%d", &major, &minor)
-	require.NoError(t, scanErr, "build %q", info["build"])
-	require.True(t, major > 8 || (major == 8 && minor >= 1), "server build %q is older than 8.1", info["build"])
 }

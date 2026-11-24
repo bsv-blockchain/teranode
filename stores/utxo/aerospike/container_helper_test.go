@@ -231,8 +231,6 @@ func startOwnAerospikeServer(t *testing.T, image string) (string, int) {
 	// Skips only when the container runtime is unreachable; any other failure fails the test.
 	test.SkipIfContainerUnavailable(t, err)
 
-	teranode_aerospike.CountContainerStart("own", t.Name())
-
 	t.Cleanup(func() {
 		require.NoError(t, container.Terminate(ctx))
 	})
