@@ -2,6 +2,8 @@ package p2p
 
 import (
 	"context"
+	"net"
+	"sync"
 	"time"
 
 	p2pMessageBus "github.com/bsv-blockchain/go-p2p-message-bus"
@@ -32,6 +34,67 @@ type MockServerP2PClient struct {
 	mock.Mock                          // Embedded mock for method call recording and expectations
 	peerID    peer.ID                  // Configurable peer ID for testing scenarios
 	peers     []p2pMessageBus.PeerInfo // If non-nil, returned by GetPeers() instead of the default
+
+	// Admission calls (Block*/Unblock*) are recorded here rather than through
+	// mock.Mock, so tests that reach the ban paths need no expectations.
+	admissionMu    sync.Mutex
+	admissionCalls []string
+	blockErr       error // returned by every Block* call when set
+}
+
+// recordAdmission appends one "Method arg" entry and returns err.
+func (m *MockServerP2PClient) recordAdmission(call string, err error) error {
+	m.admissionMu.Lock()
+	defer m.admissionMu.Unlock()
+
+	m.admissionCalls = append(m.admissionCalls, call)
+
+	return err
+}
+
+// AdmissionCalls returns the Block*/Unblock* calls made so far, in order.
+func (m *MockServerP2PClient) AdmissionCalls() []string {
+	m.admissionMu.Lock()
+	defer m.admissionMu.Unlock()
+
+	return append([]string(nil), m.admissionCalls...)
+}
+
+func (m *MockServerP2PClient) BlockAddr(ip net.IP) error {
+	return m.recordAdmission("BlockAddr "+ip.String(), m.blockErr)
+}
+
+func (m *MockServerP2PClient) UnblockAddr(ip net.IP) error {
+	return m.recordAdmission("UnblockAddr "+ip.String(), nil)
+}
+
+func (m *MockServerP2PClient) BlockSubnet(ipnet *net.IPNet) error {
+	return m.recordAdmission("BlockSubnet "+ipnet.String(), m.blockErr)
+}
+
+func (m *MockServerP2PClient) UnblockSubnet(ipnet *net.IPNet) error {
+	return m.recordAdmission("UnblockSubnet "+ipnet.String(), nil)
+}
+
+func (m *MockServerP2PClient) BlockPeer(peerID string) error {
+	return m.recordAdmission("BlockPeer "+peerID, m.blockErr)
+}
+
+func (m *MockServerP2PClient) UnblockPeer(peerID string) error {
+	return m.recordAdmission("UnblockPeer "+peerID, nil)
+}
+
+// PeerAddrs answers from the peers fixture, as the real client answers from
+// its connection table: the Addrs of the matching entry, or nil when there is
+// none or it has no addresses (not connected).
+func (m *MockServerP2PClient) PeerAddrs(peerID string) []string {
+	for _, p := range m.peers {
+		if p.ID == peerID && len(p.Addrs) > 0 {
+			return p.Addrs
+		}
+	}
+
+	return nil
 }
 
 func (m *MockServerP2PClient) Start(ctx context.Context, streamHandler func(network.Stream), topicNames ...string) error {
