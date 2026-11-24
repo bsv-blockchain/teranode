@@ -134,7 +134,9 @@ jobs:
     # The required check. Fails unless every test shard passed, then merges their
     # coverage profiles into the coverage.out that the coverage gate and Sonar read.
     needs: test-shard
-    if: always()
+    # Runs when a shard fails or is skipped, so the check reports it, but not when
+    # a newer push cancels the workflow.
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
