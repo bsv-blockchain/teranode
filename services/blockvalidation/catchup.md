@@ -160,7 +160,7 @@ When writing tests for catchup functionality, the following principles must be f
 2. **Mock Setup Order**:
    - Set up `GetBlockExists` mocks BEFORE the HTTP handlers are called
    - Mocks added inside HTTP handlers may not be registered in time
-   - Register expectations a test relies on as required, with `.Times(n)` or `.Once()` for repeated calls. Never use `.Maybe()` in a shared fixture, or a call the code stops making no longer fails the test
+   - Don't mark an expectation a test relies on `.Maybe()`: it makes the call optional, so a call the code stops making no longer fails the test. A plain `.Return(...)` already allows repeated calls
 
 3. **Header Response Structure**:
    - Always include the common ancestor as the first header in the response
