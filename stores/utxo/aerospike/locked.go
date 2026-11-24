@@ -165,7 +165,7 @@ func (s *Store) setLockedBatch(batch []*batchLocked) {
 			batchItem.complete(keyErr)
 
 			handled[idx] = true
-			batchRecords[idx] = aerospike.NewBatchRead(nil, placeholderKey, nil)
+			batchRecords[idx] = aerospike.NewBatchRead(nil, s.placeholderKey, nil)
 
 			continue
 		}

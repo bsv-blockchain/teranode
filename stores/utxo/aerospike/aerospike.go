@@ -205,6 +205,10 @@ func safeBatcherPutBatchCtx[T any](b batcherIfc[T], ctx context.Context, items [
 type Store struct {
 	utxo.LanePositions
 
+	// placeholderKey fills a batch slot an item does not use (a NOOP read). It is per store, in the
+	// store's namespace: a package-level key was rewritten by every New while other stores read it.
+	placeholderKey *aerospike.Key
+
 	// laneSlotWrites is whether the server records a spend's lane position in the parent's slot,
 	// which the start-up probe checks with lane positions on. It only decides how spends are
 	// counted; a spend carries its position either way.
@@ -365,7 +369,7 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 		return nil, err
 	}
 
-	placeholderKey, err = aerospike.NewKey(namespace, "placeholderKey", "placeHolderKey")
+	placeholderKey, err := newPlaceholderKey(namespace)
 	if err != nil {
 		log.Fatal("Failed to init placeholder key")
 	}
@@ -421,12 +425,13 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 	}
 
 	s := &Store{
-		ctx:       ctx,
-		url:       aerospikeURL,
-		client:    client,
-		namespace: namespace,
-		setName:   setName,
-		logger:    logger,
+		placeholderKey: placeholderKey,
+		ctx:            ctx,
+		url:            aerospikeURL,
+		client:         client,
+		namespace:      namespace,
+		setName:        setName,
+		logger:         logger,
 
 		settings:               tSettings,
 		externalStore:          externalStore,
