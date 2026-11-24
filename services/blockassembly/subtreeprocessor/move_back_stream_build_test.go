@@ -5,6 +5,7 @@ import (
 	"runtime"
 	"testing"
 
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/stretchr/testify/require"
@@ -164,22 +165,80 @@ func TestStreamBuildSubtrees_FailureInstallsNothingAndRetiresWhatItBuilt(t *test
 	require.NotEmpty(t, stp.retiredSubtrees, "the subtrees it allocated are retired, to be closed")
 }
 
-// BenchmarkReorgMoveBackBuild times the build of the move-back (issue 2269, PR 9) on a pending set and a
-// lost block that has no transaction pending (stream: the nodes are read where they are) and on one that
-// has a single (list: the held-children walk copies every node into one list first, which is what
-// every move-back did before PR 9). The subtrees are mapped outside the heap, so B/op is the list and the
-// block's arrays.
-func BenchmarkReorgMoveBackBuild(b *testing.B) {
-	size, pending, lost := 1<<14, 1<<20, 1<<16
-	if testing.Short() { // the benchmark-compare job runs with -short
-		size, pending, lost = 1<<12, 1<<17, 1<<13
+// moveBackBuildBeforePR9 is moveBackBlockBulkBuild as it was before issue 2269 (PR 9), for a lost block
+// none of whose transactions is pending: every node of the new assembly is copied into one list, which
+// bulkBuildSubtrees then builds from.
+func (stp *SubtreeProcessor) moveBackBuildBeforePR9(ctx context.Context, block []subtreepkg.Node, inpoints []subtreepkg.TxInpoints,
+	previousChained []*subtreepkg.Subtree, previousCurrent *subtreepkg.Subtree, subtreeSize int) error {
+	total := len(block) - 1
+
+	for _, st := range previousChained {
+		total += len(st.Nodes)
 	}
 
-	for _, tc := range []struct {
-		name           string
-		alreadyPending int
-	}{{"impl=stream", 0}, {"impl=list", 1}} {
-		b.Run(tc.name, func(b *testing.B) {
+	total += len(previousCurrent.Nodes)
+
+	allNodes := make([]subtreepkg.Node, 0, total)
+	flatHashes := make([]chainhash.Hash, 0, len(block)-1)
+	flatInpoints := make([]*subtreepkg.TxInpoints, 0, len(block)-1)
+	flatNodes := make([]subtreepkg.Node, 0, len(block)-1)
+
+	for i := 1; i < len(block); i++ {
+		flatHashes = append(flatHashes, block[i].Hash)
+		flatInpoints = append(flatInpoints, &inpoints[i])
+		flatNodes = append(flatNodes, block[i])
+	}
+
+	wasSet := make([]bool, len(flatHashes))
+	stp.currentTxMap.(*SplitTxInpointsMap).ParallelBulkSetIfNotExists(flatHashes, flatInpoints, wasSet)
+
+	allNodes = append(allNodes, flatNodes...)
+
+	for _, st := range previousChained {
+		for _, node := range st.Nodes {
+			if !node.Hash.Equal(subtreepkg.CoinbasePlaceholderHashValue) {
+				allNodes = append(allNodes, node)
+			}
+		}
+	}
+
+	for _, node := range previousCurrent.Nodes {
+		if !node.Hash.Equal(subtreepkg.CoinbasePlaceholderHashValue) {
+			allNodes = append(allNodes, node)
+		}
+	}
+
+	newSubtree, err := stp.newSubtree(subtreeSize)
+	if err != nil {
+		return err
+	}
+
+	_ = newSubtree.AddCoinbaseNode()
+
+	stp.retireSubtrees(previousCurrent)
+	stp.currentSubtree.Store(newSubtree)
+	stp.retireChainedSubtrees()
+
+	return stp.bulkBuildSubtrees(ctx, allNodes, subtreeSize)
+}
+
+// BenchmarkReorgMoveBackBuild times the build of the move-back (issue 2269, PR 9) on a pending set and a
+// lost block, three ways: before is the build as it was, copying every node into one list; stream is
+// the build now, for a lost block with no transaction pending, which reads the nodes where they are;
+// held is the build now for one that has a single, whose children are held behind their pending parents,
+// which still needs the list and its per-node lookups. The subtrees are mapped outside the heap, so B/op
+// is the list and the block's arrays.
+func BenchmarkReorgMoveBackBuild(b *testing.B) {
+	// the timed region is a few milliseconds behind a processor and a pending set built per iteration,
+	// which the benchmark-compare job's -short run (-benchtime=1s, three times) would repeat for minutes
+	if testing.Short() {
+		b.Skip("builds a processor per iteration")
+	}
+
+	const size, pending, lost = 1 << 14, 1 << 20, 1 << 16
+
+	for _, impl := range []string{"before", "stream", "held"} {
+		b.Run("impl="+impl, func(b *testing.B) {
 			b.ReportAllocs()
 
 			for i := 0; i < b.N; i++ {
@@ -194,8 +253,8 @@ func BenchmarkReorgMoveBackBuild(b *testing.B) {
 				}
 
 				nodes := append([]subtreepkg.Node{{Hash: subtreepkg.CoinbasePlaceholderHashValue}}, batchTestNodes(0, lost)...)
-				for j := 0; j < tc.alreadyPending; j++ {
-					nodes[1+j] = batchTestNodes(1_000_000+j, 1)[0]
+				if impl == "held" {
+					nodes[1] = batchTestNodes(1_000_000, 1)[0]
 				}
 
 				inpoints := make([]subtreepkg.TxInpoints, len(nodes))
@@ -203,8 +262,14 @@ func BenchmarkReorgMoveBackBuild(b *testing.B) {
 
 				b.StartTimer()
 
-				_, _, err := stp.moveBackBlockBulkBuild(context.Background(), &model.Block{Header: model.GenesisBlockHeader}, true, chained, current,
-					[][]subtreepkg.Node{nodes}, [][]subtreepkg.TxInpoints{inpoints}, nil)
+				var err error
+
+				if impl == "before" {
+					err = stp.moveBackBuildBeforePR9(context.Background(), nodes, inpoints, chained, current, size)
+				} else {
+					_, _, err = stp.moveBackBlockBulkBuild(context.Background(), &model.Block{Header: model.GenesisBlockHeader}, true, chained, current,
+						[][]subtreepkg.Node{nodes}, [][]subtreepkg.TxInpoints{inpoints}, nil)
+				}
 
 				b.StopTimer()
 
