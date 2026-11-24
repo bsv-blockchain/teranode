@@ -236,6 +236,25 @@ func TestLookupInvBatch_ReadsEachHashOnce(t *testing.T) {
 	require.True(t, marked, "a hash read stays marked for the request-set expiry")
 }
 
+// TestLookupInvBatch_RequestsATransactionWhoseRecordIsARollbackHold pins that a record which is the
+// hold of a rolled back create-first attempt is no transaction at our end: it carries none, so the
+// announcement is requested, while a stored transaction is not.
+func TestLookupInvBatch_RequestsATransactionWhoseRecordIsARollbackHold(t *testing.T) {
+	tSettings := test.CreateBaseTestSettings(t)
+	store := newLookupStore(t, tSettings, "inv_queue_hold")
+	sm, p, state, _ := newInvHarness(t, tSettings, store, blockchain2.FSMStateRUNNING)
+
+	held := chainhash.Hash{0x71}
+	have := chainhash.Hash{0x72}
+	store.holds = map[chainhash.Hash]struct{}{held: {}}
+	store.stored = map[chainhash.Hash]struct{}{have: {}}
+
+	sm.admitTxInvs(p, state, []*wire.InvVect{inv(held), inv(have)})
+	sm.lookupInvBatch(<-sm.invQueue)
+
+	require.Equal(t, 1, state.requestQueue.Length(), "the hold is requested and the stored transaction is not")
+}
+
 // TestLookupInvBatch_UnmarksOnAStoreError pins that a failed read leaves no
 // hash marked, so the next announcement of it is read again, and that the
 // failure is counted by hashes.

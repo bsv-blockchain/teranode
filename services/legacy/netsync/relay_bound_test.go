@@ -52,6 +52,13 @@ type lookupStore struct {
 
 	// fail, when set, is what BatchDecorate returns instead of reading.
 	fail error
+
+	// holds and stored are hashes whose record BatchDecorate answers itself, as the Aerospike store
+	// does. A stored transaction answers a record with no error. A rollback hold of a create-first
+	// attempt answers the same record, and carries its markers only when the caller asked for
+	// Creating or RollingBack: the Hold bin is read for those two fields alone.
+	holds  map[chainhash.Hash]struct{}
+	stored map[chainhash.Hash]struct{}
 }
 
 func (s *lookupStore) Get(ctx context.Context, hash *chainhash.Hash, fieldNames ...fields.FieldName) (*meta.Data, error) {
@@ -79,7 +86,30 @@ func (s *lookupStore) BatchDecorate(ctx context.Context, items []*utxo.Unresolve
 		}
 	}
 
-	return s.Store.BatchDecorate(ctx, items, fieldNames...)
+	var rest []*utxo.UnresolvedMetaData
+
+	for _, item := range items {
+		_, hold := s.holds[item.Hash]
+		_, stored := s.stored[item.Hash]
+
+		if !hold && !stored {
+			rest = append(rest, item)
+
+			continue
+		}
+
+		item.Data = &meta.Data{}
+
+		if hold && slices.ContainsFunc(fieldNames, func(f fields.FieldName) bool { return f == fields.Creating || f == fields.RollingBack }) {
+			item.Data.Creating, item.Data.RollingBack, item.Data.Hold = true, true, true
+		}
+	}
+
+	if len(rest) == 0 {
+		return nil
+	}
+
+	return s.Store.BatchDecorate(ctx, rest, fieldNames...)
 }
 
 func newLookupStore(t *testing.T, tSettings *settings.Settings, name string) *lookupStore {

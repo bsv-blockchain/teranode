@@ -464,7 +464,7 @@ func (sm *SyncManager) lookupInvBatch(first *invChunk) []*invChunk {
 	for start := 0; start < len(items); start += txInvLookupChunk {
 		end := min(start+txInvLookupChunk, len(items))
 
-		if err := sm.utxoStore.BatchDecorate(sm.ctx, items[start:end], fields.Fee); err != nil {
+		if err := sm.utxoStore.BatchDecorate(sm.ctx, items[start:end], fields.Fee, fields.Creating); err != nil {
 			for _, item := range items[start:] {
 				sm.requestedTxns.Delete(item.Hash)
 			}
@@ -478,7 +478,9 @@ func (sm *SyncManager) lookupInvBatch(first *invChunk) []*invChunk {
 		for i := start; i < end; i++ {
 			item := items[i]
 
-			if item.Err == nil && item.Data != nil {
+			// A hold is the record a rolled back create-first attempt leaves for its txid. It carries
+			// no transaction, and the store marks it only for a caller that asks for Creating.
+			if item.Err == nil && item.Data != nil && !item.Data.Hold {
 				// Held: processed completely at our end.
 				continue
 			}
