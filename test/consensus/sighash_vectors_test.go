@@ -14,6 +14,7 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2/sighash"
 	"github.com/bsv-blockchain/go-chaincfg"
 	crypto "github.com/bsv-blockchain/go-sdk/primitives/hash"
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/stretchr/testify/require"
 )
@@ -148,7 +149,7 @@ func withoutCodeSeparators(script []byte) ([]byte, error) {
 		next, op, ok := scriptOp(script, pc)
 
 		if !ok {
-			return nil, fmt.Errorf("unsupported truncated push in script code at byte %d", pc)
+			return nil, errors.NewProcessingError("unsupported truncated push in script code at byte %d", pc)
 		}
 
 		pc = next
