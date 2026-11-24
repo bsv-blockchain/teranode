@@ -68,8 +68,9 @@ const (
 	// banSweepInterval is how often the admission rules are re-synced with
 	// the bans in force and connected peers are re-checked against the IP ban
 	// list. The sync is what applies changes that raise no ban-list event (an
-	// expiry, bans another process wrote, a registry ban that lapsed), so they
-	// reach connection admission within one interval.
+	// expiry, a Clear by the legacy service, which shares the list, a registry
+	// ban that lapsed) and retries failed Block* calls, so those reach
+	// connection admission within one interval.
 	banSweepInterval = 1 * time.Minute
 
 	// Default values for peer map cleanup (reduced to prevent memory exhaustion)

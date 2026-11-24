@@ -1150,8 +1150,8 @@ func (s *Server) shouldSkipBannedPeer(from string, messageType string) bool {
 // enforcement of IP bans: the bus refuses connections from a banned address or
 // subnet and closes the open ones when the rule is applied
 // (syncAdmissionBans). This check is defence in depth behind it, for a
-// connection whose rule has not been applied yet (a ban another process wrote
-// reaches admission within one banSweepInterval) or whose Block* call failed.
+// connection whose rule has not been applied yet (its ban-list event is still
+// being handled) or whose Block* call failed.
 // The addresses come from the bus's connection table (liveConnAddrs), so a
 // neighbour is checked from its first message and a gossip-relayed author (no
 // open connection, hence no addresses) costs one table miss.
@@ -1406,10 +1406,11 @@ func (s *Server) reconcileConnectionStates(ctx context.Context) {
 // is intentionally deferred to a follow-up PR; the Cleanup method itself ships in PR1).
 
 func (s *Server) listenForBanEvents(ctx context.Context) {
-	// Ban-list events cover local adds and removes only. The sweep re-syncs
-	// the admission rules for everything else (expiry, bans another process
-	// wrote, registry bans that lapsed), and drops at the application layer
-	// any registry entry still connected from a banned address.
+	// Ban-list events cover adds and removes only. The sweep re-syncs the
+	// admission rules for everything else (expiry, a Clear by the legacy
+	// service, registry bans that lapsed, Block* calls that failed), and drops
+	// at the application layer any registry entry still connected from a
+	// banned address.
 	sweep := time.NewTicker(banSweepInterval)
 	defer sweep.Stop()
 

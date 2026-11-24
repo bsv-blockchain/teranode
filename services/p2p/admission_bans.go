@@ -65,7 +65,8 @@ func banNetworkAddr(n *net.IPNet) (netip.Addr, bool) {
 // every trigger calls the same thing: startup, each ban-list event (whose
 // delivery order is not guaranteed), the operator ban RPCs, and the periodic
 // sweep, which is what catches changes that raise no event (an expiry, a
-// reload of bans another process wrote, a registry ban that lapsed).
+// Clear by the legacy service, which shares the list, a registry ban that
+// lapsed).
 //
 // A Block* call that fails is logged and left unapplied, so the next sync
 // retries it; the application-layer checks (the gossip gate, the sweep) keep
