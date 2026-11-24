@@ -16,8 +16,8 @@ import (
 //
 // Set refreshes an updated key's position, so the eviction victim is the entry
 // set longest ago. Callers give every entry the same TTL, so that is close to
-// expiry order but not exact: an expiry computed before a slow lookup can be
-// set after a later one. Get treats an expired entry as a miss and drops
+// expiry order but not exact: two callers can compute their expiries and reach
+// Set in opposite orders. Get treats an expired entry as a miss and drops
 // it; DeleteExpired is the periodic sweep that reclaims entries nobody looks
 // up again.
 //

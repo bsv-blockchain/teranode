@@ -162,7 +162,8 @@ func (s *Server) rebuildLiveConnsLocked() *liveConnView {
 // answered from the live-connection snapshot (see liveConnAddrs for its
 // freshness contract). updatePeerLastMessageTime uses it so gossip-relayed
 // publishers are never marked IsConnected while a freshly connected neighbour
-// is flagged on its first message.
+// is flagged on its first message once the snapshot sees it: at once in the
+// quiet case, otherwise within liveConnMissRefreshInterval plus one walk.
 func (s *Server) hasLiveConnection(peerID string) bool {
 	_, live := s.liveConnAddrs(peerID)
 
