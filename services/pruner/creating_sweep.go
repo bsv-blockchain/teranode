@@ -235,14 +235,17 @@ func (s *Server) sweepCreatingTxs(ctx context.Context, blockHeight uint32) {
 					continue
 				}
 
-				if rbErr := utxo.RollBackCreating(ctx, s.logger, s.utxoStore, md.Tx, md.Attempt); rbErr != nil {
+				ended, rbErr := utxo.RollBackCreatingEnded(ctx, s.logger, s.utxoStore, md.Tx, md.Attempt)
+				if rbErr != nil {
 					s.logger.Errorf("[pruner][creating-sweep][%d] rollback of %s failed, will retry next block: %v", blockHeight, hash, rbErr)
 					prunerCreatingSweepFailures.Inc()
 
 					continue
 				}
 
-				progressed++ // loser unspent and held
+				if ended {
+					progressed++ // loser unspent and held
+				}
 
 				continue
 			}

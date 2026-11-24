@@ -568,6 +568,44 @@ func TestSweepCreatingTxsDoubleSpendRollsBack(t *testing.T) {
 	require.Empty(t, store.finalized, "a loser must never be finalized")
 }
 
+// A rollback that did not begin, because the record is final, gone or owned by another caller,
+// reversed nothing. The pass must not count it as progress, or a page that cannot converge reads
+// as one that did.
+func TestSweepCreatingTxsRollbackThatDidNotBeginIsNoProgress(t *testing.T) {
+	ns, err := nullstore.NewNullStore()
+	require.NoError(t, err)
+
+	txA := oneOutputTx(1)
+	hashA := *txA.TxIDChainHash()
+
+	store := &fakeSweepStore{
+		NullStore:     ns,
+		stale:         []chainhash.Hash{hashA},
+		getResp:       map[chainhash.Hash]*meta.Data{hashA: {Creating: true, Attempt: sweepToken, Tx: txA}},
+		spendErr:      errors.ErrSpent,
+		spendSpends:   []*utxo.Spend{{Vout: 8, Err: errors.ErrSpent}},
+		beginDeclined: true,
+	}
+
+	logger := newCapturingLogger()
+	srv := newSweepServer(t, store)
+	srv.logger = logger
+
+	srv.sweepCreatingTxs(context.Background(), 100)
+
+	require.Empty(t, store.unspent, "a rollback that did not begin reverses nothing")
+
+	var stuck bool
+
+	for _, line := range logger.captured() {
+		if strings.Contains(line, "rolled forward 0 of 1 stale creating txs") {
+			stuck = true
+		}
+	}
+
+	require.True(t, stuck, "a pass whose only record was not rolled back made no progress and says so")
+}
+
 func TestSweepCreatingTxsEveryUnwinnableErrorRollsBack(t *testing.T) {
 	for _, spendErr := range []error{errors.ErrSpent, errors.ErrTxConflicting, errors.ErrFrozen, errors.ErrUtxoHashMismatch, errors.ErrTxNotFound} {
 		ns, err := nullstore.NewNullStore()

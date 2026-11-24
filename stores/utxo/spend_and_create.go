@@ -917,6 +917,14 @@ func RollBackCreating(ctx context.Context, logger ulogger.Logger, s CreatingRoll
 	return err
 }
 
+// RollBackCreatingEnded is RollBackCreating that also reports whether this call ended the rollback
+// of its record. A nil error with ended false means that the rollback did not begin and nothing was
+// reversed: the record is final, gone, owned by another attempt or already rolling back under
+// another caller.
+func RollBackCreatingEnded(ctx context.Context, logger ulogger.Logger, s CreatingRollBacker, tx *bt.Tx, attempt []byte) (ended bool, err error) {
+	return rollBackCreating(ctx, logger, s, tx, attempt)
+}
+
 // rollBackCreating is RollBackCreating that also reports whether this call ended the rollback of
 // its record. A nil error with ended false means the rollback did not begin: the record is final,
 // gone, owned by another attempt or already rolling back under another caller, and nothing was
