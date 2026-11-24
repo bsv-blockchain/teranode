@@ -1,7 +1,9 @@
 package blockchain
 
 import (
+	"cmp"
 	"context"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -1517,11 +1519,9 @@ func (r *CentralizedPeerRegistry) evictToSizeLocked(size, noHistorySize int, now
 		candidates = append(candidates, evictionCandidate{id: id, tier: evictionTier(info, now), last: peerActivity(info)})
 	}
 
-	sort.Slice(candidates, func(i, j int) bool {
-		if candidates[i].tier != candidates[j].tier {
-			return candidates[i].tier < candidates[j].tier
-		}
-		return candidates[i].last.Before(candidates[j].last)
+	// slices.SortFunc rather than sort.Slice: it does not allocate.
+	slices.SortFunc(candidates, func(a, b evictionCandidate) int {
+		return cmp.Or(cmp.Compare(a.tier, b.tier), a.last.Compare(b.last))
 	})
 
 	evicted := 0
