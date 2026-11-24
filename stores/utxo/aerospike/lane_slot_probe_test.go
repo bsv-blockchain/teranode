@@ -18,7 +18,7 @@ import (
 // teranode.lua with the slot write taken out, the shape of a server that predates the lanePos key.
 func TestLaneSlotProbeAnswersFalseWithoutProof(t *testing.T) {
 	// Not parallel: it reads the process-wide lane spend counts, which other tests' spends add to.
-	s, client := setupStoreForLockTest(t)
+	s, client := setupStoreForLockTestOwnServer(t)
 	ctx := t.Context()
 
 	s.settings.UtxoStore.LaneMigration = settings.LaneMigrationShadow

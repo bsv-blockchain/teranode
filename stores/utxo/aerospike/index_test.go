@@ -21,7 +21,7 @@ func TestCreateIndexIfNotExists(t *testing.T) {
 	logger := ulogger.NewVerboseTestLogger(t)
 	ctx := context.Background()
 
-	container, err := runAerospikeTestContainer(ctx)
+	container, err := runAerospikeTestContainer(t, ctx)
 	test.SkipIfContainerUnavailable(t, err)
 
 	t.Cleanup(func() {
@@ -79,7 +79,7 @@ func TestWaitForIndexReady(t *testing.T) {
 	logger := ulogger.NewVerboseTestLogger(t)
 	ctx := context.Background()
 
-	container, err := runAerospikeTestContainer(ctx)
+	container, err := runAerospikeTestContainer(t, ctx)
 	test.SkipIfContainerUnavailable(t, err)
 
 	t.Cleanup(func() {
@@ -138,7 +138,7 @@ func TestIndexWaiterAdapter(t *testing.T) {
 	logger := ulogger.NewVerboseTestLogger(t)
 	ctx := context.Background()
 
-	container, err := runAerospikeTestContainer(ctx)
+	container, err := runAerospikeTestContainer(t, ctx)
 	test.SkipIfContainerUnavailable(t, err)
 
 	t.Cleanup(func() {

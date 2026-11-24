@@ -8,6 +8,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -20,6 +21,7 @@ import (
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/bsv-blockchain/teranode/util/uaerospike"
 	aeroTest "github.com/bsv-blockchain/testcontainers-aerospike-go"
+	"github.com/stretchr/testify/require"
 	"github.com/testcontainers/testcontainers-go"
 )
 
@@ -109,8 +111,8 @@ var (
 // AcquireSharedTestServer returns the server that every test asking for the same image, platform and
 // batch size shares, starting it on first use. A test run again in the same process (go test
 // -count) gets the next set of servers, so it never meets its own records. An empty image means
-// test.AerospikeImage. It skips the test when no container runtime is available, as starting a
-// container of its own would.
+// test.AerospikeImage. It skips the test when no container runtime is available and fails it when
+// the server could not be started for any other reason.
 //
 // A test on a shared server must not depend on what else is in the namespace: its transactions must
 // be its own (no other test creates them), it must not clear, scan or count a whole set, and it must
@@ -136,9 +138,9 @@ func AcquireSharedTestServer(t testing.TB, image, platform string, batchSize int
 		entry.container, entry.server, entry.err = startSharedTestServer(key)
 	})
 
-	if entry.err != nil {
-		t.Skipf("Skipping Aerospike integration test: shared container not available (%v)", entry.err)
-	}
+	// Skips only when the container runtime is unreachable; any other failure fails the test, so a
+	// broken shared server cannot quietly skip every test that uses it.
+	test.SkipIfContainerUnavailable(t, entry.err)
 
 	return entry.server
 }
@@ -163,7 +165,7 @@ func startSharedTestServer(key sharedServerKey) (*aeroTest.Container, SharedTest
 		return nil, SharedTestServer{}, err
 	}
 
-	CountContainerStart("shared")
+	CountContainerStart("shared", fmt.Sprintf("%s batch size %d generation %d", key.image, key.batchSize, key.generation))
 
 	server, err := warmUpSharedTestServer(ctx, container, key.batchSize)
 	if err != nil {
@@ -250,8 +252,13 @@ func terminateSharedTestServers() {
 }
 
 // CountContainerStart counts one container start of the given kind ("shared" or "own"), for the
-// lines TestMain prints when AEROSPIKE_TEST_COUNT_CONTAINERS is set.
-func CountContainerStart(kind string) {
+// lines TestMain prints when AEROSPIKE_TEST_COUNT_CONTAINERS is set, and then also logs what the
+// container is for.
+func CountContainerStart(kind, what string) {
+	if os.Getenv("AEROSPIKE_TEST_COUNT_CONTAINERS") != "" {
+		fmt.Printf("aerospike test container start: %s for %s\n", kind, what)
+	}
+
 	counter, _ := containerStarts.LoadOrStore(kind, new(int64Counter))
 	counter.(*int64Counter).add()
 }
@@ -331,8 +338,8 @@ func WaitForWritesReady(client *uaerospike.Client, namespace, set string) error 
 }
 
 // acquireSharedTestServerForInternalTests is AcquireSharedTestServer with the image the internal
-// tests run on (see runAerospikeTestContainer) and the default utxostore_utxoBatchSize.
-func acquireSharedTestServerForInternalTests(t *testing.T) SharedTestServer {
+// tests run on (see runAerospikeTestContainer).
+func acquireSharedTestServerForInternalTests(t *testing.T, batchSize int) SharedTestServer {
 	t.Helper()
 
 	image := os.Getenv("AEROSPIKE_CONTAINER_IMAGE")
@@ -342,14 +349,61 @@ func acquireSharedTestServerForInternalTests(t *testing.T) SharedTestServer {
 		platform = cmp.Or(os.Getenv("AEROSPIKE_CONTAINER_PLATFORM"), "linux/amd64")
 	}
 
-	return AcquireSharedTestServer(t, image, platform, test.CreateBaseTestSettings(t).UtxoStore.UtxoBatchSize)
+	return AcquireSharedTestServer(t, image, platform, batchSize)
+}
+
+// newSharedTestStore opens a store on the shared server, with query appended to the store URL,
+// and a raw client to it; both close when the test ends.
+func newSharedTestStore(t *testing.T, logger ulogger.Logger, tSettings *settings.Settings, query string) (*Store, *uaerospike.Client) {
+	t.Helper()
+
+	server := acquireSharedTestServerForInternalTests(t, tSettings.UtxoStore.UtxoBatchSize)
+
+	client, aeroErr := uaerospike.NewClient(server.Host, server.Port)
+	require.NoError(t, aeroErr)
+	t.Cleanup(client.Close)
+
+	storeURL, err := url.Parse(fmt.Sprintf("aerospike://%s:%d/%s?set=%s%s", server.Host, server.Port, SharedTestNamespace, SharedTestSet, query))
+	require.NoError(t, err)
+
+	store, err := New(context.Background(), logger, tSettings, storeURL)
+	require.NoError(t, err)
+
+	store.LeaveSharedClientOpenOnClose()
+	t.Cleanup(store.StopConflictingIndexSelfTest)
+
+	return store, client
+}
+
+// ownServerSlots bounds how many tests run on a server of their own at once: each one is a
+// container, and the parallel tests already share the machine with the shared servers.
+var ownServerSlots = make(chan struct{}, 8)
+
+// AcquireOwnServerSlot waits for one of the slots for a server of a test's own and gives it back
+// when the test ends.
+func AcquireOwnServerSlot(t testing.TB) {
+	t.Helper()
+
+	ownServerSlots <- struct{}{}
+	t.Cleanup(func() { <-ownServerSlots })
+}
+
+// uniqueLockTime is the last lock time NextUniqueLockTime handed out.
+var uniqueLockTime atomic.Uint32
+
+// NextUniqueLockTime returns a lock time no earlier call returned. A transaction given one has a
+// txid of its own, so tests that share a server never create the same transaction; the store does
+// not interpret the lock time.
+func NextUniqueLockTime() uint32 {
+	return uniqueLockTime.Add(1)
 }
 
 // runAerospikeTestContainer starts an Aerospike server for a test: test.AerospikeImage, or the
 // image in AEROSPIKE_CONTAINER_IMAGE (for example the mod-teranode fork) on the platform in
 // AEROSPIKE_CONTAINER_PLATFORM, linux/amd64 when that is unset.
-func runAerospikeTestContainer(ctx context.Context, opts ...testcontainers.ContainerCustomizer) (*aeroTest.Container, error) {
-	CountContainerStart("own")
+func runAerospikeTestContainer(t testing.TB, ctx context.Context, opts ...testcontainers.ContainerCustomizer) (*aeroTest.Container, error) {
+	AcquireOwnServerSlot(t)
+	CountContainerStart("own", t.Name())
 
 	image := os.Getenv("AEROSPIKE_CONTAINER_IMAGE")
 	if image == "" {

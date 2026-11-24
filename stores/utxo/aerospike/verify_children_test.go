@@ -2,8 +2,6 @@ package aerospike
 
 import (
 	"context"
-	"fmt"
-	"net/url"
 	"testing"
 
 	"github.com/bsv-blockchain/aerospike-client-go/v8"
@@ -13,48 +11,14 @@ import (
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/bsv-blockchain/teranode/util/uaerospike"
-	aeroTest "github.com/bsv-blockchain/testcontainers-aerospike-go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func setupStoreForVerifyTest(t *testing.T) (*Store, *uaerospike.Client) {
 	t.Helper()
-	logger := ulogger.NewErrorTestLogger(t)
-	ctx := context.Background()
-	tSettings := test.CreateBaseTestSettings(t)
 
-	container, err := runAerospikeTestContainer(ctx,
-		aeroTest.WithTTLSupport("test"),
-	)
-	if err != nil {
-		t.Skipf("Skipping: Aerospike container not available (%v)", err)
-	}
-
-	t.Cleanup(func() {
-		_ = container.Terminate(ctx)
-	})
-
-	host, err := container.Host(ctx)
-	require.NoError(t, err)
-
-	port, err := container.ServicePort(ctx)
-	require.NoError(t, err)
-
-	client, err := uaerospike.NewClient(host, port)
-	require.NoError(t, err)
-
-	t.Cleanup(func() {
-		client.Close()
-	})
-
-	aeroURL, err := url.Parse(fmt.Sprintf("aerospike://%s:%d/test?set=test&externalStore=file://./data/external&block_retention=100", host, port))
-	require.NoError(t, err)
-
-	store, err := New(ctx, logger, tSettings, aeroURL)
-	require.NoError(t, err)
-
-	return store, client
+	return newSharedTestStore(t, ulogger.NewErrorTestLogger(t), test.CreateBaseTestSettings(t), "&externalStore=file://./data/external&block_retention=100")
 }
 
 func TestHandleExtraRecords_DAHSetWithDrift(t *testing.T) {
@@ -69,6 +33,7 @@ func TestHandleExtraRecords_DAHSetWithDrift(t *testing.T) {
 
 	// Build a tx with 6 outputs → master(2) + child1(2) + child2(2) = totalExtraRecs=2
 	largeTx := bt.NewTx()
+	largeTx.LockTime = NextUniqueLockTime() // a txid of its own: the server is shared
 	err := largeTx.From(
 		"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 		0,
@@ -126,6 +91,7 @@ func TestHandleExtraRecords_DAHSetAllSpent(t *testing.T) {
 
 	// Build a tx with 4 outputs → master(2) + child1(2) = totalExtraRecs=1
 	largeTx := bt.NewTx()
+	largeTx.LockTime = NextUniqueLockTime() // a txid of its own: the server is shared
 	err := largeTx.From(
 		"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
 		0,

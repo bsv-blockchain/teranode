@@ -2,6 +2,7 @@ package aerospike
 
 import (
 	"context"
+	"encoding/binary"
 	"fmt"
 	"net/url"
 	"testing"
@@ -30,19 +31,25 @@ func TestIsFilteredOut(t *testing.T) {
 	require.False(t, isFilteredOut(nil))
 }
 
-// setupStoreForLockTest brings up an Aerospike container and returns a store wired to it,
-// plus a raw client for asserting on the lock record directly.
+// setupStoreForLockTest returns a store on the shared Aerospike server, plus a raw client for
+// asserting on the lock record directly.
 func setupStoreForLockTest(t *testing.T) (*Store, *uaerospike.Client) {
+	t.Helper()
+
+	return newSharedTestStore(t, ulogger.NewErrorTestLogger(t), test.CreateBaseTestSettings(t), "&externalStore=file://./data/external&block_retention=100")
+}
+
+// setupStoreForLockTestOwnServer is setupStoreForLockTest on a server of the test's own, for a test
+// that closes the store's client or replaces the server's UDF module.
+func setupStoreForLockTestOwnServer(t *testing.T) (*Store, *uaerospike.Client) {
 	t.Helper()
 
 	ctx := context.Background()
 	logger := ulogger.NewErrorTestLogger(t)
 	tSettings := test.CreateBaseTestSettings(t)
 
-	container, err := runAerospikeTestContainer(ctx, aeroTest.WithTTLSupport("test"))
-	if err != nil {
-		t.Skipf("Skipping: Aerospike container not available (%v)", err)
-	}
+	container, err := runAerospikeTestContainer(t, ctx, aeroTest.WithTTLSupport("test"))
+	test.SkipIfContainerUnavailable(t, err)
 
 	t.Cleanup(func() {
 		_ = container.Terminate(ctx)
@@ -108,10 +115,13 @@ func TestLockFence(t *testing.T) {
 
 	store, client := setupStoreForLockTest(t)
 
-	// Distinct hashes per sub-test so they cannot interfere with one another.
+	// Distinct hashes per sub-test so they cannot interfere with one another, and with this run's
+	// own suffix so they cannot meet another test's on the shared server.
+	suffix := NextUniqueLockTime()
 	hashFor := func(b byte) *chainhash.Hash {
 		var raw [32]byte
 		raw[0] = b
+		binary.LittleEndian.PutUint32(raw[28:], suffix)
 
 		hash, err := chainhash.NewHash(raw[:])
 		require.NoError(t, err)

@@ -2,8 +2,6 @@ package aerospike
 
 import (
 	"context"
-	"fmt"
-	"net/url"
 	"os"
 	"testing"
 	"time"
@@ -35,24 +33,8 @@ func TestNativeTeranodeOpProbe_Container(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings(t)
 	tSettings.Aerospike.UseNativeTeranodeOps = true
 
-	container, err := runAerospikeTestContainer(ctx)
-	test.SkipIfContainerUnavailable(t, err)
-
-	t.Cleanup(func() {
-		_ = container.Terminate(ctx)
-	})
-
-	host, err := container.Host(ctx)
-	require.NoError(t, err)
-
-	port, err := container.ServicePort(ctx)
-	require.NoError(t, err)
-
-	aeroURL, err := url.Parse(fmt.Sprintf("aerospike://%s:%d/test?set=utxo&externalStore=file://./data/external", host, port))
-	require.NoError(t, err)
-
-	store, err := New(ctx, logger, tSettings, aeroURL)
-	require.NoError(t, err)
+	// The probes write records under keys of their own, so the server can be shared.
+	store, _ := newSharedTestStore(t, logger, tSettings, "&externalStore=file://./data/external")
 
 	expectNative := os.Getenv("AEROSPIKE_EXPECT_NATIVE_OPS") == "true"
 

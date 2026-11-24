@@ -19,6 +19,7 @@ func txWithOutputs(t *testing.T, numOutputs int) *bt.Tx {
 	t.Helper()
 
 	tx := bt.NewTx()
+	tx.LockTime = NextUniqueLockTime() // a txid of its own: the server is shared
 	require.NoError(t, tx.From("0000000000000000000000000000000000000000000000000000000000000000", 0,
 		"76a914000000000000000000000000000000000000000088ac", 1000))
 
@@ -181,7 +182,7 @@ func TestApplyLockClearWorkReportsEveryFailure(t *testing.T) {
 		t.Skip("Skipping Aerospike integration test in short mode")
 	}
 
-	store, _ := setupStoreForLockTest(t)
+	store, _ := setupStoreForLockTestOwnServer(t)
 
 	txID := chainhash.Hash{0x01}
 	other := chainhash.Hash{0x02}

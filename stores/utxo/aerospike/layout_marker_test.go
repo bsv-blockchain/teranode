@@ -27,7 +27,7 @@ func newLayoutTestStore(t *testing.T, batchSize int) (*Store, *aerospike.Client,
 	tSettings := test.CreateBaseTestSettings(t)
 	tSettings.UtxoStore.UtxoBatchSize = batchSize
 
-	container, err := runAerospikeTestContainer(ctx)
+	container, err := runAerospikeTestContainer(t, ctx)
 	test.SkipIfContainerUnavailable(t, err)
 
 	t.Cleanup(func() {

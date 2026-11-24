@@ -139,7 +139,7 @@ func TestUnmined(t *testing.T) {
 
 	tSettings := test.CreateBaseTestSettings(t)
 
-	container, err := runAerospikeTestContainer(ctx)
+	container, err := runAerospikeTestContainer(t, ctx)
 	test.SkipIfContainerUnavailable(t, err)
 
 	t.Cleanup(func() {
@@ -364,32 +364,12 @@ func TestLargeTxStoresExternally(t *testing.T) {
 	t.Parallel()
 
 	logger := ulogger.NewErrorTestLogger(t)
-	ctx := context.Background()
-
 	tSettings := test.CreateBaseTestSettings(t)
-
-	container, err := runAerospikeTestContainer(ctx)
-	test.SkipIfContainerUnavailable(t, err)
-
-	t.Cleanup(func() {
-		err = container.Terminate(ctx)
-		require.NoError(t, err)
-	})
-
-	host, err := container.Host(ctx)
-	require.NoError(t, err)
-
-	port, err := container.ServicePort(ctx)
-	require.NoError(t, err)
 
 	// An external store directory of its own, so the test can run beside the others.
 	externalDir := t.TempDir()
 
-	aeroURL, err := url.Parse(fmt.Sprintf("aerospike://%s:%d/test?set=utxo&externalStore=file://%s?hashPrefix=2", host, port, externalDir))
-	require.NoError(t, err)
-
-	store, err := New(ctx, logger, tSettings, aeroURL)
-	require.NoError(t, err)
+	store, _ := newSharedTestStore(t, logger, tSettings, "&externalStore=file://"+externalDir+"?hashPrefix=2")
 
 	b, err := os.ReadFile("test/01d29b3fd5f2629c3b6586790312ee4a16039d8033e35a6ad0dcfa0235a39400")
 	require.NoError(t, err)

@@ -78,7 +78,7 @@ func TestNativeOp_AddDeletedChildren_Integration(t *testing.T) {
 	logger := ulogger.NewErrorTestLogger(t)
 	ctx := context.Background()
 
-	container, err := runAerospikeTestContainer(ctx)
+	container, err := runAerospikeTestContainer(t, ctx)
 	if err != nil {
 		t.Skipf("Skipping: Aerospike container not available (%v)", err)
 	}

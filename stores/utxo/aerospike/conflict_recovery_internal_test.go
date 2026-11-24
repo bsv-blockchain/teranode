@@ -24,6 +24,7 @@ func restoreTestTxs(t *testing.T, s *Store, outputs int) (parent, child *bt.Tx) 
 	ctx := t.Context()
 
 	parent = bt.NewTx()
+	parent.LockTime = NextUniqueLockTime() // a txid of its own: the server is shared
 	in := &bt.Input{PreviousTxOutIndex: 0, PreviousTxSatoshis: 1_000_000, PreviousTxScript: bscript.NewFromBytes([]byte{0x51}),
 		SequenceNumber: 0xffffffff, UnlockingScript: bscript.NewFromBytes([]byte{0x00})}
 	require.NoError(t, in.PreviousTxIDAdd(&chainhash.Hash{0xd5, 0xd5}))

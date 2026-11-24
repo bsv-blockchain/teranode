@@ -2697,14 +2697,14 @@ func TestDeleteByBin(t *testing.T) {
 	logger := ulogger.NewErrorTestLogger(t)
 	tSettings := test.CreateBaseTestSettings(t)
 
-	client, _, _, deferFn := initAerospikeOwnServer(t, tSettings, logger)
+	client, _, _, deferFn := initAerospike(t, tSettings, logger)
 
 	t.Cleanup(func() {
 		deferFn()
 	})
 
-	// A set of its own: the store's UTXO set also holds the conflicting index self-test's probe
-	// record while that test runs, which a count over the whole set would include.
+	// A set of its own: it counts and deletes the records of the whole set, and the UTXO set holds
+	// other tests' records (and the conflicting index self-test's probe record).
 	const set = "delete_by_bin"
 
 	putBins(t, client, aerospike.NewWritePolicy(0, 0), set, "key1", aerospike.BinMap{"ID": 1})

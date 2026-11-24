@@ -7,7 +7,6 @@ import (
 	"net/url"
 	"os"
 	"sync"
-	"sync/atomic"
 	"testing"
 
 	"github.com/bsv-blockchain/aerospike-client-go/v8"
@@ -45,9 +44,6 @@ var (
 
 	spendingTxID1, _ = chainhash.NewHashFromStr("5e3bc5947f48cec766090aa17f309fd16259de029dcef5d306b514848c9687c7")
 	spendingTxID2, _ = chainhash.NewHashFromStr("663bc5947f48cec766090aa17f309fd16259de029dcef5d306b514848c9687c8")
-
-	// fixtureLockTime is the last lock time uniqueTx handed out.
-	fixtureLockTime atomic.Uint32
 )
 
 const (
@@ -143,11 +139,11 @@ func uniqueFixtureTx(t testing.TB, txHex string) *bt.Tx {
 	return uniqueTx(tx)
 }
 
-// uniqueTx gives tx a lock time no other transaction made unique here has, which changes its
-// txid, and returns it. Tests on a shared server must not create the same transaction as another
+// uniqueTx gives tx a lock time no other transaction made unique here has (NextUniqueLockTime),
+// which changes its txid, and returns it. Tests on a shared server must not create the same transaction as another
 // test; the store does not interpret the lock time.
 func uniqueTx(tx *bt.Tx) *bt.Tx {
-	tx.LockTime = fixtureLockTime.Add(1)
+	tx.LockTime = teranode_aerospike.NextUniqueLockTime()
 
 	return tx
 }
@@ -198,10 +194,6 @@ func initAerospikeWithURL(t *testing.T, settings *settings.Settings, logger ulog
 	return openStore(t, server.Host, server.Port, true, settings, logger, nil)
 }
 
-// ownServerSlots bounds how many tests run on a server of their own at once: each one is a
-// container, and the parallel tests already share the machine with the shared servers.
-var ownServerSlots = make(chan struct{}, 8)
-
 // conflictWALScansMu is held by every test or subtest that reads the process-wide count of
 // conflict WAL fallback scans or can add to it, so no such test sees another's scans.
 var conflictWALScansMu sync.Mutex
@@ -218,8 +210,7 @@ func lockConflictWALScans(t *testing.T) {
 func startOwnAerospikeServer(t *testing.T, image string) (string, int) {
 	t.Helper()
 
-	ownServerSlots <- struct{}{}
-	t.Cleanup(func() { <-ownServerSlots })
+	teranode_aerospike.AcquireOwnServerSlot(t)
 
 	ctx := context.Background()
 
@@ -237,11 +228,10 @@ func startOwnAerospikeServer(t *testing.T, image string) (string, int) {
 
 		container, err = aeroTest.RunContainer(ctx, aeroTest.WithTTLSupport(aerospikeNamespace), aeroTest.WithImage(image))
 	}()
-	if err != nil {
-		t.Skipf("Skipping Aerospike integration tests: container not available (%v)", err)
-	}
+	// Skips only when the container runtime is unreachable; any other failure fails the test.
+	test.SkipIfContainerUnavailable(t, err)
 
-	teranode_aerospike.CountContainerStart("own")
+	teranode_aerospike.CountContainerStart("own", t.Name())
 
 	t.Cleanup(func() {
 		require.NoError(t, container.Terminate(ctx))

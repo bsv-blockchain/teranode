@@ -6,6 +6,7 @@ import (
 	"github.com/bsv-blockchain/aerospike-client-go/v8"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	spendpkg "github.com/bsv-blockchain/teranode/stores/utxo/spend"
+	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/stretchr/testify/require"
 )
 
@@ -29,7 +30,7 @@ func TestUnspendableOutputSlotRoundTrip(t *testing.T) {
 	t.Parallel()
 
 	// The keys are this test's own, in a set no store uses, so the server can be shared.
-	server := acquireSharedTestServerForInternalTests(t)
+	server := acquireSharedTestServerForInternalTests(t, test.CreateBaseTestSettings(t).UtxoStore.UtxoBatchSize)
 
 	client, aErr := aerospike.NewClient(server.Host, server.Port)
 	require.Nil(t, aErr)
@@ -94,7 +95,7 @@ func TestTrailingNilSlotsSurviveRoundTrip(t *testing.T) {
 	t.Parallel()
 
 	// The keys are this test's own, in a set no store uses, so the server can be shared.
-	server := acquireSharedTestServerForInternalTests(t)
+	server := acquireSharedTestServerForInternalTests(t, test.CreateBaseTestSettings(t).UtxoStore.UtxoBatchSize)
 
 	client, aErr := aerospike.NewClient(server.Host, server.Port)
 	require.Nil(t, aErr)
