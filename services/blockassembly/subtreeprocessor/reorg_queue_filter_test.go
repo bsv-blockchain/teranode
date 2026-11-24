@@ -130,7 +130,7 @@ func TestReorgBlocks_Fork_SameMillisecondBatchIsFilteredAgainstItsForwardBlock(t
 }
 
 // A transaction handed to block assembly after its own forward block's step, and before a later
-// forward block's step, is checked against the earlier block's kept set too. B's drain alone only
+// forward block's step, is dropped on arrival by the earlier block's kept set. B's drain alone only
 // knows B, so without the kept set the transaction A mined goes back into block assembly.
 func TestReorgBlocks_Fork_LateArrivalAfterItsForwardBlockStaysOut(t *testing.T) {
 	cases := map[string]struct {
@@ -287,4 +287,33 @@ func TestReorgBlocks_CatchUp_LateHandOffIsCheckedOnArrival(t *testing.T) {
 			require.Contains(t, hashes, unmined)
 		})
 	}
+}
+
+// A catch-up that fails part-way rolls back the blocks it applied and forgets their kept sets, so a
+// late hand-off of a transaction only those blocks mined is queued again.
+func TestReorgBlocks_CatchUp_FailedRollbackForgetsItsSets(t *testing.T) {
+	stp, store, subtreeStore, chain := newResetWALTestProcessor(t, false)
+	stp.settings.BlockAssembly.MinedTxSetRetention = 10 * time.Second
+
+	firstTx, _ := createResetWALConflict(t, store, 31)
+	minedInFirst := *firstTx.TxIDChainHash()
+
+	chain.moveForward[0].Subtrees = []*chainhash.Hash{storeTestSubtree(t, subtreeStore, false, firstTx)}
+	// The second block's subtree is not in the store, so its step fails.
+	missing := chainhash.HashH([]byte("catch-up-missing-subtree"))
+	chain.moveForward[1].Subtrees = []*chainhash.Hash{&missing}
+
+	keptAfterFirst := -1
+	fired := beforeForwardBlockOn(stp, chain.moveForward[0].Header, func() {
+		keptAfterFirst = stp.keptMinedSetCount()
+	})
+
+	require.Error(t, stp.reorgBlocks(t.Context(), []*model.Block{}, chain.moveForward))
+	require.True(t, *fired)
+	require.Equal(t, 1, keptAfterFirst, "the first block's step kept its set")
+	require.Equal(t, chain.genesis.Hash(), stp.GetCurrentBlockHeader().Hash(), "the catch-up rolled back")
+	require.Zero(t, stp.keptMinedSetCount(), "the rolled-back blocks' sets are forgotten")
+
+	stp.AddBatch([]subtreepkg.Node{{Hash: minedInFirst, Fee: 1, SizeInBytes: 1}}, []*subtreepkg.TxInpoints{inpointsPtr()})
+	require.Equal(t, int64(1), stp.queue.length(), "a hand-off of the rolled-back block's transaction is queued")
 }

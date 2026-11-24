@@ -34,6 +34,9 @@ import (
 type recentMinedSet struct {
 	blockHash chainhash.Hash
 	txs       *SortedHashSet
+	// seq numbers the sets in the order they were kept, so a batch checked on arrival is checked
+	// at placement only against sets kept after that (TxBatch.checkedSeq).
+	seq uint64
 	// expires is when the set is dropped.
 	expires time.Time
 }
@@ -41,8 +44,9 @@ type recentMinedSet struct {
 // recentMinedSets holds the kept sets. Readers load the slice without a lock; writers replace
 // it under mu, so a slice once loaded never changes.
 type recentMinedSets struct {
-	mu   sync.Mutex
-	sets atomic.Pointer[[]recentMinedSet]
+	mu      sync.Mutex
+	sets    atomic.Pointer[[]recentMinedSet]
+	nextSeq uint64 // guarded by mu
 }
 
 func (r *recentMinedSets) load() []recentMinedSet {
@@ -79,7 +83,9 @@ func (stp *SubtreeProcessor) keepMinedSet(block *model.Block, txs *SortedHashSet
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	entry := recentMinedSet{blockHash: *block.Hash(), txs: txs, expires: now.Add(retention)}
+	r.nextSeq++
+
+	entry := recentMinedSet{blockHash: *block.Hash(), txs: txs, seq: r.nextSeq, expires: now.Add(retention)}
 
 	old := r.load()
 	sets := make([]recentMinedSet, 0, len(old)+1)
@@ -241,15 +247,32 @@ func (stp *SubtreeProcessor) lookupRecentlyMined(batches []*TxBatch, skip *Sorte
 		return nil, nil
 	}
 
-	sets := make([]*SortedHashSet, 0, len(all))
+	sets := make([]recentMinedSet, 0, len(all))
+
+	var newest uint64
 
 	for i := range all {
 		if all[i].txs != skip {
-			sets = append(sets, all[i].txs)
+			sets = append(sets, all[i])
+			newest = max(newest, all[i].seq)
 		}
 	}
 
 	if len(sets) == 0 {
+		return nil, nil
+	}
+
+	// A batch checked on arrival against every set here needs no lookup at all.
+	unchecked := false
+
+	for _, b := range batches {
+		if b.checkedSeq < newest {
+			unchecked = true
+			break
+		}
+	}
+
+	if !unchecked {
 		return nil, nil
 	}
 
@@ -276,10 +299,11 @@ func (stp *SubtreeProcessor) lookupRecentlyMined(batches []*TxBatch, skip *Sorte
 				bi++
 			}
 
-			h := batches[bi].nodes[idx-offsets[bi]].Hash
+			b := batches[bi]
+			h := b.nodes[idx-offsets[bi]].Hash
 
 			for _, set := range sets {
-				if set.Exists(h) {
+				if set.seq > b.checkedSeq && set.txs.Exists(h) {
 					mined[idx] = true
 					anyMined.Store(true)
 
@@ -303,29 +327,49 @@ func countLateMinedDropped(dropped int) {
 }
 
 // filterHandOff returns a batch arriving at the queue without the transactions a kept block set
-// holds, so a hand-off is checked against the sets kept when it arrives. It never changes the
-// caller's slices, which a refused hand-off sends again: when it drops anything it returns new
-// ones. validatedHeights may be nil.
-func (stp *SubtreeProcessor) filterHandOff(nodes []subtreepkg.Node, txInpoints []*subtreepkg.TxInpoints, validatedHeights []uint32) ([]subtreepkg.Node, []*subtreepkg.TxInpoints, []uint32) {
-	if len(nodes) == 0 || len(nodes) != len(txInpoints) {
-		return nodes, txInpoints, validatedHeights
+// holds, so a hand-off is checked against the sets kept when it arrives, and the newest set it
+// was checked against, for TxBatch.checkedSeq. It never changes the caller's slices, which a
+// refused hand-off sends again: when it drops anything it returns new ones. validatedHeights may
+// be nil.
+func (stp *SubtreeProcessor) filterHandOff(nodes []subtreepkg.Node, txInpoints []*subtreepkg.TxInpoints, validatedHeights []uint32) ([]subtreepkg.Node, []*subtreepkg.TxInpoints, []uint32, uint64) {
+	kept := stp.recentMined.load()
+	if len(kept) == 0 || len(nodes) == 0 || len(nodes) != len(txInpoints) {
+		return nodes, txInpoints, validatedHeights, 0
 	}
 
-	mined, _ := stp.lookupRecentlyMined([]*TxBatch{{nodes: nodes, txInpoints: txInpoints}}, nil)
-	if mined == nil {
-		return nodes, txInpoints, validatedHeights
+	var checkedSeq uint64
+	for i := range kept {
+		checkedSeq = max(checkedSeq, kept[i].seq)
 	}
 
-	keptNodes := make([]subtreepkg.Node, 0, len(nodes))
-	keptInpoints := make([]*subtreepkg.TxInpoints, 0, len(nodes))
+	// A hand-off batch is small (blockassembly_sendBatchSize), and many arrive at once on their
+	// own goroutines, so it is looked up in place, with no allocation until a transaction is found.
+	first := -1
+
+	for i := range nodes {
+		if inKeptSet(kept, nodes[i].Hash) {
+			first = i
+			break
+		}
+	}
+
+	if first < 0 {
+		return nodes, txInpoints, validatedHeights, checkedSeq
+	}
+
+	keptNodes := make([]subtreepkg.Node, first, len(nodes))
+	copy(keptNodes, nodes[:first])
+	keptInpoints := make([]*subtreepkg.TxInpoints, first, len(nodes))
+	copy(keptInpoints, txInpoints[:first])
 
 	var keptHeights []uint32
 	if len(validatedHeights) == len(nodes) {
-		keptHeights = make([]uint32, 0, len(nodes))
+		keptHeights = make([]uint32, first, len(nodes))
+		copy(keptHeights, validatedHeights[:first])
 	}
 
-	for i := range nodes {
-		if mined[i] {
+	for i := first + 1; i < len(nodes); i++ {
+		if inKeptSet(kept, nodes[i].Hash) {
 			continue
 		}
 
@@ -339,5 +383,15 @@ func (stp *SubtreeProcessor) filterHandOff(nodes []subtreepkg.Node, txInpoints [
 
 	countLateMinedDropped(len(nodes) - len(keptNodes))
 
-	return keptNodes, keptInpoints, keptHeights
+	return keptNodes, keptInpoints, keptHeights, checkedSeq
+}
+
+func inKeptSet(sets []recentMinedSet, h chainhash.Hash) bool {
+	for i := range sets {
+		if sets[i].txs.Exists(h) {
+			return true
+		}
+	}
+
+	return false
 }

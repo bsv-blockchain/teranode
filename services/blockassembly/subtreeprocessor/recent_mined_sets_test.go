@@ -1,6 +1,7 @@
 package subtreeprocessor
 
 import (
+	"context"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -224,9 +225,8 @@ func TestForgetAndClearMinedSets(t *testing.T) {
 	require.Zero(t, stp.keptMinedSetCount())
 }
 
-// An ordinary block move: a transaction the block mined whose hand-off reaches the queue after
-// the block's drain is dropped by the steady-state dequeue loop. Its batch is stamped before the
-// block, as a batch stamped before its block's drain and linked after it is.
+// An ordinary block move: a late hand-off of a transaction the block mined, after the block's
+// drain, is dropped on arrival by the block's kept set.
 func TestMoveForwardBlock_LateHandOffOfMinedTxStaysOut(t *testing.T) {
 	cases := map[string]struct {
 		retention time.Duration
@@ -370,4 +370,93 @@ func TestDequeueLoop_PrunesExpiredSetsWhenIdle(t *testing.T) {
 	nowNanos.Add(int64(10 * time.Second))
 
 	require.Eventually(t, func() bool { return stp.keptMinedSetCount() == 0 }, 5*time.Second, time.Millisecond)
+}
+
+// The kept-set check runs before the era filter, so a transaction a kept set holds is dropped as
+// mined and never recorded as kept out by the era filter, from where it could be let back in.
+func TestDequeueLoop_KeptSetCheckRunsBeforeTheEraFilter(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	stp := newTestSubtreeProcessorForDequeueStaleness(t, ctx)
+	stp.settings.BlockAssembly.MinedTxSetRetention = 10 * time.Second
+	stp.SetTxEra(150)
+
+	mined, inEra := chainhash.HashH([]byte("mined-and-out-of-era")), chainhash.HashH([]byte("in-era"))
+	stp.keepMinedSet(minedSetBlock(1), frozenHashSet(t, mined))
+
+	// Queued without the arrival check, as a batch queued before its block's set was kept is.
+	require.Equal(t, Admitted, stp.queue.enqueueBatchBounded(
+		[]subtreepkg.Node{{Hash: mined, Fee: 1, SizeInBytes: 1}, {Hash: inEra, Fee: 1, SizeInBytes: 1}},
+		[]*subtreepkg.TxInpoints{{}, {}},
+		false,
+		[]uint32{99, 150},
+	))
+
+	stp.Start(ctx)
+	t.Cleanup(func() { stp.Stop(ctx) })
+
+	require.Eventually(t, func() bool {
+		_, ok := stp.currentTxMap.Get(inEra)
+		return stp.queue.length() == 0 && ok
+	}, 2*time.Second, 5*time.Millisecond)
+
+	stp.droppedMu.Lock()
+	_, recorded := stp.droppedTxs[mined]
+	stp.droppedMu.Unlock()
+	require.False(t, recorded, "a mined transaction must not be recorded as kept out by the era filter")
+}
+
+// A reset clears the kept sets before it reloads, so a hand-off arriving during the reload is not
+// checked against a set of a block the reset may have moved back.
+func TestReset_ClearsKeptMinedSetsBeforeItsReload(t *testing.T) {
+	stp, _ := newMinedSetProcessor(t, 10*time.Second)
+	h := chainhash.HashH([]byte("handed-off-during-reload"))
+	stp.keepMinedSet(minedSetBlock(1), frozenHashSet(t, h))
+
+	var queuedDuringReload int64
+
+	require.NoError(t, stp.reset(&model.BlockHeader{
+		Version:        1,
+		HashPrevBlock:  &chainhash.Hash{},
+		HashMerkleRoot: &chainhash.Hash{},
+		Nonce:          2241,
+	}, nil, nil, false, func() error {
+		stp.AddBatch([]subtreepkg.Node{{Hash: h, Fee: 1, SizeInBytes: 1}}, []*subtreepkg.TxInpoints{inpointsPtr()})
+		queuedDuringReload = stp.queue.length()
+
+		return nil
+	}))
+
+	require.Equal(t, int64(1), queuedDuringReload, "the hand-off during the reload is queued")
+}
+
+// A batch checked on arrival is checked when placed only against sets kept after that: a set kept
+// later still drops its transaction, and the sets it was checked against are not looked up again.
+func TestDequeueLoop_ChecksOnlySetsKeptAfterArrival(t *testing.T) {
+	stp, _ := newMinedSetProcessor(t, 10*time.Second)
+	early, late := chainhash.HashH([]byte("in-the-set-kept-before")), chainhash.HashH([]byte("in-the-set-kept-after"))
+	unmined := chainhash.HashH([]byte("in-no-set"))
+
+	stp.keepMinedSet(minedSetBlock(1), frozenHashSet(t, chainhash.HashH([]byte("unrelated"))))
+	stp.AddBatch(
+		[]subtreepkg.Node{{Hash: late, Fee: 1, SizeInBytes: 1}, {Hash: unmined, Fee: 1, SizeInBytes: 1}},
+		[]*subtreepkg.TxInpoints{inpointsPtr(), inpointsPtr()},
+	)
+	stp.keepMinedSet(minedSetBlock(2), frozenHashSet(t, late))
+
+	stp.Start(t.Context())
+
+	require.Eventually(t, func() bool {
+		return stp.queue.length() == 0 && stp.GetCurrentTxMap().Exists(unmined)
+	}, 5*time.Second, time.Millisecond)
+	require.False(t, stp.GetCurrentTxMap().Exists(late), "a set kept after the batch arrived drops its transaction when placed")
+
+	// A batch recorded as checked against every kept set is trusted, and not looked up again.
+	stp.keepMinedSet(minedSetBlock(3), frozenHashSet(t, early))
+	b := batchOf(early)
+	b.checkedSeq = 3
+
+	mined, _ := stp.lookupRecentlyMined([]*TxBatch{b}, nil)
+	require.Nil(t, mined)
 }
