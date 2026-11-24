@@ -798,6 +798,31 @@ func (s *Store) clearLockedOnRecordsMulti(items []lockClearItem) error {
 // the block's hashes (creating records are rare and transient), and does per-tx work only
 // for the few that are actually mid-flight.
 func (s *Store) rollForwardCreatingBeforeSetMined(ctx context.Context, hashes []*chainhash.Hash, blockHeight uint32) error {
+	_, err := s.rollForwardCreatingRecords(ctx, hashes, blockHeight, false)
+
+	return err
+}
+
+// rollForwardCreatingRecords is the pre-flight rule for any write that clears unminedSince of a
+// transaction that is mined: it completes the creating records among hashes. With tolerant false it
+// stops at the first record it cannot complete and returns that error. With tolerant true it goes on,
+// and returns the error of each record it could not complete, by hash, so the caller leaves those
+// records as they are and still handles the rest. An error that is not about one record, a failed
+// batch read or a failed clear of the tokenless records, is returned as the second result in both modes.
+func (s *Store) rollForwardCreatingRecords(ctx context.Context, hashes []*chainhash.Hash, blockHeight uint32, tolerant bool) (map[chainhash.Hash]error, error) {
+	failed := make(map[chainhash.Hash]error)
+
+	// fail ends the pass for the record at hash when the caller is not tolerant, and otherwise notes it.
+	fail := func(hash chainhash.Hash, err error) error {
+		if !tolerant {
+			return err
+		}
+
+		failed[hash] = err
+
+		return nil
+	}
+
 	items := make([]*utxo.UnresolvedMetaData, 0, len(hashes))
 
 	for i, h := range hashes {
@@ -809,11 +834,11 @@ func (s *Store) rollForwardCreatingBeforeSetMined(ctx context.Context, hashes []
 	}
 
 	if len(items) == 0 {
-		return nil
+		return failed, nil
 	}
 
 	if err := s.BatchDecorate(ctx, items, fields.Creating, fields.RollingBack, fields.Attempt); err != nil {
-		return errors.NewProcessingError("[setMined] create-first pre-flight: batch read of creating flag failed", err)
+		return failed, errors.NewProcessingError("[setMined] create-first pre-flight: batch read of creating flag failed", err)
 	}
 
 	var legacy []*chainhash.Hash
@@ -824,7 +849,11 @@ func (s *Store) rollForwardCreatingBeforeSetMined(ctx context.Context, hashes []
 				continue // nothing to roll forward
 			}
 
-			return errors.NewProcessingError("[setMined] create-first pre-flight: read of %s failed", item.Hash.String(), item.Err)
+			if failErr := fail(item.Hash, errors.NewProcessingError("[setMined] create-first pre-flight: read of %s failed", item.Hash.String(), item.Err)); failErr != nil {
+				return failed, failErr
+			}
+
+			continue
 		}
 
 		if item.Data == nil || !item.Data.Creating {
@@ -847,7 +876,11 @@ func (s *Store) rollForwardCreatingBeforeSetMined(ctx context.Context, hashes []
 				continue
 			}
 
-			return errors.NewProcessingError("[setMined] create-first pre-flight: get tx %s failed", item.Hash.String(), err)
+			if failErr := fail(item.Hash, errors.NewProcessingError("[setMined] create-first pre-flight: get tx %s failed", item.Hash.String(), err)); failErr != nil {
+				return failed, failErr
+			}
+
+			continue
 		}
 
 		if !md.Creating {
@@ -858,7 +891,11 @@ func (s *Store) rollForwardCreatingBeforeSetMined(ctx context.Context, hashes []
 			// Its owner is undoing it, and the hold it leaves carries no transaction at all, so it
 			// must not be completed or mined against. Fail closed: the block is retried once the
 			// rollback completes or the hold expires.
-			return errors.NewProcessingError("[setMined] create-first pre-flight: tx %s is rolling back", item.Hash.String())
+			if failErr := fail(item.Hash, errors.NewProcessingError("[setMined] create-first pre-flight: tx %s is rolling back", item.Hash.String())); failErr != nil {
+				return failed, failErr
+			}
+
+			continue
 		}
 
 		if md.Tx == nil {
@@ -869,11 +906,13 @@ func (s *Store) rollForwardCreatingBeforeSetMined(ctx context.Context, hashes []
 		// create-first tentative lock); the roll-forward completes an already-committed
 		// spend, so a locked parent must not fail-close setMined for the whole block.
 		if _, _, err := utxo.RollForwardCreating(ctx, s.logger, s, md.Tx, md.Attempt, blockHeight, utxo.WithIgnoreLocked(true)); err != nil {
-			return errors.NewProcessingError("[setMined] create-first pre-flight: roll-forward of %s failed", item.Hash.String(), err)
+			if failErr := fail(item.Hash, errors.NewProcessingError("[setMined] create-first pre-flight: roll-forward of %s failed", item.Hash.String(), err)); failErr != nil {
+				return failed, failErr
+			}
 		}
 	}
 
-	return s.clearCreatingWithoutAttempt(legacy)
+	return failed, s.clearCreatingWithoutAttempt(legacy)
 }
 
 // clearCreatingWithoutAttempt deletes the creating bin from the master records that carry no

@@ -65,7 +65,63 @@ import (
 // That is deliberate: the reset reloads the unmined transactions and re-marks the ones the master
 // restore (applyLongestChainChildDAH) left in a mined state with unmined_since set, so nothing is lost,
 // at the price of one transient page failure costing an incremental reorg. Do not swallow this error.
+//
+// Create-first: onLongestChain=true clears unmined_since, and a record that is still creating needs
+// it, because the creating sweep selects by it and a creating record without it is never found
+// again. The call therefore settles the creating records among txHashes first, by the rule the
+// setMined pre-flight uses (rollForwardCreatingRecords). A record it cannot complete, one that is
+// rolling back included, is left out of the mark and keeps its unmined_since for the sweep, the rest
+// are marked, and the call returns an error that names the first of them.
 func (s *Store) MarkTransactionsOnLongestChain(ctx context.Context, txHashes []chainhash.Hash, onLongestChain bool) error {
+	if len(txHashes) == 0 || !onLongestChain {
+		return s.markTransactionsOnLongestChain(ctx, txHashes, onLongestChain)
+	}
+
+	ptrs := make([]*chainhash.Hash, len(txHashes))
+	for i := range txHashes {
+		ptrs[i] = &txHashes[i]
+	}
+
+	failed, err := s.rollForwardCreatingRecords(ctx, ptrs, s.GetBlockHeight(), true)
+	if err != nil {
+		return errors.NewProcessingError("[MarkTransactionsOnLongestChain] the creating records could not be settled before the mark, nothing was marked", err)
+	}
+
+	if len(failed) == 0 {
+		return s.markTransactionsOnLongestChain(ctx, txHashes, true)
+	}
+
+	markable := make([]chainhash.Hash, 0, len(txHashes))
+
+	var first chainhash.Hash
+
+	var firstErr error
+
+	for _, h := range txHashes {
+		failure, isFailed := failed[h]
+		if !isFailed {
+			markable = append(markable, h)
+
+			continue
+		}
+
+		if firstErr == nil {
+			first, firstErr = h, failure
+		}
+	}
+
+	unsettled := errors.NewProcessingError("[MarkTransactionsOnLongestChain] %d creating records could not be completed and were not marked, they keep unmined_since for the sweep, first %s", len(failed), first.String(), firstErr)
+
+	// errors.Join keeps the type of its errors only when the first one has it.
+	if markErr := s.markTransactionsOnLongestChain(ctx, markable, true); markErr != nil {
+		return errors.Join(markErr, unsettled)
+	}
+
+	return unsettled
+}
+
+// markTransactionsOnLongestChain is the mark itself, for records that need no settling.
+func (s *Store) markTransactionsOnLongestChain(ctx context.Context, txHashes []chainhash.Hash, onLongestChain bool) error {
 	if len(txHashes) == 0 {
 		return nil
 	}
