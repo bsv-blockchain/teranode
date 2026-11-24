@@ -416,6 +416,13 @@ func TestNew_LegacyPeerPoolTokenExemptsBlockLegacyFromHeavyLimiter(t *testing.T)
 		require.Equal(t, 1, countStatus(fireRequestsWithLegacyToken(srv, path, token, 2), http.StatusTooManyRequests))
 	})
 
+	t.Run("the token with wire=0 is limited", func(t *testing.T) {
+		srv := newServer(t, token)
+		path := fmt.Sprintf("/api/v1/block_legacy/%s?wire=0", testHashHex)
+
+		require.Equal(t, []int{http.StatusNotFound, http.StatusTooManyRequests}, fireRequestsWithLegacyToken(srv, path, token, 2))
+	})
+
 	t.Run("the token on the mining candidate variant is limited", func(t *testing.T) {
 		srv := newServer(t, token)
 		path := fmt.Sprintf("/api/v1/block_legacy/%s?wire=1&type=miningcandidate", testHashHex)

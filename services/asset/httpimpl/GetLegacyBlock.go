@@ -215,7 +215,7 @@ func (h *HTTP) exemptLegacyPeerServer(mw []echo.MiddlewareFunc) []echo.Middlewar
 		}
 
 		return func(c echo.Context) error {
-			if c.QueryParam("wire") != "" && c.QueryParam("type") != "miningcandidate" && h.usesLegacyPeerPool(c) {
+			if c.QueryParam("wire") == "1" && c.QueryParam("type") != "miningcandidate" && h.usesLegacyPeerPool(c) {
 				return next(c)
 			}
 
