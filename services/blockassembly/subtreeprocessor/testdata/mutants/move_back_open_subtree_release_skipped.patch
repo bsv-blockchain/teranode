@@ -1,13 +1,13 @@
 diff --git a/services/blockassembly/subtreeprocessor/SubtreeProcessor.go b/services/blockassembly/subtreeprocessor/SubtreeProcessor.go
-index 6aa8973e1..56dd4b496 100644
+index a4a5c1340..07ba62a6f 100644
 --- a/services/blockassembly/subtreeprocessor/SubtreeProcessor.go
 +++ b/services/blockassembly/subtreeprocessor/SubtreeProcessor.go
-@@ -6529,7 +6529,7 @@ func (stp *SubtreeProcessor) moveBackBlockBulkBuild(ctx context.Context, block *
- 				continue
- 			}
- 			if held != nil {
--				allNodes = held.appendPending(allNodes, node, stp.currentTxMap.Get)
-+				allNodes = append(allNodes, node) // mutant: nothing is released in the open subtree
- 				continue
- 			}
- 			allNodes = append(allNodes, node)
+@@ -6776,7 +6776,7 @@ func (stp *SubtreeProcessor) moveBackBlockBulkBuild(ctx context.Context, block *
+ 					continue
+ 				}
+ 				if held != nil {
+-					allNodes = held.appendPending(allNodes, node, stp.currentTxMap.Get)
++					allNodes = append(allNodes, node) // mutant: nothing is released in the open subtree
+ 					continue
+ 				}
+ 				allNodes = append(allNodes, node)

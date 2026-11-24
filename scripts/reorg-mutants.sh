@@ -22,7 +22,7 @@ cd "$repo_root"
 
 pkg=./services/blockassembly/subtreeprocessor
 mutant_dir=services/blockassembly/subtreeprocessor/testdata/mutants
-tests=${1:-${REORG_MUTANT_TESTS:-^(TestReorgScenario|TestReorgDifferential|TestOrderOracle)}}
+tests=${1:-${REORG_MUTANT_TESTS:-^(TestReorgScenario|TestReorgDifferential|TestOrderOracle|TestMovedBackMarks|TestStreamBuildSubtrees|TestMoveBackBulkBuild|TestReorgParallelDrain)}}
 
 run_tests() {
 	TERANODE_HEAVY_TESTS=1 go test -count=1 -tags testtxmetacache -run "$tests" "$pkg" >/dev/null 2>&1

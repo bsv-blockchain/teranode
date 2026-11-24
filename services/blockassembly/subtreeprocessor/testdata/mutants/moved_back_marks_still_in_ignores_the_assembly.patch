@@ -1,0 +1,13 @@
+diff --git a/services/blockassembly/subtreeprocessor/reorg_moved_back_marks.go b/services/blockassembly/subtreeprocessor/reorg_moved_back_marks.go
+index 4c0ec22c1..92d37150b 100644
+--- a/services/blockassembly/subtreeprocessor/reorg_moved_back_marks.go
++++ b/services/blockassembly/subtreeprocessor/reorg_moved_back_marks.go
+@@ -80,7 +80,7 @@ func (m *movedBackMarks) stillIn(txMap interface{ Exists(chainhash.Hash) bool },
+ 	parts := make([][]chainhash.Hash, m.set.Partitions())
+ 
+ 	m.set.IterPositions(workers, func(part int, pos uint64, hash *chainhash.Hash) {
+-		if m.mined[pos/64].Load()&(1<<(pos%64)) == 0 && txMap.Exists(*hash) {
++		if m.mined[pos/64].Load()&(1<<(pos%64)) == 0 { // mutant: a moved-back transaction the assembly dropped is marked too
+ 			parts[part] = append(parts[part], *hash)
+ 		}
+ 	})

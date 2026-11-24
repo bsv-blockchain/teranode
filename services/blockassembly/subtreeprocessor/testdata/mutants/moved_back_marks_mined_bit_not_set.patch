@@ -1,0 +1,16 @@
+diff --git a/services/blockassembly/subtreeprocessor/reorg_moved_back_marks.go b/services/blockassembly/subtreeprocessor/reorg_moved_back_marks.go
+index 4c0ec22c1..bd18d5c9d 100644
+--- a/services/blockassembly/subtreeprocessor/reorg_moved_back_marks.go
++++ b/services/blockassembly/subtreeprocessor/reorg_moved_back_marks.go
+@@ -64,10 +64,7 @@ func (m *movedBackMarks) markForward(block *SortedHashSet, workers int) []chainh
+ 			return
+ 		}
+ 
+-		// load first: the word is shared by 64 hashes and most are set once
+-		if word, bit := &m.mined[pos/64], uint64(1)<<(pos%64); word.Load()&bit == 0 {
+-			word.Or(bit)
+-		}
++		_ = pos // mutant: a moved-back transaction a forward block mined is not recorded as mined
+ 	})
+ 
+ 	return joinParts(parts)
