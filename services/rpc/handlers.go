@@ -2808,7 +2808,7 @@ func handleGetMiningInfo(ctx context.Context, s *RPCServer, cmd interface{}, _ <
 // Parameters:
 //   - ctx: Context for cancellation and tracing
 //   - s: The RPC server instance providing access to service clients
-//   - cmd: The parsed command arguments (bsvjson.FreezeCmd with TxID and Vout)
+//   - cmd: The parsed command arguments (bsvjson.FreezeCmd with TxID, Vout and UTXOHash)
 //   - _: Unused channel for close notification
 //
 // Returns:
@@ -2824,23 +2824,63 @@ func handleFreeze(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan s
 
 	c := cmd.(*bsvjson.FreezeCmd)
 
-	var err error
-
-	h, err := chainhash.NewHashFromStr(c.TxID)
+	spend, err := s.alertSpendFromArgs(c.TxID, c.Vout, c.UTXOHash)
 	if err != nil {
-		return nil, rpcDecodeHexError(c.TxID)
+		return nil, err
 	}
 
-	vout, err := safeconversion.IntToUint32(c.Vout)
-	if err != nil {
-		return nil, s.rpcInputError(err, bsvjson.ErrRPCInvalidParameter, "")
-	}
-
-	if err = s.utxoStore.FreezeUTXOs(ctx, []*utxo.Spend{{TxID: h, Vout: vout, UTXOHash: h}}, s.settings); err != nil {
+	if err = s.utxoStore.FreezeUTXOs(ctx, []*utxo.Spend{spend}, s.settings); err != nil {
 		return nil, err
 	}
 
 	return nil, nil
+}
+
+// alertSpendFromArgs builds the utxo.Spend the alert-system store methods expect
+// from the RPC's positional txid, vout and utxohash arguments. The UTXO hash is
+// the caller-supplied commitment, never synthesised from the txid: the Aerospike
+// backend verifies it against the stored output and a txid would never match,
+// while the SQL backend ignores it, so synthesising hid a backend divergence.
+//
+// A malformed hash returns rpcDecodeHexError naming that argument; a hash shorter
+// than 64 hex characters or a vout outside the uint32 range returns
+// ErrRPCInvalidParameter. Either way the store is not called.
+func (s *RPCServer) alertSpendFromArgs(txID string, vout int, utxoHash string) (*utxo.Spend, error) {
+	txHash, err := parseAlertHash("txid", txID)
+	if err != nil {
+		return nil, err
+	}
+
+	hash, err := parseAlertHash("utxohash", utxoHash)
+	if err != nil {
+		return nil, err
+	}
+
+	outputIndex, err := safeconversion.IntToUint32(vout)
+	if err != nil {
+		return nil, s.rpcInputError(err, bsvjson.ErrRPCInvalidParameter, "")
+	}
+
+	return &utxo.Spend{TxID: txHash, Vout: outputIndex, UTXOHash: hash}, nil
+}
+
+// parseAlertHash parses a txid or UTXO commitment argument of the alert RPCs.
+// chainhash.NewHashFromStr left-pads a short string, so "deadbeef" would name a
+// different record or commitment from the one the caller meant, and the Aerospike
+// freeze treats a missing record as success. Both are always full length, so a
+// short one is refused. Hex first and then length, as getrawtransaction does.
+func parseAlertHash(name, value string) (*chainhash.Hash, error) {
+	hash, err := chainhash.NewHashFromStr(value)
+	if err != nil {
+		return nil, rpcDecodeHexError(value)
+	}
+
+	if len(value) != chainhash.MaxHashStringSize {
+		return nil, bsvjson.NewRPCError(bsvjson.ErrRPCInvalidParameter,
+			fmt.Sprintf("%s must be of length %d (not %d)", name, chainhash.MaxHashStringSize, len(value)))
+	}
+
+	return hash, nil
 }
 
 // handleUnfreeze implements the unfreeze command, which removes the frozen status from
@@ -2862,7 +2902,7 @@ func handleFreeze(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan s
 // Parameters:
 //   - ctx: Context for cancellation and tracing
 //   - s: The RPC server instance providing access to service clients
-//   - cmd: The parsed command arguments (bsvjson.UnfreezeCmd with TxID and Vout)
+//   - cmd: The parsed command arguments (bsvjson.UnfreezeCmd with TxID, Vout and UTXOHash)
 //   - _: Unused channel for close notification
 //
 // Returns:
@@ -2878,19 +2918,12 @@ func handleUnfreeze(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan
 
 	c := cmd.(*bsvjson.UnfreezeCmd)
 
-	var err error
-
-	h, err := chainhash.NewHashFromStr(c.TxID)
+	spend, err := s.alertSpendFromArgs(c.TxID, c.Vout, c.UTXOHash)
 	if err != nil {
-		return nil, rpcDecodeHexError(c.TxID)
+		return nil, err
 	}
 
-	vout, err := safeconversion.IntToUint32(c.Vout)
-	if err != nil {
-		return nil, s.rpcInputError(err, bsvjson.ErrRPCInvalidParameter, "")
-	}
-
-	if err = s.utxoStore.UnFreezeUTXOs(ctx, []*utxo.Spend{{TxID: h, Vout: vout, UTXOHash: h}}, s.settings); err != nil {
+	if err = s.utxoStore.UnFreezeUTXOs(ctx, []*utxo.Spend{spend}, s.settings); err != nil {
 		return nil, err
 	}
 
@@ -2933,31 +2966,17 @@ func handleReassign(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan
 
 	c := cmd.(*bsvjson.ReassignCmd)
 
-	var err error
-
-	oldTXIDHash, err := chainhash.NewHashFromStr(c.OldTxID)
+	oldSpend, err := s.alertSpendFromArgs(c.OldTxID, c.OldVout, c.OldUTXOHash)
 	if err != nil {
-		return nil, rpcDecodeHexError(c.OldTxID)
+		return nil, err
 	}
 
-	oldUTXOHash, err := chainhash.NewHashFromStr(c.OldUTXOHash)
+	newUTXOHash, err := parseAlertHash("newutxohash", c.NewUTXOHash)
 	if err != nil {
-		return nil, rpcDecodeHexError(c.OldUTXOHash)
+		return nil, err
 	}
 
-	newUTXOHash, err := chainhash.NewHashFromStr(c.NewUTXOHash)
-	if err != nil {
-		return nil, rpcDecodeHexError(c.NewUTXOHash)
-	}
-
-	oldVout, err := safeconversion.IntToUint32(c.OldVout)
-	if err != nil {
-		return nil, s.rpcInputError(err, bsvjson.ErrRPCInvalidParameter, "")
-	}
-
-	if err = s.utxoStore.ReAssignUTXO(ctx,
-		&utxo.Spend{TxID: oldTXIDHash, Vout: oldVout, UTXOHash: oldUTXOHash},
-		&utxo.Spend{UTXOHash: newUTXOHash}, s.settings); err != nil {
+	if err = s.utxoStore.ReAssignUTXO(ctx, oldSpend, &utxo.Spend{UTXOHash: newUTXOHash}, s.settings); err != nil {
 		return nil, err
 	}
 
