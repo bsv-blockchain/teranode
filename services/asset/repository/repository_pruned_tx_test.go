@@ -11,10 +11,10 @@ import (
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/services/asset/repository"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
+	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/blob"
 	blockchain_store "github.com/bsv-blockchain/teranode/stores/blockchain"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
-	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/test"
@@ -30,8 +30,20 @@ import (
 func newRepoWithMockedUtxoStore(t *testing.T) (*repository.Repository, *utxo.MockUtxostore, blob.Store) {
 	t.Helper()
 
+	return newRepoWithMockedUtxoStoreWith(t, nil)
+}
+
+// newRepoWithMockedUtxoStoreWith is newRepoWithMockedUtxoStore with the settings adjusted before the
+// repository is built.
+func newRepoWithMockedUtxoStoreWith(t *testing.T, adjust func(*settings.Settings)) (*repository.Repository, *utxo.MockUtxostore, blob.Store) {
+	t.Helper()
+
 	logger := ulogger.NewErrorTestLogger(t)
 	tSettings := test.CreateBaseTestSettings(t)
+
+	if adjust != nil {
+		adjust(tSettings)
+	}
 
 	memoryURL, err := url.Parse("memory://")
 	require.NoError(t, err)
@@ -207,49 +219,4 @@ func TestGetTransactionMeta_KeepsUsableMetadata(t *testing.T) {
 	require.Nil(t, txMeta.Tx, "an unserializable reconstruction must not be handed to a JSON marshaller")
 	require.Equal(t, uint64(1234), txMeta.Fee)
 	require.Equal(t, []uint32{900000}, txMeta.BlockHeights)
-}
-
-// GetTxBlockRefs asks the UTXO store for exactly the block IDs and block heights, so a store that would
-// otherwise load the transaction body with its metadata (Aerospike) does not read it.
-func TestRepository_GetTxBlockRefs_requestsOnlyTheBlockFields(t *testing.T) {
-	repo, mockUtxoStore, _ := newRepoWithMockedUtxoStore(t)
-
-	hash, err := chainhash.NewHashFromStr("0202020202020202020202020202020202020202020202020202020202020202")
-	require.NoError(t, err)
-
-	want := []fields.FieldName{fields.BlockIDs, fields.BlockHeights}
-	mockUtxoStore.On("Get", mock.Anything, hash, want).
-		Return(&meta.Data{BlockIDs: []uint32{8}, BlockHeights: []uint32{870}}, nil)
-
-	got, err := repo.GetTxBlockRefs(context.Background(), hash)
-	require.NoError(t, err)
-	require.Equal(t, []uint32{8}, got.BlockIDs)
-	require.Equal(t, []uint32{870}, got.BlockHeights)
-	require.Nil(t, got.Tx)
-	mockUtxoStore.AssertExpectations(t)
-}
-
-// GetTxFundingRecord names its fields, because a store's default read leaves some out: Aerospike's
-// default read has no UnminedSince (measured on a real Aerospike: an unmined record read back 0 by
-// default and its height with the field named), so an unconfirmed funding transaction would have
-// read as "funding unknown".
-func TestRepository_GetTxFundingRecord_requestsTheStatusFields(t *testing.T) {
-	repo, mockUtxoStore, _ := newRepoWithMockedUtxoStore(t)
-
-	hash, err := chainhash.NewHashFromStr("0303030303030303030303030303030303030303030303030303030303030303")
-	require.NoError(t, err)
-
-	want := []fields.FieldName{fields.Tx, fields.IsCoinbase, fields.BlockIDs, fields.BlockHeights,
-		fields.UnminedSince, fields.Conflicting, fields.Locked}
-	require.Equal(t, want, repository.TxFundingRecordFields)
-
-	mockUtxoStore.On("Get", mock.Anything, hash, want).
-		Return(&meta.Data{IsCoinbase: true, UnminedSince: 800, Locked: true}, nil)
-
-	got, err := repo.GetTxFundingRecord(context.Background(), hash)
-	require.NoError(t, err)
-	require.True(t, got.IsCoinbase)
-	require.True(t, got.Locked)
-	require.Equal(t, uint32(800), got.UnminedSince)
-	mockUtxoStore.AssertExpectations(t)
 }

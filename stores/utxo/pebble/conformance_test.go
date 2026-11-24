@@ -56,6 +56,7 @@ func TestConformance(t *testing.T) {
 	t.Run("unspend idempotent", func(t *testing.T) { tests.UnspendIdempotent(t, newTestStore(t)) })
 	t.Run("spend error types", func(t *testing.T) { tests.SpendErrorTypes(t, newTestStore(t)) })
 	t.Run("get spend not found", func(t *testing.T) { tests.GetSpendNotFound(t, newTestStore(t)) })
+	t.Run("get spend hash mismatch", func(t *testing.T) { tests.GetSpendHashMismatch(t, newTestStore(t)) })
 	t.Run("set block height zero", func(t *testing.T) { tests.SetBlockHeightZero(t, newTestStore(t)) })
 	t.Run("set block state contract", func(t *testing.T) { tests.SetBlockStateContract(t, newTestStore(t)) })
 	t.Run("set block state snapshot under concurrency", func(t *testing.T) {

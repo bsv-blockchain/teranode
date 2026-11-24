@@ -377,7 +377,7 @@ func (s *Store) GetSpend(_ context.Context, spend *utxo.Spend) (*utxo.SpendRespo
 				if spend.UTXOHash != nil {
 					utxoHash := chainhash.Hash(b[:32])
 					if !utxoHash.IsEqual(spend.UTXOHash) {
-						return nil, errors.NewProcessingError("utxo hash mismatch", nil)
+						return nil, errors.NewUtxoHashMismatchError("utxo hash mismatch for %s:%d", spend.TxID, spend.Vout)
 					}
 				}
 

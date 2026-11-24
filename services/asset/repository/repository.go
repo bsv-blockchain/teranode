@@ -322,11 +322,13 @@ func (repo *Repository) GetTxMeta(ctx context.Context, hash *chainhash.Hash) (*m
 	return withoutUnserializableTx(txMeta, hash), nil
 }
 
-// GetTxBlockRefs reads only the BlockIDs and BlockHeights fields of a transaction's record. On stores
-// that would otherwise load the transaction body with its metadata (Aerospike), this avoids reading
-// the body, and possibly an external blob, when only the mined blocks are needed.
+// GetTxBlockRefs reads only the BlockIDs, BlockHeights and UnminedSince fields of a transaction's
+// record. On stores that would otherwise load the transaction body with its metadata (Aerospike), this
+// avoids reading the body, and possibly an external blob, when only where the transaction is mined is
+// needed. UnminedSince is named because Aerospike's default read leaves it out, and without it an
+// unmined transaction cannot be told apart from one whose blocks are unknown.
 func (repo *Repository) GetTxBlockRefs(ctx context.Context, hash *chainhash.Hash) (*meta.Data, error) {
-	return repo.UtxoStore.Get(ctx, hash, fields.BlockIDs, fields.BlockHeights)
+	return repo.UtxoStore.Get(ctx, hash, fields.BlockIDs, fields.BlockHeights, fields.UnminedSince)
 }
 
 // TxFundingRecordFields are the fields GetTxFundingRecord reads.
@@ -346,7 +348,15 @@ var TxFundingRecordFields = []fields.FieldName{
 // spent, and the caller needs those positions: on Aerospike a hole is a nil UTXO slot, which GetSpend
 // reads as unspent. The caller must check the transaction (meta.Data.TxIsSerializable and its txid)
 // before trusting a value or script from it, and must never marshal it.
+//
+// The read loads the body, so it shares the GetTransactionMeta permit
+// (asset_concurrency_get_transaction_meta): the configured bound then covers these reads process-wide.
 func (repo *Repository) GetTxFundingRecord(ctx context.Context, hash *chainhash.Hash) (*meta.Data, error) {
+	if err := acquireSemaphorePermit(ctx, repo.semGetTransactionMeta, "GetTransactionMeta"); err != nil {
+		return nil, err
+	}
+	defer releaseSemaphorePermit(repo.semGetTransactionMeta)
+
 	return repo.UtxoStore.Get(ctx, hash, TxFundingRecordFields...)
 }
 
