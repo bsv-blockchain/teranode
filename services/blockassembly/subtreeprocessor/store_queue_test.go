@@ -1247,3 +1247,62 @@ func TestStoreQueue_TheLostAnnouncementSetIsBounded(t *testing.T) {
 
 	require.LessOrEqual(t, len(q.announceLost), announceLostCap)
 }
+
+// The in-place fast path (blockassembly_reorgFastPath) with the store queue: the reorg's awaited
+// stores, its marks and its announcement behave as they do on the slow path. Each chained subtree is
+// stored once, nothing is announced before the marks, and the cut template ends as the whole chain.
+func TestReorgScenario_StoreQueue_WithTheFastPathStoresOnceAndAnnouncesAfterTheMarks(t *testing.T) {
+	for _, fast := range []bool{false, true} {
+		t.Run(map[bool]string{false: "slow", true: "fast"}[fast], func(t *testing.T) {
+			q := NewStoreQueue(1 << 40)
+			set := NewStoredSet()
+			cfg := smallScenarioConfig()
+			cfg.storeQueue, cfg.storedSet = q, set
+			sc := newReorgScenario(t, cfg)
+
+			workers := startQueueWorkers(t, q, set, 4, nil, func() int { return sc.utxo.markCount(true) + sc.utxo.markCount(false) })
+
+			var rec fastPathRun
+
+			path := reorgPath(slowReorgPath)
+			if fast {
+				path = recordingFastPath(&rec)
+			}
+
+			require.NoError(t, path(t, sc))
+
+			if fast {
+				require.True(t, rec.applied, "the fast path applied: %v", rec.reasons)
+			}
+
+			roots := chainRoots(sc.stp)
+			require.NotEmpty(t, roots)
+
+			for root := range roots {
+				require.Equal(t, 1, workers.stores(root), "a subtree is stored once")
+			}
+
+			require.Eventually(t, func() bool {
+				announces := 0
+
+				for _, tk := range workers.bySeq() {
+					if tk.announceOnly {
+						announces++
+					}
+				}
+
+				return announces == len(roots)
+			}, 10*time.Second, 5*time.Millisecond, "every subtree is announced after the reorg")
+
+			for _, tk := range workers.bySeq() {
+				if tk.announces {
+					require.Positive(t, tk.marks, "an announcement was taken before the marks")
+				}
+			}
+
+			data := sc.stp.GetPrecomputedMiningData()
+			require.NotNil(t, data)
+			require.Len(t, data.Subtrees, len(sc.stp.chainedSubtrees), "everything is stored, so the template is the whole chain")
+		})
+	}
+}
