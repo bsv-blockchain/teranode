@@ -34,6 +34,10 @@ type countingRegistryClient struct {
 	onUpdateLastMessageTime   func()
 	failListPeers             error
 	failUpdateConnectionState error
+	// onListBannedPeers runs during ListBannedPeers, before failListBannedPeers
+	// is returned; tests use it to hold a refresh in flight.
+	onListBannedPeers   func()
+	failListBannedPeers error
 }
 
 func newCountingRegistryClient(inner blockchain.PeerRegistryClientI) *countingRegistryClient {
@@ -104,6 +108,12 @@ func (c *countingRegistryClient) IsPeerBanned(ctx context.Context, peerID string
 
 func (c *countingRegistryClient) ListBannedPeers(ctx context.Context) ([]string, error) {
 	c.count("ListBannedPeers")
+	if c.onListBannedPeers != nil {
+		c.onListBannedPeers()
+	}
+	if c.failListBannedPeers != nil {
+		return nil, c.failListBannedPeers
+	}
 	return c.PeerRegistryClientI.ListBannedPeers(ctx)
 }
 

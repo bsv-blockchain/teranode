@@ -10,6 +10,7 @@ import (
 	"time"
 
 	p2pMessageBus "github.com/bsv-blockchain/go-p2p-message-bus"
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/p2p/p2p_api"
 	"github.com/bsv-blockchain/teranode/settings"
@@ -664,4 +665,75 @@ func TestResetReputation_RereadsBanStateImmediately(t *testing.T) {
 	require.NoError(t, err)
 
 	require.False(t, s.shouldSkipBannedPeer(pid.String(), "test"), "a reset must re-read the registry rather than serve the stale ban")
+}
+
+// A failed refresh keeps the last good banned set in force and is not retried
+// until the next interval: one registry fault must neither unban every peer
+// nor turn each lookup into a round-trip.
+func TestRefreshBannedPeers_FailureKeepsLastGoodSet(t *testing.T) {
+	s, reg := newServerWithLocalRegistry(t)
+	pid := mustNewPeerID(t)
+	banPeerInRegistry(t, reg, pid)
+
+	counting := newCountingRegistryClient(s.peerRegistry)
+	s.peerRegistry = counting
+
+	s.primeBannedPeers()
+	require.True(t, s.isRegistryBanned(pid.String()), "precondition: the primed mirror holds the ban")
+	require.Equal(t, 1, counting.callCount("ListBannedPeers"))
+
+	counting.failListBannedPeers = errors.NewServiceError("registry unavailable")
+	s.bannedPeers.invalidate()
+
+	require.True(t, s.isRegistryBanned(pid.String()), "a failed refresh must keep the last good banned set")
+	require.Equal(t, 2, counting.callCount("ListBannedPeers"), "the stale mirror attempted one refresh")
+
+	require.True(t, s.isRegistryBanned(pid.String()))
+	require.Equal(t, 2, counting.callCount("ListBannedPeers"), "a failed refresh is not retried until the next interval")
+}
+
+// A refresh that fails while a reset happens must not stamp the mirror fresh:
+// the reset asked for a re-list on the next lookup, and the failed listing
+// predates it.
+func TestRefreshBannedPeers_FailureAcrossResetStillReLists(t *testing.T) {
+	s, reg := newServerWithLocalRegistry(t)
+	pid := mustNewPeerID(t)
+	banPeerInRegistry(t, reg, pid)
+
+	counting := newCountingRegistryClient(s.peerRegistry)
+	s.peerRegistry = counting
+	s.primeBannedPeers()
+	require.Equal(t, 1, counting.callCount("ListBannedPeers"))
+
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	counting.onListBannedPeers = func() {
+		close(entered)
+		<-release
+	}
+	counting.failListBannedPeers = errors.NewServiceError("registry unavailable")
+	s.bannedPeers.invalidate()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		s.isRegistryBanned(pid.String())
+	}()
+
+	<-entered
+
+	_, err := s.ResetReputation(context.Background(), &p2p_api.ResetReputationRequest{PeerId: pid.String()})
+	require.NoError(t, err)
+
+	close(release)
+	<-done
+
+	counting.onListBannedPeers = nil
+	counting.failListBannedPeers = nil
+
+	stale, _ := s.bannedPeers.state(time.Now())
+	require.True(t, stale, "a refresh that failed across a reset must not stamp the mirror fresh")
+
+	require.True(t, s.isRegistryBanned(pid.String()), "the re-list after the reset reads the registry, which still bans the peer")
+	require.Equal(t, 3, counting.callCount("ListBannedPeers"), "the lookup after the reset re-lists")
 }
