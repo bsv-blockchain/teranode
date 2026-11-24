@@ -96,6 +96,20 @@ func TestConflictingStatementsNeverScanTheirTables(t *testing.T) {
 		}
 	})
 
+	// The transaction-row flips run before the UTXO update as statements of their own (see
+	// setConflictingSQL), so their plans are pinned on their own too.
+	t.Run("setConflictingIdentSQL", func(t *testing.T) {
+		for _, g := range p.leaves {
+			assertKeyed(t, explainUnderNoNestloop(t, s, ctx, setConflictingIdentSQL,
+				g.leaf, g.txids, true, FlagConflicting))
+		}
+	})
+
+	t.Run("setConflictingMinedSQL", func(t *testing.T) {
+		assertKeyed(t, explainUnderNoNestloop(t, s, ctx, setConflictingMinedSQL,
+			p.kTxid, true, FlagConflicting))
+	})
+
 	t.Run("conflictingReadSQL", func(t *testing.T) {
 		root := explainUnderNoNestloop(t, s, ctx, conflictingReadSQL,
 			p.kRef, p.kTxid, p.kLo, p.kHi,

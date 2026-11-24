@@ -448,6 +448,130 @@ func TestUnspendRacingAConflictingClearBelowTheLookupFloorWaitsForIt(t *testing.
 		"the restored coin must not keep a conflicting mark its transaction lost while the restore waited")
 }
 
+// conflictingParentSpent is the fixture for the restore-against-SetConflicting race: a parent,
+// conflicting or not, its output 0 spent by a loser, through IgnoreConflicting when the parent
+// is conflicting. With stamped set, the parent is mined and stamped first, so its conflicting bit
+// lives only on its containment row in tx_mined; otherwise it lives on its identity row. It
+// returns the parent and the loser's spends.
+func conflictingParentSpent(t *testing.T, s *Store, ctx context.Context, stamped, conflicting bool) (*bt.Tx, []*utxo.Spend) {
+	t.Helper()
+
+	require.NoError(t, s.SetBlockHeight(100))
+
+	parent := mkTx(t, 2, 10_000)
+	_, err := s.Create(ctx, parent, 100)
+	require.NoError(t, err)
+
+	spendAt := uint32(101)
+
+	if stamped {
+		_, err = s.SetMinedMulti(ctx, []*chainhash.Hash{parent.TxIDChainHash()},
+			utxo.MinedBlockInfo{BlockID: 7, BlockHeight: 100, OnLongestChain: true})
+		require.NoError(t, err)
+
+		spendAt = stampThrough(t, s, ctx, 0, map[uint32]uint32{100: 7}) + 1
+		require.NoError(t, s.SetBlockHeight(spendAt))
+
+		require.False(t, identExists(t, s, ctx, parent), "fixture: the stamp deleted the identity row")
+		require.Equal(t, 1, minedRows(t, s, ctx, parent), "fixture: the containment row is the only record")
+	}
+
+	if conflicting {
+		_, _, err = s.SetConflicting(ctx, []chainhash.Hash{*parent.TxIDChainHash()}, true)
+		require.NoError(t, err)
+	}
+
+	spends, err := spendOnly(ctx, s, spendParentTx(t, parent, nil, 1_000, 0), spendAt,
+		utxo.WithIgnoreConflicting(conflicting))
+	require.NoError(t, err)
+	require.Len(t, spends, 1)
+
+	return parent, spends
+}
+
+// requireRestoredCoinConflicting checks the restored coin carries the conflicting bit the change
+// left on its transaction.
+func requireRestoredCoinConflicting(t *testing.T, s *Store, ctx context.Context, parent *bt.Tx, conflicting bool) {
+	t.Helper()
+
+	require.Nil(t, spenderOf(t, s, ctx, parent, 0))
+	require.Equal(t, conflicting, utxoFlagsOf(t, s, ctx, parent, 0)&FlagConflicting != 0,
+		"the restored coin must carry its transaction's conflicting bit as SetConflicting left it")
+}
+
+// TestSetConflictingRacingAnUnspendWaitsForIt: a parent marked conflicting while its coin is
+// being restored, restore first. The restore has share-locked the parent's identity row and
+// inserted the coin, not yet committed. SetConflicting's row update waits on the share lock. When
+// that update shared a statement with the coin update, the coin update read the snapshot taken
+// before the wait, missed the coin, and left a live coin of a conflict loser without the bit, so
+// the spend path's flag mask let a mempool transaction spend it.
+func TestSetConflictingRacingAnUnspendWaitsForIt(t *testing.T) {
+	s, ctx := newTestStore(t)
+
+	parent, spends := conflictingParentSpent(t, s, ctx, false, false)
+
+	restoreWhileChangeRuns(t, s, ctx, setConflictingTo(s, parent, true), spends)
+	requireRestoredCoinConflicting(t, s, ctx, parent, true)
+}
+
+// TestClearingConflictingRacingAnUnspendWaitsForIt: the clear, restore first. The restore read the
+// bit as set, so a coin update that missed the coin left it refused after its transaction was
+// cleared.
+func TestClearingConflictingRacingAnUnspendWaitsForIt(t *testing.T) {
+	s, ctx := newTestStore(t)
+
+	parent, spends := conflictingParentSpent(t, s, ctx, false, true)
+
+	restoreWhileChangeRuns(t, s, ctx, setConflictingTo(s, parent, false), spends)
+	requireRestoredCoinConflicting(t, s, ctx, parent, false)
+}
+
+// TestSetConflictingOfAContainmentRowRacingAnUnspendWaitsForIt: the stamped case, restore first.
+// The parent's only row is its containment row, so the containment update is the one that waits
+// on the restore's share lock, and it has to finish before the coin update starts.
+func TestSetConflictingOfAContainmentRowRacingAnUnspendWaitsForIt(t *testing.T) {
+	s, ctx := newTestStore(t)
+
+	parent, spends := conflictingParentSpent(t, s, ctx, true, false)
+
+	restoreWhileChangeRuns(t, s, ctx, setConflictingTo(s, parent, true), spends)
+	requireRestoredCoinConflicting(t, s, ctx, parent, true)
+}
+
+// TestClearingConflictingOfAContainmentRowRacingAnUnspendWaitsForIt: the stamped clear, restore
+// first.
+func TestClearingConflictingOfAContainmentRowRacingAnUnspendWaitsForIt(t *testing.T) {
+	s, ctx := newTestStore(t)
+
+	parent, spends := conflictingParentSpent(t, s, ctx, true, true)
+
+	restoreWhileChangeRuns(t, s, ctx, setConflictingTo(s, parent, false), spends)
+	requireRestoredCoinConflicting(t, s, ctx, parent, false)
+}
+
+// TestUnspendRacingSetConflictingWaitsForIt: the mark first. SetConflicting has run every
+// statement and not committed when the restore starts, so its coin update cannot have seen the
+// coin. The restore waits on the parent's identity row and reads the bit as it is left.
+func TestUnspendRacingSetConflictingWaitsForIt(t *testing.T) {
+	s, ctx := newTestStore(t)
+
+	parent, spends := conflictingParentSpent(t, s, ctx, false, false)
+
+	changeWhileRestoreRuns(t, s, ctx, setConflictingTo(s, parent, true), spends)
+	requireRestoredCoinConflicting(t, s, ctx, parent, true)
+}
+
+// TestUnspendRacingSetConflictingOfAContainmentRowWaitsForIt: the mark first, stamped parent, so
+// the restore waits on the containment row.
+func TestUnspendRacingSetConflictingOfAContainmentRowWaitsForIt(t *testing.T) {
+	s, ctx := newTestStore(t)
+
+	parent, spends := conflictingParentSpent(t, s, ctx, true, false)
+
+	changeWhileRestoreRuns(t, s, ctx, setConflictingTo(s, parent, true), spends)
+	requireRestoredCoinConflicting(t, s, ctx, parent, true)
+}
+
 // TestUnspendCutByItsDeadlineLeavesTheUndoRecord: nothing in the store bounds the restore's wait
 // for the rows it share-locks, so the caller's deadline does. A restore cut while it waits must
 // return an error and roll back whole, the coin still spent and its undo record still there, so a

@@ -98,9 +98,10 @@ ON CONFLICT DO NOTHING`
 // both answers the caller needs.
 //
 // THE FLIP AND THE READ ARE SEPARATE STATEMENTS, and the split is a correctness requirement.
-// runConflictingPlan runs this statement once per leaf group, in ascending leaf order, and then
-// runs the read: N+1 statements in one READ COMMITTED transaction, which keeps every row lock it
-// takes until the commit, across all of those round trips. A child whose spend of one of these
+// runConflictingPlan runs the transaction-row flips (setConflictingIdentSQL once per leaf group,
+// then setConflictingMinedSQL), then this statement once per leaf group, in ascending leaf order,
+// and then the read: 2N+2 statements in one READ COMMITTED transaction, which keeps every row lock
+// it takes until the commit, across all of those round trips. A child whose spend of one of these
 // UTXOs is in flight holds that UTXO's row lock, so the UTXO update below waits for it; when the
 // child commits, the row is gone and the update skips it. The child's journal row committed in
 // the same instant, and the read that names the children has to see it. Inside one statement it
@@ -115,11 +116,24 @@ ON CONFLICT DO NOTHING`
 // flag mask, including one that was waiting on a flip's row lock, whose predicate READ COMMITTED
 // re-evaluates against the new row version (TestSpendWaitingOnSetConflictingIsRefused).
 //
+// THE TRANSACTION ROWS ARE FLIPPED BEFORE THIS STATEMENT RUNS, in statements of their own, and
+// that split is a correctness requirement too, the one setLockedSQL's comment gives for the lock.
+// Unspend share-locks the identity and containment rows it reads the conflicting bit from. A
+// restore that has inserted a coin and not committed makes the row flips wait for its commit, and
+// a UTXO update in the same statement as those flips would still read the snapshot taken before
+// the wait: it missed the coin, and a live coin of a conflict loser kept no conflicting bit, so the
+// spend path's flag mask let a mempool transaction spend it. Nothing corrected the coin after
+// that. As a later statement this update takes its snapshot after the wait and finds the coin
+// (TestSetConflictingRacingAnUnspendWaitsForIt and its siblings in unspend_test.go). The other
+// order needs nothing from here: a restore that starts after the flips waits on its share lock
+// and reads the bit they leave.
+//
 // Holding locks across round trips widens the window for a deadlock with a caller that takes the
-// same rows in another order. Within each statement the UTXO update runs before the identity and
-// membership arms, while setLockedOnce takes the identity rows first, so a concurrent SetLocked on
-// an overlapping set can deadlock with this. SetConflicting runs the whole transaction under
-// withDeadlockRetry, the cure the store uses for the same race between SetLocked and the mine.
+// same rows in another order. The order here is now SetLocked's (identity rows by leaf group, then
+// containment rows, then UTXO rows), but an overlapping SetLocked, mine or restore can still cross
+// this when they name several of the same transactions, because each takes its rows of one table
+// in its own order. SetConflicting runs the whole transaction under withDeadlockRetry, the cure
+// the store uses for the same race between SetLocked and the mine.
 //
 // BOTH rows, for the reason setLockedSQL gives: the identity row is what a metadata read
 // shows, the UTXO row is what the spend path reads, and the spend path never looks at the
@@ -160,11 +174,12 @@ ON CONFLICT DO NOTHING`
 //     became a hash join over a sequential scan of every partition, 4.9 s at 16,000.
 //
 // This shape measured 46-57 ms at 16,000 outputs and 159-227 ms at 64,000, the same with nested
-// loops on or off. The identity and membership arms match the per-leaf constant arrays
-// directly, in setLockedIdentSQL's leaf-scalar shape, and
-// TestConflictingStatementsNeverScanTheirTables pins all of it.
+// loops on or off. The identity and membership statements match constant arrays directly, the
+// identity one in setLockedIdentSQL's leaf-scalar shape, and
+// TestConflictingStatementsNeverScanTheirTables pins all three.
 //
-// The flag is flipped on THREE things, not two, for the same reason setLockedSQL flips three.
+// The flag is flipped on THREE things, not two, for the same reason setLockedSQL flips three:
+// this statement and the two that run before it.
 // A transaction lives in exactly one of tx_ident and tx_mined and this statement does not know
 // which; a contested parent is very often mined, which is the whole reason the note itself
 // became a side table. minedRow.toMeta reads Conflicting straight off tx_mined.flags, copied
@@ -197,20 +212,6 @@ ON CONFLICT DO NOTHING`
 // flips on the same transaction at the same time: the losing call would act on its affected
 // outputs and children as if its flip had landed. No path that overlaps them is known today.
 const setConflictingSQL = `
-WITH ident AS (
-    UPDATE tx_ident i
-       SET flags = CASE WHEN $5::boolean THEN i.flags |  $6::smallint
-                                         ELSE i.flags & ~$6::smallint END
-     WHERE i.leaf = $1::smallint AND i.txid = ANY ($2::bytea[])
-       AND ((i.flags & $6::smallint) <> 0) <> $5::boolean
-),
-mined AS (
-    UPDATE tx_mined m
-       SET flags = CASE WHEN $5::boolean THEN m.flags |  $6::smallint
-                                         ELSE m.flags & ~$6::smallint END
-     WHERE m.txid = ANY ($2::bytea[])
-       AND ((m.flags & $6::smallint) <> 0) <> $5::boolean
-)
 UPDATE utxo u
    SET flags = CASE WHEN $5::boolean THEN u.flags |  $6::smallint
                                      ELSE u.flags & ~$6::smallint END
@@ -226,6 +227,29 @@ UPDATE utxo u
           ) AS c))
    AND u.txid = ANY ($2::bytea[])
    AND ((u.flags & $6::smallint) <> 0) <> $5::boolean`
+
+// setConflictingIdentSQL is the identity arm of SetConflicting, run once per leaf group before
+// setConflictingSQL in the same transaction, with the leaf as a scalar. See setConflictingSQL for
+// why it is a statement of its own and for the changed-bit test, which READ COMMITTED's recheck
+// applies to the row as it stands after a wait.
+const setConflictingIdentSQL = `
+UPDATE tx_ident i
+   SET flags = CASE WHEN $3::boolean THEN i.flags |  $4::smallint
+                                     ELSE i.flags & ~$4::smallint END
+ WHERE i.leaf = $1::smallint AND i.txid = ANY ($2::bytea[])
+   AND ((i.flags & $4::smallint) <> 0) <> $3::boolean`
+
+// setConflictingMinedSQL is the membership arm of SetConflicting, run once for every named
+// transaction after the identity arm and before setConflictingSQL. It writes every containment
+// row of the transaction, at any height, because Unspend reads the conflicting bit from the
+// dropped floor up. A plain txid equality is one descent per key per partition, because tx_mined's
+// primary key leads with txid.
+const setConflictingMinedSQL = `
+UPDATE tx_mined m
+   SET flags = CASE WHEN $2::boolean THEN m.flags |  $3::smallint
+                                     ELSE m.flags & ~$3::smallint END
+ WHERE m.txid = ANY ($1::bytea[])
+   AND ((m.flags & $3::smallint) <> 0) <> $2::boolean`
 
 // conflictingReadSQL reads back the spends to undo and the next level of the cascade, after
 // setConflictingSQL has run in the same transaction. See setConflictingSQL for why it is a
@@ -616,11 +640,26 @@ func (p *conflictingPlan) groupByLeaf() {
 	}
 }
 
-// runConflictingPlan flips the flags and then reads back both answers, as separate statements so
-// the read sees every spend that committed while a flip waited on its row locks. q must be a
+// runConflictingPlan flips the flags, transaction rows before UTXO rows, and then reads back both
+// answers, as separate statements so the read sees every spend that committed while a flip waited
+// on its row locks. q must be a
 // transaction for them to be atomic; SetConflicting always passes one.
 func (s *Store) runConflictingPlan(ctx context.Context, q querier, p *conflictingPlan,
 	value bool) ([]*utxo.Spend, []chainhash.Hash, error) {
+	// The transaction rows first, every leaf group and then the containment rows, and only then
+	// the UTXO rows, so each UTXO update takes its snapshot after any wait on a restore's share
+	// lock (see setConflictingSQL).
+	for _, g := range p.leaves {
+		if _, err := q.Exec(ctx, setConflictingIdentSQL,
+			g.leaf, g.txids, value, FlagConflicting); err != nil {
+			return nil, nil, errors.NewStorageError("[utxoset][SetConflicting] set ident", err)
+		}
+	}
+
+	if _, err := q.Exec(ctx, setConflictingMinedSQL, p.kTxid, value, FlagConflicting); err != nil {
+		return nil, nil, errors.NewStorageError("[utxoset][SetConflicting] set containment", err)
+	}
+
 	for _, g := range p.leaves {
 		if _, err := q.Exec(ctx, setConflictingSQL,
 			g.leaf, g.txids, g.lo, g.hi, value, FlagConflicting); err != nil {
