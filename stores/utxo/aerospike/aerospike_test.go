@@ -439,7 +439,6 @@ func TestLargeTxStoresExternally(t *testing.T) {
 	require.Error(t, err) // DAH should NOT be created for external stores
 }
 
-// TestStore_SimpleGetters tests simple getter methods that don't require Aerospike connection
 // The placeholder key fills unused batch slots. New sets it once, so a later store never rewrites
 // the key that earlier stores' batchers read.
 func TestNewSetsThePlaceholderKeyOnce(t *testing.T) {
@@ -456,6 +455,7 @@ func TestNewSetsThePlaceholderKeyOnce(t *testing.T) {
 	require.Same(t, first, placeholderKey)
 }
 
+// TestStore_SimpleGetters tests simple getter methods that don't require Aerospike connection
 func TestStore_SimpleGetters(t *testing.T) {
 	// Create a basic store instance for testing getters
 	store := &Store{
