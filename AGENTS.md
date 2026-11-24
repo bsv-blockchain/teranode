@@ -118,7 +118,9 @@ Test file layout:
   the package's fixture in the same PR. A package with no table or fixture gets one
   the first time a PR adds tests there.
 - Where a shared fixture uses a mock, it registers every expectation a test relies
-  on as required, never `.Maybe()`, so a call the code stops making still fails.
+  on as required, never `.Maybe()`, and asserts expectations after the test (for
+  example, with `t.Cleanup(func() { mockClient.AssertExpectations(t) })`). A
+  required expectation alone does not fail when the call is missing.
 - A store test that must pass on SQLite and PostgreSQL is one test body over a
   backend loop, with a per-case timeout so a hang fails by name. No `_SQLite` and
   `_Postgres` copies. Start PostgreSQL with `test/utils/postgres`, not
