@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/stretchr/testify/require"
@@ -323,4 +324,41 @@ func TestReorgScenario_FastPathDispatcherAnswersBeforeTheDrainRuns(t *testing.T)
 	for _, id := range arrivals {
 		require.Contains(t, hashes, sc.hash(id))
 	}
+}
+
+// The union is kept for the tip it was built for: once a block moves the tip on, it is released even
+// though the queue still holds a batch.
+func TestReorgScenario_FastPathReleasesTheUnionWhenTheTipMoves(t *testing.T) {
+	sc, _ := newDeferredDrainScenario(t)
+	sc.stp.settings.BlockAssembly.DoubleSpendWindow = time.Hour
+
+	queueIntake(t, sc, 0, 3) // held back by the window, so the queue is never empty
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	sc.stp.Start(ctx)
+
+	require.NoError(t, sc.stp.Reorg([]*model.Block{sc.lost}, sc.forward))
+	require.Eventually(t, func() bool { return !sc.stp.DrainingAfterBlock() }, 5*time.Second, time.Millisecond)
+	require.EqualValues(t, 3, sc.stp.QueueLength())
+	require.NotNil(t, sc.stp.reorgFilter.Load(), "the union is kept while the queue holds a batch")
+
+	// an empty block on top of the last winner: it moves the tip and mines nothing
+	tip := sc.forward[len(sc.forward)-1]
+	header := &model.BlockHeader{
+		Version:        1,
+		HashPrevBlock:  tip.Header.Hash(),
+		HashMerkleRoot: &chainhash.Hash{},
+		Timestamp:      tip.Header.Timestamp + 1,
+		Nonce:          777,
+	}
+	next := &model.Block{Height: tip.Height + 1, Header: header, CoinbaseTx: scenarioCoinbase(t, tip.Height+1, 777, 0), Subtrees: []*chainhash.Hash{}}
+
+	require.NoError(t, sc.stp.MoveForwardBlock(next))
+	require.Equal(t, *header.Hash(), *sc.stp.GetCurrentBlockHeader().Hash())
+	require.EqualValues(t, 3, sc.stp.QueueLength(), "the window still holds the batch")
+
+	require.Eventually(t, func() bool { return sc.stp.reorgFilter.Load() == nil }, 5*time.Second, time.Millisecond,
+		"a tip that moved releases the union although the queue is not empty")
 }

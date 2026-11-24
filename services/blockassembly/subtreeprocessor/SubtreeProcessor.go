@@ -1072,6 +1072,8 @@ func (stp *SubtreeProcessor) Start(ctx context.Context) {
 					stp.setCurrentRunningState(StateRunning)
 
 				case reorgReq := <-stp.reorgBlockChan:
+					reorgSucceeded := false
+
 					reorgReq.errChan <- stp.runHandlerWithRecover("reorgBlocks", func() error {
 						stp.setCurrentRunningState(StateReorg)
 						logger.Infof("[SubtreeProcessor] reorgReq subtree processor: %d, %d", len(reorgReq.moveBackBlocks), len(reorgReq.moveForwardBlocks))
@@ -1085,13 +1087,17 @@ func (stp *SubtreeProcessor) Start(ctx context.Context) {
 
 							// set before the response goes out, as for a block's deferred drain
 							stp.announceDeferredReorgDrain()
+
+							reorgSucceeded = true
 						}
 
 						logger.Infof("[SubtreeProcessor] reorgReq subtree processor DONE: %d, %d", len(reorgReq.moveBackBlocks), len(reorgReq.moveForwardBlocks))
 						return reorgErr
 					})
 
-					stp.runDeferredReorgDrain(processorCtx)
+					if reorgSucceeded {
+						stp.runDeferredReorgDrain(processorCtx)
+					}
 
 					stp.setCurrentRunningState(StateRunning)
 
