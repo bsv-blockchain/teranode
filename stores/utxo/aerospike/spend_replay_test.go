@@ -150,8 +150,7 @@ func (f *replayFixture) keyOf(hash *chainhash.Hash) *aerospike.Key {
 func (f *replayFixture) prune(height uint32) {
 	f.t.Helper()
 
-	astore.ResetPrunerServiceForTests()
-	f.t.Cleanup(astore.ResetPrunerServiceForTests)
+	astore.UsePrunerServiceForTest(f.t)
 
 	require.NoError(f.t, f.store.CreateIndexIfNotExists(f.ctx, apruner.IndexName, fields.DeleteAtHeight.String(), aerospike.NUMERIC))
 	require.NoError(f.t, f.store.WaitForIndexReady(f.ctx, apruner.IndexName))

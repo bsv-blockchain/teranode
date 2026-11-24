@@ -2,6 +2,9 @@ package aerospike
 
 import (
 	"context"
+	"strings"
+	"sync"
+	"testing"
 
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
@@ -137,4 +140,51 @@ func (s *Store) LeaveSharedClientOpenOnClose() {
 	u := *s.url
 	u.Host = "client-shared-with-other-test-stores"
 	s.url = &u
+}
+
+// prunerServiceHolder is the test using the process-wide pruner service singleton, if any.
+var (
+	prunerServiceHolderMu   sync.Mutex
+	prunerServiceHolderCond = sync.NewCond(&prunerServiceHolderMu)
+	prunerServiceHolder     string
+)
+
+// UsePrunerServiceForTest gives the calling test the pruner service singleton until it ends:
+// GetPrunerService hands every store in the process the same service, built for the first store
+// that asks, so two tests on different servers that prune at the same time would share one. It
+// waits for any other test using it, and resets the singleton now and when the test ends. A
+// subtest of the holder, or the holder asking again, goes straight through.
+func UsePrunerServiceForTest(t testing.TB) {
+	t.Helper()
+
+	prunerServiceHolderMu.Lock()
+
+	holds := func() bool {
+		return prunerServiceHolder != "" && (t.Name() == prunerServiceHolder || strings.HasPrefix(t.Name(), prunerServiceHolder+"/"))
+	}
+
+	if holds() {
+		prunerServiceHolderMu.Unlock()
+		ResetPrunerServiceForTests()
+
+		return
+	}
+
+	for prunerServiceHolder != "" {
+		prunerServiceHolderCond.Wait()
+	}
+
+	prunerServiceHolder = t.Name()
+	prunerServiceHolderMu.Unlock()
+
+	ResetPrunerServiceForTests()
+
+	t.Cleanup(func() {
+		ResetPrunerServiceForTests()
+
+		prunerServiceHolderMu.Lock()
+		prunerServiceHolder = ""
+		prunerServiceHolderMu.Unlock()
+		prunerServiceHolderCond.Broadcast()
+	})
 }

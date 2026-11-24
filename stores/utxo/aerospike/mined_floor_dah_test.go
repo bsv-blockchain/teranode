@@ -542,8 +542,7 @@ func TestSetConflictingRaisesPaginatedMasterAndPagesToMinedFloor(t *testing.T) {
 
 	require.NoError(t, store.SetBlockHeight(floorCachedTip))
 
-	teranode_aerospike.ResetPrunerServiceForTests()
-	t.Cleanup(teranode_aerospike.ResetPrunerServiceForTests)
+	teranode_aerospike.UsePrunerServiceForTest(t)
 	require.NoError(t, store.CreateIndexIfNotExists(ctx, apruner.IndexName, fields.DeleteAtHeight.String(), aerospike.NUMERIC))
 	require.NoError(t, store.WaitForIndexReady(ctx, apruner.IndexName))
 
@@ -642,8 +641,7 @@ func TestIncrementSpentRecordsMultiStampsConflictingPagesAtMinedFloor(t *testing
 func floorPrunerService(ctx context.Context, t *testing.T, store *teranode_aerospike.Store) *apruner.Service {
 	t.Helper()
 
-	teranode_aerospike.ResetPrunerServiceForTests()
-	t.Cleanup(teranode_aerospike.ResetPrunerServiceForTests)
+	teranode_aerospike.UsePrunerServiceForTest(t)
 	require.NoError(t, store.CreateIndexIfNotExists(ctx, apruner.IndexName, fields.DeleteAtHeight.String(), aerospike.NUMERIC))
 	require.NoError(t, store.WaitForIndexReady(ctx, apruner.IndexName))
 

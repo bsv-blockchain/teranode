@@ -1793,8 +1793,7 @@ func TestSmokeTests(t *testing.T) {
 		// Pruner service is a process-wide singleton. Reset at both ends so
 		// this subtest doesn't leak a started service into later aerospike
 		// tests that expect GetPrunerService() to initialize fresh state.
-		teranode_aerospike.ResetPrunerServiceForTests()
-		t.Cleanup(teranode_aerospike.ResetPrunerServiceForTests)
+		teranode_aerospike.UsePrunerServiceForTest(t)
 		_ = store.Delete(ctx, tests.TXHash)
 		_ = store.Delete(ctx, tests.ParentTx.TxIDChainHash())
 

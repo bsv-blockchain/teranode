@@ -121,8 +121,7 @@ func runPruneWorkload(t *testing.T, w pruneWorkload, children int) pruneResult {
 
 	seedPruneWorkload(t, ctx, store, w, children)
 
-	astore.ResetPrunerServiceForTests()
-	defer astore.ResetPrunerServiceForTests()
+	astore.UsePrunerServiceForTest(t)
 
 	require.NoError(t, store.CreateIndexIfNotExists(ctx, apruner.IndexName, fields.DeleteAtHeight.String(), aerospike.NUMERIC))
 	require.NoError(t, store.WaitForIndexReady(ctx, apruner.IndexName))

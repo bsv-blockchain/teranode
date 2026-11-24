@@ -36,8 +36,7 @@ func TestMarkTransactionsOnLongestChain_RestampsDAH(t *testing.T) {
 	retention := s.GetUtxoStoreBlockHeightRetention()
 	require.NotZero(t, retention)
 
-	astore.ResetPrunerServiceForTests()
-	t.Cleanup(astore.ResetPrunerServiceForTests)
+	astore.UsePrunerServiceForTest(t)
 	require.NoError(t, store.CreateIndexIfNotExists(ctx, apruner.IndexName, fields.DeleteAtHeight.String(), aerospike.NUMERIC))
 	require.NoError(t, store.WaitForIndexReady(ctx, apruner.IndexName))
 

@@ -146,8 +146,7 @@ func TestPrunerDeletesConflictingLoserWithReleasedUncontestedInput(t *testing.T)
 	require.NoError(t, err)
 	require.Nil(t, qSpend.SpendingData, "fixture: ProcessConflicting released the uncontested Q:0")
 
-	astore.ResetPrunerServiceForTests()
-	t.Cleanup(astore.ResetPrunerServiceForTests)
+	astore.UsePrunerServiceForTest(t)
 	require.NoError(t, store.CreateIndexIfNotExists(ctx, apruner.IndexName, fields.DeleteAtHeight.String(), aerospike.NUMERIC))
 	require.NoError(t, store.WaitForIndexReady(ctx, apruner.IndexName))
 
