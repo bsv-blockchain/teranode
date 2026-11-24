@@ -74,11 +74,11 @@ func TestBlockCorruptGRPCSurvival(t *testing.T) {
 	require.False(t, Is(wrapped, ErrBlockInvalid))
 }
 
-// TestBlockCorruptSurvivesRealServerWrapper reproduces the exact shape the stateless
-// block-validation RPC uses: the block.Valid corrupt error is re-wrapped
-// in an OUTER corrupt error carrying RPC context and then sent through WrapGRPC. The
-// classification must survive so the gRPC caller sees corrupt, not block-invalid.
-func TestBlockCorruptSurvivesRealServerWrapper(t *testing.T) {
+// TestBlockCorruptSurvivesCorruptWrapper pins this package's behaviour: a corrupt error re-wrapped
+// in an outer corrupt error and sent through WrapGRPC still classifies as corrupt and not as
+// block-invalid. It does not describe Server.ValidateBlock, which still wraps a block.Valid
+// failure in NewBlockInvalidError (the counter-example below).
+func TestBlockCorruptSurvivesCorruptWrapper(t *testing.T) {
 	inner := NewBlockCorruptError("[BLOCK] merkle root does not match")
 	outer := NewBlockCorruptError("[ValidateBlock] block body is corrupt", inner)
 
@@ -91,9 +91,9 @@ func TestBlockCorruptSurvivesRealServerWrapper(t *testing.T) {
 	require.True(t, IsBlockCorrupt(unwrapped))
 	require.False(t, Is(unwrapped, ErrBlockInvalid))
 
-	// Counter-example documenting WHY the fix matters: had the RPC wrapped the corrupt
-	// cause in NewBlockInvalidError (the pre-fix behaviour), errors.Is(ErrBlockInvalid)
-	// would become true — the exact bug the corrupt outer wrapper above avoids.
+	// Counter-example: wrapping a corrupt cause in NewBlockInvalidError makes
+	// errors.Is(ErrBlockInvalid) true as well. That is what Server.ValidateBlock does today; it
+	// stores nothing, so it only affects how its callers read the error.
 	buggy := WrapGRPC(NewBlockInvalidError("block is not valid", inner))
 	require.True(t, Is(buggy, ErrBlockInvalid),
 		"wrapping a corrupt cause in block-invalid leaks it as block-invalid — do not do this")

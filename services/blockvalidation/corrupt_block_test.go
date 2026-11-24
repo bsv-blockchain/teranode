@@ -2,6 +2,7 @@ package blockvalidation
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -14,6 +15,7 @@ import (
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
+	"github.com/bsv-blockchain/teranode/services/blockchain/blockchain_api"
 	"github.com/bsv-blockchain/teranode/services/subtreevalidation"
 	"github.com/bsv-blockchain/teranode/stores/blob"
 	utxostore "github.com/bsv-blockchain/teranode/stores/utxo"
@@ -461,4 +463,165 @@ func TestRunOncePerBlock_CorruptResultIsNotShared(t *testing.T) {
 
 	require.True(t, errors.IsBlockCorrupt(<-firstDone))
 	require.NoError(t, <-secondDone, "the waiting caller must validate its own body")
+}
+
+// corruptRevalidationBlock re-mines the revalidation fixture's block over a merkle root its body
+// does not hash to, so block.Valid returns a corrupt verdict.
+func corruptRevalidationBlock(t *testing.T, block *model.Block) {
+	t.Helper()
+
+	block.Header.HashMerkleRoot = &chainhash.Hash{0x01}
+	block.Header.Nonce = 0
+
+	for {
+		if ok, _, _ := block.Header.HasMetTargetDifficulty(); ok {
+			return
+		}
+
+		block.Header.Nonce++
+	}
+}
+
+func invalidateBlockCalls(m *blockchain.Mock) int {
+	n := 0
+
+	for _, call := range m.Calls {
+		if call.Method == "InvalidateBlock" {
+			n++
+		}
+	}
+
+	return n
+}
+
+// TestReValidateBlock_CorruptVerdictInvalidatesOnlyOptimisticallyAddedBlocks: a body optimistic
+// mining already added to the chain has to come off it, and the only way is InvalidateBlock. A
+// block that was never added must not have its hash condemned by a corrupt verdict.
+func TestReValidateBlock_CorruptVerdictInvalidatesOnlyOptimisticallyAddedBlocks(t *testing.T) {
+	t.Run("optimistically added", func(t *testing.T) {
+		bv, block, mockBlockchain, _ := setupRevalidateBlockTest(t)
+		corruptRevalidationBlock(t, block)
+
+		err := bv.reValidateBlock(revalidateBlockData{block: block, baseURL: "test", optimisticallyAdded: true})
+		require.True(t, errors.IsBlockCorrupt(err), "expected corrupt, got: %v", err)
+		require.Equal(t, 1, invalidateBlockCalls(mockBlockchain))
+	})
+
+	t.Run("not added", func(t *testing.T) {
+		bv, block, mockBlockchain, _ := setupRevalidateBlockTest(t)
+		corruptRevalidationBlock(t, block)
+
+		err := bv.reValidateBlock(revalidateBlockData{block: block, baseURL: "test"})
+		require.True(t, errors.IsBlockCorrupt(err), "expected corrupt, got: %v", err)
+		require.Zero(t, invalidateBlockCalls(mockBlockchain))
+	})
+}
+
+// TestOptimisticMining_TransientFailureThenCorruptBodyIsInvalidated: optimistic mining adds a
+// corrupt body, the background validation hits a transient GetBlockHeaderIDs failure and hands
+// the block to the revalidation queue, and the retry must still take the body off the chain.
+func TestOptimisticMining_TransientFailureThenCorruptBodyIsInvalidated(t *testing.T) {
+	initPrometheusMetrics()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.BlockValidation.OptimisticMining = true
+
+	coinbaseTx, err := bt.NewTxFromString(model.CoinbaseHex)
+	require.NoError(t, err)
+
+	subtree, err := subtreepkg.NewTreeByLeafCount(2)
+	require.NoError(t, err)
+	require.NoError(t, subtree.AddCoinbaseNode())
+
+	nBits, err := model.NewNBitFromString("207fffff")
+	require.NoError(t, err)
+
+	// The header commits to a merkle root the served body does not hash to.
+	blockHeader := &model.BlockHeader{
+		Version:        1,
+		HashPrevBlock:  tSettings.ChainCfgParams.GenesisHash,
+		HashMerkleRoot: &chainhash.Hash{0x01},
+		Timestamp:      uint32(time.Now().Unix()), //nolint:gosec
+		Bits:           *nBits,
+	}
+
+	for {
+		if ok, _, _ := blockHeader.HasMetTargetDifficulty(); ok {
+			break
+		}
+
+		blockHeader.Nonce++
+	}
+
+	block, err := model.NewBlock(blockHeader, coinbaseTx, []*chainhash.Hash{subtree.RootHash()}, uint64(subtree.Length()), uint64(coinbaseTx.Size()), 100, 0) //nolint:gosec
+	require.NoError(t, err)
+
+	// The revalidation worker retries a failed revalidation, so InvalidateBlock may be called
+	// more than once; the first call is what this test waits for.
+	invalidated := make(chan struct{})
+	var invalidatedOnce sync.Once
+
+	mockBlockchain := &blockchain.Mock{}
+	mockBlockchain.On("GetNextWorkRequired", mock.Anything, mock.Anything, mock.Anything).Return(nBits, nil)
+	mockBlockchain.On("AddBlock", mock.Anything, block, mock.Anything, mock.Anything).Return(nil)
+	mockBlockchain.On("GetBlockHeaderIDs", mock.Anything, mock.Anything, mock.Anything).Return(nil, errors.NewServiceError("transient")).Once()
+	mockBlockchain.On("GetBlockHeaderIDs", mock.Anything, mock.Anything, mock.Anything).Return([]uint32{1}, nil)
+	mockBlockchain.On("InvalidateBlock", mock.Anything, block.Header.Hash()).Return([]chainhash.Hash{}, nil).Run(func(mock.Arguments) {
+		invalidatedOnce.Do(func() { close(invalidated) })
+	})
+	mockBlockchain.On("GetBlocksMinedNotSet", mock.Anything).Return([]*model.Block{}, nil)
+	mockBlockchain.On("GetBlocksSubtreesNotSet", mock.Anything).Return([]*model.Block{}, nil)
+	mockBlockchain.On("Subscribe", mock.Anything, mock.Anything).Return(make(chan *blockchain_api.Notification, 1), nil)
+	mockBlockchain.On("GetBlockExists", mock.Anything, mock.Anything).Return(false, nil)
+	mockBlockchain.On("GetBlockHeaders", mock.Anything, mock.Anything, mock.Anything).Return([]*model.BlockHeader{}, []*model.BlockHeaderMeta{}, nil)
+	mockBlockchain.On("GetBlockHeader", mock.Anything, mock.Anything).Return(&model.BlockHeader{}, &model.BlockHeaderMeta{}, nil)
+	mockBlockchain.On("SetBlockSubtreesSet", mock.Anything, mock.Anything).Return(nil)
+	mockBlockchain.On("GetBestBlockHeader", mock.Anything).Return(&model.BlockHeader{}, &model.BlockHeaderMeta{Height: 100}, nil)
+	mockBlockchain.On("GetBlockIsMined", mock.Anything, mock.Anything).Return(true, nil)
+
+	utxoStore, subtreeValidationClient, _, txStore, subtreeStore, deferFunc := setup(t)
+	defer deferFunc()
+
+	subtreeBytes, err := subtree.Serialize()
+	require.NoError(t, err)
+	require.NoError(t, subtreeStore.Set(ctx, subtree.RootHash()[:], fileformat.FileTypeSubtree, subtreeBytes))
+
+	bv := NewBlockValidation(ctx, ulogger.TestLogger{}, tSettings, mockBlockchain, subtreeStore, txStore, utxoStore, nil, subtreeValidationClient)
+
+	require.NoError(t, bv.ValidateBlock(ctx, block, "test", false))
+
+	select {
+	case <-invalidated:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the optimistically added corrupt body was never invalidated after the transient failure")
+	}
+}
+
+// TestProcessBlockFound_PeerBlockIsNotOptimisticByDefault: with optimistic mining on and the
+// peer-blocks opt-in off, a doctored body from a peer is checked before it can extend the chain,
+// so processBlockFound reports it as corrupt and the honest body is accepted afterwards. If the
+// peer path were optimistic, the doctored body would be added first and the call would succeed.
+func TestProcessBlockFound_PeerBlockIsNotOptimisticByDefault(t *testing.T) {
+	f := newCorruptTestFixture(t, corruptTestSubtreeSize, corruptTestSubtreeSize)
+	f.bv.settings.BlockValidation.OptimisticMining = true
+	f.bv.settings.BlockValidation.OptimisticMiningPeerBlocks = false
+
+	s := New(ulogger.TestLogger{}, f.bv.settings, f.subtreeStore, nil, nil, nil, f.blockchainClient, nil, nil, nil)
+	s.blockValidation = f.bv
+
+	bad := f.doctored(t, f.coinbase, []*chainhash.Hash{f.subtrees[0].RootHash(), f.spare.RootHash()}, 2*corruptTestSubtreeSize)
+
+	err := s.processBlockFound(f.ctx, bad.Hash(), "attacker", "http://peer:8000", bad)
+	require.True(t, errors.IsBlockCorrupt(err), "a peer block must be validated before it is added, got: %v", err)
+	f.requireNotPersistedInvalid(t)
+
+	require.Eventually(t, func() bool {
+		_, inFlight := f.bv.blocksCurrentlyValidating.Get(*bad.Hash())
+		return !inFlight
+	}, 5*time.Second, 10*time.Millisecond)
+
+	require.NoError(t, s.processBlockFound(f.ctx, f.honest.Hash(), "honest-peer", "http://peer:8000", f.honest))
 }

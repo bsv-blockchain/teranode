@@ -138,6 +138,13 @@ type revalidateBlockData struct {
 
 	// retries tracks the number of revalidation attempts
 	retries int
+
+	// optimisticallyAdded is set when the block was added to the chain by optimistic mining and
+	// is requeued before block.Valid succeeded on it. Only then may a corrupt verdict invalidate
+	// the block: the body is on the chain and InvalidateBlock is the only way to take it off. It
+	// is never set once block.Valid has succeeded, nor for a block that was never added, so a
+	// corrupt verdict there cannot condemn the hash.
+	optimisticallyAdded bool
 }
 
 // BlockValidation handles the core validation logic for blocks in Teranode.
@@ -1574,7 +1581,7 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 				if err != nil {
 					u.logger.Errorf("[ValidateBlock][%s] failed to get block header ids: %v", block.String(), err)
 
-					u.ReValidateBlock(block, baseURL)
+					u.reValidateOptimisticallyAddedBlock(block, baseURL)
 
 					return
 				}
@@ -1602,11 +1609,11 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 						if err = u.markBlockAsInvalid(decoupledCtx, block, reason); err != nil {
 							u.logger.Errorf("[ValidateBlock][%s][InvalidateBlock] failed to invalidate block: %v", block.String(), err)
 							// we should try again to re-validate the block, as we failed to mark it as invalid
-							u.ReValidateBlock(block, baseURL)
+							u.reValidateOptimisticallyAddedBlock(block, baseURL)
 						}
 					} else {
 						// storage or processing error, block is not really invalid, but we need to re-validate
-						u.ReValidateBlock(block, baseURL)
+						u.reValidateOptimisticallyAddedBlock(block, baseURL)
 					}
 
 					return
@@ -1956,6 +1963,18 @@ func (u *BlockValidation) ReValidateBlock(block *model.Block, baseURL string) {
 	}
 }
 
+// reValidateOptimisticallyAddedBlock requeues a block that optimistic mining already added to the
+// chain but that has not passed block.Valid, so a corrupt verdict on the retry takes it off the
+// chain. Use it only on the failure paths before block.Valid succeeded.
+func (u *BlockValidation) reValidateOptimisticallyAddedBlock(block *model.Block, baseURL string) {
+	u.logger.Errorf("[ValidateBlock][%s] re-validating optimistically added block", block.String())
+	u.revalidateBlockChan <- revalidateBlockData{
+		block:               block,
+		baseURL:             baseURL,
+		optimisticallyAdded: true,
+	}
+}
+
 // reValidateBlock performs a full block revalidation.
 // This method handles blocks that failed initial validation or need reverification.
 //
@@ -2042,6 +2061,14 @@ func (u *BlockValidation) reValidateBlock(blockData revalidateBlockData) error {
 	u.logger.Infof("[ReValidateBlock][%s] validating %d subtrees", blockData.block.Hash().String(), len(blockData.block.Subtrees))
 
 	if err = u.validateBlockSubtrees(ctx, blockData.block, "", blockData.baseURL); err != nil {
+		// Same rule as the block.Valid verdict below: a corrupt body that optimistic mining
+		// added to the chain must be taken off it.
+		if errors.IsBlockCorrupt(err) && blockData.optimisticallyAdded {
+			if _, invalidateBlockErr := u.blockchainClient.InvalidateBlock(ctx, blockData.block.Header.Hash()); invalidateBlockErr != nil {
+				u.logger.Errorf("[ReValidateBlock][%s][InvalidateBlock] failed to invalidate block: %s", blockData.block.Hash().String(), invalidateBlockErr)
+			}
+		}
+
 		return err
 	}
 
@@ -2054,7 +2081,10 @@ func (u *BlockValidation) reValidateBlock(blockData revalidateBlockData) error {
 	if ok, err := blockData.block.Valid(ctx, u.logger, u.subtreeStore, u.utxoStore, oldBlockIDsMap, blockHeaders, blockHeaderIDs, u.settings, metaRegenerator); !ok {
 		u.logger.Errorf("[ReValidateBlock][%s] InvalidateBlock block is not valid in background: %v", blockData.block.String(), err)
 
-		if errors.Is(err, errors.ErrBlockInvalid) {
+		// A corrupt verdict invalidates only a block that optimistic mining added before
+		// block.Valid succeeded on it: that body is on the chain. Otherwise nothing was added and
+		// the hash must not be condemned.
+		if errors.Is(err, errors.ErrBlockInvalid) || (errors.IsBlockCorrupt(err) && blockData.optimisticallyAdded) {
 			if _, invalidateBlockErr := u.blockchainClient.InvalidateBlock(ctx, blockData.block.Header.Hash()); invalidateBlockErr != nil {
 				u.logger.Errorf("[ReValidateBlock][%s][InvalidateBlock] failed to invalidate block: %s", blockData.block.String(), invalidateBlockErr)
 			}

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2"
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-wire"
 	"github.com/bsv-blockchain/teranode/daemon"
 	"github.com/bsv-blockchain/teranode/errors"
@@ -1760,6 +1761,13 @@ func TestFloatingBlock_SubmitToTeranodeFirst(t *testing.T) {
 	require.NoError(t, err, "Should create model block from wire.MsgBlock")
 
 	expectedHeight := fundingBlockHeight + 1
+
+	// model.NewBlockFromMsgBlock records neither the subtree nor the transaction bodies, and a
+	// body with no subtrees is only accepted when the header's merkle root is the coinbase txid.
+	// Persist the subtree (coinbase placeholder + the spending tx) and point the block at it.
+	subtreeRoot := td.StoreSubtreeForBlock(t, []*bt.Tx{tx}, expectedHeight+1000)
+	modelBlock.Subtrees = []*chainhash.Hash{subtreeRoot}
+
 	err = td.BlockValidationClient.ProcessBlock(ctx, modelBlock, expectedHeight, "test", "", 0)
 	require.NoError(t, err, "Teranode should accept the floating block")
 	t.Logf("Submitted floating block to Teranode at height %d", expectedHeight)
