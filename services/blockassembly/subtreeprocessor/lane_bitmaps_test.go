@@ -200,26 +200,34 @@ func TestRemovalFromAChainedSubtreeRebuildsItsBitmaps(t *testing.T) {
 	}
 }
 
-// The parallel rebuild after a block keeps each full subtree's bitmaps from its workers' reads,
-// and leaves the open subtree with a record that covers the txs it took.
+// The parallel rebuild after a block keeps each full subtree's bitmaps, built from the positions
+// the copy into the pool carried, before the subtree is chained, and leaves the open subtree with
+// a record that covers the txs it took. The pool here holds the txs without positions, so a
+// position read back from the pool would show as none.
 func TestParallelRebuildKeepsEachSubtreesBitmaps(t *testing.T) {
 	for _, disk := range []bool{false, true} {
 		t.Run(fmt.Sprintf("disk=%t", disk), func(t *testing.T) {
 			stp, keeper := keptLanePoolProcessor(t, disk)
 
 			kept := make([]subtreepkg.Node, 0, 9)
+			positions := make([]uint64, 0, 9)
 
 			for i := 1; i <= 9; i++ {
 				hash := lanePoolTxHash(100 + i)
-				stp.currentTxMap.SetAt(hash, lanePoolInpoints(i), lane.Pack(8, uint64(i))) //nolint:gosec // small test index
+				stp.currentTxMap.Set(hash, lanePoolInpoints(i))
 				kept = append(kept, subtreepkg.Node{Hash: hash, Fee: 1, SizeInBytes: 1})
+				positions = append(positions, lane.Pack(8, uint64(i))) //nolint:gosec // small test index
 			}
 
-			require.NoError(t, stp.parallelBuildRemainderSubtrees(context.Background(), kept, true))
+			require.NoError(t, stp.parallelBuildRemainderSubtrees(context.Background(), kept, positions, true))
 			require.Len(t, stp.chainedSubtrees, 2)
 
-			require.Equal(t, []uint64{lane.Pack(8, 1), lane.Pack(8, 2), lane.Pack(8, 3)}, keeper.positions(t, *stp.chainedSubtrees[0].RootHash()))
-			require.Equal(t, []uint64{lane.Pack(8, 4), lane.Pack(8, 5), lane.Pack(8, 6), lane.Pack(8, 7)}, keeper.positions(t, *stp.chainedSubtrees[1].RootHash()))
+			first, second := *stp.chainedSubtrees[0].RootHash(), *stp.chainedSubtrees[1].RootHash()
+
+			require.Equal(t, []uint64{lane.Pack(8, 1), lane.Pack(8, 2), lane.Pack(8, 3)}, keeper.positions(t, first))
+			require.Equal(t, []uint64{lane.Pack(8, 4), lane.Pack(8, 5), lane.Pack(8, 6), lane.Pack(8, 7)}, keeper.positions(t, second))
+			require.Equal(t, 0, keeper.chainedAt[first], "kept before the first subtree is chained")
+			require.Equal(t, 1, keeper.chainedAt[second], "kept before the second subtree is chained")
 			require.True(t, stp.laneFill.matches(stp.currentSubtree.Load()), "the open subtree's record covers the 2 txs it took")
 
 			addPositioned(t, stp, 10, lane.Pack(8, 10))
@@ -227,6 +235,123 @@ func TestParallelRebuildKeepsEachSubtreesBitmaps(t *testing.T) {
 
 			require.Len(t, stp.chainedSubtrees, 3)
 			require.Equal(t, []uint64{lane.Pack(8, 8), lane.Pack(8, 9), lane.Pack(8, 10), lane.Pack(8, 11)}, keeper.positions(t, *stp.chainedSubtrees[2].RootHash()))
+		})
+	}
+}
+
+// A full chunk whose members are not all recorded, here the open subtree's own members, has its
+// bitmaps built from the pool before it is chained and sent to storage.
+func TestParallelRebuildKeepsAnUnrecordedChunkBeforeItIsChained(t *testing.T) {
+	stp, keeper := keptLanePoolProcessor(t, false)
+
+	// the open subtree holds one member its record does not cover
+	stp.currentTxMap.SetAt(lanePoolTxHash(400), lanePoolInpoints(400), lane.Pack(6, 1))
+	require.NoError(t, stp.addNodePreValidated(subtreepkg.Node{Hash: lanePoolTxHash(400), Fee: 1, SizeInBytes: 1}, lane.Pack(6, 1), true))
+	stp.laneFill = laneFill{}
+
+	kept := make([]subtreepkg.Node, 0, 2)
+	positions := make([]uint64, 0, 2)
+
+	for i := 1; i <= 2; i++ {
+		hash := lanePoolTxHash(400 + i)
+		stp.currentTxMap.SetAt(hash, lanePoolInpoints(400+i), lane.Pack(6, uint64(1+i))) //nolint:gosec // small test index
+		kept = append(kept, subtreepkg.Node{Hash: hash, Fee: 1, SizeInBytes: 1})
+		positions = append(positions, lane.Pack(6, uint64(1+i))) //nolint:gosec // small test index
+	}
+
+	require.NoError(t, stp.parallelBuildRemainderSubtrees(context.Background(), kept, positions, true))
+	require.Len(t, stp.chainedSubtrees, 1)
+
+	root := *stp.chainedSubtrees[0].RootHash()
+	require.Equal(t, []uint64{lane.Pack(6, 1), lane.Pack(6, 2), lane.Pack(6, 3)}, keeper.positions(t, root))
+	require.Equal(t, 0, keeper.chainedAt[root], "kept before it is chained")
+}
+
+// The copy between pool halves hands back each tx's lane position on every route it takes: the
+// raw in-memory move, the raw disk move, and the decode-and-insert between map kinds.
+func TestPoolCopyHandsBackEachTxsPosition(t *testing.T) {
+	for _, tc := range []struct {
+		name            string
+		srcDisk, toDisk bool
+	}{
+		{"in-memory to in-memory", false, false},
+		{"disk to disk", true, true},
+		{"disk to in-memory", true, false},
+		{"in-memory to disk", false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stp, _ := lanePoolProcessor(t, tc.toDisk, true)
+
+			var src TxInpointsMap = NewSplitTxInpointsMap(16)
+
+			if tc.srcDisk {
+				m, err := NewDiskTxMap(DiskTxMapOptions{BasePaths: []string{t.TempDir()}})
+				require.NoError(t, err)
+				t.Cleanup(func() { _ = m.Close() })
+
+				src = m
+			}
+
+			nodes := make([]subtreepkg.Node, 0, 5)
+			want := make([]uint64, 0, 5)
+
+			for i := 0; i < 5; i++ {
+				hash := lanePoolTxHash(500 + i)
+
+				position := lane.Pack(13, uint64(40+i)) //nolint:gosec // small test index
+				if i == 2 {
+					position = 0
+				}
+
+				src.SetAt(hash, lanePoolInpoints(i), position)
+				nodes = append(nodes, subtreepkg.Node{Hash: hash, Fee: 1, SizeInBytes: 1})
+				want = append(want, position)
+			}
+
+			wasInserted := make([]bool, len(nodes))
+			positions := make([]uint64, len(nodes))
+
+			require.NoError(t, stp.parallelGetAndSetIfNotExistsAt(nodes, src, 0, 2, wasInserted, positions))
+
+			for i := range wasInserted {
+				require.True(t, wasInserted[i])
+			}
+
+			require.Equal(t, want, positions)
+		})
+	}
+}
+
+// The own block's path adds the txs left in the open subtree with the positions the copy carried.
+func TestOwnBlockPathRecordsTheCopiedPositions(t *testing.T) {
+	for _, disk := range []bool{false, true} {
+		t.Run(fmt.Sprintf("disk=%t", disk), func(t *testing.T) {
+			stp, keeper := keptLanePoolProcessor(t, disk)
+			stp.settings.BlockAssembly.ParallelSetIfNotExistsThreshold = 1
+
+			var src TxInpointsMap = NewSplitTxInpointsMap(16)
+
+			if disk {
+				m, err := NewDiskTxMap(DiskTxMapOptions{BasePaths: []string{t.TempDir()}})
+				require.NoError(t, err)
+				t.Cleanup(func() { _ = m.Close() })
+
+				src = m
+			}
+
+			nodes := make([]subtreepkg.Node, 0, 3)
+
+			for i := 1; i <= 3; i++ {
+				hash := lanePoolTxHash(600 + i)
+				src.SetAt(hash, lanePoolInpoints(i), lane.Pack(14, uint64(i))) //nolint:gosec // small test index
+				nodes = append(nodes, subtreepkg.Node{Hash: hash, Fee: 1, SizeInBytes: 1})
+			}
+
+			block := &model.Block{Header: &model.BlockHeader{Version: 1, HashPrevBlock: &chainhash.Hash{}, HashMerkleRoot: &chainhash.Hash{}}}
+			require.NoError(t, stp.processOwnBlockSubtreeNodes(block, nodes, src, 0, nil, true))
+
+			require.Len(t, stp.chainedSubtrees, 1)
+			require.Equal(t, []uint64{lane.Pack(14, 1), lane.Pack(14, 2), lane.Pack(14, 3)}, keeper.positions(t, *stp.chainedSubtrees[0].RootHash()))
 		})
 	}
 }
@@ -403,4 +528,29 @@ func TestAPoolLookupThatFailsIsNotAPosition(t *testing.T) {
 
 	stp.keepLaneBitmapsFromPool(st)
 	require.False(t, keeper.HasLaneBitmaps(*st.RootHash()))
+}
+
+// bitmapsFromPositions builds the same bitmaps as the per-lane record from positions in any
+// order, counting the members without one.
+func TestBitmapsFromPositionsMatchesTheRecord(t *testing.T) {
+	positions := []uint64{lane.Pack(9, 7), 0, lane.Pack(2, 3), lane.Pack(9, 1), lane.Pack(2, 4), 0, lane.Pack(200, lane.MaxPosition)}
+
+	fill := newLaneFill(nil)
+	for _, p := range positions {
+		fill.add(p)
+	}
+
+	root := chainhash.HashH([]byte("bitmaps-from-positions"))
+	want, wantUnpositioned := fill.bitmaps(root)
+
+	got, unpositioned := bitmapsFromPositions(root, append([]uint64(nil), positions...))
+
+	require.Equal(t, wantUnpositioned, unpositioned)
+	require.Equal(t, 2, unpositioned)
+	require.Equal(t, root, got.SubtreeHash)
+	require.Len(t, got.Lanes, len(want.Lanes))
+
+	for l, bm := range want.Lanes {
+		require.Equal(t, bm.ToArray(), got.Lanes[l].ToArray(), "lane %d", l)
+	}
 }

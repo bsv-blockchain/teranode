@@ -2,6 +2,7 @@ package subtreeprocessor
 
 import (
 	"runtime"
+	"slices"
 
 	"github.com/RoaringBitmap/roaring/v2/roaring64"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
@@ -143,6 +144,43 @@ func (f *laneFill) bitmaps(root chainhash.Hash) (lane.SubtreeBitmaps, int) {
 				delete(bitmaps.Lanes, l)
 			}
 		}
+	}
+
+	return bitmaps, unpositioned
+}
+
+// bitmapsFromPositions builds the lane bitmaps of subtree root from positions, one per member, 0
+// or another invalid one for none, and counts the members without one. It sorts positions in place
+// and reuses it, so the caller must not read it afterwards; it allocates nothing besides the
+// bitmaps.
+func bitmapsFromPositions(root chainhash.Hash, positions []uint64) (lane.SubtreeBitmaps, int) {
+	slices.Sort(positions)
+
+	bitmaps := lane.SubtreeBitmaps{SubtreeHash: root, Lanes: lane.LaneBitmaps{}}
+	unpositioned := 0
+
+	for start := 0; start < len(positions); {
+		if !lane.Valid(positions[start]) {
+			unpositioned++
+			start++
+
+			continue
+		}
+
+		l := lane.Lane(positions[start])
+
+		end := start
+		for end < len(positions) && lane.Valid(positions[end]) && lane.Lane(positions[end]) == l {
+			positions[end] &= lane.MaxPosition
+			end++
+		}
+
+		bm := roaring64.New()
+		bm.AddMany(positions[start:end])
+		bm.RunOptimize()
+		bitmaps.Lanes[l] = bm
+
+		start = end
 	}
 
 	return bitmaps, unpositioned

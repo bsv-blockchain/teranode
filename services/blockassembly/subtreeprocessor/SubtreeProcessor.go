@@ -44,6 +44,7 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
+	"github.com/bsv-blockchain/teranode/util/lane"
 	"github.com/bsv-blockchain/teranode/util/retry"
 	"github.com/bsv-blockchain/teranode/util/tracing"
 	"github.com/ordishs/gocore"
@@ -3231,11 +3232,12 @@ func (stp *SubtreeProcessor) placeNodeAt(node subtreepkg.Node, parents *subtreep
 //
 // Parameters:
 //   - node: The node to add to the subtree
+//   - position: The node's lane position the copy into currentTxMap carried, 0 for none
 //   - skipNotification: Whether to skip notification of new subtrees
 //
 // Returns:
 //   - error: Any error encountered during addition
-func (stp *SubtreeProcessor) addNodePreValidated(node subtreepkg.Node, skipNotification bool) (err error) {
+func (stp *SubtreeProcessor) addNodePreValidated(node subtreepkg.Node, position uint64, skipNotification bool) (err error) {
 	if stp.currentSubtree.Load() == nil {
 		itemsPerFile := int(stp.currentItemsPerFile.Load())
 
@@ -3257,11 +3259,7 @@ func (stp *SubtreeProcessor) addNodePreValidated(node subtreepkg.Node, skipNotif
 		return errors.NewProcessingError(errAddingNodeToSubtree, err)
 	}
 
-	if stp.laneKeeper != nil {
-		// the map already holds the tx, with its position
-		position, _ := stp.poolLanePosition(node.Hash)
-		stp.recordLanePosition(stp.currentSubtree.Load(), position)
-	}
+	stp.recordLanePosition(stp.currentSubtree.Load(), position)
 
 	if stp.currentSubtree.Load().IsComplete() {
 		if err = stp.processCompleteSubtree(skipNotification); err != nil {
@@ -7798,8 +7796,15 @@ func (stp *SubtreeProcessor) processOwnBlockSubtreeNodes(block *model.Block, nod
 		// Parallel path for large node sets
 		wasInserted := make([]bool, len(nodes))
 
-		if err := stp.parallelGetAndSetIfNotExists(nodes, currentTxMap, removeMapLength,
-			stp.settings.BlockAssembly.ProcessRemainderTxHashesConcurrency, wasInserted); err != nil {
+		// at shadow the copy hands back each tx's lane position, recorded as it joins the open
+		// subtree
+		var positions []uint64
+		if stp.keepsLaneBitmaps() {
+			positions = make([]uint64, len(nodes))
+		}
+
+		if err := stp.parallelGetAndSetIfNotExistsAt(nodes, currentTxMap, removeMapLength,
+			stp.settings.BlockAssembly.ProcessRemainderTxHashesConcurrency, wasInserted, positions); err != nil {
 			return errors.NewProcessingError("[processOwnBlockSubtreeNodes][%s] parallel error", block.String(), err)
 		}
 
@@ -7817,7 +7822,12 @@ func (stp *SubtreeProcessor) processOwnBlockSubtreeNodes(block *model.Block, nod
 				continue
 			}
 
-			if err := stp.addNodePreValidated(node, skipNotification); err != nil {
+			var position uint64
+			if positions != nil {
+				position = positions[idx]
+			}
+
+			if err := stp.addNodePreValidated(node, position, skipNotification); err != nil {
 				return errors.NewProcessingError("[processOwnBlockSubtreeNodes][%s] error adding node %s to subtree", block.String(), node.Hash.String(), err)
 			}
 		}
@@ -8933,9 +8943,15 @@ func (stp *SubtreeProcessor) processRemainderTxHashes(ctx context.Context, chain
 
 		wasInserted := make([]bool, len(flatNodes))
 
+		// at shadow the copy hands back each tx's lane position, for the rebuilt subtrees' bitmaps
+		var positions []uint64
+		if stp.keepsLaneBitmaps() {
+			positions = make([]uint64, len(flatNodes))
+		}
+
 		// Note: removeMapLength is 0 here because removeMap was already processed in Phase 1
-		if err := stp.parallelGetAndSetIfNotExists(flatNodes, currentTxMap, 0,
-			stp.settings.BlockAssembly.ProcessRemainderTxHashesConcurrency, wasInserted); err != nil {
+		if err := stp.parallelGetAndSetIfNotExistsAt(flatNodes, currentTxMap, 0,
+			stp.settings.BlockAssembly.ProcessRemainderTxHashesConcurrency, wasInserted, positions); err != nil {
 			return errors.NewProcessingError("[processRemainderTxHashes] parallel error", err)
 		}
 
@@ -8944,13 +8960,19 @@ func (stp *SubtreeProcessor) processRemainderTxHashes(ctx context.Context, chain
 		// when wasInserted[idx] was true, so leaf order in the resulting subtrees
 		// is unchanged.
 		kept := flatNodes[:0]
+		keptPositions := positions[:0]
+
 		for idx, node := range flatNodes {
 			if wasInserted[idx] {
 				kept = append(kept, node)
+
+				if positions != nil {
+					keptPositions = append(keptPositions, positions[idx])
+				}
 			}
 		}
 
-		if err := stp.parallelBuildRemainderSubtrees(ctx, kept, skipNotification); err != nil {
+		if err := stp.parallelBuildRemainderSubtrees(ctx, kept, keptPositions, skipNotification); err != nil {
 			return errors.NewProcessingError("[processRemainderTxHashes] parallel build error", err)
 		}
 	} else {
@@ -9001,9 +9023,17 @@ func (stp *SubtreeProcessor) processRemainderTxHashes(ctx context.Context, chain
 // (shutdown, reorg abort) terminates pending workers promptly; running workers
 // finish their current chunk (≤ leafCount inserts, bounded ≤ 100 ms) before
 // the next gCtx-aware sibling returns.
-func (stp *SubtreeProcessor) parallelBuildRemainderSubtrees(ctx context.Context, kept []subtreepkg.Node, skipNotification bool) error {
+//
+// positions holds the lane position of each node in kept, 0 for none, or is nil when none has one.
+// At utxostore_laneMigration shadow each full chunk's lane bitmaps are built in its worker from
+// them, and kept before the subtree is chained.
+func (stp *SubtreeProcessor) parallelBuildRemainderSubtrees(ctx context.Context, kept []subtreepkg.Node, positions []uint64, skipNotification bool) error {
 	if len(kept) == 0 {
 		return nil
+	}
+
+	if len(positions) != len(kept) {
+		positions = nil
 	}
 
 	currentSubtree := stp.currentSubtree.Load()
@@ -9027,9 +9057,24 @@ func (stp *SubtreeProcessor) parallelBuildRemainderSubtrees(ctx context.Context,
 	type buildChunk struct {
 		subtree *subtreepkg.Subtree
 		nodes   []subtreepkg.Node
+		// positions holds the nodes' lane positions, or is nil when none has one
+		positions []uint64
 		// lanes records the lane positions of the subtree's members at utxostore_laneMigration
-		// shadow, or is nil when they are not all recorded (lane_bitmaps.go)
+		// shadow, or is nil when they are not all recorded (lane_bitmaps.go). A full chunk's
+		// worker turns it into bitmaps and drops it.
 		lanes *laneFill
+		// bitmaps are a full chunk's lane bitmaps, built in its worker, and unpositioned the
+		// count of its members without a position
+		bitmaps      *lane.SubtreeBitmaps
+		unpositioned int
+	}
+
+	chunkPositions := func(from, to int) []uint64 {
+		if positions == nil {
+			return nil
+		}
+
+		return positions[from:to]
 	}
 
 	chunks := make([]buildChunk, 0, len(kept)/leafCount+2)
@@ -9039,7 +9084,7 @@ func (stp *SubtreeProcessor) parallelBuildRemainderSubtrees(ctx context.Context,
 	if firstLen > len(kept) {
 		firstLen = len(kept)
 	}
-	chunks = append(chunks, buildChunk{subtree: currentSubtree, nodes: kept[pos : pos+firstLen]})
+	chunks = append(chunks, buildChunk{subtree: currentSubtree, nodes: kept[pos : pos+firstLen], positions: chunkPositions(pos, pos+firstLen)})
 	pos += firstLen
 
 	for pos < len(kept) {
@@ -9053,7 +9098,7 @@ func (stp *SubtreeProcessor) parallelBuildRemainderSubtrees(ctx context.Context,
 			return errors.NewProcessingError("[parallelBuildRemainderSubtrees] error allocating new subtree", err)
 		}
 
-		chunks = append(chunks, buildChunk{subtree: st, nodes: kept[pos : pos+take]})
+		chunks = append(chunks, buildChunk{subtree: st, nodes: kept[pos : pos+take], positions: chunkPositions(pos, pos+take)})
 		pos += take
 	}
 
@@ -9114,14 +9159,34 @@ func (stp *SubtreeProcessor) parallelBuildRemainderSubtrees(ctx context.Context,
 				}
 			}
 
-			// the map holds each tx with its position; a position that cannot be read leaves
-			// the chunk's subtree to have its bitmaps built from the pool later
+			// A full chunk whose subtree holds only its own nodes has its bitmaps built straight
+			// from the positions the copy carried, sorted in place, with no per-lane lists.
+			if i < fullCount && c.lanes != nil && c.lanes.added == 0 && laneMembers(c.subtree) == len(c.nodes) {
+				_ = c.subtree.RootHash()
+
+				var bitmaps lane.SubtreeBitmaps
+
+				unpositioned := len(c.nodes)
+
+				if c.positions != nil {
+					bitmaps, unpositioned = bitmapsFromPositions(*c.subtree.RootHash(), c.positions)
+				} else {
+					bitmaps = lane.SubtreeBitmaps{SubtreeHash: *c.subtree.RootHash(), Lanes: lane.LaneBitmaps{}}
+				}
+
+				chunks[i].bitmaps = &bitmaps
+				chunks[i].unpositioned = unpositioned
+				chunks[i].lanes = nil
+
+				return nil
+			}
+
+			// the positions the copy into the pool carried, recorded without a pool read
 			if c.lanes != nil {
 				for j := range c.nodes {
-					position, ok := stp.poolLanePosition(c.nodes[j].Hash)
-					if !ok {
-						chunks[i].lanes = nil
-						break
+					var position uint64
+					if c.positions != nil {
+						position = c.positions[j]
 					}
 
 					c.lanes.add(position)
@@ -9134,6 +9199,15 @@ func (stp *SubtreeProcessor) parallelBuildRemainderSubtrees(ctx context.Context,
 				// below, via oldSubtree.RootHash()) would serialise the work
 				// back onto one core and undo the parallel win.
 				_ = c.subtree.RootHash()
+
+				// a full chunk's bitmaps are built here, and its per-lane lists dropped
+				if c.lanes != nil && c.lanes.matches(c.subtree) {
+					bitmaps, unpositioned := c.lanes.bitmaps(*c.subtree.RootHash())
+					chunks[i].bitmaps = &bitmaps
+					chunks[i].unpositioned = unpositioned
+				}
+
+				chunks[i].lanes = nil
 			}
 
 			return nil
@@ -9173,10 +9247,15 @@ func (stp *SubtreeProcessor) parallelBuildRemainderSubtrees(ctx context.Context,
 		oldSubtree := chunks[i].subtree
 		oldSubtreeHash := oldSubtree.RootHash()
 
-		// a chunk without a full record has its lane bitmaps built from the pool before a mining
-		// candidate lists it (ensureLaneBitmaps)
-		if chunks[i].lanes != nil {
-			stp.keepLaneBitmapsOf(oldSubtree, chunks[i].lanes)
+		// the subtree's lane bitmaps are kept before it is chained and sent to storage; a chunk
+		// without them built has them built from the pool
+		if stp.keepsLaneBitmaps() {
+			if chunks[i].bitmaps != nil {
+				stp.laneKeeper.KeepLaneBitmaps(*chunks[i].bitmaps, chunks[i].unpositioned)
+				chunks[i].bitmaps = nil
+			} else {
+				stp.keepLaneBitmapsFromPool(oldSubtree)
+			}
 		}
 
 		if !skipNotification {
@@ -9259,6 +9338,20 @@ func (stp *SubtreeProcessor) parallelGetAndSetIfNotExists(
 	concurrencyLimit int,
 	wasInserted []bool,
 ) error {
+	return stp.parallelGetAndSetIfNotExistsAt(nodes, currentTxMap, removeMapLength, concurrencyLimit, wasInserted, nil)
+}
+
+// parallelGetAndSetIfNotExistsAt is parallelGetAndSetIfNotExists that also sets positions[i] to
+// the lane position (util/lane) it copies with each node it inserts, 0 for none, so a caller that
+// records positions needs no pool read. A nil positions reads none; otherwise it has len(nodes).
+func (stp *SubtreeProcessor) parallelGetAndSetIfNotExistsAt(
+	nodes []subtreepkg.Node,
+	currentTxMap TxInpointsMap,
+	removeMapLength int,
+	concurrencyLimit int,
+	wasInserted []bool,
+	positions []uint64,
+) error {
 	if len(nodes) == 0 {
 		return nil
 	}
@@ -9269,11 +9362,11 @@ func (stp *SubtreeProcessor) parallelGetAndSetIfNotExists(
 	// underlying per-bucket SyncedMap. Profiling showed that contention
 	// previously cost ~17 % of every SetIfNotExists call.
 	if splitMap, ok := stp.currentTxMap.(*SplitTxInpointsMap); ok {
-		return stp.bucketShardedGetAndSetIfNotExists(splitMap, nodes, currentTxMap, removeMapLength, concurrencyLimit, wasInserted)
+		return stp.bucketShardedGetAndSetIfNotExists(splitMap, nodes, currentTxMap, removeMapLength, concurrencyLimit, wasInserted, positions)
 	}
 
 	// Fallback (e.g. DiskTxMap path): original per-node parallel scheme.
-	return stp.legacyParallelGetAndSetIfNotExists(nodes, currentTxMap, removeMapLength, concurrencyLimit, wasInserted)
+	return stp.legacyParallelGetAndSetIfNotExists(nodes, currentTxMap, removeMapLength, concurrencyLimit, wasInserted, positions)
 }
 
 // bucketShardedGetAndSetIfNotExists partitions nodes by destination bucket and
@@ -9287,6 +9380,7 @@ func (stp *SubtreeProcessor) bucketShardedGetAndSetIfNotExists(
 	removeMapLength int,
 	concurrencyLimit int,
 	wasInserted []bool,
+	outPositions []uint64,
 ) error {
 	nrOfBuckets := splitMap.Buckets()
 
@@ -9370,12 +9464,22 @@ func (stp *SubtreeProcessor) bucketShardedGetAndSetIfNotExists(
 				}
 
 				moved := make([]bool, len(indices))
-				if missing := splitMap.MoveBucketFrom(srcSplit, bucketIdx, hashes, moved); missing >= 0 {
+
+				var movedPositions []uint64
+				if outPositions != nil {
+					movedPositions = make([]uint64, len(indices))
+				}
+
+				if missing := splitMap.MoveBucketFromAt(srcSplit, bucketIdx, hashes, moved, movedPositions); missing >= 0 {
 					return errors.NewProcessingError("node %s not found in currentTxMap", hashes[missing].String())
 				}
 
 				for j, origIdx := range indices {
 					wasInserted[origIdx] = moved[j]
+
+					if movedPositions != nil {
+						outPositions[origIdx] = movedPositions[j]
+					}
 				}
 
 				return nil
@@ -9410,6 +9514,10 @@ func (stp *SubtreeProcessor) bucketShardedGetAndSetIfNotExists(
 
 			for j, origIdx := range indices {
 				wasInserted[origIdx] = results[j]
+
+				if outPositions != nil && positions != nil {
+					outPositions[origIdx] = positions[j]
+				}
 			}
 
 			return nil
@@ -9428,6 +9536,7 @@ func (stp *SubtreeProcessor) legacyParallelGetAndSetIfNotExists(
 	removeMapLength int,
 	concurrencyLimit int,
 	wasInserted []bool,
+	outPositions []uint64,
 ) error {
 	batchSize := (len(nodes) + concurrencyLimit - 1) / concurrencyLimit
 	if batchSize < 1 {
@@ -9500,6 +9609,10 @@ func (stp *SubtreeProcessor) legacyParallelGetAndSetIfNotExists(
 				_, wasSet := stp.currentTxMap.SetIfNotExistsAt(node.Hash, nodeParents, position)
 				wasInserted[idx] = wasSet
 
+				if outPositions != nil {
+					outPositions[idx] = position
+				}
+
 				if !wasSet {
 					stp.logger.Debugf("duplicate transaction ignored: %s", node.Hash.String())
 				}
@@ -9510,7 +9623,13 @@ func (stp *SubtreeProcessor) legacyParallelGetAndSetIfNotExists(
 			}
 
 			moved := make([]bool, len(moveHashes))
-			if missing, moveErr := dstDisk.MoveFrom(srcDisk, moveHashes, moved); missing >= 0 {
+
+			var movedPositions []uint64
+			if outPositions != nil {
+				movedPositions = make([]uint64, len(moveHashes))
+			}
+
+			if missing, moveErr := dstDisk.MoveFromAt(srcDisk, moveHashes, moved, movedPositions); missing >= 0 {
 				if moveErr != nil {
 					return errors.NewProcessingError("error reading node %s from currentTxMap", moveHashes[missing].String(), moveErr)
 				}
@@ -9520,6 +9639,10 @@ func (stp *SubtreeProcessor) legacyParallelGetAndSetIfNotExists(
 
 			for j, idx := range moveIdxs {
 				wasInserted[idx] = moved[j]
+
+				if movedPositions != nil {
+					outPositions[idx] = movedPositions[j]
+				}
 
 				if !moved[j] {
 					stp.logger.Debugf("duplicate transaction ignored: %s", moveHashes[j].String())

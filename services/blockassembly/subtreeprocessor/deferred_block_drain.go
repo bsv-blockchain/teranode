@@ -151,16 +151,21 @@ func (stp *SubtreeProcessor) addDrainedBatches(ctx context.Context, batches []*T
 	// Compact in place: nodes is not read again, and each write lands at or
 	// before the position being read.
 	kept := nodes[:0]
+	keptPositions := positions[:0]
 
 	for i := range nodes {
 		if keep[i] {
 			kept = append(kept, nodes[i])
+
+			if positions != nil {
+				keptPositions = append(keptPositions, positions[i])
+			}
 		}
 	}
 
 	prometheusSubtreeProcessorDequeuedTxs.Add(float64(total))
 
-	if err := stp.parallelBuildRemainderSubtrees(ctx, kept, false); err != nil {
+	if err := stp.parallelBuildRemainderSubtrees(ctx, kept, keptPositions, false); err != nil {
 		return 0, err
 	}
 

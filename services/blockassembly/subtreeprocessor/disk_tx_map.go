@@ -804,6 +804,13 @@ func (m *DiskTxMap) SetIfNotExistsAt(hash chainhash.Hash, inpoints *subtreepkg.T
 // have, or the position of a hash src couldn't read with the read error,
 // which is also recorded on src, as Get records it.
 func (m *DiskTxMap) MoveFrom(src *DiskTxMap, hashes []chainhash.Hash, wasSet []bool) (int, error) {
+	return m.MoveFromAt(src, hashes, wasSet, nil)
+}
+
+// MoveFromAt is MoveFrom that also sets positions[i] to the lane position (util/lane) src keeps
+// with hashes[i], 0 for none, read from the record it copies, for each hash m did not already
+// hold. A nil positions reads none.
+func (m *DiskTxMap) MoveFromAt(src *DiskTxMap, hashes []chainhash.Hash, wasSet []bool, positions []uint64) (int, error) {
 	n := len(hashes)
 	if n == 0 {
 		return -1, nil
@@ -948,6 +955,10 @@ func (m *DiskTxMap) MoveFrom(src *DiskTxMap, hashes []chainhash.Hash, wasSet []b
 			if err != nil {
 				src.recordErr(err)
 				return int(i), err
+			}
+
+			if positions != nil {
+				_, positions[i] = splitPositioned(payload, magic)
 			}
 
 			payloads = append(payloads, payload)

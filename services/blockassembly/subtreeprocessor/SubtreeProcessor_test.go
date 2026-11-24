@@ -1456,7 +1456,7 @@ func TestParallelBuildRemainderSubtrees_MultiChunk(t *testing.T) {
 	stp.currentSubtree.Store(cs)
 	stp.chainedSubtrees = make([]*subtreepkg.Subtree, 0)
 
-	require.NoError(t, stp.parallelBuildRemainderSubtrees(ctx, ordered, true))
+	require.NoError(t, stp.parallelBuildRemainderSubtrees(ctx, ordered, nil, true))
 
 	// Reassemble leaf order from chainedSubtrees followed by currentSubtree,
 	// stripping coinbase placeholders.
@@ -4638,7 +4638,7 @@ func TestNewSubtreeChanContextCancellation(t *testing.T) {
 		cancel()
 
 		waitForReturn(t, "parallelBuildRemainderSubtrees", func() error {
-			return stp.parallelBuildRemainderSubtrees(cancelledCtx, kept, true)
+			return stp.parallelBuildRemainderSubtrees(cancelledCtx, kept, nil, true)
 		})
 	})
 }
