@@ -69,6 +69,9 @@ func currentAerospikePolicies() *aerospikePolicyValues {
 	return &aerospikePolicyValues{}
 }
 
+// aerospikeStatsMu serialises processAerospikeStats.
+var aerospikeStatsMu sync.Mutex
+
 var aerospikePrometheusMetrics = *safemap.New[string, prometheus.Counter]()
 var aerospikePrometheusHistograms = *safemap.New[string, prometheus.Histogram]()
 
@@ -576,6 +579,11 @@ func processAerospikeStats(
 	latencyBuckets []float64,
 	nonAlphanumericRegex *regexp.Regexp,
 ) {
+	// Every client runs its own stats loop, and the loops share the delta state and the metrics
+	// they create; two clients in one process raced on both.
+	aerospikeStatsMu.Lock()
+	defer aerospikeStatsMu.Unlock()
+
 	// stats are: map[string]interface {} of
 	// "server" -> map[string]interface{}
 	// "cluster-aggregated-stats" -> map[string]interface{}
