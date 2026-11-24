@@ -37,3 +37,17 @@ func TestNBit_UnmarshalJSON_rejectsWrongLength(t *testing.T) {
 	var nb NBit
 	require.Error(t, nb.UnmarshalJSON([]byte(`"1e0cbb"`)))
 }
+
+// A JSON value that is not a string cannot hold a hex NBit; it must be rejected
+// by the json.Unmarshal step rather than panicking or silently passing.
+func TestNBit_UnmarshalJSON_rejectsNonStringJSON(t *testing.T) {
+	var nb NBit
+	require.Error(t, nb.UnmarshalJSON([]byte(`12345678`)))
+}
+
+// A well-formed JSON string that is not valid hex must be rejected by the hex
+// decoder rather than leaving a partially written NBit.
+func TestNBit_UnmarshalJSON_rejectsInvalidHex(t *testing.T) {
+	var nb NBit
+	require.Error(t, nb.UnmarshalJSON([]byte(`"zzzzzzzz"`)))
+}
