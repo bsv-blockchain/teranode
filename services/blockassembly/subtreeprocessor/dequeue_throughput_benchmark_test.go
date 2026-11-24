@@ -10,6 +10,7 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
 	"github.com/bsv-blockchain/teranode/model"
+	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/util/lane"
 )
 
@@ -25,8 +26,9 @@ func BenchmarkDequeueThroughput(b *testing.B) {
 		itemsPerSubtree = 1 << 20
 	)
 
-	// The _lanes variants hand every tx a lane position with its batch, as the validator does at
-	// utxostore_laneMigration shadow, so the pool keeps it with the tx's inpoints.
+	// The _lanes variants run at utxostore_laneMigration shadow and hand every tx a lane position
+	// with its batch, as the validator does, so the pool keeps it with the tx's inpoints and each
+	// subtree's lane bitmaps are built when it is sealed.
 	variants := []struct {
 		name  string
 		disks int
@@ -64,6 +66,12 @@ func BenchmarkDequeueThroughput(b *testing.B) {
 						}
 
 						opts = append(opts, WithTxMapDirs(dirs))
+					}
+
+					if v.lanes {
+						opts = append(opts, func(stp *SubtreeProcessor) {
+							stp.settings.UtxoStore.LaneMigration = settings.LaneMigrationShadow
+						}, WithLaneBitmapsKeeper(newRecordingLaneKeeper()))
 					}
 
 					stp, cleanup := newAddNodesBenchProcessor(b, itemsPerSubtree, opts...)
