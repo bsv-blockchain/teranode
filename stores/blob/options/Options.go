@@ -503,6 +503,13 @@ func (o *Options) ConstructFilename(basePath string, key []byte, fileType filefo
 	// For positive HashPrefix, take characters from the beginning
 	prefix = o.CalculatePrefix(filename)
 
+	// A caller-supplied filename that starts or ends with ".." passes ValidateFilename, but with
+	// a HashPrefix of 2 or -2 it yields the prefix "..", and filepath.Join would resolve that
+	// folder one level above SubDirectory.
+	if prefix == ".." {
+		return "", errors.NewInvalidArgumentError("filename yields a parent-directory hash prefix")
+	}
+
 	// Build the folder to use based on the StoreOption SubDirectory and the calculated prefix
 	folder := filepath.Join(basePath, o.SubDirectory, prefix)
 

@@ -390,6 +390,46 @@ func TestConstructFilenameRejectsUnsafeFilename(t *testing.T) {
 	}
 }
 
+// TestConstructFilenameRejectsParentHashPrefix covers names that ValidateFilename accepts but
+// whose hash prefix is "..": joined as a folder, that prefix would step out of SubDirectory.
+func TestConstructFilenameRejectsParentHashPrefix(t *testing.T) {
+	base := t.TempDir()
+	ext := "." + fileformat.FileTypeTesting.String()
+
+	tests := []struct {
+		name       string
+		filename   string
+		hashPrefix int
+		want       string // relative to base; empty means the name must be refused
+	}{
+		{"leading dots, prefix 2", "..x", 2, ""},
+		{"trailing dots, prefix -2", "x..", -2, ""},
+		{"inner dots, prefix 2", "a..b", 2, filepath.Join("sub", "a.", "a..b"+ext)},
+		{"leading dots, prefix 3", "..x", 3, filepath.Join("sub", "..x", "..x"+ext)},
+		// The prefix "." cleans away, so the file sits directly in SubDirectory.
+		{"single dot, prefix 1", ".x", 1, filepath.Join("sub", ".x"+ext)},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			o := NewFileOptions(WithFilename(tc.filename))
+			o.SubDirectory = "sub"
+			o.HashPrefix = tc.hashPrefix
+
+			got, err := o.ConstructFilename(base, nil, fileformat.FileTypeTesting)
+			if tc.want == "" {
+				require.Error(t, err)
+				require.Empty(t, got)
+
+				return
+			}
+
+			require.NoError(t, err)
+			require.Equal(t, filepath.Join(base, tc.want), got)
+		})
+	}
+}
+
 // TestQueryToFileOptions_IgnoresAllowOverwrite pins the fix for issue 4841: the server reads
 // the overwrite flag only in handleSet, for an authenticated POST, so it must never come back
 // through this function, which runs for every method.
