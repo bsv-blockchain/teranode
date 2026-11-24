@@ -291,6 +291,30 @@ func TestReset_ClearsKeptMinedSets(t *testing.T) {
 	require.Equal(t, int64(1), stp.queue.length(), "the transaction is queued again after the reset")
 }
 
+// A failed reset leaves the old block applied, so its kept set must still reject a late hand-off.
+func TestReset_FailedPrecheckKeepsMinedSet(t *testing.T) {
+	stp, _, _, chain := newResetWALTestProcessor(t, false)
+	stp.settings.BlockAssembly.MinedTxSetRetention = 10 * time.Second
+	stp.InitCurrentBlockHeader(chain.moveForward[1].Header)
+
+	mined := chainhash.HashH([]byte("mined-before-failed-reset"))
+	stp.keepMinedSet(chain.moveForward[1], frozenHashSet(t, mined))
+	beforeHeader := stp.GetCurrentBlockHeader()
+	beforeMap := stp.GetCurrentTxMap()
+
+	missing := chainhash.HashH([]byte("missing-move-forward-subtree"))
+	moveForward := &model.Block{Header: dummyHeader(), Subtrees: []*chainhash.Hash{&missing}}
+	err := stp.reset(chain.moveForward[0].Header, []*model.Block{chain.moveForward[1]}, []*model.Block{moveForward}, false, nil)
+	require.ErrorContains(t, err, "moveForward subtree cannot be opened")
+	require.Same(t, beforeHeader, stp.GetCurrentBlockHeader())
+	require.Same(t, beforeMap, stp.GetCurrentTxMap())
+	require.Equal(t, 1, stp.keptMinedSetCount(), "the still-applied block must keep its mined set")
+
+	late := batchOf(mined)
+	require.Equal(t, Admitted, stp.AddBatchBounded(late.nodes, late.txInpoints, false, late.validatedHeights))
+	require.Zero(t, stp.queue.length(), "a late hand-off after the failed reset must stay out of the template")
+}
+
 // The arrival check leaves the caller's slices as they were: block assembly's server sends the same
 // slices again after a refusal, and a second call must queue only the survivors again.
 func TestAddBatchBounded_ArrivalCheckLeavesCallerSlicesUnchanged(t *testing.T) {

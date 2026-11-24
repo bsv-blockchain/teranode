@@ -1703,10 +1703,6 @@ func (stp *SubtreeProcessor) reset(blockHeader *model.BlockHeader, moveBackBlock
 	stp.SetUnminedLoading(true)
 	defer stp.SetUnminedLoading(false)
 
-	// A reset can move back any block and rebuilds block assembly from the UTXO store, so no
-	// kept block set is known to still hold mined transactions only.
-	stp.clearMinedSets()
-
 	// reset has no rollback: it commits to a new state (clearing currentTxMap
 	// below, then reloading) unconditionally, unlike moveForwardBlock/
 	// reorgBlocks which can still swap back before their own commit point. A
@@ -1836,6 +1832,10 @@ func (stp *SubtreeProcessor) reset(blockHeader *model.BlockHeader, moveBackBlock
 
 		return errors.NewProcessingError("[SubtreeProcessor][reset] tx map still holds %d entries after clear, refusing to reload on top of stale state", remaining)
 	}
+
+	// A successful rotation commits the reset. It may move back any block and reload from the
+	// UTXO store, so no kept block set is known to still hold mined transactions only.
+	stp.clearMinedSets()
 
 	// The rotation above is itself the cure for any disk tx map error already
 	// pending, or already requesting a reset, before this point (a stale error
