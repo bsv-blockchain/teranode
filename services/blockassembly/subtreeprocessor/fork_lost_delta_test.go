@@ -3,8 +3,6 @@ package subtreeprocessor
 import (
 	"context"
 	"fmt"
-	"github.com/bsv-blockchain/teranode/services/blockchain"
-	"github.com/stretchr/testify/mock"
 	"math/rand"
 	"slices"
 	"testing"
@@ -14,6 +12,8 @@ import (
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
+	"github.com/bsv-blockchain/teranode/services/blockchain"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 

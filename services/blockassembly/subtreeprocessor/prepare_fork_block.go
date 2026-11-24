@@ -160,11 +160,14 @@ func (stp *SubtreeProcessor) prepareForkBlock(block *model.Block) {
 func (stp *SubtreeProcessor) runForkPrepare(ctx context.Context, e *forkPrepared, parent *forkPrepared, block *model.Block) {
 	defer close(e.done)
 
+	// not read after the build: a competitor's entry held here would keep its set alive
+	competitor := parent == nil
+
 	e.err = stp.buildForkSet(ctx, e, parent, block)
 	if e.err != nil {
 		stp.logger.Warnf("[PrepareBlock][%s] not preparing the block for a fork reorg: %v", block.String(), e.err)
 		stp.removeFork(e)
-	} else if parent == nil {
+	} else if competitor {
 		go stp.runForkLostDelta(e)
 	}
 }
@@ -218,6 +221,12 @@ func (stp *SubtreeProcessor) buildForkSet(ctx context.Context, e *forkPrepared, 
 		e.lost = nil
 	}
 
+	// the competitor's set is let go with its entry unless it is kept here
+	var first *SortedHashSet
+	if keepFirst {
+		first = parent.txMap
+	}
+
 	if parent != nil {
 		stp.removeFork(parent)
 	}
@@ -226,7 +235,7 @@ func (stp *SubtreeProcessor) buildForkSet(ctx context.Context, e *forkPrepared, 
 		return err
 	}
 
-	e.firstMask = markFirstSet(parent.txMap, e.txMap, forkPrepareWorkers())
+	e.firstMask = markFirstSet(first, e.txMap, forkPrepareWorkers())
 
 	return nil
 }

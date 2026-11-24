@@ -169,18 +169,25 @@ func deriveForkDelta(pre *reorgDelta, mask []atomic.Uint64, union *SortedHashSet
 		bitmap[i].Store(mask[i].Load())
 	}
 
-	// the first winner's hashes the lost block lacks are D2 whatever the next winner holds
-	for _, h := range pre.D2 {
-		if pos, ok := union.Find(h); ok {
-			bitmap[pos/64].Store(bitmap[pos/64].Load() &^ (1 << (pos % 64)))
-		}
-	}
-
-	chunks := make([][]reorgDeltaNode, (len(pre.D1)+forkDeltaChunk-1)/forkDeltaChunk)
-
 	var g errgroup.Group
 
 	g.SetLimit(max(1, workers))
+
+	// the first winner's hashes the lost block lacks are D2 whatever the next winner holds. They are not
+	// among the candidates, which the first winner lacks, so the two passes touch other bits.
+	for start := 0; start < len(pre.D2); start += forkDeltaChunk {
+		g.Go(func() error {
+			for _, h := range pre.D2[start:min(start+forkDeltaChunk, len(pre.D2))] {
+				if pos, ok := union.Find(h); ok {
+					bitmap[pos/64].And(^(uint64(1) << (pos % 64)))
+				}
+			}
+
+			return nil
+		})
+	}
+
+	chunks := make([][]reorgDeltaNode, (len(pre.D1)+forkDeltaChunk-1)/forkDeltaChunk)
 
 	for c := range chunks {
 		g.Go(func() error {
