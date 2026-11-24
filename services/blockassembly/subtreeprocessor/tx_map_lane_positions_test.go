@@ -107,11 +107,10 @@ func TestSplitTxInpointsMapRecordWithoutPositionIsUnchanged(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, found)
 
-	meta, position, found, err := withPosition.AppendMetaInpointsAt(nil, hash)
+	meta, found, err := withPosition.AppendMetaInpoints(nil, hash)
 	require.NoError(t, err)
 	require.True(t, found)
 	require.Equal(t, plainMeta, meta, "the subtree meta bytes leave the position out")
-	require.Equal(t, lanePositionSample, position)
 
 	serialized, found, err := withPosition.AppendSerialized(nil, hash)
 	require.NoError(t, err)

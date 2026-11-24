@@ -39,7 +39,7 @@ func TestBuildSubtreeMeta_ParentMapClosedUnderTheRequest(t *testing.T) {
 	ba := &BlockAssembly{logger: ulogger.TestLogger{}}
 	req := subtreeprocessor.NewSubtreeRequest{Subtree: st, ParentTxMap: diskMap}
 
-	_, ok := ba.buildSubtreeMeta(req, nil)
+	_, ok := ba.buildSubtreeMeta(req)
 	require.True(t, ok, "precondition: the meta builds while the map is open")
 
 	// Storage workers read the map while it is closed, as a request still in
@@ -56,7 +56,7 @@ func TestBuildSubtreeMeta_ParentMapClosedUnderTheRequest(t *testing.T) {
 			<-start
 
 			for range 20 {
-				_, _ = ba.buildSubtreeMeta(req, nil)
+				_, _ = ba.buildSubtreeMeta(req)
 			}
 		}()
 	}
@@ -65,7 +65,7 @@ func TestBuildSubtreeMeta_ParentMapClosedUnderTheRequest(t *testing.T) {
 	require.NoError(t, diskMap.Close())
 	wg.Wait()
 
-	_, ok = ba.buildSubtreeMeta(req, nil)
+	_, ok = ba.buildSubtreeMeta(req)
 	require.False(t, ok, "a closed parent map holds no entries, so the meta is not built")
 
 	_, found := diskMap.Get(st.Nodes[1].Hash)

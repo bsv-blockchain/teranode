@@ -7,19 +7,7 @@ import (
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
 	txmap "github.com/bsv-blockchain/go-tx-map"
 	"github.com/bsv-blockchain/teranode/errors"
-	"github.com/bsv-blockchain/teranode/util/lane"
 )
-
-// positionedSerializedInpointsMap is a serializedInpointsMap that also gives the lane position it
-// keeps with a tx, read under the same lock as its inpoints (the in-memory SplitTxInpointsMap), so
-// a subtree's lane bitmaps are built in the pass that builds its meta.
-type positionedSerializedInpointsMap interface {
-	serializedInpointsMap
-	// AppendSerializedAt is AppendSerialized that also returns the lane position, 0 for none.
-	AppendSerializedAt(dst []byte, hash chainhash.Hash) (out []byte, position uint64, found bool, err error)
-	// AppendMetaInpointsAt is AppendMetaInpoints that also returns the lane position, 0 for none.
-	AppendMetaInpointsAt(dst []byte, hash chainhash.Hash) (out []byte, position uint64, found bool, err error)
-}
 
 // serializedInpointsMap is a parent tx map that keeps inpoints serialized (the
 // in-memory SplitTxInpointsMap). It copies a record into dst while holding its
@@ -46,20 +34,8 @@ var emptyInpointsWire = [4]byte{} // TxInpoints.Serialize of inpoints without pa
 // Meta and serializing it fails: a node with no inpoints anywhere, inpoints
 // that cannot be serialized, or parent hashes that were never set on any node
 // but the first.
-//
-// With laneBits, at utxostore_laneMigration shadow, it also adds the lane position of every node
-// but the coinbase placeholder to laneBits. When parents keeps positions, each node's position is
-// read with its inpoints, under the same lock; that includes node 0 of a subtree that is not its
-// block's first, which is a real tx. A node found only in deletedTxs, because it was removed while
-// the subtree was being stored, takes its position from deletedPositions, the backup kept beside
-// it, or has none, which is counted. laneBits is complete only when it returns no error.
-func buildSubtreeMetaBytes(subtree *subtreepkg.Subtree, parents serializedInpointsMap, deletedTxs *txmap.SyncedMap[chainhash.Hash, subtreepkg.TxInpoints], deletedPositions *txmap.SyncedMap[chainhash.Hash, uint64], laneBits *laneCollector) ([]byte, error) {
+func buildSubtreeMetaBytes(subtree *subtreepkg.Subtree, parents serializedInpointsMap, deletedTxs *txmap.SyncedMap[chainhash.Hash, subtreepkg.TxInpoints]) ([]byte, error) {
 	nodes := subtree.Nodes
-
-	var positioned positionedSerializedInpointsMap
-	if laneBits != nil {
-		positioned, _ = parents.(positionedSerializedInpointsMap)
-	}
 
 	// root hash, node count, and for a typical tx one parent with a vout or two
 	out := make([]byte, 0, chainhash.HashSize+4+len(nodes)*(4+chainhash.HashSize+8))
@@ -78,19 +54,13 @@ func buildSubtreeMetaBytes(subtree *subtreepkg.Subtree, parents serializedInpoin
 		}
 
 		var (
-			found    bool
-			err      error
-			position uint64
+			found bool
+			err   error
 		)
 
-		switch {
-		case idx == 0 && positioned != nil:
-			out, position, found, err = positioned.AppendSerializedAt(out, node.Hash)
-		case idx == 0:
+		if idx == 0 {
 			out, found, err = parents.AppendSerialized(out, node.Hash)
-		case positioned != nil:
-			out, position, found, err = positioned.AppendMetaInpointsAt(out, node.Hash)
-		default:
+		} else {
 			out, found, err = parents.AppendMetaInpoints(out, node.Hash)
 		}
 
@@ -99,22 +69,7 @@ func buildSubtreeMetaBytes(subtree *subtreepkg.Subtree, parents serializedInpoin
 		}
 
 		if found {
-			if laneBits != nil {
-				laneBits.Add(position)
-			}
-
 			continue
-		}
-
-		// removed while the subtree was being stored: its position is in the backup beside its
-		// inpoints, read before them (see backUpLanePosition)
-		positionKnown := true
-
-		if laneBits != nil {
-			var removedPosition uint64
-
-			removedPosition, positionKnown = removedLanePosition(parents, deletedPositions, node.Hash)
-			laneBits.Add(removedPosition)
 		}
 
 		if deletedTxs == nil {
@@ -124,10 +79,6 @@ func buildSubtreeMetaBytes(subtree *subtreepkg.Subtree, parents serializedInpoin
 		deleted, found := deletedTxs.Get(node.Hash)
 		if !found {
 			return nil, errors.NewProcessingError("inpoints of node %s not found in the parent tx map or the deleted txs", node.Hash.String())
-		}
-
-		if !positionKnown {
-			laneBits.lost++
 		}
 
 		if idx != 0 && deleted.ParentTxHashes == nil {
@@ -141,98 +92,4 @@ func buildSubtreeMetaBytes(subtree *subtreepkg.Subtree, parents serializedInpoin
 	}
 
 	return out, nil
-}
-
-// removedLanePosition returns the lane position of a member the pool map did not hold when it was
-// read, and whether it is known. At utxostore_laneMigration shadow a removed tx's position is backed
-// up beside its inpoints, 0 included for one without a position, so a member with no backup entry
-// is either back in the pool (a re-chain re-added it and dropped the backup) or its backup was
-// dropped by another storage request's cleanup: the pool map is read again, and if it does not hold
-// the member either, its position is not known. Without backups (deletedPositions nil) the pool
-// map's answer is taken as it is.
-func removedLanePosition(pool any, deletedPositions *txmap.SyncedMap[chainhash.Hash, uint64], hash chainhash.Hash) (uint64, bool) {
-	if deletedPositions == nil {
-		return poolLanePosition(pool, hash), true
-	}
-
-	if position, ok := deletedPositions.Get(hash); ok {
-		return position, true
-	}
-
-	// back in the pool, or gone: one read that says both, so a tx cleared between two reads is
-	// not taken as present without a position
-	if position, found := poolLookupPosition(pool, hash); found {
-		return position, true
-	}
-
-	return 0, false
-}
-
-// laneCollector gathers a subtree's lane positions during its meta pass. lost counts the members
-// whose position could not be told from none, which makes the bitmaps unusable.
-type laneCollector struct {
-	*lane.BitmapsBuilder
-	lost int
-}
-
-func newLaneCollector() *laneCollector {
-	return &laneCollector{BitmapsBuilder: lane.NewBitmapsBuilder()}
-}
-
-// poolLookupPosition reads hash's lane position from the pool map and whether the map holds hash.
-// Both pool maps answer from one read (LookupPosition); a map without it is asked whether it holds
-// hash after its position read, and a read error counts as not held.
-func poolLookupPosition(pool any, hash chainhash.Hash) (uint64, bool) {
-	if m, ok := pool.(interface {
-		LookupPosition(hash chainhash.Hash) (uint64, bool, error)
-	}); ok {
-		position, found, err := m.LookupPosition(hash)
-
-		return position, found && err == nil
-	}
-
-	if position := poolLanePosition(pool, hash); position != 0 {
-		return position, true
-	}
-
-	if m, ok := pool.(interface {
-		Exists(hash chainhash.Hash) bool
-	}); ok && m.Exists(hash) {
-		// re-added after the read above: read it once more
-		return poolLanePosition(pool, hash), true
-	}
-
-	return 0, false
-}
-
-// poolLanePosition reads hash's lane position from the pool map, 0 when it holds none or does not
-// hold hash. A map that has PositionWithErr (the disk map) is read with it, so a read error is not
-// recorded on the map, where the processor's next check would take it for its own.
-func poolLanePosition(pool any, hash chainhash.Hash) uint64 {
-	switch m := pool.(type) {
-	case interface {
-		PositionWithErr(hash chainhash.Hash) (uint64, error)
-	}:
-		position, _ := m.PositionWithErr(hash)
-
-		return position
-	case interface {
-		Position(hash chainhash.Hash) uint64
-	}:
-		return m.Position(hash)
-	default:
-		return 0
-	}
-}
-
-// deletedLanePosition returns the lane position backed up for hash when it was removed from the pool
-// while its subtree was being stored, or 0 for none.
-func deletedLanePosition(deletedPositions *txmap.SyncedMap[chainhash.Hash, uint64], hash chainhash.Hash) uint64 {
-	if deletedPositions == nil {
-		return 0
-	}
-
-	position, _ := deletedPositions.Get(hash)
-
-	return position
 }

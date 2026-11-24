@@ -24,15 +24,13 @@ const (
 // Why a block's rows were not built.
 const (
 	// MissingBitmapsAbsent: a subtree of a peer's block has no lane bitmaps file, or a subtree of a
-	// block this node mined has no bitmaps kept and no storage worker has taken it, which includes
-	// one still queued for storage behind a backlog.
+	// block this node mined has no bitmaps kept.
 	MissingBitmapsAbsent = "absent"
 	// MissingBitmapsUnreadable: a subtree's lane bitmaps file could not be read or decoded (peers'
 	// blocks only).
 	MissingBitmapsUnreadable = "unreadable"
 	// MissingBitmapsTimedOut: reading a peer block's lane bitmaps files ran past its deadline or was
-	// cancelled, or a subtree of a block this node mined was still being stored when its wait
-	// ended.
+	// cancelled (peers' blocks only).
 	MissingBitmapsTimedOut = "timed_out"
 	// MissingBitmapsWriteFailed: a subtree's lane bitmaps file could not be encoded or written, by
 	// subtree validation (block peer) or block assembly (block own). It is counted when the write
@@ -105,7 +103,7 @@ func initRowsMetrics() {
 			Namespace: "teranode",
 			Subsystem: "lane",
 			Name:      "missing_bitmaps_total",
-			Help:      "Subtrees without usable lane bitmaps, by reason; block is peer or own. absent, unreadable and timed_out are counted for the subtrees of a block stored without lane rows. For a peer's block (block peer) the bitmaps are its subtrees' lane bitmaps files, read by block validation: absent, unreadable, or timed_out when not read by the deadline. For a block this node mined (block own) they are the bitmaps block assembly kept in memory, not read from a file: timed_out when the subtree was still being stored as the wait ended, absent when nothing was kept and no storage worker had taken it, which includes a subtree still queued for storage behind a backlog. write_failed is counted when a subtree's lane bitmaps file could not be written, by subtree validation (block peer) or by block assembly (block own); a peer's block that later lists that subtree counts it again, as absent",
+			Help:      "Subtrees without usable lane bitmaps, by reason; block is peer or own. absent, unreadable and timed_out are counted for the subtrees of a block stored without lane rows. For a peer's block (block peer) the bitmaps are its subtrees' lane bitmaps files, read by block validation: absent, unreadable, or timed_out when not read by the deadline. For a block this node mined (block own) they are the bitmaps block assembly kept in memory when it sealed the subtree, not read from a file: absent when none were kept. write_failed is counted when a subtree's lane bitmaps file could not be written, by subtree validation (block peer) or by block assembly (block own); a peer's block that later lists that subtree counts it again, as absent",
 		}, []string{"block", "reason"})
 		prometheusLaneTxsNoPosition = promauto.NewCounterVec(prometheus.CounterOpts{
 			Namespace: "teranode",

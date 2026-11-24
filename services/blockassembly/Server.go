@@ -345,8 +345,24 @@ func (ba *BlockAssembly) Init(ctx context.Context) (err error) {
 	// nil when no txmeta producer is configured, which disables eviction publishing
 	txMetaEvictor := subtreeprocessor.NewTxMetaEvictor(ba.logger, ba.txMetaProducer)
 
+	assemblerOpts := []BlockAssemblerOption{WithTxMetaEvictor(txMetaEvictor)}
+
+	// at utxostore_laneMigration shadow the subtree processor keeps each chained subtree's lane
+	// bitmaps here, for the rows of the blocks this node mines (lane_rows.go)
+	if ba.keepsLanePositions() {
+		ba.ownLaneBitmaps.height = func() uint32 {
+			if ba.blockAssembler == nil || ba.blockAssembler.utxoStore == nil {
+				return 0
+			}
+
+			return ba.blockAssembler.utxoStore.GetBlockHeight()
+		}
+
+		assemblerOpts = append(assemblerOpts, WithLaneBitmapsKeeper(&ba.ownLaneBitmaps))
+	}
+
 	ba.blockAssembler, err = NewBlockAssembler(ctx, ba.logger, ba.settings, ba.stats, ba.utxoStore, ba.subtreeStore, ba.blockchainClient, newSubtreeChan,
-		WithTxMetaEvictor(txMetaEvictor))
+		assemblerOpts...)
 	if err != nil {
 		return errors.NewServiceError("failed to init block assembler", err)
 	}
@@ -636,7 +652,6 @@ func (ba *BlockAssembly) runNewSubtreeListener(ctx context.Context, newSubtreeCh
 
 		case newSubtreeRequest := <-newSubtreeChan:
 			ba.logger.Infof("[runNewSubtreeListener][%s] New subtree request: %d", newSubtreeRequest.Subtree.RootHash().String(), seq)
-
 			work := &subtreeStorageWork{
 				seq:     seq,
 				request: newSubtreeRequest,
@@ -669,11 +684,6 @@ func (ba *BlockAssembly) subtreeStorageWorker(ctx context.Context, workChan <-ch
 
 		ba.logger.Infof("[subtreeStorageWorker][%s] Storing subtree (seq=%d)", work.request.Subtree.RootHash().String(), work.seq)
 
-		// at shadow a block listing this subtree waits for its lane bitmaps while it is stored
-		if ba.keepsLanePositions() {
-			ba.ownLaneBitmaps.expect(*work.request.Subtree.RootHash())
-		}
-
 		// Store subtree and meta
 		subtreeDone, allDone, err := ba.storeSubtreeData(ctx, work.request, subtreeRetryChan)
 		result.err = err
@@ -696,21 +706,12 @@ func (ba *BlockAssembly) subtreeStorageWorker(ctx context.Context, workChan <-ch
 		select {
 		case resultChan <- result:
 		case <-ctx.Done():
-			if ba.keepsLanePositions() {
-				ba.ownLaneBitmaps.settle(*work.request.Subtree.RootHash())
-			}
-
 			return
 		}
 
 		// Wait for all work to complete before sending response to caller
 		if allDone != nil {
 			<-allDone
-		}
-
-		// at shadow nothing waits for this subtree's lane bitmaps any more, kept or not
-		if ba.keepsLanePositions() {
-			ba.ownLaneBitmaps.settle(*work.request.Subtree.RootHash())
 		}
 
 		// Send error back to caller if channel exists.
@@ -929,18 +930,13 @@ func (ba *BlockAssembly) sendSubtreeNotification(ctx context.Context, subtreeHas
 
 // buildSubtreeMeta returns the serialized subtree meta of the subtree in the
 // request, or false, after logging why, when it cannot be built.
-//
-// With laneBits, at utxostore_laneMigration shadow, it adds the lane position of every node but
-// the coinbase placeholder to laneBits in the same pass. Both pool maps return each position with
-// its inpoints, from one lock or one disk read; any other map is asked for it after. laneBits is
-// complete only when it reports true.
-func (ba *BlockAssembly) buildSubtreeMeta(subtreeRequest subtreeprocessor.NewSubtreeRequest, laneBits *laneCollector) ([]byte, bool) {
+func (ba *BlockAssembly) buildSubtreeMeta(subtreeRequest subtreeprocessor.NewSubtreeRequest) ([]byte, bool) {
 	subtree := subtreeRequest.Subtree
 
 	// An in-memory tx map keeps the inpoints serialized, so the meta is put
 	// together from those bytes without decoding and encoding every tx's inpoints.
 	if serialized, ok := subtreeRequest.ParentTxMap.(serializedInpointsMap); ok {
-		subtreeMetaBytes, err := buildSubtreeMetaBytes(subtree, serialized, subtreeRequest.DeletedTxs, subtreeRequest.DeletedPositions, laneBits)
+		subtreeMetaBytes, err := buildSubtreeMetaBytes(subtree, serialized, subtreeRequest.DeletedTxs)
 		if err != nil {
 			ba.logger.Errorf("[BlockAssembly:storeSubtreeData][%s] failed to build subtree meta: %s", subtree.RootHash().String(), err)
 			return nil, false
@@ -960,75 +956,31 @@ func (ba *BlockAssembly) buildSubtreeMeta(subtreeRequest subtreeprocessor.NewSub
 		GetWithErr(hash chainhash.Hash) (*subtreepkg.TxInpoints, bool, error)
 	})
 
-	// DiskTxMap reads a tx's lane position from the record its inpoints are read from.
-	var parentTxMapWithPosition interface {
-		GetAtWithErr(hash chainhash.Hash) (*subtreepkg.TxInpoints, uint64, bool, error)
-	}
-
-	if laneBits != nil {
-		parentTxMapWithPosition, _ = subtreeRequest.ParentTxMap.(interface {
-			GetAtWithErr(hash chainhash.Hash) (*subtreepkg.TxInpoints, uint64, bool, error)
-		})
-	}
-
 	for idx, node := range subtreeRequest.Subtree.Nodes {
 		if !node.Hash.Equal(subtreepkg.CoinbasePlaceholderHashValue) {
 			var (
 				txInpoints *subtreepkg.TxInpoints
 				found      bool
-				position   uint64
 			)
 
-			switch {
-			case parentTxMapWithPosition != nil:
-				var getErr error
-
-				txInpoints, position, found, getErr = parentTxMapWithPosition.GetAtWithErr(node.Hash)
-				if getErr != nil {
-					ba.logger.Errorf("[BlockAssembly:storeSubtreeData][%s] error reading parent tx hashes for node %s: %s", subtreeRequest.Subtree.RootHash().String(), node.Hash.String(), getErr)
-				}
-			case parentTxMapSupportsErr:
+			if parentTxMapSupportsErr {
 				var getErr error
 
 				txInpoints, found, getErr = parentTxMapWithErr.GetWithErr(node.Hash)
 				if getErr != nil {
 					ba.logger.Errorf("[BlockAssembly:storeSubtreeData][%s] error reading parent tx hashes for node %s: %s", subtreeRequest.Subtree.RootHash().String(), node.Hash.String(), getErr)
 				}
-			default:
+			} else {
 				txInpoints, found = subtreeRequest.ParentTxMap.Get(node.Hash)
-
-				if laneBits != nil && found {
-					position = subtreeRequest.ParentTxMap.Position(node.Hash)
-				}
 			}
 
 			if !found && subtreeRequest.DeletedTxs != nil {
-				// Fallback: check if transaction was deleted during async storage. Its lane
-				// position is read from the backup beside it first (see backUpLanePosition); one
-				// that cannot be told from none makes the subtree's lane bitmaps unusable.
-				var (
-					removedPosition uint64
-					positionKnown   = true
-				)
-
-				if laneBits != nil {
-					removedPosition, positionKnown = removedLanePosition(subtreeRequest.ParentTxMap, subtreeRequest.DeletedPositions, node.Hash)
-				}
-
+				// Fallback: check if transaction was deleted during async storage
 				var deletedTxInpoints subtreepkg.TxInpoints
 				deletedTxInpoints, found = subtreeRequest.DeletedTxs.Get(node.Hash)
 				if found {
 					txInpoints = &deletedTxInpoints
-					position = removedPosition
-
-					if !positionKnown {
-						laneBits.lost++
-					}
 				}
-			}
-
-			if laneBits != nil {
-				laneBits.Add(position)
 			}
 			if !found {
 				ba.logger.Errorf("[BlockAssembly:storeSubtreeData][%s] failed to find parent tx hashes for node %s: parent transaction not found in ParentTxMap or DeletedTxs", subtreeRequest.Subtree.RootHash().String(), node.Hash.String())
@@ -1075,9 +1027,8 @@ func (ba *BlockAssembly) storeSubtreeData(ctx context.Context, subtreeRequest su
 	)
 	defer deferFn()
 
-	// At utxostore_laneMigration shadow the subtree's lane bitmaps are built from the positions the
-	// pool keeps, kept in memory for the rows of a block mined from it, and stored before the
-	// subtree file (lane_rows.go).
+	// At utxostore_laneMigration shadow the subtree's lane bitmaps, kept when the subtree processor
+	// chained it, are written before the subtree file (lane_rows.go).
 	lanes := ba.keepsLanePositions()
 
 	// Check whether this subtree already exists in the store
@@ -1092,7 +1043,7 @@ func (ba *BlockAssembly) storeSubtreeData(ctx context.Context, subtreeRequest su
 			ba.logger.Debugf("[BlockAssembly:storeSubtreeData][%s] could not update subtree meta DAH (meta may not exist): %s", subtree.RootHash().String(), err)
 		}
 		if lanes {
-			ba.keepExistingSubtreeLaneBitmaps(ctx, subtreeRequest, height, dah)
+			ba.keepExistingSubtreeLaneBitmaps(ctx, *subtree.RootHash(), height, dah)
 		}
 		return nil, nil, errors.ErrBlobAlreadyExists
 	}
@@ -1115,11 +1066,16 @@ func (ba *BlockAssembly) storeSubtreeData(ctx context.Context, subtreeRequest su
 	// The subtree file waits for it, as subtree validation's does, so a subtree file is never
 	// written before its lane bitmaps are. A failed encode or write is logged and the subtree is
 	// still stored, as subtree validation does at shadow, so a stored subtree can lack the file. A
-	// peer's block that lists it then counts its bitmaps as missing; a block this node mines still
-	// uses the bitmaps kept in memory before the write. Without lanes it is closed now and nothing
-	// waits.
+	// peer's block that lists it then counts its bitmaps as missing; a block this node mines uses
+	// the kept bitmaps. Without lanes it is closed now and nothing waits.
 	laneBitmapsDone := make(chan struct{})
-	if !lanes {
+	if lanes {
+		go func() {
+			defer close(laneBitmapsDone)
+
+			ba.writeKeptLaneBitmapsFile(ctx, *subtree.RootHash(), height, dah)
+		}()
+	} else {
 		close(laneBitmapsDone)
 	}
 
@@ -1128,27 +1084,7 @@ func (ba *BlockAssembly) storeSubtreeData(ctx context.Context, subtreeRequest su
 		go func() {
 			defer close(metaDoneCh)
 
-			var laneBits *laneCollector
-			if lanes {
-				laneBits = newLaneCollector()
-			}
-
-			subtreeMetaBytes, ok := ba.buildSubtreeMeta(subtreeRequest, laneBits)
-
-			if lanes {
-				switch {
-				case ok && laneBits.lost > 0:
-					ba.logger.Warnf("[BlockAssembly:storeSubtreeData][%s] storing the subtree without lane bitmaps: the lane positions of %d of its removed members could not be read", subtree.RootHash().String(), laneBits.lost)
-				case ok:
-					ba.storeSubtreeLaneBitmaps(ctx, subtree, laneBits.BitmapsBuilder, height, dah)
-				default:
-					// a meta pass that failed part way collected only some positions
-					ba.storeLanePositionsFromPool(ctx, subtreeRequest, height, dah)
-				}
-
-				close(laneBitmapsDone)
-			}
-
+			subtreeMetaBytes, ok := ba.buildSubtreeMeta(subtreeRequest)
 			if !ok {
 				return
 			}
@@ -1174,14 +1110,6 @@ func (ba *BlockAssembly) storeSubtreeData(ctx context.Context, subtreeRequest su
 		}()
 	} else {
 		close(metaDoneCh)
-
-		if lanes {
-			go func() {
-				defer close(laneBitmapsDone)
-
-				ba.storeLanePositionsFromPool(ctx, subtreeRequest, height, dah)
-			}()
-		}
 	}
 
 	// Store subtree in background

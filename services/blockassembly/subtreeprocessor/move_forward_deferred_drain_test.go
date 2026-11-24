@@ -828,35 +828,3 @@ func TestGetIncompleteSubtreeMiningData_RetriesFailedSnapshotStore(t *testing.T)
 	require.Same(t, data, stp.GetIncompleteSubtreeMiningData(context.Background()), "the next caller stores again")
 	require.Equal(t, int32(2), stores.Load())
 }
-
-// TestAfterBlockSnapshotStoreCarriesTheRemovalBackups: at utxostore_laneMigration shadow the
-// after-block snapshot's store request carries the removal backups, so a member removed from the
-// pool before the snapshot is stored keeps its lane position; at off it carries none, as before.
-func TestAfterBlockSnapshotStoreCarriesTheRemovalBackups(t *testing.T) {
-	for _, shadow := range []bool{false, true} {
-		t.Run(fmt.Sprintf("shadow=%t", shadow), func(t *testing.T) {
-			requests := make(chan NewSubtreeRequest, 1)
-
-			stp, _ := newAfterBlockSnapshotProcessor(t, func(req NewSubtreeRequest) {
-				requests <- req
-				req.ErrChan <- nil
-			})
-
-			if shadow {
-				stp.settings.UtxoStore.LaneMigration = settings.LaneMigrationShadow
-				stp.deletedPositions = txmap.NewSyncedMap[chainhash.Hash, uint64]()
-			}
-
-			require.True(t, stp.afterBlockMiningData.Load().storeOnce(t.Context(), stp))
-
-			req := <-requests
-			if shadow {
-				require.Same(t, stp.deletedTxs, req.DeletedTxs)
-				require.Same(t, stp.deletedPositions, req.DeletedPositions)
-			} else {
-				require.Nil(t, req.DeletedTxs)
-				require.Nil(t, req.DeletedPositions)
-			}
-		})
-	}
-}

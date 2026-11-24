@@ -376,7 +376,8 @@ type blockWithMeta struct {
 type BlockAssemblerOption func(*blockAssemblerOptions)
 
 type blockAssemblerOptions struct {
-	txMetaEvictor *subtreeprocessor.TxMetaEvictor
+	txMetaEvictor   *subtreeprocessor.TxMetaEvictor
+	laneBitmapsKeep subtreeprocessor.LaneBitmapsKeeper
 }
 
 // WithTxMetaEvictor makes the assembler (and its subtree processor) publish txmeta
@@ -384,6 +385,12 @@ type blockAssemblerOptions struct {
 // disables publishing.
 func WithTxMetaEvictor(e *subtreeprocessor.TxMetaEvictor) BlockAssemblerOption {
 	return func(o *blockAssemblerOptions) { o.txMetaEvictor = e }
+}
+
+// WithLaneBitmapsKeeper makes the subtree processor keep the lane bitmaps of each subtree it
+// chains with k, at utxostore_laneMigration shadow (subtreeprocessor.WithLaneBitmapsKeeper).
+func WithLaneBitmapsKeeper(k subtreeprocessor.LaneBitmapsKeeper) BlockAssemblerOption {
+	return func(o *blockAssemblerOptions) { o.laneBitmapsKeep = k }
 }
 
 // NewBlockAssembler creates and initializes a new BlockAssembler instance.
@@ -435,6 +442,10 @@ func NewBlockAssembler(ctx context.Context, logger ulogger.Logger, tSettings *se
 
 	if options.txMetaEvictor != nil {
 		stpOpts = append(stpOpts, subtreeprocessor.WithTxMetaEvictor(options.txMetaEvictor))
+	}
+
+	if options.laneBitmapsKeep != nil {
+		stpOpts = append(stpOpts, subtreeprocessor.WithLaneBitmapsKeeper(options.laneBitmapsKeep))
 	}
 
 	subtreeProcessor, err := subtreeprocessor.NewSubtreeProcessor(ctx, logger, tSettings, subtreeStore, blockchainClient, utxoStore, newSubtreeChan, stpOpts...)

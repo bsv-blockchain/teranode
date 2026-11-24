@@ -9,8 +9,6 @@ import (
 	txmap "github.com/bsv-blockchain/go-tx-map"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/services/blockassembly/subtreeprocessor"
-	"github.com/bsv-blockchain/teranode/ulogger"
-	"github.com/bsv-blockchain/teranode/util/lane"
 	"github.com/stretchr/testify/require"
 )
 
@@ -174,7 +172,7 @@ func TestBuildSubtreeMetaBytes_MatchesSubtreeMeta(t *testing.T) {
 			}
 
 			want, wantOK := legacyMetaBytes(subtree, m, deleted)
-			got, err := buildSubtreeMetaBytes(subtree, m, deleted, nil, nil)
+			got, err := buildSubtreeMetaBytes(subtree, m, deleted)
 
 			if !wantOK {
 				require.Error(t, err)
@@ -242,7 +240,7 @@ func BenchmarkBuildSubtreeMeta(b *testing.B) {
 		b.ReportAllocs()
 
 		for i := 0; i < b.N; i++ {
-			if _, err := buildSubtreeMetaBytes(subtree, m, nil, nil, nil); err != nil {
+			if _, err := buildSubtreeMetaBytes(subtree, m, nil); err != nil {
 				b.Fatal(err)
 			}
 		}
@@ -260,158 +258,5 @@ func BenchmarkBuildSubtreeMeta(b *testing.B) {
 		}
 
 		b.ReportMetric(float64(b.N*leaves)/b.Elapsed().Seconds()/1e6, "Mtx/s")
-	})
-
-	// serialized_lanes is the same pass at utxostore_laneMigration shadow: every record keeps a lane
-	// position, read with its inpoints, and the subtree's lane bitmaps are built from them.
-	positioned := subtreeprocessor.NewSplitTxInpointsMap(16384)
-
-	for i := 0; i < leaves; i++ {
-		h := metaTestHash(i)
-		p := subtreepkg.NewTxInpointsFromPacked([]chainhash.Hash{metaTestHash(i + leaves)}, []uint32{1, r.Uint32() % 4})
-		positioned.SetAt(h, &p, lane.Pack(uint8(i%17), uint64(i/17+1))) //nolint:gosec // i%17 < 17
-	}
-
-	b.Run("serialized_lanes", func(b *testing.B) {
-		b.ReportAllocs()
-
-		for i := 0; i < b.N; i++ {
-			laneBits := newLaneCollector()
-			if _, err := buildSubtreeMetaBytes(subtree, positioned, nil, nil, laneBits); err != nil {
-				b.Fatal(err)
-			}
-
-			if _, err := lane.EncodeSubtreeBitmaps(laneBits.Subtree(*subtree.RootHash())); err != nil {
-				b.Fatal(err)
-			}
-		}
-
-		b.ReportMetric(float64(b.N*leaves)/b.Elapsed().Seconds()/1e6, "Mtx/s")
-	})
-}
-
-// TestBuildSubtreeMetaBytesCollectsEveryNodesLanePosition: at shadow the meta pass adds every
-// node's lane position to the subtree's lane bitmaps, node 0 of a subtree that is not its block's
-// first included, since that node is a real tx. A node removed from the map while the subtree was
-// being stored takes its position from the backup kept beside its inpoints, and one with no backed
-// up position is counted as without one.
-func TestBuildSubtreeMetaBytesCollectsEveryNodesLanePosition(t *testing.T) {
-	subtree, err := subtreepkg.NewTreeByLeafCount(4)
-	require.NoError(t, err)
-
-	m := subtreeprocessor.NewSplitTxInpointsMap(16)
-	deleted := txmap.NewSyncedMap[chainhash.Hash, subtreepkg.TxInpoints]()
-	deletedPositions := txmap.NewSyncedMap[chainhash.Hash, uint64]()
-
-	positions := []uint64{lane.Pack(8, 100), lane.Pack(8, 101), lane.Pack(8, 102), lane.Pack(8, 103)}
-
-	for i, position := range positions {
-		h := metaTestHash(9_000 + i)
-		require.NoError(t, subtree.AddNode(h, 1, 1))
-
-		p := subtreepkg.NewTxInpointsFromPacked([]chainhash.Hash{metaTestHash(9_100 + i)}, []uint32{1, 0})
-		m.SetAt(h, &p, position)
-	}
-
-	// the last two nodes were removed while the subtree was being stored; only the first of them
-	// had its position backed up
-	for i, backedUp := range map[int]bool{2: true, 3: false} {
-		removed := metaTestHash(9_000 + i)
-		p, ok := m.Get(removed)
-		require.True(t, ok)
-
-		deleted.Set(removed, *p)
-
-		if backedUp {
-			deletedPositions.Set(removed, positions[i])
-		}
-
-		require.True(t, m.Delete(removed))
-	}
-
-	laneBits := newLaneCollector()
-
-	_, err = buildSubtreeMetaBytes(subtree, m, deleted, deletedPositions, laneBits)
-	require.NoError(t, err)
-
-	bitmaps := laneBits.Subtree(*subtree.RootHash())
-	require.Equal(t, []uint64{100, 101, 102}, bitmaps.Lanes[8].ToArray(), "node 0 is a real tx and keeps its position, and a removed node keeps its backed-up one")
-	require.Equal(t, 1, laneBits.Unpositioned(), "the removed node without a backed-up position has none")
-}
-
-// BenchmarkBuildSubtreeMetaDiskTxMap is BenchmarkBuildSubtreeMeta on the disk map, which reads and
-// decodes each tx's record: the meta pass without lanes (off), the same pass collecting each
-// position into the lane bitmaps (shadow), and the positions-only pass that runs when no meta file
-// is written (positions_only). At shadow the subtree file waits for the pass and the bitmaps write.
-func BenchmarkBuildSubtreeMetaDiskTxMap(b *testing.B) {
-	const leaves = 1 << 16
-
-	subtree, err := subtreepkg.NewTreeByLeafCount(leaves)
-	require.NoError(b, err)
-
-	m, err := subtreeprocessor.NewDiskTxMap(subtreeprocessor.DiskTxMapOptions{BasePaths: []string{b.TempDir()}})
-	require.NoError(b, err)
-
-	b.Cleanup(func() { _ = m.Close() })
-
-	r := rand.New(rand.NewSource(1))
-
-	for i := 0; i < leaves; i++ {
-		h := metaTestHash(i)
-		require.NoError(b, subtree.AddNode(h, uint64(i), uint64(i)))
-
-		p := subtreepkg.NewTxInpointsFromPacked([]chainhash.Hash{metaTestHash(i + leaves)}, []uint32{1, r.Uint32() % 4})
-		m.SetAt(h, &p, lane.Pack(uint8(i%17), uint64(i/17+1))) //nolint:gosec // i%17 < 17
-	}
-
-	require.NoError(b, m.Flush())
-
-	ba := &BlockAssembly{logger: ulogger.TestLogger{}}
-	request := subtreeprocessor.NewSubtreeRequest{Subtree: subtree, ParentTxMap: m}
-
-	report := func(b *testing.B) {
-		b.ReportMetric(float64(b.N*leaves)/b.Elapsed().Seconds()/1e6, "Mtx/s")
-	}
-
-	b.Run("off", func(b *testing.B) {
-		b.ReportAllocs()
-
-		for i := 0; i < b.N; i++ {
-			if _, ok := ba.buildSubtreeMeta(request, nil); !ok {
-				b.Fatal("failed")
-			}
-		}
-
-		report(b)
-	})
-
-	b.Run("shadow", func(b *testing.B) {
-		b.ReportAllocs()
-
-		for i := 0; i < b.N; i++ {
-			laneBits := newLaneCollector()
-			if _, ok := ba.buildSubtreeMeta(request, laneBits); !ok {
-				b.Fatal("failed")
-			}
-
-			if _, err := lane.EncodeSubtreeBitmaps(laneBits.Subtree(*subtree.RootHash())); err != nil {
-				b.Fatal(err)
-			}
-		}
-
-		report(b)
-	})
-
-	b.Run("positions_only", func(b *testing.B) {
-		b.ReportAllocs()
-
-		for i := 0; i < b.N; i++ {
-			laneBits, _ := subtreeLanePositions(subtree, m, nil, nil)
-			if _, err := lane.EncodeSubtreeBitmaps(laneBits.Subtree(*subtree.RootHash())); err != nil {
-				b.Fatal(err)
-			}
-		}
-
-		report(b)
 	})
 }

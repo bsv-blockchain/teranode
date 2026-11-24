@@ -2,7 +2,6 @@ package subtreeprocessor
 
 import (
 	"context"
-	"fmt"
 	"net/url"
 	"sync"
 	"testing"
@@ -34,6 +33,13 @@ import (
 // on the disk tx map or the in-memory one, at shadow or off. Start is not called, so the test
 // drives it directly.
 func lanePoolProcessor(t *testing.T, disk, shadow bool) (*SubtreeProcessor, utxo.Store) {
+	t.Helper()
+
+	return lanePoolProcessorWith(t, disk, shadow)
+}
+
+// lanePoolProcessorWith is lanePoolProcessor with extra processor options.
+func lanePoolProcessorWith(t *testing.T, disk, shadow bool, extra ...Options) (*SubtreeProcessor, utxo.Store) {
 	t.Helper()
 
 	tSettings := test.CreateBaseTestSettings(t)
@@ -72,6 +78,8 @@ func lanePoolProcessor(t *testing.T, disk, shadow bool) (*SubtreeProcessor, utxo
 	if disk {
 		opts = append(opts, WithTxMapDirs([]string{t.TempDir(), t.TempDir()}))
 	}
+
+	opts = append(opts, extra...)
 
 	stp, err := NewSubtreeProcessor(t.Context(), ulogger.TestLogger{}, tSettings, memory.New(), nil, utxoStore, newSubtreeChan, opts...)
 	require.NoError(t, err)
@@ -421,41 +429,6 @@ func TestPoolKeepsLanePositionAcrossMapKinds(t *testing.T) {
 	}
 }
 
-// TestConflictRemovalBacksUpLanePositions: a removal backs up each tx's lane position beside its
-// inpoints before it deletes the tx from the pool, so a subtree being stored meanwhile keeps it; the
-// disk map's re-chain does the same for every tx it deletes and re-adds. The backup goes once the
-// subtree is stored.
-func TestConflictRemovalBacksUpLanePositions(t *testing.T) {
-	stp, _ := lanePoolProcessor(t, true, true)
-
-	for i := 0; i < 9; i++ {
-		require.NoError(t, stp.addNodeAt(subtreepkg.Node{Hash: lanePoolTxHash(800 + i), Fee: 1, SizeInBytes: 1}, lanePoolInpoints(i), lane.Pack(5, uint64(50+i)), true))
-	}
-
-	removed := lanePoolTxHash(801)
-
-	// what a subtree storage in flight would hold, taken before the removal
-	backups := stp.deletedPositions
-
-	require.NoError(t, stp.removeTxFromSubtrees(context.Background(), removed))
-
-	position, ok := backups.Get(removed)
-	require.True(t, ok, "the removed tx's position is backed up")
-	require.Equal(t, lane.Pack(5, 51), position)
-
-	_, stillHeld := backups.Get(lanePoolTxHash(805))
-	require.False(t, stillHeld, "a re-chained tx's backup goes once it is back in the pool")
-
-	st, err := subtreepkg.NewTreeByLeafCount(4)
-	require.NoError(t, err)
-	require.NoError(t, st.AddNode(removed, 1, 1))
-
-	stp.cleanupDeletedTxs(st)
-
-	_, ok = backups.Get(removed)
-	require.False(t, ok, "the backup goes once the subtree is stored")
-}
-
 // overlapProbeStore records how many BatchDecorate calls run at once. The first `limit` calls
 // each wait until all of them have started, so calls that never overlap show as a wait that runs
 // out.
@@ -617,61 +590,6 @@ func TestMoveBackKeepsTxsWhoseLanePositionReadFails(t *testing.T) {
 	stp.utxoStore = failingBatchStore{Store: store, failHash: hashes[1]}
 
 	require.Equal(t, []uint64{positions[0], 0, positions[2]}, stp.lanePositionsFromUtxoStore(context.Background(), &model.Block{Header: prevBlockHeader}, hashes))
-}
-
-// TestBackUpLanePositionRecordsOnlyWhatTheMapHolds: the removal backup records a positioned tx's
-// position and 0 for a tx the map holds without one, and nothing for a tx the map does not hold,
-// on both maps.
-func TestBackUpLanePositionRecordsOnlyWhatTheMapHolds(t *testing.T) {
-	for _, disk := range []bool{false, true} {
-		t.Run(fmt.Sprintf("disk=%t", disk), func(t *testing.T) {
-			stp, _ := lanePoolProcessor(t, disk, true)
-
-			positioned, plain, absent := lanePoolTxHash(700), lanePoolTxHash(701), lanePoolTxHash(702)
-			stp.currentTxMap.SetAt(positioned, lanePoolInpoints(700), lane.Pack(4, 7))
-			stp.currentTxMap.Set(plain, lanePoolInpoints(701))
-
-			for _, hash := range []chainhash.Hash{positioned, plain, absent} {
-				stp.backUpLanePosition(hash)
-			}
-
-			position, ok := stp.deletedPositions.Get(positioned)
-			require.True(t, ok)
-			require.Equal(t, lane.Pack(4, 7), position)
-
-			position, ok = stp.deletedPositions.Get(plain)
-			require.True(t, ok, "a tx without a position is backed up as 0")
-			require.Zero(t, position)
-
-			_, ok = stp.deletedPositions.Get(absent)
-			require.False(t, ok, "a tx the map does not hold gets no backup")
-		})
-	}
-}
-
-// TestBatchRemovalBacksUpLanePositions: removing several txs at once backs up each removed tx's
-// position, as removing one does, on both maps.
-func TestBatchRemovalBacksUpLanePositions(t *testing.T) {
-	for _, disk := range []bool{false, true} {
-		t.Run(fmt.Sprintf("disk=%t", disk), func(t *testing.T) {
-			stp, _ := lanePoolProcessor(t, disk, true)
-
-			for i := 0; i < 9; i++ {
-				require.NoError(t, stp.addNodeAt(subtreepkg.Node{Hash: lanePoolTxHash(900 + i), Fee: 1, SizeInBytes: 1}, lanePoolInpoints(i), lane.Pack(6, uint64(60+i)), true))
-			}
-
-			backups := stp.deletedPositions
-			removed := []chainhash.Hash{lanePoolTxHash(901), lanePoolTxHash(907)}
-
-			require.NoError(t, stp.removeTxsFromSubtrees(context.Background(), removed))
-
-			for i, hash := range removed {
-				position, ok := backups.Get(hash)
-				require.True(t, ok, "tx %d's position is backed up", i)
-				require.Equal(t, lane.Pack(6, uint64(60+[]int{1, 7}[i])), position)
-			}
-		})
-	}
 }
 
 // TestDrainedPositionsKeepsEachBatchsOffset: the positions of several drained batches land at each

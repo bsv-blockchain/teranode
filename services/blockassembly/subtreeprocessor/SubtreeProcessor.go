@@ -44,6 +44,7 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
+	"github.com/bsv-blockchain/teranode/util/lane"
 	"github.com/bsv-blockchain/teranode/util/retry"
 	"github.com/bsv-blockchain/teranode/util/tracing"
 	"github.com/ordishs/gocore"
@@ -92,7 +93,6 @@ type NewSubtreeRequest struct {
 	Subtree           *subtreepkg.Subtree                                     // The subtree to process
 	ParentTxMap       TxInpointsMap                                           // Map of parent transactions
 	DeletedTxs        *txmap.SyncedMap[chainhash.Hash, subtreepkg.TxInpoints] // Backup map for deleted transactions
-	DeletedPositions  *txmap.SyncedMap[chainhash.Hash, uint64]                // Lane positions of the txs in DeletedTxs, at utxostore_laneMigration shadow
 	SkipNotification  bool                                                    // Whether to skip notification to the network
 	ErrChan           chan error                                              // Channel for error reporting
 	OnStorageComplete func()                                                  // Called when storage completes to trigger cleanup
@@ -357,10 +357,15 @@ type SubtreeProcessor struct {
 	// This provides a backup/fallback for Server when transactions are deleted during async storage
 	deletedTxs *txmap.SyncedMap[chainhash.Hash, subtreepkg.TxInpoints]
 
-	// deletedPositions holds, at utxostore_laneMigration shadow, the lane position of each tx in
-	// deletedTxs, so a subtree being stored while one of its txs is removed still builds its lane
-	// bitmaps with it. Kept and cleared with deletedTxs.
-	deletedPositions *txmap.SyncedMap[chainhash.Hash, uint64]
+	// laneKeeper receives the lane bitmaps of each subtree the processor chains, at
+	// utxostore_laneMigration shadow (lane_bitmaps.go). Nil at off: no position is recorded.
+	laneKeeper LaneBitmapsKeeper
+
+	// laneFill holds the lane positions recorded for the members of the open subtree.
+	laneFill laneFill
+
+	// laneUnbuilt holds the chained subtrees whose lane bitmaps could not be built from the pool.
+	laneUnbuilt map[chainhash.Hash]struct{}
 
 	// removeMap tracks transactions marked for removal
 	removeMap txmap.TxMap
@@ -796,6 +801,11 @@ func NewSubtreeProcessor(_ context.Context, logger ulogger.Logger, tSettings *se
 		opts(stp)
 	}
 
+	// lane bitmaps are built only at utxostore_laneMigration shadow
+	if !stp.keepsLanePositions() {
+		stp.laneKeeper = nil
+	}
+
 	stp.lastDequeueMillis.Store(stp.clock.Now().UnixMilli())
 
 	// If mmap dir is configured, recreate first subtree with mmap backing
@@ -858,12 +868,6 @@ func NewSubtreeProcessor(_ context.Context, logger ulogger.Logger, tSettings *se
 	// half could not be created, which leaves diskTxMap nil.
 	if stp.diskTxMap == nil {
 		stp.currentTxMapShadow = NewSplitTxInpointsMap(splitBuckets)
-	}
-
-	// At utxostore_laneMigration shadow a removed tx's lane position is backed up beside its
-	// inpoints; without lanes there is no backup to keep, so none is allocated or written.
-	if stp.keepsLanePositions() {
-		stp.deletedPositions = txmap.NewSyncedMap[chainhash.Hash, uint64]()
 	}
 
 	// The in-memory limit counts what the queue holds plus what has reached a subtree.
@@ -949,6 +953,8 @@ func (stp *SubtreeProcessor) Start(ctx context.Context) {
 					completeSubtrees := make([]*subtreepkg.Subtree, 0, chainedCount)
 					completeSubtrees = append(completeSubtrees, stp.chainedSubtrees...)
 
+					stp.ensureLaneBitmaps(completeSubtrees)
+
 					// incomplete subtrees ?
 					if chainedCount == 0 && stp.currentSubtree.Load().Length() > 1 {
 						incompleteSubtree, err := stp.createIncompleteSubtreeCopy()
@@ -965,11 +971,10 @@ func (stp *SubtreeProcessor) Start(ctx context.Context) {
 
 						// store (and announce) new incomplete subtree to other miners
 						send := NewSubtreeRequest{
-							Subtree:          incompleteSubtree,
-							ParentTxMap:      stp.currentTxMap,
-							DeletedTxs:       stp.deletedTxs,
-							DeletedPositions: stp.deletedPositions,
-							ErrChan:          make(chan error),
+							Subtree:     incompleteSubtree,
+							ParentTxMap: stp.currentTxMap,
+							DeletedTxs:  stp.deletedTxs,
+							ErrChan:     make(chan error),
 							OnStorageComplete: func() {
 								stp.cleanupDeletedTxs(incompleteSubtree)
 							},
@@ -1159,11 +1164,10 @@ func (stp *SubtreeProcessor) Start(ctx context.Context) {
 						}
 
 						send := NewSubtreeRequest{
-							Subtree:          incompleteSubtree,
-							ParentTxMap:      stp.currentTxMap,
-							DeletedTxs:       stp.deletedTxs,
-							DeletedPositions: stp.deletedPositions,
-							ErrChan:          make(chan error),
+							Subtree:     incompleteSubtree,
+							ParentTxMap: stp.currentTxMap,
+							DeletedTxs:  stp.deletedTxs,
+							ErrChan:     make(chan error),
 							OnStorageComplete: func() {
 								stp.cleanupDeletedTxs(incompleteSubtree)
 							},
@@ -1326,7 +1330,12 @@ func (stp *SubtreeProcessor) Start(ctx context.Context) {
 					// Only nodes with non-zero Hash passed the filters
 					nrAddedInBatch := 0
 					for _, batch := range dequeueBatches {
-						for _, node := range batch.nodes {
+						// a batch's positions, when it carries one per node, are recorded for the
+						// open subtree's lane bitmaps (lane_bitmaps.go)
+						recordPositions := stp.laneKeeper != nil
+						positioned := recordPositions && len(batch.positions) == len(batch.nodes)
+
+						for i, node := range batch.nodes {
 							// Skip rejected/duplicate nodes (marked with zero hash)
 							if node.Hash == zeroHash {
 								continue
@@ -1339,6 +1348,15 @@ func (stp *SubtreeProcessor) Start(ctx context.Context) {
 								nrAddedInBatch++
 								addedCount++
 								nrProcessed++
+
+								if recordPositions {
+									var position uint64
+									if positioned {
+										position = batch.positions[i]
+									}
+
+									stp.recordLanePosition(currentSubtree, position)
+								}
 							}
 
 							// Check if subtree is complete
@@ -1540,13 +1558,6 @@ func (a *afterBlockSnapshot) storeOnce(ctx context.Context, stp *SubtreeProcesso
 			ErrChan:     make(chan error, 1), // the worker never blocks on a caller that gave up
 		}
 
-		// at shadow a member removed from the pool before this snapshot is stored keeps its
-		// position from the removal backup, as on the other incomplete-subtree stores
-		if stp.keepsLanePositions() {
-			send.DeletedTxs = stp.deletedTxs
-			send.DeletedPositions = stp.deletedPositions
-		}
-
 		select {
 		case stp.newSubtreeChan <- send:
 			a.pending = send.ErrChan
@@ -1617,6 +1628,9 @@ func (stp *SubtreeProcessor) createIncompleteSubtreeCopy() (*subtreepkg.Subtree,
 	// Copy fees
 	incompleteSubtree.Fees = currentSt.Fees
 
+	// a mining candidate can list the copy, so its lane bitmaps are kept now
+	stp.keepIncompleteLaneBitmaps(currentSt, incompleteSubtree)
+
 	return incompleteSubtree, nil
 }
 
@@ -1637,51 +1651,8 @@ func (stp *SubtreeProcessor) cleanupDeletedTxs(subtree *subtreepkg.Subtree) {
 		if !node.Hash.Equal(subtreepkg.CoinbasePlaceholderHashValue) {
 			// Remove from deletedTxs backup map (transaction data no longer needed after storage)
 			stp.deletedTxs.Delete(node.Hash)
-			stp.forgetLanePosition(node.Hash)
 		}
 	}
-}
-
-// forgetLanePosition drops hash's lane position backup, with its deletedTxs backup.
-func (stp *SubtreeProcessor) forgetLanePosition(hash chainhash.Hash) {
-	if stp.deletedPositions != nil {
-		stp.deletedPositions.Delete(hash)
-	}
-}
-
-// backUpLanePosition saves hash's lane position beside its deletedTxs backup before the tx is
-// deleted from currentTxMap, at utxostore_laneMigration shadow, so a subtree being stored with it
-// meanwhile keeps it in its lane bitmaps.
-//
-// The two backups are separate maps. They are written position first and dropped inpoints first
-// (cleanupDeletedTxs), and a storage worker reads the position before the inpoints, which narrows
-// the window in which a worker finds one without the other but does not close it: another storage
-// request's cleanup can drop a backup between the processor's two writes. So 0 is recorded for a
-// tx without a position, and a worker that finds the inpoints backup but no position entry treats
-// the position as unknown: the subtree's lane bitmaps are not kept or written, while its meta is
-// still stored.
-func (stp *SubtreeProcessor) backUpLanePosition(hash chainhash.Hash) {
-	if stp.deletedPositions == nil {
-		return
-	}
-
-	// 0 is recorded for a tx the map holds without a position. A tx the map does not hold, or
-	// whose record cannot be read, gets no entry, so a reader finds its position unknown.
-	lookup, ok := stp.currentTxMap.(interface {
-		LookupPosition(hash chainhash.Hash) (uint64, bool, error)
-	})
-	if !ok {
-		// a map without LookupPosition is read with Position
-		stp.deletedPositions.Set(hash, stp.lanePositionIn(stp.currentTxMap, hash))
-		return
-	}
-
-	position, found, err := lookup.LookupPosition(hash)
-	if err != nil || !found {
-		return
-	}
-
-	stp.deletedPositions.Set(hash, position)
 }
 
 // GetCurrentRunningState returns the current operational state of the processor.
@@ -3237,6 +3208,15 @@ func (stp *SubtreeProcessor) placeNodeAt(node subtreepkg.Node, parents *subtreep
 		return false, errors.NewProcessingError(errAddingNodeToSubtree, err)
 	}
 
+	if stp.laneKeeper != nil {
+		// a tx re-added from the map (parents nil) keeps the position the map holds for it
+		if parents == nil {
+			position, _ = stp.poolLanePosition(node.Hash)
+		}
+
+		stp.recordLanePosition(stp.currentSubtree.Load(), position)
+	}
+
 	if stp.currentSubtree.Load().IsComplete() {
 		if err = stp.processCompleteSubtree(skipNotification); err != nil {
 			return true, err
@@ -3276,6 +3256,12 @@ func (stp *SubtreeProcessor) addNodePreValidated(node subtreepkg.Node, skipNotif
 
 	if err = stp.currentSubtree.Load().AddSubtreeNode(node); err != nil {
 		return errors.NewProcessingError(errAddingNodeToSubtree, err)
+	}
+
+	if stp.laneKeeper != nil {
+		// the map already holds the tx, with its position
+		position, _ := stp.poolLanePosition(node.Hash)
+		stp.recordLanePosition(stp.currentSubtree.Load(), position)
 	}
 
 	if stp.currentSubtree.Load().IsComplete() {
@@ -3339,6 +3325,10 @@ func (stp *SubtreeProcessor) processCompleteSubtree(skipNotification bool) (err 
 		stp.subtreeNodeCounts = stp.subtreeNodeCounts.Next()
 	}
 
+	// at utxostore_laneMigration shadow the subtree's lane bitmaps are kept before it is chained,
+	// so a mining candidate that lists it has them (lane_bitmaps.go)
+	stp.sealLaneBitmaps(currentSubtree)
+
 	// Add the subtree to the chain
 	chainedIdx := len(stp.chainedSubtrees)
 	stp.chainedSubtrees = append(stp.chainedSubtrees, currentSubtree)
@@ -3374,7 +3364,6 @@ func (stp *SubtreeProcessor) processCompleteSubtree(skipNotification bool) (err 
 		Subtree:          oldSubtree,
 		ParentTxMap:      stp.currentTxMap,
 		DeletedTxs:       stp.deletedTxs,
-		DeletedPositions: stp.deletedPositions,
 		SkipNotification: skipNotification,
 		ErrChan:          errCh,
 		OnStorageComplete: func() {
@@ -3872,6 +3861,8 @@ func (stp *SubtreeProcessor) addNodesDirectly(txs []*utxostore.UnminedTransactio
 			return errors.NewProcessingError("AddNodesDirectly: error adding node to subtree: %s", err)
 		}
 
+		stp.recordLanePosition(currentSubtree, tx.LanePosition)
+
 		addedCount++
 
 		// Check if subtree is complete
@@ -4256,12 +4247,20 @@ func (stp *SubtreeProcessor) removeTxFromSubtrees(ctx context.Context, hash chai
 			txInpoints, _ = stp.currentTxMap.Get(hash)
 		}
 
-		// the position backup goes in before the inpoints backup, and only beside one (see
-		// backUpLanePosition)
 		if txInpoints != nil {
-			stp.backUpLanePosition(hash)
 			stp.deletedTxs.Set(hash, *txInpoints)
 		}
+
+		// the open subtree's recorded lane positions lose the removed tx's (lane_bitmaps.go)
+		var (
+			lanePosition      uint64
+			lanePositionKnown bool
+		)
+
+		if stp.keepsLaneBitmaps() && foundSubtreeIndex == -1 {
+			lanePosition, lanePositionKnown = stp.poolLanePosition(hash)
+		}
+
 		stp.currentTxMap.Delete(hash)
 
 		// we found the transaction in a subtree
@@ -4281,6 +4280,7 @@ func (stp *SubtreeProcessor) removeTxFromSubtrees(ctx context.Context, hash chai
 			}
 
 			stp.currentSubtree.Store(currentSubtree)
+			stp.recordLaneMemberRemoved(originalSubtree, currentSubtree, lanePosition, lanePositionKnown)
 			// an mmap-backed original is released when the next block commits
 			stp.retireSubtrees(originalSubtree)
 
@@ -4348,10 +4348,7 @@ func (stp *SubtreeProcessor) removeTxsFromSubtrees(ctx context.Context, hashes [
 				txInpoints, _ = stp.currentTxMap.Get(hash)
 			}
 
-			// the position backup goes in before the inpoints backup, and only beside one (see
-			// backUpLanePosition)
 			if txInpoints != nil {
-				stp.backUpLanePosition(hash)
 				stp.deletedTxs.Set(hash, *txInpoints)
 			}
 			stp.currentTxMap.Delete(hash)
@@ -4516,11 +4513,7 @@ func (stp *SubtreeProcessor) reChainSubtrees(fromIndex int) error {
 				return errors.NewProcessingError("error getting txInpoints from currentTxMap for %s", node.Hash.String())
 			}
 
-			// Save to deleted backup before removing (protects brief window during delete-and-readd);
-			// the position backup goes in before the inpoints backup (see backUpLanePosition)
-			if stp.deletedPositions != nil {
-				stp.deletedPositions.Set(node.Hash, position)
-			}
+			// Save to deleted backup before removing (protects brief window during delete-and-readd)
 			stp.deletedTxs.Set(node.Hash, *parents)
 
 			// Delete from currentTxMap so addNode won't skip it as a duplicate
@@ -4531,13 +4524,11 @@ func (stp *SubtreeProcessor) reChainSubtrees(fromIndex int) error {
 				// Restore to currentTxMap to avoid inconsistent state
 				stp.currentTxMap.SetAt(node.Hash, parents, position)
 				stp.deletedTxs.Delete(node.Hash)
-				stp.forgetLanePosition(node.Hash)
 				return errors.NewProcessingError(errAddingNodeToSubtree, err)
 			}
 
 			// Clear from deletedTxs (transaction successfully re-added, no longer deleted)
 			stp.deletedTxs.Delete(node.Hash)
-			stp.forgetLanePosition(node.Hash)
 		}
 	}
 
@@ -4556,6 +4547,9 @@ func (stp *SubtreeProcessor) reChainSubtrees(fromIndex int) error {
 // subtrees are stored; the results of the rest are logged asynchronously. Sends happen
 // in a batch before waiting, overlapping send and receive.
 func (stp *SubtreeProcessor) storeAndAnnounceChainedSubtrees(ctx context.Context, caller string, wait int) error {
+	// subtrees a bulk rebuild chained get their lane bitmaps before they are stored
+	stp.ensureLaneBitmaps(stp.chainedSubtrees)
+
 	errChs := make([]chan error, len(stp.chainedSubtrees))
 	for i, subtree := range stp.chainedSubtrees {
 		errChs[i] = make(chan error, 1)
@@ -4567,11 +4561,10 @@ func (stp *SubtreeProcessor) storeAndAnnounceChainedSubtrees(ctx context.Context
 		// select pattern used by the other newSubtreeChan sends.
 		select {
 		case stp.newSubtreeChan <- NewSubtreeRequest{
-			Subtree:          subtree,
-			ParentTxMap:      stp.currentTxMap,
-			DeletedTxs:       stp.deletedTxs,
-			DeletedPositions: stp.deletedPositions,
-			ErrChan:          errChs[i],
+			Subtree:     subtree,
+			ParentTxMap: stp.currentTxMap,
+			DeletedTxs:  stp.deletedTxs,
+			ErrChan:     errChs[i],
 			OnStorageComplete: func() {
 				stp.cleanupDeletedTxs(st)
 			},
@@ -5142,6 +5135,10 @@ func (stp *SubtreeProcessor) updatePrecomputedMiningData() {
 		})
 		return
 	}
+
+	// a chained subtree without kept lane bitmaps, such as one a bulk rebuild chained, gets them
+	// before a mining candidate can list it
+	stp.ensureLaneBitmaps(chainedSubtrees)
 
 	// Copy subtrees for lock-free access
 	subtreesCopy := make([]*subtreepkg.Subtree, len(chainedSubtrees))
@@ -9031,6 +9028,9 @@ func (stp *SubtreeProcessor) parallelBuildRemainderSubtrees(ctx context.Context,
 	type buildChunk struct {
 		subtree *subtreepkg.Subtree
 		nodes   []subtreepkg.Node
+		// lanes records the lane positions of the subtree's members at utxostore_laneMigration
+		// shadow, or is nil when they are not all recorded (lane_bitmaps.go)
+		lanes *laneFill
 	}
 
 	chunks := make([]buildChunk, 0, len(kept)/leafCount+2)
@@ -9067,6 +9067,24 @@ func (stp *SubtreeProcessor) parallelBuildRemainderSubtrees(ctx context.Context,
 		fullCount = len(chunks)
 	}
 
+	// At shadow each chunk records its members' lane positions. Chunk 0 continues the open
+	// subtree's record when that record holds every member the subtree already has.
+	if stp.keepsLaneBitmaps() {
+		switch {
+		case laneMembers(currentSubtree) == 0:
+			chunks[0].lanes = &laneFill{subtree: currentSubtree, builder: lane.NewBitmapsBuilder()}
+		case stp.laneFill.matches(currentSubtree):
+			fill := stp.laneFill
+			chunks[0].lanes = &fill
+		}
+
+		for i := 1; i < len(chunks); i++ {
+			chunks[i].lanes = &laneFill{subtree: chunks[i].subtree, builder: lane.NewBitmapsBuilder()}
+		}
+
+		stp.laneFill = laneFill{}
+	}
+
 	// Parallel leaf insertion + eager merkle build. Each goroutine owns its
 	// destination subtree, so AddSubtreeNodeWithoutLock is safe; merkle build
 	// inside the worker amortises the cost across cores.
@@ -9095,6 +9113,21 @@ func (stp *SubtreeProcessor) parallelBuildRemainderSubtrees(ctx context.Context,
 				}
 			}
 
+			// the map holds each tx with its position; a position that cannot be read leaves
+			// the chunk's subtree to have its bitmaps built from the pool later
+			if c.lanes != nil {
+				for j := range c.nodes {
+					position, ok := stp.poolLanePosition(c.nodes[j].Hash)
+					if !ok {
+						chunks[i].lanes = nil
+						break
+					}
+
+					c.lanes.builder.Add(position)
+					c.lanes.added++
+				}
+			}
+
 			if i < fullCount {
 				// Force merkle materialisation inside the worker. Without this
 				// the first reader (typically the sequential side-effect pass
@@ -9120,6 +9153,10 @@ func (stp *SubtreeProcessor) parallelBuildRemainderSubtrees(ctx context.Context,
 	// chainedSubtrees: the deferred drain after a block has no rollback.
 	if fullCount < len(chunks) {
 		stp.currentSubtree.Store(chunks[fullCount].subtree)
+
+		if chunks[fullCount].lanes != nil {
+			stp.laneFill = *chunks[fullCount].lanes
+		}
 	} else {
 		newST, err := stp.newSubtree(leafCount)
 		if err != nil {
@@ -9135,6 +9172,12 @@ func (stp *SubtreeProcessor) parallelBuildRemainderSubtrees(ctx context.Context,
 	for i := 0; i < fullCount; i++ {
 		oldSubtree := chunks[i].subtree
 		oldSubtreeHash := oldSubtree.RootHash()
+
+		// a chunk without a full record has its lane bitmaps built from the pool before a mining
+		// candidate lists it (ensureLaneBitmaps)
+		if chunks[i].lanes != nil {
+			stp.keepLaneBitmapsOf(oldSubtree, chunks[i].lanes)
+		}
 
 		if !skipNotification {
 			stp.logger.Debugf("[%s] append subtree", oldSubtreeHash.String())
@@ -9165,7 +9208,6 @@ func (stp *SubtreeProcessor) parallelBuildRemainderSubtrees(ctx context.Context,
 			Subtree:           oldSubtree,
 			ParentTxMap:       stp.currentTxMap,
 			DeletedTxs:        stp.deletedTxs,
-			DeletedPositions:  stp.deletedPositions,
 			SkipNotification:  skipNotification,
 			ErrChan:           errCh,
 			OnStorageComplete: func() { stp.cleanupDeletedTxs(oldSubtree) },

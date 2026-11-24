@@ -423,46 +423,6 @@ func (s *SplitTxInpointsMap) appendPayload(dst []byte, hash chainhash.Hash, requ
 	return append(dst, recordPayload(rec)...), true, nil
 }
 
-// AppendSerializedAt is AppendSerialized that also returns the lane position kept with hash, or 0
-// when it keeps none, read under the same lock.
-func (s *SplitTxInpointsMap) AppendSerializedAt(dst []byte, hash chainhash.Hash) (out []byte, position uint64, found bool, err error) {
-	return s.appendPayloadAt(dst, hash, false)
-}
-
-// AppendMetaInpointsAt is AppendMetaInpoints that also returns the lane position kept with hash,
-// or 0 when it keeps none, read under the same lock, so the subtree meta and the subtree's lane
-// bitmaps are built in one pass over the map.
-func (s *SplitTxInpointsMap) AppendMetaInpointsAt(dst []byte, hash chainhash.Hash) (out []byte, position uint64, found bool, err error) {
-	return s.appendPayloadAt(dst, hash, true)
-}
-
-// appendPayloadAt is appendPayload that also returns the lane position, read under the same lock.
-func (s *SplitTxInpointsMap) appendPayloadAt(dst []byte, hash chainhash.Hash, requireParents bool) (out []byte, position uint64, found bool, err error) {
-	b := s.bucket(hash)
-
-	b.mu.Lock()
-	defer b.mu.Unlock()
-
-	h, ok := b.handle(hash)
-	if !ok {
-		return dst, 0, false, nil
-	}
-
-	rec := b.record(h)
-	position = recordPosition(rec)
-
-	switch flags := rec[2]; {
-	case flags&recordNil != 0:
-		return dst, position, true, errNilInpoints
-	case flags&recordNoVouts != 0:
-		return dst, position, true, subtreepkg.ErrParentTxHashesMismatch
-	case requireParents && flags&recordParentsSet == 0:
-		return dst, position, true, subtreepkg.ErrCannotSerializeSubtreeNotSet
-	}
-
-	return append(dst, recordPayload(rec)...), position, true, nil
-}
-
 // Position returns the lane position kept with hash, or 0 when the map does not hold hash or
 // keeps no position for it.
 func (s *SplitTxInpointsMap) Position(hash chainhash.Hash) uint64 {
