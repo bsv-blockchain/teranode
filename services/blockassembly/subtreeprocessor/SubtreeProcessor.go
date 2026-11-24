@@ -6685,7 +6685,6 @@ func (stp *SubtreeProcessor) moveBackBlockBulkBuild(ctx context.Context, block *
 
 	flatHashes := make([]chainhash.Hash, 0, blockNodeCount)
 	flatInpoints := make([]*subtreepkg.TxInpoints, 0, blockNodeCount)
-	flatNodes := make([]subtreepkg.Node, 0, blockNodeCount)
 
 	for idx, subtreeNodes := range subtreesNodes {
 		startIdx := 0
@@ -6695,7 +6694,6 @@ func (stp *SubtreeProcessor) moveBackBlockBulkBuild(ctx context.Context, block *
 		for i := startIdx; i < len(subtreeNodes); i++ {
 			flatHashes = append(flatHashes, subtreeNodes[i].Hash)
 			flatInpoints = append(flatInpoints, &subtreeMetaTxInpoints[idx][i])
-			flatNodes = append(flatNodes, subtreeNodes[i])
 		}
 	}
 
@@ -6721,6 +6719,17 @@ func (stp *SubtreeProcessor) moveBackBlockBulkBuild(ctx context.Context, block *
 		streamed = !slices.Contains(wasSet, false)
 
 		if !streamed {
+			// the held walk indexes the block's nodes, coinbase left out, as the arrays above do
+			flatNodes := make([]subtreepkg.Node, 0, blockNodeCount)
+
+			for idx, subtreeNodes := range subtreesNodes {
+				if idx == 0 {
+					subtreeNodes = subtreeNodes[min(len(subtreeNodes), 1):]
+				}
+
+				flatNodes = append(flatNodes, subtreeNodes...)
+			}
+
 			allNodes = make([]subtreepkg.Node, 0, totalBlockNodes+totalPreviousNodes)
 
 			for i, set := range wasSet {
@@ -6748,7 +6757,14 @@ func (stp *SubtreeProcessor) moveBackBlockBulkBuild(ctx context.Context, block *
 	var runs [][]subtreepkg.Node
 
 	if streamed {
-		runs = append(runs, flatNodes)
+		// the block's nodes where they are, without the coinbase of its first subtree
+		for idx, subtreeNodes := range subtreesNodes {
+			if idx == 0 {
+				subtreeNodes = subtreeNodes[min(len(subtreeNodes), 1):]
+			}
+
+			runs = append(runs, subtreeNodes)
+		}
 
 		for _, st := range previousChainedSubtrees {
 			runs = append(runs, withoutCoinbasePlaceholder(st.Nodes))
