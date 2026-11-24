@@ -34,7 +34,11 @@ func (stp *SubtreeProcessor) dequeueDuringReorg(ctx context.Context, transaction
 		return stp.dequeueDuringBlockMovement(transactionMap, losingTxHashesMap, conflictingHashes, skipNotification)
 	}
 
-	parallel := reorgParallelDrain && len(conflictingHashes) == 0 && (losingTxHashesMap == nil || losingTxHashesMap.Length() == 0)
+	// the parallel build continues the open subtree and fails without room in it; placeNode makes room
+	open := stp.currentSubtree.Load()
+	roomInOpen := open != nil && !open.IsComplete()
+
+	parallel := reorgParallelDrain && roomInOpen && len(conflictingHashes) == 0 && (losingTxHashesMap == nil || losingTxHashesMap.Length() == 0)
 
 	if reorgDrainHook != nil {
 		reorgDrainHook(parallel)

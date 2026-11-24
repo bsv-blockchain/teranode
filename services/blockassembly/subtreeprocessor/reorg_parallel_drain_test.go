@@ -141,3 +141,41 @@ func BenchmarkReorgDrain(b *testing.B) {
 		})
 	}
 }
+
+// The parallel build fills the open subtree from where it stands and needs room in it. A drain that
+// finds the open subtree full, or none, places what is queued one node at a time, as it did before the
+// parallel drain, instead of failing the reorg.
+func TestReorgParallelDrain_StaysSequentialWithoutRoomInTheOpenSubtree(t *testing.T) {
+	for _, name := range []string{"full", "none"} {
+		t.Run(name, func(t *testing.T) {
+			cfg := smallScenarioConfig()
+			cfg.parallelThreshold = 1
+			sc := newReorgScenario(t, cfg)
+
+			prevHook := reorgDrainHook
+			defer func() { reorgDrainHook = prevHook }()
+
+			var modes []bool
+
+			reorgDrainHook = func(p bool) { modes = append(modes, p) }
+
+			if name == "full" {
+				open := sc.stp.currentSubtree.Load()
+				for i := 0; !open.IsComplete(); i++ {
+					require.NoError(t, open.AddSubtreeNode(subtreepkg.Node{Hash: chainhash.HashH([]byte(fmt.Sprintf("fill-%d", i))), Fee: 1, SizeInBytes: 250}))
+				}
+			} else {
+				sc.stp.currentSubtree.Store(nil)
+			}
+
+			queueIntake(sc, 0, 10)
+
+			sc.stp.parallelReorgDrain = true
+			defer func() { sc.stp.parallelReorgDrain = false }()
+
+			require.NoError(t, sc.stp.dequeueDuringReorg(t.Context(), nil, nil, nil, false))
+			require.Equal(t, []bool{false}, modes)
+			require.Zero(t, sc.stp.queue.length())
+		})
+	}
+}
