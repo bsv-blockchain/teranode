@@ -1,0 +1,13 @@
+diff --git a/services/blockassembly/subtreeprocessor/store_queue_reorg.go b/services/blockassembly/subtreeprocessor/store_queue_reorg.go
+index 2ca318d2d..3d3244dc7 100644
+--- a/services/blockassembly/subtreeprocessor/store_queue_reorg.go
++++ b/services/blockassembly/subtreeprocessor/store_queue_reorg.go
+@@ -232,7 +232,7 @@ func (stp *SubtreeProcessor) reorgAwaitedSubtrees() int {
+ 	n := len(stp.chainedSubtrees)
+ 	k0 := stp.settings.BlockAssembly.ReorgAwaitedSubtrees
+ 
+-	if k0 <= 0 || stp.storedSet == nil || stp.storeQueue == nil || n == 0 {
++	if k0 <= 0 || n == 0 { // mutant: K0 whether or not the cut is on
+ 		return n
+ 	}
+ 
