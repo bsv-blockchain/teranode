@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/RoaringBitmap/roaring/v2/roaring64"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
 	"github.com/bsv-blockchain/teranode/errors"
@@ -493,13 +494,32 @@ func BenchmarkSealLaneBitmaps(b *testing.B) {
 		positions[i] = lane.Pack(uint8(l), next[l]) //nolint:gosec // l < 17
 	}
 
+	r := rand.New(rand.NewSource(1))
+
 	shuffled := append([]uint64(nil), positions...)
-	rand.New(rand.NewSource(1)).Shuffle(len(shuffled), func(i, j int) { shuffled[i], shuffled[j] = shuffled[j], shuffled[i] })
+	r.Shuffle(len(shuffled), func(i, j int) { shuffled[i], shuffled[j] = shuffled[j], shuffled[i] })
+
+	// concurrent validation reorders transactions locally: shuffled within windows of 1,000
+	jittered := append([]uint64(nil), positions...)
+	for i := 0; i < len(jittered); i += 1000 {
+		w := jittered[i:min(i+1000, len(jittered))]
+		r.Shuffle(len(w), func(a, b int) { w[a], w[b] = w[b], w[a] })
+	}
+
+	// a subtree holding one position in ten of its lanes' ranges, in arrival order
+	sparse := make([]uint64, members)
+	sparseNext := make([]uint64, 17)
+
+	for i := range sparse {
+		l := (i / 1024) % 17
+		sparseNext[l] += 1 + uint64(r.Intn(19))        //nolint:gosec // small
+		sparse[i] = lane.Pack(uint8(l), sparseNext[l]) //nolint:gosec // l < 17
+	}
 
 	for _, order := range []struct {
 		name      string
 		positions []uint64
-	}{{"arrival", positions}, {"shuffled", shuffled}} {
+	}{{"arrival", positions}, {"jittered", jittered}, {"shuffled", shuffled}, {"sparse", sparse}} {
 		b.Run(order.name, func(b *testing.B) {
 			for i := 0; i < b.N; i++ {
 				b.StopTimer()
@@ -721,5 +741,81 @@ func TestRemainderRebuildCarriesThePositions(t *testing.T) {
 			require.Len(t, stp.chainedSubtrees, 1)
 			require.Equal(t, []uint64{lane.Pack(17, 1), lane.Pack(17, 3), lane.Pack(17, 5)}, keeper.positions(t, *stp.chainedSubtrees[0].RootHash()))
 		})
+	}
+}
+
+// laneBitmap and bitmapsFromPositions give the bitmaps a plain AddMany of each lane's positions
+// gives, for positions in runs, with gaps and duplicates, in order and shuffled, across lanes.
+func TestLaneBitmapBuildsMatchAddMany(t *testing.T) {
+	r := rand.New(rand.NewSource(7))
+
+	for round := 0; round < 50; round++ {
+		var packed []uint64
+
+		want := map[uint8]*roaring64.Bitmap{}
+		next := map[uint8]uint64{}
+
+		for i := 0; i < 2000; i++ {
+			if r.Intn(20) == 0 {
+				packed = append(packed, 0)
+				continue
+			}
+
+			l := uint8(r.Intn(5)) //nolint:gosec // r.Intn(5) < 5
+			step := uint64(1)
+
+			switch r.Intn(10) {
+			case 0:
+				step = uint64(2 + r.Intn(300)) //nolint:gosec // small
+			case 1:
+				step = 0 // a duplicate
+			}
+
+			next[l] += step
+			if next[l] == 0 {
+				// some rounds run past 32 bits, where the bitset build does not apply
+				next[l] = 1 + uint64(round%3/2)<<33 //nolint:gosec // round is small
+			}
+
+			packed = append(packed, lane.Pack(l, next[l]))
+
+			if want[l] == nil {
+				want[l] = roaring64.New()
+			}
+
+			want[l].Add(next[l])
+		}
+
+		if round%2 == 1 {
+			r.Shuffle(len(packed), func(i, j int) { packed[i], packed[j] = packed[j], packed[i] })
+		}
+
+		root := chainhash.Hash{byte(round)}
+
+		got, unpositioned := bitmapsFromPositions(root, append([]uint64(nil), packed...))
+
+		fill := newLaneFill(nil)
+		for _, p := range packed {
+			fill.add(p)
+		}
+
+		fromFill, fillUnpositioned := fill.bitmaps(root)
+
+		wantUnpositioned := 0
+		for _, p := range packed {
+			if !lane.Valid(p) {
+				wantUnpositioned++
+			}
+		}
+
+		require.Equal(t, wantUnpositioned, unpositioned)
+		require.Equal(t, wantUnpositioned, fillUnpositioned)
+		require.Len(t, got.Lanes, len(want))
+		require.Len(t, fromFill.Lanes, len(want))
+
+		for l, bm := range want {
+			require.Equal(t, bm.ToArray(), got.Lanes[l].ToArray(), "round %d lane %d", round, l)
+			require.Equal(t, bm.ToArray(), fromFill.Lanes[l].ToArray(), "round %d lane %d from the record", round, l)
+		}
 	}
 }

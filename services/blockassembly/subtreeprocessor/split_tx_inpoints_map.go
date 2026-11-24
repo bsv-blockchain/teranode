@@ -564,12 +564,13 @@ func (s *SplitTxInpointsMap) putRecordIfNotExists(hash chainhash.Hash, rec []byt
 // through swapCurrentTxMapBack, which clears the half that was being written
 // before it becomes the retired half again.
 func (s *SplitTxInpointsMap) MoveBucketFrom(src *SplitTxInpointsMap, bucket uint16, hashes []chainhash.Hash, inserted []bool) int {
-	return s.MoveBucketFromAt(src, bucket, hashes, inserted, nil)
+	return s.MoveBucketFromAt(src, bucket, hashes, inserted, nil, nil)
 }
 
-// MoveBucketFromAt is MoveBucketFrom that also sets positions[i] to the lane position (util/lane)
-// src keeps with hashes[i], 0 for none, read from the record it copies. A nil positions reads none.
-func (s *SplitTxInpointsMap) MoveBucketFromAt(src *SplitTxInpointsMap, bucket uint16, hashes []chainhash.Hash, inserted []bool, positions []uint64) int {
+// MoveBucketFromAt is MoveBucketFrom that also sets positions[at[i]] to the lane position
+// (util/lane) src keeps with hashes[i], 0 for none, read from the record it copies. A nil
+// positions reads none.
+func (s *SplitTxInpointsMap) MoveBucketFromAt(src *SplitTxInpointsMap, bucket uint16, hashes []chainhash.Hash, inserted []bool, positions []uint64, at []int) int {
 	var scratch [txInpointsScratch]byte
 
 	dst := &s.buckets[bucket]
@@ -581,7 +582,7 @@ func (s *SplitTxInpointsMap) MoveBucketFromAt(src *SplitTxInpointsMap, bucket ui
 		}
 
 		if positions != nil {
-			positions[i] = recordPosition(rec)
+			positions[at[i]] = recordPosition(rec)
 		}
 
 		dst.mu.Lock()

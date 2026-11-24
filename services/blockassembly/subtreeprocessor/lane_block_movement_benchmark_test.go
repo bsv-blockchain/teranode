@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"runtime"
 	"runtime/metrics"
+	"runtime/pprof"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -215,7 +216,10 @@ func BenchmarkLaneRemainderRebuild(b *testing.B) {
 
 					b.StartTimer()
 
-					require.NoError(b, stp.processRemainderTxHashes(context.Background(), chained, mined, nil, nil, src, true))
+					// labelled, with the goroutines it starts, so a CPU profile can focus on the timed work
+					pprof.Do(context.Background(), pprof.Labels("phase", "timed"), func(ctx context.Context) {
+						require.NoError(b, stp.processRemainderTxHashes(ctx, chained, mined, nil, nil, src, true))
+					})
 
 					b.StopTimer()
 
@@ -258,7 +262,9 @@ func BenchmarkLaneOwnBlockSubtreeNodes(b *testing.B) {
 
 					b.StartTimer()
 
-					require.NoError(b, stp.processOwnBlockSubtreeNodes(block, nodes, src, 0, nil, true))
+					pprof.Do(context.Background(), pprof.Labels("phase", "timed"), func(context.Context) {
+						require.NoError(b, stp.processOwnBlockSubtreeNodes(block, nodes, src, 0, nil, true))
+					})
 				}
 			})
 		}

@@ -364,6 +364,9 @@ type SubtreeProcessor struct {
 	// laneFill holds the lane positions recorded for the members of the open subtree.
 	laneFill laneFill
 
+	// laneSpare holds the emptied per-lane lists of the last sealed record, for the next record.
+	laneSpare *[lane.MaxLane + 1][]uint64
+
 	// laneUnbuilt holds the chained subtrees whose lane bitmaps could not be built from the pool.
 	laneUnbuilt map[chainhash.Hash]struct{}
 
@@ -9508,21 +9511,13 @@ func (stp *SubtreeProcessor) bucketShardedGetAndSetIfNotExists(
 
 				moved := make([]bool, len(indices))
 
-				var movedPositions []uint64
-				if outPositions != nil {
-					movedPositions = make([]uint64, len(indices))
-				}
-
-				if missing := splitMap.MoveBucketFromAt(srcSplit, bucketIdx, hashes, moved, movedPositions); missing >= 0 {
+				// each position goes straight to its node's slot in outPositions
+				if missing := splitMap.MoveBucketFromAt(srcSplit, bucketIdx, hashes, moved, outPositions, indices); missing >= 0 {
 					return errors.NewProcessingError("node %s not found in currentTxMap", hashes[missing].String())
 				}
 
 				for j, origIdx := range indices {
 					wasInserted[origIdx] = moved[j]
-
-					if movedPositions != nil {
-						outPositions[origIdx] = movedPositions[j]
-					}
 				}
 
 				return nil
@@ -9667,12 +9662,8 @@ func (stp *SubtreeProcessor) legacyParallelGetAndSetIfNotExists(
 
 			moved := make([]bool, len(moveHashes))
 
-			var movedPositions []uint64
-			if outPositions != nil {
-				movedPositions = make([]uint64, len(moveHashes))
-			}
-
-			if missing, moveErr := dstDisk.MoveFromAt(srcDisk, moveHashes, moved, movedPositions); missing >= 0 {
+			// each position goes straight to its node's slot in outPositions
+			if missing, moveErr := dstDisk.MoveFromAt(srcDisk, moveHashes, moved, outPositions, moveIdxs); missing >= 0 {
 				if moveErr != nil {
 					return errors.NewProcessingError("error reading node %s from currentTxMap", moveHashes[missing].String(), moveErr)
 				}
@@ -9682,10 +9673,6 @@ func (stp *SubtreeProcessor) legacyParallelGetAndSetIfNotExists(
 
 			for j, idx := range moveIdxs {
 				wasInserted[idx] = moved[j]
-
-				if movedPositions != nil {
-					outPositions[idx] = movedPositions[j]
-				}
 
 				if !moved[j] {
 					stp.logger.Debugf("duplicate transaction ignored: %s", moveHashes[j].String())

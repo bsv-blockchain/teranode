@@ -1,9 +1,10 @@
 package subtreeprocessor
 
 import (
+	"math"
 	"runtime"
-	"slices"
 
+	"github.com/RoaringBitmap/roaring/v2"
 	"github.com/RoaringBitmap/roaring/v2/roaring64"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
@@ -48,6 +49,17 @@ func newLaneFill(st *subtreepkg.Subtree) laneFill {
 	return laneFill{subtree: st, lanes: new([lane.MaxLane + 1][]uint64)}
 }
 
+// startLaneFill starts an empty record for st on the per-lane lists the last sealed record left,
+// emptied, when there are some.
+func (stp *SubtreeProcessor) startLaneFill(st *subtreepkg.Subtree) laneFill {
+	if lanes := stp.laneSpare; lanes != nil {
+		stp.laneSpare = nil
+		return laneFill{subtree: st, lanes: lanes}
+	}
+
+	return newLaneFill(st)
+}
+
 // add records one member's position, 0 or another invalid one for none.
 func (f *laneFill) add(position uint64) {
 	f.added++
@@ -75,7 +87,7 @@ func (stp *SubtreeProcessor) recordLanePosition(st *subtreepkg.Subtree, position
 	}
 
 	if stp.laneFill.subtree != st || stp.laneFill.lanes == nil {
-		stp.laneFill = newLaneFill(st)
+		stp.laneFill = stp.startLaneFill(st)
 	}
 
 	stp.laneFill.add(position)
@@ -124,10 +136,7 @@ func (f *laneFill) bitmaps(root chainhash.Hash) (lane.SubtreeBitmaps, int) {
 			continue
 		}
 
-		bm := roaring64.New()
-		bm.AddMany(positions)
-		bm.RunOptimize()
-		bitmaps.Lanes[uint8(l)] = bm //nolint:gosec // l is at most MaxLane
+		bitmaps.Lanes[uint8(l)] = laneBitmap(positions) //nolint:gosec // l is at most MaxLane
 	}
 
 	for _, position := range f.removed {
@@ -149,41 +158,143 @@ func (f *laneFill) bitmaps(root chainhash.Hash) (lane.SubtreeBitmaps, int) {
 	return bitmaps, unpositioned
 }
 
+// laneDenseFactor bounds the span of a lane's positions laneBitmap builds from a bitset: at most
+// this many times the number of positions, so the bitset costs at most this many bits a position.
+const laneDenseFactor = 32
+
+// laneRunFactor is the fewest positions a run must average for laneBitmap to add a lane's
+// positions as ranges, one per run of positions that follow one another.
+const laneRunFactor = 64
+
+// laneBitmap builds one lane's bitmap from positions within the lane, in any order. One pass finds
+// their lowest, highest and how many runs of consecutive positions they come in. Few long runs are
+// added as ranges. Otherwise, when the positions fit in 32 bits and span at most laneDenseFactor
+// times their number, they are set in a bitset, whatever their order, and the bitmap is built from
+// its words; failing that they are added with AddMany.
+func laneBitmap(positions []uint64) *roaring64.Bitmap {
+	bm := roaring64.New()
+	if len(positions) == 0 {
+		return bm
+	}
+
+	lowest, highest, runs := positions[0], positions[0], 1
+
+	for i := 1; i < len(positions); i++ {
+		p := positions[i]
+		lowest = min(lowest, p)
+		highest = max(highest, p)
+
+		if p != positions[i-1]+1 {
+			runs++
+		}
+	}
+
+	switch {
+	case runs*laneRunFactor <= len(positions):
+		start := 0
+
+		for i := 1; i <= len(positions); i++ {
+			if i == len(positions) || positions[i] != positions[i-1]+1 {
+				bm.AddRange(positions[start], positions[i-1]+1)
+				start = i
+			}
+		}
+	case highest <= math.MaxUint32 && highest-(lowest&^0xFFFF) < uint64(len(positions))*laneDenseFactor:
+		return denseLaneBitmap(positions, lowest, highest)
+	default:
+		bm.AddMany(positions)
+	}
+
+	bm.RunOptimize()
+
+	return bm
+}
+
+// denseLaneBitmap builds the bitmap of positions, which run from lowest to highest, at most
+// MaxUint32, from a bitset that starts on the container boundary at or below lowest.
+func denseLaneBitmap(positions []uint64, lowest, highest uint64) *roaring64.Bitmap {
+	base := lowest &^ 0xFFFF
+
+	words := make([]uint64, (highest-base+64)/64)
+	for _, p := range positions {
+		off := p - base
+		words[off>>6] |= 1 << (off & 63)
+	}
+
+	bm32 := roaring.FromDense(words, false)
+	if base != 0 {
+		bm32 = roaring.AddOffset(bm32, uint32(base)) //nolint:gosec // base <= lowest <= MaxUint32
+	}
+
+	bm32.RunOptimize()
+
+	return roaring64.Roaring32AsRoaring64(bm32)
+}
+
+// laneKey is the bucket bitmapsFromPositions groups position v into: 0 for none, or its lane + 1.
+func laneKey(v uint64) int {
+	if !lane.Valid(v) {
+		return 0
+	}
+
+	return int(lane.Lane(v)) + 1
+}
+
 // bitmapsFromPositions builds the lane bitmaps of subtree root from positions, one per member, 0
-// or another invalid one for none, and counts the members without one. It sorts positions in place
-// and reuses it, so the caller must not read it afterwards; it allocates nothing besides the
-// bitmaps.
+// or another invalid one for none, and counts the members without one. It groups positions by lane
+// in place, in one counting pass and one swapping pass, so the caller must not read positions
+// afterwards; it allocates nothing besides the bitmaps.
 func bitmapsFromPositions(root chainhash.Hash, positions []uint64) (lane.SubtreeBitmaps, int) {
-	slices.Sort(positions)
+	const keys = lane.MaxLane + 2
+
+	var count, next, end [keys]int
+
+	for _, v := range positions {
+		count[laneKey(v)]++
+	}
+
+	offset := 0
+	for k := range count {
+		next[k] = offset
+		offset += count[k]
+		end[k] = offset
+	}
+
+	// each position is swapped straight into its lane's bucket
+	for k := range next {
+		for next[k] < end[k] {
+			v := positions[next[k]]
+
+			kv := laneKey(v)
+			if kv == k {
+				next[k]++
+				continue
+			}
+
+			positions[next[k]], positions[next[kv]] = positions[next[kv]], v
+			next[kv]++
+		}
+	}
 
 	bitmaps := lane.SubtreeBitmaps{SubtreeHash: root, Lanes: lane.LaneBitmaps{}}
-	unpositioned := 0
 
-	for start := 0; start < len(positions); {
-		if !lane.Valid(positions[start]) {
-			unpositioned++
-			start++
+	start := count[0]
 
+	for k := 1; k < keys; k++ {
+		if count[k] == 0 {
 			continue
 		}
 
-		l := lane.Lane(positions[start])
-
-		end := start
-		for end < len(positions) && lane.Valid(positions[end]) && lane.Lane(positions[end]) == l {
-			positions[end] &= lane.MaxPosition
-			end++
+		segment := positions[start : start+count[k]]
+		for i := range segment {
+			segment[i] &= lane.MaxPosition
 		}
 
-		bm := roaring64.New()
-		bm.AddMany(positions[start:end])
-		bm.RunOptimize()
-		bitmaps.Lanes[l] = bm
-
-		start = end
+		bitmaps.Lanes[uint8(k-1)] = laneBitmap(segment) //nolint:gosec // k-1 is at most MaxLane
+		start += count[k]
 	}
 
-	return bitmaps, unpositioned
+	return bitmaps, count[0]
 }
 
 // sealLaneBitmaps keeps the lane bitmaps of st, the open subtree being sealed, and ends its record.
@@ -196,6 +307,15 @@ func (stp *SubtreeProcessor) sealLaneBitmaps(st *subtreepkg.Subtree) {
 	stp.laneFill = laneFill{}
 
 	stp.keepLaneBitmapsOf(st, &fill)
+
+	// the bitmaps hold no reference to the record's lists, which the next record reuses, emptied
+	if fill.lanes != nil {
+		for l := range fill.lanes {
+			fill.lanes[l] = fill.lanes[l][:0]
+		}
+
+		stp.laneSpare = fill.lanes
+	}
 }
 
 // keepLaneBitmapsOf keeps st's lane bitmaps from fill when it accounts for every member, or else
