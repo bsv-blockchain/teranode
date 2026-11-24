@@ -77,7 +77,7 @@ func initRowsMetrics() {
 			Namespace: "teranode",
 			Subsystem: "lane",
 			Name:      "gate_seconds",
-			Help:      "Time per block of the lane gate at utxostore_laneMigration shadow, by stage: build (merging the subtrees' lane bitmaps into rows, in block validation for a peer's block, after reading them from the subtree store, and in block assembly for its own, from the bitmaps it kept when it stored each subtree) and insert (in the blockchain store, checking the rows in memory before the block's database transaction begins, then inserting them inside it, observed once the block is stored and only when its rows were, with the insert of the attempt that stored it); a block's gate time is the sum. The block's own INSERT and the commit are not included. block is peer or own",
+			Help:      "Time per block of the lane gate at utxostore_laneMigration shadow, by stage: build (merging the subtrees' lane bitmaps into rows, in block validation for a peer's block, after reading them from the subtree store, and in block assembly for its own, from the bitmaps it kept when it sealed each subtree, before the subtree was listed or stored) and insert (in the blockchain store, checking the rows in memory before the block's database transaction begins, then inserting them inside it, observed once the block is stored and only when its rows were, with the insert of the attempt that stored it); a block's gate time is the sum. The block's own INSERT and the commit are not included. block is peer or own",
 			Buckets:   prometheus.ExponentialBuckets(0.0001, 4, 12),
 		}, []string{"block", "stage"})
 		prometheusLaneRowBytes = promauto.NewHistogramVec(prometheus.HistogramOpts{
@@ -110,7 +110,7 @@ func initRowsMetrics() {
 			Namespace: "teranode",
 			Subsystem: "lane",
 			Name:      "txs_without_position_total",
-			Help:      "Transactions a subtree's lane bitmaps leave out because no valid lane position was known for them, by the service that built the bitmaps; counted each time a subtree is validated (subtreevalidation) or stored (blockassembly), so a transaction in several subtrees, as peers announce the same unmined transactions again or block assembly rebuilds its subtrees after a block, counts once for each. The coinbase placeholder is not counted",
+			Help:      "Transactions a subtree's lane bitmaps leave out because no valid lane position was known for them, by the service that built the bitmaps; counted each time a subtree is validated (subtreevalidation), and by blockassembly once for each subtree it keeps bitmaps for: each sealed subtree, each subtree rebuilt after a block, and each copy of the open subtree taken for an announcement or a mining candidate. So a transaction in several subtrees, as peers announce the same unmined transactions again or block assembly rebuilds its subtrees after a block, counts once for each, and one waiting in the open subtree counts once for each copy too. The coinbase placeholder is not counted",
 		}, []string{"service"})
 		prometheusLaneRowInsertFailure = promauto.NewCounterVec(prometheus.CounterOpts{
 			Namespace: "teranode",

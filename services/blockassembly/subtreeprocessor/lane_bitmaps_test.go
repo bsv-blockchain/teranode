@@ -431,6 +431,35 @@ func TestIncompleteSubtreeCopyHasItsBitmaps(t *testing.T) {
 	require.True(t, stp.laneFill.matches(stp.currentSubtree.Load()))
 }
 
+// A copy of a later open subtree leaves out its first member, which has no coinbase placeholder
+// before it, so the copy's bitmaps hold only the members the copy has, not the open subtree's
+// record.
+func TestLaterIncompleteSubtreeCopyHasOnlyItsMembersBitmaps(t *testing.T) {
+	for _, disk := range []bool{false, true} {
+		t.Run(map[bool]string{false: "in-memory map", true: "disk map"}[disk], func(t *testing.T) {
+			stp, keeper := keptLanePoolProcessor(t, disk)
+
+			i := 0
+			for len(stp.chainedSubtrees) == 0 {
+				i++
+				addPositioned(t, stp, i, lane.Pack(3, uint64(i))) //nolint:gosec // small test index
+			}
+
+			for j := 1; j <= 3; j++ {
+				addPositioned(t, stp, i+j, lane.Pack(3, uint64(i+j))) //nolint:gosec // small test index
+			}
+
+			open := stp.currentSubtree.Load()
+			require.NotEqual(t, subtreepkg.CoinbasePlaceholderHashValue, open.Nodes[0].Hash, "a later open subtree starts with a real tx")
+
+			copied, err := stp.createIncompleteSubtreeCopy()
+			require.NoError(t, err)
+
+			require.Equal(t, []uint64{lane.Pack(3, uint64(i+2)), lane.Pack(3, uint64(i+3))}, keeper.positions(t, *copied.RootHash())) //nolint:gosec // small test index
+		})
+	}
+}
+
 // At off the processor records no position and keeps no bitmaps, even with a keeper given.
 func TestOffRecordsNoLanePositions(t *testing.T) {
 	keeper := newRecordingLaneKeeper()

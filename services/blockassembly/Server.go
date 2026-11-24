@@ -114,7 +114,7 @@ type BlockAssembly struct {
 	// jobStore caches mining jobs with TTL
 	jobStore *ttlcache.Cache[chainhash.Hash, *subtreeprocessor.Job]
 
-	// ownLaneBitmaps keeps the lane bitmaps of the subtrees this service stored, by subtree hash,
+	// ownLaneBitmaps keeps the lane bitmaps of the subtrees this service's subtree processor sealed or rebuilt, by subtree hash,
 	// for the lane map rows of the blocks it mines, at utxostore_laneMigration shadow (lane_rows.go).
 	ownLaneBitmaps ownLaneBitmaps
 
