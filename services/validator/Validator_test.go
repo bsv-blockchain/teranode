@@ -2617,6 +2617,18 @@ func TestValidateTransaction_BIP68BlockTimeFollowsCandidateBranch(t *testing.T) 
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "transaction sequence lock time not satisfied")
 	})
+
+	t.Run("same-block parent takes the candidate parent median as its coin time", func(t *testing.T) {
+		v := bip68ForkValidator(t, blockHeight)
+		// A coin at the candidate's own height has the candidate's parent as its ancestor, so
+		// its coin time equals the block time and a one-unit lock cannot be met in this block.
+		// A coin time of zero would meet it.
+
+		err := v.validateTransaction(ctx, bip68TimeLockedTx(t), blockHeight, []uint32{blockHeight},
+			&Options{SkipPolicyChecks: true, CandidateParentMedianTime: coinTime + 10_000})
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "transaction sequence lock time not satisfied")
+	})
 }
 
 // TestValidateTransaction_BIP68PathReadsMTPStore drives validateTransaction
