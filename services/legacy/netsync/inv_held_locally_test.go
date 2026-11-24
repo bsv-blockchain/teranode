@@ -260,30 +260,37 @@ func TestHandleInvMsg_ARecentlyFailedBlockIsNotAskedFor(t *testing.T) {
 // The re-ask a skip leaves is due when the mark expires, measured from when the
 // block was marked, not from when the skipped announcement arrived. A block marked
 // at minute zero whose one announcement arrives at minute nine is otherwise not
-// asked for until minute nineteen. The mark here lasts a minute, so the block must
-// be asked for within a sweep of that minute, not ten minutes after the skip.
+// asked for until minute nineteen. Here the announcement arrives late in a short
+// mark's life, so a due time counted from the skip lands well after the sweep the
+// test runs just past the mark's original expiry.
 func TestHandleInvMsg_AMarkedBlockIsAskedForWhenItsMarkExpires(t *testing.T) {
+	const markTTL = 2 * time.Second
+
 	failed := chainhash.Hash{0x80}
 	control := chainhash.Hash{0x81}
 
 	sm, announcer, _, rec, _ := newInvPathManager(t)
-	sm.recentlyFailedBlocks = expiringmap.New[chainhash.Hash, struct{}](time.Minute)
+	sm.recentlyFailedBlocks = expiringmap.New[chainhash.Hash, struct{}](markTTL)
 	t.Cleanup(sm.recentlyFailedBlocks.Stop)
 
 	markedAt := time.Now()
 	sm.recentlyFailedBlocks.Set(failed, struct{}{})
 
+	// The one announcement arrives late in the mark's life.
+	time.Sleep(markTTL * 7 / 10)
+
 	sm.handleInvMsg(&invMsg{inv: blockInv(failed, control), peer: announcer})
 	requireOnlyControlAsked(t, sm, rec, failed, control)
+	require.Less(t, time.Since(markedAt), markTTL, "precondition: the announcement was skipped while the mark stood")
 
-	// The mark has gone by the sweep after its expiry.
-	sm.recentlyFailedBlocks.Delete(failed)
+	// The sweep just after the mark's original expiry, with the mark really gone.
+	time.Sleep(time.Until(markedAt.Add(markTTL + 50*time.Millisecond)))
 
 	before := rec.getDataCount()
 
-	sm.sendDueReAsks(markedAt.Add(time.Minute + time.Second))
+	sm.sendDueReAsks(markedAt.Add(markTTL + 100*time.Millisecond))
 	require.True(t, WaitUntil(func() bool { return rec.askedForSince(before, failed) }, 5*time.Second),
-		"asked for at the first sweep after the mark expires")
+		"asked for at the first sweep after the mark's original expiry")
 }
 
 // The end-to-end test above passes on the drain's check alone, so this pins
