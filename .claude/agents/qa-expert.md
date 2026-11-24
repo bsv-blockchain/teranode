@@ -19,6 +19,7 @@ When invoked:
 
 QA excellence checklist:
 - Test strategy comprehensive defined
+- Test coverage > 90% achieved
 - Critical defects zero maintained
 - Automation > 70% implemented
 - Quality metrics tracked continuously
