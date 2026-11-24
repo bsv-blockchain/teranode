@@ -475,28 +475,29 @@ func TestSorter_DrainReleasesSpareBuffer(t *testing.T) {
 // passes 10M by default, which sized them at about 1.3 GB for a few records.
 // TotalAlloc counts every goroutine in the process, so the bound is loose.
 func TestSorter_DrainSizesBatchBuffersToLen(t *testing.T) {
-	in := makeInputs(3, false)
+	for _, n := range []int{0, 3} {
+		in := makeInputs(n, false)
 
-	s, err := New(Options{BufferRecords: 10})
-	require.NoError(t, err)
+		s, err := New(Options{BufferRecords: 10})
+		require.NoError(t, err)
 
-	defer s.Close()
+		addAll(t, s, in, false)
 
-	addAll(t, s, in, false)
+		var before, after runtime.MemStats
 
-	var before, after runtime.MemStats
+		emitted := 0
 
-	emitted := 0
+		runtime.ReadMemStats(&before)
+		require.NoError(t, s.Drain(context.Background(), 10_000_000, func(batch []*utxo.UnminedTransaction, _ []uint32) error {
+			emitted += len(batch)
+			return nil
+		}))
+		runtime.ReadMemStats(&after)
 
-	runtime.ReadMemStats(&before)
-	require.NoError(t, s.Drain(context.Background(), 10_000_000, func(batch []*utxo.UnminedTransaction, _ []uint32) error {
-		emitted += len(batch)
-		return nil
-	}))
-	runtime.ReadMemStats(&after)
-
-	require.Equal(t, len(in), emitted)
-	require.Less(t, after.TotalAlloc-before.TotalAlloc, uint64(64<<20), "Drain of 3 records allocated for the 10M batch size")
+		require.NoError(t, s.Close())
+		require.Equal(t, len(in), emitted)
+		require.Less(t, after.TotalAlloc-before.TotalAlloc, uint64(64<<20), "Drain of %d records allocated for the 10M batch size", n)
+	}
 }
 
 func TestSorter_InvalidOptions(t *testing.T) {
