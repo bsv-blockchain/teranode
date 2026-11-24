@@ -5737,11 +5737,9 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveBackBlocks []*
 	// the map is only used during the reorg process and is not stored in the SubtreeProcessor struct
 	processedConflictingHashesMap := make(map[chainhash.Hash]struct{})
 
-	// movedBackBlockTxMap keeps track of all the transactions that were in the blocks we moved back
-	// this is used to determine which transactions need to be marked as on the longest chain when moving forward
-	// if a transaction was in a block we moved back, it means it was on the longest chain before the reorg
-	// the value is true once a moveForward block has mined the transaction
-	movedBackBlockTxMap := make(map[chainhash.Hash]bool)
+	// movedBackBlockTxMap is the transactions the lost block had and the winners lacked, as the fast path
+	// finds them, each false: none was mined forward. The slow path keeps the same facts in slowMarks.
+	var movedBackBlockTxMap map[chainhash.Hash]bool
 
 	// reverseCascadedConflictingSet collects every tx whose Conflicting flag
 	// ReverseProcessConflicting flipped to true during the moveBack loop —
@@ -5776,6 +5774,23 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveBackBlocks []*
 			movedBackBlockTxMap = fast.movedBack
 			fastMarkOnLongestChain = fast.markOnLongestChain
 		}
+	}
+
+	// slowMarks keeps track of all the transactions that were in the blocks we moved back, which were on
+	// the longest chain before the reorg, and which of them a moveForward block mines. They decide which
+	// transactions are marked as on the longest chain when moving forward, and which as not.
+	var slowMarks *movedBackMarks
+
+	markWorkers := remainderWorkers(stp.settings.BlockAssembly.ProcessRemainderTxHashesConcurrency)
+
+	if len(slowBackBlocks) > 0 || len(slowForwardBlocks) > 0 {
+		var capacity uint64
+
+		for _, block := range slowBackBlocks {
+			capacity += block.TransactionCount
+		}
+
+		slowMarks = newMovedBackMarks(int(min(capacity, math.MaxInt32))) //nolint:gosec // only sizes the set
 	}
 
 	var reversedBlocks []chainhash.Hash
@@ -5933,14 +5948,8 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveBackBlocks []*
 			}
 		}
 
-		// add all the transactions in the block to the movedBackBlockTxMap
-		for _, subtreeNodes := range subtreesNodes {
-			for _, node := range subtreeNodes {
-				if !node.Hash.Equal(subtreepkg.CoinbasePlaceholderHashValue) {
-					movedBackBlockTxMap[node.Hash] = false
-				}
-			}
-		}
+		// add all the transactions in the block to the moved-back set
+		parallelFor(len(subtreesNodes), markWorkers, func(i int) { slowMarks.add(subtreesNodes[i]) })
 
 		stp.phases.done("move_back")
 	}
@@ -5951,6 +5960,12 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveBackBlocks []*
 	// retires a checklist whose winners are reversed.
 	if retireErr := utxostore.RetireConflictIntentsForBlocks(ctx, stp.utxoStore, reversedBlocks); retireErr != nil {
 		stp.logger.Warnf("[reorgBlocks] could not retire the forward conflict checklists of %d reversed blocks: %v", len(reversedBlocks), retireErr)
+	}
+
+	if slowMarks != nil {
+		if err = slowMarks.freeze(markWorkers); err != nil {
+			return errors.NewProcessingError("[reorgBlocks] error freezing the set of the moved-back transactions", err)
+		}
 	}
 
 	if len(slowBackBlocks) > 0 {
@@ -6013,19 +6028,7 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveBackBlocks []*
 		markedBefore := len(markOnLongestChain)
 
 		if transactionMap != nil {
-			transactionMap.Iter(func(hash chainhash.Hash) bool {
-				if !hash.Equal(subtreepkg.CoinbasePlaceholderHashValue) {
-					if _, ok := movedBackBlockTxMap[hash]; ok {
-						movedBackBlockTxMap[hash] = true
-					} else {
-						markOnLongestChain = append(markOnLongestChain, hash)
-					}
-				}
-
-				// The Iter callback returns "stop", not "continue":
-				// returning true here would stop after the first tx.
-				return false
-			})
+			markOnLongestChain = append(markOnLongestChain, slowMarks.markForward(transactionMap, markWorkers)...)
 		}
 
 		// D2 of this step: the block's transactions the moved-back blocks did not have.
@@ -6126,9 +6129,15 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveBackBlocks []*
 	// the original spend — a one-block fork opened a
 	// blockHeightRetention-unminedTxRetention window in which parents were pruned from
 	// under live children.
-	movedBackAssemblyHashes := movedBackStillInAssembly(movedBackBlockTxMap, stp.currentTxMap)
+	var movedBackAssemblyHashes []chainhash.Hash
 
-	movedBackBlockTxMap = nil // free up memory
+	if slowMarks != nil {
+		movedBackAssemblyHashes = slowMarks.stillIn(stp.currentTxMap, markWorkers)
+	} else {
+		movedBackAssemblyHashes = movedBackStillInAssembly(movedBackBlockTxMap, stp.currentTxMap)
+	}
+
+	movedBackBlockTxMap, slowMarks = nil, nil // free up memory
 
 	// Partition into the two mark sets. partitionLongestChainMarks guarantees the
 	// returned slices are disjoint and de-duplicated, which is the precondition for
