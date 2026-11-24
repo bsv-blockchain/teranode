@@ -477,6 +477,11 @@ func TestSorter_DrainReleasesSpareBuffer(t *testing.T) {
 func TestSorter_DrainSizesBatchBuffersToLen(t *testing.T) {
 	for _, n := range []int{0, 3} {
 		in := makeInputs(n, false)
+		// Distinct CreatedAt values, so a batch size below Len() would split the
+		// output and the one-batch check below can tell.
+		for i := range in {
+			in[i].createdAt += int64(i)
+		}
 
 		s, err := New(Options{BufferRecords: 10})
 		require.NoError(t, err)
@@ -485,17 +490,20 @@ func TestSorter_DrainSizesBatchBuffersToLen(t *testing.T) {
 
 		var before, after runtime.MemStats
 
-		emitted := 0
+		emitted, batches := 0, 0
 
 		runtime.ReadMemStats(&before)
 		require.NoError(t, s.Drain(context.Background(), 10_000_000, func(batch []*utxo.UnminedTransaction, _ []uint32) error {
 			emitted += len(batch)
+			batches++
+
 			return nil
 		}))
 		runtime.ReadMemStats(&after)
 
 		require.NoError(t, s.Close())
 		require.Equal(t, len(in), emitted)
+		require.Equal(t, min(n, 1), batches, "a batch size above Len() must still emit one batch")
 		require.Less(t, after.TotalAlloc-before.TotalAlloc, uint64(64<<20), "Drain of %d records allocated for the 10M batch size", n)
 	}
 }
