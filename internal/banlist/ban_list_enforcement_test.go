@@ -174,6 +174,7 @@ func loadEnforcementFixture(t *testing.T, bl *BanList, mode string) *BanList {
 	case "startup":
 		fresh := New(bl.db, bl.engine, bl.logger)
 		require.NoError(t, fresh.Init(context.Background()))
+		t.Cleanup(func() { requireIndexConsistent(t, fresh) })
 
 		return fresh
 	case "reload":

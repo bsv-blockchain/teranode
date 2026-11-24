@@ -55,6 +55,9 @@ func newTestBanList(t *testing.T) *BanList {
 	err = bl.Init(context.Background())
 	require.NoError(t, err)
 
+	// Whatever the test did, the lookup index must still describe the map.
+	t.Cleanup(func() { requireIndexConsistent(t, bl) })
+
 	return bl
 }
 
