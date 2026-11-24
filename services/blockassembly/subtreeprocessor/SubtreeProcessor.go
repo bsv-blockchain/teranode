@@ -6668,8 +6668,6 @@ func (stp *SubtreeProcessor) moveBackBlockBulkBuild(ctx context.Context, block *
 		totalPreviousNodes += len(previousCurrentSubtree.Nodes)
 	}
 
-	allNodes := make([]subtreepkg.Node, 0, totalBlockNodes+totalPreviousNodes)
-
 	// Step 3: Collect block nodes and populate currentTxMap for new entries using bulk parallel insert.
 	// Flatten block nodes (skipping coinbase) into parallel arrays for ParallelBulkSetIfNotExists.
 	blockNodeCount := totalBlockNodes
@@ -6696,6 +6694,13 @@ func (stp *SubtreeProcessor) moveBackBlockBulkBuild(ctx context.Context, block *
 	// held is nil, and costs nothing below, unless a block transaction is already pending.
 	var held *heldChildren
 
+	// allNodes is the list of the new assembly, in order, for the walk that holds a child behind its
+	// pending parent. With no block transaction already pending nothing is held, the list is the block's
+	// nodes and then the pending ones, and the build reads them where they are instead (issue 2269, PR 9).
+	var allNodes []subtreepkg.Node
+
+	streamed := true
+
 	if len(flatHashes) > 0 {
 		wasSet := make([]bool, len(flatHashes))
 		if splitMap, ok := stp.currentTxMap.(*SplitTxInpointsMap); ok {
@@ -6705,53 +6710,73 @@ func (stp *SubtreeProcessor) moveBackBlockBulkBuild(ctx context.Context, block *
 				_, wasSet[i] = stp.currentTxMap.SetIfNotExists(hash, flatInpoints[i])
 			}
 		}
-		for i, set := range wasSet {
-			if !set {
-				// Already pending: it keeps its pending position, and a child of it waits there.
-				if held == nil {
-					held = newHeldChildren()
+		streamed = !slices.Contains(wasSet, false)
+
+		if !streamed {
+			allNodes = make([]subtreepkg.Node, 0, totalBlockNodes+totalPreviousNodes)
+
+			for i, set := range wasSet {
+				if !set {
+					// Already pending: it keeps its pending position, and a child of it waits there.
+					if held == nil {
+						held = newHeldChildren()
+					}
+
+					held.keep(flatHashes[i])
+
+					continue
 				}
 
-				held.keep(flatHashes[i])
+				if held != nil && held.hold(flatNodes[i], flatInpoints[i].ParentTxHashes) {
+					continue
+				}
 
-				continue
+				allNodes = append(allNodes, flatNodes[i])
 			}
-
-			if held != nil && held.hold(flatNodes[i], flatInpoints[i].ParentTxHashes) {
-				continue
-			}
-
-			allNodes = append(allNodes, flatNodes[i])
 		}
 	}
 
 	// Step 4: Collect previous mempool nodes (already in currentTxMap)
-	for _, st := range previousChainedSubtrees {
-		for _, node := range st.Nodes {
-			if node.Hash.Equal(subtreepkg.CoinbasePlaceholderHashValue) {
-				continue
-			}
-			if held != nil {
-				allNodes = held.appendPending(allNodes, node, stp.currentTxMap.Get)
-				continue
-			}
-			allNodes = append(allNodes, node)
+	var runs [][]subtreepkg.Node
+
+	if streamed {
+		runs = append(runs, flatNodes)
+
+		for _, st := range previousChainedSubtrees {
+			runs = append(runs, withoutCoinbasePlaceholder(st.Nodes))
 		}
-	}
-	if previousCurrentSubtree != nil {
-		for _, node := range previousCurrentSubtree.Nodes {
-			if node.Hash.Equal(subtreepkg.CoinbasePlaceholderHashValue) {
-				continue
-			}
-			if held != nil {
-				allNodes = held.appendPending(allNodes, node, stp.currentTxMap.Get)
-				continue
-			}
-			allNodes = append(allNodes, node)
+
+		if previousCurrentSubtree != nil {
+			runs = append(runs, withoutCoinbasePlaceholder(previousCurrentSubtree.Nodes))
 		}
-	}
-	if held != nil {
-		allNodes = held.flush(allNodes)
+	} else {
+		for _, st := range previousChainedSubtrees {
+			for _, node := range st.Nodes {
+				if node.Hash.Equal(subtreepkg.CoinbasePlaceholderHashValue) {
+					continue
+				}
+				if held != nil {
+					allNodes = held.appendPending(allNodes, node, stp.currentTxMap.Get)
+					continue
+				}
+				allNodes = append(allNodes, node)
+			}
+		}
+		if previousCurrentSubtree != nil {
+			for _, node := range previousCurrentSubtree.Nodes {
+				if node.Hash.Equal(subtreepkg.CoinbasePlaceholderHashValue) {
+					continue
+				}
+				if held != nil {
+					allNodes = held.appendPending(allNodes, node, stp.currentTxMap.Get)
+					continue
+				}
+				allNodes = append(allNodes, node)
+			}
+		}
+		if held != nil {
+			allNodes = held.flush(allNodes)
+		}
 	}
 
 	// Step 5: Determine subtree size
@@ -6778,7 +6803,15 @@ func (stp *SubtreeProcessor) moveBackBlockBulkBuild(ctx context.Context, block *
 	stp.retireChainedSubtrees()
 
 	// Step 7: Bulk build subtrees from all collected nodes
-	if err := stp.bulkBuildSubtrees(ctx, allNodes, subtreeSize); err != nil {
+	var buildErr error
+
+	if streamed {
+		buildErr = stp.streamBuildSubtrees(ctx, runs, subtreeSize)
+	} else {
+		buildErr = stp.bulkBuildSubtrees(ctx, allNodes, subtreeSize)
+	}
+
+	if err := buildErr; err != nil {
 		// The block's transactions stay in currentTxMap: the reset that follows a
 		// failed fork reorg clears it.
 		stp.restoreSubtrees(previousChainedSubtrees, previousCurrentSubtree)
