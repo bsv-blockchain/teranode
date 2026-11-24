@@ -38,7 +38,7 @@ func TestBlockRejectReason(t *testing.T) {
 		"invalid parent":               {errors.NewBlockInvalidError("[ValidateBlock][x] parent block is invalid"), "bad-prevblk"},
 	} {
 		t.Run(name, func(t *testing.T) {
-			require.Equal(t, tc.want, blockRejectReason(tc.err))
+			require.Equal(t, tc.want, BlockRejectReason(tc.err))
 		})
 	}
 }
@@ -47,14 +47,14 @@ func TestBlockRejectReason(t *testing.T) {
 // node-internal detail and peer-supplied data, is never passed on.
 func TestBlockRejectReason_NeverLeaksErrorText(t *testing.T) {
 	secret := "/var/lib/teranode/secret.dat 10.1.2.3 txid-deadbeef"
-	got := blockRejectReason(errors.NewBlockInvalidError("failed to read " + secret))
+	got := BlockRejectReason(errors.NewBlockInvalidError("failed to read " + secret))
 	require.Equal(t, "block rejected", got)
 
 	for _, err := range []error{
 		errors.NewBlockInvalidError("merkle root " + secret),
 		errors.NewTxInvalidError("x -> UNKNOWN (0): bad-txns-in-belowout " + secret),
 	} {
-		got := blockRejectReason(err)
+		got := BlockRejectReason(err)
 		require.False(t, strings.Contains(got, "secret"), got)
 		require.LessOrEqual(t, len(got), 111, "bitcoin-sv truncates a reject reason to 111 bytes")
 	}
@@ -67,7 +67,7 @@ func TestBlockRejectReasons_Vocabulary(t *testing.T) {
 
 	for reason := range blockRejectReasons {
 		require.LessOrEqual(t, len(reason), 111)
-		require.Equal(t, reason, blockRejectReason(errors.NewTxInvalidError("GoBDK -> UNKNOWN (0): "+reason)))
+		require.Equal(t, reason, BlockRejectReason(errors.NewTxInvalidError("GoBDK -> UNKNOWN (0): "+reason)))
 	}
 }
 

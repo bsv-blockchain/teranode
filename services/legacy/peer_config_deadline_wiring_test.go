@@ -4,6 +4,7 @@ import (
 	"net"
 	"testing"
 
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/services/legacy/addrmgr"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/ulogger"
@@ -47,4 +48,16 @@ func TestNewPeerConfigWiresDownloadDeadlineCallbacks(t *testing.T) {
 		"a peer with no sync manager must not claim to be catching up")
 	require.Zero(t, peerCfg.PeersWithBlockDownloads(),
 		"a peer with no sync manager must not report downloading peers")
+}
+
+func TestNewPeerConfigWiresBlockRejectReason(t *testing.T) {
+	prev := cfg
+	cfg = &config{}
+	t.Cleanup(func() { cfg = prev })
+
+	amgr := addrmgr.New(ulogger.TestLogger{}, t.TempDir(), func(string) ([]net.IP, error) { return nil, nil })
+	sp := &serverPeer{server: &server{settings: settings.NewSettings(), addrManager: amgr}}
+	peerCfg := newPeerConfig(sp)
+	require.NotNil(t, peerCfg.BlockRejectReason)
+	require.Equal(t, "bad-txnmrklroot", peerCfg.BlockRejectReason(errors.NewBlockInvalidError("merkle root does not match header's")))
 }

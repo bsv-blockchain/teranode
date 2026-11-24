@@ -52,7 +52,7 @@ var blockRejectPhrases = []struct{ phrase, reason string }{
 	{"parent block is invalid", "bad-prevblk"},
 }
 
-// blockRejectReason picks the reason of the reject that tells a peer why its block was refused.
+// BlockRejectReason picks the reason of the reject that tells a peer why its block was refused.
 // The answer is always one string of the closed vocabulary above or defaultBlockRejectReason,
 // never the text of err, which can carry node-internal detail and peer-supplied data.
 //
@@ -60,7 +60,7 @@ var blockRejectPhrases = []struct{ phrase, reason string }{
 // the generic reason. A bitcoin-sv string reported by a validator (GoBDK produces them verbatim)
 // is taken from the innermost place it appears, the cause and not a wrapper's context. Teranode's
 // own block checks have no such string; their fixed messages are matched only on a block verdict.
-func blockRejectReason(err error) string {
+func BlockRejectReason(err error) string {
 	if err == nil {
 		return defaultBlockRejectReason
 	}

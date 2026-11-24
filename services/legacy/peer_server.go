@@ -2753,6 +2753,7 @@ func newPeerConfig(sp *serverPeer) *peer.Config {
 		AddrMe:            addrMe,
 		NewestBlock:       sp.newestBlock,
 		HostToNetAddress:  sp.server.addrManager.HostToNetAddress,
+		BlockRejectReason: netsync.BlockRejectReason,
 		Proxy:             cfg.Proxy,
 		UserAgentName:     userAgentName,
 		UserAgentVersion:  version.String(),
