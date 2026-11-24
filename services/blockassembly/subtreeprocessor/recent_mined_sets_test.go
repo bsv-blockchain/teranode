@@ -145,6 +145,66 @@ func TestKeepMinedSet_RetentionAndPrune(t *testing.T) {
 	require.Zero(t, stp.keptMinedSetCount(), "a block with no transaction set keeps nothing")
 }
 
+// A block with no transaction set keeps nothing but still drops the expired sets, so a catch-up
+// of empty blocks, whose dequeue loop does not run, frees an earlier block's set on time.
+func TestKeepMinedSet_EmptyBlockDropsExpiredSets(t *testing.T) {
+	stp, now := newMinedSetProcessor(t, 10*time.Second)
+	stp.keepMinedSet(minedSetBlock(1), frozenHashSet(t, chainhash.HashH([]byte("x"))))
+
+	*now = now.Add(10 * time.Second)
+	stp.keepMinedSet(minedSetBlock(2), nil)
+	require.Zero(t, stp.keptMinedSetCount())
+}
+
+// Moving onto a block with no subtrees drops the expired kept sets.
+func TestMoveForwardBlock_EmptyBlockDropsExpiredSets(t *testing.T) {
+	stp, _, _, chain := newResetWALTestProcessor(t, false)
+	stp.settings.BlockAssembly.MinedTxSetRetention = 10 * time.Second
+
+	now := time.Date(2030, 1, 2, 3, 4, 5, 0, time.UTC)
+	stp.clock = clockFunc(func() time.Time { return now })
+	stp.keepMinedSet(minedSetBlock(1), frozenHashSet(t, chainhash.HashH([]byte("x"))))
+
+	now = now.Add(10 * time.Second)
+	chain.moveForward[0].Subtrees = nil
+
+	_, _, err := stp.moveForwardBlock(t.Context(), chain.moveForward[0], true, map[chainhash.Hash]struct{}{}, true, false)
+	require.NoError(t, err)
+	require.Zero(t, stp.keptMinedSetCount(), "the empty block drops the expired set")
+}
+
+// Each batch is checked against the sets kept after its own checkedSeq, not another batch's: a
+// transaction in a set its batch was checked against stays, and the same transaction in a batch
+// checked against fewer sets is dropped.
+func TestFilterRecentlyMined_EachBatchUsesItsOwnCheckedSeq(t *testing.T) {
+	stp, _ := newMinedSetProcessor(t, 10*time.Second)
+	first, second := chainhash.HashH([]byte("in-set-1")), chainhash.HashH([]byte("in-set-2"))
+	stp.keepMinedSet(minedSetBlock(1), frozenHashSet(t, first))
+	stp.keepMinedSet(minedSetBlock(2), frozenHashSet(t, second))
+
+	checkedBoth, checkedFirst, checkedNone := batchOf(first, second), batchOf(first, second), batchOf(first, second)
+	checkedBoth.checkedSeq, checkedFirst.checkedSeq = 2, 1
+
+	stp.filterRecentlyMined([]*TxBatch{checkedBoth, checkedFirst, checkedNone}, nil)
+
+	require.Equal(t, []chainhash.Hash{first, second}, batchHashes(checkedBoth), "checked against both sets: nothing looked up")
+	require.Equal(t, []chainhash.Hash{first}, batchHashes(checkedFirst), "checked against set 1: only set 2 looked up")
+	require.Empty(t, batchHashes(checkedNone), "checked against no set: both looked up")
+}
+
+// The arrival check records on the queued batch the newest set it was checked against.
+func TestAddBatch_RecordsTheNewestSetCheckedOnArrival(t *testing.T) {
+	stp, _ := newMinedSetProcessor(t, 10*time.Second)
+	stp.keepMinedSet(minedSetBlock(1), frozenHashSet(t, chainhash.HashH([]byte("a"))))
+	stp.keepMinedSet(minedSetBlock(2), frozenHashSet(t, chainhash.HashH([]byte("b"))))
+
+	stp.AddBatch([]subtreepkg.Node{{Hash: chainhash.HashH([]byte("c")), Fee: 1, SizeInBytes: 1}}, []*subtreepkg.TxInpoints{inpointsPtr()})
+
+	queued := stp.queue.head.next.Load()
+	require.NotNil(t, queued)
+	require.Equal(t, uint64(2), queued.checkedSeq)
+}
+
 // Keeping the same block again replaces its set rather than holding two.
 func TestKeepMinedSet_SameBlockReplaces(t *testing.T) {
 	stp, _ := newMinedSetProcessor(t, 10*time.Second)

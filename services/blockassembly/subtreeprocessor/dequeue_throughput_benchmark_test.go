@@ -83,8 +83,9 @@ func BenchmarkDequeueThroughput(b *testing.B) {
 }
 
 // BenchmarkDequeueThroughputWithKeptSet measures the steady-state dequeue loop while a block's
-// transaction set is kept (recent_mined_sets.go), against none: every transaction is then looked
-// up on arrival and when placed. The kept set holds keptSetSize hashes that none of the queued
+// transaction set is kept (recent_mined_sets.go), against none. The set is kept before the
+// batches arrive, so every transaction is looked up on arrival and placement skips the set: this
+// measures the arrival lookup. The kept set holds keptSetSize hashes that none of the queued
 // transactions match, so this is the lookup cost alone.
 //
 // Run with -benchtime=1x; each iteration pushes total transactions.

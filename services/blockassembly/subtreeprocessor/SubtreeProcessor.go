@@ -5861,8 +5861,8 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveBackBlocks []*
 		// drained. The reset that follows a failed fork reorg reloads every tx
 		// the store marks unmined, and a queued tx is one, as with the last
 		// step's drain before. A tx that arrives after its own block's step is
-		// checked against that block's kept set, on arrival and when placed,
-		// while blockassembly_minedTxSetRetention lasts (recent_mined_sets.go).
+		// checked against that block's kept set on arrival, or when placed if
+		// it arrived before the set was kept, while blockassembly_minedTxSetRetention lasts (recent_mined_sets.go).
 		// One a positive double-spend window holds back past its block's drain
 		// reaches only later blocks' filters and the kept sets.
 		if transactionMap, losingTxHashesMap, err = stp.moveForwardBlock(ctx, block, true, processedConflictingHashesMap, false, lastMoveForwardBlock); err != nil {
@@ -7752,6 +7752,9 @@ func (stp *SubtreeProcessor) moveForwardBlockDeferringDrain(ctx context.Context,
 		if err = stp.applyCoinbaseUtxos(ctx, block, true, skipNotification); err != nil {
 			return nil, nil, nil, errors.NewProcessingError("[moveForwardBlock][%s] error processing coinbase utxos", block.String(), err)
 		}
+
+		// keeps nothing, but drops the expired kept sets, which a catch-up's dequeue loop cannot
+		stp.keepMinedSet(block, nil)
 
 		return nil, nil, nil, nil
 	}

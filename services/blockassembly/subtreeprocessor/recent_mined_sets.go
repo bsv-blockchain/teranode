@@ -24,7 +24,7 @@ import (
 // alone.
 //
 // A hand-off is checked when it arrives (AddBatch, AddBatchBounded), against the sets kept at that
-// moment, and again when it is placed. Checking on arrival is what lets a set go after its
+// moment, and when it is placed against the sets kept after it arrived. Checking on arrival is what lets a set go after its
 // retention even when a long reorg leaves the hand-off queued for longer than that.
 //
 // Meant to be replaced: if lanes becomes the way teranode records mined state, a block's lane
@@ -70,10 +70,12 @@ func (r *recentMinedSets) storeLocked(sets []recentMinedSet) {
 // keepMinedSet keeps the transaction set of a block just moved forward onto until the retention
 // has passed, and drops the sets whose retention has passed, so a reorg or catch-up holds only the
 // sets of the blocks it moved in the last retention plus the newest. A nil or empty set, or a
-// retention of 0, keeps nothing.
+// retention of 0, keeps nothing, but still drops the expired sets: a catch-up of empty blocks
+// must not hold an earlier block's set past its retention.
 func (stp *SubtreeProcessor) keepMinedSet(block *model.Block, txs *SortedHashSet) {
 	retention := stp.settings.BlockAssembly.MinedTxSetRetention
 	if retention <= 0 || block == nil || txs == nil || txs.Length() == 0 {
+		stp.pruneMinedSets()
 		return
 	}
 
