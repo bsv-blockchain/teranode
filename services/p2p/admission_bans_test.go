@@ -113,7 +113,7 @@ func TestHandleBanEvent_RemoveLiftsAdmissionRule(t *testing.T) {
 func TestSyncAdmissionBans_ExpiryLiftsRule(t *testing.T) {
 	s, _, client := newAdmissionTestServer(t)
 
-	require.NoError(t, s.banList.Add(context.Background(), "198.51.100.9", time.Now().Add(300*time.Millisecond)))
+	require.NoError(t, s.banList.Add(context.Background(), "198.51.100.9", time.Now().Add(1500*time.Millisecond)))
 	s.syncAdmissionBans()
 	require.Equal(t, []string{"BlockAddr 198.51.100.9"}, client.AdmissionCalls())
 

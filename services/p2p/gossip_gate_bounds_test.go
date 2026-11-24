@@ -357,6 +357,7 @@ func TestShouldSkipUnhealthyPeer_NewLowReputationNeighbourGatedOnFirstMessage(t 
 
 	require.True(t, s.shouldSkipUnhealthyPeer(fresh.String(), "test"), "the connected low-reputation peer is gated on its first message")
 	require.Equal(t, 1, counting.callCount("GetPeer"))
+	require.Zero(t, client.walks.Load(), "liveness must not walk GetPeers")
 }
 
 // A ban applied locally while a registry listing was in flight must survive
