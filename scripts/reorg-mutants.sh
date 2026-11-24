@@ -25,7 +25,7 @@ mutant_dir=services/blockassembly/subtreeprocessor/testdata/mutants
 tests=${1:-${REORG_MUTANT_TESTS:-^(TestReorgScenario|TestReorgDifferential|TestOrderOracle)}}
 
 run_tests() {
-	go test -count=1 -tags testtxmetacache -run "$tests" "$pkg" >/dev/null 2>&1
+	TERANODE_HEAVY_TESTS=1 go test -count=1 -tags testtxmetacache -run "$tests" "$pkg" >/dev/null 2>&1
 }
 
 compiles() {
