@@ -16,16 +16,19 @@ import (
 // its serving peer is invalid. One bad record must also leave its batch peers
 // readable.
 func TestGetOutputsProjection_StorageFaults(t *testing.T) {
+	t.Parallel()
+
+	fx := newTxFixtures(t)
+
 	settings := test.CreateBaseTestSettings(t)
 	client, store, ctx, cleanup := initAerospike(t, settings, ulogger.NewErrorTestLogger(t))
 	defer cleanup()
-	cleanDB(t, client)
-	_, err := store.Create(ctx, tx, 0)
+	_, err := store.Create(ctx, fx.tx, 0)
 	require.NoError(t, err)
 	healthy := createTransactionWithOutputs(2)
 	_, err = store.Create(ctx, healthy, 0)
 	require.NoError(t, err)
-	hash := tx.TxIDChainHash()
+	hash := fx.tx.TxIDChainHash()
 	key, aErr := aerospike.NewKey(store.GetNamespace(), store.GetName(), hash[:])
 	require.Nil(t, aErr)
 	for _, tc := range []struct {
