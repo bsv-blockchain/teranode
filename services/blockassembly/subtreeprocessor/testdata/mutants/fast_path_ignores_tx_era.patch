@@ -1,0 +1,13 @@
+diff --git a/services/blockassembly/subtreeprocessor/reorg_fast_path.go b/services/blockassembly/subtreeprocessor/reorg_fast_path.go
+index eedea8cbc..b0e8d3d3c 100644
+--- a/services/blockassembly/subtreeprocessor/reorg_fast_path.go
++++ b/services/blockassembly/subtreeprocessor/reorg_fast_path.go
+@@ -133,7 +133,7 @@ func (stp *SubtreeProcessor) planFastReorg(ctx context.Context, moveBackBlocks,
+ 
+ 	// Admission of a moved-back transaction (the tx era, the dropped set) and the drop of its pending
+ 	// descendants live in the slow path; the fast path declines rather than duplicate them.
+-	if era := stp.txEra.Load(); era != nil && lost.Height != 0 && (lost.Height < era.lo || lost.Height > era.hi) {
++	if era := stp.txEra.Load(); false && era != nil && lost.Height != 0 && (lost.Height < era.lo || lost.Height > era.hi) { // mutant: the era is ignored
+ 		return nil, "tx_era"
+ 	}
+ 
