@@ -272,8 +272,8 @@ var benchmarkTxChains = map[int]benchmarkTxChain{}
 
 // createTransactionChainForBenchmark returns a chain of count transactions, signed on first
 // use for each count and parsed afresh from the kept bytes on every call.
-func createTransactionChainForBenchmark(b *testing.B, r *require.Assertions, count int) []*bt.Tx {
-	b.Helper()
+func createTransactionChainForBenchmark(tb testing.TB, r *require.Assertions, count int) []*bt.Tx {
+	tb.Helper()
 
 	chain, ok := benchmarkTxChains[count]
 	if ok {
@@ -300,6 +300,26 @@ func createTransactionChainForBenchmark(b *testing.B, r *require.Assertions, cou
 	benchmarkTxChains[count] = chain
 
 	return txs
+}
+
+// Signing is the cost the cache removes, so a second request for a length must reuse the
+// kept chain and still hand back transactions the caller can change freely.
+func TestCreateTransactionChainForBenchmarkCachesByLength(t *testing.T) {
+	r := require.New(t)
+
+	delete(benchmarkTxChains, 3)
+	t.Cleanup(func() { delete(benchmarkTxChains, 3) })
+
+	first := createTransactionChainForBenchmark(t, r, 3)
+	r.Contains(benchmarkTxChains, 3)
+
+	second := createTransactionChainForBenchmark(t, r, 3)
+	r.Len(second, len(first))
+
+	for i := range first {
+		r.Equal(first[i].TxID(), second[i].TxID())
+		r.NotSame(first[i], second[i])
+	}
 }
 
 func parseBenchmarkTxChain(r *require.Assertions, chain benchmarkTxChain) []*bt.Tx {
