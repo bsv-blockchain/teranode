@@ -17,7 +17,8 @@ import (
 //     where one fits, otherwise the minimal CScriptNum encoding in a data push;
 //   - 0x<hex> is inserted as raw bytes, not pushed;
 //   - 'text' is pushed as data;
-//   - an opcode name, with or without the OP_ prefix, from OP_PUSHDATA1 up, is the opcode.
+//   - an opcode name, with or without the OP_ prefix, from OP_PUSHDATA1 up, is the opcode
+//     (bitcoinSVOpNames: case-sensitive, bitcoin-sv v1.2.3's names).
 //
 // After a push opcode written as raw hex or a name, the following tokens must add exactly
 // the bytes it announces, or parsing fails, as in bitcoin-sv.
@@ -111,7 +112,7 @@ func appendScriptToken(result []byte, w string) ([]byte, error) {
 		return appendPushData(result, []byte(w[1:len(w)-1])), nil
 	}
 
-	if op, err := GetOpcodeValue(w); err == nil && op >= bscript.OpPUSHDATA1 {
+	if op, ok := bitcoinSVOpNames[w]; ok {
 		return append(result, op), nil
 	}
 
