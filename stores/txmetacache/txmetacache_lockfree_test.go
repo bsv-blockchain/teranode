@@ -10,6 +10,7 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/stores/utxo/nullstore"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util/lane"
 	"github.com/stretchr/testify/require"
 )
 
@@ -252,4 +253,41 @@ func TestIntoScratch_ReserveSizesForTheBatch(t *testing.T) {
 	kept := &intoScratch{raw: make([]byte, 0, 1<<20)}
 	kept.reserve(16)
 	require.Equal(t, 1<<20, cap(kept.raw), "a big enough buffer is kept")
+}
+
+// Every backend keeps a record's own lane position, from SetCache and from the byte form, and
+// GetMetaCachedInto returns it; a record without one reads as 0.
+func TestTxMetaCache_KeepsTheOwnLanePositionInEveryBackend(t *testing.T) {
+	for _, bt := range allBucketTypes {
+		t.Run(bt.name, func(t *testing.T) {
+			c := newTestTxMetaCache(t, bt.bucket)
+			ctx := context.Background()
+
+			inpoints := subtree.NewTxInpointsFromPacked([]chainhash.Hash{mixedKey(99)}, []uint32{1, 0})
+
+			viaSet, viaBytes, plain := mixedKey(1), mixedKey(2), mixedKey(3)
+
+			require.NoError(t, c.SetCache(&viaSet, &meta.Data{Fee: 1, TxInpoints: inpoints, LanePosition: lane.Pack(7, 11)}))
+
+			cached, err := (&meta.Data{Fee: 2, TxInpoints: inpoints, LanePosition: lane.Pack(0, 22)}).CacheBytes()
+			require.NoError(t, err)
+			require.NoError(t, c.SetCacheFromBytes(viaBytes[:], cached))
+
+			require.NoError(t, c.SetCache(&plain, &meta.Data{Fee: 3, TxInpoints: inpoints}))
+
+			hashes := []chainhash.Hash{viaSet, viaBytes, plain}
+			out := make([]CachedMeta, len(hashes))
+			found := make([]bool, len(hashes))
+
+			hits, err := c.GetMetaCachedInto(ctx, hashes, nil, out, found)
+			require.NoError(t, err)
+			require.Equal(t, 3, hits)
+
+			require.Equal(t, lane.Pack(7, 11), out[0].LanePosition)
+			require.Equal(t, lane.Pack(0, 22), out[1].LanePosition, "lane 0 is a lane")
+			require.Zero(t, out[2].LanePosition)
+			require.Equal(t, uint64(2), out[1].Fee)
+			require.Equal(t, inpoints.ParentTxHashes, out[1].TxInpoints.ParentTxHashes)
+		})
+	}
 }

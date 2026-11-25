@@ -3,6 +3,7 @@ package txmetacache
 import (
 	"context"
 	"encoding/binary"
+	"slices"
 	"sync"
 	"testing"
 
@@ -15,6 +16,7 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/stores/utxo/nullstore"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util/lane"
 	"github.com/stretchr/testify/require"
 )
 
@@ -186,5 +188,52 @@ func testBatchDecoratePooledBuffersConcurrent(t *testing.T, bt BucketType) {
 			require.Equal(t, feeFor(h), got.Fee, "bucket %v: g=%d tx %d fee", bt, g, i)
 			require.Equal(t, sizeFor(h), got.SizeInBytes, "bucket %v: g=%d tx %d size", bt, g, i)
 		}
+	}
+}
+
+// lanePositionStore decorates like perHashDecoratingStore and gives each record a lane position
+// when the read asks for fields.LanePosition, as utxoset does.
+type lanePositionStore struct {
+	perHashDecoratingStore
+}
+
+func (s *lanePositionStore) BatchDecorate(ctx context.Context, items []*utxo.UnresolvedMetaData, f ...fields.FieldName) error {
+	if err := s.perHashDecoratingStore.BatchDecorate(ctx, items, f...); err != nil {
+		return err
+	}
+
+	if slices.Contains(f, fields.LanePosition) {
+		for i, it := range items {
+			it.Data.LanePosition = lane.Pack(5, uint64(i)+1) //nolint:gosec // i is small
+		}
+	}
+
+	return nil
+}
+
+// A read that asks for the lane position writes it back into the cache with the record.
+func Test_TxMetaCache_BatchDecorate_WritesBackTheLanePosition(t *testing.T) {
+	for _, bucket := range []BucketType{Unallocated, Native, Pointer, Lockfree} {
+		base := newPerHashCache(t, bucket)
+		ns := base.utxoStore.(*perHashDecoratingStore)
+
+		c, err := NewTxMetaCache(context.Background(), settings.NewSettings(), ulogger.TestLogger{}, &lanePositionStore{*ns}, bucket)
+		require.NoError(t, err)
+
+		cache := c.(*TxMetaCache)
+		ctx := context.Background()
+
+		items := []*utxo.UnresolvedMetaData{{Hash: hashFor(1, 0)}, {Hash: hashFor(1, 1)}}
+		require.NoError(t, cache.BatchDecorate(ctx, items, fields.Fee, fields.SizeInBytes, fields.TxInpoints, fields.LanePosition))
+
+		hashes := []chainhash.Hash{items[0].Hash, items[1].Hash}
+		out := make([]CachedMeta, 2)
+		found := make([]bool, 2)
+
+		_, err = cache.GetMetaCachedInto(ctx, hashes, nil, out, found)
+		require.NoError(t, err)
+		require.True(t, found[0] && found[1], "bucket %v", bucket)
+		require.Equal(t, lane.Pack(5, 1), out[0].LanePosition, "bucket %v", bucket)
+		require.Equal(t, lane.Pack(5, 2), out[1].LanePosition, "bucket %v", bucket)
 	}
 }

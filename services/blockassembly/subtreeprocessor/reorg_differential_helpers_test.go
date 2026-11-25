@@ -27,6 +27,10 @@ type reorgOutcome struct {
 	removeMapLen int
 	markTrue     []chainhash.Hash
 	markFalse    []chainhash.Hash
+	// minedKept lists the scenario transactions a kept mined set holds, dropped the drops the
+	// processor still records: a late hand-off and a queued child are judged by them.
+	minedKept []chainhash.Hash
+	dropped   []chainhash.Hash
 }
 
 func (o reorgOutcome) clone() reorgOutcome {
@@ -34,6 +38,8 @@ func (o reorgOutcome) clone() reorgOutcome {
 	o.inpoints = maps.Clone(o.inpoints)
 	o.markTrue = slices.Clone(o.markTrue)
 	o.markFalse = slices.Clone(o.markFalse)
+	o.minedKept = slices.Clone(o.minedKept)
+	o.dropped = slices.Clone(o.dropped)
 
 	return o
 }
@@ -69,6 +75,22 @@ func captureReorgOutcome(sc *reorgScenario, runErr error) reorgOutcome {
 	if runErr != nil {
 		o.err = runErr.Error()
 	}
+
+	kept := sc.stp.recentMined.load()
+
+	for _, ids := range [][]scenarioID{sc.winnerIDs, sc.lostIDs, sc.pendingIDs} {
+		for _, h := range sc.hashes(ids) {
+			if inKeptSet(kept, h) {
+				o.minedKept = append(o.minedKept, h)
+			}
+		}
+	}
+
+	o.minedKept = sortedHashes(o.minedKept)
+
+	sc.stp.droppedMu.Lock()
+	o.dropped = sortedHashes(slices.Collect(maps.Keys(sc.stp.droppedTxs)))
+	sc.stp.droppedMu.Unlock()
 
 	txMap := sc.stp.GetCurrentTxMap()
 	o.inpoints = make(map[chainhash.Hash]string, len(o.order))
@@ -125,6 +147,14 @@ func compareReorgOutcomes(a, b reorgOutcome, divergences []reorgDivergence) []st
 
 	if !slices.Equal(a.markFalse, b.markFalse) {
 		diffs = append(diffs, fmt.Sprintf("marked not on the longest chain: %d vs %d", len(a.markFalse), len(b.markFalse)))
+	}
+
+	if !slices.Equal(a.minedKept, b.minedKept) {
+		diffs = append(diffs, fmt.Sprintf("kept mined sets hold: %d vs %d scenario transactions", len(a.minedKept), len(b.minedKept)))
+	}
+
+	if !slices.Equal(a.dropped, b.dropped) {
+		diffs = append(diffs, fmt.Sprintf("dropped transactions: %d vs %d", len(a.dropped), len(b.dropped)))
 	}
 
 	return diffs

@@ -52,6 +52,39 @@ func TestLaneBurnReason(t *testing.T) {
 	}
 }
 
+// A failed lane spend returns its position only when every input was refused before its write.
+func TestLaneSpendWroteNothing(t *testing.T) {
+	spent := &Spend{Err: errors.NewUtxoSpentError(chainhash.Hash{}, 0, chainhash.Hash{}, nil)}
+	locked := &Spend{Err: errors.NewTxLockedError("locked")}
+
+	cases := []struct {
+		name   string
+		spends []*Spend
+		want   bool
+	}{
+		{"a double spend of one output", []*Spend{spent}, true},
+		{"every input refused, for different reasons", []*Spend{spent, locked, {Err: errors.NewUtxoFrozenError("frozen")},
+			{Err: errors.NewTxConflictingError("conflicting")}, {Err: errors.NewUtxoHashMismatchError("mismatch")},
+			{Err: errors.NewTxCreatingError("creating")}, {Err: errors.NewTxNotFoundError("missing")},
+			{Err: errors.NewTxCoinbaseImmatureError("immature")}}, true},
+		{"one input spent before the refusal", []*Spend{{}, spent}, false},
+		{"an input with no result", []*Spend{nil, spent}, false},
+		{"no spends", nil, false},
+		{"a storage error may have written", []*Spend{spent, {Err: errors.NewStorageError("disk")}}, false},
+		{"a response that did not parse may have written", []*Spend{{Err: errors.NewProcessingError("could not parse response")}}, false},
+		{"a timeout may have written", []*Spend{{Err: errors.NewServiceUnavailableError("batch timed out")}}, false},
+		{"a refusal wrapped in a storage error may have written", []*Spend{{Err: errors.NewStorageError("disk", errors.NewTxNotFoundError("missing"))}}, false},
+		{"the context ending may have written", []*Spend{{Err: errors.NewContextCanceledError("cancelled")}}, false},
+		{"an invalid spend is not on the list", []*Spend{{Err: errors.NewUtxoError("invalid spend")}}, false},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			require.Equal(t, c.want, LaneSpendWroteNothing(c.spends))
+		})
+	}
+}
+
 func TestWithCaller(t *testing.T) {
 	for c := CallerUnknown; c < callerCount; c++ {
 		var o CreateOptions

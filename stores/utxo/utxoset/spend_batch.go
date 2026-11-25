@@ -446,7 +446,12 @@ func (s *Store) runSpendPlan(ctx context.Context, q pgx.Tx, p *spendPlan) error 
 		return nil
 	}
 
-	rows, err := q.Query(ctx, spendJournalSQL, p.leaves, p.ukeys, p.txids, p.idx,
+	stmt := spendJournalSQL
+	if s.laneCoinColumn {
+		stmt = spendJournalLaneSQL
+	}
+
+	rows, err := q.Query(ctx, stmt, p.leaves, p.ukeys, p.txids, p.idx,
 		p.heights, p.spenders, p.masks, p.vins)
 	if err != nil {
 		return errors.NewStorageError("[utxoset][Spend] delete", err)
@@ -454,20 +459,37 @@ func (s *Store) runSpendPlan(ctx context.Context, q pgx.Tx, p *spendPlan) error 
 
 	done := make(map[int32]struct{}, len(p.owner))
 
+	// The spends whose journal row carries the output's lane position, and those whose does not.
+	var lanesCarried, lanesMissing int
+
 	for rows.Next() {
 		var (
 			k            int32
 			satoshis     int64
 			script       []byte
 			hashOverride []byte
+			laneCarried  bool
 		)
 
-		if err := rows.Scan(&k, &satoshis, &script, &hashOverride); err != nil {
+		var err error
+		if s.laneCoinColumn {
+			err = rows.Scan(&k, &satoshis, &script, &hashOverride, &laneCarried)
+		} else {
+			err = rows.Scan(&k, &satoshis, &script, &hashOverride)
+		}
+
+		if err != nil {
 			rows.Close()
 			return errors.NewStorageError("[utxoset][Spend] scan", err)
 		}
 
 		done[k] = struct{}{}
+
+		if laneCarried {
+			lanesCarried++
+		} else {
+			lanesMissing++
+		}
 
 		// The decorate fetch, free: the input now carries what script validation needs, so
 		// nothing has to read the parent transaction for it.
@@ -492,6 +514,10 @@ func (s *Store) runSpendPlan(ctx context.Context, q pgx.Tx, p *spendPlan) error 
 
 	if err := rows.Err(); err != nil {
 		return errors.NewStorageError("[utxoset][Spend] rows", err)
+	}
+
+	if s.laneShadow {
+		utxo.CountLaneSpends(laneStoreName, lanesCarried, lanesMissing)
 	}
 
 	if len(done) == len(p.owner) {
