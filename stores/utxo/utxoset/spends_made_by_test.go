@@ -20,6 +20,8 @@ import (
 // of what each transaction spends, and the undo journal, which copied down each UTXO's amount
 // and rules at the moment it was destroyed.
 func TestSpendsMadeByAnswersWithoutTheTransaction(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	parent := mkTx(t, 2, 5_000)
@@ -56,6 +58,8 @@ func TestSpendsMadeByAnswersWithoutTheTransaction(t *testing.T) {
 // reading the transaction stops working at that horizon, silently. The two sources this uses do
 // not age out on that schedule.
 func TestSpendsMadeByStillAnswersOnceTheTransactionHasAgedOut(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	parent := mkTx(t, 2, 5_000)
@@ -94,6 +98,8 @@ func TestSpendsMadeByStillAnswersOnceTheTransactionHasAgedOut(t *testing.T) {
 // store's Unspend refuses the whole batch if any record it is given cannot be restored, so
 // reporting an input that was never spent would break the undo rather than pad it.
 func TestSpendsMadeByOmitsWhatItCannotRestore(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	parent := mkTx(t, 2, 5_000)
@@ -115,6 +121,8 @@ func TestSpendsMadeByOmitsWhatItCannotRestore(t *testing.T) {
 // TestSpendsMadeByReportsATransactionItDoesNotHold, so an undo aimed at something absent fails
 // loudly rather than quietly restoring nothing.
 func TestSpendsMadeByReportsATransactionItDoesNotHold(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	missing := mkTx(t, 1, 9_999)
@@ -127,6 +135,8 @@ func TestSpendsMadeByReportsATransactionItDoesNotHold(t *testing.T) {
 // place, and undoing a conflict uses them one after the other, so a disagreement between them
 // would restore a different set of UTXOs than the one that was marked.
 func TestSpendsMadeByMatchesWhatSetConflictingReturns(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	parent := mkTx(t, 3, 5_000)
@@ -164,6 +174,8 @@ func TestSpendsMadeByMatchesWhatSetConflictingReturns(t *testing.T) {
 // by parent, so a position in that list is not an input index when inputs from two parents are
 // interleaved.
 func TestSpendsMadeByNamesTheInputThatTookEachUTXO(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	a := mkTx(t, 2, 5_000)

@@ -27,6 +27,8 @@ import (
 // utxostore_skipTxBodyBelowCheckpoint on, so s.Get answers Tx: nil for it, exactly as it does
 // on mainnet below the real 945,000 checkpoint — the case this whole change exists for.
 func TestValidatorFillsBodylessParentFromUTXOTable(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newCheckpointStore(t, true)
 
 	privateKey, publicKey := bec.PrivateKeyFromBytes([]byte("utxoset bodyless UTXO-table fallback test key32"))

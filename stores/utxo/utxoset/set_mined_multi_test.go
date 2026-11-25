@@ -46,6 +46,8 @@ func txHashes(txs []*bt.Tx) []*chainhash.Hash {
 // The block is on the longest chain, so each named transaction gains a containment row and
 // loses its marker. The bystander proves the other half: it gains no row and keeps its marker.
 func TestSetMinedMultiStampsEveryTransactionInOneCall(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	txs := mkStoredTxs(t, s, 700_000, 1_000, 5)
@@ -92,6 +94,8 @@ func TestSetMinedMultiStampsEveryTransactionInOneCall(t *testing.T) {
 // The insert does nothing on conflict, so the transactions already carrying the block are
 // left as they are and the rest gain it, in one statement per leaf group.
 func TestSetMinedMultiReplaysOverAMixedBatch(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	first := mkStoredTxs(t, s, 700_000, 1_000, 3)
@@ -129,6 +133,8 @@ func TestSetMinedMultiReplaysOverAMixedBatch(t *testing.T) {
 // TestSetMinedMultiToleratesTheSameHashTwiceInOneCall. A caller may name a transaction twice
 // in one block, and the two offers now travel in one statement rather than in two.
 func TestSetMinedMultiToleratesTheSameHashTwiceInOneCall(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	tx := mkTx(t, 1, 1_000)
@@ -150,6 +156,8 @@ func TestSetMinedMultiToleratesTheSameHashTwiceInOneCall(t *testing.T) {
 // block" and "on the main chain" are different facts, and only the second clears the marker.
 // The containment row is written either way.
 func TestSetMinedMultiKeepsTheMempoolMarkerOffTheLongestChain(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	txs := mkStoredTxs(t, s, 700_000, 1_000, 3)
@@ -176,6 +184,8 @@ func TestSetMinedMultiKeepsTheMempoolMarkerOffTheLongestChain(t *testing.T) {
 // TestUnsetMinedMultiUnstampsEveryTransactionInOneCall is the reorg path at batch width: each
 // transaction loses the block's containment row and gets a clock from the CURRENT tip.
 func TestUnsetMinedMultiUnstampsEveryTransactionInOneCall(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newUncheckpointedStore(t)
 
 	txs := mkStoredTxs(t, s, 100, 1_000, 4)

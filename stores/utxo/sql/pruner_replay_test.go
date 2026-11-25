@@ -326,6 +326,8 @@ func TestPrunedReplayFrozenAfterUnspend(t *testing.T) {
 // the second wave of a below-checkpoint list, whose first wave may have written
 // the record itself.
 func TestSpendDoesNotBlessWithRequireParentOutputs(t *testing.T) {
+	parallelPostgres(t)
+
 	forEachBackend(t, func(t *testing.T, ctx context.Context, store *Store) {
 		parent := bt.NewTx()
 		require.NoError(t, parent.From("1111111111111111111111111111111111111111111111111111111111111111", 0, "51", 30000))
@@ -370,6 +372,8 @@ func TestSpendDoesNotBlessWithRequireParentOutputs(t *testing.T) {
 // ever mined the spender, and an unanswered input holds back every match of that
 // call too.
 func TestOrphanedSpendIsReversedOnTheNextAttempt(t *testing.T) {
+	parallelPostgres(t)
+
 	forEachBackend(t, func(t *testing.T, ctx context.Context, store *Store) {
 		p := bt.NewTx()
 		require.NoError(t, p.From("1111111111111111111111111111111111111111111111111111111111111111", 0, "51", 30000))
@@ -468,6 +472,8 @@ func TestSpendRollbackSetForRequireParentOutputs(t *testing.T) {
 // The per-input wait ends two ways, each with its own arm that counts the input as
 // unresolved: the wait timeout, and the caller's context being cancelled. Both are run.
 func TestAbortedSpendKeepsAnIdempotentMatchWhileAnInputIsUnanswered(t *testing.T) {
+	parallelPostgres(t)
+
 	for _, byCancel := range []bool{false, true} {
 		name := "timeout"
 		if byCancel {
@@ -481,6 +487,8 @@ func TestAbortedSpendKeepsAnIdempotentMatchWhileAnInputIsUnanswered(t *testing.T
 }
 
 func TestAbandonedQueuedSpendNeverWrites(t *testing.T) {
+	parallelPostgres(t)
+
 	forEachBackend(t, func(t *testing.T, ctx context.Context, store *Store) {
 		parent := replayParent(t, ctx, store, strings.Repeat("11", 32))
 		child := replaySpender(t, parent)
@@ -527,6 +535,8 @@ func TestAbandonedQueuedSpendNeverWrites(t *testing.T) {
 }
 
 func TestAbandonedQueuedSpendDoesNotCancelItsBatchPeer(t *testing.T) {
+	parallelPostgres(t)
+
 	forEachBackend(t, func(t *testing.T, ctx context.Context, store *Store) {
 		a := replaySpender(t, replayParent(t, ctx, store, strings.Repeat("11", 32)))
 		parentB := replayParent(t, ctx, store, strings.Repeat("22", 32))
@@ -779,6 +789,8 @@ func replayParentNotStored(t *testing.T, seed string) *bt.Tx {
 // the call wrote is reversed. X:0 is written, Y:0 is spent by another transaction, and X:0
 // must be free again.
 func TestRequireParentOutputsRollsBackWhatItWrote(t *testing.T) {
+	parallelPostgres(t)
+
 	forEachBackend(t, func(t *testing.T, ctx context.Context, store *Store) {
 		x := replayParent(t, ctx, store, "1111111111111111111111111111111111111111111111111111111111111111")
 		y := replayParent(t, ctx, store, "2222222222222222222222222222222222222222222222222222222222222222")
@@ -806,6 +818,8 @@ func TestRequireParentOutputsRollsBackWhatItWrote(t *testing.T) {
 // transaction that is never created and must be reversed, or its legitimate spender gets
 // ErrSpent naming a txid this node never stored.
 func TestTransientLockDoesNotHideAPrunedReplay(t *testing.T) {
+	parallelPostgres(t)
+
 	forEachBackend(t, func(t *testing.T, ctx context.Context, store *Store) {
 		l := replayParent(t, ctx, store, "1111111111111111111111111111111111111111111111111111111111111111")
 		m := replayParent(t, ctx, store, "2222222222222222222222222222222222222222222222222222222222222222")
@@ -890,6 +904,8 @@ func TestRefusedReplayLeavesTheParentsStampAlone(t *testing.T) {
 // it, or while setDAH waited for its lock, has no stamp to recompute. setDAH answers nil and
 // setDAHIfPresent says the row is gone, so a caller never fails a whole batch for one parent.
 func TestSetDAHOfARowThePruneDeletedHasNothingToStamp(t *testing.T) {
+	parallelPostgres(t)
+
 	forEachBackend(t, func(t *testing.T, ctx context.Context, store *Store) {
 		floorRetention(t, store)
 

@@ -19,6 +19,8 @@ import (
 // The same transaction spending the same UTXO is the SAME spend, not a competing one. The
 // journal already records who took each UTXO, so the store can tell the two apart.
 func TestSpendReplayedByTheSameTransactionSucceeds(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	parent := mkTx(t, 2, 5_000)
@@ -67,6 +69,8 @@ func TestSpendReplayedByTheSameTransactionSucceeds(t *testing.T) {
 // TestSpendByADifferentTransactionIsStillRejected pins the other half. Making replay work
 // must not make an actual double spend succeed.
 func TestSpendByADifferentTransactionIsStillRejected(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	parent := mkTx(t, 2, 5_000)

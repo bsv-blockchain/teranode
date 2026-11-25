@@ -18,6 +18,8 @@ import (
 // after the stamp was invisible to Get: a transaction reporting itself unlocked forever, or
 // locked forever, silently.
 func TestSetLockedReachesAMinedTransaction(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	tx := mkTx(t, 1, 5_000)
@@ -42,6 +44,8 @@ func TestSetLockedReachesAMinedTransaction(t *testing.T) {
 // TestSetLockedStillReachesAMempoolTransaction pins the arm that already worked, so the added
 // membership arm cannot be mistaken for a replacement.
 func TestSetLockedStillReachesAMempoolTransaction(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	tx := mkTx(t, 1, 5_000)
@@ -66,6 +70,8 @@ func TestSetLockedStillReachesAMempoolTransaction(t *testing.T) {
 // the packed prefix under a different txid must be left alone, which it is either way, and the
 // bound is what stops the planner reading the whole leaf partition to prove it.
 func TestSetLockedDoesNotTouchACollidingTransactionsUTXOs(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	tx := mkTx(t, 1, 5_000)
@@ -93,6 +99,8 @@ func TestSetLockedDoesNotTouchACollidingTransactionsUTXOs(t *testing.T) {
 // TestSetConflictingReadsInputsFromAMinedTransaction in conflicting_test.go covers the whole
 // path end to end.
 func TestSetConflictingReachesAMinedTransaction(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	tx := mkTx(t, 1, 5_000)
