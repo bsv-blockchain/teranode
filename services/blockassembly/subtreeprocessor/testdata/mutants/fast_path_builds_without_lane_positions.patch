@@ -1,9 +1,9 @@
 diff --git a/services/blockassembly/subtreeprocessor/reorg_fast_path.go b/services/blockassembly/subtreeprocessor/reorg_fast_path.go
-index 0f7288b90..f87963ae0 100644
+index a11d22bb5..a7b64b7a9 100644
 --- a/services/blockassembly/subtreeprocessor/reorg_fast_path.go
 +++ b/services/blockassembly/subtreeprocessor/reorg_fast_path.go
-@@ -533,7 +533,7 @@ func (stp *SubtreeProcessor) applyFastReorg(ctx context.Context, plan *fastReorg
- 		}
+@@ -548,7 +548,7 @@ func (stp *SubtreeProcessor) applyFastReorg(ctx context.Context, plan *fastReorg
+ 		_ = g.Wait()
  	}
  
 -	if err = stp.parallelBuildRemainderSubtrees(ctx, kept, positions, true); err != nil {
