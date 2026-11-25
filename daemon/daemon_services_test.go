@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"net/url"
+	"strings"
 	"testing"
 
 	"github.com/bsv-blockchain/teranode/settings"
@@ -13,20 +14,53 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// Subtree validation, block validation and the validator each start the lane index on their own.
-// A service that hands its transactions to a validator (propagation, legacy, RPC) starts it only
-// when that validator runs in-process; a process running none of these does not.
+// Subtree validation, block validation, the validator and block assembly each start the lane index
+// on their own. A service that hands its transactions to a validator (propagation, legacy, RPC)
+// starts it only when that validator runs in-process; a process running none of these does not.
 func TestNeedsLaneReader(t *testing.T) {
-	require.False(t, needsLaneReader(false, false, false, false, false), "none of them")
-	require.False(t, needsLaneReader(false, false, false, false, true), "a local validator setting alone")
-	require.False(t, needsLaneReader(false, false, false, true, false), "a validator client with a remote validator")
-	require.True(t, needsLaneReader(false, false, false, true, true), "a validator client with a local validator")
+	require.False(t, needsLaneReader(false, false, false, false, false, false), "none of them")
+	require.False(t, needsLaneReader(false, false, false, false, false, true), "a local validator setting alone")
+	require.False(t, needsLaneReader(false, false, false, false, true, false), "a validator client with a remote validator")
+	require.True(t, needsLaneReader(false, false, false, false, true, true), "a validator client with a local validator")
 
-	for i, name := range []string{"subtree validation", "block validation", "validator"} {
-		flags := make([]bool, 3)
+	for i, name := range []string{"subtree validation", "block validation", "validator", "block assembly"} {
+		flags := make([]bool, 4)
 		flags[i] = true
 
-		require.True(t, needsLaneReader(flags[0], flags[1], flags[2], false, false), name)
+		require.True(t, needsLaneReader(flags[0], flags[1], flags[2], flags[3], false, false), name)
+	}
+}
+
+// Start decides from the services the command line switches on: block assembly alone keeps a lane
+// index, and a process running none of the services that check parents keeps none.
+func TestLaneReaderWanted(t *testing.T) {
+	services := []string{serviceSubtreeValidationFormal, serviceBlockValidationFormal, serviceValidatorFormal,
+		serviceBlockAssemblyFormal, servicePropagationFormal, serviceLegacyFormal, serviceRPCFormal}
+
+	only := func(on string) []string {
+		args := make([]string, 0, len(services))
+
+		for _, s := range services {
+			flag := "0"
+			if s == on {
+				flag = "1"
+			}
+
+			args = append(args, "-"+strings.ToLower(s)+"="+flag)
+		}
+
+		return args
+	}
+
+	require.False(t, laneReaderWanted(only(""), true), "none of them")
+
+	for _, s := range []string{serviceSubtreeValidationFormal, serviceBlockValidationFormal, serviceValidatorFormal, serviceBlockAssemblyFormal} {
+		require.True(t, laneReaderWanted(only(s), false), s)
+	}
+
+	for _, s := range []string{servicePropagationFormal, serviceLegacyFormal, serviceRPCFormal} {
+		require.True(t, laneReaderWanted(only(s), true), "%s with a local validator", s)
+		require.False(t, laneReaderWanted(only(s), false), "%s with a remote validator", s)
 	}
 }
 
