@@ -12,11 +12,13 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/services/blockassembly/subtreeprocessor"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
+	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/blob/memory"
 	blockchainstore "github.com/bsv-blockchain/teranode/stores/blockchain"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	utxostoresql "github.com/bsv-blockchain/teranode/stores/utxo/sql"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util/lane"
 	"github.com/ordishs/gocore"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -379,4 +381,122 @@ func generateTestTransactionsForDiskSort(tb testing.TB, count int) []*bt.Tx {
 	}
 
 	return transactions
+}
+
+// lanePositionIteratorStore hands each unmined tx the lane position the test gives it, as the
+// utxoset and Aerospike iterators do at utxostore_laneMigration shadow (the SQL store reads none).
+type lanePositionIteratorStore struct {
+	utxo.Store
+	positions map[chainhash.Hash]uint64
+}
+
+func (s *lanePositionIteratorStore) GetUnminedTxIterator() (utxo.UnminedTxIterator, error) {
+	it, err := s.Store.GetUnminedTxIterator()
+	if err != nil {
+		return nil, err
+	}
+
+	return &lanePositionIterator{UnminedTxIterator: it, positions: s.positions}, nil
+}
+
+type lanePositionIterator struct {
+	utxo.UnminedTxIterator
+	positions map[chainhash.Hash]uint64
+}
+
+func (it *lanePositionIterator) Next(ctx context.Context) ([]*utxo.UnminedTransaction, error) {
+	batch, err := it.UnminedTxIterator.Next(ctx)
+
+	for _, tx := range batch {
+		if tx.Node != nil {
+			tx.LanePosition = it.positions[tx.Hash]
+		}
+	}
+
+	return batch, err
+}
+
+// TestLoadUnminedTransactionsWithDiskSortKeepsLanePositions: at shadow the reload's disk sort
+// carries each tx's lane position into the pool; at off the pool keeps none.
+func TestLoadUnminedTransactionsWithDiskSortKeepsLanePositions(t *testing.T) {
+	initPrometheusMetrics()
+
+	for _, shadow := range []bool{true, false} {
+		t.Run(map[bool]string{true: "shadow", false: "off"}[shadow], func(t *testing.T) {
+			ba, utxoStore, cleanup := setupDiskSortTest(t)
+			defer cleanup()
+
+			ctx := context.Background()
+
+			if shadow {
+				ba.settings.UtxoStore.LaneMigration = settings.LaneMigrationShadow
+			}
+
+			positions := make(map[chainhash.Hash]uint64)
+
+			for i, tx := range generateTestTransactionsForDiskSort(t, 5) {
+				_, _, err := utxoStore.SpendAndCreate(ctx, tx, 1, utxo.WithCreateOnly())
+				require.NoError(t, err)
+
+				positions[*tx.TxIDChainHash()] = lane.Pack(6, uint64(i+1))
+			}
+
+			ba.utxoStore = &lanePositionIteratorStore{Store: utxoStore, positions: positions}
+
+			require.NoError(t, ba.loadUnminedTransactionsWithDiskSort(ctx, false))
+
+			txMap := ba.subtreeProcessor.GetCurrentTxMap()
+
+			for hash, position := range positions {
+				require.True(t, txMap.Exists(hash))
+
+				want := position
+				if !shadow {
+					want = 0
+				}
+
+				require.Equal(t, want, txMap.Position(hash))
+			}
+		})
+	}
+}
+
+// TestLoadUnminedTransactionsSequentiallyKeepsLanePositions: at shadow a reload without the disk
+// sort and with UnminedLoadingBatchSize 0, which adds each tx on its own, carries each tx's lane
+// position into the pool, on a startup load and on a reset's reload.
+func TestLoadUnminedTransactionsSequentiallyKeepsLanePositions(t *testing.T) {
+	initPrometheusMetrics()
+
+	for _, isReload := range []bool{false, true} {
+		t.Run(map[bool]string{false: "startup", true: "reset reload"}[isReload], func(t *testing.T) {
+			ba, utxoStore, cleanup := setupDiskSortTest(t)
+			defer cleanup()
+
+			ctx := context.Background()
+
+			ba.settings.UtxoStore.LaneMigration = settings.LaneMigrationShadow
+			ba.settings.BlockAssembly.UnminedTxDiskSortEnabled = false
+			ba.settings.BlockAssembly.UnminedLoadingBatchSize = 0
+
+			positions := make(map[chainhash.Hash]uint64)
+
+			for i, tx := range generateTestTransactionsForDiskSort(t, 5) {
+				_, _, err := utxoStore.SpendAndCreate(ctx, tx, 1, utxo.WithCreateOnly())
+				require.NoError(t, err)
+
+				positions[*tx.TxIDChainHash()] = lane.Pack(7, uint64(i+1))
+			}
+
+			ba.utxoStore = &lanePositionIteratorStore{Store: utxoStore, positions: positions}
+
+			require.NoError(t, ba.loadUnminedTransactions(ctx, isReload))
+
+			txMap := ba.subtreeProcessor.GetCurrentTxMap()
+
+			for hash, position := range positions {
+				require.True(t, txMap.Exists(hash))
+				require.Equal(t, position, txMap.Position(hash))
+			}
+		})
+	}
 }

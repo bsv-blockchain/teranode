@@ -20,6 +20,7 @@ When invoked:
 Code review checklist:
 - Zero critical security issues verified
 - Code coverage > 80% confirmed
+- Each new behaviour has a test that fails without it
 - Cyclomatic complexity < 10 maintained
 - No high-priority vulnerabilities found
 - Documentation complete and clear

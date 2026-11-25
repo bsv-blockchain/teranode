@@ -987,6 +987,7 @@ type txFeeSize struct {
 	size            uint64
 	txInpoints      subtree.TxInpoints
 	validatedHeight uint32
+	lanePosition    uint64
 }
 
 // MockBlockAssemblyStore provides a test double for block assembly storage operations.
@@ -997,7 +998,7 @@ type MockBlockAssemblyStore struct {
 	removedTxs   []chainhash.Hash
 }
 
-func (s *MockBlockAssemblyStore) Store(_ context.Context, hash *chainhash.Hash, fee, size uint64, txInpoints subtree.TxInpoints, validatedHeight uint32) (bool, error) {
+func (s *MockBlockAssemblyStore) Store(_ context.Context, hash *chainhash.Hash, fee, size uint64, txInpoints subtree.TxInpoints, validatedHeight uint32, lanePosition uint64) (bool, error) {
 	if s.panicOnStore {
 		// Simulates a nil/misconfigured block-assembly client panicking mid-delivery,
 		// e.g. inside the real gRPC client's Store() call.
@@ -1018,6 +1019,7 @@ func (s *MockBlockAssemblyStore) Store(_ context.Context, hash *chainhash.Hash, 
 		size:            size,
 		txInpoints:      txInpoints,
 		validatedHeight: validatedHeight,
+		lanePosition:    lanePosition,
 	})
 
 	return true, nil
@@ -1081,7 +1083,7 @@ func TestExtendedTxa1f6a4ffcfd7bb4775790932aff1f82ac6a9b3b3e76c8faf8b11328e948af
 
 	ctx := context.Background()
 
-	container, err := aeroTest.RunContainer(ctx)
+	container, err := aeroTest.RunContainer(ctx, aeroTest.WithImage(test.AerospikeImage))
 	test.SkipIfContainerUnavailable(t, err)
 
 	t.Cleanup(func() {
@@ -1673,7 +1675,7 @@ func TestValidator_LockedFlagChangedIfBlockAssemblyStoreSucceeds(t *testing.T) {
 		stats:          gocore.NewStat("validator"),
 	}
 
-	blockAsmMock.On("Store", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+	blockAsmMock.On("Store", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		Return(true, nil).Times(1)
 
 	err = utxoStore.SetBlockHeight(2)
@@ -1733,7 +1735,7 @@ func TestValidator_ValidateWithOptions_ReturnsUnlockFailureError(t *testing.T) {
 		stats:          gocore.NewStat("validator"),
 	}
 
-	blockAsmMock.On("Store", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+	blockAsmMock.On("Store", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		Return(true, nil).Times(1)
 
 	require.NoError(t, utxoStore.SetBlockHeight(2))
@@ -2286,7 +2288,7 @@ func TestValidator_TwoPhaseCommitCompletesAfterTxMetaSerializationFailure(t *tes
 		txmetaKafkaProducerClient: kafkaMock,
 	}
 
-	blockAsmMock.On("Store", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+	blockAsmMock.On("Store", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		Return(true, nil).Times(1)
 
 	err = realStore.SetBlockHeight(2)
@@ -3152,6 +3154,58 @@ func (s *laneCaptureStore) SpendAndCreate(ctx context.Context, tx *bt.Tx, blockH
 	}
 
 	return md, spends, err
+}
+
+// TestValidateHandsTheLanePositionToBlockAssembly: at shadow the validator hands block assembly
+// the lane position the create returned, and 0 for a record without one; at off it hands over 0
+// even when the store returns a position. The store under laneCaptureStore is SQL, which returns
+// no position from its create (lanes Phase 1 leaves it out), so laneCaptureStore sets the returned
+// position as utxoset and Aerospike do; the test pins the validator's copy, not a store.
+func TestValidateHandsTheLanePositionToBlockAssembly(t *testing.T) {
+	tracing.SetupMockTracer()
+	initPrometheusMetrics()
+
+	ctx := context.Background()
+	base := parentOutputsStore(t)
+
+	s0 := bscript.NewFromBytes([]byte{0x76, 0xa9, 0x00})
+	parent := storedParent(t, base, 0x72, 150, s0, s0, s0, s0)
+	store := &laneCaptureStore{Store: base, parentPositions: map[chainhash.Hash]uint64{*parent.TxIDChainHash(): lane.Pack(14, 1)}}
+
+	for _, tc := range []struct {
+		name   string
+		shadow bool
+		vout   uint32
+		own    uint64
+		handed uint64
+	}{
+		{name: "shadow", shadow: true, vout: 0, own: lane.Pack(14, 3), handed: lane.Pack(14, 3)},
+		{name: "shadow, a record without a position", shadow: true, vout: 1, own: lane.None, handed: lane.None},
+		{name: "off", shadow: false, vout: 2, own: lane.Pack(14, 4), handed: lane.None},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			v := parentOutputsValidator(t, store)
+			if tc.shadow {
+				v = laneShadowValidator(t, store)
+			}
+
+			v.logger = ulogger.TestLogger{}
+			v.txValidator = NewTxValidator(ulogger.TestLogger{}, v.settings)
+			v.stats = gocore.NewStat("validator")
+
+			blockAssembly := &MockBlockAssemblyStore{}
+			v.blockAssembler = blockAssembly
+
+			store.own = tc.own
+
+			child := parentOutputsChild(t, []chainhash.Hash{*parent.TxIDChainHash()}, []uint32{tc.vout})
+			_, err := v.Validate(ctx, child, 201, WithSkipPolicyChecks(true), WithSkipScriptValidation(true), WithAddTXToBlockAssembly(true))
+			require.NoError(t, err)
+
+			require.Len(t, blockAssembly.storedTxs, 1)
+			require.Equal(t, tc.handed, blockAssembly.storedTxs[0].lanePosition)
+		})
+	}
 }
 
 // laneEntry reads the one entry of a v1 txmeta message: its action and its content.
