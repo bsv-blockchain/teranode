@@ -2656,13 +2656,14 @@ func filterCurrentBlockHeaderIDsMap(parentTxMeta *meta.Data, currentBlockHeaderI
 func getParentTxMetaBlockIDs(gCtx context.Context, txMetaStore utxo.Store, parentTxStruct missingParentTx, observer LaneParentObserver) (*meta.Data, error) {
 	readFields := []fields.FieldName{fields.BlockIDs}
 	if observer != nil {
-		// The lanes shadow of this check takes the parent's lane position from this same read.
-		readFields = append(readFields, fields.LanePosition)
+		// The lanes shadow of this check takes the parent's lane position, and whether it is a
+		// coinbase, from this same read.
+		readFields = append(readFields, fields.LanePosition, fields.IsCoinbase)
 	}
 
 	parentTxMeta, err := txMetaStore.Get(gCtx, &parentTxStruct.parentTxHash, readFields...)
 	if err == nil && observer != nil {
-		observer.ObserveParent(parentTxStruct.parentTxHash, parentTxMeta.LanePosition, parentTxMeta.BlockIDs)
+		observer.ObserveParent(parentTxStruct.parentTxHash, parentTxMeta.LanePosition, parentTxMeta.BlockIDs, parentTxMeta.IsCoinbase)
 	}
 
 	if err != nil {

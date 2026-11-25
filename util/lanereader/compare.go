@@ -63,9 +63,14 @@ const (
 	// chain took the position, such as one a reorg replaced: the store's height is the lowest it
 	// recorded, from any chain. Not a disagreement.
 	KindOffChain = "off_chain"
+	// KindCoinbase: the parent is a coinbase. It takes a lane position like any record, but block
+	// rows leave the coinbase out, so no row holds its position and lanes cannot say it is mined.
+	// Counted for every coinbase parent, whatever the index holds, and never looked up. Not a
+	// disagreement.
+	KindCoinbase = "coinbase"
 )
 
-var kinds = []string{KindAgree, KindLanesOnly, KindTodayOnly, KindDifferentBlock, KindNoPosition, KindNoRows, KindNotLoaded, KindNotReady, KindOffChain}
+var kinds = []string{KindAgree, KindLanesOnly, KindTodayOnly, KindDifferentBlock, KindNoPosition, KindNoRows, KindNotLoaded, KindNotReady, KindOffChain, KindCoinbase}
 
 // isDisagreement reports whether kind is one the soak must explain.
 func isDisagreement(kind string) bool {
@@ -89,6 +94,15 @@ func (r *Reader) lookup(v *lane.ChainView, pos uint64) lane.Answer {
 // lookupSampleEvery is how often a lookup is timed: two clock reads and a histogram observation
 // cost about what a lookup does.
 const lookupSampleEvery = 64
+
+// CountCoinbase counts a coinbase parent under reader, in place of a comparison (KindCoinbase).
+func (r *Reader) CountCoinbase(reader string) {
+	if r == nil {
+		return
+	}
+
+	count(reader, KindCoinbase, lane.ViaNone)
+}
 
 // CompareHeight compares the lanes answer for a transaction on the main chain with today's answer
 // given as a height: mined at height, or not mined. The validator's parent read answers so.

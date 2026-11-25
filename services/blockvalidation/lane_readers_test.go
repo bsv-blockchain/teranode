@@ -361,7 +361,7 @@ func laneReaderAnswerAll(t *testing.T, reader string) float64 {
 	var sum float64
 
 	for _, kind := range []string{lanereader.KindAgree, lanereader.KindLanesOnly, lanereader.KindTodayOnly, lanereader.KindDifferentBlock,
-		lanereader.KindNoPosition, lanereader.KindNoRows, lanereader.KindNotLoaded, lanereader.KindNotReady, lanereader.KindOffChain} {
+		lanereader.KindNoPosition, lanereader.KindNoRows, lanereader.KindNotLoaded, lanereader.KindNotReady, lanereader.KindOffChain, lanereader.KindCoinbase} {
 		sum += laneReaderAnswer(t, reader, kind)
 	}
 

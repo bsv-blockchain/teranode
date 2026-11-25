@@ -10,6 +10,7 @@ import (
 	"github.com/bsv-blockchain/aerospike-client-go/v8/types"
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/bscript"
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
@@ -256,6 +257,21 @@ func laneParent(t *testing.T, seed uint32, n int) *bt.Tx {
 	return tx
 }
 
+// laneCoinbase is a coinbase, distinct from every other test transaction.
+func laneCoinbase(t *testing.T) *bt.Tx {
+	t.Helper()
+
+	in := &bt.Input{PreviousTxOutIndex: 0xffffffff, SequenceNumber: 0xffffffff, UnlockingScript: bscript.NewFromBytes([]byte{0x04, 0xff, 0xff, 0x00, 0x1d})}
+	require.NoError(t, in.PreviousTxIDAdd(&chainhash.Hash{}))
+
+	tx := uniqueTx(bt.NewTx())
+	tx.Inputs = []*bt.Input{in}
+	require.NoError(t, tx.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 5_000))
+	require.True(t, tx.IsCoinbase())
+
+	return tx
+}
+
 // laneChild spends the named outputs of parent.
 func laneChild(t *testing.T, parent *bt.Tx, vouts ...uint32) *bt.Tx {
 	t.Helper()
@@ -415,6 +431,18 @@ func TestParentLanePositionsOnAerospike(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, answers[0].Err)
 	require.Equal(t, parentPosition, answers[0].LanePosition, "the parent read gives the parent's position")
+	require.False(t, answers[0].IsCoinbase)
+
+	// The same read says whether the parent is a coinbase, for the lanes shadow.
+	coinbase := laneCoinbase(t)
+	_, err = store.Create(ctx, coinbase, 100, utxo.WithLanePosition(lane.Pack(7, 99)))
+	require.NoError(t, err)
+
+	answers, err = store.ParentOutputsForValidation(ctx, []utxo.Outpoint{{TxID: *coinbase.TxIDChainHash(), Vout: 0}})
+	require.NoError(t, err)
+	require.NoError(t, answers[0].Err)
+	require.True(t, answers[0].IsCoinbase, "the parent read says the parent is a coinbase")
+	require.Equal(t, lane.Pack(7, 99), answers[0].LanePosition)
 
 	child := laneChild(t, parent, 0)
 	md, err := store.Create(ctx, child, 101, utxo.WithLanePosition(childPosition), utxo.WithParentLanePositions([]uint64{parentPosition}))

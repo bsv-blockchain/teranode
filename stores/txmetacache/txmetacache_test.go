@@ -928,6 +928,21 @@ func TestBatchDecorate_DoesNotCachePartialInpoints(t *testing.T) {
 
 	_, found := cache.GetMetaCached(ctx, h)
 	require.False(t, found, "BatchDecorate must not cache a partial (inpoints-less) non-coinbase meta")
+
+	// A coinbase has no parents either way: the parent prefetch at lane shadow reads its flag and
+	// not its inpoints, which is partial too. Read whole, it is cached.
+	partial.IsCoinbase = true
+
+	err = cache.BatchDecorate(ctx, items, fields.BlockIDs, fields.BlockHeights, fields.Outputs, fields.LanePosition, fields.IsCoinbase)
+	require.NoError(t, err)
+
+	_, found = cache.GetMetaCached(ctx, h)
+	require.False(t, found, "BatchDecorate must not cache a coinbase meta read without its inpoints")
+
+	require.NoError(t, cache.BatchDecorate(ctx, items))
+
+	_, found = cache.GetMetaCached(ctx, h)
+	require.True(t, found, "a coinbase read whole is cached")
 }
 
 // TestBatchDecorate_CachesCompleteInpoints is the positive counterpart: a meta
