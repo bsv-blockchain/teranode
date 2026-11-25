@@ -135,6 +135,13 @@ func TestBlockValidation_checkpointConfirmedAncestor(t *testing.T) {
 
 		u := &BlockValidation{settings: settingsWith(checkpoints), blockchainClient: mockBC, utxoStore: supportingStore, logger: ulogger.TestLogger{}}
 		require.True(t, u.checkpointConfirmedAncestor(context.Background(), blockUnderTest, true))
+
+		u.utxoStore = &utxo.MockUtxostore{}
+		require.False(t, u.checkpointConfirmedAncestor(context.Background(), blockUnderTest, true), "a header proof must not widen the skip onto a store that never writes fee 0")
+
+		u.utxoStore = supportingStore
+		u.settings = settingsWith([]chaincfg.Checkpoint{{Height: int32(checkpointHeight)}})
+		require.False(t, u.checkpointConfirmedAncestor(context.Background(), blockUnderTest, true), "a header proof means nothing without a pinned checkpoint hash")
 		require.Empty(t, mockBC.Calls)
 	})
 
