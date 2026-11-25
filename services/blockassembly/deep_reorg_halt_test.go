@@ -145,3 +145,27 @@ func TestDeepReorgHaltLiftedByOperatorReset(t *testing.T) {
 
 	mockStp.AssertCalled(t, "Reset", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 }
+
+// A halted block assembly still starts, so the halt never turns into a restart loop, and it
+// starts halted. The pass that halts records a pending mark of skipped fork transactions first,
+// as processNewBlockAnnouncement does, and the start must finish that mark too.
+func TestDeepReorgHaltSurvivesRestart(t *testing.T) {
+	initPrometheusMetrics()
+
+	items, b1, _ := deepReorgFixture(t)
+	ba := items.blockAssembler
+
+	require.NoError(t, ba.SetState(t.Context()), "a running node has its tip, a1, persisted")
+	require.NoError(t, ba.saveSkippedForkMark(t.Context(), true))
+	require.Error(t, ba.handleReorg(t.Context(), b1, 1))
+	require.True(t, ba.DeepReorgHalted())
+
+	restarted, err := startBlockAssembler(t, items, ba.settings, nil)
+	require.NoError(t, err, "a halted block assembly must start, or the halt becomes a restart loop")
+	t.Cleanup(func() { restarted.subtreeProcessor.Stop(context.Background()) })
+
+	require.True(t, restarted.DeepReorgHalted(), "the halt outlives the restart")
+
+	_, _, err = restarted.GetMiningCandidate(t.Context())
+	require.True(t, errors.Is(err, errors.ErrServiceUnavailable), "candidates are refused after the restart, got %v", err)
+}
