@@ -1,7 +1,7 @@
 name: 'Go cache'
 description: >
   Restore (and on the main-branch savers, save) the Go module cache
-  (~/go/pkg/mod) and build cache (~/.cache/go-build).
+  (~/go/pkg/mod) and build caches (~/.cache/go-build, ~/.cache/go-build-bench).
 
   GitHub Actions caches are branch-scoped: only caches written on the default
   branch are readable by all PRs. So only main-branch jobs save: the unit test
@@ -34,7 +34,9 @@ inputs:
       this runner's architecture, saved by the main-branch benchmark build cache
       job. The key is dated, so each day's entry holds the build of that day's
       first main run (per go.mod hash); later main runs that day hit it and do
-      not save. 'true' also points GOCACHE at it for the rest of the job.
+      not save. 'true' also points GOCACHE at it and adds -trimpath to GOFLAGS
+      for the rest of the job: without -trimpath Go keys each package by its
+      directory, and the bench jobs build their base side in a subdirectory.
     default: 'false'
   save_bench_build_cache:
     description: >
@@ -123,4 +125,6 @@ runs:
     - name: Point GOCACHE at the benchmark build cache
       if: inputs.bench_build_cache == 'true' || inputs.save_bench_build_cache == 'true'
       shell: bash
-      run: echo "GOCACHE=$HOME/.cache/go-build-bench" >> "$GITHUB_ENV"
+      run: |
+        echo "GOCACHE=$HOME/.cache/go-build-bench" >> "$GITHUB_ENV"
+        echo "GOFLAGS=${GOFLAGS:+$GOFLAGS }-trimpath" >> "$GITHUB_ENV"
