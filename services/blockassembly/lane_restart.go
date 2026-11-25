@@ -344,10 +344,10 @@ func laneRestartReaderView(ctx context.Context, targetHeight uint32, ids map[uin
 }
 
 // runLaneRestartDryRun reads the window and judges it against today's reload.
-func runLaneRestartDryRun(ctx context.Context, deps laneRestartDeps, t *laneRestartToday) laneRestartResult {
+func runLaneRestartDryRun(ctx context.Context, deps laneRestartDeps, t *laneRestartToday) (res laneRestartResult) {
 	start := time.Now()
 
-	res := laneRestartResult{
+	res = laneRestartResult{
 		records:    map[string]uint64{},
 		sample:     map[string]uint64{},
 		todayRead:  t.read,

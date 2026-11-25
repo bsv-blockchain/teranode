@@ -297,6 +297,8 @@ func TestLaneRestartDryRunCounts(t *testing.T) {
 			// Blocks 995 to 1005; only 1003 and 1004 took positions.
 			require.Equal(t, uint64(11), res.capBlocks)
 			require.Equal(t, uint64(9), res.capBlocksWithoutRows)
+			require.GreaterOrEqual(t, res.duration, res.stats.Duration, "the run's duration covers its read")
+			require.Positive(t, res.stats.Duration)
 
 			requireLaneRestartPublished(t, res, map[string]float64{
 				laneLastReadRecords:          float64(read),
