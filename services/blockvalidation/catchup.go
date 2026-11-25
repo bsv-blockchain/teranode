@@ -297,6 +297,22 @@ func (u *Server) catchup(ctx context.Context, blockUpTo *model.Block, peerID, ba
 
 	// Early exit if no headers to process
 	if len(catchupCtx.headersFetchResult.Headers) == 0 {
+		// The target is already stored, so the fork checks below never see it. It can be a
+		// fork stored before the tip passed a checkpoint above it, and is no longer valid.
+		breaker := u.catchupCircuitBreaker(catchupCtx.peerID, catchupCtx.baseURL)
+
+		if err = u.validateStoredTargetBelowCheckpoint(ctx, catchupCtx); err != nil {
+			if breaker != nil && errors.Is(err, errors.ErrNetworkInvalidResponse) {
+				breaker.RecordFailure()
+			}
+
+			return err
+		}
+
+		if breaker != nil {
+			breaker.RecordSuccess()
+		}
+
 		u.logger.Infof("[catchup][%s] block already exists or no headers needed", blockUpTo.Hash().String())
 		return nil
 	}
@@ -337,7 +353,15 @@ func (u *Server) catchup(ctx context.Context, blockUpTo *model.Block, peerID, ba
 		return err
 	}
 
-	// Step 5.1: Refuse a chain with less work than ours, before anything is fetched or
+	// Step 5.2: Refuse a chain that forks below a checkpoint the tip has passed (bitcoin-sv's
+	// bad-fork-prior-to-checkpoint), on any route, before any of its blocks is fetched or
+	// skipped as already stored. It runs before the less-work check, so such a chain is the
+	// peer's fault even when it is lighter than ours.
+	if err = u.validateForkBelowCheckpoint(catchupCtx); err != nil {
+		return err
+	}
+
+	// Step 5.3: Refuse a chain with less work than ours, before anything is fetched or
 	// un-stamped. Both Bitcoin nodes treat such a peer as offering nothing of interest, so
 	// this ends the run as a no-op and charges no one (issue 2067). findCommonAncestor has
 	// already refused offered headers that do not link up, so the weight here is a chain's weight.
@@ -1464,6 +1488,92 @@ func (u *Server) validateForkDepth(catchupCtx *CatchupContext) error {
 	}
 
 	u.logger.Infof("[catchup][%s] Fork depth %d is within coinbase maturity limit of %d", catchupCtx.blockUpTo.Hash().String(), catchupCtx.forkDepth, u.settings.ChainCfgParams.CoinbaseMaturity)
+
+	return nil
+}
+
+// validateForkBelowCheckpoint applies bitcoin-sv's bad-fork-prior-to-checkpoint rule to the
+// offered chain: its first block after the common ancestor must not sit below a checkpoint the
+// tip has reached. Checked on headers, as bitcoin-sv does, so a block of such a chain that is
+// already stored is refused with the rest rather than skipped as known.
+func (u *Server) validateForkBelowCheckpoint(catchupCtx *CatchupContext) error {
+	if catchupCtx.commonAncestorMeta == nil || catchupCtx.bestBlockMeta == nil {
+		return nil
+	}
+
+	firstForkHeight := catchupCtx.commonAncestorMeta.Height + 1
+	if !model.ForkBelowCheckpoint(u.settings.ChainCfgParams.Checkpoints, firstForkHeight, catchupCtx.bestBlockMeta.Height) {
+		return nil
+	}
+
+	u.logger.Errorf("[catchup][%s] bad-fork-prior-to-checkpoint: chain forks at height %d, below a checkpoint the tip (height %d) has passed", catchupCtx.blockUpTo.Hash().String(), firstForkHeight, catchupCtx.bestBlockMeta.Height)
+
+	u.recordMaliciousAttempt(catchupCtx.peerID, "bad_fork_prior_to_checkpoint")
+
+	if prometheusCatchupErrors != nil {
+		prometheusCatchupErrors.WithLabelValues(catchupCtx.peerID, "bad_fork_prior_to_checkpoint").Inc()
+	}
+
+	// The peer's fault, as for a header that contradicts a checkpoint: a ServiceError would read
+	// as a local fault, and the same peer would be asked for the same chain again.
+	return errors.NewNetworkInvalidResponseError("[catchup][%s] bad-fork-prior-to-checkpoint: chain forks at height %d, below a checkpoint the tip (height %d) has passed", catchupCtx.blockUpTo.Hash().String(), firstForkHeight, catchupCtx.bestBlockMeta.Height)
+}
+
+// catchupCircuitBreaker returns the circuit breaker catchupGetBlockHeaders uses for the peer, nil
+// when there are none.
+func (u *Server) catchupCircuitBreaker(peerID, baseURL string) *catchup.CircuitBreaker {
+	if u.peerCircuitBreakers == nil {
+		return nil
+	}
+
+	identifier := peerID
+	if identifier == "" {
+		identifier = baseURL
+	}
+
+	return u.peerCircuitBreakers.GetBreaker(identifier)
+}
+
+// validateStoredTargetBelowCheckpoint applies the checkpoint fork rule to a catchup target that
+// is already stored, as ValidateBlock does for a stored hash: one below a checkpoint the tip has
+// passed that is not on the main chain is refused, and the peer charged, as
+// validateForkBelowCheckpoint refuses an offered chain. A target that is not stored passes; the
+// fork checks after the header fetch cover it.
+func (u *Server) validateStoredTargetBelowCheckpoint(ctx context.Context, catchupCtx *CatchupContext) error {
+	if u.settings.ChainCfgParams == nil || len(u.settings.ChainCfgParams.Checkpoints) == 0 {
+		return nil
+	}
+
+	hash := catchupCtx.blockUpTo.Hash()
+
+	header, meta, err := u.blockchainClient.GetBlockHeader(ctx, hash)
+	if err != nil {
+		if errors.Is(err, errors.ErrBlockNotFound) || errors.Is(err, errors.ErrNotFound) {
+			return nil
+		}
+
+		return errors.NewServiceError("[catchup][%s] failed to get the stored target for the checkpoint fork rule", hash.String(), err)
+	}
+
+	if meta == nil || meta.Invalid {
+		return nil
+	}
+
+	if err = u.blockValidation.rejectStoredForkBelowCheckpoint(ctx, header, meta.Height); err != nil {
+		if !errors.Is(err, errors.ErrBlockInvalid) {
+			return err
+		}
+
+		u.logger.Errorf("[catchup][%s] %v", hash.String(), err)
+
+		u.recordMaliciousAttempt(catchupCtx.peerID, "bad_fork_prior_to_checkpoint")
+
+		if prometheusCatchupErrors != nil {
+			prometheusCatchupErrors.WithLabelValues(catchupCtx.peerID, "bad_fork_prior_to_checkpoint").Inc()
+		}
+
+		return errors.NewNetworkInvalidResponseError("[catchup][%s] bad-fork-prior-to-checkpoint: the stored target at height %d is below a checkpoint the tip has passed and is not on the main chain", hash.String(), meta.Height)
+	}
 
 	return nil
 }
@@ -3218,7 +3328,7 @@ func (u *Server) validateBatchHeaders(ctx context.Context, headers []*model.Bloc
 		}
 
 		// Validate proof of work
-		if err := catchup.ValidateHeaderProofOfWork(header); err != nil {
+		if err := catchup.ValidateHeaderProofOfWork(header, u.settings.ChainCfgParams); err != nil {
 			u.logger.Errorf("[catchup:validateBatchHeaders] header %d/%d fails PoW validation: %v",
 				i+1, len(headers), err)
 			return err

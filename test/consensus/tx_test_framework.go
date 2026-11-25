@@ -13,7 +13,7 @@ import (
 type TxTestContext struct {
 	Tx         *bt.Tx
 	Inputs     []TxTestInput
-	Flags      []string
+	FlagSets   []string
 	Comment    string
 	ShouldPass bool
 	Parser     *ScriptParser
@@ -38,7 +38,7 @@ func NewTxTestContext() *TxTestContext {
 // LoadFromTxTest loads test data from a TxTest structure
 func (ctx *TxTestContext) LoadFromTxTest(test TxTest, shouldPass bool) error {
 	ctx.Inputs = test.Inputs
-	ctx.Flags = test.Flags
+	ctx.FlagSets = test.FlagSets
 	ctx.Comment = test.Comment
 	ctx.ShouldPass = shouldPass
 
@@ -161,44 +161,6 @@ func (ctx *TxTestContext) ValidateWithValidator(validatorType ValidatorType) TxT
 	}
 }
 
-// GetScriptFlags converts string flags to flag values
-func (ctx *TxTestContext) GetScriptFlags() uint32 {
-	var flags uint32
-
-	for _, flag := range ctx.Flags {
-		switch flag {
-		case "P2SH":
-			// flags |= SCRIPT_VERIFY_P2SH
-		case "STRICTENC":
-			// flags |= SCRIPT_VERIFY_STRICTENC
-		case "DERSIG":
-			// flags |= SCRIPT_VERIFY_DERSIG
-		case "LOW_S":
-			// flags |= SCRIPT_VERIFY_LOW_S
-		case "NULLDUMMY":
-			// flags |= SCRIPT_VERIFY_NULLDUMMY
-		case "SIGPUSHONLY":
-			// flags |= SCRIPT_VERIFY_SIGPUSHONLY
-		case "MINIMALDATA":
-			// flags |= SCRIPT_VERIFY_MINIMALDATA
-		case "DISCOURAGE_UPGRADABLE_NOPS":
-			// flags |= SCRIPT_VERIFY_DISCOURAGE_UPGRADABLE_NOPS
-		case "CLEANSTACK":
-			// flags |= SCRIPT_VERIFY_CLEANSTACK
-		case "CHECKLOCKTIMEVERIFY":
-			// flags |= SCRIPT_VERIFY_CHECKLOCKTIMEVERIFY
-		case "CHECKSEQUENCEVERIFY":
-			// flags |= SCRIPT_VERIFY_CHECKSEQUENCEVERIFY
-		case "UTXO_AFTER_GENESIS":
-			// flags |= SCRIPT_VERIFY_UTXO_AFTER_GENESIS
-		case "FORKID":
-			// flags |= SCRIPT_VERIFY_FORKID
-		}
-	}
-
-	return flags
-}
-
 // IsExtended checks if the transaction has been extended with previous output info
 func (ctx *TxTestContext) IsExtended() bool {
 	for _, input := range ctx.Tx.Inputs {
@@ -220,7 +182,7 @@ func (ctx *TxTestContext) GetTransactionInfo() map[string]interface{} {
 	info["num_inputs"] = len(ctx.Tx.Inputs)
 	info["num_outputs"] = len(ctx.Tx.Outputs)
 	info["is_extended"] = ctx.IsExtended()
-	info["flags"] = ctx.Flags
+	info["flags"] = ctx.FlagSets
 	info["should_pass"] = ctx.ShouldPass
 
 	// Calculate total input and output values

@@ -43,7 +43,6 @@ type subtreeStoreOutcome struct {
 	// blockassembly_storedPrefixTemplate is on; nil otherwise.
 	set      *subtreeprocessor.StoredSet
 	root     chainhash.Hash
-	started  time.Time
 	retrying bool // a write was handed to the retry processor
 }
 
@@ -78,7 +77,7 @@ func (o *subtreeStoreOutcome) settle(apply func(r *subtreeprocessor.StoreResult)
 	if o.pending == 0 {
 		// before the result is posted, so a waiter that sees the result finds the root in the set
 		if o.set != nil {
-			o.set.Finish(o.root, o.res, o.retrying, time.Since(o.started))
+			o.set.Finish(o.root, o.res, o.retrying)
 		}
 
 		if o.result != nil {
@@ -99,7 +98,7 @@ func (o *subtreeStoreOutcome) track(set *subtreeprocessor.StoredSet, root chainh
 	o.mu.Lock()
 	defer o.mu.Unlock()
 
-	o.set, o.root, o.started = set, root, time.Now()
+	o.set, o.root = set, root
 }
 
 // toRetry notes that a write was handed to the retry processor, which the stored set counts until
@@ -115,7 +114,7 @@ func (o *subtreeStoreOutcome) toRetry() {
 	if o.set != nil && !o.retrying && o.pending > 0 {
 		o.retrying = true
 
-		o.set.RetryStarted()
+		o.set.RetryStarted(o.root)
 	}
 }
 

@@ -205,6 +205,11 @@ func safeBatcherPutBatchCtx[T any](b batcherIfc[T], ctx context.Context, items [
 type Store struct {
 	utxo.LanePositions
 
+	// laneSlotWrites is whether the server records a spend's lane position in the parent's slot,
+	// which the start-up probe checks with lane positions on. It only decides how spends are
+	// counted; a spend carries its position either way.
+	laneSlotWrites atomic.Bool
+
 	ctx                 context.Context // store the global context for things that run in the background
 	url                 *url.URL
 	client              *uaerospike.Client
@@ -254,6 +259,10 @@ type Store struct {
 	// runtime PARAMETER_ERROR demotes it back to false while batch goroutines
 	// read it concurrently (see demoteNativeOnUnsupported in native_op.go).
 	useNativeTeranodeOps atomic.Bool
+	// nativeReplayProtection records whether the native dispatcher proved the
+	// replay-protection semantics (probeNativeReplayProtection). When false the
+	// sub-ops that carry them stay on the UDF path; see useNativeForSubOp.
+	nativeReplayProtection atomic.Bool
 
 	// useNativeMarkLongestChain is whether the server also serves native sub-op 14, markLongestChain,
 	// which MarkTransactionsOnLongestChain uses in place of its expression write. Set by its own
@@ -292,8 +301,16 @@ type Store struct {
 	// namespace/setName never crosses Store instances.
 	batchKeysPool sync.Pool
 
+	// nativeProbes is a test-only override for the start-up probes initNativeTeranodeOps runs; nil
+	// means the store's own.
+	nativeProbes *nativeSupportProbes
+
 	// batchOperateFn is a test-only override for s.client.BatchOperate; nil means use the real client.
 	batchOperateFn func(*aerospike.BatchPolicy, []aerospike.BatchRecordIfc) aerospike.Error
+
+	// rollbackBeforeProbe is a test-only hook that rollbackPartialSpends runs right before its
+	// spender-existence probe; nil outside tests. A test uses it to prune the spender in that gap.
+	rollbackBeforeProbe func()
 
 	// lockPutFn is a test-only override for the creation lock's s.client.PutBins; nil means use the real client.
 	lockPutFn func(*aerospike.WritePolicy, *aerospike.Key, ...*aerospike.Bin) aerospike.Error
@@ -420,8 +437,8 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 		batcherWait:            batcherWaitTimeout(tSettings),
 	}
 
-	s.NameLaneBurns("aerospike")
-	s.NameLaneReturns("aerospike")
+	s.NameLaneBurns(laneStoreName)
+	s.NameLaneReturns(laneStoreName)
 
 	// Initialize spendLuaPackages array with configurable count
 	if s.settings.Aerospike.SeparateSpendUDFModuleCount > 0 {
@@ -435,6 +452,13 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 	// invocations. Falls back to UDF transparently if the setting is off
 	// or the cluster doesn't support the new opcode. See native_op.go.
 	s.initNativeTeranodeOps(ctx)
+
+	// Record utxostore_utxoBatchSize in the namespace on first open and
+	// refuse any later open that disagrees - the value is part of every
+	// coin's stored address. See layout_marker.go.
+	if err := s.enforceLayoutMarker(ctx); err != nil {
+		return nil, err
+	}
 
 	// Ensure index creation/wait is only done once per process
 	if pruner.IndexName != "" {
@@ -562,6 +586,13 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 	// update the version of the lua script when a new version is launched, do not re-use the old one
 	if err = registerLuaIfNecessary(logger, client, LuaPackageMined, teranodeLUA); err != nil {
 		return nil, errors.NewStorageError("Failed to register udfLUA mined", err)
+	}
+
+	// With lane positions on, check that the server records a spender's lane position in the
+	// parent's slot, on the route spends take. It only decides how spends are counted; with lane
+	// positions off it does not run.
+	if s.laneShadow() {
+		s.laneSlotWrites.Store(s.probeLaneSlotWrites(ctx))
 	}
 
 	spendBatchSize := s.settings.UtxoStore.SpendBatcherSize

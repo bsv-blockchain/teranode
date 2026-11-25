@@ -211,7 +211,10 @@ func seedParentAndChild(ctx context.Context, t *testing.T, items *baTestItems) (
 	child.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{bscript.OpTRUE})
 	child.AddOutput(&bt.Output{Satoshis: parent.Outputs[0].Satoshis - 1, LockingScript: parent.Outputs[0].LockingScript})
 
-	_, _, err = items.utxoStore.SpendAndCreate(ctx, child, 2, utxoStore.WithCreateOnly())
+	// At the next height of the genesis tip the reset tests park block assembly on: a
+	// transaction tagged with another height falls under other rules on regtest (P2SH at 2)
+	// and is kept out of the template.
+	_, _, err = items.utxoStore.SpendAndCreate(ctx, child, 1, utxoStore.WithCreateOnly())
 	require.NoError(t, err)
 
 	return parent, child

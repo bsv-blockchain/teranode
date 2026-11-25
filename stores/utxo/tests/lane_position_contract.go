@@ -120,6 +120,25 @@ func LanePositionSpendAndCreate(t *testing.T, db utxostore.Store) {
 	}
 }
 
+// LanePositionReturnedBySpendAndCreate: the metadata SpendAndCreate returns carries the created
+// record's lane position. The validator publishes it in the transaction's txmeta, and the txmeta
+// cache keeps it for the block gate's subtree lane bitmaps (lanes Phase 1, P2). Phase 1 covers
+// utxoset and Aerospike, which run it; the SQL store does not return the position yet.
+func LanePositionReturnedBySpendAndCreate(t *testing.T, db utxostore.Store) {
+	ctx := context.Background()
+
+	w := BuildMultiWorkload(t, 0xd9, 1, 2)
+	w.StoreRoots(t, db, 900)
+
+	want := []uint64{lane.Pack(7, 52_000), widest}
+
+	for i, tx := range w.Txs {
+		md, _, err := db.SpendAndCreate(ctx, tx, 901, utxostore.WithLanePosition(want[i]))
+		require.NoError(t, err, "tx %d", i)
+		require.Equal(t, want[i], md.LanePosition, "tx %d: the returned metadata", i)
+	}
+}
+
 // LanePositionMinedCreate: a create that carries the block it is mined in,
 // the coinbase's and block validation's shape, keeps the lane position.
 func LanePositionMinedCreate(t *testing.T, db utxostore.Store) {
@@ -593,7 +612,9 @@ func LanePositionBurns(t *testing.T, db utxostore.Store, store string) {
 		require.NoError(t, err)
 
 		// Spends root output 0, which w.Txs[0] has spent: the spend is refused before any create
-		// runs, so every store hands the position back, and it still burned.
+		// runs and before any write, so every store hands the position back, and it still burned. A
+		// store that records the spender's position in the parents' slots returns it too, because
+		// its only input was refused before its slot was written.
 		double := spendOneOutput(t, w.Roots[0], 0)
 
 		requireBurns(t, store, LaneBurns{utxostore.LaneBurnSpendRejected + "/validator": 1}, func() {
