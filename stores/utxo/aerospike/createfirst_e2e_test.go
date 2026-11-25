@@ -159,6 +159,8 @@ func TestSpendAndCreate_CreateFirst_MissingParentLeavesNoRecord(t *testing.T) {
 // the second transaction, which spends its output, is created and spent rather than failing
 // with ErrTxCreating on every retry.
 func TestSpendAndCreateMulti_CreateFirst_RollsForwardTentativeDuplicate(t *testing.T) {
+	tx := uniqueTx(tests.Tx.Clone())
+
 	logger := ulogger.NewErrorTestLogger(t)
 	tSettings := test.CreateBaseTestSettings(t)
 	tSettings.UtxoStore.UseCreateFirstOrder = true
@@ -250,6 +252,8 @@ func TestSetMined_CreatingRecord_RollsForwardWithFlagOff(t *testing.T) {
 // spendability), crash recovery (roll forward an un-finalized creating tx — the
 // re-spend MUST be idempotent), and double-spend resolution (the loser is rolled back and deleted).
 func TestCreateFirstLifecycle(t *testing.T) {
+	tx := uniqueTx(tests.Tx.Clone())
+
 	logger := ulogger.NewErrorTestLogger(t)
 	tSettings := test.CreateBaseTestSettings(t)
 
@@ -532,6 +536,8 @@ func TestCreateFirstLifecycle(t *testing.T) {
 // (create tentative → spend → finalize) against a real Aerospike store, leaving a
 // finalized, spendable tx.
 func TestSpendAndCreate_CreateFirst_Aerospike(t *testing.T) {
+	tx := uniqueTx(tests.Tx.Clone())
+
 	logger := ulogger.NewErrorTestLogger(t)
 	tSettings := test.CreateBaseTestSettings(t)
 	tSettings.UtxoStore.UseCreateFirstOrder = true
@@ -794,6 +800,8 @@ func TestRollBackCreating_OwnerHoldsTheHoldForItsUnspend(t *testing.T) {
 // a transaction whose record is gone: the attempt is rolled back, which reverses that spend, and it
 // leaves a hold.
 func TestCreateFirst_FailedAdoptionRollsBackOverAConcurrentRollForward(t *testing.T) {
+	tx := uniqueTx(tests.Tx.Clone())
+
 	logger := ulogger.NewErrorTestLogger(t)
 	tSettings := test.CreateBaseTestSettings(t)
 	tSettings.UtxoStore.UtxoBatchSize = 2

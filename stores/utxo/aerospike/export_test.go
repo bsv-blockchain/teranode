@@ -2,12 +2,14 @@ package aerospike
 
 import (
 	"context"
+	"strings"
+	"sync"
+	"testing"
 	"time"
 
 	"github.com/bsv-blockchain/aerospike-client-go/v8"
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
-	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
 // ConflictingIndexVerdict reports whether the conflicting index self-test has
@@ -95,9 +97,9 @@ func SetMaxParentLanePositions(n int) (restore func()) {
 	return func() { maxParentLanePositions = was }
 }
 
-// ConflictWALFallbackScans is the number of WAL reads that scanned the set, for this process.
-func ConflictWALFallbackScans() float64 {
-	return testutil.ToFloat64(prometheusConflictWALFallbackScans)
+// ConflictWALFallbackScans is the number of this store's WAL reads that scanned the set.
+func (s *Store) ConflictWALFallbackScans() int64 {
+	return s.conflictWALScans.Load()
 }
 
 // FailChildAdoption makes the batch that gives surviving pagination children the attempt token
@@ -189,4 +191,60 @@ func SpenderOwnsSpend(st SpenderState, recordedHeight uint32, hasRecordedHeight 
 		creatingState{absent: st.Absent, creating: st.Creating, rollingBack: st.RollingBack, hold: st.Hold, hasUnminedSince: st.HasUnminedSince, unminedSince: st.UnminedSince},
 		&batchSpend{recordedHeight: recordedHeight, hasRecordedHeight: hasRecordedHeight},
 	)
+}
+
+// LeaveSharedClientOpenOnClose makes Close and CloseClient leave the process-wide client cache
+// alone. GetAerospikeClient hands every store on one host the same client, so a test store on a
+// server other tests share must not close that client for all of them; TestMain closes it.
+func (s *Store) LeaveSharedClientOpenOnClose() {
+	u := *s.url
+	u.Host = "client-shared-with-other-test-stores"
+	s.url = &u
+}
+
+// prunerServiceHolder is the test using the process-wide pruner service singleton, if any.
+var (
+	prunerServiceHolderMu   sync.Mutex
+	prunerServiceHolderCond = sync.NewCond(&prunerServiceHolderMu)
+	prunerServiceHolder     string
+)
+
+// UsePrunerServiceForTest gives the calling test the pruner service singleton until it ends:
+// GetPrunerService hands every store in the process the same service, built for the first store
+// that asks, so two tests on different servers that prune at the same time would share one. It
+// waits for any other test using it, and resets the singleton now and when the test ends. A
+// subtest of the holder, or the holder asking again, goes straight through.
+func UsePrunerServiceForTest(t testing.TB) {
+	t.Helper()
+
+	prunerServiceHolderMu.Lock()
+
+	holds := func() bool {
+		return prunerServiceHolder != "" && (t.Name() == prunerServiceHolder || strings.HasPrefix(t.Name(), prunerServiceHolder+"/"))
+	}
+
+	if holds() {
+		prunerServiceHolderMu.Unlock()
+		ResetPrunerServiceForTests()
+
+		return
+	}
+
+	for prunerServiceHolder != "" {
+		prunerServiceHolderCond.Wait()
+	}
+
+	prunerServiceHolder = t.Name()
+	prunerServiceHolderMu.Unlock()
+
+	ResetPrunerServiceForTests()
+
+	t.Cleanup(func() {
+		ResetPrunerServiceForTests()
+
+		prunerServiceHolderMu.Lock()
+		prunerServiceHolder = ""
+		prunerServiceHolderMu.Unlock()
+		prunerServiceHolderCond.Broadcast()
+	})
 }

@@ -29,18 +29,20 @@ func (r *fatalRecorder) New(string, ...ulogger.Option) ulogger.Logger { return r
 // no error is returned. Marking a missing tx not on the longest chain still
 // exits: a moveBack tx without a record would go back into block assembly.
 func TestMarkTransactionsOnLongestChain_MissingIsSkippedNotFatal(t *testing.T) {
+	t.Parallel()
+
 	rec := &fatalRecorder{ErrorTestLogger: ulogger.NewErrorTestLogger(t)}
 	tSettings := test.CreateBaseTestSettings(t)
 
-	client, store, ctx, deferFn := initAerospike(t, tSettings, rec)
+	_, store, ctx, deferFn := initAerospike(t, tSettings, rec)
 	defer deferFn()
-
-	cleanDB(t, client)
 
 	require.NoError(t, store.SetBlockHeight(100))
 
 	tx, err := bt.NewTxFromString("01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff17032dff0c2f71646c6e6b2f5e931c7f7b6199adf35e1300ffffffff01d15fa012000000001976a91417db35d440a673a218e70a5b9d07f895facf50d288ac00000000")
 	require.NoError(t, err)
+
+	uniqueTx(tx) // a txid of its own: the server is shared with other tests
 
 	_, err = store.Create(ctx, tx, 100)
 	require.NoError(t, err)

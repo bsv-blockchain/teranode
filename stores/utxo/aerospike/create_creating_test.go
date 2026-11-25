@@ -46,6 +46,8 @@ func TestCreateWithCreating(t *testing.T) {
 	t.Cleanup(deferFn)
 	cleanDB(t, client)
 
+	tx := uniqueTx(tests.Tx.Clone())
+
 	// Grandparent (spendable) so tx's input parent exists, and to serve as the control.
 	_, err := store.Create(ctx, tests.ParentTx, 100)
 	require.NoError(t, err)
@@ -84,6 +86,8 @@ func TestCreateWithCreating_MultiRecord(t *testing.T) {
 	t.Cleanup(deferFn)
 	cleanDB(t, client)
 
+	tx := uniqueTx(tests.Tx.Clone())
+
 	_, err := store.Create(ctx, tests.ParentTx, 100)
 	require.NoError(t, err)
 
@@ -121,6 +125,8 @@ func TestCreateOnlyDuplicate_MultiRecord_CreatingFlag(t *testing.T) {
 			client, store, ctx, deferFn := initAerospike(t, tSettings, logger)
 			t.Cleanup(deferFn)
 			cleanDB(t, client)
+
+			tx := uniqueTx(tests.Tx.Clone())
 
 			_, err := store.Create(ctx, tests.ParentTx, 100)
 			require.NoError(t, err)
@@ -173,6 +179,8 @@ func TestCreateOnlyDuplicate_ClearsATokenlessCreatingRecord(t *testing.T) {
 			client, store, ctx, deferFn := initAerospike(t, tSettings, logger)
 			t.Cleanup(deferFn)
 			cleanDB(t, client)
+
+			tx := uniqueTx(tests.Tx.Clone())
 
 			_, err := store.Create(ctx, tests.ParentTx, 100)
 			require.NoError(t, err)
@@ -243,6 +251,8 @@ func TestCreateWithCreating_SurvivingChildThatCannotBeAdoptedFailsTheCreate(t *t
 			t.Cleanup(deferFn)
 			cleanDB(t, client)
 
+			tx := uniqueTx(tests.Tx.Clone())
+
 			_, err := store.Create(ctx, tests.ParentTx, 100)
 			require.NoError(t, err)
 
@@ -308,6 +318,8 @@ func TestFinalizeTransaction_ChildCreatingUnderAnotherAttemptKeepsMasterCreating
 	t.Cleanup(deferFn)
 	cleanDB(t, client)
 
+	tx := uniqueTx(tests.Tx.Clone())
+
 	_, err := store.Create(ctx, tests.ParentTx, 100)
 	require.NoError(t, err)
 
@@ -346,6 +358,8 @@ func TestFinalizeTransaction_ChildAlreadyFinalIsCleared(t *testing.T) {
 	t.Cleanup(deferFn)
 	cleanDB(t, client)
 
+	tx := uniqueTx(tests.Tx.Clone())
+
 	_, err := store.Create(ctx, tests.ParentTx, 100)
 	require.NoError(t, err)
 
@@ -378,6 +392,8 @@ func TestCreate_ChildWrittenByARetryTakesTheTokenOfItsMaster(t *testing.T) {
 	client, store, ctx, deferFn := initAerospike(t, tSettings, logger)
 	t.Cleanup(deferFn)
 	cleanDB(t, client)
+
+	tx := uniqueTx(tests.Tx.Clone())
 
 	_, err := store.Create(ctx, tests.ParentTx, 100)
 	require.NoError(t, err)

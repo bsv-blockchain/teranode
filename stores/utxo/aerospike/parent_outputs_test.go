@@ -16,6 +16,8 @@ import (
 )
 
 func TestParentOutputsForValidation(t *testing.T) {
+	t.Parallel()
+
 	logger := ulogger.NewErrorTestLogger(t)
 	tSettings := test.CreateBaseTestSettings(t)
 
@@ -34,6 +36,8 @@ func TestParentOutputsForValidation(t *testing.T) {
 // External parents are reconstructed from the blob store; the answer must match
 // the transaction's own outputs, and an index past the end is NoSuchIndex.
 func TestParentOutputsForValidationExternalParent(t *testing.T) {
+	t.Parallel()
+
 	logger := ulogger.NewErrorTestLogger(t)
 	tSettings := test.CreateBaseTestSettings(t)
 
@@ -76,6 +80,8 @@ func TestParentOutputsForValidationExternalParent(t *testing.T) {
 
 // A cancelled context fails the whole call rather than answering any slot.
 func TestParentOutputsForValidationCancelled(t *testing.T) {
+	t.Parallel()
+
 	logger := ulogger.NewErrorTestLogger(t)
 	tSettings := test.CreateBaseTestSettings(t)
 
@@ -99,6 +105,8 @@ func TestParentOutputsForValidationCancelled(t *testing.T) {
 // scope note in getExternalTransaction); this pins it rather than hides it. The
 // outputs the bin still holds answer as before.
 func TestParentOutputsForValidationTruncatedInlineOutputsBin(t *testing.T) {
+	t.Parallel()
+
 	logger := ulogger.NewErrorTestLogger(t)
 	tSettings := test.CreateBaseTestSettings(t)
 

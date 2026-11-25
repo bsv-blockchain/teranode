@@ -7,6 +7,7 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	teranode_aerospike "github.com/bsv-blockchain/teranode/stores/utxo/aerospike"
+	"github.com/bsv-blockchain/teranode/stores/utxo/tests"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/stretchr/testify/require"
@@ -45,6 +46,8 @@ func drainUnmined(t *testing.T, ctx context.Context, store *teranode_aerospike.S
 // "creating" state is NOT restored into block assembly by the default unmined iterator,
 // and becomes visible once finalized.
 func TestUnminedIteratorSkipsCreatingRecords(t *testing.T) {
+	tx := uniqueTx(tests.Tx.Clone())
+
 	logger := ulogger.NewErrorTestLogger(t)
 	tSettings := test.CreateBaseTestSettings(t)
 
@@ -83,6 +86,8 @@ func TestUnminedIteratorSkipsCreatingRecords(t *testing.T) {
 // which carries the unminedSince selector but no transaction data, is neither restored into block
 // assembly by the default iterator nor an error for it or for the pruner's iterator.
 func TestUnminedIteratorsSkipHolds(t *testing.T) {
+	tx := uniqueTx(tests.Tx.Clone())
+
 	logger := ulogger.NewErrorTestLogger(t)
 	tSettings := test.CreateBaseTestSettings(t)
 

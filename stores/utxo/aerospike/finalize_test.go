@@ -26,6 +26,8 @@ import (
 // creating state (making outputs spendable), and is idempotent / a no-op for
 // transactions that were never created in the creating state.
 func TestFinalizeTransaction(t *testing.T) {
+	tx := uniqueTx(tests.Tx.Clone())
+
 	logger := ulogger.NewErrorTestLogger(t)
 	tSettings := test.CreateBaseTestSettings(t)
 
@@ -74,6 +76,8 @@ func TestFinalizeTransaction(t *testing.T) {
 // roll-forward of the same attempt, which can both reach the finalize. Exactly one of them gets
 // nil, whichever send the server applied, and each can tell after a lost answer.
 func TestFinalizeTransaction_OneCallerOwnsTheHandOff(t *testing.T) {
+	tx := uniqueTx(tests.Tx.Clone())
+
 	logger := ulogger.NewErrorTestLogger(t)
 	tSettings := test.CreateBaseTestSettings(t)
 
@@ -216,6 +220,8 @@ func (c cancelledAfterBatchContext) Err() error {
 // finalize reports success because the record is finalized. The batch still runs for an item that
 // was already enqueued, so the record state after a cancelled call is not asserted.
 func TestFinalizeTransaction_ContextCancellation(t *testing.T) {
+	tx := uniqueTx(tests.Tx.Clone())
+
 	logger := ulogger.NewErrorTestLogger(t)
 	tSettings := test.CreateBaseTestSettings(t)
 
@@ -270,6 +276,8 @@ func TestFinalizeTransaction_ContextCancellation(t *testing.T) {
 
 // TestFinalizeTransaction_MultiRecord finalizes a paginated (multi-record) tx.
 func TestFinalizeTransaction_MultiRecord(t *testing.T) {
+	tx := uniqueTx(tests.Tx.Clone())
+
 	logger := ulogger.NewErrorTestLogger(t)
 	tSettings := test.CreateBaseTestSettings(t)
 	tSettings.UtxoStore.UtxoBatchSize = 2 // tx has 6 outputs → multiple records
@@ -299,6 +307,8 @@ func TestFinalizeTransaction_MultiRecord(t *testing.T) {
 // finalized: the finalize reports ErrTxNotFound and leaves the creating bin, so the outputs
 // stay unspendable until the rollback owner deletes the record.
 func TestFinalizeTransaction_RollingBack(t *testing.T) {
+	tx := uniqueTx(tests.Tx.Clone())
+
 	for name, batchSize := range map[string]int{"single record": 0, "multi record": 2} {
 		t.Run(name, func(t *testing.T) {
 			logger := ulogger.NewErrorTestLogger(t)
@@ -348,6 +358,8 @@ func TestFinalizeTransaction_RollingBack(t *testing.T) {
 // TestQueryStaleCreatingTxs verifies the sweeper query returns only creating-state
 // txs whose unminedSince is strictly below the cutoff.
 func TestQueryStaleCreatingTxs(t *testing.T) {
+	tx := uniqueTx(tests.Tx.Clone())
+
 	logger := ulogger.NewErrorTestLogger(t)
 	tSettings := test.CreateBaseTestSettings(t)
 
@@ -394,6 +406,8 @@ func TestQueryStaleCreatingTxs(t *testing.T) {
 // mined record: unminedSince is the sweep's selector while the record is creating, and is
 // removed again once the record has block IDs and is no longer creating.
 func TestCreatingRecordWithMinedBlockInfo_UnminedSinceLifecycle(t *testing.T) {
+	tx := uniqueTx(tests.Tx.Clone())
+
 	for _, batchSize := range []int{0, 2} {
 		name := "single-record"
 		if batchSize > 0 {
@@ -447,6 +461,8 @@ func TestCreatingRecordWithMinedBlockInfo_UnminedSinceLifecycle(t *testing.T) {
 // TestFinalizeTransaction_KeepsUnminedSinceWithoutBlockIDs verifies finalize leaves
 // unminedSince alone on a record that has no block IDs: such a record is genuinely unmined.
 func TestFinalizeTransaction_KeepsUnminedSinceWithoutBlockIDs(t *testing.T) {
+	tx := uniqueTx(tests.Tx.Clone())
+
 	for _, batchSize := range []int{0, 2} {
 		name := "single-record"
 		if batchSize > 0 {
@@ -488,6 +504,8 @@ func TestFinalizeTransaction_KeepsUnminedSinceWithoutBlockIDs(t *testing.T) {
 // attempt's record, on the master and on every pagination child, so the later attempt's creating
 // bin stays until its own spends are made and it finalizes with its own token.
 func TestFinalizeTransaction_StaleAttemptIsRefused(t *testing.T) {
+	tx := uniqueTx(tests.Tx.Clone())
+
 	for name, batchSize := range map[string]int{"single record": 0, "multi record": 2} {
 		t.Run(name, func(t *testing.T) {
 			logger := ulogger.NewErrorTestLogger(t)
@@ -562,6 +580,8 @@ func TestFinalizeTransaction_StaleAttemptIsRefused(t *testing.T) {
 // own token, so its finalize, which is filtered on that token, clears them too instead of leaving
 // them creating for good.
 func TestFinalizeTransaction_AdoptsSurvivingChildren(t *testing.T) {
+	tx := uniqueTx(tests.Tx.Clone())
+
 	logger := ulogger.NewErrorTestLogger(t)
 	tSettings := test.CreateBaseTestSettings(t)
 	tSettings.UtxoStore.UtxoBatchSize = 2 // tx has 6 outputs → multiple records
@@ -631,6 +651,8 @@ func TestFinalizeTransaction_PaginatedRecordsItsCaller(t *testing.T) {
 // bin and stamp the record with the lease of a caller that has returned an error, and no caller would
 // own the hand-off to block assembly, because every recovery path selects on the creating bin.
 func TestFinalizeTransaction_AnAbandonedFinalizeIsNotSent(t *testing.T) {
+	tx := uniqueTx(tests.Tx.Clone())
+
 	logger := ulogger.NewErrorTestLogger(t)
 	tSettings := test.CreateBaseTestSettings(t)
 
@@ -681,6 +703,8 @@ func TestFinalizeTransaction_AnAbandonedFinalizeIsNotSent(t *testing.T) {
 // not land later, or the record would be final and stamped with the lease of a caller that returned an
 // error, and no caller would own the hand-off.
 func TestFinalizeTransaction_AFinalizeThatTimedOutIsNotSent(t *testing.T) {
+	tx := uniqueTx(tests.Tx.Clone())
+
 	logger := ulogger.NewErrorTestLogger(t)
 	tSettings := test.CreateBaseTestSettings(t)
 	tSettings.UtxoStore.LockedBatcherDurationMillis = 400 // the finalize waits in the batcher this long
@@ -841,6 +865,8 @@ func TestFinalizeTransaction_PaginatedFinalizeOfALiveCaller(t *testing.T) {
 // no deadline. It waits no longer than the batcher wait, so no finalize write, of a single record
 // or of a paginated transaction, may start after that: each write carries only the time left.
 func TestFinalizeTransaction_CallerWithNoDeadlineIsBoundedByTheWait(t *testing.T) {
+	tx := uniqueTx(tests.Tx.Clone())
+
 	logger := ulogger.NewErrorTestLogger(t)
 	tSettings := test.CreateBaseTestSettings(t)
 	tSettings.UtxoStore.UtxoBatchSize = 4

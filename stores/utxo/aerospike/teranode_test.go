@@ -1,12 +1,10 @@
 package aerospike
 
 import (
-	"context"
 	"testing"
 
 	"github.com/bsv-blockchain/aerospike-client-go/v8"
 	"github.com/bsv-blockchain/teranode/ulogger"
-	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/bsv-blockchain/teranode/util/uaerospike"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -34,23 +32,13 @@ func listedUDFHash(t *testing.T, client *uaerospike.Client, filename string) str
 // embedded script, so a lua change ships even when the package name is unchanged.
 func TestRegisterLuaIfNecessary_ReRegistersOnContentMismatch(t *testing.T) {
 	logger := ulogger.NewErrorTestLogger(t)
-	ctx := context.Background()
+	// The test registers a UDF module, which changes the server, so it takes a server of its own.
+	server := acquireOwnTestServerForInternalTests(t)
 
-	container, err := runAerospikeTestContainer(ctx)
-	test.SkipIfContainerUnavailable(t, err)
-
-	t.Cleanup(func() {
-		require.NoError(t, container.Terminate(ctx))
-	})
-
-	host, err := container.Host(ctx)
+	client, err := uaerospike.NewClient(server.Host, server.Port)
 	require.NoError(t, err)
 
-	port, err := container.ServicePort(ctx)
-	require.NoError(t, err)
-
-	client, err := uaerospike.NewClient(host, port)
-	require.NoError(t, err)
+	t.Cleanup(client.Close)
 
 	const pkg = "teranode_hashtest"
 

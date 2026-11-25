@@ -9,29 +9,17 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo/aerospike/pruner"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/ulogger"
-	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/bsv-blockchain/teranode/util/uaerospike"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func TestCreateIndexIfNotExists(t *testing.T) {
+	t.Parallel()
+
 	logger := ulogger.NewVerboseTestLogger(t)
-	ctx := context.Background()
-
-	container, err := runAerospikeTestContainer(ctx)
-	test.SkipIfContainerUnavailable(t, err)
-
-	t.Cleanup(func() {
-		err = container.Terminate(ctx)
-		require.NoError(t, err)
-	})
-
-	host, err := container.Host(ctx)
-	require.NoError(t, err)
-
-	port, err := container.ServicePort(ctx)
-	require.NoError(t, err)
+	server := acquireOwnTestServerForInternalTests(t)
+	host, port := server.Host, server.Port
 
 	client, err := uaerospike.NewClient(host, port)
 	require.NoError(t, err)
@@ -72,22 +60,11 @@ func TestCreateIndexIfNotExists(t *testing.T) {
 }
 
 func TestWaitForIndexReady(t *testing.T) {
+	t.Parallel()
+
 	logger := ulogger.NewVerboseTestLogger(t)
-	ctx := context.Background()
-
-	container, err := runAerospikeTestContainer(ctx)
-	test.SkipIfContainerUnavailable(t, err)
-
-	t.Cleanup(func() {
-		err = container.Terminate(ctx)
-		require.NoError(t, err)
-	})
-
-	host, err := container.Host(ctx)
-	require.NoError(t, err)
-
-	port, err := container.ServicePort(ctx)
-	require.NoError(t, err)
+	server := acquireOwnTestServerForInternalTests(t)
+	host, port := server.Host, server.Port
 
 	client, err := uaerospike.NewClient(host, port)
 	require.NoError(t, err)
@@ -129,22 +106,11 @@ func TestWaitForIndexReady(t *testing.T) {
 }
 
 func TestIndexWaiterAdapter(t *testing.T) {
+	t.Parallel()
+
 	logger := ulogger.NewVerboseTestLogger(t)
-	ctx := context.Background()
-
-	container, err := runAerospikeTestContainer(ctx)
-	test.SkipIfContainerUnavailable(t, err)
-
-	t.Cleanup(func() {
-		err = container.Terminate(ctx)
-		require.NoError(t, err)
-	})
-
-	host, err := container.Host(ctx)
-	require.NoError(t, err)
-
-	port, err := container.ServicePort(ctx)
-	require.NoError(t, err)
+	server := acquireOwnTestServerForInternalTests(t)
+	host, port := server.Host, server.Port
 
 	client, err := uaerospike.NewClient(host, port)
 	require.NoError(t, err)
