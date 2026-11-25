@@ -24,9 +24,10 @@ func waitForLockWait(t *testing.T, s *Store, ctx context.Context, fragment strin
 
 	for time.Now().Before(deadline) {
 		var n int
+		// Only backends of this test's database: other tests run beside it on the shared server.
 		require.NoError(t, s.pool.QueryRow(ctx, `
 			SELECT count(*) FROM pg_stat_activity
-			 WHERE wait_event_type = 'Lock' AND position($1 in query) > 0`, fragment).Scan(&n))
+			 WHERE datname = current_database() AND wait_event_type = 'Lock' AND position($1 in query) > 0`, fragment).Scan(&n))
 
 		if n > 0 {
 			return

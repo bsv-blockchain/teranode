@@ -430,7 +430,7 @@ func TestDeleteWaitsForARestoreOfAMinedCoin(t *testing.T) {
 
 	go func() { done <- s.Delete(ctx, h) }()
 
-	// Delete is the only backend that can wait here. "FROM" matches either of its statements:
+	// Delete is the only backend in this test's database that can wait here. "FROM" matches either of its statements:
 	// PostgreSQL reports only the first 1024 bytes of a query, and deleteTxSQL names tx_mined
 	// past that.
 	waitForLockWait(t, s, ctx, "FROM")

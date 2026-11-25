@@ -17,9 +17,9 @@ import (
 )
 
 // sharedConnStr is the base connStr for the single PostgreSQL container shared across
-// the test binary. The container is started exactly once via containerOnce. Its lifecycle
-// is bound to the test process / CI runner teardown (Ryuk is disabled in CI), unless the
-// package's TestMain calls TerminateSharedContainer. containerErr is permanent if that one-time start fails, so a
+// the test binary. The container is started exactly once via containerOnce. The package's
+// TestMain should stop it with TerminateSharedContainer: where the testcontainers reaper
+// is off, as in CI, it otherwise runs until the runner is torn down. containerErr is permanent if that one-time start fails, so a
 // transient first-start failure fails every caller in the binary (see startSharedContainer's
 // internal 3-attempt retry, which mitigates this).
 var (
@@ -173,9 +173,10 @@ func startSharedContainer() (*postgres.PostgresContainer, string, error) {
 		return nil, "", errors.NewProcessingError("database validation failed", err)
 	}
 
-	// There is no per-test teardown for the shared container. It is reaped by the
-	// testcontainers Ryuk reaper when the test process exits, or stopped by
-	// TerminateSharedContainer. Only the per-test databases are dropped (see cleanup above).
+	// There is no per-test teardown for the shared container. TerminateSharedContainer
+	// stops it. Without that call, the testcontainers reaper removes it when the test
+	// process exits, and where the reaper is off (CI) it runs until the runner is torn
+	// down. Only the per-test databases are dropped (see cleanup above).
 	return postgresC, connStr, nil
 }
 
