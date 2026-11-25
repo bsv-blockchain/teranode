@@ -8,6 +8,7 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
+	teranodeaerospike "github.com/bsv-blockchain/teranode/stores/utxo/aerospike"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/lane"
 	"github.com/bsv-blockchain/teranode/util/test"
@@ -106,4 +107,42 @@ func TestReadLaneWindowFiltersOnLastUpdate(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Equal(t, 6, all)
+}
+
+// A cancel during the read returns at once with the cancel, and hands the caller no more batches,
+// though partition queries may still be walking the index.
+func TestReadLaneWindowReturnsOnCancel(t *testing.T) {
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.UtxoStore.LaneMigration = settings.LaneMigrationShadow
+
+	_, store, _, deferFn := initAerospike(t, tSettings, ulogger.NewErrorTestLogger(t))
+	t.Cleanup(deferFn)
+
+	// Batches of four, so the read has many to hand over after the cancel.
+	t.Cleanup(teranodeaerospike.SetLaneWindowBatch(4))
+
+	from := time.Now().Add(-time.Second)
+
+	for i := range 64 {
+		_, err := store.Create(context.Background(), laneParent(t, uint32(100+i), 1), 101, utxo.WithLanePosition(lane.Pack(4, uint64(i+1)))) //nolint:gosec // a test seed
+		require.NoError(t, err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	calls := 0
+
+	_, err := store.ReadLaneWindow(ctx, utxo.LaneWindow{From: from}, func([]utxo.LaneWindowRecord) error {
+		calls++
+
+		// The partition queries fill the results buffer meanwhile, so batches are waiting when the
+		// cancel comes.
+		time.Sleep(200 * time.Millisecond)
+		cancel()
+
+		return nil
+	})
+	require.ErrorIs(t, err, context.Canceled)
+	require.Equal(t, 1, calls, "no batch after the cancel")
 }

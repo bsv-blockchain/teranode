@@ -18,10 +18,11 @@ const (
 	// laneWindowMaxQueries bounds the partition queries of a window read. The read runs beside the
 	// node's own work, after block assembly's reload, and shares the server's query threads.
 	laneWindowMaxQueries = 4
-
-	// laneWindowBatch is how many records one batch to the caller holds.
-	laneWindowBatch = 4_096
 )
+
+// laneWindowBatch is how many records one batch to the caller holds. A variable so a test can make
+// a read hand over several batches.
+var laneWindowBatch = 4_096
 
 // laneWindowBins are the bins a reload from the window would read: the ones block assembly's
 // reload reads, with the lane position.
@@ -110,8 +111,9 @@ func (s *Store) ReadLaneWindow(ctx context.Context, w utxo.LaneWindow, fn func([
 
 			defer func() { _ = rs.Close() }()
 
-			// A cancel closes the recordset at once: the server may walk a long stretch of the
-			// index with nothing inside the window, and send no record to notice the cancel by.
+			// A cancel closes the recordset. Its node commands notice only at their next record
+			// inside the window or at the end of their partitions, so ReadLaneWindow does not wait
+			// for this goroutine once readCtx is done.
 			stopClose := context.AfterFunc(readCtx, func() { _ = rs.Close() })
 			defer stopClose()
 
@@ -165,36 +167,48 @@ func (s *Store) ReadLaneWindow(ctx context.Context, w utxo.LaneWindow, fn func([
 		close(results)
 	}()
 
-	var fnErr error
+	// A cancel, the caller's or fn's, returns at once: partition queries still walking the index
+	// end in the background.
+	for {
+		if readCtx.Err() != nil {
+			break
+		}
 
-	for r := range results {
-		if fnErr != nil {
-			continue
+		var (
+			r  result
+			ok bool
+		)
+
+		select {
+		case r, ok = <-results:
+		case <-readCtx.Done():
+		}
+
+		if !ok {
+			break
 		}
 
 		st.Records += uint64(len(r.batch))
 		st.Bytes += r.bytes
 		st.External += r.external
 
-		if fnErr = fn(r.batch); fnErr != nil {
-			cancel()
+		if fnErr := fn(r.batch); fnErr != nil {
+			st.Duration = time.Since(start)
+
+			return st, fnErr
 		}
 	}
 
 	st.Duration = time.Since(start)
 
-	if fnErr != nil {
-		return st, fnErr
+	if err = ctx.Err(); err != nil {
+		return st, err
 	}
 
 	select {
 	case err = <-errs:
 		return st, errors.NewStorageError("[aerospike] read the restart window", err)
 	default:
-	}
-
-	if err = ctx.Err(); err != nil {
-		return st, err
 	}
 
 	return st, nil

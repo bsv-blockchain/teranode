@@ -645,7 +645,17 @@ func TestLaneRestartRunIsCancelledByTheNextReloadAndByStop(t *testing.T) {
 	go jobs.Start()
 
 	server := &BlockAssembly{logger: ulogger.TestLogger{}, blockAssembler: b, jobStore: jobs}
+	b.laneRestart.mu.Lock()
+	third := b.laneRestart.done
+	b.laneRestart.mu.Unlock()
+
 	require.NoError(t, server.Stop(context.Background()))
+
+	select {
+	case <-third:
+	default:
+		t.Fatal("Stop returned before the run ended")
+	}
 
 	require.Equal(t, laneRunCancelled, runEnds().outcome)
 }
