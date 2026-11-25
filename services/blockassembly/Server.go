@@ -1287,6 +1287,11 @@ func (ba *BlockAssembly) Stop(ctx context.Context) error {
 	ba.stopOnce.Do(func() {
 		ba.jobStore.Stop()
 
+		// the lanes restart dry run reads the UTXO store in the background
+		if ba.blockAssembler != nil {
+			ba.blockAssembler.stopLaneRestartDryRun()
+		}
+
 		// Stop the subtree processor to stop the announcement ticker and cleanup resources
 		if ba.blockAssembler != nil && ba.blockAssembler.subtreeProcessor != nil {
 			ba.blockAssembler.subtreeProcessor.Stop(ctx)

@@ -4,7 +4,6 @@ import (
 	"context"
 	"net/url"
 	"testing"
-	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/bscript"
@@ -18,12 +17,10 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	utxosql "github.com/bsv-blockchain/teranode/stores/utxo/sql"
+	tpostgres "github.com/bsv-blockchain/teranode/test/utils/postgres"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/stretchr/testify/require"
-	"github.com/testcontainers/testcontainers-go"
-	"github.com/testcontainers/testcontainers-go/modules/postgres"
-	"github.com/testcontainers/testcontainers-go/wait"
 )
 
 // Exercise reset conflict swaps against PostgreSQL as well as the SQLite pool fixture.
@@ -53,11 +50,10 @@ func testResetHistoricalConflict(t *testing.T, commonWinner, pruneWinner bool) {
 		if testing.Short() {
 			t.Skip("requires PostgreSQL testcontainer")
 		}
-		pg, err := postgres.Run(t.Context(), "postgres:16-alpine", postgres.WithDatabase("replay"), postgres.WithUsername("replay"), postgres.WithPassword("replay"), testcontainers.WithWaitStrategy(wait.ForLog("database system is ready to accept connections").WithOccurrence(2).WithStartupTimeout(time.Minute)))
+		// A fresh database on the PostgreSQL server shared by this test binary.
+		conn, teardown, err := tpostgres.SetupTestPostgresContainer()
 		test.SkipIfContainerUnavailable(t, err)
-		t.Cleanup(func() { require.NoError(t, pg.Terminate(context.Background())) })
-		conn, err := pg.ConnectionString(t.Context(), "sslmode=disable")
-		require.NoError(t, err)
+		t.Cleanup(func() { require.NoError(t, teardown()) })
 		dbURL, err := url.Parse(conn)
 		require.NoError(t, err)
 		store, err = utxosql.New(t.Context(), ulogger.TestLogger{}, ba.settings, dbURL)

@@ -117,6 +117,8 @@ func minedItem(tx *bt.Tx, height uint32, blockID uint32) *createItem {
 // the spend path reads UTXO rows, and no spend on the outpoint-only route reads a parent body.
 // So the row is not written -- and everything that does not depend on it must be unaffected.
 func TestSkipTxBodyBelowCheckpointWritesNoBodyButKeepsTheUTXOs(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newCheckpointStore(t, true)
 
 	tx := mkTx(t, 2, 5_000)
@@ -164,6 +166,8 @@ func TestSkipTxBodyBelowCheckpointWritesNoBodyButKeepsTheUTXOs(t *testing.T) {
 // TestSkipTxBodyBelowCheckpointBatchDecoratesFromTheUTXORow is the batched half of the
 // decorate check, because BatchPreviousOutputsDecorate is the call the validator actually makes.
 func TestSkipTxBodyBelowCheckpointBatchDecoratesFromTheUTXORow(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newCheckpointStore(t, true)
 
 	tx := mkTx(t, 2, 5_000)
@@ -190,6 +194,8 @@ func TestSkipTxBodyBelowCheckpointBatchDecoratesFromTheUTXORow(t *testing.T) {
 // TestSkipTxBodyAboveCheckpointStillWritesTheBody: one block past the floor the node is on the
 // ordinary route, where a body is still the only copy of the unlocking scripts this store has.
 func TestSkipTxBodyAboveCheckpointStillWritesTheBody(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newCheckpointStore(t, true)
 
 	tx := mkTx(t, 1, 5_000)
@@ -210,6 +216,8 @@ func TestSkipTxBodyAboveCheckpointStillWritesTheBody(t *testing.T) {
 // place it in, and no subtree data file holding its bytes either. It keeps its body whatever
 // the setting says.
 func TestMempoolCreateKeepsItsBodyBelowTheCheckpoint(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newCheckpointStore(t, true)
 
 	tx := mkTx(t, 1, 5_000)
@@ -222,6 +230,8 @@ func TestMempoolCreateKeepsItsBodyBelowTheCheckpoint(t *testing.T) {
 // TestTxBodyIsWrittenBelowTheCheckpointWhenTheSettingIsOff is today's behaviour, and the
 // default: the setting is opt-in, so an operator who has not asked for this loses nothing.
 func TestTxBodyIsWrittenBelowTheCheckpointWhenTheSettingIsOff(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newCheckpointStore(t, false)
 
 	tx := mkTx(t, 1, 5_000)
@@ -235,6 +245,8 @@ func TestTxBodyIsWrittenBelowTheCheckpointWhenTheSettingIsOff(t *testing.T) {
 // ROW rather than per batch: block application below the checkpoint and the tip's own writes
 // reach the same batcher, so a single statement can carry both.
 func TestSkipTxBodyBatchMixesHeightsAroundTheFloor(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newCheckpointStore(t, true)
 
 	below := mkTx(t, 1, 5_000)
@@ -261,6 +273,8 @@ func TestSkipTxBodyBatchMixesHeightsAroundTheFloor(t *testing.T) {
 // must answer exactly as it does today, and must not take the second offer's body as an
 // excuse to write a row the first offer deliberately skipped.
 func TestSkipTxBodyReplayStillReportsTxExistsAndWritesNoBody(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newCheckpointStore(t, true)
 
 	tx := mkTx(t, 1, 5_000)
@@ -283,6 +297,8 @@ func TestSkipTxBodyReplayStillReportsTxExistsAndWritesNoBody(t *testing.T) {
 // blocks are on the fast path. The boundary has exactly one definition; this is the test that
 // says which one.
 func TestGenesisKeepsItsBodyBelowTheCheckpoint(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newCheckpointStore(t, true)
 
 	tx := mkTx(t, 1, 5_000)
@@ -299,6 +315,8 @@ func TestGenesisKeepsItsBodyBelowTheCheckpoint(t *testing.T) {
 // already applied, then a child that spends it and is created in the same call, both carrying
 // the block that contains them.
 func TestSkipTxBodyBelowCheckpointThroughSpendAndCreate(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newCheckpointStore(t, true)
 
 	parent := mkTx(t, 2, 5_000)

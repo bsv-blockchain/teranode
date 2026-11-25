@@ -31,6 +31,8 @@ const pgLockNotAvailable = "55P03"
 // The short deadlock timeout on Delete makes its failure deterministic when
 // the old opposite order forms a cycle; mining cannot hide it with a retry.
 func TestDeleteAndMiningUseTheSameRowLockOrder_Postgres(t *testing.T) {
+	parallelPostgres(t)
+
 	if testing.Short() {
 		t.Skip("skipping Postgres integration test in short mode")
 	}
@@ -71,7 +73,7 @@ func TestDeleteAndMiningUseTheSameRowLockOrder_Postgres(t *testing.T) {
 				deadline := time.Now().Add(5 * time.Second)
 				for time.Now().Before(deadline) {
 					var waiting bool
-					err := observer.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE application_name = $1 AND wait_event_type = 'Lock')", name).Scan(&waiting)
+					err := observer.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE datname = current_database() AND application_name = $1 AND wait_event_type = 'Lock')", name).Scan(&waiting)
 					require.NoError(t, err)
 					if waiting {
 						return
@@ -106,6 +108,8 @@ func TestDeleteAndMiningUseTheSameRowLockOrder_Postgres(t *testing.T) {
 // deadlock timeout aborts it. Delete retries a deadlock and would still delete
 // the row, so the test bounds setDAH's wait well below that timeout instead.
 func TestDeleteAndSpendUseTheSameRowLockOrder_Postgres(t *testing.T) {
+	parallelPostgres(t)
+
 	if testing.Short() {
 		t.Skip("skipping Postgres integration test in short mode")
 	}
@@ -149,7 +153,7 @@ func TestDeleteAndSpendUseTheSameRowLockOrder_Postgres(t *testing.T) {
 		var waiting bool
 
 		require.NoError(t, observer.QueryRow(ctx,
-			"SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND query LIKE '%DELETE FROM outputs%')").Scan(&waiting))
+			"SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock' AND query LIKE '%DELETE FROM outputs%')").Scan(&waiting))
 
 		if waiting {
 			break
@@ -174,6 +178,8 @@ func TestDeleteAndSpendUseTheSameRowLockOrder_Postgres(t *testing.T) {
 // opposite of Delete's order. The holder here does the same on one row. Delete's
 // short deadlock timeout makes it the victim, so it must retry and still delete.
 func TestDeleteRetriesADeadlockWithThePrune_Postgres(t *testing.T) {
+	parallelPostgres(t)
+
 	if testing.Short() {
 		t.Skip("skipping Postgres integration test in short mode")
 	}
@@ -219,7 +225,7 @@ func TestDeleteRetriesADeadlockWithThePrune_Postgres(t *testing.T) {
 		var waiting bool
 
 		require.NoError(t, observer.QueryRow(ctx,
-			"SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND query LIKE '%FOR UPDATE%')").Scan(&waiting))
+			"SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock' AND query LIKE '%FOR UPDATE%')").Scan(&waiting))
 
 		if waiting {
 			break
@@ -288,7 +294,7 @@ func waitBlockedOrDone(ctx context.Context, t *testing.T, store *Store, done cha
 
 		var waiting int
 
-		require.NoError(t, store.db.QueryRowContext(ctx, "SELECT count(*) FROM pg_locks WHERE NOT granted").Scan(&waiting))
+		require.NoError(t, store.db.QueryRowContext(ctx, "SELECT count(*) FROM pg_locks l JOIN pg_stat_activity a ON a.pid = l.pid WHERE NOT l.granted AND a.datname = current_database()").Scan(&waiting))
 
 		if waiting > 0 {
 			return
@@ -592,7 +598,7 @@ func TestSetMinedMultiSerialisesWithSetDAHOnTheRow_Postgres(t *testing.T) {
 		for time.Now().Before(deadline) {
 			var waiting int
 
-			if err := store.db.QueryRowContext(ctx, "SELECT count(*) FROM pg_locks WHERE NOT granted").Scan(&waiting); err == nil && waiting > 0 {
+			if err := store.db.QueryRowContext(ctx, "SELECT count(*) FROM pg_locks l JOIN pg_stat_activity a ON a.pid = l.pid WHERE NOT l.granted AND a.datname = current_database()").Scan(&waiting); err == nil && waiting > 0 {
 				break
 			}
 
@@ -632,6 +638,8 @@ func TestSetMinedMultiSerialisesWithSetDAHOnTheRow_Postgres(t *testing.T) {
 // cost the up-front row lock adds to it. It only measures: it runs when
 // TERANODE_SQL_TIMING is set and logs the best of three runs, each over fresh rows.
 func TestSetMinedMultiTiming_Postgres(t *testing.T) {
+	parallelPostgres(t)
+
 	if os.Getenv("TERANODE_SQL_TIMING") == "" {
 		t.Skip("set TERANODE_SQL_TIMING=1 to run the SetMinedMulti timing")
 	}
@@ -684,6 +692,8 @@ func TestSetMinedMultiTiming_Postgres(t *testing.T) {
 // ended by the test, with no sleeps in between. Both Postgres spend paths are run: the bulk one
 // and the per-row one, which also sends an idempotent match to setDAH.
 func TestSpendBatchSurvivesAParentThePruneDeletes_Postgres(t *testing.T) {
+	parallelPostgres(t)
+
 	if testing.Short() {
 		t.Skip("skipping Postgres integration test in short mode")
 	}
