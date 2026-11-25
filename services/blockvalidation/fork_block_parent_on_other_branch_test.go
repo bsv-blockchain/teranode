@@ -457,18 +457,18 @@ func TestValidateBlock_AcceptsBlockSpendingParentMinedDeepOnItsOwnFork(t *testin
 }
 
 // TestValidateBlock_AcceptsMainChainBlockSpendingParentMinedPastThePrefetchWindow covers a parent
-// mined deeper than the prefetch route's 10,000-ID window. The main chain is genesis - B1 .. B10002,
-// T is mined in B1, and block C on B10002 spends it. B1 is C's own ancestor, so C is valid. B1 is
-// outside both the header window block.Valid checks and the prefetch window, so both routes must
+// mined deeper than the prefetch route's window, shrunk to 200 IDs. The main chain is genesis - B1 ..
+// B202, T is mined in B1, and block C on B202 spends it. B1 is C's own ancestor, so C is valid. B1 is
+// outside both the 100-header window block.Valid checks and the prefetch window, so both routes must
 // resolve it with the ancestor lookup and accept C.
 func TestValidateBlock_AcceptsMainChainBlockSpendingParentMinedPastThePrefetchWindow(t *testing.T) {
-	const chainLength = uint32(10_002)
+	const (
+		prefetchWindow = uint64(200)
+		chainLength    = uint32(prefetchWindow) + 2
+	)
 
 	for _, route := range forkParentRoutes {
 		t.Run(route.name, func(t *testing.T) {
-			// each route builds its own stores; storing 10,002 blocks is most of the cost
-			t.Parallel()
-
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 
@@ -501,11 +501,13 @@ func TestValidateBlock_AcceptsMainChainBlockSpendingParentMinedPastThePrefetchWi
 			require.NoError(t, err)
 			require.NoError(t, stores.client.SetBlockMinedSet(ctx, parent, parentMeta.MinedSetGeneration))
 
-			window, err := stores.client.GetBlockHeaderIDs(ctx, parent, 10_000)
+			window, err := stores.client.GetBlockHeaderIDs(ctx, parent, prefetchWindow)
 			require.NoError(t, err)
 			require.NotContains(t, window, b1Meta.ID, "precondition: B1 is outside the prefetch window")
+			require.Greater(t, chainLength, uint32(stores.settings.BlockValidation.PreviousBlockHeaderCount), "precondition: B1 is outside the header window")
 
 			bv := stores.newBlockValidation(ctx, t)
+			bv.oldBlockIDsPrefetchWindow = prefetchWindow
 
 			require.NoError(t, bv.ValidateBlock(ctx, blockC, "test", true), "a main-chain block spending a parent mined past the prefetch window was rejected; chain calls: %s",
 				describeChainCheckCalls(stores.spy.recorded()))

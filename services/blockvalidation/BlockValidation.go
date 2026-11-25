@@ -242,6 +242,11 @@ type BlockValidation struct {
 	// settings contains operational parameters and feature flags
 	settings *settings.Settings
 
+	// oldBlockIDsPrefetchWindow is how many ancestors' block IDs the prefetch
+	// route of checkOldBlockIDs loads. Zero means defaultOldBlockIDsPrefetchWindow;
+	// tests shrink it so a chain past the window stays short.
+	oldBlockIDsPrefetchWindow uint64
+
 	// blockchainClient interfaces with the blockchain for operations
 	blockchainClient blockchain.ClientI
 
@@ -4558,7 +4563,12 @@ func (u *BlockValidation) checkOldBlockIDs(ctx context.Context, oldBlockIDsMap *
 
 	lookupHash := block.Header.HashPrevBlock
 
-	currentChainBlockIDs, err := u.blockchainClient.GetBlockHeaderIDs(ctx, lookupHash, 10_000)
+	prefetchWindow := u.oldBlockIDsPrefetchWindow
+	if prefetchWindow == 0 {
+		prefetchWindow = defaultOldBlockIDsPrefetchWindow
+	}
+
+	currentChainBlockIDs, err := u.blockchainClient.GetBlockHeaderIDs(ctx, lookupHash, prefetchWindow)
 	if err != nil {
 		return errors.NewServiceError("[Block Validation][checkOldBlockIDs][%s] failed to get block header ids", block.String(), err)
 	}
@@ -4679,6 +4689,10 @@ func (u *BlockValidation) checkOldBlockIDsInMemoryChainCheck(ctx context.Context
 // allocation. It matches the prefetch route's historical implicit cap
 // (len(currentChainBlockIDs) <= 10_000).
 const oldBlockIDsCacheHintCap = 10_000
+
+// defaultOldBlockIDsPrefetchWindow is how many ancestors' block IDs the prefetch
+// route of checkOldBlockIDs loads unless oldBlockIDsPrefetchWindow is set.
+const defaultOldBlockIDsPrefetchWindow = 10_000
 
 func (u *BlockValidation) iterateOldBlockIDsWithCachedLookup(
 	ctx context.Context,
