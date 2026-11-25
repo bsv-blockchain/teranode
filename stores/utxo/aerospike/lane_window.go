@@ -80,6 +80,9 @@ func (s *Store) ReadLaneWindow(ctx context.Context, w utxo.LaneWindow, fn func([
 		external uint64
 	}
 
+	// Read once: a cancelled read returns while its partition queries may still be running.
+	batchSize := laneWindowBatch
+
 	results := make(chan result, queries)
 	errs := make(chan error, queries)
 
@@ -117,12 +120,12 @@ func (s *Store) ReadLaneWindow(ctx context.Context, w utxo.LaneWindow, fn func([
 			stopClose := context.AfterFunc(readCtx, func() { _ = rs.Close() })
 			defer stopClose()
 
-			cur := result{batch: make([]utxo.LaneWindowRecord, 0, laneWindowBatch)}
+			cur := result{batch: make([]utxo.LaneWindowRecord, 0, batchSize)}
 
 			send := func() bool {
 				select {
 				case results <- cur:
-					cur = result{batch: make([]utxo.LaneWindowRecord, 0, laneWindowBatch)}
+					cur = result{batch: make([]utxo.LaneWindowRecord, 0, batchSize)}
 
 					return true
 				case <-readCtx.Done():
@@ -149,7 +152,7 @@ func (s *Store) ReadLaneWindow(ctx context.Context, w utxo.LaneWindow, fn func([
 					cur.external++
 				}
 
-				if len(cur.batch) >= laneWindowBatch && !send() {
+				if len(cur.batch) >= batchSize && !send() {
 					return
 				}
 			}
