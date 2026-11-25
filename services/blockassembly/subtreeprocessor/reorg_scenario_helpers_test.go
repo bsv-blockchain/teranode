@@ -18,6 +18,7 @@ import (
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
+	"github.com/bsv-blockchain/teranode/settings"
 	blob_memory "github.com/bsv-blockchain/teranode/stores/blob/memory"
 	blockchainstore "github.com/bsv-blockchain/teranode/stores/blockchain"
 	blockchainoptions "github.com/bsv-blockchain/teranode/stores/blockchain/options"
@@ -65,6 +66,11 @@ type reorgScenarioConfig struct {
 	pendingSpendsLost int
 	subtreeSize       int
 	diskTxMap         bool
+
+	// lanePositions runs the processor at utxostore_laneMigration shadow: each pending tx is loaded
+	// with scenarioLanePosition(hash), the UTXO store answers a lane position read with the same
+	// for every hash, and sc.laneKeeper records the lane bitmaps of the subtrees the processor builds.
+	lanePositions bool
 
 	// parallelThreshold is blockassembly_parallelSetIfNotExistsThreshold. Zero keeps the default of
 	// 10_000, below which the remainder pass adds node by node and never reaches the wasInserted
@@ -179,6 +185,9 @@ type reorgScenario struct {
 	pendingIDs []scenarioID
 	winnerIDs  []scenarioID
 	rawD1Txs   []*bt.Tx
+
+	// laneKeeper is set with cfg.lanePositions.
+	laneKeeper *recordingLaneKeeper
 
 	// cbChildTxs are the pending transactions that spend the lost block's coinbase, and
 	// lostCoinbase is that coinbase.
@@ -1005,6 +1014,14 @@ func (sc *reorgScenario) buildProcessor(t testing.TB) {
 	}
 
 	var opts []Options
+
+	if sc.cfg.lanePositions {
+		tSettings.UtxoStore.LaneMigration = settings.LaneMigrationShadow
+		sc.utxo.Store = &scenarioLaneStore{Store: sc.utxo.Store}
+		sc.laneKeeper = newRecordingLaneKeeper()
+		opts = append(opts, WithLaneBitmapsKeeper(sc.laneKeeper))
+	}
+
 	if sc.cfg.diskTxMap {
 		opts = append(opts, WithTxMapDirs([]string{t.TempDir()}))
 	}
@@ -1054,6 +1071,10 @@ func (sc *reorgScenario) buildProcessor(t testing.TB) {
 		for i, id := range ids {
 			txs[i] = sc.tx(t, id)
 			batch[i] = &utxo.UnminedTransaction{Node: &txs[i].node, TxInpoints: &txs[i].inpoints, CreatedAt: start + i}
+
+			if sc.cfg.lanePositions {
+				batch[i].LanePosition = scenarioLanePosition(txs[i].node.Hash)
+			}
 		}
 
 		require.NoError(t, stp.AddNodesDirectly(batch, true))
