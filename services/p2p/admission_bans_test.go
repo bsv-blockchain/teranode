@@ -12,6 +12,7 @@ import (
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/p2p/p2p_api"
+	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/types/known/emptypb"
 )
@@ -156,19 +157,157 @@ func TestListenForBanEvents_TickerRunsTheSweep(t *testing.T) {
 	}, 5*time.Second, 10*time.Millisecond)
 }
 
-// A peer registered and connected from an address that went on the list
-// without an event is dropped from the registry by the sweep tick.
-func TestBanSweepTick_DropsRegistryPeerOnBannedAddress(t *testing.T) {
+// withSyncCoordinator gives s a sync coordinator over its registry and makes
+// peerID its current sync peer.
+func withSyncCoordinator(t *testing.T, s *Server, peerID string) *SyncCoordinator {
+	t.Helper()
+
+	sc := NewSyncCoordinator(context.Background(), ulogger.TestLogger{}, s.settings, s.peerRegistry,
+		NewPeerSelector(ulogger.TestLogger{}, s.settings), nil, nil)
+	sc.SetGetLocalHeightCallback(func(context.Context) uint32 { return 0 })
+	t.Cleanup(func() { sc.Stop(context.Background()) })
+
+	sc.currentSyncPeer = peerID
+	s.syncCoordinator = sc
+
+	return sc
+}
+
+// A registered peer connected from an address that gets banned leaves the
+// registry and stops being the sync peer, whichever path applies the ban.
+// The fake bus closes the covered connections inside Block*, as the real one
+// does, so with admission enforcement on the peer is listed with no
+// addresses by the time any walk of GetPeers runs. With it off the
+// connection stays open and the walk finds it.
+func TestBanOnAddress_DropsConnectedPeerFromRegistryAndSync(t *testing.T) {
+	relayID := mustNewPeerID(t)
+
+	tests := []struct {
+		name      string
+		enforce   bool
+		circuit   bool // the peer is reached through a relay on the banned address
+		ban       func(t *testing.T, s *Server)
+		keepsConn bool
+	}{
+		{
+			name:    "BanPeer RPC",
+			enforce: true,
+			ban:     func(t *testing.T, s *Server) { banAddr(t, s, "198.51.100.9") },
+		},
+		{
+			name:    "BanPeer RPC, subnet",
+			enforce: true,
+			ban:     func(t *testing.T, s *Server) { banAddr(t, s, "198.51.100.0/24") },
+		},
+		{
+			name:    "BanPeer RPC, relay address",
+			enforce: true,
+			circuit: true,
+			ban:     func(t *testing.T, s *Server) { banAddr(t, s, "198.51.100.9") },
+		},
+		{
+			name:    "ban-list event",
+			enforce: true,
+			ban: func(t *testing.T, s *Server) {
+				require.NoError(t, s.banList.Add(context.Background(), "198.51.100.9", time.Now().Add(time.Hour)))
+				s.handleBanEvent(context.Background(), BanEvent{Action: banActionAdd, IP: "198.51.100.9"})
+			},
+		},
+		{
+			name:    "sweep tick, ban added without an event",
+			enforce: true,
+			ban: func(t *testing.T, s *Server) {
+				require.NoError(t, s.banList.Add(context.Background(), "198.51.100.9", time.Now().Add(time.Hour)))
+				s.banSweepTick(context.Background())
+			},
+		},
+		{
+			name:      "admission off, BanPeer RPC then ban-list event",
+			enforce:   false,
+			keepsConn: true,
+			ban: func(t *testing.T, s *Server) {
+				banAddr(t, s, "198.51.100.9")
+				s.handleBanEvent(context.Background(), BanEvent{Action: banActionAdd, IP: "198.51.100.9"})
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s, reg, client := newAdmissionTestServer(t)
+			s.settings.P2P.EnforceBansAtAdmission = tt.enforce
+
+			pid := mustNewPeerID(t)
+			addr := fmt.Sprintf("/ip4/198.51.100.9/tcp/9905/p2p/%s", pid)
+			if tt.circuit {
+				addr = fmt.Sprintf("/ip4/198.51.100.9/tcp/9905/p2p/%s/p2p-circuit/p2p/%s", relayID, pid)
+			}
+
+			reg.Register(&blockchain.PeerInfo{ID: pid.String()})
+			client.peers = []p2pMessageBus.PeerInfo{{ID: pid.String(), Addrs: []string{addr}}}
+			sc := withSyncCoordinator(t, s, pid.String())
+
+			tt.ban(t, s)
+
+			_, inRegistry := reg.Get(pid.String())
+			require.False(t, inRegistry, "the peer leaves the registry")
+			require.Empty(t, sc.GetCurrentSyncPeer(), "the peer stops being the sync peer")
+			require.Equal(t, tt.keepsConn, len(client.PeerAddrs(pid.String())) > 0)
+		})
+	}
+}
+
+// A registry ban recorded without this process's onPeerBanned (another
+// service's AddBanScore) reaches admission through a sync, which blocks the
+// peer ID and closes its connection. The sync drops the peer too.
+func TestSyncAdmissionBans_PeerBlockDropsTheConnectedPeer(t *testing.T) {
 	s, reg, client := newAdmissionTestServer(t)
 	pid := mustNewPeerID(t)
 	reg.Register(&blockchain.PeerInfo{ID: pid.String()})
-	client.peers = []p2pMessageBus.PeerInfo{{ID: pid.String(), Addrs: []string{fmt.Sprintf("/ip4/198.51.100.9/tcp/9905/p2p/%s", pid)}}}
+	client.peers = []p2pMessageBus.PeerInfo{{ID: pid.String(), Addrs: []string{fmt.Sprintf("/ip4/192.0.2.4/tcp/9905/p2p/%s", pid)}}}
+	sc := withSyncCoordinator(t, s, pid.String())
 
-	require.NoError(t, s.banList.Add(context.Background(), "198.51.100.9", time.Now().Add(time.Hour)))
-	require.Equal(t, 1, reg.Count())
-
+	banPeerInRegistry(t, reg, pid)
+	s.primeBannedPeers()
 	s.banSweepTick(context.Background())
-	require.Equal(t, 0, reg.Count())
+
+	require.Equal(t, []string{"BlockPeer " + pid.String()}, client.AdmissionCalls())
+	_, inRegistry := reg.Get(pid.String())
+	require.False(t, inRegistry, "the peer leaves the registry")
+	require.True(t, reg.IsBannedPeer(pid.String()), "its ban outlives the record")
+	require.Empty(t, sc.GetCurrentSyncPeer(), "the peer stops being the sync peer")
+}
+
+// A score-threshold ban blocks the banned peer's IP, which closes the
+// connection of every other peer on that address too. Those peers leave the
+// registry and the sync coordinator as well; a peer elsewhere stays.
+func TestOnPeerBanned_DropsOtherPeersOnTheBannedAddress(t *testing.T) {
+	s, reg, client := newAdmissionTestServer(t)
+
+	banned := mustNewPeerID(t)
+	sameHost := mustNewPeerID(t)
+	elsewhere := mustNewPeerID(t)
+
+	for _, pid := range []string{banned.String(), sameHost.String(), elsewhere.String()} {
+		reg.Register(&blockchain.PeerInfo{ID: pid})
+	}
+
+	client.peers = []p2pMessageBus.PeerInfo{
+		{ID: banned.String(), Addrs: []string{fmt.Sprintf("/ip4/198.51.100.9/tcp/9905/p2p/%s", banned)}},
+		{ID: sameHost.String(), Addrs: []string{fmt.Sprintf("/ip4/198.51.100.9/tcp/9906/p2p/%s", sameHost)}},
+		{ID: elsewhere.String(), Addrs: []string{fmt.Sprintf("/ip4/192.0.2.4/tcp/9905/p2p/%s", elsewhere)}},
+	}
+	sc := withSyncCoordinator(t, s, sameHost.String())
+
+	s.onPeerBanned(banned.String(), ReasonSpam)
+
+	_, inRegistry := reg.Get(banned.String())
+	require.False(t, inRegistry, "the banned peer leaves the registry")
+	_, inRegistry = reg.Get(sameHost.String())
+	require.False(t, inRegistry, "the other peer on the banned address leaves the registry")
+	require.Empty(t, sc.GetCurrentSyncPeer(), "and stops being the sync peer")
+	_, inRegistry = reg.Get(elsewhere.String())
+	require.True(t, inRegistry, "a peer on another address stays")
 }
 
 // Clear raises no event, so ClearBanned lifts every IP and subnet rule itself.

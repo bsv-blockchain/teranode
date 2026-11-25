@@ -10,6 +10,8 @@ import (
 	"github.com/bsv-blockchain/teranode/util/kafka"
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
+	ma "github.com/multiformats/go-multiaddr"
+	manet "github.com/multiformats/go-multiaddr/net"
 	"github.com/stretchr/testify/mock"
 )
 
@@ -36,7 +38,10 @@ type MockServerP2PClient struct {
 	peers     []p2pMessageBus.PeerInfo // If non-nil, returned by GetPeers() instead of the default
 
 	// Admission calls (Block*/Unblock*) are recorded here rather than through
-	// mock.Mock, so tests that reach the ban paths need no expectations.
+	// mock.Mock, so tests that reach the ban paths need no expectations. A
+	// Block* call that succeeds also closes the connections it covers, as the
+	// real bus does: it drops the matching Addrs from peers. admissionMu
+	// guards peers once a test has handed the client to the server.
 	admissionMu    sync.Mutex
 	admissionCalls []string
 	blockErr       error // returned by every Block* call when set
@@ -61,6 +66,10 @@ func (m *MockServerP2PClient) AdmissionCalls() []string {
 }
 
 func (m *MockServerP2PClient) BlockAddr(ip net.IP) error {
+	if m.blockErr == nil {
+		m.closeConns(func(_ string, remote net.IP) bool { return remote != nil && remote.Equal(ip) })
+	}
+
 	return m.recordAdmission("BlockAddr "+ip.String(), m.blockErr)
 }
 
@@ -69,6 +78,10 @@ func (m *MockServerP2PClient) UnblockAddr(ip net.IP) error {
 }
 
 func (m *MockServerP2PClient) BlockSubnet(ipnet *net.IPNet) error {
+	if m.blockErr == nil {
+		m.closeConns(func(_ string, remote net.IP) bool { return remote != nil && ipnet.Contains(remote) })
+	}
+
 	return m.recordAdmission("BlockSubnet "+ipnet.String(), m.blockErr)
 }
 
@@ -77,7 +90,44 @@ func (m *MockServerP2PClient) UnblockSubnet(ipnet *net.IPNet) error {
 }
 
 func (m *MockServerP2PClient) BlockPeer(peerID string) error {
+	if m.blockErr == nil {
+		m.closeConns(func(id string, _ net.IP) bool { return id == peerID })
+	}
+
 	return m.recordAdmission("BlockPeer "+peerID, m.blockErr)
+}
+
+// closeConns does what the real bus's closeRefusedConns does to the peers
+// fixture: it drops every address refused reports covered, given the peer's
+// ID and the address's leading IP (nil when it has none; for a relay circuit,
+// the relay's). A peer keeps its entry with no addresses, as GetPeers lists a
+// topic peer with no open connection. The slice is replaced, not edited, so a
+// slice GetPeers returned earlier is left as it was.
+func (m *MockServerP2PClient) closeConns(refused func(id string, remote net.IP) bool) {
+	m.admissionMu.Lock()
+	defer m.admissionMu.Unlock()
+
+	if m.peers == nil {
+		return
+	}
+
+	next := make([]p2pMessageBus.PeerInfo, 0, len(m.peers))
+	for _, p := range m.peers {
+		kept := make([]string, 0, len(p.Addrs))
+		for _, addr := range p.Addrs {
+			var remote net.IP
+			if maddr, err := ma.NewMultiaddr(addr); err == nil {
+				remote, _ = manet.ToIP(maddr)
+			}
+			if !refused(p.ID, remote) {
+				kept = append(kept, addr)
+			}
+		}
+		p.Addrs = kept
+		next = append(next, p)
+	}
+
+	m.peers = next
 }
 
 func (m *MockServerP2PClient) UnblockPeer(peerID string) error {
@@ -88,6 +138,9 @@ func (m *MockServerP2PClient) UnblockPeer(peerID string) error {
 // its connection table: the Addrs of the matching entry, or nil when there is
 // none or it has no addresses (not connected).
 func (m *MockServerP2PClient) PeerAddrs(peerID string) []string {
+	m.admissionMu.Lock()
+	defer m.admissionMu.Unlock()
+
 	for _, p := range m.peers {
 		if p.ID == peerID && len(p.Addrs) > 0 {
 			return p.Addrs
@@ -132,6 +185,9 @@ func (m *MockServerP2PClient) Connect(ctx context.Context, peerMultiaddr string)
 }
 
 func (m *MockServerP2PClient) GetPeers() []p2pMessageBus.PeerInfo {
+	m.admissionMu.Lock()
+	defer m.admissionMu.Unlock()
+
 	if m.peers != nil {
 		return m.peers
 	}
