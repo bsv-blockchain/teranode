@@ -114,8 +114,8 @@ func TestFilterRecentlyMined_ManyBatchesAcrossChunks(t *testing.T) {
 	}
 }
 
-// A set is dropped once its retention has passed, which frees it, and a retention of 0 keeps
-// nothing.
+// A set is dropped once its retention, plus any double-spend window, has passed, which frees it,
+// and a retention of 0 keeps nothing.
 func TestKeepMinedSet_RetentionAndPrune(t *testing.T) {
 	stp, now := newMinedSetProcessor(t, 10*time.Second)
 	h := chainhash.HashH([]byte("mined"))
@@ -138,6 +138,23 @@ func TestKeepMinedSet_RetentionAndPrune(t *testing.T) {
 	stp.settings.BlockAssembly.MinedTxSetRetention = 0
 	stp.keepMinedSet(minedSetBlock(2), frozenHashSet(t, h))
 	require.Zero(t, stp.keptMinedSetCount(), "a retention of 0 keeps nothing")
+
+	stp.settings.BlockAssembly.DoubleSpendWindow = 2 * time.Second
+	stp.keepMinedSet(minedSetBlock(5), frozenHashSet(t, h))
+	require.Zero(t, stp.keptMinedSetCount(), "a retention of 0 keeps nothing, even with a double-spend window")
+
+	stp.settings.BlockAssembly.MinedTxSetRetention = 10 * time.Second
+	stp.keepMinedSet(minedSetBlock(6), frozenHashSet(t, h))
+
+	*now = now.Add(12*time.Second - time.Millisecond)
+	stp.pruneMinedSets()
+	require.Equal(t, 1, stp.keptMinedSetCount(), "a double-spend window extends the retention by its length")
+
+	*now = now.Add(time.Millisecond)
+	stp.pruneMinedSets()
+	require.Zero(t, stp.keptMinedSetCount())
+
+	stp.settings.BlockAssembly.DoubleSpendWindow = 0
 
 	stp.settings.BlockAssembly.MinedTxSetRetention = time.Second
 	stp.keepMinedSet(minedSetBlock(3), nil)
@@ -327,6 +344,60 @@ func TestMoveForwardBlock_LateHandOffOfMinedTxStaysOut(t *testing.T) {
 				require.Equal(t, tc.reEnters, stp.GetCurrentTxMap().Exists(mined))
 			})
 		}
+	}
+}
+
+// A transaction queued inside the double-spend window before a block mines it is held back by the
+// block's drain. When the window has passed, the dequeue loop must not place it.
+func TestMoveForwardBlock_MinedTxHeldByTheWindowStaysOut(t *testing.T) {
+	cases := map[string]struct {
+		window, retention time.Duration
+		reEnters          bool
+	}{
+		"window_below_retention":     {window: 2 * time.Second, retention: 10 * time.Second},
+		"window_above_retention":     {window: 15 * time.Second, retention: 10 * time.Second},
+		"retention_off_lets_it_back": {window: 2 * time.Second, retention: 0, reEnters: true},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			stp, store, subtreeStore, chain := newResetWALTestProcessor(t, false)
+			stp.settings.BlockAssembly.DoubleSpendWindow = tc.window
+			stp.settings.BlockAssembly.MinedTxSetRetention = tc.retention
+
+			minedTx, _ := createResetWALConflict(t, store, 33)
+			mined := *minedTx.TxIDChainHash()
+			unmined := chainhash.HashH([]byte("held-by-the-window-not-mined"))
+
+			chain.moveForward[0].Subtrees = []*chainhash.Hash{storeTestSubtree(t, subtreeStore, false, minedTx)}
+
+			enqueueAt := time.Now()
+
+			var nowNanos atomic.Int64
+			nowNanos.Store(enqueueAt.UnixNano())
+			stp.clock = clockFunc(func() time.Time { return time.Unix(0, nowNanos.Load()) })
+			stp.queue.clock = fixedClock{t: enqueueAt}
+
+			stp.Start(t.Context())
+
+			stp.AddBatch(
+				[]subtreepkg.Node{{Hash: mined, Fee: 1, SizeInBytes: 1}, {Hash: unmined, Fee: 1, SizeInBytes: 1}},
+				[]*subtreepkg.TxInpoints{inpointsPtr(), inpointsPtr()},
+			)
+
+			nowNanos.Add(int64(500 * time.Millisecond))
+			require.NoError(t, stp.MoveForwardBlock(chain.moveForward[0]))
+			require.Eventually(t, func() bool { return !stp.DrainingAfterBlock() }, 5*time.Second, time.Millisecond)
+			require.Equal(t, int64(2), stp.queue.length(), "precondition: the block's drain leaves the batch inside the window")
+
+			nowNanos.Store(enqueueAt.Add(tc.window + time.Millisecond).UnixNano())
+
+			require.Eventually(t, func() bool {
+				return stp.queue.length() == 0 && stp.GetCurrentTxMap().Exists(unmined)
+			}, 5*time.Second, time.Millisecond, "the dequeue loop must place the unmined transaction")
+
+			require.Equal(t, tc.reEnters, stp.GetCurrentTxMap().Exists(mined), "a transaction the block mined re-enters block assembly only with the kept sets off")
+		})
 	}
 }
 

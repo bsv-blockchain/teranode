@@ -72,8 +72,13 @@ func (r *recentMinedSets) storeLocked(sets []recentMinedSet) {
 // sets of the blocks it moved in the last retention plus the newest. A nil or empty set, or a
 // retention of 0, keeps nothing, but still drops the expired sets: a catch-up of empty blocks
 // must not hold an earlier block's set past its retention.
+//
+// The retention is blockassembly_minedTxSetRetention plus the double-spend window. The block's
+// drain leaves a batch younger than the window queued, and the dequeue loop places it when the
+// window has passed, so the set must outlive the window or a tx the block mined goes back into
+// block assembly.
 func (stp *SubtreeProcessor) keepMinedSet(block *model.Block, txs *SortedHashSet) {
-	retention := stp.settings.BlockAssembly.MinedTxSetRetention
+	retention := stp.minedSetRetention()
 	if retention <= 0 || block == nil || txs == nil || txs.Length() == 0 {
 		stp.pruneMinedSets()
 		return
@@ -99,6 +104,18 @@ func (stp *SubtreeProcessor) keepMinedSet(block *model.Block, txs *SortedHashSet
 	}
 
 	r.storeLocked(append(sets, entry))
+}
+
+// minedSetRetention is how long keepMinedSet keeps a block's set: blockassembly_minedTxSetRetention
+// plus the double-spend window. A retention of 0 keeps nothing even with a window: the window
+// alone leaves no margin, since a batch stamped as the block moves is let out as the set expires.
+func (stp *SubtreeProcessor) minedSetRetention() time.Duration {
+	retention := stp.settings.BlockAssembly.MinedTxSetRetention
+	if retention <= 0 {
+		return 0
+	}
+
+	return retention + max(stp.settings.BlockAssembly.DoubleSpendWindow, 0)
 }
 
 func (s *recentMinedSet) expired(now time.Time) bool {
