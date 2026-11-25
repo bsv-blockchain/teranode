@@ -263,6 +263,7 @@ func setupDiskSortTest(t *testing.T) (*BlockAssembler, utxo.Store, func()) {
 
 	utxoStore, err := utxostoresql.New(ctx, logger, tSettings, utxoStoreURL)
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = utxoStore.Close(context.Background()) })
 
 	err = utxoStore.SetBlockHeight(1)
 	require.NoError(t, err)
