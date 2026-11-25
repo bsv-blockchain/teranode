@@ -106,20 +106,19 @@ jobs:
             ${{ matrix.packages }} \
             | tee pr-${{ matrix.group }}.txt
 
+      # Check main out over the PR tree, not into a subdirectory: Go keys each
+      # compile by the package's directory, so building main from another path
+      # would miss the benchmark build cache. The untracked pr-*.txt survives.
       - name: Checkout main
-        uses: actions/checkout@v4
-        with:
-          ref: main
-          path: main
+        run: git checkout --detach origin/main
 
       - name: Run main benchmarks
         run: |
-          cd main
           BENCH_FILTER="${{ matrix.bench_filter || '.' }}"
           go test -bench="$BENCH_FILTER" -benchmem -benchtime=1s -short -timeout=25m -count=3 -run=^$ \
             -tags "testtxmetacache" \
             ${{ matrix.packages }} \
-            | tee ../main-${{ matrix.group }}.txt
+            | tee main-${{ matrix.group }}.txt
 
       - name: Upload results
         if: always()
