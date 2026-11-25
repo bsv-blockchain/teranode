@@ -303,6 +303,10 @@ func (ba *BlockAssembly) Health(ctx context.Context, checkLiveness bool) (int, s
 		checks = append(checks, health.Check{Name: "UTXOStore", Check: ba.utxoStore.Health})
 	}
 
+	if ba.blockAssembler != nil {
+		checks = append(checks, health.Check{Name: "DeepReorgHalt", Check: ba.blockAssembler.deepReorgHaltHealth})
+	}
+
 	return health.CheckAll(ctx, checkLiveness, checks)
 }
 
@@ -2039,6 +2043,10 @@ func (ba *BlockAssembly) SubmitMiningSolution(ctx context.Context, req *blockass
 		return nil, errors.WrapGRPC(errors.NewServiceUnavailableError("[SubmitMiningSolution] service not initialised"))
 	}
 
+	if ba.blockAssembler.DeepReorgHalted() {
+		return nil, errors.WrapGRPC(ba.blockAssembler.deepReorgHaltedError())
+	}
+
 	// Check if unmined transactions are still being loaded
 	if ba.blockAssembler.unminedTransactionsLoading.Load() {
 		ba.logger.Warnf("[SubmitMiningSolution] service not ready - unmined transactions are still being loaded")
@@ -2848,7 +2856,7 @@ func (ba *BlockAssembly) ResetBlockAssembly(ctx context.Context, _ *blockassembl
 		return nil, errors.WrapGRPC(errors.NewServiceNotReadyError(errServiceNotReadyUnminedLoading))
 	}
 
-	ba.blockAssembler.Reset(false)
+	ba.blockAssembler.OperatorReset(false, false)
 
 	return &blockassembly_api.EmptyMessage{}, nil
 }
@@ -2866,7 +2874,7 @@ func (ba *BlockAssembly) ResetBlockAssemblyFully(ctx context.Context, _ *blockas
 		return nil, errors.WrapGRPC(errors.NewServiceNotReadyError(errServiceNotReadyUnminedLoading))
 	}
 
-	ba.blockAssembler.Reset(true)
+	ba.blockAssembler.OperatorReset(true, false)
 
 	return &blockassembly_api.EmptyMessage{}, nil
 }
@@ -2888,7 +2896,7 @@ func (ba *BlockAssembly) ResetBlockAssemblyValidateInputs(ctx context.Context, _
 		return nil, errors.WrapGRPC(errors.NewServiceNotReadyError(errServiceNotReadyUnminedLoading))
 	}
 
-	ba.blockAssembler.ResetWithInputValidation()
+	ba.blockAssembler.OperatorReset(false, true)
 
 	return &blockassembly_api.EmptyMessage{}, nil
 }
