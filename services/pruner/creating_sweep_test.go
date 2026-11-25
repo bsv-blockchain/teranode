@@ -19,6 +19,7 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/stores/utxo/nullstore"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util/lane"
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/mock"
@@ -353,7 +354,7 @@ func TestSweepCreatingTxsRollsForward(t *testing.T) {
 	}
 
 	ba := blockassembly.NewMock()
-	ba.On("Store", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(true, nil)
+	ba.On("Store", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(true, nil)
 
 	s := newSweepServer(t, store)
 	s.blockAssemblyClient = ba
@@ -433,7 +434,7 @@ func TestSweepCreatingTxsRunsWithCreateFirstDisabled(t *testing.T) {
 	}
 
 	ba := blockassembly.NewMock()
-	ba.On("Store", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(true, nil)
+	ba.On("Store", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(true, nil)
 
 	s := newSweepServer(t, store)
 	s.settings.UtxoStore.UseCreateFirstOrder = false
@@ -462,7 +463,7 @@ func TestSweepCreatingTxsAnnouncesBeforeUnlock(t *testing.T) {
 	store.onUnlock = func() { events = append(events, "unlock") }
 
 	ba := blockassembly.NewMock()
-	ba.On("Store", mock.Anything, mock.Anything, uint64(7), uint64(99), inpoints).
+	ba.On("Store", mock.Anything, mock.Anything, uint64(7), uint64(99), inpoints, mock.Anything).
 		Run(func(mock.Arguments) { events = append(events, "store") }).
 		Return(true, nil)
 
@@ -488,7 +489,7 @@ func TestSweepCreatingTxsStoreFailureLeavesLocked(t *testing.T) {
 	}
 
 	ba := blockassembly.NewMock()
-	ba.On("Store", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(false, errors.NewServiceError("ba down"))
+	ba.On("Store", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(false, errors.NewServiceError("ba down"))
 
 	s := newSweepServer(t, store)
 	s.blockAssemblyClient = ba
@@ -1696,17 +1697,19 @@ func TestSweepCreatingTxsKeepsLeaseOfSpendWithAnInputInDoubt(t *testing.T) {
 }
 
 // heightRecordingBlockAssembly records the height each Store call names as the one the transaction
-// was validated at, which the shared mock drops.
+// was validated at, and the lane position it carries.
 type heightRecordingBlockAssembly struct {
 	*blockassembly.Mock
 
-	heights []uint32
+	heights       []uint32
+	lanePositions []uint64
 }
 
-func (h *heightRecordingBlockAssembly) Store(ctx context.Context, hash *chainhash.Hash, fee, size uint64, txInpoints subtree.TxInpoints, validatedHeight uint32) (bool, error) {
+func (h *heightRecordingBlockAssembly) Store(ctx context.Context, hash *chainhash.Hash, fee, size uint64, txInpoints subtree.TxInpoints, validatedHeight uint32, lanePosition uint64) (bool, error) {
 	h.heights = append(h.heights, validatedHeight)
+	h.lanePositions = append(h.lanePositions, lanePosition)
 
-	return h.Mock.Store(ctx, hash, fee, size, txInpoints, validatedHeight)
+	return h.Mock.Store(ctx, hash, fee, size, txInpoints, validatedHeight, lanePosition)
 }
 
 // The sweep tells block assembly the height the transaction was validated at, by the rule that block
@@ -1743,7 +1746,7 @@ func TestSweepCreatingTxsAnnouncesTheHeightTheTransactionWasValidatedAt(t *testi
 			}
 
 			ba := &heightRecordingBlockAssembly{Mock: blockassembly.NewMock()}
-			ba.On("Store", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(true, nil)
+			ba.On("Store", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(true, nil)
 
 			s := newSweepServer(t, store)
 			s.settings.UtxoStore.UnminedTxRetention = retention
@@ -1751,6 +1754,41 @@ func TestSweepCreatingTxsAnnouncesTheHeightTheTransactionWasValidatedAt(t *testi
 			s.sweepCreatingTxs(context.Background(), sweepHeight)
 
 			require.Equal(t, []uint32{tc.want}, ba.heights)
+		})
+	}
+}
+
+// The sweep tells block assembly the lane position the record carries, as the validator does for a
+// record it creates, and a retry of the announce carries the same value. A record with none says 0.
+func TestSweepCreatingTxsAnnouncesTheLanePositionOfTheRecord(t *testing.T) {
+	ns, err := nullstore.NewNullStore()
+	require.NoError(t, err)
+
+	for name, position := range map[string]uint64{
+		"a record that carries a position": lane.Pack(210, 3),
+		"a record that carries none":       0,
+	} {
+		t.Run(name, func(t *testing.T) {
+			txA := oneOutputTx(1)
+			hashA := *txA.TxIDChainHash()
+
+			store := &fakeSweepStore{
+				NullStore: ns,
+				stale:     []chainhash.Hash{hashA},
+				getResp:   map[chainhash.Hash]*meta.Data{hashA: {Creating: true, Attempt: sweepToken, Tx: txA, UnminedSince: 490, LanePosition: position}},
+			}
+
+			ba := &flakyBlockAssembly{Mock: blockassembly.NewMock(), failures: 1}
+
+			s := newSweepServer(t, store)
+			s.blockAssemblyClient = ba
+			s.sweepCreatingTxs(context.Background(), 500)
+
+			require.NotEmpty(t, ba.lanes, "the sweep announced the record")
+
+			for _, got := range ba.lanes {
+				require.Equal(t, position, got, "every attempt, the retry too, carries the record's position")
+			}
 		})
 	}
 }
@@ -1763,12 +1801,14 @@ type flakyBlockAssembly struct {
 	failures int
 	calls    int
 	heights  []uint32
+	lanes    []uint64
 	onStore  func()
 }
 
-func (f *flakyBlockAssembly) Store(_ context.Context, _ *chainhash.Hash, _, _ uint64, _ subtree.TxInpoints, validatedHeight uint32) (bool, error) {
+func (f *flakyBlockAssembly) Store(_ context.Context, _ *chainhash.Hash, _, _ uint64, _ subtree.TxInpoints, validatedHeight uint32, lanePosition uint64) (bool, error) {
 	f.calls++
 	f.heights = append(f.heights, validatedHeight)
+	f.lanes = append(f.lanes, lanePosition)
 
 	if f.onStore != nil {
 		f.onStore()

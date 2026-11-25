@@ -25,13 +25,15 @@ const (
 )
 
 // handOff is a rolled-forward record whose hand-off to block assembly is not complete. stage is
-// the step that is still owed. validatedHeight is the value of the first attempt.
+// the step that is still owed. validatedHeight is the value of the first attempt. lanePosition is
+// the lane position the record carries, or 0 when it has none.
 type handOff struct {
 	hash            chainhash.Hash
 	stage           handOffStage
 	fee, size       uint64
 	inpoints        subtree.TxInpoints
 	validatedHeight uint32
+	lanePosition    uint64
 }
 
 // sweepCreatingTxs heals transactions abandoned in the create-first "creating" state. A
@@ -156,7 +158,7 @@ func (s *Server) sweepCreatingTxs(ctx context.Context, blockHeight uint32) {
 			continue
 		}
 
-		md, err = s.utxoStore.Get(ctx, &hash, fields.Tx, fields.Creating, fields.RollingBack, fields.Attempt, fields.Reversed, fields.Fee, fields.SizeInBytes, fields.TxInpoints, fields.UnminedSince)
+		md, err = s.utxoStore.Get(ctx, &hash, fields.Tx, fields.Creating, fields.RollingBack, fields.Attempt, fields.Reversed, fields.Fee, fields.SizeInBytes, fields.TxInpoints, fields.UnminedSince, fields.LanePosition)
 		if err != nil {
 			s.logger.Warnf("[pruner][creating-sweep][%d] get of the transaction of %s failed: %v", blockHeight, hash, err)
 			continue
@@ -283,6 +285,7 @@ func (s *Server) sweepCreatingTxs(ctx context.Context, blockHeight uint32) {
 			size:            md.SizeInBytes,
 			inpoints:        md.TxInpoints,
 			validatedHeight: utxo.UnminedValidatedHeight(md.UnminedSince, blockHeight, s.settings.UtxoStore.UnminedTxRetention),
+			lanePosition:    md.LanePosition,
 		}
 
 		if !s.completeHandOff(ctx, blockHeight, &entry, pass) {
@@ -450,7 +453,7 @@ func (s *Server) completeHandOff(ctx context.Context, blockHeight uint32, e *han
 		}
 
 		err := s.retryHandOff(ctx, pass, func() error {
-			_, storeErr := s.blockAssemblyClient.Store(ctx, &e.hash, e.fee, e.size, e.inpoints, e.validatedHeight)
+			_, storeErr := s.blockAssemblyClient.Store(ctx, &e.hash, e.fee, e.size, e.inpoints, e.validatedHeight, e.lanePosition)
 
 			return storeErr
 		})

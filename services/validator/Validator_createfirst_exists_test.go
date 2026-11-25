@@ -237,7 +237,7 @@ type eventBlockAssembly struct {
 	err    error
 }
 
-func (b *eventBlockAssembly) Store(_ context.Context, hash *chainhash.Hash, _, _ uint64, _ subtree.TxInpoints, _ uint32) (bool, error) {
+func (b *eventBlockAssembly) Store(_ context.Context, hash *chainhash.Hash, _, _ uint64, _ subtree.TxInpoints, _ uint32, _ uint64) (bool, error) {
 	if b.err != nil {
 		return false, b.err
 	}
