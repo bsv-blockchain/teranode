@@ -44,7 +44,8 @@ func newSmallPoolStore(t *testing.T, maxConns int) (*Store, context.Context) {
 	s, err := New(ctx, ulogger.TestLogger{}, settings.NewSettings(), u)
 	require.NoError(t, err)
 
-	t.Cleanup(func() { _ = s.Close(ctx) })
+	closeOnCleanup(t, s)
+	rememberDSN(t, s, dsn)
 
 	return s, ctx
 }
@@ -65,6 +66,8 @@ func newSmallPoolStore(t *testing.T, maxConns int) (*Store, context.Context) {
 // a leaf boundary. Block validation runs the spend phase at
 // spendBatcherSize x spendBatcherConcurrency x 2 goroutines against one shared pool.
 func TestConcurrentSpendsDoNotDeadlockThePool(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newSmallPoolStore(t, 4)
 
 	const n = 16

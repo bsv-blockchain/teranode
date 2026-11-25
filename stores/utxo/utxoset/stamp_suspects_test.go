@@ -95,6 +95,8 @@ func TestStampLeavesATransactionConfirmedInALaterPartition(t *testing.T) {
 // The same row, when the ancestry names a different block at its height, is a loser's row: the
 // transaction is not confirmed anywhere and is marked.
 func TestStampMarksATransactionWhoseOnlyLaterRowIsOnAForkBlock(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	f := newSuspectFixture(t, 600)
 
 	f.stamp(t, chainancestrytest.Chain(t, 0, f.tip, map[uint32]uint32{300: 9, 600: 12}))

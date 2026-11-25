@@ -451,6 +451,8 @@ func TestPrunerReapClearsTheDeleteHeightOfAParentItUnspends(t *testing.T) {
 // end instead of landing after the count and restoring a parent spend of a record the reap then deletes. The
 // reap is parked on a parent output row after it took the table lock, so the test exercises the production lock.
 func TestReapConflictingHoldsTheIntentLockUntilCommit_Postgres(t *testing.T) {
+	parallelPostgres(t)
+
 	if testing.Short() {
 		t.Skip("skipping Postgres integration test in short mode")
 	}
@@ -504,7 +506,7 @@ func TestReapConflictingHoldsTheIntentLockUntilCommit_Postgres(t *testing.T) {
 
 		require.NoError(t, store.db.QueryRowContext(ctx, `
 			SELECT count(*) FROM pg_stat_activity
-			WHERE wait_event_type = 'Lock' AND query LIKE '%UPDATE outputs%' AND query NOT LIKE '%pg_stat_activity%'`).Scan(&waiting))
+			WHERE datname = current_database() AND wait_event_type = 'Lock' AND query LIKE '%UPDATE outputs%' AND query NOT LIKE '%pg_stat_activity%'`).Scan(&waiting))
 
 		return waiting == 1
 	}, 10*time.Second, 50*time.Millisecond, "the reap must park on the parent output row after it took the table lock")

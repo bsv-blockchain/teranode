@@ -20,6 +20,7 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/kafka"
+	"github.com/bsv-blockchain/teranode/util/kafka/kafkatest"
 	"github.com/bsv-blockchain/teranode/util/lane"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
@@ -31,6 +32,8 @@ import (
 func TestMain(m *testing.M) {
 	InitPrometheusMetrics()
 	exitCode := m.Run()
+	// CI turns off the testcontainers reaper, so stop the shared Redpanda container here.
+	kafkatest.TerminateSharedEnv()
 	os.Exit(exitCode)
 }
 

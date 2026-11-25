@@ -51,6 +51,8 @@ func hashesOf(txs []*utxo.UnminedTransaction) map[string]*utxo.UnminedTransactio
 // first accepted, and an absent UTXO row reads as already spent, so nobody can ever spend
 // them again.
 func TestUnminedIteratorReturnsEveryTransactionWaitingToBeMined(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	waiting := mkTx(t, 1, 1_000)
@@ -84,6 +86,8 @@ func TestUnminedIteratorReturnsEveryTransactionWaitingToBeMined(t *testing.T) {
 // everything but the coinbase arrives from the mempool first, and a block that later loses
 // stamped it on the way past.
 func TestUnminedIteratorReturnsAForkMinedTransaction(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	forked := mkTx(t, 1, 1_000)
@@ -113,6 +117,8 @@ func TestUnminedIteratorReturnsAForkMinedTransaction(t *testing.T) {
 // TestUnminedIteratorSkipsConflictingTransactions. Block assembly's own query excludes them,
 // because a transaction that lost a double-spend race must not be offered for mining.
 func TestUnminedIteratorSkipsConflictingTransactions(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	ok := mkTx(t, 1, 1_000)
@@ -138,6 +144,8 @@ func TestUnminedIteratorSkipsConflictingTransactions(t *testing.T) {
 // from the serialized transaction. That is what lets the body age out of its partition while
 // the transaction stays mineable.
 func TestUnminedIteratorCarriesWhatBlockAssemblyNeedsToRebuildACandidate(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	parent := mkTx(t, 1, 5_000)
@@ -172,6 +180,8 @@ func TestUnminedIteratorCarriesWhatBlockAssemblyNeedsToRebuildACandidate(t *test
 // which waiting transactions have been waiting longer than the retention window, so their
 // parents need their lifetime extended.
 func TestPrunableUnminedIteratorBoundsByAge(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	old := mkTx(t, 1, 1_000)
@@ -195,6 +205,8 @@ func TestPrunableUnminedIteratorBoundsByAge(t *testing.T) {
 // TestUnminedIteratorIsEmptyWhenNothingIsWaiting, which must be an empty answer rather than
 // an error, because it is the ordinary state of a caught-up node.
 func TestUnminedIteratorIsEmptyWhenNothingIsWaiting(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	it, err := s.GetUnminedTxIterator()
@@ -215,6 +227,8 @@ func TestUnminedIteratorIsEmptyWhenNothingIsWaiting(t *testing.T) {
 // The other two iterators in this package and the sql store's version all return nil here. This
 // one did not.
 func TestUnminedIteratorEndsWithNil(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	// Nothing waiting to be mined, which is the ordinary state and the one that spun.
@@ -231,6 +245,8 @@ func TestUnminedIteratorEndsWithNil(t *testing.T) {
 // TestUnminedIteratorEndsWithNilAfterAFullDrain, so the terminator arrives after real rows too
 // rather than only on an empty store.
 func TestUnminedIteratorEndsWithNilAfterAFullDrain(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	for i := 0; i < 3; i++ {
@@ -258,6 +274,8 @@ func TestUnminedIteratorEndsWithNilAfterAFullDrain(t *testing.T) {
 // context itself, so Next is the only place the stream can stop, and the open rows hold a pool
 // connection that Store.Close waits for.
 func TestUnminedIteratorStopsWhenItsContextIsCancelled(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	_, err := s.Create(ctx, mkTx(t, 1, 1_000), 700_000)

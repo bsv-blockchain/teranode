@@ -10,16 +10,14 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/tests"
+	tpostgres "github.com/bsv-blockchain/teranode/test/utils/postgres"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/testcontainers/testcontainers-go"
-	"github.com/testcontainers/testcontainers-go/modules/postgres"
-	"github.com/testcontainers/testcontainers-go/wait"
 )
 
-// setupPostgresStore starts a Postgres testcontainer and returns a *Store with
+// setupPostgresStore opens a fresh database on the shared Postgres server and returns a *Store with
 // the unlock batcher enabled (LockedBatcherSize > 1).
 func setupPostgresStore(t *testing.T) (*Store, context.Context) {
 	t.Helper()
@@ -28,34 +26,47 @@ func setupPostgresStore(t *testing.T) (*Store, context.Context) {
 	return newPostgresTestStore(t, ctx, startPostgresContainer(t, ctx)), ctx
 }
 
-// startPostgresContainer starts a Postgres testcontainer, skipping the test
-// when no container runtime is reachable, and returns its connection URL.
-func startPostgresContainer(t *testing.T, ctx context.Context) *url.URL {
-	t.Helper()
+// postgresTestURL returns a fresh, empty database of its own on the PostgreSQL server
+// shared by this test binary (test/utils/postgres), skipping the test when no container
+// runtime is reachable. The database is dropped when the test ends, after any cleanup the
+// test registers later, such as closing its store.
+func postgresTestURL(tb testing.TB) *url.URL {
+	tb.Helper()
 
-	pgContainer, err := postgres.Run(ctx,
-		"postgres:13",
-		postgres.WithDatabase("testdb"),
-		postgres.WithUsername("testuser"),
-		postgres.WithPassword("testpass"),
-		testcontainers.WithWaitStrategy(
-			wait.ForLog("database system is ready to accept connections").
-				WithOccurrence(2).
-				WithStartupTimeout(5*time.Minute),
-		),
-	)
-	test.SkipIfContainerUnavailable(t, err)
-	t.Cleanup(func() {
-		assert.NoError(t, pgContainer.Terminate(ctx))
-	})
-
-	connStr, err := pgContainer.ConnectionString(ctx, "sslmode=disable")
-	require.NoError(t, err)
+	connStr, teardown, err := tpostgres.SetupTestPostgresContainer()
+	test.SkipIfContainerUnavailable(tb, err)
+	tb.Cleanup(func() { assert.NoError(tb, teardown()) })
 
 	dbURL, err := url.Parse(connStr)
-	require.NoError(t, err)
+	require.NoError(tb, err)
 
 	return dbURL
+}
+
+// postgresParallelSlots bounds how many parallel Postgres tests hold a store at once.
+// Each store allocates its batchers' pools when it opens, so the bound keeps the test
+// binary's peak memory near what it was when these tests ran one at a time.
+var postgresParallelSlots = make(chan struct{}, 4)
+
+// parallelPostgres marks a test parallel that works only on a database of its own on
+// the shared server. A test that sets a package-level hook (spendBeforeWrite,
+// setDAHAfterLock and the rest), uses the pruner service singleton or reads a
+// process-wide metric must not call it: it stays sequential, and Go runs every
+// sequential test before it releases the parallel ones.
+func parallelPostgres(t *testing.T) {
+	t.Helper()
+	t.Parallel()
+
+	postgresParallelSlots <- struct{}{}
+	t.Cleanup(func() { <-postgresParallelSlots })
+}
+
+// startPostgresContainer returns a fresh database on the shared PostgreSQL server
+// (see postgresTestURL).
+func startPostgresContainer(t *testing.T, _ context.Context) *url.URL {
+	t.Helper()
+
+	return postgresTestURL(t)
 }
 
 // newPostgresTestStore opens a *Store on dbURL with the settings
@@ -85,6 +96,8 @@ func newPostgresTestStore(t *testing.T, ctx context.Context, dbURL *url.URL) *St
 // against real Postgres — the ON CONFLICT DO NOTHING idempotency path and the
 // BYTEA intent_id / tx_hashes columns that the SQLite path cannot cover.
 func TestConflictWAL_Postgres(t *testing.T) {
+	parallelPostgres(t)
+
 	if testing.Short() {
 		t.Skip("skipping Postgres integration test in short mode")
 	}
@@ -101,6 +114,8 @@ func TestConflictWAL_Postgres(t *testing.T) {
 // while the background get-batcher needs a second connection, and sqlitememory's
 // single-connection model deadlocks. Postgres has a real connection pool.
 func TestConflictWALCrashRecovery_Postgres(t *testing.T) {
+	parallelPostgres(t)
+
 	if testing.Short() {
 		t.Skip("skipping Postgres integration test in short mode")
 	}
@@ -117,6 +132,8 @@ func TestConflictWALCrashRecovery_Postgres(t *testing.T) {
 // delete_at_height so the pruner can expire it. Before the fix this record had no
 // delete_at_height and was retained forever.
 func TestCreateMinedUnspendableSetsDAH_Postgres(t *testing.T) {
+	parallelPostgres(t)
+
 	if testing.Short() {
 		t.Skip("skipping Postgres integration test in short mode")
 	}
@@ -157,6 +174,8 @@ func TestCreateMinedUnspendableSetsDAH_Postgres(t *testing.T) {
 // SetLocked(false) call goes through the unlock batcher on Postgres and
 // correctly clears the locked flag.
 func TestUnlockBatcher_Postgres_SingleHash(t *testing.T) {
+	parallelPostgres(t)
+
 	if testing.Short() {
 		t.Skip("skipping Postgres integration test in short mode")
 	}
@@ -196,6 +215,8 @@ func TestUnlockBatcher_Postgres_SingleHash(t *testing.T) {
 // correctly recalculates delete_at_height (DAH) for a fully-spent, mined,
 // on-longest-chain transaction.
 func TestUnlockBatcher_Postgres_DAH(t *testing.T) {
+	parallelPostgres(t)
+
 	if testing.Short() {
 		t.Skip("skipping Postgres integration test in short mode")
 	}
@@ -280,6 +301,8 @@ func TestUnlockBatcher_Postgres_DAH(t *testing.T) {
 // concurrent single-hash unlock calls complete correctly with the unlock
 // batcher-enabled path.
 func TestUnlockBatcher_Postgres_MultipleConcurrent(t *testing.T) {
+	parallelPostgres(t)
+
 	if testing.Short() {
 		t.Skip("skipping Postgres integration test in short mode")
 	}
