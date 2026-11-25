@@ -162,6 +162,31 @@ func TestSetConflictingStampsDAHAtMinedFloor_SQLite(t *testing.T) {
 		"the stamp must be at least mined height + retention, not the lagging tip + retention")
 }
 
+// An unmined record flagged conflicting has no mined floor, so its stamp is exactly the tip
+// plus one plus the spent retention, the retention padded by the unmined retention.
+func TestSetConflictingStampsUnminedAtTipPlusSpentRetention_SQLite(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	store, _ := setup(ctx, t)
+	require.NotZero(t, store.settings.UtxoStore.UnminedTxRetention, "the pad must be non-zero for this test to mean anything")
+
+	require.NoError(t, store.SetBlockHeight(floorCachedTip))
+
+	_, err := store.Create(ctx, tests.ParentTx, floorCachedTip)
+	require.NoError(t, err)
+
+	_, err = store.Create(ctx, tests.Tx, floorCachedTip)
+	require.NoError(t, err)
+
+	_, _, err = store.SetConflicting(ctx, []chainhash.Hash{*tests.Tx.TxIDChainHash()}, true)
+	require.NoError(t, err)
+
+	dah := readDAH(ctx, t, store, *tests.Tx.TxIDChainHash())
+	require.NotNil(t, dah)
+	require.Equal(t, int64(floorCachedTip)+1+floorRetention(t, store), *dah)
+}
+
 // A conflicting record already stamped from the lagging tip, then flagged conflicting
 // again after mining, has its stale stamp raised to the mined floor.
 func TestSetConflictingRaisesStaleStamp_Postgres(t *testing.T) {

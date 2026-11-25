@@ -129,6 +129,17 @@ func TestBlockHeightRetentionAdjustments(t *testing.T) {
 		tSettings.UtxoStore.UnminedTxRetention = 72
 		require.Equal(t, uint32(216), tSettings.GetUtxoStoreSpentDeleteRetention())
 
+		// The base is the UTXO store's adjusted retention, not the global one.
+		tSettings.UtxoStore.BlockHeightRetentionAdjustment = -44
+		require.Equal(t, uint32(172), tSettings.GetUtxoStoreSpentDeleteRetention())
+		tSettings.UtxoStore.BlockHeightRetentionAdjustment = 0
+
+		// The smallest retention still pads, and the getter changes no setting.
+		tSettings.GlobalBlockHeightRetention = 1
+		require.Equal(t, uint32(73), tSettings.GetUtxoStoreSpentDeleteRetention())
+		require.Equal(t, uint32(1), tSettings.GlobalBlockHeightRetention)
+		require.Equal(t, uint32(72), tSettings.UtxoStore.UnminedTxRetention)
+
 		tSettings.GlobalBlockHeightRetention = 0
 		require.Equal(t, uint32(0), tSettings.GetUtxoStoreSpentDeleteRetention())
 
