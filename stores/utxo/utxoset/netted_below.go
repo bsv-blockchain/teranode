@@ -464,6 +464,18 @@ INSERT INTO utxo (satoshis, created_height, spendable_from, mined_height, block_
 SELECT * FROM unnest($1::bigint[], $2::int[], $3::int[], $4::int[], $5::int[],
                      $6::smallint[], $7::smallint[], $8::uuid[], $9::bytea[], $10::bytea[])`
 
+// nettedCoinsLaneSQL is nettedCoinsSQL with each coin's lane position, the creating transaction's,
+// for a database with lane_position on utxo (Store.laneCoinColumn).
+const nettedCoinsLaneSQL = `
+INSERT INTO utxo (satoshis, created_height, spendable_from, mined_height, block_id,
+                  leaf, flags, ukey, txid, script, lane_position)
+SELECT o.satoshis, o.created_height, o.spendable_from, o.mined_height, o.block_id,
+       o.leaf, o.flags, o.ukey, o.txid, o.script, NULLIF(o.lane_position, 0)
+  FROM unnest($1::bigint[], $2::int[], $3::int[], $4::int[], $5::int[],
+              $6::smallint[], $7::smallint[], $8::uuid[], $9::bytea[], $10::bytea[], $11::bigint[])
+    AS o(satoshis, created_height, spendable_from, mined_height, block_id, leaf, flags, ukey, txid,
+         script, lane_position)`
+
 // nettedBodiesSQL writes the bodies the plan carries, which is none below the checkpoint when
 // utxostore_skipTxBodyBelowCheckpoint is on.
 const nettedBodiesSQL = `
@@ -689,6 +701,16 @@ func (s *Store) netBelowClaim(ctx context.Context, dbTx pgx.Tx, p *createPlan) (
 		return nil, errors.NewStorageError("[utxoset][SpendAndCreateMulti] claim rows", err)
 	}
 
+	// The netted claim writes no inpoints, so its records are counted for their own position only,
+	// as the block-path claim's are. A chunk that rolls back and runs again counts twice.
+	if s.laneShadow {
+		for k, id := range p.txids {
+			if claimed[string(id)] {
+				utxo.CountLaneRecord(laneStoreName, p.lanes != nil && p.lanes[k] != 0, false, false)
+			}
+		}
+	}
+
 	return claimed, nil
 }
 
@@ -836,12 +858,32 @@ func (s *Store) netBelowCoins(ctx context.Context, dbTx pgx.Tx, p *createPlan, c
 		// In batches of nettedCoinsBatchRows rows and nettedCoinsBatchBytes bytes, in the sorted
 		// sequence: the driver builds each statement in memory, several times the size of its
 		// rows, and Postgres refuses a message of 1 GB or more.
+		// Each coin's lane position, the creating transaction's, when the database has the column
+		// and a transaction of the plan has one.
+		var coinLanes []int64
+
+		if lanes := p.lanesByTxid(); s.laneCoinColumn && lanes != nil {
+			coinLanes = make([]int64, len(p.utxoTxids))
+			for c, id := range p.utxoTxids {
+				coinLanes[c] = lanes[string(id)]
+			}
+		}
+
 		for _, batch := range coinBatches(rows, p.utxoScripts, nettedCoinsBatchRows, nettedCoinsBatchBytes) {
-			if _, err := dbTx.Exec(ctx, nettedCoinsSQL,
+			stmt := nettedCoinsSQL
+			args := []any{
 				permute(p.utxoSats, batch), permute(p.utxoHeights, batch), permute(p.utxoSpendable, batch),
 				permute(p.utxoMined, batch), permute(p.utxoBlockIDs, batch), permute(p.utxoLeaves, batch),
 				permute(p.utxoFlags, batch), permute(p.utxoUkeys, batch), permute(p.utxoTxids, batch),
-				permute(p.utxoScripts, batch)); err != nil {
+				permute(p.utxoScripts, batch),
+			}
+
+			if coinLanes != nil {
+				stmt = nettedCoinsLaneSQL
+				args = append(args, permute(coinLanes, batch))
+			}
+
+			if _, err := dbTx.Exec(ctx, stmt, args...); err != nil {
 				return errors.NewStorageError("[utxoset][SpendAndCreateMulti] coins of netted chunk", err)
 			}
 		}

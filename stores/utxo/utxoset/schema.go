@@ -726,8 +726,8 @@ func CreateSchema(ctx context.Context, pool *pgxpool.Pool) error {
 // a NULL in a row that has no other NULL adds a null bitmap, which is 8 bytes of heap and WAL per
 // row with nothing to show for them. A database that has never had lane positions on keeps the
 // rows main writes, until an operator installs the lane schema with PrepareLaneSchema. The other
-// five lane columns, which nothing in this build writes, arrive only that way, so turning lane
-// positions on does not add columns that would stay empty.
+// five lane columns arrive only that way, and this build writes them only once PrepareLaneSchema
+// has installed them, so turning lane positions on adds only those three identity columns.
 //
 // A process with the flag off still looks, because the columns outlive the flag: on a database
 // where they exist, the statements that copy a record's payload keep carrying the position. A process
@@ -744,6 +744,40 @@ func openLaneColumns(ctx context.Context, pool *pgxpool.Pool, on bool) (bool, er
 
 	for _, table := range laneColumnTables {
 		found, err := schemaHas(ctx, pool, table, "lane_position")
+		if err != nil || !found {
+			return false, err
+		}
+	}
+
+	return true, nil
+}
+
+// openLaneCopyColumns reports whether the database has the lane columns the copies need, beyond the
+// three openLaneColumns opens: parent_lane_positions on every table that carries a record's
+// payload (parents), and lane_position on utxo and spend_journal (coins). It only looks. These
+// columns arrive with PrepareLaneSchema, run as the table owner with the node stopped, so a store
+// opened with lane positions on but without them writes what it can and counts the rest. Each needs
+// the identity columns too, because the statements that write them are the lane forms.
+func openLaneCopyColumns(ctx context.Context, pool *pgxpool.Pool, laneColumn bool) (parents, coins bool, err error) {
+	if !laneColumn {
+		return false, false, nil
+	}
+
+	if parents, err = schemaHasAll(ctx, pool, laneColumnTables, "parent_lane_positions"); err != nil {
+		return false, false, err
+	}
+
+	if coins, err = schemaHasAll(ctx, pool, []string{"utxo", "spend_journal"}, "lane_position"); err != nil {
+		return false, false, err
+	}
+
+	return parents, coins, nil
+}
+
+// schemaHasAll reports whether every one of tables has column.
+func schemaHasAll(ctx context.Context, pool *pgxpool.Pool, tables []string, column string) (bool, error) {
+	for _, table := range tables {
+		found, err := schemaHas(ctx, pool, table, column)
 		if err != nil || !found {
 			return false, err
 		}
@@ -782,7 +816,10 @@ type laneSchemaColumn struct{ table, column, sqlType string }
 //     spend_journal.lane_position the copy a spend takes of it, so a fully spent parent answered
 //     from the journal, and an output Unspend restores from it, keep their position.
 //
-// Nothing in this build writes the last five; the steps that make them mandatory do.
+// Opening the store never adds the last five; PrepareLaneSchema does. Where they exist the store
+// writes them, and each copy carries them where its source row has them (openLaneCopyColumns), with
+// lane positions on or off, as it does lane_position; a create with lane positions off has none to
+// write, so it writes NULL, and so does a create on the list path, which names no parents' positions.
 var laneSchemaColumns = []laneSchemaColumn{
 	{"tx_ident", "lane_position", "BIGINT"},
 	{"tx_mined", "lane_position", "BIGINT"},

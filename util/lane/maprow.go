@@ -3,6 +3,7 @@ package lane
 import (
 	"bytes"
 	"encoding/binary"
+	"math/bits"
 	"sync/atomic"
 
 	"github.com/RoaringBitmap/roaring/v2/roaring64"
@@ -256,14 +257,9 @@ func DecodeHoleData(data []byte) (*roaring64.Bitmap, error) {
 		return nil, errors.NewProcessingError("lane hole data has %d trailing bytes", r.Len())
 	}
 
-	// Roaring's Validate compares every pair of runs in a run container, so a container of tens of
-	// thousands of runs costs seconds. The canonical form never holds more than maxCanonicalRuns,
-	// so refuse more before Validate runs.
-	if err := checkRunCounts(data); err != nil {
-		return nil, err
-	}
-
-	if err := bm.Validate(); err != nil {
+	// What Roaring's Validate checks, in one linear pass: Validate compares every pair of runs in a
+	// run container, which on a block of scattered takes cost most of a second (checkContainers).
+	if err := checkContainers(data); err != nil {
 		return nil, errors.NewProcessingError("lane hole data is inconsistent", err)
 	}
 
@@ -286,14 +282,14 @@ func DecodeHoleData(data []byte) (*roaring64.Bitmap, error) {
 	return bm, nil
 }
 
-// Roaring's serialized form, as far as checkRunCounts reads it. A 64-bit bitmap is a bucket count,
-// then per bucket a 4-byte key and a 32-bit bitmap. A 32-bit bitmap starts with a cookie: with run
+// Roaring's serialized form, as checkContainers reads it. A 64-bit bitmap is a bucket count, then
+// per bucket a 4-byte key and a 32-bit bitmap. A 32-bit bitmap starts with a cookie: with run
 // containers, the low 16 bits are serialCookie, the high 16 bits the container count less one,
 // then a run flag per container; without, serialCookieNoRunContainer then a 4-byte count. Then a
 // key and a cardinality less one per container, 2 bytes each, then 4-byte offsets unless the
 // bitmap has run containers and fewer than noOffsetThreshold containers. Then each container: a
-// run container is a 2-byte run count and 4 bytes per run, a bitmap container 8,192 bytes, and an
-// array container 2 bytes per value.
+// run container is a 2-byte run count and per run a 2-byte start and a 2-byte length less one, a
+// bitmap container 8,192 bytes, and an array container 2 bytes per value.
 const (
 	serialCookie               = 12347
 	serialCookieNoRunContainer = 12346
@@ -307,11 +303,16 @@ const (
 	maxCanonicalRuns = (bitmapContainerBytes - 2) / 4
 )
 
-// checkRunCounts walks the serialized form of a 64-bit Roaring bitmap and refuses a run container
-// of more than maxCanonicalRuns runs. It reads only headers and run counts, in time linear in the
-// number of containers. A buffer it cannot walk is refused too; ReadPortableFrom has already
-// accepted the buffer, so that means it is not the format checkRunCounts reads.
-func checkRunCounts(data []byte) error {
+// checkContainers walks the serialized form of a 64-bit Roaring bitmap and checks, in one pass
+// linear in its size, everything Roaring's Validate checks: bucket and container keys in rising
+// order, no empty bucket or container, array values in rising order, a bitmap container's
+// cardinality equal to its bits set, and runs in range, in rising order, neither overlapping nor
+// touching. It also refuses a run container of more than maxCanonicalRuns runs. Validate compares
+// every pair of runs in a run container, so a block whose scattered takes fill its containers with
+// close to 2,047 runs cost it most of a second; with the runs in order, each run against the next
+// is the same check. A buffer it cannot walk is refused too; ReadPortableFrom has already accepted
+// the buffer, so that means it is not the format checkContainers reads.
+func checkContainers(data []byte) error {
 	refuse := func() error {
 		return errors.NewProcessingError("lane hole data: unreadable container headers")
 	}
@@ -323,12 +324,20 @@ func checkRunCounts(data []byte) error {
 	buckets := binary.LittleEndian.Uint64(data)
 	b := data[8:]
 
+	var prevBucket int64 = -1
+
 	for i := uint64(0); i < buckets; i++ {
 		if len(b) < 8 {
 			return refuse()
 		}
 
-		b = b[4:] // the bucket key
+		bucket := int64(binary.LittleEndian.Uint32(b))
+		if bucket <= prevBucket {
+			return errors.NewProcessingError("lane hole data: bucket %d follows bucket %d", bucket, prevBucket)
+		}
+
+		prevBucket = bucket
+		b = b[4:]
 
 		cookie := binary.LittleEndian.Uint32(b)
 
@@ -359,6 +368,10 @@ func checkRunCounts(data []byte) error {
 			return refuse()
 		}
 
+		if size == 0 {
+			return errors.NewProcessingError("lane hole data: bucket %d is empty", bucket)
+		}
+
 		if uint64(len(b)) < uint64(size)*4 {
 			return refuse()
 		}
@@ -374,42 +387,114 @@ func checkRunCounts(data []byte) error {
 			b = b[size*4:]
 		}
 
+		prevKey := -1
+
 		for c := uint32(0); c < size; c++ {
+			key := int(binary.LittleEndian.Uint16(keyCard[c*4:]))
+			if key <= prevKey {
+				return errors.NewProcessingError("lane hole data: container %d follows container %d", key, prevKey)
+			}
+
+			prevKey = key
 			card := int(binary.LittleEndian.Uint16(keyCard[c*4+2:])) + 1
+
+			var err error
 
 			switch {
 			case runFlag != nil && runFlag[c/8]&(1<<(c%8)) != 0:
-				if len(b) < 2 {
-					return refuse()
-				}
-
-				runs := int(binary.LittleEndian.Uint16(b))
-				if runs > maxCanonicalRuns {
-					return errors.NewProcessingError("lane hole data: a run container of %d runs, more than the canonical %d", runs, maxCanonicalRuns)
-				}
-
-				if len(b) < 2+runs*4 {
-					return refuse()
-				}
-
-				b = b[2+runs*4:]
+				b, err = checkRunContainer(b)
 			case card > arrayContainerMax:
-				if len(b) < bitmapContainerBytes {
-					return refuse()
-				}
-
-				b = b[bitmapContainerBytes:]
+				b, err = checkBitmapContainer(b, card)
 			default:
-				if len(b) < card*2 {
-					return refuse()
-				}
+				b, err = checkArrayContainer(b, card)
+			}
 
-				b = b[card*2:]
+			if err != nil {
+				return err
 			}
 		}
 	}
 
 	return nil
+}
+
+// checkRunContainer checks the run container at the start of b and returns what follows it.
+func checkRunContainer(b []byte) ([]byte, error) {
+	if len(b) < 2 {
+		return nil, errors.NewProcessingError("lane hole data: unreadable container headers")
+	}
+
+	runs := int(binary.LittleEndian.Uint16(b))
+	if runs > maxCanonicalRuns {
+		return nil, errors.NewProcessingError("lane hole data: a run container of %d runs, more than the canonical %d", runs, maxCanonicalRuns)
+	}
+
+	if runs == 0 {
+		return nil, errors.NewProcessingError("lane hole data: a run container with no runs")
+	}
+
+	if len(b) < 2+runs*4 {
+		return nil, errors.NewProcessingError("lane hole data: unreadable container headers")
+	}
+
+	prevEnd := -2
+
+	for r := 0; r < runs; r++ {
+		start := int(binary.LittleEndian.Uint16(b[2+r*4:]))
+		end := start + int(binary.LittleEndian.Uint16(b[4+r*4:]))
+
+		if end > 0xFFFF {
+			return nil, errors.NewProcessingError("lane hole data: a run from %d passes the end of its container", start)
+		}
+
+		if start <= prevEnd+1 {
+			return nil, errors.NewProcessingError("lane hole data: a run from %d overlaps or touches the run ending %d", start, prevEnd)
+		}
+
+		prevEnd = end
+	}
+
+	return b[2+runs*4:], nil
+}
+
+// checkBitmapContainer checks the bitmap container at the start of b, whose header says it holds
+// card values, and returns what follows it.
+func checkBitmapContainer(b []byte, card int) ([]byte, error) {
+	if len(b) < bitmapContainerBytes {
+		return nil, errors.NewProcessingError("lane hole data: unreadable container headers")
+	}
+
+	set := 0
+	for w := 0; w < bitmapContainerBytes; w += 8 {
+		set += bits.OnesCount64(binary.LittleEndian.Uint64(b[w:]))
+	}
+
+	if set != card {
+		return nil, errors.NewProcessingError("lane hole data: a bitmap container of %d values says %d", set, card)
+	}
+
+	return b[bitmapContainerBytes:], nil
+}
+
+// checkArrayContainer checks the array container of card values at the start of b and returns
+// what follows it.
+func checkArrayContainer(b []byte, card int) ([]byte, error) {
+	if len(b) < card*2 {
+		return nil, errors.NewProcessingError("lane hole data: unreadable container headers")
+	}
+
+	prev := -1
+
+	for v := 0; v < card; v++ {
+		value := int(binary.LittleEndian.Uint16(b[v*2:]))
+		if value <= prev {
+			return nil, errors.NewProcessingError("lane hole data: array value %d follows %d", value, prev)
+		}
+
+		prev = value
+	}
+
+	return b[card*2:], nil
 }
 
 // Check validates a stored row against itself: range bounds, tag, first hole and hole data. It

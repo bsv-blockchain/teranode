@@ -73,13 +73,17 @@ func (h *supersedeHarness) complete(t *testing.T) subtreeprocessor.NewSubtreeReq
 func (h *supersedeHarness) reset(t *testing.T) {
 	t.Helper()
 
-	response := h.stp.Reset(&model.BlockHeader{
+	require.NoError(t, h.tryReset())
+}
+
+// tryReset runs a no-op reset and returns its error, for a caller off the test goroutine.
+func (h *supersedeHarness) tryReset() error {
+	return h.stp.Reset(&model.BlockHeader{
 		Version:        1,
 		HashPrevBlock:  &chainhash.Hash{},
 		HashMerkleRoot: &chainhash.Hash{},
 		Nonce:          2269,
-	}, nil, nil, false, func() error { return nil })
-	require.NoError(t, response.Err)
+	}, nil, nil, false, func() error { return nil }).Err
 }
 
 // pausedParents is a ParentTxMap whose first read signals that the build is under way and then waits.
@@ -119,15 +123,13 @@ func TestSubtreeStoreSuperseded_ResetWhileTheMetaBuildIsPaused_ResetDoesNotWaitA
 	failedBefore := testutil.ToFloat64(prometheusBlockAssemblySubtreeStoreFailed)
 
 	// the build is blocked inside the map: a reset that waited for it would not return
-	resetDone := make(chan struct{})
+	resetDone := make(chan error, 1)
 
-	go func() {
-		defer close(resetDone)
-		h.reset(t)
-	}()
+	go func() { resetDone <- h.tryReset() }()
 
 	select {
-	case <-resetDone:
+	case err := <-resetDone:
+		require.NoError(t, err)
 	case <-time.After(10 * time.Second):
 		t.Fatal("reset waited for the paused store request")
 	}

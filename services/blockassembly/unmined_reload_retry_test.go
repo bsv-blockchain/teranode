@@ -79,6 +79,9 @@ func mockGenesisChainForReset(items *baTestItems) {
 		Return([]*model.BlockHeader{genesisHeader}, []*model.BlockHeaderMeta{genesisMeta}, nil)
 	mockBC.On("GetBlockHeaders", mock.Anything, mock.Anything, uint64(0)).
 		Return([]*model.BlockHeader{}, []*model.BlockHeaderMeta{}, nil)
+	// The reload's next block: the median time past of the headers ending at genesis.
+	mockBC.On("GetBlockHeaders", mock.Anything, mock.Anything, uint64(blockchain.MedianTimeBlocks)).
+		Return([]*model.BlockHeader{genesisHeader}, []*model.BlockHeaderMeta{genesisMeta}, nil)
 	mockBC.On("GetBlockHeaderIDs", mock.Anything, mock.Anything, mock.Anything).Return([]uint32{}, nil)
 	mockBC.On("SetState", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
@@ -405,7 +408,7 @@ func TestReset_FailedReloadKeepsTheHeldCountFullUntilTheRetrySucceeds(t *testing
 	require.GreaterOrEqual(t, stp.HeldCount(), limit, "the subtrees are empty and the retry is pending, which must not read as room")
 	require.True(t, items.blockAssembler.HeldByUnminedLoad())
 	require.Equal(t, subtreeprocessor.RefusedHeld, stp.AddBatchBounded(
-		[]subtreepkg.Node{{Hash: chainhash.HashH([]byte("while-retry-pending"))}}, []*subtreepkg.TxInpoints{{}}, false),
+		[]subtreepkg.Node{{Hash: chainhash.HashH([]byte("while-retry-pending"))}}, []*subtreepkg.TxInpoints{{}}, false, nil),
 		"mempool ingest is refused until the retry has reloaded the mempool")
 
 	flaky.down.Store(false)

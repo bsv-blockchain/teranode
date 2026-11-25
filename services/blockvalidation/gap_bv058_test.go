@@ -90,6 +90,7 @@ func newGap058Fixture(t *testing.T) *gap058Fixture {
 
 	realUtxoStore, err := sql.New(ctx, logger, tSettings, utxoStoreURL)
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = realUtxoStore.Close(context.Background()) })
 
 	subtreeStore := blobmemory.New()
 	txStore := blobmemory.New()
