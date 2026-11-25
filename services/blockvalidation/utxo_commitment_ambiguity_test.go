@@ -46,6 +46,7 @@ func newAmbiguityBlockValidation(t *testing.T, dbName string) (*BlockValidation,
 
 	store, err := sql.New(ctx, logger, tSettings, storeURL)
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = store.Close(context.Background()) })
 	require.NoError(t, store.SetBlockHeight(500))
 
 	return &BlockValidation{

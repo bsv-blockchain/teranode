@@ -469,14 +469,14 @@ Case 2: Parent whose child remains unmined (triggers preservation)
 
 **Current approach (all cases):**
 
-- Spend: 1 read (parent), 1 write (set DAH)
-- Cleanup: 1 read (parent + UTXOs), N reads (verify N children via BatchGet), 1 delete, M writes (deletedChildren)
-- **Total: 2+N reads, 1+M writes**
+- Spend: 1 read (parent), 1 write (set DAH; the same write records the spend's block height)
+- Cleanup: 1 read (parent + UTXOs), N reads (verify N children via BatchGet, only with defensive mode on), 1 delete. No replay-marker writes: a replay of a pruned transaction is refused at the spend, from the recorded spend height. Defensive mode still unspends a conflicting record's inputs on its surviving parents before the delete
+- **Total: 2+N reads, 1 write** (more on a conflicting record with defensive mode on)
 
 Where:
 
 - N = unique children for this parent (typically 2-3, up to 100+)
-- M = number of inputs (parents to update with deletedChildren) - same in both approaches
+- M = number of inputs (parents the previous approach updated with deletedChildren)
 - K = number of cleanup skip attempts in previous preservation case
 
 **Analysis:**

@@ -251,6 +251,19 @@ func (u *Server) processTxMetaUsingStoreAllowing(ctx context.Context, txHashes [
 	// TxMetaCache.UnderlyingStore).
 	store, decorateFields := u.decorateReadPath(skipCachePopulation)
 
+	// At shadow the same read gives each transaction's own lane position, for the subtree's lane
+	// bitmaps. A fresh slice: the field sets are shared.
+	laneShadow := u.laneShadow()
+
+	// oneByOneFields is what the one-by-one read asks for at shadow: what GetMeta reads, the
+	// coinbase flag among them, and the lane position, which GetMeta does not read.
+	var oneByOneFields []fields.FieldName
+
+	if laneShadow {
+		decorateFields = append(append(make([]fields.FieldName, 0, len(decorateFields)+1), decorateFields...), fields.LanePosition)
+		oneByOneFields = append(append(make([]fields.FieldName, 0, len(utxo.MetaFields)+1), utxo.MetaFields...), fields.LanePosition)
+	}
+
 	var missed atomic.Int32
 
 	// Conflicting transactions are collected by whichever batch decorates them
@@ -339,13 +352,14 @@ func (u *Server) processTxMetaUsingStoreAllowing(ctx context.Context, txHashes [
 						}
 
 						txMetaSlice[data.Idx] = metaSliceItem{
-							fee:         data.Data.Fee,
-							sizeInBytes: data.Data.SizeInBytes,
-							coinbase:    data.Data.IsCoinbase,
-							conflicting: data.Data.Conflicting,
-							creating:    data.Data.Creating,
-							isSet:       true,
-							txInpoints:  data.Data.TxInpoints,
+							fee:          data.Data.Fee,
+							sizeInBytes:  data.Data.SizeInBytes,
+							coinbase:     data.Data.IsCoinbase,
+							conflicting:  data.Data.Conflicting,
+							creating:     data.Data.Creating,
+							isSet:        true,
+							txInpoints:   data.Data.TxInpoints,
+							lanePosition: data.Data.LanePosition,
 						}
 
 						// if the tx is conflicting, we need to check if it is conflicting on the current chain
@@ -397,7 +411,30 @@ func (u *Server) processTxMetaUsingStoreAllowing(ctx context.Context, txHashes [
 							// the whole block. This branch is reachable whenever
 							// subtreevalidation_batch_missing_transactions is off.
 							if err := u.withStoreRetry(gCtx, "get tx meta", func() error {
-								return store.GetMeta(gCtx, &txHash, txMeta)
+								if !laneShadow {
+									return store.GetMeta(gCtx, &txHash, txMeta)
+								}
+
+								// GetMeta reads no lane position, so at shadow this is a
+								// one-transaction BatchDecorate for GetMeta's fields and the
+								// position. Through the txmeta cache it fills the cache,
+								// position included, as GetMeta would have.
+								one := []*utxo.UnresolvedMetaData{{Hash: txHash}}
+								if err := store.BatchDecorate(gCtx, one, oneByOneFields...); err != nil {
+									return err
+								}
+
+								if one[0].Err != nil {
+									return one[0].Err
+								}
+
+								if one[0].Data == nil {
+									return errors.NewTxNotFoundError("tx %s not found in utxo store", txHash.String())
+								}
+
+								*txMeta = *one[0].Data
+
+								return nil
 							}); err != nil {
 								if gCtx.Err() != nil {
 									return errors.NewContextCanceledError(errProcessTxMetaContextDone, gCtx.Err())
@@ -410,13 +447,14 @@ func (u *Server) processTxMetaUsingStoreAllowing(ctx context.Context, txHashes [
 							// If Creating is true, treat as missing to trigger re-processing
 							if !txMeta.Creating {
 								txMetaSlice[i+j] = metaSliceItem{
-									fee:         txMeta.Fee,
-									sizeInBytes: txMeta.SizeInBytes,
-									coinbase:    txMeta.IsCoinbase,
-									conflicting: txMeta.Conflicting,
-									creating:    txMeta.Creating,
-									isSet:       true,
-									txInpoints:  txMeta.TxInpoints,
+									fee:          txMeta.Fee,
+									sizeInBytes:  txMeta.SizeInBytes,
+									coinbase:     txMeta.IsCoinbase,
+									conflicting:  txMeta.Conflicting,
+									creating:     txMeta.Creating,
+									isSet:        true,
+									txInpoints:   txMeta.TxInpoints,
+									lanePosition: txMeta.LanePosition,
 								}
 
 								// The batched branch above collects these too; without it here,

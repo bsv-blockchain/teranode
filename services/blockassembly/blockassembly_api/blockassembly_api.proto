@@ -143,6 +143,7 @@ message AddTxRequest {
   repeated bytes utxos = 5; // the UTXOs consumed by this transaction
   bytes txInpoints = 6; // a serialized list of input outpoints for this transaction
   bool inBlock = 7; // the transaction arrived inside a block, so the in-memory transaction limit does not refuse it
+  uint32 validated_height = 8; // the block height the transaction was validated at; 0 = untagged. Block assembly drops a tagged transaction whose height falls under other consensus rules than its next block's. An older sender leaves it 0 and its transactions are admitted as before.
 }
 
 // Request for adding a batch of transactions to the mining candidate block.
@@ -229,6 +230,10 @@ message AddTxBatchColumnarRequest {
   // transaction limit does not refuse the batch. A server that predates this
   // field ignores it and applies the limit, which is the previous behaviour.
   bool in_block = 12;
+
+  // Per-transaction validated block height, as AddTxRequest.validated_height. Empty when
+  // the sender tags nothing (an older sender); otherwise one entry per transaction.
+  repeated uint32 validated_heights = 13;
 }
 
 // Request for retrieving a mining candidate block template.
