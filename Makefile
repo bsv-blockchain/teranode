@@ -181,10 +181,27 @@ install-tools:
 # -timeout is per package. stores/utxo/aerospike runs its testcontainer suite
 # under -race and coverage, which took 9m20s on main by itself in October 2026,
 # so 10m left no room for new container tests there.
+#
+# TEST_EXCLUDE drops packages (paths relative to the module) from `make test`; CI
+# sets it to run the slowest package in its own job via `make test-pkgs`.
+# TEST_COVERPROFILE names the coverage file either target writes.
+TEST_EXCLUDE ?=
+TEST_COVERPROFILE ?= coverage.out
+TEST_FLAGS = -race -tags "testtxmetacache" -count=1 -timeout=20m -coverprofile=$(TEST_COVERPROFILE) -coverpkg=./...
+UNIT_TEST_PKGS = $(filter-out $(addprefix github.com/bsv-blockchain/teranode/,$(TEST_EXCLUDE)),$(shell go list ./... | grep -v github.com/bsv-blockchain/teranode/test/ | sort))
+
 .PHONY: test
 test:
 	@command -v gotestsum >/dev/null 2>&1 || { echo "gotestsum not found. Installing..."; $(MAKE) install-tools; }
-	SETTINGS_CONTEXT=test $$(go env GOPATH)/bin/gotestsum --format pkgname -- -race -tags "testtxmetacache" -count=1 -timeout=20m -coverprofile=coverage.out -coverpkg=./... $$(go list ./... | grep -v github.com/bsv-blockchain/teranode/test/ | sort)
+	SETTINGS_CONTEXT=test $$(go env GOPATH)/bin/gotestsum --format pkgname -- $(TEST_FLAGS) $(UNIT_TEST_PKGS)
+
+# run `make test` for only the packages in TEST_PKGS (paths relative to the module),
+# e.g. make test-pkgs TEST_PKGS=stores/utxo/aerospike TEST_COVERPROFILE=coverage-aerospike.out
+.PHONY: test-pkgs
+test-pkgs:
+	@test -n "$(TEST_PKGS)" || { echo "TEST_PKGS is empty"; exit 1; }
+	@command -v gotestsum >/dev/null 2>&1 || { echo "gotestsum not found. Installing..."; $(MAKE) install-tools; }
+	SETTINGS_CONTEXT=test $$(go env GOPATH)/bin/gotestsum --format pkgname -- $(TEST_FLAGS) $(addprefix ./,$(TEST_PKGS))
 
 # run the tests too slow for `make test` under -race and coverage (TERANODE_HEAVY_TESTS), without -race.
 # The PR test job runs it after `make test`.
@@ -207,6 +224,12 @@ test-bvgaps:
 .PHONY: vet-bvgaps
 vet-bvgaps:
 	go vet -tags "bvgaps testtxmetacache" ./model/... ./services/blockvalidation/... ./services/subtreevalidation/...
+
+# run bitcoin-sv's consensus vectors (script, transaction and signature hash tests) in
+# test/consensus. `make test` skips everything under test/; the PR test job runs this after it.
+.PHONY: consensustest
+consensustest:
+	go test -count=1 -timeout=10m ./test/consensus/...
 
 # run tagged service regressions and tests in the test/longtest directory
 .PHONY: longtest
