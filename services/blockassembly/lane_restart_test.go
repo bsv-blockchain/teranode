@@ -1,0 +1,971 @@
+package blockassembly
+
+import (
+	"context"
+	"net/url"
+	"reflect"
+	"testing"
+	"time"
+
+	"github.com/RoaringBitmap/roaring/v2/roaring64"
+	"github.com/bsv-blockchain/go-bt/v2"
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/go-subtree"
+	"github.com/bsv-blockchain/teranode/model"
+	"github.com/bsv-blockchain/teranode/services/blockassembly/subtreeprocessor"
+	"github.com/bsv-blockchain/teranode/settings"
+	"github.com/bsv-blockchain/teranode/stores/utxo"
+	utxoaerospike "github.com/bsv-blockchain/teranode/stores/utxo/aerospike"
+	"github.com/bsv-blockchain/teranode/stores/utxo/utxoset"
+	testAerospike "github.com/bsv-blockchain/teranode/test/utils/aerospike"
+	"github.com/bsv-blockchain/teranode/test/utils/postgres"
+	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util/lane"
+	"github.com/bsv-blockchain/teranode/util/lanereader"
+	"github.com/bsv-blockchain/teranode/util/test"
+	"github.com/jellydator/ttlcache/v3"
+	"github.com/prometheus/client_golang/prometheus/testutil"
+	"github.com/stretchr/testify/require"
+)
+
+// laneTestStore is a store the dry run can read the window of.
+type laneTestStore interface {
+	utxo.Store
+	utxo.LaneWindowReader
+}
+
+func laneShadowSettings(t *testing.T) *settings.Settings {
+	t.Helper()
+
+	ts := test.CreateBaseTestSettings(t)
+	ts.UtxoStore.LaneMigration = settings.LaneMigrationShadow
+
+	return ts
+}
+
+func newLaneUtxosetStore(t *testing.T) laneTestStore {
+	t.Helper()
+
+	dsn, cleanup, err := postgres.SetupTestPostgresContainer()
+	test.SkipIfContainerUnavailable(t, err)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = cleanup() })
+
+	u, err := url.Parse(dsn)
+	require.NoError(t, err)
+
+	s, err := utxoset.New(context.Background(), ulogger.TestLogger{}, laneShadowSettings(t), u)
+	require.NoError(t, err)
+
+	t.Cleanup(func() { _ = s.Close(context.Background()) })
+
+	return s
+}
+
+func newLaneAerospikeStore(t *testing.T) laneTestStore {
+	t.Helper()
+
+	aerospikeURL, cleanup, err := testAerospike.InitAerospikeContainer()
+	test.SkipIfContainerUnavailable(t, err)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = cleanup() })
+
+	u, err := url.Parse(aerospikeURL)
+	require.NoError(t, err)
+
+	s, err := utxoaerospike.New(context.Background(), ulogger.TestLogger{}, laneShadowSettings(t), u)
+	require.NoError(t, err)
+
+	return s
+}
+
+// laneTestTx is a distinct transaction with two outputs.
+func laneTestTx(t *testing.T, seed uint32) *bt.Tx {
+	t.Helper()
+
+	tx := bt.NewTx()
+	require.NoError(t, tx.From("00000000000000000000000000000000000000000000000000000000000000bb", seed,
+		"76a914000000000000000000000000000000000000000088ac", 1_000_000))
+	require.NoError(t, tx.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 1_000))
+	require.NoError(t, tx.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 1_000))
+
+	return tx
+}
+
+func laneTestChild(t *testing.T, parent *bt.Tx) *bt.Tx {
+	t.Helper()
+
+	child := bt.NewTx()
+	require.NoError(t, child.FromUTXOs(&bt.UTXO{
+		TxIDHash:      parent.TxIDChainHash(),
+		Vout:          0,
+		LockingScript: parent.Outputs[0].LockingScript,
+		Satoshis:      parent.Outputs[0].Satoshis,
+	}))
+	require.NoError(t, child.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 500))
+
+	return child
+}
+
+func laneTestHash(id uint32) chainhash.Hash {
+	var h chainhash.Hash
+
+	h[0], h[1], h[2], h[3], h[31] = byte(id), byte(id>>8), byte(id>>16), byte(id>>24), 0xab
+
+	return h
+}
+
+// laneTestIndex is a lane index of main-chain blocks 900 to 1010, block ID equal to height, whose
+// rows take: lane 1 positions 1 to 10 in block 905 (folded into the floor at tip 1010), 20 in
+// block 1003, 61 in block 1004 and 60 in block 1008.
+func laneTestIndex(t *testing.T) *lane.Index {
+	t.Helper()
+
+	idx := lane.NewIndex(lane.DefaultSettleDepth)
+
+	takes := map[uint32][]uint64{905: {1, 2, 3, 4, 5, 6, 7, 8, 9, 10}, 1003: {20}, 1004: {61}, 1008: {60}}
+
+	for h := uint32(900); h <= 1010; h++ {
+		var rows []lane.MapRow
+
+		if ps, ok := takes[h]; ok {
+			var err error
+
+			rows, err = lane.BuildMapRows(1, roaring64.BitmapOf(ps...))
+			require.NoError(t, err)
+		}
+
+		require.NoError(t, idx.AddBlock(lane.IndexBlock{ID: h, Height: h, Hash: laneTestHash(h), Parent: laneTestHash(h - 1)}, rows))
+	}
+
+	require.NoError(t, idx.SetTip(laneTestHash(1010)))
+
+	return idx
+}
+
+func laneTestIDs(from, to uint32) map[uint32]bool {
+	ids := map[uint32]bool{}
+	for h := from; h <= to; h++ {
+		ids[h] = true
+	}
+
+	return ids
+}
+
+// TestLaneRestartDryRunCounts dry-runs a reset to block 1005 (tip 1010, cap 10, cap height 995) on
+// each store and checks every count. Lane 1's first grant inside the cap starts at 15, lane 2's at
+// 1,000; lane 9 has none. Each record's case is beside its write.
+func TestLaneRestartDryRunCounts(t *testing.T) {
+	if testing.Short() {
+		t.Skip("needs Postgres and Aerospike containers")
+	}
+
+	for _, tc := range []struct {
+		name  string
+		store func(t *testing.T) laneTestStore
+		// readsOldParent: the store reads P, whose last-update time the spend moved.
+		readsOldParent bool
+		marginKnown    bool
+	}{
+		{"utxoset", newLaneUtxosetStore, false, true},
+		{"aerospike", newLaneAerospikeStore, true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			store := tc.store(t)
+
+			create := func(seed uint32, tx *bt.Tx, height uint32, pos uint64) *bt.Tx {
+				if tx == nil {
+					tx = laneTestTx(t, seed)
+				}
+
+				return createLaneTestTx(t, store, tx, height, pos, true)
+			}
+
+			// Before the window: on Aerospike, more than the margin before the first grant's time;
+			// on utxoset, below its height less the margin. P is an old parent block 1003 took; B is
+			// read by neither store.
+			p := create(1, nil, 900, lane.Pack(1, 20))
+			create(2, nil, 990, lane.Pack(1, 16))
+
+			handedAt := time.Now().Add(laneRestartMargin + time.Second)
+
+			time.Sleep(2 * time.Second)
+
+			k := create(3, nil, 1000, lane.Pack(1, 30))  // unmined: keep, and in today's pool
+			create(4, nil, 1000, lane.Pack(1, 35))       // unmined: keep, not in today's pool (lanes_only)
+			x := create(5, nil, 1000, lane.Pack(1, 60))  // block 1008 took it, above the target: keep
+			y := create(6, nil, 1000, lane.Pack(1, 61))  // block 1004 took it: mined_row, and in today's pool
+			create(7, nil, 1000, lane.Pack(1, 5))        // below lane 1's floor: mined_floor before capped
+			i := create(8, nil, 1000, lane.Pack(2, 500)) // an idle grant older than the cap: capped
+			create(9, nil, 1000, lane.Pack(9, 5))        // a lane with no grant inside the cap: capped
+			c := create(10, nil, 1000, lane.Pack(1, 40)) // a double-spend's loser: conflicting
+			z := create(11, nil, 1000, lane.None)        // no_position, and in today's pool
+			create(12, nil, 995, lane.Pack(1, 17))       // in the margin: keep, counted in utxoset's margin
+
+			// The child spends P inside the window, which moves P's last-update time: Aerospike
+			// reads P and drops it as mined, utxoset does not read it. The child is kept.
+			createLaneTestTx(t, store, laneTestChild(t, p), 1000, lane.Pack(1, 45), false)
+
+			_, _, err := store.SetConflicting(ctx, []chainhash.Hash{*c.TxIDChainHash()}, true)
+			require.NoError(t, err)
+
+			started := time.Now()
+
+			time.Sleep(20 * time.Millisecond)
+			create(13, nil, 1000, lane.Pack(1, 80)) // after today's reload began: after_reload
+
+			m := laneTestTx(t, 14) // in today's pool and in no store: today_only_not_read
+
+			today := &laneRestartToday{target: laneTestHash(1005), targetHeight: 1005, ids: laneTestIDs(900, 1005), started: started}
+			today.noteRead(9)
+
+			var pool []*utxo.UnminedTransaction
+
+			for _, kept := range []struct {
+				tx  *bt.Tx
+				pos uint64
+			}{{k, lane.Pack(1, 30)}, {x, lane.Pack(1, 60)}, {y, lane.Pack(1, 61)}, {i, lane.Pack(2, 500)}, {z, lane.None}, {m, lane.Pack(1, 70)}} {
+				pool = append(pool, &utxo.UnminedTransaction{Node: &subtree.Node{Hash: *kept.tx.TxIDChainHash()}, LanePosition: kept.pos})
+			}
+
+			today.expect(len(pool))
+			today.keep(pool)
+
+			idx := laneTestIndex(t)
+
+			deps := laneRestartDeps{
+				logger:    ulogger.TestLogger{},
+				window:    store,
+				retention: 10,
+				grants: func(_ context.Context, height uint32) ([]lane.CapGrant, error) {
+					require.Equal(t, uint32(995), height)
+
+					// Lane 2's grant comes first, so the window's start is each value's earliest, not the
+					// first grant's.
+					return []lane.CapGrant{
+						{Lane: 2, First: 1_000, Height: 998, HandedAt: handedAt.Add(time.Minute)},
+						{Lane: 1, First: 15, Height: 996, HandedAt: handedAt},
+					}, nil
+				},
+				view: func(_ context.Context, _ uint32, ids map[uint32]bool) *lane.ChainView {
+					return idx.Snapshot().ViewOfIDs(ids)
+				},
+			}
+			deps.lastUpdate, _ = utxo.As[utxo.LaneLastUpdateReader](store)
+
+			res := runLaneRestartDryRun(ctx, deps, today)
+			require.Equal(t, laneRunDone, res.outcome)
+
+			minedRow := uint64(1)
+			read := uint64(12)
+
+			if tc.readsOldParent {
+				minedRow++
+				read++
+			}
+
+			require.Equal(t, map[string]uint64{
+				laneRecKeep:        5,
+				laneRecMinedRow:    minedRow,
+				laneRecMinedFloor:  1,
+				laneRecCapped:      2,
+				laneRecConflicting: 1,
+				laneRecNoPosition:  1,
+				laneRecAfterReload: 1,
+			}, res.records)
+			require.Equal(t, read, res.stats.Records)
+			require.Equal(t, tc.marginKnown, res.stats.MarginKnown)
+
+			if tc.marginKnown {
+				require.Equal(t, uint64(1), res.stats.MarginRecords, "E, written one block below the first grant")
+			}
+
+			require.Equal(t, map[string]uint64{
+				laneSampleBoth:            2,
+				laneSampleLanesOnly:       3,
+				laneSampleTodayMined:      1,
+				laneSampleTodayCapped:     1,
+				laneSampleTodayNoPosition: 1,
+				laneSampleTodayNotRead:    1,
+			}, res.sample)
+
+			require.Equal(t, uint64(9), res.todayRead)
+			require.Equal(t, uint64(6), res.todayKept)
+			require.Equal(t, uint64(1), res.sampleRate)
+			require.Equal(t, handedAt, res.window.From)
+			require.Equal(t, uint32(996), res.window.FromHeight)
+
+			// Blocks 995 to 1005; only 1003 and 1004 took positions.
+			require.Equal(t, uint64(11), res.capBlocks)
+			require.Equal(t, uint64(9), res.capBlocksWithoutRows)
+			require.GreaterOrEqual(t, res.duration, res.stats.Duration, "the run's duration covers its read")
+			require.Positive(t, res.stats.Duration)
+
+			last := map[string]float64{
+				laneLastReadRecords:          float64(read),
+				laneLastTodayReadRecords:     9,
+				laneLastTodayKept:            6,
+				laneLastWouldKeep:            5,
+				laneLastReadRatio:            float64(read) / 9,
+				laneLastCapBlocks:            11,
+				laneLastCapBlocksWithoutRows: 9,
+				laneLastSampleRate:           1,
+			}
+
+			if tc.marginKnown {
+				last[laneLastMarginRecords] = 1
+			}
+
+			requireLaneRestartPublished(t, res, last)
+
+			if !tc.marginKnown {
+				require.False(t, prometheusLaneRestartLast.DeleteLabelValues(laneLastMarginRecords), "no margin count where the store cannot tell")
+			}
+		})
+	}
+}
+
+// createLaneTestTx writes tx at height with lane position pos, spending its inputs unless
+// createOnly.
+func createLaneTestTx(t *testing.T, store utxo.Store, tx *bt.Tx, height uint32, pos uint64, createOnly bool) *bt.Tx {
+	t.Helper()
+
+	var opts []utxo.CreateOption
+	if pos != lane.None {
+		opts = append(opts, utxo.WithLanePosition(pos))
+	}
+
+	if createOnly {
+		opts = append(opts, utxo.WithCreateOnly())
+	}
+
+	_, _, err := store.SpendAndCreate(context.Background(), tx, height, opts...)
+	require.NoError(t, err)
+
+	return tx
+}
+
+// fakeLaneWindow is a window reader for the cases that need no store.
+type fakeLaneWindow struct {
+	records []utxo.LaneWindowRecord
+	called  bool
+	block   bool
+}
+
+func (f *fakeLaneWindow) ReadLaneWindow(ctx context.Context, _ utxo.LaneWindow, fn func([]utxo.LaneWindowRecord) error) (utxo.LaneWindowStats, error) {
+	f.called = true
+
+	if f.block {
+		<-ctx.Done()
+
+		return utxo.LaneWindowStats{}, ctx.Err()
+	}
+
+	return utxo.LaneWindowStats{Records: uint64(len(f.records))}, fn(f.records)
+}
+
+// The run's outcomes that need no store: no grant inside the cap, no view of the target's chain, a
+// store that cannot read the window, a run cancelled during its read, and a sample rate above one.
+func TestLaneRestartDryRunOutcomes(t *testing.T) {
+	grants := func(context.Context, uint32) ([]lane.CapGrant, error) {
+		return []lane.CapGrant{{Lane: 1, First: 15, Height: 900, HandedAt: time.Now()}}, nil
+	}
+	noView := func(context.Context, uint32, map[uint32]bool) *lane.ChainView { return nil }
+	idx := laneTestIndex(t)
+	view := func(_ context.Context, _ uint32, ids map[uint32]bool) *lane.ChainView {
+		return idx.Snapshot().ViewOfIDs(ids)
+	}
+	tx := func(id uint32, pos uint64) *utxo.UnminedTransaction {
+		return &utxo.UnminedTransaction{Node: &subtree.Node{Hash: laneTestHash(id)}, LanePosition: pos}
+	}
+
+	for _, tc := range []struct {
+		name   string
+		window *fakeLaneWindow
+		grants func(context.Context, uint32) ([]lane.CapGrant, error)
+		view   func(context.Context, uint32, map[uint32]bool) *lane.ChainView
+		pool   []*utxo.UnminedTransaction
+		rate   int // today's expected pool size, which sets the sample rate; 0 for the pool's size
+		cancel bool
+		// sampleMax lowers laneRestartLaneSampleMax when set, and overflow is the count expected past it.
+		sampleMax int
+		overflow  uint64
+		outcome   string
+		records   map[string]uint64
+		sample    map[string]uint64
+	}{
+		{
+			// No position is inside the cap: the window is not read, and today's positioned pool
+			// is capped.
+			name:    "no grant inside the cap",
+			window:  &fakeLaneWindow{},
+			grants:  func(context.Context, uint32) ([]lane.CapGrant, error) { return nil, nil },
+			view:    func(context.Context, uint32, map[uint32]bool) *lane.ChainView { panic("no view is needed") },
+			pool:    []*utxo.UnminedTransaction{tx(1, lane.Pack(1, 5)), tx(2, lane.None)},
+			outcome: laneRunNoGrant,
+			records: map[string]uint64{},
+			sample:  map[string]uint64{laneSampleTodayCapped: 1, laneSampleTodayNoPosition: 1},
+		},
+		{
+			// Without a view of the target's chain nothing could be judged, so nothing is read.
+			name:    "no view",
+			window:  &fakeLaneWindow{records: []utxo.LaneWindowRecord{{Hash: laneTestHash(1), LanePosition: lane.Pack(1, 30), CreatedAt: 1}}},
+			grants:  grants,
+			view:    noView,
+			outcome: laneRunNotReady,
+			records: map[string]uint64{},
+			sample:  map[string]uint64{},
+		},
+		{
+			name: "records the store marks",
+			window: &fakeLaneWindow{records: []utxo.LaneWindowRecord{
+				{Hash: laneTestHash(2), CreatedAt: 1},
+				{Hash: laneTestHash(3), NotMaster: true},
+				{Hash: laneTestHash(4), Missing: true},
+			}},
+			grants:  grants,
+			view:    view,
+			outcome: laneRunDone,
+			records: map[string]uint64{laneRecNoPosition: 1, laneRecNotMaster: 1, laneRecMissing: 1},
+			sample:  map[string]uint64{},
+		},
+		{
+			// Past the sample's limit a transaction only the window keeps is counted, not held.
+			name: "the lanes-only sample is full",
+			window: &fakeLaneWindow{records: []utxo.LaneWindowRecord{
+				{Hash: laneTestHash(2), LanePosition: lane.Pack(1, 30), CreatedAt: 1},
+				{Hash: laneTestHash(4), LanePosition: lane.Pack(1, 31), CreatedAt: 1},
+				{Hash: laneTestHash(6), LanePosition: lane.Pack(1, 32), CreatedAt: 1},
+			}},
+			grants:    grants,
+			view:      view,
+			sampleMax: 1,
+			outcome:   laneRunDone,
+			records:   map[string]uint64{laneRecKeep: 3},
+			sample:    map[string]uint64{laneSampleLanesOnly: 3},
+			overflow:  2,
+		},
+		{
+			name:    "the grants cannot be read",
+			window:  &fakeLaneWindow{},
+			grants:  func(context.Context, uint32) ([]lane.CapGrant, error) { return nil, context.DeadlineExceeded },
+			view:    view,
+			outcome: laneRunError,
+			records: map[string]uint64{},
+			sample:  map[string]uint64{},
+		},
+		{
+			name:    "a store that cannot read the window",
+			outcome: laneRunUnsupported,
+			records: map[string]uint64{},
+			sample:  map[string]uint64{},
+		},
+		{
+			name:    "cancelled during the read, as the next reload cancels it",
+			window:  &fakeLaneWindow{block: true},
+			grants:  grants,
+			view:    view,
+			cancel:  true,
+			outcome: laneRunCancelled,
+			records: map[string]uint64{},
+			sample:  map[string]uint64{},
+		},
+		{
+			// At one in two only even IDs (laneTestHash puts the ID in the hash's low bytes) are in
+			// either side's sample: kept record 3 and today's transaction 5 are outside it.
+			name: "a sample rate of two",
+			window: &fakeLaneWindow{records: []utxo.LaneWindowRecord{
+				{Hash: laneTestHash(2), LanePosition: lane.Pack(1, 30), CreatedAt: 1},
+				{Hash: laneTestHash(3), LanePosition: lane.Pack(1, 31), CreatedAt: 1},
+			}},
+			grants:  grants,
+			view:    view,
+			pool:    []*utxo.UnminedTransaction{tx(4, lane.Pack(1, 32)), tx(5, lane.Pack(1, 33))},
+			rate:    laneRestartSampleTarget + 1,
+			outcome: laneRunDone,
+			records: map[string]uint64{laneRecKeep: 2},
+			sample:  map[string]uint64{laneSampleLanesOnly: 1, laneSampleTodayNotRead: 1},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+
+			if tc.cancel {
+				time.AfterFunc(50*time.Millisecond, cancel)
+			}
+
+			if tc.sampleMax > 0 {
+				defer func(n int) { laneRestartLaneSampleMax = n }(laneRestartLaneSampleMax)
+
+				laneRestartLaneSampleMax = tc.sampleMax
+			}
+
+			today := &laneRestartToday{target: laneTestHash(1010), targetHeight: 1010, ids: laneTestIDs(900, 1010), started: time.Now()}
+			today.noteRead(uint64(len(tc.pool)))
+			today.expect(max(tc.rate, len(tc.pool)))
+			today.keep(tc.pool)
+
+			deps := laneRestartDeps{logger: ulogger.TestLogger{}, retention: 144, grants: tc.grants, view: tc.view}
+			if tc.window != nil {
+				deps.window = tc.window
+			}
+
+			res := runLaneRestartDryRun(ctx, deps, today)
+
+			require.Equal(t, tc.outcome, res.outcome)
+			require.Equal(t, tc.records, res.records)
+			require.Equal(t, tc.sample, res.sample)
+			require.Equal(t, tc.overflow, res.laneSampleOverflow)
+
+			if tc.outcome == laneRunNoGrant || tc.outcome == laneRunNotReady || tc.outcome == laneRunError {
+				require.False(t, tc.window.called, "no window is read")
+			}
+
+			// Only a run that ends done or no_qualifying_grant sets the last-run gauges and adds
+			// to the counters.
+			if tc.outcome != laneRunDone && tc.outcome != laneRunNoGrant {
+				initLaneRestartMetrics()
+
+				prometheusLaneRestartLast.WithLabelValues(laneLastReadRecords).Set(12_345)
+				keepBefore := testutil.ToFloat64(prometheusLaneRestartRecords.WithLabelValues(laneRecKeep))
+
+				res.stats.Records = 1
+				res.records[laneRecKeep] = 1
+				publishLaneRestart(res)
+
+				require.InDelta(t, 12_345, testutil.ToFloat64(prometheusLaneRestartLast.WithLabelValues(laneLastReadRecords)), 0)
+				require.InDelta(t, keepBefore, testutil.ToFloat64(prometheusLaneRestartRecords.WithLabelValues(laneRecKeep)), 0)
+			}
+		})
+	}
+}
+
+// laneRestartViewSource is a lane index source with one block, genesis, and no rows.
+type laneRestartViewSource struct{ header *model.BlockHeader }
+
+func (s laneRestartViewSource) GetBestBlockHeader(context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
+	return s.header, &model.BlockHeaderMeta{}, nil
+}
+
+func (s laneRestartViewSource) GetBlockHeaders(context.Context, *chainhash.Hash, uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
+	return []*model.BlockHeader{s.header}, []*model.BlockHeaderMeta{{}}, nil
+}
+
+func (laneRestartViewSource) LaneMapRows(context.Context, uint32) ([]lane.MapRow, error) {
+	return nil, nil
+}
+
+// startLaneTestReader starts the process's lane index on a chain of genesis alone, and stops it
+// when the test ends.
+func startLaneTestReader(t *testing.T, ctx context.Context) {
+	t.Helper()
+
+	ts := test.CreateBaseTestSettings(t)
+	ts.UtxoStore.LaneMigration = settings.LaneMigrationShadow
+
+	genesis := ts.ChainCfgParams.GenesisBlock.Header
+	header := &model.BlockHeader{
+		Version:        uint32(genesis.Version), //nolint:gosec // a block version
+		HashPrevBlock:  &chainhash.Hash{},
+		HashMerkleRoot: &genesis.MerkleRoot,
+		Timestamp:      uint32(genesis.Timestamp.Unix()), //nolint:gosec // a block time
+		Bits:           model.NBit{},
+		Nonce:          genesis.Nonce,
+	}
+
+	require.NotNil(t, lanereader.Start(ctx, ulogger.TestLogger{}, ts, laneRestartViewSource{header: header}))
+
+	t.Cleanup(func() {
+		lanereader.Start(context.Background(), ulogger.TestLogger{}, test.CreateBaseTestSettings(t), nil)
+	})
+}
+
+// The production view waits for the process's lane index to reach the target's height and gives
+// up at the deadline, so a run never judges against an index behind its target.
+func TestLaneRestartReaderViewWaitsForTheTarget(t *testing.T) {
+	defer func(d time.Duration) { laneRestartViewWait = d }(laneRestartViewWait)
+
+	laneRestartViewWait = 1500 * time.Millisecond
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	startLaneTestReader(t, ctx)
+
+	start := time.Now()
+	require.Nil(t, laneRestartReaderView(ctx, 1, map[uint32]bool{0: true}), "the index's tip, height 0, is below the target")
+	require.GreaterOrEqual(t, time.Since(start), laneRestartViewWait)
+
+	require.Nil(t, laneRestartReaderView(ctx, 0, map[uint32]bool{^uint32(0): true}), "the index's tip is at the target's height, but the target block is not in it")
+
+	v := laneRestartReaderView(ctx, 0, map[uint32]bool{0: true})
+	require.NotNil(t, v)
+	require.True(t, v.IDSet())
+
+	cancel()
+	require.Nil(t, laneRestartReaderView(ctx, 1, map[uint32]bool{0: true}), "a cancelled run stops waiting")
+}
+
+// laneTestBlocks is an index snapshot's block table: id to height, absent ids not loaded.
+type laneTestBlocks map[uint32]uint32
+
+func (b laneTestBlocks) Block(id uint32) (lane.BlockState, uint32) {
+	h, ok := b[id]
+	if !ok {
+		return lane.BlockNotLoaded, 0
+	}
+
+	return lane.BlockHasRows, h
+}
+
+// After a reset to a same-height or shorter branch, the index can reach the target's height on
+// the old branch; only the target block itself at that height makes the index ready.
+func TestLaneIndexHoldsTarget(t *testing.T) {
+	ids := map[uint32]bool{1: true, 2: true, 3: true}
+
+	require.False(t, laneIndexHoldsTarget(laneTestBlocks{1: 4, 2: 5}, 6, ids), "ancestors are loaded, the target is not")
+	require.False(t, laneIndexHoldsTarget(laneTestBlocks{1: 4, 2: 5, 9: 6}, 6, ids), "a block at the target's height on another branch")
+	require.True(t, laneIndexHoldsTarget(laneTestBlocks{1: 4, 2: 5, 3: 6}, 6, ids))
+}
+
+// A run from a reload reads its grants through the assembler's blockchain client and waits for the
+// process's lane index, and judges with the UTXO store's window read where the store has one.
+func TestLaneRestartDepsComeFromTheAssembler(t *testing.T) {
+	ba, _, cleanup := setupDiskSortTest(t)
+	defer cleanup()
+
+	_, grant, err := ba.blockchainClient.OpenLaneLease(context.Background(), "test")
+	require.NoError(t, err)
+
+	deps := ba.laneRestartDeps()
+
+	got, err := deps.grants(context.Background(), 0)
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	require.Equal(t, grant.Lane, got[0].Lane)
+	require.Equal(t, grant.First, got[0].First)
+
+	got, err = deps.grants(context.Background(), 1)
+	require.NoError(t, err)
+	require.Empty(t, got, "the grant was handed out at height 0")
+
+	require.Equal(t, reflect.ValueOf(laneRestartReaderView).Pointer(), reflect.ValueOf(deps.view).Pointer(), "the process's lane index")
+	require.Nil(t, deps.window, "the SQL store cannot read the window")
+	require.Equal(t, ba.settings.UtxoStore.UnminedTxRetention, deps.retention)
+}
+
+// blockingWindowStore is a UTXO store whose window read blocks until its run is cancelled, and says
+// when a read has started.
+type blockingWindowStore struct {
+	utxo.Store
+	started chan struct{}
+}
+
+func (s *blockingWindowStore) ReadLaneWindow(ctx context.Context, _ utxo.LaneWindow, _ func([]utxo.LaneWindowRecord) error) (utxo.LaneWindowStats, error) {
+	s.started <- struct{}{}
+
+	<-ctx.Done()
+
+	return utxo.LaneWindowStats{}, ctx.Err()
+}
+
+// A new reload cancels a run still reading, and stopping block assembly stops one and waits for it.
+func TestLaneRestartRunIsCancelledByTheNextReloadAndByStop(t *testing.T) {
+	defer func(d time.Duration) { laneRestartViewWait = d }(laneRestartViewWait)
+
+	laneRestartViewWait = 5 * time.Second
+
+	readerCtx, stopReader := context.WithCancel(context.Background())
+	defer stopReader()
+
+	startLaneTestReader(t, readerCtx)
+
+	setup, _, cleanup := setupDiskSortTest(t)
+	defer cleanup()
+
+	_, _, err := setup.blockchainClient.OpenLaneLease(context.Background(), "test")
+	require.NoError(t, err)
+
+	ts := *setup.settings
+	ts.UtxoStore.LaneMigration = settings.LaneMigrationShadow
+
+	store := &blockingWindowStore{started: make(chan struct{}, 1)}
+	b := &BlockAssembler{logger: ulogger.TestLogger{}, settings: &ts, utxoStore: store, blockchainClient: setup.blockchainClient}
+	header, _ := setup.CurrentBlock()
+	b.bestBlock.Store(&BestBlockInfo{Header: header, Height: 0})
+
+	ids := map[uint32]bool{0: true}
+
+	runEnds := func() *laneRestartResult {
+		b.laneRestart.mu.Lock()
+		done := b.laneRestart.done
+		b.laneRestart.mu.Unlock()
+
+		select {
+		case <-done:
+		case <-time.After(10 * time.Second):
+			t.Fatal("the run did not end")
+		}
+
+		b.laneRestart.mu.Lock()
+		defer b.laneRestart.mu.Unlock()
+
+		return b.laneRestart.last
+	}
+
+	b.startLaneRestartDryRun(context.Background(), b.newLaneRestartToday(ids, time.Now()))
+	<-store.started
+
+	b.laneRestart.mu.Lock()
+	first := b.laneRestart.done
+	b.laneRestart.mu.Unlock()
+
+	next := b.newLaneRestartToday(ids, time.Now())
+	require.NotNil(t, next)
+
+	select {
+	case <-first:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the next reload did not cancel the run")
+	}
+
+	require.Equal(t, laneRunCancelled, runEnds().outcome)
+
+	b.startLaneRestartDryRun(context.Background(), next)
+	<-store.started
+
+	// Starting another run cancels this one, even without a reload's cancel first.
+	b.laneRestart.mu.Lock()
+	second := b.laneRestart.done
+	b.laneRestart.mu.Unlock()
+
+	b.startLaneRestartDryRun(context.Background(), next)
+
+	select {
+	case <-second:
+	case <-time.After(10 * time.Second):
+		t.Fatal("starting another run did not cancel the one going")
+	}
+
+	<-store.started
+
+	jobs := ttlcache.New[chainhash.Hash, *subtreeprocessor.Job]()
+	go jobs.Start()
+
+	server := &BlockAssembly{logger: ulogger.TestLogger{}, blockAssembler: b, jobStore: jobs}
+	b.laneRestart.mu.Lock()
+	third := b.laneRestart.done
+	b.laneRestart.mu.Unlock()
+
+	require.NoError(t, server.Stop(context.Background()))
+
+	select {
+	case <-third:
+	default:
+		t.Fatal("Stop returned before the run ended")
+	}
+
+	require.Equal(t, laneRunCancelled, runEnds().outcome)
+
+	// A reload that was still going when Stop came starts no run after it.
+	b.startLaneRestartDryRun(context.Background(), next)
+
+	select {
+	case <-store.started:
+		t.Fatal("a run started after Stop")
+	case <-time.After(200 * time.Millisecond):
+	}
+}
+
+// A cap block counts as covered when the index holds its rows, or has folded them into a floor
+// the judged chain holds.
+func TestLaneCapCoverage(t *testing.T) {
+	idx := laneTestIndex(t)
+	s := idx.Snapshot()
+
+	// Blocks 900 to 905 are folded at tip 1010; 905 took positions. On the main chain the floor
+	// holds, so 905 is covered.
+	blocks, without := laneCapCoverage(s.ViewOfIDs(laneTestIDs(900, 1010)), laneTestIDs(900, 1010), 900, 905)
+	require.Equal(t, uint64(6), blocks)
+	require.Equal(t, uint64(5), without)
+
+	// On a chain that ends below the floor's anchor the floor does not hold, so its folded rows
+	// cover nothing.
+	blocks, without = laneCapCoverage(s.ViewOfIDs(laneTestIDs(900, 905)), laneTestIDs(900, 905), 900, 905)
+	require.Equal(t, uint64(6), blocks)
+	require.Equal(t, uint64(6), without)
+
+	// Unfolded blocks with rows are covered either way.
+	_, without = laneCapCoverage(s.ViewOfIDs(laneTestIDs(900, 1005)), laneTestIDs(900, 1005), 1003, 1004)
+	require.Zero(t, without)
+}
+
+// failingUnlockStore fails SetLocked, the last step of a reload that holds locked transactions.
+type failingUnlockStore struct {
+	utxo.Store
+}
+
+func (failingUnlockStore) SetLocked(context.Context, []chainhash.Hash, bool) error {
+	return context.DeadlineExceeded
+}
+
+// A reload that fails after it gathered its pool starts no run.
+func TestLaneRestartDryRunDoesNotStartAfterAFailedReload(t *testing.T) {
+	for _, diskSort := range []bool{false, true} {
+		t.Run(map[bool]string{false: "in memory", true: "disk sort"}[diskSort], func(t *testing.T) {
+			ba, utxoStore, cleanup := setupDiskSortTest(t)
+			defer cleanup()
+
+			ctx := context.Background()
+
+			for _, tx := range generateTestTransactionsForDiskSort(t, 3) {
+				_, _, err := utxoStore.SpendAndCreate(ctx, tx, 1, utxo.WithCreateOnly(), utxo.WithLocked(true))
+				require.NoError(t, err)
+			}
+
+			ba.utxoStore = failingUnlockStore{Store: utxoStore}
+			ba.settings.BlockAssembly.UnminedTxDiskSortEnabled = diskSort
+			ba.settings.BlockAssembly.OnRestartValidateParentChain = false
+			ba.settings.UtxoStore.LaneMigration = settings.LaneMigrationShadow
+
+			require.Error(t, ba.loadUnminedTransactions(ctx, false))
+
+			ba.laneRestart.mu.Lock()
+			defer ba.laneRestart.mu.Unlock()
+
+			require.Nil(t, ba.laneRestart.cancel, "no run started")
+		})
+	}
+}
+
+// requireLaneRestartPublished publishes res and checks the last-run gauges, and that the records and
+// sample counters each rose by res's counts.
+func requireLaneRestartPublished(t *testing.T, res laneRestartResult, last map[string]float64) {
+	t.Helper()
+
+	initLaneRestartMetrics()
+
+	before := map[string]float64{}
+	for _, o := range laneRecOutcomes {
+		before["r"+o] = testutil.ToFloat64(prometheusLaneRestartRecords.WithLabelValues(o))
+	}
+
+	for _, k := range laneSampleKinds {
+		before["s"+k] = testutil.ToFloat64(prometheusLaneRestartSample.WithLabelValues(k))
+	}
+
+	bytesBefore := testutil.ToFloat64(prometheusLaneRestartBytes)
+
+	publishLaneRestart(res)
+
+	for m, v := range last {
+		require.InDelta(t, v, testutil.ToFloat64(prometheusLaneRestartLast.WithLabelValues(m)), 1e-9, m)
+	}
+
+	for _, o := range laneRecOutcomes {
+		require.InDelta(t, float64(res.records[o]), testutil.ToFloat64(prometheusLaneRestartRecords.WithLabelValues(o))-before["r"+o], 1e-9, o)
+	}
+
+	for _, k := range laneSampleKinds {
+		require.InDelta(t, float64(res.sample[k]), testutil.ToFloat64(prometheusLaneRestartSample.WithLabelValues(k))-before["s"+k], 1e-9, k)
+	}
+
+	require.InDelta(t, float64(res.stats.Bytes), testutil.ToFloat64(prometheusLaneRestartBytes)-bytesBefore, 1e-9)
+}
+
+// Both sides sample by the same rule, so a transaction absent from one sample is absent from that
+// side, and the sample stays near its target however large the pool.
+func TestLaneRestartSampleRate(t *testing.T) {
+	today := &laneRestartToday{}
+	today.expect(10 * laneRestartSampleTarget)
+	require.Equal(t, uint64(10), today.rate)
+
+	today.expect(laneRestartSampleTarget)
+	require.Equal(t, uint64(1), today.rate)
+
+	today.expect(laneRestartSampleTarget + 1)
+	require.Equal(t, uint64(2), today.rate)
+}
+
+func TestLaneRestartSortedSampleGrowsWithKeptPool(t *testing.T) {
+	today := &laneRestartToday{}
+	today.expect(0)
+	today.kept = laneRestartSampleTarget
+	today.sample[laneTestHash(1)] = &laneTodayEntry{}
+	today.sample[laneTestHash(2)] = &laneTodayEntry{}
+
+	today.keepSorted([]*utxo.UnminedTransaction{{Node: &subtree.Node{Hash: laneTestHash(4)}}})
+
+	require.Equal(t, uint64(2), today.rate)
+	require.Equal(t, uint64(laneRestartSampleTarget+1), today.kept)
+	require.NotContains(t, today.sample, laneTestHash(1), "old samples must obey the final rate")
+	require.Contains(t, today.sample, laneTestHash(2))
+	require.Contains(t, today.sample, laneTestHash(4))
+
+	// A disk-sorted batch can hold a million transactions, so one call may need several doublings.
+	today.kept = 4 * laneRestartSampleTarget
+	today.keepSorted([]*utxo.UnminedTransaction{{Node: &subtree.Node{Hash: laneTestHash(5)}}})
+
+	require.Equal(t, uint64(8), today.rate)
+
+	for h := range today.sample {
+		require.True(t, laneSampled(h, today.rate), "every kept sample obeys the final rate")
+	}
+}
+
+// At off a reload gathers nothing and starts no run; at shadow each reload path starts one with
+// what it read and kept. The SQL store cannot read the window, so the run ends unsupported.
+func TestLaneRestartDryRunStartsAfterAReloadOnlyAtShadow(t *testing.T) {
+	initLaneRestartMetrics()
+
+	for _, diskSort := range []bool{false, true} {
+		for _, shadow := range []bool{false, true} {
+			name := map[bool]string{false: "in memory", true: "disk sort"}[diskSort] + "/" + map[bool]string{false: "off", true: "shadow"}[shadow]
+
+			t.Run(name, func(t *testing.T) {
+				ba, utxoStore, cleanup := setupDiskSortTest(t)
+				defer cleanup()
+
+				ctx := context.Background()
+
+				for _, tx := range generateTestTransactionsForDiskSort(t, 5) {
+					_, _, err := utxoStore.SpendAndCreate(ctx, tx, 1, utxo.WithCreateOnly())
+					require.NoError(t, err)
+				}
+
+				ba.settings.BlockAssembly.UnminedTxDiskSortEnabled = diskSort
+				ba.settings.BlockAssembly.OnRestartValidateParentChain = false
+
+				if shadow {
+					ba.settings.UtxoStore.LaneMigration = settings.LaneMigrationShadow
+				}
+
+				before := testutil.ToFloat64(prometheusLaneRestartRuns.WithLabelValues(laneRunUnsupported))
+
+				require.NoError(t, ba.loadUnminedTransactions(ctx, false))
+				ba.stopLaneRestartDryRun()
+
+				ba.laneRestart.mu.Lock()
+				last := ba.laneRestart.last
+				started := ba.laneRestart.cancel != nil
+				ba.laneRestart.mu.Unlock()
+
+				if !shadow {
+					require.False(t, started, "no run at off")
+					require.Nil(t, last)
+					require.Equal(t, before, testutil.ToFloat64(prometheusLaneRestartRuns.WithLabelValues(laneRunUnsupported)))
+
+					return
+				}
+
+				require.NotNil(t, last)
+				require.Equal(t, laneRunUnsupported, last.outcome)
+				require.Equal(t, uint64(5), last.todayRead)
+				require.Equal(t, uint64(5), last.todayKept)
+				require.Equal(t, before+1, testutil.ToFloat64(prometheusLaneRestartRuns.WithLabelValues(laneRunUnsupported)))
+			})
+		}
+	}
+}

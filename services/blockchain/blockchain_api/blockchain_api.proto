@@ -127,6 +127,9 @@ service BlockchainAPI {
   // GetLaneMapRows returns one block's lane map rows, by lane and first position (utxostore_laneMigration shadow readers).
   rpc GetLaneMapRows(GetLaneMapRowsRequest) returns (GetLaneMapRowsResponse) {}
 
+  // GetLaneCapGrants returns, for each lane with one, the first grant handed out at or above a height (block assembly's restart window, utxostore_laneMigration shadow).
+  rpc GetLaneCapGrants(GetLaneCapGrantsRequest) returns (GetLaneCapGrantsResponse) {}
+
   // GetBestBlockHeader retrieves the header of the current best block.
   rpc GetBestBlockHeader(google.protobuf.Empty) returns (GetBlockHeaderResponse) {}
 
@@ -302,6 +305,24 @@ message GetLaneMapRowsRequest {
 // GetLaneMapRowsResponse is one block's lane map rows; none for a block the map holds no row of.
 message GetLaneMapRowsResponse {
   repeated LaneMapRow rows = 1;
+}
+
+// GetLaneCapGrantsRequest names the height the grants must be handed out at or above.
+message GetLaneCapGrantsRequest {
+  uint32 height = 1;
+}
+
+// LaneCapGrant is one lane's first grant handed out at or above the requested height.
+message LaneCapGrant {
+  uint32 lane = 1;
+  uint64 first = 2;          // the grant's first position in the lane, unpacked
+  uint32 height = 3;         // the chain tip recorded with the grant
+  int64 handed_at_nanos = 4; // when the grant was recorded, Unix nanoseconds on the database's clock
+}
+
+// GetLaneCapGrantsResponse holds one grant per lane that has one, by lane.
+message GetLaneCapGrantsResponse {
+  repeated LaneCapGrant grants = 1;
 }
 
 // GetBlockRequest represents a request to retrieve a block by its hash.
