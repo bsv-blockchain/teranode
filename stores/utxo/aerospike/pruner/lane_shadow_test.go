@@ -8,6 +8,7 @@ import (
 
 	"github.com/RoaringBitmap/roaring/v2/roaring64"
 	"github.com/bsv-blockchain/aerospike-client-go/v8"
+	"github.com/bsv-blockchain/aerospike-client-go/v8/types"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/stores/blob/memory"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
@@ -357,9 +358,26 @@ func TestLaneShadowReadsPagesBeforeTheDelete(t *testing.T) {
 		fields.LanePosition.String(), fields.SpendingLanePositions.String()}, svc.queryBinNames(), "defensive mode reads utxos already")
 	svc.defensiveEnabled = false
 
-	var pageReads []aerospike.BatchRecordIfc
+	// Deletes run, so the order of the page read and the delete batch shows.
+	svc.settings.Pruner.SkipDeletions = false
+
+	var (
+		pageReads []aerospike.BatchRecordIfc
+		calls     []string
+	)
 
 	svc.batchOperateFn = func(_ *aerospike.BatchPolicy, records []aerospike.BatchRecordIfc) error {
+		if _, isRead := records[0].(*aerospike.BatchRead); !isRead {
+			calls = append(calls, "delete")
+
+			for _, r := range records {
+				r.BatchRec().ResultCode = types.OK
+			}
+
+			return nil
+		}
+
+		calls = append(calls, "read")
 		pageReads = append(pageReads, records...)
 
 		for _, r := range records {
@@ -379,6 +397,7 @@ func TestLaneShadowReadsPagesBeforeTheDelete(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 1, processed)
 	require.Len(t, pageReads, 1, "one page read")
+	require.Equal(t, []string{"read", "delete"}, calls, "the page is read before the delete batch")
 	require.Equal(t, shallow+1, laneVerdicts(t, lanereader.PruneDelete, lanereader.PruneKeep, lanereader.ReasonSpenderShallow), "judged by the page's slot")
 }
 

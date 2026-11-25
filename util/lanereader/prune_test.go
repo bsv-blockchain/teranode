@@ -138,7 +138,7 @@ func TestPruneJudgeAtOffDoesNothing(t *testing.T) {
 	j := r.PruneJudge(PruneStoreUtxoset, 288)
 	require.Nil(t, j)
 
-	require.Equal(t, PruneVerdict{}, j.Judge(true, candidate(lane.Pack(7, 500))))
+	require.Equal(t, PruneVerdict{}, j.Judge(TodayDelete, candidate(lane.Pack(7, 500))))
 	j.Reads("page", 3)
 	j.Unjudged("record_error", 1)
 	require.Zero(t, j.Elapsed())
@@ -291,7 +291,7 @@ func TestPruneJudgeEachReason(t *testing.T) {
 
 			r := tc.chain(newPruneIndex(t, 100)).build(300)
 			j := r.PruneJudge(PruneStoreUtxoset, retention)
-			require.Equal(t, tc.want, j.Judge(true, tc.c))
+			require.Equal(t, tc.want, j.Judge(TodayDelete, tc.c))
 		})
 	}
 }
@@ -305,7 +305,7 @@ func TestPruneJudgeBelowTheFloor(t *testing.T) {
 	require.Equal(t, lane.ViaFloor, r.MainView().Lookup(lane.Pack(9, 40)).Via)
 
 	j := r.PruneJudge(PruneStoreAerospike, 288)
-	require.Equal(t, PruneVerdict{PruneDelete, ReasonSettled}, j.Judge(true, candidate(lane.Pack(7, 500), lane.Pack(9, 40))))
+	require.Equal(t, PruneVerdict{PruneDelete, ReasonSettled}, j.Judge(TodayDelete, candidate(lane.Pack(7, 500), lane.Pack(9, 40))))
 	require.Equal(t, [3]uint64{0, 0, 2}, j.vias)
 }
 
@@ -317,7 +317,7 @@ func TestPruneJudgeNoRows(t *testing.T) {
 
 	r := p.build(300)
 	j := r.PruneJudge(PruneStoreAerospike, 288)
-	require.Equal(t, PruneVerdict{PruneCannotJudge, ReasonNoRows}, j.Judge(true, candidate(lane.Pack(7, 500), lane.Pack(9, 40))))
+	require.Equal(t, PruneVerdict{PruneCannotJudge, ReasonNoRows}, j.Judge(TodayDelete, candidate(lane.Pack(7, 500), lane.Pack(9, 40))))
 }
 
 func TestPruneJudgeNotReady(t *testing.T) {
@@ -325,7 +325,7 @@ func TestPruneJudgeNotReady(t *testing.T) {
 	r.idx.Store(lane.NewIndex(100))
 
 	j := r.PruneJudge(PruneStoreUtxoset, 288)
-	require.Equal(t, PruneVerdict{PruneCannotJudge, ReasonNotReady}, j.Judge(false, candidate(lane.Pack(7, 500))))
+	require.Equal(t, PruneVerdict{PruneCannotJudge, ReasonNotReady}, j.Judge(TodayKeep, candidate(lane.Pack(7, 500))))
 }
 
 // TestPruneJudgeCountsBesideToday: each verdict is counted with today's decision, in Done, and the
@@ -345,12 +345,12 @@ func TestPruneJudgeCountsBesideToday(t *testing.T) {
 	}
 
 	j := r.PruneJudge(PruneStoreAerospike, 288)
-	j.Judge(true, settled)
-	j.Judge(false, unmined)
-	j.Judge(true, unmined)
-	j.Judge(false, settled)
-	j.Judge(false, settled)
-	j.Judge(true, candidate(lane.None))
+	j.Judge(TodayDelete, settled)
+	j.Judge(TodayKeep, unmined)
+	j.Judge(TodayDelete, unmined)
+	j.Judge(TodayKeep, settled)
+	j.Judge(TodayKeep, settled)
+	j.Judge(TodayDelete, candidate(lane.None))
 	j.Reads("page", 2)
 	j.Unjudged("record_error", 1)
 
@@ -382,7 +382,7 @@ func TestPruneJudgeSkipsARepeatedSpender(t *testing.T) {
 	r := newPruneIndex(t, 100).at(150, laneRows(t, 7, 500)).at(190, laneRows(t, 9, 40)).build(300)
 
 	j := r.PruneJudge(PruneStoreAerospike, 288)
-	require.Equal(t, PruneVerdict{PruneDelete, ReasonSettled}, j.Judge(true, candidate(lane.Pack(7, 500), lane.Pack(9, 40), lane.Pack(9, 40), lane.Pack(9, 40))))
+	require.Equal(t, PruneVerdict{PruneDelete, ReasonSettled}, j.Judge(TodayDelete, candidate(lane.Pack(7, 500), lane.Pack(9, 40), lane.Pack(9, 40), lane.Pack(9, 40))))
 	require.Equal(t, uint64(2), j.vias[lane.ViaFloor])
 }
 

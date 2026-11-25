@@ -18,7 +18,9 @@ import (
 // partition is older than the journal retention the pruner drops it, after moving forward the rows
 // whose spender still waits to be mined or was mined recently (collectCopyForward). So the
 // per-record decision the lane rule is judged against is each row of a retiring partition: carried
-// forward is today's keep, dropped with the partition is today's delete. The row is the parent's slot
+// forward for a waiting spender is today's keep, dropped with the partition is today's delete. A row
+// carried for a recently mined spender is kept as the undo copy a reorg inside the journal retention
+// may need, not for the parent check, so it is counted keep_undo. The row is the parent's slot
 // for that output: its lane_position is the parent's position (where the lane schema installed the
 // column), and the spender's position is not on it, so the rule reads it from the spender's identity
 // row, containment rows or preserved copy (teranode_lane_pruner_extra_reads_total kind position).
@@ -65,8 +67,8 @@ SELECT k.txid, COALESCE(i.lane_position, m.lane_position, p.lane_position)
 type laneJournalJudge struct {
 	s     *Store
 	judge *lanereader.PruneJudge
-	// kept is the carried set, each (output key, parent, spender).
-	kept map[carriedKey]struct{}
+	// kept is the carried set, each (output key, parent, spender), true for a waiting spender's.
+	kept map[carriedKey]bool
 	// backlog is a pass retiring more than one journal partition, which judges none.
 	backlog bool
 	// deadline ends the pass's judging.
@@ -118,9 +120,9 @@ func (s *Store) newLaneJournalJudge(carry *copyForwardSet, retiring int) *laneJo
 		return l
 	}
 
-	l.kept = make(map[carriedKey]struct{}, len(carry.ukeys))
+	l.kept = make(map[carriedKey]bool, len(carry.ukeys))
 	for i := range carry.ukeys {
-		l.kept[newCarriedKey(carry.ukeys[i], carry.parents[i], carry.spenders[i])] = struct{}{}
+		l.kept[newCarriedKey(carry.ukeys[i], carry.parents[i], carry.spenders[i])] = i < carry.unmined
 	}
 
 	return l
@@ -299,8 +301,15 @@ func (l *laneJournalJudge) judgeBatch(ctx context.Context, batch []laneJournalRo
 
 		c.Spenders = append(c.Spenders[:0], lanereader.PruneSpender{Hash: spender, Pos: positions[string(r.spender)]})
 
-		_, kept := l.kept[newCarriedKey(r.ukey, r.parent, r.spender)]
-		l.judge.Judge(!kept, &c)
+		today := lanereader.TodayDelete
+		if waiting, kept := l.kept[newCarriedKey(r.ukey, r.parent, r.spender)]; kept {
+			today = lanereader.TodayKeepUndo
+			if waiting {
+				today = lanereader.TodayKeep
+			}
+		}
+
+		l.judge.Judge(today, &c)
 	}
 
 	l.judge.Time(start)

@@ -655,6 +655,9 @@ const copyForwardBatch = 10_000
 type copyForwardSet struct {
 	ukeys, parents, spenders [][]byte
 	seen                     map[string]struct{}
+	// unmined is how many leading entries are spends of waiting transactions; the rest are spends
+	// of recently mined ones, carried for a reorg.
+	unmined int
 }
 
 // collectSpenders runs stmt, whose rows are a spender's txid and its packed inputs, and adds
@@ -730,6 +733,8 @@ func (s *Store) collectCopyForward(ctx context.Context, keepFrom uint32) (*copyF
 	if err := s.collectSpenders(ctx, c, "unmined", unminedInpointsSQL); err != nil {
 		return nil, err
 	}
+
+	c.unmined = len(c.ukeys)
 
 	// A block at or below the highest checkpoint is never un-mined (unMine refuses it), so the
 	// read starts above it. During a sync below the checkpoint it reads no partition at all.

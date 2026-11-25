@@ -31,11 +31,26 @@ const (
 	PruneStoreAerospike = "aerospike"
 )
 
-// Today's decision, the today label.
+// Today's decision, the today label. PruneKeepUndo is a utxoset journal row today carries forward
+// only as the undo copy a reorg inside the journal retention may need, because its spender is mined:
+// the parent check is not why it is kept, so it is counted apart from PruneKeep.
 const (
-	PruneDelete = "delete"
-	PruneKeep   = "keep"
+	PruneDelete   = "delete"
+	PruneKeep     = "keep"
+	PruneKeepUndo = "keep_undo"
 )
+
+// PruneToday is today's decision on a candidate, the one acted on.
+type PruneToday uint8
+
+// Today's decisions, named by todayNames.
+const (
+	TodayDelete PruneToday = iota
+	TodayKeep
+	TodayKeepUndo
+)
+
+var todayNames = [3]string{PruneDelete, PruneKeep, PruneKeepUndo}
 
 // The lane rule's answer, the lanes label: PruneDelete, PruneKeep, or PruneCannotJudge, which keeps
 // too.
@@ -171,8 +186,8 @@ type PruneJudge struct {
 	// noRows is whether the main chain holds a loaded block with no rows.
 	noRows bool
 
-	// verdicts counts by today (0 delete, 1 keep), lanes and reason.
-	verdicts [2][3][numReasons]uint64
+	// verdicts counts by today, lanes and reason.
+	verdicts [3][3][numReasons]uint64
 	vias     [3]uint64
 	reads    map[string]uint64
 	unjudged map[string]uint64
@@ -207,29 +222,24 @@ func (r *Reader) PruneJudge(store string, retention uint32) *PruneJudge {
 }
 
 // Judge answers c by the lane rule, counts the answer beside today's decision, and logs the first
-// disagreements of each direction. todayDeletes is today's decision, the only one acted on. It reads
+// disagreements of each direction. today is today's decision, the only one acted on. It reads
 // no clock except to rate-limit a disagreement's log line: the store times each batch it judges, the
 // decoding of the candidates included (Time).
-func (j *PruneJudge) Judge(todayDeletes bool, c *PruneCandidate) PruneVerdict {
+func (j *PruneJudge) Judge(today PruneToday, c *PruneCandidate) PruneVerdict {
 	if j == nil {
 		return PruneVerdict{}
 	}
 
 	lanes, reason, d := j.decide(c)
 
-	today := 1
-	if todayDeletes {
-		today = 0
-	}
-
 	j.verdicts[today][lanes][reason]++
 
 	v := PruneVerdict{Lanes: lanesNames[lanes], Reason: reasonNames[reason]}
 
 	switch {
-	case todayDeletes && lanes == lanesKeep:
+	case today == TodayDelete && lanes == lanesKeep:
 		j.logDisagreement(0, c, v, d)
-	case !todayDeletes && lanes == lanesDelete:
+	case today == TodayKeep && lanes == lanesDelete:
 		j.logDisagreement(1, c, v, d)
 	}
 
@@ -397,7 +407,7 @@ func (j *PruneJudge) Done() {
 		for lanes, byReason := range byLanes {
 			for reason, n := range byReason {
 				if n > 0 {
-					prometheusLanePrunerVerdicts.WithLabelValues(j.store, [2]string{PruneDelete, PruneKeep}[today], lanesNames[lanes], reasonNames[reason]).Add(float64(n))
+					prometheusLanePrunerVerdicts.WithLabelValues(j.store, todayNames[today], lanesNames[lanes], reasonNames[reason]).Add(float64(n))
 				}
 			}
 		}

@@ -88,7 +88,7 @@ func (l *laneShadow) markDeleted(rec *aerospike.Result) {
 // laneMaster is one master record waiting for its pages.
 type laneMaster struct {
 	c     lanereader.PruneCandidate
-	today bool
+	today lanereader.PruneToday
 	pages []*aerospike.Key
 }
 
@@ -107,6 +107,11 @@ func (l *laneShadow) run() {
 
 	defer l.judge.Done()
 
+	if !l.s.defensiveEnabled {
+		// Outside defensive mode the query read each record's utxos bin only for the rule.
+		l.judge.Reads("utxos_bin", len(l.records))
+	}
+
 	start := time.Now()
 
 	masters := make([]laneMaster, 0, len(l.records))
@@ -120,8 +125,9 @@ func (l *laneShadow) run() {
 	)
 
 	for _, rec := range l.records {
-		today := next < len(l.deleted) && l.deleted[next] == rec
-		if today {
+		today := lanereader.TodayKeep
+		if next < len(l.deleted) && l.deleted[next] == rec {
+			today = lanereader.TodayDelete
 			next++
 		}
 

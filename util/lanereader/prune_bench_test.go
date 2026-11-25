@@ -63,7 +63,7 @@ func runPruneBench(b *testing.B, r *Reader, retention uint32, candidates []*Prun
 	b.ResetTimer()
 
 	for b.Loop() {
-		j.Judge(true, candidates[i])
+		j.Judge(TodayDelete, candidates[i])
 
 		i++
 		if i == len(candidates) {

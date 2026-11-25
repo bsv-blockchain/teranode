@@ -125,23 +125,39 @@ var (
 	journalParentPos  = lane.Pack(7, 500) // block 150: below the floor
 	journalSettled    = lane.Pack(9, 40)  // block 190: below the floor
 	journalSettled2   = lane.Pack(9, 42)  // block 190: below the floor
+	journalSettled3   = lane.Pack(9, 43)  // block 190: below the floor
 	journalShallow    = lane.Pack(9, 41)  // block 250: 50 deep
 	journalUnmined    = lane.Pack(9, 99)  // no block
 	journalIndexBlock = map[uint32][]uint64{
 		150: {journalParentPos},
-		190: {journalSettled, journalSettled2},
+		190: {journalSettled, journalSettled2, journalSettled3},
 		250: {journalShallow},
 		260: {lane.Pack(7, 1000), lane.Pack(9, 1000)},
 	}
 )
 
+// newUncheckpointedLaneCopyStore is newLaneCopyStore with no checkpoints, so the copy-forward also
+// carries the spends of transactions mined at test heights.
+func newUncheckpointedLaneCopyStore(t *testing.T) (*Store, context.Context) {
+	t.Helper()
+
+	s, ctx := newUncheckpointedLaneStore(t)
+	require.NoError(t, s.PrepareLaneSchema(ctx))
+
+	full := reopenWithFlag(t, s, true)
+	require.True(t, full.laneCoinColumn)
+
+	return full, ctx
+}
+
 // TestJournalDropJudgesEveryRowByTheLaneRule retires a journal partition at shadow and checks each of
-// its rows is judged beside today's decision: carried forward is today's keep, dropped its delete.
+// its rows is judged beside today's decision: carried forward for a waiting spender is today's keep,
+// for a recently mined one keep_undo, and dropped is its delete.
 func TestJournalDropJudgesEveryRowByTheLaneRule(t *testing.T) {
-	s, ctx := newLaneCopyStore(t)
+	s, ctx := newUncheckpointedLaneCopyStore(t)
 	installJournalLaneIndex(t, journalIndexBlock)
 
-	parent := mkTx(t, 5, 5_000)
+	parent := mkTx(t, 6, 5_000)
 	_, err := s.Create(ctx, parent, 1_000, utxo.WithLanePosition(journalParentPos), minedAt(1_000, 1))
 	require.NoError(t, err)
 
@@ -157,6 +173,12 @@ func TestJournalDropJudgesEveryRowByTheLaneRule(t *testing.T) {
 	// Carried, as it still waits to be mined, while the lane index says a deep block took it: the
 	// direction that must never happen in a soak, counted.
 	spendWith(t, s, ctx, parent, 4, 1_010, utxo.WithLanePosition(journalSettled2))
+	// Carried because its spender, spent at 1,010, was mined at 1,500, at or above the journal's keep
+	// height: today keeps the row as the undo copy a reorg may need, not for the parent check, so it
+	// counts keep_undo, outside the direction that must stay at zero.
+	minedLate := spendWith(t, s, ctx, parent, 5, 1_010, utxo.WithLanePosition(journalSettled3))
+	_, err = s.SetMinedMulti(ctx, hashes(minedLate), utxo.MinedBlockInfo{BlockID: 9, BlockHeight: 1_500, OnLongestChain: true})
+	require.NoError(t, err)
 
 	require.NoError(t, s.SetBlockHeight(1_728))
 
@@ -166,6 +188,7 @@ func TestJournalDropJudgesEveryRowByTheLaneRule(t *testing.T) {
 		"today only":  journalVerdicts(t, lanereader.PruneDelete, lanereader.PruneKeep, lanereader.ReasonSpenderShallow),
 		"no position": journalVerdicts(t, lanereader.PruneDelete, lanereader.PruneCannotJudge, lanereader.ReasonNoPosition),
 		"lanes only":  journalVerdicts(t, lanereader.PruneKeep, lanereader.PruneDelete, lanereader.ReasonSettled),
+		"undo":        journalVerdicts(t, lanereader.PruneKeepUndo, lanereader.PruneDelete, lanereader.ReasonSettled),
 		"rows":        journalReads(t, "journal_row"),
 		"positions":   journalReads(t, "position"),
 	}
@@ -179,11 +202,15 @@ func TestJournalDropJudgesEveryRowByTheLaneRule(t *testing.T) {
 	require.Equal(t, before["today only"]+1, journalVerdicts(t, lanereader.PruneDelete, lanereader.PruneKeep, lanereader.ReasonSpenderShallow))
 	require.Equal(t, before["no position"]+1, journalVerdicts(t, lanereader.PruneDelete, lanereader.PruneCannotJudge, lanereader.ReasonNoPosition))
 	require.Equal(t, before["lanes only"]+1, journalVerdicts(t, lanereader.PruneKeep, lanereader.PruneDelete, lanereader.ReasonSettled))
-	require.Equal(t, before["rows"]+5, journalReads(t, "journal_row"))
-	require.Equal(t, before["positions"]+5, journalReads(t, "position"), "each spender's position; the parent's is on the journal row")
+	require.Equal(t, before["undo"]+1, journalVerdicts(t, lanereader.PruneKeepUndo, lanereader.PruneDelete, lanereader.ReasonSettled))
+	require.Equal(t, before["rows"]+6, journalReads(t, "journal_row"))
+	require.Equal(t, before["positions"]+6, journalReads(t, "position"), "each spender's position; the parent's is on the journal row")
+
+	_, judged := s.laneJudgedLeaves.Load(uint32(1_010 / SpendJournalPartitionBlocks))
+	require.True(t, judged, "the partition is remembered as judged")
 
 	// Today's decision is the one acted on: the carried rows survive, the rest are gone.
-	for vout, carried := range []bool{true, false, false, false, true} {
+	for vout, carried := range []bool{true, false, false, false, true, true} {
 		_, ok := journalLane(t, s, ctx, parent, uint32(vout)) //nolint:gosec // five outputs
 		require.Equal(t, carried, ok, "output %d", vout)
 	}

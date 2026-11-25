@@ -23,7 +23,7 @@ func initPruneMetrics() {
 			Namespace: "teranode",
 			Subsystem: "lane_pruner",
 			Name:      "verdicts_total",
-			Help:      "Pruning decisions judged by the lane rule beside today's rule, at utxostore_laneMigration shadow, by store (utxoset, aerospike), today's decision (delete, keep), the lane rule's (delete, keep, cannot_judge) and reason (settled; parent_ or spender_ unmined, off_chain, shallow; conflicting; no_position, not_ready, not_loaded, no_rows, spender_unread). today=keep with lanes=delete is the direction that must never happen. Only today's decision is acted on",
+			Help:      "Pruning decisions judged by the lane rule beside today's rule, at utxostore_laneMigration shadow, by store (utxoset, aerospike), today's decision (delete; keep; keep_undo, a utxoset journal row carried only for a reorg because its spender is mined), the lane rule's (delete, keep, cannot_judge) and reason (settled; parent_ or spender_ unmined, off_chain, shallow; conflicting; no_position, not_ready, not_loaded, no_rows, spender_unread). today=keep with lanes=delete is the direction that must never happen. Only today's decision is acted on",
 		}, []string{"store", "today", "lanes", "reason"})
 		prometheusLanePrunerLookups = promauto.NewCounterVec(prometheus.CounterOpts{
 			Namespace: "teranode",
@@ -35,13 +35,13 @@ func initPruneMetrics() {
 			Namespace: "teranode",
 			Subsystem: "lane_pruner",
 			Name:      "extra_reads_total",
-			Help:      "Records or rows the pruner read only for the lane rule, beyond what today's pruner reads, by store and kind (aerospike: page; utxoset: journal_row, position)",
+			Help:      "Records or rows the pruner read only for the lane rule, beyond what today's pruner reads, by store and kind (aerospike: page, a page record read for its slots, and utxos_bin, a record the query returned with the utxos bin it reads only for the rule; utxoset: journal_row, position)",
 		}, []string{"store", "kind"})
 		prometheusLanePrunerUnjudged = promauto.NewCounterVec(prometheus.CounterOpts{
 			Namespace: "teranode",
 			Subsystem: "lane_pruner",
 			Name:      "unjudged_total",
-			Help:      "Pruning decisions the lane rule did not judge, by store and reason (aerospike: record_error, a record the query returned with an error or no txid, and chunk_error, the records of a chunk whose processing failed; utxoset: leaf_error, one per retiring journal partition whose judging stopped early, and budget, one per partition the pass's time budget left unjudged)",
+			Help:      "Pruning decisions the lane rule did not judge, by store and reason (aerospike: record_error, a record the query returned with an error or no txid, and chunk_error, the records of a chunk whose processing failed; utxoset: backlog, one per retiring journal partition of a pass that retires more than one, none of which is judged; leaf_error, one per retiring journal partition whose judging stopped early; and budget, one per partition the pass's time budget left unjudged)",
 		}, []string{"store", "reason"})
 		prometheusLanePrunerSeconds = promauto.NewCounterVec(prometheus.CounterOpts{
 			Namespace: "teranode",
