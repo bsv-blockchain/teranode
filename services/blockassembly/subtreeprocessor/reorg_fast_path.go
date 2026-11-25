@@ -131,6 +131,16 @@ func (stp *SubtreeProcessor) planFastReorg(ctx context.Context, moveBackBlocks, 
 		}
 	}
 
+	// Admission of a moved-back transaction (the tx era, the dropped set) and the drop of its pending
+	// descendants live in the slow path; the fast path declines rather than duplicate them.
+	if era := stp.txEra.Load(); era != nil && lost.Height != 0 && (lost.Height < era.lo || lost.Height > era.hi) {
+		return nil, "tx_era"
+	}
+
+	if stp.droppedCount.Load() > 0 {
+		return nil, "dropped_txs"
+	}
+
 	if lost.CoinbaseTx == nil {
 		return nil, "read_failed"
 	}

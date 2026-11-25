@@ -826,3 +826,60 @@ func TestReorgDifferential_FastPathDeclineKeepsPerBlockSets(t *testing.T) {
 	require.Equal(t, want, keptBlocks(declined))
 	require.Equal(t, keptBlocks(flagOff), keptBlocks(declined))
 }
+
+// withSetup runs setup on the scenario before path does.
+func withSetup(path reorgPath, setup func(sc *reorgScenario)) reorgPath {
+	return func(t testing.TB, sc *reorgScenario) error {
+		setup(sc)
+
+		return path(t, sc)
+	}
+}
+
+// The admission of a moved-back transaction (the tx era and the dropped set) and the drop of its pending
+// descendants live in the slow path. The fast path declines when the era could refuse the lost block, or
+// when a drop exists, rather than duplicate them.
+func TestReorgDifferential_FastPathDeclinesWhenTheTxEraRefusesTheLostBlock(t *testing.T) {
+	cfg := smallScenarioConfig()
+
+	// the era is 100..199 and the lost block is at height 1
+	setEra := func(sc *reorgScenario) { sc.stp.SetTxEra(150) }
+
+	var rec fastPathRun
+
+	requireReorgEquivalent(t, cfg, withSetup(slowReference, setEra), withSetup(recordingFastPath(&rec), setEra))
+	require.False(t, rec.applied, "the fast path must decline")
+	require.Equal(t, []string{"tx_era"}, rec.reasons)
+}
+
+func TestReorgDifferential_FastPathDeclinesWhenADroppedTxExists(t *testing.T) {
+	cfg := smallScenarioConfig()
+
+	// the parent of every lost-block transaction is dropped, so the D1 ones are refused
+	seed := func(sc *reorgScenario) {
+		sc.stp.droppedMu.Lock()
+		defer sc.stp.droppedMu.Unlock()
+
+		for _, id := range sc.lostIDs {
+			sc.stp.recordDroppedLocked(sc.confirmedParent(id))
+		}
+	}
+
+	var rec fastPathRun
+
+	requireReorgEquivalent(t, cfg, withSetup(slowReference, seed), withSetup(recordingFastPath(&rec), seed))
+	require.False(t, rec.applied, "the fast path must decline")
+	require.Equal(t, []string{"dropped_txs"}, rec.reasons)
+}
+
+func TestReorgDifferential_FastPathStaysFastWhenTheEraHoldsTheLostBlock(t *testing.T) {
+	// an era that includes the lost block's height, and no drops: the common case stays fast
+	requireFastPathMatchesSlow(t, smallScenarioConfig())
+
+	setEra := func(sc *reorgScenario) { sc.stp.SetTxEra(sc.lost.Height) }
+
+	var rec fastPathRun
+
+	requireReorgEquivalent(t, smallScenarioConfig(), withSetup(slowReference, setEra), withSetup(recordingFastPath(&rec), setEra))
+	require.True(t, rec.applied, "the fast path must apply, it declined: %v", rec.reasons)
+}
