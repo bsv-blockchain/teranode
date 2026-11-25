@@ -228,7 +228,7 @@ func (l *laneJournalJudge) judgeLeafRows(ctx context.Context, leaf uint32) (int,
 
 	for q.Next() {
 		var (
-			r   laneJournalRow
+			r     laneJournalRow
 			pos   *int64
 			flags int16
 		)

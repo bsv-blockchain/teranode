@@ -342,9 +342,9 @@ func TestReaderCountsEachKind(t *testing.T) {
 		// The block-list form, on the main chain.
 		v := r.MainView()
 		listCases := []struct {
-			kind  string
-			via   lane.Via
-			pos   uint64
+			kind     string
+			via      lane.Via
+			pos      uint64
 			today    []uint32
 			coinbase bool
 		}{
