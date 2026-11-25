@@ -1488,9 +1488,9 @@ func (b *Block) closeDeferredLocked() error {
 //     replaced the old SQL-store restriction;
 //   - the block is a confirmed ancestor of the pinned checkpoint
 //     (b.checkpointConfirmedAncestor, set only by the blockvalidation service via
-//     SetCheckpointConfirmedAncestor; defaults false). This closes the window before the
-//     checkpoint block is stored and the fork-below-the-checkpoint window that a
-//     height-only gate would leave open;
+//     SetCheckpointConfirmedAncestor; defaults false). Unless legacy sync's header proof
+//     vouches for the block, this closes the window before the checkpoint block is stored
+//     and the fork-below-the-checkpoint window that a height-only gate would leave open;
 //   - the network defines a hardcoded checkpoint and 0 < b.Height <= that
 //     checkpoint.
 //
@@ -1565,7 +1565,8 @@ func (b *Block) checkBlockRewardAndFees(params *chaincfg.Params, storeSupportsOu
 	//     coinbase, making the arithmetic redundant. This closes the two windows a height-only
 	//     skip leaves open: (a) a below-checkpoint block validated before the block with the
 	//     pinned hash is stored, and (b) a fork block below the checkpoint, which the walk from
-	//     the pinned hash never reaches. In both the predicate is false, so the check runs —
+	//     the pinned hash never reaches. In both the predicate is false unless legacy sync supplied
+	//     the header proof, which ties the hash to the pinned checkpoint directly, so the check runs —
 	//     correctly, because non-fast-path blocks carry real fees. A fast-path block that was
 	//     invalidated and is reconsidered still passes, because the walk follows stored parent
 	//     links whatever their validity. The predicate is

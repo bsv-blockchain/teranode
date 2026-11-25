@@ -4,8 +4,8 @@ package blockvalidation
 // predicate that gates the below-checkpoint coinbase no-inflation skip in
 // model.checkBlockRewardAndFees. The predicate must be TRUE only when the walk back from the
 // stored block with the pinned checkpoint hash lands on the block, and FALSE (forcing full
-// no-inflation enforcement) while the checkpoint block is not stored, for a block not stored
-// yet, for a fork block, above the checkpoint, and on any lookup error.
+// no-inflation enforcement) without a header proof while the checkpoint block is not stored, for
+// a block not stored yet, for a fork block, and on any lookup error, and above the checkpoint always.
 
 import (
 	"context"

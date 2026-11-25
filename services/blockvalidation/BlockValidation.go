@@ -201,6 +201,10 @@ type revalidateBlockData struct {
 	// clearing that only runs under IsRevalidation.
 	useFullValidation bool
 
+	// headerProven carries legacy netsync's header proof (ValidateBlockOptions.HeaderProven) into
+	// the from-scratch retry, so the retry keeps the checkpoint ancestry the first attempt had.
+	headerProven bool
+
 	// isRevalidation preserves an operator reconsider request across the re-queue. Without it
 	// the retry re-enters with the flag false, trips the existence check, and is rejected with
 	// "block already exists as invalid" on every attempt.
@@ -1006,6 +1010,18 @@ const (
 // its re-queue on failure. It must not block on anything slow: the worker is the channel's only
 // consumer, the channel holds 2, and once it is full enqueueRevalidation blocks its callers inside
 // ValidateBlockWithOptions.
+// retryOptions rebuilds the options of the full-validation retry from the carried fields.
+func (d revalidateBlockData) retryOptions() *ValidateBlockOptions {
+	return &ValidateBlockOptions{
+		PeerID:                  d.peerID,
+		IsRequeuedRetry:         true,
+		IsRevalidation:          d.isRevalidation,
+		DisableOptimisticMining: d.disableOptimisticMining,
+		IsCatchupMode:           d.isCatchupMode,
+		HeaderProven:            d.headerProven,
+	}
+}
+
 func (u *BlockValidation) processRevalidation(ctx context.Context, blockData revalidateBlockData) {
 	startTime := time.Now()
 
@@ -1018,13 +1034,7 @@ func (u *BlockValidation) processRevalidation(ctx context.Context, blockData rev
 	// worker's retry counter below stays the only retry budget.
 	var err error
 	if blockData.useFullValidation {
-		err = u.ValidateBlockWithOptions(ctx, blockData.block, blockData.baseURL, &ValidateBlockOptions{
-			PeerID:                  blockData.peerID,
-			IsRequeuedRetry:         true,
-			IsRevalidation:          blockData.isRevalidation,
-			DisableOptimisticMining: blockData.disableOptimisticMining,
-			IsCatchupMode:           blockData.isCatchupMode,
-		})
+		err = u.ValidateBlockWithOptions(ctx, blockData.block, blockData.baseURL, blockData.retryOptions())
 	} else {
 		err = u.reValidateBlock(ctx, blockData)
 	}
@@ -3945,6 +3955,7 @@ func (u *BlockValidation) ReValidateBlockFromScratch(block *model.Block, baseURL
 		// opted out of, and flipping its per-block logging from debug to info.
 		disableOptimisticMining: opts.DisableOptimisticMining,
 		isCatchupMode:           opts.IsCatchupMode,
+		headerProven:            opts.HeaderProven,
 		// CachedHeaders is deliberately NOT carried: the run it holds is what failed, and the
 		// retry should re-fetch a fresh one from the store.
 	}
@@ -4018,7 +4029,7 @@ func (u *BlockValidation) enqueueRevalidation(data revalidateBlockData) {
 // alone; the reasoning is recorded on the expected-nBits block in ValidateBlockWithOptions.
 
 // checkpointConfirmedAncestor reports whether block b is an ancestor of the block with the
-// highest hardcoded checkpoint hash, by the stored headers. It is the ancestry predicate gating the
+// highest hardcoded checkpoint hash, by the stored headers or by legacy sync's header proof. It is the ancestry predicate gating the
 // below-checkpoint coinbase no-inflation skip in model.checkBlockRewardAndFees (threaded via
 // Block.SetCheckpointConfirmedAncestor): only an ancestor of the pinned checkpoint may skip,
 // because the pinned hash then transitively commits its coinbase.
@@ -4031,11 +4042,11 @@ func (u *BlockValidation) enqueueRevalidation(data revalidateBlockData) {
 // blocks included, in no defined order.
 //
 // It returns false, forcing full no-inflation enforcement, for any block above the checkpoint
-// (the skip cannot fire there anyway), while the block with the pinned hash is not yet stored (a
+// (the skip cannot fire there anyway). Without headerProven it also returns false while the block with the pinned hash is not yet stored (a
 // forward sync that has not reached the checkpoint), and for a block the walk does not land on.
 // Fail-safe: any lookup error yields false, so the no-inflation check runs.
 //
-// It also returns false for a block that is not in the blockchain store yet: the walk only ever
+// Without headerProven it also returns false for a block that is not in the blockchain store yet: the walk only ever
 // lands on a stored block. That case costs one indexed existence lookup, and it covers every block
 // arriving for the first time, a peer-served fork below the checkpoint included.
 //
