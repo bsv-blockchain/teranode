@@ -1,0 +1,13 @@
+diff --git a/services/blockassembly/subtreeprocessor/reorg_fast_path.go b/services/blockassembly/subtreeprocessor/reorg_fast_path.go
+index eedea8cbc..b1b11f3df 100644
+--- a/services/blockassembly/subtreeprocessor/reorg_fast_path.go
++++ b/services/blockassembly/subtreeprocessor/reorg_fast_path.go
+@@ -137,7 +137,7 @@ func (stp *SubtreeProcessor) planFastReorg(ctx context.Context, moveBackBlocks,
+ 		return nil, "tx_era"
+ 	}
+ 
+-	if stp.droppedCount.Load() > 0 {
++	if false && stp.droppedCount.Load() > 0 { // mutant: dropped txs are ignored
+ 		return nil, "dropped_txs"
+ 	}
+ 
