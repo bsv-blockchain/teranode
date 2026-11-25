@@ -468,8 +468,17 @@ func (stp *SubtreeProcessor) applyFastReorg(ctx context.Context, plan *fastReorg
 
 	// Effective D1 goes into the map before the subtrees are built and sent: the meta of a subtree
 	// that holds one reads its inpoints from the map.
+	// At utxostore_laneMigration shadow each goes in with the lane position the UTXO store holds for it,
+	// as in a move-back, so the subtrees built from it keep complete lane bitmaps.
+	d1Positions := stp.lanePositionsFromUtxoStore(ctx, lost, d1Hashes)
+
 	for i := range plan.d1Nodes {
-		if _, inserted := stp.currentTxMap.SetIfNotExists(plan.d1Nodes[i].Hash, &plan.d1Inpoints[i]); !inserted {
+		var d1Position uint64
+		if d1Positions != nil {
+			d1Position = d1Positions[i]
+		}
+
+		if _, inserted := stp.currentTxMap.SetIfNotExistsAt(plan.d1Nodes[i].Hash, &plan.d1Inpoints[i], d1Position); !inserted {
 			return nil, errors.NewProcessingError("[reorgInPlace][%s] effective D1 transaction %s is already in the tx map", lost.String(), plan.d1Nodes[i].Hash.String())
 		}
 	}
@@ -514,7 +523,17 @@ func (stp *SubtreeProcessor) applyFastReorg(ctx context.Context, plan *fastReorg
 	stp.currentSubtree.Store(newSubtree)
 	stp.retireChainedSubtrees()
 
-	if err = stp.parallelBuildRemainderSubtrees(ctx, kept, true); err != nil {
+	// The remainder pass of the slow path reads each kept node's position from the map; so does this.
+	var positions []uint64
+
+	if stp.keepsLanePositions() {
+		positions = make([]uint64, len(kept))
+		for i := range kept {
+			positions[i] = stp.currentTxMap.Position(kept[i].Hash)
+		}
+	}
+
+	if err = stp.parallelBuildRemainderSubtrees(ctx, kept, positions, true); err != nil {
 		return nil, errors.NewProcessingError("[reorgInPlace][%s] error building the subtrees", lost.String(), err)
 	}
 
