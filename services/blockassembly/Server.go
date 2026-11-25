@@ -303,10 +303,6 @@ func (ba *BlockAssembly) Health(ctx context.Context, checkLiveness bool) (int, s
 		checks = append(checks, health.Check{Name: "UTXOStore", Check: ba.utxoStore.Health})
 	}
 
-	if ba.blockAssembler != nil {
-		checks = append(checks, health.Check{Name: "DeepReorgHalt", Check: ba.blockAssembler.deepReorgHaltHealth})
-	}
-
 	return health.CheckAll(ctx, checkLiveness, checks)
 }
 

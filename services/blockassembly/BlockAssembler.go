@@ -2081,7 +2081,7 @@ func (b *BlockAssembler) Start(ctx context.Context) (err error) {
 	}
 
 	// A halt on a deep reorg outlives the restart. Block assembly still starts on its own tip and
-	// pool, which the reorg never touched, so the node stays readable while it waits.
+	// pool, which the reorg never touched, and answers the operator's reset.
 	if err = b.loadDeepReorgHalt(ctx); err != nil {
 		return err
 	}

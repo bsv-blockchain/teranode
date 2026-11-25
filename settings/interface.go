@@ -114,7 +114,7 @@ func (s *Settings) GetUtxoStoreBlockHeightRetention() uint32 {
 // record is kept: the UTXO store retention plus utxostore_unminedTxRetention, or 0 when the
 // retention is 0 and pruning is off. A child that spent the record while unmined and was mined
 // within the unmined retention keeps its parent for the full retention after it is mined; a
-// child unmined for longer has the pruner preserve the parent instead, so neither leaves a gap.
+// child unmined for longer has the pruner preserve the parent instead, while preservation is on.
 func (s *Settings) GetUtxoStoreSpentDeleteRetention() uint32 {
 	retention := s.GetUtxoStoreBlockHeightRetention()
 	if retention == 0 {

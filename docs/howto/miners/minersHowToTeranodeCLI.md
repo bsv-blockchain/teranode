@@ -291,10 +291,11 @@ teranode-cli resetblockassembly [--full-reset]
 Resets the block assembly state. Useful for clearing stuck transactions or resetting mining state.
 
 It is also the only way out of a deep reorg halt. When a reorg moves back at least the UTXO store
-retention, block assembly stops serving mining candidates, fails its readiness check, logs
-`MANUAL INTERVENTION REQUIRED` and sets `teranode_blockassembly_deep_reorg_halted` to 1, because the
-transactions the reorg returns to the mempool may spend parents the pruner already deleted. The
-halt survives a restart. Running `resetblockassembly` accepts that loss: it moves block assembly to
+retention, block assembly stops serving mining candidates, logs `MANUAL INTERVENTION REQUIRED` and
+sets `teranode_blockassembly_deep_reorg_halted` to 1, because the transactions the reorg returns to
+the mempool may spend parents the pruner already deleted. About 20 blocks later
+(`blockvalidation_maxBlocksBehindBlockAssembly`) block validation and the pruner stop as well, so
+the node stops following the chain. The halt survives a restart. Running `resetblockassembly` accepts that loss: it moves block assembly to
 the best block, reloads the mempool from the store, drops what it cannot find and lifts the halt.
 
 Options:

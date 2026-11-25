@@ -3,7 +3,6 @@ package blockassembly
 import (
 	"context"
 	"fmt"
-	"net/http"
 	"testing"
 	"time"
 
@@ -12,6 +11,7 @@ import (
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/services/blockassembly/blockassembly_api"
 	"github.com/bsv-blockchain/teranode/services/blockassembly/subtreeprocessor"
+	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
@@ -78,8 +78,8 @@ func deepReorgFixture(t *testing.T) (*baTestItems, *model.BlockHeader, *subtreep
 	return items, b[1], mockStp
 }
 
-// A reorg that moves back the retention halts block assembly loudly: no candidates, no
-// solutions, readiness failing, no further block moves, and a record that survives a restart.
+// A reorg that moves back the retention halts block assembly loudly: no candidates, no block
+// moves, a record that survives a restart, and readiness left alone so clients still reach it.
 func TestDeepReorgHaltStopsBlockAssembly(t *testing.T) {
 	initPrometheusMetrics()
 
@@ -94,13 +94,19 @@ func TestDeepReorgHaltStopsBlockAssembly(t *testing.T) {
 	_, _, err = ba.GetMiningCandidate(t.Context())
 	require.True(t, errors.Is(err, errors.ErrServiceUnavailable), "candidates are refused while halted, got %v", err)
 
-	status, msg, err := ba.deepReorgHaltHealth(t.Context(), false)
+	// Readiness stays as it was: a Service that drops unready pods would cut the operator off.
+	server := &BlockAssembly{logger: ba.logger, settings: ba.settings, blockAssembler: ba}
+	_, msg, err := server.Health(t.Context(), false)
 	require.NoError(t, err)
-	require.Equal(t, http.StatusServiceUnavailable, status)
-	require.Contains(t, msg, "resetblockassembly")
+	require.NotContains(t, msg, "halted", "the halt is not a readiness check")
 
-	// A new block announcement leaves block assembly on its tip.
+	// A new block announcement does nothing at all: a blockchain client with no expectations
+	// panics on any call the pass would make.
+	realClient := ba.blockchainClient
+	ba.blockchainClient = &blockchain.Mock{}
 	ba.processNewBlockAnnouncement(t.Context())
+	ba.blockchainClient = realClient
+
 	tip, _ := ba.CurrentBlock()
 	require.NotEqual(t, b2.Hash().String(), tip.Hash().String())
 
@@ -149,10 +155,9 @@ func TestDeepReorgHaltLiftedByOperatorReset(t *testing.T) {
 	mockStp.AssertCalled(t, "Reset", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 }
 
-// A halted block assembly still starts, so the halt never turns into a restart loop, and it
-// ends up halted: from its record, or, when the record was never written, by meeting the same
-// reorg again from the tip it kept. The pass that halts records a pending mark of skipped fork
-// transactions first, as processNewBlockAnnouncement does, and the start must finish it too.
+// A halted block assembly still starts, finishes the pending skipped-fork mark the halting pass
+// recorded, and ends up halted: from its record, or by meeting the same reorg again when the
+// record was lost.
 func TestDeepReorgHaltSurvivesRestart(t *testing.T) {
 	for _, recordLost := range []bool{false, true} {
 		t.Run(fmt.Sprintf("recordLost=%t", recordLost), func(t *testing.T) {
@@ -203,4 +208,61 @@ func TestDeepReorgHaltRefusesMiningSolution(t *testing.T) {
 
 	_, err = server.SubmitMiningSolution(t.Context(), req)
 	require.True(t, errors.Is(err, errors.ErrServiceUnavailable), "halted: the solution is refused, got %v", err)
+}
+
+// Each resetblockassembly command reaches block assembly as an operator reset, the one reset that
+// runs while halted, and lifts the halt and its record.
+func TestDeepReorgHaltLiftedByResetCommands(t *testing.T) {
+	commands := map[string]func(*BlockAssembly, context.Context) error{
+		"ResetBlockAssembly": func(s *BlockAssembly, ctx context.Context) error {
+			_, err := s.ResetBlockAssembly(ctx, &blockassembly_api.EmptyMessage{})
+			return err
+		},
+		"ResetBlockAssemblyFully": func(s *BlockAssembly, ctx context.Context) error {
+			_, err := s.ResetBlockAssemblyFully(ctx, &blockassembly_api.EmptyMessage{})
+			return err
+		},
+		"ResetBlockAssemblyValidateInputs": func(s *BlockAssembly, ctx context.Context) error {
+			_, err := s.ResetBlockAssemblyValidateInputs(ctx, &blockassembly_api.EmptyMessage{})
+			return err
+		},
+	}
+
+	for name, command := range commands {
+		t.Run(name, func(t *testing.T) {
+			initPrometheusMetrics()
+
+			items, b2, mockStp := deepReorgFixture(t)
+			ba := items.blockAssembler
+			server := &BlockAssembly{logger: ba.logger, settings: ba.settings, blockAssembler: ba}
+
+			require.Error(t, ba.handleReorg(t.Context(), b2, 2))
+			require.True(t, ba.DeepReorgHalted())
+
+			mockStp.On("Reset", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+				Return(subtreeprocessor.ResetResponse{})
+
+			require.NoError(t, command(server, t.Context()))
+
+			// The command queues the request for block assembly's loop, which this fixture does
+			// not run, so the test plays the loop's part.
+			var req resetRequest
+			select {
+			case req = <-ba.resetCh:
+			case <-time.After(10 * time.Second):
+				t.Fatal("the command queued no reset")
+			}
+
+			require.True(t, req.Operator, "a resetblockassembly command is an operator reset")
+			ba.handleResetRequests(t.Context(), req)
+
+			require.False(t, ba.DeepReorgHalted())
+
+			data, err := items.blockchainClient.GetState(t.Context(), DeepReorgHaltStateKey)
+			require.NoError(t, err)
+			recorded, err := parseDeepReorgHalt(data)
+			require.NoError(t, err)
+			require.Nil(t, recorded)
+		})
+	}
 }

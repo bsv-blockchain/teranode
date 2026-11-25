@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
-	"net/http"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
@@ -68,15 +67,15 @@ func (b *BlockAssembler) DeepReorgHalted() bool {
 	return b.deepReorgHalt.Load() != nil
 }
 
-// deepReorgHaltMessage is the operator-facing description of a halt, for the log, the error
-// mining callers get and the readiness check.
+// deepReorgHaltMessage is the operator-facing description of a halt, for the log and the error
+// mining callers get.
 func (b *BlockAssembler) deepReorgHaltMessage() string {
 	h := b.deepReorgHalt.Load()
 	if h == nil {
 		return ""
 	}
 
-	return fmt.Sprintf("block assembly halted: a reorg to %s at height %d moves back %d blocks, at least the UTXO retention of %d, and the transactions it returns to the mempool may spend parents the pruner deleted; run resetblockassembly to reload the mempool from the store and drop what it cannot find",
+	return fmt.Sprintf("block assembly halted: a reorg to %s at height %d moves back %d blocks, at least the UTXO retention of %d, and the transactions it returns to the mempool may spend parents the pruner deleted; block validation and the pruner stop once the chain is blockvalidation_maxBlocksBehindBlockAssembly blocks past block assembly; run resetblockassembly to reload the mempool from the store, drop what it cannot find and follow the chain again",
 		h.target, h.height, h.moveBack, b.settings.GetUtxoStoreBlockHeightRetention())
 }
 
@@ -148,14 +147,4 @@ func (b *BlockAssembler) clearDeepReorgHalt(ctx context.Context) error {
 	b.logger.Infof("[BlockAssembler] deep reorg halt lifted by an operator reset")
 
 	return nil
-}
-
-// deepReorgHaltHealth is the readiness check that fails while halted. It is never a liveness
-// check: a restart does not lift the halt, so failing liveness would only restart in a loop.
-func (b *BlockAssembler) deepReorgHaltHealth(_ context.Context, _ bool) (int, string, error) {
-	if b.DeepReorgHalted() {
-		return http.StatusServiceUnavailable, b.deepReorgHaltMessage(), nil
-	}
-
-	return http.StatusOK, "OK", nil
 }

@@ -192,8 +192,9 @@ was mined within `UnminedTxRetention` blocks therefore keeps the parent for a fu
 its own block; a child unmined for longer has its parents preserved instead. So a reorg up to the
 UTXO retention minus one never needs a parent the pruner deleted, whatever `UnminedTxRetention` is,
 and raising `UnminedTxRetention` keeps spent records that many blocks longer. This holds only while
-the pruner runs at every height: a height it skips can leave a child mined during the skip without
-either protection.
+the pruner runs at every height with parent preservation on (`pruner_skipPreserveParents` off and
+`utxostore_parentPreservationBlocks` above 0): a height it skips can leave a child mined during the
+skip without either protection, and with preservation off a child unmined for longer has none.
 
 When `SkipProcessExpiredPreservations` is off (the default), each pruner cycle clears expired
 `PreserveUntil` markers and re-stamps `DeleteAtHeight` on preserved parents that have become safe to
