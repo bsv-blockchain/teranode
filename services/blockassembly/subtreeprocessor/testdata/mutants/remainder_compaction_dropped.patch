@@ -1,15 +1,13 @@
 diff --git a/services/blockassembly/subtreeprocessor/SubtreeProcessor.go b/services/blockassembly/subtreeprocessor/SubtreeProcessor.go
-index 2d7cbd297..44911abe5 100644
+index eaa1b059b..c6bf1e5d9 100644
 --- a/services/blockassembly/subtreeprocessor/SubtreeProcessor.go
 +++ b/services/blockassembly/subtreeprocessor/SubtreeProcessor.go
-@@ -8659,8 +8659,8 @@ func (stp *SubtreeProcessor) processRemainderTxHashes(ctx context.Context, chain
- 		// when wasInserted[idx] was true, so leaf order in the resulting subtrees
- 		// is unchanged.
- 		kept := flatNodes[:0]
--		for idx, node := range flatNodes {
+@@ -9087,7 +9087,7 @@ func (stp *SubtreeProcessor) processRemainderTxHashes(ctx context.Context, chain
+ 		keptPositions := positions[:0]
+ 
+ 		for idx, node := range flatNodes {
 -			if wasInserted[idx] {
-+		for _, node := range flatNodes {
 +			{ // mutant: keep a node whose hash was already inserted
  				kept = append(kept, node)
- 			}
- 		}
+ 
+ 				if positions != nil {
