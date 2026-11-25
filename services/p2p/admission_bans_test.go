@@ -312,6 +312,45 @@ func TestOnPeerBanned_BlockFailureLoggedAndBanStillApplied(t *testing.T) {
 	require.Len(t, client.AdmissionCalls(), 6)
 }
 
+// With p2p_enforce_bans_at_admission off, no path reaches the gater: operator
+// bans, a score-threshold ban, the sweep, a clear and an operator disconnect
+// make no Block* or Unblock* call. The bans are still enforced on messages
+// and the peers still leave the registry.
+func TestAdmission_OffSwitchMakesNoBusCalls(t *testing.T) {
+	s, reg, client := newAdmissionTestServer(t)
+	s.settings.P2P.EnforceBansAtAdmission = false
+
+	banAddr(t, s, "198.51.100.9")
+	banAddr(t, s, "203.0.113.0/24")
+	require.True(t, s.banList.IsBanned("198.51.100.9"))
+
+	scored := mustNewPeerID(t)
+	reg.Register(&blockchain.PeerInfo{ID: scored.String()})
+	client.peers = []p2pMessageBus.PeerInfo{{ID: scored.String(), Addrs: []string{fmt.Sprintf("/ip4/192.0.2.4/tcp/9905/p2p/%s", scored)}}}
+	s.onPeerBanned(scored.String(), ReasonSpam)
+	require.True(t, s.shouldSkipBannedPeer(scored.String(), "test"), "the ban is enforced on messages")
+	require.True(t, s.banList.IsBanned("192.0.2.4"))
+
+	listed := mustNewPeerID(t)
+	banPeerInRegistry(t, reg, listed)
+	s.primeBannedPeers()
+	s.banSweepTick(context.Background())
+
+	other := mustNewPeerID(t)
+	reg.Register(&blockchain.PeerInfo{ID: other.String()})
+	resp, err := s.DisconnectPeer(context.Background(), &p2p_api.DisconnectPeerRequest{PeerId: other.String()})
+	require.NoError(t, err)
+	require.True(t, resp.Success)
+	_, inRegistry := s.getPeer(other)
+	require.False(t, inRegistry, "an operator disconnect still drops the peer at the application layer")
+
+	unbanAddr(t, s, "198.51.100.9")
+	_, err = s.ClearBanned(context.Background(), &emptypb.Empty{})
+	require.NoError(t, err)
+
+	require.Empty(t, client.AdmissionCalls())
+}
+
 func admissionErrors(l *warnRecorder) []string {
 	var out []string
 
