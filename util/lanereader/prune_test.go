@@ -336,7 +336,11 @@ func TestPruneJudgeNotReady(t *testing.T) {
 	r.idx.Store(lane.NewIndex(100))
 
 	j := r.PruneJudge(PruneStoreUtxoset, 288)
+	require.False(t, j.Ready())
 	require.Equal(t, PruneVerdict{PruneCannotJudge, ReasonNotReady}, j.Judge(TodayKeep, candidate(lane.Pack(7, 500))))
+
+	require.False(t, (*PruneJudge)(nil).Ready())
+	require.True(t, newPruneIndex(t, 100).at(150, laneRows(t, 7, 500)).build(300).PruneJudge(PruneStoreUtxoset, 288).Ready())
 }
 
 // TestPruneJudgeCountsBesideToday: each verdict is counted with today's decision, in Done, and the

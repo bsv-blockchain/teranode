@@ -476,3 +476,57 @@ func TestJournalDropReadsAPreservedParentsPosition(t *testing.T) {
 
 	require.Equal(t, settled+1, journalVerdicts(t, lanereader.PruneDelete, lanereader.PruneDelete, lanereader.ReasonSettled))
 }
+
+// TestJournalDropReadsNoPositionWithoutTheLaneColumn: a store whose transaction tables have no
+// lane_position column reads no position; every row is judged with none.
+func TestJournalDropReadsNoPositionWithoutTheLaneColumn(t *testing.T) {
+	s, ctx := newLaneStore(t)
+	installJournalLaneIndex(t, journalIndexBlock)
+
+	parent := mkTx(t, 1, 5_000)
+	_, err := s.Create(ctx, parent, 1_000, utxo.WithLanePosition(journalParentPos), minedAt(1_000, 1))
+	require.NoError(t, err)
+
+	spendWith(t, s, ctx, parent, 0, 1_010, utxo.WithLanePosition(journalSettled), minedAt(1_010, 2))
+
+	require.NoError(t, s.SetBlockHeight(1_728))
+
+	s.laneColumn = false
+
+	noPosition := journalVerdicts(t, lanereader.PruneDelete, lanereader.PruneCannotJudge, lanereader.ReasonNoPosition)
+	positions := journalReads(t, "position")
+
+	_, err = s.dropSpendJournalPartitionsBelow(ctx, 1_440)
+	require.NoError(t, err)
+
+	require.Equal(t, noPosition+1, journalVerdicts(t, lanereader.PruneDelete, lanereader.PruneCannotJudge, lanereader.ReasonNoPosition))
+	require.Equal(t, positions, journalReads(t, "position"), "no position read")
+}
+
+// TestJournalDropReadsNothingBeforeTheIndexIsReady: before the lane index's first snapshot every
+// verdict would be not_ready, so the retiring partition is not read for the rule, and still drops.
+func TestJournalDropReadsNothingBeforeTheIndexIsReady(t *testing.T) {
+	s, ctx := newLaneCopyStore(t)
+
+	lanereader.InstallIndex(ulogger.TestLogger{}, lane.NewIndex(100), 100)
+	t.Cleanup(func() { lanereader.Start(context.Background(), nil, test.CreateBaseTestSettings(t), nil) })
+
+	parent := mkTx(t, 2, 5_000)
+	_, err := s.Create(ctx, parent, 1_000, utxo.WithLanePosition(journalParentPos), minedAt(1_000, 1))
+	require.NoError(t, err)
+
+	spendWith(t, s, ctx, parent, 0, 1_010, utxo.WithLanePosition(journalSettled), minedAt(1_010, 2))
+
+	require.NoError(t, s.SetBlockHeight(1_728))
+
+	notReady := journalUnjudged(t, "not_ready")
+	rows := journalReads(t, "journal_row")
+
+	dropped, err := s.dropSpendJournalPartitionsBelow(ctx, 1_440)
+	require.NoError(t, err)
+	require.Positive(t, dropped)
+
+	require.Equal(t, notReady+1, journalUnjudged(t, "not_ready"))
+	require.Equal(t, rows, journalReads(t, "journal_row"), "no row read")
+	require.Zero(t, judgedLeaves(s), "a partition judged before the index was ready can be judged on a retry")
+}

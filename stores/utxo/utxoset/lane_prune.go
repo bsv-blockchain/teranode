@@ -31,7 +31,8 @@ import (
 // only when it retires a single journal partition, as it does at the tip once every 288 blocks; a
 // pass catching up a backlog judges none of them (unjudged backlog). A pass spends at most
 // laneJudgePassBudget judging; an error or the budget ends a partition's judging (unjudged
-// leaf_error) and the drop goes on. And a partition is judged once per process, so a pass that
+// leaf_error) and the drop goes on. The rows judged before then stay in the counts, so for that
+// partition the counts cover only the rows read before it stopped. And a partition is judged once per process, so a pass that
 // retries a failed drop does not count its rows again.
 //
 // What this does not judge: tx_body partitions and their carry, tx_mined partitions and
@@ -156,6 +157,11 @@ func (l *laneJournalJudge) judgeLeaf(ctx context.Context, leaf uint32) {
 		return
 	case !time.Now().Before(l.deadline):
 		l.judge.Unjudged("budget", 1)
+
+		return
+	case !l.judge.Ready():
+		// Every verdict would be not_ready, so the partition is not read for it.
+		l.judge.Unjudged("not_ready", 1)
 
 		return
 	}

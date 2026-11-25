@@ -179,8 +179,12 @@ func (l *laneShadow) run() {
 		m.c.Conflicting = conflicting
 
 		start := len(spenders)
-		spenders = appendSlotSpenders(spenders, bins[l.s.fieldUtxos], bins[binSpendLanePos])
+
+		var whole bool
+
+		spenders, whole = appendSlotSpenders(spenders, bins[l.s.fieldUtxos], bins[binSpendLanePos])
 		m.c.Spenders = spenders[start:len(spenders):len(spenders)]
+		m.c.Unread = !whole
 
 		if n, _ := extra.(int); n > 0 {
 			for num := 1; num <= n; num++ {
@@ -202,7 +206,8 @@ func (l *laneShadow) run() {
 		}
 	}
 
-	if pageKeys > 0 {
+	// Before the index's first snapshot every verdict is not_ready, so no page is read for it.
+	if pageKeys > 0 && l.judge.Ready() {
 		// The page reads are I/O, counted as reads, not as the rule's time.
 		l.judge.Time(start)
 		l.readPages(masters, pageKeys)
@@ -291,7 +296,12 @@ func (l *laneShadow) readPages(masters []laneMaster, n int) {
 				continue
 			}
 
-			m.c.Spenders = appendSlotSpenders(m.c.Spenders, br.Record.Bins[l.s.fieldUtxos], br.Record.Bins[binSpendLanePos])
+			var whole bool
+
+			m.c.Spenders, whole = appendSlotSpenders(m.c.Spenders, br.Record.Bins[l.s.fieldUtxos], br.Record.Bins[binSpendLanePos])
+			if !whole {
+				m.c.Unread = true
+			}
 		}
 	}
 }
@@ -316,22 +326,38 @@ func binLanePosition(v interface{}) uint64 {
 	return p
 }
 
-// utxoSpendingDataEnd is where a spent utxo entry's spending data ends: the 32-byte utxo hash, the
-// spender's 32-byte hash and its 4-byte input index.
-const utxoSpendingDataEnd = 68
+// An unspent utxo entry is the 32-byte utxo hash alone. utxoSpendingDataEnd is where a spent one's
+// spending data ends: the 32-byte utxo hash, the spender's 32-byte hash and its 4-byte input index.
+const (
+	utxoUnspentSize     = 32
+	utxoSpendingDataEnd = 68
+)
 
 // appendSlotSpenders appends the spender of every spent output of one record: utxos is the record's
 // utxos bin and positions its spendLanePos bin, eight bytes per output, zero for none. A frozen
-// output has no spender. A positions bin that is malformed gives every spender no position.
-func appendSlotSpenders(dst []lanereader.PruneSpender, utxos, positions interface{}) []lanereader.PruneSpender {
+// output has no spender. A positions bin that is malformed gives every spender no position. whole is
+// false when an output entry is neither nil (unspendable), 32 bytes (unspent) nor 68 bytes (spent or
+// frozen): its spender, if any, is unknown, so the caller marks the record unread.
+func appendSlotSpenders(dst []lanereader.PruneSpender, utxos, positions interface{}) (_ []lanereader.PruneSpender, whole bool) {
 	list, _ := utxos.([]interface{})
 	pos, _ := positions.([]byte)
 
 	valid := len(pos)%lane.PositionSize == 0 && len(pos)/lane.PositionSize <= len(list)
+	whole = true
 
 	for i, raw := range list {
+		if raw == nil {
+			continue
+		}
+
 		b, ok := raw.([]byte)
-		if !ok || len(b) < utxoSpendingDataEnd {
+		if !ok || (len(b) != utxoUnspentSize && len(b) != utxoSpendingDataEnd) {
+			whole = false
+
+			continue
+		}
+
+		if len(b) == utxoUnspentSize {
 			continue
 		}
 
@@ -352,7 +378,7 @@ func appendSlotSpenders(dst []lanereader.PruneSpender, utxos, positions interfac
 		dst = append(dst, s)
 	}
 
-	return dst
+	return dst, whole
 }
 
 func allZero(b []byte) bool {

@@ -11,6 +11,7 @@ import (
 	"github.com/bsv-blockchain/aerospike-client-go/v8"
 	"github.com/bsv-blockchain/aerospike-client-go/v8/types"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	subtreepkg "github.com/bsv-blockchain/go-subtree"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/stores/blob/memory"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
@@ -435,14 +436,33 @@ func TestAppendSlotSpenders(t *testing.T) {
 
 	unspent := chainhash.HashH([]byte("unspent"))
 
-	got := appendSlotSpenders(nil, []interface{}{spentUtxo("0", a), unspent[:], nil, spentUtxo("3", b)},
+	got, whole := appendSlotSpenders(nil, []interface{}{spentUtxo("0", a), unspent[:], nil, spentUtxo("3", b)},
 		slotPositions(laneSettled, 0, 0))
 
+	require.True(t, whole, "nil, unspent and spent entries are all well formed")
 	require.Equal(t, []lanereader.PruneSpender{{Hash: a, Pos: laneSettled}, {Hash: b, Pos: lane.None}}, got,
 		"output 3 is past the end of the positions bin")
 
-	got = appendSlotSpenders(nil, []interface{}{spentUtxo("0", a)}, []byte{1, 2, 3})
+	got, _ = appendSlotSpenders(nil, []interface{}{spentUtxo("0", a)}, []byte{1, 2, 3})
 	require.Equal(t, []lanereader.PruneSpender{{Hash: a, Pos: lane.None}}, got, "a malformed bin gives no positions")
+
+	got, _ = appendSlotSpenders(nil, []interface{}{spentUtxo("0", a)}, append(slotPositions(laneSettled), 0, 0, 0, 0))
+	require.Equal(t, []lanereader.PruneSpender{{Hash: a, Pos: lane.None}}, got,
+		"a bin that is not whole positions gives none, even where its first eight bytes are one")
+
+	got, _ = appendSlotSpenders(nil, []interface{}{spentUtxo("0", a)}, slotPositions(laneSettled, laneSettled))
+	require.Equal(t, []lanereader.PruneSpender{{Hash: a, Pos: lane.None}}, got, "a bin with more positions than outputs gives none")
+
+	got, whole = appendSlotSpenders(nil, []interface{}{spentUtxo("0", subtreepkg.FrozenBytesTxHash), spentUtxo("1", a)},
+		slotPositions(0, laneSettled))
+	require.True(t, whole)
+	require.Equal(t, []lanereader.PruneSpender{{Hash: a, Pos: laneSettled}}, got, "a frozen output has no spender")
+
+	for _, torn := range []interface{}{spentUtxo("0", a)[:40], append(spentUtxo("0", a), 0), "not bytes"} {
+		got, whole = appendSlotSpenders(nil, []interface{}{torn, spentUtxo("1", b)}, nil)
+		require.False(t, whole, "a torn entry's spender is unknown")
+		require.Equal(t, []lanereader.PruneSpender{{Hash: b, Pos: lane.None}}, got)
+	}
 
 	require.Equal(t, lane.None, binLanePosition(nil))
 	require.Equal(t, laneSettled, binLanePosition(int(lane.ToSigned(laneSettled))))
@@ -638,4 +658,92 @@ func TestLaneShadowPageReadTimeoutDoesNotHoldDelete(t *testing.T) {
 	require.Equal(t, 5*time.Minute, deleteTimeout, "the real delete retains its configured policy")
 	require.Less(t, elapsed, 2*time.Second, "the optional read did not hold deletion")
 	require.Equal(t, unread+2, laneVerdicts(t, lanereader.PruneDelete, lanereader.PruneCannotJudge, lanereader.ReasonSpenderUnread))
+}
+
+// TestLaneShadowCountsATornMasterUnread: a master whose utxos bin holds a torn entry cannot be judged
+// settled, since that output's spender is unknown.
+func TestLaneShadowCountsATornMasterUnread(t *testing.T) {
+	svc := laneShadowTestService(t)
+
+	chunk := pagedMasterChunk(t, svc)
+	chunk[0].Record.Bins[svc.fieldTotalExtraRecs] = 0
+	chunk[0].Record.Bins[svc.fieldUtxos] = []interface{}{spentUtxo("pm0", chainhash.HashH([]byte("spender a")))[:40]}
+
+	unread := laneVerdicts(t, lanereader.PruneDelete, lanereader.PruneCannotJudge, lanereader.ReasonSpenderUnread)
+
+	shadow := svc.newLaneShadow(chunk)
+	shadow.markDeleted(chunk[0])
+	shadow.run()
+
+	require.Equal(t, unread+1, laneVerdicts(t, lanereader.PruneDelete, lanereader.PruneCannotJudge, lanereader.ReasonSpenderUnread))
+}
+
+// TestLaneShadowCountsNoUtxosBinInDefensiveMode: in defensive mode the query reads the utxos bin for
+// today's child check, so it is not an extra read.
+func TestLaneShadowCountsNoUtxosBinInDefensiveMode(t *testing.T) {
+	svc := laneShadowTestService(t)
+	svc.defensiveEnabled = true
+
+	chunk := pagedMasterChunk(t, svc)
+	chunk[0].Record.Bins[svc.fieldTotalExtraRecs] = 0
+
+	utxosBins := laneMetric(t, "teranode_lane_pruner_extra_reads_total", map[string]string{"store": lanereader.PruneStoreAerospike, "kind": "utxos_bin"})
+	settled := laneVerdicts(t, lanereader.PruneKeep, lanereader.PruneDelete, lanereader.ReasonSettled)
+
+	svc.newLaneShadow(chunk).run()
+
+	require.Equal(t, settled+1, laneVerdicts(t, lanereader.PruneKeep, lanereader.PruneDelete, lanereader.ReasonSettled))
+	require.Equal(t, utxosBins, laneMetric(t, "teranode_lane_pruner_extra_reads_total", map[string]string{"store": lanereader.PruneStoreAerospike, "kind": "utxos_bin"}))
+}
+
+// TestLaneShadowReadsNoPageBeforeTheIndexIsReady: before the index's first snapshot every verdict is
+// not_ready, so a paged master's pages are not read for it.
+func TestLaneShadowReadsNoPageBeforeTheIndexIsReady(t *testing.T) {
+	installLaneIndex(t, lane.NewIndex(100))
+
+	svc := newTestService(t)
+	svc.fieldConflicting = fields.Conflicting.String()
+	svc.laneRetention = 288
+	svc.batchOperateFn = func(_ *aerospike.BatchPolicy, records []aerospike.BatchRecordIfc) error {
+		_, isRead := records[0].(*aerospike.BatchRead)
+		require.False(t, isRead, "no page read before the index is ready")
+
+		return nil
+	}
+
+	pages := laneMetric(t, "teranode_lane_pruner_extra_reads_total", map[string]string{"store": lanereader.PruneStoreAerospike, "kind": "page"})
+	notReady := laneVerdicts(t, lanereader.PruneDelete, lanereader.PruneCannotJudge, lanereader.ReasonNotReady)
+
+	chunk := pagedMasterChunk(t, svc)
+	shadow := svc.newLaneShadow(chunk)
+	shadow.markDeleted(chunk[0])
+	shadow.run()
+
+	require.Equal(t, notReady+1, laneVerdicts(t, lanereader.PruneDelete, lanereader.PruneCannotJudge, lanereader.ReasonNotReady))
+	require.Equal(t, pages, laneMetric(t, "teranode_lane_pruner_extra_reads_total", map[string]string{"store": lanereader.PruneStoreAerospike, "kind": "page"}))
+}
+
+// TestLaneShadowCountsATornPageUnread: a page whose utxos bin holds a torn entry leaves its master
+// cannot_judge, since that output's spender is unknown.
+func TestLaneShadowCountsATornPageUnread(t *testing.T) {
+	svc := laneShadowTestService(t)
+	svc.batchOperateFn = func(_ *aerospike.BatchPolicy, records []aerospike.BatchRecordIfc) error {
+		for _, r := range records {
+			br := r.BatchRec()
+			br.Record = &aerospike.Record{Key: br.Key, Bins: aerospike.BinMap{
+				svc.fieldUtxos: []interface{}{spentUtxo("pg0", chainhash.HashH([]byte("spender b")))[:40]},
+			}}
+		}
+
+		return nil
+	}
+
+	unread := laneVerdicts(t, lanereader.PruneDelete, lanereader.PruneCannotJudge, lanereader.ReasonSpenderUnread)
+
+	chunk := pagedMasterChunk(t, svc)
+	shadow := svc.newLaneShadow(chunk)
+	shadow.markDeleted(chunk[0])
+	shadow.run()
+
+	require.Equal(t, unread+1, laneVerdicts(t, lanereader.PruneDelete, lanereader.PruneCannotJudge, lanereader.ReasonSpenderUnread))
 }

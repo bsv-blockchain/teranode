@@ -383,12 +383,18 @@ func (j *PruneJudge) Unjudged(reason string, n int) {
 }
 
 // Time adds the time since start to the time spent in the lane rule. A store calls it around each
-// stretch of work it does only for the rule, its reads excluded, so
-// teranode_lane_pruner_judge_seconds_total is the CPU the rule adds.
+// stretch of work it does only for the rule, its reads excluded. That work does no I/O, so
+// teranode_lane_pruner_judge_seconds_total, a wall time, approximates the CPU the rule adds.
 func (j *PruneJudge) Time(start time.Time) {
 	if j != nil {
 		j.elapsed += time.Since(start)
 	}
+}
+
+// Ready reports whether the judge has a snapshot of the index to judge against. Before the index's
+// first snapshot every verdict is not_ready, so a store reads nothing extra for the rule.
+func (j *PruneJudge) Ready() bool {
+	return j != nil && j.snap != nil
 }
 
 // Elapsed is the time the judge has spent in the lane rule so far, not counting reads.
