@@ -529,7 +529,7 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 
 				if !exists {
 					if err := s.createExpressionIndexIfNotExists(conflictingIndexName, conflictingIndexExpression()); err != nil {
-						s.logger.Warnf("Failed to create %s; block validation will read every transaction of an already-validated subtree: %v", conflictingIndexName, err)
+						s.logger.Warnf("Failed to create %s (expression indexes need Aerospike 8.1, the minimum Teranode supports); block validation will read every transaction of an already-validated subtree: %v", conflictingIndexName, err)
 					}
 				}
 			}

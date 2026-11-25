@@ -73,7 +73,10 @@ func prestartServers(count int) {
 
 	for range count {
 		go func() {
-			container, err := runServerContainer(context.Background(), prestartedKey)
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+			defer cancel()
+
+			container, err := runServerContainer(ctx, prestartedKey)
 			if err != nil {
 				container = nil // the test that takes it starts one itself
 			}
@@ -87,8 +90,20 @@ func prestartServers(count int) {
 // otherwise.
 func startServerContainer(ctx context.Context, key sharedServerKey) (*aeroTest.Container, error) {
 	if prestarted != nil && key.image == prestartedKey.image && key.platform == prestartedKey.platform && prestartedUnclaimed.Add(-1) >= 0 {
-		if container := <-prestarted; container != nil {
-			return container, nil
+		select {
+		case container := <-prestarted:
+			if container != nil {
+				return container, nil
+			}
+		case <-ctx.Done():
+			// The claimed container may still arrive: terminate it then.
+			go func() {
+				if container := <-prestarted; container != nil {
+					_ = container.Terminate(context.Background())
+				}
+			}()
+
+			return nil, ctx.Err()
 		}
 	}
 
