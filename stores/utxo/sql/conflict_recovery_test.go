@@ -347,6 +347,8 @@ func TestConflictRecoveryBlockKeyedIntent(t *testing.T) {
 // row lock of the output, so the restore statement waits. It must return when ctx ends, and its
 // transaction must roll back, so no write lands after the restore returns.
 func TestRestoreConflictSpendsHonoursDeadline_Postgres(t *testing.T) {
+	parallelPostgres(t)
+
 	if testing.Short() {
 		t.Skip("skipping Postgres integration test in short mode")
 	}

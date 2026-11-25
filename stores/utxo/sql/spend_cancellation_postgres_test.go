@@ -16,6 +16,8 @@ import (
 )
 
 func TestCanceledSpendBatchKeepsHistoricalMatch_Postgres(t *testing.T) {
+	parallelPostgres(t)
+
 	if testing.Short() {
 		t.Skip("skipping Postgres integration test in short mode")
 	}
@@ -53,7 +55,7 @@ func TestCanceledSpendBatchKeepsHistoricalMatch_Postgres(t *testing.T) {
 	}()
 	require.Eventually(t, func() bool {
 		var waiting int
-		err := store.db.QueryRowContext(ctx, "SELECT count(*) FROM pg_stat_activity WHERE wait_event_type = 'Lock'").Scan(&waiting)
+		err := store.db.QueryRowContext(ctx, "SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock'").Scan(&waiting)
 		return err == nil && waiting > 0
 	}, 5*time.Second, 10*time.Millisecond)
 	cancel()
@@ -70,6 +72,8 @@ func TestCanceledSpendBatchKeepsHistoricalMatch_Postgres(t *testing.T) {
 // A pruning candidate holds the same parent row lock as holder below. A spend
 // must not write its inputs after its caller has already abandoned the call.
 func TestSpendDoesNotCommitAfterAbandoningRowLockWait_Postgres(t *testing.T) {
+	parallelPostgres(t)
+
 	if testing.Short() {
 		t.Skip("skipping Postgres integration test in short mode")
 	}
@@ -117,7 +121,7 @@ func TestSpendDoesNotCommitAfterAbandoningRowLockWait_Postgres(t *testing.T) {
 				}()
 				require.Eventually(t, func() bool {
 					var waiting int
-					err := store.db.QueryRowContext(ctx, "SELECT count(*) FROM pg_stat_activity WHERE wait_event_type = 'Lock'").Scan(&waiting)
+					err := store.db.QueryRowContext(ctx, "SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock'").Scan(&waiting)
 					return err == nil && waiting > 0
 				}, 5*time.Second, 10*time.Millisecond, "the spend must reach the parent lock held by pruning")
 				if cancelCaller {
@@ -152,6 +156,8 @@ func TestSpendDoesNotCommitAfterAbandoningRowLockWait_Postgres(t *testing.T) {
 // run on and B's spend must commit; A's caller gets the batch's real answer, so
 // A's parent output is spent only if A's Spend reported success.
 func TestCanceledCallDoesNotFailTheOtherCallsInItsBatch_Postgres(t *testing.T) {
+	parallelPostgres(t)
+
 	if testing.Short() {
 		t.Skip("skipping Postgres integration test in short mode")
 	}
@@ -198,7 +204,7 @@ func TestCanceledCallDoesNotFailTheOtherCallsInItsBatch_Postgres(t *testing.T) {
 
 			require.Eventually(t, func() bool {
 				var waiting int
-				queryErr := store.db.QueryRowContext(ctx, "SELECT count(*) FROM pg_stat_activity WHERE wait_event_type = 'Lock'").Scan(&waiting)
+				queryErr := store.db.QueryRowContext(ctx, "SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock'").Scan(&waiting)
 				return queryErr == nil && waiting > 0
 			}, 5*time.Second, 10*time.Millisecond, "the batch must reach the lock on B's parent")
 
@@ -230,6 +236,8 @@ func TestCanceledCallDoesNotFailTheOtherCallsInItsBatch_Postgres(t *testing.T) {
 // is recovered by the batcher does. Once the input's wait timer fires, Spend
 // must return a storage error instead of waiting on the answer for good.
 func TestSpendReturnsWhenItsBatchEndsWithoutAnAnswer_Postgres(t *testing.T) {
+	parallelPostgres(t)
+
 	if testing.Short() {
 		t.Skip("skipping Postgres integration test in short mode")
 	}

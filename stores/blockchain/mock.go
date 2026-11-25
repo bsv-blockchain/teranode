@@ -721,6 +721,10 @@ func (m *MockStore) LaneMapRowsEndingAbove(ctx context.Context, laneNum uint8, a
 	panic(implementMe)
 }
 
+func (m *MockStore) LaneCapGrants(ctx context.Context, height uint32) ([]lane.CapGrant, error) {
+	panic(implementMe)
+}
+
 func (m *MockStore) InsertLaneConversionSegment(ctx context.Context, seg lane.ConversionSegment) error {
 	panic(implementMe)
 }

@@ -19,6 +19,8 @@ import (
 // The frozen output is vout 1, so the sentinel's input index, which both reference stores set
 // to the output number, is distinguishable from the zero a careless answer would give.
 func TestGetReportsAFrozenOutputWithTheFrozenSentinel(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	parent := mkTx(t, 3, 5_000)
@@ -48,6 +50,8 @@ func TestGetReportsAFrozenOutputWithTheFrozenSentinel(t *testing.T) {
 // the winner would demote a frozen coin; the shared walk refuses that with "tx has frozen
 // child", and it can only do so if the store reports the freeze.
 func TestCounterConflictingRefusesAWinnerWithAFrozenDescendant(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	parent := mkTx(t, 2, 5_000)
@@ -81,6 +85,8 @@ func TestCounterConflictingRefusesAWinnerWithAFrozenDescendant(t *testing.T) {
 // the delete. Without this the walks see an empty answer for every parent and fail on every
 // input, which is what stopped conflict handling working here at all.
 func TestGetNamesWhoSpentEachOutputWhenAsked(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	parent := mkTx(t, 2, 5_000)
@@ -109,6 +115,8 @@ func TestGetNamesWhoSpentEachOutputWhenAsked(t *testing.T) {
 // query over two tables, and the validator resolves parents constantly without needing it, so
 // it must stay off the read path unless a caller asks.
 func TestGetLeavesSpendingDataAloneWhenNotAsked(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	parent := mkTx(t, 2, 5_000)
@@ -136,6 +144,8 @@ func TestGetLeavesSpendingDataAloneWhenNotAsked(t *testing.T) {
 //
 // The colliding row is planted directly, since a 12-byte collision will not arise by chance.
 func TestGetDoesNotNameASpenderFromACollidingKeyPrefix(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	parent := mkTx(t, 2, 5_000)
