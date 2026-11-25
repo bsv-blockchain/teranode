@@ -3287,8 +3287,8 @@ func (s *Server) applyBanScore(peerID, reason string) error {
 
 // onPeerBanned reacts to a NEW ban transition (score crossed threshold this
 // call): it adds the peer's IPs to the local banList, blocks the peer ID and
-// those IPs at connection admission, which closes its connections, and drops
-// it at the application layer. Replaces the old BanEventHandler indirection.
+// those IPs at connection admission when p2p_enforce_bans_at_admission is on,
+// which closes its connections, and drops it at the application layer. Replaces the old BanEventHandler indirection.
 func (s *Server) onPeerBanned(peerID, reason string) {
 	// Honor the configured ban duration so the address-level ban list and the
 	// centralized peer registry agree on how long the ban lasts. Fall back to

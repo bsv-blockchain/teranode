@@ -56,9 +56,9 @@ func (s *Server) handleBlockTopic(ctx context.Context, m []byte, fromID string) 
 	// Drop messages from banned peers before any registration, WebSocket
 	// forwarding, or further processing (and before field validation and the
 	// spoof check, so a banned peer cannot keep triggering uncached
-	// AddBanScore RPCs). The gate itself costs no registry round-trip and
-	// allocates nothing per author (see shouldSkipBannedPeer), so an unknown
-	// identity cannot turn it into one either. Own messages are identified by
+	// AddBanScore RPCs). The gate makes no per-author registry round-trip and
+	// retains nothing per author (see shouldSkipBannedPeer), so an unknown
+	// identity cannot turn it into either. Own messages are identified by
 	// the real sender, not the claimed PeerID, so a banned peer spoofing our
 	// ID cannot dodge the skip; genuine own messages return at the self check
 	// below.
@@ -1104,11 +1104,14 @@ func (s *Server) cleanupPeerMaps() {
 	}
 
 	// The reputation cache only holds peers that had a direct connection when
-	// looked up, each for reputationCacheTTL, so it reaches capacity when more
-	// peers than the cap were connected within one TTL: the cap is undersized
-	// for this node or connections are churning, not gossip flooding.
+	// looked up. Set evicts at the cap counting entries that have expired but
+	// not been swept yet, and those leave only on a Get or at the
+	// DeleteExpired call above. So the cache fills when more distinct
+	// connected peers were looked up since the last sweep than the cap: the
+	// cap is undersized for this node or connections are churning, not gossip
+	// flooding.
 	if reputationEvictions := s.reputationCache.EvictionsSinceLastRead(); reputationEvictions > 0 {
-		s.logger.Warnf("[cleanupPeerMaps] reputation cache at capacity since the last sweep: evicted %d entries; more peers connected within %s than p2p_peer_map_max_size allows", reputationEvictions, reputationCacheTTL)
+		s.logger.Warnf("[cleanupPeerMaps] reputation cache at capacity since the last sweep: evicted %d entries; more distinct connected peers were looked up since the last sweep than p2p_peer_map_max_size allows", reputationEvictions)
 	}
 
 	// Log current sizes
@@ -1121,14 +1124,19 @@ func (s *Server) cleanupPeerMaps() {
 
 // shouldSkipBannedPeer checks if we should skip a message from a banned peer:
 // score-based bans live in the centralized peer registry, operator IP/subnet
-// bans in the local ban list. Neither check costs a registry round-trip or a
-// per-author allocation on the gossip path: registry bans are answered from
-// the banned-peer mirror (refreshed once per bannedPeerRefreshInterval, with
-// local ban transitions applied immediately by onPeerBanned) and IP bans from
-// the bus's connection table (liveConnAddrs), so a flood of never-before-seen
-// authors — the identities being free to mint — costs the same as a flood from
-// one peer. Both checks sit behind connection admission, which refuses banned
-// peers and addresses outright (syncAdmissionBans).
+// bans in the local ban list. Neither check makes a per-author registry
+// round-trip or retains anything per author: registry bans are answered from
+// the banned-peer mirror (local ban transitions applied immediately by
+// onPeerBanned) and IP bans from the bus's connection table (liveConnAddrs),
+// so a flood of never-before-seen authors — the identities being free to
+// mint — costs the same as a flood from one peer. Once per
+// bannedPeerRefreshInterval, and on the first lookup after a
+// ResetReputation, the gossip worker that wins the refresh re-lists the
+// banned set inline, waiting up to bannedPeerRefreshTimeout. With the real
+// bus, liveConnAddrs also allocates per message to decode the author's ID.
+// With p2p_enforce_bans_at_admission on, both checks sit behind connection
+// admission, which refuses banned peers and addresses outright
+// (syncAdmissionBans).
 // Registry failures are tolerated (the mirror keeps serving its last view) so
 // a transient registry blip doesn't drop traffic silently.
 func (s *Server) shouldSkipBannedPeer(from string, messageType string) bool {
@@ -1146,12 +1154,13 @@ func (s *Server) shouldSkipBannedPeer(from string, messageType string) bool {
 }
 
 // isPeerIPBanned reports whether any of the peer's connected addresses match
-// an entry in the IP/subnet ban list. Connection admission is the primary
-// enforcement of IP bans: the bus refuses connections from a banned address or
-// subnet and closes the open ones when the rule is applied
-// (syncAdmissionBans). This check is defence in depth behind it, for a
-// connection whose rule has not been applied yet (its ban-list event is still
-// being handled) or whose Block* call failed.
+// an entry in the IP/subnet ban list. With p2p_enforce_bans_at_admission on,
+// connection admission is the primary enforcement of IP bans: the bus refuses
+// connections from a banned address or subnet and closes the open ones when
+// the rule is applied (syncAdmissionBans). This check is then defence in
+// depth behind it, for a connection whose rule has not been applied yet (its
+// ban-list event is still being handled) or whose Block* call failed. With
+// the setting off, this check is the enforcement.
 // The addresses come from the bus's connection table (liveConnAddrs), so a
 // neighbour is checked from its first message and a gossip-relayed author (no
 // open connection, hence no addresses) costs one table miss.
@@ -1513,9 +1522,12 @@ func isRelayCircuit(maddr ma.Multiaddr) bool {
 // the IP/subnet ban list. Literal IPs are checked directly; DNS components
 // (/dns, /dns4, /dns6, /dnsaddr) are resolved and every returned address is
 // checked. A parse or resolution failure returns an error so callers can fail
-// closed. Relay circuits pass without any check: their IP/DNS components name
-// the relay, not the dial target, so checking them would refuse to dial every
-// peer behind a banned relay; peer-ID bans cover circuit peers.
+// closed. A relay circuit passes this check: its IP/DNS components name the
+// relay, not the dial target, so the target's own address is unknown here and
+// peer-ID bans cover it. The dial is not thereby allowed through a banned
+// relay: with p2p_enforce_bans_at_admission on, the bus gates a relayed
+// connection on the relay's address, so it refuses a dial through a banned
+// relay, and banning a relay's IP closes every circuit through it.
 func (s *Server) checkMultiaddrBanned(ctx context.Context, addrStr string) (bool, error) {
 	if s.banList == nil {
 		return false, nil
