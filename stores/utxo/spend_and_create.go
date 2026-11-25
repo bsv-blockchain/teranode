@@ -586,7 +586,14 @@ func (r *rollbackInTheWay) resolve(ctx context.Context, logger ulogger.Logger, s
 	case getErr != nil:
 		// What is at the txid is not known, and it may be a hold that carries no transaction, so
 		// the call does not report one. The spends stay in effect, as when the call cannot settle.
-		return false, spends, errors.NewProcessingError("SpendAndCreate: tx %s exists but its record could not be read, so it is not known to be a stored transaction; retry", hash.String(), getErr)
+		//
+		// The error is a storage error that does not carry the read error, in its chain or in its
+		// text. The retry predicate refuses an error that holds a context error, matched by its text
+		// too, and the bounded read ends in one when it times out. Quick validation retries a
+		// retryable error and fails the block on any other. The read error goes to the log.
+		logger.Errorf("SpendAndCreate: the record of tx %s could not be read after it was reported as existing: %v", hash.String(), getErr)
+
+		return false, spends, errors.NewStorageError("SpendAndCreate: tx %s exists but its record could not be read, so it is not known to be a stored transaction; retry", hash.String())
 	}
 
 	clearHold := func() bool {

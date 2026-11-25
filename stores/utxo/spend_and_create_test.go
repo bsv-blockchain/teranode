@@ -607,7 +607,8 @@ func TestSequentialSpendAndCreate(t *testing.T) {
 			}
 
 			md, spends, err := SequentialSpendAndCreate(ctx, logger, f, tx, 100, false)
-			require.ErrorIs(t, err, errors.ErrProcessing, name)
+			require.ErrorIs(t, err, errors.ErrStorageError, name)
+			require.True(t, errors.IsRetryableError(err), "%s: quick validation retries a retryable error and fails the block on any other", name)
 			require.NotErrorIs(t, err, errors.ErrTxExists, "%s: the record may be a hold that carries no transaction", name)
 			require.Nil(t, md, name)
 			require.Len(t, spends, 1, "%s: the spends stay in effect, as for any outcome the call cannot settle", name)
@@ -1171,7 +1172,8 @@ func TestSequentialSpendAndCreate(t *testing.T) {
 			}
 
 			_, spends, err := SequentialSpendAndCreate(ctx, logger, f, tx, 100, false, WithCreateOnly())
-			require.ErrorIs(t, err, errors.ErrProcessing, name)
+			require.ErrorIs(t, err, errors.ErrStorageError, name)
+			require.True(t, errors.IsRetryableError(err), "%s: quick validation retries a retryable error and fails the block on any other", name)
 			require.NotErrorIs(t, err, errors.ErrTxExists, "%s: the record may be a hold, and a caller that reads ErrTxExists as done would spend under it", name)
 			require.Nil(t, spends, name)
 			require.Equal(t, []string{"create", "getmeta"}, f.callSeq, name)
