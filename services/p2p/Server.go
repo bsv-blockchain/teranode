@@ -48,6 +48,7 @@ import (
 	"github.com/bsv-blockchain/teranode/util/health"
 	"github.com/bsv-blockchain/teranode/util/kafka"
 	kafkamessage "github.com/bsv-blockchain/teranode/util/kafka/kafka_message"
+	"github.com/bsv-blockchain/teranode/util/rejectedtx"
 	"github.com/bsv-blockchain/teranode/util/servicemanager"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
@@ -200,6 +201,7 @@ type Server struct {
 	reportedInvalidBlocks             cappedPeerMap                  // Invalid blocks already scored (canonical hash -> scoring record); dedupes at-least-once Kafka redelivery so one invalid block is scored once per TTL, not once per delivery
 	blockSeenHashes                   seenHashCache                  // Block hashes already announced within the TTL; suppresses replayed announcements before the Kafka publish
 	subtreeSeenHashes                 seenHashCache                  // Subtree hashes already announced within the TTL; suppresses replayed announcements before the Kafka publish
+	rejectedTxEgress                  rejectedTxEgressGate           // Rate limit + per-txid dedup on the re-broadcast of internally rejected transactions
 	lastAnnouncedBlockHash            atomic.Pointer[chainhash.Hash] // Most recently gossiped tip; suppresses the consecutive re-announcements a blockchain-subscription reconnect replays
 	lastAnnouncedSubtreeHash          atomic.Pointer[chainhash.Hash] // Most recently gossiped subtree, same consecutive-duplicate guard as lastAnnouncedBlockHash
 	// preAnnouncedBlockHashes records hashes announceBlock already announced
@@ -894,6 +896,10 @@ func (s *Server) applyPeerMapLimits(tSettings *settings.Settings) {
 	// configurability when skipped.
 	s.blockSeenHashes.setLimits(tSettings.P2P.SeenHashMaxSize, tSettings.P2P.SeenHashMaxPublishers, tSettings.P2P.SeenHashTTL)
 	s.subtreeSeenHashes.setLimits(tSettings.P2P.SeenHashMaxSize, tSettings.P2P.SeenHashMaxPublishers, tSettings.P2P.SeenHashTTL)
+
+	// The rejected-tx egress gate shares the seen-hash bounds for its dedup and
+	// takes its own rate and burst.
+	s.rejectedTxEgress.setLimits(tSettings.P2P.RejectedTxPublishRate, tSettings.P2P.RejectedTxPublishBurst, tSettings.P2P.SeenHashMaxSize, tSettings.P2P.SeenHashTTL)
 }
 
 // announcePeerMapLimits logs the two ways a configured value differs from what
@@ -913,6 +919,8 @@ func (s *Server) applyPeerMapLimits(tSettings *settings.Settings) {
 // enforcement", so an operator can reasonably set 0 expecting that and get a
 // bound they did not ask for. A silently-coerced value looks exactly like a
 // value that was never read, which is the bug this change just finished fixing.
+// The same holds for the seen-hash TTL raised to the publish window and for a
+// non-positive rejected-tx egress rate or burst, so those are announced too.
 func (s *Server) announcePeerMapLimits(tSettings *settings.Settings, maxSize int) {
 	if tSettings.P2P.PeerMapMaxSize <= 0 {
 		s.logger.Infof("[applyPeerMapLimits] p2p_peer_map_max_size=%d is not a usable cap; using the %d default — there is no unbounded mode",
@@ -930,6 +938,24 @@ func (s *Server) announcePeerMapLimits(tSettings *settings.Settings, maxSize int
 	if tSettings.P2P.PeerMapCleanupInterval > defaultPeerMapCleanupInterval {
 		s.logger.Warnf("[applyPeerMapLimits] p2p_peer_map_cleanup_interval=%s exceeds the %s default; this key was inert before and is now read, so check the value is intended",
 			tSettings.P2P.PeerMapCleanupInterval, defaultPeerMapCleanupInterval)
+	}
+
+	// seenHashCache.ttlLocked raises a TTL below the publish window to the
+	// window, for the block, subtree and rejected-tx dedup alike. Say so, or
+	// the configured value looks like it was never read.
+	if ttl := tSettings.P2P.SeenHashTTL; ttl > 0 && ttl < seenHashPublishWindow {
+		s.logger.Warnf("[applyPeerMapLimits] p2p_seen_hash_ttl=%s is below the %s publish window; using %s for the block, subtree and rejected-tx dedup — a shorter TTL would expire entries before the window is consulted and switch the dedup off",
+			ttl, seenHashPublishWindow, seenHashPublishWindow)
+	}
+
+	if tSettings.P2P.RejectedTxPublishRate <= 0 {
+		s.logger.Infof("[applyPeerMapLimits] p2p_rejected_tx_publish_rate=%d is not a usable rate; using the %d default — there is no unlimited mode",
+			tSettings.P2P.RejectedTxPublishRate, defaultRejectedTxPublishRate)
+	}
+
+	if tSettings.P2P.RejectedTxPublishBurst <= 0 {
+		s.logger.Infof("[applyPeerMapLimits] p2p_rejected_tx_publish_burst=%d is not a usable burst; using the %d default — there is no unlimited mode",
+			tSettings.P2P.RejectedTxPublishBurst, defaultRejectedTxPublishBurst)
 	}
 }
 
@@ -1326,23 +1352,50 @@ func (s *Server) rejectedTxHandler(ctx context.Context) func(msg *kafka.KafkaMes
 		s.logger.Debugf("[rejectedTxHandler] Received internal rejected tx notification for %s: %s (broadcasting to p2p network)",
 			hash.String(), m.Reason)
 
-		rejectedTxMessage := RejectedTxMessage{
-			TxID:   hash.String(),
-			Reason: m.Reason,
-			PeerID: s.P2PClient.GetID(),
+		txID := hash.String()
+		selfID := s.P2PClient.GetID()
+
+		// Every internal rejection is attacker-triggerable for the price of one
+		// invalid transaction, and each re-broadcast is fanned out to the whole
+		// mesh, so the egress is deduplicated per txid and rate limited before
+		// any publish work. Suppression is counted in a metric and logged per
+		// message only at debug level.
+		grant, why := s.rejectedTxEgress.allow(txID, selfID)
+		if grant == nil {
+			rejectedTxPublishSuppressed(why)
+			s.logger.Debugf("[rejectedTxHandler] not re-broadcasting rejected tx %s: %s", txID, why)
+
+			return nil
 		}
 
-		// Self-check against the bounds we enforce on ingress: truncates the
-		// validator's reason text so it always passes remote validation.
+		// The reason is held to the closed grammar in util/rejectedtx at this
+		// chokepoint, not only at the validator that produced it: during a
+		// rolling upgrade a pre-upgrade validator still publishes err.Error()
+		// on the in-cluster topic, and that free text must not leave the node.
+		reason := rejectedtx.Normalize(m.Reason)
+		if reason != m.Reason {
+			s.logger.Debugf("[rejectedTxHandler] rejected tx %s reason does not fit the reason grammar, sending %s", txID, reason)
+		}
+
+		rejectedTxMessage := RejectedTxMessage{
+			TxID:   txID,
+			Reason: reason,
+			PeerID: selfID,
+		}
+
+		// Self-check against the bounds we enforce on ingress, so the message
+		// always passes remote validation.
 		rejectedTxMessage.sanitizeFields()
 
 		if err := rejectedTxMessage.validateFields(); err != nil {
+			grant.publishFailed()
 			s.logger.Errorf("[rejectedTxHandler] rejectedTxMessage failed gossip field validation, not publishing: %v", err)
 			return nil
 		}
 
 		msgBytes, err := json.Marshal(rejectedTxMessage)
 		if err != nil {
+			grant.publishFailed()
 			s.logger.Errorf("[rejectedTxHandler] json marshal error: %v", err)
 
 			return err
@@ -1352,8 +1405,18 @@ func (s *Server) rejectedTxHandler(ctx context.Context) func(msg *kafka.KafkaMes
 		// publishToNetwork.
 		s.logger.Debugf("[rejectedTxHandler] publishing rejectedTxMessage to p2p network")
 
-		if _, err = s.publishToNetwork(ctx, s.rejectedTxTopicName, msgBytes); err != nil {
+		// A re-broadcast that did not reach the network must not leave the txid
+		// marked as announced. A publish error keeps its rate token, so a mesh
+		// outage cannot switch the gate off and this error line stays bounded
+		// by the egress rate; a policy drop did no publish work and returns it.
+		sent, err := s.publishToNetwork(ctx, s.rejectedTxTopicName, msgBytes)
+
+		switch {
+		case err != nil:
+			grant.publishErrored()
 			s.logger.Errorf("[rejectedTxHandler] publish error: %v", err)
+		case !sent:
+			grant.publishFailed()
 		}
 
 		return nil
@@ -3000,6 +3063,7 @@ func (s *Server) Stop(ctx context.Context) error {
 	s.reportedInvalidBlocks.Clear()
 	s.blockSeenHashes.Clear()
 	s.subtreeSeenHashes.Clear()
+	s.rejectedTxEgress.clear()
 	s.logger.Infof("[Stop] cleared peer maps")
 
 	// Stop preAnnouncedBlockHashes' cleanup goroutine; nil in tests that

@@ -1,0 +1,685 @@
+package p2p
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"testing"
+	"time"
+
+	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/bsv-blockchain/teranode/services/blockchain"
+	"github.com/bsv-blockchain/teranode/services/blockchain/blockchain_api"
+	"github.com/bsv-blockchain/teranode/settings"
+	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util/kafka"
+	kafkamessage "github.com/bsv-blockchain/teranode/util/kafka/kafka_message"
+	"github.com/bsv-blockchain/teranode/util/rejectedtx"
+	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/proto"
+)
+
+// countingPublishServer is capturePublishServer with a publish counter, for
+// tests that care how many messages reached the network rather than which.
+// publishErr, when non-nil, is returned by the mock for the first failFirstN
+// publishes so the retry path can be exercised.
+func countingPublishServer(t *testing.T, publishErr error, failFirstN int) (*Server, *int) {
+	t.Helper()
+
+	count := 0
+	mockP2P := &MockServerP2PClient{peerID: mustNewPeerID(t)}
+
+	if publishErr != nil && failFirstN > 0 {
+		mockP2P.On("Publish", mock.Anything, mock.Anything, mock.Anything).Return(publishErr).Times(failFirstN)
+	}
+
+	mockP2P.On("Publish", mock.Anything, mock.Anything, mock.Anything).Run(func(_ mock.Arguments) {
+		count++
+	}).Return(nil)
+
+	s := &Server{
+		logger:              &ulogger.TestLogger{},
+		settings:            &settings.Settings{P2P: settings.P2PSettings{ListenMode: settings.ListenModeFull}},
+		P2PClient:           mockP2P,
+		rejectedTxTopicName: "test-rejected",
+	}
+
+	return s, &count
+}
+
+func internalRejection(t *testing.T, txID string) *kafka.KafkaMessage {
+	t.Helper()
+
+	value, err := proto.Marshal(&kafkamessage.KafkaRejectedTxTopicMessage{
+		TxHash: txID,
+		PeerId: "",
+		Reason: "TX_INVALID",
+	})
+	require.NoError(t, err)
+
+	return &kafka.KafkaMessage{Value: value}
+}
+
+func distinctTxID(i int) string {
+	return fmt.Sprintf("%064x", i+1)
+}
+
+// fakeClock drives a gate on a synthetic timeline so no assertion depends on
+// how fast the test host runs.
+type fakeClock struct {
+	now time.Time
+}
+
+func newFakeClock() *fakeClock {
+	return &fakeClock{now: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}
+}
+
+func (c *fakeClock) read() time.Time { return c.now }
+
+func (c *fakeClock) advance(d time.Duration) { c.now = c.now.Add(d) }
+
+// gateWithClock returns a zero-value gate on a fake clock.
+func gateWithClock() (*rejectedTxEgressGate, *fakeClock) {
+	clock := newFakeClock()
+
+	return &rejectedTxEgressGate{clock: clock.read}, clock
+}
+
+// The remote exploit path: an attacker gets thousands of distinct junk
+// transactions rejected per second. The validator forwards each one; the p2p
+// egress must cap what reaches the mesh at the configured burst, not one
+// publish per rejection. The gate runs on a frozen clock so the cap is exact.
+func TestRejectedTxHandler_DistinctTxIDFloodIsRateLimited(t *testing.T) {
+	s, published := countingPublishServer(t, nil, 0)
+	s.rejectedTxEgress.setLimits(1, 5, 0, 0)
+	s.rejectedTxEgress.clock = newFakeClock().read
+
+	handler := s.rejectedTxHandler(context.Background())
+
+	const flood = 500
+	for i := 0; i < flood; i++ {
+		require.NoError(t, handler(internalRejection(t, distinctTxID(i))))
+	}
+
+	require.Equal(t, 5, *published, "a flood of %d rejections must be capped at the burst", flood)
+}
+
+// A repeated txid is re-broadcast once per dedup period, and a repeat never
+// consumes a rate-limit token that a fresh txid could have used.
+func TestRejectedTxHandler_RepeatedTxIDPublishedOnce(t *testing.T) {
+	s, published := countingPublishServer(t, nil, 0)
+	s.rejectedTxEgress.setLimits(1, 2, 0, 0)
+
+	handler := s.rejectedTxHandler(context.Background())
+
+	for i := 0; i < 10; i++ {
+		require.NoError(t, handler(internalRejection(t, testBlockHashHex)))
+	}
+	require.Equal(t, 1, *published, "a repeated txid must be re-broadcast once")
+
+	require.NoError(t, handler(internalRejection(t, distinctTxID(1))))
+	require.Equal(t, 2, *published, "repeats must not have spent the second burst token")
+}
+
+// A re-broadcast the network refused must not leave the txid marked as
+// announced, but keeps its rate token: with a burst of one the immediate retry
+// is rate limited, and once the bucket refills it goes out rather than being
+// suppressed as a duplicate.
+func TestRejectedTxHandler_PublishFailureAllowsRetry(t *testing.T) {
+	s, published := countingPublishServer(t, errors.NewServiceError("mesh unavailable"), 1)
+	s.rejectedTxEgress.setLimits(1, 1, 0, 0)
+
+	clock := newFakeClock()
+	s.rejectedTxEgress.clock = clock.read
+
+	handler := s.rejectedTxHandler(context.Background())
+
+	require.NoError(t, handler(internalRejection(t, testBlockHashHex)))
+	require.Equal(t, 0, *published, "first publish fails")
+
+	require.NoError(t, handler(internalRejection(t, testBlockHashHex)))
+	require.Equal(t, 0, *published, "the errored publish kept its token, so the immediate retry is rate limited")
+
+	clock.advance(time.Second)
+	require.NoError(t, handler(internalRejection(t, testBlockHashHex)))
+	require.Equal(t, 1, *published, "the retry must not be suppressed as a duplicate once a token is back")
+
+	require.NoError(t, handler(internalRejection(t, testBlockHashHex)))
+	require.Equal(t, 1, *published, "once published the txid is deduplicated")
+}
+
+// A publish the chokepoint drops on policy, here the FSM leaving RUNNING
+// between the handler's pre-check and publishToNetwork, did no publish work,
+// so it returns both the dedup slot and the rate token: with a burst of one on
+// a frozen clock, the next rejection of the same txid goes straight out.
+func TestRejectedTxHandler_PolicyDropReturnsTokenAndDedupSlot(t *testing.T) {
+	running := blockchain_api.FSMStateType_RUNNING
+	catching := blockchain_api.FSMStateType_CATCHINGBLOCKS
+
+	client := &blockchain.Mock{}
+	client.On("GetFSMCurrentState", mock.Anything).Return(&running, nil).Once()
+	client.On("GetFSMCurrentState", mock.Anything).Return(&catching, nil).Once()
+	client.On("GetFSMCurrentState", mock.Anything).Return(&running, nil)
+
+	s, published := countingPublishServer(t, nil, 0)
+	s.blockchainClient = client
+	s.rejectedTxEgress.setLimits(1, 1, 0, 0)
+	s.rejectedTxEgress.clock = newFakeClock().read
+
+	handler := s.rejectedTxHandler(context.Background())
+
+	require.NoError(t, handler(internalRejection(t, testBlockHashHex)))
+	require.Equal(t, 0, *published, "the chokepoint drops the publish in CATCHINGBLOCKS")
+
+	require.NoError(t, handler(internalRejection(t, testBlockHashHex)))
+	require.Equal(t, 1, *published, "the dropped publish returned its token and dedup slot, so the retry goes out at once")
+}
+
+// While every publish errors (mesh down, topic not joined) the gate must still
+// engage: a distinct-txid flood reaches Publish at most burst times, not once
+// per rejection, so neither the publish work nor the error log line scales
+// with the flood.
+func TestRejectedTxHandler_PersistentPublishErrorStaysRateLimited(t *testing.T) {
+	const flood = 500
+
+	s, published := countingPublishServer(t, errors.NewServiceError("mesh unavailable"), flood)
+	s.rejectedTxEgress.setLimits(1, 5, 0, 0)
+	s.rejectedTxEgress.clock = newFakeClock().read
+
+	handler := s.rejectedTxHandler(context.Background())
+
+	for i := 0; i < flood; i++ {
+		require.NoError(t, handler(internalRejection(t, distinctTxID(i))))
+	}
+
+	require.Equal(t, 0, *published)
+	s.P2PClient.(*MockServerP2PClient).AssertNumberOfCalls(t, "Publish", 5)
+}
+
+// A message the publish gate drops (silent listen mode reached via the
+// chokepoint rather than the handler pre-check) must also return the grant.
+func TestRejectedTxHandler_GateDropReturnsDedupGrant(t *testing.T) {
+	s, published := countingPublishServer(t, nil, 0)
+
+	// Silent mode at the handler pre-check returns before the gate, so drive
+	// the chokepoint directly with a message the gate will refuse: unknown topic.
+	selfID := s.P2PClient.GetID()
+	grant, _ := s.rejectedTxEgress.allow(testBlockHashHex, selfID)
+	require.NotNil(t, grant)
+
+	sent, err := s.publishToNetwork(context.Background(), "not-a-known-topic", []byte("{}"))
+	require.NoError(t, err)
+	require.False(t, sent)
+	require.Equal(t, 0, *published)
+
+	grant.publishFailed()
+
+	grant, _ = s.rejectedTxEgress.allow(testBlockHashHex, selfID)
+	require.NotNil(t, grant, "a returned grant must allow the txid to retry")
+}
+
+// There is no unbounded mode: a Server constructed without applyPeerMapLimits
+// (as every direct-construction test does) still caps the egress at the
+// package defaults.
+func TestRejectedTxEgressGate_ZeroValueUsesDefaults(t *testing.T) {
+	g, clock := gateWithClock()
+
+	allowed := 0
+	for i := 0; i < defaultRejectedTxPublishBurst*3; i++ {
+		if grant, _ := g.allow(distinctTxID(i), "self"); grant != nil {
+			allowed++
+		}
+	}
+
+	require.Equal(t, defaultRejectedTxPublishBurst, allowed, "an unconfigured gate must apply the default burst")
+
+	// The bucket refills at the default rate.
+	clock.advance(time.Second)
+	grant, why := g.allow(distinctTxID(10_000), "self")
+	require.NotNil(t, grant, "tokens must refill over time: %s", why)
+}
+
+// A non-positive rate or burst passed through setLimits selects the defaults,
+// as the settings document, rather than a bucket that never refills or never
+// holds a token.
+func TestRejectedTxEgressGate_NonPositiveLimitsSelectDefaults(t *testing.T) {
+	g, clock := gateWithClock()
+	g.setLimits(0, -1, 0, 0)
+
+	allowed := 0
+	for i := 0; i < defaultRejectedTxPublishBurst*3; i++ {
+		if grant, _ := g.allow(distinctTxID(i), "self"); grant != nil {
+			allowed++
+		}
+	}
+
+	require.Equal(t, defaultRejectedTxPublishBurst, allowed, "a non-positive burst must select the default burst")
+
+	clock.advance(time.Second)
+
+	refilled := 0
+	for i := 0; i < defaultRejectedTxPublishRate*3; i++ {
+		if grant, _ := g.allow(distinctTxID(10_000+i), "self"); grant != nil {
+			refilled++
+		}
+	}
+
+	require.Equal(t, defaultRejectedTxPublishRate, refilled, "a non-positive rate must select the default rate")
+}
+
+// Suppression reasons are distinguishable so operators can tell a duplicate
+// storm from a distinct-txid flood.
+func TestRejectedTxEgressGate_Reasons(t *testing.T) {
+	g, clock := gateWithClock()
+	g.setLimits(1, 1, 0, 0)
+
+	grant, why := g.allow("a", "self")
+	require.NotNil(t, grant)
+	require.Empty(t, why)
+
+	grant, why = g.allow("a", "self")
+	require.Nil(t, grant)
+	require.Equal(t, rejectedTxSuppressedDuplicate, why)
+
+	grant, why = g.allow("b", "self")
+	require.Nil(t, grant)
+	require.Equal(t, rejectedTxSuppressedRateLimited, why)
+
+	// A rate-limited txid was not marked announced: once a token is back it
+	// goes out.
+	clock.advance(2 * time.Second)
+	grant, why = g.allow("b", "self")
+	require.NotNil(t, grant, why)
+}
+
+// A refused reservation must not debit the bucket: refusing txids while the
+// bucket is empty does not push the refill further out.
+func TestRejectedTxEgressGate_RefusalDoesNotDebitBucket(t *testing.T) {
+	g, clock := gateWithClock()
+	g.setLimits(1, 1, 0, 0)
+
+	grant, _ := g.allow("a", "self")
+	require.NotNil(t, grant)
+
+	for i := 0; i < 100; i++ {
+		grant, why := g.allow(distinctTxID(i), "self")
+		require.Nil(t, grant)
+		require.Equal(t, rejectedTxSuppressedRateLimited, why)
+	}
+
+	clock.advance(time.Second)
+	grant, why := g.allow("b", "self")
+	require.NotNil(t, grant, "one refill later exactly one token must be back: %s", why)
+}
+
+// Both charges come back when the publish did not happen: the dedup slot and
+// the rate token. With a burst of one, the second txid can only be granted if
+// the first grant's token was refunded.
+func TestRejectedTxEgressGate_PublishFailedReturnsToken(t *testing.T) {
+	g, _ := gateWithClock()
+	g.setLimits(1, 1, 0, 0)
+
+	grant, _ := g.allow("a", "self")
+	require.NotNil(t, grant)
+
+	refused, why := g.allow("b", "self")
+	require.Nil(t, refused)
+	require.Equal(t, rejectedTxSuppressedRateLimited, why)
+
+	grant.publishFailed()
+
+	granted, why := g.allow("b", "self")
+	require.NotNil(t, granted, "the failed publish's token must be back: %s", why)
+}
+
+// An errored publish returns only the dedup slot: the same txid may retry,
+// but the rate token stays spent, so with a burst of one nothing else is
+// granted until the bucket refills.
+func TestRejectedTxEgressGate_PublishErroredKeepsToken(t *testing.T) {
+	g, clock := gateWithClock()
+	g.setLimits(1, 1, 0, 0)
+
+	grant, _ := g.allow("a", "self")
+	require.NotNil(t, grant)
+
+	grant.publishErrored()
+
+	refused, why := g.allow("b", "self")
+	require.Nil(t, refused, "the errored publish's token must stay spent")
+	require.Equal(t, rejectedTxSuppressedRateLimited, why)
+
+	refused, why = g.allow("a", "self")
+	require.Nil(t, refused)
+	require.Equal(t, rejectedTxSuppressedRateLimited, why, "the dedup slot came back, so the retry is refused on rate, not as a duplicate")
+
+	clock.advance(time.Second)
+
+	granted, why := g.allow("a", "self")
+	require.NotNil(t, granted, "the txid retries once the bucket refills: %s", why)
+}
+
+// publishFailed reads the gate's clock, not the wall clock: on a synthetic
+// timeline a refund must not rewind the bucket or pin it to the present.
+func TestRejectedTxEgressGate_PublishFailedUsesGateClock(t *testing.T) {
+	g, clock := gateWithClock()
+	g.setLimits(1, 1, 0, 0)
+
+	grant, _ := g.allow("a", "self")
+	require.NotNil(t, grant)
+	grant.publishFailed()
+
+	require.Equal(t, clock.now, g.bucket.last, "the refund must be stamped with the gate clock")
+
+	granted, _ := g.allow("b", "self")
+	require.NotNil(t, granted)
+
+	clock.advance(time.Second)
+	granted, why := g.allow("c", "self")
+	require.NotNil(t, granted, "the synthetic timeline must still refill: %s", why)
+}
+
+// Pins the dedup period the gate documents: with this node as the single
+// announcer a repeated txid is refused inside the publish window and again on
+// the first rollover (last window's grantee is withheld the retry grant), and
+// granted only after the second rollover, about every two windows.
+func TestRejectedTxEgressGate_RepeatPeriodIsTwoPublishWindows(t *testing.T) {
+	g, clock := gateWithClock()
+	g.setLimits(100, 100, 0, 10*time.Minute)
+
+	grant, _ := g.allow("a", "self")
+	require.NotNil(t, grant, "first rejection is re-broadcast")
+
+	clock.advance(seenHashPublishWindow / 2)
+	grant, why := g.allow("a", "self")
+	require.Nil(t, grant, "repeat inside the window is a duplicate")
+	require.Equal(t, rejectedTxSuppressedDuplicate, why)
+
+	clock.advance(seenHashPublishWindow / 2)
+	grant, why = g.allow("a", "self")
+	require.Nil(t, grant, "first rollover withholds the retry grant from last window's grantee")
+	require.Equal(t, rejectedTxSuppressedDuplicate, why)
+
+	clock.advance(seenHashPublishWindow)
+	grant, _ = g.allow("a", "self")
+	require.NotNil(t, grant, "second rollover re-broadcasts the repeat")
+
+	clock.advance(seenHashPublishWindow)
+	grant, _ = g.allow("a", "self")
+	require.Nil(t, grant, "and the cycle repeats")
+}
+
+// The two-window period assumes a TTL longer than two windows. A shorter one
+// sets the period itself, because an aged-out entry starts fresh and is
+// granted at once: a TTL below the window runs at the one-window floor, and a
+// TTL between one and two windows is the period. Pins what the gate doc, the
+// p2p_rejected_tx_publish_rate longdesc and the duplicate metric help say.
+func TestRejectedTxEgressGate_ShortTTLSetsRepeatPeriod(t *testing.T) {
+	cases := []struct {
+		ttl  time.Duration
+		want time.Duration
+	}{
+		{5 * time.Second, seenHashPublishWindow},
+		{seenHashPublishWindow, seenHashPublishWindow},
+		{20 * time.Second, 20 * time.Second},
+		{2 * seenHashPublishWindow, 2 * seenHashPublishWindow},
+		{2 * time.Minute, 2 * seenHashPublishWindow},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.ttl.String(), func(t *testing.T) {
+			g, clock := gateWithClock()
+			g.setLimits(1000, 1000, 0, tc.ttl)
+
+			start := clock.now
+
+			var grants []time.Duration
+
+			for clock.now.Sub(start) <= 2*time.Minute {
+				if grant, _ := g.allow("a", "self"); grant != nil {
+					grants = append(grants, clock.now.Sub(start))
+				}
+
+				clock.advance(time.Second)
+			}
+
+			require.Greater(t, len(grants), 2)
+
+			for i := 1; i < len(grants); i++ {
+				require.Equal(t, tc.want, grants[i]-grants[i-1], "a rejection every second, ttl %s: grants at %v", tc.ttl, grants)
+			}
+		})
+	}
+}
+
+// A seen-hash TTL below the publish window must not switch the dedup off: the
+// cache clamps it to the window, so a txid rejected every few seconds is still
+// suppressed rather than re-published on every repeat.
+func TestRejectedTxEgressGate_SubWindowTTLStillDeduplicates(t *testing.T) {
+	g, clock := gateWithClock()
+	g.setLimits(100, 100, 0, 5*time.Second)
+
+	grant, _ := g.allow("a", "self")
+	require.NotNil(t, grant)
+
+	granted := 0
+	for i := 0; i < 20; i++ {
+		clock.advance(6 * time.Second)
+
+		if grant, _ := g.allow("a", "self"); grant != nil {
+			granted++
+		}
+	}
+
+	require.LessOrEqual(t, granted, 8, "with a clamped TTL of one window a repeat every 6s is granted at most once per window, not 20 times")
+	require.Positive(t, granted, "the clamp must not suppress forever either")
+}
+
+// clear drops the dedup state and keeps the bucket, so a Stop/Start cycle
+// cannot be used to widen the burst.
+func TestRejectedTxEgressGate_ClearKeepsBucket(t *testing.T) {
+	g, _ := gateWithClock()
+	g.setLimits(1, 2, 0, 0)
+
+	grant, _ := g.allow("a", "self")
+	require.NotNil(t, grant)
+	require.Equal(t, 1, g.size())
+
+	g.clear()
+	require.Equal(t, 0, g.size(), "dedup state is dropped")
+
+	grant, _ = g.allow("a", "self")
+	require.NotNil(t, grant, "after clear the txid is fresh again")
+
+	grant, why := g.allow("b", "self")
+	require.Nil(t, grant, "the bucket must not have been refilled by clear: %s", why)
+	require.Equal(t, rejectedTxSuppressedRateLimited, why)
+}
+
+// The reason the validator sends is held to util/rejectedtx's grammar; every
+// shape it can produce, including the detail-carrying one with its colon,
+// space and hyphens, must pass this node's own ingress sanitizer unchanged and
+// sit well under the display bound, so truncation is never the normal case.
+func TestRejectedTxMessage_ReasonShapesPassIngressBounds(t *testing.T) {
+	reasons := make([]string, 0, 2+len(rejectedtx.Details()))
+	reasons = append(reasons, "TX_INVALID", "TX_INVALID/PROCESSING/UTXO_FROZEN/UTXO_NON_FINAL")
+
+	for _, detail := range rejectedtx.Details() {
+		require.Equal(t, detail, sanitizePeerDisplayString(detail, maxGossipReasonLen), "detail %q must survive the sanitizer", detail)
+
+		reasons = append(reasons, "TX_INVALID/TX_POLICY: "+detail)
+	}
+
+	for _, reason := range reasons {
+		msg := RejectedTxMessage{
+			TxID:   testBlockHashHex,
+			Reason: reason,
+			PeerID: mustNewPeerID(t).String(),
+		}
+
+		msg.sanitizeFields()
+		require.Equal(t, reason, msg.Reason, "reason %q must not be altered by the sanitizer", reason)
+		require.NoError(t, msg.validateFields())
+		require.True(t, rejectedtx.Valid(msg.Reason), "reason %q must still fit the grammar after sanitizing", reason)
+	}
+}
+
+// The reason grammar is enforced at this chokepoint, not only at the producer:
+// a pre-upgrade validator's err.Error() on the in-cluster topic leaves the
+// node as the fallback code, while a well-formed reason passes through intact.
+func TestRejectedTxHandler_NormalizesReasonAtChokepoint(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"pre-upgrade validator error text", "TX_INVALID (30): GoBDK fail to ValidateTransaction -> TX_INVALID (30): script failed: OP_RETURN <attacker blob>", "TX_INVALID"},
+		{"unlisted detail", "TX_INVALID: something the producer made up", "TX_INVALID"},
+		{"unlisted detail keeps a valid code list", "TX_INVALID/TX_POLICY: a literal from a newer release", "TX_INVALID/TX_POLICY"},
+		{"well-formed code list", "TX_INVALID/TX_POLICY", "TX_INVALID/TX_POLICY"},
+		{"well-formed detail", "TX_INVALID: bad-txns-in-belowout", "TX_INVALID: bad-txns-in-belowout"},
+	}
+
+	for i, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s, published := capturePublishServer(t)
+
+			value, err := proto.Marshal(&kafkamessage.KafkaRejectedTxTopicMessage{TxHash: distinctTxID(i), Reason: tc.in})
+			require.NoError(t, err)
+
+			require.NoError(t, s.rejectedTxHandler(context.Background())(&kafka.KafkaMessage{Value: value}))
+
+			var msg RejectedTxMessage
+			require.NoError(t, json.Unmarshal(published["test-rejected"], &msg))
+			require.Equal(t, tc.want, msg.Reason)
+		})
+	}
+}
+
+// External rejections (a peer ID on the Kafka message) return before the gate,
+// so what other nodes announce can never drain this node's own egress budget.
+func TestRejectedTxHandler_ExternalRejectionsDoNotTouchTheGate(t *testing.T) {
+	s, published := countingPublishServer(t, nil, 0)
+	s.rejectedTxEgress.setLimits(1, 1, 0, 0)
+	s.rejectedTxEgress.clock = newFakeClock().read
+
+	handler := s.rejectedTxHandler(context.Background())
+
+	for i := 0; i < 50; i++ {
+		value, err := proto.Marshal(&kafkamessage.KafkaRejectedTxTopicMessage{
+			TxHash: distinctTxID(i),
+			PeerId: "12D3KooWSomeOtherPeer",
+			Reason: "TX_INVALID",
+		})
+		require.NoError(t, err)
+		require.NoError(t, handler(&kafka.KafkaMessage{Value: value}))
+	}
+
+	require.Equal(t, 0, *published, "external rejections are never re-broadcast")
+	require.Equal(t, 0, s.rejectedTxEgress.size(), "external rejections must not enter the dedup")
+
+	require.NoError(t, handler(internalRejection(t, distinctTxID(1_000))))
+	require.Equal(t, 1, *published, "the single burst token must still be available to our own rejection")
+}
+
+// Guards the settings-to-gate path end to end, the same way
+// TestApplyPeerMapLimits_ConfiguresSeenHashCaches guards the seen-hash keys:
+// the two p2p_rejected_tx_publish_* keys do something only because
+// applyPeerMapLimits hands them to the gate.
+func TestApplyPeerMapLimits_ConfiguresRejectedTxEgress(t *testing.T) {
+	s := &Server{logger: ulogger.TestLogger{}}
+	s.applyPeerMapLimits(&settings.Settings{P2P: settings.P2PSettings{
+		RejectedTxPublishRate:  1,
+		RejectedTxPublishBurst: 2,
+		SeenHashMaxSize:        5,
+		SeenHashTTL:            time.Minute,
+	}})
+
+	clock := newFakeClock()
+	s.rejectedTxEgress.clock = clock.read
+
+	granted := 0
+	for i := 0; i < 8; i++ {
+		if grant, _ := s.rejectedTxEgress.allow(distinctTxID(i), "self"); grant != nil {
+			granted++
+		}
+	}
+	require.Equal(t, 2, granted, "the configured burst must be in force")
+	require.Equal(t, 5, s.rejectedTxEgress.size(), "the configured seen-hash size cap must be in force on the dedup")
+
+	clock.advance(time.Second)
+	grant, why := s.rejectedTxEgress.allow(distinctTxID(100), "self")
+	require.NotNil(t, grant, "the configured rate must be in force: one token per second: %s", why)
+
+	// The TTL leg needs an entry the size cap has not evicted, and a repeat
+	// that only the configured TTL lets through. distinctTxID(100) was just
+	// granted and is resident. One minute on, under the 2m default its
+	// window has rolled with us as last window's grantee, so the repeat
+	// would be refused as a duplicate; under the configured 1m the entry
+	// has expired and the repeat is a fresh grant.
+	clock.advance(time.Minute)
+	grant, why = s.rejectedTxEgress.allow(distinctTxID(100), "self")
+	require.NotNil(t, grant, "the configured TTL must be in force: the entry expired after one minute: %s", why)
+}
+
+// The dedup cache is swept with the sibling seen-hash caches, so a
+// distinct-txid flood does not leave it pinned at its size cap for the process
+// lifetime.
+func TestCleanupPeerMaps_SweepsRejectedTxDedup(t *testing.T) {
+	s := &Server{logger: ulogger.TestLogger{}}
+	s.rejectedTxEgress.setLimits(100, 100, 0, time.Minute)
+
+	// Entries stamped in the past, so the sweep's wall-clock now is past their TTL.
+	s.rejectedTxEgress.clock = func() time.Time { return time.Now().Add(-2 * time.Minute) }
+
+	for i := 0; i < 10; i++ {
+		grant, _ := s.rejectedTxEgress.allow(distinctTxID(i), "self")
+		require.NotNil(t, grant)
+	}
+	require.Equal(t, 10, s.rejectedTxEgress.size())
+
+	s.cleanupPeerMaps()
+
+	require.Equal(t, 0, s.rejectedTxEgress.size(), "expired dedup entries must be released by the sweep")
+}
+
+// Stop releases the dedup entries with the other seen-hash caches but keeps
+// the bucket: a refilled bucket would only widen the burst.
+func TestServerStop_ClearsRejectedTxDedupKeepsBucket(t *testing.T) {
+	s := &Server{logger: ulogger.TestLogger{}}
+	s.rejectedTxEgress.setLimits(1, 2, 0, time.Minute)
+	s.rejectedTxEgress.clock = newFakeClock().read
+
+	for i := 0; i < 2; i++ {
+		grant, _ := s.rejectedTxEgress.allow(distinctTxID(i), "self")
+		require.NotNil(t, grant)
+	}
+	require.Equal(t, 2, s.rejectedTxEgress.size())
+
+	require.NoError(t, s.Stop(context.Background()))
+
+	require.Zero(t, s.rejectedTxEgress.size(), "Stop must release the dedup entries")
+
+	grant, why := s.rejectedTxEgress.allow(distinctTxID(0), "self")
+	require.Nil(t, grant, "the bucket must survive Stop")
+	require.Equal(t, rejectedTxSuppressedRateLimited, why, "the cleared entry is fresh again, so the refusal is the spent bucket")
+}
+
+// A refund never lifts the bucket above burst and time never runs backwards:
+// a full bucket refunded stays at burst, and an earlier now neither refills
+// nor rewinds.
+func TestTokenBucket_RefundCapsAtBurstAndTimeIsMonotonic(t *testing.T) {
+	b := newTokenBucket(1, 2)
+	now := time.Now()
+
+	b.refund(now)
+	require.Equal(t, float64(2), b.tokens, "refund into a full bucket is lost")
+
+	require.True(t, b.take(now))
+	require.True(t, b.take(now))
+	require.False(t, b.take(now), "bucket empty")
+
+	require.False(t, b.take(now.Add(-time.Hour)), "an earlier now must not mint tokens")
+	require.True(t, b.take(now.Add(time.Second)), "one second refills one token")
+	require.False(t, b.take(now.Add(time.Second)))
+}

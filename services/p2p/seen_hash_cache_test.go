@@ -324,6 +324,25 @@ func TestApplyPeerMapLimits_ConfiguresSeenHashCaches(t *testing.T) {
 	require.True(t, publish, "the configured TTL must be in force: the entry expired after one minute")
 }
 
+// A TTL shorter than the publish window would make Check's expiry branch fire
+// before the window is consulted, re-publishing every repeat: the effective
+// TTL is clamped to the window for every consumer of the cache.
+func TestSeenHashCache_TTLIsClampedToPublishWindow(t *testing.T) {
+	var c seenHashCache
+	c.setLimits(0, 1, 5*time.Second)
+
+	now := time.Now()
+
+	publish, _ := c.Check("hash-a", "peer-1", now)
+	require.True(t, publish)
+
+	publish, _ = c.Check("hash-a", "peer-1", now.Add(6*time.Second))
+	require.False(t, publish, "a repeat past the configured 5s TTL but inside the 15s window must still be suppressed")
+
+	publish, _ = c.Check("hash-a", "peer-1", now.Add(seenHashPublishWindow))
+	require.True(t, publish, "at the window the clamped TTL expires and the entry is fresh")
+}
+
 func TestSeenHashCache_DeleteExpired(t *testing.T) {
 	var c seenHashCache
 

@@ -21,6 +21,7 @@ import (
 	"github.com/bsv-blockchain/teranode/pkg/txrules"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util/rejectedtx"
 )
 
 const (
@@ -29,11 +30,13 @@ const (
 	// transaction, and the error code already carries what they carry. See
 	// uninformativeVerdictText in services/rpc/rpc_errors.go.
 	//
-	// Exporting makes a rename a compile error there, and since the map reads
-	// these constants, rewording one changes both sides together. Do not copy
-	// the text anywhere: a copy is what would drift.
-	ErrMsgInvalidTx = "GoBDK fail to ValidateTransaction"
-	ErrMsgPolicy    = "GoBDK fail to ValidateTransaction by policy settings"
+	// The text itself lives in util/rejectedtx, because these are also the
+	// fixed literals the rejected-tx reason may carry to the network. Both the
+	// RPC suppression map and the gossip allowlist read the one constant, so a
+	// rewording changes all three sides together. Do not copy the text
+	// anywhere: a copy is what would drift.
+	ErrMsgInvalidTx = rejectedtx.DetailGoBDKInvalidTx
+	ErrMsgPolicy    = rejectedtx.DetailGoBDKPolicy
 
 	errMsgInvalidTx = ErrMsgInvalidTx
 	errMsgPolicy    = ErrMsgPolicy
