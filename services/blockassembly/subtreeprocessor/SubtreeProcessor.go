@@ -1192,7 +1192,10 @@ func (stp *SubtreeProcessor) Start(ctx context.Context) {
 					}
 
 					// Phase 1: Dequeue multiple batches
-					dequeueBatches = dequeueBatches[:0] // Reset slice without reallocating
+					// Reset without reallocating. Clear first: a slot left past the new length keeps its old
+					// *TxBatch, and each batch links to the next, so one stale slot pins every batch queued since.
+					clear(dequeueBatches)
+					dequeueBatches = dequeueBatches[:0]
 
 					// Calculate validFromMillis based on DoubleSpendWindow
 					validFromMillis := int64(0)

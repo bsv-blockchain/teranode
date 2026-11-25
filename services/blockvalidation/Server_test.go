@@ -458,6 +458,7 @@ func newProcessBlockFoundHarness(ctx context.Context, t *testing.T) (*Server, *b
 
 	utxoStore, err := sql.New(ctx, logger, tSettings, utxoStoreURL)
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = utxoStore.Close(context.Background()) })
 
 	txStore := memory.New()
 
@@ -666,6 +667,7 @@ func TestServer_processBlockFoundChannel(t *testing.T) {
 
 	utxoStore, err := sql.New(ctx, logger, tSettings, utxoStoreURL)
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = utxoStore.Close(context.Background()) })
 
 	txStore := memory.New()
 	subtreeStore := memory.New()
@@ -730,6 +732,7 @@ func TestServer_catchup(t *testing.T) {
 		if err != nil {
 			panic(err)
 		}
+		t.Cleanup(func() { _ = utxoStore.Close(context.Background()) })
 
 		_ = utxoStore.SetBlockHeight(100)
 
