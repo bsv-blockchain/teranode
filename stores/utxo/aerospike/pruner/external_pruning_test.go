@@ -24,7 +24,7 @@ func TestExternalTransactionPruning(t *testing.T) {
 	logger := ulogger.New("test")
 	ctx := context.Background()
 
-	container, err := aeroTest.RunContainer(ctx)
+	container, err := aeroTest.RunContainer(ctx, aeroTest.WithImage(test.AerospikeImage))
 	test.SkipIfContainerUnavailable(t, err)
 
 	t.Cleanup(func() {
@@ -122,7 +122,7 @@ func TestExternalTransactionOutputsOnlyPruning(t *testing.T) {
 	logger := ulogger.New("test")
 	ctx := context.Background()
 
-	container, err := aeroTest.RunContainer(ctx)
+	container, err := aeroTest.RunContainer(ctx, aeroTest.WithImage(test.AerospikeImage))
 	test.SkipIfContainerUnavailable(t, err)
 
 	t.Cleanup(func() {
@@ -212,7 +212,7 @@ func TestMultiRecordExternalTransactionPruning(t *testing.T) {
 	logger := ulogger.New("test")
 	ctx := context.Background()
 
-	container, err := aeroTest.RunContainer(ctx)
+	container, err := aeroTest.RunContainer(ctx, aeroTest.WithImage(test.AerospikeImage))
 	test.SkipIfContainerUnavailable(t, err)
 
 	t.Cleanup(func() {
@@ -345,7 +345,7 @@ func TestExternalFileAlreadyDeleted(t *testing.T) {
 	logger := ulogger.New("test")
 	ctx := context.Background()
 
-	container, err := aeroTest.RunContainer(ctx)
+	container, err := aeroTest.RunContainer(ctx, aeroTest.WithImage(test.AerospikeImage))
 	test.SkipIfContainerUnavailable(t, err)
 
 	t.Cleanup(func() {
@@ -425,7 +425,7 @@ func TestMixedExternalAndNormalTransactions(t *testing.T) {
 	logger := ulogger.New("test")
 	ctx := context.Background()
 
-	container, err := aeroTest.RunContainer(ctx)
+	container, err := aeroTest.RunContainer(ctx, aeroTest.WithImage(test.AerospikeImage))
 	test.SkipIfContainerUnavailable(t, err)
 
 	t.Cleanup(func() {

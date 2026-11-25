@@ -16,6 +16,7 @@ import (
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
+	"github.com/bsv-blockchain/teranode/util/lane"
 )
 
 const (
@@ -42,6 +43,7 @@ var (
 	rawBinIsCoinbase   = fields.IsCoinbase.String()
 	rawBinExternal     = fields.External.String()
 	rawBinInputs       = fields.Inputs.String()
+	rawBinLanePosition = fields.LanePosition.String()
 )
 
 // rawUnminedRecord holds the decoded bins of the record being delivered.
@@ -51,6 +53,9 @@ type rawUnminedRecord struct {
 	size         uint64
 	createdAt    int
 	unminedSince int
+	// lanePosition is the record's own lane position, read only at utxostore_laneMigration
+	// shadow, when the query names the bin; 0 for none.
+	lanePosition uint64
 
 	// hasCreatedAt is set whenever the bin is present, whatever its type:
 	// its absence is what marks a split record.
@@ -159,6 +164,12 @@ func (h *rawUnminedHandler) Bin(name []byte, particleType int, value []byte) err
 		r.coinbase = rawBool(particleType, value)
 	case rawBinExternal:
 		r.external = rawBool(particleType, value)
+	case rawBinLanePosition:
+		// A position that does not decode is none: at shadow a lane read never fails the reload,
+		// and the tx is counted as without position when its subtree is sealed.
+		if particleType == particle_type.INTEGER && len(value) == 8 {
+			r.lanePosition = lane.FromSigned(int64(binary.BigEndian.Uint64(value))) //nolint:gosec // wire int64
+		}
 	case rawBinBlockIDs:
 		r.blockIDs, r.blockIDsErr = as.DecodeParticle(particleType, value)
 	case rawBinInputs:
@@ -325,6 +336,7 @@ func (h *rawUnminedHandler) buildTx() (*utxo.UnminedTransaction, error) {
 		CreatedAt:    r.createdAt,
 		Locked:       r.locked,
 		BlockIDs:     blockIDs,
+		LanePosition: r.lanePosition,
 	}
 
 	return &rec.tx, nil

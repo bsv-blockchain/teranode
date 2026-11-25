@@ -12,7 +12,7 @@ import (
 )
 
 func TestAerospike8TransactionSupport(t *testing.T) {
-	t.Skip("Aerospike 8.0 community edition does not support transactions")
+	t.Skip("Aerospike community edition does not support transactions")
 
 	ctx := context.Background()
 

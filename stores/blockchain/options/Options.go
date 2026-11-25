@@ -31,6 +31,9 @@ type StoreBlockOptions struct {
 	// transaction at utxostore_laneMigration shadow. Nil stores the block as it is stored
 	// without lanes.
 	LaneMapRows []lane.MapRow
+	// LaneMapRowsOwnBlock says the block is one this node mined, for the lane metrics' block
+	// label (lane.BlockOwn); otherwise they count it as a peer's.
+	LaneMapRowsOwnBlock bool
 }
 
 // StoreBlockOption is a function type that modifies StoreBlockOptions.

@@ -207,10 +207,14 @@ func laneMissingBitmaps(t *testing.T, reason string) float64 {
 		}
 
 		for _, m := range f.GetMetric() {
+			labels := map[string]string{}
 			for _, l := range m.GetLabel() {
-				if l.GetName() == "reason" && l.GetValue() == reason {
-					return m.GetCounter().GetValue()
-				}
+				labels[l.GetName()] = l.GetValue()
+			}
+
+			// subtree validation counts under a peer's block
+			if labels["reason"] == reason && labels["block"] == lane.BlockPeer {
+				return m.GetCounter().GetValue()
 			}
 		}
 	}
