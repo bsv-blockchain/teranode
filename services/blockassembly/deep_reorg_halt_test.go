@@ -147,13 +147,20 @@ func TestDeepReorgHaltSurvivesRestart(t *testing.T) {
 
 			if recordLost {
 				require.NoError(t, items.blockchainClient.SetState(t.Context(), DeepReorgHaltStateKey, []byte{0}))
+			} else {
+				// Pruning off: the reorg no longer halts, so only the record can.
+				ba.settings.GlobalBlockHeightRetention = 0
 			}
 
 			restarted, err := startBlockAssembler(t, items, ba.settings, nil)
 			require.NoError(t, err, "a halted block assembly must start, or the halt becomes a restart loop")
 			t.Cleanup(func() { restarted.subtreeProcessor.Stop(context.Background()) })
 
-			require.Eventually(t, restarted.DeepReorgHalted, 10*time.Second, 20*time.Millisecond, "the halt outlives the restart")
+			if recordLost {
+				require.Eventually(t, restarted.DeepReorgHalted, 10*time.Second, 20*time.Millisecond, "the same reorg halts it again")
+			} else {
+				require.True(t, restarted.DeepReorgHalted(), "the record halts it as it starts")
+			}
 
 			_, _, err = restarted.GetMiningCandidate(t.Context())
 			require.True(t, errors.Is(err, errors.ErrServiceUnavailable), "candidates are refused after the restart, got %v", err)
@@ -290,4 +297,30 @@ func TestDeepReorgHaltCountsOnlyBlocksMovedBack(t *testing.T) {
 	_, err = ba.resetToBlockWithResponse(t.Context(), b[13], 44)
 	require.NoError(t, err)
 	require.False(t, ba.DeepReorgHalted())
+}
+
+// An operator reset that fails leaves block assembly on its old tip and pool, so the halt and its
+// record stay.
+func TestDeepReorgHaltKeptByFailedOperatorReset(t *testing.T) {
+	initPrometheusMetrics()
+
+	items, b2, mockStp := deepReorgFixture(t)
+	ba := items.blockAssembler
+
+	require.Error(t, ba.handleReorg(t.Context(), b2, 2))
+
+	mockStp.On("Reset", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		Return(subtreeprocessor.ResetResponse{Err: errors.NewProcessingError("reset failed")})
+	mockStp.On("GetCurrentBlockHeader").Return((*model.BlockHeader)(nil))
+
+	errCh := make(chan error, 1)
+	ba.handleResetRequests(t.Context(), resetRequest{Operator: true, ErrCh: errCh})
+	require.Error(t, <-errCh)
+	require.True(t, ba.DeepReorgHalted())
+
+	data, err := items.blockchainClient.GetState(t.Context(), DeepReorgHaltStateKey)
+	require.NoError(t, err)
+	recorded, err := parseDeepReorgHalt(data)
+	require.NoError(t, err)
+	require.NotNil(t, recorded, "the record stays with the halt")
 }
