@@ -3844,8 +3844,8 @@ const medianTimeSpan = 11
 // which reads no main-chain flag and no cache, so both describe one chain however the chain
 // moves meanwhile. An entry whose block is stored takes the block's stored median; the entry
 // just above the walked block, not stored yet, is the median of the 11 timestamps below it.
-// The walk keeps no headers beyond those 11, so a first load after a restart holds only the
-// two result arrays.
+// The walk holds one page of headers at a time (mtpPageSize) besides those 11 timestamps, so a
+// first load after a restart holds the two result arrays and one page, not the whole chain.
 func (v *Validator) fetchMTPRange(ctx context.Context, fromHeight, needed uint32) ([]uint32, []uint32, error) {
 	topHash, top, err := v.mtpTop(ctx, needed)
 	if err != nil {

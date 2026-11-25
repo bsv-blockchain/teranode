@@ -204,6 +204,36 @@ func TestValidateTransaction_BIP68AfterReorgReadsTheNewChain(t *testing.T) {
 	require.Len(t, f.v.mtpStore, 61, "the entry above the reload belonged to A and must be cut")
 }
 
+// TestValidateTransaction_BIP68ForkCandidateChecksTheForkPoint checks a block at 60 on B while A
+// is current: its coins above the fork come from the overlay and its base is the fork point, A's
+// block at 20, which the store loaded along A holds, so no reload runs and B's medians decide.
+func TestValidateTransaction_BIP68ForkCandidateChecksTheForkPoint(t *testing.T) {
+	f := newReorgFixture(t)
+
+	const coinHeight = uint32(30)
+
+	overlay := make([]uint32, 0, 39)
+	for h := uint32(21); h < 60; h++ {
+		overlay = append(overlay, medianBelow(h, f.timeOnB))
+	}
+
+	opts := &Options{
+		SkipPolicyChecks:          true,
+		CandidateParentMedianTime: medianBelow(60, f.timeOnB),
+		CandidateForkStartHeight:  21,
+		CandidateForkMTPs:         overlay,
+		CandidateBaseID:           f.blockID(t, f.chainA[19]),
+		CandidateBaseSet:          true,
+	}
+
+	before := f.loads.calls.Load()
+
+	err := f.v.validateTransaction(context.Background(), timeLockedFor40Units(t), 60, []uint32{coinHeight}, opts)
+	require.ErrorContains(t, err, "transaction sequence lock time not satisfied")
+	require.NoError(t, f.v.validateTransaction(context.Background(), timeLockedFor40Units(t), 60, []uint32{10}, opts))
+	require.Equal(t, before, f.loads.calls.Load(), "the store holds the fork point, so nothing reloads")
+}
+
 // TestValidateTransaction_BIP68FailsWhenTheStoreCannotHoldTheBase checks that once the store has
 // moved to B, a candidate naming a base on A (its block at 59) fails with a ProcessingError rather
 // than being judged on B's medians. While the store still held A, it would read A's, correctly.
