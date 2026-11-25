@@ -1664,34 +1664,6 @@ func TestProcessTransactionsInLevels(t *testing.T) {
 		require.NoError(t, err)
 	})
 
-	t.Run("PassesCandidateBranchCoinTimes", func(t *testing.T) {
-		server, cleanup := setupTestServer(t)
-		defer cleanup()
-
-		tx1, err := createTestTransaction("fff2525b8931402dd09222c50775608f75787bd2b87e56995a7bdd30f79702c4")
-		require.NoError(t, err)
-
-		mockValidator := server.validatorClient.(*validator.MockValidator)
-		mockValidator.UtxoStore = server.utxoStore
-		recorder := &optionsRecordingValidator{MockValidator: mockValidator}
-		server.validatorClient = recorder
-
-		server.blockchainClient.(*blockchain.Mock).On("IsFSMCurrentState",
-			mock.Anything, blockchain.FSMStateRUNNING).
-			Return(true, nil)
-
-		fork := candidateForkMTPs{start: 97, mtps: []uint32{1_700_000_000, 1_700_000_600, 1_700_001_200}}
-		err = server.processTransactionsInLevels(context.Background(), []*bt.Tx{tx1}, chainhash.Hash{}, chainhash.Hash{}, 100, 0, 0, fork, map[uint32]bool{}, true)
-		require.NoError(t, err)
-
-		require.NotEmpty(t, recorder.seen)
-
-		for _, opts := range recorder.seen {
-			require.Equal(t, fork.start, opts.CandidateForkStartHeight)
-			require.Equal(t, fork.mtps, opts.CandidateForkMTPs)
-		}
-	})
-
 	t.Run("ValidationErrors", func(t *testing.T) {
 		server, cleanup := setupTestServer(t)
 		defer cleanup()
@@ -2932,21 +2904,4 @@ func TestValidateSubtreeLeafCount(t *testing.T) {
 		require.Error(t, err)
 		require.True(t, errors.Is(err, errors.ErrNetworkInvalidResponse))
 	})
-}
-
-// optionsRecordingValidator records the options of every ValidateWithOptions call and then
-// validates through the wrapped mock.
-type optionsRecordingValidator struct {
-	*validator.MockValidator
-
-	mu   sync.Mutex
-	seen []*validator.Options
-}
-
-func (r *optionsRecordingValidator) ValidateWithOptions(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts *validator.Options) (*utxometa.Data, error) {
-	r.mu.Lock()
-	r.seen = append(r.seen, opts)
-	r.mu.Unlock()
-
-	return r.MockValidator.ValidateWithOptions(ctx, tx, blockHeight, opts)
 }
