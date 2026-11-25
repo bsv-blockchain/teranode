@@ -1406,11 +1406,8 @@ func (s *Server) reconcileConnectionStates(ctx context.Context) {
 // is intentionally deferred to a follow-up PR; the Cleanup method itself ships in PR1).
 
 func (s *Server) listenForBanEvents(ctx context.Context) {
-	// Ban-list events cover adds and removes only. The sweep re-syncs the
-	// admission rules for everything else (expiry, a Clear by the legacy
-	// service, registry bans that lapsed, Block* calls that failed), and drops
-	// at the application layer any registry entry still connected from a
-	// banned address.
+	// Ban-list events cover adds and removes only; banSweepTick covers the
+	// rest.
 	sweep := time.NewTicker(banSweepInterval)
 	defer sweep.Stop()
 
@@ -1421,11 +1418,21 @@ func (s *Server) listenForBanEvents(ctx context.Context) {
 		case event := <-s.banChan:
 			s.handleBanEvent(ctx, event)
 		case <-sweep.C:
-			s.refreshBannedPeersIfStale()
-			s.syncAdmissionBans()
-			s.disconnectPeersOnBanList(ctx, "address on ban list")
+			s.banSweepTick(ctx)
 		}
 	}
+}
+
+// banSweepTick applies the ban changes that raise no ban-list event. It
+// re-lists the registry's banned peers if the mirror is stale, so a lapsed
+// registry ban leaves the banned set, then re-syncs the admission rules,
+// which lifts expired, cleared and lapsed bans and retries Block* calls that
+// failed. Last, it drops at the application layer any registry peer still
+// connected from a banned address.
+func (s *Server) banSweepTick(ctx context.Context) {
+	s.refreshBannedPeersIfStale()
+	s.syncAdmissionBans()
+	s.disconnectPeersOnBanList(ctx, "address on ban list")
 }
 
 func (s *Server) handleBanEvent(ctx context.Context, event BanEvent) {

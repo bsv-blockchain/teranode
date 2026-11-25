@@ -62,16 +62,17 @@ import (
 
 const logProcessingNotification = "[processBlockchainNotification] Processing %s notification: %s"
 
+// banSweepInterval is how often banSweepTick runs: the admission rules are
+// re-synced with the bans in force and connected peers are re-checked against
+// the IP ban list. The sync is what applies changes that raise no ban-list
+// event (an expiry, a Clear by the legacy service, which shares the list, a
+// registry ban that lapsed) and retries failed Block* calls, so those reach
+// connection admission within one interval. Declared as a var so tests can
+// shorten it; not a setting.
+var banSweepInterval = 1 * time.Minute
+
 const (
 	banActionAdd = "add" // Action constant for adding a ban
-
-	// banSweepInterval is how often the admission rules are re-synced with
-	// the bans in force and connected peers are re-checked against the IP ban
-	// list. The sync is what applies changes that raise no ban-list event (an
-	// expiry, a Clear by the legacy service, which shares the list, a registry
-	// ban that lapsed) and retries failed Block* calls, so those reach
-	// connection admission within one interval.
-	banSweepInterval = 1 * time.Minute
 
 	// Default values for peer map cleanup (reduced to prevent memory exhaustion)
 	defaultPeerMapMaxSize         = 10000            // Maximum entries in peer maps (reduced from 100k)
