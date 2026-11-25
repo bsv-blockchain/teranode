@@ -4572,8 +4572,8 @@ func (stp *SubtreeProcessor) reChainSubtrees(fromIndex int) error {
 // Sends happen in a batch before waiting, overlapping send and receive.
 //
 // With a deadline the wait is for the typed StoreResult of each of the first wait subtrees, and a
-// store that failed, was cancelled, or did not finish within deadline of the send is an error.
-// Without one the wait is for ErrChan, which a failed write answers with nil.
+// store that failed, was cancelled, or did not finish within deadline of the end of the sends is an
+// error. Without one the wait is for ErrChan, which a failed write answers with nil.
 func (stp *SubtreeProcessor) storeAndAnnounceChainedSubtrees(ctx context.Context, caller string, wait int, skipNotification bool, deadline time.Duration) error {
 	wait = min(wait, len(stp.chainedSubtrees))
 
@@ -6285,8 +6285,10 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveBackBlocks []*
 	// Store the subtrees this reorg built before any longest-chain mark, and announce them only
 	// after the marks (issue 2269, decision 2). With blockassembly_reorgStoreDeadline set, a store
 	// that failed or did not finish in time fails the reorg here, before anything irreversible
-	// below, and a reset follows (failedForkReorgNeedsReset). At 0 the wait is as before and never
-	// fails on a store.
+	// below, and a reset follows (failedForkReorgNeedsReset). At 0 the wait is on ErrChan as before:
+	// an error there still fails the reorg, a write that failed and went to the retry path does not.
+	// Only the subtree file is checked: most subtrees take the store's Exists path here, because the
+	// forward steps already sent them, and their meta can still be in flight (PR 4b sends once).
 	if err = stp.storeAndAnnounceChainedSubtrees(ctx, "reorgBlocks", len(stp.chainedSubtrees), true, stp.settings.BlockAssembly.ReorgStoreDeadline); err != nil {
 		return err
 	}
