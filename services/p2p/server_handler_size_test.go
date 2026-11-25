@@ -3,6 +3,8 @@ package p2p
 import (
 	"context"
 	"encoding/json"
+	"net"
+	"net/url"
 	"testing"
 	"time"
 
@@ -181,5 +183,45 @@ func TestGossipTopicValidators_CapEveryTopicBeforeRelay(t *testing.T) {
 	for kind, name := range names {
 		require.Contains(t, validators, name)
 		require.Equal(t, topicKindCaps[kind], validators[name].MaxPayloadSize, "topic %s", kind)
+	}
+}
+
+// TestNewServerInstallsGossipTopicValidators drives the real constructor and
+// publishes on each topic it built: a payload at the cap is accepted and one
+// byte over is refused by the node's own pre-relay validator.
+func TestNewServerInstallsGossipTopicValidators(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	port := ln.Addr().(*net.TCPAddr).Port
+	require.NoError(t, ln.Close())
+
+	tSettings := settings.NewSettings()
+	tSettings.P2P.Port = port
+	tSettings.P2P.ListenAddresses = []string{"0.0.0.0"}
+	tSettings.P2P.PeerCacheDir = t.TempDir()
+	tSettings.P2P.DHTMode = "off"
+	tSettings.P2P.BootstrapPeers = nil
+	tSettings.P2P.StaticPeers = nil
+	tSettings.BlockChain.StoreURL, err = url.Parse("sqlitememory://")
+	require.NoError(t, err)
+
+	ResetBanListSingleton()
+	t.Cleanup(ResetBanListSingleton)
+
+	s, err := NewServer(t.Context(), ulogger.TestLogger{}, tSettings, nil, nil, nil, nil, nil, nil, nil, nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = s.P2PClient.Close() })
+
+	topics := map[topicKind]string{
+		topicKindBlock:      s.blockTopicName,
+		topicKindSubtree:    s.subtreeTopicName,
+		topicKindRejectedTx: s.rejectedTxTopicName,
+		topicKindNodeStatus: s.nodeStatusTopicName,
+	}
+
+	for kind, name := range topics {
+		capBytes := topicKindCaps[kind]
+		require.NoError(t, s.P2PClient.Publish(t.Context(), name, make([]byte, capBytes)), "topic %s at cap", kind)
+		require.Error(t, s.P2PClient.Publish(t.Context(), name, make([]byte, capBytes+1)), "topic %s over cap", kind)
 	}
 }
