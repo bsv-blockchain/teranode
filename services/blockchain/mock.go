@@ -698,6 +698,15 @@ func (m *Mock) LaneMapRows(ctx context.Context, blockID uint32) ([]lane.MapRow, 
 	return rows, args.Error(1)
 }
 
+// LaneCapGrants mocks the LaneCapGrants method
+func (m *Mock) LaneCapGrants(ctx context.Context, height uint32) ([]lane.CapGrant, error) {
+	args := m.Called(ctx, height)
+
+	grants, _ := args.Get(0).([]lane.CapGrant)
+
+	return grants, args.Error(1)
+}
+
 type emptyStoreGetBlockHeader struct {
 	blockchain_store.MockStore
 }

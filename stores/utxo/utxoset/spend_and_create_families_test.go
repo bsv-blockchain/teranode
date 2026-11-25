@@ -164,6 +164,8 @@ func TestSpendAndCreateMultiAFailedChunkGivesParentFailedToItsDependants(t *test
 // An output a child in the chunk would have netted is a real coin when the child fails: the
 // parent is written, the child is not, and the output is spendable by anyone.
 func TestSpendAndCreateMultiAFailedChildLeavesItsParentsOutputACoin(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	const height = 1800
 
 	s, ctx := newUncheckpointedStore(t)
@@ -541,6 +543,8 @@ func TestSpendAndCreateMultiRoutesByTheCheckpoint(t *testing.T) {
 // chunk must find the record rather than report the transaction failed, and must not touch
 // anything.
 func TestSpendAndCreateMultiAnExistingTransactionWithNoJournalRowIsExisted(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newUncheckpointedStore(t)
 
 	parent := storedParent(t, s, ctx)
@@ -565,6 +569,8 @@ func TestSpendAndCreateMultiAnExistingTransactionWithNoJournalRowIsExisted(t *te
 // are left alone: the write took nothing for it. Spending first and finding the record through
 // the create claim must roll that spend back.
 func TestSpendAndCreateMultiAnExistingTransactionKeepsItsInputsUntouched(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newUncheckpointedStore(t)
 
 	parent := storedParent(t, s, ctx)
@@ -587,6 +593,8 @@ func TestSpendAndCreateMultiAnExistingTransactionKeepsItsInputsUntouched(t *test
 // included, that a loop of SpendAndCreate leaves. Building the record before the spends would
 // leave no fee, because a fee needs extended inputs.
 func TestSpendAndCreateMultiBuildsTheRecordFromTheDecoratedInputs(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	const height = 2200
 
 	s, ctx := newUncheckpointedStore(t)

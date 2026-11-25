@@ -20,6 +20,8 @@ import (
 // one; without the retry in setLockedDirect that call fails. Every call must succeed, and at the
 // end every transaction reads back unlocked.
 func TestSetLockedConcurrentBatchesDoNotDeadlock(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStoreWith(t, func(ts *settings.Settings) {
 		ts.UtxoStore.LockedBatcherSize = 16
 		ts.UtxoStore.LockedBatcherDurationMillis = 1
@@ -100,6 +102,8 @@ func TestSetLockedConcurrentBatchesDoNotDeadlock(t *testing.T) {
 // They can deadlock, and every call must still succeed through the retry. The retry itself is
 // pinned by TestWithDeadlockRetry, because a run here is not certain to deadlock.
 func TestSetLockedConcurrentWithMiningDoesNotDeadlock(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStoreWith(t, func(ts *settings.Settings) {
 		withCheckpoints(ts, nil)
 		ts.UtxoStore.LockedBatcherSize = 16
@@ -194,6 +198,8 @@ func TestSetLockedConcurrentWithMiningDoesNotDeadlock(t *testing.T) {
 // once, can leave a coin no restore touched disagreeing with its transaction, which is a race of
 // SetLocked's own and not the restore's, so this test keeps it out.
 func TestSetLockedConcurrentWithUnspendLeavesEveryCoinAgreeingWithItsTransaction(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 	require.NoError(t, s.SetBlockHeight(100))
 

@@ -15,6 +15,8 @@ import (
 // the fence shared while it waits. The writer that holds the transaction lock then queues for the
 // fence behind the stamp's exclusive request, and Postgres aborts one of them as a deadlock.
 func TestNettedBelowTakesTransactionLocksBeforeTheFence(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	const height = 975
@@ -46,7 +48,7 @@ func TestNettedBelowTakesTransactionLocksBeforeTheFence(t *testing.T) {
 	require.Eventually(t, func() bool {
 		var n int
 		require.NoError(t, s.pool.QueryRow(ctx,
-			`SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND NOT granted`).Scan(&n))
+			`SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND NOT granted AND database = (SELECT oid FROM pg_database WHERE datname = current_database())`).Scan(&n))
 
 		return n > 0
 	}, 10*time.Second, 20*time.Millisecond)

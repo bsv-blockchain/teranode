@@ -35,6 +35,8 @@ func newOwnerScript(t *testing.T) *bscript.Script {
 // distinguishes "you skipped the freeze" from "there is no such UTXO", and an operator sent
 // looking for a missing UTXO that is sitting right there loses the incident.
 func TestReAssignRefusesAUTXOThatWasNeverFrozen(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 	tSettings := settings.NewSettings()
 
@@ -68,6 +70,8 @@ func TestReAssignRefusesAUTXOThatWasNeverFrozen(t *testing.T) {
 // delete-on-spend means a spent UTXO leaves no row at all, so the freeze that should have
 // preceded this would have failed too.
 func TestReAssignRefusesAUTXOThatIsNotThere(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 	tSettings := settings.NewSettings()
 
@@ -105,6 +109,8 @@ func TestReAssignRefusesAUTXOThatIsNotThere(t *testing.T) {
 // and must be accepted. Getting this backwards is not a failed spend, it is the confiscated
 // UTXO going back to the party it was taken from.
 func TestReAssignInvertsWhoMaySpendTheUTXO(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 	tSettings := settings.NewSettings()
 
@@ -163,6 +169,8 @@ func TestReAssignInvertsWhoMaySpendTheUTXO(t *testing.T) {
 // outpoint by the hash they used to own must be refused rather than shown a live UTXO, and the
 // new owner must see the UTXO held by the delay rather than reported spendable.
 func TestReAssignedUTXOAnswersOnlyToItsNewHash(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 	tSettings := settings.NewSettings()
 
@@ -216,6 +224,8 @@ func TestReAssignedUTXOAnswersOnlyToItsNewHash(t *testing.T) {
 // no error would have the validator mark the transaction extended and validate it against no
 // script at all.
 func TestReAssignedUTXOIsNotDecoratedFromItsOldOutput(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 	tSettings := settings.NewSettings()
 
@@ -278,6 +288,8 @@ func TestReAssignedUTXOIsNotDecoratedFromItsOldOutput(t *testing.T) {
 // live in different files and the next person to widen either one should hit a test rather
 // than a silent hole.
 func TestReAssignedUTXOCannotBeSpentOutpointOnly(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 	tSettings := settings.NewSettings()
 
@@ -378,6 +390,8 @@ func mkCoinbase(t *testing.T, sats uint64) *bt.Tx {
 // the alert system's. hash_override is what says so, because reassignSQL is the only writer of
 // one on a live UTXO and writes both columns together.
 func TestAReassignedCoinbaseInsideItsDelayIsFrozenNotImmature(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 	tSettings := settings.NewSettings()
 
@@ -411,6 +425,8 @@ func TestAReassignedCoinbaseInsideItsDelayIsFrozenNotImmature(t *testing.T) {
 // not have taken over: with no reassignment there is no override, and the coinbase answer is
 // the right one.
 func TestAnOrdinaryCoinbaseInsideItsMaturityIsStillImmature(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	require.NoError(t, s.SetBlockHeight(100))

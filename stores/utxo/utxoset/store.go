@@ -55,6 +55,10 @@ type Store struct {
 	// count lane position coverage.
 	laneShadow bool
 
+	// laneJudgedLeaves holds the journal partitions the pruner's lane rule judged, so a pass that
+	// retries a failed drop does not count them twice (lane_prune.go).
+	laneJudgedLeaves sync.Map
+
 	logger   ulogger.Logger
 	settings *settings.Settings
 	pool     *pgxpool.Pool

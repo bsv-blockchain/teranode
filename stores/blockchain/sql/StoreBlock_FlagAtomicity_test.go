@@ -335,6 +335,8 @@ func TestLegacySequenceLeavesACommittedBlockBehind(t *testing.T) {
 // against PostgreSQL, the engine production uses, because transaction and
 // recursive-CTE semantics there are what the fix actually depends on.
 func TestStoreBlockFlagAtomicity_PostgreSQL(t *testing.T) {
+	t.Parallel() // a database of its own on the shared server
+
 	if testing.Short() {
 		t.Skip("Skipping PostgreSQL tests in short mode")
 	}

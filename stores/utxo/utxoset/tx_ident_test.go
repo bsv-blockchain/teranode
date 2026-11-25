@@ -35,6 +35,8 @@ func requireCheckViolation(t *testing.T, err error, msgAndArgs ...any) {
 // eight wrong values are in range, so nothing about a mistake fails safely. The CHECK is
 // therefore not defensive tidiness, it IS the global uniqueness rule.
 func TestTxIdentRejectsAWrongLeaf(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	txid := make([]byte, 32)
@@ -59,6 +61,8 @@ func TestTxIdentRejectsAWrongLeaf(t *testing.T) {
 // empty txid (schema.go). The AND short-circuits, so that disagreement surfaces as an
 // ordinary constraint violation instead of an error from inside the expression.
 func TestTxIdentRejectsATxidThatIsNotThirtyTwoBytes(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	for _, tc := range []struct {
@@ -91,6 +95,8 @@ func TestTxIdentRejectsATxidThatIsNotThirtyTwoBytes(t *testing.T) {
 // This asserts the PLAN, not the timing, because at test scale postgres will reasonably
 // prefer a sequential scan over a handful of rows. The plan is what transfers to production.
 func TestMempoolReloadUsesThePartialIndex(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	var indexed bool
@@ -132,6 +138,8 @@ func readIdent(t *testing.T, s *Store, ctx context.Context, txid []byte) identRo
 // off. Without it Get, SetMinedMulti, the mempool reload and the reclaimer all have nothing
 // to read.
 func TestCreateWritesTheIdentityRow(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	tx := mkTx(t, 2, 1_000)
@@ -151,6 +159,8 @@ func TestCreateWritesTheIdentityRow(t *testing.T) {
 // TestCreateMarksAMempoolArrivalAsOffChain covers the ordinary case: nothing told us a block
 // contains this transaction, so it is in the mempool set and block assembly must see it.
 func TestCreateMarksAMempoolArrivalAsOffChain(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	tx := mkTx(t, 1, 1_000)
@@ -176,6 +186,8 @@ func TestCreateMarksAMempoolArrivalAsOffChain(t *testing.T) {
 // a guess made before anyone could know. The containment rows stay through the mark-off: they
 // record which blocks contain the transaction, which a chain switch cannot make false.
 func TestAForkMinedTransactionCarriesBothContainmentAndTheWaitingMarker(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	tx := mkTx(t, 1, 1_000)
@@ -213,6 +225,8 @@ func TestAForkMinedTransactionCarriesBothContainmentAndTheWaitingMarker(t *testi
 // nowhere near the unmined set. It says so by clearing its marker; its identity row stays until
 // the deep stamp deletes it, and its one block is recorded as containment.
 func TestCreateLeavesAConfirmedBlockApplicationOnChain(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	tx := mkTx(t, 1, 1_000)
@@ -238,6 +252,8 @@ func TestCreateLeavesAConfirmedBlockApplicationOnChain(t *testing.T) {
 // The primary key on (leaf, txid) is what makes it work, which is why the CHECK tying leaf
 // to txid is load-bearing rather than decorative.
 func TestCreateRejectsATransactionTheStoreAlreadyHolds(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	tx := mkTx(t, 2, 1_000)
@@ -274,6 +290,8 @@ func TestCreateRejectsATransactionTheStoreAlreadyHolds(t *testing.T) {
 // nothing to do" while the parent UTXOs are still sitting there, spendable by anyone else.
 // A double spend becomes mineable by our own node.
 func TestSpendAndCreateKeepsTheSpendsWhenTheTransactionExists(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	parent := mkTx(t, 1, 5_000)
@@ -317,6 +335,8 @@ func TestSpendAndCreateKeepsTheSpendsWhenTheTransactionExists(t *testing.T) {
 // So within the journal's retention the store can name the winner, and beyond it cannot,
 // which is a real and stated limit rather than a gap.
 func TestDoubleSpendNamesTheTransactionThatTookTheUTXO(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	parent := mkTx(t, 1, 5_000)

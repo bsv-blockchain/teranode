@@ -92,6 +92,8 @@ func recordedSpendHeight(t *testing.T, ctx context.Context, store *Store, parent
 }
 
 func TestSpendRecordsItsHeight(t *testing.T) {
+	parallelPostgres(t)
+
 	for _, backend := range heightBackends() {
 		t.Run(backend.name, func(t *testing.T) {
 			store, ctx := backend.build(t)
@@ -125,6 +127,8 @@ func TestSpendRecordsItsHeight(t *testing.T) {
 // Two calls at different heights can share one bulk statement, so each row has
 // to carry its own height rather than the batch sharing one.
 func TestSpendRecordsEachCallsOwnHeightInOneBatch(t *testing.T) {
+	parallelPostgres(t)
+
 	store, ctx := setupPostgresStore(t)
 	store.settings.UtxoStore.BatchSQLOperations = true
 
@@ -151,6 +155,8 @@ func TestSpendRecordsEachCallsOwnHeightInOneBatch(t *testing.T) {
 }
 
 func TestSpendHeightColumnIsAddedToAnOldDatabase(t *testing.T) {
+	parallelPostgres(t)
+
 	for _, backend := range heightBackends()[:2] {
 		t.Run(backend.name, func(t *testing.T) {
 			store, ctx := backend.build(t)
