@@ -14,28 +14,28 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// Subtree validation, block validation, the validator and block assembly each start the lane index
-// on their own. A service that hands its transactions to a validator (propagation, legacy, RPC)
+// Subtree validation, block validation, the validator, block assembly and the pruner each start the
+// lane index on their own. A service that hands its transactions to a validator (propagation, legacy, RPC)
 // starts it only when that validator runs in-process; a process running none of these does not.
 func TestNeedsLaneReader(t *testing.T) {
-	require.False(t, needsLaneReader(false, false, false, false, false, false), "none of them")
-	require.False(t, needsLaneReader(false, false, false, false, false, true), "a local validator setting alone")
-	require.False(t, needsLaneReader(false, false, false, false, true, false), "a validator client with a remote validator")
-	require.True(t, needsLaneReader(false, false, false, false, true, true), "a validator client with a local validator")
+	require.False(t, needsLaneReader(false, false, false, false, false, false, false), "none of them")
+	require.False(t, needsLaneReader(false, false, false, false, false, true, false), "a local validator setting alone")
+	require.False(t, needsLaneReader(false, false, false, false, true, false, false), "a validator client with a remote validator")
+	require.True(t, needsLaneReader(false, false, false, false, true, true, false), "a validator client with a local validator")
 
-	for i, name := range []string{"subtree validation", "block validation", "validator", "block assembly"} {
-		flags := make([]bool, 4)
+	for i, name := range []string{"subtree validation", "block validation", "validator", "block assembly", "pruner"} {
+		flags := make([]bool, 5)
 		flags[i] = true
 
-		require.True(t, needsLaneReader(flags[0], flags[1], flags[2], flags[3], false, false), name)
+		require.True(t, needsLaneReader(flags[0], flags[1], flags[2], flags[3], false, false, flags[4]), name)
 	}
 }
 
-// Start decides from the services the command line switches on: block assembly alone keeps a lane
-// index, and a process running none of the services that check parents keeps none.
+// Start decides from the services the command line switches on: block assembly alone, or the pruner
+// alone, keeps a lane index, and a process running none of the services that check parents keeps none.
 func TestLaneReaderWanted(t *testing.T) {
 	services := []string{serviceSubtreeValidationFormal, serviceBlockValidationFormal, serviceValidatorFormal,
-		serviceBlockAssemblyFormal, servicePropagationFormal, serviceLegacyFormal, serviceRPCFormal}
+		serviceBlockAssemblyFormal, servicePropagationFormal, serviceLegacyFormal, serviceRPCFormal, servicePrunerFormal}
 
 	only := func(on string) []string {
 		args := make([]string, 0, len(services))
@@ -54,7 +54,7 @@ func TestLaneReaderWanted(t *testing.T) {
 
 	require.False(t, laneReaderWanted(only(""), true), "none of them")
 
-	for _, s := range []string{serviceSubtreeValidationFormal, serviceBlockValidationFormal, serviceValidatorFormal, serviceBlockAssemblyFormal} {
+	for _, s := range []string{serviceSubtreeValidationFormal, serviceBlockValidationFormal, serviceValidatorFormal, serviceBlockAssemblyFormal, servicePrunerFormal} {
 		require.True(t, laneReaderWanted(only(s), false), s)
 	}
 
