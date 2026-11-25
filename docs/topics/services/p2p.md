@@ -375,7 +375,7 @@ When a ban event occurs:
 1. The ban is added to the persistent storage
 2. A ban event is broadcast through the ban channel
 3. With `p2p_enforce_bans_at_admission` on (the default), the P2P service applies the ban at connection admission in the P2P message bus: a banned IP or subnet is blocked with `BlockAddr` or `BlockSubnet`, and a peer banned by the peer registry with `BlockPeer`. The bus closes the open connections the rule covers and refuses new ones, inbound and outbound.
-4. Matching peers are also dropped from the peer registry and the sync coordinator
+4. The peers whose connections the rule closed are dropped from the peer registry and the sync coordinator, so a banned sync peer stops being the sync peer. The P2P service notes those peers before it applies the rule, because the bus closes their connections inside the call and the peers are then listed with no addresses. If the rule fails to apply, the peers still connected from the banned address are dropped instead, and the next sweep retries the rule.
 
 The bus keeps these rules in memory only. The P2P service applies the persisted IP and subnet bans as soon as it creates the bus client, and the registry's peer bans when it starts, before it subscribes to any topic. Changes that raise no ban event (an expiry, a registry ban that lapses) reach the bus within one ban sweep, every minute. Gossip messages are still checked against both ban lists, as defence in depth.
 

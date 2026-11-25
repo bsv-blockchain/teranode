@@ -1436,9 +1436,11 @@ func (s *Server) listenForBanEvents(ctx context.Context) {
 // banSweepTick applies the ban changes that raise no ban-list event. It
 // re-lists the registry's banned peers if the mirror is stale, so a lapsed
 // registry ban leaves the banned set, then re-syncs the admission rules,
-// which lifts expired, cleared and lapsed bans and retries Block* calls that
-// failed. Last, it drops at the application layer any registry peer still
-// connected from a banned address.
+// which lifts expired, cleared and lapsed bans, retries Block* calls that
+// failed, and drops the peers a newly applied rule disconnected. Last, it
+// drops at the application layer any registry peer still connected from a
+// banned address: with p2p_enforce_bans_at_admission off, every such peer;
+// with it on, only one whose rule failed to apply.
 func (s *Server) banSweepTick(ctx context.Context) {
 	s.refreshBannedPeersIfStale()
 	s.syncAdmissionBans()
@@ -1470,8 +1472,10 @@ func (s *Server) handleBanEvent(ctx context.Context, event BanEvent) {
 	}
 
 	// IP/subnet ban with no PeerID (operator BanPeer RPC, startup replay). With
-	// admission enforcement on, the sync above closed the connections; drop
-	// the matching peers at the application layer too.
+	// p2p_enforce_bans_at_admission on, the sync above closed the matching
+	// connections and dropped those peers itself, having noted them before
+	// the close; this walk then finds only a peer whose rule failed to apply.
+	// With it off, the walk is what drops the matching peers.
 	s.disconnectPeersOnBanList(ctx, event.Reason)
 }
 
@@ -1573,13 +1577,18 @@ func (s *Server) checkMultiaddrBanned(ctx context.Context, addrStr string) (bool
 }
 
 // disconnectPeersOnBanList drops at the application layer every registry
-// peer still connected from an address on the IP-based ban list. With
-// p2p_enforce_bans_at_admission on, admission closes those connections when
-// their rule is applied (syncAdmissionBans), so normally nothing matches
-// here; a match is a connection whose rule has not been applied yet or whose
-// Block* call failed, and the sync retries that. With it off, this is the
-// only enforcement against a connected peer, and the connection stays open. Peers not in the registry are left alone, so a connection that
-// outlives a failed block is not re-reported on every sweep.
+// peer still connected from an address on the IP-based ban list. It matches
+// on GetPeers' addresses, which list open connections only.
+//
+// With p2p_enforce_bans_at_admission on, applying a rule closes the
+// connections it covers, and syncAdmissionBans drops those peers itself,
+// having noted them before the close; by the time this walk runs they have no
+// addresses and nothing matches. A match here is a connection whose rule has
+// not been applied yet or whose Block* call failed, and the sync retries
+// that. With it off, this walk is the only enforcement against a connected
+// peer, and the connection stays open. Peers not in the registry are left
+// alone, so a connection that outlives a failed block is not re-reported on
+// every sweep.
 func (s *Server) disconnectPeersOnBanList(ctx context.Context, reason string) {
 	if s.P2PClient == nil || s.banList == nil {
 		return

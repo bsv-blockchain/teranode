@@ -6,6 +6,8 @@ import (
 	"sync"
 
 	"github.com/libp2p/go-libp2p/core/peer"
+	ma "github.com/multiformats/go-multiaddr"
+	manet "github.com/multiformats/go-multiaddr/net"
 )
 
 // admissionBans records the ban rules this process has applied to the message
@@ -81,17 +83,35 @@ func (s *Server) admissionEnforced() bool {
 // enforcing the ban meanwhile. A failure never stops a ban from being
 // recorded, because the ban list and the registry are written before this
 // runs.
+//
+// The bus closes the connections a new rule covers inside the Block* call, so
+// afterwards GetPeers lists those peers with no addresses and no walk of it
+// can find them. Each new rule therefore notes the connected peers it covers
+// before it is applied, and once the lock is released those peers are
+// dropped at the application layer (registry and sync coordinator), so a
+// banned host does not stay registered, or stay the sync peer, after its
+// connection is gone.
 func (s *Server) syncAdmissionBans() {
 	if !s.admissionEnforced() {
 		return
 	}
 
+	s.dropPeersClosedAtAdmission(s.applyAdmissionBans(), "connection closed by a ban at admission")
+}
+
+// applyAdmissionBans does syncAdmissionBans' work under the admission lock
+// and returns the IDs of the connected peers whose connections the rules it
+// applied closed. It makes no registry call: those are made after the lock is
+// released.
+func (s *Server) applyAdmissionBans() map[string]struct{} {
 	a := &s.admission
 
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
 	a.initLocked()
+
+	closed := make(map[string]struct{})
 
 	// Every rule some ban asks for, keyed as failed is, so failures of rules
 	// no ban wants any more can be forgotten.
@@ -124,11 +144,11 @@ func (s *Server) syncAdmissionBans() {
 		}
 
 		for addr := range wantAddrs {
-			s.blockAddrLocked(addr)
+			s.blockAddrLocked(addr, closed)
 		}
 
 		for key, n := range wantSubnets {
-			s.blockSubnetLocked(key, n)
+			s.blockSubnetLocked(key, n, closed)
 		}
 	}
 
@@ -152,7 +172,7 @@ func (s *Server) syncAdmissionBans() {
 	}
 
 	for id := range wantPeers {
-		s.blockPeerLocked(id)
+		s.blockPeerLocked(id, closed)
 	}
 
 	for rule := range a.failed {
@@ -160,15 +180,20 @@ func (s *Server) syncAdmissionBans() {
 			delete(a.failed, rule)
 		}
 	}
+
+	return closed
 }
 
 // blockBannedPeer applies a ban this process has just recorded (onPeerBanned)
 // at admission at once, without waiting for the next sync: the peer ID, and
 // each IP the ban list accepted for it. Both are already in the registry's
-// banned set and on the ban list, so a concurrent sync wants them too.
-func (s *Server) blockBannedPeer(peerID string, ips []net.IP) {
+// banned set and on the ban list, so a concurrent sync wants them too. It
+// returns the IDs of the connected peers whose connections those rules
+// closed, the banned peer's own included, for the caller to drop at the
+// application layer once the lock is released; nil with admission off.
+func (s *Server) blockBannedPeer(peerID string, ips []net.IP) map[string]struct{} {
 	if !s.admissionEnforced() {
-		return
+		return nil
 	}
 
 	a := &s.admission
@@ -178,13 +203,85 @@ func (s *Server) blockBannedPeer(peerID string, ips []net.IP) {
 
 	a.initLocked()
 
+	closed := make(map[string]struct{})
+
 	for _, ip := range ips {
 		if addr, ok := netip.AddrFromSlice(ip); ok {
-			s.blockAddrLocked(addr.Unmap())
+			s.blockAddrLocked(addr.Unmap(), closed)
 		}
 	}
 
-	s.blockPeerLocked(peerID)
+	s.blockPeerLocked(peerID, closed)
+
+	return closed
+}
+
+// dropPeersClosedAtAdmission drops at the application layer each registered
+// peer whose connections an admission rule closed. It makes registry calls,
+// so it must not run under the admission lock. A peer not in the registry is
+// left alone, as disconnectPeersOnBanList leaves it.
+func (s *Server) dropPeersClosedAtAdmission(closed map[string]struct{}, reason string) {
+	for id := range closed {
+		pid, err := peer.Decode(id)
+		if err != nil {
+			continue
+		}
+
+		if _, inRegistry := s.getPeer(pid); inRegistry {
+			s.disconnectBannedPeerByID(s.gCtx, pid, reason)
+		}
+	}
+}
+
+// notePeersCoveredLocked returns the ID of each connected peer with a
+// connection covers matches, given the peer's ID and the leading IP of the
+// connection's address (ok false when it has none). It must run before the
+// Block* call that applies the rule: that call closes the matching
+// connections, and GetPeers then lists the peers with no addresses.
+func (s *Server) notePeersCoveredLocked(covers func(id string, ip netip.Addr, ok bool) bool) []string {
+	var ids []string
+
+	for _, p := range s.P2PClient.GetPeers() {
+		for _, addr := range p.Addrs {
+			ip, ok := leadingIP(addr)
+			if covers(p.ID, ip, ok) {
+				ids = append(ids, p.ID)
+				break
+			}
+		}
+	}
+
+	return ids
+}
+
+// leadingIP returns the IP a connection's multiaddr starts with, which is the
+// address the bus's gater judges a connection by. For a relay circuit that is
+// the relay's IP, so a rule on a relay's address covers every peer connected
+// through it, as it does at the gater.
+func leadingIP(addr string) (netip.Addr, bool) {
+	maddr, err := ma.NewMultiaddr(addr)
+	if err != nil {
+		return netip.Addr{}, false
+	}
+
+	ip, err := manet.ToIP(maddr)
+	if err != nil {
+		return netip.Addr{}, false
+	}
+
+	parsed, ok := netip.AddrFromSlice(ip)
+	if !ok {
+		return netip.Addr{}, false
+	}
+
+	return parsed.Unmap(), true
+}
+
+// addAll adds ids to set.
+func addAll(set map[string]struct{}, ids []string) {
+	for _, id := range ids {
+		set[id] = struct{}{}
+	}
 }
 
 // severPeer closes the open connections to peerID through the bus. The bus
@@ -215,11 +312,20 @@ func (s *Server) severPeer(peerID string) {
 	}
 }
 
-func (s *Server) blockAddrLocked(addr netip.Addr) {
+// The Block* helpers below apply a rule not applied yet and add to closed the
+// connected peers it covers, noted before the call closes their connections.
+// A rule already in force closes nothing new, and a failed call closes
+// nothing, so neither notes anyone.
+
+func (s *Server) blockAddrLocked(addr netip.Addr, closed map[string]struct{}) {
 	a := &s.admission
 	if _, ok := a.addrs[addr]; ok {
 		return
 	}
+
+	covered := s.notePeersCoveredLocked(func(_ string, ip netip.Addr, ok bool) bool {
+		return ok && ip == addr
+	})
 
 	if err := s.P2PClient.BlockAddr(net.IP(addr.AsSlice())); err != nil {
 		s.logAdmissionFailureLocked(addr.String(), err)
@@ -228,13 +334,18 @@ func (s *Server) blockAddrLocked(addr netip.Addr) {
 
 	delete(a.failed, addr.String())
 	a.addrs[addr] = struct{}{}
+	addAll(closed, covered)
 }
 
-func (s *Server) blockSubnetLocked(key string, n *net.IPNet) {
+func (s *Server) blockSubnetLocked(key string, n *net.IPNet, closed map[string]struct{}) {
 	a := &s.admission
 	if _, ok := a.subnets[key]; ok {
 		return
 	}
+
+	covered := s.notePeersCoveredLocked(func(_ string, ip netip.Addr, ok bool) bool {
+		return ok && n.Contains(net.IP(ip.AsSlice()))
+	})
 
 	if err := s.P2PClient.BlockSubnet(n); err != nil {
 		s.logAdmissionFailureLocked(key, err)
@@ -243,13 +354,18 @@ func (s *Server) blockSubnetLocked(key string, n *net.IPNet) {
 
 	delete(a.failed, key)
 	a.subnets[key] = n
+	addAll(closed, covered)
 }
 
-func (s *Server) blockPeerLocked(peerID string) {
+func (s *Server) blockPeerLocked(peerID string, closed map[string]struct{}) {
 	a := &s.admission
 	if _, ok := a.peers[peerID]; ok {
 		return
 	}
+
+	covered := s.notePeersCoveredLocked(func(id string, _ netip.Addr, _ bool) bool {
+		return id == peerID
+	})
 
 	if err := s.P2PClient.BlockPeer(peerID); err != nil {
 		s.logAdmissionFailureLocked(peerID, err)
@@ -258,6 +374,7 @@ func (s *Server) blockPeerLocked(peerID string) {
 
 	delete(a.failed, peerID)
 	a.peers[peerID] = struct{}{}
+	addAll(closed, covered)
 }
 
 // The Unblock* calls fail only on input the matching Block* call accepted, so

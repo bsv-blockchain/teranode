@@ -3290,7 +3290,9 @@ func (s *Server) applyBanScore(peerID, reason string) error {
 // onPeerBanned reacts to a NEW ban transition (score crossed threshold this
 // call): it adds the peer's IPs to the local banList, blocks the peer ID and
 // those IPs at connection admission when p2p_enforce_bans_at_admission is on,
-// which closes its connections, and drops it at the application layer. Replaces the old BanEventHandler indirection.
+// which closes its connections, and drops it at the application layer, along
+// with any other peer those IP rules disconnected. Replaces the old
+// BanEventHandler indirection.
 func (s *Server) onPeerBanned(peerID, reason string) {
 	// Honor the configured ban duration so the address-level ban list and the
 	// centralized peer registry agree on how long the ban lasts. Fall back to
@@ -3340,8 +3342,14 @@ func (s *Server) onPeerBanned(peerID, reason string) {
 		}
 	}
 
-	s.blockBannedPeer(pid.String(), bannedIPs)
+	closed := s.blockBannedPeer(pid.String(), bannedIPs)
 	s.disconnectBannedPeerByID(s.gCtx, pid, reason)
+
+	// The IP rules also closed the connections of any other peer on those
+	// addresses; the block emptied their addresses, so no later walk finds
+	// them.
+	delete(closed, pid.String())
+	s.dropPeersClosedAtAdmission(closed, reason)
 }
 
 // RecordBytesDownloaded records the number of bytes downloaded via HTTP from a peer.
