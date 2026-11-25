@@ -72,9 +72,47 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
-  test:
-    name: test
+  consensus-vectors:
+    name: consensus-vectors
+    # bitcoin-sv's script, transaction and signature hash vectors (test/consensus),
+    # which make test skips with the rest of test/. Seconds, no -race.
+    # arm64-safe: gobdk ships arm64 libraries.
+    runs-on: teranode-runner-8-core-arm
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: false
+
+      # Plain go test (no -race): module cache only.
+      - name: Restore Go caches
+        uses: ./.github/actions/go-cache
+        with:
+          build_cache: 'false'
+
+      - name: Run consensus vectors
+        run: make consensustest
+
+  test-shard:
+    name: test ${{ matrix.shard }}
+    # make test is split so its slowest package, stores/utxo/aerospike (~15 min
+    # under -race and coverage), runs beside the rest instead of setting the
+    # whole job's wall time, and so the two biggest test binaries don't share a
+    # runner's memory. The `test` job below is the required check.
     runs-on: teranode-runner-16-core-arm
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - shard: unit
+            run: make test TEST_EXCLUDE=stores/utxo/aerospike TEST_COVERPROFILE=coverage-unit.out
+            profile: coverage-unit.out
+          - shard: aerospike
+            run: make test-pkgs TEST_PKGS=stores/utxo/aerospike TEST_COVERPROFILE=coverage-aerospike.out
+            profile: coverage-aerospike.out
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
 
@@ -96,59 +134,55 @@ jobs:
         uses: ./.github/actions/go-cache
 
       - name: Run Go tests
-        # Tracks each test binary's peak RSS (VmHWM — the kernel's monotonic
-        # high-water mark) silently in the background, then prints a top-10
-        # peak-memory table at the END of the run, so per-binary unit-test memory
-        # stays visible and regressions are caught early. No deps; survives a
-        # SIGTERM (the summary also runs from the EXIT trap). Sampler runs under
-        # `set +e` so a SIGPIPE/no-match can't trip the step's `set -e`; `make test`
-        # keeps it.
-        run: |
-          TRACK="$(mktemp)"
-          track() {
-            set +e
-            local st pid hwm cmd name
-            while :; do
-              for st in /proc/[0-9]*/status; do
-                hwm="$(awk '/^VmHWM:/{print $2; exit}' "$st" 2>/dev/null)"
-                [ -n "$hwm" ] || continue
-                pid="${st#/proc/}"; pid="${pid%/status}"
-                cmd="$(tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null)"
-                name="${cmd%% *}"; name="${name##*/}"
-                case "$name" in *.test) echo "$hwm $name" >> "$TRACK" ;; esac
-              done
-              sleep 10
-            done
-          }
-          track & TRACK_PID=$!
-          job_peak() {
-            local f
-            for f in /sys/fs/cgroup/memory.peak /sys/fs/cgroup/memory/memory.max_usage_in_bytes; do
-              if [ -r "$f" ]; then awk -v b="$(<"$f")" 'BEGIN{printf "%.1fG", b/1073741824}'; return; fi
-            done
-            awk '/^MemTotal:/{t=$2} /^MemAvailable:/{a=$2} END{printf "%.1fG",(t-a)/1048576}' /proc/meminfo
-          }
-          summary() {
-            set +e
-            kill "$TRACK_PID" 2>/dev/null
-            echo "::group::Peak memory  (job peak=$(job_peak))"
-            awk '$1>m[$2]{m[$2]=$1} END{for (k in m) printf "%d %s\n", m[k], k}' "$TRACK" 2>/dev/null \
-              | sort -rn | head -10 | awk '{printf "PEAKMEM %.1fG %s\n", $1/1048576, $2}'
-            echo "::endgroup::"
-          }
-          trap summary EXIT
-          make test
-        continue-on-error: false
+        # Prints each test binary's peak memory at the end, even if the runner is shut down.
+        run: .github/scripts/track-test-memory.sh ${{ matrix.run }}
 
       - name: Run heavy Go tests
         # Cases gated behind TERANODE_HEAVY_TESTS: minutes under -race and coverage,
         # seconds without.
+        if: matrix.shard == 'unit'
         run: make test-heavy
 
-      - name: Check consensus package coverage
-        # Fails when a consensus-critical package's statement coverage in the
-        # coverage.out written by make test falls below its minimum.
-        run: go run ./cmd/coveragegate -profile coverage.out -thresholds .github/consensus-coverage.txt
+      - name: Upload coverage profile
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: go-coverage-${{ matrix.shard }}
+          path: ${{ matrix.profile }}
+          if-no-files-found: warn
+          retention-days: 1
+
+  test:
+    name: test
+    # The required check. Fails unless every test shard passed, then merges their
+    # coverage profiles into the coverage.out that the coverage gate and Sonar read.
+    needs: test-shard
+    # Runs when a shard fails or is skipped, so the check reports it, but not when
+    # a newer push cancels the workflow.
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+
+      - name: Download coverage profiles
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: go-coverage-*
+          path: coverage-profiles
+          merge-multiple: true
+
+      - name: Merge coverage profiles
+        # Every profile comes from -race (mode: atomic) with -coverpkg=./..., so a
+        # block can appear in several; the coverage gate and Sonar count a block
+        # covered when any copy of it is.
+        run: |
+          set -euo pipefail
+          for f in coverage-unit.out coverage-aerospike.out; do
+            [ -f "coverage-profiles/$f" ] || { echo "::error::Missing coverage profile $f"; exit 1; }
+          done
+          mode="$(head -n 1 coverage-profiles/coverage-unit.out)"
+          [ "$(head -n 1 coverage-profiles/coverage-aerospike.out)" = "$mode" ] || { echo "::error::Coverage profiles have different modes"; exit 1; }
+          { cat coverage-profiles/coverage-unit.out; tail -n +2 coverage-profiles/coverage-aerospike.out; } > coverage.out
 
       - name: Upload coverage report
         if: always()
@@ -158,6 +192,28 @@ jobs:
           path: coverage.out
           if-no-files-found: error
           retention-days: 1
+
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: false
+
+      - name: Restore Go caches
+        uses: ./.github/actions/go-cache
+        with:
+          build_cache: 'false'
+
+      - name: Check consensus package coverage
+        # Fails when a consensus-critical package's statement coverage in the
+        # merged coverage.out falls below its minimum.
+        run: go run ./cmd/coveragegate -profile coverage.out -thresholds .github/consensus-coverage.txt
+
+      - name: Require every test shard to pass
+        if: always()
+        env:
+          SHARDS_RESULT: ${{ needs.test-shard.result }}
+        run: |
+          [ "$SHARDS_RESULT" = "success" ] || { echo "::error::Test shards finished with result: $SHARDS_RESULT"; exit 1; }
 
       # - name: Publish Test Summary Results
       #   if: always()
