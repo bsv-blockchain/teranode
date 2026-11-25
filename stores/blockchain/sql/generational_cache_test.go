@@ -311,7 +311,10 @@ func TestGenerationalCache_HeaderBudgetReclaimed(t *testing.T) {
 		}
 		require.True(t, admitted, "evictions spread over many refused Sets must add up to a sweep")
 		require.Equal(t, sweeps+1, gc.sweeps)
-		for i := uint32(1 << 30); gc.NewOp(chainhash.Hash{byte(i), byte(i >> 8), byte(i >> 16), byte(i >> 24)}).Set(ids, time.Hour); i++ {
+		for i := uint32(1 << 30); ; i++ {
+			if !gc.NewOp(chainhash.Hash{byte(i), byte(i >> 8), byte(i >> 16), byte(i >> 24)}).Set(ids, time.Hour) {
+				break
+			}
 		}
 		sweeps = gc.sweeps
 		for i := 0; i < 100; i++ {
