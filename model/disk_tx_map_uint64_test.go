@@ -334,3 +334,37 @@ func TestNewDiskTxMapUint64_RejectsZeroCapacity(t *testing.T) {
 	})
 	require.Error(t, err)
 }
+
+// FileBytes is the disk every table can take, and GrowAt reaches each table. Each map holds
+// spread keys at about half of its smallest layout, 256 segments of 64 slots: past a GrowAt of 0.5
+// in some segment, so that map grows, but far from filling any segment, so the control map with
+// GrowAt 0 does not.
+func TestDiskTxMapUint64_FileBytesAndGrowAt(t *testing.T) {
+	newMap := func(growAt float64) *DiskTxMapUint64 {
+		m, err := NewDiskTxMapUint64(DiskTxMapUint64Options{
+			BasePaths:      []string{t.TempDir()},
+			Prefix:         "test-growat",
+			FilterCapacity: 10,
+			GrowAt:         growAt,
+		})
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = m.Close() })
+
+		return m
+	}
+
+	grows, control := newMap(0.5), newMap(0)
+
+	start := grows.FileBytes()
+	require.Positive(t, start)
+	require.Equal(t, start, control.FileBytes())
+
+	for i := 0; i < 256*64/2; i++ {
+		h := chainhash.HashH([]byte(fmt.Sprintf("tx-%d", i)))
+		require.NoError(t, grows.Put(h, uint64(i)))
+		require.NoError(t, control.Put(h, uint64(i)))
+	}
+
+	require.Greater(t, grows.FileBytes(), start, "a segment past half grew the table, and FileBytes followed")
+	require.Equal(t, start, control.FileBytes(), "without GrowAt no segment was full, so nothing grew")
+}

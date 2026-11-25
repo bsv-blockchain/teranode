@@ -11,6 +11,7 @@ import (
 	"github.com/bsv-blockchain/teranode/services/blockassembly/subtreeprocessor"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util/lane"
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/bsv-blockchain/teranode/util/testutil"
 	promtestutil "github.com/prometheus/client_golang/prometheus/testutil"
@@ -644,4 +645,32 @@ func TestNewHeldLimitShedError(t *testing.T) {
 	require.Contains(t, shed.Error(), "holds 65 transactions in memory, limit 64")
 	require.True(t, IsHeldLimitShed(errors.UnwrapGRPC(errors.WrapGRPC(shed))), "and it survives the gRPC hop")
 	require.False(t, errors.Is(shed, errors.ErrServiceUnavailable), "a retry layer must not take it for a transient fault")
+}
+
+// A batch the queue admits only on a retry keeps its lane positions: each attempt offers the same
+// positions, at utxostore_laneMigration shadow.
+func TestAddTxBatch_RetryKeepsLanePositions(t *testing.T) {
+	positions := []uint64{lane.Pack(1, 5), lane.Pack(1, 6)}
+
+	stp := &subtreeprocessor.MockSubtreeProcessor{}
+	stp.On("AddPositionedBatchBounded", mock.Anything, mock.Anything, positions, false).Return(subtreeprocessor.RefusedQueue).Once()
+	stp.On("AddPositionedBatchBounded", mock.Anything, mock.Anything, positions, false).Return(subtreeprocessor.Admitted).Once()
+	stp.On("QueueLength").Return(int64(150)).Maybe()
+	stp.On("QueueMaxItems").Return(int64(100)).Maybe()
+
+	ba := baWithProcessor(t, func(s *settings.Settings) {
+		s.UtxoStore.LaneMigration = settings.LaneMigrationShadow
+		s.BlockAssembly.MaxQueueItems = 100
+		s.BlockAssembly.QueueFullWaitTimeout = 500 * time.Millisecond
+	}, stp)
+
+	req := columnarReq(2)
+	req.LanePositions = positions
+
+	resp, err := ba.AddTxBatchColumnar(context.Background(), req)
+	require.NoError(t, err)
+	require.True(t, resp.Ok)
+
+	stp.AssertNumberOfCalls(t, "AddPositionedBatchBounded", 2)
+	stp.AssertNotCalled(t, "AddBatchBounded", mock.Anything, mock.Anything, mock.Anything)
 }
