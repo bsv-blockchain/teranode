@@ -116,6 +116,10 @@ func TestSQL_GetBlockInChainByHeightHash_FastPathEquivalence(t *testing.T) {
 	store := setupTestStore(t)
 	ctx := context.Background()
 
+	// The startup rebuild holds mainChainRebuilding up; the fast path asserted below
+	// needs it down.
+	waitForStartupRebuild(t, store)
+
 	block0, err := store.GetBlockByHeight(ctx, 0)
 	require.NoError(t, err)
 

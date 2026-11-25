@@ -18,6 +18,7 @@ import (
 	"github.com/bsv-blockchain/go-chaincfg"
 	safeconversion "github.com/bsv-blockchain/go-safe-conversion"
 	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/bsv-blockchain/teranode/pkg/txrules"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/ulogger"
 )
@@ -134,19 +135,8 @@ func uint2int(arr []uint32) ([]int32, error) {
 //   - stn         -> stn
 //   - teratestnet -> teratestnet
 //   - tstn        -> tstn
-func getBDKChainNameFromParams(l ulogger.Logger, pa *chaincfg.Params) string {
-	// teranode : mainnet  testnet   regtest  stn
-	// bdk  :    main      test  regtest  stn
-	chainNameMap := map[string]string{
-		"mainnet":     "main",
-		"stn":         "stn",
-		"tstn":        "tstn",
-		"teratestnet": "teratestnet",
-		"testnet":     "test",
-		"regtest":     "regtest",
-	}
-
-	return chainNameMap[pa.Name]
+func getBDKChainNameFromParams(_ ulogger.Logger, pa *chaincfg.Params) string {
+	return txrules.BDKChainName(pa)
 }
 
 // newScriptVerifierGoBDK creates a new GoBDK transaction validator adapter.

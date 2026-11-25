@@ -186,6 +186,7 @@ func (e *env) deleteSubtreeBlobs(ctx context.Context, pf *preflightResult, subtr
 			fileformat.FileTypeSubtreeMeta,
 			fileformat.FileTypeSubtreeToCheck,
 			fileformat.FileTypeSubtreeConflicting,
+			fileformat.FileTypeSubtreeLaneBitmaps,
 		} {
 			if delErr := e.subtreeStore.Del(ctx, sh[:], ft); delErr != nil {
 				// Best effort — tolerate NotFound per file type.

@@ -1413,6 +1413,7 @@ func (ba *BlockAssembly) AddTx(ctx context.Context, req *blockassembly_api.AddTx
 			[]subtreepkg.Node{{Hash: chainhash.Hash(req.Txid), Fee: req.Fee, SizeInBytes: req.Size}},
 			[]*subtreepkg.TxInpoints{&txInpoints},
 			req.GetInBlock(),
+			[]uint32{req.ValidatedHeight},
 		); err != nil {
 			return nil, err
 		}
@@ -1512,8 +1513,8 @@ const queueFullPollInterval = 5 * time.Millisecond
 //
 // The wait is strictly bounded so it can never wedge the validator, whose
 // block-assembly client honours the caller's context (group.Wait(ctx, 0)).
-func (ba *BlockAssembly) addTxBatchWithBackpressure(ctx context.Context, nodes []subtreepkg.Node, txInpoints []*subtreepkg.TxInpoints, inBlock bool) error {
-	verdict := ba.blockAssembler.AddTxBatchBounded(nodes, txInpoints, inBlock)
+func (ba *BlockAssembly) addTxBatchWithBackpressure(ctx context.Context, nodes []subtreepkg.Node, txInpoints []*subtreepkg.TxInpoints, inBlock bool, validatedHeights []uint32) error {
+	verdict := ba.blockAssembler.AddTxBatchBounded(nodes, txInpoints, inBlock, validatedHeights)
 	if verdict == subtreeprocessor.Admitted {
 		return nil
 	}
@@ -1538,7 +1539,7 @@ func (ba *BlockAssembly) addTxBatchWithBackpressure(ctx context.Context, nodes [
 			case <-timeout:
 				return ba.shed(start)
 			case <-ticker.C:
-				switch ba.blockAssembler.AddTxBatchBounded(nodes, txInpoints, inBlock) {
+				switch ba.blockAssembler.AddTxBatchBounded(nodes, txInpoints, inBlock, validatedHeights) {
 				case subtreeprocessor.Admitted:
 					prometheusBlockAssemblyQueueWait.Observe(time.Since(start).Seconds())
 					return nil
@@ -1680,6 +1681,7 @@ func (ba *BlockAssembly) AddTxBatch(ctx context.Context, batch *blockassembly_ap
 	nodes := make([]subtreepkg.Node, len(requests))
 	txInpointsArr := make([]subtreepkg.TxInpoints, len(requests))
 	txInpointsList := make([]*subtreepkg.TxInpoints, len(requests))
+	validatedHeights := make([]uint32, len(requests))
 
 	for i, req := range requests {
 		if len(req.Txid) != 32 {
@@ -1691,6 +1693,7 @@ func (ba *BlockAssembly) AddTxBatch(ctx context.Context, batch *blockassembly_ap
 			Fee:         req.Fee,
 			SizeInBytes: req.Size,
 		}
+		validatedHeights[i] = req.ValidatedHeight
 
 		// kept in every mode, as in AddTx
 		ti, err := subtreepkg.NewTxInpointsFromBytes(req.TxInpoints)
@@ -1705,7 +1708,7 @@ func (ba *BlockAssembly) AddTxBatch(ctx context.Context, batch *blockassembly_ap
 
 	// Add entire batch in one call
 	if !ba.settings.BlockAssembly.Disabled {
-		if err := ba.addTxBatchWithBackpressure(ctx, nodes, txInpointsList, batch.GetInBlock()); err != nil {
+		if err := ba.addTxBatchWithBackpressure(ctx, nodes, txInpointsList, batch.GetInBlock(), validatedHeights); err != nil {
 			return nil, err
 		}
 
@@ -1766,6 +1769,11 @@ func (ba *BlockAssembly) AddTxBatchColumnar(ctx context.Context, req *blockassem
 
 	if len(req.Fees) != txCount || len(req.Sizes) != txCount {
 		return nil, errors.WrapGRPC(errors.NewInvalidArgumentError("mismatched array lengths: txids=%d, fees=%d, sizes=%d", txCount, len(req.Fees), len(req.Sizes)))
+	}
+
+	// Empty from a sender that tags nothing; otherwise one height per transaction.
+	if len(req.ValidatedHeights) != 0 && len(req.ValidatedHeights) != txCount {
+		return nil, errors.WrapGRPC(errors.NewInvalidArgumentError("mismatched array lengths: txids=%d, validated_heights=%d", txCount, len(req.ValidatedHeights)))
 	}
 
 	// Validate columnar TxInpoints structure
@@ -1881,7 +1889,7 @@ func (ba *BlockAssembly) AddTxBatchColumnar(ctx context.Context, req *blockassem
 		txInpointsList[i] = &txInpointsArr[i]
 	}
 
-	if err := ba.addTxBatchWithBackpressure(ctx, nodes, txInpointsList, req.GetInBlock()); err != nil {
+	if err := ba.addTxBatchWithBackpressure(ctx, nodes, txInpointsList, req.GetInBlock(), req.ValidatedHeights); err != nil {
 		return nil, err
 	}
 

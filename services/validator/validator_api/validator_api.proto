@@ -90,6 +90,7 @@ message ValidateTransactionResponse {
   bytes txid = 2;        // Transaction ID of the validated transaction
   string reason = 3;     // Reason for rejection if invalid
   bytes metadata = 4;    // Additional metadata for the transaction
+  uint64 lane_position = 5; // The created record's own lane position at utxostore_laneMigration shadow, 0 when none; metadata does not carry it
 }
 
 // ValidateTransactionBatchRequest contains multiple transactions for batch validation
@@ -104,6 +105,7 @@ message ValidateTransactionBatchResponse {
   bool valid = 1;                    // Always true; callers must inspect per-item errors below.
   repeated errors.TError errors = 2;        // Array of error messages, one per transaction
   repeated bytes metadata = 3;       // Array of metadata for each transaction
+  repeated uint64 lane_positions = 4; // Each transaction's lane_position, as in ValidateTransactionResponse; empty from a server built before it
 }
 
 // GetBlockHeightResponse provides the current block height

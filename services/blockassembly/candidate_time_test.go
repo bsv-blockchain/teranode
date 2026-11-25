@@ -926,6 +926,7 @@ func TestMiningCandidateMainPathTimeFloored(t *testing.T) {
 			[]subtreepkg.Node{{Hash: txHash, Fee: uint64(100), SizeInBytes: 250}},
 			[]*subtreepkg.TxInpoints{{}},
 			false,
+			nil,
 		))
 	}
 

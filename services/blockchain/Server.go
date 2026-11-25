@@ -35,6 +35,7 @@ import (
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/pkg/urlutil"
 	"github.com/bsv-blockchain/teranode/services/blockchain/blockchain_api"
+	"github.com/bsv-blockchain/teranode/services/p2p/peerregistry"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/blob"
 	blobstoreoptions "github.com/bsv-blockchain/teranode/stores/blob/options"
@@ -1096,19 +1097,16 @@ func (b *Blockchain) startSubscriptions() {
 const sendDeadline = 5 * time.Second
 
 // minPeerRegistryTTL is the floor applied to an operator-configured
-// p2p_peer_registry_ttl. A connected peer republishes node_status every
-// nodeStatusPublishInterval (10s, see services/p2p/Server.go), which refreshes
-// LastSeen via Register (services/blockchain/peer_registry.go), and the
-// gossip-handler batcher coalesces those refreshes for up to one minute
-// (registryReassertTTL, services/p2p/peer_registry_batcher.go) before
-// re-asserting. A TTL below this floor risks the cleanup loop expiring an
-// actively-connected peer between its own batched refreshes — the peer then
-// fails IsPeerUnhealthy (services/p2p/handle_catchup_metrics.go), which gates
-// it out of catchup, and drops any not-yet-flushed validated-header progress
-// (RecordValidatedPeerProgress, services/blockchain/peer_registry.go). Five
-// minutes is 5x the batcher's reassert window and 30x the publish interval,
-// comfortably covering a missed beat or two of either.
-const minPeerRegistryTTL = 5 * time.Minute
+// p2p_peer_registry_ttl. It is not restated arithmetic: the number is derived
+// in one place - services/p2p/peerregistry - from the two P2P cadences it
+// exists to cover (node-status publishes every NodeStatusPublishInterval
+// refreshing LastSeen via Register, coalesced by the gossip batcher for up to
+// RegistryReassertTTL). A TTL below the floor risks the cleanup loop expiring
+// an actively-connected peer between its own batched refreshes - the peer
+// then fails IsPeerUnhealthy (services/p2p/handle_catchup_metrics.go), which
+// gates it out of catchup, and drops any not-yet-flushed validated-header
+// progress (RecordValidatedPeerProgress, services/blockchain/peer_registry.go).
+const minPeerRegistryTTL = peerregistry.MinTTL
 
 // resolvePeerRegistryTTL applies the same coercion Server.go has always
 // applied for ttl<=0 (select the 24h default) and adds a floor for a
@@ -1342,6 +1340,17 @@ func (b *Blockchain) AddBlock(ctx context.Context, request *blockchain_api.AddBl
 	}
 	if request.OptionID != 0 {
 		storeBlockOptions = append(storeBlockOptions, blockchainoptions.WithID(request.OptionID))
+	}
+
+	// The block's lane map rows, at utxostore_laneMigration shadow. They are measured, never
+	// acted on, so rows that do not even parse are dropped and the block is stored without them.
+	if len(request.LaneMapRows) > 0 {
+		if laneRows, laneErr := laneMapRowsFromProto(request.LaneMapRows); laneErr != nil {
+			lane.CountRowInsertFailure()
+			b.logger.Warnf("[Blockchain][AddBlock][%s] dropping its lane map rows: %v", header.Hash().String(), laneErr)
+		} else {
+			storeBlockOptions = append(storeBlockOptions, blockchainoptions.WithLaneMapRows(laneRows))
+		}
 	}
 
 	ID, height, err := b.store.StoreBlock(ctx, block, request.PeerId, storeBlockOptions...)
@@ -1707,6 +1716,21 @@ func (b *Blockchain) ReleaseLaneLease(ctx context.Context, req *blockchain_api.R
 	}
 
 	return &blockchain_api.ReleaseLaneLeaseResponse{AlreadyClosed: already}, nil
+}
+
+// GetLaneMapRows returns one block's lane map rows, for a reader's index.
+func (b *Blockchain) GetLaneMapRows(ctx context.Context, req *blockchain_api.GetLaneMapRowsRequest) (*blockchain_api.GetLaneMapRowsResponse, error) {
+	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "GetLaneMapRows",
+		tracing.WithParentStat(b.stats),
+	)
+	defer deferFn()
+
+	rows, err := b.store.LaneMapRows(ctx, req.GetBlockId())
+	if err != nil {
+		return nil, errors.WrapGRPC(err)
+	}
+
+	return &blockchain_api.GetLaneMapRowsResponse{Rows: laneMapRowsToProto(rows)}, nil
 }
 
 // leaseFromRequest checks the lease ID and lane a request names.

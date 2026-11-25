@@ -800,6 +800,9 @@ func (v *Server) validateTransaction(ctx context.Context, req *validator_api.Val
 		Valid:    true,
 		Txid:     tx.TxIDChainHash().CloneBytes(),
 		Metadata: txMetaBytes,
+		// Bytes does not carry the lane position, so it goes beside it: subtree validation puts it
+		// in the subtree's lane bitmaps at utxostore_laneMigration shadow.
+		LanePosition: txMetaData.LanePosition,
 	}, nil
 }
 
@@ -844,6 +847,7 @@ func (v *Server) ValidateTransactionBatch(ctx context.Context, req *validator_ap
 
 	// we create a slice for all transactions we just batched, in the same order as we got them
 	metaData := make([][]byte, len(req.GetTransactions()))
+	lanePositions := make([]uint64, len(req.GetTransactions()))
 	errReasons := make([]*errors.TError, len(req.GetTransactions()))
 
 	for idx, reqItem := range req.GetTransactions() {
@@ -855,6 +859,7 @@ func (v *Server) ValidateTransactionBatch(ctx context.Context, req *validator_ap
 			// metadata through the nil-safe generated accessor: no response means
 			// empty metadata at this index, with the error recorded alongside it.
 			metaData[idx] = validatorResponse.GetMetadata()
+			lanePositions[idx] = validatorResponse.GetLanePosition()
 			errReasons[idx] = errors.Wrap(err)
 
 			// Never return an error because we don't want to cancel the context for other transactions in the batch.
@@ -868,9 +873,10 @@ func (v *Server) ValidateTransactionBatch(ctx context.Context, req *validator_ap
 	return &validator_api.ValidateTransactionBatchResponse{
 		// Valid is always true at the batch level by design — callers must
 		// inspect per-item Errors. The field is retained for wire compatibility.
-		Valid:    true,
-		Errors:   errReasons,
-		Metadata: metaData,
+		Valid:         true,
+		Errors:        errReasons,
+		Metadata:      metaData,
+		LanePositions: lanePositions,
 	}, nil
 }
 
