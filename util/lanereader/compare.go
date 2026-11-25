@@ -65,8 +65,9 @@ const (
 	KindOffChain = "off_chain"
 	// KindCoinbase: the parent is a coinbase. It takes a lane position like any record, but block
 	// rows leave the coinbase out, so no row holds its position and lanes cannot say it is mined.
-	// Counted for every coinbase parent, whatever the index holds, and never looked up. Not a
-	// disagreement.
+	// Counted for a coinbase parent whose read gives the coinbase flag, whatever the index holds,
+	// and never looked up. The validator's store answer gives it only on the stores that fill
+	// utxo.ParentOutput.IsCoinbase (utxoset, Aerospike). Not a disagreement.
 	KindCoinbase = "coinbase"
 )
 
