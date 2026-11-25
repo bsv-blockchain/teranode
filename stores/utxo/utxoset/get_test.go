@@ -14,6 +14,8 @@ import (
 // field-less Get is the default shape the conformance suite uses, and it expects the raw
 // transaction back, which is why the body table had to exist before this could work.
 func TestGetReturnsTheWholeTransaction(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	tx := mkTx(t, 2, 4_242)
@@ -35,6 +37,8 @@ func TestGetReturnsTheWholeTransaction(t *testing.T) {
 // a not-found parent into TxMissingParent and rejects the child, which is recoverable,
 // whereas a zero-valued answer would be silently wrong.
 func TestGetReportsAMissingTransactionAsNotFound(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	tx := mkTx(t, 1, 1_000)
@@ -52,6 +56,8 @@ func TestGetReportsAMissingTransactionAsNotFound(t *testing.T) {
 // The shared conformance suite only ever records in ascending order, so it cannot tell the two
 // apart; this test records the higher block first so that it can.
 func TestGetReturnsBlocksInHeightThenBlockIDOrder(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	tx := mkTx(t, 1, 1_000)
@@ -80,6 +86,8 @@ func TestGetReturnsBlocksInHeightThenBlockIDOrder(t *testing.T) {
 // reads as spent, so a transaction dropped from the mempool can never be mined and its
 // inputs can never be spent again.
 func TestGetReportsWhetherTheTransactionIsWaitingToBeMined(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	waiting := mkTx(t, 1, 1_000)
@@ -107,6 +115,8 @@ func TestGetReportsWhetherTheTransactionIsWaitingToBeMined(t *testing.T) {
 // output is unspent, so a body-less row is the ordinary steady state for an old transaction,
 // not an error. Get must return what it has.
 func TestGetSurvivesABodyThatHasAgedOut(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	tx := mkTx(t, 1, 1_000)
@@ -132,6 +142,8 @@ func TestGetSurvivesABodyThatHasAgedOut(t *testing.T) {
 // Without this, conflict resolution has no way to walk from a contested UTXO to the
 // transactions competing for it.
 func TestCreatingAConflictingTransactionRecordsItOnItsParents(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	parent := mkTx(t, 1, 5_000)
