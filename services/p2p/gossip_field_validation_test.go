@@ -895,21 +895,70 @@ func TestHandleNodeStatusNotification_OversizedURLsDroppedNotSilenced(t *testing
 	require.Empty(t, msg.PropagationURL, "the oversizing URLs must be dropped")
 }
 
-// ChiR4: a DataHubURL that peers would score under their SSRF check (e.g. the
-// committed localhost default) is warned about but still published — the warn
-// is the operator signal, suppression would break dev setups.
-func TestHandleSubtreeNotification_LocalhostURLWarnsButPublishes(t *testing.T) {
-	s, published := capturePublishServer(t)
-	s.AssetHTTPAddressURL = "http://localhost:8090"
+// A DataHubURL that fails the check receivers apply (the committed localhost
+// default, with p2p_allow_private_ips off) withholds block and subtree
+// announcements: peers would score each one as a protocol violation and
+// could not fetch from it. node_status still goes out, BaseURL blanked. With
+// p2p_allow_private_ips on, as on dev and test networks, the same URL passes
+// and announcements flow; so does a public URL with it off.
+func TestAnnouncements_WithheldWhileDataHubURLFailsLocalPolicy(t *testing.T) {
+	tests := []struct {
+		name            string
+		url             string
+		allowPrivateIPs bool
+		published       bool
+	}{
+		{name: "localhost, private IPs refused", url: "http://localhost:8090", published: false},
+		{name: "private address, private IPs refused", url: "http://10.0.0.5:8090", published: false},
+		{name: "localhost, private IPs allowed", url: "http://localhost:8090", allowPrivateIPs: true, published: true},
+		{name: "public host, private IPs refused", url: "http://example.com:8090", published: true},
+	}
 
-	require.NoError(t, s.handleSubtreeNotification(context.Background(), model.GenesisBlockHeader.Hash()))
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			s, published := capturePublishServer(t)
+			s.AssetHTTPAddressURL = tc.url
+			s.settings.P2P.AllowPrivateIPs = tc.allowPrivateIPs
 
-	captured := published["test-subtree"]
-	require.NotNil(t, captured, "a localhost DataHubURL must not suppress the publish")
+			mockBlockchain := &blockchain.Mock{}
+			mockBlockchain.On("GetBlockHeader", mock.Anything, mock.Anything).Return(model.GenesisBlockHeader, &model.BlockHeaderMeta{Height: 42, SubtreesSet: true}, nil)
+			mockBlockchain.On("GetFSMCurrentState", mock.Anything).Return(nil, assert.AnError).Maybe()
+			mockBlockchain.On("GetBestBlockHeader", mock.Anything).Return(nil, nil, assert.AnError).Maybe()
+			mockBlockchain.On("GetState", mock.Anything, mock.Anything).Return(nil, assert.AnError).Maybe()
+			s.blockchainClient = mockBlockchain
 
-	var msg SubtreeMessage
-	require.NoError(t, json.Unmarshal(captured, &msg))
-	require.Equal(t, "http://localhost:8090", msg.DataHubURL)
+			require.NoError(t, s.handleBlockNotification(context.Background(), model.GenesisBlockHeader.Hash()))
+			require.NoError(t, s.handleSubtreeNotification(context.Background(), model.GenesisBlockHeader.Hash()))
+
+			if !tc.published {
+				require.Nil(t, published["test-block"], "block announcement must be withheld")
+				require.Nil(t, published["test-subtree"], "subtree announcement must be withheld")
+			} else {
+				require.NotNil(t, published["test-block"], "block announcement must be published")
+				require.NotNil(t, published["test-subtree"], "subtree announcement must be published")
+
+				var block BlockMessage
+				require.NoError(t, json.Unmarshal(published["test-block"], &block))
+				require.Equal(t, tc.url, block.DataHubURL)
+
+				var subtree SubtreeMessage
+				require.NoError(t, json.Unmarshal(published["test-subtree"], &subtree))
+				require.Equal(t, tc.url, subtree.DataHubURL)
+			}
+
+			// The block notification's node_status refresh goes out either way.
+			require.NotNil(t, published["test-node-status"], "node_status must still be published")
+
+			var status NodeStatusMessage
+			require.NoError(t, json.Unmarshal(published["test-node-status"], &status))
+
+			if tc.published {
+				require.Equal(t, tc.url, status.BaseURL)
+			} else {
+				require.Empty(t, status.BaseURL)
+			}
+		})
+	}
 }
 
 // The centralized cap enforcement in publishToNetwork is the single backstop
@@ -974,9 +1023,9 @@ func TestRejectedTxHandler_InvalidSelfPeerIDNotPublished(t *testing.T) {
 }
 
 // ChiR7: the committed-default shape (localhost DataHubURL) blanks the
-// node_status BaseURL via the once-evaluated static verdict, while block and
-// subtree announcements keep flowing (their DataHubURL is structurally
-// required; the once-per-process warn is the operator signal).
+// node_status BaseURL via the once-evaluated static verdict; block and
+// subtree announcements are withheld instead (see
+// TestAnnouncements_WithheldWhileDataHubURLFailsLocalPolicy).
 func TestHandleNodeStatusNotification_LocalhostBaseURLBlanked(t *testing.T) {
 	s, published := capturePublishServer(t)
 	s.AssetHTTPAddressURL = "http://localhost:8090"

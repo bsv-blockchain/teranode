@@ -1960,8 +1960,6 @@ func (s *Server) announceBlock(ctx context.Context, hash *chainhash.Hash, viaSub
 		}
 	}
 
-	var msgBytes []byte
-
 	h, meta, err := s.blockchainClient.GetBlockHeader(ctx, hash)
 	if err != nil {
 		return errors.NewError("error getting block header and meta for BlockMessage", err)
@@ -2021,16 +2019,30 @@ func (s *Server) announceBlock(ctx context.Context, hash *chainhash.Hash, viaSub
 		return errors.NewError("blockMessage failed gossip field validation, not publishing", err)
 	}
 
-	// An empty or unroutable DataHubURL is scored as a protocol violation by
-	// every receiver (checkDataHubURL); the once-per-process check below warns
-	// loudly but keeps publishing, since suppressing would also silence dev
-	// setups that legitimately advertise private addresses to peers configured
-	// to accept them.
-	s.checkStaticGossipURLs()
+	// Not published while the DataHubURL fails the check receivers apply
+	// (unpublishableAssetURL); node_status below still goes out, with its
+	// BaseURL blanked.
+	if s.unpublishableAssetURL() {
+		ctxLogger.Debugf("[announceBlock] not announcing block %s: DataHubURL fails the gossip URL check: %v", hash.String(), s.assetURLErr)
+	} else if err = s.publishBlockMessage(ctx, hash, &blockMessage, viaSubtreesSetNotification); err != nil {
+		return err
+	}
 
+	// Also send a node_status update when best block changes
+	if err = s.handleNodeStatusNotification(ctx); err != nil {
+		// Log the error but don't fail the block notification
+		ctxLogger.Warnf("[announceBlock] error sending node status update: %v", err)
+	}
+
+	return nil
+}
+
+// publishBlockMessage publishes a validated block announcement and arms the
+// duplicate guards announceBlock checks.
+func (s *Server) publishBlockMessage(ctx context.Context, hash *chainhash.Hash, blockMessage *BlockMessage, viaSubtreesSetNotification bool) error {
 	// The topic size cap on the marshalled bytes is enforced centrally in
 	// publishToNetwork.
-	msgBytes, err = json.Marshal(blockMessage)
+	msgBytes, err := json.Marshal(blockMessage)
 	if err != nil {
 		return errors.NewError("blockMessage - json marshal error", err)
 	}
@@ -2050,18 +2062,12 @@ func (s *Server) announceBlock(ctx context.Context, hash *chainhash.Hash, viaSub
 		s.lastAnnouncedBlockHash.Store(hash)
 
 		// Only the Block-notification branch records this: it is what
-		// handleBlockSubtreesSetNotification's duplicate check above consumes,
-		// and a BlockSubtreesSet announcement never needs to arm it, since
-		// nothing ever consumes an entry written from that side.
+		// handleBlockSubtreesSetNotification's duplicate check in announceBlock
+		// consumes, and a BlockSubtreesSet announcement never needs to arm it,
+		// since nothing ever consumes an entry written from that side.
 		if !viaSubtreesSetNotification && s.preAnnouncedBlockHashes != nil {
 			s.preAnnouncedBlockHashes.Set(*hash, struct{}{})
 		}
-	}
-
-	// Also send a node_status update when best block changes
-	if err = s.handleNodeStatusNotification(ctx); err != nil {
-		// Log the error but don't fail the block notification
-		ctxLogger.Warnf("[announceBlock] error sending node status update: %v", err)
 	}
 
 	return nil
@@ -2462,11 +2468,11 @@ func (s *Server) getNodeStatusMessage(ctx context.Context) *notificationMsg {
 // all run true withholds a private BaseURL those peers would have used —
 // judged the safer default, since the reverse mismatch gets the node scored.
 //
-// Only node_status degrades on a bad verdict (BaseURL blanked, message still
+// On a bad verdict node_status degrades (BaseURL blanked, message still
 // published): an empty BaseURL is legal there on ingress. Block and subtree
-// announcements are useless without a fetchable URL and receivers score an
-// empty DataHubURL just like a malformed one, so those publish unchanged and
-// the warning below is the operator's signal that peers will score them.
+// announcements are not published at all (unpublishableAssetURL): they are
+// useless without a fetchable URL, and receivers score an empty DataHubURL
+// just like a malformed one.
 func (s *Server) checkStaticGossipURLs() {
 	s.staticURLCheckOnce.Do(func() {
 		if err := checkGossipString("base_url", s.AssetHTTPAddressURL, maxGossipURLLen); err != nil {
@@ -2476,7 +2482,7 @@ func (s *Server) checkStaticGossipURLs() {
 		}
 
 		if s.assetURLErr != nil {
-			s.logger.Warnf("[checkStaticGossipURLs] DataHubURL %q will be scored as a protocol violation by peers: %v - expected on a deliberately private node, which keeps gossiping with node_status BaseURL blanked and simply cannot be fetched from; set asset_httpPublicAddress when this node should be a reachable source", s.AssetHTTPAddressURL, s.assetURLErr)
+			s.logger.Warnf("[checkStaticGossipURLs] DataHubURL %q fails the check peers apply to announced URLs: %v - block and subtree announcements are not published, since peers would score each one as a protocol violation and could not fetch from it, and node_status goes out with BaseURL blanked; expected on a deliberately private node, otherwise set asset_httpPublicAddress to a reachable URL, or p2p_allow_private_ips=true on a private network whose peers accept private URLs", s.AssetHTTPAddressURL, s.assetURLErr)
 		}
 
 		if err := checkGossipString("propagation_url", s.PropagationURL, maxGossipURLLen); err != nil {
@@ -2484,6 +2490,19 @@ func (s *Server) checkStaticGossipURLs() {
 			s.logger.Warnf("[checkStaticGossipURLs] PropagationURL breaches the gossip field bounds and will be omitted from node_status: %v", err)
 		}
 	})
+}
+
+// unpublishableAssetURL reports whether block and subtree announcements must
+// be withheld because the static DataHubURL fails the check receivers apply
+// to it (checkDataHubURL). Each such announcement would cost this node a
+// protocol violation at every peer, and enough of them a ban, which with
+// admission enforcement disconnects and refuses it. The check reads
+// p2p_allow_private_ips, so a dev or test network that advertises private
+// URLs with it set keeps announcing.
+func (s *Server) unpublishableAssetURL() bool {
+	s.checkStaticGossipURLs()
+
+	return s.assetURLErr != nil
 }
 
 func (s *Server) handleNodeStatusNotification(ctx context.Context) error {
@@ -2640,12 +2659,10 @@ func (s *Server) handleSubtreeNotification(ctx context.Context, hash *chainhash.
 		return errors.NewError("subtreeMessage failed gossip field validation, not publishing", err)
 	}
 
-	// An empty or unroutable DataHubURL is scored as a protocol violation by
-	// every receiver (checkDataHubURL); the once-per-process check below warns
-	// loudly but keeps publishing, since suppressing would also silence dev
-	// setups that legitimately advertise private addresses to peers configured
-	// to accept them.
-	s.checkStaticGossipURLs()
+	if s.unpublishableAssetURL() {
+		s.logger.Debugf("[handleSubtreeNotification] not announcing subtree %s: DataHubURL fails the gossip URL check: %v", hash.String(), s.assetURLErr)
+		return nil
+	}
 
 	// The topic size cap on the marshalled bytes is enforced centrally in
 	// publishToNetwork.

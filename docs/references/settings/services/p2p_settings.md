@@ -247,6 +247,14 @@ link-local address is accepted into the peer registry. The URL must still be a c
 (http or https, no credentials, query or fragment) either way, because fetch paths are joined
 onto it.
 
+The node applies the same check to its own DataHub URL (`asset_httpPublicAddress`, or
+`asset_httpAddress` when that is unset). If its own URL fails, the node does not publish block or
+subtree announcements, since peers would score each one as a protocol violation and could not
+fetch from it, and its `node_status` goes out with `BaseURL` blanked. It logs one warning at the
+first publish. The shipped default, a localhost `asset_httpAddress` with `p2p_allow_private_ips`
+false, is such a URL. Set `asset_httpPublicAddress` to a reachable URL. On a private network
+whose peers accept private URLs, set `p2p_allow_private_ips` to `true` instead.
+
 At connection time, every outbound request to a peer-supplied URL - availability probes and
 block/subtree fetches alike - resolves the hostname and checks each address:
 
