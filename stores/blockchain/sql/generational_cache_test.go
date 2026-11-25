@@ -265,7 +265,7 @@ func TestGenerationalCache_HeaderBudgetReclaimed(t *testing.T) {
 		}, time.Second, time.Millisecond, "expired entries must return their header budget without chain invalidation")
 	})
 
-	t.Run("one large expiry among many small charges", func(t *testing.T) {
+	t.Run("one large eviction among many small charges", func(t *testing.T) {
 		gc := NewGenerationalCache(0)
 		defer gc.Stop()
 		for i := uint32(0); i < 2000; i++ {
@@ -274,10 +274,14 @@ func TestGenerationalCache_HeaderBudgetReclaimed(t *testing.T) {
 			require.True(t, gc.NewOp(key).Set([]uint32{i}, time.Hour))
 		}
 		large := [2]interface{}{make([]*model.BlockHeader, 120000), make([]*model.BlockHeaderMeta, 120000)}
-		require.True(t, gc.NewOp(chainhash.Hash{0xff}).Set(large, 50*time.Millisecond))
-		require.Eventually(t, func() bool {
-			return gc.NewOp(chainhash.Hash{0xfe}).Set(large, time.Hour)
-		}, time.Second, time.Millisecond, "one expired entry holding most of the budget must return it")
+		require.True(t, gc.NewOp(chainhash.Hash{0xff}).Set(large, time.Hour))
+		// one sweep while the large entry is live, so it must re-learn the largest charge
+		gc.ttlCache.Delete(chainhash.Hash{})
+		sweeps := gc.sweeps
+		require.False(t, gc.NewOp(chainhash.Hash{0xfe}).Set(large, time.Hour))
+		require.Equal(t, sweeps+1, gc.sweeps)
+		gc.ttlCache.Delete(chainhash.Hash{0xff})
+		require.True(t, gc.NewOp(chainhash.Hash{0xfe}).Set(large, time.Hour), "one evicted entry holding most of the budget must return it")
 	})
 
 	t.Run("sweeps wait until evictions can repay them", func(t *testing.T) {
