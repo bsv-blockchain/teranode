@@ -3836,8 +3836,8 @@ const mtpRangeAttempts = 3
 // blockchain_maxBlockHeadersPerRequest is lower.
 const mtpPageSize = 10_000
 
-// medianTimeSpan is the number of blocks a median time past covers, the single consensus
-// declaration the other median builders read.
+// medianTimeSpan is the number of blocks a median time past covers, read from
+// blockchain.MedianTimeBlocks as subtree validation's median builder does.
 const medianTimeSpan = uint32(blockchain.MedianTimeBlocks)
 
 // fetchMTPRange returns the MTPs for heights fromHeight to needed along the current chain's
