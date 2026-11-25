@@ -116,7 +116,11 @@ func TestCreateOptionsStillSetWhatTheySay(t *testing.T) {
 
 // CreateOptions is allocated once per create, so a new field must not move it up a size class.
 func TestCreateOptionsSize(t *testing.T) {
-	require.Equal(t, uintptr(112), unsafe.Sizeof(CreateOptions{}))
+	// 136, in the 144-byte size class: the 112 it was plus ParentLanePositions' slice header, which
+	// a create with lane positions on fills and one with them off leaves nil. Carrying the parents'
+	// positions to the store needs some field here, and any field moves it past 112; the PR that
+	// added it measured the create benchmark before and after.
+	require.Equal(t, uintptr(136), unsafe.Sizeof(CreateOptions{}))
 }
 
 // TestTakeDoesNotAllocate holds the point of taking lane positions in the store: with a source set,

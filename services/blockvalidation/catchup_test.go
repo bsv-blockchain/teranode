@@ -589,6 +589,7 @@ func Test_checkSecretMining(t *testing.T) {
 
 		utxoStore, err := sql.New(ctx, logger, tSettings, utxoStoreURL)
 		require.NoError(t, err)
+		t.Cleanup(func() { _ = utxoStore.Close(context.Background()) })
 
 		_ = utxoStore.SetBlockHeight(110)
 
@@ -631,6 +632,7 @@ func Test_checkSecretMining(t *testing.T) {
 
 		utxoStore, err := sql.New(ctx, logger, tSettings, utxoStoreURL)
 		require.NoError(t, err)
+		t.Cleanup(func() { _ = utxoStore.Close(context.Background()) })
 
 		_ = utxoStore.SetBlockHeight(0)
 
@@ -669,6 +671,7 @@ func Test_checkSecretMining_blockchainClientError(t *testing.T) {
 
 		utxoStore, err := sql.New(ctx, logger, tSettings, utxoStoreURL)
 		require.NoError(t, err)
+		t.Cleanup(func() { _ = utxoStore.Close(context.Background()) })
 
 		_ = utxoStore.SetBlockHeight(100)
 

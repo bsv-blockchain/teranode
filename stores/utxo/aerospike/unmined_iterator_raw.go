@@ -226,7 +226,8 @@ func (h *rawUnminedHandler) EndRecord() error {
 	return h.add(tx)
 }
 
-// buildTx mirrors processRecord for a raw record.
+// buildTx mirrors processRecord for a raw record. A missing external file
+// yields a hashed Skip record so block assembly can filter queued children.
 func (h *rawUnminedHandler) buildTx() (*utxo.UnminedTransaction, error) {
 	r := &h.cur
 
@@ -275,6 +276,30 @@ func (h *rawUnminedHandler) buildTx() (*utxo.UnminedTransaction, error) {
 		h.busy.Store(true)
 		*txInpoints, err = h.it.processExternalTransactionInpoints(h.ctx, &r.txid)
 		h.busy.Store(false)
+
+		// The record says the transaction is in the external store, but its file
+		// is not there. For block assembly's load, leave it out rather than fail
+		// the scan (see GetUnminedTxIteratorSkippingMissingExternal). Its children
+		// are left out by the load's parent chain check or startup queue drain:
+		// the hashed Skip record below lets the drain reject children submitted
+		// after their scan partition completed. Block assembly opens this scan
+		// only while blockassembly_onRestartValidateParentChain and
+		// blockassembly_onRestartRemoveInvalidParentChainTxs are both on (the defaults).
+		if h.it.skipMissingExternal && errors.Is(err, errors.ErrNotFound) {
+			h.it.missingExternalSkipped.Add(1)
+			prometheusUnminedMissingExternalSkipped.Inc()
+			h.it.store.logger.Errorf("[unminedTxIterator][%s] skipping unmined transaction: its record is external but the external store has no file for it: %v", r.txid.String(), err)
+
+			// The block IDs and unmined_since go with it: a record already mined on
+			// the best chain with a stale unmined_since is repaired by the load as
+			// usual, file or no file, and its children stay valid.
+			return &utxo.UnminedTransaction{
+				Node:         &subtree.Node{Hash: r.txid},
+				Skip:         true,
+				UnminedSince: r.unminedSince,
+				BlockIDs:     blockIDs,
+			}, nil
+		}
 	case r.fastInputs:
 		*txInpoints, err = h.txInpointsFromBuffer()
 	case r.inputsErr != nil:

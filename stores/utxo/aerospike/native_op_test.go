@@ -1,8 +1,12 @@
 package aerospike
 
 import (
+	"fmt"
 	"testing"
 
+	"github.com/bsv-blockchain/aerospike-client-go/v8"
+	"github.com/bsv-blockchain/aerospike-client-go/v8/types"
+	"github.com/stretchr/testify/require"
 	"github.com/vmihailenco/msgpack/v5"
 )
 
@@ -38,4 +42,20 @@ func TestEncodeNativeOpPayloadUsesSubOpAndArgsArray(t *testing.T) {
 	if len(args) != 1 || args[0] != true {
 		t.Fatalf("args = %#v, want []any{true}", args)
 	}
+}
+
+// TestHasResultCode covers the bare-error fast path and the chain walk it falls
+// back to.
+func TestHasResultCode(t *testing.T) {
+	require.True(t, hasResultCode(aeroErr(types.KEY_NOT_FOUND_ERROR), types.KEY_NOT_FOUND_ERROR))
+	require.False(t, hasResultCode(aeroErr(types.KEY_NOT_FOUND_ERROR), types.PARAMETER_ERROR))
+
+	wrapped := fmt.Errorf("op failed: %w", aeroErr(types.PARAMETER_ERROR)) //nolint:forbidigo // std %w chain needed; errors.New* erases the aerospike type
+	require.True(t, hasResultCode(wrapped, types.PARAMETER_ERROR))
+	require.False(t, hasResultCode(wrapped, types.KEY_NOT_FOUND_ERROR))
+
+	require.False(t, hasResultCode(nil, types.KEY_NOT_FOUND_ERROR))
+
+	var typedNil *aerospike.AerospikeError
+	require.False(t, hasResultCode(typedNil, types.KEY_NOT_FOUND_ERROR))
 }

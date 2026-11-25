@@ -5,6 +5,9 @@ import (
 	"net/url"
 	"testing"
 
+	"github.com/bsv-blockchain/go-chaincfg"
+	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/stores/blockchain/options"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/test"
@@ -82,4 +85,36 @@ func TestSQL_RevalidateBlock(t *testing.T) {
 		assert.False(t, invalid)
 		assert.False(t, mined_set)
 	})
+}
+
+// TestSQL_RevalidateBlock_RejectsForkBelowPassedCheckpoint pins the checkpoint fork
+// rule on reconsideration: an invalid fork below a checkpoint the best chain has
+// passed stays invalid.
+func TestSQL_RevalidateBlock_RejectsForkBelowPassedCheckpoint(t *testing.T) {
+	tSettings := test.CreateBaseTestSettings(t)
+	params := *tSettings.ChainCfgParams
+	params.Checkpoints = []chaincfg.Checkpoint{{Height: 3, Hash: block3.Hash()}}
+	tSettings.ChainCfgParams = &params
+
+	storeURL, err := url.Parse("sqlitememory:///")
+	require.NoError(t, err)
+
+	s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
+	require.NoError(t, err)
+
+	for _, b := range []*model.Block{block1, block2, block3} {
+		_, _, err = s.StoreBlock(context.Background(), b, "")
+		require.NoError(t, err)
+	}
+
+	_, _, err = s.StoreBlock(context.Background(), blockAlternative2, "", options.WithInvalid(true))
+	require.NoError(t, err)
+
+	err = s.RevalidateBlock(context.Background(), blockAlternative2.Hash())
+	require.Error(t, err)
+	require.True(t, errors.Is(err, errors.ErrBlockInvalid), "got: %v", err)
+
+	_, meta, err := s.GetBlockHeader(context.Background(), blockAlternative2.Hash())
+	require.NoError(t, err)
+	require.True(t, meta.Invalid, "the fork must stay invalid")
 }

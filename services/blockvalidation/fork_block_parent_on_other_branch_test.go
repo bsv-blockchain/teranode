@@ -156,6 +156,7 @@ func newParentCheckStores(ctx context.Context, t *testing.T, inMemoryChainCheck 
 
 	utxoStore, err := sql.New(ctx, logger, tSettings, utxoStoreURL)
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = utxoStore.Close(context.Background()) })
 
 	return &parentCheckStores{
 		settings:     tSettings,

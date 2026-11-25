@@ -206,8 +206,10 @@ const (
 // lane.SameRow, succeeds and writes nothing; a call whose rows differ from what is stored, by one
 // row or by the set of rows, fails and writes nothing. The rows are checked with
 // lane.CheckMapRows first. A block with no rows records nothing, so a later call with rows for it
-// is a first insert: a live block always has rows, at least its coinbase's, and a historical block
-// with none has no readable transaction to place.
+// is a first insert. A live block can be stored with none: the coinbase takes no lane position,
+// and at shadow a block whose subtrees' lane bitmaps are missing, or hold no position, gets none,
+// as do block assembly's own blocks and quick validation's. A historical block with none has no
+// readable transaction to place.
 func (s *SQL) InsertLaneMapRows(ctx context.Context, blockID uint32, rows []lane.MapRow) error {
 	if err := lane.CheckMapRows(rows); err != nil {
 		return errors.NewProcessingError("block %d", blockID, err)
@@ -238,7 +240,8 @@ func (s *SQL) InsertLaneMapRows(ctx context.Context, blockID uint32, rows []lane
 // first, held to the end of tx, so two writers of one block never both see no rows and insert
 // different ones. On SQLite the lock is laneWriteMu, which only the caller can hold for the whole
 // transaction: the caller takes s.lockLaneProcess() before beginning tx and releases it after the
-// commit, as InsertLaneMapRows does. InsertLaneMapRows is its only caller today.
+// commit, as InsertLaneMapRows and StoreBlock do. StoreBlock calls it through
+// insertLaneMapRowsWithBlock, under a savepoint in the block's own transaction.
 func (s *SQL) insertLaneMapRowsTx(ctx context.Context, tx *sql.Tx, blockID uint32, rows []lane.MapRow) error {
 	if err := s.lockLaneWrite(ctx, tx, laneMapLockClass, blockID); err != nil {
 		return err
