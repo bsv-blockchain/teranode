@@ -22,6 +22,16 @@ func TestNonNilConsumerGroup(t *testing.T) {
 	require.Same(t, group, nonNilConsumerGroup(group))
 }
 
+func TestNonNilAsyncProducer(t *testing.T) {
+	// An unconfigured optional producer must map to a true nil interface, or the
+	// validator's nil checks pass and TryPublish panics on the nil receiver.
+	require.Nil(t, nonNilAsyncProducer(nil))
+
+	producer := &kafka.KafkaAsyncProducer{}
+	require.NotNil(t, nonNilAsyncProducer(producer))
+	require.Same(t, producer, nonNilAsyncProducer(producer))
+}
+
 // TestValidatorTxsConfigContextDivergence documents why the producer must not read
 // the raw gocore key: with an alternative settings context the raw value in the
 // ambient context and the value parsed for that context differ.

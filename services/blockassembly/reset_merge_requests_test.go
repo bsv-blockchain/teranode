@@ -47,8 +47,10 @@ func seedConflictedUnminedTx(ctx context.Context, t *testing.T, items *baTestIte
 	txA.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{})
 	txA.Outputs = []*bt.Output{{Satoshis: 90000, LockingScript: bscript.NewFromBytes([]byte{0x52})}}
 
-	require.NoError(t, items.utxoStore.SetBlockHeight(5))
-	_, _, err = items.utxoStore.SpendAndCreate(ctx, txA, 5, utxoStore.WithCreateOnly())
+	// Created at the next height on the genesis tip block assembly starts from: the reload
+	// keeps out a transaction validated at a height under other rules than the next block's.
+	require.NoError(t, items.utxoStore.SetBlockHeight(1))
+	_, _, err = items.utxoStore.SpendAndCreate(ctx, txA, 1, utxoStore.WithCreateOnly())
 	require.NoError(t, err)
 
 	// Point the parent output's spending data at a winner that is not txA.

@@ -119,6 +119,7 @@ func newUnifiedRouteServer(t *testing.T, name string) *unifiedRouteServer {
 
 	utxoStore, err := sql.New(ctx, logger, tSettings, utxoStoreURL)
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = utxoStore.Close(context.Background()) })
 	require.NoError(t, utxoStore.SetBlockHeight(1))
 
 	blockchainStore, err := blockchain_store.NewStore(logger, &url.URL{Scheme: "sqlitememory"}, tSettings)
@@ -637,9 +638,11 @@ func TestRevalidateBlock_ReconsideredFastPathBlockWithAForkAtItsHeightIsValid(t 
 
 	us.s.settings.ChainCfgParams.Checkpoints = []chaincfg.Checkpoint{{Height: 2, Hash: second.Hash()}}
 
+	// The fork is stored before the tip reaches the checkpoint: once it has, a block that forks
+	// below the checkpoint is refused (bad-fork-prior-to-checkpoint).
 	require.NoError(t, us.s.processBlockFound(ctx, first.Hash(), "peer-1", "legacy", true, first))
-	require.NoError(t, us.s.processBlockFound(ctx, second.Hash(), "peer-1", "legacy", true, second))
 	require.NoError(t, us.s.processBlockFound(ctx, fork.Hash(), "peer-1", "legacy", true, fork))
+	require.NoError(t, us.s.processBlockFound(ctx, second.Hash(), "peer-1", "legacy", true, second))
 
 	_, err := us.client.InvalidateBlock(ctx, first.Hash())
 	require.NoError(t, err)
