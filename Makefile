@@ -225,6 +225,12 @@ test-bvgaps:
 vet-bvgaps:
 	go vet -tags "bvgaps testtxmetacache" ./model/... ./services/blockvalidation/... ./services/subtreevalidation/...
 
+# run bitcoin-sv's consensus vectors (script, transaction and signature hash tests) in
+# test/consensus. `make test` skips everything under test/; the PR test job runs this after it.
+.PHONY: consensustest
+consensustest:
+	go test -count=1 -timeout=10m ./test/consensus/...
+
 # run tagged service regressions and tests in the test/longtest directory
 .PHONY: longtest
 longtest:
