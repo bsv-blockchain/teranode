@@ -511,6 +511,36 @@ func TestGetAerospikeClient_MultipleHosts(t *testing.T) {
 	}
 }
 
+// TestAerospikePolicyReadsDoNotRaceClientCreation pins that creating a client, which writes the
+// policy values, can run while stores read policies: tests that share one Aerospike server create
+// clients while other tests' stores read. The connection fails, as nothing listens. Run with -race.
+func TestAerospikePolicyReadsDoNotRaceClientCreation(t *testing.T) {
+	tSettings := settings.NewSettings()
+	logger := ulogger.New("test")
+
+	storeURL, err := url.Parse("aerospike://127.0.0.1:1/test?Timeout=200ms")
+	require.NoError(t, err)
+
+	done := make(chan struct{})
+
+	go func() {
+		defer close(done)
+
+		for range 20 {
+			_, _ = getAerospikeClient(logger, storeURL, tSettings)
+		}
+	}()
+
+	for range 200 {
+		_ = GetAerospikeReadPolicy(tSettings)
+		_ = GetAerospikeWritePolicy(tSettings, 0)
+		_ = GetAerospikeBatchPolicy(tSettings)
+		_ = GetAerospikeQueryPolicy(tSettings)
+	}
+
+	<-done
+}
+
 func TestGetAerospikeReadPolicy(t *testing.T) {
 	tests := []struct {
 		name               string

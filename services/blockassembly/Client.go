@@ -349,7 +349,7 @@ func (s *Client) Health(ctx context.Context, checkLiveness bool) (int, string, e
 // Returns:
 //   - bool: True if storage was successful
 //   - error: Any error encountered during storage
-func (s *Client) Store(ctx context.Context, hash *chainhash.Hash, fee, size uint64, txInpoints subtree.TxInpoints, validatedHeight uint32) (bool, error) {
+func (s *Client) Store(ctx context.Context, hash *chainhash.Hash, fee, size uint64, txInpoints subtree.TxInpoints, validatedHeight uint32, lanePosition uint64) (bool, error) {
 	txInpointsBytes, err := txInpoints.Serialize()
 	if err != nil {
 		return false, err
@@ -364,6 +364,9 @@ func (s *Client) Store(ctx context.Context, hash *chainhash.Hash, fee, size uint
 		TxInpoints:      txInpointsBytes,
 		InBlock:         inBlock,
 		ValidatedHeight: validatedHeight,
+		// Zero, which proto3 does not send, unless the validator runs at utxostore_laneMigration
+		// shadow, so at off the request is the same on the wire.
+		LanePosition: lanePosition,
 	}
 
 	if s.batchSize <= 0 {
@@ -765,7 +768,29 @@ func (s *Client) convertToColumnarFormat(batch []*batchItem) (*blockassembly_api
 		VoutIdxsTxOffsets:    voutIdxsTxOffsets,
 		InBlock:              batchIsInBlock(batch),
 		ValidatedHeights:     validatedHeights,
+		LanePositions:        batchLanePositions(batch),
 	}, nil
+}
+
+// batchLanePositions returns the batch's own lane positions in batch order, or nil when no
+// transaction in it has one, which is every batch at utxostore_laneMigration off: an empty
+// repeated field is not sent, so the request is then the same on the wire as without lanes.
+func batchLanePositions(batch []*batchItem) []uint64 {
+	var positions []uint64
+
+	for i, item := range batch {
+		if item.req.LanePosition == 0 {
+			continue
+		}
+
+		if positions == nil {
+			positions = make([]uint64, len(batch))
+		}
+
+		positions[i] = item.req.LanePosition
+	}
+
+	return positions
 }
 
 // ResetBlockAssembly triggers a reset of the block assembly state.

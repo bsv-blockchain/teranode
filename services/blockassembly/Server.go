@@ -118,6 +118,10 @@ type BlockAssembly struct {
 	// from being unmapped: the job store only covers a job while it is in the store.
 	readerPins subtreeprocessor.SubtreePins
 
+	// ownLaneBitmaps keeps the lane bitmaps of the subtrees this service's subtree processor sealed or rebuilt, by subtree hash,
+	// for the lane map rows of the blocks it mines, at utxostore_laneMigration shadow (lane_rows.go).
+	ownLaneBitmaps ownLaneBitmaps
+
 	// jobCoinbaseMu makes GetMiningCandidate's read of a job's coinbase and its store of the new
 	// job one step, so two polls that share a candidate id cannot each build a coinbase and leave
 	// one miner holding a coinbase the job no longer has.
@@ -345,8 +349,24 @@ func (ba *BlockAssembly) Init(ctx context.Context) (err error) {
 	// nil when no txmeta producer is configured, which disables eviction publishing
 	txMetaEvictor := subtreeprocessor.NewTxMetaEvictor(ba.logger, ba.txMetaProducer)
 
+	assemblerOpts := []BlockAssemblerOption{WithTxMetaEvictor(txMetaEvictor), WithRetainedSubtrees(ba.retainedSubtrees)}
+
+	// at utxostore_laneMigration shadow the subtree processor keeps each chained subtree's lane
+	// bitmaps here, for the rows of the blocks this node mines (lane_rows.go)
+	if ba.keepsLanePositions() {
+		ba.ownLaneBitmaps.height = func() uint32 {
+			if ba.blockAssembler == nil || ba.blockAssembler.utxoStore == nil {
+				return 0
+			}
+
+			return ba.blockAssembler.utxoStore.GetBlockHeight()
+		}
+
+		assemblerOpts = append(assemblerOpts, WithLaneBitmapsKeeper(&ba.ownLaneBitmaps))
+	}
+
 	ba.blockAssembler, err = NewBlockAssembler(ctx, ba.logger, ba.settings, ba.stats, ba.utxoStore, ba.subtreeStore, ba.blockchainClient, newSubtreeChan,
-		WithTxMetaEvictor(txMetaEvictor), WithRetainedSubtrees(ba.retainedSubtrees))
+		assemblerOpts...)
 	if err != nil {
 		return errors.NewServiceError("failed to init block assembler", err)
 	}
@@ -1062,15 +1082,23 @@ func (ba *BlockAssembly) storeSubtreeData(ctx context.Context, subtreeRequest su
 	)
 	defer deferFn()
 
+	// At utxostore_laneMigration shadow the subtree's lane bitmaps, kept when the subtree processor
+	// chained it, are written before the subtree file (lane_rows.go).
+	lanes := ba.keepsLanePositions()
+
 	// Check whether this subtree already exists in the store
 	if ok, _ := ba.subtreeStore.Exists(ctx, subtree.RootHash()[:], fileformat.FileTypeSubtree); ok {
 		ba.logger.Debugf("[BlockAssembly:storeSubtreeData][%s] subtree already exists, updating DeleteAtHeight", subtree.RootHash().String())
-		dah := ba.blockAssembler.utxoStore.GetBlockHeight() + ba.settings.GlobalBlockHeightRetention
+		height := ba.blockAssembler.utxoStore.GetBlockHeight()
+		dah := height + ba.settings.GlobalBlockHeightRetention
 		if err := ba.subtreeStore.SetDAH(ctx, subtree.RootHash()[:], fileformat.FileTypeSubtree, dah); err != nil {
 			return nil, nil, errors.NewProcessingError("[BlockAssembly:storeSubtreeData][%s] failed to update subtree DAH", subtree.RootHash().String(), err)
 		}
 		if err := ba.subtreeStore.SetDAH(ctx, subtree.RootHash()[:], fileformat.FileTypeSubtreeMeta, dah); err != nil {
 			ba.logger.Debugf("[BlockAssembly:storeSubtreeData][%s] could not update subtree meta DAH (meta may not exist): %s", subtree.RootHash().String(), err)
+		}
+		if lanes {
+			ba.keepExistingSubtreeLaneBitmaps(ctx, *subtree.RootHash(), height, dah)
 		}
 		return nil, nil, errors.ErrBlobAlreadyExists
 	}
@@ -1081,12 +1109,30 @@ func (ba *BlockAssembly) storeSubtreeData(ctx context.Context, subtreeRequest su
 		return nil, nil, errors.NewProcessingError("[BlockAssembly:storeSubtreeData][%s] failed to serialize subtree", subtree.RootHash().String(), err)
 	}
 
-	dah := ba.blockAssembler.utxoStore.GetBlockHeight() + ba.settings.GlobalBlockHeightRetention
+	height := ba.blockAssembler.utxoStore.GetBlockHeight()
+	dah := height + ba.settings.GlobalBlockHeightRetention
 
 	subtreeDoneCh := make(chan bool, 1)
 	subtreeStorageDone := make(chan struct{}) // Separate signal for coordinator
 	metaDoneCh := make(chan struct{})
 	allDoneCh := make(chan struct{})
+
+	// laneBitmapsDone is closed once the write of the subtree's lane bitmaps has finished or failed.
+	// The subtree file waits for it, as subtree validation's does, so a subtree file is never
+	// written before its lane bitmaps are. A failed encode or write is logged and the subtree is
+	// still stored, as subtree validation does at shadow, so a stored subtree can lack the file. A
+	// peer's block that lists it then counts its bitmaps as missing; a block this node mines uses
+	// the kept bitmaps. Without lanes it is closed now and nothing waits.
+	laneBitmapsDone := make(chan struct{})
+	if lanes {
+		go func() {
+			defer close(laneBitmapsDone)
+
+			ba.writeKeptLaneBitmapsFile(ctx, *subtree.RootHash(), height, dah)
+		}()
+	} else {
+		close(laneBitmapsDone)
+	}
 
 	// Build, serialize, and store subtree meta in background
 	if subtreeRequest.ParentTxMap != nil && ba.settings.BlockAssembly.StoreTxInpointsForSubtreeMeta {
@@ -1124,6 +1170,10 @@ func (ba *BlockAssembly) storeSubtreeData(ctx context.Context, subtreeRequest su
 	// Store subtree in background
 	go func() {
 		defer close(subtreeStorageDone) // Signal coordinator when done
+
+		// at shadow, after the subtree's lane bitmaps
+		<-laneBitmapsDone
+
 		storedOK := true
 		if err := ba.subtreeStore.Set(ctx,
 			subtree.RootHash()[:],
@@ -1327,11 +1377,17 @@ func (ba *BlockAssembly) AddTx(ctx context.Context, req *blockassembly_api.AddTx
 	}
 
 	if !ba.settings.BlockAssembly.Disabled {
+		var positions []uint64
+		if ba.keepsLanePositions() && req.GetLanePosition() != 0 {
+			positions = []uint64{req.GetLanePosition()}
+		}
+
 		if err = ba.addTxBatchWithBackpressure(ctx,
 			[]subtreepkg.Node{{Hash: chainhash.Hash(req.Txid), Fee: req.Fee, SizeInBytes: req.Size}},
 			[]*subtreepkg.TxInpoints{&txInpoints},
 			req.GetInBlock(),
 			[]uint32{req.ValidatedHeight},
+			positions,
 		); err != nil {
 			return nil, err
 		}
@@ -1431,8 +1487,8 @@ const queueFullPollInterval = 5 * time.Millisecond
 //
 // The wait is strictly bounded so it can never wedge the validator, whose
 // block-assembly client honours the caller's context (group.Wait(ctx, 0)).
-func (ba *BlockAssembly) addTxBatchWithBackpressure(ctx context.Context, nodes []subtreepkg.Node, txInpoints []*subtreepkg.TxInpoints, inBlock bool, validatedHeights []uint32) error {
-	verdict := ba.blockAssembler.AddTxBatchBounded(nodes, txInpoints, inBlock, validatedHeights)
+func (ba *BlockAssembly) addTxBatchWithBackpressure(ctx context.Context, nodes []subtreepkg.Node, txInpoints []*subtreepkg.TxInpoints, inBlock bool, validatedHeights []uint32, positions []uint64) error {
+	verdict := ba.blockAssembler.AddPositionedTxBatchBounded(nodes, txInpoints, inBlock, validatedHeights, positions)
 	if verdict == subtreeprocessor.Admitted {
 		return nil
 	}
@@ -1457,7 +1513,7 @@ func (ba *BlockAssembly) addTxBatchWithBackpressure(ctx context.Context, nodes [
 			case <-timeout:
 				return ba.shed(start)
 			case <-ticker.C:
-				switch ba.blockAssembler.AddTxBatchBounded(nodes, txInpoints, inBlock, validatedHeights) {
+				switch ba.blockAssembler.AddPositionedTxBatchBounded(nodes, txInpoints, inBlock, validatedHeights, positions) {
 				case subtreeprocessor.Admitted:
 					prometheusBlockAssemblyQueueWait.Observe(time.Since(start).Seconds())
 					return nil
@@ -1601,9 +1657,22 @@ func (ba *BlockAssembly) AddTxBatch(ctx context.Context, batch *blockassembly_ap
 	txInpointsList := make([]*subtreepkg.TxInpoints, len(requests))
 	validatedHeights := make([]uint32, len(requests))
 
+	// Allocated only when a transaction carries a lane position, at utxostore_laneMigration shadow.
+	var positions []uint64
+
+	keepPositions := ba.keepsLanePositions()
+
 	for i, req := range requests {
 		if len(req.Txid) != 32 {
 			return nil, errors.WrapGRPC(errors.NewInvalidArgumentError("invalid txid length at index %d: %d", i, len(req.Txid)))
+		}
+
+		if keepPositions && req.GetLanePosition() != 0 {
+			if positions == nil {
+				positions = make([]uint64, len(requests))
+			}
+
+			positions[i] = req.GetLanePosition()
 		}
 
 		nodes[i] = subtreepkg.Node{
@@ -1626,7 +1695,7 @@ func (ba *BlockAssembly) AddTxBatch(ctx context.Context, batch *blockassembly_ap
 
 	// Add entire batch in one call
 	if !ba.settings.BlockAssembly.Disabled {
-		if err := ba.addTxBatchWithBackpressure(ctx, nodes, txInpointsList, batch.GetInBlock(), validatedHeights); err != nil {
+		if err := ba.addTxBatchWithBackpressure(ctx, nodes, txInpointsList, batch.GetInBlock(), validatedHeights, positions); err != nil {
 			return nil, err
 		}
 
@@ -1807,7 +1876,7 @@ func (ba *BlockAssembly) AddTxBatchColumnar(ctx context.Context, req *blockassem
 		txInpointsList[i] = &txInpointsArr[i]
 	}
 
-	if err := ba.addTxBatchWithBackpressure(ctx, nodes, txInpointsList, req.GetInBlock(), req.ValidatedHeights); err != nil {
+	if err := ba.addTxBatchWithBackpressure(ctx, nodes, txInpointsList, req.GetInBlock(), req.ValidatedHeights, ba.columnarLanePositions(req.GetLanePositions(), txCount)); err != nil {
 		return nil, err
 	}
 
@@ -1816,6 +1885,32 @@ func (ba *BlockAssembly) AddTxBatchColumnar(ctx context.Context, req *blockassem
 	prometheusBlockAssemblyAddTxCounter.Add(float64(len(nodes))) // gosec:nolint
 
 	return &blockassembly_api.AddTxBatchResponse{Ok: true}, nil
+}
+
+// keepsLanePositions reports whether block assembly keeps the lane positions (util/lane) the
+// validator hands it, at utxostore_laneMigration shadow, to build the lane bitmaps of the subtrees
+// it seals and the lane map rows of the blocks it mines. At off it keeps none, even if a validator
+// sends them.
+func (ba *BlockAssembly) keepsLanePositions() bool {
+	return ba.settings != nil && ba.settings.UtxoStore.LaneMigration.Stamps()
+}
+
+// columnarLanePositions returns a columnar batch's lane positions, or nil when block assembly
+// keeps none or the batch carries none. A column that does not have one position per transaction
+// is dropped with a warning: at shadow nothing about lanes may refuse a transaction, so the batch
+// is admitted without positions, and its transactions are counted as without position when their
+// subtree is sealed.
+func (ba *BlockAssembly) columnarLanePositions(positions []uint64, txCount int) []uint64 {
+	if len(positions) == 0 || !ba.keepsLanePositions() {
+		return nil
+	}
+
+	if len(positions) != txCount {
+		ba.logger.Warnf("[AddTxBatchColumnar] dropping the lane positions of a batch of %d transactions, which carries %d", txCount, len(positions))
+		return nil
+	}
+
+	return positions
 }
 
 // TxCount returns the total number of transactions processed.
@@ -1868,6 +1963,12 @@ func (ba *BlockAssembly) GetMiningCandidate(ctx context.Context, req *blockassem
 	id, _ := chainhash.NewHash(miningCandidate.Id)
 
 	ba.storeJobWithCoinbase(id, miningCandidate, subtrees)
+
+	// at shadow the lane bitmaps of a candidate's subtrees stay kept while candidates list them,
+	// even across blocks that do not rebuild the pool's subtrees, such as a coinbase-only block
+	if ba.keepsLanePositions() {
+		ba.keepCandidateLaneBitmaps(subtrees)
+	}
 
 	if includeSubtreeHashes {
 		miningCandidate.SubtreeHashes = make([][]byte, len(subtrees))
@@ -2513,7 +2614,15 @@ func (ba *BlockAssembly) submitMiningSolution(ctx context.Context, req *BlockSub
 	// announcing a locally mined block until the SetBlockSubtreesSet call
 	// below fires its own notification, delaying the announcement by one
 	// extra RPC round trip for no reason.
-	if err = ba.blockchainClient.AddBlock(callerCtx, block, "", blockchainoptions.WithSubtreesSet(true)); err != nil {
+	addBlockOpts := []blockchainoptions.StoreBlockOption{blockchainoptions.WithSubtreesSet(true)}
+
+	// At utxostore_laneMigration shadow the block's lane map rows, built from its own subtrees'
+	// lane bitmaps and stored in the block's database transaction; see ownLaneRows.
+	if laneRows := ba.ownLaneRows(callerCtx, block); laneRows != nil {
+		addBlockOpts = append(addBlockOpts, blockchainoptions.WithOwnBlockLaneMapRows(laneRows))
+	}
+
+	if err = ba.blockchainClient.AddBlock(callerCtx, block, "", addBlockOpts...); err != nil {
 		return nil, errors.NewProcessingError("[BlockAssembly][%s][%s] failed to add block", jobID, block.Hash().String(), err)
 	}
 
