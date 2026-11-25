@@ -17,16 +17,20 @@ import (
 // TestUnspendOwnership_HappyPath verifies that Unspend with matching SpendingData
 // successfully clears the spend.
 func TestUnspendOwnership_HappyPath(t *testing.T) {
+	t.Parallel()
+
+	fx := newTxFixtures(t)
+
 	logger := ulogger.NewErrorTestLogger(t)
 	tSettings := test.CreateBaseTestSettings(t)
 
 	_, store, ctx, deferFn := initAerospike(t, tSettings, logger)
 	t.Cleanup(deferFn)
 
-	_, err := store.Create(ctx, tx, 101)
+	_, err := store.Create(ctx, fx.tx, 101)
 	require.NoError(t, err)
 
-	localSpendTx := utxo2.GetSpendingTx(tx, 0)
+	localSpendTx := utxo2.GetSpendingTx(fx.tx, 0)
 	spendsRet, err := store.Spend(ctx, localSpendTx, store.GetBlockHeight()+1)
 	require.NoError(t, err)
 	require.Len(t, spendsRet, 1)
@@ -36,7 +40,7 @@ func TestUnspendOwnership_HappyPath(t *testing.T) {
 	require.NoError(t, err, "happy path Unspend with matching SpendingData should succeed")
 
 	// Verify the UTXO is now unspent — we should be able to Spend it again.
-	spendTxAlt := utxo2.GetSpendingTx(tx, 0)
+	spendTxAlt := utxo2.GetSpendingTx(fx.tx, 0)
 	_, err = store.Spend(ctx, spendTxAlt, store.GetBlockHeight()+1)
 	require.NoError(t, err, "after successful Unspend the UTXO should be re-spendable")
 }
@@ -46,26 +50,30 @@ func TestUnspendOwnership_HappyPath(t *testing.T) {
 // the legitimate spend stays intact. The safety guarantee is "never wipe a
 // spend we don't own".
 func TestUnspendOwnership_Mismatch(t *testing.T) {
+	t.Parallel()
+
+	fx := newTxFixtures(t)
+
 	logger := ulogger.NewErrorTestLogger(t)
 	tSettings := test.CreateBaseTestSettings(t)
 
 	_, store, ctx, deferFn := initAerospike(t, tSettings, logger)
 	t.Cleanup(deferFn)
 
-	_, err := store.Create(ctx, tx, 101)
+	_, err := store.Create(ctx, fx.tx, 101)
 	require.NoError(t, err)
 
 	// Spend with a real spending tx — store records SpendingData = NewSpendingData(localSpendTx.TxIDChainHash(), 0).
-	localSpendTx := utxo2.GetSpendingTx(tx, 0)
+	localSpendTx := utxo2.GetSpendingTx(fx.tx, 0)
 	_, err = store.Spend(ctx, localSpendTx, store.GetBlockHeight()+1)
 	require.NoError(t, err)
 
-	utxoHash, err := util.UTXOHashFromOutput(tx.TxIDChainHash(), tx.Outputs[0], 0)
+	utxoHash, err := util.UTXOHashFromOutput(fx.tx.TxIDChainHash(), fx.tx.Outputs[0], 0)
 	require.NoError(t, err)
 
 	wrongTxHash := chainhash.HashH([]byte("wrong-spender"))
 	mismatched := []*utxo.Spend{{
-		TxID:         tx.TxIDChainHash(),
+		TxID:         fx.tx.TxIDChainHash(),
 		Vout:         0,
 		UTXOHash:     utxoHash,
 		SpendingData: spendpkg.NewSpendingData(&wrongTxHash, 0),
@@ -76,7 +84,7 @@ func TestUnspendOwnership_Mismatch(t *testing.T) {
 
 	// The UTXO must still be spent — attempting to Spend with a NEW spender should fail with ErrSpent
 	// and report the ORIGINAL spender's TxID as the conflict source.
-	spendTxRetry := utxo2.GetSpendingTx(tx, 0)
+	spendTxRetry := utxo2.GetSpendingTx(fx.tx, 0)
 	spendsRet, err := store.Spend(ctx, spendTxRetry, store.GetBlockHeight()+1)
 	require.Error(t, err, "UTXO should still be spent after the no-op mismatched Unspend")
 	require.Len(t, spendsRet, 1)
@@ -88,6 +96,10 @@ func TestUnspendOwnership_Mismatch(t *testing.T) {
 // has never seen (Lua's ERROR_CODE_TX_NOT_FOUND branch) is surfaced as
 // NotFoundError — matches the SQL backend.
 func TestUnspendOwnership_NotFound(t *testing.T) {
+	t.Parallel()
+
+	fx := newTxFixtures(t)
+
 	logger := ulogger.NewErrorTestLogger(t)
 	tSettings := test.CreateBaseTestSettings(t)
 
@@ -96,7 +108,7 @@ func TestUnspendOwnership_NotFound(t *testing.T) {
 
 	// No store.Create — the record does not exist.
 	unknownTxHash := chainhash.HashH([]byte("never-created"))
-	utxoHash, err := util.UTXOHashFromOutput(tx.TxIDChainHash(), tx.Outputs[0], 0)
+	utxoHash, err := util.UTXOHashFromOutput(fx.tx.TxIDChainHash(), fx.tx.Outputs[0], 0)
 	require.NoError(t, err)
 
 	spend := []*utxo.Spend{{
@@ -116,22 +128,26 @@ func TestUnspendOwnership_NotFound(t *testing.T) {
 // already in the desired state — nothing to clear). Mirrors the SQL backend's
 // case-2 behaviour.
 func TestUnspendOwnership_MismatchOnUnspent(t *testing.T) {
+	t.Parallel()
+
+	fx := newTxFixtures(t)
+
 	logger := ulogger.NewErrorTestLogger(t)
 	tSettings := test.CreateBaseTestSettings(t)
 
 	_, store, ctx, deferFn := initAerospike(t, tSettings, logger)
 	t.Cleanup(deferFn)
 
-	_, err := store.Create(ctx, tx, 101)
+	_, err := store.Create(ctx, fx.tx, 101)
 	require.NoError(t, err)
 
-	utxoHash, err := util.UTXOHashFromOutput(tx.TxIDChainHash(), tx.Outputs[0], 0)
+	utxoHash, err := util.UTXOHashFromOutput(fx.tx.TxIDChainHash(), fx.tx.Outputs[0], 0)
 	require.NoError(t, err)
 
 	// Never call Spend — the row exists with spending_data nil.
 	someTxHash := chainhash.HashH([]byte("some-other-tx"))
 	spend := []*utxo.Spend{{
-		TxID:         tx.TxIDChainHash(),
+		TxID:         fx.tx.TxIDChainHash(),
 		Vout:         0,
 		UTXOHash:     utxoHash,
 		SpendingData: spendpkg.NewSpendingData(&someTxHash, 0),
@@ -141,7 +157,7 @@ func TestUnspendOwnership_MismatchOnUnspent(t *testing.T) {
 	require.NoError(t, err, "Unspend against an already-unspent UTXO must be a no-op success")
 
 	// The UTXO must still be spendable normally — confirm by spending it.
-	freshSpend := utxo2.GetSpendingTx(tx, 0)
+	freshSpend := utxo2.GetSpendingTx(fx.tx, 0)
 	_, err = store.Spend(ctx, freshSpend, store.GetBlockHeight()+1)
 	require.NoError(t, err, "UTXO should remain freshly spendable after the no-op Unspend")
 }
@@ -151,24 +167,28 @@ func TestUnspendOwnership_MismatchOnUnspent(t *testing.T) {
 // every production caller derives spends from Spend()/SetConflicting()/GetSpends(),
 // all of which populate SpendingData.
 func TestUnspendOwnership_NilSpendingDataRejected(t *testing.T) {
+	t.Parallel()
+
+	fx := newTxFixtures(t)
+
 	logger := ulogger.NewErrorTestLogger(t)
 	tSettings := test.CreateBaseTestSettings(t)
 
 	_, store, ctx, deferFn := initAerospike(t, tSettings, logger)
 	t.Cleanup(deferFn)
 
-	_, err := store.Create(ctx, tx, 101)
+	_, err := store.Create(ctx, fx.tx, 101)
 	require.NoError(t, err)
 
-	localSpendTx := utxo2.GetSpendingTx(tx, 0)
+	localSpendTx := utxo2.GetSpendingTx(fx.tx, 0)
 	_, err = store.Spend(ctx, localSpendTx, store.GetBlockHeight()+1)
 	require.NoError(t, err)
 
-	utxoHash, err := util.UTXOHashFromOutput(tx.TxIDChainHash(), tx.Outputs[0], 0)
+	utxoHash, err := util.UTXOHashFromOutput(fx.tx.TxIDChainHash(), fx.tx.Outputs[0], 0)
 	require.NoError(t, err)
 
 	noSpendingData := []*utxo.Spend{{
-		TxID:         tx.TxIDChainHash(),
+		TxID:         fx.tx.TxIDChainHash(),
 		Vout:         0,
 		UTXOHash:     utxoHash,
 		SpendingData: nil,
@@ -179,7 +199,7 @@ func TestUnspendOwnership_NilSpendingDataRejected(t *testing.T) {
 	require.True(t, errors.Is(err, errors.ErrProcessing), "expected processing error, got: %v", err)
 
 	// The UTXO must still be spent — attempting to Spend with a NEW spender should still fail.
-	spendTxRetry := utxo2.GetSpendingTx(tx, 0)
+	spendTxRetry := utxo2.GetSpendingTx(fx.tx, 0)
 	spendsRet, err := store.Spend(ctx, spendTxRetry, store.GetBlockHeight()+1)
 	require.Error(t, err, "UTXO should still be spent after rejected nil-SpendingData Unspend")
 	require.Len(t, spendsRet, 1)

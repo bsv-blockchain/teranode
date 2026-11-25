@@ -38,7 +38,7 @@ func TestCleanupServiceLogicWithoutProcessor(t *testing.T) {
 	logger := ulogger.NewErrorTestLogger(t, func() {})
 	ctx := context.Background()
 
-	container, err := aeroTest.RunContainer(ctx)
+	container, err := aeroTest.RunContainer(ctx, aeroTest.WithImage(test.AerospikeImage))
 	test.SkipIfContainerUnavailable(t, err)
 
 	t.Cleanup(func() {
@@ -229,7 +229,7 @@ func TestServiceStartStop(t *testing.T) {
 	logger := ulogger.NewErrorTestLogger(t, func() {})
 	ctx := context.Background()
 
-	container, err := aeroTest.RunContainer(ctx)
+	container, err := aeroTest.RunContainer(ctx, aeroTest.WithImage(test.AerospikeImage))
 	test.SkipIfContainerUnavailable(t, err)
 
 	host, err := container.Host(ctx)
@@ -276,7 +276,7 @@ func TestDeleteAtHeight(t *testing.T) {
 	logger := ulogger.New("test")
 	ctx := context.Background()
 
-	container, err := aeroTest.RunContainer(ctx)
+	container, err := aeroTest.RunContainer(ctx, aeroTest.WithImage(test.AerospikeImage))
 	test.SkipIfContainerUnavailable(t, err)
 
 	t.Cleanup(func() {

@@ -31,6 +31,8 @@ import (
 // covers IncrementSpentRecordsMulti, used by the filter-expression spend path and
 // the setMined extra-records accounting.
 func TestSpendPaginatedStampsDAHAtSpendBlockHeight(t *testing.T) {
+	t.Parallel()
+
 	if testing.Short() {
 		t.Skip("Skipping Aerospike integration test in short mode")
 	}
@@ -48,7 +50,6 @@ func TestSpendPaginatedStampsDAHAtSpendBlockHeight(t *testing.T) {
 
 	client, store, _, cleanup := initAerospike(t, tSettings, logger)
 	defer cleanup()
-	cleanDB(t, client)
 
 	// Cached chain tip lags far behind the block doing the spends — the catchup /
 	// sync condition that triggered the bug.
@@ -58,7 +59,7 @@ func TestSpendPaginatedStampsDAHAtSpendBlockHeight(t *testing.T) {
 
 	// Mined, on-longest-chain, paginated parent with spendable outputs (still
 	// unspent, so no DAH yet). Non-zero previous txid keeps it from being a coinbase.
-	parent := bt.NewTx()
+	parent := uniqueTx(bt.NewTx())
 	require.NoError(t, parent.From(
 		"1111111111111111111111111111111111111111111111111111111111111111",
 		0,

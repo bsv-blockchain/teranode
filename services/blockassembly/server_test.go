@@ -20,6 +20,7 @@ import (
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/blob/memory"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util/lane"
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/bsv-blockchain/teranode/util/testutil"
 	"github.com/stretchr/testify/assert"
@@ -2673,5 +2674,105 @@ func TestIngestKeepsParentLinksWithSubtreeMetaOff(t *testing.T) {
 			return err
 		})
 		require.Equal(t, []chainhash.Hash{parentHash}, parents)
+	})
+}
+
+// At utxostore_laneMigration shadow every ingest path hands the subtree processor each tx's own
+// lane position; at off, or for a columnar batch whose positions column does not have one per tx,
+// the batch goes as it does without lanes.
+func TestIngestHandsLanePositionsOnlyAtShadow(t *testing.T) {
+	parentHash := chainhash.Hash{0x06}
+	parentLinks := inpointsForParents(t, []chainhash.Hash{parentHash}, [][]uint32{{0}})
+
+	txid := make([]byte, 32)
+	txid[0] = 0x02
+
+	position := lane.Pack(5, 77)
+
+	// handedPositions runs add on block assembly at shadow or off and returns the positions the
+	// subtree processor got, nil when the batch went without any.
+	handedPositions := func(t *testing.T, shadow bool, add func(ba *BlockAssembly) error) []uint64 {
+		t.Helper()
+
+		var handed []uint64
+
+		stp := &subtreeprocessor.MockSubtreeProcessor{}
+		stp.On("AddBatchBounded", mock.Anything, mock.Anything, mock.Anything).Return(subtreeprocessor.Admitted).Maybe()
+		stp.On("AddPositionedBatchBounded", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
+			handed = args.Get(2).([]uint64)
+		}).Return(subtreeprocessor.Admitted).Maybe()
+
+		ba := baWithProcessor(t, func(s *settings.Settings) {
+			if shadow {
+				s.UtxoStore.LaneMigration = settings.LaneMigrationShadow
+			}
+		}, stp)
+
+		require.NoError(t, add(ba))
+
+		return handed
+	}
+
+	columnar := func(positions []uint64) func(ba *BlockAssembly) error {
+		return func(ba *BlockAssembly) error {
+			_, err := ba.AddTxBatchColumnar(context.Background(), &blockassembly_api.AddTxBatchColumnarRequest{
+				TxidsPacked:          txid,
+				Fees:                 []uint64{1},
+				Sizes:                []uint64{100},
+				ParentTxHashesPacked: parentHash[:],
+				ParentTxOffsets:      []uint32{0, 1},
+				VoutIdxsPacked:       []uint32{1, 0},
+				VoutIdxsTxOffsets:    []uint32{0, 2},
+				LanePositions:        positions,
+			})
+
+			return err
+		}
+	}
+
+	unary := func(ba *BlockAssembly) error {
+		_, err := ba.AddTx(context.Background(), &blockassembly_api.AddTxRequest{Txid: txid, Fee: 1, Size: 100, TxInpoints: parentLinks, LanePosition: position})
+		return err
+	}
+
+	batch := func(ba *BlockAssembly) error {
+		_, err := ba.AddTxBatch(context.Background(), &blockassembly_api.AddTxBatchRequest{
+			TxRequests: []*blockassembly_api.AddTxRequest{{Txid: txid, Fee: 1, Size: 100, TxInpoints: parentLinks, LanePosition: position}},
+		})
+
+		return err
+	}
+
+	for name, add := range map[string]func(ba *BlockAssembly) error{"AddTx": unary, "AddTxBatch": batch, "AddTxBatchColumnar": columnar([]uint64{position})} {
+		t.Run(name, func(t *testing.T) {
+			require.Equal(t, []uint64{position}, handedPositions(t, true, add), "at shadow")
+			require.Nil(t, handedPositions(t, false, add), "at off")
+		})
+	}
+
+	t.Run("AddTxBatchColumnar with a positions column of the wrong length", func(t *testing.T) {
+		require.Nil(t, handedPositions(t, true, columnar([]uint64{position, position})))
+	})
+
+	t.Run("a tx without a position", func(t *testing.T) {
+		require.Nil(t, handedPositions(t, true, columnar(nil)))
+	})
+
+	t.Run("AddTxBatch hands each tx its own position", func(t *testing.T) {
+		second, third := lane.Pack(2, 41), lane.Pack(3, 42)
+
+		several := func(ba *BlockAssembly) error {
+			requests := make([]*blockassembly_api.AddTxRequest, 3)
+			for i, p := range []uint64{0, second, third} {
+				hash := chainhash.HashH([]byte{byte(i), 0x5a})
+				requests[i] = &blockassembly_api.AddTxRequest{Txid: hash[:], Fee: 1, Size: 100, TxInpoints: parentLinks, LanePosition: p}
+			}
+
+			_, err := ba.AddTxBatch(context.Background(), &blockassembly_api.AddTxBatchRequest{TxRequests: requests})
+
+			return err
+		}
+
+		require.Equal(t, []uint64{0, second, third}, handedPositions(t, true, several))
 	})
 }

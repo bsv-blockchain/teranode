@@ -20,6 +20,8 @@ import (
 // on both transports — Lua TX_NOT_FOUND on the UDF path, KEY_NOT_FOUND under
 // the native path's UPDATE_ONLY policy), and an unfrozen UTXO unfreeze.
 func TestFreezeUnfreezeResultHandling(t *testing.T) {
+	t.Parallel()
+
 	logger := ulogger.NewErrorTestLogger(t)
 	tSettings := test.CreateBaseTestSettings(t)
 
