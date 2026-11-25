@@ -493,3 +493,65 @@ func TestLaneShadowCountsAFailedChunkUnjudged(t *testing.T) {
 	require.Error(t, err)
 	require.Equal(t, chunkErrors+1, laneMetric(t, "teranode_lane_pruner_unjudged_total", map[string]string{"store": lanereader.PruneStoreAerospike, "reason": "chunk_error"}))
 }
+
+// laneShadowTestService is newTestService at shadow with the lane index installed.
+func laneShadowTestService(t *testing.T) *Service {
+	t.Helper()
+
+	installLaneIndex(t, laneIndexForTests(t))
+
+	svc := newTestService(t)
+	svc.fieldConflicting = fields.Conflicting.String()
+	svc.laneRetention = 288
+
+	return svc
+}
+
+// TestLaneShadowSkipsARecordTheQueryReturnedWithAnError: a record that came with an error is counted
+// unjudged, even when it carries bins.
+func TestLaneShadowSkipsARecordTheQueryReturnedWithAnError(t *testing.T) {
+	svc := laneShadowTestService(t)
+
+	chunk := pagedMasterChunk(t, svc)
+	chunk[0].Record.Bins[svc.fieldTotalExtraRecs] = 0
+	chunk[0].Err = aerospike.ErrTimeout
+
+	recordErrors := laneMetric(t, "teranode_lane_pruner_unjudged_total", map[string]string{"store": lanereader.PruneStoreAerospike, "reason": "record_error"})
+	settled := laneVerdicts(t, lanereader.PruneKeep, lanereader.PruneDelete, lanereader.ReasonSettled)
+
+	_, _, err := svc.processRecordChunk(context.Background(), 1000, chunk)
+	require.NoError(t, err)
+	require.Equal(t, recordErrors+1, laneMetric(t, "teranode_lane_pruner_unjudged_total", map[string]string{"store": lanereader.PruneStoreAerospike, "reason": "record_error"}))
+	require.Equal(t, settled, laneVerdicts(t, lanereader.PruneKeep, lanereader.PruneDelete, lanereader.ReasonSettled), "not judged")
+}
+
+// TestLaneShadowJudgesAMasterWithoutTotalExtraRecs: a master from a writer that sets no
+// totalExtraRecs bin, stored under the bare txid, is judged as a master.
+func TestLaneShadowJudgesAMasterWithoutTotalExtraRecs(t *testing.T) {
+	svc := laneShadowTestService(t)
+
+	chunk := pagedMasterChunk(t, svc)
+	delete(chunk[0].Record.Bins, svc.fieldTotalExtraRecs)
+
+	settled := laneVerdicts(t, lanereader.PruneDelete, lanereader.PruneDelete, lanereader.ReasonSettled)
+
+	processed, _, err := svc.processRecordChunk(context.Background(), 1000, chunk)
+	require.NoError(t, err)
+	require.Equal(t, 1, processed)
+	require.Equal(t, settled+1, laneVerdicts(t, lanereader.PruneDelete, lanereader.PruneDelete, lanereader.ReasonSettled))
+}
+
+// TestLaneShadowCountsAFailedPageBatch: when the page-read batch fails, its master cannot be judged
+// settled, and the failure is counted apart.
+func TestLaneShadowCountsAFailedPageBatch(t *testing.T) {
+	svc := laneShadowTestService(t)
+	svc.batchOperateFn = func(*aerospike.BatchPolicy, []aerospike.BatchRecordIfc) error { return aerospike.ErrTimeout }
+
+	pageErrors := laneMetric(t, "teranode_lane_pruner_extra_reads_total", map[string]string{"store": lanereader.PruneStoreAerospike, "kind": "page_error"})
+	unread := laneVerdicts(t, lanereader.PruneDelete, lanereader.PruneCannotJudge, lanereader.ReasonSpenderUnread)
+
+	_, _, err := svc.processRecordChunk(context.Background(), 1000, pagedMasterChunk(t, svc))
+	require.NoError(t, err)
+	require.Equal(t, pageErrors+1, laneMetric(t, "teranode_lane_pruner_extra_reads_total", map[string]string{"store": lanereader.PruneStoreAerospike, "kind": "page_error"}))
+	require.Equal(t, unread+1, laneVerdicts(t, lanereader.PruneDelete, lanereader.PruneCannotJudge, lanereader.ReasonSpenderUnread))
+}

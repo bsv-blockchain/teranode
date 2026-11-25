@@ -785,7 +785,7 @@ func TestIndexOffMainTakerBeforeStartAndBlocksWithoutRows(t *testing.T) {
 	c.add(3, 2, 3)
 	c.add(4, 3, 4, rowsOf(t, 7, 53))
 	c.add(5, 4, 5, rowsOf(t, 7, 54))
-	c.add(40, 3, 4, rowsOf(t, 7, 90))
+	c.add(40, 3, 4, rowsOf(t, 7, 90, 92))
 	c.tip(5)
 
 	s := c.idx.Snapshot()
@@ -799,7 +799,13 @@ func TestIndexOffMainTakerBeforeStartAndBlocksWithoutRows(t *testing.T) {
 	require.False(t, ok, "a main-chain row is not an off-main taker")
 
 	_, _, ok = s.OffMainTaker(Pack(7, 91))
+	require.False(t, ok, "inside the fork row's range, but a hole in it")
+
+	_, _, ok = s.OffMainTaker(Pack(7, 93))
 	require.False(t, ok, "no row takes it")
+
+	_, _, ok = s.OffMainTaker(Pack(8, 50))
+	require.False(t, ok, "a lane the index holds nothing of")
 
 	require.True(t, s.BeforeStart(Pack(7, 49)), "below the lowest row of the lane")
 	require.False(t, s.BeforeStart(Pack(7, 50)))

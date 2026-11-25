@@ -3,6 +3,8 @@ package daemon
 import (
 	"context"
 	"net/url"
+	"slices"
+	"strings"
 	"testing"
 
 	"github.com/bsv-blockchain/teranode/settings"
@@ -28,6 +30,25 @@ func TestNeedsLaneReader(t *testing.T) {
 
 		require.True(t, needsLaneReader(flags[0], flags[1], flags[2], false, false, flags[3]), name)
 	}
+}
+
+// A process whose command line switches on only the pruner keeps a lane index; one with none of the
+// services that judge does not.
+func TestLaneReaderWantedForAPrunerOnlyProcess(t *testing.T) {
+	off := func(apps ...string) []string {
+		args := make([]string, 0, len(apps)+1)
+		for _, app := range apps {
+			args = append(args, "-"+strings.ToLower(app)+"=0")
+		}
+
+		return args
+	}
+
+	judging := []string{serviceSubtreeValidationFormal, serviceBlockValidationFormal, serviceValidatorFormal,
+		servicePropagationFormal, serviceLegacyFormal, serviceRPCFormal}
+
+	require.True(t, laneReaderWanted(append(off(judging...), "-"+strings.ToLower(servicePrunerFormal)+"=1"), false))
+	require.False(t, laneReaderWanted(off(slices.Concat(judging, []string{servicePrunerFormal})...), false))
 }
 
 // At off, starting the lane reader starts nothing and clears a reader left from before.

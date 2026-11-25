@@ -1,7 +1,10 @@
 package lanereader
 
 import (
+	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/RoaringBitmap/roaring/v2/roaring64"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
@@ -233,6 +236,14 @@ func TestPruneJudgeEachReason(t *testing.T) {
 			want:  PruneVerdict{PruneKeep, ReasonConflicting},
 		},
 		{
+			name: "a conflicting parent only a fork block took is counted conflicting",
+			chain: func(p *pruneIndex) *pruneIndex {
+				return p.at(150, laneRows(t, 7, 499)).at(190, laneRows(t, 9, 40)).fork(5000, 249, 250, laneRows(t, 7, 500))
+			},
+			c:    &PruneCandidate{Parent: parentHash, ParentPos: parent, Spenders: []PruneSpender{{spenderHash, spender}}, Conflicting: true},
+			want: PruneVerdict{PruneKeep, ReasonConflicting},
+		},
+		{
 			name:  "a zero-output parent, mined deep",
 			chain: func(p *pruneIndex) *pruneIndex { return p.at(150, laneRows(t, 7, 500)) },
 			c:     candidate(parent),
@@ -353,11 +364,13 @@ func TestPruneJudgeCountsBesideToday(t *testing.T) {
 	j.Judge(TodayDelete, candidate(lane.None))
 	j.Reads("page", 2)
 	j.Unjudged("record_error", 1)
+	j.Time(time.Now().Add(-time.Millisecond))
 
 	require.Equal(t, before["lanes only"], verdictCount(PruneStoreAerospike, PruneKeep, PruneDelete, ReasonSettled), "nothing is counted before Done")
 
 	readsBefore := testutil.ToFloat64(prometheusLanePrunerReads.WithLabelValues(PruneStoreAerospike, "page"))
 	unjudgedBefore := testutil.ToFloat64(prometheusLanePrunerUnjudged.WithLabelValues(PruneStoreAerospike, "record_error"))
+	secondsBefore := testutil.ToFloat64(prometheusLanePrunerSeconds.WithLabelValues(PruneStoreAerospike))
 	floorBefore := testutil.ToFloat64(prometheusLanePrunerLookups.WithLabelValues(PruneStoreAerospike, "floor"))
 	noneBefore := testutil.ToFloat64(prometheusLanePrunerLookups.WithLabelValues(PruneStoreAerospike, "none"))
 
@@ -369,6 +382,7 @@ func TestPruneJudgeCountsBesideToday(t *testing.T) {
 	require.Equal(t, before["lanes only"]+2, verdictCount(PruneStoreAerospike, PruneKeep, PruneDelete, ReasonSettled))
 	require.Equal(t, before["cannot judge"]+1, verdictCount(PruneStoreAerospike, PruneDelete, PruneCannotJudge, ReasonNoPosition))
 	require.Equal(t, readsBefore+2, testutil.ToFloat64(prometheusLanePrunerReads.WithLabelValues(PruneStoreAerospike, "page")))
+	require.Greater(t, testutil.ToFloat64(prometheusLanePrunerSeconds.WithLabelValues(PruneStoreAerospike)), secondsBefore, "the rule's time is added")
 	require.Equal(t, unjudgedBefore+1, testutil.ToFloat64(prometheusLanePrunerUnjudged.WithLabelValues(PruneStoreAerospike, "record_error")))
 	// Five candidates with a parent position, each looking up the parent and its one spender: both
 	// blocks folded, so the floor answers eight and nothing answers the unmined spender twice.
@@ -393,4 +407,57 @@ func TestInstallIndexIsTheProcessReader(t *testing.T) {
 	r := InstallIndex(ulogger.TestLogger{}, idx, 100)
 	require.Same(t, r, Current())
 	require.Nil(t, r.Snapshot(), "no tip yet")
+}
+
+// TestPruneJudgeStopsAtTheFirstUnsettledPosition: once one position keeps the parent, the rest are not
+// looked up.
+func TestPruneJudgeStopsAtTheFirstUnsettledPosition(t *testing.T) {
+	r := newPruneIndex(t, 100).at(150, laneRows(t, 7, 500)).at(190, laneRows(t, 9, 40)).build(300)
+
+	j := r.PruneJudge(PruneStoreAerospike, 288)
+	require.Equal(t, PruneVerdict{PruneKeep, ReasonSpenderUnmined}, j.Judge(TodayDelete, candidate(lane.Pack(7, 500), lane.Pack(9, 41), lane.Pack(9, 40))))
+	require.Equal(t, [3]uint64{1, 0, 1}, j.vias, "the parent and the first spender, not the second")
+}
+
+// warnLogger records the format of each warning.
+type warnLogger struct {
+	ulogger.TestLogger
+
+	mu    sync.Mutex
+	warns []string
+}
+
+func (l *warnLogger) Warnf(format string, _ ...interface{}) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	l.warns = append(l.warns, format)
+}
+
+// TestPruneJudgeLogsEachDirectionUnderItsOwnGate: the first disagreements of each direction are
+// logged, then no more inside the minute, and one direction's lines do not use up the other's.
+func TestPruneJudgeLogsEachDirectionUnderItsOwnGate(t *testing.T) {
+	r := newPruneIndex(t, 100).at(150, laneRows(t, 7, 500)).at(190, laneRows(t, 9, 40)).build(300)
+	log := &warnLogger{}
+	r.logger = log
+
+	settled := candidate(lane.Pack(7, 500), lane.Pack(9, 40))
+	unmined := candidate(lane.Pack(7, 500), lane.Pack(9, 41))
+
+	j := r.PruneJudge(PruneStoreUtxoset, 288)
+
+	for range disagreementsLogged + 3 {
+		j.Judge(TodayDelete, unmined)
+	}
+
+	require.Len(t, log.warns, disagreementsLogged, "the first lines of today's-only direction, then none inside the minute")
+
+	j.Judge(TodayKeep, settled)
+
+	require.Len(t, log.warns, disagreementsLogged+1, "the alarm direction logs under its own gate")
+	require.True(t, strings.Contains(log.warns[disagreementsLogged], "%s %s (log line %d)"))
+
+	j.Judge(TodayKeepUndo, settled)
+	j.Judge(TodayDelete, settled)
+	require.Len(t, log.warns, disagreementsLogged+1, "neither keep_undo nor agreement logs")
 }

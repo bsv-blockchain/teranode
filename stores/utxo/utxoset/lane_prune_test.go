@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/binary"
 	"testing"
+	"time"
 
 	"github.com/RoaringBitmap/roaring/v2/roaring64"
 	"github.com/bsv-blockchain/go-bt/v2"
@@ -180,6 +181,9 @@ func TestJournalDropJudgesEveryRowByTheLaneRule(t *testing.T) {
 	_, err = s.SetMinedMulti(ctx, hashes(minedLate), utxo.MinedBlockInfo{BlockID: 9, BlockHeight: 1_500, OnLongestChain: true})
 	require.NoError(t, err)
 
+	// A journal partition above the cutoff, which does not retire, so the pass is no backlog.
+	require.NoError(t, s.ensureSpendJournalPartition(ctx, 1_700))
+
 	require.NoError(t, s.SetBlockHeight(1_728))
 
 	before := map[string]float64{
@@ -266,6 +270,20 @@ func TestJournalDropAtOffJudgesNothing(t *testing.T) {
 
 	require.Equal(t, rows, journalReads(t, "journal_row"))
 	require.Equal(t, noPosition, journalVerdicts(t, lanereader.PruneDelete, lanereader.PruneCannotJudge, lanereader.ReasonNoPosition))
+	require.Zero(t, judgedLeaves(s), "no partition judged at off")
+}
+
+// judgedLeaves counts the journal partitions the lane rule has judged in this store.
+func judgedLeaves(s *Store) int {
+	n := 0
+
+	s.laneJudgedLeaves.Range(func(any, any) bool {
+		n++
+
+		return true
+	})
+
+	return n
 }
 
 func journalUnjudged(t *testing.T, reason string) float64 {
@@ -300,6 +318,7 @@ func TestJournalDropJudgingIsBoundedAndNeverHoldsTheDrop(t *testing.T) {
 
 	require.Equal(t, unjudged+1, journalUnjudged(t, "budget"))
 	require.Equal(t, rows, journalReads(t, "journal_row"), "no row read")
+	require.Zero(t, judgedLeaves(s), "a partition the budget skipped is not remembered as judged")
 
 	_, carried := journalLane(t, s, ctx, parent, 0)
 	require.True(t, carried, "the waiting spend is carried")
@@ -332,6 +351,7 @@ func TestJournalDropJudgesNoBacklog(t *testing.T) {
 
 	require.Equal(t, backlog+2, journalUnjudged(t, "backlog"))
 	require.Equal(t, rows, journalReads(t, "journal_row"))
+	require.Zero(t, judgedLeaves(s), "a backlog partition is not remembered as judged")
 }
 
 // TestJournalLeafIsJudgedOnce: a partition already judged in this process is not judged again by a
@@ -384,10 +404,75 @@ func TestJournalDropCountsAFailedJudgeAndStillDrops(t *testing.T) {
 	require.Positive(t, dropped)
 
 	require.Equal(t, leafErrors+1, journalUnjudged(t, "leaf_error"))
+	require.Equal(t, 1, judgedLeaves(s), "a partition whose judging failed is not judged again")
 
 	_, carried := journalLane(t, s, ctx, parent, 0)
 	require.True(t, carried, "the waiting spend is carried")
 
 	_, kept := journalLane(t, s, ctx, parent, 1)
 	require.False(t, kept, "the mined spend dropped with its partition")
+}
+
+// TestJournalDropBudgetCutsAJudgingShort: the pass's budget ends a partition's judging part way, the
+// partition counts leaf_error, and the drop goes on.
+func TestJournalDropBudgetCutsAJudgingShort(t *testing.T) {
+	s, ctx := newLaneCopyStore(t)
+	installJournalLaneIndex(t, journalIndexBlock)
+
+	budget, query := laneJudgePassBudget, lanePositionsQuery
+	laneJudgePassBudget = 300 * time.Millisecond
+	// A position read that takes two seconds, longer than the budget.
+	lanePositionsQuery = "SELECT k.txid, NULL::bigint FROM unnest($1::smallint[], $2::bytea[]) AS k(leaf, txid), pg_sleep(2)"
+
+	t.Cleanup(func() { laneJudgePassBudget, lanePositionsQuery = budget, query })
+
+	parent := mkTx(t, 1, 5_000)
+	_, err := s.Create(ctx, parent, 1_000, utxo.WithLanePosition(journalParentPos), minedAt(1_000, 1))
+	require.NoError(t, err)
+
+	spendWith(t, s, ctx, parent, 0, 1_010, utxo.WithLanePosition(journalSettled), minedAt(1_010, 2))
+
+	require.NoError(t, s.SetBlockHeight(1_728))
+
+	leafErrors := journalUnjudged(t, "leaf_error")
+
+	dropped, err := s.dropSpendJournalPartitionsBelow(ctx, 1_440)
+	require.NoError(t, err)
+	require.Positive(t, dropped)
+	require.Equal(t, leafErrors+1, journalUnjudged(t, "leaf_error"))
+}
+
+// TestJournalDropReadsAPreservedParentsPosition: a parent known only by its preserved copy, whose
+// journal row carries no position, gives its position from that copy.
+func TestJournalDropReadsAPreservedParentsPosition(t *testing.T) {
+	s, ctx := newUncheckpointedLaneCopyStore(t)
+	installJournalLaneIndex(t, journalIndexBlock)
+
+	parent := mkTx(t, 1, 5_000)
+	_, err := s.Create(ctx, parent, 1_000, utxo.WithLanePosition(journalParentPos), minedAt(1_000, 1))
+	require.NoError(t, err)
+
+	spendWith(t, s, ctx, parent, 0, 1_010, utxo.WithLanePosition(journalSettled), minedAt(1_010, 2))
+
+	// The preserved copy, planted directly: setup through PreserveTransactions would depend on its
+	// own conditions for copying.
+	_, err = s.pool.Exec(ctx, `
+        INSERT INTO preserved_parent (txid, mined_height, block_id, subtree_idx, created_height, preserve_until, lane_position)
+        VALUES ($1, 1000, 1, 0, 1000, 5000, $2)`, hashBytes(parent), lane.ToSigned(journalParentPos))
+	require.NoError(t, err)
+
+	dropIdentityRow(t, s, ctx, parent)
+	_, err = s.pool.Exec(ctx, "DELETE FROM tx_mined WHERE txid = $1", hashBytes(parent))
+	require.NoError(t, err)
+	_, err = s.pool.Exec(ctx, "UPDATE spend_journal SET lane_position = NULL WHERE txid = $1", hashBytes(parent))
+	require.NoError(t, err)
+
+	require.NoError(t, s.SetBlockHeight(1_728))
+
+	settled := journalVerdicts(t, lanereader.PruneDelete, lanereader.PruneDelete, lanereader.ReasonSettled)
+
+	_, err = s.dropSpendJournalPartitionsBelow(ctx, 1_440)
+	require.NoError(t, err)
+
+	require.Equal(t, settled+1, journalVerdicts(t, lanereader.PruneDelete, lanereader.PruneDelete, lanereader.ReasonSettled))
 }

@@ -128,8 +128,7 @@ func (d *Daemon) startServices(ctx context.Context, logger ulogger.Logger, appSe
 	// At utxostore_laneMigration shadow, a process running a service that checks whether a parent
 	// is mined, or the pruner, which judges each delete by the lane rule, keeps an index of the lane
 	// map and answers those checks from it too (util/lanereader).
-	if needsLaneReader(startSubtreeValidation, startBlockValidation, startValidator,
-		startPropagation || startLegacy || startRPC, appSettings.Validator.UseLocalValidator, startPruner) {
+	if laneReaderWanted(args, appSettings.Validator.UseLocalValidator) {
 		d.startLaneReader(ctx, appSettings, createLogger)
 	}
 
@@ -791,6 +790,14 @@ func (d *Daemon) startBlockAssemblyService(ctx context.Context, appSettings *set
 // its own index would answer nothing.
 func needsLaneReader(subtreeValidation, blockValidation, validator, validatorClient, localValidator, pruner bool) bool {
 	return subtreeValidation || blockValidation || validator || (validatorClient && localValidator) || pruner
+}
+
+// laneReaderWanted is needsLaneReader for the services args switch on in this process.
+func laneReaderWanted(args []string, localValidator bool) bool {
+	on := func(app string) bool { return serviceEnabled(app, args) }
+
+	return needsLaneReader(on(serviceSubtreeValidationFormal), on(serviceBlockValidationFormal), on(serviceValidatorFormal),
+		on(servicePropagationFormal) || on(serviceLegacyFormal) || on(serviceRPCFormal), localValidator, on(servicePrunerFormal))
 }
 
 // laneReaderConnectRetry is how long the lane index waits before connecting to the blockchain
