@@ -759,9 +759,10 @@ func TestReorgDifferential_FastPathKeepsTheWinnersMinedSet(t *testing.T) {
 	require.True(t, handOff(sc, f1), "the union goes with the tip, which only falls back to no kept set")
 }
 
-// A transaction the winners mine is confirmed, so the fast path forgets its drop as each slow-path
-// step does, and keeps the drop of one nobody mined.
-func TestReorgDifferential_FastPathForgetsTheDropsTheWinnersMine(t *testing.T) {
+// A transaction the winners mine is confirmed, so its drop is forgotten as each slow-path step does,
+// and the drop of one nobody mined is kept. A dropped tx makes the fast path decline, so the slow path
+// does it.
+func TestReorgDifferential_DroppedTxsForgottenWhenTheWinnersMineThem(t *testing.T) {
 	cfg := smallScenarioConfig()
 
 	var dropped []chainhash.Hash
@@ -793,7 +794,7 @@ func TestReorgDifferential_FastPathForgetsTheDropsTheWinnersMine(t *testing.T) {
 	var rec fastPathRun
 
 	requireReorgEquivalent(t, cfg, seeded(slowReference, false), seeded(recordingFastPath(&rec), true))
-	require.True(t, rec.applied, "the fast path must apply, it declined: %v", rec.reasons)
+	require.Equal(t, []string{"dropped_txs"}, rec.reasons)
 	require.Equal(t, []chainhash.Hash{chainhash.HashH([]byte("dropped-and-never-mined"))}, dropped)
 }
 
@@ -825,4 +826,66 @@ func TestReorgDifferential_FastPathDeclineKeepsPerBlockSets(t *testing.T) {
 	want := sortedHashes([]chainhash.Hash{*declined.forward[0].Hash(), *declined.forward[1].Hash()})
 	require.Equal(t, want, keptBlocks(declined))
 	require.Equal(t, keptBlocks(flagOff), keptBlocks(declined))
+}
+
+// withSetup runs setup on the scenario before path does.
+func withSetup(path reorgPath, setup func(sc *reorgScenario)) reorgPath {
+	return func(t testing.TB, sc *reorgScenario) error {
+		setup(sc)
+
+		return path(t, sc)
+	}
+}
+
+// The admission of a moved-back transaction (the tx era and the dropped set) and the drop of its pending
+// descendants live in the slow path. The fast path declines when the era could refuse the lost block, or
+// when a drop exists, rather than duplicate them.
+func TestReorgDifferential_FastPathDeclinesWhenTheTxEraRefusesTheLostBlock(t *testing.T) {
+	cfg := smallScenarioConfig()
+
+	// the era is 100..199 and the lost block is at height 1
+	setEra := func(sc *reorgScenario) { sc.stp.SetTxEra(150) }
+
+	var rec fastPathRun
+
+	requireReorgEquivalent(t, cfg, withSetup(slowReference, setEra), withSetup(recordingFastPath(&rec), setEra))
+	require.False(t, rec.applied, "the fast path must decline")
+	require.Equal(t, []string{"tx_era"}, rec.reasons)
+}
+
+func TestReorgDifferential_FastPathDeclinesWhenADroppedTxExists(t *testing.T) {
+	cfg := smallScenarioConfig()
+
+	// the parent of every lost-block transaction is dropped, so the D1 ones are refused
+	seed := func(sc *reorgScenario) {
+		sc.stp.droppedMu.Lock()
+		defer sc.stp.droppedMu.Unlock()
+
+		for _, id := range sc.lostIDs {
+			sc.stp.recordDroppedLocked(sc.confirmedParent(id))
+		}
+	}
+
+	var rec fastPathRun
+
+	requireReorgEquivalent(t, cfg, withSetup(slowReference, seed), withSetup(recordingFastPath(&rec), seed))
+	require.False(t, rec.applied, "the fast path must decline")
+	require.Equal(t, []string{"dropped_txs"}, rec.reasons)
+}
+
+func TestReorgDifferential_FastPathStaysFastWhenTheEraHoldsTheLostBlock(t *testing.T) {
+	// an era that includes the lost block's height, and no drops: the common case stays fast
+	setEra := func(sc *reorgScenario) {
+		sc.stp.SetTxEra(sc.lost.Height)
+
+		lo, hi, ok := sc.stp.TxEra()
+		require.True(t, ok, "the era is set")
+		require.LessOrEqual(t, lo, sc.lost.Height)
+		require.GreaterOrEqual(t, hi, sc.lost.Height)
+	}
+
+	var rec fastPathRun
+
+	requireReorgEquivalent(t, smallScenarioConfig(), withSetup(slowReference, setEra), withSetup(recordingFastPath(&rec), setEra))
+	require.True(t, rec.applied, "the fast path must apply, it declined: %v", rec.reasons)
 }

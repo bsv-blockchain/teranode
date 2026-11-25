@@ -133,6 +133,16 @@ func (stp *SubtreeProcessor) planFastReorg(ctx context.Context, moveBackBlocks, 
 		}
 	}
 
+	// Admission of a moved-back transaction (the tx era, the dropped set) and the drop of its pending
+	// descendants live in the slow path; the fast path declines rather than duplicate them.
+	if era := stp.txEra.Load(); era != nil && lost.Height != 0 && (lost.Height < era.lo || lost.Height > era.hi) {
+		return nil, "tx_era"
+	}
+
+	if stp.droppedCount.Load() > 0 {
+		return nil, "dropped_txs"
+	}
+
 	if lost.CoinbaseTx == nil {
 		return nil, "read_failed"
 	}
@@ -584,7 +594,9 @@ func (stp *SubtreeProcessor) applyFastReorg(ctx context.Context, plan *fastReorg
 	stp.phases.done("fast_apply_coinbase")
 
 	// A slow-path step forgets the drops its block mines before its drain, and puts them back if the
-	// move fails (issue 2269). The fast path does the same once for the winners.
+	// move fails (issue 2269). The fast path does the same once for the winners. It declines when any
+	// drop exists at the plan, so this acts only on a drop recorded since, by FilterUnminedTxEra on
+	// the block assembler's goroutine; without one it returns at once.
 	if forgotten := stp.forgetMinedDroppedTxs(plan.winners); len(forgotten) != 0 {
 		defer func() {
 			if err != nil {
