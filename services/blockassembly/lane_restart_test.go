@@ -606,6 +606,20 @@ func TestLaneRestartReaderViewWaitsForTheTarget(t *testing.T) {
 	require.Nil(t, laneRestartReaderView(ctx, 1, map[uint32]bool{0: true}), "a cancelled run stops waiting")
 }
 
+func TestLaneRestartReaderViewWaitsForTargetBlockOnAnotherBranch(t *testing.T) {
+	defer func(d time.Duration) { laneRestartViewWait = d }(laneRestartViewWait)
+	laneRestartViewWait = 25 * time.Millisecond
+
+	startLaneTestReader(t, context.Background())
+	require.Eventually(t, func() bool { return lanereader.Current().Snapshot() != nil }, time.Second, time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	// The reader has a height-zero tip, but the reset target is a different block at
+	// that height and is absent from its snapshot.
+	require.Nil(t, laneRestartReaderView(ctx, 0, map[uint32]bool{^uint32(0): true}))
+}
+
 // A run from a reload reads its grants through the assembler's blockchain client and waits for the
 // process's lane index, and judges with the UTXO store's window read where the store has one.
 func TestLaneRestartDepsComeFromTheAssembler(t *testing.T) {

@@ -326,7 +326,7 @@ func (b *BlockAssembler) stopLaneRestartDryRun() {
 	<-done
 }
 
-// laneRestartReaderView waits for the process's lane index to reach the target's height and
+// laneRestartReaderView waits for the process's lane index to hold the target block and
 // returns its view of the target's chain, or nil at the wait's end.
 func laneRestartReaderView(ctx context.Context, targetHeight uint32, ids map[uint32]bool) *lane.ChainView {
 	deadline := time.Now().Add(laneRestartViewWait)
@@ -334,7 +334,11 @@ func laneRestartReaderView(ctx context.Context, targetHeight uint32, ids map[uin
 	for {
 		r := lanereader.Current()
 		if s := r.Snapshot(); s != nil && s.TipHeight() >= targetHeight {
-			return r.ViewOfIDs(ids)
+			for id := range ids {
+				if state, height := s.Block(id); state != lane.BlockNotLoaded && height == targetHeight {
+					return s.ViewOfIDs(ids)
+				}
+			}
 		}
 
 		if time.Now().After(deadline) {
