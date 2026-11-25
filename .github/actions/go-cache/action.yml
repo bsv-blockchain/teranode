@@ -4,8 +4,9 @@ description: >
   (~/go/pkg/mod) and build cache (~/.cache/go-build).
 
   GitHub Actions caches are branch-scoped: only caches written on the default
-  branch are readable by all PRs. So exactly ONE job — the main-branch unit
-  test job — runs with save: 'true'. Every other job restores only.
+  branch are readable by all PRs. So only main-branch jobs run with save: 'true':
+  the unit test job (module cache and -race build cache) and the benchmark build
+  cache job (bench_build_cache). Every other job restores only.
 
   The build cache key rotates daily (GO_CACHE_DATE) so it never goes stale for
   weeks at a time; restore-keys fall back to the most recent dated entry, then
@@ -25,6 +26,13 @@ inputs:
       near-zero hits and just waste bandwidth on a multi-GB tarball. Set 'false'
       for those — the module cache (~/go/pkg/mod) is always restored regardless.
     default: 'true'
+  bench_build_cache:
+    description: >
+      Whether to use the benchmark build cache (~/.cache/go-build-bench): the
+      benchmark packages built without -race and with -tags testtxmetacache on
+      this runner's architecture, saved by the main-branch benchmark build cache
+      job. 'true' also points GOCACHE at it for the rest of the job.
+    default: 'false'
 
 runs:
   using: 'composite'
@@ -53,7 +61,17 @@ runs:
           gobuild-${{ runner.os }}-${{ hashFiles('**/go.mod') }}-
           gobuild-${{ runner.os }}-
 
-    # --- save path (authoritative saver only: main-branch unit tests) ---
+    - name: Restore Go benchmark build cache
+      if: inputs.save != 'true' && inputs.bench_build_cache == 'true'
+      uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+      with:
+        path: ~/.cache/go-build-bench
+        key: gobuild-bench-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('**/go.mod') }}-${{ env.GO_CACHE_DATE }}
+        restore-keys: |
+          gobuild-bench-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('**/go.mod') }}-
+          gobuild-bench-${{ runner.os }}-${{ runner.arch }}-
+
+    # --- save path (authoritative savers only: main-branch jobs) ---
     # actions/cache registers a post-job step that uploads at job end, AFTER
     # the trim step in the caller has run. Saves only on a key miss (new day or
     # new go.sum/go.mod), so same-day reruns are no-ops.
@@ -75,3 +93,18 @@ runs:
         restore-keys: |
           gobuild-${{ runner.os }}-${{ hashFiles('**/go.mod') }}-
           gobuild-${{ runner.os }}-
+
+    - name: Save Go benchmark build cache
+      if: inputs.save == 'true' && inputs.bench_build_cache == 'true'
+      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+      with:
+        path: ~/.cache/go-build-bench
+        key: gobuild-bench-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('**/go.mod') }}-${{ env.GO_CACHE_DATE }}
+        restore-keys: |
+          gobuild-bench-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('**/go.mod') }}-
+          gobuild-bench-${{ runner.os }}-${{ runner.arch }}-
+
+    - name: Point GOCACHE at the benchmark build cache
+      if: inputs.bench_build_cache == 'true'
+      shell: bash
+      run: echo "GOCACHE=$HOME/.cache/go-build-bench" >> "$GITHUB_ENV"
