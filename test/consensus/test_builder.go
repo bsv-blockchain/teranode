@@ -667,14 +667,15 @@ func scriptNumBytes(num int64) []byte {
 	}
 
 	negative := num < 0
+	magnitude := uint64(num) //nolint:gosec // unsigned negation also handles math.MinInt64
 	if negative {
-		num = -num
+		magnitude = -magnitude
 	}
 
 	var bytes []byte
-	for num > 0 {
-		bytes = append(bytes, byte(num&0xff))
-		num >>= 8
+	for magnitude > 0 {
+		bytes = append(bytes, byte(magnitude&0xff))
+		magnitude >>= 8
 	}
 
 	// Add sign bit if needed

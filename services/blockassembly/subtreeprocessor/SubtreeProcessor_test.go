@@ -7,9 +7,11 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"runtime"
 	"sync"
 	"testing"
 	"time"
+	"weak"
 
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/bscript"
@@ -1456,7 +1458,7 @@ func TestParallelBuildRemainderSubtrees_MultiChunk(t *testing.T) {
 	stp.currentSubtree.Store(cs)
 	stp.chainedSubtrees = make([]*subtreepkg.Subtree, 0)
 
-	require.NoError(t, stp.parallelBuildRemainderSubtrees(ctx, ordered, true))
+	require.NoError(t, stp.parallelBuildRemainderSubtrees(ctx, ordered, nil, true))
 
 	// Reassemble leaf order from chainedSubtrees followed by currentSubtree,
 	// stripping coinbase placeholders.
@@ -4638,7 +4640,7 @@ func TestNewSubtreeChanContextCancellation(t *testing.T) {
 		cancel()
 
 		waitForReturn(t, "parallelBuildRemainderSubtrees", func() error {
-			return stp.parallelBuildRemainderSubtrees(cancelledCtx, kept, true)
+			return stp.parallelBuildRemainderSubtrees(cancelledCtx, kept, nil, true)
 		})
 	})
 }
@@ -5037,4 +5039,62 @@ func TestTxInpointsFromUtxoStoreReadsInBoundedBatches(t *testing.T) {
 	}
 
 	require.Empty(t, txInpoints[4].ParentTxHashes, "a tx whose record is gone has no links to read")
+}
+
+// TestProcessedBatchesAreReleasedAfterABurst pins that the main loop does not keep processed batches
+// reachable. Each queued TxBatch links to the next one, so a single stale *TxBatch left in the reused
+// dequeue slice pins every batch queued after it, with all their nodes and inpoints. A burst that fills
+// more slots than later iterations use leaves exactly such stale slots; the nightly soak test saw this as
+// heap growing linearly for as long as the load ran.
+func TestProcessedBatchesAreReleasedAfterABurst(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	stp := newTestSubtreeProcessorForDequeueStaleness(t, ctx)
+	stp.settings.BlockAssembly.DoubleSpendWindow = 0
+
+	nextHash := byte(0)
+	newBatch := func() []subtreepkg.Node {
+		nextHash++
+		nodes := []subtreepkg.Node{{Hash: chainhash.Hash{nextHash, 0xbb}, Fee: 1, SizeInBytes: 1}}
+		stp.queue.enqueueBatch(nodes, []*subtreepkg.TxInpoints{{}})
+
+		return nodes
+	}
+	waitDrained := func() {
+		require.Eventually(t, func() bool { return stp.queue.length() == 0 }, 5*time.Second, time.Millisecond)
+	}
+
+	// Queued before Start, so the first iteration dequeues the whole burst into the slice.
+	for range 10 {
+		newBatch()
+	}
+
+	stp.Start(ctx)
+	t.Cleanup(func() { stp.Stop(ctx) })
+	waitDrained()
+
+	// Steady state: one batch per iteration. Only the newest few may stay reachable.
+	const steady = 100
+
+	watched := make([]weak.Pointer[subtreepkg.Node], 0, steady)
+
+	for range steady {
+		nodes := newBatch()
+		watched = append(watched, weak.Make(&nodes[0]))
+		waitDrained()
+	}
+
+	runtime.GC()
+	runtime.GC()
+
+	retained := 0
+
+	for _, w := range watched[:steady/2] {
+		if w.Value() != nil {
+			retained++
+		}
+	}
+
+	require.Zero(t, retained, "%d of the %d oldest processed batches are still reachable", retained, steady/2)
 }

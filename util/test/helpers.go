@@ -10,6 +10,10 @@ import (
 	"github.com/testcontainers/testcontainers-go"
 )
 
+// AerospikeImage is the Aerospike server image that tests run against unless they choose
+// another. Teranode needs Aerospike 8.1 or later, so no test runs on an older server.
+const AerospikeImage = "aerospike/aerospike-server:8.1"
+
 type TestingT interface {
 	Errorf(format string, args ...interface{})
 	Logf(format string, args ...interface{})
@@ -37,6 +41,11 @@ func CreateBaseTestSettings(t TestingT) *settings.Settings {
 	// (#1051). Bucket count only affects sharding/lock-contention, not results, so test
 	// outcomes are unchanged; 16 is the value the subtreeprocessor unit tests already use.
 	tSettings.BlockAssembly.SplitMapBuckets = 16
+	// Shrink the UTXO store get batch for tests. A batcher's input channel holds 64
+	// batches, so the production 4096 gives every SQL UTXO store a ~21 MB queue, and a
+	// test binary builds hundreds of stores. 256 still batches (sql.New only builds the
+	// get batcher above 1) at ~1.3 MB per store.
+	tSettings.UtxoStore.GetBatcherSize = 256
 
 	// We sometimes get 'hot key' errors while running the test
 	// To mitigate this, we use more aggressive retry settings with exponential backoff
