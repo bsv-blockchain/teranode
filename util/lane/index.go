@@ -631,7 +631,9 @@ func (v *ChainView) Lookup(pos uint64) Answer {
 
 // TakenBefore counts the positions block id took that one of its ancestors on the chain also
 // took: a block re-including a mined transaction. byRow counts those an ancestor's row took and
-// byFloor those below the floor. hasRows is false when the index holds no rows of the block.
+// byFloor those below the floor. hasRows is false when the index does not hold the block's rows
+// complete: not loaded, folded, or a block with transactions besides its coinbase and no rows. A
+// block of only its coinbase has complete, empty rows.
 func (v *ChainView) TakenBefore(id uint32) (byRow, byFloor uint64, hasRows bool) {
 	b, ok := v.snap.blocks[id]
 	if !ok || !b.hasRows || b.folded {

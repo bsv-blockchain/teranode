@@ -354,8 +354,9 @@ func TestReaderCountsEachKind(t *testing.T) {
 			{KindAgree, lane.ViaRow, lane.Pack(3, 5), []uint32{b2.id, b1.id}},
 			{KindNoRows, lane.ViaNone, lane.Pack(3, 99), []uint32{b3.id, b2.id}},
 			{KindTodayOnly, lane.ViaNone, lane.Pack(3, 99), []uint32{b2.id, b3.id}},
-			// A block of only its coinbase has complete rows, so today naming it for a
-			// transaction no row takes is a disagreement, not no_rows.
+			// A block of only its coinbase has complete rows, so a position no row takes is
+			// judged, not no_rows. Only its coinbase can hold one, which the parent-check
+			// coinbase kind counts apart once it lands.
 			{KindTodayOnly, lane.ViaNone, lane.Pack(3, 99), []uint32{b4.id}},
 		}
 
@@ -407,6 +408,16 @@ func TestReaderCountsTheMinedWriteWindowApart(t *testing.T) {
 			r.CompareHeight(ReaderValidator, chainhash.Hash{}, lane.Pack(3, 6), false, 0)
 		})
 
+		// With b2's write seen finished, the follower stops asking: a failing read is never made.
+		r.source = headerFailingSource{store}
+		errorsBefore := testutil.ToFloat64(prometheusLaneReaderFollowErrors)
+
+		_, err = r.step(t.Context(), b2.hash)
+		require.NoError(t, err)
+		require.Equal(t, errorsBefore, testutil.ToFloat64(prometheusLaneReaderFollowErrors))
+
+		r.source = store
+
 		// b3 arrives with its mined write unfinished; then a read of its flag fails. The failure is
 		// counted and leaves no block pending.
 		b3 := c.add(b2, takes(t, 3, 7))
@@ -419,7 +430,7 @@ func TestReaderCountsTheMinedWriteWindowApart(t *testing.T) {
 		})
 
 		r.source = headerFailingSource{store}
-		errorsBefore := testutil.ToFloat64(prometheusLaneReaderFollowErrors)
+		errorsBefore = testutil.ToFloat64(prometheusLaneReaderFollowErrors)
 
 		_, err = r.step(t.Context(), b3.hash)
 		require.NoError(t, err)
