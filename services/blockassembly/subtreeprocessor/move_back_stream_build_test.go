@@ -2,12 +2,21 @@ package subtreeprocessor
 
 import (
 	"context"
+	"net/url"
 	"runtime"
 	"testing"
 
+	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
 	"github.com/bsv-blockchain/teranode/model"
+	"github.com/bsv-blockchain/teranode/pkg/fileformat"
+	"github.com/bsv-blockchain/teranode/services/blockchain"
+	utxostore "github.com/bsv-blockchain/teranode/stores/utxo"
+	"github.com/bsv-blockchain/teranode/stores/utxo/sql"
+	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util/test"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -281,4 +290,92 @@ func BenchmarkReorgMoveBackBuild(b *testing.B) {
 			}
 		})
 	}
+}
+
+// A lost block's transaction the tx era keeps out on a move-back is left out of the tx map, and
+// so of the held walk's arrays. The nodes the walk reads must leave it out at the same positions:
+// otherwise a kept-out transaction enters the template and a kept one is lost. Here b spends a
+// transaction already kept out, so it goes, with its pending child; c is already pending, which
+// takes the move-back down the held walk instead of the streamed build.
+func TestMoveBackBulkBuild_LeavesOutWhatTheTxEraKeepsOut(t *testing.T) {
+	stp := newTestSubtreeProcessorForDequeueStaleness(t, context.Background())
+	stp.SetTxEra(150)
+
+	blockchainClient := &blockchain.Mock{}
+	blockchainClient.On("SetBlockProcessedAt", mock.Anything, mock.Anything, mock.Anything).Return(nil)
+	stp.blockchainClient = blockchainClient
+
+	utxoStoreURL, err := url.Parse("sqlitememory:///test")
+	require.NoError(t, err)
+	utxoStore, err := sql.New(t.Context(), ulogger.TestLogger{}, test.CreateBaseTestSettings(t), utxoStoreURL)
+	require.NoError(t, err)
+	stp.utxoStore = utxoStore
+
+	keptOut := chainhash.HashH([]byte("era-kept-out-parent"))
+	confirmed := chainhash.HashH([]byte("era-confirmed-parent"))
+	b := chainhash.HashH([]byte("era-b-spends-kept-out"))
+	a := chainhash.HashH([]byte("era-a"))
+	c := chainhash.HashH([]byte("era-c-already-pending"))
+	childOfB := chainhash.HashH([]byte("era-pending-child-of-b"))
+
+	st, err := subtreepkg.NewTreeByLeafCount(4)
+	require.NoError(t, err)
+	require.NoError(t, st.AddCoinbaseNode())
+
+	for i, h := range []chainhash.Hash{b, a, c} {
+		require.NoError(t, st.AddNode(h, uint64(i+1), 250)) //nolint:gosec // test fees
+	}
+
+	meta := subtreepkg.NewSubtreeMeta(st)
+	for idx, parent := range []chainhash.Hash{{}, keptOut, confirmed, confirmed} {
+		if idx == 0 {
+			continue
+		}
+
+		input := &bt.Input{PreviousTxOutIndex: 0}
+		require.NoError(t, input.PreviousTxIDAdd(&parent))
+		inpoints, err := subtreepkg.NewTxInpointsFromInputs([]*bt.Input{input})
+		require.NoError(t, err)
+		require.NoError(t, meta.SetTxInpoints(idx, inpoints))
+	}
+
+	subtreeBytes, err := st.Serialize()
+	require.NoError(t, err)
+	require.NoError(t, stp.subtreeStore.Set(t.Context(), st.RootHash()[:], fileformat.FileTypeSubtree, subtreeBytes))
+	metaBytes, err := meta.Serialize()
+	require.NoError(t, err)
+	require.NoError(t, stp.subtreeStore.Set(t.Context(), st.RootHash()[:], fileformat.FileTypeSubtreeMeta, metaBytes))
+
+	_, _ = utxoStore.Create(t.Context(), coinbaseTx, 0)
+	stp.InitCurrentBlockHeader(blockHeader)
+
+	stp.droppedMu.Lock()
+	stp.recordDroppedLocked(keptOut)
+	stp.droppedMu.Unlock()
+
+	require.NoError(t, stp.AddNodesDirectly([]*utxostore.UnminedTransaction{
+		{Node: &subtreepkg.Node{Hash: c, Fee: 3, SizeInBytes: 250}, TxInpoints: inpointsWithParent(confirmed)},
+		{Node: &subtreepkg.Node{Hash: childOfB, Fee: 1, SizeInBytes: 250}, TxInpoints: inpointsWithParent(b)},
+	}, true))
+
+	_, _, err = stp.moveBackBlock(t.Context(), &model.Block{
+		Header:     prevBlockHeader,
+		Height:     150,
+		Subtrees:   []*chainhash.Hash{st.RootHash()},
+		CoinbaseTx: coinbaseTx,
+	}, true)
+	require.NoError(t, err)
+
+	held := map[chainhash.Hash]int{}
+	for _, node := range assemblyNodes(stp) {
+		held[node.Hash]++
+	}
+
+	require.Equal(t, 1, held[a], "a kept transaction of the lost block is in the template once")
+	require.Equal(t, 1, held[c], "the pending transaction stays, once")
+	require.Zero(t, held[b], "the kept-out transaction stays out")
+	require.Zero(t, held[childOfB], "its pending child goes with it")
+
+	_, inMap := stp.currentTxMap.Get(b)
+	require.False(t, inMap)
 }

@@ -16,13 +16,17 @@ const (
 // storedPrefixWatch is the state of maintainStoredPrefix, owned by the processor goroutine.
 type storedPrefixWatch struct {
 	tickEvery    time.Duration
-	stallFloor   time.Duration // the least time the stored count may stand still before a re-enqueue
+	stallFloor   time.Duration // how long the first unstored subtree may stay first before it is sent again
 	reenqueueGap time.Duration // the least time between two sends of one subtree
 
-	firstSeen   map[chainhash.Hash]time.Time // when a chained subtree was first seen not stored
-	lastSent    map[chainhash.Hash]time.Time // when a subtree was last sent again
-	lastAdded   uint64
-	lastAdvance time.Time
+	firstSeen map[chainhash.Hash]time.Time        // when a chained subtree was first seen not stored
+	lastSent  map[chainhash.Hash]time.Time        // when a subtree was last sent again
+	pending   map[chainhash.Hash]chan StoreResult // the send of a subtree that has not settled
+
+	// stuck is the first unstored chained root, and since when it has been the first: the stall is
+	// the hole's, not the set's, because later subtrees keep storing behind a hole.
+	stuck      chainhash.Hash
+	stuckSince time.Time
 }
 
 func newStoredPrefixWatch() storedPrefixWatch {
@@ -32,6 +36,7 @@ func newStoredPrefixWatch() storedPrefixWatch {
 		reenqueueGap: storedPrefixReenqueueGap,
 		firstSeen:    make(map[chainhash.Hash]time.Time),
 		lastSent:     make(map[chainhash.Hash]time.Time),
+		pending:      make(map[chainhash.Hash]chan StoreResult),
 	}
 }
 
@@ -42,8 +47,11 @@ func newStoredPrefixWatch() storedPrefixWatch {
 //   - It drops the roots of the set that are not chained, so the set cannot outgrow the chain.
 //   - It exports the age of the oldest chained subtree that is not stored.
 //   - It sends a chained subtree again from memory when its store ended failed for good, and the
-//     first unstored one when the stored count has not advanced for max(3 x the median store time,
-//     stallFloor) with no retry in flight. A subtree is sent again at most once per reenqueueGap.
+//     first unstored one when it has been the first for stallFloor with no retry of its own in
+//     flight. A fixed 150 s stands for max(3 x the median store time, 150 s): the median would need
+//     a timer on the store path, and a store that takes 50 s is already past any sane setting.
+//     A subtree is sent again at most once per reenqueueGap, and not while its last send is
+//     outstanding: in an outage each send holds its bytes in the retry channel for about 100 s.
 func (stp *SubtreeProcessor) maintainStoredPrefix(now time.Time) {
 	set, w := stp.storedSet, &stp.prefixWatch
 
@@ -66,6 +74,17 @@ func (stp *SubtreeProcessor) maintainStoredPrefix(now time.Time) {
 	for root := range w.lastSent {
 		if _, ok := keep[root]; !ok {
 			delete(w.lastSent, root)
+		}
+	}
+
+	for root, result := range w.pending {
+		select {
+		case <-result:
+			delete(w.pending, root)
+		default:
+			if _, ok := keep[root]; !ok {
+				delete(w.pending, root) // left the chain: its send settles on its own
+			}
 		}
 	}
 
@@ -94,8 +113,10 @@ func (stp *SubtreeProcessor) maintainStoredPrefix(now time.Time) {
 
 	prometheusSubtreeProcessorStoredPrefixOldestUnstored.Set(now.Sub(oldest).Seconds())
 
-	if added := set.Added(); added != w.lastAdded || first < 0 || w.lastAdvance.IsZero() {
-		w.lastAdded, w.lastAdvance = added, now
+	if first < 0 {
+		w.stuckSince = time.Time{}
+	} else if roots[first] != w.stuck || w.stuckSince.IsZero() {
+		w.stuck, w.stuckSince = roots[first], now
 	}
 
 	for i, root := range roots {
@@ -104,10 +125,10 @@ func (stp *SubtreeProcessor) maintainStoredPrefix(now time.Time) {
 		}
 	}
 
-	if first >= 0 && set.Retrying() == 0 && now.Sub(w.lastAdvance) >= max(3*set.MedianStore(), w.stallFloor) {
+	if first >= 0 && !set.Retrying(roots[first]) && now.Sub(w.stuckSince) >= w.stallFloor {
 		stp.sendChainedSubtreeAgain(first, roots[first], now)
 
-		w.lastAdvance = now
+		w.stuckSince = now
 	}
 }
 
@@ -117,11 +138,16 @@ func (stp *SubtreeProcessor) maintainStoredPrefix(now time.Time) {
 func (stp *SubtreeProcessor) sendChainedSubtreeAgain(i int, root chainhash.Hash, now time.Time) {
 	w := &stp.prefixWatch
 
+	if _, outstanding := w.pending[root]; outstanding {
+		return
+	}
+
 	if last, ok := w.lastSent[root]; ok && now.Sub(last) < w.reenqueueGap {
 		return
 	}
 
 	st := stp.chainedSubtrees[i]
+	result := make(chan StoreResult, 1)
 
 	select {
 	case stp.newSubtreeChan <- NewSubtreeRequest{
@@ -130,10 +156,12 @@ func (stp *SubtreeProcessor) sendChainedSubtreeAgain(i int, root chainhash.Hash,
 		superseded:        stp.supersedeToken(),
 		DeletedTxs:        stp.deletedTxs,
 		SkipNotification:  true,
+		Result:            result,
 		ErrChan:           make(chan error, 1),
 		OnStorageComplete: func() { stp.cleanupDeletedTxs(st) },
 	}:
 		w.lastSent[root] = now
+		w.pending[root] = result
 
 		stp.logger.Warnf("[SubtreeProcessor] chained subtree %d is not stored, sending it to the store again", i)
 	default:

@@ -359,6 +359,7 @@ func (c *Client) AddBlock(ctx context.Context, block *model.Block, peerID string
 		OptionInvalid:     storeBlockOptions.Invalid,
 		OptionID:          storeBlockOptions.ID,
 		CoinbaseBump:      block.CoinbaseBUMP,
+		LaneMapRows:       laneMapRowsToProto(storeBlockOptions.LaneMapRows),
 	}
 
 	for _, subtreeHash := range block.Subtrees {
@@ -535,6 +536,16 @@ func (c *Client) ReleaseLaneLease(ctx context.Context, r lane.Release) (bool, er
 	}
 
 	return resp.GetAlreadyClosed(), nil
+}
+
+// LaneMapRows returns one block's lane map rows.
+func (c *Client) LaneMapRows(ctx context.Context, blockID uint32) ([]lane.MapRow, error) {
+	resp, err := c.client.GetLaneMapRows(ctx, &blockchain_api.GetLaneMapRowsRequest{BlockId: blockID})
+	if err != nil {
+		return nil, errors.UnwrapGRPC(err)
+	}
+
+	return laneMapRowsFromProto(resp.GetRows())
 }
 
 // blockFromResponse converts a gRPC GetBlockResponse into a model.Block.

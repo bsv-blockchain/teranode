@@ -93,6 +93,8 @@ jobs:
           - pkg: util/lane
             target: FuzzDecodeHoleData
           - pkg: util/lane
+            target: FuzzCheckContainersMatchesValidate
+          - pkg: util/lane
             target: FuzzDecodeSubtreePositions
           - pkg: util/lane
             target: FuzzDecodeProofFile
@@ -102,6 +104,8 @@ jobs:
             target: FuzzOpenManifest
           - pkg: stores/utxo/meta
             target: FuzzNewDataFromLaneMetaBytes
+          - pkg: stores/utxo/meta
+            target: FuzzOwnCacheBytesView
     steps:
       # Nothing otherwise relates timeout_minutes to fuzztime, and a job killed
       # by timeout-minutes is cancelled mid-fuzz - so a deep run with a too-small
