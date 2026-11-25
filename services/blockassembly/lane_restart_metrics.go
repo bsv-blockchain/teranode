@@ -70,7 +70,7 @@ func initLaneRestartMetrics() {
 			Namespace: "teranode",
 			Subsystem: "blockassembly",
 			Name:      "lane_restart_last",
-			Help:      "The last lanes restart dry run that ended done or no_qualifying_grant, by measure; a no_qualifying_grant run reads no window, so its read measures are 0",
+			Help:      "The last lanes restart dry run that ended done or no_qualifying_grant, by measure; a no_qualifying_grant run reads no window and consults no lane index, so its read and cap measures are 0",
 		}, []string{"measure"})
 
 		prometheusLaneRestartDuration = promauto.NewHistogram(prometheus.HistogramOpts{
