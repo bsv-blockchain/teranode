@@ -27,7 +27,7 @@ const (
 func floorRetention(t *testing.T, store *Store) int64 {
 	t.Helper()
 
-	retention := store.settings.GetUtxoStoreBlockHeightRetention()
+	retention := store.settings.GetUtxoStoreSpentDeleteRetention()
 	require.NotZero(t, retention)
 
 	return int64(retention)

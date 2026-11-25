@@ -246,7 +246,8 @@ func twoParentPrunedChild(t *testing.T, ctx context.Context, store *Store) (p, q
 
 	svc, err := store.GetPrunerService()
 	require.NoError(t, err)
-	n, err := svc.Prune(ctx, 1300, "two-parent-child")
+	// The child is fully spent at 1001, so it is due one block after 1001 + the spent retention.
+	n, err := svc.Prune(ctx, 1002+store.settings.GetUtxoStoreSpentDeleteRetention(), "two-parent-child")
 	require.NoError(t, err)
 	require.Equal(t, int64(1), n, "fixture: only the child is pruned")
 

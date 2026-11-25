@@ -39,7 +39,7 @@ func TestProcessExpiredPreservations(t *testing.T) {
 	// the background — processExpiryUntilProcessed retries to absorb the index-build lag.
 
 	const currentHeight = uint32(200)
-	retention := tSettings.GetUtxoStoreBlockHeightRetention()
+	retention := tSettings.GetUtxoStoreSpentDeleteRetention()
 	expiredPreserveUntil := int(currentHeight - 10)
 
 	txKey, err := aerospike.NewKey(store.GetNamespace(), store.GetName(), fx.tx.TxIDChainHash().CloneBytes())
