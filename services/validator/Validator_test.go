@@ -2345,7 +2345,7 @@ func TestEnsureMTPLoaded_ConcurrentCallsNeitherHangsNorRaces(t *testing.T) {
 	v := &Validator{
 		logger:           ulogger.TestLogger{},
 		settings:         tSettings,
-		blockchainClient: mockClient,
+		blockchainClient: &idChainClient{Mock: mockClient},
 		stats:            gocore.NewStat("validator_test"),
 	}
 
@@ -2429,7 +2429,7 @@ func TestEnsureMTPLoaded_CrossBlockReadersAndWritersDoNotRace(t *testing.T) {
 	v := &Validator{
 		logger:           ulogger.TestLogger{},
 		settings:         tSettings,
-		blockchainClient: mockClient,
+		blockchainClient: &idChainClient{Mock: mockClient},
 		stats:            gocore.NewStat("validator_test"),
 	}
 
@@ -2458,7 +2458,7 @@ func TestEnsureMTPLoaded_CrossBlockReadersAndWritersDoNotRace(t *testing.T) {
 				// Read through validateTransaction's own reader, so the test
 				// fails under -race if readMTPsLocked stops taking the lock.
 				// initialHeight-1 sits in the overlap the extension patches.
-				_, _ = v.readMTPsLocked(initialHeight, 1, 0, nil, []uint32{0, initialHeight / 2, initialHeight - 1})
+				_, _, _ = v.readMTPsLocked(initialHeight, 1, 0, nil, nil, []uint32{0, initialHeight / 2, initialHeight - 1})
 			}
 		}()
 	}
@@ -2500,7 +2500,7 @@ func TestReadMTPsLocked_HappyPath(t *testing.T) {
 		},
 	}
 
-	utxoMTPs, err := v.readMTPsLocked(4, 1_800_000_000, 0, nil, []uint32{0, 2, 3})
+	utxoMTPs, _, err := v.readMTPsLocked(4, 1_800_000_000, 0, nil, nil, []uint32{0, 2, 3})
 	require.NoError(t, err)
 	require.Equal(t, []uint32{1_700_000_000, 1_700_000_020, 1_700_000_030}, utxoMTPs)
 }
@@ -2519,7 +2519,7 @@ func TestReadMTPsLocked_ClampsOutOfRangeUTXOs(t *testing.T) {
 		},
 	}
 
-	utxoMTPs, err := v.readMTPsLocked(2, 1_800_000_000, 0, nil, []uint32{0, 99, 1, 2})
+	utxoMTPs, _, err := v.readMTPsLocked(2, 1_800_000_000, 0, nil, nil, []uint32{0, 99, 1, 2})
 	require.NoError(t, err)
 	require.Equal(t, []uint32{1_700_000_000, 1_800_000_000, 1_700_000_010, 1_800_000_000}, utxoMTPs)
 }
@@ -2689,9 +2689,22 @@ func TestReadMTPsLocked_ForkMTPs(t *testing.T) {
 		{name: "overlay runs past the parent", forkStart: 4, wantErr: true},
 	}
 
+	t.Run("store does not hold the base", func(t *testing.T) {
+		v := &Validator{mtpStore: []uint32{100, 101, 102, 103, 104, 105}, mtpIDs: []uint32{0, 1, 2, 3, 4, 5}}
+
+		_, held, err := v.readMTPsLocked(5, 999, 3, []uint32{203, 204}, &mtpBase{entry: 3, id: 9}, []uint32{2})
+		require.NoError(t, err)
+		require.False(t, held)
+
+		utxoMTPs, held, err := v.readMTPsLocked(5, 999, 3, []uint32{203, 204}, &mtpBase{entry: 3, id: 3}, []uint32{2})
+		require.NoError(t, err)
+		require.True(t, held)
+		require.Equal(t, []uint32{102}, utxoMTPs)
+	})
+
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			utxoMTPs, err := v.readMTPsLocked(5, 999, tc.forkStart, []uint32{203, 204}, []uint32{2, 3, 4, 5})
+			utxoMTPs, _, err := v.readMTPsLocked(5, 999, tc.forkStart, []uint32{203, 204}, nil, []uint32{2, 3, 4, 5})
 			if tc.wantErr {
 				require.ErrorContains(t, err, "must end at the candidate's parent")
 				return
@@ -2796,7 +2809,7 @@ func TestReadMTPsLocked_GuardFiresOnUnpopulatedStore(t *testing.T) {
 		mtpStore: []uint32{1_700_000_000, 1_700_000_010}, // length 2, asking for height 5
 	}
 
-	utxoMTPs, err := v.readMTPsLocked(5, 1_800_000_000, 0, nil, []uint32{0})
+	utxoMTPs, _, err := v.readMTPsLocked(5, 1_800_000_000, 0, nil, nil, []uint32{0})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "MTP store not loaded up to height 5")
 	require.Nil(t, utxoMTPs)
@@ -3469,4 +3482,43 @@ func TestValidateCarriesLanePositionsToTheCreateAndTheTxMeta(t *testing.T) {
 			checkEntry(t, items[0].wireAction(), items[0].metaBytes, tc.own)
 		})
 	}
+}
+
+// idChainClient serves a straight chain's block IDs around a mocked MTP range: the block at
+// height h has nonce h and ID h+1. Every other call goes to the mock.
+type idChainClient struct {
+	*blockchain.Mock
+
+	mu      sync.Mutex
+	heights map[chainhash.Hash]uint32
+}
+
+func (c *idChainClient) GetBlockHeadersByHeight(_ context.Context, height, _ uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
+	header := &model.BlockHeader{Nonce: height, HashPrevBlock: &chainhash.Hash{}, HashMerkleRoot: &chainhash.Hash{}}
+
+	c.mu.Lock()
+	if c.heights == nil {
+		c.heights = make(map[chainhash.Hash]uint32)
+	}
+	c.heights[*header.Hash()] = height
+	c.mu.Unlock()
+
+	return []*model.BlockHeader{header}, []*model.BlockHeaderMeta{{Height: height, ID: height + 1}}, nil
+}
+
+func (c *idChainClient) GetBlockHeaderIDs(_ context.Context, hash *chainhash.Hash, n uint64) ([]uint32, error) {
+	c.mu.Lock()
+	height, ok := c.heights[*hash]
+	c.mu.Unlock()
+
+	if !ok {
+		return nil, nil
+	}
+
+	ids := make([]uint32, 0, n)
+	for i := uint64(0); i < n && i <= uint64(height); i++ {
+		ids = append(ids, height-uint32(i)+1) //nolint:gosec // i <= height
+	}
+
+	return ids, nil
 }

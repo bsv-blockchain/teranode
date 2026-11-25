@@ -314,6 +314,16 @@ func (s *forkChainStore) branchCoinTimes(upTo int) []uint32 {
 	return mtps
 }
 
+// blockID returns the store's ID for block.
+func (s *forkChainStore) blockID(t *testing.T, block *model.Block) uint32 {
+	t.Helper()
+
+	_, meta, err := s.client.GetBlockHeader(t.Context(), block.Hash())
+	require.NoError(t, err)
+
+	return meta.ID
+}
+
 // forkWalkSpy counts the walk's blockchain calls and the largest header page it asked for, and
 // can corrupt the metas of the first page it serves.
 type forkWalkSpy struct {
@@ -386,12 +396,13 @@ func TestFetchCandidateForkMTPs(t *testing.T) {
 		corrupt     func(metas []*model.BlockHeaderMeta)
 		wantStart   uint32
 		wantMTPs    []uint32
+		wantBase    *model.Block
 		wantErr     string
 		wantNoCalls bool
 	}{
-		{name: "parent on the main chain", parent: s.main[39].Hash(), height: 41},
-		{name: "branch tip", parent: s.branch[4].Hash(), height: 26, wantStart: 21, wantMTPs: s.branchCoinTimes(5)},
-		{name: "branch tip, three headers per request", parent: s.branch[4].Hash(), height: 26, limit: 3, wantStart: 21, wantMTPs: s.branchCoinTimes(5)},
+		{name: "parent on the main chain", parent: s.main[39].Hash(), height: 41, wantBase: s.main[39]},
+		{name: "branch tip", parent: s.branch[4].Hash(), height: 26, wantStart: 21, wantMTPs: s.branchCoinTimes(5), wantBase: s.main[19]},
+		{name: "branch tip, three headers per request", parent: s.branch[4].Hash(), height: 26, limit: 3, wantStart: 21, wantMTPs: s.branchCoinTimes(5), wantBase: s.main[19]},
 		{name: "height at genesis activation", parent: s.branch[4].Hash(), height: 26, genesis: 26, wantNoCalls: true},
 		{name: "height below CSV activation", parent: s.branch[4].Hash(), height: 26, csv: 27, wantNoCalls: true},
 		{name: "height not above the parent", parent: s.branch[4].Hash(), height: 27, wantErr: "is not at height 26"},
@@ -407,15 +418,20 @@ func TestFetchCandidateForkMTPs(t *testing.T) {
 
 			spy := &forkWalkSpy{ClientI: s.client, corrupt: tc.corrupt}
 
-			start, mtps, err := forkTestServerOn(t, spy, tc.csv, tc.genesis, tc.limit).fetchCandidateForkMTPs(t.Context(), tc.parent, tc.height)
+			got, err := forkTestServerOn(t, spy, tc.csv, tc.genesis, tc.limit).fetchCandidateForkMTPs(t.Context(), tc.parent, tc.height)
 			if tc.wantErr != "" {
 				require.ErrorContains(t, err, tc.wantErr)
 				return
 			}
 
 			require.NoError(t, err)
-			require.Equal(t, tc.wantStart, start)
-			require.Equal(t, tc.wantMTPs, mtps)
+			require.Equal(t, tc.wantStart, got.start)
+			require.Equal(t, tc.wantMTPs, got.mtps)
+			require.Equal(t, tc.wantBase != nil, got.baseSet)
+
+			if tc.wantBase != nil {
+				require.Equal(t, s.blockID(t, tc.wantBase), got.baseID)
+			}
 
 			if tc.wantNoCalls {
 				require.Zero(t, spy.headerCalls+spy.pageCalls+spy.chainChecks)
@@ -435,10 +451,11 @@ func TestFetchCandidateForkMTPs_DeepBranch(t *testing.T) {
 	s := newForkChainStore(t, 100, 20, 70)
 	spy := &forkWalkSpy{ClientI: s.client}
 
-	start, mtps, err := forkTestServerOn(t, spy, 0, math.MaxUint32, 0).fetchCandidateForkMTPs(t.Context(), s.branch[69].Hash(), 91)
+	got, err := forkTestServerOn(t, spy, 0, math.MaxUint32, 0).fetchCandidateForkMTPs(t.Context(), s.branch[69].Hash(), 91)
 	require.NoError(t, err)
-	require.Equal(t, uint32(21), start)
-	require.Equal(t, s.branchCoinTimes(70), mtps)
+	require.Equal(t, uint32(21), got.start)
+	require.Equal(t, s.branchCoinTimes(70), got.mtps)
+	require.Equal(t, s.blockID(t, s.main[19]), got.baseID)
 	require.Equal(t, 2, spy.pageCalls)
 	require.LessOrEqual(t, spy.chainChecks, 1+2+7)
 }

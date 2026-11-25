@@ -315,7 +315,8 @@ type Validator struct {
 	// transactions of a block in the BIP68 range (CSVHeight <= height < GenesisActivationHeight)
 	// are validated, then extended on demand as new heights arrive; never loaded outside it.
 	//
-	// MTP values are immutable once a block is persisted, so entries never need invalidation.
+	// An entry is the median below one block, so it changes only when a reorg replaces that
+	// block; mtpIDs records which block, and loads repair entries a reorg replaced.
 	// Memory cost: ~4 MB per million blocks (one uint32 per block), negligible for any
 	// foreseeable chain length.
 	//
@@ -332,6 +333,11 @@ type Validator struct {
 	mtpLoadMu sync.Mutex
 	mtpMu     sync.RWMutex
 	mtpStore  []uint32
+	// mtpIDs[h] is the ID of the block at height h-1, the block whose ancestry mtpStore[h] is
+	// the median of (0 for h = 0). It lets a candidate check that the store holds its own
+	// chain (Options.CandidateBaseID) and lets a load tell where a reorg left the stored chain.
+	// Same length as mtpStore; guarded by mtpMu.
+	mtpIDs []uint32
 	// mtpLoadWindows tracks the height ranges ([from, to)) that in-flight
 	// EnsureMTPLoaded calls are about to patch for reorg repair. Guarded by mtpMu.
 	// EnsureMTPLoaded's fast path (see comment there) must fall through to
@@ -3578,13 +3584,9 @@ func (v *Validator) extendTransaction(ctx context.Context, tx *bt.Tx) error {
 	return nil
 }
 
-// mtpReorgOverlap is the number of already-stored MTP values that EnsureMTPLoaded
-// re-fetches on every extension call to detect and repair reorg-invalidated entries.
-//
-// A block reorg at depth D invalidates MTP values for the following 11 heights
-// (one full MTP window). Overlapping by D+11 therefore catches any reorg of depth D.
-// BSV reorgs are extremely shallow in practice (depth ≤ 1–2), so 12 is a safe,
-// cheap constant that covers the realistic worst case.
+// mtpReorgOverlap is how many already-stored MTP values a load re-fetches first. If the
+// fetched chain and the stored one name different blocks even at the lowest of them, a reorg
+// went deeper, and the load reaches further back until they agree (loadMTPsLocked).
 const mtpReorgOverlap = 12
 
 // EnsureMTPLoaded pre-warms the in-memory MTP store through blockHeight, one entry more than
@@ -3597,11 +3599,44 @@ const mtpReorgOverlap = 12
 // configured, this is a no-op.
 //
 // When the store already covers the needed range this is a fast O(1) no-op.
-// When new heights extend beyond the loaded range, the fetch includes a backward
-// overlap of mtpReorgOverlap heights. Any already-stored values that differ from
-// the freshly fetched ones (reorg-invalidated) are corrected in-place before the
-// new tail is appended.
+// When new heights extend beyond the loaded range, the fetch starts mtpReorgOverlap
+// heights back and keeps reaching further back until the fetched chain and the stored
+// one agree (see loadMTPsLocked), so the store always holds one chain.
 func (v *Validator) EnsureMTPLoaded(ctx context.Context, blockHeight uint32) error {
+	return v.ensureMTPLoaded(ctx, blockHeight, nil)
+}
+
+// mtpBase names the block a candidate needs the MTP store to hold: the store entry at
+// height entry must carry block id. See Options.CandidateBaseID.
+type mtpBase struct {
+	entry uint32
+	id    uint32
+}
+
+// candidateMTPBase returns the base the candidate's options name, or nil when they name none.
+// The base block is the candidate's fork point when it carries branch coin times, or else its
+// parent; the store entry one above it is the first whose median the base's block closes.
+func candidateMTPBase(blockHeight uint32, opts *Options) *mtpBase {
+	if !opts.CandidateBaseSet {
+		return nil
+	}
+
+	entry := blockHeight
+	if len(opts.CandidateForkMTPs) > 0 {
+		entry = opts.CandidateForkStartHeight
+	}
+
+	return &mtpBase{entry: entry, id: opts.CandidateBaseID}
+}
+
+// holdsBaseLocked reports whether the store holds base; the caller holds mtpMu.
+func (v *Validator) holdsBaseLocked(base *mtpBase) bool {
+	return base == nil || (uint32(len(v.mtpIDs)) > base.entry && v.mtpIDs[base.entry] == base.id)
+}
+
+// ensureMTPLoaded is EnsureMTPLoaded that, given a base, also reloads the store from the
+// current chain when the store does not hold the base, as after a reorg.
+func (v *Validator) ensureMTPLoaded(ctx context.Context, blockHeight uint32, base *mtpBase) error {
 	if v.blockchainClient == nil || blockHeight == 0 || !v.bip68Active(blockHeight) {
 		return nil
 	}
@@ -3614,13 +3649,13 @@ func (v *Validator) EnsureMTPLoaded(ctx context.Context, blockHeight uint32) err
 
 	needed := blockHeight
 
-	// Fast path: the store already covers `needed` and no in-flight loader is
-	// about to rewrite that entry. A loader publishes the [From, To) window it is
-	// about to patch (see mtpLoadWindows) before it releases mtpMu to perform the
-	// fetch, so a covered-but-in-flight height falls through to the mtpLoadMu wait
-	// below instead of racing the patch.
+	// Fast path: the store already covers `needed`, holds the base, and no in-flight loader
+	// is about to rewrite that entry. A loader publishes the [From, To) window it is about to
+	// patch (see mtpLoadWindows) before it releases mtpMu to perform the fetch, so a
+	// covered-but-in-flight height falls through to the mtpLoadMu wait below instead of
+	// racing the patch.
 	v.mtpMu.RLock()
-	covered := uint32(len(v.mtpStore)) > needed
+	covered := uint32(len(v.mtpStore)) > needed && v.holdsBaseLocked(base)
 	inFlight := false
 	if covered {
 		for _, w := range v.mtpLoadWindows {
@@ -3641,72 +3676,223 @@ func (v *Validator) EnsureMTPLoaded(ctx context.Context, blockHeight uint32) err
 	defer v.mtpLoadMu.Unlock()
 	v.mtpMu.RLock()
 	currentLen := uint32(len(v.mtpStore))
+	holdsBase := v.holdsBaseLocked(base)
 	v.mtpMu.RUnlock()
-	if currentLen > needed {
+	if currentLen > needed && holdsBase {
 		return nil
 	}
 
-	// Compute the fetch start, extending back by mtpReorgOverlap so we re-check
-	// recently stored values. This repairs any MTP entries that were invalidated by
-	// a chain reorg: a reorg at depth D corrupts stored MTP values for the next 11
-	// heights, so overlapping by 12 catches reorgs of depth ≤ 1 (the realistic case).
+	return v.loadMTPsLocked(ctx, needed, currentLen)
+}
+
+// loadMTPsLocked loads the store from the current chain through needed; the caller holds
+// mtpLoadMu. It starts mtpReorgOverlap heights below what the store already covers (or below
+// needed, when reloading a covered range) and reaches further back until the fetched chain and
+// the stored one name the same block at the lowest fetched entry, so everything below it is
+// shared and the store stays one chain. Entries the fetch changes are patched in place. When
+// any changed and the store reached past needed, it is cut back to needed, since its higher
+// entries belonged to the replaced chain.
+func (v *Validator) loadMTPsLocked(ctx context.Context, needed, currentLen uint32) error {
+	baseLen := min(currentLen, needed+1)
+
+	// A store filled without IDs (only in tests) has unknown blocks: 0.
+	v.mtpMu.Lock()
+	if missing := len(v.mtpStore) - len(v.mtpIDs); missing > 0 {
+		v.mtpIDs = append(v.mtpIDs, make([]uint32, missing)...)
+	}
+	v.mtpMu.Unlock()
+
 	var fromHeight uint32
-	if currentLen > mtpReorgOverlap {
-		fromHeight = currentLen - mtpReorgOverlap
+	if baseLen > mtpReorgOverlap {
+		fromHeight = baseLen - mtpReorgOverlap
 	}
 
-	// Publish the window this load is about to patch so concurrent callers whose
-	// needed height falls inside it wait instead of taking the fast path above.
-	// Always removed on return, including on error, so a failed fetch cannot leave
-	// a stale window blocking future fast-path callers.
+	// Publish the window this load may patch so concurrent callers whose needed height
+	// falls inside it wait instead of taking the fast path. Always removed on return,
+	// including on error, so a failed fetch cannot leave a stale window behind.
+	// When the load reaches further back, the window widens with it.
 	window := mtpLoadWindow{From: fromHeight, To: currentLen}
 	v.mtpMu.Lock()
 	v.mtpLoadWindows = append(v.mtpLoadWindows, window)
 	v.mtpMu.Unlock()
-	defer func() {
+
+	setWindow := func(next mtpLoadWindow) {
 		v.mtpMu.Lock()
+		defer v.mtpMu.Unlock()
+
 		for i, w := range v.mtpLoadWindows {
 			if w == window {
-				v.mtpLoadWindows = append(v.mtpLoadWindows[:i], v.mtpLoadWindows[i+1:]...)
+				if next == (mtpLoadWindow{}) {
+					v.mtpLoadWindows = append(v.mtpLoadWindows[:i], v.mtpLoadWindows[i+1:]...)
+				} else {
+					v.mtpLoadWindows[i] = next
+				}
+
 				break
 			}
 		}
-		v.mtpMu.Unlock()
-	}()
+
+		window = next
+	}
+	defer setWindow(mtpLoadWindow{})
 
 	isInitialLoad := currentLen == 0
 	start := time.Now()
 
-	fetched, err := v.blockchainClient.GetMedianTimePastRange(ctx, fromHeight, needed)
-	if err != nil {
-		return errors.NewProcessingError("[Validator][EnsureMTPLoaded] failed to fetch MTPs from height %d to %d", fromHeight, needed, err)
-	}
+	var fetched, fetchedIDs []uint32
 
-	expected := needed - fromHeight + 1
-	if uint32(len(fetched)) != expected {
-		return errors.NewProcessingError("[Validator][EnsureMTPLoaded] MTP count mismatch: expected %d, got %d", expected, len(fetched))
+	for {
+		var err error
+
+		if fetched, fetchedIDs, err = v.fetchMTPRange(ctx, fromHeight, needed); err != nil {
+			return err
+		}
+
+		v.mtpMu.RLock()
+		joined := fromHeight == 0 || baseLen == 0 || v.mtpIDs[fromHeight] == fetchedIDs[0]
+		v.mtpMu.RUnlock()
+
+		if joined {
+			break
+		}
+
+		// The chains differ even at the lowest fetched entry: reach back twice as far.
+		fromHeight -= min(fromHeight, max(baseLen-fromHeight, mtpReorgOverlap))
+		setWindow(mtpLoadWindow{From: fromHeight, To: currentLen})
 	}
 
 	v.mtpMu.Lock()
 	defer v.mtpMu.Unlock()
 
-	// Patch any overlap values that changed (reorg-invalidated entries).
-	for i := fromHeight; i < currentLen; i++ {
-		if v.mtpStore[i] != fetched[i-fromHeight] {
+	changed := false
+
+	for i := fromHeight; i < baseLen; i++ {
+		if v.mtpIDs[i] != fetchedIDs[i-fromHeight] || v.mtpStore[i] != fetched[i-fromHeight] {
+			changed = true
 			v.mtpStore[i] = fetched[i-fromHeight]
+			v.mtpIDs[i] = fetchedIDs[i-fromHeight]
 		}
 	}
 
-	// Append the new tail beyond the previously loaded range.
-	v.mtpStore = append(v.mtpStore, fetched[currentLen-fromHeight:]...)
+	if changed && currentLen > needed+1 {
+		v.mtpStore = v.mtpStore[:needed+1]
+		v.mtpIDs = v.mtpIDs[:needed+1]
+	}
+
+	if needed+1 > currentLen {
+		v.mtpStore = append(v.mtpStore, fetched[currentLen-fromHeight:]...)
+		v.mtpIDs = append(v.mtpIDs, fetchedIDs[currentLen-fromHeight:]...)
+	}
 
 	if isInitialLoad {
 		v.logger.Infof("[Validator][EnsureMTPLoaded] initial MTP store loaded: %d entries (heights 0..%d) in %s", len(v.mtpStore), needed, time.Since(start))
 	} else {
-		v.logger.Debugf("[Validator][EnsureMTPLoaded] extended MTP store to height %d (+%d entries) in %s", needed, needed-currentLen+1, time.Since(start))
+		v.logger.Debugf("[Validator][EnsureMTPLoaded] loaded MTP store heights %d to %d (changed: %t) in %s", fromHeight, needed, changed, time.Since(start))
 	}
 
 	return nil
+}
+
+// mtpRangeAttempts bounds how often fetchMTPRange retries when the current chain moves while
+// it reads.
+const mtpRangeAttempts = 3
+
+// fetchMTPRange returns the current chain's MTPs for heights fromHeight to needed, and for each
+// the ID of the block one below it, whose ancestry the entry is the median of (0 for height 0,
+// and for an entry whose block is above the current tip). The IDs are read by hash along the
+// ancestry of the highest of those blocks, and that block is read again after the MTPs, so
+// both describe one chain; if the chain moved meanwhile, the read is retried.
+func (v *Validator) fetchMTPRange(ctx context.Context, fromHeight, needed uint32) ([]uint32, []uint32, error) {
+	// blockAt reads the current chain's block at a height; found is false above the tip.
+	blockAt := func(height uint32) (*chainhash.Hash, uint32, bool, error) {
+		// main chain only, the source GetMedianTimePastRange reads
+		headers, metas, err := v.blockchainClient.GetBlockHeadersByHeight(ctx, height, height)
+		if err != nil {
+			return nil, 0, false, errors.NewProcessingError("[Validator][EnsureMTPLoaded] failed to read the block at height %d", height, err)
+		}
+
+		if len(headers) == 0 || len(metas) == 0 || metas[0].Height != height {
+			return nil, 0, false, nil
+		}
+
+		return headers[0].Hash(), metas[0].ID, true, nil
+	}
+
+	for attempt := 0; attempt < mtpRangeAttempts; attempt++ {
+		top := needed - 1
+
+		topHash, topID, found, err := blockAt(top)
+		if err != nil {
+			return nil, nil, err
+		}
+
+		if !found {
+			// The entries above the tip have no block yet; name the tip instead.
+			_, tipMeta, tipErr := v.blockchainClient.GetBestBlockHeader(ctx)
+			if tipErr != nil {
+				return nil, nil, errors.NewProcessingError("[Validator][EnsureMTPLoaded] failed to read the best block", tipErr)
+			}
+
+			if top = tipMeta.Height; top >= needed-1 {
+				continue // the chain grew meanwhile
+			}
+
+			if topHash, topID, found, err = blockAt(top); err != nil {
+				return nil, nil, err
+			}
+
+			if !found {
+				continue
+			}
+		}
+
+		// blocks max(fromHeight-1, 0) up to top, newest first; none when the range is above it
+		var blockIDs []uint32
+
+		if fromHeight <= top+1 {
+			count := uint64(top - fromHeight + 2)
+			if fromHeight == 0 {
+				count = uint64(top) + 1
+			}
+
+			if blockIDs, err = v.blockchainClient.GetBlockHeaderIDs(ctx, topHash, count); err != nil {
+				return nil, nil, errors.NewProcessingError("[Validator][EnsureMTPLoaded] failed to read block IDs below height %d", top, err)
+			}
+
+			if uint64(len(blockIDs)) != count || blockIDs[0] != topID {
+				return nil, nil, errors.NewProcessingError("[Validator][EnsureMTPLoaded] got %d block IDs below height %d, expected %d", len(blockIDs), top, count)
+			}
+		}
+
+		fetched, err := v.blockchainClient.GetMedianTimePastRange(ctx, fromHeight, needed)
+		if err != nil {
+			return nil, nil, errors.NewProcessingError("[Validator][EnsureMTPLoaded] failed to fetch MTPs from height %d to %d", fromHeight, needed, err)
+		}
+
+		if expected := needed - fromHeight + 1; uint32(len(fetched)) != expected {
+			return nil, nil, errors.NewProcessingError("[Validator][EnsureMTPLoaded] MTP count mismatch: expected %d, got %d", expected, len(fetched))
+		}
+
+		againHash, _, againFound, err := blockAt(top)
+		if err != nil {
+			return nil, nil, err
+		}
+
+		if !againFound || !againHash.IsEqual(topHash) {
+			continue
+		}
+
+		ids := make([]uint32, len(fetched))
+		for i := range ids {
+			if h := fromHeight + uint32(i); h > 0 && h-1 <= top { //nolint:gosec // i < len(fetched), a uint32 count
+				ids[i] = blockIDs[top-(h-1)]
+			}
+		}
+
+		return fetched, ids, nil
+	}
+
+	return nil, nil, errors.NewProcessingError("[Validator][EnsureMTPLoaded] the current chain kept moving while MTPs from height %d to %d were read", fromHeight, needed)
 }
 
 // validateTransaction performs Teranode-owned transaction checks, BDK
@@ -3836,11 +4022,11 @@ func (v *Validator) validateTransaction(ctx context.Context, tx *bt.Tx, blockHei
 	// A coin at the candidate's own height (a same-block parent) has the candidate's parent
 	// as its ancestor, so its coin time is the block time above.
 	//
-	// A coin below the candidate's height reads mtpStore, which holds the values of the chain
-	// EnsureMTPLoaded last extended along, repaired over the last 12 heights only when the store
-	// grows. Those are right only below the point where the candidate's branch leaves that
-	// chain. Above it, a fork candidate's caller passes its own branch's coin times in
-	// Options.CandidateForkMTPs, and those heights read from there. A coin is looked up by its
+	// A coin below the candidate's height reads mtpStore, which holds one chain, the one it was
+	// last loaded along. Above the point where the candidate's branch leaves the current chain,
+	// a fork candidate's caller passes its own branch's coin times in Options.CandidateForkMTPs,
+	// and those heights read from there. Below it, Options.CandidateBaseID names the block the
+	// store must hold; readMTPsLocked checks it and the store is reloaded when it does not. A coin is looked up by its
 	// lowest recorded height across every block that mined it, which for a parent also mined
 	// lower on another chain is that other height, not its height on the candidate's branch.
 	blockMTP := validationOptions.CandidateParentMedianTime
@@ -3858,7 +4044,21 @@ func (v *Validator) validateTransaction(ctx context.Context, tx *bt.Tx, blockHei
 	// goroutines read it) without holding the lock through ECDSA / sequence-lock
 	// arithmetic. RLock is uncontended in the steady-state path where EnsureMTPLoaded
 	// has already populated the range.
-	utxoMTPs, err := v.readMTPsLocked(blockHeight, blockMTP, validationOptions.CandidateForkStartHeight, validationOptions.CandidateForkMTPs, utxoHeights)
+	base := candidateMTPBase(blockHeight, validationOptions)
+
+	utxoMTPs, held, err := v.readMTPsLocked(blockHeight, blockMTP, validationOptions.CandidateForkStartHeight, validationOptions.CandidateForkMTPs, base, utxoHeights)
+	if err == nil && !held {
+		// The store does not hold the candidate's chain, as after a reorg: reload it from the
+		// current chain once, and fail rather than judge if it still does not.
+		if err = v.ensureMTPLoaded(ctx, blockHeight, base); err == nil {
+			utxoMTPs, held, err = v.readMTPsLocked(blockHeight, blockMTP, validationOptions.CandidateForkStartHeight, validationOptions.CandidateForkMTPs, base, utxoHeights)
+		}
+
+		if err == nil && !held {
+			err = errors.NewProcessingError("[Validator][validateTransaction] the MTP store does not hold block ID %d at height %d after a reload; the candidate's chain is not the current chain (block height: %d)", base.id, base.entry-1, blockHeight)
+		}
+	}
+
 	if err != nil {
 		span.RecordError(err)
 		return err
@@ -3874,9 +4074,13 @@ func (v *Validator) validateTransaction(ctx context.Context, tx *bt.Tx, blockHei
 // branch's own value. Any other coin reads mtpStore. It takes the mtpStore read lock
 // for the duration of the reads only and releases it before returning. The caller is
 // free to use the returned slice without further synchronisation.
-func (v *Validator) readMTPsLocked(blockHeight uint32, blockMTP uint32, forkStart uint32, forkMTPs []uint32, utxoHeights []uint32) ([]uint32, error) {
+//
+// Given a base, it first checks under the same lock that the store holds the base's block,
+// so every value it reads is a median on the candidate's chain; if not, it returns held
+// false and no values.
+func (v *Validator) readMTPsLocked(blockHeight uint32, blockMTP uint32, forkStart uint32, forkMTPs []uint32, base *mtpBase, utxoHeights []uint32) ([]uint32, bool, error) {
 	if len(forkMTPs) > 0 && uint64(forkStart)+uint64(len(forkMTPs)) != uint64(blockHeight) {
-		return nil, errors.NewProcessingError("[Validator][validateTransaction] candidate fork MTPs cover heights %d to %d, but must end at the candidate's parent (block height %d)", forkStart, uint64(forkStart)+uint64(len(forkMTPs))-1, blockHeight)
+		return nil, false, errors.NewProcessingError("[Validator][validateTransaction] candidate fork MTPs cover heights %d to %d, but must end at the candidate's parent (block height %d)", forkStart, uint64(forkStart)+uint64(len(forkMTPs))-1, blockHeight)
 	}
 
 	v.mtpMu.RLock()
@@ -3885,7 +4089,11 @@ func (v *Validator) readMTPsLocked(blockHeight uint32, blockMTP uint32, forkStar
 	// Guard against a missing EnsureMTPLoaded call. In normal operation this cannot
 	// happen because Server.go calls EnsureMTPLoaded before spawning goroutines.
 	if uint32(len(v.mtpStore)) <= blockHeight {
-		return nil, errors.NewProcessingError("[Validator][validateTransaction] MTP store not loaded up to height %d (store length %d); EnsureMTPLoaded must be called before block validation", blockHeight, len(v.mtpStore))
+		return nil, false, errors.NewProcessingError("[Validator][validateTransaction] MTP store not loaded up to height %d (store length %d); EnsureMTPLoaded must be called before block validation", blockHeight, len(v.mtpStore))
+	}
+
+	if !v.holdsBaseLocked(base) {
+		return nil, false, nil
 	}
 
 	utxoMTPs := make([]uint32, len(utxoHeights))
@@ -3901,7 +4109,7 @@ func (v *Validator) readMTPsLocked(blockHeight uint32, blockMTP uint32, forkStar
 		}
 	}
 
-	return utxoMTPs, nil
+	return utxoMTPs, true, nil
 }
 
 // bip68Active reports whether relative lock times (BIP68) are enforced for a block at

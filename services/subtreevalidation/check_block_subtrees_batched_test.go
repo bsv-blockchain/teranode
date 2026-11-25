@@ -937,8 +937,7 @@ type forkCandidateFixture struct {
 	*batchedFixture
 	recorder *forkOptionsRecorder
 	parent   *chainhash.Hash
-	start    uint32
-	mtps     []uint32
+	fork     candidateForkMTPs
 }
 
 func newForkCandidateFixture(t *testing.T, state blockchain.FSMStateType) *forkCandidateFixture {
@@ -972,12 +971,13 @@ func newForkCandidateFixture(t *testing.T, state blockchain.FSMStateType) *forkC
 		},
 	})
 
-	start, mtps, err := f.server.fetchCandidateForkMTPs(context.Background(), headers[0].Hash(), batchedTestHeight)
+	fork, err := f.server.fetchCandidateForkMTPs(context.Background(), headers[0].Hash(), batchedTestHeight)
 	require.NoError(t, err)
-	require.Equal(t, batchedTestHeight-3, start)
-	require.Len(t, mtps, 3)
+	require.Equal(t, batchedTestHeight-3, fork.start)
+	require.Len(t, fork.mtps, 3)
+	require.Equal(t, metas[3].ID, fork.baseID)
 
-	return &forkCandidateFixture{batchedFixture: f, recorder: recorder, parent: headers[0].Hash(), start: start, mtps: mtps}
+	return &forkCandidateFixture{batchedFixture: f, recorder: recorder, parent: headers[0].Hash(), fork: fork}
 }
 
 // requireBranchCoinTimes checks that transactions reached the validator and that every check
@@ -991,8 +991,10 @@ func (f *forkCandidateFixture) requireBranchCoinTimes(t *testing.T) {
 	require.NotEmpty(t, f.recorder.seen, "the block's transactions must reach the validator")
 
 	for _, opts := range f.recorder.seen {
-		require.Equal(t, f.start, opts.CandidateForkStartHeight)
-		require.Equal(t, f.mtps, opts.CandidateForkMTPs)
+		require.Equal(t, f.fork.start, opts.CandidateForkStartHeight)
+		require.Equal(t, f.fork.mtps, opts.CandidateForkMTPs)
+		require.True(t, opts.CandidateBaseSet)
+		require.Equal(t, f.fork.baseID, opts.CandidateBaseID)
 	}
 }
 

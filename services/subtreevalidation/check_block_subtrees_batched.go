@@ -185,10 +185,13 @@ func (u *Server) processTransactionsBatched(ctx context.Context, checker validat
 		validator.WithIgnoreLocked(true),
 		validator.WithCandidateBlockTime(candidateBlockTime),
 		validator.WithCandidateParentMedianTime(candidateParentMedianTime),
-		validator.WithCandidateForkMTPs(candidateFork.start, candidateFork.mtps),
 		validator.WithUnconfirmedParentsAtCandidateHeight(true),
 		validator.WithAddTXToBlockAssembly(false),
 	)
+
+	for _, opt := range candidateFork.options() {
+		opt(validatorOptions)
+	}
 
 	if err = u.validatorClient.EnsureMTPLoaded(ctx, blockHeight); err != nil {
 		return errors.NewProcessingError("[processTransactionsBatched] failed to pre-load MTP store", err)

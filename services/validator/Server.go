@@ -714,6 +714,11 @@ func optionsFromValidateRequest(req *validator_api.ValidateTransactionRequest) (
 
 	opts.CandidateForkMTPs = req.CandidateForkMtps
 
+	if req.CandidateBaseId != nil {
+		opts.CandidateBaseID = *req.CandidateBaseId
+		opts.CandidateBaseSet = true
+	}
+
 	return opts, nil
 }
 

@@ -123,6 +123,16 @@ type Options struct {
 	CandidateForkStartHeight uint32
 	CandidateForkMTPs        []uint32
 
+	// CandidateBaseID, when CandidateBaseSet, is the ID of the block BIP68 needs the
+	// validator's MTP store to hold: the candidate's fork point when it carries
+	// CandidateForkMTPs, or else its parent. Every coin time the store gives the candidate is
+	// a median below that block, so the store must hold the chain through it. The validator
+	// checks this when it reads, and reloads its store from the current chain when it does
+	// not, as after a reorg; if the store still does not hold it, the block fails with a
+	// ProcessingError, never a verdict. Unset, the store is read without the check.
+	CandidateBaseID  uint32
+	CandidateBaseSet bool
+
 	// UnconfirmedParentsAtCandidateHeight makes the unconfirmedParentHeight
 	// sentinel resolve to the candidate block height instead of failing closed
 	// (consensus-mode sentinel → MEMPOOL_HEIGHT → BDK rejects with
@@ -429,6 +439,15 @@ func WithCandidateForkMTPs(startHeight uint32, mtps []uint32) Option {
 	return func(o *Options) {
 		o.CandidateForkStartHeight = startHeight
 		o.CandidateForkMTPs = mtps
+	}
+}
+
+// WithCandidateBase names the block the candidate needs the MTP store to hold. See
+// Options.CandidateBaseID.
+func WithCandidateBase(id uint32) Option {
+	return func(o *Options) {
+		o.CandidateBaseID = id
+		o.CandidateBaseSet = true
 	}
 }
 

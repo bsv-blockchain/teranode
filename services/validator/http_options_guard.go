@@ -98,5 +98,9 @@ func nonDefaultValidationOptions(req *validator_api.ValidateTransactionRequest) 
 		return "candidateForkMtps"
 	}
 
+	if req.CandidateBaseId != nil {
+		return "candidateBaseId"
+	}
+
 	return ""
 }

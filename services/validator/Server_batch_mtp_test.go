@@ -203,7 +203,7 @@ func TestServerBatchMTPFailure(t *testing.T) {
 			direct, directErr := server.validateTransaction(ctx, failing)
 			require.Nil(t, direct)
 			require.ErrorIs(t, directErr, errors.ErrProcessing)
-			require.Contains(t, directErr.Error(), "[Validator][EnsureMTPLoaded] failed to fetch MTPs")
+			require.Contains(t, directErr.Error(), "[Validator][EnsureMTPLoaded] failed to read the block at height")
 
 			if tc.closed {
 				require.Contains(t, directErr.Error(), "database is closed")

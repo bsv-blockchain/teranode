@@ -155,6 +155,7 @@ type ValidateTransactionRequest struct {
 	SkipScriptValidation                *bool    `protobuf:"varint,13,opt,name=skip_script_validation,json=skipScriptValidation,proto3,oneof" json:"skip_script_validation,omitempty"`                                                  // Skip BDK script/signature validation for transactions below the checkpoint height. Request-only. DEPLOYMENT SKEW: new sender → old validator ignores this field and performs full script validation (slower, never corrupts state); old sender → new validator reconstructs absent as false (old behaviour, full validation).
 	CandidateForkStartHeight            *uint32  `protobuf:"varint,15,opt,name=candidate_fork_start_height,json=candidateForkStartHeight,proto3,oneof" json:"candidate_fork_start_height,omitempty"`                                    // First height of candidate_fork_mtps. Request-only; see candidate_fork_mtps.
 	CandidateForkMtps                   []uint32 `protobuf:"varint,16,rep,packed,name=candidate_fork_mtps,json=candidateForkMtps,proto3" json:"candidate_fork_mtps,omitempty"`                                                          // BIP68 coin times along the candidate's own branch, from candidate_fork_start_height up to the candidate's parent: entry i is the median of the 11 timestamps before the branch block at candidate_fork_start_height+i. Set only for a candidate whose parent is off the current chain, at heights where BIP68 is enforced. DEPLOYMENT SKEW: new sender → old validator ignores it and reads those coins from its main-chain MTP store (the old behaviour); old sender → new validator does the same.
+	CandidateBaseId                     *uint32  `protobuf:"varint,17,opt,name=candidate_base_id,json=candidateBaseId,proto3,oneof" json:"candidate_base_id,omitempty"`                                                                 // ID of the block the validator's MTP store must hold for BIP68: the candidate's fork point when candidate_fork_mtps is set, else its parent. On a mismatch the validator reloads the store and, if it still differs, fails the request with a processing error. Request-only. DEPLOYMENT SKEW: new sender → old validator ignores it and reads the store unchecked (the old behaviour); old sender → new validator does the same.
 	OutpointOnlySpend                   *bool    `protobuf:"varint,14,opt,name=outpoint_only_spend,json=outpointOnlySpend,proto3,oneof" json:"outpoint_only_spend,omitempty"`                                                           // Below-checkpoint outpoint-only spend fast path: skips parent-tx reads, fee computation, and UTXO-hash checksum. MUST travel with skip_script_validation=true; the validator enforces this invariant and returns a processing error if outpoint_only_spend is true without skip_script_validation. Request-only. DEPLOYMENT SKEW: new sender → old validator ignores this field and performs full extend+spend (slower, never corrupts state); old sender → new validator reconstructs absent as false (old behaviour, full spend).
 	unknownFields                       protoimpl.UnknownFields
 	sizeCache                           protoimpl.SizeCache
@@ -286,6 +287,13 @@ func (x *ValidateTransactionRequest) GetCandidateForkMtps() []uint32 {
 		return x.CandidateForkMtps
 	}
 	return nil
+}
+
+func (x *ValidateTransactionRequest) GetCandidateBaseId() uint32 {
+	if x != nil && x.CandidateBaseId != nil {
+		return *x.CandidateBaseId
+	}
+	return 0
 }
 
 func (x *ValidateTransactionRequest) GetOutpointOnlySpend() bool {
@@ -590,7 +598,7 @@ const file_services_validator_validator_api_validator_api_proto_rawDesc = "" +
 	"\x0eHealthResponse\x12\x0e\n" +
 	"\x02ok\x18\x01 \x01(\bR\x02ok\x12\x18\n" +
 	"\adetails\x18\x02 \x01(\tR\adetails\x128\n" +
-	"\ttimestamp\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\ttimestamp\"\xb2\t\n" +
+	"\ttimestamp\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\ttimestamp\"\xf9\t\n" +
 	"\x1aValidateTransactionRequest\x12)\n" +
 	"\x10transaction_data\x18\x01 \x01(\fR\x0ftransactionData\x12!\n" +
 	"\fblock_height\x18\x02 \x01(\rR\vblockHeight\x121\n" +
@@ -606,8 +614,9 @@ const file_services_validator_validator_api_validator_api_proto_rawDesc = "" +
 	"\x16skip_script_validation\x18\r \x01(\bH\tR\x14skipScriptValidation\x88\x01\x01\x12B\n" +
 	"\x1bcandidate_fork_start_height\x18\x0f \x01(\rH\n" +
 	"R\x18candidateForkStartHeight\x88\x01\x01\x12.\n" +
-	"\x13candidate_fork_mtps\x18\x10 \x03(\rR\x11candidateForkMtps\x123\n" +
-	"\x13outpoint_only_spend\x18\x0e \x01(\bH\vR\x11outpointOnlySpend\x88\x01\x01B\x15\n" +
+	"\x13candidate_fork_mtps\x18\x10 \x03(\rR\x11candidateForkMtps\x12/\n" +
+	"\x11candidate_base_id\x18\x11 \x01(\rH\vR\x0fcandidateBaseId\x88\x01\x01\x123\n" +
+	"\x13outpoint_only_spend\x18\x0e \x01(\bH\fR\x11outpointOnlySpend\x88\x01\x01B\x15\n" +
 	"\x13_skip_utxo_creationB\x1b\n" +
 	"\x19_add_tx_to_block_assemblyB\x15\n" +
 	"\x13_skip_policy_checksB\x15\n" +
@@ -618,7 +627,8 @@ const file_services_validator_validator_api_validator_api_proto_rawDesc = "" +
 	"\t_in_blockB*\n" +
 	"(_unconfirmed_parents_at_candidate_heightB\x19\n" +
 	"\x17_skip_script_validationB\x1e\n" +
-	"\x1c_candidate_fork_start_heightB\x16\n" +
+	"\x1c_candidate_fork_start_heightB\x14\n" +
+	"\x12_candidate_base_idB\x16\n" +
 	"\x14_outpoint_only_spendJ\x04\b\n" +
 	"\x10\vR\x0fparent_metadata\"\xa0\x01\n" +
 	"\x1bValidateTransactionResponse\x12\x14\n" +

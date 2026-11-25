@@ -906,7 +906,7 @@ func (u *Server) checkSubtreeFromBlock(ctx context.Context, request *subtreevali
 
 	// BIP68 coin times along the candidate's own branch, for a candidate whose parent is off
 	// the current chain (fetchCandidateForkMTPs).
-	forkStart, forkMTPs, err := u.fetchCandidateForkMTPs(ctx, previousBlockHash, request.BlockHeight)
+	candidateFork, err := u.fetchCandidateForkMTPs(ctx, previousBlockHash, request.BlockHeight)
 	if err != nil {
 		return false, errors.NewProcessingError("[CheckSubtree] candidate branch coin times", err)
 	}
@@ -914,14 +914,13 @@ func (u *Server) checkSubtreeFromBlock(ctx context.Context, request *subtreevali
 	// blockValidatorOptions are the options both branches below validate the subtree's
 	// transactions with; the legacy branch adds to them. Each call returns a new slice.
 	blockValidatorOptions := func() []validator.Option {
-		return []validator.Option{
+		return append([]validator.Option{
 			validator.WithSkipPolicyChecks(true),
 			validator.WithInBlock(true),
 			validator.WithCreateConflicting(true),
 			validator.WithIgnoreLocked(true),
 			validator.WithCandidateParentMedianTime(candidateParentMedianTime),
-			validator.WithCandidateForkMTPs(forkStart, forkMTPs),
-		}
+		}, candidateFork.options()...)
 	}
 
 	// Check if the base URL is "legacy", which indicates that the subtree is coming from a block from the legacy service.
