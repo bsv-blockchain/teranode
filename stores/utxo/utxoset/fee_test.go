@@ -80,6 +80,8 @@ func TestCreateStoresTheFee(t *testing.T) {
 // fee cannot be known, which is the below-checkpoint fast path, so it is stored as unknown and
 // never as a guessed number.
 func TestCreateOfAnUnextendedTransactionStoresNoFee(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	parent := mkTx(t, 1, 5_000)

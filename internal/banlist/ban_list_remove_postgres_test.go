@@ -4,50 +4,34 @@ import (
 	"context"
 	"net/url"
 	"testing"
-	"time"
 
 	"github.com/bsv-blockchain/teranode/stores/blockchain"
+	tpostgres "github.com/bsv-blockchain/teranode/test/utils/postgres"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/test"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/testcontainers/testcontainers-go"
-	"github.com/testcontainers/testcontainers-go/modules/postgres"
-	"github.com/testcontainers/testcontainers-go/wait"
 )
 
-// newPostgresBanList starts a PostgreSQL container, builds a real blockchain
-// store on it and returns an initialized BanList. It skips when containers are
+// newPostgresBanList opens a fresh database on the shared PostgreSQL server, builds a
+// real blockchain store on it and returns an initialized BanList. It skips when containers are
 // unavailable; a skip is untested, not PostgreSQL validation.
 func newPostgresBanList(t *testing.T) *BanList {
 	t.Helper()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-	defer cancel()
-
-	pgContainer, err := postgres.Run(ctx,
-		"postgres:13",
-		postgres.WithDatabase("testdb"),
-		postgres.WithUsername("testuser"),
-		postgres.WithPassword("testpass"),
-		testcontainers.WithWaitStrategy(
-			wait.ForLog("database system is ready to accept connections").
-				WithOccurrence(2).
-				WithStartupTimeout(5*time.Minute),
-		),
-	)
+	// A fresh database on the PostgreSQL server shared by this test binary, dropped when
+	// the test ends, after the store closes.
+	connStr, teardown, err := tpostgres.SetupTestPostgresContainer()
 	test.SkipIfContainerUnavailable(t, err)
-	t.Cleanup(func() { _ = pgContainer.Terminate(context.Background()) })
-
-	connStr, err := pgContainer.ConnectionString(ctx, "sslmode=disable")
-	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, teardown()) })
 
 	dbURL, err := url.Parse(connStr)
 	require.NoError(t, err)
 
 	store, err := blockchain.NewStore(ulogger.TestLogger{}, dbURL, test.CreateBaseTestSettings(t))
 	require.NoError(t, err)
-	// Registered after Terminate, so the store closes first.
+	// Registered after the database drop, so the store closes first.
 	t.Cleanup(func() { _ = store.Close(context.Background()) })
 	require.Equal(t, util.Postgres, store.GetDBEngine())
 

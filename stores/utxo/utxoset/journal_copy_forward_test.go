@@ -37,6 +37,8 @@ func journalRowsFor(t *testing.T, s *Store, ctx context.Context, parent *bt.Tx, 
 // A mined spender's row is NOT carried: its spend is settled and the partition's drop is the
 // end of it.
 func TestJournalDropCarriesForwardSpendsOfUnminedTransactions(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	parent := mkTx(t, 2, 5_000)
@@ -74,6 +76,8 @@ func TestJournalDropCarriesForwardSpendsOfUnminedTransactions(t *testing.T) {
 // that takes the block back and then gives the spender's coin back needs that row. Undo history
 // has to be kept by the height the spender was mined at, not the height it spent at.
 func TestJournalKeepsTheSpendsOfARecentlyMinedTransaction(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newUncheckpointedStore(t)
 
 	parent := mkTx(t, 2, 5_000)
@@ -112,6 +116,8 @@ func TestJournalKeepsTheSpendsOfARecentlyMinedTransaction(t *testing.T) {
 // carry commits on its own, so a restart there carries the same partition again on the next
 // pass, and that must not leave two rows: every journal reader answers once per row.
 func TestJournalCopyForwardIsIdempotent(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	parent := mkTx(t, 1, 5_000)
@@ -157,6 +163,8 @@ SELECT $3::int, spending_vin, satoshis, created_height, spendable_from, flags,
 // in a live one. The next pass over the leaf deletes the original and inserts nothing, so the
 // one row left is the carried one, at the height it was carried to.
 func TestJournalCopyForwardHealsADuplicateLeftByACopy(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 	parent, waiting := carriedWindow(t, s, ctx)
 
@@ -193,6 +201,8 @@ func TestJournalCopyForwardHealsADuplicateLeftByACopy(t *testing.T) {
 // them itself. The end state is exactly one live UTXO for the outpoint, no journal row left for
 // a later replay to find, and a clean return.
 func TestUnspendBetweenCopyForwardAndDropRestoresOneUTXO(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	parent := mkTx(t, 2, 5_000)
@@ -290,6 +300,8 @@ func requireRestoredOnce(t *testing.T, s *Store, ctx context.Context, parent *bt
 // The carry now moves the row, so the readers never see two. The test asserts that directly,
 // one row between the carry and the drop, and then that both reversals return cleanly.
 func TestConflictReversalBetweenCopyForwardAndDrop(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	t.Run("SpendsMadeBy then Unspend", func(t *testing.T) {
 		s, ctx := newTestStore(t)
 		parent, waiting := carriedWindow(t, s, ctx)

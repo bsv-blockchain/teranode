@@ -79,6 +79,8 @@ func archivable(t *testing.T, s *Store, ctx context.Context, tx *bt.Tx) error {
 // The end state, all through the real pruner: the body survives the drop of its partition while
 // the transaction waits, survives its mining, and goes once it is mined and 288 blocks deep.
 func TestUnminedBodyOutlivesItsWindow(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	tx := mkTx(t, 1, 5_000)
@@ -126,6 +128,8 @@ func TestUnminedBodyOutlivesItsWindow(t *testing.T) {
 // The carry runs a partition ahead of the drop, measured from the tip, so the transaction was
 // carried while it was still waiting.
 func TestBodyOfTransactionMinedAheadOfThePersisterSurvivesTheDrop(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	tx := mkTx(t, 1, 5_000)
@@ -158,6 +162,8 @@ func TestBodyOfTransactionMinedAheadOfThePersisterSurvivesTheDrop(t *testing.T) 
 // archived, so its body is still needed, and the carry must copy it because it is not yet
 // archived, whether or not it is still waiting.
 func TestBodyOfTransactionMinedBeforeTheFirstCarrySurvivesTheDrop(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	tx := mkTx(t, 1, 5_000)
@@ -188,6 +194,8 @@ func TestBodyOfTransactionMinedBeforeTheFirstCarrySurvivesTheDrop(t *testing.T) 
 // on the same terms, not by the block's distance from the tip, or the persister asks for a
 // body the store holds and gets nil once the tip is 336 blocks past the block.
 func TestCarriedBodyIsFoundWhileThePersisterLags(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	tx := mkTx(t, 1, 5_000)
@@ -217,6 +225,8 @@ func TestCarriedBodyIsFoundWhileThePersisterLags(t *testing.T) {
 // commits on its own and the drop comes after it, so a restart there carries the same partition
 // again, and a read must still see exactly one body.
 func TestBodyCarryIsIdempotent(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	tx := mkTx(t, 1, 5_000)
@@ -245,6 +255,8 @@ func TestBodyCarryIsIdempotent(t *testing.T) {
 // TestMinedBodyIsNotCarried: a transaction mined in time keeps the ordinary horizon. Carrying
 // it would make the side table a second body store.
 func TestMinedBodyIsNotCarried(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	tx := mkTx(t, 1, 5_000)
@@ -294,6 +306,8 @@ func carriedBodies(t *testing.T, s *Store, ctx context.Context) int {
 // blocks deep nowhere near the drop, and a carried body is kept for exactly that long
 // (reclaimCarriedBodySQL), so the drop must carry it too.
 func TestBodyOfRecentlyMinedTransactionSurvivesADelayedDropForARemine(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	tx := mkTx(t, 1, 5_000)
@@ -343,6 +357,8 @@ func TestBodyOfRecentlyMinedTransactionSurvivesADelayedDropForARemine(t *testing
 // long-waiting transaction; it is every transaction whose block is above its creation partition's
 // top, a fraction of ordinary tip traffic. The copy lives until the block is 288 deep.
 func TestBodyMinedPastItsWindowIsCarriedUntilItsBlockIs288Deep(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	windowTop := uint32(carryTestHeight/TxBodyPartitionBlocks+1)*TxBodyPartitionBlocks - 1
