@@ -106,10 +106,11 @@ func TerminateSharedEnv() {
 }
 
 // UniqueName returns prefix followed by a suffix no other call in this process
-// returns, for a topic or consumer group on a shared broker. A rerun of the
-// same test under -count gets a new name too.
+// returns, for a topic or consumer group on a shared broker. The broker is
+// shared only within one test binary, so a process-wide counter is enough. A
+// rerun of the same test under -count gets a new name too.
 func UniqueName(prefix string) string {
-	return fmt.Sprintf("%s-%d-%d", prefix, time.Now().UnixNano(), uniqueNameCounter.Add(1))
+	return fmt.Sprintf("%s-%d", prefix, uniqueNameCounter.Add(1))
 }
 
 // startEnv starts a single-node Redpanda container on a free host port.

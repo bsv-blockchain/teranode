@@ -141,9 +141,6 @@ func startSharedContainer() (*postgres.PostgresContainer, string, error) {
 			postgres.WithDatabase(dbName),
 			postgres.WithUsername(dbUser),
 			postgres.WithPassword(dbPassword),
-			// Tests share this server and many run in parallel, each with a pool of its
-			// own, so the default limit of 100 connections is too few.
-			testcontainers.WithCmdArgs("-c", "max_connections=500"),
 			testcontainers.WithWaitStrategy(
 				wait.ForLog("database system is ready to accept connections").
 					WithOccurrence(2).WithStartupTimeout(60*time.Second),
