@@ -245,9 +245,28 @@ func generateFixtureForBenchmark(b *testing.B, r *require.Assertions, totalTxCou
 	}
 }
 
+// benchmarkTxChains keeps each signed chain by length for the life of the test binary.
+// The testing package calls a sub-benchmark's function once per b.N round and once per
+// -count, and signing the chain was most of the wall time; the timed loop never sees it.
+// Benchmarks run one at a time, so the map needs no lock.
+var benchmarkTxChains = map[int][]*bt.Tx{}
+
+// createTransactionChainForBenchmark returns a signed chain of count transactions, built
+// on first use for each count. Callers share the slice and must not modify it.
 func createTransactionChainForBenchmark(b *testing.B, r *require.Assertions, count int) []*bt.Tx {
 	b.Helper()
 
+	if chain, ok := benchmarkTxChains[count]; ok {
+		return chain
+	}
+
+	chain := signTransactionChainForBenchmark(r, count)
+	benchmarkTxChains[count] = chain
+
+	return chain
+}
+
+func signTransactionChainForBenchmark(r *require.Assertions, count int) []*bt.Tx {
 	// Import the transaction creation logic inline to use require assertions
 	// This ensures benchmark failures are properly reported
 	r.GreaterOrEqual(count, 2, "count must be at least 2")
@@ -715,6 +734,11 @@ func BenchmarkBlockSizeScaling(b *testing.B) {
 	}
 
 	for _, tc := range testCases {
+		// The 10k rows repeat BenchmarkSubtreeSizes' cases exactly; -short (CI) runs them there only.
+		if testing.Short() && tc.totalTxCount == 10_000 {
+			continue
+		}
+
 		b.Run(tc.name, func(b *testing.B) {
 			r := require.New(b)
 
@@ -792,6 +816,12 @@ func BenchmarkSubtreeAllocations(b *testing.B) {
 
 			b.ReportMetric(float64(len(fixture.Subtrees)), "subtrees")
 		})
+
+		// _full_validation repeats BenchmarkSubtreeSizes' case for the same subtree size;
+		// -short (CI) runs it there only.
+		if testing.Short() {
+			continue
+		}
 
 		b.Run(tc.name+"_full_validation", func(b *testing.B) {
 			r := require.New(b)

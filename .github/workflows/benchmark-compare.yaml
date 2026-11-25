@@ -44,6 +44,11 @@ jobs:
           - group: subtreevalidation-sizing
             packages: ./services/subtreevalidation
             bench_filter: "BenchmarkSubtreeSizes|BenchmarkBlockSizeScaling|BenchmarkSubtreeAllocations|BenchmarkSubtreeProcessor|BenchmarkStreamingProcessor"
+            # Each op takes 2µs to 2ms, so 100ms still runs 50 or more iterations of it. benchstat
+            # needs 4 samples a side to call any difference at p < 0.05 and 6 for a confidence
+            # interval; at the default count of 3 it reports every change as "~".
+            benchtime: 100ms
+            count: 6
           - group: blockchain
             packages: ./services/blockchain/work
           - group: blockchain-sql
@@ -98,7 +103,7 @@ jobs:
       - name: Run PR benchmarks
         run: |
           BENCH_FILTER="${{ matrix.bench_filter || '.' }}"
-          go test -bench="$BENCH_FILTER" -benchmem -benchtime=1s -short -timeout=25m -count=3 -run=^$ \
+          go test -bench="$BENCH_FILTER" -benchmem -benchtime=${{ matrix.benchtime || '1s' }} -short -timeout=25m -count=${{ matrix.count || 3 }} -run=^$ \
             -tags "testtxmetacache" \
             ${{ matrix.packages }} \
             | tee pr-${{ matrix.group }}.txt
@@ -113,7 +118,7 @@ jobs:
         run: |
           cd main
           BENCH_FILTER="${{ matrix.bench_filter || '.' }}"
-          go test -bench="$BENCH_FILTER" -benchmem -benchtime=1s -short -timeout=25m -count=3 -run=^$ \
+          go test -bench="$BENCH_FILTER" -benchmem -benchtime=${{ matrix.benchtime || '1s' }} -short -timeout=25m -count=${{ matrix.count || 3 }} -run=^$ \
             -tags "testtxmetacache" \
             ${{ matrix.packages }} \
             | tee ../main-${{ matrix.group }}.txt
