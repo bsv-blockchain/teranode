@@ -111,7 +111,11 @@ jobs:
           pkgs=$(sed -n '/matrix:/,/steps:/p' .github/workflows/benchmark-compare.yaml \
             | grep -vE '^[[:space:]]*#' | grep -oE '[.]/[a-z][A-Za-z0-9_./-]*' | sort -u)
           echo "$pkgs"
-          go test -c -tags testtxmetacache -o "$RUNNER_TEMP/bench-bin/" $pkgs
+          # One binary per package: go test -c refuses several packages that share
+          # a base name (./stores/blockchain/sql and ./stores/utxo/sql) into one dir.
+          for p in $pkgs; do
+            go test -c -tags testtxmetacache -o "$RUNNER_TEMP/bench-bin/$(echo "$p" | tr '/.' '__').test" "$p"
+          done
 
       # Drop entries this build did not use, as the unit job does for its cache.
       - name: Trim benchmark build cache
