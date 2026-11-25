@@ -8,6 +8,7 @@ import (
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/util/lane"
+	"golang.org/x/sync/errgroup"
 )
 
 // laneWindowPage is how many rows one statement of the window read returns. A variable so a test
@@ -208,6 +209,9 @@ func (s *Store) laneWindowPage(ctx context.Context, page *[]laneWindowRow, st *u
 	return last, nil
 }
 
+// laneWindowProbes bounds the identity reads of one page that run at once, one per leaf.
+const laneWindowProbes = 4
+
 // laneWindowJudge reads the identity rows of one page, one statement per leaf, and hands the page
 // to fn as records.
 func (s *Store) laneWindowJudge(ctx context.Context, page []laneWindowRow, st *utxo.LaneWindowStats, fn func([]utxo.LaneWindowRecord) error) error {
@@ -218,69 +222,40 @@ func (s *Store) laneWindowJudge(ctx context.Context, page []laneWindowRow, st *u
 		byLeaf[leaf] = append(byLeaf[leaf], page[i].txid[:])
 	}
 
-	found := make(map[chainhash.Hash]utxo.LaneWindowRecord, len(page))
+	var (
+		found [8]map[chainhash.Hash]utxo.LaneWindowRecord
+		bytes [8]uint64
+	)
+
+	g, gCtx := errgroup.WithContext(ctx)
+	g.SetLimit(laneWindowProbes)
 
 	for leaf, txids := range byLeaf {
 		if len(txids) == 0 {
 			continue
 		}
 
-		rows, err := s.pool.Query(ctx, laneWindowIdentSQL, int16(leaf), txids) //nolint:gosec // a leaf is below 8
-		if err != nil {
-			return errors.NewStorageError("[utxoset] read tx_ident for the restart window", err)
-		}
+		g.Go(func() error {
+			var err error
 
-		for rows.Next() {
-			var (
-				txid          []byte
-				lanePosition  *int64
-				createdAt     *int64
-				offChainSince *int32
-				flags         int16
-				fee           *int64
-				size          *int32
-				inpoints      []byte
-			)
+			found[leaf], bytes[leaf], err = s.laneWindowIdent(gCtx, int16(leaf), txids) //nolint:gosec // a leaf is below 8
 
-			if err = rows.Scan(&txid, &lanePosition, &createdAt, &offChainSince, &flags, &fee, &size, &inpoints); err != nil {
-				rows.Close()
+			return err
+		})
+	}
 
-				return errors.NewStorageError("[utxoset] scan tx_ident", err)
-			}
+	if err := g.Wait(); err != nil {
+		return err
+	}
 
-			var rec utxo.LaneWindowRecord
-
-			copy(rec.Hash[:], txid)
-
-			if lanePosition != nil {
-				rec.LanePosition = lane.FromSigned(*lanePosition)
-			}
-
-			if createdAt != nil {
-				rec.CreatedAt = *createdAt
-			}
-
-			if offChainSince != nil && *offChainSince > 0 {
-				rec.UnminedSince = uint32(*offChainSince)
-			}
-
-			rec.Conflicting = flags&FlagConflicting != 0
-
-			found[rec.Hash] = rec
-			st.Bytes += uint64(len(txid)) + 8 + 8 + 4 + 2 + 8 + 4 + uint64(len(inpoints))
-		}
-
-		rows.Close()
-
-		if err = rows.Err(); err != nil {
-			return errors.NewStorageError("[utxoset] read tx_ident for the restart window", err)
-		}
+	for _, n := range bytes {
+		st.Bytes += n
 	}
 
 	batch := make([]utxo.LaneWindowRecord, 0, len(page))
 
 	for i := range page {
-		rec, ok := found[page[i].txid]
+		rec, ok := found[LeafFor(page[i].txid[:])][page[i].txid]
 		if !ok {
 			rec = utxo.LaneWindowRecord{Hash: page[i].txid, Missing: true}
 		}
@@ -297,4 +272,62 @@ func (s *Store) laneWindowJudge(ctx context.Context, page []laneWindowRow, st *u
 	st.Records += uint64(len(batch))
 
 	return fn(batch)
+}
+
+// laneWindowIdent reads the identity rows of one leaf's transactions, with the bytes read.
+func (s *Store) laneWindowIdent(ctx context.Context, leaf int16, txids [][]byte) (map[chainhash.Hash]utxo.LaneWindowRecord, uint64, error) {
+	found := make(map[chainhash.Hash]utxo.LaneWindowRecord, len(txids))
+
+	var n uint64
+
+	rows, err := s.pool.Query(ctx, laneWindowIdentSQL, leaf, txids)
+	if err != nil {
+		return nil, 0, errors.NewStorageError("[utxoset] read tx_ident for the restart window", err)
+	}
+
+	defer rows.Close()
+
+	for rows.Next() {
+		var (
+			txid          []byte
+			lanePosition  *int64
+			createdAt     *int64
+			offChainSince *int32
+			flags         int16
+			fee           *int64
+			size          *int32
+			inpoints      []byte
+		)
+
+		if err = rows.Scan(&txid, &lanePosition, &createdAt, &offChainSince, &flags, &fee, &size, &inpoints); err != nil {
+			return nil, 0, errors.NewStorageError("[utxoset] scan tx_ident", err)
+		}
+
+		var rec utxo.LaneWindowRecord
+
+		copy(rec.Hash[:], txid)
+
+		if lanePosition != nil {
+			rec.LanePosition = lane.FromSigned(*lanePosition)
+		}
+
+		if createdAt != nil {
+			rec.CreatedAt = *createdAt
+		}
+
+		if offChainSince != nil && *offChainSince > 0 {
+			rec.UnminedSince = uint32(*offChainSince)
+		}
+
+		rec.Conflicting = flags&FlagConflicting != 0
+
+		found[rec.Hash] = rec
+		n += uint64(len(txid)) + 8 + 8 + 4 + 2 + 8 + 4 + uint64(len(inpoints))
+	}
+
+	if err = rows.Err(); err != nil {
+		return nil, 0, errors.NewStorageError("[utxoset] read tx_ident for the restart window", err)
+	}
+
+	return found, n, nil
 }
