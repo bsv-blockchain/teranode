@@ -1,5 +1,5 @@
 diff --git a/services/blockassembly/subtreeprocessor/reorg_fast_path.go b/services/blockassembly/subtreeprocessor/reorg_fast_path.go
-index 0f7288b90..f2681c8b3 100644
+index 0f7288b90..f87963ae0 100644
 --- a/services/blockassembly/subtreeprocessor/reorg_fast_path.go
 +++ b/services/blockassembly/subtreeprocessor/reorg_fast_path.go
 @@ -533,7 +533,7 @@ func (stp *SubtreeProcessor) applyFastReorg(ctx context.Context, plan *fastReorg
@@ -7,7 +7,7 @@ index 0f7288b90..f2681c8b3 100644
  	}
  
 -	if err = stp.parallelBuildRemainderSubtrees(ctx, kept, positions, true); err != nil {
-+	if err = stp.parallelBuildRemainderSubtrees(ctx, kept, nil, true) // mutant: the subtrees are built without lane positions; err != nil {
++	if err = stp.parallelBuildRemainderSubtrees(ctx, kept, nil, true); err != nil { // mutant: built without lane positions
  		return nil, errors.NewProcessingError("[reorgInPlace][%s] error building the subtrees", lost.String(), err)
  	}
  
