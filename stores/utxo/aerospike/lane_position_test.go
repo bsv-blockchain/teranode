@@ -444,6 +444,18 @@ func TestParentLanePositionsOnAerospike(t *testing.T) {
 	require.True(t, answers[0].IsCoinbase, "the parent read says the parent is a coinbase")
 	require.Equal(t, lane.Pack(7, 99), answers[0].LanePosition)
 
+	// The block parent check's Get and the subtree prefetch's BatchDecorate read the flag too.
+	for _, tx := range []*bt.Tx{parent, coinbase} {
+		md, err := store.Get(ctx, tx.TxIDChainHash(), fields.BlockIDs, fields.LanePosition, fields.IsCoinbase)
+		require.NoError(t, err)
+		require.Equal(t, tx.IsCoinbase(), md.IsCoinbase, "block parent read")
+
+		items := []*utxo.UnresolvedMetaData{{Hash: *tx.TxIDChainHash()}}
+		require.NoError(t, store.BatchDecorate(ctx, items, fields.BlockIDs, fields.BlockHeights, fields.Outputs, fields.LanePosition, fields.IsCoinbase))
+		require.NoError(t, items[0].Err)
+		require.Equal(t, tx.IsCoinbase(), items[0].Data.IsCoinbase, "prefetch read")
+	}
+
 	child := laneChild(t, parent, 0)
 	md, err := store.Create(ctx, child, 101, utxo.WithLanePosition(childPosition), utxo.WithParentLanePositions([]uint64{parentPosition}))
 	require.NoError(t, err)

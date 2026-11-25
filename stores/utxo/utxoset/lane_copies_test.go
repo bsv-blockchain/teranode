@@ -601,6 +601,16 @@ func TestParentOutputsCarryThePositionFromCoinAndJournalRows(t *testing.T) {
 		require.Equal(t, utxo.ParentOutputMined, answers[0].Status)
 		require.Equal(t, want, answers[0].LanePosition, "answered from the %s", from)
 		require.Equal(t, parent.IsCoinbase(), answers[0].IsCoinbase, "answered from the %s", from)
+
+		// The block parent check's Get and the subtree prefetch's BatchDecorate read the flag too.
+		md, err := s.Get(ctx, parent.TxIDChainHash(), fields.BlockIDs, fields.LanePosition, fields.IsCoinbase)
+		require.NoError(t, err)
+		require.Equal(t, parent.IsCoinbase(), md.IsCoinbase, "block parent read, from the %s", from)
+
+		items := []*utxo.UnresolvedMetaData{{Hash: *parent.TxIDChainHash()}}
+		require.NoError(t, s.BatchDecorate(ctx, items, fields.BlockIDs, fields.BlockHeights, fields.Outputs, fields.LanePosition, fields.IsCoinbase))
+		require.NoError(t, items[0].Err)
+		require.Equal(t, parent.IsCoinbase(), items[0].Data.IsCoinbase, "prefetch read, from the %s", from)
 	}
 
 	for _, parent := range parents {
