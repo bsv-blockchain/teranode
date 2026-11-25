@@ -220,6 +220,10 @@ func (stp *SubtreeProcessor) filterRecentlyMined(batches []*TxBatch, skip *Sorte
 				b.validatedHeights[kept] = b.validatedHeights[i]
 			}
 
+			if len(b.positions) == len(b.nodes) {
+				b.positions[kept] = b.positions[i]
+			}
+
 			kept++
 		}
 
@@ -231,6 +235,12 @@ func (stp *SubtreeProcessor) filterRecentlyMined(batches []*TxBatch, skip *Sorte
 			b.validatedHeights = b.validatedHeights[:kept]
 		} else {
 			b.validatedHeights = nil
+		}
+
+		if len(b.positions) == len(b.nodes) {
+			b.positions = b.positions[:kept]
+		} else {
+			b.positions = nil
 		}
 
 		b.nodes = b.nodes[:kept]
@@ -331,12 +341,16 @@ func countLateMinedDropped(dropped int) {
 // filterHandOff returns a batch arriving at the queue without the transactions a kept block set
 // holds, so a hand-off is checked against the sets kept when it arrives, and the newest set it
 // was checked against, for TxBatch.checkedSeq. It never changes the caller's slices, which a
-// refused hand-off sends again: when it drops anything it returns new ones. validatedHeights may
-// be nil.
-func (stp *SubtreeProcessor) filterHandOff(nodes []subtreepkg.Node, txInpoints []*subtreepkg.TxInpoints, validatedHeights []uint32) ([]subtreepkg.Node, []*subtreepkg.TxInpoints, []uint32, uint64) {
+// refused hand-off sends again: when it drops anything it returns new ones. validatedHeights and
+// positions may be nil; a positions of another length than nodes is returned as nil.
+func (stp *SubtreeProcessor) filterHandOff(nodes []subtreepkg.Node, txInpoints []*subtreepkg.TxInpoints, validatedHeights []uint32, positions []uint64) ([]subtreepkg.Node, []*subtreepkg.TxInpoints, []uint32, []uint64, uint64) {
+	if len(positions) != len(nodes) {
+		positions = nil
+	}
+
 	kept := stp.recentMined.load()
 	if len(kept) == 0 || len(nodes) == 0 || len(nodes) != len(txInpoints) {
-		return nodes, txInpoints, validatedHeights, 0
+		return nodes, txInpoints, validatedHeights, positions, 0
 	}
 
 	var checkedSeq uint64
@@ -356,7 +370,7 @@ func (stp *SubtreeProcessor) filterHandOff(nodes []subtreepkg.Node, txInpoints [
 	}
 
 	if first < 0 {
-		return nodes, txInpoints, validatedHeights, checkedSeq
+		return nodes, txInpoints, validatedHeights, positions, checkedSeq
 	}
 
 	keptNodes := make([]subtreepkg.Node, first, len(nodes))
@@ -370,6 +384,12 @@ func (stp *SubtreeProcessor) filterHandOff(nodes []subtreepkg.Node, txInpoints [
 		copy(keptHeights, validatedHeights[:first])
 	}
 
+	var keptPositions []uint64
+	if positions != nil {
+		keptPositions = make([]uint64, first, len(nodes))
+		copy(keptPositions, positions[:first])
+	}
+
 	for i := first + 1; i < len(nodes); i++ {
 		if inKeptSet(kept, nodes[i].Hash) {
 			continue
@@ -381,11 +401,15 @@ func (stp *SubtreeProcessor) filterHandOff(nodes []subtreepkg.Node, txInpoints [
 		if keptHeights != nil {
 			keptHeights = append(keptHeights, validatedHeights[i])
 		}
+
+		if keptPositions != nil {
+			keptPositions = append(keptPositions, positions[i])
+		}
 	}
 
 	countLateMinedDropped(len(nodes) - len(keptNodes))
 
-	return keptNodes, keptInpoints, keptHeights, checkedSeq
+	return keptNodes, keptInpoints, keptHeights, keptPositions, checkedSeq
 }
 
 func inKeptSet(sets []recentMinedSet, h chainhash.Hash) bool {

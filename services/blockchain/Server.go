@@ -1345,10 +1345,18 @@ func (b *Blockchain) AddBlock(ctx context.Context, request *blockchain_api.AddBl
 	// The block's lane map rows, at utxostore_laneMigration shadow. They are measured, never
 	// acted on, so rows that do not even parse are dropped and the block is stored without them.
 	if len(request.LaneMapRows) > 0 {
-		if laneRows, laneErr := laneMapRowsFromProto(request.LaneMapRows); laneErr != nil {
-			lane.CountRowInsertFailure()
+		laneBlock := lane.BlockPeer
+		if request.LaneMapRowsOwnBlock {
+			laneBlock = lane.BlockOwn
+		}
+
+		switch laneRows, laneErr := laneMapRowsFromProto(request.LaneMapRows); {
+		case laneErr != nil:
+			lane.CountRowInsertFailure(laneBlock)
 			b.logger.Warnf("[Blockchain][AddBlock][%s] dropping its lane map rows: %v", header.Hash().String(), laneErr)
-		} else {
+		case request.LaneMapRowsOwnBlock:
+			storeBlockOptions = append(storeBlockOptions, blockchainoptions.WithOwnBlockLaneMapRows(laneRows))
+		default:
 			storeBlockOptions = append(storeBlockOptions, blockchainoptions.WithLaneMapRows(laneRows))
 		}
 	}
@@ -1716,6 +1724,21 @@ func (b *Blockchain) ReleaseLaneLease(ctx context.Context, req *blockchain_api.R
 	}
 
 	return &blockchain_api.ReleaseLaneLeaseResponse{AlreadyClosed: already}, nil
+}
+
+// GetLaneMapRows returns one block's lane map rows, for a reader's index.
+func (b *Blockchain) GetLaneMapRows(ctx context.Context, req *blockchain_api.GetLaneMapRowsRequest) (*blockchain_api.GetLaneMapRowsResponse, error) {
+	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "GetLaneMapRows",
+		tracing.WithParentStat(b.stats),
+	)
+	defer deferFn()
+
+	rows, err := b.store.LaneMapRows(ctx, req.GetBlockId())
+	if err != nil {
+		return nil, errors.WrapGRPC(err)
+	}
+
+	return &blockchain_api.GetLaneMapRowsResponse{Rows: laneMapRowsToProto(rows)}, nil
 }
 
 // leaseFromRequest checks the lease ID and lane a request names.
