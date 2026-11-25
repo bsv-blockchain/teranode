@@ -89,17 +89,46 @@ Full process: [`docs/references/reviewProcess.md`](docs/references/reviewProcess
 
 Test file layout:
 
-- `foo.go` is tested in `foo_test.go`. Before writing a test, find the existing
-  test file for the code under test and add to it.
-- A second test file for the same code is allowed only when its name states the
-  behaviour it covers (`create_arena_test.go`). Never name a file by how it was
-  written: no `_additional`, `_coverage`, `_extra`, `_more`, `_new` or numeric
-  suffixes.
+- A test for code in `foo.go` goes in `foo_test.go`, including a test for a new
+  behaviour or a bug fix. Create a new `_test.go` file only alongside a new
+  production file.
+- There are two exceptions. A test that needs its own build tag gets its own file,
+  because Go applies build tags per file; name it for the tag
+  (`foo_integration_test.go`). A package's shared test code gets its own file too:
+  `main_test.go` for `TestMain`, `helpers_test.go` for the package fixture,
+  `export_test.go`. Benchmarks also go in `foo_test.go`.
+- Never name a test file by how it was written: no `_additional`, `_coverage`,
+  `_extra`, `_more`, `_new` or numeric suffixes.
+- Existing split files stay as they are. A PR that adds tests to code with several
+  test files adds them to `foo_test.go`, or to the existing file that holds the
+  closest test.
 - Keep unit tests in the same directory as the code; don't move them to a
   separate tree. The top-level `test/` tree holds the e2e, multi-node,
   consensus-vector, long-running, sequential, chaos and soak suites.
 - Search production code first and open tests only when needed. Most hits for a
   common identifier are in tests: `git grep <name> -- ':!*_test.go'`.
+- New code still meets the 80% coverage gate. The rules below change only how
+  coverage is reached: an assertion or a table row in an existing test comes first.
+- Add to an existing test, not only an existing file. When a test already reaches
+  the code, add an assertion there. When only the inputs or the entry point differ
+  (a sync and an async version, two handlers with the same failure), add a row to
+  that test's table. Write a new Test function only for a genuinely new setup.
+- When a PR adds a second test whose setup repeats an existing one, or a third case
+  that differs only in inputs, turn them into a table or move the shared setup into
+  the package's fixture in the same PR. A package with no table or fixture gets one
+  the first time a PR adds tests there.
+- Where a shared fixture uses a mock, it registers every expectation a test relies
+  on as required, never `.Maybe()`, and asserts expectations after the test (for
+  example, with `t.Cleanup(func() { mockClient.AssertExpectations(t) })`). A
+  required expectation alone does not fail when the call is missing.
+- A store test that must pass on SQLite and PostgreSQL is one test body over a
+  backend loop, with a per-case timeout so a hang fails by name. No `_SQLite` and
+  `_Postgres` copies. Start PostgreSQL with `test/utils/postgres`, not
+  testcontainers' `postgres.Run`, except in a test of server configuration that
+  needs its own container settings.
+- A comment above a test is at most three lines: the behaviour it pins and why it
+  matters. Incident history, mutation proofs and review discussion go in the PR
+  body. Never put an issue number from a private tracker in a code comment.
 
 Test tags: `testtxmetacache` (small cache for testing), `largetxmetacache`
 (production cache size), `aerospike` (gates one native-ops integration test; the

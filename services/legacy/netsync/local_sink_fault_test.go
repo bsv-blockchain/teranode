@@ -547,7 +547,9 @@ func TestRecoveredSinkPanic_APanicAtTheLimitMarksTheBlockAgain(t *testing.T) {
 // TestHandleBlockOnDiskMsg_ALocalFaultDrainOfAMarkedBlockIsNotReAsked: the
 // direct re-ask above the final checkpoint does not ask for a block marked
 // recently failed. The mark is what bounds a panic every copy of the block
-// meets (recoveredSinkPanic), and asking again would go on fetching it.
+// meets (recoveredSinkPanic), and asking again would go on fetching it. The
+// re-ask is put off, not dropped: the block was asked for from an inv the peer
+// will not repeat, so once the mark has gone it is asked of the same peer.
 func TestHandleBlockOnDiskMsg_ALocalFaultDrainOfAMarkedBlockIsNotReAsked(t *testing.T) {
 	sm := newPipelineParkManager(t, memory.New(), 8)
 	sm.blockDownloads = newBlockDownloadTracker(time.Hour)
@@ -566,6 +568,15 @@ func TestHandleBlockOnDiskMsg_ALocalFaultDrainOfAMarkedBlockIsNotReAsked(t *test
 	sm.handleBlockOnDiskMsg(&blockOnDiskMsg{body: peerpkg.BlockBody{Hash: h}, peer: local})
 
 	require.Never(t, func() bool { return rec.count() > 0 }, 300*time.Millisecond, 10*time.Millisecond, "no getdata for a marked block")
+
+	sm.sendDueReAsks(time.Now().Add(recentlyFailedBlocksTTL + time.Second))
+	require.Never(t, func() bool { return rec.count() > 0 }, 300*time.Millisecond, 10*time.Millisecond, "nor while the mark stands")
+
+	sm.recentlyFailedBlocks.Delete(h)
+
+	sm.sendDueReAsks(time.Now().Add(2*recentlyFailedBlocksTTL + 2*time.Second))
+	require.Eventually(t, func() bool { return rec.count() == 1 }, 5*time.Second, 10*time.Millisecond, "asked for once the mark has gone")
+	require.Equal(t, []chainhash.Hash{h}, rec.all())
 }
 
 // TestPipelineSink_ABodyCutMidTransactionIsADeliveryFaultNotAnInvalidBlock pins

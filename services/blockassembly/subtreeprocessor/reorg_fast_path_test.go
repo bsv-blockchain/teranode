@@ -293,6 +293,38 @@ func TestReorgDifferential_FastPathMatchesSlowPath(t *testing.T) {
 	}
 }
 
+// With lanes at shadow, the fast path leaves the tx map with the lane position of every transaction in
+// assembly, the effective D1 ones read from the UTXO store, and every chained subtree with the lane
+// bitmaps the slow path builds for it.
+func TestReorgDifferential_FastPathKeepsLanePositions(t *testing.T) {
+	for name, tweak := range fastPathMatrix() {
+		for _, disk := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/disk=%v", name, disk), func(t *testing.T) {
+				cfg := smallScenarioConfig()
+				cfg.diskTxMap = disk
+				cfg.lanePositions = true
+				tweak(&cfg)
+
+				requireFastPathMatchesSlow(t, cfg)
+
+				sc := newReorgScenario(t, cfg)
+				require.NoError(t, fastReorgPath(t, sc))
+
+				out := captureReorgOutcome(sc, nil)
+				require.NotEmpty(t, out.order)
+
+				for _, h := range out.order {
+					require.Equal(t, scenarioLanePosition(h), out.positions[h], "lane position of %s", h)
+				}
+
+				for root, kept := range out.laneBitmaps {
+					require.NotEqual(t, "none", kept, "lane bitmaps of chained subtree %s", root)
+				}
+			})
+		}
+	}
+}
+
 // Random forks over every knob the fast path accepts: overlap 0 to 100 percent, one to three winning
 // blocks, scattered or front-clustered hits. Six seeds under `make test`; all 24 under heavy tests
 // (`make test-heavy`, the mutant script).

@@ -164,7 +164,7 @@ func benchStoreURL(b *testing.B, storeName string) *url.URL {
 
 	switch storeName {
 	case "aerospike":
-		c, err := aeroTest.RunContainer(ctx, aeroTest.WithTTLSupport("test"))
+		c, err := aeroTest.RunContainer(ctx, aeroTest.WithImage(test.AerospikeImage), aeroTest.WithTTLSupport("test"))
 		require.NoError(b, err)
 
 		host, err := c.Host(ctx)

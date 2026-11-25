@@ -59,6 +59,7 @@ import (
 	"crypto/rand"
 	"os"
 	"runtime/debug"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -82,8 +83,11 @@ import (
 	"github.com/ordishs/gocore"
 )
 
-// Used for NOOP batch operations
-var placeholderKey *aerospike.Key
+// Used for NOOP batch operations. New sets it once, in the namespace of the first store.
+var (
+	placeholderKey     *aerospike.Key
+	placeholderKeyOnce sync.Once
+)
 
 // LockRecordIndex is a special index value for lock records
 // Uses high uint32 values to avoid conflict with actual sub-records (0, 1, 2, ...)

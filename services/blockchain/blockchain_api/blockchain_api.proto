@@ -280,6 +280,7 @@ message AddBlockRequest {
   uint64 optionID = 11;                         // Optional block ID
   bytes coinbase_bump = 12;                     // Coinbase BUMP (BRC-74 merkle proof)
   repeated LaneMapRow lane_map_rows = 13;       // Lane map rows, stored in the block's transaction (utxostore_laneMigration shadow)
+  bool lane_map_rows_own_block = 14;            // The lane map rows are of a block this node mined, for the lane metrics' block label; sent only with rows
 }
 
 // LaneMapRow is one lane map row of a block: the positions the block took from one lane, or from

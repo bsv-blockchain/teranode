@@ -1,8 +1,8 @@
 diff --git a/services/blockassembly/subtreeprocessor/reorg_fast_path.go b/services/blockassembly/subtreeprocessor/reorg_fast_path.go
-index d7717edab..77afddbe9 100644
+index 0f7288b90..5529be682 100644
 --- a/services/blockassembly/subtreeprocessor/reorg_fast_path.go
 +++ b/services/blockassembly/subtreeprocessor/reorg_fast_path.go
-@@ -237,9 +237,9 @@ func (stp *SubtreeProcessor) planFastReorg(ctx context.Context, moveBackBlocks,
+@@ -239,9 +239,9 @@ func (stp *SubtreeProcessor) planFastReorg(ctx context.Context, moveBackBlocks,
  	for _, node := range plan.delta.D1 {
  		if stp.currentTxMap.Exists(node.Hash) {
  			suppressed[node.Hash] = struct{}{}
@@ -14,15 +14,15 @@ index d7717edab..77afddbe9 100644
  	}
  
  	found, survivors, deletes := stp.flagPending(plan, suppressed, workers)
-@@ -467,9 +467,8 @@ func (stp *SubtreeProcessor) applyFastReorg(ctx context.Context, plan *fastReorg
- 	// Effective D1 goes into the map before the subtrees are built and sent: the meta of a subtree
- 	// that holds one reads its inpoints from the map.
- 	for i := range plan.d1Nodes {
--		if _, inserted := stp.currentTxMap.SetIfNotExists(plan.d1Nodes[i].Hash, &plan.d1Inpoints[i]); !inserted {
+@@ -478,9 +478,8 @@ func (stp *SubtreeProcessor) applyFastReorg(ctx context.Context, plan *fastReorg
+ 			d1Position = d1Positions[i]
+ 		}
+ 
+-		if _, inserted := stp.currentTxMap.SetIfNotExistsAt(plan.d1Nodes[i].Hash, &plan.d1Inpoints[i], d1Position); !inserted {
 -			return nil, errors.NewProcessingError("[reorgInPlace][%s] effective D1 transaction %s is already in the tx map", lost.String(), plan.d1Nodes[i].Hash.String())
 -		}
 +		// mutant: an already pending transaction is built a second time, silently
-+		stp.currentTxMap.SetIfNotExists(plan.d1Nodes[i].Hash, &plan.d1Inpoints[i])
++		stp.currentTxMap.SetIfNotExistsAt(plan.d1Nodes[i].Hash, &plan.d1Inpoints[i], d1Position)
  	}
  
  	stp.flushDiskTxMapWriters()
