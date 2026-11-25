@@ -176,19 +176,10 @@ func TestParentOutputsCarryTheParentsLanePosition(t *testing.T) {
 
 	op := []utxo.Outpoint{{TxID: *parent.TxIDChainHash(), Vout: 0}}
 
-	// A coinbase parent says so beside its position, for the lanes shadow to count it apart.
-	coinbase := mkTx(t, 1, 6_000)
-	_, err = s.Create(ctx, coinbase, 100, utxo.WithSetCoinbase(true), utxo.WithLanePosition(lane.Pack(3, 13)))
-	require.NoError(t, err)
-
-	op = append(op, utxo.Outpoint{TxID: *coinbase.TxIDChainHash(), Vout: 0})
-
 	answers, err := s.ParentOutputsForValidation(ctx, op)
 	require.NoError(t, err)
 	require.Equal(t, utxo.ParentOutputNotMined, answers[0].Status)
 	require.Equal(t, want, answers[0].LanePosition)
-	require.False(t, answers[0].IsCoinbase)
-	require.True(t, answers[1].IsCoinbase)
 
 	// The parent is spent, so the coin comes from the journal; the position still comes with the
 	// parent's record.
@@ -204,7 +195,6 @@ func TestParentOutputsCarryTheParentsLanePosition(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, utxo.ParentOutputNotMined, answers[0].Status)
 	require.Zero(t, answers[0].LanePosition, "lane positions off: the read does not ask")
-	require.False(t, answers[1].IsCoinbase, "lane positions off: nothing reads the flag for lanes")
 }
 
 // The parents' positions travel where the inpoints do: into the containment row when the record is

@@ -277,9 +277,9 @@ func TestReaderAtOffDoesNothing(t *testing.T) {
 
 	before := total()
 
-	r.BlockParents(t.Context(), chainhash.Hash{}).ObserveParent(chainhash.Hash{}, lane.Pack(1, 1), false, []uint32{1})
-	r.CompareHeight(ReaderValidator, chainhash.Hash{}, lane.Pack(1, 1), false, true, 1)
-	r.CompareBlocks(ReaderBlockParent, nil, chainhash.Hash{}, lane.Pack(1, 1), false, []uint32{1})
+	r.BlockParents(t.Context(), chainhash.Hash{}).ObserveParent(chainhash.Hash{}, lane.Pack(1, 1), []uint32{1})
+	r.CompareHeight(ReaderValidator, chainhash.Hash{}, lane.Pack(1, 1), true, 1)
+	r.CompareBlocks(ReaderBlockParent, nil, chainhash.Hash{}, lane.Pack(1, 1), []uint32{1})
 	r.compareDuplicates(nil, KindNotReady, chainhash.Hash{}, 1, false)
 	r.ShadowDuplicates(t.Context(), chainhash.Hash{}, 1, false)
 
@@ -301,7 +301,7 @@ func TestReaderCountsEachKind(t *testing.T) {
 		r := newReader(ulogger.TestLogger{}, store, 100)
 
 		requireCounted(t, ReaderValidator, KindNotReady, lane.ViaNone, func() {
-			r.CompareHeight(ReaderValidator, chainhash.Hash{}, lane.Pack(3, 5), false, true, b1.height)
+			r.CompareHeight(ReaderValidator, chainhash.Hash{}, lane.Pack(3, 5), true, b1.height)
 		})
 
 		follow(t, r)
@@ -315,69 +315,58 @@ func TestReaderCountsEachKind(t *testing.T) {
 			pos         uint64
 			todayMined  bool
 			todayHeight uint32
-			coinbase    bool
 		}{
-			{KindAgree, lane.ViaRow, lane.Pack(3, 5), true, b1.height, false},
-			{KindAgree, lane.ViaNone, lane.Pack(3, 15), false, 0, false},
-			{KindLanesOnly, lane.ViaRow, lane.Pack(3, 5), false, 0, false},
-			{KindTodayOnly, lane.ViaNone, lane.Pack(3, 15), true, b2.height, false},
-			{KindDifferentBlock, lane.ViaRow, lane.Pack(3, 5), true, b2.height, false},
-			{KindNoPosition, lane.ViaNone, 0, true, b1.height, false},
-			{KindNoRows, lane.ViaNone, lane.Pack(3, 99), true, b3.height, false},
-			{KindNotLoaded, lane.ViaNone, lane.Pack(3, 99), true, 5_000, false},
-			// A coinbase no row takes: today says mined, lanes cannot. A coinbase a row takes is
-			// judged as any other, and an unmined one agrees.
-			{KindCoinbase, lane.ViaNone, lane.Pack(3, 15), true, b2.height, true},
-			{KindAgree, lane.ViaRow, lane.Pack(3, 5), true, b1.height, true},
-			{KindDifferentBlock, lane.ViaRow, lane.Pack(3, 5), true, b2.height, true},
-			{KindAgree, lane.ViaNone, lane.Pack(3, 15), false, 0, true},
+			{KindAgree, lane.ViaRow, lane.Pack(3, 5), true, b1.height},
+			{KindAgree, lane.ViaNone, lane.Pack(3, 15), false, 0},
+			{KindLanesOnly, lane.ViaRow, lane.Pack(3, 5), false, 0},
+			{KindTodayOnly, lane.ViaNone, lane.Pack(3, 15), true, b2.height},
+			{KindDifferentBlock, lane.ViaRow, lane.Pack(3, 5), true, b2.height},
+			{KindNoPosition, lane.ViaNone, 0, true, b1.height},
+			{KindNoRows, lane.ViaNone, lane.Pack(3, 99), true, b3.height},
+			{KindNotLoaded, lane.ViaNone, lane.Pack(3, 99), true, 5_000},
 		}
 
 		for _, tc := range cases {
 			requireCounted(t, ReaderValidator, tc.kind, tc.via, func() {
-				r.CompareHeight(ReaderValidator, h, tc.pos, tc.coinbase, tc.todayMined, tc.todayHeight)
+				r.CompareHeight(ReaderValidator, h, tc.pos, tc.todayMined, tc.todayHeight)
 			})
 		}
 
 		// The block-list form, on the main chain.
 		v := r.MainView()
 		listCases := []struct {
-			kind     string
-			via      lane.Via
-			pos      uint64
-			today    []uint32
-			coinbase bool
+			kind  string
+			via   lane.Via
+			pos   uint64
+			today []uint32
 		}{
-			{KindAgree, lane.ViaRow, lane.Pack(3, 5), []uint32{b1.id}, false},
-			{KindAgree, lane.ViaNone, lane.Pack(3, 15), nil, false},
-			{KindLanesOnly, lane.ViaRow, lane.Pack(3, 5), nil, false},
-			{KindTodayOnly, lane.ViaNone, lane.Pack(3, 15), []uint32{b2.id}, false},
-			{KindDifferentBlock, lane.ViaRow, lane.Pack(3, 5), []uint32{b2.id}, false},
-			{KindNoPosition, lane.ViaNone, 0, []uint32{b1.id}, false},
-			{KindNoRows, lane.ViaNone, lane.Pack(3, 99), []uint32{b3.id}, false},
-			{KindNotLoaded, lane.ViaNone, lane.Pack(3, 99), []uint32{b3.id + 1_000}, false},
+			{KindAgree, lane.ViaRow, lane.Pack(3, 5), []uint32{b1.id}},
+			{KindAgree, lane.ViaNone, lane.Pack(3, 15), nil},
+			{KindLanesOnly, lane.ViaRow, lane.Pack(3, 5), nil},
+			{KindTodayOnly, lane.ViaNone, lane.Pack(3, 15), []uint32{b2.id}},
+			{KindDifferentBlock, lane.ViaRow, lane.Pack(3, 5), []uint32{b2.id}},
+			{KindNoPosition, lane.ViaNone, 0, []uint32{b1.id}},
+			{KindNoRows, lane.ViaNone, lane.Pack(3, 99), []uint32{b3.id}},
+			{KindNotLoaded, lane.ViaNone, lane.Pack(3, 99), []uint32{b3.id + 1_000}},
 			// Two blocks on the chain: the row's block first or second still agrees, and the
 			// first block decides no_rows.
-			{KindAgree, lane.ViaRow, lane.Pack(3, 5), []uint32{b1.id, b2.id}, false},
-			{KindAgree, lane.ViaRow, lane.Pack(3, 5), []uint32{b2.id, b1.id}, false},
-			{KindNoRows, lane.ViaNone, lane.Pack(3, 99), []uint32{b3.id, b2.id}, false},
-			{KindTodayOnly, lane.ViaNone, lane.Pack(3, 99), []uint32{b2.id, b3.id}, false},
-			{KindCoinbase, lane.ViaNone, lane.Pack(3, 15), []uint32{b2.id}, true},
-			{KindAgree, lane.ViaRow, lane.Pack(3, 5), []uint32{b1.id}, true},
-			{KindNoRows, lane.ViaNone, lane.Pack(3, 99), []uint32{b3.id}, true},
+			{KindAgree, lane.ViaRow, lane.Pack(3, 5), []uint32{b1.id, b2.id}},
+			{KindAgree, lane.ViaRow, lane.Pack(3, 5), []uint32{b2.id, b1.id}},
+			{KindNoRows, lane.ViaNone, lane.Pack(3, 99), []uint32{b3.id, b2.id}},
+			{KindTodayOnly, lane.ViaNone, lane.Pack(3, 99), []uint32{b2.id, b3.id}},
 			// A block of only its coinbase has complete rows, so today naming it for a
 			// transaction no row takes is a disagreement, not no_rows.
-			{KindTodayOnly, lane.ViaNone, lane.Pack(3, 99), []uint32{b4.id}, false},
+			{KindTodayOnly, lane.ViaNone, lane.Pack(3, 99), []uint32{b4.id}},
 		}
 
 		for _, tc := range listCases {
 			requireCounted(t, ReaderSubtreeAlreadyMined, tc.kind, tc.via, func() {
-				r.CompareBlocks(ReaderSubtreeAlreadyMined, v, h, tc.pos, tc.coinbase, tc.today)
+				r.CompareBlocks(ReaderSubtreeAlreadyMined, v, h, tc.pos, tc.today)
 			})
 		}
 
 		requireCounted(t, ReaderBlockParent, KindNotReady, lane.ViaNone, func() {
-			r.CompareBlocks(ReaderBlockParent, nil, h, lane.Pack(3, 5), false, []uint32{b1.id})
+			r.CompareBlocks(ReaderBlockParent, nil, h, lane.Pack(3, 5), []uint32{b1.id})
 		})
 	})
 }
@@ -397,15 +386,15 @@ func TestReaderCountsTheMinedWriteWindowApart(t *testing.T) {
 
 		// b2 is the best block, and its mined write has not finished.
 		requireCounted(t, ReaderValidator, KindMinedPending, lane.ViaRow, func() {
-			r.CompareHeight(ReaderValidator, chainhash.Hash{}, lane.Pack(3, 6), false, false, 0)
+			r.CompareHeight(ReaderValidator, chainhash.Hash{}, lane.Pack(3, 6), false, 0)
 		})
 		requireCounted(t, ReaderSubtreePrefetch, KindMinedPending, lane.ViaRow, func() {
-			r.CompareBlocks(ReaderSubtreePrefetch, r.MainView(), chainhash.Hash{}, lane.Pack(3, 6), false, nil)
+			r.CompareBlocks(ReaderSubtreePrefetch, r.MainView(), chainhash.Hash{}, lane.Pack(3, 6), nil)
 		})
 
 		// b1's has finished, so its row against today's unmined is a disagreement.
 		requireCounted(t, ReaderValidator, KindLanesOnly, lane.ViaRow, func() {
-			r.CompareHeight(ReaderValidator, chainhash.Hash{}, lane.Pack(3, 5), false, false, 0)
+			r.CompareHeight(ReaderValidator, chainhash.Hash{}, lane.Pack(3, 5), false, 0)
 		})
 
 		// Once b2's has finished too, so is its row's.
@@ -415,7 +404,7 @@ func TestReaderCountsTheMinedWriteWindowApart(t *testing.T) {
 		require.NoError(t, err)
 
 		requireCounted(t, ReaderValidator, KindLanesOnly, lane.ViaRow, func() {
-			r.CompareHeight(ReaderValidator, chainhash.Hash{}, lane.Pack(3, 6), false, false, 0)
+			r.CompareHeight(ReaderValidator, chainhash.Hash{}, lane.Pack(3, 6), false, 0)
 		})
 	})
 }
@@ -444,18 +433,18 @@ func TestReaderFollowsAReorg(t *testing.T) {
 		require.Equal(t, lane.Answer{Mined: true, Via: lane.ViaRow, BlockID: rival.id, Height: 2}, v.Lookup(lane.Pack(4, 6)))
 
 		requireCounted(t, ReaderValidator, KindAgree, lane.ViaRow, func() {
-			r.CompareHeight(ReaderValidator, chainhash.Hash{}, lane.Pack(4, 6), false, true, 2)
+			r.CompareHeight(ReaderValidator, chainhash.Hash{}, lane.Pack(4, 6), true, 2)
 		})
 
 		// A store still reporting the replaced block's height is not a disagreement: its block at
 		// that height, off the main chain now, took the position.
 		requireCounted(t, ReaderValidator, KindOffChain, lane.ViaNone, func() {
-			r.CompareHeight(ReaderValidator, chainhash.Hash{}, lane.Pack(4, 5), false, true, 2)
+			r.CompareHeight(ReaderValidator, chainhash.Hash{}, lane.Pack(4, 5), true, 2)
 		})
 
 		// Judged by block list, the replaced block is simply off the chain.
 		requireCounted(t, ReaderSubtreePrefetch, KindAgree, lane.ViaNone, func() {
-			r.CompareBlocks(ReaderSubtreePrefetch, v, chainhash.Hash{}, lane.Pack(4, 5), false, []uint32{b2.id})
+			r.CompareBlocks(ReaderSubtreePrefetch, v, chainhash.Hash{}, lane.Pack(4, 5), []uint32{b2.id})
 		})
 	})
 }
@@ -480,15 +469,15 @@ func TestReaderFloorAnswersBelowIt(t *testing.T) {
 		require.Equal(t, lane.Answer{}, v.Lookup(lane.Pack(2, 12)), "a hole stays listed")
 
 		requireCounted(t, ReaderValidator, KindAgree, lane.ViaFloor, func() {
-			r.CompareHeight(ReaderValidator, chainhash.Hash{}, lane.Pack(2, 13), false, true, b1.height)
+			r.CompareHeight(ReaderValidator, chainhash.Hash{}, lane.Pack(2, 13), true, b1.height)
 		})
 
 		// Today's block at the anchor's height is settled too; one above it is not.
 		requireCounted(t, ReaderValidator, KindAgree, lane.ViaFloor, func() {
-			r.CompareHeight(ReaderValidator, chainhash.Hash{}, lane.Pack(2, 13), false, true, s.AnchorHeight())
+			r.CompareHeight(ReaderValidator, chainhash.Hash{}, lane.Pack(2, 13), true, s.AnchorHeight())
 		})
 		requireCounted(t, ReaderValidator, KindDifferentBlock, lane.ViaFloor, func() {
-			r.CompareHeight(ReaderValidator, chainhash.Hash{}, lane.Pack(2, 13), false, true, s.AnchorHeight()+1)
+			r.CompareHeight(ReaderValidator, chainhash.Hash{}, lane.Pack(2, 13), true, s.AnchorHeight()+1)
 		})
 	})
 }
@@ -586,13 +575,13 @@ func TestBlockParentsAnswersHeldParentsOnceTheChainIsIn(t *testing.T) {
 		before := answers(ReaderBlockParent, KindAgree, lane.ViaRow)
 
 		bp := r.BlockParents(context.Background(), b2.hash)
-		bp.ObserveParent(chainhash.Hash{2}, lane.Pack(8, 9), false, []uint32{b2.id})
+		bp.ObserveParent(chainhash.Hash{2}, lane.Pack(8, 9), []uint32{b2.id})
 
 		require.Eventually(t, func() bool {
 			return answers(ReaderBlockParent, KindAgree, lane.ViaRow) == before+1
 		}, 5*time.Second, 10*time.Millisecond)
 
-		bp.ObserveParent(chainhash.Hash{3}, lane.Pack(8, 9), false, []uint32{b2.id})
+		bp.ObserveParent(chainhash.Hash{3}, lane.Pack(8, 9), []uint32{b2.id})
 		require.Equal(t, before+2, answers(ReaderBlockParent, KindAgree, lane.ViaRow))
 	})
 }
@@ -646,7 +635,7 @@ func TestReaderCountsAFoldedAncestorOnAForkBelowTheAnchorNotLoaded(t *testing.T)
 		require.False(t, v.FloorValid())
 
 		requireCounted(t, ReaderBlockParent, KindNotLoaded, lane.ViaNone, func() {
-			r.CompareBlocks(ReaderBlockParent, v, chainhash.Hash{}, lane.Pack(2, 50), false, []uint32{b1.id})
+			r.CompareBlocks(ReaderBlockParent, v, chainhash.Hash{}, lane.Pack(2, 50), []uint32{b1.id})
 		})
 	})
 }
@@ -716,10 +705,10 @@ func TestReaderJudgesOnTheChainOfTheCallersBlockIDs(t *testing.T) {
 		follow(t, r)
 
 		requireCounted(t, ReaderSubtreeAlreadyMined, KindAgree, lane.ViaRow, func() {
-			r.CompareBlocks(ReaderSubtreeAlreadyMined, r.ViewOfIDs(map[uint32]bool{b1.id: true, b2.id: true}), chainhash.Hash{}, lane.Pack(4, 5), false, []uint32{b2.id})
+			r.CompareBlocks(ReaderSubtreeAlreadyMined, r.ViewOfIDs(map[uint32]bool{b1.id: true, b2.id: true}), chainhash.Hash{}, lane.Pack(4, 5), []uint32{b2.id})
 		})
 		requireCounted(t, ReaderSubtreeAlreadyMined, KindLanesOnly, lane.ViaRow, func() {
-			r.CompareBlocks(ReaderSubtreeAlreadyMined, r.ViewOfIDs(map[uint32]bool{b1.id: true, b2.id: true}), chainhash.Hash{}, lane.Pack(4, 5), false, nil)
+			r.CompareBlocks(ReaderSubtreeAlreadyMined, r.ViewOfIDs(map[uint32]bool{b1.id: true, b2.id: true}), chainhash.Hash{}, lane.Pack(4, 5), nil)
 		})
 	})
 }
@@ -764,7 +753,7 @@ func TestReaderCountsMissesOnADisconnectedForkNotLoaded(t *testing.T) {
 		require.True(t, v.Disconnected())
 
 		requireCounted(t, ReaderBlockParent, KindNotLoaded, lane.ViaNone, func() {
-			r.CompareBlocks(ReaderBlockParent, v, chainhash.Hash{}, lane.Pack(2, 60), false, []uint32{b1.id})
+			r.CompareBlocks(ReaderBlockParent, v, chainhash.Hash{}, lane.Pack(2, 60), []uint32{b1.id})
 		})
 		requireCounted(t, ReaderBlockDuplicate, KindNotLoaded, lane.ViaNone, func() {
 			r.compareDuplicates(v, KindNotReady, f5.hash, f5.id, true)
@@ -820,12 +809,12 @@ func TestReaderCountsAForgottenForkHeightNotLoaded(t *testing.T) {
 		require.True(t, r.Snapshot().ForkAt(2))
 
 		requireCounted(t, ReaderValidator, KindNotLoaded, lane.ViaNone, func() {
-			r.CompareHeight(ReaderValidator, chainhash.Hash{}, lane.Pack(4, 5), false, true, 2)
+			r.CompareHeight(ReaderValidator, chainhash.Hash{}, lane.Pack(4, 5), true, 2)
 		})
 
 		// The winner's own position at that height still agrees, below the floor.
 		requireCounted(t, ReaderValidator, KindAgree, lane.ViaFloor, func() {
-			r.CompareHeight(ReaderValidator, chainhash.Hash{}, lane.Pack(4, 6), false, true, 2)
+			r.CompareHeight(ReaderValidator, chainhash.Hash{}, lane.Pack(4, 6), true, 2)
 		})
 	})
 }
@@ -854,7 +843,7 @@ func TestReaderJudgesALoadedForkHeightByItsRows(t *testing.T) {
 
 		// At height 2 the losers are one with rows and one without: the height cannot be judged.
 		requireCounted(t, ReaderValidator, KindNotLoaded, lane.ViaNone, func() {
-			r.CompareHeight(ReaderValidator, chainhash.Hash{}, lane.Pack(4, 7), false, true, 2)
+			r.CompareHeight(ReaderValidator, chainhash.Hash{}, lane.Pack(4, 7), true, 2)
 		})
 	})
 }
@@ -877,7 +866,7 @@ func TestReaderCountsAPositionNoLoadedBlockAtTheHeightTookTodayOnly(t *testing.T
 		require.False(t, r.Snapshot().ForkAt(2), "the loaded loser has rows")
 
 		requireCounted(t, ReaderValidator, KindTodayOnly, lane.ViaNone, func() {
-			r.CompareHeight(ReaderValidator, chainhash.Hash{}, lane.Pack(4, 7), false, true, 2)
+			r.CompareHeight(ReaderValidator, chainhash.Hash{}, lane.Pack(4, 7), true, 2)
 		})
 	})
 }
@@ -900,7 +889,7 @@ func TestReaderTreatsAFoldedBlockOutsideTheCallersWindowAsUnknown(t *testing.T) 
 		window := map[uint32]bool{b3.id: true, b4.id: true, b5.id: true}
 
 		requireCounted(t, ReaderSubtreeAlreadyMined, KindAgree, lane.ViaFloor, func() {
-			r.CompareBlocks(ReaderSubtreeAlreadyMined, r.ViewOfIDs(window), chainhash.Hash{}, lane.Pack(2, 50), false, []uint32{b1.id})
+			r.CompareBlocks(ReaderSubtreeAlreadyMined, r.ViewOfIDs(window), chainhash.Hash{}, lane.Pack(2, 50), []uint32{b1.id})
 		})
 	})
 }
@@ -922,7 +911,7 @@ func TestReaderCountsAForkMinedParentOnAnIDWindowAgree(t *testing.T) {
 		require.True(t, ok)
 
 		requireCounted(t, ReaderSubtreeAlreadyMined, KindAgree, lane.ViaNone, func() {
-			r.CompareBlocks(ReaderSubtreeAlreadyMined, r.ViewOfIDs(map[uint32]bool{b1.id: true, b2.id: true}), chainhash.Hash{}, lane.Pack(2, 70), false, []uint32{rival.id})
+			r.CompareBlocks(ReaderSubtreeAlreadyMined, r.ViewOfIDs(map[uint32]bool{b1.id: true, b2.id: true}), chainhash.Hash{}, lane.Pack(2, 70), []uint32{rival.id})
 		})
 	})
 }
@@ -1116,13 +1105,13 @@ func TestBlockParentsCountsNotReadyWhenTheChainCannotLoad(t *testing.T) {
 	before := answers(ReaderBlockParent, KindNotReady, lane.ViaNone)
 
 	bp := r.BlockParents(context.Background(), chainhash.Hash{9, 9})
-	bp.ObserveParent(chainhash.Hash{2}, lane.Pack(8, 9), false, []uint32{1})
+	bp.ObserveParent(chainhash.Hash{2}, lane.Pack(8, 9), []uint32{1})
 
 	require.Eventually(t, func() bool {
 		return answers(ReaderBlockParent, KindNotReady, lane.ViaNone) == before+1
 	}, 5*time.Second, 10*time.Millisecond)
 
-	bp.ObserveParent(chainhash.Hash{3}, lane.Pack(8, 9), false, []uint32{1})
+	bp.ObserveParent(chainhash.Hash{3}, lane.Pack(8, 9), []uint32{1})
 	require.Equal(t, before+2, answers(ReaderBlockParent, KindNotReady, lane.ViaNone))
 }
 
@@ -1210,13 +1199,13 @@ func TestReaderDoesNotCountANewBlockAboveTheTipAsOffChain(t *testing.T) {
 	r.ShadowDuplicates(context.Background(), b2.hash, b2.id, false) // loads b2 ahead of the follower
 
 	requireCounted(t, ReaderValidator, KindNotLoaded, lane.ViaNone, func() {
-		r.CompareHeight(ReaderValidator, chainhash.Hash{}, lane.Pack(4, 5), false, true, b2.height)
+		r.CompareHeight(ReaderValidator, chainhash.Hash{}, lane.Pack(4, 5), true, b2.height)
 	})
 
 	follow(t, r)
 
 	requireCounted(t, ReaderValidator, KindAgree, lane.ViaRow, func() {
-		r.CompareHeight(ReaderValidator, chainhash.Hash{}, lane.Pack(4, 5), false, true, b2.height)
+		r.CompareHeight(ReaderValidator, chainhash.Hash{}, lane.Pack(4, 5), true, b2.height)
 	})
 }
 
@@ -1257,7 +1246,7 @@ func TestBlockParentsHoldsUpToItsCapWhileTheChainLoads(t *testing.T) {
 	const held = 100_000 // the cap the design states, written out so a changed cap fails here
 
 	for i := 0; i <= held; i++ {
-		bp.ObserveParent(chainhash.Hash{2}, lane.Pack(8, 9), false, []uint32{b2.id})
+		bp.ObserveParent(chainhash.Hash{2}, lane.Pack(8, 9), []uint32{b2.id})
 	}
 
 	require.Equal(t, notReady+1, answers(ReaderBlockParent, KindNotReady, lane.ViaNone), "one past the cap counts not_ready")
@@ -1320,7 +1309,7 @@ func TestBlockParentsGivesUpOnItsOwnDeadline(t *testing.T) {
 	before := answers(ReaderBlockParent, KindNotReady, lane.ViaNone)
 
 	bp := r.BlockParents(context.Background(), b2.hash)
-	bp.ObserveParent(chainhash.Hash{2}, lane.Pack(8, 9), false, []uint32{b2.id})
+	bp.ObserveParent(chainhash.Hash{2}, lane.Pack(8, 9), []uint32{b2.id})
 
 	require.Eventually(t, func() bool {
 		return answers(ReaderBlockParent, KindNotReady, lane.ViaNone) == before+1
@@ -1514,7 +1503,7 @@ func TestReaderCountsNotReadyWhileItConnects(t *testing.T) {
 	require.Same(t, r, Current())
 
 	requireCounted(t, ReaderValidator, KindNotReady, lane.ViaNone, func() {
-		Current().CompareHeight(ReaderValidator, chainhash.Hash{}, lane.Pack(2, 7), false, true, b1.height)
+		Current().CompareHeight(ReaderValidator, chainhash.Hash{}, lane.Pack(2, 7), true, b1.height)
 	})
 
 	require.Eventually(t, func() bool { return attempts.Load() >= 2 }, 5*time.Second, 5*time.Millisecond, "a failed connect is retried")
@@ -1524,6 +1513,6 @@ func TestReaderCountsNotReadyWhileItConnects(t *testing.T) {
 	require.Eventually(t, func() bool { return r.Snapshot() != nil }, 5*time.Second, 10*time.Millisecond)
 
 	requireCounted(t, ReaderValidator, KindAgree, lane.ViaRow, func() {
-		Current().CompareHeight(ReaderValidator, chainhash.Hash{}, lane.Pack(2, 7), false, true, b1.height)
+		Current().CompareHeight(ReaderValidator, chainhash.Hash{}, lane.Pack(2, 7), true, b1.height)
 	})
 }

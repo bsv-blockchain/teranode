@@ -669,7 +669,7 @@ func (u *Server) blessMissing(ctx context.Context, blockHash chainhash.Hash, sub
 			u.fillLanePosition(ctx, tx.TxIDChainHash(), txMeta)
 		}
 
-		r.CompareBlocks(lanereader.ReaderSubtreeAlreadyMined, view, *tx.TxIDChainHash(), txMeta.LanePosition, txMeta.IsCoinbase, txMeta.BlockIDs)
+		r.CompareBlocks(lanereader.ReaderSubtreeAlreadyMined, view, *tx.TxIDChainHash(), txMeta.LanePosition, txMeta.BlockIDs)
 	}
 
 	// check whether this transaction was already mined on our chain by comparing the block ids

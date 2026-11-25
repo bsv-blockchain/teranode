@@ -89,7 +89,6 @@ func (s *Store) ParentOutputsForValidation(ctx context.Context, outpoints []utxo
 
 		answers[i].Status, answers[i].Height = parentStatus(data)
 		answers[i].LanePosition = data.LanePosition
-		answers[i].IsCoinbase = s.laneShadow && data.IsCoinbase
 		fromCoins = append(fromCoins, i)
 	}
 

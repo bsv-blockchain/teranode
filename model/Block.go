@@ -2657,12 +2657,12 @@ func getParentTxMetaBlockIDs(gCtx context.Context, txMetaStore utxo.Store, paren
 	readFields := []fields.FieldName{fields.BlockIDs}
 	if observer != nil {
 		// The lanes shadow of this check takes the parent's lane position from this same read.
-		readFields = append(readFields, fields.LanePosition, fields.IsCoinbase)
+		readFields = append(readFields, fields.LanePosition)
 	}
 
 	parentTxMeta, err := txMetaStore.Get(gCtx, &parentTxStruct.parentTxHash, readFields...)
 	if err == nil && observer != nil {
-		observer.ObserveParent(parentTxStruct.parentTxHash, parentTxMeta.LanePosition, parentTxMeta.IsCoinbase, parentTxMeta.BlockIDs)
+		observer.ObserveParent(parentTxStruct.parentTxHash, parentTxMeta.LanePosition, parentTxMeta.BlockIDs)
 	}
 
 	if err != nil {

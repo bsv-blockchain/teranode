@@ -63,11 +63,6 @@ const (
 	// chain took the position, such as one a reorg replaced: the store's height is the lowest it
 	// recorded, from any chain. Not a disagreement.
 	KindOffChain = "off_chain"
-	// KindCoinbase: a coinbase today says is mined and lanes says is not. In Phase 1 a coinbase takes
-	// an ordinary leased position when block assembly creates it, after its block's rows are
-	// committed, so no row ever lists it; the reserved coinbase lane is Phase 2. Not a
-	// disagreement. A coinbase a row does take is judged like any other transaction.
-	KindCoinbase = "coinbase"
 	// KindMinedPending: lanes says a row of the best block took the position and today says not
 	// mined, while today's mined write of that block has not finished: the block's rows commit
 	// with it, and today's mined state lands after, about 3 s for a block of 26,000 on mainnet. Not
@@ -76,17 +71,7 @@ const (
 	KindMinedPending = "mined_pending"
 )
 
-var kinds = []string{KindAgree, KindLanesOnly, KindTodayOnly, KindDifferentBlock, KindNoPosition, KindNoRows, KindNotLoaded, KindNotReady, KindOffChain, KindCoinbase, KindMinedPending}
-
-// coinbaseKind counts a coinbase that only today says is mined under KindCoinbase: no Phase 1 row
-// lists a coinbase.
-func coinbaseKind(kind string, coinbase bool) string {
-	if coinbase && kind == KindTodayOnly {
-		return KindCoinbase
-	}
-
-	return kind
-}
+var kinds = []string{KindAgree, KindLanesOnly, KindTodayOnly, KindDifferentBlock, KindNoPosition, KindNoRows, KindNotLoaded, KindNotReady, KindOffChain, KindMinedPending}
 
 // minedPendingKind counts a lanes_only answer from a row of the best block under KindMinedPending
 // while today's mined write of that block has not finished.
@@ -123,8 +108,7 @@ const lookupSampleEvery = 64
 
 // CompareHeight compares the lanes answer for a transaction on the main chain with today's answer
 // given as a height: mined at height, or not mined. The validator's parent read answers so.
-// coinbase is the record's coinbase flag (KindCoinbase).
-func (r *Reader) CompareHeight(reader string, hash chainhash.Hash, pos uint64, coinbase, todayMined bool, todayHeight uint32) {
+func (r *Reader) CompareHeight(reader string, hash chainhash.Hash, pos uint64, todayMined bool, todayHeight uint32) {
 	if r == nil {
 		return
 	}
@@ -143,7 +127,7 @@ func (r *Reader) CompareHeight(reader string, hash chainhash.Hash, pos uint64, c
 	}
 
 	a := r.lookup(s.Main(), pos)
-	kind := r.minedPendingKind(coinbaseKind(classifyHeight(s, pos, a, todayMined, todayHeight), coinbase), a)
+	kind := r.minedPendingKind(classifyHeight(s, pos, a, todayMined, todayHeight), a)
 	count(reader, kind, a.Via)
 
 	if isDisagreement(kind) {
@@ -200,13 +184,13 @@ func classifyHeight(s *lane.IndexSnapshot, pos uint64, a lane.Answer, todayMined
 
 // CompareBlocks compares the lanes answer for a transaction on chain v with today's answer given
 // as the record's mined block list: today's answer is the listed blocks on v, so both answers are
-// judged against the same chain. coinbase is the record's coinbase flag (KindCoinbase).
-func (r *Reader) CompareBlocks(reader string, v *lane.ChainView, hash chainhash.Hash, pos uint64, coinbase bool, todayBlockIDs []uint32) {
-	r.compareBlocks(reader, v, KindNotReady, hash, pos, coinbase, todayBlockIDs)
+// judged against the same chain.
+func (r *Reader) CompareBlocks(reader string, v *lane.ChainView, hash chainhash.Hash, pos uint64, todayBlockIDs []uint32) {
+	r.compareBlocks(reader, v, KindNotReady, hash, pos, todayBlockIDs)
 }
 
 // compareBlocks is CompareBlocks counting noView when v is nil.
-func (r *Reader) compareBlocks(reader string, v *lane.ChainView, noView string, hash chainhash.Hash, pos uint64, coinbase bool, todayBlockIDs []uint32) {
+func (r *Reader) compareBlocks(reader string, v *lane.ChainView, noView string, hash chainhash.Hash, pos uint64, todayBlockIDs []uint32) {
 	if r == nil {
 		return
 	}
@@ -224,7 +208,7 @@ func (r *Reader) compareBlocks(reader string, v *lane.ChainView, noView string, 
 	}
 
 	a := r.lookup(v, pos)
-	kind := r.minedPendingKind(coinbaseKind(classifyBlocks(v, a, todayBlockIDs), coinbase), a)
+	kind := r.minedPendingKind(classifyBlocks(v, a, todayBlockIDs), a)
 	count(reader, kind, a.Via)
 
 	if isDisagreement(kind) {

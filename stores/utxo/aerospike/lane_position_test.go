@@ -415,17 +415,6 @@ func TestParentLanePositionsOnAerospike(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, answers[0].Err)
 	require.Equal(t, parentPosition, answers[0].LanePosition, "the parent read gives the parent's position")
-	require.False(t, answers[0].IsCoinbase)
-
-	// A coinbase parent says so beside its position, for the lanes shadow to count it apart.
-	coinbase := laneParent(t, 9, 1)
-	_, err = store.Create(ctx, coinbase, 100, utxo.WithLanePosition(lane.Pack(7, 99)), utxo.WithSetCoinbase(true))
-	require.NoError(t, err)
-
-	answers, err = store.ParentOutputsForValidation(ctx, []utxo.Outpoint{{TxID: *coinbase.TxIDChainHash(), Vout: 0}})
-	require.NoError(t, err)
-	require.NoError(t, answers[0].Err)
-	require.True(t, answers[0].IsCoinbase)
 
 	child := laneChild(t, parent, 0)
 	md, err := store.Create(ctx, child, 101, utxo.WithLanePosition(childPosition), utxo.WithParentLanePositions([]uint64{parentPosition}))
