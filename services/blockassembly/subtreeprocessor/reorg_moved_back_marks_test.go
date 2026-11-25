@@ -1,7 +1,6 @@
 package subtreeprocessor
 
 import (
-	"math"
 	"runtime"
 	"testing"
 
@@ -101,35 +100,26 @@ func TestMovedBackMarks_MatchesGoMapOnRandomSets(t *testing.T) {
 
 // A Go map of 32-byte keys costs about 50 bytes an entry. The frozen set must stay near its 33.
 func TestMovedBackMarks_HoldsFewerBytesThanAGoMap(t *testing.T) {
+	// A heap measurement: in the unit run, other tests' goroutines and coverage counters allocate and
+	// free while it measures, so it runs with the heavy tests (make test-heavy), and under the mutants.
+	skipUnlessHeavyTests(t)
+
 	const n = 400_000
 
 	hashes := randHashes(n, 5)
 
-	// Goroutines an earlier test left running allocate and free while this measures, so it measures
-	// three times and keeps the least: what the structure holds is the floor. A reading that went
-	// down is someone else's garbage collected and is not counted.
 	heapAfter := func(build func() any) uint64 {
-		least := uint64(math.MaxUint64)
+		runtime.GC()
 
-		for range 3 {
-			runtime.GC()
+		var before, after runtime.MemStats
 
-			var before, after runtime.MemStats
+		runtime.ReadMemStats(&before)
+		keep := build()
+		runtime.GC()
+		runtime.ReadMemStats(&after)
+		runtime.KeepAlive(keep)
 
-			runtime.ReadMemStats(&before)
-			keep := build()
-			runtime.GC()
-			runtime.ReadMemStats(&after)
-			runtime.KeepAlive(keep)
-
-			if after.HeapAlloc >= before.HeapAlloc {
-				least = min(least, after.HeapAlloc-before.HeapAlloc)
-			}
-		}
-
-		require.NotEqual(t, uint64(math.MaxUint64), least, "no reading where the heap grew")
-
-		return least
+		return after.HeapAlloc - before.HeapAlloc
 	}
 
 	goMap := heapAfter(func() any {
