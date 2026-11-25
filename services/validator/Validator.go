@@ -318,8 +318,8 @@ type Validator struct {
 	//
 	// An entry is the median below one block, so it changes only when a reorg replaces that
 	// block; mtpIDs records which block, and loads repair entries a reorg replaced.
-	// Memory cost: ~4 MB per million blocks (one uint32 per block), negligible for any
-	// foreseeable chain length.
+	// Memory cost: ~8 MB per million blocks (a uint32 here and one in mtpIDs per block),
+	// negligible for any foreseeable chain length.
 	//
 	// mtpMu guards concurrent access to mtpStore and mtpLoadWindows.
 	//   - EnsureMTPLoaded serializes fetches with mtpLoadMu, leaving readers free
@@ -337,7 +337,8 @@ type Validator struct {
 	mtpMu     sync.RWMutex
 	mtpStore  []uint32
 	// mtpIDs[h] is the ID of the block at height h-1, the block whose ancestry mtpStore[h] is
-	// the median of (0 for h = 0). It lets a candidate check that the store holds its own
+	// the median of; 0 for h = 0 and for an entry above the tip, and also genesis's own ID in the
+	// SQL store, so entry 1 is 0 too. It lets a candidate check that the store holds its own
 	// chain (Options.CandidateBaseID) and lets a load tell where a reorg left the stored chain.
 	// Same length as mtpStore; guarded by mtpMu.
 	mtpIDs []uint32
@@ -3781,7 +3782,8 @@ func (v *Validator) loadMTPsLocked(ctx context.Context, needed, currentLen uint3
 		}
 
 		v.mtpMu.RLock()
-		// A 0 ID names no block (an entry above the tip), so two of them prove nothing.
+		// A 0 ID can be a placeholder for an entry above the tip, so two of them prove nothing;
+		// genesis is ID 0 too, but entry 1 then reaches back to 0, which joins.
 		joined := fromHeight == 0 || baseLen == 0 || (fetchedIDs[0] != 0 && v.mtpIDs[fromHeight] == fetchedIDs[0])
 		v.mtpMu.RUnlock()
 
@@ -3840,8 +3842,9 @@ const medianTimeSpan = uint32(blockchain.MedianTimeBlocks)
 
 // fetchMTPRange returns the MTPs for heights fromHeight to needed along the current chain's
 // block at needed-1 (or its tip, when that block does not exist yet), and for each the ID of
-// the block one below it, whose median the entry is (0 for height 0, and for an entry whose
-// block is above the tip). Values and IDs come from one walk by parent links from that block,
+// the block one below it, whose median the entry is (0 for height 0, for an entry whose block
+// is above the tip, and for genesis, whose ID in the SQL store is 0). Values and IDs come from
+// one walk by parent links from that block,
 // which reads no main-chain flag and no cache, so both describe one chain however the chain
 // moves meanwhile. An entry whose block is stored takes the block's stored median; the entry
 // just above the walked block, not stored yet, is the median of the 11 timestamps below it.
