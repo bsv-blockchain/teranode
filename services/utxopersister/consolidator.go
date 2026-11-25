@@ -284,14 +284,16 @@ func (c *consolidator) ConsolidateBlockRange(ctx context.Context, startBlock, en
 }
 
 // consumeDeletions fetches the per-block deletions reader, processes it, and
-// releases the read permit. ErrBlobNotFound is tolerated (matching the prior
-// behaviour) and means "no deletions for this block".
+// releases the read permit. A missing deletions ledger is an error, never "no
+// deletions": NewUTXOSet always creates the deletions file (header only, for a
+// block that spends nothing), and UTXOSet.Close finalises additions before
+// deletions. A missing ledger therefore means "not written yet" or "half
+// written". Treating it as zero spends would roll a block into the set with
+// every output it spent still present, and every later set would inherit that.
+// Propagating the error stalls the roll-up until the block persister finishes.
 func (c *consolidator) consumeDeletions(ctx context.Context, us *UTXOSet) error {
 	r, err := us.GetUTXODeletionsReader(ctx)
 	if err != nil {
-		if errors.Is(err, errors.ErrBlobNotFound) {
-			return nil
-		}
 		return err
 	}
 	defer r.Close()
@@ -299,8 +301,8 @@ func (c *consolidator) consumeDeletions(ctx context.Context, us *UTXOSet) error 
 }
 
 // consumeAdditions fetches the per-block additions reader, processes it, and
-// releases the read permit. Unlike deletions, a missing additions file is a
-// real error - every block written via NewUTXOSet creates one.
+// releases the read permit. A missing additions file is an error, as a missing
+// deletions file is: every block written via NewUTXOSet creates both.
 func (c *consolidator) consumeAdditions(ctx context.Context, us *UTXOSet) error {
 	r, err := us.GetUTXOAdditionsReader(ctx)
 	if err != nil {

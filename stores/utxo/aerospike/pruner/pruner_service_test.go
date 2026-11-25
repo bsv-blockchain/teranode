@@ -449,13 +449,11 @@ func TestDeleteAtHeight(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotNil(t, record)
 
-	// verify that the parent record was marked
+	// the pruner deletes only: the surviving parent is not written to
 	record, err = client.Get(nil, keyParent)
 	require.NoError(t, err)
 	assert.NotNil(t, record)
-	assert.Equal(t, map[interface{}]interface{}{
-		txID1.String(): true,
-	}, record.Bins[fields.DeletedChildren.String()])
+	assert.NotContains(t, record.Bins, fields.DeletedChildren.String(), "the pruner must not write a replay marker on the parent")
 
 	// Run prune synchronously for height 4
 	ctx4, cancel4 := context.WithTimeout(context.Background(), 30*time.Second)

@@ -26,5 +26,15 @@ data:
   # without a valid shared key, including in development.
   # Use a strong random value (32+ chars) and supply it to all services and CLI clients.
   # recommended settings to tweak based on your deployment
+  # Ingest guardrail pair - set together, never one without the other: the queue
+  # cap gives block assembly a memory ceiling and the Kafka pause makes the
+  # validator stop consuming before that ceiling starts refusing. A cap alone
+  # turns overload into refusals; a pause alone protects no memory. The number
+  # is a placeholder: bytes-per-item scales with input counts, so size it against
+  # the block-assembly pods' headroom - see the sizing notes under
+  # blockassembly_maxQueueItems in settings.conf. Where the validator is not
+  # deployed (the development fixture) the pause key lies dormant, harmlessly.
+  blockassembly_maxQueueItems: "2097152"
+  validator_kafkaBackpressureEnabled: "true"
   # KAFKA_PARTITIONS_HIGH: "512"
   # txMetaCacheMaxMB: "32768"

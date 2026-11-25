@@ -12,7 +12,8 @@ type LaneMigration string
 const (
 	// LaneMigrationOff takes no lease and stamps nothing.
 	LaneMigrationOff LaneMigration = "off"
-	// LaneMigrationShadow stamps a lane position on every new record; nothing reads it yet.
+	// LaneMigrationShadow stamps a lane position on every new record. Readers copy parent positions
+	// onto the child and into txmeta; nothing decides acceptance or pruning from one yet.
 	LaneMigrationShadow LaneMigration = "shadow"
 	// LaneMigrationRows switches readers to the lane rows. Not supported by this build.
 	LaneMigrationRows LaneMigration = "rows"
