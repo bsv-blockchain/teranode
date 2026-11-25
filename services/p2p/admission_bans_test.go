@@ -3,6 +3,7 @@ package p2p
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -109,19 +110,64 @@ func TestHandleBanEvent_RemoveLiftsAdmissionRule(t *testing.T) {
 	require.Equal(t, []string{"UnblockAddr 198.51.100.9"}, callsSince(client, n))
 }
 
-// An expired ban raises no event; the sweep's sync lifts its rule.
-func TestSyncAdmissionBans_ExpiryLiftsRule(t *testing.T) {
+// An expired ban raises no event; the sweep tick lifts its rule.
+func TestBanSweepTick_ExpiryLiftsRule(t *testing.T) {
 	s, _, client := newAdmissionTestServer(t)
 
 	require.NoError(t, s.banList.Add(context.Background(), "198.51.100.9", time.Now().Add(1500*time.Millisecond)))
-	s.syncAdmissionBans()
+	s.banSweepTick(context.Background())
 	require.Equal(t, []string{"BlockAddr 198.51.100.9"}, client.AdmissionCalls())
 
 	require.Eventually(t, func() bool {
-		s.syncAdmissionBans()
+		s.banSweepTick(context.Background())
 		return len(client.AdmissionCalls()) == 2
 	}, 5*time.Second, 50*time.Millisecond)
 	require.Equal(t, "UnblockAddr 198.51.100.9", client.AdmissionCalls()[1])
+}
+
+// The ticker runs the sweep with no ban event at all: a ban added straight to
+// the list, as another holder of the shared list would, reaches admission on
+// the next tick.
+func TestListenForBanEvents_TickerRunsTheSweep(t *testing.T) {
+	prev := banSweepInterval
+	banSweepInterval = 20 * time.Millisecond
+	t.Cleanup(func() { banSweepInterval = prev })
+
+	s, _, client := newAdmissionTestServer(t)
+	require.NoError(t, s.banList.Add(context.Background(), "198.51.100.9", time.Now().Add(time.Hour)))
+	require.Empty(t, client.AdmissionCalls())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+
+	go func() {
+		defer close(done)
+		s.listenForBanEvents(ctx)
+	}()
+
+	t.Cleanup(func() {
+		cancel()
+		<-done
+	})
+
+	require.Eventually(t, func() bool {
+		return slices.Contains(client.AdmissionCalls(), "BlockAddr 198.51.100.9")
+	}, 5*time.Second, 10*time.Millisecond)
+}
+
+// A peer registered and connected from an address that went on the list
+// without an event is dropped from the registry by the sweep tick.
+func TestBanSweepTick_DropsRegistryPeerOnBannedAddress(t *testing.T) {
+	s, reg, client := newAdmissionTestServer(t)
+	pid := mustNewPeerID(t)
+	reg.Register(&blockchain.PeerInfo{ID: pid.String()})
+	client.peers = []p2pMessageBus.PeerInfo{{ID: pid.String(), Addrs: []string{fmt.Sprintf("/ip4/198.51.100.9/tcp/9905/p2p/%s", pid)}}}
+
+	require.NoError(t, s.banList.Add(context.Background(), "198.51.100.9", time.Now().Add(time.Hour)))
+	require.Equal(t, 1, reg.Count())
+
+	s.banSweepTick(context.Background())
+	require.Equal(t, 0, reg.Count())
 }
 
 // Clear raises no event, so ClearBanned lifts every IP and subnet rule itself.
@@ -172,22 +218,23 @@ func TestResetReputation_LiftsNoAdmissionRule(t *testing.T) {
 	}
 }
 
-// A registry ban that lapses lifts the peer's admission block on the next
-// sync once the mirror has re-listed without it.
-func TestSyncAdmissionBans_RegistryBanLapseLiftsPeerBlock(t *testing.T) {
+// A registry ban that lapses raises no event. Once the mirror is due a
+// refresh, the sweep tick re-lists the registry and lifts the peer's
+// admission block.
+func TestBanSweepTick_RegistryBanLapseLiftsPeerBlock(t *testing.T) {
 	s, reg, client := newAdmissionTestServer(t)
 	banned := mustNewPeerID(t)
 	banPeerInRegistry(t, reg, banned)
 
 	s.primeBannedPeers()
-	s.syncAdmissionBans()
+	s.banSweepTick(context.Background())
 	require.Equal(t, []string{"BlockPeer " + banned.String()}, client.AdmissionCalls())
 
-	// The registry stops listing it.
-	_, gen := s.bannedPeers.state(time.Now())
-	require.True(t, s.bannedPeers.replace(nil, time.Now(), gen))
+	// The registry stops listing it, and the mirror comes due for a re-list.
+	reg.ClearBannedPeers()
+	s.bannedPeers.invalidate()
 
-	s.syncAdmissionBans()
+	s.banSweepTick(context.Background())
 	require.Equal(t, []string{"BlockPeer " + banned.String(), "UnblockPeer " + banned.String()}, client.AdmissionCalls())
 }
 
@@ -249,15 +296,18 @@ func TestOnPeerBanned_BlockFailureLoggedAndBanStillApplied(t *testing.T) {
 	require.Equal(t, 0, reg.Count(), "the peer is dropped at the application layer")
 	require.True(t, s.shouldSkipBannedPeer(pid.String(), "test"))
 
-	// The sweep retries both rules without logging them as errors again.
-	s.syncAdmissionBans()
+	// The next sweep tick retries both rules without logging them as errors
+	// again.
+	s.banSweepTick(context.Background())
 	require.Len(t, client.AdmissionCalls(), 4)
 	require.Len(t, admissionErrors(logger), 2)
 
-	// Once the bus accepts them they are applied and not retried.
+	// Once the bus accepts them the next tick applies them, and later ticks
+	// do not retry them.
 	client.blockErr = nil
-	s.syncAdmissionBans()
-	s.syncAdmissionBans()
+	s.banSweepTick(context.Background())
+	require.ElementsMatch(t, []string{"BlockAddr 198.51.100.9", "BlockPeer " + pid.String()}, client.AdmissionCalls()[4:])
+	s.banSweepTick(context.Background())
 	require.Len(t, client.AdmissionCalls(), 6)
 }
 
