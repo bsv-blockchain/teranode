@@ -56,6 +56,8 @@ func hideStateTable(t *testing.T, s *SQL) {
 // recordBestTipDrop never reads the state table: the lock is the only statement that can
 // fail. Each also has its own store, so no subtest leaves a block invalid for the next.
 func TestChainWriteLockFailureStopsEachWriter_PostgreSQL(t *testing.T) {
+	t.Parallel() // a database of its own on the shared server
+
 	ctx := context.Background()
 
 	t.Run("DeleteBlock", func(t *testing.T) {
@@ -115,6 +117,8 @@ func TestChainWriteLockFailureStopsEachWriter_PostgreSQL(t *testing.T) {
 // shared row cannot know whether a write landed after its snapshot, so it must not commit.
 // The error is not a serialization failure, so it is reported rather than retried.
 func TestChainWriteLockWalkCheckFailureFailsTheWalk_PostgreSQL(t *testing.T) {
+	t.Parallel() // a database of its own on the shared server
+
 	s := newPostgresChainWriteStore(t)
 
 	// A stale flag the walk would correct if it committed.
@@ -133,6 +137,8 @@ func TestChainWriteLockWalkCheckFailureFailsTheWalk_PostgreSQL(t *testing.T) {
 // failing every repair on a database where the row was removed by hand. It warns when it
 // does, because that warning is the only sign the cross-process check is off.
 func TestChainWriteLockWalkWithoutTheRow_PostgreSQL(t *testing.T) {
+	t.Parallel() // a database of its own on the shared server
+
 	s := newPostgresChainWriteStore(t)
 
 	_, err := s.db.Exec(`UPDATE blocks SET on_main_chain = false WHERE hash = $1`, block2.Hash().CloneBytes())
@@ -182,6 +188,8 @@ func (l *warnRecordingLogger) warnedAbout(substr string) bool {
 // would find no row while a write is creating it, so a failure to read or to create the
 // row is an error.
 func TestEnsureChainWriteRowReportsFailure_PostgreSQL(t *testing.T) {
+	t.Parallel() // a database of its own on the shared server
+
 	t.Run("read fails", func(t *testing.T) {
 		s := newPostgresChainWriteStore(t)
 
@@ -256,6 +264,8 @@ func openStoreOn(t *testing.T, storeURL *url.URL) *SQL {
 // the genesis StoreBlock creates it anyway; the case New covers is a database that already
 // holds its chain but has no row, such as one written before the row existed.
 func TestNewCreatesTheChainWriteRow_PostgreSQL(t *testing.T) {
+	t.Parallel() // a database of its own on the shared server
+
 	first, storeURL := openPostgresChainWriteStore(t)
 
 	_, err := first.db.Exec(`DELETE FROM state WHERE key = $1`, chainWriteStateKey)
@@ -273,6 +283,8 @@ func TestNewCreatesTheChainWriteRow_PostgreSQL(t *testing.T) {
 // write to end. The holder can be a writer queued behind a full on_main_chain walk, so
 // the wait could last as long as the walk.
 func TestNewDoesNotWaitOnAnOpenChainWrite_PostgreSQL(t *testing.T) {
+	t.Parallel() // a database of its own on the shared server
+
 	holder, storeURL := openPostgresChainWriteStore(t)
 
 	tx, err := holder.db.BeginTx(context.Background(), nil)
@@ -356,7 +368,7 @@ func waitForHeldBlocksWrite(t *testing.T, s *SQL) {
 
 	require.EventuallyWithT(t, func(c *assert.CollectT) {
 		var waiting int
-		if !assert.NoError(c, s.db.QueryRow(`SELECT COUNT(*) FROM pg_locks WHERE locktype = 'advisory' AND NOT granted`).Scan(&waiting)) {
+		if !assert.NoError(c, s.db.QueryRow(`SELECT COUNT(*) FROM pg_locks WHERE locktype = 'advisory' AND NOT granted AND database = (SELECT oid FROM pg_database WHERE datname = current_database())`).Scan(&waiting)) {
 			return
 		}
 
@@ -371,6 +383,8 @@ func waitForHeldBlocksWrite(t *testing.T, s *SQL) {
 // first write to blocks and held open, the way a writer queued behind a long walk is; a
 // walk run in that window must fail its check with 55P03 rather than commit.
 func TestChainWriteLockIsTakenBeforeTheWritersFlags_PostgreSQL(t *testing.T) {
+	t.Parallel() // a database of its own on the shared server
+
 	writers := []struct {
 		name                string
 		setup               func(t *testing.T, s *SQL)
@@ -434,7 +448,7 @@ func TestChainWriteLockIsTakenBeforeTheWritersFlags_PostgreSQL(t *testing.T) {
 				// The trigger must still hold the same attempt when the walk checks it.
 				require.Never(t, func() bool {
 					var waiting int
-					err := walker.db.QueryRow(`SELECT COUNT(*) FROM pg_locks WHERE locktype = 'advisory' AND NOT granted`).Scan(&waiting)
+					err := walker.db.QueryRow(`SELECT COUNT(*) FROM pg_locks WHERE locktype = 'advisory' AND NOT granted AND database = (SELECT oid FROM pg_database WHERE datname = current_database())`).Scan(&waiting)
 					return err != nil || waiting == 0
 				}, 2*forkLockTimeout, 10*time.Millisecond, "the test trigger must hold the fork attempt beyond its normal lock timeout")
 			}

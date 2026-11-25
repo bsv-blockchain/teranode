@@ -18,6 +18,8 @@ import (
 )
 
 func TestParentOutputsForValidationUtxoset(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	t.Run("contract", func(t *testing.T) {
 		s, _ := newUncheckpointedStore(t)
 		tests.ParentOutputsForValidation(t, s)
@@ -114,6 +116,8 @@ func utxoRowsOf(t *testing.T, s *Store, tx *bt.Tx) int {
 // An output created and spent inside one list is never a UTXO row, and its spend is in the
 // journal naming the child; an output nothing in the list spends is a UTXO row.
 func TestSpendAndCreateMultiNetsOutputsSpentInTheList(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newUncheckpointedStore(t)
 
 	const height = 700
@@ -266,6 +270,8 @@ func TestSpendAndCreateMultiNettedRepeatAfterACrash(t *testing.T) {
 // output is unspent, and from the spend journal once it is spent, including an output the list
 // netted.
 func TestParentOutputsForValidationWithoutABody(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newUncheckpointedStore(t)
 
 	const height = 900

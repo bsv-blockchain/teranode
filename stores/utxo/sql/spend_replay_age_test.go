@@ -73,6 +73,8 @@ func TestSpendRefusesAReplayOfAPrunedTransaction(t *testing.T) {
 // exists. D comes back two blocks later: the recorded spend is young, so the
 // retry is the ordinary idempotent match and succeeds without writing again.
 func TestSpendAcceptsAnHonestRetryTwoBlocksLater(t *testing.T) {
+	parallelPostgres(t)
+
 	forEachSpendPath(t, func(t *testing.T, ctx context.Context, store *Store) {
 		p := newTwoOutputParent(t, 21)
 		_, err := store.Create(ctx, p, 1000)
@@ -93,6 +95,8 @@ func TestSpendAcceptsAnHonestRetryTwoBlocksLater(t *testing.T) {
 // record exists, so it gets no replay error: the spender check keeps today's
 // answer for it.
 func TestSpendOfAnOldTransactionThatIsStillStoredIsNotAReplay(t *testing.T) {
+	parallelPostgres(t)
+
 	forEachSpendPath(t, func(t *testing.T, ctx context.Context, store *Store) {
 		p := newTwoOutputParent(t, 22)
 		_, err := store.Create(ctx, p, 1000)
@@ -111,6 +115,8 @@ func TestSpendOfAnOldTransactionThatIsStillStoredIsNotAReplay(t *testing.T) {
 // A block that applies a transaction already in the store, at the height it
 // was first applied at, is a young match.
 func TestSpendAtTheRecordedHeightIsNotAReplay(t *testing.T) {
+	parallelPostgres(t)
+
 	forEachSpendPath(t, func(t *testing.T, ctx context.Context, store *Store) {
 		p := newTwoOutputParent(t, 23)
 		_, err := store.Create(ctx, p, 1000)
@@ -159,6 +165,8 @@ func TestFailedReplayReversesItsFreshSpendAndKeepsTheHistoricalMatch(t *testing.
 // history. A spend left behind before the upgrade must not stall a block, so a
 // spender with no record is accepted as it was before heights were stored.
 func TestSpendAcceptsAnUnrecordedHeightWhenTheSpenderHasNoRecord(t *testing.T) {
+	parallelPostgres(t)
+
 	forEachSpendPath(t, func(t *testing.T, ctx context.Context, store *Store) {
 		p := newTwoOutputParent(t, 24)
 		_, err := store.Create(ctx, p, 1000)
@@ -178,6 +186,8 @@ func TestSpendAcceptsAnUnrecordedHeightWhenTheSpenderHasNoRecord(t *testing.T) {
 
 // The same unrecorded height with the spender stored is an ordinary match.
 func TestSpendAcceptsAnUnrecordedHeightWhenTheSpenderIsStored(t *testing.T) {
+	parallelPostgres(t)
+
 	forEachSpendPath(t, func(t *testing.T, ctx context.Context, store *Store) {
 		p := newTwoOutputParent(t, 25)
 		_, err := store.Create(ctx, p, 1000)
@@ -198,6 +208,8 @@ func TestSpendAcceptsAnUnrecordedHeightWhenTheSpenderIsStored(t *testing.T) {
 // With no retention nothing is ever pruned, so no match is history and an honest
 // retry a block after its failed attempt is not refused.
 func TestSpendAtZeroRetentionNeverTreatsAMatchAsAReplay(t *testing.T) {
+	parallelPostgres(t)
+
 	forEachSpendPath(t, func(t *testing.T, ctx context.Context, store *Store) {
 		store.settings.GlobalBlockHeightRetention = 0
 		store.settings.UtxoStore.BlockHeightRetentionAdjustment = 0

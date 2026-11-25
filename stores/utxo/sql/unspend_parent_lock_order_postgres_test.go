@@ -244,7 +244,7 @@ func TestUnspendRetriesAfterAPostgresDeadlock_Postgres(t *testing.T) {
 			for time.Now().Before(deadline) {
 				var waiting int
 
-				if err := store.db.QueryRowContext(ctx, "SELECT count(*) FROM pg_locks WHERE NOT granted").Scan(&waiting); err != nil {
+				if err := store.db.QueryRowContext(ctx, "SELECT count(*) FROM pg_locks l JOIN pg_stat_activity a ON a.pid = l.pid WHERE NOT l.granted AND a.datname = current_database()").Scan(&waiting); err != nil {
 					holderLockedA <- err
 
 					return
