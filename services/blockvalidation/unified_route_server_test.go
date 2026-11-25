@@ -119,6 +119,7 @@ func newUnifiedRouteServer(t *testing.T, name string) *unifiedRouteServer {
 
 	utxoStore, err := sql.New(ctx, logger, tSettings, utxoStoreURL)
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = utxoStore.Close(context.Background()) })
 	require.NoError(t, utxoStore.SetBlockHeight(1))
 
 	blockchainStore, err := blockchain_store.NewStore(logger, &url.URL{Scheme: "sqlitememory"}, tSettings)

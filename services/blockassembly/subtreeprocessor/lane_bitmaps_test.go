@@ -173,6 +173,59 @@ func TestRemovalFromTheOpenSubtreeLeavesItsPositionOut(t *testing.T) {
 	}
 }
 
+// A tx removed from the open subtree and added to it again keeps its position in the subtree's
+// bitmaps when it is sealed.
+func TestATxRemovedAndAddedAgainKeepsItsPosition(t *testing.T) {
+	for _, disk := range []bool{false, true} {
+		t.Run(fmt.Sprintf("disk=%t", disk), func(t *testing.T) {
+			stp, keeper := keptLanePoolProcessor(t, disk)
+
+			addPositioned(t, stp, 1, lane.Pack(6, 1))
+			addPositioned(t, stp, 2, lane.Pack(6, 2))
+
+			require.NoError(t, stp.removeTxFromSubtrees(context.Background(), lanePoolTxHash(1)))
+
+			addPositioned(t, stp, 1, lane.Pack(6, 1))
+			require.True(t, stp.laneFill.matches(stp.currentSubtree.Load()), "the record accounts for each member")
+
+			addPositioned(t, stp, 3, lane.Pack(6, 3))
+
+			require.Len(t, stp.chainedSubtrees, 1)
+			require.Equal(t, []uint64{lane.Pack(6, 1), lane.Pack(6, 2), lane.Pack(6, 3)}, keeper.positions(t, *stp.chainedSubtrees[0].RootHash()))
+		})
+	}
+}
+
+// Txs without a position removed from the open subtree leave the record's count of them, and one
+// added again counts once.
+func TestRemovedTxsWithoutAPositionLeaveTheCount(t *testing.T) {
+	for _, disk := range []bool{false, true} {
+		t.Run(fmt.Sprintf("disk=%t", disk), func(t *testing.T) {
+			stp, keeper := keptLanePoolProcessor(t, disk)
+
+			addPositioned(t, stp, 1, 0)
+			addPositioned(t, stp, 2, 0)
+
+			require.NoError(t, stp.removeTxFromSubtrees(context.Background(), lanePoolTxHash(1)))
+			require.NoError(t, stp.removeTxFromSubtrees(context.Background(), lanePoolTxHash(2)))
+
+			require.True(t, stp.laneFill.matches(stp.currentSubtree.Load()), "the record follows the open subtree's copy")
+			_, unpositioned := stp.laneFill.bitmaps(chainhash.Hash{})
+			require.Equal(t, 0, unpositioned, "both removals leave the count")
+
+			addPositioned(t, stp, 1, 0)
+			addPositioned(t, stp, 3, lane.Pack(6, 3))
+			addPositioned(t, stp, 4, lane.Pack(6, 4))
+
+			require.Len(t, stp.chainedSubtrees, 1)
+
+			root := *stp.chainedSubtrees[0].RootHash()
+			require.Equal(t, []uint64{lane.Pack(6, 3), lane.Pack(6, 4)}, keeper.positions(t, root))
+			require.Equal(t, 1, keeper.unpositioned[root])
+		})
+	}
+}
+
 // A tx removed from a chained subtree re-chains the subtrees from there, and the re-chained
 // subtrees' bitmaps leave its position out and keep everyone else's.
 func TestRemovalFromAChainedSubtreeRebuildsItsBitmaps(t *testing.T) {

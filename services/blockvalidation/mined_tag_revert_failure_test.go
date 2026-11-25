@@ -73,6 +73,7 @@ func newMinedTagHarness(t *testing.T, ctx context.Context, utxoStoreName string)
 
 	realUtxoStore, err := sql.New(ctx, logger, tSettings, utxoStoreURL)
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = realUtxoStore.Close(context.Background()) })
 
 	subtreeStore := blobmemory.New()
 	txStore := blobmemory.New()

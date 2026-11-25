@@ -72,6 +72,29 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
+  consensus-vectors:
+    name: consensus-vectors
+    # bitcoin-sv's script, transaction and signature hash vectors (test/consensus),
+    # which make test skips with the rest of test/. Seconds, no -race.
+    # arm64-safe: gobdk ships arm64 libraries.
+    runs-on: teranode-runner-8-core-arm
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: false
+
+      # Plain go test (no -race): module cache only.
+      - name: Restore Go caches
+        uses: ./.github/actions/go-cache
+        with:
+          build_cache: 'false'
+
+      - name: Run consensus vectors
+        run: make consensustest
+
   test-shard:
     name: test ${{ matrix.shard }}
     # make test is split so its slowest package, stores/utxo/aerospike (~15 min

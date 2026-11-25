@@ -744,6 +744,14 @@ func (s *Sorter) Drain(ctx context.Context, batchSize int, fn func(batch []*utxo
 		batchSize = 1
 	}
 
+	// The batch buffers below are allocated up front, so size them for what
+	// there is to emit. A batch size above Len() gives the same batches either
+	// way, but would allocate for records that do not exist (about 1.3 GB at
+	// the 10M blockassembly_unminedLoadingBatchSize default, even when empty).
+	if n := s.Len(); batchSize > n {
+		batchSize = max(n, 1)
+	}
+
 	srcs := make([]source, 0, len(s.runs)+1)
 
 	defer func() {

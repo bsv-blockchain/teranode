@@ -42,8 +42,11 @@ type laneFill struct {
 	unpositioned int
 	// added counts the members recorded, with a position or without one.
 	added int
-	// removed holds the positions of recorded members taken out of the subtree again.
-	removed []uint64
+	// removed counts, by position, the recorded members taken out of the subtree again and not
+	// added back since.
+	removed map[uint64]int
+	// removedCount is the sum of removed's counts.
+	removedCount int
 }
 
 // newLaneFill starts an empty record for st.
@@ -62,8 +65,16 @@ func (stp *SubtreeProcessor) startLaneFill(st *subtreepkg.Subtree) laneFill {
 	return newLaneFill(st)
 }
 
-// add records one member's position, 0 or another invalid one for none.
+// add records one member's position, 0 or another invalid one for none. A position taken out of
+// the subtree since it was recorded cancels that removal instead.
 func (f *laneFill) add(position uint64) {
+	if f.removedCount > 0 && f.removed[position] > 0 {
+		f.removed[position]--
+		f.removedCount--
+
+		return
+	}
+
 	f.added++
 
 	if !lane.Valid(position) {
@@ -109,12 +120,18 @@ func (stp *SubtreeProcessor) recordLaneMemberRemoved(from, to *subtreepkg.Subtre
 	}
 
 	stp.laneFill.subtree = to
-	stp.laneFill.removed = append(stp.laneFill.removed, position)
+
+	if stp.laneFill.removed == nil {
+		stp.laneFill.removed = map[uint64]int{}
+	}
+
+	stp.laneFill.removed[position]++
+	stp.laneFill.removedCount++
 }
 
 // matches reports whether the record holds a position, or none, for each member of st.
 func (f *laneFill) matches(st *subtreepkg.Subtree) bool {
-	return f.subtree == st && f.lanes != nil && f.added-len(f.removed) == laneMembers(st)
+	return f.subtree == st && f.lanes != nil && f.added-f.removedCount == laneMembers(st)
 }
 
 // laneMembers is the number of st's members, leaving out the coinbase placeholder.
@@ -141,9 +158,13 @@ func (f *laneFill) bitmaps(root chainhash.Hash) (lane.SubtreeBitmaps, int) {
 		bitmaps.Lanes[uint8(l)] = laneBitmap(positions) //nolint:gosec // l is at most MaxLane
 	}
 
-	for _, position := range f.removed {
+	for position, count := range f.removed {
+		if count == 0 {
+			continue
+		}
+
 		if !lane.Valid(position) {
-			unpositioned--
+			unpositioned -= count
 			continue
 		}
 
