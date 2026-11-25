@@ -355,13 +355,15 @@ func TestStore_IncrementSpentRecords(t *testing.T) {
 	})
 
 	t.Run("Increment spentExtraRecs - set DAH", func(t *testing.T) {
+		// Clean up the database
+		resetFixtures(t)
+
 		txID := fx.tx.TxIDChainHash()
 
 		key, aErr := aerospike.NewKey(store.GetNamespace(), store.GetName(), txID.CloneBytes())
 		require.NoError(t, aErr)
 
-		// Clean up the database
-		resetFixtures(t)
+		require.Equal(t, fx.tx.TxIDChainHash().CloneBytes(), key.Value().GetObject())
 
 		_, err := store.Create(ctx, fx.tx, 101)
 		require.NoError(t, err)
@@ -423,13 +425,15 @@ func TestStore_IncrementSpentRecords(t *testing.T) {
 	})
 
 	t.Run("Increment totalExtraRecs - multi", func(t *testing.T) {
+		// Clean up the database
+		resetFixtures(t)
+
 		txID := fx.tx.TxIDChainHash()
 
 		key, aErr := aerospike.NewKey(store.GetNamespace(), store.GetName(), txID.CloneBytes())
 		require.NoError(t, aErr)
 
-		// Clean up the database
-		resetFixtures(t)
+		require.Equal(t, fx.tx.TxIDChainHash().CloneBytes(), key.Value().GetObject())
 
 		_, err := store.Create(ctx, fx.tx, 101)
 		require.NoError(t, err)
