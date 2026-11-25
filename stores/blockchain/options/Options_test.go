@@ -3,6 +3,7 @@ package options
 import (
 	"testing"
 
+	"github.com/bsv-blockchain/teranode/util/lane"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -657,4 +658,13 @@ func BenchmarkOptionCreation(b *testing.B) {
 			_ = WithID(12345)
 		}
 	})
+}
+
+// WithLaneMapRows(nil), as at utxostore_laneMigration off, stores no rows; rows given are kept.
+func TestWithLaneMapRows(t *testing.T) {
+	require.Nil(t, ProcessStoreBlockOptions(WithLaneMapRows(nil)).LaneMapRows)
+	require.Nil(t, ProcessStoreBlockOptions().LaneMapRows)
+
+	rows := []lane.MapRow{{Lane: 7, First: 1, Last: 1, Tag: lane.RowTagRange}}
+	require.Equal(t, rows, ProcessStoreBlockOptions(WithLaneMapRows(rows)).LaneMapRows)
 }

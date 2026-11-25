@@ -160,7 +160,11 @@ func (s *HTTPBlobServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	opts := options.QueryToFileOptions(r.URL.Query())
+	opts, err := options.QueryToFileOptions(r.URL.Query())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 
 	switch r.Method {
 	case http.MethodGet:

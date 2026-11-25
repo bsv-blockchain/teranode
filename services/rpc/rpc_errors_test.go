@@ -314,7 +314,7 @@ func TestHandleFreeze_StoreErrorTextStaysOffTheWire(t *testing.T) {
 	}
 
 	_, handlerErr := handleFreeze(context.Background(), s,
-		&bsvjson.FreezeCmd{TxID: strings.Repeat("ab", 32), Vout: 0}, nil)
+		&bsvjson.FreezeCmd{TxID: strings.Repeat("ab", 32), Vout: 0, UTXOHash: strings.Repeat("cd", 32)}, nil)
 	require.Error(t, handlerErr)
 
 	reply, err := s.createMarshalledReply(1, nil, handlerErr)

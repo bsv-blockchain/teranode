@@ -85,6 +85,16 @@ func TestPrunerClearsParentRefsOfReapedConflictingLoser(t *testing.T) {
 			if defensive {
 				require.Nil(t, after.SpendingData, "a surviving parent must not name the reaped loser as its spender")
 				require.Equal(t, 0, countChildRefs(), "a surviving parent must not list the reaped loser as a conflicting child")
+
+				// A height left behind would be read as the next spend's when that spend writes none
+				// (an older build's spend, or Create inserting spending_data), and could make it
+				// look like history.
+				var spendingHeight sql.NullInt64
+
+				require.NoError(t, store.db.QueryRowContext(ctx, `
+					SELECT spending_height FROM outputs
+					WHERE transaction_id = (SELECT id FROM transactions WHERE hash = $1) AND idx = 0`, parent.TxIDChainHash()[:]).Scan(&spendingHeight))
+				require.False(t, spendingHeight.Valid, "the reap must clear the height of the spend it removes")
 			} else {
 				require.NotNil(t, after.SpendingData, "default mode keeps the existing behaviour")
 			}

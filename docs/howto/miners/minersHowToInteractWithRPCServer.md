@@ -177,21 +177,23 @@ The Teranode RPC server provides a JSON-RPC interface for interacting with the n
       ```
 
 4. `freeze`: Freezes a specific UTXO, preventing it from being spent
-    - Parameters:
+    - Parameters (positional, in this order):
 
         - `txid` (string, required): The transaction ID of the UTXO
         - `vout` (numeric, required): The output index
+        - `utxohash` (string, required): The UTXO commitment of the output, as a 64-character hex hash
 
-    - Returns: Boolean `true` if successful
+    - Returns: `null` on success; an error if hash parsing or the store operation fails
     - Note: Frozen UTXOs remain frozen until explicitly unfrozen
 
 5. `unfreeze`: Unfreezes a previously frozen UTXO, allowing it to be spent
-    - Parameters:
+    - Parameters (positional, in this order):
 
         - `txid` (string, required): The transaction ID of the frozen UTXO
         - `vout` (numeric, required): The output index
+        - `utxohash` (string, required): The UTXO commitment of the output, as a 64-character hex hash
 
-    - Returns: Boolean `true` if successful
+    - Returns: `null` on success; an error if hash parsing or the store operation fails
 
 6. `reassign`: Replaces a frozen UTXO's commitment using its outpoint and the old and new hashes
     - **Known regression:** do not reassign to a different owner. A successful result can leave the output unspendable by both owners, even after maturity. See the [reassignment limitation](../../topics/services/alert.md#24-utxo-reassignment) and [issue 1725](https://github.com/bsv-blockchain/teranode/issues/1725).

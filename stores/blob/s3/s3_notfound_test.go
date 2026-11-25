@@ -263,8 +263,13 @@ func TestS3_ErrorMessagesRenderTheObjectKey(t *testing.T) {
 
 	key := []byte("render-me")
 
-	renderedKey := func(s3Store *S3) string {
-		return aws.ToString(s3Store.getObjectKey(key, fileformat.FileTypeTx, s3Store.options))
+	renderedKey := func(t *testing.T, s3Store *S3) string {
+		t.Helper()
+
+		objectKey, err := s3Store.getObjectKey(key, fileformat.FileTypeTx, s3Store.options)
+		require.NoError(t, err)
+
+		return aws.ToString(objectKey)
 	}
 
 	t.Run("SetFromReader on an existing object", func(t *testing.T) {
@@ -276,7 +281,7 @@ func TestS3_ErrorMessagesRenderTheObjectKey(t *testing.T) {
 
 		require.Error(t, err)
 		require.NotContains(t, err.Error(), badRender, "the object key must render as text")
-		require.Contains(t, err.Error(), renderedKey(s3Store))
+		require.Contains(t, err.Error(), renderedKey(t, s3Store))
 	})
 
 	t.Run("SetFromReader when the upload fails", func(t *testing.T) {
@@ -288,7 +293,7 @@ func TestS3_ErrorMessagesRenderTheObjectKey(t *testing.T) {
 
 		require.Error(t, err)
 		require.NotContains(t, err.Error(), badRender)
-		require.Contains(t, err.Error(), renderedKey(s3Store))
+		require.Contains(t, err.Error(), renderedKey(t, s3Store))
 	})
 
 	t.Run("Set on an existing object", func(t *testing.T) {
@@ -299,7 +304,7 @@ func TestS3_ErrorMessagesRenderTheObjectKey(t *testing.T) {
 
 		require.Error(t, err)
 		require.NotContains(t, err.Error(), badRender)
-		require.Contains(t, err.Error(), renderedKey(s3Store))
+		require.Contains(t, err.Error(), renderedKey(t, s3Store))
 	})
 
 	t.Run("Set when the upload fails", func(t *testing.T) {
@@ -310,7 +315,7 @@ func TestS3_ErrorMessagesRenderTheObjectKey(t *testing.T) {
 
 		require.Error(t, err)
 		require.NotContains(t, err.Error(), badRender)
-		require.Contains(t, err.Error(), renderedKey(s3Store))
+		require.Contains(t, err.Error(), renderedKey(t, s3Store))
 	})
 
 	t.Run("Del when the delete fails", func(t *testing.T) {
@@ -321,7 +326,7 @@ func TestS3_ErrorMessagesRenderTheObjectKey(t *testing.T) {
 
 		require.Error(t, err)
 		require.NotContains(t, err.Error(), badRender)
-		require.Contains(t, err.Error(), renderedKey(s3Store))
+		require.Contains(t, err.Error(), renderedKey(t, s3Store))
 	})
 }
 
@@ -341,9 +346,12 @@ func TestS3_MalformedStoredObjectIsAStorageFault(t *testing.T) {
 	// storeRaw puts bytes under the key with no valid fileformat header.
 	storeRaw := func(t *testing.T, mock *mockS3Client, s3Store *S3, raw []byte) {
 		t.Helper()
-		_, err := mock.PutObject(context.Background(), &s3.PutObjectInput{
+		objectKey, err := s3Store.getObjectKey(key, fileformat.FileTypeTx, s3Store.options)
+		require.NoError(t, err)
+
+		_, err = mock.PutObject(context.Background(), &s3.PutObjectInput{
 			Bucket: aws.String("test-bucket"),
-			Key:    s3Store.getObjectKey(key, fileformat.FileTypeTx, s3Store.options),
+			Key:    objectKey,
 			Body:   bytes.NewReader(raw),
 		})
 		require.NoError(t, err)

@@ -1,5 +1,6 @@
 # Minimum statement coverage for the consensus-critical packages, checked by
-# cmd/coveragegate on the coverage.out that `make test` writes in the PR test job.
+# cmd/coveragegate in the PR `test` job, on the coverage.out it merges from the
+# `make test` shards.
 #
 # Each minimum is the coverage these packages had in CI on 2026-10-18, rounded
 # down to a whole percent, so coverage can rise but not fall. Raise a minimum when
