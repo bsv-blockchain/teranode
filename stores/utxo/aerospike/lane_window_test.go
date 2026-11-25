@@ -22,7 +22,8 @@ func TestReadLaneWindowFiltersOnLastUpdate(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings(t)
 	tSettings.UtxoStore.LaneMigration = settings.LaneMigrationShadow
 
-	_, store, _, deferFn := initAerospike(t, tSettings, ulogger.NewErrorTestLogger(t))
+	// A server of its own: the window read scans the whole set.
+	_, store, _, deferFn := initAerospikeOwnServer(t, tSettings, ulogger.NewErrorTestLogger(t))
 	t.Cleanup(deferFn)
 
 	untouched := laneParent(t, 11, 2)
@@ -113,7 +114,8 @@ func TestReadLaneWindowReturnsOnCancel(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings(t)
 	tSettings.UtxoStore.LaneMigration = settings.LaneMigrationShadow
 
-	_, store, _, deferFn := initAerospike(t, tSettings, ulogger.NewErrorTestLogger(t))
+	// A server of its own: the window read scans the whole set.
+	_, store, _, deferFn := initAerospikeOwnServer(t, tSettings, ulogger.NewErrorTestLogger(t))
 	t.Cleanup(deferFn)
 
 	// Batches of four, so the read has many to hand over after the cancel.
