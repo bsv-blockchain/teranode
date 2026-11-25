@@ -15,6 +15,8 @@ import (
 // The pruner provider is still found by type assertion in services/pruner and the wrapper does
 // not forward GetPrunerService here; the separate PR stu/logger-forward-pruner-service covers it.
 func TestLoggingWrapperOffersTheStamp(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	wrapped := storelogger.New(ctx, ulogger.TestLogger{}, s)

@@ -426,6 +426,11 @@ func (s *Store) dropSpendJournalPartitionsBelow(ctx context.Context, height uint
 	// spend made after the read is journaled at its own height, above every retiring leaf.
 	var carry *copyForwardSet
 
+	// At utxostore_laneMigration shadow the lane rule judges every row of each retiring leaf beside
+	// today's carry (lane_prune.go); nil at off.
+	var lanes *laneJournalJudge
+	defer func() { lanes.done() }()
+
 	for _, l := range leaves {
 		if l.leaf >= cutoff {
 			continue
@@ -443,7 +448,11 @@ func (s *Store) dropSpendJournalPartitionsBelow(ctx context.Context, height uint
 				}
 
 				carry = c
+				lanes = s.newLaneJournalJudge(carry, retiringJournalLeaves(leaves, cutoff))
 			}
+
+			// Before the copy-forward moves the kept rows out of the leaf.
+			lanes.judgeLeaf(ctx, l.leaf)
 
 			if _, err := s.copyForwardFrom(ctx, l.leaf, keepFrom, carry); err != nil {
 				return dropped, err
@@ -646,6 +655,9 @@ const copyForwardBatch = 10_000
 type copyForwardSet struct {
 	ukeys, parents, spenders [][]byte
 	seen                     map[string]struct{}
+	// unmined is how many leading entries are spends of waiting transactions; the rest are spends
+	// of recently mined ones, carried for a reorg.
+	unmined int
 }
 
 // collectSpenders runs stmt, whose rows are a spender's txid and its packed inputs, and adds
@@ -721,6 +733,8 @@ func (s *Store) collectCopyForward(ctx context.Context, keepFrom uint32) (*copyF
 	if err := s.collectSpenders(ctx, c, "unmined", unminedInpointsSQL); err != nil {
 		return nil, err
 	}
+
+	c.unmined = len(c.ukeys)
 
 	// A block at or below the highest checkpoint is never un-mined (unMine refuses it), so the
 	// read starts above it. During a sync below the checkpoint it reads no partition at all.

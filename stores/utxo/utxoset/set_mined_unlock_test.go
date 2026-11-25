@@ -18,6 +18,8 @@ import (
 // only the unmined marker, so the transaction left unmined recovery, which is what would have
 // unlocked it, and every child spending it kept getting TX_LOCKED.
 func TestMiningReleasesTheLockSoChildrenCanSpend(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	for _, onLongestChain := range []bool{true, false} {
 		name := "longest chain"
 		if !onLongestChain {
@@ -58,6 +60,8 @@ func TestMiningReleasesTheLockSoChildrenCanSpend(t *testing.T) {
 // through SetMinedMulti. The lock lives on the containment row and the UTXOs only, and the mine
 // releases it there too, as the aerospike UDF does for a record left locked by quick validation.
 func TestMiningReleasesTheLockOfABlockPathCreateWithNoIdentityRow(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	const height = 700_100

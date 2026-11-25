@@ -51,6 +51,8 @@ func TestSortSpendUpdateRows(t *testing.T) {
 // sort prevents deadlocks: it passes either way, and the sort's effect shows
 // only in the "[Spend] deadlock detected" retry warnings.
 func TestSpendBatchesInOppositeOrderBothComplete(t *testing.T) {
+	parallelPostgres(t)
+
 	if testing.Short() {
 		t.Skip("skipping Postgres integration test in short mode")
 	}

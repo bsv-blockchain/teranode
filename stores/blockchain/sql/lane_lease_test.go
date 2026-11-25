@@ -104,6 +104,8 @@ func ageLeases(t *testing.T, s *SQL, d time.Duration) {
 }
 
 func TestOpenLaneLeaseGrantsTheMinimumOnAFreshLane(t *testing.T) {
+	t.Parallel() // a database of its own on the shared server
+
 	runLaneHandoutTests(t, "fresh lane", func(t *testing.T, s *SQL) {
 		id, g, _, err := s.OpenLaneLease(t.Context(), leaseOpen("a"))
 		require.NoError(t, err)
@@ -116,6 +118,8 @@ func TestOpenLaneLeaseGrantsTheMinimumOnAFreshLane(t *testing.T) {
 }
 
 func TestOpenLaneLeaseStartsAboveTheOldRanges(t *testing.T) {
+	t.Parallel() // a database of its own on the shared server
+
 	runLaneHandoutTests(t, "old ranges", func(t *testing.T, s *SQL) {
 		base := time.Date(2026, 11, 7, 0, 0, 0, 0, time.UTC)
 
@@ -150,6 +154,8 @@ func TestOpenLaneLeaseStartsAboveTheOldRanges(t *testing.T) {
 }
 
 func TestOpenLaneLeaseNeverGrantsLanes254And255(t *testing.T) {
+	t.Parallel() // a database of its own on the shared server
+
 	runLaneHandoutTests(t, "254 and 255", func(t *testing.T, s *SQL) {
 		for i := 0; i < 254; i++ {
 			_, g, _, err := s.OpenLaneLease(t.Context(), leaseOpen("a"))
@@ -165,6 +171,8 @@ func TestOpenLaneLeaseNeverGrantsLanes254And255(t *testing.T) {
 }
 
 func TestRenewLaneLeaseSizesTheGrantByRate(t *testing.T) {
+	t.Parallel() // a database of its own on the shared server
+
 	runLaneHandoutTests(t, "rate", func(t *testing.T, s *SQL) {
 		id, g, _, err := s.OpenLaneLease(t.Context(), leaseOpen("a"))
 		require.NoError(t, err)
@@ -189,6 +197,8 @@ func TestRenewLaneLeaseSizesTheGrantByRate(t *testing.T) {
 }
 
 func TestRenewLaneLeaseWithoutAGrantWritesNoHandoutRow(t *testing.T) {
+	t.Parallel() // a database of its own on the shared server
+
 	runLaneHandoutTests(t, "no grant", func(t *testing.T, s *SQL) {
 		id, g, _, err := s.OpenLaneLease(t.Context(), leaseOpen("a"))
 		require.NoError(t, err)
@@ -205,6 +215,8 @@ func TestRenewLaneLeaseWithoutAGrantWritesNoHandoutRow(t *testing.T) {
 }
 
 func TestRenewLaneLeaseRecordsTheSettlesPairOnTheNextHandoutRow(t *testing.T) {
+	t.Parallel() // a database of its own on the shared server
+
 	runLaneHandoutTests(t, "settles", func(t *testing.T, s *SQL) {
 		id, g, _, err := s.OpenLaneLease(t.Context(), leaseOpen("a"))
 		require.NoError(t, err)
@@ -234,6 +246,8 @@ func TestRenewLaneLeaseRecordsTheSettlesPairOnTheNextHandoutRow(t *testing.T) {
 }
 
 func TestSweepRecordsTheNewestHandoutOnALapsedClose(t *testing.T) {
+	t.Parallel() // a database of its own on the shared server
+
 	runLaneHandoutTests(t, "lapsed", func(t *testing.T, s *SQL) {
 		id, g, _, err := s.OpenLaneLease(t.Context(), leaseOpen("a"))
 		require.NoError(t, err)
@@ -274,6 +288,8 @@ func TestSweepRecordsTheNewestHandoutOnALapsedClose(t *testing.T) {
 // An open closes stale leases before it chooses a lane, and reports how many, so the service can
 // count them with the sweep's lapsed closes.
 func TestOpenReportsTheStaleLeasesItCloses(t *testing.T) {
+	t.Parallel() // a database of its own on the shared server
+
 	runLaneHandoutTests(t, "open-lapsed", func(t *testing.T, s *SQL) {
 		for _, holder := range []string{"a", "b"} {
 			_, _, _, err := s.OpenLaneLease(t.Context(), leaseOpen(holder))
@@ -337,6 +353,8 @@ func TestOpenLaneLeaseRetryAfterALostCommitTakesANewID(t *testing.T) {
 }
 
 func TestRenewAndReleaseOfAClosedLeaseAreRefused(t *testing.T) {
+	t.Parallel() // a database of its own on the shared server
+
 	runLaneHandoutTests(t, "closed", func(t *testing.T, s *SQL) {
 		id, g, _, err := s.OpenLaneLease(t.Context(), leaseOpen("a"))
 		require.NoError(t, err)
@@ -368,6 +386,8 @@ func TestRenewAndReleaseOfAClosedLeaseAreRefused(t *testing.T) {
 }
 
 func TestReleaseAndSweepRaceWriteOneCloseRow(t *testing.T) {
+	t.Parallel() // a database of its own on the shared server
+
 	runLaneHandoutTests(t, "race", func(t *testing.T, s *SQL) {
 		for i := 0; i < 50; i++ {
 			id, g, _, err := s.OpenLaneLease(t.Context(), leaseOpen("a"))
@@ -417,6 +437,8 @@ func TestReleaseAndSweepRaceWriteOneCloseRow(t *testing.T) {
 // TestTwoLeasesOnOneLaneNeverSharePosition is the end-state test of the store: leases open, take
 // grants, release or lapse and lanes pass between them, and no two hand-outs in a lane ever overlap.
 func TestTwoLeasesOnOneLaneNeverSharePosition(t *testing.T) {
+	t.Parallel() // a database of its own on the shared server
+
 	runLaneHandoutTests(t, "end state", func(t *testing.T, s *SQL) {
 		const (
 			workers = 8
@@ -566,6 +588,8 @@ func TestTwoLeasesOnOneLaneNeverSharePosition(t *testing.T) {
 }
 
 func TestSweepClosesOnlyLeasesPastTheCloseTime(t *testing.T) {
+	t.Parallel() // a database of its own on the shared server
+
 	runLaneHandoutTests(t, "close time", func(t *testing.T, s *SQL) {
 		for i := 0; i < 2; i++ {
 			_, _, _, err := s.OpenLaneLease(t.Context(), leaseOpen("old"))
@@ -590,6 +614,8 @@ func TestSweepClosesOnlyLeasesPastTheCloseTime(t *testing.T) {
 }
 
 func TestLaneLeaseDDLIsANoOpOnACurrentSchema(t *testing.T) {
+	t.Parallel() // a database of its own on the shared server
+
 	if testing.Short() {
 		t.Skip("skipping postgres-backed test in -short mode")
 	}
@@ -626,18 +652,19 @@ func TestLaneLeaseDDLIsANoOpOnACurrentSchema(t *testing.T) {
 	}
 
 	// With everything in place, a role without CREATE runs no DDL at all.
+	role := testRoleName("lease_no_ddl", dbURL)
 	for _, stmt := range []string{
-		`CREATE ROLE lease_no_ddl LOGIN PASSWORD 'lease_no_ddl'`,
+		"CREATE ROLE " + role + " LOGIN PASSWORD '" + role + "'",
 		`REVOKE CREATE ON SCHEMA public FROM PUBLIC`,
-		`GRANT USAGE ON SCHEMA public TO lease_no_ddl`,
-		`GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO lease_no_ddl`,
+		"GRANT USAGE ON SCHEMA public TO " + role,
+		"GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO " + role,
 	} {
 		_, err = db.Exec(stmt)
 		require.NoError(t, err, stmt)
 	}
 
 	nodeURL := *dbURL
-	nodeURL.User = url.UserPassword("lease_no_ddl", "lease_no_ddl")
+	nodeURL.User = url.UserPassword(role, role)
 
 	nodeDB, err := usql.Open("postgres", nodeURL.String())
 	require.NoError(t, err)
@@ -652,6 +679,8 @@ func TestLaneLeaseDDLIsANoOpOnACurrentSchema(t *testing.T) {
 // An exhausted lane, one whose last hand-out reached the last position, is never chosen, even when it
 // is the lane closed longest ago.
 func TestOpenLaneLeaseSkipsAnExhaustedLane(t *testing.T) {
+	t.Parallel() // a database of its own on the shared server
+
 	runLaneHandoutTests(t, "exhausted", func(t *testing.T, s *SQL) {
 		id, g, _, err := s.OpenLaneLease(t.Context(), leaseOpen("a"))
 		require.NoError(t, err)
@@ -694,6 +723,8 @@ func TestOpenLaneLeaseSkipsAnExhaustedLane(t *testing.T) {
 // A lane with no lease row can be exhausted by hand-outs from before the lease. However long ago
 // its last hand-out, an open skips it.
 func TestOpenLaneLeaseSkipsAnExhaustedLaneWithNoLease(t *testing.T) {
+	t.Parallel() // a database of its own on the shared server
+
 	runLaneHandoutTests(t, "exhausted without lease", func(t *testing.T, s *SQL) {
 		_, err := s.db.ExecContext(t.Context(),
 			`INSERT INTO lane_handout (lane, first, last, holder, height, handed_at) VALUES (0, 1, $1, 'old', 1, $2)`,
@@ -725,6 +756,8 @@ func useUpLanesFrom(t *testing.T, s *SQL, first int) {
 }
 
 func TestRenewAndReleaseOfAnOldLeaseLeaveTheLaneNewLeaseAlone(t *testing.T) {
+	t.Parallel() // a database of its own on the shared server
+
 	runLaneHandoutTests(t, "old lease on reused lane", func(t *testing.T, s *SQL) {
 		oldID, oldGrant, _, err := s.OpenLaneLease(t.Context(), leaseOpen("old"))
 		require.NoError(t, err)
@@ -766,6 +799,8 @@ func TestRenewAndReleaseOfAnOldLeaseLeaveTheLaneNewLeaseAlone(t *testing.T) {
 }
 
 func TestOpenLaneLeaseTakesTheLaneClosedLongestAgo(t *testing.T) {
+	t.Parallel() // a database of its own on the shared server
+
 	runLaneHandoutTests(t, "closed longest ago", func(t *testing.T, s *SQL) {
 		ids := make([]lane.LeaseID, 3)
 		grants := make([]lane.Grant, 3)
@@ -1105,6 +1140,8 @@ func (m *leaseModel) prefill(t *testing.T, rng *rand.Rand, free int) {
 // rules, and then the invariants. Odd seeds leave only a few lanes usable, so lanes pass from one
 // lease to the next while the old holder still renews and releases.
 func TestLaneLeaseStoreKeepsItsInvariants(t *testing.T) {
+	t.Parallel() // a database of its own on the shared server
+
 	runLaneHandoutTests(t, "invariants", func(t *testing.T, s *SQL) {
 		for seed := uint64(1); seed <= 6; seed++ {
 			for _, table := range []string{"lane_close", "lane_handout", "lane_lease"} {
@@ -1314,6 +1351,8 @@ func TestGrantSize(t *testing.T) {
 // An open asked for a first grant above settings.MaxLaneGrant gets MaxLaneGrant, so a misconfigured
 // blockchain_laneGrantMin cannot use up a lane on its first grant.
 func TestOpenLaneLeaseCapsTheFirstGrant(t *testing.T) {
+	t.Parallel() // a database of its own on the shared server
+
 	runLaneHandoutTests(t, "first grant cap", func(t *testing.T, s *SQL) {
 		req := leaseOpen("a")
 		req.GrantMin = lane.MaxPosition
@@ -1330,6 +1369,8 @@ func TestOpenLaneLeaseCapsTheFirstGrant(t *testing.T) {
 // sweep, and both go when the lock is let go. SQLite runs every lease call under one mutex, so
 // there the two cannot overlap at all.
 func TestARenewalThatGetsTheRowFirstKeepsItsLease(t *testing.T) {
+	t.Parallel() // a database of its own on the shared server
+
 	runLaneHandoutTests(t, "renewal before sweep", func(t *testing.T, s *SQL) {
 		if s.engine != util.Postgres {
 			t.Skip("lease calls never overlap on SQLite")

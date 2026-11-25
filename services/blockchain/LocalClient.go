@@ -193,6 +193,10 @@ func (c *LocalClient) LaneMapRows(ctx context.Context, blockID uint32) ([]lane.M
 	return c.store.LaneMapRows(ctx, blockID)
 }
 
+func (c *LocalClient) LaneCapGrants(ctx context.Context, height uint32) ([]lane.CapGrant, error) {
+	return c.store.LaneCapGrants(ctx, height)
+}
+
 func (c *LocalClient) GetBlockStats(ctx context.Context) (*model.BlockStats, error) {
 	return c.store.GetBlockStats(ctx)
 }

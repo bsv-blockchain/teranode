@@ -139,6 +139,8 @@ func windowAttached(t *testing.T, s *Store, ctx context.Context, window uint32) 
 // TestStampDepthIsDerivedFromCoinbaseMaturity pins the arithmetic the rest of the design rests
 // on, so a change to any one constant is caught beside the others it must move with.
 func TestStampDepthIsDerivedFromCoinbaseMaturity(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	require.Equal(t, uint32(288), StampDepthFor(100), "twice maturity, rounded up to a whole partition")
 	require.Equal(t, uint32(288), StampDepthFor(144))
 	require.Equal(t, uint32(576), StampDepthFor(145))
@@ -156,6 +158,8 @@ func TestStampDepthIsDerivedFromCoinbaseMaturity(t *testing.T) {
 // transaction seen before its block, mined in one block, stamped 288 deep. The partition then
 // drops on schedule and the UTXO alone still answers.
 func TestStampWritesTheWinnerAndDeletesTheIdentityRow(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newUncheckpointedStore(t)
 
 	tx := mkTx(t, 2, 5_000)
@@ -257,6 +261,8 @@ func TestStampDeletesLosersAndLeavesForkOnlyTransactionsWaiting(t *testing.T) {
 // TestStampNeverTouchesAnUnminedTransaction: an identity row with no containment at all is
 // neither stamped nor deleted, however many partitions pass it.
 func TestStampNeverTouchesAnUnminedTransaction(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newUncheckpointedStore(t)
 
 	unmined := mkTx(t, 1, 5_000)
@@ -278,6 +284,8 @@ func TestStampNeverTouchesAnUnminedTransaction(t *testing.T) {
 // TestStampFindsAStragglerByWhereItWasMined is the design's ST-1 and ST-2: partition membership
 // comes from containment and never from the height a transaction was first seen at.
 func TestStampFindsAStragglerByWhereItWasMined(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newUncheckpointedStore(t)
 
 	// Seen in partition 0, mined in partition 1.
@@ -641,6 +649,8 @@ func TestStampRefusesAWindowWhoseBlockIsNotMined(t *testing.T) {
 // TestNoIndexOnUTXONamesMinedHeight pins the planner-trap guard: the page statement's
 // mined_height = 0 test is safe only while no partial index on utxo names the column.
 func TestNoIndexOnUTXONamesMinedHeight(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	var n int
@@ -685,6 +695,8 @@ func TestStampCountsAMissingWindowAboveAnExistingOne(t *testing.T) {
 // 2026-10-09 that was about 30 GB of reads for each partition, to change no row. Rows is the count
 // of tx_mined rows the page read, so a skipped page reports 0.
 func TestStampPageWithNoIdentityRowReadsNoContainmentRows(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	tx := mkTx(t, 1, 9_000)
