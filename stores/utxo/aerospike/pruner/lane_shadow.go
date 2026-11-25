@@ -122,7 +122,7 @@ func (l *laneShadow) run() {
 	start := time.Now()
 
 	masters := make([]laneMaster, 0, len(l.records))
-	mastersSeen := make(map[chainhash.Hash]struct{})
+
 	var pagesDeleted []chainhash.Hash
 
 	// Every master's spenders share one array; a page's spenders, appended later, copy that master's
@@ -168,7 +168,6 @@ func (l *laneShadow) run() {
 				continue
 			}
 		}
-		mastersSeen[chainhash.Hash(txID)] = struct{}{}
 
 		conflicting, _ := bins[l.s.fieldConflicting].(bool)
 
@@ -200,9 +199,17 @@ func (l *laneShadow) run() {
 			}
 		}
 	}
-	for _, txID := range pagesDeleted {
-		if _, ok := mastersSeen[txID]; !ok {
-			l.judge.Unjudged("page_without_master", 1)
+	if len(pagesDeleted) > 0 {
+		// Rare, so the masters are indexed only then.
+		seen := make(map[chainhash.Hash]struct{}, len(masters))
+		for i := range masters {
+			seen[masters[i].c.Parent] = struct{}{}
+		}
+
+		for _, txID := range pagesDeleted {
+			if _, ok := seen[txID]; !ok {
+				l.judge.Unjudged("page_without_master", 1)
+			}
 		}
 	}
 
@@ -222,7 +229,9 @@ func (l *laneShadow) run() {
 }
 
 // readPages reads the utxos and slot positions of every master's pages in one batch and adds their
-// spenders to the master. A page that cannot be read leaves its master unread.
+// spenders to the master. A page that cannot be read leaves its master unread. The read is bounded
+// by lanePageReadTimeout, so it cannot hold the chunk's delete batch; a read past the bound, and every
+// read while one past it still runs, leaves its masters unread.
 func (l *laneShadow) readPages(masters []laneMaster, n int) {
 	readPolicy := aerospike.NewBatchReadPolicy()
 	readPolicy.ReadModeSC = aerospike.ReadModeSCSession
@@ -236,6 +245,15 @@ func (l *laneShadow) readPages(masters []laneMaster, n int) {
 		}
 	}
 
+	if l.s.lanePageReadsStale.Load() > 0 {
+		// A read that outlived its bound is still running in the client, so Aerospike is struggling;
+		// no read is added to it. The masters cannot be judged settled.
+		markPagedUnread(masters)
+		l.judge.Reads("page_skipped", len(records))
+
+		return
+	}
+
 	l.judge.Reads("page", len(records))
 
 	policy := aerospike.NewBatchPolicy()
@@ -246,29 +264,41 @@ func (l *laneShadow) readPages(masters []laneMaster, n int) {
 	policy.SocketTimeout = lanePageReadTimeout
 	policy.MaxRetries = 0
 
-	var err error
-	if !l.s.lanePageReadInFlight.CompareAndSwap(false, true) {
-		err = aerospike.ErrTimeout
-	} else {
-		readResult := make(chan error, 1)
-		go func() {
-			defer l.s.lanePageReadInFlight.Store(false)
-			readResult <- l.s.batchOperateWithPolicy(policy, records)
-		}()
+	// The read runs on its own goroutine so a stalled client cannot hold the delete batch past the
+	// bound. state is 0 while it runs, 1 once it returned, 2 once this call gave up on it; a read given
+	// up on counts as stale until it returns.
+	var (
+		err   error
+		state atomic.Int32
+	)
 
-		select {
-		case err = <-readResult:
-		case <-time.After(lanePageReadTimeout):
+	readResult := make(chan error, 1)
+
+	go func() {
+		readResult <- l.s.batchOperateWithPolicy(policy, records)
+
+		if !state.CompareAndSwap(0, 1) {
+			l.s.lanePageReadsStale.Add(-1)
+		}
+	}()
+
+	select {
+	case err = <-readResult:
+	case <-time.After(lanePageReadTimeout):
+		l.s.lanePageReadsStale.Add(1)
+
+		if state.CompareAndSwap(0, 2) {
 			err = aerospike.ErrTimeout
+		} else {
+			// It returned as the bound passed.
+			l.s.lanePageReadsStale.Add(-1)
+
+			err = <-readResult
 		}
 	}
 
 	if err != nil {
-		for i := range masters {
-			if len(masters[i].pages) > 0 {
-				masters[i].c.Unread = true
-			}
-		}
+		markPagedUnread(masters)
 
 		// Counted apart from a page another worker deleted first, so an outage shows.
 		l.judge.Reads("page_error", len(records))
@@ -302,6 +332,15 @@ func (l *laneShadow) readPages(masters []laneMaster, n int) {
 			if !whole {
 				m.c.Unread = true
 			}
+		}
+	}
+}
+
+// markPagedUnread marks every master with a page unread.
+func markPagedUnread(masters []laneMaster) {
+	for i := range masters {
+		if len(masters[i].pages) > 0 {
+			masters[i].c.Unread = true
 		}
 	}
 }

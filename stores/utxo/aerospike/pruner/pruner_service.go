@@ -173,8 +173,9 @@ type Service struct {
 	queryPolicy *aerospike.QueryPolicy
 	writePolicy *aerospike.WritePolicy
 	batchPolicy *aerospike.BatchPolicy
-	// A timed-out optional lane page read may still be running in the Aerospike client.
-	lanePageReadInFlight atomic.Bool
+	// lanePageReadsStale counts the lane rule's page reads that outlived lanePageReadTimeout and are
+	// still running in the Aerospike client; while any is, no new page read starts.
+	lanePageReadsStale atomic.Int32
 }
 
 // externalFileInfo holds information about external files to delete

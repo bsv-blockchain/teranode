@@ -35,7 +35,7 @@ func initPruneMetrics() {
 			Namespace: "teranode",
 			Subsystem: "lane_pruner",
 			Name:      "extra_reads_total",
-			Help:      "Records or rows the pruner read only for the lane rule, beyond what today's pruner reads, by store and kind (aerospike: page, a page record read for its slots; page_error, a page whose batch read failed, its master counted spender_unread; and utxos_bin, a record the query returned with the utxos bin it reads only for the rule; utxoset: journal_row, position)",
+			Help:      "Records or rows the pruner read only for the lane rule, beyond what today's pruner reads, by store and kind (aerospike: page, a page record read for its slots; page_error, a page whose batch read failed, its master counted spender_unread; page_skipped, a page not read because an earlier page read outlived its bound and still runs, its master counted spender_unread; and utxos_bin, a record the query returned with the utxos bin it reads only for the rule; utxoset: journal_row, position)",
 		}, []string{"store", "kind"})
 		prometheusLanePrunerUnjudged = promauto.NewCounterVec(prometheus.CounterOpts{
 			Namespace: "teranode",

@@ -3,6 +3,7 @@ package pruner
 import (
 	"context"
 	"encoding/binary"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -592,6 +593,10 @@ func TestLaneShadowCountsADeletedPageWithoutItsMaster(t *testing.T) {
 	shadow.run()
 	require.Equal(t, before+1, laneMetric(t, "teranode_lane_pruner_unjudged_total", map[string]string{"store": lanereader.PruneStoreAerospike, "reason": "page_without_master"}),
 		"a page returned with its master is not counted twice")
+
+	svc.newLaneShadow(chunk).run()
+	require.Equal(t, before+1, laneMetric(t, "teranode_lane_pruner_unjudged_total", map[string]string{"store": lanereader.PruneStoreAerospike, "reason": "page_without_master"}),
+		"a page today keeps is not counted")
 }
 
 // TestLaneShadowCountsAFailedPageBatch: when the page-read batch fails, its master cannot be judged
@@ -640,6 +645,7 @@ func TestLaneShadowPageReadTimeoutDoesNotHoldDelete(t *testing.T) {
 	}
 
 	unread := laneVerdicts(t, lanereader.PruneDelete, lanereader.PruneCannotJudge, lanereader.ReasonSpenderUnread)
+	skipped := laneMetric(t, "teranode_lane_pruner_extra_reads_total", map[string]string{"store": lanereader.PruneStoreAerospike, "kind": "page_skipped"})
 	start := time.Now()
 	processed, _, err := svc.processRecordChunk(context.Background(), 1000, pagedMasterChunk(t, svc))
 	elapsed := time.Since(start)
@@ -647,6 +653,9 @@ func TestLaneShadowPageReadTimeoutDoesNotHoldDelete(t *testing.T) {
 	for i := int32(0); i < readCalls.Load(); i++ {
 		<-readDone
 	}
+
+	require.Eventually(t, func() bool { return svc.lanePageReadsStale.Load() == 0 }, 2*time.Second, 10*time.Millisecond,
+		"a stale read that returns stops blocking new reads")
 
 	require.NoError(t, err)
 	require.NoError(t, secondErr)
@@ -658,6 +667,74 @@ func TestLaneShadowPageReadTimeoutDoesNotHoldDelete(t *testing.T) {
 	require.Equal(t, 5*time.Minute, deleteTimeout, "the real delete retains its configured policy")
 	require.Less(t, elapsed, 2*time.Second, "the optional read did not hold deletion")
 	require.Equal(t, unread+2, laneVerdicts(t, lanereader.PruneDelete, lanereader.PruneCannotJudge, lanereader.ReasonSpenderUnread))
+	require.Equal(t, skipped+1, laneMetric(t, "teranode_lane_pruner_extra_reads_total", map[string]string{"store": lanereader.PruneStoreAerospike, "kind": "page_skipped"}),
+		"the second chunk's page is skipped while the first read still runs")
+}
+
+// TestLaneShadowReadsPagesOfConcurrentChunksAtOnce: chunks run at once, and on a healthy Aerospike
+// each chunk's page read runs; none counts as failed or skipped.
+func TestLaneShadowReadsPagesOfConcurrentChunksAtOnce(t *testing.T) {
+	svc := laneShadowTestService(t)
+
+	var entered sync.WaitGroup
+
+	entered.Add(2)
+
+	both := make(chan struct{})
+
+	go func() {
+		entered.Wait()
+		close(both)
+	}()
+
+	svc.batchOperateFn = func(_ *aerospike.BatchPolicy, records []aerospike.BatchRecordIfc) error {
+		entered.Done()
+
+		select {
+		case <-both:
+		case <-time.After(500 * time.Millisecond):
+			return aerospike.ErrTimeout
+		}
+
+		for _, r := range records {
+			br := r.BatchRec()
+			br.Record = &aerospike.Record{Key: br.Key, Bins: aerospike.BinMap{
+				svc.fieldUtxos:                        []interface{}{spentUtxo("pg0", chainhash.HashH([]byte("spender b")))},
+				fields.SpendingLanePositions.String(): slotPositions(laneShallow),
+			}}
+		}
+
+		return nil
+	}
+
+	metric := func(kind string) float64 {
+		return laneMetric(t, "teranode_lane_pruner_extra_reads_total", map[string]string{"store": lanereader.PruneStoreAerospike, "kind": kind})
+	}
+
+	pageErrors, skipped := metric("page_error"), metric("page_skipped")
+	shallow := laneVerdicts(t, lanereader.PruneDelete, lanereader.PruneKeep, lanereader.ReasonSpenderShallow)
+
+	var done sync.WaitGroup
+
+	for range 2 {
+		chunk := pagedMasterChunk(t, svc)
+		shadow := svc.newLaneShadow(chunk)
+		shadow.markDeleted(chunk[0])
+
+		done.Add(1)
+
+		go func() {
+			defer done.Done()
+			shadow.run()
+		}()
+	}
+
+	done.Wait()
+
+	require.Equal(t, pageErrors, metric("page_error"))
+	require.Equal(t, skipped, metric("page_skipped"))
+	require.Equal(t, shallow+2, laneVerdicts(t, lanereader.PruneDelete, lanereader.PruneKeep, lanereader.ReasonSpenderShallow),
+		"both masters judged by their page's slot")
 }
 
 // TestLaneShadowCountsATornMasterUnread: a master whose utxos bin holds a torn entry cannot be judged
