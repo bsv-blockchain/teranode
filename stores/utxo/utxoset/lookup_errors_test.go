@@ -34,6 +34,8 @@ func corruptInpoints(t *testing.T, s *Store, ctx context.Context, tx *bt.Tx) {
 // ONE of them has an unreadable tx_inpoints would reject every transaction that happened to
 // travel with it, which is a few thousand valid transactions rejected over one damaged row.
 func TestBatchDecorateReportsACorruptRowOnItsOwnEntry(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	good := mkTx(t, 1, 6_001)
@@ -68,6 +70,8 @@ func TestBatchDecorateReportsACorruptRowOnItsOwnEntry(t *testing.T) {
 // fault is a statement about this node's storage, and dressing it up as a missing parent would
 // have the node reject a perfectly valid child and blame the sender.
 func TestGetReportsACorruptRowAsAFaultNotAMiss(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	tx := mkTx(t, 1, 6_003)
@@ -91,6 +95,8 @@ func TestGetReportsACorruptRowAsAFaultNotAMiss(t *testing.T) {
 // happily with the thin UTXO-derived record. The caller would then get a success carrying no
 // inpoints and no size, with nothing anywhere saying the real record was unreadable.
 func TestGetDoesNotAnswerACorruptIdentityRowFromTheUTXO(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	tx := mkTx(t, 2, 6_004)

@@ -38,6 +38,8 @@ func utxoFacts(t *testing.T, s *Store, ctx context.Context, tx *bt.Tx) (minedHei
 // a create carrying mined-block information writes a membership row and UTXOs that know their
 // block, and no identity row.
 func TestBlockPathCreateWritesMembershipAndUTXOFactsAndNoIdentityRow(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	tx := mkTx(t, 2, 5_000)
@@ -55,6 +57,8 @@ func TestBlockPathCreateWritesMembershipAndUTXOFactsAndNoIdentityRow(t *testing.
 
 // TestMempoolCreateStillClaimsOnTheIdentityTable pins that stage 1 leaves the tip alone.
 func TestMempoolCreateStillClaimsOnTheIdentityTable(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	tx := mkTx(t, 1, 5_000)
@@ -72,6 +76,8 @@ func TestMempoolCreateStillClaimsOnTheIdentityTable(t *testing.T) {
 // TestBlockPathCreateIsIdempotentForTheSameBlock: a re-applied block after a crash hits the
 // membership key and gets ErrTxExists, writing no second UTXO.
 func TestBlockPathCreateIsIdempotentForTheSameBlock(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	tx := mkTx(t, 1, 5_000)
@@ -90,6 +96,8 @@ func TestBlockPathCreateIsIdempotentForTheSameBlock(t *testing.T) {
 // retry, or a stale sibling block at the same height. The same-partition probe on
 // (txid, height) refuses it; the caller's ErrTxExists branch stamps instead.
 func TestBlockPathCreateRefusesTheSameHeightUnderAnotherBlockId(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	tx := mkTx(t, 1, 5_000)
@@ -107,6 +115,8 @@ func TestBlockPathCreateRefusesTheSameHeightUnderAnotherBlockId(t *testing.T) {
 // and what catches the two historic duplicate coinbases: a re-offer at any height of a
 // transaction with a live UTXO creates nothing.
 func TestBlockPathCreateRefusesATransactionThatStillHasAUTXO(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	tx := mkTx(t, 1, 5_000)
@@ -131,6 +141,8 @@ func TestBlockPathCreateRefusesATransactionThatStillHasAUTXO(t *testing.T) {
 // record-mined call names the same key and does nothing, so if this row were thin the thin
 // row would be the one that survives the stamp.
 func TestBlockPathCreateRefusesAMempoolStray(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	tx := mkTx(t, 1, 5_000)
@@ -166,6 +178,8 @@ func TestBlockPathCreateRefusesAMempoolStray(t *testing.T) {
 // for the block, and UTXOs at (0,0) for the deep stamp to fill, exactly as a create that
 // carries no block does, and Get answers with the block and not waiting.
 func TestBlockCarryingCreateAboveTheCheckpointTakesTheIdentityRoute(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	tx := mkTx(t, 2, 5_000)
@@ -219,6 +233,8 @@ func TestBlockCarryingCreateAboveTheCheckpointTakesTheIdentityRoute(t *testing.T
 // the block id differs, so without the tx_mined check the claim would take and the spent
 // outputs would be created again.
 func TestBlockPathCreateRefusesATransactionContainedElsewhereAndFullySpent(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 	require.NoError(t, s.SetBlockHeight(700_101))
 
@@ -244,6 +260,8 @@ func TestBlockPathCreateRefusesATransactionContainedElsewhereAndFullySpent(t *te
 // a fully spent transaction can be re-offered as itself only while the undo copies of its
 // inputs live, and they live in the attached undo partitions, however late the drops run.
 func TestClaimFloorIsTheLowerOfTheFixedReachAndTheOldestUndoPartition(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	require.Equal(t, int32(0), s.claimFloor(), "a fresh store at height zero reads every partition")
@@ -285,6 +303,8 @@ func TestClaimFloorIsTheLowerOfTheFixedReachAndTheOldestUndoPartition(t *testing
 // long as the undo copies of its inputs live. Its containment row is far below the fixed reach,
 // and the undo partition that holds the copies is what keeps the row inside the probe.
 func TestUnminedCreateClaimSeesAContainmentRowTheUndoPartitionKeepsInReach(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	parent := mkTx(t, 1, 5_000)
@@ -317,6 +337,8 @@ func TestUnminedCreateClaimSeesAContainmentRowTheUndoPartitionKeepsInReach(t *te
 // the UTXO insert is gated on that claim taking, writes every one of its outputs a SECOND
 // time. Duplicate UTXOs are the failure the whole claim mechanism exists to prevent.
 func TestMempoolCreateRefusesASettledTransaction(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	tx := mkTx(t, 1, 5_000)
@@ -349,6 +371,8 @@ func TestMempoolCreateRefusesASettledTransaction(t *testing.T) {
 // mined-block info, so it lands on the mempool claim with the spend phase skipped. That option
 // is on for every subtree-validation entry point, which is the mainline block path at the tip.
 func TestMempoolCreateRefusesATransactionThatStillHasAUTXO(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	tx := mkTx(t, 1, 5_000)
