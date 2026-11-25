@@ -88,6 +88,15 @@ func (s *Store) QueryConflictWALIndex(ctx context.Context) (int, bool, error) {
 	return len(records), readable, err
 }
 
+// SetLaneWindowBatch sets how many records one batch of a restart window read holds, and returns
+// the function that puts it back.
+func SetLaneWindowBatch(n int) (restore func()) {
+	was := laneWindowBatch
+	laneWindowBatch = n
+
+	return func() { laneWindowBatch = was }
+}
+
 // SetMaxParentLanePositions lowers the most parent lane positions a create writes, and returns the
 // function that puts it back.
 func SetMaxParentLanePositions(n int) (restore func()) {

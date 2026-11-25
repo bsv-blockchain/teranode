@@ -492,6 +492,10 @@ type Store interface {
 	// LaneMapRowsEndingAbove returns every map row of a lane whose range ends above a position.
 	LaneMapRowsEndingAbove(ctx context.Context, laneNum uint8, above uint64) ([]lane.BlockMapRow, error)
 
+	// LaneCapGrants returns, for each lane with one, the first grant handed out at or above height,
+	// by lane: where block assembly's restart window starts.
+	LaneCapGrants(ctx context.Context, height uint32) ([]lane.CapGrant, error)
+
 	// InsertLaneConversionSegment records a historical conversion segment, insert-only. A new
 	// segment appends: its ID and first position are above every recorded segment's.
 	InsertLaneConversionSegment(ctx context.Context, seg lane.ConversionSegment) error
