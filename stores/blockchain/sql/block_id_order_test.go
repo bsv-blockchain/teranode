@@ -19,6 +19,8 @@ import (
 // Both ids are the hash's own reservation, so checkCallerSuppliedBlockID passes
 // them and the refusal can only come from the id-order check.
 func TestStoreBlock_RefusesIDNotAboveParent(t *testing.T) {
+	t.Parallel() // a database of its own on the shared server
+
 	run := func(t *testing.T, s *SQL) {
 		ctx := context.Background()
 

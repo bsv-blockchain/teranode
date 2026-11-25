@@ -14,6 +14,8 @@ import (
 // TestSetMinedMultiAnswersAnEmptyOrNilListWithNothing: the interface allows nil entries, and a
 // list with no transaction in it writes nothing and answers an empty map, not an error.
 func TestSetMinedMultiAnswersAnEmptyOrNilListWithNothing(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	info := utxo.MinedBlockInfo{BlockID: 3, BlockHeight: 100, OnLongestChain: true}
@@ -31,6 +33,8 @@ func TestSetMinedMultiAnswersAnEmptyOrNilListWithNothing(t *testing.T) {
 // transactions beside it are recorded and answered, on the ordinary path and on the quiet
 // path a deep fork block in a dropped partition takes.
 func TestSetMinedMultiSkipsANilEntryBesideRealOnes(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	require.NoError(t, s.ensureTxMinedPartition(ctx, 100))
@@ -119,6 +123,8 @@ func TestUnMineCountsARecordWithNoIdentityRowButNotACoinbase(t *testing.T) {
 // does, so the caller marks the new block invalid; "not found" left its mined status unset and
 // block assembly waiting behind it.
 func TestSetMinedMultiTellsABlockAboutAnOlderBlockOfAHeldTransaction(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	tx := mkTx(t, 1, 5_000)
@@ -150,6 +156,8 @@ func TestSetMinedMultiTellsABlockAboutAnOlderBlockOfAHeldTransaction(t *testing.
 // so no pair on them records block 7; the undo copies the spend journalled do, and the answer
 // must still name block 7 and then the new block.
 func TestSetMinedMultiTellsABlockAboutAnOlderBlockOfASpentTransaction(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	tx := mkTx(t, 2, 5_000)
@@ -185,6 +193,8 @@ func TestSetMinedMultiTellsABlockAboutAnOlderBlockOfASpentTransaction(t *testing
 // partition, and off it the call takes the quiet branch and returns first. So this reaches
 // the guard directly, by id, which is the only thing the guard compares.
 func TestSetMinedMultiNamesTheOlderBlockOnceWhenAskedForItAgain(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	tx := mkTx(t, 1, 5_000)

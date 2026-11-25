@@ -17,6 +17,8 @@ import (
 // than run that way, before any write, and the message names the lever an operator who wants
 // an archive should use instead.
 func TestStoreRefusesToStartWithThePrunerSkippingCatchup(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	ctx := context.Background()
 
 	u, err := url.Parse(testDSN(t))

@@ -16,6 +16,8 @@ import (
 // child that is then rejected must not keep the outside spends made for it: its independent input
 // is unspent afterwards and another transaction can take it.
 func TestSpendAndCreateMultiARejectedChildLeavesNoOutsideSpend(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newUncheckpointedStore(t)
 
 	const height = 1000

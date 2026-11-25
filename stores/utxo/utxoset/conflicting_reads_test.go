@@ -14,6 +14,8 @@ import (
 // because that is the only route from a contested UTXO back to the transactions competing for
 // it. This walks that route.
 func TestGetConflictingChildrenWalksTheNotedCone(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	parent := mkTx(t, 2, 5_000)
@@ -43,6 +45,8 @@ func TestGetConflictingChildrenWalksTheNotedCone(t *testing.T) {
 // UTXO row was destroyed by the winning spend, and it reaches the walk through the per-output
 // spend state on a metadata read.
 func TestGetCounterConflictingNamesTheWinner(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	parent := mkTx(t, 2, 5_000)
@@ -80,6 +84,8 @@ func TestGetCounterConflictingNamesTheWinner(t *testing.T) {
 // TestGetCounterConflictingReportsATransactionItDoesNotHold, matching both reference stores,
 // whose metadata read raises before the walk starts.
 func TestGetCounterConflictingReportsATransactionItDoesNotHold(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	missing := mkTx(t, 1, 9_999)
@@ -98,6 +104,8 @@ func TestGetCounterConflictingReportsATransactionItDoesNotHold(t *testing.T) {
 // pins that -- the walk answered from tx_ident alone would report no counter-spender at all,
 // which is the answer that lets the double spend stand.
 func TestGetCounterConflictingNamesTheWinnerForAMinedLoser(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 	require.NoError(t, s.SetBlockHeight(700_100))
 
@@ -141,6 +149,8 @@ func TestGetCounterConflictingNamesTheWinnerForAMinedLoser(t *testing.T) {
 // parent being mined and losing its identity row to the stamp. Without that the cone would empty out the moment the contested
 // parent was mined, which is the ordinary case rather than a corner.
 func TestGetConflictingChildrenWalksTheNotedConeFromAMinedParent(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 	require.NoError(t, s.SetBlockHeight(700_100))
 

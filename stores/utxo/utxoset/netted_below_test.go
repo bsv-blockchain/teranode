@@ -104,6 +104,8 @@ func withNettedBelowChunkTxs(t *testing.T, n int) {
 // no coin for an output the list spends, no spend-journal row at all, and one mined record per
 // transaction.
 func TestNettedBelowWritesTheNetEffectAndNoJournal(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	const height = 800
@@ -180,6 +182,8 @@ func TestNettedBelowRepeatAfterAnySubsetOfChunks(t *testing.T) {
 // A transaction with no spendable output is in the list like any other: it gets a mined record,
 // its inputs are spent, and it writes no coin.
 func TestNettedBelowUnspendableTransactionInTheList(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	const height = 810
@@ -211,6 +215,8 @@ func TestNettedBelowUnspendableTransactionInTheList(t *testing.T) {
 // its spends. In the list it is not written again, and its child in the list spends its coin
 // for real rather than netting it.
 func TestNettedBelowRebroadcastTransactionStoredBeforeItsBlock(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	const height = 820
@@ -290,6 +296,8 @@ func nettedSurvivors(w *tests.MultiWorkload, width int) []*bt.Tx {
 // coins it writes are locked and a spend of one is refused as locked, and an output the list
 // spends left no coin to lock.
 func TestNettedBelowLockedCreatesWriteLockedCoins(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	const (
@@ -326,6 +334,8 @@ func TestNettedBelowLockedCreatesWriteLockedCoins(t *testing.T) {
 // block has committed. That clears the coins the netted write made, and the transactions that
 // wrote no coin are no fault.
 func TestNettedBelowLockedCreatesUnlockWithSetLocked(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	const (
@@ -362,6 +372,8 @@ func TestNettedBelowLockedCreatesUnlockWithSetLocked(t *testing.T) {
 
 // Without the locked option the coins are written unlocked, as before.
 func TestNettedBelowUnlockedCreatesWriteUnlockedCoins(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	const (
@@ -388,6 +400,8 @@ func TestNettedBelowUnlockedCreatesWriteUnlockedCoins(t *testing.T) {
 // Frozen and conflicting creates below the checkpoint are not modelled by
 // the netted write (create-only and spend-only never reach it), and the store says so rather than writing the list another, slower way.
 func TestNettedBelowRefusesWhatItDoesNotModel(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	for name, opt := range map[string]utxo.CreateOption{
 		"frozen":      utxo.WithFrozen(true),
 		"conflicting": utxo.WithConflicting(true),
@@ -410,6 +424,8 @@ func TestNettedBelowRefusesWhatItDoesNotModel(t *testing.T) {
 // A coinbase never goes through the list: it keeps the create path that refuses the historic
 // duplicate coinbases.
 func TestNettedBelowRefusesACoinbase(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	const height = 850

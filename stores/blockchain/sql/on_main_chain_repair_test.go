@@ -1537,6 +1537,8 @@ func recordWalkSQLStates(s *SQL) func() []string {
 // store's in-process watch never hears of that write, so only the database can tell the
 // held walk that its snapshot is stale.
 func TestOnMainChainRepairRerunsWhenAnotherStoreRevalidates_PostgreSQL(t *testing.T) {
+	t.Parallel() // a database of its own on the shared server
+
 	s, other := newPostgresStorePair(t)
 	ctx := context.Background()
 
@@ -1578,6 +1580,8 @@ func TestOnMainChainRepairRerunsWhenAnotherStoreRevalidates_PostgreSQL(t *testin
 // held walk would then commit the old branch's flags, and the repair would land and send
 // readers back to a column that describes a chain whose tip is gone.
 func TestOnMainChainRepairRerunsWhenAnotherStoreDeletesTheTip_PostgreSQL(t *testing.T) {
+	t.Parallel() // a database of its own on the shared server
+
 	s, other := newPostgresStorePair(t)
 	ctx := context.Background()
 
@@ -1610,6 +1614,8 @@ func TestOnMainChainRepairRerunsWhenAnotherStoreDeletesTheTip_PostgreSQL(t *test
 // end. The write's later statements may read the rows from before the walk's commit, so
 // the walk cannot commit around it: it must give way and land only after the write ends.
 func TestOnMainChainRepairWaitsOutAnUncommittedChainWrite_PostgreSQL(t *testing.T) {
+	t.Parallel() // a database of its own on the shared server
+
 	s, other := newPostgresStorePair(t)
 	ctx := context.Background()
 
@@ -1648,6 +1654,8 @@ func TestOnMainChainRepairWaitsOutAnUncommittedChainWrite_PostgreSQL(t *testing.
 // walk can see. It must not take the shared chain-write row, or a peer sending blocks with
 // valid proof of work and a bad body could keep rolling the repair walk back.
 func TestOnMainChainRepairIgnoresAnInvalidBlockFromAnotherStore_PostgreSQL(t *testing.T) {
+	t.Parallel() // a database of its own on the shared server
+
 	s, other := newPostgresStorePair(t)
 	ctx := context.Background()
 
@@ -1676,6 +1684,8 @@ func TestOnMainChainRepairIgnoresAnInvalidBlockFromAnotherStore_PostgreSQL(t *te
 // block2 and sets the other branch; the held walk sets block3, a row the reorg did not
 // touch, so without the shared row neither aborts and height 3 ends with two flags.
 func TestOnMainChainRepairRerunsWhenAnotherStoreReorgs_PostgreSQL(t *testing.T) {
+	t.Parallel() // a database of its own on the shared server
+
 	s, other := newPostgresStorePair(t)
 	ctx := context.Background()
 
@@ -1713,6 +1723,8 @@ func TestOnMainChainRepairRerunsWhenAnotherStoreReorgs_PostgreSQL(t *testing.T) 
 // held walk sets block2, which neither touched, so without the shared row height 2 ends
 // with two flags.
 func TestOnMainChainRepairRerunsWhenAnotherStoreInvalidates_PostgreSQL(t *testing.T) {
+	t.Parallel() // a database of its own on the shared server
+
 	s, other := newPostgresStorePair(t)
 	ctx := context.Background()
 

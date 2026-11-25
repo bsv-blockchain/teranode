@@ -86,6 +86,8 @@ func spendAllOutputsForMinedFloor(ctx context.Context, t *testing.T, store *Stor
 // Spending the last output of a mined tx with the lagging tip as the spending height
 // must still stamp from the mined height. Runs on the SQLite and Postgres paths.
 func TestSpendStampsDAHAtMinedFloor(t *testing.T) {
+	parallelPostgres(t)
+
 	t.Run("sqlite", func(t *testing.T) {
 		ctx := context.Background()
 		store, _ := setup(ctx, t)
@@ -119,6 +121,8 @@ func TestSpendStampsDAHAtMinedFloor(t *testing.T) {
 // Mined far above the cached tip, then flagged conflicting: the stamp comes from the
 // mined height, not the lagging tip.
 func TestSetConflictingStampsDAHAtMinedFloor_Postgres(t *testing.T) {
+	parallelPostgres(t)
+
 	if testing.Short() {
 		t.Skip("skipping Postgres integration test in short mode")
 	}
@@ -161,6 +165,8 @@ func TestSetConflictingStampsDAHAtMinedFloor_SQLite(t *testing.T) {
 // A conflicting record already stamped from the lagging tip, then flagged conflicting
 // again after mining, has its stale stamp raised to the mined floor.
 func TestSetConflictingRaisesStaleStamp_Postgres(t *testing.T) {
+	parallelPostgres(t)
+
 	if testing.Short() {
 		t.Skip("skipping Postgres integration test in short mode")
 	}
@@ -187,6 +193,8 @@ func TestSetConflictingRaisesStaleStamp_Postgres(t *testing.T) {
 // Flagged conflicting while unmined (stamped from the lagging tip), then mined far
 // above it: mining raises the stamp to the mined floor.
 func TestSetMinedRaisesConflictingStamp_Postgres(t *testing.T) {
+	parallelPostgres(t)
+
 	if testing.Short() {
 		t.Skip("skipping Postgres integration test in short mode")
 	}
@@ -224,6 +232,8 @@ func TestSetMinedRaisesConflictingStamp_Postgres(t *testing.T) {
 // The bulk unlock recomputes the stamp for a conflicting record from the cached tip.
 // It must floor it at the mined height too.
 func TestUnlockStampsConflictingDAHAtMinedFloor_Postgres(t *testing.T) {
+	parallelPostgres(t)
+
 	if testing.Short() {
 		t.Skip("skipping Postgres integration test in short mode")
 	}
@@ -249,6 +259,8 @@ func TestUnlockStampsConflictingDAHAtMinedFloor_Postgres(t *testing.T) {
 // An expired preservation stamps from the pruner's current height. For a conflicting
 // record mined above it, the stamp must still be at least mined height + retention.
 func TestExpiredPreservationStampsDAHAtMinedFloor_Postgres(t *testing.T) {
+	parallelPostgres(t)
+
 	if testing.Short() {
 		t.Skip("skipping Postgres integration test in short mode")
 	}
@@ -336,6 +348,8 @@ func floorRowID(ctx context.Context, t *testing.T, store *Store, hash chainhash.
 // block and raises the stamp after that read must survive the write: the decision is a
 // stale value and the UPDATE has to reconcile it with the row.
 func TestWriteDAHKeepsConcurrentlyRaisedStamp(t *testing.T) {
+	parallelPostgres(t)
+
 	forEachFloorBackend(t, func(t *testing.T, ctx context.Context, store *Store, postgres bool) {
 		retention := floorRetention(t, store)
 
@@ -399,6 +413,8 @@ func TestWriteDAHKeepsConcurrentlyRaisedStamp(t *testing.T) {
 
 // A value below the row's mined floor is raised by the write, and a NULL decision still clears.
 func TestWriteDAHFloorsValueAndClearsOnNull(t *testing.T) {
+	parallelPostgres(t)
+
 	forEachFloorBackend(t, func(t *testing.T, ctx context.Context, store *Store, _ bool) {
 		retention := floorRetention(t, store)
 
@@ -427,6 +443,8 @@ func TestWriteDAHFloorsValueAndClearsOnNull(t *testing.T) {
 // decided before the preservation committed is not written back, and a NULL decision
 // does not clear a stamp the preservation left in place.
 func TestWriteDAHLeavesPreservedRowUntouched(t *testing.T) {
+	parallelPostgres(t)
+
 	forEachFloorBackend(t, func(t *testing.T, ctx context.Context, store *Store, _ bool) {
 		retention := floorRetention(t, store)
 
@@ -464,6 +482,8 @@ func TestWriteDAHLeavesPreservedRowUntouched(t *testing.T) {
 // Flagged conflicting while unmined at the lagging tip, then mined into a fork far
 // above it: the stamp must follow the mined height, not stay at tip + retention.
 func TestSetMinedOffLongestChainRaisesConflictingStamp(t *testing.T) {
+	parallelPostgres(t)
+
 	forEachFloorBackend(t, func(t *testing.T, ctx context.Context, store *Store, _ bool) {
 		retention := floorRetention(t, store)
 
@@ -498,6 +518,8 @@ func TestSetMinedOffLongestChainRaisesConflictingStamp(t *testing.T) {
 // A conflicting record with a stale low stamp and a high mined block is raised when
 // it is put back on the longest chain.
 func TestMarkOnLongestChainRaisesConflictingStamp(t *testing.T) {
+	parallelPostgres(t)
+
 	forEachFloorBackend(t, func(t *testing.T, ctx context.Context, store *Store, _ bool) {
 		retention := floorRetention(t, store)
 
@@ -539,6 +561,8 @@ func createUnminedAtTip(ctx context.Context, t *testing.T, store *Store) chainha
 // A fully spent tx mined on a fork at a high block, then mined on the longest chain at
 // a lower one, keeps the highest block as its floor.
 func TestSetMinedOnLongestChainFloorsAtHighestForkBlock(t *testing.T) {
+	parallelPostgres(t)
+
 	forEachFloorBackend(t, func(t *testing.T, ctx context.Context, store *Store, _ bool) {
 		retention := floorRetention(t, store)
 
@@ -566,6 +590,8 @@ func TestSetMinedOnLongestChainFloorsAtHighestForkBlock(t *testing.T) {
 // A fully spent tx mined on the longest chain at a high block, with no stamp, then
 // placed on a fork at a lower block: the stamp follows the highest block.
 func TestSetMinedOffLongestChainFloorsFullySpentStamp(t *testing.T) {
+	parallelPostgres(t)
+
 	forEachFloorBackend(t, func(t *testing.T, ctx context.Context, store *Store, _ bool) {
 		retention := floorRetention(t, store)
 
@@ -590,6 +616,8 @@ func TestSetMinedOffLongestChainFloorsFullySpentStamp(t *testing.T) {
 // put back on the longest chain, as the Lua setDeleteAtHeight does, not to the current
 // tip + retention. A record with no stamp still gets the tip-based one.
 func TestMarkOnLongestChainRaisesLowConflictingStampToFloorOnly(t *testing.T) {
+	parallelPostgres(t)
+
 	forEachFloorBackend(t, func(t *testing.T, ctx context.Context, store *Store, _ bool) {
 		retention := floorRetention(t, store)
 
@@ -621,6 +649,8 @@ func TestMarkOnLongestChainRaisesLowConflictingStampToFloorOnly(t *testing.T) {
 // Locking clears the stamp and unlocking recomputes it from the cached tip. A mined,
 // fully spent tx must come back at its mined floor.
 func TestUnlockStampsSpentDAHAtMinedFloor_Postgres(t *testing.T) {
+	parallelPostgres(t)
+
 	if testing.Short() {
 		t.Skip("skipping Postgres integration test in short mode")
 	}
@@ -646,6 +676,8 @@ func TestUnlockStampsSpentDAHAtMinedFloor_Postgres(t *testing.T) {
 // A conflicting row whose stamp was written below the floor between lock and unlock is
 // raised to the floor by the unlock.
 func TestUnlockRaisesLowConflictingStampToFloor_Postgres(t *testing.T) {
+	parallelPostgres(t)
+
 	if testing.Short() {
 		t.Skip("skipping Postgres integration test in short mode")
 	}
@@ -675,6 +707,8 @@ func TestUnlockRaisesLowConflictingStampToFloor_Postgres(t *testing.T) {
 // An expired preservation of a mined, fully spent, non-conflicting tx stamps from the
 // pruner's current height. It must still land at the mined floor.
 func TestExpiredPreservationStampsSpentDAHAtMinedFloor(t *testing.T) {
+	parallelPostgres(t)
+
 	forEachFloorBackend(t, func(t *testing.T, ctx context.Context, store *Store, _ bool) {
 		retention := floorRetention(t, store)
 
@@ -721,6 +755,8 @@ func spendFirstOutput(ctx context.Context, t *testing.T, store *Store, hash chai
 // issues no UPDATE, so a concurrent SetConflicting(false) or PreserveTransactions that
 // commits after setDAH reads cannot be overwritten with a stale stamp.
 func TestUnspendKeepingConflictingStampWritesNothing_Postgres(t *testing.T) {
+	parallelPostgres(t)
+
 	if testing.Short() {
 		t.Skip("skipping Postgres integration test in short mode")
 	}
@@ -749,6 +785,8 @@ func TestUnspendKeepingConflictingStampWritesNothing_Postgres(t *testing.T) {
 
 // A parent cleared by SetConflicting(false) stays unstamped through an Unspend.
 func TestUnspendAfterConflictingClearedKeepsNoStamp_Postgres(t *testing.T) {
+	parallelPostgres(t)
+
 	if testing.Short() {
 		t.Skip("skipping Postgres integration test in short mode")
 	}
