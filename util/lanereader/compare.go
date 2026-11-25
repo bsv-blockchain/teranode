@@ -387,8 +387,29 @@ const disagreementsLogged = 5
 
 func (d *disagreementLog) log(r *Reader, reader, kind string, hash chainhash.Hash, pos uint64, a lane.Answer, s *lane.IndexSnapshot,
 	todayForm string, todayMined bool, todayValue uint32, todayBlockIDs []uint32) {
-	key := reader + "/" + kind
+	n, ok := d.admit(reader + "/" + kind)
+	if !ok {
+		return
+	}
 
+	laneNum, p := lane.Unpack(pos)
+
+	switch todayForm {
+	case "height":
+		r.logger.Warnf("[lanereader] %s %s (log line %d): tx %s lane %d position %d: lanes mined=%t via %s block %d height %d; today mined=%t height %d; index tip %d anchor %d start %d",
+			reader, kind, n, hash.String(), laneNum, p, a.Mined, a.Via, a.BlockID, a.Height, todayMined, todayValue, s.TipHeight(), s.AnchorHeight(), s.StartHeight())
+	case "duplicate":
+		r.logger.Warnf("[lanereader] %s %s (log line %d): block %s (ID %d): lanes counts %d positions taken before it; today duplicate=%t; index tip %d anchor %d start %d",
+			reader, kind, n, hash.String(), a.BlockID, todayValue, todayMined, s.TipHeight(), s.AnchorHeight(), s.StartHeight())
+	default:
+		r.logger.Warnf("[lanereader] %s %s (log line %d): tx %s lane %d position %d: lanes mined=%t via %s block %d height %d; today block IDs %v; index tip %d anchor %d start %d",
+			reader, kind, n, hash.String(), laneNum, p, a.Mined, a.Via, a.BlockID, a.Height, todayBlockIDs, s.TipHeight(), s.AnchorHeight(), s.StartHeight())
+	}
+}
+
+// admit reports whether a disagreement under key may be logged, and its line number: the first
+// disagreementsLogged of each key, then one a minute.
+func (d *disagreementLog) admit(key string) (int64, bool) {
 	g, ok := d.gates.Load(key)
 	if !ok {
 		// The gate starts its minute when made, so a check that finds the first lines taken cannot
@@ -423,23 +444,11 @@ func (d *disagreementLog) log(r *Reader, reader, kind string, hash chainhash.Has
 		last := gate.last.Load()
 
 		if now-last < int64(time.Minute) || !gate.last.CompareAndSwap(last, now) {
-			return
+			return 0, false
 		}
 
 		n = gate.seen.Add(1)
 	}
 
-	laneNum, p := lane.Unpack(pos)
-
-	switch todayForm {
-	case "height":
-		r.logger.Warnf("[lanereader] %s %s (log line %d): tx %s lane %d position %d: lanes mined=%t via %s block %d height %d; today mined=%t height %d; index tip %d anchor %d start %d",
-			reader, kind, n, hash.String(), laneNum, p, a.Mined, a.Via, a.BlockID, a.Height, todayMined, todayValue, s.TipHeight(), s.AnchorHeight(), s.StartHeight())
-	case "duplicate":
-		r.logger.Warnf("[lanereader] %s %s (log line %d): block %s (ID %d): lanes counts %d positions taken before it; today duplicate=%t; index tip %d anchor %d start %d",
-			reader, kind, n, hash.String(), a.BlockID, todayValue, todayMined, s.TipHeight(), s.AnchorHeight(), s.StartHeight())
-	default:
-		r.logger.Warnf("[lanereader] %s %s (log line %d): tx %s lane %d position %d: lanes mined=%t via %s block %d height %d; today block IDs %v; index tip %d anchor %d start %d",
-			reader, kind, n, hash.String(), laneNum, p, a.Mined, a.Via, a.BlockID, a.Height, todayBlockIDs, s.TipHeight(), s.AnchorHeight(), s.StartHeight())
-	}
+	return n, true
 }

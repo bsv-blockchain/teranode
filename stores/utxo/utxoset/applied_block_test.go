@@ -32,6 +32,8 @@ func liveRows(t *testing.T, s *Store, ctx context.Context, txid []byte) int {
 // truth (a row written in the same transaction as the work it describes) rather than by
 // a counter or a clock.
 func TestApplyBlockReplayDoesNotDuplicateOutputs(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	tx := mkTx(t, 2, 5_000)
@@ -65,6 +67,8 @@ func TestApplyBlockReplayDoesNotDuplicateOutputs(t *testing.T) {
 // of the two because nothing downstream would flag it. The claim and the work must
 // therefore commit or roll back together.
 func TestApplyBlockFailureLeavesBlockRetryable(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	tx := mkTx(t, 2, 5_000)
@@ -108,6 +112,8 @@ func TestApplyBlockFailureLeavesBlockRetryable(t *testing.T) {
 // loss, which is worse than the duplication it would be avoiding. So an incomplete claim
 // must re-apply.
 func TestBeginBlockApplySkipsOnlyCompletedBlocks(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	done := chainhash.Hash{0x01}

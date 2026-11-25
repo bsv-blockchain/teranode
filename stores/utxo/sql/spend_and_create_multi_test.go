@@ -42,6 +42,8 @@ func TestSpendAndCreateMultiSQLite(t *testing.T) {
 }
 
 func TestSpendAndCreateMultiPostgres(t *testing.T) {
+	parallelPostgres(t)
+
 	if testing.Short() {
 		t.Skip("skipping Postgres integration test in short mode")
 	}

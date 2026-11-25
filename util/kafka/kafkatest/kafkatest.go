@@ -7,6 +7,14 @@
 //	defer env.Close()
 //	// env.BrokerAddr is ready — create producers/consumers against it.
 //
+// Tests that need no broker of their own share one per test binary instead, and
+// isolate themselves by topic and consumer group (UniqueName):
+//
+//	env := kafkatest.SharedEnv(t)
+//	topic := kafkatest.UniqueName("my-test")
+//
+// with TerminateSharedEnv called from the package's TestMain.
+//
 // The framework also provides helpers to run throughput/latency measurements and
 // format results in a human-readable table.
 package kafkatest
@@ -20,6 +28,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -49,9 +58,66 @@ type Env struct {
 func MustStartEnv(t testing.TB, ctx context.Context) *Env {
 	t.Helper()
 
+	env, err := startEnv(ctx)
+	test.SkipIfContainerUnavailable(t, err)
+
+	t.Cleanup(func() { env.Close() })
+
+	return env
+}
+
+var (
+	sharedOnce sync.Once
+	sharedEnv  *Env
+	sharedErr  error
+
+	uniqueNameCounter atomic.Uint64
+)
+
+// SharedEnv returns the one Redpanda container shared by every caller in this
+// test binary, starting it on first use. It skips the test if the container
+// runtime itself is unavailable and fails it on any other startup error.
+//
+// Callers share the broker, so each must use topics and consumer groups of its
+// own (UniqueName). The container outlives the test: the package's TestMain
+// must call TerminateSharedEnv after m.Run, because CI turns off the
+// testcontainers reaper that would otherwise remove it when the process exits.
+func SharedEnv(t testing.TB) *Env {
+	t.Helper()
+
+	sharedOnce.Do(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+
+		sharedEnv, sharedErr = startEnv(ctx)
+	})
+
+	test.SkipIfContainerUnavailable(t, sharedErr)
+
+	return sharedEnv
+}
+
+// TerminateSharedEnv stops the container SharedEnv started, if any. Call it
+// from TestMain after m.Run. No test may call SharedEnv afterwards.
+func TerminateSharedEnv() {
+	if sharedEnv != nil {
+		sharedEnv.Close()
+	}
+}
+
+// UniqueName returns prefix followed by a suffix no other call in this process
+// returns, for a topic or consumer group on a shared broker. The broker is
+// shared only within one test binary, so a process-wide counter is enough. A
+// rerun of the same test under -count gets a new name too.
+func UniqueName(prefix string) string {
+	return fmt.Sprintf("%s-%d", prefix, uniqueNameCounter.Add(1))
+}
+
+// startEnv starts a single-node Redpanda container on a free host port.
+func startEnv(ctx context.Context) (*Env, error) {
 	port, err := getFreePort()
 	if err != nil {
-		t.Fatalf("kafkatest: free port: %v", err)
+		return nil, err
 	}
 
 	portStr := fmt.Sprintf("%d/tcp", port)
@@ -79,16 +145,14 @@ func MustStartEnv(t testing.TB, ctx context.Context) *Env {
 		ContainerRequest: req,
 		Started:          true,
 	})
-	test.SkipIfContainerUnavailable(t, err)
-
-	env := &Env{
-		Container:  container,
-		BrokerAddr: fmt.Sprintf("localhost:%d", port),
+	if err != nil {
+		return nil, err
 	}
 
-	t.Cleanup(func() { env.Close() })
-
-	return env
+	return &Env{
+		Container:  container,
+		BrokerAddr: fmt.Sprintf("localhost:%d", port),
+	}, nil
 }
 
 // Close terminates the Redpanda container.

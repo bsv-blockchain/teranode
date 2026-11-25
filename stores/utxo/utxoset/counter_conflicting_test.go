@@ -23,6 +23,8 @@ import (
 //
 // The inputs are on the identity record too, as stored inpoints, and those never age out.
 func TestCounterConflictingSurvivesABodyThatHasAgedOut(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	parent := mkTx(t, 2, 5_000)
@@ -82,6 +84,8 @@ func TestCounterConflictingSurvivesABodyThatHasAgedOut(t *testing.T) {
 // What this does NOT fix is promoting the winner, which calls a method taking an actual
 // transaction. That step still needs the winner's bytes and is a stated limit.
 func TestReverseConflictReachesATransactionWhoseBytesHaveGone(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	parent := mkTx(t, 2, 5_000)

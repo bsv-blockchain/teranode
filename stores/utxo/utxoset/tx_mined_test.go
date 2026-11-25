@@ -13,6 +13,8 @@ import (
 // transaction that made the UTXO. Both fixed width, placed before the variable-length
 // script so alignment costs nothing.
 func TestUTXORowsCarryTheirParentsBlockFacts(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	var names []string
@@ -47,6 +49,8 @@ func TestUTXORowsCarryTheirParentsBlockFacts(t *testing.T) {
 // height-leading key cannot be probed by transaction id without a skip scan over every
 // height in the partition.
 func TestMembershipTableIsKeyedByTransactionIdFirst(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	require.NoError(t, s.ensureTxMinedPartition(ctx, 700_000))
@@ -67,6 +71,8 @@ func TestMembershipTableIsKeyedByTransactionIdFirst(t *testing.T) {
 // create for a height inside it fails instead of recreating the partition, because a block
 // re-offered after its partition retired would otherwise claim every transaction in it afresh.
 func TestDroppedMembershipWindowsCannotComeBack(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	require.NoError(t, s.ensureTxMinedPartition(ctx, 100))
@@ -88,6 +94,8 @@ func TestDroppedMembershipWindowsCannotComeBack(t *testing.T) {
 // The other two floors are already at or above the partition's upper bound, because the drop's
 // first condition is the completion record the stamp wrote when it advanced them.
 func TestDropWritesOnlyTheDroppedFloor(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	require.NoError(t, s.ensureTxMinedPartition(ctx, 100))
@@ -110,6 +118,8 @@ func TestDropWritesOnlyTheDroppedFloor(t *testing.T) {
 // raised floor alone would be refused by postgres rather than silently leaving the three values
 // out of order.
 func TestFloorRowRefusesAFloorAboveTheFence(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	_, err := s.pool.Exec(ctx, `UPDATE tx_mined_floor SET floor = 3 WHERE id = 0`)
@@ -125,6 +135,8 @@ func TestFloorRowRefusesAFloorAboveTheFence(t *testing.T) {
 // cache, skips the floor read, and the INSERT fails with "no partition of relation" instead of
 // the loud, explained refusal the floor exists to give.
 func TestDroppingAWindowClearsTheEnsureCache(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	require.NoError(t, s.ensureTxMinedPartition(ctx, 100))

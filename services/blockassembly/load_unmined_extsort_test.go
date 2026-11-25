@@ -10,6 +10,7 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
 	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/stretchr/testify/require"
 )
@@ -184,6 +185,36 @@ func TestLoadUnminedSorted_HeightsFollowTheParentsFirstReorder(t *testing.T) {
 	require.NoError(t, ba.loadUnminedSorted(context.Background(), iter, map[uint32]bool{}, false))
 
 	require.Equal(t, []chainhash.Hash{unrelated.Hash}, loadedHashes(t, ba))
+}
+
+func TestLoadUnminedSorted_SamplesTheEraFilteredPool(t *testing.T) {
+	initPrometheusMetrics()
+
+	ba, _, cleanup := setupDiskSortTest(t)
+	defer cleanup()
+
+	ba.settings.UtxoStore.LaneMigration = settings.LaneMigrationShadow
+	ba.settings.BlockAssembly.UnminedTxDiskSortPaths = []string{t.TempDir()}
+	ba.settings.BlockAssembly.UnminedTxSortBufferRecords = 1000
+	ba.subtreeProcessor.SetTxEra(150)
+
+	txs := make([]*utxo.UnminedTransaction, laneRestartSampleTarget+1)
+	for i := range txs {
+		txs[i] = unminedAt(i, 5000+i)
+		txs[i].UnminedSince = 99
+	}
+	txs[len(txs)-1].UnminedSince = 150
+
+	require.NoError(t, ba.loadUnminedSorted(context.Background(), &sliceUnminedIterator{batches: inBatches(txs, 1000)}, map[uint32]bool{}, false))
+	ba.stopLaneRestartDryRun()
+
+	ba.laneRestart.mu.Lock()
+	last := ba.laneRestart.last
+	ba.laneRestart.mu.Unlock()
+
+	require.NotNil(t, last)
+	require.Equal(t, uint64(1), last.todayKept)
+	require.Equal(t, uint64(1), last.sampleRate, "only kept transactions should set the sample rate")
 }
 
 func TestLoadUnminedSorted_FiltersLikeTheInMemoryPath(t *testing.T) {
