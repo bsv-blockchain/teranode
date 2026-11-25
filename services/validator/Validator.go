@@ -311,7 +311,7 @@ type Validator struct {
 	txmetaKafkaBatcher *batcher.Batcher[txmetaBatchItem]
 
 	// mtpStore is a dense in-memory array of Median Time Past values indexed by block height.
-	// mtpStore[h] = MTP for block h. Loaded from height 0 up to (blockHeight - 1) before
+	// mtpStore[h] = MTP for block h. Loaded from height 0 through blockHeight before
 	// each block's transactions are validated, then extended on demand as new heights arrive.
 	//
 	// MTP values are immutable once a block is persisted, so entries never need invalidation.
@@ -3586,7 +3586,8 @@ func (v *Validator) extendTransaction(ctx context.Context, tx *bt.Tx) error {
 // cheap constant that covers the realistic worst case.
 const mtpReorgOverlap = 12
 
-// EnsureMTPLoaded pre-warms the in-memory MTP store up to (blockHeight - 1).
+// EnsureMTPLoaded pre-warms the in-memory MTP store through blockHeight, one entry more than
+// BIP68 reads.
 // This must be called once per block, before concurrent per-transaction goroutines start,
 // so that BIP68 MTP lookups inside each goroutine are pure array reads with no gRPC calls.
 //
@@ -3718,8 +3719,9 @@ func (v *Validator) EnsureMTPLoaded(ctx context.Context, blockHeight uint32) err
 //
 // Phase 2 is only executed when phase 1 succeeds and SkipPolicyChecks is true (block context).
 // This avoids the cost of MTP lookups when a transaction fails normal validation.
-// MTP values are read from v.mtpStore, pre-loaded by EnsureMTPLoaded before concurrent
-// goroutines start; lookups take a read lock and do not issue gRPC calls.
+// Coin MTPs below the candidate's height are read from v.mtpStore, pre-loaded by EnsureMTPLoaded
+// before concurrent goroutines start, or from Options.CandidateForkMTPs; the block MTP is
+// Options.CandidateParentMedianTime. Lookups take a read lock and do not issue gRPC calls.
 func (v *Validator) validateTransaction(ctx context.Context, tx *bt.Tx, blockHeight uint32, utxoHeights []uint32, validationOptions *Options) error {
 	ctx, span, deferFn := tracing.Tracer("validator").Start(ctx, "validateTransaction",
 		tracing.WithHistogram(prometheusTransactionValidate),
@@ -3833,10 +3835,13 @@ func (v *Validator) validateTransaction(ctx context.Context, tx *bt.Tx, blockHei
 	// A coin at the candidate's own height (a same-block parent) has the candidate's parent
 	// as its ancestor, so its coin time is the block time above.
 	//
-	// A coin below the candidate's height reads mtpStore, which holds the current chain's
-	// values. That is right only up to the point where the candidate's branch leaves the
-	// current chain. Above it, a fork candidate's caller passes its own branch's coin
-	// times in Options.CandidateForkMTPs, and those heights read from there.
+	// A coin below the candidate's height reads mtpStore, which holds the values of the chain
+	// EnsureMTPLoaded last extended along, repaired over the last 12 heights only when the store
+	// grows. Those are right only below the point where the candidate's branch leaves that
+	// chain. Above it, a fork candidate's caller passes its own branch's coin times in
+	// Options.CandidateForkMTPs, and those heights read from there. A coin is looked up by its
+	// lowest recorded height across every block that mined it, which for a parent also mined
+	// lower on another chain is that other height, not its height on the candidate's branch.
 	blockMTP := validationOptions.CandidateParentMedianTime
 	if blockMTP == 0 {
 		err := errors.NewProcessingError("[Validator][validateTransaction] BIP68 requires Options.CandidateParentMedianTime, got zero (block height: %d)", blockHeight)

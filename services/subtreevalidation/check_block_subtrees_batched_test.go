@@ -846,10 +846,9 @@ func TestProcessTransactionsBatched_StepMetricsSeparateReadsFromChecks(t *testin
 	})
 }
 
-// forkAnswerClient serves a candidate branch to the block paths: GetBlockHeader and
-// GetBlockHeaders answer from headers (newest first, ending at the candidate's parent), and
-// CheckBlockIsInCurrentChain reports the metas from index onChainFrom on as on the current chain.
-// Every other call goes to the wrapped client.
+// forkAnswerClient serves a candidate branch (headers newest first, ending at the parent) to the
+// header reads, reports metas from onChainFrom on as on the current chain, and passes other calls
+// on. A real store cannot cheaply hold a chain at the fixture's height of 20,000.
 type forkAnswerClient struct {
 	blockchain.ClientI
 	headers     []*model.BlockHeader
@@ -883,6 +882,16 @@ func (c *forkAnswerClient) GetBlockHeaders(ctx context.Context, hash *chainhash.
 	}
 
 	return c.ClientI.GetBlockHeaders(ctx, hash, n)
+}
+
+func (c *forkAnswerClient) GetBlockHeadersByParentLinks(ctx context.Context, hash *chainhash.Hash, n uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
+	if i := c.index(hash); i >= 0 {
+		end := min(i+int(n), len(c.headers)) //nolint:gosec // test sizes are small
+
+		return c.headers[i:end], c.metas[i:end], nil
+	}
+
+	return c.ClientI.GetBlockHeadersByParentLinks(ctx, hash, n)
 }
 
 func (c *forkAnswerClient) CheckBlockIsInCurrentChain(_ context.Context, blockIDs []uint32) (bool, error) {
@@ -922,10 +931,8 @@ func (r *forkOptionsRecorder) CheckExtendedTransaction(ctx context.Context, tx *
 	return r.publishSpy.CheckExtendedTransaction(ctx, tx, blockHeight, utxoHeights, opts)
 }
 
-// forkCandidateFixture is a batched fixture where BIP68 is enforced at the test height (CSV at 0,
-// Genesis pushed above it), whose blockchain client serves a candidate branch: the parent and the
-// two blocks below it are off the current chain. Every transaction check reaching the validator
-// is recorded.
+// forkCandidateFixture is a batched fixture enforcing BIP68 at the test height, whose candidate's
+// parent and the two blocks below it are off the current chain, recording every transaction check.
 type forkCandidateFixture struct {
 	*batchedFixture
 	recorder *forkOptionsRecorder
@@ -1007,9 +1014,8 @@ func TestCheckBlockSubtrees_ForkCandidateCarriesBranchCoinTimes(t *testing.T) {
 	}
 }
 
-// TestCheckSubtreeFromBlock_ForkCandidateCarriesBranchCoinTimes checks the same for a subtree
-// checked on its own for a block on a side branch, through the legacy branch of
-// CheckSubtreeFromBlock. That branch and the peer branch take their shared options from one list.
+// TestCheckSubtreeFromBlock_ForkCandidateCarriesBranchCoinTimes checks the same through the legacy
+// branch of CheckSubtreeFromBlock, whose options the peer branch shares.
 func TestCheckSubtreeFromBlock_ForkCandidateCarriesBranchCoinTimes(t *testing.T) {
 	f := newForkCandidateFixture(t, blockchain.FSMStateCATCHINGBLOCKS)
 

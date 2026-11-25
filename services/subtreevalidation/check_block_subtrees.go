@@ -2305,17 +2305,10 @@ func (u *Server) fetchCandidateForkMTPs(ctx context.Context, parentHash *chainha
 		headers = append(headers, pageHeaders...)
 		metas = append(metas, pageMetas...)
 
-		for i := len(metas) - len(pageMetas); forkIdx < 0 && i < len(metas); i++ {
-			if i == 0 {
-				continue
-			}
-
-			if onChain, err = u.blockchainClient.CheckBlockIsInCurrentChain(ctx, []uint32{metas[i].ID}); err != nil {
-				return 0, nil, errors.NewProcessingError("parent hash %s: failed to check whether the ancestor at height %d is on the current chain", parentHash.String(), metas[i].Height, err)
-			}
-
-			if onChain {
-				forkIdx = i
+		if forkIdx < 0 {
+			// index 0, the parent, is already known to be off the current chain
+			if forkIdx, err = u.firstOnCurrentChain(ctx, metas, max(len(metas)-len(pageMetas), 1)); err != nil {
+				return 0, nil, errors.NewProcessingError("parent hash %s: failed to find where the candidate branch leaves the current chain", parentHash.String(), err)
 			}
 		}
 
@@ -2357,11 +2350,55 @@ func (u *Server) fetchCandidateForkMTPs(ctx context.Context, parentHash *chainha
 	return start, mtps, nil
 }
 
+// firstOnCurrentChain returns the first index from 'from' on whose block is on the current chain,
+// or -1 if none is. Every ancestor of a block on the current chain is on it too, so the blocks of
+// a run that are on it form a suffix. One any-of check tells whether the suffix starts in
+// metas[from:], and a binary search with any-of checks over prefixes finds where.
+func (u *Server) firstOnCurrentChain(ctx context.Context, metas []*model.BlockHeaderMeta, from int) (int, error) {
+	if from >= len(metas) {
+		return -1, nil
+	}
+
+	anyOnChain := func(lo, hi int) (bool, error) {
+		ids := make([]uint32, 0, hi-lo+1)
+		for _, m := range metas[lo : hi+1] {
+			ids = append(ids, m.ID)
+		}
+
+		return u.blockchainClient.CheckBlockIsInCurrentChain(ctx, ids)
+	}
+
+	found, err := anyOnChain(from, len(metas)-1)
+	if err != nil || !found {
+		return -1, err
+	}
+
+	lo, hi := from, len(metas)-1
+	for lo < hi {
+		mid := lo + (hi-lo)/2
+
+		if found, err = anyOnChain(lo, mid); err != nil {
+			return -1, err
+		}
+
+		if found {
+			hi = mid
+		} else {
+			lo = mid + 1
+		}
+	}
+
+	return lo, nil
+}
+
 // candidateBranchRun fetches up to depth headers starting at startHash, newest first, and checks
 // that they form one linked run from that block at startHeight downwards, with metas whose
 // heights match their place in the run.
 func (u *Server) candidateBranchRun(ctx context.Context, startHash *chainhash.Hash, startHeight uint32, depth uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
-	headers, metas, err := u.blockchainClient.GetBlockHeaders(ctx, startHash, depth)
+	// By parent links, never by the main-chain flag or through a cache: below the fork point the
+	// run is on the main chain, where a reorg racing GetBlockHeaders' flag probe could return,
+	// and cache, another chain's headers.
+	headers, metas, err := u.blockchainClient.GetBlockHeadersByParentLinks(ctx, startHash, depth)
 	if err != nil {
 		return nil, nil, errors.NewProcessingError("parent hash %s: failed to fetch the candidate branch headers", startHash.String(), err)
 	}
@@ -2485,8 +2522,9 @@ func candidateParentMedianTimeFromHeaders(parentHash *chainhash.Hash, headers []
 	// A run LONGER than the window is as wrong as one shorter than it, and just as invisible to
 	// the anchor and linkage checks: an over-long run is still anchored at the parent and still
 	// correctly linked, but its median covers blocks the consensus rule excludes. Unreachable
-	// while the only caller requests exactly MedianTimeBlocks, which the store cannot exceed;
-	// enforced so that all three copies of this helper — here, netsync, and block assembly's
+	// while its callers pass at most MedianTimeBlocks headers: fetchCandidateParentMedianTime
+	// requests exactly that many, and fetchCandidateForkMTPs slices windows no longer; enforced
+	// so that all three copies of this helper — here, netsync, and block assembly's
 	// verifyParentChainRun — agree, and a later change to the request size fails loudly rather
 	// than silently widening the window in some of them.
 	if uint64(len(headers)) > blockchain.MedianTimeBlocks {

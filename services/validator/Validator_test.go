@@ -2575,16 +2575,9 @@ func bip68TimeLockedTx(t *testing.T) *bt.Tx {
 	return tx
 }
 
-// TestValidateTransaction_BIP68BlockTimeFollowsCandidateBranch checks that a time-based
-// relative lock is judged against the candidate's own parent median
-// (Options.CandidateParentMedianTime), not the main chain's median at the candidate's
-// height. The coin sits one block below the candidate, so its coin time is
-// MTP(H-1) = 1_700_000_000 + H - 1, and the lock needs a block time of at least
-// coin time + 512.
-//
-// A fork candidate at height H has a different parent from the main-chain block at H, so
-// the two medians differ. Each case puts the verdict on the opposite side of the lock from
-// what mtpStore[H] would give.
+// TestValidateTransaction_BIP68BlockTimeFollowsCandidateBranch checks that a one-unit time lock
+// on a coin at H-1 is judged against Options.CandidateParentMedianTime, not mtpStore[H]: each
+// case puts the two on opposite sides of the lock.
 func TestValidateTransaction_BIP68BlockTimeFollowsCandidateBranch(t *testing.T) {
 	const blockHeight = uint32(500_000)
 
@@ -2625,14 +2618,9 @@ func TestValidateTransaction_BIP68BlockTimeFollowsCandidateBranch(t *testing.T) 
 	})
 }
 
-// TestValidateTransaction_BIP68ForkCoinReadsItsOwnBranch checks that a coin created on the
-// candidate's own branch, above the point where that branch leaves the main chain, takes its
-// coin time from Options.CandidateForkMTPs and not from the main chain's mtpStore.
-//
-// The fork leaves the main chain below H-8, so the overlay covers H-8 to H-1 and the coin
-// sits at H-5. Its branch's median is two hours later than the main chain's at H-5. The block
-// time is 100 seconds after the branch coin time, short of the 512 a one-unit lock needs,
-// while measured from the main-chain coin time it would be more than two hours.
+// TestValidateTransaction_BIP68ForkCoinReadsItsOwnBranch checks that a coin at H-5 on the
+// candidate's branch (overlay H-8 to H-1) takes its coin time from Options.CandidateForkMTPs:
+// the branch and main-chain medians fall on opposite sides of a one-unit lock.
 func TestValidateTransaction_BIP68ForkCoinReadsItsOwnBranch(t *testing.T) {
 	const (
 		blockHeight = uint32(500_000)
@@ -2684,26 +2672,34 @@ func TestValidateTransaction_BIP68ForkCoinReadsItsOwnBranch(t *testing.T) {
 	})
 }
 
-// TestReadMTPsLocked_ForkMTPs checks which source each coin height reads when the candidate
-// carries its branch's coin times: the main-chain store below the fork, the overlay from the
-// fork up to the parent, and the block time at the candidate's own height.
+// TestReadMTPsLocked_ForkMTPs checks which source each coin height reads with a branch overlay
+// (store below the fork, overlay up to the parent, block time at the candidate's height), and
+// that an overlay not ending at the candidate's parent is refused.
 func TestReadMTPsLocked_ForkMTPs(t *testing.T) {
 	v := &Validator{mtpStore: []uint32{100, 101, 102, 103, 104, 105}}
 
-	utxoMTPs, err := v.readMTPsLocked(5, 999, 3, []uint32{203, 204}, []uint32{2, 3, 4, 5})
-	require.NoError(t, err)
-	require.Equal(t, []uint32{102, 203, 204, 999}, utxoMTPs)
-}
+	tests := []struct {
+		name      string
+		forkStart uint32
+		want      []uint32
+		wantErr   bool
+	}{
+		{name: "overlay ends at the parent", forkStart: 3, want: []uint32{102, 203, 204, 999}},
+		{name: "overlay ends below the parent", forkStart: 2, wantErr: true},
+		{name: "overlay runs past the parent", forkStart: 4, wantErr: true},
+	}
 
-// TestReadMTPsLocked_RejectsForkMTPsNotEndingAtParent checks that an overlay which does not
-// end at the candidate's parent is refused rather than indexed.
-func TestReadMTPsLocked_RejectsForkMTPsNotEndingAtParent(t *testing.T) {
-	v := &Validator{mtpStore: []uint32{100, 101, 102, 103, 104, 105}}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			utxoMTPs, err := v.readMTPsLocked(5, 999, tc.forkStart, []uint32{203, 204}, []uint32{2, 3, 4, 5})
+			if tc.wantErr {
+				require.ErrorContains(t, err, "must end at the candidate's parent")
+				return
+			}
 
-	for _, forkStart := range []uint32{2, 4} {
-		_, err := v.readMTPsLocked(5, 999, forkStart, []uint32{203, 204}, []uint32{3})
-		require.Error(t, err)
-		require.Contains(t, err.Error(), "must end at the candidate's parent")
+			require.NoError(t, err)
+			require.Equal(t, tc.want, utxoMTPs)
+		})
 	}
 }
 
@@ -2727,9 +2723,8 @@ func TestValidateTransaction_BIP68PathReadsMTPStore(t *testing.T) {
 	require.NoError(t, err)
 }
 
-// TestValidateTransaction_BIP68FailsWithoutItsMTPs checks that a block inside the BIP68
-// range fails, rather than judging time locks against zero, when either MTP source is
-// missing: the pre-warmed mtpStore, or the caller's candidate-parent MTP.
+// TestValidateTransaction_BIP68FailsWithoutItsMTPs checks that a block in the BIP68 range fails,
+// rather than judging locks against zero, without a loaded mtpStore or a candidate-parent MTP.
 func TestValidateTransaction_BIP68FailsWithoutItsMTPs(t *testing.T) {
 	const blockHeight = uint32(500_000)
 

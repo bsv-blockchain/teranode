@@ -115,7 +115,9 @@ type Options struct {
 	// CandidateForkStartHeight+len(CandidateForkMTPs) is the candidate's height. A coin at
 	// one of those heights reads its time from here rather than from the validator's MTP
 	// store, which holds the current chain's values. Both are empty when the candidate's
-	// parent is on the current chain. Only consumed where BIP68 is enforced.
+	// parent is on the current chain. Only consumed where BIP68 is enforced. The validator
+	// looks a coin up by its lowest recorded height across every block that mined it, so a
+	// parent also mined lower on another chain is read at that other height.
 	CandidateForkStartHeight uint32
 	CandidateForkMTPs        []uint32
 
