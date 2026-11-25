@@ -93,6 +93,12 @@ type ValidateBlockOptions struct {
 	// This is used to track peer behavior during subtree validation.
 	PeerID string
 
+	// HeaderProven is legacy netsync's proof that the block's hash sits in a header run that a
+	// matched hardcoded checkpoint commits (headerCache.Proven). It is the same proof the unified
+	// below-checkpoint route rests on, and it counts as checkpoint ancestry for the coinbase
+	// no-inflation skip (checkpointConfirmedAncestor). Every caller other than netsync leaves it false.
+	HeaderProven bool
+
 	// KeepBlockAssemblyHandoff asks subtree validation to hand the block's unseen transactions
 	// to block assembly even though the FSM is in CATCHINGBLOCKS. Catchup sets it for a short
 	// run that started from RUNNING, so a fork block's transactions reach the pool exactly as
@@ -2819,7 +2825,7 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 
 				// Create meta regenerator with peer URL for potential meta file recovery
 				metaRegenerator := u.createMetaRegenerator([]string{baseURL})
-				block.SetCheckpointConfirmedAncestor(u.checkpointConfirmedAncestor(decoupledCtx, block))
+				block.SetCheckpointConfirmedAncestor(u.checkpointConfirmedAncestor(decoupledCtx, block, opts.HeaderProven))
 				if ok, err := block.Valid(laneParentsContext(decoupledCtx, block), u.logger, u.subtreeStore, u.utxoStore, oldBlockIDsMap, blockHeaders, blockHeaderIDs, u.settings, metaRegenerator); !ok {
 					u.logger.Errorf("[ValidateBlock][%s] InvalidateBlock block is not valid in background: %v", block.String(), err)
 
@@ -2972,7 +2978,7 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 
 			// Create meta regenerator with peer URL for potential meta file recovery
 			metaRegenerator := u.createMetaRegenerator([]string{baseURL})
-			block.SetCheckpointConfirmedAncestor(u.checkpointConfirmedAncestor(ctx, block))
+			block.SetCheckpointConfirmedAncestor(u.checkpointConfirmedAncestor(ctx, block, opts.HeaderProven))
 			if ok, bodyBoundToHeader, err := block.ValidWithBinding(laneParentsContext(ctx, block), u.logger, u.subtreeStore, u.utxoStore, oldBlockIDsMap, blockHeaders, blockHeaderIDs, u.settings, metaRegenerator); !ok {
 				reason := "unknown"
 				if err != nil {
@@ -4031,6 +4037,13 @@ func (u *BlockValidation) enqueueRevalidation(data revalidateBlockData) {
 // lands on a stored block. That case costs one indexed existence lookup, and it covers every block
 // arriving for the first time, a peer-served fork below the checkpoint included.
 //
+// headerProven is the other proof of the same fact, and it is the one a block arriving for the
+// first time can carry: legacy netsync's header cache saw the block's hash in a header run that a
+// matched hardcoded checkpoint commits. When it is true the predicate holds without the lookups.
+// This is what lets full validation accept a proven legacy block whose fees were recorded as 0 by
+// an earlier outpoint-only quick attempt that never committed: the attempt's transaction records
+// stay in the UTXO store with fee 0, and subtree validation reuses those fees as they stand.
+//
 // Cost: for a stored block, one recursive query over the stored blocks between the checkpoint and
 // b, up to the checkpoint height in rows; a query for a pinned hash that is not stored returns at
 // once. Only a block already in the blockchain store pays it: revalidation, reconsiderblock, the
@@ -4038,7 +4051,7 @@ func (u *BlockValidation) enqueueRevalidation(data revalidateBlockData) {
 // path, which stores a block before validating it. The walk grows with the block's age: an early
 // mainnet block walks close to the checkpoint height in rows, where the old check made two
 // indexed lookups.
-func (u *BlockValidation) checkpointConfirmedAncestor(ctx context.Context, b *model.Block) bool {
+func (u *BlockValidation) checkpointConfirmedAncestor(ctx context.Context, b *model.Block, headerProven bool) bool {
 	// The below-checkpoint no-inflation skip requires store fast-path support too, so the
 	// ancestry predicate cannot change the outcome on a store that never produces fee=0
 	// blocks. Short-circuit before any blockchain lookup on such stores (Aerospike, the
@@ -4057,6 +4070,10 @@ func (u *BlockValidation) checkpointConfirmedAncestor(ctx context.Context, b *mo
 	pinned := model.HighestCheckpointHash(checkpoints)
 	if pinned == nil {
 		return false
+	}
+
+	if headerProven {
+		return true
 	}
 
 	// The walk below can only land on a stored block, and it costs up to the checkpoint height in
@@ -4222,7 +4239,7 @@ func (u *BlockValidation) reValidateBlock(ctx context.Context, blockData revalid
 
 	// Create meta regenerator with peer URL for potential meta file recovery during revalidation
 	metaRegenerator := u.createMetaRegenerator([]string{blockData.baseURL})
-	blockData.block.SetCheckpointConfirmedAncestor(u.checkpointConfirmedAncestor(ctx, blockData.block))
+	blockData.block.SetCheckpointConfirmedAncestor(u.checkpointConfirmedAncestor(ctx, blockData.block, false))
 	if ok, err := blockData.block.Valid(laneParentsContext(ctx, blockData.block), u.logger, u.subtreeStore, u.utxoStore, oldBlockIDsMap, blockHeaders, blockHeaderIDs, u.settings, metaRegenerator); !ok {
 		u.logger.Errorf("[ReValidateBlock][%s] InvalidateBlock block is not valid in background: %v", blockData.block.String(), err)
 
