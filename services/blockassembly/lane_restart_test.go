@@ -12,7 +12,7 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-subtree"
 	"github.com/bsv-blockchain/teranode/model"
-	"github.com/bsv-blockchain/teranode/services/blockchain"
+	"github.com/bsv-blockchain/teranode/services/blockassembly/subtreeprocessor"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	utxoaerospike "github.com/bsv-blockchain/teranode/stores/utxo/aerospike"
@@ -23,8 +23,8 @@ import (
 	"github.com/bsv-blockchain/teranode/util/lane"
 	"github.com/bsv-blockchain/teranode/util/lanereader"
 	"github.com/bsv-blockchain/teranode/util/test"
+	"github.com/jellydator/ttlcache/v3"
 	"github.com/prometheus/client_golang/prometheus/testutil"
-	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -525,26 +525,129 @@ func TestLaneRestartReaderViewWaitsForTheTarget(t *testing.T) {
 	require.Nil(t, laneRestartReaderView(ctx, 1, map[uint32]bool{0: true}), "a cancelled run stops waiting")
 }
 
-// A run from a reload reads its grants from the blockchain client and waits for the process's lane
-// index, and judges with the UTXO store's window read where the store has one.
+// A run from a reload reads its grants through the assembler's blockchain client and waits for the
+// process's lane index, and judges with the UTXO store's window read where the store has one.
 func TestLaneRestartDepsComeFromTheAssembler(t *testing.T) {
 	ba, _, cleanup := setupDiskSortTest(t)
 	defer cleanup()
 
-	client := &blockchain.Mock{}
-	client.On("LaneCapGrants", mock.Anything, uint32(7)).Return([]lane.CapGrant{{Lane: 3, First: 1}}, nil)
-	ba.blockchainClient = client
+	_, grant, err := ba.blockchainClient.OpenLaneLease(context.Background(), "test")
+	require.NoError(t, err)
 
 	deps := ba.laneRestartDeps()
 
-	got, err := deps.grants(context.Background(), 7)
+	got, err := deps.grants(context.Background(), 0)
 	require.NoError(t, err)
-	require.Equal(t, []lane.CapGrant{{Lane: 3, First: 1}}, got)
-	client.AssertExpectations(t)
+	require.Len(t, got, 1)
+	require.Equal(t, grant.Lane, got[0].Lane)
+	require.Equal(t, grant.First, got[0].First)
+
+	got, err = deps.grants(context.Background(), 1)
+	require.NoError(t, err)
+	require.Empty(t, got, "the grant was handed out at height 0")
 
 	require.Equal(t, reflect.ValueOf(laneRestartReaderView).Pointer(), reflect.ValueOf(deps.view).Pointer(), "the process's lane index")
 	require.Nil(t, deps.window, "the SQL store cannot read the window")
 	require.Equal(t, ba.settings.UtxoStore.UnminedTxRetention, deps.retention)
+}
+
+// blockingWindowStore is a UTXO store whose window read blocks until its run is cancelled, and says
+// when a read has started.
+type blockingWindowStore struct {
+	utxo.Store
+	started chan struct{}
+}
+
+func (s *blockingWindowStore) ReadLaneWindow(ctx context.Context, _ utxo.LaneWindow, _ func([]utxo.LaneWindowRecord) error) (utxo.LaneWindowStats, error) {
+	s.started <- struct{}{}
+
+	<-ctx.Done()
+
+	return utxo.LaneWindowStats{}, ctx.Err()
+}
+
+// A new reload cancels a run still reading, and stopping block assembly stops one and waits for it.
+func TestLaneRestartRunIsCancelledByTheNextReloadAndByStop(t *testing.T) {
+	defer func(d time.Duration) { laneRestartViewWait = d }(laneRestartViewWait)
+
+	laneRestartViewWait = 10 * time.Millisecond
+
+	setup, _, cleanup := setupDiskSortTest(t)
+	defer cleanup()
+
+	_, _, err := setup.blockchainClient.OpenLaneLease(context.Background(), "test")
+	require.NoError(t, err)
+
+	ts := *setup.settings
+	ts.UtxoStore.LaneMigration = settings.LaneMigrationShadow
+
+	store := &blockingWindowStore{started: make(chan struct{}, 1)}
+	b := &BlockAssembler{logger: ulogger.TestLogger{}, settings: &ts, utxoStore: store, blockchainClient: setup.blockchainClient}
+	header, _ := setup.CurrentBlock()
+	b.bestBlock.Store(&BestBlockInfo{Header: header, Height: 0})
+
+	ids := map[uint32]bool{0: true}
+
+	runEnds := func() *laneRestartResult {
+		b.laneRestart.mu.Lock()
+		done := b.laneRestart.done
+		b.laneRestart.mu.Unlock()
+
+		select {
+		case <-done:
+		case <-time.After(10 * time.Second):
+			t.Fatal("the run did not end")
+		}
+
+		b.laneRestart.mu.Lock()
+		defer b.laneRestart.mu.Unlock()
+
+		return b.laneRestart.last
+	}
+
+	b.startLaneRestartDryRun(context.Background(), b.newLaneRestartToday(ids, time.Now()))
+	<-store.started
+
+	b.laneRestart.mu.Lock()
+	first := b.laneRestart.done
+	b.laneRestart.mu.Unlock()
+
+	next := b.newLaneRestartToday(ids, time.Now())
+	require.NotNil(t, next)
+
+	select {
+	case <-first:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the next reload did not cancel the run")
+	}
+
+	require.Equal(t, laneRunCancelled, runEnds().outcome)
+
+	b.startLaneRestartDryRun(context.Background(), next)
+	<-store.started
+
+	// Starting another run cancels this one, even without a reload's cancel first.
+	b.laneRestart.mu.Lock()
+	second := b.laneRestart.done
+	b.laneRestart.mu.Unlock()
+
+	b.startLaneRestartDryRun(context.Background(), next)
+
+	select {
+	case <-second:
+	case <-time.After(10 * time.Second):
+		t.Fatal("starting another run did not cancel the one going")
+	}
+
+	<-store.started
+
+	jobs := ttlcache.New[chainhash.Hash, *subtreeprocessor.Job]()
+	go jobs.Start()
+
+	server := &BlockAssembly{logger: ulogger.TestLogger{}, blockAssembler: b, jobStore: jobs}
+	require.NoError(t, server.Stop(context.Background()))
+
+	require.Equal(t, laneRunCancelled, runEnds().outcome)
 }
 
 // requireLaneRestartPublished publishes res and checks the last-run gauges, and that the records and

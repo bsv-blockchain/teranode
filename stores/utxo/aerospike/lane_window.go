@@ -110,6 +110,11 @@ func (s *Store) ReadLaneWindow(ctx context.Context, w utxo.LaneWindow, fn func([
 
 			defer func() { _ = rs.Close() }()
 
+			// A cancel closes the recordset at once: the server may walk a long stretch of the
+			// index with nothing inside the window, and send no record to notice the cancel by.
+			stopClose := context.AfterFunc(readCtx, func() { _ = rs.Close() })
+			defer stopClose()
+
 			cur := result{batch: make([]utxo.LaneWindowRecord, 0, laneWindowBatch)}
 
 			send := func() bool {

@@ -115,7 +115,8 @@ func isLaneSampleDisagreement(kind string) bool {
 }
 
 // laneRestartToday is what today's reload read and kept, gathered while it runs, and the target it
-// judged against. Only the reload's goroutine writes it, before the dry run starts.
+// judged against. The reload's goroutine fills it before the dry run starts; after that only the
+// dry run's goroutine touches it, and it writes each sampled entry's verdict.
 type laneRestartToday struct {
 	target       chainhash.Hash
 	targetHeight uint32
