@@ -262,6 +262,8 @@ func requireMatchesRawAggregate(t *testing.T, s *SQL, periodSeconds uint64, got 
 // against real PostgreSQL: the bucket expression and the SUM cast have to be
 // portable, and sqlite alone does not prove that.
 func TestSQLGetBlockGraphDataAggregatesInStore_Postgres(t *testing.T) {
+	t.Parallel() // a database of its own on the shared server
+
 	ctx := context.Background()
 
 	dbURL := postgresTestURL(t)

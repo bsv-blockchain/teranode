@@ -150,6 +150,8 @@ func TestStoreBlockCommitsLaneMapRowsWithTheBlock(t *testing.T) {
 // another transaction, it stops the store after the block's INSERT and before the commit. Another
 // connection then cannot see the block, and sees it with its rows once the lock is released.
 func TestStoreBlockCommitsTheBlockAndItsRowsTogether(t *testing.T) {
+	t.Parallel() // a database of its own on the shared server
+
 	if testing.Short() {
 		t.Skip("skipping postgres-backed test in -short mode")
 	}
@@ -180,7 +182,7 @@ func TestStoreBlockCommitsTheBlockAndItsRowsTogether(t *testing.T) {
 
 	require.Eventually(t, func() bool {
 		var waiting int
-		require.NoError(t, s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM pg_locks WHERE locktype = 'advisory' AND NOT granted`).Scan(&waiting))
+		require.NoError(t, s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM pg_locks WHERE locktype = 'advisory' AND NOT granted AND database = (SELECT oid FROM pg_database WHERE datname = current_database())`).Scan(&waiting))
 
 		return waiting > 0
 	}, 10*time.Second, 10*time.Millisecond, "the store waits on the block's lane write lock")
@@ -674,6 +676,8 @@ func TestStoreBlockCountsNothingForAForkBlockThatGivesUp_PostgreSQL(t *testing.T
 // DeleteBlock, which the rewind tool uses, removes the block and leaves its rows: rows are kept for
 // ever, and block IDs are never handed out again, so the rows name no block.
 func TestDeleteBlockLeavesItsLaneMapRows(t *testing.T) {
+	t.Parallel() // a database of its own on the shared server
+
 	runLaneHandoutTests(t, "delete", func(t *testing.T, s *SQL) {
 		ctx := t.Context()
 		rows := blockLaneRows(t)

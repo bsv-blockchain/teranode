@@ -28,6 +28,8 @@ func TestSQL_SetBlockMinedSet(t *testing.T) {
 // uint64 bind in "mined_set_gen = $2" has to compare against a BIGINT column and the
 // ALTER TABLE migration has to add that column with its default.
 func TestSQL_SetBlockMinedSet_Postgres(t *testing.T) {
+	t.Parallel() // a database of its own on the shared server
+
 	// each case gets its own database on the shared server, so the shared block fixtures never collide
 	testSetBlockMinedSet(t, postgresTestURL)
 }

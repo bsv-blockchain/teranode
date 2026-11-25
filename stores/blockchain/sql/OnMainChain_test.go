@@ -1283,6 +1283,8 @@ func TestStoreBlock_ReorgForkingBelowTheReconcileWindow(t *testing.T) {
 // PostgreSQL, which evaluates the same recursive walk and UPDATE ... RETURNING under its
 // own planner and snapshot rules.
 func TestStoreBlock_ReorgForkingBelowTheReconcileWindow_PostgreSQL(t *testing.T) {
+	t.Parallel() // a database of its own on the shared server
+
 	requireReorgBelowTheReconcileWindowIsRepaired(t, newPostgresOnMainChainTestStore(t))
 }
 
@@ -1400,6 +1402,8 @@ func TestStoreBlock_ReorgOverStaleFlagsNotesTheForkPoint(t *testing.T) {
 // TestStoreBlock_ReorgOverStaleFlagsNotesTheForkPoint_PostgreSQL runs the same reorg on
 // PostgreSQL, the engine whose full repair runs without slowPathMu and so can overlap it.
 func TestStoreBlock_ReorgOverStaleFlagsNotesTheForkPoint_PostgreSQL(t *testing.T) {
+	t.Parallel() // a database of its own on the shared server
+
 	requireReorgOverStaleFlagsNotesTheForkPoint(t, newPostgresOnMainChainTestStore(t))
 }
 

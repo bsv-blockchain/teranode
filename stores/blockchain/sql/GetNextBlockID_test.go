@@ -152,6 +152,8 @@ func TestGetNextBlockID_SQLite(t *testing.T) {
 }
 
 func TestGetNextBlockID_Postgres(t *testing.T) {
+	t.Parallel() // a database of its own on the shared server
+
 	ctx := context.Background()
 
 	t.Run("sequential ID generation from empty database", func(t *testing.T) {

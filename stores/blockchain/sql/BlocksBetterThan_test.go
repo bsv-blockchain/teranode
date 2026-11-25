@@ -98,6 +98,8 @@ func lowWater(t *testing.T, s *SQL) (mark model.BestTipLowWater, data []byte, ok
 // it was written later; it ties A2 on work and peer and wins on id, so it was the best tip until
 // A3 arrived. A read in id order from A2 would never see it.
 func TestBlocksBetterThan_BrieflyBestInOrder(t *testing.T) {
+	t.Parallel() // a database of its own on the shared server
+
 	forEachBestTipEngine(t, func(t *testing.T, s *SQL) {
 		ctx := t.Context()
 		genesis := s.chainParams.GenesisHash
@@ -150,6 +152,8 @@ func TestBlocksBetterThan_BrieflyBestInOrder(t *testing.T) {
 // one stored first stays the best tip even when a later one comes from a lower peer id, and the
 // read returns the later siblings below it, worst first.
 func TestBlocksBetterThan_TieKeepsFirstStored(t *testing.T) {
+	t.Parallel() // a database of its own on the shared server
+
 	forEachBestTipEngine(t, func(t *testing.T, s *SQL) {
 		a1 := createTestBlock(t, 301, s.chainParams.GenesisHash)
 		storeOn(t, s, a1, "b")
@@ -176,6 +180,8 @@ func TestBlocksBetterThan_TieKeepsFirstStored(t *testing.T) {
 // the highest id, so a read from it returns every block of its work, its own block included, and
 // the id binds on both engines although it is past the range of a signed 32-bit integer.
 func TestBlocksBetterThan_LegacyKeyIsLastAmongEqualWork(t *testing.T) {
+	t.Parallel() // a database of its own on the shared server
+
 	forEachBestTipEngine(t, func(t *testing.T, s *SQL) {
 		a1 := createTestBlock(t, 601, s.chainParams.GenesisHash)
 		storeOn(t, s, a1, "b")
@@ -204,6 +210,8 @@ func TestBlocksBetterThan_LegacyKeyIsLastAmongEqualWork(t *testing.T) {
 // because it sorts worse. C2 is stored before D2 but from a higher peer id, so a peer-id order
 // would pick D2.
 func TestBestTipLowWater_EqualWorkDropKeepsFirstStored(t *testing.T) {
+	t.Parallel() // a database of its own on the shared server
+
 	forEachBestTipEngine(t, func(t *testing.T, s *SQL) {
 		ctx := t.Context()
 
@@ -256,6 +264,8 @@ func TestBestTipLowWater_EqualWorkDropKeepsFirstStored(t *testing.T) {
 // TestBlocksBetterThan_FromIsInclusive: with a from key below after, the read starts at from
 // itself; with one above, it adds nothing.
 func TestBlocksBetterThan_FromIsInclusive(t *testing.T) {
+	t.Parallel() // a database of its own on the shared server
+
 	forEachBestTipEngine(t, func(t *testing.T, s *SQL) {
 		chain := make([]*model.Block, 0, 4)
 		parent := s.chainParams.GenesisHash
@@ -282,6 +292,8 @@ func TestBlocksBetterThan_FromIsInclusive(t *testing.T) {
 // every write gives it a new generation, and the conditional clear removes only the bytes the
 // caller read.
 func TestBestTipLowWater_WrittenByDrops(t *testing.T) {
+	t.Parallel() // a database of its own on the shared server
+
 	forEachBestTipEngine(t, func(t *testing.T, s *SQL) {
 		ctx := t.Context()
 
@@ -363,6 +375,8 @@ func TestBestTipLowWater_WrittenByDrops(t *testing.T) {
 // TestBestTipLowWater_DeleteBest: deleting the best block drops the tip and records the mark;
 // deleting a block off the best chain does not.
 func TestBestTipLowWater_DeleteBest(t *testing.T) {
+	t.Parallel() // a database of its own on the shared server
+
 	forEachBestTipEngine(t, func(t *testing.T, s *SQL) {
 		ctx := t.Context()
 
@@ -392,6 +406,8 @@ func TestBestTipLowWater_DeleteBest(t *testing.T) {
 // TestBestTipLowWater_UnreadableMarkResets: a drop merged into a mark this binary cannot read
 // loses whatever tips that mark listed, so the new mark asks the reader to reset regardless.
 func TestBestTipLowWater_UnreadableMarkResets(t *testing.T) {
+	t.Parallel() // a database of its own on the shared server
+
 	forEachBestTipEngine(t, func(t *testing.T, s *SQL) {
 		ctx := t.Context()
 
@@ -423,6 +439,8 @@ func TestBestTipLowWater_UnreadableMarkResets(t *testing.T) {
 // the index scan read backwards with no sort, which shows the index serves both the bound and
 // the order, so the read stays a bounded index range on a table of a million blocks.
 func TestBlocksBetterThan_PostgresUsesTheBestTipIndex(t *testing.T) {
+	t.Parallel() // a database of its own on the shared server
+
 	if testing.Short() {
 		t.Skip("postgres container test")
 	}

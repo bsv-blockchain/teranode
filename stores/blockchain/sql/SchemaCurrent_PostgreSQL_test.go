@@ -17,6 +17,10 @@ import (
 // postgresTestURL returns a fresh, empty database of its own on the PostgreSQL server
 // shared by this test binary (test/utils/postgres). The database is dropped when the test
 // ends, after any cleanup the test registers later, such as closing its store.
+//
+// Tests on a database of their own run in parallel. Those that set a package-level hook
+// (openLeaseAttemptHook, reservationSweepInterval) or read a process-wide metric stay
+// sequential, and Go runs every sequential test before it releases the parallel ones.
 func postgresTestURL(t *testing.T) *url.URL {
 	t.Helper()
 
@@ -53,6 +57,8 @@ func newSchemaTestDB(t *testing.T) (*url.URL, *usql.DB) {
 }
 
 func TestIsBlockchainSchemaCurrent_EmptyDB(t *testing.T) {
+	t.Parallel() // a database of its own on the shared server
+
 	if testing.Short() {
 		t.Skip("skipping postgres-backed test in -short mode")
 	}
@@ -65,6 +71,8 @@ func TestIsBlockchainSchemaCurrent_EmptyDB(t *testing.T) {
 }
 
 func TestIsBlockchainSchemaCurrent_AfterCreate(t *testing.T) {
+	t.Parallel() // a database of its own on the shared server
+
 	if testing.Short() {
 		t.Skip("skipping postgres-backed test in -short mode")
 	}
@@ -84,6 +92,8 @@ func TestIsBlockchainSchemaCurrent_AfterCreate(t *testing.T) {
 }
 
 func TestIsBlockchainSchemaCurrent_MissingColumn(t *testing.T) {
+	t.Parallel() // a database of its own on the shared server
+
 	if testing.Short() {
 		t.Skip("skipping postgres-backed test in -short mode")
 	}
@@ -110,6 +120,8 @@ func TestIsBlockchainSchemaCurrent_MissingColumn(t *testing.T) {
 // leave the schema current, so a tagging run on an old block reads generation 0 and its
 // SetBlockMinedSet still lands.
 func TestBlockchainSchema_AddsMinedSetGenToExistingBlocks(t *testing.T) {
+	t.Parallel() // a database of its own on the shared server
+
 	if testing.Short() {
 		t.Skip("skipping postgres-backed test in -short mode")
 	}
@@ -149,6 +161,8 @@ func TestBlockchainSchema_AddsMinedSetGenToExistingBlocks(t *testing.T) {
 }
 
 func TestIsBlockchainSchemaCurrent_MissingReservationsTable(t *testing.T) {
+	t.Parallel() // a database of its own on the shared server
+
 	if testing.Short() {
 		t.Skip("skipping postgres-backed test in -short mode")
 	}
@@ -172,6 +186,8 @@ func TestIsBlockchainSchemaCurrent_MissingReservationsTable(t *testing.T) {
 }
 
 func TestIsBlockchainSchemaCurrent_MissingIndex(t *testing.T) {
+	t.Parallel() // a database of its own on the shared server
+
 	if testing.Short() {
 		t.Skip("skipping postgres-backed test in -short mode")
 	}
@@ -192,6 +208,8 @@ func TestIsBlockchainSchemaCurrent_MissingIndex(t *testing.T) {
 }
 
 func TestIsBlockchainSchemaCurrent_WrongPeerIDType(t *testing.T) {
+	t.Parallel() // a database of its own on the shared server
+
 	if testing.Short() {
 		t.Skip("skipping postgres-backed test in -short mode")
 	}
@@ -215,6 +233,8 @@ func TestIsBlockchainSchemaCurrent_WrongPeerIDType(t *testing.T) {
 }
 
 func TestIsBlockchainSchemaCurrent_MissingPeerIDColumn(t *testing.T) {
+	t.Parallel() // a database of its own on the shared server
+
 	if testing.Short() {
 		t.Skip("skipping postgres-backed test in -short mode")
 	}
@@ -239,6 +259,8 @@ func TestIsBlockchainSchemaCurrent_MissingPeerIDColumn(t *testing.T) {
 }
 
 func TestCreatePostgresSchema_FastPathOnSecondCall(t *testing.T) {
+	t.Parallel() // a database of its own on the shared server
+
 	if testing.Short() {
 		t.Skip("skipping postgres-backed test in -short mode")
 	}
@@ -273,6 +295,8 @@ func TestCreatePostgresSchema_FastPathOnSecondCall(t *testing.T) {
 // fast path would skip the DDL sequence and the DROP INDEX would never run on an
 // existing database.
 func TestIsBlockchainSchemaCurrent_RetiredIndexPresent(t *testing.T) {
+	t.Parallel() // a database of its own on the shared server
+
 	if testing.Short() {
 		t.Skip("skipping postgres-backed test in -short mode")
 	}
@@ -300,6 +324,8 @@ func TestIsBlockchainSchemaCurrent_RetiredIndexPresent(t *testing.T) {
 // A database created by an older version still carries idx_inserted_at. Running the
 // schema setup against it must drop the index and leave the schema current.
 func TestCreatePostgresSchema_DropsRetiredIndex(t *testing.T) {
+	t.Parallel() // a database of its own on the shared server
+
 	if testing.Short() {
 		t.Skip("skipping postgres-backed test in -short mode")
 	}
@@ -331,6 +357,8 @@ func TestCreatePostgresSchema_DropsRetiredIndex(t *testing.T) {
 // idx_chain_work_valid, both ordered by peer_id, and lacks the indexes ordered by id. Running the
 // schema setup against it must swap them and leave the schema current.
 func TestCreatePostgresSchema_ReplacesPeerIDBestTipIndexes(t *testing.T) {
+	t.Parallel() // a database of its own on the shared server
+
 	if testing.Short() {
 		t.Skip("skipping postgres-backed test in -short mode")
 	}
@@ -383,6 +411,8 @@ func TestCreatePostgresSchema_ReplacesPeerIDBestTipIndexes(t *testing.T) {
 // error rather than carry on. A table with the index's name makes Postgres refuse
 // the drop, because the name is not an index.
 func TestCreatePostgresSchema_RetiredIndexDropFails(t *testing.T) {
+	t.Parallel() // a database of its own on the shared server
+
 	if testing.Short() {
 		t.Skip("skipping postgres-backed test in -short mode")
 	}
@@ -403,6 +433,8 @@ func TestCreatePostgresSchema_RetiredIndexDropFails(t *testing.T) {
 }
 
 func TestCreatePostgresSchema_MissingLaneHandoutTableTakesFastPath(t *testing.T) {
+	t.Parallel() // a database of its own on the shared server
+
 	if testing.Short() {
 		t.Skip("skipping postgres-backed test in -short mode")
 	}
@@ -433,6 +465,8 @@ func TestCreatePostgresSchema_MissingLaneHandoutTableTakesFastPath(t *testing.T)
 }
 
 func TestCreatePostgresSchema_CurrentSchemaNeedsNoCreatePrivilege(t *testing.T) {
+	t.Parallel() // a database of its own on the shared server
+
 	if testing.Short() {
 		t.Skip("skipping postgres-backed test in -short mode")
 	}

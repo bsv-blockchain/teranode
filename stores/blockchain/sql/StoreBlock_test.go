@@ -1043,6 +1043,8 @@ func TestStoreBlock_WithPersistedAt(t *testing.T) {
 }
 
 func TestStoreBlock_WithPersistedAt_Postgres(t *testing.T) {
+	t.Parallel() // a database of its own on the shared server
+
 	ctx := context.Background()
 
 	dbURL := postgresTestURL(t)
@@ -1223,6 +1225,8 @@ func heavyForkBlock(parent *model.Block, nonce uint32) *model.Block {
 // arrives meanwhile stores at once. The fork block keeps retrying while the row is held,
 // and the waiting fork block takes the tip once the row is released.
 func TestStoreBlockForkDoesNotHoldSlowPathMuOnALockedRow_PostgreSQL(t *testing.T) {
+	t.Parallel() // a database of its own on the shared server
+
 	s := newPostgresChainWriteStore(t)
 	ctx := context.Background()
 
@@ -1263,7 +1267,7 @@ func TestStoreBlockForkDoesNotHoldSlowPathMuOnALockedRow_PostgreSQL(t *testing.T
 	// Wait until the fork's reconcile is queued on the held row.
 	require.Eventually(t, func() bool {
 		var waiting int
-		if qErr := s.db.QueryRow(`SELECT count(*) FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND query LIKE '%new_path%'`).Scan(&waiting); qErr != nil {
+		if qErr := s.db.QueryRow(`SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock' AND query LIKE '%new_path%'`).Scan(&waiting); qErr != nil {
 			return false
 		}
 
@@ -1324,6 +1328,8 @@ func TestStoreBlockForkDoesNotHoldSlowPathMuOnALockedRow_PostgreSQL(t *testing.T
 // TestStoreBlockForkGiveUpContext_PostgreSQL checks that either kind of caller
 // cancellation interrupts the retry pause promptly and leaves no block behind.
 func TestStoreBlockForkGiveUpContext_PostgreSQL(t *testing.T) {
+	t.Parallel() // a database of its own on the shared server
+
 	for _, deadline := range []bool{false, true} {
 		name := "cancel"
 		if deadline {

@@ -16,6 +16,8 @@ import (
 // the best chain past a checkpoint after the first read, which still sees it below; only the
 // read under the lock can refuse the fork.
 func TestStoreBlock_CheckpointRecheckUnderChainWriteLock_Postgres(t *testing.T) {
+	t.Parallel() // a database of its own on the shared server
+
 	ctx := context.Background()
 
 	dbURL := postgresTestURL(t)

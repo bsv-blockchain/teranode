@@ -12,6 +12,8 @@ import (
 )
 
 func TestStoreBlockWithID_Postgres(t *testing.T) {
+	t.Parallel() // a database of its own on the shared server
+
 	ctx := context.Background()
 
 	t.Run("store block with custom ID", func(t *testing.T) {
@@ -108,6 +110,8 @@ func TestStoreBlockWithID_Postgres(t *testing.T) {
 // rules against Postgres, where the highest issued id comes from
 // pg_sequence_last_value rather than sqlite_sequence.
 func TestStoreBlock_CallerSuppliedIDMustMatchReservation_Postgres(t *testing.T) {
+	t.Parallel() // a database of its own on the shared server
+
 	ctx := context.Background()
 
 	dbURL := postgresTestURL(t)
