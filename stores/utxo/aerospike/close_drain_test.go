@@ -29,6 +29,8 @@ import (
 // SetLocked plus a clean Close proves the inline handling works during drain;
 // the pre-fix code would panic or wedge here.
 func TestClose_DrainsQueuedSetLockedMultiRecord(t *testing.T) {
+	t.Parallel()
+
 	if testing.Short() {
 		t.Skip("skipping Aerospike integration test in short mode")
 	}
@@ -43,10 +45,8 @@ func TestClose_DrainsQueuedSetLockedMultiRecord(t *testing.T) {
 	tSettings.UtxoStore.LockedBatcherDurationMillis = 60000 // 60s; Close fires first
 	tSettings.UtxoStore.LockedBatcherTickerIntervalMillis = 0
 
-	client, store, ctx, cleanup := initAerospike(t, tSettings, logger)
+	_, store, ctx, cleanup := initAerospike(t, tSettings, logger)
 	defer cleanup()
-
-	cleanDB(t, client)
 
 	// Small utxo batch size so a 20-output tx spans several records, giving the
 	// master a non-zero ChildCount and driving setLockedBatch's child path.
@@ -95,6 +95,8 @@ func TestClose_DrainsQueuedSetLockedMultiRecord(t *testing.T) {
 // setDAH/increment enqueues — run during Close's drain. A successful Spend plus
 // a clean Close proves the close order is correct; the pre-fix order panics.
 func TestClose_DrainsQueuedSpendCrossBatcher(t *testing.T) {
+	t.Parallel()
+
 	if testing.Short() {
 		t.Skip("skipping Aerospike integration test in short mode")
 	}
@@ -115,13 +117,11 @@ func TestClose_DrainsQueuedSpendCrossBatcher(t *testing.T) {
 	tSettings.UtxoStore.SpendBatcherDurationMillis = 60000 // 60s; Close fires first
 	tSettings.UtxoStore.SpendBatcherTickerIntervalMillis = 0
 
-	client, store, ctx, cleanup := initAerospike(t, tSettings, logger)
+	_, store, ctx, cleanup := initAerospike(t, tSettings, logger)
 	defer cleanup()
 
-	cleanDB(t, client)
-
 	// Build and store a multi-record tx.
-	largeTx := bt.NewTx()
+	largeTx := uniqueTx(bt.NewTx())
 	require.NoError(t, largeTx.From(
 		"1111111111111111111111111111111111111111111111111111111111111111",
 		0,

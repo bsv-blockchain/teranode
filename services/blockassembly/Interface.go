@@ -95,11 +95,13 @@ type ClientI interface {
 	//   - size: Transaction size in bytes
 	//   - validatedHeight: Block height the transaction was validated at, or 0 when unknown;
 	//     block assembly drops a transaction validated under other rules than its next block's
+	//   - lanePosition: The transaction's own lane position (util/lane), or 0 for none; non-zero
+	//     only at utxostore_laneMigration shadow
 	//
 	// Returns:
 	//   - bool: True if storage was successful
 	//   - error: Any error encountered during storage
-	Store(ctx context.Context, hash *chainhash.Hash, fee, size uint64, txInpoints subtree.TxInpoints, validatedHeight uint32) (bool, error)
+	Store(ctx context.Context, hash *chainhash.Hash, fee, size uint64, txInpoints subtree.TxInpoints, validatedHeight uint32, lanePosition uint64) (bool, error)
 
 	// RemoveTx removes a transaction from block assembly.
 	//
@@ -256,11 +258,13 @@ type Store interface {
 	//   - size: Transaction size in bytes
 	//   - validatedHeight: Block height the transaction was validated at, or 0 when unknown;
 	//     block assembly drops a transaction validated under other rules than its next block's
+	//   - lanePosition: The transaction's own lane position (util/lane), or 0 for none; non-zero
+	//     only at utxostore_laneMigration shadow
 	//
 	// Returns:
 	//   - bool: True if storage was successful
 	//   - error: Any error encountered during storage
-	Store(ctx context.Context, hash *chainhash.Hash, fee, size uint64, txInpoints subtree.TxInpoints, validatedHeight uint32) (bool, error)
+	Store(ctx context.Context, hash *chainhash.Hash, fee, size uint64, txInpoints subtree.TxInpoints, validatedHeight uint32, lanePosition uint64) (bool, error)
 
 	// RemoveTx removes a transaction from storage.
 	//

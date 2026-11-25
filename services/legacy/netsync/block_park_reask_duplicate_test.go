@@ -77,6 +77,14 @@ func TestApplyParkDisposition_AReAskIsNotADuplicateRequest(t *testing.T) {
 				h.sm.inFlightBlocksMu.Unlock()
 			},
 		},
+		{
+			// Marked by another source while the re-ask was pending, the sink-panic
+			// verdict say: a copy asked for would meet the same failure.
+			name: "marked recently failed",
+			arm: func(_ *testing.T, h *parkWiringHarness, child chainhash.Hash) {
+				h.sm.recentlyFailedBlocks.Set(child, struct{}{})
+			},
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			h, child := newReAskHarness(t)
