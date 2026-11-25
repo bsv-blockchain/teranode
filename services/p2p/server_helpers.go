@@ -1167,8 +1167,9 @@ func (s *Server) shouldSkipBannedPeer(from string, messageType string) bool {
 //
 // The check covers authors with an open connection only. A banned host that
 // signs gossip under fresh author keys has no connection under those keys, so
-// it is never IP-checked here; admission is what keeps it out, since its own
-// connection is refused.
+// it is never IP-checked here. With p2p_enforce_bans_at_admission on,
+// admission keeps it out, since its own connection is refused; with it off,
+// nothing does, as before admission enforcement existed.
 //
 // IsBanned runs per message per address. The ban list files single-address
 // bans by address, so a clean lookup costs one map read plus a scan of the
@@ -1468,9 +1469,9 @@ func (s *Server) handleBanEvent(ctx context.Context, event BanEvent) {
 		return
 	}
 
-	// IP/subnet ban with no PeerID (operator BanPeer RPC, startup replay). The
-	// sync above closed the connections at admission; drop the matching
-	// peers at the application layer too.
+	// IP/subnet ban with no PeerID (operator BanPeer RPC, startup replay). With
+	// admission enforcement on, the sync above closed the connections; drop
+	// the matching peers at the application layer too.
 	s.disconnectPeersOnBanList(ctx, event.Reason)
 }
 
@@ -1572,11 +1573,12 @@ func (s *Server) checkMultiaddrBanned(ctx context.Context, addrStr string) (bool
 }
 
 // disconnectPeersOnBanList drops at the application layer every registry
-// peer still connected from an address on the IP-based ban list. Admission
-// closes those connections when their rule is applied (syncAdmissionBans),
-// so normally nothing matches here; a match is a connection whose rule has
-// not been applied yet or whose Block* call failed, and the sync retries
-// that. Peers not in the registry are left alone, so a connection that
+// peer still connected from an address on the IP-based ban list. With
+// p2p_enforce_bans_at_admission on, admission closes those connections when
+// their rule is applied (syncAdmissionBans), so normally nothing matches
+// here; a match is a connection whose rule has not been applied yet or whose
+// Block* call failed, and the sync retries that. With it off, this is the
+// only enforcement against a connected peer, and the connection stays open. Peers not in the registry are left alone, so a connection that
 // outlives a failed block is not re-reported on every sweep.
 func (s *Server) disconnectPeersOnBanList(ctx context.Context, reason string) {
 	if s.P2PClient == nil || s.banList == nil {
@@ -1607,9 +1609,10 @@ func (s *Server) disconnectPeersOnBanList(ctx context.Context, reason string) {
 
 // disconnectBannedPeerByID drops a peer at the application layer (registry +
 // sync coordinator). Closing its connections is the caller's part, through
-// the bus: a ban blocks the peer or its address at admission, which closes
-// them (onPeerBanned, syncAdmissionBans), and an operator disconnect severs
-// them (severPeer).
+// the bus, and happens only with p2p_enforce_bans_at_admission on: a ban
+// blocks the peer or its address at admission, which closes them
+// (onPeerBanned, syncAdmissionBans), and an operator disconnect severs them
+// (severPeer).
 func (s *Server) disconnectBannedPeerByID(_ context.Context, peerID peer.ID, reason string) {
 	s.logger.Infof("[disconnectBannedPeerByID] Disconnecting banned peer %s (reason: %s)", peerID, reason)
 

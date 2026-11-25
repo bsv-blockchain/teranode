@@ -770,7 +770,8 @@ func NewServer(
 	// listening and dialling, so re-apply the persisted IP and subnet bans
 	// now rather than in Start: a connection admitted in between is closed
 	// by the Block* call that covers it. Peer-ID bans need the registry and
-	// are applied in Start (startGossipIntake).
+	// are applied in Start (startGossipIntake). Both are no-ops with
+	// p2p_enforce_bans_at_admission off.
 	p2pServer.syncAdmissionBans()
 
 	initPrometheusMetrics()
@@ -1233,8 +1234,9 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 //     against an empty mirror. A gossip worker never waits on another worker's
 //     refresh; see bannedPeerMirror.
 //   - syncAdmissionBans then blocks those peer IDs at connection admission,
-//     closing their open connections. NewServer already applied the IP and
-//     subnet bans right after creating the client.
+//     closing their open connections, when p2p_enforce_bans_at_admission is
+//     on. NewServer already applied the IP and subnet bans right after
+//     creating the client.
 func (s *Server) startGossipIntake(ctx context.Context) {
 	s.primeBannedPeers()
 	s.syncAdmissionBans()

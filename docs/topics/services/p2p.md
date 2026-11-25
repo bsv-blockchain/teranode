@@ -381,7 +381,7 @@ The bus keeps these rules in memory only. The P2P service applies the persisted 
 
 The bus gates a relayed connection on the relay's address, so banning a relay's or bootstrap peer's IP drops every peer reached through it. A peer-ID ban still reaches a peer behind a relay.
 
-With `p2p_enforce_bans_at_admission` off, step 3 is skipped: no rule reaches the bus, a banned peer's gossip is dropped and the peer leaves the registry, but its connection stays open.
+With `p2p_enforce_bans_at_admission` off, step 3 is skipped: no rule reaches the bus, a banned peer's gossip is dropped and the peer leaves the registry, but its connection stays open. A banned host that keeps its connection and signs gossip under fresh author keys is then not stopped, because those authors have no connection of their own to IP-check.
 
 #### 2.7.4. Configuration
 

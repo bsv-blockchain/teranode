@@ -101,7 +101,7 @@
 
 - `EnforceBansAtAdmission` (default true) applies bans to the message bus's connection gater. Operator IP and subnet bans block the address or subnet, and peer bans in the peer registry block the peer ID; matching connections are closed and new ones refused. Unban, expiry, `clearbanned` and a lapsed registry ban lift the rule, within one ban sweep (1 minute) for the cases that raise no event. A failed block is logged once and retried on the next sweep, and the ban is still enforced on messages meanwhile.
 - A relayed connection is gated on the relay's address, so banning a relay's or bootstrap peer's IP drops every peer reached through it. A peer-ID ban reaches a peer behind a relay.
-- With `false`, no gater rule is applied: a banned peer's gossip is dropped and the peer leaves the peer registry, but its connection stays open, and `disconnectpeer` acts at the application layer only. Use it to rule admission enforcement out while diagnosing connectivity.
+- With `false`, no gater rule is applied: a banned peer's gossip is dropped and the peer leaves the peer registry, but its connection stays open, and `disconnectpeer` acts at the application layer only. A banned host that keeps its connection and signs gossip under fresh author keys is not stopped, because those authors have no connection of their own to IP-check. Use it to rule admission enforcement out while diagnosing connectivity.
 
 ### Connection Limits
 
