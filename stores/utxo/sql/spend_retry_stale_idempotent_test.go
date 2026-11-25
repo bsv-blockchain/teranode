@@ -51,6 +51,8 @@ func (h *spendRetryHook) Warnf(format string, args ...interface{}) {
 // both engines. The hook drops the trigger and performs the Unspend between the
 // two attempts.
 func TestSpendRetryRollsBackSpendWrittenOnRetry(t *testing.T) {
+	parallelPostgres(t)
+
 	forEachBackend(t, func(t *testing.T, ctx context.Context, store *Store) {
 		newParent := func(seed string) *bt.Tx {
 			parent := bt.NewTx()
@@ -168,6 +170,8 @@ func TestSpendRetryRollsBackSpendWrittenOnRetry(t *testing.T) {
 // the match is a confirmed spend and must stay, is pinned by
 // TestFailedReplayReversesItsFreshSpendAndKeepsTheHistoricalMatch.
 func TestSpendRollbackReversesOrphanWhenASiblingParentIsMissing(t *testing.T) {
+	parallelPostgres(t)
+
 	forEachBackend(t, func(t *testing.T, ctx context.Context, store *Store) {
 		newParent := func(seed string, create bool) *bt.Tx {
 			parent := bt.NewTx()
@@ -234,6 +238,8 @@ func TestSpendRollbackReversesOrphanWhenASiblingParentIsMissing(t *testing.T) {
 // and is written fresh on attempt 2. A stale idempotent flag would keep it out of the
 // rollback, leaving P:0 spent by a transaction that is never created.
 func TestSpendRetryReversesAFreshWriteWhenAReplayAnswerFollows(t *testing.T) {
+	parallelPostgres(t)
+
 	forEachBackend(t, func(t *testing.T, ctx context.Context, store *Store) {
 		p := replayParent(t, ctx, store, strings.Repeat("1", 63)+"1")
 		q := replayParent(t, ctx, store, strings.Repeat("1", 63)+"2")

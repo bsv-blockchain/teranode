@@ -28,13 +28,15 @@ func TestPolicyRejectedTxEndToEnd(t *testing.T) {
 		t.Skip("skipping integration test in -short mode")
 	}
 
+	t.Parallel() // its own topic and consumer group on the shared broker
+
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
 	logger := ulogger.New("policy-rejected-tx-e2e")
-	env := kafkatest.MustStartEnv(t, ctx)
+	env := kafkatest.SharedEnv(t)
 
-	topic := fmt.Sprintf("policy-rejected-e2e-%d", time.Now().UnixNano()%10000)
+	topic := kafkatest.UniqueName("policy-rejected-e2e")
 	kafkaURL, err := url.Parse(env.TopicURL(topic,
 		"partitions=1&replication=1&retention=60000&flush_frequency=10ms&replay=1"))
 	require.NoError(t, err)
@@ -66,7 +68,7 @@ func TestPolicyRejectedTxEndToEnd(t *testing.T) {
 
 	// --- Consumer side (simulates what subtree validation does) ---
 	consumer, err := kafka.NewKafkaConsumerGroupFromURL(logger, kafkaURL,
-		fmt.Sprintf("policy-rejected-cg-%d", time.Now().UnixNano()%10000), true, nil)
+		kafkatest.UniqueName("policy-rejected-cg"), true, nil)
 	require.NoError(t, err)
 
 	cache := newTxPolicyRejectedCache(64 * 1024 * 1024)
@@ -134,13 +136,15 @@ func TestPolicyRejectedTxMultipleMessages(t *testing.T) {
 		t.Skip("skipping integration test in -short mode")
 	}
 
+	t.Parallel() // its own topic and consumer group on the shared broker
+
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
 	logger := ulogger.New("policy-rejected-batch-e2e")
-	env := kafkatest.MustStartEnv(t, ctx)
+	env := kafkatest.SharedEnv(t)
 
-	topic := fmt.Sprintf("policy-rejected-batch-%d", time.Now().UnixNano()%10000)
+	topic := kafkatest.UniqueName("policy-rejected-batch")
 	kafkaURL, err := url.Parse(env.TopicURL(topic,
 		"partitions=1&replication=1&retention=60000&flush_frequency=10ms&replay=1"))
 	require.NoError(t, err)
@@ -192,7 +196,7 @@ func TestPolicyRejectedTxMultipleMessages(t *testing.T) {
 	done := make(chan struct{})
 
 	consumer, err := kafka.NewKafkaConsumerGroupFromURL(logger, kafkaURL,
-		fmt.Sprintf("policy-batch-cg-%d", time.Now().UnixNano()%10000), true, nil)
+		kafkatest.UniqueName("policy-batch-cg"), true, nil)
 	require.NoError(t, err)
 
 	consumer.Start(ctx, func(msg *kafka.KafkaMessage) error {

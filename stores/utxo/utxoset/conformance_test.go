@@ -31,6 +31,8 @@ import (
 // at birth. With no checkpoint every height is the tip's regime, which is the one the suite is
 // written for.
 func TestConformance(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	t.Run("Store", func(t *testing.T) {
 		db, _ := newUncheckpointedStore(t)
 		tests.Store(t, db)

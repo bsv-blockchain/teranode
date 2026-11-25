@@ -27,6 +27,8 @@ func dataOnlyTx(t *testing.T, seed byte) *bt.Tx {
 // found by the identity probe, whatever leaf it lands in, and transactions the store never saw
 // are left out without failing the read.
 func TestStoredTxsFindsAnUnminedDataTransaction(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	// Enough distinct transactions to land in several leaves.
@@ -76,6 +78,8 @@ func TestStoredTxsFindsAnUnminedDataTransaction(t *testing.T) {
 // simulated by dropping the row, as the containment-read tests do. Pinned so a change to where
 // a transaction lives is seen here.
 func TestStoredTxsSeesTheIdentityTableOnly(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	tx := dataOnlyTx(t, 0x77)
@@ -141,6 +145,8 @@ func explainStoredTxs(t *testing.T, s *Store, ctx context.Context, perLeaf int) 
 // may read the partition whole instead, because that is fewer pages than a thousand descents;
 // that plan is logged, not failed.
 func TestStoredTxsPlanReadsThePrimaryKey(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	// An empty table is seq-scanned whatever the query, because there is nothing to scan. Fill

@@ -31,6 +31,8 @@ func holedRows(t *testing.T, laneNum uint8, positions ...uint64) []lane.MapRow {
 }
 
 func TestLaneMapRowsInsertAndRead(t *testing.T) {
+	t.Parallel() // a database of its own on the shared server
+
 	runLaneHandoutTests(t, "map rows", func(t *testing.T, s *SQL) {
 		ctx := t.Context()
 
@@ -76,6 +78,8 @@ func TestLaneMapRowsInsertAndRead(t *testing.T) {
 }
 
 func TestLaneMapRowsRefuseInvalidRows(t *testing.T) {
+	t.Parallel() // a database of its own on the shared server
+
 	runLaneHandoutTests(t, "invalid rows", func(t *testing.T, s *SQL) {
 		ctx := t.Context()
 
@@ -100,6 +104,8 @@ func TestLaneMapRowsRefuseInvalidRows(t *testing.T) {
 
 // The reader query for a floor: rows of a lane ending above a position, from every block.
 func TestLaneMapRowsEndingAbove(t *testing.T) {
+	t.Parallel() // a database of its own on the shared server
+
 	runLaneHandoutTests(t, "ending above", func(t *testing.T, s *SQL) {
 		ctx := t.Context()
 
@@ -133,6 +139,8 @@ func testSegment(id uint32, first, prefixLast, last uint64) lane.ConversionSegme
 // The design's example: block 700,000 holds A, B, C at 1,000,001 to 1,000,003, block 700,001 holds
 // D and E at 1,000,004 and 1,000,005, and the suffix holds one unmined record at 1,000,006.
 func TestLaneConversionSegmentLifecycle(t *testing.T) {
+	t.Parallel() // a database of its own on the shared server
+
 	runLaneHandoutTests(t, "conversion", func(t *testing.T, s *SQL) {
 		ctx := t.Context()
 		seg := testSegment(1, 1_000_001, 1_000_005, 1_000_006)
@@ -195,6 +203,8 @@ func TestLaneConversionSegmentLifecycle(t *testing.T) {
 // The prefix ends at 4 and the suffix runs to 10, so a block reaching 5 stays inside the segment and
 // only the prefix-end check refuses it.
 func TestLaneConversionBlocksMustNotPassThePrefix(t *testing.T) {
+	t.Parallel() // a database of its own on the shared server
+
 	runLaneHandoutTests(t, "prefix end", func(t *testing.T, s *SQL) {
 		ctx := t.Context()
 		require.NoError(t, s.InsertLaneConversionSegment(ctx, testSegment(1, 2, 4, 10)))
@@ -213,6 +223,8 @@ func TestLaneConversionBlocksMustNotPassThePrefix(t *testing.T) {
 // height and another block. The stored list is read only from its last block, so each of these is
 // checked against that block.
 func TestLaneConversionBlocksContinueAcrossCalls(t *testing.T) {
+	t.Parallel() // a database of its own on the shared server
+
 	runLaneHandoutTests(t, "continue", func(t *testing.T, s *SQL) {
 		ctx := t.Context()
 		require.NoError(t, s.InsertLaneConversionSegment(ctx, testSegment(1, 2, 20, 20)))
@@ -261,6 +273,8 @@ func TestLaneConversionBlocksContinueAcrossCalls(t *testing.T) {
 // Within one call each new block chains onto the block before it in that call, on a first call
 // and after stored blocks, and a call with one bad block stores none of its blocks.
 func TestLaneConversionBlocksChainWithinOneCall(t *testing.T) {
+	t.Parallel() // a database of its own on the shared server
+
 	runLaneHandoutTests(t, "one call", func(t *testing.T, s *SQL) {
 		ctx := t.Context()
 		require.NoError(t, s.InsertLaneConversionSegment(ctx, testSegment(1, 2, 20, 20)))
@@ -301,6 +315,8 @@ func TestLaneConversionBlocksChainWithinOneCall(t *testing.T) {
 // A stored block list that already runs past the prefix end, which only a fault could leave, is
 // refused rather than continued.
 func TestLaneConversionBlocksRefuseAStoredListPastThePrefix(t *testing.T) {
+	t.Parallel() // a database of its own on the shared server
+
 	runLaneHandoutTests(t, "stored past prefix", func(t *testing.T, s *SQL) {
 		ctx := t.Context()
 		require.NoError(t, s.InsertLaneConversionSegment(ctx, testSegment(1, 2, 4, 10)))
@@ -317,6 +333,8 @@ func TestLaneConversionBlocksRefuseAStoredListPastThePrefix(t *testing.T) {
 // 4294967295. Each case stores one valid row with one value out of range, and names the error the
 // range check gives, so no later check can stand in for it.
 func TestLaneReadersRefuseOutOfRangeStoredValues(t *testing.T) {
+	t.Parallel() // a database of its own on the shared server
+
 	const tooWide = int64(1) << 32
 
 	runLaneHandoutTests(t, "out of range", func(t *testing.T, s *SQL) {
@@ -470,6 +488,8 @@ func TestLaneConversionInsertsReportARefusedInsert(t *testing.T) {
 // segment's, is refused even when nothing overlaps. Recording a segment again is a no-op, and an
 // invalid segment is refused before anything is stored.
 func TestLaneConversionSegmentsAppend(t *testing.T) {
+	t.Parallel() // a database of its own on the shared server
+
 	runLaneHandoutTests(t, "append", func(t *testing.T, s *SQL) {
 		ctx := t.Context()
 
@@ -493,6 +513,8 @@ func TestLaneConversionSegmentsAppend(t *testing.T) {
 
 // Every lane_map index the reader needs exists on both engines, by its own name.
 func TestLaneMapLaneLastIndexExists(t *testing.T) {
+	t.Parallel() // a database of its own on the shared server
+
 	runLaneHandoutTests(t, "index", func(t *testing.T, s *SQL) {
 		var n int
 
@@ -509,6 +531,8 @@ func TestLaneMapLaneLastIndexExists(t *testing.T) {
 // A blockchain database from before this change has the lease tables but none of the map tables.
 // Schema setup adds them and touches nothing else.
 func TestLaneMapTablesAreAddedToAnOlderSchema(t *testing.T) {
+	t.Parallel() // a database of its own on the shared server
+
 	if testing.Short() {
 		t.Skip("skipping postgres-backed test in -short mode")
 	}
@@ -549,6 +573,8 @@ func TestLaneMapTablesAreAddedToAnOlderSchema(t *testing.T) {
 // seeing none and inserting different ones. Held here from another transaction, the lock must hold
 // the insert back until it is released.
 func TestLaneMapRowsWaitForTheBlockLock(t *testing.T) {
+	t.Parallel() // a database of its own on the shared server
+
 	if testing.Short() {
 		t.Skip("skipping postgres-backed test in -short mode")
 	}
@@ -669,6 +695,8 @@ func TestLaneConversionSegmentWaitsForTheSegmentLock(t *testing.T) {
 // On Postgres hole_data is stored out of line with no compression attempt, on a new database and
 // on one whose lane_map an earlier build created with the default storage.
 func TestLaneMapHoleDataIsStoredExternal(t *testing.T) {
+	t.Parallel() // a database of its own on the shared server
+
 	if testing.Short() {
 		t.Skip("skipping postgres-backed test in -short mode")
 	}
@@ -700,6 +728,8 @@ func TestLaneMapHoleDataIsStoredExternal(t *testing.T) {
 // lane_map makes startup wait at most laneMapStorageLockTimeout, then start with the default
 // storage; a role that does not own lane_map starts too.
 func TestLaneMapHoleDataStorageNeverBlocksStartup(t *testing.T) {
+	t.Parallel() // a database of its own on the shared server
+
 	if testing.Short() {
 		t.Skip("skipping postgres-backed test in -short mode")
 	}
@@ -743,18 +773,19 @@ func TestLaneMapHoleDataStorageNeverBlocksStartup(t *testing.T) {
 	require.Equal(t, "x", storage(), "the default storage stays while the lock was held")
 
 	// A role that does not own lane_map, on a schema its owner created with the default storage.
+	role := testRoleName("lane_storage_node", dbURL)
 	for _, stmt := range []string{
-		`CREATE ROLE lane_storage_node LOGIN PASSWORD 'lane_storage_node'`,
+		"CREATE ROLE " + role + " LOGIN PASSWORD '" + role + "'",
 		`REVOKE CREATE ON SCHEMA public FROM PUBLIC`,
-		`GRANT USAGE ON SCHEMA public TO lane_storage_node`,
-		`GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO lane_storage_node`,
+		"GRANT USAGE ON SCHEMA public TO " + role,
+		"GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO " + role,
 	} {
 		_, err = db.Exec(stmt)
 		require.NoError(t, err, stmt)
 	}
 
 	nodeURL := *dbURL
-	nodeURL.User = url.UserPassword("lane_storage_node", "lane_storage_node")
+	nodeURL.User = url.UserPassword(role, role)
 
 	nodeDB, err := usql.Open("postgres", nodeURL.String())
 	require.NoError(t, err)
