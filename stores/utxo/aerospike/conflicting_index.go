@@ -335,9 +335,8 @@ func (s *Store) stopConflictingIndexSelfTest() {
 // index still building, or a store error, leaves the state unchecked for the
 // next attempt. probeErr reports that the probe itself failed.
 func (s *Store) verifyConflictingIndex(ctx context.Context) (done, probeErr bool) {
-	// A server without the index (8.0) answers a query naming it with a bare
-	// PARAMETER_ERROR rather than INDEX_NOTFOUND, so the probe only runs once
-	// every node lists the index built.
+	// The probe only runs once every node lists the index built, so a missing
+	// or still-building index is never mistaken for one that misses the flag.
 	ready, err := s.conflictingIndexBuiltOnAllNodes()
 	if err != nil {
 		s.logger.Debugf("[ConflictingTxHashes] could not check whether %s is built: %v", conflictingIndexName, err)

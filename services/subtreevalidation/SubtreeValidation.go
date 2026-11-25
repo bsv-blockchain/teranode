@@ -1281,7 +1281,7 @@ func (u *Server) storeSubtreeLaneBitmaps(ctx context.Context, subtreeHash *chain
 	}
 
 	if err != nil && !errors.Is(err, errors.ErrBlobAlreadyExists) {
-		lane.CountMissingBitmaps(lane.MissingBitmapsWriteFailed, 1)
+		lane.CountMissingBitmaps(lane.BlockPeer, lane.MissingBitmapsWriteFailed, 1)
 		u.logger.Warnf("[ValidateSubtreeInternal][%s] failed to store subtree lane bitmaps, its block will go without lane rows: %v", subtreeHash.String(), err)
 	}
 }

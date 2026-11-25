@@ -27,24 +27,14 @@ func newLayoutTestStore(t *testing.T, batchSize int) (*Store, *aerospike.Client,
 	tSettings := test.CreateBaseTestSettings(t)
 	tSettings.UtxoStore.UtxoBatchSize = batchSize
 
-	container, err := runAerospikeTestContainer(ctx)
-	test.SkipIfContainerUnavailable(t, err)
+	server := acquireOwnTestServerForInternalTests(t)
+	h, p := server.Host, server.Port
 
-	t.Cleanup(func() {
-		require.NoError(t, container.Terminate(ctx))
-	})
-
-	h, err := container.Host(ctx)
-	require.NoError(t, err)
-
-	p, err := container.ServicePort(ctx)
-	require.NoError(t, err)
-
-	client, err := aerospike.NewClient(h, p)
-	require.NoError(t, err)
+	client, aeroErr := aerospike.NewClient(h, p)
+	require.NoError(t, aeroErr)
 	t.Cleanup(client.Close)
 
-	aeroURL, err := url.Parse(fmt.Sprintf("aerospike://%s:%d/test?set=utxo&externalStore=file://./data/external-lm", h, p))
+	aeroURL, err := url.Parse(fmt.Sprintf("aerospike://%s:%d/test?set=test&externalStore=file://./data/external-lm", h, p))
 	require.NoError(t, err)
 
 	store, newErr := New(ctx, logger, tSettings, aeroURL)
@@ -59,6 +49,8 @@ func newLayoutTestStore(t *testing.T, batchSize int) (*Store, *aerospike.Client,
 
 // A first open records the batch size it was configured with.
 func TestLayoutMarker_FirstOpenRecordsBatchSize(t *testing.T) {
+	t.Parallel()
+
 	store, client, _, _ := newLayoutTestStore(t, 128)
 	if store == nil {
 		t.Skip("store open failed")
@@ -75,6 +67,8 @@ func TestLayoutMarker_FirstOpenRecordsBatchSize(t *testing.T) {
 
 // Reopening with the same batch size is silent and accepted.
 func TestLayoutMarker_SameSizeReopenAccepted(t *testing.T) {
+	t.Parallel()
+
 	store, _, tSettings, endpoint := newLayoutTestStore(t, 512)
 	if store == nil {
 		t.Skip("store open failed")
@@ -82,7 +76,7 @@ func TestLayoutMarker_SameSizeReopenAccepted(t *testing.T) {
 
 	ctx := context.Background()
 	// Second store on the same namespace and the same size: must open cleanly.
-	aeroURL, err := url.Parse(fmt.Sprintf("aerospike://%s/test?set=utxo&externalStore=file://./data/external-lm2", endpoint))
+	aeroURL, err := url.Parse(fmt.Sprintf("aerospike://%s/test?set=test&externalStore=file://./data/external-lm2", endpoint))
 	require.NoError(t, err)
 
 	second, err := New(ctx, ulogger.NewErrorTestLogger(t), tSettings, aeroURL)
@@ -96,6 +90,8 @@ func TestLayoutMarker_SameSizeReopenAccepted(t *testing.T) {
 // vs docker.m (512) context swap from the notes - must refuse the store and
 // name both numbers.
 func TestLayoutMarker_DifferentSizeReopenRefused(t *testing.T) {
+	t.Parallel()
+
 	store, _, tSettings, endpoint := newLayoutTestStore(t, 512)
 	if store == nil {
 		t.Skip("store open failed")
@@ -104,7 +100,7 @@ func TestLayoutMarker_DifferentSizeReopenRefused(t *testing.T) {
 	ctx := context.Background()
 	tSettings.UtxoStore.UtxoBatchSize = 50
 
-	aeroURL, err := url.Parse(fmt.Sprintf("aerospike://%s/test?set=utxo&externalStore=file://./data/external-lm3", endpoint))
+	aeroURL, err := url.Parse(fmt.Sprintf("aerospike://%s/test?set=test&externalStore=file://./data/external-lm3", endpoint))
 	require.NoError(t, err)
 
 	_, err = New(ctx, ulogger.NewErrorTestLogger(t), tSettings, aeroURL)
@@ -118,6 +114,8 @@ func TestLayoutMarker_DifferentSizeReopenRefused(t *testing.T) {
 // loser path without a genuine race: the pre-write wins, the open re-reads,
 // agrees, and proceeds.
 func TestLayoutMarker_PreexistingSameValueAccepted(t *testing.T) {
+	t.Parallel()
+
 	store, client, _, _ := newLayoutTestStore(t, 64)
 	if store == nil {
 		t.Skip("store open failed")
@@ -138,6 +136,8 @@ func TestLayoutMarker_PreexistingSameValueAccepted(t *testing.T) {
 // different value directly, then calling writeLayoutBatchSize (which re-reads
 // and must report the disagreement naming the winner's number).
 func TestLayoutMarker_WriteRaceReportsWinner(t *testing.T) {
+	t.Parallel()
+
 	store, client, _, _ := newLayoutTestStore(t, 128)
 	if store == nil {
 		t.Skip("store open failed")
