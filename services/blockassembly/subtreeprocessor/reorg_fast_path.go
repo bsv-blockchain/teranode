@@ -563,12 +563,12 @@ func (stp *SubtreeProcessor) applyFastReorg(ctx context.Context, plan *fastReorg
 	stp.drainAndLogDiskTxMapErr("reorgBlocks_inplace_commit")
 
 	// Kept for late hand-offs of what the winners mined (recent_mined_sets.go), before the deferred
-	// drain runs, so a batch the drain does not take is still filtered when it is placed. A failed
-	// post-commit drain requests a reset, and reset() clears the kept sets (clearMinedSets). The fast
-	// path has one set, the winners' union, kept once under the tip: a later reorg that moves back any
-	// forward block moves back the tip too, so the union is forgotten whenever it must be. A reorg that
-	// moves back only the tip forgets the earlier blocks' protection with it, which only falls back to
-	// the behaviour without kept sets and never drops a transaction wrongly. The earlier blocks get no
+	// drain runs. A failed post-commit drain requests a reset, and reset() clears the kept sets
+	// (clearMinedSets). The fast path has one set,
+	// the winners' union, kept once under the tip: a later reorg that moves back any forward block
+	// moves back the tip too, so the union is forgotten whenever it must be. A reorg that moves back
+	// only the tip forgets the earlier blocks' protection with it, which only falls back to the
+	// behaviour without kept sets and never drops a transaction wrongly. The earlier blocks get no
 	// entry: this call also prunes the expired sets, as each step's does.
 	stp.keepMinedSet(moveForwardBlocks[len(moveForwardBlocks)-1], plan.winners)
 
