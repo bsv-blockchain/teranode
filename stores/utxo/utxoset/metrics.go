@@ -126,3 +126,6 @@ var (
 		Help: "1 while the operator has asked for every tx_mined partition and undo partition to be kept; the stamp still runs",
 	})
 )
+
+// laneStoreName labels this store's lane position counters.
+const laneStoreName = "utxoset"

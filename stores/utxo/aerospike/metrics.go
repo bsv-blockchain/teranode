@@ -73,6 +73,11 @@ var (
 	prometheusUtxoSpendRollbackFailed   prometheus.Counter
 	prometheusUtxoSpendAbortInFlight    prometheus.Counter
 
+	// prometheusAerospikeNativeRouting says, per route, whether the store sends the operation as a
+	// native mod-teranode op (1) or on the UDF or filtered-expression path (0). A native-ops
+	// deployment on a server build that fails a probe falls back silently otherwise.
+	prometheusAerospikeNativeRouting *prometheus.GaugeVec
+
 	prometheusUtxoCreateBatch              prometheus.Histogram
 	prometheusUtxoCreateBatchSize          prometheus.Histogram
 	prometheusUtxoSpendBatch               prometheus.Histogram
@@ -99,6 +104,9 @@ var (
 	// longest-chain DAH updates whose master could not be restored after a failed page write
 	prometheusTxMetaAerospikeLongestChainRestoreFailed prometheus.Counter
 
+	// unmined transactions the block assembly scan left out because their external file is missing
+	prometheusUnminedMissingExternalSkipped prometheus.Counter
+
 	// metrics for external transactions
 	prometheusTxMetaAerospikeMapGetExternal prometheus.Histogram
 	prometheusTxMetaAerospikeMapSetExternal prometheus.Histogram
@@ -117,6 +125,14 @@ func InitPrometheusMetrics() {
 // _initPrometheusMetrics performs the actual initialization of all Prometheus metrics.
 // This is called only once via sync.Once from InitPrometheusMetrics.
 func _initPrometheusMetrics() {
+	prometheusUnminedMissingExternalSkipped = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "aerospike",
+			Name:      "unmined_missing_external_skipped",
+			Help:      "Unmined transactions the block assembly scan left out because the external store has no file for them",
+		},
+	)
 	prometheusConflictWALFallbackScans = promauto.NewCounter(
 		prometheus.CounterOpts{
 			Namespace: "teranode",
@@ -320,6 +336,16 @@ func _initPrometheusMetrics() {
 			Name:      "utxo_spend_rollback_failed",
 			Help:      "Spends that could not be reverted by a partial-spend rollback, i.e. potential dangling spender refs left behind (a count of spends, not of calls)",
 		},
+	)
+
+	prometheusAerospikeNativeRouting = promauto.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "teranode",
+			Subsystem: "aerospike",
+			Name:      "native_routing",
+			Help:      "1 when the route is sent as a native mod-teranode op, 0 when it runs on the UDF or filtered-expression path. replay_protection covers spendMulti, spend and addDeletedChildren",
+		},
+		[]string{"route"},
 	)
 
 	prometheusUtxoSpendAbortInFlight = promauto.NewCounter(

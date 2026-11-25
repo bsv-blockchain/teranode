@@ -802,8 +802,10 @@ func TestAllocatorKeepsBothPairsWhenTwoGrantsAreLeftBeforeARequestSucceeds(t *te
 	}
 
 	require.Eventually(t, func() bool {
-		var sent []Settles
-		for _, r := range src.grantRequests() {
+		requests := src.grantRequests()
+
+		sent := make([]Settles, 0, len(requests))
+		for _, r := range requests {
 			sent = append(sent, r.Settles)
 		}
 

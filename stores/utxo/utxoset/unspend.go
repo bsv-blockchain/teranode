@@ -380,6 +380,15 @@ func (s *Store) unspendOnce(ctx context.Context, req unspendRequest) (unspendRes
 	return res, nil
 }
 
+// unspendLaneSQL is unspendSQL on a database with lane_position on utxo and spend_journal
+// (Store.laneCoinColumn): the restored UTXO takes back the lane position its journal row kept, the
+// position of the transaction that created the output.
+var unspendLaneSQL = laneStatement(unspendSQL,
+	"j.spendable_from, j.flags, j.hash_override, j.mined_height, j.block_id\n),", "j.spendable_from, j.flags, j.hash_override, j.mined_height, j.block_id, j.lane_position\n),",
+	"spendable_from, flags, hash_override, mined_height, block_id)\n    SELECT (get_byte", "spendable_from, flags, hash_override, mined_height, block_id, lane_position)\n    SELECT (get_byte",
+	"WHEN w.n = 1 THEN w.block_id ELSE 0 END\n      FROM one t", "WHEN w.n = 1 THEN w.block_id ELSE 0 END,\n           t.lane_position\n      FROM one t",
+)
+
 // unspendRequest is an Unspend call's arguments in the shape unspendSQL binds them.
 type unspendRequest struct {
 	ukeys      [][16]byte
@@ -441,7 +450,12 @@ func (s *Store) restoreIn(ctx context.Context, dbTx pgx.Tx, req unspendRequest) 
 		offending           *string
 	)
 
-	if err := dbTx.QueryRow(ctx, unspendSQL, req.ukeys, req.ptxids, req.stxids, req.extraFlags,
+	stmt := unspendSQL
+	if s.laneCoinColumn {
+		stmt = unspendLaneSQL
+	}
+
+	if err := dbTx.QueryRow(ctx, stmt, req.ukeys, req.ptxids, req.stxids, req.extraFlags,
 		int32(fence.droppedFloor), int32(fence.fence), FlagConflicting, s.lookupFloor(), FlagLocked). //nolint:gosec // heights fit int32
 		Scan(&res.restored, &res.requested, &res.alreadyLive, &res.otherOwner, &res.repaired, &noSource, &ambiguous, &offending); err != nil {
 		return unspendResult{}, errors.NewStorageError("[utxoset][Unspend] restore", err)
