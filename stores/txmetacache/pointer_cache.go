@@ -19,9 +19,11 @@ import (
 //
 // With chainhash.Hash keys the per-cell overhead is ~24 bytes higher than the
 // previous uint64-keyed layout; the constant is calibrated against that.
-// Phase B benchmarks confirmed entries fit at ~280-320 bytes each; 320 leaves
-// modest headroom for parent-hash-heavy transactions.
-const pointerCacheAvgEntryBytes = 320
+// Measured with a full cache of two-parent entries: 319 bytes each before the
+// create-first fields (RollingBack, Hold, Reversed, Attempt) grew meta.Data from
+// 240 to 264 bytes, and 367 bytes each after. One-parent entries cost 336 and
+// four-parent entries 447. 368 matches the two-parent median, as 320 did before.
+const pointerCacheAvgEntryBytes = 368
 
 // Compile-time check that *PointerCache satisfies the cacheBackend contract.
 var _ cacheBackend = (*PointerCache)(nil)
