@@ -1855,7 +1855,8 @@ func (s *Store) sendOutpointBatch(batch []*batchOutpoint) {
 			txLanes[previousTxHash] = position
 		}
 
-		if coinbase, _ := bins[fields.IsCoinbase.String()].(bool); laneShadow && coinbase {
+		// Only outpointLaneBins asks for the flag, so it is read with lane positions on and no other time.
+		if coinbase, _ := bins[fields.IsCoinbase.String()].(bool); coinbase {
 			if txCoinbases == nil {
 				txCoinbases = make(map[chainhash.Hash]bool)
 			}
