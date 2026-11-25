@@ -122,7 +122,8 @@ func newTestStoreWith(t *testing.T, tune func(*settings.Settings)) (*Store, cont
 	s, err := New(ctx, ulogger.TestLogger{}, tSettings, u)
 	require.NoError(t, err)
 
-	t.Cleanup(func() { _ = s.Close(ctx) })
+	closeOnCleanup(t, s)
+	rememberDSN(t, s, dsn)
 
 	return s, ctx
 }
@@ -150,6 +151,8 @@ func mkTx(t *testing.T, nOut int, sats uint64) *bt.Tx {
 // (that RETURNING clause is what replaces PreviousOutputsDecorate), and a second attempt
 // must be rejected by ABSENCE rather than by consulting a spent-set.
 func TestUTXOTableCreateSpendRoundTrip(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	parent := mkTx(t, 2, 5000)
@@ -218,6 +221,8 @@ func TestUTXOTableCreateSpendRoundTrip(t *testing.T) {
 // bounded: an output that can never be spent must never occupy a row, because a row
 // nothing can ever delete would sit in the budget forever.
 func TestUTXOTableUnspendableOutputsCreateNoRow(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	tx := bt.NewTx()
@@ -252,6 +257,8 @@ func TestUTXOTableUnspendableOutputsCreateNoRow(t *testing.T) {
 // so decorate is an index probe. Note this store holds no transaction bodies at all, so
 // if the input comes back decorated it can only have come from the UTXO table.
 func TestDecorateFromUTXOTable(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	parent := mkTx(t, 1, 7777)
@@ -304,6 +311,8 @@ func TestDecorateFromUTXOTable(t *testing.T) {
 // create share ONE transaction, so there is no window in which the inputs are spent and
 // the outputs missing, and no compensating Unspend on failure.
 func TestSpendAndCreateAtomic(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	parent := mkTx(t, 1, 9000)
@@ -343,6 +352,8 @@ func TestSpendAndCreateAtomic(t *testing.T) {
 
 // TestSpendAndCreateRejectsContradictoryOptions pins the one invalid combination.
 func TestSpendAndCreateRejectsContradictoryOptions(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	tx := mkTx(t, 1, 100)
@@ -357,6 +368,8 @@ func TestSpendAndCreateRejectsContradictoryOptions(t *testing.T) {
 // restore from. It cannot be re-derived -- the node keeps almost no blocks, and the
 // subtree data it does keep carries outpoints without satoshis or scripts.
 func TestSpendWritesJournal(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	parent := mkTx(t, 1, 4242)
@@ -415,6 +428,8 @@ func TestSpendWritesJournal(t *testing.T) {
 // existing height-driven trigger -- services/pruner/worker.go calls Prune once per block
 // off its own goroutine, logs a returned error at Errorf with a metric, and times it.
 func TestSpendJournalReclaimIsDrivenByThePruner(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	s.journalRetention = 96 // under one leaf, so the test does not need 1440 blocks
@@ -464,6 +479,8 @@ func TestSpendJournalReclaimIsDrivenByThePruner(t *testing.T) {
 // session cannot SEE the leak, so the listing has to find orphans by name in the journal's
 // own schema, not just attached partitions.
 func TestSpendJournalReclaimRecoversOrphanedPartitions(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	s.journalRetention = 96
@@ -537,6 +554,8 @@ func spendOne(t *testing.T, s *Store, ctx context.Context, sats uint64, h uint32
 // destroyed by a spend must come back byte-identical, and the journal row must be
 // CONSUMED so a second restore cannot duplicate it.
 func TestUnspendRestoresFromJournal(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	parent, _, spends := spendOne(t, s, ctx, 3131, 200)
@@ -580,6 +599,8 @@ func TestUnspendRestoresFromJournal(t *testing.T) {
 // the UTXO is accounted for by its owner. A UTXO with no journal row at all is the case that
 // fails: nothing says who took it, so a restore cannot be confirmed.
 func TestUnspendRefusesWrongSpender(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	parent, _, spends := spendOne(t, s, ctx, 4141, 200)
@@ -614,6 +635,8 @@ func TestUnspendRefusesWrongSpender(t *testing.T) {
 // TestUnspendRequiresSpender refuses to guess. Restoring on the outpoint alone could
 // resurrect a UTXO a different transaction now owns.
 func TestUnspendRequiresSpender(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	_, _, spends := spendOne(t, s, ctx, 5151, 200)
@@ -631,6 +654,8 @@ func TestUnspendRequiresSpender(t *testing.T) {
 // "no partition of relation spend_journal found for row". Higher leaves worked fine, so
 // every test that happened to pick a height above 48 passed and the store looked healthy.
 func TestSpendBelowFirstJournalLeafCreatesPartition(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	parent := mkTx(t, 1, 7777)
@@ -664,6 +689,8 @@ func TestSpendBelowFirstJournalLeafCreatesPartition(t *testing.T) {
 // an output back -- and it would reject valid spends during a reorg or whenever a caller
 // passes a height that is not strictly increasing.
 func TestCreateDoesNotGateOrdinaryOutputsOnHeight(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	parent := mkTx(t, 1, 5150)
@@ -727,6 +754,8 @@ func spendOnly(ctx context.Context, s *Store, tx *bt.Tx, blockHeight uint32,
 // pruner passed in to use each retiring leaf as a work list; nothing reads a retiring leaf any
 // more, so the leaf that survives an interrupted run is what says where the run had got to.
 func TestSpendJournalDropTakesTheOldestLeafFirst(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	// Deliberately scrambled: leaves 10, 2, 7, 4 in creation order, at heights inside each
@@ -776,6 +805,8 @@ func TestSpendJournalDropTakesTheOldestLeafFirst(t *testing.T) {
 // The setting travels in the connection's startup packet, so this also proves a reconnect
 // carries it rather than silently coming back with the server default.
 func TestStorePoolDisablesJIT(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	var jit string

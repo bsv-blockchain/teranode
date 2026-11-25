@@ -15,6 +15,8 @@ import (
 // the fence shared while it waits. The writer that holds the transaction lock then queues for the
 // fence behind the stamp's exclusive request, and Postgres aborts one of them as a deadlock.
 func TestNettedBelowTakesTransactionLocksBeforeTheFence(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	const height = 975
