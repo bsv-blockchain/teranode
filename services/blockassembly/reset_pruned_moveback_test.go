@@ -170,28 +170,46 @@ func TestReset_PrunedMoveBackTxIsNotMarked(t *testing.T) {
 	require.NotZero(t, unminedSinceOf(t, items, existingHash), "surviving moveBack tx must have unmined_since set")
 }
 
-// If the existence lookup fails outright, reset cannot tell pruned from live. It
-// marks them all, as it did before the lookup existed: dropping them would leave
-// live txs flagged mined while their block is off the chain, and nothing would
-// repair that. A pruned tx among them still hits the store's fatal, as before.
-func TestReset_MoveBackExistenceLookupFailureMarksAll(t *testing.T) {
-	ba, rec, items, existingHash, prunedHash := setupPrunedMoveBackReset(t)
+// requireResetFailedBeforeItChangedAnything checks that a failed reset never
+// reached the subtree processor's reset, which rotates the tx map, and left block
+// assembly on the block it was on.
+func requireResetFailedBeforeItChangedAnything(t *testing.T, ba *BlockAssembler, before *model.BlockHeader) {
+	t.Helper()
+
+	mockStp, ok := ba.subtreeProcessor.(*subtreeprocessor.MockSubtreeProcessor)
+	require.True(t, ok)
+	mockStp.AssertNotCalled(t, "Reset", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+
+	after, _ := ba.CurrentBlock()
+	require.Equal(t, before.Hash(), after.Hash(), "block assembly stays on the block it was on")
+}
+
+// If the existence lookup fails outright, reset cannot tell pruned from live.
+// Marking them all would hit the store's fatal for a pruned one, and leaving
+// them out would leave live txs flagged mined while their block is off the
+// chain. A failed read of the store fails the reset, before the tx map rotation,
+// so it is run again.
+func TestReset_MoveBackExistenceLookupFailureFailsTheReset(t *testing.T) {
+	ba, rec, _, _, _ := setupPrunedMoveBackReset(t)
 	rec.decorateErr = tErrors.NewStorageError("store unavailable")
 
-	require.NoError(t, ba.reset(t.Context()))
-	require.Contains(t, rec.markedFalse, existingHash)
-	require.Contains(t, rec.markedFalse, prunedHash)
-	require.NotZero(t, unminedSinceOf(t, items, existingHash))
+	before, _ := ba.CurrentBlock()
+
+	require.Error(t, ba.reset(t.Context()))
+	require.Empty(t, rec.markedFalse, "nothing is marked on a lookup that failed")
+	requireResetFailedBeforeItChangedAnything(t, ba, before)
 }
 
 // A per-tx lookup error other than not found (a transient Aerospike record error)
-// is no evidence the record is gone: that tx is still marked.
-func TestReset_MoveBackTransientLookupErrorStillMarks(t *testing.T) {
-	ba, rec, items, existingHash, prunedHash := setupPrunedMoveBackReset(t)
+// is no evidence the record is gone, and no answer either. It fails the reset
+// before anything is marked, as a lookup that failed outright does.
+func TestReset_MoveBackTransientLookupErrorFailsTheReset(t *testing.T) {
+	ba, rec, _, existingHash, _ := setupPrunedMoveBackReset(t)
 	rec.itemErrs = map[chainhash.Hash]error{existingHash: tErrors.NewStorageError("record timeout")}
 
-	require.NoError(t, ba.reset(t.Context()))
-	require.Contains(t, rec.markedFalse, existingHash, "a tx whose lookup failed transiently is still marked")
-	require.NotContains(t, rec.markedFalse, prunedHash)
-	require.NotZero(t, unminedSinceOf(t, items, existingHash))
+	before, _ := ba.CurrentBlock()
+
+	require.Error(t, ba.reset(t.Context()))
+	require.Empty(t, rec.markedFalse)
+	requireResetFailedBeforeItChangedAnything(t, ba, before)
 }

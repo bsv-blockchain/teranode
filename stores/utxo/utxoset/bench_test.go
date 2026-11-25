@@ -76,23 +76,39 @@ func benchLaneStore(b *testing.B) (*Store, context.Context) {
 	return openBenchStore(b, true)
 }
 
+// benchLaneStoreKeep opens the bench database again with lane positions on, keeping its tables, as a
+// restart would.
+func benchLaneStoreKeep(b *testing.B) (*Store, context.Context) {
+	b.Helper()
+
+	return openBenchStoreOn(b, true, false)
+}
+
 func openBenchStore(b *testing.B, lanePositions bool) (*Store, context.Context) {
+	b.Helper()
+
+	return openBenchStoreOn(b, lanePositions, true)
+}
+
+func openBenchStoreOn(b *testing.B, lanePositions, fresh bool) (*Store, context.Context) {
 	b.Helper()
 
 	ctx := context.Background()
 	dsn := testDSN(b)
 
-	pool, err := pgxpool.New(ctx, dsn)
-	require.NoError(b, err)
-	require.NoError(b, pool.Ping(ctx))
+	if fresh {
+		pool, err := pgxpool.New(ctx, dsn)
+		require.NoError(b, err)
+		require.NoError(b, pool.Ping(ctx))
 
-	_, _ = pool.Exec(ctx, `DROP TABLE IF EXISTS utxo CASCADE;
-	                       DROP TABLE IF EXISTS spend_journal CASCADE;
-	                       DROP TABLE IF EXISTS tx_ident CASCADE;
-	                       DROP TABLE IF EXISTS tx_body CASCADE;
-	                       DROP TABLE IF EXISTS applied_block CASCADE;
-	                       DROP TABLE IF EXISTS applied_chunk CASCADE;`)
-	pool.Close()
+		_, _ = pool.Exec(ctx, `DROP TABLE IF EXISTS utxo CASCADE;
+		                       DROP TABLE IF EXISTS spend_journal CASCADE;
+		                       DROP TABLE IF EXISTS tx_ident CASCADE;
+		                       DROP TABLE IF EXISTS tx_body CASCADE;
+		                       DROP TABLE IF EXISTS applied_block CASCADE;
+		                       DROP TABLE IF EXISTS applied_chunk CASCADE;`)
+		pool.Close()
+	}
 
 	u, err := url.Parse(dsn)
 	require.NoError(b, err)
@@ -240,6 +256,23 @@ func BenchmarkSpendAndCreateLanePosition(b *testing.B) {
 	runSpendAndCreateBench(b, s, ctx, utxo.WithLanePosition(lane.Pack(7, 1)))
 }
 
+// BenchmarkSpendAndCreateLaneCopies is BenchmarkSpendAndCreateLanePosition on a database with the
+// whole lane schema (prepare-lane-schema), with the parent's position named as the validator names
+// it: each output row carries its creator's position, the spend copies it into the journal, and
+// the child's record keeps its parent's position beside its inpoints.
+func BenchmarkSpendAndCreateLaneCopies(b *testing.B) {
+	s, ctx := benchLaneStore(b)
+	require.NoError(b, s.PrepareLaneSchema(ctx))
+	require.NoError(b, s.Close(ctx))
+
+	s, ctx = benchLaneStoreKeep(b)
+	require.True(b, s.laneParentColumn && s.laneCoinColumn)
+
+	parent := lane.Pack(7, 1)
+
+	runSpendAndCreateBench(b, s, ctx, utxo.WithLanePosition(lane.Pack(7, 2)), utxo.WithParentLanePositions([]uint64{parent}))
+}
+
 func runSpendAndCreateBench(b *testing.B, s *Store, ctx context.Context, opts ...utxo.CreateOption) {
 	b.ReportAllocs()
 
@@ -264,6 +297,8 @@ func runSpendAndCreateBench(b *testing.B, s *Store, ctx context.Context, opts ..
 		children[i] = child
 	}
 
+	walBefore := walPosition(b, s, ctx)
+
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
@@ -274,6 +309,7 @@ func runSpendAndCreateBench(b *testing.B, s *Store, ctx context.Context, opts ..
 
 	b.StopTimer()
 	b.ReportMetric(float64(b.Elapsed().Nanoseconds())/float64(b.N), "ns/tx")
+	b.ReportMetric(float64(walPosition(b, s, ctx)-walBefore)/float64(b.N), "walB/tx")
 	wipe(b, s, ctx)
 }
 
@@ -522,4 +558,17 @@ func runCreatePathBench(b *testing.B, s *Store, ctx context.Context, n int, mine
 
 	b.StopTimer()
 	b.ReportMetric(float64(b.Elapsed().Nanoseconds())/float64(b.N)/float64(n), "ns/row")
+}
+
+// walPosition is the database's current write-ahead log position in bytes, so a benchmark can
+// report how much log its writes cost: the bytes every write of a spend or create pays on disk,
+// which a wall-clock time dominated by the commit's flush hides. Nothing else writes to the bench
+// database while it runs.
+func walPosition(b *testing.B, s *Store, ctx context.Context) int64 {
+	b.Helper()
+
+	var lsn int64
+	require.NoError(b, s.pool.QueryRow(ctx, `SELECT (pg_current_wal_lsn() - '0/0'::pg_lsn)::bigint`).Scan(&lsn))
+
+	return lsn
 }

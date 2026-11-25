@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"io"
 	"testing"
 	"time"
 
@@ -13,7 +14,11 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2/bscript"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/bsv-blockchain/teranode/stores/blob"
+	"github.com/bsv-blockchain/teranode/stores/blob/memory"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
+	"github.com/prometheus/client_golang/prometheus/testutil"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -691,4 +696,87 @@ func TestRawUnminedHandler_FastInputsFallBackOnUnexpectedShape(t *testing.T) {
 		bins := withBin(rawMainRecordBins(1), fields.Inputs.String(), particle_type.LIST, encInputs(whole[:len(whole)-1]))
 		require.ErrorContains(t, feed(t, h, bins), "failed to process transaction inpoints")
 	})
+}
+
+// rawExternalRecordBins is record i stored externally: no inputs bin, so its
+// inpoints can only come from the external store.
+func rawExternalRecordBins(i int) []rawBin {
+	var bins []rawBin
+
+	for _, b := range rawMainRecordBins(i) {
+		if b.name != fields.Inputs.String() {
+			bins = append(bins, b)
+		}
+	}
+
+	return append(bins, rawBin{fields.External.String(), particle_type.BOOL, encBool(true)})
+}
+
+// An external record whose file is gone can never be read, so block assembly's
+// scan leaves it out, counts it and goes on: one such record must not stop
+// block assembly loading every other unmined transaction.
+func TestRawUnminedHandler_SkipsExternalRecordWithMissingFile(t *testing.T) {
+	InitPrometheusMetrics()
+
+	it, h := newRawTestHandler(t)
+	it.store.externalStore = memory.New()
+	it.skipMissingExternal = true
+
+	skippedBefore := testutil.ToFloat64(prometheusUnminedMissingExternalSkipped)
+
+	// block IDs as the server sends them: a msgpack array of one fixint
+	missingBins := append(rawExternalRecordBins(1), rawBin{fields.BlockIDs.String(), particle_type.LIST, []byte{0x91, 7}})
+	require.NoError(t, feed(t, h, missingBins))
+	require.InDelta(t, skippedBefore+1, testutil.ToFloat64(prometheusUnminedMissingExternalSkipped), 0)
+
+	// The skip must not leave the handler marked busy, or the idle watchdog
+	// would take a later stall on Aerospike for time spent on the external store.
+	require.False(t, h.busy.Load())
+
+	require.NoError(t, feed(t, h, rawMainRecordBins(2)))
+	require.NoError(t, h.flush())
+
+	txs := collectResults(it)
+	require.Len(t, txs, 2)
+	require.True(t, txs[0].Skip)
+	require.NotNil(t, txs[0].Node)
+	var missing chainhash.Hash
+	binary.LittleEndian.PutUint64(missing[:], 2)
+	require.Equal(t, missing, txs[0].Hash, "block assembly needs the missing parent hash to filter queued children")
+	require.Equal(t, []uint32{7}, txs[0].BlockIDs, "block assembly repairs a skipped record already mined on the best chain")
+	require.Equal(t, 10, txs[0].UnminedSince)
+
+	var want chainhash.Hash
+	binary.LittleEndian.PutUint64(want[:], 3)
+	require.Equal(t, want, txs[1].Hash)
+	require.Equal(t, int64(1), it.missingExternalSkipped.Load())
+}
+
+// Without the opt-in, as for the rewind tool, a missing file still fails the
+// scan, so no caller reports success over a record it could not read.
+func TestRawUnminedHandler_MissingExternalFileFailsWithoutOptIn(t *testing.T) {
+	InitPrometheusMetrics()
+
+	it, h := newRawTestHandler(t)
+	it.store.externalStore = memory.New()
+
+	err := feed(t, h, rawExternalRecordBins(1))
+	require.ErrorIs(t, err, errors.ErrNotFound)
+	require.Zero(t, it.missingExternalSkipped.Load())
+}
+
+// Any other external store failure may pass, so it still fails the scan
+// rather than dropping a transaction that could be read on the next attempt.
+func TestRawUnminedHandler_ExternalStoreErrorStillFails(t *testing.T) {
+	InitPrometheusMetrics()
+
+	it, h := newRawTestHandler(t)
+
+	externalStore := &blob.MockStore{}
+	externalStore.On("GetIoReader", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		Return(io.NopCloser(bytes.NewReader(nil)), errors.NewStorageError("disk unavailable"))
+	it.store.externalStore = externalStore
+	it.skipMissingExternal = true
+
+	require.ErrorContains(t, feed(t, h, rawExternalRecordBins(1)), "failed to process transaction inpoints")
 }
