@@ -100,6 +100,8 @@ func withNettedBelowWorkers(t *testing.T, s *Store, n int) {
 // Below the checkpoint, with bodies skipped, a transaction with no coin to write and no coin to
 // delete still writes its mined record. The coins are the list's net effect.
 func TestNettedBelowEveryTransactionWritesItsRecord(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s := newBodySkipStore(t)
 	ctx := t.Context()
 
@@ -181,6 +183,8 @@ func TestNettedBelowFamilyRepeatAfterAnySubsetOfChunks(t *testing.T) {
 // A repeat of a block whose window the stamp has already passed is judged by the fence: every
 // transaction it claims must already have its record. Every transaction wrote one.
 func TestNettedBelowFamilyRepeatBehindTheStampFence(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s := newBodySkipStore(t)
 	ctx := t.Context()
 
@@ -271,6 +275,8 @@ func TestNettedBelowTransactionStoredAfterTheProbe(t *testing.T) {
 // copy of the transaction with every output a coin. This is the create step of a validator that
 // stores t1 while the chunk of t1's parent still runs.
 func TestNettedBelowTransactionOfferedAfterItsChunk(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s := newBodySkipStore(t)
 	ctx := t.Context()
 

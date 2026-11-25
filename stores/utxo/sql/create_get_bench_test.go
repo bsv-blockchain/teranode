@@ -12,13 +12,10 @@ import (
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/stretchr/testify/require"
-	"github.com/testcontainers/testcontainers-go"
-	"github.com/testcontainers/testcontainers-go/modules/postgres"
-	"github.com/testcontainers/testcontainers-go/wait"
 )
 
-// benchSQLStore opens the store on in-memory SQLite, or on a Postgres container
-// when pg is set. Postgres is where the create batcher's statements run.
+// benchSQLStore opens the store on in-memory SQLite, or on a fresh database on the
+// shared Postgres server when pg is set. Postgres is where the create batcher's statements run.
 func benchSQLStore(b *testing.B, pg bool) *Store {
 	b.Helper()
 
@@ -28,19 +25,7 @@ func benchSQLStore(b *testing.B, pg bool) *Store {
 	require.NoError(b, err)
 
 	if pg {
-		container, err := postgres.Run(ctx, "postgres:13",
-			postgres.WithDatabase("testdb"), postgres.WithUsername("testuser"), postgres.WithPassword("testpass"),
-			testcontainers.WithWaitStrategy(wait.ForLog("database system is ready to accept connections").
-				WithOccurrence(2).WithStartupTimeout(5*time.Minute)),
-		)
-		test.SkipIfContainerUnavailable(b, err)
-		b.Cleanup(func() { _ = container.Terminate(ctx) })
-
-		connStr, err := container.ConnectionString(ctx, "sslmode=disable")
-		require.NoError(b, err)
-
-		dbURL, err = url.Parse(connStr)
-		require.NoError(b, err)
+		dbURL = postgresTestURL(b)
 	}
 
 	tSettings := test.CreateBaseTestSettings(b)

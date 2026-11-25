@@ -34,6 +34,8 @@ func TestUTXOIndexRebuildIgnoresASmallIndex(t *testing.T) {
 // TestRebuildUTXOIndexRunsConcurrentlyAndOnce exercises the statement against the test
 // database: it must succeed on a live partition and touch only one partition per call.
 func TestRebuildUTXOIndexRunsConcurrentlyAndOnce(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	n, err := s.rebuildOneBloatedUTXOIndex(ctx, func(bytes, rows int64) bool { return true })
@@ -65,6 +67,8 @@ func TestStatisticsRefreshIsSkippedWhileARebuildRuns(t *testing.T) {
 // running waits for it. A refresh takes seconds, and starting the rebuild alongside it is
 // exactly the overlap that deadlocks.
 func TestRebuildWaitsForAStatisticsRefresh(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	s.indexMaintenance.Lock()
@@ -103,6 +107,8 @@ func TestRebuildWaitsForAStatisticsRefresh(t *testing.T) {
 //
 // A valid index is left alone whatever it is called, and so is the live index.
 func TestInterruptedRebuildLeftoversAreDropped(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	for _, stmt := range []string{

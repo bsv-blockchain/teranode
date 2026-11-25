@@ -317,6 +317,8 @@ func TestSpendBatchRejectsDuplicateDifferentSpendersSQLite(t *testing.T) {
 }
 
 func TestSpendBatchRejectsDuplicateDifferentSpendersPostgresBulk(t *testing.T) {
+	parallelPostgres(t)
+
 	if testing.Short() {
 		t.Skip("skipping Postgres integration test in short mode")
 	}
@@ -3877,6 +3879,8 @@ func TestPgCreateError(t *testing.T) {
 // so utxo.SequentialSpendAndCreate keeps the spends, rather than success for a
 // write nothing has confirmed.
 func TestCreateCTE_ConnectionLostAfterRowLeavesOutcomeUnknown(t *testing.T) {
+	parallelPostgres(t)
+
 	if testing.Short() {
 		t.Skip("skipping Postgres integration test in short mode")
 	}
