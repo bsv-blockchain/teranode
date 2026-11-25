@@ -40,6 +40,8 @@ func mineAtSeenAt(t *testing.T, s *Store, ctx context.Context, sats uint64, crea
 // refusals guard against a worker bug, not a normal path: each refuses before it writes
 // anything, and none moves the fence.
 func TestStampBeginWindowRefusesWhatIsNotTheNextPartitionOrIsNotCovered(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newUncheckpointedStore(t)
 	mineAt(t, s, ctx, 5_000, 100, 7)
 
@@ -86,6 +88,8 @@ func stampDepthTip(s *Store, window uint32) uint32 {
 // no completion record, is a state the drop rule makes impossible. The stamp refuses to touch it
 // rather than write onto a table that is not part of tx_mined.
 func TestStampRefusesADetachedPartitionWithNoCompletionRecord(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newUncheckpointedStore(t)
 	mineAt(t, s, ctx, 5_000, 100, 7)
 
@@ -265,6 +269,8 @@ func TestStampStopsWaitingForTheFenceLockWhenCancelled(t *testing.T) {
 }
 
 func TestIsLockTimeoutOnlyMatchesALockNotAvailableError(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newUncheckpointedStore(t)
 
 	t.Cleanup(holdFenceExclusive(t, s, ctx))

@@ -11,6 +11,8 @@ import (
 // create below the checkpoint, writes tx_inpoints NULL, so a create there plans none and the
 // store does not build them.
 func TestPlanCreatesBuildsInpointsOnlyForTheIdentityClaim(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, _ := newTestStore(t)
 
 	const height = 870

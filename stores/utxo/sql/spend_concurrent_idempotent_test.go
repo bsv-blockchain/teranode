@@ -25,6 +25,8 @@ import (
 //
 // Postgres only, for the same reason as TestSpendRefusesMarkerCommittedAfterSelect.
 func TestRollbackKeepsAMatchAnotherWriterRecordedBeforeTheUpdate(t *testing.T) {
+	parallelPostgres(t)
+
 	if testing.Short() {
 		t.Skip("skipping Postgres integration test in short mode")
 	}
@@ -88,7 +90,7 @@ func TestRollbackKeepsAMatchAnotherWriterRecordedBeforeTheUpdate(t *testing.T) {
 						for time.Now().Before(deadline) {
 							var waiting int
 
-							if err := store.db.QueryRowContext(context.Background(), "SELECT count(*) FROM pg_locks WHERE NOT granted").Scan(&waiting); err == nil && waiting > 0 {
+							if err := store.db.QueryRowContext(context.Background(), "SELECT count(*) FROM pg_locks l JOIN pg_stat_activity a ON a.pid = l.pid WHERE NOT l.granted AND a.datname = current_database()").Scan(&waiting); err == nil && waiting > 0 {
 								break
 							}
 
@@ -124,6 +126,8 @@ func TestRollbackKeepsAMatchAnotherWriterRecordedBeforeTheUpdate(t *testing.T) {
 //
 // Postgres only, for the same reason as TestSpendRefusesMarkerCommittedAfterSelect.
 func TestRollbackKeepsADuplicateOfAMatchAnotherWriterRecorded(t *testing.T) {
+	parallelPostgres(t)
+
 	if testing.Short() {
 		t.Skip("skipping Postgres integration test in short mode")
 	}
@@ -205,6 +209,8 @@ func TestRollbackKeepsADuplicateOfAMatchAnotherWriterRecorded(t *testing.T) {
 //
 // Postgres only, for the same reason as TestSpendRefusesMarkerCommittedAfterSelect.
 func TestSpendClassifiesALateMatchByAge(t *testing.T) {
+	parallelPostgres(t)
+
 	if testing.Short() {
 		t.Skip("skipping Postgres integration test in short mode")
 	}
@@ -268,7 +274,7 @@ func TestSpendClassifiesALateMatchByAge(t *testing.T) {
 						for time.Now().Before(deadline) {
 							var waiting int
 
-							if err := store.db.QueryRowContext(context.Background(), "SELECT count(*) FROM pg_locks WHERE NOT granted").Scan(&waiting); err == nil && waiting > 0 {
+							if err := store.db.QueryRowContext(context.Background(), "SELECT count(*) FROM pg_locks l JOIN pg_stat_activity a ON a.pid = l.pid WHERE NOT l.granted AND a.datname = current_database()").Scan(&waiting); err == nil && waiting > 0 {
 								break
 							}
 

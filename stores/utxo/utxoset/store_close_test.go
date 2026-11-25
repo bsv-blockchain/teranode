@@ -17,6 +17,8 @@ import (
 // queued read either panics reaching a closed pool or simply never gets an answer, because
 // nothing forced the batcher to flush or waited for it to.
 func TestCloseDrainsAQueuedGetBeforeClosingThePool(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStoreWith(t, func(st *settings.Settings) {
 		st.UtxoStore.GetBatcherSize = 8
 		st.UtxoStore.GetBatcherDurationMillis = 60_000 // long enough it never fires on its own
@@ -46,6 +48,8 @@ func TestCloseDrainsAQueuedGetBeforeClosingThePool(t *testing.T) {
 // TestCloseDrainsAQueuedLockBeforeClosingThePool is the same fact for lockBatcher, the
 // other batcher Close left running.
 func TestCloseDrainsAQueuedLockBeforeClosingThePool(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStoreWith(t, func(st *settings.Settings) {
 		st.UtxoStore.LockedBatcherSize = 8
 		st.UtxoStore.LockedBatcherDurationMillis = 60_000
@@ -77,6 +81,8 @@ func TestCloseDrainsAQueuedLockBeforeClosingThePool(t *testing.T) {
 // would take the process down part-way through Close. Each must instead take its direct path
 // and get the closed pool's error.
 func TestACallAfterCloseIsRefusedNotPanicked(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStoreWith(t, func(st *settings.Settings) {
 		st.UtxoStore.StoreBatcherSize = 8
 		st.UtxoStore.GetBatcherSize = 8
