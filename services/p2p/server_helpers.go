@@ -1398,10 +1398,12 @@ const reconcileTimeout = 30 * time.Second
 
 // snapshotLiveConnIDs returns the set of peer IDs that currently have an
 // open libp2p connection. Liveness comes from P2PClient.GetPeers(): verified
-// against go-p2p-message-bus v0.1.17 (client.go GetPeers), Addrs is built
+// against go-p2p-message-bus v0.3.2 (client.go GetPeers), Addrs is built
 // from host.Network().ConnsToPeer — open connections only, not the peerstore
-// — while the peer list itself is every peer that ever authored a message on
-// a subscribed topic (gossip-only publishers included, never pruned). So the
+// — while the peer list itself is every peer that authored a message on a
+// subscribed topic (gossip-only publishers included). Connected authors are
+// never evicted; a disconnected one is dropped after an hour of silence or
+// when the 10k tracker cap forces it out. So the
 // Addrs filter is what separates live neighbours from gossip-only authors;
 // it is not redundant with the listing. This differs from the p2p service's
 // own GetPeers RPC, which is filtered to IsConnected registry entries.

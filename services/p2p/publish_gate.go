@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	p2pMessageBus "github.com/bsv-blockchain/go-p2p-message-bus"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/services/blockchain/blockchain_api"
@@ -33,6 +34,20 @@ var topicKindCaps = map[topicKind]int{
 	topicKindSubtree:    maxSubtreeMessageSize,
 	topicKindRejectedTx: maxRejectedTxMessageSize,
 	topicKindNodeStatus: maxNodeStatusMessageSize,
+}
+
+// gossipTopicValidators applies topicKindCaps before gossipsub relays a
+// message, keyed by each kind's wire topic name. Without it the caps only run
+// in the topic handlers, after the message has already been forwarded to the
+// mesh. The handlers keep their own checks.
+func gossipTopicValidators(topicNames map[topicKind]string) map[string]p2pMessageBus.TopicValidator {
+	validators := make(map[string]p2pMessageBus.TopicValidator, len(topicNames))
+
+	for kind, name := range topicNames {
+		validators[name] = p2pMessageBus.TopicValidator{MaxPayloadSize: topicKindCaps[kind]}
+	}
+
+	return validators
 }
 
 // outboundTopicsAllowed declares, per blockchain FSM state, which outbound

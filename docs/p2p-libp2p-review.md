@@ -59,8 +59,8 @@ These defaults are sensible for networks up to ~10K nodes. Latency is `O(log N)`
 
 ### Validators / rate limiting
 
-- **No `RegisterTopicValidator` calls anywhere.** No `pubsub.WithValidator`. No per-topic schema check before forwarding. A malformed-but-parseable JSON payload will be relayed by the whole mesh before any node catches the schema violation. The library does not currently expose a hook for this — addressing it requires extending `go-p2p-message-bus` to surface `pubsub.RegisterTopicValidator` from libp2p.
-- Per-topic size limits are now enforced application-side (see `services/p2p/Server.go` constants `maxBlockMessageSize`, `maxSubtreeMessageSize`, `maxNodeStatusMessageSize`, `maxRejectedTxMessageSize`). A 5MB blob on `node_status` is now rejected at the topic handler instead of being parsed. This is defence in depth; gossipsub still forwards the message before the handler runs.
+- **Per-topic size caps run before relay.** `go-p2p-message-bus` `Config.TopicValidators` registers a pubsub validator per topic, and `gossipTopicValidators` (`services/p2p/publish_gate.go`) supplies the caps from `topicKindCaps` (`maxBlockMessageSize`, `maxSubtreeMessageSize`, `maxNodeStatusMessageSize`, `maxRejectedTxMessageSize`). An oversized message is rejected before gossipsub forwards it; the topic handlers keep the same checks.
+- **No schema check before forwarding.** A malformed-but-parseable JSON payload under the cap is still relayed by the mesh before any node catches the schema violation. The validator hook now exists (`TopicValidator.Validate`), so this is a teranode-side change.
 - No per-peer rate limiting on inbound topic messages. A peer publishing 100 fake `node_status` messages per second produces 100 distinct message IDs and gossipsub will fan all of them out.
 
 ### NodeStatus heartbeat scaling
@@ -83,8 +83,8 @@ Four topics — block, subtree, node_status, rejected_tx (`Server.go:608-611`). 
 
 Already covered above:
 
-- **No validators at gossipsub layer** — schema and rate are not enforced before relay. **Application-layer parsing happens after the message has been forwarded to the mesh**, so garbage propagates one hop further than it needs to. Closing this gap requires the library to expose `RegisterTopicValidator`; teranode can't reach the underlying `pubsub.PubSub` directly today.
-- Per-topic size limits are now enforced (see "Validators / rate limiting" above), all at or under a 10KB ceiling, so a 5 MB blob on `node_status` is rejected before JSON parsing. There is no wider Teranode-side safety net: the only pre-relay size check is libp2p's 1MiB default, because `go-p2p-message-bus` does not expose `pubsub.WithMaxMessageSize`.
+- **Schema and rate are not enforced before relay.** Size caps are (see "Validators / rate limiting" above), all at or under a 10KB ceiling, but JSON parsing happens after the message has been forwarded to the mesh, so a malformed message under the cap propagates one hop further than it needs to.
+- The pubsub wire limit stays at libp2p's 1MiB default on purpose. `Config.MaxMessageSize` exists, but it bounds whole RPC frames and a frame over it resets the sending peer's stream, so lowering it would drop traffic from peers on the default.
 - No message signing / origin authentication. Today the network trusts `peer.FromID`. Acceptable while bootstrap peers are curated; risky once the network is open.
 
 ## 4. Reputation, ban management, peer-map
@@ -139,7 +139,7 @@ Already covered above:
 
 1. ~~**`StaticPeers` is dead code in `services/p2p/`.**~~ **Resolved.** Wired through `go-p2p-message-bus` v0.1.17 (`services/p2p/Server.go:334`).
 2. ~~**`PeerRegistry` has no eviction policy.**~~ **Resolved.** TTL + LRU eviction added (`services/blockchain/peer_registry.go` `Cleanup`, with `p2p_peer_registry_max_size`/`_ttl`/`_cleanup_interval` settings). Banned peers are exempt; connected peers only while active within the TTL, and a periodic reconciliation sweep in the p2p service clears stale `IsConnected` flags (no libp2p disconnect callback exists). Note: the three settings carried `key:`/`default:` tags but `settings.NewSettings()` never read them, so the cleanup loop never actually started until that loader wiring was added — settings.conf overrides of these keys had no effect before then.
-3. **Pre-relay topic validators (`pubsub.RegisterTopicValidator`).** Per-topic size caps now run in handlers (mitigates the worst payloads), but schema and rate are still enforced *after* gossipsub fan-out. Closing this gap is a library change: extend `go-p2p-message-bus` so callers can register a validator function, then teranode supplies one per topic. Highest-leverage hardening change still outstanding.
+3. **Pre-relay topic validators (`pubsub.RegisterTopicValidator`).** Partly resolved: `go-p2p-message-bus` exposes `Config.TopicValidators` and teranode registers the per-topic size caps before relay. Schema and rate are still enforced *after* gossipsub fan-out; schema can now go into `TopicValidator.Validate` without a library change.
 
 ### Should-fix
 
@@ -163,7 +163,7 @@ Already covered above:
 1. ~~**Wire StaticPeers through to libp2p connect-and-supervise.**~~ Done in `go-p2p-message-bus` v0.1.17.
 2. ~~**PeerRegistry eviction.**~~ Done.
 3. **Persist reputation and bans.** Spec the storage format, decide on a file vs. SQLite.
-4. **Pre-relay gossipsub validators.** Two-step: (a) extend `go-p2p-message-bus` to expose `RegisterTopicValidator` (or accept a `MessageValidator` in `Config`), then (b) wire per-topic schema + rate-limit validators from `services/p2p/`. Per-topic size caps already landed application-side as a partial mitigation.
+4. **Pre-relay gossipsub validators.** (a) Done: `go-p2p-message-bus` `Config.TopicValidators`, with the per-topic size caps wired from `services/p2p/`. (b) Outstanding: per-topic schema and rate-limit checks in `TopicValidator.Validate`.
 5. **Heartbeat bandwidth at scale.** Either rate-adapt with cluster size or merge into block topic.
 6. **Expose connection-manager settings.** Min/Max/Grace as `settings.P2P.MaxConnections` etc.
 7. **Documentation pass on DHT "client" mode and mDNS production safety.**
