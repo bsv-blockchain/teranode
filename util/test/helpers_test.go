@@ -25,6 +25,14 @@ func TestCreateBaseTestSettings(t *testing.T) {
 			"CoinbaseMaturity should be set to 1")
 	})
 
+	t.Run("utxo store get batch", func(t *testing.T) {
+		settings := CreateBaseTestSettings(t)
+
+		// Small, to bound each store's batcher queue, and above 1 so sql.New still
+		// builds the get batcher and tests keep covering the batched path.
+		assert.Equal(t, 256, settings.UtxoStore.GetBatcherSize)
+	})
+
 	t.Run("global block height retention", func(t *testing.T) {
 		settings := CreateBaseTestSettings(t)
 
