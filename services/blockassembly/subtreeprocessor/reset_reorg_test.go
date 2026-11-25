@@ -4,17 +4,20 @@ import (
 	"context"
 	"encoding/binary"
 	"net/url"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	safeconversion "github.com/bsv-blockchain/go-safe-conversion"
 	"github.com/bsv-blockchain/go-subtree"
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	blob_memory "github.com/bsv-blockchain/teranode/stores/blob/memory"
 	"github.com/bsv-blockchain/teranode/stores/blob/options"
+	utxostore "github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/stores/utxo/sql"
 	"github.com/bsv-blockchain/teranode/ulogger"
@@ -1343,6 +1346,144 @@ func TestResetMarksAssemblyTxsAsNotOnLongestChainBeforeClearing(t *testing.T) {
 	require.NotEqual(t, uint32(0), metaAfter.UnminedSince,
 		"after reset, an assembly tx that had unmined_since=NULL must be marked as NOT on longest chain "+
 			"so loadUnminedTransactions can recover it; without the fix this tx is silently lost from block assembly")
+}
+
+// sweepChunkStore records the hashes of every MarkTransactionsOnLongestChain(false)
+// call, one entry per call, without touching the wrapped store.
+type sweepChunkStore struct {
+	utxostore.Store
+
+	mu    sync.Mutex
+	calls [][]chainhash.Hash
+	// failOn fails the failOn-th call, counting from 1, and only that one.
+	failOn   int
+	attempts int
+}
+
+func (s *sweepChunkStore) MarkTransactionsOnLongestChain(_ context.Context, hashes []chainhash.Hash, onLongestChain bool) error {
+	if !onLongestChain {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+
+		s.attempts++
+		if s.attempts == s.failOn {
+			return errors.NewStorageError("mark failed on call %d", s.failOn)
+		}
+
+		s.calls = append(s.calls, append([]chainhash.Hash(nil), hashes...))
+	}
+
+	return nil
+}
+
+// newSweepFixture returns a processor holding 13 transactions, with a store that
+// records the sweep's calls and marks sweepChunk transactions a call. With four
+// items a subtree and the coinbase placeholder in the first, 13 fill three
+// chained subtrees and leave two in the current one, so a chunk crosses from the
+// chained subtrees into the current one.
+func newSweepFixture(t *testing.T) (*SubtreeProcessor, *sweepChunkStore, []chainhash.Hash) {
+	t.Helper()
+
+	old := resetSweepChunkSize
+	resetSweepChunkSize = sweepChunk
+
+	t.Cleanup(func() { resetSweepChunkSize = old })
+
+	ctx := context.Background()
+
+	utxoStoreURL, err := url.Parse("sqlitememory:///test")
+	require.NoError(t, err)
+
+	settings := test.CreateBaseTestSettings(t)
+	settings.BlockAssembly.InitialMerkleItemsPerSubtree = 4
+
+	sqlStore, err := sql.New(ctx, ulogger.TestLogger{}, settings, utxoStoreURL)
+	require.NoError(t, err)
+
+	store := &sweepChunkStore{Store: sqlStore}
+
+	newSubtreeChan := make(chan NewSubtreeRequest, 10)
+
+	go func() {
+		for req := range newSubtreeChan {
+			if req.ErrChan != nil {
+				req.ErrChan <- nil
+			}
+		}
+	}()
+
+	t.Cleanup(func() { close(newSubtreeChan) })
+
+	stp, err := NewSubtreeProcessor(ctx, ulogger.TestLogger{}, settings, blob_memory.New(), &blockchain.Mock{}, store, newSubtreeChan)
+	require.NoError(t, err)
+	stp.Start(ctx)
+	t.Cleanup(func() { stp.Stop(context.Background()) })
+
+	const txCount = 13
+
+	want := make([]chainhash.Hash, txCount)
+	nodes := make([]subtree.Node, txCount)
+	inpoints := make([]*subtree.TxInpoints, txCount)
+
+	for i := range want {
+		want[i] = chainhash.HashH([]byte{byte(i), 's', 'w', 'e', 'e', 'p'})
+		nodes[i] = subtree.Node{Hash: want[i], Fee: 100, SizeInBytes: 200}
+		inpoints[i] = &subtree.TxInpoints{}
+	}
+
+	stp.AddBatch(nodes, inpoints)
+
+	require.Eventually(t, func() bool {
+		return stp.GetCurrentTxMap().Exists(want[txCount-1])
+	}, 5*time.Second, 10*time.Millisecond)
+
+	return stp, store, want
+}
+
+// sweepChunk is how many transactions newSweepFixture's sweep marks in one call.
+const sweepChunk = 3
+
+// reset marks every transaction in block assembly as not on the longest chain
+// before it clears its state. Block assembly can hold billions of transactions,
+// so the sweep must hand them to the store a bounded chunk at a time and never
+// build one list of them all.
+func TestResetMarksAssemblyTxsInBoundedChunks(t *testing.T) {
+	stp, store, want := newSweepFixture(t)
+
+	response := stp.Reset(resetTestHeader(4242), nil, nil, false, nil)
+	require.NoError(t, response.Err)
+
+	var got []chainhash.Hash
+
+	store.mu.Lock()
+	defer store.mu.Unlock()
+
+	for _, call := range store.calls {
+		require.LessOrEqual(t, len(call), sweepChunk, "one store call must never carry more than a chunk")
+		got = append(got, call...)
+	}
+
+	require.Len(t, store.calls, (len(want)+sweepChunk-1)/sweepChunk, "full chunks, then the rest")
+	require.ElementsMatch(t, want, got, "every assembly transaction is marked exactly once")
+}
+
+// A chunk the store fails to mark fails the reset there, before it has cleared
+// anything: block assembly keeps its transactions, and the error says how many
+// were marked.
+func TestResetFailsOnAChunkTheStoreCannotMark(t *testing.T) {
+	stp, store, want := newSweepFixture(t)
+	store.failOn = 2
+
+	response := stp.Reset(resetTestHeader(4243), nil, nil, false, nil)
+	require.ErrorContains(t, response.Err, "error marking assembly txs as not on longest chain before reset, 3 marked before it")
+
+	store.mu.Lock()
+	require.Len(t, store.calls, 1, "the sweep stops at the chunk that failed")
+	store.mu.Unlock()
+
+	for _, h := range want {
+		require.True(t, stp.GetCurrentTxMap().Exists(h), "a reset that failed in the sweep has cleared nothing")
+	}
 }
 
 // storeReorgSubtree builds a real subtree (coinbase placeholder + the given

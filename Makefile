@@ -97,6 +97,10 @@ clean_backup:
 	@rm -f settings_local.conf.bak
 
 
+# Note: the aerospike tag below no longer gates the Aerospike store (it has been
+# always-compiled since; see docs/topics/microservicesReconciliationNotes.md
+# section 72). It is passed through so tag-gated test code still compiles in
+# tagged contexts; removing it from build targets changes nothing in the binary.
 .PHONY: build-teranode-with-dashboard
 build-teranode-with-dashboard: set_debug_flags set_txmetacache_flag build-dashboard
 	CGO_ENABLED=$(CGO_ENABLED) GOOS=$(GOOS) GOARCH=$(GOARCH) go build -mod=readonly -tags aerospike,${TXMETA_TAG} --trimpath -ldflags="-X main.commit=${GIT_COMMIT} -X main.version=${GIT_VERSION} -X main.StartFromState=${START_FROM_STATE}"  -gcflags "all=${DEBUG_FLAGS}" -o teranode.run .
@@ -174,10 +178,30 @@ install-tools:
 	go install github.com/ctrf-io/go-ctrf-json-reporter/cmd/go-ctrf-json-reporter@latest
 	go install gotest.tools/gotestsum@latest
 
+# -timeout is per package. stores/utxo/aerospike runs its testcontainer suite
+# under -race and coverage, which took 9m20s on main by itself in October 2026,
+# so 10m left no room for new container tests there.
+#
+# TEST_EXCLUDE drops packages (paths relative to the module) from `make test`; CI
+# sets it to run the slowest package in its own job via `make test-pkgs`.
+# TEST_COVERPROFILE names the coverage file either target writes.
+TEST_EXCLUDE ?=
+TEST_COVERPROFILE ?= coverage.out
+TEST_FLAGS = -race -tags "testtxmetacache" -count=1 -timeout=20m -coverprofile=$(TEST_COVERPROFILE) -coverpkg=./...
+UNIT_TEST_PKGS = $(filter-out $(addprefix github.com/bsv-blockchain/teranode/,$(TEST_EXCLUDE)),$(shell go list ./... | grep -v github.com/bsv-blockchain/teranode/test/ | sort))
+
 .PHONY: test
 test:
 	@command -v gotestsum >/dev/null 2>&1 || { echo "gotestsum not found. Installing..."; $(MAKE) install-tools; }
-	SETTINGS_CONTEXT=test $$(go env GOPATH)/bin/gotestsum --format pkgname -- -race -tags "testtxmetacache" -count=1 -timeout=20m -coverprofile=coverage.out -coverpkg=./... $$(go list ./... | grep -v github.com/bsv-blockchain/teranode/test/ | sort)
+	SETTINGS_CONTEXT=test $$(go env GOPATH)/bin/gotestsum --format pkgname -- $(TEST_FLAGS) $(UNIT_TEST_PKGS)
+
+# run `make test` for only the packages in TEST_PKGS (paths relative to the module),
+# e.g. make test-pkgs TEST_PKGS=stores/utxo/aerospike TEST_COVERPROFILE=coverage-aerospike.out
+.PHONY: test-pkgs
+test-pkgs:
+	@test -n "$(TEST_PKGS)" || { echo "TEST_PKGS is empty"; exit 1; }
+	@command -v gotestsum >/dev/null 2>&1 || { echo "gotestsum not found. Installing..."; $(MAKE) install-tools; }
+	SETTINGS_CONTEXT=test $$(go env GOPATH)/bin/gotestsum --format pkgname -- $(TEST_FLAGS) $(addprefix ./,$(TEST_PKGS))
 
 # run the tests too slow for `make test` under -race and coverage (TERANODE_HEAVY_TESTS), without -race.
 # The PR test job runs it after `make test`.
@@ -197,6 +221,28 @@ reorg-scale:
 	SETTINGS_CONTEXT=test go test -tags "reorgscale testtxmetacache" -count=1 -timeout=4h -run '^TestReorgScale$$' -v ./services/blockassembly/subtreeprocessor
 	SETTINGS_CONTEXT=test go test -tags "reorgscale testtxmetacache" -count=1 -timeout=4h -run '^TestReorgScale$$' -v ./services/blockassembly
 
+# run the Block Validation known-defect proofs (services/blockvalidation/spec.md, Conformance Gaps).
+# Each is a TestKnownDefect_* test behind the bvgaps build tag that asserts spec-correct behaviour
+# and FAILS until its defect is fixed, so this target is not part of `make test`. When a defect is
+# fixed, drop the bvgaps tag and the TestKnownDefect_ prefix so the test becomes a regression test.
+# ./services/subtreevalidation/... has no proofs until bsv-blockchain/teranode#2124 (test task T08)
+# merges; it holds the GAP-BV-047 proofs. Until then `go test` reports no tests to run there.
+.PHONY: test-bvgaps
+test-bvgaps:
+	SETTINGS_CONTEXT=test go test -race -count=1 -tags "bvgaps testtxmetacache" -run '^TestKnownDefect_' ./model/... ./services/blockvalidation/... ./services/subtreevalidation/...
+
+# compile and vet the gap-proof tests without running them, so a rename in the code they exercise
+# breaks the build here (and in CI) instead of silently when a gap is fixed.
+.PHONY: vet-bvgaps
+vet-bvgaps:
+	go vet -tags "bvgaps testtxmetacache" ./model/... ./services/blockvalidation/... ./services/subtreevalidation/...
+
+# run bitcoin-sv's consensus vectors (script, transaction and signature hash tests) in
+# test/consensus. `make test` skips everything under test/; the PR test job runs this after it.
+.PHONY: consensustest
+consensustest:
+	go test -count=1 -timeout=10m ./test/consensus/...
+
 # run tagged service regressions and tests in the test/longtest directory
 .PHONY: longtest
 longtest:
@@ -208,7 +254,8 @@ longtest:
 # run the soak test: the in-process daemon under steady tx load for SOAK_DURATION, failing if heap or goroutine
 # counts trend upward. No -race: the detector skews memory and throughput, which is what this test measures.
 # SOAK_TIMEOUT must exceed SOAK_DURATION by at least 10m. Other knobs (SOAK_WARMUP, SOAK_SAMPLE_INTERVAL,
-# SOAK_TXS_PER_CYCLE, SOAK_UTXO_STORE, SOAK_OUTPUT_DIR, SOAK_INJECT_LEAK) are read from the environment.
+# SOAK_TXS_PER_CYCLE, SOAK_UTXO_STORE, SOAK_OUTPUT_DIR, SOAK_INJECT_LEAK and the SOAK_*_TOLERANCE* settings) are
+# read from the environment; see docs/howto/runningTests.md.
 # Example: make soaktest SOAK_DURATION=2h SOAK_TIMEOUT=150m
 SOAK_DURATION ?= 30m
 SOAK_TIMEOUT ?= 60m
@@ -274,11 +321,13 @@ FUZZ_TARGETS = \
 	services/rpc/bsvjson:FuzzUnmarshalCmd \
 	util/lane:FuzzDecodeDiskPayload \
 	util/lane:FuzzDecodeHoleData \
+	util/lane:FuzzCheckContainersMatchesValidate \
 	util/lane:FuzzDecodeSubtreePositions \
 	util/lane:FuzzDecodeProofFile \
 	util/lane:FuzzDecodeSubtreeBitmaps \
 	util/lane/backfill:FuzzOpenManifest \
-	stores/utxo/meta:FuzzNewDataFromLaneMetaBytes
+	stores/utxo/meta:FuzzNewDataFromLaneMetaBytes \
+	stores/utxo/meta:FuzzOwnCacheBytesView
 
 # Per-target budget. The nightly workflow uses 5m; the default here is kept
 # short so `make fuzz` is usable as a pre-push check.
@@ -581,7 +630,7 @@ install-lint:
 # lint will check the changed files in the current branch compared to main, including commits and unstaged/untracked changes
 # It will show new linting errors/warnings, by updating local copy of origin/main with the latest state of the remote main branch.
 .PHONY: lint
-lint: lint-tracing-info
+lint: lint-tracing-info vet-bvgaps
 	git fetch origin main
 	golangci-lint run ./... --new-from-rev origin/main --disable gosec --disable prealloc # TODO: re-enable gosec once gosec >v2.23.0 is released (fixes float constant panic)
 

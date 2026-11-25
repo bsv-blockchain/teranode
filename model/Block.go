@@ -2317,6 +2317,9 @@ func (b *Block) checkParentsExistOnChain(ctx context.Context, logger ulogger.Log
 	)
 	defer deferFn()
 
+	// At utxostore_laneMigration shadow, the lanes shadow of this check, resolved once per block.
+	laneParents := laneParentObserverFrom(ctx)
+
 	// check all the parent transactions in parallel, this allows us to batch read from the txMetaStore
 	parentG := new(errgroup.Group)
 	util.SafeSetLimit(logger, parentG, 1024*32)
@@ -2325,7 +2328,7 @@ func (b *Block) checkParentsExistOnChain(ctx context.Context, logger ulogger.Log
 		parentTxStruct := parentTxStruct
 
 		parentG.Go(func() error {
-			oldParentBlockIDs, err := b.checkParentExistsOnChain(ctx, logger, deps.txMetaStore, parentTxStruct, validationCtx.currentBlockHeaderIDsMap)
+			oldParentBlockIDs, err := b.checkParentExistsOnChainObserved(ctx, logger, deps.txMetaStore, parentTxStruct, validationCtx.currentBlockHeaderIDsMap, laneParents)
 
 			// there are old blocks we need to return to the validator
 			if err == nil && len(oldParentBlockIDs) > 0 {
@@ -2385,6 +2388,13 @@ func (b *Block) getValidationConcurrency(validOrderAndBlessedConcurrency int) in
 }
 
 func (b *Block) checkParentExistsOnChain(gCtx context.Context, logger ulogger.Logger, txMetaStore utxo.Store, parentTxStruct missingParentTx, currentBlockHeaderIDsMap map[uint32]struct{}) ([]uint32, error) {
+	return b.checkParentExistsOnChainObserved(gCtx, logger, txMetaStore, parentTxStruct, currentBlockHeaderIDsMap, laneParentObserverFrom(gCtx))
+}
+
+// checkParentExistsOnChainObserved is checkParentExistsOnChain with the lanes shadow, nil at off,
+// told of the parent record it reads.
+func (b *Block) checkParentExistsOnChainObserved(gCtx context.Context, logger ulogger.Logger, txMetaStore utxo.Store, parentTxStruct missingParentTx,
+	currentBlockHeaderIDsMap map[uint32]struct{}, laneParents LaneParentObserver) ([]uint32, error) {
 	var oldBlockIDs []uint32
 
 	// check whether the parent transaction has already been mined in a block on our chain
@@ -2392,7 +2402,7 @@ func (b *Block) checkParentExistsOnChain(gCtx context.Context, logger ulogger.Lo
 	// two options: 1- parent is currently under validation, 2- parent is from forked chain.
 	// for the first situation we don't start validating the current block until the parent is validated.
 	// parent tx meta was not found, must be old, ignore | it is a coinbase, which obviously is mined in a block
-	parentTxMeta, err := getParentTxMetaBlockIDs(gCtx, txMetaStore, parentTxStruct)
+	parentTxMeta, err := getParentTxMetaBlockIDs(gCtx, txMetaStore, parentTxStruct, laneParents)
 	if err != nil {
 		return oldBlockIDs, err
 	}
@@ -2643,8 +2653,18 @@ func filterCurrentBlockHeaderIDsMap(parentTxMeta *meta.Data, currentBlockHeaderI
 	return foundInPreviousBlocks, minBlockID
 }
 
-func getParentTxMetaBlockIDs(gCtx context.Context, txMetaStore utxo.Store, parentTxStruct missingParentTx) (*meta.Data, error) {
-	parentTxMeta, err := txMetaStore.Get(gCtx, &parentTxStruct.parentTxHash, fields.BlockIDs)
+func getParentTxMetaBlockIDs(gCtx context.Context, txMetaStore utxo.Store, parentTxStruct missingParentTx, observer LaneParentObserver) (*meta.Data, error) {
+	readFields := []fields.FieldName{fields.BlockIDs}
+	if observer != nil {
+		// The lanes shadow of this check takes the parent's lane position from this same read.
+		readFields = append(readFields, fields.LanePosition)
+	}
+
+	parentTxMeta, err := txMetaStore.Get(gCtx, &parentTxStruct.parentTxHash, readFields...)
+	if err == nil && observer != nil {
+		observer.ObserveParent(parentTxStruct.parentTxHash, parentTxMeta.LanePosition, parentTxMeta.BlockIDs)
+	}
+
 	if err != nil {
 		if errors.Is(err, errors.ErrTxNotFound) {
 			// Parent tx is not in our store yet. During catchup this is a transient ordering

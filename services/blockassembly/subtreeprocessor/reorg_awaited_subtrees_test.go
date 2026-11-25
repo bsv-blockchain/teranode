@@ -112,7 +112,7 @@ func (g *gatedStores) serve(ctx context.Context, req NewSubtreeRequest) {
 	}
 
 	// the way the block assembly worker settles: with the result, and announcing when the queue says so
-	g.set.Finish(root, res, false, 0)
+	g.set.Finish(root, res, false)
 
 	if req.Result != nil {
 		req.Result <- res

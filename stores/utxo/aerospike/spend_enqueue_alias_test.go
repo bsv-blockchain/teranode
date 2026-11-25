@@ -131,7 +131,7 @@ func TestSpend_EnqueuesEveryItemWhenNoCircuitBreaker(t *testing.T) {
 
 // TestSpend_EnqueuesOnlyAcceptedItemsWhenBreakerHalfOpen exercises the prefix
 // copy and the mid-batch boundary. A fully-open breaker cannot produce an
-// accept-then-reject shape (Allow returns false for EVERY call before
+// accept-then-reject shape (Admit refuses EVERY call before
 // nextAttempt); half-open can, because the first Allow after the cooldown flips
 // the state and returns true, and subsequent calls return true only while
 // halfOpenAttempts < halfOpenMax. With halfOpenMax = 1, input 0 is accepted and
@@ -146,9 +146,9 @@ func TestSpend_EnqueuesOnlyAcceptedItemsWhenBreakerHalfOpen(t *testing.T) {
 	cb := newCircuitBreaker(1, 1, time.Millisecond)
 	require.NotNil(t, cb)
 
-	cb.RecordFailure() // trips the breaker open
+	cb.RecordFailure(breakerSlot{}) // trips the breaker open
 
-	time.Sleep(20 * time.Millisecond) // let the cooldown elapse so the next Allow half-opens
+	time.Sleep(20 * time.Millisecond) // let the cooldown elapse so the next Admit half-opens
 
 	s.spendCircuitBreaker = cb
 
@@ -179,7 +179,7 @@ func TestSpend_FiltersFromTheFirstInputWhenBreakerFullyOpen(t *testing.T) {
 	cb := newCircuitBreaker(1, 1, time.Hour)
 	require.NotNil(t, cb)
 
-	cb.RecordFailure() // trips the breaker open, cooldown will not elapse
+	cb.RecordFailure(breakerSlot{}) // trips the breaker open, cooldown will not elapse
 
 	s.spendCircuitBreaker = cb
 

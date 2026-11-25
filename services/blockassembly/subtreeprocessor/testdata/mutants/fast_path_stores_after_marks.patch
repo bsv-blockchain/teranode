@@ -1,5 +1,5 @@
 diff --git a/services/blockassembly/subtreeprocessor/SubtreeProcessor.go b/services/blockassembly/subtreeprocessor/SubtreeProcessor.go
-index c54b33a69..d30bf8248 100644
+index 0c5c39eb8..e004e7552 100644
 --- a/services/blockassembly/subtreeprocessor/SubtreeProcessor.go
 +++ b/services/blockassembly/subtreeprocessor/SubtreeProcessor.go
 @@ -6140,8 +6140,10 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveBackBlocks []*
@@ -15,7 +15,7 @@ index c54b33a69..d30bf8248 100644
  	}
  
  	stp.phases.done("store_wait")
-@@ -6169,6 +6171,13 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveBackBlocks []*
+@@ -6318,6 +6320,13 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveBackBlocks []*
  		return err
  	}
  

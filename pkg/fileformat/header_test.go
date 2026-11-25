@@ -408,6 +408,24 @@ func TestFileTypeToMagicMapping(t *testing.T) {
 	}
 }
 
+// Every file type has its own magic, and the magic reads back as that type. The UTXO headers
+// type is the one with two magics, its two format versions.
+func TestFileTypeMagicsAreDistinct(t *testing.T) {
+	seen := map[[8]byte]FileType{}
+
+	for fileType, magic := range fileTypeToMagic {
+		other, dup := seen[magic]
+		require.False(t, dup, "%s and %s share a magic", fileType, other)
+
+		seen[magic] = fileType
+		require.Equal(t, fileType, magicToFileType[magic], "%s reads back from its magic", fileType)
+	}
+
+	// The lane bitmaps file's name and magic are on disk beside every subtree.
+	require.Equal(t, "subtreeLaneBitmaps", FileTypeSubtreeLaneBitmaps.String())
+	require.Equal(t, [8]byte{'S', 'L', 'B', '-', '1', '.', '0', ' '}, FileTypeSubtreeLaneBitmaps.ToMagicBytes())
+}
+
 // TestMagicToFileTypeMapping tests the magicToFileType mapping
 func TestMagicToFileTypeMapping(t *testing.T) {
 	for magic, expectedFileType := range magicToFileType {

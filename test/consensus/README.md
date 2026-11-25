@@ -41,9 +41,9 @@ This package contains the ported test suites from bitcoin-sv for validating tran
    - Parse complex scripts
 
 2. **Port Remaining Tests**
-   - Transaction validation tests (tx_valid.json, tx_invalid.json)
-   - Signature hash tests (sighash.json)
    - Consensus rule tests
+   - Script tests through `ParseScriptBitcoinSV` and per-vector flags (they still use the
+     heuristic `ScriptParser` and derive a block height from the flags)
 
 3. **Native Go Implementation**
    - Implement script interpreter in pure Go
@@ -61,14 +61,28 @@ Example:
 ```
 
 ### Transaction Tests (tx_valid.json, tx_invalid.json)
-Format: `[[inputs], serialized_tx_hex, flags]`
+Format: `[[[prevout hash, prevout index, prevout scriptPubKey, optional amount], ...], serialized_tx_hex, flags]`,
+where flags is one comma-separated flag set or an array of them.
+
+`TestTransactionValidation` runs every vector as bitcoin-sv's `transaction_tests.cpp` does:
+context-free checks with pre-Genesis limits, then each input's script through gobdk's
+`VerifyScriptWithCustomFlags` with each flag set. Prevout scripts are parsed with
+`ParseScriptBitcoinSV`, a port of bitcoin-sv's `ParseScript`. Vectors where Teranode
+deliberately differs go in `txVectorDeviations`.
 
 ### Signature Hash Tests (sighash.json)
-Format: `[raw_tx, script, input_index, hash_type, expected_hash]`
+Format: `[raw_tx, script, input_index, hash_type, signature_hash, signature_hash_original]`
+
+`TestSigHashVectors` checks go-bt's signature hashes against both columns, as bitcoin-sv's
+`sighash_tests.cpp` does. go-bt's legacy preimage keeps OP_CODESEPARATOR, which bitcoin-sv
+drops; the test pins that deviation.
 
 ## Usage
 
 ```bash
+# Transaction and signature hash vectors
+go test -v ./test/consensus -run 'TestTransactionValidation|TestSigHashVectors'
+
 # Run test statistics
 go test -v ./test/consensus -run TestScriptTestStats
 

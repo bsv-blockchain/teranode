@@ -183,16 +183,17 @@ func (x *NewChaintipAndHeightRequest) GetHeight() uint32 {
 
 // Request for adding a new transaction to the mining candidate block.
 type AddTxRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Txid          []byte                 `protobuf:"bytes,1,opt,name=txid,proto3" json:"txid,omitempty"`             // the transaction id
-	Fee           uint64                 `protobuf:"varint,3,opt,name=fee,proto3" json:"fee,omitempty"`              // the transaction fee in satoshis
-	Size          uint64                 `protobuf:"varint,4,opt,name=size,proto3" json:"size,omitempty"`            // the size of the transaction in bytes
-	Locktime      uint32                 `protobuf:"varint,2,opt,name=locktime,proto3" json:"locktime,omitempty"`    // the earliest time a transaction can be mined into a block
-	Utxos         [][]byte               `protobuf:"bytes,5,rep,name=utxos,proto3" json:"utxos,omitempty"`           // the UTXOs consumed by this transaction
-	TxInpoints    []byte                 `protobuf:"bytes,6,opt,name=txInpoints,proto3" json:"txInpoints,omitempty"` // a serialized list of input outpoints for this transaction
-	InBlock       bool                   `protobuf:"varint,7,opt,name=inBlock,proto3" json:"inBlock,omitempty"`      // the transaction arrived inside a block, so the in-memory transaction limit does not refuse it
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	Txid            []byte                 `protobuf:"bytes,1,opt,name=txid,proto3" json:"txid,omitempty"`                                               // the transaction id
+	Fee             uint64                 `protobuf:"varint,3,opt,name=fee,proto3" json:"fee,omitempty"`                                                // the transaction fee in satoshis
+	Size            uint64                 `protobuf:"varint,4,opt,name=size,proto3" json:"size,omitempty"`                                              // the size of the transaction in bytes
+	Locktime        uint32                 `protobuf:"varint,2,opt,name=locktime,proto3" json:"locktime,omitempty"`                                      // the earliest time a transaction can be mined into a block
+	Utxos           [][]byte               `protobuf:"bytes,5,rep,name=utxos,proto3" json:"utxos,omitempty"`                                             // the UTXOs consumed by this transaction
+	TxInpoints      []byte                 `protobuf:"bytes,6,opt,name=txInpoints,proto3" json:"txInpoints,omitempty"`                                   // a serialized list of input outpoints for this transaction
+	InBlock         bool                   `protobuf:"varint,7,opt,name=inBlock,proto3" json:"inBlock,omitempty"`                                        // the transaction arrived inside a block, so the in-memory transaction limit does not refuse it
+	ValidatedHeight uint32                 `protobuf:"varint,8,opt,name=validated_height,json=validatedHeight,proto3" json:"validated_height,omitempty"` // the block height the transaction was validated at; 0 = untagged. Block assembly drops a tagged transaction whose height falls under other consensus rules than its next block's. An older sender leaves it 0 and its transactions are admitted as before.
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *AddTxRequest) Reset() {
@@ -272,6 +273,13 @@ func (x *AddTxRequest) GetInBlock() bool {
 		return x.InBlock
 	}
 	return false
+}
+
+func (x *AddTxRequest) GetValidatedHeight() uint32 {
+	if x != nil {
+		return x.ValidatedHeight
+	}
+	return 0
 }
 
 // Request for adding a batch of transactions to the mining candidate block.
@@ -390,9 +398,12 @@ type AddTxBatchColumnarRequest struct {
 	// Every transaction in the batch arrived inside a block, so the in-memory
 	// transaction limit does not refuse the batch. A server that predates this
 	// field ignores it and applies the limit, which is the previous behaviour.
-	InBlock       bool `protobuf:"varint,12,opt,name=in_block,json=inBlock,proto3" json:"in_block,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	InBlock bool `protobuf:"varint,12,opt,name=in_block,json=inBlock,proto3" json:"in_block,omitempty"`
+	// Per-transaction validated block height, as AddTxRequest.validated_height. Empty when
+	// the sender tags nothing (an older sender); otherwise one entry per transaction.
+	ValidatedHeights []uint32 `protobuf:"varint,13,rep,packed,name=validated_heights,json=validatedHeights,proto3" json:"validated_heights,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *AddTxBatchColumnarRequest) Reset() {
@@ -479,6 +490,13 @@ func (x *AddTxBatchColumnarRequest) GetInBlock() bool {
 		return x.InBlock
 	}
 	return false
+}
+
+func (x *AddTxBatchColumnarRequest) GetValidatedHeights() []uint32 {
+	if x != nil {
+		return x.ValidatedHeights
+	}
+	return nil
 }
 
 // Request for retrieving a mining candidate block template.
@@ -1396,7 +1414,7 @@ const file_services_blockassembly_blockassembly_api_blockassembly_api_proto_rawD
 	"\ttimestamp\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\ttimestamp\"Q\n" +
 	"\x1bNewChaintipAndHeightRequest\x12\x1a\n" +
 	"\bchaintip\x18\x01 \x01(\fR\bchaintip\x12\x16\n" +
-	"\x06height\x18\x02 \x01(\rR\x06height\"\xb4\x01\n" +
+	"\x06height\x18\x02 \x01(\rR\x06height\"\xdf\x01\n" +
 	"\fAddTxRequest\x12\x12\n" +
 	"\x04txid\x18\x01 \x01(\fR\x04txid\x12\x10\n" +
 	"\x03fee\x18\x03 \x01(\x04R\x03fee\x12\x12\n" +
@@ -1406,12 +1424,13 @@ const file_services_blockassembly_blockassembly_api_blockassembly_api_proto_rawD
 	"\n" +
 	"txInpoints\x18\x06 \x01(\fR\n" +
 	"txInpoints\x12\x18\n" +
-	"\ainBlock\x18\a \x01(\bR\ainBlock\"n\n" +
+	"\ainBlock\x18\a \x01(\bR\ainBlock\x12)\n" +
+	"\x10validated_height\x18\b \x01(\rR\x0fvalidatedHeight\"n\n" +
 	"\x11AddTxBatchRequest\x12?\n" +
 	"\n" +
 	"txRequests\x18\x01 \x03(\v2\x1f.blockassembly_api.AddTxRequestR\n" +
 	"txRequests\x12\x18\n" +
-	"\ainBlock\x18\x02 \x01(\bR\ainBlock\"\xf4\x02\n" +
+	"\ainBlock\x18\x02 \x01(\bR\ainBlock\"\xa1\x03\n" +
 	"\x19AddTxBatchColumnarRequest\x12!\n" +
 	"\ftxids_packed\x18\x01 \x01(\fR\vtxidsPacked\x12\x12\n" +
 	"\x04fees\x18\x02 \x03(\x04R\x04fees\x12\x14\n" +
@@ -1421,7 +1440,8 @@ const file_services_blockassembly_blockassembly_api_blockassembly_api_proto_rawD
 	"\x10vout_idxs_packed\x18\n" +
 	" \x03(\rR\x0evoutIdxsPacked\x12/\n" +
 	"\x14vout_idxs_tx_offsets\x18\v \x03(\rR\x11voutIdxsTxOffsets\x12\x19\n" +
-	"\bin_block\x18\f \x01(\bR\ainBlockJ\x04\b\b\x10\tJ\x04\b\t\x10\n" +
+	"\bin_block\x18\f \x01(\bR\ainBlock\x12+\n" +
+	"\x11validated_heights\x18\r \x03(\rR\x10validatedHeightsJ\x04\b\b\x10\tJ\x04\b\t\x10\n" +
 	"R\x13parent_vout_indicesR\x10vout_idx_offsets\"E\n" +
 	"\x19GetMiningCandidateRequest\x12(\n" +
 	"\x0fincludeSubtrees\x18\x01 \x01(\bR\x0fincludeSubtrees\"%\n" +

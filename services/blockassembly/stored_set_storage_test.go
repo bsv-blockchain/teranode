@@ -33,7 +33,7 @@ func TestStoredSet_AStoredSubtreeAndItsMetaAddTheRoot(t *testing.T) {
 	require.True(t, result.OK(), "%+v", result)
 	require.True(t, set.Has(*subtree.RootHash()), "the root is in the set when the result is posted")
 	require.Equal(t, uint64(1), set.Added())
-	require.Zero(t, set.Retrying())
+	require.False(t, set.Retrying(*subtree.RootHash()))
 }
 
 func TestStoredSet_ASubtreeStoredByARetryAddsTheRootAndTheRetryIsNoLongerInFlight(t *testing.T) {
@@ -49,7 +49,7 @@ func TestStoredSet_ASubtreeStoredByARetryAddsTheRootAndTheRetryIsNoLongerInFligh
 
 	require.True(t, result.OK(), "%+v", result)
 	require.True(t, set.Has(*subtree.RootHash()))
-	require.Zero(t, set.Retrying(), "the retry settled")
+	require.False(t, set.Retrying(*subtree.RootHash()), "the retry settled")
 }
 
 func TestStoredSet_ARetryThatIsExhaustedLeavesTheRootOutAndNotesTheFailure(t *testing.T) {
@@ -67,7 +67,7 @@ func TestStoredSet_ARetryThatIsExhaustedLeavesTheRootOutAndNotesTheFailure(t *te
 	require.Error(t, result.Err)
 	require.False(t, set.Has(*subtree.RootHash()))
 	require.True(t, set.HasFailed(*subtree.RootHash()), "the processor sends it again from memory")
-	require.Zero(t, set.Retrying())
+	require.False(t, set.Retrying(*subtree.RootHash()))
 }
 
 // A subtree whose file landed but whose meta did not: the second request for it finds the file and
@@ -151,7 +151,7 @@ func TestStoredSet_EveryWayARequestSettlesBalancesTheRetryCount(t *testing.T) {
 
 			settle(o)
 
-			require.Zero(t, set.Retrying())
+			require.False(t, set.Retrying(root))
 		})
 	}
 }

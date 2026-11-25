@@ -30,6 +30,7 @@ func TestParentTransactionNETCalculationDuringReset(t *testing.T) {
 
 		utxoStore, err := utxostoresql.New(ctx, ulogger.TestLogger{}, test.CreateBaseTestSettings(t), utxoStoreURL)
 		require.NoError(t, err)
+		t.Cleanup(func() { _ = utxoStore.Close(context.Background()) })
 
 		err = utxoStore.SetBlockHeight(150)
 		require.NoError(t, err)
@@ -232,6 +233,7 @@ func TestParentTransactionNETCalculationDuringReset(t *testing.T) {
 
 		utxoStore, err := utxostoresql.New(ctx, ulogger.TestLogger{}, test.CreateBaseTestSettings(t), utxoStoreURL)
 		require.NoError(t, err)
+		t.Cleanup(func() { _ = utxoStore.Close(context.Background()) })
 
 		// Set current block height so unmined_since gets set properly
 		err = utxoStore.SetBlockHeight(100)
@@ -313,6 +315,7 @@ func TestParentTransactionNETCalculationDuringReset(t *testing.T) {
 
 		utxoStore, err := utxostoresql.New(ctx, ulogger.TestLogger{}, test.CreateBaseTestSettings(t), utxoStoreURL)
 		require.NoError(t, err)
+		t.Cleanup(func() { _ = utxoStore.Close(context.Background()) })
 
 		err = utxoStore.SetBlockHeight(200)
 		require.NoError(t, err)
@@ -400,6 +403,7 @@ func TestParentTransactionNETCalculationDuringReset(t *testing.T) {
 
 		utxoStore, err := utxostoresql.New(ctx, ulogger.TestLogger{}, test.CreateBaseTestSettings(t), utxoStoreURL)
 		require.NoError(t, err)
+		t.Cleanup(func() { _ = utxoStore.Close(context.Background()) })
 
 		err = utxoStore.SetBlockHeight(150)
 		require.NoError(t, err)
@@ -523,6 +527,7 @@ func TestParentTransactionNETCalculationDuringReset(t *testing.T) {
 
 		utxoStore, err := utxostoresql.New(ctx, ulogger.TestLogger{}, test.CreateBaseTestSettings(t), utxoStoreURL)
 		require.NoError(t, err)
+		t.Cleanup(func() { _ = utxoStore.Close(context.Background()) })
 
 		err = utxoStore.SetBlockHeight(150)
 		require.NoError(t, err)
