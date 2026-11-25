@@ -592,7 +592,9 @@ func (stp *SubtreeProcessor) applyFastReorg(ctx context.Context, plan *fastReorg
 	stp.phases.done("fast_apply_coinbase")
 
 	// A slow-path step forgets the drops its block mines before its drain, and puts them back if the
-	// move fails (issue 2269). The fast path does the same once for the winners.
+	// move fails (issue 2269). The fast path does the same once for the winners. It declines when any
+	// drop exists at the plan, so this acts only on a drop recorded since, by FilterUnminedTxEra on
+	// the block assembler's goroutine; without one it returns at once.
 	if forgotten := stp.forgetMinedDroppedTxs(plan.winners); len(forgotten) != 0 {
 		defer func() {
 			if err != nil {
