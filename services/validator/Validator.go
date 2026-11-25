@@ -3834,8 +3834,9 @@ const mtpRangeAttempts = 3
 // blockchain_maxBlockHeadersPerRequest is lower.
 const mtpPageSize = 10_000
 
-// medianTimeSpan is the number of blocks a median time past covers.
-const medianTimeSpan = 11
+// medianTimeSpan is the number of blocks a median time past covers, the single consensus
+// declaration the other median builders read.
+const medianTimeSpan = uint32(blockchain.MedianTimeBlocks)
 
 // fetchMTPRange returns the MTPs for heights fromHeight to needed along the current chain's
 // block at needed-1 (or its tip, when that block does not exist yet), and for each the ID of
@@ -3877,7 +3878,7 @@ func (v *Validator) fetchMTPRange(ctx context.Context, fromHeight, needed uint32
 			ids[height+1-fromHeight] = meta.ID
 		}
 
-		if len(window) < medianTimeSpan {
+		if uint32(len(window)) < medianTimeSpan {
 			window = append(window, time.Unix(int64(header.Timestamp), 0))
 		}
 	})
@@ -3885,7 +3886,7 @@ func (v *Validator) fetchMTPRange(ctx context.Context, fromHeight, needed uint32
 		return nil, nil, err
 	}
 
-	if h := top + 1; h <= needed && h >= medianTimeSpan && len(window) == medianTimeSpan {
+	if h := top + 1; h <= needed && h >= medianTimeSpan && uint32(len(window)) == medianTimeSpan {
 		median, medianErr := model.CalculateMedianTimestamp(window)
 		if medianErr != nil {
 			return nil, nil, errors.NewProcessingError("[Validator][EnsureMTPLoaded] median below height %d", h, medianErr)
