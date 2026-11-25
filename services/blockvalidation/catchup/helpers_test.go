@@ -514,10 +514,12 @@ func TestFetchHeadersWithRetry_EnforcesByteCap(t *testing.T) {
 			httpmock.NewBytesResponder(200, bytes.Repeat([]byte{0xAB}, int(maxBytes)+1)))
 
 		start := time.Now()
-		headerBytes, err := FetchHeadersWithRetry(ctx, logger, url, 1, time.Millisecond, maxBytes)
+		headerBytes, err := FetchHeadersWithRetry(ctx, logger, url, 1, 20*time.Millisecond, maxBytes)
 		require.Error(t, err)
 		assert.Nil(t, headerBytes)
-		require.Less(t, time.Since(start), 500*time.Millisecond, "the retry must wait the given 1ms backoff, not the 1s default")
+		elapsed := time.Since(start)
+		require.GreaterOrEqual(t, elapsed, 20*time.Millisecond, "the retry must wait the given backoff")
+		require.Less(t, elapsed, 500*time.Millisecond, "the retry must wait the given 20ms backoff, not the 1s default")
 	})
 
 	t.Run("response within the cap succeeds", func(t *testing.T) {
