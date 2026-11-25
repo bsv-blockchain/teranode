@@ -55,3 +55,12 @@ func WithStoreQueue(q *StoreQueue) Options {
 		stp.storeQueue = q
 	}
 }
+
+// WithLaneBitmapsKeeper makes the processor build the lane bitmaps (util/lane) of each subtree it
+// chains, at utxostore_laneMigration shadow, and hand them to k before a mining candidate can list
+// the subtree. At off it is ignored.
+func WithLaneBitmapsKeeper(k LaneBitmapsKeeper) Options {
+	return func(stp *SubtreeProcessor) {
+		stp.laneKeeper = k
+	}
+}
