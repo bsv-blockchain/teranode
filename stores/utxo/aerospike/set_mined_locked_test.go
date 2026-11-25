@@ -78,6 +78,8 @@ func totalExtraRecs(t *testing.T, client *uaerospike.Client, store *teranode_aer
 // every one of its records — master AND pagination — must be unlocked. The test
 // runs for both the Lua UDF path and the filter-expression path.
 func TestSetMinedMultiClearsLockOnPaginationRecords(t *testing.T) {
+	t.Parallel()
+
 	if testing.Short() {
 		t.Skip("Skipping Aerospike integration test in short mode")
 	}
@@ -99,8 +101,6 @@ func TestSetMinedMultiClearsLockOnPaginationRecords(t *testing.T) {
 
 			client, store, _, cleanup := initAerospike(t, settings, logger)
 			defer cleanup()
-
-			cleanDB(t, client)
 
 			const blockHeight = 604315
 
@@ -151,6 +151,8 @@ func TestSetMinedMultiClearsLockOnPaginationRecords(t *testing.T) {
 // spendable regardless, so the master lock must be cleared even on the filtered
 // path.
 func TestSetMinedMultiWithExpressionsClearsLockWhenBlockIDFilteredOut(t *testing.T) {
+	t.Parallel()
+
 	if testing.Short() {
 		t.Skip("Skipping Aerospike integration test in short mode")
 	}
@@ -162,8 +164,6 @@ func TestSetMinedMultiWithExpressionsClearsLockWhenBlockIDFilteredOut(t *testing
 
 	client, store, _, cleanup := initAerospike(t, settings, logger)
 	defer cleanup()
-
-	cleanDB(t, client)
 
 	const blockHeight = 604315
 	const blockID = 7
@@ -205,6 +205,8 @@ func TestSetMinedMultiWithExpressionsClearsLockWhenBlockIDFilteredOut(t *testing
 // already in the record's list) MUST clear the pagination lock — otherwise the
 // orphan never heals. Covers both store paths.
 func TestSetMinedMultiHealsAlreadyMinedLockedPaginationRecord(t *testing.T) {
+	t.Parallel()
+
 	if testing.Short() {
 		t.Skip("Skipping Aerospike integration test in short mode")
 	}
@@ -224,8 +226,6 @@ func TestSetMinedMultiHealsAlreadyMinedLockedPaginationRecord(t *testing.T) {
 
 			client, store, _, cleanup := initAerospike(t, settings, logger)
 			defer cleanup()
-
-			cleanDB(t, client)
 
 			const blockHeight = 604314
 			const blockID = 635313
@@ -278,6 +278,8 @@ func TestSetMinedMultiHealsAlreadyMinedLockedPaginationRecord(t *testing.T) {
 // before applyLockClearWork would re-introduce the #1037 wedge while still
 // compiling and passing the happy-path tests.
 func TestSetMinedMultiUnlocksDespiteSiblingError(t *testing.T) {
+	t.Parallel()
+
 	if testing.Short() {
 		t.Skip("Skipping Aerospike integration test in short mode")
 	}
@@ -297,8 +299,6 @@ func TestSetMinedMultiUnlocksDespiteSiblingError(t *testing.T) {
 
 			client, store, _, cleanup := initAerospike(t, settings, logger)
 			defer cleanup()
-
-			cleanDB(t, client)
 
 			const blockHeight = 604314
 

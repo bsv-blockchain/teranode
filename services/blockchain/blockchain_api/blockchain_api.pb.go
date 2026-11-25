@@ -243,22 +243,23 @@ func (x *HealthResponse) GetTimestamp() *timestamppb.Timestamp {
 
 // AddBlockRequest contains data for adding a new block to the blockchain.
 type AddBlockRequest struct {
-	state             protoimpl.MessageState `protogen:"open.v1"`
-	Header            []byte                 `protobuf:"bytes,1,opt,name=header,proto3" json:"header,omitempty"`                                              // Block header
-	SubtreeHashes     [][]byte               `protobuf:"bytes,2,rep,name=subtree_hashes,json=subtreeHashes,proto3" json:"subtree_hashes,omitempty"`           // Merkle tree hashes
-	CoinbaseTx        []byte                 `protobuf:"bytes,3,opt,name=coinbase_tx,json=coinbaseTx,proto3" json:"coinbase_tx,omitempty"`                    // Coinbase transaction
-	TransactionCount  uint64                 `protobuf:"varint,4,opt,name=transaction_count,json=transactionCount,proto3" json:"transaction_count,omitempty"` // Number of transactions
-	SizeInBytes       uint64                 `protobuf:"varint,5,opt,name=size_in_bytes,json=sizeInBytes,proto3" json:"size_in_bytes,omitempty"`              // Block size
-	External          bool                   `protobuf:"varint,6,opt,name=external,proto3" json:"external,omitempty"`                                         // External block flag
-	PeerId            string                 `protobuf:"bytes,7,opt,name=peer_id,json=peerId,proto3" json:"peer_id,omitempty"`                                // Peer identifier
-	OptionMinedSet    bool                   `protobuf:"varint,8,opt,name=optionMinedSet,proto3" json:"optionMinedSet,omitempty"`                             // Option to mark block as mined
-	OptionSubtreesSet bool                   `protobuf:"varint,9,opt,name=optionSubtreesSet,proto3" json:"optionSubtreesSet,omitempty"`                       // Option to mark subtrees as set
-	OptionInvalid     bool                   `protobuf:"varint,10,opt,name=optionInvalid,proto3" json:"optionInvalid,omitempty"`                              // Option to invalidate block when adding
-	OptionID          uint64                 `protobuf:"varint,11,opt,name=optionID,proto3" json:"optionID,omitempty"`                                        // Optional block ID
-	CoinbaseBump      []byte                 `protobuf:"bytes,12,opt,name=coinbase_bump,json=coinbaseBump,proto3" json:"coinbase_bump,omitempty"`             // Coinbase BUMP (BRC-74 merkle proof)
-	LaneMapRows       []*LaneMapRow          `protobuf:"bytes,13,rep,name=lane_map_rows,json=laneMapRows,proto3" json:"lane_map_rows,omitempty"`              // Lane map rows, stored in the block's transaction (utxostore_laneMigration shadow)
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
+	state               protoimpl.MessageState `protogen:"open.v1"`
+	Header              []byte                 `protobuf:"bytes,1,opt,name=header,proto3" json:"header,omitempty"`                                                              // Block header
+	SubtreeHashes       [][]byte               `protobuf:"bytes,2,rep,name=subtree_hashes,json=subtreeHashes,proto3" json:"subtree_hashes,omitempty"`                           // Merkle tree hashes
+	CoinbaseTx          []byte                 `protobuf:"bytes,3,opt,name=coinbase_tx,json=coinbaseTx,proto3" json:"coinbase_tx,omitempty"`                                    // Coinbase transaction
+	TransactionCount    uint64                 `protobuf:"varint,4,opt,name=transaction_count,json=transactionCount,proto3" json:"transaction_count,omitempty"`                 // Number of transactions
+	SizeInBytes         uint64                 `protobuf:"varint,5,opt,name=size_in_bytes,json=sizeInBytes,proto3" json:"size_in_bytes,omitempty"`                              // Block size
+	External            bool                   `protobuf:"varint,6,opt,name=external,proto3" json:"external,omitempty"`                                                         // External block flag
+	PeerId              string                 `protobuf:"bytes,7,opt,name=peer_id,json=peerId,proto3" json:"peer_id,omitempty"`                                                // Peer identifier
+	OptionMinedSet      bool                   `protobuf:"varint,8,opt,name=optionMinedSet,proto3" json:"optionMinedSet,omitempty"`                                             // Option to mark block as mined
+	OptionSubtreesSet   bool                   `protobuf:"varint,9,opt,name=optionSubtreesSet,proto3" json:"optionSubtreesSet,omitempty"`                                       // Option to mark subtrees as set
+	OptionInvalid       bool                   `protobuf:"varint,10,opt,name=optionInvalid,proto3" json:"optionInvalid,omitempty"`                                              // Option to invalidate block when adding
+	OptionID            uint64                 `protobuf:"varint,11,opt,name=optionID,proto3" json:"optionID,omitempty"`                                                        // Optional block ID
+	CoinbaseBump        []byte                 `protobuf:"bytes,12,opt,name=coinbase_bump,json=coinbaseBump,proto3" json:"coinbase_bump,omitempty"`                             // Coinbase BUMP (BRC-74 merkle proof)
+	LaneMapRows         []*LaneMapRow          `protobuf:"bytes,13,rep,name=lane_map_rows,json=laneMapRows,proto3" json:"lane_map_rows,omitempty"`                              // Lane map rows, stored in the block's transaction (utxostore_laneMigration shadow)
+	LaneMapRowsOwnBlock bool                   `protobuf:"varint,14,opt,name=lane_map_rows_own_block,json=laneMapRowsOwnBlock,proto3" json:"lane_map_rows_own_block,omitempty"` // The lane map rows are of a block this node mined, for the lane metrics' block label; sent only with rows
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
 }
 
 func (x *AddBlockRequest) Reset() {
@@ -380,6 +381,13 @@ func (x *AddBlockRequest) GetLaneMapRows() []*LaneMapRow {
 		return x.LaneMapRows
 	}
 	return nil
+}
+
+func (x *AddBlockRequest) GetLaneMapRowsOwnBlock() bool {
+	if x != nil {
+		return x.LaneMapRowsOwnBlock
+	}
+	return false
 }
 
 // LaneMapRow is one lane map row of a block: the positions the block took from one lane, or from
@@ -8003,7 +8011,7 @@ const file_services_blockchain_blockchain_api_blockchain_api_proto_rawDesc = "" 
 	"\x0eHealthResponse\x12\x0e\n" +
 	"\x02ok\x18\x01 \x01(\bR\x02ok\x12\x18\n" +
 	"\adetails\x18\x02 \x01(\tR\adetails\x128\n" +
-	"\ttimestamp\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\ttimestamp\"\xf4\x03\n" +
+	"\ttimestamp\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\ttimestamp\"\xaa\x04\n" +
 	"\x0fAddBlockRequest\x12\x16\n" +
 	"\x06header\x18\x01 \x01(\fR\x06header\x12%\n" +
 	"\x0esubtree_hashes\x18\x02 \x03(\fR\rsubtreeHashes\x12\x1f\n" +
@@ -8019,7 +8027,8 @@ const file_services_blockchain_blockchain_api_blockchain_api_proto_rawDesc = "" 
 	" \x01(\bR\roptionInvalid\x12\x1a\n" +
 	"\boptionID\x18\v \x01(\x04R\boptionID\x12#\n" +
 	"\rcoinbase_bump\x18\f \x01(\fR\fcoinbaseBump\x12>\n" +
-	"\rlane_map_rows\x18\r \x03(\v2\x1a.blockchain_api.LaneMapRowR\vlaneMapRows\"\x98\x01\n" +
+	"\rlane_map_rows\x18\r \x03(\v2\x1a.blockchain_api.LaneMapRowR\vlaneMapRows\x124\n" +
+	"\x17lane_map_rows_own_block\x18\x0e \x01(\bR\x13laneMapRowsOwnBlock\"\x98\x01\n" +
 	"\n" +
 	"LaneMapRow\x12\x12\n" +
 	"\x04lane\x18\x01 \x01(\rR\x04lane\x12\x14\n" +

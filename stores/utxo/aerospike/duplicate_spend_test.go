@@ -16,6 +16,8 @@ import (
 // TestDuplicateSpendLargeTx tests that duplicate spend attempts on a transaction
 // with more than utxoBatchSize outputs don't cause spentExtraRecs to exceed totalExtraRecs
 func TestDuplicateSpendLargeTx(t *testing.T) {
+	t.Parallel()
+
 	batchSize := 2
 	numOutputs := 10
 
@@ -30,7 +32,7 @@ func TestDuplicateSpendLargeTx(t *testing.T) {
 	})
 
 	// Build a transaction with many outputs
-	largeTx := bt.NewTx()
+	largeTx := uniqueTx(bt.NewTx())
 
 	// Add a dummy input - use the From method which is the public API
 	// Use a non-zero hash to avoid being treated as coinbase
@@ -162,6 +164,8 @@ func TestDuplicateSpendLargeTx(t *testing.T) {
 // (Spend at spend.go:381-385) trigger Unspend followed by re-spend on retry,
 // causing double-counting of spentExtraRecs.
 func TestSpendUnspendRespendLargeTx(t *testing.T) {
+	t.Parallel()
+
 	batchSize := 2
 	numOutputs := 10
 
@@ -175,7 +179,7 @@ func TestSpendUnspendRespendLargeTx(t *testing.T) {
 	})
 
 	// Build a transaction with outputs spanning multiple child records
-	largeTx := bt.NewTx()
+	largeTx := uniqueTx(bt.NewTx())
 	err := largeTx.From(
 		"1111111111111111111111111111111111111111111111111111111111111111",
 		0,

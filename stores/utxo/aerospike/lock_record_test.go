@@ -69,6 +69,8 @@ func TestCalculateLockTTL(t *testing.T) {
 
 // TestLockRecordAcquisitionAndRelease tests the basic lock lifecycle
 func TestLockRecordAcquisitionAndRelease(t *testing.T) {
+	t.Parallel()
+
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
@@ -78,10 +80,8 @@ func TestLockRecordAcquisitionAndRelease(t *testing.T) {
 	settings := test.CreateBaseTestSettings(t)
 
 	// Create Aerospike store using helper
-	client, store, _, cleanup := initAerospike(t, settings, logger)
+	_, store, _, cleanup := initAerospike(t, settings, logger)
 	defer cleanup()
-
-	cleanDB(t, client)
 
 	// Create a small transaction for testing lock acquisition/release
 	// We don't need a huge transaction to test the lock mechanism
@@ -105,6 +105,8 @@ func TestLockRecordAcquisitionAndRelease(t *testing.T) {
 // TestConcurrentTransactionCreation tests that concurrent attempts to create
 // the same transaction are properly handled by the lock mechanism
 func TestConcurrentTransactionCreation(t *testing.T) {
+	t.Parallel()
+
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
@@ -113,10 +115,8 @@ func TestConcurrentTransactionCreation(t *testing.T) {
 	logger := ulogger.NewErrorTestLogger(t)
 	settings := test.CreateBaseTestSettings(t)
 
-	client, store, _, cleanup := initAerospike(t, settings, logger)
+	_, store, _, cleanup := initAerospike(t, settings, logger)
 	defer cleanup()
-
-	cleanDB(t, client)
 
 	// Create a small transaction for testing concurrent creation
 	tx := createTransactionWithOutputs(100)
@@ -160,6 +160,8 @@ func TestConcurrentTransactionCreation(t *testing.T) {
 // TestOrphanedTransactionRecovery tests that orphaned locked transactions
 // can be detected and recovered
 func TestOrphanedTransactionRecovery(t *testing.T) {
+	t.Parallel()
+
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
@@ -168,10 +170,8 @@ func TestOrphanedTransactionRecovery(t *testing.T) {
 	logger := ulogger.NewErrorTestLogger(t)
 	settings := test.CreateBaseTestSettings(t)
 
-	client, store, _, cleanup := initAerospike(t, settings, logger)
+	_, store, _, cleanup := initAerospike(t, settings, logger)
 	defer cleanup()
-
-	cleanDB(t, client)
 
 	// Create a small transaction with locked=true to simulate an orphaned state
 	tx := createTransactionWithOutputs(100)
@@ -204,6 +204,8 @@ func TestOrphanedTransactionRecovery(t *testing.T) {
 // TestHandleExistingTransactionScenarios tests various scenarios for
 // handleExistingTransaction
 func TestHandleExistingTransactionScenarios(t *testing.T) {
+	t.Parallel()
+
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
@@ -212,11 +214,10 @@ func TestHandleExistingTransactionScenarios(t *testing.T) {
 	logger := ulogger.NewErrorTestLogger(t)
 	settings := test.CreateBaseTestSettings(t)
 
-	client, store, _, cleanup := initAerospike(t, settings, logger)
+	_, store, _, cleanup := initAerospike(t, settings, logger)
 	defer cleanup()
 
 	t.Run("complete transaction returns exists error", func(t *testing.T) {
-		cleanDB(t, client)
 
 		tx := createTransactionWithOutputs(100)
 
@@ -231,7 +232,6 @@ func TestHandleExistingTransactionScenarios(t *testing.T) {
 	})
 
 	t.Run("transaction with lock held by another process", func(t *testing.T) {
-		cleanDB(t, client)
 
 		tx := createTransactionWithOutputs(100)
 
@@ -249,6 +249,8 @@ func TestHandleExistingTransactionScenarios(t *testing.T) {
 // TestMultiRecordTransactionIntegrity tests that multi-record transactions
 // are created atomically with the lock pattern
 func TestMultiRecordTransactionIntegrity(t *testing.T) {
+	t.Parallel()
+
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
@@ -257,10 +259,8 @@ func TestMultiRecordTransactionIntegrity(t *testing.T) {
 	logger := ulogger.NewErrorTestLogger(t)
 	settings := test.CreateBaseTestSettings(t)
 
-	client, store, _, cleanup := initAerospike(t, settings, logger)
+	_, store, _, cleanup := initAerospike(t, settings, logger)
 	defer cleanup()
-
-	cleanDB(t, client)
 
 	// Create a small transaction for testing multi-record integrity
 	// The lock pattern works the same regardless of size
@@ -312,5 +312,5 @@ func createTransactionWithOutputs(numOutputs int) *bt.Tx {
 		}
 	}
 
-	return tx
+	return uniqueTx(tx)
 }

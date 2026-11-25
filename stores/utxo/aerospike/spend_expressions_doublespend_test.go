@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/bsv-blockchain/aerospike-client-go/v8"
+	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/settings"
 	teranode_aerospike "github.com/bsv-blockchain/teranode/stores/utxo/aerospike"
@@ -19,7 +20,7 @@ import (
 // readSingleUtxoRecord returns the stored utxos[0] element bytes and the
 // spentUtxos counter for the master record holding vout 0 of tx, for a store
 // configured with utxoBatchSize == 1.
-func readSingleUtxoRecord(t *testing.T, client *uaerospike.Client, tSettings *settings.Settings, store *teranode_aerospike.Store) ([]byte, int) {
+func readSingleUtxoRecord(t *testing.T, tx *bt.Tx, client *uaerospike.Client, tSettings *settings.Settings, store *teranode_aerospike.Store) ([]byte, int) {
 	t.Helper()
 
 	batchSize := store.GetUtxoBatchSize()
@@ -61,6 +62,8 @@ func readSingleUtxoRecord(t *testing.T, client *uaerospike.Client, tSettings *se
 // in-batch FilterConflictingDuplicateSpendClaims guard does not apply — the store
 // itself must reject the double-spend.
 func TestStore_SpendExpressions_CrossBatchDoubleSpend(t *testing.T) {
+	t.Parallel()
+
 	cases := []struct {
 		name              string
 		enableExpressions bool
@@ -75,6 +78,8 @@ func TestStore_SpendExpressions_CrossBatchDoubleSpend(t *testing.T) {
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
+			fx := newTxFixtures(t)
+
 			logger := ulogger.NewErrorTestLogger(t)
 			tSettings := test.CreateBaseTestSettings(t)
 			tSettings.UtxoStore.UtxoBatchSize = 1
@@ -86,13 +91,11 @@ func TestStore_SpendExpressions_CrossBatchDoubleSpend(t *testing.T) {
 			client, store, ctx, deferFn := initAerospike(t, tSettings, logger)
 			t.Cleanup(deferFn)
 
-			cleanDB(t, client)
-
-			_, err := store.Create(ctx, tx, 101)
+			_, err := store.Create(ctx, fx.tx, 101)
 			require.NoError(t, err)
 
 			// First spender (batch 1) — must succeed.
-			firstSpends, err := store.Spend(ctx, spendTx, 200)
+			firstSpends, err := store.Spend(ctx, fx.spendTx, 200)
 			require.NoError(t, err)
 			require.Len(t, firstSpends, 1)
 			require.NoError(t, firstSpends[0].Err)
@@ -104,7 +107,7 @@ func TestStore_SpendExpressions_CrossBatchDoubleSpend(t *testing.T) {
 			// rejected with ErrSpent. spendTx2 is a distinct transaction
 			// (GetSpendingTx randomises outputs), so it carries different
 			// spending data than spendTx.
-			secondSpends, err := store.Spend(ctx, spendTx2, 200)
+			secondSpends, err := store.Spend(ctx, fx.spendTx2, 200)
 			require.Error(t, err)
 			require.Len(t, secondSpends, 1)
 			require.Error(t, secondSpends[0].Err)
@@ -114,7 +117,7 @@ func TestStore_SpendExpressions_CrossBatchDoubleSpend(t *testing.T) {
 			// The stored spender must STILL be the first-seen one, and spentUtxos
 			// must be exactly 1 (the double-spend attempt must not overwrite or
 			// re-increment).
-			elem, spentUtxos := readSingleUtxoRecord(t, client, tSettings, store)
+			elem, spentUtxos := readSingleUtxoRecord(t, fx.tx, client, tSettings, store)
 			require.Len(t, elem, 68, "spent element must be 68 bytes (hash + spendingData)")
 			require.Equal(t, firstSpends[0].UTXOHash[:], elem[0:32], "stored utxo hash must be unchanged")
 			require.Equal(t, firstSpenderBytes, elem[32:68],
@@ -135,6 +138,8 @@ func TestStore_SpendExpressions_CrossBatchDoubleSpend(t *testing.T) {
 // out and routed through the Lua UDF, which recognises the identical spender and
 // returns success without incrementing.
 func TestStore_SpendExpressions_IdempotentRespendNoDoubleIncrement(t *testing.T) {
+	t.Parallel()
+
 	cases := []struct {
 		name              string
 		enableExpressions bool
@@ -149,6 +154,8 @@ func TestStore_SpendExpressions_IdempotentRespendNoDoubleIncrement(t *testing.T)
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
+			fx := newTxFixtures(t)
+
 			logger := ulogger.NewErrorTestLogger(t)
 			tSettings := test.CreateBaseTestSettings(t)
 			tSettings.UtxoStore.UtxoBatchSize = 1
@@ -160,13 +167,11 @@ func TestStore_SpendExpressions_IdempotentRespendNoDoubleIncrement(t *testing.T)
 			client, store, ctx, deferFn := initAerospike(t, tSettings, logger)
 			t.Cleanup(deferFn)
 
-			cleanDB(t, client)
-
-			_, err := store.Create(ctx, tx, 101)
+			_, err := store.Create(ctx, fx.tx, 101)
 			require.NoError(t, err)
 
 			// First spend — succeeds, spentUtxos -> 1.
-			firstSpends, err := store.Spend(ctx, spendTx, 200)
+			firstSpends, err := store.Spend(ctx, fx.spendTx, 200)
 			require.NoError(t, err)
 			require.Len(t, firstSpends, 1)
 			require.NoError(t, firstSpends[0].Err)
@@ -174,17 +179,17 @@ func TestStore_SpendExpressions_IdempotentRespendNoDoubleIncrement(t *testing.T)
 			firstSpenderBytes := firstSpends[0].SpendingData.Bytes()
 			require.Len(t, firstSpenderBytes, 36)
 
-			elemAfterFirst, spentAfterFirst := readSingleUtxoRecord(t, client, tSettings, store)
+			elemAfterFirst, spentAfterFirst := readSingleUtxoRecord(t, fx.tx, client, tSettings, store)
 			require.Equal(t, 1, spentAfterFirst)
 			require.Equal(t, firstSpenderBytes, elemAfterFirst[32:68])
 
 			// Re-spend by the SAME spender in a separate batch — idempotent success.
-			secondSpends, err := store.Spend(ctx, spendTx, 200)
+			secondSpends, err := store.Spend(ctx, fx.spendTx, 200)
 			require.NoError(t, err, "idempotent re-spend by the same spender must succeed")
 			require.Len(t, secondSpends, 1)
 			require.NoError(t, secondSpends[0].Err)
 
-			elemAfterSecond, spentAfterSecond := readSingleUtxoRecord(t, client, tSettings, store)
+			elemAfterSecond, spentAfterSecond := readSingleUtxoRecord(t, fx.tx, client, tSettings, store)
 			require.Equal(t, 1, spentAfterSecond,
 				"spentUtxos must stay 1 after an idempotent re-spend (no double-increment)")
 			require.Equal(t, firstSpenderBytes, elemAfterSecond[32:68],

@@ -14,6 +14,8 @@ import (
 // client and removes it from the per-host cache, so a store built afterwards
 // for the same host, as a restarted daemon's is, gets a new connected client.
 func TestCloseClient_ClosesAndEvictsTheStoresClient(t *testing.T) {
+	t.Parallel()
+
 	if testing.Short() {
 		t.Skip("skipping Aerospike integration test in short mode")
 	}
@@ -21,7 +23,7 @@ func TestCloseClient_ClosesAndEvictsTheStoresClient(t *testing.T) {
 	logger := ulogger.NewErrorTestLogger(t)
 	tSettings := test.CreateBaseTestSettings(t)
 
-	_, store, _, cleanup, storeURL := initAerospikeWithURL(t, tSettings, logger, nil)
+	_, store, _, cleanup, storeURL := initAerospikeOwnServerWithURL(t, tSettings, logger)
 	defer cleanup()
 
 	client := store.GetClient()

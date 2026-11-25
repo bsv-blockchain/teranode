@@ -381,9 +381,10 @@ type blockWithMeta struct {
 type BlockAssemblerOption func(*blockAssemblerOptions)
 
 type blockAssemblerOptions struct {
-	txMetaEvictor *subtreeprocessor.TxMetaEvictor
-	storedSet     *subtreeprocessor.StoredSet
-	storeQueue    *subtreeprocessor.StoreQueue
+	txMetaEvictor   *subtreeprocessor.TxMetaEvictor
+	laneBitmapsKeep subtreeprocessor.LaneBitmapsKeeper
+	storedSet       *subtreeprocessor.StoredSet
+	storeQueue      *subtreeprocessor.StoreQueue
 }
 
 // WithStoreQueue gives the assembler's subtree processor the queue that takes its store requests
@@ -405,6 +406,12 @@ func WithStoredSet(set *subtreeprocessor.StoredSet) BlockAssemblerOption {
 // disables publishing.
 func WithTxMetaEvictor(e *subtreeprocessor.TxMetaEvictor) BlockAssemblerOption {
 	return func(o *blockAssemblerOptions) { o.txMetaEvictor = e }
+}
+
+// WithLaneBitmapsKeeper makes the subtree processor keep the lane bitmaps of each subtree it
+// chains with k, at utxostore_laneMigration shadow (subtreeprocessor.WithLaneBitmapsKeeper).
+func WithLaneBitmapsKeeper(k subtreeprocessor.LaneBitmapsKeeper) BlockAssemblerOption {
+	return func(o *blockAssemblerOptions) { o.laneBitmapsKeep = k }
 }
 
 // NewBlockAssembler creates and initializes a new BlockAssembler instance.
@@ -460,6 +467,9 @@ func NewBlockAssembler(ctx context.Context, logger ulogger.Logger, tSettings *se
 
 	if options.storedSet != nil {
 		stpOpts = append(stpOpts, subtreeprocessor.WithStoredSet(options.storedSet))
+	}
+	if options.laneBitmapsKeep != nil {
+		stpOpts = append(stpOpts, subtreeprocessor.WithLaneBitmapsKeeper(options.laneBitmapsKeep))
 	}
 
 	if options.storeQueue != nil {
@@ -2806,6 +2816,17 @@ func (b *BlockAssembler) AddTxBatchBounded(nodes []subtree.Node, txInpoints []*s
 	return b.subtreeProcessor.AddBatchBounded(nodes, txInpoints, inBlock, validatedHeights)
 }
 
+// AddPositionedTxBatchBounded is AddTxBatchBounded for a batch that carries each transaction's own
+// lane position (util/lane), positions[i] for nodes[i] and 0 for none, at utxostore_laneMigration
+// shadow. A nil positions takes AddTxBatchBounded's path unchanged.
+func (b *BlockAssembler) AddPositionedTxBatchBounded(nodes []subtree.Node, txInpoints []*subtree.TxInpoints, inBlock bool, validatedHeights []uint32, positions []uint64) subtreeprocessor.Admission {
+	if positions == nil {
+		return b.subtreeProcessor.AddBatchBounded(nodes, txInpoints, inBlock, validatedHeights)
+	}
+
+	return b.subtreeProcessor.AddPositionedBatchBounded(nodes, txInpoints, inBlock, validatedHeights, positions)
+}
+
 // HeldCount returns the transactions held in memory: queued, dequeued but not yet counted, and
 // already in subtrees.
 //
@@ -4912,9 +4933,13 @@ func (b *BlockAssembler) loadUnminedTransactions(ctx context.Context, isReload b
 	} else {
 		// Sequential mode: use AddDirectly for each transaction
 		for idx, unminedTransaction := range unminedTransactions {
-			if isReload {
+			switch {
+			case unminedTransaction.LanePosition != 0:
+				// at utxostore_laneMigration shadow the tx's lane position goes into the pool with it
+				err = b.subtreeProcessor.AddDirectlyAt(unminedTransaction.Node, unminedTransaction.TxInpoints, unminedTransaction.LanePosition, true, isReload)
+			case isReload:
 				err = b.subtreeProcessor.AddDirectlyReportOnly(unminedTransaction.Node, unminedTransaction.TxInpoints, true)
-			} else {
+			default:
 				err = b.subtreeProcessor.AddDirectly(unminedTransaction.Node, unminedTransaction.TxInpoints, true)
 			}
 			if err != nil {
@@ -5616,6 +5641,9 @@ func (b *BlockAssembler) loadUnminedSorted(ctx context.Context, it utxo.UnminedT
 		Dirs:          unminedSortDirs(b.settings.BlockAssembly.UnminedTxDiskSortPaths),
 		BufferRecords: b.settings.BlockAssembly.UnminedTxSortBufferRecords,
 		WithInpoints:  true,
+		// At utxostore_laneMigration shadow each tx's lane position goes through the sort into
+		// the pool.
+		WithPositions: b.settings.UtxoStore.LaneMigration.Stamps(),
 	})
 	if err != nil {
 		return errors.NewProcessingError("error creating unmined transaction sorter", err)
@@ -5693,7 +5721,7 @@ func (b *BlockAssembler) loadUnminedSorted(ctx context.Context, it utxo.UnminedT
 				}
 			}
 
-			if err = sorter.Add(int64(unminedTx.CreatedAt), *unminedTx.Node, unminedTx.TxInpoints, validatedHeight); err != nil {
+			if err = sorter.AddAt(int64(unminedTx.CreatedAt), *unminedTx.Node, unminedTx.TxInpoints, validatedHeight, unminedTx.LanePosition); err != nil {
 				return errors.NewProcessingError("error buffering unmined transaction %s for sorting", unminedTx.Node.Hash, err)
 			}
 
