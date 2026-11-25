@@ -355,14 +355,14 @@ func (s *forkWalkSpy) CheckBlockIsInCurrentChain(ctx context.Context, blockIDs [
 	return s.ClientI.CheckBlockIsInCurrentChain(ctx, blockIDs)
 }
 
-// forkTestServerOn returns a Server over client enforcing BIP68 from height 0 up to genesis, with
+// forkTestServerOn returns a Server over client enforcing BIP68 from csv up to genesis, with
 // blockchain_maxBlockHeadersPerRequest set to limit.
-func forkTestServerOn(t *testing.T, client blockchain.ClientI, genesis uint32, limit int) *Server {
+func forkTestServerOn(t *testing.T, client blockchain.ClientI, csv, genesis uint32, limit int) *Server {
 	t.Helper()
 
 	tSettings := test.CreateBaseTestSettings(t)
 	params := *tSettings.ChainCfgParams
-	params.CSVHeight = 0
+	params.CSVHeight = csv
 	params.GenesisActivationHeight = genesis
 	tSettings.ChainCfgParams = &params
 	tSettings.BlockChain.MaxBlockHeadersPerRequest = limit
@@ -380,6 +380,7 @@ func TestFetchCandidateForkMTPs(t *testing.T) {
 		name        string
 		parent      *chainhash.Hash
 		height      uint32
+		csv         uint32
 		genesis     uint32
 		limit       int
 		corrupt     func(metas []*model.BlockHeaderMeta)
@@ -392,6 +393,7 @@ func TestFetchCandidateForkMTPs(t *testing.T) {
 		{name: "branch tip", parent: s.branch[4].Hash(), height: 26, wantStart: 21, wantMTPs: s.branchCoinTimes(5)},
 		{name: "branch tip, three headers per request", parent: s.branch[4].Hash(), height: 26, limit: 3, wantStart: 21, wantMTPs: s.branchCoinTimes(5)},
 		{name: "height at genesis activation", parent: s.branch[4].Hash(), height: 26, genesis: 26, wantNoCalls: true},
+		{name: "height below CSV activation", parent: s.branch[4].Hash(), height: 26, csv: 27, wantNoCalls: true},
 		{name: "height not above the parent", parent: s.branch[4].Hash(), height: 27, wantErr: "is not at height 26"},
 		{name: "run at the wrong heights", parent: s.branch[4].Hash(), height: 26, wantErr: "wrong height",
 			corrupt: func(metas []*model.BlockHeaderMeta) { metas[4].Height++ }},
@@ -405,7 +407,7 @@ func TestFetchCandidateForkMTPs(t *testing.T) {
 
 			spy := &forkWalkSpy{ClientI: s.client, corrupt: tc.corrupt}
 
-			start, mtps, err := forkTestServerOn(t, spy, tc.genesis, tc.limit).fetchCandidateForkMTPs(t.Context(), tc.parent, tc.height)
+			start, mtps, err := forkTestServerOn(t, spy, tc.csv, tc.genesis, tc.limit).fetchCandidateForkMTPs(t.Context(), tc.parent, tc.height)
 			if tc.wantErr != "" {
 				require.ErrorContains(t, err, tc.wantErr)
 				return
@@ -433,7 +435,7 @@ func TestFetchCandidateForkMTPs_DeepBranch(t *testing.T) {
 	s := newForkChainStore(t, 100, 20, 70)
 	spy := &forkWalkSpy{ClientI: s.client}
 
-	start, mtps, err := forkTestServerOn(t, spy, math.MaxUint32, 0).fetchCandidateForkMTPs(t.Context(), s.branch[69].Hash(), 91)
+	start, mtps, err := forkTestServerOn(t, spy, 0, math.MaxUint32, 0).fetchCandidateForkMTPs(t.Context(), s.branch[69].Hash(), 91)
 	require.NoError(t, err)
 	require.Equal(t, uint32(21), start)
 	require.Equal(t, s.branchCoinTimes(70), mtps)

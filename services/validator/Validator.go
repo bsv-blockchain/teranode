@@ -311,8 +311,9 @@ type Validator struct {
 	txmetaKafkaBatcher *batcher.Batcher[txmetaBatchItem]
 
 	// mtpStore is a dense in-memory array of Median Time Past values indexed by block height.
-	// mtpStore[h] = MTP for block h. Loaded from height 0 through blockHeight before
-	// each block's transactions are validated, then extended on demand as new heights arrive.
+	// mtpStore[h] = MTP for block h. Loaded from height 0 through blockHeight before the
+	// transactions of a block in the BIP68 range (CSVHeight <= height < GenesisActivationHeight)
+	// are validated, then extended on demand as new heights arrive; never loaded outside it.
 	//
 	// MTP values are immutable once a block is persisted, so entries never need invalidation.
 	// Memory cost: ~4 MB per million blocks (one uint32 per block), negligible for any
