@@ -100,9 +100,8 @@ jobs:
       - name: Restore and save Go caches
         uses: ./.github/actions/go-cache
         with:
-          save: 'true'
           build_cache: 'false'
-          bench_build_cache: 'true'
+          save_bench_build_cache: 'true'
 
       # Same packages and build flags as the bench jobs in benchmark-compare.yaml,
       # read from its matrix so a new group is cached without an edit here.
