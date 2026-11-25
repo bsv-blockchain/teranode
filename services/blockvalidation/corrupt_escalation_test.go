@@ -120,6 +120,7 @@ func TestOptimisticCorrupt_InvalidateFailure_EscalatesNotSilentlyAccepted(t *tes
 	require.NoError(t, err)
 	utxoStore, err := sql.New(ctx, logger, tSettings, utxoStoreURL)
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = utxoStore.Close(context.Background()) })
 
 	// Buffered so the escalation's ReValidateBlock enqueue never blocks and can be observed here.
 	revalidateChan := make(chan revalidateBlockData, 2)
@@ -319,6 +320,7 @@ func TestOptimisticCorrupt_ReValidationConvergesOnInvalidation(t *testing.T) {
 	require.NoError(t, err)
 	utxoStore, err := sql.New(ctx, logger, tSettings, utxoStoreURL)
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = utxoStore.Close(context.Background()) })
 
 	// Buffered, and with no background revalidate worker, so the re-queue can be observed and then
 	// driven deterministically from the test rather than raced against a worker.
@@ -461,6 +463,7 @@ func newCorruptRevalidationHarness(ctx context.Context, t *testing.T, blockIsSto
 	require.NoError(t, err)
 	utxoStore, err := sql.New(ctx, logger, tSettings, utxoStoreURL)
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = utxoStore.Close(context.Background()) })
 
 	bv := &BlockValidation{
 		logger:                        logger,
@@ -728,6 +731,7 @@ func TestValidateBlock_SubtreeCorrupt_StrikeGatedOnRevalidation(t *testing.T) {
 		require.NoError(t, err)
 		utxoStore, err := sql.New(ctx, logger, tSettings, utxoStoreURL)
 		require.NoError(t, err)
+		t.Cleanup(func() { _ = utxoStore.Close(context.Background()) })
 
 		mockBlockchain := &blockchain.Mock{}
 		mockBlockchain.On("GetBlockExists", mock.Anything, mock.Anything).Return(false, nil).Maybe()
@@ -934,6 +938,7 @@ func TestOptimisticCorrupt_StrikeGatedOnRevalidation(t *testing.T) {
 		require.NoError(t, err)
 		utxoStore, err := sql.New(ctx, logger, tSettings, utxoStoreURL)
 		require.NoError(t, err)
+		t.Cleanup(func() { _ = utxoStore.Close(context.Background()) })
 
 		fake := &corruptStrikeP2PClient{}
 

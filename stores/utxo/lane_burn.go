@@ -161,6 +161,38 @@ func spendRefused(spends []*Spend) bool {
 	return false
 }
 
+// LaneSpendWroteNothing reports whether a failed LaneSpender spend provably wrote no parent's slot:
+// spends is not empty, and every input's Spend carries a refusal the store's spend script makes
+// before it writes that output (spent, conflicting, frozen, a hash mismatch, a locked or creating
+// parent, a parent or output not found, an immature coinbase). A spend that succeeded, an item with
+// no result yet, or an error whose outcome is unknown (a storage, service or parse error, a timeout,
+// the context ending) may have written, so the answer is false and the position stays burned.
+func LaneSpendWroteNothing(spends []*Spend) bool {
+	if len(spends) == 0 {
+		return false
+	}
+
+	for _, s := range spends {
+		if s == nil || !refusedBeforeWrite(s.Err) {
+			return false
+		}
+	}
+
+	return true
+}
+
+// refusedBeforeWrite reports whether err is a spend refusal made before the output is written.
+func refusedBeforeWrite(err error) bool {
+	if err == nil || errors.IsContextError(err) || errors.IsTransientLocalError(err) {
+		return false
+	}
+
+	return errors.Is(err, errors.ErrSpent) || errors.Is(err, errors.ErrTxConflicting) ||
+		errors.Is(err, errors.ErrFrozen) || errors.Is(err, errors.ErrUtxoHashMismatch) ||
+		errors.Is(err, errors.ErrTxLocked) || errors.Is(err, errors.ErrTxCreating) ||
+		errors.Is(err, errors.ErrTxNotFound) || errors.Is(err, errors.ErrTxCoinbaseImmature)
+}
+
 // TookLanePosition reports whether a create that named the position named, and holds position after
 // taking, took it from the source. Only then is a burn its own to record. A position the caller named
 // was taken, and is recorded, by that caller.

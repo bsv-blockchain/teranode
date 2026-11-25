@@ -2,8 +2,11 @@ package testutil
 
 import (
 	"context"
+	"net/http"
 	"testing"
 
+	"github.com/bsv-blockchain/teranode/services/blockchain"
+	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -28,17 +31,39 @@ func TestNewMemoryBlobStore(t *testing.T) {
 func TestNewSQLiteMemoryUTXOStore(t *testing.T) {
 	setup := NewCommonTestSetup(t)
 
-	store := NewSQLiteMemoryUTXOStore(setup.Ctx, setup.Logger, setup.Settings, t)
+	var store utxo.Store
 
-	require.NotNil(t, store)
+	// The store must close when the test that built it ends, or its batchers stay
+	// alive for the rest of the test binary.
+	t.Run("built", func(t *testing.T) {
+		store = NewSQLiteMemoryUTXOStore(setup.Ctx, setup.Logger, setup.Settings, t)
+		require.NotNil(t, store)
+
+		_, _, err := store.Health(setup.Ctx, false)
+		require.NoError(t, err)
+	})
+
+	_, _, err := store.Health(setup.Ctx, false)
+	require.Error(t, err, "the store is still open after the test that built it ended")
 }
 
 func TestNewMemorySQLiteBlockchainClient(t *testing.T) {
 	setup := NewCommonTestSetup(t)
 
-	client := NewMemorySQLiteBlockchainClient(setup.Logger, setup.Settings, t)
+	var client blockchain.ClientI
 
-	require.NotNil(t, client)
+	// The blockchain store must close when the test that built it ends, or its
+	// background loops keep that test's t, and everything it built, reachable.
+	t.Run("built", func(t *testing.T) {
+		client = NewMemorySQLiteBlockchainClient(setup.Logger, setup.Settings, t)
+		require.NotNil(t, client)
+
+		status, _, _ := client.Health(setup.Ctx, false)
+		require.Equal(t, http.StatusOK, status)
+	})
+
+	status, _, _ := client.Health(setup.Ctx, false)
+	require.NotEqual(t, http.StatusOK, status, "the blockchain store is still open after the test that built it ended")
 }
 
 func TestAssertHealthResponse(t *testing.T) {

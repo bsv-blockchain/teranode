@@ -11,6 +11,8 @@ import (
 	"encoding/binary"
 	"fmt"
 	"net/http"
+	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -34,6 +36,8 @@ import (
 	"github.com/bsv-blockchain/teranode/util/health"
 	"github.com/bsv-blockchain/teranode/util/kafka"
 	kafkamessage "github.com/bsv-blockchain/teranode/util/kafka/kafka_message"
+	"github.com/bsv-blockchain/teranode/util/lane"
+	"github.com/bsv-blockchain/teranode/util/lanereader"
 	"github.com/bsv-blockchain/teranode/util/tracing"
 	"github.com/cespare/xxhash/v2"
 	"github.com/ordishs/gocore"
@@ -219,6 +223,20 @@ type txmetaBatchItem struct {
 	hash      *chainhash.Hash
 	metaBytes []byte
 	isDelete  bool
+	// action is the wire action of an entry that is not a delete: txmetacache.WireActionADD for
+	// MetaBytes, WireActionADDLane for the lane metadata encoding (meta.LaneMetaBytesInto), or
+	// WireActionADDOwn for MetaBytes with the own lane position (meta.CacheBytesInto).
+	action byte
+}
+
+// wireAction is the action byte the txmeta wire carries for the item.
+func (it *txmetaBatchItem) wireAction() byte {
+	switch {
+	case it.isDelete:
+		return txmetacache.WireActionDELETE
+	default:
+		return it.action
+	}
 }
 
 // Validator implements comprehensive BSV Blockchain transaction validation and manages the complete lifecycle
@@ -502,7 +520,80 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 		}
 	}
 
+	// v2 txmeta routing partitions records by a configured count; the topic has
+	// its own partition count from a different setting (kafka_txmetaConfig),
+	// and the async producer contract is "MUST set Partition" with no fallback.
+	// Reconcile the two once, loudly, at start-up instead of shipping records
+	// to non-existent partitions forever.
+	if tSettings.Validator.TxMetaWireFormat == "v2" {
+		v.checkTxMetaPartitionAgreement(ctx)
+	}
+
 	return v, nil
+}
+
+// txmetaTopicMetadataTimeout bounds the start-up topic metadata request so an
+// unreachable broker cannot stall validator construction.
+var txmetaTopicMetadataTimeout = 10 * time.Second
+
+// checkTxMetaPartitionAgreement reconciles validator_txmeta_numPartitions
+// against everything it must match for v2 txmeta routing to be sound:
+// the cache bucket count (the routing divides BucketsCount into partition
+// ranges, so an exact multiple is a correctness constraint, not a style
+// preference) and the topic's partition count. The topic count is taken from
+// the producer via metadata where the producer can answer (real clients can;
+// test doubles need not), and falls back to the partitions parameter of the
+// kafka_txmetaConfig URL - the number that topic is created with. Disagreement
+// is reported as an error, not a warning, and does not stop the service:
+// routing named partitions 8-31 on an 8-partition topic in the default
+// settings context (numPartitions 32, KAFKA_PARTITIONS_HIGH 8), a mismatch
+// that must be impossible to miss because the failure it causes - records to
+// unknown partitions from a producer with no fallback - is a data-loss path.
+func (v *Validator) checkTxMetaPartitionAgreement(ctx context.Context) {
+	numPartitions := v.settings.Validator.TxMetaNumPartitions
+	if numPartitions <= 0 {
+		numPartitions = 1
+	}
+
+	if txmetacache.BucketsCount%numPartitions != 0 {
+		v.logger.Errorf("[Validator] validator_txmeta_numPartitions=%d does not divide the txmeta cache BucketsCount=%d; v2 routing ranges would overlap - choose a divisor",
+			numPartitions, txmetacache.BucketsCount)
+	}
+
+	// Preferred source: ask the broker what the topic actually has.
+	if counter, ok := v.txmetaKafkaProducerClient.(kafka.TopicPartitionCounter); ok && counter != nil {
+		metaCtx, cancel := context.WithTimeout(ctx, txmetaTopicMetadataTimeout)
+		count, err := counter.TopicPartitionCount(metaCtx)
+		cancel()
+
+		if err != nil {
+			v.logger.Warnf("[Validator] cannot verify txmeta topic partition count against validator_txmeta_numPartitions=%d: %v", numPartitions, err)
+			return
+		}
+		if int(count) != numPartitions {
+			v.logger.Errorf("[Validator] validator_txmeta_numPartitions=%d but the txmeta topic has %d partitions: v2 routing will name partitions the topic does not have and the async producer has no fallback - align validator_txmeta_numPartitions with the topic (kafka_txmetaConfig partitions)",
+				numPartitions, count)
+		}
+		return
+	}
+
+	// Fallback source: the partitions parameter the topic is created from.
+	if v.settings.Kafka.TxMetaConfig != nil {
+		if p := v.settings.Kafka.TxMetaConfig.Query().Get("partitions"); p != "" {
+			topicPartitions, err := strconv.Atoi(p)
+			if err != nil {
+				v.logger.Warnf("[Validator] kafka_txmetaConfig partitions=%q is not a number; cannot verify against validator_txmeta_numPartitions=%d", p, numPartitions)
+				return
+			}
+			if topicPartitions != numPartitions {
+				v.logger.Errorf("[Validator] validator_txmeta_numPartitions=%d but kafka_txmetaConfig creates the topic with partitions=%d: v2 routing will name partitions the topic does not have and the async producer has no fallback",
+					numPartitions, topicPartitions)
+			}
+			return
+		}
+	}
+
+	v.logger.Infof("[Validator] txmeta v2 partition agreement not verifiable here (no broker metadata, no partitions parameter in kafka_txmetaConfig); validator_txmeta_numPartitions=%d stands unverified", numPartitions)
 }
 
 // Close releases the resources the Validator owns: the tx-meta batcher and the
@@ -1038,7 +1129,12 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 		return nil, err
 	}
 
-	var utxoHeights []uint32
+	var (
+		utxoHeights []uint32
+		// parentLanes is the lane position of each distinct parent, in TxInpoints parent order,
+		// read with the parents at utxostore_laneMigration shadow; nil otherwise.
+		parentLanes []uint64
+	)
 
 	// OutpointOnlySpend: skip parent reads entirely. utxoHeights stays nil.
 	// Safe because (a) SkipScriptValidation short-circuits BDK before it indexes
@@ -1056,7 +1152,7 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 		// gating nothing.
 		var allParentsMissing bool
 
-		if utxoHeights, allParentsMissing, err = v.getTransactionInputBlockHeightsAndExtendTx(ctx, tx, txID, validationOptions); err != nil {
+		if utxoHeights, parentLanes, allParentsMissing, err = v.getTransactionInputBlockHeightsAndExtendTx(ctx, tx, txID, validationOptions); err != nil {
 			if allParentsMissing && !validationOptions.InBlock && ctx.Err() == nil {
 				// Ingest only: block drivers skip every tx whose record resolves before
 				// the validator runs, so a block-sourced tx never has a record to bless.
@@ -1198,7 +1294,7 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 	// spend the tx's inputs and create its outputs + metadata in one store
 	// operation; the store reverses the spends if the create fails (except on
 	// ErrTxExists, which leaves the spends in place and is handled below)
-	if txMetaData, spentUtxos, err = v.spendAndCreateInUtxoStore(decoupledCtx, tx, blockHeight, addToBlockAssembly, validationOptions); err != nil {
+	if txMetaData, spentUtxos, err = v.spendAndCreateInUtxoStore(decoupledCtx, tx, blockHeight, addToBlockAssembly, validationOptions, parentLanes); err != nil {
 		if errors.Is(err, errors.ErrTxExists) {
 			// create phase: the tx already exists in the store
 			v.logger.Debugf("[Validate][%s] tx already exists in store, not sending to block assembly: %v", txID, err)
@@ -1461,10 +1557,11 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 		}
 
 		blockAssemblyData := &blockassembly.Data{
-			TxIDChainHash: *tx.TxIDChainHash(),
-			Fee:           txMetaData.Fee,
-			Size:          uint64(tx.Size()), // nolint:gosec
-			TxInpoints:    txInpoints,
+			TxIDChainHash:   *tx.TxIDChainHash(),
+			Fee:             txMetaData.Fee,
+			Size:            uint64(tx.Size()), // nolint:gosec
+			TxInpoints:      txInpoints,
+			ValidatedHeight: blockHeight,
 		}
 
 		// On the Kafka ingest path a queue-full shed is worth waiting out rather
@@ -1700,7 +1797,7 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 		// announce it as a fresh mempool tx.
 		txMetaData.InBlock = validationOptions.InBlock
 
-		if txMetaErr := v.sendTxMetaToKafka(txMetaData, tx.TxIDChainHash()); txMetaErr != nil {
+		if txMetaErr := v.sendTxMetaToKafka(txMetaData, tx.TxIDChainHash(), parentLanes); txMetaErr != nil {
 			v.logger.Errorf("[Validate][%s] failed to serialize/enqueue txmeta for kafka, continuing to 2PC: %v", txID, txMetaErr)
 		}
 	}
@@ -1960,22 +2057,79 @@ func (v *Validator) unlockLockedTxOnExit(ctx context.Context, tx *bt.Tx, txID st
 	txMetaData.Locked = false
 }
 
-// getTransactionInputBlockHeights returns the block heights for each input of the transaction
-func (v *Validator) getTransactionInputBlockHeightsAndExtendTx(ctx context.Context, tx *bt.Tx, txID string, validationOptions *Options) ([]uint32, bool, error) {
+// getTransactionInputBlockHeights returns the block heights for each input of the transaction and,
+// with lane positions on (utxostore_laneMigration shadow), the lane position of each distinct
+// parent in TxInpoints parent order, taken from the same parent reads. A parent the reads give no
+// position for is zero there.
+func (v *Validator) getTransactionInputBlockHeightsAndExtendTx(ctx context.Context, tx *bt.Tx, txID string, validationOptions *Options) ([]uint32, []uint64, bool, error) {
 	ctx, span, endSpan := tracing.Tracer("validator").Start(ctx, "getTransactionInputBlockHeightsAndExtendTx",
 		tracing.WithHistogram(getTransactionInputBlockHeights),
 	)
 	defer endSpan()
 
-	// get the utxo heights for each input
-	utxoHeights, allParentsMissing, err := v.resolveParentOutputs(ctx, tx, txID, validationOptions.PrefetchedParents)
-	if err != nil {
-		span.RecordError(err)
-		return nil, allParentsMissing, err
+	var inputLanes []uint64
+	if v.laneShadow() {
+		inputLanes = make([]uint64, len(tx.Inputs))
 	}
 
-	return utxoHeights, false, nil
+	// get the utxo heights for each input
+	utxoHeights, allParentsMissing, err := v.resolveParentOutputs(ctx, tx, txID, validationOptions.PrefetchedParents, inputLanes)
+	if err != nil {
+		span.RecordError(err)
+		return nil, nil, allParentsMissing, err
+	}
+
+	return utxoHeights, parentLanePositions(tx, inputLanes), false, nil
 }
+
+// laneShadow reports whether lane positions are on (utxostore_laneMigration shadow or later): the
+// validator then reads its parents' lane positions and publishes them in the transaction's
+// metadata. Nothing acts on them yet.
+func (v *Validator) laneShadow() bool {
+	return v.settings != nil && v.settings.UtxoStore.LaneMigration.Stamps()
+}
+
+// parentLanePositions turns one lane position per input into one per distinct parent, in the order
+// subtree.TxInpoints lists a transaction's parents: by first appearance among the inputs. It
+// returns nil for nil, and for a transaction with no inputs.
+func parentLanePositions(tx *bt.Tx, inputLanes []uint64) []uint64 {
+	if inputLanes == nil || len(tx.Inputs) == 0 {
+		return nil
+	}
+
+	positions := make([]uint64, 0, len(tx.Inputs))
+
+	// A few inputs are compared directly; a wide transaction, a consolidation of thousands of
+	// parents, uses a set so the cost stays linear in its inputs.
+	if len(tx.Inputs) <= parentLaneLinearMax {
+		parents := make([]chainhash.Hash, 0, len(tx.Inputs))
+
+		for i, input := range tx.Inputs {
+			parent := *input.PreviousTxIDChainHash()
+			if !slices.Contains(parents, parent) {
+				parents = append(parents, parent)
+				positions = append(positions, inputLanes[i])
+			}
+		}
+
+		return positions
+	}
+
+	seen := make(map[chainhash.Hash]struct{}, len(tx.Inputs))
+
+	for i, input := range tx.Inputs {
+		parent := *input.PreviousTxIDChainHash()
+		if _, ok := seen[parent]; !ok {
+			seen[parent] = struct{}{}
+			positions = append(positions, inputLanes[i])
+		}
+	}
+
+	return positions
+}
+
+// parentLaneLinearMax is the most inputs parentLanePositions compares directly.
+const parentLaneLinearMax = 16
 
 // twoPhaseCommitTransaction marks the transaction as spendable.
 //
@@ -2162,7 +2316,7 @@ func nonGenesisBlockIDs(blockIDs []uint32) []uint32 {
 // genuinely unspendable output and mint coins (GHSA-v76m-6vc7-g7c7). Overwriting
 // every input from the store's own outputs closes that.
 func (v *Validator) getUtxoBlockHeightsAndExtendTx(ctx context.Context, tx *bt.Tx, txID string, prefetched map[chainhash.Hash]*meta.Data) ([]uint32, error) {
-	utxoHeights, _, err := v.resolveParentOutputs(ctx, tx, txID, prefetched)
+	utxoHeights, _, err := v.resolveParentOutputs(ctx, tx, txID, prefetched, nil)
 
 	return utxoHeights, err
 }
@@ -2171,13 +2325,24 @@ func (v *Validator) getUtxoBlockHeightsAndExtendTx(ctx context.Context, tx *bt.T
 // whether the store found none of the parents. The flag is true only with an
 // ErrTxMissingParent error, when no parent came from prefetched and every
 // store answer is ParentOutputTxNotFound.
-func (v *Validator) resolveParentOutputs(ctx context.Context, tx *bt.Tx, txID string, prefetched map[chainhash.Hash]*meta.Data) ([]uint32, bool, error) {
+//
+// inputLanes, when not nil, has one entry per input and receives each input's
+// parent's lane position from the same reads: the store's answer, or the
+// prefetched parent's record. No read is added for it.
+func (v *Validator) resolveParentOutputs(ctx context.Context, tx *bt.Tx, txID string, prefetched map[chainhash.Hash]*meta.Data, inputLanes []uint64) ([]uint32, bool, error) {
 	utxoHeights := make([]uint32, len(tx.Inputs))
 
 	var (
 		storeIdxs []int
 		outpoints []utxo.Outpoint
+		// The lanes shadow of this check, at shadow only (inputLanes is set only then).
+		shadow parentShadow
 	)
+
+	if inputLanes != nil {
+		shadow.reader = lanereader.Current()
+		shadow.view = shadow.reader.MainView()
+	}
 
 	for inputIdx, input := range tx.Inputs {
 		parentTxHash := *input.PreviousTxIDChainHash()
@@ -2187,6 +2352,11 @@ func (v *Validator) resolveParentOutputs(ctx context.Context, tx *bt.Tx, txID st
 		if pf, ok := prefetched[parentTxHash]; ok && pf != nil && pf.Tx != nil {
 			if err := extendInputFromPrefetchedParent(tx, inputIdx, pf, utxoHeights); err != nil {
 				return nil, false, err
+			}
+
+			if inputLanes != nil {
+				inputLanes[inputIdx] = pf.LanePosition
+				shadow.compareBlocks(lanereader.ReaderSubtreePrefetch, parentTxHash, pf.LanePosition, pf.BlockIDs)
 			}
 
 			continue
@@ -2238,6 +2408,11 @@ func (v *Validator) resolveParentOutputs(ctx context.Context, tx *bt.Tx, txID st
 
 		tx.Inputs[inputIdx].PreviousTxSatoshis = answer.Satoshis
 		tx.Inputs[inputIdx].PreviousTxScript = answer.LockingScript
+
+		if inputLanes != nil {
+			inputLanes[inputIdx] = answer.LanePosition
+			shadow.compare(lanereader.ReaderValidator, parentTxHash, answer.LanePosition, answer.Status == utxo.ParentOutputMined, answer.Height)
+		}
 	}
 
 	return utxoHeights, false, nil
@@ -2338,10 +2513,12 @@ func (v *Validator) CreateInUtxoStore(ctx context.Context, tx *bt.Tx, blockHeigh
 	return txMetaData, nil
 }
 
-func (v *Validator) sendTxMetaToKafka(data *meta.Data, txHash *chainhash.Hash) error {
+// sendTxMetaToKafka publishes data on the txmeta topic. parentLanes is the lane position of each
+// distinct parent in TxInpoints parent order, nil when the caller read none.
+func (v *Validator) sendTxMetaToKafka(data *meta.Data, txHash *chainhash.Hash, parentLanes []uint64) error {
 	startKafka := time.Now()
 
-	metaBytes, err := data.MetaBytes()
+	metaBytes, action, err := v.txMetaPayload(data, parentLanes)
 	if err != nil {
 		return errors.NewProcessingError("error serializing tx meta data for tx %s", txHash.String(), err)
 	}
@@ -2356,6 +2533,7 @@ func (v *Validator) sendTxMetaToKafka(data *meta.Data, txHash *chainhash.Hash) e
 			hash:      txHash,
 			metaBytes: metaBytes,
 			isDelete:  false,
+			action:    action,
 		})
 	} else {
 		// Fallback: send single item as batch format for consistency.
@@ -2363,6 +2541,7 @@ func (v *Validator) sendTxMetaToKafka(data *meta.Data, txHash *chainhash.Hash) e
 			hash:      txHash,
 			metaBytes: metaBytes,
 			isDelete:  false,
+			action:    action,
 		}
 		if v.settings.Validator.TxMetaWireFormat == "v2" {
 			v.sendTxMetaBatchV2([]*txmetaBatchItem{item})
@@ -2380,6 +2559,67 @@ func (v *Validator) sendTxMetaToKafka(data *meta.Data, txHash *chainhash.Hash) e
 	prometheusValidatorSendToBlockValidationKafka.Observe(float64(time.Since(startKafka).Microseconds()) / 1_000_000)
 
 	return nil
+}
+
+// txMetaPayload is the content of data's txmeta entry and its wire action. With lane positions on
+// it is the lane metadata encoding (WireActionADDLane), carrying the transaction's own lane
+// position and its parents', when every one of them is a valid position. When only the own
+// position is valid, as for a transaction spending an output created before lane positions were
+// on, it is MetaBytes followed by the own position (WireActionADDOwn), which subtree validation
+// caches as it is and reads when it builds the subtree's lane bitmaps. Otherwise, and always with
+// lane positions off, it is MetaBytes (WireActionADD). An entry that goes without the parents'
+// positions at shadow is counted with the reason, never refused: nothing decides on a lane
+// position yet, and Phase 1 measures how many entries carry them.
+func (v *Validator) txMetaPayload(data *meta.Data, parentLanes []uint64) ([]byte, byte, error) {
+	if !v.laneShadow() {
+		b, err := data.MetaBytes()
+		return b, txmetacache.WireActionADD, err
+	}
+
+	reason := laneTxMetaMiss(data, parentLanes)
+	if reason == "" {
+		b, err := data.LaneMetaBytesInto(nil, parentLanes)
+		if err == nil {
+			txmetacache.CountLaneTxMetaSent("", false)
+			return b, txmetacache.WireActionADDLane, nil
+		}
+
+		reason = txmetacache.LaneMissEncode
+	}
+
+	if lane.Valid(data.LanePosition) {
+		txmetacache.CountLaneTxMetaSent(reason, true)
+
+		b, err := data.CacheBytesInto(nil)
+
+		return b, txmetacache.WireActionADDOwn, err
+	}
+
+	txmetacache.CountLaneTxMetaSent(reason, false)
+
+	b, err := data.MetaBytes()
+
+	return b, txmetacache.WireActionADD, err
+}
+
+// laneTxMetaMiss is why data's txmeta cannot carry lane positions, or "" when it can.
+func laneTxMetaMiss(data *meta.Data, parentLanes []uint64) string {
+	if !lane.Valid(data.LanePosition) {
+		return txmetacache.LaneMissOwn
+	}
+
+	// A record with no parents, such as a coinbase, needs none, and parentLanePositions gives none.
+	if len(parentLanes) != len(data.TxInpoints.ParentTxHashes) {
+		return txmetacache.LaneMissParentsNotRead
+	}
+
+	for _, position := range parentLanes {
+		if !lane.Valid(position) {
+			return txmetacache.LaneMissParent
+		}
+	}
+
+	return ""
 }
 
 // sendTxMetaDeletesToKafka publishes txmeta DELETEs so subtree validation evicts
@@ -2503,9 +2743,11 @@ func txMetaEntrySize(item *txmetaBatchItem) int {
 // For each entry:
 //
 //	[32 bytes] - tx hash (raw bytes)
-//	[1 byte]   - action (0=ADD, 1=DELETE)
+//	[1 byte]   - action (0=ADD, 1=DELETE, 2=ADDLane, 3=ADDOwn)
 //	[4 bytes]  - content length (uint32, little-endian) - 0 for DELETE
-//	[N bytes]  - content (metaBytes) - only for ADD
+//	[N bytes]  - content - for every ADD form, none for DELETE: MetaBytes for ADD, the lane
+//	             encoding for ADDLane, MetaBytes and the own position for ADDOwn
+//	             (docs/references/kafkaMessageFormat.md)
 func serializeTxMetaBatch(batch []*txmetaBatchItem) []byte {
 	// Calculate total size
 	size := 4 // entry count
@@ -2530,11 +2772,7 @@ func serializeTxMetaBatch(batch []*txmetaBatchItem) []byte {
 		offset += 32
 
 		// Write action (1 byte)
-		if item.isDelete {
-			buf[offset] = txmetacache.WireActionDELETE
-		} else {
-			buf[offset] = txmetacache.WireActionADD
-		}
+		buf[offset] = item.wireAction()
 		offset++
 
 		// Write content length (4 bytes)
@@ -2560,6 +2798,14 @@ type txmetaItemWithHash struct {
 	h    uint64
 }
 
+// The v2 header carries txmetacache.BucketsCount as a uint16 that receivers
+// accept only when it is zero or a power of two. Both assertions fail the build,
+// not a running node, if a cache build tag ever selects a count outside that.
+var (
+	_ = [1]struct{}{}[txmetacache.BucketsCount>>16]
+	_ = [1]struct{}{}[txmetacache.BucketsCount&(txmetacache.BucketsCount-1)]
+)
+
 // serializeTxMetaBatchV2 writes a v2-format txmeta Kafka payload for a set of
 // items that have already been grouped into a single Kafka partition.
 //
@@ -2573,15 +2819,15 @@ type txmetaItemWithHash struct {
 //	per entry:
 //	  [8 bytes]  xxhash(tx hash) (uint64 LE)
 //	  [32 bytes] tx hash
-//	  [1 byte]   action (0=ADD, 1=DELETE)
+//	  [1 byte]   action (0=ADD, 1=DELETE, 2=ADDLane, 3=ADDOwn)
 //	  [4 bytes]  content length (uint32 LE)
-//	  [N bytes]  content (only for ADD)
+//	  [N bytes]  content, for every ADD form and none for DELETE, as in v1
 //
 // Putting the pre-computed xxhash on the wire lets the receiver skip its own
 // xxhash on every entry — a small per-entry saving that compounds at the
 // production rates this is designed for.
-func serializeTxMetaBatchV2(items []txmetaItemWithHash) []byte {
-	size := 8 // header: magic + version + 2 reserved + count
+func serializeTxMetaBatchV2(items []txmetaItemWithHash, bucketsCount int) []byte {
+	size := 8 // header: magic + version + uint16 BucketsCount + count
 	for _, it := range items {
 		size += 8 + 32 + 1 + 4
 		if !it.item.isDelete {
@@ -2592,6 +2838,12 @@ func serializeTxMetaBatchV2(items []txmetaItemWithHash) []byte {
 	buf := make([]byte, size)
 	buf[0] = txmetacache.WireV2Magic
 	buf[1] = txmetacache.WireV2Version
+	// Build-tag-selected cache geometry, on the wire: receivers compare it
+	// against their own and can name the disagreement instead of silently
+	// sharing buckets across partitions. The header holds a uint16 and receivers
+	// accept only zero or a power of two, which the compile-time assertion on
+	// txmetacache.BucketsCount below guarantees for every build tag.
+	binary.LittleEndian.PutUint16(buf[txmetacache.WireV2BucketsOffset:], uint16(bucketsCount)) //nolint:gosec // bounded by the BucketsCount assertion
 	binary.LittleEndian.PutUint32(buf[4:], uint32(len(items)))
 	off := 8
 
@@ -2606,7 +2858,7 @@ func serializeTxMetaBatchV2(items []txmetaItemWithHash) []byte {
 			binary.LittleEndian.PutUint32(buf[off:], 0)
 			off += 4
 		} else {
-			buf[off] = txmetacache.WireActionADD
+			buf[off] = it.item.wireAction()
 			off++
 			binary.LittleEndian.PutUint32(buf[off:], uint32(len(it.item.metaBytes)))
 			off += 4
@@ -2698,7 +2950,7 @@ func (v *Validator) sendTxMetaBatchV2(batch []*txmetaBatchItem) {
 		}
 		v.txmetaKafkaProducerClient.Publish(&kafka.Message{
 			Partition: int32(p), //nolint:gosec // p < numPartitions, bounded by setting
-			Value:     serializeTxMetaBatchV2(items),
+			Value:     serializeTxMetaBatchV2(items, txmetacache.BucketsCount),
 		})
 	}
 }
@@ -2720,7 +2972,7 @@ func (v *Validator) sendTxMetaBatchV2(batch []*txmetaBatchItem) {
 // SkipUTXOHashCheck must likewise be set on that path so the store resolves
 // spends via outpoint lookup without a UTXO-hash comparison.
 func (v *Validator) spendAndCreateInUtxoStore(ctx context.Context, tx *bt.Tx, blockHeight uint32,
-	addToBlockAssembly bool, validationOptions *Options) (*meta.Data, []*utxo.Spend, error) {
+	addToBlockAssembly bool, validationOptions *Options, parentLanes []uint64) (*meta.Data, []*utxo.Spend, error) {
 	// NOTE: prometheusTransactionSpendUtxos keeps its name for dashboard
 	// continuity but now measures the combined spend+create (and any rollback),
 	// not just the spend. The primary path no longer records
@@ -2745,6 +2997,12 @@ func (v *Validator) spendAndCreateInUtxoStore(ctx context.Context, tx *bt.Tx, bl
 	} else if addToBlockAssembly {
 		// mark the tx as locked, since we are going to add it to the block assembly
 		opts = append(opts, utxo.WithLocked(true))
+	}
+
+	// The parents' lane positions from the reads above, which a store with the column writes beside
+	// the inpoints. Only at utxostore_laneMigration shadow is the list not nil.
+	if parentLanes != nil {
+		opts = append(opts, utxo.WithParentLanePositions(parentLanes))
 	}
 
 	txMetaData, spends, err := v.utxoStore.SpendAndCreate(ctx, tx, blockHeight, opts...)
@@ -2810,7 +3068,7 @@ func (v *Validator) sendToBlockAssembler(ctx context.Context, bData *blockassemb
 	v.logger.Debugf("[Validator] sending tx %s to block assembler", bData.TxIDChainHash.String())
 	// }
 
-	if _, err := v.blockAssembler.Store(ctx, &bData.TxIDChainHash, bData.Fee, bData.Size, bData.TxInpoints); err != nil {
+	if _, err := v.blockAssembler.Store(ctx, &bData.TxIDChainHash, bData.Fee, bData.Size, bData.TxInpoints, bData.ValidatedHeight); err != nil {
 		// A queue-full shed must keep its resource-exhausted classification so it
 		// surfaces as ResourceExhausted (retry gate skips it) rather than being
 		// masked as a generic service fault (Internal). Every other failure is a
@@ -3515,9 +3773,9 @@ func (v *Validator) validateTransaction(ctx context.Context, tx *bt.Tx, blockHei
 	// enabled in RUNNING for reorg resilience. The combination is safe: a
 	// floater child blessed at the candidate height and added to assembly is
 	// the same tx policy-mode admission would have accepted into assembly
-	// (policy substitutes tip+1 for unconfirmed parents — equal to the
-	// candidate height at the tip; era flags cannot differ post-Genesis), and
-	// accepted-block txs are mined-removed from assembly as always.
+	// (policy substitutes tip+1 for unconfirmed parents; block assembly drops
+	// a tx validated at a height under other transaction rules than tip+1),
+	// and accepted-block txs are mined-removed from assembly as always.
 	if validationOptions.UnconfirmedParentsAtCandidateHeight {
 		utxoHeights = resolveUnconfirmedParentsAtCandidateHeight(utxoHeights, blockHeight)
 	}

@@ -218,6 +218,22 @@ type SubtreeProcessor struct {
 	// settings contains the configuration parameters for the processor
 	settings *settings.Settings
 
+	// txEra is the range of validated heights admitted to the template; nil admits all.
+	// droppedTxs holds the transactions kept out, so their descendants are kept out too.
+	// See tx_era.go.
+	txEra        atomic.Pointer[txEra]
+	droppedMu    sync.Mutex
+	droppedTxs   map[chainhash.Hash]struct{}
+	droppedCount atomic.Int64
+
+	// recentMined holds the transaction sets of the blocks block assembly moved forward onto
+	// in the last blockassembly_minedTxSetRetention, so a late hand-off of a transaction one
+	// of them mined stays out. See recent_mined_sets.go.
+	recentMined recentMinedSets
+	// drainingBlockSet is the transaction set of the block whose drain is running, which the
+	// drain checks itself, so filterRecentlyMined skips it. Processor goroutine only.
+	drainingBlockSet *SortedHashSet
+
 	// currentItemsPerFile specifies the maximum number of items per subtree file
 	currentItemsPerFile atomic.Int32
 
@@ -306,6 +322,9 @@ type SubtreeProcessor struct {
 
 	// lengthCh receives requests for the current length of the processor
 	lengthCh chan chan int
+
+	// templateEmptyCh receives NothingToReload's requests
+	templateEmptyCh chan chan bool
 
 	// checkSubtreeProcessorCh is used to check the subtree processor state
 	checkSubtreeProcessorCh chan chan error
@@ -695,6 +714,10 @@ var (
 	// This is calculated based on a subtree being created approximately every second,
 	// and is used for initial capacity allocation to optimize memory usage.
 	ExpectedNumberOfSubtrees = 1024
+
+	// resetSweepChunkSize is how many assembly transactions reset marks as not on
+	// the longest chain in one store call. A variable so tests can force several.
+	resetSweepChunkSize = 1_000_000
 )
 
 // NewSubtreeProcessor creates and initializes a new SubtreeProcessor instance.
@@ -779,6 +802,7 @@ func NewSubtreeProcessor(_ context.Context, logger ulogger.Logger, tSettings *se
 		reconcileCoinbasesCh:         make(chan reconcileCoinbasesMsg),
 		removeTxCh:                   make(chan chainhash.Hash, 100),
 		lengthCh:                     make(chan chan int),
+		templateEmptyCh:              make(chan chan bool),
 		checkSubtreeProcessorCh:      make(chan chan error),
 		newSubtreeChan:               newSubtreeChan,
 		chainedSubtrees:              make([]*subtreepkg.Subtree, 0, ExpectedNumberOfSubtrees),
@@ -1141,6 +1165,11 @@ func (stp *SubtreeProcessor) Start(ctx context.Context) {
 					// return the length of the current subtree
 					lengthCh <- stp.currentSubtree.Load().Length()
 
+				case emptyCh := <-stp.templateEmptyCh:
+					// Answered between dequeue iterations, so no dequeued batch is half placed.
+					current := stp.currentSubtree.Load()
+					emptyCh <- len(stp.chainedSubtrees) == 0 && (current == nil || current.Length() <= 1) && stp.droppedCount.Load() == 0
+
 				case errCh := <-stp.checkSubtreeProcessorCh:
 					errCh <- stp.runHandlerWithRecover("checkSubtreeProcessor", func() error {
 						stp.setCurrentRunningState(StateCheckSubtreeProcessor)
@@ -1219,7 +1248,10 @@ func (stp *SubtreeProcessor) Start(ctx context.Context) {
 					}
 
 					// Phase 1: Dequeue multiple batches
-					dequeueBatches = dequeueBatches[:0] // Reset slice without reallocating
+					// Reset without reallocating. Clear first: a slot left past the new length keeps its old
+					// *TxBatch, and each batch links to the next, so one stale slot pins every batch queued since.
+					clear(dequeueBatches)
+					dequeueBatches = dequeueBatches[:0]
 
 					// Calculate validFromMillis based on DoubleSpendWindow
 					validFromMillis := int64(0)
@@ -1242,6 +1274,15 @@ func (stp *SubtreeProcessor) Start(ctx context.Context) {
 					for _, batch := range dequeueBatches {
 						dequeuedItems += int64(len(batch.nodes))
 					}
+
+					// A transaction a recently applied block mined is dropped first, so the era
+					// filter below never records it as kept out.
+					stp.pruneMinedSets()
+					stp.filterRecentlyMined(dequeueBatches, nil)
+
+					// Before the parallel filter: descendants are found in queue order. After
+					// the count above, which settles what the queue handed out, kept or not.
+					stp.filterTxEra(dequeueBatches)
 
 					if len(dequeueBatches) == 0 {
 						stp.setCurrentRunningState(StateRunning)
@@ -1850,32 +1891,71 @@ func (stp *SubtreeProcessor) reset(blockHeader *model.BlockHeader, moveBackBlock
 	// drops transactions from block assembly. For transactions that already have
 	// unmined_since set, it is a no-op on the sql and aerospike stores; the utxoset store
 	// restarts their clock.
+	//
+	// Block assembly can hold billions of transactions, so they go to the store a
+	// bounded chunk at a time: one list of them all is 32 bytes a transaction.
 	{
 		currentSubtree := stp.currentSubtree.Load()
-		subtreeNodeCount := len(currentSubtree.Nodes)
+
+		nodeCount := len(currentSubtree.Nodes)
 		for _, st := range stp.chainedSubtrees {
-			subtreeNodeCount += len(st.Nodes)
+			nodeCount += len(st.Nodes)
 		}
 
-		assemblyTxHashes := make([]chainhash.Hash, 0, subtreeNodeCount)
-		for _, st := range stp.chainedSubtrees {
-			for _, node := range st.Nodes {
-				if !node.Hash.Equal(subtreepkg.CoinbasePlaceholderHashValue) {
-					assemblyTxHashes = append(assemblyTxHashes, node.Hash)
+		var (
+			chunk  = make([]chainhash.Hash, 0, min(nodeCount, resetSweepChunkSize))
+			marked int
+		)
+
+		markChunk := func() error {
+			if len(chunk) == 0 {
+				return nil
+			}
+
+			if err := stp.markNotOnLongestChain(ctx, nil, nil, chunk); err != nil {
+				return errors.NewProcessingError("[SubtreeProcessor][reset] error marking assembly txs as not on longest chain before reset, %d marked before it", marked, err)
+			}
+
+			marked += len(chunk)
+			chunk = chunk[:0]
+
+			return nil
+		}
+
+		sweep := func(nodes []subtreepkg.Node) error {
+			for _, node := range nodes {
+				if node.Hash.Equal(subtreepkg.CoinbasePlaceholderHashValue) {
+					continue
+				}
+
+				chunk = append(chunk, node.Hash)
+
+				if len(chunk) == resetSweepChunkSize {
+					if err := markChunk(); err != nil {
+						return err
+					}
 				}
 			}
+
+			return nil
 		}
-		for _, node := range currentSubtree.Nodes {
-			if !node.Hash.Equal(subtreepkg.CoinbasePlaceholderHashValue) {
-				assemblyTxHashes = append(assemblyTxHashes, node.Hash)
+
+		for _, st := range stp.chainedSubtrees {
+			if err := sweep(st.Nodes); err != nil {
+				return err
 			}
 		}
 
-		if len(assemblyTxHashes) > 0 {
-			stp.logger.Infof("[SubtreeProcessor][reset] marking %d assembly txs as not on longest chain before clearing state", len(assemblyTxHashes))
-			if err := stp.markNotOnLongestChain(ctx, nil, nil, assemblyTxHashes); err != nil {
-				return errors.NewProcessingError("[SubtreeProcessor][reset] error marking assembly txs as not on longest chain before reset", err)
-			}
+		if err := sweep(currentSubtree.Nodes); err != nil {
+			return err
+		}
+
+		if err := markChunk(); err != nil {
+			return err
+		}
+
+		if marked > 0 {
+			stp.logger.Infof("[SubtreeProcessor][reset] marked %d assembly txs as not on longest chain before clearing state", marked)
 		}
 	}
 
@@ -1919,6 +1999,10 @@ func (stp *SubtreeProcessor) reset(blockHeader *model.BlockHeader, moveBackBlock
 
 		return errors.NewProcessingError("[SubtreeProcessor][reset] tx map still holds %d entries after clear, refusing to reload on top of stale state", remaining)
 	}
+
+	// A successful rotation commits the reset. It may move back any block and reload from the
+	// UTXO store, so no kept block set is known to still hold mined transactions only.
+	stp.clearMinedSets()
 
 	// The rotation above is itself the cure for any disk tx map error already
 	// pending, or already requesting a reset, before this point (a stale error
@@ -1967,8 +2051,9 @@ func (stp *SubtreeProcessor) reset(blockHeader *model.BlockHeader, moveBackBlock
 	}
 
 	// clear remove map to prevent memory leak - entries for transactions that were
-	// never dequeued would otherwise accumulate indefinitely across resets
-	stp.removeMap = txmap.NewSplitSwissMap(256, 16)
+	// never dequeued would otherwise accumulate indefinitely across resets. Cleared in
+	// place: GetRemoveMapLength reads the field from other goroutines.
+	stp.removeMap.Clear()
 
 	// reset tx count
 	stp.setTxCountFromSubtrees()
@@ -2815,6 +2900,36 @@ func (stp *SubtreeProcessor) ProcessRemainderTransactionsAndDequeue(ctx context.
 	return stp.processRemainderTransactionsAndDequeue(ctx, params)
 }
 
+// NothingToReload reports whether a reload of the template would change nothing: it holds no
+// transaction besides the coinbase, and none is recorded as kept out (a transaction dropped
+// under the previous rules can be admitted under the new ones) or held (a held one can be
+// untagged, and only a reload checks it against the new rules). It is answered on the
+// processor's goroutine between dequeue iterations, so a batch admitted under the previous
+// transaction rules is either in the template already or still queued, where the current
+// rules decide it. A processor that is not running answers false, so the caller reloads.
+func (stp *SubtreeProcessor) NothingToReload() bool {
+	p := stp.processorCtx.Load()
+	if p == nil {
+		return false
+	}
+
+	ctx := *p
+	emptyCh := make(chan bool, 1)
+
+	select {
+	case stp.templateEmptyCh <- emptyCh:
+	case <-ctx.Done():
+		return false
+	}
+
+	select {
+	case empty := <-emptyCh:
+		return empty
+	case <-ctx.Done():
+		return false
+	}
+}
+
 // TxCount returns the total number of transactions processed.
 //
 // Returns:
@@ -3579,7 +3694,13 @@ func (stp *SubtreeProcessor) updateChainedSubtreeCounts() {
 //   - nodes: Transaction nodes to add
 //   - txInpoints: Parent transaction references for each node
 func (stp *SubtreeProcessor) AddBatch(nodes []subtreepkg.Node, txInpoints []*subtreepkg.TxInpoints) {
-	stp.queue.enqueueBatch(nodes, txInpoints)
+	// A transaction a recently applied block mined stays out (recent_mined_sets.go).
+	nodes, txInpoints, _, checkedSeq := stp.filterHandOff(nodes, txInpoints, nil)
+	if len(nodes) == 0 {
+		return
+	}
+
+	stp.queue.enqueueCheckedBatch(nodes, txInpoints, checkedSeq)
 }
 
 // AddBatchBounded offers a batch to the queue under the configured bounds and reports which
@@ -3590,11 +3711,19 @@ func (stp *SubtreeProcessor) AddBatch(nodes []subtreepkg.Node, txInpoints []*sub
 //   - nodes: Transaction nodes to add
 //   - txInpoints: Parent transaction references for each node
 //   - inBlock: Whether the transactions arrived inside a block
+//   - validatedHeights: Height each node was validated at, or nil when untagged
 //
 // Returns:
 //   - Admission: Admitted, or the bound that refused the batch
-func (stp *SubtreeProcessor) AddBatchBounded(nodes []subtreepkg.Node, txInpoints []*subtreepkg.TxInpoints, inBlock bool) Admission {
-	return stp.queue.enqueueBatchBounded(nodes, txInpoints, inBlock)
+func (stp *SubtreeProcessor) AddBatchBounded(nodes []subtreepkg.Node, txInpoints []*subtreepkg.TxInpoints, inBlock bool, validatedHeights []uint32) Admission {
+	// A transaction a recently applied block mined stays out (recent_mined_sets.go). A batch
+	// left empty is admitted: block assembly has nothing to hold for it.
+	nodes, txInpoints, validatedHeights, checkedSeq := stp.filterHandOff(nodes, txInpoints, validatedHeights)
+	if len(nodes) == 0 {
+		return Admitted
+	}
+
+	return stp.queue.enqueueCheckedBatchBounded(nodes, txInpoints, inBlock, validatedHeights, checkedSeq)
 }
 
 // heldBase is the count of transactions the subtrees hold, which the queue's in-memory limit
@@ -4491,8 +4620,8 @@ func (stp *SubtreeProcessor) reChainSubtrees(fromIndex int) error {
 // Sends happen in a batch before waiting, overlapping send and receive.
 //
 // With a deadline the wait is for the typed StoreResult of each of the first wait subtrees, and a
-// store that failed, was cancelled, or did not finish within deadline of the send is an error.
-// Without one the wait is for ErrChan, which a failed write answers with nil.
+// store that failed, was cancelled, or did not finish within deadline of the end of the sends is an
+// error. Without one the wait is for ErrChan, which a failed write answers with nil.
 func (stp *SubtreeProcessor) storeAndAnnounceChainedSubtrees(ctx context.Context, caller string, wait int, skipNotification bool, deadline time.Duration) error {
 	// With a store queue the reorg's two calls (wait with no announcement, announce with no wait)
 	// do not send the chain again: it was sent as it was built.
@@ -5693,6 +5822,10 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveBackBlocks []*
 			if stp.storeQueue != nil {
 				stp.wantRestored(originalChainedSubtrees)
 			}
+
+			// The blocks are no longer applied, so their kept sets must not keep a late
+			// hand-off of their transactions out.
+			stp.forgetMinedSets(moveForwardBlocks)
 		}
 
 		// Defer panic-aware rollback so a panic mid-loop unwinds the partial
@@ -5767,6 +5900,10 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveBackBlocks []*
 		stp.phases.count("pending", max(int(stp.TxCount())-1, 0)) //nolint:gosec // a count, far below MaxInt
 		stp.phases.count("tx_map", stp.currentTxMap.Length())
 		stp.phases.count("queue", int(stp.QueueLength()))
+
+		// The moved-back blocks no longer mine their transactions on the chain block assembly
+		// follows, so a late hand-off of one of them must be placed, not dropped.
+		stp.forgetMinedSets(moveBackBlocks)
 	}
 
 	// Check the moveForward subtrees open, read every moveBack block's
@@ -6076,9 +6213,11 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveBackBlocks []*
 		// that fails after its drain puts back its input, which lacks what it
 		// drained. The reset that follows a failed fork reorg reloads every tx
 		// the store marks unmined, and a queued tx is one, as with the last
-		// step's drain before. A tx that arrives after its own block's step
-		// still reaches only later blocks' filters, as it does outside a reorg,
-		// and so does one a positive double-spend window holds back past it.
+		// step's drain before. A tx that arrives after its own block's step is
+		// checked against that block's kept set on arrival, or when placed if
+		// it arrived before the set was kept, while blockassembly_minedTxSetRetention lasts (recent_mined_sets.go).
+		// One a positive double-spend window holds back past its block's drain
+		// reaches only later blocks' filters and the kept sets.
 		if transactionMap, losingTxHashesMap, err = stp.moveForwardBlock(ctx, block, true, processedConflictingHashesMap, false, lastMoveForwardBlock); err != nil {
 			return err
 		}
@@ -6216,8 +6355,10 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveBackBlocks []*
 	// Store the subtrees this reorg built before any longest-chain mark, and announce them only
 	// after the marks (issue 2269, decision 2). With blockassembly_reorgStoreDeadline set, a store
 	// that failed or did not finish in time fails the reorg here, before anything irreversible
-	// below, and a reset follows (failedForkReorgNeedsReset). At 0 the wait is as before and never
-	// fails on a store.
+	// below, and a reset follows (failedForkReorgNeedsReset). At 0 the wait is on ErrChan as before:
+	// an error there still fails the reorg, a write that failed and went to the retry path does not.
+	// Only the subtree file is checked: most subtrees take the store's Exists path here, because the
+	// forward steps already sent them, and their meta can still be in flight (PR 4b sends once).
 	if err = stp.storeAndAnnounceChainedSubtrees(ctx, "reorgBlocks", len(stp.chainedSubtrees), true, stp.settings.BlockAssembly.ReorgStoreDeadline); err != nil {
 		return err
 	}
@@ -6745,17 +6886,28 @@ func (stp *SubtreeProcessor) moveBackBlockBulkBuild(ctx context.Context, block *
 	flatInpoints := make([]*subtreepkg.TxInpoints, 0, blockNodeCount)
 	flatNodes := make([]subtreepkg.Node, 0, blockNodeCount)
 
+	// The block's transactions were validated at its height: keep out the ones under other
+	// rules than the next block's, as on every other way into the template.
+	droppedFromBlock := false
+
+	stp.droppedMu.Lock()
 	for idx, subtreeNodes := range subtreesNodes {
 		startIdx := 0
 		if idx == 0 {
 			startIdx = 1 // skip coinbase in first subtree
 		}
 		for i := startIdx; i < len(subtreeNodes); i++ {
+			if !stp.admitTxLocked(subtreeNodes[i].Hash, &subtreeMetaTxInpoints[idx][i], block.Height) {
+				droppedFromBlock = true
+				continue
+			}
+
 			flatHashes = append(flatHashes, subtreeNodes[i].Hash)
 			flatInpoints = append(flatInpoints, &subtreeMetaTxInpoints[idx][i])
 			flatNodes = append(flatNodes, subtreeNodes[i])
 		}
 	}
+	stp.droppedMu.Unlock()
 
 	if len(flatHashes) > 0 {
 		wasSet := make([]bool, len(flatHashes))
@@ -6773,10 +6925,15 @@ func (stp *SubtreeProcessor) moveBackBlockBulkBuild(ctx context.Context, block *
 		}
 	}
 
-	// Step 4: Collect previous mempool nodes (already in currentTxMap)
+	// Step 4: Collect previous mempool nodes (already in currentTxMap). One that spends a
+	// transaction Step 3 kept out goes too, with its own descendants: the template would
+	// otherwise hold a child without its parent. Previous nodes are in template order,
+	// parents first, so one pass finds every descendant.
+	keepPrevious := stp.keepPreviousNodeFunc(droppedFromBlock)
+
 	for _, st := range previousChainedSubtrees {
 		for _, node := range st.Nodes {
-			if node.Hash.Equal(subtreepkg.CoinbasePlaceholderHashValue) {
+			if node.Hash.Equal(subtreepkg.CoinbasePlaceholderHashValue) || !keepPrevious(node.Hash) {
 				continue
 			}
 			allNodes = append(allNodes, node)
@@ -6784,7 +6941,7 @@ func (stp *SubtreeProcessor) moveBackBlockBulkBuild(ctx context.Context, block *
 	}
 	if previousCurrentSubtree != nil {
 		for _, node := range previousCurrentSubtree.Nodes {
-			if node.Hash.Equal(subtreepkg.CoinbasePlaceholderHashValue) {
+			if node.Hash.Equal(subtreepkg.CoinbasePlaceholderHashValue) || !keepPrevious(node.Hash) {
 				continue
 			}
 			allNodes = append(allNodes, node)
@@ -7987,6 +8144,9 @@ func (stp *SubtreeProcessor) moveForwardBlockDeferringDrain(ctx context.Context,
 			return nil, nil, nil, errors.NewProcessingError("[moveForwardBlock][%s] error processing coinbase utxos", block.String(), err)
 		}
 
+		// keeps nothing, but drops the expired kept sets, which a catch-up's dequeue loop cannot
+		stp.keepMinedSet(block, nil)
+
 		return nil, nil, nil, nil
 	}
 
@@ -8004,6 +8164,16 @@ func (stp *SubtreeProcessor) moveForwardBlockDeferringDrain(ctx context.Context,
 	}
 
 	stp.phases.done("forward_set_build")
+
+	// The block's mined drops are forgotten before the drain below, so their queued children are
+	// admitted, and put back if the move fails after this: the block is then not applied.
+	if forgotten := stp.forgetMinedDroppedTxs(transactionMap); len(forgotten) != 0 {
+		defer func() {
+			if err != nil {
+				stp.restoreForgottenDroppedTxs(forgotten)
+			}
+		}()
+	}
 
 	if stp.reorgForwardTxMapSubtrees != nil {
 		for subtreeHash := range blockSubtreesMap {
@@ -8155,6 +8325,9 @@ func (stp *SubtreeProcessor) moveForwardBlockDeferringDrain(ctx context.Context,
 			stp.logger.Debugf("Memory after GC: Alloc=%d MB", memStats.Alloc/(1024*1024))
 		}
 	}
+
+	// Kept for late hand-offs of the transactions this block mined (recent_mined_sets.go).
+	stp.keepMinedSet(block, transactionMap)
 
 	return transactionMap, losingTxHashesMap, drain, nil
 }
@@ -8357,12 +8530,18 @@ func (stp *SubtreeProcessor) WaitForPendingBlocks(ctx context.Context) error {
 }
 
 // DrainQueue is the public entry point for BlockAssembler to flush in-flight
-// children of conflicting parents from the input queue before the event-loop
+// children of conflicting or skipped parents from the input queue before the event-loop
 // goroutine starts (BA.Start path) or before the existing post-postProcess
 // drain runs (Reset path's postProcess closure).
 //
-// Internally calls dequeueDuringBlockMovement with the supplied transient
-// drop set as the filter. Non-conflicting txs in the queue are added to the
+// Internally calls dequeueDuringBlockMovementWithCutoff with the supplied
+// transient drop set as the filter. Before the consumer starts it ignores the
+// double-spend window (double_spend_window_millis), so the filter covers every
+// queued batch: with a non-empty drop set, startup places queued batches that
+// are still inside the window at once, while an empty drop set returns early
+// and leaves them to wait out the window. After the consumer starts it keeps
+// the window cutoff, so batches inside the window are left for the normal
+// dequeue, which places them without the filter. Non-conflicting txs in the queue are added to the
 // current subtree as part of the same drain — same routing as default-case
 // dequeue would have used. skipNotification=true so this is safe to invoke
 // before subtree-announcement listeners are wired up.
@@ -8370,7 +8549,10 @@ func (stp *SubtreeProcessor) DrainQueue(dropHashes map[chainhash.Hash]struct{}) 
 	if len(dropHashes) == 0 {
 		return
 	}
-	if err := stp.dequeueDuringBlockMovement(nil, nil, dropHashes, true); err != nil {
+	// Before Start, the filter is transient and the startup load must apply it
+	// to every queued batch. After Start, preserve the double-spend window for
+	// the post-block-movement drain.
+	if err := stp.dequeueDuringBlockMovementWithCutoff(nil, nil, dropHashes, true, !stp.ConsumerStarted()); err != nil {
 		stp.logger.Errorf("[SubtreeProcessor][DrainQueue] error: %v", err)
 	}
 }
@@ -8393,7 +8575,14 @@ func (stp *SubtreeProcessor) DrainQueue(dropHashes map[chainhash.Hash]struct{}) 
 // Returns:
 //   - error: Any error encountered during processing
 func (stp *SubtreeProcessor) dequeueDuringBlockMovement(transactionMap *SortedHashSet, losingTxHashesMap txmap.TxMap, conflictingHashes map[chainhash.Hash]struct{}, skipNotification bool) (err error) {
-	return stp.forEachDrainChunk(1, func(batches []*TxBatch) (int, error) {
+	return stp.dequeueDuringBlockMovementWithCutoff(transactionMap, losingTxHashesMap, conflictingHashes, skipNotification, false)
+}
+
+func (stp *SubtreeProcessor) dequeueDuringBlockMovementWithCutoff(transactionMap *SortedHashSet, losingTxHashesMap txmap.TxMap, conflictingHashes map[chainhash.Hash]struct{}, skipNotification, ignoreWindow bool) (err error) {
+	stp.drainingBlockSet = transactionMap
+	defer func() { stp.drainingBlockSet = nil }()
+
+	return stp.forEachDrainChunkWithCutoff(1, ignoreWindow, func(batches []*TxBatch) (int, error) {
 		placed := 0
 
 		for _, batch := range batches {
@@ -8435,11 +8624,17 @@ func (stp *SubtreeProcessor) dequeueDuringBlockMovement(transactionMap *SortedHa
 // queue length, and the backpressure that reads it, honest during the
 // drain, and bounds what a failure part-way through can lose. fn reports how
 // many of the chunk's transactions it placed in subtrees, and that number is
-// added to the subtrees count before the chunk is settled.
+// added to the subtrees count before the chunk is settled. Before the consumer
+// starts, DrainQueue ignores the time cutoff so its transient drop filter covers
+// the queue already present; after Start it keeps the double-spend window cutoff.
 func (stp *SubtreeProcessor) forEachDrainChunk(maxItems int, fn func(batches []*TxBatch) (int, error)) error {
-	// Bound the drain by two complementary cutoffs:
+	return stp.forEachDrainChunkWithCutoff(maxItems, false, fn)
+}
+
+func (stp *SubtreeProcessor) forEachDrainChunkWithCutoff(maxItems int, ignoreWindow bool, fn func(batches []*TxBatch) (int, error)) error {
+	// Bound the drain by the queue-length snapshot and, normally, a time cutoff:
 	//
-	//  1. Time: the millisecond of clock.Now() at function entry,
+	//  1. Time (unless ignoreWindow): the millisecond of clock.Now() at function entry,
 	//     inclusive, or clock.Now() - DoubleSpendWindow, exclusive, when
 	//     that filter is enabled. The drain stops at the first queued batch
 	//     the cutoff excludes (stamped after it with no window, at or after
@@ -8485,10 +8680,11 @@ func (stp *SubtreeProcessor) forEachDrainChunk(maxItems int, fn func(batches []*
 	// tx this block mined back into block assembly. A producer stamps a
 	// batch before it links it, so a batch stamped in this millisecond can
 	// still miss the drain: when a later-stamped batch links ahead of it,
-	// or when it links after the drain ends. The steady-state dequeue loop
-	// then places it with no block filter, or the next block movement takes
-	// it and filters it only against the blocks that movement moves, never
-	// against this one, as for any tx that arrives after its block's drain.
+	// or when it links after the drain ends. The steady-state dequeue loop or
+	// the next block movement then places it, checked against the kept sets
+	// of the blocks applied within blockassembly_minedTxSetRetention, this
+	// one included (recent_mined_sets.go), as for any tx that arrives after
+	// its block's drain.
 	now := stp.clock.Now()
 	window := stp.settings.BlockAssembly.DoubleSpendWindow
 
@@ -8498,6 +8694,9 @@ func (stp *SubtreeProcessor) forEachDrainChunk(maxItems int, fn func(batches []*
 	}
 
 	dequeue := func() (*TxBatch, bool) {
+		if ignoreWindow {
+			return stp.queue.dequeueBatch(0)
+		}
 		if window > 0 {
 			return stp.queue.dequeueBatch(validFromMillis)
 		}
@@ -8554,6 +8753,13 @@ func (stp *SubtreeProcessor) runDrainChunk(chunk []*TxBatch, chunkItems int, fn 
 
 		stp.queue.settle(int64(chunkItems))
 	}()
+
+	// Before fn, in queue order, so descendants are found. chunkItems was counted before it,
+	// as the queue handed the chunk out, so the settle above releases what was dropped too.
+	// A transaction a block applied in the last blockassembly_minedTxSetRetention mined is
+	// dropped first. fn checks the block this drain moves, if any, so its set is skipped here.
+	stp.filterRecentlyMined(chunk, stp.drainingBlockSet)
+	stp.filterTxEra(chunk)
 
 	placed, err = fn(chunk)
 
