@@ -14,6 +14,10 @@ import (
 )
 
 func TestPreserveTransactionsWithExpressions(t *testing.T) {
+	t.Parallel()
+
+	fx := newTxFixtures(t)
+
 	logger := ulogger.NewErrorTestLogger(t)
 	tSettings := test.CreateBaseTestSettings(t)
 	tSettings.Aerospike.EnablePreserveFilterExpressions = true
@@ -42,7 +46,7 @@ func TestPreserveTransactionsWithExpressions(t *testing.T) {
 	})
 
 	t.Run("missing record is a no-op", func(t *testing.T) {
-		cleanDB(t, client)
+		*fx = *newTxFixtures(t)
 
 		missingHash := chainhash.HashH([]byte("does-not-exist"))
 		err := store.PreserveTransactions(ctx, []chainhash.Hash{missingHash}, 500)
@@ -50,12 +54,12 @@ func TestPreserveTransactionsWithExpressions(t *testing.T) {
 	})
 
 	t.Run("sets preserveUntil and clears deleteAtHeight", func(t *testing.T) {
-		cleanDB(t, client)
+		*fx = *newTxFixtures(t)
 
-		_, err := store.Create(ctx, tx, 0)
+		_, err := store.Create(ctx, fx.tx, 0)
 		require.NoError(t, err)
 
-		txHash := *tx.TxIDChainHash()
+		txHash := *fx.tx.TxIDChainHash()
 
 		// Set a deleteAtHeight on the record first via raw client
 		txKey, err := aerospike.NewKey(store.GetNamespace(), store.GetName(), txHash[:])
@@ -85,12 +89,12 @@ func TestPreserveTransactionsWithExpressions(t *testing.T) {
 	})
 
 	t.Run("idempotent - preserving same tx twice is ok", func(t *testing.T) {
-		cleanDB(t, client)
+		*fx = *newTxFixtures(t)
 
-		_, err := store.Create(ctx, tx, 0)
+		_, err := store.Create(ctx, fx.tx, 0)
 		require.NoError(t, err)
 
-		txHash := *tx.TxIDChainHash()
+		txHash := *fx.tx.TxIDChainHash()
 		stampDAH(t, txHash)
 
 		err = store.PreserveTransactions(ctx, []chainhash.Hash{txHash}, 500)
@@ -108,12 +112,12 @@ func TestPreserveTransactionsWithExpressions(t *testing.T) {
 	})
 
 	t.Run("batch with mix of existing and missing records", func(t *testing.T) {
-		cleanDB(t, client)
+		*fx = *newTxFixtures(t)
 
-		_, err := store.Create(ctx, tx, 0)
+		_, err := store.Create(ctx, fx.tx, 0)
 		require.NoError(t, err)
 
-		txHash := *tx.TxIDChainHash()
+		txHash := *fx.tx.TxIDChainHash()
 		stampDAH(t, txHash)
 		missingHash := chainhash.HashH([]byte("missing-tx"))
 
@@ -129,12 +133,12 @@ func TestPreserveTransactionsWithExpressions(t *testing.T) {
 	})
 
 	t.Run("updates preserveUntil to new height", func(t *testing.T) {
-		cleanDB(t, client)
+		*fx = *newTxFixtures(t)
 
-		_, err := store.Create(ctx, tx, 0)
+		_, err := store.Create(ctx, fx.tx, 0)
 		require.NoError(t, err)
 
-		txHash := *tx.TxIDChainHash()
+		txHash := *fx.tx.TxIDChainHash()
 		stampDAH(t, txHash)
 
 		err = store.PreserveTransactions(ctx, []chainhash.Hash{txHash}, 500)
@@ -155,6 +159,8 @@ func TestPreserveTransactionsWithExpressions(t *testing.T) {
 }
 
 func TestPreserveTransactionsWithExpressions_LuaParity(t *testing.T) {
+	t.Parallel()
+
 	logger := ulogger.NewErrorTestLogger(t)
 
 	t.Run("expression result matches lua result", func(t *testing.T) {
@@ -165,17 +171,18 @@ func TestPreserveTransactionsWithExpressions_LuaParity(t *testing.T) {
 			}
 
 			t.Run(name, func(t *testing.T) {
+				fx := newTxFixtures(t)
+
 				tSettings := test.CreateBaseTestSettings(t)
 				tSettings.Aerospike.EnablePreserveFilterExpressions = useExpressions
 
 				client, store, ctx, deferFn := initAerospike(t, tSettings, logger)
 				defer deferFn()
-				cleanDB(t, client)
 
-				_, err := store.Create(ctx, tx, 0)
+				_, err := store.Create(ctx, fx.tx, 0)
 				require.NoError(t, err)
 
-				txHash := *tx.TxIDChainHash()
+				txHash := *fx.tx.TxIDChainHash()
 
 				// Set deleteAtHeight first
 				txKey, err := aerospike.NewKey(store.GetNamespace(), store.GetName(), txHash[:])

@@ -24,6 +24,10 @@ import (
 // go test -v -tags test_aerospike ./test/...
 
 func TestAlertSystem(t *testing.T) {
+	t.Parallel()
+
+	fx := newTxFixtures(t)
+
 	logger := ulogger.NewErrorTestLogger(t)
 	tSettings := test.CreateBaseTestSettings(t)
 
@@ -35,10 +39,10 @@ func TestAlertSystem(t *testing.T) {
 
 	t.Run("FreezeUTXOs", func(t *testing.T) {
 		spend := &utxo.Spend{
-			TxID:         tx.TxIDChainHash(),
+			TxID:         fx.tx.TxIDChainHash(),
 			Vout:         0,
-			UTXOHash:     utxoHash0,
-			SpendingData: spendpkg.NewSpendingData(tx.TxIDChainHash(), 0),
+			UTXOHash:     fx.utxoHash0,
+			SpendingData: spendpkg.NewSpendingData(fx.tx.TxIDChainHash(), 0),
 		}
 
 		// Create a key for the UTXO
@@ -48,7 +52,7 @@ func TestAlertSystem(t *testing.T) {
 
 		// Insert a mock UTXO record
 		bins := aerospike.BinMap{
-			fields.Utxos.String(): []interface{}{utxoHash0[:]},
+			fields.Utxos.String(): []interface{}{fx.utxoHash0[:]},
 		}
 		aErr = client.Put(nil, key, bins)
 		require.NoError(t, aErr)
@@ -71,11 +75,11 @@ func TestAlertSystem(t *testing.T) {
 		frozenUTXO, ok := utxos[0].([]byte)
 		require.True(t, ok)
 		require.Len(t, frozenUTXO, 68)
-		assert.Equal(t, utxoHash0[:], frozenUTXO[:32])
+		assert.Equal(t, fx.utxoHash0[:], frozenUTXO[:32])
 		assert.Equal(t, teranode_aerospike.GetFrozenUTXOBytes(), frozenUTXO[32:68])
 
 		// try to spend the UTXO
-		spends, err := store.Spend(ctx, spendTx, store.GetBlockHeight()+1)
+		spends, err := store.Spend(ctx, fx.spendTx, store.GetBlockHeight()+1)
 		require.Error(t, err)
 
 		var tErr *errors.Error
@@ -88,10 +92,10 @@ func TestAlertSystem(t *testing.T) {
 		var err error
 
 		spend := &utxo.Spend{
-			TxID:         tx.TxIDChainHash(),
+			TxID:         fx.tx.TxIDChainHash(),
 			Vout:         0,
-			UTXOHash:     utxoHash0,
-			SpendingData: spendpkg.NewSpendingData(tx.TxIDChainHash(), 0),
+			UTXOHash:     fx.utxoHash0,
+			SpendingData: spendpkg.NewSpendingData(fx.tx.TxIDChainHash(), 0),
 		}
 
 		// Create a key for the UTXO
@@ -100,7 +104,7 @@ func TestAlertSystem(t *testing.T) {
 		require.NoError(t, err)
 
 		utxoBytes := make([]byte, 68)
-		copy(utxoBytes[:32], utxoHash0[:])
+		copy(utxoBytes[:32], fx.utxoHash0[:])
 		copy(utxoBytes[32:68], teranode_aerospike.GetFrozenUTXOBytes())
 
 		// Insert a mock UTXO record
@@ -114,7 +118,7 @@ func TestAlertSystem(t *testing.T) {
 		require.NoError(t, err)
 
 		// try to spend the UTXO
-		spends, err := store.Spend(ctx, spendTx, store.GetBlockHeight()+1)
+		spends, err := store.Spend(ctx, fx.spendTx, store.GetBlockHeight()+1)
 
 		var tErr *errors.Error
 		require.ErrorAs(t, err, &tErr)
@@ -139,10 +143,10 @@ func TestAlertSystem(t *testing.T) {
 		unfrozenUTXO, ok := utxos[0].([]byte)
 		require.True(t, ok)
 		require.Len(t, unfrozenUTXO, 32)
-		assert.Equal(t, utxoHash0[:], unfrozenUTXO)
+		assert.Equal(t, fx.utxoHash0[:], unfrozenUTXO)
 
 		// try to spend the UTXO
-		_, err = store.Spend(ctx, spendTx, store.GetBlockHeight()+1)
+		_, err = store.Spend(ctx, fx.spendTx, store.GetBlockHeight()+1)
 		require.NoError(t, err)
 	})
 
@@ -150,15 +154,15 @@ func TestAlertSystem(t *testing.T) {
 		err := store.SetBlockHeight(101)
 		require.NoError(t, err)
 
-		utxoRecTx := utxo2.GetSpendingTx(tx, 0)
+		utxoRecTx := utxo2.GetSpendingTx(fx.tx, 0)
 		utxoRec := &utxo.Spend{
-			TxID:         tx.TxIDChainHash(),
+			TxID:         fx.tx.TxIDChainHash(),
 			Vout:         0,
-			UTXOHash:     utxoHash0,
+			UTXOHash:     fx.utxoHash0,
 			SpendingData: spendpkg.NewSpendingData(utxoRecTx.TxIDChainHash(), 0),
 		}
 
-		newUtxoRecTx := utxo2.GetSpendingTx(tx, 0)
+		newUtxoRecTx := utxo2.GetSpendingTx(fx.tx, 0)
 
 		privKey, err := bec.NewPrivateKey()
 		require.NoError(t, err)
@@ -167,7 +171,7 @@ func TestAlertSystem(t *testing.T) {
 		require.NoError(t, err)
 
 		newOutput := &bt.Output{
-			Satoshis:      tx.Outputs[0].Satoshis,
+			Satoshis:      fx.tx.Outputs[0].Satoshis,
 			LockingScript: newLockingScript,
 		}
 
@@ -175,10 +179,10 @@ func TestAlertSystem(t *testing.T) {
 		newUtxoRecTx.Inputs[0].PreviousTxSatoshis = newOutput.Satoshis
 		newUtxoRecTx.Inputs[0].PreviousTxScript = newOutput.LockingScript
 
-		newUtxoHash, _ := util.UTXOHashFromOutput(tx.TxIDChainHash(), newOutput, 0)
+		newUtxoHash, _ := util.UTXOHashFromOutput(fx.tx.TxIDChainHash(), newOutput, 0)
 
 		newUtxoRec := &utxo.Spend{
-			TxID:         tx.TxIDChainHash(),
+			TxID:         fx.tx.TxIDChainHash(),
 			Vout:         0,
 			UTXOHash:     newUtxoHash,
 			SpendingData: spendpkg.NewSpendingData(newUtxoRecTx.TxIDChainHash(), 0),
@@ -195,7 +199,7 @@ func TestAlertSystem(t *testing.T) {
 
 		// Insert a mock UTXO record
 		bins := aerospike.BinMap{
-			fields.Utxos.String():       []interface{}{utxoHash0[:]},
+			fields.Utxos.String():       []interface{}{fx.utxoHash0[:]},
 			fields.TotalUtxos.String():  1,
 			fields.SpentUtxos.String():  0,
 			fields.RecordUtxos.String(): 1,
@@ -215,7 +219,7 @@ func TestAlertSystem(t *testing.T) {
 		utxoBytes, ok := utxos[0].([]byte)
 		require.True(t, ok)
 		require.Len(t, utxoBytes, 32)
-		assert.Equal(t, utxoHash0[:], utxoBytes)
+		assert.Equal(t, fx.utxoHash0[:], utxoBytes)
 
 		tSettings := test.CreateBaseTestSettings(t)
 
@@ -243,7 +247,7 @@ func TestAlertSystem(t *testing.T) {
 		utxoBytes, ok = utxos[0].([]byte)
 		require.True(t, ok)
 		require.Len(t, utxoBytes, 32)
-		assert.NotEqual(t, utxoHash0[:], utxoBytes)
+		assert.NotEqual(t, fx.utxoHash0[:], utxoBytes)
 		assert.Equal(t, newUtxoRec.UTXOHash[:], utxoBytes)
 
 		// check the reassignment list
@@ -256,7 +260,7 @@ func TestAlertSystem(t *testing.T) {
 		require.Len(t, reassignmentMap, 4)
 
 		// check the reassignment record
-		assert.Equal(t, utxoHash0[:], reassignmentMap["utxoHash"])
+		assert.Equal(t, fx.utxoHash0[:], reassignmentMap["utxoHash"])
 		assert.Equal(t, 0, reassignmentMap["offset"])
 		assert.Equal(t, newUtxoRec.UTXOHash[:], reassignmentMap["newUtxoHash"])
 		assert.Equal(t, 101, reassignmentMap["blockHeight"])

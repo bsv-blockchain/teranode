@@ -14,6 +14,8 @@ import (
 // spend, expired preservation) depend on this: the answer is that expressions see the
 // in-flight record (earlier writes in the same operate are visible), NOT the pre-operate one.
 func TestExpressionSeesInFlightOperateChanges(t *testing.T) {
+	t.Parallel()
+
 	if testing.Short() {
 		t.Skip("Skipping Aerospike integration test in short mode")
 	}
@@ -23,7 +25,6 @@ func TestExpressionSeesInFlightOperateChanges(t *testing.T) {
 
 	client, store, _, cleanup := initAerospike(t, tSettings, logger)
 	defer cleanup()
-	cleanDB(t, client)
 
 	key, err := aerospike.NewKey(store.GetNamespace(), store.GetName(), []byte("visibility-probe"))
 	require.NoError(t, err)
@@ -60,6 +61,8 @@ func TestExpressionSeesInFlightOperateChanges(t *testing.T) {
 // guards every counter/list read (Lua treats a nil bin as false/0/empty, an unguarded read
 // makes the whole expression unknown, which is a silent no-op under EvalNoFail).
 func TestExpressionMissingBinSemantics(t *testing.T) {
+	t.Parallel()
+
 	if testing.Short() {
 		t.Skip("Skipping Aerospike integration test in short mode")
 	}
@@ -69,7 +72,6 @@ func TestExpressionMissingBinSemantics(t *testing.T) {
 
 	client, store, _, cleanup := initAerospike(t, tSettings, logger)
 	defer cleanup()
-	cleanDB(t, client)
 
 	key, err := aerospike.NewKey(store.GetNamespace(), store.GetName(), []byte("missing-bin-probe"))
 	require.NoError(t, err)
@@ -130,6 +132,8 @@ func TestExpressionMissingBinSemantics(t *testing.T) {
 // TestExpressionSeesInFlightOperateChanges. Production writes go through BatchOperate
 // (BatchWrite), not Operate, so the visibility guarantee is pinned on that path too.
 func TestExpressionSeesInFlightOperateChangesBatch(t *testing.T) {
+	t.Parallel()
+
 	if testing.Short() {
 		t.Skip("Skipping Aerospike integration test in short mode")
 	}
@@ -139,7 +143,6 @@ func TestExpressionSeesInFlightOperateChangesBatch(t *testing.T) {
 
 	client, store, _, cleanup := initAerospike(t, tSettings, logger)
 	defer cleanup()
-	cleanDB(t, client)
 
 	key, err := aerospike.NewKey(store.GetNamespace(), store.GetName(), []byte("visibility-probe-batch"))
 	require.NoError(t, err)
