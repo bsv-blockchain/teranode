@@ -265,6 +265,21 @@ func TestGenerationalCache_HeaderBudgetReclaimed(t *testing.T) {
 		}, time.Second, time.Millisecond, "expired entries must return their header budget without chain invalidation")
 	})
 
+	t.Run("one large expiry among many small charges", func(t *testing.T) {
+		gc := NewGenerationalCache(0)
+		defer gc.Stop()
+		for i := uint32(0); i < 2000; i++ {
+			var key chainhash.Hash
+			binary.LittleEndian.PutUint32(key[:], i)
+			require.True(t, gc.NewOp(key).Set([]uint32{i}, time.Hour))
+		}
+		large := [2]interface{}{make([]*model.BlockHeader, 120000), make([]*model.BlockHeaderMeta, 120000)}
+		require.True(t, gc.NewOp(chainhash.Hash{0xff}).Set(large, 50*time.Millisecond))
+		require.Eventually(t, func() bool {
+			return gc.NewOp(chainhash.Hash{0xfe}).Set(large, time.Hour)
+		}, time.Second, time.Millisecond, "one expired entry holding most of the budget must return it")
+	})
+
 	t.Run("capacity eviction", func(t *testing.T) {
 		gc := NewGenerationalCache(2)
 		defer gc.Stop()

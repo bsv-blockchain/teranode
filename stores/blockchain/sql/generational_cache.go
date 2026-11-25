@@ -33,9 +33,11 @@ type GenerationalCache struct {
 	writeMu       sync.Mutex
 	headerBytes   uint64
 	headerCharges map[chainhash.Hash]uint64
-	// sweptEvictions is ttlCache's eviction count at the last full sweep, and
-	// sweeps counts full sweeps; both are guarded by writeMu.
+	// sweptEvictions is ttlCache's eviction count at the last full sweep,
+	// maxCharge is at least the largest charge held, and sweeps counts full
+	// sweeps; all three are guarded by writeMu.
 	sweptEvictions uint64
+	maxCharge      uint64
 	sweeps         int
 	ttlCache       *ttlcache.Cache[chainhash.Hash, any]
 	generation     atomic.Uint64
@@ -70,32 +72,42 @@ func NewGenerationalCache(capacity int) *GenerationalCache {
 	return gc
 }
 
-// sweepEvictionFraction sets how many evictions, as a fraction of the charged
-// entries, must happen between two full sweeps.
+// sweepEvictionFraction sets how much a sweep must be able to reclaim: at least
+// 1/sweepEvictionFraction of the charged entries, or of the header budget.
 const sweepEvictionFraction = 32
 
 // sweepDepartedCharges runs with writeMu held. Has does not change LRU order.
 // Reconcile on budget pressure, or when accounting has accumulated twice the
 // live entry count (with a 1024-entry floor), bounding stale bookkeeping too.
 // A charge departs only through a ttlCache eviction, so the scan is skipped
-// until evictions since the last scan reach 1/sweepEvictionFraction of the
-// charges: a budget full of live entries no longer costs every Set a full scan.
+// until the evictions since the last scan could have freed
+// 1/sweepEvictionFraction of the charged entries or of the budget: a budget
+// full of live entries no longer costs every Set a full scan.
 func (gc *GenerationalCache) sweepDepartedCharges() {
 	gc.ttlCache.DeleteExpired()
 
 	evictions := gc.ttlCache.Metrics().Evictions
-	if evictions-gc.sweptEvictions < max(1, uint64(len(gc.headerCharges))/sweepEvictionFraction) {
+	departed := evictions - gc.sweptEvictions
+
+	if departed == 0 ||
+		(departed < uint64(len(gc.headerCharges))/sweepEvictionFraction &&
+			departed*gc.maxCharge < maxCachedHeaderBytes/sweepEvictionFraction) {
 		return
 	}
 
 	gc.sweptEvictions = evictions
+	gc.maxCharge = 0
 	gc.sweeps++
 
 	for key, cost := range gc.headerCharges {
 		if !gc.ttlCache.Has(key) {
 			gc.headerBytes -= cost
 			delete(gc.headerCharges, key)
+
+			continue
 		}
+
+		gc.maxCharge = max(gc.maxCharge, cost)
 	}
 }
 
@@ -115,6 +127,7 @@ func (gc *GenerationalCache) DeleteAll() {
 	gc.writeMu.Lock()
 	defer gc.writeMu.Unlock()
 	gc.headerBytes = 0
+	gc.maxCharge = 0
 	clear(gc.headerCharges)
 	gc.ttlCache.DeleteAll()
 	gc.generation.Add(1)
@@ -178,6 +191,7 @@ func (co *CacheOperation) Set(value any, ttl time.Duration) bool {
 			delete(gc.headerCharges, co.key)
 		} else {
 			gc.headerCharges[co.key] = cost
+			gc.maxCharge = max(gc.maxCharge, cost)
 		}
 		return true
 	}
