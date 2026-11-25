@@ -77,14 +77,16 @@ type Options struct {
 
 	// CandidateParentMedianTime carries the equivalent of bitcoin-sv's
 	// pindexPrev->GetMedianTimePast() for the candidate block being validated.
-	// Only consumed when SkipPolicyChecks=true AND blockHeight >= CSVHeight,
-	// matching bitcoin-sv's BIP113 activation at ContextualCheckBlock
-	// (src/validation.cpp:6001), where post-activation finality is checked
-	// against the parent's MTP rather than the candidate block's own timestamp.
+	// Only consumed when SkipPolicyChecks=true AND blockHeight >= CSVHeight:
+	// as the finality comparison time, matching bitcoin-sv's BIP113 activation
+	// at ContextualCheckBlock (src/validation.cpp:6001), where post-activation
+	// finality is checked against the parent's MTP rather than the candidate
+	// block's own timestamp; and, below GenesisActivationHeight, as BIP68's
+	// block MTP and the coin time of a coin at or above the candidate height.
 	//
 	// Required field on the consensus path. Block-validation callers MUST
-	// populate this. selectFinalityComparisonTime returns a ProcessingError
-	// when it is missing — there is no tip-MTP soft-fall. blockState.MedianTime
+	// populate this. selectFinalityComparisonTime, and validateTransaction's
+	// BIP68 phase, return a ProcessingError when it is missing — there is no tip-MTP soft-fall. blockState.MedianTime
 	// is updated asynchronously from blockchain notifications, so a tip
 	// advance / reorg between the caller's snapshot and the validator's read
 	// would silently swap the comparison time source; the hard-error stance
