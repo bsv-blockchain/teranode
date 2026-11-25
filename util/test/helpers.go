@@ -47,9 +47,10 @@ func CreateBaseTestSettings(t TestingT) *settings.Settings {
 	// get batcher above 1) at ~1.3 MB per store.
 	tSettings.UtxoStore.GetBatcherSize = 256
 	// Give every UTXO store batcher a 1 ms window. Tests mostly call a store one request at
-	// a time, so each request waited out the production window (5 to 100 ms) before its
-	// batch ran: in stores/utxo/utxoset a chain of 600 SpendAndCreate calls took 18 s with
-	// the 10 ms windows and 5 s with 1 ms ones. A test that measures batching sets its own.
+	// a time, so each request waited out the production window (5 to 10 ms in settings.conf)
+	// before its batch ran: in stores/utxo/utxoset a chain of 600 SpendAndCreate calls took
+	// 18 s with 10 ms windows and 5 s with 1 ms ones. A test that measures batching sets its
+	// own.
 	tSettings.UtxoStore.StoreBatcherDurationMillis = 1
 	tSettings.UtxoStore.GetBatcherDurationMillis = 1
 	tSettings.UtxoStore.SpendBatcherDurationMillis = 1
