@@ -142,7 +142,7 @@ func newMmapJobServer(t *testing.T, gated bool) *mmapJobServer {
 
 		require.Equal(t, subtreeprocessor.Admitted, ba.blockAssembler.AddTxBatchBounded(
 			[]subtreepkg.Node{{Hash: *tx.TxIDChainHash(), Fee: uint64(i) + 1, SizeInBytes: 100}},
-			[]*subtreepkg.TxInpoints{&inpoints}, false))
+			[]*subtreepkg.TxInpoints{&inpoints}, false, nil))
 	}
 
 	require.Eventually(t, func() bool {
