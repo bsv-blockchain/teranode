@@ -43,6 +43,24 @@ func postgresTestURL(tb testing.TB) *url.URL {
 	return dbURL
 }
 
+// postgresParallelSlots bounds how many parallel Postgres tests hold a store at once.
+// Each store allocates its batchers' pools when it opens, so the bound keeps the test
+// binary's peak memory near what it was when these tests ran one at a time.
+var postgresParallelSlots = make(chan struct{}, 4)
+
+// parallelPostgres marks a test parallel that works only on a database of its own on
+// the shared server. A test that sets a package-level hook (spendBeforeWrite,
+// setDAHAfterLock and the rest), uses the pruner service singleton or reads a
+// process-wide metric must not call it: it stays sequential, and Go runs every
+// sequential test before it releases the parallel ones.
+func parallelPostgres(t *testing.T) {
+	t.Helper()
+	t.Parallel()
+
+	postgresParallelSlots <- struct{}{}
+	t.Cleanup(func() { <-postgresParallelSlots })
+}
+
 // startPostgresContainer returns a fresh database on the shared PostgreSQL server
 // (see postgresTestURL).
 func startPostgresContainer(t *testing.T, _ context.Context) *url.URL {
@@ -78,6 +96,8 @@ func newPostgresTestStore(t *testing.T, ctx context.Context, dbURL *url.URL) *St
 // against real Postgres — the ON CONFLICT DO NOTHING idempotency path and the
 // BYTEA intent_id / tx_hashes columns that the SQLite path cannot cover.
 func TestConflictWAL_Postgres(t *testing.T) {
+	parallelPostgres(t)
+
 	if testing.Short() {
 		t.Skip("skipping Postgres integration test in short mode")
 	}
@@ -94,6 +114,8 @@ func TestConflictWAL_Postgres(t *testing.T) {
 // while the background get-batcher needs a second connection, and sqlitememory's
 // single-connection model deadlocks. Postgres has a real connection pool.
 func TestConflictWALCrashRecovery_Postgres(t *testing.T) {
+	parallelPostgres(t)
+
 	if testing.Short() {
 		t.Skip("skipping Postgres integration test in short mode")
 	}
@@ -110,6 +132,8 @@ func TestConflictWALCrashRecovery_Postgres(t *testing.T) {
 // delete_at_height so the pruner can expire it. Before the fix this record had no
 // delete_at_height and was retained forever.
 func TestCreateMinedUnspendableSetsDAH_Postgres(t *testing.T) {
+	parallelPostgres(t)
+
 	if testing.Short() {
 		t.Skip("skipping Postgres integration test in short mode")
 	}
@@ -150,6 +174,8 @@ func TestCreateMinedUnspendableSetsDAH_Postgres(t *testing.T) {
 // SetLocked(false) call goes through the unlock batcher on Postgres and
 // correctly clears the locked flag.
 func TestUnlockBatcher_Postgres_SingleHash(t *testing.T) {
+	parallelPostgres(t)
+
 	if testing.Short() {
 		t.Skip("skipping Postgres integration test in short mode")
 	}
@@ -189,6 +215,8 @@ func TestUnlockBatcher_Postgres_SingleHash(t *testing.T) {
 // correctly recalculates delete_at_height (DAH) for a fully-spent, mined,
 // on-longest-chain transaction.
 func TestUnlockBatcher_Postgres_DAH(t *testing.T) {
+	parallelPostgres(t)
+
 	if testing.Short() {
 		t.Skip("skipping Postgres integration test in short mode")
 	}
@@ -273,6 +301,8 @@ func TestUnlockBatcher_Postgres_DAH(t *testing.T) {
 // concurrent single-hash unlock calls complete correctly with the unlock
 // batcher-enabled path.
 func TestUnlockBatcher_Postgres_MultipleConcurrent(t *testing.T) {
+	parallelPostgres(t)
+
 	if testing.Short() {
 		t.Skip("skipping Postgres integration test in short mode")
 	}

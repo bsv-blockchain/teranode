@@ -36,6 +36,8 @@ func startPostgres(t *testing.T) *url.URL {
 // out from under it, and the queued Create was lost (and its caller wedged).
 // go-batcher v2.0.4 makes Close block until the drain completes.
 func TestClose_DrainsQueuedCreate_Postgres(t *testing.T) {
+	parallelPostgres(t)
+
 	if testing.Short() {
 		t.Skip("skipping Postgres integration test in short mode")
 	}

@@ -252,6 +252,8 @@ func TestLanePositionMigrationSQLite(t *testing.T) {
 }
 
 func TestLanePositionMigrationPostgres(t *testing.T) {
+	parallelPostgres(t)
+
 	if testing.Short() {
 		t.Skip("skipping Postgres integration test in short mode")
 	}
@@ -425,6 +427,8 @@ func TestMarkRefusedCreate(t *testing.T) {
 // commits, the write TestLanePositionNotReturnedAfterAConflictLinkLockError replaces with a fault.
 // Without it the parent has no link to the child.
 func TestConflictingCreateOnTheSingleCTEPathLinksItsParent(t *testing.T) {
+	parallelPostgres(t)
+
 	if testing.Short() {
 		t.Skip("skipping Postgres integration test in short mode")
 	}
@@ -657,6 +661,8 @@ func TestPrepareLaneSchemaRestoresColumnsSQLite(t *testing.T) {
 }
 
 func TestPrepareLaneSchemaRestoresColumnsPostgres(t *testing.T) {
+	parallelPostgres(t)
+
 	if testing.Short() {
 		t.Skip("skipping Postgres integration test in short mode")
 	}
