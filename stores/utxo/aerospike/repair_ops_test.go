@@ -162,6 +162,10 @@ func sortedUint32(xs []uint32) []uint32 {
 // TestAerospike_RemoveFromConflictingChildren exercises the BatchOperate
 // removal of children from parents' conflictingCs list.
 func TestAerospike_RemoveFromConflictingChildren(t *testing.T) {
+	t.Parallel()
+
+	fx := newTxFixtures(t)
+
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
@@ -173,14 +177,13 @@ func TestAerospike_RemoveFromConflictingChildren(t *testing.T) {
 	t.Cleanup(func() { deferFn() })
 
 	t.Run("empty slice is a no-op", func(t *testing.T) {
-		cleanDB(t, client)
 
 		require.NoError(t, store.RemoveFromConflictingChildren(ctx, nil))
 		require.NoError(t, store.RemoveFromConflictingChildren(ctx, []utxo.ConflictingChildRemoval{}))
 	})
 
 	t.Run("nil hashes error", func(t *testing.T) {
-		cleanDB(t, client)
+		*fx = *newTxFixtures(t)
 
 		someHash := chainhash.HashH([]byte("some"))
 
@@ -196,7 +199,7 @@ func TestAerospike_RemoveFromConflictingChildren(t *testing.T) {
 	})
 
 	t.Run("missing parent record is tolerated", func(t *testing.T) {
-		cleanDB(t, client)
+		*fx = *newTxFixtures(t)
 
 		parent := chainhash.HashH([]byte("missing-parent"))
 		child := chainhash.HashH([]byte("missing-child"))
@@ -208,22 +211,22 @@ func TestAerospike_RemoveFromConflictingChildren(t *testing.T) {
 	})
 
 	t.Run("removes single child and keeps other entries", func(t *testing.T) {
-		cleanDB(t, client)
+		*fx = *newTxFixtures(t)
 
 		// Create parent.
-		_, err := store.Create(ctx, tx, 0)
+		_, err := store.Create(ctx, fx.tx, 0)
 		require.NoError(t, err)
 
 		// Two distinct children, each spending a different output of the parent.
 		// Creating each with WithConflicting(true) appends their hash to the
 		// parent's conflictingCs list via updateParentConflictingChildren.
-		child1 := newChildSpendingOutput(t, tx, 0, 1)
-		child2 := newChildSpendingOutput(t, tx, 1, 2)
+		child1 := newChildSpendingOutput(t, fx.tx, 0, 1)
+		child2 := newChildSpendingOutput(t, fx.tx, 1, 2)
 		seedConflictingChild(t, ctx, store, child1)
 		seedConflictingChild(t, ctx, store, child2)
 
 		// Sanity check: both children now appear in parent's conflictingCs.
-		children := readConflictingChildren(t, store, client, tx.TxIDChainHash())
+		children := readConflictingChildren(t, store, client, fx.tx.TxIDChainHash())
 		require.ElementsMatch(t,
 			[]string{child1.TxIDChainHash().String(), child2.TxIDChainHash().String()},
 			sortedHashStrings(children),
@@ -231,32 +234,32 @@ func TestAerospike_RemoveFromConflictingChildren(t *testing.T) {
 
 		// Remove only child1.
 		err = store.RemoveFromConflictingChildren(ctx, []utxo.ConflictingChildRemoval{
-			{ParentHash: tx.TxIDChainHash(), ChildHash: child1.TxIDChainHash()},
+			{ParentHash: fx.tx.TxIDChainHash(), ChildHash: child1.TxIDChainHash()},
 		})
 		require.NoError(t, err)
 
 		// child2 remains.
-		children = readConflictingChildren(t, store, client, tx.TxIDChainHash())
+		children = readConflictingChildren(t, store, client, fx.tx.TxIDChainHash())
 		require.Len(t, children, 1)
 		assert.Equal(t, child2.TxIDChainHash().String(), children[0].String())
 	})
 
 	t.Run("batched removal across multiple parents", func(t *testing.T) {
-		cleanDB(t, client)
+		*fx = *newTxFixtures(t)
 
 		// Two parents: the shared `tx` fixture and the `txWithOPReturn` fixture.
-		_, err := store.Create(ctx, tx, 0)
+		_, err := store.Create(ctx, fx.tx, 0)
 		require.NoError(t, err)
-		_, err = store.Create(ctx, txWithOPReturn, 0)
+		_, err = store.Create(ctx, fx.txWithOPReturn, 0)
 		require.NoError(t, err)
 
 		// Single child spending one output from each parent.
-		child := newChildSpendingTwoParents(t, tx, txWithOPReturn, 0, 0, 42)
+		child := newChildSpendingTwoParents(t, fx.tx, fx.txWithOPReturn, 0, 0, 42)
 		seedConflictingChild(t, ctx, store, child)
 
 		// Sanity: each parent should list the child.
-		childrenA := readConflictingChildren(t, store, client, tx.TxIDChainHash())
-		childrenB := readConflictingChildren(t, store, client, txWithOPReturn.TxIDChainHash())
+		childrenA := readConflictingChildren(t, store, client, fx.tx.TxIDChainHash())
+		childrenB := readConflictingChildren(t, store, client, fx.txWithOPReturn.TxIDChainHash())
 		require.Len(t, childrenA, 1)
 		require.Len(t, childrenB, 1)
 		assert.Equal(t, child.TxIDChainHash().String(), childrenA[0].String())
@@ -265,41 +268,45 @@ func TestAerospike_RemoveFromConflictingChildren(t *testing.T) {
 		// One RemoveFromConflictingChildren call scrubs the child from both
 		// parents.
 		err = store.RemoveFromConflictingChildren(ctx, []utxo.ConflictingChildRemoval{
-			{ParentHash: tx.TxIDChainHash(), ChildHash: child.TxIDChainHash()},
-			{ParentHash: txWithOPReturn.TxIDChainHash(), ChildHash: child.TxIDChainHash()},
+			{ParentHash: fx.tx.TxIDChainHash(), ChildHash: child.TxIDChainHash()},
+			{ParentHash: fx.txWithOPReturn.TxIDChainHash(), ChildHash: child.TxIDChainHash()},
 		})
 		require.NoError(t, err)
 
-		assert.Empty(t, readConflictingChildren(t, store, client, tx.TxIDChainHash()))
-		assert.Empty(t, readConflictingChildren(t, store, client, txWithOPReturn.TxIDChainHash()))
+		assert.Empty(t, readConflictingChildren(t, store, client, fx.tx.TxIDChainHash()))
+		assert.Empty(t, readConflictingChildren(t, store, client, fx.txWithOPReturn.TxIDChainHash()))
 	})
 
 	t.Run("idempotent — second call succeeds", func(t *testing.T) {
-		cleanDB(t, client)
+		*fx = *newTxFixtures(t)
 
-		_, err := store.Create(ctx, tx, 0)
+		_, err := store.Create(ctx, fx.tx, 0)
 		require.NoError(t, err)
 
-		child1 := newChildSpendingOutput(t, tx, 0, 7)
+		child1 := newChildSpendingOutput(t, fx.tx, 0, 7)
 		seedConflictingChild(t, ctx, store, child1)
 
 		removal := []utxo.ConflictingChildRemoval{
-			{ParentHash: tx.TxIDChainHash(), ChildHash: child1.TxIDChainHash()},
+			{ParentHash: fx.tx.TxIDChainHash(), ChildHash: child1.TxIDChainHash()},
 		}
 
 		// First call removes the entry.
 		require.NoError(t, store.RemoveFromConflictingChildren(ctx, removal))
-		assert.Empty(t, readConflictingChildren(t, store, client, tx.TxIDChainHash()))
+		assert.Empty(t, readConflictingChildren(t, store, client, fx.tx.TxIDChainHash()))
 
 		// Second identical call must succeed (list no longer contains the value).
 		require.NoError(t, store.RemoveFromConflictingChildren(ctx, removal))
-		assert.Empty(t, readConflictingChildren(t, store, client, tx.TxIDChainHash()))
+		assert.Empty(t, readConflictingChildren(t, store, client, fx.tx.TxIDChainHash()))
 	})
 }
 
 // TestAerospike_RemoveBlockIDs covers batched trimming of blockIDs from tx
 // records without deleting the tx.
 func TestAerospike_RemoveBlockIDs(t *testing.T) {
+	t.Parallel()
+
+	fx := newTxFixtures(t)
+
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
@@ -311,7 +318,6 @@ func TestAerospike_RemoveBlockIDs(t *testing.T) {
 	t.Cleanup(func() { deferFn() })
 
 	t.Run("empty slice is a no-op", func(t *testing.T) {
-		cleanDB(t, client)
 
 		require.NoError(t, store.RemoveBlockIDs(ctx, nil))
 		require.NoError(t, store.RemoveBlockIDs(ctx, []utxo.BlockIDsRemoval{}))
@@ -319,13 +325,13 @@ func TestAerospike_RemoveBlockIDs(t *testing.T) {
 		// A removal with an empty BlockIDs list should also be a no-op (skipped
 		// inside the implementation).
 		require.NoError(t, store.RemoveBlockIDs(ctx, []utxo.BlockIDsRemoval{
-			{TxHash: tx.TxIDChainHash(), BlockIDs: nil},
-			{TxHash: tx.TxIDChainHash(), BlockIDs: []uint32{}},
+			{TxHash: fx.tx.TxIDChainHash(), BlockIDs: nil},
+			{TxHash: fx.tx.TxIDChainHash(), BlockIDs: []uint32{}},
 		}))
 	})
 
 	t.Run("nil hash errors", func(t *testing.T) {
-		cleanDB(t, client)
+		*fx = *newTxFixtures(t)
 
 		err := store.RemoveBlockIDs(ctx, []utxo.BlockIDsRemoval{
 			{TxHash: nil, BlockIDs: []uint32{10}},
@@ -334,7 +340,7 @@ func TestAerospike_RemoveBlockIDs(t *testing.T) {
 	})
 
 	t.Run("missing tx record is tolerated", func(t *testing.T) {
-		cleanDB(t, client)
+		*fx = *newTxFixtures(t)
 
 		missing := chainhash.HashH([]byte("missing-tx"))
 		err := store.RemoveBlockIDs(ctx, []utxo.BlockIDsRemoval{
@@ -344,10 +350,10 @@ func TestAerospike_RemoveBlockIDs(t *testing.T) {
 	})
 
 	t.Run("removes subset of block IDs", func(t *testing.T) {
-		cleanDB(t, client)
+		*fx = *newTxFixtures(t)
 
 		// Create tx with blockIDs [10, 20, 30].
-		_, err := store.Create(ctx, tx, 1,
+		_, err := store.Create(ctx, fx.tx, 1,
 			utxo.WithMinedBlockInfo(
 				utxo.MinedBlockInfo{BlockID: 10, BlockHeight: 10, SubtreeIdx: 0},
 				utxo.MinedBlockInfo{BlockID: 20, BlockHeight: 11, SubtreeIdx: 0},
@@ -357,23 +363,23 @@ func TestAerospike_RemoveBlockIDs(t *testing.T) {
 		require.NoError(t, err)
 
 		// Sanity — all three block IDs present.
-		require.ElementsMatch(t, []uint32{10, 20, 30}, readBlockIDs(t, store, client, tx.TxIDChainHash()))
+		require.ElementsMatch(t, []uint32{10, 20, 30}, readBlockIDs(t, store, client, fx.tx.TxIDChainHash()))
 
 		// Remove [10, 30]; [20] must remain.
 		err = store.RemoveBlockIDs(ctx, []utxo.BlockIDsRemoval{
-			{TxHash: tx.TxIDChainHash(), BlockIDs: []uint32{10, 30}},
+			{TxHash: fx.tx.TxIDChainHash(), BlockIDs: []uint32{10, 30}},
 		})
 		require.NoError(t, err)
 
-		remaining := readBlockIDs(t, store, client, tx.TxIDChainHash())
+		remaining := readBlockIDs(t, store, client, fx.tx.TxIDChainHash())
 		assert.Equal(t, []uint32{20}, sortedUint32(remaining))
 	})
 
 	t.Run("batched across multiple txs", func(t *testing.T) {
-		cleanDB(t, client)
+		*fx = *newTxFixtures(t)
 
 		// tx with [10, 20].
-		_, err := store.Create(ctx, tx, 1,
+		_, err := store.Create(ctx, fx.tx, 1,
 			utxo.WithMinedBlockInfo(
 				utxo.MinedBlockInfo{BlockID: 10, BlockHeight: 10, SubtreeIdx: 0},
 				utxo.MinedBlockInfo{BlockID: 20, BlockHeight: 11, SubtreeIdx: 0},
@@ -382,7 +388,7 @@ func TestAerospike_RemoveBlockIDs(t *testing.T) {
 		require.NoError(t, err)
 
 		// coinbaseTx with [30, 40, 50].
-		_, err = store.Create(ctx, coinbaseTx, 1,
+		_, err = store.Create(ctx, fx.coinbaseTx, 1,
 			utxo.WithMinedBlockInfo(
 				utxo.MinedBlockInfo{BlockID: 30, BlockHeight: 12, SubtreeIdx: 0},
 				utxo.MinedBlockInfo{BlockID: 40, BlockHeight: 13, SubtreeIdx: 0},
@@ -393,13 +399,13 @@ func TestAerospike_RemoveBlockIDs(t *testing.T) {
 
 		// One batched call: trim [10] from tx, [40, 50] from coinbaseTx.
 		err = store.RemoveBlockIDs(ctx, []utxo.BlockIDsRemoval{
-			{TxHash: tx.TxIDChainHash(), BlockIDs: []uint32{10}},
-			{TxHash: coinbaseTx.TxIDChainHash(), BlockIDs: []uint32{40, 50}},
+			{TxHash: fx.tx.TxIDChainHash(), BlockIDs: []uint32{10}},
+			{TxHash: fx.coinbaseTx.TxIDChainHash(), BlockIDs: []uint32{40, 50}},
 		})
 		require.NoError(t, err)
 
-		assert.Equal(t, []uint32{20}, sortedUint32(readBlockIDs(t, store, client, tx.TxIDChainHash())))
-		assert.Equal(t, []uint32{30}, sortedUint32(readBlockIDs(t, store, client, coinbaseTx.TxIDChainHash())))
+		assert.Equal(t, []uint32{20}, sortedUint32(readBlockIDs(t, store, client, fx.tx.TxIDChainHash())))
+		assert.Equal(t, []uint32{30}, sortedUint32(readBlockIDs(t, store, client, fx.coinbaseTx.TxIDChainHash())))
 	})
 }
 
@@ -430,6 +436,10 @@ func drainConflictingIterator(t *testing.T, ctx context.Context, it utxo.Unmined
 // TestAerospike_GetConflictingTxIterator covers the partition-parallel scan
 // iterator that emits only conflicting=true records.
 func TestAerospike_GetConflictingTxIterator(t *testing.T) {
+	t.Parallel()
+
+	fx := newTxFixtures(t)
+
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
@@ -437,7 +447,7 @@ func TestAerospike_GetConflictingTxIterator(t *testing.T) {
 	logger := ulogger.NewErrorTestLogger(t)
 	tSettings := test.CreateBaseTestSettings(t)
 
-	client, store, ctx, deferFn := initAerospike(t, tSettings, logger)
+	client, store, ctx, deferFn := initAerospikeOwnServer(t, tSettings, logger)
 	t.Cleanup(func() { deferFn() })
 
 	t.Run("empty store returns nothing", func(t *testing.T) {
@@ -454,11 +464,11 @@ func TestAerospike_GetConflictingTxIterator(t *testing.T) {
 		cleanDB(t, client)
 
 		// Non-conflicting parent.
-		_, err := store.Create(ctx, tx, 0)
+		_, err := store.Create(ctx, fx.tx, 0)
 		require.NoError(t, err)
 
 		// Conflicting child (spends one of parent's outputs).
-		child := newChildSpendingOutput(t, tx, 0, 11)
+		child := newChildSpendingOutput(t, fx.tx, 0, 11)
 		_, err = store.Create(ctx, child, 1, utxo.WithConflicting(true))
 		require.NoError(t, err)
 
@@ -473,15 +483,15 @@ func TestAerospike_GetConflictingTxIterator(t *testing.T) {
 	t.Run("returns multiple conflicting records", func(t *testing.T) {
 		cleanDB(t, client)
 
-		_, err := store.Create(ctx, tx, 0)
+		_, err := store.Create(ctx, fx.tx, 0)
 		require.NoError(t, err)
 
 		// Three distinct conflicting children, each spending a different output
 		// of `tx` so they produce unique txids and have real parent references.
 		children := []*bt.Tx{
-			newChildSpendingOutput(t, tx, 0, 100),
-			newChildSpendingOutput(t, tx, 1, 101),
-			newChildSpendingOutput(t, tx, 2, 102),
+			newChildSpendingOutput(t, fx.tx, 0, 100),
+			newChildSpendingOutput(t, fx.tx, 1, 101),
+			newChildSpendingOutput(t, fx.tx, 2, 102),
 		}
 		expected := make([]string, 0, len(children))
 		for _, c := range children {
@@ -501,16 +511,16 @@ func TestAerospike_GetConflictingTxIterator(t *testing.T) {
 		cleanDB(t, client)
 
 		// Sanity — the fixture really is a coinbase.
-		require.True(t, coinbaseTx.IsCoinbase())
+		require.True(t, fx.coinbaseTx.IsCoinbase())
 
 		// Seed one legitimate non-coinbase conflicting tx so we can prove the
 		// iterator is still emitting real conflicts (and therefore the absence
 		// of the coinbase below is because of the filter, not because the
 		// iterator is broken).
-		_, err := store.Create(ctx, tx, 0)
+		_, err := store.Create(ctx, fx.tx, 0)
 		require.NoError(t, err)
 
-		child := newChildSpendingOutput(t, tx, 0, 55)
+		child := newChildSpendingOutput(t, fx.tx, 0, 55)
 		_, err = store.Create(ctx, child, 1, utxo.WithConflicting(true))
 		require.NoError(t, err)
 
@@ -519,16 +529,16 @@ func TestAerospike_GetConflictingTxIterator(t *testing.T) {
 		// because updateParentConflictingChildren walks inputs and a coinbase
 		// input references the zero hash (no real parent record exists).
 		var usedRawPutBins bool
-		_, createErr := store.Create(ctx, coinbaseTx, 0, utxo.WithConflicting(true))
+		_, createErr := store.Create(ctx, fx.coinbaseTx, 0, utxo.WithConflicting(true))
 		if createErr != nil {
 			t.Logf("store.Create(coinbaseTx, WithConflicting(true)) returned error (falling back to raw PutBins): %v", createErr)
 
 			// Fall back: create the coinbase without the flag, then flip the
 			// Conflicting bin directly on the record via the raw client.
-			_, err = store.Create(ctx, coinbaseTx, 0)
+			_, err = store.Create(ctx, fx.coinbaseTx, 0)
 			require.NoError(t, err)
 
-			cbKey, keyErr := aerospike.NewKey(store.GetNamespace(), store.GetName(), coinbaseTx.TxIDChainHash().CloneBytes())
+			cbKey, keyErr := aerospike.NewKey(store.GetNamespace(), store.GetName(), fx.coinbaseTx.TxIDChainHash().CloneBytes())
 			require.NoError(t, keyErr)
 
 			writePolicy := util.GetAerospikeWritePolicy(tSettings, 0)
@@ -541,7 +551,7 @@ func TestAerospike_GetConflictingTxIterator(t *testing.T) {
 
 		// Verify the coinbase record really does carry conflicting=true now —
 		// otherwise the assertion below would be a tautology.
-		cbKey, err := aerospike.NewKey(store.GetNamespace(), store.GetName(), coinbaseTx.TxIDChainHash().CloneBytes())
+		cbKey, err := aerospike.NewKey(store.GetNamespace(), store.GetName(), fx.coinbaseTx.TxIDChainHash().CloneBytes())
 		require.NoError(t, err)
 
 		rec, aeroErr := client.Get(util.GetAerospikeReadPolicy(tSettings), cbKey, fields.Conflicting.String(), fields.IsCoinbase.String())
@@ -561,7 +571,7 @@ func TestAerospike_GetConflictingTxIterator(t *testing.T) {
 		}
 
 		// Coinbase must NOT appear even though its Conflicting bin is true.
-		_, cbPresent := collectedSet[coinbaseTx.TxIDChainHash().String()]
+		_, cbPresent := collectedSet[fx.coinbaseTx.TxIDChainHash().String()]
 		assert.False(t, cbPresent, "coinbase tx must be filtered out of GetConflictingTxIterator; collected=%v", sortedHashStrings(collected))
 
 		// The non-coinbase conflicting child must appear — this proves the

@@ -33,6 +33,7 @@ import (
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/kafka"
+	"github.com/bsv-blockchain/teranode/util/lanereader"
 	"github.com/bsv-blockchain/teranode/util/servicemanager"
 	"github.com/bsv-blockchain/teranode/util/tracing"
 	"github.com/felixge/fgprof"
@@ -122,6 +123,13 @@ func (d *Daemon) startServices(ctx context.Context, logger ulogger.Logger, appSe
 		{startPropagation, func() error { return d.startPropagationService(ctx, appSettings, createLogger) }},
 		{startLegacy, func() error { return d.startLegacyService(ctx, appSettings, createLogger) }},
 		{startPruner, func() error { return d.startPrunerService(ctx, appSettings, createLogger) }},
+	}
+
+	// At utxostore_laneMigration shadow, a process running a service that checks whether a parent
+	// is mined keeps an index of the lane map and answers those checks from it too
+	// (util/lanereader).
+	if laneReaderWanted(args, appSettings.Validator.UseLocalValidator) {
+		d.startLaneReader(ctx, appSettings, createLogger)
 	}
 
 	// Loop through and start each service if needed
@@ -772,6 +780,49 @@ func (d *Daemon) startBlockAssemblyService(ctx context.Context, appSettings *set
 		blockchainClient,
 		blockassembly.WithTxMetaProducer(txMetaProducer),
 	))
+}
+
+// needsLaneReader reports whether a process keeps a lane index: one running subtree validation,
+// block validation or the validator, which check parents themselves, block assembly, whose restart
+// dry run judges records against it (services/blockassembly/lane_restart.go), or a service that sends its
+// transactions to a validator (propagation, legacy, RPC) when that validator runs in-process
+// (useLocalValidator). With a remote validator, such a service's parent checks are made, and
+// counted, in the validator's process, so its own index would answer nothing.
+func needsLaneReader(subtreeValidation, blockValidation, validator, blockAssembly, validatorClient, localValidator bool) bool {
+	return subtreeValidation || blockValidation || validator || blockAssembly || (validatorClient && localValidator)
+}
+
+// laneReaderWanted is needsLaneReader for the services args and the config switch on, as Start
+// reads them.
+func laneReaderWanted(args []string, localValidator bool) bool {
+	return needsLaneReader(
+		serviceEnabled(serviceSubtreeValidationFormal, args),
+		serviceEnabled(serviceBlockValidationFormal, args),
+		serviceEnabled(serviceValidatorFormal, args),
+		serviceEnabled(serviceBlockAssemblyFormal, args),
+		serviceEnabled(servicePropagationFormal, args) || serviceEnabled(serviceLegacyFormal, args) || serviceEnabled(serviceRPCFormal, args),
+		localValidator,
+	)
+}
+
+// laneReaderConnectRetry is how long the lane index waits before connecting to the blockchain
+// service again.
+const laneReaderConnectRetry = 5 * time.Second
+
+// startLaneReader starts the process's lane index at utxostore_laneMigration shadow; at off it
+// starts nothing and opens no connection. The index's blockchain client connects in the
+// background: creating it waits for the blockchain service, which this same process may not have
+// started yet, so the index does not hold up a service's start.
+func (d *Daemon) startLaneReader(ctx context.Context, appSettings *settings.Settings, createLogger func(string) ulogger.Logger) {
+	if !appSettings.UtxoStore.LaneMigration.Stamps() {
+		lanereader.Start(ctx, nil, appSettings, nil)
+
+		return
+	}
+
+	lanereader.StartConnecting(ctx, createLogger(loggerLaneReader), appSettings, func(ctx context.Context) (lanereader.Source, error) {
+		return d.daemonStores.GetBlockchainClient(ctx, createLogger(loggerBlockchainClient), appSettings, serviceLaneReader)
+	}, laneReaderConnectRetry)
 }
 
 // startSubtreeValidationService initializes and adds the SubtreeValidation service to the ServiceManager.

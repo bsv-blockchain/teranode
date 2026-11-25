@@ -23,6 +23,10 @@ import (
 const aerospikeInvalidValueMsg = "[Aerospike] Invalid value %s=%v"
 
 var aerospikeConnectionMutex sync.Mutex
+
+// aerospikePoliciesMu guards the policy values below: getAerospikeClient writes them while
+// GetAerospike*Policy may be reading them for stores that are already running.
+var aerospikePoliciesMu sync.RWMutex
 var aerospikeConnections map[string]*uaerospike.Client
 
 var readMaxRetries int
@@ -53,6 +57,9 @@ var queryTotalTimeout time.Duration
 var querySocketTimeout time.Duration
 var querySleepBetweenRetries time.Duration
 var querySleepMultiplier float64
+
+// aerospikeStatsMu serialises processAerospikeStats.
+var aerospikeStatsMu sync.Mutex
 
 var aerospikePrometheusMetrics = *safemap.New[string, prometheus.Counter]()
 var aerospikePrometheusHistograms = *safemap.New[string, prometheus.Histogram]()
@@ -146,6 +153,10 @@ func getAerospikeClient(logger ulogger.Logger, url *url.URL, tSettings *settings
 	if tSettings.Aerospike.UseDefaultBasePolicies {
 		logger.Warnf("Using default aerospike connection (base) policies")
 	} else {
+		aerospikePoliciesMu.Lock()
+		unlockPolicies := sync.OnceFunc(aerospikePoliciesMu.Unlock)
+		defer unlockPolicies()
+
 		readPolicyURL := tSettings.Aerospike.ReadPolicyURL
 		if readPolicyURL == nil {
 			return nil, errors.NewConfigurationError("no aerospike_readPolicy found")
@@ -302,6 +313,8 @@ func getAerospikeClient(logger ulogger.Logger, url *url.URL, tSettings *settings
 				return nil, err
 			}
 		}
+
+		unlockPolicies() // parsed; connecting below can take a while
 
 		// todo optimize these https://github.com/aerospike/aerospike-client-go/issues/256#issuecomment-479964112
 		// todo optimize read policies
@@ -547,6 +560,11 @@ func processAerospikeStats(
 	latencyBuckets []float64,
 	nonAlphanumericRegex *regexp.Regexp,
 ) {
+	// Every client runs its own stats loop, and the loops share the delta state and the metrics
+	// they create; two clients in one process raced on both.
+	aerospikeStatsMu.Lock()
+	defer aerospikeStatsMu.Unlock()
+
 	// stats are: map[string]interface {} of
 	// "server" -> map[string]interface{}
 	// "cluster-aggregated-stats" -> map[string]interface{}
@@ -817,6 +835,9 @@ func GetAerospikeReadPolicy(tSettings *settings.Settings, options ...AerospikeRe
 		return readPolicy
 	}
 
+	aerospikePoliciesMu.RLock()
+	defer aerospikePoliciesMu.RUnlock()
+
 	readPolicy.MaxRetries = readMaxRetries
 	readPolicy.TotalTimeout = readTimeout
 	readPolicy.SocketTimeout = readSocketTimeout
@@ -883,6 +904,9 @@ func GetAerospikeWritePolicy(tSettings *settings.Settings, generation uint32, op
 		return writePolicy
 	}
 
+	aerospikePoliciesMu.RLock()
+	defer aerospikePoliciesMu.RUnlock()
+
 	writePolicy.MaxRetries = writeMaxRetries
 	writePolicy.TotalTimeout = writeTimeout
 	writePolicy.SocketTimeout = writeSocketTimeout
@@ -907,6 +931,9 @@ func GetAerospikeBatchPolicy(tSettings *settings.Settings) *aerospike.BatchPolic
 	if tSettings.Aerospike.UseDefaultPolicies {
 		return batchPolicy
 	}
+
+	aerospikePoliciesMu.RLock()
+	defer aerospikePoliciesMu.RUnlock()
 
 	batchPolicy.TotalTimeout = batchTotalTimeout
 	batchPolicy.SocketTimeout = batchSocketTimeout
@@ -954,6 +981,9 @@ func GetAerospikeQueryPolicy(tSettings *settings.Settings) *aerospike.QueryPolic
 	if tSettings.Aerospike.UseDefaultPolicies {
 		return queryPolicy
 	}
+
+	aerospikePoliciesMu.RLock()
+	defer aerospikePoliciesMu.RUnlock()
 
 	queryPolicy.MaxRetries = queryMaxRetries
 	queryPolicy.TotalTimeout = queryTotalTimeout

@@ -107,6 +107,10 @@ type BlockAssembler struct {
 	// logger provides logging functionality for the assembler
 	logger ulogger.Logger
 
+	// laneRestart runs the lanes restart dry run after each reload, at utxostore_laneMigration
+	// shadow (lane_restart.go).
+	laneRestart laneRestartRunner
+
 	// templateTxEra is the transaction rules the template was last loaded from the UTXO
 	// store under; nil before the first load. A block that moves the subtree processor to
 	// other rules makes the template stale until a reload succeeds. See
@@ -376,7 +380,8 @@ type blockWithMeta struct {
 type BlockAssemblerOption func(*blockAssemblerOptions)
 
 type blockAssemblerOptions struct {
-	txMetaEvictor *subtreeprocessor.TxMetaEvictor
+	txMetaEvictor   *subtreeprocessor.TxMetaEvictor
+	laneBitmapsKeep subtreeprocessor.LaneBitmapsKeeper
 }
 
 // WithTxMetaEvictor makes the assembler (and its subtree processor) publish txmeta
@@ -384,6 +389,12 @@ type blockAssemblerOptions struct {
 // disables publishing.
 func WithTxMetaEvictor(e *subtreeprocessor.TxMetaEvictor) BlockAssemblerOption {
 	return func(o *blockAssemblerOptions) { o.txMetaEvictor = e }
+}
+
+// WithLaneBitmapsKeeper makes the subtree processor keep the lane bitmaps of each subtree it
+// chains with k, at utxostore_laneMigration shadow (subtreeprocessor.WithLaneBitmapsKeeper).
+func WithLaneBitmapsKeeper(k subtreeprocessor.LaneBitmapsKeeper) BlockAssemblerOption {
+	return func(o *blockAssemblerOptions) { o.laneBitmapsKeep = k }
 }
 
 // NewBlockAssembler creates and initializes a new BlockAssembler instance.
@@ -435,6 +446,10 @@ func NewBlockAssembler(ctx context.Context, logger ulogger.Logger, tSettings *se
 
 	if options.txMetaEvictor != nil {
 		stpOpts = append(stpOpts, subtreeprocessor.WithTxMetaEvictor(options.txMetaEvictor))
+	}
+
+	if options.laneBitmapsKeep != nil {
+		stpOpts = append(stpOpts, subtreeprocessor.WithLaneBitmapsKeeper(options.laneBitmapsKeep))
 	}
 
 	subtreeProcessor, err := subtreeprocessor.NewSubtreeProcessor(ctx, logger, tSettings, subtreeStore, blockchainClient, utxoStore, newSubtreeChan, stpOpts...)
@@ -2774,6 +2789,17 @@ func (b *BlockAssembler) AddTxBatchBounded(nodes []subtree.Node, txInpoints []*s
 	return b.subtreeProcessor.AddBatchBounded(nodes, txInpoints, inBlock, validatedHeights)
 }
 
+// AddPositionedTxBatchBounded is AddTxBatchBounded for a batch that carries each transaction's own
+// lane position (util/lane), positions[i] for nodes[i] and 0 for none, at utxostore_laneMigration
+// shadow. A nil positions takes AddTxBatchBounded's path unchanged.
+func (b *BlockAssembler) AddPositionedTxBatchBounded(nodes []subtree.Node, txInpoints []*subtree.TxInpoints, inBlock bool, validatedHeights []uint32, positions []uint64) subtreeprocessor.Admission {
+	if positions == nil {
+		return b.subtreeProcessor.AddBatchBounded(nodes, txInpoints, inBlock, validatedHeights)
+	}
+
+	return b.subtreeProcessor.AddPositionedBatchBounded(nodes, txInpoints, inBlock, validatedHeights, positions)
+}
+
 // HeldCount returns the transactions held in memory: queued, dequeued but not yet counted, and
 // already in subtrees.
 //
@@ -4553,6 +4579,10 @@ func (b *BlockAssembler) loadUnminedTransactions(ctx context.Context, isReload b
 		bestBlockHeaderIDsMap[id] = true
 	}
 
+	// At utxostore_laneMigration shadow, what this reload reads and keeps is gathered for the lanes
+	// restart dry run, which starts once the reload has succeeded; nil at off.
+	laneToday := b.newLaneRestartToday(bestBlockHeaderIDsMap, time.Now())
+
 	b.logger.Infof("[loadUnminedTransactions] requesting unmined tx iterator from UTXO store")
 	start := time.Now()
 	it, err := b.unminedTxIteratorForLoad()
@@ -4734,6 +4764,8 @@ func (b *BlockAssembler) loadUnminedTransactions(ctx context.Context, isReload b
 
 	workerResults = nil // release memory
 
+	laneToday.noteRead(uint64(totalProcessed.Load())) //nolint:gosec // a count
+
 	// Validation can mark conflicts and their descendants. Drain and close the
 	// iterator before those writes: SQLite's open read cursor otherwise blocks
 	// the write transaction, while a worker waits for it and prevents the drain.
@@ -4839,6 +4871,9 @@ func (b *BlockAssembler) loadUnminedTransactions(ctx context.Context, isReload b
 		return err
 	}
 
+	laneToday.expect(len(unminedTransactions))
+	laneToday.keep(unminedTransactions)
+
 	// Use batch insertion if UnminedLoadingBatchSize is set (> 0)
 	batchSize := b.settings.BlockAssembly.UnminedLoadingBatchSize // default 10 million
 	if batchSize > 0 {
@@ -4880,9 +4915,13 @@ func (b *BlockAssembler) loadUnminedTransactions(ctx context.Context, isReload b
 	} else {
 		// Sequential mode: use AddDirectly for each transaction
 		for idx, unminedTransaction := range unminedTransactions {
-			if isReload {
+			switch {
+			case unminedTransaction.LanePosition != 0:
+				// at utxostore_laneMigration shadow the tx's lane position goes into the pool with it
+				err = b.subtreeProcessor.AddDirectlyAt(unminedTransaction.Node, unminedTransaction.TxInpoints, unminedTransaction.LanePosition, true, isReload)
+			case isReload:
 				err = b.subtreeProcessor.AddDirectlyReportOnly(unminedTransaction.Node, unminedTransaction.TxInpoints, true)
-			} else {
+			default:
 				err = b.subtreeProcessor.AddDirectly(unminedTransaction.Node, unminedTransaction.TxInpoints, true)
 			}
 			if err != nil {
@@ -4925,6 +4964,8 @@ func (b *BlockAssembler) loadUnminedTransactions(ctx context.Context, isReload b
 			b.logger.Infof("[BlockAssembler] unlocked %d previously locked unmined transactions", len(lockedTransactions))
 		}
 	}
+
+	b.startLaneRestartDryRun(ctx, laneToday)
 
 	return nil
 }
@@ -5584,6 +5625,9 @@ func (b *BlockAssembler) loadUnminedSorted(ctx context.Context, it utxo.UnminedT
 		Dirs:          unminedSortDirs(b.settings.BlockAssembly.UnminedTxDiskSortPaths),
 		BufferRecords: b.settings.BlockAssembly.UnminedTxSortBufferRecords,
 		WithInpoints:  true,
+		// At utxostore_laneMigration shadow each tx's lane position goes through the sort into
+		// the pool.
+		WithPositions: b.settings.UtxoStore.LaneMigration.Stamps(),
 	})
 	if err != nil {
 		return errors.NewProcessingError("error creating unmined transaction sorter", err)
@@ -5606,6 +5650,9 @@ func (b *BlockAssembler) loadUnminedSorted(ctx context.Context, it utxo.UnminedT
 
 	iteratorStart := time.Now()
 	lastLogTime := iteratorStart
+
+	// At utxostore_laneMigration shadow, gathered for the lanes restart dry run; nil at off.
+	laneToday := b.newLaneRestartToday(bestBlockHeaderIDsMap, iteratorStart)
 
 	var totalProcessed, skippedCount, alreadyMinedCount int64
 
@@ -5661,7 +5708,7 @@ func (b *BlockAssembler) loadUnminedSorted(ctx context.Context, it utxo.UnminedT
 				}
 			}
 
-			if err = sorter.Add(int64(unminedTx.CreatedAt), *unminedTx.Node, unminedTx.TxInpoints, validatedHeight); err != nil {
+			if err = sorter.AddAt(int64(unminedTx.CreatedAt), *unminedTx.Node, unminedTx.TxInpoints, validatedHeight, unminedTx.LanePosition); err != nil {
 				return errors.NewProcessingError("error buffering unmined transaction %s for sorting", unminedTx.Node.Hash, err)
 			}
 
@@ -5684,6 +5731,9 @@ func (b *BlockAssembler) loadUnminedSorted(ctx context.Context, it utxo.UnminedT
 	prometheusBlockAssemblerIteratorTransactionsStats.WithLabelValues("false", "already_mined").Add(float64(alreadyMinedCount))
 	prometheusBlockAssemblerIteratorTransactionsStats.WithLabelValues("false", "locked").Add(float64(len(lockedTransactions)))
 	prometheusBlockAssemblerIteratorTransactionsStats.WithLabelValues("false", "added").Add(float64(sorter.Len()))
+
+	laneToday.noteRead(uint64(totalProcessed)) //nolint:gosec // a count
+	laneToday.expect(0)
 
 	// Fix data inconsistencies
 	if len(markAsMinedOnLongestChain) > 0 {
@@ -5717,6 +5767,8 @@ func (b *BlockAssembler) loadUnminedSorted(ctx context.Context, it utxo.UnminedT
 		orderEqualCreatedAtRunsParentsFirstWithHeights(batch, validatedHeights)
 
 		batch = b.subtreeProcessor.FilterUnminedTxEra(batch, validatedHeights)
+
+		laneToday.keepSorted(batch)
 
 		var addErr error
 		if isReload {
@@ -5752,6 +5804,8 @@ func (b *BlockAssembler) loadUnminedSorted(ctx context.Context, it utxo.UnminedT
 		}
 		b.logger.Infof("[BlockAssembler] unlocked %d previously locked unmined transactions", len(lockedTransactions))
 	}
+
+	b.startLaneRestartDryRun(ctx, laneToday)
 
 	return nil
 }
