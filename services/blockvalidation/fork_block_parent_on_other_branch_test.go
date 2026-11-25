@@ -466,6 +466,9 @@ func TestValidateBlock_AcceptsMainChainBlockSpendingParentMinedPastThePrefetchWi
 
 	for _, route := range forkParentRoutes {
 		t.Run(route.name, func(t *testing.T) {
+			// each route builds its own stores; storing 10,002 blocks is most of the cost
+			t.Parallel()
+
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 
