@@ -27,8 +27,9 @@ import (
 // holding the output, is its spender's. The pages a master names are read in one batch per chunk,
 // only for the lane rule (teranode_lane_pruner_extra_reads_total kind page). A page record the query
 // returns on its own is judged with its master, not again. A page another worker has already
-// deleted, which only happens when today deletes its master, makes the master cannot_judge
-// spender_unread.
+// deleted makes the master cannot_judge spender_unread. Outside defensive mode that happens only
+// when today deletes the master. In defensive mode a page is deleted on its own children, so a
+// master today keeps for an unstable child of its own can be counted spender_unread.
 //
 // At off no Reader exists, newLaneShadow returns nil, the query asks for exactly the bins it asked
 // for before, and every method below does nothing.
@@ -64,6 +65,17 @@ func (s *Service) laneQueryBins(binNames []string) []string {
 	}
 
 	return binNames
+}
+
+// abandon counts the chunk's records unjudged, for a chunk whose processing failed before its delete
+// batch, and adds the counts to the metrics.
+func (l *laneShadow) abandon() {
+	if l == nil {
+		return
+	}
+
+	l.judge.Unjudged("chunk_error", len(l.records))
+	l.judge.Done()
 }
 
 // markDeleted records that today deletes rec.

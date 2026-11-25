@@ -23,17 +23,21 @@ import (
 // column), and the spender's position is not on it, so the rule reads it from the spender's identity
 // row, containment rows or preserved copy (teranode_lane_pruner_extra_reads_total kind position).
 //
-// Every row of each retiring partition is read and judged, in Go, against one snapshot of the lane
-// index taken when the carried set is read, before the copy-forward moves the kept rows out and the
-// partition drops. The drop never waits on a failed judge: an error or the time bound ends the
-// leaf's judging, is counted (unjudged leaf_error) and logged, and the drop goes on.
+// Every row of a retiring partition is read and judged, in Go, against one snapshot of the lane index
+// taken when the carried set is read, before the copy-forward moves the kept rows out and the
+// partition drops. The judging must not slow the drops, so it is bounded three ways. A pass judges
+// only when it retires a single journal partition, as it does at the tip once every 288 blocks; a
+// pass catching up a backlog judges none of them (unjudged backlog). A pass spends at most
+// laneJudgePassBudget judging; an error or the budget ends a partition's judging (unjudged
+// leaf_error) and the drop goes on. And a partition is judged once per process, so a pass that
+// retries a failed drop does not count its rows again.
 //
 // What this does not judge: tx_body partitions and their carry, tx_mined partitions and
 // preserved_parent expiry. None of those deletes a parent's slot; each is a copy or a body whose
 // retention is set by height alone.
 
-// laneJudgeLeafTimeout bounds the lane rule's reads of one retiring journal partition.
-var laneJudgeLeafTimeout = 10 * time.Minute
+// laneJudgePassBudget bounds the time one pruner pass spends judging.
+var laneJudgePassBudget = 2 * time.Minute
 
 // laneJudgeBatch is how many journal rows one round of position reads covers.
 const laneJudgeBatch = 10_000
@@ -61,13 +65,44 @@ SELECT k.txid, COALESCE(i.lane_position, m.lane_position, p.lane_position)
 type laneJournalJudge struct {
 	s     *Store
 	judge *lanereader.PruneJudge
-	// kept is the carried set, each (output key, parent, spender) as one string.
-	kept map[string]struct{}
+	// kept is the carried set, each (output key, parent, spender).
+	kept map[carriedKey]struct{}
+	// backlog is a pass retiring more than one journal partition, which judges none.
+	backlog bool
+	// deadline ends the pass's judging.
+	deadline time.Time
+}
+
+// carriedKey is one carried spend: the 16-byte output key, the parent and the spender.
+type carriedKey [16 + 32 + 32]byte
+
+func newCarriedKey(ukey, parent, spender []byte) carriedKey {
+	var k carriedKey
+
+	copy(k[:16], ukey)
+	copy(k[16:48], parent)
+	copy(k[48:], spender)
+
+	return k
+}
+
+// retiringJournalLeaves counts the spend_journal partitions below cutoff, the ones a pass retires.
+func retiringJournalLeaves(leaves []leafState, cutoff uint32) int {
+	n := 0
+
+	for _, l := range leaves {
+		if l.parent == "spend_journal" && l.leaf < cutoff {
+			n++
+		}
+	}
+
+	return n
 }
 
 // newLaneJournalJudge returns the pass's judge, against the index's snapshot now, with carry today's
-// keep set. It returns nil at off, where no Reader exists.
-func (s *Store) newLaneJournalJudge(carry *copyForwardSet) *laneJournalJudge {
+// keep set, for a pass retiring retiring journal partitions. It returns nil at off, where no Reader
+// exists.
+func (s *Store) newLaneJournalJudge(carry *copyForwardSet, retiring int) *laneJournalJudge {
 	var retention uint32
 	if s.settings != nil {
 		retention = s.settings.GlobalBlockHeightRetention
@@ -78,16 +113,17 @@ func (s *Store) newLaneJournalJudge(carry *copyForwardSet) *laneJournalJudge {
 		return nil
 	}
 
-	kept := make(map[string]struct{}, len(carry.ukeys))
-	for i := range carry.ukeys {
-		kept[carriedKey(carry.ukeys[i], carry.parents[i], carry.spenders[i])] = struct{}{}
+	l := &laneJournalJudge{s: s, judge: j, backlog: retiring > 1, deadline: time.Now().Add(laneJudgePassBudget)}
+	if l.backlog {
+		return l
 	}
 
-	return &laneJournalJudge{s: s, judge: j, kept: kept}
-}
+	l.kept = make(map[carriedKey]struct{}, len(carry.ukeys))
+	for i := range carry.ukeys {
+		l.kept[newCarriedKey(carry.ukeys[i], carry.parents[i], carry.spenders[i])] = struct{}{}
+	}
 
-func carriedKey(ukey, parent, spender []byte) string {
-	return string(ukey) + string(parent) + string(spender)
+	return l
 }
 
 // done adds the pass's counts to the metrics.
@@ -103,7 +139,24 @@ func (l *laneJournalJudge) judgeLeaf(ctx context.Context, leaf uint32) {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(ctx, laneJudgeLeafTimeout)
+	if _, seen := l.s.laneJudgedLeaves.Load(leaf); seen {
+		return
+	}
+
+	switch {
+	case l.backlog:
+		l.judge.Unjudged("backlog", 1)
+
+		return
+	case !time.Now().Before(l.deadline):
+		l.judge.Unjudged("budget", 1)
+
+		return
+	}
+
+	l.s.laneJudgedLeaves.Store(leaf, struct{}{})
+
+	ctx, cancel := context.WithDeadline(ctx, l.deadline)
 	defer cancel()
 
 	start := time.Now()
@@ -246,7 +299,7 @@ func (l *laneJournalJudge) judgeBatch(ctx context.Context, batch []laneJournalRo
 
 		c.Spenders = append(c.Spenders[:0], lanereader.PruneSpender{Hash: spender, Pos: positions[string(r.spender)]})
 
-		_, kept := l.kept[carriedKey(r.ukey, r.parent, r.spender)]
+		_, kept := l.kept[newCarriedKey(r.ukey, r.parent, r.spender)]
 		l.judge.Judge(!kept, &c)
 	}
 

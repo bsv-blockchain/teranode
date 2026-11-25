@@ -41,7 +41,7 @@ func initPruneMetrics() {
 			Namespace: "teranode",
 			Subsystem: "lane_pruner",
 			Name:      "unjudged_total",
-			Help:      "Pruning decisions the lane rule did not judge, by store and reason (aerospike: record_error, page; utxoset: read_error)",
+			Help:      "Pruning decisions the lane rule did not judge, by store and reason (aerospike: record_error, a record the query returned with an error or no txid, and chunk_error, the records of a chunk whose processing failed; utxoset: leaf_error, one per retiring journal partition whose judging stopped early, and budget, one per partition the pass's time budget left unjudged)",
 		}, []string{"store", "reason"})
 		prometheusLanePrunerSeconds = promauto.NewCounterVec(prometheus.CounterOpts{
 			Namespace: "teranode",

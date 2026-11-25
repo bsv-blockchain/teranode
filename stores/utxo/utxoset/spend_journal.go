@@ -448,7 +448,7 @@ func (s *Store) dropSpendJournalPartitionsBelow(ctx context.Context, height uint
 				}
 
 				carry = c
-				lanes = s.newLaneJournalJudge(carry)
+				lanes = s.newLaneJournalJudge(carry, retiringJournalLeaves(leaves, cutoff))
 			}
 
 			// Before the copy-forward moves the kept rows out of the leaf.

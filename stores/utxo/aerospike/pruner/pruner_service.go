@@ -484,7 +484,7 @@ func (s *Service) partitionWorker(
 	// UnminedSince and Conflicting are needed to protect currently-unmined records (see dropUnminedRecords).
 	// The inputs bin is not scanned: nothing reads a record's inputs to update its parents any more, and
 	// an external record reads them from its blob.
-	stmt.BinNames = s.queryBinNames(lanereader.Current() != nil)
+	stmt.BinNames = s.queryBinNames()
 
 	// Create partition filter for this worker's range
 	partitionFilter := aerospike.NewPartitionFilterByRange(partitionStart, partitionCount)
@@ -617,9 +617,11 @@ func (s *Service) partitionWorker(
 	return totalProcessed, totalSkipped, nil
 }
 
-// queryBinNames is the bins the delete-at-height query reads; with laneShadow, at
+// queryBinNames is the bins the delete-at-height query reads; when the process has a lane reader, at
 // utxostore_laneMigration shadow, also those the lane rule needs (laneQueryBins).
-func (s *Service) queryBinNames(laneShadow bool) []string {
+func (s *Service) queryBinNames() []string {
+	laneShadow := lanereader.Current() != nil
+
 	binNames := []string{s.fieldTxID, s.fieldExternal, s.fieldTotalExtraRecs, s.fieldUnminedSince, s.fieldConflicting}
 	if s.defensiveEnabled {
 		binNames = append(binNames, s.fieldUtxos)
@@ -1013,6 +1015,8 @@ func (s *Service) processRecordChunk(ctx context.Context, blockHeight uint32, ch
 		if isExternal && external {
 			inputs, err := s.getTxInputsFromBins(ctx, blockHeight, rec.Record.Bins, txHash)
 			if err != nil {
+				lanes.abandon()
+
 				return 0, 0, err
 			}
 

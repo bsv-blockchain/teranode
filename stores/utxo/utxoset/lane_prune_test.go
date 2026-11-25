@@ -240,3 +240,93 @@ func TestJournalDropAtOffJudgesNothing(t *testing.T) {
 	require.Equal(t, rows, journalReads(t, "journal_row"))
 	require.Equal(t, noPosition, journalVerdicts(t, lanereader.PruneDelete, lanereader.PruneCannotJudge, lanereader.ReasonNoPosition))
 }
+
+func journalUnjudged(t *testing.T, reason string) float64 {
+	return lanePrunerMetric(t, "teranode_lane_pruner_unjudged_total", map[string]string{"store": lanereader.PruneStoreUtxoset, "reason": reason})
+}
+
+// TestJournalDropJudgingIsBoundedAndNeverHoldsTheDrop: a pass whose time budget is spent judges
+// nothing more, counts the partition unjudged, and still drops it, carrying the waiting spend.
+func TestJournalDropJudgingIsBoundedAndNeverHoldsTheDrop(t *testing.T) {
+	s, ctx := newLaneCopyStore(t)
+	installJournalLaneIndex(t, journalIndexBlock)
+
+	budget := laneJudgePassBudget
+	laneJudgePassBudget = 0
+	t.Cleanup(func() { laneJudgePassBudget = budget })
+
+	parent := mkTx(t, 2, 5_000)
+	_, err := s.Create(ctx, parent, 1_000, utxo.WithLanePosition(journalParentPos), minedAt(1_000, 1))
+	require.NoError(t, err)
+
+	spendWith(t, s, ctx, parent, 0, 1_010, utxo.WithLanePosition(journalUnmined))
+	spendWith(t, s, ctx, parent, 1, 1_010, utxo.WithLanePosition(journalSettled), minedAt(1_010, 2))
+
+	require.NoError(t, s.SetBlockHeight(1_728))
+
+	unjudged := journalUnjudged(t, "budget")
+	rows := journalReads(t, "journal_row")
+
+	dropped, err := s.dropSpendJournalPartitionsBelow(ctx, 1_440)
+	require.NoError(t, err)
+	require.Positive(t, dropped)
+
+	require.Equal(t, unjudged+1, journalUnjudged(t, "budget"))
+	require.Equal(t, rows, journalReads(t, "journal_row"), "no row read")
+
+	_, carried := journalLane(t, s, ctx, parent, 0)
+	require.True(t, carried, "the waiting spend is carried")
+
+	_, kept := journalLane(t, s, ctx, parent, 1)
+	require.False(t, kept, "the mined spend dropped with its partition")
+}
+
+// TestJournalDropJudgesNoBacklog: a pass retiring more than one journal partition, a backlog, judges
+// none of them, so catching up is never slowed.
+func TestJournalDropJudgesNoBacklog(t *testing.T) {
+	s, ctx := newLaneCopyStore(t)
+	installJournalLaneIndex(t, journalIndexBlock)
+
+	parent := mkTx(t, 2, 5_000)
+	_, err := s.Create(ctx, parent, 700, utxo.WithLanePosition(journalParentPos), minedAt(700, 1))
+	require.NoError(t, err)
+
+	// Spends at 710 and 1,010 land in two journal partitions, both below the cutoff at 1,440.
+	spendWith(t, s, ctx, parent, 0, 710, utxo.WithLanePosition(journalSettled), minedAt(710, 2))
+	spendWith(t, s, ctx, parent, 1, 1_010, utxo.WithLanePosition(journalSettled2), minedAt(1_010, 3))
+
+	require.NoError(t, s.SetBlockHeight(1_728))
+
+	backlog := journalUnjudged(t, "backlog")
+	rows := journalReads(t, "journal_row")
+
+	_, err = s.dropSpendJournalPartitionsBelow(ctx, 1_440)
+	require.NoError(t, err)
+
+	require.Equal(t, backlog+2, journalUnjudged(t, "backlog"))
+	require.Equal(t, rows, journalReads(t, "journal_row"))
+}
+
+// TestJournalLeafIsJudgedOnce: a partition already judged in this process is not judged again by a
+// later pass, as when its drop failed and is retried.
+func TestJournalLeafIsJudgedOnce(t *testing.T) {
+	s, ctx := newLaneCopyStore(t)
+	installJournalLaneIndex(t, journalIndexBlock)
+
+	s.laneJudgedLeaves.Store(uint32(1_010/SpendJournalPartitionBlocks), struct{}{})
+
+	parent := mkTx(t, 1, 5_000)
+	_, err := s.Create(ctx, parent, 1_000, utxo.WithLanePosition(journalParentPos), minedAt(1_000, 1))
+	require.NoError(t, err)
+
+	spendWith(t, s, ctx, parent, 0, 1_010, utxo.WithLanePosition(journalSettled), minedAt(1_010, 2))
+
+	require.NoError(t, s.SetBlockHeight(1_728))
+
+	rows := journalReads(t, "journal_row")
+
+	_, err = s.dropSpendJournalPartitionsBelow(ctx, 1_440)
+	require.NoError(t, err)
+
+	require.Equal(t, rows, journalReads(t, "journal_row"))
+}

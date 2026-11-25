@@ -178,6 +178,8 @@ type PruneJudge struct {
 	unjudged map[string]uint64
 	// elapsed is the time the store reported in the lane rule (Time).
 	elapsed time.Duration
+	// gateKeys are the disagreement log's keys for this store, today-only then lanes-only.
+	gateKeys [2]string
 }
 
 // PruneJudge returns a judge for one batch of store's pruning decisions, with the depth
@@ -192,7 +194,8 @@ func (r *Reader) PruneJudge(store string, retention uint32) *PruneJudge {
 
 	start := time.Now()
 
-	j := &PruneJudge{r: r, store: store, snap: r.Snapshot(), depth: min(r.settleDepth, retention)}
+	j := &PruneJudge{r: r, store: store, snap: r.Snapshot(), depth: min(r.settleDepth, retention),
+		gateKeys: [2]string{"pruner/" + store + "/" + directionTodayOnly, "pruner/" + store + "/" + directionLanesOnly}}
 
 	if j.snap != nil {
 		j.noRows = j.snap.MainBlocksWithoutRows() > 0
@@ -205,7 +208,8 @@ func (r *Reader) PruneJudge(store string, retention uint32) *PruneJudge {
 
 // Judge answers c by the lane rule, counts the answer beside today's decision, and logs the first
 // disagreements of each direction. todayDeletes is today's decision, the only one acted on. It reads
-// no clock: the store times each batch it judges, the decoding of the candidates included (Time).
+// no clock except to rate-limit a disagreement's log line: the store times each batch it judges, the
+// decoding of the candidates included (Time).
 func (j *PruneJudge) Judge(todayDeletes bool, c *PruneCandidate) PruneVerdict {
 	if j == nil {
 		return PruneVerdict{}
@@ -224,9 +228,9 @@ func (j *PruneJudge) Judge(todayDeletes bool, c *PruneCandidate) PruneVerdict {
 
 	switch {
 	case todayDeletes && lanes == lanesKeep:
-		j.logDisagreement(directionTodayOnly, c, v, d)
+		j.logDisagreement(0, c, v, d)
 	case !todayDeletes && lanes == lanesDelete:
-		j.logDisagreement(directionLanesOnly, c, v, d)
+		j.logDisagreement(1, c, v, d)
 	}
 
 	return v
@@ -418,11 +422,13 @@ func (j *PruneJudge) Done() {
 
 // logDisagreement logs one disagreement, the first disagreementsLogged of each store and direction
 // and then one a minute.
-func (j *PruneJudge) logDisagreement(direction string, c *PruneCandidate, v PruneVerdict, d pruneDecider) {
-	n, ok := j.r.disagree.admit("pruner/" + j.store + "/" + direction)
+func (j *PruneJudge) logDisagreement(which int, c *PruneCandidate, v PruneVerdict, d pruneDecider) {
+	n, ok := j.r.disagree.admit(j.gateKeys[which])
 	if !ok {
 		return
 	}
+
+	direction := [2]string{directionTodayOnly, directionLanesOnly}[which]
 
 	pl, pp := lane.Unpack(c.ParentPos)
 	dl, dp := lane.Unpack(d.pos)

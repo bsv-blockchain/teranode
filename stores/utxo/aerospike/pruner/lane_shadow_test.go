@@ -66,7 +66,7 @@ func lanePageReads(t *testing.T) float64 {
 // position in lane 250 so no block lacks rows, and block h also taking took[h]; and for each height h
 // in forks a block off the main chain, ID 10,000 + h, on block h-1, taking forks[h]. Settle depth 100,
 // so blocks at or below 200 are folded into the floors.
-func laneTestIndex(t *testing.T, took, forks map[uint32][]uint64) *lane.Index {
+func laneTestIndex(t testing.TB, took, forks map[uint32][]uint64) *lane.Index {
 	t.Helper()
 
 	hash := func(id uint32) chainhash.Hash {
@@ -142,7 +142,7 @@ func slotPositions(positions ...uint64) []byte {
 	return lane.AppendPositions(nil, positions)
 }
 
-func installLaneIndex(t *testing.T, idx *lane.Index) {
+func installLaneIndex(t testing.TB, idx *lane.Index) {
 	t.Helper()
 
 	lanereader.InstallIndex(ulogger.TestLogger{}, idx, 100)
@@ -159,7 +159,7 @@ var (
 	laneForkOnly      = lane.Pack(9, 77)  // only fork block 10,250
 )
 
-func laneIndexForTests(t *testing.T) *lane.Index {
+func laneIndexForTests(t testing.TB) *lane.Index {
 	return laneTestIndex(t, map[uint32][]uint64{
 		150: {laneSettledParent},
 		190: {laneSettled},
@@ -317,11 +317,11 @@ func TestLaneShadowAtOffAddsNothing(t *testing.T) {
 	svc.fieldConflicting = fields.Conflicting.String()
 
 	require.Equal(t, []string{svc.fieldTxID, svc.fieldExternal, svc.fieldTotalExtraRecs, svc.fieldUnminedSince, svc.fieldConflicting},
-		svc.queryBinNames(lanereader.Current() != nil), "today's bins exactly")
+		svc.queryBinNames(), "today's bins exactly")
 
 	svc.defensiveEnabled = true
 	require.Equal(t, []string{svc.fieldTxID, svc.fieldExternal, svc.fieldTotalExtraRecs, svc.fieldUnminedSince, svc.fieldConflicting, svc.fieldUtxos},
-		svc.queryBinNames(false))
+		svc.queryBinNames())
 	svc.defensiveEnabled = false
 
 	calls := 0
@@ -350,11 +350,11 @@ func TestLaneShadowReadsPagesBeforeTheDelete(t *testing.T) {
 	svc.laneRetention = 288
 
 	require.Equal(t, []string{svc.fieldTxID, svc.fieldExternal, svc.fieldTotalExtraRecs, svc.fieldUnminedSince, svc.fieldConflicting,
-		fields.LanePosition.String(), fields.SpendingLanePositions.String(), svc.fieldUtxos}, svc.queryBinNames(true))
+		fields.LanePosition.String(), fields.SpendingLanePositions.String(), svc.fieldUtxos}, svc.queryBinNames())
 
 	svc.defensiveEnabled = true
 	require.Equal(t, []string{svc.fieldTxID, svc.fieldExternal, svc.fieldTotalExtraRecs, svc.fieldUnminedSince, svc.fieldConflicting, svc.fieldUtxos,
-		fields.LanePosition.String(), fields.SpendingLanePositions.String()}, svc.queryBinNames(true), "defensive mode reads utxos already")
+		fields.LanePosition.String(), fields.SpendingLanePositions.String()}, svc.queryBinNames(), "defensive mode reads utxos already")
 	svc.defensiveEnabled = false
 
 	var pageReads []aerospike.BatchRecordIfc
@@ -423,4 +423,26 @@ func TestAppendSlotSpenders(t *testing.T) {
 	require.Equal(t, lane.None, binLanePosition(nil))
 	require.Equal(t, laneSettled, binLanePosition(int(lane.ToSigned(laneSettled))))
 	require.Equal(t, laneSettled, binLanePosition(lane.ToSigned(laneSettled)))
+}
+
+// TestLaneShadowJudgesAChunkTodayKeepsWhole: a chunk whose every record today keeps as unmined is
+// judged too, the direction that must stay at zero.
+func TestLaneShadowJudgesAChunkTodayKeepsWhole(t *testing.T) {
+	installLaneIndex(t, laneIndexForTests(t))
+
+	svc := newTestService(t)
+	svc.fieldConflicting = fields.Conflicting.String()
+	svc.laneRetention = 288
+	svc.batchOperateFn = func(*aerospike.BatchPolicy, []aerospike.BatchRecordIfc) error { return nil }
+
+	chunk := pagedMasterChunk(t, svc)
+	chunk[0].Record.Bins[svc.fieldTotalExtraRecs] = 0
+	chunk[0].Record.Bins[svc.fieldUnminedSince] = 3
+
+	lanesOnly := laneVerdicts(t, lanereader.PruneKeep, lanereader.PruneDelete, lanereader.ReasonSettled)
+
+	processed, _, err := svc.processRecordChunk(context.Background(), 1000, chunk)
+	require.NoError(t, err)
+	require.Zero(t, processed, "today keeps the unmined record")
+	require.Equal(t, lanesOnly+1, laneVerdicts(t, lanereader.PruneKeep, lanereader.PruneDelete, lanereader.ReasonSettled))
 }

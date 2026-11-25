@@ -18,12 +18,17 @@ import (
 // store adds to the rule. Each record holds two outputs, both spent, by two spenders. ns/op is per
 // record.
 func BenchmarkLaneShadowRun(b *testing.B) {
-	t := &testing.T{}
-	installLaneIndex(t, laneIndexForTests(t))
+	installLaneIndex(b, laneIndexForTests(b))
 
-	svc := newTestService(t)
-	svc.fieldConflicting = fields.Conflicting.String()
-	svc.laneRetention = 288
+	svc := &Service{
+		namespace:           "test",
+		set:                 "test",
+		fieldTxID:           fields.TxID.String(),
+		fieldUtxos:          fields.Utxos.String(),
+		fieldTotalExtraRecs: fields.TotalExtraRecs.String(),
+		fieldConflicting:    fields.Conflicting.String(),
+		laneRetention:       288,
+	}
 
 	spenderA := chainhash.HashH([]byte("spender a"))
 	spenderB := chainhash.HashH([]byte("spender b"))

@@ -403,8 +403,10 @@ type IndexSnapshot struct {
 	// forkHeights are the heights of off-main blocks the index cannot judge: forgotten ones, whose
 	// rows are gone, and loaded ones with no rows.
 	forkHeights map[uint32]struct{}
-	stats       IndexStats
-	mainView    *ChainView
+	// mainNoRows counts the loaded main-chain blocks with no rows.
+	mainNoRows int
+	stats      IndexStats
+	mainView   *ChainView
 }
 
 // IndexStats is the index's size, for the metrics.
@@ -773,17 +775,7 @@ func (s *IndexSnapshot) BeforeStart(pos uint64) bool {
 // MainBlocksWithoutRows counts the loaded main-chain blocks the map holds no rows for: blocks taken
 // by quick validation, our own blocks before block assembly writes rows, and blocks of only a
 // coinbase. A position no row takes may be in one of them, so a reader cannot call it unmined.
-func (s *IndexSnapshot) MainBlocksWithoutRows() int {
-	n := 0
-
-	for id := range s.main {
-		if b, ok := s.blocks[id]; ok && !b.hasRows {
-			n++
-		}
-	}
-
-	return n
-}
+func (s *IndexSnapshot) MainBlocksWithoutRows() int { return s.mainNoRows }
 
 // Folded reports whether block id's rows were folded into the floors and left memory.
 func (s *IndexSnapshot) Folded(id uint32) bool {
@@ -1171,8 +1163,13 @@ func (x *Index) publish() {
 
 	// A loaded fork block with no rows cannot be judged either.
 	for id, b := range x.blocks {
-		if _, onMain := x.main[id]; !onMain && !b.hasRows {
+		_, onMain := x.main[id]
+
+		switch {
+		case !onMain && !b.hasRows:
 			s.forkHeights[b.Height] = struct{}{}
+		case onMain && !b.hasRows:
+			s.mainNoRows++
 		}
 	}
 
