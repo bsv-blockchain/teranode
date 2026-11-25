@@ -1,9 +1,9 @@
 diff --git a/services/blockassembly/subtreeprocessor/SubtreeProcessor.go b/services/blockassembly/subtreeprocessor/SubtreeProcessor.go
-index 11ea1bd18..5c163ff09 100644
+index eaa1b059b..86a603986 100644
 --- a/services/blockassembly/subtreeprocessor/SubtreeProcessor.go
 +++ b/services/blockassembly/subtreeprocessor/SubtreeProcessor.go
-@@ -6427,8 +6427,8 @@ func (stp *SubtreeProcessor) moveBackBlockBulkBuild(ctx context.Context, block *
- 				_, wasSet[i] = stp.currentTxMap.SetIfNotExists(hash, flatInpoints[i])
+@@ -6765,8 +6765,8 @@ func (stp *SubtreeProcessor) moveBackBlockBulkBuild(ctx context.Context, block *
+ 				_, wasSet[i] = stp.currentTxMap.SetIfNotExistsAt(hash, flatInpoints[i], position)
  			}
  		}
 -		for i, set := range wasSet {
