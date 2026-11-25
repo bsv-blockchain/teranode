@@ -14,11 +14,11 @@ import (
 // The block gate for a peer's block, at utxostore_laneMigration shadow (lanes Phase 1). Before the
 // block is stored, block validation reads the lane bitmaps subtree validation saved beside each of
 // the block's subtrees, merges them lane by lane into the block's map rows, and hands the rows to
-// AddBlock, which inserts them in the block's own database transaction. Nothing reads the rows
-// yet, so nothing here can stop a block: a subtree without usable bitmaps means the block is
-// stored without rows, and a count that does not match is counted and logged while whatever rows
-// were built still go with the block. A block whose bitmaps files were all read but hold no
-// position has no rows to go, and counts as fewer.
+// AddBlock, which inserts them in the block's own database transaction. Readers load the rows at
+// shadow and do not act on them, so nothing here can stop a block: a subtree without usable
+// bitmaps means the block is stored without rows, and a count that does not match is counted and
+// logged while whatever rows were built still go with the block. A block whose bitmaps files were
+// all read but hold no position has no rows to go, and counts as fewer.
 
 // laneBitmapReadConcurrency bounds the subtree bitmap reads in flight across every block, not per
 // block, and a read a block stopped waiting for keeps its slot until it returns. The file subtree
