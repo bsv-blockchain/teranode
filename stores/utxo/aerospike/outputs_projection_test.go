@@ -20,23 +20,25 @@ import (
 // was fetched as a dependency of fields.Tx but never decoded on its own, and
 // Data.Tx came back nil.
 func TestGetOutputsProjection(t *testing.T) {
+	t.Parallel()
+
+	fx := newTxFixtures(t)
+
 	tSettings := test.CreateBaseTestSettings(t)
 	logger := ulogger.NewErrorTestLogger(t)
 
-	client, store, ctx, deferFn := initAerospike(t, tSettings, logger)
+	_, store, ctx, deferFn := initAerospike(t, tSettings, logger)
 	defer deferFn()
 
-	cleanDB(t, client)
-
-	_, err := store.Create(ctx, tx, 0)
+	_, err := store.Create(ctx, fx.tx, 0)
 	require.NoError(t, err)
 
-	resp, err := store.Get(ctx, tx.TxIDChainHash(), fields.Outputs)
+	resp, err := store.Get(ctx, fx.tx.TxIDChainHash(), fields.Outputs)
 	require.NoError(t, err)
 	require.NotNil(t, resp.Tx, "fields.Outputs must decode into Data.Tx, as fields.Inputs does")
-	require.Len(t, resp.Tx.Outputs, len(tx.Outputs))
+	require.Len(t, resp.Tx.Outputs, len(fx.tx.Outputs))
 
-	for i, want := range tx.Outputs {
+	for i, want := range fx.tx.Outputs {
 		require.NotNil(t, resp.Tx.Outputs[i], "output %d must be decoded", i)
 		require.Equal(t, want.Satoshis, resp.Tx.Outputs[i].Satoshis, "output %d satoshis", i)
 		require.Equal(t, []byte(*want.LockingScript), []byte(*resp.Tx.Outputs[i].LockingScript), "output %d script", i)
@@ -60,6 +62,8 @@ func TestGetOutputsProjection(t *testing.T) {
 // a large parent would be rejected for having no output at that index, which is
 // the failure this test exists to catch.
 func TestGetOutputsProjection_ExternalParent(t *testing.T) {
+	t.Parallel()
+
 	tSettings := test.CreateBaseTestSettings(t)
 	// Small batch size so a modest fixture spills past one record, which is what
 	// makes create.go store it externally.
@@ -67,10 +71,8 @@ func TestGetOutputsProjection_ExternalParent(t *testing.T) {
 
 	logger := ulogger.NewErrorTestLogger(t)
 
-	client, store, ctx, deferFn := initAerospike(t, tSettings, logger)
+	_, store, ctx, deferFn := initAerospike(t, tSettings, logger)
 	defer deferFn()
-
-	cleanDB(t, client)
 
 	// More outputs than UtxoBatchSize => multiple records => external.
 	bigTx := createTransactionWithOutputs(tSettings.UtxoStore.UtxoBatchSize + 1)
@@ -92,29 +94,32 @@ func TestGetOutputsProjection_ExternalParent(t *testing.T) {
 
 // Both requested field orders must retain both projections of an inline parent.
 func TestGetOutputsProjection_WithInputs(t *testing.T) {
+	t.Parallel()
+
+	fx := newTxFixtures(t)
+
 	settings := test.CreateBaseTestSettings(t)
-	client, store, ctx, cleanup := initAerospike(t, settings, ulogger.NewErrorTestLogger(t))
+	_, store, ctx, cleanup := initAerospike(t, settings, ulogger.NewErrorTestLogger(t))
 	defer cleanup()
-	cleanDB(t, client)
-	_, err := store.Create(ctx, tx, 0)
+	_, err := store.Create(ctx, fx.tx, 0)
 	require.NoError(t, err)
 	for _, order := range [][]fields.FieldName{{fields.Inputs, fields.Outputs}, {fields.Outputs, fields.Inputs}} {
 		t.Run(order[0].String()+"_first", func(t *testing.T) {
-			items := []*utxo.UnresolvedMetaData{{Hash: *tx.TxIDChainHash(), Fields: order}}
+			items := []*utxo.UnresolvedMetaData{{Hash: *fx.tx.TxIDChainHash(), Fields: order}}
 			require.NoError(t, store.BatchDecorate(ctx, items))
 			require.NoError(t, items[0].Err)
 			got := items[0].Data.Tx
 			require.NotNil(t, got)
-			require.Len(t, got.Inputs, len(tx.Inputs))
-			require.Len(t, got.Outputs, len(tx.Outputs))
-			for i, want := range tx.Inputs {
+			require.Len(t, got.Inputs, len(fx.tx.Inputs))
+			require.Len(t, got.Outputs, len(fx.tx.Outputs))
+			for i, want := range fx.tx.Inputs {
 				require.Equal(t, want.PreviousTxIDChainHash(), got.Inputs[i].PreviousTxIDChainHash())
 				require.Equal(t, want.PreviousTxOutIndex, got.Inputs[i].PreviousTxOutIndex)
 				require.Equal(t, want.PreviousTxSatoshis, got.Inputs[i].PreviousTxSatoshis)
 				require.Equal(t, *want.UnlockingScript, *got.Inputs[i].UnlockingScript)
 				require.Equal(t, *want.PreviousTxScript, *got.Inputs[i].PreviousTxScript)
 			}
-			for i, want := range tx.Outputs {
+			for i, want := range fx.tx.Outputs {
 				require.Equal(t, want.Satoshis, got.Outputs[i].Satoshis)
 				require.Equal(t, *want.LockingScript, *got.Outputs[i].LockingScript)
 			}

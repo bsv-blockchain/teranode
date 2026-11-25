@@ -81,7 +81,7 @@ func TestValidate_TwoPhaseCommitUnlocksOnUtxoset(t *testing.T) {
 	require.NoError(t, err)
 
 	blockAssemblyClient := &blockassembly.Mock{}
-	blockAssemblyClient.On("Store", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(true, nil)
+	blockAssemblyClient.On("Store", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(true, nil)
 
 	vi, err := New(ctx, ulogger.TestLogger{}, tSettings, store,
 		kafka.NewKafkaAsyncProducerMock(), kafka.NewKafkaAsyncProducerMock(), nil,

@@ -112,6 +112,8 @@ func spendHeightSpendsOf(t *testing.T, child *bt.Tx) []*utxo.Spend {
 // unspend clears it, a re-spend records its own, and a frozen output is never read as a historical
 // spend.
 func TestSpendRecordsItsHeight_Aerospike(t *testing.T) {
+	t.Parallel()
+
 	logger := ulogger.NewErrorTestLogger(t)
 	tSettings := test.CreateBaseTestSettings(t)
 
@@ -218,6 +220,8 @@ func TestSpendRecordsItsHeight_Aerospike(t *testing.T) {
 // order and grows only as far as the highest output spent. A record spent only by older code has
 // no bin at all, and a match on it reports no height.
 func TestSpendHeightsBinGrowsToCoverTheOutput_Aerospike(t *testing.T) {
+	t.Parallel()
+
 	logger := ulogger.NewErrorTestLogger(t)
 	tSettings := test.CreateBaseTestSettings(t)
 
