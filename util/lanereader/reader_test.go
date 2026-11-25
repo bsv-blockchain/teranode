@@ -406,7 +406,36 @@ func TestReaderCountsTheMinedWriteWindowApart(t *testing.T) {
 		requireCounted(t, ReaderValidator, KindLanesOnly, lane.ViaRow, func() {
 			r.CompareHeight(ReaderValidator, chainhash.Hash{}, lane.Pack(3, 6), false, 0)
 		})
+
+		// b3 arrives with its mined write unfinished; then a read of its flag fails. The failure is
+		// counted and leaves no block pending.
+		b3 := c.add(b2, takes(t, 3, 7))
+
+		_, err = r.step(t.Context(), b2.hash)
+		require.NoError(t, err)
+
+		requireCounted(t, ReaderValidator, KindMinedPending, lane.ViaRow, func() {
+			r.CompareHeight(ReaderValidator, chainhash.Hash{}, lane.Pack(3, 7), false, 0)
+		})
+
+		r.source = headerFailingSource{store}
+		errorsBefore := testutil.ToFloat64(prometheusLaneReaderFollowErrors)
+
+		_, err = r.step(t.Context(), b3.hash)
+		require.NoError(t, err)
+		require.Equal(t, errorsBefore+1, testutil.ToFloat64(prometheusLaneReaderFollowErrors))
+
+		requireCounted(t, ReaderValidator, KindLanesOnly, lane.ViaRow, func() {
+			r.CompareHeight(ReaderValidator, chainhash.Hash{}, lane.Pack(3, 7), false, 0)
+		})
 	})
+}
+
+// headerFailingSource is a Source whose GetBlockHeader fails.
+type headerFailingSource struct{ blockchainstore.Store }
+
+func (headerFailingSource) GetBlockHeader(context.Context, *chainhash.Hash) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
+	return nil, nil, errors.NewServiceUnavailableError("blockchain service down")
 }
 
 // A reorg moves the answer: once the fork is the main chain, its block's rows answer and the old

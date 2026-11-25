@@ -326,6 +326,12 @@ func (r *Reader) noteMinedWrite(ctx context.Context, best chainhash.Hash) {
 	switch {
 	case err != nil || meta == nil:
 		r.minedPending.Store(0)
+
+		prometheusLaneReaderFollowErrors.Inc()
+
+		if r.warnAMinute("mined_set") {
+			r.logger.Warnf("[lanereader] reading best block %s's mined_set flag failed, so answers from its rows count lanes_only until a read succeeds: %v", best.String(), err)
+		}
 	case meta.MinedSet:
 		r.minedPending.Store(0)
 		r.minedDone = best
@@ -598,24 +604,27 @@ func (r *Reader) markUnreachable(hash chainhash.Hash, tipID uint32) {
 func (r *Reader) prepareFailed(reason, format string, args ...any) {
 	prometheusLaneReaderPrepareFailures.WithLabelValues(reason).Inc()
 
+	if r.warnAMinute(reason) {
+		r.logger.Warnf(format, args...)
+	}
+}
+
+// warnAMinute reports whether a warning under key may be logged: at most one a minute per key.
+func (r *Reader) warnAMinute(key string) bool {
 	r.unreachableMu.Lock()
+	defer r.unreachableMu.Unlock()
 
 	if r.prepareWarned == nil {
 		r.prepareWarned = map[string]time.Time{}
 	}
 
-	last := r.prepareWarned[reason]
-	warn := time.Since(last) >= time.Minute
-
-	if warn {
-		r.prepareWarned[reason] = time.Now()
+	if time.Since(r.prepareWarned[key]) < time.Minute {
+		return false
 	}
 
-	r.unreachableMu.Unlock()
+	r.prepareWarned[key] = time.Now()
 
-	if warn {
-		r.logger.Warnf(format, args...)
-	}
+	return true
 }
 
 func (r *Reader) publishMetrics() {
