@@ -3178,8 +3178,9 @@ func (s *Server) ConnectPeer(ctx context.Context, req *p2p_api.ConnectPeerReques
 }
 
 // DisconnectPeer disconnects a peer by ID: its libp2p connections are closed
-// (severPeer) and it is removed from the peer registry and sync coordinator.
-// It is not a ban, so the peer may reconnect.
+// (severPeer, only with p2p_enforce_bans_at_admission on) and it is removed
+// from the peer registry and sync coordinator. It is not a ban, so the peer
+// may reconnect.
 func (s *Server) DisconnectPeer(ctx context.Context, req *p2p_api.DisconnectPeerRequest) (*p2p_api.DisconnectPeerResponse, error) {
 	pid, err := peer.Decode(req.PeerId)
 	if err != nil {

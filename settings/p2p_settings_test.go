@@ -226,6 +226,23 @@ func TestP2PGossipSubMeshProtectionSettings(t *testing.T) {
 	})
 }
 
+// TestP2PEnforceBansAtAdmission guards the admission switch: on unless set,
+// and the loader reads an override under the ambient context.
+func TestP2PEnforceBansAtAdmission(t *testing.T) {
+	key := "p2p_enforce_bans_at_admission"
+	if ctx := gocore.Config().GetContext(); ctx != "" {
+		key += "." + ctx
+	}
+
+	t.Cleanup(func() { gocore.Config().Set(key, "") })
+
+	gocore.Config().Set(key, "")
+	require.True(t, NewSettings().P2P.EnforceBansAtAdmission, "bans must reach connection admission by default")
+
+	gocore.Config().Set(key, "false")
+	require.False(t, NewSettings().P2P.EnforceBansAtAdmission, "loader must read %s", key)
+}
+
 // TestP2PPeerScoreIPColocationThreshold_LoaderReadsKey guards the colocation
 // threshold override: set at the winning precedence for the ambient context,
 // it must be read back (field-exists-but-loader-never-reads-it bug).

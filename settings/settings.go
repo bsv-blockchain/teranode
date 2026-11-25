@@ -665,6 +665,8 @@ func NewSettings(alternativeContext ...string) *Settings {
 			EnablePeerScoring:              getBool("p2p_enable_peer_scoring", true, alternativeContext...),
 			EnablePeerExchange:             getBool("p2p_enable_peer_exchange", true, alternativeContext...),
 			PeerScoreIPColocationThreshold: getInt("p2p_peer_score_ip_colocation_threshold", 10, alternativeContext...),
+			// Bans reach the connection gater by default; false leaves message-layer checks only.
+			EnforceBansAtAdmission: getBool("p2p_enforce_bans_at_admission", true, alternativeContext...),
 			// Connection manager watermarks and libp2p resource manager overrides.
 			// Every default is 0 / empty, which keeps the go-p2p-message-bus and
 			// go-libp2p defaults, so a node that sets none of these builds the

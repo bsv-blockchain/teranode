@@ -58,6 +58,14 @@ func banNetworkAddr(n *net.IPNet) (netip.Addr, bool) {
 	return addr.Unmap(), true
 }
 
+// admissionEnforced reports whether bans reach the bus's connection gater
+// (p2p_enforce_bans_at_admission). When it is off, no Block* or Unblock*
+// call is made: bans are enforced on messages only, and an operator
+// disconnect acts at the application layer only.
+func (s *Server) admissionEnforced() bool {
+	return s.P2PClient != nil && s.settings != nil && s.settings.P2P.EnforceBansAtAdmission
+}
+
 // syncAdmissionBans makes the bus's admission rules match the bans in force:
 // every IP and subnet on the ban list and every libp2p peer ID in the
 // registry's banned set is blocked, and every rule applied earlier that no
@@ -74,7 +82,7 @@ func banNetworkAddr(n *net.IPNet) (netip.Addr, bool) {
 // recorded, because the ban list and the registry are written before this
 // runs.
 func (s *Server) syncAdmissionBans() {
-	if s.P2PClient == nil {
+	if !s.admissionEnforced() {
 		return
 	}
 
@@ -159,7 +167,7 @@ func (s *Server) syncAdmissionBans() {
 // each IP the ban list accepted for it. Both are already in the registry's
 // banned set and on the ban list, so a concurrent sync wants them too.
 func (s *Server) blockBannedPeer(peerID string, ips []net.IP) {
-	if s.P2PClient == nil {
+	if !s.admissionEnforced() {
 		return
 	}
 
@@ -184,7 +192,7 @@ func (s *Server) blockBannedPeer(peerID string, ips []net.IP) {
 // lifts the block straight away unless a ban already holds it. The peer may
 // reconnect afterwards: banning, not severing, is what keeps it out.
 func (s *Server) severPeer(peerID string) {
-	if s.P2PClient == nil {
+	if !s.admissionEnforced() {
 		return
 	}
 

@@ -37,6 +37,7 @@
 | EnablePeerScoring | bool | true | p2p_enable_peer_scoring | **CRITICAL** - GossipSub peer scoring (Sybil mesh protection); static/bootstrap peers exempt |
 | EnablePeerExchange | bool | true | p2p_enable_peer_exchange | GossipSub peer exchange (PX); requires EnablePeerScoring (startup error otherwise); inbound PX records currently refused |
 | PeerScoreIPColocationThreshold | int | 10 | p2p_peer_score_ip_colocation_threshold | Peers allowed per exact IP before the colocation penalty applies |
+| EnforceBansAtAdmission | bool | true | p2p_enforce_bans_at_admission | Apply IP, subnet and peer-ID bans at the connection gater (disconnect and refuse); false leaves message-layer ban checks only |
 | MaxConnections | int | 0 | p2p_max_connections | Connection manager high water mark; 0 keeps the library default (35) |
 | MinConnections | int | 0 | p2p_min_connections | Connection manager low water mark; 0 keeps the library default (25) |
 | ConnectionGracePeriod | time.Duration | 0s | p2p_connection_grace_period | How long new connections are protected from pruning; 0 keeps the library default (20s) |
@@ -95,6 +96,12 @@
 - `PeerScoreIPColocationThreshold` tunes the local penalty without disabling scoring (lower it on networks with no legitimately colocated operators).
 - With `AllowPrivateIPs` true, loopback, RFC1918, RFC6598, link-local, and IPv6 ULA ranges are whitelisted from the colocation penalty, so local/test multi-node clusters are unaffected.
 - `EnablePeerExchange` (default true) controls emitting PX records in PRUNE messages, and **requires** `EnablePeerScoring` (gossipsub v1.1 pairs PX with scoring) - the service refuses to start with PX on and scoring off. Inbound PX records are currently refused regardless (`AcceptPXThreshold` is set above the maximum attainable score): penalty-only scoring caps every score at 0, so accepting 0-scored records would let an attacker get itself dialed, and dialed peers register as outbound - bypassing gossipsub's Dhi graft refusal and Dout quota. This will be relaxed when positive (per-topic delivery) scoring exists.
+
+### Ban Enforcement
+
+- `EnforceBansAtAdmission` (default true) applies bans to the message bus's connection gater. Operator IP and subnet bans block the address or subnet, and peer bans in the peer registry block the peer ID; matching connections are closed and new ones refused. Unban, expiry, `clearbanned` and a lapsed registry ban lift the rule, within one ban sweep (1 minute) for the cases that raise no event. A failed block is logged once and retried on the next sweep, and the ban is still enforced on messages meanwhile.
+- A relayed connection is gated on the relay's address, so banning a relay's or bootstrap peer's IP drops every peer reached through it. A peer-ID ban reaches a peer behind a relay.
+- With `false`, no gater rule is applied: a banned peer's gossip is dropped and the peer leaves the peer registry, but its connection stays open, and `disconnectpeer` acts at the application layer only. Use it to rule admission enforcement out while diagnosing connectivity.
 
 ### Connection Limits
 

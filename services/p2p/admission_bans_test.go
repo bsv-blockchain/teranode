@@ -22,6 +22,7 @@ func newAdmissionTestServer(t *testing.T) (*Server, *blockchain.CentralizedPeerR
 	t.Helper()
 
 	s, reg := newServerWithLocalRegistry(t)
+	s.settings.P2P.EnforceBansAtAdmission = true
 	bl, _ := newOwnedUnbanBanList(t)
 	s.banList = bl
 

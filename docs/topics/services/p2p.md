@@ -374,10 +374,14 @@ When a ban event occurs:
 
 1. The ban is added to the persistent storage
 2. A ban event is broadcast through the ban channel
-3. The P2P service applies the ban at connection admission in the P2P message bus: a banned IP or subnet is blocked with `BlockAddr` or `BlockSubnet`, and a peer banned by the peer registry with `BlockPeer`. The bus closes the open connections the rule covers and refuses new ones, inbound and outbound.
+3. With `p2p_enforce_bans_at_admission` on (the default), the P2P service applies the ban at connection admission in the P2P message bus: a banned IP or subnet is blocked with `BlockAddr` or `BlockSubnet`, and a peer banned by the peer registry with `BlockPeer`. The bus closes the open connections the rule covers and refuses new ones, inbound and outbound.
 4. Matching peers are also dropped from the peer registry and the sync coordinator
 
 The bus keeps these rules in memory only. The P2P service applies the persisted IP and subnet bans as soon as it creates the bus client, and the registry's peer bans when it starts, before it subscribes to any topic. Changes that raise no ban event (an expiry, a registry ban that lapses) reach the bus within one ban sweep, every minute. Gossip messages are still checked against both ban lists, as defence in depth.
+
+The bus gates a relayed connection on the relay's address, so banning a relay's or bootstrap peer's IP drops every peer reached through it. A peer-ID ban still reaches a peer behind a relay.
+
+With `p2p_enforce_bans_at_admission` off, step 3 is skipped: no rule reaches the bus, a banned peer's gossip is dropped and the peer leaves the registry, but its connection stays open.
 
 #### 2.7.4. Configuration
 
@@ -388,6 +392,7 @@ Ban-related settings in the configuration:
 | `banlist_db` | string | "" | Database connection string for ban storage | Required for ban list persistence across restarts |
 | `ban_default_duration` | duration | 24h | Default duration for bans | Controls how long banned peers are excluded from the network |
 | `ban_max_entries` | int | 1000 | Maximum number of banned entries to maintain | Prevents unbounded memory growth in ban list |
+| `p2p_enforce_bans_at_admission` | bool | true | Apply bans at the message bus's connection gater | Off, bans are enforced on messages only and banned peers stay connected |
 
 ### 2.8. Peer Registry and Reputation System
 
