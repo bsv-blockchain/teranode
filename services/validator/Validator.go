@@ -3605,7 +3605,8 @@ func (v *Validator) EnsureMTPLoaded(ctx context.Context, blockHeight uint32) err
 	}
 
 	// The store is loaded through blockHeight so readMTPsLocked's guard (len > blockHeight)
-	// holds. Coins below blockHeight read mtpStore[h]. The block MTP, and the MTP of any
+	// holds. Coins below blockHeight read mtpStore[h], except a fork candidate's coins above
+	// the fork point, which read Options.CandidateForkMTPs. The block MTP, and the MTP of any
 	// coin at or above blockHeight (a same-block parent or the unconfirmedParentHeight
 	// sentinel), come from Options.CandidateParentMedianTime, not from this array.
 
@@ -3832,14 +3833,10 @@ func (v *Validator) validateTransaction(ctx context.Context, tx *bt.Tx, blockHei
 	// A coin at the candidate's own height (a same-block parent) has the candidate's parent
 	// as its ancestor, so its coin time is the block time above.
 	//
-	// Known limit: a coin below the candidate's height is read from mtpStore, which is
-	// filled from the main chain. For a fork candidate, a coin created above the fork
-	// point therefore gets the main chain's median at that height, not its own branch's.
-	// That cannot change a verdict on any configured network: BIP68 only applies from
-	// CSVHeight up to GenesisActivationHeight, and on mainnet and testnet that whole range
-	// is below the highest hardcoded checkpoint, so a fork there is refused once the tip
-	// passes the next checkpoint and its branch can never pass a checkpoint hash. On
-	// regtest the range is empty; on stn and teratestnet it covers only the first blocks.
+	// A coin below the candidate's height reads mtpStore, which holds the current chain's
+	// values. That is right only up to the point where the candidate's branch leaves the
+	// current chain. Above it, a fork candidate's caller passes its own branch's coin
+	// times in Options.CandidateForkMTPs, and those heights read from there.
 	blockMTP := validationOptions.CandidateParentMedianTime
 	if blockMTP == 0 {
 		err := errors.NewProcessingError("[Validator][validateTransaction] BIP68 requires Options.CandidateParentMedianTime, got zero (block height: %d)", blockHeight)
@@ -3855,7 +3852,7 @@ func (v *Validator) validateTransaction(ctx context.Context, tx *bt.Tx, blockHei
 	// goroutines read it) without holding the lock through ECDSA / sequence-lock
 	// arithmetic. RLock is uncontended in the steady-state path where EnsureMTPLoaded
 	// has already populated the range.
-	utxoMTPs, err := v.readMTPsLocked(blockHeight, blockMTP, utxoHeights)
+	utxoMTPs, err := v.readMTPsLocked(blockHeight, blockMTP, validationOptions.CandidateForkStartHeight, validationOptions.CandidateForkMTPs, utxoHeights)
 	if err != nil {
 		span.RecordError(err)
 		return err
@@ -3865,12 +3862,17 @@ func (v *Validator) validateTransaction(ctx context.Context, tx *bt.Tx, blockHei
 }
 
 // readMTPsLocked returns the per-input MTP values for use by validateTransaction.
-// A coin below blockHeight reads mtpStore; a coin at or above it (a same-block
-// parent, or the unconfirmed-parent sentinel) takes blockMTP, the candidate's
-// parent MTP. It takes the mtpStore read lock for the duration of the reads only
-// and releases it before returning. The caller is free to use the returned slice
-// without further synchronisation.
-func (v *Validator) readMTPsLocked(blockHeight uint32, blockMTP uint32, utxoHeights []uint32) ([]uint32, error) {
+// A coin at or above blockHeight (a same-block parent, or the unconfirmed-parent
+// sentinel) takes blockMTP, the candidate's parent MTP. A coin at a height covered
+// by forkMTPs (forkStart up to blockHeight-1) takes its entry there, the candidate
+// branch's own value. Any other coin reads mtpStore. It takes the mtpStore read lock
+// for the duration of the reads only and releases it before returning. The caller is
+// free to use the returned slice without further synchronisation.
+func (v *Validator) readMTPsLocked(blockHeight uint32, blockMTP uint32, forkStart uint32, forkMTPs []uint32, utxoHeights []uint32) ([]uint32, error) {
+	if len(forkMTPs) > 0 && uint64(forkStart)+uint64(len(forkMTPs)) != uint64(blockHeight) {
+		return nil, errors.NewProcessingError("[Validator][validateTransaction] candidate fork MTPs cover heights %d to %d, but must end at the candidate's parent (block height %d)", forkStart, uint64(forkStart)+uint64(len(forkMTPs))-1, blockHeight)
+	}
+
 	v.mtpMu.RLock()
 	defer v.mtpMu.RUnlock()
 
@@ -3883,9 +3885,12 @@ func (v *Validator) readMTPsLocked(blockHeight uint32, blockMTP uint32, utxoHeig
 	utxoMTPs := make([]uint32, len(utxoHeights))
 
 	for i, h := range utxoHeights {
-		if h >= blockHeight {
+		switch {
+		case h >= blockHeight:
 			utxoMTPs[i] = blockMTP
-		} else {
+		case len(forkMTPs) > 0 && h >= forkStart:
+			utxoMTPs[i] = forkMTPs[h-forkStart]
+		default:
 			utxoMTPs[i] = v.mtpStore[h]
 		}
 	}

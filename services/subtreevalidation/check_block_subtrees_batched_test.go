@@ -504,7 +504,7 @@ func TestProcessTransactionsBatched_ForgedExtensionFails(t *testing.T) {
 	checker, ok := f.server.batchChecker(blockchain.FSMStateCATCHINGBLOCKS, batchedTestHeight)
 	require.True(t, ok)
 
-	err := f.server.processTransactionsBatched(context.Background(), checker, []*bt.Tx{forged}, chainhash.Hash{}, batchedTestHeight, 0, 0, map[uint32]bool{})
+	err := f.server.processTransactionsBatched(context.Background(), checker, []*bt.Tx{forged}, chainhash.Hash{}, batchedTestHeight, 0, 0, candidateForkMTPs{}, map[uint32]bool{})
 	require.ErrorIs(t, err, errors.ErrTxInvalid)
 	requireAbsent(t, f, []*bt.Tx{forged})
 }
@@ -527,7 +527,7 @@ func TestProcessTransactionsBatched_CoinbaseIsNeverAParent(t *testing.T) {
 
 	spy := &spyChecker{BlockBatchChecker: inner, checked: map[chainhash.Hash]bool{}}
 
-	_ = f.server.processTransactionsBatched(context.Background(), spy, []*bt.Tx{coinbase, spender}, chainhash.Hash{}, batchedTestHeight, 0, 0, map[uint32]bool{})
+	_ = f.server.processTransactionsBatched(context.Background(), spy, []*bt.Tx{coinbase, spender}, chainhash.Hash{}, batchedTestHeight, 0, 0, candidateForkMTPs{}, map[uint32]bool{})
 
 	require.False(t, spy.checked[*spender.TxIDChainHash()], "a spend of the subtree data's coinbase must not reach the batch script check")
 	require.False(t, spy.checked[*coinbase.TxIDChainHash()])
@@ -546,11 +546,11 @@ func TestProcessTransactionsBatched_InvalidBodiesFailBeforeWriting(t *testing.T)
 	a := opTrueTx(t, 1, []*bt.Tx{root}, []uint32{0})
 	b := opTrueTx(t, 2, []*bt.Tx{root}, []uint32{0})
 
-	err := f.server.processTransactionsBatched(context.Background(), checker, []*bt.Tx{a, b}, chainhash.Hash{}, batchedTestHeight, 0, 0, map[uint32]bool{})
+	err := f.server.processTransactionsBatched(context.Background(), checker, []*bt.Tx{a, b}, chainhash.Hash{}, batchedTestHeight, 0, 0, candidateForkMTPs{}, map[uint32]bool{})
 	require.ErrorIs(t, err, errors.ErrBlockInvalid)
 
 	child := opTrueTx(t, 3, []*bt.Tx{a}, []uint32{0})
-	err = f.server.processTransactionsBatched(context.Background(), checker, []*bt.Tx{child, a}, chainhash.Hash{}, batchedTestHeight, 0, 0, map[uint32]bool{})
+	err = f.server.processTransactionsBatched(context.Background(), checker, []*bt.Tx{child, a}, chainhash.Hash{}, batchedTestHeight, 0, 0, candidateForkMTPs{}, map[uint32]bool{})
 	require.ErrorIs(t, err, errors.ErrBlockInvalid)
 
 	require.Zero(t, f.store.multiCalls.Load())
@@ -577,7 +577,7 @@ func TestProcessTransactionsBatched_FailedSpendGoesThroughTodaysPath(t *testing.
 	winner := opTrueTx(t, 2, []*bt.Tx{roots[1]}, []uint32{0})
 	child := opTrueTx(t, 3, []*bt.Tx{winner}, []uint32{0})
 
-	err = f.server.processTransactionsBatched(context.Background(), checker, []*bt.Tx{loser, winner, child}, chainhash.Hash{}, batchedTestHeight, 0, 0, map[uint32]bool{})
+	err = f.server.processTransactionsBatched(context.Background(), checker, []*bt.Tx{loser, winner, child}, chainhash.Hash{}, batchedTestHeight, 0, 0, candidateForkMTPs{}, map[uint32]bool{})
 	require.NoError(t, err)
 	require.Positive(t, f.store.multiCalls.Load())
 
@@ -600,7 +600,7 @@ func TestProcessTransactionsBatched_CutsLists(t *testing.T) {
 	roots := []*bt.Tx{storedRoot(t, f, 1, opTrue), storedRoot(t, f, 2, opTrue), storedRoot(t, f, 3, opTrue)}
 	txs := chainedTxs(t, roots, 4)
 
-	err := f.server.processTransactionsBatched(context.Background(), checker, txs, chainhash.Hash{}, batchedTestHeight, 0, 0, map[uint32]bool{})
+	err := f.server.processTransactionsBatched(context.Background(), checker, txs, chainhash.Hash{}, batchedTestHeight, 0, 0, candidateForkMTPs{}, map[uint32]bool{})
 	require.NoError(t, err)
 	require.Equal(t, int64(3), f.store.multiCalls.Load(), "12 transactions in lists of 4")
 	requireCreatedUnmined(t, f, txs)
@@ -739,7 +739,7 @@ func TestProcessTransactionsBatched_StoreFaultIsRetryable(t *testing.T) {
 	checker, ok := f.server.batchChecker(blockchain.FSMStateCATCHINGBLOCKS, batchedTestHeight)
 	require.True(t, ok)
 
-	err := f.server.processTransactionsBatched(context.Background(), checker, txs, chainhash.Hash{}, batchedTestHeight, 0, 0, map[uint32]bool{})
+	err := f.server.processTransactionsBatched(context.Background(), checker, txs, chainhash.Hash{}, batchedTestHeight, 0, 0, candidateForkMTPs{}, map[uint32]bool{})
 	require.ErrorIs(t, err, errors.ErrProcessing)
 	require.NotErrorIs(t, err, errors.ErrTxInvalid)
 	require.NotErrorIs(t, err, errors.ErrBlockInvalid)
@@ -796,7 +796,7 @@ func TestProcessTransactionsBatched_StepMetricsSeparateReadsFromChecks(t *testin
 
 		resolveBefore, tailBefore := batchStepSum(t, "resolve"), batchStepSum(t, "check_after_reads")
 
-		require.NoError(t, f.server.processTransactionsBatched(context.Background(), checker, []*bt.Tx{tx}, chainhash.Hash{}, batchedTestHeight, 0, 0, map[uint32]bool{}))
+		require.NoError(t, f.server.processTransactionsBatched(context.Background(), checker, []*bt.Tx{tx}, chainhash.Hash{}, batchedTestHeight, 0, 0, candidateForkMTPs{}, map[uint32]bool{}))
 
 		require.GreaterOrEqual(t, batchStepSum(t, "resolve")-resolveBefore, delay.Seconds(), "resolve covers the parent reads")
 		require.Less(t, batchStepSum(t, "check_after_reads")-tailBefore, delay.Seconds(), "a fast check leaves little after the reads")
@@ -812,7 +812,7 @@ func TestProcessTransactionsBatched_StepMetricsSeparateReadsFromChecks(t *testin
 
 		tailBefore := batchStepSum(t, "check_after_reads")
 
-		require.NoError(t, f.server.processTransactionsBatched(context.Background(), &slowChecker{BlockBatchChecker: inner, delay: delay}, []*bt.Tx{tx}, chainhash.Hash{}, batchedTestHeight, 0, 0, map[uint32]bool{}))
+		require.NoError(t, f.server.processTransactionsBatched(context.Background(), &slowChecker{BlockBatchChecker: inner, delay: delay}, []*bt.Tx{tx}, chainhash.Hash{}, batchedTestHeight, 0, 0, candidateForkMTPs{}, map[uint32]bool{}))
 
 		require.GreaterOrEqual(t, batchStepSum(t, "check_after_reads")-tailBefore, delay.Seconds(), "a slow check shows after the reads")
 	})

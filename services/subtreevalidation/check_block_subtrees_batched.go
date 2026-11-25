@@ -91,7 +91,7 @@ func (u *Server) checkBlockBodyBound(ctx context.Context, request *subtreevalida
 //     descendants, through processTransactionsInLevels, which handles missing
 //     parents, conflicts and already-mined records exactly as today.
 func (u *Server) processTransactionsBatched(ctx context.Context, checker validator.BlockBatchChecker, allTransactions []*bt.Tx,
-	blockHash chainhash.Hash, blockHeight uint32, candidateBlockTime uint32, candidateParentMedianTime uint32, blockIds map[uint32]bool) error {
+	blockHash chainhash.Hash, blockHeight uint32, candidateBlockTime uint32, candidateParentMedianTime uint32, candidateFork candidateForkMTPs, blockIds map[uint32]bool) error {
 	ctx, _, deferFn := tracing.Tracer("subtreevalidation").Start(ctx, "processTransactionsBatched",
 		tracing.WithParentStat(u.stats),
 		tracing.WithDebugLogMessage(u.logger, "[processTransactionsBatched] Processing %d transactions at block height %d", len(allTransactions), blockHeight),
@@ -185,6 +185,7 @@ func (u *Server) processTransactionsBatched(ctx context.Context, checker validat
 		validator.WithIgnoreLocked(true),
 		validator.WithCandidateBlockTime(candidateBlockTime),
 		validator.WithCandidateParentMedianTime(candidateParentMedianTime),
+		validator.WithCandidateForkMTPs(candidateFork.start, candidateFork.mtps),
 		validator.WithUnconfirmedParentsAtCandidateHeight(true),
 		validator.WithAddTXToBlockAssembly(false),
 	)
@@ -229,7 +230,7 @@ func (u *Server) processTransactionsBatched(ctx context.Context, checker validat
 		prometheusSubtreeValidationBatchStep.WithLabelValues("fallback").Observe(time.Since(start).Seconds())
 	}()
 
-	return u.processTransactionsInLevels(ctx, fallbackTxs, blockHash, chainhash.Hash{}, blockHeight, candidateBlockTime, candidateParentMedianTime, blockIds, false)
+	return u.processTransactionsInLevels(ctx, fallbackTxs, blockHash, chainhash.Hash{}, blockHeight, candidateBlockTime, candidateParentMedianTime, candidateFork, blockIds, false)
 }
 
 // batchState is one load batch on the batch path. Indices are positions in txs.

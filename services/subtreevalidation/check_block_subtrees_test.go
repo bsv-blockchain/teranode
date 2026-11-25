@@ -1636,7 +1636,7 @@ func TestProcessTransactionsInLevels(t *testing.T) {
 		var allTransactions []*bt.Tx
 		blockIds := make(map[uint32]bool)
 
-		err := server.processTransactionsInLevels(context.Background(), allTransactions, chainhash.Hash{}, chainhash.Hash{}, 100, 0, 0, blockIds, true)
+		err := server.processTransactionsInLevels(context.Background(), allTransactions, chainhash.Hash{}, chainhash.Hash{}, 100, 0, 0, candidateForkMTPs{}, blockIds, true)
 		require.NoError(t, err)
 	})
 
@@ -1660,8 +1660,36 @@ func TestProcessTransactionsInLevels(t *testing.T) {
 			mock.Anything, blockchain.FSMStateRUNNING).
 			Return(true, nil)
 
-		err = server.processTransactionsInLevels(context.Background(), allTransactions, chainhash.Hash{}, chainhash.Hash{}, 100, 0, 0, blockIds, true)
+		err = server.processTransactionsInLevels(context.Background(), allTransactions, chainhash.Hash{}, chainhash.Hash{}, 100, 0, 0, candidateForkMTPs{}, blockIds, true)
 		require.NoError(t, err)
+	})
+
+	t.Run("PassesCandidateBranchCoinTimes", func(t *testing.T) {
+		server, cleanup := setupTestServer(t)
+		defer cleanup()
+
+		tx1, err := createTestTransaction("fff2525b8931402dd09222c50775608f75787bd2b87e56995a7bdd30f79702c4")
+		require.NoError(t, err)
+
+		mockValidator := server.validatorClient.(*validator.MockValidator)
+		mockValidator.UtxoStore = server.utxoStore
+		recorder := &optionsRecordingValidator{MockValidator: mockValidator}
+		server.validatorClient = recorder
+
+		server.blockchainClient.(*blockchain.Mock).On("IsFSMCurrentState",
+			mock.Anything, blockchain.FSMStateRUNNING).
+			Return(true, nil)
+
+		fork := candidateForkMTPs{start: 97, mtps: []uint32{1_700_000_000, 1_700_000_600, 1_700_001_200}}
+		err = server.processTransactionsInLevels(context.Background(), []*bt.Tx{tx1}, chainhash.Hash{}, chainhash.Hash{}, 100, 0, 0, fork, map[uint32]bool{}, true)
+		require.NoError(t, err)
+
+		require.NotEmpty(t, recorder.seen)
+
+		for _, opts := range recorder.seen {
+			require.Equal(t, fork.start, opts.CandidateForkStartHeight)
+			require.Equal(t, fork.mtps, opts.CandidateForkMTPs)
+		}
 	})
 
 	t.Run("ValidationErrors", func(t *testing.T) {
@@ -1687,7 +1715,7 @@ func TestProcessTransactionsInLevels(t *testing.T) {
 			Return(true, nil)
 
 		// Should fail with validation errors (errors are logged but not returned)
-		err = server.processTransactionsInLevels(context.Background(), allTransactions, chainhash.Hash{}, chainhash.Hash{}, 100, 0, 0, blockIds, true)
+		err = server.processTransactionsInLevels(context.Background(), allTransactions, chainhash.Hash{}, chainhash.Hash{}, 100, 0, 0, candidateForkMTPs{}, blockIds, true)
 		require.Error(t, err)
 	})
 
@@ -1711,7 +1739,7 @@ func TestProcessTransactionsInLevels(t *testing.T) {
 		// Missing-parent errors are deferred (not fatal) so the caller's
 		// sequential revalidation pass can re-run the failed subtrees in
 		// block order and resolve cross-subtree parent dependencies.
-		err = server.processTransactionsInLevels(context.Background(), allTransactions, chainhash.Hash{}, chainhash.Hash{}, 100, 0, 0, blockIds, true)
+		err = server.processTransactionsInLevels(context.Background(), allTransactions, chainhash.Hash{}, chainhash.Hash{}, 100, 0, 0, candidateForkMTPs{}, blockIds, true)
 		require.NoError(t, err)
 	})
 
@@ -1736,7 +1764,7 @@ func TestProcessTransactionsInLevels(t *testing.T) {
 		// The walk-limit error is deterministic for the block: it must fail the
 		// level immediately and keep its distinct code through the wrapping, not
 		// be swallowed into a countless summary error.
-		err = server.processTransactionsInLevels(context.Background(), allTransactions, chainhash.Hash{}, chainhash.Hash{}, 100, 0, 0, blockIds, true)
+		err = server.processTransactionsInLevels(context.Background(), allTransactions, chainhash.Hash{}, chainhash.Hash{}, 100, 0, 0, candidateForkMTPs{}, blockIds, true)
 		require.Error(t, err)
 		require.ErrorIs(t, err, errors.ErrUtxoWalkLimitExceeded)
 	})
@@ -1761,7 +1789,7 @@ func TestProcessTransactionsInLevels(t *testing.T) {
 
 		// Generic per-tx errors are counted and deferred, but the summary error
 		// must chain the first cause instead of reporting bare counts.
-		err = server.processTransactionsInLevels(context.Background(), allTransactions, chainhash.Hash{}, chainhash.Hash{}, 100, 0, 0, blockIds, true)
+		err = server.processTransactionsInLevels(context.Background(), allTransactions, chainhash.Hash{}, chainhash.Hash{}, 100, 0, 0, candidateForkMTPs{}, blockIds, true)
 		require.Error(t, err)
 		require.ErrorIs(t, err, errors.ErrStorageError)
 		require.Contains(t, err.Error(), "distinctive storage failure for testing")
@@ -1776,7 +1804,7 @@ func TestProcessTransactionsInLevels(t *testing.T) {
 		blockIds := make(map[uint32]bool)
 
 		// Should fail with nil transaction
-		err := server.processTransactionsInLevels(context.Background(), allTransactions, chainhash.Hash{}, chainhash.Hash{}, 100, 0, 0, blockIds, true)
+		err := server.processTransactionsInLevels(context.Background(), allTransactions, chainhash.Hash{}, chainhash.Hash{}, 100, 0, 0, candidateForkMTPs{}, blockIds, true)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "transaction is nil")
 	})
@@ -1811,7 +1839,7 @@ func TestProcessTransactionsInLevels(t *testing.T) {
 			mock.Anything, blockchain.FSMStateRUNNING).
 			Return(true, nil)
 
-		err = server.processTransactionsInLevels(context.Background(), allTransactions, chainhash.Hash{}, chainhash.Hash{}, 100, 0, 0, blockIds, true)
+		err = server.processTransactionsInLevels(context.Background(), allTransactions, chainhash.Hash{}, chainhash.Hash{}, 100, 0, 0, candidateForkMTPs{}, blockIds, true)
 		require.NoError(t, err)
 	})
 
@@ -1844,7 +1872,7 @@ func TestProcessTransactionsInLevels(t *testing.T) {
 			Return(true, nil)
 
 		// Should return error even some validation failures
-		err := server.processTransactionsInLevels(context.Background(), allTransactions, chainhash.Hash{}, chainhash.Hash{}, 100, 0, 0, blockIds, true)
+		err := server.processTransactionsInLevels(context.Background(), allTransactions, chainhash.Hash{}, chainhash.Hash{}, 100, 0, 0, candidateForkMTPs{}, blockIds, true)
 		require.Error(t, err)
 	})
 
@@ -2904,4 +2932,21 @@ func TestValidateSubtreeLeafCount(t *testing.T) {
 		require.Error(t, err)
 		require.True(t, errors.Is(err, errors.ErrNetworkInvalidResponse))
 	})
+}
+
+// optionsRecordingValidator records the options of every ValidateWithOptions call and then
+// validates through the wrapped mock.
+type optionsRecordingValidator struct {
+	*validator.MockValidator
+
+	mu   sync.Mutex
+	seen []*validator.Options
+}
+
+func (r *optionsRecordingValidator) ValidateWithOptions(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts *validator.Options) (*utxometa.Data, error) {
+	r.mu.Lock()
+	r.seen = append(r.seen, opts)
+	r.mu.Unlock()
+
+	return r.MockValidator.ValidateWithOptions(ctx, tx, blockHeight, opts)
 }

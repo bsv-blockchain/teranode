@@ -2458,7 +2458,7 @@ func TestEnsureMTPLoaded_CrossBlockReadersAndWritersDoNotRace(t *testing.T) {
 				// Read through validateTransaction's own reader, so the test
 				// fails under -race if readMTPsLocked stops taking the lock.
 				// initialHeight-1 sits in the overlap the extension patches.
-				_, _ = v.readMTPsLocked(initialHeight, 1, []uint32{0, initialHeight / 2, initialHeight - 1})
+				_, _ = v.readMTPsLocked(initialHeight, 1, 0, nil, []uint32{0, initialHeight / 2, initialHeight - 1})
 			}
 		}()
 	}
@@ -2500,7 +2500,7 @@ func TestReadMTPsLocked_HappyPath(t *testing.T) {
 		},
 	}
 
-	utxoMTPs, err := v.readMTPsLocked(4, 1_800_000_000, []uint32{0, 2, 3})
+	utxoMTPs, err := v.readMTPsLocked(4, 1_800_000_000, 0, nil, []uint32{0, 2, 3})
 	require.NoError(t, err)
 	require.Equal(t, []uint32{1_700_000_000, 1_700_000_020, 1_700_000_030}, utxoMTPs)
 }
@@ -2519,7 +2519,7 @@ func TestReadMTPsLocked_ClampsOutOfRangeUTXOs(t *testing.T) {
 		},
 	}
 
-	utxoMTPs, err := v.readMTPsLocked(2, 1_800_000_000, []uint32{0, 99, 1, 2})
+	utxoMTPs, err := v.readMTPsLocked(2, 1_800_000_000, 0, nil, []uint32{0, 99, 1, 2})
 	require.NoError(t, err)
 	require.Equal(t, []uint32{1_700_000_000, 1_800_000_000, 1_700_000_010, 1_800_000_000}, utxoMTPs)
 }
@@ -2625,6 +2625,88 @@ func TestValidateTransaction_BIP68BlockTimeFollowsCandidateBranch(t *testing.T) 
 	})
 }
 
+// TestValidateTransaction_BIP68ForkCoinReadsItsOwnBranch checks that a coin created on the
+// candidate's own branch, above the point where that branch leaves the main chain, takes its
+// coin time from Options.CandidateForkMTPs and not from the main chain's mtpStore.
+//
+// The fork leaves the main chain below H-8, so the overlay covers H-8 to H-1 and the coin
+// sits at H-5. Its branch's median is two hours later than the main chain's at H-5. The block
+// time is 100 seconds after the branch coin time, short of the 512 a one-unit lock needs,
+// while measured from the main-chain coin time it would be more than two hours.
+func TestValidateTransaction_BIP68ForkCoinReadsItsOwnBranch(t *testing.T) {
+	const (
+		blockHeight = uint32(500_000)
+		forkStart   = blockHeight - 8
+		coinHeight  = blockHeight - 5
+	)
+
+	ctx, _, endSpan := tracing.Tracer("validator").Start(context.Background(), "Test")
+	defer endSpan()
+
+	forkMTPs := func(coinTime uint32) []uint32 {
+		mtps := make([]uint32, blockHeight-forkStart)
+		for i := range mtps {
+			mtps[i] = uint32(1_700_000_000) + forkStart + uint32(i) + 7_200
+		}
+
+		mtps[coinHeight-forkStart] = coinTime
+
+		return mtps
+	}
+
+	t.Run("lock not met on the candidate branch", func(t *testing.T) {
+		v := bip68ForkValidator(t, blockHeight)
+		branchCoinTime := v.mtpStore[coinHeight] + 7_200
+
+		err := v.validateTransaction(ctx, bip68TimeLockedTx(t), blockHeight, []uint32{coinHeight}, &Options{
+			SkipPolicyChecks:          true,
+			CandidateParentMedianTime: branchCoinTime + 100,
+			CandidateForkStartHeight:  forkStart,
+			CandidateForkMTPs:         forkMTPs(branchCoinTime),
+		})
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "transaction sequence lock time not satisfied")
+	})
+
+	t.Run("lock met on the candidate branch", func(t *testing.T) {
+		v := bip68ForkValidator(t, blockHeight)
+		// the branch coin time is earlier than the main chain's, and the block time is 100
+		// seconds after the main-chain coin time
+		branchCoinTime := v.mtpStore[coinHeight] - 1_000
+
+		err := v.validateTransaction(ctx, bip68TimeLockedTx(t), blockHeight, []uint32{coinHeight}, &Options{
+			SkipPolicyChecks:          true,
+			CandidateParentMedianTime: v.mtpStore[coinHeight] + 100,
+			CandidateForkStartHeight:  forkStart,
+			CandidateForkMTPs:         forkMTPs(branchCoinTime),
+		})
+		require.NoError(t, err)
+	})
+}
+
+// TestReadMTPsLocked_ForkMTPs checks which source each coin height reads when the candidate
+// carries its branch's coin times: the main-chain store below the fork, the overlay from the
+// fork up to the parent, and the block time at the candidate's own height.
+func TestReadMTPsLocked_ForkMTPs(t *testing.T) {
+	v := &Validator{mtpStore: []uint32{100, 101, 102, 103, 104, 105}}
+
+	utxoMTPs, err := v.readMTPsLocked(5, 999, 3, []uint32{203, 204}, []uint32{2, 3, 4, 5})
+	require.NoError(t, err)
+	require.Equal(t, []uint32{102, 203, 204, 999}, utxoMTPs)
+}
+
+// TestReadMTPsLocked_RejectsForkMTPsNotEndingAtParent checks that an overlay which does not
+// end at the candidate's parent is refused rather than indexed.
+func TestReadMTPsLocked_RejectsForkMTPsNotEndingAtParent(t *testing.T) {
+	v := &Validator{mtpStore: []uint32{100, 101, 102, 103, 104, 105}}
+
+	for _, forkStart := range []uint32{2, 4} {
+		_, err := v.readMTPsLocked(5, 999, forkStart, []uint32{203, 204}, []uint32{3})
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "must end at the candidate's parent")
+	}
+}
+
 // TestValidateTransaction_BIP68PathReadsMTPStore drives validateTransaction
 // through the SkipPolicyChecks BIP68 branch with a populated mtpStore. The
 // goal is coverage on the MTP-reading code path (`readMTPsLocked` call,
@@ -2719,7 +2801,7 @@ func TestReadMTPsLocked_GuardFiresOnUnpopulatedStore(t *testing.T) {
 		mtpStore: []uint32{1_700_000_000, 1_700_000_010}, // length 2, asking for height 5
 	}
 
-	utxoMTPs, err := v.readMTPsLocked(5, 1_800_000_000, []uint32{0})
+	utxoMTPs, err := v.readMTPsLocked(5, 1_800_000_000, 0, nil, []uint32{0})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "MTP store not loaded up to height 5")
 	require.Nil(t, utxoMTPs)

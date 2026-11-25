@@ -179,7 +179,7 @@ func TestProcessTransactionsBatched_RepeatedParentFallsBackWithChild(t *testing.
 	winner := opTrueTx(t, 2, []*bt.Tx{roots[1]}, []uint32{0})
 	child := opTrueTx(t, 3, []*bt.Tx{loser, winner, loser}, []uint32{0, 0, 1})
 
-	err = f.server.processTransactionsBatched(context.Background(), checker, []*bt.Tx{loser, winner, child}, chainhash.Hash{}, batchedTestHeight, 0, 0, map[uint32]bool{})
+	err = f.server.processTransactionsBatched(context.Background(), checker, []*bt.Tx{loser, winner, child}, chainhash.Hash{}, batchedTestHeight, 0, 0, candidateForkMTPs{}, map[uint32]bool{})
 	require.NoError(t, err)
 	require.Equal(t, int64(1), f.store.multiCalls.Load(), "the child's list is never sent: the child falls back before it")
 

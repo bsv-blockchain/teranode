@@ -708,6 +708,12 @@ func optionsFromValidateRequest(req *validator_api.ValidateTransactionRequest) (
 		opts.OutpointOnlySpend = *req.OutpointOnlySpend
 	}
 
+	if req.CandidateForkStartHeight != nil {
+		opts.CandidateForkStartHeight = *req.CandidateForkStartHeight
+	}
+
+	opts.CandidateForkMTPs = req.CandidateForkMtps
+
 	return opts, nil
 }
 

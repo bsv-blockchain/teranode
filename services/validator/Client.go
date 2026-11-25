@@ -312,6 +312,16 @@ func candidateParentMedianTimePtr(opts *Options) *uint32 {
 	return &opts.CandidateParentMedianTime
 }
 
+// candidateForkStartHeightPtr returns the fork start height only when the request carries
+// fork coin times, so a request without them leaves the field unset.
+func candidateForkStartHeightPtr(opts *Options) *uint32 {
+	if len(opts.CandidateForkMTPs) == 0 {
+		return nil
+	}
+
+	return &opts.CandidateForkStartHeight
+}
+
 // buildValidateTxRequest constructs the gRPC ValidateTransactionRequest from
 // raw transaction bytes, block height, and validation options. Shared by the
 // client's non-batch / batch send paths AND by the server's HTTP /tx, /txs
@@ -332,6 +342,8 @@ func buildValidateTxRequest(transactionData []byte, blockHeight uint32, opts *Op
 		UnconfirmedParentsAtCandidateHeight: unconfirmedParentsAtCandidateHeightPtr(opts),
 		SkipScriptValidation:                &opts.SkipScriptValidation,
 		OutpointOnlySpend:                   &opts.OutpointOnlySpend,
+		CandidateForkStartHeight:            candidateForkStartHeightPtr(opts),
+		CandidateForkMtps:                   opts.CandidateForkMTPs,
 	}
 }
 

@@ -106,6 +106,19 @@ type Options struct {
 	// reference implementations).
 	CandidateParentMedianTime uint32
 
+	// CandidateForkStartHeight and CandidateForkMTPs give BIP68 the coin times of a
+	// candidate block on a side chain. CandidateForkMTPs[i] is the median of the 11
+	// timestamps before the candidate-branch block at height CandidateForkStartHeight+i,
+	// the value bitcoin-sv reads as GetAncestor(nCoinHeight-1)->GetMedianTimePast() for a
+	// coin created in that block. The list runs from the first block above the point where
+	// the candidate's branch leaves the current chain up to the candidate's parent, so
+	// CandidateForkStartHeight+len(CandidateForkMTPs) is the candidate's height. A coin at
+	// one of those heights reads its time from here rather than from the validator's MTP
+	// store, which holds the current chain's values. Both are empty when the candidate's
+	// parent is on the current chain. Only consumed where BIP68 is enforced.
+	CandidateForkStartHeight uint32
+	CandidateForkMTPs        []uint32
+
 	// UnconfirmedParentsAtCandidateHeight makes the unconfirmedParentHeight
 	// sentinel resolve to the candidate block height instead of failing closed
 	// (consensus-mode sentinel → MEMPOOL_HEIGHT → BDK rejects with
@@ -403,6 +416,15 @@ func WithCandidateBlockTime(timestamp uint32) Option {
 func WithCandidateParentMedianTime(mtp uint32) Option {
 	return func(o *Options) {
 		o.CandidateParentMedianTime = mtp
+	}
+}
+
+// WithCandidateForkMTPs carries the coin times of the candidate's own branch above the
+// point where it leaves the current chain. See Options.CandidateForkMTPs.
+func WithCandidateForkMTPs(startHeight uint32, mtps []uint32) Option {
+	return func(o *Options) {
+		o.CandidateForkStartHeight = startHeight
+		o.CandidateForkMTPs = mtps
 	}
 }
 

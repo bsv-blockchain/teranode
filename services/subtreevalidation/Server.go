@@ -904,6 +904,13 @@ func (u *Server) checkSubtreeFromBlock(ctx context.Context, request *subtreevali
 		}
 	}
 
+	// BIP68 coin times along the candidate's own branch, for a candidate whose parent is off
+	// the current chain (fetchCandidateForkMTPs).
+	forkStart, forkMTPs, err := u.fetchCandidateForkMTPs(ctx, previousBlockHash, request.BlockHeight)
+	if err != nil {
+		return false, errors.NewProcessingError("[CheckSubtree] candidate branch coin times", err)
+	}
+
 	// Check if the base URL is "legacy", which indicates that the subtree is coming from a block from the legacy service.
 	if request.BaseUrl == "legacy" {
 		// read from legacy store
@@ -989,6 +996,7 @@ func (u *Server) checkSubtreeFromBlock(ctx context.Context, request *subtreevali
 			validator.WithCreateConflicting(true),
 			validator.WithIgnoreLocked(true),
 			validator.WithCandidateParentMedianTime(candidateParentMedianTime),
+			validator.WithCandidateForkMTPs(forkStart, forkMTPs),
 			validator.WithUnconfirmedParentsAtCandidateHeight(true),
 		}
 
@@ -1042,6 +1050,7 @@ func (u *Server) checkSubtreeFromBlock(ctx context.Context, request *subtreevali
 		validator.WithCreateConflicting(true),
 		validator.WithIgnoreLocked(true),
 		validator.WithCandidateParentMedianTime(candidateParentMedianTime),
+		validator.WithCandidateForkMTPs(forkStart, forkMTPs),
 	}
 
 	// The same gate as the legacy branch: the block's txs feed block assembly only when the
