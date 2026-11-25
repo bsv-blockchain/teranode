@@ -52,6 +52,8 @@ func finishes(fn func(), d time.Duration) bool {
 // writer and has its own test below, because on a store with no checkpoints a block-carrying
 // create takes the identity route and writes no containment.
 func TestFenceLockBlocksTheContainmentWritersAndNotSpends(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newUncheckpointedStore(t)
 
 	parent := mkTx(t, 3, 5_000)
@@ -110,6 +112,8 @@ func TestFenceLockBlocksTheContainmentWritersAndNotSpends(t *testing.T) {
 // TestFenceLockBlocksTheBlockPathCreate is the fourth writer of ST-25, on a store with
 // checkpoints so that a create carrying a block below the checkpoint writes containment.
 func TestFenceLockBlocksTheBlockPathCreate(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	release := holdFenceExclusive(t, s, ctx)

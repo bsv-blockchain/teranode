@@ -13,6 +13,8 @@ import (
 // TestGetServesAMinedTransactionFromTheMembershipTable: no identity row exists, so the
 // block ids, heights and subtree index come from tx_mined, and the body from its partition.
 func TestGetServesAMinedTransactionFromTheMembershipTable(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	tx := mkTx(t, 1, 5_000)
@@ -33,6 +35,8 @@ func TestGetServesAMinedTransactionFromTheMembershipTable(t *testing.T) {
 // the transaction still has a live UTXO, and the UTXO's block facts are the answer. Fee,
 // size, inputs and subtree index are zero, which is what a pruned SV Node can say too.
 func TestGetServesAnOldParentFromItsUTXOOnceTheWindowIsGone(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	tx := mkTx(t, 1, 5_000)
@@ -55,6 +59,8 @@ func TestGetServesAnOldParentFromItsUTXOOnceTheWindowIsGone(t *testing.T) {
 // UTXO holds one block id; a transaction stamped into two blocks must report both while
 // the partition lives, which only the membership table can do.
 func TestGetNeverAnswersBlockIdsFromTheUTXOWhileAMembershipRowExists(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	tx := mkTx(t, 1, 5_000)
@@ -85,6 +91,8 @@ func TestGetNeverAnswersBlockIdsFromTheUTXOWhileAMembershipRowExists(t *testing.
 // half: past both retentions the transaction really is gone, which is aerospike's behaviour
 // after its delete-at-height and what the shared suite's pruning test requires.
 func TestGetServesAFullySpentTransactionPastItsWindowWhileItsJournalLeafLives(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	parent := mkTx(t, 1, 5_000)
@@ -117,6 +125,8 @@ func TestGetServesAFullySpentTransactionPastItsWindowWhileItsJournalLeafLives(t 
 // TestBatchDecorateFollowsTheSameOrder: one mempool row, one membership row, one UTXO-only
 // parent and one unknown, in a single call.
 func TestBatchDecorateFollowsTheSameOrder(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	mempool := mkTx(t, 1, 5_001)
@@ -156,6 +166,8 @@ func TestBatchDecorateFollowsTheSameOrder(t *testing.T) {
 // That transaction has no identity row in this design; the answer comes from tx_mined.
 // services/blockvalidation/quick_validate.go:429-444, services/legacy/netsync/handle_block.go:1236-1262.
 func TestBlockIdRecoveryReadsTheMembershipRow(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	first := mkTx(t, 1, 5_000)
@@ -178,6 +190,8 @@ func TestBlockIdRecoveryReadsTheMembershipRow(t *testing.T) {
 // txid masked to NumLeaves, so a handful of random transactions is not enough to guarantee it;
 // the loop keeps creating until every leaf has at least one and then checks the count.
 func TestBatchDecorateResolvesEveryLeafOfAMultiLeafBatch(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	seen := map[int16]int{}
@@ -210,6 +224,8 @@ func TestBatchDecorateResolvesEveryLeafOfAMultiLeafBatch(t *testing.T) {
 // group would fail the whole batch rather than answer wrongly -- which is the right direction,
 // and still worth pinning.
 func TestSetMinedMultiAnswersForEveryLeafOfAMultiLeafBatch(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	seen := map[int16]int{}

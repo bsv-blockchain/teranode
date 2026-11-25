@@ -550,6 +550,31 @@ func (c *Client) LaneMapRows(ctx context.Context, blockID uint32) ([]lane.MapRow
 	return laneMapRowsFromProto(resp.GetRows())
 }
 
+// LaneCapGrants returns, for each lane with one, the first grant handed out at or above height.
+func (c *Client) LaneCapGrants(ctx context.Context, height uint32) ([]lane.CapGrant, error) {
+	resp, err := c.client.GetLaneCapGrants(ctx, &blockchain_api.GetLaneCapGrantsRequest{Height: height})
+	if err != nil {
+		return nil, errors.UnwrapGRPC(err)
+	}
+
+	grants := make([]lane.CapGrant, 0, len(resp.GetGrants()))
+
+	for _, g := range resp.GetGrants() {
+		if g.GetLane() > lane.MaxLane || g.GetFirst() == 0 || g.GetFirst() > lane.MaxPosition {
+			return nil, errors.NewProcessingError("lane cap grant lane %d first %d is out of range", g.GetLane(), g.GetFirst())
+		}
+
+		grants = append(grants, lane.CapGrant{
+			Lane:     uint8(g.GetLane()),
+			First:    g.GetFirst(),
+			Height:   g.GetHeight(),
+			HandedAt: time.Unix(0, g.GetHandedAtNanos()),
+		})
+	}
+
+	return grants, nil
+}
+
 // blockFromResponse converts a gRPC GetBlockResponse into a model.Block.
 // This helper method deserializes the various components of a block response
 // from the blockchain service and reconstructs them into the internal Block model.

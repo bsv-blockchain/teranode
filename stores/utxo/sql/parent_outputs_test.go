@@ -26,6 +26,8 @@ func TestParentOutputsForValidationSQLite(t *testing.T) {
 }
 
 func TestParentOutputsForValidationPostgres(t *testing.T) {
+	parallelPostgres(t)
+
 	if testing.Short() {
 		t.Skip("skipping Postgres integration test in short mode")
 	}
