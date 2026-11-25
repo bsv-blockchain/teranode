@@ -156,6 +156,17 @@ func StartConnecting(ctx context.Context, logger ulogger.Logger, tSettings *sett
 	return r
 }
 
+// InstallIndex makes a Reader over idx, which the caller keeps current, the process's Reader, and
+// returns it. It follows no chain. Tests of the readers in other packages use it to judge against an
+// index they built; Start at off removes it.
+func InstallIndex(logger ulogger.Logger, idx *lane.Index, settleDepth uint32) *Reader {
+	r := newReader(logger, nil, settleDepth)
+	r.idx.Store(idx)
+	current.Store(r)
+
+	return r
+}
+
 func newReader(logger ulogger.Logger, source Source, settleDepth uint32) *Reader {
 	initMetrics()
 

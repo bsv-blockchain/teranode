@@ -13,6 +13,8 @@ import (
 // Two transactions with different fees created in one statement keep their own fees. The create
 // plan sorts its rows by txid, and the fee column has to move with them.
 func TestCreatePlanKeepsEachTransactionsFee(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newUncheckpointedStore(t)
 
 	const height = 950

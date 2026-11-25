@@ -134,6 +134,8 @@ func conflictingIndexTestTx(t *testing.T) *bt.Tx {
 // that transaction ends. A plain CREATE INDEX at startup would block writes for
 // the whole build instead.
 func TestPostgresConflictingIndex_BuiltConcurrentlyAfterStartup(t *testing.T) {
+	parallelPostgres(t)
+
 	dbURL := startPostgres(t)
 	admin := openAdminDB(t, dbURL)
 
@@ -187,6 +189,8 @@ func TestPostgresConflictingIndex_BuiltConcurrentlyAfterStartup(t *testing.T) {
 // index left by a failed concurrent build is dropped and rebuilt, rather than
 // kept forever by CREATE INDEX IF NOT EXISTS.
 func TestPostgresConflictingIndex_RebuildsAnInvalidLeftover(t *testing.T) {
+	parallelPostgres(t)
+
 	dbURL := startPostgres(t)
 	admin := openAdminDB(t, dbURL)
 
@@ -216,6 +220,8 @@ func TestPostgresConflictingIndex_RebuildsAnInvalidLeftover(t *testing.T) {
 // on transactions would queue an ACCESS EXCLUSIVE lock behind the build, and
 // every later read and write of the table behind that.
 func TestPostgresConflictingIndex_SchemaStartupWaitsForABuild(t *testing.T) {
+	parallelPostgres(t)
+
 	dbURL := startPostgres(t)
 	admin := openAdminDB(t, dbURL)
 
@@ -268,6 +274,8 @@ func TestPostgresConflictingIndex_SchemaStartupWaitsForABuild(t *testing.T) {
 // statement takes its table lock before it checks IF NOT EXISTS, and would wait
 // behind anything holding a conflicting lock, such as an anti-wraparound vacuum.
 func TestPostgresConflictingIndex_ValidIndexTakesNoTableLock(t *testing.T) {
+	parallelPostgres(t)
+
 	dbURL := startPostgres(t)
 	admin := openAdminDB(t, dbURL)
 
@@ -485,6 +493,8 @@ func TestHoldConflictingIndexBuildLock_Errors(t *testing.T) {
 // schema lock and runs the schema statements on one connection, so it never
 // waits for a connection it is itself holding.
 func TestPostgresConflictingIndex_StartsWithTwoConnections(t *testing.T) {
+	parallelPostgres(t)
+
 	dbURL := startPostgres(t)
 
 	tSettings := conflictingIndexSettings(t)
@@ -508,6 +518,8 @@ func TestPostgresConflictingIndex_StartsWithTwoConnections(t *testing.T) {
 // starting afterwards would wait in New for it. pgx sends a CancelRequest when a
 // context interrupts a statement; this keeps that true.
 func TestPostgresConflictingIndex_CloseCancelsTheBuildOnTheServer(t *testing.T) {
+	parallelPostgres(t)
+
 	dbURL := startPostgres(t)
 	admin := openAdminDB(t, dbURL)
 
@@ -541,7 +553,7 @@ func TestPostgresConflictingIndex_CloseCancelsTheBuildOnTheServer(t *testing.T) 
 
 	require.Eventually(t, func() bool {
 		var building int
-		err := admin.QueryRow(`SELECT count(*) FROM pg_stat_activity WHERE state = 'active' AND query LIKE 'CREATE INDEX CONCURRENTLY%'`).Scan(&building)
+		err := admin.QueryRow(`SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() AND state = 'active' AND query LIKE 'CREATE INDEX CONCURRENTLY%'`).Scan(&building)
 
 		return err == nil && building == 0
 	}, 10*time.Second, 100*time.Millisecond, "the index build kept running on the server after Close")

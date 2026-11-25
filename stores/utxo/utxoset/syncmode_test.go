@@ -30,6 +30,8 @@ import (
 // So the journal still has no off-switch, and this test pins the height case that used to
 // disable it: deep below the checkpoint, a spend must still be journalled.
 func TestJournalRunsBelowTheCheckpoint(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	s.settings.ChainCfgParams.Checkpoints = []chaincfg.Checkpoint{{Height: 1_000_000}}

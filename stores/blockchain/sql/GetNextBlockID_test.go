@@ -11,9 +11,6 @@ import (
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/testcontainers/testcontainers-go"
-	"github.com/testcontainers/testcontainers-go/modules/postgres"
-	"github.com/testcontainers/testcontainers-go/wait"
 )
 
 func TestGetNextBlockID_SQLite(t *testing.T) {
@@ -155,32 +152,12 @@ func TestGetNextBlockID_SQLite(t *testing.T) {
 }
 
 func TestGetNextBlockID_Postgres(t *testing.T) {
+	t.Parallel() // a database of its own on the shared server
+
 	ctx := context.Background()
 
 	t.Run("sequential ID generation from empty database", func(t *testing.T) {
-		// Start PostgreSQL container
-		pgContainer, err := postgres.Run(ctx,
-			"postgres:13",
-			postgres.WithDatabase("testdb"),
-			postgres.WithUsername("testuser"),
-			postgres.WithPassword("testpass"),
-			testcontainers.WithWaitStrategy(
-				wait.ForLog("database system is ready to accept connections").
-					WithOccurrence(2).
-					WithStartupTimeout(5*time.Minute),
-			),
-		)
-		test.SkipIfContainerUnavailable(t, err)
-		defer func() {
-			assert.NoError(t, pgContainer.Terminate(ctx))
-		}()
-
-		// Get connection string
-		connStr, err := pgContainer.ConnectionString(ctx, "sslmode=disable")
-		require.NoError(t, err)
-
-		dbURL, err := url.Parse(connStr)
-		require.NoError(t, err)
+		dbURL := postgresTestURL(t)
 
 		tSettings := test.CreateBaseTestSettings(t)
 		s, err := New(ulogger.TestLogger{}, dbURL, tSettings)
@@ -206,29 +183,7 @@ func TestGetNextBlockID_Postgres(t *testing.T) {
 	})
 
 	t.Run("ID generation after storing blocks", func(t *testing.T) {
-		// Start PostgreSQL container
-		pgContainer, err := postgres.Run(ctx,
-			"postgres:13",
-			postgres.WithDatabase("testdb"),
-			postgres.WithUsername("testuser"),
-			postgres.WithPassword("testpass"),
-			testcontainers.WithWaitStrategy(
-				wait.ForLog("database system is ready to accept connections").
-					WithOccurrence(2).
-					WithStartupTimeout(5*time.Minute),
-			),
-		)
-		test.SkipIfContainerUnavailable(t, err)
-		defer func() {
-			assert.NoError(t, pgContainer.Terminate(ctx))
-		}()
-
-		// Get connection string
-		connStr, err := pgContainer.ConnectionString(ctx, "sslmode=disable")
-		require.NoError(t, err)
-
-		dbURL, err := url.Parse(connStr)
-		require.NoError(t, err)
+		dbURL := postgresTestURL(t)
 
 		tSettings := test.CreateBaseTestSettings(t)
 		s, err := New(ulogger.TestLogger{}, dbURL, tSettings)
@@ -259,29 +214,7 @@ func TestGetNextBlockID_Postgres(t *testing.T) {
 	})
 
 	t.Run("concurrent ID generation", func(t *testing.T) {
-		// Start PostgreSQL container
-		pgContainer, err := postgres.Run(ctx,
-			"postgres:13",
-			postgres.WithDatabase("testdb"),
-			postgres.WithUsername("testuser"),
-			postgres.WithPassword("testpass"),
-			testcontainers.WithWaitStrategy(
-				wait.ForLog("database system is ready to accept connections").
-					WithOccurrence(2).
-					WithStartupTimeout(5*time.Minute),
-			),
-		)
-		test.SkipIfContainerUnavailable(t, err)
-		defer func() {
-			assert.NoError(t, pgContainer.Terminate(ctx))
-		}()
-
-		// Get connection string
-		connStr, err := pgContainer.ConnectionString(ctx, "sslmode=disable")
-		require.NoError(t, err)
-
-		dbURL, err := url.Parse(connStr)
-		require.NoError(t, err)
+		dbURL := postgresTestURL(t)
 
 		tSettings := test.CreateBaseTestSettings(t)
 		s, err := New(ulogger.TestLogger{}, dbURL, tSettings)
@@ -321,29 +254,7 @@ func TestGetNextBlockID_Postgres(t *testing.T) {
 	})
 
 	t.Run("context cancellation", func(t *testing.T) {
-		// Start PostgreSQL container
-		pgContainer, err := postgres.Run(ctx,
-			"postgres:13",
-			postgres.WithDatabase("testdb"),
-			postgres.WithUsername("testuser"),
-			postgres.WithPassword("testpass"),
-			testcontainers.WithWaitStrategy(
-				wait.ForLog("database system is ready to accept connections").
-					WithOccurrence(2).
-					WithStartupTimeout(5*time.Minute),
-			),
-		)
-		test.SkipIfContainerUnavailable(t, err)
-		defer func() {
-			assert.NoError(t, pgContainer.Terminate(ctx))
-		}()
-
-		// Get connection string
-		connStr, err := pgContainer.ConnectionString(ctx, "sslmode=disable")
-		require.NoError(t, err)
-
-		dbURL, err := url.Parse(connStr)
-		require.NoError(t, err)
+		dbURL := postgresTestURL(t)
 
 		tSettings := test.CreateBaseTestSettings(t)
 		s, err := New(ulogger.TestLogger{}, dbURL, tSettings)
