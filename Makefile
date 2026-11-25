@@ -180,14 +180,17 @@ install-tools:
 
 # -timeout is per package. stores/utxo/aerospike runs its testcontainer suite
 # under -race and coverage, which took 9m20s on main by itself in October 2026,
-# so 10m left no room for new container tests there.
+# so 10m left no room for new container tests there. In November 2026 it took
+# about 16m on main's PRs, and the create-first tests need more than 20m, so
+# test-pkgs, which CI uses for that package alone, allows 30m. `make test` keeps 20m.
 #
 # TEST_EXCLUDE drops packages (paths relative to the module) from `make test`; CI
 # sets it to run the slowest package in its own job via `make test-pkgs`.
 # TEST_COVERPROFILE names the coverage file either target writes.
 TEST_EXCLUDE ?=
 TEST_COVERPROFILE ?= coverage.out
-TEST_FLAGS = -race -tags "testtxmetacache" -count=1 -timeout=20m -coverprofile=$(TEST_COVERPROFILE) -coverpkg=./...
+TEST_TIMEOUT ?= 20m
+TEST_FLAGS = -race -tags "testtxmetacache" -count=1 -timeout=$(TEST_TIMEOUT) -coverprofile=$(TEST_COVERPROFILE) -coverpkg=./...
 UNIT_TEST_PKGS = $(filter-out $(addprefix github.com/bsv-blockchain/teranode/,$(TEST_EXCLUDE)),$(shell go list ./... | grep -v github.com/bsv-blockchain/teranode/test/ | sort))
 
 .PHONY: test
@@ -198,6 +201,7 @@ test:
 # run `make test` for only the packages in TEST_PKGS (paths relative to the module),
 # e.g. make test-pkgs TEST_PKGS=stores/utxo/aerospike TEST_COVERPROFILE=coverage-aerospike.out
 .PHONY: test-pkgs
+test-pkgs: TEST_TIMEOUT = 30m
 test-pkgs:
 	@test -n "$(TEST_PKGS)" || { echo "TEST_PKGS is empty"; exit 1; }
 	@command -v gotestsum >/dev/null 2>&1 || { echo "gotestsum not found. Installing..."; $(MAKE) install-tools; }
