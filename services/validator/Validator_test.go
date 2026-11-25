@@ -3517,17 +3517,22 @@ func (c *idChainClient) GetBlockHeadersByParentLinks(_ context.Context, hash *ch
 	return nil, nil, nil
 }
 
-// brokenLinkClient is idChainClient whose parent-link walk swaps the fourth header for one that
-// does not link to its neighbours, at the right height.
+// brokenLinkClient is idChainClient whose parent-link walk, on its call-th page, swaps the header
+// at index at for one that does not link to its neighbours, at the right height.
 type brokenLinkClient struct {
 	*idChainClient
+
+	call, at int
+	calls    int
 }
 
 func (c *brokenLinkClient) GetBlockHeadersByParentLinks(ctx context.Context, hash *chainhash.Hash, n uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
 	headers, metas, err := c.idChainClient.GetBlockHeadersByParentLinks(ctx, hash, n)
-	if len(headers) > 3 {
+
+	c.calls++
+	if c.calls == c.call && len(headers) > c.at {
 		headers = append([]*model.BlockHeader{}, headers...)
-		headers[3] = &model.BlockHeader{Nonce: 999_999, HashPrevBlock: &chainhash.Hash{}, HashMerkleRoot: &chainhash.Hash{}}
+		headers[c.at] = &model.BlockHeader{Nonce: 999_999, HashPrevBlock: &chainhash.Hash{}, HashMerkleRoot: &chainhash.Hash{}}
 	}
 
 	return headers, metas, err
@@ -3536,20 +3541,33 @@ func (c *brokenLinkClient) GetBlockHeadersByParentLinks(ctx context.Context, has
 // TestEnsureMTPLoaded_RefusesAChainThatDoesNotLink checks that a load whose parent-link read does
 // not form one chain fails rather than storing medians from more than one chain.
 func TestEnsureMTPLoaded_RefusesAChainThatDoesNotLink(t *testing.T) {
-	tSettings := test.CreateBaseTestSettings(t)
-	params := *tSettings.ChainCfgParams
-	params.GenesisActivationHeight = ^uint32(0)
-	tSettings.ChainCfgParams = &params
-
-	v := &Validator{
-		logger:           ulogger.TestLogger{},
-		settings:         tSettings,
-		blockchainClient: &brokenLinkClient{idChainClient: &idChainClient{Mock: &blockchain.Mock{}, tip: 999}},
-		stats:            gocore.NewStat("validator_test"),
+	tests := []struct {
+		name                string
+		pageLimit, call, at int
+	}{
+		{name: "inside a page", call: 1, at: 3},
+		{name: "first header of a later page", pageLimit: 100, call: 2, at: 0},
 	}
 
-	require.ErrorContains(t, v.EnsureMTPLoaded(context.Background(), 1_000), "does not link")
-	require.Empty(t, v.mtpStore)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			tSettings := test.CreateBaseTestSettings(t)
+			params := *tSettings.ChainCfgParams
+			params.GenesisActivationHeight = ^uint32(0)
+			tSettings.ChainCfgParams = &params
+			tSettings.BlockChain.MaxBlockHeadersPerRequest = tc.pageLimit
+
+			v := &Validator{
+				logger:           ulogger.TestLogger{},
+				settings:         tSettings,
+				blockchainClient: &brokenLinkClient{idChainClient: &idChainClient{Mock: &blockchain.Mock{}, tip: 999}, call: tc.call, at: tc.at},
+				stats:            gocore.NewStat("validator_test"),
+			}
+
+			require.ErrorContains(t, v.EnsureMTPLoaded(context.Background(), 1_000), "does not link")
+			require.Empty(t, v.mtpStore)
+		})
+	}
 }
 
 // TestEnsureMTPLoaded_PlaceholderIDsDoNotJoin checks that entries above the tip, whose ID 0 names

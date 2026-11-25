@@ -234,6 +234,21 @@ func TestValidateTransaction_BIP68ForkCandidateChecksTheForkPoint(t *testing.T) 
 	require.Equal(t, before, f.loads.calls.Load(), "the store holds the fork point, so nothing reloads")
 }
 
+// TestEnsureMTPLoaded_PagedWalkMatchesOnePage checks that a load read in pages of 7 headers,
+// joined by parent links across page boundaries, stores what a single-page load does.
+func TestEnsureMTPLoaded_PagedWalkMatchesOnePage(t *testing.T) {
+	f := newReorgFixture(t)
+
+	paged := *f.v.settings
+	paged.BlockChain.MaxBlockHeadersPerRequest = 7
+
+	v := &Validator{logger: ulogger.TestLogger{}, settings: &paged, blockchainClient: f.client, stats: gocore.NewStat("validator_test")}
+	require.NoError(t, v.EnsureMTPLoaded(context.Background(), 60))
+
+	require.Equal(t, f.v.mtpStore, v.mtpStore)
+	require.Equal(t, f.v.mtpIDs, v.mtpIDs)
+}
+
 // TestValidateTransaction_BIP68FailsWhenTheStoreCannotHoldTheBase checks that once the store has
 // moved to B, a candidate naming a base on A (its block at 59) fails with a ProcessingError rather
 // than being judged on B's medians. While the store still held A, it would read A's, correctly.
