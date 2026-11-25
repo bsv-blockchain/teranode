@@ -453,7 +453,7 @@ func TestFetchHeadersWithRetry(t *testing.T) {
 	// Note: This test will fail because util.DoHTTPRequestBounded will likely fail
 	// But it will test the function structure and error handling paths
 	maxBytes := int64(10_000 * model.BlockHeaderSize)
-	_, err := FetchHeadersWithRetry(ctx, logger, url, maxRetries, maxBytes)
+	_, err := FetchHeadersWithRetry(ctx, logger, url, maxRetries, time.Millisecond, maxBytes)
 
 	// The function should return an error since the URL doesn't exist
 	// but we can verify the function can be called without panicking
@@ -463,7 +463,7 @@ func TestFetchHeadersWithRetry(t *testing.T) {
 	cancelledCtx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	_, err = FetchHeadersWithRetry(cancelledCtx, logger, url, maxRetries, maxBytes)
+	_, err = FetchHeadersWithRetry(cancelledCtx, logger, url, maxRetries, time.Millisecond, maxBytes)
 	require.Error(t, err)
 }
 
@@ -478,7 +478,7 @@ func TestFetchHeadersWithRetry_ErrorCategorization(t *testing.T) {
 	// Test with invalid URL that should cause a connection error
 	invalidURL := "http://192.0.2.0:12345/headers" // RFC 3330 test address
 	maxBytes := int64(10_000 * model.BlockHeaderSize)
-	_, err := FetchHeadersWithRetry(ctx, logger, invalidURL, 1, maxBytes)
+	_, err := FetchHeadersWithRetry(ctx, logger, invalidURL, 1, time.Millisecond, maxBytes)
 	require.Error(t, err)
 
 	// The error should be wrapped appropriately by the retry mechanism
@@ -490,7 +490,7 @@ func TestFetchHeadersWithRetry_ErrorCategorization(t *testing.T) {
 	defer cancel()
 	time.Sleep(time.Millisecond) // Ensure timeout
 
-	_, err = FetchHeadersWithRetry(timeoutCtx, logger, invalidURL, 1, maxBytes)
+	_, err = FetchHeadersWithRetry(timeoutCtx, logger, invalidURL, 1, time.Millisecond, maxBytes)
 	require.Error(t, err)
 }
 
@@ -513,16 +513,18 @@ func TestFetchHeadersWithRetry_EnforcesByteCap(t *testing.T) {
 		httpmock.RegisterResponder("GET", url,
 			httpmock.NewBytesResponder(200, bytes.Repeat([]byte{0xAB}, int(maxBytes)+1)))
 
-		headerBytes, err := FetchHeadersWithRetry(ctx, logger, url, 1, maxBytes)
+		start := time.Now()
+		headerBytes, err := FetchHeadersWithRetry(ctx, logger, url, 1, time.Millisecond, maxBytes)
 		require.Error(t, err)
 		assert.Nil(t, headerBytes)
+		require.Less(t, time.Since(start), 500*time.Millisecond, "the retry must wait the given 1ms backoff, not the 1s default")
 	})
 
 	t.Run("response within the cap succeeds", func(t *testing.T) {
 		body := bytes.Repeat([]byte{0xAB}, int(maxBytes))
 		httpmock.RegisterResponder("GET", url, httpmock.NewBytesResponder(200, body))
 
-		headerBytes, err := FetchHeadersWithRetry(ctx, logger, url, 1, maxBytes)
+		headerBytes, err := FetchHeadersWithRetry(ctx, logger, url, 1, time.Millisecond, maxBytes)
 		require.NoError(t, err)
 		assert.Equal(t, body, headerBytes)
 	})

@@ -126,6 +126,7 @@ func BuildBlockLocatorString(locatorHashes []*chainhash.Hash) string {
 //   - logger: Logger for retry attempts
 //   - url: URL to fetch headers from
 //   - maxRetries: Maximum retry attempts
+//   - backoff: Wait before the first retry; 0 means 1s
 //   - maxBytes: Cap on the response body, enforced before it is read into memory
 //
 // Returns:
@@ -141,7 +142,11 @@ func BuildBlockLocatorString(locatorHashes []*chainhash.Hash) string {
 // caller-known exact size - the caller requests a fixed count and each header is a
 // fixed model.BlockHeaderSize bytes - so, unlike the block-fetch paths, a byte cap is
 // the right fit here and needs no invented constant.
-func FetchHeadersWithRetry(ctx context.Context, logger ulogger.Logger, url string, maxRetries int, maxBytes int64) ([]byte, error) {
+func FetchHeadersWithRetry(ctx context.Context, logger ulogger.Logger, url string, maxRetries int, backoff time.Duration, maxBytes int64) ([]byte, error) {
+	if backoff <= 0 {
+		backoff = time.Second
+	}
+
 	return retry.Retry(ctx, logger, func() ([]byte, error) {
 		headerBytes, err := util.DoHTTPRequestBounded(ctx, url, maxBytes)
 		if err != nil {
@@ -170,6 +175,7 @@ func FetchHeadersWithRetry(ctx context.Context, logger ulogger.Logger, url strin
 	},
 		retry.WithRetryCount(maxRetries),
 		retry.WithExponentialBackoff(),
+		retry.WithBackoffDurationType(backoff),
 		retry.WithBackoffFactor(2.0),
 		retry.WithMaxBackoff(30*time.Second),
 		retry.WithMessage("Failed to fetch block headers"),
