@@ -5733,7 +5733,7 @@ func (b *BlockAssembler) loadUnminedSorted(ctx context.Context, it utxo.UnminedT
 	prometheusBlockAssemblerIteratorTransactionsStats.WithLabelValues("false", "added").Add(float64(sorter.Len()))
 
 	laneToday.noteRead(uint64(totalProcessed)) //nolint:gosec // a count
-	laneToday.expect(sorter.Len())
+	laneToday.expect(0)
 
 	// Fix data inconsistencies
 	if len(markAsMinedOnLongestChain) > 0 {
@@ -5768,7 +5768,7 @@ func (b *BlockAssembler) loadUnminedSorted(ctx context.Context, it utxo.UnminedT
 
 		batch = b.subtreeProcessor.FilterUnminedTxEra(batch, validatedHeights)
 
-		laneToday.keep(batch)
+		laneToday.keepSorted(batch)
 
 		var addErr error
 		if isReload {

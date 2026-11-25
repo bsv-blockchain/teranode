@@ -195,6 +195,35 @@ func (t *laneRestartToday) keep(txs []*utxo.UnminedTransaction) {
 	}
 }
 
+// keepSorted grows the disk-sorted sample rate as kept transactions arrive. Doubling the rate
+// lets previously sampled hashes be thinned without losing hashes needed at the final rate.
+func (t *laneRestartToday) keepSorted(txs []*utxo.UnminedTransaction) {
+	if t == nil {
+		return
+	}
+	if t.rate == 0 {
+		t.expect(0)
+	}
+
+	kept := t.kept
+	for _, tx := range txs {
+		if tx != nil && tx.Node != nil {
+			kept++
+		}
+	}
+
+	for t.rate*laneRestartSampleTarget < kept {
+		t.rate *= 2
+		for hash := range t.sample {
+			if !laneSampled(hash, t.rate) {
+				delete(t.sample, hash)
+			}
+		}
+	}
+
+	t.keep(txs)
+}
+
 // laneSampled is the sample rule, the same for both sides: one transaction in rate, by hash.
 func laneSampled(h chainhash.Hash, rate uint64) bool {
 	return rate > 0 && binary.LittleEndian.Uint64(h[:8])%rate == 0

@@ -879,6 +879,22 @@ func TestLaneRestartSampleRate(t *testing.T) {
 	require.Equal(t, uint64(2), today.rate)
 }
 
+func TestLaneRestartSortedSampleGrowsWithKeptPool(t *testing.T) {
+	today := &laneRestartToday{}
+	today.expect(0)
+	today.kept = laneRestartSampleTarget
+	today.sample[laneTestHash(1)] = &laneTodayEntry{}
+	today.sample[laneTestHash(2)] = &laneTodayEntry{}
+
+	today.keepSorted([]*utxo.UnminedTransaction{{Node: &subtree.Node{Hash: laneTestHash(4)}}})
+
+	require.Equal(t, uint64(2), today.rate)
+	require.Equal(t, uint64(laneRestartSampleTarget+1), today.kept)
+	require.NotContains(t, today.sample, laneTestHash(1), "old samples must obey the final rate")
+	require.Contains(t, today.sample, laneTestHash(2))
+	require.Contains(t, today.sample, laneTestHash(4))
+}
+
 // At off a reload gathers nothing and starts no run; at shadow each reload path starts one with
 // what it read and kept. The SQL store cannot read the window, so the run ends unsupported.
 func TestLaneRestartDryRunStartsAfterAReloadOnlyAtShadow(t *testing.T) {
