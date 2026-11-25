@@ -357,3 +357,37 @@ func TestJournalLeafIsJudgedOnce(t *testing.T) {
 
 	require.Equal(t, rows, journalReads(t, "journal_row"))
 }
+
+// TestJournalDropCountsAFailedJudgeAndStillDrops: a read the judging needs fails, the partition counts
+// leaf_error, and the drop goes on, carrying the waiting spend.
+func TestJournalDropCountsAFailedJudgeAndStillDrops(t *testing.T) {
+	s, ctx := newLaneCopyStore(t)
+	installJournalLaneIndex(t, journalIndexBlock)
+
+	query := lanePositionsQuery
+	lanePositionsQuery = "SELECT no_such_column FROM tx_ident WHERE $1::smallint[] IS NULL AND $2::bytea[] IS NULL"
+	t.Cleanup(func() { lanePositionsQuery = query })
+
+	parent := mkTx(t, 2, 5_000)
+	_, err := s.Create(ctx, parent, 1_000, utxo.WithLanePosition(journalParentPos), minedAt(1_000, 1))
+	require.NoError(t, err)
+
+	spendWith(t, s, ctx, parent, 0, 1_010, utxo.WithLanePosition(journalUnmined))
+	spendWith(t, s, ctx, parent, 1, 1_010, utxo.WithLanePosition(journalSettled), minedAt(1_010, 2))
+
+	require.NoError(t, s.SetBlockHeight(1_728))
+
+	leafErrors := journalUnjudged(t, "leaf_error")
+
+	dropped, err := s.dropSpendJournalPartitionsBelow(ctx, 1_440)
+	require.NoError(t, err)
+	require.Positive(t, dropped)
+
+	require.Equal(t, leafErrors+1, journalUnjudged(t, "leaf_error"))
+
+	_, carried := journalLane(t, s, ctx, parent, 0)
+	require.True(t, carried, "the waiting spend is carried")
+
+	_, kept := journalLane(t, s, ctx, parent, 1)
+	require.False(t, kept, "the mined spend dropped with its partition")
+}

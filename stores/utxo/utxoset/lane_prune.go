@@ -63,6 +63,10 @@ SELECT k.txid, COALESCE(i.lane_position, m.lane_position, p.lane_position)
         WHERE x.txid = k.txid
        OFFSET 0) p ON true`
 
+// lanePositionsQuery is the statement positions runs, lanePositionsSQL; a test swaps it to make the
+// read fail.
+var lanePositionsQuery = lanePositionsSQL
+
 // laneJournalJudge judges the rows of one pruner pass's retiring journal partitions.
 type laneJournalJudge struct {
 	s     *Store
@@ -335,7 +339,7 @@ func (l *laneJournalJudge) positions(ctx context.Context, want map[string]struct
 
 	l.judge.Reads("position", len(txids))
 
-	rows, err := l.s.pool.Query(ctx, lanePositionsSQL, leaves, txids)
+	rows, err := l.s.pool.Query(ctx, lanePositionsQuery, leaves, txids)
 	if err != nil {
 		return nil, errors.NewStorageError("[utxoset] lane rule: read %d lane positions", len(txids), err)
 	}

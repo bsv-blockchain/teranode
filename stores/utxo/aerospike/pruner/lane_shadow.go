@@ -3,6 +3,7 @@ package pruner
 import (
 	"bytes"
 	"encoding/binary"
+	"sync/atomic"
 	"time"
 
 	"github.com/bsv-blockchain/aerospike-client-go/v8"
@@ -91,6 +92,10 @@ type laneMaster struct {
 	today lanereader.PruneToday
 	pages []*aerospike.Key
 }
+
+// lastPageReadWarn is when a failed page read last logged, in Unix nanoseconds, so a sustained
+// outage logs once a minute.
+var lastPageReadWarn atomic.Int64
 
 // The lane bins' names, resolved once.
 var (
@@ -219,6 +224,14 @@ func (l *laneShadow) readPages(masters []laneMaster, n int) {
 			if len(masters[i].pages) > 0 {
 				masters[i].c.Unread = true
 			}
+		}
+
+		// Counted apart from a page another worker deleted first, so an outage shows.
+		l.judge.Reads("page_error", len(records))
+
+		if now := time.Now().UnixNano(); now-lastPageReadWarn.Load() >= int64(time.Minute) {
+			lastPageReadWarn.Store(now)
+			l.s.logger.Warnf("[pruner] lane rule: reading %d pages failed, their masters count spender_unread: %v", len(records), err)
 		}
 
 		return

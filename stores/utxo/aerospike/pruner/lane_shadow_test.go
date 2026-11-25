@@ -10,6 +10,7 @@ import (
 	"github.com/bsv-blockchain/aerospike-client-go/v8"
 	"github.com/bsv-blockchain/aerospike-client-go/v8/types"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/stores/blob/memory"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/ulogger"
@@ -392,11 +393,14 @@ func TestLaneShadowReadsPagesBeforeTheDelete(t *testing.T) {
 	}
 
 	shallow := laneVerdicts(t, lanereader.PruneDelete, lanereader.PruneKeep, lanereader.ReasonSpenderShallow)
+	utxosBins := laneMetric(t, "teranode_lane_pruner_extra_reads_total", map[string]string{"store": lanereader.PruneStoreAerospike, "kind": "utxos_bin"})
 
 	processed, _, err := svc.processRecordChunk(context.Background(), 1000, pagedMasterChunk(t, svc))
 	require.NoError(t, err)
 	require.Equal(t, 1, processed)
 	require.Len(t, pageReads, 1, "one page read")
+	require.Equal(t, utxosBins+1, laneMetric(t, "teranode_lane_pruner_extra_reads_total", map[string]string{"store": lanereader.PruneStoreAerospike, "kind": "utxos_bin"}),
+		"outside defensive mode the record's utxos bin was read for the rule")
 	require.Equal(t, []string{"read", "delete"}, calls, "the page is read before the delete batch")
 	require.Equal(t, shallow+1, laneVerdicts(t, lanereader.PruneDelete, lanereader.PruneKeep, lanereader.ReasonSpenderShallow), "judged by the page's slot")
 }
@@ -464,4 +468,28 @@ func TestLaneShadowJudgesAChunkTodayKeepsWhole(t *testing.T) {
 	require.NoError(t, err)
 	require.Zero(t, processed, "today keeps the unmined record")
 	require.Equal(t, lanesOnly+1, laneVerdicts(t, lanereader.PruneKeep, lanereader.PruneDelete, lanereader.ReasonSettled))
+}
+
+// TestLaneShadowCountsAFailedChunkUnjudged: a chunk that fails before its delete batch, here on an
+// external record whose blob cannot be parsed, counts its records unjudged.
+func TestLaneShadowCountsAFailedChunkUnjudged(t *testing.T) {
+	installLaneIndex(t, laneIndexForTests(t))
+
+	svc := newTestService(t)
+	svc.fieldConflicting = fields.Conflicting.String()
+	svc.laneRetention = 288
+	svc.external = memory.New()
+
+	chunk := pagedMasterChunk(t, svc)
+	chunk[0].Record.Bins[svc.fieldTotalExtraRecs] = 0
+	chunk[0].Record.Bins[svc.fieldExternal] = true
+
+	txID := chainhash.Hash(chunk[0].Record.Bins[svc.fieldTxID].([]byte))
+	require.NoError(t, svc.external.Set(context.Background(), txID.CloneBytes(), fileformat.FileTypeTx, []byte{0xff}))
+
+	chunkErrors := laneMetric(t, "teranode_lane_pruner_unjudged_total", map[string]string{"store": lanereader.PruneStoreAerospike, "reason": "chunk_error"})
+
+	_, _, err := svc.processRecordChunk(context.Background(), 1000, chunk)
+	require.Error(t, err)
+	require.Equal(t, chunkErrors+1, laneMetric(t, "teranode_lane_pruner_unjudged_total", map[string]string{"store": lanereader.PruneStoreAerospike, "reason": "chunk_error"}))
 }

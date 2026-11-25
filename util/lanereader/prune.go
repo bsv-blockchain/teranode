@@ -22,8 +22,11 @@ import (
 // taken C, P stays, counted spender_off_chain.
 //
 // The rule fails safe: a position missing from the parent or a slot, an index not loaded yet, a
-// position older than anything the index loaded, or a main chain holding blocks with no rows (which
-// may hold a position no row takes) all mean keep, counted as cannot_judge with the reason.
+// position below everything the index saw of its lane (IndexSnapshot.BeforeStart), or a main chain
+// holding blocks with no rows (which may hold a position no row takes) all mean keep, counted as
+// cannot_judge with the reason. One case reads as unmined instead: a position a block just below
+// the index's first loaded block took, inside the range of a loaded row that left it untaken. It
+// still means keep, but spender_unmined near the index's start can be such a load artefact.
 
 // The stores the pruner judges, the store label.
 const (
