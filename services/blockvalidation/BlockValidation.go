@@ -1006,10 +1006,6 @@ const (
 	revalidateParentNotMinedMaxRetries = 32
 )
 
-// processRevalidation runs one revalidateBlockChan item on the revalidation worker and schedules
-// its re-queue on failure. It must not block on anything slow: the worker is the channel's only
-// consumer, the channel holds 2, and once it is full enqueueRevalidation blocks its callers inside
-// ValidateBlockWithOptions.
 // retryOptions rebuilds the options of the full-validation retry from the carried fields.
 func (d revalidateBlockData) retryOptions() *ValidateBlockOptions {
 	return &ValidateBlockOptions{
@@ -1022,6 +1018,10 @@ func (d revalidateBlockData) retryOptions() *ValidateBlockOptions {
 	}
 }
 
+// processRevalidation runs one revalidateBlockChan item on the revalidation worker and schedules
+// its re-queue on failure. It must not block on anything slow: the worker is the channel's only
+// consumer, the channel holds 2, and once it is full enqueueRevalidation blocks its callers inside
+// ValidateBlockWithOptions.
 func (u *BlockValidation) processRevalidation(ctx context.Context, blockData revalidateBlockData) {
 	startTime := time.Now()
 
