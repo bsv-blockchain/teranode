@@ -201,7 +201,7 @@ func TestHandleReorg_FallbackReset_ReturnsNilInsteadOfResetError(t *testing.T) {
 	initPrometheusMetrics()
 
 	ctx := t.Context()
-	items := setupBlockAssemblyTestWithUtxoStore(t)
+	items := setupBlockAssemblyTestWithUtxoStore(t, giveUpOnMinedSetAtOnce)
 	require.NotNil(t, items)
 
 	// Build two forks from block1:
@@ -296,6 +296,15 @@ func TestReset_FallbackHeaderFailure_RestoresPreResetTip(t *testing.T) {
 // block1. The subtree processor is replaced by a mock whose Reset always fails
 // and whose current header is stpHeader, which is what the fallback then has to
 // place.
+// giveUpOnMinedSetAtOnce is for tests whose reset moves back over an invalidated
+// block. Reset waits for that block's mined_set, which only Block Validation's
+// background job sets, and these tests never run it. So the wait always ends by
+// giving up and carrying on. At the production 45 retries that takes about 78 s
+// per reset; one attempt reaches the same give-up path straight away.
+func giveUpOnMinedSetAtOnce(s *settings.Settings) {
+	s.BlockValidation.IsParentMinedRetryMaxRetry = 1
+}
+
 func setUpFailedRollbackReset(ctx context.Context, t *testing.T, items *baTestItems, stpHeader *model.BlockHeader) {
 	t.Helper()
 
@@ -352,7 +361,7 @@ func TestReset_FallbackHeaderFailure_RollbackDirectionStaysOffTheChainTip(t *tes
 	initPrometheusMetrics()
 
 	ctx := t.Context()
-	items := setupBlockAssemblyTestWithUtxoStore(t)
+	items := setupBlockAssemblyTestWithUtxoStore(t, giveUpOnMinedSetAtOnce)
 	require.NotNil(t, items)
 
 	// A header no side of this reset ever saw and the blockchain store does not
@@ -388,7 +397,7 @@ func TestReset_FailedRollbackResolvesHeightWithoutTheBlockchain(t *testing.T) {
 	initPrometheusMetrics()
 
 	ctx := t.Context()
-	items := setupBlockAssemblyTestWithUtxoStore(t)
+	items := setupBlockAssemblyTestWithUtxoStore(t, giveUpOnMinedSetAtOnce)
 	require.NotNil(t, items)
 
 	// The processor reports the new tip: SubtreeProcessor.reset stores each
