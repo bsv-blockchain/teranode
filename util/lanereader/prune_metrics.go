@@ -41,7 +41,7 @@ func initPruneMetrics() {
 			Namespace: "teranode",
 			Subsystem: "lane_pruner",
 			Name:      "unjudged_total",
-			Help:      "Pruning decisions the lane rule did not judge, by store and reason (aerospike: record_error, a record the query returned with an error or no txid; chunk_error, the records of a chunk whose processing failed; and page_without_master, a page today deletes whose master the chunk does not hold; utxoset: backlog, one per retiring journal partition of a pass that retires more than one, none of which is judged; leaf_error, one per retiring journal partition whose judging stopped early; budget, one per partition the pass's time budget left unjudged; and not_ready, one per retiring partition before the lane index's first snapshot)",
+			Help:      "Pruning decisions the lane rule did not judge, by store and reason (aerospike: record_error, a record the query returned with an error or no txid; chunk_error, the records of a chunk whose processing failed; and page_without_master, a page today deletes whose master the chunk does not hold, an upper bound on pages deleted without their master, since a master is often judged in another chunk; utxoset: backlog, one per retiring journal partition of a pass that retires more than one, none of which is judged; leaf_error, one per retiring journal partition whose judging stopped early; budget, one per partition the pass's time budget left unjudged; and not_ready, one per retiring partition before the lane index's first snapshot)",
 		}, []string{"store", "reason"})
 		prometheusLanePrunerSeconds = promauto.NewCounterVec(prometheus.CounterOpts{
 			Namespace: "teranode",

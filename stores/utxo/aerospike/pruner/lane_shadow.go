@@ -27,7 +27,9 @@ import (
 // bin is the parent's position, and each spent output's spendLanePos entry, on the master or the page
 // holding the output, is its spender's. The pages a master names are read in one batch per chunk,
 // only for the lane rule (teranode_lane_pruner_extra_reads_total kind page). A page record returned
-// with its master is not judged again; a deleted page without its master is counted unjudged. A page
+// with its master is not judged again. A page today deletes whose master the chunk does not hold is
+// counted unjudged page_without_master; a page's key hashes apart from its master's, so the master is
+// often in another chunk and judged there, which makes that count an upper bound. A page
 // another worker has already deleted makes the master cannot_judge spender_unread. Outside defensive
 // mode that happens only when today deletes the master. In defensive mode a page is deleted on its
 // own children, so a master today keeps for an unstable child of its own can be counted spender_unread.
