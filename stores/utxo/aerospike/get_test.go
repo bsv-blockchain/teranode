@@ -29,6 +29,8 @@ import (
 // go test -v -tags test_aerospike ./test/...
 
 func TestStore_GetTxFromExternalStore(t *testing.T) {
+	t.Parallel()
+
 	logger := ulogger.NewErrorTestLogger(t)
 	tSettings := test.CreateBaseTestSettings(t)
 

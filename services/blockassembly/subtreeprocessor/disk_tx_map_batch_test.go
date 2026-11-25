@@ -194,7 +194,7 @@ func TestDiskTxMap_SubtreeIndexAfterParallelRemainderBuild(t *testing.T) {
 	nodes := batchTestNodes(1000, 300)
 	setAll(stp, nodes)
 
-	require.NoError(t, stp.parallelBuildRemainderSubtrees(context.Background(), nodes, true))
+	require.NoError(t, stp.parallelBuildRemainderSubtrees(context.Background(), nodes, nil, true))
 	require.GreaterOrEqual(t, len(stp.chainedSubtrees), 4)
 	require.Positive(t, requireIndexesMatchChain(t, stp))
 }

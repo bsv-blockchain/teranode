@@ -15,6 +15,8 @@ import (
 // name: mined -> unmined via unsetMined stamps utxo.BackdatedUnminedSince (issue 1768), and an
 // existing unmined_since is kept.
 func TestUnsetMinedBackdatesUnminedSince(t *testing.T) {
+	t.Parallel()
+
 	if testing.Short() {
 		t.Skip("Skipping Aerospike integration test in short mode")
 	}
@@ -31,7 +33,6 @@ func TestUnsetMinedBackdatesUnminedSince(t *testing.T) {
 
 		client, store, _, cleanup := initAerospike(t, tSettings, logger)
 		defer cleanup()
-		cleanDB(t, client)
 
 		parent := newParent(t)
 		parentHash := parent.TxIDChainHash()
@@ -61,7 +62,6 @@ func TestUnsetMinedBackdatesUnminedSince(t *testing.T) {
 
 		client, store, _, cleanup := initAerospike(t, tSettings, logger)
 		defer cleanup()
-		cleanDB(t, client)
 
 		parent := newParent(t)
 		parentHash := parent.TxIDChainHash()

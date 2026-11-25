@@ -92,7 +92,7 @@ func newUnlockFailureServer(t *testing.T, remote bool, unlockFailures int64) (*S
 	require.NoError(t, err)
 
 	blockAssembly := blockassembly.NewMock()
-	blockAssembly.On("Store", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+	blockAssembly.On("Store", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		Return(true, nil).Times(2)
 
 	realValidator, err := validator.New(ctx, logger, tSettings, store,

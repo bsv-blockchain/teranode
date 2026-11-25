@@ -496,8 +496,13 @@ func TestLaneColumnsOnACurrentSchemaTakeNoOutputsLock(t *testing.T) {
 
 	dbURL := startLanePositionPostgres(t)
 
-	_, err := New(context.Background(), ulogger.TestLogger{}, lanePositionSettings(t), dbURL)
+	first, err := New(context.Background(), ulogger.TestLogger{}, lanePositionSettings(t), dbURL)
 	require.NoError(t, err)
+
+	// The first open builds px_transactions_conflicting in the background under the advisory lock
+	// the second open waits for. A concurrent index build waits for the reader's snapshot below, so
+	// a build still running when the reader starts would hold that lock until the test times out.
+	require.Eventually(t, first.conflictingIndexReady.Load, 30*time.Second, 10*time.Millisecond, "the first open's index build ends before the reader starts")
 
 	reader, err := sql.Open("pgx", dbURL.String())
 	require.NoError(t, err)

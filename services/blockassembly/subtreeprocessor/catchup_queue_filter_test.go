@@ -199,6 +199,13 @@ func (m *heldProbeTxMap) SetIfNotExists(hash chainhash.Hash, inpoints *subtreepk
 	return m.TxInpointsMap.SetIfNotExists(hash, inpoints)
 }
 
+// SetIfNotExistsAt is the insert the drain makes, keeping the tx's lane position; it probes too.
+func (m *heldProbeTxMap) SetIfNotExistsAt(hash chainhash.Hash, inpoints *subtreepkg.TxInpoints, position uint64) (*subtreepkg.TxInpoints, bool) {
+	m.probe()
+
+	return m.TxInpointsMap.SetIfNotExistsAt(hash, inpoints, position)
+}
+
 func TestReorgBlocks_CatchUp_DrainKeepsTheHeldTotalAtEveryChunkBoundary(t *testing.T) {
 	f := newCatchUpQueueFixture(t, true)
 	f.stp.queue.maxHeld = 1 << 20
@@ -212,9 +219,13 @@ func TestReorgBlocks_CatchUp_DrainKeepsTheHeldTotalAtEveryChunkBoundary(t *testi
 
 	var lowest int64 = startHeld
 
+	samples := 0
+
 	f.stp.currentTxMap = &heldProbeTxMap{
 		TxInpointsMap: f.stp.currentTxMap,
 		probe: func() {
+			samples++
+
 			if held := f.stp.HeldCount(); held < lowest {
 				lowest = held
 			}
@@ -224,6 +235,7 @@ func TestReorgBlocks_CatchUp_DrainKeepsTheHeldTotalAtEveryChunkBoundary(t *testi
 	require.NoError(t, f.stp.reorgBlocks(t.Context(), []*model.Block{}, []*model.Block{f.block1, f.block2}))
 
 	require.Zero(t, f.stp.queue.length(), "precondition: the catch-up drained the backlog across several chunks")
+	require.Positive(t, samples, "precondition: the probe sampled the held total on the drain's inserts")
 	require.GreaterOrEqual(t, lowest, startHeld,
 		"a producer reading the held total between two chunks of the drain must not see the transactions the earlier chunks placed missing")
 }

@@ -17,6 +17,7 @@ import (
 	"github.com/bsv-blockchain/teranode/services/legacy/bsvutil"
 	peerpkg "github.com/bsv-blockchain/teranode/services/legacy/peer"
 	"github.com/bsv-blockchain/teranode/stores/blob/memory"
+	"github.com/bsv-blockchain/teranode/util/expiringmap"
 	"github.com/stretchr/testify/require"
 )
 
@@ -205,6 +206,137 @@ func TestDrainRequestQueue_SkipsABlockABusyOwnerStillOwes(t *testing.T) {
 	require.Zero(t, state.requestQueue.Length(), "the owed item is consumed, not left to block the queue")
 	require.False(t, sm.blockDownloads.RequestedWithin(owed, blockRequestRetryInterval), "nothing asked for the owed block again")
 	require.True(t, sm.blockDownloads.RequestedWithin(control, time.Minute))
+}
+
+// wireRecentlyFailed gives sm the recentlyFailedBlocks map New() wires, which
+// newInvPathManager leaves nil.
+func wireRecentlyFailed(t *testing.T, sm *SyncManager) {
+	t.Helper()
+
+	sm.recentlyFailedBlocks = expiringmap.New[chainhash.Hash, struct{}](recentlyFailedBlocksTTL)
+	t.Cleanup(sm.recentlyFailedBlocks.Stop)
+}
+
+// requireAskedOnceTheMarkIsGone is the second half of every skip test: a skipped
+// block is put off, not written off. Above the final checkpoint the announcement
+// the skip swallowed is the peer's only one; a repeat getblocks from the same tip
+// is dropped by PushGetBlocksMsg, so nothing announces the block again. The skip
+// leaves a re-ask behind that waits for the mark, is put off again while the mark
+// stands, and asks once it has gone, with no further announcement.
+func requireAskedOnceTheMarkIsGone(t *testing.T, sm *SyncManager, rec *peerMsgRecorder, failed chainhash.Hash) {
+	t.Helper()
+
+	before := rec.getDataCount()
+
+	sm.sendDueReAsks(time.Now().Add(recentlyFailedBlocksTTL + time.Second))
+	require.False(t, WaitUntil(func() bool { return rec.askedForSince(before, failed) }, 300*time.Millisecond),
+		"not asked while the mark stands")
+
+	sm.recentlyFailedBlocks.Delete(failed)
+
+	sm.sendDueReAsks(time.Now().Add(2*recentlyFailedBlocksTTL + 2*time.Second))
+	require.True(t, WaitUntil(func() bool { return rec.askedForSince(before, failed) }, 5*time.Second),
+		"asked for once the mark has gone, with no further announcement")
+}
+
+// A block marked in recentlyFailedBlocks is not asked for again while the mark
+// stands; the wanted-range pass has skipped it since #1333. Above the final
+// checkpoint the inv is the only discovery path, and it asked every announcer for
+// the block for the mark's whole TTL, each copy meeting the same failure again.
+func TestHandleInvMsg_ARecentlyFailedBlockIsNotAskedFor(t *testing.T) {
+	failed := chainhash.Hash{0x7a}
+	control := chainhash.Hash{0x7b}
+
+	sm, announcer, _, rec, _ := newInvPathManager(t)
+	wireRecentlyFailed(t, sm)
+	sm.recentlyFailedBlocks.Set(failed, struct{}{})
+
+	sm.handleInvMsg(&invMsg{inv: blockInv(failed, control), peer: announcer})
+
+	requireOnlyControlAsked(t, sm, rec, failed, control)
+	requireAskedOnceTheMarkIsGone(t, sm, rec, failed)
+}
+
+// The re-ask a skip leaves is due when the mark expires, measured from when the
+// block was marked, not from when the skipped announcement arrived. A block marked
+// at minute zero whose one announcement arrives at minute nine is otherwise not
+// asked for until minute nineteen. Here the announcement arrives late in a short
+// mark's life, so a due time counted from the skip lands well after the sweep the
+// test runs just past the mark's original expiry.
+func TestHandleInvMsg_AMarkedBlockIsAskedForWhenItsMarkExpires(t *testing.T) {
+	const markTTL = 2 * time.Second
+
+	failed := chainhash.Hash{0x80}
+	control := chainhash.Hash{0x81}
+
+	sm, announcer, _, rec, _ := newInvPathManager(t)
+	sm.recentlyFailedBlocks = expiringmap.New[chainhash.Hash, struct{}](markTTL)
+	t.Cleanup(sm.recentlyFailedBlocks.Stop)
+
+	markedAt := time.Now()
+	sm.recentlyFailedBlocks.Set(failed, struct{}{})
+
+	// The one announcement arrives late in the mark's life.
+	time.Sleep(markTTL * 7 / 10)
+
+	sm.handleInvMsg(&invMsg{inv: blockInv(failed, control), peer: announcer})
+	requireOnlyControlAsked(t, sm, rec, failed, control)
+	require.Less(t, time.Since(markedAt), markTTL, "precondition: the announcement was skipped while the mark stood")
+
+	// The sweep just after the mark's original expiry, with the mark really gone.
+	time.Sleep(time.Until(markedAt.Add(markTTL + 50*time.Millisecond)))
+
+	before := rec.getDataCount()
+
+	sm.sendDueReAsks(markedAt.Add(markTTL + 100*time.Millisecond))
+	require.True(t, WaitUntil(func() bool { return rec.askedForSince(before, failed) }, 5*time.Second),
+		"asked for at the first sweep after the mark's original expiry")
+}
+
+// The end-to-end test above passes on the drain's check alone, so this pins
+// processInvMsg's own: a marked block is never queued, which spares every
+// announcement the chain round trip and the disk read before the queue. The
+// control is queued.
+func TestProcessInvMsg_ARecentlyFailedBlockIsNotQueued(t *testing.T) {
+	failed := chainhash.Hash{0x7e}
+	control := chainhash.Hash{0x7f}
+
+	sm, announcer, state, _, _ := newInvPathManager(t)
+	wireRecentlyFailed(t, sm)
+	sm.recentlyFailedBlocks.Set(failed, struct{}{})
+
+	sm.processInvMsg(0, wire.NewInvVect(wire.InvTypeBlock, &failed), true, announcer, false, state, -1)
+	require.Zero(t, state.requestQueue.Length(), "a marked block is not queued")
+
+	sm.processInvMsg(0, wire.NewInvVect(wire.InvTypeBlock, &control), true, announcer, false, state, -1)
+	require.Equal(t, 1, state.requestQueue.Length(), "positive control: an unknown block is queued")
+}
+
+// The mark can land between the Append and the drain: the copy that fails is
+// converting while another peer's inv for the same block waits in its queue. The
+// marked item is consumed, not held: holding it would stall everything queued
+// behind it, transactions included, for the mark's TTL.
+func TestDrainRequestQueue_SkipsARecentlyFailedBlock(t *testing.T) {
+	failed := chainhash.Hash{0x7c}
+	control := chainhash.Hash{0x7d}
+
+	sm, announcer, state, rec, _ := newInvPathManager(t)
+	wireRecentlyFailed(t, sm)
+
+	state.requestQueue.Append(wire.NewInvVect(wire.InvTypeBlock, &failed))
+	state.requestQueue.Append(wire.NewInvVect(wire.InvTypeBlock, &control))
+
+	sm.recentlyFailedBlocks.Set(failed, struct{}{})
+
+	gd := sm.drainRequestQueue(announcer, state)
+
+	require.Len(t, gd.InvList, 1)
+	require.Equal(t, control, gd.InvList[0].Hash)
+	require.Zero(t, state.requestQueue.Length(), "the marked item is consumed, not left to block the queue")
+	require.False(t, sm.blockDownloads.RequestedWithin(failed, time.Minute))
+	require.True(t, sm.blockDownloads.RequestedWithin(control, time.Minute))
+
+	requireAskedOnceTheMarkIsGone(t, sm, rec, failed)
 }
 
 // A parked block announced last in an inv used to reach the getblocks branch,

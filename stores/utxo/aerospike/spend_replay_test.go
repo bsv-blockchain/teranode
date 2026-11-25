@@ -77,7 +77,8 @@ func newReplayFixture(t *testing.T, cfg replayConfig) *replayFixture {
 		s.UtxoStore.UtxoBatchSize = 1
 	}
 
-	client, store, ctx, cleanup := initAerospike(t, s, ulogger.New("spend-replay-test"))
+	// Most replay tests prune, and the pruner sweeps the whole set.
+	client, store, ctx, cleanup := initAerospikeOwnServer(t, s, ulogger.New("spend-replay-test"))
 	t.Cleanup(cleanup)
 
 	require.NoError(t, store.SetBlockHeight(replaySpendBlock))
@@ -149,8 +150,7 @@ func (f *replayFixture) keyOf(hash *chainhash.Hash) *aerospike.Key {
 func (f *replayFixture) prune(height uint32) {
 	f.t.Helper()
 
-	astore.ResetPrunerServiceForTests()
-	f.t.Cleanup(astore.ResetPrunerServiceForTests)
+	astore.UsePrunerServiceForTest(f.t)
 
 	require.NoError(f.t, f.store.CreateIndexIfNotExists(f.ctx, apruner.IndexName, fields.DeleteAtHeight.String(), aerospike.NUMERIC))
 	require.NoError(f.t, f.store.WaitForIndexReady(f.ctx, apruner.IndexName))
@@ -214,6 +214,8 @@ func (f *replayFixture) requireNoMarker(i int) {
 // already spent by C, an idempotent match, recorded 1,001 blocks ago. C has no record, so the
 // spend is refused as a pruned replay, writes nothing and leaves P's output spent by C.
 func TestPrunedReplayIsRefusedAtSpend_Aerospike(t *testing.T) {
+	t.Parallel()
+
 	for _, tc := range []struct {
 		name string
 		cfg  replayConfig
@@ -255,6 +257,8 @@ func TestPrunedReplayIsRefusedAtSpend_Aerospike(t *testing.T) {
 // height as well: a spend without one never counts as historical, so a replay of it after
 // pruning would be accepted.
 func TestHonestRetryIsNotARejectedReplay_Aerospike(t *testing.T) {
+	t.Parallel()
+
 	for _, tc := range []struct {
 		name string
 		cfg  replayConfig
@@ -298,6 +302,8 @@ func TestHonestRetryIsNotARejectedReplay_Aerospike(t *testing.T) {
 // resubmitted. Its record exists, so the match is ordinary: no replay error, and the create
 // answers TX_EXISTS as it did before heights were stored.
 func TestStoredOldChildIsNotARejectedReplay_Aerospike(t *testing.T) {
+	t.Parallel()
+
 	f := newReplayFixture(t, replayConfig{})
 
 	_, err := f.store.Spend(f.ctx, f.child, replaySpendBlock+200)
@@ -314,6 +320,8 @@ func TestStoredOldChildIsNotARejectedReplay_Aerospike(t *testing.T) {
 // store already spent for (quick validation, a re-sync after a reset) spends at the height the
 // spend was recorded at, so the match is young and passes, with or without the spender's record.
 func TestReappliedSpendAtItsOwnHeightIsAccepted_Aerospike(t *testing.T) {
+	t.Parallel()
+
 	f := newReplayFixture(t, replayConfig{})
 	f.prune(replayPruneBlock)
 
@@ -332,6 +340,8 @@ func TestReappliedSpendAtItsOwnHeightIsAccepted_Aerospike(t *testing.T) {
 // the spend it wrote, Q:0, but not P:0: that spend was made by the confirmed C, and releasing it
 // hands a confirmed output to anyone.
 func TestFailedReplayKeepsItsHistoricalMatch_Aerospike(t *testing.T) {
+	t.Parallel()
+
 	f := newReplayFixture(t, replayConfig{parents: 2})
 	f.prune(replayPruneBlock)
 
@@ -366,6 +376,8 @@ func TestFailedReplayKeepsItsHistoricalMatch_Aerospike(t *testing.T) {
 // before the upgrade cannot stall a block. The cost is that a spender pruned after the upgrade, by
 // a pruner that writes no marker, is accepted again as on a store without the check.
 func TestPreUpgradeEntryWithoutSpenderIsAccepted_Aerospike(t *testing.T) {
+	t.Parallel()
+
 	f := newReplayFixture(t, replayConfig{})
 
 	key := f.keyOf(f.parents[0].TxIDChainHash())
@@ -385,6 +397,8 @@ func TestPreUpgradeEntryWithoutSpenderIsAccepted_Aerospike(t *testing.T) {
 // inputs. That must still work on an entry that carries a height, whether or not the replay was
 // refused first.
 func TestUnspendAfterAHistoricalMatchReleasesTheOutput_Aerospike(t *testing.T) {
+	t.Parallel()
+
 	f := newReplayFixture(t, replayConfig{})
 	f.prune(replayPruneBlock)
 
@@ -413,6 +427,8 @@ func TestUnspendAfterAHistoricalMatchReleasesTheOutput_Aerospike(t *testing.T) {
 // its historical match passes. Such a call carries a transaction of a block being applied, not a
 // mempool submission.
 func TestHistoricalMatchPassesWhenTheSpenderRecordExists_Aerospike(t *testing.T) {
+	t.Parallel()
+
 	f := newReplayFixture(t, replayConfig{})
 	f.prune(replayPruneBlock)
 
