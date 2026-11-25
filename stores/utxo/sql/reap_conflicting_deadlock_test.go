@@ -15,6 +15,8 @@ import (
 // then asks for the loser's row. Its own deadlock_timeout is long, so the reap's
 // shorter one fires first and the reap is the victim.
 func TestReapConflictingRetriesAfterBeingChosenAsADeadlockVictim(t *testing.T) {
+	parallelPostgres(t)
+
 	store, ctx := setupPostgresStore(t)
 	store.settings.Pruner.UTXODefensiveEnabled = true
 

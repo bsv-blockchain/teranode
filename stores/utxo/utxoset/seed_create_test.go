@@ -51,6 +51,8 @@ func coinCount(t *testing.T, s *Store, txid chainhash.Hash, vout uint32) (n int,
 // path panicked measuring the transaction's size over the nil outputs, and the ID and the
 // coinbase flag were derived from the rebuilt transaction.
 func TestSeederStyleCreate(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	for _, viaBatch := range []bool{true, false} {
 		name := "single path"
 		if viaBatch {
@@ -113,6 +115,8 @@ func TestSeederStyleCreate(t *testing.T) {
 // recovery the batcher swallowed it and Create waited forever; that is how the seeder hung on
 // the single-transaction path when a rebuilt transaction first reached this store.
 func TestCreateBatchPanicAnswersEveryCaller(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, _ := newTestStore(t)
 
 	script := bscript.Script([]byte{0x51})
@@ -140,7 +144,8 @@ func TestCreateBatchPanicAnswersEveryCaller(t *testing.T) {
 func openSeedingStore(t *testing.T, base *Store) *Store {
 	t.Helper()
 
-	u, err := url.Parse(testDSN(t))
+	dsn := storeDSN(t, base)
+	u, err := url.Parse(dsn)
 	require.NoError(t, err)
 
 	q := u.Query()
@@ -150,7 +155,8 @@ func openSeedingStore(t *testing.T, base *Store) *Store {
 	s, err := New(context.Background(), ulogger.TestLogger{}, base.settings, u)
 	require.NoError(t, err, "seeding=true must not reach the Postgres driver")
 
-	t.Cleanup(func() { _ = s.Close(context.Background()) })
+	closeOnCleanup(t, s)
+	rememberDSN(t, s, dsn)
 
 	require.True(t, s.seeding)
 
@@ -163,6 +169,8 @@ func openSeedingStore(t *testing.T, base *Store) *Store {
 // at its height, a re-run is refused as an existing transaction, and a create that is not shaped
 // like the seeder's takes its normal route.
 func TestSeedingModeWritesCoinsOnly(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	base, ctx := newTestStore(t) // mainnet checkpoints
 	s := openSeedingStore(t, base)
 

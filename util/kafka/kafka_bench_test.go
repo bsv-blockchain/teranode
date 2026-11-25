@@ -5,7 +5,6 @@ import (
 	"crypto/rand"
 	"fmt"
 	"net/url"
-	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -22,21 +21,10 @@ import (
 // measuring the impact of new features (transfer rate monitoring, batching
 // changes, etc.) on producer/consumer throughput.
 
-// sharedBenchEnv lazily starts a single Redpanda container shared across all
-// benchmarks in the same test binary invocation. The container is terminated
-// when the process exits (via the testing cleanup mechanism).
-var sharedBenchEnv struct {
-	env  *kafkatest.Env
-	once sync.Once
-}
-
+// getBenchEnv returns the Redpanda container shared by every test and benchmark
+// in this test binary (kafkatest.SharedEnv). TestMain terminates it.
 func getBenchEnv(b *testing.B) *kafkatest.Env {
-	sharedBenchEnv.once.Do(func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-		defer cancel()
-		sharedBenchEnv.env = kafkatest.MustStartEnv(b, ctx)
-	})
-	return sharedBenchEnv.env
+	return kafkatest.SharedEnv(b)
 }
 
 func BenchmarkSyncProducer(b *testing.B) {
