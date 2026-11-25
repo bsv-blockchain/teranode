@@ -1,6 +1,7 @@
 package subtreeprocessor
 
 import (
+	"math"
 	"runtime"
 	"testing"
 
@@ -104,18 +105,31 @@ func TestMovedBackMarks_HoldsFewerBytesThanAGoMap(t *testing.T) {
 
 	hashes := randHashes(n, 5)
 
+	// Goroutines an earlier test left running allocate and free while this measures, so it measures
+	// three times and keeps the least: what the structure holds is the floor. A reading that went
+	// down is someone else's garbage collected and is not counted.
 	heapAfter := func(build func() any) uint64 {
-		runtime.GC()
+		least := uint64(math.MaxUint64)
 
-		var before, after runtime.MemStats
+		for range 3 {
+			runtime.GC()
 
-		runtime.ReadMemStats(&before)
-		keep := build()
-		runtime.GC()
-		runtime.ReadMemStats(&after)
-		runtime.KeepAlive(keep)
+			var before, after runtime.MemStats
 
-		return after.HeapAlloc - before.HeapAlloc
+			runtime.ReadMemStats(&before)
+			keep := build()
+			runtime.GC()
+			runtime.ReadMemStats(&after)
+			runtime.KeepAlive(keep)
+
+			if after.HeapAlloc >= before.HeapAlloc {
+				least = min(least, after.HeapAlloc-before.HeapAlloc)
+			}
+		}
+
+		require.NotEqual(t, uint64(math.MaxUint64), least, "no reading where the heap grew")
+
+		return least
 	}
 
 	goMap := heapAfter(func() any {
