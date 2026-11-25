@@ -291,7 +291,6 @@ func (m *MockSubtreeProcessor) AddDirectly(node *subtree.Node, txInpoints *subtr
 	return args.Error(0)
 }
 
-// AddDirectlyReportOnly implements Interface.AddDirectlyReportOnly
 // AddDirectlyAt implements Interface.AddDirectlyAt
 func (m *MockSubtreeProcessor) AddDirectlyAt(node *subtree.Node, txInpoints *subtree.TxInpoints, position uint64, skipNotification, reportOnly bool) error {
 	args := m.Called(node, txInpoints, position, skipNotification, reportOnly)
@@ -303,6 +302,7 @@ func (m *MockSubtreeProcessor) AddDirectlyAt(node *subtree.Node, txInpoints *sub
 	return args.Error(0)
 }
 
+// AddDirectlyReportOnly implements Interface.AddDirectlyReportOnly
 func (m *MockSubtreeProcessor) AddDirectlyReportOnly(node *subtree.Node, txInpoints *subtree.TxInpoints, skipNotification bool) error {
 	args := m.Called(node, txInpoints, skipNotification)
 
