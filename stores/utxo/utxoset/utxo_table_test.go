@@ -114,6 +114,7 @@ func newTestStoreWith(t *testing.T, tune func(*settings.Settings)) (*Store, cont
 
 	tSettings := settings.NewSettings()
 	withCheckpoints(tSettings, chaincfg.MainNetParams.Checkpoints)
+	shortenBatcherWindows(tSettings)
 
 	if tune != nil {
 		tune(tSettings)
@@ -126,6 +127,22 @@ func newTestStoreWith(t *testing.T, tune func(*settings.Settings)) (*Store, cont
 	rememberDSN(t, s, dsn)
 
 	return s, ctx
+}
+
+// shortenBatcherWindows sets every UTXO store batching window to 1 ms. Most tests call the
+// store one request at a time, so each request waited out the whole production window before
+// its batch ran: a chain of 600 SpendAndCreate calls took 18 s with the 10 ms windows and 5 s
+// with these. A test that measures batching sets its own window through tune, which runs after.
+func shortenBatcherWindows(ts *settings.Settings) {
+	us := &ts.UtxoStore
+	us.StoreBatcherDurationMillis = 1
+	us.GetBatcherDurationMillis = 1
+	us.SpendBatcherDurationMillis = 1
+	us.OutpointBatcherDurationMillis = 1
+	us.IncrementBatcherDurationMillis = 1
+	us.SetDAHBatcherDurationMillis = 1
+	us.LockedBatcherDurationMillis = 1
+	us.LongestChainBatcherDurationMillis = 1
 }
 
 // mkTx builds a transaction with n spendable P2PKH-ish outputs.
