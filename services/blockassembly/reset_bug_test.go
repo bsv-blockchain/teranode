@@ -289,6 +289,16 @@ func TestReset_FallbackHeaderFailure_RestoresPreResetTip(t *testing.T) {
 	require.True(t, gotHeader.Hash().IsEqual(preHeader.Hash()), "pointer must be restored to pre-reset tip")
 }
 
+// giveUpOnMinedSetAtOnce is for tests whose reset moves back over an invalidated
+// block. Reset waits for that block's mined_set, which only Block Validation's
+// background job sets, and these tests never run it. So the wait always ends by
+// giving up and carrying on. At the production 45 retries that takes about 78 s
+// per reset; a single retry (two polls, 20 ms apart) reaches the same give-up
+// path almost at once.
+func giveUpOnMinedSetAtOnce(s *settings.Settings) {
+	s.BlockValidation.IsParentMinedRetryMaxRetry = 1
+}
+
 // setUpFailedRollbackReset builds the rollback shape the reset fallback has to
 // cope with: the blockchain has block1 -> block2, block assembly sits on the
 // abandoned block2Alt at the same height, so reset() produces one moveBack block
@@ -296,15 +306,6 @@ func TestReset_FallbackHeaderFailure_RestoresPreResetTip(t *testing.T) {
 // block1. The subtree processor is replaced by a mock whose Reset always fails
 // and whose current header is stpHeader, which is what the fallback then has to
 // place.
-// giveUpOnMinedSetAtOnce is for tests whose reset moves back over an invalidated
-// block. Reset waits for that block's mined_set, which only Block Validation's
-// background job sets, and these tests never run it. So the wait always ends by
-// giving up and carrying on. At the production 45 retries that takes about 78 s
-// per reset; one attempt reaches the same give-up path straight away.
-func giveUpOnMinedSetAtOnce(s *settings.Settings) {
-	s.BlockValidation.IsParentMinedRetryMaxRetry = 1
-}
-
 func setUpFailedRollbackReset(ctx context.Context, t *testing.T, items *baTestItems, stpHeader *model.BlockHeader) {
 	t.Helper()
 
