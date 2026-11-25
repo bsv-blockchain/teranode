@@ -7557,6 +7557,14 @@ context), and <code>${LEGACY_GRPC_PORT}</code> is <code>8099</code>.</p>
 <td>Block bodies the whole node may have outstanding, counting every peer together, and the read-ahead depth: how far above the committed tip a block may be asked for at all. A count, not svnode's per-peer height range</td>
 </tr>
 <tr>
+<td>StreamDedupMaxInMemoryEntries</td>
+<td>int</td>
+<td>1048576</td>
+<td>not set</td>
+<td>legacy_streamDedupMaxInMemoryEntries</td>
+<td>Transactions of one streamed block held in the in-memory duplicate map (about 48 bytes each, 63 at the peak of a grow) before every entry moves to a memory-mapped table under <code>dataFolder/legacy-dedup</code>. Bounds the heap a block can use before its merkle root is checked; across the blocks converting at once (<code>legacy_maxBlocksInTransitPerPeer</code> x 4) the default is about 3 GB. The disk table starts at 172 MB and takes 55 to 110 bytes per transaction, up to three times that while it grows; a block whose table the free disk cannot cover fails as a local fault and is requested again. 0 or below means the default</td>
+</tr>
+<tr>
 <td>ParkStoreTimeout</td>
 <td>time.Duration</td>
 <td>10s</td>
