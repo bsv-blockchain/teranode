@@ -972,6 +972,10 @@ drain:
 		b.bestTipResetReplayPending.Store(true)
 	}
 	resp, err := b.resetWithResponse(ctx, validateInputs)
+	// The exemption covers the reset the operator asked for, not the replay and owed work that
+	// follow it: those may move back past the retention again and must halt like any other.
+	b.operatorResetRunning.Store(false)
+
 	if err == nil && operator {
 		err = b.clearDeepReorgHalt(ctx)
 	}

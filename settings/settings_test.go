@@ -132,6 +132,12 @@ func TestBlockHeightRetentionAdjustments(t *testing.T) {
 		tSettings.GlobalBlockHeightRetention = 0
 		require.Equal(t, uint32(0), tSettings.GetUtxoStoreSpentDeleteRetention())
 
+		// A huge unmined retention is capped so a height plus the result cannot wrap; a
+		// retention already past the cap is kept.
+		tSettings.GlobalBlockHeightRetention = 288
+		tSettings.UtxoStore.UnminedTxRetention = math.MaxUint32
+		require.Equal(t, uint32(math.MaxUint32/2), tSettings.GetUtxoStoreSpentDeleteRetention())
+
 		tSettings.GlobalBlockHeightRetention = math.MaxUint32
 		require.Equal(t, uint32(math.MaxUint32), tSettings.GetUtxoStoreSpentDeleteRetention())
 	})

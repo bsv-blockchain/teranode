@@ -2,12 +2,15 @@ package blockassembly
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"testing"
+	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
+	"github.com/bsv-blockchain/teranode/services/blockassembly/blockassembly_api"
 	"github.com/bsv-blockchain/teranode/services/blockassembly/subtreeprocessor"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -51,8 +54,8 @@ func TestDeepReorgHaltRecord(t *testing.T) {
 	}
 }
 
-// deepReorgFixture puts block assembly on a1 with b1, a sibling of a1, the best block and a
-// retention of 1, so following the best block moves back the retention.
+// deepReorgFixture puts block assembly on a1 with b2, the tip of a two-block branch beside a1,
+// the best block and a retention of 1, so following the best block moves back the retention.
 func deepReorgFixture(t *testing.T) (*baTestItems, *model.BlockHeader, *subtreeprocessor.MockSubtreeProcessor) {
 	t.Helper()
 
@@ -60,9 +63,9 @@ func deepReorgFixture(t *testing.T) (*baTestItems, *model.BlockHeader, *subtreep
 	genesis := genesisHeader(t, items)
 
 	a1 := buildChain(genesis, 1, 610)[0]
-	b1 := buildChain(genesis, 1, 710)[0]
+	b := buildChain(genesis, 2, 710)
 	require.NoError(t, items.addBlock(t.Context(), a1))
-	require.NoError(t, items.addBlock(t.Context(), b1))
+	addChain(t, items, b)
 
 	mockStp := &subtreeprocessor.MockSubtreeProcessor{}
 	mockStp.On("WaitForPendingBlocks", mock.Anything).Return(nil)
@@ -72,7 +75,7 @@ func deepReorgFixture(t *testing.T) (*baTestItems, *model.BlockHeader, *subtreep
 	items.blockAssembler.settings.UtxoStore.BlockHeightRetentionAdjustment = 0
 	items.blockAssembler.setBestBlockHeader(a1, 1)
 
-	return items, b1, mockStp
+	return items, b[1], mockStp
 }
 
 // A reorg that moves back the retention halts block assembly loudly: no candidates, no
@@ -80,10 +83,10 @@ func deepReorgFixture(t *testing.T) (*baTestItems, *model.BlockHeader, *subtreep
 func TestDeepReorgHaltStopsBlockAssembly(t *testing.T) {
 	initPrometheusMetrics()
 
-	items, b1, mockStp := deepReorgFixture(t)
+	items, b2, mockStp := deepReorgFixture(t)
 	ba := items.blockAssembler
 
-	err := ba.handleReorg(t.Context(), b1, 1)
+	err := ba.handleReorg(t.Context(), b2, 2)
 	require.Error(t, err)
 	require.True(t, ba.DeepReorgHalted())
 	mockStp.AssertNotCalled(t, "Reset", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
@@ -99,7 +102,7 @@ func TestDeepReorgHaltStopsBlockAssembly(t *testing.T) {
 	// A new block announcement leaves block assembly on its tip.
 	ba.processNewBlockAnnouncement(t.Context())
 	tip, _ := ba.CurrentBlock()
-	require.NotEqual(t, b1.Hash().String(), tip.Hash().String())
+	require.NotEqual(t, b2.Hash().String(), tip.Hash().String())
 
 	// A reset nobody but block assembly asked for is refused.
 	errCh := make(chan error, 1)
@@ -112,7 +115,7 @@ func TestDeepReorgHaltStopsBlockAssembly(t *testing.T) {
 	require.NoError(t, err)
 	recorded, err := parseDeepReorgHalt(data)
 	require.NoError(t, err)
-	require.Equal(t, *b1.Hash(), recorded.target)
+	require.Equal(t, *b2.Hash(), recorded.target)
 
 	restarted := &BlockAssembler{settings: ba.settings, logger: ba.logger, blockchainClient: items.blockchainClient}
 	require.NoError(t, restarted.loadDeepReorgHalt(t.Context()))
@@ -123,10 +126,10 @@ func TestDeepReorgHaltStopsBlockAssembly(t *testing.T) {
 func TestDeepReorgHaltLiftedByOperatorReset(t *testing.T) {
 	initPrometheusMetrics()
 
-	items, b1, mockStp := deepReorgFixture(t)
+	items, b2, mockStp := deepReorgFixture(t)
 	ba := items.blockAssembler
 
-	require.Error(t, ba.handleReorg(t.Context(), b1, 1))
+	require.Error(t, ba.handleReorg(t.Context(), b2, 2))
 	require.True(t, ba.DeepReorgHalted())
 
 	mockStp.On("Reset", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
@@ -147,25 +150,57 @@ func TestDeepReorgHaltLiftedByOperatorReset(t *testing.T) {
 }
 
 // A halted block assembly still starts, so the halt never turns into a restart loop, and it
-// starts halted. The pass that halts records a pending mark of skipped fork transactions first,
-// as processNewBlockAnnouncement does, and the start must finish that mark too.
+// ends up halted: from its record, or, when the record was never written, by meeting the same
+// reorg again from the tip it kept. The pass that halts records a pending mark of skipped fork
+// transactions first, as processNewBlockAnnouncement does, and the start must finish it too.
 func TestDeepReorgHaltSurvivesRestart(t *testing.T) {
+	for _, recordLost := range []bool{false, true} {
+		t.Run(fmt.Sprintf("recordLost=%t", recordLost), func(t *testing.T) {
+			initPrometheusMetrics()
+
+			items, b2, _ := deepReorgFixture(t)
+			ba := items.blockAssembler
+
+			require.NoError(t, ba.SetState(t.Context()), "a running node has its tip, a1, persisted")
+			require.NoError(t, ba.saveSkippedForkMark(t.Context(), true))
+			require.Error(t, ba.handleReorg(t.Context(), b2, 2))
+			require.True(t, ba.DeepReorgHalted())
+
+			if recordLost {
+				require.NoError(t, items.blockchainClient.SetState(t.Context(), DeepReorgHaltStateKey, []byte{0}))
+			}
+
+			restarted, err := startBlockAssembler(t, items, ba.settings, nil)
+			require.NoError(t, err, "a halted block assembly must start, or the halt becomes a restart loop")
+			t.Cleanup(func() { restarted.subtreeProcessor.Stop(context.Background()) })
+
+			require.Eventually(t, restarted.DeepReorgHalted, 10*time.Second, 20*time.Millisecond, "the halt outlives the restart")
+
+			_, _, err = restarted.GetMiningCandidate(t.Context())
+			require.True(t, errors.Is(err, errors.ErrServiceUnavailable), "candidates are refused after the restart, got %v", err)
+		})
+	}
+}
+
+// A halted server refuses a mining solution before anything else; the same server, not halted,
+// goes on to its next check.
+func TestDeepReorgHaltRefusesMiningSolution(t *testing.T) {
 	initPrometheusMetrics()
 
-	items, b1, _ := deepReorgFixture(t)
+	items, b2, _ := deepReorgFixture(t)
 	ba := items.blockAssembler
+	server := &BlockAssembly{logger: ba.logger, settings: ba.settings, blockAssembler: ba}
 
-	require.NoError(t, ba.SetState(t.Context()), "a running node has its tip, a1, persisted")
-	require.NoError(t, ba.saveSkippedForkMark(t.Context(), true))
-	require.Error(t, ba.handleReorg(t.Context(), b1, 1))
-	require.True(t, ba.DeepReorgHalted())
+	// Still loading: the check after the halt guard answers without touching the submission queue.
+	ba.unminedTransactionsLoading.Store(true)
 
-	restarted, err := startBlockAssembler(t, items, ba.settings, nil)
-	require.NoError(t, err, "a halted block assembly must start, or the halt becomes a restart loop")
-	t.Cleanup(func() { restarted.subtreeProcessor.Stop(context.Background()) })
+	req := &blockassembly_api.SubmitMiningSolutionRequest{}
 
-	require.True(t, restarted.DeepReorgHalted(), "the halt outlives the restart")
+	_, err := server.SubmitMiningSolution(t.Context(), req)
+	require.True(t, errors.Is(err, errors.ErrServiceNotReady), "not halted: the next check answers, got %v", err)
 
-	_, _, err = restarted.GetMiningCandidate(t.Context())
-	require.True(t, errors.Is(err, errors.ErrServiceUnavailable), "candidates are refused after the restart, got %v", err)
+	require.Error(t, ba.handleReorg(t.Context(), b2, 2))
+
+	_, err = server.SubmitMiningSolution(t.Context(), req)
+	require.True(t, errors.Is(err, errors.ErrServiceUnavailable), "halted: the solution is refused, got %v", err)
 }

@@ -121,9 +121,16 @@ func (s *Settings) GetUtxoStoreSpentDeleteRetention() uint32 {
 		return 0
 	}
 
+	// Capped at half the height range, so a block height plus the result never wraps a uint32
+	// and turns a long retention into an immediate delete. A retention already above the cap is
+	// returned as it is: the pad never shortens it.
 	padded := uint64(retention) + uint64(s.UtxoStore.UnminedTxRetention)
-	if padded > math.MaxUint32 {
-		return math.MaxUint32
+	if padded > math.MaxUint32/2 {
+		if retention > math.MaxUint32/2 {
+			return retention
+		}
+
+		return math.MaxUint32 / 2
 	}
 
 	return uint32(padded)

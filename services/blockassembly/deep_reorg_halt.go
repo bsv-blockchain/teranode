@@ -87,7 +87,8 @@ func (b *BlockAssembler) deepReorgHaltedError() error {
 
 // haltForDeepReorg stops block assembly before a reset that moves back at least the UTXO
 // retention reloads the mempool and quietly loses what the pruner deleted. It records the halt
-// so a restart stays halted; a failed record is logged and the halt holds until the restart.
+// so a restart starts halted. A failed record is logged: the halt leaves block assembly's saved
+// tip where it was, so a restart without the record meets the same reorg and halts again.
 func (b *BlockAssembler) haltForDeepReorg(ctx context.Context, target *model.BlockHeader, height uint32, moveBack, moveForward int) error {
 	h := &deepReorgHalt{target: *target.Hash(), height: height, moveBack: uint32(moveBack)} //nolint:gosec // a block count
 
@@ -97,7 +98,7 @@ func (b *BlockAssembler) haltForDeepReorg(ctx context.Context, target *model.Blo
 	b.logger.Errorf("[BlockAssembler] MANUAL INTERVENTION REQUIRED: %s (moving forward %d blocks)", b.deepReorgHaltMessage(), moveForward)
 
 	if err := b.blockchainClient.SetState(ctx, DeepReorgHaltStateKey, h.bytes()); err != nil {
-		b.logger.Errorf("[BlockAssembler] error recording the deep reorg halt in state[%s], a restart would lift it: %v", DeepReorgHaltStateKey, err)
+		b.logger.Errorf("[BlockAssembler] error recording the deep reorg halt in state[%s]; a restart starts unhalted on the tip it kept and halts again when it meets the same reorg: %v", DeepReorgHaltStateKey, err)
 	}
 
 	return b.deepReorgHaltedError()
