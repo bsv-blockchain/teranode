@@ -33,9 +33,13 @@ type GenerationalCache struct {
 	writeMu       sync.Mutex
 	headerBytes   uint64
 	headerCharges map[chainhash.Hash]uint64
-	ttlCache      *ttlcache.Cache[chainhash.Hash, any]
-	generation    atomic.Uint64
-	stopped       atomic.Bool
+	// sweptEvictions is ttlCache's eviction count at the last full sweep, and
+	// sweeps counts full sweeps; both are guarded by writeMu.
+	sweptEvictions uint64
+	sweeps         int
+	ttlCache       *ttlcache.Cache[chainhash.Hash, any]
+	generation     atomic.Uint64
+	stopped        atomic.Bool
 }
 
 // NewGenerationalCache creates a new generational cache instance.
@@ -66,11 +70,27 @@ func NewGenerationalCache(capacity int) *GenerationalCache {
 	return gc
 }
 
+// sweepEvictionFraction sets how many evictions, as a fraction of the charged
+// entries, must happen between two full sweeps.
+const sweepEvictionFraction = 32
+
 // sweepDepartedCharges runs with writeMu held. Has does not change LRU order.
 // Reconcile on budget pressure, or when accounting has accumulated twice the
 // live entry count (with a 1024-entry floor), bounding stale bookkeeping too.
+// A charge departs only through a ttlCache eviction, so the scan is skipped
+// until evictions since the last scan reach 1/sweepEvictionFraction of the
+// charges: a budget full of live entries no longer costs every Set a full scan.
 func (gc *GenerationalCache) sweepDepartedCharges() {
 	gc.ttlCache.DeleteExpired()
+
+	evictions := gc.ttlCache.Metrics().Evictions
+	if evictions-gc.sweptEvictions < max(1, uint64(len(gc.headerCharges))/sweepEvictionFraction) {
+		return
+	}
+
+	gc.sweptEvictions = evictions
+	gc.sweeps++
+
 	for key, cost := range gc.headerCharges {
 		if !gc.ttlCache.Has(key) {
 			gc.headerBytes -= cost

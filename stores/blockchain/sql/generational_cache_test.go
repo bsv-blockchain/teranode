@@ -234,6 +234,11 @@ func TestGenerationalCache_HeaderByteBudget(t *testing.T) {
 		require.True(t, gc.NewOp(chainhash.Hash{i}).Set(value, time.Hour))
 	}
 	require.False(t, gc.NewOp(chainhash.Hash{17}).Set(value, time.Hour))
+	sweeps := gc.sweeps
+	for i := 0; i < 1000; i++ {
+		require.False(t, gc.NewOp(chainhash.Hash{17}).Set(value, time.Hour))
+	}
+	require.Equal(t, sweeps, gc.sweeps, "with nothing evicted, a refused Set must not rescan every charge")
 	require.Nil(t, gc.NewOp(chainhash.Hash{17}).Get())
 	require.NotNil(t, gc.NewOp(chainhash.Hash{1}).Get(), "budget exhaustion must not evict existing responses")
 	require.NotNil(t, gc.NewOp(hotKey).Get(), "header queries must not flush unrelated hot-path entries")
