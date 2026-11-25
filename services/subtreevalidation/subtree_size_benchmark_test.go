@@ -302,23 +302,37 @@ func createTransactionChainForBenchmark(tb testing.TB, r *require.Assertions, co
 	return txs
 }
 
-// Signing is the cost the cache removes, so a second request for a length must reuse the
-// kept chain and still hand back transactions the caller can change freely.
+// Signing is the cost the cache removes, so a request must read the entry kept for its
+// length, and still hand back transactions the caller can change freely.
 func TestCreateTransactionChainForBenchmarkCachesByLength(t *testing.T) {
 	r := require.New(t)
 
-	delete(benchmarkTxChains, 3)
-	t.Cleanup(func() { delete(benchmarkTxChains, 3) })
+	lengths := []int{2, 3, 4}
+	for _, n := range lengths {
+		delete(benchmarkTxChains, n)
+	}
 
-	first := createTransactionChainForBenchmark(t, r, 3)
-	r.Contains(benchmarkTxChains, 3)
+	t.Cleanup(func() {
+		for _, n := range lengths {
+			delete(benchmarkTxChains, n)
+		}
+	})
 
-	second := createTransactionChainForBenchmark(t, r, 3)
-	r.Len(second, len(first))
+	two := createTransactionChainForBenchmark(t, r, 2)
+	four := createTransactionChainForBenchmark(t, r, 4)
+	r.Len(two, 2)
+	r.Len(four, 4)
 
-	for i := range first {
-		r.Equal(first[i].TxID(), second[i].TxID())
-		r.NotSame(first[i], second[i])
+	// A hit returns the kept entry: length 2's chain planted under length 3 comes back as is.
+	benchmarkTxChains[3] = benchmarkTxChains[2]
+	r.Len(createTransactionChainForBenchmark(t, r, 3), 2)
+
+	again := createTransactionChainForBenchmark(t, r, 2)
+	r.Len(again, len(two))
+
+	for i := range two {
+		r.Equal(two[i].TxID(), again[i].TxID())
+		r.NotSame(two[i], again[i])
 	}
 }
 
