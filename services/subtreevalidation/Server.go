@@ -911,6 +911,19 @@ func (u *Server) checkSubtreeFromBlock(ctx context.Context, request *subtreevali
 		return false, errors.NewProcessingError("[CheckSubtree] candidate branch coin times", err)
 	}
 
+	// blockValidatorOptions are the options both branches below validate the subtree's
+	// transactions with; the legacy branch adds to them. Each call returns a new slice.
+	blockValidatorOptions := func() []validator.Option {
+		return []validator.Option{
+			validator.WithSkipPolicyChecks(true),
+			validator.WithInBlock(true),
+			validator.WithCreateConflicting(true),
+			validator.WithIgnoreLocked(true),
+			validator.WithCandidateParentMedianTime(candidateParentMedianTime),
+			validator.WithCandidateForkMTPs(forkStart, forkMTPs),
+		}
+	}
+
 	// Check if the base URL is "legacy", which indicates that the subtree is coming from a block from the legacy service.
 	if request.BaseUrl == "legacy" {
 		// read from legacy store
@@ -990,15 +1003,7 @@ func (u *Server) checkSubtreeFromBlock(ctx context.Context, request *subtreevali
 		// tx validated at a height under other transaction rules than tip+1;
 		// see feedsBlockAssembly.
 		// Accepted-block txs are mined-removed from assembly as always.
-		validatorOptions := []validator.Option{
-			validator.WithSkipPolicyChecks(true),
-			validator.WithInBlock(true),
-			validator.WithCreateConflicting(true),
-			validator.WithIgnoreLocked(true),
-			validator.WithCandidateParentMedianTime(candidateParentMedianTime),
-			validator.WithCandidateForkMTPs(forkStart, forkMTPs),
-			validator.WithUnconfirmedParentsAtCandidateHeight(true),
-		}
+		validatorOptions := append(blockValidatorOptions(), validator.WithUnconfirmedParentsAtCandidateHeight(true))
 
 		currentState, err := u.blockchainClient.GetFSMCurrentState(ctx)
 		if err != nil {
@@ -1044,14 +1049,7 @@ func (u *Server) checkSubtreeFromBlock(ctx context.Context, request *subtreevali
 		FromBlock:     true,
 	}
 
-	peerValidatorOptions := []validator.Option{
-		validator.WithSkipPolicyChecks(true),
-		validator.WithInBlock(true),
-		validator.WithCreateConflicting(true),
-		validator.WithIgnoreLocked(true),
-		validator.WithCandidateParentMedianTime(candidateParentMedianTime),
-		validator.WithCandidateForkMTPs(forkStart, forkMTPs),
-	}
+	peerValidatorOptions := blockValidatorOptions()
 
 	// The same gate as the legacy branch: the block's txs feed block assembly only when the
 	// node is RUNNING and the block is not above tip+1 (feedsBlockAssembly).

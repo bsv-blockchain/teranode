@@ -799,22 +799,10 @@ func (u *Server) CheckBlockSubtrees(ctx context.Context, request *subtreevalidat
 	//       addTXToBlockAssembly captured once above. Kept catch-up uses the
 	//       existing RUNNING block-validation options; an unresolved mempool
 	//       floater still reaches block.Valid's membership check described above.
-	subtreeValidatorOptions := []validator.Option{
-		validator.WithSkipPolicyChecks(true),
-		validator.WithInBlock(true),
-		validator.WithCreateConflicting(true),
-		validator.WithIgnoreLocked(true),
-		validator.WithCandidateBlockTime(candidateBlockTime),
-		validator.WithCandidateParentMedianTime(candidateParentMedianTime),
-		validator.WithCandidateForkMTPs(forkStart, forkMTPs),
-		validator.WithUnconfirmedParentsAtCandidateHeight(true),
-	}
-
 	// Reuse the FSM state captured once at the top of CheckBlockSubtrees so this
-	// closure and processTransactionsInLevels cannot diverge across a transition.
-	if !addTXToBlockAssembly {
-		subtreeValidatorOptions = append(subtreeValidatorOptions, validator.WithAddTXToBlockAssembly(false))
-	}
+	// closure and processTransactionsInLevels cannot diverge across a transition:
+	// both build their options with blockTxValidatorOptions.
+	subtreeValidatorOptions := blockTxValidatorOptions(candidateBlockTime, candidateParentMedianTime, candidateFork, addTXToBlockAssembly)
 
 	validateSubtree := func(validateCtx context.Context, subtreeHash chainhash.Hash) (*subtreepkg.Subtree, error) {
 		v := ValidateSubtree{
@@ -1733,24 +1721,11 @@ func (u *Server) processTransactionsInLevels(ctx context.Context, allTransaction
 	// consensus-safety rationale) — both routes validate txs of the same
 	// PoW-checked candidate block, and divergence would make accept/reject
 	// branch-dependent.
-	validatorOptions := []validator.Option{
-		validator.WithSkipPolicyChecks(true),
-		validator.WithInBlock(true),
-		validator.WithCreateConflicting(true),
-		validator.WithIgnoreLocked(true),
-		validator.WithCandidateBlockTime(candidateBlockTime),
-		validator.WithCandidateParentMedianTime(candidateParentMedianTime),
-		validator.WithCandidateForkMTPs(candidateFork.start, candidateFork.mtps),
-		validator.WithUnconfirmedParentsAtCandidateHeight(true),
-	}
-
 	// addTXToBlockAssembly is captured once by the caller (CheckBlockSubtrees)
 	// from a single FSM read, so this pass and the validateSubtree closure cannot
 	// diverge across an FSM transition. Bulk catch-up disables the hand-off; a
 	// short catch-up from RUNNING can explicitly keep it on.
-	if !addTXToBlockAssembly {
-		validatorOptions = append(validatorOptions, validator.WithAddTXToBlockAssembly(false))
-	}
+	validatorOptions := blockTxValidatorOptions(candidateBlockTime, candidateParentMedianTime, candidateFork, addTXToBlockAssembly)
 
 	// Pre-process validation options
 	processedValidatorOptions := validator.ProcessOptions(validatorOptions...)
@@ -2239,8 +2214,31 @@ type candidateForkMTPs struct {
 	mtps  []uint32
 }
 
-// candidateForkWalkDepth is how many headers fetchCandidateForkMTPs asks for at first when the
-// candidate's parent is off the current chain. It doubles until the walk reaches the current chain.
+// blockTxValidatorOptions are the options CheckBlockSubtrees validates a candidate block's
+// transactions with, on the level path (processTransactionsInLevels) and in its validateSubtree
+// closure, so the two cannot drift apart.
+func blockTxValidatorOptions(candidateBlockTime, candidateParentMedianTime uint32, candidateFork candidateForkMTPs, addTXToBlockAssembly bool) []validator.Option {
+	opts := []validator.Option{
+		validator.WithSkipPolicyChecks(true),
+		validator.WithInBlock(true),
+		validator.WithCreateConflicting(true),
+		validator.WithIgnoreLocked(true),
+		validator.WithCandidateBlockTime(candidateBlockTime),
+		validator.WithCandidateParentMedianTime(candidateParentMedianTime),
+		validator.WithCandidateForkMTPs(candidateFork.start, candidateFork.mtps),
+		validator.WithUnconfirmedParentsAtCandidateHeight(true),
+	}
+
+	if !addTXToBlockAssembly {
+		opts = append(opts, validator.WithAddTXToBlockAssembly(false))
+	}
+
+	return opts
+}
+
+// candidateForkWalkDepth is how many headers fetchCandidateForkMTPs asks for in one page when
+// the candidate's parent is off the current chain, unless blockchain_maxBlockHeadersPerRequest
+// is lower.
 const candidateForkWalkDepth = 64
 
 // fetchCandidateForkMTPs returns the BIP68 coin times of the candidate's own branch, for a
@@ -2283,21 +2281,35 @@ func (u *Server) fetchCandidateForkMTPs(ctx context.Context, parentHash *chainha
 
 	// Find the fork point: the newest ancestor on the current chain. Index i of the run is the
 	// block at height blockHeight-1-i, and index 0, the parent, is already known to be off it.
-	depth := uint64(candidateForkWalkDepth)
-	forkIdx := -1
-	checked := 1
+	// The run is read in pages no larger than the blockchain service accepts, each starting
+	// where the last one ended.
+	pageSize := uint64(candidateForkWalkDepth)
+	if limit := u.settings.BlockChain.MaxBlockHeadersPerRequest; limit > 0 && uint64(limit) < pageSize {
+		pageSize = uint64(limit)
+	}
 
-	var headers []*model.BlockHeader
+	var (
+		headers []*model.BlockHeader
+		metas   []*model.BlockHeaderMeta
+	)
+
+	forkIdx := -1
+	cursor, cursorHeight := parentHash, blockHeight-1
 
 	for {
-		var metas []*model.BlockHeaderMeta
-
-		headers, metas, err = u.candidateBranchRun(ctx, parentHash, blockHeight-1, depth)
+		pageHeaders, pageMetas, err := u.candidateBranchRun(ctx, cursor, cursorHeight, pageSize)
 		if err != nil {
 			return 0, nil, err
 		}
 
-		for i := checked; forkIdx < 0 && i < len(metas); i++ {
+		headers = append(headers, pageHeaders...)
+		metas = append(metas, pageMetas...)
+
+		for i := len(metas) - len(pageMetas); forkIdx < 0 && i < len(metas); i++ {
+			if i == 0 {
+				continue
+			}
+
 			if onChain, err = u.blockchainClient.CheckBlockIsInCurrentChain(ctx, []uint32{metas[i].ID}); err != nil {
 				return 0, nil, errors.NewProcessingError("parent hash %s: failed to check whether the ancestor at height %d is on the current chain", parentHash.String(), metas[i].Height, err)
 			}
@@ -2307,32 +2319,24 @@ func (u *Server) fetchCandidateForkMTPs(ctx context.Context, parentHash *chainha
 			}
 		}
 
+		last := headers[len(headers)-1]
 		atGenesis := metas[len(metas)-1].Height == 0
-
-		if forkIdx < 0 {
-			if atGenesis || uint64(len(headers)) < depth {
-				return 0, nil, errors.NewProcessingError("parent hash %s: no ancestor of the candidate is on the current chain", parentHash.String())
-			}
-
-			checked = len(metas)
-			depth *= 2
-
-			continue
-		}
 
 		// Each branch block's coin time needs the 11 headers below it, so the run must reach
 		// 10 below the fork point, or end at genesis.
-		if needed := uint64(forkIdx) + blockchain.MedianTimeBlocks; uint64(len(headers)) < needed && !atGenesis {
-			if uint64(len(headers)) < depth {
-				return 0, nil, errors.NewProcessingError("parent hash %s: the run below the fork point ends early at %d headers", parentHash.String(), len(headers))
-			}
-
-			depth = needed
-
-			continue
+		if forkIdx >= 0 && (atGenesis || uint64(len(headers)) >= uint64(forkIdx)+blockchain.MedianTimeBlocks) {
+			break
 		}
 
-		break
+		if atGenesis {
+			return 0, nil, errors.NewProcessingError("parent hash %s: no ancestor of the candidate is on the current chain", parentHash.String())
+		}
+
+		if uint64(len(pageHeaders)) < pageSize {
+			return 0, nil, errors.NewProcessingError("parent hash %s: the candidate branch run ends early at height %d", parentHash.String(), metas[len(metas)-1].Height)
+		}
+
+		cursor, cursorHeight = last.HashPrevBlock, metas[len(metas)-1].Height-1
 	}
 
 	// The branch blocks sit at indexes forkIdx-1 (the first above the fork point) down to 0
@@ -2353,34 +2357,34 @@ func (u *Server) fetchCandidateForkMTPs(ctx context.Context, parentHash *chainha
 	return start, mtps, nil
 }
 
-// candidateBranchRun fetches up to depth headers ending at parentHash, newest first, and checks
-// that they form one linked run from the parent at parentHeight downwards, with metas whose
+// candidateBranchRun fetches up to depth headers starting at startHash, newest first, and checks
+// that they form one linked run from that block at startHeight downwards, with metas whose
 // heights match their place in the run.
-func (u *Server) candidateBranchRun(ctx context.Context, parentHash *chainhash.Hash, parentHeight uint32, depth uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
-	headers, metas, err := u.blockchainClient.GetBlockHeaders(ctx, parentHash, depth)
+func (u *Server) candidateBranchRun(ctx context.Context, startHash *chainhash.Hash, startHeight uint32, depth uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
+	headers, metas, err := u.blockchainClient.GetBlockHeaders(ctx, startHash, depth)
 	if err != nil {
-		return nil, nil, errors.NewProcessingError("parent hash %s: failed to fetch the candidate branch headers", parentHash.String(), err)
+		return nil, nil, errors.NewProcessingError("parent hash %s: failed to fetch the candidate branch headers", startHash.String(), err)
 	}
 
 	if len(headers) == 0 || len(headers) != len(metas) {
-		return nil, nil, errors.NewProcessingError("parent hash %s: got %d headers and %d metas for the candidate branch", parentHash.String(), len(headers), len(metas))
+		return nil, nil, errors.NewProcessingError("parent hash %s: got %d headers and %d metas for the candidate branch", startHash.String(), len(headers), len(metas))
 	}
 
 	for i := range headers {
-		if headers[i] == nil || metas[i] == nil || uint64(metas[i].Height)+uint64(i) != uint64(parentHeight) {
-			return nil, nil, errors.NewProcessingError("parent hash %s: candidate branch header %d is missing or at the wrong height", parentHash.String(), i)
+		if headers[i] == nil || metas[i] == nil || uint64(metas[i].Height)+uint64(i) != uint64(startHeight) {
+			return nil, nil, errors.NewProcessingError("parent hash %s: candidate branch header %d is missing or at the wrong height", startHash.String(), i)
 		}
 
 		if i == 0 {
-			if !headers[0].Hash().IsEqual(parentHash) {
-				return nil, nil, errors.NewProcessingError("parent hash %s: candidate branch run does not start at the parent", parentHash.String())
+			if !headers[0].Hash().IsEqual(startHash) {
+				return nil, nil, errors.NewProcessingError("parent hash %s: candidate branch run does not start at the requested block", startHash.String())
 			}
 
 			continue
 		}
 
 		if prev := headers[i-1].HashPrevBlock; prev == nil || !prev.IsEqual(headers[i].Hash()) {
-			return nil, nil, errors.NewProcessingError("parent hash %s: candidate branch link broken at depth %d", parentHash.String(), i)
+			return nil, nil, errors.NewProcessingError("parent hash %s: candidate branch link broken at depth %d", startHash.String(), i)
 		}
 	}
 

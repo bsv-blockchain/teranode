@@ -2,12 +2,19 @@ package subtreevalidation
 
 import (
 	"context"
+	"fmt"
+	"math"
+	"net/url"
+	"slices"
 	"testing"
 
+	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-chaincfg"
+	subtreepkg "github.com/bsv-blockchain/go-subtree"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
+	blockchainsql "github.com/bsv-blockchain/teranode/stores/blockchain/sql"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/stretchr/testify/mock"
@@ -240,19 +247,201 @@ func onCurrentChainFrom(bcMock *blockchain.Mock, n, forkIdx int) {
 	}
 }
 
-// TestFetchCandidateForkMTPs_ParentOnCurrentChain checks that a candidate extending the current
-// chain gets no branch coin times and costs no header walk.
-func TestFetchCandidateForkMTPs_ParentOnCurrentChain(t *testing.T) {
-	headers, metas := forkTestChain(t, 1)
-	bcMock := &blockchain.Mock{}
-	bcMock.Mock.On("GetBlockHeader", mock.Anything, headers[0].Hash()).Return(headers[0], metas[0], nil)
-	onCurrentChainFrom(bcMock, 1, 0)
+// forkChainStore is a sqlitememory blockchain store holding a main chain of mainLen blocks on
+// top of regtest genesis and a side branch of branchLen blocks leaving it after the block at
+// forkHeight, behind a LocalClient. timestamp gives each stored block's time: the branch's are
+// two hours ahead of the main chain's at the same height, so the two give different medians.
+type forkChainStore struct {
+	client     blockchain.ClientI
+	main       []*model.Block // main[i] is at height i+1
+	branch     []*model.Block // branch[i] is at height forkHeight+1+i
+	forkHeight uint32
+}
 
-	start, mtps, err := forkTestServer(t, bcMock).fetchCandidateForkMTPs(context.Background(), headers[0].Hash(), forkTestHeight)
+func newForkChainStore(t *testing.T, mainLen, forkHeight, branchLen int) *forkChainStore {
+	t.Helper()
+
+	storeURL, err := url.Parse("sqlitememory:///" + t.Name())
+	require.NoError(t, err)
+
+	tSettings := test.CreateBaseTestSettings(t)
+
+	store, err := blockchainsql.New(ulogger.TestLogger{}, storeURL, tSettings)
+	require.NoError(t, err)
+
+	main := forkTestBlocks(t, tSettings.ChainCfgParams.GenesisHash, 1, mainLen, 0)
+	branch := forkTestBlocks(t, main[forkHeight-1].Hash(), uint32(forkHeight+1), branchLen, 7_200) //nolint:gosec // test sizes are small
+
+	for _, block := range append(append([]*model.Block{}, main...), branch...) {
+		_, _, err = store.StoreBlock(t.Context(), block, "")
+		require.NoError(t, err)
+	}
+
+	best, _, err := store.GetBestBlockHeader(t.Context())
+	require.NoError(t, err)
+	require.Equal(t, main[mainLen-1].Hash().String(), best.Hash().String(), "the main chain must stay the best chain")
+
+	client, err := blockchain.NewLocalClient(ulogger.TestLogger{}, tSettings, store, nil, nil)
+	require.NoError(t, err)
+
+	return &forkChainStore{client: client, main: main, branch: branch, forkHeight: uint32(forkHeight)} //nolint:gosec // test sizes are small
+}
+
+// forkTestBlocks builds n blocks on top of parentHash, the first at height firstHeight, with
+// block times 600 seconds apart plus skew.
+func forkTestBlocks(t *testing.T, parentHash *chainhash.Hash, firstHeight uint32, n int, skew uint32) []*model.Block {
+	t.Helper()
+
+	coinbase, err := bt.NewTxFromString(model.CoinbaseHex)
+	require.NoError(t, err)
+
+	subtree, err := subtreepkg.NewTreeByLeafCount(4)
+	require.NoError(t, err)
+	require.NoError(t, subtree.AddNode(*coinbase.TxIDChainHash(), 0, 0))
+
+	nBits, err := model.NewNBitFromString("207fffff")
+	require.NoError(t, err)
+
+	blocks := make([]*model.Block, 0, n)
+	prev := parentHash
+
+	for i := 0; i < n; i++ {
+		block := &model.Block{
+			Header: &model.BlockHeader{
+				Version:        1,
+				Timestamp:      1_600_000_000 + 600*(firstHeight+uint32(i)) + skew, //nolint:gosec // test sizes are small
+				Nonce:          2573394689,
+				HashPrevBlock:  prev,
+				HashMerkleRoot: subtree.RootHash(),
+				Bits:           *nBits,
+			},
+			CoinbaseTx:       coinbase,
+			TransactionCount: 1,
+			Subtrees:         []*chainhash.Hash{subtree.RootHash()},
+		}
+
+		blocks = append(blocks, block)
+		prev = block.Hash()
+	}
+
+	return blocks
+}
+
+// branchCoinTimes is the oracle: for each branch block, the median of the timestamps of the 11
+// blocks below it along the branch (main chain up to the fork point).
+func (s *forkChainStore) branchCoinTimes(upTo int) []uint32 {
+	timeAt := func(height uint32) uint32 {
+		if height > s.forkHeight {
+			return s.branch[height-s.forkHeight-1].Header.Timestamp
+		}
+
+		return s.main[height-1].Header.Timestamp
+	}
+
+	mtps := make([]uint32, 0, upTo)
+
+	for k := 0; k < upTo; k++ {
+		h := s.forkHeight + 1 + uint32(k) //nolint:gosec // test sizes are small
+		window := make([]uint32, 0, 11)
+
+		for x := h - 11; x < h; x++ {
+			window = append(window, timeAt(x))
+		}
+
+		slices.Sort(window)
+		mtps = append(mtps, window[len(window)/2])
+	}
+
+	return mtps
+}
+
+// forkTestServerOn returns a Server whose chain params enforce BIP68 at every height (CSV 0,
+// Genesis at the top), over client, with blockchain_maxBlockHeadersPerRequest set to limit.
+func forkTestServerOn(t *testing.T, client blockchain.ClientI, limit int) *Server {
+	t.Helper()
+
+	tSettings := test.CreateBaseTestSettings(t)
+	params := *tSettings.ChainCfgParams
+	params.CSVHeight = 0
+	params.GenesisActivationHeight = math.MaxUint32
+	tSettings.ChainCfgParams = &params
+	tSettings.BlockChain.MaxBlockHeadersPerRequest = limit
+
+	return &Server{logger: ulogger.TestLogger{}, settings: tSettings, blockchainClient: client}
+}
+
+// headerRequestCounter records how many GetBlockHeaders calls were made and the largest count
+// any of them asked for.
+type headerRequestCounter struct {
+	blockchain.ClientI
+
+	calls   int
+	largest uint64
+}
+
+func (c *headerRequestCounter) GetBlockHeaders(ctx context.Context, hash *chainhash.Hash, n uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
+	c.calls++
+	c.largest = max(c.largest, n)
+
+	return c.ClientI.GetBlockHeaders(ctx, hash, n)
+}
+
+// TestFetchCandidateForkMTPs_ParentOnCurrentChain checks that a candidate extending the main
+// chain gets no branch coin times.
+func TestFetchCandidateForkMTPs_ParentOnCurrentChain(t *testing.T) {
+	s := newForkChainStore(t, 40, 20, 5)
+
+	start, mtps, err := forkTestServerOn(t, s.client, 0).fetchCandidateForkMTPs(t.Context(), s.main[39].Hash(), 41)
 	require.NoError(t, err)
 	require.Zero(t, start)
 	require.Empty(t, mtps)
-	bcMock.AssertNotCalled(t, "GetBlockHeaders", mock.Anything, mock.Anything, mock.Anything)
+}
+
+// TestFetchCandidateForkMTPs_BranchCoinTimes checks the coin times of a five-block side branch
+// leaving the main chain after height 20, for a candidate on the branch tip. Each value must be
+// the median along the branch, which differs from the main chain's median at the same height
+// for every branch block above the first. With a header limit of 3 the walk reads the run in
+// pages and must give the same answer.
+func TestFetchCandidateForkMTPs_BranchCoinTimes(t *testing.T) {
+	s := newForkChainStore(t, 40, 20, 5)
+	want := s.branchCoinTimes(5)
+
+	for _, limit := range []int{0, 3} {
+		t.Run(fmt.Sprintf("limit=%d", limit), func(t *testing.T) {
+			client := &headerRequestCounter{ClientI: s.client}
+
+			start, mtps, err := forkTestServerOn(t, client, limit).fetchCandidateForkMTPs(t.Context(), s.branch[4].Hash(), 26)
+			require.NoError(t, err)
+			require.Equal(t, uint32(21), start)
+			require.Equal(t, want, mtps)
+
+			if limit > 0 {
+				require.LessOrEqual(t, client.largest, uint64(limit), "no header request may exceed blockchain_maxBlockHeadersPerRequest")
+				require.Greater(t, client.calls, 1, "the run must be read in more than one page")
+			}
+		})
+	}
+}
+
+// TestFetchCandidateForkMTPs_DeepBranch checks a 70-block branch, deeper than one page of
+// candidateForkWalkDepth headers, so the walk must page past it to find the fork point.
+func TestFetchCandidateForkMTPs_DeepBranch(t *testing.T) {
+	s := newForkChainStore(t, 100, 20, 70)
+
+	start, mtps, err := forkTestServerOn(t, s.client, 0).fetchCandidateForkMTPs(t.Context(), s.branch[69].Hash(), 91)
+	require.NoError(t, err)
+	require.Equal(t, uint32(21), start)
+	require.Equal(t, s.branchCoinTimes(70), mtps)
+}
+
+// TestFetchCandidateForkMTPs_RejectsAParentAtTheWrongHeight checks that a candidate height that
+// does not sit directly above its parent fails rather than misplacing the coin times.
+func TestFetchCandidateForkMTPs_RejectsAParentAtTheWrongHeight(t *testing.T) {
+	s := newForkChainStore(t, 40, 20, 5)
+
+	_, _, err := forkTestServerOn(t, s.client, 0).fetchCandidateForkMTPs(t.Context(), s.branch[4].Hash(), 27)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "is not at height 26")
 }
 
 // TestFetchCandidateForkMTPs_OutsideBIP68DoesNothing checks that no lookups run at a height where
@@ -268,53 +457,6 @@ func TestFetchCandidateForkMTPs_OutsideBIP68DoesNothing(t *testing.T) {
 	}
 
 	bcMock.AssertNotCalled(t, "GetBlockHeader", mock.Anything, mock.Anything)
-}
-
-// TestFetchCandidateForkMTPs_BranchCoinTimes checks the coin times of a three-block branch: the
-// parent and the two blocks below it are off the current chain, and index 3 is the fork point.
-// The coin time of the block at height h is the median of the 11 timestamps below it, anchored
-// at index forkTestHeight-h, and with timestamps rising by 1000 per block that median is the
-// timestamp 5 below the anchor.
-func TestFetchCandidateForkMTPs_BranchCoinTimes(t *testing.T) {
-	const n = 30
-
-	headers, metas := forkTestChain(t, n)
-	bcMock := &blockchain.Mock{}
-	bcMock.Mock.On("GetBlockHeader", mock.Anything, headers[0].Hash()).Return(headers[0], metas[0], nil)
-	bcMock.Mock.On("GetBlockHeaders", mock.Anything, headers[0].Hash(), uint64(candidateForkWalkDepth)).Return(headers, metas, nil)
-	onCurrentChainFrom(bcMock, n, 3)
-
-	start, mtps, err := forkTestServer(t, bcMock).fetchCandidateForkMTPs(context.Background(), headers[0].Hash(), forkTestHeight)
-	require.NoError(t, err)
-	require.Equal(t, forkTestHeight-3, start)
-	// anchors at indexes 3, 2 and 1; medians at indexes 8, 7 and 6
-	require.Equal(t, []uint32{1000 * (n - 8), 1000 * (n - 7), 1000 * (n - 6)}, mtps)
-}
-
-// TestFetchCandidateForkMTPs_FetchesTheWindowBelowADeepFork checks that a fork point found near
-// the end of the first run triggers a second, longer fetch, so the oldest branch block's coin time
-// is taken over a full 11-header window.
-func TestFetchCandidateForkMTPs_FetchesTheWindowBelowADeepFork(t *testing.T) {
-	const (
-		n       = 80
-		forkIdx = 60
-	)
-
-	headers, metas := forkTestChain(t, n)
-	bcMock := &blockchain.Mock{}
-	bcMock.Mock.On("GetBlockHeader", mock.Anything, headers[0].Hash()).Return(headers[0], metas[0], nil)
-	bcMock.Mock.On("GetBlockHeaders", mock.Anything, headers[0].Hash(), uint64(candidateForkWalkDepth)).
-		Return(headers[:candidateForkWalkDepth], metas[:candidateForkWalkDepth], nil)
-	bcMock.Mock.On("GetBlockHeaders", mock.Anything, headers[0].Hash(), uint64(forkIdx+blockchain.MedianTimeBlocks)).
-		Return(headers[:forkIdx+blockchain.MedianTimeBlocks], metas[:forkIdx+blockchain.MedianTimeBlocks], nil)
-	onCurrentChainFrom(bcMock, n, forkIdx)
-
-	start, mtps, err := forkTestServer(t, bcMock).fetchCandidateForkMTPs(context.Background(), headers[0].Hash(), forkTestHeight)
-	require.NoError(t, err)
-	require.Equal(t, forkTestHeight-forkIdx, start)
-	require.Len(t, mtps, forkIdx)
-	require.Equal(t, uint32(1000*(n-forkIdx-5)), mtps[0])
-	require.Equal(t, uint32(1000*(n-6)), mtps[forkIdx-1])
 }
 
 // TestFetchCandidateForkMTPs_RejectsAMislinkedRun checks that a run whose metas do not sit at the

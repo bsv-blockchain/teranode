@@ -102,6 +102,21 @@ type batchedFixture struct {
 // the test height so no median-time lookups are needed.
 func newBatchedFixture(t *testing.T, state blockchain.FSMStateType) *batchedFixture {
 	t.Helper()
+
+	return newBatchedFixtureWithParams(t, state, func(params *chaincfg.Params) { params.CSVHeight = 1_000_000 }, fixtureWraps{})
+}
+
+// fixtureWraps lets a test wrap the server's blockchain client and validator before the server
+// starts, so its background goroutines never see the clients change. A nil field wraps nothing.
+type fixtureWraps struct {
+	client    func(blockchain.ClientI) blockchain.ClientI
+	validator func(*publishSpy) validator.Interface
+}
+
+// newBatchedFixtureWithParams is newBatchedFixture with the regtest chain params adjusted by
+// adjust instead of only pushing CSV above the test height, and the clients wrapped by wraps.
+func newBatchedFixtureWithParams(t *testing.T, state blockchain.FSMStateType, adjust func(params *chaincfg.Params), wraps fixtureWraps) *batchedFixture {
+	t.Helper()
 	InitPrometheusMetrics()
 
 	ctx := newCancelCtx(t)
@@ -109,7 +124,7 @@ func newBatchedFixture(t *testing.T, state blockchain.FSMStateType) *batchedFixt
 
 	tSettings := test.CreateBaseTestSettings(t)
 	params := *tSettings.ChainCfgParams
-	params.CSVHeight = 1_000_000
+	adjust(&params)
 	tSettings.ChainCfgParams = &params
 	tSettings.BlockAssembly.Disabled = true
 
@@ -138,7 +153,20 @@ func newBatchedFixture(t *testing.T, state blockchain.FSMStateType) *batchedFixt
 	nilConsumer := &kafka.KafkaConsumerGroup{}
 	spy := &publishSpy{Validator: v.(*validator.Validator), published: map[chainhash.Hash]bool{}}
 
-	server, err := New(ctx, logger, tSettings, subtreeStore, blobmemory.New(), store, spy, blockchainClient, nilConsumer, nilConsumer, nil, nil)
+	var (
+		serverClient    blockchain.ClientI  = blockchainClient
+		serverValidator validator.Interface = spy
+	)
+
+	if wraps.client != nil {
+		serverClient = wraps.client(blockchainClient)
+	}
+
+	if wraps.validator != nil {
+		serverValidator = wraps.validator(spy)
+	}
+
+	server, err := New(ctx, logger, tSettings, subtreeStore, blobmemory.New(), store, serverValidator, serverClient, nilConsumer, nilConsumer, nil, nil)
 	require.NoError(t, err)
 
 	return &batchedFixture{server: server, store: store, txmeta: txmeta, validator: v.(*validator.Validator)}
@@ -816,4 +844,187 @@ func TestProcessTransactionsBatched_StepMetricsSeparateReadsFromChecks(t *testin
 
 		require.GreaterOrEqual(t, batchStepSum(t, "check_after_reads")-tailBefore, delay.Seconds(), "a slow check shows after the reads")
 	})
+}
+
+// forkAnswerClient serves a candidate branch to the block paths: GetBlockHeader and
+// GetBlockHeaders answer from headers (newest first, ending at the candidate's parent), and
+// CheckBlockIsInCurrentChain reports the metas from index onChainFrom on as on the current chain.
+// Every other call goes to the wrapped client.
+type forkAnswerClient struct {
+	blockchain.ClientI
+	headers     []*model.BlockHeader
+	metas       []*model.BlockHeaderMeta
+	onChainFrom int
+}
+
+func (c *forkAnswerClient) index(hash *chainhash.Hash) int {
+	for i, h := range c.headers {
+		if h.Hash().IsEqual(hash) {
+			return i
+		}
+	}
+
+	return -1
+}
+
+func (c *forkAnswerClient) GetBlockHeader(ctx context.Context, hash *chainhash.Hash) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
+	if i := c.index(hash); i >= 0 {
+		return c.headers[i], c.metas[i], nil
+	}
+
+	return c.ClientI.GetBlockHeader(ctx, hash)
+}
+
+func (c *forkAnswerClient) GetBlockHeaders(ctx context.Context, hash *chainhash.Hash, n uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
+	if i := c.index(hash); i >= 0 {
+		end := min(i+int(n), len(c.headers)) //nolint:gosec // test sizes are small
+
+		return c.headers[i:end], c.metas[i:end], nil
+	}
+
+	return c.ClientI.GetBlockHeaders(ctx, hash, n)
+}
+
+func (c *forkAnswerClient) CheckBlockIsInCurrentChain(_ context.Context, blockIDs []uint32) (bool, error) {
+	for _, id := range blockIDs {
+		if int(id) >= c.onChainFrom {
+			return true, nil
+		}
+	}
+
+	return false, nil
+}
+
+// forkOptionsRecorder records the options of every transaction check the block paths send to
+// the validator: ValidateWithOptions on the level path, CheckExtendedTransaction on the batch path.
+type forkOptionsRecorder struct {
+	*publishSpy
+
+	mu   sync.Mutex
+	seen []*validator.Options
+}
+
+func (r *forkOptionsRecorder) record(opts *validator.Options) {
+	r.mu.Lock()
+	r.seen = append(r.seen, opts)
+	r.mu.Unlock()
+}
+
+func (r *forkOptionsRecorder) ValidateWithOptions(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts *validator.Options) (*meta.Data, error) {
+	r.record(opts)
+
+	return r.publishSpy.ValidateWithOptions(ctx, tx, blockHeight, opts)
+}
+
+func (r *forkOptionsRecorder) CheckExtendedTransaction(ctx context.Context, tx *bt.Tx, blockHeight uint32, utxoHeights []uint32, opts *validator.Options) error {
+	r.record(opts)
+
+	return r.publishSpy.CheckExtendedTransaction(ctx, tx, blockHeight, utxoHeights, opts)
+}
+
+// forkCandidateFixture is a batched fixture where BIP68 is enforced at the test height (CSV at 0,
+// Genesis pushed above it), whose blockchain client serves a candidate branch: the parent and the
+// two blocks below it are off the current chain. Every transaction check reaching the validator
+// is recorded.
+type forkCandidateFixture struct {
+	*batchedFixture
+	recorder *forkOptionsRecorder
+	parent   *chainhash.Hash
+	start    uint32
+	mtps     []uint32
+}
+
+func newForkCandidateFixture(t *testing.T, state blockchain.FSMStateType) *forkCandidateFixture {
+	t.Helper()
+
+	const n = 20
+
+	timestamps := make([]uint32, n)
+	metas := make([]*model.BlockHeaderMeta, n)
+
+	for i := range timestamps {
+		timestamps[i] = uint32(1_700_000_000 - 600*i)                                               //nolint:gosec // test data
+		metas[i] = &model.BlockHeaderMeta{ID: uint32(i), Height: batchedTestHeight - 1 - uint32(i)} //nolint:gosec // test data
+	}
+
+	headers := makeChain(t, n, timestamps)
+
+	var recorder *forkOptionsRecorder
+
+	f := newBatchedFixtureWithParams(t, state, func(params *chaincfg.Params) {
+		params.CSVHeight = 0
+		params.GenesisActivationHeight = batchedTestHeight + 1_000
+	}, fixtureWraps{
+		client: func(c blockchain.ClientI) blockchain.ClientI {
+			return &forkAnswerClient{ClientI: c, headers: headers, metas: metas, onChainFrom: 3}
+		},
+		validator: func(spy *publishSpy) validator.Interface {
+			recorder = &forkOptionsRecorder{publishSpy: spy}
+
+			return recorder
+		},
+	})
+
+	start, mtps, err := f.server.fetchCandidateForkMTPs(context.Background(), headers[0].Hash(), batchedTestHeight)
+	require.NoError(t, err)
+	require.Equal(t, batchedTestHeight-3, start)
+	require.Len(t, mtps, 3)
+
+	return &forkCandidateFixture{batchedFixture: f, recorder: recorder, parent: headers[0].Hash(), start: start, mtps: mtps}
+}
+
+// requireBranchCoinTimes checks that transactions reached the validator and that every check
+// carried the branch's coin times.
+func (f *forkCandidateFixture) requireBranchCoinTimes(t *testing.T) {
+	t.Helper()
+
+	f.recorder.mu.Lock()
+	defer f.recorder.mu.Unlock()
+
+	require.NotEmpty(t, f.recorder.seen, "the block's transactions must reach the validator")
+
+	for _, opts := range f.recorder.seen {
+		require.Equal(t, f.start, opts.CandidateForkStartHeight)
+		require.Equal(t, f.mtps, opts.CandidateForkMTPs)
+	}
+}
+
+// TestCheckBlockSubtrees_ForkCandidateCarriesBranchCoinTimes checks that a block whose parent is
+// off the current chain reaches the validator with its branch's coin times, on the level path
+// (RUNNING) and on the batch path (catch-up).
+func TestCheckBlockSubtrees_ForkCandidateCarriesBranchCoinTimes(t *testing.T) {
+	for _, state := range []blockchain.FSMStateType{blockchain.FSMStateRUNNING, blockchain.FSMStateCATCHINGBLOCKS} {
+		t.Run(state.String(), func(t *testing.T) {
+			f := newForkCandidateFixture(t, state)
+
+			roots := []*bt.Tx{storedRoot(t, f.batchedFixture, 1, opTrue), storedRoot(t, f.batchedFixture, 2, opTrue)}
+			block := storeBlock(t, f.batchedFixture, chainedTxs(t, roots, 2), false)
+			block.Header.HashPrevBlock = f.parent
+
+			require.NoError(t, checkBlock(t, f.batchedFixture, block))
+			f.requireBranchCoinTimes(t)
+		})
+	}
+}
+
+// TestCheckSubtreeFromBlock_ForkCandidateCarriesBranchCoinTimes checks the same for a subtree
+// checked on its own for a block on a side branch, through the legacy branch of
+// CheckSubtreeFromBlock. That branch and the peer branch take their shared options from one list.
+func TestCheckSubtreeFromBlock_ForkCandidateCarriesBranchCoinTimes(t *testing.T) {
+	f := newForkCandidateFixture(t, blockchain.FSMStateCATCHINGBLOCKS)
+
+	roots := []*bt.Tx{storedRoot(t, f.batchedFixture, 1, opTrue), storedRoot(t, f.batchedFixture, 2, opTrue)}
+	block := storeBlock(t, f.batchedFixture, chainedTxs(t, roots, 2), false)
+	block.Header.HashPrevBlock = f.parent
+
+	response, err := f.server.CheckSubtreeFromBlock(context.Background(), &subtreevalidation_api.CheckSubtreeFromBlockRequest{
+		Hash:              block.Subtrees[0][:],
+		BaseUrl:           "legacy",
+		BlockHeight:       batchedTestHeight,
+		BlockHash:         block.Hash()[:],
+		PreviousBlockHash: f.parent[:],
+	})
+	require.NoError(t, err)
+	require.True(t, response.Blessed)
+	f.requireBranchCoinTimes(t)
 }
