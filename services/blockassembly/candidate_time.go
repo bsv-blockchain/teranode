@@ -481,10 +481,38 @@ func (b *BlockAssembler) logFloorLookupFailure(parentHash *chainhash.Hash, forma
 // fetchParentChainHeaders performs the batched header fetch and nothing else, so
 // its caller can tell a transport failure apart from a result that arrived but
 // cannot be trusted. The two want opposite responses: see mtpFloor.
+//
+// A blockchain service that caps header reads below MedianTimeBlocks
+// (blockchain_maxBlockHeadersPerRequest) is read in pages of the cap, each from the parent
+// of the last header read; verifyParentChainRun checks the joined run as it would one read.
 func (b *BlockAssembler) fetchParentChainHeaders(ctx context.Context, parentHash *chainhash.Hash) ([]*model.BlockHeader, error) {
-	headers, _, err := b.blockchainClient.GetBlockHeaders(ctx, parentHash, blockchain.MedianTimeBlocks)
-	if err != nil {
-		return nil, errors.NewProcessingError("failed to fetch parent-chain headers for %s", parentHash.String(), err)
+	pageSize := uint64(blockchain.MedianTimeBlocks)
+	if b.settings != nil {
+		if limit := b.settings.BlockChain.MaxBlockHeadersPerRequest; limit > 0 && uint64(limit) < pageSize {
+			pageSize = uint64(limit)
+		}
+	}
+
+	var headers []*model.BlockHeader
+
+	for next := parentHash; uint64(len(headers)) < blockchain.MedianTimeBlocks; {
+		page, _, err := b.blockchainClient.GetBlockHeaders(ctx, next, min(pageSize, blockchain.MedianTimeBlocks-uint64(len(headers))))
+		if err != nil {
+			return nil, errors.NewProcessingError("failed to fetch parent-chain headers for %s", parentHash.String(), err)
+		}
+
+		headers = append(headers, page...)
+
+		if len(page) == 0 || uint64(len(page)) == blockchain.MedianTimeBlocks {
+			break
+		}
+
+		last := page[len(page)-1]
+		if last == nil || isChainStart(last) {
+			break
+		}
+
+		next = last.HashPrevBlock
 	}
 
 	return headers, nil

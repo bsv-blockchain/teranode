@@ -48,3 +48,16 @@ func TestBlockAssemblyMaxTransactionsInMemory(t *testing.T) {
 	require.Equal(t, uint64(1_000_000_000), NewSettings().BlockAssembly.MaxTransactionsInMemory,
 		"loader must read blockassembly_maxTransactionsInMemory")
 }
+
+// TestBlockAssemblyMinedTxSetRetention pins the 10s default and proves NewSettings reads
+// blockassembly_minedTxSetRetention, including 0, which keeps no block set.
+func TestBlockAssemblyMinedTxSetRetention(t *testing.T) {
+	require.Equal(t, 10*time.Second, NewSettings().BlockAssembly.MinedTxSetRetention)
+
+	t.Setenv("blockassembly_minedTxSetRetention", "3s")
+	require.Equal(t, 3*time.Second, NewSettings().BlockAssembly.MinedTxSetRetention,
+		"loader must read blockassembly_minedTxSetRetention")
+
+	t.Setenv("blockassembly_minedTxSetRetention", "0s")
+	require.Equal(t, time.Duration(0), NewSettings().BlockAssembly.MinedTxSetRetention)
+}

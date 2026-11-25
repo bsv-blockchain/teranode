@@ -124,6 +124,9 @@ service BlockchainAPI {
   // ReleaseLaneLease closes a lane lease cleanly and records the highest position its holder gave out that may carry a record (positions at the top that came back unwritten are left out).
   rpc ReleaseLaneLease(ReleaseLaneLeaseRequest) returns (ReleaseLaneLeaseResponse) {}
 
+  // GetLaneMapRows returns one block's lane map rows, by lane and first position (utxostore_laneMigration shadow readers).
+  rpc GetLaneMapRows(GetLaneMapRowsRequest) returns (GetLaneMapRowsResponse) {}
+
   // GetBestBlockHeader retrieves the header of the current best block.
   rpc GetBestBlockHeader(google.protobuf.Empty) returns (GetBlockHeaderResponse) {}
 
@@ -276,6 +279,28 @@ message AddBlockRequest {
   bool optionInvalid = 10;                      // Option to invalidate block when adding
   uint64 optionID = 11;                         // Optional block ID
   bytes coinbase_bump = 12;                     // Coinbase BUMP (BRC-74 merkle proof)
+  repeated LaneMapRow lane_map_rows = 13;       // Lane map rows, stored in the block's transaction (utxostore_laneMigration shadow)
+}
+
+// LaneMapRow is one lane map row of a block: the positions the block took from one lane, or from
+// a run of whole chunks of it when the lane's bitmap is split (util/lane MapRow).
+message LaneMapRow {
+  uint32 lane = 1;       // Lane number, 0 to 255
+  uint64 first = 2;      // Lowest position taken
+  uint64 last = 3;       // Highest position taken
+  uint64 first_hole = 4; // Lowest position between first and last not taken, 0 when none
+  uint32 tag = 5;        // Row tag: 0 a range with no holes, 1 a 64-bit Roaring bitmap of the positions taken
+  bytes hole_data = 6;   // The bitmap, for tag 1
+}
+
+// GetLaneMapRowsRequest asks for one block's lane map rows.
+message GetLaneMapRowsRequest {
+  uint32 block_id = 1; // The block's ID in the blockchain database
+}
+
+// GetLaneMapRowsResponse is one block's lane map rows; none for a block the map holds no row of.
+message GetLaneMapRowsResponse {
+  repeated LaneMapRow rows = 1;
 }
 
 // GetBlockRequest represents a request to retrieve a block by its hash.

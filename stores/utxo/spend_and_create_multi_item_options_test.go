@@ -20,9 +20,11 @@ func TestListItemOptions(t *testing.T) {
 				TxIDs:           []chainhash.Hash{{1}, {2}, {3}},
 				SubtreeIdxs:     subtreeIdxs,
 				BelowCheckpoint: true,
-				IsCoinbase:      &locked,
-				Locked:          true,
-				IgnoreFlags:     IgnoreFlags{IgnoreLocked: true, SkipUTXOHashCheck: true},
+				// The parents' lane positions describe one transaction, never a whole list.
+				ParentLanePositions: []uint64{11, 12},
+				IsCoinbase:          &locked,
+				Locked:              true,
+				IgnoreFlags:         IgnoreFlags{IgnoreLocked: true, SkipUTXOHashCheck: true},
 			},
 			TxIDs: []chainhash.Hash{{1}, {2}, {3}},
 		}
@@ -47,6 +49,8 @@ func TestListItemOptions(t *testing.T) {
 				want.TxID = &list.TxIDs[i]
 
 				require.Equal(t, want, got, "transaction %d", i)
+				require.Nil(t, want.ParentLanePositions, "ItemOptions clears the list's parent lane positions")
+				require.Nil(t, got.ParentLanePositions, "transaction %d gets no parent lane positions from the list", i)
 			}
 		})
 	}

@@ -119,6 +119,9 @@ func newPreBindHarness(t *testing.T, subtreeStore blob.Store) *preBindHarness {
 
 	blockChainStore, err := blockchainstore.NewStore(logger, &url.URL{Scheme: "sqlitememory"}, tSettings)
 	require.NoError(t, err)
+	// The store's background loops hold logger, which holds t and so every
+	// cleanup closure; left running they keep this harness reachable.
+	t.Cleanup(func() { _ = blockChainStore.Close(context.Background()) })
 
 	localClient, err := blockchain.NewLocalClient(logger, tSettings, blockChainStore, nil, nil)
 	require.NoError(t, err)

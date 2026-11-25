@@ -1095,6 +1095,7 @@ func newBlockValidationWithRealStore(t *testing.T) (*BlockValidation, utxo.Store
 
 	realStore, err := sql.New(ctx, logger, tSettings, storeURL)
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = realStore.Close(context.Background()) })
 
 	bv := &BlockValidation{
 		logger:                        logger,

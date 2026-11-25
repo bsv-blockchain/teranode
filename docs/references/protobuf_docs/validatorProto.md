@@ -91,11 +91,12 @@ Provides batch validation results for multiple transactions.
 
 swagger:model ValidateTransactionBatchResponse
 
-| Field    | Type            | Label    | Description                                  |
-| -------- | --------------- | -------- | -------------------------------------------- |
-| valid    | [bool](#bool)   |          | Overall batch validation status              |
-| errors   | errors.TError   | repeated | Array of error messages, one per transaction |
-| metadata | [bytes](#bytes) | repeated | Array of metadata for each transaction       |
+| Field          | Type              | Label    | Description                                                                                       |
+| -------------- | ----------------- | -------- | ------------------------------------------------------------------------------------------------- |
+| valid          | [bool](#bool)     |          | Overall batch validation status                                                                   |
+| errors         | errors.TError     | repeated | Array of error messages, one per transaction                                                      |
+| metadata       | [bytes](#bytes)   | repeated | Array of metadata for each transaction                                                            |
+| lane_positions | [uint64](#uint64) | repeated | Each transaction's `lane_position`, as in ValidateTransactionResponse; empty from an older server |
 
 <a name="ValidateTransactionRequest"></a>
 
@@ -122,12 +123,13 @@ Provides transaction validation results.
 
 swagger:model ValidateTransactionResponse
 
-| Field    | Type              | Label | Description                                 |
-| -------- | ----------------- | ----- | ------------------------------------------- |
-| valid    | [bool](#bool)     |       | Validation result (true if valid)           |
-| txid     | [bytes](#bytes)   |       | Transaction ID of the validated transaction |
-| reason   | [string](#string) |       | Reason for rejection if invalid             |
-| metadata | [bytes](#bytes)   |       | Additional metadata for the transaction     |
+| Field         | Type              | Label | Description                                                                                                      |
+| ------------- | ----------------- | ----- | ---------------------------------------------------------------------------------------------------------------- |
+| valid         | [bool](#bool)     |       | Validation result (true if valid)                                                                                |
+| txid          | [bytes](#bytes)   |       | Transaction ID of the validated transaction                                                                      |
+| reason        | [string](#string) |       | Reason for rejection if invalid                                                                                  |
+| metadata      | [bytes](#bytes)   |       | Additional metadata for the transaction                                                                          |
+| lane_position | [uint64](#uint64) |       | The created record's own lane position at `utxostore_laneMigration` shadow, 0 when none; `metadata` does not carry it |
 
  <!-- end messages -->
 
