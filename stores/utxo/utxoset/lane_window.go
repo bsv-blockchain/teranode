@@ -45,8 +45,7 @@ SELECT txid FROM tx_body_carry
 	// window reads for each one, its position, fee, size and parents. The leaf is a scalar and the
 	// txids an array, the shape identByTxidSQL measured.
 	laneWindowIdentSQL = `
-SELECT i.txid, i.lane_position, i.created_at, i.off_chain_since, i.flags, i.fee, i.size_in_bytes,
-       i.tx_inpoints
+SELECT i.txid, i.lane_position, i.created_at, i.flags, i.fee, i.size_in_bytes, i.tx_inpoints
   FROM tx_ident i
  WHERE i.leaf = $1::smallint
    AND i.txid = ANY($2::bytea[])`
@@ -289,17 +288,16 @@ func (s *Store) laneWindowIdent(ctx context.Context, leaf int16, txids [][]byte)
 
 	for rows.Next() {
 		var (
-			txid          []byte
-			lanePosition  *int64
-			createdAt     *int64
-			offChainSince *int32
-			flags         int16
-			fee           *int64
-			size          *int32
-			inpoints      []byte
+			txid         []byte
+			lanePosition *int64
+			createdAt    *int64
+			flags        int16
+			fee          *int64
+			size         *int32
+			inpoints     []byte
 		)
 
-		if err = rows.Scan(&txid, &lanePosition, &createdAt, &offChainSince, &flags, &fee, &size, &inpoints); err != nil {
+		if err = rows.Scan(&txid, &lanePosition, &createdAt, &flags, &fee, &size, &inpoints); err != nil {
 			return nil, 0, errors.NewStorageError("[utxoset] scan tx_ident", err)
 		}
 
@@ -315,14 +313,10 @@ func (s *Store) laneWindowIdent(ctx context.Context, leaf int16, txids [][]byte)
 			rec.CreatedAt = *createdAt
 		}
 
-		if offChainSince != nil && *offChainSince > 0 {
-			rec.UnminedSince = uint32(*offChainSince)
-		}
-
 		rec.Conflicting = flags&FlagConflicting != 0
 
 		found[rec.Hash] = rec
-		n += uint64(len(txid)) + 8 + 8 + 4 + 2 + 8 + 4 + uint64(len(inpoints))
+		n += uint64(len(txid)) + 8 + 8 + 2 + 8 + 4 + uint64(len(inpoints))
 	}
 
 	if err = rows.Err(); err != nil {

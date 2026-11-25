@@ -95,7 +95,6 @@ func TestReadLaneWindowReadsTheRowsCreatedInsideIt(t *testing.T) {
 	require.Equal(t, lane.Pack(5, 1), got[*carried.TxIDChainHash()].LanePosition)
 	require.Equal(t, lane.None, got[*noPosition.TxIDChainHash()].LanePosition)
 	require.Positive(t, got[*inside.TxIDChainHash()].CreatedAt)
-	require.Positive(t, got[*inside.TxIDChainHash()].UnminedSince)
 
 	require.True(t, got[*gone.TxIDChainHash()].Missing)
 	require.False(t, got[*inside.TxIDChainHash()].Missing)

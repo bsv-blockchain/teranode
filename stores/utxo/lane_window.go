@@ -32,9 +32,6 @@ type LaneWindowRecord struct {
 	LanePosition uint64
 	// CreatedAt is the record's creation time in Unix milliseconds, 0 if the store has none.
 	CreatedAt int64
-	// UnminedSince is today's unmined marker, 0 when the record reads mined. Only compared, never
-	// used to judge.
-	UnminedSince uint32
 	// Conflicting is a record marked as having lost a double-spend.
 	Conflicting bool
 	// Missing is a row of the window whose transaction has no record the reload would read:

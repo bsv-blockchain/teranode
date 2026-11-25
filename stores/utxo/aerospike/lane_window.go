@@ -246,10 +246,6 @@ func laneWindowRecord(bins as.BinMap) (utxo.LaneWindowRecord, uint64, bool) {
 		rec.LanePosition = lane.FromSigned(int64(p))
 	}
 
-	if u, ok := bins[fields.UnminedSince.String()].(int); ok && u > 0 {
-		rec.UnminedSince = uint32(u) //nolint:gosec // a block height
-	}
-
 	rec.Conflicting, _ = bins[fields.Conflicting.String()].(bool)
 	external, _ := bins[fields.External.String()].(bool)
 

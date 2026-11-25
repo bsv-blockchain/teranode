@@ -88,7 +88,6 @@ func TestReadLaneWindowFiltersOnLastUpdate(t *testing.T) {
 	require.Equal(t, lane.Pack(3, 2), got[*spentParent.TxIDChainHash()].LanePosition)
 	require.Equal(t, lane.Pack(4, 7), got[*fresh.TxIDChainHash()].LanePosition)
 	require.Positive(t, got[*fresh.TxIDChainHash()].CreatedAt)
-	require.Positive(t, got[*fresh.TxIDChainHash()].UnminedSince)
 
 	lut, err := store.LaneLastUpdate(ctx, *spentParent.TxIDChainHash())
 	require.NoError(t, err)
