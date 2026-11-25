@@ -1,16 +1,16 @@
 diff --git a/services/blockassembly/subtreeprocessor/SubtreeProcessor.go b/services/blockassembly/subtreeprocessor/SubtreeProcessor.go
-index 2d7cbd297..e9ac69072 100644
+index a3f87f4ec..49e5576c4 100644
 --- a/services/blockassembly/subtreeprocessor/SubtreeProcessor.go
 +++ b/services/blockassembly/subtreeprocessor/SubtreeProcessor.go
-@@ -6465,6 +6465,7 @@ func (stp *SubtreeProcessor) moveBackBlockBulkBuild(ctx context.Context, block *
+@@ -6604,6 +6604,7 @@ func (stp *SubtreeProcessor) moveBackBlockBulkBuild(ctx context.Context, block *
  	flatHashes := make([]chainhash.Hash, 0, blockNodeCount)
  	flatInpoints := make([]*subtreepkg.TxInpoints, 0, blockNodeCount)
  	flatNodes := make([]subtreepkg.Node, 0, blockNodeCount)
 +	var mutantDeferred []subtreepkg.Node
  
- 	for idx, subtreeNodes := range subtreesNodes {
- 		startIdx := 0
-@@ -6487,11 +6488,29 @@ func (stp *SubtreeProcessor) moveBackBlockBulkBuild(ctx context.Context, block *
+ 	// The block's transactions were validated at its height: keep out the ones under other
+ 	// rules than the next block's, as on every other way into the template.
+@@ -6637,11 +6638,29 @@ func (stp *SubtreeProcessor) moveBackBlockBulkBuild(ctx context.Context, block *
  				_, wasSet[i] = stp.currentTxMap.SetIfNotExists(hash, flatInpoints[i])
  			}
  		}
@@ -41,8 +41,8 @@ index 2d7cbd297..e9ac69072 100644
 +		}
  	}
  
- 	// Step 4: Collect previous mempool nodes (already in currentTxMap)
-@@ -6512,6 +6531,8 @@ func (stp *SubtreeProcessor) moveBackBlockBulkBuild(ctx context.Context, block *
+ 	// Step 4: Collect previous mempool nodes (already in currentTxMap). One that spends a
+@@ -6667,6 +6686,8 @@ func (stp *SubtreeProcessor) moveBackBlockBulkBuild(ctx context.Context, block *
  		}
  	}
  
