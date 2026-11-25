@@ -362,12 +362,8 @@ func laneRestartReaderView(ctx context.Context, targetHeight uint32, ids map[uin
 
 	for {
 		r := lanereader.Current()
-		if s := r.Snapshot(); s != nil && s.TipHeight() >= targetHeight {
-			for id := range ids {
-				if state, height := s.Block(id); state != lane.BlockNotLoaded && height == targetHeight {
-					return s.ViewOfIDs(ids)
-				}
-			}
+		if s := r.Snapshot(); s != nil && s.TipHeight() >= targetHeight && laneIndexHoldsTarget(s, targetHeight, ids) {
+			return s.ViewOfIDs(ids)
 		}
 
 		if time.Now().After(deadline) {
@@ -384,6 +380,20 @@ func laneRestartReaderView(ctx context.Context, targetHeight uint32, ids map[uin
 		case <-t.C:
 		}
 	}
+}
+
+// laneIndexHoldsTarget reports whether an index snapshot has a block of the target's chain (ids) at the
+// target's height, which is the target itself. A tip at that height on another branch does not count.
+func laneIndexHoldsTarget(s interface {
+	Block(id uint32) (lane.BlockState, uint32)
+}, targetHeight uint32, ids map[uint32]bool) bool {
+	for id := range ids {
+		if state, height := s.Block(id); state != lane.BlockNotLoaded && height == targetHeight {
+			return true
+		}
+	}
+
+	return false
 }
 
 // runLaneRestartDryRun reads the window and judges it against today's reload.

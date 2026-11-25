@@ -598,6 +598,8 @@ func TestLaneRestartReaderViewWaitsForTheTarget(t *testing.T) {
 	require.Nil(t, laneRestartReaderView(ctx, 1, map[uint32]bool{0: true}), "the index's tip, height 0, is below the target")
 	require.GreaterOrEqual(t, time.Since(start), laneRestartViewWait)
 
+	require.Nil(t, laneRestartReaderView(ctx, 0, map[uint32]bool{^uint32(0): true}), "the index's tip is at the target's height, but the target block is not in it")
+
 	v := laneRestartReaderView(ctx, 0, map[uint32]bool{0: true})
 	require.NotNil(t, v)
 	require.True(t, v.IDSet())
@@ -606,18 +608,26 @@ func TestLaneRestartReaderViewWaitsForTheTarget(t *testing.T) {
 	require.Nil(t, laneRestartReaderView(ctx, 1, map[uint32]bool{0: true}), "a cancelled run stops waiting")
 }
 
-func TestLaneRestartReaderViewWaitsForTargetBlockOnAnotherBranch(t *testing.T) {
-	defer func(d time.Duration) { laneRestartViewWait = d }(laneRestartViewWait)
-	laneRestartViewWait = 25 * time.Millisecond
+// laneTestBlocks is an index snapshot's block table: id to height, absent ids not loaded.
+type laneTestBlocks map[uint32]uint32
 
-	startLaneTestReader(t, context.Background())
-	require.Eventually(t, func() bool { return lanereader.Current().Snapshot() != nil }, time.Second, time.Millisecond)
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
-	defer cancel()
+func (b laneTestBlocks) Block(id uint32) (lane.BlockState, uint32) {
+	h, ok := b[id]
+	if !ok {
+		return lane.BlockNotLoaded, 0
+	}
 
-	// The reader has a height-zero tip, but the reset target is a different block at
-	// that height and is absent from its snapshot.
-	require.Nil(t, laneRestartReaderView(ctx, 0, map[uint32]bool{^uint32(0): true}))
+	return lane.BlockHasRows, h
+}
+
+// After a reset to a same-height or shorter branch, the index can reach the target's height on
+// the old branch; only the target block itself at that height makes the index ready.
+func TestLaneIndexHoldsTarget(t *testing.T) {
+	ids := map[uint32]bool{1: true, 2: true, 3: true}
+
+	require.False(t, laneIndexHoldsTarget(laneTestBlocks{1: 4, 2: 5}, 6, ids), "ancestors are loaded, the target is not")
+	require.False(t, laneIndexHoldsTarget(laneTestBlocks{1: 4, 2: 5, 9: 6}, 6, ids), "a block at the target's height on another branch")
+	require.True(t, laneIndexHoldsTarget(laneTestBlocks{1: 4, 2: 5, 3: 6}, 6, ids))
 }
 
 // A run from a reload reads its grants through the assembler's blockchain client and waits for the
@@ -893,6 +903,16 @@ func TestLaneRestartSortedSampleGrowsWithKeptPool(t *testing.T) {
 	require.NotContains(t, today.sample, laneTestHash(1), "old samples must obey the final rate")
 	require.Contains(t, today.sample, laneTestHash(2))
 	require.Contains(t, today.sample, laneTestHash(4))
+
+	// A disk-sorted batch can hold a million transactions, so one call may need several doublings.
+	today.kept = 4 * laneRestartSampleTarget
+	today.keepSorted([]*utxo.UnminedTransaction{{Node: &subtree.Node{Hash: laneTestHash(5)}}})
+
+	require.Equal(t, uint64(8), today.rate)
+
+	for h := range today.sample {
+		require.True(t, laneSampled(h, today.rate), "every kept sample obeys the final rate")
+	}
 }
 
 // At off a reload gathers nothing and starts no run; at shadow each reload path starts one with
