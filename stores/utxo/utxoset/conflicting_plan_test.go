@@ -21,6 +21,8 @@ import (
 // explainUnderNoNestloop). A fenced LATERAL can only be planned as a nested loop, so the setting
 // changes an unfenced join and nothing else.
 func TestConflictingStatementsNeverScanTheirTables(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	parent := mkTx(t, 2, 10_000)
@@ -110,6 +112,8 @@ func TestConflictingStatementsNeverScanTheirTables(t *testing.T) {
 // Delete passes one hash today, but deleteIn takes a batch, so the plan is checked at the size a
 // batch caller would bring.
 func TestDeleteStatementNeverScansItsTables(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	parent := mkTx(t, 2, 10_000)

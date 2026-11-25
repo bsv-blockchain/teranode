@@ -41,6 +41,8 @@ import (
 // gone. The stamp is told which block won by the chain answer the pruner service builds, and
 // it deletes M's row as a loser before it writes F onto the UTXO.
 func TestRetiringWindowStampsTheBlockThatWonTheReorg(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	tx := mkTx(t, 1, 5_000)
@@ -83,6 +85,8 @@ func TestRetiringWindowStampsTheBlockThatWonTheReorg(t *testing.T) {
 // deletes F's row. Below the checkpoint this scenario cannot arise: a fork block cannot be
 // header-proven.
 func TestSideChainCreateIsCorrectedWhenTheMainChainBlockStampsIt(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newUncheckpointedStore(t)
 
 	tx := mkTx(t, 1, 5_000)
@@ -200,6 +204,8 @@ func TestParentSpentWhileUnconfirmedIsStillAnswerableAfterItsWindowRetires(t *te
 // stale pair from the copy, which is the hazard the block-born variant still carries and which
 // rests on the open decision about invalidation at or below the checkpoint.
 func TestUnspendOfAnUnminedParentRestoresAnUnconfirmedUTXO(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newUncheckpointedStore(t)
 
 	parent := mkTx(t, 2, 5_000)

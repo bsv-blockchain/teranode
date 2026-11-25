@@ -1742,6 +1742,33 @@ func (b *Blockchain) GetLaneMapRows(ctx context.Context, req *blockchain_api.Get
 	return &blockchain_api.GetLaneMapRowsResponse{Rows: laneMapRowsToProto(rows)}, nil
 }
 
+// GetLaneCapGrants returns, for each lane with one, the first grant handed out at or above a
+// height, for block assembly's restart dry run.
+func (b *Blockchain) GetLaneCapGrants(ctx context.Context, req *blockchain_api.GetLaneCapGrantsRequest) (*blockchain_api.GetLaneCapGrantsResponse, error) {
+	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "GetLaneCapGrants",
+		tracing.WithParentStat(b.stats),
+	)
+	defer deferFn()
+
+	grants, err := b.store.LaneCapGrants(ctx, req.GetHeight())
+	if err != nil {
+		return nil, errors.WrapGRPC(err)
+	}
+
+	resp := &blockchain_api.GetLaneCapGrantsResponse{Grants: make([]*blockchain_api.LaneCapGrant, 0, len(grants))}
+
+	for _, g := range grants {
+		resp.Grants = append(resp.Grants, &blockchain_api.LaneCapGrant{
+			Lane:          uint32(g.Lane),
+			First:         g.First,
+			Height:        g.Height,
+			HandedAtNanos: g.HandedAt.UnixNano(),
+		})
+	}
+
+	return resp, nil
+}
+
 // leaseFromRequest checks the lease ID and lane a request names.
 func leaseFromRequest(leaseID []byte, l uint32) (lane.LeaseID, uint8, error) {
 	var id lane.LeaseID

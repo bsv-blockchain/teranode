@@ -16,6 +16,8 @@ import (
 // mined, and this call is how it fixes them. Until it existed the node could not start
 // at all once any such transaction was in the store.
 func TestMarkOnLongestChainClearsTheMempoolMarker(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	txs := mkStoredTxs(t, s, 700_000, 1_000, 4)
@@ -45,6 +47,8 @@ func TestMarkOnLongestChainClearsTheMempoolMarker(t *testing.T) {
 // un-mine path follows: the clock comes from the CURRENT tip, not from the height the
 // transaction was created at.
 func TestMarkOffLongestChainGivesAFreshClock(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	txs := mkStoredTxs(t, s, 100, 1_000, 3)
@@ -74,6 +78,8 @@ func TestMarkOffLongestChainGivesAFreshClock(t *testing.T) {
 // committed, so an error cancels nothing. Marking off still reports it, because block assembly
 // would put that transaction back with no record behind it.
 func TestMarkOnLongestChainSkipsATransactionItDoesNotHold(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	known := mkStoredTxs(t, s, 700_000, 1_000, 1)[0]
@@ -99,6 +105,8 @@ func TestMarkOnLongestChainSkipsATransactionItDoesNotHold(t *testing.T) {
 // TestMarkOnLongestChainOnAnEmptyListIsANoOp, which is how block assembly calls it on the
 // ordinary path where nothing needs repairing.
 func TestMarkOnLongestChainOnAnEmptyListIsANoOp(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	require.NoError(t, s.MarkTransactionsOnLongestChain(ctx, nil, true))
@@ -110,6 +118,8 @@ func TestMarkOnLongestChainOnAnEmptyListIsANoOp(t *testing.T) {
 // writes the marker and nothing else; the rows recording which blocks contain the transaction
 // stay, because a chain switch cannot make "block 42 contains this transaction" false.
 func TestMarkOffLongestChainSetsTheMarkerAndLeavesContainmentAlone(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 	require.NoError(t, s.SetBlockHeight(700_150))
 
@@ -138,6 +148,8 @@ func TestMarkOffLongestChainSetsTheMarkerAndLeavesContainmentAlone(t *testing.T)
 // integer, whether the transaction is in one block or two. Nothing moves between tables any
 // more, so there is no single-block special case.
 func TestMarkOnLongestChainOnlyClearsTheMarker(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	one := mkTx(t, 1, 5_000)
@@ -170,6 +182,8 @@ func TestMarkOnLongestChainOnlyClearsTheMarker(t *testing.T) {
 // for, so the call must count it as reached rather than report it missing. Without this block
 // assembly's startup repair could not be re-run after an interrupted one.
 func TestMarkOnLongestChainCountsAContainedTransactionWithNoIdentityRowAsReached(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	tx := mkTx(t, 1, 5_000)

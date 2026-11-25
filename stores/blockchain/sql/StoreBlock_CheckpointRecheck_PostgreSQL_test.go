@@ -2,19 +2,13 @@ package sql
 
 import (
 	"context"
-	"net/url"
 	"testing"
-	"time"
 
 	"github.com/bsv-blockchain/go-chaincfg"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/test"
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/testcontainers/testcontainers-go"
-	"github.com/testcontainers/testcontainers-go/modules/postgres"
-	"github.com/testcontainers/testcontainers-go/wait"
 )
 
 // TestStoreBlock_CheckpointRecheckUnderChainWriteLock_Postgres pins the second read of the best
@@ -22,29 +16,11 @@ import (
 // the best chain past a checkpoint after the first read, which still sees it below; only the
 // read under the lock can refuse the fork.
 func TestStoreBlock_CheckpointRecheckUnderChainWriteLock_Postgres(t *testing.T) {
+	t.Parallel() // a database of its own on the shared server
+
 	ctx := context.Background()
 
-	pgContainer, err := postgres.Run(ctx,
-		"postgres:13",
-		postgres.WithDatabase("testdb"),
-		postgres.WithUsername("testuser"),
-		postgres.WithPassword("testpass"),
-		testcontainers.WithWaitStrategy(
-			wait.ForLog("database system is ready to accept connections").
-				WithOccurrence(2).
-				WithStartupTimeout(5*time.Minute),
-		),
-	)
-	test.SkipIfContainerUnavailable(t, err)
-	defer func() {
-		assert.NoError(t, pgContainer.Terminate(ctx))
-	}()
-
-	connStr, err := pgContainer.ConnectionString(ctx, "sslmode=disable")
-	require.NoError(t, err)
-
-	dbURL, err := url.Parse(connStr)
-	require.NoError(t, err)
+	dbURL := postgresTestURL(t)
 
 	tSettings := test.CreateBaseTestSettings(t)
 	params := *tSettings.ChainCfgParams
