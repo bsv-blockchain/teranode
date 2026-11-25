@@ -16,7 +16,8 @@ import (
 
 // ParentOutputsForValidation implements utxo.Store. Every outpoint goes through
 // the shared outpoint batcher, which reads each distinct parent's master record
-// once, fetching only the outputs, external and blockHeights bins. External
+// once, fetching only the outputs, external and blockHeights bins and, with lane
+// positions on, the parent's lanePos bin in that same read. External
 // parents are reconstructed through GetOutpointsFromExternalStore, which re-hashes
 // the blob against its key and caches the outputs.
 //

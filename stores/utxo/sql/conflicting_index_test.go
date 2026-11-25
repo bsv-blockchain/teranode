@@ -70,17 +70,27 @@ func openConflictingIndexStoreWith(t *testing.T, dbURL *url.URL, timeout time.Du
 
 // postgresConflictingIndex reports whether px_transactions_conflicting exists,
 // whether Postgres lists it valid, and its definition.
+//
+// The store drops an INVALID leftover and rebuilds it while a test polls. A drop
+// that commits between the row lookup and pg_get_indexdef leaves the definition
+// NULL; that reads as no index yet, so the poll tries again.
 func postgresConflictingIndex(t *testing.T, db *usql.DB) (exists, valid bool, definition string) {
 	t.Helper()
 
-	err := db.QueryRow(`SELECT i.indisvalid, pg_get_indexdef(i.indexrelid) FROM pg_index i WHERE i.indexrelid = to_regclass('px_transactions_conflicting')`).Scan(&valid, &definition)
+	var indexDef sql.NullString
+
+	err := db.QueryRow(`SELECT i.indisvalid, pg_get_indexdef(i.indexrelid) FROM pg_index i WHERE i.indexrelid = to_regclass('px_transactions_conflicting')`).Scan(&valid, &indexDef)
 	if err == sql.ErrNoRows {
 		return false, false, ""
 	}
 
 	require.NoError(t, err)
 
-	return true, valid, definition
+	if !indexDef.Valid {
+		return false, false, ""
+	}
+
+	return true, valid, indexDef.String
 }
 
 func awaitValidConflictingIndex(t *testing.T, db *usql.DB) {

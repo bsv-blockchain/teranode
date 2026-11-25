@@ -91,7 +91,17 @@ func TestReorgScenario_AwaitedStore_StoresBeforeTheMarksAndAnnouncesAfter(t *tes
 		require.Zero(t, marks, "every awaited store is sent before the first longest-chain mark")
 	}
 
-	require.NotEmpty(t, r.announced, "the reorg announces its subtrees")
+	r.mu.Unlock()
+
+	// nothing waits for the announcing send, so the listener may take it after the reorg returns
+	require.Eventually(t, func() bool {
+		r.mu.Lock()
+		defer r.mu.Unlock()
+
+		return len(r.announced) > 0
+	}, 5*time.Second, 10*time.Millisecond, "the reorg announces its subtrees")
+
+	r.mu.Lock()
 
 	for _, marks := range r.announced {
 		require.Positive(t, marks, "nothing is announced before the marks")
@@ -134,10 +144,12 @@ func TestReorgScenario_AwaitedStore_StoreThatDoesNotFinishInTimeFailsTheReorg(t 
 	require.Zero(t, sc.utxo.markCount(true)+sc.utxo.markCount(false))
 }
 
-func TestReorgScenario_AwaitedStore_NoDeadlineNeverFailsOnAStore(t *testing.T) {
+// At deadline 0 no request carries a Result, so a write that failed and went to the retry path is
+// invisible to the reorg, as on main: the wait is on ErrChan, which such a write answers with nil.
+func TestReorgScenario_AwaitedStore_NoDeadlineWaitsOnErrChanAsBefore(t *testing.T) {
 	sc, r, _ := newAwaitedStoreScenario(t, 0, failAwaited)
 
-	require.NoError(t, sc.run(t), "with the deadline at 0 a failed store does not fail the reorg")
+	require.NoError(t, sc.run(t))
 	require.Positive(t, sc.utxo.markCount(true)+sc.utxo.markCount(false))
 
 	r.mu.Lock()
