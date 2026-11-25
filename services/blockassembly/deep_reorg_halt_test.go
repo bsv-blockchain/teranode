@@ -14,6 +14,7 @@ import (
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc/metadata"
 )
 
 func TestDeepReorgNeedsHalt(t *testing.T) {
@@ -128,33 +129,6 @@ func TestDeepReorgHaltStopsBlockAssembly(t *testing.T) {
 	require.True(t, restarted.DeepReorgHalted())
 }
 
-// Only an operator's reset runs while halted, and it lifts the halt and its record.
-func TestDeepReorgHaltLiftedByOperatorReset(t *testing.T) {
-	initPrometheusMetrics()
-
-	items, b2, mockStp := deepReorgFixture(t)
-	ba := items.blockAssembler
-
-	require.Error(t, ba.handleReorg(t.Context(), b2, 2))
-	require.True(t, ba.DeepReorgHalted())
-
-	mockStp.On("Reset", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
-		Return(subtreeprocessor.ResetResponse{})
-
-	errCh := make(chan error, 1)
-	ba.handleResetRequests(context.Background(), resetRequest{Operator: true, ErrCh: errCh})
-	require.NoError(t, <-errCh)
-	require.False(t, ba.DeepReorgHalted())
-
-	data, err := items.blockchainClient.GetState(t.Context(), DeepReorgHaltStateKey)
-	require.NoError(t, err)
-	recorded, err := parseDeepReorgHalt(data)
-	require.NoError(t, err)
-	require.Nil(t, recorded, "the record is cleared with the halt")
-
-	mockStp.AssertCalled(t, "Reset", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
-}
-
 // A halted block assembly still starts, finishes the pending skipped-fork mark the halting pass
 // recorded, and ends up halted: from its record, or by meeting the same reorg again when the
 // record was lost.
@@ -210,9 +184,10 @@ func TestDeepReorgHaltRefusesMiningSolution(t *testing.T) {
 	require.True(t, errors.Is(err, errors.ErrServiceUnavailable), "halted: the solution is refused, got %v", err)
 }
 
-// Each resetblockassembly command reaches block assembly as an operator reset, the one reset that
-// runs while halted, and lifts the halt and its record.
-func TestDeepReorgHaltLiftedByResetCommands(t *testing.T) {
+// A reset RPC is an operator reset only when it carries the resetblockassembly command's
+// metadata: that one runs while halted and lifts the halt and its record. Any other caller, such
+// as the validator's shed recovery, gets an ordinary reset, which the halt refuses.
+func TestDeepReorgHaltResetCommands(t *testing.T) {
 	commands := map[string]func(*BlockAssembly, context.Context) error{
 		"ResetBlockAssembly": func(s *BlockAssembly, ctx context.Context) error {
 			_, err := s.ResetBlockAssembly(ctx, &blockassembly_api.EmptyMessage{})
@@ -229,40 +204,90 @@ func TestDeepReorgHaltLiftedByResetCommands(t *testing.T) {
 	}
 
 	for name, command := range commands {
-		t.Run(name, func(t *testing.T) {
-			initPrometheusMetrics()
+		for _, operator := range []bool{true, false} {
+			t.Run(fmt.Sprintf("%s/operator=%t", name, operator), func(t *testing.T) {
+				initPrometheusMetrics()
 
-			items, b2, mockStp := deepReorgFixture(t)
-			ba := items.blockAssembler
-			server := &BlockAssembly{logger: ba.logger, settings: ba.settings, blockAssembler: ba}
+				items, b2, mockStp := deepReorgFixture(t)
+				ba := items.blockAssembler
+				server := &BlockAssembly{logger: ba.logger, settings: ba.settings, blockAssembler: ba}
 
-			require.Error(t, ba.handleReorg(t.Context(), b2, 2))
-			require.True(t, ba.DeepReorgHalted())
+				require.Error(t, ba.handleReorg(t.Context(), b2, 2))
+				require.True(t, ba.DeepReorgHalted())
 
-			mockStp.On("Reset", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
-				Return(subtreeprocessor.ResetResponse{})
+				mockStp.On("Reset", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+					Return(subtreeprocessor.ResetResponse{})
 
-			require.NoError(t, command(server, t.Context()))
+				ctx := t.Context()
+				if operator {
+					ctx = metadata.NewIncomingContext(ctx, metadata.Pairs(OperatorResetMetadataKey, "true"))
+				}
 
-			// The command queues the request for block assembly's loop, which this fixture does
-			// not run, so the test plays the loop's part.
-			var req resetRequest
-			select {
-			case req = <-ba.resetCh:
-			case <-time.After(10 * time.Second):
-				t.Fatal("the command queued no reset")
-			}
+				require.NoError(t, command(server, ctx))
 
-			require.True(t, req.Operator, "a resetblockassembly command is an operator reset")
-			ba.handleResetRequests(t.Context(), req)
+				// The command queues the request for block assembly's loop, which this fixture does
+				// not run, so the test plays the loop's part.
+				var req resetRequest
+				select {
+				case req = <-ba.resetCh:
+				case <-time.After(10 * time.Second):
+					t.Fatal("the command queued no reset")
+				}
 
-			require.False(t, ba.DeepReorgHalted())
+				require.Equal(t, operator, req.Operator)
+				ba.handleResetRequests(t.Context(), req)
 
-			data, err := items.blockchainClient.GetState(t.Context(), DeepReorgHaltStateKey)
-			require.NoError(t, err)
-			recorded, err := parseDeepReorgHalt(data)
-			require.NoError(t, err)
-			require.Nil(t, recorded)
-		})
+				require.Equal(t, !operator, ba.DeepReorgHalted())
+
+				data, err := items.blockchainClient.GetState(t.Context(), DeepReorgHaltStateKey)
+				require.NoError(t, err)
+				recorded, err := parseDeepReorgHalt(data)
+				require.NoError(t, err)
+
+				if operator {
+					require.Nil(t, recorded, "the record is cleared with the halt")
+					mockStp.AssertCalled(t, "Reset", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+				} else {
+					require.NotNil(t, recorded, "the record stays with the halt")
+					mockStp.AssertNotCalled(t, "Reset", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+				}
+			})
+		}
 	}
+}
+
+// Block locators are sparse, so the reorg lists start below the real fork point and share the
+// blocks between. A fork 14 deep at retention 15 moves back 14 blocks and must not halt.
+func TestDeepReorgHaltCountsOnlyBlocksMovedBack(t *testing.T) {
+	initPrometheusMetrics()
+
+	items := setupBlockAssemblyTest(t)
+	genesis := genesisHeader(t, items)
+
+	prefix := buildChain(genesis, 30, 400)
+	addChain(t, items, prefix)
+	a := buildChain(prefix[29], 14, 500)
+	addChain(t, items, a)
+	b := buildChain(prefix[29], 14, 600)
+	addChain(t, items, b)
+
+	mockStp := &subtreeprocessor.MockSubtreeProcessor{}
+	mockStp.On("WaitForPendingBlocks", mock.Anything).Return(nil)
+	mockStp.On("Reset", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		Return(subtreeprocessor.ResetResponse{})
+	injectMockStp(t, items, mockStp)
+
+	ba := items.blockAssembler
+	ba.settings.GlobalBlockHeightRetention = 15
+	ba.settings.UtxoStore.BlockHeightRetentionAdjustment = 0
+	ba.setBestBlockHeader(a[13], 44)
+
+	back, forward, err := ba.getReorgBlocks(t.Context(), b[13], 44)
+	require.NoError(t, err)
+	require.Greater(t, len(back), 14, "the locators must start below the fork for this test to mean anything")
+	require.Equal(t, 14, movedBackCount(back, forward))
+
+	_, err = ba.resetToBlockWithResponse(t.Context(), b[13], 44)
+	require.NoError(t, err)
+	require.False(t, ba.DeepReorgHalted())
 }

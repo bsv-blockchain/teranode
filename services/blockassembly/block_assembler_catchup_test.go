@@ -291,34 +291,6 @@ func TestProcessNewBlockAnnouncement_CatchupVsReorg(t *testing.T) {
 			"large reorg must return ErrBlockAssemblyReset, got: %v", err)
 	})
 
-	// A reorg that moves back the UTXO retention halts block assembly instead of resetting: the
-	// reset would reload a mempool whose parents the pruner may have deleted.
-	t.Run("reorg moving back the retention halts", func(t *testing.T) {
-		items := setupBlockAssemblyTest(t)
-		genesis := genesisHeader(t, items)
-
-		a1 := buildChain(genesis, 1, 610)[0]
-		b1 := buildChain(genesis, 1, 710)[0]
-		require.NoError(t, items.addBlock(t.Context(), a1))
-		require.NoError(t, items.addBlock(t.Context(), b1))
-
-		mockStp := &subtreeprocessor.MockSubtreeProcessor{}
-		mockStp.On("WaitForPendingBlocks", mock.Anything).Return(nil)
-		injectMockStp(t, items, mockStp)
-
-		items.blockAssembler.settings.GlobalBlockHeightRetention = 1
-		items.blockAssembler.settings.UtxoStore.BlockHeightRetentionAdjustment = 0
-		items.blockAssembler.setBestBlockHeader(a1, 1)
-
-		err := items.blockAssembler.handleReorg(t.Context(), b1, 1)
-
-		require.Error(t, err)
-		require.False(t, errors.Is(err, errors.ErrBlockAssemblyReset), "a halted reorg must not report a reset, got: %v", err)
-		require.True(t, items.blockAssembler.DeepReorgHalted())
-		mockStp.AssertNotCalled(t, "Reset", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
-		mockStp.AssertNotCalled(t, "Reorg", mock.Anything, mock.Anything)
-	})
-
 	// A reorg whose forward side reaches the UTXO retention while it moves back less resets
 	// even at low height: the moveForward txs may already be pruned, which reorgBlocks cannot
 	// handle, but nothing moved back can have lost a parent.

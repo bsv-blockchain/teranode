@@ -916,6 +916,7 @@ drain:
 
 			b.resetOwed.FullReset = b.resetOwed.FullReset || req.FullReset
 			b.resetOwed.ValidateInputs = b.resetOwed.ValidateInputs || req.ValidateInputs
+			b.resetOwed.Operator = b.resetOwed.Operator || req.Operator
 		}
 
 		// Its own back-off, so a mark that keeps failing for another reason, which pushes
@@ -1199,8 +1200,8 @@ func (b *BlockAssembler) resetToBlockWithResponse(ctx context.Context, bestBlock
 	// Every reset reloads the mempool from the store, so one that moves back at least the UTXO
 	// retention would quietly drop what the pruner deleted. It halts instead, unless an operator
 	// asked for it. Every path to a reset, a deep reorg in handleReorg included, comes here.
-	if !operator && deepReorgNeedsHalt(len(moveBackBlocksWithMeta), b.settings.GetUtxoStoreBlockHeightRetention()) {
-		return resp, b.haltForDeepReorg(ctx, bestBlockchainBlockHeader, targetHeight, len(moveBackBlocksWithMeta), len(moveForwardBlocksWithMeta))
+	if movedBack := movedBackCount(moveBackBlocksWithMeta, moveForwardBlocksWithMeta); !operator && deepReorgNeedsHalt(movedBack, b.settings.GetUtxoStoreBlockHeightRetention()) {
+		return resp, b.haltForDeepReorg(ctx, bestBlockchainBlockHeader, targetHeight, movedBack, len(moveForwardBlocksWithMeta))
 	}
 
 	// Fast-forward reset is safe when the whole forward range is at/below the

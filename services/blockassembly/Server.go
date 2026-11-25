@@ -2839,6 +2839,20 @@ func (ba *BlockAssembly) SubtreeCount() int {
 	return ba.blockAssembler.SubtreeCount()
 }
 
+// reset queues the reset a reset RPC asked for: an operator reset when the call carries
+// OperatorResetMetadataKey, as the resetblockassembly command's does, and an ordinary one
+// otherwise, which a deep reorg halt refuses.
+func (ba *BlockAssembly) reset(ctx context.Context, fullReset, validateInputs bool) {
+	switch {
+	case isOperatorReset(ctx):
+		ba.blockAssembler.OperatorReset(fullReset, validateInputs)
+	case validateInputs:
+		ba.blockAssembler.ResetWithInputValidation()
+	default:
+		ba.blockAssembler.Reset(fullReset)
+	}
+}
+
 func (ba *BlockAssembly) ResetBlockAssembly(ctx context.Context, _ *blockassembly_api.EmptyMessage) (*blockassembly_api.EmptyMessage, error) {
 	_, _, deferFn := tracing.Tracer("blockassembly").Start(ctx, "ResetBlockAssembly",
 		tracing.WithParentStat(ba.stats),
@@ -2852,7 +2866,7 @@ func (ba *BlockAssembly) ResetBlockAssembly(ctx context.Context, _ *blockassembl
 		return nil, errors.WrapGRPC(errors.NewServiceNotReadyError(errServiceNotReadyUnminedLoading))
 	}
 
-	ba.blockAssembler.OperatorReset(false, false)
+	ba.reset(ctx, false, false)
 
 	return &blockassembly_api.EmptyMessage{}, nil
 }
@@ -2870,7 +2884,7 @@ func (ba *BlockAssembly) ResetBlockAssemblyFully(ctx context.Context, _ *blockas
 		return nil, errors.WrapGRPC(errors.NewServiceNotReadyError(errServiceNotReadyUnminedLoading))
 	}
 
-	ba.blockAssembler.OperatorReset(true, false)
+	ba.reset(ctx, true, false)
 
 	return &blockassembly_api.EmptyMessage{}, nil
 }
@@ -2892,7 +2906,7 @@ func (ba *BlockAssembly) ResetBlockAssemblyValidateInputs(ctx context.Context, _
 		return nil, errors.WrapGRPC(errors.NewServiceNotReadyError(errServiceNotReadyUnminedLoading))
 	}
 
-	ba.blockAssembler.OperatorReset(false, true)
+	ba.reset(ctx, false, true)
 
 	return &blockassembly_api.EmptyMessage{}, nil
 }

@@ -8,6 +8,7 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
+	"google.golang.org/grpc/metadata"
 )
 
 // DeepReorgHaltStateKey is the key under which block assembly records that it halted on a reorg
@@ -59,6 +60,52 @@ func parseDeepReorgHalt(data []byte) (*deepReorgHalt, error) {
 // whose parents are gone. A retention of 0 means pruning is off and nothing is ever deleted.
 func deepReorgNeedsHalt(moveBack int, utxoRetention uint32) bool {
 	return utxoRetention > 0 && moveBack >= int(utxoRetention)
+}
+
+// OperatorResetMetadataKey is the gRPC metadata key the resetblockassembly command sets on its
+// reset call. Only a reset that carries it is an operator reset, the one that runs while block
+// assembly is halted on a deep reorg; services that reset block assembly on their own never set it.
+const OperatorResetMetadataKey = "teranode-operator-reset"
+
+// WithOperatorReset marks the reset calls made with the returned context as an operator's.
+func WithOperatorReset(ctx context.Context) context.Context {
+	return metadata.AppendToOutgoingContext(ctx, OperatorResetMetadataKey, "true")
+}
+
+// isOperatorReset reports whether a reset call carries OperatorResetMetadataKey.
+func isOperatorReset(ctx context.Context) bool {
+	md, ok := metadata.FromIncomingContext(ctx)
+	if !ok {
+		return false
+	}
+
+	for _, v := range md.Get(OperatorResetMetadataKey) {
+		if v == "true" {
+			return true
+		}
+	}
+
+	return false
+}
+
+// movedBackCount is how many blocks of moveBack a move really takes back. The lists come from
+// block locators, which are sparse, so they can both start at a block below the real fork point
+// and share the blocks between the two; those are taken back and forward again, not lost.
+func movedBackCount(moveBack, moveForward []blockWithMeta) int {
+	forward := make(map[chainhash.Hash]struct{}, len(moveForward))
+	for _, m := range moveForward {
+		forward[*m.block.Hash()] = struct{}{}
+	}
+
+	count := 0
+
+	for _, m := range moveBack {
+		if _, shared := forward[*m.block.Hash()]; !shared {
+			count++
+		}
+	}
+
+	return count
 }
 
 // DeepReorgHalted reports whether block assembly has halted on a reorg deeper than the UTXO
