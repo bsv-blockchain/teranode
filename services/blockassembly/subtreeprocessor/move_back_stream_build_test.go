@@ -2,6 +2,7 @@ package subtreeprocessor
 
 import (
 	"context"
+	"fmt"
 	"net/url"
 	"runtime"
 	"testing"
@@ -63,32 +64,39 @@ func TestStreamBuildSubtrees_MatchesBulkBuild(t *testing.T) {
 
 			for _, cuts := range [][]int{nil, {n / 2}, {n / 3, 2 * n / 3}, {0, n}} {
 				for _, disk := range []bool{false, true} {
-					var opts []Options
-					if disk {
-						opts = append(opts, WithTxMapDirs([]string{t.TempDir(), t.TempDir()}))
-					}
+					t.Run(fmt.Sprintf("size=%d/n=%d/cuts=%v/disk=%t", size, n, cuts, disk), func(t *testing.T) {
+						var opts []Options
+						if disk {
+							opts = append(opts, WithTxMapDirs([]string{t.TempDir(), t.TempDir()}))
+						}
 
-					nodes := batchTestNodes(0, n)
+						nodes := batchTestNodes(0, n)
 
-					bulk, cleanupBulk := newAddNodesBenchProcessor(t, size, opts...)
-					defer cleanupBulk()
+						// closed when this case ends, so the disk maps of the cases before it are gone
+						bulk, cleanupBulk := newAddNodesBenchProcessor(t, size, opts...)
+						t.Cleanup(cleanupBulk)
 
-					stream, cleanupStream := newAddNodesBenchProcessor(t, size, opts...)
-					defer cleanupStream()
+						stream, cleanupStream := newAddNodesBenchProcessor(t, size, opts...)
+						t.Cleanup(cleanupStream)
 
-					if disk {
-						setAll(bulk, nodes)
-						setAll(stream, nodes)
-					}
+						if disk {
+							// a failed disk map falls back to the in-memory one and leaves this nil
+							require.NotNil(t, bulk.diskTxMap, "the bulk processor has a disk map")
+							require.NotNil(t, stream.diskTxMap, "the stream processor has a disk map")
 
-					require.NoError(t, bulk.bulkBuildSubtrees(context.Background(), nodes, size), "size %d, %d nodes", size, n)
-					require.NoError(t, stream.streamBuildSubtrees(context.Background(), splitRuns(nodes, cuts...), size), "size %d, %d nodes", size, n)
+							setAll(bulk, nodes)
+							setAll(stream, nodes)
+						}
 
-					requireSameSubtrees(t, bulk, stream)
+						require.NoError(t, bulk.bulkBuildSubtrees(context.Background(), nodes, size), "size %d, %d nodes", size, n)
+						require.NoError(t, stream.streamBuildSubtrees(context.Background(), splitRuns(nodes, cuts...), size), "size %d, %d nodes", size, n)
 
-					if disk && n > size {
-						require.Positive(t, requireIndexesMatchChain(t, stream))
-					}
+						requireSameSubtrees(t, bulk, stream)
+
+						if disk && n > size {
+							require.Positive(t, requireIndexesMatchChain(t, stream))
+						}
+					})
 				}
 			}
 		}

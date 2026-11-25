@@ -98,48 +98,44 @@ func TestMovedBackMarks_MatchesGoMapOnRandomSets(t *testing.T) {
 	require.ElementsMatch(t, want, m.stillIn(pending, 4))
 }
 
-// A Go map of 32-byte keys costs about 50 bytes an entry. The frozen set must stay near its 33.
-func TestMovedBackMarks_HoldsFewerBytesThanAGoMap(t *testing.T) {
-	// A heap measurement: in the unit run, other tests' goroutines and coverage counters allocate and
-	// free while it measures, so it runs with the heavy tests (make test-heavy), and under the mutants.
-	skipUnlessHeavyTests(t)
+// retainedBytes is what a frozen movedBackMarks holds, counted from the capacity of the slices it
+// keeps: the sorted hashes, the directory over them, the partition offsets, the mined bitmap and any
+// build chunks not yet let go. It reads no heap statistics, so what other tests allocated cannot move it.
+func (m *movedBackMarks) retainedBytes() uint64 {
+	s := m.set
+	bytes := uint64(cap(s.dir))*4 + uint64(cap(s.base))*8 + uint64(cap(m.mined))*8
 
-	const n = 400_000
+	for i := range s.parts {
+		bytes += uint64(cap(s.parts[i].keys)) * chainhash.HashSize
+		bytes += uint64(cap(s.parts[i].chunks)) * 24 // slice headers
 
-	hashes := randHashes(n, 5)
-
-	heapAfter := func(build func() any) uint64 {
-		runtime.GC()
-
-		var before, after runtime.MemStats
-
-		runtime.ReadMemStats(&before)
-		keep := build()
-		runtime.GC()
-		runtime.ReadMemStats(&after)
-		runtime.KeepAlive(keep)
-
-		return after.HeapAlloc - before.HeapAlloc
+		for _, c := range s.parts[i].chunks {
+			bytes += uint64(cap(c)) * chainhash.HashSize
+		}
 	}
 
-	goMap := heapAfter(func() any {
-		m := make(map[chainhash.Hash]bool, n)
-		for _, hash := range hashes {
-			m[hash] = false
-		}
+	return bytes
+}
 
-		return m
-	})
+// A Go map of 32-byte keys and a bool costs at least 38 bytes an entry: its slots are 33 bytes, one
+// control byte each, and it grows before it is more than 7/8 full. The frozen set must stay near its 33.
+// The sizes are counted from the structures' own slices rather than read from the heap, which other
+// tests' garbage and goroutines skew.
+func TestMovedBackMarks_HoldsFewerBytesThanAGoMap(t *testing.T) {
+	const (
+		n             = 400_000
+		goMapMinBytes = 38 // per entry, see above
+	)
 
-	frozen := heapAfter(func() any {
-		m := newMovedBackMarks(n)
-		m.add(nodesOf(hashes...))
-		require.NoError(t, m.freeze(4))
+	m := newMovedBackMarks(n)
+	m.add(nodesOf(randHashes(n, 5)...))
+	require.NoError(t, m.freeze(4))
 
-		return m
-	})
+	frozen := m.retainedBytes()
+	goMap := uint64(n * goMapMinBytes)
 
-	require.Less(t, frozen, goMap*3/4, "frozen %d bytes against a Go map's %d", frozen, goMap)
+	require.GreaterOrEqual(t, frozen, uint64(n*chainhash.HashSize), "the hashes themselves are held")
+	require.Less(t, frozen, goMap*9/10, "frozen %d bytes against a Go map's at least %d", frozen, goMap)
 }
 
 // BenchmarkReorgMovedBackMarks times the marks of the slow reorg's moved-back blocks: building what is
