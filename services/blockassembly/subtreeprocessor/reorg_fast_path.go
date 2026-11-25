@@ -523,14 +523,29 @@ func (stp *SubtreeProcessor) applyFastReorg(ctx context.Context, plan *fastReorg
 	stp.currentSubtree.Store(newSubtree)
 	stp.retireChainedSubtrees()
 
-	// The remainder pass of the slow path reads each kept node's position from the map; so does this.
+	// The remainder pass of the slow path reads each kept node's position from the map; so does this,
+	// on the same workers, since kept is the whole pending set.
 	var positions []uint64
 
 	if stp.keepsLanePositions() {
 		positions = make([]uint64, len(kept))
-		for i := range kept {
-			positions[i] = stp.currentTxMap.Position(kept[i].Hash)
+
+		var g errgroup.Group
+
+		chunk := max(1, (len(kept)+workers-1)/workers)
+		for lo := 0; lo < len(kept); lo += chunk {
+			hi := min(lo+chunk, len(kept))
+
+			g.Go(func() error {
+				for i := lo; i < hi; i++ {
+					positions[i] = stp.currentTxMap.Position(kept[i].Hash)
+				}
+
+				return nil
+			})
 		}
+
+		_ = g.Wait()
 	}
 
 	if err = stp.parallelBuildRemainderSubtrees(ctx, kept, positions, true); err != nil {

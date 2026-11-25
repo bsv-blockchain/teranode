@@ -129,7 +129,8 @@ func captureReorgOutcome(sc *reorgScenario, runErr error) reorgOutcome {
 }
 
 // scenarioLanePosition is the lane position a scenario with lanePositions gives the tx with hash,
-// in the pool and in the UTXO store alike: a valid, per-tx distinct position.
+// in the pool and in the UTXO store alike: a valid position, derived from the hash. Two txs can share
+// one; the bitmaps compared are sets, so that does not hide a difference between the paths.
 func scenarioLanePosition(hash chainhash.Hash) uint64 {
 	return lane.Pack(1+hash[0]%5, uint64(hash[1])<<16|uint64(hash[2])<<8|uint64(hash[3])+1)
 }
