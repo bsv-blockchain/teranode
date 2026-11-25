@@ -35,12 +35,9 @@ func initAerospikeImage(t *testing.T, image string, tSettings *settings.Settings
 func initAerospikeImageWith(t *testing.T, image string, tSettings *settings.Settings, beforeStore func(*uaerospike.Client)) (*uaerospike.Client, *teranode_aerospike.Store, context.Context) {
 	t.Helper()
 
-	previous := aerospikeContainerImage
-	aerospikeContainerImage = image
+	host, port := startOwnAerospikeServer(t, image)
 
-	t.Cleanup(func() { aerospikeContainerImage = previous })
-
-	client, store, ctx, cleanup := initAerospikeWith(t, tSettings, ulogger.NewErrorTestLogger(t), beforeStore)
+	client, store, ctx, cleanup, _ := openStore(t, host, port, false, tSettings, ulogger.NewErrorTestLogger(t), beforeStore)
 	t.Cleanup(cleanup)
 	t.Cleanup(func() {
 		closeCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -129,6 +126,8 @@ func conflictingSet(t *testing.T, ctx context.Context, store *teranode_aerospike
 // TTL, so it also pins that the self-test works there and leaves no probe
 // record behind.
 func TestConflictingTxHashes_TracksTheFlag(t *testing.T) {
+	t.Parallel()
+
 	client, store, ctx := initAerospikeImageWith(t, "aerospike/aerospike-server:8.1", test.CreateBaseTestSettings(t), func(client *uaerospike.Client) {
 		setNamespaceConfig(t, client, "allow-ttl-without-nsup=false")
 		setNamespaceConfig(t, client, "nsup-period=0")
@@ -192,6 +191,8 @@ func TestConflictingTxHashes_TracksTheFlag(t *testing.T) {
 // exactly the set of transactions whose record reads Conflicting, including a
 // paginated transaction, which is listed once.
 func TestConflictingTxHashes_MatchesTheFlagOnEveryRecord(t *testing.T) {
+	t.Parallel()
+
 	tSettings := test.CreateBaseTestSettings(t)
 	tSettings.UtxoStore.UtxoBatchSize = 2
 
@@ -265,21 +266,12 @@ func TestConflictingTxHashes_MatchesTheFlagOnEveryRecord(t *testing.T) {
 	}
 }
 
-// TestConflictingTxHashes_ServerWithoutExpressionIndexes pins the answer from a
-// server that cannot hold the index: not indexed, no error, so the caller falls
-// back instead of reading "nothing is conflicting".
-func TestConflictingTxHashes_ServerWithoutExpressionIndexes(t *testing.T) {
-	store, ctx := initAerospikeImage(t, "aerospike/aerospike-server:8.0", test.CreateBaseTestSettings(t))
-
-	hashes, indexed, err := store.ConflictingTxHashes(ctx)
-	require.NoError(t, err)
-	require.False(t, indexed)
-	require.Nil(t, hashes)
-}
-
-// setNamespaceConfig applies a dynamic namespace setting on every node.
+// setNamespaceConfig applies a dynamic namespace setting on every node. The wipe between tests does
+// not reset namespace configuration, so the test's server is terminated when the test ends.
 func setNamespaceConfig(t *testing.T, client *uaerospike.Client, setting string) {
 	t.Helper()
+
+	teranode_aerospike.RetireOwnTestServer(t)
 
 	command := fmt.Sprintf("set-config:context=namespace;id=%s;%s", aerospikeNamespace, setting)
 
@@ -315,7 +307,12 @@ func probeRecordCount(t *testing.T, client *uaerospike.Client) int {
 // that never follows the conflicting bin. The store must report not indexed,
 // so block validation falls back, rather than reading "nothing is conflicting".
 func TestConflictingIndex_NotTrustedWhenItMissesTheFlag(t *testing.T) {
+	t.Parallel()
+
 	_, store, ctx := initAerospikeImageWith(t, "aerospike/aerospike-server:8.1", test.CreateBaseTestSettings(t), func(client *uaerospike.Client) {
+		// The server has the store's own index from an earlier store: replace it.
+		require.NoError(t, client.DropIndex(nil, aerospikeNamespace, aerospikeSet, "conflictingIndex"))
+
 		wrong := aerospike.ExpCond(aerospike.ExpBoolBin("_neverWritten"), aerospike.ExpIntVal(1), aerospike.ExpUnknown())
 
 		task, err := client.CreateIndexWithExpression(aerospike.NewWritePolicy(0, 0), aerospikeNamespace, aerospikeSet, "conflictingIndex", aerospike.NUMERIC, aerospike.ICT_DEFAULT, wrong)

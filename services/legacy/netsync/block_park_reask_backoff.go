@@ -64,6 +64,27 @@ func reAskBackoff(asked int) time.Duration {
 	return wait
 }
 
+// reAskRecordLocked returns hash's pacing record, creating it, or nil when a new one would pass
+// maxTrackedReAsks. The caller holds reAsksMu.
+func (sm *SyncManager) reAskRecordLocked(hash chainhash.Hash) *droppedReAsk {
+	if rec, ok := sm.reAsks[hash]; ok {
+		return rec
+	}
+
+	if len(sm.reAsks) >= maxTrackedReAsks {
+		return nil
+	}
+
+	if sm.reAsks == nil {
+		sm.reAsks = make(map[chainhash.Hash]*droppedReAsk)
+	}
+
+	rec := &droppedReAsk{}
+	sm.reAsks[hash] = rec
+
+	return rec
+}
+
 // admitDroppedReAsk counts one re-ask of entry's block and reports whether it may be sent now.
 // Past the free attempts it is deferred to the backoff and sent by sendDueReAsks; a re-ask
 // already waiting is left as it is, so a run of drops cannot pull it forward.
@@ -71,20 +92,11 @@ func (sm *SyncManager) admitDroppedReAsk(entry parkedBlock, now time.Time) bool 
 	sm.reAsksMu.Lock()
 	defer sm.reAsksMu.Unlock()
 
-	rec, ok := sm.reAsks[entry.hash]
-	if !ok {
-		if len(sm.reAsks) >= maxTrackedReAsks {
-			sm.logger.Warnf("[applyParkDisposition][%s] %d dropped blocks already waiting to be asked for again; not asking for this one, it waits for its next announcement", entry.hash, maxTrackedReAsks)
+	rec := sm.reAskRecordLocked(entry.hash)
+	if rec == nil {
+		sm.logger.Warnf("[applyParkDisposition][%s] %d dropped blocks already waiting to be asked for again; not asking for this one, it waits for its next announcement", entry.hash, maxTrackedReAsks)
 
-			return false
-		}
-
-		if sm.reAsks == nil {
-			sm.reAsks = make(map[chainhash.Hash]*droppedReAsk)
-		}
-
-		rec = &droppedReAsk{}
-		sm.reAsks[entry.hash] = rec
+		return false
 	}
 
 	rec.entry = entry
@@ -106,6 +118,47 @@ func (sm *SyncManager) admitDroppedReAsk(entry parkedBlock, now time.Time) bool 
 	sm.logger.Warnf("[applyParkDisposition][%s] the block was dropped and asked for again %d times; asking again in %s", entry.hash, rec.asked-1, wait)
 
 	return false
+}
+
+// putOffIfMarked reports whether entry's block is marked in recentlyFailedBlocks, and if it is,
+// puts the request off: sendDueReAsks asks entry.peer for the block once the mark has gone.
+// Every request path that skips a marked block goes through here, because a skip that left
+// nothing behind would write the block off for good above the final checkpoint: the
+// announcement it swallowed is the peer's only one, and PushGetBlocksMsg drops a repeat
+// getblocks from the same tip. The request is due when the mark expires, measured from when
+// the block was marked, so a skip late in the mark's life does not add a TTL of its own. A
+// mark set again by then puts the request off again (askDroppedBlockAgain). A re-ask already
+// waiting keeps its time.
+func (sm *SyncManager) putOffIfMarked(entry parkedBlock) bool {
+	if sm.recentlyFailedBlocks == nil {
+		return false
+	}
+
+	markExpiry, marked := sm.recentlyFailedBlocks.Expiry(entry.hash)
+	if !marked {
+		return false
+	}
+
+	sm.reAsksMu.Lock()
+	defer sm.reAsksMu.Unlock()
+
+	rec := sm.reAskRecordLocked(entry.hash)
+	if rec == nil {
+		// Debug, not Warn: on the inv path this repeats for every announcement of the block.
+		// admitDroppedReAsk warns about the full table once per drop.
+		sm.logger.Debugf("[putOffIfMarked][%s] %d blocks already waiting to be asked for again; not putting this one off, it waits for its next announcement", entry.hash, maxTrackedReAsks)
+
+		return true
+	}
+
+	rec.entry = entry
+	rec.last = time.Now()
+
+	if rec.due.IsZero() {
+		rec.due = markExpiry
+	}
+
+	return true
 }
 
 // forgetDroppedReAsk ends the pacing of hash's re-asks: the block is in the chain or written

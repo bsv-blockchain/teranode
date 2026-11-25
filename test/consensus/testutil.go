@@ -3,8 +3,10 @@ package consensus
 import (
 	"encoding/hex"
 	"encoding/json"
+	"math"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -13,6 +15,9 @@ import (
 
 // ScriptTest represents a single script validation test case from script_tests.json
 type ScriptTest struct {
+	Index        int           // Position of the entry in the JSON array
+	Amount       uint64        // Value of the output being spent, in satoshis; 0 unless the entry starts with [amount in BSV]
+	TxVersion    int32         // Version of the spending transaction
 	ScriptSig    string        // Unlocking script (scriptSig)
 	ScriptPubKey string        // Locking script (scriptPubKey)
 	Flags        []string      // Validation flags (e.g., "P2SH", "STRICTENC")
@@ -52,7 +57,10 @@ type SigHashTest struct {
 	Raw          []interface{} // Raw test data
 }
 
-// LoadScriptTests loads script test vectors from a JSON file
+// LoadScriptTests loads script_tests.json in bitcoin-sv's format (v1.2.3): an entry is a
+// comment, [ "text" ], or [[amount]?, tx version, scriptSig, scriptPubKey, flags,
+// expected error, comment?], where amount is the spent output's value in BSV, read as
+// bitcoin-sv's AmountFromValue does. A malformed entry fails the test, as in bitcoin-sv.
 func LoadScriptTests(t *testing.T, filename string) []ScriptTest {
 	t.Helper()
 
@@ -67,56 +75,71 @@ func LoadScriptTests(t *testing.T, filename string) []ScriptTest {
 	}
 
 	tests := make([]ScriptTest, 0, len(rawTests))
+
 	for i, rawTest := range rawTests {
-		// Skip comments (arrays with single string)
 		if len(rawTest) == 1 {
 			continue
 		}
 
-		if len(rawTest) < 4 {
-			t.Logf("Skipping malformed test at index %d: %v", i, rawTest)
-			continue
+		test, err := parseScriptTest(rawTest)
+		if err != nil {
+			t.Fatalf("Bad test at index %d of %s: %v", i, filename, err)
 		}
 
-		test := ScriptTest{
-			Raw: rawTest,
-		}
-
-		// Parse scriptSig
-		if sig, ok := rawTest[0].(string); ok {
-			test.ScriptSig = sig
-		}
-
-		// Parse scriptPubKey
-		if pubkey, ok := rawTest[1].(string); ok {
-			test.ScriptPubKey = pubkey
-		}
-
-		// Parse flags
-		if flags, ok := rawTest[2].(string); ok {
-			test.Flags = strings.Split(flags, ",")
-			// Trim whitespace from flags
-			for j := range test.Flags {
-				test.Flags[j] = strings.TrimSpace(test.Flags[j])
-			}
-		}
-
-		// Parse expected result
-		if expected, ok := rawTest[3].(string); ok {
-			test.Expected = expected
-		}
-
-		// Parse optional comment
-		if len(rawTest) > 4 {
-			if comment, ok := rawTest[4].(string); ok {
-				test.Comment = comment
-			}
-		}
-
+		test.Index = i
 		tests = append(tests, test)
 	}
 
 	return tests
+}
+
+func parseScriptTest(rawTest []interface{}) (ScriptTest, error) {
+	test := ScriptTest{Raw: rawTest}
+
+	if amount, ok := rawTest[0].([]interface{}); ok {
+		var btc float64
+
+		if len(amount) > 0 {
+			btc, ok = amount[0].(float64)
+		}
+
+		if !ok || len(amount) == 0 || btc < 0 {
+			return test, errors.NewProcessingError("bad amount %v", amount)
+		}
+
+		test.Amount = uint64(math.Round(btc * 1e8))
+		rawTest = rawTest[1:]
+	}
+
+	if len(rawTest) < 5 || len(rawTest) > 6 {
+		return test, errors.NewProcessingError("want [tx version, scriptSig, scriptPubKey, flags, expected, comment?], got %d elements", len(rawTest))
+	}
+
+	fields := make([]string, len(rawTest))
+
+	for j, f := range rawTest {
+		s, ok := f.(string)
+		if !ok {
+			return test, errors.NewProcessingError("element %d is not a string", j)
+		}
+
+		fields[j] = s
+	}
+
+	version, err := strconv.ParseInt(fields[0], 10, 32)
+	if err != nil {
+		return test, errors.NewProcessingError("bad tx version %q", fields[0], err)
+	}
+
+	test.TxVersion = int32(version)
+	test.ScriptSig, test.ScriptPubKey, test.Expected = fields[1], fields[2], fields[4]
+	test.Flags = strings.Split(fields[3], ",")
+
+	if len(fields) == 6 {
+		test.Comment = fields[5]
+	}
+
+	return test, nil
 }
 
 // LoadTxTests loads tx_valid.json or tx_invalid.json in bitcoin-sv's format: an entry is

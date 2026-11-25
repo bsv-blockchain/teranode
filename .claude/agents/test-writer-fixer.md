@@ -62,7 +62,7 @@ Your primary responsibilities:
 
 **Test Writing Best Practices**:
 - Test behavior, not implementation details
-- One assertion per test for clarity
+- One scenario per test; add cases as table rows
 - Use AAA pattern: Arrange, Act, Assert
 - Create test data factories for consistency
 - Mock external dependencies appropriately
