@@ -36,6 +36,8 @@ import (
 // open. Once create-first (#1355) is enabled a parent's 2PC window becomes a
 // creating window rather than a locked one, so this becomes the common case.
 func TestPartialSpendRollbackSuppressedByCreatingParent(t *testing.T) {
+	t.Parallel()
+
 	logger := ulogger.NewErrorTestLogger(t)
 	tSettings := test.CreateBaseTestSettings(t)
 
@@ -44,17 +46,20 @@ func TestPartialSpendRollbackSuppressedByCreatingParent(t *testing.T) {
 
 	dummy := bscript.NewFromBytes([]byte{0x00, 0x48, 0x30, 0x45})
 
+	// A copy of tests.Tx with a txid of its own: the server is shared with other tests.
+	root := uniqueTx(tests.Tx.Clone())
+
 	// parent of the two parents
-	_, _, err := store.SpendAndCreate(ctx, tests.Tx, 1000, utxo.WithCreateOnly())
+	_, _, err := store.SpendAndCreate(ctx, root, 1000, utxo.WithCreateOnly())
 	require.NoError(t, err)
 
 	// Pay out slightly less than the input so the store's fee check passes; the
 	// per-parent delta also keeps the two parents' txids distinct.
 	newParent := func(vout uint32, feeDelta uint64) *bt.Tx {
-		in := tests.Tx.Outputs[vout]
+		in := root.Outputs[vout]
 
 		tx := bt.NewTx()
-		require.NoError(t, tx.From(tests.Tx.TxIDChainHash().String(), vout,
+		require.NoError(t, tx.From(root.TxIDChainHash().String(), vout,
 			in.LockingScript.String(), in.Satoshis))
 		tx.Inputs[0].UnlockingScript = dummy
 		require.NoError(t, tx.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", in.Satoshis-feeDelta))

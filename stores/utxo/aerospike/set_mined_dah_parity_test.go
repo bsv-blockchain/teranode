@@ -174,6 +174,8 @@ type dahResult struct{ master, child string }
 // the follow-up DAH on the pagination record (the Go-side reaction to the Lua DAHSET/DAHUNSET
 // signals), and (b) the two paths produce identical results.
 func TestSetMinedDAHParity(t *testing.T) {
+	t.Parallel()
+
 	if testing.Short() {
 		t.Skip("Skipping Aerospike integration test in short mode")
 	}
@@ -213,7 +215,6 @@ func TestSetMinedDAHParity(t *testing.T) {
 
 				client, store, ctx, cleanup := initAerospike(t, tSettings, logger)
 				defer cleanup()
-				cleanDB(t, client)
 
 				const minedHeight = 1000
 
@@ -350,7 +351,7 @@ func dahParityDedupeBins(bins []*aerospike.Bin) []*aerospike.Bin {
 func dahParityCreatePaginatedTx(ctx context.Context, t *testing.T, store *teranode_aerospike.Store, idx int) *chainhash.Hash {
 	t.Helper()
 
-	tx := bt.NewTx()
+	tx := uniqueTx(bt.NewTx())
 	require.NoError(t, tx.From(
 		"1111111111111111111111111111111111111111111111111111111111111111",
 		uint32(idx), //nolint:gosec
@@ -375,6 +376,8 @@ func dahParityCreatePaginatedTx(ctx context.Context, t *testing.T, store *terano
 // a retry would hit FILTERED_OUT (blockID already present) and never reconcile them, leaving a
 // stale DAH on children whose master is no longer prunable.
 func TestSetMinedDAHChildFollowUpsSurviveSiblingError(t *testing.T) {
+	t.Parallel()
+
 	if testing.Short() {
 		t.Skip("Skipping Aerospike integration test in short mode")
 	}
@@ -395,7 +398,6 @@ func TestSetMinedDAHChildFollowUpsSurviveSiblingError(t *testing.T) {
 
 			client, store, ctx, cleanup := initAerospike(t, tSettings, logger)
 			defer cleanup()
-			cleanDB(t, client)
 
 			const minedHeight = 1000
 

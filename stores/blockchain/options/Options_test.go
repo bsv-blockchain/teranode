@@ -668,3 +668,18 @@ func TestWithLaneMapRows(t *testing.T) {
 	rows := []lane.MapRow{{Lane: 7, First: 1, Last: 1, Tag: lane.RowTagRange}}
 	require.Equal(t, rows, ProcessStoreBlockOptions(WithLaneMapRows(rows)).LaneMapRows)
 }
+
+// WithOwnBlockLaneMapRows keeps the rows and marks them as our own block's, for the lane metrics'
+// block label; WithLaneMapRows leaves them a peer's.
+func TestWithOwnBlockLaneMapRows(t *testing.T) {
+	rows := []lane.MapRow{{Lane: 7, First: 1, Last: 9, Tag: lane.RowTagRange}}
+
+	own := ProcessStoreBlockOptions(WithOwnBlockLaneMapRows(rows))
+	require.Equal(t, rows, own.LaneMapRows)
+	require.True(t, own.LaneMapRowsOwnBlock)
+	require.Equal(t, lane.BlockOwn, own.LaneMetricsBlock())
+
+	peer := ProcessStoreBlockOptions(WithLaneMapRows(rows))
+	require.False(t, peer.LaneMapRowsOwnBlock)
+	require.Equal(t, lane.BlockPeer, peer.LaneMetricsBlock())
+}

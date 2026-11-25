@@ -402,7 +402,7 @@ type Client struct {
 }
 
 func (s *Client) Health(ctx context.Context, checkLiveness bool) (int, string, error)
-func (s *Client) Store(ctx context.Context, hash *chainhash.Hash, fee, size uint64, txInpoints subtree.TxInpoints) (bool, error)
+func (s *Client) Store(ctx context.Context, hash *chainhash.Hash, fee, size uint64, txInpoints subtree.TxInpoints, validatedHeight uint32, lanePosition uint64) (bool, error)
 func (s *Client) RemoveTx(ctx context.Context, hash *chainhash.Hash) error
 func (s *Client) GetMiningCandidate(ctx context.Context, includeSubtreeHashes ...bool) (*model.MiningCandidate, error)
 func (s *Client) SubmitMiningSolution(ctx context.Context, solution *model.MiningSolution) error

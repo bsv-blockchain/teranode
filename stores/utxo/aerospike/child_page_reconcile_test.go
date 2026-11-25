@@ -50,6 +50,8 @@ func floorLoseNextMasterUDFResponse(t *testing.T, store *teranode_aerospike.Stor
 // error. The retry finds the master already clear, so its response carries no signal. The pages must
 // still be cleared, or the pruner deletes them at their old stamp while the master is live.
 func TestSetConflictingRetryAfterLostResponseClearsPages(t *testing.T) {
+	t.Parallel()
+
 	if testing.Short() {
 		t.Skip("Skipping Aerospike integration test in short mode")
 	}
@@ -58,7 +60,7 @@ func TestSetConflictingRetryAfterLostResponseClearsPages(t *testing.T) {
 	logger := ulogger.NewErrorTestLogger(t)
 	tSettings, retention := floorSettings(t)
 
-	client, store, _, cleanup := initAerospike(t, tSettings, logger)
+	client, store, _, cleanup := initAerospikeOwnServer(t, tSettings, logger)
 	defer cleanup()
 	cleanDB(t, client)
 
@@ -109,6 +111,8 @@ func floorMarkPagesVersioned(t *testing.T, client *uaerospike.Client, keyFor fun
 // A page that already holds the master's version or a later one refuses the write as FILTERED_OUT.
 // The setDAH batcher must count that as success and leave the page as it was.
 func TestUnspendCountsAFilteredOutPageWriteAsSuccess(t *testing.T) {
+	t.Parallel()
+
 	if testing.Short() {
 		t.Skip("Skipping Aerospike integration test in short mode")
 	}
@@ -119,7 +123,6 @@ func TestUnspendCountsAFilteredOutPageWriteAsSuccess(t *testing.T) {
 
 	client, store, _, cleanup := initAerospike(t, tSettings, logger)
 	defer cleanup()
-	cleanDB(t, client)
 
 	require.NoError(t, store.SetBlockHeight(floorCachedTip))
 
@@ -148,6 +151,8 @@ func TestUnspendCountsAFilteredOutPageWriteAsSuccess(t *testing.T) {
 
 // The multi-record page write used by the lock path takes the same FILTERED_OUT refusal as success.
 func TestSetLockedCountsAFilteredOutPageWriteAsSuccess(t *testing.T) {
+	t.Parallel()
+
 	if testing.Short() {
 		t.Skip("Skipping Aerospike integration test in short mode")
 	}
@@ -158,7 +163,6 @@ func TestSetLockedCountsAFilteredOutPageWriteAsSuccess(t *testing.T) {
 
 	client, store, _, cleanup := initAerospike(t, tSettings, logger)
 	defer cleanup()
-	cleanDB(t, client)
 
 	require.NoError(t, store.SetBlockHeight(floorCachedTip))
 
