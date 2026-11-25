@@ -1816,6 +1816,9 @@ func (s *Store) sendOutpointBatch(batch []*batchOutpoint) {
 	// Per parent, with lane positions on: its own lane position, for the validator to copy onto the
 	// child. A parent with none, or a bin that does not parse, is left out and answers zero.
 	var txLanes map[chainhash.Hash]uint64
+	// txCoinbase holds, with lane positions on, the parents whose coinbase flag is set, read in the
+	// same batch for the lanes shadow.
+	var txCoinbase map[chainhash.Hash]bool
 
 	// Process the batch records
 	for idx, batchRecordIfc := range batchRecords {
@@ -1849,6 +1852,14 @@ func (s *Store) sendOutpointBatch(batch []*batchOutpoint) {
 			}
 
 			txLanes[previousTxHash] = position
+		}
+
+		if coinbase, _ := bins[fields.IsCoinbase.String()].(bool); laneShadow && coinbase {
+			if txCoinbase == nil {
+				txCoinbase = make(map[chainhash.Hash]bool)
+			}
+
+			txCoinbase[previousTxHash] = true
 		}
 
 		external, ok := bins[fields.External.String()].(bool)
@@ -1887,6 +1898,7 @@ func (s *Store) sendOutpointBatch(batch []*batchOutpoint) {
 				txExternal[parentTxID], txHeights[parentTxID], heightErrors[parentTxID])
 			if batchItem.answer.Err == nil {
 				batchItem.answer.LanePosition = txLanes[parentTxID]
+				batchItem.answer.IsCoinbase = txCoinbase[parentTxID]
 			}
 
 			batchItem.complete(nil)
@@ -2532,10 +2544,11 @@ func (s *Store) sendGetBatch(batch []*batchGetItem) {
 // The bins the outpoint batch reads from a parent's master record. Only the outputs are ever used.
 // BlockHeights is read so external parents can be reconstructed with the era-aware unspendable rule
 // keyed to their creation height, and so parent-output items can report it. With lane positions on
-// the parent's own lane position comes in the same read, for the validator to copy onto the child.
+// the parent's own lane position comes in the same read, for the validator to copy onto the child,
+// and its coinbase flag, which the lanes shadow counts apart.
 var (
 	outpointBins     = []fields.FieldName{fields.Outputs, fields.External, fields.BlockHeights}
-	outpointLaneBins = []fields.FieldName{fields.Outputs, fields.External, fields.BlockHeights, fields.LanePosition}
+	outpointLaneBins = []fields.FieldName{fields.Outputs, fields.External, fields.BlockHeights, fields.LanePosition, fields.IsCoinbase}
 )
 
 // lanePositionFromBins is the record's own lane position, and whether it has a readable one. The

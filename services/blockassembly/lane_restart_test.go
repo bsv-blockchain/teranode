@@ -431,6 +431,21 @@ func TestLaneRestartDryRunOutcomes(t *testing.T) {
 			sample:  map[string]uint64{},
 		},
 		{
+			// A coinbase no row takes is counted apart, inside the cap or before it, and never
+			// sampled as only the window's; one a row takes is mined like any other record.
+			name: "coinbases",
+			window: &fakeLaneWindow{records: []utxo.LaneWindowRecord{
+				{Hash: laneTestHash(2), LanePosition: lane.Pack(1, 30), CreatedAt: 1, Coinbase: true},
+				{Hash: laneTestHash(4), LanePosition: lane.Pack(1, 12), CreatedAt: 1, Coinbase: true},
+				{Hash: laneTestHash(6), LanePosition: lane.Pack(1, 20), CreatedAt: 1, Coinbase: true},
+			}},
+			grants:  grants,
+			view:    view,
+			outcome: laneRunDone,
+			records: map[string]uint64{laneRecCoinbase: 2, laneRecMinedRow: 1},
+			sample:  map[string]uint64{},
+		},
+		{
 			// Past the sample's limit a transaction only the window keeps is counted, not held.
 			name: "the lanes-only sample is full",
 			window: &fakeLaneWindow{records: []utxo.LaneWindowRecord{
@@ -551,6 +566,10 @@ func (s laneRestartViewSource) GetBestBlockHeader(context.Context) (*model.Block
 
 func (s laneRestartViewSource) GetBlockHeaders(context.Context, *chainhash.Hash, uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
 	return []*model.BlockHeader{s.header}, []*model.BlockHeaderMeta{{}}, nil
+}
+
+func (s laneRestartViewSource) GetBlockHeader(context.Context, *chainhash.Hash) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
+	return s.header, &model.BlockHeaderMeta{MinedSet: true}, nil
 }
 
 func (laneRestartViewSource) LaneMapRows(context.Context, uint32) ([]lane.MapRow, error) {

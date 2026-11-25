@@ -34,6 +34,9 @@ type LaneWindowRecord struct {
 	CreatedAt int64
 	// Conflicting is a record marked as having lost a double-spend.
 	Conflicting bool
+	// Coinbase is a coinbase record. Block assembly's reload never loads one, and no Phase 1 lane row
+	// lists one, so the dry run counts it apart.
+	Coinbase bool
 	// Missing is a row of the window whose transaction has no record the reload would read:
 	// utxoset's tx_body row with no tx_ident row, which the deep stamp deletes once a block is
 	// settled, or whose transaction was first seen in a block.

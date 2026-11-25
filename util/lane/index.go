@@ -96,6 +96,9 @@ type IndexBlock struct {
 	Height uint32
 	Hash   chainhash.Hash
 	Parent chainhash.Hash
+	// TxCount is the block's transaction count, its coinbase included; 0 when not known. A block of
+	// only its coinbase takes no position a row lists, so with no rows its rows are complete.
+	TxCount uint64
 }
 
 // indexRow is one loaded row. A range row, whose block took first to last, has neither bits nor
@@ -444,8 +447,9 @@ type BlockState uint8
 const (
 	// BlockNotLoaded is a block the index never loaded, or has forgotten.
 	BlockNotLoaded BlockState = iota
-	// BlockNoRows is a loaded block the map holds no row for: one taken by quick validation, one
-	// of our own before block assembly writes rows, or a block of only its coinbase.
+	// BlockNoRows is a loaded block the map holds no row for: one taken by quick validation, or one
+	// of our own before block assembly writes rows. A block of only its coinbase is not one: it has
+	// nothing for a row to list (IndexBlock.TxCount).
 	BlockNoRows
 	// BlockHasRows is a loaded block with rows.
 	BlockHasRows
@@ -773,8 +777,9 @@ func (s *IndexSnapshot) BeforeStart(pos uint64) bool {
 }
 
 // MainBlocksWithoutRows counts the loaded main-chain blocks the map holds no rows for: blocks taken
-// by quick validation, our own blocks before block assembly writes rows, and blocks of only a
-// coinbase. A position no row takes may be in one of them, so a reader cannot call it unmined.
+// by quick validation and our own blocks before block assembly writes rows. A position no row takes
+// may be in one of them, so a reader cannot call it unmined. A block of only its coinbase is not
+// counted: no Phase 1 row lists a coinbase, so it has no row to be missing.
 func (s *IndexSnapshot) MainBlocksWithoutRows() int { return s.mainNoRows }
 
 // Folded reports whether block id's rows were folded into the floors and left memory.
@@ -868,7 +873,8 @@ func (x *Index) AddBlock(b IndexBlock, rows []MapRow) error {
 		return nil
 	}
 
-	st := &indexBlockState{IndexBlock: b, hasRows: len(rows) > 0, rows: loaded, lanes: lanes}
+	// A block of only its coinbase has nothing for a row to list, so its empty rows are complete.
+	st := &indexBlockState{IndexBlock: b, hasRows: len(rows) > 0 || b.TxCount == 1, rows: loaded, lanes: lanes}
 	x.blocks[b.ID] = st
 	x.byHash[b.Hash] = b.ID
 

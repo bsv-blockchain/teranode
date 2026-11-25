@@ -123,7 +123,7 @@ func BenchmarkCompareHeightParallel(b *testing.B) {
 						height = disagreeHeight
 					}
 
-					r.CompareHeight(ReaderValidator, chainhash.Hash{}, p.pos, true, height)
+					r.CompareHeight(ReaderValidator, chainhash.Hash{}, p.pos, false, true, height)
 					i++
 				}
 			})
@@ -153,7 +153,7 @@ func TestDisagreementLogIsRateLimited(t *testing.T) {
 	r.idx.Store(idx)
 
 	for range 20 {
-		r.CompareHeight(ReaderValidator, chainhash.Hash{}, lane.Pack(2, 7), false, 0) // lanes_only
+		r.CompareHeight(ReaderValidator, chainhash.Hash{}, lane.Pack(2, 7), false, false, 0) // lanes_only
 	}
 
 	require.Equal(t, int64(5), logger.warns.Load(), "the first five, then none within the minute")
@@ -165,7 +165,7 @@ func TestDisagreementLogIsRateLimited(t *testing.T) {
 	g.(*logGate).last.Store(time.Now().Add(-59 * time.Second).UnixNano())
 
 	for range 20 {
-		r.CompareHeight(ReaderValidator, chainhash.Hash{}, lane.Pack(2, 7), false, 0)
+		r.CompareHeight(ReaderValidator, chainhash.Hash{}, lane.Pack(2, 7), false, false, 0)
 	}
 
 	require.Equal(t, int64(5), logger.warns.Load(), "nothing within the minute")
@@ -174,7 +174,7 @@ func TestDisagreementLogIsRateLimited(t *testing.T) {
 	g.(*logGate).last.Store(time.Now().Add(-61 * time.Second).UnixNano())
 
 	for range 20 {
-		r.CompareHeight(ReaderValidator, chainhash.Hash{}, lane.Pack(2, 7), false, 0)
+		r.CompareHeight(ReaderValidator, chainhash.Hash{}, lane.Pack(2, 7), false, false, 0)
 	}
 
 	require.Equal(t, int64(6), logger.warns.Load(), "one more a minute later")
@@ -232,7 +232,7 @@ func TestFloorAnswerDoesNotAgreeWithAnUnloadedBlock(t *testing.T) {
 	require.Equal(t, lane.ViaFloor, r.MainView().Lookup(lane.Pack(2, 7)).Via)
 
 	requireCounted(t, ReaderBlockParent, KindNotLoaded, lane.ViaFloor, func() {
-		r.CompareBlocks(ReaderBlockParent, r.MainView(), chainhash.Hash{}, lane.Pack(2, 7), []uint32{999})
+		r.CompareBlocks(ReaderBlockParent, r.MainView(), chainhash.Hash{}, lane.Pack(2, 7), false, []uint32{999})
 	})
 }
 
@@ -264,7 +264,7 @@ func TestDisagreementLogHoldsItsFiveLinesUnderConcurrentChecks(t *testing.T) {
 				<-start
 
 				for range 4 {
-					r.CompareHeight(ReaderValidator, chainhash.Hash{}, lane.Pack(2, 7), false, 0) // lanes_only
+					r.CompareHeight(ReaderValidator, chainhash.Hash{}, lane.Pack(2, 7), false, false, 0) // lanes_only
 				}
 			}()
 		}
@@ -291,11 +291,11 @@ func TestCompareBlocksDoesNotAllocate(t *testing.T) {
 	ids := []uint32{1}
 
 	requireCounted(t, ReaderValidator, KindAgree, lane.ViaRow, func() {
-		r.CompareBlocks(ReaderValidator, v, chainhash.Hash{}, lane.Pack(2, 7), ids)
+		r.CompareBlocks(ReaderValidator, v, chainhash.Hash{}, lane.Pack(2, 7), false, ids)
 	})
 
 	require.Zero(t, testing.AllocsPerRun(1_000, func() {
-		r.CompareBlocks(ReaderValidator, v, chainhash.Hash{}, lane.Pack(2, 7), ids)
+		r.CompareBlocks(ReaderValidator, v, chainhash.Hash{}, lane.Pack(2, 7), false, ids)
 	}))
 }
 
@@ -316,6 +316,6 @@ func BenchmarkCompareBlocks(b *testing.B) {
 	b.ReportAllocs()
 
 	for b.Loop() {
-		r.CompareBlocks(ReaderValidator, v, chainhash.Hash{}, lane.Pack(2, 7), ids)
+		r.CompareBlocks(ReaderValidator, v, chainhash.Hash{}, lane.Pack(2, 7), false, ids)
 	}
 }

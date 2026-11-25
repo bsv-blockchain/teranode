@@ -84,10 +84,15 @@ const (
 	laneRecMissing = "missing"
 	// laneRecNotMaster: an Aerospike pagination record.
 	laneRecNotMaster = "not_master"
+	// laneRecCoinbase: a coinbase no row takes. Today's reload never loads a coinbase, and in Phase 1
+	// a coinbase takes an ordinary leased position after its block's rows are committed, so no row
+	// lists it; the reserved coinbase lane is Phase 2. A coinbase a row does take is judged as
+	// mined like any other record.
+	laneRecCoinbase = "coinbase"
 )
 
 var laneRecOutcomes = []string{laneRecKeep, laneRecMinedRow, laneRecMinedFloor, laneRecCapped, laneRecConflicting,
-	laneRecNoPosition, laneRecAfterReload, laneRecMissing, laneRecNotMaster}
+	laneRecNoPosition, laneRecAfterReload, laneRecMissing, laneRecNotMaster, laneRecCoinbase}
 
 // Sample kinds: how a sampled transaction compares between today's pool and the window's.
 const (
@@ -593,6 +598,8 @@ func (j *laneJudge) outcome(rec *utxo.LaneWindowRecord) string {
 		return laneRecMinedFloor
 	case a.Mined:
 		return laneRecMinedRow
+	case rec.Coinbase:
+		return laneRecCoinbase
 	case j.capped(rec.LanePosition):
 		return laneRecCapped
 	}

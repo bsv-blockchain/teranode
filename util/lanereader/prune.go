@@ -60,7 +60,7 @@ var todayNames = [3]string{PruneDelete, PruneKeep, PruneKeepUndo}
 const PruneCannotJudge = "cannot_judge"
 
 // Reasons, the reason label. ReasonSettled goes with lanes=delete; the next seven with lanes=keep,
-// naming the first position found unsettled; the last five with lanes=cannot_judge.
+// naming the first position found unsettled; the last six with lanes=cannot_judge.
 const (
 	ReasonSettled = "settled"
 
@@ -76,6 +76,10 @@ const (
 	ReasonNotLoaded       = "not_loaded"
 	ReasonNoRows          = "no_rows"
 	ReasonSpenderUnread   = "spender_unread"
+	// ReasonCoinbase is a coinbase parent no row takes. In Phase 1 a coinbase takes an ordinary
+	// leased position after its block's rows are committed, so no row lists it and the rule cannot
+	// say it is settled; the reserved coinbase lane is Phase 2. It keeps, as any cannot_judge does.
+	ReasonCoinbase = "coinbase"
 )
 
 // Disagreement directions, for the log.
@@ -102,6 +106,8 @@ type PruneCandidate struct {
 	// Conflicting is a conflict loser, which today deletes by its delete-at height and the lane rule
 	// keeps, since no main-chain block takes it.
 	Conflicting bool
+	// Coinbase is a coinbase parent, which no Phase 1 row lists (ReasonCoinbase).
+	Coinbase bool
 	// Unread is set when some of the parent's slots could not be read, such as an Aerospike page
 	// another worker deleted first: the lane rule cannot say every spender is settled.
 	Unread bool
@@ -132,6 +138,7 @@ const (
 	reasonNotLoaded
 	reasonNoRows
 	reasonSpenderUnread
+	reasonCoinbase
 	numReasons
 	// reasonNone is a settled position.
 	reasonNone pruneReason = 255
@@ -140,7 +147,7 @@ const (
 var reasonNames = [numReasons]string{
 	ReasonSettled, ReasonParentUnmined, ReasonParentOffChain, ReasonParentShallow, ReasonSpenderUnmined,
 	ReasonSpenderOffChain, ReasonSpenderShallow, ReasonConflicting, ReasonNoPosition, ReasonNotReady,
-	ReasonNotLoaded, ReasonNoRows, ReasonSpenderUnread,
+	ReasonNotLoaded, ReasonNoRows, ReasonSpenderUnread, ReasonCoinbase,
 }
 
 // The unsettled kinds, added to unsettledBase.
@@ -260,8 +267,8 @@ func (j *PruneJudge) decide(c *PruneCandidate) (int, pruneReason, pruneDecider) 
 		keepBy, cannotBy pruneDecider
 	)
 
-	judge := func(spender bool, hash chainhash.Hash, pos uint64) {
-		reason, a := j.position(spender, pos)
+	judge := func(spender bool, hash chainhash.Hash, pos uint64, coinbase bool) {
+		reason, a := j.position(spender, pos, coinbase)
 
 		switch {
 		case reason == reasonNone:
@@ -276,7 +283,7 @@ func (j *PruneJudge) decide(c *PruneCandidate) (int, pruneReason, pruneDecider) 
 		}
 	}
 
-	judge(false, c.Parent, c.ParentPos)
+	judge(false, c.Parent, c.ParentPos, c.Coinbase)
 
 	if c.Conflicting && (keep == reasonParentUnmined || keep == reasonParentOffChain) {
 		keep = reasonConflicting
@@ -296,7 +303,7 @@ func (j *PruneJudge) decide(c *PruneCandidate) (int, pruneReason, pruneDecider) 
 		}
 
 		last = c.Spenders[i].Pos
-		judge(true, c.Spenders[i].Hash, c.Spenders[i].Pos)
+		judge(true, c.Spenders[i].Hash, c.Spenders[i].Pos, false)
 	}
 
 	switch {
@@ -320,7 +327,8 @@ func whoName(spender bool) string {
 }
 
 // position judges one position: reasonNone when settled, else why it is not or cannot be judged.
-func (j *PruneJudge) position(spender bool, pos uint64) (pruneReason, lane.Answer) {
+// coinbase is set for a coinbase parent, which no row lists.
+func (j *PruneJudge) position(spender bool, pos uint64, coinbase bool) (pruneReason, lane.Answer) {
 	if !lane.Valid(pos) {
 		return reasonNoPosition, lane.Answer{}
 	}
@@ -343,6 +351,10 @@ func (j *PruneJudge) position(spender bool, pos uint64) (pruneReason, lane.Answe
 
 	if _, _, ok := j.snap.OffMainTaker(pos); ok {
 		return unsettledBase(spender) + kindOffChain, a
+	}
+
+	if coinbase {
+		return reasonCoinbase, a
 	}
 
 	if j.snap.BeforeStart(pos) {

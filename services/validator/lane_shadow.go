@@ -23,23 +23,24 @@ type parentShadow struct {
 }
 
 // compare answers parent, at lane position pos, beside today's answer: mined at height, or not.
-func (s *parentShadow) compare(reader string, parent chainhash.Hash, pos uint64, mined bool, height uint32) {
+// coinbase is the parent record's coinbase flag, which a Phase 1 row never lists.
+func (s *parentShadow) compare(reader string, parent chainhash.Hash, pos uint64, coinbase, mined bool, height uint32) {
 	if s.reader == nil || s.repeat(parent) {
 		return
 	}
 
-	s.reader.CompareHeight(reader, parent, pos, mined, height)
+	s.reader.CompareHeight(reader, parent, pos, coinbase, mined, height)
 }
 
 // compareBlocks answers parent, at lane position pos, beside today's answer given as its mined
 // block list: a prefetched parent's record carries the list, which a height alone cannot stand in
 // for, since the lowest height may be a fork block's.
-func (s *parentShadow) compareBlocks(reader string, parent chainhash.Hash, pos uint64, blockIDs []uint32) {
+func (s *parentShadow) compareBlocks(reader string, parent chainhash.Hash, pos uint64, coinbase bool, blockIDs []uint32) {
 	if s.reader == nil || s.repeat(parent) {
 		return
 	}
 
-	s.reader.CompareBlocks(reader, s.view, parent, pos, blockIDs)
+	s.reader.CompareBlocks(reader, s.view, parent, pos, coinbase, blockIDs)
 }
 
 // repeat reports whether parent was seen before, and records it.

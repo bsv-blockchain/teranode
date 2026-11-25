@@ -43,6 +43,7 @@ type loadedChain struct {
 type pendingParent struct {
 	hash     chainhash.Hash
 	pos      uint64
+	coinbase bool
 	blockIDs []uint32
 }
 
@@ -68,7 +69,7 @@ func (r *Reader) BlockParents(ctx context.Context, parent chainhash.Hash) *Block
 		b.mu.Unlock()
 
 		for _, p := range pending {
-			r.compareBlocks(ReaderBlockParent, view, noView, p.hash, p.pos, p.blockIDs)
+			r.compareBlocks(ReaderBlockParent, view, noView, p.hash, p.pos, p.coinbase, p.blockIDs)
 		}
 	}()
 
@@ -77,13 +78,13 @@ func (r *Reader) BlockParents(ctx context.Context, parent chainhash.Hash) *Block
 
 // ObserveParent answers one parent, or holds it until the chain's rows are in. On a nil
 // BlockParents it does nothing.
-func (b *BlockParents) ObserveParent(parentHash chainhash.Hash, lanePosition uint64, blockIDs []uint32) {
+func (b *BlockParents) ObserveParent(parentHash chainhash.Hash, lanePosition uint64, coinbase bool, blockIDs []uint32) {
 	if b == nil {
 		return
 	}
 
 	if l := b.loaded.Load(); l != nil {
-		b.r.compareBlocks(ReaderBlockParent, l.view, l.noView, parentHash, lanePosition, blockIDs)
+		b.r.compareBlocks(ReaderBlockParent, l.view, l.noView, parentHash, lanePosition, coinbase, blockIDs)
 
 		return
 	}
@@ -92,7 +93,7 @@ func (b *BlockParents) ObserveParent(parentHash chainhash.Hash, lanePosition uin
 
 	if l := b.loaded.Load(); l != nil {
 		b.mu.Unlock()
-		b.r.compareBlocks(ReaderBlockParent, l.view, l.noView, parentHash, lanePosition, blockIDs)
+		b.r.compareBlocks(ReaderBlockParent, l.view, l.noView, parentHash, lanePosition, coinbase, blockIDs)
 
 		return
 	}
@@ -104,6 +105,6 @@ func (b *BlockParents) ObserveParent(parentHash chainhash.Hash, lanePosition uin
 		return
 	}
 
-	b.pending = append(b.pending, pendingParent{hash: parentHash, pos: lanePosition, blockIDs: append([]uint32(nil), blockIDs...)})
+	b.pending = append(b.pending, pendingParent{hash: parentHash, pos: lanePosition, coinbase: coinbase, blockIDs: append([]uint32(nil), blockIDs...)})
 	b.mu.Unlock()
 }
