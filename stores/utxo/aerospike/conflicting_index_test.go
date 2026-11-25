@@ -129,8 +129,6 @@ func TestConflictingTxHashes_TracksTheFlag(t *testing.T) {
 	t.Parallel()
 
 	client, store, ctx := initAerospikeImageWith(t, "aerospike/aerospike-server:8.1", test.CreateBaseTestSettings(t), func(client *uaerospike.Client) {
-		// The wipe between tests does not reset namespace configuration.
-		teranode_aerospike.RetireOwnTestServer(t)
 		setNamespaceConfig(t, client, "allow-ttl-without-nsup=false")
 		setNamespaceConfig(t, client, "nsup-period=0")
 	})
@@ -268,9 +266,12 @@ func TestConflictingTxHashes_MatchesTheFlagOnEveryRecord(t *testing.T) {
 	}
 }
 
-// setNamespaceConfig applies a dynamic namespace setting on every node.
+// setNamespaceConfig applies a dynamic namespace setting on every node. The wipe between tests does
+// not reset namespace configuration, so the test's server is terminated when the test ends.
 func setNamespaceConfig(t *testing.T, client *uaerospike.Client, setting string) {
 	t.Helper()
+
+	teranode_aerospike.RetireOwnTestServer(t)
 
 	command := fmt.Sprintf("set-config:context=namespace;id=%s;%s", aerospikeNamespace, setting)
 
