@@ -26,14 +26,24 @@ var sigHashOne = append([]byte{1}, make([]byte, 31)...)
 // sigHashOneHex is sigHashOne in bitcoin-sv's uint256 hex, as the vectors write it.
 const sigHashOneHex = "0000000000000000000000000000000000000000000000000000000000000001"
 
+// sigHashChronicle is bitcoin-sv's SIGHASH_CHRONICLE (src/script/sighashtype.h, v1.2.3).
+// go-bt's sighash package has no such flag.
+const sigHashChronicle uint32 = 0x20
+
 // TestSigHashVectors checks go-bt's signature hashes against every vector in
 // sighash.json, as bitcoin-sv's sighash_tests.cpp does: the transaction must parse,
 // serialize back to the same bytes and pass the context-free checks; then SignatureHash
-// (amount 0; BIP143 when the hash type has FORKID) and SignatureHashOriginal (the
-// original algorithm always) must give the vector's hashes.
+// (amount 0; BIP143 when the hash type has FORKID and not CHRONICLE, as in bitcoin-sv
+// v1.2.3) and SignatureHashOriginal (the original algorithm always) must give the
+// vector's hashes.
 //
 // Teranode verifies signatures in gobdk, not go-bt, so this covers go-bt's signing path
 // and its preimage serialization, which a go-bt bump could change.
+//
+// Known deviation: go-bt has no SIGHASH_CHRONICLE (0x20) and uses BIP143 for every FORKID
+// hash type, where bitcoin-sv uses the original algorithm for FORKID|CHRONICLE. The test
+// computes the original algorithm for those and asserts BIP143 still differs. Like the
+// next one, it only affects go-bt's signing.
 //
 // Known deviation: bitcoin-sv's original algorithm drops every OP_CODESEPARATOR from the
 // script code (SerializeScriptCode); go-bt's CalcInputPreimageLegacy writes the script code
@@ -78,12 +88,22 @@ func TestSigHashVectors(t *testing.T) {
 			original := sigHashHex(t, tx, test.InputIndex, stripped, hashType, false)
 			require.Equal(t, test.OriginalHash, original, "SignatureHashOriginal")
 
+			forkID := hashType&uint32(sighash.ForkID) != 0
+			chronicle := hashType&sigHashChronicle != 0
+
+			// bitcoin-sv v1.2.3 SignatureHash: BIP143 only for FORKID without CHRONICLE.
 			regular := original
-			if hashType&uint32(sighash.ForkID) != 0 {
+			if forkID && !chronicle {
 				regular = sigHashHex(t, tx, test.InputIndex, scriptCode, hashType, true)
 			}
 
 			require.Equal(t, test.RegularHash, regular, "SignatureHash")
+
+			// go-bt picks BIP143 for every FORKID hash type (Tx.sigStrat), CHRONICLE or not.
+			if forkID && chronicle {
+				require.NotEqual(t, test.RegularHash, sigHashHex(t, tx, test.InputIndex, scriptCode, hashType, true),
+					"BIP143 now gives bitcoin-sv's hash for FORKID|CHRONICLE: recheck the known deviation in this test")
+			}
 
 			// SIGHASH_SINGLE with no matching output gives the constant one, which never
 			// hashes the script code, so there is no deviation to see.

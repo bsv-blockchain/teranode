@@ -8,7 +8,7 @@ import (
 )
 
 // txMapOpCounts is how many of each operation a countingTxMap served. inserted counts the
-// SetIfNotExists calls that inserted.
+// SetIfNotExists and SetIfNotExistsAt calls that inserted.
 type txMapOpCounts struct {
 	set, setIfNotExists, inserted, exists, get, delete int64
 }
@@ -37,6 +37,18 @@ func (m *countingTxMap) SetIfNotExists(hash chainhash.Hash, inpoints *subtreepkg
 	m.setIfNotExists.Add(1)
 
 	p, inserted := m.TxInpointsMap.SetIfNotExists(hash, inpoints)
+	if inserted {
+		m.inserted.Add(1)
+	}
+
+	return p, inserted
+}
+
+// SetIfNotExistsAt is a SetIfNotExists that keeps a lane position, and counts as one.
+func (m *countingTxMap) SetIfNotExistsAt(hash chainhash.Hash, inpoints *subtreepkg.TxInpoints, position uint64) (*subtreepkg.TxInpoints, bool) {
+	m.setIfNotExists.Add(1)
+
+	p, inserted := m.TxInpointsMap.SetIfNotExistsAt(hash, inpoints, position)
 	if inserted {
 		m.inserted.Add(1)
 	}

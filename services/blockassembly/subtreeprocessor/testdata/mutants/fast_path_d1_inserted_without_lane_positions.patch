@@ -1,0 +1,13 @@
+diff --git a/services/blockassembly/subtreeprocessor/reorg_fast_path.go b/services/blockassembly/subtreeprocessor/reorg_fast_path.go
+index 0f7288b90..96758e93a 100644
+--- a/services/blockassembly/subtreeprocessor/reorg_fast_path.go
++++ b/services/blockassembly/subtreeprocessor/reorg_fast_path.go
+@@ -475,7 +475,7 @@ func (stp *SubtreeProcessor) applyFastReorg(ctx context.Context, plan *fastReorg
+ 	for i := range plan.d1Nodes {
+ 		var d1Position uint64
+ 		if d1Positions != nil {
+-			d1Position = d1Positions[i]
++			d1Position = 0 // mutant: D1 goes into the map without the position the store holds
+ 		}
+ 
+ 		if _, inserted := stp.currentTxMap.SetIfNotExistsAt(plan.d1Nodes[i].Hash, &plan.d1Inpoints[i], d1Position); !inserted {

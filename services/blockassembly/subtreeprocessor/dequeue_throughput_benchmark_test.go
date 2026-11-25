@@ -10,6 +10,8 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
 	"github.com/bsv-blockchain/teranode/model"
+	"github.com/bsv-blockchain/teranode/settings"
+	"github.com/bsv-blockchain/teranode/util/lane"
 )
 
 // BenchmarkDequeueThroughput measures steady-state block assembly: batches
@@ -24,19 +26,30 @@ func BenchmarkDequeueThroughput(b *testing.B) {
 		itemsPerSubtree = 1 << 20
 	)
 
+	// The _lanes variants run at utxostore_laneMigration shadow and hand every tx a lane position
+	// with its batch, as the validator does, so the pool keeps it with the tx's inpoints and each
+	// subtree's lane bitmaps are built when it is sealed.
 	variants := []struct {
 		name  string
 		disks int
+		lanes bool
 	}{
 		{name: "memTxMap"},
 		{name: "diskTxMap_1dir", disks: 1},
 		{name: "diskTxMap_2dir", disks: 2},
+		{name: "memTxMap_lanes", lanes: true},
+		{name: "diskTxMap_1dir_lanes", disks: 1, lanes: true},
 	}
 
 	for _, total := range []int{8 << 20} {
 		for _, v := range variants {
 			b.Run(fmt.Sprintf("%s/%dM", v.name, total>>20), func(b *testing.B) {
 				nodes, inpoints := makeDequeueBenchBatches(total, batchSize)
+
+				var positions [][]uint64
+				if v.lanes {
+					positions = makeDequeueBenchPositions(nodes)
+				}
 
 				b.ReportAllocs()
 				b.ResetTimer()
@@ -55,6 +68,12 @@ func BenchmarkDequeueThroughput(b *testing.B) {
 						opts = append(opts, WithTxMapDirs(dirs))
 					}
 
+					if v.lanes {
+						opts = append(opts, func(stp *SubtreeProcessor) {
+							stp.settings.UtxoStore.LaneMigration = settings.LaneMigrationShadow
+						}, WithLaneBitmapsKeeper(newRecordingLaneKeeper()))
+					}
+
 					stp, cleanup := newAddNodesBenchProcessor(b, itemsPerSubtree, opts...)
 					stp.Start(context.Background())
 
@@ -64,6 +83,11 @@ func BenchmarkDequeueThroughput(b *testing.B) {
 					b.StartTimer()
 
 					for j := range nodes {
+						if positions != nil {
+							stp.queue.enqueuePositionedBatchBounded(nodes[j], inpoints[j], false, nil, positions[j])
+							continue
+						}
+
 						stp.AddBatch(nodes[j], inpoints[j])
 					}
 
@@ -184,4 +208,23 @@ func makeDequeueBenchBatches(total, batchSize int) ([][]subtreepkg.Node, [][]*su
 	}
 
 	return nodes, inpoints
+}
+
+// makeDequeueBenchPositions gives every tx of the batches a lane position, 17 lanes taking turns
+// in runs of 1,024, as 17 validators would.
+func makeDequeueBenchPositions(nodes [][]subtreepkg.Node) [][]uint64 {
+	positions := make([][]uint64, len(nodes))
+	next := make([]uint64, 17)
+
+	for b := range nodes {
+		positions[b] = make([]uint64, len(nodes[b]))
+		l := b % 17
+
+		for j := range nodes[b] {
+			next[l]++
+			positions[b][j] = lane.Pack(uint8(l), next[l]) //nolint:gosec // l < 17
+		}
+	}
+
+	return positions
 }

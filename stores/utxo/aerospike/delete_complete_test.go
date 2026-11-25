@@ -42,19 +42,19 @@ var deleteCompleteUnlockingScript = bscript.NewFromBytes([]byte{0x00, 0x48, 0x30
 const deleteCompleteAddress = "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa"
 
 // paginatedSpendAndCreateTx builds an extended transaction spending output vout
-// of tests.Tx and paying numOutputs addresses, so the record paginates on the
+// of parent and paying numOutputs addresses, so the record paginates on the
 // Aerospike backend. Local copy of the tests-package helper, which is unexported;
 // satoshis makes the txid unique per case, and the remaining outputs carry one
 // satoshi each.
-func paginatedSpendAndCreateTx(t *testing.T, vout uint32, satoshis uint64, numOutputs int) *bt.Tx {
+func paginatedSpendAndCreateTx(t *testing.T, parent *bt.Tx, vout uint32, satoshis uint64, numOutputs int) *bt.Tx {
 	t.Helper()
 
 	tx := bt.NewTx()
 	require.NoError(t, tx.FromUTXOs(&bt.UTXO{
-		TxIDHash:      tests.Tx.TxIDChainHash(),
+		TxIDHash:      parent.TxIDChainHash(),
 		Vout:          vout,
-		LockingScript: tests.Tx.Outputs[vout].LockingScript,
-		Satoshis:      tests.Tx.Outputs[vout].Satoshis,
+		LockingScript: parent.Outputs[vout].LockingScript,
+		Satoshis:      parent.Outputs[vout].Satoshis,
 	}))
 	tx.Inputs[0].UnlockingScript = deleteCompleteUnlockingScript
 
@@ -271,10 +271,12 @@ func (b *delFailingBlobStore) Del(context.Context, []byte, fileformat.FileType, 
 // children instead; that state is covered by
 // TestDeleteComplete_OrphanChildResidueIsUnreachableNotMineable below.
 func TestDeleteComplete_HalfCompletedCascadeLeavesNoMineableRecord(t *testing.T) {
+	t.Parallel()
+
 	logger := ulogger.NewErrorTestLogger(t)
 	tSettings := test.CreateBaseTestSettings(t)
 
-	client, store, ctx, deferFn := initAerospike(t, tSettings, logger)
+	client, store, ctx, deferFn := initAerospikeOwnServer(t, tSettings, logger)
 	t.Cleanup(deferFn)
 
 	utxoBatchSize := tSettings.UtxoStore.UtxoBatchSize
@@ -284,7 +286,7 @@ func TestDeleteComplete_HalfCompletedCascadeLeavesNoMineableRecord(t *testing.T)
 	_, _, err := store.SpendAndCreate(ctx, tests.Tx, 1000, utxo.WithCreateOnly())
 	require.NoError(t, err)
 
-	child := paginatedSpendAndCreateTx(t, 4, 6001, utxoBatchSize+72)
+	child := paginatedSpendAndCreateTx(t, tests.Tx, 4, 6001, utxoBatchSize+72)
 	hash := child.TxIDChainHash()
 
 	_ = store.DeleteComplete(ctx, hash)
@@ -326,6 +328,8 @@ func TestDeleteComplete_HalfCompletedCascadeLeavesNoMineableRecord(t *testing.T)
 // also the shape a cascade that died between steps used to leave behind, so it is
 // the state a retry has to converge on rather than error on.
 func TestDeleteComplete_AbsentChildrenAreSuccess(t *testing.T) {
+	t.Parallel()
+
 	logger := ulogger.NewErrorTestLogger(t)
 	tSettings := test.CreateBaseTestSettings(t)
 
@@ -335,7 +339,10 @@ func TestDeleteComplete_AbsentChildrenAreSuccess(t *testing.T) {
 	utxoBatchSize := tSettings.UtxoStore.UtxoBatchSize
 	require.Positive(t, utxoBatchSize)
 
-	_, _, err := store.SpendAndCreate(ctx, tests.Tx, 1000, utxo.WithCreateOnly())
+	// A copy of tests.Tx with a txid of its own: the server is shared with other tests.
+	root := uniqueTx(tests.Tx.Clone())
+
+	_, _, err := store.SpendAndCreate(ctx, root, 1000, utxo.WithCreateOnly())
 	require.NoError(t, err)
 
 	cases := []struct {
@@ -353,7 +360,7 @@ func TestDeleteComplete_AbsentChildrenAreSuccess(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			child := paginatedSpendAndCreateTx(t, tc.vout, tc.satoshis, tc.numOutputs)
+			child := paginatedSpendAndCreateTx(t, root, tc.vout, tc.satoshis, tc.numOutputs)
 			hash := child.TxIDChainHash()
 
 			_ = store.DeleteComplete(ctx, hash)
@@ -396,10 +403,12 @@ func TestDeleteComplete_AbsentChildrenAreSuccess(t *testing.T) {
 // a high-numbered output of a transaction that no longer exists would be
 // ACCEPTED. Assertion 3 is what makes that a fact rather than an argument.
 func TestDeleteComplete_OrphanChildResidueIsUnreachableNotMineable(t *testing.T) {
+	t.Parallel()
+
 	logger := ulogger.NewErrorTestLogger(t)
 	tSettings := test.CreateBaseTestSettings(t)
 
-	client, store, ctx, deferFn := initAerospike(t, tSettings, logger)
+	client, store, ctx, deferFn := initAerospikeOwnServer(t, tSettings, logger)
 	t.Cleanup(deferFn)
 
 	utxoBatchSize := tSettings.UtxoStore.UtxoBatchSize
@@ -410,7 +419,7 @@ func TestDeleteComplete_OrphanChildResidueIsUnreachableNotMineable(t *testing.T)
 	_, _, err := store.SpendAndCreate(ctx, tests.Tx, 1000, utxo.WithCreateOnly())
 	require.NoError(t, err)
 
-	child := paginatedSpendAndCreateTx(t, 4, 6001, utxoBatchSize+72)
+	child := paginatedSpendAndCreateTx(t, tests.Tx, 4, 6001, utxoBatchSize+72)
 	hash := child.TxIDChainHash()
 
 	_ = store.DeleteComplete(ctx, hash)

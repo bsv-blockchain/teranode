@@ -64,6 +64,11 @@ type Interface interface {
 	//   - Admission: Admitted, or the bound that refused the batch
 	AddBatchBounded(nodes []subtreepkg.Node, txInpoints []*subtreepkg.TxInpoints, inBlock bool, validatedHeights []uint32) Admission
 
+	// AddPositionedBatchBounded is AddBatchBounded for a batch that carries each transaction's own
+	// lane position (util/lane), positions[i] for nodes[i] and 0 for none, at
+	// utxostore_laneMigration shadow. A nil positions is AddBatchBounded.
+	AddPositionedBatchBounded(nodes []subtreepkg.Node, txInpoints []*subtreepkg.TxInpoints, inBlock bool, validatedHeights []uint32, positions []uint64) Admission
+
 	// HeldCount returns the transactions held in memory: queued, dequeued but not yet counted,
 	// and already in subtrees.
 	//
@@ -137,6 +142,11 @@ type Interface interface {
 	// back (e.g. reset's postProcess reload), where failing on a pending map
 	// error would incorrectly report an already-committed operation as failed.
 	AddDirectlyReportOnly(node *subtreepkg.Node, txInpoints *subtreepkg.TxInpoints, skipNotification bool) error
+
+	// AddDirectlyAt is AddDirectly, or with reportOnly AddDirectlyReportOnly, keeping the
+	// transaction's own lane position (util/lane) with its inpoints, at utxostore_laneMigration
+	// shadow. Position 0 keeps none.
+	AddDirectlyAt(node *subtreepkg.Node, txInpoints *subtreepkg.TxInpoints, position uint64, skipNotification, reportOnly bool) error
 
 	// AddNodesDirectly adds a batch of unmined transactions directly to the processor without going through the queue.
 	// It performs parallel filtering/insertion into currentTxMap and sequential insertion into subtrees.
@@ -587,4 +597,18 @@ type TxInpointsMap interface {
 
 	// Clear removes all entries from the map.
 	Clear()
+
+	// SetAt is Set keeping the transaction's own lane position (util/lane) with its inpoints, at
+	// utxostore_laneMigration shadow. Position 0 keeps none and is exactly Set.
+	SetAt(hash chainhash.Hash, inpoints *subtreepkg.TxInpoints, position uint64)
+
+	// SetIfNotExistsAt is SetIfNotExists keeping the transaction's own lane position with its
+	// inpoints. Position 0 keeps none and is exactly SetIfNotExists. A hash already in the map
+	// keeps the position it has.
+	SetIfNotExistsAt(hash chainhash.Hash, inpoints *subtreepkg.TxInpoints, position uint64) (*subtreepkg.TxInpoints, bool)
+
+	// Position returns the lane position kept with hash, or 0 when the map does not hold hash or
+	// keeps no position for it. The lane bitmaps of a subtree block assembly seals are built from
+	// these positions, and a transaction whose subtree is rebuilt keeps its position through them.
+	Position(hash chainhash.Hash) uint64
 }

@@ -29,6 +29,8 @@ import (
 // stayed green through a change that made this read fail. It asserts the store
 // boundary — the Get the validator issues — not the validator end to end.
 func TestExternalOutputsOnlyParentIsReadableForExtension(t *testing.T) {
+	t.Parallel()
+
 	logger := ulogger.NewErrorTestLogger(t)
 	tSettings := test.CreateBaseTestSettings(t)
 
