@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/services/asset/repository"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/settings"
@@ -16,6 +17,7 @@ import (
 	"github.com/labstack/echo/v4/middleware"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -316,6 +318,124 @@ func TestNew_HeavyRateLimiterUsesDistinctMetricLabelForCatchupRoutes(t *testing.
 
 	require.Equal(t, beforeHeavy+1, testutil.ToFloat64(prometheusAssetHTTPRateLimited.WithLabelValues("heavy")),
 		"the non-catchup heavy-route rejection must be counted under heavy")
+}
+
+// fireRequestsWithLegacyToken serves n GETs for path with legacyInternalTokenHeader
+// set to token (an empty token sends no header) and returns each response's status.
+func fireRequestsWithLegacyToken(srv *HTTP, path, token string, n int) []int {
+	codes := make([]int, 0, n)
+
+	for i := 0; i < n; i++ {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		if token != "" {
+			req.Header.Set(legacyInternalTokenHeader, token)
+		}
+		rec := httptest.NewRecorder()
+		srv.e.ServeHTTP(rec, req)
+		codes = append(codes, rec.Code)
+	}
+
+	return codes
+}
+
+// countStatus returns how many of codes equal status.
+func countStatus(codes []int, status int) int {
+	n := 0
+
+	for _, c := range codes {
+		if c == status {
+			n++
+		}
+	}
+
+	return n
+}
+
+// TestNew_LegacyPeerPoolTokenExemptsBlockLegacyFromHeavyLimiter — this node's own
+// legacy peer server fetches every block it serves to SV peers from
+// GET /block_legacy/:hash. It is not in this node's peer registry, so the heavy
+// limiter keys it by IP as an unverified client and its 429s stall the SV peers.
+// A request presenting asset_legacyPeerPoolToken must skip the heavy limiter on
+// that route, for the request shape it sends (?wire=1). A missing or wrong token,
+// an unset configured token, the token without ?wire=1 or on the
+// ?type=miningcandidate variant, and the token on any other heavy route must
+// still be limited.
+func TestNew_LegacyPeerPoolTokenExemptsBlockLegacyFromHeavyLimiter(t *testing.T) {
+	const token = "internal-token"
+
+	legacyPath := fmt.Sprintf("/api/v1/block_legacy/%s?wire=1", testHashHex)
+
+	newServer := func(t *testing.T, configuredToken string) *HTTP {
+		tSettings := baseTestSettings()
+		tSettings.Asset.HTTPHeavyRateLimit = 1
+		tSettings.Asset.LegacyPeerPoolToken = configuredToken
+
+		// The block is unknown, so a request that gets past the limiter is answered 404
+		// by the handler itself.
+		blockchainClient := &blockchain.Mock{}
+		blockchainClient.On("GetBlock", mock.Anything, mock.Anything).Return(nil, errors.ErrNotFound)
+
+		repo, err := repository.NewRepository(ulogger.TestLogger{}, tSettings, nil, nil, blockchainClient, nil, memory.New(), nil, nil, nil)
+		require.NoError(t, err)
+
+		srv, err := New(ulogger.TestLogger{}, tSettings, repo, nil)
+		require.NoError(t, err)
+
+		return srv
+	}
+
+	t.Run("the configured token skips the heavy limiter", func(t *testing.T) {
+		srv := newServer(t, token)
+
+		require.Equal(t, []int{404, 404, 404, 404, 404}, fireRequestsWithLegacyToken(srv, legacyPath, token, 5),
+			"every request from the legacy peer server presenting the token must reach the handler")
+	})
+
+	t.Run("no token is limited", func(t *testing.T) {
+		srv := newServer(t, token)
+
+		require.Equal(t, 1, countStatus(fireRequestsWithLegacyToken(srv, legacyPath, "", 2), http.StatusTooManyRequests))
+	})
+
+	t.Run("a wrong token is limited", func(t *testing.T) {
+		srv := newServer(t, token)
+
+		require.Equal(t, 1, countStatus(fireRequestsWithLegacyToken(srv, legacyPath, "wrong-token", 2), http.StatusTooManyRequests))
+	})
+
+	t.Run("an unset configured token exempts nobody", func(t *testing.T) {
+		srv := newServer(t, "")
+
+		require.Equal(t, 1, countStatus(fireRequestsWithLegacyToken(srv, legacyPath, "anything", 2), http.StatusTooManyRequests))
+	})
+
+	t.Run("the token without wire=1 is limited", func(t *testing.T) {
+		srv := newServer(t, token)
+		path := fmt.Sprintf("/api/v1/block_legacy/%s", testHashHex)
+
+		require.Equal(t, 1, countStatus(fireRequestsWithLegacyToken(srv, path, token, 2), http.StatusTooManyRequests))
+	})
+
+	t.Run("the token with wire=0 is limited", func(t *testing.T) {
+		srv := newServer(t, token)
+		path := fmt.Sprintf("/api/v1/block_legacy/%s?wire=0", testHashHex)
+
+		require.Equal(t, []int{http.StatusNotFound, http.StatusTooManyRequests}, fireRequestsWithLegacyToken(srv, path, token, 2))
+	})
+
+	t.Run("the token on the mining candidate variant is limited", func(t *testing.T) {
+		srv := newServer(t, token)
+		path := fmt.Sprintf("/api/v1/block_legacy/%s?wire=1&type=miningcandidate", testHashHex)
+
+		require.Equal(t, 1, countStatus(fireRequestsWithLegacyToken(srv, path, token, 2), http.StatusTooManyRequests))
+	})
+
+	t.Run("the token does not exempt other heavy routes", func(t *testing.T) {
+		srv := newServer(t, token)
+		path := fmt.Sprintf("/api/v1/block/%s/hex", testHashHex)
+
+		require.Equal(t, 1, countStatus(fireRequestsWithLegacyToken(srv, path, token, 2), http.StatusTooManyRequests))
+	})
 }
 
 // TestNew_TrustedProxyCIDRsReplaceEchoDefaults — echo.TrustIPRange is additive:

@@ -193,6 +193,37 @@ func (h *HTTP) GetRestLegacyBlock() func(c echo.Context) error {
 	}
 }
 
+// exemptLegacyPeerServer wraps the route middleware mw so that a request from this
+// node's own legacy peer server skips it: a ?wire=1 block request carrying
+// asset_legacyPeerPoolToken (usesLegacyPeerPool), the same gate that admits it to
+// the peer pool. Every other request runs through mw unchanged, so a missing or
+// wrong token is limited as before, an unset token exempts nobody, and a token on
+// the ?type=miningcandidate variant, which the legacy peer server never requests,
+// buys nothing.
+//
+// The token check runs here, before the limiter, because the handler's own check
+// comes too late: by then the limiter has already answered 429.
+func (h *HTTP) exemptLegacyPeerServer(mw []echo.MiddlewareFunc) []echo.MiddlewareFunc {
+	if len(mw) == 0 {
+		return nil
+	}
+
+	return []echo.MiddlewareFunc{func(next echo.HandlerFunc) echo.HandlerFunc {
+		limited := next
+		for i := len(mw) - 1; i >= 0; i-- {
+			limited = mw[i](limited)
+		}
+
+		return func(c echo.Context) error {
+			if c.QueryParam("wire") == "1" && c.QueryParam("type") != "miningcandidate" && h.usesLegacyPeerPool(c) {
+				return next(c)
+			}
+
+			return limited(c)
+		}
+	}}
+}
+
 // usesLegacyPeerPool reports whether c's request is trusted to draw from the
 // internal legacy-peer-server GetLegacyBlockReader pool, based on
 // asset_legacyPeerPoolToken: a shared secret, never on network origin (RemoteAddr,

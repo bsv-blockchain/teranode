@@ -393,6 +393,8 @@ func (s *Server) Init(ctx context.Context) error {
 	// on streamingBlockHandler for the full rationale.
 	legacypeer.RegisterStreamingBlockHandler()
 
+	warnIfLegacyPeerPoolTokenUnset(s.logger, s.settings)
+
 	// get the public IP and listen on it
 	ip, err := GetOutboundIP()
 	if err != nil {

@@ -521,20 +521,7 @@ func DoLocalServiceHTTPRequestBodyReader(ctx context.Context, url string, header
 		ctx, cancelFn = context.WithTimeout(ctx, time.Duration(httpStreamingTimeout)*time.Millisecond)
 	}
 
-	// Merge every map passed; a later map wins on a duplicate key.
-	var reqHeaders map[string]string
-
-	for _, h := range headers {
-		for k, v := range h {
-			if reqHeaders == nil {
-				reqHeaders = make(map[string]string, len(h))
-			}
-
-			reqHeaders[k] = v
-		}
-	}
-
-	bodyReaderCloser, cancelFn, err := executeHTTPRequestWithClient(ctx, cancelFn, localServiceHTTPClient, url, reqHeaders)
+	bodyReaderCloser, cancelFn, err := executeHTTPRequestWithClient(ctx, cancelFn, localServiceHTTPClient, url, mergeHeaders(headers))
 	if err != nil {
 		cancelFn()
 		return nil, err
@@ -544,6 +531,41 @@ func DoLocalServiceHTTPRequestBodyReader(ctx context.Context, url string, header
 		ReadCloser: bodyReaderCloser,
 		cancelFn:   cancelFn,
 	}, nil
+}
+
+// DoLocalServiceHTTPRequestBodyReaderWithRetry behaves like DoLocalServiceHTTPRequestBodyReader
+// but retries HTTP 429 and 503 exactly as DoHTTPRequestBodyReaderWithRetry does: same backoff,
+// same Retry-After handling, and the final error keeps the class of the last rejection. The
+// legacy peer server uses it to read blocks from this node's own asset service, whose rate
+// limiter may answer 429; returning that 429 would leave the SV peer's getdata unanswered.
+func DoLocalServiceHTTPRequestBodyReaderWithRetry(ctx context.Context, url string, headers ...map[string]string) (io.ReadCloser, error) {
+	return doLocalServiceHTTPRequestBodyReaderWithRetry(ctx, url, defaultRetryConfig, headers...)
+}
+
+func doLocalServiceHTTPRequestBodyReaderWithRetry(ctx context.Context, url string, cfg retryConfig, headers ...map[string]string) (io.ReadCloser, error) {
+	reqHeaders := mergeHeaders(headers)
+
+	return retryRejections(ctx, url, cfg, func(ctx context.Context) (io.ReadCloser, time.Duration, int, error) {
+		return doRequestWithRetryAfter(ctx, httpStreamingTimeout, localServiceHTTPClient, url, reqHeaders)
+	})
+}
+
+// mergeHeaders merges every map passed into one; a later map wins on a duplicate key. It
+// returns nil when there is no header at all.
+func mergeHeaders(headers []map[string]string) map[string]string {
+	var merged map[string]string
+
+	for _, h := range headers {
+		for k, v := range h {
+			if merged == nil {
+				merged = make(map[string]string, len(h))
+			}
+
+			merged[k] = v
+		}
+	}
+
+	return merged
 }
 
 // HTTPClient returns the shared HTTP client for use with httpmock.ActivateNonDefault() in tests.
@@ -1182,9 +1204,23 @@ func doHTTPRequestBoundedWithRetry(ctx context.Context, url string, maxBytes int
 	return readBodyBounded(ctx, url, body, maxBytes)
 }
 
-// doHTTPRequestWithRetry is the retry loop behind both retrying helpers. timeoutMs is the
-// per-attempt timeout applied when ctx carries no deadline.
+// doHTTPRequestWithRetry runs the retry loop for the two peer-fetch retrying helpers. timeoutMs
+// is the per-attempt timeout applied when ctx carries no deadline.
 func doHTTPRequestWithRetry(ctx context.Context, url string, cfg retryConfig, timeoutMs int, requestBody ...[]byte) (io.ReadCloser, error) {
+	return retryRejections(ctx, url, cfg, func(ctx context.Context) (io.ReadCloser, time.Duration, int, error) {
+		return doHTTPRequestWithRetryAfter(ctx, timeoutMs, url, requestBody...)
+	})
+}
+
+// retryAttempt performs one request of the retry loop and returns what
+// doHTTPRequestWithRetryAfter returns: the body, the Retry-After hint, the response status (0
+// when no response was received) and the error.
+type retryAttempt func(ctx context.Context) (io.ReadCloser, time.Duration, int, error)
+
+// retryRejections is the retry loop behind every retrying helper: it runs attempt until it
+// succeeds, fails with something other than a 429 or 503, or the ladder in cfg runs out. url is
+// only used to describe the final error.
+func retryRejections(ctx context.Context, url string, cfg retryConfig, attempt retryAttempt) (io.ReadCloser, error) {
 	delay := cfg.initialDelay
 	var lastErr error
 	lastAttemptSecond := int64(-1)
@@ -1201,14 +1237,14 @@ func doHTTPRequestWithRetry(ctx context.Context, url string, cfg retryConfig, ti
 	// error reports; an attempt cut short by the deadline is not one of them.
 	rejections := 0
 
-	for attempt := 1; attempt <= cfg.maxAttempts; attempt++ {
-		if attempt > 1 && signerSignsRequests(loadHTTPRequestSigner()) {
+	for n := 1; n <= cfg.maxAttempts; n++ {
+		if n > 1 && signerSignsRequests(loadHTTPRequestSigner()) {
 			if err := waitOutRetrySecond(ctx, lastAttemptSecond); err != nil {
 				return nil, rejectionOrContextError(ctx, url, rejections, lastErr, 0, err)
 			}
 		}
 
-		body, retryAfter, status, err := doHTTPRequestWithRetryAfter(ctx, timeoutMs, url, requestBody...)
+		body, retryAfter, status, err := attempt(ctx)
 		// Read the clock after the attempt, not before it: the signer takes its
 		// timestamp while building the request, so a second that rolls over
 		// between a pre-attempt read and the signature would record S while the
@@ -1224,7 +1260,7 @@ func doHTTPRequestWithRetry(ctx context.Context, url string, cfg retryConfig, ti
 		lastErr = err
 		rejections++
 
-		if attempt == cfg.maxAttempts {
+		if n == cfg.maxAttempts {
 			break
 		}
 
@@ -1290,23 +1326,29 @@ func rejectionOrContextError(ctx context.Context, url string, rejections int, la
 // response status, or 0 when no response was received. On success returns
 // (body, 0, status, nil).
 func doHTTPRequestWithRetryAfter(ctx context.Context, timeoutMs int, rawURL string, requestBody ...[]byte) (io.ReadCloser, time.Duration, int, error) {
+	if err := ValidateURL(rawURL); err != nil {
+		return nil, 0, 0, err
+	}
+
+	return doRequestWithRetryAfter(ctx, timeoutMs, httpClient, rawURL, nil, requestBody...)
+}
+
+// doRequestWithRetryAfter is doHTTPRequestWithRetryAfter on the given client, with headers set
+// on the request as-is, and without the URL check, which is the caller's job. Never pass it a
+// peer-supplied URL with localServiceHTTPClient: that client has no SSRF dial guard.
+func doRequestWithRetryAfter(ctx context.Context, timeoutMs int, client *http.Client, rawURL string, headers map[string]string, requestBody ...[]byte) (io.ReadCloser, time.Duration, int, error) {
 	cancelFn := func() {}
 	if _, ok := ctx.Deadline(); !ok {
 		ctx, cancelFn = context.WithTimeout(ctx, time.Duration(timeoutMs)*time.Millisecond)
 	}
 
-	if err := ValidateURL(rawURL); err != nil {
-		cancelFn()
-		return nil, 0, 0, err
-	}
-
-	req, err := buildOutboundRequest(ctx, rawURL, nil, requestBody...)
+	req, err := buildOutboundRequest(ctx, rawURL, headers, requestBody...)
 	if err != nil {
 		cancelFn()
 		return nil, 0, 0, err
 	}
 
-	resp, err := httpClient.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		cancelFn()
 		return nil, 0, 0, errors.NewServiceError("failed to do http request", err)

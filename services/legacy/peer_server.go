@@ -1833,6 +1833,17 @@ func legacyPeerPoolHeaders(tSettings *settings.Settings) map[string]string {
 	return map[string]string{legacyInternalTokenHeader: token}
 }
 
+// warnIfLegacyPeerPoolTokenUnset warns that pushBlockMsg's fetches from Asset are charged to
+// Asset's per-IP heavy rate limit, which only asset_legacyPeerPoolToken exempts them from. It is
+// silent when the token is set or the heavy limit is off.
+func warnIfLegacyPeerPoolTokenUnset(logger ulogger.Logger, tSettings *settings.Settings) {
+	if tSettings.Asset.LegacyPeerPoolToken != "" || tSettings.Asset.HTTPHeavyRateLimit <= 0 {
+		return
+	}
+
+	logger.Warnf("[Legacy Server] asset_legacyPeerPoolToken is not set, so blocks served to legacy peers are fetched from the asset service under its per-IP heavy rate limit (asset_httpHeavyRateLimit=%d req/s); set the token to the same value on the legacy and asset services to exempt them, and consider a finite asset_concurrency_get_legacy_block_reader_peer", tSettings.Asset.HTTPHeavyRateLimit)
+}
+
 // pushBlockMsg sends a block message for the provided block hash to the
 // connected peer.  An error is returned if the block hash is not known.
 func (s *server) pushBlockMsg(sp *serverPeer, hash *chainhash.Hash, doneChan chan<- struct{},
@@ -1845,7 +1856,11 @@ func (s *server) pushBlockMsg(sp *serverPeer, hash *chainhash.Hash, doneChan cha
 	url := fmt.Sprintf("%s/block_legacy/%s?wire=1", s.assetHTTPAddress, hash.String())
 	// asset_httpAddress is this node's own asset service, from settings, and is routinely
 	// localhost or a private container address. The peer-URL client refuses both.
-	reader, err := util.DoLocalServiceHTTPRequestBodyReader(s.ctx, url, legacyPeerPoolHeaders(s.settings))
+	//
+	// The asset service's heavy rate limiter can answer 429 here: without
+	// asset_legacyPeerPoolToken this request is limited like any anonymous client. Retry it,
+	// honouring Retry-After, since a failed fetch leaves the SV peer's getdata unanswered.
+	reader, err := util.DoLocalServiceHTTPRequestBodyReaderWithRetry(s.ctx, url, legacyPeerPoolHeaders(s.settings))
 	if err != nil {
 		sp.server.logger.Errorf("Unable to fetch requested block %v: %v", hash, err)
 
