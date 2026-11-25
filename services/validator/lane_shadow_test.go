@@ -207,7 +207,7 @@ func TestCoinbaseParentCountsAsItsOwnKind(t *testing.T) {
 	base := parentOutputsStore(t)
 
 	s0 := bscript.NewFromBytes([]byte{0x76, 0xa9, 0x00})
-	coinbase := storedParent(t, base, 1, 1, s0)
+	coinbase := storedParent(t, base, 1, 1, s0, s0)
 	ordinary := storedParent(t, base, 2, 1, s0)
 	held := storedParent(t, base, 3, 1, s0)
 
@@ -229,7 +229,9 @@ func TestCoinbaseParentCountsAsItsOwnKind(t *testing.T) {
 	}
 
 	blockID := startLaneReader(t, 1)
-	tx := parentOutputsChild(t, []chainhash.Hash{*coinbase.TxIDChainHash(), *ordinary.TxIDChainHash(), *held.TxIDChainHash()}, []uint32{0, 0, 0})
+	// The coinbase is spent twice, and counted once.
+	tx := parentOutputsChild(t, []chainhash.Hash{*coinbase.TxIDChainHash(), *coinbase.TxIDChainHash(), *ordinary.TxIDChainHash(), *held.TxIDChainHash()},
+		[]uint32{0, 1, 0, 0})
 
 	for _, tc := range []struct {
 		reader     string
