@@ -15,10 +15,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// The restart window on Aerospike is every record last updated at or after its start, found by
-// walking the primary index with the last-update time as a filter. A record written before the
-// start is not returned; an old parent a spend inside the window updated is, and so is a page
-// record written inside it, as not the transaction's own.
+// The window is every record last updated since its start: an older record is not read, an old
+// parent a spend touched is, and a page record counts as not the transaction's own.
 func TestReadLaneWindowFiltersOnLastUpdate(t *testing.T) {
 	ctx := context.Background()
 	tSettings := test.CreateBaseTestSettings(t)

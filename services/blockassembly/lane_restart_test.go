@@ -369,16 +369,19 @@ func TestLaneRestartDryRunOutcomes(t *testing.T) {
 	}
 
 	for _, tc := range []struct {
-		name    string
-		window  *fakeLaneWindow
-		grants  func(context.Context, uint32) ([]lane.CapGrant, error)
-		view    func(context.Context, uint32, map[uint32]bool) *lane.ChainView
-		pool    []*utxo.UnminedTransaction
-		rate    int // today's expected pool size, which sets the sample rate; 0 for the pool's size
-		cancel  bool
-		outcome string
-		records map[string]uint64
-		sample  map[string]uint64
+		name   string
+		window *fakeLaneWindow
+		grants func(context.Context, uint32) ([]lane.CapGrant, error)
+		view   func(context.Context, uint32, map[uint32]bool) *lane.ChainView
+		pool   []*utxo.UnminedTransaction
+		rate   int // today's expected pool size, which sets the sample rate; 0 for the pool's size
+		cancel bool
+		// sampleMax lowers laneRestartLaneSampleMax when set, and overflow is the count expected past it.
+		sampleMax int
+		overflow  uint64
+		outcome   string
+		records   map[string]uint64
+		sample    map[string]uint64
 	}{
 		{
 			// No position is inside the cap: the window is not read, and today's positioned pool
@@ -393,19 +396,43 @@ func TestLaneRestartDryRunOutcomes(t *testing.T) {
 			sample:  map[string]uint64{laneSampleTodayCapped: 1, laneSampleTodayNoPosition: 1},
 		},
 		{
-			// A positioned record is not judged without a view of the target's chain.
-			name: "no view",
+			// Without a view of the target's chain nothing could be judged, so nothing is read.
+			name:    "no view",
+			window:  &fakeLaneWindow{records: []utxo.LaneWindowRecord{{Hash: laneTestHash(1), LanePosition: lane.Pack(1, 30), CreatedAt: 1}}},
+			grants:  grants,
+			view:    noView,
+			outcome: laneRunNotReady,
+			records: map[string]uint64{},
+			sample:  map[string]uint64{},
+		},
+		{
+			name: "records the store marks",
 			window: &fakeLaneWindow{records: []utxo.LaneWindowRecord{
-				{Hash: laneTestHash(1), LanePosition: lane.Pack(1, 30), CreatedAt: 1},
 				{Hash: laneTestHash(2), CreatedAt: 1},
 				{Hash: laneTestHash(3), NotMaster: true},
 				{Hash: laneTestHash(4), Missing: true},
 			}},
 			grants:  grants,
-			view:    noView,
+			view:    view,
 			outcome: laneRunDone,
-			records: map[string]uint64{laneRecNotReady: 1, laneRecNoPosition: 1, laneRecNotMaster: 1, laneRecMissing: 1},
+			records: map[string]uint64{laneRecNoPosition: 1, laneRecNotMaster: 1, laneRecMissing: 1},
 			sample:  map[string]uint64{},
+		},
+		{
+			// Past the sample's limit a transaction only the window keeps is counted, not held.
+			name: "the lanes-only sample is full",
+			window: &fakeLaneWindow{records: []utxo.LaneWindowRecord{
+				{Hash: laneTestHash(2), LanePosition: lane.Pack(1, 30), CreatedAt: 1},
+				{Hash: laneTestHash(4), LanePosition: lane.Pack(1, 31), CreatedAt: 1},
+				{Hash: laneTestHash(6), LanePosition: lane.Pack(1, 32), CreatedAt: 1},
+			}},
+			grants:    grants,
+			view:      view,
+			sampleMax: 1,
+			outcome:   laneRunDone,
+			records:   map[string]uint64{laneRecKeep: 3},
+			sample:    map[string]uint64{laneSampleLanesOnly: 3},
+			overflow:  2,
 		},
 		{
 			name:    "a store that cannot read the window",
@@ -417,7 +444,7 @@ func TestLaneRestartDryRunOutcomes(t *testing.T) {
 			name:    "cancelled during the read, as the next reload cancels it",
 			window:  &fakeLaneWindow{block: true},
 			grants:  grants,
-			view:    noView,
+			view:    view,
 			cancel:  true,
 			outcome: laneRunCancelled,
 			records: map[string]uint64{},
@@ -448,6 +475,12 @@ func TestLaneRestartDryRunOutcomes(t *testing.T) {
 				time.AfterFunc(50*time.Millisecond, cancel)
 			}
 
+			if tc.sampleMax > 0 {
+				defer func(n int) { laneRestartLaneSampleMax = n }(laneRestartLaneSampleMax)
+
+				laneRestartLaneSampleMax = tc.sampleMax
+			}
+
 			today := &laneRestartToday{target: laneTestHash(1010), targetHeight: 1010, ids: laneTestIDs(900, 1010), started: time.Now()}
 			today.noteRead(uint64(len(tc.pool)))
 			today.expect(max(tc.rate, len(tc.pool)))
@@ -463,8 +496,9 @@ func TestLaneRestartDryRunOutcomes(t *testing.T) {
 			require.Equal(t, tc.outcome, res.outcome)
 			require.Equal(t, tc.records, res.records)
 			require.Equal(t, tc.sample, res.sample)
+			require.Equal(t, tc.overflow, res.laneSampleOverflow)
 
-			if tc.outcome == laneRunNoGrant {
+			if tc.outcome == laneRunNoGrant || tc.outcome == laneRunNotReady {
 				require.False(t, tc.window.called, "no window is read")
 			}
 		})
@@ -486,15 +520,10 @@ func (laneRestartViewSource) LaneMapRows(context.Context, uint32) ([]lane.MapRow
 	return nil, nil
 }
 
-// The production view waits for the process's lane index to reach the target's height and gives
-// up at the deadline, so a run never judges against an index behind its target.
-func TestLaneRestartReaderViewWaitsForTheTarget(t *testing.T) {
-	defer func(d time.Duration) { laneRestartViewWait = d }(laneRestartViewWait)
-
-	laneRestartViewWait = 1500 * time.Millisecond
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+// startLaneTestReader starts the process's lane index on a chain of genesis alone, and stops it
+// when the test ends.
+func startLaneTestReader(t *testing.T, ctx context.Context) {
+	t.Helper()
 
 	ts := test.CreateBaseTestSettings(t)
 	ts.UtxoStore.LaneMigration = settings.LaneMigrationShadow
@@ -511,7 +540,22 @@ func TestLaneRestartReaderViewWaitsForTheTarget(t *testing.T) {
 
 	require.NotNil(t, lanereader.Start(ctx, ulogger.TestLogger{}, ts, laneRestartViewSource{header: header}))
 
-	defer lanereader.Start(ctx, ulogger.TestLogger{}, test.CreateBaseTestSettings(t), nil)
+	t.Cleanup(func() {
+		lanereader.Start(context.Background(), ulogger.TestLogger{}, test.CreateBaseTestSettings(t), nil)
+	})
+}
+
+// The production view waits for the process's lane index to reach the target's height and gives
+// up at the deadline, so a run never judges against an index behind its target.
+func TestLaneRestartReaderViewWaitsForTheTarget(t *testing.T) {
+	defer func(d time.Duration) { laneRestartViewWait = d }(laneRestartViewWait)
+
+	laneRestartViewWait = 1500 * time.Millisecond
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	startLaneTestReader(t, ctx)
 
 	start := time.Now()
 	require.Nil(t, laneRestartReaderView(ctx, 1, map[uint32]bool{0: true}), "the index's tip, height 0, is below the target")
@@ -570,7 +614,12 @@ func (s *blockingWindowStore) ReadLaneWindow(ctx context.Context, _ utxo.LaneWin
 func TestLaneRestartRunIsCancelledByTheNextReloadAndByStop(t *testing.T) {
 	defer func(d time.Duration) { laneRestartViewWait = d }(laneRestartViewWait)
 
-	laneRestartViewWait = 10 * time.Millisecond
+	laneRestartViewWait = 5 * time.Second
+
+	readerCtx, stopReader := context.WithCancel(context.Background())
+	defer stopReader()
+
+	startLaneTestReader(t, readerCtx)
 
 	setup, _, cleanup := setupDiskSortTest(t)
 	defer cleanup()
@@ -658,6 +707,76 @@ func TestLaneRestartRunIsCancelledByTheNextReloadAndByStop(t *testing.T) {
 	}
 
 	require.Equal(t, laneRunCancelled, runEnds().outcome)
+
+	// A reload that was still going when Stop came starts no run after it.
+	b.startLaneRestartDryRun(context.Background(), next)
+
+	select {
+	case <-store.started:
+		t.Fatal("a run started after Stop")
+	case <-time.After(200 * time.Millisecond):
+	}
+}
+
+// A cap block counts as covered when the index holds its rows, or has folded them into a floor
+// the judged chain holds.
+func TestLaneCapCoverage(t *testing.T) {
+	idx := laneTestIndex(t)
+	s := idx.Snapshot()
+
+	// Blocks 900 to 905 are folded at tip 1010; 905 took positions. On the main chain the floor
+	// holds, so 905 is covered.
+	blocks, without := laneCapCoverage(s.ViewOfIDs(laneTestIDs(900, 1010)), laneTestIDs(900, 1010), 900, 905)
+	require.Equal(t, uint64(6), blocks)
+	require.Equal(t, uint64(5), without)
+
+	// On a chain that ends below the floor's anchor the floor does not hold, so its folded rows
+	// cover nothing.
+	blocks, without = laneCapCoverage(s.ViewOfIDs(laneTestIDs(900, 905)), laneTestIDs(900, 905), 900, 905)
+	require.Equal(t, uint64(6), blocks)
+	require.Equal(t, uint64(6), without)
+
+	// Unfolded blocks with rows are covered either way.
+	_, without = laneCapCoverage(s.ViewOfIDs(laneTestIDs(900, 1005)), laneTestIDs(900, 1005), 1003, 1004)
+	require.Zero(t, without)
+}
+
+// failingUnlockStore fails SetLocked, the last step of a reload that holds locked transactions.
+type failingUnlockStore struct {
+	utxo.Store
+}
+
+func (failingUnlockStore) SetLocked(context.Context, []chainhash.Hash, bool) error {
+	return context.DeadlineExceeded
+}
+
+// A reload that fails after it gathered its pool starts no run.
+func TestLaneRestartDryRunDoesNotStartAfterAFailedReload(t *testing.T) {
+	for _, diskSort := range []bool{false, true} {
+		t.Run(map[bool]string{false: "in memory", true: "disk sort"}[diskSort], func(t *testing.T) {
+			ba, utxoStore, cleanup := setupDiskSortTest(t)
+			defer cleanup()
+
+			ctx := context.Background()
+
+			for _, tx := range generateTestTransactionsForDiskSort(t, 3) {
+				_, _, err := utxoStore.SpendAndCreate(ctx, tx, 1, utxo.WithCreateOnly(), utxo.WithLocked(true))
+				require.NoError(t, err)
+			}
+
+			ba.utxoStore = failingUnlockStore{Store: utxoStore}
+			ba.settings.BlockAssembly.UnminedTxDiskSortEnabled = diskSort
+			ba.settings.BlockAssembly.OnRestartValidateParentChain = false
+			ba.settings.UtxoStore.LaneMigration = settings.LaneMigrationShadow
+
+			require.Error(t, ba.loadUnminedTransactions(ctx, false))
+
+			ba.laneRestart.mu.Lock()
+			defer ba.laneRestart.mu.Unlock()
+
+			require.Nil(t, ba.laneRestart.cancel, "no run started")
+		})
+	}
 }
 
 // requireLaneRestartPublished publishes res and checks the last-run gauges, and that the records and

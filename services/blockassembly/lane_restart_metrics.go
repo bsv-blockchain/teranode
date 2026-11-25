@@ -42,7 +42,7 @@ func initLaneRestartMetrics() {
 			Namespace: "teranode",
 			Subsystem: "blockassembly",
 			Name:      "lane_restart_runs_total",
-			Help:      "Lanes restart dry runs by outcome: done, unsupported, no_qualifying_grant, error, cancelled",
+			Help:      "Lanes restart dry runs by outcome: done, unsupported, no_qualifying_grant, not_ready, error, cancelled",
 		}, []string{"outcome"})
 
 		prometheusLaneRestartRecords = promauto.NewCounterVec(prometheus.CounterOpts{

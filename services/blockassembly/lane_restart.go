@@ -37,26 +37,31 @@ const (
 	laneRestartMarginBlocks = 1
 
 	// laneRestartSampleTarget is about how many of today's kept transactions the hash comparison
-	// samples, and laneRestartLaneSampleMax how many transactions only the window would keep it
-	// holds before it stops adding them.
-	laneRestartSampleTarget  = 50_000
-	laneRestartLaneSampleMax = 4 * laneRestartSampleTarget
+	// samples.
+	laneRestartSampleTarget = 50_000
 
 	// laneRestartLogged is how many disagreements of each kind one run logs.
 	laneRestartLogged = 5
 )
 
+// laneRestartLaneSampleMax is how many transactions only the window would keep the sample holds
+// before it only counts them. A variable so a test can lower it.
+var laneRestartLaneSampleMax = 4 * laneRestartSampleTarget
+
 // laneRestartViewWait is how long a run waits for the lane index to reach the target before it
-// judges nothing. A variable so a test can shorten it.
-var laneRestartViewWait = 2 * time.Minute
+// gives up without reading. The index loads two days of rows when its process starts, which is
+// also when the first reload runs. A variable so a test can shorten it.
+var laneRestartViewWait = 10 * time.Minute
 
 // Run outcomes.
 const (
 	laneRunDone        = "done"
 	laneRunUnsupported = "unsupported"
 	laneRunNoGrant     = "no_qualifying_grant"
-	laneRunError       = "error"
-	laneRunCancelled   = "cancelled"
+	// laneRunNotReady: the lane index did not reach the target in time, so nothing was read.
+	laneRunNotReady  = "not_ready"
+	laneRunError     = "error"
+	laneRunCancelled = "cancelled"
 )
 
 // Record outcomes: how the dry run judged one record it read.
@@ -73,8 +78,6 @@ const (
 	laneRecConflicting = "conflicting"
 	// laneRecNoPosition: the record has no lane position.
 	laneRecNoPosition = "no_position"
-	// laneRecNotReady: the lane index had no view of the target's chain to judge with.
-	laneRecNotReady = "not_ready"
 	// laneRecAfterReload: created after today's reload began, so not comparable with it.
 	laneRecAfterReload = "after_reload"
 	// laneRecMissing: utxoset's tx_body row with no identity row (LaneWindowRecord.Missing).
@@ -84,7 +87,7 @@ const (
 )
 
 var laneRecOutcomes = []string{laneRecKeep, laneRecMinedRow, laneRecMinedFloor, laneRecCapped, laneRecConflicting,
-	laneRecNoPosition, laneRecNotReady, laneRecAfterReload, laneRecMissing, laneRecNotMaster}
+	laneRecNoPosition, laneRecAfterReload, laneRecMissing, laneRecNotMaster}
 
 // Sample kinds: how a sampled transaction compares between today's pool and the window's.
 const (
@@ -103,7 +106,7 @@ const (
 	// laneSampleTodayNoPosition: in today's pool with no lane position.
 	laneSampleTodayNoPosition = "today_only_no_position"
 	// laneSampleTodayOther: in today's pool and read by the window as one of the other outcomes
-	// (conflicting, not_ready, after_reload, missing).
+	// (conflicting, after_reload, missing).
 	laneSampleTodayOther = "today_only_other"
 )
 
@@ -241,6 +244,8 @@ type laneRestartRunner struct {
 	done   chan struct{}
 	// last is the result of the last run that ended, for tests.
 	last *laneRestartResult
+	// stopped is set by Stop: no run starts after it, even from a reload that was still going.
+	stopped bool
 }
 
 // startLaneRestartDryRun starts the dry run for a reload that succeeded, in the background,
@@ -256,6 +261,13 @@ func (b *BlockAssembler) startLaneRestartDryRun(ctx context.Context, t *laneRest
 	done := make(chan struct{})
 
 	b.laneRestart.mu.Lock()
+	if b.laneRestart.stopped {
+		b.laneRestart.mu.Unlock()
+		cancel()
+
+		return
+	}
+
 	if b.laneRestart.cancel != nil {
 		b.laneRestart.cancel()
 	}
@@ -303,9 +315,10 @@ func (b *BlockAssembler) laneRestartDeps() laneRestartDeps {
 	return deps
 }
 
-// stopLaneRestartDryRun cancels a run still going and waits for it to end.
+// stopLaneRestartDryRun cancels a run still going and waits for it to end. No run starts after it.
 func (b *BlockAssembler) stopLaneRestartDryRun() {
 	b.laneRestart.mu.Lock()
+	b.laneRestart.stopped = true
 	cancel, done := b.laneRestart.cancel, b.laneRestart.done
 	b.laneRestart.mu.Unlock()
 
@@ -408,9 +421,17 @@ func runLaneRestartDryRun(ctx context.Context, deps laneRestartDeps, t *laneRest
 	}
 
 	j.view = deps.view(ctx, t.targetHeight, t.ids)
-	if j.view != nil {
-		res.capBlocks, res.capBlocksWithoutRows = laneCapCoverage(j.view, t.ids, capHeight, t.targetHeight)
+	if j.view == nil {
+		// Without a view every positioned record would read not_ready: the read would measure
+		// its cost but judge nothing, so it is not made.
+		res.outcome = runOutcome(ctx, laneRunNotReady)
+		deps.logger.Warnf("[laneRestart] the lane index did not reach target %s at %d within %s: the window is not read",
+			t.target.String(), t.targetHeight, laneRestartViewWait)
+
+		return res
 	}
+
+	res.capBlocks, res.capBlocksWithoutRows = laneCapCoverage(j.view, t.ids, capHeight, t.targetHeight)
 
 	res.stats, err = deps.window.ReadLaneWindow(ctx, res.window, func(batch []utxo.LaneWindowRecord) error {
 		for i := range batch {
@@ -524,8 +545,6 @@ func (j *laneJudge) outcome(rec *utxo.LaneWindowRecord) string {
 		return laneRecNoPosition
 	case rec.Conflicting:
 		return laneRecConflicting
-	case j.view == nil:
-		return laneRecNotReady
 	}
 
 	a := j.view.Lookup(rec.LanePosition)
