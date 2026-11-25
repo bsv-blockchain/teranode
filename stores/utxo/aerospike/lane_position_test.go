@@ -416,7 +416,7 @@ func TestParentLanePositionsOnAerospike(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings(t)
 	tSettings.UtxoStore.LaneMigration = settings.LaneMigrationShadow
 
-	client, store, _, deferFn := initAerospike(t, tSettings, logger)
+	client, store, _, deferFn, aeroURL := initAerospikeWithURL(t, tSettings, logger, nil)
 	t.Cleanup(deferFn)
 
 	require.True(t, store.LaneSlotPositionsRecorded(), "the server, running this build's Lua, passes the slot probe")
@@ -455,6 +455,38 @@ func TestParentLanePositionsOnAerospike(t *testing.T) {
 		require.NoError(t, items[0].Err)
 		require.Equal(t, tx.IsCoinbase(), items[0].Data.IsCoinbase, "prefetch read")
 	}
+
+	// The parent read takes a record without the coinbase bin as not a coinbase.
+	bare := laneCoinbase(t)
+	_, err = store.Create(ctx, bare, 100, utxo.WithLanePosition(lane.Pack(7, 98)))
+	require.NoError(t, err)
+
+	bareKey, err := aerospike.NewKey(store.GetNamespace(), store.GetName(), uaerospike.CalculateKeySourceInternal(bare.TxIDChainHash(), 0))
+	require.NoError(t, err)
+	require.NoError(t, client.PutBins(nil, bareKey, aerospike.NewBin(fields.IsCoinbase.String(), nil)))
+
+	_, hasBin := recordBin(t, client, store, bare, 0, fields.IsCoinbase)
+	require.False(t, hasBin)
+
+	answers, err = store.ParentOutputsForValidation(ctx, []utxo.Outpoint{{TxID: *bare.TxIDChainHash(), Vout: 0}})
+	require.NoError(t, err)
+	require.NoError(t, answers[0].Err)
+	require.False(t, answers[0].IsCoinbase)
+
+	// With lane positions off the parent read gives neither the position nor the coinbase flag.
+	off := *tSettings
+	off.UtxoStore.LaneMigration = settings.LaneMigrationOff
+
+	offStore, err := teranodeaerospike.New(ctx, logger, &off, aeroURL)
+	require.NoError(t, err)
+	offStore.LeaveSharedClientOpenOnClose()
+	t.Cleanup(offStore.StopConflictingIndexSelfTest)
+
+	answers, err = offStore.ParentOutputsForValidation(ctx, []utxo.Outpoint{{TxID: *coinbase.TxIDChainHash(), Vout: 0}})
+	require.NoError(t, err)
+	require.NoError(t, answers[0].Err)
+	require.Zero(t, answers[0].LanePosition)
+	require.False(t, answers[0].IsCoinbase)
 
 	child := laneChild(t, parent, 0)
 	md, err := store.Create(ctx, child, 101, utxo.WithLanePosition(childPosition), utxo.WithParentLanePositions([]uint64{parentPosition}))
