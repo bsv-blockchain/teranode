@@ -426,6 +426,11 @@ func (s *Store) dropSpendJournalPartitionsBelow(ctx context.Context, height uint
 	// spend made after the read is journaled at its own height, above every retiring leaf.
 	var carry *copyForwardSet
 
+	// At utxostore_laneMigration shadow the lane rule judges every row of each retiring leaf beside
+	// today's carry (lane_prune.go); nil at off.
+	var lanes *laneJournalJudge
+	defer func() { lanes.done() }()
+
 	for _, l := range leaves {
 		if l.leaf >= cutoff {
 			continue
@@ -443,7 +448,11 @@ func (s *Store) dropSpendJournalPartitionsBelow(ctx context.Context, height uint
 				}
 
 				carry = c
+				lanes = s.newLaneJournalJudge(carry)
 			}
+
+			// Before the copy-forward moves the kept rows out of the leaf.
+			lanes.judgeLeaf(ctx, l.leaf)
 
 			if _, err := s.copyForwardFrom(ctx, l.leaf, keepFrom, carry); err != nil {
 				return dropped, err

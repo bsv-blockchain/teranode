@@ -26,6 +26,7 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo/txparse"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
+	"github.com/bsv-blockchain/teranode/util/lanereader"
 	"github.com/bsv-blockchain/teranode/util/uaerospike"
 	"github.com/ordishs/gocore"
 	"github.com/prometheus/client_golang/prometheus"
@@ -136,8 +137,11 @@ type Service struct {
 	notifier    *PrunerEventNotifier
 
 	// Configuration values extracted from settings for performance
-	utxoBatchSize                  int
-	blockHeightRetention           uint32
+	utxoBatchSize        int
+	blockHeightRetention uint32
+	// laneRetention is global_blockHeightRetention, which the lane rule's depth min(100, retention)
+	// takes at utxostore_laneMigration shadow.
+	laneRetention                  uint32
 	defensiveEnabled               bool
 	clearParentRefs                func(ctx context.Context, txHash *chainhash.Hash) error
 	defensiveBatchReadSize         int
@@ -277,6 +281,7 @@ func NewService(settings *settings.Settings, opts Options) (*Service, error) {
 		batchPolicy:                    batchPolicy,
 		utxoBatchSize:                  settings.UtxoStore.UtxoBatchSize,
 		blockHeightRetention:           settings.GetUtxoStoreBlockHeightRetention(),
+		laneRetention:                  settings.GlobalBlockHeightRetention,
 		defensiveEnabled:               settings.Pruner.UTXODefensiveEnabled,
 		clearParentRefs:                opts.ClearParentRefs,
 		defensiveBatchReadSize:         settings.Pruner.UTXODefensiveBatchReadSize,
@@ -479,11 +484,7 @@ func (s *Service) partitionWorker(
 	// UnminedSince and Conflicting are needed to protect currently-unmined records (see dropUnminedRecords).
 	// The inputs bin is not scanned: nothing reads a record's inputs to update its parents any more, and
 	// an external record reads them from its blob.
-	binNames := []string{s.fieldTxID, s.fieldExternal, s.fieldTotalExtraRecs, s.fieldUnminedSince, s.fieldConflicting}
-	if s.defensiveEnabled {
-		binNames = append(binNames, s.fieldUtxos)
-	}
-	stmt.BinNames = binNames
+	stmt.BinNames = s.queryBinNames(lanereader.Current() != nil)
 
 	// Create partition filter for this worker's range
 	partitionFilter := aerospike.NewPartitionFilterByRange(partitionStart, partitionCount)
@@ -614,6 +615,21 @@ func (s *Service) partitionWorker(
 	}
 
 	return totalProcessed, totalSkipped, nil
+}
+
+// queryBinNames is the bins the delete-at-height query reads; with laneShadow, at
+// utxostore_laneMigration shadow, also those the lane rule needs (laneQueryBins).
+func (s *Service) queryBinNames(laneShadow bool) []string {
+	binNames := []string{s.fieldTxID, s.fieldExternal, s.fieldTotalExtraRecs, s.fieldUnminedSince, s.fieldConflicting}
+	if s.defensiveEnabled {
+		binNames = append(binNames, s.fieldUtxos)
+	}
+
+	if laneShadow {
+		binNames = s.laneQueryBins(binNames)
+	}
+
+	return binNames
 }
 
 // partitionRange represents a contiguous range of Aerospike partitions assigned to a worker
@@ -823,12 +839,18 @@ func (s *Service) processRecordChunk(ctx context.Context, blockHeight uint32, ch
 		return 0, 0, nil
 	}
 
+	// At utxostore_laneMigration shadow, the lane rule judges every record of the chunk beside
+	// today's decision (lane_shadow.go); nil at off.
+	lanes := s.newLaneShadow(chunk)
+
 	// Do not delete a record that is currently unmined, unless it is conflicting. Counted separately
 	// from the defensive skip count.
 	chunk, _, clears := s.dropUnminedRecords(chunk)
 	s.clearUnminedDAH(ctx, clears)
 
 	if len(chunk) == 0 {
+		lanes.run()
+
 		return 0, 0, nil
 	}
 
@@ -1008,6 +1030,7 @@ func (s *Service) processRecordChunk(ctx context.Context, blockHeight uint32, ch
 
 		// Accumulate deletions (master + child records)
 		allDeletions = append(allDeletions, rec.Record.Key)
+		lanes.markDeleted(rec)
 
 		if totalExtraRecs, hasExtraRecs := rec.Record.Bins[s.fieldTotalExtraRecs].(int); hasExtraRecs && totalExtraRecs > 0 {
 			for i := 1; i <= totalExtraRecs; i++ {
@@ -1021,6 +1044,9 @@ func (s *Service) processRecordChunk(ctx context.Context, blockHeight uint32, ch
 
 		processedCount++
 	}
+
+	// The lane rule reads a paged parent's pages, so it runs before they are deleted.
+	lanes.run()
 
 	// Flush all accumulated operations in one batch per chunk. Blocks on
 	// Aerospike network I/O.

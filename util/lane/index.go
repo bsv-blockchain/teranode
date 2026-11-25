@@ -707,6 +707,84 @@ func (s *IndexSnapshot) ForkAt(height uint32) bool {
 	return ok
 }
 
+// OffMainTaker returns a loaded block off the main chain whose row takes the packed lane position
+// pos, with its height: a fork block, such as one a reorg replaced. The pruner's lane rule uses it to
+// tell a spender only a fork block took from one no block took.
+func (s *IndexSnapshot) OffMainTaker(pos uint64) (id, height uint32, ok bool) {
+	if !Valid(pos) {
+		return 0, 0, false
+	}
+
+	laneNum, p := Unpack(pos)
+
+	ls := s.lanes[laneNum]
+	if ls == nil {
+		return 0, 0, false
+	}
+
+	ls.covering(p, func(r *indexRow) bool {
+		if _, onMain := s.main[r.blockID]; onMain || !r.takes(p) {
+			return true
+		}
+
+		b, loaded := s.blocks[r.blockID]
+		if !loaded {
+			return true
+		}
+
+		id, height, ok = r.blockID, b.height, true
+
+		return false
+	})
+
+	return id, height, ok
+}
+
+// BeforeStart reports whether the packed lane position pos lies below everything the index saw of
+// its lane, so it cannot say whether a block took it: the lane has no row or floor in the index, or
+// pos is below both the lane's first folded row and its lowest held row, and no later block that
+// folded took it. A process that started a day ago holds nothing of a spender mined two days ago.
+func (s *IndexSnapshot) BeforeStart(pos uint64) bool {
+	laneNum, p := Unpack(pos)
+
+	ls := s.lanes[laneNum]
+	if ls == nil {
+		return true
+	}
+
+	lowest := uint64(MaxPosition) + 1
+
+	if ls.fl != nil {
+		if ls.fl.settledBelow.Contains(p) {
+			return false
+		}
+
+		lowest = ls.fl.seenFrom
+	}
+
+	// Rows are sorted by first position.
+	if len(ls.rows) > 0 {
+		lowest = min(lowest, ls.rows[0].first)
+	}
+
+	return p < lowest
+}
+
+// MainBlocksWithoutRows counts the loaded main-chain blocks the map holds no rows for: blocks taken
+// by quick validation, our own blocks before block assembly writes rows, and blocks of only a
+// coinbase. A position no row takes may be in one of them, so a reader cannot call it unmined.
+func (s *IndexSnapshot) MainBlocksWithoutRows() int {
+	n := 0
+
+	for id := range s.main {
+		if b, ok := s.blocks[id]; ok && !b.hasRows {
+			n++
+		}
+	}
+
+	return n
+}
+
 // Folded reports whether block id's rows were folded into the floors and left memory.
 func (s *IndexSnapshot) Folded(id uint32) bool {
 	b, ok := s.blocks[id]

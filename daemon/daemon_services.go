@@ -126,10 +126,10 @@ func (d *Daemon) startServices(ctx context.Context, logger ulogger.Logger, appSe
 	}
 
 	// At utxostore_laneMigration shadow, a process running a service that checks whether a parent
-	// is mined keeps an index of the lane map and answers those checks from it too
-	// (util/lanereader).
+	// is mined, or the pruner, which judges each delete by the lane rule, keeps an index of the lane
+	// map and answers those checks from it too (util/lanereader).
 	if needsLaneReader(startSubtreeValidation, startBlockValidation, startValidator,
-		startPropagation || startLegacy || startRPC, appSettings.Validator.UseLocalValidator) {
+		startPropagation || startLegacy || startRPC, appSettings.Validator.UseLocalValidator, startPruner) {
 		d.startLaneReader(ctx, appSettings, createLogger)
 	}
 
@@ -784,12 +784,13 @@ func (d *Daemon) startBlockAssemblyService(ctx context.Context, appSettings *set
 }
 
 // needsLaneReader reports whether a process keeps a lane index: one running subtree validation,
-// block validation or the validator, which check parents themselves, or a service that sends its
+// block validation or the validator, which check parents themselves, a service that sends its
 // transactions to a validator (propagation, legacy, RPC) when that validator runs in-process
-// (useLocalValidator). With a remote validator, such a service's parent checks are made, and
-// counted, in the validator's process, so its own index would answer nothing.
-func needsLaneReader(subtreeValidation, blockValidation, validator, validatorClient, localValidator bool) bool {
-	return subtreeValidation || blockValidation || validator || (validatorClient && localValidator)
+// (useLocalValidator), or the pruner, which judges its deletes by the lane rule. With a remote
+// validator, such a service's parent checks are made, and counted, in the validator's process, so
+// its own index would answer nothing.
+func needsLaneReader(subtreeValidation, blockValidation, validator, validatorClient, localValidator, pruner bool) bool {
+	return subtreeValidation || blockValidation || validator || (validatorClient && localValidator) || pruner
 }
 
 // laneReaderConnectRetry is how long the lane index waits before connecting to the blockchain
