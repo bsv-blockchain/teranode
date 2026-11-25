@@ -1,9 +1,9 @@
 diff --git a/services/blockassembly/subtreeprocessor/SubtreeProcessor.go b/services/blockassembly/subtreeprocessor/SubtreeProcessor.go
-index dbe7138fb..1d005284b 100644
+index c5e32fbc2..8c5e6e058 100644
 --- a/services/blockassembly/subtreeprocessor/SubtreeProcessor.go
 +++ b/services/blockassembly/subtreeprocessor/SubtreeProcessor.go
-@@ -6893,7 +6893,7 @@ func (stp *SubtreeProcessor) moveBackBlockBulkBuild(ctx context.Context, block *
- 				_, wasSet[i] = stp.currentTxMap.SetIfNotExists(hash, flatInpoints[i])
+@@ -7021,7 +7021,7 @@ func (stp *SubtreeProcessor) moveBackBlockBulkBuild(ctx context.Context, block *
+ 				_, wasSet[i] = stp.currentTxMap.SetIfNotExistsAt(hash, flatInpoints[i], position)
  			}
  		}
 -		streamed = streamed && !slices.Contains(wasSet, false)
