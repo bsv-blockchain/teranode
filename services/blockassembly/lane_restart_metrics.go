@@ -108,7 +108,6 @@ func publishLaneRestart(res laneRestartResult) {
 		laneLastReadRecords:          float64(res.stats.Records),
 		laneLastReadBytes:            float64(res.stats.Bytes),
 		laneLastReadSeconds:          res.stats.Duration.Seconds(),
-		laneLastMarginRecords:        float64(res.stats.MarginRecords),
 		laneLastExternalRecords:      float64(res.stats.External),
 		laneLastTodayReadRecords:     float64(res.todayRead),
 		laneLastTodayKept:            float64(res.todayKept),
@@ -116,6 +115,13 @@ func publishLaneRestart(res laneRestartResult) {
 		laneLastCapBlocks:            float64(res.capBlocks),
 		laneLastCapBlocksWithoutRows: float64(res.capBlocksWithoutRows),
 		laneLastSampleRate:           float64(res.sampleRate),
+	}
+
+	// A store that cannot tell which records the margin added (Aerospike) has no margin count.
+	if res.stats.MarginKnown {
+		last[laneLastMarginRecords] = float64(res.stats.MarginRecords)
+	} else {
+		prometheusLaneRestartLast.DeleteLabelValues(laneLastMarginRecords)
 	}
 
 	// With nothing read by today's reload there is no ratio; the raw counts above stand.

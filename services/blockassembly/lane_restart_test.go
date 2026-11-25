@@ -300,7 +300,7 @@ func TestLaneRestartDryRunCounts(t *testing.T) {
 			require.GreaterOrEqual(t, res.duration, res.stats.Duration, "the run's duration covers its read")
 			require.Positive(t, res.stats.Duration)
 
-			requireLaneRestartPublished(t, res, map[string]float64{
+			last := map[string]float64{
 				laneLastReadRecords:          float64(read),
 				laneLastTodayReadRecords:     9,
 				laneLastTodayKept:            6,
@@ -309,7 +309,17 @@ func TestLaneRestartDryRunCounts(t *testing.T) {
 				laneLastCapBlocks:            11,
 				laneLastCapBlocksWithoutRows: 9,
 				laneLastSampleRate:           1,
-			})
+			}
+
+			if tc.marginKnown {
+				last[laneLastMarginRecords] = 1
+			}
+
+			requireLaneRestartPublished(t, res, last)
+
+			if !tc.marginKnown {
+				require.False(t, prometheusLaneRestartLast.DeleteLabelValues(laneLastMarginRecords), "no margin count where the store cannot tell")
+			}
 		})
 	}
 }
@@ -500,6 +510,22 @@ func TestLaneRestartDryRunOutcomes(t *testing.T) {
 
 			if tc.outcome == laneRunNoGrant || tc.outcome == laneRunNotReady {
 				require.False(t, tc.window.called, "no window is read")
+			}
+
+			// Only a run that ends done or no_qualifying_grant sets the last-run gauges and adds
+			// to the counters.
+			if tc.outcome != laneRunDone && tc.outcome != laneRunNoGrant {
+				initLaneRestartMetrics()
+
+				prometheusLaneRestartLast.WithLabelValues(laneLastReadRecords).Set(12_345)
+				keepBefore := testutil.ToFloat64(prometheusLaneRestartRecords.WithLabelValues(laneRecKeep))
+
+				res.stats.Records = 1
+				res.records[laneRecKeep] = 1
+				publishLaneRestart(res)
+
+				require.InDelta(t, 12_345, testutil.ToFloat64(prometheusLaneRestartLast.WithLabelValues(laneLastReadRecords)), 0)
+				require.InDelta(t, keepBefore, testutil.ToFloat64(prometheusLaneRestartRecords.WithLabelValues(laneRecKeep)), 0)
 			}
 		})
 	}
