@@ -98,6 +98,8 @@ func spenderOf(t *testing.T, s *Store, ctx context.Context, parent *bt.Tx, vout 
 // restored, and the old owner's hash is refused. The first write and a replay answer the same,
 // because a recovery that is accepted once and refused on its replay is stuck half-applied.
 func TestRestoreConflictSpendsChecksAReassignedUTXOByTheRecordsHash(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	cases := []struct {
 		name    string
 		claim   func(newHash, oldHash *chainhash.Hash) *chainhash.Hash
@@ -145,6 +147,8 @@ func TestRestoreConflictSpendsChecksAReassignedUTXOByTheRecordsHash(t *testing.T
 // that UTXO must take it as no claim rather than as the wrong one. Refused, the resolution
 // fails on every retry and block assembly cannot move forward.
 func TestProcessConflictingPromotesAWinnerThatSpendsAReassignedUTXO(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 	parent, newOutput, _, _, spendable := reassignedParent(t, s, ctx, 6_000)
 
@@ -189,6 +193,8 @@ func (f *failAfterUnspend) Unspend(ctx context.Context, spends []*utxo.Spend, lo
 // hash, which the restore must accept on the first write: refused, the rollback ends in manual
 // intervention and block assembly refuses to start while the intent is unfinished.
 func TestProcessConflictingRollsBackALoserThatSpentAReassignedUTXO(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 	parent, newOutput, _, _, spendable := reassignedParent(t, s, ctx, 7_000)
 
@@ -224,6 +230,8 @@ func TestProcessConflictingRollsBackALoserThatSpentAReassignedUTXO(t *testing.T)
 // ErrSpent it would be stored as a conflicting transaction that conflict resolution could later
 // promote into the new owner's UTXO, because a restore record with no hash is accepted.
 func TestDoubleSpendOfAReassignedUTXOChecksTheClaimFirst(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 	parent, newOutput, _, _, spendable := reassignedParent(t, s, ctx, 8_000)
 

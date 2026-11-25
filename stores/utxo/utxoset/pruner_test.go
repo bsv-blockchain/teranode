@@ -19,6 +19,8 @@ import (
 // spends an output frees its space and its index entry in the same statement, so the
 // per-row reclaim that dominated the previous store does not exist here.
 func TestPrunerServiceContract(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	svc, err := s.GetPrunerService()
@@ -46,6 +48,8 @@ func TestPrunerServiceContract(t *testing.T) {
 // not due however old it is; a stamped one drops once the tip is the undo lifetime, 576 blocks
 // at the default retention, past its stamped_at.
 func TestPrunerDropsAContainmentWindowOnlyOnceStamped(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	old := mkTx(t, 1, 5_000)
@@ -103,6 +107,8 @@ func TestPrunerDropsAContainmentWindowOnlyOnceStamped(t *testing.T) {
 // covered by TestRebuildUTXOIndexRunsConcurrentlyAndOnce; returning false here keeps this
 // test to the one thing it is pinning, and fast.
 func TestPrunerRebuildsUTXOIndexBelowJournalRetention(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	calls := 0

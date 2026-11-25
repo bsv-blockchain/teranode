@@ -22,6 +22,8 @@ import (
 // One assertion after the DDL converts that flood into a single startup refusal that names
 // what is missing.
 func TestSchemaAssertionRefusesADatabaseFromThePreviousShape(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	require.NoError(t, assertSchemaShape(ctx, s.pool), "a schema this binary just created passes")
@@ -45,6 +47,8 @@ func TestSchemaAssertionRefusesADatabaseFromThePreviousShape(t *testing.T) {
 // TestSchemaAssertionNamesAMissingTable: the previous schema had no tx_mined at all, so a
 // database old enough to be missing the table has to be refused by name rather than by column.
 func TestSchemaAssertionNamesAMissingTable(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	_, err := s.pool.Exec(ctx, `DROP TABLE tx_mined CASCADE`)
@@ -60,6 +64,8 @@ func TestSchemaAssertionNamesAMissingTable(t *testing.T) {
 // step's only source, and a journal without them answers not-found for every fully-spent old
 // parent rather than failing loudly. That is the quietest of the three, so it is asserted too.
 func TestSchemaAssertionNamesTheJournalColumns(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	_, err := s.pool.Exec(ctx, `ALTER TABLE spend_journal DROP COLUMN mined_height`)
@@ -78,6 +84,8 @@ func TestSchemaAssertionNamesTheJournalColumns(t *testing.T) {
 // leaf left standalone by a pruner pass interrupted between DETACH and DROP, which the next
 // pass copies forward out of by name.
 func TestSchemaAssertionRefusesAJournalWithoutTheSpendingInput(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	t.Run("parent", func(t *testing.T) {
 		s, ctx := newTestStore(t)
 
@@ -120,6 +128,8 @@ func TestSchemaAssertionRefusesAJournalWithoutTheSpendingInput(t *testing.T) {
 // missing, because "tx_mined.seq is missing" about a column that is there would send an
 // operator the wrong way.
 func TestSchemaAssertionRefusesADatabaseThatStillHasTheDeletedColumns(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	for _, tc := range []struct {
@@ -150,6 +160,8 @@ func TestSchemaAssertionRefusesADatabaseThatStillHasTheDeletedColumns(t *testing
 // adds two floor columns and one table, unused until the deep stamp of build step 5 exists, so
 // the gate's required list changes once rather than twice.
 func TestSchemaAssertionNamesTheNewFloorColumnsAndTheStampedTable(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	_, err := s.pool.Exec(ctx, `ALTER TABLE tx_mined_floor DROP CONSTRAINT tx_mined_floor_order,
