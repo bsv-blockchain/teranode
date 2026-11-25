@@ -27,15 +27,15 @@ func makeLockableTx(t *testing.T, parentHex string) *bt.Tx {
 // single PutBatchCtx + one group.Wait + the first-non-nil-error reduction) that
 // existing tests, which only ever pass a single hash, never covered.
 func TestStore_SetLocked_MultipleHashes(t *testing.T) {
+	t.Parallel()
+
 	logger := ulogger.NewErrorTestLogger(t)
 	tSettings := test.CreateBaseTestSettings(t)
 
-	client, store, ctx, deferFn := initAerospike(t, tSettings, logger)
+	_, store, ctx, deferFn := initAerospike(t, tSettings, logger)
 	t.Cleanup(func() {
 		deferFn()
 	})
-
-	cleanDB(t, client)
 
 	txs := []*bt.Tx{
 		makeLockableTx(t, "1111111111111111111111111111111111111111111111111111111111111111"),
@@ -75,15 +75,15 @@ func TestStore_SetLocked_MultipleHashes(t *testing.T) {
 // from SetLocked (rather than silently succeeding or hanging). The failing item
 // captures its error and cancels the shared wait.
 func TestStore_SetLocked_PartialFailureFailsFast(t *testing.T) {
+	t.Parallel()
+
 	logger := ulogger.NewErrorTestLogger(t)
 	tSettings := test.CreateBaseTestSettings(t)
 
-	client, store, ctx, deferFn := initAerospike(t, tSettings, logger)
+	_, store, ctx, deferFn := initAerospike(t, tSettings, logger)
 	t.Cleanup(func() {
 		deferFn()
 	})
-
-	cleanDB(t, client)
 
 	real1 := makeLockableTx(t, "4444444444444444444444444444444444444444444444444444444444444444")
 	real2 := makeLockableTx(t, "5555555555555555555555555555555555555555555555555555555555555555")

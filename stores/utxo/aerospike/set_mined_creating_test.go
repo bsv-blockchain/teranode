@@ -74,6 +74,8 @@ func spendOutput(t *testing.T, parent *bt.Tx, vout uint32) *bt.Tx {
 // mines the transaction again; a transaction already mined and settled with the
 // stuck state is not revisited.
 func TestSetMinedMultiClearsCreatingOnExtraRecords(t *testing.T) {
+	t.Parallel()
+
 	if testing.Short() {
 		t.Skip("Skipping Aerospike integration test in short mode")
 	}
@@ -103,8 +105,6 @@ func TestSetMinedMultiClearsCreatingOnExtraRecords(t *testing.T) {
 
 				client, store, _, cleanup := initAerospike(t, settings, logger)
 				defer cleanup()
-
-				cleanDB(t, client)
 
 				const blockHeight = 604315
 

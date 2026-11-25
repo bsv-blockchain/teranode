@@ -24,6 +24,7 @@ func restoreTestTxs(t *testing.T, s *Store, outputs int) (parent, child *bt.Tx) 
 	ctx := t.Context()
 
 	parent = bt.NewTx()
+	parent.LockTime = NextUniqueLockTime() // a txid of its own: the server is shared
 	in := &bt.Input{PreviousTxOutIndex: 0, PreviousTxSatoshis: 1_000_000, PreviousTxScript: bscript.NewFromBytes([]byte{0x51}),
 		SequenceNumber: 0xffffffff, UnlockingScript: bscript.NewFromBytes([]byte{0x00})}
 	require.NoError(t, in.PreviousTxIDAdd(&chainhash.Hash{0xd5, 0xd5}))
@@ -53,6 +54,8 @@ func restoreTestTxs(t *testing.T, s *Store, outputs int) (parent, child *bt.Tx) 
 // RestoreConflictSpends writes the recorded spends with one Lua batch, not one round trip per
 // outpoint: a wide cascade restores thousands of outpoints.
 func TestRestoreConflictSpends_OneRoundTripPerBatch(t *testing.T) {
+	t.Parallel()
+
 	s, _ := setupStoreForLockTest(t)
 	ctx := t.Context()
 
@@ -88,6 +91,8 @@ func TestRestoreConflictSpends_OneRoundTripPerBatch(t *testing.T) {
 
 // Only the phase of a published checklist changes, so a phase save must not rewrite its chunks.
 func TestSaveConflictRecovery_PhaseSaveKeepsChunks(t *testing.T) {
+	t.Parallel()
+
 	s, client := setupStoreForLockTest(t)
 	ctx := t.Context()
 
@@ -166,6 +171,8 @@ func TestConflictBatchPolicyDeadline(t *testing.T) {
 // LoadConflictRecovery refuses a root record whose checklist reference or chunks are damaged, and
 // SaveConflictRecovery refuses a checklist for an intent that does not exist.
 func TestConflictRecovery_DamagedRecords(t *testing.T) {
+	t.Parallel()
+
 	s, _ := setupStoreForLockTest(t)
 	ctx := t.Context()
 
@@ -244,6 +251,7 @@ func TestConflictRecovery_DamagedRecords(t *testing.T) {
 // At shadow every spend RestoreConflictSpends writes counts once as not carrying a lane position,
 // across batches; with lane positions off nothing is counted, and a batch that fails counts nothing.
 func TestRestoreConflictSpendsCountsEachRestoredSpend(t *testing.T) {
+	// Not parallel: it reads the process-wide lane spend counts, which other tests' spends add to.
 	s, _ := setupStoreForLockTest(t)
 	ctx := t.Context()
 

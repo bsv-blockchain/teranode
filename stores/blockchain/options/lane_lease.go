@@ -58,3 +58,22 @@ func WithLaneMapRows(rows []lane.MapRow) StoreBlockOption {
 		opts.LaneMapRows = rows
 	}
 }
+
+// WithOwnBlockLaneMapRows is WithLaneMapRows for a block this node mined, so the lane metrics
+// count its rows under block="own" rather than as a peer's.
+func WithOwnBlockLaneMapRows(rows []lane.MapRow) StoreBlockOption {
+	return func(opts *StoreBlockOptions) {
+		opts.LaneMapRows = rows
+		opts.LaneMapRowsOwnBlock = true
+	}
+}
+
+// LaneMetricsBlock is the block label the lane metrics give the block these options store:
+// lane.BlockOwn for a block this node mined, lane.BlockPeer otherwise.
+func (o StoreBlockOptions) LaneMetricsBlock() string {
+	if o.LaneMapRowsOwnBlock {
+		return lane.BlockOwn
+	}
+
+	return lane.BlockPeer
+}

@@ -360,6 +360,8 @@ func (c *Client) AddBlock(ctx context.Context, block *model.Block, peerID string
 		OptionID:          storeBlockOptions.ID,
 		CoinbaseBump:      block.CoinbaseBUMP,
 		LaneMapRows:       laneMapRowsToProto(storeBlockOptions.LaneMapRows),
+		// Sent only with rows, so a block stored without lanes is the same on the wire.
+		LaneMapRowsOwnBlock: storeBlockOptions.LaneMapRowsOwnBlock && len(storeBlockOptions.LaneMapRows) > 0,
 	}
 
 	for _, subtreeHash := range block.Subtrees {
