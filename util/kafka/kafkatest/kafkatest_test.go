@@ -7,11 +7,15 @@ import (
 )
 
 // Tests on a shared broker tell their topics and consumer groups apart only by
-// UniqueName, so two calls with the same prefix must not return the same name.
+// UniqueName, so calls with the same prefix must never return the same name.
 func TestUniqueNameNeverRepeatsAPrefix(t *testing.T) {
-	first := UniqueName("topic")
-	second := UniqueName("topic")
+	seen := map[string]bool{}
 
-	require.NotEqual(t, first, second)
-	require.Contains(t, first, "topic-")
+	for range 3 {
+		name := UniqueName("topic")
+		require.Contains(t, name, "topic-")
+		require.False(t, seen[name], "UniqueName returned %q twice", name)
+
+		seen[name] = true
+	}
 }
