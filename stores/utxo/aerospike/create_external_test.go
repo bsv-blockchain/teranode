@@ -20,6 +20,8 @@ import (
 // TestStoreExternallySuccessScenarios tests that storeExternallyWithLock returns
 // success in the correct scenarios according to the "finish off previous attempt" pattern
 func TestStoreExternallySuccessScenarios(t *testing.T) {
+	t.Parallel()
+
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
@@ -28,11 +30,10 @@ func TestStoreExternallySuccessScenarios(t *testing.T) {
 	logger := ulogger.NewErrorTestLogger(t)
 	settings := test.CreateBaseTestSettings(t)
 
-	client, store, _, cleanup := initAerospike(t, settings, logger)
+	_, store, _, cleanup := initAerospike(t, settings, logger)
 	defer cleanup()
 
 	t.Run("Scenario A: 100% success - all records created fresh", func(t *testing.T) {
-		cleanDB(t, client)
 
 		// Create a transaction that requires multiple records
 		tx := createTransactionWithOutputs(settings.UtxoStore.UtxoBatchSize + 1) // 2 records needed
@@ -50,7 +51,6 @@ func TestStoreExternallySuccessScenarios(t *testing.T) {
 	})
 
 	t.Run("Scenario B: Partial success - some records already exist (KEY_EXISTS_ERROR)", func(t *testing.T) {
-		cleanDB(t, client)
 
 		// Simulate a partial creation by manually creating some records with creating=true
 		tx := createTransactionWithOutputs(settings.UtxoStore.UtxoBatchSize + 1) // 2 records needed
@@ -77,7 +77,6 @@ func TestStoreExternallySuccessScenarios(t *testing.T) {
 	})
 
 	t.Run("Scenario C: Recovery - complete partial transaction from previous failed attempt", func(t *testing.T) {
-		cleanDB(t, client)
 
 		// This test simulates the core "finish off" behavior
 		// We'll use the raw StoreTransactionExternally to have more control
@@ -104,7 +103,6 @@ func TestStoreExternallySuccessScenarios(t *testing.T) {
 	})
 
 	t.Run("Scenario D: Multiple concurrent attempts - only first complete wins", func(t *testing.T) {
-		cleanDB(t, client)
 
 		// Multiple processes try to create the same transaction
 		// Only the first one to COMPLETE all records should succeed
@@ -163,6 +161,8 @@ func TestStoreExternallySuccessScenarios(t *testing.T) {
 // as unmined. Before the fix the second attempt returned success here, because it had
 // written *a* record.
 func TestStoreExternallyMasterRecordDecidesCreation(t *testing.T) {
+	t.Parallel()
+
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
@@ -173,8 +173,6 @@ func TestStoreExternallyMasterRecordDecidesCreation(t *testing.T) {
 
 	client, store, _, cleanup := initAerospike(t, settings, logger)
 	defer cleanup()
-
-	cleanDB(t, client)
 
 	tx := createTransactionWithOutputs(settings.UtxoStore.UtxoBatchSize + 1) // master + one child
 	txHash := tx.TxIDChainHash()
@@ -211,6 +209,8 @@ func TestStoreExternallyMasterRecordDecidesCreation(t *testing.T) {
 
 // TestCreatingBinRemoval verifies that the creating bin is properly removed after transaction creation
 func TestCreatingBinRemoval(t *testing.T) {
+	t.Parallel()
+
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
@@ -223,7 +223,6 @@ func TestCreatingBinRemoval(t *testing.T) {
 	defer cleanup()
 
 	t.Run("Unlocked transaction - creating bin removed", func(t *testing.T) {
-		cleanDB(t, client)
 
 		// Create a transaction that requires multiple records (external storage)
 		tx := createTransactionWithOutputs(settings.UtxoStore.UtxoBatchSize + 1)
@@ -256,7 +255,6 @@ func TestCreatingBinRemoval(t *testing.T) {
 	})
 
 	t.Run("Locked transaction - creating bin still removed", func(t *testing.T) {
-		cleanDB(t, client)
 
 		// Create a transaction that requires multiple records (external storage)
 		tx := createTransactionWithOutputs(settings.UtxoStore.UtxoBatchSize + 1)
@@ -297,7 +295,6 @@ func TestCreatingBinRemoval(t *testing.T) {
 	})
 
 	t.Run("Small transaction - no creating bin needed", func(t *testing.T) {
-		cleanDB(t, client)
 
 		// Create a small transaction that fits in a single record (not external)
 		tx := createTransactionWithOutputs(10) // Small transaction
@@ -326,6 +323,8 @@ func TestCreatingBinRemoval(t *testing.T) {
 // from BatchOperate (e.g. connection lost, all-nodes timeout) is surfaced through
 // bItem.done rather than silently treated as success.
 func TestStoreExternallyWithLock_BatchOperateFails(t *testing.T) {
+	t.Parallel()
+
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
@@ -334,10 +333,8 @@ func TestStoreExternallyWithLock_BatchOperateFails(t *testing.T) {
 	logger := ulogger.NewErrorTestLogger(t)
 	settings := test.CreateBaseTestSettings(t)
 
-	client, store, _, cleanup := initAerospike(t, settings, logger)
+	_, store, _, cleanup := initAerospike(t, settings, logger)
 	defer cleanup()
-
-	cleanDB(t, client)
 
 	tx := createTransactionWithOutputs(settings.UtxoStore.UtxoBatchSize + 1)
 
@@ -365,6 +362,8 @@ func TestStoreExternallyWithLock_BatchOperateFails(t *testing.T) {
 // stands leaves a stored transaction with live inputs. A batch the server
 // rejected before writing anything stays a plain failure.
 func TestStoreExternallyWithLock_MasterMayExistLeavesOutcomeUnknown(t *testing.T) {
+	t.Parallel()
+
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
@@ -422,8 +421,6 @@ func TestStoreExternallyWithLock_MasterMayExistLeavesOutcomeUnknown(t *testing.T
 
 			client, store, _, cleanup := initAerospike(t, settings, logger)
 			defer cleanup()
-
-			cleanDB(t, client)
 
 			tx := createTransactionWithOutputs(settings.UtxoStore.UtxoBatchSize + 1)
 
