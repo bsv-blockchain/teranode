@@ -6,7 +6,9 @@ description: >
   GitHub Actions caches are branch-scoped: only caches written on the default
   branch are readable by all PRs. So only main-branch jobs run with save: 'true':
   the unit test job (module cache and -race build cache) and the benchmark build
-  cache job (bench_build_cache). Every other job restores only.
+  cache job (bench_build_cache only; it restores the module cache read-only, so
+  its partial module set never lands under the shared gomod key). Every other
+  job restores only.
 
   The build cache key rotates daily (GO_CACHE_DATE) so it never goes stale for
   weeks at a time; restore-keys fall back to the most recent dated entry, then
@@ -15,7 +17,9 @@ description: >
 inputs:
   save:
     description: >
-      'true' on the single authoritative saver (main-branch unit tests).
+      'true' on the main-branch savers: the unit test job, and with
+      bench_build_cache the benchmark build cache job (which then saves only
+      the benchmark build cache).
       'false' (default) everywhere else — restore only, no upload.
     default: 'false'
   build_cache:
@@ -31,7 +35,9 @@ inputs:
       Whether to use the benchmark build cache (~/.cache/go-build-bench): the
       benchmark packages built without -race and with -tags testtxmetacache on
       this runner's architecture, saved by the main-branch benchmark build cache
-      job. 'true' also points GOCACHE at it for the rest of the job.
+      job. The key is dated, so each day's entry holds the build of that day's
+      first main run (per go.mod hash); later main runs that day hit it and do
+      not save. 'true' also points GOCACHE at it for the rest of the job.
     default: 'false'
 
 runs:
@@ -43,7 +49,7 @@ runs:
 
     # --- restore-only path (PR jobs, every non-main job) ---
     - name: Restore Go module cache
-      if: inputs.save != 'true'
+      if: inputs.save != 'true' || inputs.bench_build_cache == 'true'
       uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
       with:
         path: ~/go/pkg/mod
@@ -76,7 +82,7 @@ runs:
     # the trim step in the caller has run. Saves only on a key miss (new day or
     # new go.sum/go.mod), so same-day reruns are no-ops.
     - name: Save Go module cache
-      if: inputs.save == 'true'
+      if: inputs.save == 'true' && inputs.bench_build_cache != 'true'
       uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
       with:
         path: ~/go/pkg/mod
