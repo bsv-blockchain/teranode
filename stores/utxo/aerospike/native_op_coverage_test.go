@@ -27,11 +27,20 @@ func TestUseNativeForSubOp_Fencing(t *testing.T) {
 	on := &Store{}
 	on.useNativeTeranodeOps.Store(true)
 
+	proven := &Store{}
+	proven.useNativeTeranodeOps.Store(true)
+	proven.nativeReplayProtection.Store(true)
+
 	for _, op := range allSubOps {
 		require.Falsef(t, off.useNativeForSubOp(op), "sub-op %d must use UDF when native disabled", op)
 
-		want := op != subOpUnspend // unspend is fenced to UDF even when native is on
-		require.Equalf(t, want, on.useNativeForSubOp(op), "sub-op %d native routing", op)
+		// unspend is fenced to UDF even when native is on; the replay-protection
+		// sub-ops are native only once that probe has passed.
+		want := op != subOpUnspend && !isReplayProtectionSubOp(op)
+		require.Equalf(t, want, on.useNativeForSubOp(op), "sub-op %d native routing without replay protection", op)
+
+		want = op != subOpUnspend
+		require.Equalf(t, want, proven.useNativeForSubOp(op), "sub-op %d native routing with replay protection", op)
 	}
 }
 

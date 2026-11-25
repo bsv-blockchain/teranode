@@ -438,7 +438,7 @@ func isIPAllowed(ip net.IP, allowedNets []*net.IPNet) bool {
 // Returns:
 //   - error: error if listeners fail to start
 func (ps *PropagationServer) StartUDP6Listeners(ctx context.Context, ipv6Addresses string) error {
-	ps.logger.Infof("Starting UDP6 listeners on %s", ipv6Addresses)
+	ps.logger.Infof("Starting UDP6 listeners on %s (receive-only: no multicast sender exists, transactions leave via gRPC/Kafka - see reconciliation notes section 82)", ipv6Addresses)
 
 	ipv6Interface := ps.settings.Propagation.IPv6Interface
 	if ipv6Interface == "" {
@@ -779,7 +779,12 @@ func httpStatusForTxError(err error) int {
 		errors.Is(err, errors.ErrTxConflicting),
 		errors.Is(err, errors.ErrSpent),
 		errors.Is(err, errors.ErrTxLocked),
-		errors.Is(err, errors.ErrTxCreating):
+		errors.Is(err, errors.ErrTxCreating),
+		// The spending transaction was pruned by this node, usually after it was
+		// mined and fully spent. It is this node's record, not a consensus verdict, but
+		// resubmitting it here gets the same answer while the parent output
+		// still names it, so it answers 409 like ErrSpent rather than 500.
+		errors.Is(err, errors.ErrUtxoSpendingTxPruned):
 		return http.StatusConflict
 	case errors.Is(err, errors.ErrTxMissingParent):
 		// Must stay above the ErrServiceUnavailable arm. A DAH-grace fault is a

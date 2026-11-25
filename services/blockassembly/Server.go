@@ -1167,11 +1167,14 @@ func (ba *BlockAssembly) storeSubtreeData(ctx context.Context, subtreeRequest su
 
 		if metaApplicable {
 			// Stored means both files: report whether the meta is there, checked only for a caller
-			// that reads the result or the stored set. A missing one is not rebuilt, which would read
-			// the request's maps after the caller moved on (that needs pinning), unless the stored
+			// that reads the result or the stored set. A missing one is not rebuilt, unless the stored
 			// set needs it: a subtree whose file landed and whose meta failed is sent again by the
-			// processor and would never reach the set otherwise. The build is inline, before the
-			// caller is answered, so the request's maps are still in use.
+			// processor and would never reach the set otherwise. The build runs here, before the
+			// caller is answered, but nobody makes it wait: the processor's re-send does not, and
+			// reads the live maps like every first-write meta build. A reset that clears them
+			// supersedes the request, and the build then ends as cancelled, not failed. It also
+			// delays the ordered announcements behind this request by one meta build; only a
+			// re-send, which does not announce, or a rare late send finds a subtree without its meta.
 			if subtreeRequest.Result == nil && ba.storedSet == nil {
 				outcome.metaAbsent()
 			} else if metaExists, _ := ba.subtreeStore.Exists(ctx, subtree.RootHash()[:], fileformat.FileTypeSubtreeMeta); metaExists {
@@ -1435,6 +1438,7 @@ func (ba *BlockAssembly) AddTx(ctx context.Context, req *blockassembly_api.AddTx
 			[]subtreepkg.Node{{Hash: chainhash.Hash(req.Txid), Fee: req.Fee, SizeInBytes: req.Size}},
 			[]*subtreepkg.TxInpoints{&txInpoints},
 			req.GetInBlock(),
+			[]uint32{req.ValidatedHeight},
 		); err != nil {
 			return nil, err
 		}
@@ -1534,8 +1538,8 @@ const queueFullPollInterval = 5 * time.Millisecond
 //
 // The wait is strictly bounded so it can never wedge the validator, whose
 // block-assembly client honours the caller's context (group.Wait(ctx, 0)).
-func (ba *BlockAssembly) addTxBatchWithBackpressure(ctx context.Context, nodes []subtreepkg.Node, txInpoints []*subtreepkg.TxInpoints, inBlock bool) error {
-	verdict := ba.blockAssembler.AddTxBatchBounded(nodes, txInpoints, inBlock)
+func (ba *BlockAssembly) addTxBatchWithBackpressure(ctx context.Context, nodes []subtreepkg.Node, txInpoints []*subtreepkg.TxInpoints, inBlock bool, validatedHeights []uint32) error {
+	verdict := ba.blockAssembler.AddTxBatchBounded(nodes, txInpoints, inBlock, validatedHeights)
 	if verdict == subtreeprocessor.Admitted {
 		return nil
 	}
@@ -1560,7 +1564,7 @@ func (ba *BlockAssembly) addTxBatchWithBackpressure(ctx context.Context, nodes [
 			case <-timeout:
 				return ba.shed(start)
 			case <-ticker.C:
-				switch ba.blockAssembler.AddTxBatchBounded(nodes, txInpoints, inBlock) {
+				switch ba.blockAssembler.AddTxBatchBounded(nodes, txInpoints, inBlock, validatedHeights) {
 				case subtreeprocessor.Admitted:
 					prometheusBlockAssemblyQueueWait.Observe(time.Since(start).Seconds())
 					return nil
@@ -1702,6 +1706,7 @@ func (ba *BlockAssembly) AddTxBatch(ctx context.Context, batch *blockassembly_ap
 	nodes := make([]subtreepkg.Node, len(requests))
 	txInpointsArr := make([]subtreepkg.TxInpoints, len(requests))
 	txInpointsList := make([]*subtreepkg.TxInpoints, len(requests))
+	validatedHeights := make([]uint32, len(requests))
 
 	for i, req := range requests {
 		if len(req.Txid) != 32 {
@@ -1713,6 +1718,7 @@ func (ba *BlockAssembly) AddTxBatch(ctx context.Context, batch *blockassembly_ap
 			Fee:         req.Fee,
 			SizeInBytes: req.Size,
 		}
+		validatedHeights[i] = req.ValidatedHeight
 
 		// kept in every mode, as in AddTx
 		ti, err := subtreepkg.NewTxInpointsFromBytes(req.TxInpoints)
@@ -1727,7 +1733,7 @@ func (ba *BlockAssembly) AddTxBatch(ctx context.Context, batch *blockassembly_ap
 
 	// Add entire batch in one call
 	if !ba.settings.BlockAssembly.Disabled {
-		if err := ba.addTxBatchWithBackpressure(ctx, nodes, txInpointsList, batch.GetInBlock()); err != nil {
+		if err := ba.addTxBatchWithBackpressure(ctx, nodes, txInpointsList, batch.GetInBlock(), validatedHeights); err != nil {
 			return nil, err
 		}
 
@@ -1788,6 +1794,11 @@ func (ba *BlockAssembly) AddTxBatchColumnar(ctx context.Context, req *blockassem
 
 	if len(req.Fees) != txCount || len(req.Sizes) != txCount {
 		return nil, errors.WrapGRPC(errors.NewInvalidArgumentError("mismatched array lengths: txids=%d, fees=%d, sizes=%d", txCount, len(req.Fees), len(req.Sizes)))
+	}
+
+	// Empty from a sender that tags nothing; otherwise one height per transaction.
+	if len(req.ValidatedHeights) != 0 && len(req.ValidatedHeights) != txCount {
+		return nil, errors.WrapGRPC(errors.NewInvalidArgumentError("mismatched array lengths: txids=%d, validated_heights=%d", txCount, len(req.ValidatedHeights)))
 	}
 
 	// Validate columnar TxInpoints structure
@@ -1903,7 +1914,7 @@ func (ba *BlockAssembly) AddTxBatchColumnar(ctx context.Context, req *blockassem
 		txInpointsList[i] = &txInpointsArr[i]
 	}
 
-	if err := ba.addTxBatchWithBackpressure(ctx, nodes, txInpointsList, req.GetInBlock()); err != nil {
+	if err := ba.addTxBatchWithBackpressure(ctx, nodes, txInpointsList, req.GetInBlock(), req.ValidatedHeights); err != nil {
 		return nil, err
 	}
 

@@ -2,6 +2,14 @@ x-teranode-settings:
   &teranode-settings
   environment:
     network: "mainnet"
+    # blockpersister is off in this stack, so the pruner must trigger on mined blocks;
+    # with the default OnBlockPersisted it waits for a notification that never arrives
+    pruner_block_trigger: "OnBlockMined"
+    # Persist the peer registry (reputation and ban scores) so a restart does not
+    # forget every peer opinion. /app/data is the ${DATA_PATH}-backed volume mounted
+    # into every service; only the blockchain service reads this key, and the fixed
+    # envelope key lives entirely inside that directory.
+    blockchain_peerRegistryStore: "file:///app/data/peer-registry"
     # logLevel: "DEBUG"
     # enable this when using your laptop or a server without a public ip
     # legacy_config_Upnp: "true"
@@ -113,6 +121,10 @@ services:
       file: ../base/docker-services.yml
       service: prometheus
 
+  # This is Prometheus's own alert sink, NOT the Teranode alertSystem micro-service:
+  # that service (rule-driven alerts and the coin-freeze brake) is not deployed in
+  # this topology at all - the kubernetes examples are where it runs. Do not read
+  # this entry as "alerting is covered" for Teranode-specific alarms.
   # Required: base/prometheus.yml points its `alerting` section at this host, so
   # without it Prometheus logs unresolvable-alertmanager errors on every reload.
   alertmanager:

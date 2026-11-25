@@ -1109,6 +1109,109 @@ func TestParseSQLError_NilError(t *testing.T) {
 	assert.Contains(t, result.Error(), "failed to store block")
 }
 
+// TestReadBestValidHeight_FollowsTheBestBlock pins that the checkpoint fork rule judges against
+// the block getBestBlockID calls best. Between equal-work tips at different heights the
+// store and block validation must pick the same one, or the store refuses as invalid a block
+// validation let through, and the peer that served it is charged.
+func TestReadBestValidHeight_FollowsTheBestBlock(t *testing.T) {
+	tSettings := test.CreateBaseTestSettings(t)
+	params := *tSettings.ChainCfgParams
+	params.Checkpoints = []chaincfg.Checkpoint{{Height: 1000, Hash: &chainhash.Hash{0x01}}}
+	tSettings.ChainCfgParams = &params
+
+	storeURL, err := url.Parse("sqlitememory:///")
+	require.NoError(t, err)
+
+	s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = s.Close(context.Background()) })
+
+	ctx := context.Background()
+
+	for _, b := range []*model.Block{block1, block2, block3, blockAlternative2} {
+		_, _, err = s.StoreBlock(ctx, b, "")
+		require.NoError(t, err)
+	}
+
+	// Equal work at heights 3 and 2. getBestBlockID breaks the tie by id, which is block3's;
+	// the other tip sorts first by peer id.
+	_, err = s.db.Exec(`UPDATE blocks SET chain_work = (SELECT chain_work FROM blocks WHERE hash = $1) WHERE hash = $2`,
+		block3.Hash().CloneBytes(), blockAlternative2.Hash().CloneBytes())
+	require.NoError(t, err)
+	_, err = s.db.Exec(`UPDATE blocks SET peer_id = 'z' WHERE hash = $1`, block3.Hash().CloneBytes())
+	require.NoError(t, err)
+	_, err = s.db.Exec(`UPDATE blocks SET peer_id = 'a' WHERE hash = $1`, blockAlternative2.Hash().CloneBytes())
+	require.NoError(t, err)
+	s.ResetResponseCache()
+
+	_, bestHash, err := s.getBestBlockID(ctx)
+	require.NoError(t, err)
+
+	_, bestMeta, err := s.GetBlockHeader(ctx, bestHash)
+	require.NoError(t, err)
+
+	var bestHeight uint32
+	require.NoError(t, s.readBestValidHeight(ctx, s.db, &bestHeight))
+	require.Equal(t, bestMeta.Height, bestHeight)
+}
+
+// TestStoreBlock_RejectsForkBelowPassedCheckpoint pins bitcoin-sv's
+// bad-fork-prior-to-checkpoint at the store: the decision is made under slowPathMu
+// against the best block the insert sees, so no block validated against an older
+// tip can be stored once the best chain has passed the checkpoint.
+func TestStoreBlock_RejectsForkBelowPassedCheckpoint(t *testing.T) {
+	newStore := func(t *testing.T) *SQL {
+		tSettings := test.CreateBaseTestSettings(t)
+		params := *tSettings.ChainCfgParams
+		params.Checkpoints = []chaincfg.Checkpoint{{Height: 3, Hash: block3.Hash()}}
+		tSettings.ChainCfgParams = &params
+
+		storeURL, err := url.Parse("sqlitememory:///")
+		require.NoError(t, err)
+
+		s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = s.Close(context.Background()) })
+
+		_, _, err = s.StoreBlock(context.Background(), block1, "")
+		require.NoError(t, err)
+		_, _, err = s.StoreBlock(context.Background(), block2, "")
+		require.NoError(t, err)
+
+		return s
+	}
+
+	t.Run("best chain passed the checkpoint", func(t *testing.T) {
+		s := newStore(t)
+		_, _, err := s.StoreBlock(context.Background(), block3, "")
+		require.NoError(t, err)
+
+		_, _, err = s.StoreBlock(context.Background(), blockAlternative2, "")
+		require.Error(t, err)
+		require.True(t, errors.Is(err, errors.ErrBlockInvalid), "got: %v", err)
+		require.Contains(t, err.Error(), "bad-fork-prior-to-checkpoint")
+
+		exists, err := s.GetBlockExists(context.Background(), blockAlternative2.Hash())
+		require.NoError(t, err)
+		require.False(t, exists, "the fork must not be stored")
+	})
+
+	t.Run("best chain below the checkpoint", func(t *testing.T) {
+		s := newStore(t)
+		_, _, err := s.StoreBlock(context.Background(), blockAlternative2, "")
+		require.NoError(t, err)
+	})
+
+	t.Run("invalid record is still stored", func(t *testing.T) {
+		s := newStore(t)
+		_, _, err := s.StoreBlock(context.Background(), block3, "")
+		require.NoError(t, err)
+
+		_, _, err = s.StoreBlock(context.Background(), blockAlternative2, "", options.WithInvalid(true))
+		require.NoError(t, err)
+	})
+}
+
 // forkRetryLogger runs a hook after a timed-out attempt has released its locks,
 // before StoreBlock selects between the caller context and its retry delay.
 type forkRetryLogger struct {

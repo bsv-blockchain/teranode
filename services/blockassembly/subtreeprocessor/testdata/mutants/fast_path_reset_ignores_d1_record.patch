@@ -1,13 +1,13 @@
 diff --git a/services/blockassembly/subtreeprocessor/SubtreeProcessor.go b/services/blockassembly/subtreeprocessor/SubtreeProcessor.go
-index f784e19da..3aa540fbb 100644
+index 0c5c39eb8..011bc6064 100644
 --- a/services/blockassembly/subtreeprocessor/SubtreeProcessor.go
 +++ b/services/blockassembly/subtreeprocessor/SubtreeProcessor.go
-@@ -1817,7 +1817,7 @@ func (stp *SubtreeProcessor) reset(blockHeader *model.BlockHeader, moveBackBlock
+@@ -1896,7 +1896,7 @@ func (stp *SubtreeProcessor) reset(blockHeader *model.BlockHeader, moveBackBlock
  
  		// A failed in-place fork reorg (reorgInPlace) flagged the lost block's transactions mined and has
  		// not put them in the subtrees above yet.
--		assemblyTxHashes = append(assemblyTxHashes, stp.reorgPendingD1...)
-+		// mutant: the recorded effective D1 is not swept
+-		for _, hash := range stp.reorgPendingD1 {
++		for _, hash := range stp.reorgPendingD1[:0] /* mutant: the recorded effective D1 is not swept */ {
+ 			chunk = append(chunk, hash)
  
- 		if len(assemblyTxHashes) > 0 {
- 			stp.logger.Infof("[SubtreeProcessor][reset] marking %d assembly txs as not on longest chain before clearing state", len(assemblyTxHashes))
+ 			if len(chunk) == resetSweepChunkSize {
