@@ -60,6 +60,7 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/lane"
+	"github.com/bsv-blockchain/teranode/util/lanereader"
 	"github.com/bsv-blockchain/teranode/util/tracing"
 	"github.com/ordishs/gocore"
 	"golang.org/x/sync/errgroup"
@@ -482,7 +483,8 @@ func (u *Server) readTxFromReader(body io.ReadCloser) (tx *bt.Tx, err error) {
 // the validator's answer, the validator's answer for a transaction it found already stored, an
 // older remote validator's answer, and the SQL store's create. blessMissingTransactions calls it,
 // where the position goes into the subtree; the block path's levels, which drop the metadata, do
-// not. The position is only measured, so a failure to read it leaves it at zero, where the
+// not. blessMissing also calls it at shadow, on both paths, for a record that names a mined block,
+// before the already-mined check's lanes shadow. The position is only measured, so a failure to read it leaves it at zero, where the
 // transaction is counted as one without a position, and is not an error.
 func (u *Server) fillLanePosition(ctx context.Context, hash *chainhash.Hash, md *meta.Data) {
 	if !u.laneShadow() || lane.Valid(md.LanePosition) {
@@ -646,6 +648,28 @@ func (u *Server) blessMissing(ctx context.Context, blockHash chainhash.Hash, sub
 		}
 
 		return nil, false, errors.NewProcessingError("[blessMissingTransaction][%s/%s][%s] tx meta is nil", blockHash.String(), subtreeHash.String(), tx.TxID())
+	}
+
+	// At utxostore_laneMigration shadow, the lanes shadow of the check below, counted only, judged
+	// on the same chain: blockIds, the ancestry the caller validates against, or the main chain
+	// when the caller gave none.
+	if r := lanereader.Current(); r != nil {
+		view := r.MainView()
+		if len(blockIds) > 0 {
+			view = r.ViewOfIDs(blockIds)
+		}
+
+		// A record that already existed and names a mined block, the case the check below can
+		// reject, comes back without its position; read it now, and keep it on txMeta so the read
+		// where the transaction goes into the subtree's metadata is not repeated when the record
+		// has one. A record with no mined block needs no position for the check, so nothing is
+		// read, and such a record that came back without its position counts no_position even
+		// though the store holds one.
+		if len(txMeta.BlockIDs) > 0 {
+			u.fillLanePosition(ctx, tx.TxIDChainHash(), txMeta)
+		}
+
+		r.CompareBlocks(lanereader.ReaderSubtreeAlreadyMined, view, *tx.TxIDChainHash(), txMeta.LanePosition, txMeta.BlockIDs)
 	}
 
 	// check whether this transaction was already mined on our chain by comparing the block ids

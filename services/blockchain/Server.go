@@ -1726,6 +1726,21 @@ func (b *Blockchain) ReleaseLaneLease(ctx context.Context, req *blockchain_api.R
 	return &blockchain_api.ReleaseLaneLeaseResponse{AlreadyClosed: already}, nil
 }
 
+// GetLaneMapRows returns one block's lane map rows, for a reader's index.
+func (b *Blockchain) GetLaneMapRows(ctx context.Context, req *blockchain_api.GetLaneMapRowsRequest) (*blockchain_api.GetLaneMapRowsResponse, error) {
+	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "GetLaneMapRows",
+		tracing.WithParentStat(b.stats),
+	)
+	defer deferFn()
+
+	rows, err := b.store.LaneMapRows(ctx, req.GetBlockId())
+	if err != nil {
+		return nil, errors.WrapGRPC(err)
+	}
+
+	return &blockchain_api.GetLaneMapRowsResponse{Rows: laneMapRowsToProto(rows)}, nil
+}
+
 // leaseFromRequest checks the lease ID and lane a request names.
 func leaseFromRequest(leaseID []byte, l uint32) (lane.LeaseID, uint8, error) {
 	var id lane.LeaseID

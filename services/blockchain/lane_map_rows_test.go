@@ -259,3 +259,41 @@ func TestAddBlockCountsOurOwnBlocksLaneMapRowsAsOwn(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, got, 1)
 }
+
+// laneRowsServer answers a Client's GetLaneMapRows from a server, as gRPC would.
+type laneRowsServer struct {
+	blockchain_api.BlockchainAPIClient
+	server *Blockchain
+}
+
+func (c *laneRowsServer) GetLaneMapRows(ctx context.Context, in *blockchain_api.GetLaneMapRowsRequest, _ ...grpc.CallOption) (*blockchain_api.GetLaneMapRowsResponse, error) {
+	return c.server.GetLaneMapRows(ctx, in)
+}
+
+// A reader reads back the rows AddBlock stored, through the server and a client, and nothing for a
+// block without rows.
+func TestGetLaneMapRowsReturnsTheRowsStoredWithTheBlock(t *testing.T) {
+	tc := setup(t)
+	blk := mockBlock(tc, t)
+
+	rows := []lane.MapRow{
+		{Lane: 3, First: 1, Last: 10, Tag: lane.RowTagRange},
+		{Lane: 7, First: 1, Last: 90_000, Tag: lane.RowTagRange},
+	}
+
+	_, _, err := tc.server.store.StoreBlock(context.Background(), blk, "peer", options.WithLaneMapRows(rows))
+	require.NoError(t, err)
+
+	_, meta, err := tc.server.store.GetBlockHeader(context.Background(), blk.Hash())
+	require.NoError(t, err)
+
+	c := &Client{client: &laneRowsServer{server: tc.server}, logger: tc.logger}
+
+	got, err := c.LaneMapRows(context.Background(), meta.ID)
+	require.NoError(t, err)
+	require.Equal(t, rows, got)
+
+	got, err = c.LaneMapRows(context.Background(), meta.ID+1_000)
+	require.NoError(t, err)
+	require.Empty(t, got)
+}

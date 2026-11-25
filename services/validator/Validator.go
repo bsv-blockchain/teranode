@@ -37,6 +37,7 @@ import (
 	"github.com/bsv-blockchain/teranode/util/kafka"
 	kafkamessage "github.com/bsv-blockchain/teranode/util/kafka/kafka_message"
 	"github.com/bsv-blockchain/teranode/util/lane"
+	"github.com/bsv-blockchain/teranode/util/lanereader"
 	"github.com/bsv-blockchain/teranode/util/tracing"
 	"github.com/cespare/xxhash/v2"
 	"github.com/ordishs/gocore"
@@ -2343,7 +2344,14 @@ func (v *Validator) resolveParentOutputs(ctx context.Context, tx *bt.Tx, txID st
 	var (
 		storeIdxs []int
 		outpoints []utxo.Outpoint
+		// The lanes shadow of this check, at shadow only (inputLanes is set only then).
+		shadow parentShadow
 	)
+
+	if inputLanes != nil {
+		shadow.reader = lanereader.Current()
+		shadow.view = shadow.reader.MainView()
+	}
 
 	for inputIdx, input := range tx.Inputs {
 		parentTxHash := *input.PreviousTxIDChainHash()
@@ -2357,6 +2365,7 @@ func (v *Validator) resolveParentOutputs(ctx context.Context, tx *bt.Tx, txID st
 
 			if inputLanes != nil {
 				inputLanes[inputIdx] = pf.LanePosition
+				shadow.compareBlocks(lanereader.ReaderSubtreePrefetch, parentTxHash, pf.LanePosition, pf.BlockIDs)
 			}
 
 			continue
@@ -2411,6 +2420,7 @@ func (v *Validator) resolveParentOutputs(ctx context.Context, tx *bt.Tx, txID st
 
 		if inputLanes != nil {
 			inputLanes[inputIdx] = answer.LanePosition
+			shadow.compare(lanereader.ReaderValidator, parentTxHash, answer.LanePosition, answer.Status == utxo.ParentOutputMined, answer.Height)
 		}
 	}
 

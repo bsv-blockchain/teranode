@@ -155,7 +155,7 @@ These packages implement consensus rules, or apply them to the UTXO set and the 
 - `services/blockassembly` and `services/blockassembly/subtreeprocessor` (reorg and conflict handling)
 - `stores/utxo`, `stores/utxo/aerospike` and `stores/utxo/sql`
 
-Each of these packages has a minimum statement coverage, in `.github/consensus-coverage.txt`. Every pull request checks the `coverage.out` that `make test` writes against these minimums, in the `Check consensus package coverage` step of `teranode_pr_tests.yaml`. The step fails when a package is below its minimum, or when the profile has no statements for it. The rest of the codebase has no minimum.
+Each of these packages has a minimum statement coverage, in `.github/consensus-coverage.txt`. Every pull request checks its coverage against these minimums, in the `Check consensus package coverage` step of the `test` job in `teranode_pr_tests.yaml`. CI runs `make test` as two shards, `stores/utxo/aerospike` and everything else, and the `test` job merges their profiles into the `coverage.out` that the step checks. The step fails when a package is below its minimum, or when the profile has no statements for it. The rest of the codebase has no minimum.
 
 To run the check on a profile:
 

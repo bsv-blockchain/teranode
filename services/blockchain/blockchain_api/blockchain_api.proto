@@ -124,6 +124,9 @@ service BlockchainAPI {
   // ReleaseLaneLease closes a lane lease cleanly and records the highest position its holder gave out that may carry a record (positions at the top that came back unwritten are left out).
   rpc ReleaseLaneLease(ReleaseLaneLeaseRequest) returns (ReleaseLaneLeaseResponse) {}
 
+  // GetLaneMapRows returns one block's lane map rows, by lane and first position (utxostore_laneMigration shadow readers).
+  rpc GetLaneMapRows(GetLaneMapRowsRequest) returns (GetLaneMapRowsResponse) {}
+
   // GetBestBlockHeader retrieves the header of the current best block.
   rpc GetBestBlockHeader(google.protobuf.Empty) returns (GetBlockHeaderResponse) {}
 
@@ -289,6 +292,16 @@ message LaneMapRow {
   uint64 first_hole = 4; // Lowest position between first and last not taken, 0 when none
   uint32 tag = 5;        // Row tag: 0 a range with no holes, 1 a 64-bit Roaring bitmap of the positions taken
   bytes hole_data = 6;   // The bitmap, for tag 1
+}
+
+// GetLaneMapRowsRequest asks for one block's lane map rows.
+message GetLaneMapRowsRequest {
+  uint32 block_id = 1; // The block's ID in the blockchain database
+}
+
+// GetLaneMapRowsResponse is one block's lane map rows; none for a block the map holds no row of.
+message GetLaneMapRowsResponse {
+  repeated LaneMapRow rows = 1;
 }
 
 // GetBlockRequest represents a request to retrieve a block by its hash.
