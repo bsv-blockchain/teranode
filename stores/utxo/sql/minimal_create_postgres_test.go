@@ -48,6 +48,8 @@ func pgQueryInputRow(t *testing.T, db *sql.DB, txHash *chainhash.Hash, idx int) 
 // otherwise ship untested. Runs only against a real Postgres testcontainer (skipped
 // in -short).
 func TestMinimalCreate_Postgres_CreateCTE(t *testing.T) {
+	parallelPostgres(t)
+
 	if testing.Short() {
 		t.Skip("skipping Postgres integration test in short mode")
 	}

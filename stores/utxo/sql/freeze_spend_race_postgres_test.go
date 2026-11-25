@@ -298,6 +298,8 @@ func TestFreezeRetriesWhenSpendUndoneBeforeRecheck_Postgres(t *testing.T) {
 // Freeze and spend released together, many times over, never both win and never leave
 // the coin frozen and spent.
 func TestFreezeAndSpendNeverBothWin_Postgres(t *testing.T) {
+	parallelPostgres(t)
+
 	if testing.Short() {
 		t.Skip("skipping Postgres integration test in short mode")
 	}

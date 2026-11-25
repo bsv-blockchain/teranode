@@ -20,6 +20,8 @@ import (
 // The list itself must come back in the order it went in, unsorted, because it is the
 // operation's own argument rather than a set the store owns.
 func TestConflictIntentIDIsIndependentOfHashOrder(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	h1 := chainhash.HashH([]byte("intent-order-1"))
@@ -75,6 +77,8 @@ func TestConflictIntentIDIsIndependentOfHashOrder(t *testing.T) {
 // caller is about to act on, and serving a prefix of it would hand block assembly a subset
 // of the transactions to resolve and let it call the resolution done.
 func TestPendingConflictIntentsRejectsARaggedHashBlob(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	id := chainhash.HashH([]byte("ragged-intent"))

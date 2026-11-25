@@ -26,6 +26,8 @@ import (
 
 // tamperedSatoshis: the claim inflates the UTXO's value.
 func TestSpendRejectsAnInflatedSatoshiClaim(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	parent := mkTx(t, 2, 5_000)
@@ -51,6 +53,8 @@ func TestSpendRejectsAnInflatedSatoshiClaim(t *testing.T) {
 
 // tamperedScript: the claim rewrites who may move the UTXO.
 func TestSpendRejectsARewrittenLockingScriptClaim(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	parent := mkTx(t, 2, 5_000)
@@ -79,6 +83,8 @@ func TestSpendRejectsARewrittenLockingScriptClaim(t *testing.T) {
 // The spend-only form of SpendAndCreate, used by block application and conflict resolution,
 // gets the same comparison as the full spend-and-create.
 func TestSpendOnlyRejectsAFalseClaim(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	parent := mkTx(t, 2, 5_000)
@@ -97,6 +103,8 @@ func TestSpendOnlyRejectsAFalseClaim(t *testing.T) {
 // An honest extended transaction must be unaffected. This is the whole steady-state path, so a
 // comparison that fired here would reject every spend on the node.
 func TestSpendAcceptsAnHonestClaim(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	parent := mkTx(t, 2, 5_000)
@@ -115,6 +123,8 @@ func TestSpendAcceptsAnHonestClaim(t *testing.T) {
 // outpoint-only path: the transaction arrives un-decorated, the spend is what decorates it,
 // and script validation is switched off in the same breath.
 func TestSpendAcceptsAnInputThatCarriesNoClaim(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	parent := mkTx(t, 2, 5_000)
@@ -138,6 +148,8 @@ func TestSpendAcceptsAnInputThatCarriesNoClaim(t *testing.T) {
 // WithSkipUTXOHashCheck is the existing, gated opt-out the other two stores honour. This store
 // ignored it entirely; it must now mean the same thing here.
 func TestSkipUTXOHashCheckDisablesTheComparison(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	parent := mkTx(t, 2, 5_000)
@@ -159,6 +171,8 @@ func TestSkipUTXOHashCheckDisablesTheComparison(t *testing.T) {
 // transaction spending again, so an honest one must still succeed -- and a doctored one must
 // not slip through the second door.
 func TestReplayedSpendRejectsAFalseClaim(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	parent := mkTx(t, 2, 5_000)
@@ -190,6 +204,8 @@ func TestReplayedSpendRejectsAFalseClaim(t *testing.T) {
 // If that ever stopped being true, a submitter could burn UTXOs it does not own by lying about
 // only the last input.
 func TestOneFalseInputLeavesTheHonestUTXOsUntouched(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	parent := mkTx(t, 3, 5_000)
@@ -238,6 +254,8 @@ func TestOneFalseInputLeavesTheHonestUTXOsUntouched(t *testing.T) {
 // conflicting against whoever took the sibling, which is exactly the outcome the mismatch error
 // exists to prevent.
 func TestAFalseClaimSurvivesASiblingMiss(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	parent := mkTx(t, 3, 5_000)
@@ -275,6 +293,8 @@ func TestAFalseClaimSurvivesASiblingMiss(t *testing.T) {
 // vehicle for the lie, and the replayed one is what invites the store to read its own journal
 // writes as history.
 func TestAFalseClaimSurvivesAGenuineReplayOfASibling(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	parent := mkTx(t, 3, 5_000)
@@ -312,6 +332,8 @@ func TestAFalseClaimSurvivesAGenuineReplayOfASibling(t *testing.T) {
 // input spent. It is an error now, so a caller that lost the body cannot mistake nothing for
 // success.
 func TestSpendOfNoTransactionIsRefused(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	_, _, err := s.SpendAndCreate(ctx, nil, 1_000, utxo.WithSpendOnly())
