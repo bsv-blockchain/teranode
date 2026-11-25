@@ -10,16 +10,14 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/tests"
+	tpostgres "github.com/bsv-blockchain/teranode/test/utils/postgres"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/testcontainers/testcontainers-go"
-	"github.com/testcontainers/testcontainers-go/modules/postgres"
-	"github.com/testcontainers/testcontainers-go/wait"
 )
 
-// setupPostgresStore starts a Postgres testcontainer and returns a *Store with
+// setupPostgresStore opens a fresh database on the shared Postgres server and returns a *Store with
 // the unlock batcher enabled (LockedBatcherSize > 1).
 func setupPostgresStore(t *testing.T) (*Store, context.Context) {
 	t.Helper()
@@ -28,34 +26,29 @@ func setupPostgresStore(t *testing.T) (*Store, context.Context) {
 	return newPostgresTestStore(t, ctx, startPostgresContainer(t, ctx)), ctx
 }
 
-// startPostgresContainer starts a Postgres testcontainer, skipping the test
-// when no container runtime is reachable, and returns its connection URL.
-func startPostgresContainer(t *testing.T, ctx context.Context) *url.URL {
-	t.Helper()
+// postgresTestURL returns a fresh, empty database of its own on the PostgreSQL server
+// shared by this test binary (test/utils/postgres), skipping the test when no container
+// runtime is reachable. The database is dropped when the test ends, after any cleanup the
+// test registers later, such as closing its store.
+func postgresTestURL(tb testing.TB) *url.URL {
+	tb.Helper()
 
-	pgContainer, err := postgres.Run(ctx,
-		"postgres:13",
-		postgres.WithDatabase("testdb"),
-		postgres.WithUsername("testuser"),
-		postgres.WithPassword("testpass"),
-		testcontainers.WithWaitStrategy(
-			wait.ForLog("database system is ready to accept connections").
-				WithOccurrence(2).
-				WithStartupTimeout(5*time.Minute),
-		),
-	)
-	test.SkipIfContainerUnavailable(t, err)
-	t.Cleanup(func() {
-		assert.NoError(t, pgContainer.Terminate(ctx))
-	})
-
-	connStr, err := pgContainer.ConnectionString(ctx, "sslmode=disable")
-	require.NoError(t, err)
+	connStr, teardown, err := tpostgres.SetupTestPostgresContainer()
+	test.SkipIfContainerUnavailable(tb, err)
+	tb.Cleanup(func() { assert.NoError(tb, teardown()) })
 
 	dbURL, err := url.Parse(connStr)
-	require.NoError(t, err)
+	require.NoError(tb, err)
 
 	return dbURL
+}
+
+// startPostgresContainer returns a fresh database on the shared PostgreSQL server
+// (see postgresTestURL).
+func startPostgresContainer(t *testing.T, _ context.Context) *url.URL {
+	t.Helper()
+
+	return postgresTestURL(t)
 }
 
 // newPostgresTestStore opens a *Store on dbURL with the settings

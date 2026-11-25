@@ -12,9 +12,6 @@ import (
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/testcontainers/testcontainers-go"
-	"github.com/testcontainers/testcontainers-go/modules/postgres"
-	"github.com/testcontainers/testcontainers-go/wait"
 )
 
 func TestSQLGetBlockGraphData(t *testing.T) {
@@ -267,28 +264,7 @@ func requireMatchesRawAggregate(t *testing.T, s *SQL, periodSeconds uint64, got 
 func TestSQLGetBlockGraphDataAggregatesInStore_Postgres(t *testing.T) {
 	ctx := context.Background()
 
-	pgContainer, err := postgres.Run(ctx,
-		"postgres:13",
-		postgres.WithDatabase("testdb"),
-		postgres.WithUsername("testuser"),
-		postgres.WithPassword("testpass"),
-		testcontainers.WithWaitStrategy(
-			wait.ForLog("database system is ready to accept connections").
-				WithOccurrence(2).
-				WithStartupTimeout(5*time.Minute),
-		),
-	)
-	test.SkipIfContainerUnavailable(t, err)
-
-	defer func() {
-		require.NoError(t, pgContainer.Terminate(ctx))
-	}()
-
-	connStr, err := pgContainer.ConnectionString(ctx, "sslmode=disable")
-	require.NoError(t, err)
-
-	dbURL, err := url.Parse(connStr)
-	require.NoError(t, err)
+	dbURL := postgresTestURL(t)
 
 	store, err := New(ulogger.TestLogger{}, dbURL, test.CreateBaseTestSettings(t))
 	require.NoError(t, err)

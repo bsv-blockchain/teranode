@@ -2,50 +2,29 @@ package usql
 
 import (
 	"context"
-	"net/url"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	tpostgres "github.com/bsv-blockchain/teranode/test/utils/postgres"
 	"github.com/bsv-blockchain/teranode/util/test"
 	_ "github.com/lib/pq"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/testcontainers/testcontainers-go"
-	"github.com/testcontainers/testcontainers-go/modules/postgres"
-	"github.com/testcontainers/testcontainers-go/wait"
 )
 
-// newPostgresTestDB spins up a real postgres container and returns a *DB plus
-// a cleanup func. Kept local to this file so advisory-lock behaviour is tested
-// against the same server mechanics the code targets in production.
+// newPostgresTestDB opens a fresh database on the PostgreSQL server shared by this test
+// binary (test/utils/postgres) and returns a *DB on it. Advisory locks are scoped to a
+// database, so tests on the shared server cannot see each other's locks. The database is
+// dropped when the test ends, after the *DB closes.
 func newPostgresTestDB(t *testing.T) *DB {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-	defer cancel()
 
-	pgContainer, err := postgres.Run(ctx,
-		"postgres:13",
-		postgres.WithDatabase("testdb"),
-		postgres.WithUsername("testuser"),
-		postgres.WithPassword("testpass"),
-		testcontainers.WithWaitStrategy(
-			wait.ForLog("database system is ready to accept connections").
-				WithOccurrence(2).
-				WithStartupTimeout(5*time.Minute),
-		),
-	)
+	connStr, teardown, err := tpostgres.SetupTestPostgresContainer()
 	test.SkipIfContainerUnavailable(t, err)
-	t.Cleanup(func() { _ = pgContainer.Terminate(context.Background()) })
-
-	connStr, err := pgContainer.ConnectionString(ctx, "sslmode=disable")
-	require.NoError(t, err)
-
-	// pg driver wants a postgres://... DSN; ConnectionString already returns one.
-	_, err = url.Parse(connStr)
-	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, teardown()) })
 
 	db, err := Open("postgres", connStr)
 	require.NoError(t, err)

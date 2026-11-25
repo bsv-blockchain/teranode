@@ -2,10 +2,8 @@ package sql
 
 import (
 	"context"
-	"fmt"
 	"net/url"
 	"testing"
-	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
@@ -13,9 +11,6 @@ import (
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/stretchr/testify/require"
-	"github.com/testcontainers/testcontainers-go"
-	"github.com/testcontainers/testcontainers-go/modules/postgres"
-	"github.com/testcontainers/testcontainers-go/wait"
 )
 
 // TestSQL_SetBlockMinedSet covers the conditional write on sqlite: mined_set is only set while
@@ -33,51 +28,8 @@ func TestSQL_SetBlockMinedSet(t *testing.T) {
 // uint64 bind in "mined_set_gen = $2" has to compare against a BIGINT column and the
 // ALTER TABLE migration has to add that column with its default.
 func TestSQL_SetBlockMinedSet_Postgres(t *testing.T) {
-	ctx := context.Background()
-
-	pgContainer, err := postgres.Run(ctx,
-		"postgres:13",
-		postgres.WithDatabase("testdb"),
-		postgres.WithUsername("testuser"),
-		postgres.WithPassword("testpass"),
-		testcontainers.WithWaitStrategy(
-			wait.ForLog("database system is ready to accept connections").
-				WithOccurrence(2).
-				WithStartupTimeout(5*time.Minute),
-		),
-	)
-	test.SkipIfContainerUnavailable(t, err)
-
-	defer func() {
-		require.NoError(t, pgContainer.Terminate(ctx))
-	}()
-
-	connStr, err := pgContainer.ConnectionString(ctx, "sslmode=disable")
-	require.NoError(t, err)
-
-	adminURL, err := url.Parse(connStr)
-	require.NoError(t, err)
-
-	admin, err := New(ulogger.TestLogger{}, adminURL, test.CreateBaseTestSettings(t))
-	require.NoError(t, err)
-
-	defer admin.Close(ctx)
-
-	dbCount := 0
-
-	// each case gets its own database, so the shared block fixtures never collide
-	testSetBlockMinedSet(t, func(t *testing.T) *url.URL {
-		dbCount++
-		dbName := fmt.Sprintf("minedset%d", dbCount)
-
-		_, err := admin.db.ExecContext(ctx, "CREATE DATABASE "+dbName)
-		require.NoError(t, err)
-
-		caseURL := *adminURL
-		caseURL.Path = "/" + dbName
-
-		return &caseURL
-	})
+	// each case gets its own database on the shared server, so the shared block fixtures never collide
+	testSetBlockMinedSet(t, postgresTestURL)
 }
 
 func testSetBlockMinedSet(t *testing.T, newStoreURL func(t *testing.T) *url.URL) {

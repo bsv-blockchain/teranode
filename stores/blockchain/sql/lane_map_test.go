@@ -743,18 +743,19 @@ func TestLaneMapHoleDataStorageNeverBlocksStartup(t *testing.T) {
 	require.Equal(t, "x", storage(), "the default storage stays while the lock was held")
 
 	// A role that does not own lane_map, on a schema its owner created with the default storage.
+	role := testRoleName("lane_storage_node", dbURL)
 	for _, stmt := range []string{
-		`CREATE ROLE lane_storage_node LOGIN PASSWORD 'lane_storage_node'`,
+		"CREATE ROLE " + role + " LOGIN PASSWORD '" + role + "'",
 		`REVOKE CREATE ON SCHEMA public FROM PUBLIC`,
-		`GRANT USAGE ON SCHEMA public TO lane_storage_node`,
-		`GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO lane_storage_node`,
+		"GRANT USAGE ON SCHEMA public TO " + role,
+		"GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO " + role,
 	} {
 		_, err = db.Exec(stmt)
 		require.NoError(t, err, stmt)
 	}
 
 	nodeURL := *dbURL
-	nodeURL.User = url.UserPassword("lane_storage_node", "lane_storage_node")
+	nodeURL.User = url.UserPassword(role, role)
 
 	nodeDB, err := usql.Open("postgres", nodeURL.String())
 	require.NoError(t, err)

@@ -626,18 +626,19 @@ func TestLaneLeaseDDLIsANoOpOnACurrentSchema(t *testing.T) {
 	}
 
 	// With everything in place, a role without CREATE runs no DDL at all.
+	role := testRoleName("lease_no_ddl", dbURL)
 	for _, stmt := range []string{
-		`CREATE ROLE lease_no_ddl LOGIN PASSWORD 'lease_no_ddl'`,
+		"CREATE ROLE " + role + " LOGIN PASSWORD '" + role + "'",
 		`REVOKE CREATE ON SCHEMA public FROM PUBLIC`,
-		`GRANT USAGE ON SCHEMA public TO lease_no_ddl`,
-		`GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO lease_no_ddl`,
+		"GRANT USAGE ON SCHEMA public TO " + role,
+		"GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO " + role,
 	} {
 		_, err = db.Exec(stmt)
 		require.NoError(t, err, stmt)
 	}
 
 	nodeURL := *dbURL
-	nodeURL.User = url.UserPassword("lease_no_ddl", "lease_no_ddl")
+	nodeURL.User = url.UserPassword(role, role)
 
 	nodeDB, err := usql.Open("postgres", nodeURL.String())
 	require.NoError(t, err)

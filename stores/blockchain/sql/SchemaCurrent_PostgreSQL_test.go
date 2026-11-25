@@ -3,50 +3,49 @@ package sql
 import (
 	"context"
 	"net/url"
+	"strings"
 	"testing"
-	"time"
 
+	tpostgres "github.com/bsv-blockchain/teranode/test/utils/postgres"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/bsv-blockchain/teranode/util/usql"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/testcontainers/testcontainers-go"
-	"github.com/testcontainers/testcontainers-go/modules/postgres"
-	"github.com/testcontainers/testcontainers-go/wait"
 )
 
-// newSchemaTestDB spins up a fresh postgres container and returns:
-//   - dbURL parsed for blockchain.New
-//   - a raw *usql.DB for direct probes
-//   - the terminate func (registered via t.Cleanup)
-func newSchemaTestDB(t *testing.T) (*url.URL, *usql.DB) {
+// postgresTestURL returns a fresh, empty database of its own on the PostgreSQL server
+// shared by this test binary (test/utils/postgres). The database is dropped when the test
+// ends, after any cleanup the test registers later, such as closing its store.
+func postgresTestURL(t *testing.T) *url.URL {
 	t.Helper()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-	defer cancel()
-
-	pgContainer, err := postgres.Run(ctx,
-		"postgres:13",
-		postgres.WithDatabase("testdb"),
-		postgres.WithUsername("testuser"),
-		postgres.WithPassword("testpass"),
-		testcontainers.WithWaitStrategy(
-			wait.ForLog("database system is ready to accept connections").
-				WithOccurrence(2).
-				WithStartupTimeout(5*time.Minute),
-		),
-	)
+	connStr, teardown, err := tpostgres.SetupTestPostgresContainer()
 	test.SkipIfContainerUnavailable(t, err)
-	t.Cleanup(func() { _ = pgContainer.Terminate(context.Background()) })
-
-	connStr, err := pgContainer.ConnectionString(ctx, "sslmode=disable")
-	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, teardown()) })
 
 	dbURL, err := url.Parse(connStr)
 	require.NoError(t, err)
 
-	db, err := usql.Open("postgres", connStr)
+	return dbURL
+}
+
+// testRoleName names a login role for one test. A role belongs to the whole server rather than
+// to a database, so the name carries the test's own database name to stay unique on the
+// shared server.
+func testRoleName(prefix string, dbURL *url.URL) string {
+	return prefix + "_" + strings.TrimPrefix(dbURL.Path, "/")
+}
+
+// newSchemaTestDB gives the test a fresh database on the shared postgres server and returns:
+//   - dbURL parsed for blockchain.New
+//   - a raw *usql.DB for direct probes
+func newSchemaTestDB(t *testing.T) (*url.URL, *usql.DB) {
+	t.Helper()
+
+	dbURL := postgresTestURL(t)
+
+	db, err := usql.Open("postgres", dbURL.String())
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
 
@@ -447,18 +446,19 @@ func TestCreatePostgresSchema_CurrentSchemaNeedsNoCreatePrivilege(t *testing.T) 
 
 	// A node role that can read and write the tables but has no CREATE on the
 	// schema, as when a separate owner role runs the migrations.
+	role := testRoleName("node_no_ddl", dbURL)
 	for _, stmt := range []string{
-		`CREATE ROLE node_no_ddl LOGIN PASSWORD 'node_no_ddl'`,
+		"CREATE ROLE " + role + " LOGIN PASSWORD '" + role + "'",
 		`REVOKE CREATE ON SCHEMA public FROM PUBLIC`,
-		`GRANT USAGE ON SCHEMA public TO node_no_ddl`,
-		`GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO node_no_ddl`,
+		"GRANT USAGE ON SCHEMA public TO " + role,
+		"GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO " + role,
 	} {
 		_, err = db.Exec(stmt)
 		require.NoError(t, err, stmt)
 	}
 
 	nodeURL := *dbURL
-	nodeURL.User = url.UserPassword("node_no_ddl", "node_no_ddl")
+	nodeURL.User = url.UserPassword(role, role)
 
 	nodeDB, err := usql.Open("postgres", nodeURL.String())
 	require.NoError(t, err)
