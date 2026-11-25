@@ -14,8 +14,9 @@ const capGrantPage = 256
 
 // laneCapGrantSQL reads a lane's hand-out rows below a position, newest first, through the
 // primary key (lane, first). lane_handout has no index on height, so the walk goes down the key
-// and stops at the first row below the height: it reads the grants handed out at or above the
-// height, and at most one page of capGrantPage rows past them.
+// and stops at the first row below the height: it reads the grants newer than that row, and at
+// most one page of capGrantPage rows past them. A grant older than that row with a height at or
+// above the height, recorded before the tip fell, is not found.
 const laneCapGrantSQL = `SELECT first, height, handed_at FROM lane_handout WHERE lane = $1 AND first < $2 ORDER BY first DESC LIMIT $3`
 
 // LaneCapGrants returns, for each lane with one, the first grant handed out at or above height,

@@ -4,8 +4,9 @@ import "time"
 
 // CapGrant is one lane's first grant handed out at or above a height: block assembly's restart
 // window starts at it (the lanes design, "Job two: block assembly's restart"). Positions only rise
-// within a lane, so a position of the lane below First came from a grant handed out below that
-// height.
+// within a lane, and grant heights rise with them while the chain tip does. After the tip falls (an
+// invalidated block, or a reorg to a lower tip) an older grant can carry a height at or above a
+// newer one's, and its positions, though below First, were handed out at or above the height.
 type CapGrant struct {
 	Lane uint8
 	// First is the grant's first position in the lane, unpacked.

@@ -249,15 +249,7 @@ func (b *BlockAssembler) startLaneRestartDryRun(ctx context.Context, t *laneRest
 		return
 	}
 
-	deps := laneRestartDeps{
-		logger:    b.logger,
-		retention: b.settings.UtxoStore.UnminedTxRetention,
-		grants:    b.blockchainClient.LaneCapGrants,
-		view:      laneRestartReaderView,
-	}
-
-	deps.window, _ = utxo.As[utxo.LaneWindowReader](b.utxoStore)
-	deps.lastUpdate, _ = utxo.As[utxo.LaneLastUpdateReader](b.utxoStore)
+	deps := b.laneRestartDeps()
 
 	runCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	done := make(chan struct{})
@@ -292,6 +284,22 @@ func (b *BlockAssembler) cancelLaneRestartDryRun() {
 	if b.laneRestart.cancel != nil {
 		b.laneRestart.cancel()
 	}
+}
+
+// laneRestartDeps is what a run from this assembler reads: its blockchain client's grants, the
+// process's lane index, and its UTXO store's window read where the store has one.
+func (b *BlockAssembler) laneRestartDeps() laneRestartDeps {
+	deps := laneRestartDeps{
+		logger:    b.logger,
+		retention: b.settings.UtxoStore.UnminedTxRetention,
+		grants:    b.blockchainClient.LaneCapGrants,
+		view:      laneRestartReaderView,
+	}
+
+	deps.window, _ = utxo.As[utxo.LaneWindowReader](b.utxoStore)
+	deps.lastUpdate, _ = utxo.As[utxo.LaneLastUpdateReader](b.utxoStore)
+
+	return deps
 }
 
 // stopLaneRestartDryRun cancels a run still going and waits for it to end.
