@@ -15,7 +15,6 @@ import (
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/bsv-blockchain/teranode/util/uaerospike"
-	aeroTest "github.com/bsv-blockchain/testcontainers-aerospike-go"
 	"github.com/stretchr/testify/require"
 )
 
@@ -48,18 +47,8 @@ func setupStoreForLockTestOwnServer(t *testing.T) (*Store, *uaerospike.Client) {
 	logger := ulogger.NewErrorTestLogger(t)
 	tSettings := test.CreateBaseTestSettings(t)
 
-	container, err := runAerospikeTestContainer(t, ctx, aeroTest.WithTTLSupport("test"))
-	test.SkipIfContainerUnavailable(t, err)
-
-	t.Cleanup(func() {
-		_ = container.Terminate(ctx)
-	})
-
-	host, err := container.Host(ctx)
-	require.NoError(t, err)
-
-	port, err := container.ServicePort(ctx)
-	require.NoError(t, err)
+	server := acquireOwnTestServerForInternalTests(t)
+	host, port := server.Host, server.Port
 
 	client, err := uaerospike.NewClient(host, port)
 	require.NoError(t, err)

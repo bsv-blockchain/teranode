@@ -129,6 +129,8 @@ func TestConflictingTxHashes_TracksTheFlag(t *testing.T) {
 	t.Parallel()
 
 	client, store, ctx := initAerospikeImageWith(t, "aerospike/aerospike-server:8.1", test.CreateBaseTestSettings(t), func(client *uaerospike.Client) {
+		// The wipe between tests does not reset namespace configuration.
+		teranode_aerospike.RetireOwnTestServer(t)
 		setNamespaceConfig(t, client, "allow-ttl-without-nsup=false")
 		setNamespaceConfig(t, client, "nsup-period=0")
 	})
@@ -307,6 +309,9 @@ func TestConflictingIndex_NotTrustedWhenItMissesTheFlag(t *testing.T) {
 	t.Parallel()
 
 	_, store, ctx := initAerospikeImageWith(t, "aerospike/aerospike-server:8.1", test.CreateBaseTestSettings(t), func(client *uaerospike.Client) {
+		// The server has the store's own index from an earlier store: replace it.
+		require.NoError(t, client.DropIndex(nil, aerospikeNamespace, aerospikeSet, "conflictingIndex"))
+
 		wrong := aerospike.ExpCond(aerospike.ExpBoolBin("_neverWritten"), aerospike.ExpIntVal(1), aerospike.ExpUnknown())
 
 		task, err := client.CreateIndexWithExpression(aerospike.NewWritePolicy(0, 0), aerospikeNamespace, aerospikeSet, "conflictingIndex", aerospike.NUMERIC, aerospike.ICT_DEFAULT, wrong)

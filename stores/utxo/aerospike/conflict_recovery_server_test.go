@@ -16,68 +16,76 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// The conflict recovery cases share one Aerospike container. Every case starts from empty UTXO,
-// WAL and checklist sets, so the order of the cases does not matter.
+// Every conflict recovery case runs in parallel on a server of its own, which starts with empty
+// UTXO, WAL and checklist sets.
 func TestAerospikeConflictRecovery(t *testing.T) {
 	t.Parallel()
-
-	client, store, _, deferFn := initAerospikeOwnServer(t, test.CreateBaseTestSettings(t), ulogger.NewErrorTestLogger(t))
-	t.Cleanup(deferFn)
 
 	cases := []struct {
 		name string
 		run  func(t *testing.T)
 	}{
-		// Must run first: later cases drop and recreate the index themselves.
-		// These read the process-wide fallback scan count, or drop the index and so add to it.
-		{"WALIndexFromNew", func(t *testing.T) { lockConflictWALScans(t); conflictWALIndexFromNew(t, store) }},
-		{"WALPendingScan", func(t *testing.T) { lockConflictWALScans(t); conflictWALPendingScan(t, client, store) }},
-		{"WALIndex", func(t *testing.T) { lockConflictWALScans(t); conflictWALIndex(t, client, store) }},
-		{"WALRootWriters", func(t *testing.T) { lockConflictWALScans(t); conflictWALRootWriters(t, client, store) }},
-		{"WideCascade", func(t *testing.T) { tests.ConflictRecoveryWideCascade(t, store) }},
-		{"LateLoserChild", func(t *testing.T) { tests.ConflictRecoveryLateLoserChild(t, store) }},
-		{"LateFreeInputSpender", func(t *testing.T) { tests.ConflictRecoveryLateFreeInputSpender(t, store) }},
-		{"OutsiderOwnedInput", func(t *testing.T) { tests.ConflictRecoveryOutsiderOwnedInput(t, store) }},
-		{"EarlyFailure", func(t *testing.T) { tests.ConflictRecoveryEarlyFailure(t, store) }},
-		{"RefusedAfterRollback", func(t *testing.T) { tests.ConflictRecoveryRefusedAfterRollback(t, store) }},
-		{"HealStaleForward", func(t *testing.T) { tests.ConflictRecoveryHealStaleForward(t, store) }},
-		{"SetConflictingChildren", func(t *testing.T) { tests.ConflictRecoverySetConflictingChildren(t, store, true) }},
-		{"ReverseCompletionFailure", func(t *testing.T) { tests.ConflictRecoveryReverseCompletionFailure(t, store) }},
-		{"WinnerWithConflictingChild", func(t *testing.T) { tests.ConflictRecoveryWinnerWithConflictingChild(t, store) }},
-		{"LateWinnerChild", func(t *testing.T) { tests.ConflictRecoveryLateWinnerChild(t, store) }},
-		{"ReverseThenReadd", func(t *testing.T) { tests.ConflictRecoveryReverseThenReadd(t, store) }},
-		{"ReverseKeepsForeignLock", func(t *testing.T) { tests.ConflictRecoveryReverseKeepsForeignLock(t, store) }},
-		{"LegacyIntent", func(t *testing.T) { tests.ConflictRecoveryLegacyIntent(t, store) }},
-		{"CancelledVerify", func(t *testing.T) { tests.ConflictRecoveryCancelledVerify(t, store) }},
-		{"PartialReverseReadd", func(t *testing.T) { tests.ConflictRecoveryPartialReverseReadd(t, store) }},
-		{"FreedInputTaken", func(t *testing.T) { tests.ConflictRecoveryFreedInputTaken(t, store) }},
-		{"BlockKeyedIntent", func(t *testing.T) { tests.ConflictRecoveryBlockKeyedIntent(t, store) }},
-		{"SupersetWinners", func(t *testing.T) { tests.ConflictRecoverySupersetWinners(t, store) }},
-		{"SupersetRefusedPhases", func(t *testing.T) { tests.ConflictRecoverySupersetRefusedPhases(t, store) }},
-		{"FreedWinningInputTaken", func(t *testing.T) { tests.ConflictRecoveryFreedWinningInputTaken(t, store) }},
-		{"AppliedWinnerPrunedParent", func(t *testing.T) { tests.ConflictRecoveryAppliedWinnerPrunedParent(t, store) }},
-		{"LegacyKey", func(t *testing.T) { tests.ConflictRecoveryLegacyKey(t, store) }},
-		{"RollbackStepFailures", func(t *testing.T) { tests.ConflictRecoveryRollbackStepFailures(t, store) }},
-		{"RollbackRetryTwoWinners", func(t *testing.T) { tests.ConflictRecoveryRollbackRetryTwoWinners(t, store) }},
-		{"ReplanThenHeal", func(t *testing.T) { tests.ConflictRecoveryReplanThenHeal(t, store) }},
-		{"ConfirmedLoserNotDemoted", func(t *testing.T) { tests.ConflictRecoveryConfirmedLoserNotDemoted(t, store) }},
-		{"ConfirmedLoserOwnsWinningInput", func(t *testing.T) { tests.ConflictRecoveryConfirmedLoserOwnsWinningInput(t, store) }},
-		{"ConfirmedLoserMixedChains", func(t *testing.T) { tests.ConflictRecoveryConfirmedLoserMixedChains(t, store) }},
+		{"WALIndexFromNew", func(t *testing.T) { conflictWALIndexFromNew(t, conflictRecoveryStore(t)) }},
+		{"WALPendingScan", func(t *testing.T) {
+			client, store := conflictRecoveryServer(t)
+			conflictWALPendingScan(t, client, store)
+		}},
+		{"WALIndex", func(t *testing.T) { client, store := conflictRecoveryServer(t); conflictWALIndex(t, client, store) }},
+		{"WALRootWriters", func(t *testing.T) {
+			client, store := conflictRecoveryServer(t)
+			conflictWALRootWriters(t, client, store)
+		}},
+		{"WideCascade", func(t *testing.T) { tests.ConflictRecoveryWideCascade(t, conflictRecoveryStore(t)) }},
+		{"LateLoserChild", func(t *testing.T) { tests.ConflictRecoveryLateLoserChild(t, conflictRecoveryStore(t)) }},
+		{"LateFreeInputSpender", func(t *testing.T) { tests.ConflictRecoveryLateFreeInputSpender(t, conflictRecoveryStore(t)) }},
+		{"OutsiderOwnedInput", func(t *testing.T) { tests.ConflictRecoveryOutsiderOwnedInput(t, conflictRecoveryStore(t)) }},
+		{"EarlyFailure", func(t *testing.T) { tests.ConflictRecoveryEarlyFailure(t, conflictRecoveryStore(t)) }},
+		{"RefusedAfterRollback", func(t *testing.T) { tests.ConflictRecoveryRefusedAfterRollback(t, conflictRecoveryStore(t)) }},
+		{"HealStaleForward", func(t *testing.T) { tests.ConflictRecoveryHealStaleForward(t, conflictRecoveryStore(t)) }},
+		{"SetConflictingChildren", func(t *testing.T) { tests.ConflictRecoverySetConflictingChildren(t, conflictRecoveryStore(t), true) }},
+		{"ReverseCompletionFailure", func(t *testing.T) { tests.ConflictRecoveryReverseCompletionFailure(t, conflictRecoveryStore(t)) }},
+		{"WinnerWithConflictingChild", func(t *testing.T) { tests.ConflictRecoveryWinnerWithConflictingChild(t, conflictRecoveryStore(t)) }},
+		{"LateWinnerChild", func(t *testing.T) { tests.ConflictRecoveryLateWinnerChild(t, conflictRecoveryStore(t)) }},
+		{"ReverseThenReadd", func(t *testing.T) { tests.ConflictRecoveryReverseThenReadd(t, conflictRecoveryStore(t)) }},
+		{"ReverseKeepsForeignLock", func(t *testing.T) { tests.ConflictRecoveryReverseKeepsForeignLock(t, conflictRecoveryStore(t)) }},
+		{"LegacyIntent", func(t *testing.T) { tests.ConflictRecoveryLegacyIntent(t, conflictRecoveryStore(t)) }},
+		{"CancelledVerify", func(t *testing.T) { tests.ConflictRecoveryCancelledVerify(t, conflictRecoveryStore(t)) }},
+		{"PartialReverseReadd", func(t *testing.T) { tests.ConflictRecoveryPartialReverseReadd(t, conflictRecoveryStore(t)) }},
+		{"FreedInputTaken", func(t *testing.T) { tests.ConflictRecoveryFreedInputTaken(t, conflictRecoveryStore(t)) }},
+		{"BlockKeyedIntent", func(t *testing.T) { tests.ConflictRecoveryBlockKeyedIntent(t, conflictRecoveryStore(t)) }},
+		{"SupersetWinners", func(t *testing.T) { tests.ConflictRecoverySupersetWinners(t, conflictRecoveryStore(t)) }},
+		{"SupersetRefusedPhases", func(t *testing.T) { tests.ConflictRecoverySupersetRefusedPhases(t, conflictRecoveryStore(t)) }},
+		{"FreedWinningInputTaken", func(t *testing.T) { tests.ConflictRecoveryFreedWinningInputTaken(t, conflictRecoveryStore(t)) }},
+		{"AppliedWinnerPrunedParent", func(t *testing.T) { tests.ConflictRecoveryAppliedWinnerPrunedParent(t, conflictRecoveryStore(t)) }},
+		{"LegacyKey", func(t *testing.T) { tests.ConflictRecoveryLegacyKey(t, conflictRecoveryStore(t)) }},
+		{"RollbackStepFailures", func(t *testing.T) { tests.ConflictRecoveryRollbackStepFailures(t, conflictRecoveryStore(t)) }},
+		{"RollbackRetryTwoWinners", func(t *testing.T) { tests.ConflictRecoveryRollbackRetryTwoWinners(t, conflictRecoveryStore(t)) }},
+		{"ReplanThenHeal", func(t *testing.T) { tests.ConflictRecoveryReplanThenHeal(t, conflictRecoveryStore(t)) }},
+		{"ConfirmedLoserNotDemoted", func(t *testing.T) { tests.ConflictRecoveryConfirmedLoserNotDemoted(t, conflictRecoveryStore(t)) }},
+		{"ConfirmedLoserOwnsWinningInput", func(t *testing.T) { tests.ConflictRecoveryConfirmedLoserOwnsWinningInput(t, conflictRecoveryStore(t)) }},
+		{"ConfirmedLoserMixedChains", func(t *testing.T) { tests.ConflictRecoveryConfirmedLoserMixedChains(t, conflictRecoveryStore(t)) }},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			cleanConflictSets(t, client)
+			t.Parallel()
 			tc.run(t)
 		})
 	}
 }
 
-// cleanConflictSets empties the UTXO set, the WAL root set and the WAL checklist chunk set.
-func cleanConflictSets(t *testing.T, client *uaerospike.Client) {
-	cleanDB(t, client)
-	cleanSet(t, client, aerospikeSet+"_conflictwal")
-	cleanSet(t, client, aerospikeSet+"_conflictwal_data")
+// conflictRecoveryServer opens a store and a raw client on a server of the case's own.
+func conflictRecoveryServer(t *testing.T) (*uaerospike.Client, *teranode_aerospike.Store) {
+	client, store, _, deferFn := initAerospikeOwnServer(t, test.CreateBaseTestSettings(t), ulogger.NewErrorTestLogger(t))
+	t.Cleanup(deferFn)
+
+	return client, store
+}
+
+func conflictRecoveryStore(t *testing.T) *teranode_aerospike.Store {
+	_, store := conflictRecoveryServer(t)
+
+	return store
 }
 
 // The pending scan reads only the WAL root. It must not load a checklist, and it must finish the
@@ -192,13 +200,13 @@ func conflictWALIndex(t *testing.T, client *uaerospike.Client, store *teranode_a
 		aerospike.NewBin("startedAt", int(legacy.StartedAt)),
 	))
 
-	scans := teranode_aerospike.ConflictWALFallbackScans()
+	scans := store.ConflictWALFallbackScans()
 
 	pending, err := store.PendingConflictIntents(ctx)
 	require.NoError(t, err, "without the index the read falls back to a scan of the set")
 	require.Len(t, pending, 1)
 	require.Equal(t, legacyID, pending[0].IntentID())
-	require.Greater(t, teranode_aerospike.ConflictWALFallbackScans(), scans, "without the index the read must scan")
+	require.Greater(t, store.ConflictWALFallbackScans(), scans, "without the index the read must scan")
 
 	// The upgrade: the store creates the index, and the server builds it over the existing root.
 	store.EnsureConflictWALIndex()
@@ -220,12 +228,12 @@ func conflictWALIndex(t *testing.T, client *uaerospike.Client, store *teranode_a
 	require.True(t, readable)
 	require.Equal(t, 2, indexed, "the index must hold the root written before it and the one written after")
 
-	scans = teranode_aerospike.ConflictWALFallbackScans()
+	scans = store.ConflictWALFallbackScans()
 
 	pending, err = store.PendingConflictIntents(ctx)
 	require.NoError(t, err)
 	require.Len(t, pending, 2)
-	require.Equal(t, scans, teranode_aerospike.ConflictWALFallbackScans(), "a readable index must be read without a scan")
+	require.Equal(t, scans, store.ConflictWALFallbackScans(), "a readable index must be read without a scan")
 
 	ids := map[chainhash.Hash]bool{}
 	for _, intent := range pending {
@@ -245,7 +253,7 @@ func conflictWALIndex(t *testing.T, client *uaerospike.Client, store *teranode_a
 }
 
 // A store fresh from New creates the WAL index itself, and startup reads through it without a
-// scan. This case runs before any case drops or recreates the index, so only New can have made it.
+// scan. The case has a server of its own, so only New can have made the index.
 func conflictWALIndexFromNew(t *testing.T, store *teranode_aerospike.Store) {
 	ctx := t.Context()
 
@@ -254,12 +262,12 @@ func conflictWALIndexFromNew(t *testing.T, store *teranode_aerospike.Store) {
 	intent := utxo.ConflictIntent{Kind: utxo.ConflictIntentReverse, BlockHeight: 41, BlockHash: chainhash.HashH([]byte("index-from-new-block")), StartedAt: 6}
 	require.NoError(t, store.BeginConflictIntent(ctx, intent))
 
-	scans := teranode_aerospike.ConflictWALFallbackScans()
+	scans := store.ConflictWALFallbackScans()
 
 	pending, err := store.PendingConflictIntents(ctx)
 	require.NoError(t, err)
 	require.Len(t, pending, 1)
-	require.Equal(t, scans, teranode_aerospike.ConflictWALFallbackScans(), "a store from New must read the WAL through its index")
+	require.Equal(t, scans, store.ConflictWALFallbackScans(), "a store from New must read the WAL through its index")
 
 	require.NoError(t, store.CompleteConflictIntent(ctx, intent.IntentID()))
 }
@@ -349,8 +357,6 @@ const conflictWALIndexCommand = "sindex-create:namespace=<ns>;set=<set>_conflict
 // uses it without a scan.
 func TestConflictWALIndex_ManualCreateCommand(t *testing.T) {
 	t.Parallel()
-	// Reads or adds to the process-wide conflict WAL fallback scan count.
-	lockConflictWALScans(t)
 
 	client, store, ctx := initAerospikeImageWith(t, "aerospike/aerospike-server:8.1", test.CreateBaseTestSettings(t), nil)
 	walSet := store.GetName() + "_conflictwal"
@@ -376,10 +382,10 @@ func TestConflictWALIndex_ManualCreateCommand(t *testing.T) {
 	intent := utxo.ConflictIntent{Kind: utxo.ConflictIntentReverse, BlockHeight: 31, BlockHash: chainhash.HashH([]byte("manual-index-block")), StartedAt: 4}
 	require.NoError(t, store.BeginConflictIntent(ctx, intent))
 
-	scans := teranode_aerospike.ConflictWALFallbackScans()
+	scans := store.ConflictWALFallbackScans()
 
 	pending, pendingErr := store.PendingConflictIntents(ctx)
 	require.NoError(t, pendingErr)
 	require.Len(t, pending, 1)
-	require.Equal(t, scans, teranode_aerospike.ConflictWALFallbackScans(), "the manually created index must serve the read")
+	require.Equal(t, scans, store.ConflictWALFallbackScans(), "the manually created index must serve the read")
 }

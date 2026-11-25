@@ -6,14 +6,12 @@ import (
 	"fmt"
 	"net/url"
 	"os"
-	"sync"
 	"testing"
 
 	"github.com/bsv-blockchain/aerospike-client-go/v8"
 	"github.com/bsv-blockchain/go-batcher/v2/completion"
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
-	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/blob/memory"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
@@ -25,7 +23,6 @@ import (
 	"github.com/bsv-blockchain/teranode/util/lane"
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/bsv-blockchain/teranode/util/uaerospike"
-	aeroTest "github.com/bsv-blockchain/testcontainers-aerospike-go"
 	"github.com/stretchr/testify/require"
 )
 
@@ -194,54 +191,13 @@ func initAerospikeWithURL(t *testing.T, settings *settings.Settings, logger ulog
 	return openStore(t, server.Host, server.Port, true, settings, logger, nil)
 }
 
-// conflictWALScansMu is held by every test or subtest that reads the process-wide count of
-// conflict WAL fallback scans or can add to it, so no such test sees another's scans.
-var conflictWALScansMu sync.Mutex
-
-// lockConflictWALScans holds conflictWALScansMu until the test ends.
-func lockConflictWALScans(t *testing.T) {
-	t.Helper()
-
-	conflictWALScansMu.Lock()
-	t.Cleanup(conflictWALScansMu.Unlock)
-}
-
-// startOwnAerospikeServer starts a container for this test alone and terminates it at cleanup.
+// startOwnAerospikeServer gives the test a server of its own (see AcquireOwnTestServer).
 func startOwnAerospikeServer(t *testing.T, image string) (string, int) {
 	t.Helper()
 
-	teranode_aerospike.AcquireOwnServerSlot(t)
+	server := teranode_aerospike.AcquireOwnTestServer(t, image, "")
 
-	ctx := context.Background()
-
-	var (
-		container *aeroTest.Container
-		err       error
-	)
-	func() {
-		defer func() {
-			if r := recover(); r != nil {
-				// Convert panic to error so we can skip cleanly
-				err = errors.NewError("container startup panic: %v", r)
-			}
-		}()
-
-		container, err = aeroTest.RunContainer(ctx, aeroTest.WithTTLSupport(aerospikeNamespace), aeroTest.WithImage(image))
-	}()
-	// Skips only when the container runtime is unreachable; any other failure fails the test.
-	test.SkipIfContainerUnavailable(t, err)
-
-	t.Cleanup(func() {
-		require.NoError(t, container.Terminate(ctx))
-	})
-
-	host, err := container.Host(ctx)
-	require.NoError(t, err)
-
-	port, err := container.ServicePort(ctx)
-	require.NoError(t, err)
-
-	return host, port
+	return server.Host, server.Port
 }
 
 // openStore connects a raw client and a store to the server at host:port. shared says other tests

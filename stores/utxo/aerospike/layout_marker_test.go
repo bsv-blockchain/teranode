@@ -27,24 +27,14 @@ func newLayoutTestStore(t *testing.T, batchSize int) (*Store, *aerospike.Client,
 	tSettings := test.CreateBaseTestSettings(t)
 	tSettings.UtxoStore.UtxoBatchSize = batchSize
 
-	container, err := runAerospikeTestContainer(t, ctx)
-	test.SkipIfContainerUnavailable(t, err)
+	server := acquireOwnTestServerForInternalTests(t)
+	h, p := server.Host, server.Port
 
-	t.Cleanup(func() {
-		require.NoError(t, container.Terminate(ctx))
-	})
-
-	h, err := container.Host(ctx)
-	require.NoError(t, err)
-
-	p, err := container.ServicePort(ctx)
-	require.NoError(t, err)
-
-	client, err := aerospike.NewClient(h, p)
-	require.NoError(t, err)
+	client, aeroErr := aerospike.NewClient(h, p)
+	require.NoError(t, aeroErr)
 	t.Cleanup(client.Close)
 
-	aeroURL, err := url.Parse(fmt.Sprintf("aerospike://%s:%d/test?set=utxo&externalStore=file://./data/external-lm", h, p))
+	aeroURL, err := url.Parse(fmt.Sprintf("aerospike://%s:%d/test?set=test&externalStore=file://./data/external-lm", h, p))
 	require.NoError(t, err)
 
 	store, newErr := New(ctx, logger, tSettings, aeroURL)
@@ -86,7 +76,7 @@ func TestLayoutMarker_SameSizeReopenAccepted(t *testing.T) {
 
 	ctx := context.Background()
 	// Second store on the same namespace and the same size: must open cleanly.
-	aeroURL, err := url.Parse(fmt.Sprintf("aerospike://%s/test?set=utxo&externalStore=file://./data/external-lm2", endpoint))
+	aeroURL, err := url.Parse(fmt.Sprintf("aerospike://%s/test?set=test&externalStore=file://./data/external-lm2", endpoint))
 	require.NoError(t, err)
 
 	second, err := New(ctx, ulogger.NewErrorTestLogger(t), tSettings, aeroURL)
@@ -110,7 +100,7 @@ func TestLayoutMarker_DifferentSizeReopenRefused(t *testing.T) {
 	ctx := context.Background()
 	tSettings.UtxoStore.UtxoBatchSize = 50
 
-	aeroURL, err := url.Parse(fmt.Sprintf("aerospike://%s/test?set=utxo&externalStore=file://./data/external-lm3", endpoint))
+	aeroURL, err := url.Parse(fmt.Sprintf("aerospike://%s/test?set=test&externalStore=file://./data/external-lm3", endpoint))
 	require.NoError(t, err)
 
 	_, err = New(ctx, ulogger.NewErrorTestLogger(t), tSettings, aeroURL)

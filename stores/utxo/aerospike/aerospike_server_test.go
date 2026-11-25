@@ -1624,172 +1624,169 @@ func TestStoreDecorate(t *testing.T) {
 func TestSmokeTests(t *testing.T) {
 	t.Parallel()
 
-	logger := ulogger.NewErrorTestLogger(t)
+	// Every case runs in parallel on a server of its own. The cases that build on the package-level
+	// fixtures of stores/utxo/tests (tests.Tx and its parent) take them in turn, since those helpers
+	// change the fixtures in place.
+	ctx := context.Background()
 	tSettings := test.CreateBaseTestSettings(t)
 
-	_, store, ctx, deferFn := initAerospikeOwnServer(t, tSettings, logger)
+	var fixturesMu sync.Mutex
 
-	t.Cleanup(func() {
-		deferFn()
-	})
+	newStore := func(t *testing.T, usesFixtures bool) *teranode_aerospike.Store {
+		t.Parallel()
+
+		if usesFixtures {
+			fixturesMu.Lock()
+			t.Cleanup(fixturesMu.Unlock)
+		}
+
+		_, store, _, deferFn := initAerospikeOwnServer(t, test.CreateBaseTestSettings(t), ulogger.NewErrorTestLogger(t))
+		t.Cleanup(deferFn)
+
+		return store
+	}
 
 	t.Run("aerospike_store", func(t *testing.T) {
-		err := store.Delete(ctx, tests.TXHash)
-		require.NoError(t, err)
+		store := newStore(t, true)
 
 		tests.Store(t, store)
 	})
 
 	t.Run("aerospike_spend", func(t *testing.T) {
-		err := store.Delete(ctx, tests.TXHash)
-		require.NoError(t, err)
+		store := newStore(t, true)
 
 		tests.Spend(t, store)
 	})
 
 	t.Run("aerospike_reset", func(t *testing.T) {
-		err := store.Delete(ctx, tests.TXHash)
-		require.NoError(t, err)
+		store := newStore(t, true)
 
 		tests.Restore(t, store)
 	})
 
 	t.Run("aerospike_freeze", func(t *testing.T) {
-		err := store.Delete(ctx, tests.TXHash)
-		require.NoError(t, err)
+		store := newStore(t, true)
 
 		tests.Freeze(t, store)
 	})
 
 	t.Run("aerospike_reassign", func(t *testing.T) {
-		err := store.Delete(ctx, tests.TXHash)
-		require.NoError(t, err)
+		store := newStore(t, true)
 
 		tests.ReAssign(t, store)
 	})
 
 	t.Run("set mined", func(t *testing.T) {
-		err := store.Delete(ctx, tests.TXHash)
-		require.NoError(t, err)
+		store := newStore(t, true)
 
 		tests.SetMined(t, store)
 	})
 
 	t.Run("aerospike_conflicting", func(t *testing.T) {
-		err := store.Delete(ctx, tests.TXHash)
-		require.NoError(t, err)
+		store := newStore(t, true)
 
 		tests.Conflicting(t, store)
 	})
 
 	t.Run("aerospike_conflict_WAL", func(t *testing.T) {
-		lockConflictWALScans(t) // a WAL read can add to the process-wide fallback scan count
+		store := newStore(t, false)
 
 		tests.ConflictWAL(t, store)
 	})
 
 	t.Run("aerospike_unspend_idempotent", func(t *testing.T) {
-		err := store.Delete(ctx, tests.TXHash)
-		require.NoError(t, err)
+		store := newStore(t, true)
 
 		tests.UnspendIdempotent(t, store)
 	})
 
 	t.Run("aerospike_spend_and_create", func(t *testing.T) {
-		err := store.Delete(ctx, tests.TXHash)
-		require.NoError(t, err)
+		store := newStore(t, true)
 
 		tests.SpendAndCreate(t, store)
 	})
 
 	t.Run("aerospike_spend_and_create_create_only", func(t *testing.T) {
-		err := store.Delete(ctx, tests.TXHash)
-		require.NoError(t, err)
+		store := newStore(t, true)
 
 		tests.SpendAndCreateCreateOnly(t, store)
 	})
 
 	t.Run("aerospike_create_returns_written_state", func(t *testing.T) {
+		store := newStore(t, true)
+
 		tests.CreateReturnsWrittenState(t, store)
 	})
 
 	t.Run("aerospike_spend_and_create_spend_only", func(t *testing.T) {
-		err := store.Delete(ctx, tests.TXHash)
-		require.NoError(t, err)
+		store := newStore(t, true)
 
 		tests.SpendAndCreateSpendOnly(t, store)
 	})
 
 	t.Run("aerospike_spend_and_create_tx_exists_keeps_spends", func(t *testing.T) {
-		err := store.Delete(ctx, tests.TXHash)
-		require.NoError(t, err)
+		store := newStore(t, true)
 
 		tests.SpendAndCreateTxExistsKeepsSpends(t, store)
 	})
 
 	t.Run("aerospike_spend_and_create_spend_error_surfaces_per_input", func(t *testing.T) {
-		err := store.Delete(ctx, tests.TXHash)
-		require.NoError(t, err)
+		store := newStore(t, true)
 
 		tests.SpendAndCreateSpendErrorSurfacesPerInput(t, store)
 	})
 
 	t.Run("aerospike_spend_and_create_invalid_options", func(t *testing.T) {
-		err := store.Delete(ctx, tests.TXHash)
-		require.NoError(t, err)
+		store := newStore(t, true)
 
 		tests.SpendAndCreateInvalidOptions(t, store)
 	})
 
 	t.Run("aerospike_delete_then_unspend_restores_parent", func(t *testing.T) {
-		err := store.Delete(ctx, tests.TXHash)
-		require.NoError(t, err)
+		store := newStore(t, true)
 
 		tests.DeleteThenUnspendRestoresParent(t, store)
 	})
 
 	t.Run("aerospike_delete_then_unspend_restores_parent_paginated", func(t *testing.T) {
-		err := store.Delete(ctx, tests.TXHash)
-		require.NoError(t, err)
+		store := newStore(t, true)
 
 		tests.DeleteThenUnspendRestoresParentPaginated(t, store, tSettings.UtxoStore.UtxoBatchSize)
 	})
 
 	t.Run("aerospike_conflict_WAL_crash_recovery", func(t *testing.T) {
-		lockConflictWALScans(t) // a WAL read can add to the process-wide fallback scan count
+		store := newStore(t, false)
 
 		tests.ConflictWALCrashRecovery(t, store)
 	})
 
 	t.Run("aerospike_set_conflicting_after_create", func(t *testing.T) {
-		err := store.Delete(ctx, tests.TXHash)
-		require.NoError(t, err)
+		store := newStore(t, true)
 
 		tests.SetConflictingAfterCreate(t, store)
 	})
 
 	t.Run("aerospike_partial_spend_rollback", func(t *testing.T) {
-		err := store.Delete(ctx, tests.TXHash)
-		require.NoError(t, err)
+		store := newStore(t, true)
 
 		tests.PartialSpendRollback(t, store)
 	})
 
 	t.Run("aerospike_quick_path_create_spend_mined_semantics", func(t *testing.T) {
-		err := store.Delete(ctx, tests.TXHash)
-		require.NoError(t, err)
+		store := newStore(t, true)
 
 		tests.QuickPathCreateSpendMinedSemantics(t, store)
 	})
 
 	t.Run("aerospike_absent_record_observables", func(t *testing.T) {
-		err := store.Delete(ctx, tests.TXHash)
-		require.NoError(t, err)
+		store := newStore(t, true)
 
 		tests.AbsentRecordObservables(t, store)
 	})
 
 	t.Run("aerospike_mined_then_spend_all_prunes", func(t *testing.T) {
+		store := newStore(t, true)
+
 		// Pruner service is a process-wide singleton. Reset at both ends so
 		// this subtest doesn't leak a started service into later aerospike
 		// tests that expect GetPrunerService() to initialize fresh state.
@@ -1820,13 +1817,15 @@ func TestSmokeTests(t *testing.T) {
 		tests.MinedThenSpendAllPrunes(t, store, prunerSvc)
 	})
 
-	// Last: these cases move the shared store's block height, and cannot restore
-	// it if the store started at zero.
 	t.Run("aerospike_set_block_state", func(t *testing.T) {
+		store := newStore(t, false)
+
 		tests.SetBlockStateContract(t, store)
 	})
 
 	t.Run("aerospike_set_block_state_concurrent", func(t *testing.T) {
+		store := newStore(t, false)
+
 		tests.SetBlockStateSnapshotUnderConcurrency(t, store)
 	})
 }

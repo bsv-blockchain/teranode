@@ -139,24 +139,13 @@ func TestUnmined(t *testing.T) {
 
 	tSettings := test.CreateBaseTestSettings(t)
 
-	container, err := runAerospikeTestContainer(t, ctx)
-	test.SkipIfContainerUnavailable(t, err)
-
-	t.Cleanup(func() {
-		err = container.Terminate(ctx)
-		require.NoError(t, err)
-	})
-
-	host, err := container.Host(ctx)
-	require.NoError(t, err)
-
-	port, err := container.ServicePort(ctx)
-	require.NoError(t, err)
+	server := acquireOwnTestServerForInternalTests(t)
+	host, port := server.Host, server.Port
 
 	client, err := uaerospike.NewClient(host, port)
 	require.NoError(t, err)
 
-	aeroURL, err := url.Parse(fmt.Sprintf("aerospike://%s:%d/test?set=utxo&externalStore=file://./data/external", host, port))
+	aeroURL, err := url.Parse(fmt.Sprintf("aerospike://%s:%d/test?set=test&externalStore=file://./data/external", host, port))
 	require.NoError(t, err)
 
 	store, err := New(ctx, logger, tSettings, aeroURL)

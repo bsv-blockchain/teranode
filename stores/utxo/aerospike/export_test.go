@@ -8,7 +8,6 @@ import (
 
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
-	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
 // ConflictingIndexVerdict reports whether the conflicting index self-test has
@@ -90,9 +89,9 @@ func SetMaxParentLanePositions(n int) (restore func()) {
 	return func() { maxParentLanePositions = was }
 }
 
-// ConflictWALFallbackScans is the number of WAL reads that scanned the set, for this process.
-func ConflictWALFallbackScans() float64 {
-	return testutil.ToFloat64(prometheusConflictWALFallbackScans)
+// ConflictWALFallbackScans is the number of this store's WAL reads that scanned the set.
+func (s *Store) ConflictWALFallbackScans() int64 {
+	return s.conflictWALScans.Load()
 }
 
 // RollbackIdempotentMatchesForTest runs the abort path's rollback for a failed

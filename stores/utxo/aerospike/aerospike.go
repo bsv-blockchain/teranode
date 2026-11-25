@@ -210,6 +210,10 @@ type Store struct {
 	// counted; a spend carries its position either way.
 	laneSlotWrites atomic.Bool
 
+	// conflictWALScans counts this store's WAL reads that scanned the set, as the process-wide
+	// metric does for every store.
+	conflictWALScans atomic.Int64
+
 	ctx                 context.Context // store the global context for things that run in the background
 	url                 *url.URL
 	client              *uaerospike.Client

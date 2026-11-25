@@ -78,18 +78,8 @@ func TestNativeOp_AddDeletedChildren_Integration(t *testing.T) {
 	logger := ulogger.NewErrorTestLogger(t)
 	ctx := context.Background()
 
-	container, err := runAerospikeTestContainer(t, ctx)
-	if err != nil {
-		t.Skipf("Skipping: Aerospike container not available (%v)", err)
-	}
-
-	t.Cleanup(func() { require.NoError(t, container.Terminate(ctx)) })
-
-	host, err := container.Host(ctx)
-	require.NoError(t, err)
-
-	port, err := container.ServicePort(ctx)
-	require.NoError(t, err)
+	server := acquireOwnTestServerForInternalTests(t)
+	host, port := server.Host, server.Port
 
 	tSettings := test.CreateBaseTestSettings(t)
 	tSettings.Aerospike.UseNativeTeranodeOps = true
