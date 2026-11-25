@@ -54,6 +54,9 @@ func NewSQLiteMemoryUTXOStore(ctx context.Context, logger ulogger.Logger, settin
 	var utxoStore utxo.Store
 	utxoStore, err = sql.New(ctx, logger, settings, utxoStoreURL)
 	require.NoError(t, err)
+	// Close at test end: an open store keeps its batcher workers, and the
+	// queue each one pins, alive until the test binary exits.
+	t.Cleanup(func() { _ = utxoStore.Close(context.Background()) })
 
 	return utxoStore
 }
@@ -67,6 +70,10 @@ func NewMemorySQLiteBlockchainClient(logger ulogger.Logger, settings *settings.S
 	var blockchainStore blockchainstore.Store
 	blockchainStore, err = blockchainstore.NewStore(logger, storeURL, settings)
 	require.NoError(t, err)
+	// Close at test end. The store's background loops hold the logger, and an
+	// ErrorTestLogger holds t, whose cleanup closures hold every store and
+	// service the test built. Left running, they keep all of it reachable.
+	t.Cleanup(func() { _ = blockchainStore.Close(context.Background()) })
 
 	var blockchainClient blockchain.ClientI
 	blockchainClient, err = blockchain.NewLocalClient(logger, settings, blockchainStore, nil, nil)

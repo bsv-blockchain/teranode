@@ -4892,7 +4892,12 @@ func TestHandleGetInfoComprehensive(t *testing.T) {
 		assert.Equal(t, true, infoMap["stn"])      // STN network
 	})
 
-	t.Run("legacy skipped when not subscribed", func(t *testing.T) {
+	t.Run("legacy peers counted though no service registers as SubscriberLegacy", func(t *testing.T) {
+		// Nothing in the tree ever calls Subscribe(ctx, blockchain.SubscriberLegacy)
+		// — the legacy netsync manager was the only producer and it was removed.
+		// So this is the subscriber list every real node reports. getinfo must
+		// still count legacy peers; if it consults the subscriber list to decide
+		// whether to call legacy GetPeers, it will silently report 0 here.
 		clearRPCCallCache()
 		nBits, _ := model.NewNBitFromString("180f9ff5")
 		mockBlockchainClient := &blockchain.Mock{}
@@ -4901,9 +4906,8 @@ func TestHandleGetInfoComprehensive(t *testing.T) {
 			&model.BlockHeaderMeta{Height: 100000},
 			nil,
 		)
-		// No legacy subscriber in the list
 		mockBlockchainClient.On("GetSubscribers", mock.Anything).Return(
-			[]string{blockchain.SubscriberP2P},
+			[]string{blockchain.SubscriberP2P, blockchain.SubscriberBlockAssembler},
 			nil,
 		)
 
@@ -4939,63 +4943,14 @@ func TestHandleGetInfoComprehensive(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, result)
 
-		assert.False(t, legacyCalled, "legacy GetPeers should not be called when legacy is not subscribed")
-		infoMap := result.(map[string]interface{})
-		assert.Equal(t, 0, infoMap["connections"])
-	})
-
-	t.Run("legacy called when subscribed", func(t *testing.T) {
-		clearRPCCallCache()
-		nBits, _ := model.NewNBitFromString("180f9ff5")
-		mockBlockchainClient := &blockchain.Mock{}
-		mockBlockchainClient.On("GetBestBlockHeader", mock.Anything).Return(
-			&model.BlockHeader{Bits: *nBits},
-			&model.BlockHeaderMeta{Height: 100000},
-			nil,
-		)
-		mockBlockchainClient.On("GetSubscribers", mock.Anything).Return(
-			[]string{blockchain.SubscriberLegacy},
-			nil,
-		)
-
-		legacyCalled := false
-		mockLegacyPeerClient := &mockLegacyPeerClient{
-			getPeersFunc: func(ctx context.Context) (*peer_api.GetPeersResponse, error) {
-				legacyCalled = true
-				return &peer_api.GetPeersResponse{
-					Peers: []*peer_api.Peer{{Id: 1, Addr: "127.0.0.1:8335"}},
-				}, nil
-			},
-		}
-
-		s := &RPCServer{
-			logger:           logger,
-			blockchainClient: mockBlockchainClient,
-			legacyP2PClient:  mockLegacyPeerClient,
-			settings: &settings.Settings{
-				ChainCfgParams: &chaincfg.MainNetParams,
-				RPC: settings.RPCSettings{
-					ClientCallTimeout: 5 * time.Second,
-				},
-				Policy: &settings.PolicySettings{
-					ExcessiveBlockSize:           4294967296,
-					BlockMaxSize:                 2000000000,
-					MaxStackMemoryUsagePolicy:    104857600,
-					MaxStackMemoryUsageConsensus: 0,
-				},
-			},
-		}
-
-		result, err := handleGetInfo(context.Background(), s, nil, nil)
-		require.NoError(t, err)
-		require.NotNil(t, result)
-
-		assert.True(t, legacyCalled, "legacy GetPeers should be called when legacy is subscribed")
+		assert.True(t, legacyCalled, "legacy GetPeers must be called whenever a legacy client exists")
 		infoMap := result.(map[string]interface{})
 		assert.Equal(t, 1, infoMap["connections"])
 	})
 
-	t.Run("legacy skipped when GetSubscribers fails", func(t *testing.T) {
+	t.Run("legacy counted when blockchain subscriber lookup fails", func(t *testing.T) {
+		// The subscriber lookup is not a liveness signal the handler depends on, so
+		// a blockchain error must not suppress the legacy leg either.
 		clearRPCCallCache()
 		nBits, _ := model.NewNBitFromString("180f9ff5")
 		mockBlockchainClient := &blockchain.Mock{}
@@ -5041,9 +4996,9 @@ func TestHandleGetInfoComprehensive(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, result)
 
-		assert.False(t, legacyCalled, "legacy GetPeers should not be called when GetSubscribers fails")
+		assert.True(t, legacyCalled, "legacy GetPeers must be called regardless of the subscriber lookup result")
 		infoMap := result.(map[string]interface{})
-		assert.Equal(t, 0, infoMap["connections"])
+		assert.Equal(t, 1, infoMap["connections"])
 	})
 }
 
@@ -5325,8 +5280,9 @@ func TestHandleFreezeComprehensive(t *testing.T) {
 		}
 
 		cmd := &bsvjson.FreezeCmd{
-			TxID: "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
-			Vout: 0,
+			TxID:     "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+			Vout:     0,
+			UTXOHash: "101112131415161718191a1b1c1d1e1f000102030405060708090a0b0c0d0e0f",
 		}
 
 		// This should panic when utxoStore is nil
@@ -5369,8 +5325,9 @@ func TestHandleUnfreezeComprehensive(t *testing.T) {
 		}
 
 		cmd := &bsvjson.UnfreezeCmd{
-			TxID: "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
-			Vout: 0,
+			TxID:     "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+			Vout:     0,
+			UTXOHash: "101112131415161718191a1b1c1d1e1f000102030405060708090a0b0c0d0e0f",
 		}
 
 		// This should panic when utxoStore is nil
@@ -5464,7 +5421,7 @@ func TestHandleReassignComprehensive(t *testing.T) {
 			OldTxID:     "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
 			OldVout:     0,
 			OldUTXOHash: "101112131415161718191a1b1c1d1e1f000102030405060708090a0b0c0d0e0f",
-			NewUTXOHash: "1f1e1d1c1b1a19181716151413121110f0e0d0c0b0a09080706050403020100",
+			NewUTXOHash: "1f1e1d1c1b1a191817161514131211100f0e0d0c0b0a09080706050403020100",
 		}
 
 		// This should panic when utxoStore is nil
@@ -6350,7 +6307,7 @@ func (m *mockBlockAssemblyClient) Health(ctx context.Context, checkLiveness bool
 	}
 	return 200, "OK", nil
 }
-func (m *mockBlockAssemblyClient) Store(ctx context.Context, hash *chainhash.Hash, fee, size uint64, txInpoints subtree.TxInpoints, _ uint32) (bool, error) {
+func (m *mockBlockAssemblyClient) Store(ctx context.Context, hash *chainhash.Hash, fee, size uint64, txInpoints subtree.TxInpoints, _ uint32, _ uint64) (bool, error) {
 	return true, nil
 }
 func (m *mockBlockAssemblyClient) RemoveTx(ctx context.Context, hash *chainhash.Hash) error {

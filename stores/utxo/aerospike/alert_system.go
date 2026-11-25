@@ -81,10 +81,11 @@ import (
 //   - spends: Array of UTXOs to freeze
 //
 // Returns error if any UTXO:
-//   - Doesn't exist
 //   - Is already spent
-//   - Is already frozen
+//   - Does not match the provided UTXO hash
 //   - Fails to freeze
+//
+// A missing record and an output that is already frozen are not reported.
 func (s *Store) FreezeUTXOs(_ context.Context, spends []*utxo.Spend, tSettings *settings.Settings) error {
 	batchUDFPolicy := aerospike.NewBatchUDFPolicy()
 	batchRecords := make([]aerospike.BatchRecordIfc, 0, len(spends))
@@ -128,7 +129,12 @@ func (s *Store) FreezeUTXOs(_ context.Context, spends []*utxo.Spend, tSettings *
 			continue
 		}
 
-		if res.Status == LuaStatusError && res.ErrorCode == LuaErrorCodeSpent {
+		if res.Status != LuaStatusError {
+			continue
+		}
+
+		switch res.ErrorCode {
+		case LuaErrorCodeSpent:
 			// Extract spending data from error message
 			hexData := strings.TrimPrefix(res.Message, "SPENT:")
 			if spendingData, parseErr := spendpkg.NewSpendingDataFromString(hexData); parseErr == nil {
@@ -136,6 +142,10 @@ func (s *Store) FreezeUTXOs(_ context.Context, spends []*utxo.Spend, tSettings *
 			} else {
 				errorsThrown = append(errorsThrown, errors.NewStorageError("[freeze][%d][%s] failed to freeze aerospike utxo: %s", batchID, spendDesc, res.Message))
 			}
+		case LuaErrorCodeUtxoHashMismatch:
+			// The output exists but the caller's commitment does not match it, so
+			// nothing was frozen. Reporting it is what makes the commitment binding.
+			errorsThrown = append(errorsThrown, errors.NewStorageError("[freeze][%d][%s] failed to freeze aerospike utxo: %s", batchID, spendDesc, res.Message))
 		}
 	}
 
