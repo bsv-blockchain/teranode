@@ -101,6 +101,11 @@ func newMmapJobServer(t *testing.T, gated bool) *mmapJobServer {
 		s.BlockAssembly.UseDynamicSubtreeSize = false
 		s.BlockAssembly.SubtreeProcessorBatcherSize = 1
 		s.BlockAssembly.DoubleSpendWindow = 0
+		// The fixture transactions spend a synthetic parent that is in no store. The first block
+		// moves the template to other transaction rules, which rebuilds it from the UTXO store
+		// (settleTemplate), and with this on that rebuild drops each transaction whose parent is
+		// missing. Parent validation is not what these tests cover.
+		s.BlockAssembly.OnRestartRemoveInvalidParentChainTxs = false
 
 		if gated {
 			// one worker, so the second subtree waits in the queue while the first write is blocked
@@ -289,7 +294,9 @@ func (m *mmapJobServer) reset(t *testing.T) {
 }
 
 // addTip adds a block on the genesis block, with the given work, and waits until block
-// assembly builds on it and holds at least wantSubtrees complete subtrees. After the
+// assembly builds on it, has settled its template under the new block's transaction rules (the
+// first block rebuilds it from the UTXO store, and until then it hands out empty candidates), and
+// holds at least wantSubtrees complete subtrees. After the
 // reorg the processor's mining data holds none until a subtree completes again.
 func (m *mmapJobServer) addTip(t *testing.T, nonce uint32, bits string, wantSubtrees int) {
 	t.Helper()
@@ -328,6 +335,7 @@ func (m *mmapJobServer) addTip(t *testing.T, nonce uint32, bits string, wantSubt
 	require.Eventually(t, func() bool {
 		best, _ := m.ba.blockAssembler.CurrentBlock()
 		return best != nil && best.Hash().IsEqual(header.Hash()) &&
+			!m.ba.blockAssembler.templateTxEraIsStale() &&
 			len(chainedSubtrees(m.ba)) >= wantSubtrees
 	}, 5*time.Second, 50*time.Millisecond, "block assembly did not move to the new tip")
 }
