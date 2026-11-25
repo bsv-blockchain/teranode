@@ -320,6 +320,13 @@ func (s *Server) blockedByParentsForLong(ctx context.Context, blockHeight, unmin
 		return false
 	}
 
+	// The query of the sweep selects records that are at least CreatingTxSweepMinAgeBlocks old, so
+	// an age at or below that value is met on the first pass that sees the record, with no earlier
+	// pass that retried it. The age is raised to one block above it.
+	if minAge := s.settings.Pruner.CreatingTxSweepMinAgeBlocks; age <= minAge {
+		age = minAge + 1
+	}
+
 	if unminedSince == 0 || unminedSince >= blockHeight || blockHeight-unminedSince <= age {
 		return false
 	}
@@ -357,10 +364,16 @@ func (s *Server) blockedByParentsForLong(ctx context.Context, blockHeight, unmin
 	return true
 }
 
-// parentBlockedForAtLeast reads the record of a parent and reports whether it is still locked or
-// creating and was stamped with an unminedSince at least age blocks below blockHeight. An unminedSince
-// of 0 means mined, and 1 is the floor of a backdated value (utxo.BackdatedUnminedSince), so neither
-// says when the parent was stored.
+// parentBlockedForAtLeast reads the record of a parent and reports whether it is locked, not
+// creating, and was stamped with an unminedSince at least age blocks below blockHeight. An
+// unminedSince of 0 means mined, and 1 is the floor of a backdated value (utxo.BackdatedUnminedSince),
+// so neither says when the parent was stored.
+//
+// The age is the height at which the parent was stored. No field records when its lock was taken,
+// so a parent that was locked a moment ago, for example by the conflict walk of a double-spend, looks
+// as old as its record. A value that a reorg backdated to the tip minus the unmined retention looks
+// that old too. The rule is a guard against a parent that was not stored recently, and it does not
+// prove that the parent has been locked for that long.
 func (s *Server) parentBlockedForAtLeast(ctx context.Context, blockHeight uint32, parent chainhash.Hash, age uint32) bool {
 	md, err := s.utxoStore.Get(ctx, &parent, fields.UnminedSince, fields.Locked, fields.Creating)
 	if err != nil {
@@ -369,7 +382,12 @@ func (s *Server) parentBlockedForAtLeast(ctx context.Context, blockHeight uint32
 		return false
 	}
 
-	if !md.Locked && !md.Creating {
+	// A creating parent is a record that this sweep heals, from the same crash as the child in
+	// many cases. It carries the same age as the child, and the order of the query does not put it
+	// before the child, so it says nothing about a parent that is stuck. The child waits for the
+	// parent to settle: once the parent is rolled forward its lock ends with the hand-off, and once
+	// it is rolled back the child's spend fails for good.
+	if !md.Locked || md.Creating {
 		return false
 	}
 

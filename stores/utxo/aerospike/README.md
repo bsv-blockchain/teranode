@@ -694,8 +694,11 @@ from touching the next.
   decides for the rollback. The sweep retries such a record on every pass. Only when
   `pruner_creatingTxSweepBlockedAgeBlocks` is above 0 (it is 0, off, by default) does it roll the
   record back for its age: the record must be older than that, and every parent that gave the
-  transient answer in the pass must be read as still locked or creating, with an `unminedSince`
-  at least that many blocks old.
+  transient answer in the pass must be read as locked and not creating, with an `unminedSince`
+  at least that many blocks old. That is the height at which the parent was stored. No field
+  records when its lock was taken, so a parent that was locked a moment ago looks as old as its
+  record, and so does one that a reorg backdated. A creating parent never counts, because the sweep
+  heals it. A value at or below `pruner_creatingTxSweepMinAgeBlocks` is raised to that value plus one.
 - **Expiry.** A hold expires with its time to live. `ClearCreateFirstHold(hash, adopt)` deletes
   one earlier, or one that has no time to live, filtered on `hold` and on the `holdUntil` that
   was read. Without `adopt` it goes
