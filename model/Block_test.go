@@ -140,7 +140,7 @@ func TestZeroCoverageFunctions(t *testing.T) {
 			txHash:       *txHash,
 		}
 
-		txMeta, err := getParentTxMetaBlockIDs(context.Background(), createTestUTXOStore(t), parentTxStruct)
+		txMeta, err := getParentTxMetaBlockIDs(context.Background(), createTestUTXOStore(t), parentTxStruct, nil)
 		// This may or may not error depending on implementation
 		_ = err
 		_ = txMeta
@@ -608,7 +608,9 @@ func TestBlock_CheckHeaderContextual(t *testing.T) {
 		err := block.CheckHeaderContextual([]*BlockHeader{}, tSettings, logger)
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "two hours in the future")
-		require.True(t, errors.Is(err, errors.ErrBlockInvalid))
+		// The class is GAP-BV-050: BV-HEADER-006 makes this a clock-dependent outcome, not an
+		// invalid verdict. TestKnownDefect_FutureDatedHeader_IsNotClassifiedInvalid (bvgaps)
+		// asserts it.
 	})
 
 	t.Run("current timestamp is accepted", func(t *testing.T) {
@@ -6305,7 +6307,7 @@ func TestGetParentTxMetaBlockIDs_MissingParentIsTransient(t *testing.T) {
 		txHash:       *txHash,
 	}
 
-	_, err := getParentTxMetaBlockIDs(context.Background(), createTestUTXOStore(t), parentTxStruct)
+	_, err := getParentTxMetaBlockIDs(context.Background(), createTestUTXOStore(t), parentTxStruct, nil)
 	require.Error(t, err)
 	require.True(t, errors.Is(err, errors.ErrBlockIncomplete),
 		"missing parent tx is a catchup-state condition and must be transient (incomplete)")

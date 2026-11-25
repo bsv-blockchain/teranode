@@ -364,6 +364,7 @@ func newAncestorVerdictFixture(ctx context.Context, t *testing.T, opts ancestorV
 
 	utxoStore, err := sql.New(ctx, logger, tSettings, utxoStoreURL)
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = utxoStore.Close(context.Background()) })
 
 	subtreeStore := blobmemory.New()
 	txStore := blobmemory.New()

@@ -1,6 +1,7 @@
 package lane
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
@@ -527,4 +528,197 @@ func TestDecodeHoleDataRefusesMoreRunsThanCanonical(t *testing.T) {
 	got, err := DecodeHoleData(raw)
 	require.NoError(t, err)
 	require.True(t, got.Equals(most))
+}
+
+// holeDataOf builds the serialized form of a one-bucket 64-bit bitmap by hand, so a test can write
+// what no encoder writes. containers are key, cardinality and body; run marks run containers.
+func holeDataOf(bucket uint32, containers []rawContainer) []byte {
+	b := binary.LittleEndian.AppendUint64(nil, 1)
+	b = binary.LittleEndian.AppendUint32(b, bucket)
+
+	anyRun := false
+	for _, c := range containers {
+		anyRun = anyRun || c.run
+	}
+
+	if anyRun {
+		b = binary.LittleEndian.AppendUint32(b, serialCookie|uint32(len(containers)-1)<<16) //nolint:gosec // a test
+		flags := make([]byte, (len(containers)+7)/8)
+
+		for i, c := range containers {
+			if c.run {
+				flags[i/8] |= 1 << (i % 8)
+			}
+		}
+
+		b = append(b, flags...)
+	} else {
+		b = binary.LittleEndian.AppendUint32(b, serialCookieNoRunContainer)
+		b = binary.LittleEndian.AppendUint32(b, uint32(len(containers))) //nolint:gosec // a test
+	}
+
+	for _, c := range containers {
+		b = binary.LittleEndian.AppendUint16(b, c.key)
+		b = binary.LittleEndian.AppendUint16(b, c.card-1)
+	}
+
+	if !anyRun || len(containers) >= noOffsetThreshold {
+		offset := uint32(len(b) + 4*len(containers)) //nolint:gosec // a test
+		for _, c := range containers {
+			b = binary.LittleEndian.AppendUint32(b, offset)
+			offset += uint32(len(c.body)) //nolint:gosec // a test
+		}
+	}
+
+	for _, c := range containers {
+		b = append(b, c.body...)
+	}
+
+	return b
+}
+
+// twoBuckets is a two-bucket bitmap holding position 1 of each of buckets first and second, in
+// that order.
+func twoBuckets(first, second uint32) []byte {
+	one := []rawContainer{{key: 0, card: 1, body: u16s(1)}}
+
+	b := holeDataOf(first, one)
+	binary.LittleEndian.PutUint64(b, 2)
+
+	return append(b, holeDataOf(second, one)[8:]...)
+}
+
+type rawContainer struct {
+	key, card uint16
+	run       bool
+	body      []byte
+}
+
+func u16s(vs ...uint16) []byte {
+	var b []byte
+	for _, v := range vs {
+		b = binary.LittleEndian.AppendUint16(b, v)
+	}
+
+	return b
+}
+
+// The linear check refuses each shape Roaring's Validate refuses, and a hand-built valid form
+// passes both. Each malformed buffer still parses, so only the check stands between it and a
+// reader.
+func TestCheckContainersRefusesWhatValidateRefuses(t *testing.T) {
+	runs := func(pairs ...uint16) rawContainer { // start, length less one, ...
+		return rawContainer{key: 0, card: 1, run: true, body: append(u16s(uint16(len(pairs)/2)), u16s(pairs...)...)} //nolint:gosec // a test
+	}
+
+	fullBitmap := make([]byte, bitmapContainerBytes)
+	for i := range fullBitmap {
+		fullBitmap[i] = 0x55 // 32,768 values
+	}
+
+	for name, c := range map[string]struct {
+		data  []byte
+		valid bool
+	}{
+		"valid runs":                 {holeDataOf(0, []rawContainer{runs(1, 2, 10, 0)}), true},
+		"valid array":                {holeDataOf(0, []rawContainer{{key: 0, card: 3, body: u16s(1, 5, 9)}}), true},
+		"valid bitmap":               {holeDataOf(0, []rawContainer{{key: 0, card: 0x8000, body: fullBitmap}}), true},
+		"overlapping runs":           {holeDataOf(0, []rawContainer{runs(1, 2, 2, 0)}), false},
+		"touching runs":              {holeDataOf(0, []rawContainer{runs(1, 0, 2, 0)}), false},
+		"runs out of order":          {holeDataOf(0, []rawContainer{runs(10, 0, 1, 0)}), false},
+		"run past the container":     {holeDataOf(0, []rawContainer{runs(0xFFFF, 1)}), false},
+		"array out of order":         {holeDataOf(0, []rawContainer{{key: 0, card: 3, body: u16s(5, 1, 9)}}), false},
+		"array repeats a value":      {holeDataOf(0, []rawContainer{{key: 0, card: 3, body: u16s(1, 1, 9)}}), false},
+		"bitmap miscounted":          {holeDataOf(0, []rawContainer{{key: 0, card: 0x7FFF, body: fullBitmap}}), false},
+		"run container with no runs": {holeDataOf(0, []rawContainer{{key: 0, card: 1, run: true, body: u16s(0)}}), false},
+		"buckets out of order":       {twoBuckets(5, 4), false},
+		"buckets in order":           {twoBuckets(4, 5), true},
+		"containers out of order": {holeDataOf(0, []rawContainer{
+			{key: 3, card: 1, body: u16s(1)}, {key: 2, card: 1, body: u16s(1)},
+		}), false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			checkErr := checkContainers(c.data)
+
+			bm := roaring64.New()
+			if _, err := bm.ReadPortableFrom(bytes.NewReader(c.data)); err == nil {
+				require.Equal(t, c.valid, bm.Validate() == nil, "Roaring's Validate agrees with the fixture")
+			}
+
+			if c.valid {
+				require.NoError(t, checkErr)
+			} else {
+				require.Error(t, checkErr)
+			}
+		})
+	}
+}
+
+// An empty bucket is refused: no canonical encoding writes one. Roaring's Validate passes it, so
+// the canonical-bytes comparison in DecodeHoleData refuses it too.
+func TestCheckContainersRefusesAnEmptyBucket(t *testing.T) {
+	data := append(holeDataOf(0, nil), twoBuckets(4, 5)[8:]...)
+	binary.LittleEndian.PutUint64(data, 3)
+
+	require.Error(t, checkContainers(data))
+
+	_, err := DecodeHoleData(data)
+	require.Error(t, err)
+}
+
+// A block of scattered takes fills its containers with close to the canonical 2,047 runs. Each
+// decodes in microseconds, where Roaring's Validate, which compares every pair of runs, takes
+// milliseconds a container. The bound is relative, against Validate on the same input in the same
+// run, so a slow or instrumented runner slows both: on a laptop the decode takes about 0.3 ms and
+// Validate about 130 ms.
+func TestDecodeHoleDataOfManyFullRunContainersIsQuick(t *testing.T) {
+	bm := roaring64.New()
+
+	for chunk := uint64(0); chunk < 16; chunk++ {
+		for i := uint64(0); i < maxCanonicalRuns; i++ {
+			start := chunk<<chunkBits + i*6 + 1
+			bm.AddRange(start, start+3)
+		}
+	}
+
+	bm.RunOptimize()
+
+	data, err := bm.ToBytes()
+	require.NoError(t, err)
+
+	started := time.Now()
+	got, err := DecodeHoleData(data)
+	decode := time.Since(started)
+
+	require.NoError(t, err)
+	require.True(t, got.Equals(bm))
+
+	started = time.Now()
+	require.NoError(t, got.Validate())
+	validate := time.Since(started)
+
+	require.Less(t, 20*decode, validate, "16 containers of 2,047 runs: the decode takes %v, Roaring's Validate %v", decode, validate)
+}
+
+// FuzzCheckContainersMatchesValidate: on any buffer Roaring parses, the linear check refuses it
+// whenever Roaring's Validate does.
+func FuzzCheckContainersMatchesValidate(f *testing.F) {
+	f.Add(holeDataOf(0, []rawContainer{{key: 0, card: 1, run: true, body: u16s(2, 1, 2, 5, 0)}}))
+	f.Add(holeDataOf(0, []rawContainer{{key: 0, card: 3, body: u16s(1, 5, 9)}}))
+	f.Add(mustBytesF(f, bitmapOf(1, 2, 3, 1<<40)))
+
+	f.Fuzz(func(t *testing.T, data []byte) {
+		if len(data) > 1<<20 {
+			return
+		}
+
+		bm := roaring64.New()
+		if _, err := bm.ReadPortableFrom(bytes.NewReader(data)); err != nil {
+			return
+		}
+
+		if checkContainers(data) == nil {
+			require.NoError(t, bm.Validate(), "the check passed what Validate refuses")
+		}
+	})
 }

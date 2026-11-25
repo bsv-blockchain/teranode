@@ -24,8 +24,9 @@ import (
 // storeRequests answers every store request of an unstarted processor and records the roots, so a
 // test sees which subtrees were sent to the store and decides itself which count as stored.
 type storeRequests struct {
-	mu    sync.Mutex
-	roots []chainhash.Hash
+	mu      sync.Mutex
+	roots   []chainhash.Hash
+	results []chan StoreResult // the Result channel of each request, nil when it had none
 }
 
 func (r *storeRequests) has(root chainhash.Hash) bool {
@@ -69,6 +70,7 @@ func newStoredPrefixProcessor(t testing.TB, itemsPerSubtree int, set *StoredSet,
 			case req := <-newSubtreeChan:
 				log.mu.Lock()
 				log.roots = append(log.roots, *req.Subtree.RootHash())
+				log.results = append(log.results, req.Result)
 				log.mu.Unlock()
 
 				if req.ErrChan != nil {

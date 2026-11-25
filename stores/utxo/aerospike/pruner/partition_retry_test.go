@@ -33,12 +33,6 @@ func ensurePrometheusMetrics() {
 		prometheusUtxoRecordsDeletedSkipped = prometheus.NewCounter(prometheus.CounterOpts{
 			Name: "test_utxo_pruner_records_deleted_skipped_total",
 		})
-		prometheusUtxoParentsUpdated = prometheus.NewCounter(prometheus.CounterOpts{
-			Name: "test_utxo_pruner_parents_updated_total",
-		})
-		prometheusUtxoParentsUpdatedSkipped = prometheus.NewCounter(prometheus.CounterOpts{
-			Name: "test_utxo_pruner_parents_updated_skipped_total",
-		})
 		prometheusUtxoExternalFilesDeleted = prometheus.NewCounter(prometheus.CounterOpts{
 			Name: "test_utxo_pruner_external_files_deleted_total",
 		})

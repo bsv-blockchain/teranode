@@ -103,7 +103,7 @@ func answerFromQueue(req NewSubtreeRequest, set *StoredSet, res StoreResult) {
 	}
 
 	if set != nil {
-		set.Finish(*req.Subtree.RootHash(), res, false, 0)
+		set.Finish(*req.Subtree.RootHash(), res, false)
 	}
 
 	if req.Result != nil {

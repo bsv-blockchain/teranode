@@ -93,6 +93,48 @@ var preserveParentLaneSQL = laneStatement(preserveParentSQL,
 	"NULL, NULL, NULL, NULL, NULL, j.flags\n", "NULL, NULL, NULL, NULL, NULL, j.flags, NULL\n",
 )
 
+// preserveParentLaneParentSQL is preserveParentLaneSQL also carrying parent_lane_positions beside
+// the inpoints, for a database with that column (Store.laneParentColumn).
+var preserveParentLaneParentSQL = laneStatement(preserveParentLaneSQL,
+	"preserve_until, lane_position)\nSELECT k.txid", "preserve_until, lane_position, parent_lane_positions)\nSELECT k.txid",
+	"$5::int, s.lane_position\n", "$5::int, s.lane_position, s.parent_lane_positions\n",
+	"           m.lane_position\n", "           m.lane_position, m.parent_lane_positions\n",
+	"NULL, NULL, NULL, NULL, NULL, m.flags, NULL\n", "NULL, NULL, NULL, NULL, NULL, m.flags, NULL, NULL\n",
+	"NULL, NULL, NULL, NULL, NULL, u.flags, NULL\n", "NULL, NULL, NULL, NULL, NULL, u.flags, NULL, NULL\n",
+	"NULL, NULL, NULL, NULL, NULL, j.flags, NULL\n", "NULL, NULL, NULL, NULL, NULL, j.flags, NULL, NULL\n",
+)
+
+// The preserve statements whose thin copies, taken from a coin row or a journal row, carry that
+// row's lane_position, for a database with the column on utxo and spend_journal
+// (Store.laneCoinColumn). The containment row's thin copy has no position to carry.
+var (
+	preserveParentLaneCoinSQL = laneStatement(preserveParentLaneSQL,
+		"NULL, NULL, NULL, NULL, NULL, u.flags, NULL\n", "NULL, NULL, NULL, NULL, NULL, u.flags, u.lane_position\n",
+		"NULL, NULL, NULL, NULL, NULL, j.flags, NULL\n", "NULL, NULL, NULL, NULL, NULL, j.flags, j.lane_position\n",
+	)
+
+	preserveParentLaneParentCoinSQL = laneStatement(preserveParentLaneParentSQL,
+		"NULL, NULL, NULL, NULL, NULL, u.flags, NULL, NULL\n", "NULL, NULL, NULL, NULL, NULL, u.flags, u.lane_position, NULL\n",
+		"NULL, NULL, NULL, NULL, NULL, j.flags, NULL, NULL\n", "NULL, NULL, NULL, NULL, NULL, j.flags, j.lane_position, NULL\n",
+	)
+)
+
+// preserveParentForm is the preserve statement for this database's lane columns.
+func (s *Store) preserveParentForm() string {
+	switch {
+	case !s.laneColumn:
+		return preserveParentSQL
+	case s.laneParentColumn && s.laneCoinColumn:
+		return preserveParentLaneParentCoinSQL
+	case s.laneParentColumn:
+		return preserveParentLaneParentSQL
+	case s.laneCoinColumn:
+		return preserveParentLaneCoinSQL
+	default:
+		return preserveParentLaneSQL
+	}
+}
+
 // renewPreservedSQL extends the preservation of every named parent that already has one. The
 // insert above copies a parent only from its block's tx_mined partition, a live UTXO or a spend-journal row,
 // and a parent fully spent in its block loses all three once its partition and journal partitions
@@ -170,7 +212,7 @@ func (s *Store) PreserveTransactions(ctx context.Context, txIDs []chainhash.Hash
 
 	leaves, ids, los, his := liveUTXOArgs(txids)
 
-	if _, err := s.pool.Exec(ctx, s.laneForm(preserveParentSQL, preserveParentLaneSQL), leaves, ids, los, his, until,
+	if _, err := s.pool.Exec(ctx, s.preserveParentForm(), leaves, ids, los, his, until,
 		int32(floors.DroppedFloor), int32(floors.StampCompleteFloor), FlagLocked); err != nil { //nolint:gosec // heights fit int32
 		return errors.NewStorageError("[utxoset][PreserveTransactions] preserve %d parents until %d",
 			len(txids), preserveUntilHeight, err)
