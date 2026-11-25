@@ -180,7 +180,7 @@ func laneIndexForTests(t testing.TB) *lane.Index {
 func TestLaneShadowJudgesEveryDecisionOnAerospike(t *testing.T) {
 	ctx := context.Background()
 
-	container, err := aeroTest.RunContainer(ctx)
+	container, err := aeroTest.RunContainer(ctx, aeroTest.WithImage(test.AerospikeImage))
 	test.SkipIfContainerUnavailable(t, err)
 
 	t.Cleanup(func() { require.NoError(t, container.Terminate(ctx)) })
