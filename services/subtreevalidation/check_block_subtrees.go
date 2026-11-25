@@ -1729,7 +1729,8 @@ func (u *Server) processTransactionsInLevels(ctx context.Context, allTransaction
 	processedValidatorOptions := validator.ProcessOptions(validatorOptions...)
 
 	// Pre-warm the MTP store once before spawning per-transaction goroutines, so each goroutine
-	// can read mtpStore[h] without locking and without making gRPC calls.
+	// reads mtpStore[h] under a read lock without gRPC calls, unless the store does not hold
+	// the candidate's base, when the first to see it reloads the store.
 	if err = u.validatorClient.EnsureMTPLoaded(ctx, blockHeight); err != nil {
 		return errors.NewProcessingError("[processTransactionsInLevels] failed to pre-load MTP store: %v", err)
 	}

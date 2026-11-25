@@ -846,8 +846,8 @@ func (v *Server) ValidateTransactionBatch(ctx context.Context, req *validator_ap
 
 	// Pre-warm the MTP store for BIP68 validation before spawning per-transaction goroutines.
 	// All transactions in a block share the same blockHeight; loading the store here (serially)
-	// means the concurrent goroutines below can look up MTPs via direct array reads, with no
-	// locking and no per-transaction gRPC calls.
+	// means the concurrent goroutines below look up MTPs by array reads under a read lock,
+	// with no per-transaction gRPC calls unless the store does not hold the candidate's base.
 	if len(req.GetTransactions()) > 0 {
 		if err := v.validator.EnsureMTPLoaded(ctx, req.GetTransactions()[0].GetBlockHeight()); err != nil {
 			return nil, err

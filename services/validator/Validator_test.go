@@ -2453,8 +2453,8 @@ func TestEnsureMTPLoaded_CrossBlockReadersAndWritersDoNotRace(t *testing.T) {
 	require.Equal(t, int32(2), client.loads.Load())
 }
 
-// TestReadMTPsLocked_HappyPath verifies the reader helper returns the per-input
-// MTP values and the block MTP correctly when mtpStore is fully populated.
+// TestReadMTPsLocked_HappyPath verifies the reader returns each input's MTP from the
+// store when mtpStore is fully populated and no base is named.
 func TestReadMTPsLocked_HappyPath(t *testing.T) {
 	v := &Validator{
 		logger: ulogger.TestLogger{},
@@ -2472,10 +2472,9 @@ func TestReadMTPsLocked_HappyPath(t *testing.T) {
 	require.Equal(t, []uint32{1_700_000_000, 1_700_000_020, 1_700_000_030}, utxoMTPs)
 }
 
-// TestReadMTPsLocked_ClampsOutOfRangeUTXOs verifies that utxoHeights at or above
-// the block height take the caller's blockMTP, the candidate's parent MTP: a
-// same-block parent's ancestor is the candidate's parent, and the unconfirmed
-// sentinel sits far above any height. mtpStore[blockHeight] is never read.
+// TestReadMTPsLocked_ClampsOutOfRangeUTXOs verifies that coins at or above the block height (a
+// same-block parent, or the unconfirmed sentinel) take the caller's blockMTP, the candidate's
+// parent MTP; mtpStore[blockHeight] is never read.
 func TestReadMTPsLocked_ClampsOutOfRangeUTXOs(t *testing.T) {
 	v := &Validator{
 		logger: ulogger.TestLogger{},
@@ -2766,10 +2765,8 @@ func TestEnsureMTPLoaded_PostGenesisFetchesNothing(t *testing.T) {
 	require.Empty(t, v.mtpStore)
 }
 
-// TestReadMTPsLocked_GuardFiresOnUnpopulatedStore verifies the guard returns a
-// processing error when EnsureMTPLoaded has not populated the store up to the
-// requested blockMTPHeight (in normal operation this cannot happen because
-// Server.go calls EnsureMTPLoaded before per-tx goroutines start).
+// TestReadMTPsLocked_GuardFiresOnUnpopulatedStore verifies the reader returns a processing
+// error when the store is not loaded up to blockHeight and no base is named.
 func TestReadMTPsLocked_GuardFiresOnUnpopulatedStore(t *testing.T) {
 	v := &Validator{
 		logger:   ulogger.TestLogger{},

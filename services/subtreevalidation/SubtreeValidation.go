@@ -1528,7 +1528,8 @@ func (u *Server) blessMissingTransactions(ctx context.Context, subtreeHash chain
 	kept := &keptAsideSet{u: u, txMetaSlice: txMetaSlice, blockHeight: blockHeight, hashes: make(map[chainhash.Hash]struct{})}
 
 	// Pre-warm the MTP store once before spawning per-transaction goroutines, so each goroutine
-	// can read mtpStore[h] without locking and without making gRPC calls.
+	// reads mtpStore[h] under a read lock without gRPC calls, unless the store does not hold
+	// the candidate's base, when the first to see it reloads the store.
 	if err = u.validatorClient.EnsureMTPLoaded(ctx, blockHeight); err != nil {
 		return errors.NewProcessingError("[processMissingTransactions][%s] failed to pre-load MTP store: %v", subtreeHash.String(), err)
 	}

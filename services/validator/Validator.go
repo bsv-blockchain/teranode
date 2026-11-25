@@ -330,7 +330,9 @@ type Validator struct {
 	//     append re-allocates the backing array; the in-place patch mutates indices that
 	//     readers may be addressing).
 	// Same-block contention is negligible: EnsureMTPLoaded runs once per block before per-tx
-	// goroutines start, and per-tx readers only contend with each other on the read lock.
+	// goroutines start, and per-tx readers only contend with each other on the read lock,
+	// unless the store does not hold the candidate's base (as after a reorg); then the first
+	// transaction to see it reloads the store under mtpLoadMu and the others wait for it.
 	mtpLoadMu sync.Mutex
 	mtpMu     sync.RWMutex
 	mtpStore  []uint32
