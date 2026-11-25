@@ -257,6 +257,24 @@ func TestBanOnAddress_DropsConnectedPeerFromRegistryAndSync(t *testing.T) {
 	}
 }
 
+// A peer whose registration is still queued in the batcher when a ban closes
+// its connection is not in the registry yet. Its queued registration is
+// dropped, so the next flush does not register a peer with no connection.
+func TestBanOnAddress_DropsQueuedRegistration(t *testing.T) {
+	s, reg, client := newAdmissionTestServer(t)
+	s.registryBatcher = newPeerRegistryBatcher(context.Background(), ulogger.TestLogger{}, s.peerRegistry, time.Hour)
+
+	pid := mustNewPeerID(t)
+	client.peers = []p2pMessageBus.PeerInfo{{ID: pid.String(), Addrs: []string{fmt.Sprintf("/ip4/198.51.100.9/tcp/9905/p2p/%s", pid)}}}
+	s.addConnectedPeer(pid, "client", peerHeightClaim{Height: 10, AdvertisedHeight: 10}, nil, "https://datahub.example")
+
+	banAddr(t, s, "198.51.100.9")
+	s.registryBatcher.flushOnce(context.Background())
+
+	_, inRegistry := reg.Get(pid.String())
+	require.False(t, inRegistry, "the flush does not register the disconnected peer")
+}
+
 // A registry ban recorded without this process's onPeerBanned (another
 // service's AddBanScore) reaches admission through a sync, which blocks the
 // peer ID and closes its connection. The sync drops the peer too.

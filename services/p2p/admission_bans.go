@@ -218,8 +218,12 @@ func (s *Server) blockBannedPeer(peerID string, ips []net.IP) map[string]struct{
 
 // dropPeersClosedAtAdmission drops at the application layer each registered
 // peer whose connections an admission rule closed. It makes registry calls,
-// so it must not run under the admission lock. A peer not in the registry is
-// left alone, as disconnectPeersOnBanList leaves it.
+// so it must not run under the admission lock.
+//
+// A peer not in the registry yet may have its registration queued in the
+// batcher, from a message read before the close; a flush after the close
+// would register it with no connection, where no walk of GetPeers finds it.
+// Its queued state is dropped instead.
 func (s *Server) dropPeersClosedAtAdmission(closed map[string]struct{}, reason string) {
 	for id := range closed {
 		pid, err := peer.Decode(id)
@@ -229,6 +233,11 @@ func (s *Server) dropPeersClosedAtAdmission(closed map[string]struct{}, reason s
 
 		if _, inRegistry := s.getPeer(pid); inRegistry {
 			s.disconnectBannedPeerByID(s.gCtx, pid, reason)
+			continue
+		}
+
+		if s.registryBatcher != nil {
+			s.registryBatcher.forget(id)
 		}
 	}
 }
