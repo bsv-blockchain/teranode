@@ -541,6 +541,38 @@ func TestLaneShadowJudgesAMasterWithoutTotalExtraRecs(t *testing.T) {
 	require.Equal(t, settled+1, laneVerdicts(t, lanereader.PruneDelete, lanereader.PruneDelete, lanereader.ReasonSettled))
 }
 
+// TestLaneShadowCountsADeletedPageWithoutItsMaster: a page returned alone is deleted by today's
+// rule, but cannot be judged as a transaction without its master.
+func TestLaneShadowCountsADeletedPageWithoutItsMaster(t *testing.T) {
+	svc := laneShadowTestService(t)
+	svc.readMastersFn = func(keys []*aerospike.Key) ([]masterRead, error) {
+		require.Len(t, keys, 1)
+		return []masterRead{{err: aerospike.ErrKeyNotFound}}, nil
+	}
+	chunk := pagedMasterChunk(t, svc)
+	txID := chainhash.Hash(chunk[0].Record.Bins[svc.fieldTxID].([]byte))
+	pageKey, keyErr := aerospike.NewKey(svc.namespace, svc.set, uaerospike.CalculateKeySourceInternal(&txID, 1))
+	require.NoError(t, keyErr)
+	chunk[0].Record.Key = pageKey
+	delete(chunk[0].Record.Bins, svc.fieldTotalExtraRecs)
+
+	before := laneMetric(t, "teranode_lane_pruner_unjudged_total", map[string]string{"store": lanereader.PruneStoreAerospike, "reason": "page_without_master"})
+	processed, _, err := svc.processRecordChunk(context.Background(), 1000, chunk)
+	require.NoError(t, err)
+	require.Equal(t, 1, processed)
+	require.Equal(t, before+1, laneMetric(t, "teranode_lane_pruner_unjudged_total", map[string]string{"store": lanereader.PruneStoreAerospike, "reason": "page_without_master"}))
+
+	svc.batchOperateFn = func(*aerospike.BatchPolicy, []aerospike.BatchRecordIfc) error { return aerospike.ErrTimeout }
+	withMaster := append(pagedMasterChunk(t, svc), chunk[0])
+	shadow := svc.newLaneShadow(withMaster)
+	for _, rec := range withMaster {
+		shadow.markDeleted(rec)
+	}
+	shadow.run()
+	require.Equal(t, before+1, laneMetric(t, "teranode_lane_pruner_unjudged_total", map[string]string{"store": lanereader.PruneStoreAerospike, "reason": "page_without_master"}),
+		"a page returned with its master is not counted twice")
+}
+
 // TestLaneShadowCountsAFailedPageBatch: when the page-read batch fails, its master cannot be judged
 // settled, and the failure is counted apart.
 func TestLaneShadowCountsAFailedPageBatch(t *testing.T) {

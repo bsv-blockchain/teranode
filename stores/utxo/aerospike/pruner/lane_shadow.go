@@ -26,11 +26,11 @@ import (
 // One verdict per transaction. A master record is judged with every page's slots: its own lanePos
 // bin is the parent's position, and each spent output's spendLanePos entry, on the master or the page
 // holding the output, is its spender's. The pages a master names are read in one batch per chunk,
-// only for the lane rule (teranode_lane_pruner_extra_reads_total kind page). A page record the query
-// returns on its own is judged with its master, not again. A page another worker has already
-// deleted makes the master cannot_judge spender_unread. Outside defensive mode that happens only
-// when today deletes the master. In defensive mode a page is deleted on its own children, so a
-// master today keeps for an unstable child of its own can be counted spender_unread.
+// only for the lane rule (teranode_lane_pruner_extra_reads_total kind page). A page record returned
+// with its master is not judged again; a deleted page without its master is counted unjudged. A page
+// another worker has already deleted makes the master cannot_judge spender_unread. Outside defensive
+// mode that happens only when today deletes the master. In defensive mode a page is deleted on its
+// own children, so a master today keeps for an unstable child of its own can be counted spender_unread.
 //
 // At off no Reader exists, newLaneShadow returns nil, the query asks for exactly the bins it asked
 // for before, and every method below does nothing.
@@ -103,8 +103,8 @@ var (
 	binSpendLanePos = fields.SpendingLanePositions.String()
 )
 
-// run judges every master record of the chunk and adds the counts to the metrics. It must run before
-// the chunk's delete batch, so the pages it reads are still there.
+// run judges every master record and counts deleted pages without a master as unjudged. It must run
+// before the chunk's delete batch, so the pages it reads are still there.
 func (l *laneShadow) run() {
 	if l == nil {
 		return
@@ -120,6 +120,9 @@ func (l *laneShadow) run() {
 	start := time.Now()
 
 	masters := make([]laneMaster, 0, len(l.records))
+	mastersSeen := make(map[chainhash.Hash]struct{})
+	var pagesDeleted []chainhash.Hash
+
 	// Every master's spenders share one array; a page's spenders, appended later, copy that master's
 	// out of it, since each master's slice is capped at its own end.
 	spenders := make([]lanereader.PruneSpender, 0, 2*len(l.records))
@@ -157,9 +160,13 @@ func (l *laneShadow) run() {
 			// txid, or a page, judged with its master.
 			key, kerr := aerospike.NewKey(l.s.namespace, l.s.set, uaerospike.CalculateKeySourceInternal((*chainhash.Hash)(txID), 0))
 			if kerr != nil || !bytes.Equal(key.Digest(), rec.Record.Key.Digest()) {
+				if today == lanereader.TodayDelete {
+					pagesDeleted = append(pagesDeleted, chainhash.Hash(txID))
+				}
 				continue
 			}
 		}
+		mastersSeen[chainhash.Hash(txID)] = struct{}{}
 
 		conflicting, _ := bins[l.s.fieldConflicting].(bool)
 
@@ -185,6 +192,11 @@ func (l *laneShadow) run() {
 				m.pages = append(m.pages, key)
 				pageKeys++
 			}
+		}
+	}
+	for _, txID := range pagesDeleted {
+		if _, ok := mastersSeen[txID]; !ok {
+			l.judge.Unjudged("page_without_master", 1)
 		}
 	}
 
