@@ -560,7 +560,10 @@ func (s *Server) drainHandOffs(ctx context.Context, blockHeight uint32, pass *ha
 	prunerCreatingSweepHandOffPending.Set(float64(listLength))
 }
 
-// resumeHandOff reports whether the entry stays on the list.
+// resumeHandOff reports whether the entry stays on the list. The read shows the master record
+// only. SetLocked writes the master first and the pagination records after it, so an unlock that
+// failed on the pages leaves the master unlocked. An entry at the unlock stage is therefore not
+// finished by an unlocked master: its unlock runs again, which is idempotent and covers the pages.
 func (s *Server) resumeHandOff(ctx context.Context, blockHeight uint32, e *handOff, pass *handOffPass) bool {
 	md, err := s.utxoStore.Get(ctx, &e.hash, fields.Locked, fields.Creating, fields.Conflicting, fields.BlockIDs)
 
@@ -573,8 +576,12 @@ func (s *Server) resumeHandOff(ctx context.Context, blockHeight uint32, e *handO
 		s.logger.Warnf("[pruner][creating-sweep][%d] reading %s for its hand-off failed, will retry next block: %v", blockHeight, e.hash, err)
 
 		return true
-	case len(md.BlockIDs) > 0 || !md.Locked:
-		s.logger.Infof("[pruner][creating-sweep][%d] dropped the hand-off of %s: it is mined or no longer locked, so another component finished it", blockHeight, e.hash)
+	case len(md.BlockIDs) > 0:
+		s.logger.Infof("[pruner][creating-sweep][%d] dropped the hand-off of %s: it is mined, which clears its locks", blockHeight, e.hash)
+
+		return false
+	case !md.Locked && e.stage != stageUnlock:
+		s.logger.Infof("[pruner][creating-sweep][%d] dropped the hand-off of %s: it is no longer locked, so another component finished it", blockHeight, e.hash)
 
 		return false
 	case md.Creating || md.Conflicting:

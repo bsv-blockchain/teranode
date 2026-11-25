@@ -1932,6 +1932,54 @@ func TestSweepCreatingTxsRetriesAFailedUnlockWithoutAnnouncingAgain(t *testing.T
 	})
 }
 
+// SetLocked writes the master first and the pagination records after it. An unlock that failed on
+// the pages leaves the master unlocked, and the read of the drain sees the master only. An entry at
+// the unlock stage must run its unlock again, and keep its place until that succeeds.
+func TestSweepCreatingTxsDrainRetriesAnUnlockOwedToThePagesOfAnUnlockedMaster(t *testing.T) {
+	t.Run("an entry at the unlock stage unlocks again and is then dropped", func(t *testing.T) {
+		s, store, ba, hashA := handOffSweep(t, 0)
+
+		store.stale = nil
+		store.getResp[hashA] = &meta.Data{Locked: false}
+		s.handOffs = []handOff{{hash: hashA, stage: stageUnlock, validatedHeight: 99}}
+
+		s.sweepCreatingTxs(context.Background(), 100)
+
+		require.Zero(t, ba.calls, "the announce was made by an earlier pass")
+		require.Equal(t, []chainhash.Hash{hashA}, store.unlocked, "the pages are unlocked again")
+		require.Empty(t, s.handOffs)
+	})
+
+	t.Run("an entry whose unlock fails again keeps its place", func(t *testing.T) {
+		s, store, _, hashA := handOffSweep(t, 0)
+
+		boom := errors.NewStorageError("unlock boom")
+		store.unlockErrs = []error{boom, boom, boom}
+		store.stale = nil
+		store.getResp[hashA] = &meta.Data{Locked: false}
+		s.handOffs = []handOff{{hash: hashA, stage: stageUnlock, validatedHeight: 99}}
+
+		s.sweepCreatingTxs(context.Background(), 100)
+
+		require.Empty(t, store.unlocked)
+		require.Len(t, s.handOffs, 1, "an unlock that is not confirmed is not recorded as finished")
+		require.Equal(t, stageUnlock, s.handOffs[0].stage)
+	})
+
+	t.Run("a mined record is dropped without an unlock", func(t *testing.T) {
+		s, store, _, hashA := handOffSweep(t, 0)
+
+		store.stale = nil
+		store.getResp[hashA] = &meta.Data{Locked: false, BlockIDs: []uint32{3}}
+		s.handOffs = []handOff{{hash: hashA, stage: stageUnlock, validatedHeight: 99}}
+
+		s.sweepCreatingTxs(context.Background(), 100)
+
+		require.Empty(t, store.unlocked, "setMined clears the locks of every page")
+		require.Empty(t, s.handOffs)
+	})
+}
+
 // An entry is acted on only after its record is read. A record that is gone, mined or no longer
 // locked was finished by another component and is dropped. A record that shows anything else is
 // left on the list and logged.
