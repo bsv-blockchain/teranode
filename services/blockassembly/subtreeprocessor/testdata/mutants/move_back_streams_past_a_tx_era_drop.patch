@@ -1,0 +1,13 @@
+diff --git a/services/blockassembly/subtreeprocessor/SubtreeProcessor.go b/services/blockassembly/subtreeprocessor/SubtreeProcessor.go
+index dbe7138fb..a940c4ebd 100644
+--- a/services/blockassembly/subtreeprocessor/SubtreeProcessor.go
++++ b/services/blockassembly/subtreeprocessor/SubtreeProcessor.go
+@@ -6882,7 +6882,7 @@ func (stp *SubtreeProcessor) moveBackBlockBulkBuild(ctx context.Context, block *
+ 
+ 	// The streamed build reads the block's nodes and the pending ones where they are, so it needs
+ 	// them all: a block transaction kept out above, or a pending one that spends it, takes the walk.
+-	streamed := !droppedFromBlock
++	streamed := true // mutant: stream even when the tx era kept a block transaction out
+ 
+ 	if len(flatHashes) > 0 {
+ 		wasSet := make([]bool, len(flatHashes))
