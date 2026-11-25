@@ -83,10 +83,9 @@ jobs:
           #     ./util/usql
           #     ./test/consensus
     steps:
+      # Nothing here reads git history, so the default depth-1 clone is enough.
       - name: Checkout PR branch
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -108,10 +107,12 @@ jobs:
             ${{ matrix.packages }} \
             | tee pr-${{ matrix.group }}.txt
 
+      # The PR's base commit, not main's tip at job start: every group then runs the
+      # same baseline, and the report names it.
       - name: Checkout main
         uses: actions/checkout@v4
         with:
-          ref: main
+          ref: ${{ github.event.pull_request.base.sha }}
           path: main
 
       - name: Run main benchmarks
@@ -173,11 +174,11 @@ jobs:
           echo "PR benchmarks: $(grep -c '^Benchmark' pr-benchmark-output.txt) results"
           echo "Main benchmarks: $(grep -c '^Benchmark' main-benchmark-output.txt) results"
 
+      # The bench jobs check out this commit as the main side. The checkout above is
+      # depth 1 with no origin/main, so git log here found nothing.
       - name: Capture baseline SHA
         id: baseline_sha
-        run: |
-          SHA=$(git log --format='%H' origin/main -1 2>/dev/null || echo "unknown")
-          echo "value=$SHA" >> "$GITHUB_OUTPUT"
+        run: echo "value=${{ github.event.pull_request.base.sha }}" >> "$GITHUB_OUTPUT"
 
       - name: Compare benchmarks
         id: compare
