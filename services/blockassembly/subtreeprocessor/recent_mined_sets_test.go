@@ -154,6 +154,17 @@ func TestKeepMinedSet_RetentionAndPrune(t *testing.T) {
 	stp.pruneMinedSets()
 	require.Zero(t, stp.keptMinedSetCount())
 
+	stp.settings.BlockAssembly.DoubleSpendWindow = -2 * time.Second
+	stp.keepMinedSet(minedSetBlock(7), frozenHashSet(t, h))
+
+	*now = now.Add(10*time.Second - time.Millisecond)
+	stp.pruneMinedSets()
+	require.Equal(t, 1, stp.keptMinedSetCount(), "a negative double-spend window does not shorten the retention")
+
+	*now = now.Add(time.Millisecond)
+	stp.pruneMinedSets()
+	require.Zero(t, stp.keptMinedSetCount())
+
 	stp.settings.BlockAssembly.DoubleSpendWindow = 0
 
 	stp.settings.BlockAssembly.MinedTxSetRetention = time.Second
@@ -303,20 +314,26 @@ func TestForgetAndClearMinedSets(t *testing.T) {
 }
 
 // An ordinary block move: a late hand-off of a transaction the block mined, after the block's
-// drain, is dropped on arrival by the block's kept set.
+// drain, is dropped on arrival by the block's kept set. With a double-spend window the transaction
+// arrives before the block instead, the drain leaves it queued, and the kept set must still drop
+// it when the window has passed and the dequeue loop places it.
 func TestMoveForwardBlock_LateHandOffOfMinedTxStaysOut(t *testing.T) {
 	cases := map[string]struct {
-		retention time.Duration
-		reEnters  bool
+		window, retention time.Duration
+		reEnters          bool
 	}{
-		"kept_set_drops_it":          {retention: 10 * time.Second},
-		"retention_off_lets_it_back": {retention: 0, reEnters: true},
+		"kept_set_drops_it":                       {retention: 10 * time.Second},
+		"retention_off_lets_it_back":              {retention: 0, reEnters: true},
+		"held_by_window_below_retention":          {window: 2 * time.Second, retention: 10 * time.Second},
+		"held_by_window_above_retention":          {window: 15 * time.Second, retention: 10 * time.Second},
+		"held_by_window_retention_off_lets_it_in": {window: 2 * time.Second, retention: 0, reEnters: true},
 	}
 
 	for variant, opts := range catchUpTxMapVariants(t) {
 		for name, tc := range cases {
 			t.Run(variant+"/"+name, func(t *testing.T) {
 				stp, store, subtreeStore, chain := newResetWALTestProcessor(t, false, opts...)
+				stp.settings.BlockAssembly.DoubleSpendWindow = tc.window
 				stp.settings.BlockAssembly.MinedTxSetRetention = tc.retention
 
 				minedTx, _ := createResetWALConflict(t, store, 31)
@@ -324,18 +341,37 @@ func TestMoveForwardBlock_LateHandOffOfMinedTxStaysOut(t *testing.T) {
 				unmined := chainhash.HashH([]byte("late-hand-off-not-mined"))
 
 				chain.moveForward[0].Subtrees = []*chainhash.Hash{storeTestSubtree(t, subtreeStore, false, minedTx)}
-				stp.queue.clock = fixedClock{t: time.Now().Add(-time.Second)}
+
+				enqueueAt := time.Now()
+
+				var nowNanos atomic.Int64
+				nowNanos.Store(enqueueAt.Add(500 * time.Millisecond).UnixNano())
+				stp.clock = clockFunc(func() time.Time { return time.Unix(0, nowNanos.Load()) })
+				stp.queue.clock = fixedClock{t: enqueueAt}
 
 				stp.Start(t.Context())
 
+				handOff := func() {
+					stp.AddBatch(
+						[]subtreepkg.Node{{Hash: mined, Fee: 1, SizeInBytes: 1}, {Hash: unmined, Fee: 1, SizeInBytes: 1}},
+						[]*subtreepkg.TxInpoints{inpointsPtr(), inpointsPtr()},
+					)
+				}
+
+				if tc.window > 0 {
+					handOff()
+				}
+
 				require.NoError(t, stp.MoveForwardBlock(chain.moveForward[0]))
 				require.Eventually(t, func() bool { return !stp.DrainingAfterBlock() }, 5*time.Second, time.Millisecond,
-					"the block's own drain must end before the hand-off arrives")
+					"the block's own drain must end before the hand-off arrives or the window passes")
 
-				stp.AddBatch(
-					[]subtreepkg.Node{{Hash: mined, Fee: 1, SizeInBytes: 1}, {Hash: unmined, Fee: 1, SizeInBytes: 1}},
-					[]*subtreepkg.TxInpoints{inpointsPtr(), inpointsPtr()},
-				)
+				if tc.window > 0 {
+					require.Equal(t, int64(2), stp.queue.length(), "precondition: the block's drain leaves the batch inside the window")
+					nowNanos.Store(enqueueAt.Add(tc.window + time.Millisecond).UnixNano())
+				} else {
+					handOff()
+				}
 
 				require.Eventually(t, func() bool {
 					return stp.queue.length() == 0 && stp.GetCurrentTxMap().Exists(unmined)
@@ -344,60 +380,6 @@ func TestMoveForwardBlock_LateHandOffOfMinedTxStaysOut(t *testing.T) {
 				require.Equal(t, tc.reEnters, stp.GetCurrentTxMap().Exists(mined))
 			})
 		}
-	}
-}
-
-// A transaction queued inside the double-spend window before a block mines it is held back by the
-// block's drain. When the window has passed, the dequeue loop must not place it.
-func TestMoveForwardBlock_MinedTxHeldByTheWindowStaysOut(t *testing.T) {
-	cases := map[string]struct {
-		window, retention time.Duration
-		reEnters          bool
-	}{
-		"window_below_retention":     {window: 2 * time.Second, retention: 10 * time.Second},
-		"window_above_retention":     {window: 15 * time.Second, retention: 10 * time.Second},
-		"retention_off_lets_it_back": {window: 2 * time.Second, retention: 0, reEnters: true},
-	}
-
-	for name, tc := range cases {
-		t.Run(name, func(t *testing.T) {
-			stp, store, subtreeStore, chain := newResetWALTestProcessor(t, false)
-			stp.settings.BlockAssembly.DoubleSpendWindow = tc.window
-			stp.settings.BlockAssembly.MinedTxSetRetention = tc.retention
-
-			minedTx, _ := createResetWALConflict(t, store, 33)
-			mined := *minedTx.TxIDChainHash()
-			unmined := chainhash.HashH([]byte("held-by-the-window-not-mined"))
-
-			chain.moveForward[0].Subtrees = []*chainhash.Hash{storeTestSubtree(t, subtreeStore, false, minedTx)}
-
-			enqueueAt := time.Now()
-
-			var nowNanos atomic.Int64
-			nowNanos.Store(enqueueAt.UnixNano())
-			stp.clock = clockFunc(func() time.Time { return time.Unix(0, nowNanos.Load()) })
-			stp.queue.clock = fixedClock{t: enqueueAt}
-
-			stp.Start(t.Context())
-
-			stp.AddBatch(
-				[]subtreepkg.Node{{Hash: mined, Fee: 1, SizeInBytes: 1}, {Hash: unmined, Fee: 1, SizeInBytes: 1}},
-				[]*subtreepkg.TxInpoints{inpointsPtr(), inpointsPtr()},
-			)
-
-			nowNanos.Add(int64(500 * time.Millisecond))
-			require.NoError(t, stp.MoveForwardBlock(chain.moveForward[0]))
-			require.Eventually(t, func() bool { return !stp.DrainingAfterBlock() }, 5*time.Second, time.Millisecond)
-			require.Equal(t, int64(2), stp.queue.length(), "precondition: the block's drain leaves the batch inside the window")
-
-			nowNanos.Store(enqueueAt.Add(tc.window + time.Millisecond).UnixNano())
-
-			require.Eventually(t, func() bool {
-				return stp.queue.length() == 0 && stp.GetCurrentTxMap().Exists(unmined)
-			}, 5*time.Second, time.Millisecond, "the dequeue loop must place the unmined transaction")
-
-			require.Equal(t, tc.reEnters, stp.GetCurrentTxMap().Exists(mined), "a transaction the block mined re-enters block assembly only with the kept sets off")
-		})
 	}
 }
 

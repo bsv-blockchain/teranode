@@ -132,20 +132,26 @@ func TestReorgBlocks_Fork_SameMillisecondBatchIsFilteredAgainstItsForwardBlock(t
 
 // A transaction handed to block assembly after its own forward block's step, and before a later
 // forward block's step, is dropped on arrival by the earlier block's kept set. B's drain alone only
-// knows B, so without the kept set the transaction A mined goes back into block assembly.
+// knows B, so without the kept set the transaction A mined goes back into block assembly. With a
+// double-spend window the batch arrives before A's step instead, the window holds it through both
+// drains, and the kept set must still drop it when the dequeue loop places it.
 func TestReorgBlocks_Fork_LateArrivalAfterItsForwardBlockStaysOut(t *testing.T) {
 	cases := map[string]struct {
-		retention time.Duration
-		reEnters  bool
+		window, retention time.Duration
+		reEnters          bool
 	}{
-		"kept_set_drops_it":          {retention: 10 * time.Second},
-		"retention_off_lets_it_back": {retention: 0, reEnters: true},
+		"kept_set_drops_it":                       {retention: 10 * time.Second},
+		"retention_off_lets_it_back":              {retention: 0, reEnters: true},
+		"held_by_window_below_retention":          {window: 2 * time.Second, retention: 10 * time.Second},
+		"held_by_window_above_retention":          {window: 15 * time.Second, retention: 10 * time.Second},
+		"held_by_window_retention_off_lets_it_in": {window: 2 * time.Second, retention: 0, reEnters: true},
 	}
 
 	for variant, opts := range catchUpTxMapVariants(t) {
 		for name, tc := range cases {
 			t.Run(variant+"/"+name, func(t *testing.T) {
 				stp, store, subtreeStore, chain := newResetWALTestProcessor(t, false, opts...)
+				stp.settings.BlockAssembly.DoubleSpendWindow = tc.window
 				stp.settings.BlockAssembly.MinedTxSetRetention = tc.retention
 
 				minedInFirstTx, _ := createResetWALConflict(t, store, 25)
@@ -158,11 +164,20 @@ func TestReorgBlocks_Fork_LateArrivalAfterItsForwardBlockStaysOut(t *testing.T) 
 				chain.moveForward[1].Subtrees = []*chainhash.Hash{storeTestSubtree(t, subtreeStore, false, minedInLastTx)}
 
 				enqueueAt := time.Now()
-				stp.queue.clock = fixedClock{t: enqueueAt}
-				stp.clock = fixedClock{t: enqueueAt.Add(time.Millisecond)}
 
-				// Block A's step, and its drain, are done; block B's is next.
-				fired := beforeForwardBlockOn(stp, chain.moveForward[0].Header, func() {
+				var nowNanos atomic.Int64
+				nowNanos.Store(enqueueAt.Add(time.Millisecond).UnixNano())
+				stp.clock = clockFunc(func() time.Time { return time.Unix(0, nowNanos.Load()) })
+				stp.queue.clock = fixedClock{t: enqueueAt}
+
+				// Without a window: block A's step, and its drain, are done; block B's is next.
+				// With one: the move back is done; block A's step is next.
+				arriveBefore := chain.moveForward[0].Header
+				if tc.window > 0 {
+					arriveBefore = chain.genesis
+				}
+
+				fired := beforeForwardBlockOn(stp, arriveBefore, func() {
 					stp.AddBatch(
 						[]subtreepkg.Node{{Hash: minedInFirst, Fee: 1, SizeInBytes: 1}, {Hash: unmined, Fee: 1, SizeInBytes: 1}},
 						[]*subtreepkg.TxInpoints{inpointsPtr(), inpointsPtr()},
@@ -170,7 +185,22 @@ func TestReorgBlocks_Fork_LateArrivalAfterItsForwardBlockStaysOut(t *testing.T) 
 				})
 
 				require.NoError(t, stp.reorgBlocks(t.Context(), []*model.Block{back}, chain.moveForward))
-				require.True(t, *fired, "the batch must arrive after the first forward block's step")
+				require.True(t, *fired, "the batch must arrive before the step it is meant to precede")
+
+				if tc.window > 0 {
+					require.Equal(t, int64(2), stp.queue.length(), "precondition: the forward drains leave the batch inside the window")
+
+					stp.Start(t.Context())
+					nowNanos.Store(enqueueAt.Add(tc.window + time.Millisecond).UnixNano())
+
+					require.Eventually(t, func() bool {
+						return stp.queue.length() == 0 && stp.GetCurrentTxMap().Exists(unmined)
+					}, 5*time.Second, time.Millisecond, "the dequeue loop must place the unmined transaction")
+					require.Equal(t, tc.reEnters, stp.GetCurrentTxMap().Exists(minedInFirst))
+
+					return
+				}
+
 				require.Zero(t, stp.queue.length(), "the last step's drain takes the late batch")
 
 				hashes := collectSubtreeHashes(stp)
@@ -317,67 +347,4 @@ func TestReorgBlocks_CatchUp_FailedRollbackForgetsItsSets(t *testing.T) {
 
 	stp.AddBatch([]subtreepkg.Node{{Hash: minedInFirst, Fee: 1, SizeInBytes: 1}}, []*subtreepkg.TxInpoints{inpointsPtr()})
 	require.Equal(t, int64(1), stp.queue.length(), "a hand-off of the rolled-back block's transaction is queued")
-}
-
-// A fork reorg's forward drains leave a batch younger than the double-spend window queued. When the
-// window has passed, the dequeue loop must not place a tx a forward block mined, even with the
-// window at or above blockassembly_minedTxSetRetention. A retention of 0 turns the kept sets off.
-func TestReorgBlocks_Fork_MinedTxHeldByTheWindowStaysOut(t *testing.T) {
-	cases := map[string]struct {
-		window, retention time.Duration
-		reEnters          bool
-	}{
-		"window_below_retention":     {window: 2 * time.Second, retention: 10 * time.Second},
-		"window_above_retention":     {window: 15 * time.Second, retention: 10 * time.Second},
-		"retention_off_lets_it_back": {window: 2 * time.Second, retention: 0, reEnters: true},
-	}
-
-	for name, tc := range cases {
-		t.Run(name, func(t *testing.T) {
-			stp, store, subtreeStore, chain := newResetWALTestProcessor(t, false)
-			stp.settings.BlockAssembly.DoubleSpendWindow = tc.window
-			stp.settings.BlockAssembly.MinedTxSetRetention = tc.retention
-
-			minedInFirstTx, _ := createResetWALConflict(t, store, 25)
-			minedInLastTx, _ := createResetWALConflict(t, store, 26)
-			minedInFirst, minedInLast := *minedInFirstTx.TxIDChainHash(), *minedInLastTx.TxIDChainHash()
-			unmined := chainhash.HashH([]byte("fork-reorg-held-by-the-window-not-mined"))
-
-			back := moveToBlockAbove(t, stp, chain)
-			chain.moveForward[0].Subtrees = []*chainhash.Hash{storeTestSubtree(t, subtreeStore, false, minedInFirstTx)}
-			chain.moveForward[1].Subtrees = []*chainhash.Hash{storeTestSubtree(t, subtreeStore, false, minedInLastTx)}
-
-			enqueueAt := time.Now()
-
-			var nowNanos atomic.Int64
-			nowNanos.Store(enqueueAt.Add(time.Millisecond).UnixNano())
-			stp.clock = clockFunc(func() time.Time { return time.Unix(0, nowNanos.Load()) })
-			stp.queue.clock = fixedClock{t: enqueueAt}
-
-			fired := beforeForwardBlockOn(stp, chain.genesis, func() {
-				stp.AddBatch(
-					[]subtreepkg.Node{
-						{Hash: minedInFirst, Fee: 1, SizeInBytes: 1},
-						{Hash: minedInLast, Fee: 1, SizeInBytes: 1},
-						{Hash: unmined, Fee: 1, SizeInBytes: 1},
-					},
-					[]*subtreepkg.TxInpoints{inpointsPtr(), inpointsPtr(), inpointsPtr()},
-				)
-			})
-
-			require.NoError(t, stp.reorgBlocks(t.Context(), []*model.Block{back}, chain.moveForward))
-			require.True(t, *fired, "the batch must arrive after the move back and before the first forward block")
-			require.Equal(t, int64(3), stp.queue.length(), "precondition: the forward drains leave the batch inside the window")
-
-			stp.Start(t.Context())
-			nowNanos.Store(enqueueAt.Add(tc.window + time.Millisecond).UnixNano())
-
-			require.Eventually(t, func() bool {
-				return stp.queue.length() == 0 && stp.GetCurrentTxMap().Exists(unmined)
-			}, 5*time.Second, time.Millisecond, "the dequeue loop must place the unmined transaction")
-
-			require.Equal(t, tc.reEnters, stp.GetCurrentTxMap().Exists(minedInFirst), "a tx the first forward block mined re-enters block assembly only with the kept sets off")
-			require.Equal(t, tc.reEnters, stp.GetCurrentTxMap().Exists(minedInLast), "a tx the last forward block mined re-enters block assembly only with the kept sets off")
-		})
-	}
 }
