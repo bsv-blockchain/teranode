@@ -49,3 +49,12 @@ type LaneLeaseRelease struct {
 	// left after it is settled by LastTaken.
 	Settles lane.Settles
 }
+
+// WithLaneMapRows has StoreBlock insert the block's lane map rows in the block's own database
+// transaction, so the rows commit with the block and only with it. The rows are measured, never
+// acted on: a row the store cannot insert is rolled back alone, counted, and the block is stored.
+func WithLaneMapRows(rows []lane.MapRow) StoreBlockOption {
+	return func(opts *StoreBlockOptions) {
+		opts.LaneMapRows = rows
+	}
+}

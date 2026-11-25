@@ -189,6 +189,10 @@ func (c *LocalClient) ReleaseLaneLease(ctx context.Context, r lane.Release) (boo
 	return releaseLaneLease(ctx, c.store, r)
 }
 
+func (c *LocalClient) LaneMapRows(ctx context.Context, blockID uint32) ([]lane.MapRow, error) {
+	return c.store.LaneMapRows(ctx, blockID)
+}
+
 func (c *LocalClient) GetBlockStats(ctx context.Context) (*model.BlockStats, error) {
 	return c.store.GetBlockStats(ctx)
 }
