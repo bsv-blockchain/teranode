@@ -1316,6 +1316,24 @@
         
       
       
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Aerospike Tuning
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
       <a href="./" class="md-nav__link md-nav__link--active">
         
   
@@ -1332,6 +1350,47 @@
   
 
       </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#general-notes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        General notes
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#sanity-checking" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Sanity Checking
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
       
     </li>
   
@@ -6673,6 +6732,36 @@
     
   
   
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#general-notes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        General notes
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#sanity-checking" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Sanity Checking
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
 </nav>
                   </div>
                 </div>
@@ -6793,9 +6882,9 @@
 
 <h1 id="aerospike-configuration-considerations">Aerospike - Configuration Considerations<a class="headerlink" href="#aerospike-configuration-considerations" title="Permanent link">&para;</a></h1>
 <p>Last Modified - 13-December-2024</p>
-<h1 id="general-notes">General notes<a class="headerlink" href="#general-notes" title="Permanent link">&para;</a></h1>
+<h2 id="general-notes">General notes<a class="headerlink" href="#general-notes" title="Permanent link">&para;</a></h2>
 <p>Teranode's scaled-out configuration (1m tps design target) uses Aerospike. The Aerospike database is used to store the UTXO set, where indexes are stored in-memory, and data on disk.This document outlines some configuration notes for Aerospike.</p>
-<p>If using the <code>Docker compose</code> installation path, your compose file will automatically install the Aerospike 7.1 community edition for you.</p>
+<p>Teranode needs Aerospike 8.1 or later. If using the <code>Docker compose</code> installation path, your compose file will automatically install the Aerospike 8.1 community edition for you.</p>
 <p>Expiration settings:</p>
 <ul>
 <li>
@@ -6813,7 +6902,7 @@
 <ul>
 <li>See the <a href="https://github.com/bsv-blockchain/teranode/blob/main/deploy/docker/base/aerospike.conf">sample aerospike.conf</a> for an example of configuration of the <code>storage-engine</code> parameter.</li>
 </ul>
-<h1 id="sanity-checking">Sanity Checking<a class="headerlink" href="#sanity-checking" title="Permanent link">&para;</a></h1>
+<h2 id="sanity-checking">Sanity Checking<a class="headerlink" href="#sanity-checking" title="Permanent link">&para;</a></h2>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>asadm<span class="w"> </span>-e<span class="w"> </span><span class="s2">"info"</span>
 </span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>asadm<span class="w"> </span>-e<span class="w"> </span><span class="s2">"summary -l"</span>
 </span></code></pre></div>

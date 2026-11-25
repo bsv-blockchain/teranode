@@ -6942,11 +6942,7 @@ the upgrade, or the namespace can go into stop-writes.</p>
 walks the whole namespace. <code>teranode_aerospike_conflict_wal_fallback_scans</code> counts
 those scans. If Teranode's Aerospike user cannot create indexes, create it by hand,
 with <code>&lt;ns&gt;</code> the namespace and <code>&lt;set&gt;</code> the UTXO set:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="c1"># Aerospike 8.1 and later</span>
-</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>asinfo<span class="w"> </span>-v<span class="w"> </span><span class="s1">'sindex-create:namespace=&lt;ns&gt;;set=&lt;set&gt;_conflictwal;indexname=&lt;set&gt;_conflictwal_startedAt;bin=startedAt;type=numeric'</span>
-</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>
-</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="c1"># Aerospike 8.0</span>
-</span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a>asinfo<span class="w"> </span>-v<span class="w"> </span><span class="s1">'sindex-create:ns=&lt;ns&gt;;set=&lt;set&gt;_conflictwal;indexname=&lt;set&gt;_conflictwal_startedAt;indexdata=startedAt,numeric'</span>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>asinfo<span class="w"> </span>-v<span class="w"> </span><span class="s1">'sindex-create:namespace=&lt;ns&gt;;set=&lt;set&gt;_conflictwal;indexname=&lt;set&gt;_conflictwal_startedAt;bin=startedAt;type=numeric'</span>
 </span></code></pre></div>
 <p>The read returns only WAL roots with an integer <code>startedAt</code>. Every build writes it
 when it begins an intent, so only a corrupted or hand-edited root lacks it.</p>
