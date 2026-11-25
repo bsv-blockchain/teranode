@@ -327,6 +327,8 @@ func storeTestBlocks(t *testing.T, s *SQL) {
 }
 
 func TestSQLGetLatestBlockHeaderFromBlockLocatorPostgreSQL(t *testing.T) {
+	t.Parallel() // a database of its own on the shared server
+
 	if testing.Short() {
 		t.Skip("Skipping PostgreSQL tests in short mode")
 	}

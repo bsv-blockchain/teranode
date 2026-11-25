@@ -23,6 +23,7 @@ func TestBlockchainAuthMethodCoverage(t *testing.T) {
 		"/blockchain_api.BlockchainAPI/RenewLaneLease":                      true,
 		"/blockchain_api.BlockchainAPI/ReleaseLaneLease":                    true,
 		"/blockchain_api.BlockchainAPI/GetLaneMapRows":                      true,
+		"/blockchain_api.BlockchainAPI/GetLaneCapGrants":                    true,
 		"/blockchain_api.BlockchainAPI/GetBlockStats":                       true,
 		"/blockchain_api.BlockchainAPI/GetBlockGraphData":                   true,
 		"/blockchain_api.BlockchainAPI/GetLastNBlocks":                      true,

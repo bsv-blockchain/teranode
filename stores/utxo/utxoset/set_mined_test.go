@@ -15,6 +15,8 @@ import (
 // row STAYS. Nothing moves between tables any more: containment has one home, and the identity
 // row lives until the deep stamp of build step 5 writes the block onto the UTXOs and deletes it.
 func TestSetMinedRecordsTheBlockAndStopsWaiting(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	tx := mkTx(t, 1, 1_000)
@@ -51,6 +53,8 @@ func TestSetMinedRecordsTheBlockAndStopsWaiting(t *testing.T) {
 // is read back from the rows, so a replayed block reports every transaction in it with the
 // block recorded exactly once.
 func TestSetMinedOnAReplayedBlockStillAnswers(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	tx := mkTx(t, 1, 1_000)
@@ -77,6 +81,8 @@ func TestSetMinedOnAReplayedBlockStillAnswers(t *testing.T) {
 // transaction with neither an identity row nor a containment row has no payload to copy, so
 // the insert writes nothing for it and the read-back misses it.
 func TestSetMinedReportsATransactionItDoesNotHold(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	known := mkTx(t, 1, 1_000)
@@ -101,6 +107,8 @@ func TestSetMinedReportsATransactionItDoesNotHold(t *testing.T) {
 // the identity row, which was there all along. On a store with no checkpoints, because an
 // un-mine at or below the checkpoint is refused.
 func TestUnsetMinedGivesTheTransactionAFreshClock(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newUncheckpointedStore(t)
 
 	tx := mkTx(t, 1, 1_000)
@@ -131,6 +139,8 @@ func TestUnsetMinedGivesTheTransactionAFreshClock(t *testing.T) {
 
 // TestUnsetMinedToleratesATransactionItDoesNotHold, which the interface states explicitly.
 func TestUnsetMinedToleratesATransactionItDoesNotHold(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newUncheckpointedStore(t)
 
 	gone := mkTx(t, 1, 1_000)
@@ -144,6 +154,8 @@ func TestUnsetMinedToleratesATransactionItDoesNotHold(t *testing.T) {
 // transaction the block path already created; the postcondition must be satisfied from
 // tx_mined and the returned ids must include the recorded block.
 func TestSetMinedMultiFindsABlockPathTransactionInTheMembershipTable(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	tx := mkTx(t, 1, 5_000)
@@ -161,6 +173,8 @@ func TestSetMinedMultiFindsABlockPathTransactionInTheMembershipTable(t *testing.
 // records the same transaction; containment holds both, and the answer lists them in
 // (mined_height, block_id) order.
 func TestSetMinedMultiAppendsASecondBlockAtTheSameHeight(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	tx := mkTx(t, 1, 5_000)
@@ -176,6 +190,8 @@ func TestSetMinedMultiAppendsASecondBlockAtTheSameHeight(t *testing.T) {
 
 // TestSetMinedMultiStillFailsForAnUnknownTransaction keeps the postcondition honest.
 func TestSetMinedMultiStillFailsForAnUnknownTransaction(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	tx := mkTx(t, 1, 5_000)
@@ -187,6 +203,8 @@ func TestSetMinedMultiStillFailsForAnUnknownTransaction(t *testing.T) {
 // everything a lookup needs once the identity row is gone, copied from the identity row at the
 // moment of recording, and Get answers with both the payload and the block while both exist.
 func TestLongestChainRecordCopiesThePayloadOntoTheContainmentRow(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	tx := mkTx(t, 1, 5_000)
@@ -230,6 +248,8 @@ func TestLongestChainRecordCopiesThePayloadOntoTheContainmentRow(t *testing.T) {
 // itself as containment exactly as a main-chain block does, and leaves the transaction in the
 // unmined set. There is no second code path for a fork block.
 func TestForkRecordInsertsContainmentAndKeepsTheMarker(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	tx := mkTx(t, 1, 5_000)
@@ -252,6 +272,8 @@ func TestForkRecordInsertsContainmentAndKeepsTheMarker(t *testing.T) {
 // on the longest chain. Both are recorded, the marker clears, and nobody has to decide which
 // block is right; the callers filter against the chain.
 func TestLongestChainRecordAfterAForkRecordClearsTheMarker(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	tx := mkTx(t, 1, 5_000)
@@ -275,6 +297,8 @@ func TestLongestChainRecordAfterAForkRecordClearsTheMarker(t *testing.T) {
 // TestForkRecordTwiceRecordsTheBlockOnce: the insert does nothing on conflict, so a replayed
 // fork block leaves one row and one entry in the answer.
 func TestForkRecordTwiceRecordsTheBlockOnce(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	tx := mkTx(t, 1, 5_000)
@@ -305,6 +329,8 @@ func TestForkRecordTwiceRecordsTheBlockOnce(t *testing.T) {
 // goes, the identity row that was there all along gets the unmined marker at the CURRENT tip,
 // and the UTXOs, which were at the sentinel from birth, are still there.
 func TestUnMineDeletesTheOneRowAndSetsTheMarker(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newUncheckpointedStore(t)
 	require.NoError(t, s.SetBlockHeight(700_150))
 
@@ -347,6 +373,8 @@ func TestUnMineDeletesTheOneRowAndSetsTheMarker(t *testing.T) {
 // identity row, a containment row for block 42 and UTXOs at (0,0), which is what every
 // transaction at the tip looks like.
 func TestUnMineIsAPointDeleteOnTheFullKey(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 	require.NoError(t, s.SetBlockHeight(1_000_150))
 
@@ -383,6 +411,8 @@ func TestUnMineIsAPointDeleteOnTheFullKey(t *testing.T) {
 // true if nothing un-mines a checkpoint-certified block. So the store refuses, and every row is
 // unchanged. An invalidation there is a resync, not an un-mine.
 func TestUnMineRefusesABlockAtOrBelowTheCheckpoint(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 	require.NoError(t, s.SetBlockHeight(700_150))
 
@@ -431,6 +461,8 @@ func TestUnMineRefusesABlockAtOrBelowTheCheckpoint(t *testing.T) {
 // lose the transaction from block assembly for good while setting it wrongly costs a mined
 // transaction reloaded as unmined, which the consistency scan repairs.
 func TestUnMineOfABlockTheTransactionDoesNotNameDeletesNothing(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 	require.NoError(t, s.SetBlockHeight(1_000_150))
 

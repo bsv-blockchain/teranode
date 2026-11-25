@@ -24,9 +24,10 @@ func waitForLockWait(t *testing.T, s *Store, ctx context.Context, fragment strin
 
 	for time.Now().Before(deadline) {
 		var n int
+		// Only backends of this test's database: other tests run beside it on the shared server.
 		require.NoError(t, s.pool.QueryRow(ctx, `
 			SELECT count(*) FROM pg_stat_activity
-			 WHERE wait_event_type = 'Lock' AND position($1 in query) > 0`, fragment).Scan(&n))
+			 WHERE datname = current_database() AND wait_event_type = 'Lock' AND position($1 in query) > 0`, fragment).Scan(&n))
 
 		if n > 0 {
 			return
@@ -52,6 +53,8 @@ func waitForLockWait(t *testing.T, s *Store, ctx context.Context, fragment strin
 // The child's spend runs through the real spend statement inside a transaction the test holds
 // open, so it takes exactly the locks a live spend takes.
 func TestSetConflictingSeesAChildWhoseSpendCommitsWhileItWaits(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	parent := mkTx(t, 2, 5_000)
@@ -123,6 +126,8 @@ func TestSetConflictingSeesAChildWhoseSpendCommitsWhileItWaits(t *testing.T) {
 // transaction that was just marked a loser. A spend that arrives after the commit sees the bit
 // directly, which TestSetConflictingStopsTheUTXOsBeingSpent covers.
 func TestSpendWaitingOnSetConflictingIsRefused(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	parent := mkTx(t, 2, 5_000)
@@ -275,6 +280,8 @@ func TestSetConflictingRetriesADeadlock(t *testing.T) {
 // row lock on it. A holder keeps every row of both transactions locked, and both calls must
 // still finish. Without the skip each would wait on the holder until its deadline.
 func TestSetConflictingSkipsRowsAlreadyAtTheValue(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	// marked is mined, so its flag lives on its containment row and the membership arm is

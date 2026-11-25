@@ -26,6 +26,8 @@ import (
 // entry point once in each batcher mode: the batched create and spend-and-create (the default
 // settings) and the direct path (a batcher size of one turns both batchers off).
 func TestCreateReturnsWrittenState(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	modes := []struct {
 		name string
 		tune func(*settings.Settings)
@@ -103,6 +105,8 @@ func TestCreateReturnsWrittenState(t *testing.T) {
 // netted write and builds its records in planCreates; a locked list is refused by canNet and
 // goes one SpendAndCreate at a time. Both must return what they wrote.
 func TestSpendAndCreateMultiReturnsWrittenState(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	for _, tc := range []struct {
 		name   string
 		opts   []utxo.CreateOption

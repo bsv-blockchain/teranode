@@ -121,6 +121,8 @@ func distinctParent(t *testing.T, seq uint32) *bt.Tx {
 // production sends: the validator's spend-and-create, the block create pass, and the block spend
 // pass. Each item must get the result shape its mode promises.
 func TestSpendAndCreateBatchAppliesEveryModeInOneFlush(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	ps := parents(t, s, ctx, 4, 100)
@@ -168,6 +170,8 @@ func TestSpendAndCreateBatchAppliesEveryModeInOneFlush(t *testing.T) {
 // A forged claim about a UTXO's value must be rejected, must consume nothing, must not be stored,
 // and must not disturb the honest transactions that shared its batch.
 func TestSpendAndCreateBatchRejectsAFalseClaimWithoutTouchingItsSiblings(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	ps := parents(t, s, ctx, 3, 100)
@@ -204,6 +208,8 @@ func TestSpendAndCreateBatchRejectsAFalseClaimWithoutTouchingItsSiblings(t *test
 // want the same UTXO. Exactly one may have it, and the loser must be told who won, because
 // conflict detection reads that name.
 func TestSpendAndCreateBatchArbitratesADoubleSpendBetweenSiblings(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	p := parents(t, s, ctx, 1, 100)[0]
@@ -243,6 +249,8 @@ func TestSpendAndCreateBatchArbitratesADoubleSpendBetweenSiblings(t *testing.T) 
 // W rejected, L accepted. If L is judged only against W's uncommitted delete, L is wrongly
 // rejected as a double spend of a transaction that never existed.
 func TestSpendAndCreateBatchLoserOfAnInvalidSiblingWins(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	// Both ways round, since which item the DELETE serves first is not specified. Fresh
@@ -283,6 +291,8 @@ func TestSpendAndCreateBatchLoserOfAnInvalidSiblingWins(t *testing.T) {
 // flush. Sequential arrival would store it once and answer the second with ErrTxExists and its
 // spends left in place; one flush must say the same.
 func TestSpendAndCreateBatchHoldsARepeatedTransactionOnce(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	p := parents(t, s, ctx, 1, 100)[0]
@@ -320,6 +330,8 @@ func TestSpendAndCreateBatchHoldsARepeatedTransactionOnce(t *testing.T) {
 // block interrupted after its batch committed is re-offered whole. Every item must answer
 // ErrTxExists with its inputs decorated, and the store must be unchanged.
 func TestSpendAndCreateBatchReplaysAnAppliedBatch(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	ps := parents(t, s, ctx, 3, 100)
@@ -357,6 +369,8 @@ func TestSpendAndCreateBatchReplaysAnAppliedBatch(t *testing.T) {
 // single path answers it with a processing error. In a batch it must get that same answer without
 // costing its neighbours anything.
 func TestSpendAndCreateBatchAnswersANilTransactionAlone(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	p := parents(t, s, ctx, 1, 100)[0]
@@ -376,6 +390,8 @@ func TestSpendAndCreateBatchAnswersANilTransactionAlone(t *testing.T) {
 // and tx_body partitions. Both partitions must exist before the transaction opens, or the insert fails
 // with "no partition of relation found for row".
 func TestSpendAndCreateBatchSpansPartitions(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	ps := parents(t, s, ctx, 2, 10)
@@ -404,6 +420,8 @@ func TestSpendAndCreateBatchSpansPartitions(t *testing.T) {
 // single transaction carries one and can. So the only way all three end up stored is through the
 // fallback.
 func TestSpendAndCreateBatchFallsBackToSingleTransactions(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	ps := parents(t, s, ctx, 3, 100)
@@ -421,8 +439,9 @@ CREATE TRIGGER batchtest_one_identity_per_tx BEFORE INSERT ON tx_ident
   FOR EACH ROW EXECUTE FUNCTION batchtest_one_identity_per_tx();`)
 	require.NoError(t, err)
 
+	pool := s.pool // the closure keeps the pool, not the whole store (see closeOnCleanup)
 	t.Cleanup(func() {
-		_, _ = s.pool.Exec(ctx, `DROP TRIGGER IF EXISTS batchtest_one_identity_per_tx ON tx_ident;
+		_, _ = pool.Exec(ctx, `DROP TRIGGER IF EXISTS batchtest_one_identity_per_tx ON tx_ident;
 		                         DROP FUNCTION IF EXISTS batchtest_one_identity_per_tx()`)
 	})
 
@@ -451,6 +470,8 @@ CREATE TRIGGER batchtest_one_identity_per_tx BEFORE INSERT ON tx_ident
 // that rejects a second identity row in one transaction, which the honest survivors' create
 // statement trips.
 func TestSpendAndCreateBatchFallbackKeepsARejectedClaimRejected(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	ps := parents(t, s, ctx, 3, 100)
@@ -468,8 +489,9 @@ CREATE TRIGGER batchtest_one_identity_per_tx BEFORE INSERT ON tx_ident
   FOR EACH ROW EXECUTE FUNCTION batchtest_one_identity_per_tx();`)
 	require.NoError(t, err)
 
+	pool := s.pool // the closure keeps the pool, not the whole store (see closeOnCleanup)
 	t.Cleanup(func() {
-		_, _ = s.pool.Exec(ctx, `DROP TRIGGER IF EXISTS batchtest_one_identity_per_tx ON tx_ident;
+		_, _ = pool.Exec(ctx, `DROP TRIGGER IF EXISTS batchtest_one_identity_per_tx ON tx_ident;
 		                         DROP FUNCTION IF EXISTS batchtest_one_identity_per_tx()`)
 	})
 
@@ -500,6 +522,8 @@ CREATE TRIGGER batchtest_one_identity_per_tx BEFORE INSERT ON tx_ident
 // 1,070 ms at exactly the sixth execution. The setting is what stops that, so its absence is a
 // regression even though every functional test would still pass.
 func TestStorePlansEveryStatementWithItsParameters(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	var mode string
@@ -519,6 +543,8 @@ func TestStorePlansEveryStatementWithItsParameters(t *testing.T) {
 // stored. Both orderings are tried because which item the DELETE serves first is not specified;
 // in the other ordering W is rejected outright and the assertion is the same.
 func TestSpendAndCreateBatchDeferredForgeryStaysRejected(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	for _, wFirst := range []bool{true, false} {
@@ -582,6 +608,8 @@ func TestSpendAndCreateBatchSplitsByBytes(t *testing.T) {
 // done gets that error and nothing is written. Once queued, a call is applied and answered
 // whatever its context does, which the tests through the public method rely on.
 func TestSpendAndCreateRefusesACancelledCallerBeforeQueueing(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	p := parents(t, s, ctx, 1, 100)[0]
@@ -599,6 +627,8 @@ func TestSpendAndCreateRefusesACancelledCallerBeforeQueueing(t *testing.T) {
 // TestSpendAndCreateAfterCloseIsAnErrorNotAPanic: the batcher's channel is closed by Close, and a
 // send on it would panic. A late caller takes the single path and gets the pool's error.
 func TestSpendAndCreateAfterCloseIsAnErrorNotAPanic(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	p := parents(t, s, ctx, 1, 100)[0]
@@ -641,6 +671,8 @@ func TestSpendPlanRowsAreSortedAndStillOwned(t *testing.T) {
 // double spends land both inside one flush and across flushes running at once. Every UTXO must
 // end up with exactly one spender and every loser must be told who it was.
 func TestSpendAndCreateThroughTheBatcherUnderContention(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStoreWith(t, func(st *settings.Settings) {
 		st.UtxoStore.StoreBatcherSize = 32
 		st.UtxoStore.StoreBatcherDurationMillis = 2
@@ -722,6 +754,8 @@ func TestSpendAndCreateThroughTheBatcherUnderContention(t *testing.T) {
 // parent before offering the child must always find the parent committed, whichever flush each
 // landed in.
 func TestSpendAndCreateThroughTheBatcherPreservesDependencyOrdering(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStoreWith(t, func(st *settings.Settings) {
 		st.UtxoStore.StoreBatcherSize = 16
 		st.UtxoStore.StoreBatcherDurationMillis = 1
@@ -774,6 +808,8 @@ func TestSpendAndCreateThroughTheBatcherPreservesDependencyOrdering(t *testing.T
 // TestSpendAndCreateBatcherCloseAnswersEveryQueuedCaller: a store closed with work queued must
 // still answer it, and must not write into a pool that is already gone.
 func TestSpendAndCreateBatcherCloseAnswersEveryQueuedCaller(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStoreWith(t, func(st *settings.Settings) {
 		st.UtxoStore.StoreBatcherSize = 1000
 		st.UtxoStore.StoreBatcherDurationMillis = 60_000

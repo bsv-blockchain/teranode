@@ -27,6 +27,8 @@ func hashOf(b []byte) *chainhash.Hash {
 // contested parent is usually mined, and this bookkeeping is keyed on the txid rather than
 // hanging off a mempool row.
 func TestRemoveFromConflictingChildrenDropsOnlyWhatIsNamed(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	parentA := idBytes(0x71)
@@ -54,6 +56,8 @@ func TestRemoveFromConflictingChildrenDropsOnlyWhatIsNamed(t *testing.T) {
 // height still inside the journal's retention, and the caller has no way to know which, so a
 // removal that only looked in the current partition would silently leave the route in place.
 func TestRemoveFromConflictingChildrenSearchesEveryWindow(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	parent := idBytes(0x75)
@@ -75,6 +79,8 @@ func TestRemoveFromConflictingChildrenSearchesEveryWindow(t *testing.T) {
 // TestRemoveFromConflictingChildrenIsIdempotentAndSilent. A rewind is re-run after a crash, and
 // the interface asks for a silent no-op rather than an error when there is nothing to remove.
 func TestRemoveFromConflictingChildrenIsIdempotentAndSilent(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	parent := idBytes(0x73)
@@ -105,6 +111,8 @@ func TestRemoveFromConflictingChildrenIsIdempotentAndSilent(t *testing.T) {
 // untouched: a rewind names blocks the caller has stopped believing in, and the identity row
 // records only that the store saw the transaction before any block did.
 func TestRemoveBlockIDsStripsEveryNamedBlock(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	txA := idBytes(0xa1)
@@ -161,6 +169,8 @@ func minedBlockIDsOf(t *testing.T, s *Store, ctx context.Context, txid []byte) [
 // and it is still conflicting. Filtering on the marker would hide exactly what a rewind exists
 // to purge.
 func TestConflictingTxIteratorListsConflictingNonCoinbaseTransactions(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	conflicting := idBytes(0xb1)
@@ -205,6 +215,8 @@ func TestConflictingTxIteratorListsConflictingNonCoinbaseTransactions(t *testing
 // TestRemoveBlockIDsReachesMembershipRows: a block-path transaction has no identity row at all,
 // and its containment is what the rewind removes.
 func TestRemoveBlockIDsReachesMembershipRows(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	tx := mkTx(t, 1, 5_000)
@@ -225,6 +237,8 @@ func TestRemoveBlockIDsReachesMembershipRows(t *testing.T) {
 // TestRemoveBlockIDsLeavesAMembershipRowNamingAnotherBlock: the tool removes the blocks the
 // caller has stopped believing in and nothing else.
 func TestRemoveBlockIDsLeavesAMembershipRowNamingAnotherBlock(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	tx := mkTx(t, 1, 5_000)
@@ -251,6 +265,8 @@ func TestRemoveBlockIDsLeavesAMembershipRowNamingAnotherBlock(t *testing.T) {
 // TestRemoveBlockIDsIsIdempotentOnMembershipRows, because a rewind re-run after a crash must
 // not fail on the work it already did.
 func TestRemoveBlockIDsIsIdempotentOnMembershipRows(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	tx := mkTx(t, 1, 5_000)

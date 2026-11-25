@@ -21,9 +21,6 @@ import (
 	"github.com/lib/pq"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/testcontainers/testcontainers-go"
-	"github.com/testcontainers/testcontainers-go/modules/postgres"
-	"github.com/testcontainers/testcontainers-go/wait"
 )
 
 var (
@@ -1046,31 +1043,11 @@ func TestStoreBlock_WithPersistedAt(t *testing.T) {
 }
 
 func TestStoreBlock_WithPersistedAt_Postgres(t *testing.T) {
+	t.Parallel() // a database of its own on the shared server
+
 	ctx := context.Background()
 
-	// Start PostgreSQL container
-	pgContainer, err := postgres.Run(ctx,
-		"postgres:13",
-		postgres.WithDatabase("testdb"),
-		postgres.WithUsername("testuser"),
-		postgres.WithPassword("testpass"),
-		testcontainers.WithWaitStrategy(
-			wait.ForLog("database system is ready to accept connections").
-				WithOccurrence(2).
-				WithStartupTimeout(5*time.Minute),
-		),
-	)
-	test.SkipIfContainerUnavailable(t, err)
-	defer func() {
-		assert.NoError(t, pgContainer.Terminate(ctx))
-	}()
-
-	// Get connection string
-	connStr, err := pgContainer.ConnectionString(ctx, "sslmode=disable")
-	require.NoError(t, err)
-
-	dbURL, err := url.Parse(connStr)
-	require.NoError(t, err)
+	dbURL := postgresTestURL(t)
 
 	tSettings := test.CreateBaseTestSettings(t)
 	s, err := New(ulogger.TestLogger{}, dbURL, tSettings)
@@ -1248,6 +1225,8 @@ func heavyForkBlock(parent *model.Block, nonce uint32) *model.Block {
 // arrives meanwhile stores at once. The fork block keeps retrying while the row is held,
 // and the waiting fork block takes the tip once the row is released.
 func TestStoreBlockForkDoesNotHoldSlowPathMuOnALockedRow_PostgreSQL(t *testing.T) {
+	t.Parallel() // a database of its own on the shared server
+
 	s := newPostgresChainWriteStore(t)
 	ctx := context.Background()
 
@@ -1288,7 +1267,7 @@ func TestStoreBlockForkDoesNotHoldSlowPathMuOnALockedRow_PostgreSQL(t *testing.T
 	// Wait until the fork's reconcile is queued on the held row.
 	require.Eventually(t, func() bool {
 		var waiting int
-		if qErr := s.db.QueryRow(`SELECT count(*) FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND query LIKE '%new_path%'`).Scan(&waiting); qErr != nil {
+		if qErr := s.db.QueryRow(`SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock' AND query LIKE '%new_path%'`).Scan(&waiting); qErr != nil {
 			return false
 		}
 
@@ -1349,6 +1328,8 @@ func TestStoreBlockForkDoesNotHoldSlowPathMuOnALockedRow_PostgreSQL(t *testing.T
 // TestStoreBlockForkGiveUpContext_PostgreSQL checks that either kind of caller
 // cancellation interrupts the retry pause promptly and leaves no block behind.
 func TestStoreBlockForkGiveUpContext_PostgreSQL(t *testing.T) {
+	t.Parallel() // a database of its own on the shared server
+
 	for _, deadline := range []bool{false, true} {
 		name := "cancel"
 		if deadline {
