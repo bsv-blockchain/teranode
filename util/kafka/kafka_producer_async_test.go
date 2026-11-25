@@ -202,13 +202,14 @@ func TestNewKafkaAsyncProducerFromURLInvalidConversion(t *testing.T) {
 	assert.Nil(t, producer)
 }
 
-// The caller's ctx bounds topic creation: a cancelled caller gets its error at
-// once instead of after franz-go's 30s request retry timeout per attempt.
+// The caller's ctx bounds topic creation. A bare host name fails DNS lookup with
+// an error franz-go retries for its 30s request retry timeout per attempt; the
+// caller's deadline must end that attempt instead.
 func TestNewKafkaAsyncProducerFromURLHonoursContext(t *testing.T) {
-	ctx, cancel := context.WithCancel(t.Context())
-	cancel()
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
 
-	kafkaURL, err := url.Parse("kafka://unresolvable-broker.invalid:9092/test-topic")
+	kafkaURL, err := url.Parse("kafka://bad-url/test-topic")
 	require.NoError(t, err)
 
 	start := time.Now()
