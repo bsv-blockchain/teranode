@@ -827,6 +827,106 @@ func TestFinalizeTransaction_PaginatedMasterIsNotSentAfterItsCallerIsGone(t *tes
 	require.NoError(t, store.FinalizeTransaction(ctx, paginated, md.Attempt, lease), "a live caller still finalizes it")
 }
 
+// failMasterFinalizeWrite makes the finalize write of the master record of hash fail with a transport
+// error. With landed set, the write is sent first and its answer is lost, which is the doubtful
+// outcome of a real transport failure. Writes to other records go through.
+func failMasterFinalizeWrite(t *testing.T, client *uaerospike.Client, store *teranode_aerospike.Store, hash *chainhash.Hash, landed bool) {
+	t.Helper()
+
+	master, err := aerospike.NewKey(store.GetNamespace(), store.GetName(), uaerospike.CalculateKeySourceInternal(hash, 0))
+	require.NoError(t, err)
+
+	store.SetBatchOperateFn(func(policy *aerospike.BatchPolicy, records []aerospike.BatchRecordIfc) aerospike.Error {
+		for _, record := range records {
+			write, ok := record.(*aerospike.BatchWrite)
+			if !ok || write.Policy == nil || write.Policy.RecordExistsAction != aerospike.UPDATE_ONLY || !write.Key.Equals(master) {
+				continue
+			}
+
+			if landed {
+				_ = client.BatchOperate(policy, records)
+			}
+
+			return aerospike.ErrNetwork
+		}
+
+		return client.BatchOperate(policy, records)
+	})
+	t.Cleanup(func() { store.SetBatchOperateFn(nil) })
+}
+
+// TestFinalizeTransaction_PaginatedMasterWriteRefusedRestoresTheChildren covers a paginated finalize
+// whose child phase committed and whose master write did not. A child with no creating bin accepts a
+// spend, because the spend gate is the bin of the record that holds the output, while the master is
+// still creating and a rollback may still end the attempt and delete the pages. The finalize puts
+// the bin back on the children, so no output of the record is spendable until the master is clear.
+func TestFinalizeTransaction_PaginatedMasterWriteRefusedRestoresTheChildren(t *testing.T) {
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.UtxoStore.UtxoBatchSize = 4
+
+	client, store, ctx, deferFn := initAerospike(t, tSettings, logger)
+	t.Cleanup(deferFn)
+	cleanDB(t, client)
+
+	paginated := createTransactionWithOutputs(10)
+	hash := paginated.TxIDChainHash()
+
+	md, err := store.Create(ctx, paginated, 100, utxo.WithCreating(true))
+	require.NoError(t, err)
+
+	lease, took, err := store.TakeSpendLease(ctx, hash, md.Attempt)
+	require.NoError(t, err)
+	require.True(t, took)
+
+	failMasterFinalizeWrite(t, client, store, hash, false)
+
+	require.Error(t, store.FinalizeTransaction(ctx, paginated, md.Attempt, lease), "the master write failed")
+
+	for idx := uint32(0); idx <= 2; idx++ {
+		require.Contains(t, recordBins(t, client, store, hash, idx, fields.Creating), fields.Creating.String(), "record %d is still creating, so none of its outputs is spendable", idx)
+	}
+
+	store.SetBatchOperateFn(nil)
+
+	require.NoError(t, store.FinalizeTransaction(ctx, paginated, md.Attempt, lease), "a repeat of the finalize clears every record again")
+
+	for idx := uint32(0); idx <= 2; idx++ {
+		require.NotContains(t, recordBins(t, client, store, hash, idx, fields.Creating), fields.Creating.String(), "record %d", idx)
+	}
+}
+
+// A master write whose answer was lost may have landed. Putting the bin back on the children of a
+// master that is final would leave outputs that are never spendable, so the finalize reads the master
+// first and leaves the children alone.
+func TestFinalizeTransaction_PaginatedMasterWriteThatLandedDoesNotRestoreTheChildren(t *testing.T) {
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.UtxoStore.UtxoBatchSize = 4
+
+	client, store, ctx, deferFn := initAerospike(t, tSettings, logger)
+	t.Cleanup(deferFn)
+	cleanDB(t, client)
+
+	paginated := createTransactionWithOutputs(10)
+	hash := paginated.TxIDChainHash()
+
+	md, err := store.Create(ctx, paginated, 100, utxo.WithCreating(true))
+	require.NoError(t, err)
+
+	lease, took, err := store.TakeSpendLease(ctx, hash, md.Attempt)
+	require.NoError(t, err)
+	require.True(t, took)
+
+	failMasterFinalizeWrite(t, client, store, hash, true)
+
+	require.Error(t, store.FinalizeTransaction(ctx, paginated, md.Attempt, lease), "the answer of the master write was lost")
+
+	for idx := uint32(0); idx <= 2; idx++ {
+		require.NotContains(t, recordBins(t, client, store, hash, idx, fields.Creating), fields.Creating.String(), "record %d: the master is final, so no child is made creating", idx)
+	}
+}
+
 // TestFinalizeTransaction_PaginatedFinalizeOfALiveCaller is the other half: a caller that is still
 // waiting gets its paginated finalize written, the master once.
 func TestFinalizeTransaction_PaginatedFinalizeOfALiveCaller(t *testing.T) {

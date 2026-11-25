@@ -1914,6 +1914,11 @@ func (s *Store) ensureCreatingBin(bins []*aerospike.Bin, creating bool) []*aeros
 // roll-forward and the sweep select, and a repeat of the finalize clears it. A ctx with no deadline
 // is the unbounded write the create path uses.
 //
+// A master write that does not clear the master after the children were cleared puts the creating
+// bin back on the children (restoreChildCreatingFlags), unless a read shows the master final, so
+// that no output of the record is spendable while its master is creating and a rollback can still
+// delete its pages.
+//
 // A child write that is filtered out is read back (childFilteredOutResult). The child counts as
 // cleared only when it is no longer creating. One that is still creating, under another attempt's
 // token or this one, fails the call before the master is written, so the master stays creating
@@ -1996,24 +2001,112 @@ func (s *Store) clearCreatingFlag(ctx context.Context, txHash *chainhash.Hash, n
 	// Phase 2: Clear master record last (index 0)
 	// Only executed if children succeeded - master's creating flag becomes atomic completion indicator
 	if masterWrite != nil {
-		_, err := s.batchOperateWithin(ctx, batchPolicy, []aerospike.BatchRecordIfc{masterWrite})
-		if err != nil {
-			return errors.NewProcessingError("failed to unlock master record", err)
-		}
-
-		if masterWrite.BatchRec().Err != nil {
-			aErr, ok := masterWrite.BatchRec().Err.(*aerospike.AerospikeError)
-			// FILTERED_OUT is success when the bin didn't exist, nothing to clear; a rolling
-			// back master is refused
-			if ok && aErr.ResultCode == types.FILTERED_OUT {
-				return s.finalizeFilteredOutResult(txHash, attempt, lease)
+		if err := s.clearMasterCreatingFlag(ctx, batchPolicy, txHash, masterWrite, attempt, lease); err != nil {
+			if len(childWrites) > 0 && !errors.Is(err, errors.ErrTxNotFound) && !utxo.IsAlreadyFinal(err) {
+				s.restoreChildCreatingFlags(txHash, len(childWrites), attempt)
 			}
-			s.logger.Errorf("[clearCreatingFlag] Failed to clear creating flag for master record for tx %s: %v", txHash, masterWrite.BatchRec().Err)
-			return errors.NewProcessingError("failed to unlock master record for tx %s", txHash)
+
+			return err
 		}
 	}
 
 	return nil
+}
+
+// clearMasterCreatingFlag sends the master write of clearCreatingFlag and turns its answer into the
+// error of the call.
+func (s *Store) clearMasterCreatingFlag(ctx context.Context, batchPolicy *aerospike.BatchPolicy, txHash *chainhash.Hash, masterWrite aerospike.BatchRecordIfc, attempt, lease []byte) error {
+	_, err := s.batchOperateWithin(ctx, batchPolicy, []aerospike.BatchRecordIfc{masterWrite})
+	if err != nil {
+		return errors.NewProcessingError("failed to unlock master record", err)
+	}
+
+	if masterWrite.BatchRec().Err != nil {
+		aErr, ok := masterWrite.BatchRec().Err.(*aerospike.AerospikeError)
+		// FILTERED_OUT is success when the bin didn't exist, nothing to clear; a rolling
+		// back master is refused
+		if ok && aErr.ResultCode == types.FILTERED_OUT {
+			return s.finalizeFilteredOutResult(txHash, attempt, lease)
+		}
+
+		s.logger.Errorf("[clearCreatingFlag] Failed to clear creating flag for master record for tx %s: %v", txHash, masterWrite.BatchRec().Err)
+
+		return errors.NewProcessingError("failed to unlock master record for tx %s", txHash)
+	}
+
+	return nil
+}
+
+// restoreChildCreatingFlags sets the creating bin again on the children that the child phase
+// cleared, after the master write did not clear its own. A child that is cleared while the master
+// is creating has outputs that a spend accepts, because the spend gate is the bin of the record that
+// the output lives in. A rollback that then ends the attempt would delete pages that a committed
+// descendant had spent. With the bin back on the children, the roll-forward and the sweep select the
+// record as before, and a repeat of the finalize clears the children again.
+//
+// The master is read first. One that is no longer creating, or is rolling back, or belongs to
+// another attempt, is left alone: a master write that was in doubt may have landed, and a child
+// that is creating under a final master would never be spendable. A master write that lands between
+// that read and the child write is a window this does not close. The write runs under a context of
+// its own, since the one of the caller may have ended, and it takes children that carry the token of
+// the attempt and have no creating bin.
+func (s *Store) restoreChildCreatingFlags(txHash *chainhash.Hash, childCount int, attempt []byte) {
+	ctx, cancel := s.spendRollbackContext()
+	defer cancel()
+
+	masterKey, keyErr := aerospike.NewKey(s.namespace, s.setName, txHash[:])
+	if keyErr != nil {
+		s.logger.Errorf("[clearCreatingFlag] could not restore the creating flag of the children of tx %s: %v", txHash, keyErr)
+
+		return
+	}
+
+	state, readErr := s.readCreatingState(masterKey)
+	if readErr != nil {
+		s.logger.Errorf("[clearCreatingFlag] could not read the master of tx %s to restore the creating flag of its children: %v", txHash, readErr)
+
+		return
+	}
+
+	if state.absent || !state.creating || state.rollingBack || !bytes.Equal(state.attempt, attempt) {
+		return
+	}
+
+	writePolicy := util.GetAerospikeBatchWritePolicy(s.settings)
+	writePolicy.RecordExistsAction = aerospike.UPDATE_ONLY
+	writePolicy.FilterExpression = aerospike.ExpAnd(
+		attemptFilter(attempt),
+		aerospike.ExpNot(aerospike.ExpBinExists(fields.Creating.String())),
+	)
+
+	writes := make([]aerospike.BatchRecordIfc, 0, childCount)
+
+	for i := 1; i <= childCount; i++ {
+		key, keyErr := aerospike.NewKey(s.namespace, s.setName, uaerospike.CalculateKeySourceInternal(txHash, uint32(i))) // nolint: gosec // children start at 1
+		if keyErr != nil {
+			s.logger.Errorf("[clearCreatingFlag] could not restore the creating flag of child %d of tx %s: %v", i, txHash, keyErr)
+
+			return
+		}
+
+		writes = append(writes, aerospike.NewBatchWrite(writePolicy, key, aerospike.PutOp(aerospike.NewBin(fields.Creating.String(), true))))
+	}
+
+	if ctx.Err() != nil {
+		return
+	}
+
+	if batchErr := s.batchOperate(util.GetAerospikeBatchPolicy(s.settings), writes); batchErr != nil {
+		s.logger.Errorf("[clearCreatingFlag] restoring the creating flag of the children of tx %s failed: %v", txHash, batchErr)
+
+		return
+	}
+
+	for idx, w := range writes {
+		if recErr := w.BatchRec().Err; recErr != nil && !isFilteredOut(recErr) && !errors.Is(recErr, aerospike.ErrKeyNotFound) {
+			s.logger.Errorf("[clearCreatingFlag] restoring the creating flag of child %d of tx %s failed: %v", idx+1, txHash, recErr)
+		}
+	}
 }
 
 // unlessAlreadyFinal turns the already-final answer of clearCreatingFlag into nil. The creating bin
