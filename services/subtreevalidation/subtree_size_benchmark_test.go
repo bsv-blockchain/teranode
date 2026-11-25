@@ -245,25 +245,47 @@ func generateFixtureForBenchmark(b *testing.B, r *require.Assertions, totalTxCou
 	}
 }
 
+// benchmarkTxChain is a signed chain in extended format, one transaction after another;
+// ends[i] is where transaction i ends in data.
+type benchmarkTxChain struct {
+	data []byte
+	ends []int
+}
+
 // benchmarkTxChains keeps each signed chain by length for the life of the test binary.
 // The testing package calls a sub-benchmark's function once per b.N round and once per
 // -count, and signing the chain was most of the wall time; the timed loop never sees it.
-// Benchmarks run one at a time, so the map needs no lock.
-var benchmarkTxChains = map[int][]*bt.Tx{}
+// Bytes, not parsed transactions, so a timed loop has no extra pointers for the garbage
+// collector to scan. Benchmarks run one at a time, so the map needs no lock.
+var benchmarkTxChains = map[int]benchmarkTxChain{}
 
-// createTransactionChainForBenchmark returns a signed chain of count transactions, built
-// on first use for each count. Callers share the slice and must not modify it.
+// createTransactionChainForBenchmark returns a chain of count transactions, signed on first
+// use for each count and parsed afresh from the kept bytes on every call.
 func createTransactionChainForBenchmark(b *testing.B, r *require.Assertions, count int) []*bt.Tx {
 	b.Helper()
 
-	if chain, ok := benchmarkTxChains[count]; ok {
-		return chain
+	chain, ok := benchmarkTxChains[count]
+	if !ok {
+		for _, tx := range signTransactionChainForBenchmark(r, count) {
+			chain.data = append(chain.data, tx.ExtendedBytes()...)
+			chain.ends = append(chain.ends, len(chain.data))
+		}
+
+		benchmarkTxChains[count] = chain
 	}
 
-	chain := signTransactionChainForBenchmark(r, count)
-	benchmarkTxChains[count] = chain
+	txs := make([]*bt.Tx, len(chain.ends))
+	start := 0
 
-	return chain
+	for i, end := range chain.ends {
+		tx, err := bt.NewTxFromBytes(chain.data[start:end])
+		r.NoError(err)
+
+		txs[i] = tx
+		start = end
+	}
+
+	return txs
 }
 
 func signTransactionChainForBenchmark(r *require.Assertions, count int) []*bt.Tx {

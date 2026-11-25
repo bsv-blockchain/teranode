@@ -108,8 +108,8 @@ jobs:
             | tee pr-${{ matrix.group }}.txt
 
       # The PR's base commit, not main's tip at job start: every group then runs the
-      # same baseline, and the report names it.
-      - name: Checkout main
+      # same baseline, and the report names it. The path stays "main" for the steps below.
+      - name: Checkout PR base
         uses: actions/checkout@v4
         with:
           ref: ${{ github.event.pull_request.base.sha }}
@@ -191,7 +191,7 @@ jobs:
             -alpha 0.05 \
             -baseline-sha "${{ steps.baseline_sha.outputs.value }}" \
             -current-sha "${{ github.sha }}" \
-            -baseline-ref "main" \
+            -baseline-ref "${{ github.event.pull_request.base.ref }}" \
             -current-ref "PR-${{ github.event.pull_request.number }}"
 
       - name: Display report
