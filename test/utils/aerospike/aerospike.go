@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/bsv-blockchain/teranode/stores/utxo/aerospike"
+	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/bsv-blockchain/teranode/util/uaerospike"
 	aerospike2 "github.com/bsv-blockchain/testcontainers-aerospike-go"
 )
@@ -37,7 +38,7 @@ func InitAerospikeContainer() (string, func() error, error) {
 
 	ctx := context.Background()
 
-	container, err := aerospike2.RunContainer(ctx, aerospike2.WithTTLSupport("test"))
+	container, err := aerospike2.RunContainer(ctx, aerospike2.WithImage(test.AerospikeImage), aerospike2.WithTTLSupport("test"))
 	if err != nil {
 		return "", nil, err
 	}

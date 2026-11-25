@@ -17,7 +17,8 @@ import (
 // store that probed false counts its spends as not carrying one. The server here runs a copy of
 // teranode.lua with the slot write taken out, the shape of a server that predates the lanePos key.
 func TestLaneSlotProbeAnswersFalseWithoutProof(t *testing.T) {
-	s, client := setupStoreForLockTest(t)
+	// Not parallel: it reads the process-wide lane spend counts, which other tests' spends add to.
+	s, client := setupStoreForLockTestOwnServer(t)
 	ctx := t.Context()
 
 	s.settings.UtxoStore.LaneMigration = settings.LaneMigrationShadow
@@ -133,6 +134,8 @@ func laneSpendCount(t *testing.T, carried string) float64 {
 // The probe record is no transaction other readers see: it has no txID, unminedSince or createdAt
 // bin, no TTL, and its spend sets no deleteAtHeight. It is gone when the probe returns.
 func TestLaneSlotProbeRecordIsInvisibleAndRemoved(t *testing.T) {
+	t.Parallel()
+
 	s, client := setupStoreForLockTest(t)
 	ctx := t.Context()
 

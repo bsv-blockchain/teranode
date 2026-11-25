@@ -16,6 +16,7 @@ import (
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
+	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/blob"
 	"github.com/bsv-blockchain/teranode/stores/blob/options"
 	utxostore "github.com/bsv-blockchain/teranode/stores/utxo"
@@ -23,6 +24,7 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
+	"github.com/bsv-blockchain/teranode/util/lane"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -1739,4 +1741,52 @@ func TestBlockAssemblyCreatesNameBlockAssembly(t *testing.T) {
 			require.Equal(t, utxostore.CallerBlockAssembly, c, name)
 		}
 	}
+}
+
+// lanePositionAnsweringStore answers a read of fields.LanePosition with the position it is given
+// for a tx, as utxoset and Aerospike do for a record created at utxostore_laneMigration shadow.
+type lanePositionAnsweringStore struct {
+	utxostore.Store
+	positions map[chainhash.Hash]uint64
+}
+
+func (s *lanePositionAnsweringStore) BatchDecorate(ctx context.Context, items []*utxostore.UnresolvedMetaData, fieldNames ...fields.FieldName) error {
+	if err := s.Store.BatchDecorate(ctx, items, fieldNames...); err != nil {
+		return err
+	}
+
+	for _, f := range fieldNames {
+		if f != fields.LanePosition {
+			continue
+		}
+
+		for _, item := range items {
+			if item.Data != nil {
+				item.Data.LanePosition = s.positions[item.Hash]
+			}
+		}
+	}
+
+	return nil
+}
+
+// At shadow, a restored tx that goes back into block assembly takes the lane position its
+// recreated record holds with it.
+func TestApplyCoinbaseUtxosRequeuesARestoredTxWithItsLanePosition(t *testing.T) {
+	ctx := context.Background()
+	stp, block := newMoveForwardCommitBoundaryProcessor(t)
+	stp.settings.UtxoStore.LaneMigration = settings.LaneMigrationShadow
+
+	first, _ := createCoinbaseChain(t, ctx, stp, block)
+	addToAssembly(t, stp, first)
+
+	require.NoError(t, stp.removeCoinbaseUtxos(ctx, block))
+
+	position := lane.Pack(13, 900)
+	stp.utxoStore = &lanePositionAnsweringStore{Store: stp.utxoStore, positions: map[chainhash.Hash]uint64{*first.TxIDChainHash(): position}}
+
+	require.NoError(t, stp.applyCoinbaseUtxos(ctx, block, true, true))
+
+	require.True(t, stp.currentTxMap.Exists(*first.TxIDChainHash()))
+	require.Equal(t, position, stp.currentTxMap.Position(*first.TxIDChainHash()))
 }

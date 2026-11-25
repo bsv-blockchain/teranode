@@ -233,6 +233,20 @@ func (m *ExpiringMap[K, V]) evictOldestLocked() bool {
 	return true
 }
 
+// Expiry reports when key stops being returned by Get, and false when key is absent
+// or has already expired.
+func (m *ExpiringMap[K, V]) Expiry(key K) (time.Time, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	item, ok := m.items[key]
+	if !ok || time.Now().UnixNano() > item.expiry {
+		return time.Time{}, false
+	}
+
+	return time.Unix(0, item.expiry), true
+}
+
 // Get returns the value for the given key.
 func (m *ExpiringMap[K, V]) Get(key K) (value V, ok bool) {
 	m.mu.RLock()
