@@ -1,0 +1,13 @@
+diff --git a/services/blockassembly/subtreeprocessor/reorg_fast_path.go b/services/blockassembly/subtreeprocessor/reorg_fast_path.go
+index 031eeec6c..4d57532ce 100644
+--- a/services/blockassembly/subtreeprocessor/reorg_fast_path.go
++++ b/services/blockassembly/subtreeprocessor/reorg_fast_path.go
+@@ -563,7 +563,7 @@ func (stp *SubtreeProcessor) applyFastReorg(ctx context.Context, plan *fastReorg
+ 		}()
+ 	}
+ 
+-	stp.keepMinedSet(moveForwardBlocks[len(moveForwardBlocks)-1], plan.winners)
++	// stp.keepMinedSet(moveForwardBlocks[len(moveForwardBlocks)-1], plan.winners)
+ 
+ 	// One drain against both blocks. The slow path drains after each step against that step's block.
+ 	stp.phases.count("fast_drain_queue", int(stp.QueueLength()))

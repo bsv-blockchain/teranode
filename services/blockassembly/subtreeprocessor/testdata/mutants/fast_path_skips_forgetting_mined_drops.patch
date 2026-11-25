@@ -1,0 +1,13 @@
+diff --git a/services/blockassembly/subtreeprocessor/reorg_fast_path.go b/services/blockassembly/subtreeprocessor/reorg_fast_path.go
+index 031eeec6c..e16b2c090 100644
+--- a/services/blockassembly/subtreeprocessor/reorg_fast_path.go
++++ b/services/blockassembly/subtreeprocessor/reorg_fast_path.go
+@@ -555,7 +555,7 @@ func (stp *SubtreeProcessor) applyFastReorg(ctx context.Context, plan *fastReorg
+ 	// falls back to the behaviour without kept sets and never drops a transaction wrongly. The
+ 	// earlier blocks get no entry: this call also prunes the expired sets, as each step's does. The
+ 	// keep comes before the drain, as in a step; the drain skips the set it is given.
+-	if forgotten := stp.forgetMinedDroppedTxs(plan.winners); len(forgotten) != 0 {
++	if forgotten := []chainhash.Hash(nil); len(forgotten) != 0 {
+ 		defer func() {
+ 			if err != nil {
+ 				stp.restoreForgottenDroppedTxs(forgotten)
