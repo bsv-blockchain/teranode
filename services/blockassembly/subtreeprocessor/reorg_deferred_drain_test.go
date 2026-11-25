@@ -7,7 +7,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/stretchr/testify/require"
@@ -15,9 +14,8 @@ import (
 
 // Issue 2269, plan PR 7b: the fast path's final drain runs after the reorg has answered, through the
 // deferred-drain mechanism of a single block (deferredBlockDrain). The reorg publishes its template after
-// the marks; the queue that built up meanwhile is drained against the union of the winning blocks
-// afterwards, and that union stays to filter later batches while the queue may still hold a transaction
-// the winners mined.
+// the marks; the queue that built up meanwhile is drained afterwards, and the winners' set the reorg kept
+// (keepMinedSet) filters later batches while a transaction the winners mined may still be queued.
 
 // settableClock is a clock a test moves while the processor reads it.
 type settableClock struct{ nanos atomic.Int64 }
@@ -141,7 +139,7 @@ func TestReorgScenario_FastPathPublishesTheTemplateBeforeTheDrain(t *testing.T) 
 	require.Equal(t, want, txHashes(assemblyNodes(sc.stp)), "the drain adds what no winner mined and drops what a winner mined")
 
 	for _, id := range winners {
-		require.False(t, sc.stp.currentTxMap.Exists(sc.hash(id)), "a transaction of the first block is dropped by the union")
+		require.False(t, sc.stp.currentTxMap.Exists(sc.hash(id)), "a transaction of the first block is dropped by the drain")
 	}
 
 	requireAssemblyValid(t, sc.stp, sc.onChainAfter)
@@ -150,7 +148,6 @@ func TestReorgScenario_FastPathPublishesTheTemplateBeforeTheDrain(t *testing.T) 
 	require.NotEqual(t, -1, marks)
 	require.Greater(t, drain, marks, "the drain is logged after the marks")
 	require.Greater(t, drain, logger.indexOfLine("[reorgBlocks] phases total="), "and after the reorg's own summary")
-	require.Nil(t, sc.stp.reorgFilter.Load(), "a drain that took everything leaves no filter behind")
 }
 
 // The set of transactions to mark off the longest chain is read before the drain, and what the drain
@@ -200,13 +197,14 @@ func TestReorgScenario_FastPathDrainFailureAfterTheCommitRequestsAReset(t *testi
 	require.Equal(t, committedTip, *sc.stp.GetCurrentBlockHeader().Hash())
 	require.Equal(t, committed, txHashes(assemblyNodes(sc.stp))[:len(committed)], "what the reorg committed is untouched")
 	require.Equal(t, sortedHashes(sc.expectedMarkFalse()), sortedHashes(sc.utxo.marked(false)))
-	require.NotNil(t, sc.stp.reorgFilter.Load(), "until the reset, a batch dequeued meanwhile is still filtered")
+
+	require.Equal(t, 1, sc.stp.keptMinedSetCount(), "until the reset, a batch dequeued meanwhile is still filtered by the winners' set")
 
 	require.NoError(t, sc.stp.reset(sc.forward[len(sc.forward)-1].Header, nil, nil, false, func() error { return nil }))
-	require.Nil(t, sc.stp.reorgFilter.Load(), "the reset discards the queue, and with it the need for the filter")
+	require.Zero(t, sc.stp.keptMinedSetCount(), "the reset discards the queue, and with it the kept set")
 }
 
-// A reorg that fails leaves no drain and no filter behind.
+// A reorg that fails leaves no drain behind.
 func TestReorgScenario_FastPathFailedReorgLeavesNoDeferredDrain(t *testing.T) {
 	sc, r, _ := newAwaitedStoreScenario(t, 5*time.Second, failAwaited)
 	_ = r
@@ -219,15 +217,15 @@ func TestReorgScenario_FastPathFailedReorgLeavesNoDeferredDrain(t *testing.T) {
 	require.True(t, rec.applied, "declined: %v", rec.reasons)
 
 	require.Nil(t, sc.stp.pendingReorgDrain)
-	require.Nil(t, sc.stp.reorgFilter.Load())
 }
 
 // Design section 5 item 10: a transaction a winner mined can miss the drain, here because the
 // double-spend window holds its batch back, and reach an ordinary dequeue later. It is classified against
-// the union, and the union is released once the queue is empty.
-func TestReorgScenario_FastPathFiltersALateBatchAgainstTheRetainedUnion(t *testing.T) {
+// the winners' set the reorg kept, which is still within its retention.
+func TestReorgScenario_FastPathFiltersALateBatchAgainstTheKeptSet(t *testing.T) {
 	sc, _ := newDeferredDrainScenario(t)
-	sc.stp.settings.BlockAssembly.DoubleSpendWindow = time.Minute
+	sc.stp.settings.BlockAssembly.DoubleSpendWindow = 5 * time.Second
+	sc.stp.settings.BlockAssembly.MinedTxSetRetention = 10 * time.Second
 
 	base := time.Now()
 	clk := &settableClock{}
@@ -247,9 +245,8 @@ func TestReorgScenario_FastPathFiltersALateBatchAgainstTheRetainedUnion(t *testi
 
 	require.Eventually(t, func() bool { return !sc.stp.DrainingAfterBlock() }, 5*time.Second, time.Millisecond)
 	require.EqualValues(t, 6, sc.stp.QueueLength(), "the window holds both batches past the drain")
-	require.NotNil(t, sc.stp.reorgFilter.Load(), "the union stays while the queue holds anything")
 
-	clk.set(base.Add(2 * time.Minute))
+	clk.set(base.Add(6 * time.Second)) // past the window, inside the retention
 
 	require.Eventually(t, func() bool { return sc.stp.QueueLength() == 0 }, 5*time.Second, time.Millisecond)
 
@@ -264,8 +261,6 @@ func TestReorgScenario_FastPathFiltersALateBatchAgainstTheRetainedUnion(t *testi
 		require.Contains(t, hashes, sc.hash(id))
 	}
 
-	require.Eventually(t, func() bool { return sc.stp.reorgFilter.Load() == nil }, 5*time.Second, time.Millisecond,
-		"the union is released once the queue is empty")
 }
 
 // Through the dispatcher: the reorg answers while the drain is still held, block assembly is told the
@@ -324,41 +319,4 @@ func TestReorgScenario_FastPathDispatcherAnswersBeforeTheDrainRuns(t *testing.T)
 	for _, id := range arrivals {
 		require.Contains(t, hashes, sc.hash(id))
 	}
-}
-
-// The union is kept for the tip it was built for: once a block moves the tip on, it is released even
-// though the queue still holds a batch.
-func TestReorgScenario_FastPathReleasesTheUnionWhenTheTipMoves(t *testing.T) {
-	sc, _ := newDeferredDrainScenario(t)
-	sc.stp.settings.BlockAssembly.DoubleSpendWindow = time.Hour
-
-	queueIntake(t, sc, 0, 3) // held back by the window, so the queue is never empty
-
-	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(cancel)
-
-	sc.stp.Start(ctx)
-
-	require.NoError(t, sc.stp.Reorg([]*model.Block{sc.lost}, sc.forward))
-	require.Eventually(t, func() bool { return !sc.stp.DrainingAfterBlock() }, 5*time.Second, time.Millisecond)
-	require.EqualValues(t, 3, sc.stp.QueueLength())
-	require.NotNil(t, sc.stp.reorgFilter.Load(), "the union is kept while the queue holds a batch")
-
-	// an empty block on top of the last winner: it moves the tip and mines nothing
-	tip := sc.forward[len(sc.forward)-1]
-	header := &model.BlockHeader{
-		Version:        1,
-		HashPrevBlock:  tip.Header.Hash(),
-		HashMerkleRoot: &chainhash.Hash{},
-		Timestamp:      tip.Header.Timestamp + 1,
-		Nonce:          777,
-	}
-	next := &model.Block{Height: tip.Height + 1, Header: header, CoinbaseTx: scenarioCoinbase(t, tip.Height+1, 777, 0), Subtrees: []*chainhash.Hash{}}
-
-	require.NoError(t, sc.stp.MoveForwardBlock(next))
-	require.Equal(t, *header.Hash(), *sc.stp.GetCurrentBlockHeader().Hash())
-	require.EqualValues(t, 3, sc.stp.QueueLength(), "the window still holds the batch")
-
-	require.Eventually(t, func() bool { return sc.stp.reorgFilter.Load() == nil }, 5*time.Second, time.Millisecond,
-		"a tip that moved releases the union although the queue is not empty")
 }

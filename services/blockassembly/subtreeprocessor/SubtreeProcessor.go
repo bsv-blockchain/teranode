@@ -467,10 +467,6 @@ type SubtreeProcessor struct {
 	// runs and clears it. Only the processor goroutine touches it.
 	pendingReorgDrain *deferredBlockDrain
 
-	// reorgFilter is the union of the winning blocks of the last fast-path reorg while the queue may
-	// still hold a transaction they mined: every batch dequeued meanwhile is filtered against it.
-	reorgFilter atomic.Pointer[reorgFilterSet]
-
 	// mmapDir, when non-empty, enables mmap-backed subtree Nodes.
 	mmapDir string
 
@@ -1259,8 +1255,6 @@ func (stp *SubtreeProcessor) Start(ctx context.Context) {
 
 					stp.setCurrentRunningState(StateDequeue)
 
-					stp.expireReorgFilter()
-
 					// the Load keeps the idle path to a read; Swap only runs when a check was requested
 					if stp.blockMaxSizeCheckPending.Load() && stp.blockMaxSizeCheckPending.Swap(false) {
 						stp.checkBlockMaxSize(processorCtx)
@@ -1355,9 +1349,6 @@ func (stp *SubtreeProcessor) Start(ctx context.Context) {
 					var zeroHash chainhash.Hash
 					var filterWg sync.WaitGroup
 
-					// a fast-path reorg's winners, while a transaction they mined may still be queued
-					reorgFilter := stp.reorgFilter.Load()
-
 					for _, batch := range dequeueBatches {
 						filterWg.Add(1)
 						go func(b *TxBatch) {
@@ -1372,11 +1363,6 @@ func (stp *SubtreeProcessor) Start(ctx context.Context) {
 								if mapLength > 0 && removeMap.Exists(hash) {
 									_ = removeMap.Delete(hash)
 									b.nodes[i].Hash = zeroHash // Mark as rejected
-									continue
-								}
-
-								if reorgFilter != nil && reorgFilter.exists(hash) {
-									b.nodes[i].Hash = zeroHash // Mined by a block of the last reorg
 									continue
 								}
 
@@ -2350,9 +2336,6 @@ func (stp *SubtreeProcessor) reset(blockHeader *model.BlockHeader, moveBackBlock
 	}
 
 	stp.phases.done("queue_discard")
-
-	// the queue the retained union of a fast-path reorg filtered is gone
-	stp.reorgFilter.Store(nil)
 
 	// Both reset branches complete the finished forward intents of every moveForward block. An
 	// earlier failed acknowledgement can leave one pending, even on the fast-forward branch.
