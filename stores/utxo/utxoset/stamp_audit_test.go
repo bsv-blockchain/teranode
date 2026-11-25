@@ -87,6 +87,8 @@ func TestStampCountsADisagreeingPairAndStillCompletes(t *testing.T) {
 // A winner whose identity row is still there after its page is the other thing the audit
 // refuses to publish over.
 func TestStampDoesNotCompleteAPartitionWithAnIdentityRowLeftOnAWinner(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx, drain, anc, tip := pagedPartitionZero(t)
 
 	_, err := s.pool.Exec(ctx, `

@@ -18,6 +18,8 @@ import (
 // failure escalate to the manual-intervention message, whatever had actually gone wrong,
 // because the rollback itself could never succeed.
 func TestSpendReturnsRecordsThisStoreCanRestore(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	parent := mkTx(t, 2, 5_000)
@@ -43,6 +45,8 @@ func TestSpendReturnsRecordsThisStoreCanRestore(t *testing.T) {
 // TestSpendAndCreateReturnsRecordsThisStoreCanRestore is the same rule on the combined call,
 // which is the one conflict resolution actually uses.
 func TestSpendAndCreateReturnsRecordsThisStoreCanRestore(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	parent := mkTx(t, 2, 5_000)
@@ -70,6 +74,8 @@ func TestSpendAndCreateReturnsRecordsThisStoreCanRestore(t *testing.T) {
 // to put two transactions through one statement. It keeps the property under test because
 // planSpends is still multi-item, which is the shape a batched SpendAndCreate would need.
 func TestSpendNamesTheRightSpenderPerTransactionInOnePlan(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	parent := mkTx(t, 3, 5_000)

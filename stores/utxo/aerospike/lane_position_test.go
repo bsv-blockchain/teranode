@@ -61,7 +61,9 @@ func TestLanePositionInUnminedIterator(t *testing.T) {
 				tSettings.UtxoStore.LaneMigration = settings.LaneMigrationShadow
 			}
 
-			_, store, _, deferFn := initAerospike(t, tSettings, logger)
+			// A server of its own: the unmined iterator scans the whole set, and both subtests
+			// create the same transactions.
+			_, store, _, deferFn := initAerospikeOwnServer(t, tSettings, logger)
 			t.Cleanup(deferFn)
 
 			tests.LanePositionInUnminedIterator(t, store, tc.shadow)
