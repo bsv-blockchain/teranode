@@ -95,8 +95,10 @@ type ValidateBlockOptions struct {
 
 	// HeaderProven is legacy netsync's proof that the block's hash sits in a header run that a
 	// matched hardcoded checkpoint commits (headerCache.Proven). It is the same proof the unified
-	// below-checkpoint route rests on, and it counts as checkpoint ancestry for the coinbase
-	// no-inflation skip (checkpointConfirmedAncestor). Every caller other than netsync leaves it false.
+	// below-checkpoint route rests on, and it counts as checkpoint ancestry
+	// (checkpointConfirmedAncestor). That gates the coinbase no-inflation skip and, with
+	// OutpointOnlyBelowCheckpoint on, the validOrderAndBlessed skip, for every proven legacy block
+	// that takes full validation. Every caller other than netsync leaves it false.
 	HeaderProven bool
 
 	// KeepBlockAssemblyHandoff asks subtree validation to hand the block's unseen transactions
@@ -4039,7 +4041,9 @@ func (u *BlockValidation) enqueueRevalidation(data revalidateBlockData) {
 //
 // headerProven is the other proof of the same fact, and it is the one a block arriving for the
 // first time can carry: legacy netsync's header cache saw the block's hash in a header run that a
-// matched hardcoded checkpoint commits. When it is true the predicate holds without the lookups.
+// matched hardcoded checkpoint commits. When it is true the predicate holds without the lookups,
+// so both skips it gates apply: the coinbase no-inflation skip and, with OutpointOnlyBelowCheckpoint
+// on, the validOrderAndBlessed skip (model.skipOrderAndBlessedBelowCheckpoint).
 // This is what lets full validation accept a proven legacy block whose fees were recorded as 0 by
 // an earlier outpoint-only quick attempt that never committed: the attempt's transaction records
 // stay in the UTXO store with fee 0, and subtree validation reuses those fees as they stand.

@@ -706,11 +706,8 @@ func TestQuickValidateBlock_AFailedAttemptRemovesTheZeroFeeSubtreeFileItWrote(t 
 	require.True(t, exists, "a committed block keeps its .subtree file")
 }
 
-// TestProcessBlockFound_FullValidationOfAProvenBlockAfterAFailedQuickAttemptIsValid covers a
-// proven legacy block that reaches full validation after an outpoint-only quick attempt stored its
-// transactions with fee 0 and then failed before the commit. Subtree validation reuses those
-// stored fees, so the rebuilt .subtree file sums 0 against a coinbase collecting 1,000 satoshis.
-// The header proof vouches for the coinbase, as on the quick route; without it the block is invalid.
+// A proven legacy block whose failed quick attempt left fee-0 records must pass full validation on
+// the header proof; without the proof the coinbase check rejects it.
 func TestProcessBlockFound_FullValidationOfAProvenBlockAfterAFailedQuickAttemptIsValid(t *testing.T) {
 	for _, tc := range []struct {
 		name         string

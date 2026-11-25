@@ -2270,8 +2270,10 @@ func (u *Server) processBlockFound(ctx context.Context, hash *chainhash.Hash, pe
 // An eligible block without the proof falls to ValidateBlockWithOptions. That is
 // correct for a legacy record because netsync writes its structure files as
 // FileTypeSubtreeToCheck, which full validation treats as unvalidated: subtree
-// validation creates the transactions and rebuilds the fees before the reward
-// check reads them. It is also slow, which is why netsync refuses to commit an
+// validation creates any transaction not yet stored and computes its fee. A
+// transaction an earlier outpoint-only quick attempt already stored keeps the fee 0
+// it was written with, so such a block can fail the reward check without the proof
+// (see checkpointConfirmedAncestor). It is also slow, which is why netsync refuses to commit an
 // unproven eligible record before it makes this RPC and re-offers it once the
 // header walk has proven it.
 func (u *Server) legacyUnifiedRoute(block *model.Block, baseURL string, headerProven bool) bool {
