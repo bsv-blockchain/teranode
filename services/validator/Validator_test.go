@@ -31,6 +31,7 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -2316,24 +2317,11 @@ func TestValidator_TwoPhaseCommitCompletesAfterTxMetaSerializationFailure(t *tes
 // goroutines simultaneously read len(v.mtpStore)==0 and then both appended to it.
 // The test must be run with -race to catch the regression.
 func TestEnsureMTPLoaded_ConcurrentCallsNeitherHangsNorRaces(t *testing.T) {
-	const blockHeight = uint32(1_000_000) // well above RegressionNet CSVHeight=576
+	const blockHeight = uint32(2_000) // above RegressionNet CSVHeight=576
 
-	// Build a dense MTP slice that GetMedianTimePastRange would return.
-	// The range fetched is [0, blockHeight], so length = blockHeight+1.
-	mtpValues := make([]uint32, blockHeight+1)
-	for i := range mtpValues {
-		mtpValues[i] = uint32(1_700_000_000 + i) // plausible unix timestamps
-	}
-
-	// slowBlockchainClient introduces a brief pause so that both goroutines are
-	// likely inside EnsureMTPLoaded concurrently when the race would occur.
-	// Once() asserts that exactly one fetch is issued: the second concurrent
-	// caller must fast-path out under the mutex without re-fetching, which is
-	// the production failure mode this test guards against.
-	mockClient := &blockchain.Mock{}
-	mockClient.On("GetMedianTimePastRange", mock.Anything, uint32(0), blockHeight).
-		After(5*time.Millisecond).
-		Return(mtpValues, nil).Once()
+	// The second concurrent caller must fast-path out under the mutex without loading again,
+	// which is the production failure mode this test guards against.
+	client := &idChainClient{Mock: &blockchain.Mock{}, tip: blockHeight - 1}
 
 	tSettings := test.CreateBaseTestSettings(t)
 	// Keep the load height inside the BIP68 range: regtest's Genesis height (100) is
@@ -2345,7 +2333,7 @@ func TestEnsureMTPLoaded_ConcurrentCallsNeitherHangsNorRaces(t *testing.T) {
 	v := &Validator{
 		logger:           ulogger.TestLogger{},
 		settings:         tSettings,
-		blockchainClient: &idChainClient{Mock: mockClient},
+		blockchainClient: client,
 		stats:            gocore.NewStat("validator_test"),
 	}
 
@@ -2371,13 +2359,13 @@ func TestEnsureMTPLoaded_ConcurrentCallsNeitherHangsNorRaces(t *testing.T) {
 	require.Equal(t, int(blockHeight+1), len(v.mtpStore),
 		"mtpStore must have exactly blockHeight+1 entries after concurrent load")
 
-	// Spot-check a few values to confirm correct data (not a corrupted merge).
+	// Spot-check a few values to confirm correct data (not a corrupted merge): the top entry
+	// is computed from timestamps, the others are the blocks' stored medians.
 	require.Equal(t, uint32(1_700_000_000), v.mtpStore[0])
 	require.Equal(t, uint32(1_700_000_000+blockHeight), v.mtpStore[blockHeight])
+	require.Equal(t, blockHeight, v.mtpIDs[blockHeight])
 
-	// Asserts exactly-one fetch (Once() above). Without the mutex both callers
-	// would each issue a 1.45 M-entry fetch — the production CPU peg.
-	mockClient.AssertExpectations(t)
+	require.Equal(t, int32(1), client.loads.Load(), "the second caller must not load again")
 }
 
 // TestEnsureMTPLoaded_CrossBlockReadersAndWritersDoNotRace verifies that
@@ -2393,31 +2381,11 @@ func TestEnsureMTPLoaded_ConcurrentCallsNeitherHangsNorRaces(t *testing.T) {
 // EnsureMTPLoaded runs.
 func TestEnsureMTPLoaded_CrossBlockReadersAndWritersDoNotRace(t *testing.T) {
 	const (
-		initialHeight  = uint32(1_000_000)
-		extendedHeight = uint32(1_000_500)
+		initialHeight  = uint32(2_000)
+		extendedHeight = uint32(2_500)
 	)
 
-	initialMTPs := make([]uint32, initialHeight+1)
-	for i := range initialMTPs {
-		initialMTPs[i] = uint32(1_700_000_000 + i)
-	}
-
-	// Second call refetches an mtpReorgOverlap-deep tail and the new heights:
-	//   fromHeight = (initialHeight+1) - mtpReorgOverlap
-	//   range     = [fromHeight, extendedHeight], so length = extendedHeight - fromHeight + 1.
-	extendFrom := (initialHeight + 1) - mtpReorgOverlap
-	extendedLen := extendedHeight - extendFrom + 1
-	extendedMTPs := make([]uint32, extendedLen)
-	for i := range extendedMTPs {
-		extendedMTPs[i] = uint32(1_700_000_000) + extendFrom + uint32(i)
-	}
-
-	mockClient := &blockchain.Mock{}
-	mockClient.On("GetMedianTimePastRange", mock.Anything, uint32(0), initialHeight).
-		Return(initialMTPs, nil).Once()
-	mockClient.On("GetMedianTimePastRange", mock.Anything, extendFrom, extendedHeight).
-		After(2*time.Millisecond).
-		Return(extendedMTPs, nil).Once()
+	client := &idChainClient{Mock: &blockchain.Mock{}, tip: extendedHeight - 1}
 
 	tSettings := test.CreateBaseTestSettings(t)
 	// Keep the load height inside the BIP68 range: regtest's Genesis height (100) is
@@ -2429,7 +2397,7 @@ func TestEnsureMTPLoaded_CrossBlockReadersAndWritersDoNotRace(t *testing.T) {
 	v := &Validator{
 		logger:           ulogger.TestLogger{},
 		settings:         tSettings,
-		blockchainClient: &idChainClient{Mock: mockClient},
+		blockchainClient: client,
 		stats:            gocore.NewStat("validator_test"),
 	}
 
@@ -2457,7 +2425,7 @@ func TestEnsureMTPLoaded_CrossBlockReadersAndWritersDoNotRace(t *testing.T) {
 				}
 				// Read through validateTransaction's own reader, so the test
 				// fails under -race if readMTPsLocked stops taking the lock.
-				// initialHeight-1 sits in the overlap the extension patches.
+				// The extension reassigns v.mtpStore while the readers run.
 				_, _, _ = v.readMTPsLocked(initialHeight, 1, 0, nil, nil, []uint32{0, initialHeight / 2, initialHeight - 1})
 			}
 		}()
@@ -2481,9 +2449,8 @@ func TestEnsureMTPLoaded_CrossBlockReadersAndWritersDoNotRace(t *testing.T) {
 	require.NoError(t, extendErr)
 	require.GreaterOrEqual(t, len(v.mtpStore), int(extendedHeight+1))
 
-	// Asserts the initial-load + extension pair both fired exactly once
-	// (each .Once() above) — defends against accidental over-fetch.
-	mockClient.AssertExpectations(t)
+	// The initial load and the extension each loaded exactly once.
+	require.Equal(t, int32(2), client.loads.Load())
 }
 
 // TestReadMTPsLocked_HappyPath verifies the reader helper returns the per-input
@@ -3484,41 +3451,102 @@ func TestValidateCarriesLanePositionsToTheCreateAndTheTxMeta(t *testing.T) {
 	}
 }
 
-// idChainClient serves a straight chain's block IDs around a mocked MTP range: the block at
-// height h has nonce h and ID h+1. Every other call goes to the mock.
+// idChainClient serves a straight synthetic chain of blocks 0 to tip: block h has nonce h, ID
+// h+1, stored median 1_700_000_000+h and a timestamp six seconds later, so the median of the 11
+// timestamps below any height h is also 1_700_000_000+h. It counts the loads (one main-chain
+// read of the top block each).
 type idChainClient struct {
 	*blockchain.Mock
 
-	mu      sync.Mutex
-	heights map[chainhash.Hash]uint32
+	tip     uint32
+	once    sync.Once
+	headers []*model.BlockHeader
+	loads   atomic.Int32
 }
 
-func (c *idChainClient) GetBlockHeadersByHeight(_ context.Context, height, _ uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
-	header := &model.BlockHeader{Nonce: height, HashPrevBlock: &chainhash.Hash{}, HashMerkleRoot: &chainhash.Hash{}}
+func (c *idChainClient) chain() []*model.BlockHeader {
+	c.once.Do(func() {
+		c.headers = make([]*model.BlockHeader, c.tip+1)
+		prev := &chainhash.Hash{}
 
-	c.mu.Lock()
-	if c.heights == nil {
-		c.heights = make(map[chainhash.Hash]uint32)
-	}
-	c.heights[*header.Hash()] = height
-	c.mu.Unlock()
+		for h := uint32(0); h <= c.tip; h++ {
+			c.headers[h] = &model.BlockHeader{Nonce: h, Timestamp: 1_700_000_006 + h, HashPrevBlock: prev, HashMerkleRoot: &chainhash.Hash{}}
+			prev = c.headers[h].Hash()
+		}
+	})
 
-	return []*model.BlockHeader{header}, []*model.BlockHeaderMeta{{Height: height, ID: height + 1}}, nil
+	return c.headers
 }
 
-func (c *idChainClient) GetBlockHeaderIDs(_ context.Context, hash *chainhash.Hash, n uint64) ([]uint32, error) {
-	c.mu.Lock()
-	height, ok := c.heights[*hash]
-	c.mu.Unlock()
+func idChainMeta(h uint32) *model.BlockHeaderMeta {
+	return &model.BlockHeaderMeta{Height: h, ID: h + 1, MedianTimePast: 1_700_000_000 + h}
+}
 
-	if !ok {
-		return nil, nil
+func (c *idChainClient) GetBlockHeadersByHeight(_ context.Context, start, _ uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
+	c.loads.Add(1)
+
+	if start > c.tip {
+		return nil, nil, nil
 	}
 
-	ids := make([]uint32, 0, n)
-	for i := uint64(0); i < n && i <= uint64(height); i++ {
-		ids = append(ids, height-uint32(i)+1) //nolint:gosec // i <= height
+	return []*model.BlockHeader{c.chain()[start]}, []*model.BlockHeaderMeta{idChainMeta(start)}, nil
+}
+
+func (c *idChainClient) GetBlockHeadersByParentLinks(_ context.Context, hash *chainhash.Hash, n uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
+	headers := c.chain()
+
+	for h := int(c.tip); h >= 0; h-- {
+		if !headers[h].Hash().IsEqual(hash) {
+			continue
+		}
+
+		var (
+			out   []*model.BlockHeader
+			metas []*model.BlockHeaderMeta
+		)
+
+		for x := h; x >= 0 && uint64(len(out)) < n; x-- {
+			out = append(out, headers[x])
+			metas = append(metas, idChainMeta(uint32(x))) //nolint:gosec // x >= 0
+		}
+
+		return out, metas, nil
 	}
 
-	return ids, nil
+	return nil, nil, nil
+}
+
+// brokenLinkClient is idChainClient whose parent-link walk swaps the fourth header for one that
+// does not link to its neighbours, at the right height.
+type brokenLinkClient struct {
+	*idChainClient
+}
+
+func (c *brokenLinkClient) GetBlockHeadersByParentLinks(ctx context.Context, hash *chainhash.Hash, n uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
+	headers, metas, err := c.idChainClient.GetBlockHeadersByParentLinks(ctx, hash, n)
+	if len(headers) > 3 {
+		headers = append([]*model.BlockHeader{}, headers...)
+		headers[3] = &model.BlockHeader{Nonce: 999_999, HashPrevBlock: &chainhash.Hash{}, HashMerkleRoot: &chainhash.Hash{}}
+	}
+
+	return headers, metas, err
+}
+
+// TestEnsureMTPLoaded_RefusesAChainThatDoesNotLink checks that a load whose parent-link read does
+// not form one chain fails rather than storing medians from more than one chain.
+func TestEnsureMTPLoaded_RefusesAChainThatDoesNotLink(t *testing.T) {
+	tSettings := test.CreateBaseTestSettings(t)
+	params := *tSettings.ChainCfgParams
+	params.GenesisActivationHeight = ^uint32(0)
+	tSettings.ChainCfgParams = &params
+
+	v := &Validator{
+		logger:           ulogger.TestLogger{},
+		settings:         tSettings,
+		blockchainClient: &brokenLinkClient{idChainClient: &idChainClient{Mock: &blockchain.Mock{}, tip: 999}},
+		stats:            gocore.NewStat("validator_test"),
+	}
+
+	require.ErrorContains(t, v.EnsureMTPLoaded(context.Background(), 1_000), "does not link")
+	require.Empty(t, v.mtpStore)
 }

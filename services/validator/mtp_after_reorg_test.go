@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/url"
 	"slices"
+	"sync/atomic"
 	"testing"
 
 	"github.com/bsv-blockchain/go-bt/v2"
@@ -78,6 +79,7 @@ func medianBelow(h uint32, timeAt func(uint32) uint32) uint32 {
 type reorgFixture struct {
 	v              *Validator
 	client         blockchain.ClientI
+	loads          *loadCounter
 	chainA, chainB []*model.Block
 	makeBCurrent   func()
 }
@@ -110,11 +112,13 @@ func newReorgFixture(t *testing.T) *reorgFixture {
 	client, err := blockchain.NewLocalClient(ulogger.TestLogger{}, tSettings, store, nil, nil)
 	require.NoError(t, err)
 
+	loads := &loadCounter{ClientI: client}
+
 	v := &Validator{
 		logger:           ulogger.TestLogger{},
 		settings:         tSettings,
 		txValidator:      NewTxValidator(ulogger.TestLogger{}, tSettings),
-		blockchainClient: client,
+		blockchainClient: loads,
 		stats:            gocore.NewStat("validator_test"),
 	}
 	v.txValidator.(*TxValidator).bdk = noopBDKValidator{}
@@ -124,7 +128,7 @@ func newReorgFixture(t *testing.T) *reorgFixture {
 	require.Equal(t, chainA[59].Hash().String(), best.Hash().String(), "chain A must be current while the store loads")
 	require.NoError(t, v.EnsureMTPLoaded(ctx, 60))
 
-	return &reorgFixture{v: v, client: client, chainA: chainA, chainB: chainB, makeBCurrent: func() {
+	return &reorgFixture{v: v, client: client, loads: loads, chainA: chainA, chainB: chainB, makeBCurrent: func() {
 		_, _, storeErr := store.StoreBlock(ctx, chainB[40], "")
 		require.NoError(t, storeErr)
 
@@ -151,6 +155,19 @@ func (f *reorgFixture) blockID(t *testing.T, block *model.Block) uint32 {
 	require.NoError(t, err)
 
 	return meta.ID
+}
+
+// loadCounter counts the main-chain reads of a load's top block, one per store load.
+type loadCounter struct {
+	blockchain.ClientI
+
+	calls atomic.Int32
+}
+
+func (c *loadCounter) GetBlockHeadersByHeight(ctx context.Context, startHeight, endHeight uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
+	c.calls.Add(1)
+
+	return c.ClientI.GetBlockHeadersByHeight(ctx, startHeight, endHeight)
 }
 
 // timeLockedFor40Units is a v2 tx whose input carries a 40-unit (20,480 second) time lock.
@@ -196,9 +213,27 @@ func TestValidateTransaction_BIP68FailsWhenTheStoreCannotHoldTheBase(t *testing.
 
 	opts := &Options{SkipPolicyChecks: true, CandidateParentMedianTime: medianBelow(60, f.timeOnA), CandidateBaseID: f.blockID(t, f.chainA[58]), CandidateBaseSet: true}
 
-	err := f.v.validateTransaction(context.Background(), timeLockedFor40Units(t), 60, []uint32{30}, opts)
-	require.ErrorIs(t, err, errors.ErrProcessing)
-	require.ErrorContains(t, err, "does not hold block ID")
+	before := f.loads.calls.Load()
+
+	for range 5 {
+		err := f.v.validateTransaction(context.Background(), timeLockedFor40Units(t), 60, []uint32{30}, opts)
+		require.ErrorIs(t, err, errors.ErrProcessing)
+		require.ErrorContains(t, err, "does not hold block ID")
+	}
+
+	require.Equal(t, int32(1), f.loads.calls.Load()-before, "the block's other transactions must not reload again")
+}
+
+// TestValidateTransaction_BIP68ReloadsAShortStore checks that a candidate above what the store
+// covers, as after another candidate's reload cut it back, reloads instead of failing.
+func TestValidateTransaction_BIP68ReloadsAShortStore(t *testing.T) {
+	f := newReorgFixture(t)
+	f.makeBCurrent()
+
+	opts := &Options{SkipPolicyChecks: true, CandidateParentMedianTime: medianBelow(62, f.timeOnB), CandidateBaseID: f.blockID(t, f.chainB[40]), CandidateBaseSet: true}
+
+	require.NoError(t, f.v.validateTransaction(context.Background(), bip68Tx(t), 62, []uint32{30}, opts))
+	require.Len(t, f.v.mtpStore, 63)
 }
 
 // TestEnsureMTPLoaded_ExtensionRepairsADeepReorg checks that extending the store after a reorg

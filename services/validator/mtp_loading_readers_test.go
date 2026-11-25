@@ -41,7 +41,7 @@ func TestEnsureMTPLoaded_ReadersContinueDuringFetch(t *testing.T) {
 	unblock := func() { once.Do(func() { close(release) }) }
 	defer unblock()
 	server := grpc.NewServer(grpc.UnaryInterceptor(func(ctx context.Context, req any, info *grpc.UnaryServerInfo, next grpc.UnaryHandler) (any, error) {
-		if info.FullMethod == "/blockchain_api.BlockchainAPI/GetMedianTimePastByHeights" {
+		if info.FullMethod == blockchain_api.BlockchainAPI_GetBlockHeadersByHeight_FullMethodName {
 			entered <- struct{}{}
 			select {
 			case <-release:
@@ -125,7 +125,7 @@ func TestEnsureMTPLoaded_InFlightWindowBlocksCoveredFastPath(t *testing.T) {
 	unblock := func() { once.Do(func() { close(release) }) }
 	defer unblock()
 	server := grpc.NewServer(grpc.UnaryInterceptor(func(ctx context.Context, req any, info *grpc.UnaryServerInfo, next grpc.UnaryHandler) (any, error) {
-		if info.FullMethod == "/blockchain_api.BlockchainAPI/GetMedianTimePastByHeights" {
+		if info.FullMethod == blockchain_api.BlockchainAPI_GetBlockHeadersByHeight_FullMethodName {
 			entered <- struct{}{}
 			select {
 			case <-release:
