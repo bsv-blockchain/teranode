@@ -3489,6 +3489,10 @@ func (c *idChainClient) GetBlockHeadersByHeight(_ context.Context, start, _ uint
 	return []*model.BlockHeader{c.chain()[start]}, []*model.BlockHeaderMeta{idChainMeta(start)}, nil
 }
 
+func (c *idChainClient) GetBestBlockHeader(_ context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
+	return c.chain()[c.tip], idChainMeta(c.tip), nil
+}
+
 func (c *idChainClient) GetBlockHeadersByParentLinks(_ context.Context, hash *chainhash.Hash, n uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
 	headers := c.chain()
 
@@ -3546,4 +3550,38 @@ func TestEnsureMTPLoaded_RefusesAChainThatDoesNotLink(t *testing.T) {
 
 	require.ErrorContains(t, v.EnsureMTPLoaded(context.Background(), 1_000), "does not link")
 	require.Empty(t, v.mtpStore)
+}
+
+// TestEnsureMTPLoaded_PlaceholderIDsDoNotJoin checks that entries above the tip, whose ID 0 names
+// no block, do not count as the fetched and stored chains agreeing: a store holding another
+// chain below them must still be reached and repaired.
+func TestEnsureMTPLoaded_PlaceholderIDsDoNotJoin(t *testing.T) {
+	tSettings := test.CreateBaseTestSettings(t)
+	params := *tSettings.ChainCfgParams
+	params.CSVHeight = 0
+	params.GenesisActivationHeight = ^uint32(0)
+	tSettings.ChainCfgParams = &params
+
+	// The store reaches 30 along another chain (IDs 1000+h) whose entries above 11 are
+	// placeholders; the current chain ends at 10.
+	store := make([]uint32, 31)
+	ids := make([]uint32, 31)
+
+	for h := uint32(1); h <= 11; h++ {
+		ids[h] = 1_000 + h
+	}
+
+	v := &Validator{
+		logger:           ulogger.TestLogger{},
+		settings:         tSettings,
+		blockchainClient: &idChainClient{Mock: &blockchain.Mock{}, tip: 10},
+		stats:            gocore.NewStat("validator_test"),
+		mtpStore:         store,
+		mtpIDs:           ids,
+	}
+
+	base := &mtpBase{entry: 11, id: 11} // the current chain's block at 10
+	require.NoError(t, v.ensureMTPLoaded(context.Background(), 30, base))
+	require.True(t, v.holdsBaseLocked(base))
+	require.Equal(t, uint32(2), v.mtpIDs[2], "entries below the placeholders must be the current chain's (block 1, ID 2)")
 }

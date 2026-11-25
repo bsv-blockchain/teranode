@@ -3781,7 +3781,8 @@ func (v *Validator) loadMTPsLocked(ctx context.Context, needed, currentLen uint3
 		}
 
 		v.mtpMu.RLock()
-		joined := fromHeight == 0 || baseLen == 0 || v.mtpIDs[fromHeight] == fetchedIDs[0]
+		// A 0 ID names no block (an entry above the tip), so two of them prove nothing.
+		joined := fromHeight == 0 || baseLen == 0 || (fetchedIDs[0] != 0 && v.mtpIDs[fromHeight] == fetchedIDs[0])
 		v.mtpMu.RUnlock()
 
 		if joined {
@@ -3843,6 +3844,8 @@ const medianTimeSpan = 11
 // which reads no main-chain flag and no cache, so both describe one chain however the chain
 // moves meanwhile. An entry whose block is stored takes the block's stored median; the entry
 // just above the walked block, not stored yet, is the median of the 11 timestamps below it.
+// The walk keeps no headers beyond those 11, so a first load after a restart holds only the
+// two result arrays.
 func (v *Validator) fetchMTPRange(ctx context.Context, fromHeight, needed uint32) ([]uint32, []uint32, error) {
 	topHash, top, err := v.mtpTop(ctx, needed)
 	if err != nil {
@@ -3863,37 +3866,32 @@ func (v *Validator) fetchMTPRange(ctx context.Context, fromHeight, needed uint32
 		lowest = low - medianTimeSpan
 	}
 
-	headers, metas, err := v.walkMTPChain(ctx, topHash, top, lowest)
+	window := make([]time.Time, 0, medianTimeSpan)
+
+	err = v.walkMTPChain(ctx, topHash, top, lowest, func(height uint32, header *model.BlockHeader, meta *model.BlockHeaderMeta) {
+		if height >= fromHeight {
+			values[height-fromHeight] = meta.MedianTimePast
+		}
+
+		if height+1 >= fromHeight && height+1 <= needed {
+			ids[height+1-fromHeight] = meta.ID
+		}
+
+		if len(window) < medianTimeSpan {
+			window = append(window, time.Unix(int64(header.Timestamp), 0))
+		}
+	})
 	if err != nil {
 		return nil, nil, err
 	}
 
-	// index i of the run is the block at height top-i
-	at := func(h uint32) int { return int(top - h) }
-
-	for i := range values {
-		h := fromHeight + uint32(i) //nolint:gosec // i < len(values), a uint32 count
-
-		if h > 0 && h-1 <= top {
-			ids[i] = metas[at(h-1)].ID
+	if h := top + 1; h <= needed && h >= medianTimeSpan && len(window) == medianTimeSpan {
+		median, medianErr := model.CalculateMedianTimestamp(window)
+		if medianErr != nil {
+			return nil, nil, errors.NewProcessingError("[Validator][EnsureMTPLoaded] median below height %d", h, medianErr)
 		}
 
-		switch {
-		case h <= top:
-			values[i] = metas[at(h)].MedianTimePast
-		case h == top+1 && h >= medianTimeSpan:
-			window := make([]time.Time, 0, medianTimeSpan)
-			for x := h - medianTimeSpan; x < h; x++ {
-				window = append(window, time.Unix(int64(headers[at(x)].Timestamp), 0))
-			}
-
-			median, medianErr := model.CalculateMedianTimestamp(window)
-			if medianErr != nil {
-				return nil, nil, errors.NewProcessingError("[Validator][EnsureMTPLoaded] median below height %d", h, medianErr)
-			}
-
-			values[i] = uint32(median.Unix()) //nolint:gosec // block times fit in uint32
-		}
+		values[h-fromHeight] = uint32(median.Unix()) //nolint:gosec // block times fit in uint32
 	}
 
 	return values, ids, nil
@@ -3930,60 +3928,64 @@ func (v *Validator) mtpTop(ctx context.Context, needed uint32) (*chainhash.Hash,
 }
 
 // walkMTPChain reads the headers from the block topHash at height top down to height lowest,
-// newest first, by parent links in pages no larger than the blockchain service accepts, and
-// checks that each links to the next at the expected height.
-func (v *Validator) walkMTPChain(ctx context.Context, topHash *chainhash.Hash, top, lowest uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
+// newest first, by parent links in pages no larger than the blockchain service accepts, checks
+// that each links to the next at the expected height, and hands each to visit. It keeps only
+// the last header, for the link check.
+func (v *Validator) walkMTPChain(ctx context.Context, topHash *chainhash.Hash, top, lowest uint32,
+	visit func(height uint32, header *model.BlockHeader, meta *model.BlockHeaderMeta)) error {
 	pageSize := uint64(mtpPageSize)
 	if limit := v.settings.BlockChain.MaxBlockHeadersPerRequest; limit > 0 && uint64(limit) < pageSize {
 		pageSize = uint64(limit)
 	}
 
-	want := int(top-lowest) + 1
-	headers := make([]*model.BlockHeader, 0, want)
-	metas := make([]*model.BlockHeaderMeta, 0, want)
+	want := uint64(top-lowest) + 1
+	seen := uint64(0)
 	cursor := topHash
 
-	for len(headers) < want {
-		below := top - uint32(len(headers)) //nolint:gosec // len(headers) < want
+	var last *model.BlockHeader
 
-		page, pageMetas, err := v.blockchainClient.GetBlockHeadersByParentLinks(ctx, cursor, min(pageSize, uint64(want-len(headers))))
+	for seen < want {
+		below := top - uint32(seen) //nolint:gosec // seen < want, a uint32 span
+
+		page, pageMetas, err := v.blockchainClient.GetBlockHeadersByParentLinks(ctx, cursor, min(pageSize, want-seen))
 		if err != nil {
-			return nil, nil, errors.NewProcessingError("[Validator][EnsureMTPLoaded] failed to read the chain below height %d", below, err)
+			return errors.NewProcessingError("[Validator][EnsureMTPLoaded] failed to read the chain below height %d", below, err)
 		}
 
 		if len(page) == 0 || len(page) != len(pageMetas) {
-			return nil, nil, errors.NewProcessingError("[Validator][EnsureMTPLoaded] got %d headers and %d metas below height %d", len(page), len(pageMetas), below)
+			return errors.NewProcessingError("[Validator][EnsureMTPLoaded] got %d headers and %d metas below height %d", len(page), len(pageMetas), below)
 		}
 
 		for i, header := range page {
-			height := top - uint32(len(headers)) //nolint:gosec // len(headers) < want
+			height := top - uint32(seen) //nolint:gosec // seen < want, a uint32 span
 
 			linked := header != nil && pageMetas[i] != nil && pageMetas[i].Height == height
 			if linked && i == 0 {
 				linked = header.Hash().IsEqual(cursor)
 			}
 
-			if linked && len(headers) > 0 {
-				prev := headers[len(headers)-1].HashPrevBlock
-				linked = prev != nil && prev.IsEqual(header.Hash())
+			if linked && last != nil {
+				linked = last.HashPrevBlock != nil && last.HashPrevBlock.IsEqual(header.Hash())
 			}
 
 			if !linked {
-				return nil, nil, errors.NewProcessingError("[Validator][EnsureMTPLoaded] the chain read below height %d does not link at height %d", top, height)
+				return errors.NewProcessingError("[Validator][EnsureMTPLoaded] the chain read below height %d does not link at height %d", top, height)
 			}
 
-			headers = append(headers, header)
-			metas = append(metas, pageMetas[i])
+			visit(height, header, pageMetas[i])
 
-			if len(headers) == want {
+			last = header
+			seen++
+
+			if seen == want {
 				break
 			}
 		}
 
-		cursor = headers[len(headers)-1].HashPrevBlock
+		cursor = last.HashPrevBlock
 	}
 
-	return headers, metas, nil
+	return nil
 }
 
 // validateTransaction performs Teranode-owned transaction checks, BDK

@@ -6,6 +6,7 @@ import (
 	"slices"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
@@ -222,6 +223,13 @@ func TestValidateTransaction_BIP68FailsWhenTheStoreCannotHoldTheBase(t *testing.
 	}
 
 	require.Equal(t, int32(1), f.loads.calls.Load()-before, "the block's other transactions must not reload again")
+
+	// Once the memory lapses, a retried block reloads.
+	f.v.mtpUnheldAt = time.Now().Add(-2 * mtpUnheldMemory)
+
+	err := f.v.validateTransaction(context.Background(), timeLockedFor40Units(t), 60, []uint32{30}, opts)
+	require.ErrorIs(t, err, errors.ErrProcessing)
+	require.Equal(t, int32(2), f.loads.calls.Load()-before)
 }
 
 // TestValidateTransaction_BIP68ReloadsAShortStore checks that a candidate above what the store
