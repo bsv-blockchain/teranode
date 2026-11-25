@@ -2,6 +2,7 @@ package subtreevalidation
 
 import (
 	"context"
+	"runtime"
 	"testing"
 	"time"
 
@@ -167,7 +168,7 @@ func BenchmarkSubtreeSizes(b *testing.B) {
 			// Note: We need to create a minimal T wrapper for the helper
 			fixture := generateFixtureForBenchmark(b, r, tc.totalTxCount, tc.txPerSubtree, server)
 
-			b.ResetTimer()
+			startTimedLoop(b)
 
 			for i := 0; i < b.N; i++ {
 				// Validate the block subtrees
@@ -243,6 +244,16 @@ func generateFixtureForBenchmark(b *testing.B, r *require.Assertions, totalTxCou
 		Block:    block,
 		Subtrees: subtrees,
 	}
+}
+
+// startTimedLoop collects the garbage the fixture setup left, then restarts the timer. The
+// testing package collects only before each round, so without this the setup's garbage is
+// collected inside the timed loop and a change to the setup moves the result.
+func startTimedLoop(b *testing.B) {
+	b.Helper()
+
+	runtime.GC()
+	b.ResetTimer()
 }
 
 // benchmarkTxChain is a signed chain in extended format, one transaction after another;
@@ -769,7 +780,7 @@ func BenchmarkBlockSizeScaling(b *testing.B) {
 
 			fixture := generateFixtureForBenchmark(b, r, tc.totalTxCount, tc.txPerSubtree, server)
 
-			b.ResetTimer()
+			startTimedLoop(b)
 			b.ReportAllocs()
 
 			for i := 0; i < b.N; i++ {
@@ -807,7 +818,7 @@ func BenchmarkSubtreeAllocations(b *testing.B) {
 			fixture := generateFixtureForBenchmark(b, r, tc.totalTxCount, tc.txPerSubtree, server)
 			ctx := context.Background()
 
-			b.ResetTimer()
+			startTimedLoop(b)
 			b.ReportAllocs()
 
 			for i := 0; i < b.N; i++ {
@@ -827,7 +838,7 @@ func BenchmarkSubtreeAllocations(b *testing.B) {
 			fixture := generateFixtureForBenchmark(b, r, tc.totalTxCount, tc.txPerSubtree, server)
 			ctx := context.Background()
 
-			b.ResetTimer()
+			startTimedLoop(b)
 			b.ReportAllocs()
 
 			for i := 0; i < b.N; i++ {
@@ -852,7 +863,7 @@ func BenchmarkSubtreeAllocations(b *testing.B) {
 
 			fixture := generateFixtureForBenchmark(b, r, tc.totalTxCount, tc.txPerSubtree, server)
 
-			b.ResetTimer()
+			startTimedLoop(b)
 			b.ReportAllocs()
 
 			for i := 0; i < b.N; i++ {
