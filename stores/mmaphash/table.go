@@ -91,6 +91,10 @@ type Options struct {
 	ValueSize  int     // bytes of value (0 for a pure set)
 	Expected   uint64  // expected entries in THIS table
 	LoadFactor float64 // 0 => defaultLoadFactor
+	// GrowAt, when set, grows the table once a segment's entries pass this share of its slots,
+	// rather than only when the segment is full, so probing stays short on a table that grows from
+	// a small start. 0 keeps the grow-when-full behaviour; otherwise it must be in (0, 1].
+	GrowAt float64
 }
 
 // seg is one independently-locked segment. count is its entry count, written
@@ -134,6 +138,8 @@ type Table struct {
 	segMask     uint64
 	segs        []seg
 	gen         atomic.Uint64 // bumped on each grow; lets Upsert skip redundant grows
+	fileBytes   atomic.Int64  // size of the backing file, updated on each grow
+	growAt      float64       // Options.GrowAt
 	dir         string        // backing-file directory, retained for grow
 	prefix      string        // backing-file prefix, retained for grow
 }
@@ -157,6 +163,9 @@ func New(opts Options) (*Table, error) {
 	if opts.Expected > maxExpected {
 		return nil, errors.NewProcessingError("mmaphash: Expected %d exceeds maximum %d", opts.Expected, uint64(maxExpected))
 	}
+	if opts.GrowAt != 0 && !(opts.GrowAt > 0 && opts.GrowAt <= 1) {
+		return nil, errors.NewProcessingError("mmaphash: GrowAt must be 0 or in (0, 1], got %v", opts.GrowAt)
+	}
 
 	l := computeLayout(opts.Expected, opts.LoadFactor)
 	slotSize := 1 + opts.KeySize + opts.ValueSize
@@ -168,7 +177,7 @@ func New(opts Options) (*Table, error) {
 		return nil, err
 	}
 
-	return &Table{
+	t := &Table{
 		data:        data,
 		slotSize:    slotSize,
 		keySize:     opts.KeySize,
@@ -178,7 +187,11 @@ func New(opts Options) (*Table, error) {
 		segs:        make([]seg, l.numSeg),
 		dir:         opts.Dir,
 		prefix:      opts.Prefix,
-	}, nil
+		growAt:      opts.GrowAt,
+	}
+	t.fileBytes.Store(fileBytes)
+
+	return t, nil
 }
 
 // mapRegion creates a sparse, immediately-unlinked backing file of fileBytes
@@ -252,6 +265,12 @@ func (t *Table) Close() error {
 	return nil
 }
 
+// FileBytes returns the size of the backing file: the disk the table can occupy once every page is
+// written. A grow maps a file twice this size before releasing this one.
+func (t *Table) FileBytes() int64 {
+	return t.fileBytes.Load()
+}
+
 // Len returns the number of entries inserted.
 func (t *Table) Len() int64 {
 	var n int64
@@ -320,6 +339,9 @@ func (t *Table) writeSlot(off int, key []byte, value uint64) {
 // table grows transparently (doubling per-segment capacity) and the insert is
 // retried; ErrTableFull is only returned once growth hits the absolute slot
 // cap (fail-safe — never reachable for any real block).
+// With Options.GrowAt set, an insert that takes its segment past that load
+// also grows the table; if that grow fails the key is already inserted, and
+// the error is returned with inserted=true.
 func (t *Table) Upsert(key []byte, value uint64) (uint64, bool, error) {
 	if len(key) != t.keySize {
 		return 0, false, errors.NewProcessingError("mmaphash: key length %d != table key size %d", len(key), t.keySize)
@@ -332,8 +354,15 @@ func (t *Table) Upsert(key []byte, value uint64) (uint64, bool, error) {
 		off, found, full := t.probe(segIdx, t.bucketOf(key), key)
 		if !found && !full {
 			t.writeSlot(off, key, value)
-			s.count.Add(1)
+			count := s.count.Add(1)
+			overGrowAt := t.growAt > 0 && float64(count) > t.growAt*float64(t.slotsPerSeg)
+			gen := t.gen.Load()
 			s.mu.Unlock()
+			if overGrowAt {
+				if err := t.grow(gen); err != nil {
+					return value, true, err
+				}
+			}
 			return value, true, nil
 		}
 		if found {
@@ -460,6 +489,7 @@ func (t *Table) grow(observedGen uint64) error {
 	old := t.data
 	t.data = newData
 	t.slotsPerSeg = newSlotsPerSeg
+	t.fileBytes.Store(fileBytes)
 	t.gen.Add(1)
 
 	// Release the old mapping. The swap is already published; a munmap error

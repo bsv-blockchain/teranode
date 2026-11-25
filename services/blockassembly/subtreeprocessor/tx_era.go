@@ -121,6 +121,11 @@ func (stp *SubtreeProcessor) filterTxEra(batches []*TxBatch) {
 				b.validatedHeights[kept] = b.validatedHeights[i]
 			}
 
+			// at utxostore_laneMigration shadow each kept tx keeps its own lane position
+			if b.positions != nil {
+				b.positions[kept] = b.positions[i]
+			}
+
 			kept++
 		}
 
@@ -129,6 +134,10 @@ func (stp *SubtreeProcessor) filterTxEra(batches []*TxBatch) {
 
 		if b.validatedHeights != nil {
 			b.validatedHeights = b.validatedHeights[:kept]
+		}
+
+		if b.positions != nil {
+			b.positions = b.positions[:kept]
 		}
 	}
 }

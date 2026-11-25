@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/bsv-blockchain/aerospike-client-go/v8"
+	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/settings"
 	teranode_aerospike "github.com/bsv-blockchain/teranode/stores/utxo/aerospike"
@@ -34,6 +35,8 @@ import (
 //     result handler retries FILTERED_OUT records through Lua so the boundary
 //     check is applied correctly.
 func TestStore_SpendableInBoundary(t *testing.T) {
+	t.Parallel()
+
 	cases := []struct {
 		name              string
 		enableExpressions bool
@@ -44,6 +47,8 @@ func TestStore_SpendableInBoundary(t *testing.T) {
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
+			fx := newTxFixtures(t)
+
 			logger := ulogger.NewErrorTestLogger(t)
 			tSettings := test.CreateBaseTestSettings(t)
 			tSettings.UtxoStore.UtxoBatchSize = 1
@@ -69,14 +74,14 @@ func TestStore_SpendableInBoundary(t *testing.T) {
 
 			for _, tc := range boundary {
 				t.Run(tc.name, func(t *testing.T) {
-					cleanDB(t, client)
+					*fx = *newTxFixtures(t)
 
-					_, err := store.Create(ctx, tx, 101)
+					_, err := store.Create(ctx, fx.tx, 101)
 					require.NoError(t, err)
 
-					injectSpendableIn(t, client, tSettings, store, 0, spendableHeight)
+					injectSpendableIn(t, fx.tx, client, tSettings, store, 0, spendableHeight)
 
-					spends, err := store.Spend(ctx, spendTx, tc.currentHeight)
+					spends, err := store.Spend(ctx, fx.spendTx, tc.currentHeight)
 					if tc.wantSpendSuccess {
 						require.NoError(t, err)
 						require.Len(t, spends, 1)
@@ -103,6 +108,8 @@ func TestStore_SpendableInBoundary(t *testing.T) {
 // values, only the bin's existence). Post-fix the FILTERED_OUT result is
 // retried through Lua, which compares per-offset and accepts the spend.
 func TestStore_SpendableInExpressionParity_PastValueAccepted(t *testing.T) {
+	t.Parallel()
+
 	cases := []struct {
 		name              string
 		enableExpressions bool
@@ -113,6 +120,8 @@ func TestStore_SpendableInExpressionParity_PastValueAccepted(t *testing.T) {
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
+			fx := newTxFixtures(t)
+
 			logger := ulogger.NewErrorTestLogger(t)
 			tSettings := test.CreateBaseTestSettings(t)
 			tSettings.UtxoStore.UtxoBatchSize = 1
@@ -124,15 +133,13 @@ func TestStore_SpendableInExpressionParity_PastValueAccepted(t *testing.T) {
 			client, store, ctx, deferFn := initAerospike(t, tSettings, logger)
 			t.Cleanup(deferFn)
 
-			cleanDB(t, client)
-
-			_, err := store.Create(ctx, tx, 101)
+			_, err := store.Create(ctx, fx.tx, 101)
 			require.NoError(t, err)
 
 			// spendableHeight far in the past — currentHeight (300) is well above.
-			injectSpendableIn(t, client, tSettings, store, 0, 50)
+			injectSpendableIn(t, fx.tx, client, tSettings, store, 0, 50)
 
-			spends, err := store.Spend(ctx, spendTx, 300)
+			spends, err := store.Spend(ctx, fx.spendTx, 300)
 			require.NoError(t, err, "spend at currentHeight=300 with spendableHeight=50 must succeed on both paths")
 			require.Len(t, spends, 1)
 			require.NoError(t, spends[0].Err)
@@ -146,6 +153,8 @@ func TestStore_SpendableInExpressionParity_PastValueAccepted(t *testing.T) {
 // path. After the T25 retry, the expression path still rejects (via Lua) with
 // ErrFrozen, matching SQL and svnode behaviour.
 func TestStore_SpendableInExpressionParity_FutureValueRejected(t *testing.T) {
+	t.Parallel()
+
 	cases := []struct {
 		name              string
 		enableExpressions bool
@@ -156,6 +165,8 @@ func TestStore_SpendableInExpressionParity_FutureValueRejected(t *testing.T) {
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
+			fx := newTxFixtures(t)
+
 			logger := ulogger.NewErrorTestLogger(t)
 			tSettings := test.CreateBaseTestSettings(t)
 			tSettings.UtxoStore.UtxoBatchSize = 1
@@ -167,14 +178,12 @@ func TestStore_SpendableInExpressionParity_FutureValueRejected(t *testing.T) {
 			client, store, ctx, deferFn := initAerospike(t, tSettings, logger)
 			t.Cleanup(deferFn)
 
-			cleanDB(t, client)
-
-			_, err := store.Create(ctx, tx, 101)
+			_, err := store.Create(ctx, fx.tx, 101)
 			require.NoError(t, err)
 
-			injectSpendableIn(t, client, tSettings, store, 0, 500)
+			injectSpendableIn(t, fx.tx, client, tSettings, store, 0, 500)
 
-			spends, err := store.Spend(ctx, spendTx, 100)
+			spends, err := store.Spend(ctx, fx.spendTx, 100)
 			require.Error(t, err, "spend at currentHeight=100 with spendableHeight=500 must fail on both paths")
 			require.Len(t, spends, 1)
 			require.Error(t, spends[0].Err)
@@ -184,10 +193,9 @@ func TestStore_SpendableInExpressionParity_FutureValueRejected(t *testing.T) {
 }
 
 // injectSpendableIn writes a single-offset utxoSpendableIn map onto the
-// Aerospike record that holds the UTXO at the package-level test tx's given
-// vout. It uses UPDATE so the rest of the record created by store.Create stays
+// Aerospike record that holds the UTXO at tx's given vout. It uses UPDATE so the rest of the record created by store.Create stays
 // intact.
-func injectSpendableIn(t *testing.T, client *uaerospike.Client, tSettings *settings.Settings, store *teranode_aerospike.Store, vout uint32, spendableHeight uint32) {
+func injectSpendableIn(t *testing.T, tx *bt.Tx, client *uaerospike.Client, tSettings *settings.Settings, store *teranode_aerospike.Store, vout uint32, spendableHeight uint32) {
 	t.Helper()
 
 	batchSize := store.GetUtxoBatchSize()
