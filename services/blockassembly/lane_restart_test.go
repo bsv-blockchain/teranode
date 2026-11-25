@@ -241,9 +241,11 @@ func TestLaneRestartDryRunCounts(t *testing.T) {
 				grants: func(_ context.Context, height uint32) ([]lane.CapGrant, error) {
 					require.Equal(t, uint32(995), height)
 
+					// Lane 2's grant comes first, so the window's start is each value's earliest, not the
+					// first grant's.
 					return []lane.CapGrant{
-						{Lane: 1, First: 15, Height: 996, HandedAt: handedAt},
 						{Lane: 2, First: 1_000, Height: 998, HandedAt: handedAt.Add(time.Minute)},
+						{Lane: 1, First: 15, Height: 996, HandedAt: handedAt},
 					}, nil
 				},
 				view: func(_ context.Context, _ uint32, ids map[uint32]bool) *lane.ChainView {
@@ -445,6 +447,15 @@ func TestLaneRestartDryRunOutcomes(t *testing.T) {
 			overflow:  2,
 		},
 		{
+			name:    "the grants cannot be read",
+			window:  &fakeLaneWindow{},
+			grants:  func(context.Context, uint32) ([]lane.CapGrant, error) { return nil, context.DeadlineExceeded },
+			view:    view,
+			outcome: laneRunError,
+			records: map[string]uint64{},
+			sample:  map[string]uint64{},
+		},
+		{
 			name:    "a store that cannot read the window",
 			outcome: laneRunUnsupported,
 			records: map[string]uint64{},
@@ -508,7 +519,7 @@ func TestLaneRestartDryRunOutcomes(t *testing.T) {
 			require.Equal(t, tc.sample, res.sample)
 			require.Equal(t, tc.overflow, res.laneSampleOverflow)
 
-			if tc.outcome == laneRunNoGrant || tc.outcome == laneRunNotReady {
+			if tc.outcome == laneRunNoGrant || tc.outcome == laneRunNotReady || tc.outcome == laneRunError {
 				require.False(t, tc.window.called, "no window is read")
 			}
 

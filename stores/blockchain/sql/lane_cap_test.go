@@ -46,9 +46,13 @@ func TestLaneCapGrants(t *testing.T) {
 		recordTestGrant(t, s, 4, 1, 100, 200)
 		recordTestGrant(t, s, 4, 101, 200, 201)
 
+		// lane 255, the last lane
+		recordTestGrant(t, s, 255, 1, 50, 150)
+
 		got, err := s.LaneCapGrants(context.Background(), 100)
 		require.NoError(t, err)
-		require.Len(t, got, 3)
+		require.Len(t, got, 4)
+		require.Equal(t, uint8(255), got[3].Lane)
 
 		require.Equal(t, uint8(1), got[0].Lane)
 		require.Equal(t, uint64(2_001), got[0].First)
@@ -68,5 +72,35 @@ func TestLaneCapGrants(t *testing.T) {
 		none, err := s.LaneCapGrants(context.Background(), 1_000)
 		require.NoError(t, err)
 		require.Empty(t, none)
+
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		_, err = s.LaneCapGrants(ctx, 100)
+		require.Error(t, err, "a read that cannot run")
 	})
+
+	// A hand-out row whose values do not fit is refused, not passed on.
+	for name, row := range map[string]struct {
+		first  int64
+		height int64
+	}{
+		"no first position":    {0, 200},
+		"first above the lane": {int64(lane.MaxPosition) + 1, 200},
+		"height above 32 bits": {1, int64(1) << 33},
+	} {
+		runLaneHandoutTests(t, "refuses "+name, func(t *testing.T, s *SQL) {
+			ctx := context.Background()
+
+			tx, err := s.db.BeginTx(ctx, nil)
+			require.NoError(t, err)
+
+			_, err = s.laneExec(ctx, tx, recordGrantSQL, 6, row.first, row.first+10, "test", row.height, nil, sql.NullInt64{}, sql.NullInt64{})
+			require.NoError(t, err)
+			require.NoError(t, tx.Commit())
+
+			_, err = s.LaneCapGrants(ctx, 100)
+			require.Error(t, err)
+		})
+	}
 }

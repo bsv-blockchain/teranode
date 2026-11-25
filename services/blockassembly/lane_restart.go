@@ -182,10 +182,6 @@ func (t *laneRestartToday) keep(txs []*utxo.UnminedTransaction) {
 		return
 	}
 
-	if t.rate == 0 {
-		t.expect(len(txs))
-	}
-
 	for _, tx := range txs {
 		if tx == nil || tx.Node == nil {
 			continue
