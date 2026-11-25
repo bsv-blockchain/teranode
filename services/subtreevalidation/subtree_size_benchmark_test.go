@@ -276,15 +276,33 @@ func createTransactionChainForBenchmark(b *testing.B, r *require.Assertions, cou
 	b.Helper()
 
 	chain, ok := benchmarkTxChains[count]
-	if !ok {
-		for _, tx := range signTransactionChainForBenchmark(r, count) {
-			chain.data = append(chain.data, tx.ExtendedBytes()...)
-			chain.ends = append(chain.ends, len(chain.data))
-		}
-
-		benchmarkTxChains[count] = chain
+	if ok {
+		return parseBenchmarkTxChain(r, chain)
 	}
 
+	signed := signTransactionChainForBenchmark(r, count)
+	for _, tx := range signed {
+		chain.data = append(chain.data, tx.ExtendedBytes()...)
+		chain.ends = append(chain.ends, len(chain.data))
+	}
+
+	// The fixtures read each transaction's ID, size and fee, so the parsed chain must
+	// keep them, previous-output satoshis included.
+	txs := parseBenchmarkTxChain(r, chain)
+	r.Len(txs, len(signed))
+
+	for i, tx := range txs {
+		r.Equal(signed[i].TxID(), tx.TxID())
+		r.Equal(signed[i].Bytes(), tx.Bytes())
+		r.Equal(signed[i].TotalInputSatoshis(), tx.TotalInputSatoshis())
+	}
+
+	benchmarkTxChains[count] = chain
+
+	return txs
+}
+
+func parseBenchmarkTxChain(r *require.Assertions, chain benchmarkTxChain) []*bt.Tx {
 	txs := make([]*bt.Tx, len(chain.ends))
 	start := 0
 
@@ -767,11 +785,6 @@ func BenchmarkBlockSizeScaling(b *testing.B) {
 	}
 
 	for _, tc := range testCases {
-		// The 10k rows repeat BenchmarkSubtreeSizes' cases exactly; -short (CI) runs them there only.
-		if testing.Short() && tc.totalTxCount == 10_000 {
-			continue
-		}
-
 		b.Run(tc.name, func(b *testing.B) {
 			r := require.New(b)
 
@@ -849,12 +862,6 @@ func BenchmarkSubtreeAllocations(b *testing.B) {
 
 			b.ReportMetric(float64(len(fixture.Subtrees)), "subtrees")
 		})
-
-		// _full_validation repeats BenchmarkSubtreeSizes' case for the same subtree size;
-		// -short (CI) runs it there only.
-		if testing.Short() {
-			continue
-		}
 
 		b.Run(tc.name+"_full_validation", func(b *testing.B) {
 			r := require.New(b)
