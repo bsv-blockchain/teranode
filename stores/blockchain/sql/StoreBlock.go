@@ -531,7 +531,7 @@ func (s *SQL) storeBlockAttempt(ctx context.Context, block *model.Block, peerID 
 	// whatever an earlier attempt of the same store did with them.
 	if !storedInvalid {
 		if laneRowsRefused {
-			lane.CountRowInsertFailure()
+			lane.CountRowInsertFailure(storeBlockOptions.LaneMetricsBlock())
 		}
 
 		if laneRows != nil {
