@@ -202,6 +202,23 @@ func TestNewKafkaAsyncProducerFromURLInvalidConversion(t *testing.T) {
 	assert.Nil(t, producer)
 }
 
+// The caller's ctx bounds topic creation: a cancelled caller gets its error at
+// once instead of after franz-go's 30s request retry timeout per attempt.
+func TestNewKafkaAsyncProducerFromURLHonoursContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	kafkaURL, err := url.Parse("kafka://unresolvable-broker.invalid:9092/test-topic")
+	require.NoError(t, err)
+
+	start := time.Now()
+	producer, err := NewKafkaAsyncProducerFromURL(ctx, &mockAsyncLogger{}, kafkaURL, nil)
+
+	require.Error(t, err)
+	require.Nil(t, producer)
+	require.Less(t, time.Since(start), 10*time.Second)
+}
+
 func TestNewKafkaAsyncProducerMemoryScheme(t *testing.T) {
 	logger := &mockAsyncLogger{}
 	cfg := KafkaProducerConfig{
