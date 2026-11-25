@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"net/http"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -36,6 +37,7 @@ import (
 	"github.com/bsv-blockchain/teranode/util/kafka"
 	kafkamessage "github.com/bsv-blockchain/teranode/util/kafka/kafka_message"
 	"github.com/bsv-blockchain/teranode/util/lane"
+	"github.com/bsv-blockchain/teranode/util/lanereader"
 	"github.com/bsv-blockchain/teranode/util/tracing"
 	"github.com/cespare/xxhash/v2"
 	"github.com/ordishs/gocore"
@@ -518,7 +520,80 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 		}
 	}
 
+	// v2 txmeta routing partitions records by a configured count; the topic has
+	// its own partition count from a different setting (kafka_txmetaConfig),
+	// and the async producer contract is "MUST set Partition" with no fallback.
+	// Reconcile the two once, loudly, at start-up instead of shipping records
+	// to non-existent partitions forever.
+	if tSettings.Validator.TxMetaWireFormat == "v2" {
+		v.checkTxMetaPartitionAgreement(ctx)
+	}
+
 	return v, nil
+}
+
+// txmetaTopicMetadataTimeout bounds the start-up topic metadata request so an
+// unreachable broker cannot stall validator construction.
+var txmetaTopicMetadataTimeout = 10 * time.Second
+
+// checkTxMetaPartitionAgreement reconciles validator_txmeta_numPartitions
+// against everything it must match for v2 txmeta routing to be sound:
+// the cache bucket count (the routing divides BucketsCount into partition
+// ranges, so an exact multiple is a correctness constraint, not a style
+// preference) and the topic's partition count. The topic count is taken from
+// the producer via metadata where the producer can answer (real clients can;
+// test doubles need not), and falls back to the partitions parameter of the
+// kafka_txmetaConfig URL - the number that topic is created with. Disagreement
+// is reported as an error, not a warning, and does not stop the service:
+// routing named partitions 8-31 on an 8-partition topic in the default
+// settings context (numPartitions 32, KAFKA_PARTITIONS_HIGH 8), a mismatch
+// that must be impossible to miss because the failure it causes - records to
+// unknown partitions from a producer with no fallback - is a data-loss path.
+func (v *Validator) checkTxMetaPartitionAgreement(ctx context.Context) {
+	numPartitions := v.settings.Validator.TxMetaNumPartitions
+	if numPartitions <= 0 {
+		numPartitions = 1
+	}
+
+	if txmetacache.BucketsCount%numPartitions != 0 {
+		v.logger.Errorf("[Validator] validator_txmeta_numPartitions=%d does not divide the txmeta cache BucketsCount=%d; v2 routing ranges would overlap - choose a divisor",
+			numPartitions, txmetacache.BucketsCount)
+	}
+
+	// Preferred source: ask the broker what the topic actually has.
+	if counter, ok := v.txmetaKafkaProducerClient.(kafka.TopicPartitionCounter); ok && counter != nil {
+		metaCtx, cancel := context.WithTimeout(ctx, txmetaTopicMetadataTimeout)
+		count, err := counter.TopicPartitionCount(metaCtx)
+		cancel()
+
+		if err != nil {
+			v.logger.Warnf("[Validator] cannot verify txmeta topic partition count against validator_txmeta_numPartitions=%d: %v", numPartitions, err)
+			return
+		}
+		if int(count) != numPartitions {
+			v.logger.Errorf("[Validator] validator_txmeta_numPartitions=%d but the txmeta topic has %d partitions: v2 routing will name partitions the topic does not have and the async producer has no fallback - align validator_txmeta_numPartitions with the topic (kafka_txmetaConfig partitions)",
+				numPartitions, count)
+		}
+		return
+	}
+
+	// Fallback source: the partitions parameter the topic is created from.
+	if v.settings.Kafka.TxMetaConfig != nil {
+		if p := v.settings.Kafka.TxMetaConfig.Query().Get("partitions"); p != "" {
+			topicPartitions, err := strconv.Atoi(p)
+			if err != nil {
+				v.logger.Warnf("[Validator] kafka_txmetaConfig partitions=%q is not a number; cannot verify against validator_txmeta_numPartitions=%d", p, numPartitions)
+				return
+			}
+			if topicPartitions != numPartitions {
+				v.logger.Errorf("[Validator] validator_txmeta_numPartitions=%d but kafka_txmetaConfig creates the topic with partitions=%d: v2 routing will name partitions the topic does not have and the async producer has no fallback",
+					numPartitions, topicPartitions)
+			}
+			return
+		}
+	}
+
+	v.logger.Infof("[Validator] txmeta v2 partition agreement not verifiable here (no broker metadata, no partitions parameter in kafka_txmetaConfig); validator_txmeta_numPartitions=%d stands unverified", numPartitions)
 }
 
 // Close releases the resources the Validator owns: the tx-meta batcher and the
@@ -1489,6 +1564,15 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 			ValidatedHeight: blockHeight,
 		}
 
+		// At utxostore_laneMigration shadow block assembly builds its subtrees' lane bitmaps from
+		// the LanePosition on the meta the create returned. utxoset and Aerospike, which lanes
+		// Phase 1 covers, set it to the position they wrote. The SQL UTXO store writes the column
+		// and returns 0, so on SQLite or Postgres every handoff is 0. A 0 is counted by block
+		// assembly, and the tx is still mined.
+		if v.laneShadow() {
+			blockAssemblyData.LanePosition = txMetaData.LanePosition
+		}
+
 		// On the Kafka ingest path a queue-full shed is worth waiting out rather
 		// than dropping: ErrThresholdExceeded is a queue-depth condition
 		// independent of this transaction, and block assembly drains a batch per
@@ -2260,7 +2344,14 @@ func (v *Validator) resolveParentOutputs(ctx context.Context, tx *bt.Tx, txID st
 	var (
 		storeIdxs []int
 		outpoints []utxo.Outpoint
+		// The lanes shadow of this check, at shadow only (inputLanes is set only then).
+		shadow parentShadow
 	)
+
+	if inputLanes != nil {
+		shadow.reader = lanereader.Current()
+		shadow.view = shadow.reader.MainView()
+	}
 
 	for inputIdx, input := range tx.Inputs {
 		parentTxHash := *input.PreviousTxIDChainHash()
@@ -2274,6 +2365,7 @@ func (v *Validator) resolveParentOutputs(ctx context.Context, tx *bt.Tx, txID st
 
 			if inputLanes != nil {
 				inputLanes[inputIdx] = pf.LanePosition
+				shadow.compareBlocks(lanereader.ReaderSubtreePrefetch, parentTxHash, pf.LanePosition, pf.BlockIDs)
 			}
 
 			continue
@@ -2328,6 +2420,7 @@ func (v *Validator) resolveParentOutputs(ctx context.Context, tx *bt.Tx, txID st
 
 		if inputLanes != nil {
 			inputLanes[inputIdx] = answer.LanePosition
+			shadow.compare(lanereader.ReaderValidator, parentTxHash, answer.LanePosition, answer.Status == utxo.ParentOutputMined, answer.Height)
 		}
 	}
 
@@ -2714,6 +2807,14 @@ type txmetaItemWithHash struct {
 	h    uint64
 }
 
+// The v2 header carries txmetacache.BucketsCount as a uint16 that receivers
+// accept only when it is zero or a power of two. Both assertions fail the build,
+// not a running node, if a cache build tag ever selects a count outside that.
+var (
+	_ = [1]struct{}{}[txmetacache.BucketsCount>>16]
+	_ = [1]struct{}{}[txmetacache.BucketsCount&(txmetacache.BucketsCount-1)]
+)
+
 // serializeTxMetaBatchV2 writes a v2-format txmeta Kafka payload for a set of
 // items that have already been grouped into a single Kafka partition.
 //
@@ -2734,8 +2835,8 @@ type txmetaItemWithHash struct {
 // Putting the pre-computed xxhash on the wire lets the receiver skip its own
 // xxhash on every entry — a small per-entry saving that compounds at the
 // production rates this is designed for.
-func serializeTxMetaBatchV2(items []txmetaItemWithHash) []byte {
-	size := 8 // header: magic + version + 2 reserved + count
+func serializeTxMetaBatchV2(items []txmetaItemWithHash, bucketsCount int) []byte {
+	size := 8 // header: magic + version + uint16 BucketsCount + count
 	for _, it := range items {
 		size += 8 + 32 + 1 + 4
 		if !it.item.isDelete {
@@ -2746,6 +2847,12 @@ func serializeTxMetaBatchV2(items []txmetaItemWithHash) []byte {
 	buf := make([]byte, size)
 	buf[0] = txmetacache.WireV2Magic
 	buf[1] = txmetacache.WireV2Version
+	// Build-tag-selected cache geometry, on the wire: receivers compare it
+	// against their own and can name the disagreement instead of silently
+	// sharing buckets across partitions. The header holds a uint16 and receivers
+	// accept only zero or a power of two, which the compile-time assertion on
+	// txmetacache.BucketsCount below guarantees for every build tag.
+	binary.LittleEndian.PutUint16(buf[txmetacache.WireV2BucketsOffset:], uint16(bucketsCount)) //nolint:gosec // bounded by the BucketsCount assertion
 	binary.LittleEndian.PutUint32(buf[4:], uint32(len(items)))
 	off := 8
 
@@ -2852,7 +2959,7 @@ func (v *Validator) sendTxMetaBatchV2(batch []*txmetaBatchItem) {
 		}
 		v.txmetaKafkaProducerClient.Publish(&kafka.Message{
 			Partition: int32(p), //nolint:gosec // p < numPartitions, bounded by setting
-			Value:     serializeTxMetaBatchV2(items),
+			Value:     serializeTxMetaBatchV2(items, txmetacache.BucketsCount),
 		})
 	}
 }
@@ -2970,7 +3077,7 @@ func (v *Validator) sendToBlockAssembler(ctx context.Context, bData *blockassemb
 	v.logger.Debugf("[Validator] sending tx %s to block assembler", bData.TxIDChainHash.String())
 	// }
 
-	if _, err := v.blockAssembler.Store(ctx, &bData.TxIDChainHash, bData.Fee, bData.Size, bData.TxInpoints, bData.ValidatedHeight); err != nil {
+	if _, err := v.blockAssembler.Store(ctx, &bData.TxIDChainHash, bData.Fee, bData.Size, bData.TxInpoints, bData.ValidatedHeight, bData.LanePosition); err != nil {
 		// A queue-full shed must keep its resource-exhausted classification so it
 		// surfaces as ResourceExhausted (retry gate skips it) rather than being
 		// masked as a generic service fault (Internal). Every other failure is a

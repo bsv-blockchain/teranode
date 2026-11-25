@@ -41,7 +41,7 @@ const (
 func createParentAndChild(ctx context.Context, t *testing.T, store *teranode_aerospike.Store) (*chainhash.Hash, *bt.Tx) {
 	t.Helper()
 
-	parent := bt.NewTx()
+	parent := uniqueTx(bt.NewTx())
 	require.NoError(t, parent.From(
 		"1111111111111111111111111111111111111111111111111111111111111111",
 		0,
@@ -74,6 +74,8 @@ func readMasterDAH(t *testing.T, client *uaerospike.Client, store *teranode_aero
 // Mined far above the cached tip, then flagged conflicting. The conflicting stamp
 // must be taken from the mined height, not from the lagging tip.
 func TestSetConflictingStampsDAHAtMinedFloor(t *testing.T) {
+	t.Parallel()
+
 	if testing.Short() {
 		t.Skip("Skipping Aerospike integration test in short mode")
 	}
@@ -86,7 +88,6 @@ func TestSetConflictingStampsDAHAtMinedFloor(t *testing.T) {
 
 	client, store, _, cleanup := initAerospike(t, tSettings, logger)
 	defer cleanup()
-	cleanDB(t, client)
 
 	require.NoError(t, store.SetBlockHeight(floorCachedTip))
 
@@ -110,6 +111,8 @@ func TestSetConflictingStampsDAHAtMinedFloor(t *testing.T) {
 // above it. Mining must raise the stamp to the mined floor. Covers the Lua UDF and
 // the filter-expression path.
 func TestSetMinedRaisesConflictingStampToMinedFloor(t *testing.T) {
+	t.Parallel()
+
 	if testing.Short() {
 		t.Skip("Skipping Aerospike integration test in short mode")
 	}
@@ -130,7 +133,6 @@ func TestSetMinedRaisesConflictingStampToMinedFloor(t *testing.T) {
 
 			client, store, _, cleanup := initAerospike(t, tSettings, logger)
 			defer cleanup()
-			cleanDB(t, client)
 
 			require.NoError(t, store.SetBlockHeight(floorCachedTip))
 
@@ -161,6 +163,8 @@ func TestSetMinedRaisesConflictingStampToMinedFloor(t *testing.T) {
 // height. The stamp the spend writes must still be at least mined height +
 // retention. Covers the Lua UDF and the filter-expression spend path.
 func TestSpendStampsDAHAtMinedFloor(t *testing.T) {
+	t.Parallel()
+
 	if testing.Short() {
 		t.Skip("Skipping Aerospike integration test in short mode")
 	}
@@ -183,11 +187,10 @@ func TestSpendStampsDAHAtMinedFloor(t *testing.T) {
 
 			client, store, _, cleanup := initAerospike(t, tSettings, logger)
 			defer cleanup()
-			cleanDB(t, client)
 
 			require.NoError(t, store.SetBlockHeight(floorCachedTip))
 
-			parent := bt.NewTx()
+			parent := uniqueTx(bt.NewTx())
 			require.NoError(t, parent.From(
 				"1111111111111111111111111111111111111111111111111111111111111111",
 				0,
@@ -228,7 +231,7 @@ func TestSpendStampsDAHAtMinedFloor(t *testing.T) {
 func floorCreatePaginatedParent(ctx context.Context, t *testing.T, store *teranode_aerospike.Store, vout uint32) *bt.Tx {
 	t.Helper()
 
-	parent := bt.NewTx()
+	parent := uniqueTx(bt.NewTx())
 	require.NoError(t, parent.From(
 		"1111111111111111111111111111111111111111111111111111111111111111",
 		vout,
@@ -281,6 +284,8 @@ func readRecordDAH(t *testing.T, client *uaerospike.Client, store *teranode_aero
 // at it. Spending the master's output last exercises the spend signal, spending the
 // pagination record's output last exercises the incrementSpentExtraRecs signal.
 func TestSpendStampsPaginationRecordsAtMinedFloor(t *testing.T) {
+	t.Parallel()
+
 	if testing.Short() {
 		t.Skip("Skipping Aerospike integration test in short mode")
 	}
@@ -304,7 +309,6 @@ func TestSpendStampsPaginationRecordsAtMinedFloor(t *testing.T) {
 
 			client, store, _, cleanup := initAerospike(t, tSettings, logger)
 			defer cleanup()
-			cleanDB(t, client)
 
 			require.NoError(t, store.SetBlockHeight(floorCachedTip))
 
@@ -340,6 +344,8 @@ func TestSpendStampsPaginationRecordsAtMinedFloor(t *testing.T) {
 // stamps from the master's highest mined height, which is the fork block, so the
 // pagination record must follow that stamp and not the lower block it was just mined at.
 func TestSetMinedStampsPaginationRecordsAtMinedFloor(t *testing.T) {
+	t.Parallel()
+
 	if testing.Short() {
 		t.Skip("Skipping Aerospike integration test in short mode")
 	}
@@ -353,7 +359,6 @@ func TestSetMinedStampsPaginationRecordsAtMinedFloor(t *testing.T) {
 
 	client, store, _, cleanup := initAerospike(t, tSettings, logger)
 	defer cleanup()
-	cleanDB(t, client)
 
 	require.NoError(t, store.SetBlockHeight(floorCachedTip))
 
@@ -419,7 +424,7 @@ func floorSettings(t *testing.T) (*settings.Settings, uint32) {
 func floorCreateThreePageParent(ctx context.Context, t *testing.T, store *teranode_aerospike.Store, vout uint32) *bt.Tx {
 	t.Helper()
 
-	parent := bt.NewTx()
+	parent := uniqueTx(bt.NewTx())
 	require.NoError(t, parent.From(
 		"1111111111111111111111111111111111111111111111111111111111111111",
 		vout,
@@ -487,6 +492,8 @@ func floorRequireAllRecordsAt(t *testing.T, client *uaerospike.Client, store *te
 // conflicting master whose other page is still unspent. The master is raised to the floor
 // and the pages follow. The master's stamp must not be cleared as counter drift.
 func TestIncrementSpentExtraRecsRaisesConflictingMasterAndPages(t *testing.T) {
+	t.Parallel()
+
 	if testing.Short() {
 		t.Skip("Skipping Aerospike integration test in short mode")
 	}
@@ -497,7 +504,6 @@ func TestIncrementSpentExtraRecsRaisesConflictingMasterAndPages(t *testing.T) {
 
 	client, store, _, cleanup := initAerospike(t, tSettings, logger)
 	defer cleanup()
-	cleanDB(t, client)
 
 	require.NoError(t, store.SetBlockHeight(floorCachedTip))
 
@@ -520,6 +526,8 @@ func TestIncrementSpentExtraRecsRaisesConflictingMasterAndPages(t *testing.T) {
 // SetConflicting on a paginated mined master with a stale low stamp raises the master and
 // every page to the floor, so a pruner pass between the old and the new date deletes nothing.
 func TestSetConflictingRaisesPaginatedMasterAndPagesToMinedFloor(t *testing.T) {
+	t.Parallel()
+
 	if testing.Short() {
 		t.Skip("Skipping Aerospike integration test in short mode")
 	}
@@ -528,14 +536,13 @@ func TestSetConflictingRaisesPaginatedMasterAndPagesToMinedFloor(t *testing.T) {
 	logger := ulogger.NewErrorTestLogger(t)
 	tSettings, retention := floorSettings(t)
 
-	client, store, _, cleanup := initAerospike(t, tSettings, logger)
+	client, store, _, cleanup := initAerospikeOwnServer(t, tSettings, logger)
 	defer cleanup()
 	cleanDB(t, client)
 
 	require.NoError(t, store.SetBlockHeight(floorCachedTip))
 
-	teranode_aerospike.ResetPrunerServiceForTests()
-	t.Cleanup(teranode_aerospike.ResetPrunerServiceForTests)
+	teranode_aerospike.UsePrunerServiceForTest(t)
 	require.NoError(t, store.CreateIndexIfNotExists(ctx, apruner.IndexName, fields.DeleteAtHeight.String(), aerospike.NUMERIC))
 	require.NoError(t, store.WaitForIndexReady(ctx, apruner.IndexName))
 
@@ -570,6 +577,8 @@ func TestSetConflictingRaisesPaginatedMasterAndPagesToMinedFloor(t *testing.T) {
 // Unspending an output of a conflicting master that carries a stale stamp raises the master
 // to the floor, and the pages take the reported stamp.
 func TestUnspendRaisesConflictingMasterPagesToMinedFloor(t *testing.T) {
+	t.Parallel()
+
 	if testing.Short() {
 		t.Skip("Skipping Aerospike integration test in short mode")
 	}
@@ -580,7 +589,6 @@ func TestUnspendRaisesConflictingMasterPagesToMinedFloor(t *testing.T) {
 
 	client, store, _, cleanup := initAerospike(t, tSettings, logger)
 	defer cleanup()
-	cleanDB(t, client)
 
 	require.NoError(t, store.SetBlockHeight(floorCachedTip))
 
@@ -605,6 +613,8 @@ func TestUnspendRaisesConflictingMasterPagesToMinedFloor(t *testing.T) {
 // IncrementSpentRecordsMulti on a conflicting master with a stale stamp raises the master to
 // the floor, and the pages take the reported stamp.
 func TestIncrementSpentRecordsMultiStampsConflictingPagesAtMinedFloor(t *testing.T) {
+	t.Parallel()
+
 	if testing.Short() {
 		t.Skip("Skipping Aerospike integration test in short mode")
 	}
@@ -615,7 +625,6 @@ func TestIncrementSpentRecordsMultiStampsConflictingPagesAtMinedFloor(t *testing
 
 	client, store, _, cleanup := initAerospike(t, tSettings, logger)
 	defer cleanup()
-	cleanDB(t, client)
 
 	require.NoError(t, store.SetBlockHeight(floorCachedTip))
 
@@ -632,8 +641,7 @@ func TestIncrementSpentRecordsMultiStampsConflictingPagesAtMinedFloor(t *testing
 func floorPrunerService(ctx context.Context, t *testing.T, store *teranode_aerospike.Store) *apruner.Service {
 	t.Helper()
 
-	teranode_aerospike.ResetPrunerServiceForTests()
-	t.Cleanup(teranode_aerospike.ResetPrunerServiceForTests)
+	teranode_aerospike.UsePrunerServiceForTest(t)
 	require.NoError(t, store.CreateIndexIfNotExists(ctx, apruner.IndexName, fields.DeleteAtHeight.String(), aerospike.NUMERIC))
 	require.NoError(t, store.WaitForIndexReady(ctx, apruner.IndexName))
 
@@ -715,6 +723,8 @@ func floorSpendFirstOutput(ctx context.Context, t *testing.T, store *teranode_ae
 // error and is retried. The retry finds the master already holding the value, so no signal
 // fires, and the pages must still be brought in line with the master.
 func TestSetConflictingRetryRepairsPagesAfterFailedPageWrite(t *testing.T) {
+	t.Parallel()
+
 	if testing.Short() {
 		t.Skip("Skipping Aerospike integration test in short mode")
 	}
@@ -723,7 +733,7 @@ func TestSetConflictingRetryRepairsPagesAfterFailedPageWrite(t *testing.T) {
 	logger := ulogger.NewErrorTestLogger(t)
 	tSettings, retention := floorSettings(t)
 
-	client, store, _, cleanup := initAerospike(t, tSettings, logger)
+	client, store, _, cleanup := initAerospikeOwnServer(t, tSettings, logger)
 	defer cleanup()
 	cleanDB(t, client)
 
@@ -793,6 +803,8 @@ func TestSetConflictingRetryRepairsPagesAfterFailedPageWrite(t *testing.T) {
 // An Unspend whose page write failed after the master committed is retried. The retry is
 // idempotent on the master, so no signal fires, and the pages must still be cleared.
 func TestUnspendRetryClearsPagesAfterFailedPageWrite(t *testing.T) {
+	t.Parallel()
+
 	if testing.Short() {
 		t.Skip("Skipping Aerospike integration test in short mode")
 	}
@@ -803,7 +815,6 @@ func TestUnspendRetryClearsPagesAfterFailedPageWrite(t *testing.T) {
 
 	client, store, _, cleanup := initAerospike(t, tSettings, logger)
 	defer cleanup()
-	cleanDB(t, client)
 
 	require.NoError(t, store.SetBlockHeight(floorCachedTip))
 
@@ -833,6 +844,8 @@ func TestUnspendRetryClearsPagesAfterFailedPageWrite(t *testing.T) {
 // per evaluation, and leaves them as they were. The control then stamps the master and unspends
 // again: the DAHUNSET signal makes the pages get cleared.
 func TestUnspendWithoutASignalReconcilesEveryPage(t *testing.T) {
+	t.Parallel()
+
 	if testing.Short() {
 		t.Skip("Skipping Aerospike integration test in short mode")
 	}
@@ -843,7 +856,6 @@ func TestUnspendWithoutASignalReconcilesEveryPage(t *testing.T) {
 
 	client, store, _, cleanup := initAerospike(t, tSettings, logger)
 	defer cleanup()
-	cleanDB(t, client)
 
 	require.NoError(t, store.SetBlockHeight(floorCachedTip))
 
@@ -924,7 +936,7 @@ func TestUnspendStalePageWriteCannotOverwriteAClearedMaster(t *testing.T) {
 	logger := ulogger.NewErrorTestLogger(t)
 	tSettings, retention := floorSettings(t)
 
-	client, store, _, cleanup := initAerospike(t, tSettings, logger)
+	client, store, _, cleanup := initAerospikeOwnServer(t, tSettings, logger)
 	defer cleanup()
 	cleanDB(t, client)
 
@@ -1030,6 +1042,8 @@ func floorKeyDAHVersion(t *testing.T, client *uaerospike.Client, key *aerospike.
 // requires the master's version to have grown. The restore cases fail the page writes, so the
 // writer bumps once and its restore bumps again.
 func TestGoMasterDAHWritersBumpTheVersion(t *testing.T) {
+	t.Parallel()
+
 	if testing.Short() {
 		t.Skip("Skipping Aerospike integration test in short mode")
 	}
@@ -1042,7 +1056,6 @@ func TestGoMasterDAHWritersBumpTheVersion(t *testing.T) {
 
 	client, store, _, cleanup := initAerospike(t, tSettings, ulogger.NewErrorTestLogger(t))
 	defer cleanup()
-	cleanDB(t, client)
 
 	require.NoError(t, store.SetBlockHeight(floorCachedTip))
 
@@ -1189,7 +1202,7 @@ func TestGoMasterDAHWritersBumpTheVersion(t *testing.T) {
 func floorCreateConflictingThreePageParent(ctx context.Context, t *testing.T, store *teranode_aerospike.Store, vout uint32) *bt.Tx {
 	t.Helper()
 
-	parent := bt.NewTx()
+	parent := uniqueTx(bt.NewTx())
 	require.NoError(t, parent.From(
 		"1111111111111111111111111111111111111111111111111111111111111111",
 		vout,
@@ -1244,6 +1257,8 @@ func floorRequireRecordsExist(t *testing.T, client *uaerospike.Client, store *te
 // setDeleteAtHeight on it. The page must neither stamp itself nor count its own version, or the
 // DAHUNSET page write of the master is refused and the pruner deletes the page of a live master.
 func TestPageOfAConflictingTxNeverStampsOrVersionsItself(t *testing.T) {
+	t.Parallel()
+
 	if testing.Short() {
 		t.Skip("Skipping Aerospike integration test in short mode")
 	}
@@ -1253,7 +1268,7 @@ func TestPageOfAConflictingTxNeverStampsOrVersionsItself(t *testing.T) {
 	tSettings, retention := floorSettings(t)
 	tSettings.UtxoStore.UtxoBatchSize = 2
 
-	client, store, _, cleanup := initAerospike(t, tSettings, logger)
+	client, store, _, cleanup := initAerospikeOwnServer(t, tSettings, logger)
 	defer cleanup()
 	cleanDB(t, client)
 
@@ -1349,7 +1364,6 @@ func TestDelayedDAHSetWriteCannotUndoALaterSetMined(t *testing.T) {
 
 	client, store, _, cleanup := initAerospike(t, tSettings, logger)
 	defer cleanup()
-	cleanDB(t, client)
 
 	require.NoError(t, store.SetBlockHeight(floorCachedTip))
 
@@ -1385,7 +1399,6 @@ func TestDelayedDAHSetWriteCannotUndoAPreserveClear(t *testing.T) {
 
 	client, store, _, cleanup := initAerospike(t, tSettings, logger)
 	defer cleanup()
-	cleanDB(t, client)
 
 	require.NoError(t, store.SetBlockHeight(floorCachedTip))
 
@@ -1425,7 +1438,7 @@ func TestDelayedDAHSetWriteCannotUndoALock(t *testing.T) {
 	logger := ulogger.NewErrorTestLogger(t)
 	tSettings, retention := floorSettings(t)
 
-	client, store, _, cleanup := initAerospike(t, tSettings, logger)
+	client, store, _, cleanup := initAerospikeOwnServer(t, tSettings, logger)
 	defer cleanup()
 	cleanDB(t, client)
 

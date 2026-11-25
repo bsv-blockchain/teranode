@@ -7,6 +7,7 @@ import (
 	"math/rand/v2"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"testing"
 
@@ -469,6 +470,44 @@ func TestSorter_DrainReleasesSpareBuffer(t *testing.T) {
 	require.Nil(t, s.spare)
 }
 
+// Drain allocates its batch buffers before it emits anything, so they must be
+// sized by the records held, not by the batch size passed in. Block assembly
+// passes 10M by default, which sized them at about 1.3 GB for a few records.
+// TotalAlloc counts every goroutine in the process, so the bound is loose.
+func TestSorter_DrainSizesBatchBuffersToLen(t *testing.T) {
+	for _, n := range []int{0, 3} {
+		in := makeInputs(n, false)
+		// Distinct CreatedAt values, so a batch size below Len() would split the
+		// output and the one-batch check below can tell.
+		for i := range in {
+			in[i].createdAt += int64(i)
+		}
+
+		s, err := New(Options{BufferRecords: 10})
+		require.NoError(t, err)
+
+		addAll(t, s, in, false)
+
+		var before, after runtime.MemStats
+
+		emitted, batches := 0, 0
+
+		runtime.ReadMemStats(&before)
+		require.NoError(t, s.Drain(context.Background(), 10_000_000, func(batch []*utxo.UnminedTransaction, _ []uint32) error {
+			emitted += len(batch)
+			batches++
+
+			return nil
+		}))
+		runtime.ReadMemStats(&after)
+
+		require.NoError(t, s.Close())
+		require.Equal(t, len(in), emitted)
+		require.Equal(t, min(n, 1), batches, "a batch size above Len() must still emit one batch")
+		require.Less(t, after.TotalAlloc-before.TotalAlloc, uint64(64<<20), "Drain of %d records allocated for the 10M batch size", n)
+	}
+}
+
 func TestSorter_InvalidOptions(t *testing.T) {
 	_, err := New(Options{BufferRecords: 0})
 	require.Error(t, err)
@@ -620,7 +659,7 @@ func TestFileSource_ChecksHeaderCount(t *testing.T) {
 
 	require.NoError(t, os.Truncate(s.runs[0], runHeaderSize))
 
-	fs, err := openFileSource(s.runs[0], false)
+	fs, err := openFileSource(s.runs[0], false, false)
 	require.NoError(t, err)
 
 	defer fs.close()
@@ -649,7 +688,7 @@ func TestFileSource_RejectsRecordsBeyondHeaderCount(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, f.Close())
 
-	fs, err := openFileSource(s.runs[0], false)
+	fs, err := openFileSource(s.runs[0], false, false)
 	require.NoError(t, err)
 
 	defer fs.close()
@@ -747,4 +786,100 @@ func TestSorter_SpillsOnBytesWithLargeInpoints(t *testing.T) {
 
 	out, _ := drainAll(t, s, 50)
 	requireOrder(t, in, out, true)
+}
+
+// TestSorter_CarriesLanePositions: WithPositions, each tx comes out with the lane position it went
+// in with, from memory and from spilled runs, and without it every tx comes out with none.
+func TestSorter_CarriesLanePositions(t *testing.T) {
+	positionOf := func(i int) uint64 {
+		if i%5 == 0 {
+			return 0 // a tx without a position
+		}
+
+		return uint64(i)<<8 | 0xff
+	}
+
+	for _, tc := range []struct {
+		name          string
+		dirs          bool
+		withPositions bool
+	}{
+		{"in memory", false, true},
+		{"spilled", true, true},
+		{"without positions", true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			in := makeInputs(20_000, true)
+
+			opts := Options{BufferRecords: 1 << 30, WithInpoints: true, WithPositions: tc.withPositions}
+			if tc.dirs {
+				opts.Dirs = []string{t.TempDir()}
+				opts.BufferRecords = 3_000
+			}
+
+			s, err := New(opts)
+			require.NoError(t, err)
+
+			defer func() { _ = s.Close() }()
+
+			byHash := make(map[chainhash.Hash]uint64, len(in))
+			heightByHash := make(map[chainhash.Hash]uint32, len(in)) // the validated height travels beside the position
+
+			for i := range in {
+				inpoints := in[i].inpoints
+				require.NoError(t, s.AddAt(in[i].createdAt, in[i].node, &inpoints, uint32(i+1), positionOf(i))) //nolint:gosec // small test index
+				byHash[in[i].node.Hash] = positionOf(i)
+				heightByHash[in[i].node.Hash] = uint32(i + 1) //nolint:gosec // small test index
+			}
+
+			drainedCount := 0
+
+			require.NoError(t, s.Drain(context.Background(), 1_000, func(batch []*utxo.UnminedTransaction, validatedHeights []uint32) error {
+				for k, tx := range batch {
+					require.Equal(t, heightByHash[tx.Hash], validatedHeights[k], "tx %s", tx.Hash)
+
+					want := byHash[tx.Hash]
+					if !tc.withPositions {
+						want = 0
+					}
+
+					require.Equal(t, want, tx.LanePosition, "tx %s", tx.Hash)
+				}
+
+				drainedCount += len(batch)
+
+				return nil
+			}))
+
+			require.Equal(t, len(in), drainedCount)
+		})
+	}
+}
+
+// A run cut short inside a record's lane position fails the drain, as one cut anywhere else does.
+func TestSorter_TruncatedRunWithPositions(t *testing.T) {
+	dir := t.TempDir()
+	in := makeInputs(3000, false)
+
+	s, err := New(Options{Dirs: []string{dir}, BufferRecords: 1000, WithPositions: true})
+	require.NoError(t, err)
+
+	defer s.Close()
+
+	addAll(t, s, in, false)
+	require.NoError(t, s.waitSpill())
+	require.NotEmpty(t, s.runs)
+
+	info, err := os.Stat(s.runs[0])
+	require.NoError(t, err)
+	require.NoError(t, os.Truncate(s.runs[0], info.Size()-5))
+
+	err = s.Drain(context.Background(), 500, func([]*utxo.UnminedTransaction, []uint32) error { return nil })
+	require.Error(t, err)
+}
+
+// The buffer's memory counts 8 bytes for each lane position it holds.
+func TestBatchBufBytesCountsPositions(t *testing.T) {
+	b := &batchBuf{positions: make([]uint64, 3)}
+	require.Equal(t, 24, b.bytes())
 }

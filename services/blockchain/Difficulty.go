@@ -375,7 +375,7 @@ func (d *Difficulty) computeTarget(suitableFirstBlock *model.SuitableBlock, suit
 
 	// In order to avoid difficulty cliffs, we bound the amplitude of the
 	// adjustment we are going to do.
-	duration := int64(suitableLastBlock.Time - suitableFirstBlock.Time)
+	duration := int64(suitableLastBlock.Time) - int64(suitableFirstBlock.Time)
 	if duration > 288*int64(tSettings.ChainCfgParams.TargetTimePerBlock.Seconds()) {
 		duration = 288 * int64(tSettings.ChainCfgParams.TargetTimePerBlock.Seconds())
 	} else if duration < 72*int64(tSettings.ChainCfgParams.TargetTimePerBlock.Seconds()) {

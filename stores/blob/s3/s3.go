@@ -26,8 +26,9 @@ import (
 	"net"
 	"net/http"
 	"net/url"
-	"path/filepath"
+	"path"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -258,7 +259,10 @@ func (g *S3) SetFromReader(ctx context.Context, key []byte, fileType fileformat.
 
 	merged := options.MergeOptions(g.options, opts)
 
-	objectKey := g.getObjectKey(key, fileType, merged)
+	objectKey, err := g.getObjectKey(key, fileType, merged)
+	if err != nil {
+		return err
+	}
 
 	if !merged.AllowOverwrite {
 		// Check if the object already exists
@@ -306,7 +310,10 @@ func (g *S3) Set(ctx context.Context, key []byte, fileType fileformat.FileType, 
 
 	merged := options.MergeOptions(g.options, opts)
 
-	objectKey := g.getObjectKey(key, fileType, merged)
+	objectKey, err := g.getObjectKey(key, fileType, merged)
+	if err != nil {
+		return err
+	}
 
 	if !merged.AllowOverwrite {
 		// Check if the object already exists
@@ -366,7 +373,10 @@ func (g *S3) GetIoReader(ctx context.Context, key []byte, fileType fileformat.Fi
 
 	merged := options.MergeOptions(g.options, opts)
 
-	objectKey := g.getObjectKey(key, fileType, merged)
+	objectKey, err := g.getObjectKey(key, fileType, merged)
+	if err != nil {
+		return nil, err
+	}
 
 	result, err := g.client.GetObject(ctx, &s3.GetObjectInput{
 		Bucket: aws.String(g.bucket),
@@ -418,7 +428,10 @@ func (g *S3) Get(ctx context.Context, key []byte, fileType fileformat.FileType, 
 
 	merged := options.MergeOptions(g.options, opts)
 
-	objectKey := g.getObjectKey(key, fileType, merged)
+	objectKey, err := g.getObjectKey(key, fileType, merged)
+	if err != nil {
+		return nil, err
+	}
 
 	// We log this, since this should not happen in a healthy system. Subtrees should be retrieved from the local ttl cache
 	// g.logger.Warnf("[S3][%s] Getting object from S3: %s", util.ReverseAndHexEncodeSlice(key), *objectKey)
@@ -535,7 +548,10 @@ func (g *S3) Exists(ctx context.Context, key []byte, fileType fileformat.FileTyp
 
 	merged := options.MergeOptions(g.options, opts)
 
-	objectKey := g.getObjectKey(key, fileType, merged)
+	objectKey, err := g.getObjectKey(key, fileType, merged)
+	if err != nil {
+		return false, err
+	}
 
 	// check cache
 	_, ok := cache.Get(*objectKey)
@@ -543,7 +559,7 @@ func (g *S3) Exists(ctx context.Context, key []byte, fileType fileformat.FileTyp
 		return true, nil
 	}
 
-	_, err := g.client.HeadObject(ctx, &s3.HeadObjectInput{
+	_, err = g.client.HeadObject(ctx, &s3.HeadObjectInput{
 		Bucket: aws.String(g.bucket),
 		Key:    objectKey,
 	})
@@ -567,11 +583,14 @@ func (g *S3) Del(ctx context.Context, key []byte, fileType fileformat.FileType, 
 
 	merged := options.MergeOptions(g.options, opts)
 
-	objectKey := g.getObjectKey(key, fileType, merged)
+	objectKey, err := g.getObjectKey(key, fileType, merged)
+	if err != nil {
+		return err
+	}
 
 	cache.Delete(*objectKey)
 
-	_, err := g.client.DeleteObject(ctx, &s3.DeleteObjectInput{
+	_, err = g.client.DeleteObject(ctx, &s3.DeleteObjectInput{
 		Bucket: aws.String(g.bucket),
 		Key:    objectKey,
 	})
@@ -605,6 +624,12 @@ func (g *S3) SetCurrentBlockHeight(_ uint32) {
 // The object key includes any configured subdirectory and uses the hash and file type to create
 // a unique and consistent path within the S3 bucket.
 //
+// S3 object keys are slash-separated strings, not host paths, so the key is assembled with
+// path.Join (always "/") rather than filepath.Join. A caller-supplied Filename must be a single
+// portable basename (options.ValidateFilename), and the final key is checked to still sit under
+// the configured SubDirectory, so a filename received over the unauthenticated HTTP blob server
+// can never address an object outside this store's prefix.
+//
 // Parameters:
 //   - hash: The blob hash/key
 //   - fileType: The type of the file
@@ -612,16 +637,38 @@ func (g *S3) SetCurrentBlockHeight(_ uint32) {
 //
 // Returns:
 //   - *string: The fully constructed S3 object key
-func (g *S3) getObjectKey(hash []byte, fileType fileformat.FileType, o *options.Options) *string {
+//   - error: An invalid-argument error if the filename or subdirectory would escape the prefix
+func (g *S3) getObjectKey(hash []byte, fileType fileformat.FileType, o *options.Options) (*string, error) {
 	var (
 		key    string
 		prefix string
 		ext    string
 	)
 
+	for _, segment := range strings.Split(o.SubDirectory, "/") {
+		if segment == ".." {
+			return nil, errors.NewInvalidArgumentError("[S3] subdirectory contains path traversal sequence")
+		}
+	}
+
+	// Normalise the configured prefix the same way path.Join will, so the prefix assertion
+	// below compares like with like. A leading slash is preserved: S3 keys may legitimately
+	// start with "/", and changing that would silently re-key every existing object.
+	subDir := ""
+	if o.SubDirectory != "" {
+		subDir = path.Clean(o.SubDirectory)
+		if subDir == "." {
+			subDir = ""
+		}
+	}
+
 	ext = "." + fileType.String()
 
 	if o.Filename != "" {
+		if err := options.ValidateFilename(o.Filename); err != nil {
+			return nil, err
+		}
+
 		key = o.Filename
 	} else {
 		key = fmt.Sprintf("%s%s", util.ReverseAndHexEncodeSlice(hash), ext)
@@ -629,7 +676,22 @@ func (g *S3) getObjectKey(hash []byte, fileType fileformat.FileType, o *options.
 		prefix = o.CalculatePrefix(key)
 	}
 
-	return aws.String(filepath.Join(o.SubDirectory, prefix, key))
+	objectKey := path.Join(subDir, prefix, key)
+
+	// Defence in depth, unreachable with today's inputs: subDir is cleaned and has no ".."
+	// segment, key is a validated basename or a hex hash plus extension, and prefix is hex or
+	// empty, so the joined key always starts with subDir. It guards against a later change to
+	// any of those three, which is why no test can reach it through getObjectKey.
+	requiredPrefix := subDir
+	if requiredPrefix != "" && !strings.HasSuffix(requiredPrefix, "/") {
+		requiredPrefix += "/"
+	}
+
+	if subDir != "" && !strings.HasPrefix(objectKey, requiredPrefix) {
+		return nil, errors.NewInvalidArgumentError("[S3] object key %q escapes configured subdirectory %q", objectKey, subDir)
+	}
+
+	return aws.String(objectKey), nil
 }
 
 // getQueryParamInt extracts an integer parameter from a URL's query string.

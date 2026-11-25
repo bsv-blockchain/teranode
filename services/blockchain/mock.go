@@ -689,6 +689,15 @@ func (m *Mock) ReleaseLaneLease(ctx context.Context, r lane.Release) (bool, erro
 	return args.Bool(0), args.Error(1)
 }
 
+// LaneMapRows mocks the LaneMapRows method
+func (m *Mock) LaneMapRows(ctx context.Context, blockID uint32) ([]lane.MapRow, error) {
+	args := m.Called(ctx, blockID)
+
+	rows, _ := args.Get(0).([]lane.MapRow)
+
+	return rows, args.Error(1)
+}
+
 type emptyStoreGetBlockHeader struct {
 	blockchain_store.MockStore
 }

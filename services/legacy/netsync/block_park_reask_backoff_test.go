@@ -105,3 +105,22 @@ func TestSendDueReAsks_ForgetsAnIdleRecord(t *testing.T) {
 
 	require.Empty(t, h.sm.reAsks)
 }
+
+// A dropped block's re-ask that meets a mark set by another source (the sink-panic
+// verdict, say) is put off until the mark has gone, not consumed. sendDueReAsks
+// clears a record's due time before it asks, so a re-ask that merely returned at
+// the mark left nothing to ask once the mark expired, and above the final
+// checkpoint nothing else asks for a dropped block.
+func TestSendDueReAsks_AReAskThatMeetsAMarkWaitsForIt(t *testing.T) {
+	h, child := newReAskHarness(t)
+
+	h.sm.recentlyFailedBlocks.Set(child, struct{}{})
+
+	before := h.rec.getDataCount()
+
+	h.sm.applyParkDisposition(parkedBlock{hash: child, peer: h.peer}, parkDispositionFilesGone)
+	require.False(t, WaitUntil(func() bool { return h.rec.askedForSince(before, child) }, 300*time.Millisecond),
+		"a marked block is not asked for at once")
+
+	requireAskedOnceTheMarkIsGone(t, h.sm, h.rec, child)
+}

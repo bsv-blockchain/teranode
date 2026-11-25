@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/url"
 	"runtime"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -39,8 +40,9 @@ func lanePositions(positions ...uint64) *roaring64.Bitmap {
 	return bm
 }
 
-// laneMetric sums a lane metric's samples whose labels include the given pair, or all of them
-// when label is "": a counter's value, or a histogram's observation count.
+// laneMetric sums a lane metric's samples for a peer's block (block="peer") whose labels include
+// the given pair, or all of them when label is "": a counter's value, or a histogram's
+// observation count.
 func laneMetric(t *testing.T, metric, label, value string) float64 {
 	t.Helper()
 
@@ -55,13 +57,19 @@ func laneMetric(t *testing.T, metric, label, value string) float64 {
 		}
 
 		for _, m := range f.GetMetric() {
-			match := label == ""
+			match, peer := label == "", false
 
 			for _, l := range m.GetLabel() {
 				if l.GetName() == label && l.GetValue() == value {
 					match = true
 				}
+
+				if l.GetName() == "block" && l.GetValue() == lane.BlockPeer {
+					peer = true
+				}
 			}
+
+			match = match && peer
 
 			if match && m.GetCounter() != nil {
 				sum += m.GetCounter().GetValue()
@@ -110,6 +118,7 @@ func TestLaneRowsAreTheBlockMembersPerLane(t *testing.T) {
 
 	mismatches := laneMetric(t, "teranode_lane_row_count_mismatches_total", "", "")
 	builds := laneMetric(t, "teranode_lane_gate_seconds", "stage", lane.GateStageBuild)
+	rowBytes := laneMetric(t, "teranode_lane_row_bytes", "", "")
 
 	rows := u.laneRows(context.Background(), block)
 	require.Len(t, rows, 2)
@@ -123,6 +132,7 @@ func TestLaneRowsAreTheBlockMembersPerLane(t *testing.T) {
 
 	require.Equal(t, mismatches, laneMetric(t, "teranode_lane_row_count_mismatches_total", "", ""), "six members for seven transactions with the coinbase is no mismatch")
 	require.Equal(t, builds+1, laneMetric(t, "teranode_lane_gate_seconds", "stage", lane.GateStageBuild), "the build stage is timed")
+	require.Equal(t, rowBytes+2, laneMetric(t, "teranode_lane_row_bytes", "", ""), "one size per lane the block took from")
 
 	// The rows go to AddBlock with the block.
 	opts := blockchainoptions.ProcessStoreBlockOptions(u.buildAddBlockOpts(context.Background(), block)...)
@@ -385,7 +395,9 @@ func TestLaneRowsOfBlocksValidatedAtOnceShareOnePool(t *testing.T) {
 		require.Len(t, got[i], 2, "call %d", i)
 	}
 
-	require.Empty(t, u.laneBitmapReadSlots(), "every read handed its slot back")
+	// A read reports its result before it frees its slot, so the last slot can come free just after
+	// laneRows returns.
+	require.Eventually(t, func() bool { return len(u.laneBitmapReadSlots()) == 0 }, time.Second, time.Millisecond, "every read handed its slot back")
 }
 
 // A block of more subtrees than are read at once still gets its rows, well inside the deadline:
@@ -823,4 +835,74 @@ func TestValidateBlock_StoresTheBlocksLaneRows(t *testing.T) {
 			require.Equal(t, []lane.MapRow{{Lane: 7, First: 5, Last: 5, Tag: lane.RowTagRange}}, rows)
 		})
 	}
+}
+
+// ownLaneTotal sums every lane metric's samples under block="own": counters' values and
+// histograms' observation counts.
+func ownLaneTotal(t *testing.T) float64 {
+	t.Helper()
+
+	families, err := prometheus.DefaultGatherer.Gather()
+	require.NoError(t, err)
+
+	var sum float64
+
+	for _, f := range families {
+		if !strings.HasPrefix(f.GetName(), "teranode_lane_") {
+			continue
+		}
+
+		for _, m := range f.GetMetric() {
+			own := false
+
+			for _, l := range m.GetLabel() {
+				if l.GetName() == "block" && l.GetValue() == lane.BlockOwn {
+					own = true
+				}
+			}
+
+			if !own {
+				continue
+			}
+
+			if m.GetCounter() != nil {
+				sum += m.GetCounter().GetValue()
+			}
+
+			if m.GetHistogram() != nil {
+				sum += float64(m.GetHistogram().GetSampleCount())
+			}
+		}
+	}
+
+	return sum
+}
+
+// A peer's block records its rows, or its missing bitmaps, under block="peer" alone: nothing goes
+// under block="own", which counts the blocks this node mined.
+func TestAPeersBlockRecordsNothingAsOwn(t *testing.T) {
+	t.Run("rows built", func(t *testing.T) {
+		u, block := laneRowsFixture(t, settings.LaneMigrationShadow)
+
+		own := ownLaneTotal(t)
+		builds := laneMetric(t, "teranode_lane_gate_seconds", "stage", lane.GateStageBuild)
+
+		require.Len(t, u.laneRows(context.Background(), block), 2)
+		require.Equal(t, builds+1, laneMetric(t, "teranode_lane_gate_seconds", "stage", lane.GateStageBuild))
+		require.Equal(t, own, ownLaneTotal(t))
+	})
+
+	t.Run("bitmaps missing", func(t *testing.T) {
+		u, block := laneRowsFixture(t, settings.LaneMigrationShadow)
+
+		third := chainhash.Hash{0x54}
+		block.Subtrees = append(block.Subtrees, &third)
+
+		own := ownLaneTotal(t)
+		absent := laneMetric(t, "teranode_lane_missing_bitmaps_total", "reason", lane.MissingBitmapsAbsent)
+
+		require.Nil(t, u.laneRows(context.Background(), block))
+		require.Equal(t, absent+1, laneMetric(t, "teranode_lane_missing_bitmaps_total", "reason", lane.MissingBitmapsAbsent))
+		require.Equal(t, own, ownLaneTotal(t))
+	})
 }

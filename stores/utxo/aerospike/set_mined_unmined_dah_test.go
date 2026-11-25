@@ -20,7 +20,7 @@ import (
 func newParent(t *testing.T) *bt.Tx {
 	t.Helper()
 
-	parent := bt.NewTx()
+	parent := uniqueTx(bt.NewTx())
 	require.NoError(t, parent.From(
 		"1111111111111111111111111111111111111111111111111111111111111111",
 		0,
@@ -52,6 +52,8 @@ func readMasterBins(t *testing.T, client *uaerospike.Client, ns, set string, has
 // fork block (onLongestChain=false) keeps its DAH, bumped forward if the fork block is higher.
 // SQL must agree with this behaviour.
 func TestSetMinedNotOnLongestChainReevaluatesDAH(t *testing.T) {
+	t.Parallel()
+
 	if testing.Short() {
 		t.Skip("Skipping Aerospike integration test in short mode")
 	}
@@ -89,7 +91,6 @@ func TestSetMinedNotOnLongestChainReevaluatesDAH(t *testing.T) {
 
 				client, store, _, cleanup := initAerospike(t, tSettings, logger)
 				defer cleanup()
-				cleanDB(t, client)
 
 				require.NoError(t, store.SetBlockHeight(mainHeight))
 
@@ -135,6 +136,8 @@ func TestSetMinedNotOnLongestChainReevaluatesDAH(t *testing.T) {
 // outputs and a non-nil unmined_since clear the DAH, preserveUntil and retention 0 leave it
 // untouched, conflicting sets it when absent, raises it to the mined floor when below it, and otherwise leaves it unchanged.
 func TestSetMinedNotOnLongestChainDAHMatrixLua(t *testing.T) {
+	t.Parallel()
+
 	if testing.Short() {
 		t.Skip("Skipping Aerospike integration test in short mode")
 	}
@@ -210,7 +213,6 @@ func TestSetMinedNotOnLongestChainDAHMatrixLua(t *testing.T) {
 
 			client, store, _, cleanup := initAerospike(t, tSettings, logger)
 			defer cleanup()
-			cleanDB(t, client)
 
 			require.NoError(t, store.SetBlockHeight(mainHeight))
 
@@ -252,6 +254,8 @@ func TestSetMinedNotOnLongestChainDAHMatrixLua(t *testing.T) {
 // TestUnsetMinedLastBlockOfMainChainTx: invalidating the only block of a fully spent main-chain
 // tx stamps a backdated unmined_since and clears the DAH.
 func TestUnsetMinedLastBlockOfMainChainTx(t *testing.T) {
+	t.Parallel()
+
 	if testing.Short() {
 		t.Skip("Skipping Aerospike integration test in short mode")
 	}
@@ -265,7 +269,6 @@ func TestUnsetMinedLastBlockOfMainChainTx(t *testing.T) {
 
 	client, store, _, cleanup := initAerospike(t, tSettings, logger)
 	defer cleanup()
-	cleanDB(t, client)
 
 	parent := newParent(t)
 	parentHash := parent.TxIDChainHash()

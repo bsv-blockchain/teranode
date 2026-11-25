@@ -140,7 +140,7 @@ func TestZeroCoverageFunctions(t *testing.T) {
 			txHash:       *txHash,
 		}
 
-		txMeta, err := getParentTxMetaBlockIDs(context.Background(), createTestUTXOStore(t), parentTxStruct)
+		txMeta, err := getParentTxMetaBlockIDs(context.Background(), createTestUTXOStore(t), parentTxStruct, nil)
 		// This may or may not error depending on implementation
 		_ = err
 		_ = txMeta
@@ -6307,7 +6307,7 @@ func TestGetParentTxMetaBlockIDs_MissingParentIsTransient(t *testing.T) {
 		txHash:       *txHash,
 	}
 
-	_, err := getParentTxMetaBlockIDs(context.Background(), createTestUTXOStore(t), parentTxStruct)
+	_, err := getParentTxMetaBlockIDs(context.Background(), createTestUTXOStore(t), parentTxStruct, nil)
 	require.Error(t, err)
 	require.True(t, errors.Is(err, errors.ErrBlockIncomplete),
 		"missing parent tx is a catchup-state condition and must be transient (incomplete)")

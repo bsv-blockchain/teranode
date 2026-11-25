@@ -167,6 +167,7 @@ func TestBlockAssembly_Start(t *testing.T) {
 
 		utxoStore, err := utxostoresql.New(t.Context(), ulogger.TestLogger{}, tSettings, utxoStoreURL)
 		require.NoError(t, err)
+		t.Cleanup(func() { _ = utxoStore.Close(context.Background()) })
 
 		stats := gocore.NewStat("test")
 
@@ -208,6 +209,7 @@ func TestBlockAssembly_Start(t *testing.T) {
 
 		utxoStore, err := utxostoresql.New(t.Context(), ulogger.TestLogger{}, tSettings, utxoStoreURL)
 		require.NoError(t, err)
+		t.Cleanup(func() { _ = utxoStore.Close(context.Background()) })
 
 		stats := gocore.NewStat("test")
 
@@ -252,6 +254,7 @@ func TestBlockAssembly_Start(t *testing.T) {
 
 		utxoStore, err := utxostoresql.New(t.Context(), ulogger.TestLogger{}, tSettings, utxoStoreURL)
 		require.NoError(t, err)
+		t.Cleanup(func() { _ = utxoStore.Close(context.Background()) })
 
 		stats := gocore.NewStat("test")
 
@@ -298,6 +301,7 @@ func TestBlockAssembly_Start(t *testing.T) {
 
 		utxoStore, err := utxostoresql.New(t.Context(), ulogger.TestLogger{}, tSettings, utxoStoreURL)
 		require.NoError(t, err)
+		t.Cleanup(func() { _ = utxoStore.Close(context.Background()) })
 
 		stats := gocore.NewStat("test")
 
@@ -379,6 +383,7 @@ func TestBlockAssembly_Start(t *testing.T) {
 
 		utxoStore, err := utxostoresql.New(t.Context(), ulogger.TestLogger{}, tSettings, utxoStoreURL)
 		require.NoError(t, err)
+		t.Cleanup(func() { _ = utxoStore.Close(context.Background()) })
 
 		stats := gocore.NewStat("test")
 
@@ -776,6 +781,7 @@ func setupBlockAssemblyTest(t *testing.T, opts ...func(*settings.Settings)) *baT
 
 	utxoStore, err := utxostoresql.New(ctx, logger, tSettings, utxoStoreURL)
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = utxoStore.Close(context.Background()) })
 
 	items.utxoStore = utxoStore
 
@@ -2185,6 +2191,7 @@ func TestBlockAssembly_Start_HoldsTheHeldCountFullFromConstructionToTheEndOfTheL
 
 	utxoStore, err := utxostoresql.New(t.Context(), ulogger.TestLogger{}, tSettings, utxoStoreURL)
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = utxoStore.Close(context.Background()) })
 
 	blockchainClient := &blockchain.Mock{}
 	blockchainClient.On("GetState", mock.Anything, mock.Anything).Return([]byte{}, sql.ErrNoRows)
@@ -3264,6 +3271,7 @@ func TestStart_TriggersReconcileOnStartup(t *testing.T) {
 
 	utxoStoreInst, err := utxostoresql.New(t.Context(), ulogger.TestLogger{}, tSettings, utxoStoreURL)
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = utxoStoreInst.Close(context.Background()) })
 
 	stats := gocore.NewStat("test")
 
@@ -3517,7 +3525,7 @@ func TestLoadUnminedTransactionsDropsQueuedChildOfMissingExternalParent(t *testi
 	it.queueChild = func() {
 		require.Equal(t, subtreeprocessor.Admitted, ba.AddTxBatchBounded(
 			[]subtreepkg.Node{{Hash: child, Fee: 1000, SizeInBytes: 250}, {Hash: unrelated, Fee: 1000, SizeInBytes: 250}},
-			[]*subtreepkg.TxInpoints{singleParentInpointsPtr(parent, 0), singleParentInpointsPtr(chainhash.Hash{}, 0)}, false))
+			[]*subtreepkg.TxInpoints{singleParentInpointsPtr(parent, 0), singleParentInpointsPtr(chainhash.Hash{}, 0)}, false, nil))
 	}
 	ba.utxoStore = &queuedChildSkippingStore{Store: items.utxoStore, iterator: it}
 

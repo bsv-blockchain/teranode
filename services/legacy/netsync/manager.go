@@ -3701,6 +3701,15 @@ outside:
 				break
 			}
 
+			// Marked failed since it was queued: processInvMsg's check, made again
+			// for a mark set between the Append and this drain. Consumed, like the
+			// held case above, since holding it would stall everything queued behind
+			// it for the mark's TTL, and put off rather than dropped: this item may
+			// be the peer's only announcement of the block (putOffIfMarked).
+			if sm.putOffIfMarked(parkedBlock{hash: iv.Hash, peer: peer}) {
+				break
+			}
+
 			// An owner still sending block bytes has not gone quiet, however
 			// long ago the block was asked for: it is delivering what was queued
 			// ahead of this one, and nothing is arriving for THIS block yet, so
@@ -3812,6 +3821,24 @@ func (sm *SyncManager) processInvMsg(i int, iv *wire.InvVect, processInvs bool, 
 	// inv at the tip. Answered from memory, before the chain round trip
 	// haveInventory makes.
 	if iv.Type == wire.InvTypeBlock && sm.blockHeldLocally(iv.Hash) {
+		return
+	}
+
+	// A block that recently failed is not asked for again while the mark stands,
+	// the rule unownedBlocksUpTo applies to the wanted range. Without it, above
+	// the final checkpoint, every peer that announces the block is sent a getdata
+	// for the mark's whole TTL. drainRequestQueue checks the mark again, which is
+	// what stops the getdata; this check spares the announcement the chain round
+	// trip and the disk read below. Read after blockHeldLocally for the same
+	// reason as there: a block being retried right now is held, so the mark is
+	// read only for a block nothing holds.
+	//
+	// Put off, not dropped. Above the final checkpoint this announcement may be
+	// the peer's last: it often answers requestMissingBlocks' getblocks, and
+	// PushGetBlocksMsg drops a repeat of that getblocks while the tip has not
+	// moved. So the block is asked of this peer once the mark has gone
+	// (putOffIfMarked).
+	if iv.Type == wire.InvTypeBlock && sm.putOffIfMarked(parkedBlock{hash: iv.Hash, peer: peer}) {
 		return
 	}
 
@@ -5350,6 +5377,21 @@ func (sm *SyncManager) kafkaTXmetaListener(ctx context.Context, kafkaURL *url.UR
 	}, &sm.settings.Kafka)
 }
 
+// lastTxmetaBucketsWarnNano throttles the BucketsCount-mismatch warning to one
+// line per minute per process: the warning fires from the per-message path.
+var lastTxmetaBucketsWarnNano atomic.Int64
+
+func (sm *SyncManager) warnBucketsMismatch(producerBuckets uint16) {
+	now := time.Now().UnixNano()
+
+	last := lastTxmetaBucketsWarnNano.Load()
+	if now-last < int64(time.Minute) || !lastTxmetaBucketsWarnNano.CompareAndSwap(last, now) {
+		return
+	}
+
+	sm.logger.Warnf("txmeta v2 batch from producer with BucketsCount=%d, this receiver compiled with BucketsCount=%d: cache bucket ranges overlap, partitions contend; rebuild both sides with matching txmetacache build tags", producerBuckets, txmetacache.BucketsCount)
+}
+
 // processTXmetaBatchMessage processes a binary batch message from the txmeta Kafka topic.
 // It parses the batch format, deserializes metadata for ADD entries, and announces
 // non-coinbase transactions to peers via the txAnnounceBatcher.
@@ -5363,11 +5405,11 @@ func (sm *SyncManager) kafkaTXmetaListener(ctx context.Context, kafkaURL *url.UR
 //	  per entry: [32 hash][1 action][4 contentLen][N content]
 //
 //	v2 (partition-aware)
-//	  [1 byte magic=0xFF][1 byte version=0x02][2 reserved=0][4 entry count LE]
+//	  [1 byte magic=0xFF][1 byte version=0x02][2 bytes uint16 LE BucketsCount][4 entry count LE]
 //	  per entry: [8 xxhash][32 hash][1 action][4 contentLen][N content]
 //
-// v2 detection requires the full 4-byte header signature AND a plausible
-// entry count for the buffer length, otherwise the message is parsed as v1.
+// v2 detection requires the header signature (magic, version and a zero or
+// power-of-two BucketsCount) AND a plausible entry count for the buffer length, otherwise the message is parsed as v1.
 // This avoids misclassifying v1 messages whose entry count happens to begin
 // with 0xFF (counts 255, 511, 767, ...).
 //
@@ -5385,20 +5427,28 @@ func (sm *SyncManager) processTXmetaBatchMessage(data []byte) error {
 		isV2       bool
 	)
 
-	// Speculative v2 detection: require the full header signature
-	// (magic + version + reserved bytes) and an entry count that fits in the
-	// remaining buffer at the minimum v2 entry size. Any failure falls
-	// through to v1 — never silently drops a valid v1 message.
+	// Speculative v2 detection: require the header signature (magic +
+	// version + a plausible power-of-two BucketsCount in bytes 2:4) and an
+	// entry count that fits in the remaining buffer at the minimum v2 entry
+	// size. Any failure falls through to v1 — never silently drops a valid
+	// v1 message. A BucketsCount that differs from this binary's compile-time
+	// count is logged: the batch stays valid, but producer and receiver
+	// cache bucket ranges overlap and partition alignment is lost.
 	if len(data) >= txmetacache.WireV2HeaderLen &&
 		data[0] == txmetacache.WireV2Magic &&
-		data[1] == txmetacache.WireV2Version &&
-		data[2] == 0 && data[3] == 0 {
-		candidateCount := binary.LittleEndian.Uint32(data[4:])
-		remaining := uint64(len(data) - txmetacache.WireV2HeaderLen)
-		if uint64(candidateCount)*uint64(txmetacache.WireV2MinEntrySize) <= remaining {
-			entryCount = candidateCount
-			offset = txmetacache.WireV2HeaderLen
-			isV2 = true
+		data[1] == txmetacache.WireV2Version {
+		if wireBuckets := binary.LittleEndian.Uint16(data[txmetacache.WireV2BucketsOffset:]); wireBuckets == 0 || wireBuckets&(wireBuckets-1) == 0 {
+			candidateCount := binary.LittleEndian.Uint32(data[4:])
+			remaining := uint64(len(data) - txmetacache.WireV2HeaderLen)
+			if uint64(candidateCount)*uint64(txmetacache.WireV2MinEntrySize) <= remaining {
+				entryCount = candidateCount
+				offset = txmetacache.WireV2HeaderLen
+				isV2 = true
+				// Zero is a batch from a pre-buckets producer: nothing to compare.
+				if wireBuckets != 0 && int(wireBuckets) != txmetacache.BucketsCount {
+					sm.warnBucketsMismatch(wireBuckets)
+				}
+			}
 		}
 	}
 

@@ -60,6 +60,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -131,29 +132,20 @@ func TestCalculateOffsetOutput(t *testing.T) {
 }
 
 func TestUnmined(t *testing.T) {
+	t.Parallel()
+
 	logger := ulogger.NewErrorTestLogger(t)
 	ctx := context.Background()
 
 	tSettings := test.CreateBaseTestSettings(t)
 
-	container, err := runAerospikeTestContainer(ctx)
-	test.SkipIfContainerUnavailable(t, err)
-
-	t.Cleanup(func() {
-		err = container.Terminate(ctx)
-		require.NoError(t, err)
-	})
-
-	host, err := container.Host(ctx)
-	require.NoError(t, err)
-
-	port, err := container.ServicePort(ctx)
-	require.NoError(t, err)
+	server := acquireOwnTestServerForInternalTests(t)
+	host, port := server.Host, server.Port
 
 	client, err := uaerospike.NewClient(host, port)
 	require.NoError(t, err)
 
-	aeroURL, err := url.Parse(fmt.Sprintf("aerospike://%s:%d/test?set=utxo&externalStore=file://./data/external", host, port))
+	aeroURL, err := url.Parse(fmt.Sprintf("aerospike://%s:%d/test?set=test&externalStore=file://./data/external", host, port))
 	require.NoError(t, err)
 
 	store, err := New(ctx, logger, tSettings, aeroURL)
@@ -358,30 +350,15 @@ func TestUnmined(t *testing.T) {
 }
 
 func TestLargeTxStoresExternally(t *testing.T) {
-	logger := ulogger.NewErrorTestLogger(t)
-	ctx := context.Background()
+	t.Parallel()
 
+	logger := ulogger.NewErrorTestLogger(t)
 	tSettings := test.CreateBaseTestSettings(t)
 
-	container, err := runAerospikeTestContainer(ctx)
-	test.SkipIfContainerUnavailable(t, err)
+	// An external store directory of its own, so the test can run beside the others.
+	externalDir := t.TempDir()
 
-	t.Cleanup(func() {
-		err = container.Terminate(ctx)
-		require.NoError(t, err)
-	})
-
-	host, err := container.Host(ctx)
-	require.NoError(t, err)
-
-	port, err := container.ServicePort(ctx)
-	require.NoError(t, err)
-
-	aeroURL, err := url.Parse(fmt.Sprintf("aerospike://%s:%d/test?set=utxo&externalStore=file://./data/external?hashPrefix=2", host, port))
-	require.NoError(t, err)
-
-	store, err := New(ctx, logger, tSettings, aeroURL)
-	require.NoError(t, err)
+	store, _ := newSharedTestStore(t, logger, tSettings, "&externalStore=file://"+externalDir+"?hashPrefix=2")
 
 	b, err := os.ReadFile("test/01d29b3fd5f2629c3b6586790312ee4a16039d8033e35a6ad0dcfa0235a39400")
 	require.NoError(t, err)
@@ -390,7 +367,7 @@ func TestLargeTxStoresExternally(t *testing.T) {
 	require.NoError(t, err)
 
 	// Remove the external store
-	err = os.RemoveAll("./data/external")
+	err = os.RemoveAll(externalDir)
 	require.NoError(t, err)
 
 	// tx.Outputs[0] carries a ~40KB locking script. Pre-Genesis that exceeds
@@ -403,7 +380,7 @@ func TestLargeTxStoresExternally(t *testing.T) {
 	require.NoError(t, err)
 
 	// check that the tx is stored externally
-	_, err = os.Stat("./data/external/01/01d29b3fd5f2629c3b6586790312ee4a16039d8033e35a6ad0dcfa0235a39400.tx")
+	_, err = os.Stat(filepath.Join(externalDir, "01", "01d29b3fd5f2629c3b6586790312ee4a16039d8033e35a6ad0dcfa0235a39400.tx"))
 	require.NoError(t, err)
 
 	// Create a transaction that spends the 2 outputs of tx
@@ -427,7 +404,7 @@ func TestLargeTxStoresExternally(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify DAH file does not exist (external store has DisableDAH=true)
-	_, err = os.Stat("./data/external/01/01d29b3fd5f2629c3b6586790312ee4a16039d8033e35a6ad0dcfa0235a39400.tx.dah")
+	_, err = os.Stat(filepath.Join(externalDir, "01", "01d29b3fd5f2629c3b6586790312ee4a16039d8033e35a6ad0dcfa0235a39400.tx.dah"))
 	require.Error(t, err) // DAH should not exist before SetMined
 
 	err = store.SetBlockHeight(100_000)
@@ -447,8 +424,24 @@ func TestLargeTxStoresExternally(t *testing.T) {
 
 	// Verify DAH file still does not exist after SetMined
 	// External store has DisableDAH=true - lifecycle managed by pruner service
-	_, err = os.Stat("./data/external/01/01d29b3fd5f2629c3b6586790312ee4a16039d8033e35a6ad0dcfa0235a39400.tx.dah")
+	_, err = os.Stat(filepath.Join(externalDir, "01", "01d29b3fd5f2629c3b6586790312ee4a16039d8033e35a6ad0dcfa0235a39400.tx.dah"))
 	require.Error(t, err) // DAH should NOT be created for external stores
+}
+
+// The placeholder key fills unused batch slots. New sets it once, so a later store never rewrites
+// the key that earlier stores' batchers read.
+func TestNewSetsThePlaceholderKeyOnce(t *testing.T) {
+	t.Parallel()
+
+	query := "&externalStore=file://" + t.TempDir()
+
+	newSharedTestStore(t, ulogger.NewErrorTestLogger(t), test.CreateBaseTestSettings(t), query)
+	first := placeholderKey
+	require.NotNil(t, first)
+	require.Equal(t, SharedTestNamespace, first.Namespace())
+
+	newSharedTestStore(t, ulogger.NewErrorTestLogger(t), test.CreateBaseTestSettings(t), query)
+	require.Same(t, first, placeholderKey)
 }
 
 // TestStore_SimpleGetters tests simple getter methods that don't require Aerospike connection

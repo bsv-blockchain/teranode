@@ -780,12 +780,15 @@ func TestCatchup_NoMinedSetChurnOnRejectedFork(t *testing.T) {
 		server.settings.ChainCfgParams = &params
 		server.settings.ChainCfgParams.CoinbaseMaturity = 100
 		server.settings.BlockValidation.SecretMiningThreshold = 1000
+		peerReports := &subtreeAttributionP2PClient{}
+		server.p2pClient = peerReports
 
 		before := blockFetches()
 		err := server.catchup(context.Background(), targetBlock, "peer-4697", "http://peer")
 
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "bad-fork-prior-to-checkpoint")
+		require.Positive(t, peerReports.totalMaliciousReports(), "a lighter fork below the passed checkpoint must be charged to the peer")
 		require.Equal(t, before, blockFetches(), "no block of the fork may be fetched")
 		mockBlockchainClient.AssertNotCalled(t, "ClearBlockMinedSet", mock.Anything, mock.Anything)
 	})
