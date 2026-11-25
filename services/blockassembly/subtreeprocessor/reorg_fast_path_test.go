@@ -718,7 +718,10 @@ func TestReorgDifferential_FastPathKeepsTheWinnersMinedSet(t *testing.T) {
 	require.False(t, handOff(sc, f2), "a transaction F2 mined must stay out")
 	require.True(t, handOff(sc, neither), "a transaction no winner mined is placed")
 
+	// What the head of a later reorgBlocks that moves the tip back does. The scenario has no block to
+	// move forward instead, and reorgBlocks rejects a move with none.
 	sc.stp.forgetMinedSets([]*model.Block{sc.forward[len(sc.forward)-1]})
+	require.Zero(t, sc.stp.keptMinedSetCount())
 
 	require.True(t, handOff(sc, f2), "after the tip is moved back its transaction is placed")
 	require.True(t, handOff(sc, f1), "the union goes with the tip, which only falls back to no kept set")
@@ -760,4 +763,34 @@ func TestReorgDifferential_FastPathForgetsTheDropsTheWinnersMine(t *testing.T) {
 	requireReorgEquivalent(t, cfg, seeded(slowReference, false), seeded(recordingFastPath(&rec), true))
 	require.True(t, rec.applied, "the fast path must apply, it declined: %v", rec.reasons)
 	require.Equal(t, []chainhash.Hash{chainhash.HashH([]byte("dropped-and-never-mined"))}, dropped)
+}
+
+// A declined fast path leaves the slow path to keep a set per forward block, exactly as with the fast
+// path off: one entry for each block that mined something, none for an empty one.
+func TestReorgDifferential_FastPathDeclineKeepsPerBlockSets(t *testing.T) {
+	cfg := smallScenarioConfig()
+	cfg.emptyForwardLast = true
+
+	keptBlocks := func(sc *reorgScenario) []chainhash.Hash {
+		var hashes []chainhash.Hash
+
+		for _, set := range sc.stp.recentMined.load() {
+			hashes = append(hashes, set.blockHash)
+		}
+
+		return sortedHashes(hashes)
+	}
+
+	flagOff := newReorgScenario(t, cfg)
+	require.NoError(t, slowReference(t, flagOff))
+
+	var rec fastPathRun
+
+	declined := newReorgScenario(t, cfg)
+	require.NoError(t, recordingFastPath(&rec)(t, declined))
+	require.Equal(t, []string{"empty_forward_block"}, rec.reasons)
+
+	want := sortedHashes([]chainhash.Hash{*declined.forward[0].Hash(), *declined.forward[1].Hash()})
+	require.Equal(t, want, keptBlocks(declined))
+	require.Equal(t, keptBlocks(flagOff), keptBlocks(declined))
 }
