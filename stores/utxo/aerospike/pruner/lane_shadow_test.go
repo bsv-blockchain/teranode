@@ -3,6 +3,7 @@ package pruner
 import (
 	"context"
 	"encoding/binary"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -586,4 +587,55 @@ func TestLaneShadowCountsAFailedPageBatch(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, pageErrors+1, laneMetric(t, "teranode_lane_pruner_extra_reads_total", map[string]string{"store": lanereader.PruneStoreAerospike, "kind": "page_error"}))
 	require.Equal(t, unread+1, laneVerdicts(t, lanereader.PruneDelete, lanereader.PruneCannotJudge, lanereader.ReasonSpenderUnread))
+}
+
+// TestLaneShadowPageReadTimeoutDoesNotHoldDelete: a stalled optional read must leave the real
+// delete batch free to run, and the incomplete page must make its master unread.
+func TestLaneShadowPageReadTimeoutDoesNotHoldDelete(t *testing.T) {
+	svc := laneShadowTestService(t)
+	svc.settings.Pruner.SkipDeletions = false
+	svc.batchPolicy = aerospike.NewBatchPolicy()
+	svc.batchPolicy.TotalTimeout = 5 * time.Minute
+
+	readDone := make(chan struct{}, 2)
+	var readCalls atomic.Int32
+	deleted := false
+	var readTimeout, deleteTimeout time.Duration
+	svc.batchOperateFn = func(policy *aerospike.BatchPolicy, records []aerospike.BatchRecordIfc) error {
+		if _, isRead := records[0].(*aerospike.BatchRead); isRead {
+			defer func() { readDone <- struct{}{} }()
+			readCalls.Add(1)
+			readTimeout = policy.TotalTimeout
+			time.Sleep(3 * time.Second)
+			return aerospike.ErrTimeout
+		}
+
+		deleted = true
+		deleteTimeout = policy.TotalTimeout
+		for _, r := range records {
+			r.BatchRec().ResultCode = types.OK
+		}
+
+		return nil
+	}
+
+	unread := laneVerdicts(t, lanereader.PruneDelete, lanereader.PruneCannotJudge, lanereader.ReasonSpenderUnread)
+	start := time.Now()
+	processed, _, err := svc.processRecordChunk(context.Background(), 1000, pagedMasterChunk(t, svc))
+	elapsed := time.Since(start)
+	processedAgain, _, secondErr := svc.processRecordChunk(context.Background(), 1000, pagedMasterChunk(t, svc))
+	for i := int32(0); i < readCalls.Load(); i++ {
+		<-readDone
+	}
+
+	require.NoError(t, err)
+	require.NoError(t, secondErr)
+	require.Equal(t, 1, processed)
+	require.Equal(t, 1, processedAgain)
+	require.EqualValues(t, 1, readCalls.Load(), "a timed-out read cannot accumulate another background read")
+	require.True(t, deleted, "the real delete batch ran")
+	require.Equal(t, time.Second, readTimeout, "the optional read uses a short policy")
+	require.Equal(t, 5*time.Minute, deleteTimeout, "the real delete retains its configured policy")
+	require.Less(t, elapsed, 2*time.Second, "the optional read did not hold deletion")
+	require.Equal(t, unread+2, laneVerdicts(t, lanereader.PruneDelete, lanereader.PruneCannotJudge, lanereader.ReasonSpenderUnread))
 }

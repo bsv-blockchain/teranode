@@ -97,6 +97,8 @@ type laneMaster struct {
 // outage logs once a minute.
 var lastPageReadWarn atomic.Int64
 
+const lanePageReadTimeout = time.Second
+
 // The lane bins' names, resolved once.
 var (
 	binLanePos      = fields.LanePosition.String()
@@ -231,7 +233,32 @@ func (l *laneShadow) readPages(masters []laneMaster, n int) {
 
 	l.judge.Reads("page", len(records))
 
-	if err := l.s.batchOperate(records); err != nil {
+	policy := aerospike.NewBatchPolicy()
+	if l.s.batchPolicy != nil {
+		*policy = *l.s.batchPolicy
+	}
+	policy.TotalTimeout = lanePageReadTimeout
+	policy.SocketTimeout = lanePageReadTimeout
+	policy.MaxRetries = 0
+
+	var err error
+	if !l.s.lanePageReadInFlight.CompareAndSwap(false, true) {
+		err = aerospike.ErrTimeout
+	} else {
+		readResult := make(chan error, 1)
+		go func() {
+			defer l.s.lanePageReadInFlight.Store(false)
+			readResult <- l.s.batchOperateWithPolicy(policy, records)
+		}()
+
+		select {
+		case err = <-readResult:
+		case <-time.After(lanePageReadTimeout):
+			err = aerospike.ErrTimeout
+		}
+	}
+
+	if err != nil {
 		for i := range masters {
 			if len(masters[i].pages) > 0 {
 				masters[i].c.Unread = true

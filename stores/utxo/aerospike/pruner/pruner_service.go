@@ -173,6 +173,8 @@ type Service struct {
 	queryPolicy *aerospike.QueryPolicy
 	writePolicy *aerospike.WritePolicy
 	batchPolicy *aerospike.BatchPolicy
+	// A timed-out optional lane page read may still be running in the Aerospike client.
+	lanePageReadInFlight atomic.Bool
 }
 
 // externalFileInfo holds information about external files to delete
@@ -1314,11 +1316,15 @@ func bytesBin(v interface{}) []byte {
 
 // batchOperate runs a batch; batchOperateFn overrides it in tests.
 func (s *Service) batchOperate(records []aerospike.BatchRecordIfc) error {
+	return s.batchOperateWithPolicy(s.batchPolicy, records)
+}
+
+func (s *Service) batchOperateWithPolicy(policy *aerospike.BatchPolicy, records []aerospike.BatchRecordIfc) error {
 	if s.batchOperateFn != nil {
-		return s.batchOperateFn(s.batchPolicy, records)
+		return s.batchOperateFn(policy, records)
 	}
 
-	return s.client.BatchOperate(s.batchPolicy, records)
+	return s.client.BatchOperate(policy, records)
 }
 
 // hadDAH reports whether a clear write found a deleteAtHeight to clear. The write reads the bin
