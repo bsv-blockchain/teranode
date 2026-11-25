@@ -4,8 +4,6 @@ import (
 	"context"
 	"crypto/rand"
 	"fmt"
-	"net"
-	"net/netip"
 	"net/url"
 	"strconv"
 	"sync"
@@ -14,70 +12,9 @@ import (
 
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/ulogger"
-	"github.com/bsv-blockchain/teranode/util/test"
-	"github.com/moby/moby/api/types/container"
-	"github.com/moby/moby/api/types/network"
+	"github.com/bsv-blockchain/teranode/util/kafka/kafkatest"
 	"github.com/stretchr/testify/require"
-	"github.com/testcontainers/testcontainers-go"
-	"github.com/testcontainers/testcontainers-go/wait"
 )
-
-const (
-	redpandaImage   = "redpandadata/redpanda"
-	redpandaVersion = "v24.3.1"
-)
-
-// startRedpanda starts a Redpanda container and returns the broker address and cleanup function.
-func startRedpanda(t *testing.T, ctx context.Context) (brokerAddr string, cleanup func()) {
-	t.Helper()
-
-	port, err := getFreePort()
-	require.NoError(t, err)
-
-	portStr := fmt.Sprintf("%d/tcp", port)
-	req := testcontainers.ContainerRequest{
-		Image:        fmt.Sprintf("%s:%s", redpandaImage, redpandaVersion),
-		ExposedPorts: []string{portStr},
-		HostConfigModifier: func(hc *container.HostConfig) {
-			hc.PortBindings = network.PortMap{
-				network.MustParsePort(portStr): []network.PortBinding{
-					{HostIP: netip.IPv4Unspecified(), HostPort: fmt.Sprintf("%d", port)},
-				},
-			}
-		},
-		Cmd: []string{
-			"redpanda", "start",
-			"--overprovisioned",
-			"--smp=1",
-			"--kafka-addr", fmt.Sprintf("PLAINTEXT://0.0.0.0:%d", port),
-			"--advertise-kafka-addr", fmt.Sprintf("PLAINTEXT://localhost:%d", port),
-		},
-		WaitingFor: wait.ForLog("Successfully started Redpanda!"),
-	}
-
-	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
-		ContainerRequest: req,
-		Started:          true,
-	})
-	test.SkipIfContainerUnavailable(t, err)
-
-	return fmt.Sprintf("localhost:%d", port), func() {
-		_ = container.Terminate(context.Background())
-	}
-}
-
-func getFreePort() (int, error) {
-	addr, err := net.ResolveTCPAddr("tcp", "localhost:0")
-	if err != nil {
-		return 0, err
-	}
-	l, err := net.ListenTCP("tcp", addr)
-	if err != nil {
-		return 0, err
-	}
-	defer l.Close()
-	return l.Addr().(*net.TCPAddr).Port, nil
-}
 
 // publishAndExpectDelivery publishes a message and waits for the consumer to receive it.
 // Returns an error description if the message was not delivered.
@@ -150,13 +87,13 @@ func publishAndExpectDelivery(t *testing.T, ctx context.Context, logger ulogger.
 // where a blocks-final Kafka message was rejected, causing block 942978 to never
 // propagate to SVNodes.
 func TestFlushBytesRegression_MessageTooLarge(t *testing.T) {
+	t.Parallel() // its own topics and consumer groups on the shared broker
+
 	logger := ulogger.TestLogger{}
+	brokerAddr := kafkatest.SharedEnv(t).BrokerAddr
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-
-	brokerAddr, cleanup := startRedpanda(t, ctx)
-	defer cleanup()
 
 	// Message sizes that mirror production payloads:
 	// - 100 B:   small INV message
@@ -168,7 +105,7 @@ func TestFlushBytesRegression_MessageTooLarge(t *testing.T) {
 
 	for _, size := range messageSizes {
 		t.Run(fmt.Sprintf("flush_bytes_64_%d_bytes", size), func(t *testing.T) {
-			topic := fmt.Sprintf("regr-flush64-%d-%d", size, time.Now().UnixNano()%10000)
+			topic := kafkatest.UniqueName(fmt.Sprintf("regr-flush64-%d", size))
 
 			// Production-equivalent config: flush_bytes=64
 			// This is the exact setting from kafka_blocksFinalConfig on mainnet
@@ -183,19 +120,19 @@ func TestFlushBytesRegression_MessageTooLarge(t *testing.T) {
 // TestFlushBytesRegression_DefaultBatchMax is the control test — same messages with
 // default flush_bytes (1MB) should always be delivered.
 func TestFlushBytesRegression_DefaultBatchMax(t *testing.T) {
+	t.Parallel() // its own topics and consumer groups on the shared broker
+
 	logger := ulogger.TestLogger{}
+	brokerAddr := kafkatest.SharedEnv(t).BrokerAddr
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-
-	brokerAddr, cleanup := startRedpanda(t, ctx)
-	defer cleanup()
 
 	messageSizes := []int{100, 1_024, 10_240, 102_400, 512_000}
 
 	for _, size := range messageSizes {
 		t.Run(fmt.Sprintf("default_%d_bytes", size), func(t *testing.T) {
-			topic := fmt.Sprintf("regr-default-%d-%d", size, time.Now().UnixNano()%10000)
+			topic := kafkatest.UniqueName(fmt.Sprintf("regr-default-%d", size))
 
 			// No flush_bytes — uses default (1MB)
 			query := "partitions=1&replication=1&retention=60000&flush_frequency=1s"
