@@ -2,6 +2,7 @@ package subtreeprocessor
 
 import (
 	"fmt"
+	"maps"
 	"math"
 	"math/rand/v2"
 	"slices"
@@ -532,12 +533,32 @@ func TestReorgScenario_FastPathDeclinesMoreThanOneBackBlock(t *testing.T) {
 	require.Equal(t, sc.pendingOrder(), txHashes(assemblyNodes(sc.stp)), "nothing changed")
 }
 
-// The union-filtered final drain (design section 5 item 6) is the one named divergence. The slow path
+// The union-filtered final drain (design section 5 item 6) was the one named divergence. The slow path
 // drains after each forward step against that step's block only, so a transaction the first block
 // mined, arriving between the two steps, is kept; the fast path drains once against both blocks and
-// drops it. The arrival is injected at the same point of each path, and only those hashes are left out of
-// the comparison.
+// drops it. The arrival is injected at the same point of each path.
+//
+// With the kept mined sets on (blockassembly_minedTxSetRetention, the default) the slow path's later
+// drain also filters what an earlier block mined, so the paths agree and nothing is left out of the
+// comparison. With retention 0 the divergence remains, and only those hashes are left out of it.
 func TestReorgDifferential_FastPathUnionFilteredFinalDrain(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		retention time.Duration
+		diverges  bool
+	}{
+		{name: "kept mined sets on", retention: 10 * time.Second},
+		{name: "retention 0", retention: 0, diverges: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			requireUnionFilteredFinalDrain(t, tc.retention, tc.diverges)
+		})
+	}
+}
+
+func requireUnionFilteredFinalDrain(t *testing.T, retention time.Duration, diverges bool) {
+	t.Helper()
+
 	cfg := smallScenarioConfig()
 
 	// A winner-only transaction of the first block, queued while the reorg runs.
@@ -626,10 +647,11 @@ func TestReorgDifferential_FastPathUnionFilteredFinalDrain(t *testing.T) {
 		},
 	}
 
-	// The slow path's own result holds a transaction the first block mined, so the order oracle would
-	// reject it: that is the difference, and only the fast path's result is checked by it.
+	// With retention 0 the slow path's own result holds a transaction the first block mined, so the
+	// order oracle would reject it: that is the difference, and only the fast path's result is checked.
 	outcome := func(path reorgPath, oracle bool) reorgOutcome {
 		sc := newReorgScenario(t, cfg)
+		sc.stp.settings.BlockAssembly.MinedTxSetRetention = retention
 		err := path(t, sc)
 		require.NoError(t, err)
 
@@ -640,7 +662,18 @@ func TestReorgDifferential_FastPathUnionFilteredFinalDrain(t *testing.T) {
 		return captureReorgOutcome(sc, err)
 	}
 
-	slow, fast := outcome(slowWithArrival, false), outcome(fastWithArrival, true)
+	slow, fast := outcome(slowWithArrival, !diverges), outcome(fastWithArrival, true)
+
+	if !diverges {
+		require.Empty(t, compareReorgOutcomes(slow, fast, nil), "the kept sets make the slow path drop what the first block mined")
+
+		for h := range hashes {
+			require.NotContains(t, slow.order, h)
+			require.NotContains(t, fast.order, h)
+		}
+
+		return
+	}
 
 	require.NotEmpty(t, compareReorgOutcomes(slow, fast, nil),
 		"without the divergence the two paths differ: the slow path keeps what the first block mined")
@@ -650,4 +683,81 @@ func TestReorgDifferential_FastPathUnionFilteredFinalDrain(t *testing.T) {
 		require.Contains(t, slow.order, h, "the slow path kept the arrival")
 		require.NotContains(t, fast.order, h, "the fast path dropped it")
 	}
+}
+
+// handOff queues one transaction through AddBatch, which checks it against the kept mined sets, and
+// reports whether it was queued.
+func handOff(sc *reorgScenario, hash chainhash.Hash) bool {
+	before := sc.stp.QueueLength()
+
+	sc.stp.AddBatch(
+		[]subtreepkg.Node{{Hash: hash, Fee: 1, SizeInBytes: 1}},
+		[]*subtreepkg.TxInpoints{{}},
+	)
+
+	return sc.stp.QueueLength() > before
+}
+
+// A late hand-off of a transaction a winning block mined stays out of the template after a fast-path
+// reorg, as it does after the slow path's forward steps (kept mined sets). The fast path keeps its one
+// union set under the tip, so moving back the tip forgets it and the hand-off is placed again.
+func TestReorgDifferential_FastPathKeepsTheWinnersMinedSet(t *testing.T) {
+	sc := newReorgScenario(t, smallScenarioConfig())
+
+	var rec fastPathRun
+
+	require.NoError(t, recordingFastPath(&rec)(t, sc))
+	require.True(t, rec.applied, "the fast path must apply, it declined: %v", rec.reasons)
+
+	// forwardBlocks is 2: the first half of the winners is F1, the second F2.
+	f1 := sc.hash(sc.winnerIDs[0])
+	f2 := sc.hash(sc.winnerIDs[len(sc.winnerIDs)-1])
+	neither := chainhash.HashH([]byte("mined-by-neither-winner"))
+
+	require.False(t, handOff(sc, f1), "a transaction F1 mined must stay out")
+	require.False(t, handOff(sc, f2), "a transaction F2 mined must stay out")
+	require.True(t, handOff(sc, neither), "a transaction no winner mined is placed")
+
+	sc.stp.forgetMinedSets([]*model.Block{sc.forward[len(sc.forward)-1]})
+
+	require.True(t, handOff(sc, f2), "after the tip is moved back its transaction is placed")
+	require.True(t, handOff(sc, f1), "the union goes with the tip, which only falls back to no kept set")
+}
+
+// A transaction the winners mine is confirmed, so the fast path forgets its drop as each slow-path
+// step does, and keeps the drop of one nobody mined.
+func TestReorgDifferential_FastPathForgetsTheDropsTheWinnersMine(t *testing.T) {
+	cfg := smallScenarioConfig()
+
+	var dropped []chainhash.Hash
+
+	seeded := func(path reorgPath, record bool) reorgPath {
+		return func(t testing.TB, sc *reorgScenario) error {
+			for _, h := range []chainhash.Hash{
+				sc.hash(sc.winnerIDs[0]),
+				sc.hash(sc.winnerIDs[len(sc.winnerIDs)-1]),
+				chainhash.HashH([]byte("dropped-and-never-mined")),
+			} {
+				sc.stp.droppedMu.Lock()
+				sc.stp.recordDroppedLocked(h)
+				sc.stp.droppedMu.Unlock()
+			}
+
+			err := path(t, sc)
+
+			if record {
+				sc.stp.droppedMu.Lock()
+				dropped = slices.Collect(maps.Keys(sc.stp.droppedTxs))
+				sc.stp.droppedMu.Unlock()
+			}
+
+			return err
+		}
+	}
+
+	var rec fastPathRun
+
+	requireReorgEquivalent(t, cfg, seeded(slowReference, false), seeded(recordingFastPath(&rec), true))
+	require.True(t, rec.applied, "the fast path must apply, it declined: %v", rec.reasons)
+	require.Equal(t, []chainhash.Hash{chainhash.HashH([]byte("dropped-and-never-mined"))}, dropped)
 }

@@ -547,6 +547,24 @@ func (stp *SubtreeProcessor) applyFastReorg(ctx context.Context, plan *fastReorg
 
 	stp.phases.done("fast_apply_coinbase")
 
+	// What the slow path's forward steps do before their drain (issue 2269): forget the drops the
+	// winners mine, put back if the move fails, and keep the mined set for late hand-offs. The fast
+	// path has one set, the winners' union, kept once under the tip: a later reorg that moves back
+	// any forward block moves back the tip too, so the union is forgotten whenever it must be. A
+	// reorg that moves back only the tip forgets the earlier blocks' protection with it, which only
+	// falls back to the behaviour without kept sets and never drops a transaction wrongly. The
+	// earlier blocks get no entry: this call also prunes the expired sets, as each step's does. The
+	// keep comes before the drain, as in a step; the drain skips the set it is given.
+	if forgotten := stp.forgetMinedDroppedTxs(plan.winners); len(forgotten) != 0 {
+		defer func() {
+			if err != nil {
+				stp.restoreForgottenDroppedTxs(forgotten)
+			}
+		}()
+	}
+
+	stp.keepMinedSet(moveForwardBlocks[len(moveForwardBlocks)-1], plan.winners)
+
 	// One drain against both blocks. The slow path drains after each step against that step's block.
 	stp.phases.count("fast_drain_queue", int(stp.QueueLength()))
 
