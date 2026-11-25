@@ -119,6 +119,7 @@ func runNoDivergenceCatchup(t *testing.T, c noDivergenceCase) noDivergenceRun {
 
 	utxoStore, err := utxosql.New(ctx, logger, tSettings, utxoStoreURL)
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = utxoStore.Close(context.Background()) })
 
 	utxoHeight := c.utxoHeight
 	if utxoHeight == 0 {

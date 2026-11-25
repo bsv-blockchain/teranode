@@ -321,6 +321,7 @@ func runAncestorLinkCatchup(t *testing.T, shape offerShape) ancestorLinkRun {
 
 	utxoStore, err := utxosql.New(ctx, logger, tSettings, utxoStoreURL)
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = utxoStore.Close(context.Background()) })
 
 	if sideBranchOnly {
 		// Without this the UTXO store reports height 0 and the header fetch caps the locator at

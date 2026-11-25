@@ -10,8 +10,9 @@ import (
 )
 
 // The lane metadata encoding is the versioned form of MetaBytes that carries lane positions. On the
-// txmeta topic the action byte says which encoding an entry holds, and the txmeta cache keeps the
-// embedded MetaBytes only. MetaBytes stays byte for byte what it was:
+// txmeta topic the action byte says which encoding an entry holds. The txmeta cache keeps the
+// embedded MetaBytes, followed at shadow by the own position (CacheBytesInto); the parents'
+// positions stay out of it. MetaBytes stays byte for byte what it was:
 //
 //	[0]      LaneMetaMagic
 //	[1]      LaneMetaVersion
@@ -33,7 +34,8 @@ const (
 	// say) starts with the same two bytes as LaneMetaMagic and LaneMetaVersion. So whatever carries
 	// the lane encoding must say so outside it, never leaving a reader to guess from the bytes. On
 	// the txmeta topic each entry's action byte says it (txmetacache.WireActionADDLane); the txmeta
-	// cache keeps MetaBytes only.
+	// cache keeps MetaBytes, followed at shadow by the own position (CacheBytesInto), whose place is
+	// found by walking the inpoints, never by these bytes.
 	LaneMetaMagic = byte(0xA7)
 
 	// LaneMetaVersion is the only version of the lane metadata encoding.
@@ -204,4 +206,101 @@ func LaneMetaBytesView(b []byte) ([]byte, error) {
 	}
 
 	return b[2+lane.PositionSize : off : off], nil
+}
+
+// The txmeta cache form. The cache keeps MetaBytes, and at utxostore_laneMigration shadow the
+// record's own lane position after it:
+//
+//	MetaBytes
+//	then     the own lane position, uint64 LE, only when it is a valid position
+//
+// MetaBytes ends exactly where its TxInpoints end, so the 8 bytes after them are the position and
+// nothing else can be: a decoder that walks the inpoints, as every cache decoder does, reads the
+// position from what is left, and one that ignores trailing bytes, as NewMetaDataFromBytes does,
+// reads the entry as before. A value with no valid position is plain MetaBytes. The parents'
+// positions stay out of the cache. Subtree validation reads the cached own position when it builds
+// a subtree's lane bitmaps; the block gate later reads those bitmap files, not the cache.
+
+// CacheBytesInto is MetaBytesInto followed by d.LanePosition when that is a valid position: the
+// txmeta cache form.
+func (d *Data) CacheBytesInto(dst []byte) ([]byte, error) {
+	b, err := d.MetaBytesInto(dst)
+	if err != nil || !lane.Valid(d.LanePosition) {
+		return b, err
+	}
+
+	return lane.AppendPosition(b, d.LanePosition), nil
+}
+
+// CacheBytes is CacheBytesInto with a fresh buffer.
+func (d *Data) CacheBytes() ([]byte, error) {
+	return d.CacheBytesInto(nil)
+}
+
+// CachedLanePosition returns the own lane position a txmeta cache value carries after its
+// MetaBytes, given rest, the bytes after its TxInpoints, or 0 when it carries none.
+func CachedLanePosition(rest []byte) uint64 {
+	if len(rest) != lane.PositionSize {
+		return 0
+	}
+
+	return binary.LittleEndian.Uint64(rest)
+}
+
+// metaBytesHeader is MetaBytes' fee (8), size (8) and flags (1), before its TxInpoints.
+const metaBytesHeader = 17
+
+// OwnCacheBytesView checks b, a txmeta cache form that carries an own lane position, and returns
+// its MetaBytes, as a sub-slice of b with nothing copied, and the position. It refuses b unless
+// its TxInpoints end exactly one position before its end and that position is valid: the content
+// of a WireActionADDOwn entry, which CacheBytesInto writes for a record with a position.
+func OwnCacheBytesView(b []byte) ([]byte, uint64, error) {
+	if len(b) < metaBytesHeader+4+lane.PositionSize {
+		return nil, 0, errors.NewProcessingError("own cache form is %d bytes, too short", len(b))
+	}
+
+	// The flags byte ends MetaBytes' header; CacheBytesInto writes only the five known bits, as
+	// LaneMetaBytesView requires of the lane encoding.
+	if flags := b[metaBytesHeader-1]; flags&^0b11111 != 0 {
+		return nil, 0, errors.NewProcessingError("own cache form has unknown flag bits %#x", flags)
+	}
+
+	size := uint64(len(b))
+	parents := uint64(binary.LittleEndian.Uint32(b[metaBytesHeader:]))
+	off := uint64(metaBytesHeader) + 4 + parents*32
+
+	for i := uint64(0); i < parents; i++ {
+		if off+4 > size {
+			return nil, 0, errors.NewProcessingError("own cache form inpoints truncated at parent %d", i)
+		}
+
+		off += 4 + 4*uint64(binary.LittleEndian.Uint32(b[off:]))
+	}
+
+	if off > size || size-off != lane.PositionSize {
+		return nil, 0, errors.NewProcessingError("own cache form has %d bytes after its inpoints, not one lane position", int64(size)-int64(off))
+	}
+
+	own := binary.LittleEndian.Uint64(b[off:])
+	if err := lane.CheckPosition(own); err != nil {
+		return nil, 0, errors.NewProcessingError("own cache form position", err)
+	}
+
+	return b[:off:off], own, nil
+}
+
+// AppendCacheFromLaneMetaBytes appends the txmeta cache form of a lane metadata encoding, its
+// MetaBytes and own position, to dst, checking the encoding, own position included, as
+// LaneMetaBytesView does.
+func AppendCacheFromLaneMetaBytes(dst, b []byte) ([]byte, error) {
+	legacy, err := LaneMetaBytesView(b)
+	if err != nil {
+		return dst, err
+	}
+
+	own := binary.LittleEndian.Uint64(b[2:])
+
+	dst = append(dst, legacy...)
+
+	return lane.AppendPosition(dst, own), nil
 }

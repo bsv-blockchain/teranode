@@ -42,7 +42,7 @@ func (b *lockFreeBackend) Set(hash *chainhash.Hash, data *meta.Data) error {
 	bufPtr := metaBytesBufPool.Get().(*[]byte)
 	defer putMetaBytesBuf(bufPtr)
 
-	bts, err := data.MetaBytesInto((*bufPtr)[:0])
+	bts, err := data.CacheBytesInto((*bufPtr)[:0])
 	if err != nil {
 		return err
 	}

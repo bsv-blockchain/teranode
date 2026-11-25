@@ -367,15 +367,19 @@ func FileOptionsToQuery(fileType fileformat.FileType, opts ...FileOption) url.Va
 //
 // Overwrite is deliberately NOT reconstructed here: this runs for every method, before the
 // caller is known. HTTPBlobServer.handleSet reads AllowOverwriteQueryParam itself and honours
-// it only for a caller that passed the bearer-token check. The "filename" key is still
-// honoured; sanitising it is tracked separately in #4847.
+// it only for a caller that passed the bearer-token check. The "filename" key is honoured
+// only after ValidateFilename accepts it.
 //
 // Parameters:
 //   - query: URL query parameters to convert
 //
 // Returns:
 //   - []FileOption: File options reconstructed from the query parameters
-func QueryToFileOptions(query url.Values) []FileOption {
+//   - error: An invalid-argument error if the query carries a filename that is not a
+//     single portable basename (see ValidateFilename). The query comes from an
+//     unauthenticated HTTP client, so the filename is validated here, before any backend
+//     sees it, rather than trusting each backend to do so.
+func QueryToFileOptions(query url.Values) ([]FileOption, error) {
 	var opts []FileOption
 
 	if blockHeightRetentionStr := query.Get("blockHeightRetention"); blockHeightRetentionStr != "" {
@@ -385,10 +389,60 @@ func QueryToFileOptions(query url.Values) []FileOption {
 	}
 
 	if filename := query.Get("filename"); filename != "" {
+		if err := ValidateFilename(filename); err != nil {
+			return nil, err
+		}
+
 		opts = append(opts, WithFilename(filename))
 	}
 
-	return opts
+	return opts, nil
+}
+
+// MaxFilenameLength bounds the length of a caller-supplied blob filename. 255 bytes is the
+// per-component limit on every mainstream filesystem and comfortably above any name Teranode
+// generates (a hex-encoded hash plus extension is under 80 bytes).
+const MaxFilenameLength = 255
+
+// ValidateFilename checks that name is a single portable basename that can be used verbatim
+// as a path component (file backend) or object-key component (S3 backend) without escaping
+// the store's configured base directory or key prefix.
+//
+// The name is rejected when it is empty, longer than MaxFilenameLength, equal to "." or "..",
+// or contains any of: a slash, a backslash, a NUL byte, a colon (Windows volume prefix such
+// as "C:"), or a percent-encoded slash, backslash or dot (a double-encoded separator that a
+// downstream decoder could turn back into a real one). The check is deliberately a fixed
+// deny-list on the raw string: it does not clean or normalise the input, so there is no
+// ambiguity between what was validated and what is used.
+//
+// The guarantee covers the name used whole. An accepted name may still start or end with "..",
+// so a caller that cuts further path components out of it must check those itself, as
+// ConstructFilename does for its hash-prefix folder.
+func ValidateFilename(name string) error {
+	if name == "" {
+		return errors.NewInvalidArgumentError("filename must not be empty")
+	}
+
+	if len(name) > MaxFilenameLength {
+		return errors.NewInvalidArgumentError("filename exceeds %d bytes", MaxFilenameLength)
+	}
+
+	if name == "." || name == ".." {
+		return errors.NewInvalidArgumentError("filename must not be a relative directory reference")
+	}
+
+	if strings.ContainsAny(name, "/\\\x00:") {
+		return errors.NewInvalidArgumentError("filename contains invalid path characters")
+	}
+
+	lower := strings.ToLower(name)
+	for _, enc := range []string{"%2f", "%5c", "%2e", "%00"} {
+		if strings.Contains(lower, enc) {
+			return errors.NewInvalidArgumentError("filename contains percent-encoded path characters")
+		}
+	}
+
+	return nil
 }
 
 // validatePathWithinBase ensures the resolved path stays within basePath to prevent
@@ -438,12 +492,12 @@ func (o *Options) ConstructFilename(basePath string, key []byte, fileType filefo
 		return "", errors.NewInvalidArgumentError("subdirectory contains path traversal sequence")
 	}
 
-	// Validate Filename doesn't contain path traversal or separator characters
-	if strings.Contains(o.Filename, "..") || strings.ContainsAny(o.Filename, `/\`) {
-		return "", errors.NewInvalidArgumentError("filename contains invalid path characters")
-	}
-
 	if len(o.Filename) > 0 {
+		// Same rule as the S3 backend and the HTTP query parser: a single portable basename.
+		if err := ValidateFilename(o.Filename); err != nil {
+			return "", err
+		}
+
 		filename = o.Filename
 	} else {
 		filename = util.ReverseAndHexEncodeSlice(key)
@@ -452,6 +506,13 @@ func (o *Options) ConstructFilename(basePath string, key []byte, fileType filefo
 	// For negative HashPrefix, take characters from the end
 	// For positive HashPrefix, take characters from the beginning
 	prefix = o.CalculatePrefix(filename)
+
+	// A caller-supplied filename that starts or ends with ".." passes ValidateFilename, but with
+	// a HashPrefix of 2 or -2 it yields the prefix "..", and filepath.Join would resolve that
+	// folder one level above SubDirectory.
+	if prefix == ".." {
+		return "", errors.NewInvalidArgumentError("filename yields a parent-directory hash prefix")
+	}
 
 	// Build the folder to use based on the StoreOption SubDirectory and the calculated prefix
 	folder := filepath.Join(basePath, o.SubDirectory, prefix)

@@ -248,6 +248,7 @@ func newListHarness(t *testing.T, dbName string, outpointOnly bool) (*BlockValid
 
 	realStore, err := sql.New(ctx, logger, tSettings, storeURL)
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = realStore.Close(context.Background()) })
 
 	recorder := &applyRecorder{Store: realStore}
 
