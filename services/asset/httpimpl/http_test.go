@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -491,6 +492,64 @@ func TestNew_TrustedProxyCIDRsFailsClosed(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, srv)
 	})
+}
+
+// TestNew_TrustedProxyCIDRsCoverScheme pins that asset_trustedProxyCIDRs decides
+// whose X-Forwarded-Proto counts, not only whose X-Forwarded-For. Since echo
+// v4.16.0 Context.Scheme uses Echo#SchemeExtractor, which is separate from
+// Echo#IPExtractor; without it a TLS-terminating proxy on a public address gets
+// a ws:// dashboard WebSocket URL, which the browser blocks on an HTTPS page.
+// The trusted peer is public on purpose: echo's default checker already trusts
+// private and loopback peers, so only a public one tells the two apart.
+func TestNew_TrustedProxyCIDRsCoverScheme(t *testing.T) {
+	tSettings := &settings.Settings{
+		Asset: settings.AssetSettings{
+			APIPrefix:         "/api/v1",
+			TrustedProxyCIDRs: "203.0.113.0/24",
+		},
+		Dashboard: settings.DashboardSettings{
+			Enabled:       true,
+			WebSocketPath: "/connection/websocket",
+		},
+		SecurityLevelHTTP: 0,
+	}
+
+	srv, err := New(ulogger.TestLogger{}, tSettings, &repository.Repository{}, nil)
+	require.NoError(t, err)
+
+	tests := []struct {
+		name       string
+		remoteAddr string
+		wantPrefix string
+	}{
+		{name: "listed public proxy", remoteAddr: "203.0.113.5:443", wantPrefix: "wss://"},
+		{name: "unlisted public peer", remoteAddr: "198.51.100.7:443", wantPrefix: "ws://"},
+		// A configured list drops echo's blanket private-network trust, for the
+		// scheme as for the client IP.
+		{name: "unlisted private peer", remoteAddr: "10.0.0.7:443", wantPrefix: "ws://"},
+		{name: "loopback peer", remoteAddr: "127.0.0.1:443", wantPrefix: "wss://"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "/api/config/websocket", nil)
+			req.Host = "node.example.com"
+			req.RemoteAddr = tt.remoteAddr
+			req.TLS = nil
+			req.Header.Set("X-Forwarded-Proto", "https")
+
+			rec := httptest.NewRecorder()
+			srv.e.ServeHTTP(rec, req)
+
+			require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+
+			var body struct {
+				WebsocketURL string `json:"websocketUrl"`
+			}
+			require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+			require.Equal(t, tt.wantPrefix+"node.example.com/connection/websocket", body.WebsocketURL)
+		})
+	}
 }
 
 // captureLogger records Errorf calls so tests can assert on what was logged.

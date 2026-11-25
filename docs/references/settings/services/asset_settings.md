@@ -51,7 +51,7 @@
 | HTTPPeerRateMultiplier | int | 5 | asset_httpPeerRateMultiplier | Authenticated peers get base × this rate |
 | HTTPMinerRateLimit | int | 0 | asset_httpMinerRateLimit | Per-peer req/s cap for miner tier; 0 = fully exempt |
 | HTTPBodyLimit | string | "100MB" | asset_httpBodyLimit | Max request body size (Echo BodyLimit, returns 413) |
-| TrustedProxyCIDRs | string | "" | asset_trustedProxyCIDRs | Pipe-separated CIDRs trusted for X-Forwarded-For extraction (fails Init if non-empty but unparseable) |
+| TrustedProxyCIDRs | string | "" | asset_trustedProxyCIDRs | Pipe-separated CIDRs trusted for X-Forwarded-For and X-Forwarded-Proto extraction (fails Init if non-empty but unparseable) |
 | PeerAuthAllowlist | string | "" | asset_peerAuthAllowlist | Pipe-separated libp2p peer IDs eligible for tier elevation; empty = no peer is elevated |
 | PeerMinerReputationThreshold | float64 | 50.0 | asset_peerMinerReputationThreshold | Min reputation score for tierMiner classification |
 
