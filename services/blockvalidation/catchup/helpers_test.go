@@ -493,13 +493,22 @@ func TestFetchHeadersWithRetry(t *testing.T) {
 	require.Error(t, err)
 
 	t.Run("initial backoff is capped", func(t *testing.T) {
-		ctx, cancel := context.WithCancel(context.Background())
-		defer cancel()
+		for _, tc := range []struct {
+			backoff     time.Duration
+			waitSeconds float64
+		}{
+			{backoff: 45 * time.Second, waitSeconds: 30},
+			{backoff: 0, waitSeconds: 1},
+			{backoff: -time.Second, waitSeconds: 1},
+		} {
+			ctx, cancel := context.WithCancel(context.Background())
+			logger := &firstRetryWaitLogger{cancel: cancel}
+			_, err := FetchHeadersWithRetry(ctx, logger, "://invalid", 1, tc.backoff, maxBytes)
+			cancel()
 
-		logger := &firstRetryWaitLogger{cancel: cancel}
-		_, err := FetchHeadersWithRetry(ctx, logger, "://invalid", 1, 45*time.Second, maxBytes)
-		require.ErrorIs(t, err, context.Canceled)
-		require.Equal(t, 30.0, logger.waitSeconds)
+			require.ErrorIs(t, err, context.Canceled, "backoff %v", tc.backoff)
+			require.Equal(t, tc.waitSeconds, logger.waitSeconds, "backoff %v", tc.backoff)
+		}
 	})
 }
 
