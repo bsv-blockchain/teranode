@@ -1,0 +1,13 @@
+diff --git a/services/blockassembly/subtreeprocessor/prepare_fork_block.go b/services/blockassembly/subtreeprocessor/prepare_fork_block.go
+index b541d1a47..436955410 100644
+--- a/services/blockassembly/subtreeprocessor/prepare_fork_block.go
++++ b/services/blockassembly/subtreeprocessor/prepare_fork_block.go
+@@ -243,7 +243,7 @@ func (stp *SubtreeProcessor) dropStaleForkLocked(tip chainhash.Hash) {
+ 			continue
+ 		}
+ 
+-		e.cancel()
++		_ = e // mutant: a set prepared for a moved tip keeps building
+ 	}
+ 
+ 	clear(stp.preparedFork[len(kept):])

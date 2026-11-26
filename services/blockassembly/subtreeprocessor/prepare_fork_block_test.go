@@ -497,3 +497,59 @@ func TestPrepareForkBlock_BuildReadsOnTheBoundedWorkers(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, int32(2), counting.peak.Load(), "control: the unbounded build reads both at once")
 }
+
+// countCancels wraps the cancel of a prepared set and counts its calls: a set that is let go has its
+// build cancelled, or it goes on reading subtrees and holding a set nobody will take.
+func countCancels(stp *SubtreeProcessor, e *forkPrepared) *atomic.Int32 {
+	var n atomic.Int32
+
+	stp.preparedMu.Lock()
+	defer stp.preparedMu.Unlock()
+
+	orig := e.cancel
+	e.cancel = func() {
+		n.Add(1)
+		orig()
+	}
+
+	return &n
+}
+
+// A set that is let go has its build cancelled, whichever way it goes: replaced by another competitor,
+// prepared against a tip that moved, or in the slot when a reorg asks for other blocks.
+func TestPrepareForkBlock_LetGoSetsHaveTheirBuildCancelled(t *testing.T) {
+	t.Run("replaced by another competitor", func(t *testing.T) {
+		f := newForkFixture(t)
+
+		f.stp.PrepareBlock(f.block)
+		prepared := waitForkDone(t, f.stp, 1)[0]
+		cancels := countCancels(f.stp, prepared)
+
+		f.stp.PrepareBlock(f.child(t, model.GenesisBlockHeader.Hash()))
+		require.Equal(t, int32(1), cancels.Load())
+	})
+
+	t.Run("prepared against a tip that moved", func(t *testing.T) {
+		f := newForkFixture(t)
+
+		f.stp.PrepareBlock(f.block)
+		prepared := waitForkDone(t, f.stp, 1)[0]
+		cancels := countCancels(f.stp, prepared)
+
+		f.stp.currentBlockHeader.Store(f.block.Header)
+		f.stp.PrepareBlock(f.child(t, model.GenesisBlockHeader.Hash())) // a competitor of the new tip
+		require.Equal(t, int32(1), cancels.Load())
+	})
+
+	t.Run("not the blocks a reorg asks for", func(t *testing.T) {
+		f := newForkFixture(t)
+
+		f.stp.PrepareBlock(f.block)
+		prepared := waitForkDone(t, f.stp, 1)[0]
+		cancels := countCancels(f.stp, prepared)
+
+		_, _, ok := f.stp.takePreparedForkSet([]*model.Block{f.child(t, model.GenesisBlockHeader.Hash())})
+		require.False(t, ok)
+		require.Equal(t, int32(1), cancels.Load())
+	})
+}
