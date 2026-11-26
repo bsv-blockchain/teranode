@@ -1,0 +1,60 @@
+name: AWS runner canary
+
+# Trial only: smoke-tests the self-hosted AWS spot runners (bsva-infra#41).
+# Runs on push to this branch only; never merged to main.
+on:
+  push:
+    branches:
+      - ci/aws-runner-canary
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    name: smoke (${{ matrix.label }})
+    strategy:
+      fail-fast: false
+      matrix:
+        label:
+          - bsva-aws-arm64-8
+          - bsva-aws-arm64-16
+          - bsva-aws-x64-8
+          - bsva-aws-x64-16
+    runs-on: ${{ matrix.label }}
+    timeout-minutes: 20
+    steps:
+      - name: Machine
+        run: |
+          set -x
+          uname -m
+          nproc
+          free -g
+          df -h /
+          TOKEN=$(curl -sX PUT http://169.254.169.254/latest/api/token -H 'X-aws-ec2-metadata-token-ttl-seconds: 60')
+          for k in instance-type instance-life-cycle placement/availability-zone; do
+            echo "$k: $(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/$k)"
+          done
+
+      - name: Docker, Buildx, Compose
+        run: |
+          set -x
+          docker version
+          docker buildx version
+          docker compose version
+          docker run --rm hello-world
+
+      - name: Privileged container and sudo
+        run: |
+          set -x
+          sudo -n true
+          docker run --rm --privileged alpine:3 sh -c 'ip link add dummy0 type dummy && echo privileged-ok'
+
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5
+        with:
+          go-version-file: go.mod
+
+      - name: Go build (timing only)
+        run: time go build ./...
