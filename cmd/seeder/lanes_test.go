@@ -401,11 +401,12 @@ func seedStampsPositionsAndRows(t *testing.T, heights []uint32) {
 	require.NoError(t, err)
 	require.Len(t, grants, 1, "the re-run took no new grant")
 
-	// A grant taken for another snapshot leaves this seed's grant recorded.
+	// Another snapshot cannot seed into this database, whose blocks already hold this seed's rows,
+	// and asking leaves this seed's grant recorded.
 	other, err := blockchain_store.NewStore(ulogger.TestLogger{}, f.settings.BlockChain.StoreURL, f.settings)
 	require.NoError(t, err)
 	_, err = takeSeederGrant(ctx, ulogger.TestLogger{}, other, f.settings, chainhash.HashH([]byte("another snapshot")), 3)
-	require.NoError(t, err)
+	require.ErrorContains(t, err, "has handed out lane positions before")
 
 	// A tip that shares the state key's hash prefix is another seed, not this one.
 	colliding := f.tip
@@ -414,15 +415,20 @@ func seedStampsPositionsAndRows(t *testing.T, heights []uint32) {
 	require.NoError(t, err)
 	require.False(t, ok)
 
-	// A plain re-run after an import that cleared the rows' state, as a forced run does before it
-	// imports, writes the rows again and leaves the checkpoint.
-	require.NoError(t, setSeededRowsWritten(ctx, other, f.tip, false))
+	// A forced import that stops before its rows clears the rows-done record, and a plain re-run
+	// then writes the rows and the checkpoint again.
+	_, err = processUTXOs(ctx, ulogger.TestLogger{}, f.settings, other, f.utxoFile(), "", true, false)
+	require.NoError(t, err)
+
+	written, err := seededRowsWritten(ctx, other, f.tip)
+	require.NoError(t, err)
+	require.False(t, written)
 	require.NoError(t, other.Close(ctx))
 	require.Equal(t, grant, f.recordedGrant())
 
 	require.NoError(t, f.seed(false))
 
-	written, err := seededRowsWritten(ctx, f.blockchainStore(), f.tip)
+	written, err = seededRowsWritten(ctx, f.blockchainStore(), f.tip)
 	require.NoError(t, err)
 	require.True(t, written)
 	f.requireStamped(grant)

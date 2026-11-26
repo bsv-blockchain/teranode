@@ -82,9 +82,6 @@ type utxoSetTip struct {
 	// lanes is set at utxostore_laneMigration shadow: the positions the seed gave its records,
 	// whose rows the seeder writes once the header pass has stored the blocks.
 	lanes *seededLanes
-	// rowsOnly is set for a completed seed whose rows are not all written: the seeder writes
-	// them and leaves the checkpoint it found.
-	rowsOnly bool
 }
 
 // usage prints the usage message and exits the program with an error code.
@@ -321,10 +318,6 @@ func Seeder(logger ulogger.Logger, appSettings *settings.Settings, inputDir stri
 			if err := writeSeededRows(ctx, logger, blockchainStore, utxoTip.lanes, utxoTip); err != nil {
 				return errors.NewProcessingError("seeder failed to write the seeded lane rows", err)
 			}
-		}
-
-		if utxoTip.rowsOnly {
-			return nil
 		}
 
 		if err := writeBlockAssemblerState(ctx, logger, blockchainStore, utxoTip); err != nil {

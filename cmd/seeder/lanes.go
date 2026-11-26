@@ -53,8 +53,9 @@ func seederStateKey(prefix string, tip chainhash.Hash) string {
 	return prefix + hex.EncodeToString(tip[:seederKeyHashBytes])
 }
 
-// seederDBTimeout bounds each blockchain store call the seed's lanes make, so a lock another
-// transaction holds fails the seed instead of stalling it.
+// seederDBTimeout bounds the database work of each blockchain store call the seed's lanes make, so
+// a lock another transaction holds fails the seed instead of stalling it. On SQLite a call first
+// takes an in-process mutex, which the bound does not cover.
 const seederDBTimeout = 2 * time.Minute
 
 // withDBTimeout runs fn with a context bounded by seederDBTimeout.
@@ -301,7 +302,7 @@ func checkRecordedPositions(ctx context.Context, logger ulogger.Logger, tSetting
 // file's first records at that grant's positions. A grant alone proves nothing, because a seed
 // refused after taking one leaves it recorded. When the seed's rows are not all written, as after a
 // forced re-run that stopped before them over an earlier checkpoint, it returns the tip with the
-// lanes to write them, and the caller writes no checkpoint. Otherwise it returns nil.
+// lanes, and the caller writes the rows and then this tip's checkpoint. Otherwise it returns nil.
 func checkSeededAtShadow(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, store blockchain.Store, utxoFile string) (*utxoSetTip, error) {
 	tip, err := readUTXOSetTip(utxoFile)
 	if err != nil {
@@ -321,9 +322,7 @@ func checkSeededAtShadow(ctx context.Context, logger ulogger.Logger, tSettings *
 		return nil, err
 	}
 
-	logger.Warnf("[seeder lanes] the seed of %s is imported but its rows are not all written; writing them", tip.hash.String())
-
-	tip.rowsOnly = true
+	logger.Warnf("[seeder lanes] the seed of %s is imported but its rows are not all written; writing them and its checkpoint", tip.hash.String())
 
 	return tip, nil
 }
@@ -359,6 +358,25 @@ func takeSeederGrant(ctx context.Context, logger ulogger.Logger, store blockchai
 
 	if ok {
 		logger.Warnf("[seeder lanes] the blockchain store records a grant for %d records of the seed of %s; this file holds %d and takes a new one", recorded.records, tip.String(), records)
+	}
+
+	// Rows are insert-only, so a block that already has rows, from another seed or from live
+	// blocks, could never take this seed's. A database that ever handed out a position may hold
+	// such rows, so a new grant needs one that never did.
+	var earlier []lane.CapGrant
+
+	if err = withDBTimeout(ctx, func(ctx context.Context) error {
+		var readErr error
+
+		earlier, readErr = store.LaneCapGrants(ctx, 0)
+
+		return readErr
+	}); err != nil {
+		return lane.Grant{}, errors.NewStorageError("could not read the lane grants already handed out", err)
+	}
+
+	if len(earlier) > 0 {
+		return lane.Grant{}, errors.NewProcessingError("the blockchain store has handed out lane positions before (lane %d from position %d), so its blocks may already hold lane rows this seed cannot replace: seed at shadow into a blockchain database and UTXO store that are both empty", earlier[0].Lane, earlier[0].First)
 	}
 
 	var (
