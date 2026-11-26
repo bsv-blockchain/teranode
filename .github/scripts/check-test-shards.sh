@@ -24,7 +24,7 @@ matrix() {
 }
 
 # The value of make variable $1 in run line $2, quoted or not, one word per line.
-var() { sed -nE "s/.*$1=(\"[^\"]*\"|[^ ]*).*/\1/p" <<<"$2" | tr -d '"' | tr ' ' '\n' | sed '/^$/d'; }
+var() { sed -nE "s/.*(^|[[:space:]])$1=(\"[^\"]*\"|[^ ]*).*/\2/p" <<<"$2" | tr -d '"' | tr ' ' '\n' | sed '/^$/d'; }
 
 for wf in "${workflows[@]}"; do
   shards="" excluded="" pkgs="" coverage="" units=0

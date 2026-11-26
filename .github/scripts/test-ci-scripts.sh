@@ -42,6 +42,7 @@ shard_case "profile is not coverage-<shard>.out" 1 's#profile: coverage-slow.out
 shard_case "TEST_COVERPROFILE is not coverage-<shard>.out" 1 's#TEST_COVERPROFILE=coverage-slow.out#TEST_COVERPROFILE=coverage-s.out#' "$pr" "$main"
 shard_case "package that does not exist" 1 's#services/legacy/netsync#services/legacy/netsyncx#g' "$pr" "$main"
 shard_case "no make test-build-pkgs step" 1 '/run: make test-build-pkgs /d' "$main"
+shard_case "TEST_EXCLUDE set under a longer name" 1 's#run: make test TEST_EXCLUDE=#run: make test NOT_TEST_EXCLUDE=#' "$pr" "$main"
 # The next three also move stores/utxo/aerospike back into the unit shard, so the
 # lists still agree and only the targeted check can fail.
 unaero='s#TEST_EXCLUDE="stores/utxo/aerospike #TEST_EXCLUDE="#; /make test-build-pkgs /s#stores/utxo/aerospike ##'
