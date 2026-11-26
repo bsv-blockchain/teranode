@@ -9,12 +9,15 @@ import (
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
+	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 )
 
 // defaultCreatingSweepMaxPerPass is the per-pass cap used when
 // Pruner.CreatingTxSweepMaxPerPass is zero. The cap bounds both the store-side scan and
 // the serial roll-forward loop so neither grows with the unmined backlog after a crash
-// burst; any remainder is swept on the next block.
+// burst. A backlog above the cap is not swept in order: each pass takes one page of it, and the
+// store hands back a different page each time (see the note on convergence at sweepCreatingTxs),
+// so a record beyond the cap is reached on a later pass, not necessarily the next one.
 const defaultCreatingSweepMaxPerPass = 1000
 
 type handOffStage uint8
@@ -42,8 +45,8 @@ type handOff struct {
 // re-spending inputs an earlier attempt already spent is safe. The roll-forward does not
 // ignore locks: a locked parent is the hand-off barrier, so ErrTxLocked leaves the record
 // creating and it is retried on every pass. Only when pruner_creatingTxSweepBlockedAgeBlocks is set
-// is such a record rolled back, and then only when it is older than that age and every parent that
-// blocked it has been blocked that long too (blockedByParentsForLong). A tx that lost a double-spend (ErrSpent,
+// is such a record rolled back, and then only when it is older than that age and the sweep has seen
+// every parent that blocked it locked for that long too (blockedByParentsForLong). A tx that lost a double-spend (ErrSpent,
 // ErrTxConflicting, ErrFrozen, ErrUtxoHashMismatch), or that spends a missing parent or a vout
 // that does not exist (ErrTxNotFound), is rolled back by
 // utxo.RollBackCreating: the record is marked rolling back, every input of the tx is
@@ -63,6 +66,24 @@ type handOff struct {
 // and unlocks the record as before. With no block assembly client configured the record stays
 // finalized and locked for that reload and is not listed. Runs whatever the value of utxostore_useCreateFirstOrder, so records stranded before the
 // flag was turned off still heal.
+//
+// A record that belongs to a block is only ever completed. That is a record that carries block IDs,
+// or the markOwed stamp that the pre-flight of a longest-chain mark puts on a creating record it
+// finds (meta.Data.MarkOwed). Its transaction is in a block, so the sweep never rolls it back,
+// whatever its re-spend answers: a rollback unspends by txid, and would free outputs that a mined
+// transaction spent. It is not announced to block assembly either, which would offer a mined
+// transaction for the next template. Its roll-forward ignores locks, as the pre-flight's does.
+//
+// Convergence above the cap. The query has no cursor: every pass asks for one page of at most
+// pruner_creatingTxSweepMaxPerPass records from the whole range. A record whose parent is still
+// creating is left for a later pass, and it heals in a pass that takes it after its parent has
+// healed, so a backlog of dependent records drains only as fast as the pages happen to cover
+// parents before their children. What keeps it from stalling is that the store does not return the
+// same page twice: on a single-node Aerospike, 12 passes of 1000 over 4000 creating records shared
+// about a quarter of their hashes with the first page, which is what a random page would share,
+// and reached 3873 of the 4000. That is a property of how the server streams a partition query,
+// not a contract, and a chain of dependent records in a backlog many times the cap can take many
+// blocks to drain. The only signal is the warning below when a non-empty page makes no progress.
 func (s *Server) sweepCreatingTxs(ctx context.Context, blockHeight uint32) {
 	minAge := s.settings.Pruner.CreatingTxSweepMinAgeBlocks
 	if minAge == 0 || blockHeight <= minAge {
@@ -75,6 +96,8 @@ func (s *Server) sweepCreatingTxs(ctx context.Context, blockHeight uint32) {
 	}
 
 	pass := &handOffPass{sleepLeft: handOffSleepBudgetDelays * s.handOffBackoff()}
+
+	defer s.forgetBlockedParents(blockHeight)
 
 	s.drainHandOffs(ctx, blockHeight, pass)
 
@@ -91,7 +114,7 @@ func (s *Server) sweepCreatingTxs(ctx context.Context, blockHeight uint32) {
 	}
 
 	if len(hashes) == maxPerPass {
-		s.logger.Infof("[pruner][creating-sweep][%d] hit per-pass cap of %d; remaining stale creating txs will be swept next block", blockHeight, maxPerPass)
+		s.logger.Infof("[pruner][creating-sweep][%d] hit per-pass cap of %d; the stale creating txs beyond it are taken by later passes, in no fixed order", blockHeight, maxPerPass)
 	}
 
 	s.logger.Infof("[pruner][creating-sweep][%d] healing %d stale creating txs", blockHeight, len(hashes))
@@ -102,7 +125,7 @@ func (s *Server) sweepCreatingTxs(ctx context.Context, blockHeight uint32) {
 	progressed := 0
 	warnedNoBlockAssembly := false
 
-	// parentBlocked caches, for this pass, whether a parent has been locked or creating for at least
+	// parentBlocked caches, for this pass, whether the sweep has seen a parent locked for at least
 	// pruner_creatingTxSweepBlockedAgeBlocks. Many records can wait on one parent.
 	parentBlocked := make(map[chainhash.Hash]bool)
 
@@ -158,7 +181,7 @@ func (s *Server) sweepCreatingTxs(ctx context.Context, blockHeight uint32) {
 			continue
 		}
 
-		md, err = s.utxoStore.Get(ctx, &hash, fields.Tx, fields.Creating, fields.RollingBack, fields.Attempt, fields.Reversed, fields.Fee, fields.SizeInBytes, fields.TxInpoints, fields.UnminedSince, fields.LanePosition)
+		md, err = s.utxoStore.Get(ctx, &hash, fields.Tx, fields.Creating, fields.RollingBack, fields.Attempt, fields.Reversed, fields.MarkOwed, fields.BlockIDs, fields.Fee, fields.SizeInBytes, fields.TxInpoints, fields.UnminedSince, fields.LanePosition)
 		if err != nil {
 			s.logger.Warnf("[pruner][creating-sweep][%d] get of the transaction of %s failed: %v", blockHeight, hash, err)
 			continue
@@ -208,6 +231,14 @@ func (s *Server) sweepCreatingTxs(ctx context.Context, blockHeight uint32) {
 			progressed++
 
 			s.logger.Infof("[pruner][creating-sweep][%d] cleared the creating state of %s, which carries no attempt token", blockHeight, hash)
+
+			continue
+		}
+
+		if md.MarkOwed || len(md.BlockIDs) > 0 {
+			if s.completeBlockOwned(ctx, blockHeight, hash, md) {
+				progressed++
+			}
 
 			continue
 		}
@@ -307,27 +338,33 @@ func (s *Server) sweepCreatingTxs(ctx context.Context, blockHeight uint32) {
 	}
 }
 
-// blockedByParentsForLong reports whether a creating record that failed its re-spend only because
-// parents are in flight may be rolled back for its age. It is false when
-// pruner_creatingTxSweepBlockedAgeBlocks is 0, which is the default. Otherwise the record must be
-// older than that age, and every parent that gave a transient answer in this pass must be read as
-// still locked or creating and as having been so for at least that age. A failure of any other kind
-// on an input, a spend that does not name its parent, a parent that cannot be read and a parent whose
-// age cannot be established all leave the record for the next pass.
-func (s *Server) blockedByParentsForLong(ctx context.Context, blockHeight, unminedSince uint32, spends []*utxo.Spend, verified map[chainhash.Hash]bool) bool {
-	age := s.settings.Pruner.CreatingTxSweepBlockedAgeBlocks
-	if age == 0 {
+// completeBlockOwned rolls forward a creating record whose transaction is in a block: one that
+// carries block IDs, or the markOwed stamp of a longest-chain mark. It reports whether the record
+// is complete. The record is never rolled back and never announced to block assembly, whatever the
+// roll-forward answers, and it is not unlocked here: the write that marks it mined unlocks it.
+func (s *Server) completeBlockOwned(ctx context.Context, blockHeight uint32, hash chainhash.Hash, md *meta.Data) bool {
+	if _, _, rfErr := utxo.RollForwardCreating(ctx, s.logger, s.utxoStore, md.Tx, md.Attempt, blockHeight, utxo.WithIgnoreLocked(true)); rfErr != nil {
+		s.logger.Warnf("[pruner][creating-sweep][%d] %s belongs to a block (owed the longest-chain mark %t, block IDs %d) and its roll-forward failed, it is never rolled back, will retry next block: %v", blockHeight, hash, md.MarkOwed, len(md.BlockIDs), rfErr)
+		prunerCreatingSweepFailures.Inc()
+
 		return false
 	}
 
-	// The query of the sweep selects records that are at least CreatingTxSweepMinAgeBlocks old, so
-	// an age at or below that value is met on the first pass that sees the record, with no earlier
-	// pass that retried it. The age is raised to one block above it.
-	if minAge := s.settings.Pruner.CreatingTxSweepMinAgeBlocks; age <= minAge {
-		age = minAge + 1
-	}
+	s.logger.Infof("[pruner][creating-sweep][%d] completed %s, which belongs to a block (owed the longest-chain mark %t, block IDs %d), and did not announce it", blockHeight, hash, md.MarkOwed, len(md.BlockIDs))
 
-	if unminedSince == 0 || unminedSince >= blockHeight || blockHeight-unminedSince <= age {
+	return true
+}
+
+// blockedByParentsForLong reports whether a creating record that failed its re-spend only because
+// parents are in flight may be rolled back for its age. It is false when
+// pruner_creatingTxSweepBlockedAgeBlocks is 0, which is the default. Otherwise the record must be
+// older than that age, and the sweep must have seen every parent that gave a transient answer in
+// this pass locked, and not creating, for at least that age (parentBlockedForAtLeast). A failure of
+// any other kind on an input, a spend that does not name its parent, a parent that cannot be read
+// and a parent that the sweep has not watched for that long all leave the record for a later pass.
+func (s *Server) blockedByParentsForLong(ctx context.Context, blockHeight, unminedSince uint32, spends []*utxo.Spend, verified map[chainhash.Hash]bool) bool {
+	age := s.blockedAge()
+	if age == 0 {
 		return false
 	}
 
@@ -349,33 +386,72 @@ func (s *Server) blockedByParentsForLong(ctx context.Context, blockHeight, unmin
 		return false
 	}
 
+	// Every parent is read, also after one has answered no and also for a record that is itself too
+	// young: a parent that a pass does not look at is not seen, and the pass that first sees it
+	// starts its age. So the sweep watches a parent from the first pass in which it blocks a record.
+	long := true
+
 	for _, parent := range parents {
-		long, known := verified[parent]
+		blocked, known := verified[parent]
 		if !known {
-			long = s.parentBlockedForAtLeast(ctx, blockHeight, parent, age)
-			verified[parent] = long
+			blocked = s.parentBlockedForAtLeast(ctx, blockHeight, parent, age)
+			verified[parent] = blocked
 		}
 
-		if !long {
-			return false
-		}
+		long = long && blocked
 	}
 
-	return true
+	if unminedSince == 0 || unminedSince >= blockHeight || blockHeight-unminedSince <= age {
+		return false
+	}
+
+	return long
 }
 
-// parentBlockedForAtLeast reads the record of a parent and reports whether it is locked, not
-// creating, and was stamped with an unminedSince at least age blocks below blockHeight. An
-// unminedSince of 0 means mined, and 1 is the floor of a backdated value (utxo.BackdatedUnminedSince),
-// so neither says when the parent was stored.
+// blockedAge is pruner_creatingTxSweepBlockedAgeBlocks as the sweep applies it: 0 when the rule is
+// off, and otherwise at least one block above pruner_creatingTxSweepMinAgeBlocks. The query of the
+// sweep selects records that are at least the minimum age old, so an age at or below it would be met
+// by a record on the first pass that sees it, with no earlier pass that retried it.
+func (s *Server) blockedAge() uint32 {
+	age := s.settings.Pruner.CreatingTxSweepBlockedAgeBlocks
+	if age == 0 {
+		return 0
+	}
+
+	if minAge := s.settings.Pruner.CreatingTxSweepMinAgeBlocks; age <= minAge {
+		age = minAge + 1
+	}
+
+	return age
+}
+
+// blockedSince is what the sweep remembers of a parent that blocks a record: the height of the pass
+// that first saw it locked, and of the last pass that saw it so.
+type blockedSince struct {
+	first, last uint32
+}
+
+// defaultBlockedParentLimit bounds the parents the sweep remembers. A parent that does not fit is
+// not remembered, so it never counts as blocked for long and the rule stays off for it.
+const defaultBlockedParentLimit = 10000
+
+// parentBlockedForAtLeast reads the record of a parent and reports whether the sweep has seen it
+// locked, and not creating, for at least age blocks: it is so in this pass, a pass at least age
+// blocks ago saw it so, and no pass in between saw it otherwise.
 //
-// The age is the height at which the parent was stored. No field records when its lock was taken,
-// so a parent that was locked a moment ago, for example by the conflict walk of a double-spend, looks
-// as old as its record. A value that a reorg backdated to the tip minus the unmined retention looks
-// that old too. The rule is a guard against a parent that was not stored recently, and it does not
-// prove that the parent has been locked for that long.
+// The age is what the sweep saw, kept in memory, and not a field of the record. No field records
+// when a lock was taken, and the height at which the parent was stored says nothing about it: a
+// parent that was locked a moment ago, for example by the conflict walk of a double-spend, is as
+// old as its record, and a reorg backdates that height. So the first pass that sees a parent locked
+// only notes it, and answers no. A parent with no note is not yet old enough, whatever its record
+// says. That holds after a restart too, which loses every note: no record is rolled back for the
+// age of a parent until this process has watched the parent for that long.
+//
+// A pass that reads the parent as not locked, or as creating, drops its note, so a parent that is
+// locked again later starts again. A read that fails says nothing and keeps the note. What the
+// rule does not prove is that the parent stayed locked between two passes that both saw it locked.
 func (s *Server) parentBlockedForAtLeast(ctx context.Context, blockHeight uint32, parent chainhash.Hash, age uint32) bool {
-	md, err := s.utxoStore.Get(ctx, &parent, fields.UnminedSince, fields.Locked, fields.Creating)
+	md, err := s.utxoStore.Get(ctx, &parent, fields.Locked, fields.Creating)
 	if err != nil {
 		s.logger.Warnf("[pruner][creating-sweep][%d] reading the parent %s of a blocked record failed, the record is left for the next pass: %v", blockHeight, parent, err)
 
@@ -383,15 +459,76 @@ func (s *Server) parentBlockedForAtLeast(ctx context.Context, blockHeight uint32
 	}
 
 	// A creating parent is a record that this sweep heals, from the same crash as the child in
-	// many cases. It carries the same age as the child, and the order of the query does not put it
-	// before the child, so it says nothing about a parent that is stuck. The child waits for the
-	// parent to settle: once the parent is rolled forward its lock ends with the hand-off, and once
-	// it is rolled back the child's spend fails for good.
+	// many cases, and the order of the query does not put it before the child, so it says nothing
+	// about a parent that is stuck. The child waits for the parent to settle: once the parent is
+	// rolled forward its lock ends with the hand-off, and once it is rolled back the child's spend
+	// fails for good.
 	if !md.Locked || md.Creating {
+		delete(s.blockedParents, parent)
+
 		return false
 	}
 
-	return md.UnminedSince > 1 && md.UnminedSince <= blockHeight && blockHeight-md.UnminedSince >= age
+	// A note that no pass has renewed for longer than the horizon is as good as none: the sweep did
+	// not watch the parent in between.
+	seen, noted := s.blockedParents[parent]
+	if !noted || blockHeight < seen.last || blockHeight-seen.last > s.blockedParentHorizon(age) {
+		limit := s.blockedParentLimit
+		if limit <= 0 {
+			limit = defaultBlockedParentLimit
+		}
+
+		if !noted && len(s.blockedParents) >= limit {
+			if s.blockedParentsFullSeen != blockHeight {
+				s.blockedParentsFullSeen = blockHeight
+				s.logger.Warnf("[pruner][creating-sweep][%d] the sweep remembers %d blocked parents, its limit, so a parent it sees for the first time now is not noted and no record is rolled back for it", blockHeight, limit)
+			}
+
+			return false
+		}
+
+		if s.blockedParents == nil {
+			s.blockedParents = make(map[chainhash.Hash]blockedSince)
+		}
+
+		s.blockedParents[parent] = blockedSince{first: blockHeight, last: blockHeight}
+
+		return false
+	}
+
+	seen.last = blockHeight
+	s.blockedParents[parent] = seen
+
+	return blockHeight-seen.first >= age
+}
+
+// blockedParentHorizon is how long a note of a blocked parent holds without a pass renewing it:
+// twice the blocked age plus the minimum age of the sweep, and at least 100 blocks. A pass renews
+// the note of every parent that blocks a record it takes, and a page does not take every record of
+// a large backlog, so the horizon is wider than the age.
+func (s *Server) blockedParentHorizon(age uint32) uint32 {
+	return max(2*age+s.settings.Pruner.CreatingTxSweepMinAgeBlocks, 100)
+}
+
+// forgetBlockedParents drops the notes that are past the horizon, so that the sweep does not keep
+// what it no longer uses. A record whose parent is forgotten is not rolled back for the age of that
+// parent until the sweep has watched it again for that long. With the rule off there is nothing to
+// remember.
+func (s *Server) forgetBlockedParents(blockHeight uint32) {
+	age := s.blockedAge()
+	if age == 0 {
+		s.blockedParents = nil
+
+		return
+	}
+
+	horizon := s.blockedParentHorizon(age)
+
+	for parent, seen := range s.blockedParents {
+		if blockHeight < seen.last || blockHeight-seen.last > horizon {
+			delete(s.blockedParents, parent)
+		}
+	}
 }
 
 const (

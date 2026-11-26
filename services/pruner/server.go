@@ -97,6 +97,15 @@ type Server struct {
 	handOffs     []handOff
 	handOffDelay time.Duration
 	handOffLimit int
+
+	// What the creating sweep has seen of the parents that block a record, for
+	// pruner_creatingTxSweepBlockedAgeBlocks: the height of the pass that first saw a parent locked,
+	// and of the last pass that saw it so. Read and written only by the sweep, which runs on the
+	// processing loop. It is lost on restart, which starts every parent again as not yet seen.
+	// blockedParentLimit is zero in production, which means the default in creating_sweep.go.
+	blockedParents         map[chainhash.Hash]blockedSince
+	blockedParentLimit     int
+	blockedParentsFullSeen uint32
 }
 
 // New creates a new Pruner server instance with the provided dependencies.

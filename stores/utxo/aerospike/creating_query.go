@@ -19,8 +19,11 @@ import (
 // The result is bounded: when limit > 0 the scan stops after that many hashes and
 // the deferred recordset.Close() aborts the remaining partitions, so neither the
 // server scan nor the returned slice grows unbounded with the unmined backlog. The
-// caller treats a full page as "more may remain" and sweeps the rest next pass. The
-// context is honoured so a shutdown mid-scan aborts promptly rather than draining.
+// caller treats a full page as "more may remain" and takes the rest on later passes. The
+// query keeps no cursor, and the page of a backlog above the limit is not the same from
+// call to call: the server streams the partitions as they answer, so which records come
+// first changes. The context is honoured so a shutdown mid-scan aborts promptly rather
+// than draining.
 func (s *Store) QueryStaleCreatingTxs(ctx context.Context, unminedSinceBefore uint32, limit int) ([]chainhash.Hash, error) {
 	// unminedSinceBefore <= 1 leaves an empty [1, x) range; nothing to sweep.
 	if unminedSinceBefore <= 1 {

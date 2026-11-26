@@ -3,24 +3,29 @@ package pruner
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/bsv-blockchain/aerospike-client-go/v8"
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/bscript"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-subtree"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/services/blockassembly"
+	"github.com/bsv-blockchain/teranode/stores/blob/memory"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
+	teranode_aerospike "github.com/bsv-blockchain/teranode/stores/utxo/aerospike"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/stores/utxo/nullstore"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/lane"
 	"github.com/bsv-blockchain/teranode/util/test"
+	aeroTest "github.com/bsv-blockchain/testcontainers-aerospike-go"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -368,6 +373,92 @@ func TestSweepCreatingTxsRollsForward(t *testing.T) {
 	require.Empty(t, store.setConflicting, "no double-spend, so nothing marked conflicting")
 }
 
+// TestSweepCreatingTxsOnlyCompletesARecordThatBelongsToABlock covers a creating record whose
+// transaction is in a block: it carries block IDs, or the stamp that the pre-flight of a
+// longest-chain mark leaves on a creating record. The sweep would roll back any other record whose
+// inputs can never be spent, and would announce any other record it completes to block assembly. A
+// rollback unspends by txid, so for this record it would free outputs that a mined transaction
+// spent, and an announce would offer a mined transaction for the next template. The sweep does
+// neither: it only completes the record.
+func TestSweepCreatingTxsOnlyCompletesARecordThatBelongsToABlock(t *testing.T) {
+	txA := oneOutputTx(1)
+	hashA := *txA.TxIDChainHash()
+
+	records := map[string]meta.Data{
+		"owed the longest-chain mark": {Creating: true, Attempt: sweepToken, Tx: txA, MarkOwed: true},
+		"carrying block IDs":          {Creating: true, Attempt: sweepToken, Tx: txA, BlockIDs: []uint32{7}},
+	}
+
+	for name, record := range records {
+		t.Run("a record "+name+" whose inputs can never be spent is not rolled back", func(t *testing.T) {
+			ns, err := nullstore.NewNullStore()
+			require.NoError(t, err)
+
+			md := record
+
+			store := &fakeSweepStore{
+				NullStore:   ns,
+				stale:       []chainhash.Hash{hashA},
+				getResp:     map[chainhash.Hash]*meta.Data{hashA: &md},
+				spendErr:    errors.ErrSpent,
+				spendSpends: []*utxo.Spend{{Vout: 1, Err: errors.ErrSpent}},
+			}
+
+			newSweepServer(t, store).sweepCreatingTxs(context.Background(), 100)
+
+			require.Equal(t, []chainhash.Hash{hashA}, store.spends, "the roll-forward is still tried")
+			require.Empty(t, store.events, "no rollback is claimed, nothing is unspent and no rollback is ended")
+			require.Empty(t, store.began)
+			require.Empty(t, store.unspent)
+
+			opts, err := utxo.ParseCreateOptions(store.spendOpts...)
+			require.NoError(t, err)
+			require.True(t, opts.IgnoreFlags.IgnoreLocked, "the re-spend of a transaction in a block ignores locks, as the pre-flight of the mark does")
+		})
+
+		t.Run("a record "+name+" that is completed is not announced to block assembly", func(t *testing.T) {
+			ns, err := nullstore.NewNullStore()
+			require.NoError(t, err)
+
+			md := record
+
+			store := &fakeSweepStore{
+				NullStore: ns,
+				stale:     []chainhash.Hash{hashA},
+				getResp:   map[chainhash.Hash]*meta.Data{hashA: &md},
+			}
+
+			ba := blockassembly.NewMock()
+
+			s := newSweepServer(t, store)
+			s.blockAssemblyClient = ba
+			s.sweepCreatingTxs(context.Background(), 100)
+
+			require.Equal(t, []chainhash.Hash{hashA}, store.finalized, "the record is completed")
+			ba.AssertNotCalled(t, "Store", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+			require.Empty(t, store.unlocked, "the write that marks it mined unlocks it, not the sweep")
+			require.Empty(t, s.handOffs, "nothing is owed to block assembly for it")
+		})
+	}
+
+	t.Run("the same record with neither is rolled back, as before", func(t *testing.T) {
+		ns, err := nullstore.NewNullStore()
+		require.NoError(t, err)
+
+		store := &fakeSweepStore{
+			NullStore:   ns,
+			stale:       []chainhash.Hash{hashA},
+			getResp:     map[chainhash.Hash]*meta.Data{hashA: {Creating: true, Attempt: sweepToken, Tx: txA}},
+			spendErr:    errors.ErrSpent,
+			spendSpends: []*utxo.Spend{{Vout: 1, Err: errors.ErrSpent}},
+		}
+
+		newSweepServer(t, store).sweepCreatingTxs(context.Background(), 100)
+
+		require.Equal(t, []chainhash.Hash{hashA}, store.began, "an ordinary tentative record that cannot be completed is rolled back")
+	})
+}
+
 // TestSweepCreatingTxsDoesNotFinalizeIncompleteSpend is the ChiR1 sweep-side guard:
 // a nil top-level spend error is not proof every input was spent (a per-input error
 // could have been swallowed, e.g. by the "already blessed" fallback). The sweep must
@@ -708,11 +799,22 @@ type blockedParent struct {
 	readErr  error
 	spendErr error
 	noTxID   bool
+	// notBlocking makes the spend of this parent's input succeed in the pass.
+	notBlocking bool
+}
+
+// blockedPass is one pass of the sweep in the table below: the height it runs at, and what each
+// parent of the record is in that pass.
+type blockedPass struct {
+	height  uint32
+	parents []blockedParent
 }
 
 // A record that only a parent blocks is retried on every pass. With pruner_creatingTxSweepBlockedAgeBlocks
-// above 0 it is rolled back when it is older than that age and every parent that blocked it in this pass
-// has itself been blocked for at least that age. The age of the parent is read from its own record.
+// above 0 it is rolled back when it is older than that age and the sweep has seen every parent that
+// blocks it locked for at least that age. The age of a parent is what the sweep itself saw: the
+// first pass that sees a parent locked only notes it. The height at which the parent was stored
+// does not count, because no field says when its lock was taken.
 func TestSweepCreatingTxsRollsBackARecordOnlyWhenItsParentsHaveBlockedItForLong(t *testing.T) {
 	ns, err := nullstore.NewNullStore()
 	require.NoError(t, err)
@@ -725,92 +827,124 @@ func TestSweepCreatingTxsRollsBackARecordOnlyWhenItsParentsHaveBlockedItForLong(
 	parentA := chainhash.HashH([]byte("parent a"))
 	parentB := chainhash.HashH([]byte("parent b"))
 
-	locked := func(since uint32) *meta.Data { return &meta.Data{Locked: true, UnminedSince: since} }
-	creating := func(since uint32) *meta.Data { return &meta.Data{Creating: true, UnminedSince: since} }
+	// A stored height that is long ago, to show that it does not count.
+	locked := func() blockedParent { return blockedParent{state: &meta.Data{Locked: true, UnminedSince: 10}} }
+	creating := func() blockedParent {
+		return blockedParent{state: &meta.Data{Creating: true, UnminedSince: 10}, spendErr: errors.ErrTxCreating}
+	}
+	unlocked := func() blockedParent { return blockedParent{state: &meta.Data{UnminedSince: 10}} }
+	spendable := func() blockedParent { return blockedParent{state: &meta.Data{UnminedSince: 10}, notBlocking: true} }
+
+	pass := func(at uint32, parents ...blockedParent) blockedPass {
+		return blockedPass{height: at, parents: parents}
+	}
 
 	cases := []struct {
 		name         string
 		setting      uint32
 		childSince   uint32
-		parents      []blockedParent
+		passes       []blockedPass
+		restart      bool // a new process runs the last pass: it has no notes
+		limit        int
 		wantRollback bool
 		noParentRead bool
 	}{
-		{name: "the rule is off", setting: 0, childSince: 10, parents: []blockedParent{{state: locked(10)}}, noParentRead: true},
-		{name: "a locked parent has blocked it for long", setting: age, childSince: 70, parents: []blockedParent{{state: locked(60)}}, wantRollback: true},
-		{name: "a creating parent is a record the sweep heals and does not count as blocked", setting: age, childSince: 70, parents: []blockedParent{{state: creating(60), spendErr: errors.ErrTxCreating}}},
-		{name: "a parent that is locked and creating does not count as blocked", setting: age, childSince: 70, parents: []blockedParent{{state: &meta.Data{Locked: true, Creating: true, UnminedSince: 60}}}},
-		{name: "the setting is at the minimum age of the sweep, so it is raised above it", setting: 2, childSince: 98, parents: []blockedParent{{state: locked(98)}}},
-		{name: "the setting is below the minimum age of the sweep, so it is raised above it", setting: 1, childSince: 98, parents: []blockedParent{{state: locked(98)}}},
-		{name: "the setting is one above the minimum age and the record is older", setting: 3, childSince: 96, parents: []blockedParent{{state: locked(96)}}, wantRollback: true},
-		{name: "a parent has blocked it for exactly the age", setting: age, childSince: 70, parents: []blockedParent{{state: locked(height - age)}}, wantRollback: true},
-		{name: "a parent has blocked it for one block less than the age", setting: age, childSince: 70, parents: []blockedParent{{state: locked(height - age + 1)}}},
-		{name: "a parent became blocked recently", setting: age, childSince: 70, parents: []blockedParent{{state: locked(95)}}},
-		{name: "the record is one block older than the age", setting: age, childSince: height - age - 1, parents: []blockedParent{{state: locked(10)}}, wantRollback: true},
-		{name: "the record is exactly the age", setting: age, childSince: height - age, parents: []blockedParent{{state: locked(10)}}},
-		{name: "the record is younger than the age", setting: age, childSince: 85, parents: []blockedParent{{state: locked(10)}}},
-		{name: "the record has no age", setting: age, childSince: 0, parents: []blockedParent{{state: locked(10)}}},
-		{name: "the parent is not in the store", setting: age, childSince: 70, parents: []blockedParent{{}}},
-		{name: "the parent cannot be read", setting: age, childSince: 70, parents: []blockedParent{{readErr: errors.NewStorageError("read boom")}}},
-		{name: "the parent no longer blocks", setting: age, childSince: 70, parents: []blockedParent{{state: &meta.Data{UnminedSince: 10}}}},
-		{name: "the parent has no unminedSince", setting: age, childSince: 70, parents: []blockedParent{{state: locked(0)}}},
-		{name: "the parent has the floor of a backdated unminedSince", setting: age, childSince: 70, parents: []blockedParent{{state: locked(1)}}},
-		{name: "the spend does not name the parent", setting: age, childSince: 70, parents: []blockedParent{{state: locked(10), noTxID: true}}},
-		{name: "two parents have blocked it for long", setting: age, childSince: 70, parents: []blockedParent{{state: locked(10)}, {state: locked(20)}}, wantRollback: true},
-		{name: "one of two parents is creating", setting: age, childSince: 70, parents: []blockedParent{{state: locked(10)}, {state: creating(20), spendErr: errors.ErrTxCreating}}},
-		{name: "one of two parents became blocked recently", setting: age, childSince: 70, parents: []blockedParent{{state: locked(10)}, {state: locked(95)}}},
-		{name: "one of two parents cannot be read", setting: age, childSince: 70, parents: []blockedParent{{state: locked(10)}, {}}},
-		{name: "another input failed for a reason that is not a parent in flight", setting: age, childSince: 70, parents: []blockedParent{{state: locked(10)}, {state: locked(10), spendErr: errors.NewStorageError("write timed out")}}},
+		{name: "the rule is off", setting: 0, childSince: 10, passes: []blockedPass{pass(80, locked()), pass(height, locked())}, noParentRead: true},
+		{name: "the sweep has seen the parent locked for exactly the age", setting: age, childSince: 10, passes: []blockedPass{pass(height-age, locked()), pass(height, locked())}, wantRollback: true},
+		{name: "the sweep has seen the parent locked for one block less than the age", setting: age, childSince: 10, passes: []blockedPass{pass(height-age+1, locked()), pass(height, locked())}},
+		{name: "the sweep sees the parent locked for the first time, although it was stored long ago", setting: age, childSince: 10, passes: []blockedPass{pass(height, locked())}},
+		{name: "a restart loses what the sweep saw, so the parent is seen for the first time again", setting: age, childSince: 10, passes: []blockedPass{pass(height-age, locked()), pass(height, locked())}, restart: true},
+		{name: "a creating parent is a record the sweep heals and does not count as blocked", setting: age, childSince: 10, passes: []blockedPass{pass(60, creating()), pass(height, creating())}},
+		{name: "a parent that is locked and creating does not count as blocked", setting: age, childSince: 10, passes: []blockedPass{pass(60, blockedParent{state: &meta.Data{Locked: true, Creating: true}}), pass(height, blockedParent{state: &meta.Data{Locked: true, Creating: true}})}},
+		{name: "a pass in between saw the parent unlocked, so it starts again", setting: age, childSince: 10, passes: []blockedPass{pass(60, locked()), pass(85, unlocked()), pass(90, locked()), pass(height, locked())}},
+		{name: "a pass in between could not read the parent, which says nothing", setting: age, childSince: 10, passes: []blockedPass{pass(height-age, locked()), pass(90, blockedParent{readErr: errors.NewStorageError("read boom")}), pass(height, locked())}, wantRollback: true},
+		{name: "no pass looked at the parent for longer than the horizon, so it starts again", setting: age, childSince: 10, passes: []blockedPass{pass(100, locked()), pass(100+101, locked())}},
+		{name: "the setting is at the minimum age of the sweep, so it is raised above it", setting: 2, childSince: 10, passes: []blockedPass{pass(height-2, locked()), pass(height, locked())}},
+		{name: "the setting is below the minimum age of the sweep, so it is raised above it", setting: 1, childSince: 10, passes: []blockedPass{pass(height-2, locked()), pass(height, locked())}},
+		{name: "the setting is one above the minimum age and the parent was seen that long ago", setting: 3, childSince: 10, passes: []blockedPass{pass(height-3, locked()), pass(height, locked())}, wantRollback: true},
+		{name: "the record is one block older than the age, and its parent was watched while it was young", setting: age, childSince: height - age - 1, passes: []blockedPass{pass(height-age, locked()), pass(height, locked())}, wantRollback: true},
+		{name: "the record is exactly the age", setting: age, childSince: height - age, passes: []blockedPass{pass(height-age, locked()), pass(height, locked())}},
+		{name: "the record is younger than the age", setting: age, childSince: 85, passes: []blockedPass{pass(60, locked()), pass(height, locked())}},
+		{name: "the record has no age", setting: age, childSince: 0, passes: []blockedPass{pass(60, locked()), pass(height, locked())}},
+		{name: "the parent is not in the store", setting: age, childSince: 10, passes: []blockedPass{pass(60, blockedParent{}), pass(height, blockedParent{})}},
+		{name: "the parent cannot be read in the pass that decides", setting: age, childSince: 10, passes: []blockedPass{pass(60, locked()), pass(height, blockedParent{readErr: errors.NewStorageError("read boom")})}},
+		{name: "the parent no longer blocks", setting: age, childSince: 10, passes: []blockedPass{pass(60, locked()), pass(height, unlocked())}},
+		{name: "the spend does not name the parent", setting: age, childSince: 10, passes: []blockedPass{pass(60, locked()), pass(height, blockedParent{state: &meta.Data{Locked: true}, noTxID: true})}},
+		{name: "the sweep has seen two parents locked for long", setting: age, childSince: 10, passes: []blockedPass{pass(60, locked(), locked()), pass(height, locked(), locked())}, wantRollback: true},
+		{name: "one of two parents is creating", setting: age, childSince: 10, passes: []blockedPass{pass(60, locked(), creating()), pass(height, locked(), creating())}},
+		{name: "one of two parents began to block recently", setting: age, childSince: 10, passes: []blockedPass{pass(60, locked(), spendable()), pass(95, locked(), locked()), pass(height, locked(), locked())}},
+		{name: "a parent that answers no does not keep the other from being seen", setting: age, childSince: 10, passes: []blockedPass{pass(70, creating(), locked()), pass(height-5, locked(), locked()), pass(height+age-5, locked(), locked())}, wantRollback: true},
+		{name: "one of two parents cannot be read", setting: age, childSince: 10, passes: []blockedPass{pass(60, locked(), locked()), pass(height, locked(), blockedParent{})}},
+		{name: "another input failed for a reason that is not a parent in flight", setting: age, childSince: 10, passes: []blockedPass{pass(60, locked(), locked()), pass(height, locked(), blockedParent{state: &meta.Data{Locked: true}, spendErr: errors.NewStorageError("write timed out")})}},
+		{name: "the sweep remembers no more parents than its limit, and one it cannot note never counts", setting: age, childSince: 10, limit: 1, passes: []blockedPass{pass(60, locked(), locked()), pass(height, locked(), locked())}},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			hashes := []chainhash.Hash{parentA, parentB}[:len(tc.parents)]
+			count := len(tc.passes[0].parents)
+			hashes := []chainhash.Hash{parentA, parentB}[:count]
 
 			txA := txWithParents(1, hashes...)
 			hashA := *txA.TxIDChainHash()
 
-			getResp := map[chainhash.Hash]*meta.Data{hashA: {Creating: true, Attempt: sweepToken, Tx: txA, UnminedSince: tc.childSince}}
-			getErrs := map[chainhash.Hash]error{}
-			spends := make([]*utxo.Spend, len(tc.parents))
-
-			for i, p := range tc.parents {
-				if p.state != nil {
-					getResp[hashes[i]] = p.state
-				}
-
-				if p.readErr != nil {
-					getErrs[hashes[i]] = p.readErr
-				}
-
-				spendErr := p.spendErr
-				if spendErr == nil {
-					spendErr = errors.ErrTxLocked
-				}
-
-				spends[i] = &utxo.Spend{Err: spendErr}
-				if !p.noTxID {
-					spends[i].TxID = &hashes[i]
-				}
-			}
-
 			store := &fakeSweepStore{
-				NullStore:   ns,
-				stale:       []chainhash.Hash{hashA},
-				getResp:     getResp,
-				getErrs:     getErrs,
-				spendErr:    errors.ErrTxLocked,
-				spendSpends: spends,
+				NullStore: ns,
+				stale:     []chainhash.Hash{hashA},
+				spendErr:  errors.ErrTxLocked,
 			}
 
-			s := newSweepServer(t, store)
-			s.settings.Pruner.CreatingTxSweepBlockedAgeBlocks = tc.setting
-			s.sweepCreatingTxs(context.Background(), height)
+			newServer := func() *Server {
+				s := newSweepServer(t, store)
+				s.settings.Pruner.CreatingTxSweepBlockedAgeBlocks = tc.setting
+				s.blockedParentLimit = tc.limit
+
+				return s
+			}
+
+			s := newServer()
+
+			for i, p := range tc.passes {
+				last := i == len(tc.passes)-1
+
+				if last && tc.restart {
+					s = newServer()
+				}
+
+				store.getResp = map[chainhash.Hash]*meta.Data{hashA: {Creating: true, Attempt: sweepToken, Tx: txA, UnminedSince: tc.childSince}}
+				store.getErrs = map[chainhash.Hash]error{}
+				store.spendSpends = make([]*utxo.Spend, len(p.parents))
+
+				for j, parent := range p.parents {
+					if parent.state != nil {
+						store.getResp[hashes[j]] = parent.state
+					}
+
+					if parent.readErr != nil {
+						store.getErrs[hashes[j]] = parent.readErr
+					}
+
+					spendErr := parent.spendErr
+					if spendErr == nil && !parent.notBlocking {
+						spendErr = errors.ErrTxLocked
+					}
+
+					store.spendSpends[j] = &utxo.Spend{Err: spendErr}
+					if !parent.noTxID {
+						store.spendSpends[j].TxID = &hashes[j]
+					}
+				}
+
+				s.sweepCreatingTxs(context.Background(), p.height)
+
+				if !last {
+					require.Empty(t, store.began, "pass %d at height %d rolls nothing back", i, p.height)
+				}
+			}
 
 			if tc.wantRollback {
 				require.Equal(t, []chainhash.Hash{hashA}, store.began, "the record is rolled back")
 			} else {
-				require.Empty(t, store.began, "the record is left creating for the next pass")
+				require.Empty(t, store.began, "the record is left creating for a later pass")
 				require.Empty(t, store.events)
 			}
 
@@ -820,9 +954,48 @@ func TestSweepCreatingTxsRollsBackARecordOnlyWhenItsParentsHaveBlockedItForLong(
 				}
 			}
 
-			require.Len(t, store.queryBefore, 1, "the child's age comes from its own record, not from a second query")
+			require.Len(t, store.queryBefore, len(tc.passes), "the child's age comes from its own record, not from a second query")
 		})
 	}
+}
+
+// The notes of the sweep are bounded twice: by a limit on their number, and by a horizon after which
+// a note that no pass renewed is dropped.
+func TestSweepCreatingTxsForgetsTheBlockedParentsItNoLongerWatches(t *testing.T) {
+	ns, err := nullstore.NewNullStore()
+	require.NoError(t, err)
+
+	parent := chainhash.HashH([]byte("parent"))
+	txA := txWithParents(1, parent)
+	hashA := *txA.TxIDChainHash()
+
+	store := &fakeSweepStore{
+		NullStore:   ns,
+		stale:       []chainhash.Hash{hashA},
+		getResp:     map[chainhash.Hash]*meta.Data{hashA: {Creating: true, Attempt: sweepToken, Tx: txA, UnminedSince: 10}, parent: {Locked: true}},
+		spendErr:    errors.ErrTxLocked,
+		spendSpends: []*utxo.Spend{{TxID: &parent, Err: errors.ErrTxLocked}},
+	}
+
+	s := newSweepServer(t, store)
+	s.settings.Pruner.CreatingTxSweepBlockedAgeBlocks = 20
+
+	s.sweepCreatingTxs(context.Background(), 100)
+	require.Contains(t, s.blockedParents, parent, "the first pass notes the parent")
+
+	// The record is gone from the page, so no pass looks at the parent again.
+	store.stale = nil
+
+	s.sweepCreatingTxs(context.Background(), 200)
+	require.Contains(t, s.blockedParents, parent, "the note holds for the horizon of 100 blocks")
+
+	s.sweepCreatingTxs(context.Background(), 201)
+	require.NotContains(t, s.blockedParents, parent, "past the horizon the note is dropped")
+
+	off := newSweepServer(t, store)
+	off.blockedParents = map[chainhash.Hash]blockedSince{parent: {first: 1, last: 1}}
+	off.sweepCreatingTxs(context.Background(), 100)
+	require.Empty(t, off.blockedParents, "with the rule off nothing is remembered")
 }
 
 // A record that lost a double-spend is rolled back whatever the setting is, and without reading any parent.
@@ -2109,4 +2282,120 @@ func TestSweepCreatingTxsRetryHonoursTheContext(t *testing.T) {
 	require.Empty(t, store.unlocked)
 	require.Len(t, s.handOffs, 1)
 	require.Equal(t, hashA, s.handOffs[0].hash)
+}
+
+// TestSweepCreatingTxsCompletesARecordWhoseFinalizeBeganAndDidNotEnd answers, on a real Aerospike,
+// what repeats the finalize of a paginated record that is left creating and finalizing when its
+// caller is gone. The mark takes the rollback away, so the record must not depend on anything else
+// either. Here its finalize failed at the master write, its creator released its lease, and its
+// parent is locked, so a repeat of its spend is refused. The sweep selects the record by its
+// creating bin like any other, sets the refused re-spend aside because the finalize had begun, and
+// completes the record, announces it to block assembly and unlocks it.
+func TestSweepCreatingTxsCompletesARecordWhoseFinalizeBeganAndDidNotEnd(t *testing.T) {
+	ctx := t.Context()
+
+	container, err := aeroTest.RunContainer(ctx, aeroTest.WithImage(test.AerospikeImage))
+	test.SkipIfContainerUnavailable(t, err)
+
+	t.Cleanup(func() {
+		require.NoError(t, container.Terminate(context.Background()))
+	})
+
+	host, err := container.Host(ctx)
+	require.NoError(t, err)
+
+	port, err := container.ServicePort(ctx)
+	require.NoError(t, err)
+
+	aeroURL, err := url.Parse(fmt.Sprintf("aerospike://%s:%d/test?set=test&expiration=1m&externalStore=file://./data/externalStore", host, port))
+	require.NoError(t, err)
+
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.UtxoStore.UtxoBatchSize = 4
+
+	store, err := teranode_aerospike.New(ctx, logger, tSettings, aeroURL)
+	require.NoError(t, err)
+
+	store.SetExternalStore(memory.New())
+	require.NoError(t, store.SetBlockHeight(1000))
+
+	parent := bt.NewTx()
+	require.NoError(t, parent.From(fmt.Sprintf("%064x", 9001), 0, "51", 5_000_000))
+	require.NoError(t, parent.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 1_000_000))
+
+	_, err = store.Create(ctx, parent, 100)
+	require.NoError(t, err)
+
+	// Ten outputs at four to a record: a master and two pagination children.
+	paginated := bt.NewTx()
+	require.NoError(t, paginated.From(parent.TxID(), 0, parent.Outputs[0].LockingScript.String(), parent.Outputs[0].Satoshis))
+	paginated.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{bscript.OpTRUE})
+
+	for i := 0; i < 10; i++ {
+		require.NoError(t, paginated.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", uint64(100+i))) //nolint:gosec // a small test amount
+	}
+
+	hash := paginated.TxIDChainHash()
+
+	md, err := store.Create(ctx, paginated, 900, utxo.WithCreating(true), utxo.WithLocked(true))
+	require.NoError(t, err)
+
+	_, err = store.Spend(ctx, paginated, 900)
+	require.NoError(t, err, "precondition: the attempt spent its input")
+
+	master, err := aerospike.NewKey(store.GetNamespace(), store.GetName(), hash[:])
+	require.NoError(t, err)
+
+	store.SetBatchOperateFn(func(policy *aerospike.BatchPolicy, records []aerospike.BatchRecordIfc) aerospike.Error {
+		for _, record := range records {
+			if write, ok := record.(*aerospike.BatchWrite); ok && write.Policy != nil && write.Policy.RecordExistsAction == aerospike.UPDATE_ONLY && write.Key.Equals(master) {
+				return aerospike.ErrNetwork
+			}
+		}
+
+		return store.GetClient().BatchOperate(policy, records)
+	})
+
+	require.Error(t, store.FinalizeTransaction(ctx, paginated, md.Attempt, md.Attempt), "the master write of the finalize failed")
+
+	store.SetBatchOperateFn(nil)
+
+	require.NoError(t, store.ReleaseSpendLease(ctx, hash, md.Attempt, md.Attempt), "the creator releases its lease and is gone")
+
+	left := &meta.Data{}
+	require.NoError(t, store.GetMeta(ctx, hash, left))
+	require.True(t, left.Creating && left.Finalizing, "precondition: the record is creating and finalizing")
+
+	began, err := store.BeginCreateFirstRollback(ctx, hash, md.Attempt)
+	require.NoError(t, err)
+	require.False(t, began, "precondition: no rollback can claim it")
+
+	require.NoError(t, store.SetLocked(ctx, []chainhash.Hash{*parent.TxIDChainHash()}, true))
+
+	_, err = store.Spend(ctx, paginated, 1000)
+	require.ErrorIs(t, err, errors.ErrTxLocked, "precondition: a repeat of its spend is refused")
+
+	stale, err := store.QueryStaleCreatingTxs(ctx, 998, 0)
+	require.NoError(t, err)
+	require.Contains(t, stale, *hash, "precondition: the sweep's query selects the record")
+
+	ba := blockassembly.NewMock()
+	ba.On("Store", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(true, nil)
+
+	s := newSweepServer(t, store)
+	s.blockAssemblyClient = ba
+	s.sweepCreatingTxs(ctx, 1000)
+
+	done := &meta.Data{}
+	require.NoError(t, store.GetMeta(ctx, hash, done))
+	require.False(t, done.Creating, "the sweep completed the record")
+	require.False(t, done.Finalizing, "the mark went with the creating bin")
+	require.False(t, done.Locked, "and it unlocked it after the hand-off")
+
+	ba.AssertCalled(t, "Store", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+
+	stale, err = store.QueryStaleCreatingTxs(ctx, 998, 0)
+	require.NoError(t, err)
+	require.NotContains(t, stale, *hash, "nothing is left for the next pass")
 }
