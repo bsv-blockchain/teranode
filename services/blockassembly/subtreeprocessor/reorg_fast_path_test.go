@@ -274,9 +274,30 @@ func fastPathMatrix() map[string]func(cfg *reorgScenarioConfig) {
 	}
 }
 
+// differentialTxMaps is the tx maps the fast path's differential matrices run on: the in-memory map
+// under `make test`, the disk map too under heavy tests (`make test-heavy`, the mutant script). No
+// decision of the fast path depends on the map type; the disk map doubles a matrix's time.
+func differentialTxMaps() []bool {
+	if heavyTests() {
+		return []bool{false, true}
+	}
+
+	return []bool{false}
+}
+
+// laneShapes is the shapes of fastPathMatrix the lane-position differential runs under `make test`:
+// the ones whose positions or bitmaps differed before the fast path kept them. Heavy tests run all.
+var laneShapes = map[string]struct{}{
+	"two forward blocks":              {},
+	"three forward blocks":            {},
+	"hits just below survivors":       {},
+	"pending set in the open subtree": {},
+	"pending chains only":             {},
+}
+
 func TestReorgDifferential_FastPathMatchesSlowPath(t *testing.T) {
 	for name, tweak := range fastPathMatrix() {
-		for _, disk := range []bool{false, true} {
+		for _, disk := range differentialTxMaps() {
 			t.Run(fmt.Sprintf("%s/disk=%v", name, disk), func(t *testing.T) {
 				cfg := smallScenarioConfig()
 				cfg.diskTxMap = disk
@@ -293,7 +314,11 @@ func TestReorgDifferential_FastPathMatchesSlowPath(t *testing.T) {
 // bitmaps the slow path builds for it.
 func TestReorgDifferential_FastPathKeepsLanePositions(t *testing.T) {
 	for name, tweak := range fastPathMatrix() {
-		for _, disk := range []bool{false, true} {
+		if _, ok := laneShapes[name]; !ok && !heavyTests() {
+			continue
+		}
+
+		for _, disk := range differentialTxMaps() {
 			t.Run(fmt.Sprintf("%s/disk=%v", name, disk), func(t *testing.T) {
 				cfg := smallScenarioConfig()
 				cfg.diskTxMap = disk
