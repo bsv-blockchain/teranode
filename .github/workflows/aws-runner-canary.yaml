@@ -58,3 +58,61 @@ jobs:
 
       - name: Go build (timing only)
         run: time go build ./...
+
+  # Trial diagnostic: the Aerospike testcontainer exits at once on the AWS arm64
+  # runners. Starts the image the way testcontainers-aerospike-go v0.4.0 does
+  # (aerospike/aerospike-server:8.1, no env, command, mounts or ulimits, 3000/tcp
+  # on a random host port) and prints the host settings and the container log.
+  aerospike-diag:
+    name: aerospike-diag
+    runs-on: bsva-aws-arm64-16
+    timeout-minutes: 15
+    env:
+      IMAGE: aerospike/aerospike-server:8.1
+    steps:
+      - name: Login to Docker Hub
+        uses: docker/login-action@5e57cd118135c172c3672efd75eb46360885c0ef # v3
+        with:
+          username: ${{ vars.DOCKER_ORG }}
+          password: ${{ secrets.DOCKER_ORG_TOKEN }}
+
+      - name: Host settings
+        run: |
+          set -x
+          uname -a || true
+          ulimit -a || true
+          ulimit -Hn || true
+          cat /proc/sys/fs/file-max || true
+          cat /proc/sys/fs/nr_open || true
+          cat /sys/kernel/mm/transparent_hugepage/enabled || true
+          stat -fc %T /sys/fs/cgroup || true
+          grep -m1 -E 'Features|CPU part' /proc/cpuinfo || true
+          lscpu || true
+          free -m || true
+          docker info || true
+          systemctl show docker containerd -p LimitNOFILE || true
+          cat /etc/docker/daemon.json || true
+
+      - name: Aerospike as the tests run it
+        run: |
+          set -x
+          docker pull "$IMAGE" || true
+          docker run --rm "$IMAGE" sh -c 'ulimit -a; ulimit -Hn' || true
+          docker run -d --name as-default -p 3000 "$IMAGE" || true
+          sleep 15
+          docker ps -a || true
+          docker inspect --format '{{.State.Status}} exit={{.State.ExitCode}} oom={{.State.OOMKilled}} ulimits={{.HostConfig.Ulimits}}' as-default || true
+          docker logs as-default 2>&1 || true
+          docker rm -f as-default || true
+
+      - name: Aerospike with nofile=65536
+        run: |
+          set -x
+          docker run --rm --ulimit nofile=65536:65536 "$IMAGE" sh -c 'ulimit -a; ulimit -Hn' || true
+          docker run -d --name as-nofile --ulimit nofile=65536:65536 -p 3000 "$IMAGE" || true
+          sleep 15
+          docker ps -a || true
+          docker inspect --format '{{.State.Status}} exit={{.State.ExitCode}} oom={{.State.OOMKilled}} ulimits={{.HostConfig.Ulimits}}' as-nofile || true
+          docker logs as-nofile 2>&1 || true
+          docker exec as-nofile asinfo -v status || true
+          docker rm -f as-nofile || true
