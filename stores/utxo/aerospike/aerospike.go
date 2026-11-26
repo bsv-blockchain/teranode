@@ -796,7 +796,7 @@ func (s *Store) effectiveBlockHeight(blockHeight uint32) uint32 {
 // setDeleteAtHeight UDF compute the same blockHeight + retention and MUST be kept
 // in sync with this function.
 func (s *Store) deleteAtHeightFor(blockHeight uint32) (uint32, bool) {
-	retention := s.settings.GetUtxoStoreBlockHeightRetention()
+	retention := s.settings.GetUtxoStoreSpentDeleteRetention()
 	if retention == 0 {
 		return 0, false
 	}
@@ -1639,7 +1639,7 @@ func (s *Store) ProcessExpiredPreservations(ctx context.Context, currentHeight u
 		// follow the master (see processBatchExpiredPreservations).
 		ops := []*aerospike.Operation{}
 
-		blockHeightRetention := s.settings.GetUtxoStoreBlockHeightRetention()
+		blockHeightRetention := s.settings.GetUtxoStoreSpentDeleteRetention()
 		if blockHeightRetention > 0 {
 			ops = append(ops,
 				aerospike.GetBinOp(fields.DeleteAtHeight.String()),

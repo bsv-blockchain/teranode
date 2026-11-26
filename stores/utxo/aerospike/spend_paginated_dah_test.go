@@ -45,7 +45,7 @@ func TestSpendPaginatedStampsDAHAtSpendBlockHeight(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings(t)
 	tSettings.UtxoStore.UtxoBatchSize = 4
 
-	retention := tSettings.GetUtxoStoreBlockHeightRetention()
+	retention := tSettings.GetUtxoStoreSpentDeleteRetention()
 	require.Greater(t, retention, uint32(0), "test requires a non-zero block height retention")
 
 	client, store, _, cleanup := initAerospike(t, tSettings, logger)

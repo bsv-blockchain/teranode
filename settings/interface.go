@@ -1,6 +1,7 @@
 package settings
 
 import (
+	"math"
 	"net/url"
 	"time"
 
@@ -107,6 +108,32 @@ func (s *Settings) GetUtxoStoreBlockHeightRetention() uint32 {
 	}
 
 	return uint32(result)
+}
+
+// GetUtxoStoreSpentDeleteRetention is how many blocks past its stamp height a fully spent UTXO
+// record is kept: the UTXO store retention plus utxostore_unminedTxRetention, or 0 when the
+// retention is 0 and pruning is off. A child that spent the record while unmined and was mined
+// within the unmined retention keeps its parent for the full retention after it is mined; a
+// child unmined for longer has the pruner preserve the parent instead, while preservation is on.
+func (s *Settings) GetUtxoStoreSpentDeleteRetention() uint32 {
+	retention := s.GetUtxoStoreBlockHeightRetention()
+	if retention == 0 {
+		return 0
+	}
+
+	// Capped at half the height range, so a block height plus the result never wraps a uint32
+	// and turns a long retention into an immediate delete. A retention already above the cap is
+	// returned as it is: the pad never shortens it.
+	padded := uint64(retention) + uint64(s.UtxoStore.UnminedTxRetention)
+	if padded > math.MaxUint32/2 {
+		if retention > math.MaxUint32/2 {
+			return retention
+		}
+
+		return math.MaxUint32 / 2
+	}
+
+	return uint32(padded)
 }
 
 // GetSubtreeValidationBlockHeightRetention calculates the effective block height retention for subtree validation

@@ -330,6 +330,7 @@ func TestBlockAssembly_Start(t *testing.T) {
 		// No mark of skipped fork transactions is pending; a record that is not the byte 0
 		// would read as pending.
 		blockchainClient.On("GetState", mock.Anything, SkippedForkMarkStateKey).Return([]byte(nil), errors.NewNotFoundError("no record"))
+		blockchainClient.On("GetState", mock.Anything, DeepReorgHaltStateKey).Return([]byte(nil), errors.NewNotFoundError("no record"))
 		blockchainClient.On("GetState", mock.Anything, mock.Anything).Return(stateBytes, nil)
 		blockchainClient.On("GetBestBlockHeader", mock.Anything).Return(bestBlockHeader, &model.BlockHeaderMeta{Height: 1}, nil)
 		blockchainClient.On("GetBlockHeaders", mock.Anything, mock.Anything, mock.Anything).Return([]*model.BlockHeader{model.GenesisBlockHeader}, []*model.BlockHeaderMeta{{Height: 0}}, nil)
@@ -3291,6 +3292,7 @@ func TestStart_TriggersReconcileOnStartup(t *testing.T) {
 	bc := &blockchain.Mock{}
 	// No mark of skipped fork transactions is pending.
 	bc.On("GetState", mock.Anything, SkippedForkMarkStateKey).Return([]byte(nil), errors.NewNotFoundError("no record"))
+	bc.On("GetState", mock.Anything, DeepReorgHaltStateKey).Return([]byte(nil), errors.NewNotFoundError("no record"))
 	bc.On("GetState", mock.Anything, mock.Anything).Return(checkpointBytes, nil)
 	bc.On("SetState", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 	bc.On("GetBestBlockHeader", mock.Anything).

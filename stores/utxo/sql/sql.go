@@ -788,7 +788,7 @@ func (s *Store) unspendableMinedTxDAH(tx *bt.Tx, blockHeight uint32, options *ut
 		return nil
 	}
 
-	retention := s.settings.GetUtxoStoreBlockHeightRetention()
+	retention := s.settings.GetUtxoStoreSpentDeleteRetention()
 	if retention == 0 {
 		return nil
 	}
@@ -3465,7 +3465,7 @@ func (s *Store) trySendSpendBatchBulk(ctx context.Context, batch []*batchSpend) 
 		item.historical = historical
 	}
 	if len(dedupedUpdate) > 0 {
-		retention := s.settings.GetUtxoStoreBlockHeightRetention()
+		retention := s.settings.GetUtxoStoreSpentDeleteRetention()
 		wrapDAH := retention > 0
 
 		var ub strings.Builder
@@ -3836,7 +3836,7 @@ func (s *Store) trySendSpendBatchBulk(ctx context.Context, batch []*batchSpend) 
 	for p := range idempotentParentIDs {
 		touchedParents[p] = struct{}{}
 	}
-	if s.settings.GetUtxoStoreBlockHeightRetention() > 0 && len(touchedParents) > 0 {
+	if s.settings.GetUtxoStoreSpentDeleteRetention() > 0 && len(touchedParents) > 0 {
 		// Sort parent IDs before calling setDAH so concurrent bulk batches
 		// acquire row locks on `transactions` in a deterministic order. Map
 		// iteration is randomised per-run, which under contention would
@@ -4344,7 +4344,7 @@ func (s *Store) setDAH(ctx context.Context, txn *sql.Tx, transactionID int) erro
 // storage error for a parent that only one of them touched, so the caller decides what the
 // spends on that parent get.
 func (s *Store) setDAHIfPresent(ctx context.Context, txn *sql.Tx, transactionID int) (present bool, err error) {
-	if s.settings.GetUtxoStoreBlockHeightRetention() == 0 {
+	if s.settings.GetUtxoStoreSpentDeleteRetention() == 0 {
 		return true, nil
 	}
 
@@ -4412,7 +4412,7 @@ func (s *Store) setDAHIfPresent(ctx context.Context, txn *sql.Tx, transactionID 
 		return true, nil
 	}
 
-	retention := s.settings.GetUtxoStoreBlockHeightRetention()
+	retention := s.settings.GetUtxoStoreSpentDeleteRetention()
 	// +1 because blockHeight is updated asynchronously via blockchain notifications
 	// and lags behind during block processing (mirrors aerospike set_mined.go:162)
 	newDAH := int64(s.GetBlockHeight() + 1 + retention)
@@ -4920,7 +4920,7 @@ func (s *Store) setMinedMultiChunk(ctx context.Context, hashes []*chainhash.Hash
 	// Mirrors aerospike's setMined->setDeleteAtHeight behavior
 	var retention uint32
 	if s.settings != nil {
-		retention = s.settings.GetUtxoStoreBlockHeightRetention()
+		retention = s.settings.GetUtxoStoreSpentDeleteRetention()
 	}
 	// Stamp the DAH relative to the height of the block the tx is mined into
 	// (minedBlockInfo.BlockHeight), NOT the store's cached chain tip. The cached
@@ -5980,9 +5980,9 @@ func (s *Store) GetConflictingChildren(ctx context.Context, hash chainhash.Hash)
 func (s *Store) SetConflicting(ctx context.Context, txHashes []chainhash.Hash, setValue bool) ([]*utxo.Spend, []chainhash.Hash, error) {
 	var deleteAtHeight sql.NullInt64
 
-	if s.settings.GetUtxoStoreBlockHeightRetention() > 0 && setValue {
+	if s.settings.GetUtxoStoreSpentDeleteRetention() > 0 && setValue {
 		// +1 because blockHeight lags during block processing (mirrors aerospike set_mined.go:162)
-		if err := deleteAtHeight.Scan(int64(s.GetBlockHeight() + 1 + s.settings.GetUtxoStoreBlockHeightRetention())); err != nil {
+		if err := deleteAtHeight.Scan(int64(s.GetBlockHeight() + 1 + s.settings.GetUtxoStoreSpentDeleteRetention())); err != nil {
 			return nil, nil, err
 		}
 	}
@@ -5997,7 +5997,7 @@ func (s *Store) SetConflicting(ctx context.Context, txHashes []chainhash.Hash, s
 	// When clearing conflicting: clear DAH (conditions for deletion no longer met).
 	var qUpdate string
 	if setValue {
-		if retention := s.settings.GetUtxoStoreBlockHeightRetention(); retention > 0 {
+		if retention := s.settings.GetUtxoStoreSpentDeleteRetention(); retention > 0 {
 			// the stamp is never below the row's highest block height + retention, and a
 			// stamp written earlier from a lagging tip is raised once the record is mined
 			qUpdate = fmt.Sprintf(`
@@ -6250,7 +6250,7 @@ func (s *Store) SetLocked(ctx context.Context, txHashes []chainhash.Hash, setVal
 // Replaces 3N sequential queries (unlock + setDAH SELECT + setDAH UPDATE per tx)
 // with 1 UPDATE per chunk of maxINClauseSize hashes.
 func (s *Store) setUnlockedBulk(ctx context.Context, txHashes []chainhash.Hash) error {
-	retention := s.settings.GetUtxoStoreBlockHeightRetention()
+	retention := s.settings.GetUtxoStoreSpentDeleteRetention()
 
 	for i := 0; i < len(txHashes); i += maxINClauseSize {
 		end := i + maxINClauseSize
@@ -6446,7 +6446,7 @@ func (s *Store) MarkTransactionsOnLongestChain(ctx context.Context, txHashes []c
 			// hashes start at $1
 			var retention uint32
 			if s.settings != nil {
-				retention = s.settings.GetUtxoStoreBlockHeightRetention()
+				retention = s.settings.GetUtxoStoreSpentDeleteRetention()
 			}
 
 			if retention > 0 {
@@ -7568,7 +7568,7 @@ func (s *Store) PreserveTransactions(ctx context.Context, txIDs []chainhash.Hash
 func (s *Store) ProcessExpiredPreservations(ctx context.Context, currentHeight uint32) error {
 	// Retention 0 disables pruning: no DAH is ever stamped (mirrors setDAH's early return), so
 	// clearing preserve_until is all that remains to do here.
-	retention := s.settings.GetUtxoStoreBlockHeightRetention()
+	retention := s.settings.GetUtxoStoreSpentDeleteRetention()
 	if retention == 0 {
 		query := `UPDATE transactions SET preserve_until = NULL WHERE preserve_until IS NOT NULL AND preserve_until <= $1`
 		if _, err := s.db.ExecContext(ctx, query, currentHeight); err != nil {

@@ -500,7 +500,7 @@ func TestIssue1768_ParentPreservedDespiteLateUnminedSince(t *testing.T) {
 	require.NoError(t, store.CreateIndexIfNotExists(ctx, unminedSinceIndexName, fields.UnminedSince.String(), aerospike.NUMERIC))
 	require.NoError(t, store.WaitForIndexReady(ctx, unminedSinceIndexName))
 
-	retention := tSettings.GetUtxoStoreBlockHeightRetention()
+	retention := tSettings.GetUtxoStoreSpentDeleteRetention()
 	unminedRetention := tSettings.UtxoStore.UnminedTxRetention
 	require.Greater(t, retention, unminedRetention, "the race needs a positive margin to outrun")
 
@@ -614,7 +614,7 @@ func TestMarkTransactionsOnLongestChain_ReusedBatchSlots(t *testing.T) {
 		require.True(t, store.UsesNativeMark(), "native ops requested but the mark is not on sub-op 14")
 	}
 
-	retention := int(tSettings.GetUtxoStoreBlockHeightRetention())
+	retention := int(tSettings.GetUtxoStoreSpentDeleteRetention())
 	require.NotZero(t, retention)
 
 	dahBin := fields.DeleteAtHeight.String()
@@ -771,7 +771,7 @@ func TestMarkTransactionsOnLongestChain_ReusedBatchSlots(t *testing.T) {
 			tSettings.UtxoStore.BlockHeightRetentionAdjustment = previousAdjustment
 		})
 
-		require.Zero(t, tSettings.GetUtxoStoreBlockHeightRetention())
+		require.Zero(t, tSettings.GetUtxoStoreSpentDeleteRetention())
 
 		txIDs := hashes("on-no-restamp")
 		checkControls := controls(t, "on-no-restamp")
@@ -804,7 +804,7 @@ func TestMarkTransactionsOnLongestChain_ReusedBatchSlots(t *testing.T) {
 	})
 
 	t.Run("on the longest chain restamps the DAH of masters and their pagination records", func(t *testing.T) {
-		require.Equal(t, uint32(retention), tSettings.GetUtxoStoreBlockHeightRetention())
+		require.Equal(t, uint32(retention), tSettings.GetUtxoStoreSpentDeleteRetention())
 
 		txIDs := hashes("on-restamp")
 		checkControls := controls(t, "on-restamp")
@@ -887,7 +887,7 @@ func TestMarkTransactionsOnLongestChain_NativeResultsAndFallback(t *testing.T) {
 
 	require.NoError(t, store.SetBlockHeight(height))
 
-	retention := int(tSettings.GetUtxoStoreBlockHeightRetention())
+	retention := int(tSettings.GetUtxoStoreSpentDeleteRetention())
 	require.NotZero(t, retention)
 
 	// isNative: a native record carries one TeranodeModifyOp; the restamping expression write carries ten.

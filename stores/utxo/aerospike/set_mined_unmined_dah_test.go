@@ -86,7 +86,7 @@ func TestSetMinedNotOnLongestChainReevaluatesDAH(t *testing.T) {
 				logger := ulogger.NewErrorTestLogger(t)
 				tSettings := test.CreateBaseTestSettings(t)
 				tSettings.Aerospike.EnableSetMinedFilterExpressions = useExpressions
-				retention := tSettings.GetUtxoStoreBlockHeightRetention()
+				retention := tSettings.GetUtxoStoreSpentDeleteRetention()
 				require.Greater(t, retention, uint32(0))
 
 				client, store, _, cleanup := initAerospike(t, tSettings, logger)
@@ -209,7 +209,7 @@ func TestSetMinedNotOnLongestChainDAHMatrixLua(t *testing.T) {
 				tSettings.UtxoStore.BlockHeightRetentionAdjustment = 0
 			}
 
-			retention := tSettings.GetUtxoStoreBlockHeightRetention()
+			retention := tSettings.GetUtxoStoreSpentDeleteRetention()
 
 			client, store, _, cleanup := initAerospike(t, tSettings, logger)
 			defer cleanup()

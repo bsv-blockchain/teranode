@@ -409,7 +409,7 @@ Record marked for automatic pruning:
 
 - `LuaSignalDAHSet` signal from Lua scripts when last UTXO spent
 - `LuaSignalDAHUnset` signal when previously spent UTXO is unspent (reorganization)
-- Formula: `deleteAtHeight = currentBlockHeight + blockHeightRetention`
+- Formula: `deleteAtHeight = currentBlockHeight + blockHeightRetention + unminedTxRetention` (`GetUtxoStoreSpentDeleteRetention`)
 
 **Implementation:**
 
