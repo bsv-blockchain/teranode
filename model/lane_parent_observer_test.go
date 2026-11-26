@@ -33,6 +33,7 @@ type observedParent struct {
 	hash     chainhash.Hash
 	pos      uint64
 	blockIDs []uint32
+	coinbase bool
 }
 
 type recordingObserver struct {
@@ -40,11 +41,11 @@ type recordingObserver struct {
 	seen []observedParent
 }
 
-func (o *recordingObserver) ObserveParent(h chainhash.Hash, pos uint64, blockIDs []uint32) {
+func (o *recordingObserver) ObserveParent(h chainhash.Hash, pos uint64, blockIDs []uint32, coinbase bool) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 
-	o.seen = append(o.seen, observedParent{h, pos, append([]uint32(nil), blockIDs...)})
+	o.seen = append(o.seen, observedParent{h, pos, append([]uint32(nil), blockIDs...), coinbase})
 }
 
 // Without an observer, the state at off, the parent check reads only the block IDs, as before
@@ -63,8 +64,16 @@ func TestParentCheckReadsTheLanePositionOnlyForTheLanesShadow(t *testing.T) {
 
 	_, err = getParentTxMetaBlockIDs(context.Background(), store, parent, observer)
 	require.NoError(t, err)
-	require.Equal(t, [][]fields.FieldName{{fields.BlockIDs, fields.LanePosition}}, store.asked)
-	require.Equal(t, []observedParent{{parent.parentTxHash, 42, []uint32{5}}}, observer.seen)
+	require.Equal(t, [][]fields.FieldName{{fields.BlockIDs, fields.LanePosition, fields.IsCoinbase}}, store.asked)
+	require.Equal(t, []observedParent{{parent.parentTxHash, 42, []uint32{5}, false}}, observer.seen)
+
+	// A coinbase parent is told as one, from the same read.
+	store.data.IsCoinbase = true
+	observer.seen = nil
+
+	_, err = getParentTxMetaBlockIDs(context.Background(), store, parent, observer)
+	require.NoError(t, err)
+	require.Equal(t, []observedParent{{parent.parentTxHash, 42, []uint32{5}, true}}, observer.seen)
 }
 
 // A parent with no mined block is still told to the observer before the check reports it
@@ -76,7 +85,7 @@ func TestParentCheckTellsTheObserverOfAnUnminedParent(t *testing.T) {
 
 	_, err := getParentTxMetaBlockIDs(context.Background(), store, parent, observer)
 	require.ErrorIs(t, err, errors.ErrBlockIncomplete)
-	require.Equal(t, []observedParent{{parent.parentTxHash, 42, nil}}, observer.seen)
+	require.Equal(t, []observedParent{{parent.parentTxHash, 42, nil, false}}, observer.seen)
 }
 
 // checkParentExistsOnChain takes the observer from its context.
