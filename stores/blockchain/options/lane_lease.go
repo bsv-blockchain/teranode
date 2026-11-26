@@ -26,8 +26,9 @@ type LaneLeaseRenew struct {
 	Rate uint64
 	// WantGrant asks for the next grant.
 	WantGrant bool
-	// Settles finishes the oldest grant the holder has left and not yet reported; recorded only
-	// with WantGrant, on the new grant's hand-out row.
+	// Settles finishes the most recent grant the holder has left and not yet reported (an older one
+	// may follow on a later request or the release); recorded only with WantGrant, on the new
+	// grant's hand-out row.
 	Settles lane.Settles
 	// Height is the best block height at the time, recorded with a grant.
 	Height uint32
