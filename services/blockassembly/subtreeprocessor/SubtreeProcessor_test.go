@@ -2840,63 +2840,92 @@ func TestSubtreeProcessor_CreateTransactionMap(t *testing.T) {
 	})
 }
 
+// addNodeBenchmarkSizes are the subtree sizes BenchmarkAddNode and BenchmarkAddNodeWithMap fill
+// ten subtrees of. Each run of either is one fill, whatever b.N is, so run them at -benchtime=1x.
+// One 1Mi fill takes 12 to 18 s on a CI runner, so -short (CI) runs only the 64Ki size.
+var addNodeBenchmarkSizes = []struct {
+	name      string
+	leafCount int
+	long      bool
+}{
+	{name: "64Ki_per_subtree", leafCount: 1 << 16},
+	{name: "1Mi_per_subtree", leafCount: 1 << 20, long: true},
+}
+
 // BenchmarkAddNode tests node addition performance.
 func BenchmarkAddNode(b *testing.B) {
-	g, stp, txHashes := initTestAddNodeBenchmark(b)
+	for _, size := range addNodeBenchmarkSizes {
+		b.Run(size.name, func(b *testing.B) {
+			if size.long && testing.Short() {
+				b.Skip("one fill takes 12 to 18 s on a CI runner; skipped in -short")
+			}
 
-	startTime := time.Now()
+			g, stp, txHashes := initTestAddNodeBenchmark(b, size.leafCount)
 
-	b.ResetTimer()
+			startTime := time.Now()
 
-	for i, txHash := range txHashes {
-		stp.AddBatch([]subtreepkg.Node{{Hash: txHash, Fee: uint64(i)}}, []*subtreepkg.TxInpoints{{ParentTxHashes: []chainhash.Hash{txHash}}}) // nolint:gosec
+			b.ResetTimer()
+
+			for i, txHash := range txHashes {
+				stp.AddBatch([]subtreepkg.Node{{Hash: txHash, Fee: uint64(i)}}, []*subtreepkg.TxInpoints{{ParentTxHashes: []chainhash.Hash{txHash}}}) // nolint:gosec
+			}
+
+			err := g.Wait()
+			require.NoError(b, err)
+
+			b.Logf("Time taken: %s\n", time.Since(startTime))
+		})
 	}
-
-	err := g.Wait()
-	require.NoError(b, err)
-
-	b.Logf("Time taken: %s\n", time.Since(startTime))
 }
 
 func BenchmarkAddNodeWithMap(b *testing.B) {
-	g, stp, txHashes := initTestAddNodeBenchmark(b)
+	for _, size := range addNodeBenchmarkSizes {
+		b.Run(size.name, func(b *testing.B) {
+			if size.long && testing.Short() {
+				b.Skip("one fill takes 12 to 18 s on a CI runner; skipped in -short")
+			}
 
-	_ = stp.Remove(b.Context(), txHashes[1000])
-	_ = stp.Remove(b.Context(), txHashes[2000])
-	_ = stp.Remove(b.Context(), txHashes[3000]) //nolint:gosec
-	_ = stp.Remove(b.Context(), txHashes[4000])
+			g, stp, txHashes := initTestAddNodeBenchmark(b, size.leafCount)
 
-	for i := 0; i < 4; i++ {
-		txHash, err := generateTxHash()
-		require.NoError(b, err)
+			_ = stp.Remove(b.Context(), txHashes[1000])
+			_ = stp.Remove(b.Context(), txHashes[2000])
+			_ = stp.Remove(b.Context(), txHashes[3000]) //nolint:gosec
+			_ = stp.Remove(b.Context(), txHashes[4000])
 
-		txHashes = append(txHashes, txHash)
+			for i := 0; i < 4; i++ {
+				txHash, err := generateTxHash()
+				require.NoError(b, err)
+
+				txHashes = append(txHashes, txHash)
+			}
+
+			startTime := time.Now()
+
+			b.ResetTimer()
+
+			for i, txHash := range txHashes {
+				stp.AddBatch([]subtreepkg.Node{{Hash: txHash, Fee: uint64(i)}}, []*subtreepkg.TxInpoints{{ParentTxHashes: []chainhash.Hash{txHash}}}) //nolint:gosec
+			}
+
+			err := g.Wait()
+			require.NoError(b, err)
+
+			b.Logf("Time taken: %s\n", time.Since(startTime))
+		})
 	}
-
-	startTime := time.Now()
-
-	b.ResetTimer()
-
-	for i, txHash := range txHashes {
-		stp.AddBatch([]subtreepkg.Node{{Hash: txHash, Fee: uint64(i)}}, []*subtreepkg.TxInpoints{{ParentTxHashes: []chainhash.Hash{txHash}}}) //nolint:gosec
-	}
-
-	err := g.Wait()
-	require.NoError(b, err)
-
-	b.Logf("Time taken: %s\n", time.Since(startTime))
 }
 
 // initTestAddNodeBenchmark initializes benchmark environment for AddNode testing.
 //
 // Parameters:
 //   - t: Benchmark testing instance
+//   - leafCount: Subtree size; the hashes fill ten subtrees of it
 //
 // Returns:
 //   - *errgroup.Group: Error group for concurrent operations
 //   - *SubtreeProcessor: Processor instance for testing
 //   - []chainhash.Hash: Test transaction hashes
-func initTestAddNodeBenchmark(b *testing.B) (*errgroup.Group, *SubtreeProcessor, []chainhash.Hash) {
+func initTestAddNodeBenchmark(b *testing.B, leafCount int) (*errgroup.Group, *SubtreeProcessor, []chainhash.Hash) {
 	newSubtreeChan := make(chan NewSubtreeRequest)
 	g := errgroup.Group{}
 	nrSubtreesExpected := 10
@@ -2919,13 +2948,13 @@ func initTestAddNodeBenchmark(b *testing.B) (*errgroup.Group, *SubtreeProcessor,
 	})
 
 	settings := test.CreateBaseTestSettings(b)
-	settings.BlockAssembly.InitialMerkleItemsPerSubtree = 1048576
+	settings.BlockAssembly.InitialMerkleItemsPerSubtree = leafCount
 	settings.BlockAssembly.DoubleSpendWindow = 0
 
 	stp, _ := NewSubtreeProcessor(b.Context(), ulogger.TestLogger{}, settings, nil, nil, nil, newSubtreeChan)
 	stp.Start(b.Context())
 
-	nrTxs := 1_048_576
+	nrTxs := leafCount
 	txHashes := make([]chainhash.Hash, 10*nrTxs)
 
 	for i := 0; i < (10*nrTxs)-1; i++ {

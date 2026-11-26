@@ -139,6 +139,9 @@ type CacheStats struct {
 	// wraps); only the lockfree cache reports it. Explicit deletes are counted
 	// in the cache's own metrics.
 	Evictions uint64
+
+	Bytes         uint64
+	CapacityBytes uint64
 }
 
 // BucketType defines the allocation strategy for the cache's internal buckets.
@@ -1308,6 +1311,8 @@ func (t *TxMetaCache) GetCacheStats() *CacheStats {
 		PreviousGenEntries: s.PreviousGenEntries,
 		LaneWaits:          s.LaneWaits,
 		Evictions:          s.Evictions,
+		Bytes:              s.Bytes,
+		CapacityBytes:      s.CapacityBytes,
 	}
 }
 
