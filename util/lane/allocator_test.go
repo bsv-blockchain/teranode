@@ -35,14 +35,16 @@ type fakeLeases struct {
 	down    bool
 	// ignoreGiveBack makes it a service from before the give-back field.
 	ignoreGiveBack bool
-	gate           chan struct{} // when set, a grant request waits for it to close
-	openGate       chan struct{} // when set, an open waits for it to close, ignoring the caller's context
-	opening        chan struct{} // when set, closed as an open starts waiting on openGate
-	asking         chan struct{} // when set, closed as a grant request starts waiting on gate
-	opens          int
-	renewals       []Renewal
-	releases       []Release
-	seq            byte
+	// loseReply makes the next grant request commit its grant and then fail, as a lost reply does.
+	loseReply bool
+	gate      chan struct{} // when set, a grant request waits for it to close
+	openGate  chan struct{} // when set, an open waits for it to close, ignoring the caller's context
+	opening   chan struct{} // when set, closed as an open starts waiting on openGate
+	asking    chan struct{} // when set, closed as a grant request starts waiting on gate
+	opens     int
+	renewals  []Renewal
+	releases  []Release
+	seq       byte
 }
 
 // leaseGrantStart is a grant's first position and the lease it went to.
@@ -153,7 +155,14 @@ func (f *fakeLeases) RenewLaneLease(_ context.Context, r Renewal) (RenewResult, 
 		giveBack = 0
 	}
 
-	return RenewResult{Granted: true, Grant: f.grantLocked(r.Lease, r.Lane, f.size, r.Settles, giveBack)}, nil
+	g := f.grantLocked(r.Lease, r.Lane, f.size, r.Settles, giveBack)
+
+	if f.loseReply && giveBack != 0 {
+		f.loseReply = false
+		return RenewResult{}, errors.NewServiceUnavailableError("reply lost")
+	}
+
+	return RenewResult{Granted: true, Grant: g}, nil
 }
 
 func (f *fakeLeases) ReleaseLaneLease(_ context.Context, r Release) (bool, error) {
@@ -334,17 +343,19 @@ func TestAllocatorGivesTheSpareBackWhenAGrantAgesOut(t *testing.T) {
 	for _, c := range []struct {
 		name   string
 		ignore bool
+		lose   bool // the reply to the give-back is lost after the service took the spare back
 		next   uint64
-		warns  int
+		warn   string
 	}{
-		{"honoured", false, 52, 0},
-		{"ignored by an older service", true, 201, 1},
+		{"honoured", false, false, 52, ""},
+		{"ignored by an older service", true, false, 201, "[lane] blockchain service granted 0:201 to pod-3 instead of continuing after 51, so positions 52 to 200 stay unused"},
+		{"reply lost", false, true, 152, "[lane] blockchain service granted 0:152 to pod-3 instead of continuing after 51, so positions 52 to 151 stay unused"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			clk := newStepClock()
 			start := clk.Now()
 			src := newFakeLeases(100)
-			src.ignoreGiveBack = c.ignore
+			src.ignoreGiveBack, src.loseReply = c.ignore, c.lose
 			a := newTestAllocator(t, src, Timings{Renew: time.Hour, Stop: 10 * time.Minute, GrantDuration: 2 * time.Minute}, clk)
 			logs := &warnLog{}
 			a.logger = logs
@@ -369,8 +380,23 @@ func TestAllocatorGivesTheSpareBackWhenAGrantAgesOut(t *testing.T) {
 			r := src.grantRequests()[1]
 			require.Equal(t, Settles{First: 1, LastTaken: 51}, r.Settles, "an aged grant settles at the highest position taken")
 			require.Equal(t, uint64(101), r.GiveBack, "the spare goes back unused")
-			require.Len(t, logs.warnings(), c.warns)
-			require.Equal(t, missed+float64(c.warns), testutil.ToFloat64(prometheusLaneGiveBacksMissed))
+			var gaps []string // the lost reply also logs its retry, which is not this warning
+
+			for _, w := range logs.warnings() {
+				if strings.Contains(w, "instead of continuing") {
+					gaps = append(gaps, w)
+				}
+			}
+
+			warns := 0
+			if c.warn != "" {
+				warns = 1
+				require.Equal(t, []string{c.warn}, gaps)
+			} else {
+				require.Empty(t, gaps)
+			}
+
+			require.Equal(t, missed+float64(warns), testutil.ToFloat64(prometheusLaneGiveBacksMissed))
 
 			require.NoError(t, a.Close())
 
