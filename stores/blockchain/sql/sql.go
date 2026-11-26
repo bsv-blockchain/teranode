@@ -260,9 +260,9 @@ type SQL struct {
 	// The fast extend path (parent == preBest, atomic INSERT, won the
 	// maxBlockID CAS) does NOT take this mutex.
 	slowPathMu sync.Mutex
-	// blockTimestampCache is a sliding-window cache of recent block timestamps,
-	// eliminating per-block SQL queries in calculateMedianTimePastForHeight during
-	// sequential block processing (seeder, catchup). Cleared on fork detection/invalidation.
+	// blockTimestampCache holds recent blocks' timestamps by block ID, each with its parent's
+	// ID, so calculateMedianTimePastForHeight follows parent links in memory instead of
+	// querying SQL for every stored block during sync.
 	blockTimestampCache *blockTimestampCache
 	// bestBlockIDQueries counts how many times getBestBlockID has hit the database
 	// (cache misses only). Exposed for tests to catch regressions that reintroduce

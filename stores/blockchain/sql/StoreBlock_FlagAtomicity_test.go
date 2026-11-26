@@ -191,18 +191,25 @@ func TestStoreBlockRolledBackForkLeavesNoTimestampInTheCache(t *testing.T) {
 	storeBlocks(t, s, block1, block2, block3)
 
 	want := []uint32{block1.Header.Timestamp, block2.Header.Timestamp, block3.Header.Timestamp}
-	require.Equal(t, want, s.blockTimestampCache.GetRange(1, 3), "precondition: the main chain is cached")
+	_, block3Meta, err := s.GetBlockHeader(context.Background(), block3.Hash())
+	require.NoError(t, err)
+
+	block3ID := uint64(block3Meta.ID)
+	require.Equal(t, want, s.blockTimestampCache.Ancestors(block3ID, 3), "precondition: the main chain is cached")
+
+	cached := s.blockTimestampCache.Len()
 	require.NotEqual(t, block2.Header.Timestamp, blockAlternative2.Header.Timestamp,
 		"precondition: the fork's timestamp is distinguishable")
 
 	s.reconcileHook = func() error { return errors.NewStorageError("injected reconciliation failure") }
 
-	_, _, err := s.StoreBlock(context.Background(), blockAlternative2, "peer")
+	_, _, err = s.StoreBlock(context.Background(), blockAlternative2, "peer")
 	require.Error(t, err)
 	require.False(t, blockRowExists(t, s, blockAlternative2.Hash().CloneBytes()))
 
-	require.Equal(t, want, s.blockTimestampCache.GetRange(1, 3),
+	require.Equal(t, want, s.blockTimestampCache.Ancestors(block3ID, 3),
 		"the rolled-back fork must not replace or evict cached main-chain timestamps")
+	require.Equal(t, cached, s.blockTimestampCache.Len(), "the rolled-back fork adds no entry")
 }
 
 // TestStoreBlockInvalidWriteDoesNotDependOnTheReconciliation: an invalid row is written
@@ -322,7 +329,7 @@ func TestLegacySequenceLeavesACommittedBlockBehind(t *testing.T) {
 
 	storeBlocks(t, s, block1, block2, block3)
 
-	_, _, _, _, err := s.storeBlock(context.Background(), s.db, blockAlternative2, "peer",
+	_, _, _, _, _, err := s.storeBlock(context.Background(), s.db, blockAlternative2, "peer",
 		options.StoreBlockOptions{}, false)
 	require.NoError(t, err)
 
