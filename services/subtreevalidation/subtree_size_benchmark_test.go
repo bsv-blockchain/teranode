@@ -3,6 +3,7 @@ package subtreevalidation
 import (
 	"context"
 	"os"
+	"runtime"
 	"testing"
 	"time"
 
@@ -181,7 +182,7 @@ func BenchmarkSubtreeSizes(b *testing.B) {
 			// Note: We need to create a minimal T wrapper for the helper
 			fixture := generateFixtureForBenchmark(b, r, tc.totalTxCount, tc.txPerSubtree, server)
 
-			b.ResetTimer()
+			startTimedLoop(b)
 
 			for i := 0; i < b.N; i++ {
 				// Validate the block subtrees
@@ -259,9 +260,138 @@ func generateFixtureForBenchmark(b *testing.B, r *require.Assertions, totalTxCou
 	}
 }
 
-func createTransactionChainForBenchmark(b *testing.B, r *require.Assertions, count int) []*bt.Tx {
+// startTimedLoop collects the garbage the fixture setup left, then restarts the timer. The
+// testing package collects only before each round, so without this the setup's garbage is
+// collected inside the timed loop and a change to the setup moves the result.
+func startTimedLoop(b *testing.B) {
 	b.Helper()
 
+	runtime.GC()
+	b.ResetTimer()
+}
+
+// benchmarkTxChain is a signed chain in extended format, one transaction after another;
+// ends[i] is where transaction i ends in data.
+type benchmarkTxChain struct {
+	data []byte
+	ends []int
+}
+
+// benchmarkTxChains keeps each signed chain by length for the life of the test binary.
+// The testing package calls a sub-benchmark's function once per b.N round and once per
+// -count, and signing the chain was most of the wall time; the timed loop never sees it.
+// Bytes, not parsed transactions, so a timed loop has no extra pointers for the garbage
+// collector to scan. Benchmarks run one at a time, so the map needs no lock.
+var benchmarkTxChains = map[int]benchmarkTxChain{}
+
+// createTransactionChainForBenchmark returns a chain of count transactions, signed on first
+// use for each count and parsed afresh from the kept bytes on every call.
+func createTransactionChainForBenchmark(tb testing.TB, r *require.Assertions, count int) []*bt.Tx {
+	tb.Helper()
+
+	chain, ok := benchmarkTxChains[count]
+	if ok {
+		return parseBenchmarkTxChain(r, chain)
+	}
+
+	signed := signTransactionChainForBenchmark(r, count)
+	for _, tx := range signed {
+		chain.data = append(chain.data, tx.ExtendedBytes()...)
+		chain.ends = append(chain.ends, len(chain.data))
+	}
+
+	// The fixtures read each transaction's ID, size and fee, so the parsed chain must
+	// keep them, previous-output satoshis included.
+	txs := parseBenchmarkTxChain(r, chain)
+	r.Len(txs, len(signed))
+
+	for i, tx := range txs {
+		r.Equal(signed[i].TxID(), tx.TxID())
+		r.Equal(signed[i].Bytes(), tx.Bytes())
+		r.Equal(signed[i].TotalInputSatoshis(), tx.TotalInputSatoshis())
+	}
+
+	benchmarkTxChains[count] = chain
+
+	return txs
+}
+
+// Signing is the cost the cache removes, so a request must read the entry kept for its
+// length, and still hand back transactions the caller can change freely.
+func TestCreateTransactionChainForBenchmarkCachesByLength(t *testing.T) {
+	r := require.New(t)
+
+	lengths := []int{2, 3, 4}
+	for _, n := range lengths {
+		delete(benchmarkTxChains, n)
+	}
+
+	t.Cleanup(func() {
+		for _, n := range lengths {
+			delete(benchmarkTxChains, n)
+		}
+	})
+
+	two := createTransactionChainForBenchmark(t, r, 2)
+	four := createTransactionChainForBenchmark(t, r, 4)
+	r.Len(two, 2)
+	r.Len(four, 4)
+
+	// A hit returns the kept entry: length 2's chain planted under length 3 comes back as is.
+	benchmarkTxChains[3] = benchmarkTxChains[2]
+	r.Len(createTransactionChainForBenchmark(t, r, 3), 2)
+
+	again := createTransactionChainForBenchmark(t, r, 2)
+	r.Len(again, len(two))
+
+	for i := range two {
+		r.Equal(two[i].TxID(), again[i].TxID())
+		r.NotSame(two[i], again[i])
+	}
+
+	// Changing a script in a chain the cache returned leaves the other chains alone.
+	wantID := two[1].TxID()
+	(*again[1].Outputs[0].LockingScript)[0] ^= 0xff
+	(*again[1].Inputs[0].UnlockingScript)[0] ^= 0xff
+	r.NotEqual(wantID, again[1].TxID())
+	r.Equal(wantID, two[1].TxID())
+	r.Equal(wantID, createTransactionChainForBenchmark(t, r, 2)[1].TxID())
+}
+
+// The sizing benchmarks rely on this collection, so the fixture's garbage is not
+// collected inside the timed loop.
+func TestStartTimedLoopForcesACollection(t *testing.T) {
+	var forced uint32
+
+	testing.Benchmark(func(b *testing.B) {
+		var before, after runtime.MemStats
+
+		runtime.ReadMemStats(&before)
+		startTimedLoop(b)
+		runtime.ReadMemStats(&after)
+
+		forced = after.NumForcedGC - before.NumForcedGC
+	})
+
+	require.NotZero(t, forced)
+}
+
+func parseBenchmarkTxChain(r *require.Assertions, chain benchmarkTxChain) []*bt.Tx {
+	txs := make([]*bt.Tx, len(chain.ends))
+	start := 0
+
+	for i, end := range chain.ends {
+		tx, err := bt.NewTxFromBytes(chain.data[start:end])
+		r.NoError(err)
+
+		txs[i] = tx
+		start = end
+	}
+
+	return txs
+}
+
+func signTransactionChainForBenchmark(r *require.Assertions, count int) []*bt.Tx {
 	// Import the transaction creation logic inline to use require assertions
 	// This ensures benchmark failures are properly reported
 	r.GreaterOrEqual(count, 2, "count must be at least 2")
@@ -739,7 +869,7 @@ func BenchmarkBlockSizeScaling(b *testing.B) {
 
 			fixture := generateFixtureForBenchmark(b, r, tc.totalTxCount, tc.txPerSubtree, server)
 
-			b.ResetTimer()
+			startTimedLoop(b)
 			b.ReportAllocs()
 
 			for i := 0; i < b.N; i++ {
@@ -777,7 +907,7 @@ func BenchmarkSubtreeAllocations(b *testing.B) {
 			fixture := generateFixtureForBenchmark(b, r, tc.totalTxCount, tc.txPerSubtree, server)
 			ctx := context.Background()
 
-			b.ResetTimer()
+			startTimedLoop(b)
 			b.ReportAllocs()
 
 			for i := 0; i < b.N; i++ {
@@ -797,7 +927,7 @@ func BenchmarkSubtreeAllocations(b *testing.B) {
 			fixture := generateFixtureForBenchmark(b, r, tc.totalTxCount, tc.txPerSubtree, server)
 			ctx := context.Background()
 
-			b.ResetTimer()
+			startTimedLoop(b)
 			b.ReportAllocs()
 
 			for i := 0; i < b.N; i++ {
@@ -816,7 +946,7 @@ func BenchmarkSubtreeAllocations(b *testing.B) {
 
 			fixture := generateFixtureForBenchmark(b, r, tc.totalTxCount, tc.txPerSubtree, server)
 
-			b.ResetTimer()
+			startTimedLoop(b)
 			b.ReportAllocs()
 
 			for i := 0; i < b.N; i++ {
