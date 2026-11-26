@@ -75,10 +75,16 @@ func (r *Reader) BlockParents(ctx context.Context, parent chainhash.Hash) *Block
 	return b
 }
 
-// ObserveParent answers one parent, or holds it until the chain's rows are in. On a nil
-// BlockParents it does nothing.
-func (b *BlockParents) ObserveParent(parentHash chainhash.Hash, lanePosition uint64, blockIDs []uint32) {
+// ObserveParent answers one parent, or holds it until the chain's rows are in. A coinbase parent
+// is counted at once, with no lookup (KindCoinbase). On a nil BlockParents it does nothing.
+func (b *BlockParents) ObserveParent(parentHash chainhash.Hash, lanePosition uint64, blockIDs []uint32, coinbase bool) {
 	if b == nil {
+		return
+	}
+
+	if coinbase {
+		b.r.CountCoinbase(ReaderBlockParent)
+
 		return
 	}
 
