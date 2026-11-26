@@ -61,7 +61,9 @@ type Timings struct {
 // It holds the grant it is handing out and one spare. At half the current grant used it asks for
 // the next grant and keeps it as the spare. It takes from the current grant until the grant is used
 // up, with no returned position (Return) still waiting in it, or GrantDuration has passed since its
-// first position was taken, and only then moves to the spare. An unused grant expires GrantDuration
+// first position was taken, and only then moves to the spare. A grant that ages out with no spare is
+// left by the next take, which waits for a grant: the service starts that grant right after the last
+// position taken, so a slow process leaves no unused tail between its grants. An unused grant expires GrantDuration
 // after its request was sent, including a spare.
 // The grant it leaves is settled by the next request: the grant's first position and its
 // final number, which is the grant's last position if used up or the highest position taken if it
@@ -123,8 +125,9 @@ type Allocator struct {
 	// leaseTakenBefore is leaseTaken as it stood when cur was installed, the number the lease falls
 	// back to when every position cur gave out came back.
 	leaseTakenBefore uint64
-	// highest is the highest position this process has given out in each lane, across leases. A
-	// grant that does not start above it is refused.
+	// highest is the highest position this process has given out in each lane, across leases, that
+	// may carry a record: leaving a grant lowers it past returned positions at the top of what the
+	// grant gave out. A grant that does not start above it is refused.
 	highest [MaxLane + 1]uint64
 	// lastGood is when the last renewal (or the open) that succeeded was sent.
 	lastGood time.Time
@@ -413,6 +416,12 @@ func (a *Allocator) leaveCurrentLocked(usedUp bool) {
 		a.pending[a.npending] = Settles{First: a.cur.First, LastTaken: final}
 		a.npending++
 		a.leaseTaken = a.leaseTakenAfterLocked(final)
+
+		// Returned positions above final carry no record, so a grant that continues right after
+		// final, as the service makes one when this grant is still the lane's newest, is accepted.
+		if final != 0 {
+			a.highest[a.cur.Lane] = final
+		}
 	}
 
 	if a.hasSpare {
@@ -496,7 +505,9 @@ func (a *Allocator) withinStopLocked() bool {
 }
 
 // wantGrantLocked reports whether the loop should ask for the next grant: no spare is held, and
-// the current grant is missing, half used, used up or aged out.
+// the current grant is missing, half used or used up. An aged-out grant alone is not a reason: the
+// next take leaves it first, so the request carries its settles pair and the service can start
+// the next grant right after its last taken position instead of above its unused tail.
 func (a *Allocator) wantGrantLocked() bool {
 	if a.hasSpare {
 		return false
@@ -506,11 +517,7 @@ func (a *Allocator) wantGrantLocked() bool {
 		return true
 	}
 
-	if a.next-a.cur.First >= (a.cur.Len()+1)/2 {
-		return true
-	}
-
-	return !a.curFirstTake.IsZero() && a.now().Sub(a.curFirstTake) >= a.t.GrantDuration
+	return a.next-a.cur.First >= (a.cur.Len()+1)/2
 }
 
 func (a *Allocator) broadcastLocked() {

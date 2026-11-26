@@ -245,6 +245,87 @@ func TestRenewLaneLeaseRecordsTheSettlesPairOnTheNextHandoutRow(t *testing.T) {
 	})
 }
 
+// A grant request whose settles pair settles the lane's newest hand-out, its own lease's, starts
+// right after the pair's last taken position, so an aged-out grant leaves no unused tail. Any other
+// pair starts above the newest hand-out, as before.
+func TestRenewLaneLeaseContinuesTheNewestHandout(t *testing.T) {
+	t.Parallel() // a database of its own on the shared server
+
+	for _, c := range []struct {
+		name    string
+		settles func(g, spare lane.Grant) lane.Settles
+		spare   bool // the request follows a spare, so the newest hand-out is the spare
+		cont    bool
+	}{
+		{"aged out", func(g, _ lane.Grant) lane.Settles { return lane.Settles{First: g.First, LastTaken: g.First + 287} }, false, true},
+		{"one taken", func(g, _ lane.Grant) lane.Settles { return lane.Settles{First: g.First, LastTaken: g.First} }, false, true},
+		{"used up", func(g, _ lane.Grant) lane.Settles { return lane.Settles{First: g.First, LastTaken: g.Last} }, false, false},
+		{"no pair", func(lane.Grant, lane.Grant) lane.Settles { return lane.Settles{} }, false, false},
+		{"older grant", func(g, _ lane.Grant) lane.Settles { return lane.Settles{First: g.First, LastTaken: g.First + 287} }, true, false},
+		{"spare aged out", func(_, sp lane.Grant) lane.Settles { return lane.Settles{First: sp.First, LastTaken: sp.First + 5} }, true, true},
+		{"taken below the grant", func(g, _ lane.Grant) lane.Settles { return lane.Settles{First: g.First, LastTaken: g.First - 1} }, false, false},
+		{"taken past the grant", func(g, _ lane.Grant) lane.Settles { return lane.Settles{First: g.First, LastTaken: g.Last + 5} }, false, false},
+	} {
+		runLaneHandoutTests(t, c.name, func(t *testing.T, s *SQL) {
+			id, g, _, err := s.OpenLaneLease(t.Context(), leaseOpen("a"))
+			require.NoError(t, err)
+
+			r := leaseRenew(id, g)
+			r.WantGrant = true
+			newest, spare := g, lane.Grant{}
+
+			if c.spare {
+				spare, _, _, err = s.RenewLaneLease(t.Context(), r)
+				require.NoError(t, err)
+				newest = spare
+			}
+
+			r.Settles = c.settles(g, spare)
+
+			got, granted, _, err := s.RenewLaneLease(t.Context(), r)
+			require.NoError(t, err)
+			require.True(t, granted)
+			require.Equal(t, uint64(leaseTestGrantMin), got.Len())
+
+			if c.cont {
+				require.Equal(t, r.Settles.LastTaken+1, got.First, "the grant starts right after the last taken position")
+			} else {
+				require.Equal(t, newest.Last+1, got.First, "the grant starts above the newest hand-out")
+			}
+
+			checkLaneInvariants(t, s)
+		})
+	}
+
+	// Another lease's pair never continues a hand-out, even one that names it. The lease calls cannot
+	// reach this, since any open or grant of the requesting lease is newer, so it is checked directly.
+	runLaneHandoutTests(t, "another lease", func(t *testing.T, s *SQL) {
+		mine, err := lane.NewLeaseID()
+		require.NoError(t, err)
+		theirs, err := lane.NewLeaseID()
+		require.NoError(t, err)
+
+		param := func(id lane.LeaseID) []byte {
+			if s.engine == util.Postgres {
+				return []byte(id.String())
+			}
+
+			return id[:]
+		}
+
+		st := laneState{used: true, first: 1, last: 10_000, leaseID: param(theirs)}
+		pair := lane.Settles{First: 1, LastTaken: 288}
+
+		require.False(t, s.continues(st, mine, pair))
+
+		st.leaseID = param(mine)
+		require.True(t, s.continues(st, mine, pair))
+
+		st.leaseID = nil // a hand-out from before the lease
+		require.False(t, s.continues(st, mine, pair))
+	})
+}
+
 func TestSweepRecordsTheNewestHandoutOnALapsedClose(t *testing.T) {
 	t.Parallel() // a database of its own on the shared server
 
@@ -512,78 +593,9 @@ func TestTwoLeasesOnOneLaneNeverSharePosition(t *testing.T) {
 			require.NoError(t, err)
 		}
 
-		type row struct {
-			lane        int
-			first, last int64
-			leaseID     string
-			handedAt    time.Time
-		}
-
-		rows, err := s.db.QueryContext(t.Context(), `SELECT lane, first, last, lease_id, handed_at FROM lane_handout`)
-		require.NoError(t, err)
-
-		var all []row
-
-		for rows.Next() {
-			var (
-				r  row
-				id []byte
-			)
-
-			require.NoError(t, rows.Scan(&r.lane, &r.first, &r.last, &id, &r.handedAt))
-			r.leaseID = string(id)
-			all = append(all, r)
-		}
-
-		require.NoError(t, rows.Err())
-		require.NoError(t, rows.Close())
-		require.Greater(t, len(all), workers*loops)
-
-		byLane := map[int][]row{}
-		for _, r := range all {
-			require.Less(t, r.lane, 254)
-			byLane[r.lane] = append(byLane[r.lane], r)
-		}
-
-		for l, rs := range byLane {
-			sort.Slice(rs, func(i, j int) bool { return rs[i].first < rs[j].first })
-
-			for i := 1; i < len(rs); i++ {
-				require.Greater(t, rs[i].first, rs[i-1].last, "lane %d: two hand-outs overlap", l)
-			}
-
-			sort.SliceStable(rs, func(i, j int) bool { return rs[i].handedAt.Before(rs[j].handedAt) })
-
-			for i := 1; i < len(rs); i++ {
-				if rs[i].handedAt.Equal(rs[i-1].handedAt) {
-					continue
-				}
-
-				require.Greater(t, rs[i].first, rs[i-1].first, "lane %d: a later hand-out starts below an earlier one", l)
-			}
-		}
-
-		closes, err := s.db.QueryContext(t.Context(), `SELECT c.lease_id, c.last, (SELECT COUNT(*) FROM lane_handout h WHERE h.lease_id = c.lease_id AND c.last BETWEEN h.first AND h.last) FROM lane_close c`)
-		require.NoError(t, err)
-
-		n := 0
-
-		for closes.Next() {
-			var (
-				id     []byte
-				last   int64
-				inside int
-			)
-
-			require.NoError(t, closes.Scan(&id, &last, &inside))
-			require.Equal(t, 1, inside, "close row last %d is not inside its own lease's grants", last)
-
-			n++
-		}
-
-		require.NoError(t, closes.Err())
-		require.NoError(t, closes.Close())
-		require.Positive(t, n)
+		require.Greater(t, countRows(t, s, `SELECT COUNT(*) FROM lane_handout`), workers*loops)
+		require.Positive(t, countRows(t, s, `SELECT COUNT(*) FROM lane_close`))
+		checkLaneInvariants(t, s)
 	})
 }
 
@@ -832,30 +844,35 @@ func TestOpenLaneLeaseTakesTheLaneClosedLongestAgo(t *testing.T) {
 }
 
 // checkLaneInvariants checks what must hold however the lease calls interleave: no position is
-// handed out twice in a lane, a later hand-out never starts below an earlier one, a lease has at
+// handed out twice in a lane, a hand-out starts inside the one below it only by continuing it from
+// its own lease's settles pair, a later hand-out never starts below an earlier one, a lease has at
 // most one close row and its last lies inside the lease's own grants, and a lane's lease row has a
 // close row exactly when it is closed.
 func checkLaneInvariants(t *testing.T, s *SQL) {
 	t.Helper()
 
 	type row struct {
-		first, last int64
-		handedAt    time.Time
+		first, last          int64
+		handedAt             time.Time
+		lease                string
+		settlesFirst, settTk sql.NullInt64
 	}
 
-	rows, err := s.db.QueryContext(t.Context(), `SELECT lane, first, last, handed_at FROM lane_handout`)
+	rows, err := s.db.QueryContext(t.Context(), `SELECT lane, first, last, handed_at, lease_id, settles_first, settles_last_taken FROM lane_handout`)
 	require.NoError(t, err)
 
 	byLane := map[int][]row{}
 
 	for rows.Next() {
 		var (
-			l int
-			r row
+			l  int
+			r  row
+			id []byte
 		)
 
-		require.NoError(t, rows.Scan(&l, &r.first, &r.last, &r.handedAt))
+		require.NoError(t, rows.Scan(&l, &r.first, &r.last, &r.handedAt, &id, &r.settlesFirst, &r.settTk))
 		require.Less(t, l, leasableLanes)
+		r.lease = string(id)
 		byLane[l] = append(byLane[l], r)
 	}
 
@@ -866,7 +883,15 @@ func checkLaneInvariants(t *testing.T, s *SQL) {
 		sort.Slice(rs, func(i, j int) bool { return rs[i].first < rs[j].first })
 
 		for i := 1; i < len(rs); i++ {
-			require.Greater(t, rs[i].first, rs[i-1].last, "lane %d: two hand-outs overlap", l)
+			if rs[i].first > rs[i-1].last {
+				continue
+			}
+
+			// Inside the hand-out below: only a continuation, which starts right after the last
+			// position its own lease reported taken from that hand-out.
+			require.True(t, rs[i].lease != "" && rs[i].lease == rs[i-1].lease && rs[i].settlesFirst.Valid &&
+				rs[i].settlesFirst.Int64 == rs[i-1].first && rs[i].first == rs[i].settTk.Int64+1,
+				"lane %d: hand-out at %d overlaps the one at %d without continuing it", l, rs[i].first, rs[i-1].first)
 		}
 
 		sort.SliceStable(rs, func(i, j int) bool { return rs[i].handedAt.Before(rs[j].handedAt) })
@@ -876,7 +901,7 @@ func checkLaneInvariants(t *testing.T, s *SQL) {
 		}
 	}
 
-	require.Zero(t, countRows(t, s, `SELECT COUNT(*) FROM lane_close c WHERE (SELECT COUNT(*) FROM lane_handout h WHERE h.lease_id = c.lease_id AND c.last BETWEEN h.first AND h.last) <> 1`),
+	require.Zero(t, countRows(t, s, `SELECT COUNT(*) FROM lane_close c WHERE NOT EXISTS (SELECT 1 FROM lane_handout h WHERE h.lease_id = c.lease_id AND c.last BETWEEN h.first AND h.last)`),
 		"a close row's last lies outside its own lease's grants")
 	require.Zero(t, countRows(t, s, `SELECT COUNT(*) - COUNT(DISTINCT lease_id) FROM lane_close`), "a lease has two close rows")
 	require.Zero(t, countRows(t, s, `SELECT COUNT(*) FROM lane_lease l WHERE (l.closed_at IS NOT NULL) <> EXISTS (SELECT 1 FROM lane_close c WHERE c.lease_id = l.lease_id)`),
@@ -889,7 +914,8 @@ type leaseModel struct {
 	s         *SQL
 	leases    []*modelLease
 	current   map[uint8]*modelLease // each lane's lease row
-	high      map[uint8]uint64      // each lane's newest hand-out, 0 for none
+	high      map[uint8]uint64      // each lane's newest hand-out's last, 0 for none
+	newest    map[uint8]modelNewest // each lane's newest hand-out, by first
 	prefillAt map[uint8]time.Time   // when the hand-outs from before the lease were made
 	handouts  []modelHandout        // the hand-out rows with a lease
 	closes    []modelClose
@@ -939,6 +965,35 @@ func (m *leaseModel) exhausted(l uint8) bool { return m.high[l] >= lane.MaxPosit
 
 func (m *leaseModel) stale(ls *modelLease) bool { return ls.closed || m.current[ls.lane] != ls }
 
+// modelNewest is a lane's newest hand-out: its first position and its lease, nil from before the lease.
+type modelNewest struct {
+	first uint64
+	lease *modelLease
+}
+
+// continues reports whether ls's grant request with settles pair st starts right after the pair's
+// last taken position: the pair settles the lane's newest hand-out, ls's own, short of its last.
+func (m *leaseModel) continues(ls *modelLease, st lane.Settles) bool {
+	n := m.newest[ls.lane]
+
+	return st.First != 0 && n.lease == ls && st.First == n.first && st.LastTaken >= n.first && st.LastTaken < m.high[ls.lane]
+}
+
+// renewGrant is the grant ls's request gets: size positions from one above the lane's newest
+// hand-out, or from one above st's last taken position when the request continues that hand-out.
+func (m *leaseModel) renewGrant(ls *modelLease, size uint64, st lane.Settles) lane.Grant {
+	if !m.continues(ls, st) {
+		return m.grant(ls.lane, size)
+	}
+
+	g := lane.Grant{Lane: ls.lane, First: st.LastTaken + 1, Last: lane.MaxPosition}
+	if size-1 < lane.MaxPosition-g.First {
+		g.Last = g.First + size - 1
+	}
+
+	return g
+}
+
 // grant is the next grant in lane l: size positions from one above the lane's newest hand-out.
 func (m *leaseModel) grant(l uint8, size uint64) lane.Grant {
 	g := lane.Grant{Lane: l, First: m.high[l] + 1, Last: lane.MaxPosition}
@@ -951,6 +1006,7 @@ func (m *leaseModel) grant(l uint8, size uint64) lane.Grant {
 
 func (m *leaseModel) record(ls *modelLease, g lane.Grant, height uint32, st lane.Settles) {
 	m.high[g.Lane] = g.Last
+	m.newest[g.Lane] = modelNewest{g.First, ls}
 	ls.grants = append(ls.grants, g)
 	m.handouts = append(m.handouts, modelHandout{g.Lane, lane.ToSigned(g.First), lane.ToSigned(g.Last), ls.holder, int64(height), m.key(ls.id), settlesFirst(st), settlesLastTaken(st)})
 }
@@ -1131,6 +1187,7 @@ func (m *leaseModel) prefill(t *testing.T, rng *rand.Rand, free int) {
 		require.NoError(t, err)
 
 		m.high[uint8(n)], m.prefillAt[uint8(n)] = lane.FromSigned(last), at //nolint:gosec // n is below 254
+		m.newest[uint8(n)] = modelNewest{first: uint64(first)}              //nolint:gosec // n is below 254
 	}
 }
 
@@ -1156,7 +1213,7 @@ func TestLaneLeaseStoreKeepsItsInvariants(t *testing.T) {
 
 func runLeaseModel(t *testing.T, s *SQL, seed uint64, steps int) {
 	rng := rand.New(rand.NewPCG(seed, seed)) //nolint:gosec // test randomness
-	m := &leaseModel{s: s, current: map[uint8]*modelLease{}, high: map[uint8]uint64{}, prefillAt: map[uint8]time.Time{}}
+	m := &leaseModel{s: s, current: map[uint8]*modelLease{}, high: map[uint8]uint64{}, newest: map[uint8]modelNewest{}, prefillAt: map[uint8]time.Time{}}
 
 	var ops []string
 
@@ -1246,7 +1303,7 @@ func runLeaseModel(t *testing.T, s *SQL, seed uint64, steps int) {
 			stale := m.stale(ls)
 
 			g, granted, closed, err := s.RenewLaneLease(ctx, req)
-			if !stale && req.WantGrant && m.exhausted(ls.lane) {
+			if !stale && req.WantGrant && m.exhausted(ls.lane) && !m.continues(ls, req.Settles) {
 				require.ErrorIs(t, err, errors.ErrServiceError, "an exhausted lane grants nothing")
 				break
 			}
@@ -1269,7 +1326,7 @@ func runLeaseModel(t *testing.T, s *SQL, seed uint64, steps int) {
 					size = max(size, req.Rate*120)
 				}
 
-				require.Equal(t, m.grant(ls.lane, size), g)
+				require.Equal(t, m.renewGrant(ls, size, req.Settles), g)
 				m.record(ls, g, req.Height, req.Settles)
 			}
 

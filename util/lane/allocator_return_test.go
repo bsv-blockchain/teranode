@@ -391,6 +391,29 @@ func TestAllocatorSettlesAGrantBelowReturnedPositionsAtItsTop(t *testing.T) {
 	require.Equal(t, Settles{First: 1, LastTaken: 48}, settleAgedGrant(t, 50, 20, 49), "only the run at the top")
 }
 
+// A grant that continues an aged-out one starts right after its settled final number, below the
+// returned positions at the old grant's top. Those carry no record, so the allocator accepts it and
+// gives them out again from the new grant.
+func TestAllocatorAcceptsAGrantThatContinuesBelowReturnedPositions(t *testing.T) {
+	clk := newStepClock()
+	src := newFakeLeases(100)
+	a := newTestAllocator(t, src, quiet, clk)
+	refused := testutil.ToFloat64(prometheusLaneRefusedGrants)
+
+	for i := uint64(1); i <= 7; i++ {
+		require.Equal(t, Pack(0, i), next(t, a))
+	}
+
+	require.True(t, a.Return(Pack(0, 7)))
+	require.True(t, a.Return(Pack(0, 6)))
+
+	clk.step(2 * time.Minute)
+	require.Equal(t, Pack(0, 6), next(t, a), "the next grant continues at the first position no record carries")
+	require.Equal(t, Settles{First: 1, LastTaken: 5}, src.grantRequests()[0].Settles)
+	require.Equal(t, Pack(0, 7), next(t, a))
+	require.Equal(t, refused, testutil.ToFloat64(prometheusLaneRefusedGrants), "no grant was refused")
+}
+
 // A grant every taken position of which came back settles at zero: it gave out nothing that may
 // carry a record.
 func TestAllocatorSettlesAGrantWhoseTakesAllCameBackAtZero(t *testing.T) {
