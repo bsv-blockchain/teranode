@@ -2,10 +2,8 @@ package lanereader
 
 import (
 	"context"
-	"fmt"
 	"net/url"
 	"runtime"
-	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -395,7 +393,7 @@ func TestReaderCountsTheMinedWriteWindowApart(t *testing.T) {
 		b2 := c.add(b1, takes(t, 3, 6))
 		require.NoError(t, store.SetBlockMinedSet(ctx, &b1.hash, nil))
 
-		logger := &warnLog{}
+		logger := &warnLogger{}
 		r := newReader(logger, store, 100)
 		clock := storedAt(t, store, b2.hash)
 		r.now = func() time.Time { return clock }
@@ -529,33 +527,6 @@ func TestReaderCountsTheMinedWriteWindowApart(t *testing.T) {
 			r.CompareHeight(ReaderValidator, chainhash.Hash{}, lane.Pack(3, 8), false, 0)
 		})
 	})
-}
-
-// warnLog is a logger that keeps its warnings.
-type warnLog struct {
-	ulogger.TestLogger
-
-	mu    sync.Mutex
-	warns []string
-}
-
-func (l *warnLog) Warnf(format string, args ...interface{}) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-
-	l.warns = append(l.warns, fmt.Sprintf(format, args...))
-}
-
-// last is the latest warning, empty if there is none.
-func (l *warnLog) last() string {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-
-	if len(l.warns) == 0 {
-		return ""
-	}
-
-	return l.warns[len(l.warns)-1]
 }
 
 // storedAt is when the store saved block hash, the start of its mined write's minute.

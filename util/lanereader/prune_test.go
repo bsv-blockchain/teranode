@@ -1,6 +1,7 @@
 package lanereader
 
 import (
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -455,19 +456,33 @@ func TestPruneJudgeStopsAtTheFirstUnsettledPosition(t *testing.T) {
 	require.Equal(t, [3]uint64{1, 0, 1}, j.vias, "the parent and the first spender, not the second")
 }
 
-// warnLogger records the format of each warning.
+// warnLogger records each warning's format and its formatted line.
 type warnLogger struct {
 	ulogger.TestLogger
 
 	mu    sync.Mutex
 	warns []string
+	lines []string
 }
 
-func (l *warnLogger) Warnf(format string, _ ...interface{}) {
+func (l *warnLogger) Warnf(format string, args ...interface{}) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
 	l.warns = append(l.warns, format)
+	l.lines = append(l.lines, fmt.Sprintf(format, args...))
+}
+
+// last is the latest warning's formatted line, empty if there is none.
+func (l *warnLogger) last() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	if len(l.lines) == 0 {
+		return ""
+	}
+
+	return l.lines[len(l.lines)-1]
 }
 
 // TestPruneJudgeLogsEachDirectionUnderItsOwnGate: the first disagreements of each direction are
