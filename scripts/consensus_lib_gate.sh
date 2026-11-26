@@ -62,10 +62,18 @@ fi
 
 run_vectors() { # dir output [go test flags...]
 	local dir=$1 out=$2
+	local status=0
 	shift 2
 	# go test exits non-zero when a test fails; the outcomes are in the JSON.
 	# shellcheck disable=SC2086 # PKGS is a list of packages
-	(cd "$dir" && go test -count=1 -timeout=20m -json "$@" $PKGS) >"$out" 2>"$out.stderr" || true
+	(cd "$dir" && go test -count=1 -timeout=20m -json "$@" $PKGS) >"$out" 2>"$out.stderr" || status=$?
+	case $status in
+	0|1) ;; # Completed test failures are compared; the reader checks completeness.
+	*)
+		echo "consensusdiff: go test exited with status $status; see $out.stderr" >&2
+		return 1
+		;;
+	esac
 }
 
 BASE_TREE=$OUT_DIR/base-tree

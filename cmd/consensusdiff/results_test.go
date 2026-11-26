@@ -90,6 +90,17 @@ func TestReadResults(t *testing.T) {
 		_, err := readResults(strings.NewReader("{not json\n"))
 		require.Error(t, err)
 	})
+
+	t.Run("every observed package must finish", func(t *testing.T) {
+		for _, in := range []string{
+			goTestJSON(event("start", "", "")),
+			goTestJSON(event("pass", "TestFirst", ""), event("run", "TestLater", "")),
+			goTestJSON(event("pass", "", ""), `{"Action":"start","Package":"other"}`),
+		} {
+			_, err := readResults(strings.NewReader(in))
+			require.ErrorContains(t, err, "no final package outcome")
+		}
+	})
 }
 
 func TestDiffResults(t *testing.T) {

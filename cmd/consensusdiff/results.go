@@ -39,6 +39,7 @@ func readResults(r io.Reader) (map[string]outcome, error) {
 	details := map[string]string{}
 	errorLines := map[string]string{}
 	messageLines := map[string]string{}
+	packages := map[string]bool{}
 
 	scanner := bufio.NewScanner(r)
 	scanner.Buffer(make([]byte, 0, 1024*1024), 16*1024*1024)
@@ -57,6 +58,9 @@ func readResults(r io.Reader) (map[string]outcome, error) {
 		if e.Package == "" {
 			continue // build-output events carry ImportPath, not Package
 		}
+		if _, seen := packages[e.Package]; !seen {
+			packages[e.Package] = false
+		}
 
 		if e.Test == "" {
 			// A package's own output is the test binary's log, not a reason.
@@ -67,6 +71,7 @@ func readResults(r io.Reader) (map[string]outcome, error) {
 				}
 
 				results[e.Package+" (package)"] = o
+				packages[e.Package] = true
 			}
 
 			continue
@@ -110,6 +115,11 @@ func readResults(r io.Reader) (map[string]outcome, error) {
 
 	if err := scanner.Err(); err != nil {
 		return nil, err
+	}
+	for pkg, complete := range packages {
+		if !complete {
+			return nil, errors.NewProcessingError("%s has no final package outcome; go test may have been interrupted", pkg)
+		}
 	}
 
 	return results, nil
