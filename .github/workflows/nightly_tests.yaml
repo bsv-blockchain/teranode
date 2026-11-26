@@ -18,6 +18,8 @@ jobs:
   # Chain Integrity Test with 3 block generators.
   # Muted: docker-compose-3blasters.yml pulls teranode-coinbase from a private ECR registry that CI has no
   # credentials for, so the job fails before any test runs. Re-enable once the image is pullable from CI.
+  # As written it starts only block-generator-1: block-generator-2 and -3 need the with-coinbase profile,
+  # which the compose up below does not pass. That flag would also start every other with-coinbase service.
   # The single-miner in-process counterpart (test/e2e/chainintegrity) still runs on every PR.
   chainintegrity:
     name: Chain Integrity Test
@@ -181,7 +183,8 @@ jobs:
         run: docker compose -f compose/docker-compose-3blasters.yml down
 
   # The daemon ready tests that the smoketest -skip list excludes and no other target (prunertest,
-  # legacy-sync) selects. The rest of the package already runs on every PR and on main.
+  # legacy-sync) selects. The rest of the package runs on every PR. Main runs smoketest and prunertest but
+  # not legacy-sync, so the legacy sync tests that smoketest skips run only on PRs.
   # No -race: TestMultistreamLongestChainSelection has a known race in the Kafka producer (see the Makefile).
   # TestShouldRejectOversizedTx is also uncovered but is left out because it fails on main.
   daemon-uncovered-tests:
