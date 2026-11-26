@@ -748,6 +748,8 @@ func NewSubtreeProcessor(_ context.Context, logger ulogger.Logger, tSettings *se
 	// when cast to uint16.
 	splitBucketsCfg := tSettings.BlockAssembly.SplitMapBuckets
 
+	warnMinedSetRetentionOff(logger, tSettings)
+
 	var splitBuckets uint16
 
 	switch {

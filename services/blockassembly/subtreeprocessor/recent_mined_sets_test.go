@@ -9,6 +9,7 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
 	"github.com/bsv-blockchain/teranode/model"
+	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/stretchr/testify/require"
 )
 
@@ -313,6 +314,39 @@ func TestForgetAndClearMinedSets(t *testing.T) {
 	require.Zero(t, stp.keptMinedSetCount())
 }
 
+// A retention of 0 or less keeps no set, so with a double-spend window a mined transaction the
+// window held back re-enters; that pairing is warned about when the processor is built.
+func TestWarnMinedSetRetentionOff(t *testing.T) {
+	cases := map[string]struct {
+		retention, window time.Duration
+		warns             bool
+	}{
+		"retention_off_with_window":      {retention: 0, window: 2 * time.Second, warns: true},
+		"retention_negative_with_window": {retention: -time.Second, window: 2 * time.Second, warns: true},
+		"retention_off_without_window":   {retention: 0},
+		"retention_on_with_window":       {retention: 10 * time.Second, window: 2 * time.Second},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			logger := &queueBoundCapturingLogger{}
+			tSettings := &settings.Settings{}
+			tSettings.BlockAssembly.MinedTxSetRetention = tc.retention
+			tSettings.BlockAssembly.DoubleSpendWindow = tc.window
+
+			warnMinedSetRetentionOff(logger, tSettings)
+
+			if !tc.warns {
+				require.Empty(t, logger.warns)
+				return
+			}
+
+			require.Len(t, logger.warns, 1)
+			require.Contains(t, logger.warns[0], "can re-enter block assembly")
+		})
+	}
+}
+
 // An ordinary block move: a late hand-off of a transaction the block mined, after the block's
 // drain, is dropped on arrival by the block's kept set. With a double-spend window the transaction
 // arrives before the block instead, the drain leaves it queued, and the kept set must still drop
@@ -368,7 +402,8 @@ func TestMoveForwardBlock_LateHandOffOfMinedTxStaysOut(t *testing.T) {
 
 				if tc.window > 0 {
 					require.Equal(t, int64(2), stp.queue.length(), "precondition: the block's drain leaves the batch inside the window")
-					nowNanos.Store(enqueueAt.Add(tc.window + time.Millisecond).UnixNano())
+					// Past the window and past the retention alone, so only the window's share of the set's life keeps the mined transaction out.
+					nowNanos.Store(enqueueAt.Add(max(tc.window, tc.retention) + time.Second).UnixNano())
 				} else {
 					handOff()
 				}

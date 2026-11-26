@@ -191,7 +191,8 @@ func TestReorgBlocks_Fork_LateArrivalAfterItsForwardBlockStaysOut(t *testing.T) 
 					require.Equal(t, int64(2), stp.queue.length(), "precondition: the forward drains leave the batch inside the window")
 
 					stp.Start(t.Context())
-					nowNanos.Store(enqueueAt.Add(tc.window + time.Millisecond).UnixNano())
+					// Past the window and past the retention alone, so only the window's share of the set's life keeps the mined transaction out.
+					nowNanos.Store(enqueueAt.Add(max(tc.window, tc.retention) + time.Second).UnixNano())
 
 					require.Eventually(t, func() bool {
 						return stp.queue.length() == 0 && stp.GetCurrentTxMap().Exists(unmined)

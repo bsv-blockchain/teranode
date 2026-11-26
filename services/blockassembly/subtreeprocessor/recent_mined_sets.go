@@ -9,6 +9,8 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
 	"github.com/bsv-blockchain/teranode/model"
+	"github.com/bsv-blockchain/teranode/settings"
+	"github.com/bsv-blockchain/teranode/ulogger"
 )
 
 // recentMinedSet is the transaction set of a block that block assembly moved forward onto. It is
@@ -116,6 +118,17 @@ func (stp *SubtreeProcessor) minedSetRetention() time.Duration {
 	}
 
 	return retention + max(stp.settings.BlockAssembly.DoubleSpendWindow, 0)
+}
+
+// warnMinedSetRetentionOff warns when blockassembly_minedTxSetRetention is 0 or less while the
+// double-spend window is above 0: no set is kept, so a transaction a block mined that the window
+// held back in the queue goes back into block assembly when the window lets it out.
+func warnMinedSetRetentionOff(logger ulogger.Logger, tSettings *settings.Settings) {
+	if tSettings.BlockAssembly.MinedTxSetRetention > 0 || tSettings.BlockAssembly.DoubleSpendWindow <= 0 {
+		return
+	}
+
+	logger.Warnf("BlockAssembly.MinedTxSetRetention=%s keeps no mined transaction set while DoubleSpendWindow=%s; a transaction a block mined, held back by the window, can re-enter block assembly", tSettings.BlockAssembly.MinedTxSetRetention, tSettings.BlockAssembly.DoubleSpendWindow)
 }
 
 func (s *recentMinedSet) expired(now time.Time) bool {
