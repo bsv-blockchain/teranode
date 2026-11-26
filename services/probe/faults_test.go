@@ -225,7 +225,7 @@ func TestPanicInClientWriteLoopClosesOnlyThatClient(t *testing.T) {
 	srv.setFaultHook(panicAt(faultClientWrite, 1))
 
 	require.Eventually(t, func() bool { return srv.hubClients() == 1 }, 5*time.Second, 5*time.Millisecond)
-	require.Equal(t, 1, countLines(logger.Lines(), "websocket client writer panicked"))
+	require.Eventually(t, func() bool { return countLines(logger.Lines(), "websocket client writer panicked") == 1 }, 5*time.Second, 5*time.Millisecond, "the writer removes its client before it logs the panic")
 
 	alive := 0
 
