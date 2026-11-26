@@ -465,6 +465,25 @@ func TestFindUTXOSet(t *testing.T) {
 	}
 }
 
+// A set whose existence cannot be checked is an error, not an absence: otherwise an
+// unreadable plain set would silently give way to the compressed one.
+func TestFindUTXOSet_UncheckablePathIsAnError(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores the directory permissions this test relies on")
+	}
+
+	dir := t.TempDir()
+	locked := filepath.Join(dir, "locked")
+	require.NoError(t, os.Mkdir(locked, 0o700))
+	require.NoError(t, os.Symlink(filepath.Join(locked, "set"), filepath.Join(dir, compressedTestHash+".utxo-set")))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, compressedTestHash+".utxo-set.zst"), nil, 0o600))
+	require.NoError(t, os.Chmod(locked, 0))
+	t.Cleanup(func() { _ = os.Chmod(locked, 0o700) })
+
+	_, err := findUTXOSet(dir, compressedTestHash)
+	require.ErrorContains(t, err, "cannot check")
+}
+
 // Only *.zst files are pieces, taken in name order; a fetch's unfinished
 // .part files and anything else in the directory are not.
 func TestUTXOSetPieces(t *testing.T) {

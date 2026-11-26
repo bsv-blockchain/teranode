@@ -18,7 +18,6 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/ulogger"
-	"github.com/klauspost/compress/zstd"
 	"github.com/stretchr/testify/require"
 )
 
@@ -301,11 +300,6 @@ func TestProcessUTXOs_RecoverCheckpoint_SetReplacedAfterTheCheck(t *testing.T) {
 	b := withOtherTip(a)
 	bSum := sha256.Sum256(b)
 
-	enc, err := zstd.NewWriter(nil)
-	require.NoError(t, err)
-
-	defer func() { _ = enc.Close() }()
-
 	var tipA chainhash.Hash
 	tipA[0] = 0xcc // writeCompleteSnapshotFile's tip
 
@@ -314,11 +308,11 @@ func TestProcessUTXOs_RecoverCheckpoint_SetReplacedAfterTheCheck(t *testing.T) {
 		markImported(t, ctx, openTestBlockStore(t, tSettings), 200, tipA)
 
 		dir := t.TempDir()
-		path := filepath.Join(dir, compressedTestHash+".utxo-set.zst")
+		path := filepath.Join(dir, compressedTestHash+".utxo-set")
 		next := filepath.Join(dir, "next")
-		require.NoError(t, os.WriteFile(next, enc.EncodeAll(b, nil), 0o600))
+		require.NoError(t, os.WriteFile(next, b, 0o600))
 
-		swapAfterFirstOpen(t, path, enc.EncodeAll(a, nil), next)
+		swapAfterFirstOpen(t, path, a, next)
 
 		expected := ""
 		if withChecksum {
@@ -342,12 +336,7 @@ func TestVerifyUTXOSetFile_CancelWhileAPipeReadIsBlocked(t *testing.T) {
 	data, err := os.ReadFile(writeCompleteSnapshotFile(t, benchWrappers("blocked", 20, 0)))
 	require.NoError(t, err)
 
-	enc, err := zstd.NewWriter(nil)
-	require.NoError(t, err)
-
-	defer func() { _ = enc.Close() }()
-
-	path := filepath.Join(t.TempDir(), compressedTestHash+".utxo-set.zst")
+	path := filepath.Join(t.TempDir(), compressedTestHash+".utxo-set")
 	require.NoError(t, syscall.Mkfifo(path, 0o600))
 
 	stall := make(chan struct{})
@@ -361,7 +350,7 @@ func TestVerifyUTXOSetFile_CancelWhileAPipeReadIsBlocked(t *testing.T) {
 			return
 		}
 
-		_, _ = w.Write(enc.EncodeAll(data[:200], nil))
+		_, _ = w.Write(data[:200])
 		<-stall // keep the pipe open with nothing more to read
 		_ = w.Close()
 	}()
@@ -388,4 +377,24 @@ func TestVerifyUTXOSetFile_CancelWhileAPipeReadIsBlocked(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("verification did not return after cancel")
 	}
+}
+
+// A compressed set, or one of its pieces, that is a named pipe is refused: two passes
+// would split its bytes. Only the plain .utxo-set name may be a pipe.
+func TestUTXOSetPieces_RefusesNamedPipes(t *testing.T) {
+	dir := t.TempDir()
+
+	zstPipe := filepath.Join(dir, compressedTestHash+".utxo-set.zst")
+	require.NoError(t, syscall.Mkfifo(zstPipe, 0o600))
+
+	_, err := utxoSetPieces(zstPipe)
+	require.ErrorContains(t, err, "not a regular file")
+
+	pieces := filepath.Join(dir, "pieces.zst")
+	require.NoError(t, os.Mkdir(pieces, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(pieces, "piece_000000.zst"), nil, 0o600))
+	require.NoError(t, syscall.Mkfifo(filepath.Join(pieces, "piece_000001.zst"), 0o600))
+
+	_, err = utxoSetPieces(pieces)
+	require.ErrorContains(t, err, "not a regular file")
 }

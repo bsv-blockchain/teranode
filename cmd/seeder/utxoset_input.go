@@ -32,21 +32,43 @@ var zstdDecoderConcurrency = 1
 // <hash>.utxo-set, or <hash>.utxo-set.zst as a file or a directory of pieces.
 // When neither exists it returns the plain path, so the caller reports that
 // name as missing. Both at once is refused: the seed would read one and the
-// operator could not tell which.
+// operator could not tell which. A path that exists but cannot be checked is an
+// error, not an absence.
 func findUTXOSet(inputDir, hash string) (string, error) {
 	plain := filepath.Join(inputDir, hash+".utxo-set")
 	compressed := plain + compressedUTXOSetExtension
 
-	_, plainErr := os.Stat(plain)
-	_, compressedErr := os.Stat(compressed)
+	plainExists, err := pathExists(plain)
+	if err != nil {
+		return "", err
+	}
+
+	compressedExists, err := pathExists(compressed)
+	if err != nil {
+		return "", err
+	}
 
 	switch {
-	case plainErr == nil && compressedErr == nil:
+	case plainExists && compressedExists:
 		return "", errors.NewConfigurationError("both %s and %s exist; remove one so the seed reads the UTXO set you meant", plain, compressed)
-	case compressedErr == nil:
+	case compressedExists:
 		return compressed, nil
 	default:
 		return plain, nil
+	}
+}
+
+// pathExists reports whether path exists; any failure other than its absence is an error.
+func pathExists(path string) (bool, error) {
+	_, err := os.Stat(path)
+
+	switch {
+	case err == nil:
+		return true, nil
+	case os.IsNotExist(err):
+		return false, nil
+	default:
+		return false, errors.NewStorageError("cannot check %s", path, err)
 	}
 }
 
@@ -67,6 +89,11 @@ func uncompressedUTXOSetPath(path string) string {
 // the directory, sorted by name. Other files, such as a fetch's unfinished
 // .part files, are ignored. Nothing here notices a missing piece: one that
 // removes records is caught later by the footer counts or the checksum.
+//
+// Every piece must be a regular file. Each import pass opens the pieces itself,
+// and two passes on one named pipe would split its bytes between them; a pipe
+// can also block a read that cancellation cannot reach. A pipe goes under the
+// plain <hash>.utxo-set name instead, which the import checks for itself.
 func utxoSetPieces(path string) ([]string, error) {
 	info, err := os.Stat(path)
 	if err != nil {
@@ -74,6 +101,10 @@ func utxoSetPieces(path string) ([]string, error) {
 	}
 
 	if !info.IsDir() {
+		if !info.Mode().IsRegular() {
+			return nil, errors.NewConfigurationError("compressed UTXO set %s is not a regular file; a named pipe must use the plain .utxo-set name", path)
+		}
+
 		return []string{path}, nil
 	}
 
@@ -85,9 +116,22 @@ func utxoSetPieces(path string) ([]string, error) {
 	var pieces []string
 
 	for _, e := range entries {
-		if !e.IsDir() && strings.HasSuffix(e.Name(), compressedUTXOSetExtension) {
-			pieces = append(pieces, filepath.Join(path, e.Name()))
+		if e.IsDir() || !strings.HasSuffix(e.Name(), compressedUTXOSetExtension) {
+			continue
 		}
+
+		piece := filepath.Join(path, e.Name())
+
+		pieceInfo, err := os.Stat(piece)
+		if err != nil {
+			return nil, errors.NewStorageError("failed to open UTXO set piece %s", piece, err)
+		}
+
+		if !pieceInfo.Mode().IsRegular() {
+			return nil, errors.NewConfigurationError("UTXO set piece %s is not a regular file; a named pipe must use the plain .utxo-set name", piece)
+		}
+
+		pieces = append(pieces, piece)
 	}
 
 	if len(pieces) == 0 {

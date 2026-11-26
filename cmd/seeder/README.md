@@ -21,8 +21,11 @@ is either one zstd file or a directory of zstd pieces. The pieces are every
 `*.zst` file in the directory, read in name order, so their names must sort in
 stream order (`piece_0000.zst`, `piece_0001.zst`, ...). Each piece is any byte
 range of the set compressed on its own, as a resumable download writes them;
-other files in the directory, such as unfinished `.part` files, are ignored. If
-both the plain and the compressed set exist, the seeder refuses to choose.
+other files in the directory, such as unfinished `.part` files, are ignored. The
+compressed set and every piece must be regular files: each import pass opens
+them itself, so a named pipe would split its bytes between passes. A pipe goes
+under the plain `<hash>.utxo-set` name. If both the plain and the compressed set
+exist, the seeder refuses to choose.
 
 The checksum sidecar stays `<hash>.utxo-set.sha256` and covers the uncompressed
 bytes. For a compressed set it is read before the import and checked in the
