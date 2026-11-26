@@ -528,11 +528,13 @@ func processUTXOs(ctx context.Context, logger ulogger.Logger, appSettings *setti
 		}
 
 		if skip {
-			// The store has already been fully seeded. Skip idempotently and
-			// leave any existing BlockAssembler checkpoint untouched (returning a
-			// nil tip signals the caller not to write state). At shadow the
-			// earlier seed must have stamped positions too: one made at off left
-			// records no row can name.
+			// The store has already been fully seeded, so the import is skipped.
+			// At off, or at shadow once every seeded row is written, a nil tip
+			// leaves any existing BlockAssembler checkpoint untouched. At shadow
+			// with the seed's rows not all written, the tip comes back with its
+			// lanes: the caller writes the rows and then this tip's checkpoint,
+			// replacing the existing one. A seed made at off left records no row
+			// can name, so at shadow it is refused.
 			var rowsOnly *utxoSetTip
 
 			if appSettings.UtxoStore.LaneMigration.Stamps() {

@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -22,7 +23,6 @@ import (
 	"github.com/bsv-blockchain/teranode/services/utxopersister"
 	"github.com/bsv-blockchain/teranode/settings"
 	blockchain_store "github.com/bsv-blockchain/teranode/stores/blockchain"
-	blockchainoptions "github.com/bsv-blockchain/teranode/stores/blockchain/options"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	utxofactory "github.com/bsv-blockchain/teranode/stores/utxo/factory"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
@@ -555,9 +555,9 @@ func TestSeederGrantAfterAnUnrecordedOne(t *testing.T) {
 	s := test.CreateBaseTestSettings(t)
 	tip := chainhash.HashH([]byte("stopped seed"))
 
-	require.NoError(t, store.SetState(ctx, seederStateKey(seederPendingKeyPrefix, tip), tip[:]))
-	_, _, _, err := store.OpenLaneLease(ctx, blockchainoptions.LaneLeaseOpen{Holder: "seeder@test", GrantMin: 5, CloseAfter: time.Minute})
-	require.NoError(t, err)
+	// The first run's lease commits, and recording its grant fails.
+	_, err := takeSeederGrant(ctx, ulogger.TestLogger{}, &failGrantRecordStore{Store: store}, s, tip, 5)
+	require.ErrorContains(t, err, "could not record the seeder's lane grant")
 
 	g, err := takeSeederGrant(ctx, ulogger.TestLogger{}, store, s, tip, 5)
 	require.NoError(t, err)
@@ -574,6 +574,19 @@ func TestSeederGrantAfterAnUnrecordedOne(t *testing.T) {
 
 	_, err = takeSeederGrant(ctx, ulogger.TestLogger{}, store, s, chainhash.HashH([]byte("another seed")), 5)
 	require.ErrorContains(t, err, "has handed out lane positions before")
+}
+
+// failGrantRecordStore is a blockchain store whose write of a seeder grant record fails.
+type failGrantRecordStore struct {
+	blockchain_store.Store
+}
+
+func (s *failGrantRecordStore) SetState(ctx context.Context, key string, data []byte) error {
+	if strings.HasPrefix(key, seederGrantKeyPrefix) {
+		return errors.NewStorageError("refused")
+	}
+
+	return s.Store.SetState(ctx, key, data)
 }
 
 // blockingStateStore is a blockchain store whose GetState waits until its context ends.
