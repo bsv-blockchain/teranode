@@ -21,22 +21,31 @@ jobs:
     # ARM runner (see teranode_pr_tests.yaml): more headroom for the heavy
     # `make test` -race+coverage compile; runs natively on arm64.
     runs-on: teranode-runner-16-core-arm
-    # make test is split so its slowest package, stores/utxo/aerospike (~15 min
-    # under -race and coverage), runs beside the rest instead of setting the
-    # whole job's wall time, and so the two biggest test binaries don't share a
-    # runner's memory. Unsplit, make test took ~18 min, and 15 min cancelled
-    # every main run from 18 Nov 2026.
+    # make test is split across runners. The slowest packages (200-340 s each under
+    # -race and coverage) take about as long alone as beside the rest, so they are
+    # bound by the clock, not by cores, and all run together in the slow shard. That
+    # shard starts them at once instead of behind the rest of the build, and the unit
+    # shard no longer waits for them. stores/utxo/aerospike keeps its own shard for
+    # its testcontainer suite and memory. Every path in a shard's TEST_PKGS must also be
+    # in the unit shard's TEST_EXCLUDE (and the reverse), or its tests run twice or
+    # not at all; COVERAGE_SHARDS in the sonarqube job lists every shard.
+    # .github/scripts/check-test-shards.sh checks both on every PR.
+    # Unsplit, make test took ~18 min, and 15 min cancelled every main run from
+    # 18 Nov 2026.
     timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
         include:
           - shard: unit
-            run: make test TEST_EXCLUDE=stores/utxo/aerospike TEST_COVERPROFILE=coverage-unit.out
+            run: make test TEST_EXCLUDE="stores/utxo/aerospike services/blockvalidation model services/blockassembly/subtreeprocessor stores/utxo/utxoset services/blockassembly services/legacy/netsync services/blockchain stores/blockchain/sql" TEST_COVERPROFILE=coverage-unit.out
             profile: coverage-unit.out
           - shard: aerospike
             run: make test-pkgs TEST_PKGS=stores/utxo/aerospike TEST_COVERPROFILE=coverage-aerospike.out
             profile: coverage-aerospike.out
+          - shard: slow
+            run: make test-pkgs TEST_PKGS="services/blockvalidation model services/blockassembly/subtreeprocessor stores/utxo/utxoset services/blockassembly services/legacy/netsync services/blockchain stores/blockchain/sql" TEST_COVERPROFILE=coverage-slow.out
+            profile: coverage-slow.out
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
 
@@ -67,6 +76,17 @@ jobs:
       - name: Run Go tests
         # Prints each test binary's peak memory at the end, even if the runner is shut down.
         run: .github/scripts/track-test-memory.sh ${{ matrix.run }}
+
+      # The unit shard is the only build-cache saver but no longer tests the
+      # packages the other shards run, so compile their test binaries here too,
+      # or every PR's slow and aerospike shards compile them from scratch.
+      # TEST_PKGS is the unit shard's TEST_EXCLUDE (check-test-shards.sh checks it).
+      - name: Build the other shards' test binaries into the Go build cache
+        # PR runs never execute this step, so a failure here costs only cache
+        # warmth, never main's tests, coverage upload or cache save.
+        if: github.ref == 'refs/heads/main' && matrix.shard == 'unit'
+        continue-on-error: true
+        run: make test-build-pkgs TEST_PKGS="stores/utxo/aerospike services/blockvalidation model services/blockassembly/subtreeprocessor stores/utxo/utxoset services/blockassembly services/legacy/netsync services/blockchain stores/blockchain/sql"
 
       # Drop build-cache objects unused for 90+ min before the post-job save,
       # keeping the uploaded tarball under the 10 GB repo cache cap.
@@ -217,12 +237,13 @@ jobs:
           path: coverage-profiles
           merge-multiple: true
 
-      # Sonar reads coverage.out; a block that appears in both profiles counts
-      # as covered when either copy is.
+      # Sonar reads coverage.out; a block that appears in several profiles counts
+      # as covered when any copy is. COVERAGE_SHARDS must name every go-test
+      # matrix entry.
       - name: Merge coverage profiles
-        run: |
-          set -euo pipefail
-          { cat coverage-profiles/coverage-unit.out; tail -n +2 coverage-profiles/coverage-aerospike.out; } > coverage.out
+        env:
+          COVERAGE_SHARDS: unit aerospike slow
+        run: .github/scripts/merge-coverage.sh coverage-profiles coverage.out $COVERAGE_SHARDS
 
       - name: Run filename check script
         run: |
