@@ -489,6 +489,15 @@ func TestJournalDropCountsAFailedJudgeAndStillDrops(t *testing.T) {
 			require.Equal(t, tc.keptDone, cov.keptDone)
 			require.Equal(t, tc.keptJudged, cov.kept)
 			require.Equal(t, tc.keptJudged, cov.rows, "only judged rows are counted")
+
+			// Only carried spends whose rows were judged count as probed: all of them once the probe
+			// finished, none when its first batch failed.
+			probed := 0
+			if tc.keptDone {
+				probed = len(carry.ukeys)
+			}
+
+			require.Equal(t, probed, cov.probed)
 			require.NotZero(t, cov.total, "the row count, or -1 when unknown, survives the failure")
 
 			dropped, err := s.dropSpendJournalPartitionsBelow(ctx, 1_440)
