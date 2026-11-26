@@ -771,9 +771,9 @@ func TestSeederGrantRecordIsChecked(t *testing.T) {
 	good := encodeSeederGrant(tip, 3, lane.Grant{Lane: 2, First: 10, Last: 12})
 
 	corrupt := map[string]func([]byte) []byte{
-		"version":       func(b []byte) []byte { b[0] = 2; return b },
-		"length":        func(b []byte) []byte { return b[:len(b)-1] },
-		"records":       func(b []byte) []byte { binary.LittleEndian.PutUint64(b[33:41], 4); return b },
+		"version": func(b []byte) []byte { b[0] = 2; return b },
+		"length":  func(b []byte) []byte { return b[:len(b)-1] },
+		"records": func(b []byte) []byte { binary.LittleEndian.PutUint64(b[33:41], 4); return b },
 		// First 0 to last 2 is still three positions, so only the position check refuses it.
 		"zero position": func(b []byte) []byte {
 			binary.LittleEndian.PutUint64(b[42:50], 0)
@@ -886,8 +886,8 @@ func TestSeederLaneStoreCallsAreBounded(t *testing.T) {
 	saved := seederDBTimeout
 	require.Equal(t, 2*time.Minute, saved, "the bound in production")
 
-	// Long enough for the real SQLite calls before the blocked one, under -race too.
-	seederDBTimeout = 250 * time.Millisecond
+	// Long enough for the real SQLite calls before the blocked one, under -race and on CI too.
+	seederDBTimeout = time.Second
 
 	t.Cleanup(func() { seederDBTimeout = saved })
 
@@ -949,9 +949,9 @@ func TestSeederLaneStoreCallsAreBounded(t *testing.T) {
 				require.NoError(t, err)
 			}
 
-			require.Less(t, time.Since(start), 2*time.Second, "within a few times the 250 ms bound")
+			require.Less(t, time.Since(start), 4*time.Second, "within a few times the 1 s bound")
 			require.LessOrEqual(t, store.bound, seederDBTimeout, "the blocked call had no more than the configured bound")
-			require.Greater(t, store.bound, seederDBTimeout-50*time.Millisecond, "the blocked call had the configured bound")
+			require.Greater(t, store.bound, seederDBTimeout-200*time.Millisecond, "the blocked call had the configured bound")
 		})
 	}
 }
