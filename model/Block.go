@@ -138,8 +138,9 @@ type Block struct {
 	// blockvalidation service sets this (via SetNodeAllocator); model-internal
 	// callers leave it nil and behaviour matches legacy make() allocation.
 	nodeAllocator subtreepkg.NodeAllocator
-	// checkpointConfirmedAncestor records whether this block is provably an ancestor of the
-	// stored block with the highest hardcoded checkpoint hash, by its stored headers. It is
+	// checkpointConfirmedAncestor records whether this block is provably tied to a hardcoded
+	// checkpoint hash: an ancestor of the stored checkpoint block by its stored headers, or
+	// header-proven by legacy sync. It is
 	// the caller-supplied ancestry predicate that, together with store fast-path support,
 	// gates the below-checkpoint coinbase no-inflation skip in checkBlockRewardAndFees.
 	// Only the blockvalidation service sets it (via SetCheckpointConfirmedAncestor); it
@@ -166,8 +167,9 @@ func (b *Block) NodeAllocator() subtreepkg.NodeAllocator {
 	return b.nodeAllocator
 }
 
-// SetCheckpointConfirmedAncestor records whether this block is provably an ancestor of the
-// stored block with the highest hardcoded checkpoint hash, by its stored headers.
+// SetCheckpointConfirmedAncestor records whether this block is provably tied to a hardcoded
+// checkpoint hash: an ancestor of the stored checkpoint block by its stored headers, or
+// header-proven by legacy sync.
 // Only the blockvalidation service sets this (from BlockValidation.checkpointConfirmed-
 // Ancestor); it is the caller-supplied ancestry predicate that gates the below-checkpoint
 // coinbase no-inflation skip in checkBlockRewardAndFees. Leaving it unset (false) forces
@@ -1486,9 +1488,9 @@ func (b *Block) closeDeferredLocked() error {
 //     replaced the old SQL-store restriction;
 //   - the block is a confirmed ancestor of the pinned checkpoint
 //     (b.checkpointConfirmedAncestor, set only by the blockvalidation service via
-//     SetCheckpointConfirmedAncestor; defaults false). This closes the window before the
-//     checkpoint block is stored and the fork-below-the-checkpoint window that a
-//     height-only gate would leave open;
+//     SetCheckpointConfirmedAncestor; defaults false). Unless legacy sync's header proof
+//     vouches for the block, this closes the window before the checkpoint block is stored
+//     and the fork-below-the-checkpoint window that a height-only gate would leave open;
 //   - the network defines a hardcoded checkpoint and 0 < b.Height <= that
 //     checkpoint.
 //
@@ -1558,11 +1560,13 @@ func (b *Block) checkBlockRewardAndFees(params *chaincfg.Params, storeSupportsOu
 	//     site, which holds the store; model cannot see the store type directly.
 	//  3. GATED on confirmed ancestry (checkpointConfirmedAncestor). The skip fires only for a
 	//     block PROVEN to be an ancestor of the stored block with the pinned checkpoint hash,
-	//     by following parent links back from it — so the checkpoint transitively commits its
+	//     by following parent links back from it, or proven by legacy sync's header cache before
+	//     the block is stored (ValidateBlockOptions.HeaderProven) — so the checkpoint transitively commits its
 	//     coinbase, making the arithmetic redundant. This closes the two windows a height-only
 	//     skip leaves open: (a) a below-checkpoint block validated before the block with the
 	//     pinned hash is stored, and (b) a fork block below the checkpoint, which the walk from
-	//     the pinned hash never reaches. In both the predicate is false, so the check runs —
+	//     the pinned hash never reaches. In both the predicate is false unless legacy sync supplied
+	//     the header proof, which ties the hash to the pinned checkpoint directly, so the check runs —
 	//     correctly, because non-fast-path blocks carry real fees. A fast-path block that was
 	//     invalidated and is reconsidered still passes, because the walk follows stored parent
 	//     links whatever their validity. The predicate is
