@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
+	"io"
 	"net/url"
 	"os"
 	"strconv"
@@ -199,6 +200,61 @@ func BenchmarkSeederUTXOImportNoopStore(b *testing.B) {
 				}))
 
 				b.ReportMetric(float64(txCount)/time.Since(start).Seconds(), "tx/s")
+			}
+		})
+	}
+}
+
+// BenchmarkSeederUTXOSetRead measures how fast the seeder reads a real UTXO set,
+// plain or compressed: decoding alone, decoding with the checksum, and the whole
+// import into a store that does nothing. SEEDER_BENCH_UTXOSET names the set (a
+// .utxo-set, or a .utxo-set.zst file or piece directory); without it the
+// benchmark skips. MB/s is of uncompressed bytes.
+//
+//	SEEDER_BENCH_UTXOSET=<path> go test -bench=BenchmarkSeederUTXOSetRead -benchtime=3x -run '^$' ./cmd/seeder/
+func BenchmarkSeederUTXOSetRead(b *testing.B) {
+	path := os.Getenv("SEEDER_BENCH_UTXOSET")
+	if path == "" {
+		b.Skip("SEEDER_BENCH_UTXOSET not set")
+	}
+
+	defer func(c int) { zstdDecoderConcurrency = c }(zstdDecoderConcurrency)
+
+	readAll := func(b *testing.B, hashIt bool) int64 {
+		s, err := openUTXOSetStream(path, hashIt)
+		require.NoError(b, err)
+
+		n, err := io.Copy(io.Discard, s.reader)
+		require.NoError(b, err)
+		require.NoError(b, s.Close())
+
+		return n
+	}
+
+	size := readAll(b, false)
+
+	for _, decoders := range []int{1, 4} {
+		zstdDecoderConcurrency = decoders
+
+		for _, hashIt := range []bool{false, true} {
+			b.Run(fmt.Sprintf("decode/sha256=%t/decoders=%d", hashIt, decoders), func(b *testing.B) {
+				b.SetBytes(size)
+
+				for i := 0; i < b.N; i++ {
+					readAll(b, hashIt)
+				}
+			})
+		}
+
+		b.Run(fmt.Sprintf("import-noop-store/decoders=%d", decoders), func(b *testing.B) {
+			b.SetBytes(size)
+
+			for i := 0; i < b.N; i++ {
+				require.NoError(b, importUTXOSet(context.Background(), ulogger.TestLogger{}, noopCreateStore{}, path, importOptions{
+					workerCount:            16384,
+					multiRecordWorkerCount: 256,
+					channelSize:            1000,
+				}))
 			}
 		})
 	}

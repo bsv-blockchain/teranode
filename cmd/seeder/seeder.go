@@ -86,7 +86,8 @@ func usage(msg string) {
 		fmt.Printf("Error: %s\n\n", msg)
 	}
 
-	fmt.Printf("Usage: seeder -inputDir <folder> -hash <hash> [-skipHeaders] [-skipUTXOs]\n\n")
+	fmt.Printf("Usage: seeder -inputDir <folder> -hash <hash> [-skipHeaders] [-skipUTXOs]\n")
+	fmt.Printf("The UTXO set is <hash>.utxo-set, or <hash>.utxo-set.zst as one zstd file or a directory of zstd pieces.\n\n")
 
 	os.Exit(1)
 }
@@ -157,7 +158,18 @@ func Seeder(logger ulogger.Logger, appSettings *settings.Settings, inputDir stri
 	// so seeded coinbases keep their input. Existence is only enforced when the
 	// header pass will actually consume it.
 	headerFile := filepath.Join(inputDir, hash+".utxo-headers")
-	utxoFile := filepath.Join(inputDir, hash+".utxo-set")
+
+	// The UTXO set is <hash>.utxo-set, or <hash>.utxo-set.zst as one zstd file
+	// or a directory of zstd pieces, decompressed as it is read.
+	utxoFile, err := findUTXOSet(inputDir, hash)
+	if err != nil {
+		return err
+	}
+
+	// expectedUTXOSetSHA256 is set for a compressed UTXO set only: its checksum
+	// is checked in the import pass itself, since checking it first would
+	// decompress the whole set once more before the import begins.
+	var expectedUTXOSetSHA256 string
 
 	if !skipHeaders {
 		// Check the header file exists
@@ -186,10 +198,22 @@ func Seeder(logger ulogger.Logger, appSettings *settings.Settings, inputDir stri
 	if !skipUTXOs {
 		// Check the UTXO file exists
 		if _, err := os.Stat(utxoFile); os.IsNotExist(err) {
-			usage(fmt.Sprintf("UTXO file %s does not exist", utxoFile))
+			usage(fmt.Sprintf("UTXO file %s does not exist (nor %s%s)", utxoFile, utxoFile, compressedUTXOSetExtension))
 		}
 
-		if !skipChecksum {
+		switch {
+		case skipChecksum:
+		case isCompressedUTXOSet(utxoFile):
+			// The sidecar is read and parsed now, so a malformed one fails in
+			// seconds rather than after the import.
+			if expectedUTXOSetSHA256, err = readChecksumSidecar(logger, uncompressedUTXOSetPath(utxoFile)); err != nil {
+				return errors.NewProcessingError("checksum verification failed for UTXO file %s", utxoFile, err)
+			}
+
+			if expectedUTXOSetSHA256 != "" {
+				logger.Infof("UTXO set %s is compressed; its checksum is verified while it is imported", utxoFile)
+			}
+		default:
 			if err := verifyChecksum(logger, utxoFile); err != nil {
 				return errors.NewProcessingError("checksum verification failed for UTXO file %s", utxoFile, err)
 			}
@@ -275,7 +299,7 @@ func Seeder(logger ulogger.Logger, appSettings *settings.Settings, inputDir stri
 			logger.Infof("UTXO store: %s", urlutil.Redact(appSettings.UtxoStore.UtxoStore))
 
 			// Process the UTXOs
-			tip, err := processUTXOs(ctx, logger, appSettings, blockchainStore, utxoFile, headerFile, force, recoverCheckpoint)
+			tip, err := processUTXOs(ctx, logger, appSettings, blockchainStore, utxoFile, headerFile, force, recoverCheckpoint, expectedUTXOSetSHA256)
 			if err != nil {
 				utxoErr = err
 				logger.Errorf("Failed to process UTXOs: %v", err)
@@ -445,9 +469,11 @@ func processHeaders(ctx context.Context, logger ulogger.Logger, blockchainStore 
 }
 
 // processUTXOs reads the UTXO set from a file and stores it in the UTXO store.
+// When expectedSHA256 is set, the import also hashes the uncompressed set and
+// fails on a mismatch before marking the seed complete.
 //
 //nolint:gocognit // Requires refactoring to reduce cognitive complexity
-func processUTXOs(ctx context.Context, logger ulogger.Logger, appSettings *settings.Settings, blockchainStore blockchain.Store, utxoFile string, headersFile string, force bool, recoverCheckpoint bool) (*utxoSetTip, error) {
+func processUTXOs(ctx context.Context, logger ulogger.Logger, appSettings *settings.Settings, blockchainStore blockchain.Store, utxoFile string, headersFile string, force bool, recoverCheckpoint bool, expectedSHA256 string) (*utxoSetTip, error) {
 	blockStoreURL := appSettings.Block.BlockStore
 	if blockStoreURL == nil {
 		return nil, errors.NewConfigurationError("blockstore URL not found in config")
@@ -569,23 +595,12 @@ func processUTXOs(ctx context.Context, logger ulogger.Logger, appSettings *setti
 
 	// Read the tip this UTXO set is complete at. importUTXOSet re-opens the
 	// file for each of its passes.
-	var (
-		hash   chainhash.Hash
-		height uint32
-	)
-
-	if err = func() error {
-		f, _, tipHash, tipHeight, openErr := openUTXOSetFile(utxoFile)
-		if openErr != nil {
-			return openErr
-		}
-
-		hash, height = tipHash, tipHeight
-
-		return f.Close()
-	}(); err != nil {
+	tip, err := readUTXOSetTip(utxoFile)
+	if err != nil {
 		return nil, err
 	}
+
+	hash, height := tip.hash, tip.height
 
 	// Multi-record txs go through a much slower create path, so they get their
 	// own pass (see importUTXOSet). Their workers only wait on the external
@@ -610,6 +625,7 @@ func processUTXOs(ctx context.Context, logger ulogger.Logger, appSettings *setti
 		utxoBatchSize:          appSettings.UtxoStore.UtxoBatchSize,
 		skipStore:              gocore.Config().GetBool("skipStore", false),
 		coinbaseTxs:            coinbaseTxs,
+		expectedSHA256:         expectedSHA256,
 	}
 
 	// A re-import invalidates everything the previous import left vouching for
@@ -667,12 +683,12 @@ func processUTXOs(ctx context.Context, logger ulogger.Logger, appSettings *setti
 // readUTXOSetTip reads only the preamble of a .utxo-set file, not the records
 // after it, and returns the tip it is complete at.
 func readUTXOSetTip(utxoFile string) (*utxoSetTip, error) {
-	f, _, hash, height, err := openUTXOSetFile(utxoFile)
+	s, hash, height, err := openUTXOSetFile(utxoFile, false)
 	if err != nil {
 		return nil, err
 	}
 
-	if err = f.Close(); err != nil {
+	if err = s.Close(); err != nil {
 		return nil, errors.NewStorageError("failed to close %s", utxoFile, err)
 	}
 
@@ -826,6 +842,7 @@ type importOptions struct {
 	utxoBatchSize          int // store outputs-per-record limit; <= 0 imports in one pass
 	skipStore              bool
 	coinbaseTxs            map[chainhash.Hash]*bt.Tx
+	expectedSHA256         string // hex SHA-256 of the uncompressed set; "" skips the check
 }
 
 // importUTXOSet imports every record of the .utxo-set file at utxoFile into
@@ -839,6 +856,10 @@ type importOptions struct {
 // its own reader, channel and workers, so neither can block the other, and the
 // import takes as long as the slower pass. Both run in one errgroup: the first
 // error in either cancels both, and the seed is then re-run from the start.
+//
+// With opts.expectedSHA256 set, the first pass hashes every byte it reads and
+// fails after its last record when the hash does not match. Both passes read
+// the whole set, so hashing one of them is enough.
 func importUTXOSet(ctx context.Context, logger ulogger.Logger, store utxo.Store, utxoFile string, opts importOptions) error {
 	if opts.workerCount < 1 || opts.multiRecordWorkerCount < 1 || opts.workerCount > maxWorkerCount || opts.multiRecordWorkerCount > maxWorkerCount {
 		return errors.NewConfigurationError("workerCount (%d) and multiRecordWorkerCount (%d) must both be between 1 and %d", opts.workerCount, opts.multiRecordWorkerCount, maxWorkerCount)
@@ -855,15 +876,20 @@ func importUTXOSet(ctx context.Context, logger ulogger.Logger, store utxo.Store,
 
 	g, gCtx := errgroup.WithContext(ctx)
 
+	verifyPending := opts.expectedSHA256 != ""
+
 	startPass := func(name string, workerCount int, accept func(maxIndex uint32) bool) {
+		verify := verifyPending
+		verifyPending = false
+
 		g.Go(func() error {
-			f, reader, _, _, err := openUTXOSetFile(utxoFile)
+			s, _, _, err := openUTXOSetFile(utxoFile, verify)
 			if err != nil {
 				return err
 			}
 
 			defer func() {
-				_ = f.Close()
+				_ = s.Close()
 			}()
 
 			logger.Infof("[%s pass] starting %d workers, channel size %d", name, workerCount, opts.channelSize)
@@ -881,7 +907,21 @@ func importUTXOSet(ctx context.Context, logger ulogger.Logger, store utxo.Store,
 			}
 
 			pg.Go(func() error {
-				return readUTXOFrames(pCtx, logger, f, reader, frameCh, name, accept)
+				if err := readUTXOFrames(pCtx, logger, s.footerSource(), s.reader, frameCh, name, accept); err != nil {
+					return err
+				}
+
+				if !verify {
+					return nil
+				}
+
+				if err := s.verify(opts.expectedSHA256, utxoFile); err != nil {
+					return err
+				}
+
+				logger.Infof("[%s pass] checksum verified for %s", name, utxoFile)
+
+				return nil
 			})
 
 			return pg.Wait()
@@ -914,26 +954,28 @@ func importUTXOSet(ctx context.Context, logger ulogger.Logger, store utxo.Store,
 	return nil
 }
 
-// openUTXOSetFile opens a .utxo-set file, validates its header and returns a
-// reader positioned at the first record, plus the block hash and height the
-// set is complete at.
-func openUTXOSetFile(utxoFile string) (*os.File, *bufio.Reader, chainhash.Hash, uint32, error) {
+// openUTXOSetFile opens a UTXO set (plain or compressed, see findUTXOSet),
+// validates its header and returns a stream positioned at the first record,
+// plus the block hash and height the set is complete at. With hashIt the
+// stream hashes everything it reads, the header included. Only the start of a
+// compressed set is decompressed.
+func openUTXOSetFile(utxoFile string, hashIt bool) (*utxoSetStream, chainhash.Hash, uint32, error) {
 	var (
 		hash   chainhash.Hash
 		height uint32
 	)
 
-	f, err := os.Open(utxoFile)
+	s, err := openUTXOSetStream(utxoFile, hashIt)
 	if err != nil {
-		return nil, nil, hash, 0, errors.NewStorageError("failed to open file", err)
+		return nil, hash, 0, err
 	}
 
-	fail := func(err error) (*os.File, *bufio.Reader, chainhash.Hash, uint32, error) {
-		_ = f.Close()
-		return nil, nil, hash, 0, err
+	fail := func(err error) (*utxoSetStream, chainhash.Hash, uint32, error) {
+		_ = s.Close()
+		return nil, hash, 0, err
 	}
 
-	reader := bufio.NewReader(f)
+	reader := s.reader
 
 	header, err := fileformat.ReadHeader(reader)
 	if err != nil {
@@ -953,7 +995,7 @@ func openUTXOSetFile(utxoFile string) (*os.File, *bufio.Reader, chainhash.Hash, 
 	copy(hash[:], preamble[:32])
 	height = binary.LittleEndian.Uint32(preamble[32:36])
 
-	return f, reader, hash, height, nil
+	return s, hash, height, nil
 }
 
 // resumeUnsafeAfterHostCrash reports whether utxoStoreURL has a file:// external
@@ -1042,9 +1084,10 @@ func seedingExternalStoreURL(utxoStoreURL *url.URL, fsyncMode string) (*url.URL,
 // reason, that footer is compared against what was actually read, and a
 // mismatch is reported as an error instead of silently treated as success.
 // The footer is taken from the stream when the records end exactly at it
-// (utxopersister.ErrRecordBoundary), so this reader can validate a pipe;
-// otherwise it is read by seeking (utxopersister.GetFooter). A stream that
-// cannot seek and did not end at a footer is reported as truncated. Whether
+// (utxopersister.ErrRecordBoundary), so this reader can validate a pipe or a
+// decompressed stream; otherwise it is read by seeking f (utxopersister.GetFooter).
+// f is nil for a compressed set, whose file offsets are not the stream's. A
+// stream that cannot seek and did not end at a footer is reported as truncated. Whether
 // the seeder as a whole can take a pipe is decided in importUTXOSet, which
 // refuses one when the import would need two passes.
 //
@@ -1052,7 +1095,7 @@ func seedingExternalStoreURL(utxoStoreURL *url.URL, fsyncMode string) (*url.URL,
 // sent; accept gets the record's highest output index. Every record is still
 // read and counted, so each pass validates the whole file against the footer.
 // pass names the pass in log lines.
-func readUTXOFrames(ctx context.Context, logger ulogger.Logger, f *os.File, reader *bufio.Reader, frameCh chan<- []byte,
+func readUTXOFrames(ctx context.Context, logger ulogger.Logger, f io.Reader, reader *bufio.Reader, frameCh chan<- []byte,
 	pass string, accept func(maxIndex uint32) bool) error {
 	defer close(frameCh)
 
@@ -1131,12 +1174,18 @@ func readUTXOFrames(ctx context.Context, logger ulogger.Logger, f *os.File, read
 		footerErr                          error
 	)
 
-	if footerBytes != nil {
+	switch {
+	case footerBytes != nil:
 		expectedTxCount, expectedUTXOCount, footerErr = utxopersister.DecodeFooter(footerBytes)
 		if footerErr != nil {
 			return errors.NewProcessingError("failed to read snapshot footer", footerErr)
 		}
-	} else {
+	case f == nil:
+		// A compressed set has no file to seek; its footer is in the stream or nowhere.
+		return errors.NewProcessingError(
+			"snapshot file truncated: the records ended without a footer after %d transactions/%d UTXOs (%v)",
+			txProcessed, utxosProcessed, endErr)
+	default:
 		expectedTxCount, expectedUTXOCount, footerErr = utxopersister.GetFooter(f)
 		if footerErr != nil {
 			// The stream did not end at a footer, and there is none to seek to,
@@ -1497,53 +1546,12 @@ func writeBlockAssemblerState(ctx context.Context, logger ulogger.Logger, store 
 // doesn't match the file's actual content, the import is refused: a
 // corrupted-but-count-consistent file must never be silently imported.
 func verifyChecksum(logger ulogger.Logger, filePath string) error {
+	expected, err := readChecksumSidecar(logger, filePath)
+	if err != nil || expected == "" {
+		return err
+	}
+
 	sidecarPath := filePath + checksumSidecarExtension
-
-	// maxSidecarSize bounds the sidecar read: a genuine sidecar is a hex digest
-	// plus an optional filename, well under 1KB. Anything larger is not a
-	// sidecar (e.g. the snapshot file itself, copied to the wrong name), and
-	// reading it in full would pull an arbitrarily large file into memory.
-	const maxSidecarSize = 4096
-
-	f, err := os.Open(sidecarPath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			logger.Warnf("[verifyChecksum] no checksum sidecar %s found for %s; proceeding without checksum verification", sidecarPath, filePath)
-			return nil
-		}
-
-		return errors.NewStorageError("failed to read checksum sidecar %s", sidecarPath, err)
-	}
-
-	sidecar, err := io.ReadAll(io.LimitReader(f, maxSidecarSize))
-	_ = f.Close()
-
-	if err != nil {
-		return errors.NewStorageError("failed to read checksum sidecar %s", sidecarPath, err)
-	}
-
-	fields := strings.Fields(string(sidecar))
-	if len(fields) == 0 {
-		return errors.NewProcessingError("checksum sidecar %s is empty", sidecarPath)
-	}
-
-	expected := strings.ToLower(fields[0])
-
-	if len(expected) != sha256.Size*2 {
-		return errors.NewProcessingError("checksum sidecar %s is malformed: %q is not a hex-encoded SHA-256 digest", sidecarPath, fields[0])
-	}
-
-	if _, err := hex.DecodeString(expected); err != nil {
-		return errors.NewProcessingError("checksum sidecar %s is malformed: %q is not a hex-encoded SHA-256 digest", sidecarPath, fields[0])
-	}
-
-	// The standard sha256sum layout names the file the checksum belongs to as
-	// the second field. When present, it must match filePath's own basename —
-	// otherwise the sidecar was paired with the wrong snapshot, and reporting
-	// that as a checksum mismatch would misdirect the operator.
-	if len(fields) > 1 && fields[1] != filepath.Base(filePath) {
-		return errors.NewProcessingError("checksum sidecar %s belongs to %q, not to %s", sidecarPath, fields[1], filepath.Base(filePath))
-	}
 
 	if st, statErr := os.Stat(filePath); statErr == nil {
 		logger.Infof("[verifyChecksum] verifying %s (%s bytes) against %s; this reads the whole file", filePath, formatNumber(uint64(st.Size())), sidecarPath)
@@ -1574,6 +1582,61 @@ func verifyChecksum(logger ulogger.Logger, filePath string) error {
 	logger.Infof("[verifyChecksum] checksum verified for %s against %s", filePath, sidecarPath)
 
 	return nil
+}
+
+// readChecksumSidecar returns the lower-case hex SHA-256 recorded in the
+// "<filePath>.sha256" sidecar, or "" (with a warning) when there is none. A
+// sidecar that is empty, malformed or names another file is an error.
+func readChecksumSidecar(logger ulogger.Logger, filePath string) (string, error) {
+	sidecarPath := filePath + checksumSidecarExtension
+
+	// maxSidecarSize bounds the sidecar read: a genuine sidecar is a hex digest
+	// plus an optional filename, well under 1KB. Anything larger is not a
+	// sidecar (e.g. the snapshot file itself, copied to the wrong name), and
+	// reading it in full would pull an arbitrarily large file into memory.
+	const maxSidecarSize = 4096
+
+	f, err := os.Open(sidecarPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			logger.Warnf("[verifyChecksum] no checksum sidecar %s found for %s; proceeding without checksum verification", sidecarPath, filePath)
+			return "", nil
+		}
+
+		return "", errors.NewStorageError("failed to read checksum sidecar %s", sidecarPath, err)
+	}
+
+	sidecar, err := io.ReadAll(io.LimitReader(f, maxSidecarSize))
+	_ = f.Close()
+
+	if err != nil {
+		return "", errors.NewStorageError("failed to read checksum sidecar %s", sidecarPath, err)
+	}
+
+	fields := strings.Fields(string(sidecar))
+	if len(fields) == 0 {
+		return "", errors.NewProcessingError("checksum sidecar %s is empty", sidecarPath)
+	}
+
+	expected := strings.ToLower(fields[0])
+
+	if len(expected) != sha256.Size*2 {
+		return "", errors.NewProcessingError("checksum sidecar %s is malformed: %q is not a hex-encoded SHA-256 digest", sidecarPath, fields[0])
+	}
+
+	if _, err := hex.DecodeString(expected); err != nil {
+		return "", errors.NewProcessingError("checksum sidecar %s is malformed: %q is not a hex-encoded SHA-256 digest", sidecarPath, fields[0])
+	}
+
+	// The standard sha256sum layout names the file the checksum belongs to as
+	// the second field. When present, it must match filePath's own basename —
+	// otherwise the sidecar was paired with the wrong snapshot, and reporting
+	// that as a checksum mismatch would misdirect the operator.
+	if len(fields) > 1 && fields[1] != filepath.Base(filePath) {
+		return "", errors.NewProcessingError("checksum sidecar %s belongs to %q, not to %s", sidecarPath, fields[1], filepath.Base(filePath))
+	}
+
+	return expected, nil
 }
 
 // formatNumber formats a number with commas as thousands separators.

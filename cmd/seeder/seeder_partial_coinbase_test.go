@@ -95,7 +95,7 @@ func TestProcessUTXOs_TruncatedHeaders_StillRestoresCoinbaseReadBeforeTruncation
 
 	// The truncated headers file is a warning, not a failure: coinbase
 	// restoration is best-effort and must not abort the import.
-	_, err = processUTXOs(ctx, ulogger.TestLogger{}, tSettings, blockchainStore, utxoFile, headersFile, false, false)
+	_, err = processUTXOs(ctx, ulogger.TestLogger{}, tSettings, blockchainStore, utxoFile, headersFile, false, false, "")
 	require.NoError(t, err)
 
 	store, err := utxosql.New(ctx, ulogger.TestLogger{}, tSettings, utxoStoreURL)

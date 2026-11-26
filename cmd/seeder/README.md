@@ -13,6 +13,25 @@ This package is typically used to process blockchain data from specified input f
 - Handle system signals for graceful termination
 - Start a profiler server for debugging
 
+### Compressed UTXO set
+
+The UTXO set can stay compressed on disk. When `<hash>.utxo-set` is absent, the
+seeder reads `<hash>.utxo-set.zst` instead, decompressing as it reads. That path
+is either one zstd file or a directory of zstd pieces. The pieces are every
+`*.zst` file in the directory, read in name order, so their names must sort in
+stream order (`piece_0000.zst`, `piece_0001.zst`, ...). Each piece is any byte
+range of the set compressed on its own, as a resumable download writes them;
+other files in the directory, such as unfinished `.part` files, are ignored. If
+both the plain and the compressed set exist, the seeder refuses to choose.
+
+The checksum sidecar stays `<hash>.utxo-set.sha256` and covers the uncompressed
+bytes. For a compressed set it is read before the import and checked in the
+import pass itself, not by a separate read first: a mismatch fails the seed
+after the last record and before `lastProcessed.dat` is written. The records
+read by then are already in the UTXO store, so wipe the store before seeding
+again. A missing piece or a damaged one also fails the seed: the zstd decoder
+or the footer counts catch it, with or without a sidecar.
+
 ### Checksum verification
 
 Before consuming a headers or UTXO-set file, the seeder looks for a
@@ -25,7 +44,8 @@ proceeds with a warning — older snapshots, or ones from a source that never
 produced a sidecar, are not blocked. This check is unauthenticated (it catches
 corruption/transfer errors, not tampering). Pass `-skipChecksum` only when
 the caller has already verified the same files (as a fetch script does after
-download); verification reads each file in full.
+download); verification reads each file in full. A compressed UTXO set is the
+exception: see above.
 
 ### Tuning (UTXO import)
 
