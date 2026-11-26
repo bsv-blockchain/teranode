@@ -419,13 +419,8 @@ func TestDeepReorgHaltResetCommands(t *testing.T) {
 				mockStp.On("Reset", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 					Return(subtreeprocessor.ResetResponse{})
 
-				var completed chan error
-				if operator {
-					completed = make(chan error, 1)
-					go func() { completed <- command.run(server, withHeader(t.Context())) }()
-				} else {
-					require.NoError(t, command.run(server, withHeader(t.Context())))
-				}
+				completed := make(chan error, 1)
+				go func() { completed <- command.run(server, withHeader(t.Context())) }()
 
 				// The command queues the request for block assembly's loop, which this fixture does
 				// not run, so the test plays the loop's part.
@@ -438,21 +433,21 @@ func TestDeepReorgHaltResetCommands(t *testing.T) {
 
 				require.Equal(t, resetRequest{FullReset: command.full, ValidateInputs: command.validate, Operator: operator},
 					resetRequest{FullReset: req.FullReset, ValidateInputs: req.ValidateInputs, Operator: req.Operator})
-				if operator {
-					select {
-					case err := <-completed:
-						t.Fatalf("operator reset RPC returned before completion: %v", err)
-					case <-time.After(20 * time.Millisecond):
-					}
+				select {
+				case err := <-completed:
+					t.Fatalf("reset RPC returned before the request completed: %v", err)
+				case <-time.After(20 * time.Millisecond):
 				}
 				ba.handleResetRequests(t.Context(), req)
-				if operator {
-					select {
-					case err := <-completed:
+				select {
+				case err := <-completed:
+					if operator {
 						require.NoError(t, err)
-					case <-time.After(10 * time.Second):
-						t.Fatal("operator reset RPC did not report completion")
+					} else {
+						require.True(t, errors.Is(err, errors.ErrServiceUnavailable), "ordinary reset refusal reaches its caller: %v", err)
 					}
+				case <-time.After(10 * time.Second):
+					t.Fatal("reset RPC did not report completion")
 				}
 
 				require.Equal(t, !operator, ba.DeepReorgHalted())

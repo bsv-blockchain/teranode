@@ -2848,19 +2848,16 @@ func (ba *BlockAssembly) SubtreeCount() int {
 	return ba.blockAssembler.SubtreeCount()
 }
 
-// reset waits for an operator reset when the call carries OperatorResetMetadataKey, as the
-// resetblockassembly command's does. Ordinary resets remain asynchronous.
+// reset waits for the reset a reset RPC asked for: an operator reset when the call carries
+// OperatorResetMetadataKey, as the resetblockassembly command's does, and an ordinary one
+// otherwise, which a deep reorg halt refuses.
 func (ba *BlockAssembly) reset(ctx context.Context, fullReset, validateInputs bool) error {
 	switch {
 	case isOperatorReset(ctx):
 		return ba.blockAssembler.OperatorResetAndWait(ctx, fullReset, validateInputs)
-	case validateInputs:
-		ba.blockAssembler.ResetWithInputValidation()
 	default:
-		ba.blockAssembler.Reset(fullReset)
+		return ba.blockAssembler.resetAndWait(ctx, resetRequest{FullReset: fullReset, ValidateInputs: validateInputs})
 	}
-
-	return nil
 }
 
 func (ba *BlockAssembly) ResetBlockAssembly(ctx context.Context, _ *blockassembly_api.EmptyMessage) (*blockassembly_api.EmptyMessage, error) {

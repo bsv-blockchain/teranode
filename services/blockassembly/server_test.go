@@ -702,6 +702,7 @@ func TestGetCurrentDifficultyCoverage(t *testing.T) {
 func TestResetBlockAssemblyCoverage(t *testing.T) {
 	server, _, _, _ := setup(t)
 	ctx := t.Context()
+	require.NoError(t, server.blockAssembler.Start(ctx))
 
 	t.Run("reset block assembly", func(t *testing.T) {
 		// Call reset function - testing for coverage
@@ -1840,6 +1841,7 @@ func TestResetFunctionsIntensive(t *testing.T) {
 	t.Run("ResetBlockAssembly normal operation", func(t *testing.T) {
 		server, _ := setupServer(t)
 		server.blockAssembler.unminedTransactionsLoading.Store(false)
+		require.NoError(t, server.blockAssembler.Start(t.Context()))
 
 		resp, err := server.ResetBlockAssembly(context.Background(), &blockassembly_api.EmptyMessage{})
 		assert.NoError(t, err)
@@ -1859,6 +1861,7 @@ func TestResetFunctionsIntensive(t *testing.T) {
 	t.Run("ResetBlockAssemblyFully normal operation", func(t *testing.T) {
 		server, _ := setupServer(t)
 		server.blockAssembler.unminedTransactionsLoading.Store(false)
+		require.NoError(t, server.blockAssembler.Start(t.Context()))
 
 		resp, err := server.ResetBlockAssemblyFully(context.Background(), &blockassembly_api.EmptyMessage{})
 		assert.NoError(t, err)
@@ -2184,6 +2187,7 @@ func TestResetBlockAssemblyFully(t *testing.T) {
 	t.Run("reset fully successful", func(t *testing.T) {
 		server, _ := setupServer(t)
 		server.blockAssembler.unminedTransactionsLoading.Store(false)
+		require.NoError(t, server.blockAssembler.Start(t.Context()))
 
 		resp, err := server.ResetBlockAssemblyFully(context.Background(), &blockassembly_api.EmptyMessage{})
 		assert.NoError(t, err)
