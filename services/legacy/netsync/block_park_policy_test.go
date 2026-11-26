@@ -397,6 +397,13 @@ func TestParkCommitFailure_AMissingSubtreeFileDropsTheRecordWithoutJudgingIt(t *
 			want: parkDispositionRetryLater,
 		},
 		{
+			// Quick validation's wrap of a failed mined-info merge for txs that already existed.
+			name: "a store fault in the mined-info merge under quick validation's wraps",
+			err: parkCommitChain(errors.NewProcessingError("[createAndSpendUTXOsForBatch][hash] failed to update mined info",
+				errors.NewProcessingError("failed to merge blockID into 1 pre-existing txs", errors.NewStorageError("aerospike timeout")))),
+			want: parkDispositionRetryLater,
+		},
+		{
 			name: "a missing parent block carries code 3 inside code 10 and is the parent's row, not this one",
 			err:  errors.NewProcessingError("failed to get block header for previous block", errors.NewBlockNotFoundError("block not found", errors.ErrNotFound)),
 			want: parkDispositionParentGone,

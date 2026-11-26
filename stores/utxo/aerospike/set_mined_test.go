@@ -2,13 +2,19 @@ package aerospike
 
 import (
 	"context"
+	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/bsv-blockchain/aerospike-client-go/v8"
 	"github.com/bsv-blockchain/aerospike-client-go/v8/types"
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
+	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/bsv-blockchain/teranode/util/uaerospike"
 	"github.com/stretchr/testify/require"
 )
@@ -206,4 +212,178 @@ func TestApplyLockClearWorkReportsEveryFailure(t *testing.T) {
 		require.ErrorContains(t, err, "clearLockedOnRecordsMulti")
 		require.ErrorContains(t, err, "setLocked")
 	})
+}
+
+// TestSetMinedMultiKeepsTheStorageCodeOfAFailedCleanup checks that a cleanup
+// failure after a successful mined update leaves SetMinedMulti as a StorageError,
+// so legacy sync keeps the block for a retry instead of rejecting it.
+func TestSetMinedMultiKeepsTheStorageCodeOfAFailedCleanup(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping Aerospike integration test in short mode")
+	}
+
+	for _, tc := range []struct {
+		name        string
+		expressions bool
+		sibling     bool // a never-created hash in the batch, so the mined update fails too
+		cleanup     string
+		// fail is the cleanup's batch seam; nil fails every cleanup batch whole.
+		fail func(client *uaerospike.Client) func(*aerospike.BatchPolicy, []aerospike.BatchRecordIfc) aerospike.Error
+		// recordTimeouts is how many per-record timeouts the error must carry; 0 skips the check.
+		recordTimeouts int
+	}{
+		{name: "lua: the clear of the extra records fails", cleanup: "clearLockedOnRecordsMulti"},
+		{name: "expressions: the extra record count read of a FILTERED_OUT tx fails", expressions: true, cleanup: "readExtraRecordCounts"},
+		{name: "lua: the clear fails beside a failed sibling", sibling: true, cleanup: "clearLockedOnRecordsMulti"},
+		{name: "expressions: the count read fails beside a failed sibling", expressions: true, sibling: true, cleanup: "readExtraRecordCounts"},
+		{name: "lua: each record of the clear fails on its own", cleanup: "clearLockedOnRecordsMulti", fail: failClearRecords, recordTimeouts: 2},
+		{name: "expressions: only the unlock of a FILTERED_OUT tx fails", expressions: true, cleanup: "applyLockClearWork", fail: failAfterReadAndClear},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			logger := ulogger.NewErrorTestLogger(t)
+			tSettings := test.CreateBaseTestSettings(t)
+			tSettings.Aerospike.EnableSetMinedFilterExpressions = tc.expressions
+
+			store, client := newSharedTestStore(t, logger, tSettings, "&externalStore=file://./data/external&block_retention=100")
+			store.utxoBatchSize = 4
+
+			tx := txWithOutputs(t, 10)
+			_, err := store.Create(ctx, tx, 100, utxo.WithLocked(true))
+			require.NoError(t, err)
+
+			hashes := []*chainhash.Hash{tx.TxIDChainHash()}
+			info := utxo.MinedBlockInfo{BlockID: 7, BlockHeight: 100, OnLongestChain: true}
+
+			if tc.expressions {
+				// The first mine stores the blockID, so the next write is FILTERED_OUT.
+				_, err = store.SetMinedMulti(ctx, hashes, info)
+				require.NoError(t, err)
+			}
+
+			missing := &chainhash.Hash{0xDE, 0xAD, 0xBE, 0xEF}
+			if tc.sibling {
+				hashes = append(hashes, missing)
+			}
+
+			// The mined update calls the client directly; only the cleanup batches go through this seam.
+			store.batchOperateFn = errorOperate()
+			if tc.fail != nil {
+				store.batchOperateFn = tc.fail(client)
+			}
+
+			t.Cleanup(func() { store.batchOperateFn = nil })
+
+			_, err = store.SetMinedMulti(ctx, hashes, info)
+			require.ErrorIs(t, err, errors.ErrStorageError)
+			require.ErrorContains(t, err, tc.cleanup)
+
+			if tc.sibling {
+				require.ErrorContains(t, err, missing.String(), "the sibling's failure must survive the cleanup's")
+			}
+
+			if tc.recordTimeouts > 0 {
+				require.Equal(t, tc.recordTimeouts, strings.Count(err.Error(), "ResultCode: TIMEOUT"), "every failed record must reach the caller: %v", err)
+			}
+
+			// Quick validation's wrap, which legacy sync's park reads as retry-later.
+			err = errors.NewProcessingError("[createAndSpendUTXOsForBatch] failed to update mined info",
+				utxo.SetMinedMultiChunked(ctx, logger, store, hashes, info, 10, 1))
+			require.True(t, errors.IsTransientLocalError(err), "got %v", err)
+		})
+	}
+}
+
+// failClearRecords runs each batch for real, then marks every written record
+// as timed out, so the batch succeeds and each record fails on its own.
+func failClearRecords(client *uaerospike.Client) func(*aerospike.BatchPolicy, []aerospike.BatchRecordIfc) aerospike.Error {
+	return func(policy *aerospike.BatchPolicy, records []aerospike.BatchRecordIfc) aerospike.Error {
+		if err := client.BatchOperate(policy, records); err != nil {
+			return err
+		}
+
+		for _, r := range records {
+			if _, isWrite := r.(*aerospike.BatchWrite); isWrite {
+				r.BatchRec().Err = &aerospike.AerospikeError{ResultCode: types.TIMEOUT}
+			}
+		}
+
+		return nil
+	}
+}
+
+// failAfterReadAndClear lets the first two cleanup batches of a FILTERED_OUT tx
+// run for real (the count read, then the clear) and fails every later one, which
+// is SetLocked's unlock.
+func failAfterReadAndClear(client *uaerospike.Client) func(*aerospike.BatchPolicy, []aerospike.BatchRecordIfc) aerospike.Error {
+	var calls atomic.Int32
+
+	return func(policy *aerospike.BatchPolicy, records []aerospike.BatchRecordIfc) aerospike.Error {
+		if calls.Add(1) <= 2 {
+			return client.BatchOperate(policy, records)
+		}
+
+		return &aerospike.AerospikeError{ResultCode: types.TIMEOUT}
+	}
+}
+
+// TestProcessBatchResultsForSetMinedKeepsTheStorageCodeOfAFailedIncrement checks
+// that a failed spent-extra-records increment after a successful mine reaches
+// the caller as a StorageError, so legacy sync keeps the block for a retry.
+func TestProcessBatchResultsForSetMinedKeepsTheStorageCodeOfAFailedIncrement(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		fail func() func(*aerospike.BatchPolicy, []aerospike.BatchRecordIfc) aerospike.Error
+	}{
+		{name: "the whole batch fails", fail: errorOperate},
+		{name: "every record of a successful batch fails", fail: timeoutEveryRecord},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			processBatchResultsWithFailedFollowUps(t, tc.fail())
+		})
+	}
+}
+
+func processBatchResultsWithFailedFollowUps(t *testing.T, fail func(*aerospike.BatchPolicy, []aerospike.BatchRecordIfc) aerospike.Error) {
+	t.Helper()
+
+	s := newTestStoreForSetMinedExpressions(t)
+	s.batchOperateFn = fail
+
+	hash := &chainhash.Hash{0xCC}
+	rec := newFakeBatchWrite(t, hash)
+	rec.BatchRec().Record = &aerospike.Record{Bins: aerospike.BinMap{
+		LuaSuccess.String(): map[interface{}]interface{}{
+			"status": "OK",
+			"signal": string(LuaSignalAllSpent),
+		},
+	}}
+
+	// A second tx whose child DAH unset fails too: both follow-up errors must reach the caller.
+	unsetHash := &chainhash.Hash{0xCD}
+	unsetRec := newFakeBatchWrite(t, unsetHash)
+	unsetRec.BatchRec().Record = &aerospike.Record{Bins: aerospike.BinMap{
+		LuaSuccess.String(): map[interface{}]interface{}{
+			"status":     "OK",
+			"signal":     string(LuaSignalDAHUnset),
+			"childCount": 1,
+		},
+	}}
+
+	_, _, err := s.processBatchResultsForSetMined(context.Background(), []aerospike.BatchRecordIfc{rec, unsetRec},
+		[]*chainhash.Hash{hash, unsetHash}, utxo.MinedBlockInfo{BlockID: 1, BlockHeight: 100})
+	require.ErrorIs(t, err, errors.ErrStorageError)
+	require.ErrorContains(t, err, "IncrementSpentRecordsMulti")
+	require.ErrorContains(t, err, "SetDAHForChildRecordsMulti")
+}
+
+// timeoutEveryRecord reports the batch as sent and every record in it as timed out.
+func timeoutEveryRecord() func(*aerospike.BatchPolicy, []aerospike.BatchRecordIfc) aerospike.Error {
+	return func(_ *aerospike.BatchPolicy, records []aerospike.BatchRecordIfc) aerospike.Error {
+		for _, r := range records {
+			r.BatchRec().Err = &aerospike.AerospikeError{ResultCode: types.TIMEOUT}
+		}
+
+		return nil
+	}
 }
