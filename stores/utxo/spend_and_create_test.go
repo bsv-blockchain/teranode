@@ -1662,7 +1662,10 @@ var spendFaults = map[string]error{
 type fakeRollForwarder struct {
 	// conflictingErr is what SetConflicting answers. conflictingChildren is popped once per call
 	// and is the spending transactions it reports. conflictingMarked holds what each call marked.
-	conflictingErr      error
+	conflictingErr error
+	// conflictingErrs is popped once per SetConflicting call, and a nil entry lets the call answer;
+	// conflictingErr applies when exhausted.
+	conflictingErrs     []error
 	conflictingChildren [][]chainhash.Hash
 	conflictingMarked   [][]chainhash.Hash
 	conflictingCtxErr   error
@@ -1784,7 +1787,14 @@ func (f *fakeRollForwarder) SetConflicting(ctx context.Context, txHashes []chain
 
 	f.conflictingMarked = append(f.conflictingMarked, append([]chainhash.Hash(nil), txHashes...))
 
-	if f.conflictingErr != nil {
+	if len(f.conflictingErrs) > 0 {
+		err := f.conflictingErrs[0]
+		f.conflictingErrs = f.conflictingErrs[1:]
+
+		if err != nil {
+			return nil, nil, err
+		}
+	} else if f.conflictingErr != nil {
 		return nil, nil, f.conflictingErr
 	}
 
@@ -1981,9 +1991,9 @@ func TestRollForwardCreating(t *testing.T) {
 			spends []*Spend
 			seq    []string
 		}{
-			"a parent is locked":                 {[]*Spend{{}, {Err: errors.ErrTxLocked}}, []string{"lease", "spend", "getmeta", "finalize"}},
-			"a parent is conflicting":            {[]*Spend{{}, {Err: errors.ErrTxConflicting}}, []string{"lease", "spend", "getmeta", "finalize"}},
-			"another transaction spent an input": {[]*Spend{{}, {Err: errors.ErrSpent}}, []string{"lease", "spend", "getmeta", "finalize"}},
+			"a parent is locked":                 {[]*Spend{{}, {Err: errors.ErrTxLocked}}, []string{"lease", "spend", "getmeta", "conflicting", "finalize"}},
+			"a parent is conflicting":            {[]*Spend{{}, {Err: errors.ErrTxConflicting}}, []string{"lease", "spend", "getmeta", "conflicting", "finalize"}},
+			"another transaction spent an input": {[]*Spend{{}, {Err: errors.ErrSpent}}, []string{"lease", "spend", "getmeta", "conflicting", "finalize"}},
 		} {
 			// The error of the spend carries the verdict on its input, as a store's does.
 			f := &fakeRollForwarder{spends: tc.spends, spendErr: errors.NewUtxoError("spend failed", tc.spends[1].Err), existing: meta.Data{Creating: true, Finalizing: true, Conflicting: true, Attempt: attempt}}
@@ -1995,7 +2005,7 @@ func TestRollForwardCreating(t *testing.T) {
 			require.NotContains(t, err.Error(), "MISSING", "%s: the text of the refusal is in the message", name)
 			require.Contains(t, err.Error(), "spend failed", name)
 			require.False(t, completed, name)
-			require.Equal(t, tc.seq, f.callSeq, "%s: the record is marked already, so it is only finalized", name)
+			require.Equal(t, tc.seq, f.callSeq, "%s: the mark is repeated for a record that is marked already, and then it is finalized", name)
 		}
 	})
 
@@ -2014,6 +2024,35 @@ func TestRollForwardCreating(t *testing.T) {
 		_, _, err := RollForwardCreating(ctx, ulogger.TestLogger{}, f, tx, attempt, 100)
 		require.True(t, IsEndedConflicting(err))
 		require.Equal(t, [][]chainhash.Hash{{hash}, {child}, {grandchild}}, f.conflictingMarked, "each level once, and a transaction that is already marked is not marked again")
+	})
+
+	t.Run("a mark that stopped at a descendant is repeated from the record on the next pass", func(t *testing.T) {
+		attempt := []byte{1}
+		hash := *tx.TxIDChainHash()
+		child := chainhash.HashH([]byte("child"))
+
+		// The walk writes the record and fails on the transaction that spends its output.
+		f := &fakeRollForwarder{
+			spends:              []*Spend{{}, {Err: errors.ErrSpent}},
+			spendErr:            errors.NewUtxoError("spend failed"),
+			existing:            meta.Data{Creating: true, Finalizing: true, Attempt: attempt},
+			conflictingChildren: [][]chainhash.Hash{{child}, {child}},
+			conflictingErrs:     []error{nil, errors.NewStorageError("write failed")},
+		}
+
+		_, _, err := RollForwardCreating(ctx, ulogger.TestLogger{}, f, tx, attempt, 100)
+		require.ErrorIs(t, err, errors.ErrStorageError)
+		require.False(t, IsEndedConflicting(err), "the record is not complete")
+		require.Equal(t, []string{"lease", "spend", "getmeta", "conflicting", "conflicting", "unlease"}, f.callSeq)
+
+		// The store wrote the flag of the record before the walk failed.
+		f.existing.Conflicting = true
+		f.callSeq, f.conflictingMarked = nil, nil
+
+		_, _, err = RollForwardCreating(ctx, ulogger.TestLogger{}, f, tx, attempt, 100)
+		require.True(t, IsEndedConflicting(err))
+		require.Equal(t, [][]chainhash.Hash{{hash}, {child}}, f.conflictingMarked, "a record that is marked already does not hide a descendant that is not")
+		require.Equal(t, []string{"lease", "spend", "getmeta", "conflicting", "conflicting", "finalize"}, f.callSeq, "the descendant is marked before the record is finalized")
 	})
 
 	t.Run("the mark and the finalize of a record that lost an input outlive the caller's context", func(t *testing.T) {
@@ -3913,6 +3952,26 @@ func TestSettleTentativeInTheWay(t *testing.T) {
 		require.NoError(t, err)
 		require.False(t, settled, "the record is final, finalizing or another caller's, and nothing was reversed")
 		require.Zero(t, f.unspendCalls)
+	})
+
+	t.Run("a record that the roll-forward completed as conflicting is settled, and no rollback is tried", func(t *testing.T) {
+		for name, tc := range map[string]struct {
+			conflicting bool
+			verdict     error
+		}{
+			"it lost an input": {false, errors.ErrSpent},
+			"it is conflicting and its re-spend is refused": {true, errors.ErrTxLocked},
+		} {
+			existing := meta.Data{Creating: true, Finalizing: true, Conflicting: tc.conflicting, Attempt: attempt}
+
+			// beginDeclined: a store refuses the rollback of a record that is final.
+			f := &fakeSequentialStore{spends: []*Spend{{}, {Err: tc.verdict}}, spendErr: errors.NewUtxoError("spend failed", tc.verdict), existing: existing, beginDeclined: true}
+
+			settled, err := settle(f, &existing)
+			require.NoError(t, err, name)
+			require.True(t, settled, "%s: the record is final, and the conflicting fallback of the block finds it", name)
+			require.Equal(t, []string{"lease", "spend", "getmeta", "conflicting", "finalize"}, f.callSeq, "%s: no lease is read and no rollback is claimed", name)
+		}
 	})
 
 	t.Run("a failed read of the leases is an error and nothing is rolled back", func(t *testing.T) {

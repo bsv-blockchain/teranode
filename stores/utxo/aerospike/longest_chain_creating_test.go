@@ -153,6 +153,50 @@ func TestMarkOnLongestChain_SettlesACreatingRecordFirst(t *testing.T) {
 // is left for the sweep, which would roll back an attempt that can never spend its inputs. A
 // rollback unspends by txid, so it would free outputs that a mined transaction spent. The pre-flight
 // stamps the record before it rolls it forward, and no rollback claims a stamped record.
+// A creating record that the pre-flight completes as conflicting is complete: its finalize had
+// begun and it lost an input. The write the pre-flight runs for applies to it in the same call, as
+// to any final record, and the call does not fail.
+func TestMarkOnLongestChain_ARecordCompletedAsConflictingIsMarkedInTheSameCall(t *testing.T) {
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.UtxoStore.UtxoBatchSize = 4
+
+	client, store, ctx, deferFn := initAerospike(t, tSettings, logger)
+	t.Cleanup(deferFn)
+	cleanDB(t, client)
+
+	for _, tc := range []struct {
+		name string
+		seed int
+		mark func(hash *chainhash.Hash) error
+	}{
+		{"the mark on the longest chain", 8215, func(hash *chainhash.Hash) error {
+			return store.MarkTransactionsOnLongestChain(ctx, []chainhash.Hash{*hash}, true)
+		}},
+		{"setMined of a block on the longest chain", 8216, func(hash *chainhash.Hash) error {
+			_, err := store.SetMinedMulti(ctx, []*chainhash.Hash{hash}, utxo.MinedBlockInfo{BlockID: 7, BlockHeight: 1000, SubtreeIdx: 0, OnLongestChain: true})
+
+			return err
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			paginated, _, _, _ := finalizingRecordThatLostAnInput(t, ctx, client, store, tc.seed, nil)
+			hash := paginated.TxIDChainHash()
+
+			require.NotNil(t, recordBins(t, client, store, hash, 0, fields.UnminedSince)[fields.UnminedSince.String()], "precondition: the tentative record carries its height")
+
+			require.NoError(t, tc.mark(hash), "a record that was completed does not fail the call")
+
+			got := &meta.Data{}
+			require.NoError(t, store.GetMeta(ctx, hash, got))
+			require.False(t, got.Creating, "the record is complete")
+			require.True(t, got.Conflicting, "and conflicting")
+
+			require.Nil(t, recordBins(t, client, store, hash, 0, fields.UnminedSince)[fields.UnminedSince.String()], "the write was applied to it in the same call")
+		})
+	}
+}
+
 func TestMarkOnLongestChain_StampsACreatingRecordSoNoRollbackClaimsIt(t *testing.T) {
 	logger := ulogger.NewErrorTestLogger(t)
 	tSettings := test.CreateBaseTestSettings(t)

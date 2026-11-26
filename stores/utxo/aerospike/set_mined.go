@@ -1022,7 +1022,9 @@ func (s *Store) readCreatingRecords(ctx context.Context, hashes []*chainhash.Has
 
 // rollForwardCreatingRecord completes one creating record that a create-first attempt wrote: it
 // reads the transaction and rolls it forward (re-spend and finalize). It returns nil for a record
-// that has been completed or is gone since the batch read.
+// that has been completed or is gone since the batch read, and for one that the roll-forward
+// completed as conflicting (utxo.IsEndedConflicting): that record is final, and the write that
+// follows applies to it as to any final record.
 func (s *Store) rollForwardCreatingRecord(ctx context.Context, rec *creatingRecord, blockHeight uint32) error {
 	md, err := s.Get(ctx, &rec.hash, fields.Tx, fields.Creating, fields.RollingBack, fields.Attempt, fields.BlockIDs, fields.BlockHeights)
 	if err != nil {
@@ -1057,7 +1059,7 @@ func (s *Store) rollForwardCreatingRecord(ctx context.Context, rec *creatingReco
 	// WithIgnoreLocked: a mined tx's parents may still be locked (e.g. their own
 	// create-first tentative lock); the roll-forward completes an already-committed
 	// spend, so a locked parent must not fail-close setMined for the whole block.
-	if _, _, err := utxo.RollForwardCreating(ctx, s.logger, s, md.Tx, md.Attempt, height, utxo.WithIgnoreLocked(true)); err != nil {
+	if _, _, err := utxo.RollForwardCreating(ctx, s.logger, s, md.Tx, md.Attempt, height, utxo.WithIgnoreLocked(true)); err != nil && !utxo.IsEndedConflicting(err) {
 		return errors.NewProcessingError("[setMined] create-first pre-flight: roll-forward of %s failed", rec.hash.String(), err)
 	}
 

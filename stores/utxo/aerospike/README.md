@@ -641,9 +641,13 @@ rollback of such a record would delete a page under the spend of a descendant.
   input is not the transaction's own (another transaction spent it, it is frozen, or its UTXO hash
   does not match), or the record is already conflicting, the roll-forward still completes the
   record, because nothing can roll it back. It marks the record conflicting first, with every
-  transaction that spends its outputs, when it is not marked yet. It returns an error for which
-  `utxo.IsEndedConflicting` is true, so no caller announces the transaction to block assembly or
-  unlocks it. It reverses nothing: the transaction keeps its other inputs, as a demoted loser does.
+  transaction that spends its outputs. It does that for a record that is marked already too: the
+  mark writes a record before its descendants, so a mark that failed part way left the record
+  marked and a descendant not, and only a repeat reaches that descendant. It returns an error for
+  which `utxo.IsEndedConflicting` is true, so no caller announces the transaction to block assembly
+  or unlocks it. A block that finds the record in its way (`SettleTentativeInTheWay`), setMined and
+  the mark on the longest chain take that result as a completed record and go on. It reverses
+  nothing: the transaction keeps its other inputs, as a demoted loser does.
 - **Scope.** Only a record with an `attempt` token and at least one pagination child is marked. A
   single-record transaction clears in one write, and a record with no token is never rolled back.
 - **Limit.** A record whose children were cleared by a binary that did not write the mark is not

@@ -1302,39 +1302,13 @@ func TestRollForwardCreating_EndsAFinalizingRecordThatLostAnInputAsConflicting(t
 		{"nothing marked the record", 8212, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			require.NoError(t, store.SetBlockHeight(1000))
-
-			parent := conflictingIndexParent(t, ctx, store, tc.seed, 2)
-			paginated := conflictingIndexTx(t, parent, []uint32{0, 1}, 10)
+			paginated, md, rival, own := finalizingRecordThatLostAnInput(t, ctx, client, store, tc.seed, func(paginated *bt.Tx) {
+				if tc.marked {
+					_, _, err := store.SetConflicting(ctx, []chainhash.Hash{*paginated.TxIDChainHash()}, true)
+					require.NoError(t, err)
+				}
+			})
 			hash := paginated.TxIDChainHash()
-
-			md, err := store.Create(ctx, paginated, 900, utxo.WithCreating(true))
-			require.NoError(t, err)
-
-			_, err = store.Spend(ctx, paginated, 900)
-			require.NoError(t, err, "precondition: the attempt spent its inputs")
-
-			failMasterFinalizeWrite(t, client, store, hash, false)
-
-			require.Error(t, store.FinalizeTransaction(ctx, paginated, md.Attempt, md.Attempt), "the master write failed")
-
-			store.SetBatchOperateFn(nil)
-
-			require.NoError(t, store.ReleaseSpendLease(ctx, hash, md.Attempt, md.Attempt), "the creator releases its lease when its finalize fails")
-
-			if tc.marked {
-				_, _, err = store.SetConflicting(ctx, []chainhash.Hash{*hash}, true)
-				require.NoError(t, err)
-			}
-
-			own := spendHeightSpendsOf(t, paginated)
-			require.Len(t, own, 2)
-			require.NoError(t, store.Unspend(ctx, own[:1]), "the spend of the input the winner needs is taken back")
-
-			rival := conflictingIndexTx(t, parent, []uint32{0}, 1)
-
-			_, err = store.Spend(ctx, rival, 1000)
-			require.NoError(t, err, "the winner spends the input")
 
 			spends, completed, err := utxo.RollForwardCreating(ctx, logger, store, paginated, md.Attempt, 1000)
 			require.ErrorIs(t, err, errors.ErrSpent, "the caller learns that the transaction lost its input")
@@ -1369,6 +1343,137 @@ func TestRollForwardCreating_EndsAFinalizingRecordThatLostAnInputAsConflicting(t
 			require.NotContains(t, stale, *hash, "nothing is left for the sweep")
 		})
 	}
+}
+
+// finalizingRecordThatLostAnInput leaves the paginated record of a create-first attempt creating and
+// finalizing, with no live lease, and gives its first input to a rival. The attempt spent both of
+// its inputs, the master write of its finalize failed, and then the spend of input 0 was taken back
+// and made by another transaction, as conflict processing does for the winner of a double spend.
+// beforeLoss, when set, runs while the record still holds both inputs. It returns the transaction,
+// the record of its create, the rival and the two spends of the transaction.
+func finalizingRecordThatLostAnInput(t *testing.T, ctx context.Context, client *uaerospike.Client, store *teranode_aerospike.Store, seed int, beforeLoss func(paginated *bt.Tx)) (*bt.Tx, *meta.Data, *bt.Tx, []*utxo.Spend) {
+	t.Helper()
+
+	require.NoError(t, store.SetBlockHeight(1000))
+
+	parent := conflictingIndexParent(t, ctx, store, seed, 2)
+	paginated := conflictingIndexTx(t, parent, []uint32{0, 1}, 10)
+	hash := paginated.TxIDChainHash()
+
+	md, err := store.Create(ctx, paginated, 900, utxo.WithCreating(true))
+	require.NoError(t, err)
+
+	_, err = store.Spend(ctx, paginated, 900)
+	require.NoError(t, err, "precondition: the attempt spent its inputs")
+
+	failMasterFinalizeWrite(t, client, store, hash, false)
+
+	require.Error(t, store.FinalizeTransaction(ctx, paginated, md.Attempt, md.Attempt), "the master write failed")
+
+	store.SetBatchOperateFn(nil)
+
+	require.NoError(t, store.ReleaseSpendLease(ctx, hash, md.Attempt, md.Attempt), "the creator releases its lease when its finalize fails")
+
+	if beforeLoss != nil {
+		beforeLoss(paginated)
+	}
+
+	own := spendHeightSpendsOf(t, paginated)
+	require.Len(t, own, 2)
+	require.NoError(t, store.Unspend(ctx, own[:1]), "the spend of the input the winner needs is taken back")
+
+	rival := conflictingIndexTx(t, parent, []uint32{0}, 1)
+
+	_, err = store.Spend(ctx, rival, 1000)
+	require.NoError(t, err, "the winner spends the input")
+
+	return paginated, md, rival, own
+}
+
+// The conflicting mark writes a record before the transactions that spend its outputs. A mark that
+// stopped between the two leaves the record conflicting and a descendant not. The roll-forward that
+// completes such a record repeats the mark, so the descendant does not stay a valid transaction.
+func TestRollForwardCreating_MarksADescendantThatAnEarlierMarkDidNotReach(t *testing.T) {
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.UtxoStore.UtxoBatchSize = 4
+
+	client, store, ctx, deferFn := initAerospike(t, tSettings, logger)
+	t.Cleanup(deferFn)
+	cleanDB(t, client)
+
+	var descendant *bt.Tx
+
+	paginated, md, _, _ := finalizingRecordThatLostAnInput(t, ctx, client, store, 8213, func(paginated *bt.Tx) {
+		// Output 5 is on a pagination record, which the finalize completed, so it can be spent.
+		descendant = conflictingIndexTx(t, paginated, []uint32{5}, 1)
+
+		_, err := store.Create(ctx, descendant, 1000)
+		require.NoError(t, err)
+
+		_, err = store.Spend(ctx, descendant, 1000)
+		require.NoError(t, err, "precondition: an output of a completed pagination record is spendable")
+
+		// The mark of the record alone, which is what a walk that stopped before the descendant left.
+		_, spenders, err := store.SetConflicting(ctx, []chainhash.Hash{*paginated.TxIDChainHash()}, true)
+		require.NoError(t, err)
+		require.Equal(t, []chainhash.Hash{*descendant.TxIDChainHash()}, spenders)
+	})
+
+	got := &meta.Data{}
+	require.NoError(t, store.GetMeta(ctx, descendant.TxIDChainHash(), got))
+	require.False(t, got.Conflicting, "precondition: the descendant is not marked")
+
+	_, _, err := utxo.RollForwardCreating(ctx, logger, store, paginated, md.Attempt, 1000)
+	require.True(t, utxo.IsEndedConflicting(err), "the record is completed as conflicting: %v", err)
+
+	require.NoError(t, store.GetMeta(ctx, paginated.TxIDChainHash(), got))
+	require.False(t, got.Creating, "the record is complete")
+
+	require.NoError(t, store.GetMeta(ctx, descendant.TxIDChainHash(), got))
+	require.True(t, got.Conflicting, "the descendant is marked with the record")
+}
+
+// A block that finds such a record in the way of one of its transactions settles it. The
+// roll-forward completes the record as conflicting, so it is final and the conflicting fallback of
+// the block goes on. No rollback is tried on it, which the store would refuse.
+func TestSettleTentativeInTheWay_ARecordCompletedAsConflictingIsSettled(t *testing.T) {
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.UtxoStore.UtxoBatchSize = 4
+
+	client, store, ctx, deferFn := initAerospike(t, tSettings, logger)
+	t.Cleanup(deferFn)
+	cleanDB(t, client)
+
+	paginated, _, rival, own := finalizingRecordThatLostAnInput(t, ctx, client, store, 8214, nil)
+	hash := paginated.TxIDChainHash()
+
+	existing := &meta.Data{}
+	require.NoError(t, store.GetMeta(ctx, hash, existing))
+	require.True(t, existing.Creating, "precondition: the record is in the way")
+	require.True(t, existing.Finalizing, "precondition: its finalize has begun")
+
+	settled, err := utxo.SettleTentativeInTheWay(ctx, logger, store, paginated, existing, 1000, utxo.WithIgnoreLocked(true))
+	require.NoError(t, err)
+	require.True(t, settled, "the record is final, so it is no longer a tentative record in the way")
+
+	got := &meta.Data{}
+	require.NoError(t, store.GetMeta(ctx, hash, got))
+	require.False(t, got.Creating, "the record is complete")
+	require.False(t, got.RollingBack, "and no rollback began")
+	require.False(t, got.Hold)
+	require.True(t, got.Conflicting, "it is conflicting, which is what the fallback of the block reads")
+
+	taken, err := store.GetSpend(ctx, own[0])
+	require.NoError(t, err)
+	require.NotNil(t, taken.SpendingData)
+	require.Equal(t, rival.TxIDChainHash().String(), taken.SpendingData.TxID.String(), "the input the winner took is still the winner's")
+
+	kept, err := store.GetSpend(ctx, own[1])
+	require.NoError(t, err)
+	require.NotNil(t, kept.SpendingData, "nothing was reversed")
+	require.Equal(t, hash.String(), kept.SpendingData.TxID.String())
 }
 
 // A creating record whose finalize has not begun still depends on its re-spend: a locked parent

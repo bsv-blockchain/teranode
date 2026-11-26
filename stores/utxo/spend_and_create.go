@@ -1795,8 +1795,9 @@ type TentativeSettler interface {
 //     transaction can never be completed (IsUnwinnableSpendError) and no spender of the attempt
 //     holds a live lease, the attempt is rolled back (RollBackCreating), which leaves a hold.
 //
-// It reports true when the record is no longer a tentative one in the way: it is final, or it is
-// a hold, which a caller in block context clears and creates over. It reports false, with no
+// It reports true when the record is no longer a tentative one in the way: it is final, also when
+// the roll-forward completed it as conflicting (IsEndedConflicting), or it is a hold, which a
+// caller in block context clears and creates over. It reports false, with no
 // error, when the record is left as it was: it is a hold already, it carries no attempt token and
 // so is not the record of a create-first attempt, another actor is at work on it (a live lease, a
 // busy holder, a finalize that has begun), or its roll-forward failed for a reason that ends by
@@ -1820,7 +1821,8 @@ func SettleTentativeInTheWay(ctx context.Context, logger ulogger.Logger, s Tenta
 	}
 
 	_, _, rfErr := RollForwardCreating(ctx, logger, s, tx, existing.Attempt, blockHeight, opts...)
-	if rfErr == nil {
+	if rfErr == nil || IsEndedConflicting(rfErr) {
+		// A record that was completed as conflicting is final, and no rollback can claim it.
 		return true, nil
 	}
 
@@ -1896,7 +1898,7 @@ func rollForwardCreating(ctx context.Context, logger ulogger.Logger, s creatingF
 		// no rollback can claim the record since. The record can only be completed, so the finalize
 		// runs. What the refusal says decides how the record ends.
 		if taken := inputNotHeld(spends, err); taken || current.Conflicting {
-			return spends, false, endConflicting(ctx, logger, s, tx, attempt, lease, current.Conflicting, taken, err)
+			return spends, false, endConflicting(ctx, logger, s, tx, attempt, lease, taken, err)
 		}
 
 		// The repeat of the spend was refused for what a parent is today, locked, conflicting or
@@ -1960,26 +1962,27 @@ func inputNotHeld(spends []*Spend, err error) bool {
 }
 
 // endConflicting completes a record whose finalize has begun and whose transaction can no longer be
-// mined: taken says that an input is not its own (inputNotHeld), conflicting that the record is
+// mined: taken says that an input is not its own (inputNotHeld), and otherwise the record is
 // already marked conflicting, as conflict processing marks the loser of a double spend and its
 // descendants. No rollback can claim such a record, because a pagination child may already have
 // spendable outputs, so it is completed. It is completed as conflicting, and the returned error
 // carries the IsEndedConflicting mark, so that no caller hands the transaction to block assembly or
 // unlocks it.
 //
-// A record that is not marked yet is marked first, with every transaction that spends its outputs,
-// and finalized after. A failure between the two leaves the record creating, and the next
+// The record is marked first, with every transaction that spends its outputs, and finalized after.
+// The mark runs for a record that is marked already too. The walk writes a record before the
+// transactions that spend its outputs, so a walk that failed part way left the record marked and a
+// descendant not, and only a repeat of the walk reaches that descendant. The mark is safe to
+// repeat. A failure between the mark and the finalize leaves the record creating, and the next
 // roll-forward does both again. Nothing is reversed: the transaction keeps the spends it still
 // holds, as the loser of a double spend keeps its other inputs when conflict processing demotes it.
-func endConflicting(ctx context.Context, logger ulogger.Logger, s creatingFinisher, tx *bt.Tx, attempt, lease []byte, conflicting, taken bool, cause error) error {
+func endConflicting(ctx context.Context, logger ulogger.Logger, s creatingFinisher, tx *bt.Tx, attempt, lease []byte, taken bool, cause error) error {
 	hash := tx.TxIDChainHash()
 
-	if !conflicting {
-		if err := markConflictingDetached(ctx, s, hash); err != nil {
-			releaseSpendLease(ctx, logger, s, hash, attempt, lease)
+	if err := markConflictingDetached(ctx, s, hash); err != nil {
+		releaseSpendLease(ctx, logger, s, hash, attempt, lease)
 
-			return errors.NewProcessingError("RollForwardCreating: tx %s lost an input (%v) and could not be marked conflicting, it is left creating for a later pass", hash.String(), cause, err)
-		}
+		return errors.NewProcessingError("RollForwardCreating: tx %s can no longer be mined (%v) and it, or a transaction that spends its outputs, could not be marked conflicting, it is left creating for a later pass", hash.String(), cause, err)
 	}
 
 	if err := finalizeDetached(ctx, logger, s, tx, attempt, lease); err != nil {
