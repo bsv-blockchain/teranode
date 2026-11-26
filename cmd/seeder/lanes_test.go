@@ -791,6 +791,8 @@ func (s *blockingStore) InsertLaneMapRows(ctx context.Context, blockID uint32, r
 // answers, except the lease release, which only logs and lets the lease lapse.
 func TestSeederLaneStoreCallsAreBounded(t *testing.T) {
 	saved := seederDBTimeout
+	require.Equal(t, 2*time.Minute, saved, "the bound in production")
+
 	seederDBTimeout = 50 * time.Millisecond
 
 	t.Cleanup(func() { seederDBTimeout = saved })
