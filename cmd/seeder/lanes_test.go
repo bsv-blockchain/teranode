@@ -774,7 +774,13 @@ func TestSeederGrantRecordIsChecked(t *testing.T) {
 		"version":       func(b []byte) []byte { b[0] = 2; return b },
 		"length":        func(b []byte) []byte { return b[:len(b)-1] },
 		"records":       func(b []byte) []byte { binary.LittleEndian.PutUint64(b[33:41], 4); return b },
-		"zero position": func(b []byte) []byte { binary.LittleEndian.PutUint64(b[42:50], 0); return b },
+		// First 0 to last 2 is still three positions, so only the position check refuses it.
+		"zero position": func(b []byte) []byte {
+			binary.LittleEndian.PutUint64(b[42:50], 0)
+			binary.LittleEndian.PutUint64(b[50:58], 2)
+
+			return b
+		},
 	}
 
 	for name, f := range corrupt {
