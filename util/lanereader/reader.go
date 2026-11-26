@@ -335,8 +335,12 @@ func (r *Reader) noteMinedWrite(ctx context.Context, best chainhash.Hash) {
 
 	cancel()
 
+	if err == nil && meta == nil {
+		err = errors.NewProcessingError("the blockchain service returned no metadata for block %s", best.String())
+	}
+
 	switch {
-	case err != nil || meta == nil:
+	case err != nil:
 		r.minedPending.Store(nil)
 
 		prometheusLaneReaderFollowErrors.Inc()
