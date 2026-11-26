@@ -31,8 +31,8 @@ import (
 // partition drops. The rows today keeps are judged first: the partition is probed for the carried
 // set on its ukey index, the probe the copy-forward makes, and only then is it scanned, skipping
 // the rows the probe judged. They are the only rows where the lane rule can delete what today keeps,
-// the direction that loses a live coin, and on mainnet the scan of one partition outlasts the
-// budget below, so judged in scan order they were never reached. The judging must not slow the drops,
+// the direction that loses a live coin, and on mainnet the scan of a large partition can outlast the
+// budget below (spend_journal_3391 did), so in scan order they could go unjudged. The judging must not slow the drops,
 // so it is bounded three ways. A pass judges
 // only when it retires a single journal partition, as it does at the tip once every 288 blocks; a
 // pass catching up a backlog judges none of them (unjudged backlog). A pass spends at most
@@ -203,10 +203,11 @@ type laneLeafCoverage struct {
 	rows int
 	// total is the partition's live row count by the statistics, -1 when unknown.
 	total int64
-	// kept is the kept rows found and judged; keptDone is whether the probe for them finished.
+	// kept is the kept rows judged; keptDone is whether the probe for them finished.
 	kept     int
 	keptDone bool
-	// probed is the carried spends the partition was probed for.
+	// probed is the carried spends the partition was probed for, counting only those whose rows were
+	// judged.
 	probed int
 }
 
@@ -222,7 +223,7 @@ func (c laneLeafCoverage) ofTotal() string {
 // keeps says whether the rows today keeps were judged, for the log.
 func (c laneLeafCoverage) keeps() string {
 	if !c.keptDone {
-		return fmt.Sprintf("its kept rows not all judged (%d found of %d carried spends probed for before it stopped)", c.kept, c.probed)
+		return fmt.Sprintf("its kept rows not all judged (%d judged, for the first %d carried spends, before it stopped)", c.kept, c.probed)
 	}
 
 	return fmt.Sprintf("all %d rows today keeps among them (probed for %d carried spends)", c.kept, c.probed)
@@ -365,22 +366,20 @@ func (l *laneJournalJudge) judgeKept(ctx context.Context, table, laneColumn stri
 			return judged, errors.NewStorageError("[utxoset] lane rule: read the kept rows of %s", table, err)
 		}
 
+		if len(batch) > 0 {
+			if err := l.judgeBatch(ctx, batch); err != nil {
+				return judged, err
+			}
+
+			for _, r := range batch {
+				judged[newCarriedKey(r.ukey, r.parent, r.spender)] = struct{}{}
+			}
+
+			c.kept += len(batch)
+			c.rows += len(batch)
+		}
+
 		c.probed = hi
-
-		if len(batch) == 0 {
-			continue
-		}
-
-		if err := l.judgeBatch(ctx, batch); err != nil {
-			return judged, err
-		}
-
-		for _, r := range batch {
-			judged[newCarriedKey(r.ukey, r.parent, r.spender)] = struct{}{}
-		}
-
-		c.kept += len(batch)
-		c.rows += len(batch)
 	}
 
 	c.keptDone = true

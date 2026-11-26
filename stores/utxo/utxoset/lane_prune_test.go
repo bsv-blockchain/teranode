@@ -412,6 +412,17 @@ func TestJournalDropCountsAFailedJudgeAndStillDrops(t *testing.T) {
 
 	leafErrors := journalUnjudged(t, "leaf_error")
 
+	// The first kept rows' position read fails, so the log line says the kept rows were not all
+	// judged. This judge's counts are never added to the metrics.
+	carry, err := s.collectCopyForward(ctx, 1_440)
+	require.NoError(t, err)
+
+	cov, err := s.newLaneJournalJudge(carry, 1).judgeLeafRows(ctx, uint32(1_010/SpendJournalPartitionBlocks))
+	require.Error(t, err)
+	require.False(t, cov.keptDone)
+	require.Zero(t, cov.kept)
+	require.Zero(t, cov.probed)
+
 	dropped, err := s.dropSpendJournalPartitionsBelow(ctx, 1_440)
 	require.NoError(t, err)
 	require.Positive(t, dropped)
@@ -434,9 +445,9 @@ func TestJournalDropBudgetCutsAJudgingShort(t *testing.T) {
 	installJournalLaneIndex(t, journalIndexBlock)
 
 	budget, scan := laneJudgePassBudget, laneJournalScanQuery
-	laneJudgePassBudget = 500 * time.Millisecond
-	// A scan whose first row comes after two seconds, longer than the budget.
-	laneJournalScanQuery = "SELECT ukey, txid, spending_txid%s FROM %s, pg_sleep(2)"
+	// Room for the keeps on a slow runner, and a scan whose first row comes after ten seconds.
+	laneJudgePassBudget = 3 * time.Second
+	laneJournalScanQuery = "SELECT ukey, txid, spending_txid%s FROM %s, pg_sleep(10)"
 
 	t.Cleanup(func() { laneJudgePassBudget, laneJournalScanQuery = budget, scan })
 
@@ -516,7 +527,7 @@ func TestLaneLeafCoverageLog(t *testing.T) {
 		{"cut after the keeps", laneLeafCoverage{rows: 1_200, total: 4_800, kept: 261, keptDone: true, probed: 22_000},
 			"about 4800 (25.0%)", "all 261 rows today keeps among them (probed for 22000 carried spends)"},
 		{"cut in the keeps", laneLeafCoverage{rows: 100, total: 4_800, kept: 100, probed: 10_000},
-			"about 4800 (2.1%)", "its kept rows not all judged (100 found of 10000 carried spends probed for before it stopped)"},
+			"about 4800 (2.1%)", "its kept rows not all judged (100 judged, for the first 10000 carried spends, before it stopped)"},
 		{"no statistics", laneLeafCoverage{rows: 5, total: -1, kept: 0, keptDone: true},
 			"an unknown number of", "all 0 rows today keeps among them (probed for 0 carried spends)"},
 	} {
