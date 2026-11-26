@@ -1595,7 +1595,11 @@ wallet_up() {
     echo "error: $cfg/infra-config.yaml still names a chaos-test fleet address; update wallet_up" >&2
     exit 1
   fi
-  chmod 600 "$cfg/infra-config.yaml"
+  # wallet-infra runs as uid 1000, which on Linux is usually not the host user, so the
+  # file has to be world-readable for the container. The directory keeps it from the
+  # host's other users: Docker resolves the bind mount as root.
+  chmod 700 "$cfg"
+  chmod 644 "$cfg/infra-config.yaml"
 
   docker rm -f "$WALLETD_CONTAINER" "$WALLET_INFRA_CONTAINER" "$WALLET_DB_CONTAINER" >/dev/null 2>&1 || true
   echo "starting the wallet ($WALLET_DB_CONTAINER, $WALLET_INFRA_CONTAINER, $WALLETD_CONTAINER)..."
