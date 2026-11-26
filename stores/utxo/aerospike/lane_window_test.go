@@ -42,7 +42,7 @@ func TestReadLaneWindowFiltersOnLastUpdate(t *testing.T) {
 	time.Sleep(time.Second)
 
 	fresh := laneParent(t, 13, 2)
-	_, err = store.Create(ctx, fresh, 101, utxo.WithLanePosition(lane.Pack(4, 7)))
+	_, err = store.Create(ctx, fresh, 101, utxo.WithLanePosition(lane.Pack(4, 7)), utxo.WithSetCoinbase(true))
 	require.NoError(t, err)
 
 	child := laneChild(t, spentParent, 0)
@@ -88,6 +88,8 @@ func TestReadLaneWindowFiltersOnLastUpdate(t *testing.T) {
 	require.Equal(t, lane.Pack(3, 2), got[*spentParent.TxIDChainHash()].LanePosition)
 	require.Equal(t, lane.Pack(4, 7), got[*fresh.TxIDChainHash()].LanePosition)
 	require.Positive(t, got[*fresh.TxIDChainHash()].CreatedAt)
+	require.True(t, got[*fresh.TxIDChainHash()].Coinbase)
+	require.False(t, got[*child.TxIDChainHash()].Coinbase)
 
 	lut, err := store.LaneLastUpdate(ctx, *spentParent.TxIDChainHash())
 	require.NoError(t, err)

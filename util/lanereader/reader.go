@@ -60,6 +60,12 @@ const (
 
 	// maxUnreachable bounds the blocks remembered as having no held ancestor.
 	maxUnreachable = 1_024
+
+	// minedWriteLimit is how long after a block is stored (its inserted_at) its rows' answers may
+	// count mined_pending while its mined write is unfinished. Mainnet's took about 3 s for a block
+	// of 26,000; past the limit the write may have failed, so its answers count lanes_only again,
+	// as do a later re-mark's, such as after a reorg back to the block.
+	minedWriteLimit = time.Minute
 )
 
 // readTimeout bounds each read of headers or rows, so a hung call cannot keep the load token,
@@ -69,6 +75,7 @@ var readTimeout = 30 * time.Second
 // Source is what the Reader reads: the blockchain client.
 type Source interface {
 	GetBestBlockHeader(ctx context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error)
+	GetBlockHeader(ctx context.Context, blockHash *chainhash.Hash) (*model.BlockHeader, *model.BlockHeaderMeta, error)
 	GetBlockHeaders(ctx context.Context, blockHash *chainhash.Hash, numberOfHeaders uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error)
 	LaneMapRows(ctx context.Context, blockID uint32) ([]lane.MapRow, error)
 }
@@ -100,6 +107,20 @@ type Reader struct {
 	unreachable   map[chainhash.Hash]uint32
 
 	prepareWarned map[string]time.Time
+
+	// minedPending is the best block while today's mined write of it (setMined) has not finished,
+	// nil otherwise (KindMinedPending). It counts only until its deadline, so a write that failed
+	// stops counting even if the follower cannot read again. now is the clock, a field so a test
+	// can move it.
+	minedPending atomic.Pointer[minedWait]
+	now          func() time.Time
+}
+
+// minedWait is a best block whose mined write has not finished, and when its answers stop counting
+// mined_pending: minedWriteLimit after the block was stored.
+type minedWait struct {
+	id    uint32
+	until time.Time
 }
 
 var current atomic.Pointer[Reader]
@@ -170,7 +191,7 @@ func InstallIndex(logger ulogger.Logger, idx *lane.Index, settleDepth uint32) *R
 func newReader(logger ulogger.Logger, source Source, settleDepth uint32) *Reader {
 	initMetrics()
 
-	r := &Reader{logger: logger, source: source, settleDepth: settleDepth, startBlocks: startBlocks, maxWalk: maxWalk, walkBatch: walkBatch, loading: make(chan struct{}, 1)}
+	r := &Reader{logger: logger, source: source, settleDepth: settleDepth, startBlocks: startBlocks, maxWalk: maxWalk, walkBatch: walkBatch, loading: make(chan struct{}, 1), now: time.Now}
 	r.idx.Store(lane.NewIndex(settleDepth))
 
 	return r
@@ -253,6 +274,9 @@ func (r *Reader) step(ctx context.Context, tip chainhash.Hash) (chainhash.Hash, 
 	}
 
 	best := *header.Hash()
+
+	r.noteMinedWrite(ctx, best)
+
 	if best == tip && r.Snapshot() != nil {
 		return tip, nil
 	}
@@ -298,6 +322,48 @@ func (r *Reader) step(ctx context.Context, tip chainhash.Hash) (chainhash.Hash, 
 	r.publishMetrics()
 
 	return best, nil
+}
+
+// noteMinedWrite records whether today's mined write of the best block has finished, reading its
+// mined_set flag every poll: a block's rows commit with it, today's mined state lands seconds
+// later, and a reorg or an invalidation can clear the flag again. A failed read, or a write still
+// unfinished minedWriteLimit after the block was stored, leaves no block pending, so its answers
+// count as they did.
+func (r *Reader) noteMinedWrite(ctx context.Context, best chainhash.Hash) {
+	readCtx, cancel := context.WithTimeout(ctx, readTimeout)
+	_, meta, err := r.source.GetBlockHeader(readCtx, &best)
+
+	cancel()
+
+	if err == nil && meta == nil {
+		err = errors.NewProcessingError("the blockchain service returned no metadata for block %s", best.String())
+	}
+
+	switch {
+	case err != nil:
+		r.minedPending.Store(nil)
+
+		prometheusLaneReaderFollowErrors.Inc()
+
+		if r.warnAMinute("mined_set") {
+			r.logger.Warnf("[lanereader] reading best block %s's mined_set flag failed, so answers from its rows count lanes_only until a read succeeds: %v", best.String(), err)
+		}
+	case meta.MinedSet:
+		r.minedPending.Store(nil)
+	default:
+		until := time.Unix(int64(meta.Timestamp), 0).Add(minedWriteLimit)
+		if r.now().Before(until) {
+			r.minedPending.Store(&minedWait{id: meta.ID, until: until})
+
+			return
+		}
+
+		r.minedPending.Store(nil)
+
+		if r.warnAMinute("mined_write_slow") {
+			r.logger.Warnf("[lanereader] best block %s's mined write has not finished %s after the block was stored, so answers from its rows count lanes_only", best.String(), minedWriteLimit)
+		}
+	}
 }
 
 // lockLoad takes the load token, or reports false if ctx ends first.
@@ -450,7 +516,7 @@ func (r *Reader) load(ctx context.Context, idx *lane.Index, headers []*model.Blo
 	}
 
 	for i, h := range headers {
-		b := lane.IndexBlock{ID: metas[i].ID, Height: metas[i].Height, Hash: *h.Hash()}
+		b := lane.IndexBlock{ID: metas[i].ID, Height: metas[i].Height, Hash: *h.Hash(), TxCount: metas[i].TxCount}
 		if h.HashPrevBlock != nil {
 			b.Parent = *h.HashPrevBlock
 		}
@@ -564,24 +630,27 @@ func (r *Reader) markUnreachable(hash chainhash.Hash, tipID uint32) {
 func (r *Reader) prepareFailed(reason, format string, args ...any) {
 	prometheusLaneReaderPrepareFailures.WithLabelValues(reason).Inc()
 
+	if r.warnAMinute(reason) {
+		r.logger.Warnf(format, args...)
+	}
+}
+
+// warnAMinute reports whether a warning under key may be logged: at most one a minute per key.
+func (r *Reader) warnAMinute(key string) bool {
 	r.unreachableMu.Lock()
+	defer r.unreachableMu.Unlock()
 
 	if r.prepareWarned == nil {
 		r.prepareWarned = map[string]time.Time{}
 	}
 
-	last := r.prepareWarned[reason]
-	warn := time.Since(last) >= time.Minute
-
-	if warn {
-		r.prepareWarned[reason] = time.Now()
+	if time.Since(r.prepareWarned[key]) < time.Minute {
+		return false
 	}
 
-	r.unreachableMu.Unlock()
+	r.prepareWarned[key] = time.Now()
 
-	if warn {
-		r.logger.Warnf(format, args...)
-	}
+	return true
 }
 
 func (r *Reader) publishMetrics() {

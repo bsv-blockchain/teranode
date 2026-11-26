@@ -53,8 +53,9 @@ jobs:
           cache: "false"
 
       # The unit shard saves the module cache and the -race/coverage build cache.
-      # The e2e-build-cache job below saves the end-to-end build cache. Both run
-      # only on the default branch, so every PR job can read them back.
+      # The e2e-build-cache job below saves the end-to-end build cache, and
+      # bench-build-cache the non-race benchmark build cache. All run only on the
+      # default branch, so every PR job can read them back.
       - name: Restore and save Go caches
         uses: ./.github/actions/go-cache
         with:
@@ -82,6 +83,48 @@ jobs:
           name: go-coverage-${{ matrix.shard }}
           path: ${{ matrix.profile }}
           retention-days: 1
+
+  # Saves the build cache the Benchmark Comparison jobs restore. Those jobs build
+  # without -race on ubuntu-latest (amd64), so neither the -race cache above nor
+  # anything built on this workflow's ARM runners can serve them.
+  bench-build-cache:
+    name: Benchmark build cache
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+
+      - name: Set up Go
+        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: "false"
+
+      - name: Restore and save Go caches
+        uses: ./.github/actions/go-cache
+        with:
+          build_cache: 'false'
+          save_bench_build_cache: 'true'
+
+      # Same packages and build flags as the bench jobs in benchmark-compare.yaml,
+      # read from its matrix so a new group is cached without an edit here.
+      - name: Build the benchmark test binaries without -race
+        run: |
+          pkgs=$(sed -n '/matrix:/,/steps:/p' .github/workflows/benchmark-compare.yaml \
+            | grep -vE '^[[:space:]]*#' | grep -oE '[.]/[a-z][A-Za-z0-9_./-]*' | sort -u)
+          echo "$pkgs"
+          # One binary per package, so a later group whose package shares a base
+          # name with another (go test -c -o dir/ refuses that) cannot break this job.
+          for p in $pkgs; do
+            go test -c -tags testtxmetacache -o "$RUNNER_TEMP/bench-bin/$(echo "$p" | tr '/.' '__').test" "$p"
+          done
+
+      # Drop entries this build did not use, as the unit job does for its cache.
+      - name: Trim benchmark build cache
+        run: |
+          find ~/.cache/go-build-bench -type f -mmin +90 -delete 2>/dev/null || true
+          du -sh ~/.cache/go-build-bench
 
 
   smoketest:

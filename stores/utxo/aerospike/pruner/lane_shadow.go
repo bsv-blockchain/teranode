@@ -57,11 +57,11 @@ func (s *Service) newLaneShadow(chunk []*aerospike.Result) *laneShadow {
 	return &laneShadow{s: s, judge: j, records: chunk, deleted: make([]*aerospike.Result, 0, len(chunk))}
 }
 
-// laneQueryBins are the bins the lane rule needs beside today's: the parent's position, the slot
-// positions and, outside defensive mode, the utxos bin, which says which outputs are spent and by
-// whom.
+// laneQueryBins are the bins the lane rule needs beside today's: the parent's position and coinbase
+// flag, the slot positions and, outside defensive mode, the utxos bin, which says which outputs are
+// spent and by whom.
 func (s *Service) laneQueryBins(binNames []string) []string {
-	binNames = append(binNames, fields.LanePosition.String(), fields.SpendingLanePositions.String())
+	binNames = append(binNames, fields.LanePosition.String(), fields.SpendingLanePositions.String(), fields.IsCoinbase.String())
 
 	if !s.defensiveEnabled {
 		binNames = append(binNames, s.fieldUtxos)
@@ -105,6 +105,7 @@ const lanePageReadTimeout = time.Second
 var (
 	binLanePos      = fields.LanePosition.String()
 	binSpendLanePos = fields.SpendingLanePositions.String()
+	binIsCoinbase   = fields.IsCoinbase.String()
 )
 
 // run judges every master record and counts deleted pages without a master as unjudged. It must run
@@ -178,6 +179,7 @@ func (l *laneShadow) run() {
 		copy(m.c.Parent[:], txID)
 		m.c.ParentPos = binLanePosition(bins[binLanePos])
 		m.c.Conflicting = conflicting
+		m.c.Coinbase, _ = bins[binIsCoinbase].(bool)
 
 		start := len(spenders)
 
