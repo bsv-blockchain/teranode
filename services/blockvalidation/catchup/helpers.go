@@ -126,7 +126,7 @@ func BuildBlockLocatorString(locatorHashes []*chainhash.Hash) string {
 //   - logger: Logger for retry attempts
 //   - url: URL to fetch headers from
 //   - maxRetries: Maximum retry attempts
-//   - backoff: Wait before the first retry; 0 means 1s
+//   - backoff: Wait before the first retry; 0 or less means 1s, above 30s is capped at 30s
 //   - maxBytes: Cap on the response body, enforced before it is read into memory
 //
 // Returns:
