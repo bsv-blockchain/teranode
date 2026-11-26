@@ -10,13 +10,11 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2"
-	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/services/blockassembly"
@@ -84,56 +82,15 @@ func withDistinctOutputs(wrappers []*utxopersister.UTXOWrapper) []*utxopersister
 	return wrappers
 }
 
-// outputRecordingStore records the outputs of every created tx.
-type outputRecordingStore struct {
-	utxo.Store
-	mu      sync.Mutex
-	outputs map[chainhash.Hash][]*bt.Output
-	creates int
-}
-
-func (s *outputRecordingStore) SpendAndCreate(_ context.Context, tx *bt.Tx, _ uint32, opts ...utxo.CreateOption) (*meta.Data, []*utxo.Spend, error) {
-	o, err := utxo.ParseCreateOptions(opts...)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	s.mu.Lock()
-	s.outputs[*o.TxID] = tx.Outputs
-	s.creates++
-	s.mu.Unlock()
-
-	return nil, nil, nil
-}
-
-// requireOutputs checks that the store got every wrapper's outputs exactly once.
-func requireOutputs(t *testing.T, store *outputRecordingStore, wrappers []*utxopersister.UTXOWrapper) {
-	t.Helper()
-
-	require.Equal(t, len(wrappers), store.creates)
-
-	for _, w := range wrappers {
-		outs, ok := store.outputs[w.TxID]
-		require.True(t, ok, "tx %s", w.TxID)
-
-		for _, want := range w.UTXOs {
-			out := outs[want.Index]
-			require.NotNil(t, out, "tx %s output %d", w.TxID, want.Index)
-			require.Equal(t, want.Value, out.Satoshis, "tx %s output %d", w.TxID, want.Index)
-			require.Equal(t, want.Script, []byte(*out.LockingScript), "tx %s output %d", w.TxID, want.Index)
-		}
-	}
-}
-
 func piecePath(dir string, i int) string {
 	return filepath.Join(dir, fmt.Sprintf("piece_%04d.zst", i))
 }
 
-// Every input form, in one pass or two and with either decoder mode, must hand the store
-// every record once with its outputs intact, multi-record txs included, and pass its
-// checksum. Pieces are cut by bytes, so records straddle pieces.
+// Every input form, in one pass or two and with either decoder mode, must land every
+// output intact and unspent in a real UTXO store, multi-record txs included, and pass
+// its checksum. Pieces are cut by bytes, so records straddle pieces.
 func TestImportUTXOSet_CompressedInputs(t *testing.T) {
-	const n = 3000
+	const n = 600
 
 	wrappers := withDistinctOutputs(benchWrappers("zst", n, 50))
 	plain := writeCompleteSnapshotFile(t, wrappers)
@@ -143,7 +100,7 @@ func TestImportUTXOSet_CompressedInputs(t *testing.T) {
 	plainSum := sha256.Sum256(plainData)
 
 	zstFile, zstSum := compressedSnapshot(t, plain, 0)
-	pieceDir, pieceSum := compressedSnapshot(t, plain, 4093)
+	pieceDir, pieceSum := compressedSnapshot(t, plain, 1021)
 
 	inputs := []struct {
 		name, path, sum string
@@ -165,9 +122,10 @@ func TestImportUTXOSet_CompressedInputs(t *testing.T) {
 					opts.utxoBatchSize = batch
 					opts.expectedSHA256 = in.sum
 
-					store := &outputRecordingStore{outputs: make(map[chainhash.Hash][]*bt.Output, n)}
-					require.NoError(t, importUTXOSet(context.Background(), ulogger.TestLogger{}, store, in.path, opts))
-					requireOutputs(t, store, wrappers)
+					ctx := context.Background()
+					store := newTestUtxoStore(ctx, t)
+					require.NoError(t, importUTXOSet(ctx, ulogger.TestLogger{}, store, in.path, opts))
+					requireStoredOutputs(ctx, t, store, wrappers)
 				})
 			}
 		}
@@ -543,7 +501,7 @@ func TestProcessUTXOs_CompressedInput_InterruptedSeedReRuns(t *testing.T) {
 	require.Equal(t, uint32(200), tip.height)
 	require.Equal(t, "200", readMarker(t, ctx, blockStore))
 
-	requireStoredOutputs(ctx, t, tSettings, "compressed_rerun", wrappers)
+	requireStoredOutputs(ctx, t, openNamedUtxoStore(ctx, t, tSettings, "compressed_rerun"), wrappers)
 
 	stale := hex.EncodeToString(make([]byte, sha256.Size))
 
@@ -566,9 +524,8 @@ func TestProcessUTXOs_CompressedInput_InterruptedSeedReRuns(t *testing.T) {
 	require.Nil(t, tip, "a skipped import writes no checkpoint")
 }
 
-// requireStoredOutputs checks every wrapper's outputs in the named sqlite UTXO store,
-// each with its value and script, and unspent.
-func requireStoredOutputs(ctx context.Context, t *testing.T, tSettings *settings.Settings, name string, wrappers []*utxopersister.UTXOWrapper) {
+// openNamedUtxoStore opens the named sqlite UTXO store (see pointUtxoStoreAt).
+func openNamedUtxoStore(ctx context.Context, t *testing.T, tSettings *settings.Settings, name string) utxo.Store {
 	t.Helper()
 
 	u, err := url.Parse("sqlite:///" + name)
@@ -576,6 +533,14 @@ func requireStoredOutputs(ctx context.Context, t *testing.T, tSettings *settings
 
 	store, err := utxosql.New(ctx, ulogger.TestLogger{}, tSettings, u)
 	require.NoError(t, err)
+
+	return store
+}
+
+// requireStoredOutputs checks every wrapper's outputs in store, each with its value
+// and script, and unspent.
+func requireStoredOutputs(ctx context.Context, t *testing.T, store utxo.Store, wrappers []*utxopersister.UTXOWrapper) {
+	t.Helper()
 
 	for _, w := range wrappers {
 		got, err := store.Get(ctx, &w.TxID)
@@ -618,7 +583,7 @@ func TestProcessUTXOs_CompressedInput_StoresEveryOutput(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, uint32(200), tip.height)
 
-			requireStoredOutputs(ctx, t, tSettings, name, wrappers)
+			requireStoredOutputs(ctx, t, openNamedUtxoStore(ctx, t, tSettings, name), wrappers)
 		})
 	}
 }

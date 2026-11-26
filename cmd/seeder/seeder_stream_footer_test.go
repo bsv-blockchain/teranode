@@ -398,3 +398,24 @@ func TestUTXOSetPieces_RefusesNamedPipes(t *testing.T) {
 	_, err = utxoSetPieces(pieces)
 	require.ErrorContains(t, err, "not a regular file")
 }
+
+// A piece replaced by a named pipe after it was listed must be refused when it is
+// opened, not block that open waiting for a writer.
+func TestPieceReader_RefusesAPipeAtOpen(t *testing.T) {
+	pipe := filepath.Join(t.TempDir(), "piece_000000.zst")
+	require.NoError(t, syscall.Mkfifo(pipe, 0o600))
+
+	done := make(chan error, 1)
+
+	go func() {
+		_, err := (&pieceReader{pieces: []string{pipe}}).Read(make([]byte, 16))
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		require.ErrorContains(t, err, "not a regular file")
+	case <-time.After(5 * time.Second):
+		t.Fatal("opening a piece that is a pipe blocked")
+	}
+}

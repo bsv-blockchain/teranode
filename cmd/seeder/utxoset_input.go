@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/klauspost/compress/zstd"
@@ -141,6 +142,29 @@ func utxoSetPieces(path string) ([]string, error) {
 	return pieces, nil
 }
 
+// openRegularFile opens path without blocking and refuses anything but a
+// regular file. utxoSetPieces checked the type earlier, but a piece replaced by
+// a named pipe since then would otherwise block this open beyond any cancel.
+// O_NONBLOCK changes nothing for a regular file's reads.
+func openRegularFile(path string) (*os.File, error) {
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return nil, errors.NewStorageError("failed to open UTXO set piece %s", path, err)
+	}
+
+	info, err := f.Stat()
+	if err == nil && !info.Mode().IsRegular() {
+		err = errors.NewConfigurationError("UTXO set piece %s is not a regular file; a named pipe must use the plain .utxo-set name", path)
+	}
+
+	if err != nil {
+		_ = f.Close()
+		return nil, err
+	}
+
+	return f, nil
+}
+
 // pieceReader reads files one after another, with one open at a time.
 type pieceReader struct {
 	pieces []string
@@ -154,9 +178,9 @@ func (p *pieceReader) Read(b []byte) (int, error) {
 				return 0, io.EOF
 			}
 
-			f, err := os.Open(p.pieces[0])
+			f, err := openRegularFile(p.pieces[0])
 			if err != nil {
-				return 0, errors.NewStorageError("failed to open UTXO set piece %s", p.pieces[0], err)
+				return 0, err
 			}
 
 			p.cur, p.pieces = f, p.pieces[1:]
