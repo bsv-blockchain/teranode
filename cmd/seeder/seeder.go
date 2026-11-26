@@ -313,7 +313,8 @@ func Seeder(logger ulogger.Logger, appSettings *settings.Settings, inputDir stri
 	// and a plain re-run skips the (now-complete) UTXO pass, never retrying it.
 	if !skipUTXOs && utxoTip != nil {
 		// The rows go before the checkpoint: a run that fails between them leaves no checkpoint,
-		// so a re-run writes them again, and a retry with the same rows writes nothing.
+		// and -recover-checkpoint or -force writes them again. A retry with the same rows writes
+		// nothing.
 		if utxoTip.lanes != nil {
 			if err := writeSeededRows(ctx, logger, blockchainStore, utxoTip.lanes, utxoTip); err != nil {
 				return errors.NewProcessingError("seeder failed to write the seeded lane rows", err)

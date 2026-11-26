@@ -369,7 +369,7 @@ func takeSeederGrant(ctx context.Context, logger ulogger.Logger, store blockchai
 	}
 
 	if ok {
-		logger.Warnf("[seeder lanes] the blockchain store records a grant for %d records of the seed of %s; this file holds %d and takes a new one", recorded.records, tip.String(), records)
+		return lane.Grant{}, errors.NewProcessingError("the blockchain store records a grant for %d records of the seed of %s, and this file of that tip holds %d: seed it into a blockchain database and UTXO store that are both empty", recorded.records, tip.String(), records)
 	}
 
 	// Rows are insert-only, so a block that already has rows, from another seed or from live
@@ -450,6 +450,14 @@ func takeSeederGrant(ctx context.Context, logger ulogger.Logger, store blockchai
 	}
 
 	release(g.Last)
+
+	// The grant is recorded, so the pending record has done its job; left set, it would let a later
+	// seed of this tip past the check for earlier grants.
+	if err = withDBTimeout(ctx, func(ctx context.Context) error {
+		return store.SetState(ctx, seederStateKey(seederPendingKeyPrefix, tip), []byte{})
+	}); err != nil {
+		return lane.Grant{}, errors.NewStorageError("could not clear the seeder's pending lane grant", err)
+	}
 
 	logger.Infof("[seeder lanes] took lane %d positions %d to %d for %d records", g.Lane, g.First, g.Last, records)
 

@@ -563,6 +563,15 @@ func TestSeederGrantAfterAnUnrecordedOne(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, uint64(5), g.Len())
 
+	// Once recorded, the grant clears the pending record, and a file of that tip with another
+	// record count is refused rather than given a second grant.
+	pending, err := readState(ctx, store, seederStateKey(seederPendingKeyPrefix, tip))
+	require.NoError(t, err)
+	require.Empty(t, pending)
+
+	_, err = takeSeederGrant(ctx, ulogger.TestLogger{}, store, s, tip, 6)
+	require.ErrorContains(t, err, "this file of that tip holds 6")
+
 	_, err = takeSeederGrant(ctx, ulogger.TestLogger{}, store, s, chainhash.HashH([]byte("another seed")), 5)
 	require.ErrorContains(t, err, "has handed out lane positions before")
 }
@@ -588,7 +597,7 @@ func TestSeederLaneStoreCallsAreBounded(t *testing.T) {
 	start := time.Now()
 	_, err := readState(context.Background(), blockingStateStore{}, "sg:x")
 	require.ErrorContains(t, err, "deadline exceeded")
-	require.Less(t, time.Since(start), 5*time.Second)
+	require.Less(t, time.Since(start), time.Second)
 }
 
 // A batch of rows whose blocks are not all on the main chain writes none of them.
