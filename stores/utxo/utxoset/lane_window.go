@@ -314,6 +314,7 @@ func (s *Store) laneWindowIdent(ctx context.Context, leaf int16, txids [][]byte)
 		}
 
 		rec.Conflicting = flags&FlagConflicting != 0
+		rec.Coinbase = flags&FlagCoinbase != 0
 
 		found[rec.Hash] = rec
 		n += uint64(len(txid)) + 8 + 8 + 2 + 8 + 4 + uint64(len(inpoints))

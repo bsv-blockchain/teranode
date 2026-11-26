@@ -1,6 +1,7 @@
 package lanereader
 
 import (
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -46,8 +47,10 @@ type pruneIndex struct {
 	settle uint32
 	took   map[uint32][][]lane.MapRow
 	forks  []forkBlock
-	// noRowsAt is a main-chain height whose block has no rows at all.
-	noRowsAt uint32
+	// noRowsAt is a main-chain height whose block has no rows at all, and coinbaseOnlyAt one whose
+	// block holds only its coinbase.
+	noRowsAt       uint32
+	coinbaseOnlyAt uint32
 }
 
 type forkBlock struct {
@@ -80,7 +83,7 @@ func (p *pruneIndex) build(tip uint32) *Reader {
 	for h := uint32(1); h <= tip; h++ {
 		var all []lane.MapRow
 
-		if h != p.noRowsAt {
+		if h != p.noRowsAt && h != p.coinbaseOnlyAt {
 			all = append(all, laneRows(p.t, fillerLane, uint64(h))...)
 
 			for _, r := range p.took[h] {
@@ -88,7 +91,12 @@ func (p *pruneIndex) build(tip uint32) *Reader {
 			}
 		}
 
-		require.NoError(p.t, p.idx.AddBlock(lane.IndexBlock{ID: h, Height: h, Hash: pruneBlockHash(h), Parent: pruneBlockHash(h - 1)}, all))
+		b := lane.IndexBlock{ID: h, Height: h, Hash: pruneBlockHash(h), Parent: pruneBlockHash(h - 1)}
+		if h == p.coinbaseOnlyAt {
+			b.TxCount = 1
+		}
+
+		require.NoError(p.t, p.idx.AddBlock(b, all))
 	}
 
 	for _, f := range p.forks {
@@ -286,6 +294,24 @@ func TestPruneJudgeEachReason(t *testing.T) {
 			want:  PruneVerdict{PruneCannotJudge, ReasonSpenderUnread},
 		},
 		{
+			name:  "a coinbase parent no row takes cannot be judged",
+			chain: func(p *pruneIndex) *pruneIndex { return p.at(150, laneRows(t, 7, 499)).at(190, laneRows(t, 9, 40)) },
+			c:     &PruneCandidate{Parent: parentHash, ParentPos: parent, Spenders: []PruneSpender{{spenderHash, spender}}, Coinbase: true},
+			want:  PruneVerdict{PruneCannotJudge, ReasonCoinbase},
+		},
+		{
+			name:  "a coinbase parent with an unmined spender is kept for the spender",
+			chain: func(p *pruneIndex) *pruneIndex { return p.at(150, laneRows(t, 7, 499)).at(160, laneRows(t, 9, 39)) },
+			c:     &PruneCandidate{Parent: parentHash, ParentPos: parent, Spenders: []PruneSpender{{spenderHash, spender}}, Coinbase: true},
+			want:  PruneVerdict{PruneKeep, ReasonSpenderUnmined},
+		},
+		{
+			name:  "a coinbase parent a row takes is judged as any other",
+			chain: func(p *pruneIndex) *pruneIndex { return p.at(150, laneRows(t, 7, 500)).at(190, laneRows(t, 9, 40)) },
+			c:     &PruneCandidate{Parent: parentHash, ParentPos: parent, Spenders: []PruneSpender{{spenderHash, spender}}, Coinbase: true},
+			want:  PruneVerdict{PruneDelete, ReasonSettled},
+		},
+		{
 			name:  "two spenders, the second unmined",
 			chain: func(p *pruneIndex) *pruneIndex { return p.at(150, laneRows(t, 7, 500)).at(190, laneRows(t, 9, 40)) },
 			c:     candidate(parent, spender, other),
@@ -329,6 +355,13 @@ func TestPruneJudgeNoRows(t *testing.T) {
 	r := p.build(300)
 	j := r.PruneJudge(PruneStoreAerospike, 288)
 	require.Equal(t, PruneVerdict{PruneCannotJudge, ReasonNoRows}, j.Judge(TodayDelete, candidate(lane.Pack(7, 500), lane.Pack(9, 40))))
+
+	// A block of only its coinbase is not one: it has nothing for a row to list.
+	p = newPruneIndex(t, 100).at(150, laneRows(t, 7, 500)).at(160, laneRows(t, 9, 39))
+	p.coinbaseOnlyAt = 250
+
+	j = p.build(300).PruneJudge(PruneStoreAerospike, 288)
+	require.Equal(t, PruneVerdict{PruneKeep, ReasonSpenderUnmined}, j.Judge(TodayDelete, candidate(lane.Pack(7, 500), lane.Pack(9, 40))))
 }
 
 func TestPruneJudgeNotReady(t *testing.T) {
@@ -423,19 +456,33 @@ func TestPruneJudgeStopsAtTheFirstUnsettledPosition(t *testing.T) {
 	require.Equal(t, [3]uint64{1, 0, 1}, j.vias, "the parent and the first spender, not the second")
 }
 
-// warnLogger records the format of each warning.
+// warnLogger records each warning's format and its formatted line.
 type warnLogger struct {
 	ulogger.TestLogger
 
 	mu    sync.Mutex
 	warns []string
+	lines []string
 }
 
-func (l *warnLogger) Warnf(format string, _ ...interface{}) {
+func (l *warnLogger) Warnf(format string, args ...interface{}) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
 	l.warns = append(l.warns, format)
+	l.lines = append(l.lines, fmt.Sprintf(format, args...))
+}
+
+// last is the latest warning's formatted line, empty if there is none.
+func (l *warnLogger) last() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	if len(l.lines) == 0 {
+		return ""
+	}
+
+	return l.lines[len(l.lines)-1]
 }
 
 // TestPruneJudgeLogsEachDirectionUnderItsOwnGate: the first disagreements of each direction are

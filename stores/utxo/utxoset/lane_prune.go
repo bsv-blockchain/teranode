@@ -234,6 +234,8 @@ func (c laneLeafCoverage) keeps() string {
 type laneJournalRow struct {
 	ukey, parent, spender []byte
 	parentPos             uint64
+	// coinbase is the spent output's coinbase flag, which is its parent's.
+	coinbase bool
 }
 
 // laneJournalKeptSQL reads the rows of one retiring journal partition (%s) that today's carry names,
@@ -241,7 +243,7 @@ type laneJournalRow struct {
 // its cost follows the carried set and not the partition. The first %s is the lane_position column
 // where the partition has it; k has no column of that name, so it needs no qualifier.
 const laneJournalKeptSQL = `
-SELECT j.ukey, j.txid, j.spending_txid%s
+SELECT j.ukey, j.txid, j.spending_txid, j.flags%s
   FROM %s j, unnest($1::uuid[], $2::bytea[], $3::bytea[]) AS k(ukey, txid, spender)
  WHERE j.ukey = k.ukey AND j.txid = k.txid AND j.spending_txid = k.spender`
 
@@ -251,7 +253,7 @@ var laneJournalKeptQuery = laneJournalKeptSQL
 
 // laneJournalScanSQL reads every row of one retiring journal partition (the second %s); the first %s
 // is the lane_position column where the partition has it.
-const laneJournalScanSQL = `SELECT ukey, txid, spending_txid%s FROM %s`
+const laneJournalScanSQL = `SELECT ukey, txid, spending_txid, flags%s FROM %s`
 
 // laneJournalScanQuery is the statement the scan runs, laneJournalScanSQL; a test swaps it to make the
 // scan outlast the budget.
@@ -415,14 +417,15 @@ func (l *laneJournalJudge) readKept(ctx context.Context, stmt string, withLane b
 	return batch, q.Err()
 }
 
-// scanLaneJournalRow reads one row of ukey, txid, spending_txid and, withLane, lane_position.
+// scanLaneJournalRow reads one row of ukey, txid, spending_txid, flags and, withLane, lane_position.
 func scanLaneJournalRow(q pgx.Rows, withLane bool) (laneJournalRow, error) {
 	var (
-		r   laneJournalRow
-		pos *int64
+		r     laneJournalRow
+		pos   *int64
+		flags int16
 	)
 
-	dest := []any{&r.ukey, &r.parent, &r.spender}
+	dest := []any{&r.ukey, &r.parent, &r.spender, &flags}
 	if withLane {
 		dest = append(dest, &pos)
 	}
@@ -430,6 +433,8 @@ func scanLaneJournalRow(q pgx.Rows, withLane bool) (laneJournalRow, error) {
 	if err := q.Scan(dest...); err != nil {
 		return r, err
 	}
+
+	r.coinbase = flags&FlagCoinbase != 0
 
 	r.parentPos = lane.None
 	if pos != nil {
@@ -468,6 +473,8 @@ func (l *laneJournalJudge) judgeBatch(ctx context.Context, batch []laneJournalRo
 
 	for _, r := range batch {
 		copy(c.Parent[:], r.parent)
+
+		c.Coinbase = r.coinbase
 
 		c.ParentPos = r.parentPos
 		if !lane.Valid(c.ParentPos) {
