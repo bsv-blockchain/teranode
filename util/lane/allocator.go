@@ -120,7 +120,9 @@ type Allocator struct {
 	// while a grant is current carries the oldest pair, so after it succeeds at most that grant and a
 	// spare can be left before the next one does. Once two are left no grant is current, so none can
 	// be left again until a request succeeds. A request with no grant current carries the newest pair
-	// and may leave one older pair, which the next request made while a grant is current carries.
+	// and may leave one older pair. Only a request made while a grant is current, or the release,
+	// carries that one, so under slow traffic it can wait until the release, and a lease the service
+	// closes loses it; its grant then has no settles pair, which readers take as possibly unused.
 	pending  [2]Settles
 	npending int
 	// leaseTaken is the highest position this lease has given out that may carry a record; 0 for
@@ -677,9 +679,10 @@ func (a *Allocator) releaseRefused(id LeaseID, l uint8) {
 	}
 }
 
-// pairToSendLocked is the settles pair a grant request carries. With no grant current and no spare
-// held, the newest pair settles the grant this allocator left last, which is the lane's newest
-// hand-out, so the request carries it and the service can start the grant right after it. Take a
+// pairToSendLocked is the settles pair a grant request carries. With no grant current (next is 0
+// only once the spare, if any, has been installed and left), the newest pair settles the grant this
+// allocator left last, which is the lane's newest hand-out, so the request carries it and the
+// service can start the grant right after it. Take a
 // burst that moved from grant 1 to spare 2, then slowed so spare 2 aged out: pending holds both
 // pairs, and carrying grant 1's would start the next grant above spare 2's tail. Otherwise the
 // request carries the oldest pair.
@@ -688,7 +691,7 @@ func (a *Allocator) pairToSendLocked() Settles {
 		return Settles{}
 	}
 
-	if a.next == 0 && !a.hasSpare {
+	if a.next == 0 {
 		return a.pending[a.npending-1]
 	}
 

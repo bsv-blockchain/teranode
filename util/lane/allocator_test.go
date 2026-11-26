@@ -403,7 +403,11 @@ func TestAllocatorLateFirstTakeKeepsItsTwoMinuteUseWindow(t *testing.T) {
 	clk.step(2*time.Minute - time.Nanosecond)
 	require.Equal(t, Pack(0, 2), next(t, a), "use continues for two minutes from the first take")
 	clk.step(time.Nanosecond)
-	require.Empty(t, src.grantRequests(), "an aged-out grant alone asks for nothing before the next take")
+
+	a.mu.Lock()
+	want := a.wantGrantLocked()
+	a.mu.Unlock()
+	require.False(t, want, "an aged-out grant alone asks for nothing before the next take")
 	require.Equal(t, Pack(0, 3), next(t, a), "switch exactly at the used-grant boundary, to a grant that continues the aged one")
 	require.Equal(t, Settles{First: 1, LastTaken: 2}, src.grantRequests()[0].Settles)
 }
@@ -1319,10 +1323,10 @@ func (m *allocModel) oldestPending() Settles {
 	return m.pending[0]
 }
 
-// pairToSend is the pair a grant request carries: the newest when no grant is current and no spare
-// is held, as that one may continue, else the oldest.
+// pairToSend is the pair a grant request carries: the newest when no grant is current, as that one
+// may continue, else the oldest.
 func (m *allocModel) pairToSend() Settles {
-	if len(m.pending) > 0 && m.next == 0 && !m.hasSpare {
+	if len(m.pending) > 0 && m.next == 0 {
 		return m.pending[len(m.pending)-1]
 	}
 
