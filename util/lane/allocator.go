@@ -682,10 +682,7 @@ func (a *Allocator) releaseRefused(id LeaseID, l uint8) {
 // settles the lane's newest hand-out, the service starts the grant right after it; otherwise above.
 // Take a burst that moved from grant 1 to spare 2, after which spare 2 aged out: carrying grant 1's
 // pair would start the next grant above spare 2's tail, so the newest goes, and grant 1's waits for
-// a later request or the release. Take a
-// burst that moved from grant 1 to spare 2, then slowed so spare 2 aged out: pending holds both
-// pairs, and carrying grant 1's would start the next grant above spare 2's tail. Otherwise the
-// request carries the oldest pair.
+// a later request or the release.
 func (a *Allocator) pairToSendLocked() Settles {
 	if a.npending == 0 {
 		return Settles{}
