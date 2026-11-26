@@ -2027,7 +2027,7 @@ func TestProcessTransaction_RefusedWhileSyncing(t *testing.T) {
 				settings:      test.CreateBaseTestSettings(t),
 				validator:     validatorInstance,
 				txStore:       txStore,
-				unminedTxGate: blockchain.NewUnminedTxGate(ulogger.TestLogger{}, blockchainClient, blockchain.UnminedTxRoutePropagation),
+				unminedTxGate: blockchain.NewUnminedTxGate(ulogger.TestLogger{}, blockchainClient, nil, blockchain.UnminedTxRoutePropagation),
 			}
 
 			txs := transactions.CreateTestTransactionChainWithCount(t, 3)
@@ -2091,7 +2091,7 @@ func newGatedPropagationServer(t *testing.T, state blockchain.FSMStateType, logg
 		settings:      tSettings,
 		validator:     &orderedErrValidator{},
 		txStore:       txStore,
-		unminedTxGate: blockchain.NewUnminedTxGate(ulogger.TestLogger{}, blockchainClient, blockchain.UnminedTxRoutePropagation),
+		unminedTxGate: blockchain.NewUnminedTxGate(ulogger.TestLogger{}, blockchainClient, nil, blockchain.UnminedTxRoutePropagation),
 	}
 }
 

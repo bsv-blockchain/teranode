@@ -5016,9 +5016,9 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 		blockValidation:   blockValidation,
 		blockAssembly:     blockAssembly,
 
-		txGate:             teranodeblockchain.NewUnminedTxGate(logger, blockchainClient, teranodeblockchain.UnminedTxRouteLegacyTx),
-		orphanGate:         teranodeblockchain.NewUnminedTxGate(logger, blockchainClient, teranodeblockchain.UnminedTxRouteLegacyOrphan),
-		orphanEvictionGate: teranodeblockchain.NewUnminedTxGate(logger, blockchainClient, teranodeblockchain.UnminedTxRouteLegacyOrphanEviction),
+		txGate:             teranodeblockchain.NewUnminedTxGate(logger, blockchainClient, tSettings, teranodeblockchain.UnminedTxRouteLegacyTx),
+		orphanGate:         teranodeblockchain.NewUnminedTxGate(logger, blockchainClient, tSettings, teranodeblockchain.UnminedTxRouteLegacyOrphan),
+		orphanEvictionGate: teranodeblockchain.NewUnminedTxGate(logger, blockchainClient, tSettings, teranodeblockchain.UnminedTxRouteLegacyOrphanEviction),
 	}
 
 	// Where every downloaded block is converted to and committed from. Not

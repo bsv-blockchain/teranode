@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/bsv-blockchain/teranode/settings"
+	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/utxoset"
 	tpostgres "github.com/bsv-blockchain/teranode/test/utils/postgres"
 	"github.com/bsv-blockchain/teranode/ulogger"
@@ -108,4 +109,6 @@ func TestUtxosetSchemeIsRegistered(t *testing.T) {
 	require.IsType(t, &utxoset.Store{}, store)
 	require.True(t, store.SupportsOutpointOnlySpend(),
 		"the below-checkpoint fast path is the reason this store exists")
+	require.True(t, utxo.NetsBelowCheckpoint(store) && utxo.NetsBelowCheckpointURL(u),
+		"a service with no store reads the URL, so the URL and the store must agree")
 }

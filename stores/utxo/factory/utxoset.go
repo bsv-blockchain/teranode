@@ -24,7 +24,7 @@ import (
 // schemas are incompatible and a typo in a parameter that silently selected the wrong one
 // against a live database is not a failure mode worth having.
 func init() {
-	availableDatabases["utxoset"] = func(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, storeURL *url.URL) (utxo.Store, error) {
+	availableDatabases[utxo.NettingStoreScheme] = func(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, storeURL *url.URL) (utxo.Store, error) {
 		return utxoset.New(ctx, logger, tSettings, storeURL)
 	}
 }

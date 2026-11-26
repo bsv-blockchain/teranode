@@ -6,6 +6,9 @@ import (
 	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/teranode/model"
+	"github.com/bsv-blockchain/teranode/settings"
+	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
@@ -29,11 +32,29 @@ const (
 // transactions a second, and one line each would bury the sync's own logging.
 const unminedTxRefusedLogInterval = 30 * time.Second
 
+// bestHeightReadInterval bounds how often a gate on a netting store reads the
+// best height. Refuses runs once per transaction, and the height read is a gRPC
+// call, so between reads the gate answers from the last height it saw.
+const bestHeightReadInterval = time.Second
+
+// bestHeightReadTimeout bounds one best-height read. The legacy intake calls
+// Refuses on its sync manager goroutine, which must not wait out an unanswered
+// call to a blockchain service that is restarting.
+const bestHeightReadTimeout = 2 * time.Second
+
+// What a gate on a netting store last learned about the best height. The zero
+// value is unknown, and unknown refuses.
+const (
+	checkpointUnknown uint32 = iota
+	checkpointBelow
+	checkpointReached
+)
+
 var prometheusUnminedTxRefused = promauto.NewCounterVec(
 	prometheus.CounterOpts{
 		Namespace: "teranode",
 		Name:      "unmined_transactions_refused_while_syncing_total",
-		Help:      "Unmined transactions dropped at intake because the blockchain FSM was CATCHINGBLOCKS, by route",
+		Help:      "Unmined transactions dropped at intake because the node was syncing (FSM CATCHINGBLOCKS, or a netting store below the highest checkpoint), by route",
 	},
 	[]string{"route"},
 )
@@ -64,6 +85,16 @@ func IsSyncingState(state FSMStateType) bool {
 // subtree validation call the validator during catch-up to check a block's own
 // transactions, and a check there would make the node refuse its own sync.
 //
+// On a store that nets below the checkpoint (utxoset), the gate also refuses
+// while the best height is below the highest checkpoint, in every FSM state.
+// The FSM rule alone leaves a window there: an operator STOP parks the FSM in
+// IDLE while a batch of blocks is still being written, and the client reports
+// IDLE while the blockchain service restarts. A transaction let in then can
+// delete a coin that a block further up the batch spends, and the netted write
+// has no fallback. This rule fails closed: until the gate has read the best
+// height once it refuses, and a failed read keeps the last answer. A node at
+// the tip has read a height above the checkpoint and keeps accepting.
+//
 // A refused transaction is dropped, counted and logged at most once per
 // interval. It is not queued: holding transactions until RUNNING would replay
 // hours-old transactions at the moment the node catches up.
@@ -81,16 +112,34 @@ type UnminedTxGate struct {
 	// propagation and validator intakes call Refuses from many goroutines.
 	lastLogNanos atomic.Int64
 	sinceLog     atomic.Uint64
+
+	// highestCheckpoint is the height below which the gate refuses whatever
+	// the FSM says. Zero when the store does not net below the checkpoint or
+	// the network has no checkpoints, which turns the rule off.
+	highestCheckpoint uint32
+
+	// checkpoint is one of the checkpoint constants, and heightReadNanos the
+	// unix time of the last best-height read, successful or not.
+	checkpoint      atomic.Uint32
+	heightReadNanos atomic.Int64
 }
 
 // NewUnminedTxGate returns a gate for one intake route. route is one of the
-// UnminedTxRoute constants.
-func NewUnminedTxGate(logger ulogger.Logger, client ClientI, route string) *UnminedTxGate {
+// UnminedTxRoute constants. tSettings decides whether the checkpoint rule is
+// on: it is when the UTXO store URL selects a store that nets below the
+// checkpoint and the network has checkpoints. A nil tSettings turns it off.
+func NewUnminedTxGate(logger ulogger.Logger, client ClientI, tSettings *settings.Settings, route string) *UnminedTxGate {
+	var highest uint32
+	if tSettings != nil && tSettings.ChainCfgParams != nil && utxo.NetsBelowCheckpointURL(tSettings.UtxoStore.UtxoStore) {
+		highest = model.HighestCheckpointHeight(tSettings.ChainCfgParams.Checkpoints)
+	}
+
 	return &UnminedTxGate{
-		client:  client,
-		logger:  logger,
-		route:   route,
-		refused: prometheusUnminedTxRefused.WithLabelValues(route),
+		client:            client,
+		logger:            logger,
+		route:             route,
+		refused:           prometheusUnminedTxRefused.WithLabelValues(route),
+		highestCheckpoint: highest,
 	}
 }
 
@@ -100,21 +149,62 @@ func NewUnminedTxGate(logger ulogger.Logger, client ClientI, route string) *Unmi
 // transaction in that log line and may be nil.
 //
 // A failed state read accepts, for the same reason IDLE does: the read failing
-// says nothing about whether the node is syncing.
+// says nothing about whether the node is syncing. The checkpoint rule still
+// applies then.
 func (g *UnminedTxGate) Refuses(ctx context.Context, txHash *chainhash.Hash) bool {
 	if g == nil || g.client == nil {
 		return false
 	}
 
 	state, err := g.client.GetFSMCurrentState(ctx)
-	if err != nil || state == nil || !IsSyncingState(*state) {
+	if err == nil && state != nil && IsSyncingState(*state) {
+		g.refuse(txHash, "the FSM is "+state.String())
+
+		return true
+	}
+
+	if g.belowHighestCheckpoint(ctx) {
+		g.refuse(txHash, "the best height is not known to have reached the highest checkpoint")
+
+		return true
+	}
+
+	return false
+}
+
+// belowHighestCheckpoint reports whether the checkpoint rule refuses. It reads
+// the best height at most once per bestHeightReadInterval, from one goroutine
+// at a time, and otherwise answers from the last read. A failed read leaves
+// the last answer in place, so a gate that has never read a height refuses.
+func (g *UnminedTxGate) belowHighestCheckpoint(ctx context.Context) bool {
+	if g.highestCheckpoint == 0 {
 		return false
 	}
 
-	g.refused.Inc()
-	g.logRefusal(txHash, *state)
+	now := time.Now().UnixNano()
+	last := g.heightReadNanos.Load()
 
-	return true
+	if (last == 0 || now-last >= int64(bestHeightReadInterval)) && g.heightReadNanos.CompareAndSwap(last, now) {
+		readCtx, cancel := context.WithTimeout(ctx, bestHeightReadTimeout)
+		height, _, err := g.client.GetBestHeightAndTime(readCtx)
+
+		cancel()
+
+		switch {
+		case err != nil:
+		case height >= g.highestCheckpoint:
+			g.checkpoint.Store(checkpointReached)
+		default:
+			g.checkpoint.Store(checkpointBelow)
+		}
+	}
+
+	return g.checkpoint.Load() != checkpointReached
+}
+
+func (g *UnminedTxGate) refuse(txHash *chainhash.Hash, reason string) {
+	g.refused.Inc()
+	g.logRefusal(txHash, reason)
 }
 
 // RefusedTotal returns how many transactions this gate's route has refused
@@ -133,7 +223,7 @@ func (g *UnminedTxGate) RefusedTotal() float64 {
 	return metric.GetCounter().GetValue()
 }
 
-func (g *UnminedTxGate) logRefusal(txHash *chainhash.Hash, state FSMStateType) {
+func (g *UnminedTxGate) logRefusal(txHash *chainhash.Hash, reason string) {
 	count := g.sinceLog.Add(1)
 
 	now := time.Now().UnixNano()
@@ -152,5 +242,5 @@ func (g *UnminedTxGate) logRefusal(txHash *chainhash.Hash, state FSMStateType) {
 		latest = txHash.String()
 	}
 
-	g.logger.Infof("[UnminedTxGate][%s] refused %d unmined transactions while the FSM is %s, latest %s", g.route, count, state, latest)
+	g.logger.Infof("[UnminedTxGate][%s] refused %d unmined transactions while syncing, latest %s refused because %s", g.route, count, latest, reason)
 }

@@ -246,7 +246,7 @@ func NewServer(logger ulogger.Logger, tSettings *settings.Settings, utxoStore ut
 		rejectedTxKafkaProducerClient:       rejectedTxKafkaProducerClient,
 		policyRejectedTxKafkaProducerClient: policyRejectedTxKafkaProducerClient,
 		blockAssemblyClient:                 blockAssemblyClient,
-		unminedTxGate:                       blockchain.NewUnminedTxGate(logger, blockchainClient, blockchain.UnminedTxRouteValidatorKafka),
+		unminedTxGate:                       blockchain.NewUnminedTxGate(logger, blockchainClient, tSettings, blockchain.UnminedTxRouteValidatorKafka),
 	}
 }
 

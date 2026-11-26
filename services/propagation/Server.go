@@ -178,7 +178,7 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, txStore blob.Store
 		txStore:                      txStore,
 		validator:                    validatorClient,
 		blockchainClient:             blockchainClient,
-		unminedTxGate:                blockchain.NewUnminedTxGate(logger, blockchainClient, blockchain.UnminedTxRoutePropagation),
+		unminedTxGate:                blockchain.NewUnminedTxGate(logger, blockchainClient, tSettings, blockchain.UnminedTxRoutePropagation),
 		validatorKafkaProducerClient: validatorKafkaProducerClient,
 		validatorHTTPAddr:            tSettings.Validator.HTTPAddress,
 		banList:                      banList,

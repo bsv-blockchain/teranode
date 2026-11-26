@@ -2,6 +2,7 @@ package utxo
 
 import (
 	"context"
+	"net/url"
 	"sync"
 	"time"
 
@@ -741,4 +742,15 @@ func NetsBelowCheckpoint(s any) bool {
 	n, ok := s.(BelowCheckpointNetter)
 
 	return ok && n.NetsBelowCheckpoint()
+}
+
+// NettingStoreScheme is the settings URL scheme of the one store that nets below the checkpoint,
+// utxoset.
+const NettingStoreScheme = "utxoset"
+
+// NetsBelowCheckpointURL reports whether the store a settings URL selects nets below the
+// checkpoint. It gives NetsBelowCheckpoint's answer to a service that has the settings but opens
+// no UTXO store, such as propagation.
+func NetsBelowCheckpointURL(storeURL *url.URL) bool {
+	return storeURL != nil && storeURL.Scheme == NettingStoreScheme
 }
