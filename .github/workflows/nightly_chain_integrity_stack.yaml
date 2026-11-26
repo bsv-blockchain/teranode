@@ -86,6 +86,15 @@ jobs:
           busy=$(echo "$listening" | grep -Eo '[0-9]+$' | sort -u | grep -Fxf <(tr ' ' '\n' <<<"$want") | tr '\n' ' ' || true)
           [ -z "$busy" ] || { echo "::error::ports the stack needs are in use (another stack running?): $busy"; exit 1; }
 
+      # A self-hosted runner keeps the workspace. On Linux the stack's root containers leave
+      # root-owned files under data/, and checkout cannot clean them when an earlier run died
+      # before its teardown handed them back.
+      - name: Reclaim the workspace
+        run: |
+          if [ -d teranode/data ]; then
+            docker run --rm -v "$PWD/teranode/data:/d" alpine chown -R "$(id -u):$(id -g)" /d || true
+          fi
+
       - name: Checkout teranode
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
         with:

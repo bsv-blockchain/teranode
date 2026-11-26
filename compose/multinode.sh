@@ -1746,9 +1746,20 @@ PY
   echo "run a scenario: $0 sim run multinode-smoke"
 }
 
+# reclaim_dir hands files a root container wrote into a bind mount back to the
+# host user. On Linux they stay root-owned otherwise, and the user (or a CI
+# runner cleaning its workspace) cannot delete them.
+reclaim_dir() {
+  local d="$1"
+  [ -d "$d" ] || return 0
+  find "$d" ! -user "$(id -u)" -print -quit 2>/dev/null | grep -q . || return 0
+  docker run --rm -v "$d:/d" alpine chown -R "$(id -u):$(id -g)" /d >/dev/null 2>&1 || true
+}
+
 sim_down() {
   if docker inspect "$SIM_CONTAINER" >/dev/null 2>&1; then
     docker rm -f "$SIM_CONTAINER" >/dev/null
+    reclaim_dir "$SIM_DATA_DIR/data"
     echo "removed $SIM_CONTAINER (runs kept in ${SIM_DATA_DIR#"$REPO_ROOT"/}/data/runs)"
   fi
   if docker inspect "$WALLETD_CONTAINER" >/dev/null 2>&1; then
