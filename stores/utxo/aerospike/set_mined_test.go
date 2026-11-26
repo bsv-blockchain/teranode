@@ -31,14 +31,11 @@ func txWithOutputs(t *testing.T, numOutputs int) *bt.Tx {
 	return tx
 }
 
-// failRecordAfterBatch runs every cleanup batch for real, then fails each record
-// of txHash's master that match selects with a TIMEOUT. The flag it returns
-// reports whether such a record was sent.
-func failRecordAfterBatch(t *testing.T, store *Store, client *uaerospike.Client, txHash *chainhash.Hash, match func(aerospike.BatchRecordIfc) bool) *bool {
+// failRecordsAfterBatch runs every cleanup batch for real, then fails with a
+// TIMEOUT each record whose key is in keys and that match selects. The flag it
+// returns reports whether such a record was sent.
+func failRecordsAfterBatch(t *testing.T, store *Store, client *uaerospike.Client, keys []*aerospike.Key, match func(aerospike.BatchRecordIfc) bool) *bool {
 	t.Helper()
-
-	key, err := aerospike.NewKey(store.namespace, store.setName, txHash[:])
-	require.NoError(t, err)
 
 	seen := false
 
@@ -48,10 +45,16 @@ func failRecordAfterBatch(t *testing.T, store *Store, client *uaerospike.Client,
 		}
 
 		for _, r := range records {
-			if match(r) && string(r.BatchRec().Key.Digest()) == string(key.Digest()) {
-				seen = true
-				r.BatchRec().Record = nil
-				r.BatchRec().Err = &aerospike.AerospikeError{ResultCode: types.TIMEOUT}
+			if !match(r) {
+				continue
+			}
+
+			for _, key := range keys {
+				if string(r.BatchRec().Key.Digest()) == string(key.Digest()) {
+					seen = true
+					r.BatchRec().Record = nil
+					r.BatchRec().Err = &aerospike.AerospikeError{ResultCode: types.TIMEOUT}
+				}
 			}
 		}
 
@@ -63,8 +66,35 @@ func failRecordAfterBatch(t *testing.T, store *Store, client *uaerospike.Client,
 	return &seen
 }
 
-// TestReadExtraRecordCounts checks that only a transaction with extra records
-// comes back, with its count, and that a missing master is skipped quietly.
+// recordKey is the key of record idx of txHash.
+func recordKey(t *testing.T, store *Store, txHash *chainhash.Hash, idx uint32) *aerospike.Key {
+	t.Helper()
+
+	key, err := aerospike.NewKey(store.namespace, store.setName, uaerospike.CalculateKeySourceInternal(txHash, idx))
+	require.NoError(t, err)
+
+	return key
+}
+
+// hasCreating reports whether record idx of txHash has a `creating` bin.
+func hasCreating(t *testing.T, client *uaerospike.Client, store *Store, txHash *chainhash.Hash, idx uint32) bool {
+	t.Helper()
+
+	rec, err := client.Get(nil, recordKey(t, store, txHash, idx))
+	require.NoError(t, err)
+
+	_, ok := rec.Bins[fields.Creating.String()]
+
+	return ok
+}
+
+func isBatchWrite(r aerospike.BatchRecordIfc) bool {
+	_, ok := r.(*aerospike.BatchWrite)
+	return ok
+}
+
+// TestReadExtraRecordCounts checks that a transaction comes back only with extra
+// records or a `creating` master, and that a missing master is skipped quietly.
 func TestReadExtraRecordCounts(t *testing.T) {
 	t.Parallel()
 
@@ -73,7 +103,7 @@ func TestReadExtraRecordCounts(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	store, _ := setupStoreForLockTest(t)
+	store, client := setupStoreForLockTest(t)
 	store.utxoBatchSize = 4
 
 	single := txWithOutputs(t, 3)
@@ -92,6 +122,13 @@ func TestReadExtraRecordCounts(t *testing.T) {
 	require.Len(t, items, 1)
 	require.Equal(t, *paginated.TxIDChainHash(), *items[0].txID)
 	require.Equal(t, 2, items[0].childCount, "10 outputs at batch size 4 must give two extra records")
+	require.False(t, items[0].master, "a master without creating needs no clear")
+
+	require.NoError(t, client.PutBins(nil, recordKey(t, store, single.TxIDChainHash(), 0), aerospike.NewBin(fields.Creating.String(), true)))
+
+	items, err = store.readExtraRecordCounts([]chainhash.Hash{*single.TxIDChainHash()})
+	require.NoError(t, err)
+	require.Equal(t, []lockClearItem{{txID: single.TxIDChainHash(), master: true}}, items)
 }
 
 // TestExtraRecordItemsReportsReadFailures checks the per-record handling of the
@@ -139,7 +176,7 @@ func TestExtraRecordItemsReportsReadFailures(t *testing.T) {
 // TestApplyLockClearWorkClearsHealthyTxWhenASiblingReadFails checks the
 // FILTERED_OUT follow-up when one transaction's count read fails inside an
 // otherwise healthy batch: the failure reaches the caller with its txid, and
-// the other transaction's extra records still lose `creating`.
+// the other transaction loses `creating` while the failing one's master keeps it.
 func TestApplyLockClearWorkClearsHealthyTxWhenASiblingReadFails(t *testing.T) {
 	t.Parallel()
 
@@ -161,19 +198,14 @@ func TestApplyLockClearWorkClearsHealthyTxWhenASiblingReadFails(t *testing.T) {
 
 	healthyHash := healthy.TxIDChainHash()
 
-	extraKey := func(idx uint32) *aerospike.Key {
-		key, err := aerospike.NewKey(store.namespace, store.setName, uaerospike.CalculateKeySourceInternal(healthyHash, idx))
-		require.NoError(t, err)
-
-		return key
+	for idx := uint32(0); idx <= 2; idx++ {
+		require.NoError(t, client.PutBins(nil, recordKey(t, store, healthyHash, idx), aerospike.NewBin(fields.Creating.String(), true)))
 	}
 
-	for idx := uint32(1); idx <= 2; idx++ {
-		require.NoError(t, client.PutBins(nil, extraKey(idx), aerospike.NewBin(fields.Creating.String(), true)))
-	}
+	require.NoError(t, client.PutBins(nil, recordKey(t, store, failing.TxIDChainHash(), 0), aerospike.NewBin(fields.Creating.String(), true)))
 
 	// Fail only the count read of the second transaction.
-	failRecordAfterBatch(t, store, client, failing.TxIDChainHash(), func(r aerospike.BatchRecordIfc) bool {
+	failRecordsAfterBatch(t, store, client, []*aerospike.Key{recordKey(t, store, failing.TxIDChainHash(), 0)}, func(r aerospike.BatchRecordIfc) bool {
 		_, isRead := r.(*aerospike.BatchRead)
 		return isRead
 	})
@@ -182,19 +214,17 @@ func TestApplyLockClearWorkClearsHealthyTxWhenASiblingReadFails(t *testing.T) {
 	require.ErrorContains(t, err, "readExtraRecordCounts")
 	require.ErrorContains(t, err, failing.TxIDChainHash().String())
 
-	for idx := uint32(1); idx <= 2; idx++ {
-		rec, getErr := client.Get(nil, extraKey(idx))
-		require.NoError(t, getErr)
-
-		_, hasCreating := rec.Bins[fields.Creating.String()]
-		require.Falsef(t, hasCreating, "extra record %d of the healthy transaction must lose creating", idx)
+	for idx := uint32(0); idx <= 2; idx++ {
+		require.Falsef(t, hasCreating(t, client, store, healthyHash, idx), "record %d of the healthy transaction must lose creating", idx)
 	}
+
+	require.True(t, hasCreating(t, client, store, failing.TxIDChainHash(), 0), "a master whose read failed must keep creating")
 }
 
-// TestApplyLockClearWorkReportsAFailedMasterClear checks the FILTERED_OUT
-// follow-up of a single-record transaction: the master's clear is attempted, and
-// its failure reaches the caller as a storage error naming the record.
-func TestApplyLockClearWorkReportsAFailedMasterClear(t *testing.T) {
+// TestApplyLockClearWorkReportsFailedClears checks the FILTERED_OUT follow-up
+// when clears fail: each failure names its transaction and record, and a failed
+// extra record keeps `creating` on its master.
+func TestApplyLockClearWorkReportsFailedClears(t *testing.T) {
 	t.Parallel()
 
 	if testing.Short() {
@@ -203,30 +233,41 @@ func TestApplyLockClearWorkReportsAFailedMasterClear(t *testing.T) {
 
 	ctx := context.Background()
 	store, client := setupStoreForLockTest(t)
+	store.utxoBatchSize = 4
 
-	tx := txWithOutputs(t, 2)
+	paginated := txWithOutputs(t, 10)
+	single := txWithOutputs(t, 2)
 
-	_, err := store.Create(ctx, tx, 100)
-	require.NoError(t, err)
+	for _, tx := range []*bt.Tx{paginated, single} {
+		_, err := store.Create(ctx, tx, 100)
+		require.NoError(t, err)
+	}
 
-	txHash := tx.TxIDChainHash()
+	paginatedHash := paginated.TxIDChainHash()
+	singleHash := single.TxIDChainHash()
 
-	// Fail only the master's clear write.
-	clearAttempted := failRecordAfterBatch(t, store, client, txHash, func(r aerospike.BatchRecordIfc) bool {
-		_, isWrite := r.(*aerospike.BatchWrite)
-		return isWrite
-	})
+	for _, key := range []*aerospike.Key{recordKey(t, store, paginatedHash, 0), recordKey(t, store, singleHash, 0)} {
+		require.NoError(t, client.PutBins(nil, key, aerospike.NewBin(fields.Creating.String(), true)))
+	}
 
-	err = store.applyLockClearWork(ctx, lockClearWork{fullUnlock: []chainhash.Hash{*txHash}})
-	require.True(t, *clearAttempted, "the master of a FILTERED_OUT transaction must be cleared")
+	// Fail the clear of the paginated transaction's first extra record and of the
+	// single-record transaction's master.
+	clearAttempted := failRecordsAfterBatch(t, store, client,
+		[]*aerospike.Key{recordKey(t, store, paginatedHash, 1), recordKey(t, store, singleHash, 0)}, isBatchWrite)
+
+	err := store.applyLockClearWork(ctx, lockClearWork{fullUnlock: []chainhash.Hash{*paginatedHash, *singleHash}})
+	require.True(t, *clearAttempted)
 	require.ErrorIs(t, err, errors.ErrStorageError)
-	require.ErrorContains(t, err, "clearLockedOnRecordsMulti")
-	require.ErrorContains(t, err, txHash.String()+"] failed to clear record 0")
+	require.ErrorContains(t, err, paginatedHash.String()+"] failed to clear record 1")
+	require.ErrorContains(t, err, singleHash.String()+"] failed to clear record 0")
+
+	require.True(t, hasCreating(t, client, store, paginatedHash, 0), "a failed extra record must keep creating on its master")
+	require.False(t, hasCreating(t, client, store, paginatedHash, 2), "the other extra record is still cleared")
 }
 
-// TestClearLockedOnRecordsMultiMasterItem pins the master write of a FILTERED_OUT
-// follow-up: it deletes only `creating`, leaves a missing master missing and
-// does not rewrite a master that has no `creating` bin.
+// TestClearLockedOnRecordsMultiMasterItem pins the master write: it deletes only
+// `creating`, never creates or needlessly rewrites a master, and waits for every
+// extra record of its transaction.
 func TestClearLockedOnRecordsMultiMasterItem(t *testing.T) {
 	t.Parallel()
 
@@ -236,58 +277,68 @@ func TestClearLockedOnRecordsMultiMasterItem(t *testing.T) {
 
 	ctx := context.Background()
 	store, client := setupStoreForLockTest(t)
+	store.utxoBatchSize = 4
 
-	masterKey := func(txHash *chainhash.Hash) *aerospike.Key {
-		key, err := aerospike.NewKey(store.namespace, store.setName, txHash[:])
+	exists := func(t *testing.T, key *aerospike.Key) bool {
+		ok, err := client.Exists(nil, key)
 		require.NoError(t, err)
 
-		return key
+		return ok
+	}
+
+	create := func(t *testing.T, outputs int, masterCreating bool) *chainhash.Hash {
+		tx := txWithOutputs(t, outputs)
+		_, err := store.Create(ctx, tx, 100)
+		require.NoError(t, err)
+
+		if masterCreating {
+			require.NoError(t, client.PutBins(nil, recordKey(t, store, tx.TxIDChainHash(), 0),
+				aerospike.NewBin(fields.Creating.String(), true), aerospike.NewBin(fields.Locked.String(), true)))
+		}
+
+		return tx.TxIDChainHash()
 	}
 
 	t.Run("missing master stays missing", func(t *testing.T) {
 		txHash := txWithOutputs(t, 2).TxIDChainHash()
 
 		require.NoError(t, store.clearLockedOnRecordsMulti([]lockClearItem{{txID: txHash, master: true}}))
-
-		exists, err := client.Exists(nil, masterKey(txHash))
-		require.NoError(t, err)
-		require.False(t, exists, "the clear must not create a master")
+		require.False(t, exists(t, recordKey(t, store, txHash, 0)), "the clear must not create a master")
 	})
 
 	t.Run("master without creating is not rewritten", func(t *testing.T) {
-		tx := txWithOutputs(t, 2)
-		_, err := store.Create(ctx, tx, 100)
-		require.NoError(t, err)
+		txHash := create(t, 2, false)
 
-		txHash := tx.TxIDChainHash()
-
-		before, err := client.Get(nil, masterKey(txHash))
+		before, err := client.Get(nil, recordKey(t, store, txHash, 0))
 		require.NoError(t, err)
 
 		require.NoError(t, store.clearLockedOnRecordsMulti([]lockClearItem{{txID: txHash, master: true}}))
 
-		after, err := client.Get(nil, masterKey(txHash))
+		after, err := client.Get(nil, recordKey(t, store, txHash, 0))
 		require.NoError(t, err)
 		require.Equal(t, before.Generation, after.Generation, "a master without creating must not be written")
 	})
 
 	t.Run("master with creating loses only creating", func(t *testing.T) {
-		tx := txWithOutputs(t, 2)
-		_, err := store.Create(ctx, tx, 100)
-		require.NoError(t, err)
-
-		txHash := tx.TxIDChainHash()
-		require.NoError(t, client.PutBins(nil, masterKey(txHash),
-			aerospike.NewBin(fields.Creating.String(), true), aerospike.NewBin(fields.Locked.String(), true)))
+		txHash := create(t, 2, true)
 
 		require.NoError(t, store.clearLockedOnRecordsMulti([]lockClearItem{{txID: txHash, master: true}}))
+		require.False(t, hasCreating(t, client, store, txHash, 0), "the master must lose creating")
 
-		rec, err := client.Get(nil, masterKey(txHash))
+		rec, err := client.Get(nil, recordKey(t, store, txHash, 0))
+		require.NoError(t, err)
+		require.Equal(t, true, rec.Bins[fields.Locked.String()], "the master's locked is left to SetLocked")
+	})
+
+	t.Run("missing extra record keeps creating on the master", func(t *testing.T) {
+		txHash := create(t, 10, true)
+
+		_, err := client.Delete(nil, recordKey(t, store, txHash, 2))
 		require.NoError(t, err)
 
-		_, hasCreating := rec.Bins[fields.Creating.String()]
-		require.False(t, hasCreating, "the master must lose creating")
-		require.Equal(t, true, rec.Bins[fields.Locked.String()], "the master's locked is left to SetLocked")
+		require.NoError(t, store.clearLockedOnRecordsMulti([]lockClearItem{{txID: txHash, childCount: 2, master: true}}))
+		require.True(t, hasCreating(t, client, store, txHash, 0), "an incomplete transaction must keep creating on its master")
+		require.False(t, exists(t, recordKey(t, store, txHash, 2)), "the missing extra record stays missing")
 	})
 }
 
