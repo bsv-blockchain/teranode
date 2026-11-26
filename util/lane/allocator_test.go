@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 )
@@ -299,6 +300,26 @@ func TestAllocatorAsksForTheNextGrantAtHalf(t *testing.T) {
 	require.Eventually(t, func() bool { return len(src.grantRequests()) == 1 }, 5*time.Second, time.Millisecond)
 }
 
+// warnLog is a logger that keeps its warnings.
+type warnLog struct {
+	ulogger.TestLogger
+	mu    sync.Mutex
+	warns []string
+}
+
+func (w *warnLog) Warnf(format string, args ...interface{}) {
+	w.mu.Lock()
+	w.warns = append(w.warns, fmt.Sprintf(format, args...))
+	w.mu.Unlock()
+}
+
+func (w *warnLog) warnings() []string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	return slices.Clone(w.warns)
+}
+
 // A grant is used for at most GrantDuration from its first take. One that ages out with an unused tail
 // gives the spare back, so the next grant starts right after its highest position taken.
 func TestAllocatorGivesTheSpareBackWhenAGrantAgesOut(t *testing.T) {
@@ -306,6 +327,8 @@ func TestAllocatorGivesTheSpareBackWhenAGrantAgesOut(t *testing.T) {
 	start := clk.Now()
 	src := newFakeLeases(100)
 	a := newTestAllocator(t, src, Timings{Renew: time.Hour, Stop: 10 * time.Minute, GrantDuration: 2 * time.Minute}, clk)
+	logs := &warnLog{}
+	a.logger = logs
 
 	for i := uint64(1); i <= 50; i++ {
 		if i == 50 {
@@ -335,6 +358,35 @@ func TestAllocatorGivesTheSpareBackWhenAGrantAgesOut(t *testing.T) {
 	require.Len(t, src.releases, 1)
 	require.Equal(t, uint64(52), src.releases[0].LastTaken)
 	require.Equal(t, Settles{}, src.releases[0].Settles, "the aged grant's pair went on the grant request")
+	require.Empty(t, logs.warnings(), "a give-back the service honours is not warned about")
+}
+
+// A service that ignores the give-back, such as one older than the field, grants above the spare. The
+// allocator warns, since the spare and the aged grant's tail then stay unused.
+func TestAllocatorWarnsWhenTheServiceKeepsTheSpareGivenBack(t *testing.T) {
+	clk := newStepClock()
+	src := &ignoresGiveBack{fakeLeases: newFakeLeases(100)}
+	a := newTestAllocator(t, src, Timings{Renew: time.Hour, Stop: 10 * time.Minute, GrantDuration: 2 * time.Minute}, clk)
+	logs := &warnLog{}
+	a.logger = logs
+
+	for i := 0; i < 50; i++ {
+		next(t, a)
+	}
+
+	require.Eventually(t, a.hasSpareGrant, 5*time.Second, time.Millisecond)
+
+	clk.step(2 * time.Minute)
+	require.Equal(t, Pack(0, 201), next(t, a), "the grant starts above the spare")
+	require.Len(t, logs.warnings(), 1)
+}
+
+// ignoresGiveBack is a blockchain service from before the give-back field.
+type ignoresGiveBack struct{ *fakeLeases }
+
+func (f *ignoresGiveBack) RenewLaneLease(ctx context.Context, r Renewal) (RenewResult, error) {
+	r.GiveBack = 0
+	return f.fakeLeases.RenewLaneLease(ctx, r)
 }
 
 // A grant must start being used within two minutes of its request, even if the lease stays live.

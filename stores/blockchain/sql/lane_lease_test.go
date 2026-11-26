@@ -316,8 +316,12 @@ func TestRenewLaneLeaseContinuesTheNewestHandout(t *testing.T) {
 	// A retry of a give-back whose first attempt committed, its reply lost, finds the continuation
 	// newest, not the spare, and gets a grant above it: nothing is dropped twice.
 	runLaneHandoutTests(t, "give-back retried after a lost reply", func(t *testing.T, s *SQL) {
+		_, other, _, err := s.OpenLaneLease(t.Context(), leaseOpen("z"))
+		require.NoError(t, err)
+
 		id, g, _, err := s.OpenLaneLease(t.Context(), leaseOpen("a"))
 		require.NoError(t, err)
+		require.NotEqual(t, other.Lane, g.Lane, "a lane other than 0, so the delete must name its lane")
 
 		r := leaseRenew(id, g)
 		r.WantGrant = true
@@ -335,6 +339,7 @@ func TestRenewLaneLeaseContinuesTheNewestHandout(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, lost.Last+1, retry.First, "the retry starts above the continuation")
 		require.Equal(t, 3, countRows(t, s, `SELECT COUNT(*) FROM lane_handout WHERE lane = $1`, int(g.Lane)))
+		require.Equal(t, 1, countRows(t, s, `SELECT COUNT(*) FROM lane_handout WHERE lane = $1`, int(other.Lane)), "the other lane keeps its hand-out")
 
 		checkLaneInvariants(t, s)
 	})

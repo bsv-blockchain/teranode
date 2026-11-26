@@ -523,8 +523,8 @@ func TestLocalClientCarriesRateSettlesAndLastTaken(t *testing.T) {
 	requireLaneLeaseRoundTrip(t, client, store)
 }
 
-// requireLaneLeaseRoundTrip opens, renews with a rate and a settles pair, and releases through
-// src, and reads the rows the service wrote. It needs blockchain_laneGrantMin 100 and
+// requireLaneLeaseRoundTrip opens, renews with a rate and a settles pair, gives a spare back, and
+// releases through src, and reads the rows the service wrote. It needs blockchain_laneGrantMin 100 and
 // blockchain_laneGrantDuration 10s on a store with no lease yet.
 func requireLaneLeaseRoundTrip(t *testing.T, src lane.LeaseSource, store blockchain_store.Store) {
 	t.Helper()
@@ -553,6 +553,24 @@ func requireLaneLeaseRoundTrip(t *testing.T, src lane.LeaseSource, store blockch
 	require.NoError(t, err)
 	require.Equal(t, sql.NullInt64{Int64: 1, Valid: true}, settlesFirst)
 	require.Equal(t, sql.NullInt64{Int64: 80, Valid: true}, settlesLastTaken)
+
+	// A spare above that grant, then a give-back of it: the grant after 81 aged out at 500, so the
+	// spare's row goes and the next grant starts at 501.
+	spare, err := src.RenewLaneLease(ctx, lane.Renewal{Lease: id, Lane: opened.Lane, Rate: 1000, WantGrant: true})
+	require.NoError(t, err)
+	require.Equal(t, uint64(10081), spare.Grant.First)
+
+	res, err = src.RenewLaneLease(ctx, lane.Renewal{
+		Lease: id, Lane: opened.Lane, Rate: 1000, WantGrant: true,
+		Settles: lane.Settles{First: 81, LastTaken: 500}, GiveBack: spare.Grant.First,
+	})
+	require.NoError(t, err)
+	require.Equal(t, uint64(501), res.Grant.First, "the give-back reaches the store")
+
+	var spareRows int
+
+	require.NoError(t, store.GetDB().QueryRow(`SELECT COUNT(*) FROM lane_handout WHERE lane = 0 AND first = 10081`).Scan(&spareRows))
+	require.Zero(t, spareRows, "the spare given back is dropped")
 
 	already, err := src.ReleaseLaneLease(ctx, lane.Release{
 		Lease: id, Lane: opened.Lane, LastTaken: 9000,

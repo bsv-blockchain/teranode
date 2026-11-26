@@ -516,7 +516,9 @@ func (s *SQL) continues(st laneState, id lane.LeaseID, settles lane.Settles) boo
 // the next grant starts at 10259. A retry whose first attempt committed finds that grant newest, not
 // the spare, and gets a grant above it as before.
 func (s *SQL) givesBack(ctx context.Context, tx *sql.Tx, l uint8, st laneState, id lane.LeaseID, settles lane.Settles, giveBack uint64) (bool, error) {
-	if giveBack == 0 || !st.used || st.first != giveBack || !s.heldBy(st, id) {
+	// A lane with no hand-out, or no giveBack, fails here too: its first never matches, or heldBy
+	// finds no lease.
+	if st.first != giveBack || !s.heldBy(st, id) {
 		return false, nil
 	}
 
@@ -525,7 +527,7 @@ func (s *SQL) givesBack(ctx context.Context, tx *sql.Tx, l uint8, st laneState, 
 		return false, err
 	}
 
-	return below.used && s.continues(below, id, settles), nil
+	return s.continues(below, id, settles), nil
 }
 
 // heldBy reports whether the hand-out went to lease id.
@@ -690,7 +692,7 @@ func readHandoutBelow(ctx context.Context, tx *sql.Tx, l uint8, before uint64) (
 
 	err := tx.QueryRowContext(ctx,
 		`SELECT first, last, handed_at, lease_id FROM lane_handout WHERE lane = $1 AND first < $2 ORDER BY first DESC LIMIT 1`,
-		int(l), lane.ToSigned(min(before, math.MaxInt64)),
+		int(l), lane.ToSigned(before),
 	).Scan(&first, &last, &handedAt, &leaseID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return laneState{}, nil
