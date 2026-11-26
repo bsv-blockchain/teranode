@@ -120,6 +120,8 @@ func requireLaneValue(t *testing.T, want uint64, got *int64, ok bool, msg string
 // Unspend puts it back on the restored output. The child's record keeps its parents' positions
 // beside its inpoints, and its own outputs take its position.
 func TestLanePositionRidesTheSpendIntoTheJournalAndBackOnUnspend(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newLaneCopyStore(t)
 
 	// Lane 200 is stored as a negative BIGINT, so the copies must keep every bit.
@@ -166,6 +168,8 @@ func TestLanePositionRidesTheSpendIntoTheJournalAndBackOnUnspend(t *testing.T) {
 // The validator reads each parent's own lane position from the parent read it already makes, at
 // shadow only.
 func TestParentOutputsCarryTheParentsLanePosition(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newLaneCopyStore(t)
 
 	want := lane.Pack(3, 12)
@@ -180,6 +184,18 @@ func TestParentOutputsCarryTheParentsLanePosition(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, utxo.ParentOutputNotMined, answers[0].Status)
 	require.Equal(t, want, answers[0].LanePosition)
+	require.False(t, answers[0].IsCoinbase)
+
+	// The same read says whether the parent is a coinbase, for the lanes shadow.
+	coinbase := mkCoinbase(t, 5_000)
+	_, err = s.Create(ctx, coinbase, 100, utxo.WithLanePosition(lane.Pack(3, 13)))
+	require.NoError(t, err)
+
+	cbOp := []utxo.Outpoint{{TxID: *coinbase.TxIDChainHash(), Vout: 0}}
+
+	answers, err = s.ParentOutputsForValidation(ctx, cbOp)
+	require.NoError(t, err)
+	require.True(t, answers[0].IsCoinbase)
 
 	// The parent is spent, so the coin comes from the journal; the position still comes with the
 	// parent's record.
@@ -195,11 +211,17 @@ func TestParentOutputsCarryTheParentsLanePosition(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, utxo.ParentOutputNotMined, answers[0].Status)
 	require.Zero(t, answers[0].LanePosition, "lane positions off: the read does not ask")
+
+	answers, err = off.ParentOutputsForValidation(ctx, cbOp)
+	require.NoError(t, err)
+	require.False(t, answers[0].IsCoinbase, "lane positions off: the coinbase flag is not handed on")
 }
 
 // The parents' positions travel where the inpoints do: into the containment row when the record is
 // mined, and into the preserved copy.
 func TestParentLanePositionsFollowTheInpoints(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newLaneCopyStore(t)
 
 	parentPosition := lane.Pack(4, 1)
@@ -235,6 +257,8 @@ func TestParentLanePositionsFollowTheInpoints(t *testing.T) {
 // A list that does not match the transaction's parents, or that holds an invalid position, is not
 // written at all.
 func TestParentLanePositionsThatDoNotMatchAreNotWritten(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newLaneCopyStore(t)
 
 	parent := mkTx(t, 1, 5_000)
@@ -267,6 +291,8 @@ func TestParentLanePositionsThatDoNotMatchAreNotWritten(t *testing.T) {
 // With lane positions off nothing new is written, even on a database with every lane column: the
 // daemon names no position, so the columns stay NULL.
 func TestLaneCopiesWriteNothingNewWithLanePositionsOff(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newLaneCopyStore(t)
 	off := reopenWithFlag(t, s, false)
 	require.True(t, off.laneParentColumn, "the columns outlive the flag")
@@ -386,6 +412,8 @@ func TestLaneCoverageCountsCarriedPositions(t *testing.T) {
 // A list that creates and spends an output inside itself writes that spend straight to the journal,
 // and the journal row still takes the output's position, its creator's.
 func TestNettedJournalRowsTakeTheOutputsLanePosition(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newLaneCopyStore(t)
 
 	w := tests.BuildMultiWorkload(t, 0xe1, 3, 3)
@@ -482,6 +510,8 @@ func readLaneCounter(t *testing.T, name string, key func(map[string]string) stri
 // The journal's copy-forward, which keeps a waiting transaction's spends past their partition's
 // drop, carries the output's position too, so Unspend still restores it.
 func TestJournalCopyForwardCarriesTheLanePosition(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newLaneCopyStore(t)
 
 	want := lane.Pack(13, 5)
@@ -513,6 +543,8 @@ func TestJournalCopyForwardCarriesTheLanePosition(t *testing.T) {
 // Below the checkpoint the netted write writes each surviving coin with its creating transaction's
 // position.
 func TestNettedBelowCoinsTakeTheirTransactionsLanePosition(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newLaneCopyStore(t)
 
 	const height = 800
@@ -563,38 +595,60 @@ func TestNettedBelowCoinsTakeTheirTransactionsLanePosition(t *testing.T) {
 // validator's parent read with its position: the identity row is gone and its containment row is
 // below the lookup floor, as for every parent mined more than about 576 blocks before.
 func TestParentOutputsCarryThePositionFromCoinAndJournalRows(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newLaneCopyStore(t)
 
 	want := lane.Pack(15, 3)
 
 	// Below mainnet's checkpoints, so the create takes the block path: coins and a containment
-	// row at height 100, and no identity row.
-	parent := mkTx(t, 1, 5_000)
-	_, err := s.Create(ctx, parent, 100, utxo.WithLanePosition(want), utxo.WithMinedBlockInfo(
-		utxo.MinedBlockInfo{BlockID: 3, BlockHeight: 100, OnLongestChain: true}))
-	require.NoError(t, err)
-	require.False(t, identExists(t, s, ctx, parent))
+	// row at height 100, and no identity row. The coinbase flag comes from the same rows.
+	parents := []*bt.Tx{mkTx(t, 1, 5_000), mkCoinbase(t, 5_000)}
+	for _, parent := range parents {
+		_, err := s.Create(ctx, parent, 100, utxo.WithLanePosition(want), utxo.WithMinedBlockInfo(
+			utxo.MinedBlockInfo{BlockID: 3, BlockHeight: 100, OnLongestChain: true}))
+		require.NoError(t, err)
+		require.False(t, identExists(t, s, ctx, parent))
+	}
+
+	answer := func(parent *bt.Tx, from string) {
+		t.Helper()
+
+		answers, err := s.ParentOutputsForValidation(ctx, []utxo.Outpoint{{TxID: *parent.TxIDChainHash(), Vout: 0}})
+		require.NoError(t, err)
+		require.Equal(t, utxo.ParentOutputMined, answers[0].Status)
+		require.Equal(t, want, answers[0].LanePosition, "answered from the %s", from)
+		require.Equal(t, parent.IsCoinbase(), answers[0].IsCoinbase, "answered from the %s", from)
+
+		// The block parent check's Get and the subtree prefetch's BatchDecorate read the flag too.
+		md, err := s.Get(ctx, parent.TxIDChainHash(), fields.BlockIDs, fields.LanePosition, fields.IsCoinbase)
+		require.NoError(t, err)
+		require.Equal(t, parent.IsCoinbase(), md.IsCoinbase, "block parent read, from the %s", from)
+
+		items := []*utxo.UnresolvedMetaData{{Hash: *parent.TxIDChainHash()}}
+		require.NoError(t, s.BatchDecorate(ctx, items, fields.BlockIDs, fields.BlockHeights, fields.Outputs, fields.LanePosition, fields.IsCoinbase))
+		require.NoError(t, items[0].Err)
+		require.Equal(t, parent.IsCoinbase(), items[0].Data.IsCoinbase, "prefetch read, from the %s", from)
+	}
+
+	for _, parent := range parents {
+		answer(parent, "record before the floor passes it")
+	}
 
 	require.NoError(t, s.SetBlockHeight(5_000))
 
-	op := []utxo.Outpoint{{TxID: *parent.TxIDChainHash(), Vout: 0}}
-
-	answers, err := s.ParentOutputsForValidation(ctx, op)
-	require.NoError(t, err)
-	require.Equal(t, utxo.ParentOutputMined, answers[0].Status)
-	require.Equal(t, want, answers[0].LanePosition, "answered from the coin row")
-
-	_ = spendOneOutput(t, s, ctx, parent, 0, 5_001)
-
-	answers, err = s.ParentOutputsForValidation(ctx, op)
-	require.NoError(t, err)
-	require.Equal(t, utxo.ParentOutputMined, answers[0].Status)
-	require.Equal(t, want, answers[0].LanePosition, "answered from the journal row")
+	for _, parent := range parents {
+		answer(parent, "coin row")
+		_ = spendOneOutput(t, s, ctx, parent, 0, 5_001)
+		answer(parent, "journal row")
+	}
 }
 
 // A preserved copy taken from a coin row, for a parent with no containment row left, carries the
 // coin's position.
 func TestPreservedCopyFromACoinRowCarriesItsPosition(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newLaneCopyStore(t)
 
 	want := lane.Pack(16, 4)

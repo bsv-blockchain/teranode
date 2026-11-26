@@ -2,6 +2,7 @@ package subtreevalidation
 
 import (
 	"context"
+	"os"
 	"testing"
 	"time"
 
@@ -23,12 +24,25 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// skipUnlessHeavyTests skips the timing reports below unless TERANODE_HEAVY_TESTS
+// is set. They take minutes under -race and coverage; `make test-heavy` runs them
+// without -race in the PR test job, so a new gated test must match its -run pattern.
+func skipUnlessHeavyTests(t *testing.T) {
+	t.Helper()
+
+	if os.Getenv("TERANODE_HEAVY_TESTS") == "" {
+		t.Skip("set TERANODE_HEAVY_TESTS=1 to run")
+	}
+}
+
 // TestSubtreeSizeTimingAnalysis provides detailed timing analysis for different subtree sizes.
 // This test compares block validation performance with tiny subtrees (4 tx) vs large subtrees (2k tx).
 func TestSubtreeSizeTimingAnalysis(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping timing analysis in short mode")
 	}
+
+	skipUnlessHeavyTests(t)
 
 	// Use 10k transactions for timing analysis tests to keep them fast
 	// For detailed performance analysis with 100k+ tx, use the benchmarks instead
@@ -620,6 +634,8 @@ func TestBlockSizeScaling(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping block size scaling test in short mode")
 	}
+
+	skipUnlessHeavyTests(t)
 
 	// Use smaller block sizes to keep test runtime reasonable
 	// For larger blocks (100k+), run with longer timeout: go test -timeout 5m -run TestBlockSizeScaling

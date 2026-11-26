@@ -63,6 +63,12 @@ const (
 	// chain took the position, such as one a reorg replaced: the store's height is the lowest it
 	// recorded, from any chain. Not a disagreement.
 	KindOffChain = "off_chain"
+	// KindCoinbase: the parent is a coinbase. It takes a lane position like any record, but block
+	// rows leave the coinbase out, so no row holds its position and lanes cannot say it is mined.
+	// Counted for a coinbase parent whose read gives the coinbase flag, whatever the index holds,
+	// and never looked up. The validator's store answer gives it only on the stores that fill
+	// utxo.ParentOutput.IsCoinbase (utxoset, Aerospike). Not a disagreement.
+	KindCoinbase = "coinbase"
 	// KindMinedPending: lanes says a row of the best block took the position and today says not
 	// mined, while today's mined write of that block has not finished: the block's rows commit
 	// with it, and today's mined state lands after, about 3 s for a block of 26,000 on mainnet. Not
@@ -71,7 +77,7 @@ const (
 	KindMinedPending = "mined_pending"
 )
 
-var kinds = []string{KindAgree, KindLanesOnly, KindTodayOnly, KindDifferentBlock, KindNoPosition, KindNoRows, KindNotLoaded, KindNotReady, KindOffChain, KindMinedPending}
+var kinds = []string{KindAgree, KindLanesOnly, KindTodayOnly, KindDifferentBlock, KindNoPosition, KindNoRows, KindNotLoaded, KindNotReady, KindOffChain, KindCoinbase, KindMinedPending}
 
 // minedPendingKind counts a lanes_only answer from a row of the best block under KindMinedPending
 // while today's mined write of that block has not finished.
@@ -105,6 +111,15 @@ func (r *Reader) lookup(v *lane.ChainView, pos uint64) lane.Answer {
 // lookupSampleEvery is how often a lookup is timed: two clock reads and a histogram observation
 // cost about what a lookup does.
 const lookupSampleEvery = 64
+
+// CountCoinbase counts a coinbase parent under reader, in place of a comparison (KindCoinbase).
+func (r *Reader) CountCoinbase(reader string) {
+	if r == nil {
+		return
+	}
+
+	count(reader, KindCoinbase, lane.ViaNone)
+}
 
 // CompareHeight compares the lanes answer for a transaction on the main chain with today's answer
 // given as a height: mined at height, or not mined. The validator's parent read answers so.

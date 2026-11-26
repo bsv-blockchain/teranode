@@ -22,6 +22,8 @@ import (
 // the transaction's own input order: input 0 spends parent B, input 1 spends parent A, input 2
 // spends B again.
 func TestGetSpendNamesTheSpendingInput(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	a := mkTx(t, 2, 5_000)
