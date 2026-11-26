@@ -452,10 +452,19 @@ func (l *firstRetryWaitLogger) Duplicate(...ulogger.Option) ulogger.Logger {
 }
 
 func (l *firstRetryWaitLogger) Debugf(_ string, args ...interface{}) {
-	if l.waitSeconds == 0 {
-		l.waitSeconds = args[2].(float64)
-		l.cancel()
+	if l.waitSeconds != 0 {
+		return
 	}
+
+	// retry.Retry logs the wait as its third argument; a changed message leaves
+	// waitSeconds at 0, so the test fails on the value instead of panicking
+	if len(args) > 2 {
+		if wait, ok := args[2].(float64); ok {
+			l.waitSeconds = wait
+		}
+	}
+
+	l.cancel()
 }
 
 func TestFetchHeadersWithRetry(t *testing.T) {
