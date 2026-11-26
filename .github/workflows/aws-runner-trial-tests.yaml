@@ -1,0 +1,117 @@
+name: AWS runner trial tests
+
+# Trial only: runs two jobs from teranode_pr_tests.yaml on the self-hosted AWS
+# spot runners (bsva-infra#41), on push to this branch only. Never merged to main.
+# Differences from the source jobs: runs-on, and the Docker Hub login runs
+# unconditionally (its PR-only if: is always false on a push event).
+
+on:
+  push:
+    branches:
+      - ci/aws-runner-canary
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  REPO: teranode
+  SETTINGS_CONTEXT_DEFAULT: test
+  GO_VERSION: "1.27.0"
+  # Disable testcontainers' Ryuk reaper sidecar — Docker Hub rate-limits and
+  # gateway timeouts pulling testcontainers/ryuk:* are the dominant flake
+  # source on CI. Ephemeral runners are torn down regardless, so the reaper
+  # provides no value here. Tests already call container.Terminate() explicitly.
+  TESTCONTAINERS_RYUK_DISABLED: "true"
+
+jobs:
+  consensus-vectors:
+    name: consensus-vectors
+    # bitcoin-sv's script, transaction and signature hash vectors (test/consensus),
+    # which make test skips with the rest of test/. Seconds, no -race.
+    # arm64-safe: gobdk ships arm64 libraries.
+    runs-on: bsva-aws-arm64-8
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: false
+
+      # Plain go test (no -race): module cache only.
+      - name: Restore Go caches
+        uses: ./.github/actions/go-cache
+        with:
+          build_cache: 'false'
+
+      - name: Run consensus vectors
+        run: make consensustest
+
+  test-shard:
+    name: test ${{ matrix.shard }}
+    # make test is split across runners. The slowest packages (200-340 s each under
+    # -race and coverage) take about as long alone as beside the rest, so they are
+    # bound by the clock, not by cores, and all run together in the slow shard. That
+    # shard starts them at once instead of behind the rest of the build, and the unit
+    # shard no longer waits for them. stores/utxo/aerospike keeps its own shard for
+    # its testcontainer suite and memory. Every path in a shard's TEST_PKGS must also be
+    # in the unit shard's TEST_EXCLUDE (and the reverse), or its tests run twice or
+    # not at all; COVERAGE_SHARDS in the `test` job lists every shard.
+    # .github/scripts/check-test-shards.sh checks both in the golangci-lint job.
+    # The `test` job below is the required check.
+    runs-on: bsva-aws-arm64-16
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - shard: unit
+            run: make test TEST_EXCLUDE="stores/utxo/aerospike services/blockvalidation model services/blockassembly/subtreeprocessor stores/utxo/utxoset services/blockassembly services/legacy/netsync services/blockchain stores/blockchain/sql" TEST_COVERPROFILE=coverage-unit.out
+            profile: coverage-unit.out
+          - shard: aerospike
+            run: make test-pkgs TEST_PKGS=stores/utxo/aerospike TEST_COVERPROFILE=coverage-aerospike.out
+            profile: coverage-aerospike.out
+          - shard: slow
+            run: make test-pkgs TEST_PKGS="services/blockvalidation model services/blockassembly/subtreeprocessor stores/utxo/utxoset services/blockassembly services/legacy/netsync services/blockchain stores/blockchain/sql" TEST_COVERPROFILE=coverage-slow.out
+            profile: coverage-slow.out
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+
+      # Login to Docker Hub to avoid rate limits. The source job's PR-only if:
+      # is always false on a push event, so it is dropped here.
+      - name: Login to Docker Hub
+        uses: docker/login-action@5e57cd118135c172c3672efd75eb46360885c0ef # v3
+        with:
+          username: ${{ vars.DOCKER_ORG }}
+          password: ${{ secrets.DOCKER_ORG_TOKEN }}
+
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: false
+
+      - name: Restore Go caches
+        uses: ./.github/actions/go-cache
+
+      - name: Run Go tests
+        # Prints each test binary's peak memory at the end, even if the runner is shut down.
+        run: .github/scripts/track-test-memory.sh ${{ matrix.run }}
+
+      - name: Run heavy Go tests
+        # Cases gated behind TERANODE_HEAVY_TESTS: minutes under -race and coverage,
+        # seconds without.
+        if: matrix.shard == 'unit'
+        run: make test-heavy
+
+      - name: Upload coverage profile
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: go-coverage-${{ matrix.shard }}
+          path: ${{ matrix.profile }}
+          if-no-files-found: warn
+          retention-days: 1
