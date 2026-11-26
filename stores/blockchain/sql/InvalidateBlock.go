@@ -179,8 +179,8 @@ func (s *SQL) InvalidateBlock(ctx context.Context, blockHash *chainhash.Hash) (i
 		defer s.noteOnMainChainWrite(noRepairFloor)
 
 		// Invalidate caches FIRST so that getBestBlockID does not return a
-		// stale best block that included the now-invalid block.
-		s.blockTimestampCache.Clear()
+		// stale best block that included the now-invalid block. The median-time cache
+		// stays: a block's timestamp and parent do not change when it is invalidated.
 		s.ResetResponseCache()
 		if s.useInMemoryChainCheck {
 			s.resetChainWalkCache()
