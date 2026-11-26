@@ -8,6 +8,7 @@ import (
 	"github.com/bsv-blockchain/aerospike-client-go/v8/types"
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/util/uaerospike"
 	"github.com/stretchr/testify/require"
@@ -171,6 +172,56 @@ func TestApplyLockClearWorkClearsHealthyTxWhenASiblingReadFails(t *testing.T) {
 		_, hasCreating := rec.Bins[fields.Creating.String()]
 		require.Falsef(t, hasCreating, "extra record %d of the healthy transaction must lose creating", idx)
 	}
+}
+
+// TestApplyLockClearWorkReportsAFailedMasterClear checks the FILTERED_OUT
+// follow-up of a single-record transaction: the master's clear is attempted, and
+// its failure reaches the caller as a storage error naming the record.
+func TestApplyLockClearWorkReportsAFailedMasterClear(t *testing.T) {
+	t.Parallel()
+
+	if testing.Short() {
+		t.Skip("Skipping Aerospike integration test in short mode")
+	}
+
+	ctx := context.Background()
+	store, client := setupStoreForLockTest(t)
+
+	tx := txWithOutputs(t, 2)
+
+	_, err := store.Create(ctx, tx, 100)
+	require.NoError(t, err)
+
+	txHash := tx.TxIDChainHash()
+
+	masterKey, keyErr := aerospike.NewKey(store.namespace, store.setName, txHash[:])
+	require.NoError(t, keyErr)
+
+	clearAttempted := false
+
+	// Fail only the master's clear write, after a real batch.
+	store.batchOperateFn = func(policy *aerospike.BatchPolicy, records []aerospike.BatchRecordIfc) aerospike.Error {
+		if err := client.BatchOperate(policy, records); err != nil {
+			return err
+		}
+
+		for _, r := range records {
+			if _, isWrite := r.(*aerospike.BatchWrite); isWrite && string(r.BatchRec().Key.Digest()) == string(masterKey.Digest()) {
+				clearAttempted = true
+				r.BatchRec().Err = &aerospike.AerospikeError{ResultCode: types.TIMEOUT}
+			}
+		}
+
+		return nil
+	}
+
+	t.Cleanup(func() { store.batchOperateFn = nil })
+
+	err = store.applyLockClearWork(ctx, lockClearWork{fullUnlock: []chainhash.Hash{*txHash}})
+	require.True(t, clearAttempted, "the master of a FILTERED_OUT transaction must be cleared")
+	require.ErrorIs(t, err, errors.ErrStorageError)
+	require.ErrorContains(t, err, "clearLockedOnRecordsMulti")
+	require.ErrorContains(t, err, txHash.String()+"] failed to clear record 0")
 }
 
 // TestApplyLockClearWorkReportsEveryFailure checks that a failed read of the

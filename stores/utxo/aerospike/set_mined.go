@@ -534,11 +534,12 @@ func (s *Store) handleBatchRecordError(batchRecord aerospike.BatchRecordIfc, err
 // have the `locked` flag and the `creating` bin cleared as part of marking the
 // transaction mined. When the setMined UDF or expression write runs, it clears
 // the master's `locked` and `creating` itself. On the expression path's
-// FILTERED_OUT branch the master's `locked` is cleared by SetLocked(false), and
-// its `creating` is not cleared.
+// FILTERED_OUT branch that write is skipped, so the item sets master and the
+// master record (index 0) is cleared here too.
 type lockClearItem struct {
 	txID       *chainhash.Hash
-	childCount int // number of pagination/extra records, cleared at indices 1..childCount
+	childCount int  // number of pagination/extra records, cleared at indices 1..childCount
+	master     bool // also clear the master record, index 0
 }
 
 // lockClearWork is the lock-clearing follow-up that a setMined result processor
@@ -550,8 +551,9 @@ type lockClearWork struct {
 	items []lockClearItem
 	// fullUnlock: transactions whose record state is unknown from the batch (the
 	// expression write was FILTERED_OUT, so the child count and even the master's
-	// lock state were not returned). SetLocked(false) reads the child count from
-	// the master and clears every record (master + all pagination records).
+	// lock state were not returned). applyLockClearWork deletes `creating` on the
+	// master and on every extra record, and SetLocked(false) clears `locked` on
+	// every record.
 	fullUnlock []chainhash.Hash
 }
 
@@ -565,9 +567,15 @@ func (s *Store) applyLockClearWork(ctx context.Context, work lockClearWork) erro
 	items := work.items
 
 	// SetLocked below clears `locked` on the fullUnlock transactions but never
-	// touches `creating`, so their extra records also go through the clear here.
-	// Their child count was not returned by the FILTERED_OUT write, so read it.
+	// touches `creating`, so every record of theirs also goes through the clear
+	// here. The FILTERED_OUT write skipped the master's own `creating` delete, so
+	// the master is cleared even when the count read below fails. The child count
+	// was not returned by the FILTERED_OUT write either, so read it.
 	if len(work.fullUnlock) > 0 {
+		for i := range work.fullUnlock {
+			items = append(items, lockClearItem{txID: &work.fullUnlock[i], master: true})
+		}
+
 		extraItems, readErr := s.readExtraRecordCounts(work.fullUnlock)
 		if readErr != nil {
 			err = readErr
@@ -680,7 +688,9 @@ func extraRecordItems(records []aerospike.BatchRecordIfc, ids []*chainhash.Hash)
 // master only, so the master looks complete and nothing re-runs the create,
 // while every output on a stuck extra record is refused with CREATING. Deleting
 // the bin here, in the same write as the lock clear, makes those outputs
-// spendable once the transaction is mined. Deleting the bin never exposes a
+// spendable once the transaction is mined. A re-mine of the same block on the
+// expression path is FILTERED_OUT and skips the master write, so that path
+// clears the master record here as well. Deleting the bin never exposes a
 // half-written record, since create writes each record with its full data in one
 // put and this write is UPDATE_ONLY. A record the create never wrote stays
 // missing and comes back KEY_NOT_FOUND below; this clear does not repair it.
@@ -690,6 +700,10 @@ func extraRecordItems(records []aerospike.BatchRecordIfc, ids []*chainhash.Hash)
 func (s *Store) clearLockedOnRecordsMulti(items []lockClearItem) error {
 	total := 0
 	for _, it := range items {
+		if it.master {
+			total++
+		}
+
 		if it.childCount > 0 {
 			total += it.childCount
 		}
@@ -707,6 +721,15 @@ func (s *Store) clearLockedOnRecordsMulti(items []lockClearItem) error {
 
 	batchRecords := make([]aerospike.BatchRecordIfc, 0, total)
 
+	// recordOf names the transaction and record index of each batch record, so a
+	// failed clear is reported against them.
+	type recordRef struct {
+		txID *chainhash.Hash
+		idx  uint32
+	}
+
+	recordOf := make([]recordRef, 0, total)
+
 	appendRecord := func(txID *chainhash.Hash, idx uint32) error {
 		keySource := uaerospike.CalculateKeySourceInternal(txID, idx)
 
@@ -716,11 +739,18 @@ func (s *Store) clearLockedOnRecordsMulti(items []lockClearItem) error {
 		}
 
 		batchRecords = append(batchRecords, aerospike.NewBatchWrite(batchWritePolicy, key, clearLockedOp, clearCreatingOp))
+		recordOf = append(recordOf, recordRef{txID: txID, idx: idx})
 
 		return nil
 	}
 
 	for _, it := range items {
+		if it.master {
+			if err := appendRecord(it.txID, 0); err != nil {
+				return err
+			}
+		}
+
 		// Guard against a non-positive childCount: uint32(negative) would wrap to
 		// ~4e9 and blow up the batch. Both producers only ever append childCount > 0,
 		// so this is belt-and-suspenders for self-consistency with the sizing loop.
@@ -743,9 +773,9 @@ func (s *Store) clearLockedOnRecordsMulti(items []lockClearItem) error {
 		return errors.NewStorageError("[clearLockedOnRecordsMulti] failed to clear locked flag", err)
 	}
 
-	var aggErr error
+	var recordErrs []error
 
-	for _, br := range batchRecords {
+	for i, br := range batchRecords {
 		recErr := br.BatchRec().Err
 		if recErr == nil {
 			continue
@@ -757,8 +787,8 @@ func (s *Store) clearLockedOnRecordsMulti(items []lockClearItem) error {
 			continue
 		}
 
-		aggErr = errors.Join(aggErr, recErr)
+		recordErrs = append(recordErrs, errors.NewStorageError("[clearLockedOnRecordsMulti][%s] failed to clear record %d", recordOf[i].txID.String(), recordOf[i].idx, recErr))
 	}
 
-	return aggErr
+	return errors.JoinCapped(10, recordErrs...)
 }

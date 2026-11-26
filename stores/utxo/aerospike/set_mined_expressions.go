@@ -863,9 +863,9 @@ func (s *Store) processBatchResultsForSetMinedExpressions(
 					// batch write — including the Locked=false op — is skipped, and the
 					// reads (totalExtraRecs etc.) return nothing, so we know neither the
 					// master's lock state nor the child count. The tx is mined (its
-					// blockID is present) and therefore must be spendable: fully unlock
-					// it (master + all pagination records) via SetLocked, which reads the
-					// child count from the master itself.
+					// blockID is present) and therefore must be spendable: delete
+					// `creating` on the master and every pagination record, and fully
+					// unlock it via SetLocked, which reads the child count itself.
 					work.fullUnlock = append(work.fullUnlock, *hash)
 					continue
 				}

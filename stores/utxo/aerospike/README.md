@@ -7,7 +7,7 @@ This document describes the Aerospike UTXO store implementation, including the d
 ### Normal Transaction
 ```
 inputs
-outputs  
+outputs
 version
 locktime
 fee
@@ -120,7 +120,7 @@ If the clear phase fails or the process stops, the records stay in the `creating
    - The record batch has no top-level error, and every record returns OK or `KEY_EXISTS_ERROR`.
 
    A second store of a single-record transaction that went through the `RECORD_TOO_BIG` retry does not do this. It takes the plain `sendStoreBatch` put, gets `KEY_EXISTS_ERROR`, and returns `ErrTxExists` without a call to `clearCreatingFlag`. Only `setMined` recovers that case.
-3. **setMined**: when the transaction is mined, `setMined` deletes the `creating` bin from the master record and from every extra record that exists. The Lua `setMined` function or `set_mined_expressions.go` clears the master. `clearLockedOnRecordsMulti` in `set_mined.go` clears the extra records in the same write that clears `locked`. On the expressions path, a master write that comes back `FILTERED_OUT` keeps its `creating` bin, but its extra records are still cleared.
+3. **setMined**: when the transaction is mined, `setMined` deletes the `creating` bin from the master record and from every extra record that exists. The Lua `setMined` function or `set_mined_expressions.go` clears the master. `clearLockedOnRecordsMulti` in `set_mined.go` clears the extra records in the same write that clears `locked`. On the expressions path, a re-mine of a block the master already lists comes back `FILTERED_OUT` and skips the master write, so `applyLockClearWork` in `set_mined.go` deletes `creating` on the master and on every extra record in its follow-up write.
 
 One gap remains after `setMined`: an extra record that the write phase never created. `setMined` clears the master, and the clear of the missing record gets `KEY_NOT_FOUND`, which `setMined` treats as benign. The record stays missing. Subtree validation then sees a complete master and does not process the transaction again. A master record without the bin therefore does not prove that every extra record exists.
 
