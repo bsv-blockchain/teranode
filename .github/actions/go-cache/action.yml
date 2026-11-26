@@ -1,11 +1,15 @@
 name: 'Go cache'
 description: >
-  Restore (and on the authoritative saver, save) the Go module cache
-  (~/go/pkg/mod) and build cache (~/.cache/go-build).
+  Restore (and on main's saver jobs, save) the Go module cache
+  (~/go/pkg/mod), the build cache (~/.cache/go-build) and the end-to-end
+  build cache (~/.cache/go-build-e2e).
 
   GitHub Actions caches are branch-scoped: only caches written on the default
-  branch are readable by all PRs. So exactly ONE job — the main-branch unit
-  test job — runs with save: 'true'. Every other job restores only.
+  branch are readable by all PRs. So only main-branch jobs save: the unit
+  test job (save: 'true') saves the module cache and the -race/coverage
+  build cache, and the e2e-build-cache job (save_e2e_build_cache: 'true')
+  saves the per-architecture end-to-end build cache. Every other job
+  restores only.
 
   The build cache key rotates daily (GO_CACHE_DATE) so it never goes stale for
   weeks at a time; restore-keys fall back to the most recent dated entry, then
@@ -14,7 +18,8 @@ description: >
 inputs:
   save:
     description: >
-      'true' on the single authoritative saver (main-branch unit tests).
+      'true' only on the main-branch unit test job, which saves the module
+      cache and the -race/coverage build cache.
       'false' (default) everywhere else — restore only, no upload.
     default: 'false'
   build_cache:
@@ -28,7 +33,7 @@ inputs:
   e2e_build_cache:
     description: >
       'true' in the end-to-end test jobs (smoke, sequential, legacy-sync,
-      prunertest, chainintegrity): restore the -race build cache that main's
+      prunertest, chainintegrity): restore the build cache that main's
       e2e-build-cache job builds without coverage on the same runner
       architecture, into ~/.cache/go-build-e2e, and point GOCACHE at it.
       The unit job's cache cannot serve them: it is built on ARM with
@@ -68,7 +73,7 @@ runs:
           gobuild-${{ runner.os }}-${{ hashFiles('**/go.mod') }}-
           gobuild-${{ runner.os }}-
 
-    # --- save path (authoritative saver only: main-branch unit tests) ---
+    # --- save path (main-branch unit test job only) ---
     # actions/cache registers a post-job step that uploads at job end, AFTER
     # the trim step in the caller has run. Saves only on a key miss (new day or
     # new go.sum/go.mod), so same-day reruns are no-ops.
@@ -91,7 +96,7 @@ runs:
           gobuild-${{ runner.os }}-${{ hashFiles('**/go.mod') }}-
           gobuild-${{ runner.os }}-
 
-    # --- end-to-end -race build cache (see the e2e_build_cache input) ---
+    # --- end-to-end build cache (see the e2e_build_cache input) ---
     # Keyed by architecture too: the x86 jobs (SV Node image is x86 only) and
     # the ARM jobs each get the cache built on their own runner type.
     - name: Restore Go e2e build cache
