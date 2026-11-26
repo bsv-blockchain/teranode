@@ -76,6 +76,9 @@ func TestFailedBlockMovement_NeverReinstallsAnUnmappedSubtree(t *testing.T) {
 
 	for name := range mmapRestoreCases {
 		t.Run(name, func(t *testing.T) {
+			// each case runs in its own child process and temp dir
+			t.Parallel()
+
 			cmd := exec.Command(os.Args[0], "-test.run=^TestFailedBlockMovement_NeverReinstallsAnUnmappedSubtree$", "-test.v", "-test.count=1")
 			cmd.Env = append(os.Environ(), mmapRestoreChildEnv+"="+name)
 

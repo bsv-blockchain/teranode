@@ -908,7 +908,7 @@ var checkedRowsPerDoc = map[string]int{
 	"blockassembly_settings.md":     47,
 	"blockchain_settings.md":        10, // was 11; PostgresPool's "(group)" row is exempt since #1920
 	"blockpersister_settings.md":    9,
-	"blockvalidation_settings.md":   72,
+	"blockvalidation_settings.md":   73,
 	"coinbase_settings.md":          21,
 	"faucet_settings.md":            1,
 	"legacy_settings.md":            34,
