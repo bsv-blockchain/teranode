@@ -678,6 +678,17 @@ func (r *rollbackInTheWay) rollForward(ctx context.Context, logger ulogger.Logge
 //     first and the call then looks again. With the record its own, the call rolls the attempt
 //     back (RollBackCreating): the marker, the reversal of every input under the hold, and the
 //     hold that keeps the txid taken until it expires.
+//
+// The claim is the only durable trace of these spends. A claim that fails with nothing written
+// leaves them as spends of a txid that has no record, so it is tried again, with a growing wait,
+// for as long as the call would wait at a busy hold: until twice the rollback bound has passed
+// since it began. The claim is CREATE_ONLY, so a repeat of one whose answer was lost is safe: it is
+// refused by the record that landed, which is then the record of a later attempt. A claim that
+// wrote its record and could not end the rollback is not tried again: the record is at the txid,
+// and its rollback is finished by the sweep.
+//
+// Residual: a store that refuses every write for that whole time leaves the spends in place. The
+// failure is logged as an error that names the txid.
 func (r *rollbackInTheWay) reverseCarried(ctx context.Context, logger ulogger.Logger, s SequentialStore, tx *bt.Tx, blockHeight uint32, opts []CreateOption) (wroteRecord bool) {
 	if len(r.carried) == 0 {
 		return false
@@ -691,7 +702,10 @@ func (r *rollbackInTheWay) reverseCarried(ctx context.Context, logger ulogger.Lo
 
 	r.deadline = time.Now().Add(2 * bound)
 
-	for round := 0; round < reverseCarriedRounds; round++ {
+	raced := 0
+	wait := claimRetryBackoffBase
+
+	for {
 		outcome, err := r.settle(WithReversalCallHeight(rbCtx, blockHeight), logger, s, hash, r.carried, nil)
 
 		switch outcome {
@@ -703,32 +717,53 @@ func (r *rollbackInTheWay) reverseCarried(ctx context.Context, logger ulogger.Lo
 			claimed, claimErr := claimAndRollBack(rbCtx, logger, s, tx, blockHeight, opts)
 			wroteRecord = wroteRecord || claimed
 
-			if claimErr == nil {
+			switch {
+			case claimErr == nil:
 				r.carried = nil
 
 				return wroteRecord
+			case claimed:
+				logger.Errorf("SpendAndCreate: the spends of an earlier round for %s are owned by the record that claimed them, and its rollback did not end, it is left for the sweep: %v", hash.String(), claimErr)
+
+				return wroteRecord
+			case errors.Is(claimErr, errors.ErrTxExists):
+				// Another attempt wrote the record first: look again, it owns the spends now.
+				if raced++; raced >= reverseCarriedRounds {
+					return wroteRecord
+				}
+
+				continue
 			}
 
-			if !errors.Is(claimErr, errors.ErrTxExists) {
-				logger.Errorf("SpendAndCreate: the spends of an earlier round for %s could not be reversed after its spend failed, they are left in place: %v", hash.String(), claimErr)
+			// The claim wrote nothing, so nothing durable names these spends yet.
+			if !time.Now().Add(wait).Before(r.deadline) {
+				logger.Errorf("SpendAndCreate: the spends of an earlier round for %s could not be reversed after its spend failed, the claim of the txid failed for twice the rollback bound and they are left in place: %v", hash.String(), claimErr)
 
 				return wroteRecord
 			}
 
-			// Another attempt wrote the record first: look again, it owns the spends now.
+			logger.Warnf("SpendAndCreate: the claim of %s, which reverses the spends of an earlier round, failed and is tried again in %s: %v", hash.String(), wait.String(), claimErr)
+
+			// The wait ends before the deadline above, which is half the life of rbCtx, and rbCtx
+			// does not follow the cancellation of the caller, so there is nothing to select on.
+			time.Sleep(wait)
+
+			wait = min(wait*2, holdPollMax)
 		default:
 			logger.Errorf("SpendAndCreate: the spends of an earlier round for %s could not be reversed after its spend failed, they are left in place: %v", hash.String(), err)
 
 			return wroteRecord
 		}
 	}
-
-	return wroteRecord
 }
 
 // reverseCarriedRounds bounds how often reverseCarried looks again after another attempt wrote the
 // record of the txid between its read and its claim.
 const reverseCarriedRounds = 3
+
+// claimRetryBackoffBase is the first wait of reverseCarried between two tries of a claim that
+// failed with nothing written. The wait doubles up to holdPollMax.
+var claimRetryBackoffBase = time.Second
 
 // claimAndRollBack writes the tentative record of tx and rolls its attempt back, which reverses
 // every input of the transaction under the marker and the hold of the attempt. The create is the

@@ -719,7 +719,11 @@ from touching the next.
   the record first, and rolls that attempt back. This is the one fence the store can order for a
   txid with no record: a read of the record followed by an unspend would clear the spends of a
   create that landed between the two. The cleanup runs on a context of its own, because the spend
-  that failed often failed with the context of the caller. The store's own partial-spend rollback (`partialSpendRollbackDecision`) follows the same
+  that failed often failed with the context of the caller. The claim is the only durable trace of
+  those spends, so a claim that fails with nothing written is tried again, with a growing wait, for
+  up to twice `utxostore_spendRollbackTimeout`, the time the call would wait at a busy hold. A
+  store that refuses every write for that whole time leaves the spends in place, and the call
+  logs an error that names the txid. The store's own partial-spend rollback (`partialSpendRollbackDecision`) follows the same
   rule and waits in the same way, so a spend that takes one input and fails on another beside a
   busy rollback is reverted and not left beside a hold that expires.
 - **What a reader sees.** A hold has no `outputs` bin. `ParentOutputsForValidation` reads the

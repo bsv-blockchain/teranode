@@ -2,7 +2,9 @@ package utxo
 
 import (
 	"context"
+	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -433,6 +435,37 @@ func shortenUnspendBackoff(t *testing.T) {
 	unspendRetryBackoffBase = time.Millisecond
 
 	t.Cleanup(func() { unspendRetryBackoffBase = orig })
+}
+
+// shortenClaimBackoff makes the wait between two tries of the claim in reverseCarried short.
+func shortenClaimBackoff(t *testing.T, d time.Duration) {
+	t.Helper()
+
+	orig := claimRetryBackoffBase
+	claimRetryBackoffBase = d
+
+	t.Cleanup(func() { claimRetryBackoffBase = orig })
+}
+
+// errorLog is a test logger that keeps the error lines it is given.
+type errorLog struct {
+	ulogger.TestLogger
+	mu     sync.Mutex
+	errors []string
+}
+
+func (l *errorLog) Errorf(format string, args ...interface{}) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	l.errors = append(l.errors, fmt.Sprintf(format, args...))
+}
+
+func (l *errorLog) lines() []string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	return append([]string(nil), l.errors...)
 }
 
 func TestSequentialSpendAndCreate(t *testing.T) {
@@ -972,6 +1005,137 @@ func TestSequentialSpendAndCreate(t *testing.T) {
 		require.ErrorIs(t, err, spendErr)
 		require.Equal(t, 0, raced.unspendCalls, "a create that the store refused wrote nothing, and the record that is there now owns the spends")
 		require.Equal(t, 0, raced.beginCalls)
+	})
+
+	t.Run("a claim that fails with nothing written is tried again until it reverses the spends of the earlier round", func(t *testing.T) {
+		shortenUnspendBackoff(t)
+		shortenClaimBackoff(t, time.Millisecond)
+
+		two := scriptedTwoInputTx(t)
+		earlier := []*Spend{{Vout: 0}, {Vout: 1}}
+		spendErr := errors.NewStorageError("the spend of the second round failed")
+
+		// The hold of the first round is cleared and the second round's spend fails. No record is at
+		// the txid, and the claim of it fails twice before the store takes it.
+		f := &fakeSequentialStore{
+			spendsSeq:   [][]*Spend{earlier, {{Vout: 0}}},
+			spendErrs:   []error{nil, spendErr},
+			createErrs:  []error{errors.NewTxExistsError("held"), errors.NewStorageError("the store is busy"), MarkCreateOutcomeUnknown(errors.NewStorageError("the answer was lost"))},
+			createMeta:  &meta.Data{Creating: true, Attempt: []byte{3}},
+			existing:    meta.Data{Creating: true, RollingBack: true, Hold: true},
+			clearResult: true,
+			getMetaErrs: []error{nil, nil},
+			getMetaErr:  errors.NewTxNotFoundError("no record"),
+		}
+
+		log := &errorLog{}
+
+		_, _, err := SequentialSpendAndCreate(ctx, log, f, two, 100, false)
+		require.ErrorIs(t, err, spendErr)
+		require.Equal(t, []string{
+			"spend", "create", "getmeta", "getmeta", "clear",
+			"spend",
+			"getmeta", "create",
+			"getmeta", "create",
+			"getmeta", "create", "unlease", "begin", "unspend", "release", "delete",
+		}, f.callSeq, "the call looks at the txid again before each try, and the third claim reverses the spends")
+		require.Len(t, f.unspentWith, len(two.Inputs), "every input of the transaction is reversed under the claim")
+		require.Empty(t, log.lines(), "the spends were reversed, so nothing is reported as left in place")
+	})
+
+	t.Run("a claim that keeps failing is given up after twice the rollback bound and reported", func(t *testing.T) {
+		shortenUnspendBackoff(t)
+		shortenClaimBackoff(t, 5*time.Millisecond)
+
+		two := scriptedTwoInputTx(t)
+		spendErr := errors.NewStorageError("the spend of the second round failed")
+
+		f := &boundedSequentialStore{
+			fakeSequentialStore: fakeSequentialStore{
+				spendsSeq:   [][]*Spend{{{Vout: 0}, {Vout: 1}}, {{Vout: 0}}},
+				spendErrs:   []error{nil, spendErr},
+				createErrs:  []error{errors.NewTxExistsError("held")},
+				createErr:   errors.NewStorageError("the store refuses every write"),
+				existing:    meta.Data{Creating: true, RollingBack: true, Hold: true},
+				clearResult: true,
+				getMetaErrs: []error{nil, nil},
+				getMetaErr:  errors.NewTxNotFoundError("no record"),
+			},
+			bound: 50 * time.Millisecond,
+		}
+
+		log := &errorLog{}
+		start := time.Now()
+
+		_, _, err := SequentialSpendAndCreate(ctx, log, f, two, 100, false)
+		require.ErrorIs(t, err, spendErr)
+		require.Less(t, time.Since(start), 2*time.Second, "the retries end with the bound")
+		require.Greater(t, f.createCalls, 3, "the claim is tried more than twice before the call gives up")
+		require.Zero(t, f.beginCalls, "no claim was written, so no rollback ran")
+		require.Zero(t, f.unspendCalls)
+
+		lines := log.lines()
+		require.Len(t, lines, 1, "the spends that stay are reported once")
+		require.Contains(t, lines[0], "left in place")
+		require.Contains(t, lines[0], "twice the rollback bound", "the call gives up at the bound of its wait, not at the end of its context")
+		require.Contains(t, lines[0], two.TxIDChainHash().String())
+	})
+
+	t.Run("a claim that wrote its record and could not end the rollback is not tried again", func(t *testing.T) {
+		shortenUnspendBackoff(t)
+		shortenClaimBackoff(t, time.Millisecond)
+
+		two := scriptedTwoInputTx(t)
+		spendErr := errors.NewStorageError("the spend of the second round failed")
+
+		f := &fakeSequentialStore{
+			spendsSeq:   [][]*Spend{{{Vout: 0}, {Vout: 1}}, {{Vout: 0}}},
+			spendErrs:   []error{nil, spendErr},
+			createErrs:  []error{errors.NewTxExistsError("held")},
+			createMeta:  &meta.Data{Creating: true, Attempt: []byte{3}},
+			beginErr:    errors.NewStorageError("the marker write failed"),
+			existing:    meta.Data{Creating: true, RollingBack: true, Hold: true},
+			clearResult: true,
+			getMetaErrs: []error{nil, nil},
+			getMetaErr:  errors.NewTxNotFoundError("no record"),
+		}
+
+		log := &errorLog{}
+
+		_, _, err := SequentialSpendAndCreate(ctx, log, f, two, 100, false)
+		require.ErrorIs(t, err, spendErr)
+		require.Equal(t, 2, f.createCalls, "the first create of the call and one claim: the record of the claim is at the txid, so it is not claimed again")
+		require.Equal(t, 1, f.beginCalls)
+
+		lines := log.lines()
+		require.NotEmpty(t, lines)
+		require.Contains(t, lines[len(lines)-1], "left for the sweep", "the record is the durable trace of the spends, and the sweep ends its rollback")
+	})
+
+	t.Run("a claim that another record keeps refusing is given up after three looks", func(t *testing.T) {
+		shortenUnspendBackoff(t)
+		shortenClaimBackoff(t, time.Millisecond)
+
+		two := scriptedTwoInputTx(t)
+		spendErr := errors.NewStorageError("the spend of the second round failed")
+
+		// Each look finds no record, and each claim is refused by one: a record that comes and goes
+		// between the read and the create. The call does not go round for ever.
+		f := &fakeSequentialStore{
+			spendsSeq:   [][]*Spend{{{Vout: 0}, {Vout: 1}}, {{Vout: 0}}},
+			spendErrs:   []error{nil, spendErr},
+			createErr:   errors.NewTxExistsError("another attempt"),
+			existing:    meta.Data{Creating: true, RollingBack: true, Hold: true},
+			clearResult: true,
+			getMetaErrs: []error{nil, nil},
+			getMetaErr:  errors.NewTxNotFoundError("no record"),
+		}
+
+		_, _, err := SequentialSpendAndCreate(ctx, logger, f, two, 100, false)
+		require.ErrorIs(t, err, spendErr)
+		require.Equal(t, 1+reverseCarriedRounds, f.createCalls, "the create of the call, and one claim per look")
+		require.Zero(t, f.beginCalls, "a create that the store refused wrote nothing")
+		require.Zero(t, f.unspendCalls)
 	})
 
 	t.Run("a spend that fails because the caller's context ended still reverses the spends of the earlier round", func(t *testing.T) {
