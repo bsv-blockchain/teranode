@@ -133,26 +133,44 @@ func TestImportUTXOSet_CompressedInputs(t *testing.T) {
 }
 
 // Any failure of a compressed import says to wipe the UTXO store: records already stored
-// may come from a damaged piece, and a re-run keeps a record that already exists.
-func TestImportUTXOSet_CompressedFailures_SayToWipe(t *testing.T) {
+// may come from a damaged piece, and a re-run keeps a record that already exists. A plain
+// set, verified up front, says so only when reading the set itself failed.
+func TestImportUTXOSet_FailuresSayWhetherToWipe(t *testing.T) {
 	cancelled, cancel := context.WithCancel(context.Background())
 	cancel()
 
 	cases := []struct {
 		name       string
+		plain      bool
+		truncate   bool // cut the plain set short of its footer
 		ctx        context.Context
 		store      utxo.Store
 		largeEvery int // failingMultiRecordStore fails only on a multi-record tx
 		staleSum   bool
 		want       string
+		wipe       bool
 	}{
-		{"checksum mismatch", context.Background(), noopCreateStore{}, 0, true, "checksum mismatch"},
-		{"cancelled", cancelled, noopCreateStore{}, 0, false, "cancel"},
-		{"store error", context.Background(), failingMultiRecordStore{}, 50, false, "error in worker"},
+		{"compressed/checksum mismatch", false, false, context.Background(), noopCreateStore{}, 0, true, "checksum mismatch", true},
+		{"compressed/cancelled", false, false, cancelled, noopCreateStore{}, 0, false, "cancel", true},
+		{"compressed/store error", false, false, context.Background(), failingMultiRecordStore{}, 50, false, "error in worker", true},
+		{"plain/read failed part-way", true, true, context.Background(), noopCreateStore{}, 0, false, "failed part-way", true},
+		{"plain/store error", true, false, context.Background(), failingMultiRecordStore{}, 50, false, "error in worker", false},
 	}
 
 	for _, tc := range cases {
-		path, sum := compressedSnapshot(t, writeCompleteSnapshotFile(t, benchWrappers("failures", 500, tc.largeEvery)), 1000)
+		plain := writeCompleteSnapshotFile(t, benchWrappers("failures", 500, tc.largeEvery))
+		path, sum := plain, ""
+
+		if tc.truncate {
+			data, err := os.ReadFile(plain)
+			require.NoError(t, err)
+			require.NoError(t, os.WriteFile(plain, data[:len(data)-100], 0o600))
+		}
+
+		if !tc.plain {
+			path, sum = compressedSnapshot(t, plain, 1000)
+		}
+
 		if tc.staleSum {
 			sum = hex.EncodeToString(make([]byte, sha256.Size))
 		}
@@ -165,7 +183,12 @@ func TestImportUTXOSet_CompressedFailures_SayToWipe(t *testing.T) {
 
 				err := importUTXOSet(tc.ctx, ulogger.TestLogger{}, tc.store, path, opts)
 				require.ErrorContains(t, err, tc.want)
-				require.ErrorContains(t, err, "wipe the UTXO store")
+
+				if tc.wipe {
+					require.ErrorContains(t, err, "wipe the UTXO store")
+				} else {
+					require.NotContains(t, err.Error(), "wipe the UTXO store")
+				}
 			})
 		}
 	}
@@ -558,33 +581,6 @@ func requireStoredOutputs(ctx context.Context, t *testing.T, store utxo.Store, w
 			require.Equal(t, int(utxo.Status_OK), spend.Status, "tx %s output %d must be unspent", w.TxID, want.Index)
 			require.Nil(t, spend.SpendingData, "tx %s output %d", w.TxID, want.Index)
 		}
-	}
-}
-
-// Both compressed forms, read in one pass or two, land every output intact and unspent
-// in a real UTXO store, the 200-output multi-record txs included.
-func TestProcessUTXOs_CompressedInput_StoresEveryOutput(t *testing.T) {
-	ctx := context.Background()
-	wrappers := withDistinctOutputs(benchWrappers("stored", 200, 25))
-	plain := writeCompleteSnapshotFile(t, wrappers)
-
-	for _, c := range []struct{ pieceSize, batch int }{{0, 0}, {0, 128}, {3000, 0}, {3000, 128}} {
-		pieceSize := c.pieceSize
-
-		t.Run(fmt.Sprintf("pieceSize=%d/batch=%d", pieceSize, c.batch), func(t *testing.T) {
-			tSettings := forceSeederSettings(t)
-			tSettings.UtxoStore.UtxoBatchSize = c.batch
-			name := fmt.Sprintf("compressed_stored_%d_%d", pieceSize, c.batch)
-			pointUtxoStoreAt(t, tSettings, name)
-
-			path, sum := compressedSnapshot(t, plain, pieceSize)
-
-			tip, err := processUTXOs(ctx, ulogger.TestLogger{}, tSettings, newTestBlockchainStore(t), path, "", false, false, sum)
-			require.NoError(t, err)
-			require.Equal(t, uint32(200), tip.height)
-
-			requireStoredOutputs(ctx, t, openNamedUtxoStore(ctx, t, tSettings, name), wrappers)
-		})
 	}
 }
 

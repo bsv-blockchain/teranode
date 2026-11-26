@@ -17,6 +17,7 @@ import (
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/blob"
 	bloboptions "github.com/bsv-blockchain/teranode/stores/blob/options"
+	blockchain_store "github.com/bsv-blockchain/teranode/stores/blockchain"
 	utxosql "github.com/bsv-blockchain/teranode/stores/utxo/sql"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/test"
@@ -125,6 +126,13 @@ func (w *warnRecorder) Warnf(format string, args ...interface{}) {
 
 // markImported records a completed import the way processUTXOs does: the
 // lastProcessed.dat height marker plus the imported-tip record with the hash.
+// checkpointRecoverable is recoverableTip as a yes or no, for the tests of that decision.
+func checkpointRecoverable(ctx context.Context, logger ulogger.Logger, blockStore blob.Store, blockchainStore blockchain_store.Store, utxoFile string) (bool, error) {
+	tip, err := recoverableTip(ctx, logger, blockStore, blockchainStore, utxoFile)
+
+	return tip != nil, err
+}
+
 func markImported(t *testing.T, ctx context.Context, blockStore blob.Store, height uint32, hash chainhash.Hash) {
 	t.Helper()
 

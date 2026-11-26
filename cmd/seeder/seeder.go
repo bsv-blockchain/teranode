@@ -729,26 +729,20 @@ func readUTXOSetTip(utxoFile string) (*utxoSetTip, error) {
 // bare height.
 const importedTipFilename = "seederImportedTip"
 
-// checkpointRecoverable reports whether the block store records a completed
-// import of utxoFile's own snapshot with the BlockAssembler checkpoint missing,
-// which is the state a failure to write the checkpoint leaves behind. Both
-// lastProcessed.dat and the tip record must name utxoFile's preamble height, and
-// the tip record must name its tip hash: the marker lives at a fixed path, so
-// its existence proves only that some import finished, and a height alone does
-// not tell two snapshots with the same tip height (reorg siblings) apart.
+// recoverableTip reports whether the block store records a completed import of
+// utxoFile's own snapshot with the BlockAssembler checkpoint missing, which is
+// the state a failure to write the checkpoint leaves behind, and returns the
+// tip it checked (nil when not recoverable), so the caller records exactly that
+// tip. Both lastProcessed.dat and the tip record must name utxoFile's preamble
+// height, and the tip record must name its tip hash: the marker lives at a fixed
+// path, so its existence proves only that some import finished, and a height
+// alone does not tell two snapshots with the same tip height (reorg siblings)
+// apart.
 //
 // None of this is evidence about the UTXO store itself, which is a different
 // store from the block store: recreating the UTXO store leaves every record
 // here intact. That is why this is only reached via -recover-checkpoint, never
 // -force. A mismatch or an unparsable record is not recoverable.
-func checkpointRecoverable(ctx context.Context, logger ulogger.Logger, blockStore blob.Store, blockchainStore blockchain.Store, utxoFile string) (bool, error) {
-	tip, err := recoverableTip(ctx, logger, blockStore, blockchainStore, utxoFile)
-
-	return tip != nil, err
-}
-
-// recoverableTip is checkpointRecoverable returning the tip it checked, or nil
-// when the checkpoint is not recoverable, so the caller records exactly that tip.
 func recoverableTip(ctx context.Context, logger ulogger.Logger, blockStore blob.Store, blockchainStore blockchain.Store, utxoFile string) (*utxoSetTip, error) {
 	b, err := blockStore.Get(ctx, nil, fileformat.FileTypeDat, bloboptions.WithFilename("lastProcessed"), bloboptions.WithNoHashPrefix())
 	if err != nil {
