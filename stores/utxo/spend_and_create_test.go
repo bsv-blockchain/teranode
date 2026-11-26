@@ -67,8 +67,10 @@ type fakeSequentialStore struct {
 	// takeDeclined makes TakeRollbackHold report that the hold is not the caller's to take.
 	takeDeclined bool
 	takeErr      error
-	takeCalls    int
-	takeTokens   [][]byte
+	// takeErrs is popped once per TakeRollbackHold call, and a nil entry lets the call answer.
+	takeErrs   []error
+	takeCalls  int
+	takeTokens [][]byte
 	// endErr is what EndCreateFirstRollback answers.
 	endErr error
 
@@ -345,6 +347,15 @@ func (f *fakeSequentialStore) TakeRollbackHold(_ context.Context, _ *chainhash.H
 
 	if f.takeErr != nil {
 		return false, f.takeErr
+	}
+
+	if len(f.takeErrs) > 0 {
+		err := f.takeErrs[0]
+		f.takeErrs = f.takeErrs[1:]
+
+		if err != nil {
+			return false, err
+		}
 	}
 
 	if len(f.takeSeq) > 0 {
@@ -1084,6 +1095,113 @@ func TestSequentialSpendAndCreate(t *testing.T) {
 		require.Len(t, lines, 1, "the spends that stay are reported once")
 		require.Contains(t, lines[0], "left in place")
 		require.Contains(t, lines[0], "twice the rollback bound", "the call gives up at the bound of its wait, not at the end of its context")
+		require.Contains(t, lines[0], two.TxIDChainHash().String())
+	})
+
+	t.Run("a look at the txid that fails is tried again until the spends of the earlier round are reversed", func(t *testing.T) {
+		shortenUnspendBackoff(t)
+		shortenClaimBackoff(t, time.Millisecond)
+
+		two := scriptedTwoInputTx(t)
+		earlier := []*Spend{{Vout: 0}, {Vout: 1}}
+		spendErr := errors.NewStorageError("the spend of the second round failed")
+		reversalErr := errors.NewStorageError("the reversal failed")
+		held := meta.Data{Creating: true, RollingBack: true, Hold: true}
+		rollingBack := meta.Data{Creating: true, RollingBack: true, Attempt: []byte{6}}
+
+		// In each case the hold of the first round is cleared and the spend of the second round
+		// fails. seq is what the cleanup does after that spend.
+		for name, tc := range map[string]struct {
+			store *fakeSequentialStore
+			seq   []string
+		}{
+			"the read of the record fails once, and no record is at the txid": {
+				&fakeSequentialStore{
+					createErrs:  []error{errors.NewTxExistsError("held")},
+					createMeta:  &meta.Data{Creating: true, Attempt: []byte{3}},
+					existing:    held,
+					getMetaErrs: []error{nil, nil, errors.NewStorageError("the read timed out")},
+					getMetaErr:  errors.NewTxNotFoundError("no record"),
+				},
+				[]string{"getmeta", "getmeta", "create", "unlease", "begin", "unspend", "release", "delete"},
+			},
+			"the take of the hold fails once": {
+				&fakeSequentialStore{
+					createErr:   errors.NewTxExistsError("held"),
+					existingSeq: []meta.Data{held, held},
+					existing:    rollingBack,
+					takeErrs:    []error{errors.NewStorageError("the take timed out")},
+				},
+				[]string{"getmeta", "take", "getmeta", "take", "unspend", "release"},
+			},
+			"the reversal under the hold fails, with its own retries used up": {
+				&fakeSequentialStore{
+					createErr:   errors.NewTxExistsError("held"),
+					existingSeq: []meta.Data{held, held},
+					existing:    rollingBack,
+					unspendErrs: []error{reversalErr, reversalErr, reversalErr},
+				},
+				[]string{"getmeta", "take", "unspend", "unspend", "unspend", "release", "getmeta", "take", "unspend", "release"},
+			},
+		} {
+			f := tc.store
+			f.spendsSeq = [][]*Spend{earlier, {{Vout: 0}}}
+			f.spendErrs = []error{nil, spendErr}
+			f.clearResult = true
+
+			log := &errorLog{}
+
+			_, _, err := SequentialSpendAndCreate(ctx, log, f, two, 100, false)
+			require.ErrorIs(t, err, spendErr, name)
+			require.Equal(t, append([]string{"spend", "create", "getmeta", "getmeta", "clear", "spend"}, tc.seq...), f.callSeq, name)
+			require.Len(t, f.unspentWith, len(earlier), "%s: the spends of the earlier round are reversed", name)
+
+			for _, line := range log.lines() {
+				require.NotContains(t, line, "left in place", name)
+			}
+		}
+	})
+
+	t.Run("a look at the txid that keeps failing is given up after twice the rollback bound and reported", func(t *testing.T) {
+		shortenClaimBackoff(t, 5*time.Millisecond)
+
+		two := scriptedTwoInputTx(t)
+		spendErr := errors.NewStorageError("the spend of the second round failed")
+
+		f := &boundedSequentialStore{
+			fakeSequentialStore: fakeSequentialStore{
+				spendsSeq:   [][]*Spend{{{Vout: 0}, {Vout: 1}}, {{Vout: 0}}},
+				spendErrs:   []error{nil, spendErr},
+				createErrs:  []error{errors.NewTxExistsError("held")},
+				existing:    meta.Data{Creating: true, RollingBack: true, Hold: true},
+				clearResult: true,
+				getMetaErrs: []error{nil, nil},
+				getMetaErr:  errors.NewStorageError("the store refuses every read"),
+			},
+			bound: 50 * time.Millisecond,
+		}
+
+		log := &errorLog{}
+		start := time.Now()
+
+		_, _, err := SequentialSpendAndCreate(ctx, log, f, two, 100, false)
+		require.ErrorIs(t, err, spendErr)
+		require.Less(t, time.Since(start), 2*time.Second, "the retries end with the bound")
+
+		looks := 0
+
+		for _, call := range f.callSeq[6:] {
+			require.Equal(t, "getmeta", call, "nothing is claimed, taken or reversed while the record cannot be read")
+
+			looks++
+		}
+
+		require.Greater(t, looks, 2, "the look is tried more than twice before the call gives up")
+
+		lines := log.lines()
+		require.Len(t, lines, 1, "the spends that stay are reported once")
+		require.Contains(t, lines[0], "left in place")
+		require.Contains(t, lines[0], "the look at the txid failed for twice the rollback bound")
 		require.Contains(t, lines[0], two.TxIDChainHash().String())
 	})
 

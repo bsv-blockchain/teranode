@@ -762,8 +762,13 @@ func (r *rollbackInTheWay) rollForward(ctx context.Context, logger ulogger.Logge
 // wrote its record and could not end the rollback is not tried again: the record is at the txid,
 // and its rollback is finished by the sweep.
 //
-// Residual: a store that refuses every write for that whole time leaves the spends in place. The
-// failure is logged as an error that names the txid.
+// A look at the txid that does not decide what owns the spends leaves them without a trace in the
+// same way: the read of the record failed, the take of the hold failed, or the reversal under the
+// hold failed. It is tried again with the same wait and until the same time. Each try reads the
+// record again and reverses only under the hold, so a repeat is safe.
+//
+// Residual: a store that refuses every read or write for that whole time leaves the spends in
+// place. The failure is logged as an error that names the txid.
 func (r *rollbackInTheWay) reverseCarried(ctx context.Context, logger ulogger.Logger, s SequentialStore, tx *bt.Tx, blockHeight uint32, opts []CreateOption) (wroteRecord bool) {
 	if len(r.carried) == 0 {
 		return false
@@ -782,6 +787,9 @@ func (r *rollbackInTheWay) reverseCarried(ctx context.Context, logger ulogger.Lo
 
 	for {
 		outcome, err := r.settle(WithReversalCallHeight(rbCtx, blockHeight), logger, s, hash, r.carried, nil)
+
+		// step is the step that failed with nothing written, and so is tried again.
+		step := "the look at the txid"
 
 		switch outcome {
 		case rollbackReversed, rollbackReplaced:
@@ -810,25 +818,23 @@ func (r *rollbackInTheWay) reverseCarried(ctx context.Context, logger ulogger.Lo
 				continue
 			}
 
-			// The claim wrote nothing, so nothing durable names these spends yet.
-			if !time.Now().Add(wait).Before(r.deadline) {
-				logger.Errorf("SpendAndCreate: the spends of an earlier round for %s could not be reversed after its spend failed, the claim of the txid failed for twice the rollback bound and they are left in place: %v", hash.String(), claimErr)
+			step, err = "the claim of the txid", claimErr
+		}
 
-				return wroteRecord
-			}
-
-			logger.Warnf("SpendAndCreate: the claim of %s, which reverses the spends of an earlier round, failed and is tried again in %s: %v", hash.String(), wait.String(), claimErr)
-
-			// The wait ends before the deadline above, which is half the life of rbCtx, and rbCtx
-			// does not follow the cancellation of the caller, so there is nothing to select on.
-			time.Sleep(wait)
-
-			wait = min(wait*2, holdPollMax)
-		default:
-			logger.Errorf("SpendAndCreate: the spends of an earlier round for %s could not be reversed after its spend failed, they are left in place: %v", hash.String(), err)
+		// Nothing durable names these spends yet.
+		if !time.Now().Add(wait).Before(r.deadline) {
+			logger.Errorf("SpendAndCreate: the spends of an earlier round for %s could not be reversed after its spend failed, %s failed for twice the rollback bound and they are left in place: %v", hash.String(), step, err)
 
 			return wroteRecord
 		}
+
+		logger.Warnf("SpendAndCreate: %s of %s, which reverses the spends of an earlier round, failed and is tried again in %s: %v", step, hash.String(), wait.String(), err)
+
+		// The wait ends before the deadline above, which is half the life of rbCtx, and rbCtx
+		// does not follow the cancellation of the caller, so there is nothing to select on.
+		time.Sleep(wait)
+
+		wait = min(wait*2, holdPollMax)
 	}
 }
 
@@ -836,8 +842,9 @@ func (r *rollbackInTheWay) reverseCarried(ctx context.Context, logger ulogger.Lo
 // record of the txid between its read and its claim.
 const reverseCarriedRounds = 3
 
-// claimRetryBackoffBase is the first wait of reverseCarried between two tries of a claim that
-// failed with nothing written. The wait doubles up to holdPollMax.
+// claimRetryBackoffBase is the first wait of reverseCarried between two tries of a step that
+// failed with nothing written: the claim, or the look at the txid before it. The wait doubles up
+// to holdPollMax.
 var claimRetryBackoffBase = time.Second
 
 // claimAndRollBack writes the tentative record of tx and rolls its attempt back, which reverses
