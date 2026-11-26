@@ -419,7 +419,13 @@ func TestDeepReorgHaltResetCommands(t *testing.T) {
 				mockStp.On("Reset", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 					Return(subtreeprocessor.ResetResponse{})
 
-				require.NoError(t, command.run(server, withHeader(t.Context())))
+				var completed chan error
+				if operator {
+					completed = make(chan error, 1)
+					go func() { completed <- command.run(server, withHeader(t.Context())) }()
+				} else {
+					require.NoError(t, command.run(server, withHeader(t.Context())))
+				}
 
 				// The command queues the request for block assembly's loop, which this fixture does
 				// not run, so the test plays the loop's part.
@@ -432,7 +438,22 @@ func TestDeepReorgHaltResetCommands(t *testing.T) {
 
 				require.Equal(t, resetRequest{FullReset: command.full, ValidateInputs: command.validate, Operator: operator},
 					resetRequest{FullReset: req.FullReset, ValidateInputs: req.ValidateInputs, Operator: req.Operator})
+				if operator {
+					select {
+					case err := <-completed:
+						t.Fatalf("operator reset RPC returned before completion: %v", err)
+					case <-time.After(20 * time.Millisecond):
+					}
+				}
 				ba.handleResetRequests(t.Context(), req)
+				if operator {
+					select {
+					case err := <-completed:
+						require.NoError(t, err)
+					case <-time.After(10 * time.Second):
+						t.Fatal("operator reset RPC did not report completion")
+					}
+				}
 
 				require.Equal(t, !operator, ba.DeepReorgHalted())
 				require.Equal(t, map[bool]float64{true: 0, false: 1}[operator], testutil.ToFloat64(prometheusBlockAssemblyDeepReorgHalted))
@@ -452,6 +473,33 @@ func TestDeepReorgHaltResetCommands(t *testing.T) {
 			})
 		}
 	}
+
+	t.Run("operator clear failure reaches command", func(t *testing.T) {
+		initPrometheusMetrics()
+		items, b2, mockStp := deepReorgFixture(t)
+		ba := items.blockAssembler
+		server := &BlockAssembly{logger: ba.logger, settings: ba.settings, blockAssembler: ba}
+		require.Error(t, ba.handleReorg(t.Context(), b2, 2))
+		client := &stateFailClient{ClientI: items.blockchainClient, failSetKey: DeepReorgHaltStateKey}
+		ba.blockchainClient = client
+		mockStp.On("Reset", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+			Return(subtreeprocessor.ResetResponse{})
+		ctx := metadata.NewIncomingContext(t.Context(), metadata.Pairs(OperatorResetMetadataKey, "true"))
+		completed := make(chan error, 1)
+		go func() {
+			_, err := server.ResetBlockAssembly(ctx, &blockassembly_api.EmptyMessage{})
+			completed <- err
+		}()
+		var req resetRequest
+		select {
+		case req = <-ba.resetCh:
+		case <-time.After(10 * time.Second):
+			t.Fatal("operator command queued no reset")
+		}
+		ba.handleResetRequests(t.Context(), req)
+		require.Error(t, <-completed)
+		require.True(t, ba.DeepReorgHalted())
+	})
 }
 
 // Block locators are sparse, so the reorg lists start below the real fork point and share the

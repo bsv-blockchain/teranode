@@ -2920,6 +2920,27 @@ func (b *BlockAssembler) OperatorReset(fullReset bool, validateInputs bool) {
 	b.queueReset(resetRequest{FullReset: fullReset, ValidateInputs: validateInputs, Operator: true})
 }
 
+// OperatorResetAndWait reports whether the operator's reset and durable halt clear completed.
+func (b *BlockAssembler) OperatorResetAndWait(ctx context.Context, fullReset, validateInputs bool) error {
+	return b.resetAndWait(ctx, resetRequest{FullReset: fullReset, ValidateInputs: validateInputs, Operator: true})
+}
+
+func (b *BlockAssembler) resetAndWait(ctx context.Context, req resetRequest) error {
+	req.ErrCh = make(chan error, 1)
+	select {
+	case b.resetCh <- req:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+
+	select {
+	case err := <-req.ErrCh:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
 func (b *BlockAssembler) resetWithOptions(fullReset bool, validateInputs bool) {
 	b.queueReset(resetRequest{FullReset: fullReset, ValidateInputs: validateInputs})
 }
