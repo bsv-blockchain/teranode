@@ -84,10 +84,15 @@ const (
 	laneRecMissing = "missing"
 	// laneRecNotMaster: an Aerospike pagination record.
 	laneRecNotMaster = "not_master"
+	// laneRecCoinbase: a coinbase no row takes, which the window never keeps. In Phase 1 a coinbase
+	// takes an ordinary leased position after its block's rows are committed, so no row lists it;
+	// the reserved coinbase lane is Phase 2. A coinbase a row does take is judged as mined like any
+	// other record. Where today's reload keeps a coinbase, the sample counts today_only_coinbase.
+	laneRecCoinbase = "coinbase"
 )
 
 var laneRecOutcomes = []string{laneRecKeep, laneRecMinedRow, laneRecMinedFloor, laneRecCapped, laneRecConflicting,
-	laneRecNoPosition, laneRecAfterReload, laneRecMissing, laneRecNotMaster}
+	laneRecNoPosition, laneRecAfterReload, laneRecMissing, laneRecNotMaster, laneRecCoinbase}
 
 // Sample kinds: how a sampled transaction compares between today's pool and the window's.
 const (
@@ -105,13 +110,16 @@ const (
 	laneSampleTodayCapped = "today_only_capped"
 	// laneSampleTodayNoPosition: in today's pool with no lane position.
 	laneSampleTodayNoPosition = "today_only_no_position"
+	// laneSampleTodayCoinbase: in today's pool and a coinbase the window counts apart. Aerospike's
+	// reload skips every coinbase; utxoset's reload query returns one off the main chain (off_chain_since set).
+	laneSampleTodayCoinbase = "today_only_coinbase"
 	// laneSampleTodayOther: in today's pool and read by the window as one of the other outcomes
 	// (conflicting, after_reload, missing).
 	laneSampleTodayOther = "today_only_other"
 )
 
 var laneSampleKinds = []string{laneSampleBoth, laneSampleLanesOnly, laneSampleTodayNotRead, laneSampleTodayMined,
-	laneSampleTodayCapped, laneSampleTodayNoPosition, laneSampleTodayOther}
+	laneSampleTodayCapped, laneSampleTodayNoPosition, laneSampleTodayCoinbase, laneSampleTodayOther}
 
 func isLaneSampleDisagreement(kind string) bool {
 	return kind == laneSampleLanesOnly || kind == laneSampleTodayNotRead || kind == laneSampleTodayMined
@@ -593,6 +601,8 @@ func (j *laneJudge) outcome(rec *utxo.LaneWindowRecord) string {
 		return laneRecMinedFloor
 	case a.Mined:
 		return laneRecMinedRow
+	case rec.Coinbase:
+		return laneRecCoinbase
 	case j.capped(rec.LanePosition):
 		return laneRecCapped
 	}
@@ -611,6 +621,8 @@ func (j *laneJudge) todayKind(e *laneTodayEntry) string {
 		return laneSampleTodayCapped
 	case laneRecNoPosition:
 		return laneSampleTodayNoPosition
+	case laneRecCoinbase:
+		return laneSampleTodayCoinbase
 	case "":
 		switch {
 		case !lane.Valid(e.pos):

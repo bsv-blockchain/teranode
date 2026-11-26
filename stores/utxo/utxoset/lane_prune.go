@@ -190,6 +190,8 @@ func (l *laneJournalJudge) judgeLeaf(ctx context.Context, leaf uint32) {
 type laneJournalRow struct {
 	ukey, parent, spender []byte
 	parentPos             uint64
+	// coinbase is the spent output's coinbase flag, which is its parent's.
+	coinbase bool
 }
 
 func (l *laneJournalJudge) judgeLeafRows(ctx context.Context, leaf uint32) (int, error) {
@@ -208,9 +210,9 @@ func (l *laneJournalJudge) judgeLeafRows(ctx context.Context, leaf uint32) (int,
 		withLane = has
 	}
 
-	stmt := "SELECT ukey, txid, spending_txid FROM " + table
+	stmt := "SELECT ukey, txid, spending_txid, flags FROM " + table
 	if withLane {
-		stmt = "SELECT ukey, txid, spending_txid, lane_position FROM " + table
+		stmt = "SELECT ukey, txid, spending_txid, flags, lane_position FROM " + table
 	}
 
 	// The scan holds one connection; the position reads take another.
@@ -226,11 +228,12 @@ func (l *laneJournalJudge) judgeLeafRows(ctx context.Context, leaf uint32) (int,
 
 	for q.Next() {
 		var (
-			r   laneJournalRow
-			pos *int64
+			r     laneJournalRow
+			pos   *int64
+			flags int16
 		)
 
-		dest := []any{&r.ukey, &r.parent, &r.spender}
+		dest := []any{&r.ukey, &r.parent, &r.spender, &flags}
 		if withLane {
 			dest = append(dest, &pos)
 		}
@@ -238,6 +241,8 @@ func (l *laneJournalJudge) judgeLeafRows(ctx context.Context, leaf uint32) (int,
 		if err := q.Scan(dest...); err != nil {
 			return judged, errors.NewStorageError("[utxoset] lane rule: scan journal partition %d", leaf, err)
 		}
+
+		r.coinbase = flags&FlagCoinbase != 0
 
 		r.parentPos = lane.None
 		if pos != nil {
@@ -300,6 +305,8 @@ func (l *laneJournalJudge) judgeBatch(ctx context.Context, batch []laneJournalRo
 
 	for _, r := range batch {
 		copy(c.Parent[:], r.parent)
+
+		c.Coinbase = r.coinbase
 
 		c.ParentPos = r.parentPos
 		if !lane.Valid(c.ParentPos) {
