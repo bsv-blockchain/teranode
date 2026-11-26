@@ -1087,3 +1087,58 @@ func (r *recordingT) contains(parts ...string) bool {
 
 	return false
 }
+
+// A missing base set stops the persister from advancing, so a pass reports it
+// as an error rather than as "no new block". Before the fix the store's
+// ErrNotFound reached trigger unchanged and was logged at Info as idle work,
+// while the heartbeat kept beating. Putting the set back lets a later pass
+// advance.
+func TestTrigger_MissingBaseSetIsAnError(t *testing.T) {
+	ctx := context.Background()
+	store := memory.New()
+
+	server, byH := restartTestChain(t, store)
+
+	require.NoError(t, store.Del(ctx, byH[1][:], fileformat.FileTypeUtxoSet))
+
+	for pass := 0; pass < 2; pass++ {
+		err := server.trigger(ctx, "test")
+		require.Error(t, err, "pass %d: a missing base set is not idle work", pass)
+		require.False(t, terrors.Is(err, terrors.ErrNotFound), "pass %d: the error must not take the idle-work branch", pass)
+		require.True(t, terrors.Is(err, terrors.ErrStorageError), "pass %d: %v", pass, err)
+		require.Contains(t, err.Error(), byH[1].String())
+		require.Contains(t, err.Error(), "height 1")
+		require.Equal(t, uint32(1), server.lastHeight)
+	}
+
+	height, err := server.readLastHeight(ctx)
+	require.NoError(t, err)
+	require.Equal(t, uint32(1), height, "the recorded height stays where it was")
+
+	exists, err := store.Exists(ctx, byH[3][:], fileformat.FileTypeUtxoSet)
+	require.NoError(t, err)
+	require.False(t, exists)
+
+	// Restore the base set; the next pass advances to block 3.
+	require.NoError(t, server.BuildUTXOSetToHeight(ctx, 0, 1, false))
+	require.NoError(t, server.trigger(ctx, "test"))
+	require.Equal(t, uint32(3), server.lastHeight)
+}
+
+// A delta file the block persister has not written yet is still idle work:
+// trigger returns nil and the height stays put until the file arrives.
+func TestTrigger_MissingNextDeltaIsIdleWork(t *testing.T) {
+	ctx := context.Background()
+	store := memory.New()
+
+	server, byH := restartTestChain(t, store)
+
+	require.NoError(t, store.Del(ctx, byH[2][:], fileformat.FileTypeUtxoAdditions))
+
+	require.NoError(t, server.trigger(ctx, "test"))
+	require.Equal(t, uint32(1), server.lastHeight)
+
+	exists, err := store.Exists(ctx, byH[1][:], fileformat.FileTypeUtxoSet)
+	require.NoError(t, err)
+	require.True(t, exists, "the base set is untouched")
+}
