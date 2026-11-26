@@ -914,3 +914,61 @@ func TestReorgDifferential_FastPathStaysFastWhenTheEraHoldsTheLostBlock(t *testi
 	requireReorgEquivalent(t, smallScenarioConfig(), withSetup(slowReference, setEra), withSetup(recordingFastPath(&rec), setEra))
 	require.True(t, rec.applied, "the fast path must apply, it declined: %v", rec.reasons)
 }
+
+// The store requests the old subtrees still have in flight read tx map entries the fast path deletes,
+// so a build that misses a parent then must read as cancelled, not failed: the fast path supersedes
+// them, as reset does, and the requests made from then on are live.
+func TestReorgScenario_FastPathSupersedesTheStoreRequestsOfTheOldSubtrees(t *testing.T) {
+	sc := newReorgScenario(t, smallScenarioConfig())
+
+	old := sc.stp.supersedeToken()
+	oldRequest := NewSubtreeRequest{superseded: old}
+
+	require.False(t, oldRequest.Superseded(), "nothing has superseded the request yet")
+
+	var rec fastPathRun
+
+	require.NoError(t, recordingFastPath(&rec)(t, sc))
+	require.True(t, rec.applied, "declined: %v", rec.reasons)
+
+	require.True(t, oldRequest.Superseded(), "a request made before the fast path is superseded")
+	require.False(t, NewSubtreeRequest{superseded: sc.stp.supersedeToken()}.Superseded(), "a request made after it is not")
+}
+
+// Effective D1 is read from the lost block's subtrees a second time, after the delta was computed. A
+// subtree that no longer holds the node the delta recorded cannot be installed: the fast path declines.
+func TestReorgScenario_FastPathDeclinesWhenALostSubtreeChangedBetweenTheTwoReads(t *testing.T) {
+	cfg := smallScenarioConfig()
+	cfg.pendingSpendsLost, cfg.lostChildOfPending = 0, 0
+
+	sc := newReorgScenario(t, cfg)
+
+	winners, _, err := sc.stp.buildUnionSet(t.Context(), sc.forward)
+	require.NoError(t, err)
+
+	delta, err := sc.stp.computeReorgDelta(t.Context(), []*model.Block{sc.lost}, winners, 2)
+	require.NoError(t, err)
+	require.Greater(t, len(delta.D1), 2)
+
+	read := func(effective []reorgDeltaNode) (*fastReorgPlan, string) {
+		plan := &fastReorgPlan{}
+
+		return plan, sc.stp.readEffectiveD1(t.Context(), plan, sc.lost, effective)
+	}
+
+	plan, reason := read(slices.Clone(delta.D1))
+	require.Empty(t, reason, "the unchanged subtrees are read")
+	require.Len(t, plan.d1Nodes, len(delta.D1))
+
+	moved := slices.Clone(delta.D1)
+	moved[1].Hash = chainhash.HashH([]byte("not the recorded node"))
+
+	_, reason = read(moved)
+	require.Equal(t, "read_failed", reason, "a node with another hash")
+
+	moved = slices.Clone(delta.D1)
+	moved[1].Node = 1 << 20
+
+	_, reason = read(moved)
+	require.Equal(t, "read_failed", reason, "a node past the end of the subtree")
+}

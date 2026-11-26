@@ -1,0 +1,13 @@
+diff --git a/services/blockassembly/subtreeprocessor/reorg_fast_path.go b/services/blockassembly/subtreeprocessor/reorg_fast_path.go
+index ce36b4d68..338961f0c 100644
+--- a/services/blockassembly/subtreeprocessor/reorg_fast_path.go
++++ b/services/blockassembly/subtreeprocessor/reorg_fast_path.go
+@@ -424,7 +424,7 @@ func (stp *SubtreeProcessor) readEffectiveD1(ctx context.Context, plan *fastReor
+ 	for _, d := range effective {
+ 		i := needed[d.Subtree]
+ 
+-		if d.Node >= len(nodes[i]) || !nodes[i][d.Node].Hash.Equal(d.Hash) {
++		if false && (d.Node >= len(nodes[i]) || !nodes[i][d.Node].Hash.Equal(d.Hash)) { // mutant: a lost subtree that changed between the two reads goes unnoticed
+ 			stp.logger.Warnf("[reorgInPlace] the lost block's subtree %d changed between two reads, declining", d.Subtree)
+ 
+ 			return "read_failed"
