@@ -27,12 +27,23 @@ jobs:
           - group: subtreeprocessor-unit
             packages: ./services/blockassembly/subtreeprocessor
             bench_filter: "BenchmarkDiskTxMap|BenchmarkReorg|BenchmarkQueue|BenchmarkAtomicPointer|BenchmarkTxMap|BenchmarkChannel"
+            # Ops take 3ns to 0.6s; the footprint rows run once a sample at any benchtime. 6 samples
+            # a side, as for sizing below, so benchstat can call a change at p < 0.05.
+            benchtime: 100ms
+            count: 6
           - group: subtreeprocessor-subtree
             packages: ./services/blockassembly/subtreeprocessor
             bench_filter: "BenchmarkDirect|BenchmarkSubtree|BenchmarkParallel|BenchmarkSequential|BenchmarkProcess"
+            # Ops take 13ns to 60ms; at 100ms the slowest rows still run 2 or more iterations a sample.
+            benchtime: 100ms
+            count: 6
           - group: subtreeprocessor-heavy
             packages: ./services/blockassembly/subtreeprocessor
             bench_filter: "^(BenchmarkBlockAssembler_AddTx|BenchmarkAddNode|BenchmarkAddNodeWithMap)$"
+            # Each of these times one fixed workload and ignores b.N, so a duration benchtime
+            # that reruns it at N=2 would report half its time. 1x runs it once a sample.
+            benchtime: 1x
+            count: 6
           - group: blockvalidation
             packages: ./services/blockvalidation
           - group: subtreevalidation-buffer

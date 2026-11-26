@@ -242,7 +242,8 @@ func TestTxMapCopiesCarryLanePosition(t *testing.T) {
 // BenchmarkTxMapLanePositionFootprint fills each pool map with a million txs, without and with a
 // lane position each, and reports what the pool keeps per tx: heap bytes and, for the disk map,
 // bytes written to its log files. The difference is the cost of keeping positions at
-// utxostore_laneMigration shadow. Run with -benchtime=1x.
+// utxostore_laneMigration shadow. Run with -benchtime=1x. -short (CI) fills only the 1M maps, since
+// a 4M fill takes about 2.5 s and reads the same per-tx bytes give or take an arena chunk step.
 //
 // The in-memory map's heap moves in steps, because each of its buckets grows its arena by doubling
 // chunks: arenaUsedB/tx is what the records take, arenaCapB/tx what the chunks hold, so a fill
@@ -254,6 +255,10 @@ func BenchmarkTxMapLanePositionFootprint(b *testing.B) {
 				name := fmt.Sprintf("%dM/", total>>20) + map[bool]string{false: "split", true: "disk"}[disk] + map[bool]string{false: "/off", true: "/shadow"}[lanes]
 
 				b.Run(name, func(b *testing.B) {
+					if total > 1<<20 && testing.Short() {
+						b.Skip("4M fill skipped in -short")
+					}
+
 					for i := 0; i < b.N; i++ {
 						baseBytes, _ := heapStats()
 
