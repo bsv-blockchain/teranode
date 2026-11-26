@@ -11,7 +11,9 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
@@ -208,6 +210,119 @@ func TestImportUTXOSet_CompressedFailures_SayToWipe(t *testing.T) {
 				require.ErrorContains(t, err, "wipe the UTXO store")
 			})
 		}
+	}
+}
+
+// passGateStore holds every create of one kind (multi-record or not) until release
+// is closed, and closes otherDone once every create of the other kind has arrived.
+type passGateStore struct {
+	utxo.Store
+	gateMulti bool
+	release   chan struct{}
+	otherLeft atomic.Int64
+	otherDone chan struct{}
+}
+
+func (s *passGateStore) SpendAndCreate(ctx context.Context, tx *bt.Tx, _ uint32, _ ...utxo.CreateOption) (*meta.Data, []*utxo.Spend, error) {
+	if (len(tx.Outputs) > 128) == s.gateMulti {
+		select {
+		case <-s.release:
+		case <-ctx.Done():
+			return nil, nil, ctx.Err()
+		}
+
+		return nil, nil, nil
+	}
+
+	if s.otherLeft.Add(-1) == 0 {
+		close(s.otherDone)
+	}
+
+	return nil, nil, nil
+}
+
+// Each pass opens the pieces itself, so each must check its own bytes. One pass is held
+// while the other reads the set to its end; then the last piece changes in a way that
+// keeps every count, and the held pass must fail its checksum. Each pass is held once.
+func TestImportUTXOSet_EveryPassChecksItsOwnBytes(t *testing.T) {
+	for _, gateMulti := range []bool{false, true} {
+		t.Run(fmt.Sprintf("held multi-record pass=%t", gateMulti), func(t *testing.T) {
+			// The pass that runs free must read the last piece, so the last record is its kind.
+			n := 301 // index 300 is a 200-output tx
+			if gateMulti {
+				n = 300
+			}
+
+			wrappers := withDistinctOutputs(benchWrappers("per-pass", n, 50))
+			data, err := os.ReadFile(writeCompleteSnapshotFile(t, wrappers))
+			require.NoError(t, err)
+
+			sum := sha256.Sum256(data)
+
+			enc, err := zstd.NewWriter(nil)
+			require.NoError(t, err)
+
+			defer func() { _ = enc.Close() }()
+
+			// 1000-byte pieces, then the last 500 bytes as the last piece.
+			dir := filepath.Join(t.TempDir(), compressedTestHash+".utxo-set.zst")
+			require.NoError(t, os.Mkdir(dir, 0o700))
+
+			tailAt := len(data) - 500
+			i := 0
+
+			for off := 0; off < tailAt; off, i = off+1000, i+1 {
+				require.NoError(t, os.WriteFile(piecePath(dir, i), enc.EncodeAll(data[off:min(off+1000, tailAt)], nil), 0o600))
+			}
+
+			last := piecePath(dir, i)
+			require.NoError(t, os.WriteFile(last, enc.EncodeAll(data[tailAt:], nil), 0o600))
+
+			// Change one byte inside the last output script: every length and count stays.
+			changed := bytes.Clone(data[tailAt:])
+			at := bytes.LastIndex(changed, []byte{0x76, 0xa9, 0x14})
+			require.Positive(t, at)
+			changed[at+3] ^= 0xff
+
+			store := &passGateStore{gateMulti: gateMulti, release: make(chan struct{}), otherDone: make(chan struct{})}
+
+			for _, w := range wrappers {
+				if (len(w.UTXOs) > 128) != gateMulti {
+					store.otherLeft.Add(1)
+				}
+			}
+
+			opts := testImportOptions()
+			opts.workerCount, opts.multiRecordWorkerCount, opts.channelSize = 1, 1, 1
+			opts.expectedSHA256 = hex.EncodeToString(sum[:])
+
+			done := make(chan error, 1)
+
+			go func() {
+				done <- importUTXOSet(context.Background(), ulogger.TestLogger{}, store, dir, opts)
+			}()
+
+			select {
+			case <-store.otherDone:
+			case err := <-done:
+				t.Fatalf("import ended before the free pass finished: %v", err)
+			case <-time.After(30 * time.Second):
+				t.Fatal("the free pass did not finish")
+			}
+
+			// The free pass has the last piece open already; the held pass opens it later.
+			tmp := last + ".tmp"
+			require.NoError(t, os.WriteFile(tmp, enc.EncodeAll(changed, nil), 0o600))
+			require.NoError(t, os.Rename(tmp, last))
+			close(store.release)
+
+			select {
+			case err := <-done:
+				require.ErrorContains(t, err, "checksum mismatch")
+			case <-time.After(30 * time.Second):
+				t.Fatal("the held pass did not finish")
+			}
+		})
 	}
 }
 
