@@ -2388,7 +2388,8 @@ func Test_checkOldBlockIDs(t *testing.T) {
 		}
 
 		blockchainMock.On("CheckBlockIsAncestorOfBlock", mock.Anything, mock.Anything, mock.Anything).Return(true, nil)
-		blockchainMock.On("GetBlockHeaderIDs", mock.Anything, mock.Anything, mock.Anything).Return(blockIDs, nil).Once()
+		// an unset oldBlockIDsPrefetchWindow loads the production 10,000 IDs
+		blockchainMock.On("GetBlockHeaderIDs", mock.Anything, mock.Anything, uint64(10_000)).Return(blockIDs, nil).Once()
 
 		err := blockValidation.checkOldBlockIDs(t.Context(), oldBlockIDsMap, testBlock())
 		require.NoError(t, err)

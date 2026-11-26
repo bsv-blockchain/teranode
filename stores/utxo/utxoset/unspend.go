@@ -124,7 +124,9 @@ import (
 // lock bit is read from, because the conflicting bit is read from the dropped floor up and
 // SetConflicting writes every containment row of the transaction, whatever its height. A row
 // between the floors read without the lock would show its bit from before a SetConflicting the
-// restore had waited out on another row, the same race the lock bit had.
+// restore had waited out on another row, the same race the lock bit had. The share lock covers the
+// other order too: a SetConflicting that starts after the restore waits on it in its row flips,
+// and its UTXO update, a later statement, then finds the restored coin.
 //
 // The restored UTXO's pair is the copy's own, verbatim, whenever it is non-zero: a non-zero
 // pair was final when it was copied and stays final. A copy at (0,0) is the REPAIR's case. The
