@@ -17,6 +17,7 @@ import (
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/validator/validator_api"
+	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/ulogger"
@@ -504,27 +505,54 @@ func TestHandleSingleTxAttachesVerdictHeader(t *testing.T) {
 // TestHandleKafkaTxMessage_RefusedWhileSyncing pins issue 2003 on the validator
 // Kafka consumer: in CATCHINGBLOCKS the message is dropped and committed
 // without the validator, the only thing that writes the UTXO store, ever
-// seeing it. RUNNING and a cached IDLE both validate. The gRPC and HTTP
-// endpoints are left ungated on purpose, because block and subtree validation
-// use them during catch-up.
+// seeing it. RUNNING and a cached IDLE both validate. On a utxoset node a
+// message waits for the gate's first height read: a restart at the tip must not
+// drop what propagation already acknowledged, and an unreadable height leaves
+// the message uncommitted. The gRPC and HTTP endpoints are left ungated on
+// purpose, because block and subtree validation use them during catch-up.
 func TestHandleKafkaTxMessage_RefusedWhileSyncing(t *testing.T) {
 	initPrometheusMetrics()
 
 	for _, tt := range []struct {
-		state   blockchain.FSMStateType
-		refuses bool
+		name      string
+		state     blockchain.FSMStateType
+		netting   bool
+		height    int
+		heightErr bool
+		refuses   bool
+		wantErr   bool
 	}{
-		{blockchain.FSMStateCATCHINGBLOCKS, true},
-		{blockchain.FSMStateRUNNING, false},
-		{blockchain.FSMStateIDLE, false},
+		{name: "CATCHINGBLOCKS", state: blockchain.FSMStateCATCHINGBLOCKS, refuses: true},
+		{name: "RUNNING", state: blockchain.FSMStateRUNNING},
+		{name: "IDLE", state: blockchain.FSMStateIDLE},
+		{name: "utxoset_restart_at_tip", state: blockchain.FSMStateRUNNING, netting: true, height: 150},
+		{name: "utxoset_below_checkpoint", state: blockchain.FSMStateIDLE, netting: true, height: 50, refuses: true},
+		{name: "utxoset_height_unreadable", state: blockchain.FSMStateRUNNING, netting: true, heightErr: true, wantErr: true},
 	} {
-		t.Run(tt.state.String(), func(t *testing.T) {
+		t.Run(tt.name, func(t *testing.T) {
 			state := tt.state
 			blockchainClient := &blockchain.Mock{}
-			blockchainClient.On("GetFSMCurrentState", mock.Anything).Return(&state, nil)
+			t.Cleanup(func() { blockchainClient.AssertExpectations(t) })
+
+			// An unreadable height stops the message before the state read.
+			if !tt.wantErr {
+				blockchainClient.On("GetFSMCurrentState", mock.Anything).Return(&state, nil)
+			}
+
+			tSettings := test.CreateBaseTestSettings(t)
+			if tt.netting {
+				tSettings = nettingSettings(t)
+
+				var heightErr error
+				if tt.heightErr {
+					heightErr = errors.NewServiceError("blockchain down")
+				}
+
+				blockchainClient.On("GetBestHeightAndTime", mock.Anything).Return(tt.height, 0, heightErr)
+			}
 
 			// NewServer builds the gate, so this also checks the wiring.
-			server := NewServer(ulogger.TestLogger{}, test.CreateBaseTestSettings(t), nil, blockchainClient, nil, nil, nil, nil, nil)
+			server := NewServer(ulogger.TestLogger{}, tSettings, nil, blockchainClient, nil, nil, nil, nil, nil)
 
 			validated := 0
 			server.validator = &MockValidator{
@@ -536,7 +564,21 @@ func TestHandleKafkaTxMessage_RefusedWhileSyncing(t *testing.T) {
 
 			refusedBefore := server.unminedTxGate.RefusedTotal()
 
-			require.NoError(t, server.handleKafkaTxMessage(context.Background(), kafkaTxMessage(t)))
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+
+			if tt.wantErr {
+				ctx, cancel = context.WithTimeout(context.Background(), 300*time.Millisecond)
+				defer cancel()
+
+				require.Error(t, server.handleKafkaTxMessage(ctx, kafkaTxMessage(t)), "an error leaves the message uncommitted")
+				require.Equal(t, 0, validated)
+				require.InDelta(t, refusedBefore, server.unminedTxGate.RefusedTotal(), 0, "not refused, so not dropped")
+
+				return
+			}
+
+			require.NoError(t, server.handleKafkaTxMessage(ctx, kafkaTxMessage(t)))
 
 			if tt.refuses {
 				require.Equal(t, 0, validated, "a refused tx must not reach the validator or the UTXO store")
@@ -638,12 +680,20 @@ func TestHandleKafkaTxMessage_EarlyHeldShedIsNotInvalidAndCountedOnce(t *testing
 // NewServer must hand its settings to the unmined transaction gate, or the
 // checkpoint rule is off on the Kafka intake.
 func TestNewServer_UnminedTxGateTakesSettings(t *testing.T) {
+	srv := NewServer(ulogger.TestLogger{}, nettingSettings(t), nil, &blockchain.Mock{}, nil, nil, nil, nil, nil)
+	require.Equal(t, uint32(100), srv.unminedTxGate.CheckpointHeight())
+}
+
+// nettingSettings returns test settings for a utxoset node on a network whose
+// only checkpoint is at height 100.
+func nettingSettings(t *testing.T) *settings.Settings {
+	t.Helper()
+
 	tSettings := test.CreateBaseTestSettings(t)
 	params := *tSettings.ChainCfgParams
 	params.Checkpoints = []chaincfg.Checkpoint{{Height: 100}}
 	tSettings.ChainCfgParams = &params
 	tSettings.UtxoStore.UtxoStore = &url.URL{Scheme: "utxoset", Host: "localhost"}
 
-	srv := NewServer(ulogger.TestLogger{}, tSettings, nil, &blockchain.Mock{}, nil, nil, nil, nil, nil)
-	require.Equal(t, uint32(100), srv.unminedTxGate.CheckpointHeight())
+	return tSettings
 }

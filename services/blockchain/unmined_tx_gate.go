@@ -111,11 +111,13 @@ type UnminedTxGate struct {
 	// the network has no checkpoints, which turns the rule off.
 	highestCheckpoint uint32
 
-	// reached is set once a height read returns highestCheckpoint or above.
+	// reached is set once a height read returns highestCheckpoint or above,
+	// and heightKnown once any height read succeeds.
 	// heightReading is true while a read is in flight, heightReadNanos is the
 	// unix time the last read was scheduled, and lastWarnNanos the last time a
 	// failed read was logged.
 	reached         atomic.Bool
+	heightKnown     atomic.Bool
 	heightReading   atomic.Bool
 	heightReadNanos atomic.Int64
 	lastWarnNanos   atomic.Int64
@@ -225,6 +227,43 @@ func (g *UnminedTxGate) readBestHeight() {
 	if height >= g.highestCheckpoint {
 		g.reached.Store(true)
 	}
+
+	g.heightKnown.Store(true)
+}
+
+// checkpointAnswerPoll is how often WaitForCheckpointAnswer looks again while
+// no height read has succeeded. Reads themselves stay spaced by
+// bestHeightReadInterval.
+const checkpointAnswerPoll = 50 * time.Millisecond
+
+// WaitForCheckpointAnswer returns once the checkpoint rule can judge a
+// transaction by a height it has read: the rule is off, or a height read has
+// succeeded. Until then it keeps scheduling reads. It returns ctx's error if
+// ctx ends first.
+//
+// An intake that has already acknowledged its transactions calls it before
+// Refuses, so a gate that has not yet read a height does not drop them. The
+// validator's Kafka intake is one: propagation acknowledged each message
+// before queueing it, and a refused message is committed and lost.
+func (g *UnminedTxGate) WaitForCheckpointAnswer(ctx context.Context) error {
+	if g == nil || g.client == nil || g.highestCheckpoint == 0 {
+		return nil
+	}
+
+	ticker := time.NewTicker(checkpointAnswerPoll)
+	defer ticker.Stop()
+
+	for !g.heightKnown.Load() {
+		g.scheduleHeightRead()
+
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+		}
+	}
+
+	return nil
 }
 
 // warnReadFailure logs a failed height read at most once per refusal log

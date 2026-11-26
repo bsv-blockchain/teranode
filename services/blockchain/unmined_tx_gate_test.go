@@ -284,6 +284,37 @@ func TestUnminedTxGate_ScheduleRechecksInsideTheSlot(t *testing.T) {
 	require.False(t, gate.heightReading.Load(), "inside the interval: slot released, no read")
 }
 
+// WaitForCheckpointAnswer returns at once when the rule is off, once a read
+// succeeds whatever height it returns, and with ctx's error while reads fail.
+func TestUnminedTxGate_WaitForCheckpointAnswer(t *testing.T) {
+	ctx := context.Background()
+
+	require.NoError(t, NewUnminedTxGate(ulogger.TestLogger{}, &Mock{}, gateSettings(t, "postgres"), "test_wait_off").WaitForCheckpointAnswer(ctx))
+
+	var nilGate *UnminedTxGate
+	require.NoError(t, nilGate.WaitForCheckpointAnswer(ctx))
+
+	for _, height := range []int{50, 150} {
+		client := &Mock{}
+		client.On("GetBestHeightAndTime", mock.Anything).Return(height, 0, nil).Once()
+
+		gate := NewUnminedTxGate(ulogger.TestLogger{}, client, gateSettings(t, "utxoset"), "test_wait_read")
+		require.NoError(t, gate.WaitForCheckpointAnswer(ctx), "height %d", height)
+		require.Equal(t, height >= 100, gate.reached.Load())
+		client.AssertExpectations(t)
+	}
+
+	client := &Mock{}
+	client.On("GetBestHeightAndTime", mock.Anything).Return(0, 0, errors.NewServiceError("blockchain down"))
+
+	gate := NewUnminedTxGate(ulogger.TestLogger{}, client, gateSettings(t, "utxoset"), "test_wait_fail")
+	waitCtx, cancel := context.WithTimeout(ctx, 200*time.Millisecond)
+	defer cancel()
+
+	require.ErrorIs(t, gate.WaitForCheckpointAnswer(waitCtx), context.DeadlineExceeded)
+	waitForHeightRead(t, gate)
+}
+
 // waitForHeightRead waits until the gate's background height read has finished.
 func waitForHeightRead(t *testing.T, gate *UnminedTxGate) {
 	t.Helper()

@@ -487,6 +487,15 @@ func (v *Server) handleKafkaTxMessage(consumerCtx context.Context, msg *kafka.Ka
 	// dropped, and nil commits its offset: a transaction held until RUNNING would
 	// be hours old when the node caught up. Propagation refuses at its own intake,
 	// so this catches what was already on the topic when the sync began.
+	//
+	// Propagation acknowledged each message before queueing it, so the gate must
+	// judge by a height it has read, not by not knowing one yet: a validator
+	// restarted at the tip would otherwise drop its backlog. An error here leaves
+	// the message uncommitted, so it is delivered again.
+	if err = v.unminedTxGate.WaitForCheckpointAnswer(consumerCtx); err != nil {
+		return err
+	}
+
 	if v.unminedTxGate.Refuses(consumerCtx, tx.TxIDChainHash()) {
 		return nil
 	}
