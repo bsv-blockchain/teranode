@@ -315,11 +315,13 @@ func TestUnminedTxGate_WaitForCheckpointAnswer(t *testing.T) {
 		require.Equal(t, height >= 100, gate.reached.Load())
 
 		if height >= 100 {
-			// Reached: every later message returns at once, with no read.
+			// Reached: every later message returns at once, with no read and no
+			// timer, which allocates.
 			shortCtx, cancel := context.WithTimeout(ctx, 200*time.Millisecond)
 			require.NoError(t, gate.WaitForCheckpointAnswer(shortCtx))
 			cancel()
 			client.AssertNumberOfCalls(t, "GetBestHeightAndTime", 1)
+			require.Zero(t, testing.AllocsPerRun(10, func() { _ = gate.WaitForCheckpointAnswer(ctx) }))
 		}
 
 		client.AssertExpectations(t)
