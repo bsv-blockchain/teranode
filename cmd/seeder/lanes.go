@@ -98,6 +98,12 @@ type seededLanes struct {
 // countSeedLayout reads every record of utxoFile and counts the records of each height, refusing a
 // height above the file's tip or a file whose footer does not match what it read.
 func countSeedLayout(ctx context.Context, utxoFile string) (*seedLayout, error) {
+	// A pipe can be read once, and a seed at shadow reads the file to count it, again to check the
+	// store, and again to import it.
+	if info, statErr := os.Stat(utxoFile); statErr == nil && info.Mode()&os.ModeNamedPipe != 0 {
+		return nil, errors.NewConfigurationError("%s is a named pipe, but a seed at utxostore_laneMigration shadow reads the snapshot more than once: unpack it to disk", utxoFile)
+	}
+
 	f, reader, _, tipHeight, err := openUTXOSetFile(utxoFile)
 	if err != nil {
 		return nil, err

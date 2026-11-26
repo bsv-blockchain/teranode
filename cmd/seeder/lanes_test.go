@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -108,6 +109,12 @@ func TestSeedLayoutRefusesWhatItCannotPlace(t *testing.T) {
 	require.NoError(t, os.WriteFile(path, data, 0o600))
 	_, err = countSeedLayout(context.Background(), path)
 	require.ErrorContains(t, err, "the footer says 2 transactions")
+
+	// A pipe, read once, is refused before it is opened.
+	fifo := filepath.Join(t.TempDir(), "snapshot.utxo-set")
+	require.NoError(t, syscall.Mkfifo(fifo, 0o600))
+	_, err = countSeedLayout(context.Background(), fifo)
+	require.ErrorContains(t, err, "named pipe")
 
 	layout, err := countSeedLayout(context.Background(), writeCompleteSnapshotFile(t, one(5)))
 	require.NoError(t, err)
