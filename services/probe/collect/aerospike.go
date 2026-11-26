@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/url"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -355,19 +355,25 @@ func (a *Aerospike) nodeInfo(node *aero.Node) nodeStats {
 	return stats
 }
 
+func sortedByName[N interface{ GetName() string }](nodes []N) []N {
+	sorted := slices.Clone(nodes)
+
+	slices.SortFunc(sorted, func(a, b N) int { return strings.Compare(a.GetName(), b.GetName()) })
+
+	return sorted
+}
+
 func (a *Aerospike) read() (aerospikeReadings, error) {
 	client, err := a.connection()
 	if err != nil {
 		return aerospikeReadings{}, err
 	}
 
-	nodes := client.GetNodes()
+	nodes := sortedByName(client.GetNodes())
 	if len(nodes) == 0 {
 		a.dropClient(client)
 		return aerospikeReadings{}, errors.NewServiceError("probe aerospike client has no active node")
 	}
-
-	sort.Slice(nodes, func(i, j int) bool { return nodes[i].GetName() < nodes[j].GetName() })
 
 	type nodeResult struct {
 		index    int

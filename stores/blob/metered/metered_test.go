@@ -153,6 +153,23 @@ func TestMeteredPassesThroughHealthAndBlockHeight(t *testing.T) {
 	require.NoError(t, store.Close(ctx))
 }
 
+type heightRecordingStore struct {
+	blob.Store
+
+	height uint32
+}
+
+func (s *heightRecordingStore) SetCurrentBlockHeight(height uint32) { s.height = height }
+
+func TestMeteredForwardsTheBlockHeightToTheInnerStore(t *testing.T) {
+	inner := &heightRecordingStore{Store: memory.New()}
+	store := New("test_height", inner)
+
+	store.SetCurrentBlockHeight(812345)
+
+	require.Equal(t, uint32(812345), inner.height, "DAH expiry depends on the height reaching the inner store")
+}
+
 // legacyPendingFileStore is the assertion legacy sync's subtree writer makes on its store.
 type legacyPendingFileStore interface {
 	NewPendingFile(ctx context.Context, fileType fileformat.FileType, opts ...options.FileOption) (*blobfile.PendingFile, error)

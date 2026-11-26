@@ -326,7 +326,7 @@ The probe refuses to start when the directory of the state file cannot be create
 The probe reads Aerospike from `probe_aerospikeURL`. When that setting is empty and the UTXO store is Aerospike, the probe uses the UTXO store URL. The probe then connects with the node's own read-write credentials. It sends only info commands, but we recommend a read-only user in `probe_aerospikeURL`.
 The probe sends info commands to every node of the cluster. It adds the size of all nodes, and it shows the highest disk fill and the highest read latency.
 
-If only some nodes answer, the probe marks the result as partial. Size and disk fill turn `idle` with the note "N of M nodes answered". Read latency shows no data with the same note, so that the alarm and the learned baseline never use part of the cluster. If no node answers, the Aerospike source fails.
+If only some nodes answer, the probe marks the result as partial. Size and disk fill turn `idle` with the note "N of M nodes answered". Read latency shows no data with the same note, so a node that did not answer never drops out of the alarm or the learned baseline unnoticed. A node that answers without a read latency (for example, with `enable-benchmarks-read` off on that node) is skipped, and the latency comes from the other nodes. If no node answers, the Aerospike source fails.
 
 Read latency p99 needs `enable-benchmarks-read true` on the namespace. Without it, the read latency reading shows no data.
 

@@ -630,3 +630,14 @@ func TestNodeReadingsMarkAPartialAnswer(t *testing.T) {
 		require.Empty(t, r.size.Note)
 	})
 }
+
+type namedNode string
+
+func (n namedNode) GetName() string { return string(n) }
+
+func TestSortedByNameLeavesTheDriversNodeArrayAlone(t *testing.T) {
+	driver := []namedNode{"c", "a", "b"}
+
+	require.Equal(t, []namedNode{"a", "b", "c"}, sortedByName(driver))
+	require.Equal(t, []namedNode{"c", "a", "b"}, driver, "the driver's tend goroutine reads this array; sorting it in place is a data race")
+}
