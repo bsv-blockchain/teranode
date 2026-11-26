@@ -96,6 +96,9 @@ type IndexBlock struct {
 	Height uint32
 	Hash   chainhash.Hash
 	Parent chainhash.Hash
+	// TxCount is the block's transaction count, its coinbase included; 0 when not known. A block of
+	// only its coinbase takes no position a row lists, so with no rows its rows are complete.
+	TxCount uint64
 }
 
 // indexRow is one loaded row. A range row, whose block took first to last, has neither bits nor
@@ -403,8 +406,10 @@ type IndexSnapshot struct {
 	// forkHeights are the heights of off-main blocks the index cannot judge: forgotten ones, whose
 	// rows are gone, and loaded ones with no rows.
 	forkHeights map[uint32]struct{}
-	stats       IndexStats
-	mainView    *ChainView
+	// mainNoRows counts the loaded main-chain blocks with no rows.
+	mainNoRows int
+	stats      IndexStats
+	mainView   *ChainView
 }
 
 // IndexStats is the index's size, for the metrics.
@@ -442,8 +447,9 @@ type BlockState uint8
 const (
 	// BlockNotLoaded is a block the index never loaded, or has forgotten.
 	BlockNotLoaded BlockState = iota
-	// BlockNoRows is a loaded block the map holds no row for: one taken by quick validation, one
-	// of our own before block assembly writes rows, or a block of only its coinbase.
+	// BlockNoRows is a loaded block the map holds no row for: one taken by quick validation, or one
+	// of our own before block assembly writes rows. A block of only its coinbase is not one: it has
+	// nothing for a row to list (IndexBlock.TxCount).
 	BlockNoRows
 	// BlockHasRows is a loaded block with rows.
 	BlockHasRows
@@ -625,7 +631,9 @@ func (v *ChainView) Lookup(pos uint64) Answer {
 
 // TakenBefore counts the positions block id took that one of its ancestors on the chain also
 // took: a block re-including a mined transaction. byRow counts those an ancestor's row took and
-// byFloor those below the floor. hasRows is false when the index holds no rows of the block.
+// byFloor those below the floor. hasRows is false when the index does not hold the block's rows
+// complete: not loaded, folded, or a block with transactions besides its coinbase and no rows. A
+// block of only its coinbase has complete, empty rows.
 func (v *ChainView) TakenBefore(id uint32) (byRow, byFloor uint64, hasRows bool) {
 	b, ok := v.snap.blocks[id]
 	if !ok || !b.hasRows || b.folded {
@@ -706,6 +714,75 @@ func (s *IndexSnapshot) ForkAt(height uint32) bool {
 
 	return ok
 }
+
+// OffMainTaker returns a loaded block off the main chain whose row takes the packed lane position
+// pos, with its height: a fork block, such as one a reorg replaced. The pruner's lane rule uses it to
+// tell a spender only a fork block took from one no block took.
+func (s *IndexSnapshot) OffMainTaker(pos uint64) (id, height uint32, ok bool) {
+	if !Valid(pos) {
+		return 0, 0, false
+	}
+
+	laneNum, p := Unpack(pos)
+
+	ls := s.lanes[laneNum]
+	if ls == nil {
+		return 0, 0, false
+	}
+
+	ls.covering(p, func(r *indexRow) bool {
+		if _, onMain := s.main[r.blockID]; onMain || !r.takes(p) {
+			return true
+		}
+
+		b, loaded := s.blocks[r.blockID]
+		if !loaded {
+			return true
+		}
+
+		id, height, ok = r.blockID, b.height, true
+
+		return false
+	})
+
+	return id, height, ok
+}
+
+// BeforeStart reports whether the packed lane position pos lies below everything the index saw of
+// its lane, so it cannot say whether a block took it: the lane has no row or floor in the index, or
+// pos is below both the lane's first folded row and its lowest held row, and no later block that
+// folded took it. A process that started a day ago holds nothing of a spender mined two days ago.
+func (s *IndexSnapshot) BeforeStart(pos uint64) bool {
+	laneNum, p := Unpack(pos)
+
+	ls := s.lanes[laneNum]
+	if ls == nil {
+		return true
+	}
+
+	lowest := uint64(MaxPosition) + 1
+
+	if ls.fl != nil {
+		if ls.fl.settledBelow.Contains(p) {
+			return false
+		}
+
+		lowest = ls.fl.seenFrom
+	}
+
+	// Rows are sorted by first position.
+	if len(ls.rows) > 0 {
+		lowest = min(lowest, ls.rows[0].first)
+	}
+
+	return p < lowest
+}
+
+// MainBlocksWithoutRows counts the loaded main-chain blocks the map holds no rows for: blocks taken
+// by quick validation and our own blocks before block assembly writes rows. A position no row takes
+// may be in one of them, so a reader cannot call it unmined. A block of only its coinbase is not
+// counted: no Phase 1 row lists a coinbase, so it has no row to be missing.
+func (s *IndexSnapshot) MainBlocksWithoutRows() int { return s.mainNoRows }
 
 // Folded reports whether block id's rows were folded into the floors and left memory.
 func (s *IndexSnapshot) Folded(id uint32) bool {
@@ -798,7 +875,8 @@ func (x *Index) AddBlock(b IndexBlock, rows []MapRow) error {
 		return nil
 	}
 
-	st := &indexBlockState{IndexBlock: b, hasRows: len(rows) > 0, rows: loaded, lanes: lanes}
+	// A block of only its coinbase has nothing for a row to list, so its empty rows are complete.
+	st := &indexBlockState{IndexBlock: b, hasRows: len(rows) > 0 || b.TxCount == 1, rows: loaded, lanes: lanes}
 	x.blocks[b.ID] = st
 	x.byHash[b.Hash] = b.ID
 
@@ -1093,8 +1171,13 @@ func (x *Index) publish() {
 
 	// A loaded fork block with no rows cannot be judged either.
 	for id, b := range x.blocks {
-		if _, onMain := x.main[id]; !onMain && !b.hasRows {
+		_, onMain := x.main[id]
+
+		switch {
+		case !onMain && !b.hasRows:
 			s.forkHeights[b.Height] = struct{}{}
+		case onMain && !b.hasRows:
+			s.mainNoRows++
 		}
 	}
 

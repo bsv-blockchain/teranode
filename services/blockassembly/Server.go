@@ -1270,6 +1270,11 @@ func (ba *BlockAssembly) Stop(ctx context.Context) error {
 	ba.stopOnce.Do(func() {
 		ba.jobStore.Stop()
 
+		// the lanes restart dry run reads the UTXO store in the background
+		if ba.blockAssembler != nil {
+			ba.blockAssembler.stopLaneRestartDryRun()
+		}
+
 		// Stop the subtree processor to stop the announcement ticker and cleanup resources
 		if ba.blockAssembler != nil && ba.blockAssembler.subtreeProcessor != nil {
 			ba.blockAssembler.subtreeProcessor.Stop(ctx)
@@ -2034,6 +2039,10 @@ func (ba *BlockAssembly) SubmitMiningSolution(ctx context.Context, req *blockass
 		return nil, errors.WrapGRPC(errors.NewServiceUnavailableError("[SubmitMiningSolution] service not initialised"))
 	}
 
+	if ba.blockAssembler.DeepReorgHalted() {
+		return nil, errors.WrapGRPC(ba.blockAssembler.deepReorgHaltedError())
+	}
+
 	// Check if unmined transactions are still being loaded
 	if ba.blockAssembler.unminedTransactionsLoading.Load() {
 		ba.logger.Warnf("[SubmitMiningSolution] service not ready - unmined transactions are still being loaded")
@@ -2561,6 +2570,14 @@ func (ba *BlockAssembly) submitMiningSolution(ctx context.Context, req *BlockSub
 		addBlockOpts = append(addBlockOpts, blockchainoptions.WithOwnBlockLaneMapRows(laneRows))
 	}
 
+	// A submission prepared while the halt began is refused here. One already past this check is
+	// still added: the halt does not wait on AddBlock, which has no deadline. The block extends its
+	// candidate's parent, which may be on an earlier branch, and the blockchain service decides
+	// where it goes.
+	if ba.blockAssembler.DeepReorgHalted() {
+		return nil, ba.blockAssembler.deepReorgHaltedError()
+	}
+
 	if err = ba.blockchainClient.AddBlock(callerCtx, block, "", addBlockOpts...); err != nil {
 		return nil, errors.NewProcessingError("[BlockAssembly][%s][%s] failed to add block", jobID, block.Hash().String(), err)
 	}
@@ -2830,6 +2847,20 @@ func (ba *BlockAssembly) SubtreeCount() int {
 	return ba.blockAssembler.SubtreeCount()
 }
 
+// reset runs the reset a reset RPC asked for and waits for its result. It is an operator reset
+// when the call carries OperatorResetMetadataKey with the value "true", as the
+// resetblockassembly command's does, and an ordinary one otherwise. While halted on a deep reorg
+// an ordinary reset is refused, unless it is merged with an operator reset queued beside it. A
+// caller whose deadline ends may get its context error while its reset still runs.
+func (ba *BlockAssembly) reset(ctx context.Context, fullReset, validateInputs bool) error {
+	switch {
+	case isOperatorReset(ctx):
+		return ba.blockAssembler.OperatorResetAndWait(ctx, fullReset, validateInputs)
+	default:
+		return ba.blockAssembler.resetAndWait(ctx, resetRequest{FullReset: fullReset, ValidateInputs: validateInputs})
+	}
+}
+
 func (ba *BlockAssembly) ResetBlockAssembly(ctx context.Context, _ *blockassembly_api.EmptyMessage) (*blockassembly_api.EmptyMessage, error) {
 	_, _, deferFn := tracing.Tracer("blockassembly").Start(ctx, "ResetBlockAssembly",
 		tracing.WithParentStat(ba.stats),
@@ -2843,7 +2874,9 @@ func (ba *BlockAssembly) ResetBlockAssembly(ctx context.Context, _ *blockassembl
 		return nil, errors.WrapGRPC(errors.NewServiceNotReadyError(errServiceNotReadyUnminedLoading))
 	}
 
-	ba.blockAssembler.Reset(false)
+	if err := ba.reset(ctx, false, false); err != nil {
+		return nil, errors.WrapGRPC(err)
+	}
 
 	return &blockassembly_api.EmptyMessage{}, nil
 }
@@ -2861,7 +2894,9 @@ func (ba *BlockAssembly) ResetBlockAssemblyFully(ctx context.Context, _ *blockas
 		return nil, errors.WrapGRPC(errors.NewServiceNotReadyError(errServiceNotReadyUnminedLoading))
 	}
 
-	ba.blockAssembler.Reset(true)
+	if err := ba.reset(ctx, true, false); err != nil {
+		return nil, errors.WrapGRPC(err)
+	}
 
 	return &blockassembly_api.EmptyMessage{}, nil
 }
@@ -2883,7 +2918,9 @@ func (ba *BlockAssembly) ResetBlockAssemblyValidateInputs(ctx context.Context, _
 		return nil, errors.WrapGRPC(errors.NewServiceNotReadyError(errServiceNotReadyUnminedLoading))
 	}
 
-	ba.blockAssembler.ResetWithInputValidation()
+	if err := ba.reset(ctx, false, true); err != nil {
+		return nil, errors.WrapGRPC(err)
+	}
 
 	return &blockassembly_api.EmptyMessage{}, nil
 }

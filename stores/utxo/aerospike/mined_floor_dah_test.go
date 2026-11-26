@@ -83,7 +83,7 @@ func TestSetConflictingStampsDAHAtMinedFloor(t *testing.T) {
 	ctx := context.Background()
 	logger := ulogger.NewErrorTestLogger(t)
 	tSettings := test.CreateBaseTestSettings(t)
-	retention := tSettings.GetUtxoStoreBlockHeightRetention()
+	retention := tSettings.GetUtxoStoreSpentDeleteRetention()
 	require.Greater(t, retention, uint32(0))
 
 	client, store, _, cleanup := initAerospike(t, tSettings, logger)
@@ -128,7 +128,7 @@ func TestSetMinedRaisesConflictingStampToMinedFloor(t *testing.T) {
 			logger := ulogger.NewErrorTestLogger(t)
 			tSettings := test.CreateBaseTestSettings(t)
 			tSettings.Aerospike.EnableSetMinedFilterExpressions = useExpressions
-			retention := tSettings.GetUtxoStoreBlockHeightRetention()
+			retention := tSettings.GetUtxoStoreSpentDeleteRetention()
 			require.Greater(t, retention, uint32(0))
 
 			client, store, _, cleanup := initAerospike(t, tSettings, logger)
@@ -182,7 +182,7 @@ func TestSpendStampsDAHAtMinedFloor(t *testing.T) {
 			tSettings.Aerospike.EnableSpendFilterExpressions = useExpressions
 			// the expression spend path only applies to single-UTXO records
 			tSettings.UtxoStore.UtxoBatchSize = 1
-			retention := tSettings.GetUtxoStoreBlockHeightRetention()
+			retention := tSettings.GetUtxoStoreSpentDeleteRetention()
 			require.Greater(t, retention, uint32(0))
 
 			client, store, _, cleanup := initAerospike(t, tSettings, logger)
@@ -304,7 +304,7 @@ func TestSpendStampsPaginationRecordsAtMinedFloor(t *testing.T) {
 			logger := ulogger.NewErrorTestLogger(t)
 			tSettings := test.CreateBaseTestSettings(t)
 			tSettings.UtxoStore.UtxoBatchSize = 1 // master holds output 0, the pagination record holds output 1
-			retention := tSettings.GetUtxoStoreBlockHeightRetention()
+			retention := tSettings.GetUtxoStoreSpentDeleteRetention()
 			require.Greater(t, retention, uint32(0))
 
 			client, store, _, cleanup := initAerospike(t, tSettings, logger)
@@ -354,7 +354,7 @@ func TestSetMinedStampsPaginationRecordsAtMinedFloor(t *testing.T) {
 	logger := ulogger.NewErrorTestLogger(t)
 	tSettings := test.CreateBaseTestSettings(t)
 	tSettings.UtxoStore.UtxoBatchSize = 1
-	retention := tSettings.GetUtxoStoreBlockHeightRetention()
+	retention := tSettings.GetUtxoStoreSpentDeleteRetention()
 	require.Greater(t, retention, uint32(0))
 
 	client, store, _, cleanup := initAerospike(t, tSettings, logger)
@@ -413,7 +413,7 @@ func floorSettings(t *testing.T) (*settings.Settings, uint32) {
 	tSettings.UtxoStore.UtxoBatchSize = 1
 	tSettings.UtxoStore.DisableDAHCleaner = false
 
-	retention := tSettings.GetUtxoStoreBlockHeightRetention()
+	retention := tSettings.GetUtxoStoreSpentDeleteRetention()
 	require.Greater(t, retention, uint32(0))
 
 	return tSettings, retention

@@ -3,12 +3,14 @@ package daemon
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
 	"io"
 	"net"
+	"net/http"
 	"net/url"
 	"os"
 	"regexp"
@@ -18,7 +20,9 @@ import (
 	"time"
 
 	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/bsv-blockchain/teranode/services/probe/snapshot"
 	"github.com/bsv-blockchain/teranode/settings"
+	"github.com/bsv-blockchain/teranode/test"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/servicemanager"
 	"github.com/ordishs/gocore"
@@ -43,6 +47,49 @@ func TestNew(t *testing.T) {
 	require.NotNil(t, d)
 	require.NotNil(t, d.doneCh)
 	require.NotNil(t, d.stopCh)
+}
+
+func TestProbeWithoutBlockPersisterReportsIdleBacklog(t *testing.T) {
+	const token = "daemon-probe-test-token"
+
+	td := NewTestDaemon(t, TestOptions{
+		EnableProbe: true,
+		SettingsOverrideFunc: test.ComposeSettings(
+			test.SystemTestSettings(),
+			func(s *settings.Settings) { s.Probe.AuthToken = token },
+		),
+	})
+	defer td.Stop(t, true)
+
+	client := &http.Client{Timeout: 2 * time.Second}
+	url := "http://" + td.ProbeAddress(t) + "/api/snapshot"
+
+	require.Eventually(t, func() bool {
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, url, nil)
+		if err != nil {
+			return false
+		}
+		req.Header.Set("Authorization", "Bearer "+token)
+
+		resp, err := client.Do(req)
+		if err != nil {
+			return false
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			return false
+		}
+
+		var snap snapshot.Snapshot
+		if err := json.NewDecoder(resp.Body).Decode(&snap); err != nil {
+			return false
+		}
+
+		return snap.Chain.BlocksWaitingCount.Status == snapshot.StatusIdle &&
+			snap.Chain.PersisterBehind.Status == snapshot.StatusIdle &&
+			len(snap.Chain.BlocksWaiting) == 0
+	}, 5*time.Second, 50*time.Millisecond, "daemon probe reported a persister backlog with the block persister disabled")
 }
 
 // TestNew_WithOptions tests the New function with various options to ensure they are applied correctly.

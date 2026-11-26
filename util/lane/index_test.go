@@ -302,6 +302,20 @@ func TestIndexBlockWithoutRows(t *testing.T) {
 
 	state, _ = c.idx.Snapshot().Block(77)
 	require.Equal(t, BlockNotLoaded, state)
+	require.Equal(t, 2, c.idx.Snapshot().MainBlocksWithoutRows())
+
+	// A block of only its coinbase has nothing for a row to list: its empty rows are complete,
+	// and it does not count as a main-chain block without rows.
+	require.NoError(t, c.idx.AddBlock(IndexBlock{ID: 3, Height: 3, Hash: blockHash(3), Parent: blockHash(2), TxCount: 1}, nil))
+	c.tip(3)
+
+	state, _ = c.idx.Snapshot().Block(3)
+	require.Equal(t, BlockHasRows, state)
+	require.Equal(t, 2, c.idx.Snapshot().MainBlocksWithoutRows())
+
+	byRow, byFloor, hasRows := c.main().TakenBefore(3)
+	require.True(t, hasRows)
+	require.Zero(t, byRow+byFloor)
 }
 
 func TestIndexTakenBefore(t *testing.T) {
@@ -772,4 +786,62 @@ func TestIndexForgetsFoldedBlocksPastTheRetention(t *testing.T) {
 
 	require.Equal(t, Answer{Mined: true, Via: ViaFloor}, s.Main().Lookup(Pack(6, 9)), "the floor still answers")
 	require.Less(t, s.Stats().Blocks, keepFoldedBlocks+20)
+}
+
+// TestIndexOffMainTakerBeforeStartAndBlocksWithoutRows covers the three lookups the pruner's lane
+// rule uses to say why no main-chain row takes a position.
+func TestIndexOffMainTakerBeforeStartAndBlocksWithoutRows(t *testing.T) {
+	c := newTestChain(t, 100)
+
+	// Main chain 1 to 5; block 3 has no rows. Fork block 40 at height 4 takes lane 7 position 90.
+	c.add(1, 0, 1, rowsOf(t, 7, 50, 51))
+	c.add(2, 1, 2, rowsOf(t, 7, 52))
+	c.add(3, 2, 3)
+	c.add(4, 3, 4, rowsOf(t, 7, 53))
+	c.add(5, 4, 5, rowsOf(t, 7, 54))
+	c.add(40, 3, 4, rowsOf(t, 7, 90, 92))
+	c.tip(5)
+
+	s := c.idx.Snapshot()
+
+	id, height, ok := s.OffMainTaker(Pack(7, 90))
+	require.True(t, ok)
+	require.Equal(t, uint32(40), id)
+	require.Equal(t, uint32(4), height)
+
+	_, _, ok = s.OffMainTaker(Pack(7, 52))
+	require.False(t, ok, "a main-chain row is not an off-main taker")
+
+	_, _, ok = s.OffMainTaker(Pack(7, 91))
+	require.False(t, ok, "inside the fork row's range, but a hole in it")
+
+	_, _, ok = s.OffMainTaker(Pack(7, 93))
+	require.False(t, ok, "no row takes it")
+
+	_, _, ok = s.OffMainTaker(Pack(8, 50))
+	require.False(t, ok, "a lane the index holds nothing of")
+
+	require.True(t, s.BeforeStart(Pack(7, 49)), "below the lowest row of the lane")
+	require.False(t, s.BeforeStart(Pack(7, 50)))
+	require.False(t, s.BeforeStart(Pack(7, 1000)), "above every row: unmined, not unseen")
+	require.True(t, s.BeforeStart(Pack(8, 50)), "a lane the index holds nothing of")
+
+	require.Equal(t, 1, s.MainBlocksWithoutRows())
+}
+
+// TestIndexBeforeStartAfterAFold: once rows fold, the floor's first folded row bounds what the index
+// saw, and a late block that settles a position below it makes that position seen.
+func TestIndexBeforeStartAfterAFold(t *testing.T) {
+	c := newTestChain(t, 2)
+
+	c.add(1, 0, 1, rowsOf(t, 7, 50, 51))
+	c.add(2, 1, 2, rowsOf(t, 7, 10))
+	c.line(3, 5)
+	c.tip(5)
+
+	s := c.idx.Snapshot()
+	require.Equal(t, 0, s.Stats().Rows, "both rows folded")
+	require.False(t, s.BeforeStart(Pack(7, 10)), "settled below the first folded row by a later block")
+	require.True(t, s.BeforeStart(Pack(7, 11)))
+	require.False(t, s.BeforeStart(Pack(7, 50)))
 }

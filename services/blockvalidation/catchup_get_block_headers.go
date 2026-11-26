@@ -269,7 +269,7 @@ func (u *Server) catchupGetBlockHeaders(ctx context.Context, blockUpTo *model.Bl
 		// for that extra header so a well-behaved peer's response is never rejected.
 		maxHeaderBytes := int64(maxBlockHeadersPerRequest+1) * int64(model.BlockHeaderSize)
 		requestStart := time.Now()
-		blockHeadersBytes, err := catchup.FetchHeadersWithRetry(iterCtx, u.logger, requestURL, maxRetries, maxHeaderBytes)
+		blockHeadersBytes, err := catchup.FetchHeadersWithRetry(iterCtx, u.logger, requestURL, maxRetries, u.settings.BlockValidation.CatchupRetryBackoff, maxHeaderBytes)
 		iterCancel() // Clean up the iteration context
 		if err == nil {
 			headerRequestTime += time.Since(requestStart)

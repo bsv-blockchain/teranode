@@ -27,10 +27,20 @@ import (
 
 const coinbaseHex = "01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff17030100002f6d312d65752f29c267ffea1adb87f33b398fffffffff03ac505763000000001976a914c362d5af234dd4e1f2a1bfbcab90036d38b0aa9f88acaa505763000000001976a9143c22b6d9ba7b50b6d6e615c69d11ecb2ba3db14588acaa505763000000001976a914b7177c7deb43f3869eabc25cfd9f618215f34d5588ac00000000"
 
+// engineTimeout bounds each engine's case, store setup included.
+const engineTimeout = 5 * time.Minute
+
 // engines runs fn against a real SQLite blockchain store and a real Postgres one in a container.
+// A case still running after engineTimeout panics the test binary with the case's name, so a
+// hung store call fails by name.
 func engines(t *testing.T, fn func(t *testing.T, store blockchainstore.Store)) {
 	for _, engine := range []string{"sqlite", "postgres"} {
 		t.Run(engine, func(t *testing.T) {
+			name := t.Name()
+			timer := time.AfterFunc(engineTimeout, func() { panic(name + " ran past " + engineTimeout.String()) })
+
+			defer timer.Stop()
+
 			fn(t, newStore(t, engine))
 		})
 	}
@@ -85,8 +95,22 @@ type stored struct {
 	height uint32
 }
 
-// add stores a block on parent (genesis when nil) with rows.
+// add stores a block on parent (genesis when nil) with rows. It holds a transaction besides its
+// coinbase, so with no rows it stands for a block quick validation took.
 func (c *chain) add(parent *stored, rows ...[]lane.MapRow) *stored {
+	c.t.Helper()
+
+	return c.addBlock(parent, 2, rows...)
+}
+
+// addCoinbaseOnly stores a block of only its coinbase on parent, which has no rows to hold.
+func (c *chain) addCoinbaseOnly(parent *stored) *stored {
+	c.t.Helper()
+
+	return c.addBlock(parent, 1)
+}
+
+func (c *chain) addBlock(parent *stored, txCount uint64, rows ...[]lane.MapRow) *stored {
 	c.t.Helper()
 
 	coinbase, err := bt.NewTxFromString(coinbaseHex)
@@ -113,7 +137,7 @@ func (c *chain) add(parent *stored, rows ...[]lane.MapRow) *stored {
 		},
 		Height:           height,
 		CoinbaseTx:       coinbase,
-		TransactionCount: 1,
+		TransactionCount: txCount,
 	}
 
 	var all []lane.MapRow
@@ -212,6 +236,12 @@ func (f failingSource) GetBlockHeaders(context.Context, *chainhash.Hash, uint64)
 	return nil, nil, nil
 }
 
+func (f failingSource) GetBlockHeader(context.Context, *chainhash.Hash) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
+	f.t.Error("GetBlockHeader called at off")
+
+	return nil, nil, nil
+}
+
 func (f failingSource) LaneMapRows(context.Context, uint32) ([]lane.MapRow, error) {
 	f.t.Error("LaneMapRows called at off")
 
@@ -257,7 +287,7 @@ func TestReaderAtOffDoesNothing(t *testing.T) {
 
 	before := total()
 
-	r.BlockParents(t.Context(), chainhash.Hash{}).ObserveParent(chainhash.Hash{}, lane.Pack(1, 1), []uint32{1})
+	r.BlockParents(t.Context(), chainhash.Hash{}).ObserveParent(chainhash.Hash{}, lane.Pack(1, 1), []uint32{1}, false)
 	r.CompareHeight(ReaderValidator, chainhash.Hash{}, lane.Pack(1, 1), true, 1)
 	r.CompareBlocks(ReaderBlockParent, nil, chainhash.Hash{}, lane.Pack(1, 1), []uint32{1})
 	r.compareDuplicates(nil, KindNotReady, chainhash.Hash{}, 1, false)
@@ -275,6 +305,8 @@ func TestReaderCountsEachKind(t *testing.T) {
 		b1 := c.add(nil, takes(t, 3, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10))
 		b2 := c.add(b1, takes(t, 3, 11, 12, 13, 14, 16, 17, 18, 19, 20))
 		b3 := c.add(b2)
+		// b4 holds only its coinbase, so it has nothing for a row to list.
+		b4 := c.addCoinbaseOnly(b3)
 
 		r := newReader(ulogger.TestLogger{}, store, 100)
 
@@ -332,6 +364,10 @@ func TestReaderCountsEachKind(t *testing.T) {
 			{KindAgree, lane.ViaRow, lane.Pack(3, 5), []uint32{b2.id, b1.id}},
 			{KindNoRows, lane.ViaNone, lane.Pack(3, 99), []uint32{b3.id, b2.id}},
 			{KindTodayOnly, lane.ViaNone, lane.Pack(3, 99), []uint32{b2.id, b3.id}},
+			// A block of only its coinbase has complete rows, so a position no row takes is
+			// judged, not no_rows. Only its coinbase can hold one, which the parent-check
+			// coinbase kind counts apart once it lands.
+			{KindTodayOnly, lane.ViaNone, lane.Pack(3, 99), []uint32{b4.id}},
 		}
 
 		for _, tc := range listCases {
@@ -344,6 +380,177 @@ func TestReaderCountsEachKind(t *testing.T) {
 			r.CompareBlocks(ReaderBlockParent, nil, h, lane.Pack(3, 5), []uint32{b1.id})
 		})
 	})
+}
+
+// A block's rows commit with it and today's mined write lands seconds later: until that write has
+// finished, a lanes_only answer from the best block's row is counted mined_pending.
+func TestReaderCountsTheMinedWriteWindowApart(t *testing.T) {
+	engines(t, func(t *testing.T, store blockchainstore.Store) {
+		ctx := t.Context()
+		c := newChain(t, store)
+
+		b1 := c.add(nil, takes(t, 3, 5))
+		b2 := c.add(b1, takes(t, 3, 6))
+		require.NoError(t, store.SetBlockMinedSet(ctx, &b1.hash, nil))
+
+		logger := &warnLogger{}
+		r := newReader(logger, store, 100)
+		clock := storedAt(t, store, b2.hash)
+		r.now = func() time.Time { return clock }
+		follow(t, r)
+
+		// b2 is the best block, and its mined write has not finished.
+		requireCounted(t, ReaderValidator, KindMinedPending, lane.ViaRow, func() {
+			r.CompareHeight(ReaderValidator, chainhash.Hash{}, lane.Pack(3, 6), false, 0)
+		})
+		requireCounted(t, ReaderSubtreePrefetch, KindMinedPending, lane.ViaRow, func() {
+			r.CompareBlocks(ReaderSubtreePrefetch, r.MainView(), chainhash.Hash{}, lane.Pack(3, 6), nil)
+		})
+
+		// b1's has finished, so its row against today's unmined is a disagreement.
+		requireCounted(t, ReaderValidator, KindLanesOnly, lane.ViaRow, func() {
+			r.CompareHeight(ReaderValidator, chainhash.Hash{}, lane.Pack(3, 5), false, 0)
+		})
+
+		// Once b2's has finished too, so is its row's.
+		require.NoError(t, store.SetBlockMinedSet(ctx, &b2.hash, nil))
+
+		_, err := r.step(ctx, b2.hash)
+		require.NoError(t, err)
+
+		requireCounted(t, ReaderValidator, KindLanesOnly, lane.ViaRow, func() {
+			r.CompareHeight(ReaderValidator, chainhash.Hash{}, lane.Pack(3, 6), false, 0)
+		})
+
+		// A cleared flag on the same best block, as a reorg's clear leaves it, counts pending again.
+		require.NoError(t, store.ClearBlockMinedSet(ctx, &b2.hash))
+
+		_, err = r.step(ctx, b2.hash)
+		require.NoError(t, err)
+
+		requireCounted(t, ReaderValidator, KindMinedPending, lane.ViaRow, func() {
+			r.CompareHeight(ReaderValidator, chainhash.Hash{}, lane.Pack(3, 6), false, 0)
+		})
+
+		require.NoError(t, store.SetBlockMinedSet(ctx, &b2.hash, nil))
+
+		// b3 arrives with its mined write unfinished; then a read of its flag fails, or comes back
+		// empty. The failure is counted and leaves no block pending.
+		b3 := c.add(b2, takes(t, 3, 7))
+		stored3 := storedAt(t, store, b3.hash)
+		clock = stored3
+
+		for _, failing := range []Source{headerFailingSource{store}, headerMissingSource{store}} {
+			r.source = store
+
+			_, err = r.step(ctx, b2.hash)
+			require.NoError(t, err)
+
+			requireCounted(t, ReaderValidator, KindMinedPending, lane.ViaRow, func() {
+				r.CompareHeight(ReaderValidator, chainhash.Hash{}, lane.Pack(3, 7), false, 0)
+			})
+
+			r.source = failing
+			r.prepareWarned = nil
+			errorsBefore := testutil.ToFloat64(prometheusLaneReaderFollowErrors)
+
+			_, err = r.step(ctx, b3.hash)
+			require.NoError(t, err)
+			require.Equal(t, errorsBefore+1, testutil.ToFloat64(prometheusLaneReaderFollowErrors))
+			require.Contains(t, logger.last(), "reading best block "+b3.hash.String()+"'s mined_set flag failed")
+
+			requireCounted(t, ReaderValidator, KindLanesOnly, lane.ViaRow, func() {
+				r.CompareHeight(ReaderValidator, chainhash.Hash{}, lane.Pack(3, 7), false, 0)
+			})
+		}
+
+		// b3 pending, then invalidated so b2 is best again: a view still holding b3 counts its row
+		// lanes_only, since b3 is no longer the best block.
+		r.source = store
+
+		_, err = r.step(ctx, b3.hash)
+		require.NoError(t, err)
+
+		held := r.MainView()
+
+		requireCounted(t, ReaderSubtreePrefetch, KindMinedPending, lane.ViaRow, func() {
+			r.CompareBlocks(ReaderSubtreePrefetch, held, chainhash.Hash{}, lane.Pack(3, 7), nil)
+		})
+
+		_, err = store.InvalidateBlock(ctx, &b3.hash)
+		require.NoError(t, err)
+
+		_, err = r.step(ctx, b3.hash)
+		require.NoError(t, err)
+
+		requireCounted(t, ReaderSubtreePrefetch, KindLanesOnly, lane.ViaRow, func() {
+			r.CompareBlocks(ReaderSubtreePrefetch, held, chainhash.Hash{}, lane.Pack(3, 7), nil)
+		})
+
+		// b4 is best and its write unfinished. Its rows count pending until a minute after it was
+		// stored, with no poll needed, as when the best block cannot be read.
+		b4 := c.add(b2, takes(t, 3, 8))
+		stored4 := storedAt(t, store, b4.hash)
+		clock = stored4
+
+		_, err = r.step(ctx, b2.hash)
+		require.NoError(t, err)
+
+		clock = stored4.Add(59 * time.Second)
+
+		requireCounted(t, ReaderValidator, KindMinedPending, lane.ViaRow, func() {
+			r.CompareHeight(ReaderValidator, chainhash.Hash{}, lane.Pack(3, 8), false, 0)
+		})
+
+		clock = stored4.Add(60 * time.Second)
+
+		requireCounted(t, ReaderValidator, KindLanesOnly, lane.ViaRow, func() {
+			r.CompareHeight(ReaderValidator, chainhash.Hash{}, lane.Pack(3, 8), false, 0)
+		})
+
+		// b5 replaces b4 as best and is invalidated: b4 is best again, still past its minute.
+		b5 := c.add(b4, takes(t, 3, 9))
+
+		_, err = r.step(ctx, b4.hash)
+		require.NoError(t, err)
+
+		_, err = store.InvalidateBlock(ctx, &b5.hash)
+		require.NoError(t, err)
+
+		r.prepareWarned = nil
+
+		_, err = r.step(ctx, b5.hash)
+		require.NoError(t, err)
+		require.Contains(t, logger.last(), "best block "+b4.hash.String()+"'s mined write has not finished")
+
+		requireCounted(t, ReaderValidator, KindLanesOnly, lane.ViaRow, func() {
+			r.CompareHeight(ReaderValidator, chainhash.Hash{}, lane.Pack(3, 8), false, 0)
+		})
+	})
+}
+
+// storedAt is when the store saved block hash, the start of its mined write's minute.
+func storedAt(t *testing.T, store blockchainstore.Store, hash chainhash.Hash) time.Time {
+	t.Helper()
+
+	_, meta, err := store.GetBlockHeader(t.Context(), &hash)
+	require.NoError(t, err)
+
+	return time.Unix(int64(meta.Timestamp), 0)
+}
+
+// headerFailingSource is a Source whose GetBlockHeader fails.
+type headerFailingSource struct{ blockchainstore.Store }
+
+func (headerFailingSource) GetBlockHeader(context.Context, *chainhash.Hash) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
+	return nil, nil, errors.NewServiceUnavailableError("blockchain service down")
+}
+
+// headerMissingSource is a Source whose GetBlockHeader returns no metadata and no error.
+type headerMissingSource struct{ blockchainstore.Store }
+
+func (headerMissingSource) GetBlockHeader(context.Context, *chainhash.Hash) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
+	return nil, nil, nil
 }
 
 // A reorg moves the answer: once the fork is the main chain, its block's rows answer and the old
@@ -482,6 +689,16 @@ func TestReaderPrepareLoadsAnAncestryTheFollowerHasNotSeen(t *testing.T) {
 			r.compareDuplicates(v, KindNotReady, b4.hash, b4.id, false)
 		})
 
+		// A block of only its coinbase has complete, empty rows: it re-takes nothing.
+		b5 := c.addCoinbaseOnly(b4)
+
+		v, ok = prepareView(r, context.Background(), b5.hash)
+		require.True(t, ok)
+
+		requireCounted(t, ReaderBlockDuplicate, KindAgree, lane.ViaNone, func() {
+			r.compareDuplicates(v, KindNotReady, b5.hash, b5.id, false)
+		})
+
 		v, ok = prepareView(r, context.Background(), b3.hash)
 		require.True(t, ok)
 
@@ -512,14 +729,28 @@ func TestBlockParentsAnswersHeldParentsOnceTheChainIsIn(t *testing.T) {
 		before := answers(ReaderBlockParent, KindAgree, lane.ViaRow)
 
 		bp := r.BlockParents(context.Background(), b2.hash)
-		bp.ObserveParent(chainhash.Hash{2}, lane.Pack(8, 9), []uint32{b2.id})
+		bp.ObserveParent(chainhash.Hash{2}, lane.Pack(8, 9), []uint32{b2.id}, false)
 
 		require.Eventually(t, func() bool {
 			return answers(ReaderBlockParent, KindAgree, lane.ViaRow) == before+1
 		}, 5*time.Second, 10*time.Millisecond)
 
-		bp.ObserveParent(chainhash.Hash{3}, lane.Pack(8, 9), []uint32{b2.id})
+		bp.ObserveParent(chainhash.Hash{3}, lane.Pack(8, 9), []uint32{b2.id}, false)
 		require.Equal(t, before+2, answers(ReaderBlockParent, KindAgree, lane.ViaRow))
+
+		// Block rows leave the coinbase out, so its position is in no row: a coinbase parent counts
+		// coinbase, where an ordinary parent at such a position counts today_only.
+		requireCounted(t, ReaderBlockParent, KindCoinbase, lane.ViaNone, func() {
+			bp.ObserveParent(chainhash.Hash{4}, lane.Pack(8, 10), []uint32{b2.id}, true)
+		})
+		requireCounted(t, ReaderBlockParent, KindTodayOnly, lane.ViaNone, func() {
+			bp.ObserveParent(chainhash.Hash{5}, lane.Pack(8, 10), []uint32{b2.id}, false)
+		})
+
+		// A coinbase parent needs no chain, so it is counted before the chain's rows are in.
+		requireCounted(t, ReaderBlockParent, KindCoinbase, lane.ViaNone, func() {
+			r.BlockParents(context.Background(), b2.hash).ObserveParent(chainhash.Hash{6}, lane.Pack(8, 10), []uint32{b2.id}, true)
+		})
 	})
 }
 
@@ -1042,13 +1273,13 @@ func TestBlockParentsCountsNotReadyWhenTheChainCannotLoad(t *testing.T) {
 	before := answers(ReaderBlockParent, KindNotReady, lane.ViaNone)
 
 	bp := r.BlockParents(context.Background(), chainhash.Hash{9, 9})
-	bp.ObserveParent(chainhash.Hash{2}, lane.Pack(8, 9), []uint32{1})
+	bp.ObserveParent(chainhash.Hash{2}, lane.Pack(8, 9), []uint32{1}, false)
 
 	require.Eventually(t, func() bool {
 		return answers(ReaderBlockParent, KindNotReady, lane.ViaNone) == before+1
 	}, 5*time.Second, 10*time.Millisecond)
 
-	bp.ObserveParent(chainhash.Hash{3}, lane.Pack(8, 9), []uint32{1})
+	bp.ObserveParent(chainhash.Hash{3}, lane.Pack(8, 9), []uint32{1}, false)
 	require.Equal(t, before+2, answers(ReaderBlockParent, KindNotReady, lane.ViaNone))
 }
 
@@ -1183,7 +1414,7 @@ func TestBlockParentsHoldsUpToItsCapWhileTheChainLoads(t *testing.T) {
 	const held = 100_000 // the cap the design states, written out so a changed cap fails here
 
 	for i := 0; i <= held; i++ {
-		bp.ObserveParent(chainhash.Hash{2}, lane.Pack(8, 9), []uint32{b2.id})
+		bp.ObserveParent(chainhash.Hash{2}, lane.Pack(8, 9), []uint32{b2.id}, false)
 	}
 
 	require.Equal(t, notReady+1, answers(ReaderBlockParent, KindNotReady, lane.ViaNone), "one past the cap counts not_ready")
@@ -1246,7 +1477,7 @@ func TestBlockParentsGivesUpOnItsOwnDeadline(t *testing.T) {
 	before := answers(ReaderBlockParent, KindNotReady, lane.ViaNone)
 
 	bp := r.BlockParents(context.Background(), b2.hash)
-	bp.ObserveParent(chainhash.Hash{2}, lane.Pack(8, 9), []uint32{b2.id})
+	bp.ObserveParent(chainhash.Hash{2}, lane.Pack(8, 9), []uint32{b2.id}, false)
 
 	require.Eventually(t, func() bool {
 		return answers(ReaderBlockParent, KindNotReady, lane.ViaNone) == before+1

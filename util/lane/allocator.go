@@ -61,8 +61,10 @@ type Timings struct {
 // It holds the grant it is handing out and one spare. At half the current grant used it asks for
 // the next grant and keeps it as the spare. It takes from the current grant until the grant is used
 // up, with no returned position (Return) still waiting in it, or GrantDuration has passed since its
-// first position was taken, and only then moves to the spare. An unused grant expires GrantDuration
-// after its request was sent, including a spare.
+// first position was taken, and only then moves to the spare. A grant that ages out with no spare is
+// left by the next take, which waits for a grant: the service starts that grant right after the last
+// position taken, so a slow process leaves no unused tail between its grants. An unused grant
+// expires GrantDuration after its request was sent, including a spare.
 // The grant it leaves is settled by the next request: the grant's first position and its
 // final number, which is the grant's last position if used up or the highest position taken if it
 // aged out, travel on the next grant request or on the release.
@@ -76,7 +78,9 @@ type Timings struct {
 //
 // A store hands back, with Return, a position it took and can prove no record carries. Next gives
 // a returned position out again before the grant's next new one, but only from the grant it came
-// from: leaving a grant drops its returned positions, and they stay burned. A returned position is
+// from: leaving a grant drops its returned positions. Those below its settled final number stay
+// burned; those at the top of its taken range lie above that number, so a grant that continues the
+// left one gives them out again. A returned position is
 // always below the grant's next new position, so at or below the highest position taken. Returned
 // positions still waiting at the top of a grant's taken range when it is settled lower its final
 // number, and the release's, so both name only positions that may carry a record
@@ -111,10 +115,13 @@ type Allocator struct {
 	returned []uint64
 	spare    Grant
 	hasSpare bool
-	// pending settles the grants left and not yet reported, oldest first, until grant requests or
-	// the release carry them. It holds at most two: after a successful request at most the current
-	// grant and the spare can be left before the next one succeeds, and once two are left no grant
-	// is current, so none can be left again until a request succeeds and carries the oldest.
+	// pending settles the grants left and not yet reported, oldest first, until grant requests (the
+	// newest pair, pairToSendLocked) or the release (the oldest) carry them. It holds at most two: a
+	// spare comes only from a request made while a grant is current, so once two are left no grant is
+	// current and none can be left until a request succeeds. A request may leave one older pair for a
+	// later request or the release. Under slow traffic that can be the release, and a lease the
+	// service closes loses it; its grant then has no settles pair, which readers take as possibly
+	// unused.
 	pending  [2]Settles
 	npending int
 	// leaseTaken is the highest position this lease has given out that may carry a record; 0 for
@@ -123,8 +130,9 @@ type Allocator struct {
 	// leaseTakenBefore is leaseTaken as it stood when cur was installed, the number the lease falls
 	// back to when every position cur gave out came back.
 	leaseTakenBefore uint64
-	// highest is the highest position this process has given out in each lane, across leases. A
-	// grant that does not start above it is refused.
+	// highest is the highest position this process has given out in each lane, across leases, that
+	// may carry a record: leaving a grant lowers it past returned positions at the top of what the
+	// grant gave out. A grant that does not start above it is refused.
 	highest [MaxLane + 1]uint64
 	// lastGood is when the last renewal (or the open) that succeeded was sent.
 	lastGood time.Time
@@ -398,9 +406,10 @@ func (a *Allocator) takeLocked() (v uint64, ok bool, changed chan struct{}, err 
 }
 
 // leaveCurrentLocked settles the current grant and moves to the spare, or to no grant when there is
-// no spare, in which case the loop asks for one at once. The grant's returned positions are dropped
-// and stay burned. Those at the top of the taken range settledFinalLocked removes, and the grant
-// settles below them; those left sit below that final number and installLocked clears them. With no
+// no spare, in which case the loop asks for one at once. The grant's returned positions are dropped.
+// Those at the top of the taken range settledFinalLocked removes, and the grant settles below them,
+// so a grant that continues this one gives them out again; those left sit below that final number,
+// stay burned, and installLocked clears them. With no
 // grant installed next is 0, which Return and takeLocked both refuse.
 func (a *Allocator) leaveCurrentLocked(usedUp bool) {
 	final := a.next - 1
@@ -413,6 +422,12 @@ func (a *Allocator) leaveCurrentLocked(usedUp bool) {
 		a.pending[a.npending] = Settles{First: a.cur.First, LastTaken: final}
 		a.npending++
 		a.leaseTaken = a.leaseTakenAfterLocked(final)
+
+		// Returned positions above final carry no record, so a grant that continues right after
+		// final, as the service makes one when this grant is still the lane's newest, is accepted.
+		if final != 0 {
+			a.highest[a.cur.Lane] = final
+		}
 	}
 
 	if a.hasSpare {
@@ -496,7 +511,9 @@ func (a *Allocator) withinStopLocked() bool {
 }
 
 // wantGrantLocked reports whether the loop should ask for the next grant: no spare is held, and
-// the current grant is missing, half used, used up or aged out.
+// the current grant is missing, half used or used up. An aged-out grant alone is not a reason: the
+// next take leaves it first, so the request carries its settles pair and the service can start
+// the next grant right after its last taken position instead of above its unused tail.
 func (a *Allocator) wantGrantLocked() bool {
 	if a.hasSpare {
 		return false
@@ -506,11 +523,7 @@ func (a *Allocator) wantGrantLocked() bool {
 		return true
 	}
 
-	if a.next-a.cur.First >= (a.cur.Len()+1)/2 {
-		return true
-	}
-
-	return !a.curFirstTake.IsZero() && a.now().Sub(a.curFirstTake) >= a.t.GrantDuration
+	return a.next-a.cur.First >= (a.cur.Len()+1)/2
 }
 
 func (a *Allocator) broadcastLocked() {
@@ -665,13 +678,26 @@ func (a *Allocator) releaseRefused(id LeaseID, l uint8) {
 	}
 }
 
+// pairToSendLocked is the settles pair a grant request carries: the newest pending one. When it
+// settles the lane's newest hand-out, the service starts the grant right after it; otherwise above.
+// Take a burst that moved from grant 1 to spare 2, after which spare 2 aged out: carrying grant 1's
+// pair would start the next grant above spare 2's tail, so the newest goes, and grant 1's waits for
+// a later request or the release.
+func (a *Allocator) pairToSendLocked() Settles {
+	if a.npending == 0 {
+		return Settles{}
+	}
+
+	return a.pending[a.npending-1]
+}
+
 func (a *Allocator) renew(want bool) error {
 	sent := a.now()
 
 	a.mu.Lock()
 	r := Renewal{Lease: a.lease, Lane: a.lane, Rate: a.rateLocked(sent), WantGrant: want}
 	if want {
-		r.Settles = a.pending[0]
+		r.Settles = a.pairToSendLocked()
 	}
 	a.mu.Unlock()
 
@@ -702,10 +728,12 @@ func (a *Allocator) renew(want bool) error {
 	a.lastGood = sent
 	a.samples[0], a.samples[1] = a.samples[1], rateSample{sent, a.taken}
 
-	// The oldest pair is reported once a request that carried it succeeds. A pair recorded while the
-	// request was in flight stays for the next one.
-	if want && a.npending > 0 && a.pending[0] == r.Settles {
-		a.pending[0], a.pending[1] = a.pending[1], Settles{}
+	// A pair is reported once a request that carried it succeeds. A pair recorded while the request
+	// was in flight stays for the next one.
+	// A request with no pair carries the zero pair, which no pending pair equals.
+	if i := slices.Index(a.pending[:a.npending], r.Settles); i >= 0 {
+		copy(a.pending[i:], a.pending[i+1:])
+		a.pending[len(a.pending)-1] = Settles{}
 		a.npending--
 	}
 

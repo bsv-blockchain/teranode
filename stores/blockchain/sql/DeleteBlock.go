@@ -98,7 +98,8 @@ func (s *SQL) DeleteBlock(ctx context.Context, blockHash *chainhash.Hash) error 
 	}
 
 	// Invalidate caches so subsequent reads (GetBestBlockHeader, etc.) reflect
-	// the deletion. Matches InvalidateBlock's defer sequence exactly.
+	// the deletion. Unlike InvalidateBlock, this also clears the median-time
+	// cache, because the deleted row's entry has no block behind it any more.
 	s.blockTimestampCache.Clear()
 	s.ResetResponseCache()
 	if s.useInMemoryChainCheck {

@@ -63,9 +63,37 @@ const (
 	// chain took the position, such as one a reorg replaced: the store's height is the lowest it
 	// recorded, from any chain. Not a disagreement.
 	KindOffChain = "off_chain"
+	// KindCoinbase: the parent is a coinbase. It takes a lane position like any record, but block
+	// rows leave the coinbase out, so no row holds its position and lanes cannot say it is mined.
+	// Counted for a coinbase parent whose read gives the coinbase flag, whatever the index holds,
+	// and never looked up. The validator's store answer gives it only on the stores that fill
+	// utxo.ParentOutput.IsCoinbase (utxoset, Aerospike). Not a disagreement.
+	KindCoinbase = "coinbase"
+	// KindMinedPending: lanes says a row of the best block took the position and today says not
+	// mined, while today's mined write of that block has not finished: the block's rows commit
+	// with it, and today's mined state lands after, about 3 s for a block of 26,000 on mainnet. Not
+	// a disagreement. The block is the best one at the follower's last read; the follower reads a
+	// second after a step succeeds and five seconds after one fails (retryAfter), and a slow read
+	// or index load lengthens that lag. It counts for at most a minute after the block was stored;
+	// once the next block is read, one whose write is still running counts lanes_only.
+	KindMinedPending = "mined_pending"
 )
 
-var kinds = []string{KindAgree, KindLanesOnly, KindTodayOnly, KindDifferentBlock, KindNoPosition, KindNoRows, KindNotLoaded, KindNotReady, KindOffChain}
+var kinds = []string{KindAgree, KindLanesOnly, KindTodayOnly, KindDifferentBlock, KindNoPosition, KindNoRows, KindNotLoaded, KindNotReady, KindOffChain, KindCoinbase, KindMinedPending}
+
+// minedPendingKind counts a lanes_only answer from a row of the best block under KindMinedPending
+// while today's mined write of that block has not finished, up to the wait's deadline.
+func (r *Reader) minedPendingKind(kind string, a lane.Answer) string {
+	if kind != KindLanesOnly || a.Via != lane.ViaRow {
+		return kind
+	}
+
+	if w := r.minedPending.Load(); w != nil && a.BlockID == w.id && r.now().Before(w.until) {
+		return KindMinedPending
+	}
+
+	return kind
+}
 
 // isDisagreement reports whether kind is one the soak must explain.
 func isDisagreement(kind string) bool {
@@ -90,6 +118,15 @@ func (r *Reader) lookup(v *lane.ChainView, pos uint64) lane.Answer {
 // cost about what a lookup does.
 const lookupSampleEvery = 64
 
+// CountCoinbase counts a coinbase parent under reader, in place of a comparison (KindCoinbase).
+func (r *Reader) CountCoinbase(reader string) {
+	if r == nil {
+		return
+	}
+
+	count(reader, KindCoinbase, lane.ViaNone)
+}
+
 // CompareHeight compares the lanes answer for a transaction on the main chain with today's answer
 // given as a height: mined at height, or not mined. The validator's parent read answers so.
 func (r *Reader) CompareHeight(reader string, hash chainhash.Hash, pos uint64, todayMined bool, todayHeight uint32) {
@@ -111,7 +148,7 @@ func (r *Reader) CompareHeight(reader string, hash chainhash.Hash, pos uint64, t
 	}
 
 	a := r.lookup(s.Main(), pos)
-	kind := classifyHeight(s, pos, a, todayMined, todayHeight)
+	kind := r.minedPendingKind(classifyHeight(s, pos, a, todayMined, todayHeight), a)
 	count(reader, kind, a.Via)
 
 	if isDisagreement(kind) {
@@ -192,7 +229,7 @@ func (r *Reader) compareBlocks(reader string, v *lane.ChainView, noView string, 
 	}
 
 	a := r.lookup(v, pos)
-	kind := classifyBlocks(v, a, todayBlockIDs)
+	kind := r.minedPendingKind(classifyBlocks(v, a, todayBlockIDs), a)
 	count(reader, kind, a.Via)
 
 	if isDisagreement(kind) {
@@ -387,8 +424,29 @@ const disagreementsLogged = 5
 
 func (d *disagreementLog) log(r *Reader, reader, kind string, hash chainhash.Hash, pos uint64, a lane.Answer, s *lane.IndexSnapshot,
 	todayForm string, todayMined bool, todayValue uint32, todayBlockIDs []uint32) {
-	key := reader + "/" + kind
+	n, ok := d.admit(reader + "/" + kind)
+	if !ok {
+		return
+	}
 
+	laneNum, p := lane.Unpack(pos)
+
+	switch todayForm {
+	case "height":
+		r.logger.Warnf("[lanereader] %s %s (log line %d): tx %s lane %d position %d: lanes mined=%t via %s block %d height %d; today mined=%t height %d; index tip %d anchor %d start %d",
+			reader, kind, n, hash.String(), laneNum, p, a.Mined, a.Via, a.BlockID, a.Height, todayMined, todayValue, s.TipHeight(), s.AnchorHeight(), s.StartHeight())
+	case "duplicate":
+		r.logger.Warnf("[lanereader] %s %s (log line %d): block %s (ID %d): lanes counts %d positions taken before it; today duplicate=%t; index tip %d anchor %d start %d",
+			reader, kind, n, hash.String(), a.BlockID, todayValue, todayMined, s.TipHeight(), s.AnchorHeight(), s.StartHeight())
+	default:
+		r.logger.Warnf("[lanereader] %s %s (log line %d): tx %s lane %d position %d: lanes mined=%t via %s block %d height %d; today block IDs %v; index tip %d anchor %d start %d",
+			reader, kind, n, hash.String(), laneNum, p, a.Mined, a.Via, a.BlockID, a.Height, todayBlockIDs, s.TipHeight(), s.AnchorHeight(), s.StartHeight())
+	}
+}
+
+// admit reports whether a disagreement under key may be logged, and its line number: the first
+// disagreementsLogged of each key, then one a minute.
+func (d *disagreementLog) admit(key string) (int64, bool) {
 	g, ok := d.gates.Load(key)
 	if !ok {
 		// The gate starts its minute when made, so a check that finds the first lines taken cannot
@@ -423,23 +481,11 @@ func (d *disagreementLog) log(r *Reader, reader, kind string, hash chainhash.Has
 		last := gate.last.Load()
 
 		if now-last < int64(time.Minute) || !gate.last.CompareAndSwap(last, now) {
-			return
+			return 0, false
 		}
 
 		n = gate.seen.Add(1)
 	}
 
-	laneNum, p := lane.Unpack(pos)
-
-	switch todayForm {
-	case "height":
-		r.logger.Warnf("[lanereader] %s %s (log line %d): tx %s lane %d position %d: lanes mined=%t via %s block %d height %d; today mined=%t height %d; index tip %d anchor %d start %d",
-			reader, kind, n, hash.String(), laneNum, p, a.Mined, a.Via, a.BlockID, a.Height, todayMined, todayValue, s.TipHeight(), s.AnchorHeight(), s.StartHeight())
-	case "duplicate":
-		r.logger.Warnf("[lanereader] %s %s (log line %d): block %s (ID %d): lanes counts %d positions taken before it; today duplicate=%t; index tip %d anchor %d start %d",
-			reader, kind, n, hash.String(), a.BlockID, todayValue, todayMined, s.TipHeight(), s.AnchorHeight(), s.StartHeight())
-	default:
-		r.logger.Warnf("[lanereader] %s %s (log line %d): tx %s lane %d position %d: lanes mined=%t via %s block %d height %d; today block IDs %v; index tip %d anchor %d start %d",
-			reader, kind, n, hash.String(), laneNum, p, a.Mined, a.Via, a.BlockID, a.Height, todayBlockIDs, s.TipHeight(), s.AnchorHeight(), s.StartHeight())
-	}
+	return n, true
 }

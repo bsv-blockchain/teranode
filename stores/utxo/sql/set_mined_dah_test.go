@@ -30,7 +30,7 @@ func TestSetMinedStampsDAHAtMinedBlockHeight(t *testing.T) {
 
 	store, parent := setup(ctx, t)
 
-	retention := store.settings.GetUtxoStoreBlockHeightRetention()
+	retention := store.settings.GetUtxoStoreSpentDeleteRetention()
 	require.Greater(t, retention, uint32(0), "test requires a non-zero block height retention")
 
 	// The store's cached chain-tip height lags far behind the block actually being

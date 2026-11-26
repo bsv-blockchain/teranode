@@ -28,6 +28,7 @@ const (
 	SubscriberBlockValidation     = "blockvalidation"
 	SubscriberSubtreeValidation   = "subtreevalidation"
 	SubscriberPruner              = "Pruner"
+	SubscriberProbe               = "probe"
 	SubscriberAssetService        = "AssetService"
 	SubscriberUTXOPersister       = "utxo-persister"
 	SubscriberFileBlockHeight     = "File BlockHeight"
@@ -114,6 +115,11 @@ type ClientI interface {
 	// the store; none for a block the map holds no row of. Readers at utxostore_laneMigration
 	// shadow load them into their index.
 	LaneMapRows(ctx context.Context, blockID uint32) ([]lane.MapRow, error)
+
+	// LaneCapGrants returns, for each lane with one, the first grant handed out at or above height,
+	// by lane. Block assembly's restart dry run at utxostore_laneMigration shadow starts its window
+	// there.
+	LaneCapGrants(ctx context.Context, height uint32) ([]lane.CapGrant, error)
 
 	// SendNotification broadcasts a notification to subscribers.
 	//

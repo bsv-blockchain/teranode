@@ -18,6 +18,8 @@ import (
 // after the stamp was invisible to Get: a transaction reporting itself unlocked forever, or
 // locked forever, silently.
 func TestSetLockedReachesAMinedTransaction(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	tx := mkTx(t, 1, 5_000)
@@ -42,6 +44,8 @@ func TestSetLockedReachesAMinedTransaction(t *testing.T) {
 // TestSetLockedStillReachesAMempoolTransaction pins the arm that already worked, so the added
 // membership arm cannot be mistaken for a replacement.
 func TestSetLockedStillReachesAMempoolTransaction(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	tx := mkTx(t, 1, 5_000)
@@ -66,6 +70,8 @@ func TestSetLockedStillReachesAMempoolTransaction(t *testing.T) {
 // the packed prefix under a different txid must be left alone, which it is either way, and the
 // bound is what stops the planner reading the whole leaf partition to prove it.
 func TestSetLockedDoesNotTouchACollidingTransactionsUTXOs(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	tx := mkTx(t, 1, 5_000)
@@ -82,17 +88,20 @@ func TestSetLockedDoesNotTouchACollidingTransactionsUTXOs(t *testing.T) {
 	require.Equal(t, int16(0), otherFlags, "a 96-bit prefix collision is not the same transaction")
 }
 
-// TestSetConflictingReachesAMinedTransaction is the same defect in the other statement:
-// setConflictingSQL's ident CTE updates tx_ident only, so marking a mined transaction
-// conflicting set the UTXO bit and not the bit Get reports.
+// TestSetConflictingReachesAMinedTransaction is the same defect in SetConflicting's statements:
+// its identity arm updates tx_ident only, so before the membership arm (now
+// setConflictingMinedSQL) marking a mined transaction conflicting set the UTXO bit and not the
+// bit Get reports.
 //
-// It goes in at runConflictingPlan rather than through SetConflicting so that it pins THIS
-// statement on its own. SetConflicting's first step, readConflictingInputs, used to read
+// It goes in at runConflictingPlan rather than through SetConflicting so that it pins THESE
+// statements on their own. SetConflicting's first step, readConflictingInputs, used to read
 // tx_ident alone and report a mined transaction as TxNotFound before the flag statement ever
 // ran; that separate defect is fixed too, and
 // TestSetConflictingReadsInputsFromAMinedTransaction in conflicting_test.go covers the whole
 // path end to end.
 func TestSetConflictingReachesAMinedTransaction(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	tx := mkTx(t, 1, 5_000)

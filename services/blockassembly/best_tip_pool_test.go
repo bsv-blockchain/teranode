@@ -52,6 +52,10 @@ func testReplayResetPool(t *testing.T, lateFailure, giveUp bool, coinbaseMaturit
 		s.BlockAssembly.StoreTxInpointsForSubtreeMeta = true
 	}, withCoinbaseMaturity(coinbaseMaturity))
 	ba := items.blockAssembler
+	// Retention 2 makes both moves resets, and the move back from B then moves back the
+	// retention, which halts unless an operator asked for the reset. This test is about the
+	// reset's reload and its failures, so it runs as the operator's reset.
+	ba.operatorResetRunning.Store(true)
 	ba.subtreeProcessor.Stop(context.Background())
 	stp, err := subtreeprocessor.NewSubtreeProcessor(t.Context(), ulogger.TestLogger{}, ba.settings, items.blobStore, items.blockchainClient, items.utxoStore, items.newSubtreeChan)
 	require.NoError(t, err)

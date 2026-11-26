@@ -10,6 +10,7 @@ import (
 	"github.com/bsv-blockchain/aerospike-client-go/v8/types"
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/bscript"
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
@@ -61,7 +62,9 @@ func TestLanePositionInUnminedIterator(t *testing.T) {
 				tSettings.UtxoStore.LaneMigration = settings.LaneMigrationShadow
 			}
 
-			_, store, _, deferFn := initAerospike(t, tSettings, logger)
+			// A server of its own: the unmined iterator scans the whole set, and both subtests
+			// create the same transactions.
+			_, store, _, deferFn := initAerospikeOwnServer(t, tSettings, logger)
 			t.Cleanup(deferFn)
 
 			tests.LanePositionInUnminedIterator(t, store, tc.shadow)
@@ -254,6 +257,21 @@ func laneParent(t *testing.T, seed uint32, n int) *bt.Tx {
 	return tx
 }
 
+// laneCoinbase is a coinbase, distinct from every other test transaction.
+func laneCoinbase(t *testing.T) *bt.Tx {
+	t.Helper()
+
+	in := &bt.Input{PreviousTxOutIndex: 0xffffffff, SequenceNumber: 0xffffffff, UnlockingScript: bscript.NewFromBytes([]byte{0x04, 0xff, 0xff, 0x00, 0x1d})}
+	require.NoError(t, in.PreviousTxIDAdd(&chainhash.Hash{}))
+
+	tx := uniqueTx(bt.NewTx())
+	tx.Inputs = []*bt.Input{in}
+	require.NoError(t, tx.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 5_000))
+	require.True(t, tx.IsCoinbase())
+
+	return tx
+}
+
 // laneChild spends the named outputs of parent.
 func laneChild(t *testing.T, parent *bt.Tx, vouts ...uint32) *bt.Tx {
 	t.Helper()
@@ -398,7 +416,7 @@ func TestParentLanePositionsOnAerospike(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings(t)
 	tSettings.UtxoStore.LaneMigration = settings.LaneMigrationShadow
 
-	client, store, _, deferFn := initAerospike(t, tSettings, logger)
+	client, store, _, deferFn, aeroURL := initAerospikeWithURL(t, tSettings, logger, nil)
 	t.Cleanup(deferFn)
 
 	require.True(t, store.LaneSlotPositionsRecorded(), "the server, running this build's Lua, passes the slot probe")
@@ -413,6 +431,62 @@ func TestParentLanePositionsOnAerospike(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, answers[0].Err)
 	require.Equal(t, parentPosition, answers[0].LanePosition, "the parent read gives the parent's position")
+	require.False(t, answers[0].IsCoinbase)
+
+	// The same read says whether the parent is a coinbase, for the lanes shadow.
+	coinbase := laneCoinbase(t)
+	_, err = store.Create(ctx, coinbase, 100, utxo.WithLanePosition(lane.Pack(7, 99)))
+	require.NoError(t, err)
+
+	answers, err = store.ParentOutputsForValidation(ctx, []utxo.Outpoint{{TxID: *coinbase.TxIDChainHash(), Vout: 0}})
+	require.NoError(t, err)
+	require.NoError(t, answers[0].Err)
+	require.True(t, answers[0].IsCoinbase, "the parent read says the parent is a coinbase")
+	require.Equal(t, lane.Pack(7, 99), answers[0].LanePosition)
+
+	// The block parent check's Get and the subtree prefetch's BatchDecorate read the flag too.
+	for _, tx := range []*bt.Tx{parent, coinbase} {
+		md, err := store.Get(ctx, tx.TxIDChainHash(), fields.BlockIDs, fields.LanePosition, fields.IsCoinbase)
+		require.NoError(t, err)
+		require.Equal(t, tx.IsCoinbase(), md.IsCoinbase, "block parent read")
+
+		items := []*utxo.UnresolvedMetaData{{Hash: *tx.TxIDChainHash()}}
+		require.NoError(t, store.BatchDecorate(ctx, items, fields.BlockIDs, fields.BlockHeights, fields.Outputs, fields.LanePosition, fields.IsCoinbase))
+		require.NoError(t, items[0].Err)
+		require.Equal(t, tx.IsCoinbase(), items[0].Data.IsCoinbase, "prefetch read")
+	}
+
+	// The parent read takes a record without the coinbase bin as not a coinbase.
+	bare := laneCoinbase(t)
+	_, err = store.Create(ctx, bare, 100, utxo.WithLanePosition(lane.Pack(7, 98)))
+	require.NoError(t, err)
+
+	bareKey, err := aerospike.NewKey(store.GetNamespace(), store.GetName(), uaerospike.CalculateKeySourceInternal(bare.TxIDChainHash(), 0))
+	require.NoError(t, err)
+	require.NoError(t, client.PutBins(nil, bareKey, aerospike.NewBin(fields.IsCoinbase.String(), nil)))
+
+	_, hasBin := recordBin(t, client, store, bare, 0, fields.IsCoinbase)
+	require.False(t, hasBin)
+
+	answers, err = store.ParentOutputsForValidation(ctx, []utxo.Outpoint{{TxID: *bare.TxIDChainHash(), Vout: 0}})
+	require.NoError(t, err)
+	require.NoError(t, answers[0].Err)
+	require.False(t, answers[0].IsCoinbase)
+
+	// With lane positions off the parent read gives neither the position nor the coinbase flag.
+	off := *tSettings
+	off.UtxoStore.LaneMigration = settings.LaneMigrationOff
+
+	offStore, err := teranodeaerospike.New(ctx, logger, &off, aeroURL)
+	require.NoError(t, err)
+	offStore.LeaveSharedClientOpenOnClose()
+	t.Cleanup(offStore.StopConflictingIndexSelfTest)
+
+	answers, err = offStore.ParentOutputsForValidation(ctx, []utxo.Outpoint{{TxID: *coinbase.TxIDChainHash(), Vout: 0}})
+	require.NoError(t, err)
+	require.NoError(t, answers[0].Err)
+	require.Zero(t, answers[0].LanePosition)
+	require.False(t, answers[0].IsCoinbase)
 
 	child := laneChild(t, parent, 0)
 	md, err := store.Create(ctx, child, 101, utxo.WithLanePosition(childPosition), utxo.WithParentLanePositions([]uint64{parentPosition}))
