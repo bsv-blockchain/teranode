@@ -454,7 +454,12 @@ reorg/conflict helpers) are single-phase and bypass the create-first ordering.
   (`utxo.FinishRollBackCreating`), when no holder is busy and no spend lease is live, so a block
   that contains the transaction does not depend on the sweep. With the flag off, a spend-first
   `SpendAndCreate` that finds a hold or an open rollback reverses its own spends and returns a
-  transient error, and it creates over a hold it may clear.
+  transient error, and it creates over a hold it may clear. A list write (`SpendAndCreateMulti`
+  below a checkpoint) writes a transaction that has a parent in the list in two calls. Its
+  create-only call does not look at a record it finds, so its spend-only call completes a tentative
+  one by the roll-forward rule (`completeCreatingBySpend`): a spend alone would leave the record
+  creating while the list reports the transaction as stored. It spends nothing, and returns a
+  retryable error, for a record whose rollback has begun since the create, or that it cannot read.
 - **Duplicate create of a record with no token** — a create that finds the master of a creating
   record with no `attempt` token clears the record (`clearCreatingFlag`), whatever
   `utxostore_useCreateFirstOrder` says. No create-first attempt wrote such a record: it is a
@@ -470,9 +475,18 @@ reorg/conflict helpers) are single-phase and bypass the create-first ordering.
   the record. The sweep reverses nothing while a spend lease of the attempt is live (see "Spend
   lease" below): it leaves the record for a later pass. A creating record with no `attempt` token
   is only cleared (`FinalizeTransaction` with no token): the sweep spends nothing for it, never
-  rolls it back and does not announce it.
+  rolls it back and does not announce it. A record that belongs to a block, one that carries block
+  IDs or the `markOwed` stamp (see "Longest-chain stamp" below), is only completed: the sweep never
+  rolls it back and never announces it to block assembly. The query has no cursor, so a backlog
+  above `pruner_creatingTxSweepMaxPerPass` is taken a page at a time in no fixed order: the store
+  returns a different page on each pass, and a record whose parent is still creating heals in a
+  pass that takes it after its parent.
 - **setMined** — a pre-flight in `SetMinedMulti` rolls a still-creating record forward
-  (re-spend, then finalize) before the mined write. It does this only for a record that carries
+  (re-spend, then finalize) before the mined write. `MarkTransactionsOnLongestChain(true)` runs the
+  same pre-flight, because it clears `unminedSince`, which the sweep selects by. The pre-flight
+  reads the creating state of every hash in batches of `utxostore_maxMinedBatchSize`, and rolls a
+  record forward at the height of the block it carries when that is above the height the caller
+  names. It does this only for a record that carries
   an `attempt` token. A creating record with no token was not written by a create-first attempt:
   its `clearCreatingFlag` failed, and the pre-flight deletes its `creating` bin and spends
   nothing. The write paths no longer clear the `creating` bin. The pre-flight runs on every call, whatever `utxostore_useCreateFirstOrder`
@@ -624,6 +638,32 @@ rollback of such a record would delete a page under the spend of a descendant.
 - **Limit.** A record whose children were cleared by a binary that did not write the mark is not
   protected.
 
+### Longest-chain stamp
+
+A rollback unspends every input of its transaction by txid. For a creating record whose transaction
+is in a block of the longest chain that would free outputs that a mined transaction spent. Such a
+record exists when a transaction that was mined lost its record, by a prune of a side-chain record
+or an unwind, and a later attempt wrote a tentative record at the same txid.
+
+- **The stamp.** The pre-flight of a write that marks transactions as mined on the longest chain
+  (`MarkTransactionsOnLongestChain(true)`, and `SetMinedMulti` for a block on the longest chain)
+  sets the `markOwed` bin on every creating record it finds, before it rolls the record forward
+  (`stampMarkOwed`). The write is filtered on `creating` and no `rollingBack` bin: a rollback that
+  has begun cannot be stopped.
+- **What it stops.** `BeginCreateFirstRollback` is filtered on the master carrying no `markOwed`
+  bin, so no caller rolls the record back: not the sweep, not a block's conflicting create, not
+  the attempt that wrote it. The sweep completes the record with a roll-forward that ignores locks
+  and does not announce it to block assembly, which would offer a mined transaction for the next
+  template. It applies the same rule to a creating record that carries block IDs.
+- **What it does not do.** It does not complete the record, and it does not apply the mark. A
+  stamped record that the pre-flight could not complete keeps its `unminedSince`, and the call
+  that asked for the mark returns an error. A later mark, or the setMined of its block, finds the
+  record complete and marks it.
+- **Clearing.** The bin is inert on a record that is no longer creating. A mark off the longest
+  chain removes it on the expression write path. The native sub-op does not know the bin, so on a
+  server that runs the native mark a stamp can outlive its block. Such a record is still only
+  completed, never rolled back, and not announced by the sweep.
+
 ### Rollback of a failed create-first spend
 
 A spend that fails after the tentative create is rolled back by `utxo.RollBackCreating`. The
@@ -633,7 +673,7 @@ on the `creating` bin and the token. The same write sets `busy` and `holdUntil`,
 holds the hold for its whole unspend and releases it with `ReleaseRollbackHold` before it ends
 the rollback. The claim is refused while a spend lease of the attempt is live, and the owner
 tries again for `utxostore_spendWaitTimeout`. It is also refused, with no retry, for a master
-that carries the `finalizing` bin: that record can only be completed. Then every input of the tx is
+that carries the `finalizing` bin or the `markOwed` bin: that record can only be completed. Then every input of the tx is
 unspent (not only the spends that
 succeeded in the failing pass, because an earlier attempt may have spent an input that now fails
 for another reason; the Lua ownership check makes an input the tx does not own a no-op, and an
@@ -737,12 +777,15 @@ from touching the next.
   same or rolls it back once an input can no longer be spent. One input with any other error
   decides for the rollback. The sweep retries such a record on every pass. Only when
   `pruner_creatingTxSweepBlockedAgeBlocks` is above 0 (it is 0, off, by default) does it roll the
-  record back for its age: the record must be older than that, and every parent that gave the
-  transient answer in the pass must be read as locked and not creating, with an `unminedSince`
-  at least that many blocks old. That is the height at which the parent was stored. No field
-  records when its lock was taken, so a parent that was locked a moment ago looks as old as its
-  record, and so does one that a reorg backdated. A creating parent never counts, because the sweep
-  heals it. A value at or below `pruner_creatingTxSweepMinAgeBlocks` is raised to that value plus one.
+  record back for its age: the record must be older than that, and the sweep must itself have seen
+  every parent that gave the transient answer locked, and not creating, for at least that many
+  blocks. The sweep counts from the first pass in which it saw the parent locked and keeps that in
+  memory. The height at which the parent was stored is not used: no field records when a lock was
+  taken, so that height says nothing about it. A pass that reads the parent as unlocked or creating
+  drops the note. A restart of the pruner loses every note, so the rule rolls nothing back until
+  the parents have been watched that long again. A creating parent never counts: it is a record of
+  the same sweep. A value at or below `pruner_creatingTxSweepMinAgeBlocks` is raised to that value
+  plus one.
 - **Expiry.** A hold expires with its time to live. `ClearCreateFirstHold(hash, adopt)` deletes
   one earlier, or one that has no time to live, filtered on `hold` and on the `holdUntil` that
   was read. Without `adopt` it goes
