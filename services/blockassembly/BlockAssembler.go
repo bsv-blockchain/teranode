@@ -2970,9 +2970,14 @@ func (b *BlockAssembler) resetAfterDrainFailure() {
 
 // requeueRefusedReset queues again, with its options, a reset handleResetRequests refused
 // (resetOwed), once its back-off is over (resetOwedRetryAt), so a record that keeps failing
-// does not refuse one reset after another.
+// does not refuse one reset after another. While halted on a deep reorg it waits: the halt
+// would refuse the retry and drop it, and the operator's reset takes in what is owed.
 func (b *BlockAssembler) requeueRefusedReset() {
 	if b.resetOwed == nil || time.Now().Before(b.resetOwedRetryAt) {
+		return
+	}
+
+	if b.DeepReorgHalted() && !b.resetOwed.Operator {
 		return
 	}
 

@@ -57,6 +57,28 @@ func TestDeepReorgHaltRecord(t *testing.T) {
 	}
 }
 
+// stateFailClient is the real blockchain client with its state reads or writes made to fail.
+type stateFailClient struct {
+	blockchain.ClientI
+	failGet, failSet bool
+}
+
+func (c *stateFailClient) GetState(ctx context.Context, key string) ([]byte, error) {
+	if c.failGet {
+		return nil, errors.NewStorageError("state read failed")
+	}
+
+	return c.ClientI.GetState(ctx, key)
+}
+
+func (c *stateFailClient) SetState(ctx context.Context, key string, data []byte) error {
+	if c.failSet {
+		return errors.NewStorageError("state write failed")
+	}
+
+	return c.ClientI.SetState(ctx, key, data)
+}
+
 // Loading a record halts only on a halt record, and fails on one it cannot read; clearing writes
 // the record before it lifts the halt, so a failed write leaves it halted.
 func TestDeepReorgHaltLoadAndClear(t *testing.T) {
@@ -64,67 +86,85 @@ func TestDeepReorgHaltLoadAndClear(t *testing.T) {
 
 	halt := &deepReorgHalt{target: chainhash.HashH([]byte("target")), height: 1234, moveBack: 300}
 
+	newAssembler := func(t *testing.T) (*BlockAssembler, *stateFailClient) {
+		items := setupBlockAssemblyTest(t)
+		client := &stateFailClient{ClientI: items.blockchainClient}
+
+		return &BlockAssembler{logger: ulogger.TestLogger{}, settings: items.blockAssembler.settings, blockchainClient: client}, client
+	}
+
 	loads := []struct {
 		name    string
-		data    []byte
-		err     error
+		record  []byte // nil writes no record
+		failGet bool
 		wantErr bool
 		halted  bool
 	}{
-		{name: "no record", err: errors.NewNotFoundError("no state")},
-		{name: "the byte 0", data: []byte{0}},
-		{name: "a halt record", data: halt.bytes(), halted: true},
-		{name: "a record it cannot parse", data: []byte{2}, wantErr: true},
-		{name: "a store it cannot read", err: errors.NewStorageError("down"), wantErr: true},
+		{name: "no record"},
+		{name: "the byte 0", record: []byte{0}},
+		{name: "a halt record", record: halt.bytes(), halted: true},
+		{name: "a record it cannot parse", record: []byte{2}, wantErr: true},
+		{name: "a store it cannot read", failGet: true, wantErr: true},
 	}
 
 	for _, tt := range loads {
 		t.Run("load/"+tt.name, func(t *testing.T) {
+			b, client := newAssembler(t)
 			prometheusBlockAssemblyDeepReorgHalted.Set(0)
 
-			client := &blockchain.Mock{}
-			client.On("GetState", mock.Anything, DeepReorgHaltStateKey).Return(tt.data, tt.err).Once()
-			b := &BlockAssembler{logger: ulogger.TestLogger{}, settings: createTestSettings(t), blockchainClient: client}
+			if tt.record != nil {
+				require.NoError(t, client.SetState(t.Context(), DeepReorgHaltStateKey, tt.record))
+			}
+
+			client.failGet = tt.failGet
 
 			err := b.loadDeepReorgHalt(t.Context())
 			require.Equal(t, tt.wantErr, err != nil, "got %v", err)
 			require.Equal(t, tt.halted, b.DeepReorgHalted())
 			require.Equal(t, map[bool]float64{true: 1, false: 0}[tt.halted], testutil.ToFloat64(prometheusBlockAssemblyDeepReorgHalted))
-			client.AssertExpectations(t)
 		})
 	}
 
 	clears := []struct {
 		name     string
 		halted   bool
-		setErr   error
+		failSet  bool
 		wantErr  bool
 		stillSet bool
 	}{
-		// No expectation on the client: clearing when not halted writes nothing.
 		{name: "not halted"},
 		{name: "halted", halted: true},
-		{name: "halted and the write fails", halted: true, setErr: errors.NewStorageError("down"), wantErr: true, stillSet: true},
+		{name: "halted and the write fails", halted: true, failSet: true, wantErr: true, stillSet: true},
 	}
 
 	for _, tt := range clears {
 		t.Run("clear/"+tt.name, func(t *testing.T) {
-			client := &blockchain.Mock{}
-			b := &BlockAssembler{logger: ulogger.TestLogger{}, settings: createTestSettings(t), blockchainClient: client}
+			b, client := newAssembler(t)
 
+			// A halt record on disk: clearing either replaces it with the byte 0 or leaves it.
+			require.NoError(t, client.SetState(t.Context(), DeepReorgHaltStateKey, halt.bytes()))
 			prometheusBlockAssemblyDeepReorgHalted.Set(0)
 
 			if tt.halted {
 				b.deepReorgHalt.Store(halt)
 				prometheusBlockAssemblyDeepReorgHalted.Set(1)
-				client.On("SetState", mock.Anything, DeepReorgHaltStateKey, []byte{0}).Return(tt.setErr).Once()
 			}
+
+			client.failSet = tt.failSet
 
 			err := b.clearDeepReorgHalt(t.Context())
 			require.Equal(t, tt.wantErr, err != nil, "got %v", err)
 			require.Equal(t, tt.stillSet, b.DeepReorgHalted())
 			require.Equal(t, map[bool]float64{true: 1, false: 0}[tt.stillSet], testutil.ToFloat64(prometheusBlockAssemblyDeepReorgHalted))
-			client.AssertExpectations(t)
+
+			data, err := client.ClientI.GetState(t.Context(), DeepReorgHaltStateKey)
+			require.NoError(t, err)
+
+			if tt.halted && !tt.failSet {
+				require.Equal(t, []byte{0}, data, "the record is cleared")
+			} else {
+				require.Equal(t, halt.bytes(), data, "nothing is written when not halted or when the write fails")
+			}
 		})
 	}
 }
@@ -188,14 +228,19 @@ func TestDeepReorgHaltStopsBlockAssembly(t *testing.T) {
 	tip, _ := ba.CurrentBlock()
 	require.NotEqual(t, b2.Hash().String(), tip.Hash().String())
 
-	// A reset nobody but block assembly asked for is refused before it touches anything, so a
-	// reset owed from earlier waits for the operator's.
+	// A reset nobody but block assembly asked for is refused before it touches anything, and a
+	// reset owed from earlier stays owed.
 	owed := &resetRequest{FullReset: true}
 	ba.resetOwed = owed
 	errCh := make(chan error, 1)
 	ba.handleResetRequests(t.Context(), resetRequest{ErrCh: errCh})
 	require.True(t, errors.Is(<-errCh, errors.ErrServiceUnavailable))
 	require.True(t, ba.DeepReorgHalted())
+	require.Same(t, owed, ba.resetOwed)
+
+	// The heartbeat's retry of an owed reset waits too, so the operator's reset takes it in.
+	ba.resetOwedRetryAt = time.Now().Add(-time.Second)
+	ba.requeueRefusedReset()
 	require.Same(t, owed, ba.resetOwed)
 
 	// So is one that would not move back at all.

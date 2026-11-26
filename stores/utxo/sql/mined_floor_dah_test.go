@@ -164,27 +164,28 @@ func TestSetConflictingStampsDAHAtMinedFloor_SQLite(t *testing.T) {
 
 // An unmined record flagged conflicting has no mined floor, so its stamp is exactly the tip
 // plus one plus the spent retention, the retention padded by the unmined retention.
-func TestSetConflictingStampsUnminedAtTipPlusSpentRetention_SQLite(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
+func TestSetConflictingStampsUnminedAtTipPlusSpentRetention(t *testing.T) {
+	forEachFloorBackend(t, func(t *testing.T, ctx context.Context, store *Store, _ bool) {
+		ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		defer cancel()
 
-	store, _ := setup(ctx, t)
-	require.NotZero(t, store.settings.UtxoStore.UnminedTxRetention, "the pad must be non-zero for this test to mean anything")
+		require.NotZero(t, store.settings.UtxoStore.UnminedTxRetention, "the pad must be non-zero for this test to mean anything")
 
-	require.NoError(t, store.SetBlockHeight(floorCachedTip))
+		require.NoError(t, store.SetBlockHeight(floorCachedTip))
 
-	_, err := store.Create(ctx, tests.ParentTx, floorCachedTip)
-	require.NoError(t, err)
+		_, err := store.Create(ctx, tests.ParentTx, floorCachedTip)
+		require.NoError(t, err)
 
-	_, err = store.Create(ctx, tests.Tx, floorCachedTip)
-	require.NoError(t, err)
+		_, err = store.Create(ctx, tests.Tx, floorCachedTip)
+		require.NoError(t, err)
 
-	_, _, err = store.SetConflicting(ctx, []chainhash.Hash{*tests.Tx.TxIDChainHash()}, true)
-	require.NoError(t, err)
+		_, _, err = store.SetConflicting(ctx, []chainhash.Hash{*tests.Tx.TxIDChainHash()}, true)
+		require.NoError(t, err)
 
-	dah := readDAH(ctx, t, store, *tests.Tx.TxIDChainHash())
-	require.NotNil(t, dah)
-	require.Equal(t, int64(floorCachedTip)+1+floorRetention(t, store), *dah)
+		dah := readDAH(ctx, t, store, *tests.Tx.TxIDChainHash())
+		require.NotNil(t, dah)
+		require.Equal(t, int64(floorCachedTip)+1+floorRetention(t, store), *dah)
+	})
 }
 
 // A conflicting record already stamped from the lagging tip, then flagged conflicting
