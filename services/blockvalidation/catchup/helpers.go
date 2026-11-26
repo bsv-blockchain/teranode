@@ -143,8 +143,12 @@ func BuildBlockLocatorString(locatorHashes []*chainhash.Hash) string {
 // fixed model.BlockHeaderSize bytes - so, unlike the block-fetch paths, a byte cap is
 // the right fit here and needs no invented constant.
 func FetchHeadersWithRetry(ctx context.Context, logger ulogger.Logger, url string, maxRetries int, backoff time.Duration, maxBytes int64) ([]byte, error) {
+	const maxBackoff = 30 * time.Second
+
 	if backoff <= 0 {
 		backoff = time.Second
+	} else if backoff > maxBackoff {
+		backoff = maxBackoff
 	}
 
 	return retry.Retry(ctx, logger, func() ([]byte, error) {
@@ -177,7 +181,7 @@ func FetchHeadersWithRetry(ctx context.Context, logger ulogger.Logger, url strin
 		retry.WithExponentialBackoff(),
 		retry.WithBackoffDurationType(backoff),
 		retry.WithBackoffFactor(2.0),
-		retry.WithMaxBackoff(30*time.Second),
+		retry.WithMaxBackoff(maxBackoff),
 		retry.WithMessage("Failed to fetch block headers"),
 	)
 }

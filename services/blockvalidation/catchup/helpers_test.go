@@ -441,6 +441,23 @@ func TestCreateCatchupResultWithLocator(t *testing.T) {
 	assert.False(t, resultReached.StoppedEarly) // reachedTarget is true, so no early stop
 }
 
+type firstRetryWaitLogger struct {
+	ulogger.TestLogger
+	waitSeconds float64
+	cancel      context.CancelFunc
+}
+
+func (l *firstRetryWaitLogger) Duplicate(...ulogger.Option) ulogger.Logger {
+	return l
+}
+
+func (l *firstRetryWaitLogger) Debugf(_ string, args ...interface{}) {
+	if l.waitSeconds == 0 {
+		l.waitSeconds = args[2].(float64)
+		l.cancel()
+	}
+}
+
 func TestFetchHeadersWithRetry(t *testing.T) {
 	// This function calls retry.Retry and util.DoHTTPRequest which are external dependencies
 	// We'll test the basic structure and error categorization logic
@@ -465,6 +482,16 @@ func TestFetchHeadersWithRetry(t *testing.T) {
 
 	_, err = FetchHeadersWithRetry(cancelledCtx, logger, url, maxRetries, time.Millisecond, maxBytes)
 	require.Error(t, err)
+
+	t.Run("initial backoff is capped", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		logger := &firstRetryWaitLogger{cancel: cancel}
+		_, err := FetchHeadersWithRetry(ctx, logger, "://invalid", 1, 45*time.Second, maxBytes)
+		require.ErrorIs(t, err, context.Canceled)
+		require.Equal(t, 30.0, logger.waitSeconds)
+	})
 }
 
 func TestFetchHeadersWithRetry_ErrorCategorization(t *testing.T) {
