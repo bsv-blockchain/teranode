@@ -25,7 +25,10 @@ other files in the directory, such as unfinished `.part` files, are ignored. The
 compressed set and every piece must be regular files: each import pass opens
 them itself, so a named pipe would split its bytes between passes. A pipe goes
 under the plain `<hash>.utxo-set` name. If both the plain and the compressed set
-exist, the seeder refuses to choose.
+exist, the seeder refuses to choose. The decoder accepts zstd windows up to
+512 MiB, its default: every `zstd` level and `--long` up to 29. A set compressed
+with `--long=30` or `--long=31` is refused when its first bytes are read, before
+anything is stored.
 
 The checksum sidecar stays `<hash>.utxo-set.sha256` and covers the uncompressed
 bytes. For a compressed set it is read before the import and checked in the
