@@ -621,7 +621,7 @@ func TestAerospike(t *testing.T) {
 		// setMined stamps the DAH relative to the height of the block the tx is mined
 		// into (BlockHeight=123), plus the retention window — not the store's cached
 		// chain tip.
-		assert.Equal(t, int(123+tSettings.GetUtxoStoreBlockHeightRetention()), value.Bins[fields.DeleteAtHeight.String()])
+		assert.Equal(t, int(123+tSettings.GetUtxoStoreSpentDeleteRetention()), value.Bins[fields.DeleteAtHeight.String()])
 
 		// try to spend with different txid
 		fx.spends, err = store.Spend(ctx, fx.spendTx3, 1)
@@ -1909,7 +1909,7 @@ func TestCreateZeroSat(t *testing.T) {
 	assert.NotNil(t, response)
 	assert.Equal(t, 2, response.Bins["totalUtxos"])
 	assert.Equal(t, 2, response.Bins["spentUtxos"])
-	require.Equal(t, 133, response.Bins[fields.DeleteAtHeight.String()])
+	require.Equal(t, int(123+tSettings.GetUtxoStoreSpentDeleteRetention()), response.Bins[fields.DeleteAtHeight.String()])
 }
 
 // TestAerospikeOutpointBatcherDrainMode is a happy-path smoke test for the

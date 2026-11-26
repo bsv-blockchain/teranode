@@ -37,6 +37,7 @@ import (
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/ordishs/gocore"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -330,6 +331,7 @@ func TestBlockAssembly_Start(t *testing.T) {
 		// No mark of skipped fork transactions is pending; a record that is not the byte 0
 		// would read as pending.
 		blockchainClient.On("GetState", mock.Anything, SkippedForkMarkStateKey).Return([]byte(nil), errors.NewNotFoundError("no record"))
+		blockchainClient.On("GetState", mock.Anything, DeepReorgHaltStateKey).Return([]byte(nil), errors.NewNotFoundError("no record"))
 		blockchainClient.On("GetState", mock.Anything, mock.Anything).Return(stateBytes, nil)
 		blockchainClient.On("GetBestBlockHeader", mock.Anything).Return(bestBlockHeader, &model.BlockHeaderMeta{Height: 1}, nil)
 		blockchainClient.On("GetBlockHeaders", mock.Anything, mock.Anything, mock.Anything).Return([]*model.BlockHeader{model.GenesisBlockHeader}, []*model.BlockHeaderMeta{{Height: 0}}, nil)
@@ -1617,9 +1619,15 @@ func TestBlockAssembler_GetMiningCandidate_HappyPath(t *testing.T) {
 		originalStp := ba.subtreeProcessor
 		ba.subtreeProcessor = mockStp
 
+		stampedBefore := testutil.ToFloat64(prometheusBlockAssemblerLastMiningCandidateTime)
+
 		candidate, subtrees, err := ba.GetMiningCandidate(context.Background())
 		require.NoError(t, err)
 		require.NotNil(t, candidate)
+
+		stamped := testutil.ToFloat64(prometheusBlockAssemblerLastMiningCandidateTime)
+		require.Greater(t, stamped, stampedBefore)
+		require.InDelta(t, float64(time.Now().Unix()), stamped, 5)
 
 		// Verify candidate fields
 		assert.Equal(t, uint32(1), candidate.Height) // genesis height 0 + 1
@@ -1638,6 +1646,23 @@ func TestBlockAssembler_GetMiningCandidate_HappyPath(t *testing.T) {
 		assert.Equal(t, st2.RootHash().CloneBytes(), candidate.SubtreeHashes[1])
 
 		ba.subtreeProcessor = originalStp
+	})
+
+	t.Run("does not stamp the candidate time when no candidate is served", func(t *testing.T) {
+		initPrometheusMetrics()
+		testItems := setupBlockAssemblyTest(t)
+		require.NotNil(t, testItems)
+
+		ba := testItems.blockAssembler
+		ba.bestBlock.Store(&BestBlockInfo{})
+
+		stampedBefore := testutil.ToFloat64(prometheusBlockAssemblerLastMiningCandidateTime)
+
+		candidate, _, err := ba.GetMiningCandidate(context.Background())
+		require.Error(t, err)
+		require.Nil(t, candidate)
+
+		require.Equal(t, stampedBefore, testutil.ToFloat64(prometheusBlockAssemblerLastMiningCandidateTime))
 	})
 
 	t.Run("returns candidate from incomplete subtree fallback", func(t *testing.T) {
@@ -3291,6 +3316,7 @@ func TestStart_TriggersReconcileOnStartup(t *testing.T) {
 	bc := &blockchain.Mock{}
 	// No mark of skipped fork transactions is pending.
 	bc.On("GetState", mock.Anything, SkippedForkMarkStateKey).Return([]byte(nil), errors.NewNotFoundError("no record"))
+	bc.On("GetState", mock.Anything, DeepReorgHaltStateKey).Return([]byte(nil), errors.NewNotFoundError("no record"))
 	bc.On("GetState", mock.Anything, mock.Anything).Return(checkpointBytes, nil)
 	bc.On("SetState", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 	bc.On("GetBestBlockHeader", mock.Anything).

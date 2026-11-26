@@ -270,7 +270,14 @@ type BlockAssembler struct {
 	bestTipPos                atomic.Pointer[model.BestTipKey]
 	bestTipPosKnown           atomic.Bool
 	bestTipResetReplayPending atomic.Bool // candidates stay empty until reset's pending history succeeds or is given up
-	bestTipResetIncomplete    atomic.Bool // reset moved its target but has not finished reloading/persisting
+
+	// deepReorgHalt is set while block assembly is halted on a reorg that moves back at least the
+	// UTXO retention (haltForDeepReorg), and nil otherwise. Only an operator reset lifts it.
+	deepReorgHalt atomic.Pointer[deepReorgHalt]
+	// operatorResetRunning is set while handleResetRequests runs a reset an operator asked for,
+	// the one reset that may run while halted.
+	operatorResetRunning   atomic.Bool
+	bestTipResetIncomplete atomic.Bool // reset moved its target but has not finished reloading/persisting
 
 	// bestTipPosSaved is the position last persisted under BestTipPositionStateKey, and
 	// lastBestTipPosSave when a save was last tried, in Unix nanoseconds.
@@ -836,13 +843,31 @@ drain:
 		}
 	}
 
-	var fullReset, validateInputs, storageTriggered bool
+	var fullReset, validateInputs, storageTriggered, operator bool
 
 	for _, req := range batch {
 		fullReset = fullReset || req.FullReset
 		validateInputs = validateInputs || req.ValidateInputs
 		storageTriggered = storageTriggered || req.StorageTriggered
+		operator = operator || req.Operator
 	}
+
+	// While halted on a deep reorg only an operator's reset runs; the others are answered with
+	// the halt and not owed, since the operator's reset does what they asked for.
+	if b.DeepReorgHalted() && !operator {
+		haltErr := b.deepReorgHaltedError()
+
+		for _, req := range batch {
+			if req.ErrCh != nil {
+				req.ErrCh <- haltErr
+			}
+		}
+
+		return
+	}
+
+	b.operatorResetRunning.Store(operator)
+	defer b.operatorResetRunning.Store(false)
 
 	// A reset refused earlier (resetOwed) runs with this one, so it does not run again. If this
 	// one then fails before the rotation, the owed options go with it, as a failed reset's own
@@ -902,6 +927,7 @@ drain:
 
 			b.resetOwed.FullReset = b.resetOwed.FullReset || req.FullReset
 			b.resetOwed.ValidateInputs = b.resetOwed.ValidateInputs || req.ValidateInputs
+			b.resetOwed.Operator = b.resetOwed.Operator || req.Operator
 		}
 
 		// Its own back-off, so a mark that keeps failing for another reason, which pushes
@@ -958,6 +984,14 @@ drain:
 		b.bestTipResetReplayPending.Store(true)
 	}
 	resp, err := b.resetWithResponse(ctx, validateInputs)
+	// The exemption covers the reset the operator asked for, not the replay and owed work that
+	// follow it: those may move back past the retention again and must halt like any other.
+	b.operatorResetRunning.Store(false)
+
+	if err == nil && operator {
+		err = b.clearDeepReorgHalt(ctx)
+	}
+
 	if err != nil && !resp.Rotated {
 		// Nothing was discarded: block assembly is still on its old tip with its old pool,
 		// and the ordinary replay from the unchanged position carries it forward.
@@ -1160,6 +1194,11 @@ func (b *BlockAssembler) resetWithResponse(ctx context.Context, validateInputs .
 func (b *BlockAssembler) resetToBlockWithResponse(ctx context.Context, bestBlockchainBlockHeader *model.BlockHeader, targetHeight uint32, validateInputs ...bool) (subtreeprocessor.ResetResponse, error) {
 	var resp subtreeprocessor.ResetResponse
 
+	operator := b.operatorResetRunning.Load()
+	if b.DeepReorgHalted() && !operator {
+		return resp, b.deepReorgHaltedError()
+	}
+
 	// reset the block assembly
 	hash, h := b.CurrentBlock()
 	b.logger.Warnf("[BlockAssembler][Reset] resetting: %d: %s -> %d: %s", h, hash.Hash(), targetHeight, bestBlockchainBlockHeader.String())
@@ -1167,6 +1206,13 @@ func (b *BlockAssembler) resetToBlockWithResponse(ctx context.Context, bestBlock
 	moveBackBlocksWithMeta, moveForwardBlocksWithMeta, err := b.getReorgBlocks(ctx, bestBlockchainBlockHeader, targetHeight)
 	if err != nil {
 		return resp, errors.NewProcessingError("[Reset] error getting reorg blocks", err)
+	}
+
+	// Every reset reloads the mempool from the store, so one that moves back at least the UTXO
+	// retention would quietly drop what the pruner deleted. It halts instead, unless an operator
+	// asked for it. Every path to a reset, a deep reorg in handleReorg included, comes here.
+	if movedBack := movedBackCount(moveBackBlocksWithMeta, moveForwardBlocksWithMeta); !operator && deepReorgNeedsHalt(movedBack, b.settings.GetUtxoStoreBlockHeightRetention()) {
+		return resp, b.haltForDeepReorg(ctx, bestBlockchainBlockHeader, targetHeight, movedBack, len(moveForwardBlocksWithMeta))
 	}
 
 	// Fast-forward reset is safe when the whole forward range is at/below the
@@ -1549,6 +1595,12 @@ func (b *BlockAssembler) processNewBlockAnnouncement(ctx context.Context) {
 
 		deferFn()
 	}()
+
+	// Halted on a deep reorg: block assembly stays on its tip until an operator resets it, and
+	// the halt was logged once when it began.
+	if b.DeepReorgHalted() {
+		return
+	}
 
 	// Drain on every exit path, including the error returns below: a refusal is
 	// recorded during block movement, and the block still needs invalidating
@@ -2038,6 +2090,12 @@ func (b *BlockAssembler) Start(ctx context.Context) (err error) {
 
 	if err = b.initState(ctx); err != nil {
 		return errors.NewProcessingError("[BlockAssembler] failed to initialize state: %v", err)
+	}
+
+	// A halt on a deep reorg outlives the restart. Block assembly still starts on its own tip and
+	// pool, which the reorg never touched, and answers the operator's reset.
+	if err = b.loadDeepReorgHalt(ctx); err != nil {
+		return err
 	}
 
 	// Read the replay position before the first wake-up, so the best tips made while block
@@ -2842,6 +2900,10 @@ type resetRequest struct {
 	// SubtreeProcessor.TakeResetRequested). Only such a reset can leave block
 	// assembly degraded (onResetDone); a clean reset of any kind clears it.
 	StorageTriggered bool
+
+	// Operator marks a reset an operator asked for (OperatorReset), the only reset that runs
+	// while block assembly is halted on a deep reorg, and that lifts the halt once it completes.
+	Operator bool
 }
 
 // Reset triggers a reset of the block assembler state.
@@ -2859,16 +2921,45 @@ func (b *BlockAssembler) ResetWithInputValidation() {
 	b.resetWithOptions(false, true)
 }
 
+// OperatorReset is a reset an operator asked for through the resetblockassembly commands. It is
+// the one reset that runs while block assembly is halted on a deep reorg, and it lifts the halt
+// once it completes, accepting that the mempool it reloads drops what the pruner deleted.
+func (b *BlockAssembler) OperatorReset(fullReset bool, validateInputs bool) {
+	b.queueReset(resetRequest{FullReset: fullReset, ValidateInputs: validateInputs, Operator: true})
+}
+
+// OperatorResetAndWait reports whether the operator's reset and durable halt clear completed.
+func (b *BlockAssembler) OperatorResetAndWait(ctx context.Context, fullReset, validateInputs bool) error {
+	return b.resetAndWait(ctx, resetRequest{FullReset: fullReset, ValidateInputs: validateInputs, Operator: true})
+}
+
+func (b *BlockAssembler) resetAndWait(ctx context.Context, req resetRequest) error {
+	req.ErrCh = make(chan error, 1)
+	select {
+	case b.resetCh <- req:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+
+	select {
+	case err := <-req.ErrCh:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
 func (b *BlockAssembler) resetWithOptions(fullReset bool, validateInputs bool) {
+	b.queueReset(resetRequest{FullReset: fullReset, ValidateInputs: validateInputs})
+}
+
+func (b *BlockAssembler) queueReset(req resetRequest) {
 	// run in a go routine to prevent blocking
 	go func() {
 		errCh := make(chan error, 1)
+		req.ErrCh = errCh
 
-		b.resetCh <- resetRequest{
-			FullReset:      fullReset,
-			ValidateInputs: validateInputs,
-			ErrCh:          errCh,
-		}
+		b.resetCh <- req
 
 		if err := <-errCh; err != nil {
 			b.logger.Errorf("[BlockAssembler] error resetting: %v", err)
@@ -2911,9 +3002,14 @@ func (b *BlockAssembler) resetAfterDrainFailure() {
 
 // requeueRefusedReset queues again, with its options, a reset handleResetRequests refused
 // (resetOwed), once its back-off is over (resetOwedRetryAt), so a record that keeps failing
-// does not refuse one reset after another.
+// does not refuse one reset after another. While halted on a deep reorg it waits: the halt
+// would refuse the retry and drop it, and the operator's reset takes in what is owed.
 func (b *BlockAssembler) requeueRefusedReset() {
 	if b.resetOwed == nil || time.Now().Before(b.resetOwedRetryAt) {
+		return
+	}
+
+	if b.DeepReorgHalted() && !b.resetOwed.Operator {
 		return
 	}
 
@@ -3024,6 +3120,15 @@ func (b *BlockAssembler) onResetDone(storageTriggered bool, resp subtreeprocesso
 //   - []*util.Subtree: Associated subtrees
 //   - error: Any error encountered during retrieval
 func (b *BlockAssembler) GetMiningCandidate(ctx context.Context, hold ...*subtreeprocessor.SubtreeHold) (*model.MiningCandidate, []*subtree.Subtree, error) {
+	candidate, subtrees, err := b.getMiningCandidate(ctx, hold...)
+	if err == nil {
+		prometheusBlockAssemblerLastMiningCandidateTime.SetToCurrentTime()
+	}
+
+	return candidate, subtrees, err
+}
+
+func (b *BlockAssembler) getMiningCandidate(ctx context.Context, hold ...*subtreeprocessor.SubtreeHold) (*model.MiningCandidate, []*subtree.Subtree, error) {
 	ctx, _, deferFn := tracing.Tracer("blockassembly").Start(ctx, "GetMiningCandidate",
 		tracing.WithParentStat(b.stats),
 		tracing.WithHistogram(prometheusBlockAssemblyGetMiningCandidateDuration),
@@ -3032,6 +3137,10 @@ func (b *BlockAssembler) GetMiningCandidate(ctx context.Context, hold ...*subtre
 	defer deferFn()
 
 	prometheusBlockAssemblerGetMiningCandidate.Inc()
+
+	if b.DeepReorgHalted() {
+		return nil, nil, b.deepReorgHaltedError()
+	}
 
 	// Handle block-processing-in-progress state. A reorg, reconcile or reset is
 	// still moving block assembly to the chain tip, so a candidate built on the

@@ -23,7 +23,7 @@ func initPruneMetrics() {
 			Namespace: "teranode",
 			Subsystem: "lane_pruner",
 			Name:      "verdicts_total",
-			Help:      "Pruning decisions judged by the lane rule beside today's rule, at utxostore_laneMigration shadow, by store (utxoset, aerospike), today's decision (delete; keep; keep_undo, a utxoset journal row carried only for a reorg because its spender is mined), the lane rule's (delete, keep, cannot_judge) and reason (settled; parent_ or spender_ unmined, off_chain, shallow; conflicting; no_position, not_ready, not_loaded, no_rows, spender_unread). today=keep with lanes=delete is the direction that must never happen. Only today's decision is acted on",
+			Help:      "Pruning decisions judged by the lane rule beside today's rule, at utxostore_laneMigration shadow, by store (utxoset, aerospike), today's decision (delete; keep; keep_undo, a utxoset journal row carried only for a reorg because its spender is mined), the lane rule's (delete, keep, cannot_judge) and reason (settled; parent_ or spender_ unmined, off_chain, shallow; conflicting; no_position, not_ready, not_loaded, no_rows, spender_unread, coinbase). today=keep with lanes=delete is the direction that must never happen. Only today's decision is acted on",
 		}, []string{"store", "today", "lanes", "reason"})
 		prometheusLanePrunerLookups = promauto.NewCounterVec(prometheus.CounterOpts{
 			Namespace: "teranode",

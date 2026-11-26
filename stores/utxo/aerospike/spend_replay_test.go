@@ -22,11 +22,12 @@ import (
 )
 
 // The replay tests run at the default retention of 288, so a spend recorded at 1000 is history
-// from block 1144 on (utxo.HistoricalSpendAge) and the pruner may delete its child from 1289.
+// from block 1144 on (utxo.HistoricalSpendAge). A fully spent record is kept for the retention
+// plus the unmined retention, 288 + 144, so the pruner may delete the child from about 1433.
 const (
 	replayRetention  = 288
 	replaySpendBlock = 1000
-	replayPruneBlock = 1400
+	replayPruneBlock = 1500
 	// replayBlock is when a pruned transaction is resubmitted: 1,001 blocks after its spend.
 	replayBlock = 2001
 )

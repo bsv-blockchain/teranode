@@ -3,6 +3,7 @@ package utxoset
 import (
 	"context"
 	"encoding/binary"
+	"fmt"
 	"testing"
 	"time"
 
@@ -127,11 +128,14 @@ var (
 	journalSettled    = lane.Pack(9, 40)  // block 190: below the floor
 	journalSettled2   = lane.Pack(9, 42)  // block 190: below the floor
 	journalSettled3   = lane.Pack(9, 43)  // block 190: below the floor
+	journalSettled4   = lane.Pack(9, 44)  // block 190: below the floor
+	journalSettled5   = lane.Pack(9, 45)  // block 190: below the floor
+	journalCoinbase   = lane.Pack(7, 501) // no block: a coinbase no row lists
 	journalShallow    = lane.Pack(9, 41)  // block 250: 50 deep
 	journalUnmined    = lane.Pack(9, 99)  // no block
 	journalIndexBlock = map[uint32][]uint64{
 		150: {journalParentPos},
-		190: {journalSettled, journalSettled2, journalSettled3},
+		190: {journalSettled, journalSettled2, journalSettled3, journalSettled4, journalSettled5},
 		250: {journalShallow},
 		260: {lane.Pack(7, 1000), lane.Pack(9, 1000)},
 	}
@@ -181,25 +185,39 @@ func TestJournalDropJudgesEveryRowByTheLaneRule(t *testing.T) {
 	_, err = s.SetMinedMulti(ctx, hashes(minedLate), utxo.MinedBlockInfo{BlockID: 9, BlockHeight: 1_500, OnLongestChain: true})
 	require.NoError(t, err)
 
+	// Dropped: a coinbase's output, spent by a settled spender. No row lists a coinbase, so the
+	// journal row's coinbase flag has lanes count it apart instead of as an unmined parent.
+	coinbase := mkTx(t, 2, 5_000)
+	_, err = s.Create(ctx, coinbase, 800, utxo.WithSetCoinbase(true), utxo.WithLanePosition(journalCoinbase), minedAt(800, 11))
+	require.NoError(t, err)
+	spendWith(t, s, ctx, coinbase, 0, 1_010, utxo.WithLanePosition(journalSettled4), minedAt(1_010, 12))
+	// Carried: a coinbase's output spent by a waiting spender the index says a deep block took. The
+	// kept row's coinbase flag is read too, so lanes cannot judge it rather than keep an unmined parent.
+	spendWith(t, s, ctx, coinbase, 1, 1_010, utxo.WithLanePosition(journalSettled5))
+
 	// A journal partition above the cutoff, which does not retire, so the pass is no backlog.
 	require.NoError(t, s.ensureSpendJournalPartition(ctx, 1_700))
 
 	require.NoError(t, s.SetBlockHeight(1_728))
 
 	before := map[string]float64{
-		"both keep":   journalVerdicts(t, lanereader.PruneKeep, lanereader.PruneKeep, lanereader.ReasonSpenderUnmined),
-		"both delete": journalVerdicts(t, lanereader.PruneDelete, lanereader.PruneDelete, lanereader.ReasonSettled),
-		"today only":  journalVerdicts(t, lanereader.PruneDelete, lanereader.PruneKeep, lanereader.ReasonSpenderShallow),
-		"no position": journalVerdicts(t, lanereader.PruneDelete, lanereader.PruneCannotJudge, lanereader.ReasonNoPosition),
-		"lanes only":  journalVerdicts(t, lanereader.PruneKeep, lanereader.PruneDelete, lanereader.ReasonSettled),
-		"undo":        journalVerdicts(t, lanereader.PruneKeepUndo, lanereader.PruneDelete, lanereader.ReasonSettled),
-		"rows":        journalReads(t, "journal_row"),
-		"positions":   journalReads(t, "position"),
+		"both keep":     journalVerdicts(t, lanereader.PruneKeep, lanereader.PruneKeep, lanereader.ReasonSpenderUnmined),
+		"both delete":   journalVerdicts(t, lanereader.PruneDelete, lanereader.PruneDelete, lanereader.ReasonSettled),
+		"today only":    journalVerdicts(t, lanereader.PruneDelete, lanereader.PruneKeep, lanereader.ReasonSpenderShallow),
+		"no position":   journalVerdicts(t, lanereader.PruneDelete, lanereader.PruneCannotJudge, lanereader.ReasonNoPosition),
+		"lanes only":    journalVerdicts(t, lanereader.PruneKeep, lanereader.PruneDelete, lanereader.ReasonSettled),
+		"undo":          journalVerdicts(t, lanereader.PruneKeepUndo, lanereader.PruneDelete, lanereader.ReasonSettled),
+		"coinbase":      journalVerdicts(t, lanereader.PruneDelete, lanereader.PruneCannotJudge, lanereader.ReasonCoinbase),
+		"kept coinbase": journalVerdicts(t, lanereader.PruneKeep, lanereader.PruneCannotJudge, lanereader.ReasonCoinbase),
+		"rows":          journalReads(t, "journal_row"),
+		"positions":     journalReads(t, "position"),
+		"leaf_error":    journalUnjudged(t, "leaf_error"),
 	}
 
 	dropped, err := s.dropSpendJournalPartitionsBelow(ctx, 1_440)
 	require.NoError(t, err)
 	require.Positive(t, dropped)
+	require.Equal(t, before["leaf_error"], journalUnjudged(t, "leaf_error"), "the judging finished")
 
 	require.Equal(t, before["both keep"]+1, journalVerdicts(t, lanereader.PruneKeep, lanereader.PruneKeep, lanereader.ReasonSpenderUnmined))
 	require.Equal(t, before["both delete"]+1, journalVerdicts(t, lanereader.PruneDelete, lanereader.PruneDelete, lanereader.ReasonSettled))
@@ -207,8 +225,10 @@ func TestJournalDropJudgesEveryRowByTheLaneRule(t *testing.T) {
 	require.Equal(t, before["no position"]+1, journalVerdicts(t, lanereader.PruneDelete, lanereader.PruneCannotJudge, lanereader.ReasonNoPosition))
 	require.Equal(t, before["lanes only"]+1, journalVerdicts(t, lanereader.PruneKeep, lanereader.PruneDelete, lanereader.ReasonSettled))
 	require.Equal(t, before["undo"]+1, journalVerdicts(t, lanereader.PruneKeepUndo, lanereader.PruneDelete, lanereader.ReasonSettled))
-	require.Equal(t, before["rows"]+6, journalReads(t, "journal_row"))
-	require.Equal(t, before["positions"]+6, journalReads(t, "position"), "each spender's position; the parent's is on the journal row")
+	require.Equal(t, before["coinbase"]+1, journalVerdicts(t, lanereader.PruneDelete, lanereader.PruneCannotJudge, lanereader.ReasonCoinbase))
+	require.Equal(t, before["kept coinbase"]+1, journalVerdicts(t, lanereader.PruneKeep, lanereader.PruneCannotJudge, lanereader.ReasonCoinbase))
+	require.Equal(t, before["rows"]+8, journalReads(t, "journal_row"))
+	require.Equal(t, before["positions"]+8, journalReads(t, "position"), "each spender's position; the parent's is on the journal row")
 
 	_, judged := s.laneJudgedLeaves.Load(uint32(1_010 / SpendJournalPartitionBlocks))
 	require.True(t, judged, "the partition is remembered as judged")
@@ -237,6 +257,22 @@ func TestJournalDropReadsTheParentsPositionWithoutTheCoinColumn(t *testing.T) {
 
 	settled := journalVerdicts(t, lanereader.PruneDelete, lanereader.PruneDelete, lanereader.ReasonSettled)
 	positions := journalReads(t, "position")
+
+	// Nothing carried: the log line says every kept row was judged, none probed for. A batch of one
+	// makes the full-batch flush count the row. This judge's counts are never added to the metrics.
+	batch := laneJudgeBatch
+	laneJudgeBatch = 1
+	t.Cleanup(func() { laneJudgeBatch = batch })
+
+	carry, err := s.collectCopyForward(ctx, 1_440)
+	require.NoError(t, err)
+	require.Empty(t, carry.ukeys)
+
+	cov, err := s.newLaneJournalJudge(carry, 1).judgeLeafRows(ctx, uint32(1_010/SpendJournalPartitionBlocks))
+	require.NoError(t, err)
+	require.Equal(t, 1, cov.rows)
+	require.True(t, cov.keptDone)
+	require.Zero(t, cov.probed)
 
 	_, err = s.dropSpendJournalPartitionsBelow(ctx, 1_440)
 	require.NoError(t, err)
@@ -379,67 +415,214 @@ func TestJournalLeafIsJudgedOnce(t *testing.T) {
 }
 
 // TestJournalDropCountsAFailedJudgeAndStillDrops: a read the judging needs fails, the partition counts
-// leaf_error, and the drop goes on, carrying the waiting spend.
+// leaf_error, its log line says how far the judging got, and the drop goes on, carrying the waiting spend.
 func TestJournalDropCountsAFailedJudgeAndStillDrops(t *testing.T) {
-	s, ctx := newLaneCopyStore(t)
-	installJournalLaneIndex(t, journalIndexBlock)
+	const (
+		badPositions = "SELECT no_such_column FROM tx_ident WHERE $1::smallint[] IS NULL AND $2::bytea[] IS NULL"
+		// The kept rows' probe: refused when prepared, failing as its rows stream, and a row it cannot scan.
+		keptRefused = "SELECT no_such_column%s FROM %s WHERE $1::uuid[] IS NULL AND $2::bytea[] IS NULL AND $3::bytea[] IS NULL"
+		keptFails   = "SELECT j.ukey, j.txid, j.spending_txid, j.flags%s FROM %s j, unnest($1::uuid[], $2::bytea[], $3::bytea[]) AS k(ukey, txid, spender) WHERE j.ukey = k.ukey AND 1 / (j.created_height - j.created_height) = 1"
+		keptBadRow  = "SELECT j.ukey, j.txid, j.spending_txid, 'x'::text%s FROM %s j WHERE $1::uuid[] IS NOT NULL AND $2::bytea[] IS NOT NULL AND $3::bytea[] IS NOT NULL"
+		// The scan: refused when prepared, and a row it cannot scan.
+		scanRefused = "SELECT no_such_column%s FROM %s"
+		scanBadRow  = "SELECT ukey, txid, spending_txid, 'x'::text%s FROM %s"
+	)
 
-	query := lanePositionsQuery
-	lanePositionsQuery = "SELECT no_such_column FROM tx_ident WHERE $1::smallint[] IS NULL AND $2::bytea[] IS NULL"
-	t.Cleanup(func() { lanePositionsQuery = query })
+	for _, tc := range []struct {
+		name                  string
+		positions, kept, scan string
+		batch                 int
+		nothingCarried        bool
+		keptDone              bool
+		keptJudged            int
+	}{
+		{name: "the kept rows' position read fails", positions: badPositions},
+		{name: "the kept rows' probe is refused", kept: keptRefused},
+		{name: "the kept rows' probe fails as it streams", kept: keptFails},
+		{name: "a kept row cannot be scanned", kept: keptBadRow},
+		{name: "the scan is refused", scan: scanRefused, keptDone: true, keptJudged: 1},
+		{name: "a scanned row cannot be scanned", scan: scanBadRow, keptDone: true, keptJudged: 1},
+		{name: "the last batch's position read fails", positions: badPositions, nothingCarried: true, keptDone: true},
+		{name: "a full batch's position read fails", positions: badPositions, batch: 1, nothingCarried: true, keptDone: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, ctx := newLaneCopyStore(t)
+			installJournalLaneIndex(t, journalIndexBlock)
 
-	parent := mkTx(t, 2, 5_000)
-	_, err := s.Create(ctx, parent, 1_000, utxo.WithLanePosition(journalParentPos), minedAt(1_000, 1))
-	require.NoError(t, err)
+			parent := mkTx(t, 2, 5_000)
+			_, err := s.Create(ctx, parent, 1_000, utxo.WithLanePosition(journalParentPos), minedAt(1_000, 1))
+			require.NoError(t, err)
 
-	spendWith(t, s, ctx, parent, 0, 1_010, utxo.WithLanePosition(journalUnmined))
-	spendWith(t, s, ctx, parent, 1, 1_010, utxo.WithLanePosition(journalSettled), minedAt(1_010, 2))
+			if tc.nothingCarried {
+				spendWith(t, s, ctx, parent, 0, 1_010, utxo.WithLanePosition(journalSettled2), minedAt(1_010, 3))
+			} else {
+				spendWith(t, s, ctx, parent, 0, 1_010, utxo.WithLanePosition(journalUnmined))
+			}
 
-	require.NoError(t, s.SetBlockHeight(1_728))
+			spendWith(t, s, ctx, parent, 1, 1_010, utxo.WithLanePosition(journalSettled), minedAt(1_010, 2))
 
-	leafErrors := journalUnjudged(t, "leaf_error")
+			require.NoError(t, s.SetBlockHeight(1_728))
 
-	dropped, err := s.dropSpendJournalPartitionsBelow(ctx, 1_440)
-	require.NoError(t, err)
-	require.Positive(t, dropped)
+			positions, kept, scan, batch := lanePositionsQuery, laneJournalKeptQuery, laneJournalScanQuery, laneJudgeBatch
+			t.Cleanup(func() {
+				lanePositionsQuery, laneJournalKeptQuery, laneJournalScanQuery, laneJudgeBatch = positions, kept, scan, batch
+			})
 
-	require.Equal(t, leafErrors+1, journalUnjudged(t, "leaf_error"))
-	require.Equal(t, 1, judgedLeaves(s), "a partition whose judging failed is not judged again")
+			if tc.positions != "" {
+				lanePositionsQuery = tc.positions
+			}
 
-	_, carried := journalLane(t, s, ctx, parent, 0)
-	require.True(t, carried, "the waiting spend is carried")
+			if tc.kept != "" {
+				laneJournalKeptQuery = tc.kept
+			}
 
-	_, kept := journalLane(t, s, ctx, parent, 1)
-	require.False(t, kept, "the mined spend dropped with its partition")
+			if tc.scan != "" {
+				laneJournalScanQuery = tc.scan
+			}
+
+			if tc.batch > 0 {
+				laneJudgeBatch = tc.batch
+			}
+
+			leafErrors := journalUnjudged(t, "leaf_error")
+
+			// What the log line reports, from a judge whose counts are never added to the metrics.
+			carry, err := s.collectCopyForward(ctx, 1_440)
+			require.NoError(t, err)
+
+			cov, err := s.newLaneJournalJudge(carry, 1).judgeLeafRows(ctx, uint32(1_010/SpendJournalPartitionBlocks))
+			require.Error(t, err)
+			require.Equal(t, tc.keptDone, cov.keptDone)
+			require.Equal(t, tc.keptJudged, cov.kept)
+			require.Equal(t, tc.keptJudged, cov.rows, "only judged rows are counted")
+
+			// Only carried spends whose rows were judged count as probed: all of them once the probe
+			// finished, none when its first batch failed.
+			probed := 0
+			if tc.keptDone {
+				probed = len(carry.ukeys)
+			}
+
+			require.Equal(t, probed, cov.probed)
+			require.NotZero(t, cov.total, "the row count, or -1 when unknown, survives the failure")
+
+			dropped, err := s.dropSpendJournalPartitionsBelow(ctx, 1_440)
+			require.NoError(t, err)
+			require.Positive(t, dropped)
+
+			require.Equal(t, leafErrors+1, journalUnjudged(t, "leaf_error"))
+			require.Equal(t, 1, judgedLeaves(s), "a partition whose judging failed is not judged again")
+
+			_, carried := journalLane(t, s, ctx, parent, 0)
+			require.Equal(t, !tc.nothingCarried, carried, "only a waiting spend is carried")
+
+			_, keptRow := journalLane(t, s, ctx, parent, 1)
+			require.False(t, keptRow, "the mined spend dropped with its partition")
+		})
+	}
 }
 
 // TestJournalDropBudgetCutsAJudgingShort: the pass's budget ends a partition's judging part way, the
-// partition counts leaf_error, and the drop goes on.
+// partition counts leaf_error, and the drop goes on. The kept rows, spent last so they sit at the end
+// of the scan, are judged before the scan the budget cuts.
 func TestJournalDropBudgetCutsAJudgingShort(t *testing.T) {
-	s, ctx := newLaneCopyStore(t)
+	s, ctx := newUncheckpointedLaneCopyStore(t)
 	installJournalLaneIndex(t, journalIndexBlock)
 
-	budget, query := laneJudgePassBudget, lanePositionsQuery
-	laneJudgePassBudget = 300 * time.Millisecond
-	// A position read that takes two seconds, longer than the budget.
-	lanePositionsQuery = "SELECT k.txid, NULL::bigint FROM unnest($1::smallint[], $2::bytea[]) AS k(leaf, txid), pg_sleep(2)"
+	budget, scan := laneJudgePassBudget, laneJournalScanQuery
+	// Room for the keeps on a slow runner, and a scan whose first row comes after ten seconds.
+	laneJudgePassBudget = 3 * time.Second
+	laneJournalScanQuery = "SELECT ukey, txid, spending_txid, flags%s FROM %s, pg_sleep(10)"
 
-	t.Cleanup(func() { laneJudgePassBudget, lanePositionsQuery = budget, query })
+	t.Cleanup(func() { laneJudgePassBudget, laneJournalScanQuery = budget, scan })
 
-	parent := mkTx(t, 1, 5_000)
+	parent := mkTx(t, 4, 5_000)
 	_, err := s.Create(ctx, parent, 1_000, utxo.WithLanePosition(journalParentPos), minedAt(1_000, 1))
 	require.NoError(t, err)
 
+	// Dropped: two spenders mined deep, read first.
 	spendWith(t, s, ctx, parent, 0, 1_010, utxo.WithLanePosition(journalSettled), minedAt(1_010, 2))
+	spendWith(t, s, ctx, parent, 1, 1_010, utxo.WithLanePosition(journalShallow), minedAt(1_010, 3))
+	// Carried, read last: a waiting spender no block took, and one the index says a deep block took.
+	spendWith(t, s, ctx, parent, 2, 1_010, utxo.WithLanePosition(journalUnmined))
+	spendWith(t, s, ctx, parent, 3, 1_010, utxo.WithLanePosition(journalSettled2))
 
+	require.NoError(t, s.ensureSpendJournalPartition(ctx, 1_700))
 	require.NoError(t, s.SetBlockHeight(1_728))
 
-	leafErrors := journalUnjudged(t, "leaf_error")
+	// The partition's row count the log reports the share against, from the statistics.
+	leaf := fmt.Sprintf("spend_journal_%d", 1_010/SpendJournalPartitionBlocks)
+	_, err = s.pool.Exec(ctx, "ANALYZE "+leaf)
+	require.NoError(t, err)
+
+	var total int64
+	require.NoError(t, s.pool.QueryRow(ctx, laneJournalRowsSQL, leaf).Scan(&total))
+	// At least the 4 rows ANALYZE counted; another connection's deferred statistics flush can add to it.
+	require.GreaterOrEqual(t, total, int64(4))
+
+	before := map[string]float64{
+		"leaf_error":  journalUnjudged(t, "leaf_error"),
+		"both keep":   journalVerdicts(t, lanereader.PruneKeep, lanereader.PruneKeep, lanereader.ReasonSpenderUnmined),
+		"lanes only":  journalVerdicts(t, lanereader.PruneKeep, lanereader.PruneDelete, lanereader.ReasonSettled),
+		"both delete": journalVerdicts(t, lanereader.PruneDelete, lanereader.PruneDelete, lanereader.ReasonSettled),
+		"today only":  journalVerdicts(t, lanereader.PruneDelete, lanereader.PruneKeep, lanereader.ReasonSpenderShallow),
+		"rows":        journalReads(t, "journal_row"),
+	}
+
+	// What the partition's log line reports, from a judge whose counts are never added to the metrics.
+	carry, err := s.collectCopyForward(ctx, 1_440)
+	require.NoError(t, err)
+
+	l := s.newLaneJournalJudge(carry, 1)
+	judgeCtx, cancel := context.WithDeadline(ctx, l.deadline)
+	cov, err := l.judgeLeafRows(judgeCtx, uint32(1_010/SpendJournalPartitionBlocks))
+	cancel()
+	require.Error(t, err, "the scan outlasts the budget")
+	require.Equal(t, 2, cov.rows)
+	require.GreaterOrEqual(t, cov.total, int64(4))
+	require.Equal(t, 2, cov.kept)
+	require.True(t, cov.keptDone)
+	require.Equal(t, len(carry.ukeys), cov.probed)
 
 	dropped, err := s.dropSpendJournalPartitionsBelow(ctx, 1_440)
 	require.NoError(t, err)
 	require.Positive(t, dropped)
-	require.Equal(t, leafErrors+1, journalUnjudged(t, "leaf_error"))
+	require.Equal(t, before["leaf_error"]+1, journalUnjudged(t, "leaf_error"))
+
+	require.Equal(t, before["both keep"]+1, journalVerdicts(t, lanereader.PruneKeep, lanereader.PruneKeep, lanereader.ReasonSpenderUnmined))
+	require.Equal(t, before["lanes only"]+1, journalVerdicts(t, lanereader.PruneKeep, lanereader.PruneDelete, lanereader.ReasonSettled))
+	require.Equal(t, before["both delete"], journalVerdicts(t, lanereader.PruneDelete, lanereader.PruneDelete, lanereader.ReasonSettled), "the scan was cut")
+	require.Equal(t, before["today only"], journalVerdicts(t, lanereader.PruneDelete, lanereader.PruneKeep, lanereader.ReasonSpenderShallow), "the scan was cut")
+	require.Equal(t, before["rows"]+2, journalReads(t, "journal_row"), "only the kept rows")
+
+	for vout, carried := range []bool{false, false, true, true} {
+		_, ok := journalLane(t, s, ctx, parent, uint32(vout)) //nolint:gosec // four outputs
+		require.Equal(t, carried, ok, "output %d", vout)
+	}
+}
+
+// TestLaneLeafCoverageLog pins the coverage words of a partition's log line: the share judged, and
+// whether every row today keeps was judged.
+func TestLaneLeafCoverageLog(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		c            laneLeafCoverage
+		total, keeps string
+	}{
+		{"cut after the keeps", laneLeafCoverage{rows: 1_200, total: 4_800, kept: 261, keptDone: true, probed: 22_000},
+			"about 4800 (25.0%)", "all 261 rows today keeps among them (probed for 22000 carried spends)"},
+		{"cut in the keeps", laneLeafCoverage{rows: 100, total: 4_800, kept: 100, probed: 10_000},
+			"about 4800 (2.1%)", "its kept rows not all judged (100 judged, for the first 10000 carried spends, before it stopped)"},
+		{"no statistics", laneLeafCoverage{rows: 5, total: -1, kept: 0, keptDone: true},
+			"an unknown number of", "all 0 rows today keeps among them (probed for 0 carried spends)"},
+		{"analyzed while empty", laneLeafCoverage{rows: 5, total: 0, kept: 0, keptDone: true},
+			"an unknown number of", "all 0 rows today keeps among them (probed for 0 carried spends)"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.total, tc.c.ofTotal())
+			require.Equal(t, tc.keeps, tc.c.keeps())
+		})
+	}
 }
 
 // TestJournalDropReadsAPreservedParentsPosition: a parent known only by its preserved copy, whose

@@ -760,10 +760,21 @@ func enqueueBatches(t *testing.T, q *LockFreeQueue, threads, iter int) {
 func BenchmarkQueue(b *testing.B) {
 	q := NewLockFreeQueue()
 
+	// The testing package calls this once per round and per -count, so the consumer
+	// stops with its round; a leaked one would poll beside every later round.
+	done := make(chan struct{})
+	defer close(done)
+
 	b.ResetTimer()
 
 	go func() {
 		for {
+			select {
+			case <-done:
+				return
+			default:
+			}
+
 			_, found := q.dequeueBatch(0)
 			if !found {
 				time.Sleep(1 * time.Millisecond)

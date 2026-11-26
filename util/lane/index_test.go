@@ -302,6 +302,20 @@ func TestIndexBlockWithoutRows(t *testing.T) {
 
 	state, _ = c.idx.Snapshot().Block(77)
 	require.Equal(t, BlockNotLoaded, state)
+	require.Equal(t, 2, c.idx.Snapshot().MainBlocksWithoutRows())
+
+	// A block of only its coinbase has nothing for a row to list: its empty rows are complete,
+	// and it does not count as a main-chain block without rows.
+	require.NoError(t, c.idx.AddBlock(IndexBlock{ID: 3, Height: 3, Hash: blockHash(3), Parent: blockHash(2), TxCount: 1}, nil))
+	c.tip(3)
+
+	state, _ = c.idx.Snapshot().Block(3)
+	require.Equal(t, BlockHasRows, state)
+	require.Equal(t, 2, c.idx.Snapshot().MainBlocksWithoutRows())
+
+	byRow, byFloor, hasRows := c.main().TakenBefore(3)
+	require.True(t, hasRows)
+	require.Zero(t, byRow+byFloor)
 }
 
 func TestIndexTakenBefore(t *testing.T) {

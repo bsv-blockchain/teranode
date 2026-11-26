@@ -127,7 +127,7 @@ func TestValidateReportsPrunedReplayRatherThanConflict(t *testing.T) {
 
 	svc, err := store.GetPrunerService()
 	require.NoError(t, err)
-	_, err = svc.Prune(ctx, 1001+tSettings.GetUtxoStoreBlockHeightRetention()+10, "prune-c")
+	_, err = svc.Prune(ctx, 1001+tSettings.GetUtxoStoreSpentDeleteRetention()+10, "prune-c")
 	require.NoError(t, err)
 
 	_, err = store.Get(ctx, c.TxIDChainHash())
@@ -256,7 +256,7 @@ func TestValidatePrunedReplayInABlock(t *testing.T) {
 
 			svc, err := store.GetPrunerService()
 			require.NoError(t, err)
-			_, err = svc.Prune(ctx, 1001+tSettings.GetUtxoStoreBlockHeightRetention()+10, "prune-c")
+			_, err = svc.Prune(ctx, 1001+tSettings.GetUtxoStoreSpentDeleteRetention()+10, "prune-c")
 			require.NoError(t, err)
 
 			_, err = store.Get(ctx, c.TxIDChainHash())

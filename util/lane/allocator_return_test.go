@@ -391,6 +391,29 @@ func TestAllocatorSettlesAGrantBelowReturnedPositionsAtItsTop(t *testing.T) {
 	require.Equal(t, Settles{First: 1, LastTaken: 48}, settleAgedGrant(t, 50, 20, 49), "only the run at the top")
 }
 
+// A grant that continues an aged-out one starts right after its settled final number, below the
+// returned positions at the old grant's top. Those carry no record, so the allocator accepts it and
+// gives them out again from the new grant.
+func TestAllocatorAcceptsAGrantThatContinuesBelowReturnedPositions(t *testing.T) {
+	clk := newStepClock()
+	src := newFakeLeases(100)
+	a := newTestAllocator(t, src, quiet, clk)
+	refused := testutil.ToFloat64(prometheusLaneRefusedGrants)
+
+	for i := uint64(1); i <= 7; i++ {
+		require.Equal(t, Pack(0, i), next(t, a))
+	}
+
+	require.True(t, a.Return(Pack(0, 7)))
+	require.True(t, a.Return(Pack(0, 6)))
+
+	clk.step(2 * time.Minute)
+	require.Equal(t, Pack(0, 6), next(t, a), "the next grant continues at the first position no record carries")
+	require.Equal(t, Settles{First: 1, LastTaken: 5}, src.grantRequests()[0].Settles)
+	require.Equal(t, Pack(0, 7), next(t, a))
+	require.Equal(t, refused, testutil.ToFloat64(prometheusLaneRefusedGrants), "no grant was refused")
+}
+
 // A grant every taken position of which came back settles at zero: it gave out nothing that may
 // carry a record.
 func TestAllocatorSettlesAGrantWhoseTakesAllCameBackAtZero(t *testing.T) {
@@ -400,6 +423,31 @@ func TestAllocatorSettlesAGrantWhoseTakesAllCameBackAtZero(t *testing.T) {
 	}
 
 	require.Equal(t, Settles{First: 1, LastTaken: 0}, settleAgedGrant(t, all...))
+}
+
+// Leaving a grant whose taken positions all came back keeps the lane's highest position, so a later
+// grant at or below positions this process gave out in earlier grants is still refused.
+func TestAllocatorKeepsItsHighestWhenAGrantsTakesAllCameBack(t *testing.T) {
+	clk := newStepClock()
+	src := newFakeLeases(100)
+	a := newTestAllocator(t, src, quiet, clk)
+
+	for i := uint64(1); i <= 3; i++ {
+		require.Equal(t, Pack(0, i), next(t, a))
+	}
+
+	clk.step(2 * time.Minute)
+	require.Equal(t, Pack(0, 4), next(t, a), "grant 1 aged out after 3, and the next grant continues at 4")
+	require.True(t, a.Return(Pack(0, 4)))
+
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	a.leaveCurrentLocked(false)
+
+	require.Equal(t, Settles{First: 4, LastTaken: 0}, a.pending[0], "the grant gave out nothing that may carry a record")
+	require.Equal(t, uint64(4), a.highest[0])
+	require.ErrorIs(t, a.acceptableLocked(Grant{Lane: 0, First: 3, Last: 9}), errors.ErrProcessing, "a grant from position 3, which a record carries, is refused")
 }
 
 // The release's last-taken number follows the same rule for the grant still current.

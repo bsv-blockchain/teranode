@@ -69,9 +69,31 @@ const (
 	// and never looked up. The validator's store answer gives it only on the stores that fill
 	// utxo.ParentOutput.IsCoinbase (utxoset, Aerospike). Not a disagreement.
 	KindCoinbase = "coinbase"
+	// KindMinedPending: lanes says a row of the best block took the position and today says not
+	// mined, while today's mined write of that block has not finished: the block's rows commit
+	// with it, and today's mined state lands after, about 3 s for a block of 26,000 on mainnet. Not
+	// a disagreement. The block is the best one at the follower's last read; the follower reads a
+	// second after a step succeeds and five seconds after one fails (retryAfter), and a slow read
+	// or index load lengthens that lag. It counts for at most a minute after the block was stored;
+	// once the next block is read, one whose write is still running counts lanes_only.
+	KindMinedPending = "mined_pending"
 )
 
-var kinds = []string{KindAgree, KindLanesOnly, KindTodayOnly, KindDifferentBlock, KindNoPosition, KindNoRows, KindNotLoaded, KindNotReady, KindOffChain, KindCoinbase}
+var kinds = []string{KindAgree, KindLanesOnly, KindTodayOnly, KindDifferentBlock, KindNoPosition, KindNoRows, KindNotLoaded, KindNotReady, KindOffChain, KindCoinbase, KindMinedPending}
+
+// minedPendingKind counts a lanes_only answer from a row of the best block under KindMinedPending
+// while today's mined write of that block has not finished, up to the wait's deadline.
+func (r *Reader) minedPendingKind(kind string, a lane.Answer) string {
+	if kind != KindLanesOnly || a.Via != lane.ViaRow {
+		return kind
+	}
+
+	if w := r.minedPending.Load(); w != nil && a.BlockID == w.id && r.now().Before(w.until) {
+		return KindMinedPending
+	}
+
+	return kind
+}
 
 // isDisagreement reports whether kind is one the soak must explain.
 func isDisagreement(kind string) bool {
@@ -126,7 +148,7 @@ func (r *Reader) CompareHeight(reader string, hash chainhash.Hash, pos uint64, t
 	}
 
 	a := r.lookup(s.Main(), pos)
-	kind := classifyHeight(s, pos, a, todayMined, todayHeight)
+	kind := r.minedPendingKind(classifyHeight(s, pos, a, todayMined, todayHeight), a)
 	count(reader, kind, a.Via)
 
 	if isDisagreement(kind) {
@@ -207,7 +229,7 @@ func (r *Reader) compareBlocks(reader string, v *lane.ChainView, noView string, 
 	}
 
 	a := r.lookup(v, pos)
-	kind := classifyBlocks(v, a, todayBlockIDs)
+	kind := r.minedPendingKind(classifyBlocks(v, a, todayBlockIDs), a)
 	count(reader, kind, a.Via)
 
 	if isDisagreement(kind) {
