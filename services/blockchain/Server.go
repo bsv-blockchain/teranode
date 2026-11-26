@@ -1656,8 +1656,9 @@ func (b *Blockchain) AssignBlockID(ctx context.Context, req *blockchain_api.Assi
 	return &blockchain_api.AssignBlockIDResponse{BlockId: id}, nil
 }
 
-// maxLaneHolderBytes is the longest holder name a hand-out accepts. Each hand-out keeps its holder
-// for ever in the lane_handout table, so the length has to be bounded.
+// maxLaneHolderBytes is the longest holder name a hand-out accepts. Each hand-out keeps its holder in
+// the lane_handout table, which only a give-back of an unused spare deletes from, so the length has
+// to be bounded.
 const maxLaneHolderBytes = 256
 
 // OpenLaneLease opens a lease on a free lane for a record-creating process, with its first grant.

@@ -412,8 +412,8 @@ func (a *Allocator) takeLocked() (v uint64, ok bool, changed chan struct{}, err 
 }
 
 // leaveCurrentLocked settles the current grant and moves to the spare, or to no grant when there is
-// no spare or the grant aged out with an unused tail, in which case the loop asks for one at once and
-// gives back the spare. The grant's returned positions are dropped.
+// no spare or the grant aged out before it was used up, in which case the loop asks for one at once
+// and gives back the spare. The grant's returned positions are dropped.
 // Those at the top of the taken range settledFinalLocked removes, and the grant settles below them,
 // so a grant that continues this one gives them out again; those left sit below that final number,
 // stay burned, and installLocked clears them. With no
@@ -756,6 +756,10 @@ func (a *Allocator) renew(want bool) error {
 	if res.Granted {
 		// Whatever the service did with the spare given back, it is settled: dropped for this grant,
 		// or, when no longer the lane's newest, left unused.
+		if r.GiveBack != 0 && res.Grant.First != r.Settles.LastTaken+1 {
+			a.logger.Warnf("[lane] blockchain service did not take back spare %d:%d from %s, so the spare and the positions after %d stay unused", r.Lane, r.GiveBack, a.holder, r.Settles.LastTaken)
+		}
+
 		a.givingBack = 0
 
 		if err = a.acceptableLocked(res.Grant); err != nil {
