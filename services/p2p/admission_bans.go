@@ -4,6 +4,7 @@ import (
 	"net"
 	"net/netip"
 	"sync"
+	"sync/atomic"
 
 	"github.com/libp2p/go-libp2p/core/peer"
 	ma "github.com/multiformats/go-multiaddr"
@@ -31,7 +32,34 @@ type admissionBans struct {
 	// keeps failing is logged as an error once and then at debug level on
 	// each retry, rather than once per sweep.
 	failed map[string]struct{}
+
+	// closedBy maps each IP or subnet rule, keyed as failed is, to the peer
+	// IDs whose own connections it closed when it was applied. Once that
+	// connection is gone the gossip gate has no address to IP-check those
+	// authors by, so without this their messages relayed by other peers
+	// would pass. An entry lives exactly as long as its rule: lifting the
+	// rule (unban, expiry, clear) drops it. Peers reached through a relay on
+	// the banned address are not recorded; the ban names the relay, not
+	// them. closedTotal counts the IDs across entries, capped at
+	// maxIPRuleClosedPeers.
+	closedBy    map[string][]string
+	closedTotal int
+	closedDirty bool
+
+	// closedIDs is the union of closedBy, published under mu whenever
+	// closedBy changes and read without mu by the gossip gate
+	// (closedByIPRule), so a message never waits on a sync.
+	closedIDs atomic.Pointer[map[string]struct{}]
 }
+
+// maxIPRuleClosedPeers bounds the peer IDs closedBy holds across all rules.
+// A rule records only the peers connected from its address when it was
+// applied, so honest use stays far below it; the cap only stops one address
+// that held many identities from growing the set without limit. It matches
+// the most authors the bus's GetPeers tracks. Past it a rule's remaining IDs
+// are not recorded, and their relayed messages pass the IP check as they
+// did before admission enforcement.
+const maxIPRuleClosedPeers = 10_000
 
 func (a *admissionBans) initLocked() {
 	if a.addrs == nil {
@@ -39,7 +67,71 @@ func (a *admissionBans) initLocked() {
 		a.subnets = make(map[string]*net.IPNet)
 		a.peers = make(map[string]struct{})
 		a.failed = make(map[string]struct{})
+		a.closedBy = make(map[string][]string)
 	}
+}
+
+// closedByIPRule reports whether an IP or subnet rule in force closed
+// peerID's own connection when it was applied. Safe without mu.
+func (a *admissionBans) closedByIPRule(peerID string) bool {
+	ids := a.closedIDs.Load()
+	if ids == nil {
+		return false
+	}
+
+	_, ok := (*ids)[peerID]
+
+	return ok
+}
+
+// rememberClosedLocked records the peers an IP or subnet rule just closed,
+// up to maxIPRuleClosedPeers across all rules.
+func (s *Server) rememberClosedLocked(rule string, ids []string) {
+	a := &s.admission
+	if len(ids) == 0 {
+		return
+	}
+
+	room := maxIPRuleClosedPeers - a.closedTotal
+	if room < len(ids) {
+		s.logger.Warnf("[syncAdmissionBans] %d of the peers rule %s closed are not remembered (limit %d): their relayed gossip is not IP-checked", len(ids)-max(room, 0), rule, maxIPRuleClosedPeers)
+		if room <= 0 {
+			return
+		}
+		ids = ids[:room]
+	}
+
+	a.closedBy[rule] = ids
+	a.closedTotal += len(ids)
+	a.closedDirty = true
+}
+
+// forgetClosedLocked drops the peers a lifted rule had closed.
+func (s *Server) forgetClosedLocked(rule string) {
+	a := &s.admission
+	if ids, ok := a.closedBy[rule]; ok {
+		a.closedTotal -= len(ids)
+		delete(a.closedBy, rule)
+		a.closedDirty = true
+	}
+}
+
+// publishClosedLocked republishes closedIDs if closedBy changed.
+func (s *Server) publishClosedLocked() {
+	a := &s.admission
+	if !a.closedDirty {
+		return
+	}
+
+	ids := make(map[string]struct{}, a.closedTotal)
+	for _, rule := range a.closedBy {
+		for _, id := range rule {
+			ids[id] = struct{}{}
+		}
+	}
+
+	a.closedIDs.Store(&ids)
+	a.closedDirty = false
 }
 
 // banNetworkAddr returns the single address a ban network covers, unmapped
@@ -108,6 +200,7 @@ func (s *Server) applyAdmissionBans() map[string]struct{} {
 
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	defer s.publishClosedLocked()
 
 	a.initLocked()
 
@@ -200,6 +293,7 @@ func (s *Server) blockBannedPeer(peerID string, ips []net.IP) map[string]struct{
 
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	defer s.publishClosedLocked()
 
 	a.initLocked()
 
@@ -244,46 +338,59 @@ func (s *Server) dropPeersClosedAtAdmission(closed map[string]struct{}, reason s
 
 // notePeersCoveredLocked returns the ID of each connected peer with a
 // connection covers matches, given the peer's ID and the leading IP of the
-// connection's address (ok false when it has none). It must run before the
+// connection's address (ok false when it has none), and separately those with
+// a matching connection that is not a relay circuit: peers on the covered
+// address itself rather than behind a relay there. It must run before the
 // Block* call that applies the rule: that call closes the matching
 // connections, and GetPeers then lists the peers with no addresses.
-func (s *Server) notePeersCoveredLocked(covers func(id string, ip netip.Addr, ok bool) bool) []string {
-	var ids []string
-
+func (s *Server) notePeersCoveredLocked(covers func(id string, ip netip.Addr, ok bool) bool) (covered, direct []string) {
 	for _, p := range s.P2PClient.GetPeers() {
+		matched, onAddress := false, false
+
 		for _, addr := range p.Addrs {
-			ip, ok := leadingIP(addr)
+			ip, ok, circuit := leadingIP(addr)
 			if covers(p.ID, ip, ok) {
-				ids = append(ids, p.ID)
-				break
+				matched = true
+				onAddress = onAddress || !circuit
 			}
+		}
+
+		if matched {
+			covered = append(covered, p.ID)
+		}
+
+		if onAddress {
+			direct = append(direct, p.ID)
 		}
 	}
 
-	return ids
+	return covered, direct
 }
 
 // leadingIP returns the IP a connection's multiaddr starts with, which is the
-// address the bus's gater judges a connection by. For a relay circuit that is
-// the relay's IP, so a rule on a relay's address covers every peer connected
-// through it, as it does at the gater.
-func leadingIP(addr string) (netip.Addr, bool) {
+// address the bus's gater judges a connection by, and whether the address is
+// a relay circuit. For a circuit the IP is the relay's, so a rule on a
+// relay's address covers every peer connected through it, as it does at the
+// gater.
+func leadingIP(addr string) (ip netip.Addr, ok, circuit bool) {
 	maddr, err := ma.NewMultiaddr(addr)
 	if err != nil {
-		return netip.Addr{}, false
+		return netip.Addr{}, false, false
 	}
 
-	ip, err := manet.ToIP(maddr)
+	circuit = isRelayCircuit(maddr)
+
+	raw, err := manet.ToIP(maddr)
 	if err != nil {
-		return netip.Addr{}, false
+		return netip.Addr{}, false, circuit
 	}
 
-	parsed, ok := netip.AddrFromSlice(ip)
-	if !ok {
-		return netip.Addr{}, false
+	parsed, valid := netip.AddrFromSlice(raw)
+	if !valid {
+		return netip.Addr{}, false, circuit
 	}
 
-	return parsed.Unmap(), true
+	return parsed.Unmap(), true, circuit
 }
 
 // addAll adds ids to set.
@@ -332,7 +439,7 @@ func (s *Server) blockAddrLocked(addr netip.Addr, closed map[string]struct{}) {
 		return
 	}
 
-	covered := s.notePeersCoveredLocked(func(_ string, ip netip.Addr, ok bool) bool {
+	covered, direct := s.notePeersCoveredLocked(func(_ string, ip netip.Addr, ok bool) bool {
 		return ok && ip == addr
 	})
 
@@ -344,6 +451,7 @@ func (s *Server) blockAddrLocked(addr netip.Addr, closed map[string]struct{}) {
 	delete(a.failed, addr.String())
 	a.addrs[addr] = struct{}{}
 	addAll(closed, covered)
+	s.rememberClosedLocked(addr.String(), direct)
 }
 
 func (s *Server) blockSubnetLocked(key string, n *net.IPNet, closed map[string]struct{}) {
@@ -352,7 +460,7 @@ func (s *Server) blockSubnetLocked(key string, n *net.IPNet, closed map[string]s
 		return
 	}
 
-	covered := s.notePeersCoveredLocked(func(_ string, ip netip.Addr, ok bool) bool {
+	covered, direct := s.notePeersCoveredLocked(func(_ string, ip netip.Addr, ok bool) bool {
 		return ok && n.Contains(net.IP(ip.AsSlice()))
 	})
 
@@ -364,6 +472,7 @@ func (s *Server) blockSubnetLocked(key string, n *net.IPNet, closed map[string]s
 	delete(a.failed, key)
 	a.subnets[key] = n
 	addAll(closed, covered)
+	s.rememberClosedLocked(key, direct)
 }
 
 func (s *Server) blockPeerLocked(peerID string, closed map[string]struct{}) {
@@ -372,7 +481,9 @@ func (s *Server) blockPeerLocked(peerID string, closed map[string]struct{}) {
 		return
 	}
 
-	covered := s.notePeersCoveredLocked(func(id string, _ netip.Addr, _ bool) bool {
+	// The peer ID rule itself is what bans this peer on gossip, so its
+	// direct set is not recorded.
+	covered, _ := s.notePeersCoveredLocked(func(id string, _ netip.Addr, _ bool) bool {
 		return id == peerID
 	})
 
@@ -395,6 +506,7 @@ func (s *Server) unblockAddrLocked(addr netip.Addr) {
 	}
 
 	delete(s.admission.addrs, addr)
+	s.forgetClosedLocked(addr.String())
 }
 
 func (s *Server) unblockSubnetLocked(key string, n *net.IPNet) {
@@ -403,6 +515,7 @@ func (s *Server) unblockSubnetLocked(key string, n *net.IPNet) {
 	}
 
 	delete(s.admission.subnets, key)
+	s.forgetClosedLocked(key)
 }
 
 func (s *Server) unblockPeerLocked(peerID string) {

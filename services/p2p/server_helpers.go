@@ -1165,16 +1165,27 @@ func (s *Server) shouldSkipBannedPeer(from string, messageType string) bool {
 // neighbour is checked from its first message and a gossip-relayed author (no
 // open connection, hence no addresses) costs one table miss.
 //
-// The check covers authors with an open connection only. A banned host that
-// signs gossip under fresh author keys has no connection under those keys, so
-// it is never IP-checked here. With p2p_enforce_bans_at_admission on,
-// admission keeps it out, since its own connection is refused; with it off,
-// nothing does, as before admission enforcement existed.
+// The address check covers authors with an open connection only. With
+// p2p_enforce_bans_at_admission on, an IP or subnet rule closes the banned
+// host's connection, which would leave its own messages, relayed by other
+// peers, with no address to check. So an author whose own connection a rule
+// in force closed counts as IP-banned by its peer ID until that rule lifts
+// (admissionBans.closedByIPRule). A peer that was only behind a relay on the
+// banned address is not counted: the ban names the relay.
+//
+// A banned host that signs gossip under fresh author keys has no connection
+// under those keys, so it is never IP-checked here. With admission on, its
+// own connection is refused, which keeps it out; with it off, nothing does,
+// as before admission enforcement existed.
 //
 // IsBanned runs per message per address. The ban list files single-address
 // bans by address, so a clean lookup costs one map read plus a scan of the
 // banned subnets, however many hosts are banned.
 func (s *Server) isPeerIPBanned(peerID string) bool {
+	if s.admission.closedByIPRule(peerID) {
+		return true
+	}
+
 	if s.banList == nil || s.P2PClient == nil {
 		return false
 	}
