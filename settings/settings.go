@@ -753,7 +753,7 @@ func NewSettings(alternativeContext ...string) *Settings {
 			SkipDeletions:                   getBool("pruner_skipDeletions", false, alternativeContext...),                        // Skip deletions for performance
 			MinBlockHeight:                  getUint32("pruner_min_block_height", 0, alternativeContext...),                       // Do not prune blocks at or below this height
 			CreatingTxSweepMinAgeBlocks:     getUint32("pruner_creatingTxSweepMinAgeBlocks", 2, alternativeContext...),            // Roll forward create-first creating txs older than this many blocks (0 disables)
-			CreatingTxSweepBlockedAgeBlocks: getUint32("pruner_creatingTxSweepBlockedAgeBlocks", 0, alternativeContext...),        // Roll back creating txs that a locked or creating parent has blocked for this many blocks (0 turns it off)
+			CreatingTxSweepBlockedAgeBlocks: getUint32("pruner_creatingTxSweepBlockedAgeBlocks", 0, alternativeContext...),        // Roll back creating txs once the sweep has watched a locked parent block them for this many blocks (0 turns it off)
 			CreatingTxSweepMaxPerPass:       getUint32("pruner_creatingTxSweepMaxPerPass", 1000, alternativeContext...),           // Per-pass cap on creating txs rolled forward by the sweep (0 = 1000)
 		},
 		SubtreeValidation: SubtreeValidationSettings{

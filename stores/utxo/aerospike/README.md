@@ -477,7 +477,9 @@ reorg/conflict helpers) are single-phase and bypass the create-first ordering.
   is only cleared (`FinalizeTransaction` with no token): the sweep spends nothing for it, never
   rolls it back and does not announce it. A record that belongs to a block, one that carries block
   IDs or the `markOwed` stamp (see "Longest-chain stamp" below), is only completed: the sweep never
-  rolls it back and never announces it to block assembly. The query has no cursor, so a backlog
+  rolls it back and never announces it to block assembly. A record whose finalize had begun and
+  whose transaction lost an input, or is conflicting, is completed as conflicting: the sweep does
+  not announce it and does not unlock it (see "Finalizing mark" below). The query has no cursor, so a backlog
   above `pruner_creatingTxSweepMaxPerPass` is taken a page at a time in no fixed order: the store
   returns a different page on each pass, and a record whose parent is still creating heals in a
   pass that takes it after its parent.
@@ -633,6 +635,15 @@ rollback of such a record would delete a page under the spend of a descendant.
   be gone. `utxo.RollForwardCreating` sets the failure of its re-spend aside for a record that
   carries the mark under the attempt, and runs the finalize. A re-spend whose outcome is unknown
   is not set aside: its lease stays, and a later roll-forward completes the record.
+- **A record that can no longer be mined ends as conflicting.** The mark stops the rollback, not
+  every unspend: the conflict processing of a block takes back the spend of an input that the
+  winner of a double spend needs, and marks the loser conflicting. When the re-spend says that an
+  input is not the transaction's own (another transaction spent it, it is frozen, or its UTXO hash
+  does not match), or the record is already conflicting, the roll-forward still completes the
+  record, because nothing can roll it back. It marks the record conflicting first, with every
+  transaction that spends its outputs, when it is not marked yet. It returns an error for which
+  `utxo.IsEndedConflicting` is true, so no caller announces the transaction to block assembly or
+  unlocks it. It reverses nothing: the transaction keeps its other inputs, as a demoted loser does.
 - **Scope.** Only a record with an `attempt` token and at least one pagination child is marked. A
   single-record transaction clears in one write, and a record with no token is never rolled back.
 - **Limit.** A record whose children were cleared by a binary that did not write the mark is not
@@ -660,9 +671,10 @@ or an unwind, and a later attempt wrote a tentative record at the same txid.
   that asked for the mark returns an error. A later mark, or the setMined of its block, finds the
   record complete and marks it.
 - **Clearing.** The bin is inert on a record that is no longer creating. A mark off the longest
-  chain removes it on the expression write path. The native sub-op does not know the bin, so on a
-  server that runs the native mark a stamp can outlive its block. Such a record is still only
-  completed, never rolled back, and not announced by the sweep.
+  chain removes it. The native sub-op does not know the bin, so a mark off the longest chain always
+  uses the expression write path, also on a server that serves the native mark. A stamp that
+  outlived its block would keep a record from every rollback when its transaction can no longer
+  win its inputs.
 
 ### Rollback of a failed create-first spend
 
