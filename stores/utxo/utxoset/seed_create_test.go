@@ -164,13 +164,9 @@ func openSeedingStore(t *testing.T, base *Store) *Store {
 	return s
 }
 
-// In seeding mode a seed's create writes the coins alone, with their block height, below and
-// above the checkpoint: no containment row and no identity row, so a mainnet seed never puts
-// tens of gigabytes of rows on the disk for its hook to clear. Lookups still answer it as mined
-// at its height, a re-run is refused as an existing transaction, and a create that is not shaped
-// like the seeder's takes its normal route.
-// It holds with and without the optional lane columns: with them, a create with a lane position
-// writes it on each coin, where a read finds it.
+// In seeding mode a seed's create writes only its coins, at their height and with any lane
+// position, so a mainnet seed puts no containment or identity rows on the disk; lookups still
+// answer it as mined, a re-run is refused, and other creates take their normal route.
 func TestSeedingModeWritesCoinsOnly(t *testing.T) {
 	for _, lanes := range []bool{false, true} {
 		t.Run(map[bool]string{false: "without lane columns", true: "with lane columns"}[lanes], func(t *testing.T) {
