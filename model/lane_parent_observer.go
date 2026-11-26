@@ -8,10 +8,11 @@ import (
 
 // LaneParentObserver is told of each parent record block validation's parent check reads, at
 // utxostore_laneMigration shadow, so lanes can answer the same check from its index and count
-// agreement (util/lanereader). It never changes the check's verdict. ObserveParent may be called
-// from many goroutines at once, and must not hold on to blockIDs.
+// agreement (util/lanereader). It never changes the check's verdict. coinbase is whether the parent
+// is a coinbase, read in the same Get. ObserveParent may be called from many goroutines at once,
+// and must not hold on to blockIDs.
 type LaneParentObserver interface {
-	ObserveParent(parentHash chainhash.Hash, lanePosition uint64, blockIDs []uint32)
+	ObserveParent(parentHash chainhash.Hash, lanePosition uint64, blockIDs []uint32, coinbase bool)
 }
 
 type laneParentObserverKey struct{}

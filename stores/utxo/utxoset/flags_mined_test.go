@@ -88,12 +88,13 @@ func TestSetLockedDoesNotTouchACollidingTransactionsUTXOs(t *testing.T) {
 	require.Equal(t, int16(0), otherFlags, "a 96-bit prefix collision is not the same transaction")
 }
 
-// TestSetConflictingReachesAMinedTransaction is the same defect in the other statement:
-// setConflictingSQL's ident CTE updates tx_ident only, so marking a mined transaction
-// conflicting set the UTXO bit and not the bit Get reports.
+// TestSetConflictingReachesAMinedTransaction is the same defect in SetConflicting's statements:
+// its identity arm updates tx_ident only, so before the membership arm (now
+// setConflictingMinedSQL) marking a mined transaction conflicting set the UTXO bit and not the
+// bit Get reports.
 //
-// It goes in at runConflictingPlan rather than through SetConflicting so that it pins THIS
-// statement on its own. SetConflicting's first step, readConflictingInputs, used to read
+// It goes in at runConflictingPlan rather than through SetConflicting so that it pins THESE
+// statements on their own. SetConflicting's first step, readConflictingInputs, used to read
 // tx_ident alone and report a mined transaction as TxNotFound before the flag statement ever
 // ran; that separate defect is fixed too, and
 // TestSetConflictingReadsInputsFromAMinedTransaction in conflicting_test.go covers the whole
