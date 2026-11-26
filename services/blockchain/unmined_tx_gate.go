@@ -161,9 +161,12 @@ func (g *UnminedTxGate) Refuses(ctx context.Context, txHash *chainhash.Hash) boo
 		return false
 	}
 
-	// Keep the height current through a sync too, so the gate knows the
-	// checkpoint is reached by the time the FSM stops refusing.
-	if g.highestCheckpoint != 0 && !g.reached.Load() {
+	// Judged once, before scheduling, so a read that lands during this call
+	// cannot change its answer. The read keeps the height current through a
+	// sync too, so the gate knows the checkpoint is reached by the time the
+	// FSM stops refusing.
+	belowCheckpoint := g.highestCheckpoint != 0 && !g.reached.Load()
+	if belowCheckpoint {
 		g.scheduleHeightRead()
 	}
 
@@ -174,28 +177,13 @@ func (g *UnminedTxGate) Refuses(ctx context.Context, txHash *chainhash.Hash) boo
 		return true
 	}
 
-	if g.belowHighestCheckpoint() {
+	if belowCheckpoint {
 		g.refuse(txHash, "the best height is not known to have reached the highest checkpoint")
 
 		return true
 	}
 
 	return false
-}
-
-// belowHighestCheckpoint reports whether the checkpoint rule refuses: it does
-// until the checkpoint is known to be reached, and meanwhile schedules a
-// background height read when one is due.
-func (g *UnminedTxGate) belowHighestCheckpoint() bool {
-	if g.highestCheckpoint == 0 || g.reached.Load() {
-		return false
-	}
-
-	// Refuse even if the read scheduled here lands before we return: the
-	// checkpoint was not known to be reached when this call was judged.
-	g.scheduleHeightRead()
-
-	return true
 }
 
 // scheduleHeightRead starts a background height read when none is in flight,
@@ -237,6 +225,8 @@ func (g *UnminedTxGate) readBestHeight(scheduled int64) {
 		return
 	}
 
+	// reached before readOKNanos: a waiter that sees this read as fresh must
+	// also see its answer.
 	if height >= g.highestCheckpoint {
 		g.reached.Store(true)
 	}

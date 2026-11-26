@@ -350,6 +350,29 @@ func TestUnminedTxGate_WaitForCheckpointAnswer(t *testing.T) {
 	require.NoError(t, <-waited)
 	inFlight.AssertNumberOfCalls(t, "GetBestHeightAndTime", 1)
 
+	// A read in flight when the wait began is not fresh, even if it lands
+	// after: its below answer is not trusted, and the wait reads again.
+	inFlightBelow := &Mock{}
+	fsmRead(inFlightBelow, &running)
+
+	releaseBelow := make(chan struct{})
+	inFlightBelow.On("GetBestHeightAndTime", mock.Anything).Run(func(mock.Arguments) { <-releaseBelow }).Return(50, 0, nil).Once()
+	inFlightBelow.On("GetBestHeightAndTime", mock.Anything).Return(150, 0, nil).Once()
+
+	gate = NewUnminedTxGate(ulogger.TestLogger{}, inFlightBelow, gateSettings(t, "utxoset"), "test_wait_in_flight_below")
+	require.True(t, gate.Refuses(ctx, nil), "starts the read")
+
+	go func() {
+		time.Sleep(200 * time.Millisecond)
+		close(releaseBelow)
+	}()
+
+	waitCtx, waitCancel := context.WithTimeout(ctx, 3*time.Second)
+	require.NoError(t, gate.WaitForCheckpointAnswer(waitCtx))
+	waitCancel()
+	require.True(t, gate.reached.Load(), "judged by the read scheduled after the wait began")
+	inFlightBelow.AssertNumberOfCalls(t, "GetBestHeightAndTime", 2)
+
 	// A below answer read before a sync is stale: the wait reads again.
 	stale := &Mock{}
 	fsmRead(stale, &running)
@@ -389,6 +412,10 @@ func TestUnminedTxGate_CheckpointHeight(t *testing.T) {
 	require.Equal(t, uint32(100), NewUnminedTxGate(ulogger.TestLogger{}, &Mock{}, gateSettings(t, "utxoset"), "test_height_on").CheckpointHeight())
 	require.Zero(t, NewUnminedTxGate(ulogger.TestLogger{}, &Mock{}, gateSettings(t, "postgres"), "test_height_off").CheckpointHeight())
 	require.Zero(t, NewUnminedTxGate(ulogger.TestLogger{}, &Mock{}, nil, "test_height_nil").CheckpointHeight())
+
+	// Read times are measured from the gate's start on the monotonic clock,
+	// not as wall-clock unix time.
+	require.Less(t, NewUnminedTxGate(ulogger.TestLogger{}, nil, nil, "test_since_start").sinceStart(), int64(time.Hour))
 
 	var nilGate *UnminedTxGate
 	require.Zero(t, nilGate.CheckpointHeight())

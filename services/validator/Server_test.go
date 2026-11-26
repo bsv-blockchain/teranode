@@ -560,8 +560,10 @@ func TestHandleKafkaTxMessage_RefusedWhileSyncing(t *testing.T) {
 			defer cancel()
 
 			if tt.wantErr {
-				ctx, cancel = context.WithTimeout(context.Background(), 300*time.Millisecond)
+				// The consumer stopping cancels its context.
+				ctx, cancel = context.WithCancel(context.Background())
 				defer cancel()
+				time.AfterFunc(300*time.Millisecond, cancel)
 
 				require.Error(t, server.handleKafkaTxMessage(ctx, kafkaTxMessage(t)), "an error leaves the message uncommitted")
 				require.Equal(t, 0, validated)
