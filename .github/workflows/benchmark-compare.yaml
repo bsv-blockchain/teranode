@@ -108,9 +108,12 @@ jobs:
 
       # Check main out over the PR tree, not into a subdirectory: Go keys each
       # compile by the package's directory, so building main from another path
-      # would miss the benchmark build cache. The untracked pr-*.txt survives.
+      # would miss the benchmark build cache. --force and clean drop anything the
+      # PR run changed or left behind; only the pr-*.txt results are kept.
       - name: Checkout main
-        run: git checkout --detach origin/main
+        run: |
+          git checkout --force --detach origin/main
+          git clean -ffdx -e 'pr-*.txt'
 
       - name: Run main benchmarks
         run: |
