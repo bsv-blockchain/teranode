@@ -21,27 +21,38 @@ import (
 // Returns:
 //   - An error if any step in the process fails.
 func ResetBlockAssembly(logger ulogger.Logger, settings *settings.Settings, fullReset bool, validateInputs bool) error {
-	// Set the context for the operation. The reset is an operator's, the one that runs while block
-	// assembly is halted on a deep reorg and lifts the halt.
-	ctx := blockassembly.WithOperatorReset(context.Background())
-
 	// Initialize the block assembly service
-	ba, err := blockassembly.NewClient(ctx, logger, settings)
+	ba, err := blockassembly.NewClient(context.Background(), logger, settings)
 	if err != nil {
 		return errors.NewConfigurationError("failed to create block assembly client", err)
 	}
 	defer func() { _ = ba.Close() }()
 
+	return operatorReset(ba, fullReset, validateInputs)
+}
+
+// resetter is the part of the block assembly client the command calls.
+type resetter interface {
+	ResetBlockAssembly(ctx context.Context) error
+	ResetBlockAssemblyFully(ctx context.Context) error
+	ResetBlockAssemblyValidateInputs(ctx context.Context) error
+}
+
+// operatorReset makes the reset call the flags ask for. The call is marked as an operator's, the
+// one reset that runs while block assembly is halted on a deep reorg and lifts the halt.
+func operatorReset(ba resetter, fullReset bool, validateInputs bool) error {
+	ctx := blockassembly.WithOperatorReset(context.Background())
+
 	if validateInputs {
-		if err = ba.ResetBlockAssemblyValidateInputs(ctx); err != nil {
+		if err := ba.ResetBlockAssemblyValidateInputs(ctx); err != nil {
 			return errors.NewProcessingError("failed to reset block assembly with input validation", err)
 		}
 	} else if fullReset {
-		if err = ba.ResetBlockAssemblyFully(ctx); err != nil {
+		if err := ba.ResetBlockAssemblyFully(ctx); err != nil {
 			return errors.NewProcessingError("failed to reset block assembly", err)
 		}
 	} else {
-		if err = ba.ResetBlockAssembly(ctx); err != nil {
+		if err := ba.ResetBlockAssembly(ctx); err != nil {
 			return errors.NewProcessingError("failed to reset block assembly", err)
 		}
 	}

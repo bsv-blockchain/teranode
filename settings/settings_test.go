@@ -149,6 +149,9 @@ func TestBlockHeightRetentionAdjustments(t *testing.T) {
 		tSettings.UtxoStore.UnminedTxRetention = math.MaxUint32
 		require.Equal(t, uint32(math.MaxUint32/2), tSettings.GetUtxoStoreSpentDeleteRetention())
 
+		tSettings.GlobalBlockHeightRetention = math.MaxUint32/2 + 10
+		require.Equal(t, uint32(math.MaxUint32/2+10), tSettings.GetUtxoStoreSpentDeleteRetention())
+
 		tSettings.GlobalBlockHeightRetention = math.MaxUint32
 		require.Equal(t, uint32(math.MaxUint32), tSettings.GetUtxoStoreSpentDeleteRetention())
 	})

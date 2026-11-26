@@ -2,7 +2,6 @@ package blockassembly
 
 import (
 	"context"
-	"fmt"
 	"testing"
 	"time"
 
@@ -391,9 +390,23 @@ func TestDeepReorgHaltResetCommands(t *testing.T) {
 		}},
 	}
 
+	// The header as the command sets it, a header with any other value, and none at all.
+	headers := map[string]func(context.Context) context.Context{
+		"operator": func(ctx context.Context) context.Context {
+			md, _ := metadata.FromOutgoingContext(WithOperatorReset(ctx))
+			return metadata.NewIncomingContext(ctx, md)
+		},
+		"header=false": func(ctx context.Context) context.Context {
+			return metadata.NewIncomingContext(ctx, metadata.Pairs(OperatorResetMetadataKey, "false"))
+		},
+		"no header": func(ctx context.Context) context.Context { return ctx },
+	}
+
 	for name, command := range commands {
-		for _, operator := range []bool{true, false} {
-			t.Run(fmt.Sprintf("%s/operator=%t", name, operator), func(t *testing.T) {
+		for header, withHeader := range headers {
+			operator := header == "operator"
+
+			t.Run(name+"/"+header, func(t *testing.T) {
 				initPrometheusMetrics()
 
 				items, b2, mockStp := deepReorgFixture(t)
@@ -406,12 +419,7 @@ func TestDeepReorgHaltResetCommands(t *testing.T) {
 				mockStp.On("Reset", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 					Return(subtreeprocessor.ResetResponse{})
 
-				ctx := t.Context()
-				if operator {
-					ctx = metadata.NewIncomingContext(ctx, metadata.Pairs(OperatorResetMetadataKey, "true"))
-				}
-
-				require.NoError(t, command.run(server, ctx))
+				require.NoError(t, command.run(server, withHeader(t.Context())))
 
 				// The command queues the request for block assembly's loop, which this fixture does
 				// not run, so the test plays the loop's part.
