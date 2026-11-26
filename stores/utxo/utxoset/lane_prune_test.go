@@ -477,6 +477,7 @@ func TestJournalDropCountsAFailedJudgeAndStillDrops(t *testing.T) {
 			require.Error(t, err)
 			require.Equal(t, tc.keptDone, cov.keptDone)
 			require.Equal(t, tc.keptJudged, cov.kept)
+			require.Equal(t, tc.keptJudged, cov.rows, "only judged rows are counted")
 			require.NotZero(t, cov.total, "the row count, or -1 when unknown, survives the failure")
 
 			dropped, err := s.dropSpendJournalPartitionsBelow(ctx, 1_440)
