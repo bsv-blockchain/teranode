@@ -174,6 +174,9 @@ func TestImportUTXOSet_DamagedPieces(t *testing.T) {
 			if tc.wantErr != "" {
 				require.ErrorContains(t, err, tc.wantErr)
 			}
+
+			// A compressed set has no file offset to seek a footer at.
+			require.NotContains(t, err.Error(), "seeking")
 		})
 	}
 }

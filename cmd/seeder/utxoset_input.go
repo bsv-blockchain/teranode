@@ -213,14 +213,11 @@ func (s *utxoSetStream) Close() error {
 	return s.close()
 }
 
-// verify reads the stream to its end and compares the SHA-256 of every byte
-// read with expected. The records have been read by then, so a mismatch means
-// they came from a snapshot that is not the one the sidecar describes.
+// verify compares the SHA-256 of every byte read with expected. It is called
+// once readUTXOFrames has found the footer at the very end of the stream, so
+// every byte has been read; a mismatch means the records came from a snapshot
+// that is not the one the sidecar describes.
 func (s *utxoSetStream) verify(expected, path string) error {
-	if _, err := io.Copy(io.Discard, s.reader); err != nil {
-		return errors.NewStorageError("failed to read %s to its end for checksum verification", path, err)
-	}
-
 	actual := hex.EncodeToString(s.sum.Sum(nil))
 	if actual != expected {
 		return errors.NewProcessingError("checksum mismatch for %s: its sidecar says %s, the uncompressed stream hashes to %s. The UTXO store now holds records from this snapshot: wipe the UTXO store, fetch the snapshot again and re-run the seed", path, expected, actual)
