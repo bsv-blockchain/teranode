@@ -110,6 +110,7 @@ func TestDiffResults(t *testing.T) {
 		"p TestToSkip":   {action: "pass"},
 		"p TestRemoved":  {action: "pass"},
 		"p TestDetail":   {action: "skip", detail: "old reason"},
+		"p TestMoved":    {action: "skip", detail: "script_test.go:1505: Skipping - same reason"},
 		"p (package)":    {action: "pass"},
 		"p TestFromFail": {action: "fail"},
 	}
@@ -119,6 +120,7 @@ func TestDiffResults(t *testing.T) {
 		"p TestToSkip":   {action: "skip", detail: "Skipping - go-bdk behavior differs"},
 		"p TestAdded":    {action: "pass"},
 		"p TestDetail":   {action: "skip", detail: "new reason"},
+		"p TestMoved":    {action: "skip", detail: "script_test.go:1510: Skipping - same reason"},
 		"p (package)":    {action: "fail"},
 		"p TestFromFail": {action: "pass"},
 	}
@@ -130,9 +132,9 @@ func TestDiffResults(t *testing.T) {
 		keys = append(keys, c.key)
 	}
 
-	require.Equal(t, []string{"p (package)", "p TestFlips", "p TestFromFail", "p TestRemoved", "p TestToSkip"}, keys,
-		"every changed action is reported, sorted, a skip counts as an outcome, and a changed detail alone is not a change")
-	require.Equal(t, change{key: "p TestRemoved", base: outcome{action: "pass"}, head: outcome{action: absent}}, changes[3],
+	require.Equal(t, []string{"p (package)", "p TestDetail", "p TestFlips", "p TestFromFail", "p TestRemoved", "p TestToSkip"}, keys,
+		"every changed action is reported, sorted, a skip counts as an outcome, a skip with a new reason is a change, and a moved t.Skip call is not")
+	require.Equal(t, change{key: "p TestRemoved", base: outcome{action: "pass"}, head: outcome{action: absent}}, changes[4],
 		"a test the pull request no longer reports is a change")
 	require.Equal(t, []string{"p TestAdded"}, added, "a new test is listed apart and is not a change")
 }

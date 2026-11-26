@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -151,6 +152,11 @@ type change struct {
 // added holds the keys only the head run reported: new tests say nothing about
 // whether the libraries changed behaviour, so they are listed, not failed. Both
 // are sorted.
+//
+// A skip whose reason differs is a change too. Some vectors skip on their
+// result (test/consensus/script_test.go skips an expected-error vector whenever
+// DoTest returns an error), so a reject that becomes an accept stays a skip and
+// only its reason shows the difference.
 func diffResults(base, head map[string]outcome) (changes []change, added []string) {
 	for k, b := range base {
 		h, ok := head[k]
@@ -158,7 +164,7 @@ func diffResults(base, head map[string]outcome) (changes []change, added []strin
 			h = outcome{action: absent}
 		}
 
-		if b.action != h.action {
+		if b.action != h.action || (b.action == "skip" && skipReason(b.detail) != skipReason(h.detail)) {
 			changes = append(changes, change{key: k, base: b, head: h})
 		}
 	}
@@ -173,6 +179,16 @@ func diffResults(base, head map[string]outcome) (changes []change, added []strin
 	sort.Strings(added)
 
 	return changes, added
+}
+
+// sourcePrefix matches the "file_test.go:123: " that go test puts before a
+// test's output line.
+var sourcePrefix = regexp.MustCompile(`^\S+\.go:\d+: `)
+
+// skipReason returns a skip's detail without its file:line prefix, so an edit
+// that only moves the t.Skip call is not a change.
+func skipReason(detail string) string {
+	return sourcePrefix.ReplaceAllString(detail, "")
 }
 
 // counts returns how many results ended in each action.
