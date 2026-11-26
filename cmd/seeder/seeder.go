@@ -696,8 +696,9 @@ func processUTXOs(ctx context.Context, logger ulogger.Logger, appSettings *setti
 
 	// Every pass has now read the whole set and, when there is a sidecar, checked
 	// its checksum, so the record goes before anything else can fail.
-	// lastProcessed.dat comes later, so a crash in between leaves neither, and a
-	// plain re-run imports the same set again.
+	// lastProcessed.dat comes later, so a failure in between leaves neither. On a
+	// fresh seed a plain re-run then imports the same set again; over an existing
+	// BlockAssembler checkpoint it is refused and needs -force, as before.
 	if err = blockStore.Del(ctx, nil, fileformat.FileTypeDat, bloboptions.WithFilename(incompleteImportFilename), bloboptions.WithNoHashPrefix()); err != nil && !errors.Is(err, errors.ErrNotFound) {
 		return nil, errors.NewStorageError("failed to clear the record of an import in progress", err)
 	}
