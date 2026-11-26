@@ -3,7 +3,6 @@ package subtreeprocessor
 import (
 	"context"
 	"net/url"
-	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -233,16 +232,6 @@ func skipInShort(b *testing.B, long bool) {
 	if long && testing.Short() {
 		b.Skip("a kept size times the same code; skipped in -short")
 	}
-}
-
-// startTimedLoop collects the garbage the setup left, then restarts the timer. The testing
-// package collects only before each round, so without this the setup's garbage is collected
-// inside the timed loop.
-func startTimedLoop(b *testing.B) {
-	b.Helper()
-
-	runtime.GC()
-	b.ResetTimer()
 }
 
 // BenchmarkDirectSubtreeAdd benchmarks direct subtree node addition
@@ -790,7 +779,7 @@ func BenchmarkParallelGetAndSetIfNotExists(b *testing.B) {
 				currentTxMap.Set(hash, &subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{}})
 			}
 
-			startTimedLoop(b)
+			b.ResetTimer()
 			b.ReportAllocs()
 
 			for i := 0; i < b.N; i++ {
@@ -840,7 +829,7 @@ func BenchmarkSequentialGetAndSetIfNotExists(b *testing.B) {
 				currentTxMap.Set(hash, &subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{}})
 			}
 
-			startTimedLoop(b)
+			b.ResetTimer()
 			b.ReportAllocs()
 
 			for i := 0; i < b.N; i++ {
@@ -901,7 +890,7 @@ func BenchmarkProcessOwnBlockSubtreeNodesParallel(b *testing.B) {
 				Header: blockHeader,
 			}
 
-			startTimedLoop(b)
+			b.ResetTimer()
 			b.ReportAllocs()
 
 			for i := 0; i < b.N; i++ {
@@ -957,7 +946,7 @@ func BenchmarkProcessOwnBlockSubtreeNodesSequential(b *testing.B) {
 				Header: blockHeader,
 			}
 
-			startTimedLoop(b)
+			b.ResetTimer()
 			b.ReportAllocs()
 
 			for i := 0; i < b.N; i++ {
