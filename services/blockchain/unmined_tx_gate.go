@@ -178,12 +178,22 @@ func (g *UnminedTxGate) belowHighestCheckpoint() bool {
 		return false
 	}
 
-	now := time.Now().UnixNano()
-	if now-g.heightReadNanos.Load() >= int64(bestHeightReadInterval) && g.heightReading.CompareAndSwap(false, true) {
-		g.heightReadNanos.Store(now)
-
-		go g.readBestHeight()
+	if !g.heightReading.CompareAndSwap(false, true) {
+		return true
 	}
+
+	// Checked only while holding the read slot, so a read that landed between
+	// another caller's checks cannot be followed at once by a second one.
+	now := time.Now().UnixNano()
+	if g.reached.Load() || now-g.heightReadNanos.Load() < int64(bestHeightReadInterval) {
+		g.heightReading.Store(false)
+
+		return !g.reached.Load()
+	}
+
+	g.heightReadNanos.Store(now)
+
+	go g.readBestHeight()
 
 	return true
 }
@@ -221,6 +231,16 @@ func (g *UnminedTxGate) warnReadFailure(err error) {
 	}
 
 	g.logger.Warnf("[UnminedTxGate][%s] cannot read the best height, so unmined transactions stay refused until it reaches checkpoint %d: %v", g.route, g.highestCheckpoint, err)
+}
+
+// Route returns the intake route the gate was built for, one of the
+// UnminedTxRoute constants. A nil gate returns "".
+func (g *UnminedTxGate) Route() string {
+	if g == nil {
+		return ""
+	}
+
+	return g.route
 }
 
 // CheckpointHeight returns the height below which the gate refuses whatever

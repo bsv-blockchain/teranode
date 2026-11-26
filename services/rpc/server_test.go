@@ -9,17 +9,20 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/bsv-blockchain/go-chaincfg"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/blockchain/blockchain_api"
 	"github.com/bsv-blockchain/teranode/services/rpc/bsvjson"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
+	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/test/mocklogger"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -962,6 +965,25 @@ func TestNewServer(t *testing.T) {
 		require.Error(t, err)
 		assert.Nil(t, server)
 		assert.Contains(t, err.Error(), "rpc_listener_url not set in config")
+	})
+
+	t.Run("hands its settings to the unmined transaction gate", func(t *testing.T) {
+		params := chaincfg.MainNetParams
+		params.Checkpoints = []chaincfg.Checkpoint{{Height: 100}}
+
+		tSettings := &settings.Settings{
+			Context:        "rpc_unmined_tx_gate_test",
+			ChainCfgParams: &params,
+			Asset:          settings.AssetSettings{HTTPAddress: "http://localhost:8090"},
+			RPC:            settings.RPCSettings{RPCListenerURL: &url.URL{Scheme: "http", Host: "127.0.0.1:0"}},
+		}
+		tSettings.UtxoStore.UtxoStore = &url.URL{Scheme: utxo.NettingStoreScheme, Host: "localhost"}
+
+		server, err := NewServer(logger, tSettings, &blockchain.Mock{}, nil, nil, nil, nil, nil, nil, nil)
+		require.NoError(t, err)
+		t.Cleanup(func() { util.RemoveListener(tSettings.Context, "rpc", "http://") })
+
+		require.Equal(t, uint32(100), server.unminedTxGate.CheckpointHeight())
 	})
 
 	// Note: Testing successful server creation is complex because the real NewServer

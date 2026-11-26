@@ -193,6 +193,15 @@ func TestUnminedTxGate_NettingStoreRefusesBelowHighestCheckpoint(t *testing.T) {
 			}
 
 			logger.AssertNumberOfCalls(t, "Warnf", wantWarn)
+
+			if tt.heightErr {
+				gate.warnReadFailure(errors.NewServiceError("blockchain down"))
+				logger.AssertNumberOfCalls(t, "Warnf", 1) // inside the interval: no second line
+
+				gate.lastWarnNanos.Store(time.Now().Add(-unminedTxRefusedLogInterval).UnixNano())
+				gate.warnReadFailure(errors.NewServiceError("blockchain down"))
+				logger.AssertNumberOfCalls(t, "Warnf", 2)
+			}
 		})
 	}
 }
@@ -234,6 +243,31 @@ func TestUnminedTxGate_HeightReadIntervalAndLatch(t *testing.T) {
 	client.AssertNumberOfCalls(t, "GetBestHeightAndTime", 2)
 }
 
+// The interval and timeout are fixed, not tuning: a longer interval or timeout
+// keeps a starting node refusing for longer, and no timeout lets a silent
+// blockchain service hold the read slot for ever.
+func TestUnminedTxGate_HeightReadTimeoutFreesTheSlot(t *testing.T) {
+	require.Equal(t, time.Second, bestHeightReadInterval)
+	require.Equal(t, 2*time.Second, bestHeightReadTimeout)
+
+	idle := FSMStateIDLE
+	client := &Mock{}
+	t.Cleanup(func() { client.AssertExpectations(t) })
+	fsmRead(client, &idle)
+
+	// The client answers only when the read's own deadline ends it.
+	client.On("GetBestHeightAndTime", mock.Anything).Run(func(args mock.Arguments) {
+		<-args.Get(0).(context.Context).Done()
+	}).Return(0, 0, errors.NewServiceError("deadline")).Once()
+
+	gate := NewUnminedTxGate(ulogger.TestLogger{}, client, gateSettings(t, "utxoset"), "test_checkpoint_timeout")
+
+	start := time.Now()
+	require.True(t, gate.Refuses(context.Background(), nil))
+	require.Eventually(t, func() bool { return !gate.heightReading.Load() }, 4*time.Second, 10*time.Millisecond)
+	require.GreaterOrEqual(t, time.Since(start), 1500*time.Millisecond, "the slot is held until the timeout")
+}
+
 // waitForHeightRead waits until the gate's background height read has finished.
 func waitForHeightRead(t *testing.T, gate *UnminedTxGate) {
 	t.Helper()
@@ -249,4 +283,6 @@ func TestUnminedTxGate_CheckpointHeight(t *testing.T) {
 
 	var nilGate *UnminedTxGate
 	require.Zero(t, nilGate.CheckpointHeight())
+	require.Empty(t, nilGate.Route())
+	require.Equal(t, "test_height_on", NewUnminedTxGate(ulogger.TestLogger{}, nil, nil, "test_height_on").Route())
 }

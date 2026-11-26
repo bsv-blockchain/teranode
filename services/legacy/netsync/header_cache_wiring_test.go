@@ -2,6 +2,7 @@ package netsync
 
 import (
 	"context"
+	"net/url"
 	"testing"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
@@ -46,8 +47,8 @@ func TestHeadersRoundLocator_UsesTheChain(t *testing.T) {
 	require.Equal(t, fromChain[0], got[0])
 }
 
-// TestNew_BuildsAHeaderCache is a guard against the cache being forgotten in
-// the constructor. A nil cache is not a crash, because every method on it is
+// TestNew_BuildsAHeaderCache is a guard against the cache, or the unmined
+// transaction gates' settings, being forgotten in the constructor. A nil cache is not a crash, because every method on it is
 // nil safe. It is worse: a silently empty wanted range for ever.
 //
 // This calls the real constructor rather than a helper that pokes the field in
@@ -75,6 +76,10 @@ func TestNew_BuildsAHeaderCache(t *testing.T) {
 	client.Mock.On("IsFSMCurrentState", mock.Anything, mock.Anything).Return(false, nil)
 	// New seeds the block-size tracker from the last blocks of the chain (seedBlockSizes).
 	client.Mock.On("GetBlockHeaders", mock.Anything, mock.Anything, mock.Anything).Return([]*model.BlockHeader{}, []*model.BlockHeaderMeta{}, nil)
+	// The gate checks below read the state and start a height read.
+	running := blockchain2.FSMStateRUNNING
+	client.Mock.On("GetFSMCurrentState", mock.Anything).Return(&running, nil)
+	client.Mock.On("GetBestHeightAndTime", mock.Anything).Return(0, 0, nil)
 
 	config := &Config{
 		ChainParams: &chaincfg.MainNetParams,
@@ -84,7 +89,12 @@ func TestNew_BuildsAHeaderCache(t *testing.T) {
 		DisableCheckpoints: true,
 	}
 
-	tSettings := &settings.Settings{}
+	// A netting store with a checkpoint, so each gate's checkpoint rule is on
+	// only if New hands it these settings.
+	gateParams := chaincfg.MainNetParams
+	gateParams.Checkpoints = []chaincfg.Checkpoint{{Height: 100}}
+	tSettings := &settings.Settings{ChainCfgParams: &gateParams}
+	tSettings.UtxoStore.UtxoStore = &url.URL{Scheme: utxo.NettingStoreScheme, Host: "localhost"}
 
 	sm, err := New(
 		ctx,
@@ -103,6 +113,19 @@ func TestNew_BuildsAHeaderCache(t *testing.T) {
 	require.NoError(t, err)
 
 	require.NotNil(t, sm.headerCache, "the manager must start with a cache to fill")
+
+	for _, tt := range []struct {
+		gate  *blockchain2.UnminedTxGate
+		route string
+	}{
+		{sm.txGate, blockchain2.UnminedTxRouteLegacyTx},
+		{sm.orphanGate, blockchain2.UnminedTxRouteLegacyOrphan},
+		{sm.orphanEvictionGate, blockchain2.UnminedTxRouteLegacyOrphanEviction},
+	} {
+		require.Equal(t, tt.route, tt.gate.Route())
+		require.Equal(t, uint32(100), tt.gate.CheckpointHeight(), tt.route)
+		require.True(t, tt.gate.Refuses(ctx, nil), "%s: below the checkpoint, so a gate with the client refuses", tt.route)
+	}
 }
 
 // newHeaderCacheManager builds a manager with a header cache ready to fill —
