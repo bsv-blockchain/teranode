@@ -184,6 +184,18 @@ func TestParentOutputsCarryTheParentsLanePosition(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, utxo.ParentOutputNotMined, answers[0].Status)
 	require.Equal(t, want, answers[0].LanePosition)
+	require.False(t, answers[0].IsCoinbase)
+
+	// The same read says whether the parent is a coinbase, for the lanes shadow.
+	coinbase := mkCoinbase(t, 5_000)
+	_, err = s.Create(ctx, coinbase, 100, utxo.WithLanePosition(lane.Pack(3, 13)))
+	require.NoError(t, err)
+
+	cbOp := []utxo.Outpoint{{TxID: *coinbase.TxIDChainHash(), Vout: 0}}
+
+	answers, err = s.ParentOutputsForValidation(ctx, cbOp)
+	require.NoError(t, err)
+	require.True(t, answers[0].IsCoinbase)
 
 	// The parent is spent, so the coin comes from the journal; the position still comes with the
 	// parent's record.
@@ -199,6 +211,10 @@ func TestParentOutputsCarryTheParentsLanePosition(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, utxo.ParentOutputNotMined, answers[0].Status)
 	require.Zero(t, answers[0].LanePosition, "lane positions off: the read does not ask")
+
+	answers, err = off.ParentOutputsForValidation(ctx, cbOp)
+	require.NoError(t, err)
+	require.False(t, answers[0].IsCoinbase, "lane positions off: the coinbase flag is not handed on")
 }
 
 // The parents' positions travel where the inpoints do: into the containment row when the record is
@@ -586,28 +602,46 @@ func TestParentOutputsCarryThePositionFromCoinAndJournalRows(t *testing.T) {
 	want := lane.Pack(15, 3)
 
 	// Below mainnet's checkpoints, so the create takes the block path: coins and a containment
-	// row at height 100, and no identity row.
-	parent := mkTx(t, 1, 5_000)
-	_, err := s.Create(ctx, parent, 100, utxo.WithLanePosition(want), utxo.WithMinedBlockInfo(
-		utxo.MinedBlockInfo{BlockID: 3, BlockHeight: 100, OnLongestChain: true}))
-	require.NoError(t, err)
-	require.False(t, identExists(t, s, ctx, parent))
+	// row at height 100, and no identity row. The coinbase flag comes from the same rows.
+	parents := []*bt.Tx{mkTx(t, 1, 5_000), mkCoinbase(t, 5_000)}
+	for _, parent := range parents {
+		_, err := s.Create(ctx, parent, 100, utxo.WithLanePosition(want), utxo.WithMinedBlockInfo(
+			utxo.MinedBlockInfo{BlockID: 3, BlockHeight: 100, OnLongestChain: true}))
+		require.NoError(t, err)
+		require.False(t, identExists(t, s, ctx, parent))
+	}
+
+	answer := func(parent *bt.Tx, from string) {
+		t.Helper()
+
+		answers, err := s.ParentOutputsForValidation(ctx, []utxo.Outpoint{{TxID: *parent.TxIDChainHash(), Vout: 0}})
+		require.NoError(t, err)
+		require.Equal(t, utxo.ParentOutputMined, answers[0].Status)
+		require.Equal(t, want, answers[0].LanePosition, "answered from the %s", from)
+		require.Equal(t, parent.IsCoinbase(), answers[0].IsCoinbase, "answered from the %s", from)
+
+		// The block parent check's Get and the subtree prefetch's BatchDecorate read the flag too.
+		md, err := s.Get(ctx, parent.TxIDChainHash(), fields.BlockIDs, fields.LanePosition, fields.IsCoinbase)
+		require.NoError(t, err)
+		require.Equal(t, parent.IsCoinbase(), md.IsCoinbase, "block parent read, from the %s", from)
+
+		items := []*utxo.UnresolvedMetaData{{Hash: *parent.TxIDChainHash()}}
+		require.NoError(t, s.BatchDecorate(ctx, items, fields.BlockIDs, fields.BlockHeights, fields.Outputs, fields.LanePosition, fields.IsCoinbase))
+		require.NoError(t, items[0].Err)
+		require.Equal(t, parent.IsCoinbase(), items[0].Data.IsCoinbase, "prefetch read, from the %s", from)
+	}
+
+	for _, parent := range parents {
+		answer(parent, "record before the floor passes it")
+	}
 
 	require.NoError(t, s.SetBlockHeight(5_000))
 
-	op := []utxo.Outpoint{{TxID: *parent.TxIDChainHash(), Vout: 0}}
-
-	answers, err := s.ParentOutputsForValidation(ctx, op)
-	require.NoError(t, err)
-	require.Equal(t, utxo.ParentOutputMined, answers[0].Status)
-	require.Equal(t, want, answers[0].LanePosition, "answered from the coin row")
-
-	_ = spendOneOutput(t, s, ctx, parent, 0, 5_001)
-
-	answers, err = s.ParentOutputsForValidation(ctx, op)
-	require.NoError(t, err)
-	require.Equal(t, utxo.ParentOutputMined, answers[0].Status)
-	require.Equal(t, want, answers[0].LanePosition, "answered from the journal row")
+	for _, parent := range parents {
+		answer(parent, "coin row")
+		_ = spendOneOutput(t, s, ctx, parent, 0, 5_001)
+		answer(parent, "journal row")
+	}
 }
 
 // A preserved copy taken from a coin row, for a parent with no containment row left, carries the

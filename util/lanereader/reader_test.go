@@ -257,7 +257,7 @@ func TestReaderAtOffDoesNothing(t *testing.T) {
 
 	before := total()
 
-	r.BlockParents(t.Context(), chainhash.Hash{}).ObserveParent(chainhash.Hash{}, lane.Pack(1, 1), []uint32{1})
+	r.BlockParents(t.Context(), chainhash.Hash{}).ObserveParent(chainhash.Hash{}, lane.Pack(1, 1), []uint32{1}, false)
 	r.CompareHeight(ReaderValidator, chainhash.Hash{}, lane.Pack(1, 1), true, 1)
 	r.CompareBlocks(ReaderBlockParent, nil, chainhash.Hash{}, lane.Pack(1, 1), []uint32{1})
 	r.compareDuplicates(nil, KindNotReady, chainhash.Hash{}, 1, false)
@@ -512,14 +512,28 @@ func TestBlockParentsAnswersHeldParentsOnceTheChainIsIn(t *testing.T) {
 		before := answers(ReaderBlockParent, KindAgree, lane.ViaRow)
 
 		bp := r.BlockParents(context.Background(), b2.hash)
-		bp.ObserveParent(chainhash.Hash{2}, lane.Pack(8, 9), []uint32{b2.id})
+		bp.ObserveParent(chainhash.Hash{2}, lane.Pack(8, 9), []uint32{b2.id}, false)
 
 		require.Eventually(t, func() bool {
 			return answers(ReaderBlockParent, KindAgree, lane.ViaRow) == before+1
 		}, 5*time.Second, 10*time.Millisecond)
 
-		bp.ObserveParent(chainhash.Hash{3}, lane.Pack(8, 9), []uint32{b2.id})
+		bp.ObserveParent(chainhash.Hash{3}, lane.Pack(8, 9), []uint32{b2.id}, false)
 		require.Equal(t, before+2, answers(ReaderBlockParent, KindAgree, lane.ViaRow))
+
+		// Block rows leave the coinbase out, so its position is in no row: a coinbase parent counts
+		// coinbase, where an ordinary parent at such a position counts today_only.
+		requireCounted(t, ReaderBlockParent, KindCoinbase, lane.ViaNone, func() {
+			bp.ObserveParent(chainhash.Hash{4}, lane.Pack(8, 10), []uint32{b2.id}, true)
+		})
+		requireCounted(t, ReaderBlockParent, KindTodayOnly, lane.ViaNone, func() {
+			bp.ObserveParent(chainhash.Hash{5}, lane.Pack(8, 10), []uint32{b2.id}, false)
+		})
+
+		// A coinbase parent needs no chain, so it is counted before the chain's rows are in.
+		requireCounted(t, ReaderBlockParent, KindCoinbase, lane.ViaNone, func() {
+			r.BlockParents(context.Background(), b2.hash).ObserveParent(chainhash.Hash{6}, lane.Pack(8, 10), []uint32{b2.id}, true)
+		})
 	})
 }
 
@@ -1042,13 +1056,13 @@ func TestBlockParentsCountsNotReadyWhenTheChainCannotLoad(t *testing.T) {
 	before := answers(ReaderBlockParent, KindNotReady, lane.ViaNone)
 
 	bp := r.BlockParents(context.Background(), chainhash.Hash{9, 9})
-	bp.ObserveParent(chainhash.Hash{2}, lane.Pack(8, 9), []uint32{1})
+	bp.ObserveParent(chainhash.Hash{2}, lane.Pack(8, 9), []uint32{1}, false)
 
 	require.Eventually(t, func() bool {
 		return answers(ReaderBlockParent, KindNotReady, lane.ViaNone) == before+1
 	}, 5*time.Second, 10*time.Millisecond)
 
-	bp.ObserveParent(chainhash.Hash{3}, lane.Pack(8, 9), []uint32{1})
+	bp.ObserveParent(chainhash.Hash{3}, lane.Pack(8, 9), []uint32{1}, false)
 	require.Equal(t, before+2, answers(ReaderBlockParent, KindNotReady, lane.ViaNone))
 }
 
@@ -1183,7 +1197,7 @@ func TestBlockParentsHoldsUpToItsCapWhileTheChainLoads(t *testing.T) {
 	const held = 100_000 // the cap the design states, written out so a changed cap fails here
 
 	for i := 0; i <= held; i++ {
-		bp.ObserveParent(chainhash.Hash{2}, lane.Pack(8, 9), []uint32{b2.id})
+		bp.ObserveParent(chainhash.Hash{2}, lane.Pack(8, 9), []uint32{b2.id}, false)
 	}
 
 	require.Equal(t, notReady+1, answers(ReaderBlockParent, KindNotReady, lane.ViaNone), "one past the cap counts not_ready")
@@ -1246,7 +1260,7 @@ func TestBlockParentsGivesUpOnItsOwnDeadline(t *testing.T) {
 	before := answers(ReaderBlockParent, KindNotReady, lane.ViaNone)
 
 	bp := r.BlockParents(context.Background(), b2.hash)
-	bp.ObserveParent(chainhash.Hash{2}, lane.Pack(8, 9), []uint32{b2.id})
+	bp.ObserveParent(chainhash.Hash{2}, lane.Pack(8, 9), []uint32{b2.id}, false)
 
 	require.Eventually(t, func() bool {
 		return answers(ReaderBlockParent, KindNotReady, lane.ViaNone) == before+1
