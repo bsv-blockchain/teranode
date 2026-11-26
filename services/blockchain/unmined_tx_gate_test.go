@@ -268,6 +268,22 @@ func TestUnminedTxGate_HeightReadTimeoutFreesTheSlot(t *testing.T) {
 	require.GreaterOrEqual(t, time.Since(start), 1500*time.Millisecond, "the slot is held until the timeout")
 }
 
+// A caller that checked before another caller's read landed must start no read
+// once it holds the slot: not after the checkpoint was reached, and not inside
+// the interval. The strict mock fails the test on any read.
+func TestUnminedTxGate_ScheduleRechecksInsideTheSlot(t *testing.T) {
+	gate := NewUnminedTxGate(ulogger.TestLogger{}, &Mock{}, gateSettings(t, "utxoset"), "test_checkpoint_recheck")
+
+	gate.reached.Store(true)
+	gate.scheduleHeightRead()
+	require.False(t, gate.heightReading.Load(), "reached: slot released, no read")
+
+	gate.reached.Store(false)
+	gate.heightReadNanos.Store(time.Now().UnixNano())
+	gate.scheduleHeightRead()
+	require.False(t, gate.heightReading.Load(), "inside the interval: slot released, no read")
+}
+
 // waitForHeightRead waits until the gate's background height read has finished.
 func waitForHeightRead(t *testing.T, gate *UnminedTxGate) {
 	t.Helper()

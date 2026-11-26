@@ -32,7 +32,7 @@ const (
 // transactions a second, and one line each would bury the sync's own logging.
 const unminedTxRefusedLogInterval = 30 * time.Second
 
-// bestHeightReadInterval is the shortest time between the starts of two
+// bestHeightReadInterval is the shortest time between scheduling two
 // best-height reads by one gate. Refuses runs once per transaction and the read
 // is a gRPC call, so between reads the gate answers from what it last learned.
 const bestHeightReadInterval = time.Second
@@ -113,7 +113,7 @@ type UnminedTxGate struct {
 
 	// reached is set once a height read returns highestCheckpoint or above.
 	// heightReading is true while a read is in flight, heightReadNanos is the
-	// unix time the last read started, and lastWarnNanos the last time a
+	// unix time the last read was scheduled, and lastWarnNanos the last time a
 	// failed read was logged.
 	reached         atomic.Bool
 	heightReading   atomic.Bool
@@ -169,33 +169,39 @@ func (g *UnminedTxGate) Refuses(ctx context.Context, txHash *chainhash.Hash) boo
 	return false
 }
 
-// belowHighestCheckpoint reports whether the checkpoint rule refuses. Until the
-// checkpoint is known to be reached it refuses, and starts a background height
-// read when none is in flight and the last one started at least
-// bestHeightReadInterval ago.
+// belowHighestCheckpoint reports whether the checkpoint rule refuses: it does
+// until the checkpoint is known to be reached, and meanwhile schedules a
+// background height read when one is due.
 func (g *UnminedTxGate) belowHighestCheckpoint() bool {
 	if g.highestCheckpoint == 0 || g.reached.Load() {
 		return false
 	}
 
+	g.scheduleHeightRead()
+
+	return !g.reached.Load()
+}
+
+// scheduleHeightRead starts a background height read when none is in flight,
+// the checkpoint is not yet known to be reached, and the last read was
+// scheduled at least bestHeightReadInterval ago. Both conditions are checked
+// while holding the read slot, so a caller that checked them before another
+// caller's read landed cannot start a second read at once.
+func (g *UnminedTxGate) scheduleHeightRead() {
 	if !g.heightReading.CompareAndSwap(false, true) {
-		return true
+		return
 	}
 
-	// Checked only while holding the read slot, so a read that landed between
-	// another caller's checks cannot be followed at once by a second one.
 	now := time.Now().UnixNano()
 	if g.reached.Load() || now-g.heightReadNanos.Load() < int64(bestHeightReadInterval) {
 		g.heightReading.Store(false)
 
-		return !g.reached.Load()
+		return
 	}
 
 	g.heightReadNanos.Store(now)
 
 	go g.readBestHeight()
-
-	return true
 }
 
 // readBestHeight reads the best height once and sets reached when it is at or
@@ -233,8 +239,8 @@ func (g *UnminedTxGate) warnReadFailure(err error) {
 	g.logger.Warnf("[UnminedTxGate][%s] cannot read the best height, so unmined transactions stay refused until it reaches checkpoint %d: %v", g.route, g.highestCheckpoint, err)
 }
 
-// Route returns the intake route the gate was built for, one of the
-// UnminedTxRoute constants. A nil gate returns "".
+// Route returns the route string the gate was built with, which in production
+// is one of the UnminedTxRoute constants. A nil gate returns "".
 func (g *UnminedTxGate) Route() string {
 	if g == nil {
 		return ""
