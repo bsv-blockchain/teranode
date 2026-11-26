@@ -70,8 +70,8 @@ var (
 	prometheusSubtreeProcessorTxEraDropped prometheus.Counter
 
 	// prometheusSubtreeProcessorLateMinedDropped counts handed-off transactions dropped, on arrival
-	// or when placed, because a block applied within blockassembly_minedTxSetRetention already
-	// mined them.
+	// or when placed, because a block applied within blockassembly_minedTxSetRetention, plus any
+	// double-spend window, already mined them.
 	prometheusSubtreeProcessorLateMinedDropped prometheus.Counter
 
 	// prometheusSubtreeProcessorDiskTxMapErrors counts disk tx map storage errors
@@ -351,7 +351,7 @@ func _initPrometheusMetrics() {
 			Namespace: "teranode",
 			Subsystem: "subtreeprocessor",
 			Name:      "late_mined_dropped_total",
-			Help:      "Number of handed-off transactions dropped, on arrival or when placed, because a block applied within blockassembly_minedTxSetRetention already mined them",
+			Help:      "Number of handed-off transactions dropped, on arrival or when placed, because a block applied within blockassembly_minedTxSetRetention, plus any double-spend window, already mined them",
 		},
 	)
 

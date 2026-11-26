@@ -119,6 +119,7 @@ func TestReValidateBlockFromScratch_CarriesEveryOptionThroughTheRequeue(t *testi
 		IsRevalidation:          true,
 		DisableOptimisticMining: true,
 		IsCatchupMode:           true,
+		HeaderProven:            true,
 	})
 
 	// ReValidateBlockFromScratch waits out the result-grace window on its own goroutine before
@@ -137,6 +138,14 @@ func TestReValidateBlockFromScratch_CarriesEveryOptionThroughTheRequeue(t *testi
 			"a caller that opted out of optimistic mining must not get the AddBlock-before-Valid branch back")
 		require.True(t, queued.isCatchupMode,
 			"catchup mode must survive the re-queue")
+		require.Equal(t, &ValidateBlockOptions{
+			PeerID:                  "peer-123",
+			IsRequeuedRetry:         true,
+			IsRevalidation:          true,
+			DisableOptimisticMining: true,
+			IsCatchupMode:           true,
+			HeaderProven:            true,
+		}, queued.retryOptions(), "a proven legacy block must keep its header proof on the retry, or the coinbase check rejects it")
 
 		// The run that failed is deliberately NOT carried: the retry has to re-fetch.
 		require.Nil(t, queued.blockHeaders,

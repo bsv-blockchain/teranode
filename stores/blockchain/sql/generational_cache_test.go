@@ -234,6 +234,11 @@ func TestGenerationalCache_HeaderByteBudget(t *testing.T) {
 		require.True(t, gc.NewOp(chainhash.Hash{i}).Set(value, time.Hour))
 	}
 	require.False(t, gc.NewOp(chainhash.Hash{17}).Set(value, time.Hour))
+	sweeps := gc.sweeps
+	for i := 0; i < 1000; i++ {
+		require.False(t, gc.NewOp(chainhash.Hash{17}).Set(value, time.Hour))
+	}
+	require.Equal(t, sweeps, gc.sweeps, "with nothing evicted, a refused Set must not rescan every charge")
 	require.Nil(t, gc.NewOp(chainhash.Hash{17}).Get())
 	require.NotNil(t, gc.NewOp(chainhash.Hash{1}).Get(), "budget exhaustion must not evict existing responses")
 	require.NotNil(t, gc.NewOp(hotKey).Get(), "header queries must not flush unrelated hot-path entries")
@@ -258,6 +263,64 @@ func TestGenerationalCache_HeaderBudgetReclaimed(t *testing.T) {
 		require.Eventually(t, func() bool {
 			return gc.NewOp(chainhash.Hash{17}).Set(value, time.Hour)
 		}, time.Second, time.Millisecond, "expired entries must return their header budget without chain invalidation")
+	})
+
+	t.Run("one large eviction among many small charges", func(t *testing.T) {
+		gc := NewGenerationalCache(0)
+		defer gc.Stop()
+		for i := uint32(0); i < 2000; i++ {
+			var key chainhash.Hash
+			binary.LittleEndian.PutUint32(key[:], i)
+			require.True(t, gc.NewOp(key).Set([]uint32{i}, time.Hour))
+		}
+		large := [2]interface{}{make([]*model.BlockHeader, 120000), make([]*model.BlockHeaderMeta, 120000)}
+		require.True(t, gc.NewOp(chainhash.Hash{0xff}).Set(large, time.Hour))
+		// one sweep while the large entry is live, so it must re-learn the largest charge
+		gc.ttlCache.Delete(chainhash.Hash{})
+		sweeps := gc.sweeps
+		require.False(t, gc.NewOp(chainhash.Hash{0xfe}).Set(large, time.Hour))
+		require.Equal(t, sweeps+1, gc.sweeps)
+		gc.ttlCache.Delete(chainhash.Hash{0xff})
+		require.True(t, gc.NewOp(chainhash.Hash{0xfe}).Set(large, time.Hour), "one evicted entry holding most of the budget must return it")
+	})
+
+	t.Run("sweeps wait until evictions can repay them", func(t *testing.T) {
+		gc := NewGenerationalCache(0)
+		defer gc.Stop()
+		ids := make([]uint32, 10000) // a 40,000-byte charge, shared by every entry
+		var keys []chainhash.Hash
+		for i := uint32(0); ; i++ {
+			var key chainhash.Hash
+			binary.LittleEndian.PutUint32(key[:], i)
+			if !gc.NewOp(key).Set(ids, time.Hour) {
+				break
+			}
+			keys = append(keys, key)
+		}
+		refused := chainhash.Hash{0xff, 0xff, 0xff, 0xff}
+		sweeps := gc.sweeps
+		gc.ttlCache.Delete(keys[0])
+		require.False(t, gc.NewOp(refused).Set(ids, time.Hour))
+		require.Equal(t, sweeps, gc.sweeps, "one small eviction does not repay a scan of every charge")
+		admitted := false
+		for _, key := range keys[1 : len(keys)/sweepEvictionFraction+1] {
+			gc.ttlCache.Delete(key)
+			if admitted = gc.NewOp(refused).Set(ids, time.Hour); admitted {
+				break
+			}
+		}
+		require.True(t, admitted, "evictions spread over many refused Sets must add up to a sweep")
+		require.Equal(t, sweeps+1, gc.sweeps)
+		for i := uint32(1 << 30); ; i++ {
+			if !gc.NewOp(chainhash.Hash{byte(i), byte(i >> 8), byte(i >> 16), byte(i >> 24)}).Set(ids, time.Hour) {
+				break
+			}
+		}
+		sweeps = gc.sweeps
+		for i := 0; i < 100; i++ {
+			require.False(t, gc.NewOp(chainhash.Hash{0xfe, 0xff, 0xff, 0xff}).Set(ids, time.Hour))
+		}
+		require.Equal(t, sweeps, gc.sweeps, "after a sweep, refused Sets with no new eviction must not scan again")
 	})
 
 	t.Run("capacity eviction", func(t *testing.T) {
