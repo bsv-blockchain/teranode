@@ -182,8 +182,9 @@ install-tools:
 # under -race and coverage, which took 9m20s on main by itself in October 2026,
 # so 10m left no room for new container tests there.
 #
-# TEST_EXCLUDE drops packages (paths relative to the module) from `make test`; CI
-# sets it to run the slowest package in its own job via `make test-pkgs`.
+# TEST_EXCLUDE drops packages (paths relative to the module, space-separated) from
+# `make test`; CI sets it to run the slowest packages in jobs of their own via
+# `make test-pkgs`.
 # TEST_COVERPROFILE names the coverage file either target writes.
 TEST_EXCLUDE ?=
 TEST_COVERPROFILE ?= coverage.out

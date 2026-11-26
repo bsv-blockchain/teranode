@@ -21,22 +21,39 @@ jobs:
     # ARM runner (see teranode_pr_tests.yaml): more headroom for the heavy
     # `make test` -race+coverage compile; runs natively on arm64.
     runs-on: teranode-runner-16-core-arm
-    # make test is split so its slowest package, stores/utxo/aerospike (~15 min
-    # under -race and coverage), runs beside the rest instead of setting the
-    # whole job's wall time, and so the two biggest test binaries don't share a
-    # runner's memory. Unsplit, make test took ~18 min, and 15 min cancelled
-    # every main run from 18 Nov 2026.
+    # make test is split across runners so no shard waits on a long tail of slow
+    # packages. Under -race and coverage on one 16-core runner the seven slowest
+    # packages each took 220-340 s and set the unit job's ~9 min wall time, so they
+    # run in pairs on their own runners. A pair runs concurrently, so a shard costs
+    # about its slower package. stores/utxo/aerospike keeps its own shard for its
+    # testcontainer suite and memory. Every path in a shard's TEST_PKGS must also be
+    # in the unit shard's TEST_EXCLUDE (and the reverse), or its tests run twice or
+    # not at all; COVERAGE_SHARDS in the sonarqube job lists every shard.
+    # Unsplit, make test took ~18 min, and 15 min cancelled every main run from
+    # 18 Nov 2026.
     timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
         include:
           - shard: unit
-            run: make test TEST_EXCLUDE=stores/utxo/aerospike TEST_COVERPROFILE=coverage-unit.out
+            run: make test TEST_EXCLUDE="stores/utxo/aerospike services/blockvalidation model services/blockassembly/subtreeprocessor stores/utxo/utxoset services/blockassembly services/legacy/netsync services/blockchain stores/blockchain/sql" TEST_COVERPROFILE=coverage-unit.out
             profile: coverage-unit.out
           - shard: aerospike
             run: make test-pkgs TEST_PKGS=stores/utxo/aerospike TEST_COVERPROFILE=coverage-aerospike.out
             profile: coverage-aerospike.out
+          - shard: blockvalidation
+            run: make test-pkgs TEST_PKGS="services/blockvalidation model" TEST_COVERPROFILE=coverage-blockvalidation.out
+            profile: coverage-blockvalidation.out
+          - shard: subtreeprocessor
+            run: make test-pkgs TEST_PKGS="services/blockassembly/subtreeprocessor stores/utxo/utxoset" TEST_COVERPROFILE=coverage-subtreeprocessor.out
+            profile: coverage-subtreeprocessor.out
+          - shard: blockassembly
+            run: make test-pkgs TEST_PKGS="services/blockassembly services/legacy/netsync" TEST_COVERPROFILE=coverage-blockassembly.out
+            profile: coverage-blockassembly.out
+          - shard: blockchain
+            run: make test-pkgs TEST_PKGS="services/blockchain stores/blockchain/sql" TEST_COVERPROFILE=coverage-blockchain.out
+            profile: coverage-blockchain.out
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
 
@@ -174,12 +191,13 @@ jobs:
           path: coverage-profiles
           merge-multiple: true
 
-      # Sonar reads coverage.out; a block that appears in both profiles counts
-      # as covered when either copy is.
+      # Sonar reads coverage.out; a block that appears in several profiles counts
+      # as covered when any copy is. COVERAGE_SHARDS must name every go-test
+      # matrix entry.
       - name: Merge coverage profiles
-        run: |
-          set -euo pipefail
-          { cat coverage-profiles/coverage-unit.out; tail -n +2 coverage-profiles/coverage-aerospike.out; } > coverage.out
+        env:
+          COVERAGE_SHARDS: unit aerospike blockvalidation subtreeprocessor blockassembly blockchain
+        run: .github/scripts/merge-coverage.sh coverage-profiles coverage.out $COVERAGE_SHARDS
 
       - name: Run filename check script
         run: |
