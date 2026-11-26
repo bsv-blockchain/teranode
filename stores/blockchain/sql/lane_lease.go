@@ -73,7 +73,8 @@ const (
 // the service commits the grant but the holder's call times out or the connection drops: the holder
 // retries with the same settles pair and gets the next grant, so two hand-out rows carry that pair
 // and the first is never installed and never settled. Positions stay unique, because the retry
-// starts above it: the retry's pair no longer settles the newest hand-out, so it cannot continue. A reader of settles pairs must take a hand-out no pair names as possibly unused.
+// starts above it: the retry's pair no longer settles the newest hand-out, so it cannot continue.
+// A reader of settles pairs must take a hand-out no pair names as possibly unused.
 //
 // Times are on the database clock, so a sweep run from any blockchain pod judges every lease by
 // the same clock. Closing is one conditional UPDATE from open to closed, and only the caller whose
@@ -471,9 +472,10 @@ func (s *SQL) recordGrant(ctx context.Context, tx *sql.Tx, id lane.LeaseID, l ui
 // when the pair settles the newest hand-out, the hand-out is the requesting lease's own, and the
 // pair stops short of its last position. A holder gives positions out of a grant in order and
 // settles below any it got back unused, so no position above the last taken one carries a record,
-// and no other lease holds the lane: no position goes to two records. Take a lane whose newest hand-out is 1 to 10,000, aged out after 288 were taken:
-// the next grant starts at 289, not 10,001. A pair for an older grant, as when the holder has moved
-// to a spare, or from a reply the holder never got, starts above the newest hand-out as before.
+// and no other lease holds the lane: no position goes to two records. Take a lane whose newest
+// hand-out is 1 to 10,000, aged out after 288 were taken: the next grant starts at 289, not 10,001.
+// A pair for an older grant, as when the holder has moved to a spare, or from a reply the holder
+// never got, starts above the newest hand-out as before.
 // A lane with no hand-out reads first 0, which no pair names.
 func (s *SQL) continues(st laneState, id lane.LeaseID, settles lane.Settles) bool {
 	if settles.First != st.first || settles.LastTaken < st.first || settles.LastTaken >= st.last {

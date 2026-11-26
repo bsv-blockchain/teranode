@@ -63,8 +63,8 @@ type Timings struct {
 // up, with no returned position (Return) still waiting in it, or GrantDuration has passed since its
 // first position was taken, and only then moves to the spare. A grant that ages out with no spare is
 // left by the next take, which waits for a grant: the service starts that grant right after the last
-// position taken, so a slow process leaves no unused tail between its grants. An unused grant expires GrantDuration
-// after its request was sent, including a spare.
+// position taken, so a slow process leaves no unused tail between its grants. An unused grant
+// expires GrantDuration after its request was sent, including a spare.
 // The grant it leaves is settled by the next request: the grant's first position and its
 // final number, which is the grant's last position if used up or the highest position taken if it
 // aged out, travel on the next grant request or on the release.
