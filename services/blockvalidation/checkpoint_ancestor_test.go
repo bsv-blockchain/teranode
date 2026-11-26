@@ -4,8 +4,8 @@ package blockvalidation
 // predicate that gates the below-checkpoint coinbase no-inflation skip in
 // model.checkBlockRewardAndFees. The predicate must be TRUE only when the walk back from the
 // stored block with the pinned checkpoint hash lands on the block, and FALSE (forcing full
-// no-inflation enforcement) while the checkpoint block is not stored, for a block not stored
-// yet, for a fork block, above the checkpoint, and on any lookup error.
+// no-inflation enforcement) without a header proof while the checkpoint block is not stored, for
+// a block not stored yet, for a fork block, and on any lookup error, and above the checkpoint always.
 
 import (
 	"context"
@@ -69,7 +69,7 @@ func TestBlockValidation_checkpointConfirmedAncestor(t *testing.T) {
 		mockBC.On("GetHashOfAncestorBlock", mock.Anything, pinnedHash, depth).Return(bHeader.Hash(), nil)
 
 		u := &BlockValidation{settings: settingsWith(checkpoints), blockchainClient: mockBC, utxoStore: supportingStore, logger: ulogger.TestLogger{}}
-		require.True(t, u.checkpointConfirmedAncestor(context.Background(), blockUnderTest))
+		require.True(t, u.checkpointConfirmedAncestor(context.Background(), blockUnderTest, false))
 	})
 
 	t.Run("forward sync: the pinned checkpoint block is not stored yet -> false", func(t *testing.T) {
@@ -79,7 +79,7 @@ func TestBlockValidation_checkpointConfirmedAncestor(t *testing.T) {
 			Return((*chainhash.Hash)(nil), errors.NewStorageError("can't get hash", errors.ErrNotFound))
 
 		u := &BlockValidation{settings: settingsWith(checkpoints), blockchainClient: mockBC, utxoStore: supportingStore, logger: ulogger.TestLogger{}}
-		require.False(t, u.checkpointConfirmedAncestor(context.Background(), blockUnderTest))
+		require.False(t, u.checkpointConfirmedAncestor(context.Background(), blockUnderTest, false))
 	})
 
 	t.Run("fork: the walk back from the pinned checkpoint lands on another block at that height -> false", func(t *testing.T) {
@@ -88,7 +88,7 @@ func TestBlockValidation_checkpointConfirmedAncestor(t *testing.T) {
 		mockBC.On("GetHashOfAncestorBlock", mock.Anything, pinnedHash, depth).Return(forkHeader.Hash(), nil)
 
 		u := &BlockValidation{settings: settingsWith(checkpoints), blockchainClient: mockBC, utxoStore: supportingStore, logger: ulogger.TestLogger{}}
-		require.False(t, u.checkpointConfirmedAncestor(context.Background(), blockUnderTest))
+		require.False(t, u.checkpointConfirmedAncestor(context.Background(), blockUnderTest, false))
 	})
 
 	t.Run("block not stored yet: returns false after the existence lookup, without the walk", func(t *testing.T) {
@@ -96,7 +96,7 @@ func TestBlockValidation_checkpointConfirmedAncestor(t *testing.T) {
 		mockBC.On("GetBlockExists", mock.Anything, bHeader.Hash()).Return(false, nil)
 
 		u := &BlockValidation{settings: settingsWith(checkpoints), blockchainClient: mockBC, utxoStore: supportingStore, logger: ulogger.TestLogger{}}
-		require.False(t, u.checkpointConfirmedAncestor(context.Background(), blockUnderTest))
+		require.False(t, u.checkpointConfirmedAncestor(context.Background(), blockUnderTest, false))
 		mockBC.AssertNotCalled(t, "GetHashOfAncestorBlock", mock.Anything, mock.Anything, mock.Anything)
 	})
 
@@ -105,7 +105,7 @@ func TestBlockValidation_checkpointConfirmedAncestor(t *testing.T) {
 		mockBC.On("GetBlockExists", mock.Anything, bHeader.Hash()).Return(false, errors.NewServiceError("boom"))
 
 		u := &BlockValidation{settings: settingsWith(checkpoints), blockchainClient: mockBC, utxoStore: supportingStore, logger: ulogger.TestLogger{}}
-		require.False(t, u.checkpointConfirmedAncestor(context.Background(), blockUnderTest))
+		require.False(t, u.checkpointConfirmedAncestor(context.Background(), blockUnderTest, false))
 		mockBC.AssertNotCalled(t, "GetHashOfAncestorBlock", mock.Anything, mock.Anything, mock.Anything)
 	})
 
@@ -114,7 +114,8 @@ func TestBlockValidation_checkpointConfirmedAncestor(t *testing.T) {
 
 		u := &BlockValidation{settings: settingsWith(checkpoints), blockchainClient: mockBC, utxoStore: supportingStore, logger: ulogger.TestLogger{}}
 		aboveBlock := &model.Block{Header: bHeader, Height: checkpointHeight + 1}
-		require.False(t, u.checkpointConfirmedAncestor(context.Background(), aboveBlock))
+		require.False(t, u.checkpointConfirmedAncestor(context.Background(), aboveBlock, false))
+		require.False(t, u.checkpointConfirmedAncestor(context.Background(), aboveBlock, true), "a header proof must not widen the skip above the checkpoint")
 		require.Empty(t, mockBC.Calls)
 	})
 
@@ -122,7 +123,25 @@ func TestBlockValidation_checkpointConfirmedAncestor(t *testing.T) {
 		mockBC := &blockchain.Mock{}
 
 		u := &BlockValidation{settings: settingsWith(nil), blockchainClient: mockBC, utxoStore: supportingStore, logger: ulogger.TestLogger{}}
-		require.False(t, u.checkpointConfirmedAncestor(context.Background(), blockUnderTest))
+		require.False(t, u.checkpointConfirmedAncestor(context.Background(), blockUnderTest, false))
+		require.False(t, u.checkpointConfirmedAncestor(context.Background(), blockUnderTest, true), "a header proof means nothing without a hardcoded checkpoint")
+		require.Empty(t, mockBC.Calls)
+	})
+
+	// A block arriving for the first time is not stored, so only netsync's header proof can vouch
+	// for it, and it needs no blockchain lookup to do so.
+	t.Run("header proven, block not stored: true without any blockchain query", func(t *testing.T) {
+		mockBC := &blockchain.Mock{}
+
+		u := &BlockValidation{settings: settingsWith(checkpoints), blockchainClient: mockBC, utxoStore: supportingStore, logger: ulogger.TestLogger{}}
+		require.True(t, u.checkpointConfirmedAncestor(context.Background(), blockUnderTest, true))
+
+		u.utxoStore = &utxo.MockUtxostore{}
+		require.False(t, u.checkpointConfirmedAncestor(context.Background(), blockUnderTest, true), "a header proof must not widen the skip onto a store that never writes fee 0")
+
+		u.utxoStore = supportingStore
+		u.settings = settingsWith([]chaincfg.Checkpoint{{Height: int32(checkpointHeight)}})
+		require.False(t, u.checkpointConfirmedAncestor(context.Background(), blockUnderTest, true), "a header proof means nothing without a pinned checkpoint hash")
 		require.Empty(t, mockBC.Calls)
 	})
 
@@ -133,6 +152,6 @@ func TestBlockValidation_checkpointConfirmedAncestor(t *testing.T) {
 			Return((*chainhash.Hash)(nil), errors.NewServiceError("boom"))
 
 		u := &BlockValidation{settings: settingsWith(checkpoints), blockchainClient: mockBC, utxoStore: supportingStore, logger: ulogger.TestLogger{}}
-		require.False(t, u.checkpointConfirmedAncestor(context.Background(), blockUnderTest))
+		require.False(t, u.checkpointConfirmedAncestor(context.Background(), blockUnderTest, false))
 	})
 }
