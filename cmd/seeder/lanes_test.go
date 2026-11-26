@@ -774,7 +774,8 @@ func TestSeederLaneStoreCallsAreBounded(t *testing.T) {
 	}
 }
 
-// A batch of rows whose blocks are not all on the main chain writes none of them.
+// A batch of rows whose blocks are not all on the main chain writes none of them, and no row is
+// written for a main chain without the snapshot's tip.
 func TestSeededRowsCheckTheirBlocksBeforeAnyInsert(t *testing.T) {
 	f := newSeedFixture(t, settings.LaneMigrationShadow, 8, fixtureHeights)
 	ctx := context.Background()
@@ -787,8 +788,14 @@ func TestSeededRowsCheckTheirBlocksBeforeAnyInsert(t *testing.T) {
 		layout.counts[h], layout.base[h] = 1, uint64(h)
 	}
 
-	err := writeSeededRows(ctx, ulogger.TestLogger{}, bc, &seededLanes{layout: layout, grant: lane.Grant{Lane: 9, First: 1, Last: 12}}, &utxoSetTip{hash: f.tip, height: f.tipH})
+	lanes := &seededLanes{layout: layout, grant: lane.Grant{Lane: 9, First: 1, Last: 12}}
+
+	err := writeSeededRows(ctx, ulogger.TestLogger{}, bc, lanes, &utxoSetTip{hash: f.tip, height: f.tipH})
 	require.ErrorContains(t, err, "no block at height 9")
+
+	// Nor are rows written onto a main chain that does not hold the snapshot's tip.
+	err = writeSeededRows(ctx, ulogger.TestLogger{}, bc, lanes, &utxoSetTip{hash: chainhash.HashH([]byte("other")), height: f.tipH})
+	require.ErrorContains(t, err, "does not hold the snapshot's tip")
 
 	_, metas, err := bc.GetBlockHeadersByHeight(ctx, 0, f.tipH)
 	require.NoError(t, err)

@@ -519,11 +519,12 @@ func processUTXOs(ctx context.Context, logger ulogger.Logger, appSettings *setti
 			return tip, tipErr
 		}
 
-		// An import made at off has no grant and no positions: its checkpoint is recovered
-		// without rows, as before shadow stamped seeds.
+		// An import made at off with no grant recorded for its tip has no positions: its
+		// checkpoint is recovered without rows, as before shadow stamped seeds. One that a
+		// refused forced seed at shadow left a grant for is refused below; recover it at off.
 		if _, granted, grantErr := readSeederGrant(ctx, blockchainStore, tip.hash); grantErr != nil || !granted {
 			if grantErr == nil {
-				logger.Warnf("no lane grant is recorded for the seed of %s, so it was imported at off: recovering its checkpoint without lane rows; its records have no lane position", tip.hash.String())
+				logger.Warnf("no lane grant is recorded for the seed of %s: recovering its checkpoint without lane rows; an import made at off gave its records no lane position", tip.hash.String())
 			}
 
 			return tip, grantErr
