@@ -223,9 +223,13 @@ func TestSetMinedMultiKeepsTheStorageCodeOfAFailedCleanup(t *testing.T) {
 	for _, tc := range []struct {
 		name        string
 		expressions bool
+		sibling     bool // a never-created hash in the batch, so the mined update fails too
+		cleanup     string
 	}{
-		{name: "lua: the clear of the extra records fails", expressions: false},
-		{name: "expressions: the extra record count read of a FILTERED_OUT tx fails", expressions: true},
+		{name: "lua: the clear of the extra records fails", cleanup: "clearLockedOnRecordsMulti"},
+		{name: "expressions: the extra record count read of a FILTERED_OUT tx fails", expressions: true, cleanup: "readExtraRecordCounts"},
+		{name: "lua: the clear fails beside a failed sibling", sibling: true, cleanup: "clearLockedOnRecordsMulti"},
+		{name: "expressions: the count read fails beside a failed sibling", expressions: true, sibling: true, cleanup: "readExtraRecordCounts"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := context.Background()
@@ -249,12 +253,22 @@ func TestSetMinedMultiKeepsTheStorageCodeOfAFailedCleanup(t *testing.T) {
 				require.NoError(t, err)
 			}
 
+			missing := &chainhash.Hash{0xDE, 0xAD, 0xBE, 0xEF}
+			if tc.sibling {
+				hashes = append(hashes, missing)
+			}
+
 			// The mined update calls the client directly; only the cleanup batches go through this seam.
 			store.batchOperateFn = errorOperate()
 			t.Cleanup(func() { store.batchOperateFn = nil })
 
 			_, err = store.SetMinedMulti(ctx, hashes, info)
 			require.ErrorIs(t, err, errors.ErrStorageError)
+			require.ErrorContains(t, err, tc.cleanup)
+
+			if tc.sibling {
+				require.ErrorContains(t, err, missing.String(), "the sibling's failure must survive the cleanup's")
+			}
 
 			// Quick validation's wrap, which legacy sync's park reads as retry-later.
 			err = errors.NewProcessingError("[createAndSpendUTXOsForBatch] failed to update mined info",
