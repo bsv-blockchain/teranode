@@ -19,6 +19,7 @@ package txmetacache
 
 import (
 	"context"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -816,10 +817,15 @@ func (t *TxMetaCache) UnderlyingStore() utxo.Store {
 //
 // The method optimizes retrieval by first checking the cache for each transaction,
 // then batching any cache misses into a single call to the underlying store.
-func (t *TxMetaCache) BatchDecorate(ctx context.Context, hashes []*utxo.UnresolvedMetaData, fields ...fields.FieldName) error {
-	if err := t.utxoStore.BatchDecorate(ctx, hashes, fields...); err != nil {
+func (t *TxMetaCache) BatchDecorate(ctx context.Context, hashes []*utxo.UnresolvedMetaData, readFields ...fields.FieldName) error {
+	if err := t.utxoStore.BatchDecorate(ctx, hashes, readFields...); err != nil {
 		return err
 	}
+
+	// A coinbase has no parents, so empty inpoints say nothing about whether they were read. Its
+	// meta is complete only when the read asked for them: the parent prefetch at lane shadow reads
+	// the coinbase flag and not the inpoints.
+	inpointsRead := len(readFields) == 0 || slices.Contains(readFields, fields.TxInpoints)
 
 	t.metrics.getOrigin.Add(uint64(len(hashes)))
 
@@ -860,7 +866,7 @@ func (t *TxMetaCache) BatchDecorate(ctx context.Context, hashes []*utxo.Unresolv
 		// Every non-coinbase tx has at least one parent, so empty ParentTxHashes
 		// here means the field was not populated; skip caching it and let the
 		// store (which can reconstruct inpoints from its inputs) serve the read.
-		if !data.Data.IsCoinbase && len(data.Data.TxInpoints.ParentTxHashes) == 0 {
+		if len(data.Data.TxInpoints.ParentTxHashes) == 0 && (!data.Data.IsCoinbase || !inpointsRead) {
 			continue
 		}
 

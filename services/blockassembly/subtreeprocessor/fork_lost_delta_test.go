@@ -152,6 +152,12 @@ func reorgReadingTheLostBlock(t *testing.T, cfg reorgScenarioConfig, prepare fun
 func TestReorgScenario_ForkLostDeltaSavesTheReadOfTheLostBlock(t *testing.T) {
 	for _, forward := range []int{1, 2} {
 		for _, inWinners := range []float64{1, 0.9, 0.2} {
+			// `make test` runs one winner with no effective D1 and two winners with most of the lost block
+			// D1; heavy tests (`make test-heavy`, the mutant script) run every pair.
+			if !heavyTests() && !(forward == 1 && inWinners == 1) && !(forward == 2 && inWinners == 0.2) {
+				continue
+			}
+
 			t.Run(fmt.Sprintf("forward=%d/lostInWinners=%.1f", forward, inWinners), func(t *testing.T) {
 				cfg := smallScenarioConfig()
 				cfg.forwardBlocks, cfg.lostInWinners = forward, inWinners
