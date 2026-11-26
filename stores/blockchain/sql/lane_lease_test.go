@@ -869,11 +869,11 @@ func TestOpenLaneLeaseTakesTheLaneClosedLongestAgo(t *testing.T) {
 	})
 }
 
-// checkLaneInvariants checks what must hold however the lease calls interleave: no position is
-// handed out twice in a lane, a hand-out starts inside the one below it only by continuing it from
-// its own lease's settles pair, a later hand-out never starts below an earlier one, a lease has at
-// most one close row and its last lies inside the lease's own grants, and a lane's lease row has a
-// close row exactly when it is closed.
+// checkLaneInvariants checks what must hold however the lease calls interleave: every hand-out in a
+// lane starts above every position an earlier one may have given out, which for a hand-out its own
+// lease's settles pair continues ends at that pair's last taken position, a later hand-out never
+// starts below an earlier one, a lease has at most one close row and its last lies inside the
+// lease's own grants, and a lane's lease row has a close row exactly when it is closed.
 func checkLaneInvariants(t *testing.T, s *SQL) {
 	t.Helper()
 
@@ -908,16 +908,27 @@ func checkLaneInvariants(t *testing.T, s *SQL) {
 	for l, rs := range byLane {
 		sort.Slice(rs, func(i, j int) bool { return rs[i].first < rs[j].first })
 
-		for i := 1; i < len(rs); i++ {
-			if rs[i].first > rs[i-1].last {
-				continue
+		// continues reports whether c starts right after the last position its own lease reported
+		// taken from p, inside p.
+		continues := func(c, p row) bool {
+			return c.lease != "" && c.lease == p.lease && c.settlesFirst.Valid && c.settlesFirst.Int64 == p.first &&
+				c.first == c.settTk.Int64+1 && c.first <= p.last
+		}
+
+		// reach is the highest position any hand-out below may have given out: its last, or, for one
+		// the next hand-out continues, the position before the continuation. A short continuation can
+		// leave a later grant inside an older, longer hand-out, above what that one gave out.
+		var reach int64
+
+		for i := range rs {
+			require.Greater(t, rs[i].first, reach, "lane %d: hand-out at %d starts at or below position %d, which an earlier hand-out may have given out", l, rs[i].first, reach)
+
+			end := rs[i].last
+			if i+1 < len(rs) && continues(rs[i+1], rs[i]) {
+				end = rs[i+1].first - 1
 			}
 
-			// Inside the hand-out below: only a continuation, which starts right after the last
-			// position its own lease reported taken from that hand-out.
-			require.True(t, rs[i].lease != "" && rs[i].lease == rs[i-1].lease && rs[i].settlesFirst.Valid &&
-				rs[i].settlesFirst.Int64 == rs[i-1].first && rs[i].first == rs[i].settTk.Int64+1,
-				"lane %d: hand-out at %d overlaps the one at %d without continuing it", l, rs[i].first, rs[i-1].first)
+			reach = max(reach, end)
 		}
 
 		sort.SliceStable(rs, func(i, j int) bool { return rs[i].handedAt.Before(rs[j].handedAt) })
