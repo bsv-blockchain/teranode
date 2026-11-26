@@ -115,14 +115,13 @@ type Allocator struct {
 	returned []uint64
 	spare    Grant
 	hasSpare bool
-	// pending settles the grants left and not yet reported, oldest first, until grant requests or
-	// the release carry them (pairToSendLocked picks which). It holds at most two. A request made
-	// while a grant is current carries the oldest pair, so after it succeeds at most that grant and a
-	// spare can be left before the next one does. Once two are left no grant is current, so none can
-	// be left again until a request succeeds. A request with no grant current carries the newest pair
-	// and may leave one older pair for a later request or the release. Under slow traffic that can be
-	// the release, and a lease the service closes loses it; its grant then has no settles pair, which
-	// readers take as possibly unused.
+	// pending settles the grants left and not yet reported, oldest first, until grant requests (the
+	// newest pair, pairToSendLocked) or the release (the oldest) carry them. It holds at most two: a
+	// spare comes only from a request made while a grant is current, so once two are left no grant is
+	// current and none can be left until a request succeeds. A request may leave one older pair for a
+	// later request or the release. Under slow traffic that can be the release, and a lease the
+	// service closes loses it; its grant then has no settles pair, which readers take as possibly
+	// unused.
 	pending  [2]Settles
 	npending int
 	// leaseTaken is the highest position this lease has given out that may carry a record; 0 for
@@ -679,10 +678,10 @@ func (a *Allocator) releaseRefused(id LeaseID, l uint8) {
 	}
 }
 
-// pairToSendLocked is the settles pair a grant request carries: with no grant current (next is 0
-// only once the spare, if any, has been installed and left) the newest pending pair, else the
-// oldest. When the pair it carries settles the lane's newest hand-out, the service starts the grant
-// right after it; otherwise above. Take a
+// pairToSendLocked is the settles pair a grant request carries: the newest pending one. When it
+// settles the lane's newest hand-out, the service starts the grant right after it; otherwise above.
+// Two pairs are held only once two grants were left with no request succeeding between, which
+// leaves no grant current; with one pair the newest is the oldest. Take a
 // burst that moved from grant 1 to spare 2, then slowed so spare 2 aged out: pending holds both
 // pairs, and carrying grant 1's would start the next grant above spare 2's tail. Otherwise the
 // request carries the oldest pair.
@@ -691,11 +690,7 @@ func (a *Allocator) pairToSendLocked() Settles {
 		return Settles{}
 	}
 
-	if a.next == 0 {
-		return a.pending[a.npending-1]
-	}
-
-	return a.pending[0]
+	return a.pending[a.npending-1]
 }
 
 func (a *Allocator) renew(want bool) error {
@@ -737,16 +732,11 @@ func (a *Allocator) renew(want bool) error {
 
 	// A pair is reported once a request that carried it succeeds. A pair recorded while the request
 	// was in flight stays for the next one.
-	if want && r.Settles != (Settles{}) {
-		for i := 0; i < a.npending; i++ {
-			if a.pending[i] == r.Settles {
-				copy(a.pending[i:], a.pending[i+1:])
-				a.pending[len(a.pending)-1] = Settles{}
-				a.npending--
-
-				break
-			}
-		}
+	// A request with no pair carries the zero pair, which no pending pair equals.
+	if i := slices.Index(a.pending[:a.npending], r.Settles); i >= 0 {
+		copy(a.pending[i:], a.pending[i+1:])
+		a.pending[len(a.pending)-1] = Settles{}
+		a.npending--
 	}
 
 	if want && !res.Granted {

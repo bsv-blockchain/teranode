@@ -1323,14 +1323,13 @@ func (m *allocModel) oldestPending() Settles {
 	return m.pending[0]
 }
 
-// pairToSend is the pair a grant request carries: the newest when no grant is current, as that one
-// may continue, else the oldest.
+// pairToSend is the pair a grant request carries: the newest, as that one may continue.
 func (m *allocModel) pairToSend() Settles {
-	if len(m.pending) > 0 && m.next == 0 {
-		return m.pending[len(m.pending)-1]
+	if len(m.pending) == 0 {
+		return Settles{}
 	}
 
-	return m.oldestPending()
+	return m.pending[len(m.pending)-1]
 }
 
 // TestAllocatorKeepsItsInvariants drives seeded random sequences of takes, clock steps and loop

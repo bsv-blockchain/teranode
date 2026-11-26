@@ -128,7 +128,7 @@ func (s *SQL) OpenLaneLease(ctx context.Context, req options.LaneLeaseOpen) (lan
 			return err
 		}
 
-		grant, err = s.recordGrant(ctx, tx, id, chosen, min(req.GrantMin, settings.MaxLaneGrant), req.Holder, req.Height, lane.Settles{}, false)
+		grant, err = s.recordGrant(ctx, tx, id, chosen, min(req.GrantMin, settings.MaxLaneGrant), req.Holder, req.Height, lane.Settles{})
 		if err != nil {
 			return err
 		}
@@ -182,7 +182,7 @@ func (s *SQL) RenewLaneLease(ctx context.Context, req options.LaneLeaseRenew) (g
 			return nil
 		}
 
-		grant, err = s.recordGrant(ctx, tx, req.Lease, req.Lane, grantSize(req.Rate, req.GrantDuration, req.GrantMin), "", req.Height, req.Settles, true)
+		grant, err = s.recordGrant(ctx, tx, req.Lease, req.Lane, grantSize(req.Rate, req.GrantDuration, req.GrantMin), "", req.Height, req.Settles)
 		if err != nil {
 			return err
 		}
@@ -424,9 +424,10 @@ func (s *SQL) chooseLeaseLane(ctx context.Context, tx *sql.Tx) (uint8, error) {
 }
 
 // recordGrant records the lane's next grant: size positions starting one above the lane's newest
-// hand-out, or, when continue is set and the settles pair settles that newest hand-out (continues
-// reports when), one above the pair's last taken position. It runs under the hand-out lock.
-func (s *SQL) recordGrant(ctx context.Context, tx *sql.Tx, id lane.LeaseID, l uint8, size uint64, holder string, height uint32, settles lane.Settles, cont bool) (lane.Grant, error) {
+// hand-out, or, when the settles pair settles that newest hand-out (continues reports when), one
+// above the pair's last taken position. An open passes no pair, so it never continues. It runs under
+// the hand-out lock.
+func (s *SQL) recordGrant(ctx context.Context, tx *sql.Tx, id lane.LeaseID, l uint8, size uint64, holder string, height uint32, settles lane.Settles) (lane.Grant, error) {
 	st, err := readLaneState(ctx, tx, l)
 	if err != nil {
 		return lane.Grant{}, err
@@ -435,7 +436,7 @@ func (s *SQL) recordGrant(ctx context.Context, tx *sql.Tx, id lane.LeaseID, l ui
 	first := lane.FirstPosition
 
 	switch {
-	case cont && s.continues(st, id, settles):
+	case s.continues(st, id, settles):
 		first = settles.LastTaken + 1
 	case st.used:
 		if st.exhausted {
@@ -473,8 +474,9 @@ func (s *SQL) recordGrant(ctx context.Context, tx *sql.Tx, id lane.LeaseID, l ui
 // and no other lease holds the lane: no position goes to two records. Take a lane whose newest hand-out is 1 to 10,000, aged out after 288 were taken:
 // the next grant starts at 289, not 10,001. A pair for an older grant, as when the holder has moved
 // to a spare, or from a reply the holder never got, starts above the newest hand-out as before.
+// A lane with no hand-out reads first 0, which no pair names.
 func (s *SQL) continues(st laneState, id lane.LeaseID, settles lane.Settles) bool {
-	if !st.used || settles.First != st.first || settles.LastTaken < st.first || settles.LastTaken >= st.last {
+	if settles.First != st.first || settles.LastTaken < st.first || settles.LastTaken >= st.last {
 		return false
 	}
 

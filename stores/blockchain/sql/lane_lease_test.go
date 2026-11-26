@@ -297,6 +297,32 @@ func TestRenewLaneLeaseContinuesTheNewestHandout(t *testing.T) {
 		})
 	}
 
+	// A pair that used its grant to the end does not continue it: on a lane whose newest hand-out ends
+	// at the last position, the request is refused as having no positions left.
+	runLaneHandoutTests(t, "used up the lane's last hand-out", func(t *testing.T, s *SQL) {
+		id, g, _, err := s.OpenLaneLease(t.Context(), leaseOpen("a"))
+		require.NoError(t, err)
+
+		top := lane.MaxPosition - 9
+		_, err = s.db.ExecContext(t.Context(),
+			`INSERT INTO lane_handout (lane, first, last, holder, height, handed_at, lease_id) VALUES ($1, $2, $3, 'a', 7, $4, $5)`,
+			int(g.Lane), lane.ToSigned(top), lane.ToSigned(lane.MaxPosition), time.Now().UTC(), s.leaseParam(id))
+		require.NoError(t, err)
+
+		r := leaseRenew(id, g)
+		r.WantGrant, r.Settles = true, lane.Settles{First: top, LastTaken: lane.MaxPosition}
+
+		_, _, _, err = s.RenewLaneLease(t.Context(), r)
+		require.ErrorIs(t, err, errors.ErrServiceError, "the lane has no positions left")
+
+		r.Settles.LastTaken = lane.MaxPosition - 5
+
+		got, granted, _, err := s.RenewLaneLease(t.Context(), r)
+		require.NoError(t, err)
+		require.True(t, granted)
+		require.Equal(t, lane.Grant{Lane: g.Lane, First: lane.MaxPosition - 4, Last: lane.MaxPosition}, got, "an aged grant on that lane still continues")
+	})
+
 	// Another lease's pair never continues a hand-out, even one that names it. The lease calls cannot
 	// reach this, since any open or grant of the requesting lease is newer, so it is checked directly.
 	runLaneHandoutTests(t, "another lease", func(t *testing.T, s *SQL) {
