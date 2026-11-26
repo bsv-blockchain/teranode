@@ -1,6 +1,7 @@
 package lane
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"maps"
@@ -405,6 +406,33 @@ func TestAllocatorLateFirstTakeKeepsItsTwoMinuteUseWindow(t *testing.T) {
 	require.Empty(t, src.grantRequests(), "an aged-out grant alone asks for nothing before the next take")
 	require.Equal(t, Pack(0, 3), next(t, a), "switch exactly at the used-grant boundary, to a grant that continues the aged one")
 	require.Equal(t, Settles{First: 1, LastTaken: 2}, src.grantRequests()[0].Settles)
+}
+
+// A burst that moves onto a spare and then slows leaves two pairs held when the spare ages out. The
+// request carries the spare's, the lane's newest hand-out, so each later grant still continues the
+// one that aged out instead of falling a pair behind for the rest of the lease.
+func TestAllocatorContinuesAfterASpareThatAgedOut(t *testing.T) {
+	clk := newStepClock()
+	src := newFakeLeases(10)
+	a := newTestAllocator(t, src, quiet, clk)
+
+	for i := uint64(1); i <= 5; i++ {
+		require.Equal(t, Pack(0, i), next(t, a))
+	}
+
+	require.Eventually(t, a.hasSpareGrant, 5*time.Second, time.Millisecond, "the spare arrives at half")
+
+	for i := uint64(6); i <= 12; i++ {
+		require.Equal(t, Pack(0, i), next(t, a), "grant 1 is used up, then spare 11 to 20 is taken from")
+	}
+
+	clk.step(2 * time.Minute)
+	require.Equal(t, Pack(0, 13), next(t, a), "the spare aged out after 12, and the next grant starts at 13")
+	require.Equal(t, Settles{First: 11, LastTaken: 12}, src.grantRequests()[1].Settles)
+
+	clk.step(2 * time.Minute)
+	require.Equal(t, Pack(0, 14), next(t, a), "and so does every grant after it")
+	require.Equal(t, Settles{First: 13, LastTaken: 13}, src.grantRequests()[2].Settles)
 }
 
 // A used-up grant settles at its last position, and the pair travels on the next grant request.
@@ -833,8 +861,10 @@ func TestAllocatorKeepsBothPairsWhenTwoGrantsAreLeftBeforeARequestSucceeds(t *te
 			sent = append(sent, r.Settles)
 		}
 
-		return len(sent) >= 3 && sent[len(sent)-2] == (Settles{First: 1, LastTaken: 10}) && sent[len(sent)-1] == (Settles{First: 11, LastTaken: 20})
-	}, 5*time.Second, time.Millisecond, "grant 1's pair and then grant 2's travel on the next two requests")
+		// With no grant current the first request carries the newer pair, grant 2's, and the next
+		// request, made while grant 3 is current, carries grant 1's.
+		return len(sent) >= 3 && sent[len(sent)-2] == (Settles{First: 11, LastTaken: 20}) && sent[len(sent)-1] == (Settles{First: 1, LastTaken: 10})
+	}, 5*time.Second, time.Millisecond, "both pairs travel on the next two requests")
 }
 
 // With two pairs held at the release, the release carries the older, and its LastTaken is the newer
@@ -1289,6 +1319,16 @@ func (m *allocModel) oldestPending() Settles {
 	return m.pending[0]
 }
 
+// pairToSend is the pair a grant request carries: the newest when no grant is current and no spare
+// is held, as that one may continue, else the oldest.
+func (m *allocModel) pairToSend() Settles {
+	if len(m.pending) > 0 && m.next == 0 && !m.hasSpare {
+		return m.pending[len(m.pending)-1]
+	}
+
+	return m.oldestPending()
+}
+
 // TestAllocatorKeepsItsInvariants drives seeded random sequences of takes, clock steps and loop
 // turns with every kind of answer from the service: a grant, a slow reply, an error, a closed lease,
 // a grant the allocator must refuse, a renewal without the grant asked for, and takes while a
@@ -1415,7 +1455,7 @@ func runAllocModel(t *testing.T, seed uint64, steps int) {
 
 			req := Renewal{Lease: m.lease, Lane: m.lane, WantGrant: want}
 			if want {
-				req.Settles = m.oldestPending()
+				req.Settles = m.pairToSend()
 			}
 
 			if rng.IntN(4) == 0 {
@@ -1447,8 +1487,8 @@ func runAllocModel(t *testing.T, seed uint64, steps int) {
 				m.lastGood = now
 			default:
 				m.lastGood = now
-				if len(m.pending) > 0 && m.pending[0] == req.Settles {
-					m.pending = m.pending[1:]
+				if i := slices.Index(m.pending, req.Settles); i >= 0 && req.Settles != (Settles{}) {
+					m.pending = slices.Delete(m.pending, i, i+1)
 				}
 
 				if src.answer == "nogrant" || !m.acceptable(src.last) {
@@ -1522,9 +1562,10 @@ func runAllocModel(t *testing.T, seed uint64, steps int) {
 		takenIn[key], leaseTaken[tk.lease] = p, p
 	}
 
-	// Every grant left is settled once and oldest first, on a grant request that was answered, or on
-	// the release. The release carries the highest position its lease took, which settles the grant
-	// in use. A lease the service closed may lose the pairs it still held.
+	// Every grant left is settled once, on a grant request that was answered, or on the release. The
+	// release carries the highest position its lease took, which settles the grant in use. A lease
+	// the service closed may lose the pairs it still held. A request with no grant current carries
+	// the newest pair, so pairs need not arrive oldest first.
 	for id, gs := range grants {
 		used := []Settles{}
 
@@ -1554,10 +1595,11 @@ func runAllocModel(t *testing.T, seed uint64, steps int) {
 				used = used[:n-1] // the grant in use is settled by the release's LastTaken
 			}
 
-			require.Equal(t, used, settled, "lease %x: the pairs settled", id[0])
+			require.ElementsMatch(t, used, settled, "lease %x: the pairs settled", id[0])
 		} else {
 			require.LessOrEqual(t, len(settled), len(used))
-			require.Equal(t, used[:len(settled)], settled, "lease %x: the pairs settled", id[0])
+			require.Subset(t, used, settled, "lease %x: the pairs settled", id[0])
+			require.Len(t, slices.Compact(slices.SortedFunc(slices.Values(settled), func(a, b Settles) int { return cmp.Compare(a.First, b.First) })), len(settled), "lease %x: a pair settled twice", id[0])
 		}
 	}
 

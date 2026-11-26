@@ -425,122 +425,27 @@ func TestAllocatorSettlesAGrantWhoseTakesAllCameBackAtZero(t *testing.T) {
 	require.Equal(t, Settles{First: 1, LastTaken: 0}, settleAgedGrant(t, all...))
 }
 
-// The release's last-taken number follows the same rule for the grant still current.
-func TestAllocatorReleasesBelowReturnedPositionsAtTheTop(t *testing.T) {
-	release := func(t *testing.T, taken uint64, returned ...uint64) uint64 {
-		t.Helper()
-
-		src := newFakeLeases(1000)
-		a := newTestAllocator(t, src, quiet, nil)
-
-		for i := uint64(0); i < taken; i++ {
-			next(t, a)
-		}
-
-		for _, n := range returned {
-			require.True(t, a.Return(Pack(0, n)))
-		}
-
-		require.NoError(t, a.Close())
-
-		src.mu.Lock()
-		defer src.mu.Unlock()
-
-		require.Len(t, src.releases, 1)
-
-		return src.releases[0].LastTaken
-	}
-
-	require.Equal(t, uint64(7), release(t, 7))
-	require.Equal(t, uint64(6), release(t, 7, 7), "the top position returned")
-	require.Equal(t, uint64(5), release(t, 7, 6, 7), "the top two returned")
-	require.Equal(t, uint64(7), release(t, 7, 3), "below a used position")
-	require.Equal(t, uint64(0), release(t, 3, 1, 2, 3), "every position returned: the lease took nothing")
-}
-
-// A release whose current grant gave back everything it took falls back to the number the lease had
-// before that grant, which itself was lowered when that grant was left.
-func TestAllocatorReleaseFallsBackPastACurrentGrantThatCameBackWhole(t *testing.T) {
+// Leaving a grant whose taken positions all came back keeps the lane's highest position, so a later
+// grant at or below positions this process gave out in earlier grants is still refused.
+func TestAllocatorKeepsItsHighestWhenAGrantsTakesAllCameBack(t *testing.T) {
 	clk := newStepClock()
-	src := newFakeLeases(10)
-	a := newTestAllocator(t, src, Timings{Renew: time.Hour, Stop: 10 * time.Minute, GrantDuration: 2 * time.Minute}, clk)
+	src := newFakeLeases(100)
+	a := newTestAllocator(t, src, quiet, clk)
 
-	for i := uint64(1); i <= 10; i++ {
-		if i == 5 {
-			clk.step(time.Minute) // the spare is requested a minute in, so it is still fresh below
-		}
-
-		next(t, a)
+	for i := uint64(1); i <= 3; i++ {
+		require.Equal(t, Pack(0, i), next(t, a))
 	}
 
-	require.Eventually(t, a.hasSpareGrant, 5*time.Second, time.Millisecond)
-	require.True(t, a.Return(Pack(0, 10)))
+	clk.step(2 * time.Minute)
+	require.Equal(t, Pack(0, 4), next(t, a), "grant 1 aged out after 3, and the next grant continues at 4")
+	require.True(t, a.Return(Pack(0, 4)))
 
-	// The grant ages out with 10 still waiting, so it settles at 9 and the lease's number drops to 9.
-	clk.step(time.Minute)
-	require.Equal(t, Pack(0, 11), next(t, a), "the aged grant is left for the spare")
-	require.Equal(t, Pack(0, 12), next(t, a))
-	require.True(t, a.Return(Pack(0, 12)))
-	require.True(t, a.Return(Pack(0, 11)))
+	a.mu.Lock()
+	defer a.mu.Unlock()
 
-	require.NoError(t, a.Close())
+	a.leaveCurrentLocked(false)
 
-	src.mu.Lock()
-	defer src.mu.Unlock()
-
-	require.Len(t, src.releases, 1)
-	require.Equal(t, uint64(9), src.releases[0].LastTaken, "the spare came back whole; the grant before it settled at 9")
-	require.Equal(t, Settles{First: 1, LastTaken: 9}, src.releases[0].Settles, "the grant left is settled by the release")
-}
-
-// A returned top position that a take reuses before the grant settles carries a record again, so the
-// settle and the release still name it: only positions still waiting in the returned set lower them.
-func TestAllocatorSettlesAtAReturnedTopPositionThatWasReused(t *testing.T) {
-	t.Run("the release", func(t *testing.T) {
-		src := newFakeLeases(1000)
-		a := newTestAllocator(t, src, quiet, nil)
-
-		for i := 0; i < 7; i++ {
-			next(t, a)
-		}
-
-		require.True(t, a.Return(Pack(0, 7)))
-		require.Equal(t, Pack(0, 7), next(t, a), "the returned top position is reused")
-
-		require.NoError(t, a.Close())
-
-		src.mu.Lock()
-		defer src.mu.Unlock()
-
-		require.Len(t, src.releases, 1)
-		require.Equal(t, uint64(7), src.releases[0].LastTaken, "a record carries 7 again")
-	})
-
-	t.Run("an aged grant", func(t *testing.T) {
-		clk := newStepClock()
-		src := newFakeLeases(100)
-		a := newTestAllocator(t, src, Timings{Renew: time.Hour, Stop: 10 * time.Minute, GrantDuration: 2 * time.Minute}, clk)
-
-		for i := uint64(1); i <= 50; i++ {
-			if i == 50 {
-				clk.step(time.Minute) // the spare is requested a minute in, so it is still fresh below
-			}
-
-			next(t, a)
-		}
-
-		require.Eventually(t, a.hasSpareGrant, 5*time.Second, time.Millisecond)
-		require.True(t, a.Return(Pack(0, 50)))
-		require.Equal(t, Pack(0, 50), next(t, a), "the returned top position is reused")
-
-		clk.step(time.Minute)
-		require.Equal(t, Pack(0, 101), next(t, a), "the aged grant is left")
-
-		for i := 0; i < 49; i++ {
-			next(t, a)
-		}
-
-		require.Eventually(t, func() bool { return len(src.grantRequests()) == 2 }, 5*time.Second, time.Millisecond)
-		require.Equal(t, Settles{First: 1, LastTaken: 50}, src.grantRequests()[1].Settles, "a record carries 50 again")
-	})
+	require.Equal(t, Settles{First: 4, LastTaken: 0}, a.pending[0], "the grant gave out nothing that may carry a record")
+	require.Equal(t, uint64(4), a.highest[0])
+	require.ErrorIs(t, a.acceptableLocked(Grant{Lane: 0, First: 3, Last: 9}), errors.ErrProcessing, "a grant from position 3, which a record carries, is refused")
 }

@@ -78,7 +78,9 @@ type Timings struct {
 //
 // A store hands back, with Return, a position it took and can prove no record carries. Next gives
 // a returned position out again before the grant's next new one, but only from the grant it came
-// from: leaving a grant drops its returned positions, and they stay burned. A returned position is
+// from: leaving a grant drops its returned positions. Those below its settled final number stay
+// burned; those at the top of its taken range lie above that number, so a grant that continues the
+// left one gives them out again. A returned position is
 // always below the grant's next new position, so at or below the highest position taken. Returned
 // positions still waiting at the top of a grant's taken range when it is settled lower its final
 // number, and the release's, so both name only positions that may carry a record
@@ -114,9 +116,11 @@ type Allocator struct {
 	spare    Grant
 	hasSpare bool
 	// pending settles the grants left and not yet reported, oldest first, until grant requests or
-	// the release carry them. It holds at most two: after a successful request at most the current
-	// grant and the spare can be left before the next one succeeds, and once two are left no grant
-	// is current, so none can be left again until a request succeeds and carries the oldest.
+	// the release carry them (pairToSendLocked picks which). It holds at most two. A request made
+	// while a grant is current carries the oldest pair, so after it succeeds at most that grant and a
+	// spare can be left before the next one does. Once two are left no grant is current, so none can
+	// be left again until a request succeeds. A request with no grant current carries the newest pair
+	// and may leave one older pair, which the next request made while a grant is current carries.
 	pending  [2]Settles
 	npending int
 	// leaseTaken is the highest position this lease has given out that may carry a record; 0 for
@@ -401,9 +405,10 @@ func (a *Allocator) takeLocked() (v uint64, ok bool, changed chan struct{}, err 
 }
 
 // leaveCurrentLocked settles the current grant and moves to the spare, or to no grant when there is
-// no spare, in which case the loop asks for one at once. The grant's returned positions are dropped
-// and stay burned. Those at the top of the taken range settledFinalLocked removes, and the grant
-// settles below them; those left sit below that final number and installLocked clears them. With no
+// no spare, in which case the loop asks for one at once. The grant's returned positions are dropped.
+// Those at the top of the taken range settledFinalLocked removes, and the grant settles below them,
+// so a grant that continues this one gives them out again; those left sit below that final number,
+// stay burned, and installLocked clears them. With no
 // grant installed next is 0, which Return and takeLocked both refuse.
 func (a *Allocator) leaveCurrentLocked(usedUp bool) {
 	final := a.next - 1
@@ -672,13 +677,31 @@ func (a *Allocator) releaseRefused(id LeaseID, l uint8) {
 	}
 }
 
+// pairToSendLocked is the settles pair a grant request carries. With no grant current and no spare
+// held, the newest pair settles the grant this allocator left last, which is the lane's newest
+// hand-out, so the request carries it and the service can start the grant right after it. Take a
+// burst that moved from grant 1 to spare 2, then slowed so spare 2 aged out: pending holds both
+// pairs, and carrying grant 1's would start the next grant above spare 2's tail. Otherwise the
+// request carries the oldest pair.
+func (a *Allocator) pairToSendLocked() Settles {
+	if a.npending == 0 {
+		return Settles{}
+	}
+
+	if a.next == 0 && !a.hasSpare {
+		return a.pending[a.npending-1]
+	}
+
+	return a.pending[0]
+}
+
 func (a *Allocator) renew(want bool) error {
 	sent := a.now()
 
 	a.mu.Lock()
 	r := Renewal{Lease: a.lease, Lane: a.lane, Rate: a.rateLocked(sent), WantGrant: want}
 	if want {
-		r.Settles = a.pending[0]
+		r.Settles = a.pairToSendLocked()
 	}
 	a.mu.Unlock()
 
@@ -709,11 +732,18 @@ func (a *Allocator) renew(want bool) error {
 	a.lastGood = sent
 	a.samples[0], a.samples[1] = a.samples[1], rateSample{sent, a.taken}
 
-	// The oldest pair is reported once a request that carried it succeeds. A pair recorded while the
-	// request was in flight stays for the next one.
-	if want && a.npending > 0 && a.pending[0] == r.Settles {
-		a.pending[0], a.pending[1] = a.pending[1], Settles{}
-		a.npending--
+	// A pair is reported once a request that carried it succeeds. A pair recorded while the request
+	// was in flight stays for the next one.
+	if want && r.Settles != (Settles{}) {
+		for i := 0; i < a.npending; i++ {
+			if a.pending[i] == r.Settles {
+				copy(a.pending[i:], a.pending[i+1:])
+				a.pending[len(a.pending)-1] = Settles{}
+				a.npending--
+
+				break
+			}
+		}
 	}
 
 	if want && !res.Granted {
