@@ -577,18 +577,20 @@ func requireStoredOutputs(ctx context.Context, t *testing.T, tSettings *settings
 	}
 }
 
-// Both compressed forms, read in two passes, land every output intact in a real UTXO
-// store, the 200-output multi-record txs included.
+// Both compressed forms, read in one pass or two, land every output intact and unspent
+// in a real UTXO store, the 200-output multi-record txs included.
 func TestProcessUTXOs_CompressedInput_StoresEveryOutput(t *testing.T) {
 	ctx := context.Background()
 	wrappers := withDistinctOutputs(benchWrappers("stored", 200, 25))
 	plain := writeCompleteSnapshotFile(t, wrappers)
 
-	for _, pieceSize := range []int{0, 3000} {
-		t.Run(fmt.Sprintf("pieceSize=%d", pieceSize), func(t *testing.T) {
+	for _, c := range []struct{ pieceSize, batch int }{{0, 0}, {0, 128}, {3000, 0}, {3000, 128}} {
+		pieceSize := c.pieceSize
+
+		t.Run(fmt.Sprintf("pieceSize=%d/batch=%d", pieceSize, c.batch), func(t *testing.T) {
 			tSettings := forceSeederSettings(t)
-			tSettings.UtxoStore.UtxoBatchSize = 128
-			name := fmt.Sprintf("compressed_stored_%d", pieceSize)
+			tSettings.UtxoStore.UtxoBatchSize = c.batch
+			name := fmt.Sprintf("compressed_stored_%d_%d", pieceSize, c.batch)
 			pointUtxoStoreAt(t, tSettings, name)
 
 			path, sum := compressedSnapshot(t, plain, pieceSize)

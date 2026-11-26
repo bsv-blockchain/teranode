@@ -226,12 +226,36 @@ func (s *utxoSetStream) verify(expected, path string) error {
 // verifyUTXOSetFile reads the whole UTXO set at path through the hash and
 // checks it against expected, for a run that uses the set without importing
 // it, and returns the tip read from the verified bytes. An empty expected
-// checks nothing and returns no tip. It stops when ctx is cancelled.
+// checks nothing and returns no tip. It returns as soon as ctx is cancelled,
+// even when an open or a read of a named pipe is blocked: that read is left
+// to end with the process, which is about to exit.
 func verifyUTXOSetFile(ctx context.Context, path, expected string) (*utxoSetTip, error) {
 	if expected == "" {
 		return nil, nil
 	}
 
+	type result struct {
+		tip *utxoSetTip
+		err error
+	}
+
+	done := make(chan result, 1)
+
+	go func() {
+		tip, err := readAndVerifyUTXOSetFile(ctx, path, expected)
+		done <- result{tip, err}
+	}()
+
+	select {
+	case r := <-done:
+		return r.tip, r.err
+	case <-ctx.Done():
+		return nil, errors.NewProcessingError("checksum verification of %s cancelled", path, ctx.Err())
+	}
+}
+
+// readAndVerifyUTXOSetFile is verifyUTXOSetFile's read, checking ctx between reads.
+func readAndVerifyUTXOSetFile(ctx context.Context, path, expected string) (*utxoSetTip, error) {
 	s, hash, height, err := openUTXOSetFile(path, true)
 	if err != nil {
 		return nil, err

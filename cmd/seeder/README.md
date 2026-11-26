@@ -29,7 +29,8 @@ bytes. For a compressed set it is read before the import and checked in the
 import pass itself, not by a separate read first: a mismatch fails the seed
 after the last record and before `lastProcessed.dat` is written. A run that does
 not import (the import is already complete, or `-recover-checkpoint`) reads the
-set through the hash instead.
+set through the hash instead, when the sidecar is present and `-skipChecksum` is
+not set.
 
 If reading the set fails part-way, for a checksum mismatch or a damaged or
 missing piece, the records read by then may already be in the UTXO store. The

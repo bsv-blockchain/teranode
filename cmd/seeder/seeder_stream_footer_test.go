@@ -335,3 +335,57 @@ func TestProcessUTXOs_RecoverCheckpoint_SetReplacedAfterTheCheck(t *testing.T) {
 		require.Equal(t, tipA, tip.hash, "the tip checked against the block store, not a re-read")
 	}
 }
+
+// Cancelling the verification of a set that is a named pipe whose writer stalled after
+// the preamble must return at once, not wait for a read that may never end.
+func TestVerifyUTXOSetFile_CancelWhileAPipeReadIsBlocked(t *testing.T) {
+	data, err := os.ReadFile(writeCompleteSnapshotFile(t, benchWrappers("blocked", 20, 0)))
+	require.NoError(t, err)
+
+	enc, err := zstd.NewWriter(nil)
+	require.NoError(t, err)
+
+	defer func() { _ = enc.Close() }()
+
+	path := filepath.Join(t.TempDir(), compressedTestHash+".utxo-set.zst")
+	require.NoError(t, syscall.Mkfifo(path, 0o600))
+
+	stall := make(chan struct{})
+	writerDone := make(chan struct{})
+
+	go func() {
+		defer close(writerDone)
+
+		w, err := os.OpenFile(path, os.O_WRONLY, 0)
+		if err != nil {
+			return
+		}
+
+		_, _ = w.Write(enc.EncodeAll(data[:200], nil))
+		<-stall // keep the pipe open with nothing more to read
+		_ = w.Close()
+	}()
+
+	t.Cleanup(func() {
+		close(stall)
+		<-writerDone
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+
+	go func() {
+		_, err := verifyUTXOSetFile(ctx, path, hex.EncodeToString(make([]byte, sha256.Size)))
+		done <- err
+	}()
+
+	time.Sleep(100 * time.Millisecond) // let the read block on the stalled pipe
+	cancel()
+
+	select {
+	case err := <-done:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(5 * time.Second):
+		t.Fatal("verification did not return after cancel")
+	}
+}
