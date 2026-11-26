@@ -845,7 +845,8 @@ func TestSeederLaneStoreCallsAreBounded(t *testing.T) {
 			}
 
 			require.Less(t, time.Since(start), 300*time.Millisecond, "within a few times the 50 ms bound")
-			require.InDelta(t, float64(seederDBTimeout), float64(store.bound), float64(20*time.Millisecond), "the blocked call had the configured bound")
+			require.LessOrEqual(t, store.bound, seederDBTimeout, "the blocked call had no more than the configured bound")
+			require.Greater(t, store.bound, seederDBTimeout-20*time.Millisecond, "the blocked call had the configured bound")
 		})
 	}
 }
