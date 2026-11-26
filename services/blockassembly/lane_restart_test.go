@@ -432,7 +432,8 @@ func TestLaneRestartDryRunOutcomes(t *testing.T) {
 		},
 		{
 			// A coinbase no row takes is counted apart, inside the cap or before it, and never
-			// sampled as only the window's; one a row takes is mined like any other record.
+			// sampled as only the window's; one a row takes is mined like any other record. One
+			// today's pool kept is sampled as today's coinbase.
 			name: "coinbases",
 			window: &fakeLaneWindow{records: []utxo.LaneWindowRecord{
 				{Hash: laneTestHash(2), LanePosition: lane.Pack(1, 30), CreatedAt: 1, Coinbase: true},
@@ -441,9 +442,10 @@ func TestLaneRestartDryRunOutcomes(t *testing.T) {
 			}},
 			grants:  grants,
 			view:    view,
+			pool:    []*utxo.UnminedTransaction{tx(2, lane.Pack(1, 30))},
 			outcome: laneRunDone,
 			records: map[string]uint64{laneRecCoinbase: 2, laneRecMinedRow: 1},
-			sample:  map[string]uint64{},
+			sample:  map[string]uint64{laneSampleTodayCoinbase: 1},
 		},
 		{
 			// Past the sample's limit a transaction only the window keeps is counted, not held.
