@@ -61,8 +61,9 @@ jobs:
           # Save only on the default branch. GitHub scopes caches by branch, so
           # only main's cache is readable by every PR. staging/release/tag builds
           # restore but don't write, leaving the 10 GB repo budget to main.
-          # The two end-to-end caches (x86 and ARM, about 430 MB compressed
-          # each, 2.1 GB on disk) count against the same budget.
+          # The two end-to-end caches count against the same budget: about
+          # 840 MB compressed (4.0 GB on disk) for x86 and 430 MB (2.1 GB)
+          # for ARM, one entry per architecture per day.
           save: ${{ github.ref == 'refs/heads/main' && matrix.shard == 'unit' }}
 
       - name: Run Go tests
