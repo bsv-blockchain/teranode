@@ -460,6 +460,17 @@ func TestJournalDropBudgetCutsAJudgingShort(t *testing.T) {
 		"rows":        journalReads(t, "journal_row"),
 	}
 
+	// What the partition's log line reports, from a judge whose counts are never added to the metrics.
+	carry, err := s.collectCopyForward(ctx, 1_440)
+	require.NoError(t, err)
+
+	l := s.newLaneJournalJudge(carry, 1)
+	judgeCtx, cancel := context.WithDeadline(ctx, l.deadline)
+	cov, err := l.judgeLeafRows(judgeCtx, uint32(1_010/SpendJournalPartitionBlocks))
+	cancel()
+	require.Error(t, err, "the scan outlasts the budget")
+	require.Equal(t, laneLeafCoverage{rows: 2, total: 4, kept: 2, keptDone: true, probed: len(carry.ukeys)}, cov)
+
 	dropped, err := s.dropSpendJournalPartitionsBelow(ctx, 1_440)
 	require.NoError(t, err)
 	require.Positive(t, dropped)
@@ -474,6 +485,28 @@ func TestJournalDropBudgetCutsAJudgingShort(t *testing.T) {
 	for vout, carried := range []bool{false, false, true, true} {
 		_, ok := journalLane(t, s, ctx, parent, uint32(vout)) //nolint:gosec // four outputs
 		require.Equal(t, carried, ok, "output %d", vout)
+	}
+}
+
+// TestLaneLeafCoverageLog pins the coverage words of a partition's log line: the share judged, and
+// whether every row today keeps was judged.
+func TestLaneLeafCoverageLog(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		c            laneLeafCoverage
+		total, keeps string
+	}{
+		{"cut after the keeps", laneLeafCoverage{rows: 1_200, total: 4_800, kept: 261, keptDone: true, probed: 22_000},
+			"about 4800 (25.0%)", "all 261 rows today keeps among them (probed for 22000 carried spends)"},
+		{"cut in the keeps", laneLeafCoverage{rows: 100, total: 4_800, kept: 100, probed: 10_000},
+			"about 4800 (2.1%)", "its kept rows not all judged (100 found of 10000 carried spends probed for before it stopped)"},
+		{"no statistics", laneLeafCoverage{rows: 5, total: -1, kept: 0, keptDone: true},
+			"an unknown number of", "all 0 rows today keeps among them (probed for 0 carried spends)"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.total, tc.c.ofTotal())
+			require.Equal(t, tc.keeps, tc.c.keeps())
+		})
 	}
 }
 
