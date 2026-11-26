@@ -101,4 +101,16 @@ func TestChangedPins(t *testing.T) {
 		f := mustParse(t, baseGoMod+"replace github.com/bsv-blockchain/go-subtree => ../go-subtree\n")
 		require.Equal(t, "v1.6.4 => ../go-subtree", effectiveVersion(f, "github.com/bsv-blockchain/go-subtree"))
 	})
+
+	t.Run("a version-specific replace takes precedence over a wildcard", func(t *testing.T) {
+		wildcard := "replace github.com/bsv-blockchain/go-wire => github.com/fork/go-wire v1.5.1\n"
+		exact := "replace github.com/bsv-blockchain/go-wire v1.5.0 => ../old\n"
+		for _, replacements := range []string{wildcard + exact, exact + wildcard} {
+			base := strings.Replace(baseGoMod, wildcard, replacements, 1)
+			head := strings.Replace(base, "../old", "../new", 1)
+			require.Equal(t, []pinChange{
+				{path: "github.com/bsv-blockchain/go-wire", base: "v1.5.0 => ../old", head: "v1.5.0 => ../new"},
+			}, changedPins(mustParse(t, base), mustParse(t, head), consensusModules))
+		}
+	})
 }

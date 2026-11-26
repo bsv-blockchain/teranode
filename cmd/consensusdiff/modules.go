@@ -90,7 +90,13 @@ func effectiveVersion(f *modfile.File, path string) string {
 	}
 
 	for _, r := range f.Replace {
-		if r.Old.Path == path && (r.Old.Version == "" || r.Old.Version == required) {
+		if r.Old.Path == path && r.Old.Version == required {
+			return strings.TrimSpace(required + " => " + r.New.Path + " " + r.New.Version)
+		}
+	}
+
+	for _, r := range f.Replace {
+		if r.Old.Path == path && r.Old.Version == "" {
 			return strings.TrimSpace(required + " => " + r.New.Path + " " + r.New.Version)
 		}
 	}
