@@ -646,9 +646,15 @@ func TestSeederGrantAfterAnUnrecordedOne(t *testing.T) {
 	s := test.CreateBaseTestSettings(t)
 	tip := chainhash.HashH([]byte("stopped seed"))
 
-	// The first run's lease commits, and recording its grant fails.
-	_, err := takeSeederGrant(ctx, ulogger.TestLogger{}, &failGrantRecordStore{Store: store}, s, tip, 5)
-	require.ErrorContains(t, err, "could not record the seeder's lane grant")
+	// Two runs' leases commit, and recording each one's grant fails.
+	for range 2 {
+		_, err := takeSeederGrant(ctx, ulogger.TestLogger{}, &failGrantRecordStore{Store: store}, s, tip, 5)
+		require.ErrorContains(t, err, "could not record the seeder's lane grant")
+	}
+
+	earlier, err := store.LaneCapGrants(ctx, 0)
+	require.NoError(t, err)
+	require.Len(t, earlier, 2, "the two stopped runs left a grant in each of two lanes")
 
 	g, err := takeSeederGrant(ctx, ulogger.TestLogger{}, store, s, tip, 5)
 	require.NoError(t, err)

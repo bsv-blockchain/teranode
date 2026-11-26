@@ -394,15 +394,19 @@ func takeSeederGrant(ctx context.Context, logger ulogger.Logger, store blockchai
 		return lane.Grant{}, errors.NewStorageError("could not read the lane grants already handed out", err)
 	}
 
-	// A pending record says an earlier run of this seed found no grant and then opened a lease. The
-	// one grant that lease took, recorded at height 0 like every seed's, holds no row. More grants, or
-	// one at a later height, came from something else, such as a node run since.
+	// A pending record says an earlier run of this seed found no grant and then opened a lease, and
+	// maybe a later run did the same. The grants those leases took, recorded at height 0 like every
+	// seed's, hold no row. A grant at a later height came from something else, such as a node run
+	// since, whose blocks may hold rows.
 	pending, err := readState(ctx, store, seederStateKey(seederPendingKeyPrefix, tip))
 	if err != nil {
 		return lane.Grant{}, err
 	}
 
-	abandoned := bytes.Equal(pending, tip[:]) && len(earlier) == 1 && earlier[0].Height == 0
+	abandoned := bytes.Equal(pending, tip[:])
+	for _, e := range earlier {
+		abandoned = abandoned && e.Height == 0
+	}
 
 	if len(earlier) > 0 && !abandoned {
 		return lane.Grant{}, errors.NewProcessingError("the blockchain store has handed out lane positions before (lane %d from position %d), so its blocks may already hold lane rows this seed cannot replace: seed at shadow into a blockchain database and UTXO store that are both empty", earlier[0].Lane, earlier[0].First)
