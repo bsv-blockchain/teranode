@@ -344,8 +344,11 @@ func (u *BlockValidation) quickValidateBlock(ctx context.Context, block *model.B
 	// later full validation of this block (a retry without the header proof, the route turned
 	// off, the same block from a p2p peer) would sum zero fees against the coinbase and mark a
 	// valid block invalid. Removing them sends that validation back to the netsync-written
-	// .subtreeToCheck and .subtreeData files, which stay, and from which subtree validation
-	// derives the real fees. Skipped when the block is or may be stored (isBlockCommitted): its
+	// .subtreeToCheck and .subtreeData files, which stay. That alone does not restore the real
+	// fees: the transactions this attempt created keep fee 0 in the UTXO store, and subtree
+	// validation reuses a stored fee. What keeps such a block valid is the header proof
+	// (checkpointConfirmedAncestor), which the full route reads too; a crash before this cleanup
+	// runs leaves the same state. Skipped when the block is or may be stored (isBlockCommitted): its
 	// row then says its .subtree files are on disk. Only files this attempt wrote are removed;
 	// one that already existed was not written here, and legacy blocks are applied one at a
 	// time, so no other block is writing the same hash meanwhile.

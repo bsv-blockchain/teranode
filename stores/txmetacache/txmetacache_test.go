@@ -336,9 +336,14 @@ func Benchmark_txMetaCache_GetMetaCached(b *testing.B) {
 type decoratingNullStore struct {
 	*nullstore.NullStore
 	metaData *meta.Data
+	err      error
 }
 
 func (s *decoratingNullStore) BatchDecorate(_ context.Context, items []*utxo.UnresolvedMetaData, _ ...fields.FieldName) error {
+	if s.err != nil {
+		return s.err
+	}
+
 	for _, it := range items {
 		if it == nil {
 			continue
@@ -928,6 +933,30 @@ func TestBatchDecorate_DoesNotCachePartialInpoints(t *testing.T) {
 
 	_, found := cache.GetMetaCached(ctx, h)
 	require.False(t, found, "BatchDecorate must not cache a partial (inpoints-less) non-coinbase meta")
+
+	require.NoError(t, cache.BatchDecorate(ctx, items))
+
+	_, found = cache.GetMetaCached(ctx, h)
+	require.False(t, found, "nor read whole: a non-coinbase always has a parent, so its inpoints are missing")
+
+	// A coinbase has no parents either way: the parent prefetch at lane shadow reads its flag and
+	// not its inpoints, which is partial too. Read whole, it is cached.
+	partial.IsCoinbase = true
+
+	err = cache.BatchDecorate(ctx, items, fields.BlockIDs, fields.BlockHeights, fields.Outputs, fields.LanePosition, fields.IsCoinbase)
+	require.NoError(t, err)
+
+	_, found = cache.GetMetaCached(ctx, h)
+	require.False(t, found, "BatchDecorate must not cache a coinbase meta read without its inpoints")
+
+	// Read whole, or with its inpoints named, it is cached.
+	for i, read := range [][]fields.FieldName{nil, {fields.BlockIDs, fields.TxInpoints}} {
+		h := chainhash.HashH([]byte{byte(i)})
+		require.NoError(t, cache.BatchDecorate(ctx, []*utxo.UnresolvedMetaData{{Hash: h}}, read...))
+
+		_, found = cache.GetMetaCached(ctx, h)
+		require.True(t, found, "a coinbase read with fields %v is cached", read)
+	}
 }
 
 // TestBatchDecorate_CachesCompleteInpoints is the positive counterpart: a meta
@@ -967,6 +996,10 @@ func TestBatchDecorate_CachesCompleteInpoints(t *testing.T) {
 	cached, found := cache.GetMetaCached(ctx, h)
 	require.True(t, found, "BatchDecorate must cache a complete meta")
 	require.Len(t, cached.TxInpoints.ParentTxHashes, 1)
+
+	store.err = errors.NewStorageError("batch decorate failed")
+	require.Error(t, cache.BatchDecorate(ctx, []*utxo.UnresolvedMetaData{{Hash: chainhash.HashH([]byte("failed-batchdecorate"))}}),
+		"the store's error is returned")
 }
 
 func Test_TxMetaCache_MiningOperations(t *testing.T) {

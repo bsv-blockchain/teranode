@@ -89,6 +89,12 @@ func (s *Store) ParentOutputsForValidation(ctx context.Context, outpoints []utxo
 
 		answers[i].Status, answers[i].Height = parentStatus(data)
 		answers[i].LanePosition = data.LanePosition
+
+		// The coinbase flag is on every row the lookup reads; it is handed on only beside the
+		// position, for the lanes shadow (utxo.ParentOutput.IsCoinbase).
+		if s.laneShadow {
+			answers[i].IsCoinbase = data.IsCoinbase
+		}
 		fromCoins = append(fromCoins, i)
 	}
 

@@ -208,7 +208,7 @@ Status codes: **C** covered, **P** partial, **G** pins a gap, **N** none. Unless
 | BODY-007 | C | `TestBlock_Valid_CoinbaseCommonRules`, `TestCoinbaseCommonRuleViolation` | post-Genesis 1 GB bound |
 | BODY-008 | C | `TestBlock_Valid_CoinbaseScriptSigLength` and service/quick variants | — |
 | BODY-009 | P | `TestBlock_Valid_BIP34Reorder`, `TestBlock_ExtractCoinbaseHeight` | property test against `CScript() << h`; non-minimal pushes |
-| BODY-010 | P | `TestBlock_CheckBlockRewardAndFees*`, `TestValidateBlock_BoundInvalidBody_IsPersistedInvalid` (height 1) | above-checkpoint case; halving boundaries; notification |
+| BODY-010 | P | `TestBlock_CheckBlockRewardAndFees*`, `TestValidateBlock_BoundInvalidBody_IsPersistedInvalid` (height 1), `TestProcessBlockFound_FullValidationOfAProvenBlockAfterAFailedQuickAttemptIsValid` (header-proven skip) | above-checkpoint case; halving boundaries; notification |
 | BODY-011 | C | bound/unbound pairs in the coinbase rule tests | reward rule unbound |
 | BODY-012 | C | `TestParentSpends_RandomBlocksVsReference` (property test), `FuzzInpointDedup` (seed replay only) | end-to-end code and persisted record |
 | BODY-013 | P | `test/sequentialtest/double_spend/13_*` (PR sequential, `require.Error` only) | error code, persisted record, notification |
