@@ -547,7 +547,11 @@ func TestInitialiseInvalidSubtreeKafkaProducer(t *testing.T) {
 	})
 
 	t.Run("initialization with invalid URL", func(t *testing.T) {
-		ctx := context.Background()
+		// the deadline ends the producer's topic-creation attempt against the
+		// unreachable broker, rather than franz-go's 30s timeout per retry
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+
 		logger := ulogger.TestLogger{}
 		tSettings := test.CreateBaseTestSettings(t)
 		tSettings.Kafka.InvalidSubtrees = "invalid-subtrees-topic"

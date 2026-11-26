@@ -38,6 +38,8 @@ var partitionEnsurers = []struct {
 // The reader here holds its lock in an open transaction for the whole test, the way the
 // stamp's multi-second query does. The ensure must finish anyway.
 func TestPartitionCreationDoesNotWaitForReaders(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	for _, tc := range partitionEnsurers {
 		t.Run(tc.name, func(t *testing.T) {
 			s, ctx := newTestStore(t)
@@ -66,6 +68,8 @@ func TestPartitionCreationDoesNotWaitForReaders(t *testing.T) {
 // re-attach it, because its rows belong to a partition the pruner has already stamped and is
 // discarding. Failing loudly here is what stops that.
 func TestPartitionCreationRefusesAStandaloneTableOfThatName(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	// A standalone table shaped like a partition, as a crash between detach and drop leaves it.
@@ -85,6 +89,8 @@ func TestPartitionCreationRefusesAStandaloneTableOfThatName(t *testing.T) {
 // cache is empty, so the ensure runs again for a partition that already exists. It must find
 // the attached partition and do nothing.
 func TestPartitionCreationIsIdempotentAcrossACacheLoss(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	for _, tc := range partitionEnsurers {
 		t.Run(tc.name, func(t *testing.T) {
 			s, ctx := newTestStore(t)

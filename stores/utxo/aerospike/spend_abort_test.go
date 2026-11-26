@@ -23,25 +23,27 @@ import (
 //     pass that computes abort-time rollback must not race the dispatcher: it
 //     reads a slot only after observing that item's published flag.
 func TestStore_Spend_AbortReturnsNilSlice(t *testing.T) {
+	t.Parallel()
+
+	fx := newTxFixtures(t)
+
 	logger := ulogger.NewErrorTestLogger(t)
 	tSettings := test.CreateBaseTestSettings(t)
 
-	client, store, ctx, deferFn := initAerospike(t, tSettings, logger)
+	_, store, ctx, deferFn := initAerospike(t, tSettings, logger)
 	t.Cleanup(func() {
 		deferFn()
 	})
 
-	cleanDB(t, client)
-
 	// Create the parent so spendTx's referenced UTXOs exist and are spendable.
-	_, err := store.Create(ctx, tx, 101)
+	_, err := store.Create(ctx, fx.tx, 101)
 	require.NoError(t, err)
 
 	// An extremely short wait forces group.Wait to abort before the batcher can
 	// respond, taking the timeout branch while the dispatcher is still in flight.
 	tSettings.UtxoStore.SpendWaitTimeout = time.Nanosecond
 
-	spends, err := store.Spend(ctx, spendTx, 101)
+	spends, err := store.Spend(ctx, fx.spendTx, 101)
 	require.Error(t, err)
 	require.True(t,
 		errors.Is(err, errors.ErrServiceUnavailable) || errors.Is(err, errors.ErrContextCanceled),

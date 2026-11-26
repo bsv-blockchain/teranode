@@ -62,6 +62,8 @@ func ptrI32(v int32) *int32 { return &v }
 // waiting to be mined. A row with no containment cannot be one, and a row with no marker is not
 // waiting, so yielding either would put work on the wire for the caller to throw away.
 func TestConsistencyScanYieldsOnlyTheRowsWorthRepairing(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	wanted := idBytes(0x11)
@@ -96,6 +98,8 @@ func TestConsistencyScanYieldsOnlyTheRowsWorthRepairing(t *testing.T) {
 // ordinary waiting-transaction iterator cannot, because that one masks conflicting rows out. A
 // scan trusting the same predicate as the thing it double-checks would be decoration.
 func TestConsistencyScanIncludesConflictingRows(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	txid := idBytes(0x21)
@@ -122,6 +126,8 @@ func TestConsistencyScanIncludesConflictingRows(t *testing.T) {
 // yield it, so that the loss is the caller's decision and is visible, rather than the store
 // quietly deciding some inconsistencies do not count.
 func TestConsistencyScanYieldsAZeroMarker(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	plantIdent(t, s, ctx, idBytes(0x31), ptrI32(0))
@@ -142,6 +148,8 @@ func TestConsistencyScanYieldsAZeroMarker(t *testing.T) {
 // so a change that removed the bound and still passed every other test would be a regression
 // nothing caught.
 func TestConsistencyScanBatchesAtItsBound(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	for i := byte(0x41); i <= 0x43; i++ {
@@ -178,6 +186,8 @@ func TestConsistencyScanBatchesAtItsBound(t *testing.T) {
 // sits inside Next. Reading it without synchronisation is a data race that the race detector
 // catches only if a test actually reads it concurrently, so this one does.
 func TestConsistencyScanCountsWhatItYieldedUnderConcurrentReads(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	for i := byte(0x51); i <= 0x55; i++ {
@@ -219,6 +229,8 @@ func TestConsistencyScanCountsWhatItYieldedUnderConcurrentReads(t *testing.T) {
 // scan is running, and reporting the cancellation as exhaustion would have the caller log that
 // it found nothing wrong after a scan that never finished.
 func TestConsistencyScanStopsWhenItsContextIsCancelled(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	for i := byte(0x61); i <= 0x63; i++ {

@@ -27,6 +27,8 @@ func countWhere(t *testing.T, s *Store, ctx context.Context, sql string, args ..
 // An identity row removed while its UTXOs survive is a live output nothing can ever reclaim,
 // because reclaim finds UTXOs through their identity row.
 func TestDeleteRemovesEveryTraceOfATransaction(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	tx := mkTx(t, 3, 5_000)
@@ -55,6 +57,8 @@ func TestDeleteRemovesEveryTraceOfATransaction(t *testing.T) {
 // reference stores do and what every caller assumes. Block assembly's reorg tolerates only a
 // not-found error, so returning anything else here aborts a reorg.
 func TestDeleteOfATransactionTheStoreDoesNotHoldSucceeds(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	absent := mkTx(t, 1, 9_999)
@@ -66,6 +70,8 @@ func TestDeleteOfATransactionTheStoreDoesNotHoldSucceeds(t *testing.T) {
 // open its database transaction. It must say so as a storage error, not as success or not-found,
 // and remove nothing.
 func TestDeleteThatCannotStartLeavesTheTransaction(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	tx := mkTx(t, 2, 5_001)
@@ -89,6 +95,8 @@ func TestDeleteThatCannotStartLeavesTheTransaction(t *testing.T) {
 // TestDeleteIsIdempotent, for the same reason: a reorg retried after a crash must not fail on
 // the work it already did.
 func TestDeleteIsIdempotent(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	tx := mkTx(t, 2, 5_000)
@@ -106,6 +114,8 @@ func TestDeleteIsIdempotent(t *testing.T) {
 // would restore a UTXO whose identity row no longer exists: spendable, invisible to reclaim,
 // and permanent.
 func TestDeleteRemovesTheUndoRecordsItOwns(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	parent := mkTx(t, 2, 5_000)
@@ -139,6 +149,8 @@ func TestDeleteRemovesTheUndoRecordsItOwns(t *testing.T) {
 // transactions' UTXOs, and the offline rewind tool unspends BEFORE it deletes. Destroying them
 // here would turn an ordering mistake into unrecoverable UTXO loss.
 func TestDeleteLeavesTheUndoRecordsWhereItWasTheSpender(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	parent := mkTx(t, 2, 5_000)
@@ -183,6 +195,8 @@ func TestDeleteLeavesTheUndoRecordsWhereItWasTheSpender(t *testing.T) {
 // design, so it can locate a row but never authorise deleting one. The colliding row is planted
 // directly, since no amount of test data will produce a 12-byte collision by chance.
 func TestDeleteDoesNotReachATransactionSharingItsKeyPrefix(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	tx := mkTx(t, 1, 5_000)
@@ -216,6 +230,8 @@ func TestDeleteDoesNotReachATransactionSharingItsKeyPrefix(t *testing.T) {
 
 // TestDeleteLeavesOtherTransactionsAlone, the ordinary version of the same rule.
 func TestDeleteLeavesOtherTransactionsAlone(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	doomed := mkTx(t, 2, 5_000)
@@ -242,6 +258,8 @@ func TestDeleteLeavesOtherTransactionsAlone(t *testing.T) {
 // only ever looked at what ident deleted left a mined-only transaction's tx_body row behind
 // until its partition aged out on its own, rather than going with everything else Delete removes.
 func TestDeleteRemovesMembershipRows(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	tx := mkTx(t, 1, 5_000)
@@ -341,6 +359,8 @@ func deleteCrossesAHolder(t *testing.T) bool {
 // left the coin behind, a live output whose transaction no longer exists and that nothing can
 // reclaim.
 func TestDeleteWaitsForARestoreOfItsCoin(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	parent, spends := mempoolParentSpent(t, s, ctx, false)
@@ -375,6 +395,8 @@ func TestDeleteWaitsForARestoreOfItsCoin(t *testing.T) {
 // transaction, which has containment rows in tx_mined and no identity row. The restore
 // share-locks the containment rows, so the delete has to take those to wait for it.
 func TestDeleteWaitsForARestoreOfAMinedCoin(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	require.NoError(t, s.SetBlockHeight(100))
@@ -408,7 +430,7 @@ func TestDeleteWaitsForARestoreOfAMinedCoin(t *testing.T) {
 
 	go func() { done <- s.Delete(ctx, h) }()
 
-	// Delete is the only backend that can wait here. "FROM" matches either of its statements:
+	// Delete is the only backend in this test's database that can wait here. "FROM" matches either of its statements:
 	// PostgreSQL reports only the first 1024 bytes of a query, and deleteTxSQL names tx_mined
 	// past that.
 	waitForLockWait(t, s, ctx, "FROM")
@@ -426,6 +448,8 @@ func TestDeleteWaitsForARestoreOfAMinedCoin(t *testing.T) {
 // lock statement, so this test needs that statement; the restore races above are what show the
 // order matters.
 func TestDeleteCutWhileWaitingOnARowDeletesNothing(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	parent, _ := mempoolParentSpent(t, s, ctx, false)

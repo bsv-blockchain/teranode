@@ -24,6 +24,8 @@ import (
 // Reporting "none" describes the store exactly. When tx_meta lands these must start
 // returning real data, and the conformance suite is what will catch it if they do not.
 func TestUnminedSetIsEmptyNotUnimplemented(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	it, err := s.GetUnminedTxIterator()
@@ -54,6 +56,8 @@ func TestUnminedSetIsEmptyNotUnimplemented(t *testing.T) {
 // unmined transactions, no parents named, nothing preserved and nothing to expire. Each of
 // those has to be a quiet success rather than an error on a timer.
 func TestUnminedFamilyIsEmptyNotUnimplemented(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	it, err := s.GetPrunableUnminedTxIterator(1_000)
@@ -91,6 +95,8 @@ func preservedRows(t *testing.T, s *Store, ctx context.Context) int {
 // the parents of old unmined transactions; a preserved parent still answers a lookup after
 // its tx_mined partition has been dropped and its UTXOs are gone.
 func TestPreservedParentOutlivesItsMembershipWindow(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	parent := mkTx(t, 1, 5_000)
@@ -140,6 +146,8 @@ func TestPreservedParentOutlivesItsMembershipWindow(t *testing.T) {
 // stays for as long as the transaction is unmined. A parent already gone cannot be recovered
 // from a table that only ever copies a live membership row.
 func TestPreserveTransactionsCopiesOnlyWhatMembershipHolds(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	mempool := mkTx(t, 1, 5_000)
@@ -163,6 +171,8 @@ func TestPreserveTransactionsCopiesOnlyWhatMembershipHolds(t *testing.T) {
 // This is the case that matters most, because the parent whose child is still unmined is
 // exactly the parent whose child may be a double spend.
 func TestPreservedParentStillAnswersItsContest(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	parent := mkTx(t, 1, 5_000)
@@ -195,6 +205,8 @@ func TestPreservedParentStillAnswersItsContest(t *testing.T) {
 // the offline rewind tool leaves nothing behind that would keep answering for a transaction
 // the operator has just erased.
 func TestPreservingASecondTimeKeepsTheLongerPromise(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	parent := mkTx(t, 1, 5_000)
@@ -231,6 +243,8 @@ func TestPreservingASecondTimeKeepsTheLongerPromise(t *testing.T) {
 // parents unpreserved on mainnet and the pruner logged it eight times a block. The spec
 // promises the row is renewed on every cycle.
 func TestAPreservationRenewsWithNoOtherCopyLeft(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	parent := mkTx(t, 1, 5_000)

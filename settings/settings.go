@@ -459,6 +459,7 @@ func NewSettings(alternativeContext ...string) *Settings {
 			UseCatchupWhenBehind:                  getBool("blockvalidation_useCatchupWhenBehind", false, alternativeContext...),
 			CatchupConcurrency:                    getInt("blockvalidation_catchupConcurrency", max(4, runtime.NumCPU()/2), alternativeContext...),
 			CatchupMaxRetries:                     getInt("blockvalidation_catchup_max_retries", 3, alternativeContext...),
+			CatchupRetryBackoff:                   getDuration("blockvalidation_catchup_retry_backoff", time.Second, alternativeContext...),
 			CatchupMaxAttemptsPerBlock:            getInt("blockvalidation_catchup_max_attempts_per_block", 5, alternativeContext...),
 			MaxCorruptAttemptsPerBlock:            getInt("blockvalidation_max_corrupt_attempts_per_block", 3, alternativeContext...),
 			CorruptAttemptCooldown:                getDuration("blockvalidation_corrupt_attempt_cooldown", DefaultCorruptAttemptCooldown, alternativeContext...),
@@ -838,6 +839,8 @@ func NewSettings(alternativeContext ...string) *Settings {
 			MultiPeerBlockDownload:    getBool("legacy_multiPeerBlockDownload", true, alternativeContext...),
 			MaxBlocksInTransitPerPeer: getInt("legacy_maxBlocksInTransitPerPeer", 16, alternativeContext...),
 			BlockDownloadWindow:       getInt("legacy_blockDownloadWindow", 1024, alternativeContext...),
+
+			StreamDedupMaxInMemoryEntries: getInt("legacy_streamDedupMaxInMemoryEntries", 1<<20, alternativeContext...),
 
 			ParkStoreTimeout:         getDuration("legacy_parkStoreTimeout", 10*time.Second, alternativeContext...),
 			PeerRegistryEnabled:      getBool("legacy_peerRegistryEnabled", true, alternativeContext...),

@@ -7,6 +7,7 @@ import (
 	"github.com/bsv-blockchain/go-subtree"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
+	"github.com/bsv-blockchain/teranode/util/lane"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -49,6 +50,22 @@ SELECT i.txid, i.fee, i.size_in_bytes, i.tx_inpoints, i.created_at, i.off_chain_
  WHERE i.off_chain_since IS NOT NULL
    AND (i.flags & $1::smallint) = 0`
 
+// unminedLaneSQL is unminedSQL that also reads each transaction's own lane position, for block
+// assembly's reload at utxostore_laneMigration shadow: the pool keeps it, and the lane bitmaps of
+// the subtrees the reload builds are made from it. The column is on tx_ident, so the read costs one
+// column more on rows the query already fetches.
+const unminedLaneSQL = `
+SELECT i.txid, i.fee, i.size_in_bytes, i.tx_inpoints, i.created_at, i.off_chain_since, b.ids,
+       i.flags, i.lane_position
+  FROM tx_ident i
+ CROSS JOIN LATERAL (
+   SELECT array_agg(m.block_id ORDER BY m.mined_height, m.block_id) AS ids
+     FROM tx_mined m
+    WHERE m.txid = i.txid
+ ) AS b
+ WHERE i.off_chain_since IS NOT NULL
+   AND (i.flags & $1::smallint) = 0`
+
 // unminedBelowSQL is the same question with an age bound, for the preservation pass: which
 // transactions have been waiting longer than the retention window, so their parents need
 // their lifetime extended.
@@ -73,6 +90,8 @@ SELECT i.txid, i.fee, i.size_in_bytes, i.tx_inpoints, i.created_at, i.off_chain_
 type unminedIterator struct {
 	rows pgx.Rows
 	err  error
+	// withLane: the rows end with lane_position (unminedLaneSQL).
+	withLane bool
 }
 
 func (it *unminedIterator) Next(ctx context.Context) ([]*utxo.UnminedTransaction, error) {
@@ -103,10 +122,15 @@ func (it *unminedIterator) Next(ctx context.Context) ([]*utxo.UnminedTransaction
 			offChainSince *int32
 			blockIDs      []int32
 			flags         int16
+			lanePosition  *int64
 		)
 
-		if err := it.rows.Scan(&txid, &fee, &sizeInBytes, &inpoints, &createdAt,
-			&offChainSince, &blockIDs, &flags); err != nil {
+		dest := []any{&txid, &fee, &sizeInBytes, &inpoints, &createdAt, &offChainSince, &blockIDs, &flags}
+		if it.withLane {
+			dest = append(dest, &lanePosition)
+		}
+
+		if err := it.rows.Scan(dest...); err != nil {
 			it.err = errors.NewStorageError("[utxoset][unmined] scan", err)
 			return nil, it.err
 		}
@@ -133,6 +157,10 @@ func (it *unminedIterator) Next(ctx context.Context) ([]*utxo.UnminedTransaction
 
 		if offChainSince != nil {
 			u.UnminedSince = int(*offChainSince)
+		}
+
+		if lanePosition != nil {
+			u.LanePosition = lane.FromSigned(*lanePosition)
 		}
 
 		for _, id := range blockIDs {
@@ -199,13 +227,23 @@ func (it *unminedIterator) Close() error {
 // and a reorg triggers a reset. A transaction missing from the answer never gets mined, and
 // on a delete-on-spend store that is unrecoverable: the UTXO rows its inputs pointed at were
 // deleted when it was first accepted, and an absent UTXO row reads as already spent.
+//
+// At utxostore_laneMigration shadow, on a database with lane_position, each transaction comes
+// with its own lane position for block assembly's pool; otherwise the query is the one without.
 func (s *Store) GetUnminedTxIterator() (utxo.UnminedTxIterator, error) {
-	rows, err := s.pool.Query(context.Background(), unminedSQL, FlagConflicting)
+	withLane := s.laneShadow && s.laneColumn
+
+	query := unminedSQL
+	if withLane {
+		query = unminedLaneSQL
+	}
+
+	rows, err := s.pool.Query(context.Background(), query, FlagConflicting)
 	if err != nil {
 		return nil, errors.NewStorageError("[utxoset][GetUnminedTxIterator]", err)
 	}
 
-	return &unminedIterator{rows: rows}, nil
+	return &unminedIterator{rows: rows, withLane: withLane}, nil
 }
 
 // GetPrunableUnminedTxIterator lists transactions that have been waiting since at or before

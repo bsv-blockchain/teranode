@@ -2,50 +2,29 @@ package usql
 
 import (
 	"context"
-	"net/url"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	tpostgres "github.com/bsv-blockchain/teranode/test/utils/postgres"
 	"github.com/bsv-blockchain/teranode/util/test"
 	_ "github.com/lib/pq"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/testcontainers/testcontainers-go"
-	"github.com/testcontainers/testcontainers-go/modules/postgres"
-	"github.com/testcontainers/testcontainers-go/wait"
 )
 
-// newPostgresTestDB spins up a real postgres container and returns a *DB plus
-// a cleanup func. Kept local to this file so advisory-lock behaviour is tested
-// against the same server mechanics the code targets in production.
+// newPostgresTestDB opens a fresh database on the PostgreSQL server shared by this test
+// binary (test/utils/postgres) and returns a *DB on it. Advisory locks are scoped to a
+// database, so tests on the shared server cannot see each other's locks. The database is
+// dropped when the test ends, after the *DB closes.
 func newPostgresTestDB(t *testing.T) *DB {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-	defer cancel()
 
-	pgContainer, err := postgres.Run(ctx,
-		"postgres:13",
-		postgres.WithDatabase("testdb"),
-		postgres.WithUsername("testuser"),
-		postgres.WithPassword("testpass"),
-		testcontainers.WithWaitStrategy(
-			wait.ForLog("database system is ready to accept connections").
-				WithOccurrence(2).
-				WithStartupTimeout(5*time.Minute),
-		),
-	)
+	connStr, teardown, err := tpostgres.SetupTestPostgresContainer()
 	test.SkipIfContainerUnavailable(t, err)
-	t.Cleanup(func() { _ = pgContainer.Terminate(context.Background()) })
-
-	connStr, err := pgContainer.ConnectionString(ctx, "sslmode=disable")
-	require.NoError(t, err)
-
-	// pg driver wants a postgres://... DSN; ConnectionString already returns one.
-	_, err = url.Parse(connStr)
-	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, teardown()) })
 
 	db, err := Open("postgres", connStr)
 	require.NoError(t, err)
@@ -56,8 +35,10 @@ func newPostgresTestDB(t *testing.T) *DB {
 }
 
 // advisoryLockHolderCount returns how many postgres backends currently hold the
-// given single-key advisory lock id. Uses pg_locks (system catalog, AccessShare)
-// so the probe cannot block on user-table activity.
+// given single-key advisory lock id in the test's own database. Uses pg_locks
+// (system catalog, AccessShare) so the probe cannot block on user-table activity.
+// pg_locks covers the whole server, and tests on other databases of the shared
+// server take the same lock id, so the probe filters on the database.
 //
 // Encoding reference: pg_advisory_lock(int8 key) stores
 //
@@ -76,6 +57,7 @@ func advisoryLockHolderCount(t *testing.T, db *DB, lockID int64) int {
           AND objsubid = 1
           AND ((classid::bigint << 32) | (objid::bigint & x'FFFFFFFF'::bigint)) = $1
           AND granted = true
+          AND database = (SELECT oid FROM pg_database WHERE datname = current_database())
     `, lockID).Scan(&count)
 	require.NoError(t, err)
 	return count
@@ -84,6 +66,8 @@ func advisoryLockHolderCount(t *testing.T, db *DB, lockID int64) int {
 const testLockID int64 = 0xabc_def
 
 func TestWithAdvisoryLock_AcquireReleaseRoundTrip(t *testing.T) {
+	t.Parallel() // a database of its own on the shared server
+
 	if testing.Short() {
 		t.Skip("skipping postgres-backed test in -short mode")
 	}
@@ -110,6 +94,8 @@ func TestWithAdvisoryLock_AcquireReleaseRoundTrip(t *testing.T) {
 }
 
 func TestWithAdvisoryLock_Serializes(t *testing.T) {
+	t.Parallel() // a database of its own on the shared server
+
 	if testing.Short() {
 		t.Skip("skipping postgres-backed test in -short mode")
 	}
@@ -155,6 +141,8 @@ func TestWithAdvisoryLock_Serializes(t *testing.T) {
 }
 
 func TestWithAdvisoryLock_ReleasesOnFnError(t *testing.T) {
+	t.Parallel() // a database of its own on the shared server
+
 	if testing.Short() {
 		t.Skip("skipping postgres-backed test in -short mode")
 	}
@@ -171,6 +159,8 @@ func TestWithAdvisoryLock_ReleasesOnFnError(t *testing.T) {
 }
 
 func TestWithAdvisoryLock_ReleasesOnFnPanic(t *testing.T) {
+	t.Parallel() // a database of its own on the shared server
+
 	if testing.Short() {
 		t.Skip("skipping postgres-backed test in -short mode")
 	}

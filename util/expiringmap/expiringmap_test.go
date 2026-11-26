@@ -430,3 +430,38 @@ func TestExpiringMap_GetAndDelete(t *testing.T) {
 		require.Equal(t, int32(1), winners.Load())
 	})
 }
+
+// Expiry reports when a key set now stops being returned, which is what a caller
+// waiting on the key's expiry needs, and reports nothing for a key that is absent
+// or has expired.
+func TestExpiringMap_Expiry(t *testing.T) {
+	m := New[string, int](time.Hour)
+	defer m.Stop()
+
+	before := time.Now()
+	m.Set("a", 1)
+	after := time.Now()
+
+	expiry, ok := m.Expiry("a")
+	require.True(t, ok)
+	require.False(t, expiry.Before(before.Add(time.Hour)))
+	require.False(t, expiry.After(after.Add(time.Hour)))
+
+	_, ok = m.Expiry("missing")
+	require.False(t, ok, "an absent key has no expiry")
+
+	// An entry past its expiry that the cleanup ticker has not removed yet. The ticker
+	// runs from the map's creation, not from Set, so this window is real: a caller
+	// waiting on the expiry would otherwise keep seeing the key until the next tick.
+	m.mu.Lock()
+	m.items["a"].expiry = time.Now().Add(-time.Second).UnixNano()
+	m.mu.Unlock()
+
+	_, ok = m.Expiry("a")
+	require.False(t, ok, "an expired key has no expiry, as Get does not return it")
+
+	m.mu.RLock()
+	_, stored := m.items["a"]
+	m.mu.RUnlock()
+	require.True(t, stored, "precondition: the expired entry is still stored, so the expiry check is what answered")
+}

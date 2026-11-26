@@ -20,6 +20,8 @@ import (
 // the spend is the only record left, and it carries the block facts copied off the UTXO the
 // delete destroyed.
 func TestGetServesAFullySpentOldParentFromTheJournal(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	parent := mkTx(t, 1, 5_000)
@@ -46,6 +48,8 @@ func TestGetServesAFullySpentOldParentFromTheJournal(t *testing.T) {
 // has nothing to re-resolve the restored UTXO's block from. The journal's copy is the
 // fallback, and it is preferred to the unconfirmed sentinel.
 func TestUnspendRestoresBlockFactsFromTheJournalCopy(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	parent := mkTx(t, 1, 5_000)
@@ -75,6 +79,8 @@ func TestUnspendRestoresBlockFactsFromTheJournalCopy(t *testing.T) {
 // the journal copy for a mempool spend is the unconfirmed sentinel anyway, which the journal
 // step filters out. A mempool parent whose UTXO is spent must not start claiming a block.
 func TestTheJournalStepIsNotConsultedForAMempoolParent(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	parent := mkTx(t, 1, 5_000)
@@ -96,6 +102,8 @@ func TestTheJournalStepIsNotConsultedForAMempoolParent(t *testing.T) {
 // the journal's retention and not a block more. Past both retentions there is genuinely
 // nothing left, and the store says so.
 func TestGetStillReportsNotFoundOnceTheJournalLeafIsGoneToo(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	parent := mkTx(t, 1, 5_000)

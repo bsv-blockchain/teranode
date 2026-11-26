@@ -2041,9 +2041,10 @@ func (u *Server) prefetchLevelParents(ctx context.Context, levelTxs []missingTx)
 	prefetchFields := append(append([]fields.FieldName(nil), prefetchParentBaseFields...), fields.Outputs)
 
 	// With lane positions on, the same read also gives each parent's own lane position, which the
-	// validator copies onto the child (validator.Options.PrefetchedParents).
+	// validator copies onto the child (validator.Options.PrefetchedParents), and whether it is a
+	// coinbase, which the validator's lanes shadow counts apart.
 	if u.settings.UtxoStore.LaneMigration.Stamps() {
-		prefetchFields = append(prefetchFields, fields.LanePosition)
+		prefetchFields = append(prefetchFields, fields.LanePosition, fields.IsCoinbase)
 	}
 
 	items := make([]*utxostore.UnresolvedMetaData, 0, len(distinct))

@@ -23,42 +23,15 @@ import (
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/bsv-blockchain/teranode/util/usql"
 	"github.com/jackc/pgx/v5/pgconn"
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/testcontainers/testcontainers-go"
-	"github.com/testcontainers/testcontainers-go/modules/postgres"
-	"github.com/testcontainers/testcontainers-go/wait"
 )
 
-// startLanePositionPostgres starts a Postgres container and returns its URL.
+// startLanePositionPostgres returns a fresh database on the shared PostgreSQL server
+// (see postgresTestURL).
 func startLanePositionPostgres(t *testing.T) *url.URL {
 	t.Helper()
 
-	ctx := context.Background()
-
-	pgContainer, err := postgres.Run(ctx,
-		"postgres:13",
-		postgres.WithDatabase("testdb"),
-		postgres.WithUsername("testuser"),
-		postgres.WithPassword("testpass"),
-		testcontainers.WithWaitStrategy(
-			wait.ForLog("database system is ready to accept connections").
-				WithOccurrence(2).
-				WithStartupTimeout(5*time.Minute),
-		),
-	)
-	test.SkipIfContainerUnavailable(t, err)
-	t.Cleanup(func() {
-		assert.NoError(t, pgContainer.Terminate(ctx))
-	})
-
-	connStr, err := pgContainer.ConnectionString(ctx, "sslmode=disable")
-	require.NoError(t, err)
-
-	dbURL, err := url.Parse(connStr)
-	require.NoError(t, err)
-
-	return dbURL
+	return postgresTestURL(t)
 }
 
 func lanePositionSettings(t *testing.T) *settings.Settings {
@@ -279,6 +252,8 @@ func TestLanePositionMigrationSQLite(t *testing.T) {
 }
 
 func TestLanePositionMigrationPostgres(t *testing.T) {
+	parallelPostgres(t)
+
 	if testing.Short() {
 		t.Skip("skipping Postgres integration test in short mode")
 	}
@@ -452,6 +427,8 @@ func TestMarkRefusedCreate(t *testing.T) {
 // commits, the write TestLanePositionNotReturnedAfterAConflictLinkLockError replaces with a fault.
 // Without it the parent has no link to the child.
 func TestConflictingCreateOnTheSingleCTEPathLinksItsParent(t *testing.T) {
+	parallelPostgres(t)
+
 	if testing.Short() {
 		t.Skip("skipping Postgres integration test in short mode")
 	}
@@ -496,8 +473,13 @@ func TestLaneColumnsOnACurrentSchemaTakeNoOutputsLock(t *testing.T) {
 
 	dbURL := startLanePositionPostgres(t)
 
-	_, err := New(context.Background(), ulogger.TestLogger{}, lanePositionSettings(t), dbURL)
+	first, err := New(context.Background(), ulogger.TestLogger{}, lanePositionSettings(t), dbURL)
 	require.NoError(t, err)
+
+	// The first open builds px_transactions_conflicting in the background under the advisory lock
+	// the second open waits for. A concurrent index build waits for the reader's snapshot below, so
+	// a build still running when the reader starts would hold that lock until the test times out.
+	require.Eventually(t, first.conflictingIndexReady.Load, 30*time.Second, 10*time.Millisecond, "the first open's index build ends before the reader starts")
 
 	reader, err := sql.Open("pgx", dbURL.String())
 	require.NoError(t, err)
@@ -684,6 +666,8 @@ func TestPrepareLaneSchemaRestoresColumnsSQLite(t *testing.T) {
 }
 
 func TestPrepareLaneSchemaRestoresColumnsPostgres(t *testing.T) {
+	parallelPostgres(t)
+
 	if testing.Short() {
 		t.Skip("skipping Postgres integration test in short mode")
 	}

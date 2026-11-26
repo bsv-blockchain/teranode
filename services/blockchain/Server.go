@@ -744,7 +744,8 @@ func (b *Blockchain) Start(ctx context.Context, readyCh chan<- struct{}) error {
 
 	// Start TTL+LRU cleanup so the registry can't grow unboundedly under
 	// peer churn. The driver loop is owned by the registry; we just feed it
-	// the operator-configured cadence and bounds. A zero interval disables.
+	// the operator-configured cadence and bounds. A zero interval disables the
+	// loop only: Register still enforces maxSize at insert.
 	b.peerRegistry.StartCleanup(ctx, cleanupInterval, registryTTL, maxSize)
 
 	go b.startSubscriptions()
@@ -1345,10 +1346,18 @@ func (b *Blockchain) AddBlock(ctx context.Context, request *blockchain_api.AddBl
 	// The block's lane map rows, at utxostore_laneMigration shadow. They are measured, never
 	// acted on, so rows that do not even parse are dropped and the block is stored without them.
 	if len(request.LaneMapRows) > 0 {
-		if laneRows, laneErr := laneMapRowsFromProto(request.LaneMapRows); laneErr != nil {
-			lane.CountRowInsertFailure()
+		laneBlock := lane.BlockPeer
+		if request.LaneMapRowsOwnBlock {
+			laneBlock = lane.BlockOwn
+		}
+
+		switch laneRows, laneErr := laneMapRowsFromProto(request.LaneMapRows); {
+		case laneErr != nil:
+			lane.CountRowInsertFailure(laneBlock)
 			b.logger.Warnf("[Blockchain][AddBlock][%s] dropping its lane map rows: %v", header.Hash().String(), laneErr)
-		} else {
+		case request.LaneMapRowsOwnBlock:
+			storeBlockOptions = append(storeBlockOptions, blockchainoptions.WithOwnBlockLaneMapRows(laneRows))
+		default:
 			storeBlockOptions = append(storeBlockOptions, blockchainoptions.WithLaneMapRows(laneRows))
 		}
 	}
@@ -1731,6 +1740,33 @@ func (b *Blockchain) GetLaneMapRows(ctx context.Context, req *blockchain_api.Get
 	}
 
 	return &blockchain_api.GetLaneMapRowsResponse{Rows: laneMapRowsToProto(rows)}, nil
+}
+
+// GetLaneCapGrants returns, for each lane with one, the first grant handed out at or above a
+// height, for block assembly's restart dry run.
+func (b *Blockchain) GetLaneCapGrants(ctx context.Context, req *blockchain_api.GetLaneCapGrantsRequest) (*blockchain_api.GetLaneCapGrantsResponse, error) {
+	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "GetLaneCapGrants",
+		tracing.WithParentStat(b.stats),
+	)
+	defer deferFn()
+
+	grants, err := b.store.LaneCapGrants(ctx, req.GetHeight())
+	if err != nil {
+		return nil, errors.WrapGRPC(err)
+	}
+
+	resp := &blockchain_api.GetLaneCapGrantsResponse{Grants: make([]*blockchain_api.LaneCapGrant, 0, len(grants))}
+
+	for _, g := range grants {
+		resp.Grants = append(resp.Grants, &blockchain_api.LaneCapGrant{
+			Lane:          uint32(g.Lane),
+			First:         g.First,
+			Height:        g.Height,
+			HandedAtNanos: g.HandedAt.UnixNano(),
+		})
+	}
+
+	return resp, nil
 }
 
 // leaseFromRequest checks the lease ID and lane a request names.
