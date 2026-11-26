@@ -119,24 +119,22 @@ jobs:
             ${{ matrix.packages }} \
             | tee pr-${{ matrix.group }}.txt
 
-      # Check the PR base out over the PR tree, not into a subdirectory: Go keys each
-      # compile by the package's directory, so building the base from another path
-      # would miss the benchmark build cache. --force and clean drop anything the PR
-      # run changed or left behind, keeping only this group's pr-<group>.txt. Every
-      # group runs the same baseline, and the report names it.
+      # Every group then runs the same baseline, and the report names it. The path
+      # stays "main" for the steps below.
       - name: Checkout PR base
-        run: |
-          git fetch --no-tags --depth=1 origin ${{ steps.base.outputs.sha }}
-          git checkout --force --detach ${{ steps.base.outputs.sha }}
-          git clean -ffdx -e "/pr-${{ matrix.group }}.txt"
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.base.outputs.sha }}
+          path: main
 
       - name: Run main benchmarks
         run: |
+          cd main
           BENCH_FILTER="${{ matrix.bench_filter || '.' }}"
           go test -bench="$BENCH_FILTER" -benchmem -benchtime=${{ matrix.benchtime || '1s' }} -short -timeout=25m -count=${{ matrix.count || 3 }} -run=^$ \
             -tags "testtxmetacache" \
             ${{ matrix.packages }} \
-            | tee main-${{ matrix.group }}.txt
+            | tee ../main-${{ matrix.group }}.txt
 
       - name: Upload results
         if: always()
