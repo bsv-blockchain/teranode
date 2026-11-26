@@ -2847,9 +2847,11 @@ func (ba *BlockAssembly) SubtreeCount() int {
 	return ba.blockAssembler.SubtreeCount()
 }
 
-// reset runs the reset a reset RPC asked for and returns its result: an operator reset when the
-// call carries OperatorResetMetadataKey, as the resetblockassembly command's does, and an
-// ordinary one otherwise, which a deep reorg halt refuses.
+// reset runs the reset a reset RPC asked for and waits for its result. It is an operator reset
+// when the call carries OperatorResetMetadataKey with the value "true", as the
+// resetblockassembly command's does, and an ordinary one otherwise. While halted on a deep reorg
+// an ordinary reset is refused, unless it is merged with an operator reset queued beside it. A
+// caller whose deadline ends may get its context error while its reset still runs.
 func (ba *BlockAssembly) reset(ctx context.Context, fullReset, validateInputs bool) error {
 	switch {
 	case isOperatorReset(ctx):
