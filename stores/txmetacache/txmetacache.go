@@ -19,6 +19,7 @@ package txmetacache
 
 import (
 	"context"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -33,6 +34,7 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo/pruner"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
+	"github.com/bsv-blockchain/teranode/util/lane"
 	"github.com/cespare/xxhash/v2"
 	"golang.org/x/sync/errgroup"
 )
@@ -100,6 +102,9 @@ type TxMetaCache struct {
 	noOfBlocksToKeepInTxMetaCache uint32                        // Cache retention horizon (blocks); kept for compatibility with the height-based expiration plumbing in ImprovedCache
 	lanes                         [writeBackLanes]writeBackLane // BatchDecorate write-back, one writer per bucket range (see writeback_lanes.go)
 	tombstones                    *tombstones                   // txs DeleteDemoted evicted; every write path evicts them again (see DeleteDemoted)
+	// laneShadow is whether lane positions are on (utxostore_laneMigration shadow or later), when
+	// an entry keeps the transaction's own lane position for the subtree's lane bitmaps.
+	laneShadow bool
 }
 
 // CacheStats provides statistical information about the current state of the cache.
@@ -276,6 +281,7 @@ func NewTxMetaCache(
 		logger:                        logger,
 		noOfBlocksToKeepInTxMetaCache: noOfBlocksToKeepInTxMetaCache,
 		tombstones:                    newTombstones(tSettings.SubtreeValidation.TxMetaTombstoneWindow, time.Now),
+		laneShadow:                    tSettings.UtxoStore.LaneMigration.Stamps(),
 	}
 
 	if bucketType == Pointer {
@@ -726,8 +732,12 @@ fromStore:
 
 	t.metrics.getOrigin.Add(1)
 
-	// add to cache, but only if the blockIDs have not been set and the tx is not conflicting
-	if len(data.BlockIDs) == 0 && !data.Conflicting {
+	// add to cache, but only if the blockIDs have not been set and the tx is not conflicting.
+	// GetMeta reads no lane position, so at shadow it caches nothing unless the position came with
+	// it: an entry without the position would be a hit that leaves the transaction out of its
+	// subtree's lane bitmaps. Every GetMeta for the transaction reads the store until a read that
+	// names fields.LanePosition, subtree validation's BatchDecorate, caches it with its position.
+	if len(data.BlockIDs) == 0 && !data.Conflicting && (!t.laneShadow || lane.Valid(data.LanePosition)) {
 		// don't return errors from SetCache, as it is not critical if the cache fails to set
 		_ = t.SetCache(hash, data)
 	}
@@ -810,15 +820,20 @@ func (t *TxMetaCache) UnderlyingStore() utxo.Store {
 //
 // The method optimizes retrieval by first checking the cache for each transaction,
 // then batching any cache misses into a single call to the underlying store.
-func (t *TxMetaCache) BatchDecorate(ctx context.Context, hashes []*utxo.UnresolvedMetaData, fields ...fields.FieldName) error {
-	if err := t.utxoStore.BatchDecorate(ctx, hashes, fields...); err != nil {
+func (t *TxMetaCache) BatchDecorate(ctx context.Context, hashes []*utxo.UnresolvedMetaData, readFields ...fields.FieldName) error {
+	if err := t.utxoStore.BatchDecorate(ctx, hashes, readFields...); err != nil {
 		return err
 	}
+
+	// A coinbase has no parents, so empty inpoints say nothing about whether they were read. Its
+	// meta is complete only when the read asked for them: the parent prefetch at lane shadow reads
+	// the coinbase flag and not the inpoints.
+	inpointsRead := len(readFields) == 0 || slices.Contains(readFields, fields.TxInpoints)
 
 	t.metrics.getOrigin.Add(uint64(len(hashes)))
 
 	// Batch cache population: build keys/values once and hand them to writeBack.
-	// Note: values are serialized the same way SetCache() does (via MetaBytes).
+	// Note: values are serialized the same way SetCache() does (meta.CacheBytesInto).
 	keys := make([][]byte, 0, len(hashes))
 	values := make([][]byte, 0, len(hashes))
 
@@ -854,7 +869,7 @@ func (t *TxMetaCache) BatchDecorate(ctx context.Context, hashes []*utxo.Unresolv
 		// Every non-coinbase tx has at least one parent, so empty ParentTxHashes
 		// here means the field was not populated; skip caching it and let the
 		// store (which can reconstruct inpoints from its inputs) serve the read.
-		if !data.Data.IsCoinbase && len(data.Data.TxInpoints.ParentTxHashes) == 0 {
+		if len(data.Data.TxInpoints.ParentTxHashes) == 0 && (!data.Data.IsCoinbase || !inpointsRead) {
 			continue
 		}
 
@@ -865,7 +880,8 @@ func (t *TxMetaCache) BatchDecorate(ctx context.Context, hashes []*utxo.Unresolv
 		// Serialize into a pooled buffer; the cache copies it on insert.
 		bufPtr := metaBytesBufPool.Get().(*[]byte)
 
-		txMetaBytes, err := data.Data.MetaBytesInto((*bufPtr)[:0])
+		// The cache form: MetaBytes, and the own lane position when the read asked for it.
+		txMetaBytes, err := data.Data.CacheBytesInto((*bufPtr)[:0])
 		if err != nil {
 			putMetaBytesBuf(bufPtr)
 

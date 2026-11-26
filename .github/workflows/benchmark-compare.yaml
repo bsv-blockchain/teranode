@@ -44,6 +44,11 @@ jobs:
           - group: subtreevalidation-sizing
             packages: ./services/subtreevalidation
             bench_filter: "BenchmarkSubtreeSizes|BenchmarkBlockSizeScaling|BenchmarkSubtreeAllocations|BenchmarkSubtreeProcessor|BenchmarkStreamingProcessor"
+            # Each op takes 2µs to 2ms, so 100ms still runs 50 or more iterations of it. benchstat
+            # needs 4 samples a side to call any difference at p < 0.05 and 6 for a confidence
+            # interval; at the default count of 3 it reports every change as "~".
+            benchtime: 100ms
+            count: 6
           - group: blockchain
             packages: ./services/blockchain/work
           - group: blockchain-sql
@@ -78,10 +83,18 @@ jobs:
           #     ./util/usql
           #     ./test/consensus
     steps:
+      # Nothing here reads git history, so the default depth-1 clone is enough.
       - name: Checkout PR branch
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
+
+      # The checkout above is GitHub's merge of the PR into main. Its first parent is the
+      # main commit that merge contains, so the base side runs exactly that commit.
+      - name: Find PR base
+        id: base
+        run: |
+          sha=$(git cat-file -p HEAD | awk '/^parent /{print $2; exit}')
+          test -n "$sha"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -89,31 +102,37 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
           cache: false
 
-      # Benchmarks run -bench without -race: module cache only.
+      # Benchmarks build without -race, so the -race build cache misses; the
+      # benchmark build cache (saved by main's bench-build-cache job) holds these
+      # packages built with the flags used below; the action adds -trimpath, so
+      # the base side, built under main/, hits it too.
       - name: Restore Go caches
         uses: ./.github/actions/go-cache
         with:
           build_cache: 'false'
+          bench_build_cache: 'true'
 
       - name: Run PR benchmarks
         run: |
           BENCH_FILTER="${{ matrix.bench_filter || '.' }}"
-          go test -bench="$BENCH_FILTER" -benchmem -benchtime=1s -short -timeout=25m -count=3 -run=^$ \
+          go test -bench="$BENCH_FILTER" -benchmem -benchtime=${{ matrix.benchtime || '1s' }} -short -timeout=25m -count=${{ matrix.count || 3 }} -run=^$ \
             -tags "testtxmetacache" \
             ${{ matrix.packages }} \
             | tee pr-${{ matrix.group }}.txt
 
-      - name: Checkout main
+      # Every group then runs the same baseline, and the report names it. The path
+      # stays "main" for the steps below.
+      - name: Checkout PR base
         uses: actions/checkout@v4
         with:
-          ref: main
+          ref: ${{ steps.base.outputs.sha }}
           path: main
 
       - name: Run main benchmarks
         run: |
           cd main
           BENCH_FILTER="${{ matrix.bench_filter || '.' }}"
-          go test -bench="$BENCH_FILTER" -benchmem -benchtime=1s -short -timeout=25m -count=3 -run=^$ \
+          go test -bench="$BENCH_FILTER" -benchmem -benchtime=${{ matrix.benchtime || '1s' }} -short -timeout=25m -count=${{ matrix.count || 3 }} -run=^$ \
             -tags "testtxmetacache" \
             ${{ matrix.packages }} \
             | tee ../main-${{ matrix.group }}.txt
@@ -168,11 +187,14 @@ jobs:
           echo "PR benchmarks: $(grep -c '^Benchmark' pr-benchmark-output.txt) results"
           echo "Main benchmarks: $(grep -c '^Benchmark' main-benchmark-output.txt) results"
 
+      # The same merge commit the bench jobs checked out, so its first parent is the
+      # commit they ran as the main side.
       - name: Capture baseline SHA
         id: baseline_sha
         run: |
-          SHA=$(git log --format='%H' origin/main -1 2>/dev/null || echo "unknown")
-          echo "value=$SHA" >> "$GITHUB_OUTPUT"
+          sha=$(git cat-file -p HEAD | awk '/^parent /{print $2; exit}')
+          test -n "$sha"
+          echo "value=$sha" >> "$GITHUB_OUTPUT"
 
       - name: Compare benchmarks
         id: compare
@@ -185,7 +207,7 @@ jobs:
             -alpha 0.05 \
             -baseline-sha "${{ steps.baseline_sha.outputs.value }}" \
             -current-sha "${{ github.sha }}" \
-            -baseline-ref "main" \
+            -baseline-ref "${{ github.event.pull_request.base.ref }}" \
             -current-ref "PR-${{ github.event.pull_request.number }}"
 
       - name: Display report

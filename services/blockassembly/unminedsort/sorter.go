@@ -62,15 +62,22 @@ type Options struct {
 
 	// SortWorkers bounds the goroutines sorting a buffer; 0 means GOMAXPROCS.
 	SortWorkers int
+	// WithPositions carries each transaction's own lane position (util/lane)
+	// through the sort, at utxostore_laneMigration shadow: 8 bytes more per
+	// buffered record and per record in a run. When false, every drained
+	// transaction gets position 0, and nothing is buffered or written for it.
+	WithPositions bool
 }
 
 // record is one buffered transaction. seq is its position in the buffer at
 // insertion, which makes (createdAt, seq) a total order that reproduces a
-// stable sort, and indexes the inpoints arena offsets.
+// stable sort, and indexes the inpoints arena offsets. validatedHeight is the
+// height the transaction was validated at, 0 when unknown.
 type record struct {
-	createdAt int64
-	node      subtreepkg.Node
-	seq       uint32
+	createdAt       int64
+	node            subtreepkg.Node
+	seq             uint32
+	validatedHeight uint32
 }
 
 // batchBuf is one buffer of records. arena holds serialized inpoints; the
@@ -80,11 +87,15 @@ type batchBuf struct {
 	recs  []record
 	arena []byte
 	offs  []uint64
+	// positions[seq] is the lane position of the record with seq i, only used
+	// WithPositions.
+	positions []uint64
 }
 
 func (b *batchBuf) reset(withInpoints bool) {
 	b.recs = b.recs[:0]
 	b.arena = b.arena[:0]
+	b.positions = b.positions[:0]
 
 	if withInpoints {
 		b.offs = append(b.offs[:0], 0)
@@ -93,7 +104,17 @@ func (b *batchBuf) reset(withInpoints bool) {
 
 // bytes is the memory the buffered records and their inpoints take.
 func (b *batchBuf) bytes() int {
-	return len(b.recs)*recordSize + len(b.arena) + len(b.offs)*8
+	return len(b.recs)*recordSize + len(b.arena) + len(b.offs)*8 + len(b.positions)*8
+}
+
+// position returns the lane position of the record with seq, or 0 when the
+// buffer keeps none.
+func (b *batchBuf) position(seq uint32) uint64 {
+	if int(seq) >= len(b.positions) {
+		return 0
+	}
+
+	return b.positions[seq]
 }
 
 func (b *batchBuf) inpoints(seq uint32) []byte {
@@ -238,8 +259,15 @@ func (s *Sorter) buffered() int {
 }
 
 // Add buffers one transaction. inpoints is ignored unless the sorter was
-// created WithInpoints; nil means no inpoints.
-func (s *Sorter) Add(createdAt int64, node subtreepkg.Node, inpoints *subtreepkg.TxInpoints) error {
+// created WithInpoints; nil means no inpoints. validatedHeight, the height the
+// transaction was validated at (0 when unknown), comes back with it from Drain.
+func (s *Sorter) Add(createdAt int64, node subtreepkg.Node, inpoints *subtreepkg.TxInpoints, validatedHeight uint32) error {
+	return s.AddAt(createdAt, node, inpoints, validatedHeight, 0)
+}
+
+// AddAt is Add for a transaction with its own lane position, which is ignored
+// unless the sorter was created WithPositions; 0 means none.
+func (s *Sorter) AddAt(createdAt int64, node subtreepkg.Node, inpoints *subtreepkg.TxInpoints, validatedHeight uint32, position uint64) error {
 	if s.drained {
 		return errors.NewProcessingError("unminedsort: Add after Drain")
 	}
@@ -250,7 +278,7 @@ func (s *Sorter) Add(createdAt int64, node subtreepkg.Node, inpoints *subtreepkg
 		return errors.NewProcessingError("unminedsort: buffer exceeds %d records; set a spill directory or lower BufferRecords", 1<<32-1)
 	}
 
-	b.recs = append(b.recs, record{createdAt: createdAt, node: node, seq: uint32(len(b.recs))}) //nolint:gosec // bounded above
+	b.recs = append(b.recs, record{createdAt: createdAt, node: node, seq: uint32(len(b.recs)), validatedHeight: validatedHeight}) //nolint:gosec // bounded above
 
 	if s.opts.WithInpoints {
 		if inpoints != nil {
@@ -263,6 +291,10 @@ func (s *Sorter) Add(createdAt int64, node subtreepkg.Node, inpoints *subtreepkg
 		}
 
 		b.offs = append(b.offs, uint64(len(b.arena)))
+	}
+
+	if s.opts.WithPositions {
+		b.positions = append(b.positions, position)
 	}
 
 	if len(s.dirs) > 0 && (len(b.recs) >= s.opts.BufferRecords || b.bytes() >= s.bufferBytes) {
@@ -397,11 +429,16 @@ func (s *Sorter) writeRun(b *batchBuf, path string) error {
 		scratch = append(scratch, rec.node.Hash[:]...)
 		scratch = binary.AppendUvarint(scratch, rec.node.Fee)
 		scratch = binary.AppendUvarint(scratch, rec.node.SizeInBytes)
+		scratch = binary.AppendUvarint(scratch, uint64(rec.validatedHeight))
 
 		if s.opts.WithInpoints {
 			inp := b.inpoints(rec.seq)
 			scratch = binary.AppendUvarint(scratch, uint64(len(inp)))
 			scratch = append(scratch, inp...)
+		}
+
+		if s.opts.WithPositions {
+			scratch = binary.LittleEndian.AppendUint64(scratch, b.position(rec.seq))
 		}
 
 		prev = rec.createdAt
@@ -490,9 +527,11 @@ type source interface {
 
 // entry is a decoded record ready to emit.
 type entry struct {
-	createdAt int64
-	node      subtreepkg.Node
-	inpoints  []byte
+	createdAt       int64
+	node            subtreepkg.Node
+	inpoints        []byte
+	validatedHeight uint32
+	position        uint64
 }
 
 type fileSource struct {
@@ -502,19 +541,20 @@ type fileSource struct {
 	prev  int64
 	inp   []byte
 	withI bool
+	withP bool
 
 	// want is the record count from the run's header; read counts the
 	// records read so far.
 	want, read uint64
 }
 
-func openFileSource(path string, withInpoints bool) (*fileSource, error) {
+func openFileSource(path string, withInpoints, withPositions bool) (*fileSource, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, errors.NewStorageError("unminedsort: opening run %s", path, err)
 	}
 
-	fs := &fileSource{f: f, r: bufio.NewReaderSize(f, ioBufferSize), withI: withInpoints}
+	fs := &fileSource{f: f, r: bufio.NewReaderSize(f, ioBufferSize), withI: withInpoints, withP: withPositions}
 
 	var header [runHeaderSize]byte
 	if _, err = io.ReadFull(fs.r, header[:]); err != nil {
@@ -560,6 +600,13 @@ func (fs *fileSource) next() (bool, error) {
 		return false, fs.readErr(err)
 	}
 
+	validatedHeight, err := binary.ReadUvarint(fs.r)
+	if err != nil {
+		return false, fs.readErr(err)
+	}
+
+	fs.cur.validatedHeight = uint32(validatedHeight) //nolint:gosec // written by this package from a uint32
+
 	fs.cur.inpoints = nil
 
 	if fs.withI {
@@ -576,6 +623,17 @@ func (fs *fileSource) next() (bool, error) {
 
 			fs.cur.inpoints = fs.inp
 		}
+	}
+
+	fs.cur.position = 0
+
+	if fs.withP {
+		var b [8]byte
+		if _, err = io.ReadFull(fs.r, b[:]); err != nil {
+			return false, fs.readErr(err)
+		}
+
+		fs.cur.position = binary.LittleEndian.Uint64(b[:])
 	}
 
 	fs.read++
@@ -611,11 +669,14 @@ func (ms *memSource) next() (bool, error) {
 	rec := &c.chunk[c.pos-1]
 	ms.cur.createdAt = rec.createdAt
 	ms.cur.node = rec.node
+	ms.cur.validatedHeight = rec.validatedHeight
 	ms.cur.inpoints = nil
 
 	if ms.withI {
 		ms.cur.inpoints = ms.b.inpoints(rec.seq)
 	}
+
+	ms.cur.position = ms.b.position(rec.seq)
 
 	return true, nil
 }
@@ -657,13 +718,15 @@ type txPair struct {
 }
 
 // Drain emits every added transaction in (CreatedAt, insertion) order, calling
-// fn with batches of about batchSize. A batch only ends where CreatedAt
-// changes, so an equal-CreatedAt group is never split across batches.
+// fn with batches of about batchSize and, per transaction, the validated height
+// it was added with. A batch only ends where CreatedAt changes, so an
+// equal-CreatedAt group is never split across batches.
 //
-// fn must not retain the batch slice, the *UnminedTransaction or its *Node
-// after it returns: they are reused for the next batch. Each TxInpoints is a
-// fresh allocation and may be retained. Drain may be called once.
-func (s *Sorter) Drain(ctx context.Context, batchSize int, fn func(batch []*utxo.UnminedTransaction) error) error {
+// fn must not retain the batch slice, the heights slice, the
+// *UnminedTransaction or its *Node after it returns: they are reused for the
+// next batch. Each TxInpoints is a fresh allocation and may be retained. Drain
+// may be called once.
+func (s *Sorter) Drain(ctx context.Context, batchSize int, fn func(batch []*utxo.UnminedTransaction, validatedHeights []uint32) error) error {
 	if s.drained {
 		return errors.NewProcessingError("unminedsort: Drain called twice")
 	}
@@ -681,6 +744,14 @@ func (s *Sorter) Drain(ctx context.Context, batchSize int, fn func(batch []*utxo
 		batchSize = 1
 	}
 
+	// The batch buffers below are allocated up front, so size them for what
+	// there is to emit. A batch size above Len() gives the same batches either
+	// way, but would allocate for records that do not exist (about 1.3 GB at
+	// the 10M blockassembly_unminedLoadingBatchSize default, even when empty).
+	if n := s.Len(); batchSize > n {
+		batchSize = max(n, 1)
+	}
+
 	srcs := make([]source, 0, len(s.runs)+1)
 
 	defer func() {
@@ -690,7 +761,7 @@ func (s *Sorter) Drain(ctx context.Context, batchSize int, fn func(batch []*utxo
 	}()
 
 	for _, path := range s.runs {
-		fs, err := openFileSource(path, s.opts.WithInpoints)
+		fs, err := openFileSource(path, s.opts.WithInpoints, s.opts.WithPositions)
 		if err != nil {
 			return err
 		}
@@ -719,6 +790,7 @@ func (s *Sorter) Drain(ctx context.Context, batchSize int, fn func(batch []*utxo
 
 	pairs := make([]txPair, 0, batchSize)
 	ptrs := make([]*utxo.UnminedTransaction, 0, batchSize)
+	heights := make([]uint32, 0, batchSize)
 	emitted := 0
 
 	flush := func() error {
@@ -732,8 +804,9 @@ func (s *Sorter) Drain(ctx context.Context, batchSize int, fn func(batch []*utxo
 			ptrs = append(ptrs, &pairs[i].tx)
 		}
 
-		err := fn(ptrs)
+		err := fn(ptrs, heights)
 		pairs = pairs[:0]
+		heights = heights[:0]
 
 		return err
 	}
@@ -764,11 +837,13 @@ func (s *Sorter) Drain(ctx context.Context, batchSize int, fn func(batch []*utxo
 
 		pairs = append(pairs, txPair{
 			tx: utxo.UnminedTransaction{
-				TxInpoints: inpoints,
-				CreatedAt:  int(e.createdAt),
+				TxInpoints:   inpoints,
+				CreatedAt:    int(e.createdAt),
+				LanePosition: e.position,
 			},
 			node: e.node,
 		})
+		heights = append(heights, e.validatedHeight)
 
 		ok, err := srcs[top].next()
 		if err != nil {

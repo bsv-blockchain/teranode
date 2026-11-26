@@ -111,6 +111,16 @@ type ClientI interface {
 	// ReleaseLaneLease closes a lease cleanly. alreadyClosed reports a lease that was closed before.
 	ReleaseLaneLease(ctx context.Context, r lane.Release) (alreadyClosed bool, err error)
 
+	// LaneMapRows returns one block's lane map rows, by lane and first position, each checked by
+	// the store; none for a block the map holds no row of. Readers at utxostore_laneMigration
+	// shadow load them into their index.
+	LaneMapRows(ctx context.Context, blockID uint32) ([]lane.MapRow, error)
+
+	// LaneCapGrants returns, for each lane with one, the first grant handed out at or above height,
+	// by lane. Block assembly's restart dry run at utxostore_laneMigration shadow starts its window
+	// there.
+	LaneCapGrants(ctx context.Context, height uint32) ([]lane.CapGrant, error)
+
 	// SendNotification broadcasts a notification to subscribers.
 	//
 	// This method publishes a notification message to all active subscribers of the

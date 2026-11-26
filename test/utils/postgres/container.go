@@ -17,15 +17,19 @@ import (
 )
 
 // sharedConnStr is the base connStr for the single PostgreSQL container shared across
-// the test binary. The container is started exactly once via containerOnce; its handle
-// is not retained — its lifecycle is bound to the test process / CI runner teardown
-// (Ryuk is disabled in CI). containerErr is permanent if that one-time start fails, so a
+// the test binary. The container is started exactly once via containerOnce. The package's
+// TestMain should stop it with TerminateSharedContainer: where the testcontainers reaper
+// is off, as in CI, it otherwise runs until the runner is torn down. containerErr is permanent if that one-time start fails, so a
 // transient first-start failure fails every caller in the binary (see startSharedContainer's
 // internal 3-attempt retry, which mitigates this).
 var (
 	containerOnce sync.Once
 	sharedConnStr string // base connStr pointing at the default "testdb" database
 	containerErr  error
+
+	// sharedContainer is the running shared container, kept so TerminateSharedContainer
+	// can stop it. It is written once inside containerOnce.
+	sharedContainer *postgres.PostgresContainer
 
 	// dbCounter is incremented atomically to produce unique per-test database names.
 	dbCounter atomic.Uint64
@@ -47,7 +51,7 @@ var (
 func SetupTestPostgresContainer() (string, func() error, error) {
 	// Initialise the shared container exactly once.
 	containerOnce.Do(func() {
-		sharedConnStr, containerErr = startSharedContainer()
+		sharedContainer, sharedConnStr, containerErr = startSharedContainer()
 	})
 	if containerErr != nil {
 		return "", nil, containerErr
@@ -97,9 +101,22 @@ func SetupTestPostgresContainer() (string, func() error, error) {
 	return testConnStr, cleanup, nil
 }
 
+// TerminateSharedContainer stops the shared container if this test binary started one.
+// Call it from TestMain after m.Run, when the package needs the container gone before
+// the process exits, for example ahead of a goroutine leak check: the testcontainers
+// reaper keeps a goroutine connected for as long as the container runs. No test may call
+// SetupTestPostgresContainer afterwards.
+func TerminateSharedContainer() error {
+	if sharedContainer == nil {
+		return nil
+	}
+
+	return sharedContainer.Terminate(context.Background())
+}
+
 // startSharedContainer starts (with up to 3 attempts) and validates a single
-// shared postgres:16-alpine container. It returns the base connection string.
-func startSharedContainer() (string, error) {
+// shared postgres:16-alpine container. It returns the container and its base connection string.
+func startSharedContainer() (*postgres.PostgresContainer, string, error) {
 	ctx := context.Background()
 
 	const (
@@ -135,14 +152,14 @@ func startSharedContainer() (string, error) {
 		}
 	}
 	if err != nil {
-		return "", errors.NewProcessingError("start postgres container", err)
+		return nil, "", errors.NewProcessingError("start postgres container", err)
 	}
 
 	connStr, err := postgresC.ConnectionString(ctx)
 	if err != nil {
 		// Don't leak the container if we created it but can't get its conn string.
 		_ = postgresC.Terminate(ctx)
-		return "", errors.NewProcessingError("get connection string", err)
+		return nil, "", errors.NewProcessingError("get connection string", err)
 	}
 
 	// Ensure sslmode=disable is present before storing as sharedConnStr.
@@ -150,13 +167,14 @@ func startSharedContainer() (string, error) {
 
 	if err := validateDatabaseConnection(connStr, 5); err != nil {
 		_ = postgresC.Terminate(ctx)
-		return "", errors.NewProcessingError("database validation failed", err)
+		return nil, "", errors.NewProcessingError("database validation failed", err)
 	}
 
-	// postgresC is intentionally not retained: there is no per-test teardown for the
-	// shared container, so it is reaped by the testcontainers Ryuk reaper when the test
-	// process exits. Only the per-test databases are dropped (see cleanup above).
-	return connStr, nil
+	// There is no per-test teardown for the shared container. TerminateSharedContainer
+	// stops it. Without that call, the testcontainers reaper removes it when the test
+	// process exits, and where the reaper is off (CI) it runs until the runner is torn
+	// down. Only the per-test databases are dropped (see cleanup above).
+	return postgresC, connStr, nil
 }
 
 // swapDatabase replaces the database name component of a postgres connStr (URL form)

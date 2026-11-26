@@ -466,6 +466,13 @@ var nonSettingsKeyExemptions = []nonSettingsKeyExemption{
 		file: "utxo_settings.md", key: "utxostore_postgres_retryBaseDelay",
 		reason: "same getPostgresPoolSettings(\"utxostore\", ...) concatenation gap as utxostore_postgres_maxOpenConns above",
 	},
+	{
+		file: "blockchain_settings.md", key: "— (group)",
+		reason: "struct-typed settings group, not a settable key: since #1920/#1811 ExportMetadata skips group fields " +
+			"(gocore reads scalars only, so blockchain_postgres_pool was advertised but could never be read). The row " +
+			"keeps no key on purpose and points operators at the real per-service blockchain_postgres_* keys below, " +
+			"which are read via getPostgresPoolSettings and exempted individually",
+	},
 }
 
 // lookupNonSettingsKey returns the nonSettingsKeyExemption registered for
@@ -903,13 +910,13 @@ var checkedRowsPerDoc = map[string]int{
 	"policy_settings.md":            26,
 	"alert_settings.md":             10,
 	"asset_settings.md":             38,
-	"blockassembly_settings.md":     46,
-	"blockchain_settings.md":        11,
+	"blockassembly_settings.md":     47,
+	"blockchain_settings.md":        10, // was 11; PostgresPool's "(group)" row is exempt since #1920
 	"blockpersister_settings.md":    9,
-	"blockvalidation_settings.md":   72,
+	"blockvalidation_settings.md":   73,
 	"coinbase_settings.md":          21,
 	"faucet_settings.md":            1,
-	"legacy_settings.md":            33,
+	"legacy_settings.md":            34,
 	"p2p_settings.md":               61,
 	"propagation_settings.md":       13,
 	"probe_settings.md":             13,

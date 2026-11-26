@@ -12,6 +12,7 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-chaincfg"
 	bec "github.com/bsv-blockchain/go-sdk/primitives/ec"
+	subtreepkg "github.com/bsv-blockchain/go-subtree"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
@@ -119,6 +120,7 @@ func newUnifiedRouteServer(t *testing.T, name string) *unifiedRouteServer {
 
 	utxoStore, err := sql.New(ctx, logger, tSettings, utxoStoreURL)
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = utxoStore.Close(context.Background()) })
 	require.NoError(t, utxoStore.SetBlockHeight(1))
 
 	blockchainStore, err := blockchain_store.NewStore(logger, &url.URL{Scheme: "sqlitememory"}, tSettings)
@@ -637,9 +639,11 @@ func TestRevalidateBlock_ReconsideredFastPathBlockWithAForkAtItsHeightIsValid(t 
 
 	us.s.settings.ChainCfgParams.Checkpoints = []chaincfg.Checkpoint{{Height: 2, Hash: second.Hash()}}
 
+	// The fork is stored before the tip reaches the checkpoint: once it has, a block that forks
+	// below the checkpoint is refused (bad-fork-prior-to-checkpoint).
 	require.NoError(t, us.s.processBlockFound(ctx, first.Hash(), "peer-1", "legacy", true, first))
-	require.NoError(t, us.s.processBlockFound(ctx, second.Hash(), "peer-1", "legacy", true, second))
 	require.NoError(t, us.s.processBlockFound(ctx, fork.Hash(), "peer-1", "legacy", true, fork))
+	require.NoError(t, us.s.processBlockFound(ctx, second.Hash(), "peer-1", "legacy", true, second))
 
 	_, err := us.client.InvalidateBlock(ctx, first.Hash())
 	require.NoError(t, err)
@@ -700,4 +704,64 @@ func TestQuickValidateBlock_AFailedAttemptRemovesTheZeroFeeSubtreeFileItWrote(t 
 	exists, err = us.subtreeStore.Exists(ctx, key[:], fileformat.FileTypeSubtree)
 	require.NoError(t, err)
 	require.True(t, exists, "a committed block keeps its .subtree file")
+}
+
+// A proven legacy block whose failed quick attempt left fee-0 records must pass full validation on
+// the header proof; without the proof the coinbase check rejects it.
+func TestProcessBlockFound_FullValidationOfAProvenBlockAfterAFailedQuickAttemptIsValid(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		headerProven bool
+	}{
+		{name: "header proven: committed", headerProven: true},
+		{name: "no header proof: the coinbase check runs and rejects", headerProven: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			us := newUnifiedRouteServer(t, "unified_route_full_after_failed_quick")
+
+			ctx := context.Background()
+
+			subsidy := util.GetBlockSubsidyForHeight(1, us.s.settings.ChainCfgParams)
+			block, _, child := unifiedRouteSpendingBlockPaying(t, us, 0x19, subsidy+1_000)
+			key := block.Subtrees[0]
+
+			us.client.failNextAddBlock = errors.NewServiceError("injected AddBlock failure")
+			require.Error(t, us.s.processBlockFound(ctx, block.Hash(), "peer-1", "legacy", true, block))
+
+			childMeta, err := us.utxoStore.Get(ctx, child.TxIDChainHash())
+			require.NoError(t, err)
+			require.Zero(t, childMeta.Fee, "precondition: the failed quick attempt left the child stored with fee 0")
+
+			// The route is off now, so the block takes full validation. Real subtree validation
+			// would reuse the child's stored fee of 0; the mock writes the .subtree file it would.
+			us.s.settings.BlockValidation.LegacyUnifiedBelowCheckpoint = false
+
+			us.subtreeValidation.On("CheckBlockSubtrees", mock.Anything, mock.Anything, "peer-1", "legacy").
+				Run(func(mock.Arguments) {
+					st, err := subtreepkg.NewIncompleteTreeByLeafCount(2)
+					require.NoError(t, err)
+					require.NoError(t, st.AddCoinbaseNode())
+					require.NoError(t, st.AddNode(*child.TxIDChainHash(), 0, uint64(child.Size())))
+
+					stBytes, err := st.Serialize()
+					require.NoError(t, err)
+					require.NoError(t, us.subtreeStore.Set(ctx, key[:], fileformat.FileTypeSubtree, stBytes, bloboptions.WithAllowOverwrite(true)))
+				}).
+				Return(nil).Once()
+
+			err = us.s.processBlockFound(ctx, block.Hash(), "peer-1", "legacy", tc.headerProven, block)
+			us.subtreeValidation.AssertExpectations(t)
+
+			if tc.headerProven {
+				require.NoError(t, err, "a header-proven block must not be judged on fees an earlier quick attempt recorded as 0")
+				require.Equal(t, []chainhash.Hash{*block.Hash()}, us.client.addedBlocks())
+
+				return
+			}
+
+			require.Error(t, err)
+			require.True(t, errors.Is(err, errors.ErrBlockInvalid), "expected the coinbase check to reject, got %v", err)
+			require.Contains(t, err.Error(), "greater than the fees + block subsidy")
+		})
+	}
 }

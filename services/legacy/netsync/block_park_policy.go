@@ -260,7 +260,7 @@ var (
 	// wrong.
 	parkDispositionLocalUtxoFault = parkDisposition{
 		name:   "local_utxo_fault",
-		reason: "a parent output this node should already hold is missing from its UTXO set",
+		reason: "this node's UTXO set cannot take the block: a parent output it should hold is missing, or still names a spender this node pruned",
 		blob:   parkBlobKeep,
 	}
 
@@ -451,6 +451,15 @@ func parkCommitFailure(err error) parkDisposition {
 		// it here, so keep this list current when touching those call sites.
 		return parkDispositionParentNotMinedYet
 
+	case errors.Is(err, errors.ErrUtxoSpendingTxPruned) && !outranksPrunedReplay(err):
+		// Above the checkpoint the full route wraps this answer in a
+		// ServiceError, which the transient arm below would read as retry
+		// later. That row carries no stamp, so the drain re-dispatched the block
+		// on every turn, and the answer does not change until an operator frees
+		// the output (docs/topics/stores/utxo.md, error 78). It is this node's
+		// UTXO fault on either route.
+		return parkDispositionLocalUtxoFault
+
 	case errors.IsContextError(err), errors.IsTransientLocalError(err):
 		return parkDispositionRetryLater
 
@@ -474,12 +483,32 @@ func parkCommitFailure(err error) parkDisposition {
 	case errors.Is(err, errors.ErrNotFound), errors.Is(err, errors.ErrBlobNotFound):
 		return parkDispositionFilesGone
 
-	case errors.Is(err, errors.ErrTxNotFound):
+	case errors.Is(err, errors.ErrTxNotFound), errors.Is(err, errors.ErrUtxoSpendingTxPruned):
+		// The two answers a replay of a transaction this node already pruned
+		// gets. Below the checkpoint the block is certified, so the store is
+		// ahead of the chain, which is this node's state, not the peer's block.
+		// Above it the full route wraps this answer in a ServiceError; the
+		// pruned answer is taken by its own arm above the transient one. On
+		// neither route is a pruned
+		// replay a block verdict: the answer says only that this node pruned
+		// the transaction, not whether, or on which chain, it was mined.
 		return parkDispositionLocalUtxoFault
 
 	default:
 		return parkDispositionBlockRejected
 	}
+}
+
+// outranksPrunedReplay reports whether err also carries an answer that the rows
+// below the transient arm rank above a pruned replay: a verdict on the block, a
+// corrupt body, a policy refusal, or missing files. Those keep their own rows when
+// one failure carries both.
+func outranksPrunedReplay(err error) bool {
+	return errors.IsBlockCorrupt(err) ||
+		errors.Is(err, errors.ErrBlockInvalid) ||
+		errors.Is(err, errors.ErrBlockPolicyDeclined) ||
+		errors.Is(err, errors.ErrNotFound) ||
+		errors.Is(err, errors.ErrBlobNotFound)
 }
 
 // withoutBlame returns the same row with the reject left unsent. Used while the
@@ -600,7 +629,10 @@ func (sm *SyncManager) applyParkDisposition(entry parkedBlock, d parkDisposition
 //     TestParkDispositions_ReAskIsSetOnTheDropRowsThatWantTheBlockBack).
 //
 // What still stops it is a request that would really be a duplicate: the block parked again,
-// arriving, being converted, or asked of any peer within the retry window. The dispatcher's
+// arriving, being converted, or asked of any peer within the retry window. A mark another
+// source set on the block while the re-ask waited (the sink-panic verdict, say) puts the
+// re-ask off until the mark has gone (putOffIfMarked): a copy asked for sooner would meet
+// the same failure. The dispatcher's
 // own in-flight entry for this block is not asked, because this disposition is how that entry
 // ends. livePeer may fall back to the sync peer: a re-ask is a sync action, not a misbehaviour
 // signal.
@@ -621,6 +653,15 @@ func (sm *SyncManager) reAskDroppedBlock(entry parkedBlock) {
 // askDroppedBlockAgain sends the re-ask for a dropped block now, unless the block is already
 // on its way (see reAskDroppedBlock).
 func (sm *SyncManager) askDroppedBlockAgain(entry parkedBlock) {
+	// Marked by another source while the re-ask waited: put off until the mark has gone, not
+	// consumed. sendDueReAsks has cleared this record's due time, so returning here would
+	// leave nothing to ask once the mark expires.
+	if sm.putOffIfMarked(entry) {
+		sm.logger.Infof("[applyParkDisposition][%s] not asking again for the dropped block while it is marked failed; asking once the mark has gone", entry.hash)
+
+		return
+	}
+
 	peer := sm.livePeer(entry.peer)
 	if peer == nil {
 		return

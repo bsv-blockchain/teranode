@@ -189,6 +189,8 @@ func metadataOnly(data *meta.Data) (*meta.Data, error) {
 		Conflicting: data.Conflicting,
 		Locked:      data.Locked,
 		TxInpoints:  inpoints,
+		// The byte backends keep it after MetaBytes (meta.CacheBytesInto).
+		LanePosition: data.LanePosition,
 	}, nil
 }
 
@@ -244,7 +246,7 @@ func (c *PointerCache) GetRawMulti(hashes []chainhash.Hash, _ []uint64, dst *[]b
 
 		start := len(*dst)
 
-		out, err := d.MetaBytesInto((*dst)[start:])
+		out, err := d.CacheBytesInto((*dst)[start:])
 		if err != nil {
 			spans[i] = [2]int{-1, -1}
 			continue
@@ -270,6 +272,12 @@ func (c *PointerCache) SetFromBytes(key, value []byte) error {
 	data := &meta.Data{}
 	if err := meta.NewMetaDataFromBytes(value, data); err != nil {
 		return errors.NewProcessingError("failed to unmarshal txMeta bytes for pointer cache", err)
+	}
+
+	// The own lane position the cache form carries after the inpoints, which
+	// NewMetaDataFromBytes leaves unread (meta.CacheBytesInto).
+	if size, sizeErr := data.TxInpoints.SerializedSize(); sizeErr == nil && 17+size <= len(value) {
+		data.LanePosition = meta.CachedLanePosition(value[17+size:])
 	}
 
 	c.insert(*hash, data)

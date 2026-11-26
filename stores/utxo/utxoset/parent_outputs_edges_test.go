@@ -16,6 +16,8 @@ import (
 // owner's is refused by the spend's claim check. An error here made a block spending the
 // output a store fault, which block validation retries for ever.
 func TestParentOutputsForValidationAnswersAReassignedOutputAsStored(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 	parent, newOutput, _, _, spendable := reassignedParent(t, s, ctx, 8_000)
 
@@ -55,6 +57,8 @@ func TestParentOutputsForValidationAnswersAReassignedOutputAsStored(t *testing.T
 // freeze or unfreeze naming that hash must not act on the UTXO its new owner now holds, as
 // aerospike refuses the mismatched hash. Naming the new hash still works.
 func TestFreezeOfAReassignedOutputNeedsItsNewHash(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 	tSettings := settings.NewSettings()
 	parent, _, newHash, oldHash, _ := reassignedParent(t, s, ctx, 8_000)
@@ -83,6 +87,8 @@ func TestFreezeOfAReassignedOutputNeedsItsNewHash(t *testing.T) {
 // that travelled in the same call is answered normally, so one corrupt row cannot reject every
 // transaction validated beside it.
 func TestParentOutputsForValidationFailsOnlyTheUnreadableParent(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newUncheckpointedStore(t)
 
 	bad := mkTx(t, 1, 5_000)

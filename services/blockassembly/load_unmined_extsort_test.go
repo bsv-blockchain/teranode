@@ -10,6 +10,7 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
 	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/stretchr/testify/require"
 )
@@ -158,6 +159,64 @@ func TestLoadUnminedSorted_ParentsFirstOnTies(t *testing.T) {
 	require.Equal(t, []chainhash.Hash{early.Hash, parent.Hash, child.Hash, grandchild.Hash}, loadedHashes(t, ba))
 }
 
+// TestLoadUnminedSorted_HeightsFollowTheParentsFirstReorder pins that each transaction keeps
+// its own validated height when an equal-CreatedAt run is put parents first: the parent here
+// was validated under other rules and goes, and its child goes with it, whatever order the
+// iterator gave them in.
+func TestLoadUnminedSorted_HeightsFollowTheParentsFirstReorder(t *testing.T) {
+	initPrometheusMetrics()
+
+	ba, _, cleanup := setupDiskSortTest(t)
+	defer cleanup()
+
+	ba.settings.BlockAssembly.UnminedTxDiskSortPaths = []string{t.TempDir()}
+	ba.settings.BlockAssembly.StoreTxInpointsForSubtreeMeta = true
+	ba.subtreeProcessor.SetTxEra(150)
+
+	parent := unminedAt(1, 5000)
+	parent.UnminedSince = 99
+	child := unminedAt(2, 5000, parent.Hash)
+	child.UnminedSince = 150
+	unrelated := unminedAt(3, 4000)
+	unrelated.UnminedSince = 150
+
+	iter := &sliceUnminedIterator{batches: [][]*utxo.UnminedTransaction{{child, parent, unrelated}}}
+
+	require.NoError(t, ba.loadUnminedSorted(context.Background(), iter, map[uint32]bool{}, false))
+
+	require.Equal(t, []chainhash.Hash{unrelated.Hash}, loadedHashes(t, ba))
+}
+
+func TestLoadUnminedSorted_SamplesTheEraFilteredPool(t *testing.T) {
+	initPrometheusMetrics()
+
+	ba, _, cleanup := setupDiskSortTest(t)
+	defer cleanup()
+
+	ba.settings.UtxoStore.LaneMigration = settings.LaneMigrationShadow
+	ba.settings.BlockAssembly.UnminedTxDiskSortPaths = []string{t.TempDir()}
+	ba.settings.BlockAssembly.UnminedTxSortBufferRecords = 1000
+	ba.subtreeProcessor.SetTxEra(150)
+
+	txs := make([]*utxo.UnminedTransaction, laneRestartSampleTarget+1)
+	for i := range txs {
+		txs[i] = unminedAt(i, 5000+i)
+		txs[i].UnminedSince = 99
+	}
+	txs[len(txs)-1].UnminedSince = 150
+
+	require.NoError(t, ba.loadUnminedSorted(context.Background(), &sliceUnminedIterator{batches: inBatches(txs, 1000)}, map[uint32]bool{}, false))
+	ba.stopLaneRestartDryRun()
+
+	ba.laneRestart.mu.Lock()
+	last := ba.laneRestart.last
+	ba.laneRestart.mu.Unlock()
+
+	require.NotNil(t, last)
+	require.Equal(t, uint64(1), last.todayKept)
+	require.Equal(t, uint64(1), last.sampleRate, "only kept transactions should set the sample rate")
+}
+
 func TestLoadUnminedSorted_FiltersLikeTheInMemoryPath(t *testing.T) {
 	initPrometheusMetrics()
 
@@ -172,7 +231,9 @@ func TestLoadUnminedSorted_FiltersLikeTheInMemoryPath(t *testing.T) {
 	mined := unminedAt(2, 900)
 	mined.BlockIDs = []uint32{7}
 	onSideChain := unminedAt(3, 800)
-	onSideChain.BlockIDs = []uint32{99}
+	// A block the store holds (genesis) that is not on the best chain given below: the
+	// reload reads its height for the era filter, as the in-memory path does.
+	onSideChain.BlockIDs = []uint32{0}
 
 	iter := &sliceUnminedIterator{batches: [][]*utxo.UnminedTransaction{{keep, coinbase, mined, onSideChain}}}
 

@@ -425,7 +425,7 @@ func (f *recoveryBAStore) ResetBlockAssembly(_ context.Context) error {
 
 var _ blockassembly.Store = (*recoveryBAStore)(nil)
 
-func (f *recoveryBAStore) Store(ctx context.Context, _ *chainhash.Hash, _, _ uint64, _ subtree.TxInpoints) (bool, error) {
+func (f *recoveryBAStore) Store(ctx context.Context, _ *chainhash.Hash, _, _ uint64, _ subtree.TxInpoints, _ uint32, _ uint64) (bool, error) {
 	if f.onStore != nil {
 		f.onStoreOnce.Do(f.onStore)
 	}

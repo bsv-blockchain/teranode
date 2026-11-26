@@ -1,12 +1,12 @@
 package aerospike
 
 import (
-	"context"
 	"testing"
 
 	"github.com/bsv-blockchain/aerospike-client-go/v8"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	spendpkg "github.com/bsv-blockchain/teranode/stores/utxo/spend"
+	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/stretchr/testify/require"
 )
 
@@ -27,22 +27,12 @@ import (
 // them, which is exactly why the reader is entitled to treat a zero-length
 // element as damage rather than as an unspent output.
 func TestUnspendableOutputSlotRoundTrip(t *testing.T) {
-	ctx := context.Background()
+	t.Parallel()
 
-	container, err := runAerospikeTestContainer(ctx)
-	if err != nil {
-		t.Skipf("Skipping Aerospike integration test: container not available (%v)", err)
-	}
+	// The keys are this test's own, in a set no store uses, so the server can be shared.
+	server := acquireSharedTestServerForInternalTests(t, test.CreateBaseTestSettings(t).UtxoStore.UtxoBatchSize)
 
-	defer func() { _ = container.Terminate(ctx) }()
-
-	host, err := container.Host(ctx)
-	require.NoError(t, err)
-
-	port, err := container.ServicePort(ctx)
-	require.NoError(t, err)
-
-	client, aErr := aerospike.NewClient(host, port)
+	client, aErr := aerospike.NewClient(server.Host, server.Port)
 	require.Nil(t, aErr)
 
 	defer client.Close()
@@ -102,22 +92,12 @@ func TestUnspendableOutputSlotRoundTrip(t *testing.T) {
 // and the reader's count check would reject perfectly healthy data. Nothing in
 // our own code decides this, so it is pinned against the real thing.
 func TestTrailingNilSlotsSurviveRoundTrip(t *testing.T) {
-	ctx := context.Background()
+	t.Parallel()
 
-	container, err := runAerospikeTestContainer(ctx)
-	if err != nil {
-		t.Skipf("Skipping Aerospike integration test: container not available (%v)", err)
-	}
+	// The keys are this test's own, in a set no store uses, so the server can be shared.
+	server := acquireSharedTestServerForInternalTests(t, test.CreateBaseTestSettings(t).UtxoStore.UtxoBatchSize)
 
-	defer func() { _ = container.Terminate(ctx) }()
-
-	host, err := container.Host(ctx)
-	require.NoError(t, err)
-
-	port, err := container.ServicePort(ctx)
-	require.NoError(t, err)
-
-	client, aErr := aerospike.NewClient(host, port)
+	client, aErr := aerospike.NewClient(server.Host, server.Port)
 	require.Nil(t, aErr)
 
 	defer client.Close()

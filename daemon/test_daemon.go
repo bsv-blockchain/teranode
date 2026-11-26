@@ -756,14 +756,17 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 		prunerObserver := newTestPrunerObserver(t)
 		td.prunerObserver = prunerObserver
 
-		// Register the observer with the pruner service
-		prunerProvider, ok := utxo.As[utxopruner.PrunerServiceProvider](utxoStore)
-		if !ok {
-			t.Fatalf("UtxoStore does not provide a pruner service, cannot register pruner observer")
-		}
+		// Register the observer with the pruner service. Aerospike and SQL stores both provide one; a store that does
+		// not just leaves WaitForPruner without notifications.
+		var (
+			prunerService utxopruner.Service
+			err           error
+		)
 
-		prunerService, err := prunerProvider.GetPrunerService()
-		if err != nil {
+		provider, ok := utxo.As[utxopruner.PrunerServiceProvider](utxoStore)
+		if !ok {
+			t.Logf("Warning: UtxoStore %T does not provide a pruner service, cannot register pruner observer", utxoStore)
+		} else if prunerService, err = provider.GetPrunerService(); err != nil {
 			t.Logf("Warning: Failed to get pruner service: %v", err)
 		} else if prunerService != nil {
 			prunerService.AddObserver(prunerObserver)

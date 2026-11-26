@@ -21,6 +21,10 @@ type UnminedTransaction struct {
 	Skip         bool
 	UnminedSince int
 	BlockIDs     []uint32
+	// LanePosition is the record's own lane position (util/lane), or 0 for none. Only an iterator
+	// asked for it fills it, at utxostore_laneMigration shadow, for block assembly's reload: the
+	// pool keeps it so the lane bitmaps of the subtrees the reload builds hold the tx.
+	LanePosition uint64
 }
 
 // InconsistentTxRecord is a lightweight record used by the consistency scan.
@@ -30,6 +34,21 @@ type InconsistentTxRecord struct {
 	Hash         chainhash.Hash
 	BlockIDs     []uint32
 	UnminedSince int
+}
+
+// MissingExternalSkipper is a store that offers block assembly's load scan: an
+// unmined record marked external whose file the external store does not have is
+// counted and returned as a Skip record carrying its hash (Node.Hash), block IDs
+// and unmined_since, instead of failing the scan. Block assembly repairs such a
+// record if it is already mined on the best chain, and otherwise adds the hash to
+// the drop filter of the queue drain after the load, so an implementation must
+// not omit the record. Block
+// assembly finds it with
+// As, and uses it only while its parent chain check drops a skipped record's
+// children. It falls back to GetUnminedTxIterator otherwise, and on a store
+// without it.
+type MissingExternalSkipper interface {
+	GetUnminedTxIteratorSkippingMissingExternal() (UnminedTxIterator, error)
 }
 
 // UnminedTxIterator provides an interface to iterate over unmined transactions efficiently.

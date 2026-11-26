@@ -30,7 +30,7 @@ import (
 // route, because it does not set the options that reach utxoset's netted write.
 // That write has its own test in stores/utxo/utxoset.
 //
-// Each workload here uses its own seed (0xd0 to 0xdf, 0xf0 to 0xf3) so the records do not
+// Each workload here uses its own seed (0xd0 to 0xdf, 0xf0 to 0xf4) so the records do not
 // collide with the other contract tests on a store shared between subtests.
 
 // widest is lane 255 at the highest position: every bit set, so a store that
@@ -117,6 +117,25 @@ func LanePositionSpendAndCreate(t *testing.T, db utxostore.Store) {
 
 	for i, tx := range w.Txs {
 		requireLanePosition(t, db, tx, want[i], "tx %d", i)
+	}
+}
+
+// LanePositionReturnedBySpendAndCreate: the metadata SpendAndCreate returns carries the created
+// record's lane position. The validator publishes it in the transaction's txmeta, and the txmeta
+// cache keeps it for the block gate's subtree lane bitmaps (lanes Phase 1, P2). Phase 1 covers
+// utxoset and Aerospike, which run it; the SQL store does not return the position yet.
+func LanePositionReturnedBySpendAndCreate(t *testing.T, db utxostore.Store) {
+	ctx := context.Background()
+
+	w := BuildMultiWorkload(t, 0xd9, 1, 2)
+	w.StoreRoots(t, db, 900)
+
+	want := []uint64{lane.Pack(7, 52_000), widest}
+
+	for i, tx := range w.Txs {
+		md, _, err := db.SpendAndCreate(ctx, tx, 901, utxostore.WithLanePosition(want[i]))
+		require.NoError(t, err, "tx %d", i)
+		require.Equal(t, want[i], md.LanePosition, "tx %d: the returned metadata", i)
 	}
 }
 
@@ -1044,4 +1063,60 @@ func LanePositionReturns(t *testing.T, db utxostore.Store, store string, rules L
 
 		requireReturned(t, db, count, source, store, before, "", nil, w.Txs[0])
 	})
+}
+
+// LanePositionInUnminedIterator: the unmined iterator block assembly reloads its pool from gives
+// each transaction its own lane position when the store runs at utxostore_laneMigration shadow,
+// and none at off, so block assembly's subtrees rebuilt after a restart keep complete lane bitmaps
+// (lanes Phase 1, P2b). shadow says which the store runs at. Phase 1 covers utxoset and Aerospike.
+func LanePositionInUnminedIterator(t *testing.T, db utxostore.Store, shadow bool) {
+	ctx := context.Background()
+
+	w := BuildMultiWorkload(t, 0xf4, 1, 3)
+
+	positions := []uint64{lane.Pack(7, 61_000), widest, lane.None}
+
+	for i, root := range w.Roots {
+		opts := []utxostore.CreateOption{utxostore.WithCreateOnly()}
+		if positions[i] != lane.None {
+			opts = append(opts, utxostore.WithLanePosition(positions[i]))
+		}
+
+		_, _, err := db.SpendAndCreate(ctx, root, 900, opts...)
+		require.NoError(t, err, "root %d", i)
+	}
+
+	it, err := db.GetUnminedTxIterator()
+	require.NoError(t, err)
+
+	defer func() { _ = it.Close() }()
+
+	got := make(map[[32]byte]uint64)
+
+	for {
+		batch, err := it.Next(ctx)
+		require.NoError(t, err)
+
+		if batch == nil {
+			break
+		}
+
+		for _, u := range batch {
+			if u.Node != nil {
+				got[u.Hash] = u.LanePosition
+			}
+		}
+	}
+
+	for i, root := range w.Roots {
+		position, ok := got[*root.TxIDChainHash()]
+		require.True(t, ok, "root %d is unmined", i)
+
+		want := positions[i]
+		if !shadow {
+			want = lane.None
+		}
+
+		require.Equal(t, want, position, "root %d", i)
+	}
 }

@@ -10,6 +10,7 @@ import (
 	"github.com/bsv-blockchain/aerospike-client-go/v8/types"
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/bscript"
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
@@ -28,6 +29,8 @@ import (
 // TestLanePositionContract runs the shared lane position contract on a real
 // Aerospike.
 func TestLanePositionContract(t *testing.T) {
+	// Not parallel: its burns and returns cases read the process-wide lane position counters,
+	// which other tests' creates and spends add to.
 	logger := ulogger.NewErrorTestLogger(t)
 	tSettings := test.CreateBaseTestSettings(t)
 
@@ -35,6 +38,7 @@ func TestLanePositionContract(t *testing.T) {
 	t.Cleanup(deferFn)
 
 	tests.LanePositionContract(t, store)
+	t.Run("returned by spend and create", func(t *testing.T) { tests.LanePositionReturnedBySpendAndCreate(t, store) })
 	t.Run("burns", func(t *testing.T) { tests.LanePositionBurns(t, store, "aerospike") })
 
 	// A KEY_EXISTS can be the create's own retried write, so no refusal goes back, and a refused
@@ -42,10 +46,38 @@ func TestLanePositionContract(t *testing.T) {
 	t.Run("returns", func(t *testing.T) { tests.LanePositionReturns(t, store, "aerospike", tests.LaneReturnRules{}, nil) })
 }
 
+// TestLanePositionInUnminedIterator: block assembly's reload reads each unmined transaction's own
+// lane position from a real Aerospike at shadow, through the raw query, and none at off, where the
+// query names the bins it always did.
+func TestLanePositionInUnminedIterator(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		shadow bool
+	}{{"shadow", true}, {"off", false}} {
+		t.Run(tc.name, func(t *testing.T) {
+			logger := ulogger.NewErrorTestLogger(t)
+			tSettings := test.CreateBaseTestSettings(t)
+
+			if tc.shadow {
+				tSettings.UtxoStore.LaneMigration = settings.LaneMigrationShadow
+			}
+
+			// A server of its own: the unmined iterator scans the whole set, and both subtests
+			// create the same transactions.
+			_, store, _, deferFn := initAerospikeOwnServer(t, tSettings, logger)
+			t.Cleanup(deferFn)
+
+			tests.LanePositionInUnminedIterator(t, store, tc.shadow)
+		})
+	}
+}
+
 // TestLanePositionBin checks what the contract cannot see: the raw bin, on the
 // master record only, for the paths that store a transaction outside the
 // record.
 func TestLanePositionBin(t *testing.T) {
+	t.Parallel()
+
 	ctx := context.Background()
 	logger := ulogger.NewErrorTestLogger(t)
 	tSettings := test.CreateBaseTestSettings(t)
@@ -74,7 +106,6 @@ func TestLanePositionBin(t *testing.T) {
 	position := lane.Pack(200, 12345)
 
 	t.Run("a transaction over the in-record size limit goes external and keeps the bin", func(t *testing.T) {
-		cleanDB(t, client)
 
 		// The test batch size is small, so reach the size limit with a few large
 		// scripts rather than many outputs.
@@ -102,7 +133,6 @@ func TestLanePositionBin(t *testing.T) {
 	})
 
 	t.Run("a transaction split across records writes the bin on the master only", func(t *testing.T) {
-		cleanDB(t, client)
 
 		tx := createTransactionWithOutputs(tSettings.UtxoStore.UtxoBatchSize + 1)
 
@@ -126,7 +156,6 @@ func TestLanePositionBin(t *testing.T) {
 	// lane position again. No configuration in the repo makes the server refuse one, so the batch
 	// answers RECORD_TOO_BIG once and the rebuild then runs against the real server.
 	t.Run("a record the server refuses as too big keeps the bin when it is rebuilt", func(t *testing.T) {
-		cleanDB(t, client)
 
 		tx := createTransactionWithOutputs(3)
 
@@ -159,7 +188,6 @@ func TestLanePositionBin(t *testing.T) {
 	})
 
 	t.Run("a create without the option writes no bin", func(t *testing.T) {
-		cleanDB(t, client)
 
 		for name, tx := range map[string]*bt.Tx{
 			"small":    createTransactionWithOutputs(3),
@@ -184,14 +212,14 @@ func TestLanePositionBin(t *testing.T) {
 // was never written. SpendAndCreate takes its position before it calls Create, so only a direct
 // Create reaches this order.
 func TestLanePositionCreateConflictingWithNoPositionLeavesParentsAlone(t *testing.T) {
+	t.Parallel()
+
 	ctx := context.Background()
 	logger := ulogger.NewErrorTestLogger(t)
 	tSettings := test.CreateBaseTestSettings(t)
 
-	client, store, _, deferFn := initAerospike(t, tSettings, logger)
+	_, store, _, deferFn := initAerospike(t, tSettings, logger)
 	t.Cleanup(deferFn)
-
-	cleanDB(t, client)
 
 	parent := createTransactionWithOutputs(1)
 	_, err := store.Create(ctx, parent, 1)
@@ -218,13 +246,28 @@ func TestLanePositionCreateConflictingWithNoPositionLeavesParentsAlone(t *testin
 func laneParent(t *testing.T, seed uint32, n int) *bt.Tx {
 	t.Helper()
 
-	tx := bt.NewTx()
+	tx := uniqueTx(bt.NewTx())
 	require.NoError(t, tx.From("00000000000000000000000000000000000000000000000000000000000000aa", seed,
 		"76a914000000000000000000000000000000000000000088ac", 1_000_000))
 
 	for range n {
 		require.NoError(t, tx.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 1_000))
 	}
+
+	return tx
+}
+
+// laneCoinbase is a coinbase, distinct from every other test transaction.
+func laneCoinbase(t *testing.T) *bt.Tx {
+	t.Helper()
+
+	in := &bt.Input{PreviousTxOutIndex: 0xffffffff, SequenceNumber: 0xffffffff, UnlockingScript: bscript.NewFromBytes([]byte{0x04, 0xff, 0xff, 0x00, 0x1d})}
+	require.NoError(t, in.PreviousTxIDAdd(&chainhash.Hash{}))
+
+	tx := uniqueTx(bt.NewTx())
+	tx.Inputs = []*bt.Input{in}
+	require.NoError(t, tx.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 5_000))
+	require.True(t, tx.IsCoinbase())
 
 	return tx
 }
@@ -287,6 +330,8 @@ func slotLanes(t *testing.T, v interface{}) []uint64 {
 // writes nothing, Unspend clears the position, and a spend without one leaves the record exactly as
 // before, with no slot bin at all.
 func TestSpendRecordsTheSpenderLanePositionInTheSlot(t *testing.T) {
+	t.Parallel()
+
 	ctx := context.Background()
 	logger := ulogger.NewErrorTestLogger(t)
 	tSettings := test.CreateBaseTestSettings(t)
@@ -364,12 +409,14 @@ func TestSpendRecordsTheSpenderLanePositionInTheSlot(t *testing.T) {
 // A create names its parents' positions on the master record, and the validator's parent read
 // gives back the parent's own position, at shadow only.
 func TestParentLanePositionsOnAerospike(t *testing.T) {
+	t.Parallel()
+
 	ctx := context.Background()
 	logger := ulogger.NewErrorTestLogger(t)
 	tSettings := test.CreateBaseTestSettings(t)
 	tSettings.UtxoStore.LaneMigration = settings.LaneMigrationShadow
 
-	client, store, _, deferFn := initAerospike(t, tSettings, logger)
+	client, store, _, deferFn, aeroURL := initAerospikeWithURL(t, tSettings, logger, nil)
 	t.Cleanup(deferFn)
 
 	require.True(t, store.LaneSlotPositionsRecorded(), "the server, running this build's Lua, passes the slot probe")
@@ -384,6 +431,62 @@ func TestParentLanePositionsOnAerospike(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, answers[0].Err)
 	require.Equal(t, parentPosition, answers[0].LanePosition, "the parent read gives the parent's position")
+	require.False(t, answers[0].IsCoinbase)
+
+	// The same read says whether the parent is a coinbase, for the lanes shadow.
+	coinbase := laneCoinbase(t)
+	_, err = store.Create(ctx, coinbase, 100, utxo.WithLanePosition(lane.Pack(7, 99)))
+	require.NoError(t, err)
+
+	answers, err = store.ParentOutputsForValidation(ctx, []utxo.Outpoint{{TxID: *coinbase.TxIDChainHash(), Vout: 0}})
+	require.NoError(t, err)
+	require.NoError(t, answers[0].Err)
+	require.True(t, answers[0].IsCoinbase, "the parent read says the parent is a coinbase")
+	require.Equal(t, lane.Pack(7, 99), answers[0].LanePosition)
+
+	// The block parent check's Get and the subtree prefetch's BatchDecorate read the flag too.
+	for _, tx := range []*bt.Tx{parent, coinbase} {
+		md, err := store.Get(ctx, tx.TxIDChainHash(), fields.BlockIDs, fields.LanePosition, fields.IsCoinbase)
+		require.NoError(t, err)
+		require.Equal(t, tx.IsCoinbase(), md.IsCoinbase, "block parent read")
+
+		items := []*utxo.UnresolvedMetaData{{Hash: *tx.TxIDChainHash()}}
+		require.NoError(t, store.BatchDecorate(ctx, items, fields.BlockIDs, fields.BlockHeights, fields.Outputs, fields.LanePosition, fields.IsCoinbase))
+		require.NoError(t, items[0].Err)
+		require.Equal(t, tx.IsCoinbase(), items[0].Data.IsCoinbase, "prefetch read")
+	}
+
+	// The parent read takes a record without the coinbase bin as not a coinbase.
+	bare := laneCoinbase(t)
+	_, err = store.Create(ctx, bare, 100, utxo.WithLanePosition(lane.Pack(7, 98)))
+	require.NoError(t, err)
+
+	bareKey, err := aerospike.NewKey(store.GetNamespace(), store.GetName(), uaerospike.CalculateKeySourceInternal(bare.TxIDChainHash(), 0))
+	require.NoError(t, err)
+	require.NoError(t, client.PutBins(nil, bareKey, aerospike.NewBin(fields.IsCoinbase.String(), nil)))
+
+	_, hasBin := recordBin(t, client, store, bare, 0, fields.IsCoinbase)
+	require.False(t, hasBin)
+
+	answers, err = store.ParentOutputsForValidation(ctx, []utxo.Outpoint{{TxID: *bare.TxIDChainHash(), Vout: 0}})
+	require.NoError(t, err)
+	require.NoError(t, answers[0].Err)
+	require.False(t, answers[0].IsCoinbase)
+
+	// With lane positions off the parent read gives neither the position nor the coinbase flag.
+	off := *tSettings
+	off.UtxoStore.LaneMigration = settings.LaneMigrationOff
+
+	offStore, err := teranodeaerospike.New(ctx, logger, &off, aeroURL)
+	require.NoError(t, err)
+	offStore.LeaveSharedClientOpenOnClose()
+	t.Cleanup(offStore.StopConflictingIndexSelfTest)
+
+	answers, err = offStore.ParentOutputsForValidation(ctx, []utxo.Outpoint{{TxID: *coinbase.TxIDChainHash(), Vout: 0}})
+	require.NoError(t, err)
+	require.NoError(t, answers[0].Err)
+	require.Zero(t, answers[0].LanePosition)
+	require.False(t, answers[0].IsCoinbase)
 
 	child := laneChild(t, parent, 0)
 	md, err := store.Create(ctx, child, 101, utxo.WithLanePosition(childPosition), utxo.WithParentLanePositions([]uint64{parentPosition}))
@@ -567,6 +670,8 @@ func TestCreateLeavesOffAParentListTooLongForTheRecord(t *testing.T) {
 // the position the create then writes: the parent's slot, the child's own lanePos bin and the
 // position the create returns are one value.
 func TestSpendAndCreateRecordsTheCreatesPositionInTheParentsSlot(t *testing.T) {
+	t.Parallel()
+
 	ctx := context.Background()
 	logger := ulogger.NewErrorTestLogger(t)
 	tSettings := test.CreateBaseTestSettings(t)
@@ -602,6 +707,8 @@ func TestSpendAndCreateRecordsTheCreatesPositionInTheParentsSlot(t *testing.T) {
 // there. Handing the position to the next create would leave that slot naming another transaction.
 // A double spend of a single output, refused before any write, returns it (the shared contract).
 func TestRefusedLaneSpendKeepsItsPositionBurned(t *testing.T) {
+	t.Parallel()
+
 	for name, tc := range map[string]struct {
 		// refuse readies the second parent so that the child's spend of it is refused.
 		refuse  func(t *testing.T, store *teranodeaerospike.Store, parent *bt.Tx)
@@ -677,6 +784,8 @@ func TestRefusedLaneSpendKeepsItsPositionBurned(t *testing.T) {
 // A below-checkpoint list creates a child of a parent in the list first and spends its inputs in a
 // second wave; that spend records the position the child was created with in the parent's slot.
 func TestBelowCheckpointListRecordsTheChildsPositionInTheParentsSlot(t *testing.T) {
+	t.Parallel()
+
 	ctx := context.Background()
 	logger := ulogger.NewErrorTestLogger(t)
 	tSettings := test.CreateBaseTestSettings(t)

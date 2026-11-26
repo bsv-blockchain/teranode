@@ -1831,8 +1831,8 @@ func (u *Server) ValidateBlock(ctx context.Context, request *blockvalidation_api
 
 	// Create meta regenerator for potential meta file recovery (no peer URL for gRPC, local store only)
 	metaRegenerator := u.blockValidation.createMetaRegenerator(nil)
-	block.SetCheckpointConfirmedAncestor(u.blockValidation.checkpointConfirmedAncestor(ctx, block))
-	if ok, err := block.Valid(ctx, u.logger, u.subtreeStore, u.utxoStore, oldBlockIDsMap, blockHeaders, blockHeaderIDs, u.settings, metaRegenerator); !ok {
+	block.SetCheckpointConfirmedAncestor(u.blockValidation.checkpointConfirmedAncestor(ctx, block, false))
+	if ok, err := block.Valid(laneParentsContext(ctx, block), u.logger, u.subtreeStore, u.utxoStore, oldBlockIDsMap, blockHeaders, blockHeaderIDs, u.settings, metaRegenerator); !ok {
 		// Transient catchup-state (e.g. parent tx not yet in our store) must not be
 		// reported as a consensus failure to the caller. See issue #1031.
 		if errors.Is(err, errors.ErrBlockIncomplete) {
@@ -2224,6 +2224,7 @@ func (u *Server) processBlockFound(ctx context.Context, hash *chainhash.Hash, pe
 		DisableOptimisticMining: optimisticMiningDisabledForPeerPath(u.settings, baseURL),
 		IsRevalidation:          false, // processBlockFound is for new blocks, not revalidation
 		PeerID:                  peerID,
+		HeaderProven:            headerProven,
 	}
 
 	err = u.blockValidation.ValidateBlockWithOptions(ctx, block, baseURL, opts)
@@ -2269,8 +2270,10 @@ func (u *Server) processBlockFound(ctx context.Context, hash *chainhash.Hash, pe
 // An eligible block without the proof falls to ValidateBlockWithOptions. That is
 // correct for a legacy record because netsync writes its structure files as
 // FileTypeSubtreeToCheck, which full validation treats as unvalidated: subtree
-// validation creates the transactions and rebuilds the fees before the reward
-// check reads them. It is also slow, which is why netsync refuses to commit an
+// validation creates any transaction not yet stored and computes its fee. A
+// transaction an earlier outpoint-only quick attempt already stored keeps the fee 0
+// it was written with, so such a block can fail the reward check without the proof
+// (see checkpointConfirmedAncestor). It is also slow, which is why netsync refuses to commit an
 // unproven eligible record before it makes this RPC and re-offers it once the
 // header walk has proven it.
 func (u *Server) legacyUnifiedRoute(block *model.Block, baseURL string, headerProven bool) bool {

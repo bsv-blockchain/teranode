@@ -106,12 +106,11 @@ func (u *Server) catchupGetBlockHeaders(ctx context.Context, blockUpTo *model.Bl
 		return catchup.CreateCatchupResult(nil, blockUpTo.Hash(), nil, 0, startTime, baseURL, 0, failedIterations, false, "Failed to check block existence"), nil, errors.NewServiceError("[catchup][%s] failed to check if block exists", blockUpTo.Hash().String(), err)
 	}
 
-	// If the block already exists, we can return immediately
+	// If the block already exists, we can return immediately. The peer is credited by catchup,
+	// once the stored target has passed the checkpoint fork rule
+	// (validateStoredTargetBelowCheckpoint): a success here would reset the failures of a peer
+	// that keeps offering a forbidden one.
 	if exists {
-		if circuitBreaker != nil {
-			circuitBreaker.RecordSuccess()
-		}
-
 		return catchup.CreateCatchupResult(nil, blockUpTo.Hash(), nil, 0, startTime, baseURL, 0, failedIterations, true, "Block already exists"), nil, nil
 	}
 
@@ -270,7 +269,7 @@ func (u *Server) catchupGetBlockHeaders(ctx context.Context, blockUpTo *model.Bl
 		// for that extra header so a well-behaved peer's response is never rejected.
 		maxHeaderBytes := int64(maxBlockHeadersPerRequest+1) * int64(model.BlockHeaderSize)
 		requestStart := time.Now()
-		blockHeadersBytes, err := catchup.FetchHeadersWithRetry(iterCtx, u.logger, requestURL, maxRetries, maxHeaderBytes)
+		blockHeadersBytes, err := catchup.FetchHeadersWithRetry(iterCtx, u.logger, requestURL, maxRetries, u.settings.BlockValidation.CatchupRetryBackoff, maxHeaderBytes)
 		iterCancel() // Clean up the iteration context
 		if err == nil {
 			headerRequestTime += time.Since(requestStart)
@@ -358,7 +357,7 @@ func (u *Server) catchupGetBlockHeaders(ctx context.Context, blockUpTo *model.Bl
 		}
 
 		// Parse headers
-		blockHeaders, parseErr := catchup.ParseBlockHeaders(blockHeadersBytes)
+		blockHeaders, parseErr := catchup.ParseBlockHeaders(blockHeadersBytes, u.settings.ChainCfgParams)
 		if parseErr != nil {
 			u.logger.Errorf("[catchup][%s] iteration %d: header parse error: %v", chainTipHash.String(), iteration, parseErr)
 

@@ -475,6 +475,7 @@ CounterVec metrics use labels: `function` (function name), `error` (error type).
 | `teranode_aerospike_utxo_spend_batch_size`        | Histogram  | Size of utxo spend batch                                        |
 | `teranode_aerospike_get_external`                 | Histogram  | Duration of getting an external transaction from the blob store |
 | `teranode_aerospike_set_external`                 | Histogram  | Duration of setting an external transaction to the blob store   |
+| `teranode_aerospike_unmined_missing_external_skipped` | Counter | Unmined transactions left out of block assembly's unmined load (start, reload, reset) because their record is external and the blob store has no file for it. Only with `blockassembly_onRestartValidateParentChain` and `blockassembly_onRestartRemoveInvalidParentChainTxs` on; otherwise the load fails on the record |
 | `teranode_aerospike_txmeta_get_counter_conflicting` | Histogram  | Duration of getting counter conflicting transactions from the blob store |
 | `teranode_aerospike_txmeta_get_conflicting`        | Histogram  | Duration of getting conflicting transactions from the blob store |
 
@@ -512,3 +513,4 @@ CounterVec metrics use labels: `function` (function name), `error` (error type).
 | `teranode_subtreeprocessor_current_state`                | Gauge     | Current state of the subtree processor                           |
 | `teranode_subtreeprocessor_oversize_batch_admitted_total` | Counter  | Number of client batches that exceeded the normalized `blockassembly_maxQueueItems` and were admitted alone onto an empty queue, so the ceiling is transiently exceeded by one batch rather than that client wedging forever. **Any** non-zero value means a client's batch size is above this pod's normalized cap and the cross-pod sizing guidance in the `blockassembly_maxQueueItems` longdesc has not been applied |
 | `teranode_subtreeprocessor_txmeta_delete_dropped_total` | Counter | Txmeta cache DELETEs for txs demoted to conflicting that block assembly dropped because the txmeta producer buffer was full or stopped. Each one can leave subtree validation caching that tx as non-conflicting until the cache rotates it out, so alert on any increase |
+| `teranode_subtreeprocessor_late_mined_dropped_total` | Counter | Handed-off transactions dropped, on arrival or when placed, because a block applied within `blockassembly_minedTxSetRetention`, plus any double-spend window, already mined them. Each one would otherwise have gone back into block assembly |

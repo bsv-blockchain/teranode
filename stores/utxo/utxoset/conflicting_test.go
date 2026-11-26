@@ -41,6 +41,8 @@ func spendOutput(t *testing.T, parent *bt.Tx, vout uint32, nOut int) *bt.Tx {
 // what the spend path reads, and the spend path never looks at the identity row. Setting only
 // one leaves a transaction reporting itself conflicting while its UTXOs stay spendable.
 func TestSetConflictingStopsTheUTXOsBeingSpent(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	parent := mkTx(t, 2, 5_000)
@@ -67,6 +69,8 @@ func TestSetConflictingStopsTheUTXOsBeingSpent(t *testing.T) {
 // TestClearingConflictingRestoresSpendability. Conflict resolution promotes a winner by
 // clearing the flag and then spending through it, so a one-way flag would strand the winner.
 func TestClearingConflictingRestoresSpendability(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	parent := mkTx(t, 2, 5_000)
@@ -99,6 +103,8 @@ func TestClearingConflictingRestoresSpendability(t *testing.T) {
 // contested, so the parent carries the list. Without it there is no route from a contested
 // UTXO to the transactions competing for it.
 func TestSetConflictingNotesTheContestOnItsParents(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	parent := mkTx(t, 2, 5_000)
@@ -137,6 +143,8 @@ func TestSetConflictingNotesTheContestOnItsParents(t *testing.T) {
 // whose undo record has aged out, is not a harmless extra: it makes the whole restore fail.
 // Only inputs with a live undo record naming this transaction may be reported.
 func TestSetConflictingReturnsOnlySpendsItsOwnUnspendCanRestore(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	parent := mkTx(t, 2, 5_000)
@@ -176,6 +184,8 @@ func TestSetConflictingReturnsOnlySpendsItsOwnUnspendCanRestore(t *testing.T) {
 // crash, would be left locked forever with nothing to say so. That is the state
 // ConflictWALCrashRecovery's forward_after_step2_unspend_lock case reconstructs.
 func TestSetConflictingStillNamesAParentWhoseUTXOWasNeverTaken(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	parent := mkTx(t, 2, 5_000)
@@ -205,6 +215,8 @@ func TestSetConflictingStillNamesAParentWhoseUTXOWasNeverTaken(t *testing.T) {
 // undo payload has aged out, or a different transaction re-spent the UTXO since. Reporting it
 // would make Unspend fail the whole restore rather than complete it, so it is omitted.
 func TestSetConflictingReportsNothingBeyondJournalRetention(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	parent := mkTx(t, 2, 5_000)
@@ -235,6 +247,8 @@ func TestSetConflictingReportsNothingBeyondJournalRetention(t *testing.T) {
 // store can answer "who took this UTXO". This is the test that fails if the key range bound or
 // the full-id recheck is wrong.
 func TestSetConflictingCascadesDownTheChain(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	root := mkTx(t, 2, 5_000)
@@ -280,6 +294,8 @@ func TestSetConflictingCascadesDownTheChain(t *testing.T) {
 // TestSetConflictingReportsATransactionItDoesNotHold, matching both reference stores: an
 // absent hash is an error, not a silent skip.
 func TestSetConflictingReportsATransactionItDoesNotHold(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	known := mkTx(t, 1, 5_000)
@@ -297,6 +313,8 @@ func TestSetConflictingReportsATransactionItDoesNotHold(t *testing.T) {
 
 // TestSetConflictingOnAnEmptyListIsANoOp, which is how the cascade terminates.
 func TestSetConflictingOnAnEmptyListIsANoOp(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	affected, next, err := s.SetConflicting(ctx, nil, true)
@@ -320,6 +338,8 @@ func TestSetConflictingOnAnEmptyListIsANoOp(t *testing.T) {
 // key, so the READER has to say DISTINCT. Both are exercised: the store's height is moved past
 // a partition boundary between the two notes.
 func TestNotingTheSameContestTwiceRecordsItOnce(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 	require.NoError(t, s.SetBlockHeight(100))
 
@@ -357,6 +377,8 @@ func TestNotingTheSameContestTwiceRecordsItOnce(t *testing.T) {
 // loses the conflict. The parent here is recorded mined and then has its identity row deleted
 // as the stamp would, so the note has only the side table to land in.
 func TestConflictingChildrenSurviveTheParentLeavingTheIdentityTable(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 	require.NoError(t, s.SetBlockHeight(700_101))
 
@@ -390,6 +412,8 @@ func TestConflictingChildrenSurviveTheParentLeavingTheIdentityTable(t *testing.T
 // set; MarkTransactionsOnLongestChain then clears the marker. The contest is keyed on the
 // parent's txid in a side table, so nothing about the parent's own rows can pin or lose it.
 func TestConflictingChildrenSurviveAParentSettledByTheIdlessStamp(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 	require.NoError(t, s.SetBlockHeight(700_101))
 
@@ -426,6 +450,8 @@ func TestConflictingChildrenSurviveAParentSettledByTheIdlessStamp(t *testing.T) 
 // row answered, so it must attach to that answer too. Folding it into the identity read, or
 // into the membership read, would have lost it here.
 func TestConflictingChildrenAnswerForAParentKnownOnlyFromItsUTXO(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 	require.NoError(t, s.SetBlockHeight(700_101))
 
@@ -465,6 +491,8 @@ func TestConflictingChildrenAnswerForAParentKnownOnlyFromItsUTXO(t *testing.T) {
 // rather than resolving the race. The identity row is deleted here as the stamp would delete
 // it, so the containment arm is what has to answer.
 func TestSetConflictingReadsInputsFromAMinedTransaction(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 	require.NoError(t, s.SetBlockHeight(700_100))
 
@@ -505,6 +533,8 @@ func TestSetConflictingReadsInputsFromAMinedTransaction(t *testing.T) {
 // conflict resolution asks the demoted transaction what it took, and the demoted transaction
 // came from a block.
 func TestSpendsMadeByReachesAMinedTransaction(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 	require.NoError(t, s.SetBlockHeight(700_100))
 
@@ -537,6 +567,8 @@ func TestSpendsMadeByReachesAMinedTransaction(t *testing.T) {
 // input set makes the cascade report no counter-spender at all, which is the answer that lets
 // a double spend through -- so it is a not-found here.
 func TestSetConflictingRefusesABlockPathMinedRow(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 	require.NoError(t, s.SetBlockHeight(700_100))
 
@@ -563,6 +595,8 @@ func TestSetConflictingRefusesABlockPathMinedRow(t *testing.T) {
 //
 // P is innocent and its output must come back spendable.
 func TestUnspendKeepsALosersOutputConflicting(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	p := mkTx(t, 1, 50_000)
@@ -615,6 +649,8 @@ func TestUnspendKeepsALosersOutputConflicting(t *testing.T) {
 // row. If the transaction is cleared before the spend is undone, the restored UTXO must come
 // back without it, or a winner's output is refused for a contest it has already won.
 func TestUnspendClearsAStaleConflictingBit(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	p := mkTx(t, 1, 50_000)
@@ -659,6 +695,8 @@ func TestUnspendClearsAStaleConflictingBit(t *testing.T) {
 // neither pays for the cold start or for the other's dead tuples. The bound of 10 sits
 // between linear (4) and quadratic (16).
 func TestSetConflictingIsLinearInOutputs(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	const (

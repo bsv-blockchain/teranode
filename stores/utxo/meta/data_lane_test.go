@@ -246,3 +246,190 @@ func FuzzNewDataFromLaneMetaBytes(f *testing.F) {
 		require.Equal(t, data, again)
 	})
 }
+
+func TestCacheBytesCarryTheOwnPositionAfterTheMetaBytes(t *testing.T) {
+	d, parents := laneSample()
+
+	legacy, err := d.MetaBytes()
+	require.NoError(t, err)
+
+	cached, err := d.CacheBytes()
+	require.NoError(t, err)
+	require.Equal(t, append(append([]byte(nil), legacy...), lane.AppendPosition(nil, d.LanePosition)...), cached)
+	require.Equal(t, d.LanePosition, CachedLanePosition(cached[len(legacy):]))
+
+	// A reader that ignores what follows the inpoints reads the entry as before.
+	var back Data
+	require.NoError(t, NewMetaDataFromBytes(cached, &back))
+	require.Equal(t, d.Fee, back.Fee)
+	require.Equal(t, d.TxInpoints.ParentTxHashes, back.TxInpoints.ParentTxHashes)
+
+	// The lane encoding gives the same cache form.
+	content, err := d.LaneMetaBytesInto(nil, parents)
+	require.NoError(t, err)
+
+	fromLane, err := AppendCacheFromLaneMetaBytes(nil, content)
+	require.NoError(t, err)
+	require.Equal(t, cached, fromLane)
+}
+
+func TestCacheBytesWithoutAPositionAreTheMetaBytes(t *testing.T) {
+	d, _ := laneSample()
+	d.LanePosition = lane.Pack(9, 0) // a lane but no position
+
+	legacy, err := d.MetaBytes()
+	require.NoError(t, err)
+
+	cached, err := d.CacheBytes()
+	require.NoError(t, err)
+	require.Equal(t, legacy, cached)
+
+	require.Zero(t, CachedLanePosition(nil))
+	require.Zero(t, CachedLanePosition([]byte{1, 2, 3}), "only exactly eight bytes are a position")
+}
+
+func TestAppendCacheFromLaneMetaBytesRefusesWithoutChangingDst(t *testing.T) {
+	d, parents := laneSample()
+
+	content, err := d.LaneMetaBytesInto(nil, parents)
+	require.NoError(t, err)
+
+	// An own position with a lane and no position is refused, as is a truncated entry.
+	bad := append([]byte(nil), content...)
+	copy(bad[2:10], lane.AppendPosition(nil, lane.Pack(4, 0)))
+
+	dst := []byte{0xAA}
+
+	got, err := AppendCacheFromLaneMetaBytes(dst, bad)
+	require.Error(t, err)
+	require.Equal(t, []byte{0xAA}, got)
+
+	got, err = AppendCacheFromLaneMetaBytes(dst, content[:len(content)-1])
+	require.Error(t, err)
+	require.Equal(t, []byte{0xAA}, got)
+}
+
+func TestCacheBytesReportAMetaBytesError(t *testing.T) {
+	// Two parents and a single vout word, fewer than one count word per parent: the inpoints
+	// cannot serialize.
+	d := &Data{LanePosition: lane.Pack(3, 9), TxInpoints: subtree.NewTxInpointsFromPacked([]chainhash.Hash{*hash3, *hash4}, []uint32{0})}
+
+	_, wantErr := d.MetaBytes()
+	require.Error(t, wantErr, "the fixture really fails to serialize")
+
+	_, err := d.CacheBytes()
+	require.Error(t, err)
+}
+
+func TestCacheBytesIntoReuseTheCallersBuffer(t *testing.T) {
+	d, _ := laneSample()
+
+	dst := make([]byte, 0, 4096)
+
+	got, err := d.CacheBytesInto(dst)
+	require.NoError(t, err)
+	require.Same(t, &dst[:1][0], &got[0], "written into dst's backing array")
+}
+
+func TestCachedLanePositionReadsExactlyEightBytes(t *testing.T) {
+	nine := lane.AppendPosition(nil, lane.Pack(2, 5))
+	require.Equal(t, lane.Pack(2, 5), CachedLanePosition(nine))
+	require.Zero(t, CachedLanePosition(append(nine, 0)), "nine bytes are not a position")
+}
+
+func TestAppendCacheFromLaneMetaBytesRefusesShortInput(t *testing.T) {
+	for n := 0; n < 12; n++ {
+		_, err := AppendCacheFromLaneMetaBytes(nil, make([]byte, n))
+		require.Error(t, err, "%d bytes", n)
+	}
+}
+
+// A WireActionADDOwn entry's content is the cache form, and the view gives back its MetaBytes,
+// without a copy, and its own position.
+func TestOwnCacheBytesViewReadsTheCacheForm(t *testing.T) {
+	d, _ := laneSample()
+
+	content, err := d.CacheBytes()
+	require.NoError(t, err)
+
+	legacy, err := d.MetaBytes()
+	require.NoError(t, err)
+
+	got, own, err := OwnCacheBytesView(content)
+	require.NoError(t, err)
+	require.Equal(t, legacy, got)
+	require.Equal(t, d.LanePosition, own)
+	require.Equal(t, len(got), cap(got), "an append to the MetaBytes cannot write into the position")
+	require.Same(t, &content[0], &got[0], "nothing is copied")
+
+	// A record with no parents, a coinbase's shape, has a position straight after the header.
+	coinbase := &Data{Fee: 1, SizeInBytes: 2, IsCoinbase: true, LanePosition: lane.Pack(0, 1)}
+
+	content, err = coinbase.CacheBytes()
+	require.NoError(t, err)
+
+	_, own, err = OwnCacheBytesView(content)
+	require.NoError(t, err)
+	require.Equal(t, lane.Pack(0, 1), own)
+}
+
+func TestOwnCacheBytesViewRefusesWhatCacheBytesWouldNotWrite(t *testing.T) {
+	d, parents := laneSample()
+
+	content, err := d.CacheBytes()
+	require.NoError(t, err)
+
+	legacy, err := d.MetaBytes()
+	require.NoError(t, err)
+
+	laneContent, err := d.LaneMetaBytesInto(nil, parents)
+	require.NoError(t, err)
+
+	withPosition := func(v uint64) []byte {
+		return lane.AppendPosition(append([]byte(nil), legacy...), v)
+	}
+
+	for name, bad := range map[string][]byte{
+		"MetaBytes alone":        legacy,
+		"one byte short":         content[:len(content)-1],
+		"one byte extra":         append(append([]byte(nil), content...), 0),
+		"zero position":          withPosition(lane.None),
+		"a lane and no position": withPosition(lane.Pack(4, 0)),
+		"the lane encoding":      laneContent,
+		"an unknown flag bit":    func() []byte { f := append([]byte(nil), content...); f[16] |= 0b100000; return f }(),
+		"empty":                  nil,
+	} {
+		_, _, err := OwnCacheBytesView(bad)
+		require.Error(t, err, name)
+	}
+
+	for n := 0; n < 29; n++ {
+		_, _, err := OwnCacheBytesView(make([]byte, n))
+		require.Error(t, err, "%d zero bytes", n)
+	}
+}
+
+// Whatever the view accepts is MetaBytes and one valid position, and it never panics.
+func FuzzOwnCacheBytesView(f *testing.F) {
+	d, _ := laneSample()
+
+	content, err := d.CacheBytes()
+	require.NoError(f, err)
+
+	f.Add(content)
+	f.Add(content[:len(content)-1])
+	f.Add([]byte{})
+
+	f.Fuzz(func(t *testing.T, b []byte) {
+		legacy, own, err := OwnCacheBytesView(b)
+		if err != nil {
+			return
+		}
+
+		require.Len(t, legacy, len(b)-lane.PositionSize)
+		require.True(t, lane.Valid(own))
+
+		var back Data
+		require.NoError(t, NewMetaDataFromBytes(legacy, &back))
+	})
+}

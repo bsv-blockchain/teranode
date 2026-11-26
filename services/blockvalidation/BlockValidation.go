@@ -93,6 +93,14 @@ type ValidateBlockOptions struct {
 	// This is used to track peer behavior during subtree validation.
 	PeerID string
 
+	// HeaderProven is legacy netsync's proof that the block's hash sits in a header run that a
+	// matched hardcoded checkpoint commits (headerCache.Proven). It is the same proof the unified
+	// below-checkpoint route rests on, and it counts as checkpoint ancestry
+	// (checkpointConfirmedAncestor). That gates the coinbase no-inflation skip and, with
+	// OutpointOnlyBelowCheckpoint on, the validOrderAndBlessed skip, for every proven legacy block
+	// that takes full validation. Every caller other than netsync leaves it false.
+	HeaderProven bool
+
 	// KeepBlockAssemblyHandoff asks subtree validation to hand the block's unseen transactions
 	// to block assembly even though the FSM is in CATCHINGBLOCKS. Catchup sets it for a short
 	// run that started from RUNNING, so a fork block's transactions reach the pool exactly as
@@ -193,6 +201,10 @@ type revalidateBlockData struct {
 	// clearing that only runs under IsRevalidation.
 	useFullValidation bool
 
+	// headerProven carries legacy netsync's header proof (ValidateBlockOptions.HeaderProven) into
+	// the from-scratch retry, so the retry keeps the checkpoint ancestry the first attempt had.
+	headerProven bool
+
 	// isRevalidation preserves an operator reconsider request across the re-queue. Without it
 	// the retry re-enters with the flag false, trips the existence check, and is rejected with
 	// "block already exists as invalid" on every attempt.
@@ -242,11 +254,21 @@ type BlockValidation struct {
 	// settings contains operational parameters and feature flags
 	settings *settings.Settings
 
+	// oldBlockIDsPrefetchWindow is how many ancestors' block IDs the prefetch
+	// route of checkOldBlockIDs loads. Zero means defaultOldBlockIDsPrefetchWindow;
+	// tests shrink it so a chain past the window stays short.
+	oldBlockIDsPrefetchWindow uint64
+
 	// blockchainClient interfaces with the blockchain for operations
 	blockchainClient blockchain.ClientI
 
 	// subtreeStore provides persistent storage for block subtrees
 	subtreeStore blob.Store
+
+	// laneBitmapSlots bounds the lane bitmap reads in flight across every block, those a block
+	// stopped waiting for included (lane_rows.go); laneBitmapReadSlots makes it.
+	laneBitmapSlots     chan struct{}
+	laneBitmapSlotsOnce sync.Once
 
 	// subtreeBlockHeightRetention specifies how long subtrees should be retained
 	subtreeBlockHeightRetention uint32
@@ -989,6 +1011,18 @@ const (
 	revalidateParentNotMinedMaxRetries = 32
 )
 
+// retryOptions rebuilds the options of the full-validation retry from the carried fields.
+func (d revalidateBlockData) retryOptions() *ValidateBlockOptions {
+	return &ValidateBlockOptions{
+		PeerID:                  d.peerID,
+		IsRequeuedRetry:         true,
+		IsRevalidation:          d.isRevalidation,
+		DisableOptimisticMining: d.disableOptimisticMining,
+		IsCatchupMode:           d.isCatchupMode,
+		HeaderProven:            d.headerProven,
+	}
+}
+
 // processRevalidation runs one revalidateBlockChan item on the revalidation worker and schedules
 // its re-queue on failure. It must not block on anything slow: the worker is the channel's only
 // consumer, the channel holds 2, and once it is full enqueueRevalidation blocks its callers inside
@@ -1005,13 +1039,7 @@ func (u *BlockValidation) processRevalidation(ctx context.Context, blockData rev
 	// worker's retry counter below stays the only retry budget.
 	var err error
 	if blockData.useFullValidation {
-		err = u.ValidateBlockWithOptions(ctx, blockData.block, blockData.baseURL, &ValidateBlockOptions{
-			PeerID:                  blockData.peerID,
-			IsRequeuedRetry:         true,
-			IsRevalidation:          blockData.isRevalidation,
-			DisableOptimisticMining: blockData.disableOptimisticMining,
-			IsCatchupMode:           blockData.isCatchupMode,
-		})
+		err = u.ValidateBlockWithOptions(ctx, blockData.block, blockData.baseURL, blockData.retryOptions())
 	} else {
 		err = u.reValidateBlock(ctx, blockData)
 	}
@@ -1854,7 +1882,7 @@ func (u *BlockValidation) setTxMinedStatus(ctx context.Context, blockHash *chain
 	}
 
 	// add the transactions in this block to the block IDs in the utxo store
-	if err = model.UpdateTxMinedStatus(
+	if err = shadowLaneDuplicates(ctx, block, ids[0], unsetMined, model.UpdateTxMinedStatus(
 		ctx,
 		u.logger,
 		u.settings,
@@ -1865,7 +1893,7 @@ func (u *BlockValidation) setTxMinedStatus(ctx context.Context, blockHash *chain
 		onLongestChain,
 		u.blockchainClient, // blockchain client for slow-path checks of older block IDs
 		unsetMined...,
-	); err != nil {
+	)); err != nil {
 		// check whether we got already mined errors and mark the block as invalid
 		if errors.Is(err, errors.ErrBlockInvalid) {
 			// mark the block as invalid in the blockchain
@@ -2078,7 +2106,8 @@ func (u *BlockValidation) runOncePerBlock(blockHash *chainhash.Hash, opts *Valid
 //
 // Returns an error if validation fails or nil on success.
 
-// buildAddBlockOpts returns AddBlock options for a block stored by full validation.
+// buildAddBlockOpts returns AddBlock options for a peer block, stored by full validation or by
+// optimistic mining.
 //
 // A block can reach full validation already holding an id: catch-up's quick validation
 // reserves one through AssignBlockID before it can fail locally and fall through here, and a
@@ -2096,15 +2125,22 @@ func (u *BlockValidation) runOncePerBlock(blockHash *chainhash.Hash, opts *Valid
 // aerospike_enable_setmined_filter_expressions on: that path filters out a record already
 // holding the id and only unlocks it.
 //
-// For a block with no id (block.ID == 0) this returns nil and the store assigns one.
-func (u *BlockValidation) buildAddBlockOpts(block *model.Block) []blockchainoptions.StoreBlockOption {
-	if block.ID == 0 {
-		return nil
+// A block with no id (block.ID == 0) gets no WithID, so the store assigns one. The result is nil
+// only when there is no option at all: at shadow it can hold just WithLaneMapRows.
+func (u *BlockValidation) buildAddBlockOpts(ctx context.Context, block *model.Block) []blockchainoptions.StoreBlockOption {
+	var opts []blockchainoptions.StoreBlockOption
+
+	if block.ID != 0 {
+		opts = append(opts, blockchainoptions.WithID(uint64(block.ID)))
 	}
 
-	return []blockchainoptions.StoreBlockOption{
-		blockchainoptions.WithID(uint64(block.ID)),
+	// At utxostore_laneMigration shadow the block's lane map rows, stored in the block's own
+	// transaction; see laneRows.
+	if rows := u.laneRows(ctx, block); rows != nil {
+		opts = append(opts, blockchainoptions.WithLaneMapRows(rows))
 	}
+
+	return opts
 }
 
 func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block, baseURL string, disableOptimisticMining ...bool) error {
@@ -2168,6 +2204,14 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 				if blockMeta != nil && blockMeta.Invalid {
 					ctxLogger.Warnf("[ValidateBlock][%s] block already exists and is marked as invalid", block.Header.Hash().String())
 					return errors.NewBlockInvalidError("[ValidateBlock][%s] block already exists as invalid", block.Header.Hash().String())
+				}
+
+				// A stored valid block can be a fork accepted before the tip passed a
+				// checkpoint above it. It is not validated again, but it is no longer valid.
+				if blockMeta != nil {
+					if err = u.rejectStoredForkBelowCheckpoint(ctx, block.Header, blockMeta.Height); err != nil {
+						return err
+					}
 				}
 
 				ctxLogger.Warnf("[ValidateBlock][%s] tried to validate existing valid block", block.Header.Hash().String())
@@ -2307,14 +2351,21 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 		// and the operator revalidation endpoint carry authoritative heights), so this reads a
 		// trusted height. Run before the (expensive) header/subtree work so a checkpoint-
 		// conflicting block costs nothing. On the catchup path the header was already checked,
-		// so this is a cheap, harmless re-assertion. (Rejecting sub-checkpoint forks at
-		// non-checkpoint heights — the fork-depth rule — is a separate, broader change.)
+		// so this is a cheap, harmless re-assertion. Forks below a checkpoint at non-checkpoint
+		// heights are rejected by rejectForkBelowCheckpoint, right below.
 		if err = catchup.ValidateHeaderAgainstCheckpoints(block.Header, block.Height, u.settings.ChainCfgParams.Checkpoints); err != nil {
 			if !opts.IsRevalidation {
 				u.rejectFinalHeaderVerdict(block, opts.PeerID, baseURL, err.Error())
 			}
 
 			return errors.NewBlockInvalidError("[ValidateBlock][%s] block conflicts with hardcoded checkpoint", block.Hash().String(), err)
+		}
+
+		// Fork-below-checkpoint rule, before any subtree work. The non-optimistic path runs it
+		// again just before the block is stored, in case the tip passes a checkpoint while the
+		// subtrees validate.
+		if err = u.rejectForkBelowCheckpoint(ctx, block, opts, baseURL); err != nil {
+			return err
 		}
 
 		// Use cached headers if available (during catchup), otherwise fetch from blockchain.
@@ -2756,9 +2807,9 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 				ctxLogger.Warnf("[ValidateBlock][%s] failed to compute coinbase BUMP: %v", block.Hash().String(), err)
 			}
 
-			addBlockOpts := u.buildAddBlockOpts(block)
+			addBlockOpts := u.buildAddBlockOpts(ctx, block)
 			if err = u.blockchainClient.AddBlock(ctx, block, opts.PeerID, addBlockOpts...); err != nil {
-				return errors.NewServiceError("[ValidateBlock][%s] failed to store block", block.Hash().String(), err)
+				return u.storeBlockError(block, opts, baseURL, err)
 			}
 
 			ctxLogger.Infof("[ValidateBlock][%s] adding block optimistically to blockchain DONE", block.Hash().String())
@@ -2791,8 +2842,8 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 
 				// Create meta regenerator with peer URL for potential meta file recovery
 				metaRegenerator := u.createMetaRegenerator([]string{baseURL})
-				block.SetCheckpointConfirmedAncestor(u.checkpointConfirmedAncestor(decoupledCtx, block))
-				if ok, err := block.Valid(decoupledCtx, u.logger, u.subtreeStore, u.utxoStore, oldBlockIDsMap, blockHeaders, blockHeaderIDs, u.settings, metaRegenerator); !ok {
+				block.SetCheckpointConfirmedAncestor(u.checkpointConfirmedAncestor(decoupledCtx, block, opts.HeaderProven))
+				if ok, err := block.Valid(laneParentsContext(decoupledCtx, block), u.logger, u.subtreeStore, u.utxoStore, oldBlockIDsMap, blockHeaders, blockHeaderIDs, u.settings, metaRegenerator); !ok {
 					u.logger.Errorf("[ValidateBlock][%s] InvalidateBlock block is not valid in background: %v", block.String(), err)
 
 					// Block will not be cached on the optimistic-mining failure path —
@@ -2944,8 +2995,8 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 
 			// Create meta regenerator with peer URL for potential meta file recovery
 			metaRegenerator := u.createMetaRegenerator([]string{baseURL})
-			block.SetCheckpointConfirmedAncestor(u.checkpointConfirmedAncestor(ctx, block))
-			if ok, bodyBoundToHeader, err := block.ValidWithBinding(ctx, u.logger, u.subtreeStore, u.utxoStore, oldBlockIDsMap, blockHeaders, blockHeaderIDs, u.settings, metaRegenerator); !ok {
+			block.SetCheckpointConfirmedAncestor(u.checkpointConfirmedAncestor(ctx, block, opts.HeaderProven))
+			if ok, bodyBoundToHeader, err := block.ValidWithBinding(laneParentsContext(ctx, block), u.logger, u.subtreeStore, u.utxoStore, oldBlockIDsMap, blockHeaders, blockHeaderIDs, u.settings, metaRegenerator); !ok {
 				reason := "unknown"
 				if err != nil {
 					reason = err.Error()
@@ -3063,6 +3114,18 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 
 			u.logger.Infof("[ValidateBlock][%s] validating block DONE", block.Hash().String())
 
+			// Re-check the checkpoint fork rule: the tip can pass a checkpoint while the
+			// subtrees validate. Like the store below, it must not fail on a cancelled
+			// parent context after the subtree work is done.
+			recheckCtx, recheckCancel := context.WithTimeout(context.Background(), 30*time.Second)
+			err = u.rejectForkBelowCheckpoint(recheckCtx, block, opts, baseURL)
+			recheckCancel()
+
+			if err != nil {
+				releaseBlockNodes(block)
+				return err
+			}
+
 			// if valid, store the block (or update it if revalidating)
 			u.logger.Infof("[ValidateBlock][%s] adding block to blockchain", block.Hash().String())
 
@@ -3083,6 +3146,12 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 				}
 			} else {
 				// Normal case - add new block
+				// The options are built first, on the caller's context: at utxostore_laneMigration
+				// shadow they read the subtrees' lane bitmaps, for up to laneBitmapReadTimeout, and
+				// that time must not come out of the store's own budget below. A cancelled caller
+				// only leaves the block without lane rows.
+				addBlockOpts := u.buildAddBlockOpts(ctx, block)
+
 				// Use background context for critical database operation
 				// This prevents cascading cancellation from parent operations (e.g., fetch timeouts)
 				// ensuring data consistency by completing the write even if catchup is canceled
@@ -3093,10 +3162,9 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 					u.logger.Warnf("[ValidateBlock][%s] failed to compute coinbase BUMP: %v", block.Hash().String(), err)
 				}
 
-				addBlockOpts := u.buildAddBlockOpts(block)
 				if err = u.blockchainClient.AddBlock(storeCtx, block, opts.PeerID, addBlockOpts...); err != nil {
 					releaseBlockNodes(block)
-					return errors.NewServiceError("[ValidateBlock][%s] failed to store block", block.Hash().String(), err)
+					return u.storeBlockError(block, opts, baseURL, err)
 				}
 			}
 
@@ -3332,6 +3400,94 @@ func (u *BlockValidation) storeInvalidBlock(ctx context.Context, block *model.Bl
 	}
 
 	u.kafkaNotifyBlockInvalid(block, reason, peerID, peerURL)
+}
+
+// rejectForkBelowCheckpoint applies bitcoin-sv's bad-fork-prior-to-checkpoint rule
+// (gap-analysis 4697): a block below a checkpoint the tip has already passed is invalid.
+// Such a block is validated at its own height, so below Genesis or Chronicle its txs get
+// the older script rules. Only blocks at or below the highest checkpoint can
+// trip it, so the tip lookup is skipped for every block above it. ValidateBlock runs it
+// before subtree work and, on the non-optimistic path, again just before storing the
+// block, since the tip can pass a checkpoint in between during initial sync. The
+// optimistic path stores the block before any subtree work, right after the first check.
+func (u *BlockValidation) rejectForkBelowCheckpoint(ctx context.Context, block *model.Block, opts *ValidateBlockOptions, baseURL string) error {
+	checkpoints := u.settings.ChainCfgParams.Checkpoints
+	if !model.BelowCheckpoint(checkpoints, block.Height) {
+		return nil
+	}
+
+	_, tipMeta, err := u.blockchainClient.GetBestBlockHeader(ctx)
+	if err != nil {
+		return errors.NewServiceError("[ValidateBlock][%s] failed to get best block header for the checkpoint fork rule", block.Hash().String(), err)
+	}
+
+	if !model.ForkBelowCheckpoint(checkpoints, block.Height, tipMeta.Height) {
+		return nil
+	}
+
+	reason := fmt.Sprintf("bad-fork-prior-to-checkpoint: block height %d is below a checkpoint the tip (height %d) has passed", block.Height, tipMeta.Height)
+
+	if !opts.IsRevalidation {
+		u.rejectFinalHeaderVerdict(block, opts.PeerID, baseURL, reason)
+	}
+
+	return errors.NewBlockInvalidError("[ValidateBlock][%s] %s", block.Hash().String(), reason)
+}
+
+// storeBlockError returns the error for a failed AddBlock. The store rejects a fork below a
+// checkpoint the best block has passed as BlockInvalid, under its own lock, so it catches a tip
+// that passes the checkpoint after rejectForkBelowCheckpoint ran. That is a verdict on the block:
+// it is sent to p2p like rejectForkBelowCheckpoint's and returned as BlockInvalid. Any other
+// failure is this node's own.
+func (u *BlockValidation) storeBlockError(block *model.Block, opts *ValidateBlockOptions, baseURL string, err error) error {
+	if errors.Is(err, errors.ErrBlockInvalid) {
+		if !opts.IsRevalidation {
+			u.rejectFinalHeaderVerdict(block, opts.PeerID, baseURL, err.Error())
+		}
+
+		return errors.NewBlockInvalidError("[ValidateBlock][%s] the store rejected the block", block.Hash().String(), err)
+	}
+
+	return errors.NewServiceError("[ValidateBlock][%s] failed to store block", block.Hash().String(), err)
+}
+
+// rejectStoredForkBelowCheckpoint applies the checkpoint fork rule to a block already stored as
+// valid at height: one below a checkpoint the tip has passed that is not the main-chain block
+// at its height is a fork, and is refused. A main-chain block there is an ancestor of the
+// checkpoint and passes. Nothing is persisted and no peer is struck: the block was valid when
+// it was stored.
+func (u *BlockValidation) rejectStoredForkBelowCheckpoint(ctx context.Context, header *model.BlockHeader, height uint32) error {
+	checkpoints := u.settings.ChainCfgParams.Checkpoints
+	if !model.BelowCheckpoint(checkpoints, height) {
+		return nil
+	}
+
+	_, tipMeta, err := u.blockchainClient.GetBestBlockHeader(ctx)
+	if err != nil {
+		return errors.NewServiceError("[ValidateBlock][%s] failed to get best block header for the checkpoint fork rule", header.Hash().String(), err)
+	}
+
+	if !model.ForkBelowCheckpoint(checkpoints, height, tipMeta.Height) {
+		return nil
+	}
+
+	// The block's own id, then whether that id is on the main chain. Height alone does not
+	// say: the store keeps fork blocks at the same heights.
+	ids, err := u.blockchainClient.GetBlockHeaderIDs(ctx, header.Hash(), 1)
+	if err != nil || len(ids) == 0 {
+		return errors.NewServiceError("[ValidateBlock][%s] failed to get the block id for the checkpoint fork rule", header.Hash().String(), err)
+	}
+
+	onMainChain, err := u.blockchainClient.CheckBlockIsInCurrentChain(ctx, ids[:1])
+	if err != nil {
+		return errors.NewServiceError("[ValidateBlock][%s] failed to check the block is on the main chain for the checkpoint fork rule", header.Hash().String(), err)
+	}
+
+	if onMainChain {
+		return nil
+	}
+
+	return errors.NewBlockInvalidError("[ValidateBlock][%s] bad-fork-prior-to-checkpoint: stored block at height %d is below a checkpoint the tip (height %d) has passed and is not on the main chain", header.Hash().String(), height, tipMeta.Height)
 }
 
 // rejectFinalHeaderVerdict handles a FINAL verdict reached before the body is bound to the
@@ -3804,6 +3960,7 @@ func (u *BlockValidation) ReValidateBlockFromScratch(block *model.Block, baseURL
 		// opted out of, and flipping its per-block logging from debug to info.
 		disableOptimisticMining: opts.DisableOptimisticMining,
 		isCatchupMode:           opts.IsCatchupMode,
+		headerProven:            opts.HeaderProven,
 		// CachedHeaders is deliberately NOT carried: the run it holds is what failed, and the
 		// retry should re-fetch a fresh one from the store.
 	}
@@ -3877,7 +4034,7 @@ func (u *BlockValidation) enqueueRevalidation(data revalidateBlockData) {
 // alone; the reasoning is recorded on the expected-nBits block in ValidateBlockWithOptions.
 
 // checkpointConfirmedAncestor reports whether block b is an ancestor of the block with the
-// highest hardcoded checkpoint hash, by the stored headers. It is the ancestry predicate gating the
+// highest hardcoded checkpoint hash, by the stored headers or by legacy sync's header proof. It is the ancestry predicate gating the
 // below-checkpoint coinbase no-inflation skip in model.checkBlockRewardAndFees (threaded via
 // Block.SetCheckpointConfirmedAncestor): only an ancestor of the pinned checkpoint may skip,
 // because the pinned hash then transitively commits its coinbase.
@@ -3890,13 +4047,22 @@ func (u *BlockValidation) enqueueRevalidation(data revalidateBlockData) {
 // blocks included, in no defined order.
 //
 // It returns false, forcing full no-inflation enforcement, for any block above the checkpoint
-// (the skip cannot fire there anyway), while the block with the pinned hash is not yet stored (a
+// (the skip cannot fire there anyway). Without headerProven it also returns false while the block with the pinned hash is not yet stored (a
 // forward sync that has not reached the checkpoint), and for a block the walk does not land on.
 // Fail-safe: any lookup error yields false, so the no-inflation check runs.
 //
-// It also returns false for a block that is not in the blockchain store yet: the walk only ever
+// Without headerProven it also returns false for a block that is not in the blockchain store yet: the walk only ever
 // lands on a stored block. That case costs one indexed existence lookup, and it covers every block
 // arriving for the first time, a peer-served fork below the checkpoint included.
+//
+// headerProven is the other proof of the same fact, and it is the one a block arriving for the
+// first time can carry: legacy netsync's header cache saw the block's hash in a header run that a
+// matched hardcoded checkpoint commits. When it is true the predicate holds without the lookups,
+// so both skips it gates apply: the coinbase no-inflation skip and, with OutpointOnlyBelowCheckpoint
+// on, the validOrderAndBlessed skip (model.skipOrderAndBlessedBelowCheckpoint).
+// This is what lets full validation accept a proven legacy block whose fees were recorded as 0 by
+// an earlier outpoint-only quick attempt that never committed: the attempt's transaction records
+// stay in the UTXO store with fee 0, and subtree validation reuses those fees as they stand.
 //
 // Cost: for a stored block, one recursive query over the stored blocks between the checkpoint and
 // b, up to the checkpoint height in rows; a query for a pinned hash that is not stored returns at
@@ -3905,7 +4071,7 @@ func (u *BlockValidation) enqueueRevalidation(data revalidateBlockData) {
 // path, which stores a block before validating it. The walk grows with the block's age: an early
 // mainnet block walks close to the checkpoint height in rows, where the old check made two
 // indexed lookups.
-func (u *BlockValidation) checkpointConfirmedAncestor(ctx context.Context, b *model.Block) bool {
+func (u *BlockValidation) checkpointConfirmedAncestor(ctx context.Context, b *model.Block, headerProven bool) bool {
 	// The below-checkpoint no-inflation skip requires store fast-path support too, so the
 	// ancestry predicate cannot change the outcome on a store that never produces fee=0
 	// blocks. Short-circuit before any blockchain lookup on such stores (Aerospike, the
@@ -3924,6 +4090,10 @@ func (u *BlockValidation) checkpointConfirmedAncestor(ctx context.Context, b *mo
 	pinned := model.HighestCheckpointHash(checkpoints)
 	if pinned == nil {
 		return false
+	}
+
+	if headerProven {
+		return true
 	}
 
 	// The walk below can only land on a stored block, and it costs up to the checkpoint height in
@@ -3964,6 +4134,27 @@ func (u *BlockValidation) reValidateBlock(ctx context.Context, blockData revalid
 	// Server.deriveBlockHeight). No storeInvalidBlock: this is a revalidation path.
 	if err := catchup.ValidateHeaderAgainstCheckpoints(blockData.block.Header, blockData.block.Height, u.settings.ChainCfgParams.Checkpoints); err != nil {
 		return errors.NewBlockInvalidError("[reValidateBlock][%s] block conflicts with hardcoded checkpoint", blockData.block.Hash().String(), err)
+	}
+
+	// The checkpoint fork rule, before the subtree work below, as ValidateBlockWithOptions
+	// applies it. A revalidation: no verdict is sent for it. The optimistic paths queue blocks
+	// they already stored, and height alone does not tell a stored main-chain block, an
+	// ancestor of the checkpoint, from a fork.
+	if model.BelowCheckpoint(u.settings.ChainCfgParams.Checkpoints, blockData.block.Height) {
+		stored, err := u.blockchainClient.GetBlockExists(ctx, blockData.block.Hash())
+		if err != nil {
+			return errors.NewServiceError("[reValidateBlock][%s] failed to check whether the block is stored for the checkpoint fork rule", blockData.block.Hash().String(), err)
+		}
+
+		if stored {
+			err = u.rejectStoredForkBelowCheckpoint(ctx, blockData.block.Header, blockData.block.Height)
+		} else {
+			err = u.rejectForkBelowCheckpoint(ctx, blockData.block, &ValidateBlockOptions{IsRevalidation: true}, blockData.baseURL)
+		}
+
+		if err != nil {
+			return err
+		}
 	}
 
 	// The header hash must meet the target its own nBits declares, below checkpoint or not
@@ -4068,8 +4259,8 @@ func (u *BlockValidation) reValidateBlock(ctx context.Context, blockData revalid
 
 	// Create meta regenerator with peer URL for potential meta file recovery during revalidation
 	metaRegenerator := u.createMetaRegenerator([]string{blockData.baseURL})
-	blockData.block.SetCheckpointConfirmedAncestor(u.checkpointConfirmedAncestor(ctx, blockData.block))
-	if ok, err := blockData.block.Valid(ctx, u.logger, u.subtreeStore, u.utxoStore, oldBlockIDsMap, blockHeaders, blockHeaderIDs, u.settings, metaRegenerator); !ok {
+	blockData.block.SetCheckpointConfirmedAncestor(u.checkpointConfirmedAncestor(ctx, blockData.block, false))
+	if ok, err := blockData.block.Valid(laneParentsContext(ctx, blockData.block), u.logger, u.subtreeStore, u.utxoStore, oldBlockIDsMap, blockHeaders, blockHeaderIDs, u.settings, metaRegenerator); !ok {
 		u.logger.Errorf("[ReValidateBlock][%s] InvalidateBlock block is not valid in background: %v", blockData.block.String(), err)
 
 		// A corrupt error normally means "nothing was added, re-download" — invalidating would poison a
@@ -4404,7 +4595,12 @@ func (u *BlockValidation) checkOldBlockIDs(ctx context.Context, oldBlockIDsMap *
 
 	lookupHash := block.Header.HashPrevBlock
 
-	currentChainBlockIDs, err := u.blockchainClient.GetBlockHeaderIDs(ctx, lookupHash, 10_000)
+	prefetchWindow := u.oldBlockIDsPrefetchWindow
+	if prefetchWindow == 0 {
+		prefetchWindow = defaultOldBlockIDsPrefetchWindow
+	}
+
+	currentChainBlockIDs, err := u.blockchainClient.GetBlockHeaderIDs(ctx, lookupHash, prefetchWindow)
 	if err != nil {
 		return errors.NewServiceError("[Block Validation][checkOldBlockIDs][%s] failed to get block header ids", block.String(), err)
 	}
@@ -4525,6 +4721,10 @@ func (u *BlockValidation) checkOldBlockIDsInMemoryChainCheck(ctx context.Context
 // allocation. It matches the prefetch route's historical implicit cap
 // (len(currentChainBlockIDs) <= 10_000).
 const oldBlockIDsCacheHintCap = 10_000
+
+// defaultOldBlockIDsPrefetchWindow is how many ancestors' block IDs the prefetch
+// route of checkOldBlockIDs loads unless oldBlockIDsPrefetchWindow is set.
+const defaultOldBlockIDsPrefetchWindow = 10_000
 
 func (u *BlockValidation) iterateOldBlockIDsWithCachedLookup(
 	ctx context.Context,

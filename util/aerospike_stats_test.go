@@ -3,6 +3,7 @@ package util
 import (
 	"fmt"
 	"regexp"
+	"sync"
 	"testing"
 
 	"github.com/bsv-blockchain/teranode/ulogger"
@@ -125,6 +126,32 @@ func TestProcessAerospikeStatsHistogramBucketDelta(t *testing.T) {
 
 	processAerospikeStats(logger, fakeStatsSnapshot(cluster, 1, 24, 1000), buckets, regex)
 	require.Equal(t, uint64(24*1000), histogramSampleCount(t, histKey), "total equals latest cumulative")
+}
+
+// TestProcessAerospikeStatsConcurrentClients pins that two clients' stats loops can process their
+// stats at the same time: they share the delta state and the metrics. Run with -race.
+func TestProcessAerospikeStatsConcurrentClients(t *testing.T) {
+	clearAerospikeStatsLastState()
+
+	logger := ulogger.New("test")
+	regex := regexp.MustCompile(`[^a-zA-Z0-9]+`)
+	buckets := latencyBuckets()
+
+	var wg sync.WaitGroup
+
+	for client := range 2 {
+		wg.Add(1)
+
+		go func() {
+			defer wg.Done()
+
+			for refresh := range 50 {
+				processAerospikeStats(logger, fakeStatsSnapshot("test-concurrent-clients", 1, 24, float64(10*(client+1)+refresh)), buckets, regex)
+			}
+		}()
+	}
+
+	wg.Wait()
 }
 
 // TestProcessAerospikeStatsHistogramResetHandling verifies counter resets

@@ -18,6 +18,8 @@ import (
 // an output the coin rows do not hold is looked for in the body, so the no-such-output case uses
 // a parent whose body is intact.
 func TestParentOutputsForValidationNeverReadsTheBody(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newUncheckpointedStore(t)
 
 	// An unmined parent: one output unspent, one spent by a child, so answered from the journal.
