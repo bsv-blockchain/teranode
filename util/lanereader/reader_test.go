@@ -386,6 +386,8 @@ func TestReaderCountsTheMinedWriteWindowApart(t *testing.T) {
 		require.NoError(t, store.SetBlockMinedSet(ctx, &b1.hash, nil))
 
 		r := newReader(ulogger.TestLogger{}, store, 100)
+		clock := time.Now()
+		r.now = func() time.Time { return clock }
 		follow(t, r)
 
 		// b2 is the best block, and its mined write has not finished.
@@ -412,10 +414,20 @@ func TestReaderCountsTheMinedWriteWindowApart(t *testing.T) {
 		})
 
 		// A cleared flag on the same best block, as a reorg's clear leaves it, counts pending again.
-		// It starts a new wait, however long ago b2's first one began.
-		r.minedWaitSince = time.Now().Add(-minedWriteLimit - time.Second)
-
 		require.NoError(t, store.ClearBlockMinedSet(ctx, &b2.hash))
+
+		_, err = r.step(ctx, b2.hash)
+		require.NoError(t, err)
+
+		requireCounted(t, ReaderValidator, KindMinedPending, lane.ViaRow, func() {
+			r.CompareHeight(ReaderValidator, chainhash.Hash{}, lane.Pack(3, 6), false, 0)
+		})
+
+		// A write and another clear between two polls start a new wait, though the first is past.
+		require.NoError(t, store.SetBlockMinedSet(ctx, &b2.hash, nil))
+		require.NoError(t, store.ClearBlockMinedSet(ctx, &b2.hash))
+
+		clock = clock.Add(61 * time.Second)
 
 		_, err = r.step(ctx, b2.hash)
 		require.NoError(t, err)
@@ -429,6 +441,7 @@ func TestReaderCountsTheMinedWriteWindowApart(t *testing.T) {
 		// b3 arrives with its mined write unfinished; then a read of its flag fails. The failure is
 		// counted and leaves no block pending.
 		b3 := c.add(b2, takes(t, 3, 7))
+		b3Seen := clock
 
 		_, err = r.step(ctx, b2.hash)
 		require.NoError(t, err)
@@ -455,13 +468,24 @@ func TestReaderCountsTheMinedWriteWindowApart(t *testing.T) {
 			})
 		}
 
-		// A write still unfinished past the limit may have failed: its rows count lanes_only again.
+		// A write still unfinished a minute after b3 was first seen may have failed: its rows count
+		// lanes_only again, with no poll needed, as when the best block cannot be read.
 		r.source = store
 
 		_, err = r.step(ctx, b3.hash)
 		require.NoError(t, err)
 
-		r.minedWaitSince = time.Now().Add(-minedWriteLimit - time.Second)
+		clock = b3Seen.Add(59 * time.Second)
+
+		requireCounted(t, ReaderValidator, KindMinedPending, lane.ViaRow, func() {
+			r.CompareHeight(ReaderValidator, chainhash.Hash{}, lane.Pack(3, 7), false, 0)
+		})
+
+		clock = b3Seen.Add(61 * time.Second)
+
+		requireCounted(t, ReaderValidator, KindLanesOnly, lane.ViaRow, func() {
+			r.CompareHeight(ReaderValidator, chainhash.Hash{}, lane.Pack(3, 7), false, 0)
+		})
 
 		_, err = r.step(ctx, b3.hash)
 		require.NoError(t, err)
@@ -472,8 +496,7 @@ func TestReaderCountsTheMinedWriteWindowApart(t *testing.T) {
 
 		// b3 pending, then invalidated so b2 is best again: a view still holding b3 counts its row
 		// lanes_only, since b3 is no longer the best block.
-		r.source = store
-		r.minedWaitID = 0
+		require.NoError(t, store.ClearBlockMinedSet(ctx, &b3.hash))
 
 		_, err = r.step(ctx, b3.hash)
 		require.NoError(t, err)

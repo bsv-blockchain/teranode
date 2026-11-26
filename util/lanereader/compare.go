@@ -80,9 +80,13 @@ const (
 var kinds = []string{KindAgree, KindLanesOnly, KindTodayOnly, KindDifferentBlock, KindNoPosition, KindNoRows, KindNotLoaded, KindNotReady, KindOffChain, KindCoinbase, KindMinedPending}
 
 // minedPendingKind counts a lanes_only answer from a row of the best block under KindMinedPending
-// while today's mined write of that block has not finished.
+// while today's mined write of that block has not finished, up to the wait's deadline.
 func (r *Reader) minedPendingKind(kind string, a lane.Answer) string {
-	if kind == KindLanesOnly && a.Via == lane.ViaRow && a.BlockID != 0 && a.BlockID == r.minedPending.Load() {
+	if kind != KindLanesOnly || a.Via != lane.ViaRow {
+		return kind
+	}
+
+	if w := r.minedPending.Load(); w != nil && a.BlockID == w.id && r.now().Before(w.until) {
 		return KindMinedPending
 	}
 
