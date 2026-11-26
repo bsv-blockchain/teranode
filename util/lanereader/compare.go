@@ -72,9 +72,10 @@ const (
 	// KindMinedPending: lanes says a row of the best block took the position and today says not
 	// mined, while today's mined write of that block has not finished: the block's rows commit
 	// with it, and today's mined state lands after, about 3 s for a block of 26,000 on mainnet. Not
-	// a disagreement. The block is the best one at the follower's last read, a poll of up to a
-	// second behind, and counts for at most a minute; once the next block is read, one whose write
-	// is still running counts lanes_only.
+	// a disagreement. The block is the best one at the follower's last read; the follower reads a
+	// second after each step ends, and a slow read or index load lengthens that lag. It counts for
+	// at most a minute after the block was stored; once the next block is read, one whose write is
+	// still running counts lanes_only.
 	KindMinedPending = "mined_pending"
 )
 

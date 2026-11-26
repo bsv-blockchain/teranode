@@ -386,7 +386,7 @@ func TestReaderCountsTheMinedWriteWindowApart(t *testing.T) {
 		require.NoError(t, store.SetBlockMinedSet(ctx, &b1.hash, nil))
 
 		r := newReader(ulogger.TestLogger{}, store, 100)
-		clock := time.Now()
+		clock := storedAt(t, store, b2.hash)
 		r.now = func() time.Time { return clock }
 		follow(t, r)
 
@@ -423,38 +423,23 @@ func TestReaderCountsTheMinedWriteWindowApart(t *testing.T) {
 			r.CompareHeight(ReaderValidator, chainhash.Hash{}, lane.Pack(3, 6), false, 0)
 		})
 
-		// A write and another clear between two polls start a new wait, though the first is past.
-		require.NoError(t, store.SetBlockMinedSet(ctx, &b2.hash, nil))
-		require.NoError(t, store.ClearBlockMinedSet(ctx, &b2.hash))
-
-		clock = clock.Add(61 * time.Second)
-
-		_, err = r.step(ctx, b2.hash)
-		require.NoError(t, err)
-
-		requireCounted(t, ReaderValidator, KindMinedPending, lane.ViaRow, func() {
-			r.CompareHeight(ReaderValidator, chainhash.Hash{}, lane.Pack(3, 6), false, 0)
-		})
-
 		require.NoError(t, store.SetBlockMinedSet(ctx, &b2.hash, nil))
 
-		// b3 arrives with its mined write unfinished; then a read of its flag fails. The failure is
-		// counted and leaves no block pending.
+		// b3 arrives with its mined write unfinished; then a read of its flag fails, or comes back
+		// empty. The failure is counted and leaves no block pending.
 		b3 := c.add(b2, takes(t, 3, 7))
-		b3Seen := clock
-
-		_, err = r.step(ctx, b2.hash)
-		require.NoError(t, err)
-
-		requireCounted(t, ReaderValidator, KindMinedPending, lane.ViaRow, func() {
-			r.CompareHeight(ReaderValidator, chainhash.Hash{}, lane.Pack(3, 7), false, 0)
-		})
+		stored3 := storedAt(t, store, b3.hash)
+		clock = stored3
 
 		for _, failing := range []Source{headerFailingSource{store}, headerMissingSource{store}} {
 			r.source = store
 
-			_, err = r.step(ctx, b3.hash)
+			_, err = r.step(ctx, b2.hash)
 			require.NoError(t, err)
+
+			requireCounted(t, ReaderValidator, KindMinedPending, lane.ViaRow, func() {
+				r.CompareHeight(ReaderValidator, chainhash.Hash{}, lane.Pack(3, 7), false, 0)
+			})
 
 			r.source = failing
 			errorsBefore := testutil.ToFloat64(prometheusLaneReaderFollowErrors)
@@ -468,35 +453,9 @@ func TestReaderCountsTheMinedWriteWindowApart(t *testing.T) {
 			})
 		}
 
-		// A write still unfinished a minute after b3 was first seen may have failed: its rows count
-		// lanes_only again, with no poll needed, as when the best block cannot be read.
-		r.source = store
-
-		_, err = r.step(ctx, b3.hash)
-		require.NoError(t, err)
-
-		clock = b3Seen.Add(59 * time.Second)
-
-		requireCounted(t, ReaderValidator, KindMinedPending, lane.ViaRow, func() {
-			r.CompareHeight(ReaderValidator, chainhash.Hash{}, lane.Pack(3, 7), false, 0)
-		})
-
-		clock = b3Seen.Add(61 * time.Second)
-
-		requireCounted(t, ReaderValidator, KindLanesOnly, lane.ViaRow, func() {
-			r.CompareHeight(ReaderValidator, chainhash.Hash{}, lane.Pack(3, 7), false, 0)
-		})
-
-		_, err = r.step(ctx, b3.hash)
-		require.NoError(t, err)
-
-		requireCounted(t, ReaderValidator, KindLanesOnly, lane.ViaRow, func() {
-			r.CompareHeight(ReaderValidator, chainhash.Hash{}, lane.Pack(3, 7), false, 0)
-		})
-
 		// b3 pending, then invalidated so b2 is best again: a view still holding b3 counts its row
 		// lanes_only, since b3 is no longer the best block.
-		require.NoError(t, store.ClearBlockMinedSet(ctx, &b3.hash))
+		r.source = store
 
 		_, err = r.step(ctx, b3.hash)
 		require.NoError(t, err)
@@ -516,7 +475,54 @@ func TestReaderCountsTheMinedWriteWindowApart(t *testing.T) {
 		requireCounted(t, ReaderSubtreePrefetch, KindLanesOnly, lane.ViaRow, func() {
 			r.CompareBlocks(ReaderSubtreePrefetch, held, chainhash.Hash{}, lane.Pack(3, 7), nil)
 		})
+
+		// b4 is best and its write unfinished. Its rows count pending until a minute after it was
+		// stored, with no poll needed, as when the best block cannot be read.
+		b4 := c.add(b2, takes(t, 3, 8))
+		stored4 := storedAt(t, store, b4.hash)
+		clock = stored4
+
+		_, err = r.step(ctx, b2.hash)
+		require.NoError(t, err)
+
+		clock = stored4.Add(59 * time.Second)
+
+		requireCounted(t, ReaderValidator, KindMinedPending, lane.ViaRow, func() {
+			r.CompareHeight(ReaderValidator, chainhash.Hash{}, lane.Pack(3, 8), false, 0)
+		})
+
+		clock = stored4.Add(60 * time.Second)
+
+		requireCounted(t, ReaderValidator, KindLanesOnly, lane.ViaRow, func() {
+			r.CompareHeight(ReaderValidator, chainhash.Hash{}, lane.Pack(3, 8), false, 0)
+		})
+
+		// b5 replaces b4 as best and is invalidated: b4 is best again, still past its minute.
+		b5 := c.add(b4, takes(t, 3, 9))
+
+		_, err = r.step(ctx, b4.hash)
+		require.NoError(t, err)
+
+		_, err = store.InvalidateBlock(ctx, &b5.hash)
+		require.NoError(t, err)
+
+		_, err = r.step(ctx, b5.hash)
+		require.NoError(t, err)
+
+		requireCounted(t, ReaderValidator, KindLanesOnly, lane.ViaRow, func() {
+			r.CompareHeight(ReaderValidator, chainhash.Hash{}, lane.Pack(3, 8), false, 0)
+		})
 	})
+}
+
+// storedAt is when the store saved block hash, the start of its mined write's minute.
+func storedAt(t *testing.T, store blockchainstore.Store, hash chainhash.Hash) time.Time {
+	t.Helper()
+
+	_, meta, err := store.GetBlockHeader(t.Context(), &hash)
+	require.NoError(t, err)
+
+	return time.Unix(int64(meta.Timestamp), 0)
 }
 
 // headerFailingSource is a Source whose GetBlockHeader fails.

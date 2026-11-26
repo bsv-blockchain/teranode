@@ -61,9 +61,10 @@ const (
 	// maxUnreachable bounds the blocks remembered as having no held ancestor.
 	maxUnreachable = 1_024
 
-	// minedWriteLimit is how long a best block's mined write may stay unfinished and its answers
-	// still count mined_pending. Mainnet's took about 3 s for a block of 26,000; past the limit
-	// the write may have failed, so its answers count lanes_only again.
+	// minedWriteLimit is how long after a block is stored (its inserted_at) its rows' answers may
+	// count mined_pending while its mined write is unfinished. Mainnet's took about 3 s for a block
+	// of 26,000; past the limit the write may have failed, so its answers count lanes_only again,
+	// as do a later re-mark's, such as after a reorg back to the block.
 	minedWriteLimit = time.Minute
 )
 
@@ -109,19 +110,17 @@ type Reader struct {
 
 	// minedPending is the best block while today's mined write of it (setMined) has not finished,
 	// nil otherwise (KindMinedPending). It counts only until its deadline, so a write that failed
-	// stops counting even if the follower cannot read again. minedWait is the wait the follower
-	// last published, which only the follower touches; now is the clock, a field so a test can move it.
+	// stops counting even if the follower cannot read again. now is the clock, a field so a test
+	// can move it.
 	minedPending atomic.Pointer[minedWait]
-	minedWait    *minedWait
 	now          func() time.Time
 }
 
-// minedWait is one wait for a best block's mined write: the block, its mined_set generation (bumped
-// by every clear, so a clear between two polls starts a new wait) and the wait's deadline.
+// minedWait is a best block whose mined write has not finished, and when its answers stop counting
+// mined_pending: minedWriteLimit after the block was stored.
 type minedWait struct {
-	id         uint32
-	generation uint64
-	until      time.Time
+	id    uint32
+	until time.Time
 }
 
 var current atomic.Pointer[Reader]
@@ -328,7 +327,8 @@ func (r *Reader) step(ctx context.Context, tip chainhash.Hash) (chainhash.Hash, 
 // noteMinedWrite records whether today's mined write of the best block has finished, reading its
 // mined_set flag every poll: a block's rows commit with it, today's mined state lands seconds
 // later, and a reorg or an invalidation can clear the flag again. A failed read, or a write still
-// unfinished after minedWriteLimit, leaves no block pending, so its answers count as they did.
+// unfinished minedWriteLimit after the block was stored, leaves no block pending, so its answers
+// count as they did.
 func (r *Reader) noteMinedWrite(ctx context.Context, best chainhash.Hash) {
 	readCtx, cancel := context.WithTimeout(ctx, readTimeout)
 	_, meta, err := r.source.GetBlockHeader(readCtx, &best)
@@ -350,16 +350,10 @@ func (r *Reader) noteMinedWrite(ctx context.Context, best chainhash.Hash) {
 		}
 	case meta.MinedSet:
 		r.minedPending.Store(nil)
-		r.minedWait = nil
 	default:
-		w := r.minedWait
-		if w == nil || w.id != meta.ID || w.generation != meta.MinedSetGeneration {
-			w = &minedWait{id: meta.ID, generation: meta.MinedSetGeneration, until: r.now().Add(minedWriteLimit)}
-			r.minedWait = w
-		}
-
-		if r.now().Before(w.until) {
-			r.minedPending.Store(w)
+		until := time.Unix(int64(meta.Timestamp), 0).Add(minedWriteLimit)
+		if r.now().Before(until) {
+			r.minedPending.Store(&minedWait{id: meta.ID, until: until})
 
 			return
 		}
@@ -367,7 +361,7 @@ func (r *Reader) noteMinedWrite(ctx context.Context, best chainhash.Hash) {
 		r.minedPending.Store(nil)
 
 		if r.warnAMinute("mined_write_slow") {
-			r.logger.Warnf("[lanereader] best block %s's mined write has not finished after %s, so answers from its rows count lanes_only", best.String(), minedWriteLimit)
+			r.logger.Warnf("[lanereader] best block %s's mined write has not finished %s after the block was stored, so answers from its rows count lanes_only", best.String(), minedWriteLimit)
 		}
 	}
 }
