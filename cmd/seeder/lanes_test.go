@@ -654,6 +654,17 @@ func TestSeederGrantAfterAnUnrecordedOne(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, uint64(5), g.Len())
 
+	// A node that ran since the stopped run took grants of its own: the pending record does not
+	// let a run of the seed past them.
+	other := newTestBlockchainStore(t)
+	otherTip := chainhash.HashH([]byte("stopped then node ran"))
+	_, err = takeSeederGrant(ctx, ulogger.TestLogger{}, &failGrantRecordStore{Store: other}, s, otherTip, 5)
+	require.Error(t, err)
+	_, _, _, err = other.OpenLaneLease(ctx, blockchainoptions.LaneLeaseOpen{Holder: "node", Height: 3, GrantMin: 10, CloseAfter: time.Minute})
+	require.NoError(t, err)
+	_, err = takeSeederGrant(ctx, ulogger.TestLogger{}, other, s, otherTip, 5)
+	require.ErrorContains(t, err, "has handed out lane positions before")
+
 	// Once recorded, the grant clears the pending record, and a file of that tip with another
 	// record count is refused rather than given a second grant.
 	pending, err := readState(ctx, store, seederStateKey(seederPendingKeyPrefix, tip))
@@ -687,11 +698,17 @@ type blockingStore struct {
 	block string
 	nth   int64
 	calls atomic.Int64
+	// bound is how long the blocked call's context had left when the call began.
+	bound time.Duration
 }
 
 func (s *blockingStore) wait(ctx context.Context, name string) error {
 	if s.block != name || s.calls.Add(1) != max(s.nth, 1) {
 		return nil
+	}
+
+	if deadline, ok := ctx.Deadline(); ok {
+		s.bound = time.Until(deadline)
 	}
 
 	<-ctx.Done()
@@ -813,6 +830,7 @@ func TestSeederLaneStoreCallsAreBounded(t *testing.T) {
 			}
 
 			require.Less(t, time.Since(start), 300*time.Millisecond, "within a few times the 50 ms bound")
+			require.InDelta(t, float64(seederDBTimeout), float64(store.bound), float64(20*time.Millisecond), "the blocked call had the configured bound")
 		})
 	}
 }
