@@ -342,7 +342,7 @@ func TestNewSubtreeProcessor_WarnsMinedSetRetentionOff(t *testing.T) {
 			var warned int
 
 			for _, w := range logger.warns {
-				if strings.Contains(w, "MinedTxSetRetention") {
+				if strings.Contains(w, "MinedTxSetRetention") && strings.Contains(w, "can re-enter block assembly") {
 					warned++
 				}
 			}
