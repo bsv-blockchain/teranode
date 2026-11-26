@@ -819,12 +819,31 @@ UTXOs AS (
 )
 SELECT c.k FROM claim c`
 
-// runSeedPlan writes a seed's creates through createSeedPlanSQL.
+// createSeedPlanLaneSQL is createSeedPlanSQL writing each coin's lane_position, the position the
+// seeder gave the transaction that created it ($16, one per transaction, 0 for none). The seeding
+// route writes no identity row, so the coin is where a read finds a seeded transaction's position.
+var createSeedPlanLaneSQL = laneStatement(createSeedPlanSQL,
+	"unnest($1::int[], $2::smallint[], $3::bytea[], $4::uuid[], $5::uuid[])\n        AS t(k, leaf, txid, lo, hi)",
+	"unnest($1::int[], $2::smallint[], $3::bytea[], $4::uuid[], $5::uuid[], $16::bigint[])\n        AS t(k, leaf, txid, lo, hi, lane_position)",
+	"SELECT t.k, t.leaf, t.txid\n", "SELECT t.k, t.leaf, t.txid, t.lane_position\n",
+	"leaf, flags, ukey, txid, script)\n    SELECT o.satoshis, o.created_height, o.spendable_from, o.mined_height, o.block_id,\n           o.leaf, o.flags, o.ukey, o.txid, o.script\n",
+	"leaf, flags, ukey, txid, script, lane_position)\n    SELECT o.satoshis, o.created_height, o.spendable_from, o.mined_height, o.block_id,\n           o.leaf, o.flags, o.ukey, o.txid, o.script, NULLIF(c.lane_position, 0)\n",
+)
+
+// runSeedPlan writes a seed's creates through createSeedPlanSQL, or createSeedPlanLaneSQL when the
+// coins have a lane_position column and a transaction of the plan has a position.
 func (s *Store) runSeedPlan(ctx context.Context, q querier, p *createPlan) error {
-	rows, err := q.Query(ctx, createSeedPlanSQL,
-		p.idx, p.leaves, p.txids, p.lo, p.hi,
+	args := []any{p.idx, p.leaves, p.txids, p.lo, p.hi,
 		p.utxoSats, p.utxoHeights, p.utxoSpendable, p.utxoMined, p.utxoBlockIDs, p.utxoLeaves,
-		p.utxoFlags, p.utxoUkeys, p.utxoTxids, p.utxoScripts)
+		p.utxoFlags, p.utxoUkeys, p.utxoTxids, p.utxoScripts}
+	stmt := createSeedPlanSQL
+
+	if s.laneCoinColumn && p.lanes != nil {
+		stmt = createSeedPlanLaneSQL
+		args = append(args, p.lanes)
+	}
+
+	rows, err := q.Query(ctx, stmt, args...)
 	if err != nil {
 		return errors.NewStorageError("[utxoset][Create] seed", err)
 	}

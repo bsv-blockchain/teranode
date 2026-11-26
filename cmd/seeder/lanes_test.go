@@ -499,14 +499,11 @@ func TestSeederStampsPositionsOnTheLaneStores(t *testing.T) {
 			s.UtxoStore.UtxoStore = u
 		},
 		"utxoset": func(t *testing.T, s *settings.Settings) {
-			dsn, teardown, err := tpostgres.SetupTestPostgresContainer()
-			test.SkipIfContainerUnavailable(t, err)
-			require.NoError(t, err)
-			t.Cleanup(func() { _ = teardown() })
-
-			u := mustURL(t, dsn)
-			u.Scheme = "utxoset"
-			s.UtxoStore.UtxoStore = u
+			s.UtxoStore.UtxoStore = utxosetURL(t, false)
+		},
+		// The seeding route writes coins alone, with no identity row.
+		"utxoset seeding": func(t *testing.T, s *settings.Settings) {
+			s.UtxoStore.UtxoStore = utxosetURL(t, true)
 		},
 	}
 
@@ -520,7 +517,7 @@ func TestSeederStampsPositionsOnTheLaneStores(t *testing.T) {
 
 			select {
 			case err := <-done:
-				if name == "utxoset" {
+				if strings.HasPrefix(name, "utxoset") {
 					require.ErrorContains(t, err, "prepare-lane-schema")
 
 					store, err := utxoset.New(context.Background(), ulogger.TestLogger{}, f.settings, f.settings.UtxoStore.UtxoStore)
@@ -884,6 +881,25 @@ func TestSeededRowsCheckTheirBlocksBeforeAnyInsert(t *testing.T) {
 		require.NoError(t, err)
 		require.Empty(t, rows, "height %d", m.Height)
 	}
+}
+
+// utxosetURL starts a database for utxoset and returns its URL, with the seeding route on or off.
+func utxosetURL(t *testing.T, seeding bool) *url.URL {
+	dsn, teardown, err := tpostgres.SetupTestPostgresContainer()
+	test.SkipIfContainerUnavailable(t, err)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = teardown() })
+
+	u := mustURL(t, dsn)
+	u.Scheme = "utxoset"
+
+	if seeding {
+		q := u.Query()
+		q.Set("seeding", "true")
+		u.RawQuery = q.Encode()
+	}
+
+	return u
 }
 
 // At off the seeder takes no lease, gives no position and writes no row.
