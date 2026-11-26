@@ -191,7 +191,8 @@ checked during the import rather than first, so the set is decompressed only
 once. A mismatch fails the seed before `lastProcessed.dat` is written. Records
 stored by then may be corrupt, and a re-run keeps a record that already exists,
 so the seeder records in the block store that the import started
-(`seederImportIncomplete.dat`) and clears it only when every pass has verified.
+(`seederImportIncomplete.dat`) and clears it once every pass has read the whole
+set, checking the sidecar's checksum when there is one.
 While that record exists, a plain re-run refuses: wipe the UTXO store, then
 re-run with `-force`.
 

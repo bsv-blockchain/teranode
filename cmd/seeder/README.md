@@ -40,8 +40,9 @@ set, for a checksum mismatch, a damaged or missing piece, a store error or a
 cancel, the records stored by then may come from a damaged piece. The seeder
 skips a transaction that already exists, so a re-run would keep them. The
 seeder writes `seederImportIncomplete.dat` to the block store before a
-compressed import and clears it only when every pass has verified; while it
-exists, a plain re-run refuses. Wipe the UTXO store, then re-run with `-force`. A missing or cut piece that removes
+compressed import and clears it once every pass has read the whole set,
+checking the sidecar's checksum when there is one; while it exists, a plain
+re-run refuses. Wipe the UTXO store, then re-run with `-force`. A missing or cut piece that removes
 bytes from the stream fails the seed, through the footer counts or the zstd
 decoder. A changed byte inside a
 piece is caught by zstd's frame checksum when the pieces carry one (the `zstd`
