@@ -320,14 +320,17 @@ func (s *Server) blockBannedPeer(peerID string, ips []net.IP) map[string]struct{
 	return closed
 }
 
-// dropPeersClosedAtAdmission drops at the application layer each registered
-// peer whose connections an admission rule closed. It makes registry calls,
-// so it must not run under the admission lock.
+// dropPeersClosedAtAdmission drops at the application layer each peer whose
+// connections an admission rule closed. It makes registry calls, so it must
+// not run under the admission lock.
 //
-// A peer not in the registry yet may have its registration queued in the
-// batcher, from a message read before the close; a flush after the close
-// would register it with no connection, where no walk of GetPeers finds it.
-// Its queued state is dropped instead.
+// Every noted peer goes through removePeer without first asking the registry
+// whether it lists the peer: getPeer reports a failed lookup as "not
+// listed", and no later walk of GetPeers finds a closed connection, so that
+// peer would never be retried. removePeer forgets a registration still queued
+// in the batcher and clears the peer as sync peer even when its registry calls
+// fail; those failures are only logged, so a peer whose removal failed stays
+// registered with no connection.
 func (s *Server) dropPeersClosedAtAdmission(closed map[string]struct{}, reason string) {
 	for id := range closed {
 		pid, err := peer.Decode(id)
@@ -335,14 +338,7 @@ func (s *Server) dropPeersClosedAtAdmission(closed map[string]struct{}, reason s
 			continue
 		}
 
-		if _, inRegistry := s.getPeer(pid); inRegistry {
-			s.disconnectBannedPeerByID(s.gCtx, pid, reason)
-			continue
-		}
-
-		if s.registryBatcher != nil {
-			s.registryBatcher.forget(id)
-		}
+		s.disconnectBannedPeerByID(s.gCtx, pid, reason)
 	}
 }
 

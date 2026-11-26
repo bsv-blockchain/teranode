@@ -1172,10 +1172,11 @@ func (s *Server) shouldSkipBannedPeer(from string, messageType string) bool {
 // or subnet rule closed counts as IP-banned by its peer ID while a rule in
 // force covers the address it came from (admissionBans.closedByIPRule). A
 // peer that was only behind a relay on the banned address is not counted:
-// the ban names the relay. Only peers connected when a rule is applied are
-// remembered, so a banned host that was not connected then (a persisted ban
-// re-applied at startup, say) is refused a connection but not IP-checked
-// here.
+// the ban names the relay. A rule remembers only the peers GetPeers lists
+// with a connection when it is applied, and GetPeers lists only authors of
+// messages on joined topics. A banned host that was not connected then (a
+// persisted ban re-applied at startup, say), or was connected but had sent
+// no such message, is refused a connection but not IP-checked here.
 //
 // A banned host that signs gossip under fresh author keys has no connection
 // under those keys, so it is never IP-checked here. With admission on, its

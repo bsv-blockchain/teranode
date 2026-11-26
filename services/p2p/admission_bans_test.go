@@ -197,6 +197,16 @@ func TestBanOnAddress_DropsConnectedPeerFromRegistryAndSync(t *testing.T) {
 			ban:     func(t *testing.T, s *Server) { banAddr(t, s, "198.51.100.9") },
 		},
 		{
+			name:    "BanPeer RPC, registry lookup fails",
+			enforce: true,
+			ban: func(t *testing.T, s *Server) {
+				counting := newCountingRegistryClient(s.peerRegistry)
+				counting.failGetPeer = errors.NewServiceError("registry unavailable")
+				s.peerRegistry = counting
+				banAddr(t, s, "198.51.100.9")
+			},
+		},
+		{
 			name:    "BanPeer RPC, subnet",
 			enforce: true,
 			ban:     func(t *testing.T, s *Server) { banAddr(t, s, "198.51.100.0/24") },
