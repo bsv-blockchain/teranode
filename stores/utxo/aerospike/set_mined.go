@@ -794,9 +794,12 @@ func (s *Store) clearLockedOnRecordsMulti(items []lockClearItem) error {
 // are intact and the sweeper still finds the record; after finalize the record is a
 // correctly-finalized unmined tx and the next block-validation pass re-runs setMined.
 //
-// The pre-flight is cheap on the common path: it batch-reads only the creating flag for
-// the block's hashes (creating records are rare and transient), and does per-tx work only
-// for the few that are actually mid-flight.
+// The pre-flight does per-tx work only for the few records that are actually mid-flight:
+// creating records are rare and transient. Its fixed cost is one batch read of the creating
+// state of every hash of the call, before the write. It pays that on every call, whatever
+// utxostore_useCreateFirstOrder says, because the healers are not gated on the setting. The
+// read is not negligible beside the mined write itself, most of all on the Lua write path;
+// BenchmarkSetMinedMulti measures the whole call.
 func (s *Store) rollForwardCreatingBeforeSetMined(ctx context.Context, hashes []*chainhash.Hash, blockHeight uint32) error {
 	_, err := s.rollForwardCreatingRecords(ctx, hashes, blockHeight, false)
 
