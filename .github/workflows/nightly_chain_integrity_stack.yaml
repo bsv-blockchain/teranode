@@ -79,7 +79,7 @@ jobs:
           # The host ports Stack A (3 nodes) publishes, not whole ranges: a dev machine has
           # editors and proxies listening in between. Teranode nodes sit at 20000/22000/24000
           # plus the offsets gennodes maps (compose/cmd/gennodes, HostBase + container - 8000).
-          want="3010 3020 3030 15432 40300 40332 41300 41332 8600 18080 18081 18082 18083 18090 18100 18700"
+          want="3010 3020 3030 15432 16300 16332 17300 17332 8600 18080 18081 18082 18083 18090 18100 18700"
           for base in 20000 22000 24000; do
             for off in 0 81 83 84 85 87 90 93 99 1091 1292 1905 1906; do want="$want $((base + off))"; done
           done

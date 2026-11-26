@@ -57,7 +57,10 @@ const (
 	maxSVNodes     = 2
 	legacyPort     = 18444
 	svRPCPort      = 18332
-	svHostBaseRoot = 40000 // svnodeN publishes RPC on base+332, its sidecar's API on base+300
+	// svnodeN publishes RPC on base+332 and its sidecar's API on base+300. Kept below
+	// 32768, where Linux's ephemeral range starts: a port in that range can be held by
+	// any outgoing connection, and the bind then fails with "address already in use".
+	svHostBaseRoot = 16000
 	svHostStride   = 1000
 )
 

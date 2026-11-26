@@ -191,7 +191,7 @@ func TestChaosPlanes_SVNodes(t *testing.T) {
 	require.Equal(t, "svnode", sv2.Kind)
 	require.Equal(t, "svnode2", sv2.Name)
 	require.Equal(t, "http://svnode2:18332", sv2.RPCURL)
-	require.Equal(t, "http://localhost:41332", sv2.HostRPCURL)
+	require.Equal(t, "http://localhost:17332", sv2.HostRPCURL)
 	require.Equal(t, "/ip4/192.0.0.162/tcp/9906/p2p/"+sv2.AlertPeerID, sv2.AlertAddr)
 	require.Equal(t, []string{"10.200.0.11:18444", "10.200.0.12:18444", "10.200.0.13:18444", "10.200.0.21:18444"}, sv2.LegacyPeers)
 	require.NotNil(t, sv2.Sidecar)
