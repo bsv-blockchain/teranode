@@ -502,14 +502,9 @@ func TestHandleSingleTxAttachesVerdictHeader(t *testing.T) {
 	require.Contains(t, rec.Body.String(), "[handleSingleTx] Failed to process transaction: ")
 }
 
-// TestHandleKafkaTxMessage_RefusedWhileSyncing pins issue 2003 on the validator
-// Kafka consumer: in CATCHINGBLOCKS the message is dropped and committed
-// without the validator, the only thing that writes the UTXO store, ever
-// seeing it. RUNNING and a cached IDLE both validate. On a utxoset node a
-// message waits for the gate's first height read: a restart at the tip must not
-// drop what propagation already acknowledged, and an unreadable height leaves
-// the message uncommitted. The gRPC and HTTP endpoints are left ungated on
-// purpose, because block and subtree validation use them during catch-up.
+// Issue 2003 on the validator Kafka consumer: CATCHINGBLOCKS, or a utxoset node
+// below the checkpoint, drops and commits the message. On a utxoset node it waits
+// for the first height read; an unreadable height returns an error, uncommitted.
 func TestHandleKafkaTxMessage_RefusedWhileSyncing(t *testing.T) {
 	initPrometheusMetrics()
 
