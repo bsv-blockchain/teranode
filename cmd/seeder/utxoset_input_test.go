@@ -432,7 +432,8 @@ func TestProcessUTXOs_CompressedInput_InterruptedSeedReRuns(t *testing.T) {
 	require.Nil(t, tip, "a skipped import writes no checkpoint")
 }
 
-// requireStoredOutputs checks every wrapper's outputs in the named sqlite UTXO store.
+// requireStoredOutputs checks every wrapper's outputs in the named sqlite UTXO store,
+// each with its value and script, and unspent.
 func requireStoredOutputs(ctx context.Context, t *testing.T, tSettings *settings.Settings, name string, wrappers []*utxopersister.UTXOWrapper) {
 	t.Helper()
 
@@ -452,6 +453,11 @@ func requireStoredOutputs(ctx context.Context, t *testing.T, tSettings *settings
 			require.NotNil(t, out, "tx %s output %d", w.TxID, want.Index)
 			require.Equal(t, want.Value, out.Satoshis, "tx %s output %d", w.TxID, want.Index)
 			require.Equal(t, want.Script, []byte(*out.LockingScript), "tx %s output %d", w.TxID, want.Index)
+
+			spend, err := store.GetSpend(ctx, &utxo.Spend{TxID: &w.TxID, Vout: want.Index})
+			require.NoError(t, err)
+			require.Equal(t, int(utxo.Status_OK), spend.Status, "tx %s output %d must be unspent", w.TxID, want.Index)
+			require.Nil(t, spend.SpendingData, "tx %s output %d", w.TxID, want.Index)
 		}
 	}
 }

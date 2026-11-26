@@ -510,36 +510,36 @@ func processUTXOs(ctx context.Context, logger ulogger.Logger, appSettings *setti
 		// without importing. Only when the store proves a completed import of this
 		// exact snapshot; anything else is refused rather than quietly turned into
 		// an hours-long re-import the operator did not ask for.
-		var recoverable bool
+		var checked *utxoSetTip
 
-		recoverable, err = checkpointRecoverable(ctx, logger, blockStore, blockchainStore, utxoFile)
+		checked, err = recoverableTip(ctx, logger, blockStore, blockchainStore, utxoFile)
 		if err != nil {
 			return nil, err
 		}
 
-		if !recoverable {
+		if checked == nil {
 			return nil, errors.NewProcessingError("-recover-checkpoint refused: the block store does not record a completed import of %s with no BlockAssembler checkpoint; nothing was written. To import the UTXO set instead, re-run with -force", utxoFile)
 		}
 
 		logger.Infof("lastProcessed.dat matches %s and no BlockAssembler checkpoint was found; recovering the checkpoint without re-importing", utxoFile)
 
 		if expectedSHA256 == "" {
-			return readUTXOSetTip(utxoFile)
+			return checked, nil
 		}
 
-		// A compressed set is verified, and the checkpoint takes its tip from
-		// the bytes that were verified, matched again against the tip record.
-		var tip *utxoSetTip
+		// A compressed set is verified in a later opening, so the verified
+		// bytes must name the tip that was checked against the block store.
+		var verified *utxoSetTip
 
-		if tip, err = verifyUTXOSetFile(ctx, utxoFile, expectedSHA256); err != nil {
+		if verified, err = verifyUTXOSetFile(ctx, utxoFile, expectedSHA256); err != nil {
 			return nil, err
 		}
 
-		if matches, matchErr := importedTipMatches(ctx, logger, blockStore, tip, utxoFile); matchErr != nil || !matches {
-			return nil, errors.NewProcessingError("-recover-checkpoint refused: the verified %s is not the snapshot the block store records as imported", utxoFile, matchErr)
+		if *verified != *checked {
+			return nil, errors.NewProcessingError("-recover-checkpoint refused: %s changed while it was read: the verified set has tip %s at height %d, the block store records %s at height %d; nothing was written", utxoFile, verified.hash.String(), verified.height, checked.hash.String(), checked.height)
 		}
 
-		return tip, nil
+		return verified, nil
 	case !force:
 		var skip bool
 
@@ -742,44 +742,56 @@ const importedTipFilename = "seederImportedTip"
 // here intact. That is why this is only reached via -recover-checkpoint, never
 // -force. A mismatch or an unparsable record is not recoverable.
 func checkpointRecoverable(ctx context.Context, logger ulogger.Logger, blockStore blob.Store, blockchainStore blockchain.Store, utxoFile string) (bool, error) {
+	tip, err := recoverableTip(ctx, logger, blockStore, blockchainStore, utxoFile)
+
+	return tip != nil, err
+}
+
+// recoverableTip is checkpointRecoverable returning the tip it checked, or nil
+// when the checkpoint is not recoverable, so the caller records exactly that tip.
+func recoverableTip(ctx context.Context, logger ulogger.Logger, blockStore blob.Store, blockchainStore blockchain.Store, utxoFile string) (*utxoSetTip, error) {
 	b, err := blockStore.Get(ctx, nil, fileformat.FileTypeDat, bloboptions.WithFilename("lastProcessed"), bloboptions.WithNoHashPrefix())
 	if err != nil {
 		if errors.Is(err, errors.ErrNotFound) {
-			return false, nil
+			return nil, nil
 		}
 
-		return false, errors.NewStorageError("failed to read lastProcessed.dat", err)
+		return nil, errors.NewStorageError("failed to read lastProcessed.dat", err)
 	}
 
 	markerHeight, err := strconv.ParseUint(strings.TrimSpace(string(b)), 10, 32)
 	if err != nil {
 		logger.Warnf("lastProcessed.dat does not hold a height (%q), so it proves nothing about %s: %v", strings.TrimSpace(string(b)), utxoFile, err)
 
-		return false, nil
+		return nil, nil
 	}
 
 	tip, err := readUTXOSetTip(utxoFile)
 	if err != nil {
-		return false, err
+		return nil, err
 	}
 
 	if uint64(tip.height) != markerHeight {
 		logger.Warnf("lastProcessed.dat records height %d but %s is for height %d; it is not the import of this snapshot", markerHeight, utxoFile, tip.height)
 
-		return false, nil
+		return nil, nil
 	}
 
 	matches, err := importedTipMatches(ctx, logger, blockStore, tip, utxoFile)
 	if err != nil || !matches {
-		return false, err
+		return nil, err
 	}
 
 	stateExists, err := blockAssemblerStateExists(ctx, blockchainStore)
 	if err != nil {
-		return false, errors.NewStorageError("failed to check BlockAssembler state", err)
+		return nil, errors.NewStorageError("failed to check BlockAssembler state", err)
 	}
 
-	return !stateExists, nil
+	if stateExists {
+		return nil, nil
+	}
+
+	return tip, nil
 }
 
 // importedTipMatches reports whether the tip record names exactly tip's height

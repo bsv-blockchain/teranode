@@ -65,8 +65,8 @@ func uncompressedUTXOSetPath(path string) string {
 // utxoSetPieces returns the zstd files of the compressed UTXO set at path in
 // stream order: path itself when it is a file, otherwise every *.zst file in
 // the directory, sorted by name. Other files, such as a fetch's unfinished
-// .part files, are ignored; a piece missing from the middle is caught by the
-// footer counts and the checksum, not here.
+// .part files, are ignored. Nothing here notices a missing piece: one that
+// removes records is caught later by the footer counts or the checksum.
 func utxoSetPieces(path string) ([]string, error) {
 	info, err := os.Stat(path)
 	if err != nil {
