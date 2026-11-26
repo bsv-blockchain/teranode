@@ -189,8 +189,15 @@ func Seeder(logger ulogger.Logger, appSettings *settings.Settings, inputDir stri
 
 	if !skipUTXOs {
 		// Check the UTXO file exists
-		if _, err := os.Stat(utxoFile); os.IsNotExist(err) {
+		info, err := os.Stat(utxoFile)
+		if os.IsNotExist(err) {
 			usage(fmt.Sprintf("UTXO file %s does not exist", utxoFile))
+		}
+
+		// A pipe can be read once, and at shadow the seed reads the snapshot more than once,
+		// starting with the checksum below.
+		if err == nil && info.Mode()&os.ModeNamedPipe != 0 && appSettings.UtxoStore.LaneMigration.Stamps() {
+			return errors.NewConfigurationError("%s is a named pipe, but a seed at utxostore_laneMigration shadow reads the snapshot more than once: unpack it to disk", utxoFile)
 		}
 
 		if !skipChecksum {

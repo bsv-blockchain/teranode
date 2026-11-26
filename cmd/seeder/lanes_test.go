@@ -110,11 +110,17 @@ func TestSeedLayoutRefusesWhatItCannotPlace(t *testing.T) {
 	_, err = countSeedLayout(context.Background(), path)
 	require.ErrorContains(t, err, "the footer says 2 transactions")
 
-	// A pipe, read once, is refused before it is opened.
+	// A pipe, read once, is refused before it is opened, here and by the whole seeder at shadow
+	// before its first read.
 	fifo := filepath.Join(t.TempDir(), "snapshot.utxo-set")
 	require.NoError(t, syscall.Mkfifo(fifo, 0o600))
 	_, err = countSeedLayout(context.Background(), fifo)
 	require.ErrorContains(t, err, "named pipe")
+
+	f := newSeedFixture(t, settings.LaneMigrationShadow, 2, []uint32{1})
+	require.NoError(t, os.Remove(f.utxoFile()))
+	require.NoError(t, syscall.Mkfifo(f.utxoFile(), 0o600))
+	require.ErrorContains(t, Seeder(ulogger.TestLogger{}, f.settings, f.dir, f.name, true, false, false, false, false), "named pipe")
 
 	layout, err := countSeedLayout(context.Background(), writeCompleteSnapshotFile(t, one(5)))
 	require.NoError(t, err)
@@ -806,7 +812,7 @@ func TestSeederLaneStoreCallsAreBounded(t *testing.T) {
 				require.NoError(t, err)
 			}
 
-			require.Less(t, time.Since(start), time.Second)
+			require.Less(t, time.Since(start), 300*time.Millisecond, "within a few times the 50 ms bound")
 		})
 	}
 }
