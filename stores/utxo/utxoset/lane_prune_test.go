@@ -3,6 +3,7 @@ package utxoset
 import (
 	"context"
 	"encoding/binary"
+	"fmt"
 	"testing"
 	"time"
 
@@ -414,32 +415,66 @@ func TestJournalDropCountsAFailedJudgeAndStillDrops(t *testing.T) {
 }
 
 // TestJournalDropBudgetCutsAJudgingShort: the pass's budget ends a partition's judging part way, the
-// partition counts leaf_error, and the drop goes on.
+// partition counts leaf_error, and the drop goes on. The kept rows, spent last so they sit at the end
+// of the scan, are judged before the scan the budget cuts.
 func TestJournalDropBudgetCutsAJudgingShort(t *testing.T) {
-	s, ctx := newLaneCopyStore(t)
+	s, ctx := newUncheckpointedLaneCopyStore(t)
 	installJournalLaneIndex(t, journalIndexBlock)
 
-	budget, query := laneJudgePassBudget, lanePositionsQuery
-	laneJudgePassBudget = 300 * time.Millisecond
-	// A position read that takes two seconds, longer than the budget.
-	lanePositionsQuery = "SELECT k.txid, NULL::bigint FROM unnest($1::smallint[], $2::bytea[]) AS k(leaf, txid), pg_sleep(2)"
+	budget, scan := laneJudgePassBudget, laneJournalScanQuery
+	laneJudgePassBudget = 500 * time.Millisecond
+	// A scan whose first row comes after two seconds, longer than the budget.
+	laneJournalScanQuery = "SELECT ukey, txid, spending_txid%s FROM %s, pg_sleep(2)"
 
-	t.Cleanup(func() { laneJudgePassBudget, lanePositionsQuery = budget, query })
+	t.Cleanup(func() { laneJudgePassBudget, laneJournalScanQuery = budget, scan })
 
-	parent := mkTx(t, 1, 5_000)
+	parent := mkTx(t, 4, 5_000)
 	_, err := s.Create(ctx, parent, 1_000, utxo.WithLanePosition(journalParentPos), minedAt(1_000, 1))
 	require.NoError(t, err)
 
+	// Dropped: two spenders mined deep, read first.
 	spendWith(t, s, ctx, parent, 0, 1_010, utxo.WithLanePosition(journalSettled), minedAt(1_010, 2))
+	spendWith(t, s, ctx, parent, 1, 1_010, utxo.WithLanePosition(journalShallow), minedAt(1_010, 3))
+	// Carried, read last: a waiting spender no block took, and one the index says a deep block took.
+	spendWith(t, s, ctx, parent, 2, 1_010, utxo.WithLanePosition(journalUnmined))
+	spendWith(t, s, ctx, parent, 3, 1_010, utxo.WithLanePosition(journalSettled2))
 
+	require.NoError(t, s.ensureSpendJournalPartition(ctx, 1_700))
 	require.NoError(t, s.SetBlockHeight(1_728))
 
-	leafErrors := journalUnjudged(t, "leaf_error")
+	// The partition's row count the log reports the share against, from the statistics.
+	leaf := fmt.Sprintf("spend_journal_%d", 1_010/SpendJournalPartitionBlocks)
+	_, err = s.pool.Exec(ctx, "ANALYZE "+leaf)
+	require.NoError(t, err)
+
+	var total int64
+	require.NoError(t, s.pool.QueryRow(ctx, laneJournalRowsSQL, leaf).Scan(&total))
+	require.EqualValues(t, 4, total)
+
+	before := map[string]float64{
+		"leaf_error":  journalUnjudged(t, "leaf_error"),
+		"both keep":   journalVerdicts(t, lanereader.PruneKeep, lanereader.PruneKeep, lanereader.ReasonSpenderUnmined),
+		"lanes only":  journalVerdicts(t, lanereader.PruneKeep, lanereader.PruneDelete, lanereader.ReasonSettled),
+		"both delete": journalVerdicts(t, lanereader.PruneDelete, lanereader.PruneDelete, lanereader.ReasonSettled),
+		"today only":  journalVerdicts(t, lanereader.PruneDelete, lanereader.PruneKeep, lanereader.ReasonSpenderShallow),
+		"rows":        journalReads(t, "journal_row"),
+	}
 
 	dropped, err := s.dropSpendJournalPartitionsBelow(ctx, 1_440)
 	require.NoError(t, err)
 	require.Positive(t, dropped)
-	require.Equal(t, leafErrors+1, journalUnjudged(t, "leaf_error"))
+	require.Equal(t, before["leaf_error"]+1, journalUnjudged(t, "leaf_error"))
+
+	require.Equal(t, before["both keep"]+1, journalVerdicts(t, lanereader.PruneKeep, lanereader.PruneKeep, lanereader.ReasonSpenderUnmined))
+	require.Equal(t, before["lanes only"]+1, journalVerdicts(t, lanereader.PruneKeep, lanereader.PruneDelete, lanereader.ReasonSettled))
+	require.Equal(t, before["both delete"], journalVerdicts(t, lanereader.PruneDelete, lanereader.PruneDelete, lanereader.ReasonSettled), "the scan was cut")
+	require.Equal(t, before["today only"], journalVerdicts(t, lanereader.PruneDelete, lanereader.PruneKeep, lanereader.ReasonSpenderShallow), "the scan was cut")
+	require.Equal(t, before["rows"]+2, journalReads(t, "journal_row"), "only the kept rows")
+
+	for vout, carried := range []bool{false, false, true, true} {
+		_, ok := journalLane(t, s, ctx, parent, uint32(vout)) //nolint:gosec // four outputs
+		require.Equal(t, carried, ok, "output %d", vout)
+	}
 }
 
 // TestJournalDropReadsAPreservedParentsPosition: a parent known only by its preserved copy, whose
