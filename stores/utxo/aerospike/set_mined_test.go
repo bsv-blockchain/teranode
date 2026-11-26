@@ -178,100 +178,109 @@ func TestExtraRecordItemsReportsReadFailures(t *testing.T) {
 	require.Equal(t, 3, items[0].childCount)
 }
 
-// TestApplyLockClearWorkClearsHealthyTxWhenASiblingReadFails: a failed count
-// read reaches the caller with its txid and keeps `creating` on that master,
-// while the healthy transaction in the same batch still loses it.
-func TestApplyLockClearWorkClearsHealthyTxWhenASiblingReadFails(t *testing.T) {
+// TestApplyLockClearWorkReportsFailures checks the FILTERED_OUT follow-up when a
+// read or a clear fails: each failure names its transaction, the failing
+// transaction's master keeps `creating`, and healthy transactions still lose it.
+func TestApplyLockClearWorkReportsFailures(t *testing.T) {
 	t.Parallel()
 
 	if testing.Short() {
 		t.Skip("Skipping Aerospike integration test in short mode")
 	}
 
-	ctx := context.Background()
-	store, client := setupStoreForLockTest(t)
-	store.utxoBatchSize = 4
-
-	healthy := txWithOutputs(t, 10)
-	failing := txWithOutputs(t, 9)
-
-	for _, tx := range []*bt.Tx{healthy, failing} {
-		_, err := store.Create(ctx, tx, 100)
-		require.NoError(t, err)
+	type rec struct {
+		tx  int    // index into txs
+		idx uint32 // record index, 0 is the master
 	}
 
-	healthyHash := healthy.TxIDChainHash()
-
-	for idx := uint32(0); idx <= 2; idx++ {
-		require.NoError(t, client.PutBins(nil, recordKey(t, store, healthyHash, idx), aerospike.NewBin(fields.Creating.String(), true)))
+	type named struct {
+		tx   int
+		text string // expected after the txid in the error
 	}
 
-	require.NoError(t, client.PutBins(nil, recordKey(t, store, failing.TxIDChainHash(), 0), aerospike.NewBin(fields.Creating.String(), true)))
-
-	// Fail only the count read of the second transaction.
-	failRecordsAfterBatch(t, store, client, []*aerospike.Key{recordKey(t, store, failing.TxIDChainHash(), 0)}, func(r aerospike.BatchRecordIfc) bool {
-		_, isRead := r.(*aerospike.BatchRead)
-		return isRead
-	})
-
-	err := store.applyLockClearWork(ctx, lockClearWork{fullUnlock: []chainhash.Hash{*healthyHash, *failing.TxIDChainHash()}})
-	require.ErrorContains(t, err, "readExtraRecordCounts")
-	require.ErrorContains(t, err, failing.TxIDChainHash().String())
-
-	for idx := uint32(0); idx <= 2; idx++ {
-		require.Falsef(t, hasCreating(t, client, store, healthyHash, idx), "record %d of the healthy transaction must lose creating", idx)
+	isBatchRead := func(r aerospike.BatchRecordIfc) bool {
+		_, ok := r.(*aerospike.BatchRead)
+		return ok
 	}
 
-	require.True(t, hasCreating(t, client, store, failing.TxIDChainHash(), 0), "a master whose read failed must keep creating")
-}
+	for _, tc := range []struct {
+		name     string
+		outputs  []int // one transaction per entry, at batch size 4; the first is healthy
+		creating []rec
+		fail     []rec
+		match    func(aerospike.BatchRecordIfc) bool
+		wantErr  []named
+		keep     []rec
+		lose     []rec
+	}{
+		{
+			name:     "count read fails",
+			outputs:  []int{10, 9},
+			creating: []rec{{0, 0}, {0, 1}, {0, 2}, {1, 0}},
+			fail:     []rec{{1, 0}},
+			match:    isBatchRead,
+			wantErr:  []named{{1, "] failed to read the extra record count"}},
+			keep:     []rec{{1, 0}},
+			lose:     []rec{{0, 0}, {0, 1}, {0, 2}},
+		},
+		{
+			name:     "extra record and master clears fail",
+			outputs:  []int{2, 10, 2},
+			creating: []rec{{0, 0}, {1, 0}, {2, 0}},
+			fail:     []rec{{1, 1}, {2, 0}},
+			match:    isBatchWrite,
+			wantErr:  []named{{1, "] failed to clear record 1"}, {2, "] failed to clear record 0"}},
+			keep:     []rec{{1, 0}},
+			lose:     []rec{{0, 0}, {1, 2}},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			store, client := setupStoreForLockTest(t)
+			store.utxoBatchSize = 4
 
-// TestApplyLockClearWorkReportsFailedClears checks the FILTERED_OUT follow-up
-// when clears fail: each failure names its transaction and record, and a failed
-// extra record keeps `creating` on its master.
-func TestApplyLockClearWorkReportsFailedClears(t *testing.T) {
-	t.Parallel()
+			hashes := make([]*chainhash.Hash, len(tc.outputs))
+			fullUnlock := make([]chainhash.Hash, len(tc.outputs))
 
-	if testing.Short() {
-		t.Skip("Skipping Aerospike integration test in short mode")
+			for i, outputs := range tc.outputs {
+				tx := txWithOutputs(t, outputs)
+				_, err := store.Create(ctx, tx, 100)
+				require.NoError(t, err)
+
+				hashes[i] = tx.TxIDChainHash()
+				fullUnlock[i] = *hashes[i]
+			}
+
+			for _, r := range tc.creating {
+				require.NoError(t, client.PutBins(nil, recordKey(t, store, hashes[r.tx], r.idx), aerospike.NewBin(fields.Creating.String(), true)))
+			}
+
+			failKeys := make([]*aerospike.Key, 0, len(tc.fail))
+			for _, r := range tc.fail {
+				failKeys = append(failKeys, recordKey(t, store, hashes[r.tx], r.idx))
+			}
+
+			attempted := failRecordsAfterBatch(t, store, client, failKeys, tc.match)
+
+			// The healthy transaction comes first, so a failure named after the wrong item shows.
+			err := store.applyLockClearWork(ctx, lockClearWork{fullUnlock: fullUnlock})
+			require.True(t, *attempted)
+			require.ErrorIs(t, err, errors.ErrStorageError)
+			require.NotContains(t, err.Error(), hashes[0].String())
+
+			for _, w := range tc.wantErr {
+				require.ErrorContains(t, err, hashes[w.tx].String()+w.text)
+			}
+
+			for _, r := range tc.keep {
+				require.Truef(t, hasCreating(t, client, store, hashes[r.tx], r.idx), "record %d of tx %d must keep creating", r.idx, r.tx)
+			}
+
+			for _, r := range tc.lose {
+				require.Falsef(t, hasCreating(t, client, store, hashes[r.tx], r.idx), "record %d of tx %d must lose creating", r.idx, r.tx)
+			}
+		})
 	}
-
-	ctx := context.Background()
-	store, client := setupStoreForLockTest(t)
-	store.utxoBatchSize = 4
-
-	healthy := txWithOutputs(t, 2)
-	paginated := txWithOutputs(t, 10)
-	single := txWithOutputs(t, 2)
-
-	for _, tx := range []*bt.Tx{healthy, paginated, single} {
-		_, err := store.Create(ctx, tx, 100)
-		require.NoError(t, err)
-	}
-
-	healthyHash := healthy.TxIDChainHash()
-	paginatedHash := paginated.TxIDChainHash()
-	singleHash := single.TxIDChainHash()
-
-	for _, key := range []*aerospike.Key{recordKey(t, store, healthyHash, 0), recordKey(t, store, paginatedHash, 0), recordKey(t, store, singleHash, 0)} {
-		require.NoError(t, client.PutBins(nil, key, aerospike.NewBin(fields.Creating.String(), true)))
-	}
-
-	// Fail the clear of the paginated transaction's first extra record and of the
-	// single-record transaction's master.
-	clearAttempted := failRecordsAfterBatch(t, store, client,
-		[]*aerospike.Key{recordKey(t, store, paginatedHash, 1), recordKey(t, store, singleHash, 0)}, isBatchWrite)
-
-	// The healthy transaction comes first, so a failure named after the wrong item shows.
-	err := store.applyLockClearWork(ctx, lockClearWork{fullUnlock: []chainhash.Hash{*healthyHash, *paginatedHash, *singleHash}})
-	require.True(t, *clearAttempted)
-	require.ErrorIs(t, err, errors.ErrStorageError)
-	require.ErrorContains(t, err, paginatedHash.String()+"] failed to clear record 1")
-	require.ErrorContains(t, err, singleHash.String()+"] failed to clear record 0")
-
-	require.True(t, hasCreating(t, client, store, paginatedHash, 0), "a failed extra record must keep creating on its master")
-	require.False(t, hasCreating(t, client, store, paginatedHash, 2), "the other extra record is still cleared")
-	require.False(t, hasCreating(t, client, store, healthyHash, 0), "a healthy master in the same batch is cleared")
-	require.NotContains(t, err.Error(), healthyHash.String())
 }
 
 // TestClearLockedOnRecordsMultiMasterItem pins the master write: it deletes only

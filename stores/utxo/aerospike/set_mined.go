@@ -556,9 +556,10 @@ type lockClearWork struct {
 	items []lockClearItem
 	// fullUnlock: transactions whose record state is unknown from the batch (the
 	// expression write was FILTERED_OUT, so the child count and even the master's
-	// lock state were not returned). applyLockClearWork reads both, deletes
-	// `creating` on every extra record and then on the master, and
-	// SetLocked(false) clears `locked` on every record.
+	// lock state were not returned). applyLockClearWork reads both and deletes
+	// `creating` on every extra record. It deletes it on the master only when
+	// every extra record was cleared. SetLocked(false) clears `locked` on every
+	// record.
 	fullUnlock []chainhash.Hash
 }
 
