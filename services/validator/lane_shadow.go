@@ -22,9 +22,16 @@ type parentShadow struct {
 	seenAt map[chainhash.Hash]struct{}
 }
 
-// compare answers parent, at lane position pos, beside today's answer: mined at height, or not.
-func (s *parentShadow) compare(reader string, parent chainhash.Hash, pos uint64, mined bool, height uint32) {
+// compare answers parent, at lane position pos, beside today's answer: mined at height, or not. A
+// coinbase parent is counted as one, not compared (lanereader.KindCoinbase).
+func (s *parentShadow) compare(reader string, parent chainhash.Hash, pos uint64, coinbase, mined bool, height uint32) {
 	if s.reader == nil || s.repeat(parent) {
+		return
+	}
+
+	if coinbase {
+		s.reader.CountCoinbase(reader)
+
 		return
 	}
 
@@ -33,9 +40,15 @@ func (s *parentShadow) compare(reader string, parent chainhash.Hash, pos uint64,
 
 // compareBlocks answers parent, at lane position pos, beside today's answer given as its mined
 // block list: a prefetched parent's record carries the list, which a height alone cannot stand in
-// for, since the lowest height may be a fork block's.
-func (s *parentShadow) compareBlocks(reader string, parent chainhash.Hash, pos uint64, blockIDs []uint32) {
+// for, since the lowest height may be a fork block's. A coinbase parent is counted as one.
+func (s *parentShadow) compareBlocks(reader string, parent chainhash.Hash, pos uint64, coinbase bool, blockIDs []uint32) {
 	if s.reader == nil || s.repeat(parent) {
+		return
+	}
+
+	if coinbase {
+		s.reader.CountCoinbase(reader)
+
 		return
 	}
 

@@ -93,6 +93,14 @@ type ValidateBlockOptions struct {
 	// This is used to track peer behavior during subtree validation.
 	PeerID string
 
+	// HeaderProven is legacy netsync's proof that the block's hash sits in a header run that a
+	// matched hardcoded checkpoint commits (headerCache.Proven). It is the same proof the unified
+	// below-checkpoint route rests on, and it counts as checkpoint ancestry
+	// (checkpointConfirmedAncestor). That gates the coinbase no-inflation skip and, with
+	// OutpointOnlyBelowCheckpoint on, the validOrderAndBlessed skip, for every proven legacy block
+	// that takes full validation. Every caller other than netsync leaves it false.
+	HeaderProven bool
+
 	// KeepBlockAssemblyHandoff asks subtree validation to hand the block's unseen transactions
 	// to block assembly even though the FSM is in CATCHINGBLOCKS. Catchup sets it for a short
 	// run that started from RUNNING, so a fork block's transactions reach the pool exactly as
@@ -193,6 +201,10 @@ type revalidateBlockData struct {
 	// clearing that only runs under IsRevalidation.
 	useFullValidation bool
 
+	// headerProven carries legacy netsync's header proof (ValidateBlockOptions.HeaderProven) into
+	// the from-scratch retry, so the retry keeps the checkpoint ancestry the first attempt had.
+	headerProven bool
+
 	// isRevalidation preserves an operator reconsider request across the re-queue. Without it
 	// the retry re-enters with the flag false, trips the existence check, and is rejected with
 	// "block already exists as invalid" on every attempt.
@@ -241,6 +253,11 @@ type BlockValidation struct {
 
 	// settings contains operational parameters and feature flags
 	settings *settings.Settings
+
+	// oldBlockIDsPrefetchWindow is how many ancestors' block IDs the prefetch
+	// route of checkOldBlockIDs loads. Zero means defaultOldBlockIDsPrefetchWindow;
+	// tests shrink it so a chain past the window stays short.
+	oldBlockIDsPrefetchWindow uint64
 
 	// blockchainClient interfaces with the blockchain for operations
 	blockchainClient blockchain.ClientI
@@ -994,6 +1011,18 @@ const (
 	revalidateParentNotMinedMaxRetries = 32
 )
 
+// retryOptions rebuilds the options of the full-validation retry from the carried fields.
+func (d revalidateBlockData) retryOptions() *ValidateBlockOptions {
+	return &ValidateBlockOptions{
+		PeerID:                  d.peerID,
+		IsRequeuedRetry:         true,
+		IsRevalidation:          d.isRevalidation,
+		DisableOptimisticMining: d.disableOptimisticMining,
+		IsCatchupMode:           d.isCatchupMode,
+		HeaderProven:            d.headerProven,
+	}
+}
+
 // processRevalidation runs one revalidateBlockChan item on the revalidation worker and schedules
 // its re-queue on failure. It must not block on anything slow: the worker is the channel's only
 // consumer, the channel holds 2, and once it is full enqueueRevalidation blocks its callers inside
@@ -1010,13 +1039,7 @@ func (u *BlockValidation) processRevalidation(ctx context.Context, blockData rev
 	// worker's retry counter below stays the only retry budget.
 	var err error
 	if blockData.useFullValidation {
-		err = u.ValidateBlockWithOptions(ctx, blockData.block, blockData.baseURL, &ValidateBlockOptions{
-			PeerID:                  blockData.peerID,
-			IsRequeuedRetry:         true,
-			IsRevalidation:          blockData.isRevalidation,
-			DisableOptimisticMining: blockData.disableOptimisticMining,
-			IsCatchupMode:           blockData.isCatchupMode,
-		})
+		err = u.ValidateBlockWithOptions(ctx, blockData.block, blockData.baseURL, blockData.retryOptions())
 	} else {
 		err = u.reValidateBlock(ctx, blockData)
 	}
@@ -2819,7 +2842,7 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 
 				// Create meta regenerator with peer URL for potential meta file recovery
 				metaRegenerator := u.createMetaRegenerator([]string{baseURL})
-				block.SetCheckpointConfirmedAncestor(u.checkpointConfirmedAncestor(decoupledCtx, block))
+				block.SetCheckpointConfirmedAncestor(u.checkpointConfirmedAncestor(decoupledCtx, block, opts.HeaderProven))
 				if ok, err := block.Valid(laneParentsContext(decoupledCtx, block), u.logger, u.subtreeStore, u.utxoStore, oldBlockIDsMap, blockHeaders, blockHeaderIDs, u.settings, metaRegenerator); !ok {
 					u.logger.Errorf("[ValidateBlock][%s] InvalidateBlock block is not valid in background: %v", block.String(), err)
 
@@ -2972,7 +2995,7 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 
 			// Create meta regenerator with peer URL for potential meta file recovery
 			metaRegenerator := u.createMetaRegenerator([]string{baseURL})
-			block.SetCheckpointConfirmedAncestor(u.checkpointConfirmedAncestor(ctx, block))
+			block.SetCheckpointConfirmedAncestor(u.checkpointConfirmedAncestor(ctx, block, opts.HeaderProven))
 			if ok, bodyBoundToHeader, err := block.ValidWithBinding(laneParentsContext(ctx, block), u.logger, u.subtreeStore, u.utxoStore, oldBlockIDsMap, blockHeaders, blockHeaderIDs, u.settings, metaRegenerator); !ok {
 				reason := "unknown"
 				if err != nil {
@@ -3937,6 +3960,7 @@ func (u *BlockValidation) ReValidateBlockFromScratch(block *model.Block, baseURL
 		// opted out of, and flipping its per-block logging from debug to info.
 		disableOptimisticMining: opts.DisableOptimisticMining,
 		isCatchupMode:           opts.IsCatchupMode,
+		headerProven:            opts.HeaderProven,
 		// CachedHeaders is deliberately NOT carried: the run it holds is what failed, and the
 		// retry should re-fetch a fresh one from the store.
 	}
@@ -4010,7 +4034,7 @@ func (u *BlockValidation) enqueueRevalidation(data revalidateBlockData) {
 // alone; the reasoning is recorded on the expected-nBits block in ValidateBlockWithOptions.
 
 // checkpointConfirmedAncestor reports whether block b is an ancestor of the block with the
-// highest hardcoded checkpoint hash, by the stored headers. It is the ancestry predicate gating the
+// highest hardcoded checkpoint hash, by the stored headers or by legacy sync's header proof. It is the ancestry predicate gating the
 // below-checkpoint coinbase no-inflation skip in model.checkBlockRewardAndFees (threaded via
 // Block.SetCheckpointConfirmedAncestor): only an ancestor of the pinned checkpoint may skip,
 // because the pinned hash then transitively commits its coinbase.
@@ -4023,13 +4047,22 @@ func (u *BlockValidation) enqueueRevalidation(data revalidateBlockData) {
 // blocks included, in no defined order.
 //
 // It returns false, forcing full no-inflation enforcement, for any block above the checkpoint
-// (the skip cannot fire there anyway), while the block with the pinned hash is not yet stored (a
+// (the skip cannot fire there anyway). Without headerProven it also returns false while the block with the pinned hash is not yet stored (a
 // forward sync that has not reached the checkpoint), and for a block the walk does not land on.
 // Fail-safe: any lookup error yields false, so the no-inflation check runs.
 //
-// It also returns false for a block that is not in the blockchain store yet: the walk only ever
+// Without headerProven it also returns false for a block that is not in the blockchain store yet: the walk only ever
 // lands on a stored block. That case costs one indexed existence lookup, and it covers every block
 // arriving for the first time, a peer-served fork below the checkpoint included.
+//
+// headerProven is the other proof of the same fact, and it is the one a block arriving for the
+// first time can carry: legacy netsync's header cache saw the block's hash in a header run that a
+// matched hardcoded checkpoint commits. When it is true the predicate holds without the lookups,
+// so both skips it gates apply: the coinbase no-inflation skip and, with OutpointOnlyBelowCheckpoint
+// on, the validOrderAndBlessed skip (model.skipOrderAndBlessedBelowCheckpoint).
+// This is what lets full validation accept a proven legacy block whose fees were recorded as 0 by
+// an earlier outpoint-only quick attempt that never committed: the attempt's transaction records
+// stay in the UTXO store with fee 0, and subtree validation reuses those fees as they stand.
 //
 // Cost: for a stored block, one recursive query over the stored blocks between the checkpoint and
 // b, up to the checkpoint height in rows; a query for a pinned hash that is not stored returns at
@@ -4038,7 +4071,7 @@ func (u *BlockValidation) enqueueRevalidation(data revalidateBlockData) {
 // path, which stores a block before validating it. The walk grows with the block's age: an early
 // mainnet block walks close to the checkpoint height in rows, where the old check made two
 // indexed lookups.
-func (u *BlockValidation) checkpointConfirmedAncestor(ctx context.Context, b *model.Block) bool {
+func (u *BlockValidation) checkpointConfirmedAncestor(ctx context.Context, b *model.Block, headerProven bool) bool {
 	// The below-checkpoint no-inflation skip requires store fast-path support too, so the
 	// ancestry predicate cannot change the outcome on a store that never produces fee=0
 	// blocks. Short-circuit before any blockchain lookup on such stores (Aerospike, the
@@ -4057,6 +4090,10 @@ func (u *BlockValidation) checkpointConfirmedAncestor(ctx context.Context, b *mo
 	pinned := model.HighestCheckpointHash(checkpoints)
 	if pinned == nil {
 		return false
+	}
+
+	if headerProven {
+		return true
 	}
 
 	// The walk below can only land on a stored block, and it costs up to the checkpoint height in
@@ -4222,7 +4259,7 @@ func (u *BlockValidation) reValidateBlock(ctx context.Context, blockData revalid
 
 	// Create meta regenerator with peer URL for potential meta file recovery during revalidation
 	metaRegenerator := u.createMetaRegenerator([]string{blockData.baseURL})
-	blockData.block.SetCheckpointConfirmedAncestor(u.checkpointConfirmedAncestor(ctx, blockData.block))
+	blockData.block.SetCheckpointConfirmedAncestor(u.checkpointConfirmedAncestor(ctx, blockData.block, false))
 	if ok, err := blockData.block.Valid(laneParentsContext(ctx, blockData.block), u.logger, u.subtreeStore, u.utxoStore, oldBlockIDsMap, blockHeaders, blockHeaderIDs, u.settings, metaRegenerator); !ok {
 		u.logger.Errorf("[ReValidateBlock][%s] InvalidateBlock block is not valid in background: %v", blockData.block.String(), err)
 
@@ -4558,7 +4595,12 @@ func (u *BlockValidation) checkOldBlockIDs(ctx context.Context, oldBlockIDsMap *
 
 	lookupHash := block.Header.HashPrevBlock
 
-	currentChainBlockIDs, err := u.blockchainClient.GetBlockHeaderIDs(ctx, lookupHash, 10_000)
+	prefetchWindow := u.oldBlockIDsPrefetchWindow
+	if prefetchWindow == 0 {
+		prefetchWindow = defaultOldBlockIDsPrefetchWindow
+	}
+
+	currentChainBlockIDs, err := u.blockchainClient.GetBlockHeaderIDs(ctx, lookupHash, prefetchWindow)
 	if err != nil {
 		return errors.NewServiceError("[Block Validation][checkOldBlockIDs][%s] failed to get block header ids", block.String(), err)
 	}
@@ -4679,6 +4721,10 @@ func (u *BlockValidation) checkOldBlockIDsInMemoryChainCheck(ctx context.Context
 // allocation. It matches the prefetch route's historical implicit cap
 // (len(currentChainBlockIDs) <= 10_000).
 const oldBlockIDsCacheHintCap = 10_000
+
+// defaultOldBlockIDsPrefetchWindow is how many ancestors' block IDs the prefetch
+// route of checkOldBlockIDs loads unless oldBlockIDsPrefetchWindow is set.
+const defaultOldBlockIDsPrefetchWindow = 10_000
 
 func (u *BlockValidation) iterateOldBlockIDsWithCachedLookup(
 	ctx context.Context,

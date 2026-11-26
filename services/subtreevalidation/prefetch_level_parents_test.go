@@ -310,7 +310,7 @@ func Test_prefetchLevelParents_AbortsOnRealItemError(t *testing.T) {
 }
 
 // At utxostore_laneMigration shadow the prefetch also asks for each parent's lane position, which
-// the validator copies onto the child from the same read; with lane positions off it does not.
+// the validator copies onto the child, and its coinbase flag, from the same read; off, neither.
 func Test_prefetchLevelParents_AsksForLanePositionsOnlyAtShadow(t *testing.T) {
 	for _, shadow := range []bool{false, true} {
 		ctx := context.Background()
@@ -333,6 +333,7 @@ func Test_prefetchLevelParents_AsksForLanePositionsOnlyAtShadow(t *testing.T) {
 		got, err := server.prefetchLevelParents(ctx, levelTxs)
 		require.NoError(t, err)
 		require.Equal(t, shadow, store.hasField(fields.LanePosition), "shadow=%v", shadow)
+		require.Equal(t, shadow, store.hasField(fields.IsCoinbase), "shadow=%v", shadow)
 		require.Equal(t, uint64(77), got[parent].LanePosition, "the prefetch hands the read's position on")
 
 		cleanup()
