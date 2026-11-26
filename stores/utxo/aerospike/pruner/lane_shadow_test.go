@@ -266,6 +266,9 @@ func TestLaneShadowJudgesEveryDecisionOnAerospike(t *testing.T) {
 		utxos: []interface{}{spentUtxo("f0", spenderA)}, slots: slotPositions(laneForkOnly)})
 	// A conflict loser: today deletes it by its delete-at height, lanes keeps it, never mined.
 	put("conflicting", 0, aerospike.BinMap{totalExtra: 0, unmined: 3, conflicting: true, lanePos: signed(laneUnminedParent)})
+	// A coinbase parent no row takes, with a settled spender: lanes cannot judge it, counted apart.
+	put("coinbase", 0, aerospike.BinMap{totalExtra: 0, fields.IsCoinbase.String(): true, lanePos: signed(laneUnminedParent),
+		utxos: []interface{}{spentUtxo("cb0", spenderA)}, slots: slotPositions(laneSettled)})
 
 	before := map[string]float64{
 		"both delete": laneVerdicts(t, lanereader.PruneDelete, lanereader.PruneDelete, lanereader.ReasonSettled),
@@ -275,6 +278,7 @@ func TestLaneShadowJudgesEveryDecisionOnAerospike(t *testing.T) {
 		"paged":       laneVerdicts(t, lanereader.PruneDelete, lanereader.PruneKeep, lanereader.ReasonSpenderUnmined),
 		"conflicting": laneVerdicts(t, lanereader.PruneDelete, lanereader.PruneKeep, lanereader.ReasonConflicting),
 		"fork":        laneVerdicts(t, lanereader.PruneDelete, lanereader.PruneKeep, lanereader.ReasonSpenderOffChain),
+		"coinbase":    laneVerdicts(t, lanereader.PruneDelete, lanereader.PruneCannotJudge, lanereader.ReasonCoinbase),
 		"page reads":  lanePageReads(t),
 	}
 
@@ -291,6 +295,7 @@ func TestLaneShadowJudgesEveryDecisionOnAerospike(t *testing.T) {
 	require.Equal(t, before["paged"]+1, laneVerdicts(t, lanereader.PruneDelete, lanereader.PruneKeep, lanereader.ReasonSpenderUnmined), "the paged parent, once, by its page's slot")
 	require.Equal(t, before["conflicting"]+1, laneVerdicts(t, lanereader.PruneDelete, lanereader.PruneKeep, lanereader.ReasonConflicting))
 	require.Equal(t, before["fork"]+1, laneVerdicts(t, lanereader.PruneDelete, lanereader.PruneKeep, lanereader.ReasonSpenderOffChain))
+	require.Equal(t, before["coinbase"]+1, laneVerdicts(t, lanereader.PruneDelete, lanereader.PruneCannotJudge, lanereader.ReasonCoinbase))
 	require.Equal(t, before["page reads"]+1, lanePageReads(t))
 }
 
@@ -355,11 +360,11 @@ func TestLaneShadowReadsPagesBeforeTheDelete(t *testing.T) {
 	svc.laneRetention = 288
 
 	require.Equal(t, []string{svc.fieldTxID, svc.fieldExternal, svc.fieldTotalExtraRecs, svc.fieldUnminedSince, svc.fieldConflicting,
-		fields.LanePosition.String(), fields.SpendingLanePositions.String(), svc.fieldUtxos}, svc.queryBinNames())
+		fields.LanePosition.String(), fields.SpendingLanePositions.String(), fields.IsCoinbase.String(), svc.fieldUtxos}, svc.queryBinNames())
 
 	svc.defensiveEnabled = true
 	require.Equal(t, []string{svc.fieldTxID, svc.fieldExternal, svc.fieldTotalExtraRecs, svc.fieldUnminedSince, svc.fieldConflicting, svc.fieldUtxos,
-		fields.LanePosition.String(), fields.SpendingLanePositions.String()}, svc.queryBinNames(), "defensive mode reads utxos already")
+		fields.LanePosition.String(), fields.SpendingLanePositions.String(), fields.IsCoinbase.String()}, svc.queryBinNames(), "defensive mode reads utxos already")
 	svc.defensiveEnabled = false
 
 	// Deletes run, so the order of the page read and the delete batch shows.

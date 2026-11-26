@@ -66,6 +66,10 @@ func TestReadLaneWindowReadsTheRowsCreatedInsideIt(t *testing.T) {
 	_, err := s.pool.Exec(ctx, `UPDATE tx_ident SET flags = flags | $2 WHERE txid = $1`, hashBytes(loser), FlagConflicting)
 	require.NoError(t, err)
 
+	coinbase := mkTx(t, 1, 1_009)
+	_, err = s.Create(ctx, coinbase, 240, utxo.WithSetCoinbase(true), utxo.WithLanePosition(lane.Pack(3, 7)))
+	require.NoError(t, err)
+
 	// A spend of the old parent inside the window: the spender is read, the parent is not.
 	child := spendOneOutput(t, s, ctx, old, 0, 260)
 
@@ -76,7 +80,7 @@ func TestReadLaneWindowReadsTheRowsCreatedInsideIt(t *testing.T) {
 
 	got, st := readWindow(t, s, ctx, 200)
 
-	want := []*bt.Tx{margin, inside, later, noPosition, gone, loser, child, carried}
+	want := []*bt.Tx{margin, inside, later, noPosition, gone, loser, coinbase, child, carried}
 	require.Len(t, got, len(want))
 	require.Equal(t, uint64(len(want)), st.Records)
 	require.NotContains(t, got, *old.TxIDChainHash(), "an old parent a spend touched is not read")
@@ -100,6 +104,8 @@ func TestReadLaneWindowReadsTheRowsCreatedInsideIt(t *testing.T) {
 	require.False(t, got[*inside.TxIDChainHash()].Missing)
 	require.True(t, got[*loser.TxIDChainHash()].Conflicting)
 	require.False(t, got[*inside.TxIDChainHash()].Conflicting)
+	require.True(t, got[*coinbase.TxIDChainHash()].Coinbase)
+	require.False(t, got[*inside.TxIDChainHash()].Coinbase)
 	require.Positive(t, st.Bytes)
 }
 
