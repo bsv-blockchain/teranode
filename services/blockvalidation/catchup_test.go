@@ -1644,11 +1644,16 @@ func TestCatchupIntegrationScenarios(t *testing.T) {
 		)
 
 		// Make multiple calls to trigger the circuit breaker (threshold is 3)
+		start := time.Now()
+
 		for i := 0; i < 3; i++ {
 			result, _, err := server.catchupGetBlockHeaders(ctx, targetBlock, "peer-test-001", "http://test-peer")
 			assert.Error(t, err)
 			assert.NotNil(t, result)
 		}
+
+		// at the 1s default backoff each call waits 1+2+4s; the test context sets 1ms
+		require.Less(t, time.Since(start), 6*time.Second, "blockvalidation_catchup_retry_backoff must reach the header fetch")
 
 		// Check circuit breaker state - should be open after 3 failures
 		cbState := server.peerCircuitBreakers.GetPeerState("peer-test-001")
