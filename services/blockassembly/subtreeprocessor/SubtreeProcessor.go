@@ -792,6 +792,8 @@ func NewSubtreeProcessor(_ context.Context, logger ulogger.Logger, tSettings *se
 	// when cast to uint16.
 	splitBucketsCfg := tSettings.BlockAssembly.SplitMapBuckets
 
+	warnMinedSetRetentionOff(logger, tSettings)
+
 	var splitBuckets uint16
 
 	switch {
@@ -8965,9 +8967,9 @@ func (stp *SubtreeProcessor) forEachDrainChunkWithCutoff(maxItems int, ignoreWin
 	// still miss the drain: when a later-stamped batch links ahead of it,
 	// or when it links after the drain ends. The steady-state dequeue loop or
 	// the next block movement then places it, checked against the kept sets
-	// of the blocks applied within blockassembly_minedTxSetRetention, this
-	// one included (recent_mined_sets.go), as for any tx that arrives after
-	// its block's drain.
+	// of the blocks applied within blockassembly_minedTxSetRetention, plus
+	// any double-spend window, this one included (recent_mined_sets.go), as
+	// for any tx that arrives after its block's drain.
 	now := stp.clock.Now()
 	window := stp.settings.BlockAssembly.DoubleSpendWindow
 
@@ -9039,8 +9041,8 @@ func (stp *SubtreeProcessor) runDrainChunk(chunk []*TxBatch, chunkItems int, fn 
 
 	// Before fn, in queue order, so descendants are found. chunkItems was counted before it,
 	// as the queue handed the chunk out, so the settle above releases what was dropped too.
-	// A transaction a block applied in the last blockassembly_minedTxSetRetention mined is
-	// dropped first. fn checks the block this drain moves, if any, so its set is skipped here.
+	// A transaction a block applied in the last blockassembly_minedTxSetRetention, plus any
+	// double-spend window, mined is dropped first. fn checks the block this drain moves, if any, so its set is skipped here.
 	stp.filterRecentlyMined(chunk, stp.drainingBlockSet)
 	stp.filterTxEra(chunk)
 
