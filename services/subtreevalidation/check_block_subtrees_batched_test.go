@@ -854,6 +854,7 @@ type forkAnswerClient struct {
 	headers     []*model.BlockHeader
 	metas       []*model.BlockHeaderMeta
 	onChainFrom int
+	pageErr     error // when set, GetBlockHeadersByParentLinks fails with it
 }
 
 func (c *forkAnswerClient) index(hash *chainhash.Hash) int {
@@ -885,6 +886,10 @@ func (c *forkAnswerClient) GetBlockHeaders(ctx context.Context, hash *chainhash.
 }
 
 func (c *forkAnswerClient) GetBlockHeadersByParentLinks(ctx context.Context, hash *chainhash.Hash, n uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
+	if c.pageErr != nil {
+		return nil, nil, c.pageErr
+	}
+
 	if i := c.index(hash); i >= 0 {
 		end := min(i+int(n), len(c.headers)) //nolint:gosec // test sizes are small
 
@@ -909,8 +914,9 @@ func (c *forkAnswerClient) CheckBlockIsInCurrentChain(_ context.Context, blockID
 type forkOptionsRecorder struct {
 	*publishSpy
 
-	mu   sync.Mutex
-	seen []*validator.Options
+	mu         sync.Mutex
+	seen       []*validator.Options
+	levelCalls int // ValidateWithOptions calls, the level path's
 }
 
 func (r *forkOptionsRecorder) record(opts *validator.Options) {
@@ -921,6 +927,9 @@ func (r *forkOptionsRecorder) record(opts *validator.Options) {
 
 func (r *forkOptionsRecorder) ValidateWithOptions(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts *validator.Options) (*meta.Data, error) {
 	r.record(opts)
+	r.mu.Lock()
+	r.levelCalls++
+	r.mu.Unlock()
 
 	return r.publishSpy.ValidateWithOptions(ctx, tx, blockHeight, opts)
 }
@@ -936,6 +945,7 @@ func (r *forkOptionsRecorder) CheckExtendedTransaction(ctx context.Context, tx *
 type forkCandidateFixture struct {
 	*batchedFixture
 	recorder *forkOptionsRecorder
+	client   *forkAnswerClient
 	parent   *chainhash.Hash
 	fork     candidateForkMTPs
 }
@@ -955,14 +965,19 @@ func newForkCandidateFixture(t *testing.T, state blockchain.FSMStateType) *forkC
 
 	headers := makeChain(t, n, timestamps)
 
-	var recorder *forkOptionsRecorder
+	var (
+		recorder *forkOptionsRecorder
+		client   *forkAnswerClient
+	)
 
 	f := newBatchedFixtureWithParams(t, state, func(params *chaincfg.Params) {
 		params.CSVHeight = 0
 		params.GenesisActivationHeight = batchedTestHeight + 1_000
 	}, fixtureWraps{
 		client: func(c blockchain.ClientI) blockchain.ClientI {
-			return &forkAnswerClient{ClientI: c, headers: headers, metas: metas, onChainFrom: 3}
+			client = &forkAnswerClient{ClientI: c, headers: headers, metas: metas, onChainFrom: 3}
+
+			return client
 		},
 		validator: func(spy *publishSpy) validator.Interface {
 			recorder = &forkOptionsRecorder{publishSpy: spy}
@@ -977,7 +992,7 @@ func newForkCandidateFixture(t *testing.T, state blockchain.FSMStateType) *forkC
 	require.Len(t, fork.mtps, 3)
 	require.Equal(t, metas[3].ID, fork.baseID)
 
-	return &forkCandidateFixture{batchedFixture: f, recorder: recorder, parent: headers[0].Hash(), fork: fork}
+	return &forkCandidateFixture{batchedFixture: f, recorder: recorder, client: client, parent: headers[0].Hash(), fork: fork}
 }
 
 // requireBranchCoinTimes checks that transactions reached the validator and that every check
@@ -1035,4 +1050,77 @@ func TestCheckSubtreeFromBlock_ForkCandidateCarriesBranchCoinTimes(t *testing.T)
 	require.NoError(t, err)
 	require.True(t, response.Blessed)
 	f.requireBranchCoinTimes(t)
+}
+
+// TestProcessTransactionsBatched_FallbackCarriesBranchCoinTimes checks that a transaction the
+// batch path hands back to the level path, after a failed spend, keeps the branch's coin times.
+func TestProcessTransactionsBatched_FallbackCarriesBranchCoinTimes(t *testing.T) {
+	f := newForkCandidateFixture(t, blockchain.FSMStateCATCHINGBLOCKS)
+
+	checker, ok := f.server.batchChecker(blockchain.FSMStateCATCHINGBLOCKS, batchedTestHeight)
+	require.True(t, ok)
+
+	roots := []*bt.Tx{storedRoot(t, f.batchedFixture, 1, opTrue), storedRoot(t, f.batchedFixture, 2, opTrue)}
+
+	// An unmined transaction spends root 0's output 0 first, so the loser falls back.
+	thief := opTrueTx(t, 99, []*bt.Tx{roots[0]}, []uint32{0})
+	_, err := f.validator.Validate(context.Background(), thief, batchedTestHeight)
+	require.NoError(t, err)
+
+	f.recorder.mu.Lock()
+	f.recorder.seen, f.recorder.levelCalls = nil, 0
+	f.recorder.mu.Unlock()
+
+	loser := opTrueTx(t, 1, []*bt.Tx{roots[0]}, []uint32{0})
+	winner := opTrueTx(t, 2, []*bt.Tx{roots[1]}, []uint32{0})
+
+	err = f.server.processTransactionsBatched(context.Background(), checker, []*bt.Tx{loser, winner}, chainhash.Hash{}, batchedTestHeight, 1_700_000_000, 1_700_000_000, f.fork, map[uint32]bool{})
+	require.NoError(t, err)
+
+	f.recorder.mu.Lock()
+	levelCalls := f.recorder.levelCalls
+	f.recorder.mu.Unlock()
+	require.Positive(t, levelCalls, "the loser must go through the level path")
+	f.requireBranchCoinTimes(t)
+}
+
+// TestForkCandidateWalkErrorFailsTheBlock checks that a failed walk of the candidate's branch
+// fails the block on both entry points, rather than validating without the branch's coin times.
+func TestForkCandidateWalkErrorFailsTheBlock(t *testing.T) {
+	tests := []struct {
+		name  string
+		check func(t *testing.T, f *forkCandidateFixture, block *model.Block) error
+	}{
+		{name: "CheckBlockSubtrees", check: func(t *testing.T, f *forkCandidateFixture, block *model.Block) error {
+			return checkBlock(t, f.batchedFixture, block)
+		}},
+		{name: "CheckSubtreeFromBlock", check: func(_ *testing.T, f *forkCandidateFixture, block *model.Block) error {
+			_, err := f.server.CheckSubtreeFromBlock(context.Background(), &subtreevalidation_api.CheckSubtreeFromBlockRequest{
+				Hash:              block.Subtrees[0][:],
+				BaseUrl:           "legacy",
+				BlockHeight:       batchedTestHeight,
+				BlockHash:         block.Hash()[:],
+				PreviousBlockHash: f.parent[:],
+			})
+
+			return err
+		}},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newForkCandidateFixture(t, blockchain.FSMStateCATCHINGBLOCKS)
+
+			roots := []*bt.Tx{storedRoot(t, f.batchedFixture, 1, opTrue), storedRoot(t, f.batchedFixture, 2, opTrue)}
+			block := storeBlock(t, f.batchedFixture, chainedTxs(t, roots, 2), false)
+			block.Header.HashPrevBlock = f.parent
+
+			f.client.pageErr = errors.NewServiceError("header store down")
+
+			require.ErrorContains(t, tc.check(t, f, block), "candidate branch coin times")
+			f.recorder.mu.Lock()
+			defer f.recorder.mu.Unlock()
+			require.Empty(t, f.recorder.seen, "no transaction may be checked without the branch's coin times")
+		})
+	}
 }

@@ -331,7 +331,7 @@ type forkWalkSpy struct {
 
 	headerCalls, pageCalls, chainChecks int
 	largestPage                         uint64
-	corrupt                             func(metas []*model.BlockHeaderMeta)
+	corrupt                             func(headers []*model.BlockHeader, metas []*model.BlockHeaderMeta)
 }
 
 func (s *forkWalkSpy) GetBlockHeader(ctx context.Context, hash *chainhash.Hash) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
@@ -352,7 +352,8 @@ func (s *forkWalkSpy) GetBlockHeadersByParentLinks(ctx context.Context, hash *ch
 			copied[i] = &mc
 		}
 
-		s.corrupt(copied)
+		headers = slices.Clone(headers)
+		s.corrupt(headers, copied)
 		metas = copied
 	}
 
@@ -393,7 +394,7 @@ func TestFetchCandidateForkMTPs(t *testing.T) {
 		csv         uint32
 		genesis     uint32
 		limit       int
-		corrupt     func(metas []*model.BlockHeaderMeta)
+		corrupt     func(headers []*model.BlockHeader, metas []*model.BlockHeaderMeta)
 		wantStart   uint32
 		wantMTPs    []uint32
 		wantBase    *model.Block
@@ -407,7 +408,9 @@ func TestFetchCandidateForkMTPs(t *testing.T) {
 		{name: "height below CSV activation", parent: s.branch[4].Hash(), height: 26, csv: 27, wantNoCalls: true},
 		{name: "height not above the parent", parent: s.branch[4].Hash(), height: 27, wantErr: "is not at height 26"},
 		{name: "run at the wrong heights", parent: s.branch[4].Hash(), height: 26, wantErr: "wrong height",
-			corrupt: func(metas []*model.BlockHeaderMeta) { metas[4].Height++ }},
+			corrupt: func(_ []*model.BlockHeader, metas []*model.BlockHeaderMeta) { metas[4].Height++ }},
+		{name: "run not starting at the parent", parent: s.branch[4].Hash(), height: 26, wantErr: "does not start at the requested block",
+			corrupt: func(headers []*model.BlockHeader, _ []*model.BlockHeaderMeta) { headers[0] = s.branch[3].Header }},
 	}
 
 	for _, tc := range tests {
