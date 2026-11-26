@@ -334,6 +334,14 @@ func TestCreateTransactionChainForBenchmarkCachesByLength(t *testing.T) {
 		r.Equal(two[i].TxID(), again[i].TxID())
 		r.NotSame(two[i], again[i])
 	}
+
+	// Changing a script in a chain the cache returned leaves the other chains alone.
+	wantID := two[1].TxID()
+	(*again[1].Outputs[0].LockingScript)[0] ^= 0xff
+	(*again[1].Inputs[0].UnlockingScript)[0] ^= 0xff
+	r.NotEqual(wantID, again[1].TxID())
+	r.Equal(wantID, two[1].TxID())
+	r.Equal(wantID, createTransactionChainForBenchmark(t, r, 2)[1].TxID())
 }
 
 func parseBenchmarkTxChain(r *require.Assertions, chain benchmarkTxChain) []*bt.Tx {
