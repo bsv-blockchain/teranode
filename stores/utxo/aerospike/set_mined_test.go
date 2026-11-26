@@ -2,6 +2,7 @@ package aerospike
 
 import (
 	"context"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -228,12 +229,14 @@ func TestSetMinedMultiKeepsTheStorageCodeOfAFailedCleanup(t *testing.T) {
 		cleanup     string
 		// fail is the cleanup's batch seam; nil fails every cleanup batch whole.
 		fail func(client *uaerospike.Client) func(*aerospike.BatchPolicy, []aerospike.BatchRecordIfc) aerospike.Error
+		// recordTimeouts is how many per-record timeouts the error must carry; 0 skips the check.
+		recordTimeouts int
 	}{
 		{name: "lua: the clear of the extra records fails", cleanup: "clearLockedOnRecordsMulti"},
 		{name: "expressions: the extra record count read of a FILTERED_OUT tx fails", expressions: true, cleanup: "readExtraRecordCounts"},
 		{name: "lua: the clear fails beside a failed sibling", sibling: true, cleanup: "clearLockedOnRecordsMulti"},
 		{name: "expressions: the count read fails beside a failed sibling", expressions: true, sibling: true, cleanup: "readExtraRecordCounts"},
-		{name: "lua: one record of the clear fails", cleanup: "clearLockedOnRecordsMulti", fail: failOneClearRecord},
+		{name: "lua: each record of the clear fails on its own", cleanup: "clearLockedOnRecordsMulti", fail: failClearRecords, recordTimeouts: 2},
 		{name: "expressions: only the unlock of a FILTERED_OUT tx fails", expressions: true, cleanup: "applyLockClearWork", fail: failAfterReadAndClear},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -279,6 +282,10 @@ func TestSetMinedMultiKeepsTheStorageCodeOfAFailedCleanup(t *testing.T) {
 				require.ErrorContains(t, err, missing.String(), "the sibling's failure must survive the cleanup's")
 			}
 
+			if tc.recordTimeouts > 0 {
+				require.Equal(t, tc.recordTimeouts, strings.Count(err.Error(), "ResultCode: TIMEOUT"), "every failed record must reach the caller: %v", err)
+			}
+
 			// Quick validation's wrap, which legacy sync's park reads as retry-later.
 			err = errors.NewProcessingError("[createAndSpendUTXOsForBatch] failed to update mined info",
 				utxo.SetMinedMultiChunked(ctx, logger, store, hashes, info, 10, 1))
@@ -287,9 +294,9 @@ func TestSetMinedMultiKeepsTheStorageCodeOfAFailedCleanup(t *testing.T) {
 	}
 }
 
-// failOneClearRecord runs each batch for real, then marks the first written
-// record as timed out, so the batch succeeds and one record fails.
-func failOneClearRecord(client *uaerospike.Client) func(*aerospike.BatchPolicy, []aerospike.BatchRecordIfc) aerospike.Error {
+// failClearRecords runs each batch for real, then marks every written record
+// as timed out, so the batch succeeds and each record fails on its own.
+func failClearRecords(client *uaerospike.Client) func(*aerospike.BatchPolicy, []aerospike.BatchRecordIfc) aerospike.Error {
 	return func(policy *aerospike.BatchPolicy, records []aerospike.BatchRecordIfc) aerospike.Error {
 		if err := client.BatchOperate(policy, records); err != nil {
 			return err
@@ -298,7 +305,6 @@ func failOneClearRecord(client *uaerospike.Client) func(*aerospike.BatchPolicy, 
 		for _, r := range records {
 			if _, isWrite := r.(*aerospike.BatchWrite); isWrite {
 				r.BatchRec().Err = &aerospike.AerospikeError{ResultCode: types.TIMEOUT}
-				break
 			}
 		}
 
