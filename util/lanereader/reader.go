@@ -60,6 +60,11 @@ const (
 
 	// maxUnreachable bounds the blocks remembered as having no held ancestor.
 	maxUnreachable = 1_024
+
+	// minedWriteLimit is how long a best block's mined write may stay unfinished and its answers
+	// still count mined_pending. Mainnet's took about 3 s for a block of 26,000; past the limit
+	// the write may have failed, so its answers count lanes_only again.
+	minedWriteLimit = time.Minute
 )
 
 // readTimeout bounds each read of headers or rows, so a hung call cannot keep the load token,
@@ -103,8 +108,11 @@ type Reader struct {
 	prepareWarned map[string]time.Time
 
 	// minedPending is the ID of the best block while today's mined write of it (setMined) has not
-	// finished, 0 otherwise (KindMinedPending).
-	minedPending atomic.Uint32
+	// finished, for up to minedWriteLimit, 0 otherwise (KindMinedPending). minedWaitID and
+	// minedWaitSince are the block last seen unfinished and when; only the follower touches them.
+	minedPending   atomic.Uint32
+	minedWaitID    uint32
+	minedWaitSince time.Time
 }
 
 var current atomic.Pointer[Reader]
@@ -310,8 +318,8 @@ func (r *Reader) step(ctx context.Context, tip chainhash.Hash) (chainhash.Hash, 
 
 // noteMinedWrite records whether today's mined write of the best block has finished, reading its
 // mined_set flag every poll: a block's rows commit with it, today's mined state lands seconds
-// later, and a reorg or an invalidation can clear the flag again. A failed read leaves no block
-// pending, so its answers count as they did.
+// later, and a reorg or an invalidation can clear the flag again. A failed read, or a write still
+// unfinished after minedWriteLimit, leaves no block pending, so its answers count as they did.
 func (r *Reader) noteMinedWrite(ctx context.Context, best chainhash.Hash) {
 	readCtx, cancel := context.WithTimeout(ctx, readTimeout)
 	_, meta, err := r.source.GetBlockHeader(readCtx, &best)
@@ -329,8 +337,23 @@ func (r *Reader) noteMinedWrite(ctx context.Context, best chainhash.Hash) {
 		}
 	case meta.MinedSet:
 		r.minedPending.Store(0)
+		r.minedWaitID = 0
 	default:
-		r.minedPending.Store(meta.ID)
+		if meta.ID != r.minedWaitID {
+			r.minedWaitID, r.minedWaitSince = meta.ID, time.Now()
+		}
+
+		if time.Since(r.minedWaitSince) <= minedWriteLimit {
+			r.minedPending.Store(meta.ID)
+
+			return
+		}
+
+		r.minedPending.Store(0)
+
+		if r.warnAMinute("mined_write_slow") {
+			r.logger.Warnf("[lanereader] best block %s's mined write has not finished after %s, so answers from its rows count lanes_only", best.String(), minedWriteLimit)
+		}
 	}
 }
 

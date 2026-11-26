@@ -376,11 +376,14 @@ func TestReaderCountsEachKind(t *testing.T) {
 // finished, a lanes_only answer from the best block's row is counted mined_pending.
 func TestReaderCountsTheMinedWriteWindowApart(t *testing.T) {
 	engines(t, func(t *testing.T, store blockchainstore.Store) {
+		ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
+		defer cancel()
+
 		c := newChain(t, store)
 
 		b1 := c.add(nil, takes(t, 3, 5))
 		b2 := c.add(b1, takes(t, 3, 6))
-		require.NoError(t, store.SetBlockMinedSet(t.Context(), &b1.hash, nil))
+		require.NoError(t, store.SetBlockMinedSet(ctx, &b1.hash, nil))
 
 		r := newReader(ulogger.TestLogger{}, store, 100)
 		follow(t, r)
@@ -399,9 +402,9 @@ func TestReaderCountsTheMinedWriteWindowApart(t *testing.T) {
 		})
 
 		// Once b2's has finished too, so is its row's.
-		require.NoError(t, store.SetBlockMinedSet(t.Context(), &b2.hash, nil))
+		require.NoError(t, store.SetBlockMinedSet(ctx, &b2.hash, nil))
 
-		_, err := r.step(t.Context(), b2.hash)
+		_, err := r.step(ctx, b2.hash)
 		require.NoError(t, err)
 
 		requireCounted(t, ReaderValidator, KindLanesOnly, lane.ViaRow, func() {
@@ -409,22 +412,25 @@ func TestReaderCountsTheMinedWriteWindowApart(t *testing.T) {
 		})
 
 		// A cleared flag on the same best block, as a reorg's clear leaves it, counts pending again.
-		require.NoError(t, store.ClearBlockMinedSet(t.Context(), &b2.hash))
+		// It starts a new wait, however long ago b2's first one began.
+		r.minedWaitSince = time.Now().Add(-minedWriteLimit - time.Second)
 
-		_, err = r.step(t.Context(), b2.hash)
+		require.NoError(t, store.ClearBlockMinedSet(ctx, &b2.hash))
+
+		_, err = r.step(ctx, b2.hash)
 		require.NoError(t, err)
 
 		requireCounted(t, ReaderValidator, KindMinedPending, lane.ViaRow, func() {
 			r.CompareHeight(ReaderValidator, chainhash.Hash{}, lane.Pack(3, 6), false, 0)
 		})
 
-		require.NoError(t, store.SetBlockMinedSet(t.Context(), &b2.hash, nil))
+		require.NoError(t, store.SetBlockMinedSet(ctx, &b2.hash, nil))
 
 		// b3 arrives with its mined write unfinished; then a read of its flag fails. The failure is
 		// counted and leaves no block pending.
 		b3 := c.add(b2, takes(t, 3, 7))
 
-		_, err = r.step(t.Context(), b2.hash)
+		_, err = r.step(ctx, b2.hash)
 		require.NoError(t, err)
 
 		requireCounted(t, ReaderValidator, KindMinedPending, lane.ViaRow, func() {
@@ -434,13 +440,13 @@ func TestReaderCountsTheMinedWriteWindowApart(t *testing.T) {
 		for _, failing := range []Source{headerFailingSource{store}, headerMissingSource{store}} {
 			r.source = store
 
-			_, err = r.step(t.Context(), b3.hash)
+			_, err = r.step(ctx, b3.hash)
 			require.NoError(t, err)
 
 			r.source = failing
 			errorsBefore := testutil.ToFloat64(prometheusLaneReaderFollowErrors)
 
-			_, err = r.step(t.Context(), b3.hash)
+			_, err = r.step(ctx, b3.hash)
 			require.NoError(t, err)
 			require.Equal(t, errorsBefore+1, testutil.ToFloat64(prometheusLaneReaderFollowErrors))
 
@@ -449,19 +455,39 @@ func TestReaderCountsTheMinedWriteWindowApart(t *testing.T) {
 			})
 		}
 
+		// A write still unfinished past the limit may have failed: its rows count lanes_only again.
+		r.source = store
+
+		_, err = r.step(ctx, b3.hash)
+		require.NoError(t, err)
+
+		r.minedWaitSince = time.Now().Add(-minedWriteLimit - time.Second)
+
+		_, err = r.step(ctx, b3.hash)
+		require.NoError(t, err)
+
+		requireCounted(t, ReaderValidator, KindLanesOnly, lane.ViaRow, func() {
+			r.CompareHeight(ReaderValidator, chainhash.Hash{}, lane.Pack(3, 7), false, 0)
+		})
+
 		// b3 pending, then invalidated so b2 is best again: a view still holding b3 counts its row
 		// lanes_only, since b3 is no longer the best block.
 		r.source = store
+		r.minedWaitID = 0
 
-		_, err = r.step(t.Context(), b3.hash)
+		_, err = r.step(ctx, b3.hash)
 		require.NoError(t, err)
 
 		held := r.MainView()
 
-		_, err = store.InvalidateBlock(t.Context(), &b3.hash)
+		requireCounted(t, ReaderSubtreePrefetch, KindMinedPending, lane.ViaRow, func() {
+			r.CompareBlocks(ReaderSubtreePrefetch, held, chainhash.Hash{}, lane.Pack(3, 7), nil)
+		})
+
+		_, err = store.InvalidateBlock(ctx, &b3.hash)
 		require.NoError(t, err)
 
-		_, err = r.step(t.Context(), b3.hash)
+		_, err = r.step(ctx, b3.hash)
 		require.NoError(t, err)
 
 		requireCounted(t, ReaderSubtreePrefetch, KindLanesOnly, lane.ViaRow, func() {
