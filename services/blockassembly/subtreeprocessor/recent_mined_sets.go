@@ -122,7 +122,7 @@ func (stp *SubtreeProcessor) minedSetRetention() time.Duration {
 
 // warnMinedSetRetentionOff warns when blockassembly_minedTxSetRetention is 0 or less while the
 // double-spend window is above 0: no set is kept, so a transaction a block mined that the window
-// held back in the queue goes back into block assembly when the window lets it out.
+// held back in the queue can go back into block assembly when the window lets it out.
 func warnMinedSetRetentionOff(logger ulogger.Logger, tSettings *settings.Settings) {
 	if tSettings.BlockAssembly.MinedTxSetRetention > 0 || tSettings.BlockAssembly.DoubleSpendWindow <= 0 {
 		return

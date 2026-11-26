@@ -2,6 +2,7 @@ package subtreeprocessor
 
 import (
 	"context"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -9,7 +10,8 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
 	"github.com/bsv-blockchain/teranode/model"
-	"github.com/bsv-blockchain/teranode/settings"
+	blob_memory "github.com/bsv-blockchain/teranode/stores/blob/memory"
+	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/stretchr/testify/require"
 )
 
@@ -315,8 +317,8 @@ func TestForgetAndClearMinedSets(t *testing.T) {
 }
 
 // A retention of 0 or less keeps no set, so with a double-spend window a mined transaction the
-// window held back re-enters; that pairing is warned about when the processor is built.
-func TestWarnMinedSetRetentionOff(t *testing.T) {
+// window held back can re-enter; building the processor with that pairing warns.
+func TestNewSubtreeProcessor_WarnsMinedSetRetentionOff(t *testing.T) {
 	cases := map[string]struct {
 		retention, window time.Duration
 		warns             bool
@@ -330,19 +332,26 @@ func TestWarnMinedSetRetentionOff(t *testing.T) {
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			logger := &queueBoundCapturingLogger{}
-			tSettings := &settings.Settings{}
+			tSettings := test.CreateBaseTestSettings(t)
 			tSettings.BlockAssembly.MinedTxSetRetention = tc.retention
 			tSettings.BlockAssembly.DoubleSpendWindow = tc.window
 
-			warnMinedSetRetentionOff(logger, tSettings)
+			_, err := NewSubtreeProcessor(t.Context(), logger, tSettings, blob_memory.New(), nil, nil, make(chan NewSubtreeRequest, 1))
+			require.NoError(t, err)
 
-			if !tc.warns {
-				require.Empty(t, logger.warns)
-				return
+			var warned int
+
+			for _, w := range logger.warns {
+				if strings.Contains(w, "MinedTxSetRetention") {
+					warned++
+				}
 			}
 
-			require.Len(t, logger.warns, 1)
-			require.Contains(t, logger.warns[0], "can re-enter block assembly")
+			if tc.warns {
+				require.Equal(t, 1, warned, "warnings: %v", logger.warns)
+			} else {
+				require.Zero(t, warned, "warnings: %v", logger.warns)
+			}
 		})
 	}
 }
