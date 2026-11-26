@@ -7682,7 +7682,7 @@
 <td>time.Duration</td>
 <td>10s</td>
 <td>blockassembly_minedTxSetRetention</td>
-<td>How long an applied block's transaction set is kept, so a late hand-off of a transaction it mined stays out of assembly; holds about 33 bytes per transaction of each block applied in that time; 0 = off</td>
+<td>How long an applied block's transaction set is kept, plus blockassembly_doubleSpendWindowMillis when retention is above 0, so a late hand-off, or a queued transaction the window held back, of a transaction it mined stays out of assembly; holds about 33 bytes per transaction of each block applied in that time; 0 = off</td>
 </tr>
 <tr>
 <td>CoinbaseRecoveryMaxGapBlocks</td>

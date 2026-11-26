@@ -9443,7 +9443,7 @@
 <tr>
 <td><code>teranode_subtreeprocessor_late_mined_dropped_total</code></td>
 <td>Counter</td>
-<td>Handed-off transactions dropped, on arrival or when placed, because a block applied within <code>blockassembly_minedTxSetRetention</code> already mined them. Each one would otherwise have gone back into block assembly</td>
+<td>Handed-off transactions dropped, on arrival or when placed, because a block applied within <code>blockassembly_minedTxSetRetention</code>, plus any double-spend window, already mined them. Each one would otherwise have gone back into block assembly</td>
 </tr>
 </tbody>
 </table>
