@@ -32,8 +32,9 @@ compiles() {
 	go test -count=1 -tags testtxmetacache -run '^$' "$pkg" >/dev/null 2>&1
 }
 
-if ! git diff --quiet -- services/blockassembly; then
-	echo "services/blockassembly has uncommitted changes; commit or stash them first" >&2
+if ! git diff --quiet HEAD -- services/blockassembly ||
+	[[ -n $(git ls-files --others --exclude-standard -- services/blockassembly) ]]; then
+	echo "services/blockassembly has staged, unstaged or untracked changes; commit or stash them first" >&2
 	exit 1
 fi
 

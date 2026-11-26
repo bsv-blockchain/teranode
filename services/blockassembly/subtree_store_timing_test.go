@@ -37,8 +37,9 @@ func TestStoreSubtreeData_TimesEachStoreStep(t *testing.T) {
 
 	fault := blobfault.New(store)
 	release := make(chan struct{})
-	entered := make(chan struct{}, 1)
+	entered := make(chan struct{}, 2)
 	fault.OnSet(subtree.RootHash()[:], fileformat.FileTypeSubtree, blobfault.Rule{Block: release, Entered: entered})
+	fault.OnSet(subtree.RootHash()[:], fileformat.FileTypeSubtreeMeta, blobfault.Rule{Block: release, Entered: entered})
 	server.subtreeStore = fault
 
 	steps := []string{"meta_build", "meta_write", "subtree_write"}
@@ -55,6 +56,7 @@ func TestStoreSubtreeData_TimesEachStoreStep(t *testing.T) {
 	require.NoError(t, err)
 
 	<-entered
+	<-entered
 	time.Sleep(200 * time.Millisecond)
 	close(release)
 
@@ -67,4 +69,8 @@ func TestStoreSubtreeData_TimesEachStoreStep(t *testing.T) {
 
 	require.GreaterOrEqual(t, storeStep(t, "subtree_write").sum-before["subtree_write"].sum, 0.2,
 		"the subtree write time includes the time the write was blocked")
+	require.GreaterOrEqual(t, storeStep(t, "meta_write").sum-before["meta_write"].sum, 0.2,
+		"the meta write time includes the time the write was blocked")
+	require.Greater(t, storeStep(t, "meta_build").sum-before["meta_build"].sum, 0.0,
+		"the meta build time is observed, not zero")
 }
