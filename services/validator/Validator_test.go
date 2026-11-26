@@ -2363,9 +2363,12 @@ func TestEnsureMTPLoaded_ConcurrentCallsNeitherHangsNorRaces(t *testing.T) {
 	require.Equal(t, int(blockHeight+1), len(v.mtpStore),
 		"mtpStore must have exactly blockHeight+1 entries after concurrent load")
 
-	// Spot-check a few values to confirm correct data (not a corrupted merge): the top entry
-	// is computed from timestamps, the others are the blocks' stored medians.
-	require.Equal(t, uint32(1_700_000_000), v.mtpStore[0])
+	// Spot-check a few values to confirm correct data (not a corrupted merge). Each entry is the
+	// median of the timestamps below it; near genesis there are fewer than 11 of them.
+	require.Zero(t, v.mtpStore[0])
+	require.Equal(t, uint32(1_700_000_006+2), v.mtpStore[4], "an even count takes the upper middle, as SV Node does")
+	require.Equal(t, uint32(1_700_000_006+2), v.mtpStore[5])
+	require.Equal(t, uint32(1_700_000_000+100), v.mtpStore[100])
 	require.Equal(t, uint32(1_700_000_000+blockHeight), v.mtpStore[blockHeight])
 	require.Equal(t, blockHeight, v.mtpIDs[blockHeight])
 
@@ -2780,15 +2783,14 @@ func TestEnsureMTPLoaded_OutsideBIP68RangeFetchesNothing(t *testing.T) {
 // TestReadMTPsLocked_GuardFiresOnUnpopulatedStore verifies the reader returns a processing
 // error when the store is not loaded up to blockHeight and no base is named.
 func TestReadMTPsLocked_GuardFiresOnUnpopulatedStore(t *testing.T) {
-	v := &Validator{
-		logger:   ulogger.TestLogger{},
-		mtpStore: []uint32{1_700_000_000, 1_700_000_010}, // length 2, asking for height 5
-	}
+	// Length 5 is the boundary: the store must hold entry 5 itself.
+	for _, length := range []int{2, 5} {
+		v := &Validator{logger: ulogger.TestLogger{}, mtpStore: make([]uint32, length)}
 
-	utxoMTPs, _, err := v.readMTPsLocked(5, 1_800_000_000, 0, nil, nil, []uint32{0})
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "MTP store not loaded up to height 5")
-	require.Nil(t, utxoMTPs)
+		utxoMTPs, _, err := v.readMTPsLocked(5, 1_800_000_000, 0, nil, nil, []uint32{0})
+		require.ErrorContains(t, err, "MTP store not loaded up to height 5", "length %d", length)
+		require.Nil(t, utxoMTPs)
+	}
 }
 
 // laneShadowValidator is parentOutputsValidator at utxostore_laneMigration shadow.
@@ -3540,7 +3542,7 @@ func (c *idChainClient) chain() []*model.BlockHeader {
 }
 
 func idChainMeta(h uint32) *model.BlockHeaderMeta {
-	return &model.BlockHeaderMeta{Height: h, ID: h + 1, MedianTimePast: 1_700_000_000 + h}
+	return &model.BlockHeaderMeta{Height: h, ID: h + 1}
 }
 
 func (c *idChainClient) GetBlockHeadersByHeight(_ context.Context, start, _ uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
@@ -3732,16 +3734,23 @@ type reorgFixture struct {
 	makeBCurrent   func()
 }
 
-func newReorgFixture(t *testing.T) *reorgFixture {
+// sqlChainSettings enforces BIP68 from csvHeight up to Genesis activation at 1,000.
+func sqlChainSettings(t *testing.T, csvHeight uint32) *settings.Settings {
 	t.Helper()
-
-	ctx := context.Background()
 
 	tSettings := test.CreateBaseTestSettings(t)
 	params := *tSettings.ChainCfgParams
-	params.CSVHeight = 0
+	params.CSVHeight = csvHeight
 	params.GenesisActivationHeight = 1_000
 	tSettings.ChainCfgParams = &params
+
+	return tSettings
+}
+
+// newSQLChainValidator stores blocks, in order, in a sqlitememory blockchain store and returns a
+// validator reading it through a loadCounter, the client and the store.
+func newSQLChainValidator(t *testing.T, tSettings *settings.Settings, blocks []*model.Block) (*Validator, *loadCounter, blockchain.ClientI, *blockchainsql.SQL) {
+	t.Helper()
 
 	storeURL, err := url.Parse("sqlitememory:///" + t.Name())
 	require.NoError(t, err)
@@ -3749,11 +3758,8 @@ func newReorgFixture(t *testing.T) *reorgFixture {
 	store, err := blockchainsql.New(ulogger.TestLogger{}, storeURL, tSettings)
 	require.NoError(t, err)
 
-	chainA := reorgTestBlocks(t, params.GenesisHash, 1, 60, 0)
-	chainB := reorgTestBlocks(t, chainA[19].Hash(), 21, 41, 7_200)
-
-	for _, block := range append(append([]*model.Block{}, chainA...), chainB[:40]...) {
-		_, _, err = store.StoreBlock(ctx, block, "")
+	for _, block := range blocks {
+		_, _, err = store.StoreBlock(context.Background(), block, "")
 		require.NoError(t, err)
 	}
 
@@ -3770,6 +3776,20 @@ func newReorgFixture(t *testing.T) *reorgFixture {
 		stats:            gocore.NewStat("validator_test"),
 	}
 	v.txValidator.(*TxValidator).bdk = noopBDKValidator{}
+
+	return v, loads, client, store
+}
+
+func newReorgFixture(t *testing.T) *reorgFixture {
+	t.Helper()
+
+	ctx := context.Background()
+	tSettings := sqlChainSettings(t, 0)
+
+	chainA := reorgTestBlocks(t, tSettings.ChainCfgParams.GenesisHash, 1, 60, 0)
+	chainB := reorgTestBlocks(t, chainA[19].Hash(), 21, 41, 7_200)
+
+	v, loads, client, store := newSQLChainValidator(t, tSettings, append(slices.Clone(chainA), chainB[:40]...))
 
 	best, _, err := client.GetBestBlockHeader(ctx)
 	require.NoError(t, err)
@@ -4045,4 +4065,27 @@ func TestEnsureMTPLoaded_WaitsInsideTheWidenedWindow(t *testing.T) {
 	got := <-seen
 	require.NoError(t, got.err)
 	require.Equal(t, medianBelow(40, f.timeOnB), got.mtp)
+}
+
+// TestEnsureMTPLoaded_ComputesMediansFromTheWalkedChain checks that coin medians come from the
+// walked chain's own timestamps, not the stored column: that is 0 below CSVHeight, and a side
+// block stored at height 25, between A's blocks 25 and 26, puts its time into A's stored medians.
+func TestEnsureMTPLoaded_ComputesMediansFromTheWalkedChain(t *testing.T) {
+	tSettings := sqlChainSettings(t, 30)
+
+	chainA := reorgTestBlocks(t, tSettings.ChainCfgParams.GenesisHash, 1, 40, 0)
+	template := reorgTestBlocks(t, chainA[23].Hash(), 25, 1, 0)[0]
+	sideHeader := *template.Header
+	sideHeader.Timestamp = 1_000_000_000 // older than every block on A
+	side := &model.Block{Header: &sideHeader, CoinbaseTx: template.CoinbaseTx, TransactionCount: 1, Subtrees: template.Subtrees}
+	require.NotEqual(t, chainA[24].Hash(), side.Hash())
+
+	v, _, _, _ := newSQLChainValidator(t, tSettings, append(append(slices.Clone(chainA[:25]), side), chainA[25:]...))
+	require.NoError(t, v.EnsureMTPLoaded(context.Background(), 40))
+
+	timeAt := func(h uint32) uint32 { return chainA[h-1].Header.Timestamp }
+
+	for h := uint32(12); h <= 40; h++ {
+		require.Equal(t, medianBelow(h, timeAt), v.mtpStore[h], "height %d", h)
+	}
 }

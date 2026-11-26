@@ -3865,8 +3865,8 @@ const medianTimeSpan = uint32(blockchain.MedianTimeBlocks)
 // is above the tip, and for genesis, whose ID in the SQL store is 0). Values and IDs come from
 // one walk by parent links from that block,
 // which reads no main-chain flag and no cache, so both describe one chain however the chain
-// moves meanwhile. An entry whose block is stored takes the block's stored median; the entry
-// just above the walked block, not stored yet, is the median of the 11 timestamps below it.
+// moves meanwhile. Each entry is the median of the 11 walked timestamps below it, or of all of
+// them for an entry nearer genesis.
 // The walk holds one page of headers at a time (mtpPageSize) besides those 11 timestamps, so a
 // first load after a restart holds the two result arrays and one page, not the whole chain.
 func (v *Validator) fetchMTPRange(ctx context.Context, fromHeight, needed uint32) ([]uint32, []uint32, error) {
@@ -3882,42 +3882,65 @@ func (v *Validator) fetchMTPRange(ctx context.Context, fromHeight, needed uint32
 		return values, ids, nil // every entry is above the tip
 	}
 
-	// The walk covers the blocks the entries name, down to fromHeight-1, and the 11 timestamps
-	// below the entry just above top.
+	// The walk covers the 11 blocks below each entry, from fromHeight up to the entry just above
+	// top. Each median is computed from the walked chain's own timestamps, never read from the
+	// stored median_time_past column: the store saves 0 there below CSVHeight, and computes the
+	// column from a timestamp cache keyed by height, which a side block at the same height can
+	// leave holding another branch's time.
 	lowest := uint32(0)
 	if low := min(fromHeight, top+1); low > medianTimeSpan {
 		lowest = low - medianTimeSpan
 	}
 
-	window := make([]time.Time, 0, medianTimeSpan)
+	// recent holds the timestamps of the last medianTimeSpan blocks walked, newest first.
+	recent := make([]uint32, 0, medianTimeSpan)
+	setMedian := func(entry uint32) {
+		if entry >= fromHeight && entry <= needed {
+			values[entry-fromHeight] = medianOf(recent)
+		}
+	}
 
 	err = v.walkMTPChain(ctx, topHash, top, lowest, func(height uint32, header *model.BlockHeader, meta *model.BlockHeaderMeta) {
-		if height >= fromHeight {
-			values[height-fromHeight] = meta.MedianTimePast
-		}
-
 		if height+1 >= fromHeight && height+1 <= needed {
 			ids[height+1-fromHeight] = meta.ID
 		}
 
-		if uint32(len(window)) < medianTimeSpan {
-			window = append(window, time.Unix(int64(header.Timestamp), 0))
+		if uint32(len(recent)) == medianTimeSpan {
+			recent = recent[1:]
+		}
+
+		recent = append(recent, header.Timestamp)
+
+		// The entry medianTimeSpan above this block reads exactly the blocks in recent.
+		if uint32(len(recent)) == medianTimeSpan {
+			setMedian(height + medianTimeSpan)
 		}
 	})
 	if err != nil {
 		return nil, nil, err
 	}
 
-	if h := top + 1; h <= needed && h >= medianTimeSpan && uint32(len(window)) == medianTimeSpan {
-		median, medianErr := model.CalculateMedianTimestamp(window)
-		if medianErr != nil {
-			return nil, nil, errors.NewProcessingError("[Validator][EnsureMTPLoaded] median below height %d", h, medianErr)
+	// Near genesis an entry has fewer than medianTimeSpan blocks below it and takes the median
+	// of all of them, as SV Node's GetMedianTimePast does.
+	if lowest == 0 {
+		for entry := min(uint32(len(recent)), medianTimeSpan-1); entry >= 1; entry-- {
+			recent = recent[len(recent)-int(entry):]
+			setMedian(entry)
 		}
-
-		values[h-fromHeight] = uint32(median.Unix()) //nolint:gosec // block times fit in uint32
 	}
 
 	return values, ids, nil
+}
+
+// medianOf returns the median of timestamps, the middle one after sorting (the upper middle
+// for an even count), as model.CalculateMedianTimestamp picks it. timestamps is not changed.
+func medianOf(timestamps []uint32) uint32 {
+	var scratch [medianTimeSpan]uint32
+
+	sorted := append(scratch[:0], timestamps...)
+	slices.Sort(sorted)
+
+	return sorted[len(sorted)/2]
 }
 
 // mtpTop returns the current chain's block at needed-1, or its tip when that block does not
