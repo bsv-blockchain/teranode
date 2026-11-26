@@ -2,6 +2,7 @@ package aerospike
 
 import (
 	"context"
+	"sync/atomic"
 	"testing"
 
 	"github.com/bsv-blockchain/aerospike-client-go/v8"
@@ -225,11 +226,15 @@ func TestSetMinedMultiKeepsTheStorageCodeOfAFailedCleanup(t *testing.T) {
 		expressions bool
 		sibling     bool // a never-created hash in the batch, so the mined update fails too
 		cleanup     string
+		// fail is the cleanup's batch seam; nil fails every cleanup batch whole.
+		fail func(client *uaerospike.Client) func(*aerospike.BatchPolicy, []aerospike.BatchRecordIfc) aerospike.Error
 	}{
 		{name: "lua: the clear of the extra records fails", cleanup: "clearLockedOnRecordsMulti"},
 		{name: "expressions: the extra record count read of a FILTERED_OUT tx fails", expressions: true, cleanup: "readExtraRecordCounts"},
 		{name: "lua: the clear fails beside a failed sibling", sibling: true, cleanup: "clearLockedOnRecordsMulti"},
 		{name: "expressions: the count read fails beside a failed sibling", expressions: true, sibling: true, cleanup: "readExtraRecordCounts"},
+		{name: "lua: one record of the clear fails", cleanup: "clearLockedOnRecordsMulti", fail: failOneClearRecord},
+		{name: "expressions: only the unlock of a FILTERED_OUT tx fails", expressions: true, cleanup: "applyLockClearWork", fail: failAfterReadAndClear},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := context.Background()
@@ -237,7 +242,7 @@ func TestSetMinedMultiKeepsTheStorageCodeOfAFailedCleanup(t *testing.T) {
 			tSettings := test.CreateBaseTestSettings(t)
 			tSettings.Aerospike.EnableSetMinedFilterExpressions = tc.expressions
 
-			store, _ := newSharedTestStore(t, logger, tSettings, "&externalStore=file://./data/external&block_retention=100")
+			store, client := newSharedTestStore(t, logger, tSettings, "&externalStore=file://./data/external&block_retention=100")
 			store.utxoBatchSize = 4
 
 			tx := txWithOutputs(t, 10)
@@ -260,6 +265,10 @@ func TestSetMinedMultiKeepsTheStorageCodeOfAFailedCleanup(t *testing.T) {
 
 			// The mined update calls the client directly; only the cleanup batches go through this seam.
 			store.batchOperateFn = errorOperate()
+			if tc.fail != nil {
+				store.batchOperateFn = tc.fail(client)
+			}
+
 			t.Cleanup(func() { store.batchOperateFn = nil })
 
 			_, err = store.SetMinedMulti(ctx, hashes, info)
@@ -275,5 +284,39 @@ func TestSetMinedMultiKeepsTheStorageCodeOfAFailedCleanup(t *testing.T) {
 				utxo.SetMinedMultiChunked(ctx, logger, store, hashes, info, 10, 1))
 			require.True(t, errors.IsTransientLocalError(err), "got %v", err)
 		})
+	}
+}
+
+// failOneClearRecord runs each batch for real, then marks the first written
+// record as timed out, so the batch succeeds and one record fails.
+func failOneClearRecord(client *uaerospike.Client) func(*aerospike.BatchPolicy, []aerospike.BatchRecordIfc) aerospike.Error {
+	return func(policy *aerospike.BatchPolicy, records []aerospike.BatchRecordIfc) aerospike.Error {
+		if err := client.BatchOperate(policy, records); err != nil {
+			return err
+		}
+
+		for _, r := range records {
+			if _, isWrite := r.(*aerospike.BatchWrite); isWrite {
+				r.BatchRec().Err = &aerospike.AerospikeError{ResultCode: types.TIMEOUT}
+				break
+			}
+		}
+
+		return nil
+	}
+}
+
+// failAfterReadAndClear lets the first two cleanup batches of a FILTERED_OUT tx
+// run for real (the count read, then the clear) and fails every later one, which
+// is SetLocked's unlock.
+func failAfterReadAndClear(client *uaerospike.Client) func(*aerospike.BatchPolicy, []aerospike.BatchRecordIfc) aerospike.Error {
+	var calls atomic.Int32
+
+	return func(policy *aerospike.BatchPolicy, records []aerospike.BatchRecordIfc) aerospike.Error {
+		if calls.Add(1) <= 2 {
+			return client.BatchOperate(policy, records)
+		}
+
+		return &aerospike.AerospikeError{ResultCode: types.TIMEOUT}
 	}
 }
