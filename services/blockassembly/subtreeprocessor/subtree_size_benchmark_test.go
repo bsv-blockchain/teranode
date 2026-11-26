@@ -416,8 +416,14 @@ func setupSubtreeProcessorForBench(t *testing.T, itemsPerSubtree int) (*SubtreeP
 	)
 	require.NoError(t, err)
 
+	// Each round of every sub-benchmark builds a store; closing it keeps the live heap from
+	// growing row by row, which changed how often later rows collect garbage.
 	cleanup := func() {
 		close(done)
+
+		if utxoStore != nil {
+			_ = utxoStore.Close(ctx)
+		}
 	}
 
 	return stp, cleanup
@@ -1002,8 +1008,14 @@ func setupSubtreeProcessorForBenchB(b *testing.B, itemsPerSubtree int) (*Subtree
 		newSubtreeChan,
 	)
 
+	// Each round of every sub-benchmark builds a store; closing it keeps the live heap from
+	// growing row by row, which changed how often later rows collect garbage.
 	cleanup := func() {
 		close(done)
+
+		if utxoStore != nil {
+			_ = utxoStore.Close(ctx)
+		}
 	}
 
 	return stp, cleanup
