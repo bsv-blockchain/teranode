@@ -2,11 +2,13 @@ package subtreevalidation
 
 import (
 	"context"
+	"fmt"
 	"maps"
 	"math/rand/v2"
 	"net/url"
 	"regexp"
 	"slices"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -581,30 +583,43 @@ func Test_checkCounterConflictingOnCurrentChainBatch_equivalence(t *testing.T) {
 	blockIds := map[uint32]bool{equivalenceOnChainBlockID: true}
 
 	t.Run("cached path, every record present", func(t *testing.T) {
+		var mu sync.Mutex
+
 		seen := map[verdict]int{}
 		oneWay := 0
 
-		for seed := uint64(1); seed <= seeds; seed++ {
-			ctx := context.Background()
-			store := newSQLUtxoStore(t, ctx, tSettings)
+		// each seed has its own store; the group returns once every seed has run
+		t.Run("seeds", func(t *testing.T) {
+			for seed := uint64(1); seed <= seeds; seed++ {
+				t.Run(fmt.Sprintf("seed_%d", seed), func(t *testing.T) {
+					t.Parallel()
 
-			conflicting, _ := buildRandomConflictGraph(t, ctx, store, tSettings, rand.New(rand.NewPCG(seed, 2037)), seed)
-			if len(conflicting) == 0 {
-				continue
+					ctx := context.Background()
+					store := newSQLUtxoStore(t, ctx, tSettings)
+
+					conflicting, _ := buildRandomConflictGraph(t, ctx, store, tSettings, rand.New(rand.NewPCG(seed, 2037)), seed)
+					if len(conflicting) == 0 {
+						return
+					}
+
+					s, block, cachedSubtrees := newCachedCheckServer(t, store, tSettings, conflicting, []uint32{equivalenceOnChainBlockID})
+
+					want, sawNotFound := perTxVerdict(t, ctx, s, conflicting, blockIds)
+					require.Falsef(t, sawNotFound, "seed %d: every record is present", seed)
+
+					got, differs := requireBatchMatchesPerTx(t, ctx, store, conflicting, blockIds, seed, want, s.checkCachedSubtreesAgainstCandidateChain(ctx, block, cachedSubtrees))
+
+					mu.Lock()
+					defer mu.Unlock()
+
+					if differs {
+						oneWay++
+					}
+
+					seen[got]++
+				})
 			}
-
-			s, block, cachedSubtrees := newCachedCheckServer(t, store, tSettings, conflicting, []uint32{equivalenceOnChainBlockID})
-
-			want, sawNotFound := perTxVerdict(t, ctx, s, conflicting, blockIds)
-			require.Falsef(t, sawNotFound, "seed %d: every record is present", seed)
-
-			got, differs := requireBatchMatchesPerTx(t, ctx, store, conflicting, blockIds, seed, want, s.checkCachedSubtreesAgainstCandidateChain(ctx, block, cachedSubtrees))
-			if differs {
-				oneWay++
-			}
-
-			seen[got]++
-		}
+		})
 
 		t.Logf("batched verdicts over %d seeds: %v, %d proven tx-invalid by the batch only", seeds, seen, oneWay)
 
@@ -615,42 +630,56 @@ func Test_checkCounterConflictingOnCurrentChainBatch_equivalence(t *testing.T) {
 	})
 
 	t.Run("fresh-path policy, some records missing", func(t *testing.T) {
+		var mu sync.Mutex
+
 		seen := map[verdict]int{}
 		notFoundSeeds := 0
 		oneWay := 0
 
-		for seed := uint64(1); seed <= seeds; seed++ {
-			ctx := context.Background()
-			rng := rand.New(rand.NewPCG(seed, 2038))
-			store := newSQLUtxoStore(t, ctx, tSettings)
+		// each seed has its own store; the group returns once every seed has run
+		t.Run("seeds", func(t *testing.T) {
+			for seed := uint64(1); seed <= seeds; seed++ {
+				t.Run(fmt.Sprintf("seed_%d", seed), func(t *testing.T) {
+					t.Parallel()
 
-			conflicting, stored := buildRandomConflictGraph(t, ctx, store, tSettings, rng, seed)
-			if len(conflicting) == 0 {
-				continue
+					ctx := context.Background()
+					rng := rand.New(rand.NewPCG(seed, 2038))
+					store := newSQLUtxoStore(t, ctx, tSettings)
+
+					conflicting, stored := buildRandomConflictGraph(t, ctx, store, tSettings, rng, seed)
+					if len(conflicting) == 0 {
+						return
+					}
+
+					// prune at most one record, anywhere: a conflicting tx, a parent, a
+					// counter-spender or a cone member. The graph is dense enough that more
+					// reaches nearly every check.
+					if rng.IntN(2) == 0 {
+						require.NoError(t, store.Delete(ctx, stored[rng.IntN(len(stored))].TxIDChainHash()))
+					}
+
+					s := &Server{logger: ulogger.NewErrorTestLogger(t), settings: tSettings, utxoStore: store}
+
+					want, sawNotFound := perTxVerdict(t, ctx, s, conflicting, blockIds)
+
+					_, err := s.checkCounterConflictingOnCurrentChainBatch(ctx, conflicting, blockIds, failOnMissingRecords)
+					got, differs := requireBatchMatchesPerTx(t, ctx, store, conflicting, blockIds, seed, want, err)
+
+					mu.Lock()
+					defer mu.Unlock()
+
+					if sawNotFound {
+						notFoundSeeds++
+					}
+
+					if differs {
+						oneWay++
+					}
+
+					seen[got]++
+				})
 			}
-
-			// prune at most one record, anywhere: a conflicting tx, a parent, a
-			// counter-spender or a cone member. The graph is dense enough that more
-			// reaches nearly every check.
-			if rng.IntN(2) == 0 {
-				require.NoError(t, store.Delete(ctx, stored[rng.IntN(len(stored))].TxIDChainHash()))
-			}
-
-			s := &Server{logger: ulogger.NewErrorTestLogger(t), settings: tSettings, utxoStore: store}
-
-			want, sawNotFound := perTxVerdict(t, ctx, s, conflicting, blockIds)
-			if sawNotFound {
-				notFoundSeeds++
-			}
-
-			_, err := s.checkCounterConflictingOnCurrentChainBatch(ctx, conflicting, blockIds, failOnMissingRecords)
-			got, differs := requireBatchMatchesPerTx(t, ctx, store, conflicting, blockIds, seed, want, err)
-			if differs {
-				oneWay++
-			}
-
-			seen[got]++
-		}
+		})
 
 		t.Logf("batched verdicts over %d seeds: %v, %d with a per-tx ErrTxNotFound, %d proven tx-invalid by the batch only", seeds, seen, notFoundSeeds, oneWay)
 
