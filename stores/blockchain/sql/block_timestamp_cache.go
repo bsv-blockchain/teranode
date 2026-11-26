@@ -16,7 +16,8 @@ const blockTimestampCacheCapacity = 1000
 type blockTimestampCache struct {
 	mu     sync.RWMutex
 	blocks map[uint64]cachedBlockTime
-	order  []uint64 // IDs in the order they were added, oldest first, for eviction
+	order  [blockTimestampCacheCapacity]uint64 // a ring of IDs in the order they were added
+	next   int                                 // the ring slot the next Add writes, holding the oldest ID once full
 }
 
 type cachedBlockTime struct {
@@ -25,10 +26,7 @@ type cachedBlockTime struct {
 }
 
 func newBlockTimestampCache() *blockTimestampCache {
-	return &blockTimestampCache{
-		blocks: make(map[uint64]cachedBlockTime, blockTimestampCacheCapacity),
-		order:  make([]uint64, 0, blockTimestampCacheCapacity),
-	}
+	return &blockTimestampCache{blocks: make(map[uint64]cachedBlockTime, blockTimestampCacheCapacity)}
 }
 
 // Add records block id's timestamp and parent. An id already present is left as it is.
@@ -40,13 +38,13 @@ func (c *blockTimestampCache) Add(id, parentID uint64, blockTime uint32) {
 		return
 	}
 
-	if len(c.order) == blockTimestampCacheCapacity {
-		delete(c.blocks, c.order[0])
-		c.order = append(c.order[:0], c.order[1:]...)
+	if len(c.blocks) == blockTimestampCacheCapacity {
+		delete(c.blocks, c.order[c.next])
 	}
 
 	c.blocks[id] = cachedBlockTime{blockTime: blockTime, parentID: parentID}
-	c.order = append(c.order, id)
+	c.order[c.next] = id
+	c.next = (c.next + 1) % blockTimestampCacheCapacity
 }
 
 // Ancestors returns the timestamps of block id and its count-1 nearest ancestors, oldest first,
@@ -76,7 +74,7 @@ func (c *blockTimestampCache) Clear() {
 	defer c.mu.Unlock()
 
 	c.blocks = make(map[uint64]cachedBlockTime, blockTimestampCacheCapacity)
-	c.order = c.order[:0]
+	c.next = 0
 }
 
 // Len returns the number of entries.
