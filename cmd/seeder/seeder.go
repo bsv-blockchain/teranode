@@ -480,7 +480,7 @@ func processHeaders(ctx context.Context, logger ulogger.Logger, blockchainStore 
 // fails on a mismatch before marking the seed complete.
 //
 //nolint:gocognit // Requires refactoring to reduce cognitive complexity
-func processUTXOs(ctx context.Context, logger ulogger.Logger, appSettings *settings.Settings, blockchainStore blockchain.Store, utxoFile string, headersFile string, force bool, recoverCheckpoint bool, expectedSHA256 string) (*utxoSetTip, error) {
+func processUTXOs(ctx context.Context, logger ulogger.Logger, appSettings *settings.Settings, blockchainStore blockchain.Store, utxoFile, headersFile string, force, recoverCheckpoint bool, expectedSHA256 string) (*utxoSetTip, error) {
 	blockStoreURL := appSettings.Block.BlockStore
 	if blockStoreURL == nil {
 		return nil, errors.NewConfigurationError("blockstore URL not found in config")
