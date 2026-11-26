@@ -253,7 +253,7 @@ func NewKafkaAsyncProducerFromURL(ctx context.Context, logger ulogger.Logger, ur
 	}
 
 	producer, err := retry.Retry(ctx, logger, func() (*KafkaAsyncProducer, error) {
-		return NewKafkaAsyncProducer(logger, producerConfig)
+		return newKafkaAsyncProducer(ctx, logger, producerConfig)
 	}, retry.WithMessage(fmt.Sprintf("[P2P] error starting kafka async producer for topic %s", producerConfig.Topic)))
 	if err != nil {
 		logger.Fatalf("[P2P] failed to start kafka async producer for topic %s: %v", producerConfig.Topic, err)
@@ -288,6 +288,12 @@ func clampBatchMaxBytes(flushBytes int) int32 {
 
 // NewKafkaAsyncProducer creates a new async producer with the given configuration using franz-go.
 func NewKafkaAsyncProducer(logger ulogger.Logger, cfg KafkaProducerConfig) (*KafkaAsyncProducer, error) {
+	return newKafkaAsyncProducer(context.Background(), logger, cfg)
+}
+
+// newKafkaAsyncProducer is NewKafkaAsyncProducer with ctx bounding topic creation,
+// so a cancelled caller is not held for franz-go's request retry timeout.
+func newKafkaAsyncProducer(ctx context.Context, logger ulogger.Logger, cfg KafkaProducerConfig) (*KafkaAsyncProducer, error) {
 	logger.Debugf("Starting async kafka producer for %s", urlutil.Redact(cfg.URL))
 
 	producer := &KafkaAsyncProducer{
@@ -367,8 +373,8 @@ func NewKafkaAsyncProducer(logger ulogger.Logger, cfg KafkaProducerConfig) (*Kaf
 		return nil, errors.NewServiceError("Failed to create Kafka async producer for %s", cfg.Topic, err)
 	}
 
-	// Create topic if it doesn't exist (uses Background; constructor is not cancelable)
-	if err := createTopicWithFranz(context.Background(), client, cfg); err != nil {
+	// Create topic if it doesn't exist
+	if err := createTopicWithFranz(ctx, client, cfg); err != nil {
 		client.Close()
 		return nil, err
 	}

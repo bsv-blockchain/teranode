@@ -178,7 +178,7 @@ A failure MUST be classified `ERR_BLOCK_CORRUPT`. Separately, after every consen
 
 - the body is bound;
 - the UTXO store supports outpoint-only spends;
-- the block is already stored, and it is the stored block with the highest hardcoded checkpoint's hash or one of that block's ancestors: following parent links down from the checkpoint block reaches it at its own height (`checkpointConfirmedAncestor`). A block above such an ancestor, or on a fork beside it, does not qualify;
+- the block is tied to a hardcoded checkpoint hash (`checkpointConfirmedAncestor`), in one of two ways. Either it is already stored, and it is the stored block with the highest hardcoded checkpoint's hash or one of that block's ancestors: following parent links down from the checkpoint block reaches it at its own height. Or legacy sync supplied the header proof, which the unified route also rests on: the block's hash sits in a header run that a matched hardcoded checkpoint commits. A block above such an ancestor, or on a fork beside it, does not qualify;
 - the height is ≤ the highest hardcoded checkpoint.
 
 **BV-BODY-011.** A violation of BV-BODY-006 through BV-BODY-010 SHALL be classified `ERR_BLOCK_INVALID` when the body is bound and `ERR_BLOCK_CORRUPT` when it is not.

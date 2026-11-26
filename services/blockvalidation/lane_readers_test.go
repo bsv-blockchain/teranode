@@ -225,24 +225,36 @@ func countsLaneShadowsThroughTheRealHooks(t *testing.T, optimistic bool) {
 	address, err := bscript.NewAddressFromPublicKey(privateKey.PubKey(), true)
 	require.NoError(t, err)
 
-	// The block's one transaction spends fundingTx, a parent outside the block.
+	// The block's one transaction spends two parents outside the block: fundingTx, an ordinary
+	// transaction, and maturedCoinbase.
 	fundingTx := bt.NewTx()
-	require.NoError(t, fundingTx.From("0000000000000000000000000000000000000000000000000000000000000000", 0xffffffff, "", 0))
+	require.NoError(t, fundingTx.From("1111111111111111111111111111111111111111111111111111111111111111", 0,
+		"76a914000000000000000000000000000000000000000088ac", 51*100000000))
 	fundingTx.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{0x03, 0x64, 0x00, 0x00, 0x00, '/', 'F', 'u', 'n', 'd'})
 	require.NoError(t, fundingTx.AddP2PKHOutputFromAddress(address.AddressString, 50*100000000))
 
-	txT := bt.NewTx()
-	require.NoError(t, txT.FromUTXOs(&bt.UTXO{
-		TxIDHash:      fundingTx.TxIDChainHash(),
-		Vout:          0,
-		LockingScript: fundingTx.Outputs[0].LockingScript,
-		Satoshis:      fundingTx.Outputs[0].Satoshis,
-	}))
-	require.NoError(t, txT.AddP2PKHOutputFromAddress(address.AddressString, 49*100000000))
-	require.NoError(t, txT.FillAllInputs(ctx, &unlocker.Getter{PrivateKey: privateKey}))
+	maturedCoinbase := bt.NewTx()
+	require.NoError(t, maturedCoinbase.From("0000000000000000000000000000000000000000000000000000000000000000", 0xffffffff, "", 0))
+	maturedCoinbase.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{0x03, 0x64, 0x00, 0x00, 0x00, '/', 'C', 'o', 'i', 'n'})
+	require.NoError(t, maturedCoinbase.AddP2PKHOutputFromAddress(address.AddressString, 50*100000000))
+	require.True(t, maturedCoinbase.IsCoinbase())
 
-	_, _, err = realUtxoStore.SpendAndCreate(ctx, fundingTx, 0, utxostore.WithMinedBlockInfo(utxostore.MinedBlockInfo{BlockID: 0, BlockHeight: 0}), utxostore.WithCreateOnly())
-	require.NoError(t, err)
+	txT := bt.NewTx()
+
+	for _, parent := range []*bt.Tx{fundingTx, maturedCoinbase} {
+		require.NoError(t, txT.FromUTXOs(&bt.UTXO{
+			TxIDHash:      parent.TxIDChainHash(),
+			Vout:          0,
+			LockingScript: parent.Outputs[0].LockingScript,
+			Satoshis:      parent.Outputs[0].Satoshis,
+		}))
+
+		_, _, err = realUtxoStore.SpendAndCreate(ctx, parent, 0, utxostore.WithMinedBlockInfo(utxostore.MinedBlockInfo{BlockID: 0, BlockHeight: 0}), utxostore.WithCreateOnly())
+		require.NoError(t, err)
+	}
+
+	require.NoError(t, txT.AddP2PKHOutputFromAddress(address.AddressString, 99*100000000))
+	require.NoError(t, txT.FillAllInputs(ctx, &unlocker.Getter{PrivateKey: privateKey}))
 
 	_, _, err = realUtxoStore.SpendAndCreate(ctx, txT, 0, utxostore.WithCreateOnly())
 	require.NoError(t, err)
@@ -297,24 +309,28 @@ func countsLaneShadowsThroughTheRealHooks(t *testing.T, optimistic bool) {
 
 	t.Cleanup(func() { lanereader.Start(context.Background(), nil, test.CreateBaseTestSettings(t), nil) })
 
-	// The parent check: fundingTx is outside the block, so ValidateBlock's parent read is told to
-	// the shadow, which counts it under block_parent.
+	// The parent check: both parents are outside the block, so ValidateBlock's parent read tells
+	// each to the shadow, which counts it under block_parent.
 	_, stop := startLaneReaderOn(t, tSettings, blockChainStore)
 
 	// fundingTx's record has no lane position (the UTXO store here runs at off), so the answer is
 	// no_position; a shadow judged on the wrong chain, one that never loads, would be not_ready.
+	// maturedCoinbase counts coinbase, whatever the chain.
 	noPosition := laneReaderAnswer(t, lanereader.ReaderBlockParent, lanereader.KindNoPosition)
+	coinbases := laneReaderAnswer(t, lanereader.ReaderBlockParent, lanereader.KindCoinbase)
+	parentsCounted := func(n float64) func() bool {
+		return func() bool {
+			return laneReaderAnswer(t, lanereader.ReaderBlockParent, lanereader.KindNoPosition) == noPosition+n &&
+				laneReaderAnswer(t, lanereader.ReaderBlockParent, lanereader.KindCoinbase) == coinbases+n
+		}
+	}
 
 	require.NoError(t, bv.ValidateBlock(ctx, block, "test"))
-	require.Eventually(t, func() bool {
-		return laneReaderAnswer(t, lanereader.ReaderBlockParent, lanereader.KindNoPosition) == noPosition+1
-	}, 10*time.Second, 10*time.Millisecond)
+	require.Eventually(t, parentsCounted(1), 10*time.Second, 10*time.Millisecond)
 
 	// Revalidating the stored block runs the parent check, and its shadow, again.
 	_ = bv.reValidateBlock(ctx, revalidateBlockData{block: block, baseURL: "test"})
-	require.Eventually(t, func() bool {
-		return laneReaderAnswer(t, lanereader.ReaderBlockParent, lanereader.KindNoPosition) == noPosition+2
-	}, 10*time.Second, 10*time.Millisecond, "reValidateBlock's parent check is shadowed too")
+	require.Eventually(t, parentsCounted(2), 10*time.Second, 10*time.Millisecond, "reValidateBlock's parent check is shadowed too")
 
 	// So is the gRPC entry point's.
 	server := &Server{logger: logger, settings: tSettings, blockValidation: bv, blockchainClient: blockchainClient,
@@ -325,9 +341,7 @@ func countsLaneShadowsThroughTheRealHooks(t *testing.T, optimistic bool) {
 
 	_, err = server.ValidateBlock(ctx, &blockvalidation_api.ValidateBlockRequest{Block: blockBytes, Height: 1})
 	require.NoError(t, err)
-	require.Eventually(t, func() bool {
-		return laneReaderAnswer(t, lanereader.ReaderBlockParent, lanereader.KindNoPosition) == noPosition+3
-	}, 10*time.Second, 10*time.Millisecond, "Server.ValidateBlock's parent check is shadowed too")
+	require.Eventually(t, parentsCounted(3), 10*time.Second, 10*time.Millisecond, "Server.ValidateBlock's parent check is shadowed too")
 
 	stop()
 
@@ -361,7 +375,7 @@ func laneReaderAnswerAll(t *testing.T, reader string) float64 {
 	var sum float64
 
 	for _, kind := range []string{lanereader.KindAgree, lanereader.KindLanesOnly, lanereader.KindTodayOnly, lanereader.KindDifferentBlock,
-		lanereader.KindNoPosition, lanereader.KindNoRows, lanereader.KindNotLoaded, lanereader.KindNotReady, lanereader.KindOffChain} {
+		lanereader.KindNoPosition, lanereader.KindNoRows, lanereader.KindNotLoaded, lanereader.KindNotReady, lanereader.KindOffChain, lanereader.KindCoinbase} {
 		sum += laneReaderAnswer(t, reader, kind)
 	}
 
