@@ -64,6 +64,12 @@ func TestStreamBuildSubtrees_MatchesBulkBuild(t *testing.T) {
 
 			for _, cuts := range [][]int{nil, {n / 2}, {n / 3, 2 * n / 3}, {0, n}} {
 				for _, disk := range []bool{false, true} {
+					// The disk map only adds the subtree index the build writes; `make test` checks it at
+					// size 64 over three runs, heavy tests (`make test-heavy`, the mutant script) everywhere.
+					if disk && !heavyTests() && (size != 64 || len(cuts) != 2) {
+						continue
+					}
+
 					t.Run(fmt.Sprintf("size=%d/n=%d/cuts=%v/disk=%t", size, n, cuts, disk), func(t *testing.T) {
 						var opts []Options
 						if disk {
