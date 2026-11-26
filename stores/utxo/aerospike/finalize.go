@@ -382,6 +382,60 @@ func finalizeMasterOps(attempt, lease []byte) []*aerospike.Operation {
 	return append(ops, removeUnminedSinceIfMinedOp())
 }
 
+// markFinalizing sets the finalizing bin on the master record of a paginated create-first attempt,
+// before the finalize clears the first pagination child. It is the point after which the attempt
+// can only be completed: the write is filtered like the finalize itself, so it is refused for a
+// record that is rolling back, and BeginCreateFirstRollback is refused for a record that carries
+// the bin. Both are single-record writes on the master, so the server orders them. A child is
+// therefore cleared only on a master that no rollback can claim, and the end of a rollback never
+// deletes a page whose outputs were spendable.
+//
+// The bin says only what is already true: a finalize runs once every input of the attempt is
+// spent. It names no caller and clears nothing, so a write that lands after its caller has gone
+// changes no ownership, which is why it is not held to the deadline of ctx as the master write
+// of clearCreatingFlag is. It is still not sent once ctx has ended, and it carries no more time
+// than ctx has left.
+//
+// done reports that the record is already final under the lease of this call: an earlier send of
+// its own finalize cleared it, and nothing is left to do. A record that is final under another
+// lease, rolling back, gone or creating under another attempt returns the error of
+// finalizeFilteredOutResult, and no child is touched.
+func (s *Store) markFinalizing(ctx context.Context, txHash *chainhash.Hash, attempt, lease []byte) (done bool, err error) {
+	key, keyErr := aerospike.NewKey(s.namespace, s.setName, txHash[:])
+	if keyErr != nil {
+		return false, errors.NewProcessingError("[clearCreatingFlag] failed to create the master key of %s", txHash.String(), keyErr)
+	}
+
+	writePolicy := util.GetAerospikeWritePolicy(s.settings, 0)
+	writePolicy.RecordExistsAction = aerospike.UPDATE_ONLY
+	writePolicy.FilterExpression = finalizeFilter(attempt)
+
+	if boundErr := boundPolicyByContext(ctx, &writePolicy.BasePolicy); boundErr != nil {
+		return false, boundErr
+	}
+
+	_, putErr := s.client.Operate(writePolicy, key, aerospike.PutOp(aerospike.NewBin(fields.Finalizing.String(), true)))
+	if putErr == nil {
+		return false, nil
+	}
+
+	if errors.Is(putErr, aerospike.ErrKeyNotFound) {
+		return false, errors.NewTxNotFoundError("[clearCreatingFlag] record not found for tx %s", txHash.String())
+	}
+
+	if !isFilteredOut(putErr) {
+		prometheusUtxoMapErrors.WithLabelValues("FinalizeTransaction", "error").Inc()
+
+		return false, errors.NewStorageError("[clearCreatingFlag] failed to mark the master record of tx %s as finalizing", txHash.String(), putErr)
+	}
+
+	if filteredErr := s.finalizeFilteredOutResult(txHash, attempt, lease); filteredErr != nil {
+		return false, filteredErr
+	}
+
+	return true, nil
+}
+
 // finalizeFilteredOutResult reads the master record after a finalize write was filtered out
 // and returns the finalize result. A record that is final carries the lease of the caller whose
 // write cleared the creating bin: when that is the lease of this call, an earlier send of its own

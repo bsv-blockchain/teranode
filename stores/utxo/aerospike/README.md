@@ -430,7 +430,9 @@ shared `SequentialSpendAndCreate` instead runs **create-first**:
    master and on every pagination child; see "Attempt token and hold" below.
 2. **Spend inputs** — the transaction's parent outputs are spent.
 3. **Finalize** — `FinalizeTransaction(tx, attempt)` clears the `creating` bin (children first,
-   master last), making the outputs spendable. The clear is filtered on the token.
+   master last), making the outputs spendable. The clear is filtered on the token. A transaction
+   with pagination children gets the `finalizing` bin on its master before the first child is
+   cleared; see "Finalizing mark" below.
 
 Because the record exists before its spends are written, a crash between steps 2 and 3
 leaves an inspectable, recoverable record instead of a dangling reference. There is **no
@@ -499,8 +501,9 @@ other, with a lease on the master record.
   spender holds a lease no rollback begins, and once a rollback has begun no spender starts. Every
   spend of the attempt therefore lands before the reversal, and the reversal, which covers every
   input of the transaction, undoes it. A lease holder that is clearing the `creating` bins of the
-  pagination children is also never overtaken by a rollback that deletes them, so a descendant
-  cannot spend an output of a page that a rollback then removes.
+  pagination children is also never overtaken by a rollback that deletes them. The lease covers
+  only the time its holder is at work: what keeps a rollback from a record whose finalize began and
+  did not end is the `finalizing` bin (see "Finalizing mark" below).
 - **Release.** A spender calls `ReleaseSpendLease` when its spend has returned with a known
   outcome and it will not finalize the record: after a finalize that failed, or one that found
   the record final under another actor's write. A roll-forward never reverses a spend itself. A
@@ -585,6 +588,42 @@ owns only the spends recorded at or after the height it was created at (its `unm
   record itself and young leftovers of an earlier attempt. Every other caller of `Unspend` passes no
   argument.
 
+### Finalizing mark
+
+The spend gate of an output is the `creating` bin of the record that holds it, and a paginated
+finalize clears the pagination children before the master. A cleared child therefore has spendable
+outputs while its master is still creating. The end of a rollback deletes the children, so a
+rollback of such a record would delete a page under the spend of a descendant.
+
+- **The mark.** Before it clears the first child, the finalize of a create-first attempt writes
+  the `finalizing` bin on the master (`markFinalizing`): one write, filtered on `creating`, the
+  token and no `rollingBack` bin. `BeginCreateFirstRollback` is filtered on the master carrying no
+  `finalizing` bin. Both are single-record writes on the master, so the server orders them: a
+  rollback that began first refuses the finalize before any child is touched, and a finalize that
+  marked first refuses every rollback from then on.
+- **What it says.** A finalize runs only once every input of the attempt is spent, so the mark says
+  that the transaction is complete but for its `creating` bins. It names no caller and clears
+  nothing. The master write of the finalize removes it with the `creating` bin.
+- **Only a finalize that can end writes it.** The mark takes the rollback away, so the finalize
+  reads the children first (`refuseChildrenOutOfReach`). A child that is absent, or is creating
+  under the token of another attempt, fails the finalize before the mark and before any child is
+  cleared, and the attempt can still be rolled back. Once the mark is on the master no other
+  attempt can write the txid, because that takes a rollback of this one, so a child that was in
+  reach stays in reach.
+- **A finalize that does not end.** A child write that fails, a master write that is refused or
+  whose answer is lost, or a caller that runs out of time leaves the master `creating` and
+  `finalizing`. Every recovery path still selects the record by its `creating` bin, and a repeat
+  of the finalize completes it.
+- **Recovery does not depend on a new spend.** The Lua spend refuses a locked or conflicting
+  parent before it sees that an output is already spent by the same transaction, and a parent can
+  be gone. `utxo.RollForwardCreating` sets the failure of its re-spend aside for a record that
+  carries the mark under the attempt, and runs the finalize. A re-spend whose outcome is unknown
+  is not set aside: its lease stays, and a later roll-forward completes the record.
+- **Scope.** Only a record with an `attempt` token and at least one pagination child is marked. A
+  single-record transaction clears in one write, and a record with no token is never rolled back.
+- **Limit.** A record whose children were cleared by a binary that did not write the mark is not
+  protected.
+
 ### Rollback of a failed create-first spend
 
 A spend that fails after the tentative create is rolled back by `utxo.RollBackCreating`. The
@@ -593,7 +632,8 @@ creator first releases its own spend lease.
 on the `creating` bin and the token. The same write sets `busy` and `holdUntil`, so the owner
 holds the hold for its whole unspend and releases it with `ReleaseRollbackHold` before it ends
 the rollback. The claim is refused while a spend lease of the attempt is live, and the owner
-tries again for `utxostore_spendWaitTimeout`. Then every input of the tx is
+tries again for `utxostore_spendWaitTimeout`. It is also refused, with no retry, for a master
+that carries the `finalizing` bin: that record can only be completed. Then every input of the tx is
 unspent (not only the spends that
 succeeded in the failing pass, because an earlier attempt may have spent an input that now fails
 for another reason; the Lua ownership check makes an input the tx does not own a no-op, and an

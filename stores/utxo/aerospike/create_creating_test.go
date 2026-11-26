@@ -339,6 +339,11 @@ func TestFinalizeTransaction_ChildCreatingUnderAnotherAttemptKeepsMasterCreating
 	require.NoError(t, store.GetMeta(ctx, hash, got))
 	require.True(t, got.Creating, "the master stays creating while a child is not clear")
 	require.Equal(t, md.Attempt, got.Attempt)
+	require.False(t, got.Finalizing, "a finalize that cannot end does not mark the master, so the attempt can still be rolled back")
+
+	for idx := uint32(1); childRecordExists(t, client, store, hash, idx); idx++ {
+		require.Contains(t, recordBins(t, client, store, hash, idx, fields.Creating), fields.Creating.String(), "child %d: a refused finalize clears no child, also not one of its own attempt", idx)
+	}
 
 	writeRawBins(t, client, store, hash, 1, aerospike.NewBin(fields.Attempt.String(), md.Attempt))
 	require.NoError(t, store.FinalizeTransaction(ctx, tx, md.Attempt, md.Attempt), "once the child carries the token the finalize completes")

@@ -61,6 +61,9 @@ const (
 	// Reversed marks a rolling back record whose spends have all been reversed, so the rollback needs
 	// no transaction data to finish
 	Reversed FieldName = "reversed"
+	// Finalizing marks a creating master whose finalize has begun to clear its pagination children: every
+	// input of the attempt is spent, and no rollback may claim the record from then on
+	Finalizing FieldName = "finalizing"
 	// UtxoSpendableIn indicates the number of blocks after which the UTXO becomes spendable
 	UtxoSpendableIn FieldName = "utxoSpendableIn"
 	// SpendingHeight is the block height at which the UTXO was spent

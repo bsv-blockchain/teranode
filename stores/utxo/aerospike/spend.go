@@ -2749,6 +2749,13 @@ func (s *Store) sendSetDAHBatch(batch []*batchDAH) {
 // boundConflictBatchPolicy applies the remaining compensation budget to the actual client call.
 // Do not race the call against a timer: the caller must wait for every write to complete.
 func boundConflictBatchPolicy(ctx context.Context, policy *aerospike.BatchPolicy) error {
+	return boundPolicyByContext(ctx, &policy.BasePolicy)
+}
+
+// boundPolicyByContext gives a client call no more time than ctx has left. It returns the error of
+// a ctx that has ended, and context.DeadlineExceeded for one with less than a millisecond left, so
+// that such a call is not sent. A ctx with no deadline leaves the policy as it is.
+func boundPolicyByContext(ctx context.Context, policy *aerospike.BasePolicy) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}

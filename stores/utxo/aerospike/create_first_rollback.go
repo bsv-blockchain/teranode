@@ -208,10 +208,16 @@ func (s *Store) SpendLeasesLive(_ context.Context, hash *chainhash.Hash, attempt
 // token, so a finalized or absent record is never touched, a record of another attempt is never
 // claimed, and only one caller can set the marker.
 //
+// The write is refused for a master that carries the finalizing bin. A paginated finalize sets
+// that bin before it clears the first pagination child (markFinalizing), with a write that is
+// refused once this marker is set. A cleared child has spendable outputs, and the end of a
+// rollback deletes the children, so from the first cleared child on the attempt can only be
+// completed. Every input of it was spent before its finalize began.
+//
 // It reports true only to the caller whose write set the marker: that caller owns the
 // rollback and is the one that unspends the inputs and ends the rollback. It reports false,
-// writing nothing, when the record is absent, already final, owned by another attempt, or
-// already rolling back under another caller. A filtered-out write is read back only to tell
+// writing nothing, when the record is absent, already final, finalizing, owned by another
+// attempt, or already rolling back under another caller. A filtered-out write is read back only to tell
 // those cases from a store fault. Any other error returns (false, err): the caller leaves the
 // record creating and the sweep heals it.
 func (s *Store) BeginCreateFirstRollback(_ context.Context, hash *chainhash.Hash, attempt []byte) (bool, error) {
@@ -222,7 +228,11 @@ func (s *Store) BeginCreateFirstRollback(_ context.Context, hash *chainhash.Hash
 
 	writePolicy := util.GetAerospikeWritePolicy(s.settings, 0)
 	writePolicy.RecordExistsAction = aerospike.UPDATE_ONLY
-	writePolicy.FilterExpression = aerospike.ExpAnd(finalizeFilter(attempt), s.noLiveSpendLease(time.Now().Unix()))
+	writePolicy.FilterExpression = aerospike.ExpAnd(
+		finalizeFilter(attempt),
+		aerospike.ExpNot(aerospike.ExpBinExists(fields.Finalizing.String())),
+		s.noLiveSpendLease(time.Now().Unix()),
+	)
 
 	_, putErr := s.client.Operate(writePolicy, key,
 		aerospike.PutOp(aerospike.NewBin(fields.RollingBack.String(), true)),
@@ -248,7 +258,7 @@ func (s *Store) BeginCreateFirstRollback(_ context.Context, hash *chainhash.Hash
 		return false, errors.NewStorageError("error reading record after the rolling back marker was filtered out", getErr)
 	}
 
-	if state.absent || !state.creating || state.rollingBack || !bytes.Equal(state.attempt, attempt) {
+	if state.absent || !state.creating || state.rollingBack || state.finalizing || !bytes.Equal(state.attempt, attempt) {
 		return false, nil
 	}
 
@@ -702,6 +712,7 @@ type creatingState struct {
 	absent          bool
 	creating        bool
 	rollingBack     bool
+	finalizing      bool
 	hold            bool
 	busy            bool
 	hasUnminedSince bool
@@ -711,6 +722,7 @@ type creatingState struct {
 var creatingStateBins = []string{
 	fields.Creating.String(),
 	fields.RollingBack.String(),
+	fields.Finalizing.String(),
 	fields.Attempt.String(),
 	fields.Hold.String(),
 	fields.HoldUntil.String(),
@@ -740,6 +752,7 @@ func (s *Store) readCreatingState(key *aerospike.Key) (creatingState, error) {
 	_, state.creating = rec.Bins[fields.Creating.String()]
 
 	state.rollingBack, _ = rec.Bins[fields.RollingBack.String()].(bool)
+	state.finalizing, _ = rec.Bins[fields.Finalizing.String()].(bool)
 	state.hold, _ = rec.Bins[fields.Hold.String()].(bool)
 	state.busy, _ = rec.Bins[fields.Busy.String()].(bool)
 	state.attempt, _ = rec.Bins[fields.Attempt.String()].([]byte)

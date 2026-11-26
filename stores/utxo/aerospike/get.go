@@ -740,6 +740,10 @@ func (s *Store) addAbstractedBins(bins []fields.FieldName) []fields.FieldName {
 		if !slices.Contains(newBins, fields.Reversed) {
 			newBins = append(newBins, fields.Reversed)
 		}
+
+		if !slices.Contains(newBins, fields.Finalizing) {
+			newBins = append(newBins, fields.Finalizing)
+		}
 	}
 
 	if slices.Contains(newBins, fields.BlockIDs) {
@@ -1178,6 +1182,11 @@ NEXT_BATCH_RECORD:
 			case fields.Reversed:
 				if reversed, ok := bins[key.String()].(bool); ok {
 					items[idx].Data.Reversed = reversed
+				}
+
+			case fields.Finalizing:
+				if finalizing, ok := bins[key.String()].(bool); ok {
+					items[idx].Data.Finalizing = finalizing
 				}
 
 			case fields.ConflictingChildren:

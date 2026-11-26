@@ -2,6 +2,7 @@ package utxo
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -1520,7 +1521,7 @@ func TestRollForwardCreating(t *testing.T) {
 
 		_, _, err := RollForwardCreating(ctx, ulogger.TestLogger{}, f, tx, []byte{1}, 100)
 		require.Error(t, err)
-		require.Equal(t, []string{"lease", "spend", "unlease"}, f.callSeq, "an incomplete re-spend must NOT finalize, and its lease is released")
+		require.Equal(t, []string{"lease", "spend", "getmeta", "unlease"}, f.callSeq, "an incomplete re-spend must NOT finalize, and its lease is released")
 		require.Equal(t, [][2][]byte{{{1}, fakeLease}}, f.unleased, "the release names the attempt and the lease that was taken")
 	})
 
@@ -1529,7 +1530,7 @@ func TestRollForwardCreating(t *testing.T) {
 
 		spends, _, err := RollForwardCreating(ctx, ulogger.TestLogger{}, f, tx, nil, 100)
 		require.Error(t, err)
-		require.Equal(t, []string{"lease", "spend", "unlease"}, f.callSeq)
+		require.Equal(t, []string{"lease", "spend", "getmeta", "unlease"}, f.callSeq)
 		require.Equal(t, f.spends, spends, "the per-input errors must reach the caller")
 	})
 
@@ -1539,7 +1540,7 @@ func TestRollForwardCreating(t *testing.T) {
 		spends, _, err := RollForwardCreating(ctx, ulogger.TestLogger{}, f, tx, []byte{1}, 100)
 		require.ErrorIs(t, err, errors.ErrUtxoError)
 		require.Equal(t, f.spends, spends)
-		require.Equal(t, []string{"lease", "spend", "unlease"}, f.callSeq, "the spend returned, so a rollback need not wait for this spender")
+		require.Equal(t, []string{"lease", "spend", "getmeta", "unlease"}, f.callSeq, "the spend returned, so a rollback need not wait for this spender")
 		require.Equal(t, [][2][]byte{{{1}, fakeLease}}, f.unleased)
 	})
 
@@ -1584,8 +1585,75 @@ func TestRollForwardCreating(t *testing.T) {
 			_, completed, err := RollForwardCreating(ctx, ulogger.TestLogger{}, f, tx, nil, 100)
 			require.Error(t, err, name)
 			require.False(t, completed, name)
-			require.Equal(t, []string{"lease", "spend", "unlease"}, f.callSeq, "%s: the store refused the input, so no write of it can still land", name)
+			require.Equal(t, []string{"lease", "spend", "getmeta", "unlease"}, f.callSeq, "%s: the store refused the input, so no write of it can still land", name)
 		}
+	})
+
+	t.Run("a record whose finalize has begun is finalized although its re-spend is refused", func(t *testing.T) {
+		attempt := []byte{1}
+
+		// The spends that reach the caller are built from the transaction, so its inputs are real.
+		spent := bt.NewTx()
+		require.NoError(t, spent.From(strings.Repeat("aa", 32), 0, "76a914000000000000000000000000000000000000000088ac", 1000))
+		require.NoError(t, spent.From(strings.Repeat("bb", 32), 1, "76a914000000000000000000000000000000000000000088ac", 2000))
+
+		for name, tc := range map[string]struct {
+			spends   []*Spend
+			spendErr error
+		}{
+			"a parent is locked":      {[]*Spend{{}, {Err: errors.ErrTxLocked}}, errors.NewUtxoError("spend failed")},
+			"a parent is conflicting": {[]*Spend{{}, {Err: errors.ErrTxConflicting}}, errors.NewUtxoError("spend failed")},
+			"a parent is gone":        {[]*Spend{{}, {Err: errors.ErrTxNotFound}}, errors.NewUtxoError("spend failed")},
+			"an input is not covered": {[]*Spend{{}}, nil},
+		} {
+			f := &fakeRollForwarder{spends: tc.spends, spendErr: tc.spendErr, existing: meta.Data{Creating: true, Finalizing: true, Attempt: attempt}}
+
+			spends, completed, err := RollForwardCreating(ctx, ulogger.TestLogger{}, f, spent, attempt, 100)
+			require.NoError(t, err, name)
+			require.True(t, completed, name)
+			require.Equal(t, []string{"lease", "spend", "getmeta", "finalize"}, f.callSeq, "%s: the inputs were spent before the finalize began, so only the finalize is left", name)
+			require.Equal(t, fakeLease, f.finalizeLease, name)
+			require.Len(t, spends, len(spent.Inputs), "%s: the spends of the transaction reach the caller for its hand-off", name)
+
+			for _, sp := range spends {
+				require.NoError(t, sp.Err, name)
+			}
+		}
+	})
+
+	t.Run("a refused re-spend is not set aside unless the record of the attempt carries the mark", func(t *testing.T) {
+		attempt := []byte{1}
+
+		for name, existing := range map[string]meta.Data{
+			"not finalizing":                 {Creating: true, Attempt: attempt},
+			"finalizing under another token": {Creating: true, Finalizing: true, Attempt: []byte{2}},
+			"rolling back":                   {Creating: true, Finalizing: true, RollingBack: true, Attempt: attempt},
+			"not creating":                   {Finalizing: true, Attempt: attempt},
+		} {
+			f := &fakeRollForwarder{spends: []*Spend{{}, {Err: errors.ErrTxLocked}}, spendErr: errors.NewUtxoError("spend failed"), existing: existing}
+
+			_, completed, err := RollForwardCreating(ctx, ulogger.TestLogger{}, f, tx, attempt, 100)
+			require.Error(t, err, name)
+			require.False(t, completed, name)
+			require.Equal(t, []string{"lease", "spend", "getmeta", "unlease"}, f.callSeq, name)
+		}
+
+		unreadable := &fakeRollForwarder{spends: []*Spend{{}, {Err: errors.ErrTxLocked}}, spendErr: errors.NewUtxoError("spend failed"), getMetaErr: errors.NewStorageError("read failed")}
+
+		_, completed, err := RollForwardCreating(ctx, ulogger.TestLogger{}, unreadable, tx, attempt, 100)
+		require.ErrorIs(t, err, errors.ErrUtxoError, "a record that cannot be read is not known to carry the mark")
+		require.False(t, completed)
+		require.Zero(t, unreadable.finalizeCalls)
+	})
+
+	t.Run("a re-spend whose outcome is unknown is not set aside for a finalizing record", func(t *testing.T) {
+		attempt := []byte{1}
+		f := &fakeRollForwarder{spends: []*Spend{{}, {}}, spendErr: context.DeadlineExceeded, existing: meta.Data{Creating: true, Finalizing: true, Attempt: attempt}}
+
+		_, completed, err := RollForwardCreating(ctx, ulogger.TestLogger{}, f, tx, attempt, 100)
+		require.Error(t, err)
+		require.False(t, completed)
+		require.Equal(t, []string{"lease", "spend"}, f.callSeq, "the lease stays, and the next roll-forward completes the record")
 	})
 
 	t.Run("completed is true only for the call whose finalize cleared the creating state", func(t *testing.T) {
@@ -2270,7 +2338,7 @@ func TestSequentialSpendAndCreate_CreateFirst(t *testing.T) {
 		require.ErrorIs(t, err, errors.ErrUtxoError)
 		require.False(t, IsRolledForward(err))
 		require.Len(t, spends, 2)
-		require.Equal(t, []string{"create", "getmeta", "lease", "spend", "unlease"}, f.callSeq, "no finalize, no rollback; the lease is released")
+		require.Equal(t, []string{"create", "getmeta", "lease", "spend", "getmeta", "unlease"}, f.callSeq, "no finalize, no rollback; the lease is released")
 		require.Equal(t, 0, f.unspendCalls, "a roll-forward never reverses a spend")
 	})
 

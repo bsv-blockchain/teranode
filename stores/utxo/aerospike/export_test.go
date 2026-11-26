@@ -9,6 +9,7 @@ import (
 
 	"github.com/bsv-blockchain/aerospike-client-go/v8"
 	"github.com/bsv-blockchain/go-bt/v2"
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 )
 
@@ -256,4 +257,10 @@ func UsePrunerServiceForTest(t testing.TB) {
 		prunerServiceHolderMu.Unlock()
 		prunerServiceHolderCond.Broadcast()
 	})
+}
+
+// MarkFinalizingForTest runs the write that marks the master of a paginated create-first attempt
+// finalizing, which a finalize sends before it clears the first pagination child.
+func (s *Store) MarkFinalizingForTest(ctx context.Context, hash *chainhash.Hash, attempt, lease []byte) (bool, error) {
+	return s.markFinalizing(ctx, hash, attempt, lease)
 }

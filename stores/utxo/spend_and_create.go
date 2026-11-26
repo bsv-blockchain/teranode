@@ -933,6 +933,9 @@ func (r tolerantReverser) SpendRollbackTimeout() time.Duration {
 //   - The record is absent, already final, owned by another attempt or already rolling back
 //     under another caller: a concurrent roll-forward finalized it and relies on the spends, or
 //     the other caller owns the reversal, so nothing is reversed. The return is nil.
+//   - The finalize of the record has begun (meta.Data.Finalizing): every input of the attempt is
+//     spent and a pagination child may already have spendable outputs, so the store refuses the
+//     marker and nothing is reversed. The return is nil, and a roll-forward completes the record.
 //   - A lease stays live past the wait (spendLeaseWait, the longest one spend may run), because
 //     its spender returned with an unknown outcome or crashed: the claim stays refused, nothing is
 //     written or reversed and the error is returned. The record is left creating. A roll-forward
@@ -958,16 +961,16 @@ func RollBackCreating(ctx context.Context, logger ulogger.Logger, s CreatingRoll
 
 // RollBackCreatingEnded is RollBackCreating that also reports whether this call ended the rollback
 // of its record. A nil error with ended false means that the rollback did not begin and nothing was
-// reversed: the record is final, gone, owned by another attempt or already rolling back under
-// another caller.
+// reversed: the record is final, finalizing, gone, owned by another attempt or already rolling back
+// under another caller.
 func RollBackCreatingEnded(ctx context.Context, logger ulogger.Logger, s CreatingRollBacker, tx *bt.Tx, attempt []byte) (ended bool, err error) {
 	return rollBackCreating(ctx, logger, s, tx, attempt)
 }
 
 // rollBackCreating is RollBackCreating that also reports whether this call ended the rollback of
 // its record. A nil error with ended false means the rollback did not begin: the record is final,
-// gone, owned by another attempt or already rolling back under another caller, and nothing was
-// reversed. A final record of this attempt, finalized by a roll-forward, still carries the lane
+// finalizing, gone, owned by another attempt or already rolling back under another caller, and
+// nothing was reversed. A final record of this attempt, finalized by a roll-forward, still carries the lane
 // position of its creator.
 func rollBackCreating(ctx context.Context, logger ulogger.Logger, s CreatingRollBacker, tx *bt.Tx, attempt []byte) (ended bool, err error) {
 	rbCtx, cancel := rollbackContext(ctx, s)
@@ -983,7 +986,7 @@ func rollBackCreating(ctx context.Context, logger ulogger.Logger, s CreatingRoll
 	}
 
 	if !began {
-		logger.Warnf("SpendAndCreate create-first: %s is not rolled back by this call: it is final, gone, owned by another attempt or already rolling back under another caller, spends left in place", hash.String())
+		logger.Warnf("SpendAndCreate create-first: %s is not rolled back by this call: it is final, finalizing, gone, owned by another attempt or already rolling back under another caller, spends left in place", hash.String())
 
 		return false, nil
 	}
@@ -1227,11 +1230,14 @@ func releaseRollbackHold(ctx context.Context, logger ulogger.Logger, s rollbackH
 //     exponential backoff under a detached context. It clears only the record this call created,
 //     identified by the token Create returned. If every attempt fails, return an
 //     error. The inputs are durably spent but the tentative flag could not be cleared, so
-//     the outputs are still unspendable; reporting success would make the validator
+//     outputs of the record are still unspendable; reporting success would make the validator
 //     announce the tx to block assembly (and unlock it) while its children fail with an
 //     unhandled ErrTxCreating. The record stays creating and is recovered by the
 //     ErrTxExists roll-forward on re-encounter, the pruner sweep, or setMined. The lease is
-//     released, because the spends it covers are complete.
+//     released, because the spends it covers are complete. A paginated record may by then have
+//     pagination children that are cleared, whose outputs are spendable. Its store marked it
+//     finalizing before it cleared the first of them, so no rollback can claim it and delete
+//     those pages: it can only be completed (meta.Data.Finalizing).
 func sequentialCreateFirst(ctx context.Context, logger ulogger.Logger, s SequentialStore,
 	tx *bt.Tx, blockHeight uint32, ignoreFlags IgnoreFlags, blockContext bool, spender uint64, taken takenPosition, opts ...CreateOption) (*meta.Data, []*Spend, error) {
 	// Force WithCreating(true) last so it cannot be overridden by a caller option (belt and
@@ -1609,6 +1615,11 @@ type CreatingRollForwarder interface {
 //     is returned and the spends stay in place. The record is still creating and remains the
 //     recovery journal, or it is rolling back and its owner reverses the spends. A spend whose
 //     outcome is unknown keeps its lease, which goes stale on its own.
+//   - The same, for a record whose finalize has begun (meta.Data.Finalizing): the failure of the
+//     re-spend is set aside and the finalize runs. A store sets that mark only once every input of
+//     the attempt is spent, and refuses a rollback of the record from then on, so the record can
+//     only be completed. A parent that is locked, conflicting or gone today refuses the repeat of
+//     a spend without undoing it.
 //   - FinalizeTransaction fails with ErrTxNotFound: the record is gone, rolling back or owned by
 //     another attempt. The lease is released and the error is returned. The owner of the
 //     rollback, which was waiting for the lease, reverses every input of the transaction.
@@ -1657,19 +1668,29 @@ func rollForwardCreating(ctx context.Context, logger ulogger.Logger, s creatingF
 	}
 
 	spends, err = spend(bCtx)
-	if err != nil {
-		if !spendOutcomeUnknown(spends, err) {
-			releaseSpendLease(ctx, logger, s, hash, attempt, lease)
-		}
-
+	if err != nil && spendOutcomeUnknown(spends, err) {
 		return spends, false, err
 	}
 
-	if !AllInputsSpent(tx, spends) {
-		releaseSpendLease(ctx, logger, s, hash, attempt, lease)
-
-		return spends, false, errors.NewProcessingError("RollForwardCreating: re-spend of %s did not cover all inputs (%d spends for %d inputs)",
+	if err == nil && !AllInputsSpent(tx, spends) {
+		err = errors.NewProcessingError("RollForwardCreating: re-spend of %s did not cover all inputs (%d spends for %d inputs)",
 			hash.String(), len(spends), len(tx.Inputs))
+	}
+
+	if err != nil {
+		if !finalizeBegun(bCtx, s, hash, attempt) {
+			releaseSpendLease(ctx, logger, s, hash, attempt, lease)
+
+			return spends, false, err
+		}
+
+		// The finalize of this attempt has begun, which it does only once every input is spent, and
+		// no rollback can claim the record since. The repeat of the spend was refused for what a
+		// parent is today, locked, conflicting or gone, and that does not undo the spend. The record
+		// can only be completed, so the finalize runs.
+		logger.Warnf("RollForwardCreating: the re-spend of %s was refused, and its finalize had already begun, so the finalize is completed: %v", hash.String(), err)
+
+		spends, _ = GetSpends(tx)
 	}
 
 	// The spends are done, so the finalize runs to its end whatever happens to the caller's
@@ -1688,6 +1709,17 @@ func rollForwardCreating(ctx context.Context, logger ulogger.Logger, s creatingF
 	}
 
 	return spends, true, nil
+}
+
+// finalizeBegun reports whether the record of the attempt carries the mark of a finalize that has
+// begun (meta.Data.Finalizing). A record that cannot be read is not known to carry it.
+func finalizeBegun(ctx context.Context, s creatingFinisher, hash *chainhash.Hash, attempt []byte) bool {
+	current := &meta.Data{}
+	if err := s.GetMeta(ctx, hash, current); err != nil {
+		return false
+	}
+
+	return current.Creating && current.Finalizing && !current.RollingBack && bytes.Equal(current.Attempt, attempt)
 }
 
 // leaseRefused reads the record after its spend lease was refused and returns the roll-forward's

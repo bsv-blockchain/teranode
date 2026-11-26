@@ -54,6 +54,13 @@ type Data struct {
 	// IsCoinbase indicates if this is a coinbase transaction
 	IsCoinbase bool `json:"isCoinbase"`
 
+	// Finalizing marks a creating record whose finalize has begun to clear its pagination children.
+	// Every input of its attempt was spent before the mark was written, and no rollback may claim the
+	// record from then on, so recovery only completes the finalize. Not part of the serialized form.
+	// It is declared here, beside IsCoinbase, because it fits in the padding before LockTime: with
+	// the other flags below it would add eight bytes to this struct. TestDataSize holds the size.
+	Finalizing bool `json:"finalizing,omitempty"`
+
 	// LockTime is the block height or timestamp until which this transaction is locked.
 	// This can differ from the transaction's own locktime, especially for coinbase transactions.
 	LockTime uint32 `json:"lockTime"`
