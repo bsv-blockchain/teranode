@@ -12,6 +12,8 @@ import (
 	"github.com/bsv-blockchain/teranode/services/blockassembly/blockassembly_api"
 	"github.com/bsv-blockchain/teranode/services/blockassembly/subtreeprocessor"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
+	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc/metadata"
@@ -55,6 +57,78 @@ func TestDeepReorgHaltRecord(t *testing.T) {
 	}
 }
 
+// Loading a record halts only on a halt record, and fails on one it cannot read; clearing writes
+// the record before it lifts the halt, so a failed write leaves it halted.
+func TestDeepReorgHaltLoadAndClear(t *testing.T) {
+	initPrometheusMetrics()
+
+	halt := &deepReorgHalt{target: chainhash.HashH([]byte("target")), height: 1234, moveBack: 300}
+
+	loads := []struct {
+		name    string
+		data    []byte
+		err     error
+		wantErr bool
+		halted  bool
+	}{
+		{name: "no record", err: errors.NewNotFoundError("no state")},
+		{name: "the byte 0", data: []byte{0}},
+		{name: "a halt record", data: halt.bytes(), halted: true},
+		{name: "a record it cannot parse", data: []byte{2}, wantErr: true},
+		{name: "a store it cannot read", err: errors.NewStorageError("down"), wantErr: true},
+	}
+
+	for _, tt := range loads {
+		t.Run("load/"+tt.name, func(t *testing.T) {
+			prometheusBlockAssemblyDeepReorgHalted.Set(0)
+
+			client := &blockchain.Mock{}
+			client.On("GetState", mock.Anything, DeepReorgHaltStateKey).Return(tt.data, tt.err).Once()
+			b := &BlockAssembler{logger: ulogger.TestLogger{}, settings: createTestSettings(t), blockchainClient: client}
+
+			err := b.loadDeepReorgHalt(t.Context())
+			require.Equal(t, tt.wantErr, err != nil, "got %v", err)
+			require.Equal(t, tt.halted, b.DeepReorgHalted())
+			require.Equal(t, map[bool]float64{true: 1, false: 0}[tt.halted], testutil.ToFloat64(prometheusBlockAssemblyDeepReorgHalted))
+			client.AssertExpectations(t)
+		})
+	}
+
+	clears := []struct {
+		name     string
+		halted   bool
+		setErr   error
+		wantErr  bool
+		stillSet bool
+	}{
+		// No expectation on the client: clearing when not halted writes nothing.
+		{name: "not halted"},
+		{name: "halted", halted: true},
+		{name: "halted and the write fails", halted: true, setErr: errors.NewStorageError("down"), wantErr: true, stillSet: true},
+	}
+
+	for _, tt := range clears {
+		t.Run("clear/"+tt.name, func(t *testing.T) {
+			client := &blockchain.Mock{}
+			b := &BlockAssembler{logger: ulogger.TestLogger{}, settings: createTestSettings(t), blockchainClient: client}
+
+			prometheusBlockAssemblyDeepReorgHalted.Set(0)
+
+			if tt.halted {
+				b.deepReorgHalt.Store(halt)
+				prometheusBlockAssemblyDeepReorgHalted.Set(1)
+				client.On("SetState", mock.Anything, DeepReorgHaltStateKey, []byte{0}).Return(tt.setErr).Once()
+			}
+
+			err := b.clearDeepReorgHalt(t.Context())
+			require.Equal(t, tt.wantErr, err != nil, "got %v", err)
+			require.Equal(t, tt.stillSet, b.DeepReorgHalted())
+			require.Equal(t, map[bool]float64{true: 1, false: 0}[tt.stillSet], testutil.ToFloat64(prometheusBlockAssemblyDeepReorgHalted))
+			client.AssertExpectations(t)
+		})
+	}
+}
+
 // deepReorgFixture puts block assembly on a1 with b2, the tip of a two-block branch beside a1,
 // the best block and a retention of 1, so following the best block moves back the retention.
 func deepReorgFixture(t *testing.T) (*baTestItems, *model.BlockHeader, *subtreeprocessor.MockSubtreeProcessor) {
@@ -87,9 +161,12 @@ func TestDeepReorgHaltStopsBlockAssembly(t *testing.T) {
 	items, b2, mockStp := deepReorgFixture(t)
 	ba := items.blockAssembler
 
+	a1, _ := ba.CurrentBlock()
+
 	err := ba.handleReorg(t.Context(), b2, 2)
 	require.Error(t, err)
 	require.True(t, ba.DeepReorgHalted())
+	require.Equal(t, 1.0, testutil.ToFloat64(prometheusBlockAssemblyDeepReorgHalted))
 	mockStp.AssertNotCalled(t, "Reset", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 
 	_, _, err = ba.GetMiningCandidate(t.Context())
@@ -111,18 +188,27 @@ func TestDeepReorgHaltStopsBlockAssembly(t *testing.T) {
 	tip, _ := ba.CurrentBlock()
 	require.NotEqual(t, b2.Hash().String(), tip.Hash().String())
 
-	// A reset nobody but block assembly asked for is refused.
+	// A reset nobody but block assembly asked for is refused before it touches anything, so a
+	// reset owed from earlier waits for the operator's.
+	owed := &resetRequest{FullReset: true}
+	ba.resetOwed = owed
 	errCh := make(chan error, 1)
 	ba.handleResetRequests(t.Context(), resetRequest{ErrCh: errCh})
 	require.True(t, errors.Is(<-errCh, errors.ErrServiceUnavailable))
 	require.True(t, ba.DeepReorgHalted())
+	require.Same(t, owed, ba.resetOwed)
+
+	// So is one that would not move back at all.
+	_, err = ba.resetToBlockWithResponse(t.Context(), a1, 1)
+	require.True(t, errors.Is(err, errors.ErrServiceUnavailable), "got %v", err)
+	mockStp.AssertNotCalled(t, "Reset", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 
 	// The record outlives a restart.
 	data, err := items.blockchainClient.GetState(t.Context(), DeepReorgHaltStateKey)
 	require.NoError(t, err)
 	recorded, err := parseDeepReorgHalt(data)
 	require.NoError(t, err)
-	require.Equal(t, *b2.Hash(), recorded.target)
+	require.Equal(t, deepReorgHalt{target: *b2.Hash(), height: 2, moveBack: 1}, *recorded)
 
 	restarted := &BlockAssembler{settings: ba.settings, logger: ba.logger, blockchainClient: items.blockchainClient}
 	require.NoError(t, restarted.loadDeepReorgHalt(t.Context()))
@@ -131,10 +217,10 @@ func TestDeepReorgHaltStopsBlockAssembly(t *testing.T) {
 
 // A halted block assembly still starts, finishes the pending skipped-fork mark the halting pass
 // recorded, and ends up halted: from its record, or by meeting the same reorg again when the
-// record was lost.
+// record was lost. A record it cannot read fails the start rather than lift the halt.
 func TestDeepReorgHaltSurvivesRestart(t *testing.T) {
-	for _, recordLost := range []bool{false, true} {
-		t.Run(fmt.Sprintf("recordLost=%t", recordLost), func(t *testing.T) {
+	for _, record := range []string{"kept", "lost", "unreadable"} {
+		t.Run("record="+record, func(t *testing.T) {
 			initPrometheusMetrics()
 
 			items, b2, _ := deepReorgFixture(t)
@@ -145,14 +231,24 @@ func TestDeepReorgHaltSurvivesRestart(t *testing.T) {
 			require.Error(t, ba.handleReorg(t.Context(), b2, 2))
 			require.True(t, ba.DeepReorgHalted())
 
-			if recordLost {
+			recordLost := record == "lost"
+
+			switch record {
+			case "lost":
 				require.NoError(t, items.blockchainClient.SetState(t.Context(), DeepReorgHaltStateKey, []byte{0}))
-			} else {
+			case "unreadable":
+				require.NoError(t, items.blockchainClient.SetState(t.Context(), DeepReorgHaltStateKey, []byte{2}))
+			default:
 				// Pruning off: the reorg no longer halts, so only the record can.
 				ba.settings.GlobalBlockHeightRetention = 0
 			}
 
 			restarted, err := startBlockAssembler(t, items, ba.settings, nil)
+			if record == "unreadable" {
+				require.Error(t, err)
+				return
+			}
+
 			require.NoError(t, err, "a halted block assembly must start, or the halt becomes a restart loop")
 			t.Cleanup(func() { restarted.subtreeProcessor.Stop(context.Background()) })
 
@@ -195,19 +291,24 @@ func TestDeepReorgHaltRefusesMiningSolution(t *testing.T) {
 // metadata: that one runs while halted and lifts the halt and its record. Any other caller, such
 // as the validator's shed recovery, gets an ordinary reset, which the halt refuses.
 func TestDeepReorgHaltResetCommands(t *testing.T) {
-	commands := map[string]func(*BlockAssembly, context.Context) error{
-		"ResetBlockAssembly": func(s *BlockAssembly, ctx context.Context) error {
+	type resetCommand struct {
+		run            func(*BlockAssembly, context.Context) error
+		full, validate bool
+	}
+
+	commands := map[string]resetCommand{
+		"ResetBlockAssembly": {run: func(s *BlockAssembly, ctx context.Context) error {
 			_, err := s.ResetBlockAssembly(ctx, &blockassembly_api.EmptyMessage{})
 			return err
-		},
-		"ResetBlockAssemblyFully": func(s *BlockAssembly, ctx context.Context) error {
+		}},
+		"ResetBlockAssemblyFully": {full: true, run: func(s *BlockAssembly, ctx context.Context) error {
 			_, err := s.ResetBlockAssemblyFully(ctx, &blockassembly_api.EmptyMessage{})
 			return err
-		},
-		"ResetBlockAssemblyValidateInputs": func(s *BlockAssembly, ctx context.Context) error {
+		}},
+		"ResetBlockAssemblyValidateInputs": {validate: true, run: func(s *BlockAssembly, ctx context.Context) error {
 			_, err := s.ResetBlockAssemblyValidateInputs(ctx, &blockassembly_api.EmptyMessage{})
 			return err
-		},
+		}},
 	}
 
 	for name, command := range commands {
@@ -230,7 +331,7 @@ func TestDeepReorgHaltResetCommands(t *testing.T) {
 					ctx = metadata.NewIncomingContext(ctx, metadata.Pairs(OperatorResetMetadataKey, "true"))
 				}
 
-				require.NoError(t, command(server, ctx))
+				require.NoError(t, command.run(server, ctx))
 
 				// The command queues the request for block assembly's loop, which this fixture does
 				// not run, so the test plays the loop's part.
@@ -241,10 +342,12 @@ func TestDeepReorgHaltResetCommands(t *testing.T) {
 					t.Fatal("the command queued no reset")
 				}
 
-				require.Equal(t, operator, req.Operator)
+				require.Equal(t, resetRequest{FullReset: command.full, ValidateInputs: command.validate, Operator: operator},
+					resetRequest{FullReset: req.FullReset, ValidateInputs: req.ValidateInputs, Operator: req.Operator})
 				ba.handleResetRequests(t.Context(), req)
 
 				require.Equal(t, !operator, ba.DeepReorgHalted())
+				require.Equal(t, map[bool]float64{true: 0, false: 1}[operator], testutil.ToFloat64(prometheusBlockAssemblyDeepReorgHalted))
 
 				data, err := items.blockchainClient.GetState(t.Context(), DeepReorgHaltStateKey)
 				require.NoError(t, err)
