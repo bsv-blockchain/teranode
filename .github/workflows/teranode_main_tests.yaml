@@ -102,7 +102,7 @@ jobs:
           cache: "false"
 
       # The e2e -race cache built on main for this runner's architecture; the
-      # unit job's cache (ARM, with coverage) never matches these compiles.
+      # unit job's cache (ARM, with coverage) misses every teranode package here.
       - name: Restore Go caches
         uses: ./.github/actions/go-cache
         with:
@@ -145,7 +145,7 @@ jobs:
           cache: "false"
 
       # The e2e -race cache built on main for this runner's architecture; the
-      # unit job's cache (ARM, with coverage) never matches these compiles.
+      # unit job's cache (ARM, with coverage) misses every teranode package here.
       - name: Restore Go caches
         uses: ./.github/actions/go-cache
         with:
@@ -169,8 +169,9 @@ jobs:
   # Saves the -race build cache the end-to-end jobs restore (smoke, sequential,
   # legacy-sync, prunertest, chainintegrity, here and in teranode_pr_smoketests.yaml).
   # It runs on both runner types those jobs use, and builds each test package
-  # with exactly the flags their make targets and scripts use, so every compile
-  # in those jobs is a cache hit.
+  # with exactly the flags their make targets and scripts use, so those jobs
+  # reuse main's compile of every package a PR leaves unchanged. Packages the
+  # PR changes, and everything that depends on them, still compile.
   e2e-build-cache:
     name: e2e build cache (${{ matrix.runner }})
     if: github.ref == 'refs/heads/main'

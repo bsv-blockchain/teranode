@@ -46,7 +46,7 @@ jobs:
           cache: "false"
 
       # The e2e -race cache built on main for this runner's architecture; the
-      # unit job's cache (ARM, with coverage) never matches these compiles.
+      # unit job's cache (ARM, with coverage) misses every teranode package here.
       - name: Restore Go caches
         uses: ./.github/actions/go-cache
         with:
@@ -89,7 +89,7 @@ jobs:
           cache: "false"
 
       # The e2e -race cache built on main for this runner's architecture; the
-      # unit job's cache (ARM, with coverage) never matches these compiles.
+      # unit job's cache (ARM, with coverage) misses every teranode package here.
       - name: Restore Go caches
         uses: ./.github/actions/go-cache
         with:
@@ -131,7 +131,7 @@ jobs:
           cache: "false"
 
       # The e2e -race cache built on main for this runner's architecture; the
-      # unit job's cache (ARM, with coverage) never matches these compiles.
+      # unit job's cache (ARM, with coverage) misses every teranode package here.
       - name: Restore Go caches
         uses: ./.github/actions/go-cache
         with:
@@ -175,7 +175,7 @@ jobs:
           cache: "false"
 
       # The e2e -race cache built on main for this runner's architecture; the
-      # unit job's cache (ARM, with coverage) never matches these compiles.
+      # unit job's cache (ARM, with coverage) misses every teranode package here.
       - name: Restore Go caches
         uses: ./.github/actions/go-cache
         with:
@@ -221,7 +221,7 @@ jobs:
           cache: "false"
 
       # The e2e -race cache built on main for this runner's architecture; the
-      # unit job's cache (ARM, with coverage) never matches these compiles.
+      # unit job's cache (ARM, with coverage) misses every teranode package here.
       - name: Restore Go caches
         uses: ./.github/actions/go-cache
         with:
