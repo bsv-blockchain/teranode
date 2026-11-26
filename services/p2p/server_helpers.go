@@ -1168,10 +1168,14 @@ func (s *Server) shouldSkipBannedPeer(from string, messageType string) bool {
 // The address check covers authors with an open connection only. With
 // p2p_enforce_bans_at_admission on, an IP or subnet rule closes the banned
 // host's connection, which would leave its own messages, relayed by other
-// peers, with no address to check. So an author whose own connection a rule
-// in force closed counts as IP-banned by its peer ID until that rule lifts
-// (admissionBans.closedByIPRule). A peer that was only behind a relay on the
-// banned address is not counted: the ban names the relay.
+// peers, with no address to check. So an author whose own connection an IP
+// or subnet rule closed counts as IP-banned by its peer ID while a rule in
+// force covers the address it came from (admissionBans.closedByIPRule). A
+// peer that was only behind a relay on the banned address is not counted:
+// the ban names the relay. Only peers connected when a rule is applied are
+// remembered, so a banned host that was not connected then (a persisted ban
+// re-applied at startup, say) is refused a connection but not IP-checked
+// here.
 //
 // A banned host that signs gossip under fresh author keys has no connection
 // under those keys, so it is never IP-checked here. With admission on, its

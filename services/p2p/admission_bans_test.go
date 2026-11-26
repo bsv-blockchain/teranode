@@ -297,40 +297,50 @@ func relayNodeStatus(t *testing.T, s *Server, reg *blockchain.CentralizedPeerReg
 	return registered
 }
 
-// Once an IP or subnet ban closes a host's connection, the host's own
-// gossip relayed by other peers neither registers it nor makes it the sync
-// peer, until the rule lifts. A peer only behind a relay on the banned
-// address is not banned on gossip, and with admission off nothing changes.
+// After an IP or subnet ban closes a host's connection, its relayed gossip
+// neither registers it nor makes it the sync peer until no rule covers its IP;
+// a peer behind a banned relay is not gossip-banned, and admission off is as before.
 func TestBanOnAddress_DropsTheClosedHostsRelayedGossipUntilLifted(t *testing.T) {
 	relayID := mustNewPeerID(t)
-	until := time.Now().Add(time.Hour)
+	unban := func(addr string) func(t *testing.T, s *Server) {
+		return func(t *testing.T, s *Server) { unbanAddr(t, s, addr) }
+	}
 
 	tests := []struct {
 		name       string
 		enforce    bool
 		circuit    bool
-		ban        string
-		lift       func(t *testing.T, s *Server)
-		dropsWhile bool // relayed gossip is dropped while the ban stands
+		otherAddr  bool                            // the host also holds a connection from an unbanned address
+		bans       []string                        // applied in order, each synced
+		lifts      []func(t *testing.T, s *Server) // the last one readmits the host
+		dropsWhile bool                            // relayed gossip is dropped while a ban stands
 	}{
-		{name: "address, unban", enforce: true, ban: "198.51.100.9", dropsWhile: true,
-			lift: func(t *testing.T, s *Server) { unbanAddr(t, s, "198.51.100.9") }},
-		{name: "subnet, unban", enforce: true, ban: "198.51.100.0/24", dropsWhile: true,
-			lift: func(t *testing.T, s *Server) { unbanAddr(t, s, "198.51.100.0/24") }},
-		{name: "address, clearbanned", enforce: true, ban: "198.51.100.9", dropsWhile: true,
-			lift: func(t *testing.T, s *Server) {
+		{name: "address, unban", enforce: true, dropsWhile: true,
+			bans: []string{"198.51.100.9"}, lifts: []func(*testing.T, *Server){unban("198.51.100.9")}},
+		{name: "subnet, unban", enforce: true, dropsWhile: true,
+			bans: []string{"198.51.100.0/24"}, lifts: []func(*testing.T, *Server){unban("198.51.100.0/24")}},
+		{name: "address, clearbanned", enforce: true, dropsWhile: true,
+			bans: []string{"198.51.100.9"}, lifts: []func(*testing.T, *Server){func(t *testing.T, s *Server) {
 				_, err := s.ClearBanned(context.Background(), &emptypb.Empty{})
 				require.NoError(t, err)
-			}},
-		{name: "address, removed by another holder of the list, then the sweep", enforce: true, ban: "198.51.100.9", dropsWhile: true,
-			lift: func(t *testing.T, s *Server) {
+			}}},
+		{name: "address, removed by another holder of the list, then the sweep", enforce: true, dropsWhile: true,
+			bans: []string{"198.51.100.9"}, lifts: []func(*testing.T, *Server){func(t *testing.T, s *Server) {
 				require.NoError(t, s.banList.Remove(context.Background(), "198.51.100.9"))
 				s.banSweepTick(context.Background())
-			}},
-		{name: "relay address: the peer behind it is not banned on gossip", enforce: true, circuit: true, ban: "198.51.100.9", dropsWhile: false,
-			lift: func(t *testing.T, s *Server) { unbanAddr(t, s, "198.51.100.9") }},
-		{name: "admission off: the open connection is IP-checked as before", enforce: false, ban: "198.51.100.9", dropsWhile: true,
-			lift: func(t *testing.T, s *Server) { unbanAddr(t, s, "198.51.100.9") }},
+			}}},
+		{name: "another key still wants the rule", enforce: true, dropsWhile: true,
+			bans:  []string{"198.51.100.9", "198.51.100.9/32"},
+			lifts: []func(*testing.T, *Server){unban("198.51.100.9"), unban("198.51.100.9/32")}},
+		{name: "a later subnet still covers the address", enforce: true, dropsWhile: true,
+			bans:  []string{"198.51.100.9", "198.51.100.0/24"},
+			lifts: []func(*testing.T, *Server){unban("198.51.100.9"), unban("198.51.100.0/24")}},
+		{name: "a connection from an unbanned address does not readmit it", enforce: true, otherAddr: true, dropsWhile: true,
+			bans: []string{"198.51.100.9"}, lifts: []func(*testing.T, *Server){unban("198.51.100.9")}},
+		{name: "relay address: the peer behind it is not banned on gossip", enforce: true, circuit: true,
+			bans: []string{"198.51.100.9"}, lifts: []func(*testing.T, *Server){unban("198.51.100.9")}},
+		{name: "admission off: the open connection is IP-checked as before", enforce: false, dropsWhile: true,
+			bans: []string{"198.51.100.9"}, lifts: []func(*testing.T, *Server){unban("198.51.100.9")}},
 	}
 
 	for _, tt := range tests {
@@ -345,52 +355,43 @@ func TestBanOnAddress_DropsTheClosedHostsRelayedGossipUntilLifted(t *testing.T) 
 				addr = fmt.Sprintf("/ip4/198.51.100.9/tcp/9905/p2p/%s/p2p-circuit/p2p/%s", relayID, pid)
 			}
 
-			client.peers = []p2pMessageBus.PeerInfo{{ID: pid.String(), Addrs: []string{addr}}}
+			addrs := []string{addr}
+			if tt.otherAddr {
+				addrs = append(addrs, fmt.Sprintf("/ip4/192.0.2.4/tcp/9905/p2p/%s", pid))
+			}
+
+			client.peers = []p2pMessageBus.PeerInfo{{ID: pid.String(), Addrs: addrs}}
 			reg.Register(&blockchain.PeerInfo{ID: pid.String()})
 			// Forced, the peer is chosen whenever it is registered, so the
 			// sync assertions turn on registration alone.
 			s.settings.P2P.ForceSyncPeer = pid.String()
 			sc := withSyncCoordinator(t, s, pid.String())
 
-			require.NoError(t, s.banList.Add(context.Background(), tt.ban, until))
-			s.syncAdmissionBans()
-			s.disconnectPeersOnBanList(context.Background(), "test")
+			for _, ban := range tt.bans {
+				require.NoError(t, s.banList.Add(context.Background(), ban, time.Now().Add(time.Hour)))
+				s.syncAdmissionBans()
+				s.disconnectPeersOnBanList(context.Background(), "test")
+			}
 			_, inRegistry := reg.Get(pid.String())
 			require.False(t, inRegistry, "the ban drops the peer")
 
-			require.Equal(t, !tt.dropsWhile, relayNodeStatus(t, s, reg, pid), "relayed gossip while the ban stands")
-			require.NoError(t, sc.TriggerSync())
-			require.Equal(t, !tt.dropsWhile, sc.GetCurrentSyncPeer() == pid.String(), "sync peer while the ban stands")
+			for i, lift := range tt.lifts {
+				require.Equal(t, !tt.dropsWhile, relayNodeStatus(t, s, reg, pid), "relayed gossip before lift %d", i)
+				require.NoError(t, sc.TriggerSync())
+				require.Equal(t, !tt.dropsWhile, sc.GetCurrentSyncPeer() == pid.String(), "sync peer before lift %d", i)
 
-			tt.lift(t, s)
-			require.True(t, relayNodeStatus(t, s, reg, pid), "relayed gossip registers the peer once the rule lifts")
+				lift(t, s)
+			}
+
+			require.True(t, relayNodeStatus(t, s, reg, pid), "relayed gossip registers the peer once no rule covers it")
 			require.NoError(t, sc.TriggerSync())
 			require.Equal(t, pid.String(), sc.GetCurrentSyncPeer(), "and it can be the sync peer again")
 		})
 	}
 }
 
-// A rule another ban-list key still wants keeps the peers it closed: a host
-// unban that leaves the address's /32 in force does not readmit them.
-func TestBanOnAddress_ClosedHostStaysBannedWhileAnotherKeyWantsTheRule(t *testing.T) {
-	s, reg, client := newAdmissionTestServer(t)
-	s.notificationCh = make(chan *notificationMsg, 10)
-
-	pid := mustNewPeerID(t)
-	client.peers = []p2pMessageBus.PeerInfo{{ID: pid.String(), Addrs: []string{fmt.Sprintf("/ip4/198.51.100.9/tcp/9905/p2p/%s", pid)}}}
-
-	banAddr(t, s, "198.51.100.9")
-	banAddr(t, s, "198.51.100.9/32")
-
-	unbanAddr(t, s, "198.51.100.9")
-	require.False(t, relayNodeStatus(t, s, reg, pid), "the /32 still wants the rule")
-
-	unbanAddr(t, s, "198.51.100.9/32")
-	require.True(t, relayNodeStatus(t, s, reg, pid))
-}
-
-// The IDs remembered across all rules are capped: past the cap a rule's
-// remaining peers are not remembered, and lifting the rule frees its share.
+// The remembered peers are capped: past the cap a peer is not remembered,
+// and lifting the rule releases the rest.
 func TestBanOnAddress_RememberedPeersAreCapped(t *testing.T) {
 	s, _, client := newAdmissionTestServer(t)
 
@@ -402,12 +403,12 @@ func TestBanOnAddress_RememberedPeersAreCapped(t *testing.T) {
 	client.peers = peers
 
 	banAddr(t, s, "198.51.100.9")
-	require.Equal(t, maxIPRuleClosedPeers, s.admission.closedTotal)
+	require.Len(t, s.admission.closed, maxIPRuleClosedPeers)
 	require.True(t, s.admission.closedByIPRule("peer-0"))
 	require.False(t, s.admission.closedByIPRule(fmt.Sprintf("peer-%d", maxIPRuleClosedPeers)))
 
 	unbanAddr(t, s, "198.51.100.9")
-	require.Zero(t, s.admission.closedTotal)
+	require.Empty(t, s.admission.closed)
 	require.False(t, s.admission.closedByIPRule("peer-0"))
 }
 
