@@ -1387,7 +1387,7 @@ func processUTXO(ctx context.Context, store utxo.Store, utxoWrapper *utxopersist
 
 	if _, _, err := store.SpendAndCreate(ctx, tx, utxoWrapper.Height, opts...); err != nil {
 		if errors.Is(err, errors.ErrTxExists) {
-			return nil
+			return checkExistingPosition(ctx, store, &utxoWrapper.TxID, position)
 		}
 
 		return err

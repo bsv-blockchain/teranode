@@ -932,6 +932,20 @@ func TestSeederAtShadowRefusesAnImportMadeAtOff(t *testing.T) {
 		require.ErrorContains(t, f.seed(true), "import made at off or from another grant")
 	})
 
+	t.Run("records past the first ones the check reads", func(t *testing.T) {
+		f := newSeedFixture(t, settings.LaneMigrationOff, 8, fixtureHeights)
+		require.Greater(t, len(f.records), probedRecords)
+
+		// An import at off that stopped having created only records the check does not read.
+		store := f.utxoStore()
+		for _, w := range f.records[probedRecords:] {
+			require.NoError(t, processUTXO(context.Background(), store, w, nil, false, lane.None))
+		}
+
+		f.settings.UtxoStore.LaneMigration = settings.LaneMigrationShadow
+		require.ErrorContains(t, f.seed(true), "import made at off or from another grant")
+	})
+
 	t.Run("a completed seed", func(t *testing.T) {
 		f := newSeedFixture(t, settings.LaneMigrationOff, 8, fixtureHeights)
 		require.NoError(t, f.seed(false))

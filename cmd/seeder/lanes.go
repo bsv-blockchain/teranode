@@ -657,6 +657,29 @@ func checkExistingPositions(ctx context.Context, store utxo.Store, utxoFile stri
 	return nil
 }
 
+// checkExistingPosition refuses a record the store already holds at another position than the
+// seed gives it, as an import made at off or from another grant leaves: the seeded rows would name
+// a position the record never received. At off, with position lane.None, it reads nothing.
+func checkExistingPosition(ctx context.Context, store utxo.Store, txid *chainhash.Hash, position uint64) error {
+	if position == lane.None {
+		return nil
+	}
+
+	md, err := store.Get(ctx, txid, fields.LanePosition)
+	if err != nil {
+		return errors.NewStorageError("could not read the lane position of %s, which the UTXO store already holds", txid.String(), err)
+	}
+
+	if md.LanePosition != position {
+		haveLane, havePos := lane.Unpack(md.LanePosition)
+		wantLane, wantPos := lane.Unpack(position)
+
+		return errors.NewProcessingError("the UTXO store already holds %s at lane %d position %d, and this seed gives it lane %d position %d: the store holds an import made at off or from another grant. Wipe the UTXO store, and the blockchain database too if any process has run at shadow on it since, then re-run with -force", txid.String(), haveLane, havePos, wantLane, wantPos)
+	}
+
+	return nil
+}
+
 // checkLaneSchema refuses a seed at shadow into a store whose lane columns are not all installed,
 // such as utxoset before teranode-cli prepare-lane-schema: its outputs and spend-journal rows would
 // carry no position.
