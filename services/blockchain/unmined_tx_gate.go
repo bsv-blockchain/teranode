@@ -121,8 +121,8 @@ type UnminedTxGate struct {
 	lastWarnNanos   atomic.Int64
 }
 
-// NewUnminedTxGate returns a gate for one intake route. route is one of the
-// UnminedTxRoute constants. tSettings decides whether the checkpoint rule is
+// NewUnminedTxGate returns a gate for one intake route. route is stored as
+// given; production callers pass one of the UnminedTxRoute constants. tSettings decides whether the checkpoint rule is
 // on: it is when the UTXO store URL selects a store that nets below the
 // checkpoint and the network has checkpoints. A nil tSettings turns it off.
 func NewUnminedTxGate(logger ulogger.Logger, client ClientI, tSettings *settings.Settings, route string) *UnminedTxGate {
@@ -177,9 +177,11 @@ func (g *UnminedTxGate) belowHighestCheckpoint() bool {
 		return false
 	}
 
+	// Refuse even if the read scheduled here lands before we return: the
+	// checkpoint was not known to be reached when this call was judged.
 	g.scheduleHeightRead()
 
-	return !g.reached.Load()
+	return true
 }
 
 // scheduleHeightRead starts a background height read when none is in flight,

@@ -206,8 +206,8 @@ func TestUnminedTxGate_NettingStoreRefusesBelowHighestCheckpoint(t *testing.T) {
 	}
 }
 
-// One read runs at a time and the next starts no sooner than the interval after
-// the last; once a read reaches the checkpoint the gate accepts and never reads
+// One read runs at a time and the next is scheduled no sooner than the interval
+// after the last was; once a read reaches the checkpoint the gate accepts and never reads
 // again.
 func TestUnminedTxGate_HeightReadIntervalAndLatch(t *testing.T) {
 	idle := FSMStateIDLE
