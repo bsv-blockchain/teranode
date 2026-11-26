@@ -224,6 +224,19 @@ var benchmarkTxHashes = sync.OnceValue(func() []chainhash.Hash {
 	return pool
 })
 
+// skipInShort skips a sub-benchmark size that -short (CI) leaves out. CI keeps 4 and 1024 per
+// subtree (64 for SubtreeProcessorOverheadBreakdown, whose 1024 row times the same loop as
+// SubtreeProcessorAdd/1024_per_subtree), 1k and 100k nodes for the parallel benchmarks, and 1k and
+// 10k for the sequential ones, whose 100k rows read 13 to 82% apart between two runs of the same
+// code on one GitHub runner.
+func skipInShort(b *testing.B, long bool) {
+	b.Helper()
+
+	if long && testing.Short() {
+		b.Skip("a kept size times the same code; skipped in -short")
+	}
+}
+
 // BenchmarkDirectSubtreeAdd benchmarks direct subtree node addition
 // WITHOUT SubtreeProcessor overhead. Compare with BenchmarkSubtreeProcessorAdd.
 func BenchmarkDirectSubtreeAdd(b *testing.B) {
@@ -232,16 +245,19 @@ func BenchmarkDirectSubtreeAdd(b *testing.B) {
 	testCases := []struct {
 		name            string
 		itemsPerSubtree int
+		long            bool
 	}{
 		{name: "4_per_subtree", itemsPerSubtree: 4},
-		{name: "64_per_subtree", itemsPerSubtree: 64},
-		{name: "256_per_subtree", itemsPerSubtree: 256},
+		{name: "64_per_subtree", itemsPerSubtree: 64, long: true},
+		{name: "256_per_subtree", itemsPerSubtree: 256, long: true},
 		{name: "1024_per_subtree", itemsPerSubtree: 1024},
-		{name: "2048_per_subtree", itemsPerSubtree: 2048},
+		{name: "2048_per_subtree", itemsPerSubtree: 2048, long: true},
 	}
 
 	for _, tc := range testCases {
 		b.Run(tc.name, func(b *testing.B) {
+			skipInShort(b, tc.long)
+
 			subtrees := make([]*subtreepkg.Subtree, 0)
 			currentSubtree, _ := subtreepkg.NewTreeByLeafCount(tc.itemsPerSubtree)
 			_ = currentSubtree.AddCoinbaseNode()
@@ -276,16 +292,19 @@ func BenchmarkSubtreeProcessorAdd(b *testing.B) {
 	testCases := []struct {
 		name            string
 		itemsPerSubtree int
+		long            bool
 	}{
 		{name: "4_per_subtree", itemsPerSubtree: 4},
-		{name: "64_per_subtree", itemsPerSubtree: 64},
-		{name: "256_per_subtree", itemsPerSubtree: 256},
+		{name: "64_per_subtree", itemsPerSubtree: 64, long: true},
+		{name: "256_per_subtree", itemsPerSubtree: 256, long: true},
 		{name: "1024_per_subtree", itemsPerSubtree: 1024},
-		{name: "2048_per_subtree", itemsPerSubtree: 2048},
+		{name: "2048_per_subtree", itemsPerSubtree: 2048, long: true},
 	}
 
 	for _, tc := range testCases {
 		b.Run(tc.name, func(b *testing.B) {
+			skipInShort(b, tc.long)
+
 			stp, cleanup := setupSubtreeProcessorForBenchB(b, tc.itemsPerSubtree)
 			defer cleanup()
 
@@ -316,15 +335,18 @@ func BenchmarkSubtreeProcessorRotate(b *testing.B) {
 	testCases := []struct {
 		name            string
 		itemsPerSubtree int
+		long            bool
 	}{
 		{name: "4_per_subtree", itemsPerSubtree: 4},
-		{name: "64_per_subtree", itemsPerSubtree: 64},
-		{name: "256_per_subtree", itemsPerSubtree: 256},
+		{name: "64_per_subtree", itemsPerSubtree: 64, long: true},
+		{name: "256_per_subtree", itemsPerSubtree: 256, long: true},
 		{name: "1024_per_subtree", itemsPerSubtree: 1024},
 	}
 
 	for _, tc := range testCases {
 		b.Run(tc.name, func(b *testing.B) {
+			skipInShort(b, tc.long)
+
 			stp, cleanup := setupSubtreeProcessorForBenchB(b, tc.itemsPerSubtree)
 			defer cleanup()
 
@@ -397,8 +419,12 @@ func setupSubtreeProcessorForBench(t *testing.T, itemsPerSubtree int) (*SubtreeP
 	)
 	require.NoError(t, err)
 
+	// Each call builds a store. Closing it stops the live heap growing call by call through a
+	// benchmark run, which made a row's reading depend on how many rows ran before it.
 	cleanup := func() {
 		close(done)
+
+		require.NoError(t, utxoStore.Close(ctx))
 	}
 
 	return stp, cleanup
@@ -455,15 +481,18 @@ func BenchmarkSubtreeNodeAddOnly(b *testing.B) {
 	testCases := []struct {
 		name            string
 		itemsPerSubtree int
+		long            bool
 	}{
 		{name: "4_per_subtree", itemsPerSubtree: 4},
-		{name: "64_per_subtree", itemsPerSubtree: 64},
-		{name: "256_per_subtree", itemsPerSubtree: 256},
+		{name: "64_per_subtree", itemsPerSubtree: 64, long: true},
+		{name: "256_per_subtree", itemsPerSubtree: 256, long: true},
 		{name: "1024_per_subtree", itemsPerSubtree: 1024},
 	}
 
 	for _, tc := range testCases {
 		b.Run(tc.name, func(b *testing.B) {
+			skipInShort(b, tc.long)
+
 			currentSubtree, _ := subtreepkg.NewTreeByLeafCount(tc.itemsPerSubtree)
 			_ = currentSubtree.AddCoinbaseNode()
 
@@ -496,16 +525,19 @@ func BenchmarkSubtreeCreationOnly(b *testing.B) {
 	testCases := []struct {
 		name            string
 		itemsPerSubtree int
+		long            bool
 	}{
 		{name: "4_per_subtree", itemsPerSubtree: 4},
-		{name: "64_per_subtree", itemsPerSubtree: 64},
-		{name: "256_per_subtree", itemsPerSubtree: 256},
+		{name: "64_per_subtree", itemsPerSubtree: 64, long: true},
+		{name: "256_per_subtree", itemsPerSubtree: 256, long: true},
 		{name: "1024_per_subtree", itemsPerSubtree: 1024},
-		{name: "2048_per_subtree", itemsPerSubtree: 2048},
+		{name: "2048_per_subtree", itemsPerSubtree: 2048, long: true},
 	}
 
 	for _, tc := range testCases {
 		b.Run(tc.name, func(b *testing.B) {
+			skipInShort(b, tc.long)
+
 			b.ReportAllocs()
 
 			for i := 0; i < b.N; i++ {
@@ -567,13 +599,16 @@ func BenchmarkSubtreeProcessorOverheadBreakdown(b *testing.B) {
 	testCases := []struct {
 		name            string
 		itemsPerSubtree int
+		long            bool
 	}{
 		{name: "64_per_subtree", itemsPerSubtree: 64},
-		{name: "1024_per_subtree", itemsPerSubtree: 1024},
+		{name: "1024_per_subtree", itemsPerSubtree: 1024, long: true},
 	}
 
 	for _, tc := range testCases {
 		b.Run(tc.name, func(b *testing.B) {
+			skipInShort(b, tc.long)
+
 			stp, cleanup := setupSubtreeProcessorForBenchB(b, tc.itemsPerSubtree)
 			defer cleanup()
 
@@ -724,15 +759,18 @@ func BenchmarkParallelGetAndSetIfNotExists(b *testing.B) {
 	testCases := []struct {
 		name      string
 		nodeCount int
+		long      bool
 	}{
 		{name: "1k_nodes", nodeCount: 1000},
-		{name: "10k_nodes", nodeCount: 10000},
-		{name: "50k_nodes", nodeCount: 50000},
+		{name: "10k_nodes", nodeCount: 10000, long: true},
+		{name: "50k_nodes", nodeCount: 50000, long: true},
 		{name: "100k_nodes", nodeCount: 100000},
 	}
 
 	for _, tc := range testCases {
 		b.Run(tc.name, func(b *testing.B) {
+			skipInShort(b, tc.long)
+
 			stp, cleanup := setupSubtreeProcessorForBenchB(b, 1024)
 			defer cleanup()
 
@@ -771,15 +809,18 @@ func BenchmarkSequentialGetAndSetIfNotExists(b *testing.B) {
 	testCases := []struct {
 		name      string
 		nodeCount int
+		long      bool
 	}{
 		{name: "1k_nodes", nodeCount: 1000},
 		{name: "10k_nodes", nodeCount: 10000},
-		{name: "50k_nodes", nodeCount: 50000},
-		{name: "100k_nodes", nodeCount: 100000},
+		{name: "50k_nodes", nodeCount: 50000, long: true},
+		{name: "100k_nodes", nodeCount: 100000, long: true},
 	}
 
 	for _, tc := range testCases {
 		b.Run(tc.name, func(b *testing.B) {
+			skipInShort(b, tc.long)
+
 			stp, cleanup := setupSubtreeProcessorForBenchB(b, 1024)
 			defer cleanup()
 
@@ -823,14 +864,17 @@ func BenchmarkProcessOwnBlockSubtreeNodesParallel(b *testing.B) {
 	testCases := []struct {
 		name      string
 		nodeCount int
+		long      bool
 	}{
 		{name: "1k_nodes", nodeCount: 1000},
-		{name: "10k_nodes", nodeCount: 10000},
+		{name: "10k_nodes", nodeCount: 10000, long: true},
 		{name: "100k_nodes", nodeCount: 100000},
 	}
 
 	for _, tc := range testCases {
 		b.Run(tc.name, func(b *testing.B) {
+			skipInShort(b, tc.long)
+
 			stp, cleanup := setupSubtreeProcessorForBenchB(b, 1024)
 			defer cleanup()
 
@@ -876,14 +920,17 @@ func BenchmarkProcessOwnBlockSubtreeNodesSequential(b *testing.B) {
 	testCases := []struct {
 		name      string
 		nodeCount int
+		long      bool
 	}{
 		{name: "1k_nodes", nodeCount: 1000},
 		{name: "10k_nodes", nodeCount: 10000},
-		{name: "100k_nodes", nodeCount: 100000},
+		{name: "100k_nodes", nodeCount: 100000, long: true},
 	}
 
 	for _, tc := range testCases {
 		b.Run(tc.name, func(b *testing.B) {
+			skipInShort(b, tc.long)
+
 			stp, cleanup := setupSubtreeProcessorForBenchB(b, 1024)
 			defer cleanup()
 
@@ -965,8 +1012,14 @@ func setupSubtreeProcessorForBenchB(b *testing.B, itemsPerSubtree int) (*Subtree
 		newSubtreeChan,
 	)
 
+	// Each call builds a store. Closing it stops the live heap growing call by call through a
+	// benchmark run, which made a row's reading depend on how many rows ran before it.
 	cleanup := func() {
 		close(done)
+
+		if utxoStore != nil {
+			require.NoError(b, utxoStore.Close(ctx))
+		}
 	}
 
 	return stp, cleanup
