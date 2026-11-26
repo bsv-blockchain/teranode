@@ -646,14 +646,17 @@ func (s *failGrantRecordStore) SetState(ctx context.Context, key string, data []
 	return s.Store.SetState(ctx, key, data)
 }
 
-// blockingStore is a blockchain store whose call named block waits until its context ends.
+// blockingStore is a blockchain store whose nth call named block, the first when nth is 0, waits
+// until its context ends.
 type blockingStore struct {
 	blockchain_store.Store
 	block string
+	nth   int64
+	calls atomic.Int64
 }
 
-func (s blockingStore) wait(ctx context.Context, name string) error {
-	if s.block != name {
+func (s *blockingStore) wait(ctx context.Context, name string) error {
+	if s.block != name || s.calls.Add(1) != max(s.nth, 1) {
 		return nil
 	}
 
@@ -662,7 +665,7 @@ func (s blockingStore) wait(ctx context.Context, name string) error {
 	return ctx.Err()
 }
 
-func (s blockingStore) GetState(ctx context.Context, key string) ([]byte, error) {
+func (s *blockingStore) GetState(ctx context.Context, key string) ([]byte, error) {
 	if err := s.wait(ctx, "GetState"); err != nil {
 		return nil, err
 	}
@@ -670,7 +673,7 @@ func (s blockingStore) GetState(ctx context.Context, key string) ([]byte, error)
 	return s.Store.GetState(ctx, key)
 }
 
-func (s blockingStore) SetState(ctx context.Context, key string, data []byte) error {
+func (s *blockingStore) SetState(ctx context.Context, key string, data []byte) error {
 	if err := s.wait(ctx, "SetState"); err != nil {
 		return err
 	}
@@ -678,7 +681,7 @@ func (s blockingStore) SetState(ctx context.Context, key string, data []byte) er
 	return s.Store.SetState(ctx, key, data)
 }
 
-func (s blockingStore) LaneCapGrants(ctx context.Context, height uint32) ([]lane.CapGrant, error) {
+func (s *blockingStore) LaneCapGrants(ctx context.Context, height uint32) ([]lane.CapGrant, error) {
 	if err := s.wait(ctx, "LaneCapGrants"); err != nil {
 		return nil, err
 	}
@@ -686,7 +689,7 @@ func (s blockingStore) LaneCapGrants(ctx context.Context, height uint32) ([]lane
 	return s.Store.LaneCapGrants(ctx, height)
 }
 
-func (s blockingStore) OpenLaneLease(ctx context.Context, req blockchainoptions.LaneLeaseOpen) (lane.LeaseID, lane.Grant, int, error) {
+func (s *blockingStore) OpenLaneLease(ctx context.Context, req blockchainoptions.LaneLeaseOpen) (lane.LeaseID, lane.Grant, int, error) {
 	if err := s.wait(ctx, "OpenLaneLease"); err != nil {
 		return lane.LeaseID{}, lane.Grant{}, 0, err
 	}
@@ -694,7 +697,7 @@ func (s blockingStore) OpenLaneLease(ctx context.Context, req blockchainoptions.
 	return s.Store.OpenLaneLease(ctx, req)
 }
 
-func (s blockingStore) ReleaseLaneLease(ctx context.Context, req blockchainoptions.LaneLeaseRelease) (bool, error) {
+func (s *blockingStore) ReleaseLaneLease(ctx context.Context, req blockchainoptions.LaneLeaseRelease) (bool, error) {
 	if err := s.wait(ctx, "ReleaseLaneLease"); err != nil {
 		return false, err
 	}
@@ -702,7 +705,7 @@ func (s blockingStore) ReleaseLaneLease(ctx context.Context, req blockchainoptio
 	return s.Store.ReleaseLaneLease(ctx, req)
 }
 
-func (s blockingStore) GetBlockHeadersByHeight(ctx context.Context, lo, hi uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
+func (s *blockingStore) GetBlockHeadersByHeight(ctx context.Context, lo, hi uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
 	if err := s.wait(ctx, "GetBlockHeadersByHeight"); err != nil {
 		return nil, nil, err
 	}
@@ -710,7 +713,7 @@ func (s blockingStore) GetBlockHeadersByHeight(ctx context.Context, lo, hi uint3
 	return s.Store.GetBlockHeadersByHeight(ctx, lo, hi)
 }
 
-func (s blockingStore) InsertLaneMapRows(ctx context.Context, blockID uint32, rows []lane.MapRow) error {
+func (s *blockingStore) InsertLaneMapRows(ctx context.Context, blockID uint32, rows []lane.MapRow) error {
 	if err := s.wait(ctx, "InsertLaneMapRows"); err != nil {
 		return err
 	}
@@ -726,29 +729,35 @@ func TestSeederLaneStoreCallsAreBounded(t *testing.T) {
 
 	t.Cleanup(func() { seederDBTimeout = saved })
 
+	// A grant reads its record, then the pending record, and writes the pending record, the grant
+	// record and the pending record's clear, in that order.
 	cases := []struct {
 		block   string
+		nth     int64
 		rows    bool
 		wantErr bool
 	}{
-		{"GetState", false, true},
-		{"LaneCapGrants", false, true},
-		{"SetState", false, true},
-		{"OpenLaneLease", false, true},
-		{"ReleaseLaneLease", false, false},
-		{"GetBlockHeadersByHeight", true, true},
-		{"InsertLaneMapRows", true, true},
-		{"SetState", true, true},
+		{"GetState", 1, false, true},
+		{"GetState", 2, false, true},
+		{"LaneCapGrants", 1, false, true},
+		{"SetState", 1, false, true},
+		{"SetState", 2, false, true},
+		{"SetState", 3, false, true},
+		{"OpenLaneLease", 1, false, true},
+		{"ReleaseLaneLease", 1, false, false},
+		{"GetBlockHeadersByHeight", 1, true, true},
+		{"InsertLaneMapRows", 1, true, true},
+		{"SetState", 1, true, true},
 	}
 
 	for _, c := range cases {
-		t.Run(c.block, func(t *testing.T) {
+		t.Run(c.block+" "+strconv.FormatInt(c.nth, 10), func(t *testing.T) {
 			f := newSeedFixture(t, settings.LaneMigrationShadow, 8, fixtureHeights)
 			ctx := context.Background()
 			bc := f.blockchainStore()
 			require.NoError(t, processHeaders(ctx, ulogger.TestLogger{}, bc, filepath.Join(f.dir, f.name+".utxo-headers")))
 
-			store := blockingStore{Store: bc, block: c.block}
+			store := &blockingStore{Store: bc, block: c.block, nth: c.nth}
 			start := time.Now()
 
 			var err error
