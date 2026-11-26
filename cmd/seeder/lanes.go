@@ -239,7 +239,7 @@ func prepareSeedLanes(ctx context.Context, logger ulogger.Logger, tSettings *set
 
 	lanes := &seededLanes{layout: layout, grant: grant}
 
-	if err = checkExistingPositions(ctx, utxoStore, utxoFile, lanes); err != nil {
+	if err = checkExistingPositions(ctx, utxoStore, utxoFile, lanes, false); err != nil {
 		return nil, err
 	}
 
@@ -247,34 +247,32 @@ func prepareSeedLanes(ctx context.Context, logger ulogger.Logger, tSettings *set
 }
 
 // checkRecordedPositions opens the UTXO store and checks it holds the file's first records at the
-// positions lanes gives them, for a run that writes rows without importing.
+// positions lanes gives them, for a run that relies on an earlier import instead of importing.
 func checkRecordedPositions(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, utxoFile string, lanes *seededLanes) error {
 	store, err := utxofactory.NewStore(ctx, logger, tSettings, "seeder", false)
 	if err != nil {
 		return errors.NewStorageError("failed to create utxostore", err)
 	}
 
-	return checkExistingPositions(ctx, store, utxoFile, lanes)
+	return checkExistingPositions(ctx, store, utxoFile, lanes, true)
 }
 
-// checkSeededAtShadow refuses to call a completed seed done at shadow when it was imported at off:
-// the blockchain store must record the grant of the seed of utxoFile's tip.
-func checkSeededAtShadow(ctx context.Context, store blockchain.Store, utxoFile string) error {
+// checkSeededAtShadow refuses to call a completed seed done at shadow unless it was stamped: the
+// blockchain store records the grant of the seed of utxoFile's tip, and the UTXO store holds the
+// file's first records at that grant's positions. A grant alone proves nothing, because a seed
+// refused after taking one leaves it recorded.
+func checkSeededAtShadow(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, store blockchain.Store, utxoFile string) error {
 	tip, err := readUTXOSetTip(utxoFile)
 	if err != nil {
 		return err
 	}
 
-	recorded, ok, err := readSeederGrant(ctx, store)
+	lanes, err := recordedSeedLanes(ctx, store, utxoFile, tip.hash)
 	if err != nil {
 		return err
 	}
 
-	if !ok || recorded.tip != tip.hash {
-		return errors.NewProcessingError("utxostore_laneMigration is shadow but the blockchain store records no lane grant for the seed of %s, so that seed was imported at off and its records have no lane position: wipe the UTXO store and re-run with -force", tip.hash.String())
-	}
-
-	return nil
+	return checkRecordedPositions(ctx, logger, tSettings, utxoFile, lanes)
 }
 
 // seederHolder names the seeder's lane lease.
@@ -428,8 +426,9 @@ const probedRecords = 16
 // checkExistingPositions refuses a seed over a UTXO store that already holds records of this file
 // with other positions: an import made at off, or from a grant the blockchain store no longer
 // records. A create of an existing record is skipped, so those records would keep their positions
-// while the rows name the new ones. It looks up the file's first records only.
-func checkExistingPositions(ctx context.Context, store utxo.Store, utxoFile string, lanes *seededLanes) error {
+// while the rows name the new ones. With requirePresent, a record missing from the store is refused
+// too, for a run that relies on a completed import. It looks up the file's first records only.
+func checkExistingPositions(ctx context.Context, store utxo.Store, utxoFile string, lanes *seededLanes, requirePresent bool) error {
 	f, reader, _, _, err := openUTXOSetFile(utxoFile)
 	if err != nil {
 		return err
@@ -444,7 +443,9 @@ func checkExistingPositions(ctx context.Context, store utxo.Store, utxoFile stri
 	for i := 0; i < probedRecords; i++ {
 		frame, _, readErr := utxopersister.ReadUTXOWrapperFrame(reader, nil)
 		if readErr != nil {
-			if errors.Is(readErr, io.EOF) {
+			// A file of fewer records ends at its footer, or at a clean end.
+			var boundary *utxopersister.ErrRecordBoundary
+			if errors.As(readErr, &boundary) || errors.Is(readErr, io.EOF) {
 				return nil
 			}
 
@@ -463,6 +464,10 @@ func checkExistingPositions(ctx context.Context, store utxo.Store, utxoFile stri
 		md, getErr := store.Get(ctx, &txid, fields.LanePosition)
 		if getErr != nil {
 			if errors.Is(getErr, errors.ErrTxNotFound) {
+				if requirePresent {
+					return errors.NewProcessingError("the UTXO store does not hold %s, which a completed import of this seed wrote: it was wiped or is another store. Re-run with -force", txid.String())
+				}
+
 				continue
 			}
 

@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -358,7 +359,16 @@ var fixtureHeights = []uint32{3, 1, 3, 5, 2, 5, 5, 1, 4, 3, 6, 2, 6, 1, 3, 5, 2,
 // A seed at shadow gives every record a position by height from one grant recorded at height 0,
 // writes one seeded row per block, and a second run over the same stores takes no new grant.
 func TestSeederStampsLanePositionsAndRows(t *testing.T) {
-	f := newSeedFixture(t, settings.LaneMigrationShadow, 8, fixtureHeights)
+	// The second snapshot holds fewer records than the check for stale records reads.
+	for _, heights := range [][]uint32{fixtureHeights, fixtureHeights[:3]} {
+		t.Run(strconv.Itoa(len(heights))+" records", func(t *testing.T) {
+			seedStampsPositionsAndRows(t, heights)
+		})
+	}
+}
+
+func seedStampsPositionsAndRows(t *testing.T, heights []uint32) {
+	f := newSeedFixture(t, settings.LaneMigrationShadow, 8, heights)
 	require.NoError(t, f.seed(false))
 
 	grant := f.recordedGrant()
@@ -467,8 +477,37 @@ func TestSeederRecoverCheckpointWritesTheSeededRows(t *testing.T) {
 	require.ErrorContains(t, err, "records no lane grant for the seed")
 	require.NoError(t, bc.Close(ctx))
 
+	// Recovery over a UTXO store that lost the import is refused.
+	imported := f.settings.UtxoStore.UtxoStore
+	f.settings.UtxoStore.UtxoStore = mustURL(t, "sqlite:///"+filepath.Join(t.TempDir(), "empty"))
+	require.ErrorContains(t, Seeder(ulogger.TestLogger{}, f.settings, f.dir, f.name, false, false, false, true, true), "does not hold")
+
+	f.settings.UtxoStore.UtxoStore = imported
+
 	require.NoError(t, Seeder(ulogger.TestLogger{}, f.settings, f.dir, f.name, false, false, false, true, true))
 	f.requireStamped(tip.lanes.grant)
+}
+
+// A seed whose rows cannot be written leaves no BlockAssembler checkpoint, so a plain re-run does
+// not take the seed as done. Here block 2 already holds a different row.
+func TestSeederWritesNoCheckpointWhenItsRowsFail(t *testing.T) {
+	f := newSeedFixture(t, settings.LaneMigrationShadow, 8, fixtureHeights)
+	ctx := context.Background()
+
+	bc, err := blockchain_store.NewStore(ulogger.TestLogger{}, f.settings.BlockChain.StoreURL, f.settings)
+	require.NoError(t, err)
+	require.NoError(t, processHeaders(ctx, ulogger.TestLogger{}, bc, filepath.Join(f.dir, f.name+".utxo-headers")))
+
+	_, metas, err := bc.GetBlockHeadersByHeight(ctx, 2, 2)
+	require.NoError(t, err)
+	require.NoError(t, bc.InsertLaneMapRows(ctx, metas[0].ID, []lane.MapRow{{Lane: 200, First: 1, Last: 1, Tag: lane.RowTagRange}}))
+	require.NoError(t, bc.Close(ctx))
+
+	require.ErrorContains(t, f.seed(false), "seeded lane rows")
+
+	exists, err := blockAssemblerStateExists(ctx, f.blockchainStore())
+	require.NoError(t, err)
+	require.False(t, exists, "no checkpoint without the rows")
 }
 
 // At off the seeder takes no lease, gives no position and writes no row.
@@ -565,6 +604,16 @@ func TestSeederAtShadowRefusesAnImportMadeAtOff(t *testing.T) {
 
 		f.settings.UtxoStore.LaneMigration = settings.LaneMigrationShadow
 		require.ErrorContains(t, f.seed(false), "records no lane grant for the seed")
+	})
+
+	t.Run("a completed seed after a refused forced one", func(t *testing.T) {
+		f := newSeedFixture(t, settings.LaneMigrationOff, 8, fixtureHeights)
+		require.NoError(t, f.seed(false))
+
+		// The refused run took and recorded a grant before it found the old records.
+		f.settings.UtxoStore.LaneMigration = settings.LaneMigrationShadow
+		require.ErrorContains(t, f.seed(true), "import made at off or from another grant")
+		require.ErrorContains(t, f.seed(false), "import made at off or from another grant")
 	})
 }
 

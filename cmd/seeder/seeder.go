@@ -533,7 +533,7 @@ func processUTXOs(ctx context.Context, logger ulogger.Logger, appSettings *setti
 			// earlier seed must have stamped positions too: one made at off left
 			// records no row can name.
 			if appSettings.UtxoStore.LaneMigration.Stamps() {
-				if err = checkSeededAtShadow(ctx, blockchainStore, utxoFile); err != nil {
+				if err = checkSeededAtShadow(ctx, logger, appSettings, blockchainStore, utxoFile); err != nil {
 					return nil, err
 				}
 			}
