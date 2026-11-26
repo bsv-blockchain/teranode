@@ -3,6 +3,7 @@ package resetblockassembly
 import (
 	"context"
 	"net"
+	"sync"
 	"testing"
 
 	"github.com/bsv-blockchain/teranode/services/blockassembly"
@@ -17,12 +18,28 @@ import (
 // recordingServer records which reset RPC arrived and the operator header it carried.
 type recordingServer struct {
 	blockassembly_api.UnimplementedBlockAssemblyAPIServer
+	mu     sync.Mutex
 	called string
 	header []string
 }
 
+// take returns what the last RPC recorded and clears it.
+func (r *recordingServer) take() (string, []string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	called, header := r.called, r.header
+	r.called, r.header = "", nil
+
+	return called, header
+}
+
 func (r *recordingServer) record(ctx context.Context, name string) (*blockassembly_api.EmptyMessage, error) {
 	md, _ := metadata.FromIncomingContext(ctx)
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
 	r.called, r.header = name, md.Get(blockassembly.OperatorResetMetadataKey)
 
 	return &blockassembly_api.EmptyMessage{}, nil
@@ -68,10 +85,10 @@ func TestResetBlockAssemblySendsOperatorHeader(t *testing.T) {
 	}
 
 	for _, c := range cases {
-		recorder.called, recorder.header = "", nil
-
 		require.NoError(t, ResetBlockAssembly(ulogger.TestLogger{}, tSettings, c.fullReset, c.validateInputs))
-		require.Equal(t, c.want, recorder.called)
-		require.Equal(t, []string{"true"}, recorder.header)
+
+		called, header := recorder.take()
+		require.Equal(t, c.want, called)
+		require.Equal(t, []string{"true"}, header)
 	}
 }
