@@ -437,9 +437,18 @@ func seedStampsPositionsAndRows(t *testing.T, heights []uint32, postgres bool) {
 	require.NoError(t, err)
 	require.Len(t, grants, 1, "the re-run took no new grant")
 
-	// A done seed whose records were since spent and pruned is still done on a plain re-run.
+	// A done seed whose records were since spent and pruned is still done on a plain re-run, but
+	// one of its records imported again at off since, with no position, is refused.
 	require.NoError(t, f.utxoStore().Delete(ctx, &f.records[0].TxID))
 	require.NoError(t, f.seed(false))
+
+	if !postgres {
+		f.settings.UtxoStore.LaneMigration = settings.LaneMigrationOff
+		require.NoError(t, processUTXO(ctx, f.utxoStore(), f.records[0], nil, false, lane.None))
+		f.settings.UtxoStore.LaneMigration = settings.LaneMigrationShadow
+		require.ErrorContains(t, f.seed(false), "imported again at off since")
+		require.NoError(t, f.utxoStore().Delete(ctx, &f.records[0].TxID))
+	}
 
 	// Another snapshot cannot seed into this database, whose blocks already hold this seed's rows,
 	// and asking leaves this seed's grant recorded.
@@ -628,7 +637,10 @@ func TestSeederWritesNoCheckpointWhenItsRowsFail(t *testing.T) {
 
 	_, metas, err := bc.GetBlockHeadersByHeight(ctx, 2, 2)
 	require.NoError(t, err)
-	require.NoError(t, bc.InsertLaneMapRows(ctx, metas[0].ID, []lane.MapRow{{Lane: 200, First: 1, Last: 1, Tag: lane.RowTagRange}}))
+	// The store's startup work on SQLite can hold the database for a moment.
+	require.Eventually(t, func() bool {
+		return bc.InsertLaneMapRows(ctx, metas[0].ID, []lane.MapRow{{Lane: 200, First: 1, Last: 1, Tag: lane.RowTagRange}}) == nil
+	}, 10*time.Second, 50*time.Millisecond)
 	require.NoError(t, bc.Close(ctx))
 
 	require.ErrorContains(t, f.seed(false), "seeded lane rows")

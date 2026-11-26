@@ -304,6 +304,62 @@ func checkRecordedPositions(ctx context.Context, logger ulogger.Logger, tSetting
 	return checkExistingPositions(ctx, store, utxoFile, lanes, true)
 }
 
+// checkRecordsHavePositions refuses a UTXO store holding any of the file's first records without a
+// lane position, as an import at off over a completed seed leaves. A record it does not hold, such
+// as one spent and pruned since, passes.
+func checkRecordsHavePositions(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, utxoFile string) error {
+	store, err := utxofactory.NewStore(ctx, logger, tSettings, "seeder", false)
+	if err != nil {
+		return errors.NewStorageError("failed to create utxostore", err)
+	}
+
+	defer func() {
+		if closeErr := store.Close(ctx); closeErr != nil {
+			logger.Warnf("[seeder lanes] closing the UTXO store opened to check positions: %v", closeErr)
+		}
+	}()
+
+	f, reader, _, _, err := openUTXOSetFile(utxoFile)
+	if err != nil {
+		return err
+	}
+
+	defer func() {
+		_ = f.Close()
+	}()
+
+	for i := 0; i < probedRecords; i++ {
+		frame, _, readErr := utxopersister.ReadUTXOWrapperFrame(reader, nil)
+		if readErr != nil {
+			var boundary *utxopersister.ErrRecordBoundary
+			if errors.As(readErr, &boundary) || errors.Is(readErr, io.EOF) {
+				return nil
+			}
+
+			return errors.NewProcessingError("reading %s", utxoFile, readErr)
+		}
+
+		var txid chainhash.Hash
+
+		copy(txid[:], frame[:32])
+
+		md, getErr := store.Get(ctx, &txid, fields.LanePosition)
+		if getErr != nil {
+			if errors.Is(getErr, errors.ErrTxNotFound) {
+				continue
+			}
+
+			return errors.NewStorageError("could not read the lane position of %s", txid.String(), getErr)
+		}
+
+		if !lane.Valid(md.LanePosition) {
+			return errors.NewProcessingError("the UTXO store holds %s with no lane position, though the seed of this snapshot was stamped: it was imported again at off since. Wipe the UTXO store, and the blockchain database too if any process has run at shadow on it since, then re-run with -force", txid.String())
+		}
+	}
+
+	return nil
+}
+
 // checkSeededAtShadow refuses to call a completed seed done at shadow unless it was stamped. The
 // blockchain store must record the grant of the seed of utxoFile's tip, and the seed is done when
 // it also records every row written. Otherwise, as after a forced re-run that stopped before its
@@ -326,10 +382,15 @@ func checkSeededAtShadow(ctx context.Context, logger ulogger.Logger, tSettings *
 	}
 
 	// Once every row is written the seed is done. Its records may have been spent and pruned since,
-	// so they are not looked up again.
+	// so a missing one proves nothing, but one the store holds without a position was imported again
+	// at off since.
 	written, err := seededRowsWritten(ctx, store, tip.hash)
-	if err != nil || written {
+	if err != nil {
 		return nil, err
+	}
+
+	if written {
+		return nil, checkRecordsHavePositions(ctx, logger, tSettings, utxoFile)
 	}
 
 	if tip.lanes, err = recordedSeedLanes(ctx, store, utxoFile, tip.hash); err != nil {
@@ -404,8 +465,22 @@ func takeSeederGrant(ctx context.Context, logger ulogger.Logger, store blockchai
 	}
 
 	abandoned := bytes.Equal(pending, tip[:])
-	for _, e := range earlier {
-		abandoned = abandoned && e.Height == 0
+
+	if abandoned {
+		// Any grant at height 1 or above, in any lane, newer than a seed's grant there included.
+		var later []lane.CapGrant
+
+		if err = withDBTimeout(ctx, func(ctx context.Context) error {
+			var readErr error
+
+			later, readErr = store.LaneCapGrants(ctx, 1)
+
+			return readErr
+		}); err != nil {
+			return lane.Grant{}, errors.NewStorageError("could not read the lane grants already handed out", err)
+		}
+
+		abandoned = len(later) == 0
 	}
 
 	if len(earlier) > 0 && !abandoned {
