@@ -429,6 +429,10 @@
          <lastmod>2026-11-26</lastmod>
     </url>
     <url>
+         <loc>https://bsv-blockchain.github.io/teranode/references/settings/services/probe_settings/</loc>
+         <lastmod>2026-11-26</lastmod>
+    </url>
+    <url>
          <loc>https://bsv-blockchain.github.io/teranode/references/settings/services/propagation_settings/</loc>
          <lastmod>2026-11-26</lastmod>
     </url>
@@ -634,6 +638,10 @@
     </url>
     <url>
          <loc>https://bsv-blockchain.github.io/teranode/topics/services/p2p/</loc>
+         <lastmod>2026-11-26</lastmod>
+    </url>
+    <url>
+         <loc>https://bsv-blockchain.github.io/teranode/topics/services/probe/</loc>
          <lastmod>2026-11-26</lastmod>
     </url>
     <url>

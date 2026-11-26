@@ -3325,6 +3325,8 @@
       
         
       
+        
+      
     
     
     
@@ -3469,6 +3471,34 @@
     
   
     Pruner
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../topics/services/probe/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Probe
   
 
     
@@ -5762,6 +5792,8 @@
       
         
       
+        
+      
     
     
     
@@ -6074,6 +6106,34 @@
     
   
     Pruner
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../settings/services/probe_settings/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Probe
   
 
     
@@ -6795,6 +6855,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#blob-store-metrics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Blob Store Metrics
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#aerospike-service-metrics" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -7159,6 +7230,17 @@
     <span class="md-ellipsis">
       
         TxMetaCache Service Metrics
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#blob-store-metrics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Blob Store Metrics
       
     </span>
   </a>
@@ -7706,6 +7788,11 @@
 <td><code>teranode_blockassembly_conflict_intent_replay_total</code></td>
 <td>CounterVec</td>
 <td>Total conflict-resolution WAL intent replays at startup, by result (label: <code>result</code>)</td>
+</tr>
+<tr>
+<td><code>teranode_blockassembly_last_mining_candidate_timestamp_seconds</code></td>
+<td>Gauge</td>
+<td>Unix time at which block assembly last served a mining candidate</td>
 </tr>
 </tbody>
 </table>
@@ -8856,6 +8943,16 @@
 <td>Gauge</td>
 <td>Peer subtrees waiting for a <code>subtreevalidation_peerSubtreeConcurrency</code> slot</td>
 </tr>
+<tr>
+<td><code>teranode_subtreevalidation_block_missing_subtrees_total</code></td>
+<td>Counter</td>
+<td>Number of subtrees that a block listed and the node did not hold</td>
+</tr>
+<tr>
+<td><code>teranode_subtreevalidation_block_missing_subtrees_outstanding</code></td>
+<td>Gauge</td>
+<td>Number of missing block subtrees still being fetched and validated</td>
+</tr>
 </tbody>
 </table>
 <h2 id="utxo-persister-service-metrics">UTXO Persister Service Metrics<a class="headerlink" href="#utxo-persister-service-metrics" title="Permanent link">&para;</a></h2>
@@ -9085,6 +9182,11 @@
 <td>Gauge</td>
 <td>Current consecutive queue-stats read-error streak (resets to 0 on a good read)</td>
 </tr>
+<tr>
+<td><code>teranode_validator_existing_tx_total</code></td>
+<td>Counter</td>
+<td>Number of transactions skipped because the UTXO store already holds them</td>
+</tr>
 </tbody>
 </table>
 <h2 id="txmetacache-service-metrics">TxMetaCache Service Metrics<a class="headerlink" href="#txmetacache-service-metrics" title="Permanent link">&para;</a></h2>
@@ -9163,9 +9265,57 @@
 <td>Number of times a <code>lockfree</code> cache writer found every lane busy; should stay 0</td>
 </tr>
 <tr>
+<td><code>teranode_tx_meta_cache_bytes</code></td>
+<td>Gauge</td>
+<td>Bytes of the cache capacity that hold entries: the ring position (the full ring after the first wrap) on the ring backends, entries x 320 on <code>pointer</code>, bytes written since reset (capped at the ring size) on <code>lockfree</code>. Updated every 5 s</td>
+</tr>
+<tr>
+<td><code>teranode_tx_meta_cache_capacity_bytes</code></td>
+<td>Gauge</td>
+<td>Usable capacity that <code>teranode_tx_meta_cache_bytes</code> is measured against: chunk ring size on the ring backends, ring slots x 320 on <code>pointer</code>, lane ring size on <code>lockfree</code>. Fill = bytes / capacity_bytes</td>
+</tr>
+<tr>
 <td><code>teranode_tx_meta_cache_tombstoned_writes_evicted_total</code></td>
 <td>Counter</td>
 <td>Writes of a tx demoted to conflicting that were dropped, or evicted right after landing when the demotion arrived during the write: a txmeta ADD consumed after the demotion's DELETE (they travel on different partitions), or a read-through write whose store read raced the demotion. Non-zero means the race happened and was absorbed</td>
+</tr>
+</tbody>
+</table>
+<h2 id="blob-store-metrics">Blob Store Metrics<a class="headerlink" href="#blob-store-metrics" title="Permanent link">&para;</a></h2>
+<p>The metered blob store wrapper records these metrics for each store. The <code>store</code> label names the store: <code>tx</code>, <code>subtree</code>, <code>temp</code>, <code>block</code> or <code>block_persister</code>.</p>
+<table>
+<thead>
+<tr>
+<th>Metric Name</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>teranode_blob_reads_total</code></td>
+<td>CounterVec</td>
+<td>Number of read calls to a blob store (<code>Exists</code>, <code>Get</code> and <code>GetIoReader</code>), by <code>store</code></td>
+</tr>
+<tr>
+<td><code>teranode_blob_writes_total</code></td>
+<td>CounterVec</td>
+<td>Number of write calls to a blob store (<code>Set</code>, <code>SetFromReader</code>, <code>SetDAH</code> and <code>Del</code>), by <code>store</code>. A committed pending file counts as one write</td>
+</tr>
+<tr>
+<td><code>teranode_blob_errors_total</code></td>
+<td>CounterVec</td>
+<td>Number of blob store calls that failed, by <code>store</code>. Not-found results, cancelled calls and blobs that already exist are not counted</td>
+</tr>
+<tr>
+<td><code>teranode_blob_read_duration_seconds</code></td>
+<td>HistogramVec</td>
+<td>Duration of blob store read calls in seconds, by <code>store</code>. <code>GetIoReader</code> measures the time to open the reader</td>
+</tr>
+<tr>
+<td><code>teranode_blob_write_duration_seconds</code></td>
+<td>HistogramVec</td>
+<td>Duration of blob store write calls in seconds, by <code>store</code>. <code>SetFromReader</code> includes the time to read the source</td>
 </tr>
 </tbody>
 </table>

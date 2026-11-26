@@ -1,0 +1,8293 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Horizontally scalable BSV blockchain node">
+      
+      
+      
+        <link rel="canonical" href="https://bsv-blockchain.github.io/teranode/topics/services/probe/">
+      
+      
+        <link rel="prev" href="../pruner/">
+      
+      
+        <link rel="next" href="../legacy/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../../assets/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+    
+    
+      
+        <title>Probe - Teranode</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../../assets/stylesheets/main.484c7ddc.min.css">
+      
+        
+        <link rel="stylesheet" href="../../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        
+        <link rel="stylesheet" href="../../../assets/external/fonts.googleapis.com/css.56f7ac64.css">
+        <style>:root{--md-text-font:"Inter";--md-code-font:"JetBrains Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../../overrides/custom.css?v=8cf07571">
+    
+    <script>__md_scope=new URL("../../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="custom" data-md-color-accent="custom">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#probe-service" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow md-header--lifted" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../../.." title="Teranode" class="md-header__button md-logo" aria-label="Teranode" data-md-component="logo">
+      
+  <img src="../../../assets/bsv-logo.png" alt="logo">
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            Teranode
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Probe
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="custom" data-md-color-accent="custom"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m17.75 4.09-2.53 1.94.91 3.06-2.63-1.81-2.63 1.81.91-3.06-2.53-1.94L12.44 4l1.06-3 1.06 3zm3.5 6.91-1.64 1.25.59 1.98-1.7-1.17-1.7 1.17.59-1.98L15.75 11l2.06-.05L18.5 9l.69 1.95zm-2.28 4.95c.83-.08 1.72 1.1 1.19 1.85-.32.45-.66.87-1.08 1.27C15.17 23 8.84 23 4.94 19.07c-3.91-3.9-3.91-10.24 0-14.14.4-.4.82-.76 1.27-1.08.75-.53 1.93.36 1.85 1.19-.27 2.86.69 5.83 2.89 8.02a9.96 9.96 0 0 0 8.02 2.89m-1.64 2.02a12.08 12.08 0 0 1-7.8-3.47c-2.17-2.19-3.33-5-3.49-7.82-2.81 3.14-2.7 7.96.31 10.98 3.02 3.01 7.84 3.12 10.98.31"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="custom" data-md-color-accent="custom"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 7a5 5 0 0 1 5 5 5 5 0 0 1-5 5 5 5 0 0 1-5-5 5 5 0 0 1 5-5m0 2a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3m0-7 2.39 3.42C13.65 5.15 12.84 5 12 5s-1.65.15-2.39.42zM3.34 7l4.16-.35A7.2 7.2 0 0 0 5.94 8.5c-.44.74-.69 1.5-.83 2.29zm.02 10 1.76-3.77a7.131 7.131 0 0 0 2.38 4.14zM20.65 7l-1.77 3.79a7.02 7.02 0 0 0-2.38-4.15zm-.01 10-4.14.36c.59-.51 1.12-1.14 1.54-1.86.42-.73.69-1.5.83-2.29zM12 22l-2.41-3.44c.74.27 1.55.44 2.41.44.82 0 1.63-.17 2.37-.44z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+          <a href="javascript:void(0)" class="md-search__icon md-icon" title="Share" aria-label="Share" data-clipboard data-clipboard-text="" data-md-component="search-share" tabindex="-1">
+            
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3c0 .24.04.47.09.7L8.04 9.81C7.5 9.31 6.79 9 6 9a3 3 0 0 0-3 3 3 3 0 0 0 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.15c-.05.21-.08.43-.08.66 0 1.61 1.31 2.91 2.92 2.91s2.92-1.3 2.92-2.91A2.92 2.92 0 0 0 18 16.08"/></svg>
+          </a>
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/bsv-blockchain/teranode" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    bsv-blockchain/teranode
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+    
+      
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../.." class="md-tabs__link">
+        
+  
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../../howto/developerSetup/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  How-To Guides
+
+        </a>
+      </li>
+    
+  
+
+    
+  
+
+      
+        
+  
+  
+  
+    
+  
+  
+    
+    
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="../../teranodeIntro/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Key Topics
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../../references/projectStructure/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Reference
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ul>
+  </div>
+</nav>
+    
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../../.." title="Teranode" class="md-nav__button md-logo" aria-label="Teranode" data-md-component="logo">
+      
+  <img src="../../../assets/bsv-logo.png" alt="logo">
+
+    </a>
+    Teranode
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/bsv-blockchain/teranode" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    bsv-blockchain/teranode
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    How-To Guides
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    How-To Guides
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2_1" >
+        
+          
+          <label class="md-nav__link" for="__nav_2_1" id="__nav_2_1_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Development
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_2_1_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2_1">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Development
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../howto/developerSetup/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Developer Setup
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../howto/forkAndPullRequestGuidelines/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Fork and Pull Request Guidelines
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../howto/locallyRunningServices/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Running Services Locally
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../howto/howToRemoteDebugTeranode/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Debugging Teranode
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../howto/generatingProtobuf/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Generating Protobuf
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../howto/addingNewProtobufServices/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Adding Protobuf
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../howto/configuringGrpcLogging/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Configuring gRPC Logging
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../howto/runningTests/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Running Tests
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../howto/automatedTestingHowTo/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Automated Testing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../howto/chain-integrity-testing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chain Integrity Testing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../howto/makefile/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Makefile Guide
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../howto/bugReporting/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Bug Reporting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../howto/releaseProcess/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Release Process
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../howto/developersHowToTeranodeCLI/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Developer's Guide to Teranode-CLI
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2_12" >
+        
+          
+          <label class="md-nav__link" for="__nav_2_12" id="__nav_2_12_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Miners
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_2_12_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2_12">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Miners
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2_12_1" >
+        
+          
+          <label class="md-nav__link" for="__nav_2_12_1" id="__nav_2_12_1_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Installation
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_2_12_1_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2_12_1">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Installation
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../howto/miners/docker/minersHowToInstallation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Docker
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../howto/miners/kubernetes/minersHowToInstallation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Kubernetes
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2_12_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2_12_2" id="__nav_2_12_2_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Configuration
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_2_12_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2_12_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Configuration
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../howto/miners/docker/minersHowToConfigureTheNode/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Docker
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../howto/miners/kubernetes/minersHowToConfigureTheNode/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Kubernetes
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../howto/miners/kubernetes/minersHowToExposeP2P/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    P2P Public Exposure (Kubernetes)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../howto/miners/minersHowToAerospikeTuning/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Aerospike Tuning
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../howto/miners/minersHowToInteractWithAssetServer/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Asset Server Interaction
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../howto/miners/minersHowToInteractWithFSM/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    FSM Interaction
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../howto/miners/minersHowToInteractWithRPCServer/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    RPC Server Interaction
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2_12_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_2_12_3" id="__nav_2_12_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Start/Stop
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_2_12_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2_12_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Start/Stop
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../howto/miners/docker/minersHowToStopStartDockerTeranode/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Docker
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../howto/miners/kubernetes/minersHowToStopStartKubernetesTeranode/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Kubernetes
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2_12_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_2_12_4" id="__nav_2_12_4_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Updating Teranode
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_2_12_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2_12_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Updating Teranode
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../howto/miners/docker/minersUpdatingTeranode/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Docker
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../howto/miners/kubernetes/minersUpdatingTeranode/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Kubernetes
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2_12_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_2_12_5" id="__nav_2_12_5_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Security Best Practices
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_2_12_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2_12_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Security Best Practices
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../howto/miners/docker/minersSecurityBestPractices/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Docker
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../howto/miners/kubernetes/minersSecurityBestPractices/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Kubernetes
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2_12_6" >
+        
+          
+          <label class="md-nav__link" for="__nav_2_12_6" id="__nav_2_12_6_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Troubleshooting
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_2_12_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2_12_6">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Troubleshooting
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../howto/miners/docker/minersHowToTroubleshooting/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Docker
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../howto/miners/kubernetes/minersHowToTroubleshooting/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Kubernetes
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2_12_7" >
+        
+          
+          <label class="md-nav__link" for="__nav_2_12_7" id="__nav_2_12_7_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Reset Teranode
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_2_12_7_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2_12_7">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Reset Teranode
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../howto/miners/docker/minersHowToResetTeranode/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Docker
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../howto/miners/kubernetes/minersHowToResetTeranode/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Kubernetes
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2_12_8" >
+        
+          
+          <label class="md-nav__link" for="__nav_2_12_8" id="__nav_2_12_8_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Sync the Node
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_2_12_8_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2_12_8">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Sync the Node
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../howto/miners/docker/minersHowToSyncTheNode/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Docker
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../howto/miners/kubernetes/minersHowToSyncTheNode/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Kubernetes
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../howto/miners/minersHowToMonitoring/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Monitoring
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2_12_10" >
+        
+          
+          <label class="md-nav__link" for="__nav_2_12_10" id="__nav_2_12_10_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Additional
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_2_12_10_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2_12_10">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Additional
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../howto/miners/minersHowToBackup/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Back Up and Restore Teranode
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../howto/miners/minersHowToCPUMiner/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    CPU Mining Setup
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../howto/miners/minersHowToTeranodeCLI/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Teranode CLI
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../howto/miners/minersManagingDiskSpace/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Managing Disk Space
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../howto/miners/minersHowToUseListenMode/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Using Listen Mode
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Key Topics
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Key Topics
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../teranodeIntro/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Teranode Introduction
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/teranode-overall-system-design/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/teranode-architecture-brief/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture Brief
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/teranode-microservices-overview/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Microservices Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../transactionLifecycle/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Transaction Lifecycle
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/stateManagement/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    State Management
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../state-machine.diagram/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    State Machine Diagram
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/understandingDoubleSpends/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Understanding Double Spends
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../technologyStack/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Technology Stack
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../understandingTheTestingFramework/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Understanding the Testing Framework
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../functionalRequirementTests/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Functional Requirement Tests
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+          
+          
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_12" >
+        
+          
+          <label class="md-nav__link" for="__nav_3_12" id="__nav_3_12_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Features
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_3_12_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3_12">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Features
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../features/two_phase_commit/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Two Phase Commit
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../features/peer_registry_reputation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Peer Registry and Reputation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../features/utxo_lock_records/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    UTXO Lock Records
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../dashboard/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Dashboard
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../tui_tools/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    TUI Tools
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+          
+          
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_15" >
+        
+          
+          <label class="md-nav__link" for="__nav_3_15" id="__nav_3_15_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Core Services
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_3_15_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3_15">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Core Services
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../alert/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Alert Service
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../assetServer/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Asset Server
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../blockAssembly/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Block Assembly
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../blockValidation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Block Validation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../blockchain/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Blockchain
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../propagation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Propagation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../subtreeValidation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Subtree Validation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../validator/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Validator
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+          
+          
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_16" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_3_16" id="__nav_3_16_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overlay Services
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_3_16_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_3_16">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Overlay Services
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../blockPersister/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Block Persister
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../p2p/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    P2P
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../P2P_NAT_TRAVERSAL/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    P2P NAT Traversal
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../pruner/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Pruner
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Probe
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Probe
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#index" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Index
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#1-description" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1. Description
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#2-how-to-enable-the-probe" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2. How to Enable the Probe
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#3-security" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3. Security
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#4-the-dashboard" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4. The Dashboard
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="4. The Dashboard">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#41-the-six-stages" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4.1 The Six Stages
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#42-kafka-flow-strips-and-consumer-lag" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4.2 Kafka Flow Strips and Consumer Lag
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#43-drain-time" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4.3 Drain Time
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#44-the-lanes-view" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4.4 The Lanes View
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#5-alarms" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5. Alarms
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="5. Alarms">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#51-alarm-states" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5.1 Alarm States
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#52-learned-baselines" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5.2 Learned Baselines
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#53-floors" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5.3 Floors
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#54-cause-chains-and-start-of-chain" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5.4 Cause Chains and Start of Chain
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#55-source-alarms" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5.5 Source Alarms
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#56-snooze-and-the-alarm-log" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5.6 Snooze and the Alarm Log
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#6-the-state-file" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        6. The State File
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#7-data-store-requirements" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        7. Data Store Requirements
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="7. Data Store Requirements">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#71-aerospike" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        7.1 Aerospike
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#72-postgresql" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        7.2 PostgreSQL
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#73-kafka" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        7.3 Kafka
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#74-tx-meta-cache" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        7.4 Tx Meta Cache
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#8-fault-behaviour" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        8. Fault Behaviour
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#9-http-api" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        9. HTTP API
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#10-configuration-options-settings-flags" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        10. Configuration Options (Settings Flags)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#11-limits" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        11. Limits
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#12-troubleshooting" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        12. Troubleshooting
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#13-directory-structure-and-main-files" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        13. Directory Structure and Main Files
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../legacy/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Legacy
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../rpc/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    RPC
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../utxoPersister/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    UTXO Persister
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+          
+          
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_17" >
+        
+          
+          <label class="md-nav__link" for="__nav_3_17" id="__nav_3_17_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Stores
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_3_17_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3_17">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Stores
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../stores/blob/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Blob Store
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../stores/utxo/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    UTXO Store
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+          
+          
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_18" >
+        
+          
+          <label class="md-nav__link" for="__nav_3_18" id="__nav_3_18_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Data Model
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_3_18_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3_18">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Data Model
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../datamodel/block_data_model/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Block Data Model
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../datamodel/block_header_data_model/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Block Header Model
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../datamodel/subtree_data_model/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Subtree Data Model
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../datamodel/transaction_data_model/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Transaction Data Model
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../datamodel/utxo_data_model/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    UTXO Data Model
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+      
+    
+    
+    
+      
+      
+        
+          
+          
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_19" >
+        
+          
+          <label class="md-nav__link" for="__nav_3_19" id="__nav_3_19_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Kafka
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_3_19_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3_19">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Kafka
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../kafka/kafka/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Kafka Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+      
+    
+    
+    
+      
+      
+        
+          
+          
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_20" >
+        
+          
+          <label class="md-nav__link" for="__nav_3_20" id="__nav_3_20_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Commands
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_3_20_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3_20">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Commands
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../commands/seeder/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Seeder
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Reference
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../references/projectStructure/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Project Structure
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_4_2" id="__nav_4_2_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API & Protobuf
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    API & Protobuf
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../references/errorHandling/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Error Handling
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../references/glossary/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Glossary
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../references/codingConventions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Coding Conventions
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../references/kafkaMessageFormat/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Kafka Message Format
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../references/protoVersioning/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Proto Versioning Policy
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../references/networkConsensusRules/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Network Consensus Rules
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_2_7" >
+        
+          
+          <label class="md-nav__link" for="__nav_4_2_7" id="__nav_4_2_7_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Protobuf API
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_4_2_7_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4_2_7">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Protobuf API
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../references/protobuf_docs/alertProto/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Alert Proto
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../references/protobuf_docs/assetProto/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Asset Proto
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../references/protobuf_docs/blockassemblyProto/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Block Assembly Proto
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../references/protobuf_docs/blockchainProto/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Blockchain Proto
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../references/protobuf_docs/blockvalidationProto/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Block Validation Proto
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../references/protobuf_docs/legacyPeerProto/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Legacy Peer Proto
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../references/protobuf_docs/p2pProto/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    P2P Proto
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../references/protobuf_docs/propagationProto/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Propagation Proto
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../references/protobuf_docs/prunerProto/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Pruner Proto
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../references/protobuf_docs/subtreevalidationProto/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Subtree Validation Proto
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../references/protobuf_docs/validatorProto/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Validator Proto
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_4_3" id="__nav_4_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Core Services
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Core Services
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../references/services/alert_reference/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Alert Service
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../references/services/asset_reference/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Asset Service
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../references/services/blockassembly_reference/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Block Assembly
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../references/services/blockvalidation_reference/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Block Validation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../references/services/blockchain_reference/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Blockchain
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../references/services/propagation_reference/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Propagation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../references/services/subtreevalidation_reference/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Subtree Validation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../references/services/validator_reference/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Validator
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4_4" id="__nav_4_4_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overlay Services
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Overlay Services
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../references/services/blockpersister_reference/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Block Persister
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../references/services/p2p_reference/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    P2P
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../references/services/legacy_reference/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    P2P Legacy Service
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../references/services/pruner_reference/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Pruner
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../references/services/rpc_reference/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    RPC
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../references/services/utxopersister_reference/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    UTXO Persister
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_4_5" id="__nav_4_5_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Stores
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Stores
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../references/stores/blob_reference/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Blob Store
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../references/stores/utxo_reference/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    UTXO Store
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_6" >
+        
+          
+          <label class="md-nav__link" for="__nav_4_6" id="__nav_4_6_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Configuration
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4_6">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Configuration
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../references/settings/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Settings Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../references/settings_reference/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Settings Reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../references/settings/global_settings/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Global Settings
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../references/settings/policy_settings/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Policy Settings
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../references/settings/kafka_settings/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Kafka Settings
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_6_6" >
+        
+          
+          <label class="md-nav__link" for="__nav_4_6_6" id="__nav_4_6_6_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Service Settings
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_4_6_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4_6_6">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Service Settings
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../references/settings/services/alert_settings/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Alert
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../references/settings/services/asset_settings/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Asset Server
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../references/settings/services/blockassembly_settings/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Block Assembly
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../references/settings/services/blockchain_settings/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Blockchain
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../references/settings/services/blockpersister_settings/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Block Persister
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../references/settings/services/blockvalidation_settings/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Block Validation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../references/settings/services/legacy_settings/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Legacy
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../references/settings/services/p2p_settings/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    P2P
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../references/settings/services/propagation_settings/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Propagation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../references/settings/services/pruner_settings/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Pruner
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../references/settings/services/probe_settings/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Probe
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../references/settings/services/rpc_settings/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    RPC
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../references/settings/services/subtreevalidation_settings/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Subtree Validation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../references/settings/services/utxopersister_settings/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    UTXO Persister
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../references/settings/services/validator_settings/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Validator
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_6_7" >
+        
+          
+          <label class="md-nav__link" for="__nav_4_6_7" id="__nav_4_6_7_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Store Settings
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_4_6_7_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4_6_7">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Store Settings
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../references/settings/stores/aerospike_settings/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Aerospike Store
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../references/settings/stores/blob_settings/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Blob Store
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../references/settings/stores/utxo_settings/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    UTXO Store
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_7" >
+        
+          
+          <label class="md-nav__link" for="__nav_4_7" id="__nav_4_7_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Miscellaneous
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_7_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4_7">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Miscellaneous
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../misc/BIP-239/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    BIP-239 (Transaction Extended Format)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../references/gitCommitSigningSetupGuide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Git Commit Signing Setup Guide
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../references/licenseInformation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Licensing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../references/prometheusMetrics/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Prometheus Metrics
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../references/teranodeDaemonReference/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Teranode Daemon Reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../references/testingTechnicalReference/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Testing Technical Reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../references/thirdPartySoftwareRequirements/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Third-Party Software Requirements
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#index" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Index
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#1-description" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1. Description
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#2-how-to-enable-the-probe" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2. How to Enable the Probe
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#3-security" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3. Security
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#4-the-dashboard" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4. The Dashboard
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="4. The Dashboard">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#41-the-six-stages" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4.1 The Six Stages
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#42-kafka-flow-strips-and-consumer-lag" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4.2 Kafka Flow Strips and Consumer Lag
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#43-drain-time" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4.3 Drain Time
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#44-the-lanes-view" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4.4 The Lanes View
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#5-alarms" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5. Alarms
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="5. Alarms">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#51-alarm-states" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5.1 Alarm States
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#52-learned-baselines" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5.2 Learned Baselines
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#53-floors" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5.3 Floors
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#54-cause-chains-and-start-of-chain" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5.4 Cause Chains and Start of Chain
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#55-source-alarms" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5.5 Source Alarms
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#56-snooze-and-the-alarm-log" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5.6 Snooze and the Alarm Log
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#6-the-state-file" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        6. The State File
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#7-data-store-requirements" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        7. Data Store Requirements
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="7. Data Store Requirements">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#71-aerospike" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        7.1 Aerospike
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#72-postgresql" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        7.2 PostgreSQL
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#73-kafka" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        7.3 Kafka
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#74-tx-meta-cache" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        7.4 Tx Meta Cache
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#8-fault-behaviour" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        8. Fault Behaviour
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#9-http-api" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        9. HTTP API
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#10-configuration-options-settings-flags" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        10. Configuration Options (Settings Flags)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#11-limits" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        11. Limits
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#12-troubleshooting" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        12. Troubleshooting
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#13-directory-structure-and-main-files" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        13. Directory Structure and Main Files
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+                
+
+
+
+  
+
+
+  <nav class="md-path" aria-label="Navigation" >
+    <ol class="md-path__list">
+      
+        
+  
+  
+    <li class="md-path__item">
+      <a href="../../.." class="md-path__link">
+        
+  <span class="md-ellipsis">
+    Home
+  </span>
+
+      </a>
+    </li>
+  
+
+      
+      
+        
+  
+  
+    
+    
+      <li class="md-path__item">
+        <a href="../../teranodeIntro/" class="md-path__link">
+          
+  <span class="md-ellipsis">
+    Key Topics
+  </span>
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+    
+    
+      <li class="md-path__item">
+        <a href="../blockPersister/" class="md-path__link">
+          
+  <span class="md-ellipsis">
+    Overlay Services
+  </span>
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ol>
+  </nav>
+
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="probe-service">Probe Service<a class="headerlink" href="#probe-service" title="Permanent link">&para;</a></h1>
+<h2 id="index">Index<a class="headerlink" href="#index" title="Permanent link">&para;</a></h2>
+<ol>
+<li><a href="#1-description">Description</a></li>
+<li><a href="#2-how-to-enable-the-probe">How to Enable the Probe</a></li>
+<li><a href="#3-security">Security</a></li>
+<li><a href="#4-the-dashboard">The Dashboard</a><ul>
+<li><a href="#41-the-six-stages">4.1 The Six Stages</a></li>
+<li><a href="#42-kafka-flow-strips-and-consumer-lag">4.2 Kafka Flow Strips and Consumer Lag</a></li>
+<li><a href="#43-drain-time">4.3 Drain Time</a></li>
+<li><a href="#44-the-lanes-view">4.4 The Lanes View</a></li>
+</ul>
+</li>
+<li><a href="#5-alarms">Alarms</a><ul>
+<li><a href="#51-alarm-states">5.1 Alarm States</a></li>
+<li><a href="#52-learned-baselines">5.2 Learned Baselines</a></li>
+<li><a href="#53-floors">5.3 Floors</a></li>
+<li><a href="#54-cause-chains-and-start-of-chain">5.4 Cause Chains and Start of Chain</a></li>
+<li><a href="#55-source-alarms">5.5 Source Alarms</a></li>
+<li><a href="#56-snooze-and-the-alarm-log">5.6 Snooze and the Alarm Log</a></li>
+</ul>
+</li>
+<li><a href="#6-the-state-file">The State File</a></li>
+<li><a href="#7-data-store-requirements">Data Store Requirements</a><ul>
+<li><a href="#71-aerospike">7.1 Aerospike</a></li>
+<li><a href="#72-postgresql">7.2 PostgreSQL</a></li>
+<li><a href="#73-kafka">7.3 Kafka</a></li>
+<li><a href="#74-tx-meta-cache">7.4 Tx Meta Cache</a></li>
+</ul>
+</li>
+<li><a href="#8-fault-behaviour">Fault Behaviour</a></li>
+<li><a href="#9-http-api">HTTP API</a></li>
+<li><a href="#10-configuration-options-settings-flags">Configuration Options (Settings Flags)</a></li>
+<li><a href="#11-limits">Limits</a></li>
+<li><a href="#12-troubleshooting">Troubleshooting</a></li>
+<li><a href="#13-directory-structure-and-main-files">Directory Structure and Main Files</a></li>
+</ol>
+<h2 id="1-description">1. Description<a class="headerlink" href="#1-description" title="Permanent link">&para;</a></h2>
+<p>The Probe service shows the live state of one Teranode node in a web dashboard.
+It shows where transactions and blocks flow, where they wait, and which stage is slow.</p>
+<p>The probe is an overlay service. It is off by default.
+It only reads. It never writes to a Teranode service or to a data store.</p>
+<p>The probe does these tasks:</p>
+<ul>
+<li>It samples the Prometheus metrics of the node services every 2 seconds.</li>
+<li>It reads the FSM state, the chain tip and the peer heights from the Blockchain and P2P services.</li>
+<li>It reads Aerospike, PostgreSQL and Kafka every 15 seconds.</li>
+<li>It compares each important reading with a normal value that it learns for this node.</li>
+<li>It raises an alarm with fixed text when a reading stays outside its normal range.</li>
+<li>It sends a new sample to each open dashboard over a WebSocket.</li>
+</ul>
+<h2 id="2-how-to-enable-the-probe">2. How to Enable the Probe<a class="headerlink" href="#2-how-to-enable-the-probe" title="Permanent link">&para;</a></h2>
+<p>The probe starts only when you enable it and set a token.</p>
+<p>Do these steps:</p>
+<ol>
+<li>Set <code>probe_authToken</code> to a long random value in your local settings.</li>
+<li>Start the node with <code>-probe=1</code>, or set <code>startProbe = true</code>.</li>
+<li>Open <code>http://localhost:8100/</code> in a browser on the same host.</li>
+<li>Type the token in the login form.</li>
+</ol>
+<p>An all-in-one node runs the probe in the same process as the other services.
+The probe then reads the metrics of all services from the process registry. You do not set <code>probe_metricsTargets</code>.</p>
+<div class="language-shell highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nv">SETTINGS_CONTEXT</span><span class="o">=</span>dev.<span class="o">[</span>YOUR_CONTEXT<span class="o">]</span><span class="w"> </span>go<span class="w"> </span>run<span class="w"> </span>.<span class="w"> </span>-probe<span class="o">=</span><span class="m">1</span>
+</span></code></pre></div>
+<p>In Kubernetes, run the probe as its own service with <code>-all=0 -probe=1</code>.
+A probe in its own pod cannot see the metrics registry of the other pods. Set <code>probe_metricsTargets</code> to the metrics endpoint of each service, for example <code>blockvalidation:9091|validator:9091</code>.
+The probe scrapes a <code>host:port</code> entry at <code>http://host:port/metrics</code> and a <code>host:port/path</code> entry at <code>http://host:port/path</code>. It uses an entry with a scheme, such as <code>https://validator:9091/metrics</code>, as given. It ignores empty entries. A node with a custom metrics path needs the path or a full URL.
+The probe also needs the Blockchain and P2P gRPC addresses from the normal settings.</p>
+<h2 id="3-security">3. Security<a class="headerlink" href="#3-security" title="Permanent link">&para;</a></h2>
+<p>The probe protects its data with a static bearer token.</p>
+<ul>
+<li>Every REST API request and every health request must send <code>Authorization: Bearer &lt;token&gt;</code>. The probe compares the token in constant time.</li>
+<li>The dashboard files (<code>/</code> and the files that it loads) are public and need no token. They hold no node data.</li>
+<li>A request with no token or a wrong token gets <code>401</code> and an empty body.</li>
+<li>The WebSocket must send <code>{"auth": "&lt;token&gt;"}</code> as its first message within 5 seconds. Otherwise the probe closes it with code <code>4401</code>.</li>
+<li>When the probe is enabled and <code>probe_authToken</code> is empty, the node refuses to start.</li>
+<li>The probe never writes the token or a data store credential to the log.</li>
+</ul>
+<p>The probe binds to <code>localhost:8100</code> by default. Only a browser on the same host can reach it.</p>
+<p>To reach the probe in Kubernetes, do these steps:</p>
+<ol>
+<li>Set <code>probe_httpListenAddress</code> to <code>:8100</code>.</li>
+<li>Put a reverse proxy with TLS in front of the probe.</li>
+<li>Expose only the proxy. Do not expose port 8100 directly.</li>
+</ol>
+<p>The probe itself serves plain HTTP. It has no TLS of its own.</p>
+<p>The dashboard keeps the token only in the session storage of the browser tab. It does not use a cookie, and it asks the browser not to save the token. When you close the tab, the browser forgets the token.</p>
+<p>The probe serves the dashboard files (<code>/</code>, <code>/app.js</code>, <code>/view.js</code>, <code>/style.css</code>) without a token. These files contain no node data. All data comes from the API and the WebSocket, which need the token.
+The dashboard pages send a strict Content Security Policy. Scripts, styles and connections are limited to the probe origin.</p>
+<p>The probe is read-only toward every store:</p>
+<ul>
+<li>It reads Prometheus metrics.</li>
+<li>It calls read methods on the Blockchain and P2P gRPC clients.</li>
+<li>It sends Aerospike info commands. It does not read or write records.</li>
+<li>It runs PostgreSQL queries in a <code>READ ONLY</code> transaction.</li>
+<li>It reads Kafka offsets through the admin API. It never joins a consumer group and never commits an offset.</li>
+</ul>
+<h2 id="4-the-dashboard">4. The Dashboard<a class="headerlink" href="#4-the-dashboard" title="Permanent link">&para;</a></h2>
+<p>The dashboard needs a desktop browser with a window width of 1280 px or more.</p>
+<p>The home page shows the six stages of the node from left to right. Arrows between the stages show the flows. A panel LED shows the worst status of the readings in that stage.
+Click a stage to open its detail view. The detail view shows each reading with its normal value and a 10 minute sparkline.</p>
+<p>Colour shows only status:</p>
+<ul>
+<li>Green: the reading is normal.</li>
+<li>Amber: a warning alarm is active.</li>
+<li>Red: a critical alarm is active.</li>
+<li>Grey: no data. The panel shows the age of the last good sample.</li>
+</ul>
+<p>When a source fails, every value from that source goes grey with the age of its last good sample. This includes the FSM chip and the tip chip (Blockchain source), the median peer height (P2P source), the Kafka lag on the flow strips and in the Kafka topics panel (Kafka source) and the Aerospike and PostgreSQL tanks. The block height chips and the drain text keep their last values during an outage.</p>
+<h3 id="41-the-six-stages">4.1 The Six Stages<a class="headerlink" href="#41-the-six-stages" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Stage</th>
+<th>Readings</th>
+<th>Source</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Ingress</td>
+<td>Propagation tx/s, subtree intake/s, peers, rejected tx/s, subtree queue</td>
+<td>Propagation, Subtree Validation and P2P metrics</td>
+</tr>
+<tr>
+<td>Validator</td>
+<td>Validated tx/s, latency p99, queue fill, spend batch fill, errors/s</td>
+<td>Validator metrics (see the note below the table), Aerospike spend batch metrics</td>
+</tr>
+<tr>
+<td>Tx meta cache</td>
+<td>Hit rate, misses/s, evictions/s, inserts/s, fill, current and previous generation share, entries, size, capacity</td>
+<td>Tx meta cache metrics</td>
+</tr>
+<tr>
+<td>Block Assembly</td>
+<td>State (running or paused), tip lag in blocks, age of the oldest queued transaction, ingest queue fill, subtree fill</td>
+<td>Block Assembly metrics</td>
+</tr>
+<tr>
+<td>Blockchain</td>
+<td>FSM state, tip height, median peer height, fork depth, blocks not yet persisted, dropped subscribers, heights of queued blocks</td>
+<td>Blockchain gRPC, P2P gRPC (median peer height), Block Validation and Blockchain metrics</td>
+</tr>
+<tr>
+<td>Data stores</td>
+<td>Aerospike and PostgreSQL disk fill, size, read latency, reads/s, writes/s, PostgreSQL commits/s</td>
+<td>Aerospike info protocol, PostgreSQL statistics views, UTXO store metrics</td>
+</tr>
+</tbody>
+</table>
+<p>A reading shows <code>no data</code> when its metric does not exist on this node. For example, the Data stores stage shows no data for a store that the node does not use.
+The persister backlog is a lower bound. The probe asks for at most 25 blocks and shows "25 or more" at that limit. The waiting blocks are the blocks that the persister has not written yet.</p>
+<p>The probe shows the persister backlog only when this node starts the block persister (<code>startBlockPersister</code> or the <code>-blockpersister</code> flag). Without a persister, no block is ever marked as persisted, and the query would return the 25 lowest heights on every call. In that case the probe does not ask. "Persister behind" and the waiting count show 0 with the note "block persister off", the list of waiting heights is empty, and the drain time uses only the subtree queue (and the peer gap during <code>CATCHINGBLOCKS</code>). The probe reads only its own process. If the persister runs in another process of a split deployment, the probe shows "block persister off" on its node too.
+The Blockchain panel shows the count of waiting blocks and the lowest three heights. A "+N more" marker shows how many waiting blocks the panel does not list.
+The probe reads the FSM state from the Blockchain service on each sample. It does not use the cached state of the Blockchain client, because that cache shows <code>IDLE</code> while its subscription is broken or stale. So <code>IDLE</code> on the dashboard means that the FSM is idle. When the read fails, the FSM chip and the tip chip go grey with the age of the last good sample. The alarms keep using the last FSM state that the probe read.</p>
+<p>The probe reads the peer heights from the P2P service as its own <code>p2p</code> source. When that call fails, the median peer height goes grey with its age, and the tip chip turns grey. The FSM state, the tip and the backlog stay live. After 90 seconds the Blockchain stage raises its source alarm.</p>
+<p>The Data stores tanks show reads and writes on separate lines:</p>
+<ul>
+<li>Aerospike reads are the sum of the rates of <code>teranode_aerospike_txmeta_get</code>, <code>teranode_aerospike_txmeta_get_multi_n</code> and <code>teranode_aerospike_utxo_get</code>.</li>
+<li>Aerospike writes are the sum of the rates of <code>teranode_aerospike_utxo_store</code>, <code>teranode_aerospike_utxo_spend</code>, <code>teranode_aerospike_txmeta_set_mined_batch_n</code>, <code>teranode_aerospike_utxo_reset</code> and <code>teranode_aerospike_utxo_delete</code>.</li>
+<li>PostgreSQL reads are rows returned and fetched (<code>tup_returned + tup_fetched</code> in <code>pg_stat_database</code>). PostgreSQL writes are rows inserted, updated and deleted. Both show no data on the first sample, because a rate needs two samples.</li>
+</ul>
+<p>When a tank has more notes than fit below it, the last note line says how many more notes the stage detail view shows.</p>
+<p>The validated tx/s reading comes from <code>teranode_validator_transactions_validate</code>. This histogram also counts the transactions that block validation checks and the transactions that fail validation. The reading carries the note "includes block-validation checks and rejected transactions". During catch-up the reading shows block-validation work. The latency p99 covers the script and policy checks only. It does not include the parent reads and the UTXO spend.</p>
+<h3 id="42-kafka-flow-strips-and-consumer-lag">4.2 Kafka Flow Strips and Consumer Lag<a class="headerlink" href="#42-kafka-flow-strips-and-consumer-lag" title="Permanent link">&para;</a></h3>
+<p>The arrows between the stages are the Kafka flow strips. Each strip shows a rate from the service metrics.
+The probe also reads the consumer-group lag of the matching Kafka topic. The lag is the sum, over all partitions and all groups that read the topic, of the end offset minus the committed offset.</p>
+<p>The probe reads these topics from the Kafka settings. For each topic, the probe takes the path of the Kafka config URL, as the producers and consumers do. If the URL is not set or has no path, the probe uses the name setting:</p>
+<ul>
+<li><code>tx-input</code>: the path of <code>kafka_validatortxsConfig</code></li>
+<li><code>subtrees</code>: the path of <code>kafka_subtreesConfig</code>, else <code>KAFKA_SUBTREES</code></li>
+<li><code>txmeta</code>: the path of <code>kafka_txmetaConfig</code>, else <code>KAFKA_TXMETA</code></li>
+<li><code>blocks</code>: the path of <code>kafka_blocksConfig</code>, else <code>KAFKA_BLOCKS</code></li>
+<li><code>blocks-final</code>: the path of <code>kafka_blocksFinalConfig</code>, else <code>KAFKA_BLOCKS_FINAL</code></li>
+</ul>
+<p>A group that has subscribed but has not committed an offset shows the full topic length as lag.</p>
+<h3 id="43-drain-time">4.3 Drain Time<a class="headerlink" href="#43-drain-time" title="Permanent link">&para;</a></h3>
+<p>The probe adds the queued blocks and the subtree queue to get one backlog.
+The block part is the count of waiting blocks, up to the persister limit of about 25. It is not limited to the heights that the panel shows. While the FSM is in <code>CATCHINGBLOCKS</code>, the block part is at least the gap between the median peer height and the tip.</p>
+<p>The median peer height is the lower median of the heights that the node accepts from peers that are not banned. Peers that report no height are skipped. The node caps each claim at the local height plus <code>p2p_max_unvalidated_advertised_height_lead</code> (default 10,000) when it accepts the claim. No peer proves its height. The lower median limits the influence of a high claim when the other heights agree, but one peer can change it when the heights diverge. For example, heights 1,000 and 11,000 have a lower median of 1,000; adding a third peer at 11,000 raises it to 11,000. The median cannot exceed the highest accepted peer height. A high claim can therefore add up to the configured lead to the peer-gap estimate relative to the local height when that claim was accepted.</p>
+<p>When the backlog source fails, the probe skips the drain samples until the backlog is current again. The probe also skips them while the FSM is in <code>CATCHINGBLOCKS</code> and the median peer height has no data. This is the case when the P2P source fails, and on every node that runs with P2P off. The drain text keeps its last value.
+It fits a line through the backlog samples of the last 5 minutes. The drain time is the backlog divided by the drain rate.
+When the backlog grows, the dashboard shows "growing" and no time.</p>
+<h3 id="44-the-lanes-view">4.4 The Lanes View<a class="headerlink" href="#44-the-lanes-view" title="Permanent link">&para;</a></h3>
+<p>The links in the top right corner switch between the Stages view and the Lanes view. The Lanes view opens at <code>#/lanes</code>. Both views show the same snapshot.</p>
+<p>The Lanes view groups the readings by what the node does, not by service:</p>
+<table>
+<thead>
+<tr>
+<th>Lane</th>
+<th>What it shows</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Transactions</td>
+<td>Raw transactions that arrive, the validation result and the transactions that the block assembler holds</td>
+</tr>
+<tr>
+<td>Subtrees</td>
+<td>Subtrees that peers announce, the subtrees that are already known, and the missing transactions that the node fetches</td>
+</tr>
+<tr>
+<td>Blocks</td>
+<td>Blocks that peers announce and that the node validates, the tip height and the fork depth</td>
+</tr>
+<tr>
+<td>Mining</td>
+<td>The block assembler state, the candidates that miners fetch and the solutions that the node submits</td>
+</tr>
+</tbody>
+</table>
+<p>The Tx meta cache and Data stores panels follow the lanes as shared panels. An arrow between two lanes glows only while work flows.</p>
+<p>On an idle node, the rate readings are 0. The totals in the Blocks and Mining lanes count from the start of the node and change only when a block or a solution arrives.</p>
+<p>Three readings come from metrics that only recent Teranode builds export. An older node shows "no data" for them:</p>
+<ul>
+<li>Transactions that the node skipped because the UTXO store already holds them (<code>teranode_validator_existing_tx_total</code>).</li>
+<li>Missing subtrees of a block that the node still has to fetch (<code>teranode_subtreevalidation_block_missing_subtrees_outstanding</code> and <code>teranode_subtreevalidation_block_missing_subtrees_total</code>).</li>
+<li>The age of the last mining candidate that block assembly served (<code>teranode_blockassembly_last_mining_candidate_timestamp_seconds</code>). The age grows while no miner fetches a candidate.</li>
+</ul>
+<p>Below the lanes, two more panels show shared infrastructure.</p>
+<p>The Blob stores panel shows the subtree store and the block store. For each store it shows reads per second, writes per second, errors per second and the p99 latency of reads and writes. Teranode counts these calls in a wrapper around each blob store:</p>
+<ul>
+<li><code>teranode_blob_reads_total</code>: calls to <code>Exists</code>, <code>Get</code> and <code>GetIoReader</code></li>
+<li><code>teranode_blob_writes_total</code>: calls to <code>Set</code>, <code>SetFromReader</code>, <code>SetDAH</code> and <code>Del</code></li>
+<li><code>teranode_blob_errors_total</code>: failed calls. A not-found result and a call that the caller cancels are not errors.</li>
+<li><code>teranode_blob_read_duration_seconds</code> and <code>teranode_blob_write_duration_seconds</code>: call duration</li>
+</ul>
+<p>All five metrics carry a <code>store</code> label: <code>tx</code>, <code>subtree</code>, <code>temp</code>, <code>block</code> or <code>block_persister</code>. The panel shows <code>subtree</code> and <code>block</code>. The latency of <code>GetIoReader</code> is the time to open the reader. A p99 reading shows "no data" when no call finished in the last interval.</p>
+<p>The Kafka topics panel lists every Kafka topic of the node, worst first. A topic shows the total lag of all consumer groups, with a bar on a log scale. A topic with no consumer group shows "no consumers". The bar has no colour thresholds, because a normal lag depends on the topic. The list uses the topics from the Kafka settings. When the Kafka source fails, the panel shows the age of the last good sample and no lag.</p>
+<h2 id="5-alarms">5. Alarms<a class="headerlink" href="#5-alarms" title="Permanent link">&para;</a></h2>
+<p>All alarm text is fixed text in the probe. The probe does not generate text.</p>
+<h3 id="51-alarm-states">5.1 Alarm States<a class="headerlink" href="#51-alarm-states" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Condition</th>
+<th>Result</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>A reading stays outside its tolerance for 30 s</td>
+<td>Amber alarm</td>
+</tr>
+<tr>
+<td>A reading stays beyond its floor, or far outside its tolerance, for 60 s</td>
+<td>Red alarm</td>
+</tr>
+<tr>
+<td>A reading stays normal for 60 s</td>
+<td>The alarm clears</td>
+</tr>
+<tr>
+<td>A reading has no data for 60 s</td>
+<td>The alarm clears</td>
+</tr>
+</tbody>
+</table>
+<p>"Far outside" means more than three tolerances from the normal value.</p>
+<h3 id="52-learned-baselines">5.2 Learned Baselines<a class="headerlink" href="#52-learned-baselines" title="Permanent link">&para;</a></h3>
+<p>The probe learns a normal value and a tolerance for each alarm reading on this node.</p>
+<ul>
+<li>The baseline is a weighted mean with a half-life of 1 hour. A new sample counts more than an old sample.</li>
+<li>The tolerance is the larger of three standard deviations and 5% of the mean. Some readings also have a fixed minimum tolerance.</li>
+<li>After 5 samples, the probe clamps each new sample to the mean plus or minus eight tolerances. One spike cannot move the baseline far.</li>
+<li>A baseline is ready after 30 samples and <code>probe_baselineWarmup</code> (default 30 minutes).</li>
+</ul>
+<p>Before the baseline is ready, the reading shows the note <code>Calibrating</code> and raises no alarm from its baseline.
+After a restart, the tx meta cache is cold. For its first 30 samples, or while the cache is less than 10% full, the hit rate shows <code>Warming</code> and raises no alarm.</p>
+<p><strong>The baseline freezes while an alarm is pending or active.</strong> The probe learns only from normal samples. This stops an alarm from teaching the probe that the bad value is normal.
+If the node moves to a new normal level for good, the alarm stays. The baseline does not learn the new level.</p>
+<ul>
+<li>To recalibrate, stop the node, delete the state file, and start the node again. This resets all baselines, and calibration starts again. It is the only way to recalibrate.</li>
+<li>A snooze mutes the alarm until it expires: the alarm stays in the list with a snoozed mark. It does not change the baseline, so the alarm is live again after the snooze.</li>
+<li>A floor adds a fixed limit (see <a href="#53-floors">5.3 Floors</a>). It does not replace the baseline check, so it cannot clear a baseline alarm.</li>
+</ul>
+<h3 id="53-floors">5.3 Floors<a class="headerlink" href="#53-floors" title="Permanent link">&para;</a></h3>
+<p>A floor is a fixed limit that you set for one reading. A reading beyond its floor for 60 s raises a red alarm, also during calibration. A floor is an extra limit. The baseline check still applies.</p>
+<p>Set floors in <code>probe_floors</code> as a pipe-separated list of <code>metric=value</code> entries:</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>probe_floors = cache.hitRate=0.9|validator.latencyP99Sec=2
+</span></code></pre></div>
+<p>For <code>cache.hitRate</code>, a value below the floor is bad. For all other keys, a value above the floor is bad.</p>
+<table>
+<thead>
+<tr>
+<th>Floor key</th>
+<th>Unit</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>cache.hitRate</code></td>
+<td>fraction from 0 to 1</td>
+</tr>
+<tr>
+<td><code>stores.aerospike.readP99Sec</code></td>
+<td>seconds</td>
+</tr>
+<tr>
+<td><code>validator.latencyP99Sec</code></td>
+<td>seconds</td>
+</tr>
+<tr>
+<td><code>assembly.queueHeadAgeSec</code></td>
+<td>seconds</td>
+</tr>
+<tr>
+<td><code>assembly.tipLagBlocks</code></td>
+<td>blocks</td>
+</tr>
+<tr>
+<td><code>chain.persisterBehind</code></td>
+<td>blocks</td>
+</tr>
+</tbody>
+</table>
+<p>The node refuses to start when a floor entry has one of these faults:</p>
+<ul>
+<li>It is not in the <code>metric=value</code> format.</li>
+<li>Its value is not a finite number.</li>
+<li>It names a key twice.</li>
+<li>Its key is not in this table.</li>
+</ul>
+<p>The probe has no alarm and no floor for <code>validator.queueFill</code>, <code>ingress.subtreeQueueOldestSec</code> and <code>assembly.subtreeFill</code>. These three readings show no data, because no metric feeds them. A floor on <code>validator.queueFill</code> or <code>ingress.subtreeQueueOldestSec</code> stops the node at startup.</p>
+<h3 id="54-cause-chains-and-start-of-chain">5.4 Cause Chains and Start of Chain<a class="headerlink" href="#54-cause-chains-and-start-of-chain" title="Permanent link">&para;</a></h3>
+<p>One slow component often causes alarms in other stages. The probe sorts alarms into two cause chains:</p>
+<table>
+<thead>
+<tr>
+<th>Chain</th>
+<th>Order</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Throughput</td>
+<td>1. Tx meta cache hit rate, 2. Aerospike read latency, 3. Validator latency, 4. Block Assembly input and tip lag</td>
+</tr>
+<tr>
+<td>Catch-up</td>
+<td>1. FSM <code>CATCHINGBLOCKS</code>, 2. Block persister behind, 3. Validator latency</td>
+</tr>
+</tbody>
+</table>
+<p>The probe uses the catch-up chain while the FSM is in <code>CATCHINGBLOCKS</code>. Otherwise it uses the throughput chain.
+The active alarm that is earliest in the chain gets the tag "Start of chain". Start your investigation there.
+While the node catches up, the "Node is catching up" alarm is first in the catch-up chain. It has the tag during the whole catch-up, unless you snooze it.</p>
+<h3 id="55-source-alarms">5.5 Source Alarms<a class="headerlink" href="#55-source-alarms" title="Permanent link">&para;</a></h3>
+<p>The probe tracks the health of each of its sources: <code>metrics</code>, <code>chain</code>, <code>p2p</code>, <code>kafka</code>, <code>aerospike</code> and <code>postgres</code>. The <code>p2p</code> source feeds the Blockchain stage.
+When a source has no fresh data for more than 60 seconds, the readings of its stages go grey. After 30 more seconds, the probe raises an amber "source has no data" alarm for each stage that the source feeds.
+In a test, an unreachable PostgreSQL URL raised this alarm after about 94 seconds. The node kept on processing blocks.</p>
+<h3 id="56-snooze-and-the-alarm-log">5.6 Snooze and the Alarm Log<a class="headerlink" href="#56-snooze-and-the-alarm-log" title="Permanent link">&para;</a></h3>
+<p>A snooze applies to one alarm ID. It applies to all dashboards, and it survives a restart.
+A snoozed alarm stays in the list with a snoozed mark. It does not take the "Start of chain" tag.
+A snooze lasts <code>probe_snoozeDefault</code> (default 15 minutes) unless you give a duration of 1 to 1440 minutes.</p>
+<p>The probe writes each raised alarm and each change of severity to the alarm log. The log keeps entries for <code>probe_alarmLogRetention</code> (default 7 days).</p>
+<h2 id="6-the-state-file">6. The State File<a class="headerlink" href="#6-the-state-file" title="Permanent link">&para;</a></h2>
+<p>The probe keeps one local JSON file at <code>probe_statePath</code>. When the setting is empty, the file is <code>probe_state.json</code> in the working directory of the node.</p>
+<p>The file holds these items:</p>
+<ul>
+<li>The learned baselines</li>
+<li>The snoozes</li>
+<li>The alarm log</li>
+</ul>
+<p>The probe writes the file atomically. It writes a temporary file, syncs it, and renames it over the old file. A crash cannot leave half a file.
+The probe saves the baselines once a minute. It saves a snooze or an alarm within about 1 second.</p>
+<p>When the file is not valid JSON at startup, the probe moves it aside to <code>&lt;path&gt;.corrupt-&lt;UTC timestamp&gt;</code>, for example <code>probe_state.json.corrupt-20261028T170018Z</code>. It logs one warning line and starts with an empty store. It never deletes the corrupt file.
+The probe refuses to start when the directory of the state file cannot be created or is not writable.</p>
+<h2 id="7-data-store-requirements">7. Data Store Requirements<a class="headerlink" href="#7-data-store-requirements" title="Permanent link">&para;</a></h2>
+<h3 id="71-aerospike">7.1 Aerospike<a class="headerlink" href="#71-aerospike" title="Permanent link">&para;</a></h3>
+<p>The probe reads Aerospike from <code>probe_aerospikeURL</code>. When that setting is empty and the UTXO store is Aerospike, the probe uses the UTXO store URL. The probe then connects with the node's own read-write credentials. It sends only info commands, but we recommend a read-only user in <code>probe_aerospikeURL</code>.
+The probe sends info commands to every node of the cluster. It adds the size of all nodes, and it shows the highest disk fill and the highest read latency.</p>
+<p>If only some nodes answer, the probe marks the result as partial. Size and disk fill turn <code>idle</code> with the note "N of M nodes answered". Read latency shows no data with the same note, so a node that did not answer never drops out of the alarm or the learned baseline unnoticed. A node that answers without a read latency (for example, with <code>enable-benchmarks-read</code> off on that node) is skipped, and the latency comes from the other nodes. If no node answers, the Aerospike source fails.</p>
+<p>Read latency p99 needs <code>enable-benchmarks-read true</code> on the namespace. Without it, the read latency reading shows no data.</p>
+<h3 id="72-postgresql">7.2 PostgreSQL<a class="headerlink" href="#72-postgresql" title="Permanent link">&para;</a></h3>
+<p>The probe reads PostgreSQL from <code>probe_postgresURL</code>. When that setting is empty and the blockchain store is PostgreSQL, the probe uses the blockchain store URL. The probe then connects with the node's own read-write credentials. It uses only <code>READ ONLY</code> transactions, but we recommend a read-only role in <code>probe_postgresURL</code>.</p>
+<ul>
+<li>PostgreSQL cannot report the size of its disk through SQL. Set <code>probe_postgresDiskCapacityGB</code> to see the disk fill. When it is 0, disk fill shows "disk capacity not set".</li>
+<li>PostgreSQL has no p99 latency without extensions. With <code>pg_stat_statements</code>, the probe shows the mean execution time over the sample interval, labelled "mean". Without it, the reading shows "needs pg_stat_statements".</li>
+<li>The probe does not force <code>sslmode</code>. When the URL has no <code>sslmode</code>, the default of the PostgreSQL driver applies. The probe passes through <code>sslmode</code>, <code>sslrootcert</code>, <code>sslcert</code>, <code>sslkey</code>, <code>connect_timeout</code> and <code>application_name</code>. It drops other URL parameters.</li>
+</ul>
+<h3 id="73-kafka">7.3 Kafka<a class="headerlink" href="#73-kafka" title="Permanent link">&para;</a></h3>
+<p>The probe connects to the brokers in <code>KAFKA_HOSTS</code> (<code>kafka_hosts</code>) and reads consumer-group lag through the Kafka admin API.
+The probe user needs permission to describe topics and groups and to read offsets.</p>
+<p>The probe client does not use TLS or SASL. A cluster that requires either shows no Kafka data.
+The probe treats Kafka as in-memory when <code>KAFKA_SCHEMA</code> is <code>memory</code> or a Kafka config URL uses <code>memory://</code>, and no Kafka config URL uses <code>kafka://</code>. Then the probe does not connect to <code>kafka_hosts</code>. Kafka is then not configured for the probe. The flow strips show no lag, and no Kafka source alarm is raised.</p>
+<h3 id="74-tx-meta-cache">7.4 Tx Meta Cache<a class="headerlink" href="#74-tx-meta-cache" title="Permanent link">&para;</a></h3>
+<p>The tx meta cache is a ring cache. After its first pass it stays full, and old entries make room for new ones. A full cache is normal.
+The live signals are the hit rate and the eviction rate. A falling hit rate with a high share of entries from the previous generation means that the cache is too small for the load.</p>
+<p>The tx meta cache publishes two gauges for the probe:</p>
+<ul>
+<li><code>teranode_tx_meta_cache_bytes</code>: the bytes that the cache uses now</li>
+<li><code>teranode_tx_meta_cache_capacity_bytes</code>: the bytes that the cache can use</li>
+</ul>
+<p>The probe shows fill as bytes divided by capacity.</p>
+<h2 id="8-fault-behaviour">8. Fault Behaviour<a class="headerlink" href="#8-fault-behaviour" title="Permanent link">&para;</a></h2>
+<p>A fault in a running probe never stops the node.</p>
+<p>A probe that cannot start stops the node at startup, as any other enabled service does. These faults stop the node:</p>
+<ul>
+<li><code>probe_authToken</code> is empty.</li>
+<li>An entry in <code>probe_floors</code> is not valid.</li>
+<li>The probe cannot listen on <code>probe_httpListenAddress</code>, for example because the port is in use.</li>
+<li>The directory of the state file cannot be created or is not writable.</li>
+<li>The state file cannot be read.</li>
+</ul>
+<p>A corrupt state file does not stop the node. The probe moves it aside and starts with an empty store. When the probe cannot move the corrupt file aside, the probe stays down and the node keeps running. The probe logs one error line, and its health check returns <code>200</code> with the message about the stopped probe (see below).</p>
+<p>After a start, these rules apply:</p>
+<ul>
+<li>The probe recovers every panic in its own goroutines and logs it.</li>
+<li>A slow or hung source times out. It cannot stop a sampling tick.</li>
+<li>When a source fails, the probe logs one warning line with the cause. Credentials in URLs are masked. When the source works again, the probe logs one line. The probe does not repeat the warning on every sample.</li>
+<li>A WebSocket client that does not read cannot block the sampler or other clients.</li>
+<li>The probe stops itself after five consecutive panics, or after one panic that ends a sampler, pipeline or hub loop. Only the probe stops. The node keeps running.</li>
+<li>When the probe stops itself, it logs one error line. Its health check still returns <code>200</code> with the message "probe stopped after repeated failures; the node must be restarted to resume probe monitoring; the node itself is not affected".</li>
+<li>To start the probe again, restart the node.</li>
+</ul>
+<h2 id="9-http-api">9. HTTP API<a class="headerlink" href="#9-http-api" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Method</th>
+<th>Path</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>GET</td>
+<td><code>/api/snapshot</code></td>
+<td>The latest sample as JSON</td>
+</tr>
+<tr>
+<td>GET</td>
+<td><code>/api/history?stage=&lt;stage&gt;&amp;minutes=&lt;1-10&gt;</code></td>
+<td>The readings of one stage over the last minutes. <code>stage</code> is one of <code>ingress</code>, <code>validator</code>, <code>cache</code>, <code>assembly</code>, <code>chain</code>, <code>stores</code></td>
+</tr>
+<tr>
+<td>GET</td>
+<td><code>/api/alarms?since=&lt;minutes or RFC3339 time&gt;</code></td>
+<td>The alarm log. The default is the last 24 hours</td>
+</tr>
+<tr>
+<td>POST</td>
+<td><code>/api/snooze</code></td>
+<td>Body <code>{"id": "&lt;alarm id&gt;", "minutes": &lt;0-1440&gt;}</code>. 0 means <code>probe_snoozeDefault</code></td>
+</tr>
+<tr>
+<td>POST</td>
+<td><code>/api/unsnooze</code></td>
+<td>Body <code>{"id": "&lt;alarm id&gt;"}</code></td>
+</tr>
+<tr>
+<td>GET</td>
+<td><code>/health</code></td>
+<td>Probe health</td>
+</tr>
+<tr>
+<td>GET</td>
+<td><code>/ws</code></td>
+<td>WebSocket. Send <code>{"auth": "&lt;token&gt;"}</code> first. Each message is one sample</td>
+</tr>
+</tbody>
+</table>
+<p>Every path except <code>/ws</code> and the dashboard files needs the bearer token.
+The probe accepts at most 16 WebSocket clients at the same time. A further client gets <code>503</code>.</p>
+<h2 id="10-configuration-options-settings-flags">10. Configuration Options (Settings Flags)<a class="headerlink" href="#10-configuration-options-settings-flags" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Setting</th>
+<th>Type</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>startProbe</code></td>
+<td>bool</td>
+<td><code>false</code></td>
+<td>Start the Probe service. The <code>-probe=1</code> flag does the same</td>
+</tr>
+<tr>
+<td><code>probe_authToken</code></td>
+<td>string</td>
+<td>empty</td>
+<td>Bearer token for the REST API, the health check and the WebSocket. The dashboard files are public. Required. An empty value stops the node at startup</td>
+</tr>
+<tr>
+<td><code>probe_httpListenAddress</code></td>
+<td>string</td>
+<td><code>localhost:8100</code></td>
+<td>Bind address of the dashboard and the API</td>
+</tr>
+<tr>
+<td><code>probe_sampleInterval</code></td>
+<td>duration</td>
+<td><code>2s</code></td>
+<td>Interval between samples of the service metrics, the Blockchain and P2P</td>
+</tr>
+<tr>
+<td><code>probe_slowSampleInterval</code></td>
+<td>duration</td>
+<td><code>15s</code></td>
+<td>Interval between samples of Aerospike, Kafka and PostgreSQL</td>
+</tr>
+<tr>
+<td><code>probe_baselineWarmup</code></td>
+<td>duration</td>
+<td><code>30m</code></td>
+<td>Minimum learning time before a baseline is ready</td>
+</tr>
+<tr>
+<td><code>probe_snoozeDefault</code></td>
+<td>duration</td>
+<td><code>15m</code></td>
+<td>Snooze length when the request gives no duration</td>
+</tr>
+<tr>
+<td><code>probe_alarmLogRetention</code></td>
+<td>duration</td>
+<td><code>168h</code></td>
+<td>Age after which the probe removes alarm log entries</td>
+</tr>
+<tr>
+<td><code>probe_metricsTargets</code></td>
+<td>[]string</td>
+<td>empty</td>
+<td>Pipe-separated metrics endpoints. A <code>host:port</code> entry is scraped at <code>http://host:port/metrics</code>, a <code>host:port/path</code> entry at <code>http://host:port/path</code>. An entry with a scheme is used as given. Empty entries are ignored. Empty means the registry of the probe process</td>
+</tr>
+<tr>
+<td><code>probe_statePath</code></td>
+<td>string</td>
+<td>empty</td>
+<td>Path of the state file. Empty means <code>probe_state.json</code> in the working directory</td>
+</tr>
+<tr>
+<td><code>probe_aerospikeURL</code></td>
+<td>url</td>
+<td>empty</td>
+<td>Aerospike URL. Empty means the UTXO store URL when it is Aerospike</td>
+</tr>
+<tr>
+<td><code>probe_postgresURL</code></td>
+<td>url</td>
+<td>empty</td>
+<td>PostgreSQL URL. Empty means the blockchain store URL when it is PostgreSQL</td>
+</tr>
+<tr>
+<td><code>probe_postgresDiskCapacityGB</code></td>
+<td>float64</td>
+<td><code>0</code></td>
+<td>Disk capacity of the PostgreSQL volume in GB (1 GB = 1e9 bytes). 0 means unknown</td>
+</tr>
+<tr>
+<td><code>probe_floors</code></td>
+<td>[]string</td>
+<td>empty</td>
+<td>Pipe-separated <code>metric=value</code> floors. See <a href="#53-floors">5.3 Floors</a></td>
+</tr>
+</tbody>
+</table>
+<h2 id="11-limits">11. Limits<a class="headerlink" href="#11-limits" title="Permanent link">&para;</a></h2>
+<ul>
+<li>The probe shows one node. It does not combine nodes.</li>
+<li>The dashboard needs a desktop window width of 1280 px or more.</li>
+<li>The stage detail view is the only drilldown page. There are no other named drilldown pages.</li>
+<li>The probe does not correlate metrics. The cause chains use a fixed order.</li>
+<li>History covers the last 10 minutes only. The probe does not keep long-term series. Use Prometheus and Grafana for that.</li>
+<li>The Kafka client has no TLS or SASL support.</li>
+</ul>
+<h2 id="12-troubleshooting">12. Troubleshooting<a class="headerlink" href="#12-troubleshooting" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Symptom</th>
+<th>Cause</th>
+<th>Action</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>The node does not start, and the log says <code>probe_authToken must be set</code></td>
+<td>The probe is enabled without a token</td>
+<td>Set <code>probe_authToken</code>, or disable the probe</td>
+</tr>
+<tr>
+<td>The browser shows nothing at <code>http://&lt;host&gt;:8100/</code></td>
+<td>The probe binds to <code>localhost</code> by default</td>
+<td>Use an SSH tunnel, or set <code>probe_httpListenAddress</code> and put a TLS reverse proxy in front</td>
+</tr>
+<tr>
+<td>The login form says the token is wrong</td>
+<td>The token does not match <code>probe_authToken</code></td>
+<td>Check the setting. Leading and trailing spaces are removed from the setting</td>
+</tr>
+<tr>
+<td>All service readings are grey on a probe in its own pod</td>
+<td><code>probe_metricsTargets</code> is empty or points to the wrong endpoints</td>
+<td>Set the metrics <code>host:port</code> or URL of each service</td>
+</tr>
+<tr>
+<td>The FSM and the tip are grey</td>
+<td>The probe cannot reach the Blockchain service</td>
+<td>Check the Blockchain gRPC address</td>
+</tr>
+<tr>
+<td>The tip chip is grey and says "peer no data"</td>
+<td>The probe cannot reach the P2P service</td>
+<td>Check the P2P gRPC address. FSM and tip stay live without P2P</td>
+</tr>
+<tr>
+<td>The tip chip is grey and says "no peers"</td>
+<td>The P2P service has no peers</td>
+<td>Check the peer connections of the node</td>
+</tr>
+<tr>
+<td>Aerospike read latency is grey</td>
+<td>Read benchmarks are off</td>
+<td>Set <code>enable-benchmarks-read true</code> on the namespace</td>
+</tr>
+<tr>
+<td>PostgreSQL disk fill says "disk capacity not set"</td>
+<td><code>probe_postgresDiskCapacityGB</code> is 0</td>
+<td>Set the volume size in GB</td>
+</tr>
+<tr>
+<td>An alarm stays after the node changed for good</td>
+<td>The baseline is frozen while the alarm is active</td>
+<td>Reset the baselines: stop the node, delete the state file and start it again (see <a href="#52-learned-baselines">5.2</a>). A snooze only mutes the alarm until it expires</td>
+</tr>
+<tr>
+<td>The log shows <code>state file was corrupt; moved it to ...</code></td>
+<td>The state file was not valid JSON</td>
+<td>No action needed. The old file stays next to the new one</td>
+</tr>
+<tr>
+<td>The health check says "probe stopped after repeated failures"</td>
+<td>Five consecutive panics, or one panic that ended a loop, stopped the probe</td>
+<td>Collect the log, then restart the node</td>
+</tr>
+<tr>
+<td>A 17<sup>th</sup> or later browser tab gets no data, and the API returns <code>503</code> on <code>/ws</code></td>
+<td>More than 16 WebSocket clients</td>
+<td>Close unused tabs</td>
+</tr>
+</tbody>
+</table>
+<h2 id="13-directory-structure-and-main-files">13. Directory Structure and Main Files<a class="headerlink" href="#13-directory-structure-and-main-files" title="Permanent link">&para;</a></h2>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>/services/probe/
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>├── Server.go        # Service lifecycle, HTTP server, self-stop
+</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>├── http.go          # Routes, token check, dashboard files and headers
+</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>├── api.go           # REST handlers
+</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a>├── hub.go           # WebSocket hub and client writers
+</span><span id="__span-2-6"><a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a>├── pipeline.go      # Sampler, alarm engine and drain wiring; state file handling
+</span><span id="__span-2-7"><a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a>├── sampler.go       # Fast and slow sampling loops and history
+</span><span id="__span-2-8"><a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a>├── faults.go        # Panic counting and self-stop
+</span><span id="__span-2-9"><a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a>├── alarm/           # Baselines, floors, rules, texts, engine, drain time, state store
+</span><span id="__span-2-10"><a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a>├── collect/         # Metrics, chain, Kafka, Aerospike and PostgreSQL collectors
+</span><span id="__span-2-11"><a id="__codelineno-2-11" name="__codelineno-2-11" href="#__codelineno-2-11"></a>├── guard/           # Panic recovery helper
+</span><span id="__span-2-12"><a id="__codelineno-2-12" name="__codelineno-2-12" href="#__codelineno-2-12"></a>├── snapshot/        # JSON contract between the probe and the dashboard
+</span><span id="__span-2-13"><a id="__codelineno-2-13" name="__codelineno-2-13" href="#__codelineno-2-13"></a>└── ui/              # Embedded dashboard (HTML, CSS, JavaScript)
+</span></code></pre></div>
+<p>For the settings struct, see <code>settings/probe_settings.go</code>.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+  <script>var tabs=__md_get("__tabs");if(Array.isArray(tabs))e:for(var set of document.querySelectorAll(".tabbed-set")){var labels=set.querySelector(".tabbed-labels");for(var tab of tabs)for(var label of labels.getElementsByTagName("label"))if(label.innerText.trim()===tab){var input=document.getElementById(label.htmlFor);input.checked=!0;continue e}}</script>
+
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+    
+      
+      <nav class="md-footer__inner md-grid" aria-label="Footer" >
+        
+          
+          <a href="../pruner/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Pruner">
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+            </div>
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Previous
+              </span>
+              <div class="md-ellipsis">
+                Pruner
+              </div>
+            </div>
+          </a>
+        
+        
+          
+          <a href="../legacy/" class="md-footer__link md-footer__link--next" aria-label="Next: Legacy">
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Next
+              </span>
+              <div class="md-ellipsis">
+                Legacy
+              </div>
+            </div>
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 11v2h12l-5.5 5.5 1.42 1.42L19.84 12l-7.92-7.92L10.5 5.5 16 11z"/></svg>
+            </div>
+          </a>
+        
+      </nav>
+    
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../../..", "features": ["navigation.tabs", "navigation.tabs.sticky", "navigation.sections", "navigation.path", "navigation.indexes", "navigation.top", "navigation.instant", "navigation.footer", "search.suggest", "search.highlight", "search.share", "toc.follow", "content.code.copy", "content.code.annotate", "content.tabs.link"], "search": "../../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../../../assets/javascripts/bundle.79ae519e.min.js"></script>
+      
+    
+  </body>
+</html>
