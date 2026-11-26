@@ -38,6 +38,16 @@ shard_case "package in two shards" 1 's#TEST_PKGS=stores/utxo/aerospike #TEST_PK
 shard_case "shard missing from COVERAGE_SHARDS" 1 's#(COVERAGE_SHARDS: unit) aerospike#\1#' "$pr" "$main"
 shard_case "test-build-pkgs list drifts from TEST_EXCLUDE" 1 '/make test-build-pkgs /s#stores/utxo/aerospike ##' "$main"
 shard_case "workflows differ" 1 's#(coverage-|shard: |aerospike )slow#\1slower#g' "$pr"
+shard_case "profile is not coverage-<shard>.out" 1 's#profile: coverage-slow.out#profile: coverage-s.out#' "$pr" "$main"
+shard_case "TEST_COVERPROFILE is not coverage-<shard>.out" 1 's#TEST_COVERPROFILE=coverage-slow.out#TEST_COVERPROFILE=coverage-s.out#' "$pr" "$main"
+shard_case "package that does not exist" 1 's#services/legacy/netsync#services/legacy/netsyncx#g' "$pr" "$main"
+shard_case "no make test-build-pkgs step" 1 '/run: make test-build-pkgs /d' "$main"
+# The next three also move stores/utxo/aerospike back into the unit shard, so the
+# lists still agree and only the targeted check can fail.
+unaero='s#TEST_EXCLUDE="stores/utxo/aerospike #TEST_EXCLUDE="#; /make test-build-pkgs /s#stores/utxo/aerospike ##'
+shard_case "shard with an empty TEST_PKGS" 1 "$unaero; s#TEST_PKGS=stores/utxo/aerospike #TEST_PKGS= #" "$pr" "$main"
+shard_case "shard running neither make target" 1 "$unaero; s#make test-pkgs TEST_PKGS=stores/utxo/aerospike #make vet TEST_PKGS= #" "$pr" "$main"
+shard_case "two shards running make test" 1 "$unaero; s#make test-pkgs TEST_PKGS=stores/utxo/aerospike #make test #" "$pr" "$main"
 
 m="$tmp/coverage"
 profile() { printf 'mode: %s\n%s\n' "$2" "$3" >"$m/coverage-$1.out"; }
@@ -46,27 +56,32 @@ reset_profiles() {
   profile a atomic "a.go:1.1,2.2 1 1"
   profile b atomic "b.go:1.1,2.2 1 0"
 }
-merge() { # prints merge-coverage.sh's exit status for shards a and b
-  if bash "$root/.github/scripts/merge-coverage.sh" "$m" "$m/merged" a b >"$m.log" 2>&1; then echo 0; else echo 1; fi
+merge() { # [shard]...: prints merge-coverage.sh's exit status for those shards
+  if bash "$root/.github/scripts/merge-coverage.sh" "$m" "$m/merged" "$@" >"$m.log" 2>&1; then echo 0; else echo 1; fi
 }
-merge_fails() { # <case> <error the merge must print>
-  local got
-  got="$(merge)"
-  grep -qF "$2" "$m.log" || got="$got, but no \"$2\" in its output"
-  report "merge-coverage: $1" 1 "$got"
+merge_fails() { # <case> <error the merge must print> [shard]...
+  local name="$1" msg="$2" got
+  shift 2
+  got="$(merge "$@")"
+  grep -qF "$msg" "$m.log" || got="$got, but no \"$msg\" in its output"
+  report "merge-coverage: $name" 1 "$got"
 }
 
 reset_profiles
-report "merge-coverage: matching profiles" 0 "$(merge)"
+report "merge-coverage: matching profiles" 0 "$(merge a b)"
 want=$'mode: atomic\na.go:1.1,2.2 1 1\nb.go:1.1,2.2 1 0'
 if [ "$(cat "$m/merged")" = "$want" ]; then got=0; else got=1; fi
 report "merge-coverage: one mode line, then every shard's blocks" 0 "$got"
 
 reset_profiles && rm "$m/coverage-b.out"
-merge_fails "missing profile" "Missing coverage profile coverage-b.out"
+merge_fails "missing profile" "Missing coverage profile coverage-b.out" a b
 reset_profiles && profile c atomic "c.go:1.1,2.2 1 1"
-merge_fails "unexpected profile" "Unexpected coverage profile coverage-c.out"
+merge_fails "unexpected profile" "Unexpected coverage profile coverage-c.out" a b
 reset_profiles && profile b set "b.go:1.1,2.2 1 0"
-merge_fails "mismatched mode" "coverage-b.out has a different mode"
+merge_fails "mismatched mode" "coverage-b.out has a different mode" a b
+reset_profiles
+merge_fails "no shards named" "No coverage shards named"
+reset_profiles && printf 'x.go:1.1,2.2 1 1\n' >"$m/coverage-a.out" && printf 'x.go:1.1,2.2 1 1\n' >"$m/coverage-b.out"
+merge_fails "profiles with no mode line" "coverage-a.out has no mode line" a b
 
 exit "$fails"
