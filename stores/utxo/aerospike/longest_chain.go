@@ -194,8 +194,9 @@ func (s *Store) markTransactionsOnLongestChain(ctx context.Context, txHashes []c
 		//
 		// A creating record that was stamped as owed the longest-chain mark is no longer owed it once
 		// its block has left the longest chain, so the stamp goes. Only this path removes it: the
-		// native sub-op does not know the bin, and a stamp that outlives its block keeps the record
-		// from a rollback and from the sweep's announce until the record is complete.
+		// native sub-op does not know the bin. A stamp that outlived its block would keep the record
+		// from every rollback, also when its transaction can no longer win its inputs, so a mark off
+		// the longest chain always takes this path (see native below).
 		exprOps = []*aerospike.Operation{
 			aerospike.ExpWriteOp(
 				fields.UnminedSince.String(),
@@ -212,9 +213,12 @@ func (s *Store) markTransactionsOnLongestChain(ctx context.Context, txHashes []c
 	// With native sub-op 14 each record is one TeranodeModifyOp the server's C module runs, in place
 	// of the expression operations above. Its arguments do not depend on the transaction, so the
 	// call shares one payload, as the expression path shares its ops.
+	//
+	// Only a mark on the longest chain goes native. A mark off it must remove the markOwed stamp,
+	// which sub-op 14 does not know, and its expression write is one conditional put per record.
 	var nativeOps []*aerospike.Operation
 
-	native := s.useNativeMark()
+	native := onLongestChain && s.useNativeMark()
 	if native {
 		// +1: the store height trails the block being validated, the allowance the spend path makes
 		payload, encErr := encodeMarkLongestChainPayload(onLongestChain, currentBlockHeight+1, retention, unminedSince)

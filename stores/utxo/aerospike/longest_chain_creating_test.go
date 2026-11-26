@@ -1,6 +1,7 @@
 package aerospike_test
 
 import (
+	"sync/atomic"
 	"testing"
 
 	"github.com/bsv-blockchain/aerospike-client-go/v8"
@@ -8,6 +9,7 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
+	teranode_aerospike "github.com/bsv-blockchain/teranode/stores/utxo/aerospike"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/ulogger"
@@ -219,6 +221,57 @@ func TestMarkOnLongestChain_StampsACreatingRecordSoNoRollbackClaimsIt(t *testing
 
 		require.NoError(t, store.MarkTransactionsOnLongestChain(ctx, []chainhash.Hash{*hash}, false))
 
+		require.NotContains(t, recordBins(t, client, store, hash, 0, fields.MarkOwed), fields.MarkOwed.String(), "the block left the longest chain, so the mark is no longer owed")
+
+		ended, err := utxo.RollBackCreatingEnded(ctx, logger, store, stuck, md.Attempt)
+		require.NoError(t, err)
+		require.True(t, ended, "the attempt is an ordinary tentative one again")
+	})
+
+	// A server that serves native sub-op 14 does not know the stamp, so its mark would leave it on
+	// the record after the block has left the longest chain, and no rollback could then claim the
+	// record. The interceptor stands for that server: it answers a native mark as done and writes
+	// nothing. The mark off the longest chain must not depend on it.
+	t.Run("a mark off the longest chain takes the stamp away on a server that serves the native mark", func(t *testing.T) {
+		stuck, md := unwinnable(t, 8305)
+		hash := stuck.TxIDChainHash()
+
+		require.Error(t, store.MarkTransactionsOnLongestChain(ctx, []chainhash.Hash{*hash}, true))
+		require.Contains(t, recordBins(t, client, store, hash, 0, fields.MarkOwed), fields.MarkOwed.String(), "precondition: the record is stamped")
+
+		var nativeMarks atomic.Int64
+
+		store.SetBatchOperateFn(func(policy *aerospike.BatchPolicy, records []aerospike.BatchRecordIfc) aerospike.Error {
+			native := false
+
+			for _, record := range records {
+				// A native record carries one TeranodeModifyOp; the expression write of this mark carries two.
+				if write, ok := record.(*aerospike.BatchWrite); ok && len(write.Ops) == 1 {
+					native = true
+					write.BatchRec().Err = nil
+					write.BatchRec().Record = &aerospike.Record{Bins: aerospike.BinMap{teranode_aerospike.LuaSuccess.String(): map[interface{}]interface{}{"status": "OK"}}}
+				}
+			}
+
+			if native {
+				nativeMarks.Add(1)
+
+				return nil
+			}
+
+			return client.BatchOperate(policy, records)
+		})
+		store.SetNativeMarkForTest(true)
+
+		markErr := store.MarkTransactionsOnLongestChain(ctx, []chainhash.Hash{*hash}, false)
+		stillNative := store.UsesNativeMark()
+
+		store.SetNativeMarkForTest(false)
+		store.SetBatchOperateFn(nil)
+
+		require.NoError(t, markErr)
+		require.Zero(t, nativeMarks.Load(), "a mark off the longest chain does not use the native sub-op")
+		require.True(t, stillNative, "and it does not turn the native mark off for the marks that do")
 		require.NotContains(t, recordBins(t, client, store, hash, 0, fields.MarkOwed), fields.MarkOwed.String(), "the block left the longest chain, so the mark is no longer owed")
 
 		ended, err := utxo.RollBackCreatingEnded(ctx, logger, store, stuck, md.Attempt)
