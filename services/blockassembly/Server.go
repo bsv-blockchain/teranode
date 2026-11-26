@@ -2570,16 +2570,14 @@ func (ba *BlockAssembly) submitMiningSolution(ctx context.Context, req *BlockSub
 		addBlockOpts = append(addBlockOpts, blockchainoptions.WithOwnBlockLaneMapRows(laneRows))
 	}
 
-	// The halt transition and AddBlock share this lock: a submission already adding a block
-	// finishes before the halt begins; one still being prepared is refused here.
-	ba.blockAssembler.miningSubmissionMu.Lock()
+	// A submission prepared while the halt began is refused here. One already past this check is
+	// still added: the halt does not wait on AddBlock, which has no deadline, and the block only
+	// extends the chain block assembly was on, which the halt leaves to the blockchain service.
 	if ba.blockAssembler.DeepReorgHalted() {
-		ba.blockAssembler.miningSubmissionMu.Unlock()
 		return nil, ba.blockAssembler.deepReorgHaltedError()
 	}
-	err = ba.blockchainClient.AddBlock(callerCtx, block, "", addBlockOpts...)
-	ba.blockAssembler.miningSubmissionMu.Unlock()
-	if err != nil {
+
+	if err = ba.blockchainClient.AddBlock(callerCtx, block, "", addBlockOpts...); err != nil {
 		return nil, errors.NewProcessingError("[BlockAssembly][%s][%s] failed to add block", jobID, block.Hash().String(), err)
 	}
 
@@ -2848,15 +2846,16 @@ func (ba *BlockAssembly) SubtreeCount() int {
 	return ba.blockAssembler.SubtreeCount()
 }
 
-// reset waits for the reset a reset RPC asked for: an operator reset when the call carries
-// OperatorResetMetadataKey, as the resetblockassembly command's does, and an ordinary one
-// otherwise, which a deep reorg halt refuses.
+// reset runs the reset a reset RPC asked for. An operator reset, a call that carries
+// OperatorResetMetadataKey as the resetblockassembly command's does, waits for the reset to
+// finish and returns its result. An ordinary one returns once block assembly takes it, with the
+// deep reorg halt's refusal if it is halted.
 func (ba *BlockAssembly) reset(ctx context.Context, fullReset, validateInputs bool) error {
 	switch {
 	case isOperatorReset(ctx):
 		return ba.blockAssembler.OperatorResetAndWait(ctx, fullReset, validateInputs)
 	default:
-		return ba.blockAssembler.resetAndWait(ctx, resetRequest{FullReset: fullReset, ValidateInputs: validateInputs})
+		return ba.blockAssembler.resetAndWaitAccepted(ctx, resetRequest{FullReset: fullReset, ValidateInputs: validateInputs})
 	}
 }
 
