@@ -50,8 +50,9 @@ import (
 // laneJudgePassBudget bounds the time one pruner pass spends judging.
 var laneJudgePassBudget = 2 * time.Minute
 
-// laneJudgeBatch is how many journal rows one round of position reads covers.
-const laneJudgeBatch = 10_000
+// laneJudgeBatch is how many journal rows one round of position reads covers; a test lowers it to
+// reach the full-batch flush.
+var laneJudgeBatch = 10_000
 
 // lanePositionsSQL reads each transaction's own lane position: from its identity row, else any of its
 // containment rows, else its preserved copy. Each arm is a fenced primary-key probe, the shape every
@@ -244,6 +245,10 @@ SELECT j.ukey, j.txid, j.spending_txid%s
   FROM %s j, unnest($1::uuid[], $2::bytea[], $3::bytea[]) AS k(ukey, txid, spender)
  WHERE j.ukey = k.ukey AND j.txid = k.txid AND j.spending_txid = k.spender`
 
+// laneJournalKeptQuery is the statement the kept rows' probe runs, laneJournalKeptSQL; a test swaps it
+// to make the probe fail.
+var laneJournalKeptQuery = laneJournalKeptSQL
+
 // laneJournalScanSQL reads every row of one retiring journal partition (the second %s); the first %s
 // is the lane_position column where the partition has it.
 const laneJournalScanSQL = `SELECT ukey, txid, spending_txid%s FROM %s`
@@ -355,7 +360,7 @@ func (l *laneJournalJudge) judgeKept(ctx context.Context, table, laneColumn stri
 		return judged, nil
 	}
 
-	stmt := fmt.Sprintf(laneJournalKeptSQL, laneColumn, table)
+	stmt := fmt.Sprintf(laneJournalKeptQuery, laneColumn, table)
 	withLane := laneColumn != ""
 
 	for lo := 0; lo < len(carry.ukeys); lo += copyForwardBatch {
