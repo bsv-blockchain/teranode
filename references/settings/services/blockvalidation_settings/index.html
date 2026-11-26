@@ -7570,6 +7570,13 @@ loader (0, false and false), so for these keys the two agree. The
 <td>Catchup operation retries</td>
 </tr>
 <tr>
+<td>CatchupRetryBackoff</td>
+<td>duration</td>
+<td>1s</td>
+<td>blockvalidation_catchup_retry_backoff</td>
+<td>Wait before the first catchup header-request retry; doubles per retry, up to 30s. 0 or less uses 1s; above 30s is capped at 30s</td>
+</tr>
+<tr>
 <td>CatchupIterationTimeout</td>
 <td>int</td>
 <td>30</td>
