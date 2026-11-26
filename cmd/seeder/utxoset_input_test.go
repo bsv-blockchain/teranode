@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -155,6 +156,7 @@ func TestImportUTXOSet_FailuresSayWhetherToWipe(t *testing.T) {
 		{"compressed/store error", false, false, context.Background(), failingMultiRecordStore{}, 50, false, "error in worker", true},
 		{"plain/read failed part-way", true, true, context.Background(), noopCreateStore{}, 0, false, "failed part-way", true},
 		{"plain/store error", true, false, context.Background(), failingMultiRecordStore{}, 50, false, "error in worker", false},
+		{"plain/cancelled", true, false, cancelled, noopCreateStore{}, 0, false, "cancel", false},
 	}
 
 	for _, tc := range cases {
@@ -185,7 +187,7 @@ func TestImportUTXOSet_FailuresSayWhetherToWipe(t *testing.T) {
 				require.ErrorContains(t, err, tc.want)
 
 				if tc.wipe {
-					require.ErrorContains(t, err, "wipe the UTXO store")
+					require.Equal(t, 1, strings.Count(err.Error(), "wipe the UTXO store"), "the advice once: %v", err)
 				} else {
 					require.NotContains(t, err.Error(), "wipe the UTXO store")
 				}
