@@ -122,13 +122,13 @@ jobs:
       # Check the PR base out over the PR tree, not into a subdirectory: Go keys each
       # compile by the package's directory, so building the base from another path
       # would miss the benchmark build cache. --force and clean drop anything the PR
-      # run changed or left behind; only the pr-*.txt results are kept. Every group
-      # runs the same baseline, and the report names it.
+      # run changed or left behind, keeping only this group's pr-<group>.txt. Every
+      # group runs the same baseline, and the report names it.
       - name: Checkout PR base
         run: |
           git fetch --no-tags --depth=1 origin ${{ steps.base.outputs.sha }}
           git checkout --force --detach ${{ steps.base.outputs.sha }}
-          git clean -ffdx -e 'pr-*.txt'
+          git clean -ffdx -e "/pr-${{ matrix.group }}.txt"
 
       - name: Run main benchmarks
         run: |
