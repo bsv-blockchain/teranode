@@ -314,9 +314,13 @@ type CreateOptions struct {
 	SkipExtendedInputs bool
 
 	// SpendAndCreate-specific options.
-	CreateOnly  bool        // skip the spend phase
-	SpendOnly   bool        // skip the create phase
-	IgnoreFlags IgnoreFlags // spend-phase flags (ignored with CreateOnly)
+	CreateOnly bool // skip the spend phase
+	SpendOnly  bool // skip the create phase
+	// CompleteCreating makes a spend-only call complete the tentative record of a create-first
+	// attempt when it finds one at the txid: its spend then runs as the roll-forward of that record.
+	// See withCompleteCreating.
+	CompleteCreating bool
+	IgnoreFlags      IgnoreFlags // spend-phase flags (ignored with CreateOnly)
 
 	// Caller names the service the create is made for. It only labels a burned lane position;
 	// see WithCaller. It sits after the bools so this struct does not grow.
@@ -410,6 +414,15 @@ func (o *CreateOptions) ItemOptions(i int) *CreateOptions {
 func withRequireParentOutputs() CreateOption {
 	return func(o *CreateOptions) {
 		o.IgnoreFlags.RequireParentOutputs = true
+	}
+}
+
+// withCompleteCreating sets CompleteCreating, for the spend wave of a list written
+// create-then-spend, on a transaction whose create found a record at its txid. That record can be
+// the tentative one of a create-first attempt, which a spend alone does not finish.
+func withCompleteCreating() CreateOption {
+	return func(o *CreateOptions) {
+		o.CompleteCreating = true
 	}
 }
 

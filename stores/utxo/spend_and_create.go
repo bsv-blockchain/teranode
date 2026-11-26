@@ -409,6 +409,12 @@ func SequentialSpendAndCreate(ctx context.Context, logger ulogger.Logger, s Sequ
 		var spends []*Spend
 
 		if !options.CreateOnly {
+			if options.SpendOnly && options.CompleteCreating {
+				if rfSpends, handled, rfErr := completeCreatingBySpend(ctx, logger, s, tx, blockHeight, options.IgnoreFlags); handled {
+					return nil, rfSpends, rfErr
+				}
+			}
+
 			var laneSpend bool
 
 			spends, laneSpend, err = spendWithPosition(ctx, s, tx, blockHeight, spender, options.IgnoreFlags)
@@ -498,6 +504,51 @@ func SequentialSpendAndCreate(ctx context.Context, logger ulogger.Logger, s Sequ
 
 		return nil, nil, err
 	}
+}
+
+// completeCreatingBySpend is the spend of a spend-only call that was told a record already exists
+// at its txid (CompleteCreating). When that record is the tentative one of a create-first attempt,
+// a spend alone would leave it creating: its inputs spent and its outputs gated, with the caller
+// told that the transaction is stored. The spend then runs as the roll-forward of the record, by
+// the rule every other caller uses (rollForwardCreating): a lease, the spend, the finalize.
+//
+// handled is false when the txid holds no tentative record of a create-first attempt, and the
+// caller then makes its plain spend. A record that cannot be read is not known to be a stored
+// transaction, and one that is rolling back is not one, so both are retryable errors and nothing
+// is spent. The re-spend does not require the parent outputs, as no roll-forward does: the record
+// it completes exists by design.
+func completeCreatingBySpend(ctx context.Context, logger ulogger.Logger, s SequentialStore, tx *bt.Tx, blockHeight uint32, flags IgnoreFlags) (spends []*Spend, handled bool, err error) {
+	hash := tx.TxIDChainHash()
+
+	existing := &meta.Data{}
+	if getErr := s.GetMeta(ctx, hash, existing); getErr != nil {
+		if errors.Is(getErr, errors.ErrTxNotFound) {
+			return nil, false, nil
+		}
+
+		logger.Errorf("SpendAndCreate: the record of tx %s could not be read before its spend-only call: %v", hash.String(), getErr)
+
+		return nil, true, errors.NewStorageError("SpendAndCreate: tx %s exists but its record could not be read, so it is not known to be a stored transaction; retry", hash.String())
+	}
+
+	if existing.RollingBack {
+		// The create of the wave found a record that was not rolling back, and its rollback has begun
+		// since. A spend takes no lease, so one made now can land after the reversal and name a txid
+		// that holds only a placeholder.
+		return nil, true, errors.NewProcessingError("SpendAndCreate: tx %s is being rolled back by a create-first attempt and is not a stored transaction; retry after it completes", hash.String())
+	}
+
+	if !existing.Creating || len(existing.Attempt) == 0 {
+		return nil, false, nil
+	}
+
+	flags.RequireParentOutputs = false
+
+	spends, _, err = rollForwardCreating(ctx, logger, s, tx, existing.Attempt, func(rfCtx context.Context) ([]*Spend, error) {
+		return s.Spend(rfCtx, tx, blockHeight, flags)
+	})
+
+	return spends, true, err
 }
 
 // spendWithPosition spends the inputs of tx, recording the spender's lane position in each parent's

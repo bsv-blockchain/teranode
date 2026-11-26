@@ -3407,6 +3407,101 @@ func TestIsSpendVerdictKnowsThePrunedReplayRefusal(t *testing.T) {
 	require.False(t, LaneSpendWroteNothing([]*Spend{{}, {Err: refusal}}), "an input beside the refusal that was spent may have written its lane slot, so the position stays burned")
 }
 
+// TestSpendOnlyCompletesATentativeRecordWhenAsked pins the spend wave of a list written
+// create-then-spend. Its create-only call found a record at the txid and did not look at it. When
+// that record is the tentative one of a create-first attempt, a spend alone leaves it creating, so
+// the spend-only call that is told to complete it runs the roll-forward of the record instead.
+func TestSpendOnlyCompletesATentativeRecordWhenAsked(t *testing.T) {
+	ctx := context.Background()
+	logger := ulogger.TestLogger{}
+	tx := twoInputTx()
+	attempt := []byte{9}
+
+	call := func(f *fakeSequentialStore, opts ...CreateOption) ([]*Spend, error) {
+		md, spends, err := SequentialSpendAndCreate(ctx, logger, f, tx, 100, false, append([]CreateOption{WithSpendOnly()}, opts...)...)
+		require.Nil(t, md, "a spend-only call returns no metadata")
+		require.Zero(t, f.createCalls, "a spend-only call creates nothing")
+
+		return spends, err
+	}
+
+	t.Run("a tentative record is rolled forward: lease, spend, finalize", func(t *testing.T) {
+		f := &fakeSequentialStore{spends: []*Spend{{}, {}}, existing: meta.Data{Creating: true, Attempt: attempt}}
+
+		spends, err := call(f, withRequireParentOutputs(), withCompleteCreating())
+		require.NoError(t, err)
+		require.Len(t, spends, 2)
+		require.Equal(t, []string{"getmeta", "lease", "spend", "finalize"}, f.callSeq)
+		require.Equal(t, [][]byte{attempt}, f.leaseTokens, "the lease names the attempt that was read")
+		require.Equal(t, [][]byte{attempt}, f.finalizeTokens)
+		require.False(t, f.spendFlags[0].RequireParentOutputs, "the re-spend follows the rule of every roll-forward: the record it completes exists by design")
+	})
+
+	t.Run("a tentative record whose re-spend fails stays creating and the error is returned", func(t *testing.T) {
+		f := &fakeSequentialStore{spends: []*Spend{{}, {Err: errors.ErrTxLocked}}, spendErr: errors.NewUtxoError("spend failed", errors.ErrTxLocked), existing: meta.Data{Creating: true, Attempt: attempt}}
+
+		_, err := call(f, withCompleteCreating())
+		require.ErrorIs(t, err, errors.ErrTxLocked)
+		require.Zero(t, f.finalizeCalls)
+		require.Equal(t, 1, f.unleaseCalls, "the lease of a roll-forward that did not finish is released")
+	})
+
+	for name, existing := range map[string]meta.Data{
+		"a record whose rollback has begun since the create of the wave": {Creating: true, RollingBack: true, Attempt: attempt},
+		"a hold": {Creating: true, RollingBack: true, Hold: true, Attempt: attempt},
+	} {
+		t.Run(name+" is not a stored transaction, so nothing is spent", func(t *testing.T) {
+			f := &fakeSequentialStore{spends: []*Spend{{}, {}}, existing: existing}
+
+			_, err := call(f, withRequireParentOutputs(), withCompleteCreating())
+			require.ErrorIs(t, err, errors.ErrProcessing)
+			require.False(t, errors.Is(err, errors.ErrTxExists), "the record is not reported as a stored transaction")
+			require.Equal(t, []string{"getmeta"}, f.callSeq, "a spend with no lease could land after the reversal of the rollback")
+		})
+	}
+
+	for name, existing := range map[string]meta.Data{
+		"a stored record":                     {},
+		"a creating record with no token":     {Creating: true},
+		"a stored record that kept its token": {Attempt: attempt},
+	} {
+		t.Run(name+" gets the plain spend", func(t *testing.T) {
+			f := &fakeSequentialStore{spends: []*Spend{{}, {}}, existing: existing}
+
+			spends, err := call(f, withRequireParentOutputs(), withCompleteCreating())
+			require.NoError(t, err)
+			require.Len(t, spends, 2)
+			require.Equal(t, []string{"getmeta", "spend"}, f.callSeq, "no lease is taken and nothing is finalized")
+			require.True(t, f.spendFlags[0].RequireParentOutputs, "the plain spend of the wave keeps its own flags")
+		})
+	}
+
+	t.Run("a txid with no record gets the plain spend", func(t *testing.T) {
+		f := &fakeSequentialStore{spends: []*Spend{{}, {}}, getMetaErr: errors.NewTxNotFoundError("no record")}
+
+		_, err := call(f, withCompleteCreating())
+		require.NoError(t, err)
+		require.Equal(t, []string{"getmeta", "spend"}, f.callSeq)
+	})
+
+	t.Run("a record that cannot be read is not known to be stored, so nothing is spent", func(t *testing.T) {
+		f := &fakeSequentialStore{spends: []*Spend{{}, {}}, getMetaErr: context.DeadlineExceeded}
+
+		_, err := call(f, withCompleteCreating())
+		require.ErrorIs(t, err, errors.ErrStorageError)
+		require.True(t, errors.IsRetryableError(err), "the caller retries: %v", err)
+		require.Equal(t, []string{"getmeta"}, f.callSeq)
+	})
+
+	t.Run("a spend-only call that is not asked makes no read", func(t *testing.T) {
+		f := &fakeSequentialStore{spends: []*Spend{{}, {}}, existing: meta.Data{Creating: true, Attempt: attempt}}
+
+		_, err := call(f)
+		require.NoError(t, err)
+		require.Equal(t, []string{"spend"}, f.callSeq, "a roll-forward's own spend-only call must not start another roll-forward")
+	})
+}
+
 // settlerStore adds the spend-only call of a roll-forward to the sequential fake, which answers it
 // with its scripted spend.
 type settlerStore struct {

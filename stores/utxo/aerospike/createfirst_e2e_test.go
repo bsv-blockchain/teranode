@@ -195,6 +195,60 @@ func TestSpendAndCreateMulti_CreateFirst_RollsForwardTentativeDuplicate(t *testi
 	require.ErrorIs(t, err, errors.ErrSpent, "the roll-forward must have spent the duplicate's inputs")
 }
 
+// TestSpendAndCreateMulti_CompletesATentativeRecordOfATransactionWithAParentInTheList covers the
+// other half of a below-checkpoint list. A transaction with a parent earlier in the list is written
+// in two calls: a create-only call in the first wave and a spend-only call in the second. The
+// create-only call finds the tentative record that an earlier create-first attempt left and reports
+// it as existing, and a spend alone would then leave the record creating, with the list reporting
+// the transaction as stored. The spend of such a transaction runs as the roll-forward of the
+// record. It does so whatever utxostore_useCreateFirstOrder says now.
+func TestSpendAndCreateMulti_CompletesATentativeRecordOfATransactionWithAParentInTheList(t *testing.T) {
+	for name, createFirst := range map[string]bool{"create-first on": true, "create-first off": false} {
+		t.Run(name, func(t *testing.T) {
+			tx := uniqueTx(tests.Tx.Clone())
+
+			logger := ulogger.NewErrorTestLogger(t)
+			tSettings := test.CreateBaseTestSettings(t)
+			tSettings.UtxoStore.UseCreateFirstOrder = createFirst
+
+			client, store, ctx, deferFn := initAerospike(t, tSettings, logger)
+			t.Cleanup(deferFn)
+			cleanDB(t, client)
+
+			_, err := store.Create(ctx, tests.ParentTx, 100)
+			require.NoError(t, err)
+
+			child := spendableChildTx(t, tx, 0)
+			childHash := child.TxIDChainHash()
+
+			_, err = store.Create(ctx, child, 101, utxo.WithCreating(true))
+			require.NoError(t, err, "precondition: an earlier attempt left the tentative record of the child")
+
+			results, err := store.SpendAndCreateMulti(ctx, []*bt.Tx{tx, child}, 102, utxo.WithBelowCheckpoint())
+			require.NoError(t, err)
+			require.Len(t, results, 2)
+			require.Equal(t, utxo.MultiTxCreated, results[0].Status, "the parent is created: %v", results[0].Err)
+			require.Equal(t, utxo.MultiTxExisted, results[1].Status, "the child had a record: %v", results[1].Err)
+			require.NoError(t, results[1].Err)
+
+			got := &meta.Data{}
+			require.NoError(t, store.GetMeta(ctx, childHash, got))
+			require.False(t, got.Creating, "a transaction the list reports as stored is not left tentative")
+
+			inputs, err := utxo.GetSpends(child)
+			require.NoError(t, err)
+
+			resp, err := store.GetSpend(ctx, inputs[0])
+			require.NoError(t, err)
+			require.NotNil(t, resp.SpendingData, "the input of the child is spent")
+			require.Equal(t, childHash.String(), resp.SpendingData.TxID.String())
+
+			_, err = store.Spend(ctx, spendableChildTx(t, child, 0), 103)
+			require.NoError(t, err, "the outputs of the child are spendable")
+		})
+	}
+}
+
 // TestSetMined_CreatingRecord_RollsForwardWithFlagOff verifies the setMined pre-flight runs
 // whatever UseCreateFirstOrder says: a creating record left on disk by a flag rollback must
 // be rolled forward (inputs spent, creating cleared) when it is mined, not stranded or made
