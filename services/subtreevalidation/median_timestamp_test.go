@@ -2,12 +2,19 @@ package subtreevalidation
 
 import (
 	"context"
+	"math"
+	"net/url"
+	"slices"
 	"testing"
 
+	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	subtreepkg "github.com/bsv-blockchain/go-subtree"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
+	blockchainsql "github.com/bsv-blockchain/teranode/stores/blockchain/sql"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
@@ -198,4 +205,260 @@ func TestCandidateParentMedianTimeFromHeaders_ErrorsOnOverLongRun(t *testing.T) 
 	_, err := candidateParentMedianTimeFromHeaders(headers[0].Hash(), headers)
 	require.Error(t, err, "a run longer than the median window must be refused")
 	require.Contains(t, err.Error(), "more than")
+}
+
+// forkChainStore is a sqlitememory blockchain store holding a main chain of mainLen blocks on
+// regtest genesis and a side branch of branchLen blocks leaving it after forkHeight, whose block
+// times run two hours ahead of the main chain's, behind a LocalClient.
+type forkChainStore struct {
+	client     blockchain.ClientI
+	main       []*model.Block // main[i] is at height i+1
+	branch     []*model.Block // branch[i] is at height forkHeight+1+i
+	forkHeight uint32
+}
+
+func newForkChainStore(t *testing.T, mainLen, forkHeight, branchLen int) *forkChainStore {
+	t.Helper()
+
+	storeURL, err := url.Parse("sqlitememory:///" + t.Name())
+	require.NoError(t, err)
+
+	tSettings := test.CreateBaseTestSettings(t)
+
+	store, err := blockchainsql.New(ulogger.TestLogger{}, storeURL, tSettings)
+	require.NoError(t, err)
+
+	main := forkTestBlocks(t, tSettings.ChainCfgParams.GenesisHash, 1, mainLen, 0)
+	branch := forkTestBlocks(t, main[forkHeight-1].Hash(), uint32(forkHeight+1), branchLen, 7_200) //nolint:gosec // test sizes are small
+
+	for _, block := range append(append([]*model.Block{}, main...), branch...) {
+		_, _, err = store.StoreBlock(t.Context(), block, "")
+		require.NoError(t, err)
+	}
+
+	best, _, err := store.GetBestBlockHeader(t.Context())
+	require.NoError(t, err)
+	require.Equal(t, main[mainLen-1].Hash().String(), best.Hash().String(), "the main chain must stay the best chain")
+
+	client, err := blockchain.NewLocalClient(ulogger.TestLogger{}, tSettings, store, nil, nil)
+	require.NoError(t, err)
+
+	return &forkChainStore{client: client, main: main, branch: branch, forkHeight: uint32(forkHeight)} //nolint:gosec // test sizes are small
+}
+
+// forkTestBlocks builds n blocks on top of parentHash, the first at height firstHeight, with
+// block times 600 seconds apart plus skew.
+func forkTestBlocks(t *testing.T, parentHash *chainhash.Hash, firstHeight uint32, n int, skew uint32) []*model.Block {
+	t.Helper()
+
+	coinbase, err := bt.NewTxFromString(model.CoinbaseHex)
+	require.NoError(t, err)
+
+	subtree, err := subtreepkg.NewTreeByLeafCount(4)
+	require.NoError(t, err)
+	require.NoError(t, subtree.AddNode(*coinbase.TxIDChainHash(), 0, 0))
+
+	nBits, err := model.NewNBitFromString("207fffff")
+	require.NoError(t, err)
+
+	blocks := make([]*model.Block, 0, n)
+	prev := parentHash
+
+	for i := 0; i < n; i++ {
+		block := &model.Block{
+			Header: &model.BlockHeader{
+				Version:        1,
+				Timestamp:      1_600_000_000 + 600*(firstHeight+uint32(i)) + skew, //nolint:gosec // test sizes are small
+				Nonce:          2573394689,
+				HashPrevBlock:  prev,
+				HashMerkleRoot: subtree.RootHash(),
+				Bits:           *nBits,
+			},
+			CoinbaseTx:       coinbase,
+			TransactionCount: 1,
+			Subtrees:         []*chainhash.Hash{subtree.RootHash()},
+		}
+
+		blocks = append(blocks, block)
+		prev = block.Hash()
+	}
+
+	return blocks
+}
+
+// branchCoinTimes is the oracle: for each of the first upTo branch blocks, the median of the
+// timestamps of the 11 blocks below it along the branch.
+func (s *forkChainStore) branchCoinTimes(upTo int) []uint32 {
+	timeAt := func(height uint32) uint32 {
+		if height > s.forkHeight {
+			return s.branch[height-s.forkHeight-1].Header.Timestamp
+		}
+
+		return s.main[height-1].Header.Timestamp
+	}
+
+	mtps := make([]uint32, 0, upTo)
+
+	for k := 0; k < upTo; k++ {
+		h := s.forkHeight + 1 + uint32(k) //nolint:gosec // test sizes are small
+		window := make([]uint32, 0, 11)
+
+		for x := h - 11; x < h; x++ {
+			window = append(window, timeAt(x))
+		}
+
+		slices.Sort(window)
+		mtps = append(mtps, window[len(window)/2])
+	}
+
+	return mtps
+}
+
+// blockID returns the store's ID for block.
+func (s *forkChainStore) blockID(t *testing.T, block *model.Block) uint32 {
+	t.Helper()
+
+	_, meta, err := s.client.GetBlockHeader(t.Context(), block.Hash())
+	require.NoError(t, err)
+
+	return meta.ID
+}
+
+// forkWalkSpy counts the walk's blockchain calls and the largest header page it asked for, and
+// can corrupt the metas of the first page it serves.
+type forkWalkSpy struct {
+	blockchain.ClientI
+
+	headerCalls, pageCalls, chainChecks int
+	largestPage                         uint64
+	corrupt                             func(headers []*model.BlockHeader, metas []*model.BlockHeaderMeta)
+}
+
+func (s *forkWalkSpy) GetBlockHeader(ctx context.Context, hash *chainhash.Hash) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
+	s.headerCalls++
+
+	return s.ClientI.GetBlockHeader(ctx, hash)
+}
+
+func (s *forkWalkSpy) GetBlockHeadersByParentLinks(ctx context.Context, hash *chainhash.Hash, n uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
+	s.pageCalls++
+	s.largestPage = max(s.largestPage, n)
+
+	headers, metas, err := s.ClientI.GetBlockHeadersByParentLinks(ctx, hash, n)
+	if err == nil && s.corrupt != nil && s.pageCalls == 1 {
+		copied := make([]*model.BlockHeaderMeta, len(metas))
+		for i, m := range metas {
+			mc := *m
+			copied[i] = &mc
+		}
+
+		headers = slices.Clone(headers)
+		s.corrupt(headers, copied)
+		metas = copied
+	}
+
+	return headers, metas, err
+}
+
+func (s *forkWalkSpy) CheckBlockIsInCurrentChain(ctx context.Context, blockIDs []uint32) (bool, error) {
+	s.chainChecks++
+
+	return s.ClientI.CheckBlockIsInCurrentChain(ctx, blockIDs)
+}
+
+// forkTestServerOn returns a Server over client enforcing BIP68 from csv up to genesis, with
+// blockchain_maxBlockHeadersPerRequest set to limit.
+func forkTestServerOn(t *testing.T, client blockchain.ClientI, csv, genesis uint32, limit int) *Server {
+	t.Helper()
+
+	tSettings := test.CreateBaseTestSettings(t)
+	params := *tSettings.ChainCfgParams
+	params.CSVHeight = csv
+	params.GenesisActivationHeight = genesis
+	tSettings.ChainCfgParams = &params
+	tSettings.BlockChain.MaxBlockHeadersPerRequest = limit
+
+	return &Server{logger: ulogger.TestLogger{}, settings: tSettings, blockchainClient: client}
+}
+
+// TestFetchCandidateForkMTPs runs the walk over a main chain of 40 blocks and a five-block side
+// branch leaving it after height 20. Branch coin times must match an independent median of the
+// branch's own timestamps.
+func TestFetchCandidateForkMTPs(t *testing.T) {
+	s := newForkChainStore(t, 40, 20, 5)
+
+	tests := []struct {
+		name        string
+		parent      *chainhash.Hash
+		height      uint32
+		csv         uint32
+		genesis     uint32
+		limit       int
+		corrupt     func(headers []*model.BlockHeader, metas []*model.BlockHeaderMeta)
+		wantStart   uint32
+		wantMTPs    []uint32
+		wantBase    *model.Block
+		wantErr     string
+		wantNoCalls bool
+	}{
+		{name: "parent on the main chain", parent: s.main[39].Hash(), height: 41, wantBase: s.main[39]},
+		{name: "branch tip", parent: s.branch[4].Hash(), height: 26, wantStart: 21, wantMTPs: s.branchCoinTimes(5), wantBase: s.main[19]},
+		{name: "branch tip, three headers per request", parent: s.branch[4].Hash(), height: 26, limit: 3, wantStart: 21, wantMTPs: s.branchCoinTimes(5), wantBase: s.main[19]},
+		{name: "height at genesis activation", parent: s.branch[4].Hash(), height: 26, genesis: 26, wantNoCalls: true},
+		{name: "height below CSV activation", parent: s.branch[4].Hash(), height: 26, csv: 27, wantNoCalls: true},
+		{name: "height not above the parent", parent: s.branch[4].Hash(), height: 27, wantErr: "is not at height 26"},
+		{name: "run at the wrong heights", parent: s.branch[4].Hash(), height: 26, wantErr: "wrong height",
+			corrupt: func(_ []*model.BlockHeader, metas []*model.BlockHeaderMeta) { metas[4].Height++ }},
+		{name: "run not starting at the parent", parent: s.branch[4].Hash(), height: 26, wantErr: "does not start at the requested block",
+			corrupt: func(headers []*model.BlockHeader, _ []*model.BlockHeaderMeta) { headers[0] = s.branch[3].Header }},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.genesis == 0 {
+				tc.genesis = math.MaxUint32
+			}
+
+			spy := &forkWalkSpy{ClientI: s.client, corrupt: tc.corrupt}
+
+			got, err := forkTestServerOn(t, spy, tc.csv, tc.genesis, tc.limit).fetchCandidateForkMTPs(t.Context(), tc.parent, tc.height)
+			if tc.wantErr != "" {
+				require.ErrorContains(t, err, tc.wantErr)
+				return
+			}
+
+			require.NoError(t, err)
+			require.Equal(t, tc.wantStart, got.start)
+			require.Equal(t, tc.wantMTPs, got.mtps)
+			require.Equal(t, tc.wantBase != nil, got.baseSet)
+
+			if tc.wantBase != nil {
+				require.Equal(t, s.blockID(t, tc.wantBase), got.baseID)
+			}
+
+			if tc.wantNoCalls {
+				require.Zero(t, spy.headerCalls+spy.pageCalls+spy.chainChecks)
+			}
+
+			if tc.limit > 0 {
+				require.LessOrEqual(t, spy.largestPage, uint64(tc.limit), "no page may exceed blockchain_maxBlockHeadersPerRequest")
+				require.Greater(t, spy.pageCalls, 1)
+			}
+		})
+	}
+}
+
+// TestFetchCandidateForkMTPs_DeepBranch checks a 70-block branch, longer than one page, so the
+// walk pages past it; finding the fork point takes a few chain checks per page, not one per block.
+func TestFetchCandidateForkMTPs_DeepBranch(t *testing.T) {
+	s := newForkChainStore(t, 100, 20, 70)
+	spy := &forkWalkSpy{ClientI: s.client}
+
+	got, err := forkTestServerOn(t, spy, 0, math.MaxUint32, 0).fetchCandidateForkMTPs(t.Context(), s.branch[69].Hash(), 91)
+	require.NoError(t, err)
+	require.Equal(t, uint32(21), got.start)
+	require.Equal(t, s.branchCoinTimes(70), got.mtps)
+	require.Equal(t, s.blockID(t, s.main[19]), got.baseID)
+	require.Equal(t, 2, spy.pageCalls)
+	require.LessOrEqual(t, spy.chainChecks, 1+2+7)
 }

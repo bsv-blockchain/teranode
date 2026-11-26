@@ -1589,10 +1589,12 @@ together, and the comment says so.
 Relative locktime rules need the median timestamp of the block each spent coin came from. Done
 literally that is a network round trip per input per transaction, on the hottest path in the
 system. Instead the validator pre-loads a run of those medians once per block, and afterwards
-every lookup in every parallel worker is a read of a shared table rather than a round trip. The
-load overlaps the previous range and corrects values that disagree in place, which is what a
-small reorganisation requires. If the pre-load was skipped, the lookup reports an error naming
-the step that was missed rather than inventing a timestamp.
+every lookup in every parallel worker is a read of a shared table rather than a round trip. Each
+entry records the block it belongs to, and a load reaches back until the table and the chain
+agree, which is what a reorganisation of any depth requires. A block names the block its coins'
+times must come from, and a coin on the block's own fork branch takes its time from the request
+instead. If the table does not hold that block, or was never loaded, the first lookup reloads it
+once; if it still does not, the block fails with an error rather than a verdict.
 
 **Skipping the script engine means inheriting its duties.**
 
