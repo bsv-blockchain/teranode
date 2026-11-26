@@ -80,7 +80,9 @@ const (
 	// KindSeeded: a row the seeder wrote says mined, and today's mined block list names only block
 	// ID 0. The seeder records every imported transaction as mined in block ID 0, a stand-in for
 	// its real block below the snapshot's tip, so today names no block the row could be matched
-	// with. Not a disagreement.
+	// with. Not a disagreement. Only a row answer is seeded: once the row's block is settle depth
+	// deep it folds into the floor, and the same parent counts not_loaded while the index does not
+	// hold block 0.
 	KindSeeded = "seeded"
 )
 

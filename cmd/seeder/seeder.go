@@ -274,6 +274,10 @@ func Seeder(logger ulogger.Logger, appSettings *settings.Settings, inputDir stri
 	// finishes first.
 	if !skipUTXOs && appSettings.UtxoStore.LaneMigration.Stamps() && strings.HasPrefix(appSettings.BlockChain.StoreURL.Scheme, "sqlite") {
 		wg.Wait()
+
+		if headerErr != nil {
+			return errors.NewProcessingError("seeder failed to process headers", headerErr)
+		}
 	}
 
 	if !skipUTXOs {

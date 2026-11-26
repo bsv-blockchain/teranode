@@ -353,8 +353,9 @@ func seederHolder() string {
 // an earlier run of this seed recorded, or a new one. A new grant is one lease's first grant, sized
 // to every record of the file, so the seed needs no renewals; the lease is released at once, which
 // leaves the grant the seeder's, since every later grant in the lane starts above it. It is
-// recorded at height 0, below any height block assembly's restart reads grants from, because every
-// record it numbers is mined below the snapshot's tip.
+// recorded at height 0, because every record it numbers is mined below the snapshot's tip, so block
+// assembly's restart, which reads grants at or above its target height less
+// utxostore_unminedTxRetention, skips it once the tip is more than that retention above genesis.
 func takeSeederGrant(ctx context.Context, logger ulogger.Logger, store blockchain.Store, tSettings *settings.Settings,
 	tip chainhash.Hash, records uint64) (lane.Grant, error) {
 	recorded, ok, err := readSeederGrant(ctx, store, tip)

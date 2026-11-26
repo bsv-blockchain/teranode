@@ -525,6 +525,35 @@ func TestSeederRecoverCheckpointWritesTheSeededRows(t *testing.T) {
 	f.requireStamped(tip.lanes.grant)
 }
 
+// On SQLite at shadow the header pass finishes first, so a header file that fails stops the seed
+// before it takes a grant or imports.
+func TestSeederOnSQLiteStopsOnAHeaderFailureBeforeItsLanes(t *testing.T) {
+	f := newSeedFixture(t, settings.LaneMigrationShadow, 8, fixtureHeights)
+
+	headers := filepath.Join(f.dir, f.name+".utxo-headers")
+	data, err := os.ReadFile(headers)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(headers, data[:len(data)-10], 0o600))
+
+	require.ErrorContains(t, f.seed(false), "failed to process headers")
+
+	_, ok, err := readSeederGrant(context.Background(), f.blockchainStore(), f.tip)
+	require.NoError(t, err)
+	require.False(t, ok)
+	require.False(t, utxoStoreHasRecord(t, f, &f.records[0].TxID))
+}
+
+func utxoStoreHasRecord(t *testing.T, f *seedFixture, txid *chainhash.Hash) bool {
+	_, err := f.utxoStore().Get(context.Background(), txid)
+	if err != nil {
+		require.ErrorIs(t, err, errors.ErrTxNotFound)
+
+		return false
+	}
+
+	return true
+}
+
 // -recover-checkpoint at shadow over an import made at off recovers the checkpoint without rows, as
 // it did before the seeder stamped positions.
 func TestSeederRecoverCheckpointAtShadowOverAnImportMadeAtOff(t *testing.T) {
