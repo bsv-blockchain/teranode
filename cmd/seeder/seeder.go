@@ -269,6 +269,13 @@ func Seeder(logger ulogger.Logger, appSettings *settings.Settings, inputDir stri
 		}()
 	}
 
+	// At shadow the UTXO pass writes lane state to the blockchain store. On SQLite, whose shared
+	// cache fails a second writer with a table lock instead of making it wait, the header pass
+	// finishes first.
+	if !skipUTXOs && appSettings.UtxoStore.LaneMigration.Stamps() && strings.HasPrefix(appSettings.BlockChain.StoreURL.Scheme, "sqlite") {
+		wg.Wait()
+	}
+
 	if !skipUTXOs {
 		wg.Add(1)
 
@@ -506,6 +513,16 @@ func processUTXOs(ctx context.Context, logger ulogger.Logger, appSettings *setti
 		tip, tipErr := readUTXOSetTip(utxoFile)
 		if tipErr != nil || !appSettings.UtxoStore.LaneMigration.Stamps() {
 			return tip, tipErr
+		}
+
+		// An import made at off has no grant and no positions: its checkpoint is recovered
+		// without rows, as before shadow stamped seeds.
+		if _, granted, grantErr := readSeederGrant(ctx, blockchainStore, tip.hash); grantErr != nil || !granted {
+			if grantErr == nil {
+				logger.Warnf("no lane grant is recorded for the seed of %s, so it was imported at off: recovering its checkpoint without lane rows; its records have no lane position", tip.hash.String())
+			}
+
+			return tip, grantErr
 		}
 
 		// The earlier run imported with these positions but stopped before its rows, which go

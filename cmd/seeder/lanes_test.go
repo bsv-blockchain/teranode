@@ -525,6 +525,27 @@ func TestSeederRecoverCheckpointWritesTheSeededRows(t *testing.T) {
 	f.requireStamped(tip.lanes.grant)
 }
 
+// -recover-checkpoint at shadow over an import made at off recovers the checkpoint without rows, as
+// it did before the seeder stamped positions.
+func TestSeederRecoverCheckpointAtShadowOverAnImportMadeAtOff(t *testing.T) {
+	f := newSeedFixture(t, settings.LaneMigrationOff, 8, fixtureHeights)
+	ctx := context.Background()
+
+	bc, err := blockchain_store.NewStore(ulogger.TestLogger{}, f.settings.BlockChain.StoreURL, f.settings)
+	require.NoError(t, err)
+
+	_, err = processUTXOs(ctx, ulogger.TestLogger{}, f.settings, bc, f.utxoFile(), "", false, false)
+	require.NoError(t, err)
+	require.NoError(t, bc.Close(ctx))
+
+	f.settings.UtxoStore.LaneMigration = settings.LaneMigrationShadow
+	require.NoError(t, Seeder(ulogger.TestLogger{}, f.settings, f.dir, f.name, false, false, false, true, true))
+
+	exists, err := blockAssemblerStateExists(ctx, f.blockchainStore())
+	require.NoError(t, err)
+	require.True(t, exists)
+}
+
 // A seed whose rows cannot be written leaves no BlockAssembler checkpoint, so a plain re-run does
 // not take the seed as done. Here block 2 already holds a different row.
 func TestSeederWritesNoCheckpointWhenItsRowsFail(t *testing.T) {
