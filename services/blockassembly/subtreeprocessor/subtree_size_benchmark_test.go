@@ -424,9 +424,7 @@ func setupSubtreeProcessorForBench(t *testing.T, itemsPerSubtree int) (*SubtreeP
 	cleanup := func() {
 		close(done)
 
-		if utxoStore != nil {
-			_ = utxoStore.Close(ctx)
-		}
+		require.NoError(t, utxoStore.Close(ctx))
 	}
 
 	return stp, cleanup
@@ -1020,7 +1018,7 @@ func setupSubtreeProcessorForBenchB(b *testing.B, itemsPerSubtree int) (*Subtree
 		close(done)
 
 		if utxoStore != nil {
-			_ = utxoStore.Close(ctx)
+			require.NoError(b, utxoStore.Close(ctx))
 		}
 	}
 
