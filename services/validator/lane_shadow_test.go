@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/RoaringBitmap/roaring/v2/roaring64"
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/bscript"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
@@ -57,9 +58,9 @@ func laneReaderAnswers(t *testing.T, reader, kind string) (all, ofKind float64) 
 }
 
 // startLaneReader starts the process's lane reader at shadow on a SQLite blockchain store holding
-// one block without rows at height 1, waits for the index to reach it, and clears the reader when
-// the test ends.
-func startLaneReader(t *testing.T) {
+// one block at height 1, with rows taking lane9 (positions in lane 9) or none, waits for the index
+// to reach it, clears the reader when the test ends, and returns the block's ID.
+func startLaneReader(t *testing.T, lane9 ...uint64) uint32 {
 	t.Helper()
 
 	u, err := url.Parse("sqlitememory:///")
@@ -80,7 +81,7 @@ func startLaneReader(t *testing.T) {
 	bits, err := model.NewNBitFromString("207fffff")
 	require.NoError(t, err)
 
-	_, _, err = store.StoreBlock(context.Background(), &model.Block{
+	blockID, _, err := store.StoreBlock(context.Background(), &model.Block{
 		Header: &model.BlockHeader{
 			Version: 1, Timestamp: 1729259800, Nonce: 5, HashPrevBlock: genesis.Hash(),
 			HashMerkleRoot: &chainhash.Hash{}, Bits: *bits,
@@ -90,6 +91,15 @@ func startLaneReader(t *testing.T) {
 		TransactionCount: 1,
 	}, "")
 	require.NoError(t, err)
+
+	if len(lane9) > 0 {
+		taken := roaring64.New()
+		taken.AddMany(lane9)
+
+		rows, err := lane.BuildMapRows(9, taken)
+		require.NoError(t, err)
+		require.NoError(t, store.InsertLaneMapRows(context.Background(), uint32(blockID), rows)) //nolint:gosec // the first stored block's ID
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -103,6 +113,8 @@ func startLaneReader(t *testing.T) {
 	})
 
 	require.Eventually(t, func() bool { return r.Snapshot() != nil && r.Snapshot().TipHeight() == 1 }, 10*time.Second, 10*time.Millisecond)
+
+	return uint32(blockID) //nolint:gosec // the first stored block's ID
 }
 
 // At shadow each distinct parent of the parent read is answered from the lane index beside the
@@ -186,6 +198,72 @@ func TestParentReadIsShadowedByTheLaneIndex(t *testing.T) {
 		after, _ := laneReaderAnswers(t, lanereader.ReaderValidator, lanereader.KindAgree)
 		require.Equal(t, before, after)
 	})
+}
+
+// A coinbase parent counts coinbase under validator and subtree_prefetch. Block rows leave the
+// coinbase out, so it would otherwise count today_only, as an ordinary parent at its position does.
+func TestCoinbaseParentCountsAsItsOwnKind(t *testing.T) {
+	ctx := context.Background()
+	base := parentOutputsStore(t)
+
+	s0 := bscript.NewFromBytes([]byte{0x76, 0xa9, 0x00})
+	coinbase := storedParent(t, base, 1, 1, s0, s0)
+	ordinary := storedParent(t, base, 2, 1, s0)
+	held := storedParent(t, base, 3, 1, s0)
+
+	// The block at height 1 takes lane 9 position 1 only.
+	answers := map[chainhash.Hash]utxostore.ParentOutput{
+		*coinbase.TxIDChainHash(): {LanePosition: lane.Pack(9, 50_112), IsCoinbase: true},
+		*ordinary.TxIDChainHash(): {LanePosition: lane.Pack(9, 50_113)},
+		*held.TxIDChainHash():     {LanePosition: lane.Pack(9, 1)},
+	}
+
+	store := &countingParentStore{Store: base}
+	store.override = func(got []utxostore.ParentOutput) ([]utxostore.ParentOutput, error) {
+		for i := range got {
+			a := answers[store.outpoints[len(store.outpoints)-len(got)+i].TxID]
+			got[i].LanePosition, got[i].IsCoinbase = a.LanePosition, a.IsCoinbase
+		}
+
+		return got, nil
+	}
+
+	blockID := startLaneReader(t, 1)
+	// The coinbase is spent twice, and counted once.
+	tx := parentOutputsChild(t, []chainhash.Hash{*coinbase.TxIDChainHash(), *coinbase.TxIDChainHash(), *ordinary.TxIDChainHash(), *held.TxIDChainHash()},
+		[]uint32{0, 1, 0, 0})
+
+	for _, tc := range []struct {
+		reader     string
+		prefetched map[chainhash.Hash]*meta.Data
+	}{
+		{reader: lanereader.ReaderValidator},
+		{reader: lanereader.ReaderSubtreePrefetch, prefetched: map[chainhash.Hash]*meta.Data{}},
+	} {
+		for _, p := range []*bt.Tx{coinbase, ordinary, held} {
+			if tc.prefetched != nil {
+				a := answers[*p.TxIDChainHash()]
+				tc.prefetched[*p.TxIDChainHash()] = &meta.Data{Tx: p, BlockIDs: []uint32{blockID}, BlockHeights: []uint32{1},
+					LanePosition: a.LanePosition, IsCoinbase: a.IsCoinbase}
+			}
+		}
+
+		counts := func() [4]float64 {
+			all, cb := laneReaderAnswers(t, tc.reader, lanereader.KindCoinbase)
+			_, todayOnly := laneReaderAnswers(t, tc.reader, lanereader.KindTodayOnly)
+			_, agree := laneReaderAnswers(t, tc.reader, lanereader.KindAgree)
+
+			return [4]float64{all, cb, todayOnly, agree}
+		}
+
+		before := counts()
+
+		_, _, _, err := laneShadowValidator(t, store).getTransactionInputBlockHeightsAndExtendTx(ctx, tx, tx.TxID(), &Options{PrefetchedParents: tc.prefetched})
+		require.NoError(t, err)
+
+		require.Equal(t, [4]float64{before[0] + 3, before[1] + 1, before[2] + 1, before[3] + 1}, counts(),
+			"%s: [all, coinbase, today_only, agree]", tc.reader)
+	}
 }
 
 // The shadow answers each distinct parent once, past the linear stretch too.
