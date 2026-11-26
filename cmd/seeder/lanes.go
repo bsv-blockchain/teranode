@@ -313,7 +313,7 @@ func checkSeededAtShadow(ctx context.Context, logger ulogger.Logger, tSettings *
 
 	if _, ok, err := readSeederGrant(ctx, store, tip.hash); err != nil || !ok {
 		if err == nil {
-			err = errors.NewProcessingError("utxostore_laneMigration is shadow but the blockchain store records no lane grant for the seed of %s, so that seed was imported at off and its records have no lane position: wipe the UTXO store and re-run with -force", tip.hash.String())
+			err = errors.NewProcessingError("utxostore_laneMigration is shadow but the blockchain store records no lane grant for the seed of %s: either lastProcessed.dat is from another snapshot's seed, or this snapshot was imported at off and its records have no lane position. Only in the second case, wipe the UTXO store and re-run with -force", tip.hash.String())
 		}
 
 		return nil, err

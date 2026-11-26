@@ -23,6 +23,7 @@ import (
 	"github.com/bsv-blockchain/teranode/services/utxopersister"
 	"github.com/bsv-blockchain/teranode/settings"
 	blockchain_store "github.com/bsv-blockchain/teranode/stores/blockchain"
+	blockchainoptions "github.com/bsv-blockchain/teranode/stores/blockchain/options"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	utxofactory "github.com/bsv-blockchain/teranode/stores/utxo/factory"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
@@ -496,33 +497,60 @@ func TestSeederStampsPositionsOnTheLaneStores(t *testing.T) {
 	}
 }
 
-// A seed whose import finished but whose run stopped before its rows and checkpoint is finished
-// by -recover-checkpoint, which writes the rows from the recorded grant without importing.
-func TestSeederRecoverCheckpointWritesTheSeededRows(t *testing.T) {
-	f := newSeedFixture(t, settings.LaneMigrationShadow, 8, fixtureHeights)
-	ctx := context.Background()
+// A seed whose import finished but whose run stopped before its rows and checkpoint is finished by
+// -recover-checkpoint at shadow: from the recorded grant without importing, or, for an import made
+// at off, with the checkpoint alone, as before the seeder stamped positions.
+func TestSeederRecoverCheckpointAtShadow(t *testing.T) {
+	for _, importedAt := range []settings.LaneMigration{settings.LaneMigrationShadow, settings.LaneMigrationOff} {
+		t.Run(string(importedAt), func(t *testing.T) {
+			f := newSeedFixture(t, importedAt, 8, fixtureHeights)
+			ctx := context.Background()
 
-	bc, err := blockchain_store.NewStore(ulogger.TestLogger{}, f.settings.BlockChain.StoreURL, f.settings)
-	require.NoError(t, err)
+			bc, err := blockchain_store.NewStore(ulogger.TestLogger{}, f.settings.BlockChain.StoreURL, f.settings)
+			require.NoError(t, err)
 
-	tip, err := processUTXOs(ctx, ulogger.TestLogger{}, f.settings, bc, f.utxoFile(), "", false, false)
-	require.NoError(t, err)
-	require.NotNil(t, tip.lanes)
+			tip, err := processUTXOs(ctx, ulogger.TestLogger{}, f.settings, bc, f.utxoFile(), "", false, false)
+			require.NoError(t, err)
 
-	// The recorded grant is this snapshot's; one recorded for another tip is not used.
-	_, err = recordedSeedLanes(ctx, bc, f.utxoFile(), chainhash.HashH([]byte("another tip")))
-	require.ErrorContains(t, err, "records no lane grant for the seed")
-	require.NoError(t, bc.Close(ctx))
+			if importedAt == settings.LaneMigrationShadow {
+				require.NotNil(t, tip.lanes)
 
-	// Recovery over a UTXO store that lost the import is refused.
-	imported := f.settings.UtxoStore.UtxoStore
-	f.settings.UtxoStore.UtxoStore = mustURL(t, "sqlite:///"+filepath.Join(t.TempDir(), "empty"))
-	require.ErrorContains(t, Seeder(ulogger.TestLogger{}, f.settings, f.dir, f.name, false, false, false, true, true), "does not hold")
+				// The recorded grant is this snapshot's; one recorded for another tip is not used.
+				_, err = recordedSeedLanes(ctx, bc, f.utxoFile(), chainhash.HashH([]byte("another tip")))
+				require.ErrorContains(t, err, "records no lane grant for the seed")
+			}
 
-	f.settings.UtxoStore.UtxoStore = imported
+			require.NoError(t, bc.Close(ctx))
 
-	require.NoError(t, Seeder(ulogger.TestLogger{}, f.settings, f.dir, f.name, false, false, false, true, true))
-	f.requireStamped(tip.lanes.grant)
+			f.settings.UtxoStore.LaneMigration = settings.LaneMigrationShadow
+			recoverCheckpoint := func() error {
+				return Seeder(ulogger.TestLogger{}, f.settings, f.dir, f.name, false, false, false, true, true)
+			}
+
+			if importedAt == settings.LaneMigrationOff {
+				require.NoError(t, recoverCheckpoint())
+
+				exists, err := blockAssemblerStateExists(ctx, f.blockchainStore())
+				require.NoError(t, err)
+				require.True(t, exists)
+
+				_, ok, err := readSeederGrant(ctx, f.blockchainStore(), f.tip)
+				require.NoError(t, err)
+				require.False(t, ok)
+
+				return
+			}
+
+			// Recovery over a UTXO store that lost the import is refused.
+			imported := f.settings.UtxoStore.UtxoStore
+			f.settings.UtxoStore.UtxoStore = mustURL(t, "sqlite:///"+filepath.Join(t.TempDir(), "empty"))
+			require.ErrorContains(t, recoverCheckpoint(), "does not hold")
+
+			f.settings.UtxoStore.UtxoStore = imported
+			require.NoError(t, recoverCheckpoint())
+			f.requireStamped(tip.lanes.grant)
+		})
+	}
 }
 
 // On SQLite at shadow the header pass finishes first, so a header file that fails stops the seed
@@ -552,27 +580,6 @@ func utxoStoreHasRecord(t *testing.T, f *seedFixture, txid *chainhash.Hash) bool
 	}
 
 	return true
-}
-
-// -recover-checkpoint at shadow over an import made at off recovers the checkpoint without rows, as
-// it did before the seeder stamped positions.
-func TestSeederRecoverCheckpointAtShadowOverAnImportMadeAtOff(t *testing.T) {
-	f := newSeedFixture(t, settings.LaneMigrationOff, 8, fixtureHeights)
-	ctx := context.Background()
-
-	bc, err := blockchain_store.NewStore(ulogger.TestLogger{}, f.settings.BlockChain.StoreURL, f.settings)
-	require.NoError(t, err)
-
-	_, err = processUTXOs(ctx, ulogger.TestLogger{}, f.settings, bc, f.utxoFile(), "", false, false)
-	require.NoError(t, err)
-	require.NoError(t, bc.Close(ctx))
-
-	f.settings.UtxoStore.LaneMigration = settings.LaneMigrationShadow
-	require.NoError(t, Seeder(ulogger.TestLogger{}, f.settings, f.dir, f.name, false, false, false, true, true))
-
-	exists, err := blockAssemblerStateExists(ctx, f.blockchainStore())
-	require.NoError(t, err)
-	require.True(t, exists)
 }
 
 // A seed whose rows cannot be written leaves no BlockAssembler checkpoint, so a plain re-run does
@@ -639,28 +646,132 @@ func (s *failGrantRecordStore) SetState(ctx context.Context, key string, data []
 	return s.Store.SetState(ctx, key, data)
 }
 
-// blockingStateStore is a blockchain store whose GetState waits until its context ends.
-type blockingStateStore struct {
+// blockingStore is a blockchain store whose call named block waits until its context ends.
+type blockingStore struct {
 	blockchain_store.Store
+	block string
 }
 
-func (blockingStateStore) GetState(ctx context.Context, _ string) ([]byte, error) {
+func (s blockingStore) wait(ctx context.Context, name string) error {
+	if s.block != name {
+		return nil
+	}
+
 	<-ctx.Done()
 
-	return nil, ctx.Err()
+	return ctx.Err()
 }
 
-// A blockchain store call the seed's lanes make that never answers fails once the bound passes.
+func (s blockingStore) GetState(ctx context.Context, key string) ([]byte, error) {
+	if err := s.wait(ctx, "GetState"); err != nil {
+		return nil, err
+	}
+
+	return s.Store.GetState(ctx, key)
+}
+
+func (s blockingStore) SetState(ctx context.Context, key string, data []byte) error {
+	if err := s.wait(ctx, "SetState"); err != nil {
+		return err
+	}
+
+	return s.Store.SetState(ctx, key, data)
+}
+
+func (s blockingStore) LaneCapGrants(ctx context.Context, height uint32) ([]lane.CapGrant, error) {
+	if err := s.wait(ctx, "LaneCapGrants"); err != nil {
+		return nil, err
+	}
+
+	return s.Store.LaneCapGrants(ctx, height)
+}
+
+func (s blockingStore) OpenLaneLease(ctx context.Context, req blockchainoptions.LaneLeaseOpen) (lane.LeaseID, lane.Grant, int, error) {
+	if err := s.wait(ctx, "OpenLaneLease"); err != nil {
+		return lane.LeaseID{}, lane.Grant{}, 0, err
+	}
+
+	return s.Store.OpenLaneLease(ctx, req)
+}
+
+func (s blockingStore) ReleaseLaneLease(ctx context.Context, req blockchainoptions.LaneLeaseRelease) (bool, error) {
+	if err := s.wait(ctx, "ReleaseLaneLease"); err != nil {
+		return false, err
+	}
+
+	return s.Store.ReleaseLaneLease(ctx, req)
+}
+
+func (s blockingStore) GetBlockHeadersByHeight(ctx context.Context, lo, hi uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
+	if err := s.wait(ctx, "GetBlockHeadersByHeight"); err != nil {
+		return nil, nil, err
+	}
+
+	return s.Store.GetBlockHeadersByHeight(ctx, lo, hi)
+}
+
+func (s blockingStore) InsertLaneMapRows(ctx context.Context, blockID uint32, rows []lane.MapRow) error {
+	if err := s.wait(ctx, "InsertLaneMapRows"); err != nil {
+		return err
+	}
+
+	return s.Store.InsertLaneMapRows(ctx, blockID, rows)
+}
+
+// Each blockchain store call the seed's lanes make fails once the bound passes when it never
+// answers, except the lease release, which only logs and lets the lease lapse.
 func TestSeederLaneStoreCallsAreBounded(t *testing.T) {
 	saved := seederDBTimeout
 	seederDBTimeout = 50 * time.Millisecond
 
 	t.Cleanup(func() { seederDBTimeout = saved })
 
-	start := time.Now()
-	_, err := readState(context.Background(), blockingStateStore{}, "sg:x")
-	require.ErrorContains(t, err, "deadline exceeded")
-	require.Less(t, time.Since(start), time.Second)
+	cases := []struct {
+		block   string
+		rows    bool
+		wantErr bool
+	}{
+		{"GetState", false, true},
+		{"LaneCapGrants", false, true},
+		{"SetState", false, true},
+		{"OpenLaneLease", false, true},
+		{"ReleaseLaneLease", false, false},
+		{"GetBlockHeadersByHeight", true, true},
+		{"InsertLaneMapRows", true, true},
+		{"SetState", true, true},
+	}
+
+	for _, c := range cases {
+		t.Run(c.block, func(t *testing.T) {
+			f := newSeedFixture(t, settings.LaneMigrationShadow, 8, fixtureHeights)
+			ctx := context.Background()
+			bc := f.blockchainStore()
+			require.NoError(t, processHeaders(ctx, ulogger.TestLogger{}, bc, filepath.Join(f.dir, f.name+".utxo-headers")))
+
+			store := blockingStore{Store: bc, block: c.block}
+			start := time.Now()
+
+			var err error
+
+			if c.rows {
+				layout, countErr := countSeedLayout(ctx, f.utxoFile())
+				require.NoError(t, countErr)
+
+				lanes := &seededLanes{layout: layout, grant: lane.Grant{Lane: 9, First: 1, Last: layout.total()}}
+				err = writeSeededRows(ctx, ulogger.TestLogger{}, store, lanes, &utxoSetTip{hash: f.tip, height: f.tipH})
+			} else {
+				_, err = takeSeederGrant(ctx, ulogger.TestLogger{}, store, f.settings, f.tip, uint64(len(f.records)))
+			}
+
+			if c.wantErr {
+				require.ErrorContains(t, err, "deadline exceeded")
+			} else {
+				require.NoError(t, err)
+			}
+
+			require.Less(t, time.Since(start), time.Second)
+		})
+	}
 }
 
 // A batch of rows whose blocks are not all on the main chain writes none of them.
