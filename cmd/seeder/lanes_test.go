@@ -805,26 +805,35 @@ func TestSeederLaneStoreCallsAreBounded(t *testing.T) {
 		nth     int64
 		rows    bool
 		wantErr bool
+		// pending sets up a stopped earlier attempt, so the grant looks up later grants again.
+		pending bool
 	}{
-		{"GetState", 1, false, true},
-		{"GetState", 2, false, true},
-		{"LaneCapGrants", 1, false, true},
-		{"SetState", 1, false, true},
-		{"SetState", 2, false, true},
-		{"SetState", 3, false, true},
-		{"OpenLaneLease", 1, false, true},
-		{"ReleaseLaneLease", 1, false, false},
-		{"GetBlockHeadersByHeight", 1, true, true},
-		{"InsertLaneMapRows", 1, true, true},
-		{"SetState", 1, true, true},
+		{"LaneCapGrants", 2, false, true, true},
+		{"GetState", 1, false, true, false},
+		{"GetState", 2, false, true, false},
+		{"LaneCapGrants", 1, false, true, false},
+		{"SetState", 1, false, true, false},
+		{"SetState", 2, false, true, false},
+		{"SetState", 3, false, true, false},
+		{"OpenLaneLease", 1, false, true, false},
+		{"ReleaseLaneLease", 1, false, false, false},
+		{"GetBlockHeadersByHeight", 1, true, true, false},
+		{"InsertLaneMapRows", 1, true, true, false},
+		{"SetState", 1, true, true, false},
 	}
 
 	for _, c := range cases {
-		t.Run(c.block+" "+strconv.FormatInt(c.nth, 10), func(t *testing.T) {
+		t.Run(c.block+" "+strconv.FormatInt(c.nth, 10)+map[bool]string{true: " pending", false: ""}[c.pending], func(t *testing.T) {
 			f := newSeedFixture(t, settings.LaneMigrationShadow, 8, fixtureHeights)
 			ctx := context.Background()
 			bc := f.blockchainStore()
 			require.NoError(t, processHeaders(ctx, ulogger.TestLogger{}, bc, filepath.Join(f.dir, f.name+".utxo-headers")))
+
+			if c.pending {
+				require.NoError(t, bc.SetState(ctx, seederStateKey(seederPendingKeyPrefix, f.tip), f.tip[:]))
+				_, _, _, err := bc.OpenLaneLease(ctx, blockchainoptions.LaneLeaseOpen{Holder: "seeder@test", GrantMin: 5, CloseAfter: time.Minute})
+				require.NoError(t, err)
+			}
 
 			store := &blockingStore{Store: bc, block: c.block, nth: c.nth}
 			start := time.Now()
