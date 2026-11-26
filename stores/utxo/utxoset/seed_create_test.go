@@ -11,6 +11,7 @@ import (
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util/lane"
 	"github.com/stretchr/testify/require"
 )
 
@@ -172,7 +173,13 @@ func TestSeedingModeWritesCoinsOnly(t *testing.T) {
 	parallelOnOwnDatabase(t)
 
 	base, ctx := newTestStore(t) // mainnet checkpoints
+
+	// With the coins' lane_position column installed, a create with no position still writes its
+	// coins, and one with a position writes it on each coin, where a read finds it.
+	require.NoError(t, base.PrepareLaneSchema(ctx))
+
 	s := openSeedingStore(t, base)
+	require.True(t, s.laneCoinColumn)
 
 	count := func(sql string, args ...any) int {
 		var n int
@@ -213,10 +220,21 @@ func TestSeedingModeWritesCoinsOnly(t *testing.T) {
 	require.Zero(t, count(`SELECT count(*) FROM pg_class WHERE relname ~ '^tx_mined_w[0-9]+$'`),
 		"a seed creates no tx_mined partitions")
 
+	var positioned chainhash.Hash
+	positioned[0] = 0x61
+
+	_, _, err := s.SpendAndCreate(ctx, seededTx(map[uint32]uint64{0: 10, 1: 20}), 600,
+		utxo.WithCreateOnly(), utxo.WithTXID(&positioned), utxo.WithSetCoinbase(false),
+		utxo.WithMinedBlockInfo(utxo.MinedBlockInfo{BlockID: 0, BlockHeight: 600, SubtreeIdx: 0}),
+		utxo.WithLanePosition(lane.Pack(3, 7)))
+	require.NoError(t, err)
+	require.Equal(t, 2, count(`SELECT count(*) FROM utxo WHERE txid = $1 AND lane_position = $2`, positioned[:], lane.ToSigned(lane.Pack(3, 7))),
+		"each coin carries its transaction's position")
+
 	// A create without the seeder's shape takes the normal route even in seeding mode.
 	normal := seededTx(map[uint32]uint64{0: 30})
 	normal.Outputs = normal.Outputs[:1]
-	_, err := s.Create(ctx, normal, 1_000_000)
+	_, err = s.Create(ctx, normal, 1_000_000)
 	require.NoError(t, err)
 	require.Equal(t, 1, count(`SELECT count(*) FROM tx_ident WHERE txid = $1`, normal.TxIDChainHash()[:]))
 }

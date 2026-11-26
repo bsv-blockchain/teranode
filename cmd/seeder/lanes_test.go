@@ -36,6 +36,7 @@ import (
 	"github.com/bsv-blockchain/teranode/util/lane"
 	"github.com/bsv-blockchain/teranode/util/lanereader"
 	"github.com/bsv-blockchain/teranode/util/test"
+	"github.com/ordishs/gocore"
 	"github.com/stretchr/testify/require"
 )
 
@@ -109,6 +110,26 @@ func TestSeedLayoutRefusesWhatItCannotPlace(t *testing.T) {
 	require.NoError(t, os.WriteFile(path, data, 0o600))
 	_, err = countSeedLayout(context.Background(), path)
 	require.ErrorContains(t, err, "the footer says 2 transactions")
+
+	// A footer whose UTXO count disagrees is refused too.
+	path = writeCompleteSnapshotFile(t, one(5))
+	data, err = os.ReadFile(path)
+	require.NoError(t, err)
+	binary.LittleEndian.PutUint64(data[len(data)-8:], 9)
+	require.NoError(t, os.WriteFile(path, data, 0o600))
+	_, err = countSeedLayout(context.Background(), path)
+	require.ErrorContains(t, err, "9 UTXOs")
+
+	// A count that is cancelled stops.
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err = countSeedLayout(cancelled, writeCompleteSnapshotFile(t, one(5)))
+	require.ErrorIs(t, err, context.Canceled)
+
+	// The check for stale records refuses a file that no longer matches its count.
+	stale := writeCompleteSnapshotFile(t, one(5))
+	empty := &seededLanes{layout: &seedLayout{counts: make([]uint32, 201), base: make([]uint64, 201)}, grant: lane.Grant{Lane: 1, First: 1, Last: 1}}
+	require.ErrorContains(t, checkExistingPositions(context.Background(), nil, stale, empty, false), "more records at height 5")
 
 	// A pipe, read once, is refused before it is opened, here and by the whole seeder at shadow
 	// before its first read.
@@ -464,6 +485,18 @@ func seedStampsPositionsAndRows(t *testing.T, heights []uint32, postgres bool) {
 	require.NoError(t, err)
 	require.False(t, ok)
 
+	// An import that starts clears the record that one ran to its end with this grant.
+	imported, err := seedImported(ctx, other, f.tip)
+	require.NoError(t, err)
+	require.True(t, imported)
+
+	_, err = prepareSeedLanes(ctx, ulogger.TestLogger{}, f.settings, other, f.utxoStore(), f.utxoFile(), f.tip)
+	require.NoError(t, err)
+
+	imported, err = seedImported(ctx, other, f.tip)
+	require.NoError(t, err)
+	require.False(t, imported)
+
 	// A forced import that stops before its rows clears the rows-done record, and a plain re-run
 	// then writes the rows and the checkpoint again.
 	_, err = processUTXOs(ctx, ulogger.TestLogger{}, f.settings, other, f.utxoFile(), "", true, false)
@@ -580,6 +613,18 @@ func TestSeederRecoverCheckpointAtShadow(t *testing.T) {
 
 				return
 			}
+
+			// Recovery is refused while no import with the grant is recorded as run to its end.
+			bc2, err := blockchain_store.NewStore(ulogger.TestLogger{}, f.settings.BlockChain.StoreURL, f.settings)
+			require.NoError(t, err)
+			require.NoError(t, setSeedImported(ctx, bc2, f.tip, false))
+			require.NoError(t, bc2.Close(ctx))
+			require.ErrorContains(t, recoverCheckpoint(), "no import with it that ran to its end")
+
+			bc2, err = blockchain_store.NewStore(ulogger.TestLogger{}, f.settings.BlockChain.StoreURL, f.settings)
+			require.NoError(t, err)
+			require.NoError(t, setSeedImported(ctx, bc2, f.tip, true))
+			require.NoError(t, bc2.Close(ctx))
 
 			// Recovery over a UTXO store that lost the import is refused.
 			imported := f.settings.UtxoStore.UtxoStore
@@ -704,6 +749,48 @@ func (s *failGrantRecordStore) SetState(ctx context.Context, key string, data []
 	}
 
 	return s.Store.SetState(ctx, key, data)
+}
+
+// errStateStore is a blockchain store whose GetState fails.
+type errStateStore struct {
+	blockchain_store.Store
+}
+
+func (errStateStore) GetState(context.Context, string) ([]byte, error) {
+	return nil, errors.NewStorageError("refused")
+}
+
+// A grant record that does not read back whole, or a store that cannot be read, is an error, never
+// taken as no grant.
+func TestSeederGrantRecordIsChecked(t *testing.T) {
+	ctx := context.Background()
+	store := newTestBlockchainStore(t)
+	tip := chainhash.HashH([]byte("checked"))
+	key := seederStateKey(seederGrantKeyPrefix, tip)
+
+	good := encodeSeederGrant(tip, 3, lane.Grant{Lane: 2, First: 10, Last: 12})
+
+	corrupt := map[string]func([]byte) []byte{
+		"version":       func(b []byte) []byte { b[0] = 2; return b },
+		"length":        func(b []byte) []byte { return b[:len(b)-1] },
+		"records":       func(b []byte) []byte { binary.LittleEndian.PutUint64(b[33:41], 4); return b },
+		"zero position": func(b []byte) []byte { binary.LittleEndian.PutUint64(b[42:50], 0); return b },
+	}
+
+	for name, f := range corrupt {
+		require.NoError(t, store.SetState(ctx, key, f(append([]byte(nil), good...))))
+		_, _, err := readSeederGrant(ctx, store, tip)
+		require.Error(t, err, name)
+	}
+
+	require.NoError(t, store.SetState(ctx, key, good))
+	r, ok, err := readSeederGrant(ctx, store, tip)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, lane.Grant{Lane: 2, First: 10, Last: 12}, r.grant)
+
+	_, _, err = readSeederGrant(ctx, errStateStore{Store: store}, tip)
+	require.ErrorContains(t, err, "refused")
 }
 
 // blockingStore is a blockchain store whose nth call named block, the first when nth is 0, waits
@@ -935,6 +1022,12 @@ func TestSeederAtOffStampsNothing(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, ok)
 
+	// An import at off writes no seeder state when no shadow seed was recorded.
+	for _, prefix := range []string{seederRowsKeyPrefix, seederImportedKeyPrefix} {
+		_, err = bc.GetState(ctx, seederStateKey(prefix, f.tip))
+		require.True(t, isNoState(err), "no %s record", prefix)
+	}
+
 	grants, err := bc.LaneCapGrants(ctx, 0)
 	require.NoError(t, err)
 	require.Empty(t, grants)
@@ -1031,6 +1124,15 @@ func TestSeederAtShadowRefusesAnImportMadeAtOff(t *testing.T) {
 
 		f.settings.UtxoStore.LaneMigration = settings.LaneMigrationShadow
 		require.ErrorContains(t, f.seed(false), "no import with it that ran to its end")
+	})
+
+	t.Run("skipStore", func(t *testing.T) {
+		f := newSeedFixture(t, settings.LaneMigrationShadow, 8, fixtureHeights)
+
+		gocore.Config().Set("skipStore", "true")
+		t.Cleanup(func() { gocore.Config().Set("skipStore", "false") })
+
+		require.ErrorContains(t, f.seed(false), "skipStore cannot be used")
 	})
 
 	t.Run("a completed seed", func(t *testing.T) {
