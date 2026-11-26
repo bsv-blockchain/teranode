@@ -408,15 +408,17 @@ func TestReaderCountsTheMinedWriteWindowApart(t *testing.T) {
 			r.CompareHeight(ReaderValidator, chainhash.Hash{}, lane.Pack(3, 6), false, 0)
 		})
 
-		// With b2's write seen finished, the follower stops asking: a failing read is never made.
-		r.source = headerFailingSource{store}
-		errorsBefore := testutil.ToFloat64(prometheusLaneReaderFollowErrors)
+		// A cleared flag on the same best block, as a reorg's clear leaves it, counts pending again.
+		require.NoError(t, store.ClearBlockMinedSet(t.Context(), &b2.hash))
 
 		_, err = r.step(t.Context(), b2.hash)
 		require.NoError(t, err)
-		require.Equal(t, errorsBefore, testutil.ToFloat64(prometheusLaneReaderFollowErrors))
 
-		r.source = store
+		requireCounted(t, ReaderValidator, KindMinedPending, lane.ViaRow, func() {
+			r.CompareHeight(ReaderValidator, chainhash.Hash{}, lane.Pack(3, 6), false, 0)
+		})
+
+		require.NoError(t, store.SetBlockMinedSet(t.Context(), &b2.hash, nil))
 
 		// b3 arrives with its mined write unfinished; then a read of its flag fails. The failure is
 		// counted and leaves no block pending.
@@ -429,15 +431,41 @@ func TestReaderCountsTheMinedWriteWindowApart(t *testing.T) {
 			r.CompareHeight(ReaderValidator, chainhash.Hash{}, lane.Pack(3, 7), false, 0)
 		})
 
-		r.source = headerFailingSource{store}
-		errorsBefore = testutil.ToFloat64(prometheusLaneReaderFollowErrors)
+		for _, failing := range []Source{headerFailingSource{store}, headerMissingSource{store}} {
+			r.source = store
+
+			_, err = r.step(t.Context(), b3.hash)
+			require.NoError(t, err)
+
+			r.source = failing
+			errorsBefore := testutil.ToFloat64(prometheusLaneReaderFollowErrors)
+
+			_, err = r.step(t.Context(), b3.hash)
+			require.NoError(t, err)
+			require.Equal(t, errorsBefore+1, testutil.ToFloat64(prometheusLaneReaderFollowErrors))
+
+			requireCounted(t, ReaderValidator, KindLanesOnly, lane.ViaRow, func() {
+				r.CompareHeight(ReaderValidator, chainhash.Hash{}, lane.Pack(3, 7), false, 0)
+			})
+		}
+
+		// b3 pending, then invalidated so b2 is best again: a view still holding b3 counts its row
+		// lanes_only, since b3 is no longer the best block.
+		r.source = store
 
 		_, err = r.step(t.Context(), b3.hash)
 		require.NoError(t, err)
-		require.Equal(t, errorsBefore+1, testutil.ToFloat64(prometheusLaneReaderFollowErrors))
 
-		requireCounted(t, ReaderValidator, KindLanesOnly, lane.ViaRow, func() {
-			r.CompareHeight(ReaderValidator, chainhash.Hash{}, lane.Pack(3, 7), false, 0)
+		held := r.MainView()
+
+		_, err = store.InvalidateBlock(t.Context(), &b3.hash)
+		require.NoError(t, err)
+
+		_, err = r.step(t.Context(), b3.hash)
+		require.NoError(t, err)
+
+		requireCounted(t, ReaderSubtreePrefetch, KindLanesOnly, lane.ViaRow, func() {
+			r.CompareBlocks(ReaderSubtreePrefetch, held, chainhash.Hash{}, lane.Pack(3, 7), nil)
 		})
 	})
 }
@@ -447,6 +475,13 @@ type headerFailingSource struct{ blockchainstore.Store }
 
 func (headerFailingSource) GetBlockHeader(context.Context, *chainhash.Hash) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
 	return nil, nil, errors.NewServiceUnavailableError("blockchain service down")
+}
+
+// headerMissingSource is a Source whose GetBlockHeader returns no metadata and no error.
+type headerMissingSource struct{ blockchainstore.Store }
+
+func (headerMissingSource) GetBlockHeader(context.Context, *chainhash.Hash) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
+	return nil, nil, nil
 }
 
 // A reorg moves the answer: once the fork is the main chain, its block's rows answer and the old

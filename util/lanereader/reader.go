@@ -103,10 +103,8 @@ type Reader struct {
 	prepareWarned map[string]time.Time
 
 	// minedPending is the ID of the best block while today's mined write of it (setMined) has not
-	// finished, 0 otherwise (KindMinedPending). minedDone is the best block last seen with its
-	// mined write finished, so the follower stops asking; only the follower touches it.
+	// finished, 0 otherwise (KindMinedPending).
 	minedPending atomic.Uint32
-	minedDone    chainhash.Hash
 }
 
 var current atomic.Pointer[Reader]
@@ -310,14 +308,11 @@ func (r *Reader) step(ctx context.Context, tip chainhash.Hash) (chainhash.Hash, 
 	return best, nil
 }
 
-// noteMinedWrite records whether today's mined write of the best block has finished, asking the
-// blockchain service once a poll until it has; a block's rows commit with it, today's mined state
-// lands seconds later. A failed read leaves no block pending, so its answers count as they did.
+// noteMinedWrite records whether today's mined write of the best block has finished, reading its
+// mined_set flag every poll: a block's rows commit with it, today's mined state lands seconds
+// later, and a reorg or an invalidation can clear the flag again. A failed read leaves no block
+// pending, so its answers count as they did.
 func (r *Reader) noteMinedWrite(ctx context.Context, best chainhash.Hash) {
-	if best == r.minedDone {
-		return
-	}
-
 	readCtx, cancel := context.WithTimeout(ctx, readTimeout)
 	_, meta, err := r.source.GetBlockHeader(readCtx, &best)
 
@@ -334,7 +329,6 @@ func (r *Reader) noteMinedWrite(ctx context.Context, best chainhash.Hash) {
 		}
 	case meta.MinedSet:
 		r.minedPending.Store(0)
-		r.minedDone = best
 	default:
 		r.minedPending.Store(meta.ID)
 	}
