@@ -30,6 +30,16 @@ func TestConsensusGateTool(t *testing.T) {
 	os.Exit(0)
 }
 
+// coverCount is the execution count the stubbed head run writes for the bumped
+// module's one statement.
+func coverCount(uncovered bool) string {
+	if uncovered {
+		return "0"
+	}
+
+	return "1"
+}
+
 func TestConsensusGateExecution(t *testing.T) {
 	script, err := filepath.Abs("../../scripts/consensus_lib_gate.sh")
 	require.NoError(t, err)
@@ -43,14 +53,16 @@ func TestConsensusGateExecution(t *testing.T) {
 		name, base, head       string
 		baseStatus, headStatus int
 		wantStatus             int
+		uncovered              bool
 	}{
-		{"complete equal runs", complete, complete, 0, 0, 0},
-		{"completed test failures are compared", complete, failed, 0, 1, 3},
-		{"interrupted baseline", partial, complete, 137, 0, 1},
-		{"incomplete baseline with ordinary failure status", partial, complete, 1, 0, 1},
-		{"incomplete head", complete, partial, 0, 1, 1},
-		{"abnormal baseline status even after complete output", complete, complete, 137, 0, 1},
-		{"abnormal head status even after complete output", complete, complete, 0, 2, 1},
+		{"complete equal runs", complete, complete, 0, 0, 0, false},
+		{"completed test failures are compared", complete, failed, 0, 1, 3, false},
+		{"interrupted baseline", partial, complete, 137, 0, 1, false},
+		{"incomplete baseline with ordinary failure status", partial, complete, 1, 0, 1, false},
+		{"incomplete head", complete, partial, 0, 1, 1, false},
+		{"abnormal baseline status even after complete output", complete, complete, 137, 0, 1, false},
+		{"abnormal head status even after complete output", complete, complete, 0, 2, 1, false},
+		{"bumped module never executed", complete, complete, 0, 0, 3, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
@@ -84,7 +96,7 @@ test)
   fi
   for arg in "$@"; do
     case $arg in
-    -coverprofile=*) printf 'mode: set\ngithub.com/bsv-blockchain/go-wire/wire.go:1.1,2.1 1 1\n' >"${arg#*=}" ;;
+    -coverprofile=*) printf 'mode: set\ngithub.com/bsv-blockchain/go-wire/wire.go:1.1,2.1 1 %s\n' "$HEAD_COVER_COUNT" >"${arg#*=}" ;;
     esac
   done
   printf '%s' "$HEAD_JSON"
@@ -102,7 +114,8 @@ esac
 			cmd.Env = append(os.Environ(), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"),
 				"GATE_ROOT="+dir, "GATE_TEST_BINARY="+binary, "CONSENSUS_GATE_TEST_TOOL=1",
 				"BASE_JSON="+tc.base, "HEAD_JSON="+tc.head,
-				"BASE_STATUS="+strconv.Itoa(tc.baseStatus), "HEAD_STATUS="+strconv.Itoa(tc.headStatus))
+				"BASE_STATUS="+strconv.Itoa(tc.baseStatus), "HEAD_STATUS="+strconv.Itoa(tc.headStatus),
+				"HEAD_COVER_COUNT="+coverCount(tc.uncovered))
 			out, err := cmd.CombinedOutput()
 			if tc.wantStatus == 0 {
 				require.NoError(t, err, "%s", out)
@@ -110,6 +123,10 @@ esac
 				var exitErr *exec.ExitError
 				require.ErrorAs(t, err, &exitErr, "%s", out)
 				require.Equal(t, tc.wantStatus, exitErr.ExitCode(), "%s", out)
+			}
+
+			if tc.uncovered {
+				require.Contains(t, string(out), "**Not checked:**", "an unexecuted bumped module is reported as not checked")
 			}
 		})
 	}

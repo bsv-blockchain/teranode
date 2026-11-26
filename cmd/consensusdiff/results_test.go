@@ -170,7 +170,7 @@ func TestWriteReport(t *testing.T) {
 		require.Contains(t, out, "| `p TestA` | pass | fail: a\\|b 'c' |")
 		require.Contains(t, out, "| `p TestB` | pass | skip |")
 		require.NotContains(t, out, "TestC`")
-		require.Contains(t, out, "1 more not listed; see the job log")
+		require.Contains(t, out, "1 more not listed; base.json and head.json in the consensus-gate artifact hold every outcome")
 		require.Contains(t, out, "3 tests are new in the pull request")
 		require.Contains(t, out, "- `p TestNew2`: skip")
 		require.NotContains(t, out, "TestNew3")

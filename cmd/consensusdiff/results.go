@@ -219,7 +219,7 @@ func writeReport(w io.Writer, base, head map[string]outcome, changes []change, a
 
 		for i, c := range changes {
 			if i == limit {
-				fmt.Fprintf(w, "\n%d more not listed; see the job log.\n", len(changes)-limit)
+				fmt.Fprintf(w, "\n%d more not listed; base.json and head.json in the consensus-gate artifact hold every outcome.\n", len(changes)-limit)
 				break
 			}
 
