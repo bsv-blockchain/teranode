@@ -111,6 +111,8 @@ func TestDiffResults(t *testing.T) {
 		"p TestRemoved":  {action: "pass"},
 		"p TestDetail":   {action: "skip", detail: "old reason"},
 		"p TestMoved":    {action: "skip", detail: "script_test.go:1505: Skipping - same reason"},
+		"p TestLogged":   {action: "pass", detail: "log a"},
+		"p TestStillBad": {action: "fail", detail: "expected EVAL_FALSE"},
 		"p (package)":    {action: "pass"},
 		"p TestFromFail": {action: "fail"},
 	}
@@ -121,6 +123,8 @@ func TestDiffResults(t *testing.T) {
 		"p TestAdded":    {action: "pass"},
 		"p TestDetail":   {action: "skip", detail: "new reason"},
 		"p TestMoved":    {action: "skip", detail: "script_test.go:1510: Skipping - same reason"},
+		"p TestLogged":   {action: "pass", detail: "log b"},
+		"p TestStillBad": {action: "fail", detail: "expected CLEANSTACK"},
 		"p (package)":    {action: "fail"},
 		"p TestFromFail": {action: "pass"},
 	}
@@ -133,7 +137,7 @@ func TestDiffResults(t *testing.T) {
 	}
 
 	require.Equal(t, []string{"p (package)", "p TestDetail", "p TestFlips", "p TestFromFail", "p TestRemoved", "p TestToSkip"}, keys,
-		"every changed action is reported, sorted, a skip counts as an outcome, a skip with a new reason is a change, and a moved t.Skip call is not")
+		"every changed action is reported, sorted, a skip counts as an outcome, a skip with a new reason is a change, and neither a moved t.Skip call nor a new detail on a pass or fail is")
 	require.Equal(t, change{key: "p TestRemoved", base: outcome{action: "pass"}, head: outcome{action: absent}}, changes[4],
 		"a test the pull request no longer reports is a change")
 	require.Equal(t, []string{"p TestAdded"}, added, "a new test is listed apart and is not a change")
