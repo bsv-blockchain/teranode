@@ -29,6 +29,7 @@ jobs:
     # testcontainer suite and memory. Every path in a shard's TEST_PKGS must also be
     # in the unit shard's TEST_EXCLUDE (and the reverse), or its tests run twice or
     # not at all; COVERAGE_SHARDS in the sonarqube job lists every shard.
+    # .github/scripts/check-test-shards.sh checks both on every PR.
     # Unsplit, make test took ~18 min, and 15 min cancelled every main run from
     # 18 Nov 2026.
     timeout-minutes: 30
