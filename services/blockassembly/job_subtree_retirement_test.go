@@ -166,9 +166,21 @@ func newMmapJobServer(t *testing.T, gated bool) *mmapJobServer {
 func (m *mmapJobServer) storeJob(t *testing.T) (chainhash.Hash, heldSubtrees) {
 	t.Helper()
 
-	candidate, subtrees, err := m.ba.blockAssembler.GetMiningCandidate(t.Context())
-	require.NoError(t, err)
-	require.GreaterOrEqual(t, len(subtrees), 2)
+	// A candidate taken while block assembly settles on the new tip (the template rebuild for the
+	// next height's rules runs after the move) can be empty: wait for one built from the subtrees.
+	var (
+		candidate *model.MiningCandidate
+		subtrees  []*subtreepkg.Subtree
+	)
+
+	require.Eventually(t, func() bool {
+		c, s, err := m.ba.blockAssembler.GetMiningCandidate(t.Context())
+		require.NoError(t, err)
+
+		candidate, subtrees = c, s
+
+		return len(subtrees) >= 2
+	}, 5*time.Second, 50*time.Millisecond, "a mining candidate built from the processor's subtrees")
 
 	id, err := chainhash.NewHash(candidate.Id)
 	require.NoError(t, err)
