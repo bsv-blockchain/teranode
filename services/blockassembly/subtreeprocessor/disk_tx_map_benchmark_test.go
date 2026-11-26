@@ -36,7 +36,13 @@ func BenchmarkDiskTxMap_SetIfNotExists(b *testing.B) {
 	}
 }
 
+// On a 4-CPU CI runner this row read 38% apart between two runs of the same code, so -short
+// (CI) skips it; BenchmarkDiskTxMap_SetIfNotExists times the same call single-threaded.
 func BenchmarkDiskTxMap_SetIfNotExists_Parallel(b *testing.B) {
+	if testing.Short() {
+		b.Skip("too noisy on a 4-CPU runner; skipped in -short")
+	}
+
 	m, err := NewDiskTxMap(DiskTxMapOptions{
 		BasePath: b.TempDir(),
 		Prefix:   "bench-par",
