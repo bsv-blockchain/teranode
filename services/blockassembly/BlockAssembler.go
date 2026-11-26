@@ -855,12 +855,6 @@ drain:
 		return
 	}
 
-	for _, req := range batch {
-		if req.Accepted != nil {
-			close(req.Accepted)
-		}
-	}
-
 	b.operatorResetRunning.Store(operator)
 	defer b.operatorResetRunning.Store(false)
 
@@ -2890,11 +2884,6 @@ type resetRequest struct {
 	ValidateInputs bool
 	ErrCh          chan error
 
-	// Accepted, when set, is closed once the loop has taken the request and the deep reorg halt
-	// has not refused it, before the reset runs. A caller that must learn of the refusal without
-	// waiting out the reset's reload waits on it and on ErrCh.
-	Accepted chan struct{}
-
 	// StorageTriggered marks a reset requested because the subtree processor
 	// reported a post-commit disk tx map storage error (see
 	// SubtreeProcessor.TakeResetRequested). Only such a reset can leave block
@@ -2942,35 +2931,6 @@ func (b *BlockAssembler) resetAndWait(ctx context.Context, req resetRequest) err
 	}
 
 	select {
-	case err := <-req.ErrCh:
-		return err
-	case <-ctx.Done():
-		return ctx.Err()
-	}
-}
-
-// resetAndWaitAccepted queues an ordinary reset and returns once the loop has taken it: nil when
-// the reset runs, or the deep reorg halt that refused it. It does not wait for the reset's reload,
-// which can outlast the caller's deadline; a reset that fails later is logged here, as before.
-func (b *BlockAssembler) resetAndWaitAccepted(ctx context.Context, req resetRequest) error {
-	req.ErrCh = make(chan error, 1)
-	req.Accepted = make(chan struct{})
-
-	select {
-	case b.resetCh <- req:
-	case <-ctx.Done():
-		return ctx.Err()
-	}
-
-	select {
-	case <-req.Accepted:
-		go func() {
-			if err := <-req.ErrCh; err != nil {
-				b.logger.Errorf("[BlockAssembler] error resetting: %v", err)
-			}
-		}()
-
-		return nil
 	case err := <-req.ErrCh:
 		return err
 	case <-ctx.Done():

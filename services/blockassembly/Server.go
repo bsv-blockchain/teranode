@@ -2571,8 +2571,9 @@ func (ba *BlockAssembly) submitMiningSolution(ctx context.Context, req *BlockSub
 	}
 
 	// A submission prepared while the halt began is refused here. One already past this check is
-	// still added: the halt does not wait on AddBlock, which has no deadline, and the block only
-	// extends the chain block assembly was on, which the halt leaves to the blockchain service.
+	// still added: the halt does not wait on AddBlock, which has no deadline. The block extends its
+	// candidate's parent, which may be on an earlier branch, and the blockchain service decides
+	// where it goes.
 	if ba.blockAssembler.DeepReorgHalted() {
 		return nil, ba.blockAssembler.deepReorgHaltedError()
 	}
@@ -2846,16 +2847,16 @@ func (ba *BlockAssembly) SubtreeCount() int {
 	return ba.blockAssembler.SubtreeCount()
 }
 
-// reset runs the reset a reset RPC asked for. An operator reset, a call that carries
-// OperatorResetMetadataKey as the resetblockassembly command's does, waits for the reset to
-// finish and returns its result. An ordinary one returns once block assembly takes it, with the
-// deep reorg halt's refusal if it is halted.
+// reset runs the reset a reset RPC asked for and returns its result: an operator reset when the
+// call carries OperatorResetMetadataKey, as the resetblockassembly command's does, and an
+// ordinary one otherwise, which a deep reorg halt refuses. A caller whose deadline ends first
+// gets that error while the reset carries on.
 func (ba *BlockAssembly) reset(ctx context.Context, fullReset, validateInputs bool) error {
 	switch {
 	case isOperatorReset(ctx):
 		return ba.blockAssembler.OperatorResetAndWait(ctx, fullReset, validateInputs)
 	default:
-		return ba.blockAssembler.resetAndWaitAccepted(ctx, resetRequest{FullReset: fullReset, ValidateInputs: validateInputs})
+		return ba.blockAssembler.resetAndWait(ctx, resetRequest{FullReset: fullReset, ValidateInputs: validateInputs})
 	}
 }
 

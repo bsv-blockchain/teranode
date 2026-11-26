@@ -497,54 +497,6 @@ func TestDeepReorgHaltResetCommands(t *testing.T) {
 	})
 }
 
-// An ordinary reset RPC returns once block assembly takes the request, not after the reload:
-// the validator's shed recovery calls it under a two-minute deadline that a reload can outlast.
-func TestOrdinaryResetRPCReturnsOnceTaken(t *testing.T) {
-	initPrometheusMetrics()
-
-	items, _, mockStp := deepReorgFixture(t)
-	ba := items.blockAssembler
-	ba.settings.GlobalBlockHeightRetention = 0 // no halt: the reset runs
-	server := &BlockAssembly{logger: ba.logger, settings: ba.settings, blockAssembler: ba}
-
-	entered, release := make(chan struct{}), make(chan struct{})
-	mockStp.On("Reset", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
-		Run(func(mock.Arguments) { close(entered); <-release }).
-		Return(subtreeprocessor.ResetResponse{})
-
-	returned := make(chan error, 1)
-	go func() {
-		_, err := server.ResetBlockAssembly(t.Context(), &blockassembly_api.EmptyMessage{})
-		returned <- err
-	}()
-
-	var req resetRequest
-	select {
-	case req = <-ba.resetCh:
-	case <-time.After(10 * time.Second):
-		t.Fatal("the RPC queued no reset")
-	}
-
-	handled := make(chan struct{})
-	go func() { ba.handleResetRequests(t.Context(), req); close(handled) }()
-
-	select {
-	case <-entered:
-	case <-time.After(10 * time.Second):
-		t.Fatal("the reset never ran")
-	}
-
-	select {
-	case err := <-returned:
-		require.NoError(t, err)
-	case <-time.After(10 * time.Second):
-		t.Fatal("the RPC waited for the reset to finish")
-	}
-
-	close(release)
-	<-handled
-}
-
 // Block locators are sparse, so the reorg lists start below the real fork point and share the
 // blocks between. A fork 14 deep at retention 15 moves back 14 blocks and must not halt.
 func TestDeepReorgHaltCountsOnlyBlocksMovedBack(t *testing.T) {
