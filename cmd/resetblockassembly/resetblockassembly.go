@@ -21,8 +21,9 @@ import (
 // Returns:
 //   - An error if any step in the process fails.
 func ResetBlockAssembly(logger ulogger.Logger, settings *settings.Settings, fullReset bool, validateInputs bool) error {
-	// Set the context for the operation
-	ctx := context.Background()
+	// Set the context for the operation. The reset is an operator's, the one that runs while block
+	// assembly is halted on a deep reorg and lifts the halt.
+	ctx := blockassembly.WithOperatorReset(context.Background())
 
 	// Initialize the block assembly service
 	ba, err := blockassembly.NewClient(ctx, logger, settings)

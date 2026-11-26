@@ -33,7 +33,7 @@ func TestMarkTransactionsOnLongestChain_RestampsDAH(t *testing.T) {
 
 	require.NoError(t, store.SetBlockHeight(1000))
 
-	retention := s.GetUtxoStoreBlockHeightRetention()
+	retention := s.GetUtxoStoreSpentDeleteRetention()
 	require.NotZero(t, retention)
 
 	astore.UsePrunerServiceForTest(t)
@@ -119,7 +119,7 @@ func TestMarkTransactionsOnLongestChain_RestampsPageDAH(t *testing.T) {
 
 	require.NoError(t, store.SetBlockHeight(1000))
 
-	retention := s.GetUtxoStoreBlockHeightRetention()
+	retention := s.GetUtxoStoreSpentDeleteRetention()
 	require.NotZero(t, retention)
 
 	txID := chainhash.HashH([]byte("large"))
@@ -172,7 +172,7 @@ func TestMarkTransactionsOnLongestChain_DAHRules(t *testing.T) {
 
 	require.NoError(t, store.SetBlockHeight(1000))
 
-	retention := int(s.GetUtxoStoreBlockHeightRetention())
+	retention := int(s.GetUtxoStoreSpentDeleteRetention())
 	require.NotZero(t, retention)
 
 	dahBin := fields.DeleteAtHeight.String()
@@ -193,7 +193,7 @@ func TestMarkTransactionsOnLongestChain_DAHRules(t *testing.T) {
 		{name: "preserved gets no DAH", bins: aerospike.BinMap{fields.PreserveUntil.String(): 5000}},
 		{name: "preserved keeps its DAH", bins: aerospike.BinMap{fields.PreserveUntil.String(): 5000}, start: 1002, want: 1002},
 		{name: "empty blockIDs gets no DAH", bins: aerospike.BinMap{fields.BlockIDs.String(): []interface{}{}}},
-		{name: "conflicting keeps an existing DAH", bins: aerospike.BinMap{fields.Conflicting.String(): true}, start: 1002, want: 1002},
+		{name: "conflicting keeps an existing DAH", bins: aerospike.BinMap{fields.Conflicting.String(): true}, start: 900 + retention + 50, want: 900 + retention + 50},
 	}
 
 	for i, tt := range tests {
@@ -251,7 +251,7 @@ func TestMarkTransactionsOnLongestChain_PageFollowUp(t *testing.T) {
 
 	require.NoError(t, store.SetBlockHeight(1000))
 
-	retention := int(s.GetUtxoStoreBlockHeightRetention())
+	retention := int(s.GetUtxoStoreSpentDeleteRetention())
 	dahBin := fields.DeleteAtHeight.String()
 
 	setup := func(name string, masterDAH, pageDAH int, spent int) (chainhash.Hash, *aerospike.Key, *aerospike.Key) {
@@ -354,7 +354,7 @@ func TestMarkTransactionsOnLongestChain_BlockHeightsFallback(t *testing.T) {
 
 	require.NoError(t, store.SetBlockHeight(1000))
 
-	retention := int(s.GetUtxoStoreBlockHeightRetention())
+	retention := int(s.GetUtxoStoreSpentDeleteRetention())
 	dahBin := fields.DeleteAtHeight.String()
 
 	for name, heights := range map[string]interface{}{"missing": nil, "empty": []interface{}{}} {
@@ -531,7 +531,7 @@ func TestMarkTransactionsOnLongestChain_FailedRaiseRestoresMaster(t *testing.T) 
 
 	require.NoError(t, store.SetBlockHeight(1000))
 
-	retention := int(s.GetUtxoStoreBlockHeightRetention())
+	retention := int(s.GetUtxoStoreSpentDeleteRetention())
 	require.NotZero(t, retention)
 
 	h := &childDAHHarness{t: t, client: client, store: store, dahBin: fields.DeleteAtHeight.String()}

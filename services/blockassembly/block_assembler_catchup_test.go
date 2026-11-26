@@ -291,16 +291,17 @@ func TestProcessNewBlockAnnouncement_CatchupVsReorg(t *testing.T) {
 			"large reorg must return ErrBlockAssemblyReset, got: %v", err)
 	})
 
-	// A reorg that reaches the UTXO retention must reset even at low height: the
-	// moveForward txs may already be pruned, which reorgBlocks cannot handle.
+	// A reorg whose forward side reaches the UTXO retention while it moves back less resets
+	// even at low height: the moveForward txs may already be pruned, which reorgBlocks cannot
+	// handle, but nothing moved back can have lost a parent.
 	t.Run("reorg at retention below height 1000 triggers reset", func(t *testing.T) {
 		items := setupBlockAssemblyTest(t)
 		genesis := genesisHeader(t, items)
 
 		a1 := buildChain(genesis, 1, 610)[0]
-		b1 := buildChain(genesis, 1, 710)[0]
+		b := buildChain(genesis, 2, 710)
 		require.NoError(t, items.addBlock(t.Context(), a1))
-		require.NoError(t, items.addBlock(t.Context(), b1))
+		addChain(t, items, b)
 
 		mockStp := &subtreeprocessor.MockSubtreeProcessor{}
 		mockStp.On("WaitForPendingBlocks", mock.Anything).Return(nil)
@@ -308,11 +309,11 @@ func TestProcessNewBlockAnnouncement_CatchupVsReorg(t *testing.T) {
 			Return(subtreeprocessor.ResetResponse{})
 		injectMockStp(t, items, mockStp)
 
-		items.blockAssembler.settings.GlobalBlockHeightRetention = 1
+		items.blockAssembler.settings.GlobalBlockHeightRetention = 2
 		items.blockAssembler.settings.UtxoStore.BlockHeightRetentionAdjustment = 0
 		items.blockAssembler.setBestBlockHeader(a1, 1)
 
-		err := items.blockAssembler.handleReorg(t.Context(), b1, 1)
+		err := items.blockAssembler.handleReorg(t.Context(), b[1], 2)
 
 		require.True(t, errors.Is(err, errors.ErrBlockAssemblyReset),
 			"reorg at retention must reset at low height, got: %v", err)

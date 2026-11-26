@@ -63,7 +63,7 @@ func TestSpendDAHParity(t *testing.T) {
 			tSettings.Aerospike.EnableSpendFilterExpressions = useExpressions
 			tSettings.UtxoStore.UtxoBatchSize = 1 // required for the expression spend path
 
-			retention := int(tSettings.GetUtxoStoreBlockHeightRetention())
+			retention := int(tSettings.GetUtxoStoreSpentDeleteRetention())
 			require.Greater(t, retention, 0)
 
 			client, store, ctx, cleanup := initAerospike(t, tSettings, logger)
@@ -133,6 +133,7 @@ func TestExpiredPreservationDAHParity(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings(t)
 	tSettings.GlobalBlockHeightRetention = 100
 	tSettings.UtxoStore.BlockHeightRetentionAdjustment = 0
+	tSettings.UtxoStore.UnminedTxRetention = 0 // stamps are exactly height + 100: these tests pin Lua and expression parity, not the pad
 
 	client, store, ctx, cleanup := initAerospikeOwnServer(t, tSettings, logger)
 	defer cleanup()
@@ -203,6 +204,7 @@ func TestExpiredPreservationChildDAH(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings(t)
 	tSettings.GlobalBlockHeightRetention = 100
 	tSettings.UtxoStore.BlockHeightRetentionAdjustment = 0
+	tSettings.UtxoStore.UnminedTxRetention = 0 // stamps are exactly height + 100: these tests pin Lua and expression parity, not the pad
 	tSettings.UtxoStore.UtxoBatchSize = 4
 
 	client, store, ctx, cleanup := initAerospikeOwnServer(t, tSettings, logger)
@@ -289,7 +291,7 @@ func TestSpendChildDAH(t *testing.T) {
 			tSettings.Aerospike.EnableSpendFilterExpressions = useExpressions
 			tSettings.UtxoStore.UtxoBatchSize = 1 // master holds output 0, child record holds output 1
 
-			retention := int(tSettings.GetUtxoStoreBlockHeightRetention())
+			retention := int(tSettings.GetUtxoStoreSpentDeleteRetention())
 
 			client, store, ctx, cleanup := initAerospike(t, tSettings, logger)
 			defer cleanup()
@@ -375,6 +377,7 @@ func newExpiredFailureHarness(t *testing.T) *expiredFailureHarness {
 	tSettings := test.CreateBaseTestSettings(t)
 	tSettings.GlobalBlockHeightRetention = 100
 	tSettings.UtxoStore.BlockHeightRetentionAdjustment = 0
+	tSettings.UtxoStore.UnminedTxRetention = 0 // stamps are exactly height + 100: these tests pin Lua and expression parity, not the pad
 	tSettings.UtxoStore.UtxoBatchSize = 4
 
 	// Its run calls ProcessExpiredPreservations, which sweeps the whole set.
@@ -797,6 +800,7 @@ func TestExpiredPreservationDoesNotRecreateDeletedPages(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings(t)
 	tSettings.GlobalBlockHeightRetention = 100
 	tSettings.UtxoStore.BlockHeightRetentionAdjustment = 0
+	tSettings.UtxoStore.UnminedTxRetention = 0 // stamps are exactly height + 100: these tests pin Lua and expression parity, not the pad
 	tSettings.UtxoStore.UtxoBatchSize = 4
 
 	client, store, ctx, cleanup := initAerospikeOwnServer(t, tSettings, logger)

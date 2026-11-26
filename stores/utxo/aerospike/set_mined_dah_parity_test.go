@@ -206,7 +206,7 @@ func TestSetMinedDAHParity(t *testing.T) {
 					tSettings.UtxoStore.BlockHeightRetentionAdjustment = 0
 				}
 
-				retention := int(tSettings.GetUtxoStoreBlockHeightRetention())
+				retention := int(tSettings.GetUtxoStoreSpentDeleteRetention())
 				if retentionDisabled {
 					require.Equal(t, 0, retention)
 				} else {
@@ -394,7 +394,7 @@ func TestSetMinedDAHChildFollowUpsSurviveSiblingError(t *testing.T) {
 			tSettings.Aerospike.EnableSetMinedFilterExpressions = useExpressions
 			tSettings.UtxoStore.UtxoBatchSize = 4
 
-			retention := int(tSettings.GetUtxoStoreBlockHeightRetention())
+			retention := int(tSettings.GetUtxoStoreSpentDeleteRetention())
 
 			client, store, ctx, cleanup := initAerospike(t, tSettings, logger)
 			defer cleanup()

@@ -102,11 +102,20 @@ func TestOptionsFromValidateRequest_RoundTrip(t *testing.T) {
 		SkipTxMetaPublishing:      true,
 		CandidateBlockTime:        1700000000,
 		CandidateParentMedianTime: 1699999000,
+		CandidateForkStartHeight:  40,
+		CandidateForkMTPs:         []uint32{1699998000, 1699998500},
+		CandidateBaseID:           7,
+		CandidateBaseSet:          true,
 	}
 
 	req := buildValidateTxRequest(newTinyTx(t).SerializeBytes(), 42, src)
 	got, err := optionsFromValidateRequest(req)
 	require.NoError(t, err)
+
+	require.Equal(t, src.CandidateForkStartHeight, got.CandidateForkStartHeight)
+	require.Equal(t, src.CandidateForkMTPs, got.CandidateForkMTPs)
+	require.Equal(t, src.CandidateBaseID, got.CandidateBaseID)
+	require.True(t, got.CandidateBaseSet)
 
 	require.Equal(t, src.SkipUtxoCreation, got.SkipUtxoCreation)
 	require.Equal(t, src.AddTXToBlockAssembly, got.AddTXToBlockAssembly)
@@ -130,6 +139,9 @@ func TestOptionsFromValidateRequest_OmittedFieldsStayZero(t *testing.T) {
 	req := buildValidateTxRequest(newTinyTx(t).SerializeBytes(), 42, src)
 	require.Nil(t, req.CandidateBlockTime)
 	require.Nil(t, req.CandidateParentMedianTime)
+	require.Nil(t, req.CandidateForkStartHeight)
+	require.Empty(t, req.CandidateForkMtps)
+	require.Nil(t, req.CandidateBaseId)
 
 	got, err := optionsFromValidateRequest(req)
 	require.NoError(t, err)

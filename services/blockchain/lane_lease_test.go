@@ -537,17 +537,18 @@ func requireLaneLeaseRoundTrip(t *testing.T, src lane.LeaseSource, store blockch
 	require.NoError(t, err)
 	require.Equal(t, lane.Grant{Lane: 0, First: 1, Last: 100}, opened)
 
-	// 1,000 positions a second for 10 seconds is 10,000 positions, far above the minimum of 100.
+	// 1,000 positions a second for 10 seconds is 10,000 positions, far above the minimum of 100. The
+	// pair settles the lane's newest hand-out short of its end, so the grant starts right after 80.
 	res, err := src.RenewLaneLease(ctx, lane.Renewal{
 		Lease: id, Lane: opened.Lane, Rate: 1000, WantGrant: true,
 		Settles: lane.Settles{First: 1, LastTaken: 80},
 	})
 	require.NoError(t, err)
-	require.Equal(t, lane.RenewResult{Granted: true, Grant: lane.Grant{Lane: 0, First: 101, Last: 10100}}, res)
+	require.Equal(t, lane.RenewResult{Granted: true, Grant: lane.Grant{Lane: 0, First: 81, Last: 10080}}, res)
 
 	var settlesFirst, settlesLastTaken sql.NullInt64
 
-	err = store.GetDB().QueryRow(`SELECT settles_first, settles_last_taken FROM lane_handout WHERE lane = 0 AND first = 101`).
+	err = store.GetDB().QueryRow(`SELECT settles_first, settles_last_taken FROM lane_handout WHERE lane = 0 AND first = 81`).
 		Scan(&settlesFirst, &settlesLastTaken)
 	require.NoError(t, err)
 	require.Equal(t, sql.NullInt64{Int64: 1, Valid: true}, settlesFirst)
@@ -555,7 +556,7 @@ func requireLaneLeaseRoundTrip(t *testing.T, src lane.LeaseSource, store blockch
 
 	already, err := src.ReleaseLaneLease(ctx, lane.Release{
 		Lease: id, Lane: opened.Lane, LastTaken: 9000,
-		Settles: lane.Settles{First: 101, LastTaken: 9000},
+		Settles: lane.Settles{First: 81, LastTaken: 9000},
 	})
 	require.NoError(t, err)
 	require.False(t, already)
@@ -566,7 +567,7 @@ func requireLaneLeaseRoundTrip(t *testing.T, src lane.LeaseSource, store blockch
 		Scan(&last, &settlesFirst, &settlesLastTaken)
 	require.NoError(t, err)
 	require.Equal(t, int64(9000), last)
-	require.Equal(t, sql.NullInt64{Int64: 101, Valid: true}, settlesFirst)
+	require.Equal(t, sql.NullInt64{Int64: 81, Valid: true}, settlesFirst)
 	require.Equal(t, sql.NullInt64{Int64: 9000, Valid: true}, settlesLastTaken)
 
 	already, err = src.ReleaseLaneLease(ctx, lane.Release{Lease: id, Lane: opened.Lane, LastTaken: 9000})

@@ -75,7 +75,7 @@ func TestSetMinedNotOnLongestChainDAHMatrix(t *testing.T) {
 				store.settings.UtxoStore.BlockHeightRetentionAdjustment = 0
 			}
 
-			retention := store.settings.GetUtxoStoreBlockHeightRetention()
+			retention := store.settings.GetUtxoStoreSpentDeleteRetention()
 			require.NoError(t, store.SetBlockHeight(mainHeight))
 
 			parentHash := parent.TxIDChainHash()

@@ -140,7 +140,7 @@ func TestCreateMinedUnspendableSetsDAH_Postgres(t *testing.T) {
 
 	store, ctx := setupPostgresStore(t)
 
-	retention := store.settings.GetUtxoStoreBlockHeightRetention()
+	retention := store.settings.GetUtxoStoreSpentDeleteRetention()
 	require.Greater(t, retention, uint32(0), "test requires a non-zero block height retention")
 
 	const minedHeight = uint32(1000)
@@ -286,15 +286,14 @@ func TestUnlockBatcher_Postgres_DAH(t *testing.T) {
 	require.False(t, m.Locked, "tx should be unlocked after batcher unlock")
 
 	// Verify that delete_at_height was set by the DAH recalculation.
-	// For a fully-spent, mined, on-longest-chain tx: DAH = blockHeight + 1 + retention.
-	// blockHeight=1000, retention=GlobalBlockHeightRetention(10), so DAH = 1011.
+	// For a fully-spent, mined, on-longest-chain tx: DAH = blockHeight + 1 + the spent retention.
 	var dahAfter *int64
 	err = store.db.QueryRowContext(ctx,
 		"SELECT delete_at_height FROM transactions WHERE hash = $1",
 		txHash[:]).Scan(&dahAfter)
 	require.NoError(t, err)
 	require.NotNil(t, dahAfter, "delete_at_height should be set after unlock of fully-spent mined tx")
-	require.Equal(t, int64(1011), *dahAfter, "delete_at_height should be blockHeight+1+retention")
+	require.Equal(t, int64(1000+1+store.settings.GetUtxoStoreSpentDeleteRetention()), *dahAfter, "delete_at_height should be blockHeight+1+spent retention")
 }
 
 // TestUnlockBatcher_Postgres_MultipleConcurrent verifies that multiple

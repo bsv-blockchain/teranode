@@ -140,6 +140,11 @@ func TestStoreBlockCommitsLaneMapRowsWithTheBlock(t *testing.T) {
 		stillInserts, _ := laneGateInsert(t)
 		require.Equal(t, afterInserts, stillInserts, "a block without rows is not timed")
 
+		// An extend with rows records its parent in the median-time cache, as one without does.
+		id3, _, err := s.StoreBlock(ctx, block3, "", options.WithLaneMapRows(rows))
+		require.NoError(t, err)
+		require.Equal(t, []uint32{block2.Header.Timestamp, block3.Header.Timestamp}, s.blockTimestampCache.Ancestors(id3, 2))
+
 		// A fork off block1 goes through the fork path's transaction.
 		fork := createBlock3OnFork(block1)
 		forkRows := holedRows(t, 9, 1, 3)
@@ -149,7 +154,7 @@ func TestStoreBlockCommitsLaneMapRowsWithTheBlock(t *testing.T) {
 		require.False(t, getOnMainChain(t, s, fork.Hash().CloneBytes()), "the fork block took the fork path")
 		requireRowsOf(t, s, idFork, forkRows)
 
-		require.Equal(t, len(rows)+len(forkRows), laneMapRowCount(t, s))
+		require.Equal(t, 2*len(rows)+len(forkRows), laneMapRowCount(t, s))
 	})
 }
 
