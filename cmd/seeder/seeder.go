@@ -82,6 +82,9 @@ type utxoSetTip struct {
 	// lanes is set at utxostore_laneMigration shadow: the positions the seed gave its records,
 	// whose rows the seeder writes once the header pass has stored the blocks.
 	lanes *seededLanes
+	// rowsOnly is set for a completed seed whose rows are not all written: the seeder writes
+	// them and leaves the checkpoint it found.
+	rowsOnly bool
 }
 
 // usage prints the usage message and exits the program with an error code.
@@ -320,6 +323,10 @@ func Seeder(logger ulogger.Logger, appSettings *settings.Settings, inputDir stri
 			}
 		}
 
+		if utxoTip.rowsOnly {
+			return nil
+		}
+
 		if err := writeBlockAssemblerState(ctx, logger, blockchainStore, utxoTip); err != nil {
 			return errors.NewProcessingError("seeder failed to set BlockAssembler state", err)
 		}
@@ -532,14 +539,16 @@ func processUTXOs(ctx context.Context, logger ulogger.Logger, appSettings *setti
 			// nil tip signals the caller not to write state). At shadow the
 			// earlier seed must have stamped positions too: one made at off left
 			// records no row can name.
+			var rowsOnly *utxoSetTip
+
 			if appSettings.UtxoStore.LaneMigration.Stamps() {
-				if err = checkSeededAtShadow(ctx, logger, appSettings, blockchainStore, utxoFile); err != nil {
+				if rowsOnly, err = checkSeededAtShadow(ctx, logger, appSettings, blockchainStore, utxoFile); err != nil {
 					return nil, err
 				}
 			}
 
 			logger.Errorf("lastProcessed.dat exists, skipping UTXOs")
-			return nil, nil
+			return rowsOnly, nil
 		}
 	}
 

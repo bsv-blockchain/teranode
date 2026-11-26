@@ -1,13 +1,17 @@
 package seeder
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
+	"encoding/hex"
 	"io"
 	"os"
+	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/services/utxopersister"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/blockchain"
@@ -34,9 +38,32 @@ import (
 // does. A position follows from the grant and the file alone, so a seed run again over the same
 // file gives each record the position it already has.
 
-// seederLaneGrantKey is the blockchain store state key holding the grant a seed takes its positions
-// from, so a seed run again reuses it.
-const seederLaneGrantKey = "seederLaneGrant"
+// The blockchain store state keys of one snapshot's seed, each the prefix and the first 14 bytes of
+// the snapshot's tip hash in hex, under the state table's 32-character key limit. The grant key
+// holds the grant the seed takes its positions from, so a seed run again reuses it; a seed of
+// another snapshot leaves it alone. The rows key holds the tip hash once every seeded row of that
+// seed is written, and is cleared when an import starts.
+const (
+	seederGrantKeyPrefix = "sg:"
+	seederRowsKeyPrefix  = "sr:"
+	seederKeyHashBytes   = 14
+)
+
+func seederStateKey(prefix string, tip chainhash.Hash) string {
+	return prefix + hex.EncodeToString(tip[:seederKeyHashBytes])
+}
+
+// seederDBTimeout bounds each blockchain store call the seed's lanes make, so a lock another
+// transaction holds fails the seed instead of stalling it.
+const seederDBTimeout = 2 * time.Minute
+
+// withDBTimeout runs fn with a context bounded by seederDBTimeout.
+func withDBTimeout(ctx context.Context, fn func(ctx context.Context) error) error {
+	ctx, cancel := context.WithTimeout(ctx, seederDBTimeout)
+	defer cancel()
+
+	return fn(ctx)
+}
 
 // seederGrantRecordBytes is the size of the grant record: a version byte, the snapshot's tip hash,
 // its record count, the lane, and the grant's first and last positions.
@@ -243,6 +270,12 @@ func prepareSeedLanes(ctx context.Context, logger ulogger.Logger, tSettings *set
 		return nil, err
 	}
 
+	// The import may change the records the rows describe, so the rows count as unwritten until
+	// this run writes them.
+	if err = setSeededRowsWritten(ctx, bcStore, tip, false); err != nil {
+		return nil, err
+	}
+
 	return lanes, nil
 }
 
@@ -254,25 +287,45 @@ func checkRecordedPositions(ctx context.Context, logger ulogger.Logger, tSetting
 		return errors.NewStorageError("failed to create utxostore", err)
 	}
 
+	defer func() {
+		if closeErr := store.Close(ctx); closeErr != nil {
+			logger.Warnf("[seeder lanes] closing the UTXO store opened to check positions: %v", closeErr)
+		}
+	}()
+
 	return checkExistingPositions(ctx, store, utxoFile, lanes, true)
 }
 
 // checkSeededAtShadow refuses to call a completed seed done at shadow unless it was stamped: the
 // blockchain store records the grant of the seed of utxoFile's tip, and the UTXO store holds the
 // file's first records at that grant's positions. A grant alone proves nothing, because a seed
-// refused after taking one leaves it recorded.
-func checkSeededAtShadow(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, store blockchain.Store, utxoFile string) error {
+// refused after taking one leaves it recorded. When the seed's rows are not all written, as after a
+// forced re-run that stopped before them over an earlier checkpoint, it returns the tip with the
+// lanes to write them, and the caller writes no checkpoint. Otherwise it returns nil.
+func checkSeededAtShadow(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, store blockchain.Store, utxoFile string) (*utxoSetTip, error) {
 	tip, err := readUTXOSetTip(utxoFile)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	lanes, err := recordedSeedLanes(ctx, store, utxoFile, tip.hash)
-	if err != nil {
-		return err
+	if tip.lanes, err = recordedSeedLanes(ctx, store, utxoFile, tip.hash); err != nil {
+		return nil, err
 	}
 
-	return checkRecordedPositions(ctx, logger, tSettings, utxoFile, lanes)
+	if err = checkRecordedPositions(ctx, logger, tSettings, utxoFile, tip.lanes); err != nil {
+		return nil, err
+	}
+
+	written, err := seededRowsWritten(ctx, store, tip.hash)
+	if err != nil || written {
+		return nil, err
+	}
+
+	logger.Warnf("[seeder lanes] the seed of %s is imported but its rows are not all written; writing them", tip.hash.String())
+
+	tip.rowsOnly = true
+
+	return tip, nil
 }
 
 // seederHolder names the seeder's lane lease.
@@ -293,33 +346,46 @@ func seederHolder() string {
 // record it numbers is mined below the snapshot's tip.
 func takeSeederGrant(ctx context.Context, logger ulogger.Logger, store blockchain.Store, tSettings *settings.Settings,
 	tip chainhash.Hash, records uint64) (lane.Grant, error) {
-	recorded, ok, err := readSeederGrant(ctx, store)
+	recorded, ok, err := readSeederGrant(ctx, store, tip)
 	if err != nil {
 		return lane.Grant{}, err
 	}
 
-	if ok && recorded.tip == tip && recorded.records == records {
+	if ok && recorded.records == records {
 		logger.Infof("[seeder lanes] reusing the grant of an earlier run of this seed: lane %d positions %d to %d", recorded.grant.Lane, recorded.grant.First, recorded.grant.Last)
 
 		return recorded.grant, nil
 	}
 
 	if ok {
-		logger.Warnf("[seeder lanes] the blockchain store records a grant for the seed of %s with %d records; this seed of %s takes a new one", recorded.tip.String(), recorded.records, tip.String())
+		logger.Warnf("[seeder lanes] the blockchain store records a grant for %d records of the seed of %s; this file holds %d and takes a new one", recorded.records, tip.String(), records)
 	}
 
-	id, g, _, err := store.OpenLaneLease(ctx, blockchainoptions.LaneLeaseOpen{
-		Holder:     seederHolder(),
-		Height:     0,
-		GrantMin:   records,
-		CloseAfter: tSettings.BlockChain.LaneLeaseCloseAfter,
-	})
-	if err != nil {
+	var (
+		id lane.LeaseID
+		g  lane.Grant
+	)
+
+	if err = withDBTimeout(ctx, func(ctx context.Context) error {
+		var openErr error
+
+		id, g, _, openErr = store.OpenLaneLease(ctx, blockchainoptions.LaneLeaseOpen{
+			Holder:     seederHolder(),
+			Height:     0,
+			GrantMin:   records,
+			CloseAfter: tSettings.BlockChain.LaneLeaseCloseAfter,
+		})
+
+		return openErr
+	}); err != nil {
 		return lane.Grant{}, errors.NewServiceError("could not open the seeder's lane lease", err)
 	}
 
 	release := func(lastTaken uint64) {
-		if _, relErr := store.ReleaseLaneLease(ctx, blockchainoptions.LaneLeaseRelease{Lease: id, Lane: g.Lane, LastTaken: lastTaken}); relErr != nil {
+		if relErr := withDBTimeout(ctx, func(ctx context.Context) error {
+			_, err := store.ReleaseLaneLease(ctx, blockchainoptions.LaneLeaseRelease{Lease: id, Lane: g.Lane, LastTaken: lastTaken})
+			return err
+		}); relErr != nil {
 			logger.Warnf("[seeder lanes] could not release the seeder's lane lease on lane %d, it closes as lapsed: %v", g.Lane, relErr)
 		}
 	}
@@ -332,7 +398,9 @@ func takeSeederGrant(ctx context.Context, logger ulogger.Logger, store blockchai
 
 	g.Last = g.First + records - 1
 
-	if err = store.SetState(ctx, seederLaneGrantKey, encodeSeederGrant(tip, records, g)); err != nil {
+	if err = withDBTimeout(ctx, func(ctx context.Context) error {
+		return store.SetState(ctx, seederStateKey(seederGrantKeyPrefix, tip), encodeSeederGrant(tip, records, g))
+	}); err != nil {
 		release(0)
 
 		return lane.Grant{}, errors.NewStorageError("could not record the seeder's lane grant", err)
@@ -364,19 +432,33 @@ func encodeSeederGrant(tip chainhash.Hash, records uint64, g lane.Grant) []byte 
 	return b
 }
 
-// readSeederGrant returns the grant record an earlier run left, if any.
-func readSeederGrant(ctx context.Context, store blockchain.Store) (seederGrant, bool, error) {
-	b, err := store.GetState(ctx, seederLaneGrantKey)
+// readState reads a blockchain store state key, nil when it holds nothing.
+func readState(ctx context.Context, store blockchain.Store, key string) ([]byte, error) {
+	var b []byte
+
+	err := withDBTimeout(ctx, func(ctx context.Context) error {
+		var getErr error
+
+		b, getErr = store.GetState(ctx, key)
+
+		return getErr
+	})
 	if err != nil {
 		if isNoState(err) {
-			return seederGrant{}, false, nil
+			return nil, nil
 		}
 
-		return seederGrant{}, false, errors.NewStorageError("could not read the seeder's lane grant", err)
+		return nil, errors.NewStorageError("could not read the seeder's state %s", key, err)
 	}
 
-	if len(b) == 0 {
-		return seederGrant{}, false, nil
+	return b, nil
+}
+
+// readSeederGrant returns the grant record an earlier run of the seed of tip left, if any.
+func readSeederGrant(ctx context.Context, store blockchain.Store, tip chainhash.Hash) (seederGrant, bool, error) {
+	b, err := readState(ctx, store, seederStateKey(seederGrantKeyPrefix, tip))
+	if err != nil || len(b) == 0 {
+		return seederGrant{}, false, err
 	}
 
 	if len(b) != seederGrantRecordBytes || b[0] != 1 {
@@ -393,18 +475,50 @@ func readSeederGrant(ctx context.Context, store blockchain.Store) (seederGrant, 
 		return seederGrant{}, false, errors.NewProcessingError("the seeder's lane grant record holds lane %d positions %d to %d for %d records", r.grant.Lane, r.grant.First, r.grant.Last, r.records)
 	}
 
+	// Two tips that share the key's hash prefix are two different seeds.
+	if r.tip != tip {
+		return seederGrant{}, false, nil
+	}
+
 	return r, true, nil
+}
+
+// seededRowsWritten reports whether every seeded row of the seed of tip was written.
+func seededRowsWritten(ctx context.Context, store blockchain.Store, tip chainhash.Hash) (bool, error) {
+	b, err := readState(ctx, store, seederStateKey(seederRowsKeyPrefix, tip))
+	if err != nil {
+		return false, err
+	}
+
+	return bytes.Equal(b, tip[:]), nil
+}
+
+// setSeededRowsWritten records that the seeded rows of the seed of tip are all written, or, with
+// done false, that an import has started and they may not be.
+func setSeededRowsWritten(ctx context.Context, store blockchain.Store, tip chainhash.Hash, done bool) error {
+	data := []byte{}
+	if done {
+		data = tip[:]
+	}
+
+	return withDBTimeout(ctx, func(ctx context.Context) error {
+		if err := store.SetState(ctx, seederStateKey(seederRowsKeyPrefix, tip), data); err != nil {
+			return errors.NewStorageError("could not record the seeded rows' state", err)
+		}
+
+		return nil
+	})
 }
 
 // recordedSeedLanes rebuilds what a completed seed of the snapshot at tip used, for a run that does
 // not import: it needs the grant an earlier run recorded and counts the file again.
 func recordedSeedLanes(ctx context.Context, store blockchain.Store, utxoFile string, tip chainhash.Hash) (*seededLanes, error) {
-	recorded, ok, err := readSeederGrant(ctx, store)
+	recorded, ok, err := readSeederGrant(ctx, store, tip)
 	if err != nil {
 		return nil, err
 	}
 
-	if !ok || recorded.tip != tip {
+	if !ok {
 		return nil, errors.NewProcessingError("utxostore_laneMigration is shadow but the blockchain store records no lane grant for the seed of %s, so that seed was imported at off and its records have no lane position: wipe the UTXO store and re-run with -force", tip.String())
 	}
 
@@ -520,7 +634,18 @@ const recentSeededBlocks = 288
 // holds a record other than a coinbase. Rows are insert-only and a retry with the same rows writes
 // nothing, so it is safe to run again.
 func writeSeededRows(ctx context.Context, logger ulogger.Logger, store blockchain.Store, lanes *seededLanes, tip *utxoSetTip) error {
-	tipHeaders, tipMetas, err := store.GetBlockHeadersByHeight(ctx, tip.height, tip.height)
+	var (
+		tipHeaders []*model.BlockHeader
+		tipMetas   []*model.BlockHeaderMeta
+	)
+
+	err := withDBTimeout(ctx, func(ctx context.Context) error {
+		var readErr error
+
+		tipHeaders, tipMetas, readErr = store.GetBlockHeadersByHeight(ctx, tip.height, tip.height)
+
+		return readErr
+	})
 	if err != nil {
 		return errors.NewStorageError("could not read the main chain at the snapshot's tip height %d", tip.height, err)
 	}
@@ -537,8 +662,15 @@ func writeSeededRows(ctx context.Context, logger ulogger.Logger, store blockchai
 	for lo := uint32(0); lo < heights; lo += seededHeadersBatch {
 		hi := min(lo+seededHeadersBatch-1, heights-1)
 
-		_, metas, err := store.GetBlockHeadersByHeight(ctx, lo, hi)
-		if err != nil {
+		var metas []*model.BlockHeaderMeta
+
+		if err = withDBTimeout(ctx, func(ctx context.Context) error {
+			var readErr error
+
+			_, metas, readErr = store.GetBlockHeadersByHeight(ctx, lo, hi)
+
+			return readErr
+		}); err != nil {
 			return errors.NewStorageError("could not read the main chain at heights %d to %d", lo, hi, err)
 		}
 
@@ -547,15 +679,18 @@ func writeSeededRows(ctx context.Context, logger ulogger.Logger, store blockchai
 			byHeight[m.Height] = &blockchainMeta{id: m.ID, txCount: m.TxCount}
 		}
 
+		// Every block of the batch first, so no insert starts for a batch that cannot finish.
+		for h := lo; h <= hi; h++ {
+			if _, ok := byHeight[h]; !ok {
+				return errors.NewProcessingError("the blockchain store's main chain has no block at height %d", h)
+			}
+		}
+
 		g, gCtx := errgroup.WithContext(ctx)
 		g.SetLimit(seededRowsConcurrency)
 
 		for h := lo; h <= hi; h++ {
-			m, ok := byHeight[h]
-			if !ok {
-				return errors.NewProcessingError("the blockchain store's main chain has no block at height %d", h)
-			}
-
+			m := byHeight[h]
 			n := lanes.layout.counts[h]
 			if n == 0 {
 				if m.txCount > 1 && h+recentSeededBlocks > tip.height {
@@ -575,7 +710,9 @@ func writeSeededRows(ctx context.Context, logger ulogger.Logger, store blockchai
 			rows++
 
 			g.Go(func() error {
-				if err := store.InsertLaneMapRows(gCtx, id, []lane.MapRow{row}); err != nil {
+				if err := withDBTimeout(gCtx, func(ctx context.Context) error {
+					return store.InsertLaneMapRows(ctx, id, []lane.MapRow{row})
+				}); err != nil {
 					return errors.NewStorageError("could not write the seeded lane row of block %d", id, err)
 				}
 
@@ -586,6 +723,10 @@ func writeSeededRows(ctx context.Context, logger ulogger.Logger, store blockchai
 		if err = g.Wait(); err != nil {
 			return err
 		}
+	}
+
+	if err = setSeededRowsWritten(ctx, store, tip.hash, true); err != nil {
+		return err
 	}
 
 	logger.Infof("[seeder lanes] wrote %d seeded lane rows in lane %d", rows, lanes.grant.Lane)

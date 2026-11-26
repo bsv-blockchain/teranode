@@ -344,7 +344,7 @@ func (f *seedFixture) requireStamped(grant lane.Grant) {
 }
 
 func (f *seedFixture) recordedGrant() lane.Grant {
-	r, ok, err := readSeederGrant(context.Background(), f.blockchainStore())
+	r, ok, err := readSeederGrant(context.Background(), f.blockchainStore(), f.tip)
 	require.NoError(f.t, err)
 	require.True(f.t, ok)
 	require.Equal(f.t, f.tip, r.tip)
@@ -400,6 +400,32 @@ func seedStampsPositionsAndRows(t *testing.T, heights []uint32) {
 	grants, err = f.blockchainStore().LaneCapGrants(ctx, 0)
 	require.NoError(t, err)
 	require.Len(t, grants, 1, "the re-run took no new grant")
+
+	// A grant taken for another snapshot leaves this seed's grant recorded.
+	other, err := blockchain_store.NewStore(ulogger.TestLogger{}, f.settings.BlockChain.StoreURL, f.settings)
+	require.NoError(t, err)
+	_, err = takeSeederGrant(ctx, ulogger.TestLogger{}, other, f.settings, chainhash.HashH([]byte("another snapshot")), 3)
+	require.NoError(t, err)
+
+	// A tip that shares the state key's hash prefix is another seed, not this one.
+	colliding := f.tip
+	colliding[31] ^= 0xff
+	_, ok, err := readSeederGrant(ctx, other, colliding)
+	require.NoError(t, err)
+	require.False(t, ok)
+
+	// A plain re-run after an import that cleared the rows' state, as a forced run does before it
+	// imports, writes the rows again and leaves the checkpoint.
+	require.NoError(t, setSeededRowsWritten(ctx, other, f.tip, false))
+	require.NoError(t, other.Close(ctx))
+	require.Equal(t, grant, f.recordedGrant())
+
+	require.NoError(t, f.seed(false))
+
+	written, err := seededRowsWritten(ctx, f.blockchainStore(), f.tip)
+	require.NoError(t, err)
+	require.True(t, written)
+	f.requireStamped(grant)
 }
 
 // The stores lanes runs on take every record's position from the seed, the transactions that
@@ -526,7 +552,7 @@ func TestSeederAtOffStampsNothing(t *testing.T) {
 
 	bc := f.blockchainStore()
 
-	_, ok, err := readSeederGrant(ctx, bc)
+	_, ok, err := readSeederGrant(ctx, bc, f.tip)
 	require.NoError(t, err)
 	require.False(t, ok)
 
