@@ -1034,22 +1034,31 @@ func TestCheckBlockSubtrees_ForkCandidateCarriesBranchCoinTimes(t *testing.T) {
 // TestCheckSubtreeFromBlock_ForkCandidateCarriesBranchCoinTimes checks the same through the legacy
 // branch of CheckSubtreeFromBlock, whose options the peer branch shares.
 func TestCheckSubtreeFromBlock_ForkCandidateCarriesBranchCoinTimes(t *testing.T) {
-	f := newForkCandidateFixture(t, blockchain.FSMStateCATCHINGBLOCKS)
+	// The peer row's transactions spend only stored roots: on this fixture a chain inside one
+	// subtree fails the peer branch with bad-txns-unconfirmed-input-in-block.
+	for _, tc := range []struct {
+		baseURL string
+		depth   int
+	}{{"legacy", 2}, {"http://peer.invalid", 1}} {
+		t.Run(tc.baseURL, func(t *testing.T) {
+			f := newForkCandidateFixture(t, blockchain.FSMStateCATCHINGBLOCKS)
 
-	roots := []*bt.Tx{storedRoot(t, f.batchedFixture, 1, opTrue), storedRoot(t, f.batchedFixture, 2, opTrue)}
-	block := storeBlock(t, f.batchedFixture, chainedTxs(t, roots, 2), false)
-	block.Header.HashPrevBlock = f.parent
+			roots := []*bt.Tx{storedRoot(t, f.batchedFixture, 1, opTrue), storedRoot(t, f.batchedFixture, 2, opTrue)}
+			block := storeBlock(t, f.batchedFixture, chainedTxs(t, roots, tc.depth), false)
+			block.Header.HashPrevBlock = f.parent
 
-	response, err := f.server.CheckSubtreeFromBlock(context.Background(), &subtreevalidation_api.CheckSubtreeFromBlockRequest{
-		Hash:              block.Subtrees[0][:],
-		BaseUrl:           "legacy",
-		BlockHeight:       batchedTestHeight,
-		BlockHash:         block.Hash()[:],
-		PreviousBlockHash: f.parent[:],
-	})
-	require.NoError(t, err)
-	require.True(t, response.Blessed)
-	f.requireBranchCoinTimes(t)
+			response, err := f.server.CheckSubtreeFromBlock(context.Background(), &subtreevalidation_api.CheckSubtreeFromBlockRequest{
+				Hash:              block.Subtrees[0][:],
+				BaseUrl:           tc.baseURL,
+				BlockHeight:       batchedTestHeight,
+				BlockHash:         block.Hash()[:],
+				PreviousBlockHash: f.parent[:],
+			})
+			require.NoError(t, err)
+			require.True(t, response.Blessed)
+			f.requireBranchCoinTimes(t)
+		})
+	}
 }
 
 // TestProcessTransactionsBatched_FallbackCarriesBranchCoinTimes checks that a transaction the

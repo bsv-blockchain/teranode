@@ -3942,6 +3942,10 @@ func TestEnsureMTPLoaded_ExtensionRepairsADeepReorg(t *testing.T) {
 	f := newReorgFixture(t)
 	f.makeBCurrent()
 
+	// GetBlockHeaders answers from chain A, as a cache the reorg left stale would; the loader
+	// must read by parent links and never see it.
+	f.v.blockchainClient = &staleHeadersClient{ClientI: f.v.blockchainClient, chainA: f.chainA}
+
 	require.NoError(t, f.v.EnsureMTPLoaded(context.Background(), 61))
 
 	for h := uint32(12); h <= 61; h++ {
@@ -3949,4 +3953,96 @@ func TestEnsureMTPLoaded_ExtensionRepairsADeepReorg(t *testing.T) {
 	}
 
 	require.Equal(t, f.blockID(t, f.chainB[39]), f.v.mtpIDs[61])
+}
+
+// staleHeadersClient answers GetBlockHeaders with chain A's run at the same heights.
+type staleHeadersClient struct {
+	blockchain.ClientI
+	chainA []*model.Block
+}
+
+func (c *staleHeadersClient) GetBlockHeaders(ctx context.Context, hash *chainhash.Hash, n uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
+	_, meta, err := c.ClientI.GetBlockHeader(ctx, hash)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	h := min(int(meta.Height), len(c.chainA))
+
+	return c.ClientI.GetBlockHeaders(ctx, c.chainA[h-1].Hash(), n)
+}
+
+// widenGateClient holds the first parent-link read made while a load window covers height,
+// which only a widened window does, until release is closed.
+type widenGateClient struct {
+	blockchain.ClientI
+	v       *Validator
+	height  uint32
+	once    sync.Once
+	gated   chan struct{}
+	release chan struct{}
+}
+
+func (c *widenGateClient) GetBlockHeadersByParentLinks(ctx context.Context, hash *chainhash.Hash, n uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
+	c.v.mtpMu.RLock()
+	covering := slices.ContainsFunc(c.v.mtpLoadWindows, func(w mtpLoadWindow) bool { return c.height >= w.From && c.height < w.To })
+	c.v.mtpMu.RUnlock()
+
+	if covering {
+		c.once.Do(func() {
+			close(c.gated)
+			<-c.release
+		})
+	}
+
+	return c.ClientI.GetBlockHeadersByParentLinks(ctx, hash, n)
+}
+
+// TestEnsureMTPLoaded_WaitsInsideTheWidenedWindow checks that while a load reaches back past
+// its first window after a deep reorg, a caller for a height only the widened window covers
+// waits for the repair instead of returning on the old chain's entry.
+func TestEnsureMTPLoaded_WaitsInsideTheWidenedWindow(t *testing.T) {
+	f := newReorgFixture(t)
+	f.makeBCurrent()
+
+	// The extension to 61 first patches [49, 61), then reaches back to 37 and 13.
+	gate := &widenGateClient{ClientI: f.v.blockchainClient, v: f.v, height: 40, gated: make(chan struct{}), release: make(chan struct{})}
+	f.v.blockchainClient = gate
+
+	loaded := make(chan error, 1)
+	go func() { loaded <- f.v.EnsureMTPLoaded(context.Background(), 61) }()
+
+	select {
+	case <-gate.gated:
+	case err := <-loaded:
+		t.Fatalf("the load finished without widening its window over height 40: %v", err)
+	case <-time.After(10 * time.Second):
+		t.Fatal("the load never widened its window over height 40")
+	}
+
+	type reading struct {
+		err error
+		mtp uint32
+	}
+
+	seen := make(chan reading, 1)
+	go func() {
+		err := f.v.EnsureMTPLoaded(context.Background(), 40)
+		f.v.mtpMu.RLock()
+		seen <- reading{err: err, mtp: f.v.mtpStore[40]}
+		f.v.mtpMu.RUnlock()
+	}()
+
+	select {
+	case got := <-seen:
+		t.Fatalf("EnsureMTPLoaded(40) returned during the repair, reading %d (err %v)", got.mtp, got.err)
+	case <-time.After(300 * time.Millisecond):
+	}
+
+	close(gate.release)
+	require.NoError(t, <-loaded)
+
+	got := <-seen
+	require.NoError(t, got.err)
+	require.Equal(t, medianBelow(40, f.timeOnB), got.mtp)
 }
