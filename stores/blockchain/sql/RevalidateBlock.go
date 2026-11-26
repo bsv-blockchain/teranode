@@ -98,8 +98,8 @@ func (s *SQL) RevalidateBlock(ctx context.Context, blockHash *chainhash.Hash) er
 	defer rebuildCancel()
 
 	// Invalidate caches FIRST so that the rebuild sees the freshly
-	// revalidated state rather than the pre-revalidation cached value.
-	s.blockTimestampCache.Clear()
+	// revalidated state rather than the pre-revalidation cached value. The median-time
+	// cache stays: a block's timestamp and parent do not change when it is revalidated.
 	s.ResetResponseCache()
 	if s.useInMemoryChainCheck {
 		s.resetChainWalkCache()

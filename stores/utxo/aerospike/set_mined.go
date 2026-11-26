@@ -311,7 +311,7 @@ func (s *Store) prepareBatchRecordsForSetMined(batchRecords []aerospike.BatchRec
 			minedBlockInfo.BlockHeight,
 			minedBlockInfo.SubtreeIdx,
 			currentBlockHeight,
-			s.settings.GetUtxoStoreBlockHeightRetention(),
+			s.settings.GetUtxoStoreSpentDeleteRetention(),
 			minedBlockInfo.OnLongestChain,
 			minedBlockInfo.UnsetMined,
 		)

@@ -167,10 +167,10 @@ start_time=$(date +%s)
 echo -e "\nStarting test execution at $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
 echo "----------------------------------------------------------"
 
-# Compile all test packages
+# Compile each package this run needs, once. Linking a -race test binary takes
+# about 10 s and is never cached, so a shard skips the packages it does not run.
 echo "Compiling test packages..."
-for test_file in $test_files; do
-    test_dir=$(dirname "$test_file")
+for test_dir in $(for spec in "${RUN_SPECS[@]}"; do echo "${spec%%$'\t'*}"; done | sort -u); do
     cd "$test_dir"
     echo "Compiling tests in ${test_dir}..."
     if ! go test -c -tags aerospike,native,memory,postgres,sqlite -race; then

@@ -150,7 +150,7 @@ func TestCreateMinedUnspendableSetsDAH(t *testing.T) {
 
 	t.Run("mined unspendable tx is given a delete_at_height", func(t *testing.T) {
 		store, tx := setup(ctx, t)
-		retention := store.settings.GetUtxoStoreBlockHeightRetention()
+		retention := store.settings.GetUtxoStoreSpentDeleteRetention()
 		require.Greater(t, retention, uint32(0), "test requires a non-zero block height retention")
 
 		tx = makeOpReturnOnly(tx)
@@ -1284,7 +1284,7 @@ func TestSetTTL(t *testing.T) {
 
 	// The tx is mined at height 100 while the cached tip is still 0, so the stamp is floored at
 	// the mined height + retention rather than the lagging tip + 1 + retention.
-	retention := store.settings.GetUtxoStoreBlockHeightRetention()
+	retention := store.settings.GetUtxoStoreSpentDeleteRetention()
 	expectedDAH := int64(100 + retention)
 	require.Greater(t, expectedDAH, int64(store.GetBlockHeight()+1+retention), "setup: the mined height must be above the cached tip")
 	require.Equal(t, expectedDAH, *tombstoneMillis, "DAH should be mined height + retention when the cached tip lags")
@@ -1639,7 +1639,7 @@ func TestProcessExpiredPreservations(t *testing.T) {
 		require.NoError(t, err)
 		require.False(t, preserveUntil.Valid, "preserve_until must be cleared")
 		require.True(t, dah.Valid, "eligible tx must be stamped for deletion")
-		expectedDAH := int64(currentHeight + store.settings.GetUtxoStoreBlockHeightRetention())
+		expectedDAH := int64(currentHeight + store.settings.GetUtxoStoreSpentDeleteRetention())
 		require.Equal(t, expectedDAH, dah.Int64)
 	})
 
@@ -1668,7 +1668,7 @@ func TestProcessExpiredPreservations(t *testing.T) {
 		require.NoError(t, err)
 		require.False(t, preserveUntil.Valid, "preserve_until must be cleared")
 		require.True(t, dah.Valid, "conflicting tx must be stamped for deletion without being mined")
-		expectedDAH := int64(currentHeight + store.settings.GetUtxoStoreBlockHeightRetention())
+		expectedDAH := int64(currentHeight + store.settings.GetUtxoStoreSpentDeleteRetention())
 		require.Equal(t, expectedDAH, dah.Int64)
 	})
 

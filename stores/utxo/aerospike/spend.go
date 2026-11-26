@@ -195,7 +195,7 @@ func (s *Store) IncrementSpentRecordsMulti(ctx context.Context, txids []*chainha
 		batchRecords = append(batchRecords, s.teranodeBatchRecord(batchUDFPolicy, LuaPackage, key, subOpIncrementSpentExtraRec, "incrementSpentExtraRecs",
 			increment,
 			int(s.effectiveBlockHeight(blockHeight)),
-			s.settings.GetUtxoStoreBlockHeightRetention(),
+			s.settings.GetUtxoStoreSpentDeleteRetention(),
 		))
 	}
 
@@ -1790,7 +1790,7 @@ func (s *Store) createBatchRecords(batchesByKey map[keyIgnoreLocked][]aerospike.
 			batchKey.ignoreConflicting,
 			batchKey.ignoreLocked,
 			batchKey.blockHeight,
-			s.settings.GetUtxoStoreBlockHeightRetention(),
+			s.settings.GetUtxoStoreSpentDeleteRetention(),
 		))
 		batchRecordKeys = append(batchRecordKeys, batchKey)
 	}
@@ -2581,7 +2581,7 @@ func (s *Store) sendIncrementBatch(batch []*batchIncrement) {
 		batchRecords[i] = s.teranodeBatchRecord(batchUDFPolicy, LuaPackage, aeroKey, subOpIncrementSpentExtraRec, "incrementSpentExtraRecs",
 			item.increment,
 			int(s.effectiveBlockHeight(item.blockHeight)),
-			s.settings.GetUtxoStoreBlockHeightRetention(),
+			s.settings.GetUtxoStoreSpentDeleteRetention(),
 		)
 	}
 

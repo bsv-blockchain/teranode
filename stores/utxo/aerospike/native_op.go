@@ -798,7 +798,7 @@ func (s *Store) nativeProbeSpend(ctx context.Context, policy *aerospike.WritePol
 	items := []aerospike.MapValue{s.probeSpendItem(utxoHash, spendingData, vout)}
 
 	payload, encErr := encodeNativeOpPayload(subOpSpendMulti, []any{
-		items, false, false, blockHeight, s.settings.GetUtxoStoreBlockHeightRetention(),
+		items, false, false, blockHeight, s.settings.GetUtxoStoreSpentDeleteRetention(),
 	})
 	if encErr != nil {
 		s.logger.Warnf("[teranode-native-op] %s payload encode failed: %v; falling back to UDF path", label, encErr)

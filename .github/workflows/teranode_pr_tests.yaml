@@ -40,6 +40,16 @@ jobs:
       - name: Cap tracing.WithLogMessage sites
         run: make lint-tracing-info
 
+      # The test matrix's package and shard lists are kept by hand in this file
+      # and teranode_main_tests.yaml. A package left in the unit shard's
+      # TEST_EXCLUDE but in no other shard's TEST_PKGS would run nowhere.
+      - name: Check the test shard lists agree
+        run: .github/scripts/check-test-shards.sh
+
+      # Proves the shard check and merge-coverage.sh fail on the drift they target.
+      - name: Self-test the test shard and coverage merge scripts
+        run: .github/scripts/test-ci-scripts.sh
+
       - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5
         with:
           go-version: ${{ env.GO_VERSION }}
@@ -97,10 +107,16 @@ jobs:
 
   test-shard:
     name: test ${{ matrix.shard }}
-    # make test is split so its slowest package, stores/utxo/aerospike (~15 min
-    # under -race and coverage), runs beside the rest instead of setting the
-    # whole job's wall time, and so the two biggest test binaries don't share a
-    # runner's memory. The `test` job below is the required check.
+    # make test is split across runners. The slowest packages (200-340 s each under
+    # -race and coverage) take about as long alone as beside the rest, so they are
+    # bound by the clock, not by cores, and all run together in the slow shard. That
+    # shard starts them at once instead of behind the rest of the build, and the unit
+    # shard no longer waits for them. stores/utxo/aerospike keeps its own shard for
+    # its testcontainer suite and memory. Every path in a shard's TEST_PKGS must also be
+    # in the unit shard's TEST_EXCLUDE (and the reverse), or its tests run twice or
+    # not at all; COVERAGE_SHARDS in the `test` job lists every shard.
+    # .github/scripts/check-test-shards.sh checks both in the golangci-lint job.
+    # The `test` job below is the required check.
     runs-on: teranode-runner-16-core-arm
     timeout-minutes: 30
     strategy:
@@ -108,11 +124,14 @@ jobs:
       matrix:
         include:
           - shard: unit
-            run: make test TEST_EXCLUDE=stores/utxo/aerospike TEST_COVERPROFILE=coverage-unit.out
+            run: make test TEST_EXCLUDE="stores/utxo/aerospike services/blockvalidation model services/blockassembly/subtreeprocessor stores/utxo/utxoset services/blockassembly services/legacy/netsync services/blockchain stores/blockchain/sql" TEST_COVERPROFILE=coverage-unit.out
             profile: coverage-unit.out
           - shard: aerospike
             run: make test-pkgs TEST_PKGS=stores/utxo/aerospike TEST_COVERPROFILE=coverage-aerospike.out
             profile: coverage-aerospike.out
+          - shard: slow
+            run: make test-pkgs TEST_PKGS="services/blockvalidation model services/blockassembly/subtreeprocessor stores/utxo/utxoset services/blockassembly services/legacy/netsync services/blockchain stores/blockchain/sql" TEST_COVERPROFILE=coverage-slow.out
+            profile: coverage-slow.out
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
 
@@ -175,14 +194,10 @@ jobs:
         # Every profile comes from -race (mode: atomic) with -coverpkg=./..., so a
         # block can appear in several; the coverage gate and Sonar count a block
         # covered when any copy of it is.
-        run: |
-          set -euo pipefail
-          for f in coverage-unit.out coverage-aerospike.out; do
-            [ -f "coverage-profiles/$f" ] || { echo "::error::Missing coverage profile $f"; exit 1; }
-          done
-          mode="$(head -n 1 coverage-profiles/coverage-unit.out)"
-          [ "$(head -n 1 coverage-profiles/coverage-aerospike.out)" = "$mode" ] || { echo "::error::Coverage profiles have different modes"; exit 1; }
-          { cat coverage-profiles/coverage-unit.out; tail -n +2 coverage-profiles/coverage-aerospike.out; } > coverage.out
+        # COVERAGE_SHARDS must name every test-shard matrix entry.
+        env:
+          COVERAGE_SHARDS: unit aerospike slow
+        run: .github/scripts/merge-coverage.sh coverage-profiles coverage.out $COVERAGE_SHARDS
 
       - name: Upload coverage report
         if: always()

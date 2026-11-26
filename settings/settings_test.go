@@ -1,6 +1,7 @@
 package settings
 
 import (
+	"math"
 	"testing"
 	"time"
 
@@ -117,6 +118,42 @@ func TestBlockHeightRetentionAdjustments(t *testing.T) {
 		// Test behavior with zero global value
 		require.Equal(t, uint32(100), tSettings.GetUtxoStoreBlockHeightRetention())
 		require.Equal(t, uint32(0), tSettings.GetSubtreeValidationBlockHeightRetention())
+	})
+
+	// A fully spent record is kept for the UTXO retention plus the unmined retention; no
+	// retention means pruning is off, and the unmined retention must not turn stamping on.
+	t.Run("SpentDeleteRetention", func(t *testing.T) {
+		tSettings := NewSettings()
+		tSettings.GlobalBlockHeightRetention = 144
+		tSettings.UtxoStore.BlockHeightRetentionAdjustment = 0
+		tSettings.UtxoStore.UnminedTxRetention = 72
+		require.Equal(t, uint32(216), tSettings.GetUtxoStoreSpentDeleteRetention())
+
+		// The base is the UTXO store's adjusted retention, not the global one.
+		tSettings.UtxoStore.BlockHeightRetentionAdjustment = -44
+		require.Equal(t, uint32(172), tSettings.GetUtxoStoreSpentDeleteRetention())
+		tSettings.UtxoStore.BlockHeightRetentionAdjustment = 0
+
+		// The smallest retention still pads, and the getter changes no setting.
+		tSettings.GlobalBlockHeightRetention = 1
+		require.Equal(t, uint32(73), tSettings.GetUtxoStoreSpentDeleteRetention())
+		require.Equal(t, uint32(1), tSettings.GlobalBlockHeightRetention)
+		require.Equal(t, uint32(72), tSettings.UtxoStore.UnminedTxRetention)
+
+		tSettings.GlobalBlockHeightRetention = 0
+		require.Equal(t, uint32(0), tSettings.GetUtxoStoreSpentDeleteRetention())
+
+		// A huge unmined retention is capped so a height plus the result cannot wrap; a
+		// retention already past the cap is kept.
+		tSettings.GlobalBlockHeightRetention = 288
+		tSettings.UtxoStore.UnminedTxRetention = math.MaxUint32
+		require.Equal(t, uint32(math.MaxUint32/2), tSettings.GetUtxoStoreSpentDeleteRetention())
+
+		tSettings.GlobalBlockHeightRetention = math.MaxUint32/2 + 10
+		require.Equal(t, uint32(math.MaxUint32/2+10), tSettings.GetUtxoStoreSpentDeleteRetention())
+
+		tSettings.GlobalBlockHeightRetention = math.MaxUint32
+		require.Equal(t, uint32(math.MaxUint32), tSettings.GetUtxoStoreSpentDeleteRetention())
 	})
 }
 

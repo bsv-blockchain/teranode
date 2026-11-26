@@ -2,112 +2,85 @@ package sql
 
 import "sync"
 
-// blockTimestampCacheCapacity is the maximum number of block timestamps to keep
-// in the sliding-window cache. Only the most recent entries are retained; older
-// entries are pruned on each Add. 50 is well above the 11 needed for a single
-// MTP calculation and provides headroom for minor out-of-order inserts.
-const blockTimestampCacheCapacity = 50
+// blockTimestampCacheCapacity is how many blocks the median-time cache holds. When it is full,
+// the block added first is dropped first. Side branches take entries too, so it holds far more
+// than the 11 one median reads; each entry is about 16 bytes.
+const blockTimestampCacheCapacity = 1000
 
-// blockTimestampCache is a concurrency-safe, bounded cache of block timestamps
-// keyed by height. It eliminates per-block SQL queries in
-// calculateMedianTimePastForHeight during sequential block processing (seeder,
-// catchup) where the previous 11 blocks are always already in the cache.
-//
-// Fork safety: when a block is stored at a height that already has a cached
-// entry, all entries from that height onward are evicted so that stale
-// timestamps from the old chain are never served. InvalidateBlock and
-// RevalidateBlock clear the entire cache as a conservative safety net.
+// blockTimestampCache holds recent blocks' timestamps keyed by block ID, each with its parent's
+// ID, so calculateMedianTimePastForHeight follows one block's own parent links in memory, as SV
+// Node's GetMedianTimePast follows pprev. It saves a SQL parent walk per stored block during
+// sync. An entry never goes stale, because a block's timestamp and parent never change, so a
+// fork, an invalidation or a revalidation leaves it in place; a side block has its own key and
+// cannot overwrite the main chain's.
 type blockTimestampCache struct {
-	mu         sync.RWMutex
-	timestamps map[uint32]uint32 // height → block_time (unix)
+	mu     sync.RWMutex
+	blocks map[uint64]cachedBlockTime
+	order  [blockTimestampCacheCapacity]uint64 // a ring of IDs in the order they were added
+	next   int                                 // the ring slot the next Add writes, holding the oldest ID once full
+}
+
+type cachedBlockTime struct {
+	blockTime uint32
+	parentID  uint64
 }
 
 func newBlockTimestampCache() *blockTimestampCache {
-	return &blockTimestampCache{
-		timestamps: make(map[uint32]uint32, blockTimestampCacheCapacity),
-	}
+	return &blockTimestampCache{blocks: make(map[uint64]cachedBlockTime, blockTimestampCacheCapacity)}
 }
 
-// Add stores a block timestamp for the given height.
-//
-// If the height already exists in the cache (fork), all entries at that height
-// and above are evicted before the new value is stored. This guarantees that
-// subsequent MTP lookups never mix timestamps from different chain branches.
-func (c *blockTimestampCache) Add(height, blockTime uint32) {
+// Add records block id's timestamp and parent. An id already present is left as it is.
+func (c *blockTimestampCache) Add(id, parentID uint64, blockTime uint32) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	// Detect fork: a different block being stored at an already-cached height.
-	if _, exists := c.timestamps[height]; exists {
-		c.invalidateFromLocked(height)
+	if _, exists := c.blocks[id]; exists {
+		return
 	}
 
-	c.timestamps[height] = blockTime
-
-	// Keep the cache bounded by pruning entries that are too far behind.
-	if len(c.timestamps) > blockTimestampCacheCapacity {
-		c.pruneLocked(height)
+	if len(c.blocks) == blockTimestampCacheCapacity {
+		delete(c.blocks, c.order[c.next])
 	}
+
+	c.blocks[id] = cachedBlockTime{blockTime: blockTime, parentID: parentID}
+	c.order[c.next] = id
+	c.next = (c.next + 1) % blockTimestampCacheCapacity
 }
 
-// GetRange returns the block timestamps for every height in [startHeight, endHeight]
-// (inclusive) in ascending order. If any height in the range is missing from the
-// cache, nil is returned to signal a cache miss.
-func (c *blockTimestampCache) GetRange(startHeight, endHeight uint32) []uint32 {
+// Ancestors returns the timestamps of block id and its count-1 nearest ancestors, oldest first,
+// or nil when any of them is not in the cache.
+func (c *blockTimestampCache) Ancestors(id uint64, count int) []uint32 {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
-	count := endHeight - startHeight + 1
-	result := make([]uint32, 0, count)
+	times := make([]uint32, count)
 
-	for h := startHeight; h <= endHeight; h++ {
-		ts, ok := c.timestamps[h]
+	for i := count - 1; i >= 0; i-- {
+		entry, ok := c.blocks[id]
 		if !ok {
 			return nil
 		}
-		result = append(result, ts)
+
+		times[i] = entry.blockTime
+		id = entry.parentID
 	}
 
-	return result
+	return times
 }
 
-// InvalidateFrom removes all cached entries at heights >= fromHeight.
-func (c *blockTimestampCache) InvalidateFrom(fromHeight uint32) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.invalidateFromLocked(fromHeight)
-}
-
-// Clear removes all cached entries.
+// Clear removes every entry.
 func (c *blockTimestampCache) Clear() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.timestamps = make(map[uint32]uint32, blockTimestampCacheCapacity)
+
+	c.blocks = make(map[uint64]cachedBlockTime, blockTimestampCacheCapacity)
+	c.next = 0
 }
 
-// Len returns the number of entries in the cache (used for testing).
+// Len returns the number of entries.
 func (c *blockTimestampCache) Len() int {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	return len(c.timestamps)
-}
 
-func (c *blockTimestampCache) invalidateFromLocked(fromHeight uint32) {
-	for h := range c.timestamps {
-		if h >= fromHeight {
-			delete(c.timestamps, h)
-		}
-	}
-}
-
-func (c *blockTimestampCache) pruneLocked(currentHeight uint32) {
-	minKeep := uint32(0)
-	if currentHeight > blockTimestampCacheCapacity {
-		minKeep = currentHeight - blockTimestampCacheCapacity
-	}
-	for h := range c.timestamps {
-		if h < minKeep {
-			delete(c.timestamps, h)
-		}
-	}
+	return len(c.blocks)
 }

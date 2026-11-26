@@ -184,13 +184,17 @@ install-tools:
 # about 16m on main's PRs, and the create-first tests need more than 20m, so
 # test-pkgs, which CI uses for that package alone, allows 30m. `make test` keeps 20m.
 #
-# TEST_EXCLUDE drops packages (paths relative to the module) from `make test`; CI
-# sets it to run the slowest package in its own job via `make test-pkgs`.
+# TEST_EXCLUDE drops packages (paths relative to the module, space-separated) from
+# `make test`; CI sets it to run the slowest packages in jobs of their own via
+# `make test-pkgs`.
 # TEST_COVERPROFILE names the coverage file either target writes.
 TEST_EXCLUDE ?=
 TEST_COVERPROFILE ?= coverage.out
 TEST_TIMEOUT ?= 20m
-TEST_FLAGS = -race -tags "testtxmetacache" -count=1 -timeout=$(TEST_TIMEOUT) -coverprofile=$(TEST_COVERPROFILE) -coverpkg=./...
+# TEST_BUILD_FLAGS are the flags that shape the test build, so the build cache
+# entries `test-build-pkgs` writes are the ones `make test` reads.
+TEST_BUILD_FLAGS = -race -tags "testtxmetacache" -coverpkg=./...
+TEST_FLAGS = $(TEST_BUILD_FLAGS) -count=1 -timeout=$(TEST_TIMEOUT) -coverprofile=$(TEST_COVERPROFILE)
 UNIT_TEST_PKGS = $(filter-out $(addprefix github.com/bsv-blockchain/teranode/,$(TEST_EXCLUDE)),$(shell go list ./... | grep -v github.com/bsv-blockchain/teranode/test/ | sort))
 
 .PHONY: test
@@ -206,6 +210,14 @@ test-pkgs:
 	@test -n "$(TEST_PKGS)" || { echo "TEST_PKGS is empty"; exit 1; }
 	@command -v gotestsum >/dev/null 2>&1 || { echo "gotestsum not found. Installing..."; $(MAKE) install-tools; }
 	SETTINGS_CONTEXT=test $$(go env GOPATH)/bin/gotestsum --format pkgname -- $(TEST_FLAGS) $(addprefix ./,$(TEST_PKGS))
+
+# compile, without running, the test binaries of the packages in TEST_PKGS into the
+# Go build cache. Main's unit-test job runs it for the packages other test jobs run,
+# since it is the only job that saves the build cache.
+.PHONY: test-build-pkgs
+test-build-pkgs:
+	@test -n "$(TEST_PKGS)" || { echo "TEST_PKGS is empty"; exit 1; }
+	d="$$(mktemp -d)" && go test -c -o "$$d/" $(TEST_BUILD_FLAGS) $(addprefix ./,$(TEST_PKGS)) && rm -rf "$$d"
 
 # run the tests too slow for `make test` under -race and coverage (TERANODE_HEAVY_TESTS), without -race.
 # The PR test job runs it after `make test`.

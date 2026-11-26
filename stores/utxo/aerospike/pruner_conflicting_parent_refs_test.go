@@ -35,7 +35,7 @@ func TestPrunerClearsParentRefsOfReapedConflictingLoser(t *testing.T) {
 
 			require.NoError(t, store.SetBlockHeight(1000))
 
-			retention := s.GetUtxoStoreBlockHeightRetention()
+			retention := s.GetUtxoStoreSpentDeleteRetention()
 			require.NotZero(t, retention)
 
 			astore.UsePrunerServiceForTest(t)

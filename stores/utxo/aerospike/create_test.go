@@ -205,7 +205,7 @@ func TestStore_GetBinsToStore_UnspendableTransactionExpires(t *testing.T) {
 
 	tSettings := test.CreateBaseTestSettings(t)
 
-	retention := tSettings.GetUtxoStoreBlockHeightRetention()
+	retention := tSettings.GetUtxoStoreSpentDeleteRetention()
 	require.Greater(t, retention, uint32(0), "test requires a non-zero block height retention")
 
 	s := teranodeaerospike.Store{}
@@ -302,7 +302,7 @@ func TestCreateMinedUnspendableGetsDAH(t *testing.T) {
 	logger := ulogger.NewErrorTestLogger(t)
 	tSettings := test.CreateBaseTestSettings(t)
 
-	retention := tSettings.GetUtxoStoreBlockHeightRetention()
+	retention := tSettings.GetUtxoStoreSpentDeleteRetention()
 	require.Greater(t, retention, uint32(0), "test requires a non-zero block height retention")
 
 	client, store, ctx, deferFn := initAerospike(t, tSettings, logger)

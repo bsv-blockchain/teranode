@@ -126,7 +126,7 @@ func TestKnownDefect_TxSeenBeforeIsNotRecheckedForFinalityInALowerBlock(t *testi
 	// (the one CheckBlockSubtrees uses), and returns its verdict: nil means accepted.
 	checkBlock := func(tx *bt.Tx, blockHeight uint32) error {
 		return server.processTransactionsInLevels(ctx, []*bt.Tx{tx.Clone()}, chainhash.Hash{}, chainhash.Hash{},
-			blockHeight, now, 0, map[uint32]bool{}, false)
+			blockHeight, now, 0, candidateForkMTPs{}, map[uint32]bool{}, false)
 	}
 
 	t.Run("control: a tx the node has not seen is rejected in block 101", func(t *testing.T) {
@@ -546,7 +546,7 @@ func (node *realSubtreeValidationNode) validateViaProcessTransactionsInLevels(t 
 	)
 
 	return node.server.processTransactionsInLevels(t.Context(), []*bt.Tx{tx.Clone(), node.other.Clone()}, chainhash.Hash{}, chainhash.Hash{},
-		blockHeight, node.candidateBlockHeader().Timestamp, noParentMedianTime, map[uint32]bool{}, addTxToBlockAssembly)
+		blockHeight, node.candidateBlockHeader().Timestamp, noParentMedianTime, candidateForkMTPs{}, map[uint32]bool{}, addTxToBlockAssembly)
 }
 
 // validateViaProcessTransactionsBatched is processTransactionsBatched, the catch-up path, with the
@@ -558,7 +558,7 @@ func (node *realSubtreeValidationNode) validateViaProcessTransactionsBatched(t *
 	require.True(t, ok)
 
 	return node.server.processTransactionsBatched(t.Context(), checker, []*bt.Tx{tx.Clone(), node.other.Clone()}, chainhash.Hash{},
-		blockHeight, node.candidateBlockHeader().Timestamp, noParentMedianTime, map[uint32]bool{})
+		blockHeight, node.candidateBlockHeader().Timestamp, noParentMedianTime, candidateForkMTPs{}, map[uint32]bool{})
 }
 
 // validateViaCheckBlockSubtrees is the entry block validation calls for a block whose subtree this

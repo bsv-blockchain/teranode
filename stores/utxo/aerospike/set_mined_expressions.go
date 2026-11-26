@@ -772,7 +772,7 @@ func (s *Store) SetMinedMultiWithExpressions(ctx context.Context, hashes []*chai
 	// The cached tip lags behind the block being validated during catchup/sync; using
 	// it stamped the DAH too low and let the pruner delete the record before the
 	// retention window elapsed.
-	blockHeightRetention := s.settings.GetUtxoStoreBlockHeightRetention()
+	blockHeightRetention := s.settings.GetUtxoStoreSpentDeleteRetention()
 	if blockHeightRetention > 0 {
 		ops = append(ops, s.buildDeleteAtHeightOps(minedBlockInfo.BlockHeight, blockHeightRetention, minedBlockInfo.OnLongestChain)...)
 	}

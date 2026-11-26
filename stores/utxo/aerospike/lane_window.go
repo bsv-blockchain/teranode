@@ -269,6 +269,7 @@ func laneWindowRecord(bins as.BinMap) (utxo.LaneWindowRecord, uint64, bool) {
 	}
 
 	rec.Conflicting, _ = bins[fields.Conflicting.String()].(bool)
+	rec.Coinbase, _ = bins[fields.IsCoinbase.String()].(bool)
 	external, _ := bins[fields.External.String()].(bool)
 
 	return rec, bytes, external

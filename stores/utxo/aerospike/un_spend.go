@@ -245,7 +245,7 @@ func (s *Store) unspendLua(ctx context.Context, spend *utxo.Spend, keepBelow uin
 		spend.UTXOHash[:],          // utxo hash
 		spend.SpendingData.Bytes(), // expected stored spending data (mandatory ownership check; #766)
 		int(s.GetBlockHeight()),
-		s.settings.GetUtxoStoreBlockHeightRetention(),
+		s.settings.GetUtxoStoreSpentDeleteRetention(),
 	}
 
 	if keepBelow > 0 {
