@@ -343,8 +343,7 @@ func (l *laneJournalJudge) judgeLeafRows(ctx context.Context, leaf uint32) (lane
 }
 
 // judgeKept judges the rows of table that today's carry names, before any other row, and returns
-// their keys so the scan skips them. The waiting spenders' spends lead the carry, so they are judged
-// first of all.
+// their keys so the scan skips them.
 func (l *laneJournalJudge) judgeKept(ctx context.Context, table, laneColumn string, c *laneLeafCoverage) (map[carriedKey]struct{}, error) {
 	judged := make(map[carriedKey]struct{})
 
