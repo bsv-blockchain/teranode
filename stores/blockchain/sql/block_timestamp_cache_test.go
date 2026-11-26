@@ -2,6 +2,7 @@ package sql
 
 import (
 	"context"
+	"fmt"
 	"net/url"
 	"sync"
 	"testing"
@@ -11,6 +12,7 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2/bscript"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/model"
+	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/test/utils/postgres"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/test"
@@ -163,12 +165,16 @@ func newMTPTestStore(t *testing.T) *SQL {
 }
 
 // newMTPTestStoreAt opens the store at rawURL with BIP113 on from height 0 and the in-memory
-// chain check off, its default.
-func newMTPTestStoreAt(t *testing.T, rawURL string) *SQL {
+// chain check off, its default, then applies configure.
+func newMTPTestStoreAt(t *testing.T, rawURL string, configure ...func(*settings.Settings)) *SQL {
 	t.Helper()
 	tSettings := test.CreateBaseTestSettings(t)
 	tSettings.ChainCfgParams.CSVHeight = 0
 	tSettings.BlockChain.UseInMemoryChainCheck = false
+
+	for _, fn := range configure {
+		fn(tSettings)
+	}
 
 	storeURL, err := url.Parse(rawURL)
 	require.NoError(t, err)
@@ -274,25 +280,46 @@ func TestMTPCache_InvalidateAndRevalidateKeepTheCache(t *testing.T) {
 	require.Equal(t, before, s.blockTimestampCache.Len(), "RevalidateBlock keeps the cache")
 }
 
+// A side branch, and the reorg onto it, leave every block's entry in place, with the in-memory
+// chain check off or on: its fork and reorg paths reset other caches, never this one.
 func TestMTPCache_ForkHandling_NewBlockAtExistingHeight(t *testing.T) {
-	s := newMTPTestStore(t)
-	ctx := context.Background()
+	for _, chainCheck := range []bool{false, true} {
+		t.Run(fmt.Sprintf("in-memory chain check %t", chainCheck), func(t *testing.T) {
+			s := newMTPTestStoreAt(t, "sqlitememory:///", func(tSettings *settings.Settings) {
+				tSettings.BlockChain.UseInMemoryChainCheck = chainCheck
+			})
+			ctx := context.Background()
 
-	// Store main chain: genesis → 1 → 2 → 3 → 4 → 5
-	hashes := storeMTPChain(t, s, 5)
+			// Store main chain: genesis → 1 → 2 → 3 → 4 → 5
+			hashes := storeMTPChain(t, s, 5)
 
-	mainTip := getBlockIDAtHeight(t, s, 5)
-	mainChain := s.blockTimestampCache.Ancestors(mainTip, 5)
-	require.Equal(t, []uint32{1600000001, 1600000002, 1600000003, 1600000004, 1600000005}, mainChain)
+			mainTip := getBlockIDAtHeight(t, s, 5)
+			mainChain := s.blockTimestampCache.Ancestors(mainTip, 5)
+			require.Equal(t, []uint32{1600000001, 1600000002, 1600000003, 1600000004, 1600000005}, mainChain)
 
-	// Store a fork block at height 2 (parent = block 1)
-	forkBlock := makeMTPTestBlock(t, 2, hashes[0], 1700000000)
-	forkID, _, err := s.StoreBlock(ctx, forkBlock, "fork-peer")
-	require.NoError(t, err)
+			// Store a fork block at height 2 (parent = block 1)
+			forkBlock := makeMTPTestBlock(t, 2, hashes[0], 1700000000)
+			forkID, _, err := s.StoreBlock(ctx, forkBlock, "fork-peer")
+			require.NoError(t, err)
 
-	// The fork block has its own entry; the main chain's are untouched
-	require.Equal(t, mainChain, s.blockTimestampCache.Ancestors(mainTip, 5), "a fork block does not disturb the main chain")
-	require.Equal(t, []uint32{1600000001, 1700000000}, s.blockTimestampCache.Ancestors(forkID, 2))
+			// The fork block has its own entry; the main chain's are untouched
+			require.Equal(t, mainChain, s.blockTimestampCache.Ancestors(mainTip, 5), "a fork block does not disturb the main chain")
+			require.Equal(t, []uint32{1600000001, 1700000000}, s.blockTimestampCache.Ancestors(forkID, 2))
+
+			// Fork blocks 3 to 6 overtake the main chain at 6, a reorg.
+			prev := forkBlock.Hash()
+			for h := uint32(3); h <= 6; h++ {
+				block := makeMTPTestBlock(t, h, prev, 1700000000+h)
+				forkID, _, err = s.StoreBlock(ctx, block, "fork-peer")
+				require.NoError(t, err)
+				prev = block.Hash()
+			}
+
+			require.Equal(t, mainChain, s.blockTimestampCache.Ancestors(mainTip, 5), "the reorg keeps the old chain's entries")
+			require.Equal(t, []uint32{1600000001, 1700000000, 1700000003, 1700000004, 1700000005, 1700000006}, s.blockTimestampCache.Ancestors(forkID, 6))
+			require.Equal(t, 11, s.blockTimestampCache.Len(), "genesis and every stored block keep their entries")
+		})
+	}
 }
 
 func TestMTPCache_BelowCSVHeight_NoCache(t *testing.T) {
