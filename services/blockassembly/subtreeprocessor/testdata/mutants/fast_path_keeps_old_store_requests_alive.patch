@@ -1,0 +1,13 @@
+diff --git a/services/blockassembly/subtreeprocessor/reorg_fast_path.go b/services/blockassembly/subtreeprocessor/reorg_fast_path.go
+index ce36b4d68..da691f73d 100644
+--- a/services/blockassembly/subtreeprocessor/reorg_fast_path.go
++++ b/services/blockassembly/subtreeprocessor/reorg_fast_path.go
+@@ -527,7 +527,7 @@ func (stp *SubtreeProcessor) applyFastReorg(ctx context.Context, plan *fastReorg
+ 	_ = newSubtree.AddCoinbaseNode()
+ 
+ 	// The store requests the old subtrees still have in flight read the entries deleted below.
+-	stp.supersedeStoreRequests()
++	// mutant: the store requests the old subtrees have in flight are not superseded
+ 
+ 	stp.retireSubtrees(oldCurrent)
+ 	stp.currentSubtree.Store(newSubtree)
