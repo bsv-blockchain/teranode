@@ -239,6 +239,18 @@ func TestJournalDropReadsTheParentsPositionWithoutTheCoinColumn(t *testing.T) {
 	settled := journalVerdicts(t, lanereader.PruneDelete, lanereader.PruneDelete, lanereader.ReasonSettled)
 	positions := journalReads(t, "position")
 
+	// Nothing carried: the log line says every kept row was judged, none probed for. This judge's
+	// counts are never added to the metrics.
+	carry, err := s.collectCopyForward(ctx, 1_440)
+	require.NoError(t, err)
+	require.Empty(t, carry.ukeys)
+
+	cov, err := s.newLaneJournalJudge(carry, 1).judgeLeafRows(ctx, uint32(1_010/SpendJournalPartitionBlocks))
+	require.NoError(t, err)
+	require.Equal(t, 1, cov.rows)
+	require.True(t, cov.keptDone)
+	require.Zero(t, cov.probed)
+
 	_, err = s.dropSpendJournalPartitionsBelow(ctx, 1_440)
 	require.NoError(t, err)
 
@@ -449,7 +461,8 @@ func TestJournalDropBudgetCutsAJudgingShort(t *testing.T) {
 
 	var total int64
 	require.NoError(t, s.pool.QueryRow(ctx, laneJournalRowsSQL, leaf).Scan(&total))
-	require.EqualValues(t, 4, total)
+	// At least the 4 rows ANALYZE counted; another connection's deferred statistics flush can add to it.
+	require.GreaterOrEqual(t, total, int64(4))
 
 	before := map[string]float64{
 		"leaf_error":  journalUnjudged(t, "leaf_error"),
@@ -469,7 +482,11 @@ func TestJournalDropBudgetCutsAJudgingShort(t *testing.T) {
 	cov, err := l.judgeLeafRows(judgeCtx, uint32(1_010/SpendJournalPartitionBlocks))
 	cancel()
 	require.Error(t, err, "the scan outlasts the budget")
-	require.Equal(t, laneLeafCoverage{rows: 2, total: 4, kept: 2, keptDone: true, probed: len(carry.ukeys)}, cov)
+	require.Equal(t, 2, cov.rows)
+	require.GreaterOrEqual(t, cov.total, int64(4))
+	require.Equal(t, 2, cov.kept)
+	require.True(t, cov.keptDone)
+	require.Equal(t, len(carry.ukeys), cov.probed)
 
 	dropped, err := s.dropSpendJournalPartitionsBelow(ctx, 1_440)
 	require.NoError(t, err)
