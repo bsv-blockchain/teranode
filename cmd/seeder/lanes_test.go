@@ -408,8 +408,8 @@ func seedStampsPositionsAndRows(t *testing.T, heights []uint32, postgres bool) {
 	ctx := context.Background()
 	bc := f.blockchainStore()
 
-	// The grant is the only one, and block assembly's restart, which reads grants at or above a
-	// height near the tip, never finds it.
+	// The grant is the only one, recorded at height 0, so block assembly's restart skips it once
+	// the tip is more than utxostore_unminedTxRetention above genesis and its cap height is above 0.
 	grants, err := bc.LaneCapGrants(ctx, 0)
 	require.NoError(t, err)
 	require.Len(t, grants, 1)
