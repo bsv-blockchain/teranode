@@ -8,7 +8,11 @@ import (
 	"github.com/bsv-blockchain/aerospike-client-go/v8/types"
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
+	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/bsv-blockchain/teranode/util/uaerospike"
 	"github.com/stretchr/testify/require"
 )
@@ -206,4 +210,56 @@ func TestApplyLockClearWorkReportsEveryFailure(t *testing.T) {
 		require.ErrorContains(t, err, "clearLockedOnRecordsMulti")
 		require.ErrorContains(t, err, "setLocked")
 	})
+}
+
+// TestSetMinedMultiKeepsTheStorageCodeOfAFailedCleanup checks that a cleanup
+// failure after a successful mined update leaves SetMinedMulti as a StorageError,
+// so legacy sync keeps the block for a retry instead of rejecting it.
+func TestSetMinedMultiKeepsTheStorageCodeOfAFailedCleanup(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping Aerospike integration test in short mode")
+	}
+
+	for _, tc := range []struct {
+		name        string
+		expressions bool
+	}{
+		{name: "lua: the clear of the extra records fails", expressions: false},
+		{name: "expressions: the extra record count read of a FILTERED_OUT tx fails", expressions: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			logger := ulogger.NewErrorTestLogger(t)
+			tSettings := test.CreateBaseTestSettings(t)
+			tSettings.Aerospike.EnableSetMinedFilterExpressions = tc.expressions
+
+			store, _ := newSharedTestStore(t, logger, tSettings, "&externalStore=file://./data/external&block_retention=100")
+			store.utxoBatchSize = 4
+
+			tx := txWithOutputs(t, 10)
+			_, err := store.Create(ctx, tx, 100, utxo.WithLocked(true))
+			require.NoError(t, err)
+
+			hashes := []*chainhash.Hash{tx.TxIDChainHash()}
+			info := utxo.MinedBlockInfo{BlockID: 7, BlockHeight: 100, OnLongestChain: true}
+
+			if tc.expressions {
+				// The first mine stores the blockID, so the next write is FILTERED_OUT.
+				_, err = store.SetMinedMulti(ctx, hashes, info)
+				require.NoError(t, err)
+			}
+
+			// The mined update calls the client directly; only the cleanup batches go through this seam.
+			store.batchOperateFn = errorOperate()
+			t.Cleanup(func() { store.batchOperateFn = nil })
+
+			_, err = store.SetMinedMulti(ctx, hashes, info)
+			require.ErrorIs(t, err, errors.ErrStorageError)
+
+			// Quick validation's wrap, which legacy sync's park reads as retry-later.
+			err = errors.NewProcessingError("[createAndSpendUTXOsForBatch] failed to update mined info",
+				utxo.SetMinedMultiChunked(ctx, logger, store, hashes, info, 10, 1))
+			require.True(t, errors.IsTransientLocalError(err), "got %v", err)
+		})
+	}
 }

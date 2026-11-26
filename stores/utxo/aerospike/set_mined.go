@@ -238,7 +238,12 @@ func (s *Store) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, min
 	// stays free of follow-up I/O. Runs even when err != nil so a tx mined
 	// successfully is fully unlocked despite a sibling failure in the same batch.
 	if clearErr := s.applyLockClearWork(ctx, work); clearErr != nil {
-		err = errors.Join(err, clearErr)
+		// errors.Join(nil, clearErr) would flatten clearErr into a plain error and drop its code.
+		if err == nil {
+			err = clearErr
+		} else {
+			err = errors.Join(err, clearErr)
+		}
 	}
 
 	return blockIDs, err
