@@ -2365,7 +2365,7 @@ func (v *Validator) resolveParentOutputs(ctx context.Context, tx *bt.Tx, txID st
 
 			if inputLanes != nil {
 				inputLanes[inputIdx] = pf.LanePosition
-				shadow.compareBlocks(lanereader.ReaderSubtreePrefetch, parentTxHash, pf.LanePosition, pf.BlockIDs)
+				shadow.compareBlocks(lanereader.ReaderSubtreePrefetch, parentTxHash, pf.LanePosition, pf.IsCoinbase, pf.BlockIDs)
 			}
 
 			continue
@@ -2420,7 +2420,7 @@ func (v *Validator) resolveParentOutputs(ctx context.Context, tx *bt.Tx, txID st
 
 		if inputLanes != nil {
 			inputLanes[inputIdx] = answer.LanePosition
-			shadow.compare(lanereader.ReaderValidator, parentTxHash, answer.LanePosition, answer.Status == utxo.ParentOutputMined, answer.Height)
+			shadow.compare(lanereader.ReaderValidator, parentTxHash, answer.LanePosition, answer.IsCoinbase, answer.Status == utxo.ParentOutputMined, answer.Height)
 		}
 	}
 
