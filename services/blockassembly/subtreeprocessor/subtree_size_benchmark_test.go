@@ -3,6 +3,7 @@ package subtreeprocessor
 import (
 	"context"
 	"net/url"
+	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -224,14 +225,24 @@ var benchmarkTxHashes = sync.OnceValue(func() []chainhash.Hash {
 	return pool
 })
 
-// skipInShort skips a sub-benchmark that -short (CI) leaves out: a kept size of the same
-// benchmark times the same code, so CI runs the smallest and the largest and skips the middle.
+// skipInShort skips a sub-benchmark size that -short (CI) leaves out. CI keeps two sizes of each
+// benchmark, 4 and 1024 per subtree or 1k and 100k nodes; the skipped sizes time the same code.
 func skipInShort(b *testing.B, long bool) {
 	b.Helper()
 
 	if long && testing.Short() {
 		b.Skip("a kept size times the same code; skipped in -short")
 	}
+}
+
+// startTimedLoop collects the garbage the setup left, then restarts the timer. The testing
+// package collects only before each round, so without this the setup's garbage is collected
+// inside the timed loop.
+func startTimedLoop(b *testing.B) {
+	b.Helper()
+
+	runtime.GC()
+	b.ResetTimer()
 }
 
 // BenchmarkDirectSubtreeAdd benchmarks direct subtree node addition
@@ -416,8 +427,8 @@ func setupSubtreeProcessorForBench(t *testing.T, itemsPerSubtree int) (*SubtreeP
 	)
 	require.NoError(t, err)
 
-	// Each round of every sub-benchmark builds a store; closing it keeps the live heap from
-	// growing row by row, which changed how often later rows collect garbage.
+	// Each call builds a store. Closing it stops the live heap growing call by call through a
+	// benchmark run, which made a row's reading depend on how many rows ran before it.
 	cleanup := func() {
 		close(done)
 
@@ -779,7 +790,7 @@ func BenchmarkParallelGetAndSetIfNotExists(b *testing.B) {
 				currentTxMap.Set(hash, &subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{}})
 			}
 
-			b.ResetTimer()
+			startTimedLoop(b)
 			b.ReportAllocs()
 
 			for i := 0; i < b.N; i++ {
@@ -829,7 +840,7 @@ func BenchmarkSequentialGetAndSetIfNotExists(b *testing.B) {
 				currentTxMap.Set(hash, &subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{}})
 			}
 
-			b.ResetTimer()
+			startTimedLoop(b)
 			b.ReportAllocs()
 
 			for i := 0; i < b.N; i++ {
@@ -890,7 +901,7 @@ func BenchmarkProcessOwnBlockSubtreeNodesParallel(b *testing.B) {
 				Header: blockHeader,
 			}
 
-			b.ResetTimer()
+			startTimedLoop(b)
 			b.ReportAllocs()
 
 			for i := 0; i < b.N; i++ {
@@ -946,7 +957,7 @@ func BenchmarkProcessOwnBlockSubtreeNodesSequential(b *testing.B) {
 				Header: blockHeader,
 			}
 
-			b.ResetTimer()
+			startTimedLoop(b)
 			b.ReportAllocs()
 
 			for i := 0; i < b.N; i++ {
@@ -1008,8 +1019,8 @@ func setupSubtreeProcessorForBenchB(b *testing.B, itemsPerSubtree int) (*Subtree
 		newSubtreeChan,
 	)
 
-	// Each round of every sub-benchmark builds a store; closing it keeps the live heap from
-	// growing row by row, which changed how often later rows collect garbage.
+	// Each call builds a store. Closing it stops the live heap growing call by call through a
+	// benchmark run, which made a row's reading depend on how many rows ran before it.
 	cleanup := func() {
 		close(done)
 

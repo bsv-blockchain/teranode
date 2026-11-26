@@ -2842,7 +2842,7 @@ func TestSubtreeProcessor_CreateTransactionMap(t *testing.T) {
 
 // addNodeBenchmarkSizes are the subtree sizes BenchmarkAddNode and BenchmarkAddNodeWithMap fill
 // ten subtrees of. Each run of either is one fill, whatever b.N is, so run them at -benchtime=1x.
-// One 1Mi fill takes about 13 s on a CI runner, so -short (CI) runs only the 64Ki size.
+// One 1Mi fill takes 12 to 18 s on a CI runner, so -short (CI) runs only the 64Ki size.
 var addNodeBenchmarkSizes = []struct {
 	name      string
 	leafCount int
@@ -2857,7 +2857,7 @@ func BenchmarkAddNode(b *testing.B) {
 	for _, size := range addNodeBenchmarkSizes {
 		b.Run(size.name, func(b *testing.B) {
 			if size.long && testing.Short() {
-				b.Skip("one fill takes about 13 s; skipped in -short")
+				b.Skip("one fill takes 12 to 18 s on a CI runner; skipped in -short")
 			}
 
 			g, stp, txHashes := initTestAddNodeBenchmark(b, size.leafCount)
@@ -2882,7 +2882,7 @@ func BenchmarkAddNodeWithMap(b *testing.B) {
 	for _, size := range addNodeBenchmarkSizes {
 		b.Run(size.name, func(b *testing.B) {
 			if size.long && testing.Short() {
-				b.Skip("one fill takes about 13 s; skipped in -short")
+				b.Skip("one fill takes 12 to 18 s on a CI runner; skipped in -short")
 			}
 
 			g, stp, txHashes := initTestAddNodeBenchmark(b, size.leafCount)
