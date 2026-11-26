@@ -224,8 +224,9 @@ var benchmarkTxHashes = sync.OnceValue(func() []chainhash.Hash {
 	return pool
 })
 
-// skipInShort skips a sub-benchmark size that -short (CI) leaves out; every size times the same
-// code. CI keeps 4 and 1024 per subtree, 1k and 100k nodes for the parallel benchmarks, and 1k and
+// skipInShort skips a sub-benchmark size that -short (CI) leaves out. CI keeps 4 and 1024 per
+// subtree (64 for SubtreeProcessorOverheadBreakdown, whose 1024 row times the same loop as
+// SubtreeProcessorAdd/1024_per_subtree), 1k and 100k nodes for the parallel benchmarks, and 1k and
 // 10k for the sequential ones, whose 100k rows read 13 to 82% apart between two runs of the same
 // code on one GitHub runner.
 func skipInShort(b *testing.B, long bool) {
