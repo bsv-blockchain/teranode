@@ -252,19 +252,25 @@ func TestRenewLaneLeaseContinuesTheNewestHandout(t *testing.T) {
 	t.Parallel() // a database of its own on the shared server
 
 	for _, c := range []struct {
-		name    string
-		settles func(g, spare lane.Grant) lane.Settles
-		spare   bool // the request follows a spare, so the newest hand-out is the spare
-		cont    bool
+		name     string
+		settles  func(g, spare lane.Grant) lane.Settles
+		spare    bool // the request follows a spare, so the newest hand-out is the spare
+		cont     bool
+		giveBack bool // the request gives back the newest hand-out
+		dropped  bool // the newest hand-out's row is deleted
 	}{
-		{"aged out", func(g, _ lane.Grant) lane.Settles { return lane.Settles{First: g.First, LastTaken: g.First + 287} }, false, true},
-		{"one taken", func(g, _ lane.Grant) lane.Settles { return lane.Settles{First: g.First, LastTaken: g.First} }, false, true},
-		{"used up", func(g, _ lane.Grant) lane.Settles { return lane.Settles{First: g.First, LastTaken: g.Last} }, false, false},
-		{"no pair", func(lane.Grant, lane.Grant) lane.Settles { return lane.Settles{} }, false, false},
-		{"older grant", func(g, _ lane.Grant) lane.Settles { return lane.Settles{First: g.First, LastTaken: g.First + 287} }, true, false},
-		{"spare aged out", func(_, sp lane.Grant) lane.Settles { return lane.Settles{First: sp.First, LastTaken: sp.First + 5} }, true, true},
-		{"taken below the grant", func(g, _ lane.Grant) lane.Settles { return lane.Settles{First: g.First, LastTaken: g.First - 1} }, false, false},
-		{"taken past the grant", func(g, _ lane.Grant) lane.Settles { return lane.Settles{First: g.First, LastTaken: g.Last + 5} }, false, false},
+		{"aged out", func(g, _ lane.Grant) lane.Settles { return lane.Settles{First: g.First, LastTaken: g.First + 287} }, false, true, false, false},
+		{"one taken", func(g, _ lane.Grant) lane.Settles { return lane.Settles{First: g.First, LastTaken: g.First} }, false, true, false, false},
+		{"used up", func(g, _ lane.Grant) lane.Settles { return lane.Settles{First: g.First, LastTaken: g.Last} }, false, false, false, false},
+		{"no pair", func(lane.Grant, lane.Grant) lane.Settles { return lane.Settles{} }, false, false, false, false},
+		{"older grant", func(g, _ lane.Grant) lane.Settles { return lane.Settles{First: g.First, LastTaken: g.First + 287} }, true, false, false, false},
+		{"spare aged out", func(_, sp lane.Grant) lane.Settles { return lane.Settles{First: sp.First, LastTaken: sp.First + 5} }, true, true, false, false},
+		{"taken below the grant", func(g, _ lane.Grant) lane.Settles { return lane.Settles{First: g.First, LastTaken: g.First - 1} }, false, false, false, false},
+		{"taken past the grant", func(g, _ lane.Grant) lane.Settles { return lane.Settles{First: g.First, LastTaken: g.Last + 5} }, false, false, false, false},
+		{"spare given back", func(g, _ lane.Grant) lane.Settles { return lane.Settles{First: g.First, LastTaken: g.First + 287} }, true, true, true, true},
+		{"spare given back after a used-up grant", func(g, _ lane.Grant) lane.Settles { return lane.Settles{First: g.First, LastTaken: g.Last} }, true, false, true, false},
+		{"spare given back with no pair", func(lane.Grant, lane.Grant) lane.Settles { return lane.Settles{} }, true, false, true, false},
+		{"given back with no spare", func(g, _ lane.Grant) lane.Settles { return lane.Settles{First: g.First, LastTaken: g.First + 287} }, false, true, true, false},
 	} {
 		runLaneHandoutTests(t, c.name, func(t *testing.T, s *SQL) {
 			id, g, _, err := s.OpenLaneLease(t.Context(), leaseOpen("a"))
@@ -281,6 +287,9 @@ func TestRenewLaneLeaseContinuesTheNewestHandout(t *testing.T) {
 			}
 
 			r.Settles = c.settles(g, spare)
+			if c.giveBack {
+				r.GiveBack = newest.First
+			}
 
 			got, granted, _, err := s.RenewLaneLease(t.Context(), r)
 			require.NoError(t, err)
@@ -293,9 +302,42 @@ func TestRenewLaneLeaseContinuesTheNewestHandout(t *testing.T) {
 				require.Equal(t, newest.Last+1, got.First, "the grant starts above the newest hand-out")
 			}
 
+			rows := countRows(t, s, `SELECT COUNT(*) FROM lane_handout WHERE lane = $1 AND first = $2`, int(newest.Lane), lane.ToSigned(newest.First))
+			if c.dropped {
+				require.Zero(t, rows, "the spare given back is dropped")
+			} else {
+				require.Equal(t, 1, rows, "the newest hand-out stays")
+			}
+
 			checkLaneInvariants(t, s)
 		})
 	}
+
+	// A retry of a give-back whose first attempt committed, its reply lost, finds the continuation
+	// newest, not the spare, and gets a grant above it: nothing is dropped twice.
+	runLaneHandoutTests(t, "give-back retried after a lost reply", func(t *testing.T, s *SQL) {
+		id, g, _, err := s.OpenLaneLease(t.Context(), leaseOpen("a"))
+		require.NoError(t, err)
+
+		r := leaseRenew(id, g)
+		r.WantGrant = true
+
+		spare, _, _, err := s.RenewLaneLease(t.Context(), r)
+		require.NoError(t, err)
+
+		r.Settles, r.GiveBack = lane.Settles{First: g.First, LastTaken: g.First + 287}, spare.First
+
+		lost, _, _, err := s.RenewLaneLease(t.Context(), r)
+		require.NoError(t, err)
+		require.Equal(t, g.First+288, lost.First)
+
+		retry, _, _, err := s.RenewLaneLease(t.Context(), r)
+		require.NoError(t, err)
+		require.Equal(t, lost.Last+1, retry.First, "the retry starts above the continuation")
+		require.Equal(t, 3, countRows(t, s, `SELECT COUNT(*) FROM lane_handout WHERE lane = $1`, int(g.Lane)))
+
+		checkLaneInvariants(t, s)
+	})
 
 	// A pair that used its grant to the end does not continue it: on a lane whose newest hand-out ends
 	// at the last position, the request is refused as having no positions left.
@@ -349,6 +391,38 @@ func TestRenewLaneLeaseContinuesTheNewestHandout(t *testing.T) {
 
 		st.leaseID = nil // a hand-out from before the lease
 		require.False(t, s.continues(st, mine, pair))
+	})
+
+	// Another lease's spare is never dropped, even when the pair continues the hand-out below it.
+	runLaneHandoutTests(t, "another lease's spare", func(t *testing.T, s *SQL) {
+		mine, g, _, err := s.OpenLaneLease(t.Context(), leaseOpen("a"))
+		require.NoError(t, err)
+
+		theirs, err := lane.NewLeaseID()
+		require.NoError(t, err)
+
+		_, err = s.db.ExecContext(t.Context(),
+			`INSERT INTO lane_handout (lane, first, last, holder, height, handed_at, lease_id) VALUES ($1, $2, $3, 'b', 7, $4, $5)`,
+			int(g.Lane), lane.ToSigned(g.Last+1), lane.ToSigned(g.Last+100), time.Now().UTC(), s.leaseParam(theirs))
+		require.NoError(t, err)
+
+		tx, err := s.db.BeginTx(t.Context(), nil)
+		require.NoError(t, err)
+
+		defer func() { _ = tx.Rollback() }()
+
+		st, err := readLaneState(t.Context(), tx, g.Lane)
+		require.NoError(t, err)
+
+		pair := lane.Settles{First: g.First, LastTaken: g.First + 287}
+
+		back, err := s.givesBack(t.Context(), tx, g.Lane, st, mine, pair, g.Last+1)
+		require.NoError(t, err)
+		require.False(t, back, "another lease's spare")
+
+		back, err = s.givesBack(t.Context(), tx, g.Lane, st, theirs, pair, g.Last+1)
+		require.NoError(t, err)
+		require.False(t, back, "a pair for a hand-out of another lease")
 	})
 }
 

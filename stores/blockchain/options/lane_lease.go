@@ -30,6 +30,8 @@ type LaneLeaseRenew struct {
 	// may follow on a later request or the release); recorded only with WantGrant, on the new
 	// grant's hand-out row.
 	Settles lane.Settles
+	// GiveBack is the first position of a spare the holder hands back unused; see lane.Renewal.
+	GiveBack uint64
 	// Height is the best block height at the time, recorded with a grant.
 	Height uint32
 	// GrantMin requests a minimum grant size, capped by the grant limit and positions left.

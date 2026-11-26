@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"math"
 	"sort"
 	"sync"
 	"time"
@@ -55,7 +56,8 @@ const (
 //
 // A lease is one process's claim on one lane. lane_lease holds one row per lane, updated in place:
 // the lane's current lease or its last one, with its times and no positions. lane_handout gets one
-// insert-only row per grant, and lane_close one insert-only row per ended lease. Each grant in a
+// row per grant, never updated, and deleted only when its holder gives it back unused (below);
+// lane_close gets one insert-only row per ended lease. Each grant in a
 // lane starts one above the lane's newest hand-out, whoever held it, so two leases on one lane can
 // never hand out the same position, even when one outlives its close. The service holds nothing
 // between calls: a holder reports a grant's final number (its settles pair) on the request after it
@@ -67,6 +69,14 @@ const (
 // original last, so a lane's hand-out rows can overlap: a position belongs to the row with the
 // highest first at or below it, and every position a row hands out lies above every position an
 // earlier row gave out that may carry a record.
+//
+// A spare can stand between the newest hand-out and the grant it should continue: the holder asks
+// for its spare at half a grant, so the spare starts above that grant's last position. If the grant
+// then ages out with an unused tail, the holder gives the spare back on its next grant request. When
+// the spare is still the lane's newest hand-out, the requesting lease's own, and the request's pair
+// continues the hand-out below it, the spare's row is deleted in the same transaction and the grant
+// continues that hand-out (givesBack). The holder never took a position from the spare, so no record
+// carries one, and rows stay in order of first by time, which LaneCapGrants relies on.
 //
 // Not every hand-out is settled. A grant nobody used gets no settles pair: the spare held at a
 // release, a grant the holder refused, and a grant whose reply was lost. A lost reply happens when
@@ -129,7 +139,7 @@ func (s *SQL) OpenLaneLease(ctx context.Context, req options.LaneLeaseOpen) (lan
 			return err
 		}
 
-		grant, err = s.recordGrant(ctx, tx, id, chosen, min(req.GrantMin, settings.MaxLaneGrant), req.Holder, req.Height, lane.Settles{})
+		grant, err = s.recordGrant(ctx, tx, id, chosen, min(req.GrantMin, settings.MaxLaneGrant), req.Holder, req.Height, lane.Settles{}, 0)
 		if err != nil {
 			return err
 		}
@@ -183,7 +193,7 @@ func (s *SQL) RenewLaneLease(ctx context.Context, req options.LaneLeaseRenew) (g
 			return nil
 		}
 
-		grant, err = s.recordGrant(ctx, tx, req.Lease, req.Lane, grantSize(req.Rate, req.GrantDuration, req.GrantMin), "", req.Height, req.Settles)
+		grant, err = s.recordGrant(ctx, tx, req.Lease, req.Lane, grantSize(req.Rate, req.GrantDuration, req.GrantMin), "", req.Height, req.Settles, req.GiveBack)
 		if err != nil {
 			return err
 		}
@@ -426,10 +436,17 @@ func (s *SQL) chooseLeaseLane(ctx context.Context, tx *sql.Tx) (uint8, error) {
 
 // recordGrant records the lane's next grant: size positions starting one above the lane's newest
 // hand-out, or, when the settles pair settles that newest hand-out (continues reports when), one
-// above the pair's last taken position. An open passes no pair, so it never continues. It runs under
-// the hand-out lock.
-func (s *SQL) recordGrant(ctx context.Context, tx *sql.Tx, id lane.LeaseID, l uint8, size uint64, holder string, height uint32, settles lane.Settles) (lane.Grant, error) {
+// above the pair's last taken position. When the holder gives back the newest hand-out, an unused
+// spare, and the pair settles the hand-out below it (givesBack reports when), the spare's row is
+// deleted and the grant starts one above the pair's last taken position. An open passes no pair, so
+// it never continues. It runs under the hand-out lock.
+func (s *SQL) recordGrant(ctx context.Context, tx *sql.Tx, id lane.LeaseID, l uint8, size uint64, holder string, height uint32, settles lane.Settles, giveBack uint64) (lane.Grant, error) {
 	st, err := readLaneState(ctx, tx, l)
+	if err != nil {
+		return lane.Grant{}, err
+	}
+
+	back, err := s.givesBack(ctx, tx, l, st, id, settles, giveBack)
 	if err != nil {
 		return lane.Grant{}, err
 	}
@@ -437,6 +454,12 @@ func (s *SQL) recordGrant(ctx context.Context, tx *sql.Tx, id lane.LeaseID, l ui
 	first := lane.FirstPosition
 
 	switch {
+	case back:
+		if _, err = tx.ExecContext(ctx, `DELETE FROM lane_handout WHERE lane = $1 AND first = $2`, int(l), lane.ToSigned(st.first)); err != nil {
+			return lane.Grant{}, errors.NewStorageError("could not drop the lane hand-out given back", err)
+		}
+
+		first = settles.LastTaken + 1
 	case s.continues(st, id, settles):
 		first = settles.LastTaken + 1
 	case st.used:
@@ -482,6 +505,31 @@ func (s *SQL) continues(st laneState, id lane.LeaseID, settles lane.Settles) boo
 		return false
 	}
 
+	return s.heldBy(st, id)
+}
+
+// givesBack reports whether a grant request gives back the lane's newest hand-out so its grant can
+// continue the hand-out below it. That holds when giveBack names the newest hand-out, it is the
+// requesting lease's own, and the settles pair continues the hand-out right below it. The holder
+// sends giveBack only for a spare it never took from, so no record carries a position of it. Take
+// grant 5161 to 15160 aged out at 10258 with spare 15161 to 29920 unused: the spare's row goes and
+// the next grant starts at 10259. A retry whose first attempt committed finds that grant newest, not
+// the spare, and gets a grant above it as before.
+func (s *SQL) givesBack(ctx context.Context, tx *sql.Tx, l uint8, st laneState, id lane.LeaseID, settles lane.Settles, giveBack uint64) (bool, error) {
+	if giveBack == 0 || !st.used || st.first != giveBack || !s.heldBy(st, id) {
+		return false, nil
+	}
+
+	below, err := readHandoutBelow(ctx, tx, l, st.first)
+	if err != nil {
+		return false, err
+	}
+
+	return below.used && s.continues(below, id, settles), nil
+}
+
+// heldBy reports whether the hand-out went to lease id.
+func (s *SQL) heldBy(st laneState, id lane.LeaseID) bool {
 	if s.engine == util.Postgres {
 		return string(st.leaseID) == id.String()
 	}
@@ -628,6 +676,12 @@ func leaseError(msg string, err error) error {
 
 // readLaneState reads the latest hand-out in a lane through the primary key.
 func readLaneState(ctx context.Context, tx *sql.Tx, l uint8) (laneState, error) {
+	return readHandoutBelow(ctx, tx, l, math.MaxInt64)
+}
+
+// readHandoutBelow reads the lane's hand-out with the highest first below before, through the
+// primary key.
+func readHandoutBelow(ctx context.Context, tx *sql.Tx, l uint8, before uint64) (laneState, error) {
 	var (
 		first, last int64
 		handedAt    time.Time
@@ -635,8 +689,8 @@ func readLaneState(ctx context.Context, tx *sql.Tx, l uint8) (laneState, error) 
 	)
 
 	err := tx.QueryRowContext(ctx,
-		`SELECT first, last, handed_at, lease_id FROM lane_handout WHERE lane = $1 ORDER BY first DESC LIMIT 1`,
-		int(l),
+		`SELECT first, last, handed_at, lease_id FROM lane_handout WHERE lane = $1 AND first < $2 ORDER BY first DESC LIMIT 1`,
+		int(l), lane.ToSigned(min(before, math.MaxInt64)),
 	).Scan(&first, &last, &handedAt, &leaseID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return laneState{}, nil

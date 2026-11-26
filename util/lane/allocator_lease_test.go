@@ -73,6 +73,32 @@ func localLeaseService(t *testing.T, grantMin uint64, closeAfter time.Duration) 
 	return client, store
 }
 
+// recording is a lease source that keeps every grant request answered and its answer.
+type recording struct {
+	lane.LeaseSource
+	mu   sync.Mutex
+	sent []lane.Renewal
+	got  []lane.RenewResult
+}
+
+func (r *recording) RenewLaneLease(ctx context.Context, req lane.Renewal) (lane.RenewResult, error) {
+	res, err := r.LeaseSource.RenewLaneLease(ctx, req)
+	if err == nil && req.WantGrant {
+		r.mu.Lock()
+		r.sent, r.got = append(r.sent, req), append(r.got, res)
+		r.mu.Unlock()
+	}
+
+	return res, err
+}
+
+func (r *recording) grants() ([]lane.Renewal, []lane.RenewResult) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	return append([]lane.Renewal(nil), r.sent...), append([]lane.RenewResult(nil), r.got...)
+}
+
 // sqliteTime reads a time the SQLite blockchain store wrote, whichever form the driver returns.
 func sqliteTime(t *testing.T, v any) time.Time {
 	t.Helper()
@@ -88,6 +114,57 @@ func sqliteTime(t *testing.T, v any) time.Time {
 	default:
 		require.Failf(t, "unexpected time", "%T %v", v, v)
 		return time.Time{}
+	}
+}
+
+// A burst past half a grant fetches the spare, then traffic stops and the grant ages out. The next
+// position is the aged grant's unused tail, not the spare's first, and no position is given out twice.
+func TestAllocatorUsesTheTailOfAGrantThatAgesOutWithASpareHeld(t *testing.T) {
+	const grantDuration = time.Second
+
+	client, _ := localLeaseService(t, 100, time.Minute)
+	src := &recording{LeaseSource: client}
+
+	a := lane.NewAllocator(src, "pod-3", lane.Timings{Renew: time.Hour, Stop: time.Minute, GrantDuration: grantDuration}, nil)
+	t.Cleanup(func() { _ = a.Close() })
+
+	seen := map[uint64]bool{}
+	take := func() uint64 {
+		v, err := a.Next(t.Context())
+		require.NoError(t, err)
+		require.False(t, seen[v], "position %d given out twice", v)
+		seen[v] = true
+
+		return v
+	}
+
+	l, p := lane.Unpack(take())
+	require.Equal(t, uint64(1), p)
+
+	start := time.Now()
+
+	for range 59 {
+		take()
+	}
+
+	require.Eventually(t, func() bool { s, _ := src.grants(); return len(s) == 1 }, 5*time.Second, time.Millisecond, "the spare is fetched at half")
+
+	_, got := src.grants()
+	spare := got[0].Grant
+	require.Equal(t, uint64(101), spare.First, "the spare starts above the grant")
+
+	time.Sleep(grantDuration - time.Since(start) + 50*time.Millisecond)
+
+	require.Equal(t, lane.Pack(l, 61), take(), "the aged grant's tail comes next, not the spare")
+
+	sent, got := src.grants()
+	require.Len(t, sent, 2)
+	require.Equal(t, lane.Settles{First: 1, LastTaken: 60}, sent[1].Settles)
+	require.Equal(t, spare.First, sent[1].GiveBack, "the spare goes back unused")
+	require.Equal(t, uint64(61), got[1].Grant.First)
+
+	for range 200 {
+		take()
 	}
 }
 

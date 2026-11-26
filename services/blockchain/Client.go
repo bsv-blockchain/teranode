@@ -512,6 +512,7 @@ func (c *Client) RenewLaneLease(ctx context.Context, r lane.Renewal) (lane.Renew
 		WantGrant:        r.WantGrant,
 		SettlesFirst:     r.Settles.First,
 		SettlesLastTaken: r.Settles.LastTaken,
+		GiveBackFirst:    r.GiveBack,
 	})
 	if err != nil {
 		return lane.RenewResult{}, errors.UnwrapGRPC(err)

@@ -164,6 +164,11 @@ type Renewal struct {
 	// may follow on a later request or the release). It is sent with a grant request, and the
 	// service records it on the new grant's hand-out row.
 	Settles Settles
+	// GiveBack is the first position of a spare the holder hands back unused, 0 for none. It goes
+	// with a grant request whose Settles settles the grant the spare was granted above, aged out with
+	// an unused tail. When the spare is still the lane's newest hand-out, the service drops it and the
+	// new grant continues the aged one, so the tail is used. Otherwise it changes nothing.
+	GiveBack uint64
 }
 
 // RenewResult answers a renewal. Closed means the lease is closed, nothing was recorded, and the

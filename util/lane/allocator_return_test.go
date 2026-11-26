@@ -98,15 +98,9 @@ func TestAllocatorDropsReturnedPositionsWhenItLeavesAnAgedGrant(t *testing.T) {
 	require.True(t, a.Return(Pack(0, 7)))
 
 	clk.step(time.Minute)
-	require.Equal(t, Pack(0, 101), next(t, a), "the aged grant is left, its returned position with it")
-	require.Equal(t, Pack(0, 102), next(t, a))
-
-	require.NoError(t, a.Close())
-
-	src.mu.Lock()
-	defer src.mu.Unlock()
-
-	require.Equal(t, Settles{First: 1, LastTaken: 50}, src.releases[0].Settles, "settled at the highest position taken")
+	require.Equal(t, Pack(0, 51), next(t, a), "the aged grant is left, its returned position with it")
+	require.Equal(t, Pack(0, 52), next(t, a))
+	require.Equal(t, Settles{First: 1, LastTaken: 50}, src.grantRequests()[1].Settles, "settled at the highest position taken")
 }
 
 // A used-up grant with returned positions stays current until they are given out, and the grant
@@ -343,8 +337,8 @@ func TestAllocatorHandsOutNoReturnedPositionAfterStop(t *testing.T) {
 }
 
 // settleAgedGrant takes positions 1 to 50 of a grant of 100, hands back the given positions, lets the
-// grant age out, takes half the spare so the next grant is asked for, and returns the settles pair
-// that request carried for the grant left.
+// grant age out with the spare held, and returns the settles pair the next grant request carried for
+// the grant left. That grant starts right after the pair, the spare given back.
 func settleAgedGrant(t *testing.T, returned ...uint64) Settles {
 	t.Helper()
 
@@ -367,16 +361,28 @@ func settleAgedGrant(t *testing.T, returned ...uint64) Settles {
 	}
 
 	clk.step(time.Minute)
-	require.Equal(t, Pack(0, 101), next(t, a), "the aged grant is left")
 
-	for i := 0; i < 49; i++ {
-		next(t, a)
+	if len(returned) == 50 {
+		// Nothing taken may carry a record, so there is nothing to continue: the spare is used, and
+		// the pair goes on the request at half of it.
+		require.Equal(t, Pack(0, 101), next(t, a))
+
+		for range 49 {
+			next(t, a)
+		}
+
+		require.Eventually(t, func() bool { return len(src.grantRequests()) == 2 }, 5*time.Second, time.Millisecond)
+		require.Zero(t, src.grantRequests()[1].GiveBack)
+
+		return src.grantRequests()[1].Settles
 	}
 
-	require.Eventually(t, func() bool { return len(src.grantRequests()) == 2 }, 5*time.Second, time.Millisecond,
-		"the next grant is asked for at half the spare")
+	v := next(t, a)
+	r := src.grantRequests()[1]
+	require.Equal(t, uint64(101), r.GiveBack, "the spare goes back")
+	require.Equal(t, Pack(0, r.Settles.LastTaken+1), v, "the next grant continues the aged one")
 
-	return src.grantRequests()[1].Settles
+	return r.Settles
 }
 
 // When the allocator leaves a grant, its final number drops past the returned positions still at the
@@ -559,13 +565,7 @@ func TestAllocatorSettlesAtAReturnedTopPositionThatWasReused(t *testing.T) {
 		require.Equal(t, Pack(0, 50), next(t, a), "the returned top position is reused")
 
 		clk.step(time.Minute)
-		require.Equal(t, Pack(0, 101), next(t, a), "the aged grant is left")
-
-		for i := 0; i < 49; i++ {
-			next(t, a)
-		}
-
-		require.Eventually(t, func() bool { return len(src.grantRequests()) == 2 }, 5*time.Second, time.Millisecond)
+		require.Equal(t, Pack(0, 51), next(t, a), "the aged grant is left")
 		require.Equal(t, Settles{First: 1, LastTaken: 50}, src.grantRequests()[1].Settles, "a record carries 50 again")
 	})
 }
