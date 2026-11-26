@@ -12,6 +12,7 @@ import (
 	"github.com/bsv-blockchain/teranode/services/utxopersister"
 	utxosql "github.com/bsv-blockchain/teranode/stores/utxo/sql"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util/lane"
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/stretchr/testify/require"
 )
@@ -68,7 +69,7 @@ func TestProcessUTXO_RestoresCoinbaseInputWhenFullyUnspent(t *testing.T) {
 	w := wrapperFromCoinbase(cb, txid, 5, []int{0, 1, 2})
 	coinbaseTxs := map[chainhash.Hash]*bt.Tx{*txid: cb}
 
-	require.NoError(t, processUTXO(ctx, store, w, coinbaseTxs, false))
+	require.NoError(t, processUTXO(ctx, store, w, coinbaseTxs, false, lane.None))
 
 	got, err := store.Get(ctx, txid)
 	require.NoError(t, err)
@@ -97,7 +98,7 @@ func TestProcessUTXO_CoinbaseFallbackWhenPartiallySpent(t *testing.T) {
 	w := wrapperFromCoinbase(cb, txid, 5, []int{0, 1})
 	coinbaseTxs := map[chainhash.Hash]*bt.Tx{*txid: cb}
 
-	require.NoError(t, processUTXO(ctx, store, w, coinbaseTxs, false))
+	require.NoError(t, processUTXO(ctx, store, w, coinbaseTxs, false, lane.None))
 
 	got, err := store.Get(ctx, txid)
 	require.NoError(t, err)

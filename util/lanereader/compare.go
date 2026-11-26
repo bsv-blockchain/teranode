@@ -77,9 +77,14 @@ const (
 	// or index load lengthens that lag. It counts for at most a minute after the block was stored;
 	// once the next block is read, one whose write is still running counts lanes_only.
 	KindMinedPending = "mined_pending"
+	// KindSeeded: a row the seeder wrote says mined, and today's mined block list names only block
+	// ID 0. The seeder records every imported transaction as mined in block ID 0, a stand-in for
+	// its real block below the snapshot's tip, so today names no block the row could be matched
+	// with. Not a disagreement.
+	KindSeeded = "seeded"
 )
 
-var kinds = []string{KindAgree, KindLanesOnly, KindTodayOnly, KindDifferentBlock, KindNoPosition, KindNoRows, KindNotLoaded, KindNotReady, KindOffChain, KindCoinbase, KindMinedPending}
+var kinds = []string{KindAgree, KindLanesOnly, KindTodayOnly, KindDifferentBlock, KindNoPosition, KindNoRows, KindNotLoaded, KindNotReady, KindOffChain, KindCoinbase, KindMinedPending, KindSeeded}
 
 // minedPendingKind counts a lanes_only answer from a row of the best block under KindMinedPending
 // while today's mined write of that block has not finished, up to the wait's deadline.
@@ -238,6 +243,10 @@ func (r *Reader) compareBlocks(reader string, v *lane.ChainView, noView string, 
 }
 
 func classifyBlocks(v *lane.ChainView, a lane.Answer, todayBlockIDs []uint32) string {
+	if a.Via == lane.ViaRow && a.Seeded && seederStandIn(todayBlockIDs) {
+		return KindSeeded
+	}
+
 	s := v.Snapshot()
 
 	var (
@@ -334,6 +343,19 @@ func classifyBlocks(v *lane.ChainView, a lane.Answer, todayBlockIDs []uint32) st
 
 		return KindAgree
 	}
+}
+
+// seederStandIn reports whether a mined block list names only block ID 0, the seeder's stand-in for
+// an imported transaction's block. Block 0 is also genesis, whose one transaction no snapshot
+// holds, since its output cannot be spent.
+func seederStandIn(blockIDs []uint32) bool {
+	for _, id := range blockIDs {
+		if id != 0 {
+			return false
+		}
+	}
+
+	return len(blockIDs) > 0
 }
 
 // ShadowDuplicates loads the ancestry of the stored block hash, as ID blockID, and compares the

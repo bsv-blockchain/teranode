@@ -13,6 +13,7 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	utxosql "github.com/bsv-blockchain/teranode/stores/utxo/sql"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util/lane"
 	"github.com/stretchr/testify/require"
 )
 
@@ -73,20 +74,20 @@ func importSnapshotFile(t *testing.T, path string, store *utxosql.Store) error {
 
 	f, reader := openForReading(t, path)
 
-	frameCh := make(chan []byte, 10)
+	frameCh := make(chan seedFrame, 10)
 
 	readErrCh := make(chan error, 1)
 
 	go func() {
-		readErrCh <- readUTXOFrames(context.Background(), ulogger.TestLogger{}, f, reader, frameCh, "all", nil)
+		readErrCh <- readUTXOFrames(context.Background(), ulogger.TestLogger{}, f, reader, frameCh, "all", nil, nil)
 	}()
 
 	var processErr error
 
-	for frame := range frameCh {
-		w, err := utxopersister.DecodeUTXOWrapperFrame(frame)
+	for item := range frameCh {
+		w, err := utxopersister.DecodeUTXOWrapperFrame(item.frame)
 		if err == nil {
-			err = processUTXO(context.Background(), store, w, nil, false)
+			err = processUTXO(context.Background(), store, w, nil, false, lane.None)
 		}
 
 		if err != nil && processErr == nil {

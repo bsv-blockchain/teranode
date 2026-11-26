@@ -88,6 +88,8 @@ type Answer struct {
 	// BlockID and Height name the block whose row takes the position, with ViaRow; zero otherwise.
 	BlockID uint32
 	Height  uint32
+	// Seeded is set with ViaRow when that row is one the seeder wrote (RowTagSeededRange).
+	Seeded bool
 }
 
 // IndexBlock is one block as the index knows it: from its header, not from the map.
@@ -116,6 +118,8 @@ type indexRow struct {
 	firstHole uint64
 	bits      []uint64
 	taken     *roaring64.Bitmap
+	// seeded is a row the seeder wrote (RowTagSeededRange), a range row.
+	seeded bool
 }
 
 // Plain bitsets: a row gets one when it costs at most plainBitsetSlack times its Roaring bitmap
@@ -621,7 +625,7 @@ func (v *ChainView) Lookup(pos uint64) Answer {
 			return true
 		}
 
-		a = Answer{Mined: true, Via: ViaRow, BlockID: r.blockID, Height: h}
+		a = Answer{Mined: true, Via: ViaRow, BlockID: r.blockID, Height: h, Seeded: r.seeded}
 
 		return false
 	})
@@ -899,9 +903,9 @@ func loadRow(blockID uint32, r MapRow) (*indexRow, error) {
 		return nil, errors.NewProcessingError("lane index: block %d lane %d row %d to %d is not a range", blockID, r.Lane, r.First, r.Last)
 	}
 
-	ir := &indexRow{blockID: blockID, first: r.First, last: r.Last, firstHole: r.FirstHole}
+	ir := &indexRow{blockID: blockID, first: r.First, last: r.Last, firstHole: r.FirstHole, seeded: r.Tag == RowTagSeededRange}
 
-	if r.Tag == RowTagRange {
+	if r.Tag.IsRange() {
 		return ir, nil
 	}
 

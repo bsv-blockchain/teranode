@@ -117,7 +117,7 @@ func TestReadUTXOWrapperFile_CompleteFile_Succeeds(t *testing.T) {
 
 	f, reader := openForReading(t, path)
 
-	frameCh := make(chan []byte, 10)
+	frameCh := make(chan seedFrame, 10)
 
 	var received [][]byte
 
@@ -125,12 +125,12 @@ func TestReadUTXOWrapperFile_CompleteFile_Succeeds(t *testing.T) {
 
 	go func() {
 		defer close(done)
-		for frame := range frameCh {
-			received = append(received, frame)
+		for item := range frameCh {
+			received = append(received, item.frame)
 		}
 	}()
 
-	err := readUTXOFrames(context.Background(), ulogger.TestLogger{}, f, reader, frameCh, "all", nil)
+	err := readUTXOFrames(context.Background(), ulogger.TestLogger{}, f, reader, frameCh, "all", nil, nil)
 	<-done
 
 	require.NoError(t, err, "a complete, well-formed snapshot file must not be rejected")
@@ -168,13 +168,13 @@ func TestReadUTXOWrapperFile_TruncatedFile_ReturnsError(t *testing.T) {
 
 	f, reader := openForReading(t, path)
 
-	frameCh := make(chan []byte, 10)
+	frameCh := make(chan seedFrame, 10)
 
 	go func() {
 		for range frameCh { //nolint:revive // drain channel
 		}
 	}()
 
-	err := readUTXOFrames(context.Background(), ulogger.TestLogger{}, f, reader, frameCh, "all", nil)
+	err := readUTXOFrames(context.Background(), ulogger.TestLogger{}, f, reader, frameCh, "all", nil, nil)
 	require.Error(t, err, "a truncated snapshot file must not be reported as a successful import")
 }

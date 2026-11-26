@@ -57,6 +57,7 @@ import (
 	utxofactory "github.com/bsv-blockchain/teranode/stores/utxo/factory"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
+	"github.com/bsv-blockchain/teranode/util/lane"
 	"github.com/ordishs/gocore"
 	"golang.org/x/sync/errgroup"
 )
@@ -78,6 +79,9 @@ const (
 type utxoSetTip struct {
 	hash   chainhash.Hash
 	height uint32
+	// lanes is set at utxostore_laneMigration shadow: the positions the seed gave its records,
+	// whose rows the seeder writes once the header pass has stored the blocks.
+	lanes *seededLanes
 }
 
 // usage prints the usage message and exits the program with an error code.
@@ -110,8 +114,8 @@ func usage(msg string) {
 //nolint:gocognit // Requires refactoring to reduce cognitive complexity
 func Seeder(logger ulogger.Logger, appSettings *settings.Settings, inputDir string, hash string,
 	skipHeaders bool, skipUTXOs bool, force bool, recoverCheckpoint bool, skipChecksum bool) error {
-	if !skipUTXOs && !recoverCheckpoint && appSettings.UtxoStore.LaneMigration != settings.LaneMigrationOff {
-		return errors.NewConfigurationError("seeder imports require utxostore_laneMigration=off; lane-enabled imports are not supported")
+	if err := settings.CheckLaneMigration(appSettings.UtxoStore.LaneMigration); err != nil {
+		return err
 	}
 
 	if force && recoverCheckpoint {
@@ -308,6 +312,14 @@ func Seeder(logger ulogger.Logger, appSettings *settings.Settings, inputDir stri
 	// UTXO set is imported but the node would otherwise start with no checkpoint
 	// and a plain re-run skips the (now-complete) UTXO pass, never retrying it.
 	if !skipUTXOs && utxoTip != nil {
+		// The rows go before the checkpoint: a run that fails between them leaves no checkpoint,
+		// so a re-run writes them again, and a retry with the same rows writes nothing.
+		if utxoTip.lanes != nil {
+			if err := writeSeededRows(ctx, logger, blockchainStore, utxoTip.lanes, utxoTip); err != nil {
+				return errors.NewProcessingError("seeder failed to write the seeded lane rows", err)
+			}
+		}
+
 		if err := writeBlockAssemblerState(ctx, logger, blockchainStore, utxoTip); err != nil {
 			return errors.NewProcessingError("seeder failed to set BlockAssembler state", err)
 		}
@@ -490,7 +502,22 @@ func processUTXOs(ctx context.Context, logger ulogger.Logger, appSettings *setti
 
 		logger.Infof("lastProcessed.dat matches %s and no BlockAssembler checkpoint was found; recovering the checkpoint without re-importing", utxoFile)
 
-		return readUTXOSetTip(utxoFile)
+		tip, tipErr := readUTXOSetTip(utxoFile)
+		if tipErr != nil || !appSettings.UtxoStore.LaneMigration.Stamps() {
+			return tip, tipErr
+		}
+
+		// The earlier run imported with these positions but stopped before its rows, which go
+		// with the checkpoint, so they are written now.
+		if tip.lanes, err = recordedSeedLanes(ctx, blockchainStore, utxoFile, tip.hash); err != nil {
+			return nil, err
+		}
+
+		if err = checkRecordedPositions(ctx, logger, appSettings, utxoFile, tip.lanes); err != nil {
+			return nil, err
+		}
+
+		return tip, nil
 	case !force:
 		var skip bool
 
@@ -502,7 +529,15 @@ func processUTXOs(ctx context.Context, logger ulogger.Logger, appSettings *setti
 		if skip {
 			// The store has already been fully seeded. Skip idempotently and
 			// leave any existing BlockAssembler checkpoint untouched (returning a
-			// nil tip signals the caller not to write state).
+			// nil tip signals the caller not to write state). At shadow the
+			// earlier seed must have stamped positions too: one made at off left
+			// records no row can name.
+			if appSettings.UtxoStore.LaneMigration.Stamps() {
+				if err = checkSeededAtShadow(ctx, blockchainStore, utxoFile); err != nil {
+					return nil, err
+				}
+			}
+
 			logger.Errorf("lastProcessed.dat exists, skipping UTXOs")
 			return nil, nil
 		}
@@ -587,6 +622,17 @@ func processUTXOs(ctx context.Context, logger ulogger.Logger, appSettings *setti
 		return nil, err
 	}
 
+	// At shadow every record takes a lane position from one grant, handed out by
+	// height (see lanes.go). This runs before anything is cleared, so a refusal
+	// leaves the earlier import's records as they were.
+	var lanes *seededLanes
+
+	if appSettings.UtxoStore.LaneMigration.Stamps() {
+		if lanes, err = prepareSeedLanes(ctx, logger, appSettings, blockchainStore, utxoStore, utxoFile, hash); err != nil {
+			return nil, err
+		}
+	}
+
 	// Multi-record txs go through a much slower create path, so they get their
 	// own pass (see importUTXOSet). Their workers only wait on the external
 	// store semaphore beyond its size, so the default matches it.
@@ -610,6 +656,7 @@ func processUTXOs(ctx context.Context, logger ulogger.Logger, appSettings *setti
 		utxoBatchSize:          appSettings.UtxoStore.UtxoBatchSize,
 		skipStore:              gocore.Config().GetBool("skipStore", false),
 		coinbaseTxs:            coinbaseTxs,
+		lanes:                  lanes,
 	}
 
 	// A re-import invalidates everything the previous import left vouching for
@@ -661,7 +708,7 @@ func processUTXOs(ctx context.Context, logger ulogger.Logger, appSettings *setti
 		logger.Warnf("could not record the imported tip hash, -recover-checkpoint will be unavailable for this import: %v", err)
 	}
 
-	return &utxoSetTip{hash: hash, height: height}, nil
+	return &utxoSetTip{hash: hash, height: height, lanes: lanes}, nil
 }
 
 // readUTXOSetTip reads only the preamble of a .utxo-set file, not the records
@@ -826,6 +873,14 @@ type importOptions struct {
 	utxoBatchSize          int // store outputs-per-record limit; <= 0 imports in one pass
 	skipStore              bool
 	coinbaseTxs            map[chainhash.Hash]*bt.Tx
+	// lanes, set at utxostore_laneMigration shadow, gives each record its lane position.
+	lanes *seededLanes
+}
+
+// seedFrame is one record's raw frame and the lane position it takes, lane.None at off.
+type seedFrame struct {
+	frame    []byte
+	position uint64
 }
 
 // importUTXOSet imports every record of the .utxo-set file at utxoFile into
@@ -868,7 +923,7 @@ func importUTXOSet(ctx context.Context, logger ulogger.Logger, store utxo.Store,
 
 			logger.Infof("[%s pass] starting %d workers, channel size %d", name, workerCount, opts.channelSize)
 
-			frameCh := make(chan []byte, opts.channelSize)
+			frameCh := make(chan seedFrame, opts.channelSize)
 
 			pg, pCtx := errgroup.WithContext(gCtx)
 
@@ -880,8 +935,14 @@ func importUTXOSet(ctx context.Context, logger ulogger.Logger, store utxo.Store,
 				})
 			}
 
+			// Each pass reads every record, so each hands out positions on its own.
+			var positions *seedPositioner
+			if opts.lanes != nil {
+				positions = opts.lanes.positioner()
+			}
+
 			pg.Go(func() error {
-				return readUTXOFrames(pCtx, logger, f, reader, frameCh, name, accept)
+				return readUTXOFrames(pCtx, logger, f, reader, frameCh, name, accept, positions)
 			})
 
 			return pg.Wait()
@@ -1052,8 +1113,8 @@ func seedingExternalStoreURL(utxoStoreURL *url.URL, fsyncMode string) (*url.URL,
 // sent; accept gets the record's highest output index. Every record is still
 // read and counted, so each pass validates the whole file against the footer.
 // pass names the pass in log lines.
-func readUTXOFrames(ctx context.Context, logger ulogger.Logger, f *os.File, reader *bufio.Reader, frameCh chan<- []byte,
-	pass string, accept func(maxIndex uint32) bool) error {
+func readUTXOFrames(ctx context.Context, logger ulogger.Logger, f *os.File, reader *bufio.Reader, frameCh chan<- seedFrame,
+	pass string, accept func(maxIndex uint32) bool, positions *seedPositioner) error {
 	defer close(frameCh)
 
 	var (
@@ -1103,6 +1164,15 @@ func readUTXOFrames(ctx context.Context, logger ulogger.Logger, f *os.File, read
 		txProcessed++
 		utxosProcessed += uint64(utxopersister.FrameUTXOCount(frame))
 
+		// Every record takes its position here, sent or not, so both passes give each
+		// record the same one.
+		position := lane.None
+		if positions != nil {
+			if position, err = positions.next(frame); err != nil {
+				return errors.NewProcessingError("lane position of UTXO record %d", txProcessed, err)
+			}
+		}
+
 		if txProcessed%1_000_000 == 0 {
 			logger.Infof("[%s pass] read %16s transactions with %16s utxos, %s sent to workers", pass, formatNumber(txProcessed), formatNumber(utxosProcessed), formatNumber(txsSent))
 		}
@@ -1116,7 +1186,7 @@ func readUTXOFrames(ctx context.Context, logger ulogger.Logger, f *os.File, read
 			logger.Infof("Context cancelled while sending UTXO to channel, stopping UTXO processing")
 			return ctx.Err()
 
-		case frameCh <- bytes.Clone(frame):
+		case frameCh <- seedFrame{frame: bytes.Clone(frame), position: position}:
 			txsSent++
 		}
 	}
@@ -1181,25 +1251,25 @@ func spansMultipleRecords(maxIndex uint32, utxoBatchSize int) bool {
 
 // worker decodes the frames from the channel and stores them in the UTXO store.
 func worker(ctx context.Context, logger ulogger.Logger, store utxo.Store,
-	id int, frameCh <-chan []byte, coinbaseTxs map[chainhash.Hash]*bt.Tx, skipStore bool) error {
+	id int, frameCh <-chan seedFrame, coinbaseTxs map[chainhash.Hash]*bt.Tx, skipStore bool) error {
 	// A plain receive rather than a select on ctx.Done(): with thousands of
 	// workers, locking the shared Done channel on every item dominated CPU. The
 	// reader closes frameCh when it finishes or ctx is cancelled, which wakes
 	// idle workers. A worker that stops on cancellation drops the remaining
 	// buffered records; importUTXOSet reports that as an error.
-	for frame := range frameCh {
+	for item := range frameCh {
 		if ctx.Err() != nil {
 			logger.Infof("Worker %d received stop signal: %v", id, ctx.Err())
 			return nil
 		}
 
-		utxoWrapper, err := utxopersister.DecodeUTXOWrapperFrame(frame)
+		utxoWrapper, err := utxopersister.DecodeUTXOWrapperFrame(item.frame)
 		if err != nil {
 			logger.Errorf("Worker %d failed to decode UTXO: %v", id, err)
 			return errors.NewProcessingError("failed to decode UTXO", err)
 		}
 
-		if err = processUTXO(ctx, store, utxoWrapper, coinbaseTxs, skipStore); err != nil {
+		if err = processUTXO(ctx, store, utxoWrapper, coinbaseTxs, skipStore, item.position); err != nil {
 			logger.Errorf("Worker %d failed to process UTXO: %v", id, err)
 			return err
 		}
@@ -1227,7 +1297,8 @@ func setCoinbaseOption(coinbase bool) utxo.CreateOption {
 // recovered from the V2 utxo-headers file; it may be empty. skipStore builds the
 // transaction but does not write it (a debugging knob, read once by the caller
 // because gocore config lookups are too expensive to run per transaction).
-func processUTXO(ctx context.Context, store utxo.Store, utxoWrapper *utxopersister.UTXOWrapper, coinbaseTxs map[chainhash.Hash]*bt.Tx, skipStore bool) error {
+// position is the record's lane position, lane.None at utxostore_laneMigration off.
+func processUTXO(ctx context.Context, store utxo.Store, utxoWrapper *utxopersister.UTXOWrapper, coinbaseTxs map[chainhash.Hash]*bt.Tx, skipStore bool, position uint64) error {
 	if utxoWrapper == nil {
 		return nil
 	}
@@ -1269,15 +1340,21 @@ func processUTXO(ctx context.Context, store utxo.Store, utxoWrapper *utxopersist
 		return nil
 	}
 
-	if _, _, err := store.SpendAndCreate(
-		ctx,
-		tx,
-		utxoWrapper.Height,
+	opts := make([]utxo.CreateOption, 0, 5)
+	opts = append(opts,
 		utxo.WithCreateOnly(),
 		utxo.WithTXID(&utxoWrapper.TxID),
 		setCoinbaseOption(utxoWrapper.Coinbase),
 		utxo.WithMinedBlockInfo(utxo.MinedBlockInfo{BlockID: 0, BlockHeight: utxoWrapper.Height, SubtreeIdx: 0}),
-	); err != nil {
+	)
+
+	// A record that exists already keeps the position it has: a re-run of the
+	// same seed gives it the same one (lanes.go).
+	if position != lane.None {
+		opts = append(opts, utxo.WithLanePosition(position))
+	}
+
+	if _, _, err := store.SpendAndCreate(ctx, tx, utxoWrapper.Height, opts...); err != nil {
 		if errors.Is(err, errors.ErrTxExists) {
 			return nil
 		}
@@ -1455,7 +1532,7 @@ func newBlockchainStore(logger ulogger.Logger, appSettings *settings.Settings) (
 func blockAssemblerStateExists(ctx context.Context, store blockchain.Store) (bool, error) {
 	data, err := store.GetState(ctx, blockassembly.StateKey)
 	if err != nil {
-		if errors.Is(err, errors.ErrNotFound) || strings.Contains(err.Error(), sql.ErrNoRows.Error()) {
+		if isNoState(err) {
 			return false, nil
 		}
 
@@ -1463,6 +1540,11 @@ func blockAssemblerStateExists(ctx context.Context, store blockchain.Store) (boo
 	}
 
 	return len(data) > 0, nil
+}
+
+// isNoState reports whether a GetState error means the key holds nothing.
+func isNoState(err error) bool {
+	return errors.Is(err, errors.ErrNotFound) || strings.Contains(err.Error(), sql.ErrNoRows.Error())
 }
 
 // writeBlockAssemblerState persists the BlockAssembler checkpoint at the given
