@@ -2,8 +2,9 @@
 # Checks the hand-kept lists of the Go test matrix in the PR and main workflows:
 # the unit shard's TEST_EXCLUDE is exactly the other shards' TEST_PKGS, with each
 # package in one shard only; every shard writes coverage-<shard>.out; COVERAGE_SHARDS
-# names every shard; and both workflows define the same shards. A package dropped
-# from one list but not the other would otherwise stop running with every job green.
+# names every shard; and both workflows define the same shards. Otherwise a package
+# left in TEST_EXCLUDE but in no shard's TEST_PKGS stops running with every job
+# green, and one in both runs twice.
 #
 # Usage: .github/scripts/check-test-shards.sh (from the repository root)
 set -euo pipefail

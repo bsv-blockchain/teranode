@@ -41,9 +41,14 @@ jobs:
         run: make lint-tracing-info
 
       # The test matrix's package and shard lists are kept by hand in this file
-      # and teranode_main_tests.yaml; a package left out of both runs nowhere.
+      # and teranode_main_tests.yaml. A package left in the unit shard's
+      # TEST_EXCLUDE but in no other shard's TEST_PKGS would run nowhere.
       - name: Check the test shard lists agree
         run: .github/scripts/check-test-shards.sh
+
+      # Proves the shard check and merge-coverage.sh fail on the drift they target.
+      - name: Self-test the test shard and coverage merge scripts
+        run: .github/scripts/test-ci-scripts.sh
 
       - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5
         with:
