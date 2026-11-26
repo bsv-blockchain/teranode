@@ -1997,6 +1997,18 @@ func (c *Client) GetFSMCurrentState(ctx context.Context) (*FSMStateType, error) 
 	return &state.State, nil
 }
 
+// FetchFSMCurrentState reads the FSM state from the Blockchain service and skips the
+// cached state. The cache holds IDLE as a placeholder while the FSM subscription is
+// broken or stale, so a reader that must tell a real IDLE from an unknown state uses this.
+func (c *Client) FetchFSMCurrentState(ctx context.Context) (*FSMStateType, error) {
+	state, err := c.client.GetFSMCurrentState(ctx, &emptypb.Empty{})
+	if err != nil {
+		return nil, errors.UnwrapGRPC(err)
+	}
+
+	return &state.State, nil
+}
+
 // IsFSMCurrentState checks if the current FSM state matches the provided state.
 func (c *Client) IsFSMCurrentState(ctx context.Context, state FSMStateType) (bool, error) {
 	currentState, err := c.GetFSMCurrentState(ctx)
