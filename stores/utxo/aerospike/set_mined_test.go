@@ -331,8 +331,24 @@ func failAfterReadAndClear(client *uaerospike.Client) func(*aerospike.BatchPolic
 // that a failed spent-extra-records increment after a successful mine reaches
 // the caller as a StorageError, so legacy sync keeps the block for a retry.
 func TestProcessBatchResultsForSetMinedKeepsTheStorageCodeOfAFailedIncrement(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		fail func() func(*aerospike.BatchPolicy, []aerospike.BatchRecordIfc) aerospike.Error
+	}{
+		{name: "the whole batch fails", fail: errorOperate},
+		{name: "every record of a successful batch fails", fail: timeoutEveryRecord},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			processBatchResultsWithFailedFollowUps(t, tc.fail())
+		})
+	}
+}
+
+func processBatchResultsWithFailedFollowUps(t *testing.T, fail func(*aerospike.BatchPolicy, []aerospike.BatchRecordIfc) aerospike.Error) {
+	t.Helper()
+
 	s := newTestStoreForSetMinedExpressions(t)
-	s.batchOperateFn = errorOperate()
+	s.batchOperateFn = fail
 
 	hash := &chainhash.Hash{0xCC}
 	rec := newFakeBatchWrite(t, hash)
@@ -343,7 +359,31 @@ func TestProcessBatchResultsForSetMinedKeepsTheStorageCodeOfAFailedIncrement(t *
 		},
 	}}
 
-	_, _, err := s.processBatchResultsForSetMined(context.Background(), []aerospike.BatchRecordIfc{rec}, []*chainhash.Hash{hash}, utxo.MinedBlockInfo{BlockID: 1, BlockHeight: 100})
+	// A second tx whose child DAH unset fails too: both follow-up errors must reach the caller.
+	unsetHash := &chainhash.Hash{0xCD}
+	unsetRec := newFakeBatchWrite(t, unsetHash)
+	unsetRec.BatchRec().Record = &aerospike.Record{Bins: aerospike.BinMap{
+		LuaSuccess.String(): map[interface{}]interface{}{
+			"status":     "OK",
+			"signal":     string(LuaSignalDAHUnset),
+			"childCount": 1,
+		},
+	}}
+
+	_, _, err := s.processBatchResultsForSetMined(context.Background(), []aerospike.BatchRecordIfc{rec, unsetRec},
+		[]*chainhash.Hash{hash, unsetHash}, utxo.MinedBlockInfo{BlockID: 1, BlockHeight: 100})
 	require.ErrorIs(t, err, errors.ErrStorageError)
 	require.ErrorContains(t, err, "IncrementSpentRecordsMulti")
+	require.ErrorContains(t, err, "SetDAHForChildRecordsMulti")
+}
+
+// timeoutEveryRecord reports the batch as sent and every record in it as timed out.
+func timeoutEveryRecord() func(*aerospike.BatchPolicy, []aerospike.BatchRecordIfc) aerospike.Error {
+	return func(_ *aerospike.BatchPolicy, records []aerospike.BatchRecordIfc) aerospike.Error {
+		for _, r := range records {
+			r.BatchRec().Err = &aerospike.AerospikeError{ResultCode: types.TIMEOUT}
+		}
+
+		return nil
+	}
 }
