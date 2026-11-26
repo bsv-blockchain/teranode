@@ -61,16 +61,19 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
           cache: "false"
 
-      # Authoritative cache saver: the unit shard is the only job that writes the
-      # module cache and the -race build cache (bench-build-cache below saves only
-      # the non-race benchmark build cache). It runs on the default branch, so
-      # every PR job can read them back.
+      # The unit shard saves the module cache and the -race/coverage build cache.
+      # The e2e-build-cache job below saves the end-to-end build cache, and
+      # bench-build-cache the non-race benchmark build cache. All run only on the
+      # default branch, so every PR job can read them back.
       - name: Restore and save Go caches
         uses: ./.github/actions/go-cache
         with:
           # Save only on the default branch. GitHub scopes caches by branch, so
           # only main's cache is readable by every PR. staging/release/tag builds
           # restore but don't write, leaving the 10 GB repo budget to main.
+          # The two end-to-end caches count against the same budget: about
+          # 840 MB compressed (4.0 GB on disk) for x86 and 430 MB (2.1 GB)
+          # for ARM, one entry per architecture per day.
           save: ${{ github.ref == 'refs/heads/main' && matrix.shard == 'unit' }}
 
       - name: Run Go tests
@@ -164,8 +167,13 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
           cache: "false"
 
+      # The e2e -race cache built on main for this runner's architecture; the
+      # unit job's cache (ARM, with coverage) misses every teranode package here.
       - name: Restore Go caches
         uses: ./.github/actions/go-cache
+        with:
+          build_cache: 'false'
+          e2e_build_cache: 'true'
 
       - name: Run Smoke tests
         run: make smoketest
@@ -202,8 +210,13 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
           cache: "false"
 
+      # The e2e -race cache built on main for this runner's architecture; the
+      # unit job's cache (ARM, with coverage) misses every teranode package here.
       - name: Restore Go caches
         uses: ./.github/actions/go-cache
+        with:
+          build_cache: 'false'
+          e2e_build_cache: 'true'
 
       - name: Run Pruner tests
         run: make prunertest
@@ -218,6 +231,69 @@ jobs:
           name: prunertest-results
           path: /tmp/teranode-test-results/prunertest-results.txt
           retention-days: 2
+
+  # Saves the build cache the end-to-end jobs restore (smoke, sequential,
+  # legacy-sync, prunertest, chainintegrity, here and in teranode_pr_smoketests.yaml).
+  # It runs on both runner types those jobs use, and runs each compile those
+  # jobs run with the same flags: the -race test builds, the non-race
+  # go test -list the sharded smoke jobs use to pick their tests, and the
+  # make install-tools build of gotestsum. The key holds the UTC date and the
+  # go.mod hash, and actions/cache does not save over an existing key, so the
+  # cache holds the compile of the first successful main run for that date and
+  # go.mod. A PR reuses it for every package whose source and dependencies match
+  # that run's commit; the rest, and everything that depends on them, still
+  # compile.
+  e2e-build-cache:
+    name: e2e build cache (${{ matrix.runner }})
+    if: github.ref == 'refs/heads/main'
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [teranode-runner-8-core, teranode-runner-8-core-arm]
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+
+      - name: Set up Go
+        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: "false"
+
+      - name: Restore and save Go caches
+        uses: ./.github/actions/go-cache
+        with:
+          build_cache: 'false'
+          save_e2e_build_cache: 'true'
+
+      # Flags must match the Makefile's smoketest, legacy-sync, prunertest and
+      # chainintegrity targets (-race, no tags), the go test -list in
+      # test/scripts/list_test_shard.sh (no -race, no tags; the PR smoke shards
+      # run it before the tests) and the compile step of
+      # test/scripts/run_tests_sequentially.sh. go test -c also caches the vet
+      # results that go test computes before running.
+      - name: Build the end-to-end test binaries
+        run: |
+          set -euo pipefail
+          make install-tools
+          out="$RUNNER_TEMP/e2e-bin"
+          mkdir -p "$out"
+          for d in test/e2e/daemon/ready test/e2e/chainintegrity; do
+            (cd "$d" && go test -c -race -o "$out/$(echo "$d" | tr '/' '_').test")
+          done
+          # The smoke and sequential shards run only on x86 runners.
+          [ "$RUNNER_ARCH" = X64 ] || exit 0
+          (cd test/e2e/daemon/ready && go test -list '.*' >/dev/null)
+          for d in $(find ./test/sequentialtest -name '*_test.go' -exec dirname {} \; | sort -u); do
+            (cd "$d" && go test -c -tags aerospike,native,memory,postgres,sqlite -race -o "$out/$(echo "$d" | tr '/.' '__').test")
+          done
+
+      # Drop entries this build did not use, as the unit job does for its cache.
+      - name: Trim e2e build cache
+        run: |
+          find ~/.cache/go-build-e2e -type f -mmin +90 -delete 2>/dev/null || true
+          du -sh ~/.cache/go-build-e2e
 
   sonarqube:
     name: Sonarqube
