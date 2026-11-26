@@ -2,8 +2,10 @@ package lanereader
 
 import (
 	"context"
+	"fmt"
 	"net/url"
 	"runtime"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -27,10 +29,20 @@ import (
 
 const coinbaseHex = "01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff17030100002f6d312d65752f29c267ffea1adb87f33b398fffffffff03ac505763000000001976a914c362d5af234dd4e1f2a1bfbcab90036d38b0aa9f88acaa505763000000001976a9143c22b6d9ba7b50b6d6e615c69d11ecb2ba3db14588acaa505763000000001976a914b7177c7deb43f3869eabc25cfd9f618215f34d5588ac00000000"
 
+// engineTimeout bounds each engine's case, store setup included.
+const engineTimeout = 5 * time.Minute
+
 // engines runs fn against a real SQLite blockchain store and a real Postgres one in a container.
+// A case still running after engineTimeout panics the test binary with the case's name, so a
+// hung store call fails by name.
 func engines(t *testing.T, fn func(t *testing.T, store blockchainstore.Store)) {
 	for _, engine := range []string{"sqlite", "postgres"} {
 		t.Run(engine, func(t *testing.T) {
+			name := t.Name()
+			timer := time.AfterFunc(engineTimeout, func() { panic(name + " ran past " + engineTimeout.String()) })
+
+			defer timer.Stop()
+
 			fn(t, newStore(t, engine))
 		})
 	}
@@ -376,16 +388,15 @@ func TestReaderCountsEachKind(t *testing.T) {
 // finished, a lanes_only answer from the best block's row is counted mined_pending.
 func TestReaderCountsTheMinedWriteWindowApart(t *testing.T) {
 	engines(t, func(t *testing.T, store blockchainstore.Store) {
-		ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
-		defer cancel()
-
+		ctx := t.Context()
 		c := newChain(t, store)
 
 		b1 := c.add(nil, takes(t, 3, 5))
 		b2 := c.add(b1, takes(t, 3, 6))
 		require.NoError(t, store.SetBlockMinedSet(ctx, &b1.hash, nil))
 
-		r := newReader(ulogger.TestLogger{}, store, 100)
+		logger := &warnLog{}
+		r := newReader(logger, store, 100)
 		clock := storedAt(t, store, b2.hash)
 		r.now = func() time.Time { return clock }
 		follow(t, r)
@@ -442,11 +453,13 @@ func TestReaderCountsTheMinedWriteWindowApart(t *testing.T) {
 			})
 
 			r.source = failing
+			r.prepareWarned = nil
 			errorsBefore := testutil.ToFloat64(prometheusLaneReaderFollowErrors)
 
 			_, err = r.step(ctx, b3.hash)
 			require.NoError(t, err)
 			require.Equal(t, errorsBefore+1, testutil.ToFloat64(prometheusLaneReaderFollowErrors))
+			require.Contains(t, logger.last(), "reading best block "+b3.hash.String()+"'s mined_set flag failed")
 
 			requireCounted(t, ReaderValidator, KindLanesOnly, lane.ViaRow, func() {
 				r.CompareHeight(ReaderValidator, chainhash.Hash{}, lane.Pack(3, 7), false, 0)
@@ -506,13 +519,43 @@ func TestReaderCountsTheMinedWriteWindowApart(t *testing.T) {
 		_, err = store.InvalidateBlock(ctx, &b5.hash)
 		require.NoError(t, err)
 
+		r.prepareWarned = nil
+
 		_, err = r.step(ctx, b5.hash)
 		require.NoError(t, err)
+		require.Contains(t, logger.last(), "best block "+b4.hash.String()+"'s mined write has not finished")
 
 		requireCounted(t, ReaderValidator, KindLanesOnly, lane.ViaRow, func() {
 			r.CompareHeight(ReaderValidator, chainhash.Hash{}, lane.Pack(3, 8), false, 0)
 		})
 	})
+}
+
+// warnLog is a logger that keeps its warnings.
+type warnLog struct {
+	ulogger.TestLogger
+
+	mu    sync.Mutex
+	warns []string
+}
+
+func (l *warnLog) Warnf(format string, args ...interface{}) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	l.warns = append(l.warns, fmt.Sprintf(format, args...))
+}
+
+// last is the latest warning, empty if there is none.
+func (l *warnLog) last() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	if len(l.warns) == 0 {
+		return ""
+	}
+
+	return l.warns[len(l.warns)-1]
 }
 
 // storedAt is when the store saved block hash, the start of its mined write's minute.
@@ -673,6 +716,16 @@ func TestReaderPrepareLoadsAnAncestryTheFollowerHasNotSeen(t *testing.T) {
 		})
 		requireCounted(t, ReaderBlockDuplicate, KindLanesOnly, lane.ViaRow, func() {
 			r.compareDuplicates(v, KindNotReady, b4.hash, b4.id, false)
+		})
+
+		// A block of only its coinbase has complete, empty rows: it re-takes nothing.
+		b5 := c.addCoinbaseOnly(b4)
+
+		v, ok = prepareView(r, context.Background(), b5.hash)
+		require.True(t, ok)
+
+		requireCounted(t, ReaderBlockDuplicate, KindAgree, lane.ViaNone, func() {
+			r.compareDuplicates(v, KindNotReady, b5.hash, b5.id, false)
 		})
 
 		v, ok = prepareView(r, context.Background(), b3.hash)

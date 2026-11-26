@@ -312,6 +312,10 @@ func TestIndexBlockWithoutRows(t *testing.T) {
 	state, _ = c.idx.Snapshot().Block(3)
 	require.Equal(t, BlockHasRows, state)
 	require.Equal(t, 2, c.idx.Snapshot().MainBlocksWithoutRows())
+
+	byRow, byFloor, hasRows := c.main().TakenBefore(3)
+	require.True(t, hasRows)
+	require.Zero(t, byRow+byFloor)
 }
 
 func TestIndexTakenBefore(t *testing.T) {
