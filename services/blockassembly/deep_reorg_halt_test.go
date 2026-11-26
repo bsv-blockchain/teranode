@@ -469,6 +469,30 @@ func TestDeepReorgHaltResetCommands(t *testing.T) {
 		}
 	}
 
+	// An ordinary reset queued beside an operator's is merged into it: both callers get the
+	// operator reset's result, and the halt is lifted.
+	t.Run("ordinary merged with operator", func(t *testing.T) {
+		initPrometheusMetrics()
+
+		items, b2, mockStp := deepReorgFixture(t)
+		ba := items.blockAssembler
+
+		require.Error(t, ba.handleReorg(t.Context(), b2, 2))
+		require.True(t, ba.DeepReorgHalted())
+
+		mockStp.On("Reset", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+			Return(subtreeprocessor.ResetResponse{})
+
+		ordinary := resetRequest{ErrCh: make(chan error, 1)}
+		operator := resetRequest{Operator: true, ErrCh: make(chan error, 1)}
+		ba.resetCh <- operator
+		ba.handleResetRequests(t.Context(), ordinary)
+
+		require.NoError(t, <-ordinary.ErrCh)
+		require.NoError(t, <-operator.ErrCh)
+		require.False(t, ba.DeepReorgHalted())
+	})
+
 	t.Run("operator clear failure reaches command", func(t *testing.T) {
 		initPrometheusMetrics()
 		items, b2, mockStp := deepReorgFixture(t)
