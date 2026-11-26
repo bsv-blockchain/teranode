@@ -54,4 +54,16 @@ done
 diff <(matrix "${workflows[0]}") <(matrix "${workflows[1]}") >/dev/null ||
   err "${workflows[0]} and ${workflows[1]} define different test shards or COVERAGE_SHARDS"
 
+# Main's unit shard, the only build-cache saver, compiles the test binaries of the
+# packages it excludes, so its make test-build-pkgs list must be its TEST_EXCLUDE.
+main="${workflows[1]}"
+warm="$(grep -E '^[[:space:]]*run: make test-build-pkgs ' "$main" || true)"
+unit="$(grep -E '^[[:space:]]*run: make test ' "$main" || true)"
+if [ -z "$warm" ]; then
+  err "$main: no make test-build-pkgs step for the unit shard"
+else
+  [ "$(var TEST_PKGS "$warm" | sort | xargs)" = "$(var TEST_EXCLUDE "$unit" | sort | xargs)" ] ||
+    err "$main: make test-build-pkgs TEST_PKGS is not the unit shard's TEST_EXCLUDE"
+fi
+
 exit "$fail"

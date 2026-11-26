@@ -102,12 +102,12 @@ jobs:
 
   test-shard:
     name: test ${{ matrix.shard }}
-    # make test is split across runners so no shard waits on a long tail of slow
-    # packages. Under -race and coverage on one 16-core runner the seven slowest
-    # packages each took 220-340 s and set the unit job's ~9 min wall time, so they
-    # run in pairs on their own runners. A pair runs concurrently, so a shard costs
-    # about its slower package. stores/utxo/aerospike keeps its own shard for its
-    # testcontainer suite and memory. Every path in a shard's TEST_PKGS must also be
+    # make test is split across runners. The slowest packages (200-340 s each under
+    # -race and coverage) take about as long alone as beside the rest, so they are
+    # bound by the clock, not by cores, and all run together in the slow shard. That
+    # shard starts them at once instead of behind the rest of the build, and the unit
+    # shard no longer waits for them. stores/utxo/aerospike keeps its own shard for
+    # its testcontainer suite and memory. Every path in a shard's TEST_PKGS must also be
     # in the unit shard's TEST_EXCLUDE (and the reverse), or its tests run twice or
     # not at all; COVERAGE_SHARDS in the `test` job lists every shard.
     # .github/scripts/check-test-shards.sh checks both in the golangci-lint job.
@@ -124,18 +124,9 @@ jobs:
           - shard: aerospike
             run: make test-pkgs TEST_PKGS=stores/utxo/aerospike TEST_COVERPROFILE=coverage-aerospike.out
             profile: coverage-aerospike.out
-          - shard: blockvalidation
-            run: make test-pkgs TEST_PKGS="services/blockvalidation model" TEST_COVERPROFILE=coverage-blockvalidation.out
-            profile: coverage-blockvalidation.out
-          - shard: subtreeprocessor
-            run: make test-pkgs TEST_PKGS="services/blockassembly/subtreeprocessor stores/utxo/utxoset" TEST_COVERPROFILE=coverage-subtreeprocessor.out
-            profile: coverage-subtreeprocessor.out
-          - shard: blockassembly
-            run: make test-pkgs TEST_PKGS="services/blockassembly services/legacy/netsync" TEST_COVERPROFILE=coverage-blockassembly.out
-            profile: coverage-blockassembly.out
-          - shard: blockchain
-            run: make test-pkgs TEST_PKGS="services/blockchain stores/blockchain/sql" TEST_COVERPROFILE=coverage-blockchain.out
-            profile: coverage-blockchain.out
+          - shard: slow
+            run: make test-pkgs TEST_PKGS="services/blockvalidation model services/blockassembly/subtreeprocessor stores/utxo/utxoset services/blockassembly services/legacy/netsync services/blockchain stores/blockchain/sql" TEST_COVERPROFILE=coverage-slow.out
+            profile: coverage-slow.out
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
 
@@ -200,7 +191,7 @@ jobs:
         # covered when any copy of it is.
         # COVERAGE_SHARDS must name every test-shard matrix entry.
         env:
-          COVERAGE_SHARDS: unit aerospike blockvalidation subtreeprocessor blockassembly blockchain
+          COVERAGE_SHARDS: unit aerospike slow
         run: .github/scripts/merge-coverage.sh coverage-profiles coverage.out $COVERAGE_SHARDS
 
       - name: Upload coverage report

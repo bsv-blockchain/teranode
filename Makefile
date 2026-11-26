@@ -188,7 +188,10 @@ install-tools:
 # TEST_COVERPROFILE names the coverage file either target writes.
 TEST_EXCLUDE ?=
 TEST_COVERPROFILE ?= coverage.out
-TEST_FLAGS = -race -tags "testtxmetacache" -count=1 -timeout=20m -coverprofile=$(TEST_COVERPROFILE) -coverpkg=./...
+# TEST_BUILD_FLAGS are the flags that shape the test build, so the build cache
+# entries `test-build-pkgs` writes are the ones `make test` reads.
+TEST_BUILD_FLAGS = -race -tags "testtxmetacache" -coverpkg=./...
+TEST_FLAGS = $(TEST_BUILD_FLAGS) -count=1 -timeout=20m -coverprofile=$(TEST_COVERPROFILE)
 UNIT_TEST_PKGS = $(filter-out $(addprefix github.com/bsv-blockchain/teranode/,$(TEST_EXCLUDE)),$(shell go list ./... | grep -v github.com/bsv-blockchain/teranode/test/ | sort))
 
 .PHONY: test
@@ -203,6 +206,14 @@ test-pkgs:
 	@test -n "$(TEST_PKGS)" || { echo "TEST_PKGS is empty"; exit 1; }
 	@command -v gotestsum >/dev/null 2>&1 || { echo "gotestsum not found. Installing..."; $(MAKE) install-tools; }
 	SETTINGS_CONTEXT=test $$(go env GOPATH)/bin/gotestsum --format pkgname -- $(TEST_FLAGS) $(addprefix ./,$(TEST_PKGS))
+
+# compile, without running, the test binaries of the packages in TEST_PKGS into the
+# Go build cache. Main's unit-test job runs it for the packages other test jobs run,
+# since it is the only job that saves the build cache.
+.PHONY: test-build-pkgs
+test-build-pkgs:
+	@test -n "$(TEST_PKGS)" || { echo "TEST_PKGS is empty"; exit 1; }
+	go test -c -o "$$(mktemp -d)/" $(TEST_BUILD_FLAGS) $(addprefix ./,$(TEST_PKGS))
 
 # run the tests too slow for `make test` under -race and coverage (TERANODE_HEAVY_TESTS), without -race.
 # The PR test job runs it after `make test`.
