@@ -213,7 +213,7 @@ test-pkgs:
 .PHONY: test-build-pkgs
 test-build-pkgs:
 	@test -n "$(TEST_PKGS)" || { echo "TEST_PKGS is empty"; exit 1; }
-	go test -c -o "$$(mktemp -d)/" $(TEST_BUILD_FLAGS) $(addprefix ./,$(TEST_PKGS))
+	d="$$(mktemp -d)" && go test -c -o "$$d/" $(TEST_BUILD_FLAGS) $(addprefix ./,$(TEST_PKGS)) && rm -rf "$$d"
 
 # run the tests too slow for `make test` under -race and coverage (TERANODE_HEAVY_TESTS), without -race.
 # The PR test job runs it after `make test`.

@@ -81,7 +81,10 @@ jobs:
       # or every PR's slow and aerospike shards compile them from scratch.
       # TEST_PKGS is the unit shard's TEST_EXCLUDE (check-test-shards.sh checks it).
       - name: Build the other shards' test binaries into the Go build cache
+        # PR runs never execute this step, so a failure here costs only cache
+        # warmth, never main's tests, coverage upload or cache save.
         if: github.ref == 'refs/heads/main' && matrix.shard == 'unit'
+        continue-on-error: true
         run: make test-build-pkgs TEST_PKGS="stores/utxo/aerospike services/blockvalidation model services/blockassembly/subtreeprocessor stores/utxo/utxoset services/blockassembly services/legacy/netsync services/blockchain stores/blockchain/sql"
 
       # Drop build-cache objects unused for 90+ min before the post-job save,
