@@ -319,7 +319,10 @@ func Seeder(logger ulogger.Logger, appSettings *settings.Settings, inputDir stri
 	// completeness (block assembly is the sole creator of coinbase UTXOs), so it
 	// must never be advanced when UTXOs were skipped or failed. When UTXOs were
 	// skipped because lastProcessed.dat already existed, utxoTip is nil and any
-	// existing checkpoint is left untouched. A failure here must be fatal: the
+	// existing checkpoint is left untouched, except at utxostore_laneMigration
+	// shadow when the seed's rows are not all written: then the tip comes back
+	// with its lanes, the rows are written and the checkpoint is rewritten at the
+	// snapshot's tip. A failure here must be fatal: the
 	// UTXO set is imported but the node would otherwise start with no checkpoint
 	// and a plain re-run skips the (now-complete) UTXO pass, never retrying it.
 	if !skipUTXOs && utxoTip != nil {
