@@ -423,7 +423,8 @@ func seederHolder() string {
 
 // takeSeederGrant returns the grant a seed of the snapshot at tip takes its positions from: the one
 // an earlier run of this seed recorded, or a new one. A new grant is one lease's first grant, sized
-// to every record of the file, so the seed needs no renewals; the lease is released at once, which
+// to every record of the file, so the seed needs no renewals; a file of more than
+// settings.MaxLaneGrant records, 2^40, is refused; the lease is released at once, which
 // leaves the grant the seeder's, since every later grant in the lane starts above it. It is
 // recorded at height 0, because every record it numbers is mined below the snapshot's tip, so block
 // assembly's restart, which reads grants at or above its target height less

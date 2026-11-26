@@ -668,6 +668,12 @@ func processUTXOs(ctx context.Context, logger ulogger.Logger, appSettings *setti
 	var lanes *seededLanes
 
 	if appSettings.UtxoStore.LaneMigration.Stamps() {
+		// skipStore writes nothing, and at shadow the import would then be recorded as done and
+		// its rows written for records that were never stored.
+		if gocore.Config().GetBool("skipStore", false) {
+			return nil, errors.NewConfigurationError("skipStore cannot be used at utxostore_laneMigration shadow")
+		}
+
 		if lanes, err = prepareSeedLanes(ctx, logger, appSettings, blockchainStore, utxoStore, utxoFile, hash); err != nil {
 			return nil, err
 		}
