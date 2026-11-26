@@ -988,6 +988,22 @@ func TestSeederAtShadowRefusesAnImportMadeAtOff(t *testing.T) {
 		require.ErrorContains(t, f.seed(true), "import made at off or from another grant")
 	})
 
+	t.Run("a done shadow seed imported again at off into a new store", func(t *testing.T) {
+		f := newSeedFixture(t, settings.LaneMigrationShadow, 8, fixtureHeights)
+		require.NoError(t, f.seed(false))
+
+		f.settings.UtxoStore.LaneMigration = settings.LaneMigrationOff
+		f.settings.UtxoStore.UtxoStore = mustURL(t, "sqlite:///"+filepath.Join(t.TempDir(), "rebuilt"))
+		require.NoError(t, f.seed(true))
+
+		written, err := seededRowsWritten(context.Background(), f.blockchainStore(), f.tip)
+		require.NoError(t, err)
+		require.False(t, written, "the import at off cleared the rows-done record")
+
+		f.settings.UtxoStore.LaneMigration = settings.LaneMigrationShadow
+		require.ErrorContains(t, f.seed(false), "import made at off or from another grant")
+	})
+
 	t.Run("a completed seed", func(t *testing.T) {
 		f := newSeedFixture(t, settings.LaneMigrationOff, 8, fixtureHeights)
 		require.NoError(t, f.seed(false))

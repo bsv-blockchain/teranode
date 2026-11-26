@@ -633,6 +633,17 @@ func seededRowsWritten(ctx context.Context, store blockchain.Store, tip chainhas
 	return bytes.Equal(b, tip[:]), nil
 }
 
+// forgetSeededRows clears the rows-done record of the seed of tip if one is set, for an import at
+// off. It writes nothing when none is set, so a node that never ran at shadow sees no change.
+func forgetSeededRows(ctx context.Context, store blockchain.Store, tip chainhash.Hash) error {
+	written, err := seededRowsWritten(ctx, store, tip)
+	if err != nil || !written {
+		return err
+	}
+
+	return setSeededRowsWritten(ctx, store, tip, false)
+}
+
 // setSeededRowsWritten records that the seeded rows of the seed of tip are all written, or, with
 // done false, that an import has started and they may not be.
 func setSeededRowsWritten(ctx context.Context, store blockchain.Store, tip chainhash.Hash, done bool) error {

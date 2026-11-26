@@ -671,6 +671,10 @@ func processUTXOs(ctx context.Context, logger ulogger.Logger, appSettings *setti
 		if lanes, err = prepareSeedLanes(ctx, logger, appSettings, blockchainStore, utxoStore, utxoFile, hash); err != nil {
 			return nil, err
 		}
+	} else if err = forgetSeededRows(ctx, blockchainStore, hash); err != nil {
+		// An import at off makes records without positions, so a shadow seed of this snapshot
+		// recorded as done is done no longer.
+		return nil, err
 	}
 
 	// Multi-record txs go through a much slower create path, so they get their
