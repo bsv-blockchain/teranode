@@ -129,12 +129,13 @@ var (
 	journalSettled2   = lane.Pack(9, 42)  // block 190: below the floor
 	journalSettled3   = lane.Pack(9, 43)  // block 190: below the floor
 	journalSettled4   = lane.Pack(9, 44)  // block 190: below the floor
+	journalSettled5   = lane.Pack(9, 45)  // block 190: below the floor
 	journalCoinbase   = lane.Pack(7, 501) // no block: a coinbase no row lists
 	journalShallow    = lane.Pack(9, 41)  // block 250: 50 deep
 	journalUnmined    = lane.Pack(9, 99)  // no block
 	journalIndexBlock = map[uint32][]uint64{
 		150: {journalParentPos},
-		190: {journalSettled, journalSettled2, journalSettled3, journalSettled4},
+		190: {journalSettled, journalSettled2, journalSettled3, journalSettled4, journalSettled5},
 		250: {journalShallow},
 		260: {lane.Pack(7, 1000), lane.Pack(9, 1000)},
 	}
@@ -186,10 +187,13 @@ func TestJournalDropJudgesEveryRowByTheLaneRule(t *testing.T) {
 
 	// Dropped: a coinbase's output, spent by a settled spender. No row lists a coinbase, so the
 	// journal row's coinbase flag has lanes count it apart instead of as an unmined parent.
-	coinbase := mkTx(t, 1, 5_000)
+	coinbase := mkTx(t, 2, 5_000)
 	_, err = s.Create(ctx, coinbase, 800, utxo.WithSetCoinbase(true), utxo.WithLanePosition(journalCoinbase), minedAt(800, 11))
 	require.NoError(t, err)
 	spendWith(t, s, ctx, coinbase, 0, 1_010, utxo.WithLanePosition(journalSettled4), minedAt(1_010, 12))
+	// Carried: a coinbase's output spent by a waiting spender the index says a deep block took. The
+	// kept row's coinbase flag is read too, so lanes cannot judge it rather than keep an unmined parent.
+	spendWith(t, s, ctx, coinbase, 1, 1_010, utxo.WithLanePosition(journalSettled5))
 
 	// A journal partition above the cutoff, which does not retire, so the pass is no backlog.
 	require.NoError(t, s.ensureSpendJournalPartition(ctx, 1_700))
@@ -197,16 +201,17 @@ func TestJournalDropJudgesEveryRowByTheLaneRule(t *testing.T) {
 	require.NoError(t, s.SetBlockHeight(1_728))
 
 	before := map[string]float64{
-		"both keep":   journalVerdicts(t, lanereader.PruneKeep, lanereader.PruneKeep, lanereader.ReasonSpenderUnmined),
-		"both delete": journalVerdicts(t, lanereader.PruneDelete, lanereader.PruneDelete, lanereader.ReasonSettled),
-		"today only":  journalVerdicts(t, lanereader.PruneDelete, lanereader.PruneKeep, lanereader.ReasonSpenderShallow),
-		"no position": journalVerdicts(t, lanereader.PruneDelete, lanereader.PruneCannotJudge, lanereader.ReasonNoPosition),
-		"lanes only":  journalVerdicts(t, lanereader.PruneKeep, lanereader.PruneDelete, lanereader.ReasonSettled),
-		"undo":        journalVerdicts(t, lanereader.PruneKeepUndo, lanereader.PruneDelete, lanereader.ReasonSettled),
-		"coinbase":    journalVerdicts(t, lanereader.PruneDelete, lanereader.PruneCannotJudge, lanereader.ReasonCoinbase),
-		"rows":        journalReads(t, "journal_row"),
-		"positions":   journalReads(t, "position"),
-		"leaf_error":  journalUnjudged(t, "leaf_error"),
+		"both keep":     journalVerdicts(t, lanereader.PruneKeep, lanereader.PruneKeep, lanereader.ReasonSpenderUnmined),
+		"both delete":   journalVerdicts(t, lanereader.PruneDelete, lanereader.PruneDelete, lanereader.ReasonSettled),
+		"today only":    journalVerdicts(t, lanereader.PruneDelete, lanereader.PruneKeep, lanereader.ReasonSpenderShallow),
+		"no position":   journalVerdicts(t, lanereader.PruneDelete, lanereader.PruneCannotJudge, lanereader.ReasonNoPosition),
+		"lanes only":    journalVerdicts(t, lanereader.PruneKeep, lanereader.PruneDelete, lanereader.ReasonSettled),
+		"undo":          journalVerdicts(t, lanereader.PruneKeepUndo, lanereader.PruneDelete, lanereader.ReasonSettled),
+		"coinbase":      journalVerdicts(t, lanereader.PruneDelete, lanereader.PruneCannotJudge, lanereader.ReasonCoinbase),
+		"kept coinbase": journalVerdicts(t, lanereader.PruneKeep, lanereader.PruneCannotJudge, lanereader.ReasonCoinbase),
+		"rows":          journalReads(t, "journal_row"),
+		"positions":     journalReads(t, "position"),
+		"leaf_error":    journalUnjudged(t, "leaf_error"),
 	}
 
 	dropped, err := s.dropSpendJournalPartitionsBelow(ctx, 1_440)
@@ -221,8 +226,9 @@ func TestJournalDropJudgesEveryRowByTheLaneRule(t *testing.T) {
 	require.Equal(t, before["lanes only"]+1, journalVerdicts(t, lanereader.PruneKeep, lanereader.PruneDelete, lanereader.ReasonSettled))
 	require.Equal(t, before["undo"]+1, journalVerdicts(t, lanereader.PruneKeepUndo, lanereader.PruneDelete, lanereader.ReasonSettled))
 	require.Equal(t, before["coinbase"]+1, journalVerdicts(t, lanereader.PruneDelete, lanereader.PruneCannotJudge, lanereader.ReasonCoinbase))
-	require.Equal(t, before["rows"]+7, journalReads(t, "journal_row"))
-	require.Equal(t, before["positions"]+7, journalReads(t, "position"), "each spender's position; the parent's is on the journal row")
+	require.Equal(t, before["kept coinbase"]+1, journalVerdicts(t, lanereader.PruneKeep, lanereader.PruneCannotJudge, lanereader.ReasonCoinbase))
+	require.Equal(t, before["rows"]+8, journalReads(t, "journal_row"))
+	require.Equal(t, before["positions"]+8, journalReads(t, "position"), "each spender's position; the parent's is on the journal row")
 
 	_, judged := s.laneJudgedLeaves.Load(uint32(1_010 / SpendJournalPartitionBlocks))
 	require.True(t, judged, "the partition is remembered as judged")
