@@ -22,6 +22,7 @@ import (
 	"github.com/bsv-blockchain/teranode/services/utxopersister"
 	"github.com/bsv-blockchain/teranode/settings"
 	blockchain_store "github.com/bsv-blockchain/teranode/stores/blockchain"
+	blockchainoptions "github.com/bsv-blockchain/teranode/stores/blockchain/options"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	utxofactory "github.com/bsv-blockchain/teranode/stores/utxo/factory"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
@@ -401,6 +402,10 @@ func seedStampsPositionsAndRows(t *testing.T, heights []uint32) {
 	require.NoError(t, err)
 	require.Len(t, grants, 1, "the re-run took no new grant")
 
+	// A done seed whose records were since spent and pruned is still done on a plain re-run.
+	require.NoError(t, f.utxoStore().Delete(ctx, &f.records[0].TxID))
+	require.NoError(t, f.seed(false))
+
 	// Another snapshot cannot seed into this database, whose blocks already hold this seed's rows,
 	// and asking leaves this seed's grant recorded.
 	other, err := blockchain_store.NewStore(ulogger.TestLogger{}, f.settings.BlockChain.StoreURL, f.settings)
@@ -540,6 +545,76 @@ func TestSeederWritesNoCheckpointWhenItsRowsFail(t *testing.T) {
 	exists, err := blockAssemblerStateExists(ctx, f.blockchainStore())
 	require.NoError(t, err)
 	require.False(t, exists, "no checkpoint without the rows")
+}
+
+// A lease whose grant committed but was never recorded, as when a run stops between the two, does
+// not block the seed's next run; without that run's pending record, an earlier grant does.
+func TestSeederGrantAfterAnUnrecordedOne(t *testing.T) {
+	ctx := context.Background()
+	store := newTestBlockchainStore(t)
+	s := test.CreateBaseTestSettings(t)
+	tip := chainhash.HashH([]byte("stopped seed"))
+
+	require.NoError(t, store.SetState(ctx, seederStateKey(seederPendingKeyPrefix, tip), tip[:]))
+	_, _, _, err := store.OpenLaneLease(ctx, blockchainoptions.LaneLeaseOpen{Holder: "seeder@test", GrantMin: 5, CloseAfter: time.Minute})
+	require.NoError(t, err)
+
+	g, err := takeSeederGrant(ctx, ulogger.TestLogger{}, store, s, tip, 5)
+	require.NoError(t, err)
+	require.Equal(t, uint64(5), g.Len())
+
+	_, err = takeSeederGrant(ctx, ulogger.TestLogger{}, store, s, chainhash.HashH([]byte("another seed")), 5)
+	require.ErrorContains(t, err, "has handed out lane positions before")
+}
+
+// blockingStateStore is a blockchain store whose GetState waits until its context ends.
+type blockingStateStore struct {
+	blockchain_store.Store
+}
+
+func (blockingStateStore) GetState(ctx context.Context, _ string) ([]byte, error) {
+	<-ctx.Done()
+
+	return nil, ctx.Err()
+}
+
+// A blockchain store call the seed's lanes make that never answers fails once the bound passes.
+func TestSeederLaneStoreCallsAreBounded(t *testing.T) {
+	saved := seederDBTimeout
+	seederDBTimeout = 50 * time.Millisecond
+
+	t.Cleanup(func() { seederDBTimeout = saved })
+
+	start := time.Now()
+	_, err := readState(context.Background(), blockingStateStore{}, "sg:x")
+	require.ErrorContains(t, err, "deadline exceeded")
+	require.Less(t, time.Since(start), 5*time.Second)
+}
+
+// A batch of rows whose blocks are not all on the main chain writes none of them.
+func TestSeededRowsCheckTheirBlocksBeforeAnyInsert(t *testing.T) {
+	f := newSeedFixture(t, settings.LaneMigrationShadow, 8, fixtureHeights)
+	ctx := context.Background()
+	bc := f.blockchainStore()
+	require.NoError(t, processHeaders(ctx, ulogger.TestLogger{}, bc, filepath.Join(f.dir, f.name+".utxo-headers")))
+
+	// One record at each height up to 11, three above the chain's tip.
+	layout := &seedLayout{counts: make([]uint32, 12), base: make([]uint64, 12), nonCoinbase: 12}
+	for h := range layout.counts {
+		layout.counts[h], layout.base[h] = 1, uint64(h)
+	}
+
+	err := writeSeededRows(ctx, ulogger.TestLogger{}, bc, &seededLanes{layout: layout, grant: lane.Grant{Lane: 9, First: 1, Last: 12}}, &utxoSetTip{hash: f.tip, height: f.tipH})
+	require.ErrorContains(t, err, "no block at height 9")
+
+	_, metas, err := bc.GetBlockHeadersByHeight(ctx, 0, f.tipH)
+	require.NoError(t, err)
+
+	for _, m := range metas {
+		rows, err := bc.LaneMapRows(ctx, m.ID)
+		require.NoError(t, err)
+		require.Empty(t, rows, "height %d", m.Height)
+	}
 }
 
 // At off the seeder takes no lease, gives no position and writes no row.

@@ -29,9 +29,9 @@ const (
 
 	// RowTagSeededRange is a range row the seeder wrote for a block below a UTXO snapshot's tip:
 	// its block took every position from First to Last, and it has no hole data. It lists only
-	// the block's transactions that still had an unspent output at the snapshot, never its
-	// coinbase, so it holds fewer members than the block has transactions, and a transaction it
-	// leaves out has no record anywhere.
+	// the block's transactions other than its coinbase that the snapshot holds, those with an
+	// unspent output at the snapshot's tip, so it can hold fewer members than the block has
+	// transactions.
 	RowTagSeededRange RowTag = 2
 )
 
