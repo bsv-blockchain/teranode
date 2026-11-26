@@ -173,10 +173,9 @@ func TestExtraRecordItemsReportsReadFailures(t *testing.T) {
 	require.Equal(t, 3, items[0].childCount)
 }
 
-// TestApplyLockClearWorkClearsHealthyTxWhenASiblingReadFails checks the
-// FILTERED_OUT follow-up when one transaction's count read fails inside an
-// otherwise healthy batch: the failure reaches the caller with its txid, and
-// the other transaction loses `creating` while the failing one's master keeps it.
+// TestApplyLockClearWorkClearsHealthyTxWhenASiblingReadFails: a failed count
+// read reaches the caller with its txid and keeps `creating` on that master,
+// while the healthy transaction in the same batch still loses it.
 func TestApplyLockClearWorkClearsHealthyTxWhenASiblingReadFails(t *testing.T) {
 	t.Parallel()
 
@@ -235,18 +234,20 @@ func TestApplyLockClearWorkReportsFailedClears(t *testing.T) {
 	store, client := setupStoreForLockTest(t)
 	store.utxoBatchSize = 4
 
+	healthy := txWithOutputs(t, 2)
 	paginated := txWithOutputs(t, 10)
 	single := txWithOutputs(t, 2)
 
-	for _, tx := range []*bt.Tx{paginated, single} {
+	for _, tx := range []*bt.Tx{healthy, paginated, single} {
 		_, err := store.Create(ctx, tx, 100)
 		require.NoError(t, err)
 	}
 
+	healthyHash := healthy.TxIDChainHash()
 	paginatedHash := paginated.TxIDChainHash()
 	singleHash := single.TxIDChainHash()
 
-	for _, key := range []*aerospike.Key{recordKey(t, store, paginatedHash, 0), recordKey(t, store, singleHash, 0)} {
+	for _, key := range []*aerospike.Key{recordKey(t, store, healthyHash, 0), recordKey(t, store, paginatedHash, 0), recordKey(t, store, singleHash, 0)} {
 		require.NoError(t, client.PutBins(nil, key, aerospike.NewBin(fields.Creating.String(), true)))
 	}
 
@@ -255,7 +256,8 @@ func TestApplyLockClearWorkReportsFailedClears(t *testing.T) {
 	clearAttempted := failRecordsAfterBatch(t, store, client,
 		[]*aerospike.Key{recordKey(t, store, paginatedHash, 1), recordKey(t, store, singleHash, 0)}, isBatchWrite)
 
-	err := store.applyLockClearWork(ctx, lockClearWork{fullUnlock: []chainhash.Hash{*paginatedHash, *singleHash}})
+	// The healthy transaction comes first, so a failure named after the wrong item shows.
+	err := store.applyLockClearWork(ctx, lockClearWork{fullUnlock: []chainhash.Hash{*healthyHash, *paginatedHash, *singleHash}})
 	require.True(t, *clearAttempted)
 	require.ErrorIs(t, err, errors.ErrStorageError)
 	require.ErrorContains(t, err, paginatedHash.String()+"] failed to clear record 1")
@@ -263,6 +265,8 @@ func TestApplyLockClearWorkReportsFailedClears(t *testing.T) {
 
 	require.True(t, hasCreating(t, client, store, paginatedHash, 0), "a failed extra record must keep creating on its master")
 	require.False(t, hasCreating(t, client, store, paginatedHash, 2), "the other extra record is still cleared")
+	require.False(t, hasCreating(t, client, store, healthyHash, 0), "a healthy master in the same batch is cleared")
+	require.NotContains(t, err.Error(), healthyHash.String())
 }
 
 // TestClearLockedOnRecordsMultiMasterItem pins the master write: it deletes only
@@ -330,6 +334,14 @@ func TestClearLockedOnRecordsMultiMasterItem(t *testing.T) {
 		require.Equal(t, true, rec.Bins[fields.Locked.String()], "the master's locked is left to SetLocked")
 	})
 
+	t.Run("item without master leaves the master alone", func(t *testing.T) {
+		txHash := create(t, 10, true)
+
+		require.NoError(t, store.clearLockedOnRecordsMulti([]lockClearItem{{txID: txHash, childCount: 2}}))
+		require.True(t, hasCreating(t, client, store, txHash, 0), "only an item that sets master clears the master")
+		require.False(t, hasCreating(t, client, store, txHash, 2), "its extra records are cleared")
+	})
+
 	t.Run("missing extra record keeps creating on the master", func(t *testing.T) {
 		txHash := create(t, 10, true)
 
@@ -363,7 +375,15 @@ func TestApplyLockClearWorkReportsEveryFailure(t *testing.T) {
 		err := store.applyLockClearWork(context.Background(), lockClearWork{
 			items: []lockClearItem{{txID: &txID, childCount: 1}},
 		})
-		require.ErrorContains(t, err, "clearLockedOnRecordsMulti")
+		require.ErrorContains(t, err, "[clearLockedOnRecordsMulti] failed to clear locked flag")
+	})
+
+	t.Run("master clear fails alone", func(t *testing.T) {
+		err := store.applyLockClearWork(context.Background(), lockClearWork{
+			items: []lockClearItem{{txID: &txID, master: true}},
+		})
+		require.ErrorIs(t, err, errors.ErrStorageError)
+		require.ErrorContains(t, err, "[clearLockedOnRecordsMulti] failed to clear creating on 1 master records")
 	})
 
 	t.Run("read, clear and unlock all fail", func(t *testing.T) {
