@@ -160,15 +160,22 @@ func Seeder(logger ulogger.Logger, appSettings *settings.Settings, inputDir stri
 	headerFile := filepath.Join(inputDir, hash+".utxo-headers")
 
 	// The UTXO set is <hash>.utxo-set, or <hash>.utxo-set.zst as one zstd file
-	// or a directory of zstd pieces, decompressed as it is read.
-	utxoFile, err := findUTXOSet(inputDir, hash)
-	if err != nil {
-		return err
+	// or a directory of zstd pieces, decompressed as it is read. Only the UTXO
+	// pass reads it, so a headers-only run does not look for it.
+	utxoFile := filepath.Join(inputDir, hash+".utxo-set")
+
+	var err error
+
+	if !skipUTXOs {
+		if utxoFile, err = findUTXOSet(inputDir, hash); err != nil {
+			return err
+		}
 	}
 
 	// expectedUTXOSetSHA256 is set for a compressed UTXO set only: its checksum
 	// is checked in the import pass itself, since checking it first would
-	// decompress the whole set once more before the import begins.
+	// decompress the whole set once more before the import begins. A run that
+	// does not import reads the set through the hash instead (processUTXOs).
 	var expectedUTXOSetSHA256 string
 
 	if !skipHeaders {
@@ -211,7 +218,7 @@ func Seeder(logger ulogger.Logger, appSettings *settings.Settings, inputDir stri
 			}
 
 			if expectedUTXOSetSHA256 != "" {
-				logger.Infof("UTXO set %s is compressed; its checksum is verified while it is imported", utxoFile)
+				logger.Infof("UTXO set %s is compressed; its checksum is verified as it is read", utxoFile)
 			}
 		default:
 			if err := verifyChecksum(logger, utxoFile); err != nil {
@@ -516,6 +523,11 @@ func processUTXOs(ctx context.Context, logger ulogger.Logger, appSettings *setti
 
 		logger.Infof("lastProcessed.dat matches %s and no BlockAssembler checkpoint was found; recovering the checkpoint without re-importing", utxoFile)
 
+		// The tip comes from this file, so a compressed one is verified first.
+		if err = verifyUTXOSetFile(utxoFile, expectedSHA256); err != nil {
+			return nil, err
+		}
+
 		return readUTXOSetTip(utxoFile)
 	case !force:
 		var skip bool
@@ -528,9 +540,11 @@ func processUTXOs(ctx context.Context, logger ulogger.Logger, appSettings *setti
 		if skip {
 			// The store has already been fully seeded. Skip idempotently and
 			// leave any existing BlockAssembler checkpoint untouched (returning a
-			// nil tip signals the caller not to write state).
+			// nil tip signals the caller not to write state). A compressed set is
+			// still verified, as a plain one was before this point.
 			logger.Errorf("lastProcessed.dat exists, skipping UTXOs")
-			return nil, nil
+
+			return nil, verifyUTXOSetFile(utxoFile, expectedSHA256)
 		}
 	}
 
@@ -907,21 +921,21 @@ func importUTXOSet(ctx context.Context, logger ulogger.Logger, store utxo.Store,
 			}
 
 			pg.Go(func() error {
-				if err := readUTXOFrames(pCtx, logger, s.footerSource(), s.reader, frameCh, name, accept); err != nil {
-					return err
+				err := readUTXOFrames(pCtx, logger, s.footerSource(), s.reader, frameCh, name, accept)
+				if err == nil && verify {
+					if err = s.verify(opts.expectedSHA256, utxoFile); err == nil {
+						logger.Infof("[%s pass] checksum verified for %s", name, utxoFile)
+					}
 				}
 
-				if !verify {
-					return nil
+				// A read that failed on its own, not because another part of the
+				// import stopped it, may have handed damaged records to the
+				// workers: a zstd frame's checksum is only checked at its end.
+				if err != nil && pCtx.Err() == nil {
+					return errors.NewProcessingError("reading the UTXO set %s failed part-way. Records read before the failure may already be in the UTXO store, and a re-run keeps a record that already exists, so wipe the UTXO store before seeding again", utxoFile, err)
 				}
 
-				if err := s.verify(opts.expectedSHA256, utxoFile); err != nil {
-					return err
-				}
-
-				logger.Infof("[%s pass] checksum verified for %s", name, utxoFile)
-
-				return nil
+				return err
 			})
 
 			return pg.Wait()

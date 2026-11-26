@@ -210,15 +210,38 @@ func (s *utxoSetStream) Close() error {
 	return s.close()
 }
 
-// verify compares the SHA-256 of every byte read with expected. It is called
-// once readUTXOFrames has found the footer at the very end of the stream, so
-// every byte has been read; a mismatch means the records came from a snapshot
-// that is not the one the sidecar describes.
+// verify compares the SHA-256 of every byte read with expected. The caller
+// must have read the stream to its end: readUTXOFrames does when it finds the
+// footer, since the footer is the last 16 bytes of the stream.
 func (s *utxoSetStream) verify(expected, path string) error {
 	actual := hex.EncodeToString(s.sum.Sum(nil))
 	if actual != expected {
-		return errors.NewProcessingError("checksum mismatch for %s: its sidecar says %s, the uncompressed stream hashes to %s. The UTXO store now holds records from this snapshot: wipe the UTXO store, fetch the snapshot again and re-run the seed", path, expected, actual)
+		return errors.NewProcessingError("checksum mismatch for %s: its sidecar says %s, the uncompressed stream hashes to %s", path, expected, actual)
 	}
 
 	return nil
+}
+
+// verifyUTXOSetFile reads the whole UTXO set at path through the hash and
+// checks it against expected, for a run that uses the set without importing
+// it. An empty expected checks nothing.
+func verifyUTXOSetFile(path, expected string) error {
+	if expected == "" {
+		return nil
+	}
+
+	s, err := openUTXOSetStream(path, true)
+	if err != nil {
+		return err
+	}
+
+	defer func() {
+		_ = s.Close()
+	}()
+
+	if _, err = io.Copy(io.Discard, s.reader); err != nil {
+		return errors.NewStorageError("failed to read %s for checksum verification", path, err)
+	}
+
+	return s.verify(expected, path)
 }

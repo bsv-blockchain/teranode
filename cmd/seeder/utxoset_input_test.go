@@ -1,18 +1,22 @@
 package seeder
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
+	"github.com/bsv-blockchain/teranode/services/blockassembly"
 	bloboptions "github.com/bsv-blockchain/teranode/stores/blob/options"
+	utxosql "github.com/bsv-blockchain/teranode/stores/utxo/sql"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/klauspost/compress/zstd"
 	"github.com/stretchr/testify/require"
@@ -170,7 +174,7 @@ func TestImportUTXOSet_DamagedPieces(t *testing.T) {
 			opts.utxoBatchSize = 0
 
 			err := importUTXOSet(context.Background(), ulogger.TestLogger{}, noopCreateStore{}, dir, opts)
-			require.Error(t, err)
+			require.ErrorContains(t, err, "wipe the UTXO store")
 
 			if tc.wantErr != "" {
 				require.ErrorContains(t, err, tc.wantErr)
@@ -292,10 +296,8 @@ func TestUTXOSetPieces(t *testing.T) {
 	require.Error(t, err)
 }
 
-// A seed that stops part-way through a compressed set (here the download was
-// incomplete) leaves no completion marker, and a plain re-run once the set is
-// whole imports it. -recover-checkpoint then reads the tip from the
-// compressed set too.
+// A seed stopped part-way (here by a missing last piece) is not marked complete; a re-run on
+// the whole set stores every output intact. Runs that do not import still check the checksum.
 func TestProcessUTXOs_CompressedInput_InterruptedSeedReRuns(t *testing.T) {
 	ctx := context.Background()
 	tSettings := forceSeederSettings(t)
@@ -303,7 +305,15 @@ func TestProcessUTXOs_CompressedInput_InterruptedSeedReRuns(t *testing.T) {
 	blockStore := openTestBlockStore(t, tSettings)
 	blockchainStore := newTestBlockchainStore(t)
 
+	// Distinct values and scripts per output, so a misread byte cannot go unnoticed.
 	wrappers := benchWrappers("rerun", 300, 0)
+	for i, w := range wrappers {
+		for j, u := range w.UTXOs {
+			u.Value = uint64(1000 + i*10 + j) //nolint:gosec // small test values
+			u.Script = append(bytes.Clone(u.Script), byte(i), byte(j))
+		}
+	}
+
 	dir, sum := compressedSnapshot(t, writeCompleteSnapshotFile(t, wrappers), 2048)
 
 	pieces, err := utxoSetPieces(dir)
@@ -316,6 +326,7 @@ func TestProcessUTXOs_CompressedInput_InterruptedSeedReRuns(t *testing.T) {
 
 	_, err = processUTXOs(ctx, ulogger.TestLogger{}, tSettings, blockchainStore, dir, "", false, false, sum)
 	require.ErrorContains(t, err, "truncated")
+	require.ErrorContains(t, err, "wipe the UTXO store")
 
 	exists, err := blockStore.Exists(ctx, nil, fileformat.FileTypeDat, bloboptions.WithFilename("lastProcessed"), bloboptions.WithNoHashPrefix())
 	require.NoError(t, err)
@@ -328,13 +339,56 @@ func TestProcessUTXOs_CompressedInput_InterruptedSeedReRuns(t *testing.T) {
 	require.Equal(t, uint32(200), tip.height)
 	require.Equal(t, "200", readMarker(t, ctx, blockStore))
 
-	for _, w := range []int{0, len(wrappers) - 1} {
-		require.True(t, utxoStoreHasTx(ctx, t, tSettings, "compressed_rerun", &wrappers[w].TxID))
+	u, err := url.Parse("sqlite:///compressed_rerun")
+	require.NoError(t, err)
+
+	store, err := utxosql.New(ctx, ulogger.TestLogger{}, tSettings, u)
+	require.NoError(t, err)
+
+	for _, w := range wrappers {
+		got, err := store.Get(ctx, &w.TxID)
+		require.NoError(t, err)
+		require.NotNil(t, got.Tx)
+
+		for _, want := range w.UTXOs {
+			out := got.Tx.Outputs[want.Index]
+			require.NotNil(t, out, "tx %s output %d", w.TxID, want.Index)
+			require.Equal(t, want.Value, out.Satoshis, "tx %s output %d", w.TxID, want.Index)
+			require.Equal(t, want.Script, []byte(*out.LockingScript), "tx %s output %d", w.TxID, want.Index)
+		}
 	}
 
-	tip, err = processUTXOs(ctx, ulogger.TestLogger{}, tSettings, blockchainStore, dir, "", false, true, "")
+	stale := hex.EncodeToString(make([]byte, sha256.Size))
+
+	// -recover-checkpoint takes the tip from the set, so it checks the set first.
+	_, err = processUTXOs(ctx, ulogger.TestLogger{}, tSettings, blockchainStore, dir, "", false, true, stale)
+	require.ErrorContains(t, err, "checksum mismatch")
+
+	tip, err = processUTXOs(ctx, ulogger.TestLogger{}, tSettings, blockchainStore, dir, "", false, true, sum)
 	require.NoError(t, err)
 	require.Equal(t, uint32(200), tip.height)
+
+	// With the checkpoint written, a plain re-run skips the import but still checks the set.
+	require.NoError(t, blockchainStore.SetState(ctx, blockassembly.StateKey, []byte("checkpoint")))
+
+	_, err = processUTXOs(ctx, ulogger.TestLogger{}, tSettings, blockchainStore, dir, "", false, false, stale)
+	require.ErrorContains(t, err, "checksum mismatch")
+
+	tip, err = processUTXOs(ctx, ulogger.TestLogger{}, tSettings, blockchainStore, dir, "", false, false, sum)
+	require.NoError(t, err)
+	require.Nil(t, tip, "a skipped import writes no checkpoint")
+}
+
+// A headers-only run never reads the UTXO set, so having both forms of it in the
+// directory is no reason to refuse.
+func TestSeeder_SkipUTXOs_DoesNotLookForTheUTXOSet(t *testing.T) {
+	dir := t.TempDir()
+
+	for _, name := range []string{compressedTestHash + ".utxo-set", compressedTestHash + ".utxo-set.zst"} {
+		require.NoError(t, os.WriteFile(filepath.Join(dir, name), nil, 0o600))
+	}
+
+	require.NoError(t, Seeder(ulogger.TestLogger{}, forceSeederSettings(t), dir, compressedTestHash, true /* skipHeaders */, true /* skipUTXOs */, false /* force */, false /* recoverCheckpoint */, false /* skipChecksum */))
 }
 
 // Through Seeder: a compressed set's sidecar is checked in the import pass, so
