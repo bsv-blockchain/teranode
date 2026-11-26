@@ -1277,6 +1277,100 @@ func TestRollForwardCreating_CompletesAFinalizingRecordWhoseParentRefusesTheRepe
 	requireSpentBy(t, ctx, store, paginated, "the input is still spent by the transaction")
 }
 
+// TestRollForwardCreating_EndsAFinalizingRecordThatLostAnInputAsConflicting covers a record whose
+// finalize began and did not end, and one of whose inputs another transaction then took, as the
+// conflict processing of a block does for the loser of a double spend: it marks the loser, takes
+// back its spend of the input the winner needs and writes the spend of the winner. No rollback can
+// claim the record, so the roll-forward completes it, but as conflicting and with an error, so that
+// no caller hands it to block assembly. It reverses nothing: the other input stays spent by the
+// record, as the other inputs of a demoted loser do.
+func TestRollForwardCreating_EndsAFinalizingRecordThatLostAnInputAsConflicting(t *testing.T) {
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.UtxoStore.UtxoBatchSize = 4
+
+	client, store, ctx, deferFn := initAerospike(t, tSettings, logger)
+	t.Cleanup(deferFn)
+	cleanDB(t, client)
+
+	for _, tc := range []struct {
+		name   string
+		seed   int
+		marked bool
+	}{
+		{"conflict processing marked the record", 8211, true},
+		{"nothing marked the record", 8212, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.NoError(t, store.SetBlockHeight(1000))
+
+			parent := conflictingIndexParent(t, ctx, store, tc.seed, 2)
+			paginated := conflictingIndexTx(t, parent, []uint32{0, 1}, 10)
+			hash := paginated.TxIDChainHash()
+
+			md, err := store.Create(ctx, paginated, 900, utxo.WithCreating(true))
+			require.NoError(t, err)
+
+			_, err = store.Spend(ctx, paginated, 900)
+			require.NoError(t, err, "precondition: the attempt spent its inputs")
+
+			failMasterFinalizeWrite(t, client, store, hash, false)
+
+			require.Error(t, store.FinalizeTransaction(ctx, paginated, md.Attempt, md.Attempt), "the master write failed")
+
+			store.SetBatchOperateFn(nil)
+
+			require.NoError(t, store.ReleaseSpendLease(ctx, hash, md.Attempt, md.Attempt), "the creator releases its lease when its finalize fails")
+
+			if tc.marked {
+				_, _, err = store.SetConflicting(ctx, []chainhash.Hash{*hash}, true)
+				require.NoError(t, err)
+			}
+
+			own := spendHeightSpendsOf(t, paginated)
+			require.Len(t, own, 2)
+			require.NoError(t, store.Unspend(ctx, own[:1]), "the spend of the input the winner needs is taken back")
+
+			rival := conflictingIndexTx(t, parent, []uint32{0}, 1)
+
+			_, err = store.Spend(ctx, rival, 1000)
+			require.NoError(t, err, "the winner spends the input")
+
+			spends, completed, err := utxo.RollForwardCreating(ctx, logger, store, paginated, md.Attempt, 1000)
+			require.ErrorIs(t, err, errors.ErrSpent, "the caller learns that the transaction lost its input")
+			require.ErrorIs(t, err, errors.ErrTxConflicting)
+			require.True(t, utxo.IsEndedConflicting(err), "and that the record is complete, so that it does not try to roll it back")
+			require.False(t, completed, "this call does not own a hand-off")
+			require.Len(t, spends, 2)
+
+			for idx := uint32(0); idx <= 2; idx++ {
+				require.NotContains(t, recordBins(t, client, store, hash, idx, fields.Creating), fields.Creating.String(), "record %d", idx)
+			}
+
+			require.NotContains(t, recordBins(t, client, store, hash, 0, fields.Finalizing), fields.Finalizing.String())
+
+			got := &meta.Data{}
+			require.NoError(t, store.GetMeta(ctx, hash, got))
+			require.False(t, got.Creating, "the record is complete")
+			require.True(t, got.Conflicting, "and conflicting, so nothing loads it into block assembly")
+
+			taken, err := store.GetSpend(ctx, own[0])
+			require.NoError(t, err)
+			require.NotNil(t, taken.SpendingData)
+			require.Equal(t, rival.TxIDChainHash().String(), taken.SpendingData.TxID.String(), "the input the winner took is still the winner's")
+
+			kept, err := store.GetSpend(ctx, own[1])
+			require.NoError(t, err)
+			require.NotNil(t, kept.SpendingData, "a roll-forward reverses nothing")
+			require.Equal(t, hash.String(), kept.SpendingData.TxID.String())
+
+			stale, err := store.QueryStaleCreatingTxs(ctx, 998, 0)
+			require.NoError(t, err)
+			require.NotContains(t, stale, *hash, "nothing is left for the sweep")
+		})
+	}
+}
+
 // A creating record whose finalize has not begun still depends on its re-spend: a locked parent
 // refuses it and the record stays creating, for a later pass or for a rollback.
 func TestRollForwardCreating_ARecordThatIsNotFinalizingStillNeedsItsSpend(t *testing.T) {

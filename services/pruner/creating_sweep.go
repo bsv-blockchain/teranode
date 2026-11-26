@@ -74,6 +74,11 @@ type handOff struct {
 // transaction spent. It is not announced to block assembly either, which would offer a mined
 // transaction for the next template. Its roll-forward ignores locks, as the pre-flight's does.
 //
+// A record whose finalize had begun cannot be rolled back, also when its transaction lost an input
+// to another transaction or is conflicting. The roll-forward completes such a record as conflicting
+// (utxo.IsEndedConflicting). The sweep does not announce it and does not unlock it, and the reload
+// of block assembly skips a conflicting record.
+//
 // Convergence above the cap. The query has no cursor: every pass asks for one page of at most
 // pruner_creatingTxSweepMaxPerPass records from the whole range. A record whose parent is still
 // creating is left for a later pass, and it heals in a pass that takes it after its parent has
@@ -252,6 +257,17 @@ func (s *Server) sweepCreatingTxs(ctx context.Context, blockHeight uint32) {
 		// reverses the spends this pass made.
 		rfSpends, completed, rfErr := utxo.RollForwardCreating(ctx, s.logger, s.utxoStore, md.Tx, md.Attempt, blockHeight)
 		if rfErr != nil {
+			// The finalize of the record had begun, so no rollback could claim it, and its transaction
+			// can no longer be mined: it lost an input, or it is conflicting. The roll-forward
+			// completed the record as conflicting. It is not announced and it stays locked.
+			if utxo.IsEndedConflicting(rfErr) {
+				progressed++
+
+				s.logger.Warnf("[pruner][creating-sweep][%d] completed %s as conflicting and did not announce it: %v", blockHeight, hash, rfErr)
+
+				continue
+			}
+
 			// A locked or creating parent is transient, and the record waits for it. Only when
 			// pruner_creatingTxSweepBlockedAgeBlocks is set is such a record rolled back, and then only
 			// when the record is that old and every parent that blocked it has been blocked for that
@@ -344,6 +360,12 @@ func (s *Server) sweepCreatingTxs(ctx context.Context, blockHeight uint32) {
 // roll-forward answers, and it is not unlocked here: the write that marks it mined unlocks it.
 func (s *Server) completeBlockOwned(ctx context.Context, blockHeight uint32, hash chainhash.Hash, md *meta.Data) bool {
 	if _, _, rfErr := utxo.RollForwardCreating(ctx, s.logger, s.utxoStore, md.Tx, md.Attempt, blockHeight, utxo.WithIgnoreLocked(true)); rfErr != nil {
+		if utxo.IsEndedConflicting(rfErr) {
+			s.logger.Warnf("[pruner][creating-sweep][%d] completed %s, which belongs to a block (owed the longest-chain mark %t, block IDs %d), as conflicting: %v", blockHeight, hash, md.MarkOwed, len(md.BlockIDs), rfErr)
+
+			return true
+		}
+
 		s.logger.Warnf("[pruner][creating-sweep][%d] %s belongs to a block (owed the longest-chain mark %t, block IDs %d) and its roll-forward failed, it is never rolled back, will retry next block: %v", blockHeight, hash, md.MarkOwed, len(md.BlockIDs), rfErr)
 		prunerCreatingSweepFailures.Inc()
 

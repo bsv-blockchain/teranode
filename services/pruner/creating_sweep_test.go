@@ -2284,14 +2284,11 @@ func TestSweepCreatingTxsRetryHonoursTheContext(t *testing.T) {
 	require.Equal(t, hashA, s.handOffs[0].hash)
 }
 
-// TestSweepCreatingTxsCompletesARecordWhoseFinalizeBeganAndDidNotEnd answers, on a real Aerospike,
-// what repeats the finalize of a paginated record that is left creating and finalizing when its
-// caller is gone. The mark takes the rollback away, so the record must not depend on anything else
-// either. Here its finalize failed at the master write, its creator released its lease, and its
-// parent is locked, so a repeat of its spend is refused. The sweep selects the record by its
-// creating bin like any other, sets the refused re-spend aside because the finalize had begun, and
-// completes the record, announces it to block assembly and unlocks it.
-func TestSweepCreatingTxsCompletesARecordWhoseFinalizeBeganAndDidNotEnd(t *testing.T) {
+// newSweepAerospikeStore starts an Aerospike container and returns a store on it that keeps four
+// outputs to a record, at height 1000.
+func newSweepAerospikeStore(t *testing.T) *teranode_aerospike.Store {
+	t.Helper()
+
 	ctx := t.Context()
 
 	container, err := aeroTest.RunContainer(ctx, aeroTest.WithImage(test.AerospikeImage))
@@ -2310,27 +2307,43 @@ func TestSweepCreatingTxsCompletesARecordWhoseFinalizeBeganAndDidNotEnd(t *testi
 	aeroURL, err := url.Parse(fmt.Sprintf("aerospike://%s:%d/test?set=test&expiration=1m&externalStore=file://./data/externalStore", host, port))
 	require.NoError(t, err)
 
-	logger := ulogger.NewErrorTestLogger(t)
 	tSettings := test.CreateBaseTestSettings(t)
 	tSettings.UtxoStore.UtxoBatchSize = 4
 
-	store, err := teranode_aerospike.New(ctx, logger, tSettings, aeroURL)
+	store, err := teranode_aerospike.New(ctx, ulogger.NewErrorTestLogger(t), tSettings, aeroURL)
 	require.NoError(t, err)
 
 	store.SetExternalStore(memory.New())
 	require.NoError(t, store.SetBlockHeight(1000))
 
-	parent := bt.NewTx()
-	require.NoError(t, parent.From(fmt.Sprintf("%064x", 9001), 0, "51", 5_000_000))
-	require.NoError(t, parent.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 1_000_000))
+	return store
+}
 
-	_, err = store.Create(ctx, parent, 100)
+// leaveFinalizingRecord stores a parent with one output for each input, and the tentative record of
+// a transaction that spends them all and has ten outputs: a master and two pagination children. The
+// attempt spent its inputs, the master write of its finalize failed and its creator released its
+// lease, so the record is left creating and finalizing with nobody to complete it.
+func leaveFinalizingRecord(t *testing.T, store *teranode_aerospike.Store, seed, inputs int) (parent, paginated *bt.Tx, md *meta.Data) {
+	t.Helper()
+
+	ctx := t.Context()
+
+	parent = bt.NewTx()
+	require.NoError(t, parent.From(fmt.Sprintf("%064x", seed), 0, "51", 5_000_000))
+
+	for i := 0; i < inputs; i++ {
+		require.NoError(t, parent.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 1_000_000))
+	}
+
+	_, err := store.Create(ctx, parent, 100)
 	require.NoError(t, err)
 
-	// Ten outputs at four to a record: a master and two pagination children.
-	paginated := bt.NewTx()
-	require.NoError(t, paginated.From(parent.TxID(), 0, parent.Outputs[0].LockingScript.String(), parent.Outputs[0].Satoshis))
-	paginated.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{bscript.OpTRUE})
+	paginated = bt.NewTx()
+
+	for i := 0; i < inputs; i++ {
+		require.NoError(t, paginated.From(parent.TxID(), uint32(i), parent.Outputs[i].LockingScript.String(), parent.Outputs[i].Satoshis)) //nolint:gosec // a small test index
+		paginated.Inputs[i].UnlockingScript = bscript.NewFromBytes([]byte{bscript.OpTRUE})
+	}
 
 	for i := 0; i < 10; i++ {
 		require.NoError(t, paginated.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", uint64(100+i))) //nolint:gosec // a small test amount
@@ -2338,11 +2351,11 @@ func TestSweepCreatingTxsCompletesARecordWhoseFinalizeBeganAndDidNotEnd(t *testi
 
 	hash := paginated.TxIDChainHash()
 
-	md, err := store.Create(ctx, paginated, 900, utxo.WithCreating(true), utxo.WithLocked(true))
+	md, err = store.Create(ctx, paginated, 900, utxo.WithCreating(true), utxo.WithLocked(true))
 	require.NoError(t, err)
 
 	_, err = store.Spend(ctx, paginated, 900)
-	require.NoError(t, err, "precondition: the attempt spent its input")
+	require.NoError(t, err, "precondition: the attempt spent its inputs")
 
 	master, err := aerospike.NewKey(store.GetNamespace(), store.GetName(), hash[:])
 	require.NoError(t, err)
@@ -2366,6 +2379,22 @@ func TestSweepCreatingTxsCompletesARecordWhoseFinalizeBeganAndDidNotEnd(t *testi
 	left := &meta.Data{}
 	require.NoError(t, store.GetMeta(ctx, hash, left))
 	require.True(t, left.Creating && left.Finalizing, "precondition: the record is creating and finalizing")
+
+	return parent, paginated, md
+}
+
+// TestSweepCreatingTxsCompletesARecordWhoseFinalizeBeganAndDidNotEnd answers, on a real Aerospike,
+// what repeats the finalize of a paginated record that is left creating and finalizing when its
+// caller is gone. The mark takes the rollback away, so the record must not depend on anything else
+// either. Here its finalize failed at the master write, its creator released its lease, and its
+// parent is locked, so a repeat of its spend is refused. The sweep selects the record by its
+// creating bin like any other, sets the refused re-spend aside because the finalize had begun, and
+// completes the record, announces it to block assembly and unlocks it.
+func TestSweepCreatingTxsCompletesARecordWhoseFinalizeBeganAndDidNotEnd(t *testing.T) {
+	ctx := t.Context()
+	store := newSweepAerospikeStore(t)
+	parent, paginated, md := leaveFinalizingRecord(t, store, 9001, 1)
+	hash := paginated.TxIDChainHash()
 
 	began, err := store.BeginCreateFirstRollback(ctx, hash, md.Attempt)
 	require.NoError(t, err)
@@ -2398,4 +2427,132 @@ func TestSweepCreatingTxsCompletesARecordWhoseFinalizeBeganAndDidNotEnd(t *testi
 	stale, err = store.QueryStaleCreatingTxs(ctx, 998, 0)
 	require.NoError(t, err)
 	require.NotContains(t, stale, *hash, "nothing is left for the next pass")
+}
+
+// TestSweepCreatingTxsEndsAFinalizingRecordThatLostAnInputAsConflicting covers a record whose
+// finalize began and did not end, and one of whose inputs another transaction then took, as the
+// conflict processing of a block does for the loser of a double spend. Nothing can roll the record
+// back, so the sweep completes it, but as conflicting: it is not announced to block assembly and it
+// is not unlocked.
+func TestSweepCreatingTxsEndsAFinalizingRecordThatLostAnInputAsConflicting(t *testing.T) {
+	ctx := t.Context()
+	store := newSweepAerospikeStore(t)
+
+	for _, tc := range []struct {
+		name   string
+		seed   int
+		marked bool
+	}{
+		{"conflict processing marked the record", 9002, true},
+		{"nothing marked the record", 9003, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			parent, paginated, _ := leaveFinalizingRecord(t, store, tc.seed, 2)
+			hash := paginated.TxIDChainHash()
+
+			if tc.marked {
+				_, _, err := store.SetConflicting(ctx, []chainhash.Hash{*hash}, true)
+				require.NoError(t, err)
+			}
+
+			own, err := utxo.GetSpends(paginated)
+			require.NoError(t, err)
+			require.NoError(t, store.Unspend(ctx, own[:1]), "the spend of the input the winner needs is taken back")
+
+			rival := bt.NewTx()
+			require.NoError(t, rival.From(parent.TxID(), 0, parent.Outputs[0].LockingScript.String(), parent.Outputs[0].Satoshis))
+			rival.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{bscript.OpTRUE})
+			require.NoError(t, rival.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 999))
+
+			_, err = store.Spend(ctx, rival, 1000)
+			require.NoError(t, err, "the winner spends the input")
+
+			_, err = store.Spend(ctx, paginated, 1000)
+			require.ErrorIs(t, err, errors.ErrSpent, "precondition: the input belongs to another transaction")
+
+			stale, err := store.QueryStaleCreatingTxs(ctx, 998, 0)
+			require.NoError(t, err)
+			require.Contains(t, stale, *hash, "precondition: the sweep's query selects the record")
+
+			ba := blockassembly.NewMock()
+			ba.On("Store", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(true, nil)
+
+			s := newSweepServer(t, store)
+			s.blockAssemblyClient = ba
+			s.sweepCreatingTxs(ctx, 1000)
+
+			done := &meta.Data{}
+			require.NoError(t, store.GetMeta(ctx, hash, done))
+			require.False(t, done.Creating, "the sweep completed the record, which nothing can roll back")
+			require.False(t, done.Finalizing)
+			require.True(t, done.Conflicting, "as conflicting")
+			require.True(t, done.Locked, "and it did not unlock it")
+
+			ba.AssertNotCalled(t, "Store", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+			require.Empty(t, s.handOffs, "no hand-off is owed for it")
+
+			taken, err := store.GetSpend(ctx, own[0])
+			require.NoError(t, err)
+			require.NotNil(t, taken.SpendingData)
+			require.Equal(t, rival.TxIDChainHash().String(), taken.SpendingData.TxID.String(), "the input the winner took is still the winner's")
+
+			kept, err := store.GetSpend(ctx, own[1])
+			require.NoError(t, err)
+			require.NotNil(t, kept.SpendingData, "the sweep reverses nothing")
+			require.Equal(t, hash.String(), kept.SpendingData.TxID.String())
+
+			stale, err = store.QueryStaleCreatingTxs(ctx, 998, 0)
+			require.NoError(t, err)
+			require.NotContains(t, stale, *hash, "nothing is left for the next pass")
+		})
+	}
+}
+
+// TestSweepCreatingTxsTakesARecordEndedAsConflictingAsSettled covers what the sweep does with the
+// answer of a roll-forward that completed its record as conflicting: the finalize of the record had
+// begun, and another transaction holds one of its inputs. The record is final, so the sweep asks for
+// no rollback, reads no lease, counts no failure, announces nothing and unlocks nothing. The store
+// of this test would grant a rollback, so a sweep that asked for one would unspend.
+func TestSweepCreatingTxsTakesARecordEndedAsConflictingAsSettled(t *testing.T) {
+	txA := oneOutputTx(1)
+	hashA := *txA.TxIDChainHash()
+
+	for name, record := range map[string]meta.Data{
+		"an ordinary tentative record":     {Creating: true, Finalizing: true, Attempt: sweepToken, Tx: txA},
+		"a record that belongs to a block": {Creating: true, Finalizing: true, Attempt: sweepToken, Tx: txA, MarkOwed: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			ns, err := nullstore.NewNullStore()
+			require.NoError(t, err)
+
+			md := record
+
+			store := &fakeSweepStore{
+				NullStore:   ns,
+				stale:       []chainhash.Hash{hashA},
+				getResp:     map[chainhash.Hash]*meta.Data{hashA: &md},
+				spendErr:    errors.ErrSpent,
+				spendSpends: []*utxo.Spend{{Vout: 1, Err: errors.ErrSpent}},
+			}
+
+			ba := blockassembly.NewMock()
+
+			s := newSweepServer(t, store)
+			s.blockAssemblyClient = ba
+
+			failures := testutil.ToFloat64(prunerCreatingSweepFailures)
+
+			s.sweepCreatingTxs(context.Background(), 100)
+
+			require.Equal(t, []chainhash.Hash{hashA}, store.setConflicting, "the roll-forward marks the record conflicting")
+			require.Equal(t, []chainhash.Hash{hashA}, store.finalized, "and completes it")
+			require.Empty(t, store.began, "the sweep asks for no rollback of a record that is complete")
+			require.Empty(t, store.unspent)
+			require.Zero(t, store.liveReads, "and reads no lease for it")
+			require.Equal(t, failures, testutil.ToFloat64(prunerCreatingSweepFailures), "a record that is settled is not a failure of the pass")
+			ba.AssertNotCalled(t, "Store", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+			require.Empty(t, store.unlocked)
+			require.Empty(t, s.handOffs)
+		})
+	}
 }

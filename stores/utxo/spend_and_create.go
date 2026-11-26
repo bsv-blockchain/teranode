@@ -125,6 +125,27 @@ func IsAlreadyFinal(err error) bool {
 	return hasErrorData(err, alreadyFinalKey)
 }
 
+// endedConflictingKey is the error-data key markEndedConflicting sets.
+const endedConflictingKey = "endedConflicting"
+
+// markEndedConflicting marks err as returned by a roll-forward that completed its record as
+// conflicting (endConflicting). It returns err.
+func markEndedConflicting(err *errors.Error) *errors.Error {
+	if err != nil {
+		err.SetData(endedConflictingKey, true)
+	}
+
+	return err
+}
+
+// IsEndedConflicting reports whether err is the error of a roll-forward that completed its record as
+// conflicting: the finalize of the record had begun, so no rollback could claim it, and its
+// transaction can no longer be mined. The record is final and conflicting. The caller does not hand
+// it to block assembly, does not unlock it and has nothing to roll back.
+func IsEndedConflicting(err error) bool {
+	return hasErrorData(err, endedConflictingKey)
+}
+
 // spendLeaseLiveKey is the error-data key MarkSpendLeaseLive sets.
 const spendLeaseLiveKey = "spendLeaseLive"
 
@@ -263,6 +284,9 @@ type SequentialStore interface {
 	// GetMeta reads the record's flags; used to tell a creating, rolling-back or final
 	// record apart when Create reports ErrTxExists.
 	GetMeta(ctx context.Context, hash *chainhash.Hash, data *meta.Data) error
+	// ConflictMarker marks a creating record whose finalize had begun and that lost an input, so
+	// that its roll-forward completes it without a hand-off; see endConflicting.
+	ConflictMarker
 }
 
 // LaneSpender is a SequentialStore whose spend can record the spender's lane position (util/lane)
@@ -1706,6 +1730,11 @@ type CreatingRollForwarder interface {
 //     the attempt is spent, and refuses a rollback of the record from then on, so the record can
 //     only be completed. A parent that is locked, conflicting or gone today refuses the repeat of
 //     a spend without undoing it.
+//   - The same, when the re-spend says that an input is not the transaction's own (another
+//     transaction spent it, it is frozen, or its UTXO hash does not match), or when the record is
+//     conflicting: the record is still completed, as conflicting, and the error is one for which
+//     IsEndedConflicting is true. The caller owns no hand-off and has nothing to roll back. See
+//     endConflicting.
 //   - FinalizeTransaction fails with ErrTxNotFound: the record is gone, rolling back or owned by
 //     another attempt. The lease is released and the error is returned. The owner of the
 //     rollback, which was waiting for the lease, reverses every input of the transaction.
@@ -1813,6 +1842,8 @@ func SettleTentativeInTheWay(ctx context.Context, logger ulogger.Logger, s Tenta
 // creatingFinisher is the store subset the roll-forward rule needs around the re-spend.
 type creatingFinisher interface {
 	FinalizeTransaction(ctx context.Context, tx *bt.Tx, attempt, lease []byte) error
+	// ConflictMarker marks a record whose finalize had begun and that lost an input; see endConflicting.
+	ConflictMarker
 	GetMeta(ctx context.Context, hash *chainhash.Hash, data *meta.Data) error
 	TakeSpendLease(ctx context.Context, hash *chainhash.Hash, attempt []byte) ([]byte, bool, error)
 	ReleaseSpendLease(ctx context.Context, hash *chainhash.Hash, attempt, lease []byte) error
@@ -1847,16 +1878,22 @@ func rollForwardCreating(ctx context.Context, logger ulogger.Logger, s creatingF
 	}
 
 	if err != nil {
-		if !finalizeBegun(bCtx, s, hash, attempt) {
+		current, begun := finalizeBegun(bCtx, s, hash, attempt)
+		if !begun {
 			releaseSpendLease(ctx, logger, s, hash, attempt, lease)
 
 			return spends, false, err
 		}
 
 		// The finalize of this attempt has begun, which it does only once every input is spent, and
-		// no rollback can claim the record since. The repeat of the spend was refused for what a
-		// parent is today, locked, conflicting or gone, and that does not undo the spend. The record
-		// can only be completed, so the finalize runs.
+		// no rollback can claim the record since. The record can only be completed, so the finalize
+		// runs. What the refusal says decides how the record ends.
+		if taken := inputNotHeld(spends, err); taken || current.Conflicting {
+			return spends, false, endConflicting(ctx, logger, s, tx, attempt, lease, current.Conflicting, taken, err)
+		}
+
+		// The repeat of the spend was refused for what a parent is today, locked, conflicting or
+		// gone, and that does not undo the spend.
 		logger.Warnf("RollForwardCreating: the re-spend of %s was refused, and its finalize had already begun, so the finalize is completed: %v", hash.String(), err)
 
 		spends, _ = GetSpends(tx)
@@ -1881,14 +1918,94 @@ func rollForwardCreating(ctx context.Context, logger ulogger.Logger, s creatingF
 }
 
 // finalizeBegun reports whether the record of the attempt carries the mark of a finalize that has
-// begun (meta.Data.Finalizing). A record that cannot be read is not known to carry it.
-func finalizeBegun(ctx context.Context, s creatingFinisher, hash *chainhash.Hash, attempt []byte) bool {
+// begun (meta.Data.Finalizing), and returns the record it read. A record that cannot be read is not
+// known to carry it.
+func finalizeBegun(ctx context.Context, s creatingFinisher, hash *chainhash.Hash, attempt []byte) (*meta.Data, bool) {
 	current := &meta.Data{}
 	if err := s.GetMeta(ctx, hash, current); err != nil {
-		return false
+		return current, false
 	}
 
-	return current.Creating && current.Finalizing && !current.RollingBack && bytes.Equal(current.Attempt, attempt)
+	return current, current.Creating && current.Finalizing && !current.RollingBack && bytes.Equal(current.Attempt, attempt)
+}
+
+// inputNotHeld reports whether the verdict of the store on a spend says that the transaction does
+// not hold one of its inputs and cannot take it: another transaction spent the output, the output
+// is frozen, or its UTXO hash does not match. A spend that the same transaction made earlier is not
+// refused with any of these: the store answers it as done, or refuses it for the state of the
+// parent before it looks at the output.
+func inputNotHeld(spends []*Spend, err error) bool {
+	notHeld := func(e error) bool {
+		return errors.Is(e, errors.ErrSpent) || errors.Is(e, errors.ErrFrozen) || errors.Is(e, errors.ErrUtxoHashMismatch)
+	}
+
+	if notHeld(err) {
+		return true
+	}
+
+	for _, sp := range spends {
+		if sp != nil && sp.Err != nil && notHeld(sp.Err) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// endConflicting completes a record whose finalize has begun and whose transaction can no longer be
+// mined: taken says that an input is not its own (inputNotHeld), conflicting that the record is
+// already marked conflicting, as conflict processing marks the loser of a double spend and its
+// descendants. No rollback can claim such a record, because a pagination child may already have
+// spendable outputs, so it is completed. It is completed as conflicting, and the returned error
+// carries the IsEndedConflicting mark, so that no caller hands the transaction to block assembly or
+// unlocks it.
+//
+// A record that is not marked yet is marked first, with every transaction that spends its outputs,
+// and finalized after. A failure between the two leaves the record creating, and the next
+// roll-forward does both again. Nothing is reversed: the transaction keeps the spends it still
+// holds, as the loser of a double spend keeps its other inputs when conflict processing demotes it.
+func endConflicting(ctx context.Context, logger ulogger.Logger, s creatingFinisher, tx *bt.Tx, attempt, lease []byte, conflicting, taken bool, cause error) error {
+	hash := tx.TxIDChainHash()
+
+	if !conflicting {
+		if err := markConflictingDetached(ctx, s, hash); err != nil {
+			releaseSpendLease(ctx, logger, s, hash, attempt, lease)
+
+			return errors.NewProcessingError("RollForwardCreating: tx %s lost an input (%v) and could not be marked conflicting, it is left creating for a later pass", hash.String(), cause, err)
+		}
+	}
+
+	if err := finalizeDetached(ctx, logger, s, tx, attempt, lease); err != nil {
+		releaseSpendLease(ctx, logger, s, hash, attempt, lease)
+
+		// Another actor's finalize of this attempt cleared the creating state, and the record is
+		// conflicting all the same.
+		if !IsAlreadyFinal(err) {
+			return err
+		}
+	}
+
+	logger.Warnf("RollForwardCreating: the finalize of %s had begun and its transaction can no longer be mined, so the record is completed as conflicting and is not handed off: %v", hash.String(), cause)
+
+	if !taken {
+		// The refusal of the re-spend names only the state of a parent today. It is not passed on,
+		// only its text: a caller would read a locked parent in it and try again.
+		return markEndedConflicting(errors.NewTxConflictingError("RollForwardCreating: tx %s is conflicting, its record is complete and is not handed off (re-spend: %s)", hash.String(), cause.Error()))
+	}
+
+	return markEndedConflicting(errors.NewTxConflictingError("RollForwardCreating: tx %s lost an input, its record is complete, conflicting and not handed off", hash.String(), cause))
+}
+
+// markConflictingDetached marks the record of hash as conflicting, and every transaction that
+// spends its outputs (MarkConflictingRecursively). It runs under rollbackContext, as the finalize
+// after it does.
+func markConflictingDetached(ctx context.Context, s creatingFinisher, hash *chainhash.Hash) error {
+	mCtx, cancel := rollbackContext(ctx, s)
+	defer cancel()
+
+	_, _, err := MarkConflictingRecursively(mCtx, s, []chainhash.Hash{*hash})
+
+	return err
 }
 
 // leaseRefused reads the record after its spend lease was refused and returns the roll-forward's
