@@ -368,16 +368,37 @@ var fixtureHeights = []uint32{3, 1, 3, 5, 2, 5, 5, 1, 4, 3, 6, 2, 6, 1, 3, 5, 2,
 // A seed at shadow gives every record a position by height from one grant recorded at height 0,
 // writes one seeded row per block, and a second run over the same stores takes no new grant.
 func TestSeederStampsLanePositionsAndRows(t *testing.T) {
-	// The second snapshot holds fewer records than the check for stale records reads.
-	for _, heights := range [][]uint32{fixtureHeights, fixtureHeights[:3]} {
-		t.Run(strconv.Itoa(len(heights))+" records", func(t *testing.T) {
-			seedStampsPositionsAndRows(t, heights)
+	// The second snapshot holds fewer records than the check for stale records reads. On Postgres,
+	// the blockchain store mainnet runs, the header and UTXO passes run together.
+	cases := []struct {
+		name     string
+		heights  []uint32
+		postgres bool
+	}{
+		{"sqlite", fixtureHeights, false},
+		{"sqlite short snapshot", fixtureHeights[:3], false},
+		{"postgres", fixtureHeights, true},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			seedStampsPositionsAndRows(t, c.heights, c.postgres)
 		})
 	}
 }
 
-func seedStampsPositionsAndRows(t *testing.T, heights []uint32) {
+func seedStampsPositionsAndRows(t *testing.T, heights []uint32, postgres bool) {
 	f := newSeedFixture(t, settings.LaneMigrationShadow, 8, heights)
+
+	if postgres {
+		dsn, teardown, err := tpostgres.SetupTestPostgresContainer()
+		test.SkipIfContainerUnavailable(t, err)
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = teardown() })
+
+		f.settings.BlockChain.StoreURL = mustURL(t, dsn)
+	}
+
 	require.NoError(t, f.seed(false))
 
 	grant := f.recordedGrant()
