@@ -344,6 +344,24 @@ func TestCreateTransactionChainForBenchmarkCachesByLength(t *testing.T) {
 	r.Equal(wantID, createTransactionChainForBenchmark(t, r, 2)[1].TxID())
 }
 
+// The sizing benchmarks rely on this collection, so the fixture's garbage is not
+// collected inside the timed loop.
+func TestStartTimedLoopForcesACollection(t *testing.T) {
+	var forced uint32
+
+	testing.Benchmark(func(b *testing.B) {
+		var before, after runtime.MemStats
+
+		runtime.ReadMemStats(&before)
+		startTimedLoop(b)
+		runtime.ReadMemStats(&after)
+
+		forced = after.NumForcedGC - before.NumForcedGC
+	})
+
+	require.NotZero(t, forced)
+}
+
 func parseBenchmarkTxChain(r *require.Assertions, chain benchmarkTxChain) []*bt.Tx {
 	txs := make([]*bt.Tx, len(chain.ends))
 	start := 0
