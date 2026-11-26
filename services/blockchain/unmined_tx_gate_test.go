@@ -325,13 +325,36 @@ func TestUnminedTxGate_WaitForCheckpointAnswer(t *testing.T) {
 		client.AssertExpectations(t)
 	}
 
+	// A wait that begins while an earlier read is in flight returns when that
+	// read reaches the checkpoint, though no read was scheduled after it began.
+	inFlight := &Mock{}
+	fsmRead(inFlight, &running)
+
+	release := make(chan struct{})
+	inFlight.On("GetBestHeightAndTime", mock.Anything).Run(func(mock.Arguments) { <-release }).Return(150, 0, nil).Once()
+
+	gate := NewUnminedTxGate(ulogger.TestLogger{}, inFlight, gateSettings(t, "utxoset"), "test_wait_in_flight")
+	require.True(t, gate.Refuses(ctx, nil), "starts the read")
+
+	waited := make(chan error, 1)
+	go func() {
+		waitCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		defer cancel()
+		waited <- gate.WaitForCheckpointAnswer(waitCtx)
+	}()
+
+	time.Sleep(200 * time.Millisecond) // let the wait reach its loop first
+	close(release)
+	require.NoError(t, <-waited)
+	inFlight.AssertNumberOfCalls(t, "GetBestHeightAndTime", 1)
+
 	// A below answer read before a sync is stale: the wait reads again.
 	stale := &Mock{}
 	fsmRead(stale, &running)
 	stale.On("GetBestHeightAndTime", mock.Anything).Return(50, 0, nil).Once()
 	stale.On("GetBestHeightAndTime", mock.Anything).Return(150, 0, nil).Once()
 
-	gate := NewUnminedTxGate(ulogger.TestLogger{}, stale, gateSettings(t, "utxoset"), "test_wait_stale")
+	gate = NewUnminedTxGate(ulogger.TestLogger{}, stale, gateSettings(t, "utxoset"), "test_wait_stale")
 	require.NoError(t, gate.WaitForCheckpointAnswer(ctx))
 	require.False(t, gate.reached.Load())
 
