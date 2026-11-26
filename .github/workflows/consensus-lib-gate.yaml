@@ -4,7 +4,8 @@ name: Consensus library gate
 # and on the pull request, and fails if any outcome differs or a bumped library
 # is never executed by the vectors. A maintainer who has reviewed the
 # difference as an intended consensus change adds the
-# consensus-change-acknowledged label, which re-runs the job and lets it pass.
+# consensus-change-acknowledged label, which re-runs the job and lets it pass
+# for that event's commit only. After a push, remove and reapply the label.
 #
 # The job runs on every pull request and exits early when no pin changed, so
 # it can be a required status check.
@@ -67,6 +68,8 @@ jobs:
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           ACKNOWLEDGED: ${{ contains(github.event.pull_request.labels.*.name, env.ACK_LABEL) }}
+          PR_ACTION: ${{ github.event.action }}
+          PR_LABEL: ${{ github.event.label.name }}
         run: |
           status=0
           ./scripts/consensus_lib_gate.sh "$BASE_SHA" "$RUNNER_TEMP/consensus-gate" || status=$?
@@ -75,11 +78,11 @@ jobs:
           case $status in
           0) ;;
           3)
-            if [ "$ACKNOWLEDGED" = "true" ]; then
+            if [ "$ACKNOWLEDGED" = "true" ] && [ "$PR_ACTION" = "labeled" ] && [ "$PR_LABEL" = "$ACK_LABEL" ]; then
               echo "::notice::Consensus outcomes differ; acknowledged by the $ACK_LABEL label."
               printf '\n**Acknowledged** by the `%s` label.\n' "$ACK_LABEL" >> "$GITHUB_STEP_SUMMARY"
             else
-              echo "::error::This pull request changes a consensus library and the consensus vectors cannot confirm it changes nothing (see the job summary). Review it as a consensus change; a maintainer then adds the $ACK_LABEL label."
+              echo "::error::This pull request changes a consensus library and the consensus vectors cannot confirm it changes nothing (see the job summary). Review this commit as a consensus change; a maintainer then removes and reapplies the $ACK_LABEL label."
               exit 1
             fi
             ;;
