@@ -646,6 +646,15 @@ func (s *Server) processNextBlock(ctx context.Context) (time.Duration, error) {
 	if lastWrittenUTXOSetHash.String() != s.settings.ChainCfgParams.GenesisHash.String() {
 		// GetStarting point
 		if err := s.verifyLastSet(ctx, lastWrittenUTXOSetHash); err != nil {
+			if errors.Is(err, errors.ErrNotFound) {
+				// The base set lastProcessed points at is gone. That is not idle
+				// work: no later pass can advance until the set comes back. The
+				// store error goes in as text, not as the wrapped error, so the
+				// result no longer matches ErrNotFound and trigger reports it
+				// instead of logging "No new block to process".
+				return 0, errors.NewStorageError("[UTXOPersister] base UTXO set for block %s height %d is missing, cannot advance: %s", lastWrittenUTXOSetHash, metas[0].Height, err.Error())
+			}
+
 			return 0, err
 		}
 	}
