@@ -174,9 +174,11 @@ jobs:
   # It runs on both runner types those jobs use, and runs each compile those
   # jobs run with the same flags: the -race test builds, the non-race
   # go test -list the sharded smoke jobs use to pick their tests, and the
-  # make install-tools build of gotestsum. So those jobs
-  # reuse main's compile of every package a PR leaves unchanged. Packages the
-  # PR changes, and everything that depends on them, still compile.
+  # make install-tools build of gotestsum. The key is dated, and actions/cache
+  # does not save over an existing key, so the cache holds the compile from the
+  # first main push of each UTC day. A PR reuses it for every package that
+  # neither the PR nor a later main commit that day changed; the rest, and
+  # everything that depends on them, still compile.
   e2e-build-cache:
     name: e2e build cache (${{ matrix.runner }})
     if: github.ref == 'refs/heads/main'
