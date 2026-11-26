@@ -602,7 +602,7 @@ func processUTXOs(ctx context.Context, logger ulogger.Logger, appSettings *setti
 	// unsupported platform or an unusable path fails before hours of import
 	// rather than just before lastProcessed.dat.
 	if syncPath != "" {
-		if err = syncFilesystem(syncPath); err != nil {
+		if err = syncExternalStore(syncPath); err != nil {
 			return nil, errors.NewStorageError("cannot sync the external store filesystem at %s", syncPath, err)
 		}
 	}
@@ -705,7 +705,7 @@ func processUTXOs(ctx context.Context, logger ulogger.Logger, appSettings *setti
 	if syncPath != "" {
 		logger.Infof("Syncing the external store filesystem at %s so it is durable before marking the seed complete", syncPath)
 
-		if err = syncFilesystem(syncPath); err != nil {
+		if err = syncExternalStore(syncPath); err != nil {
 			return nil, errors.NewStorageError("failed to sync external store filesystem", err)
 		}
 	}
@@ -1090,6 +1090,10 @@ func openUTXOSetFile(utxoFile string, hashIt bool) (*utxoSetStream, chainhash.Ha
 
 	return s, hash, height, nil
 }
+
+// syncExternalStore is syncFilesystem, held in a variable so a test can make the
+// final sync fail after a good import.
+var syncExternalStore = syncFilesystem
 
 // resumeUnsafeAfterHostCrash reports whether utxoStoreURL has a file:// external
 // store with fsyncMode=none. Such a store can keep a zero-length or partial

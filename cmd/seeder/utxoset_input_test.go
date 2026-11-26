@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2"
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/services/blockassembly"
@@ -692,6 +693,45 @@ func TestVerifyUTXOSetFile_StopsOnCancel(t *testing.T) {
 	_, err = verifyUTXOSetFile(ctx, path, sum)
 	require.ErrorIs(t, err, context.Canceled)
 	require.Equal(t, 3, ctx.calls, "the read must stop at the first check that sees the cancel")
+}
+
+// A failure after a verified compressed import, here the final filesystem sync, must not
+// leave the incomplete-import record, which would make a plain re-run demand a wipe.
+func TestProcessUTXOs_CompressedInput_SyncFailureLeavesNoRecord(t *testing.T) {
+	ctx := context.Background()
+	tSettings := forceSeederSettings(t)
+
+	u, err := url.Parse("sqlite:///compressed_sync?externalStore=file://" + t.TempDir())
+	require.NoError(t, err)
+
+	tSettings.UtxoStore.UtxoStore = u
+	blockStore := openTestBlockStore(t, tSettings)
+
+	dir, sum := compressedSnapshot(t, writeCompleteSnapshotFile(t, benchWrappers("sync", 50, 0)), 1024)
+
+	defer func(f func(string) error) { syncExternalStore = f }(syncExternalStore)
+
+	calls := 0
+	syncExternalStore = func(string) error {
+		calls++
+		if calls == 2 { // the probe passes, the final sync fails
+			return errors.NewStorageError("injected sync failure")
+		}
+
+		return nil
+	}
+
+	_, err = processUTXOs(ctx, ulogger.TestLogger{}, tSettings, newTestBlockchainStore(t), dir, "", false, false, sum)
+	require.ErrorContains(t, err, "injected sync failure")
+	require.Equal(t, 2, calls)
+
+	exists, err := blockStore.Exists(ctx, nil, fileformat.FileTypeDat, bloboptions.WithFilename(incompleteImportFilename), bloboptions.WithNoHashPrefix())
+	require.NoError(t, err)
+	require.False(t, exists)
+
+	tip, err := processUTXOs(ctx, ulogger.TestLogger{}, tSettings, newTestBlockchainStore(t), dir, "", false, false, sum)
+	require.NoError(t, err, "a plain re-run imports the verified set again")
+	require.Equal(t, uint32(200), tip.height)
 }
 
 // A headers-only run imports the headers and never reads the UTXO set, so having
