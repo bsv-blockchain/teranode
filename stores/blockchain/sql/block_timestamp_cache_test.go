@@ -158,38 +158,39 @@ func makeMTPTestBlock(t *testing.T, height uint32, prevHash *chainhash.Hash, tim
 // so that MTP calculation is active from block 11 onward.
 func newMTPTestStore(t *testing.T) *SQL {
 	t.Helper()
+
+	return newMTPTestStoreAt(t, "sqlitememory:///")
+}
+
+// newMTPTestStoreAt opens the store at rawURL with BIP113 on from height 0 and the in-memory
+// chain check off, its default.
+func newMTPTestStoreAt(t *testing.T, rawURL string) *SQL {
+	t.Helper()
 	tSettings := test.CreateBaseTestSettings(t)
 	tSettings.ChainCfgParams.CSVHeight = 0
 	tSettings.BlockChain.UseInMemoryChainCheck = false
 
-	storeURL, err := url.Parse("sqlitememory:///")
+	storeURL, err := url.Parse(rawURL)
 	require.NoError(t, err)
 
 	s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
 	require.NoError(t, err)
-	t.Cleanup(func() { s.Close(context.Background()) })
+	t.Cleanup(func() { _ = s.Close(context.Background()) })
 	return s
 }
 
-// storeMTPChain stores a linear chain of `count` blocks starting from genesis.
+// storeMTPChain stores mtpTestChain's blocks 1 to count.
 // Returns the slice of block hashes in order (index 0 = block at height 1).
-func storeMTPChain(t *testing.T, s *SQL, count int, baseTimestamp uint32) []*chainhash.Hash {
+func storeMTPChain(t *testing.T, s *SQL, count int) []*chainhash.Hash {
 	t.Helper()
 	ctx := context.Background()
 
-	genesisHeader, _, err := s.GetBestBlockHeader(ctx)
-	require.NoError(t, err)
+	chain := mtpTestChain(t, ctx, s, uint32(count))
+	requireStored(t, ctx, s, chain[1:]...)
 
-	prevHash := genesisHeader.Hash()
 	hashes := make([]*chainhash.Hash, 0, count)
-
-	for i := 1; i <= count; i++ {
-		block := makeMTPTestBlock(t, uint32(i), prevHash, baseTimestamp+uint32(i))
-		_, _, err := s.StoreBlock(ctx, block, "test")
-		require.NoError(t, err, "failed to store block at height %d", i)
-		h := block.Hash()
-		hashes = append(hashes, h)
-		prevHash = h
+	for _, block := range chain[1:] {
+		hashes = append(hashes, block.Hash())
 	}
 
 	return hashes
@@ -208,7 +209,7 @@ func TestMTPCache_SequentialInserts_CacheHit(t *testing.T) {
 	s := newMTPTestStore(t)
 
 	// Store 15 blocks — MTP kicks in at height 11 (needs 11 previous blocks)
-	storeMTPChain(t, s, 15, 1600000000)
+	storeMTPChain(t, s, 15)
 
 	require.Positive(t, s.blockTimestampCache.Len(), "cache should have entries after sequential inserts")
 
@@ -222,7 +223,7 @@ func TestMTPCache_MTPValueCorrectness(t *testing.T) {
 	s := newMTPTestStore(t)
 	ctx := context.Background()
 
-	storeMTPChain(t, s, 15, 1600000000)
+	storeMTPChain(t, s, 15)
 
 	// Get the parent block ID (block at height 14) for chain-walking MTP
 	parentBlockID := getBlockIDAtHeight(t, s, 14)
@@ -243,7 +244,7 @@ func TestMTPCache_DBFallbackOnCacheMiss(t *testing.T) {
 	s := newMTPTestStore(t)
 	ctx := context.Background()
 
-	storeMTPChain(t, s, 15, 1600000000)
+	storeMTPChain(t, s, 15)
 
 	// Get parent block ID for chain-walking MTP
 	parentBlockID := getBlockIDAtHeight(t, s, 14)
@@ -261,7 +262,7 @@ func TestMTPCache_DBFallbackOnCacheMiss(t *testing.T) {
 func TestMTPCache_InvalidateAndRevalidateKeepTheCache(t *testing.T) {
 	s := newMTPTestStore(t)
 
-	hashes := storeMTPChain(t, s, 15, 1600000000)
+	hashes := storeMTPChain(t, s, 15)
 	before := s.blockTimestampCache.Len()
 	require.Positive(t, before)
 
@@ -278,7 +279,7 @@ func TestMTPCache_ForkHandling_NewBlockAtExistingHeight(t *testing.T) {
 	ctx := context.Background()
 
 	// Store main chain: genesis → 1 → 2 → 3 → 4 → 5
-	hashes := storeMTPChain(t, s, 5, 1600000000)
+	hashes := storeMTPChain(t, s, 5)
 
 	mainTip := getBlockIDAtHeight(t, s, 5)
 	mainChain := s.blockTimestampCache.Ancestors(mainTip, 5)
@@ -306,7 +307,7 @@ func TestMTPCache_BelowCSVHeight_NoCache(t *testing.T) {
 
 	ctx := context.Background()
 
-	storeMTPChain(t, s, 15, 1600000000)
+	storeMTPChain(t, s, 15)
 
 	// parentBlockID=0 is fine here since the function returns early (below CSVHeight)
 	mtp, err := s.calculateMedianTimePastForHeight(ctx, 15, 0)
@@ -318,7 +319,7 @@ func TestMTPCache_HeightBelow11_ReturnsZero(t *testing.T) {
 	s := newMTPTestStore(t)
 	ctx := context.Background()
 
-	storeMTPChain(t, s, 10, 1600000000)
+	storeMTPChain(t, s, 10)
 
 	// parentBlockID=0 is fine here since the function returns early (height < 11)
 	mtp, err := s.calculateMedianTimePastForHeight(ctx, 10, 0)
@@ -335,7 +336,7 @@ func TestMTPCache_ForkBlocks_ParentChainWalk(t *testing.T) {
 	ctx := context.Background()
 
 	// Store a main chain of 14 blocks (heights 1-14)
-	mainHashes := storeMTPChain(t, s, 14, 1600000000)
+	mainHashes := storeMTPChain(t, s, 14)
 
 	// Store a fork block at height 5 (same parent as main-chain block 5)
 	// This creates two valid (non-invalid) blocks at height 5
@@ -392,12 +393,7 @@ func runMedianTimeTests(t *testing.T, name string, fn func(t *testing.T, ctx con
 
 	for _, backend := range []string{"sqlite", "postgres"} {
 		t.Run(name+"/"+backend, func(t *testing.T) {
-			tSettings := test.CreateBaseTestSettings(t)
-			tSettings.ChainCfgParams.CSVHeight = 0
-			tSettings.BlockChain.UseInMemoryChainCheck = false
-
-			storeURL, err := url.Parse("sqlitememory:///")
-			require.NoError(t, err)
+			storeURL := "sqlitememory:///"
 
 			if backend == "postgres" {
 				if testing.Short() {
@@ -411,13 +407,10 @@ func runMedianTimeTests(t *testing.T, name string, fn func(t *testing.T, ctx con
 
 				t.Cleanup(func() { _ = teardown() })
 
-				storeURL, err = url.Parse(connStr)
-				require.NoError(t, err)
+				storeURL = connStr
 			}
 
-			s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
-			require.NoError(t, err)
-			t.Cleanup(func() { _ = s.Close(context.Background()) })
+			s := newMTPTestStoreAt(t, storeURL)
 
 			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 			defer cancel()
@@ -493,10 +486,13 @@ func TestStoreBlockMedianTimeSurvivesAnEmptyCache(t *testing.T) {
 		requireStored(t, ctx, s, chain[1:21]...)
 		s.blockTimestampCache.Clear()
 
+		walks := s.parentWalkQueries.Load()
 		requireStored(t, ctx, s, chain[21])
+		require.Equal(t, walks+1, s.parentWalkQueries.Load(), "an empty cache falls back to one SQL walk")
 		require.GreaterOrEqual(t, s.blockTimestampCache.Len(), 11, "the fallback fills the cache")
 
 		requireStored(t, ctx, s, chain[22:]...)
+		require.Equal(t, walks+1, s.parentWalkQueries.Load(), "the blocks after it read the cache, not SQL")
 		requireChainMedians(t, ctx, s, chain, 12, 30)
 	})
 }

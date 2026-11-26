@@ -264,6 +264,9 @@ type SQL struct {
 	// ID, so calculateMedianTimePastForHeight follows parent links in memory instead of
 	// querying SQL for every stored block during sync.
 	blockTimestampCache *blockTimestampCache
+	// parentWalkQueries counts the median-time parent walks that went to SQL because the cache
+	// missed. Exposed for tests that check stored blocks read the cache.
+	parentWalkQueries atomic.Uint64
 	// bestBlockIDQueries counts how many times getBestBlockID has hit the database
 	// (cache misses only). Exposed for tests to catch regressions that reintroduce
 	// unnecessary per-block Postgres round-trips in the StoreBlock hot path.

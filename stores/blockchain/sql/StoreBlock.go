@@ -876,6 +876,8 @@ type execQuerier interface {
 //   - uint32: The height of the block in the blockchain
 //   - []byte: The calculated cumulative chain work for this block as a byte array
 //   - bool: Whether the row was written invalid, by request or inherited from an invalid parent
+//   - uint64: The parent block's database ID, which StoreBlock records with the new block in the
+//     median-time cache once the row is committed
 //   - error: Any error encountered during the operation, including validation failures. A
 //     failed INSERT returns the driver's error unwrapped; StoreBlock types it
 func (s *SQL) storeBlock(ctx context.Context, exec execQuerier, block *model.Block, peerID string, storeBlockOptions options.StoreBlockOptions, onMainChain bool) (uint64, uint32, []byte, bool, uint64, error) {
@@ -1573,6 +1575,8 @@ func (s *SQL) fetchBlockTimestampsByParentChain(ctx context.Context, startBlockI
 		)
 		SELECT id, COALESCE(parent_id, 0), block_time FROM chain ORDER BY depth DESC
 	`
+	s.parentWalkQueries.Add(1)
+
 	rows, err := s.db.QueryContext(ctx, q, startBlockID, count)
 	if err != nil {
 		return nil, errors.NewStorageError("failed to walk parent chain from block ID %d for %d blocks", startBlockID, count, err)
