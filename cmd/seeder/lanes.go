@@ -313,7 +313,7 @@ func checkSeededAtShadow(ctx context.Context, logger ulogger.Logger, tSettings *
 
 	if _, ok, err := readSeederGrant(ctx, store, tip.hash); err != nil || !ok {
 		if err == nil {
-			err = errors.NewProcessingError("utxostore_laneMigration is shadow but the blockchain store records no lane grant for the seed of %s: either lastProcessed.dat is from another snapshot's seed, or this snapshot was imported at off and its records have no lane position. Only in the second case, wipe the UTXO store and re-run with -force", tip.hash.String())
+			err = errors.NewProcessingError("utxostore_laneMigration is shadow but the blockchain store records no lane grant for the seed of %s: either lastProcessed.dat is from another snapshot's seed, or this snapshot was imported at off and its records have no lane position. Only in the second case, wipe the UTXO store, and the blockchain database too if any process has run at shadow on it since, then re-run with -force", tip.hash.String())
 		}
 
 		return nil, err
@@ -571,7 +571,7 @@ func recordedSeedLanes(ctx context.Context, store blockchain.Store, utxoFile str
 	}
 
 	if !ok {
-		return nil, errors.NewProcessingError("utxostore_laneMigration is shadow but the blockchain store records no lane grant for the seed of %s, so that seed was imported at off and its records have no lane position: wipe the UTXO store and re-run with -force", tip.String())
+		return nil, errors.NewProcessingError("utxostore_laneMigration is shadow but the blockchain store records no lane grant for the seed of %s, so that seed was imported at off and its records have no lane position: wipe the UTXO store, and the blockchain database too if any process has run at shadow on it since, then re-run with -force", tip.String())
 	}
 
 	layout, err := countSeedLayout(ctx, utxoFile)
@@ -644,7 +644,7 @@ func checkExistingPositions(ctx context.Context, store utxo.Store, utxoFile stri
 			wantLane, wantPos := lane.Unpack(want)
 			haveLane, havePos := lane.Unpack(md.LanePosition)
 
-			return errors.NewProcessingError("the UTXO store already holds %s at lane %d position %d, and this seed gives it lane %d position %d: the store holds an import made at off or from another grant, and a record keeps the position it has. Wipe the UTXO store and re-run with -force", txid.String(), haveLane, havePos, wantLane, wantPos)
+			return errors.NewProcessingError("the UTXO store already holds %s at lane %d position %d, and this seed gives it lane %d position %d: the store holds an import made at off or from another grant, and a record keeps the position it has. Wipe the UTXO store, and the blockchain database too if any process has run at shadow on it since, then re-run with -force", txid.String(), haveLane, havePos, wantLane, wantPos)
 		}
 	}
 
