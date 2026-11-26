@@ -732,6 +732,19 @@ func TestProcessUTXOs_CompressedInput_SyncFailureLeavesNoRecord(t *testing.T) {
 	tip, err := processUTXOs(ctx, ulogger.TestLogger{}, tSettings, newTestBlockchainStore(t), dir, "", false, false, sum)
 	require.NoError(t, err, "a plain re-run imports the verified set again")
 	require.Equal(t, uint32(200), tip.height)
+
+	// Over an existing checkpoint, the same failure in a forced re-seed leaves a plain
+	// re-run refused and pointing at -force, as before compressed input existed.
+	chain := newTestBlockchainStore(t)
+	require.NoError(t, chain.SetState(ctx, blockassembly.StateKey, []byte("checkpoint")))
+
+	calls = 0
+	_, err = processUTXOs(ctx, ulogger.TestLogger{}, tSettings, chain, dir, "", true, false, sum)
+	require.ErrorContains(t, err, "injected sync failure")
+
+	_, err = processUTXOs(ctx, ulogger.TestLogger{}, tSettings, chain, dir, "", false, false, sum)
+	require.ErrorContains(t, err, "-force")
+	require.NotContains(t, err.Error(), "wipe the UTXO store, then re-run with -force", "a verified set needs no wipe")
 }
 
 // A headers-only run imports the headers and never reads the UTXO set, so having
