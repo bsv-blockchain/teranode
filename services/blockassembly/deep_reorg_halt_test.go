@@ -243,6 +243,21 @@ func TestDeepReorgHaltStopsBlockAssembly(t *testing.T) {
 	ba.requeueRefusedReset()
 	require.Same(t, owed, ba.resetOwed)
 
+	// An operator's reset refused earlier is retried: only it can lift the halt.
+	ba.resetOwed = &resetRequest{Operator: true}
+	ba.requeueRefusedReset()
+	require.Nil(t, ba.resetOwed)
+
+	select {
+	case req := <-ba.resetCh:
+		require.True(t, req.Operator)
+		req.ErrCh <- nil
+	case <-time.After(10 * time.Second):
+		t.Fatal("the operator's owed reset was not retried")
+	}
+
+	ba.resetOwed = owed
+
 	// So is one that would not move back at all.
 	_, err = ba.resetToBlockWithResponse(t.Context(), a1, 1)
 	require.True(t, errors.Is(err, errors.ErrServiceUnavailable), "got %v", err)
