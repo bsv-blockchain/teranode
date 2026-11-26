@@ -757,7 +757,8 @@ func (a *Allocator) renew(want bool) error {
 		// Whatever the service did with the spare given back, it is settled: dropped for this grant,
 		// or, when no longer the lane's newest, left unused.
 		if r.GiveBack != 0 && res.Grant.First != r.Settles.LastTaken+1 {
-			a.logger.Warnf("[lane] blockchain service did not take back spare %d:%d from %s, so the spare and the positions after %d stay unused", r.Lane, r.GiveBack, a.holder, r.Settles.LastTaken)
+			prometheusLaneGiveBacksMissed.Inc()
+			a.logger.Warnf("[lane] blockchain service granted %d:%d to %s instead of continuing after %d, so positions %d to %d stay unused", r.Lane, res.Grant.First, a.holder, r.Settles.LastTaken, r.Settles.LastTaken+1, res.Grant.First-1)
 		}
 
 		a.givingBack = 0

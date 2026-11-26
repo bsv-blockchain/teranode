@@ -16,6 +16,8 @@ var (
 	prometheusLaneRefusedGrants prometheus.Counter
 	prometheusLaneReused        prometheus.Counter
 
+	prometheusLaneGiveBacksMissed prometheus.Counter
+
 	prometheusMetricsInitOnce sync.Once
 )
 
@@ -62,6 +64,12 @@ func initPrometheusMetrics() {
 			Subsystem: "lane",
 			Name:      "positions_reused_total",
 			Help:      "Lane positions handed to a new record a second time, after a store returned them because no record carried them. Each is also counted in positions_total",
+		})
+		prometheusLaneGiveBacksMissed = promauto.NewCounter(prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "lane",
+			Name:      "give_backs_missed_total",
+			Help:      "Grant requests that gave a spare back and got a grant that does not continue the aged grant, so the positions between stay unused; a blockchain service older than the give-back field gives this on every give-back",
 		})
 	})
 }
