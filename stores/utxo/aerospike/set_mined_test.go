@@ -326,3 +326,24 @@ func failAfterReadAndClear(client *uaerospike.Client) func(*aerospike.BatchPolic
 		return &aerospike.AerospikeError{ResultCode: types.TIMEOUT}
 	}
 }
+
+// TestProcessBatchResultsForSetMinedKeepsTheStorageCodeOfAFailedIncrement checks
+// that a failed spent-extra-records increment after a successful mine reaches
+// the caller as a StorageError, so legacy sync keeps the block for a retry.
+func TestProcessBatchResultsForSetMinedKeepsTheStorageCodeOfAFailedIncrement(t *testing.T) {
+	s := newTestStoreForSetMinedExpressions(t)
+	s.batchOperateFn = errorOperate()
+
+	hash := &chainhash.Hash{0xCC}
+	rec := newFakeBatchWrite(t, hash)
+	rec.BatchRec().Record = &aerospike.Record{Bins: aerospike.BinMap{
+		LuaSuccess.String(): map[interface{}]interface{}{
+			"status": "OK",
+			"signal": string(LuaSignalAllSpent),
+		},
+	}}
+
+	_, _, err := s.processBatchResultsForSetMined(context.Background(), []aerospike.BatchRecordIfc{rec}, []*chainhash.Hash{hash}, utxo.MinedBlockInfo{BlockID: 1, BlockHeight: 100})
+	require.ErrorIs(t, err, errors.ErrStorageError)
+	require.ErrorContains(t, err, "IncrementSpentRecordsMulti")
+}
