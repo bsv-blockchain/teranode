@@ -524,7 +524,7 @@ func processUTXOs(ctx context.Context, logger ulogger.Logger, appSettings *setti
 		logger.Infof("lastProcessed.dat matches %s and no BlockAssembler checkpoint was found; recovering the checkpoint without re-importing", utxoFile)
 
 		// The tip comes from this file, so a compressed one is verified first.
-		if err = verifyUTXOSetFile(utxoFile, expectedSHA256); err != nil {
+		if err = verifyUTXOSetFile(ctx, utxoFile, expectedSHA256); err != nil {
 			return nil, err
 		}
 
@@ -544,7 +544,7 @@ func processUTXOs(ctx context.Context, logger ulogger.Logger, appSettings *setti
 			// still verified, as a plain one was before this point.
 			logger.Errorf("lastProcessed.dat exists, skipping UTXOs")
 
-			return nil, verifyUTXOSetFile(utxoFile, expectedSHA256)
+			return nil, verifyUTXOSetFile(ctx, utxoFile, expectedSHA256)
 		}
 	}
 
@@ -871,9 +871,9 @@ type importOptions struct {
 // import takes as long as the slower pass. Both run in one errgroup: the first
 // error in either cancels both, and the seed is then re-run from the start.
 //
-// With opts.expectedSHA256 set, the first pass hashes every byte it reads and
-// fails after its last record when the hash does not match. Both passes read
-// the whole set, so hashing one of them is enough.
+// With opts.expectedSHA256 set, every pass hashes every byte it reads and
+// fails after its last record when the hash does not match. Each pass opens
+// the files itself, so each must prove it read the bytes the sidecar names.
 func importUTXOSet(ctx context.Context, logger ulogger.Logger, store utxo.Store, utxoFile string, opts importOptions) error {
 	if opts.workerCount < 1 || opts.multiRecordWorkerCount < 1 || opts.workerCount > maxWorkerCount || opts.multiRecordWorkerCount > maxWorkerCount {
 		return errors.NewConfigurationError("workerCount (%d) and multiRecordWorkerCount (%d) must both be between 1 and %d", opts.workerCount, opts.multiRecordWorkerCount, maxWorkerCount)
@@ -890,12 +890,10 @@ func importUTXOSet(ctx context.Context, logger ulogger.Logger, store utxo.Store,
 
 	g, gCtx := errgroup.WithContext(ctx)
 
-	verifyPending := opts.expectedSHA256 != ""
+	verify := opts.expectedSHA256 != ""
+	compressed := isCompressedUTXOSet(utxoFile)
 
 	startPass := func(name string, workerCount int, accept func(maxIndex uint32) bool) {
-		verify := verifyPending
-		verifyPending = false
-
 		g.Go(func() error {
 			s, _, _, err := openUTXOSetFile(utxoFile, verify)
 			if err != nil {
@@ -928,10 +926,10 @@ func importUTXOSet(ctx context.Context, logger ulogger.Logger, store utxo.Store,
 					}
 				}
 
-				// A read that failed on its own, not because another part of the
-				// import stopped it, may have handed damaged records to the
-				// workers: a zstd frame's checksum is only checked at its end.
-				if err != nil && pCtx.Err() == nil {
+				// A plain set's read that failed on its own, not because another
+				// part of the import stopped it, may have handed bad records to the
+				// workers. A compressed set gets this advice on any failure, below.
+				if err != nil && pCtx.Err() == nil && !compressed {
 					return errors.NewProcessingError("reading the UTXO set %s failed part-way. Records read before the failure may already be in the UTXO store, and a re-run keeps a record that already exists, so wipe the UTXO store before seeding again", utxoFile, err)
 				}
 
@@ -953,14 +951,24 @@ func importUTXOSet(ctx context.Context, logger ulogger.Logger, store utxo.Store,
 		startPass("all", opts.workerCount, nil)
 	}
 
-	if err := g.Wait(); err != nil {
-		return errors.NewProcessingError("error in worker", err)
+	err := g.Wait()
+	if err != nil {
+		err = errors.NewProcessingError("error in worker", err)
+	} else if ctxErr := ctx.Err(); ctxErr != nil {
+		// Workers stop on cancellation without an error, possibly after the
+		// readers finished cleanly, so buffered records may have been dropped.
+		err = errors.NewProcessingError("UTXO import cancelled", ctxErr)
 	}
 
-	// Workers stop on cancellation without an error, possibly after the
-	// readers finished cleanly, so buffered records may have been dropped.
-	if err := ctx.Err(); err != nil {
-		return errors.NewProcessingError("UTXO import cancelled", err)
+	// zstd checks a frame's checksum only at the frame's end, so until every
+	// pass has read and hashed the whole set, any record already stored may
+	// have come from a damaged piece, whatever stopped the import.
+	if err != nil && compressed {
+		return errors.NewProcessingError("the import of the compressed UTXO set %s stopped before the whole set was read and checked. Records stored so far may come from a damaged piece, and a re-run keeps a record that already exists, so wipe the UTXO store before seeding again", utxoFile, err)
+	}
+
+	if err != nil {
+		return err
 	}
 
 	logger.Infof("All workers finished successfully")

@@ -10,12 +10,17 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 
+	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/services/blockassembly"
+	"github.com/bsv-blockchain/teranode/services/utxopersister"
 	bloboptions "github.com/bsv-blockchain/teranode/stores/blob/options"
+	"github.com/bsv-blockchain/teranode/stores/utxo"
+	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	utxosql "github.com/bsv-blockchain/teranode/stores/utxo/sql"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/klauspost/compress/zstd"
@@ -61,17 +66,71 @@ func compressedSnapshot(t *testing.T, plain string, pieceSize int) (string, stri
 	return path, hex.EncodeToString(sum[:])
 }
 
+// withDistinctOutputs gives every output its own value and script, so a misread
+// byte changes what the store receives.
+func withDistinctOutputs(wrappers []*utxopersister.UTXOWrapper) []*utxopersister.UTXOWrapper {
+	for i, w := range wrappers {
+		for j, u := range w.UTXOs {
+			u.Value = uint64(1000 + i*1000 + j) //nolint:gosec // small test values
+			u.Script = append(bytes.Clone(u.Script), byte(i), byte(i>>8), byte(j))
+		}
+	}
+
+	return wrappers
+}
+
+// outputRecordingStore records the outputs of every created tx.
+type outputRecordingStore struct {
+	utxo.Store
+	mu      sync.Mutex
+	outputs map[chainhash.Hash][]*bt.Output
+	creates int
+}
+
+func (s *outputRecordingStore) SpendAndCreate(_ context.Context, tx *bt.Tx, _ uint32, opts ...utxo.CreateOption) (*meta.Data, []*utxo.Spend, error) {
+	o, err := utxo.ParseCreateOptions(opts...)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	s.mu.Lock()
+	s.outputs[*o.TxID] = tx.Outputs
+	s.creates++
+	s.mu.Unlock()
+
+	return nil, nil, nil
+}
+
+// requireOutputs checks that the store got every wrapper's outputs exactly once.
+func requireOutputs(t *testing.T, store *outputRecordingStore, wrappers []*utxopersister.UTXOWrapper) {
+	t.Helper()
+
+	require.Equal(t, len(wrappers), store.creates)
+
+	for _, w := range wrappers {
+		outs, ok := store.outputs[w.TxID]
+		require.True(t, ok, "tx %s", w.TxID)
+
+		for _, want := range w.UTXOs {
+			out := outs[want.Index]
+			require.NotNil(t, out, "tx %s output %d", w.TxID, want.Index)
+			require.Equal(t, want.Value, out.Satoshis, "tx %s output %d", w.TxID, want.Index)
+			require.Equal(t, want.Script, []byte(*out.LockingScript), "tx %s output %d", w.TxID, want.Index)
+		}
+	}
+}
+
 func piecePath(dir string, i int) string {
 	return filepath.Join(dir, fmt.Sprintf("piece_%04d.zst", i))
 }
 
-// Every input form, read in one pass or two and with the zstd decoder
-// synchronous or asynchronous, must create every record exactly once and
-// pass its checksum. Pieces are cut by bytes, so records straddle pieces.
+// Every input form, in one pass or two and with either decoder mode, must hand the store
+// every record once with its outputs intact, multi-record txs included, and pass its
+// checksum. Pieces are cut by bytes, so records straddle pieces.
 func TestImportUTXOSet_CompressedInputs(t *testing.T) {
 	const n = 3000
 
-	wrappers := benchWrappers("zst", n, 50)
+	wrappers := withDistinctOutputs(benchWrappers("zst", n, 50))
 	plain := writeCompleteSnapshotFile(t, wrappers)
 	plainData, err := os.ReadFile(plain)
 	require.NoError(t, err)
@@ -101,41 +160,56 @@ func TestImportUTXOSet_CompressedInputs(t *testing.T) {
 					opts.utxoBatchSize = batch
 					opts.expectedSHA256 = in.sum
 
-					store := &txidRecordingStore{seen: make(map[chainhash.Hash]int, n)}
+					store := &outputRecordingStore{outputs: make(map[chainhash.Hash][]*bt.Output, n)}
 					require.NoError(t, importUTXOSet(context.Background(), ulogger.TestLogger{}, store, in.path, opts))
-
-					require.Len(t, store.seen, n)
-
-					for _, w := range wrappers {
-						require.Equal(t, 1, store.seen[w.TxID], "tx %s", w.TxID)
-					}
+					requireOutputs(t, store, wrappers)
 				})
 			}
 		}
 	}
 }
 
-// A set whose bytes do not hash to its sidecar fails once every record has
-// been read, and says the UTXO store must be wiped, because the records it
-// already holds came from that set and a re-run keeps them.
-func TestImportUTXOSet_CompressedChecksumMismatch(t *testing.T) {
-	const n = 500
+// Any failure of a compressed import says to wipe the UTXO store: records already stored
+// may come from a damaged piece, and a re-run keeps a record that already exists.
+func TestImportUTXOSet_CompressedFailures_SayToWipe(t *testing.T) {
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
 
-	path, _ := compressedSnapshot(t, writeCompleteSnapshotFile(t, benchWrappers("mismatch", n, 0)), 1000)
+	cases := []struct {
+		name       string
+		ctx        context.Context
+		store      utxo.Store
+		largeEvery int // failingMultiRecordStore fails only on a multi-record tx
+		staleSum   bool
+		want       string
+	}{
+		{"checksum mismatch", context.Background(), noopCreateStore{}, 0, true, "checksum mismatch"},
+		{"cancelled", cancelled, noopCreateStore{}, 0, false, "cancel"},
+		{"store error", context.Background(), failingMultiRecordStore{}, 50, false, "error in worker"},
+	}
 
-	for _, batch := range []int{0, 128} {
-		opts := testImportOptions()
-		opts.utxoBatchSize = batch
-		opts.expectedSHA256 = hex.EncodeToString(make([]byte, sha256.Size))
+	for _, tc := range cases {
+		path, sum := compressedSnapshot(t, writeCompleteSnapshotFile(t, benchWrappers("failures", 500, tc.largeEvery)), 1000)
+		if tc.staleSum {
+			sum = hex.EncodeToString(make([]byte, sha256.Size))
+		}
 
-		err := importUTXOSet(context.Background(), ulogger.TestLogger{}, noopCreateStore{}, path, opts)
-		require.ErrorContains(t, err, "checksum mismatch")
-		require.ErrorContains(t, err, "wipe the UTXO store")
+		for _, batch := range []int{0, 128} {
+			t.Run(fmt.Sprintf("%s/batch=%d", tc.name, batch), func(t *testing.T) {
+				opts := testImportOptions()
+				opts.utxoBatchSize = batch
+				opts.expectedSHA256 = sum
+
+				err := importUTXOSet(tc.ctx, ulogger.TestLogger{}, tc.store, path, opts)
+				require.ErrorContains(t, err, tc.want)
+				require.ErrorContains(t, err, "wipe the UTXO store")
+			})
+		}
 	}
 }
 
-// A damaged or incomplete piece directory must fail the import even with no
-// sidecar to check against: the zstd decoder or the footer counts catch it.
+// With no sidecar, these damaged or incomplete piece directories still fail the import:
+// the zstd decoder or the footer counts catch each of them.
 func TestImportUTXOSet_DamagedPieces(t *testing.T) {
 	plain := writeCompleteSnapshotFile(t, benchWrappers("damaged", 2000, 0))
 
@@ -305,14 +379,7 @@ func TestProcessUTXOs_CompressedInput_InterruptedSeedReRuns(t *testing.T) {
 	blockStore := openTestBlockStore(t, tSettings)
 	blockchainStore := newTestBlockchainStore(t)
 
-	// Distinct values and scripts per output, so a misread byte cannot go unnoticed.
-	wrappers := benchWrappers("rerun", 300, 0)
-	for i, w := range wrappers {
-		for j, u := range w.UTXOs {
-			u.Value = uint64(1000 + i*10 + j) //nolint:gosec // small test values
-			u.Script = append(bytes.Clone(u.Script), byte(i), byte(j))
-		}
-	}
+	wrappers := withDistinctOutputs(benchWrappers("rerun", 300, 0))
 
 	dir, sum := compressedSnapshot(t, writeCompleteSnapshotFile(t, wrappers), 2048)
 
@@ -360,6 +427,10 @@ func TestProcessUTXOs_CompressedInput_InterruptedSeedReRuns(t *testing.T) {
 
 	stale := hex.EncodeToString(make([]byte, sha256.Size))
 
+	cancelled, cancel := context.WithCancel(ctx)
+	cancel()
+	require.ErrorIs(t, verifyUTXOSetFile(cancelled, dir, sum), context.Canceled)
+
 	// -recover-checkpoint takes the tip from the set, so it checks the set first.
 	_, err = processUTXOs(ctx, ulogger.TestLogger{}, tSettings, blockchainStore, dir, "", false, true, stale)
 	require.ErrorContains(t, err, "checksum mismatch")
@@ -379,16 +450,26 @@ func TestProcessUTXOs_CompressedInput_InterruptedSeedReRuns(t *testing.T) {
 	require.Nil(t, tip, "a skipped import writes no checkpoint")
 }
 
-// A headers-only run never reads the UTXO set, so having both forms of it in the
-// directory is no reason to refuse.
+// A headers-only run imports the headers and never reads the UTXO set, so having
+// both forms of the set in the directory is no reason to refuse.
 func TestSeeder_SkipUTXOs_DoesNotLookForTheUTXOSet(t *testing.T) {
 	dir := t.TempDir()
+
+	genesis, err := newTestBlockchainStore(t).GetBlockByID(context.Background(), 0)
+	require.NoError(t, err)
+
+	genesisRecord, err := blockToIndexBytes(t, genesis, genesis.Header.Hash())
+	require.NoError(t, err)
+
+	headers, err := os.ReadFile(writeUtxoHeadersFile(t, 0, genesisRecord))
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, compressedTestHash+".utxo-headers"), headers, 0o600))
 
 	for _, name := range []string{compressedTestHash + ".utxo-set", compressedTestHash + ".utxo-set.zst"} {
 		require.NoError(t, os.WriteFile(filepath.Join(dir, name), nil, 0o600))
 	}
 
-	require.NoError(t, Seeder(ulogger.TestLogger{}, forceSeederSettings(t), dir, compressedTestHash, true /* skipHeaders */, true /* skipUTXOs */, false /* force */, false /* recoverCheckpoint */, false /* skipChecksum */))
+	require.NoError(t, Seeder(ulogger.TestLogger{}, forceSeederSettings(t), dir, compressedTestHash, false /* skipHeaders */, true /* skipUTXOs */, false /* force */, false /* recoverCheckpoint */, false /* skipChecksum */))
 }
 
 // Through Seeder: a compressed set's sidecar is checked in the import pass, so

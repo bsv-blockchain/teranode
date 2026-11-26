@@ -2,6 +2,7 @@ package seeder
 
 import (
 	"bufio"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"hash"
@@ -224,8 +225,8 @@ func (s *utxoSetStream) verify(expected, path string) error {
 
 // verifyUTXOSetFile reads the whole UTXO set at path through the hash and
 // checks it against expected, for a run that uses the set without importing
-// it. An empty expected checks nothing.
-func verifyUTXOSetFile(path, expected string) error {
+// it. An empty expected checks nothing. It stops when ctx is cancelled.
+func verifyUTXOSetFile(ctx context.Context, path, expected string) error {
 	if expected == "" {
 		return nil
 	}
@@ -239,8 +240,20 @@ func verifyUTXOSetFile(path, expected string) error {
 		_ = s.Close()
 	}()
 
-	if _, err = io.Copy(io.Discard, s.reader); err != nil {
-		return errors.NewStorageError("failed to read %s for checksum verification", path, err)
+	buf := make([]byte, 1<<20)
+
+	for {
+		if err = ctx.Err(); err != nil {
+			return errors.NewProcessingError("checksum verification of %s cancelled", path, err)
+		}
+
+		if _, err = s.reader.Read(buf); err == io.EOF {
+			break
+		}
+
+		if err != nil {
+			return errors.NewStorageError("failed to read %s for checksum verification", path, err)
+		}
 	}
 
 	return s.verify(expected, path)
