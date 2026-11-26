@@ -60,17 +60,9 @@ func spendOutput(t *testing.T, parent *bt.Tx, vout uint32) *bt.Tx {
 	return child
 }
 
-// TestSetMinedMultiClearsCreatingOnExtraRecords covers a transaction whose
-// clearCreatingFlag failed part-way, leaving `creating` on the master and on
-// any extra record. setMined is keyed on the master, so it once cleared only the
-// master, and every output on an extra record (vout >= utxoBatchSize) stayed
-// refused with ErrTxCreating although the transaction was mined. Mining must
-// make every output spendable, on both the Lua and the expression path.
-//
-// The first-mine case forges the stuck state before the first SetMinedMulti.
-// The re-mine case forges it after a first mine and mines again with the same
-// block ID, which sends the expression path down its FILTERED_OUT branch: that
-// branch skips the master write, so the follow-up must clear the master too.
+// TestSetMinedMultiClearsCreatingOnExtraRecords: a mined transaction must lose
+// `creating` on every record, on both paths, including a same-block re-mine that
+// the expression path sees as FILTERED_OUT.
 func TestSetMinedMultiClearsCreatingOnExtraRecords(t *testing.T) {
 	t.Parallel()
 
