@@ -400,6 +400,25 @@ func TestUnminedTxGate_WaitForCheckpointAnswer(t *testing.T) {
 	waitForHeightRead(t, gate)
 }
 
+// Refuses judges the checkpoint once per call: a read that lands while the call
+// is still deciding cannot turn its refusal into an accept.
+func TestUnminedTxGate_AnswerFixedForTheCall(t *testing.T) {
+	running := FSMStateRUNNING
+	client := &Mock{}
+	t.Cleanup(func() { client.AssertExpectations(t) })
+	client.On("GetBestHeightAndTime", mock.Anything).Return(150, 0, nil).Once()
+
+	gate := NewUnminedTxGate(ulogger.TestLogger{}, client, gateSettings(t, "utxoset"), "test_checkpoint_fixed")
+
+	// The state read returns only after the read this call scheduled has landed.
+	client.On("GetFSMCurrentState", mock.Anything).Run(func(mock.Arguments) {
+		require.Eventually(t, gate.reached.Load, 2*time.Second, time.Millisecond)
+	}).Return(&running, nil)
+
+	require.True(t, gate.Refuses(context.Background(), nil), "judged before the read landed")
+	require.False(t, gate.Refuses(context.Background(), nil), "the next call sees it")
+}
+
 // waitForHeightRead waits until the gate's background height read has finished.
 func waitForHeightRead(t *testing.T, gate *UnminedTxGate) {
 	t.Helper()
