@@ -224,8 +224,10 @@ var benchmarkTxHashes = sync.OnceValue(func() []chainhash.Hash {
 	return pool
 })
 
-// skipInShort skips a sub-benchmark size that -short (CI) leaves out. CI keeps two sizes of each
-// benchmark, 4 and 1024 per subtree or 1k and 100k nodes; the skipped sizes time the same code.
+// skipInShort skips a sub-benchmark size that -short (CI) leaves out; every size times the same
+// code. CI keeps 4 and 1024 per subtree, 1k and 100k nodes for the parallel benchmarks, and 1k and
+// 10k for the sequential ones, whose 100k rows run one or two iterations a sample at 100ms and
+// read 13 to 82% apart between two runs of the same code on one runner.
 func skipInShort(b *testing.B, long bool) {
 	b.Helper()
 
@@ -598,13 +600,16 @@ func BenchmarkSubtreeProcessorOverheadBreakdown(b *testing.B) {
 	testCases := []struct {
 		name            string
 		itemsPerSubtree int
+		long            bool
 	}{
 		{name: "64_per_subtree", itemsPerSubtree: 64},
-		{name: "1024_per_subtree", itemsPerSubtree: 1024},
+		{name: "1024_per_subtree", itemsPerSubtree: 1024, long: true},
 	}
 
 	for _, tc := range testCases {
 		b.Run(tc.name, func(b *testing.B) {
+			skipInShort(b, tc.long)
+
 			stp, cleanup := setupSubtreeProcessorForBenchB(b, tc.itemsPerSubtree)
 			defer cleanup()
 
@@ -808,9 +813,9 @@ func BenchmarkSequentialGetAndSetIfNotExists(b *testing.B) {
 		long      bool
 	}{
 		{name: "1k_nodes", nodeCount: 1000},
-		{name: "10k_nodes", nodeCount: 10000, long: true},
+		{name: "10k_nodes", nodeCount: 10000},
 		{name: "50k_nodes", nodeCount: 50000, long: true},
-		{name: "100k_nodes", nodeCount: 100000},
+		{name: "100k_nodes", nodeCount: 100000, long: true},
 	}
 
 	for _, tc := range testCases {
@@ -919,8 +924,8 @@ func BenchmarkProcessOwnBlockSubtreeNodesSequential(b *testing.B) {
 		long      bool
 	}{
 		{name: "1k_nodes", nodeCount: 1000},
-		{name: "10k_nodes", nodeCount: 10000, long: true},
-		{name: "100k_nodes", nodeCount: 100000},
+		{name: "10k_nodes", nodeCount: 10000},
+		{name: "100k_nodes", nodeCount: 100000, long: true},
 	}
 
 	for _, tc := range testCases {
