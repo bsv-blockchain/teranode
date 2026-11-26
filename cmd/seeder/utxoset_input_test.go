@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
@@ -49,7 +50,7 @@ func compressedSnapshot(t *testing.T, plain string, pieceSize int) (string, stri
 		}
 	}
 
-	writeSidecar(t, uncompressedUTXOSetPath(path), data)
+	writeSidecar(t, filepath.Join(dir, compressedTestHash+".utxo-set"), data)
 
 	sum := sha256.Sum256(data)
 
@@ -206,6 +207,26 @@ func TestReadUTXOSetTip_CompressedReadsOnlyTheStart(t *testing.T) {
 	}
 }
 
+// Close must stop the stream: a decoder left open would go on opening and
+// decompressing the remaining pieces for whoever still holds the reader.
+func TestUTXOSetStream_CloseStopsReading(t *testing.T) {
+	plain := writeCompleteSnapshotFile(t, benchWrappers("close", 3000, 0))
+	zstFile, _ := compressedSnapshot(t, plain, 0)
+	pieceDir, _ := compressedSnapshot(t, plain, 16<<10)
+
+	for _, path := range []string{plain, zstFile, pieceDir} {
+		s, err := openUTXOSetStream(path, false)
+		require.NoError(t, err)
+
+		_, err = s.reader.Peek(1)
+		require.NoError(t, err)
+		require.NoError(t, s.Close())
+
+		_, err = io.Copy(io.Discard, s.reader)
+		require.Error(t, err, path)
+	}
+}
+
 func TestFindUTXOSet(t *testing.T) {
 	plainName := compressedTestHash + ".utxo-set"
 	zstName := plainName + compressedUTXOSetExtension
@@ -341,7 +362,7 @@ func TestSeeder_CompressedInput_Checksum(t *testing.T) {
 			blockStore := openTestBlockStore(t, tSettings)
 
 			dir, _ := compressedSnapshot(t, writeCompleteSnapshotFile(t, benchWrappers("seeder", 50, 0)), 1024)
-			plainPath := uncompressedUTXOSetPath(dir)
+			plainPath := filepath.Join(filepath.Dir(dir), compressedTestHash+".utxo-set")
 			require.NoError(t, os.WriteFile(plainPath+checksumSidecarExtension, []byte(tc.sidecar(plainPath)), 0o600))
 
 			err := Seeder(ulogger.TestLogger{}, tSettings, filepath.Dir(dir), compressedTestHash, true /* skipHeaders */, false /* skipUTXOs */, false /* force */, false /* recoverCheckpoint */, false /* skipChecksum */)

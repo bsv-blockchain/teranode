@@ -117,14 +117,11 @@ func (p *pieceReader) Read(b []byte) (int, error) {
 			p.cur, p.pieces = f, p.pieces[1:]
 		}
 
+		// An *os.File reports io.EOF only from a read that returned no bytes.
 		n, err := p.cur.Read(b)
 		if err == io.EOF {
 			_ = p.cur.Close()
 			p.cur = nil
-
-			if n > 0 {
-				return n, nil
-			}
 
 			continue
 		}
