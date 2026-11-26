@@ -35,10 +35,13 @@ not import (the import is already complete, or `-recover-checkpoint`) reads the
 set through the hash instead, when the sidecar is present and `-skipChecksum` is
 not set.
 
-If reading the set fails part-way, for a checksum mismatch or a damaged or
-missing piece, the records read by then may already be in the UTXO store. The
-seeder skips a transaction that already exists, so a re-run would keep them:
-wipe the UTXO store before seeding again. A missing or cut piece that removes
+If a compressed import stops before every pass has read and checked the whole
+set, for a checksum mismatch, a damaged or missing piece, a store error or a
+cancel, the records stored by then may come from a damaged piece. The seeder
+skips a transaction that already exists, so a re-run would keep them. The
+seeder writes `seederImportIncomplete.dat` to the block store before a
+compressed import and clears it only when every pass has verified; while it
+exists, a plain re-run refuses. Wipe the UTXO store, then re-run with `-force`. A missing or cut piece that removes
 bytes from the stream fails the seed, through the footer counts or the zstd
 decoder. A changed byte inside a
 piece is caught by zstd's frame checksum when the pieces carry one (the `zstd`
@@ -62,7 +65,7 @@ exception: see above.
 
 ### Tuning (UTXO import)
 
-The UTXO set is imported in two concurrent passes over the same file: one for transactions that fit a single UTXO store record, one for transactions spanning multiple records (highest unspent output index >= `utxostore_utxoBatchSize`), which take a much slower create path. The first error in either pass stops the import, and a re-run starts it again from the beginning; after a failure to read the set itself, wipe the UTXO store first (see above). Settings:
+The UTXO set is imported in two concurrent passes over the same file: one for transactions that fit a single UTXO store record, one for transactions spanning multiple records (highest unspent output index >= `utxostore_utxoBatchSize`), which take a much slower create path. The first error in either pass stops the import, and a re-run starts it again from the beginning; after a compressed import stops early, or a plain set fails part-way through its read, wipe the UTXO store first (see above). Settings:
 
 | Key | Default | Meaning |
 | --- | --- | --- |

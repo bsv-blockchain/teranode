@@ -490,8 +490,9 @@ func TestUTXOSetPieces(t *testing.T) {
 	require.Error(t, err)
 }
 
-// A seed stopped part-way (here by a missing last piece) is not marked complete; a re-run on
-// the whole set stores every output intact. Runs that do not import still check the checksum.
+// A seed stopped part-way (here by a missing last piece) is not marked complete, and a
+// plain re-run refuses until the store is wiped and -force is used; that run stores
+// every output intact. Runs that do not import still check the checksum.
 func TestProcessUTXOs_CompressedInput_InterruptedSeedReRuns(t *testing.T) {
 	ctx := context.Background()
 	tSettings := forceSeederSettings(t)
@@ -515,18 +516,30 @@ func TestProcessUTXOs_CompressedInput_InterruptedSeedReRuns(t *testing.T) {
 	require.ErrorContains(t, err, "truncated")
 	require.ErrorContains(t, err, "wipe the UTXO store")
 
-	exists, err := blockStore.Exists(ctx, nil, fileformat.FileTypeDat, bloboptions.WithFilename("lastProcessed"), bloboptions.WithNoHashPrefix())
-	require.NoError(t, err)
-	require.False(t, exists, "an interrupted seed must not be marked complete")
+	datExists := func(name string) bool {
+		exists, err := blockStore.Exists(ctx, nil, fileformat.FileTypeDat, bloboptions.WithFilename(name), bloboptions.WithNoHashPrefix())
+		require.NoError(t, err)
+
+		return exists
+	}
+
+	require.False(t, datExists("lastProcessed"), "an interrupted seed must not be marked complete")
+	require.True(t, datExists(incompleteImportFilename))
 
 	require.NoError(t, os.WriteFile(last, lastBytes, 0o600))
 
-	tip, err := processUTXOs(ctx, ulogger.TestLogger{}, tSettings, blockchainStore, dir, "", false, false, sum)
+	_, err = processUTXOs(ctx, ulogger.TestLogger{}, tSettings, blockchainStore, dir, "", false, false, sum)
+	require.ErrorContains(t, err, "wipe the UTXO store, then re-run with -force")
+
+	pointUtxoStoreAt(t, tSettings, "compressed_rerun_wiped")
+
+	tip, err := processUTXOs(ctx, ulogger.TestLogger{}, tSettings, blockchainStore, dir, "", true, false, sum)
 	require.NoError(t, err)
 	require.Equal(t, uint32(200), tip.height)
 	require.Equal(t, "200", readMarker(t, ctx, blockStore))
+	require.False(t, datExists(incompleteImportFilename), "a finished import clears the record")
 
-	requireStoredOutputs(ctx, t, openNamedUtxoStore(ctx, t, tSettings, "compressed_rerun"), wrappers)
+	requireStoredOutputs(ctx, t, openNamedUtxoStore(ctx, t, tSettings, "compressed_rerun_wiped"), wrappers)
 
 	stale := hex.EncodeToString(make([]byte, sha256.Size))
 
@@ -601,6 +614,12 @@ func TestImportUTXOSet_TipChangedUnderTheSeed(t *testing.T) {
 		require.ErrorContains(t, err, "changed while the seed was reading it")
 
 		opts.tip.hash[0] = 0xcc
+		opts.tip.height = 201
+
+		err = importUTXOSet(context.Background(), ulogger.TestLogger{}, noopCreateStore{}, path, opts)
+		require.ErrorContains(t, err, "changed while the seed was reading it", "the same hash at another height")
+
+		opts.tip.height = 200
 		require.NoError(t, importUTXOSet(context.Background(), ulogger.TestLogger{}, noopCreateStore{}, path, opts))
 	}
 }

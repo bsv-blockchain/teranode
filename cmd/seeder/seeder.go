@@ -541,6 +541,12 @@ func processUTXOs(ctx context.Context, logger ulogger.Logger, appSettings *setti
 
 		return verified, nil
 	case !force:
+		// Checked before the skip decision: a stopped compressed import also
+		// cleared lastProcessed.dat, which would otherwise read as a fresh seed.
+		if err = refuseAfterIncompleteImport(ctx, blockStore); err != nil {
+			return nil, err
+		}
+
 		var skip bool
 
 		skip, err = checkSkipUTXOImport(ctx, blockStore, blockchainStore)
@@ -675,6 +681,15 @@ func processUTXOs(ctx context.Context, logger ulogger.Logger, appSettings *setti
 		return nil, errors.NewStorageError("failed to clear lastProcessed.dat before re-import", err)
 	}
 
+	// A compressed set is checked only as it is imported, so until the import
+	// finishes, the UTXO store may hold records from a damaged piece. This record
+	// makes a plain re-run refuse until the operator wipes the store and uses -force.
+	if isCompressedUTXOSet(utxoFile) {
+		if err = blockStore.Set(ctx, nil, fileformat.FileTypeDat, []byte(utxoFile+"\n"), bloboptions.WithFilename(incompleteImportFilename), bloboptions.WithNoHashPrefix(), bloboptions.WithAllowOverwrite(true)); err != nil {
+			return nil, errors.NewStorageError("failed to record that an import of %s has started", utxoFile, err)
+		}
+	}
+
 	if err = importUTXOSet(ctx, logger, utxoStore, utxoFile, opts); err != nil {
 		return nil, err
 	}
@@ -685,6 +700,12 @@ func processUTXOs(ctx context.Context, logger ulogger.Logger, appSettings *setti
 		if err = syncFilesystem(syncPath); err != nil {
 			return nil, errors.NewStorageError("failed to sync external store filesystem", err)
 		}
+	}
+
+	// Cleared before lastProcessed.dat is written: a crash between the two then
+	// leaves neither, and a plain re-run imports the same verified set again.
+	if err = blockStore.Del(ctx, nil, fileformat.FileTypeDat, bloboptions.WithFilename(incompleteImportFilename), bloboptions.WithNoHashPrefix()); err != nil && !errors.Is(err, errors.ErrNotFound) {
+		return nil, errors.NewStorageError("failed to clear the record of an import in progress", err)
 	}
 
 	heightStr := fmt.Sprintf("%d\n", height)
@@ -728,6 +749,27 @@ func readUTXOSetTip(utxoFile string) (*utxoSetTip, error) {
 // carry it: that file is shared with the UTXO persister, which parses it as a
 // bare height.
 const importedTipFilename = "seederImportedTip"
+
+// incompleteImportFilename names the block-store record that a compressed
+// import has started and not yet finished verifying.
+const incompleteImportFilename = "seederImportIncomplete"
+
+// refuseAfterIncompleteImport fails when a compressed import stopped part-way:
+// the records it stored may come from a damaged piece, and an import keeps a
+// record that already exists. -force skips this check, since its own help says
+// to use it after wiping the UTXO store.
+func refuseAfterIncompleteImport(ctx context.Context, blockStore blob.Store) error {
+	b, err := blockStore.Get(ctx, nil, fileformat.FileTypeDat, bloboptions.WithFilename(incompleteImportFilename), bloboptions.WithNoHashPrefix())
+	if err != nil {
+		if errors.Is(err, errors.ErrNotFound) {
+			return nil
+		}
+
+		return errors.NewStorageError("failed to read the record of an import in progress", err)
+	}
+
+	return errors.NewProcessingError("a previous import of the compressed UTXO set %s stopped before the whole set was read and checked (%s.dat in the block store). Records it stored may come from a damaged piece, and a re-run keeps a record that already exists: wipe the UTXO store, then re-run with -force", strings.TrimSpace(string(b)), incompleteImportFilename)
+}
 
 // recoverableTip reports whether the block store records a completed import of
 // utxoFile's own snapshot with the BlockAssembler checkpoint missing, which is
@@ -991,7 +1033,7 @@ func importUTXOSet(ctx context.Context, logger ulogger.Logger, store utxo.Store,
 	// pass has read and hashed the whole set, any record already stored may
 	// have come from a damaged piece, whatever stopped the import.
 	if err != nil && compressed {
-		return errors.NewProcessingError("the import of the compressed UTXO set %s stopped before the whole set was read and checked. Records stored so far may come from a damaged piece, and a re-run keeps a record that already exists, so wipe the UTXO store before seeding again", utxoFile, err)
+		return errors.NewProcessingError("the import of the compressed UTXO set %s stopped before the whole set was read and checked. Records stored so far may come from a damaged piece, and a re-run keeps a record that already exists, so wipe the UTXO store, then re-run with -force", utxoFile, err)
 	}
 
 	if err != nil {

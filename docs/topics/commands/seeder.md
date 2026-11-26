@@ -150,7 +150,7 @@ teranode-cli seeder -inputDir <folder> -hash <hash> [-skipHeaders] [-skipUTXOs] 
 
 Options:
 
-- `-inputDir`: Specifies the input directory containing UTXO set and headers files.
+- `-inputDir`: Specifies the input directory containing UTXO set and headers files. The UTXO set is `<hash>.utxo-set`, or `<hash>.utxo-set.zst` compressed with zstd: one file, or a directory of `*.zst` pieces read in name order.
 - `-hash`: Hash of the UTXO set / headers to process.
 - `-skipHeaders`: (Optional) Skip processing of headers.
 - `-skipUTXOs`: (Optional) Skip processing of UTXOs.
@@ -183,10 +183,17 @@ itself runs.
 Verification reads each file in full (7m38s for a 569 GB mainnet UTXO set).
 A caller that has already verified the same files, such as a fetch script
 that checks the sidecars after download, can pass `-skipChecksum` to avoid
-reading them twice; the seeder logs a warning when it does. Checking during
-the import instead is not offered: a mismatch found partway through would
-leave corrupt records in the UTXO store that a re-run keeps as already
-present.
+reading them twice; the seeder logs a warning when it does.
+
+A compressed UTXO set (`<hash>.utxo-set.zst`) is the exception. Its sidecar is
+still `<hash>.utxo-set.sha256` and covers the uncompressed bytes, but it is
+checked during the import rather than first, so the set is decompressed only
+once. A mismatch fails the seed before `lastProcessed.dat` is written. Records
+stored by then may be corrupt, and a re-run keeps a record that already exists,
+so the seeder records in the block store that the import started
+(`seederImportIncomplete.dat`) and clears it only when every pass has verified.
+While that record exists, a plain re-run refuses: wipe the UTXO store, then
+re-run with `-force`.
 
 This check is a defense against transfer/storage corruption, not tampering:
 the sidecar itself is unauthenticated, so it cannot detect a snapshot and its
