@@ -1,6 +1,7 @@
 package utxoset
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -9,8 +10,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestConflictingStatementsNeverScanTheirTables pins the plans of the two statements
-// SetConflicting runs. Both used to join an unnest of transaction ids against the UTXO table and
+// TestConflictingStatementsNeverScanTheirTables pins the plans of the statements SetConflicting
+// runs. Both used to join an unnest of transaction ids against the UTXO table and
 // the spend journal on the id, with the packed key range as a join filter. Neither table has an
 // index on the id, so the planner's only fast path was the key range, and nothing made it take
 // it: on Hetzner mainnet on 2026-10-23 the generic plan hash-joined against a sequential scan of
@@ -96,6 +97,31 @@ func TestConflictingStatementsNeverScanTheirTables(t *testing.T) {
 				assertLinear(t, c)
 			}
 		}
+	})
+
+	// The transaction-row flips run before the UTXO update as statements of their own (see
+	// setConflictingSQL), so their plans are pinned on their own too.
+	t.Run("setConflictingIdentSQL", func(t *testing.T) {
+		for _, g := range p.leaves {
+			root := explainUnderNoNestloop(t, s, ctx, setConflictingIdentSQL,
+				g.leaf, g.txids, true, FlagConflicting)
+			assertKeyed(t, root)
+
+			// The leaf is the partition key, so the update reads only its own leaf's partition.
+			var scanned []string
+
+			walkPlan(root, func(n planNode) {
+				if strings.HasPrefix(n.RelationName, "tx_ident_") {
+					scanned = append(scanned, n.RelationName)
+				}
+			})
+			require.Equal(t, []string{fmt.Sprintf("tx_ident_l%d", g.leaf)}, scanned)
+		}
+	})
+
+	t.Run("setConflictingMinedSQL", func(t *testing.T) {
+		assertKeyed(t, explainUnderNoNestloop(t, s, ctx, setConflictingMinedSQL,
+			p.kTxid, true, FlagConflicting))
 	})
 
 	t.Run("conflictingReadSQL", func(t *testing.T) {
