@@ -1188,3 +1188,18 @@ func TestProcessOrphanTransactions_RefusedOnceTheNodeStartsSyncing(t *testing.T)
 		})
 	}
 }
+
+// Each legacy intake's gate must get the settings, or the checkpoint rule is off
+// on that intake.
+func TestNewUnminedTxGates_TakeSettings(t *testing.T) {
+	tSettings := test.CreateBaseTestSettings(t)
+	params := *tSettings.ChainCfgParams
+	params.Checkpoints = []chaincfg.Checkpoint{{Height: 100}}
+	tSettings.ChainCfgParams = &params
+	tSettings.UtxoStore.UtxoStore = &url.URL{Scheme: "utxoset", Host: "localhost"}
+
+	tx, orphan, eviction := newUnminedTxGates(ulogger.TestLogger{}, &blockchain2.Mock{}, tSettings)
+	for _, gate := range []*blockchain2.UnminedTxGate{tx, orphan, eviction} {
+		require.Equal(t, uint32(100), gate.CheckpointHeight())
+	}
+}

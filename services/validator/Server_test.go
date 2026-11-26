@@ -6,11 +6,13 @@ import (
 	"encoding/hex"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"testing"
 	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/go-chaincfg"
 	"github.com/bsv-blockchain/go-subtree"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
@@ -631,4 +633,17 @@ func TestHandleKafkaTxMessage_EarlyHeldShedIsNotInvalidAndCountedOnce(t *testing
 	for _, line := range logger.lines {
 		require.NotContains(t, line, "Invalid tx", "no per-message invalid-tx line for a held shed")
 	}
+}
+
+// NewServer must hand its settings to the unmined transaction gate, or the
+// checkpoint rule is off on the Kafka intake.
+func TestNewServer_UnminedTxGateTakesSettings(t *testing.T) {
+	tSettings := test.CreateBaseTestSettings(t)
+	params := *tSettings.ChainCfgParams
+	params.Checkpoints = []chaincfg.Checkpoint{{Height: 100}}
+	tSettings.ChainCfgParams = &params
+	tSettings.UtxoStore.UtxoStore = &url.URL{Scheme: "utxoset", Host: "localhost"}
+
+	srv := NewServer(ulogger.TestLogger{}, tSettings, nil, &blockchain.Mock{}, nil, nil, nil, nil, nil)
+	require.Equal(t, uint32(100), srv.unminedTxGate.CheckpointHeight())
 }

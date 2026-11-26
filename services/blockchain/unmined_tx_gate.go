@@ -32,23 +32,14 @@ const (
 // transactions a second, and one line each would bury the sync's own logging.
 const unminedTxRefusedLogInterval = 30 * time.Second
 
-// bestHeightReadInterval bounds how often a gate on a netting store reads the
-// best height. Refuses runs once per transaction, and the height read is a gRPC
-// call, so between reads the gate answers from the last height it saw.
+// bestHeightReadInterval is the shortest time between the starts of two
+// best-height reads by one gate. Refuses runs once per transaction and the read
+// is a gRPC call, so between reads the gate answers from what it last learned.
 const bestHeightReadInterval = time.Second
 
-// bestHeightReadTimeout bounds one best-height read. The legacy intake calls
-// Refuses on its sync manager goroutine, which must not wait out an unanswered
-// call to a blockchain service that is restarting.
+// bestHeightReadTimeout bounds one best-height read, so a blockchain service
+// that never answers cannot hold the gate's one read slot.
 const bestHeightReadTimeout = 2 * time.Second
-
-// What a gate on a netting store last learned about the best height. The zero
-// value is unknown, and unknown refuses.
-const (
-	checkpointUnknown uint32 = iota
-	checkpointBelow
-	checkpointReached
-)
 
 var prometheusUnminedTxRefused = promauto.NewCounterVec(
 	prometheus.CounterOpts{
@@ -91,9 +82,11 @@ func IsSyncingState(state FSMStateType) bool {
 // IDLE while a batch of blocks is still being written, and the client reports
 // IDLE while the blockchain service restarts. A transaction let in then can
 // delete a coin that a block further up the batch spends, and the netted write
-// has no fallback. This rule fails closed: until the gate has read the best
-// height once it refuses, and a failed read keeps the last answer. A node at
-// the tip has read a height above the checkpoint and keeps accepting.
+// has no fallback. This rule fails closed: the gate refuses until a height read
+// returns the checkpoint or above. The read runs in the background, so Refuses
+// never waits on it, and once the checkpoint is reached the gate stops reading.
+// That answer is kept until the process restarts: a tip moved back below the
+// checkpoint afterwards, by invalidateblock, does not close the gate again.
 //
 // A refused transaction is dropped, counted and logged at most once per
 // interval. It is not queued: holding transactions until RUNNING would replay
@@ -118,10 +111,14 @@ type UnminedTxGate struct {
 	// the network has no checkpoints, which turns the rule off.
 	highestCheckpoint uint32
 
-	// checkpoint is one of the checkpoint constants, and heightReadNanos the
-	// unix time of the last best-height read, successful or not.
-	checkpoint      atomic.Uint32
+	// reached is set once a height read returns highestCheckpoint or above.
+	// heightReading is true while a read is in flight, heightReadNanos is the
+	// unix time the last read started, and lastWarnNanos the last time a
+	// failed read was logged.
+	reached         atomic.Bool
+	heightReading   atomic.Bool
 	heightReadNanos atomic.Int64
+	lastWarnNanos   atomic.Int64
 }
 
 // NewUnminedTxGate returns a gate for one intake route. route is one of the
@@ -163,7 +160,7 @@ func (g *UnminedTxGate) Refuses(ctx context.Context, txHash *chainhash.Hash) boo
 		return true
 	}
 
-	if g.belowHighestCheckpoint(ctx) {
+	if g.belowHighestCheckpoint() {
 		g.refuse(txHash, "the best height is not known to have reached the highest checkpoint")
 
 		return true
@@ -172,34 +169,68 @@ func (g *UnminedTxGate) Refuses(ctx context.Context, txHash *chainhash.Hash) boo
 	return false
 }
 
-// belowHighestCheckpoint reports whether the checkpoint rule refuses. It reads
-// the best height at most once per bestHeightReadInterval, from one goroutine
-// at a time, and otherwise answers from the last read. A failed read leaves
-// the last answer in place, so a gate that has never read a height refuses.
-func (g *UnminedTxGate) belowHighestCheckpoint(ctx context.Context) bool {
-	if g.highestCheckpoint == 0 {
+// belowHighestCheckpoint reports whether the checkpoint rule refuses. Until the
+// checkpoint is known to be reached it refuses, and starts a background height
+// read when none is in flight and the last one started at least
+// bestHeightReadInterval ago.
+func (g *UnminedTxGate) belowHighestCheckpoint() bool {
+	if g.highestCheckpoint == 0 || g.reached.Load() {
 		return false
 	}
 
 	now := time.Now().UnixNano()
-	last := g.heightReadNanos.Load()
+	if now-g.heightReadNanos.Load() >= int64(bestHeightReadInterval) && g.heightReading.CompareAndSwap(false, true) {
+		g.heightReadNanos.Store(now)
 
-	if (last == 0 || now-last >= int64(bestHeightReadInterval)) && g.heightReadNanos.CompareAndSwap(last, now) {
-		readCtx, cancel := context.WithTimeout(ctx, bestHeightReadTimeout)
-		height, _, err := g.client.GetBestHeightAndTime(readCtx)
-
-		cancel()
-
-		switch {
-		case err != nil:
-		case height >= g.highestCheckpoint:
-			g.checkpoint.Store(checkpointReached)
-		default:
-			g.checkpoint.Store(checkpointBelow)
-		}
+		go g.readBestHeight()
 	}
 
-	return g.checkpoint.Load() != checkpointReached
+	return true
+}
+
+// readBestHeight reads the best height once and sets reached when it is at or
+// above the highest checkpoint. It runs detached from any caller's context,
+// because it outlives the Refuses call that started it.
+func (g *UnminedTxGate) readBestHeight() {
+	defer g.heightReading.Store(false)
+
+	ctx, cancel := context.WithTimeout(context.Background(), bestHeightReadTimeout)
+	defer cancel()
+
+	height, _, err := g.client.GetBestHeightAndTime(ctx)
+	if err != nil {
+		g.warnReadFailure(err)
+
+		return
+	}
+
+	if height >= g.highestCheckpoint {
+		g.reached.Store(true)
+	}
+}
+
+// warnReadFailure logs a failed height read at most once per refusal log
+// interval. Without it a node that keeps refusing because the blockchain
+// service never answers looks the same as one still below the checkpoint.
+func (g *UnminedTxGate) warnReadFailure(err error) {
+	now := time.Now().UnixNano()
+	last := g.lastWarnNanos.Load()
+
+	if now-last < int64(unminedTxRefusedLogInterval) || !g.lastWarnNanos.CompareAndSwap(last, now) {
+		return
+	}
+
+	g.logger.Warnf("[UnminedTxGate][%s] cannot read the best height, so unmined transactions stay refused until it reaches checkpoint %d: %v", g.route, g.highestCheckpoint, err)
+}
+
+// CheckpointHeight returns the height below which the gate refuses whatever
+// the FSM says, or 0 when that rule is off. A nil gate returns 0.
+func (g *UnminedTxGate) CheckpointHeight() uint32 {
+	if g == nil {
+		return 0
+	}
+
+	return g.highestCheckpoint
 }
 
 func (g *UnminedTxGate) refuse(txHash *chainhash.Hash, reason string) {

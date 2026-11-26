@@ -19,6 +19,7 @@ import (
 
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/go-chaincfg"
 	bec "github.com/bsv-blockchain/go-sdk/primitives/ec"
 	"github.com/bsv-blockchain/go-wire"
 	"github.com/bsv-blockchain/teranode/errors"
@@ -2245,4 +2246,17 @@ func TestParseDatagram_AnExtendedTransactionDecodes(t *testing.T) {
 	got, ok := msg.(*wire.MsgExtendedTx)
 	require.True(t, ok, "want *wire.MsgExtendedTx, got %T", msg)
 	require.Equal(t, tx.TxHash(), got.TxHash())
+}
+
+// New must hand its settings to the unmined transaction gate, or the checkpoint
+// rule is off on this intake.
+func TestNew_UnminedTxGateTakesSettings(t *testing.T) {
+	tSettings := test.CreateBaseTestSettings(t)
+	params := *tSettings.ChainCfgParams
+	params.Checkpoints = []chaincfg.Checkpoint{{Height: 100}}
+	tSettings.ChainCfgParams = &params
+	tSettings.UtxoStore.UtxoStore = &url.URL{Scheme: "utxoset", Host: "localhost"}
+
+	ps := New(ulogger.TestLogger{}, tSettings, nil, nil, &blockchain.Mock{}, nil, nil)
+	require.Equal(t, uint32(100), ps.unminedTxGate.CheckpointHeight())
 }

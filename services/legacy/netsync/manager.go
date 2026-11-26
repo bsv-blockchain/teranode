@@ -5015,11 +5015,8 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 		subtreeValidation: subtreeValidation,
 		blockValidation:   blockValidation,
 		blockAssembly:     blockAssembly,
-
-		txGate:             teranodeblockchain.NewUnminedTxGate(logger, blockchainClient, tSettings, teranodeblockchain.UnminedTxRouteLegacyTx),
-		orphanGate:         teranodeblockchain.NewUnminedTxGate(logger, blockchainClient, tSettings, teranodeblockchain.UnminedTxRouteLegacyOrphan),
-		orphanEvictionGate: teranodeblockchain.NewUnminedTxGate(logger, blockchainClient, tSettings, teranodeblockchain.UnminedTxRouteLegacyOrphanEviction),
 	}
+	sm.txGate, sm.orphanGate, sm.orphanEvictionGate = newUnminedTxGates(logger, blockchainClient, tSettings)
 
 	// Where every downloaded block is converted to and committed from. Not
 	// optional: a node without a usable park refuses to start.
@@ -5580,4 +5577,12 @@ func violationNames(networkSpeed, lastBlockTime bool) string {
 // because an operator STOP can land while blocks are still syncing.
 func suppressBlockRejects(state *teranodeblockchain.FSMStateType) bool {
 	return state == nil || *state != teranodeblockchain.FSMStateRUNNING
+}
+
+// newUnminedTxGates returns the gates for the legacy intakes: a peer's tx
+// message, an orphan accepted once its parents arrive, and an evicted orphan.
+func newUnminedTxGates(logger ulogger.Logger, client teranodeblockchain.ClientI, tSettings *settings.Settings) (tx, orphan, orphanEviction *teranodeblockchain.UnminedTxGate) {
+	return teranodeblockchain.NewUnminedTxGate(logger, client, tSettings, teranodeblockchain.UnminedTxRouteLegacyTx),
+		teranodeblockchain.NewUnminedTxGate(logger, client, tSettings, teranodeblockchain.UnminedTxRouteLegacyOrphan),
+		teranodeblockchain.NewUnminedTxGate(logger, client, tSettings, teranodeblockchain.UnminedTxRouteLegacyOrphanEviction)
 }
