@@ -226,7 +226,7 @@ func (s *Server) sweepCreatingTxs(ctx context.Context, blockHeight uint32) {
 			// when the record is that old and every parent that blocked it has been blocked for that
 			// long too: one that is not committing keeps the inputs that did spend, and every output of
 			// the record, unspendable for as long as it lasts.
-			if isUnwinnableSpendError(rfErr) || (isTransientSpendError(rfErr) && s.blockedByParentsForLong(ctx, blockHeight, md.UnminedSince, rfSpends, parentBlocked)) {
+			if utxo.IsUnwinnableSpendError(rfErr) || (isTransientSpendError(rfErr) && s.blockedByParentsForLong(ctx, blockHeight, md.UnminedSince, rfSpends, parentBlocked)) {
 				// A lease that is still live belongs to a spender that returned with an unknown
 				// outcome or crashed. The rollback would wait for it, so the record is left for a
 				// later pass, when the lease is stale.
@@ -625,16 +625,4 @@ func (s *Server) resumeHandOff(ctx context.Context, blockHeight uint32, e *handO
 // is locked, or still creating.
 func isTransientSpendError(err error) bool {
 	return errors.Is(err, errors.ErrTxLocked) || errors.Is(err, errors.ErrTxCreating)
-}
-
-// isUnwinnableSpendError reports whether a spend error means the tx can never be
-// completed: an input is spent by another tx, conflicting, frozen, does not match, names
-// an output that does not exist, or is a spend of a transaction that was mined and pruned.
-func isUnwinnableSpendError(err error) bool {
-	return errors.Is(err, errors.ErrSpent) ||
-		errors.Is(err, errors.ErrTxNotFound) ||
-		errors.Is(err, errors.ErrTxConflicting) ||
-		errors.Is(err, errors.ErrFrozen) ||
-		errors.Is(err, errors.ErrUtxoHashMismatch) ||
-		errors.Is(err, errors.ErrUtxoSpendingTxPruned)
 }

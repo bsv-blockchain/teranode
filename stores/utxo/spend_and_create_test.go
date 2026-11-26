@@ -3242,3 +3242,157 @@ func TestIsSpendVerdictKnowsThePrunedReplayRefusal(t *testing.T) {
 	require.True(t, LaneSpendWroteNothing([]*Spend{{Err: refusal}}), "the refusal is made before any write, and an idempotent match writes no lane slot")
 	require.False(t, LaneSpendWroteNothing([]*Spend{{}, {Err: refusal}}), "an input beside the refusal that was spent may have written its lane slot, so the position stays burned")
 }
+
+// settlerStore adds the spend-only call of a roll-forward to the sequential fake, which answers it
+// with its scripted spend.
+type settlerStore struct {
+	*fakeSequentialStore
+}
+
+func (s settlerStore) SpendAndCreate(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...CreateOption) (*meta.Data, []*Spend, error) {
+	o := CreateOptions{}
+	for _, opt := range opts {
+		opt(&o)
+	}
+
+	spends, err := s.Spend(ctx, tx, blockHeight, o.IgnoreFlags)
+
+	return nil, spends, err
+}
+
+// TestSettleTentativeInTheWay pins the rule by which a block ends the create-first attempt whose
+// record is in the way of one of its transactions: the rule of the pruner sweep, run at once. The
+// record is rolled forward, and it is rolled back only when the transaction can never be completed
+// and no spender of the attempt holds a live lease.
+func TestSettleTentativeInTheWay(t *testing.T) {
+	ctx := context.Background()
+	attempt := []byte{7}
+
+	// A rollback reverses the spends it builds from the transaction, so its inputs are real.
+	tx := bt.NewTx()
+	require.NoError(t, tx.From(strings.Repeat("aa", 32), 0, "76a914000000000000000000000000000000000000000088ac", 1000))
+	require.NoError(t, tx.From(strings.Repeat("bb", 32), 1, "76a914000000000000000000000000000000000000000088ac", 2000))
+
+	settle := func(f *fakeSequentialStore, existing *meta.Data, opts ...CreateOption) (bool, error) {
+		return SettleTentativeInTheWay(ctx, ulogger.TestLogger{}, settlerStore{f}, tx, existing, 100, opts...)
+	}
+
+	t.Run("a record that is not a tentative record of a create-first attempt is left alone", func(t *testing.T) {
+		for name, existing := range map[string]*meta.Data{
+			"no record":       nil,
+			"a hold":          {Creating: true, RollingBack: true, Hold: true, Attempt: attempt},
+			"no token":        {Creating: true},
+			"a stored record": {Attempt: attempt},
+		} {
+			f := &fakeSequentialStore{}
+
+			settled, err := settle(f, existing)
+			require.NoError(t, err, name)
+			require.False(t, settled, name)
+			require.Empty(t, f.callSeq, "%s: nothing is read, spent or written", name)
+		}
+	})
+
+	t.Run("a creating record whose inputs can be spent is rolled forward", func(t *testing.T) {
+		f := &fakeSequentialStore{spends: []*Spend{{}, {}}}
+
+		settled, err := settle(f, &meta.Data{Creating: true, Attempt: attempt}, WithIgnoreLocked(true))
+		require.NoError(t, err)
+		require.True(t, settled, "the record is final")
+		require.Equal(t, []string{"lease", "spend", "finalize"}, f.callSeq)
+		require.Equal(t, [][]byte{attempt}, f.leaseTokens)
+		require.True(t, f.spendFlags[0].IgnoreLocked, "the re-spend runs under the flags of the block's own spend")
+		require.Zero(t, f.beginCalls, "nothing is rolled back")
+	})
+
+	t.Run("a creating record that can never be completed is rolled back when no lease is live", func(t *testing.T) {
+		for name, verdict := range map[string]error{
+			"spent by another tx": errors.ErrSpent,
+			"conflicting parent":  errors.ErrTxConflicting,
+			"frozen output":       errors.ErrFrozen,
+			"hash mismatch":       errors.ErrUtxoHashMismatch,
+			"missing parent":      errors.ErrTxNotFound,
+			"pruned replay":       errors.ErrUtxoSpendingTxPruned,
+		} {
+			f := &fakeSequentialStore{spends: []*Spend{{}, {Err: verdict}}, spendErr: errors.NewUtxoError("spend failed", verdict)}
+
+			settled, err := settle(f, &meta.Data{Creating: true, Attempt: attempt})
+			require.NoError(t, err, name)
+			require.True(t, settled, "%s: the rollback ended and left a hold", name)
+			require.Equal(t, []string{"lease", "spend", "getmeta", "unlease", "leases", "begin", "unspend", "release", "delete"}, f.callSeq, name)
+			require.Equal(t, [][]byte{attempt}, f.beginTokens, "%s: the rollback names the attempt that was read", name)
+			require.Len(t, f.unspentWith, len(tx.Inputs), "%s: every input of the transaction is reversed", name)
+		}
+	})
+
+	t.Run("a live lease keeps a record that can never be completed from being rolled back", func(t *testing.T) {
+		f := &fakeSequentialStore{spends: []*Spend{{}, {Err: errors.ErrSpent}}, spendErr: errors.NewUtxoError("spend failed", errors.ErrSpent), leasesLive: -1}
+
+		settled, err := settle(f, &meta.Data{Creating: true, Attempt: attempt})
+		require.NoError(t, err)
+		require.False(t, settled)
+		require.Equal(t, []string{"lease", "spend", "getmeta", "unlease", "leases"}, f.callSeq, "a spender may still be at work, so no rollback is claimed and the call does not wait for the lease")
+		require.Zero(t, f.beginCalls)
+	})
+
+	t.Run("a roll-forward that failed for a reason that ends by itself leaves the record", func(t *testing.T) {
+		for name, tc := range map[string]struct {
+			spends   []*Spend
+			spendErr error
+		}{
+			"locked parent":   {[]*Spend{{}, {Err: errors.ErrTxLocked}}, errors.NewUtxoError("spend failed", errors.ErrTxLocked)},
+			"creating parent": {[]*Spend{{}, {Err: errors.ErrTxCreating}}, errors.NewUtxoError("spend failed", errors.ErrTxCreating)},
+			"unknown outcome": {[]*Spend{{}, {}}, context.DeadlineExceeded},
+		} {
+			f := &fakeSequentialStore{spends: tc.spends, spendErr: tc.spendErr}
+
+			settled, err := settle(f, &meta.Data{Creating: true, Attempt: attempt})
+			require.NoError(t, err, name)
+			require.False(t, settled, name)
+			require.Zero(t, f.leasesCalls, name)
+			require.Zero(t, f.beginCalls, "%s: nothing is rolled back", name)
+		}
+	})
+
+	t.Run("a rollback that the store refuses is not a settled record", func(t *testing.T) {
+		f := &fakeSequentialStore{spends: []*Spend{{}, {Err: errors.ErrSpent}}, spendErr: errors.NewUtxoError("spend failed", errors.ErrSpent), beginDeclined: true}
+
+		settled, err := settle(f, &meta.Data{Creating: true, Attempt: attempt})
+		require.NoError(t, err)
+		require.False(t, settled, "the record is final, finalizing or another caller's, and nothing was reversed")
+		require.Zero(t, f.unspendCalls)
+	})
+
+	t.Run("a failed read of the leases is an error and nothing is rolled back", func(t *testing.T) {
+		f := &fakeSequentialStore{spends: []*Spend{{}, {Err: errors.ErrSpent}}, spendErr: errors.NewUtxoError("spend failed", errors.ErrSpent), leasesErr: errors.NewStorageError("read failed")}
+
+		settled, err := settle(f, &meta.Data{Creating: true, Attempt: attempt})
+		require.ErrorIs(t, err, errors.ErrStorageError)
+		require.False(t, settled)
+		require.Zero(t, f.beginCalls)
+	})
+
+	t.Run("a rollback that its owner left open is finished", func(t *testing.T) {
+		f := &fakeSequentialStore{}
+
+		settled, err := settle(f, &meta.Data{Creating: true, RollingBack: true, Attempt: attempt})
+		require.NoError(t, err)
+		require.True(t, settled, "the rollback ended and left a hold")
+		require.Equal(t, []string{"take", "leases", "unspend", "release", "delete"}, f.callSeq)
+		require.Zero(t, f.leaseCalls, "a rolling back record is never rolled forward")
+
+		reversed := &fakeSequentialStore{}
+
+		settled, err = settle(reversed, &meta.Data{Creating: true, RollingBack: true, Reversed: true, Attempt: attempt})
+		require.NoError(t, err)
+		require.True(t, settled)
+		require.Equal(t, []string{"delete"}, reversed.callSeq, "a reversed record only needs its rollback ended")
+
+		busy := &fakeSequentialStore{takeDeclined: true}
+
+		settled, err = settle(busy, &meta.Data{Creating: true, RollingBack: true, Attempt: attempt})
+		require.NoError(t, err)
+		require.False(t, settled, "a holder is at work on it")
+		require.Equal(t, []string{"take"}, busy.callSeq)
+	})
+}

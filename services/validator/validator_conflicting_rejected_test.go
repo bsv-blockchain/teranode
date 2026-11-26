@@ -11,7 +11,9 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	bec "github.com/bsv-blockchain/go-sdk/primitives/ec"
 	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/bsv-blockchain/teranode/stores/blob/memory"
 	utxostore "github.com/bsv-blockchain/teranode/stores/utxo"
+	teranode_aerospike "github.com/bsv-blockchain/teranode/stores/utxo/aerospike"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/stores/utxo/sql"
 	"github.com/bsv-blockchain/teranode/test/utils/transactions"
@@ -20,6 +22,7 @@ import (
 	"github.com/bsv-blockchain/teranode/util/kafka"
 	kafkamessage "github.com/bsv-blockchain/teranode/util/kafka/kafka_message"
 	"github.com/bsv-blockchain/teranode/util/test"
+	aeroTest "github.com/bsv-blockchain/testcontainers-aerospike-go"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
 )
@@ -664,6 +667,192 @@ func TestBlockPathConflictingFallbackOverARecordThatIsNotATransaction(t *testing
 			require.Nil(t, txMeta)
 			require.Empty(t, shim.clearAdopt, "only a hold is cleared")
 			require.Zero(t, shim.setConflicts, "another attempt's record is not marked conflicting")
+		})
+	}
+}
+
+// TestBlockPathConflictingFallbackSettlesATentativeRecord drives, on a real Aerospike, the sequence
+// that left a block refused on every retry:
+//
+//  1. A create-first attempt writes the tentative record of a transaction and stops before every
+//     input is spent.
+//  2. Another transaction spends one of the inputs it had not spent.
+//  3. A block that contains the first transaction arrives. Its spend is refused as a double spend,
+//     the roll-forward of the tentative record is refused for the same reason, and the create of
+//     the transaction as conflicting finds that record in its way.
+//
+// The pruner sweep would roll the record back, but it runs when the chain advances, and the block is
+// what stops the chain. The block's own validation must therefore settle the record: with no spender
+// of the attempt holding a live lease, it rolls the attempt back and stores the transaction as
+// conflicting. The case runs with create-first on and with it off, where the record was left by an
+// attempt that ran before the setting was turned off.
+func TestBlockPathConflictingFallbackSettlesATentativeRecord(t *testing.T) {
+	ctx := t.Context()
+
+	container, err := aeroTest.RunContainer(ctx, aeroTest.WithImage(test.AerospikeImage))
+	test.SkipIfContainerUnavailable(t, err)
+
+	t.Cleanup(func() {
+		require.NoError(t, container.Terminate(context.Background()))
+	})
+
+	host, err := container.Host(ctx)
+	require.NoError(t, err)
+
+	port, err := container.ServicePort(ctx)
+	require.NoError(t, err)
+
+	aeroURL, err := url.Parse(fmt.Sprintf("aerospike://%s:%d/test?set=test&expiration=1m&externalStore=file://./data/externalStore", host, port))
+	require.NoError(t, err)
+
+	privateKey, publicKey := bec.PrivateKeyFromBytes([]byte("TENTATIVE_IN_THE_WAY_TEST_KEY!!!"))
+
+	type fixture struct {
+		v       *Validator
+		store   *teranode_aerospike.Store
+		inBlock *bt.Tx
+		rival   *bt.Tx
+		attempt []byte
+	}
+
+	// newFixture leaves the tentative record of inBlock, with its first input spent by it and its
+	// second input spent by rival. The lease of the attempt that wrote the record is still on it.
+	newFixture := func(t *testing.T, label string, createFirst bool) fixture {
+		logger := ulogger.NewErrorTestLogger(t)
+		tSettings := test.CreateBaseTestSettings(t)
+		tSettings.BlockAssembly.Disabled = true
+		tSettings.UtxoStore.UseCreateFirstOrder = createFirst
+
+		store, err := teranode_aerospike.New(ctx, logger, tSettings, aeroURL)
+		require.NoError(t, err)
+
+		store.SetExternalStore(memory.New())
+		require.NoError(t, store.SetBlockHeight(100))
+		require.NoError(t, store.SetMedianBlockTime(uint32(time.Now().Unix()))) //nolint:gosec
+
+		parent := transactions.Create(t,
+			transactions.WithCoinbaseData(1, "/tentative in the way "+label+"/"),
+			transactions.WithP2PKHOutputs(2, 100_000, publicKey),
+		)
+		_, err = store.Create(ctx, parent, 1, utxostore.WithMinedBlockInfo(utxostore.MinedBlockInfo{BlockID: 1, BlockHeight: 1, SubtreeIdx: 0}))
+		require.NoError(t, err)
+
+		inBlock := transactions.Create(t,
+			transactions.WithPrivateKey(privateKey),
+			transactions.WithInput(parent, 0, privateKey),
+			transactions.WithInput(parent, 1, privateKey),
+			transactions.WithP2PKHOutputs(1, 150_000, publicKey),
+		)
+		rival := transactions.Create(t,
+			transactions.WithPrivateKey(privateKey),
+			transactions.WithInput(parent, 1, privateKey),
+			transactions.WithP2PKHOutputs(1, 80_000, publicKey),
+		)
+
+		validator, err := New(ctx, logger, tSettings, store, nil, nil, nil, nil, nil)
+		require.NoError(t, err)
+
+		v := validator.(*Validator)
+
+		md, err := store.Create(ctx, inBlock, 100, utxostore.WithCreating(true))
+		require.NoError(t, err, "step 1: the tentative record is written")
+
+		_, err = v.Validate(ctx, rival, 100)
+		require.NoError(t, err, "step 2: another transaction spends the second input")
+
+		_, err = store.Spend(ctx, inBlock, 100)
+		require.ErrorIs(t, err, errors.ErrSpent, "the attempt cannot spend its second input")
+
+		return fixture{v: v, store: store, inBlock: inBlock, rival: rival, attempt: md.Attempt}
+	}
+
+	spenderOf := func(t *testing.T, f fixture, input int) *chainhash.Hash {
+		spends, err := utxostore.GetSpends(f.inBlock)
+		require.NoError(t, err)
+
+		resp, err := f.store.GetSpend(ctx, spends[input])
+		require.NoError(t, err)
+
+		if resp.SpendingData == nil {
+			return nil
+		}
+
+		return resp.SpendingData.TxID
+	}
+
+	for _, createFirst := range []bool{true, false} {
+		name := "create-first on"
+		if !createFirst {
+			name = "create-first off"
+		}
+
+		t.Run(name+": the block stores the transaction as conflicting", func(t *testing.T) {
+			f := newFixture(t, name+" settled", createFirst)
+			hash := f.inBlock.TxIDChainHash()
+
+			require.Equal(t, hash, spenderOf(t, f, 0), "precondition: the attempt spent its first input")
+			require.Equal(t, f.rival.TxIDChainHash(), spenderOf(t, f, 1), "precondition: the rival spent its second input")
+
+			require.NoError(t, f.store.ReleaseSpendLease(ctx, hash, f.attempt, f.attempt), "the attempt that wrote the record is gone, so its lease is no longer live")
+
+			txMeta, err := f.v.Validate(ctx, f.inBlock, 100, WithCreateConflicting(true))
+			require.ErrorIs(t, err, errors.ErrTxConflicting, "step 3: the block's transaction is decided, not left for a retry")
+			require.NotNil(t, txMeta)
+			require.True(t, txMeta.Conflicting)
+
+			stored := &meta.Data{}
+			require.NoError(t, f.store.GetMeta(ctx, hash, stored))
+			require.True(t, stored.Conflicting, "the transaction is stored as conflicting")
+			require.False(t, stored.Creating, "the tentative record is gone")
+			require.False(t, stored.Hold, "and so is the hold its rollback left")
+
+			require.Nil(t, spenderOf(t, f, 0), "the rollback reversed the spend the attempt had made")
+			require.Equal(t, f.rival.TxIDChainHash(), spenderOf(t, f, 1), "the spend of the rival is untouched")
+		})
+
+		t.Run(name+": with no record in the way, the block stores the transaction as conflicting", func(t *testing.T) {
+			f := newFixture(t, name+" fresh", createFirst)
+			hash := f.inBlock.TxIDChainHash()
+
+			// The attempt that left the record is rolled back as the pruner sweep would do it, and its
+			// hold is gone, so the block meets a txid with no record at all: the plain double spend.
+			require.NoError(t, f.store.ReleaseSpendLease(ctx, hash, f.attempt, f.attempt))
+			require.NoError(t, utxostore.RollBackCreating(ctx, ulogger.NewErrorTestLogger(t), f.store, f.inBlock, f.attempt))
+
+			cleared, err := f.store.ClearCreateFirstHold(ctx, hash, true)
+			require.NoError(t, err)
+			require.True(t, cleared)
+			require.ErrorIs(t, f.store.GetMeta(ctx, hash, &meta.Data{}), errors.ErrTxNotFound, "precondition: nothing is at the txid")
+
+			txMeta, err := f.v.Validate(ctx, f.inBlock, 100, WithCreateConflicting(true))
+			require.ErrorIs(t, err, errors.ErrTxConflicting, "the hold that this call's own rollback leaves must not refuse its conflicting create")
+			require.NotNil(t, txMeta)
+			require.True(t, txMeta.Conflicting)
+
+			stored := &meta.Data{}
+			require.NoError(t, f.store.GetMeta(ctx, hash, stored))
+			require.True(t, stored.Conflicting, "the transaction is stored as conflicting")
+			require.False(t, stored.Creating)
+			require.False(t, stored.Hold)
+
+			require.Nil(t, spenderOf(t, f, 0), "the transaction holds no spend of its first input")
+			require.Equal(t, f.rival.TxIDChainHash(), spenderOf(t, f, 1), "the spend of the rival is untouched")
+		})
+
+		t.Run(name+": a record whose spender may still be at work is left for a retry", func(t *testing.T) {
+			f := newFixture(t, name+" live lease", createFirst)
+			hash := f.inBlock.TxIDChainHash()
+
+			txMeta, err := f.v.Validate(ctx, f.inBlock, 100, WithCreateConflicting(true))
+			require.ErrorIs(t, err, errors.ErrProcessing)
+			require.False(t, errors.Is(err, errors.ErrTxConflicting), "the tx is not decided: %v", err)
+			require.Nil(t, txMeta)
+
+			stored := &meta.Data{}
+			require.NoError(t, f.store.GetMeta(ctx, hash, stored))
+			require.True(t, stored.Creating, "the record is still the tentative record of its attempt")
+			require.False(t, stored.RollingBack, "nothing rolled it back under a live lease")
+			require.Equal(t, hash, spenderOf(t, f, 0), "and its spend is still in place")
 		})
 	}
 }

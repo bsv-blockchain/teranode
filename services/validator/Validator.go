@@ -1465,12 +1465,24 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 				// fallback (reached during legacy below-checkpoint catchup on a stale/double
 				// spend — see handle_block.go PreValidateTransactions, which sets both
 				// CreateConflicting and OutpointOnlySpend) does not hard-fail the block.
-				conflictingCreateOpts := []utxo.CreateOption{utxo.WithCaller(createCaller(validationOptions))}
+				//
+				// The create is that of a transaction of a block, and it says so to the store the way a
+				// spend of a block does, by ignoring locks, which a create with no spend does not
+				// otherwise read. A store that keeps a hold for a rolled back create-first attempt clears
+				// it at once for such a create and makes it wait for the hold to expire for any other.
+				// This transaction's own spend was just refused, so with create-first on it has just
+				// rolled its own attempt back and left that hold: without the mark the fallback is
+				// refused by it on every retry of the block, because every retry leaves a new one.
+				conflictingCreateOpts := []utxo.CreateOption{utxo.WithCaller(createCaller(validationOptions)), utxo.WithIgnoreLocked(true)}
 				if validationOptions.OutpointOnlySpend {
 					conflictingCreateOpts = append(conflictingCreateOpts, utxo.WithSkipExtendedInputs(true))
 				}
 
-				for round := 0; ; round++ {
+				// settled and holdCleared let the create go round once more after each of the two steps
+				// that take a tentative record out of the way, and no more often.
+				settled, holdCleared := false, false
+
+				for {
 					txMetaData, utxoMapErr = v.CreateInUtxoStore(decoupledCtx, tx, blockHeight, true, false, conflictingCreateOpts...)
 					if utxoMapErr == nil || !errors.Is(utxoMapErr, errors.ErrTxExists) {
 						break
@@ -1490,8 +1502,35 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 
 					// The record at this txid is a create-first attempt's tentative record or the hold a rolled
 					// back attempt left, not a transaction: it carries no data to mark conflicting and another
-					// actor owns it. A hold in block context goes at once unless a holder is reversing spends.
-					if txMetaData.Hold && round == 0 {
+					// actor owns it.
+					//
+					// A tentative record that is not a hold is settled here by the rule of the pruner sweep:
+					// it is rolled forward, or, when an input of it can never be spent and no spender holds a
+					// live lease, rolled back, which leaves a hold. The spend of this transaction was just
+					// refused as a double spend, so an attempt at the same txid that has not spent every
+					// input cannot complete either. The sweep would do the same, but it runs when the chain
+					// advances, and this block is what the chain waits for: without this step every retry of
+					// the block would stop here.
+					if !txMetaData.Hold && !settled {
+						settled = true
+
+						ended, settleErr := utxo.SettleTentativeInTheWay(decoupledCtx, v.logger, v.utxoStore, tx, txMetaData, blockHeight, spendIgnoreOptions(validationOptions)...)
+						if settleErr != nil {
+							err = errors.NewProcessingError("[Validate][%s] the tentative record in the way of the tx could not be settled", txID, settleErr)
+							span.RecordError(err)
+
+							return nil, err
+						}
+
+						if ended {
+							continue
+						}
+					}
+
+					// A hold in block context goes at once unless a holder is reversing spends.
+					if txMetaData.Hold && !holdCleared {
+						holdCleared = true
+
 						cleared, clearErr := v.utxoStore.ClearCreateFirstHold(decoupledCtx, tx.TxIDChainHash(), true)
 						if clearErr != nil {
 							err = errors.NewProcessingError("[Validate][%s] tx is rolling back and its hold could not be cleared", txID, clearErr)

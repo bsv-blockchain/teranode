@@ -1641,6 +1641,89 @@ func RollForwardCreating(ctx context.Context, logger ulogger.Logger, s CreatingR
 	})
 }
 
+// IsUnwinnableSpendError reports whether the error of a spend means that the transaction can never
+// be completed: an input is spent by another transaction, conflicting, frozen, does not match,
+// names an output that does not exist, or is a spend of a transaction that was mined and pruned.
+// It is the rule by which a creating record that cannot be rolled forward is rolled back, and it
+// has one definition for the pruner sweep and for a block that finds such a record in its way.
+func IsUnwinnableSpendError(err error) bool {
+	return errors.Is(err, errors.ErrSpent) ||
+		errors.Is(err, errors.ErrTxNotFound) ||
+		errors.Is(err, errors.ErrTxConflicting) ||
+		errors.Is(err, errors.ErrFrozen) ||
+		errors.Is(err, errors.ErrUtxoHashMismatch) ||
+		errors.Is(err, errors.ErrUtxoSpendingTxPruned)
+}
+
+// TentativeSettler is the store subset SettleTentativeInTheWay needs.
+type TentativeSettler interface {
+	CreatingRollForwarder
+	CreatingRollBacker
+	CreatingRollbackFinisher
+}
+
+// SettleTentativeInTheWay ends, at once, the create-first attempt whose record is in the way of a
+// transaction of a block, by the rule of the pruner sweep. The sweep runs when the chain advances
+// and only for a record that is old enough, and a block that cannot store one of its transactions
+// is what stops the chain, so a block must not wait for it. existing is the record as the caller
+// read it, and opts are the ignore flags of the caller's own spend of the transaction.
+//
+//   - A rollback that its owner left open is finished (FinishRollBackCreating), which leaves a hold.
+//   - A creating record is rolled forward (RollForwardCreating). When that fails because the
+//     transaction can never be completed (IsUnwinnableSpendError) and no spender of the attempt
+//     holds a live lease, the attempt is rolled back (RollBackCreating), which leaves a hold.
+//
+// It reports true when the record is no longer a tentative one in the way: it is final, or it is
+// a hold, which a caller in block context clears and creates over. It reports false, with no
+// error, when the record is left as it was: it is a hold already, it carries no attempt token and
+// so is not the record of a create-first attempt, another actor is at work on it (a live lease, a
+// busy holder, a finalize that has begun), or its roll-forward failed for a reason that ends by
+// itself. The caller then returns its own retryable error.
+//
+// A roll-forward that this call completed owns the hand-off of the transaction. The caller is
+// storing the transaction for a block, so the block is what carries it from here.
+func SettleTentativeInTheWay(ctx context.Context, logger ulogger.Logger, s TentativeSettler, tx *bt.Tx, existing *meta.Data, blockHeight uint32, opts ...CreateOption) (bool, error) {
+	if existing == nil || existing.Hold || len(existing.Attempt) == 0 {
+		return false, nil
+	}
+
+	hash := tx.TxIDChainHash()
+
+	if existing.RollingBack {
+		return FinishRollBackCreating(WithReversalCallHeight(ctx, blockHeight), logger, s, tx, existing.Attempt, existing.Reversed)
+	}
+
+	if !existing.Creating {
+		return false, nil
+	}
+
+	_, _, rfErr := RollForwardCreating(ctx, logger, s, tx, existing.Attempt, blockHeight, opts...)
+	if rfErr == nil {
+		return true, nil
+	}
+
+	if !IsUnwinnableSpendError(rfErr) {
+		logger.Warnf("SpendAndCreate create-first: the creating record of %s is in the way of a block and its roll-forward failed, left for a retry: %v", hash.String(), rfErr)
+
+		return false, nil
+	}
+
+	live, err := s.SpendLeasesLive(ctx, hash, existing.Attempt)
+	if err != nil {
+		return false, err
+	}
+
+	if live {
+		logger.Warnf("SpendAndCreate create-first: the creating record of %s is in the way of a block and cannot be completed, but a spender may still hold a lease on it, left for a retry: %v", hash.String(), rfErr)
+
+		return false, nil
+	}
+
+	logger.Warnf("SpendAndCreate create-first: the creating record of %s is in the way of a block and cannot be completed, rolling its attempt back: %v", hash.String(), rfErr)
+
+	return rollBackCreating(WithReversalCallHeight(ctx, blockHeight), logger, s, tx, existing.Attempt)
+}
+
 // creatingFinisher is the store subset the roll-forward rule needs around the re-spend.
 type creatingFinisher interface {
 	FinalizeTransaction(ctx context.Context, tx *bt.Tx, attempt, lease []byte) error
