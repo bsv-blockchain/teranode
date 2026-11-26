@@ -34,7 +34,8 @@ jobs:
           - group: subtreeprocessor-subtree
             packages: ./services/blockassembly/subtreeprocessor
             bench_filter: "BenchmarkDirect|BenchmarkSubtree|BenchmarkParallel|BenchmarkSequential|BenchmarkProcess"
-            # Ops take 13ns to 60ms; at 100ms the slowest rows run 1 or 2 iterations a sample.
+            # Ops take 13ns to about 130ms (the 100k sequential rows, depending on the runner); at
+            # 100ms the slowest rows run 1 or 2 iterations a sample.
             benchtime: 100ms
             count: 6
           - group: subtreeprocessor-heavy
