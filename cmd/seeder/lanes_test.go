@@ -1018,7 +1018,7 @@ func TestSeederAtShadowRefusesAnImportMadeAtOff(t *testing.T) {
 		require.False(t, written, "the import at off cleared the rows-done record")
 
 		f.settings.UtxoStore.LaneMigration = settings.LaneMigrationShadow
-		require.ErrorContains(t, f.seed(false), "import made at off or from another grant")
+		require.ErrorContains(t, f.seed(false), "no import with it that ran to its end")
 	})
 
 	t.Run("a completed seed", func(t *testing.T) {
@@ -1036,7 +1036,7 @@ func TestSeederAtShadowRefusesAnImportMadeAtOff(t *testing.T) {
 		// The refused run took and recorded a grant before it found the old records.
 		f.settings.UtxoStore.LaneMigration = settings.LaneMigrationShadow
 		require.ErrorContains(t, f.seed(true), "import made at off or from another grant")
-		require.ErrorContains(t, f.seed(false), "import made at off or from another grant")
+		require.ErrorContains(t, f.seed(false), "no import with it that ran to its end")
 	})
 }
 

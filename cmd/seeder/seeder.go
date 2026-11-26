@@ -726,6 +726,14 @@ func processUTXOs(ctx context.Context, logger ulogger.Logger, appSettings *setti
 		return nil, err
 	}
 
+	// The rows written later, and any run that writes them without importing, rest on this
+	// import having given every record its position.
+	if lanes != nil {
+		if err = setSeedImported(ctx, blockchainStore, hash, true); err != nil {
+			return nil, err
+		}
+	}
+
 	if syncPath != "" {
 		logger.Infof("Syncing the external store filesystem at %s so it is durable before marking the seed complete", syncPath)
 

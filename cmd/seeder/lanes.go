@@ -44,10 +44,11 @@ import (
 // another snapshot leaves it alone. The rows key holds the tip hash once every seeded row of that
 // seed is written, and is cleared when an import starts.
 const (
-	seederGrantKeyPrefix   = "sg:"
-	seederRowsKeyPrefix    = "sr:"
-	seederPendingKeyPrefix = "sp:"
-	seederKeyHashBytes     = 14
+	seederGrantKeyPrefix    = "sg:"
+	seederRowsKeyPrefix     = "sr:"
+	seederPendingKeyPrefix  = "sp:"
+	seederImportedKeyPrefix = "si:"
+	seederKeyHashBytes      = 14
 )
 
 func seederStateKey(prefix string, tip chainhash.Hash) string {
@@ -281,6 +282,10 @@ func prepareSeedLanes(ctx context.Context, logger ulogger.Logger, tSettings *set
 	// The import may change the records the rows describe, so the rows count as unwritten until
 	// this run writes them.
 	if err = setSeededRowsWritten(ctx, bcStore, tip, false); err != nil {
+		return nil, err
+	}
+
+	if err = setSeedImported(ctx, bcStore, tip, false); err != nil {
 		return nil, err
 	}
 
@@ -633,15 +638,61 @@ func seededRowsWritten(ctx context.Context, store blockchain.Store, tip chainhas
 	return bytes.Equal(b, tip[:]), nil
 }
 
-// forgetSeededRows clears the rows-done record of the seed of tip if one is set, for an import at
-// off. It writes nothing when none is set, so a node that never ran at shadow sees no change.
+// forgetSeededRows clears the rows-done and imported records of the seed of tip if they are set,
+// for an import at off. It writes nothing when neither is set, so a node that never ran at shadow
+// sees no change.
 func forgetSeededRows(ctx context.Context, store blockchain.Store, tip chainhash.Hash) error {
-	written, err := seededRowsWritten(ctx, store, tip)
-	if err != nil || !written {
-		return err
+	for _, prefix := range []string{seederRowsKeyPrefix, seederImportedKeyPrefix} {
+		b, err := readState(ctx, store, seederStateKey(prefix, tip))
+		if err != nil {
+			return err
+		}
+
+		if len(b) == 0 {
+			continue
+		}
+
+		if err = setSeederState(ctx, store, seederStateKey(prefix, tip), nil); err != nil {
+			return err
+		}
 	}
 
-	return setSeededRowsWritten(ctx, store, tip, false)
+	return nil
+}
+
+// setSeederState writes a seeder state key, an empty value for unset.
+func setSeederState(ctx context.Context, store blockchain.Store, key string, data []byte) error {
+	if data == nil {
+		data = []byte{}
+	}
+
+	return withDBTimeout(ctx, func(ctx context.Context) error {
+		if err := store.SetState(ctx, key, data); err != nil {
+			return errors.NewStorageError("could not write the seeder's state %s", key, err)
+		}
+
+		return nil
+	})
+}
+
+// seedImported reports whether an import of the seed of tip ran to its end at shadow with the
+// recorded grant, and setSeedImported records it, or, with done false, that an import has started.
+func seedImported(ctx context.Context, store blockchain.Store, tip chainhash.Hash) (bool, error) {
+	b, err := readState(ctx, store, seederStateKey(seederImportedKeyPrefix, tip))
+	if err != nil {
+		return false, err
+	}
+
+	return bytes.Equal(b, tip[:]), nil
+}
+
+func setSeedImported(ctx context.Context, store blockchain.Store, tip chainhash.Hash, done bool) error {
+	var data []byte
+	if done {
+		data = tip[:]
+	}
+
+	return setSeederState(ctx, store, seederStateKey(seederImportedKeyPrefix, tip), data)
 }
 
 // setSeededRowsWritten records that the seeded rows of the seed of tip are all written, or, with
@@ -667,6 +718,17 @@ func recordedSeedLanes(ctx context.Context, store blockchain.Store, utxoFile str
 	recorded, ok, err := readSeederGrant(ctx, store, tip)
 	if err != nil {
 		return nil, err
+	}
+
+	if ok {
+		imported, impErr := seedImported(ctx, store, tip)
+		if impErr != nil {
+			return nil, impErr
+		}
+
+		if !imported {
+			return nil, errors.NewProcessingError("the blockchain store records a lane grant for the seed of %s but no import with it that ran to its end, so its records may lack positions: re-run with -force", tip.String())
+		}
 	}
 
 	if !ok {
