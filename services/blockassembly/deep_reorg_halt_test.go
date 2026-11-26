@@ -61,6 +61,7 @@ func TestDeepReorgHaltRecord(t *testing.T) {
 type stateFailClient struct {
 	blockchain.ClientI
 	failGet, failSet bool
+	failSetKey       string // fails writes of this key only
 }
 
 func (c *stateFailClient) GetState(ctx context.Context, key string) ([]byte, error) {
@@ -72,7 +73,7 @@ func (c *stateFailClient) GetState(ctx context.Context, key string) ([]byte, err
 }
 
 func (c *stateFailClient) SetState(ctx context.Context, key string, data []byte) error {
-	if c.failSet {
+	if c.failSet || key == c.failSetKey {
 		return errors.NewStorageError("state write failed")
 	}
 
@@ -243,21 +244,6 @@ func TestDeepReorgHaltStopsBlockAssembly(t *testing.T) {
 	ba.requeueRefusedReset()
 	require.Same(t, owed, ba.resetOwed)
 
-	// An operator's reset refused earlier is retried: only it can lift the halt.
-	ba.resetOwed = &resetRequest{Operator: true}
-	ba.requeueRefusedReset()
-	require.Nil(t, ba.resetOwed)
-
-	select {
-	case req := <-ba.resetCh:
-		require.True(t, req.Operator)
-		req.ErrCh <- nil
-	case <-time.After(10 * time.Second):
-		t.Fatal("the operator's owed reset was not retried")
-	}
-
-	ba.resetOwed = owed
-
 	// So is one that would not move back at all.
 	_, err = ba.resetToBlockWithResponse(t.Context(), a1, 1)
 	require.True(t, errors.Is(err, errors.ErrServiceUnavailable), "got %v", err)
@@ -273,6 +259,40 @@ func TestDeepReorgHaltStopsBlockAssembly(t *testing.T) {
 	restarted := &BlockAssembler{settings: ba.settings, logger: ba.logger, blockchainClient: items.blockchainClient}
 	require.NoError(t, restarted.loadDeepReorgHalt(t.Context()))
 	require.True(t, restarted.DeepReorgHalted())
+
+	// An operator's reset refused because the skipped-fork mark cannot be recorded stays owed as
+	// the operator's, so the heartbeat retries it while halted, and the retry lifts the halt.
+	ba.resetOwed = nil
+	ba.bestTipPosKnown.Store(false)
+	ba.blockchainClient = &stateFailClient{ClientI: items.blockchainClient, failSetKey: SkippedForkMarkStateKey}
+	errCh = make(chan error, 1)
+	ba.handleResetRequests(t.Context(), resetRequest{Operator: true, ErrCh: errCh})
+	require.Error(t, <-errCh)
+	require.True(t, ba.DeepReorgHalted())
+	require.NotNil(t, ba.resetOwed)
+	require.True(t, ba.resetOwed.Operator)
+	require.False(t, ba.operatorResetRunning.Load(), "the exemption ends with the refused reset")
+
+	ba.blockchainClient = items.blockchainClient
+	mockStp.On("Reset", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		Return(subtreeprocessor.ResetResponse{})
+	ba.resetOwedRetryAt = time.Now().Add(-time.Second)
+	ba.requeueRefusedReset()
+	require.Nil(t, ba.resetOwed)
+
+	select {
+	case req := <-ba.resetCh:
+		ba.handleResetRequests(t.Context(), req)
+	case <-time.After(10 * time.Second):
+		t.Fatal("the operator's owed reset was not retried")
+	}
+
+	require.False(t, ba.DeepReorgHalted())
+	data, err = items.blockchainClient.GetState(t.Context(), DeepReorgHaltStateKey)
+	require.NoError(t, err)
+	recorded, err = parseDeepReorgHalt(data)
+	require.NoError(t, err)
+	require.Nil(t, recorded, "the record is cleared with the halt")
 }
 
 // A halted block assembly still starts, finishes the pending skipped-fork mark the halting pass
