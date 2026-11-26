@@ -106,16 +106,21 @@ type UnminedTxGate struct {
 	lastLogNanos atomic.Int64
 	sinceLog     atomic.Uint64
 
+	// start is when the gate was built. The read times below are nanoseconds
+	// since start, measured on the monotonic clock, so a wall clock stepped
+	// back cannot stall the reads.
+	start time.Time
+
 	// highestCheckpoint is the height below which the gate refuses whatever
 	// the FSM says. Zero when the store does not net below the checkpoint or
 	// the network has no checkpoints, which turns the rule off.
 	highestCheckpoint uint32
 
 	// reached is set once a height read returns highestCheckpoint or above,
-	// and readOKNanos is the unix time the last successful read was scheduled.
-	// heightReading is true while a read is in flight, heightReadNanos is the
-	// unix time the last read was scheduled, and lastWarnNanos the last time a
-	// failed read was logged.
+	// and readOKNanos is when the last successful read was scheduled.
+	// heightReading is true while a read is in flight, heightReadNanos is when
+	// the last read was scheduled, and lastWarnNanos the last time a failed
+	// read was logged, all as nanoseconds since start.
 	reached         atomic.Bool
 	readOKNanos     atomic.Int64
 	heightReading   atomic.Bool
@@ -139,6 +144,7 @@ func NewUnminedTxGate(logger ulogger.Logger, client ClientI, tSettings *settings
 		route:             route,
 		refused:           prometheusUnminedTxRefused.WithLabelValues(route),
 		highestCheckpoint: highest,
+		start:             time.Now(),
 	}
 }
 
@@ -202,8 +208,8 @@ func (g *UnminedTxGate) scheduleHeightRead() {
 		return
 	}
 
-	now := time.Now().UnixNano()
-	if g.reached.Load() || now-g.heightReadNanos.Load() < int64(bestHeightReadInterval) {
+	now := g.sinceStart()
+	if last := g.heightReadNanos.Load(); g.reached.Load() || (last != 0 && now-last < int64(bestHeightReadInterval)) {
 		g.heightReading.Store(false)
 
 		return
@@ -238,8 +244,9 @@ func (g *UnminedTxGate) readBestHeight(scheduled int64) {
 	g.readOKNanos.Store(scheduled)
 }
 
-// checkpointAnswerPoll is how often WaitForCheckpointAnswer looks again while
-// no height read has succeeded. Reads themselves stay spaced by
+// checkpointAnswerPoll is how often WaitForCheckpointAnswer looks again until
+// the checkpoint is reached, the FSM is syncing, or a height read scheduled
+// after the call began has succeeded. Reads stay spaced by
 // bestHeightReadInterval.
 const checkpointAnswerPoll = 50 * time.Millisecond
 
@@ -254,11 +261,11 @@ const checkpointAnswerPoll = 50 * time.Millisecond
 // The validator's Kafka intake is one: propagation acknowledged each message
 // before queueing it, and a refused message is committed and lost.
 func (g *UnminedTxGate) WaitForCheckpointAnswer(ctx context.Context) error {
-	if g == nil || g.client == nil || g.highestCheckpoint == 0 {
+	if g == nil || g.client == nil || g.highestCheckpoint == 0 || g.reached.Load() {
 		return nil
 	}
 
-	began := time.Now().UnixNano()
+	began := g.sinceStart()
 
 	ticker := time.NewTicker(checkpointAnswerPoll)
 	defer ticker.Stop()
@@ -284,10 +291,10 @@ func (g *UnminedTxGate) WaitForCheckpointAnswer(ctx context.Context) error {
 // interval. Without it a node that keeps refusing because the blockchain
 // service never answers looks the same as one still below the checkpoint.
 func (g *UnminedTxGate) warnReadFailure(err error) {
-	now := time.Now().UnixNano()
+	now := g.sinceStart()
 	last := g.lastWarnNanos.Load()
 
-	if now-last < int64(unminedTxRefusedLogInterval) || !g.lastWarnNanos.CompareAndSwap(last, now) {
+	if (last != 0 && now-last < int64(unminedTxRefusedLogInterval)) || !g.lastWarnNanos.CompareAndSwap(last, now) {
 		return
 	}
 
@@ -302,6 +309,13 @@ func (g *UnminedTxGate) Route() string {
 	}
 
 	return g.route
+}
+
+// sinceStart returns the nanoseconds since the gate was built, from the
+// monotonic clock. It is at least 1, so a stored time is never the zero value
+// that means "never".
+func (g *UnminedTxGate) sinceStart() int64 {
+	return int64(time.Since(g.start)) + 1
 }
 
 // CheckpointHeight returns the height below which the gate refuses whatever

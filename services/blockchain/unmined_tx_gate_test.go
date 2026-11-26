@@ -122,7 +122,7 @@ func TestUnminedTxGate_LogsOncePerInterval(t *testing.T) {
 // state, including before and after a failed height read, which closes the IDLE
 // window. A store that does not net never reads the height.
 func TestUnminedTxGate_NettingStoreRefusesBelowHighestCheckpoint(t *testing.T) {
-	idle, running := FSMStateIDLE, FSMStateRUNNING
+	idle, running, catching := FSMStateIDLE, FSMStateRUNNING, FSMStateCATCHINGBLOCKS
 
 	for _, tt := range []struct {
 		name      string
@@ -133,14 +133,17 @@ func TestUnminedTxGate_NettingStoreRefusesBelowHighestCheckpoint(t *testing.T) {
 		// refusesAfterRead is the answer once the first height read is done.
 		// Before it, a netting store always refuses.
 		refusesAfterRead bool
+		wantReached      bool
 	}{
-		{"idle_below", "utxoset", &idle, 50, false, true},
-		{"running_below", "utxoset", &running, 50, false, true},
-		{"state_read_fails_below", "utxoset", nil, 50, false, true},
-		{"height_read_fails", "utxoset", &idle, 0, true, true},
-		{"idle_at_checkpoint", "utxoset", &idle, 100, false, false},
-		{"idle_above", "utxoset", &idle, 150, false, false},
-		{"not_netting_idle", "postgres", &idle, 0, false, false},
+		{"idle_below", "utxoset", &idle, 50, false, true, false},
+		{"running_below", "utxoset", &running, 50, false, true, false},
+		{"state_read_fails_below", "utxoset", nil, 50, false, true, false},
+		{"height_read_fails", "utxoset", &idle, 0, true, true, false},
+		{"idle_at_checkpoint", "utxoset", &idle, 100, false, false, true},
+		{"idle_above", "utxoset", &idle, 150, false, false, true},
+		// Reads go on while the FSM syncs, so the gate knows when it stops.
+		{"catching_above", "utxoset", &catching, 150, false, true, true},
+		{"not_netting_idle", "postgres", &idle, 0, false, false, false},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			client := &Mock{}
@@ -172,6 +175,7 @@ func TestUnminedTxGate_NettingStoreRefusesBelowHighestCheckpoint(t *testing.T) {
 			require.Equal(t, netting, gate.Refuses(context.Background(), &chainhash.Hash{}), "before the first read")
 			waitForHeightRead(t, gate)
 			require.Equal(t, tt.refusesAfterRead, gate.Refuses(context.Background(), &chainhash.Hash{}), "after the first read")
+			require.Equal(t, tt.wantReached, gate.reached.Load())
 
 			want := before
 			for _, refused := range []bool{netting, tt.refusesAfterRead} {
@@ -198,7 +202,7 @@ func TestUnminedTxGate_NettingStoreRefusesBelowHighestCheckpoint(t *testing.T) {
 				gate.warnReadFailure(errors.NewServiceError("blockchain down"))
 				logger.AssertNumberOfCalls(t, "Warnf", 1) // inside the interval: no second line
 
-				gate.lastWarnNanos.Store(time.Now().Add(-unminedTxRefusedLogInterval).UnixNano())
+				gate.lastWarnNanos.Store(gate.sinceStart() - int64(unminedTxRefusedLogInterval))
 				gate.warnReadFailure(errors.NewServiceError("blockchain down"))
 				logger.AssertNumberOfCalls(t, "Warnf", 2)
 			}
@@ -229,11 +233,11 @@ func TestUnminedTxGate_HeightReadIntervalAndLatch(t *testing.T) {
 	close(release)
 	waitForHeightRead(t, gate)
 
-	gate.heightReadNanos.Store(time.Now().Add(-bestHeightReadInterval + 200*time.Millisecond).UnixNano())
+	gate.heightReadNanos.Store(gate.sinceStart() - int64(bestHeightReadInterval) + int64(200*time.Millisecond))
 	require.True(t, gate.Refuses(ctx, nil), "inside the interval: no read")
 	client.AssertNumberOfCalls(t, "GetBestHeightAndTime", 1)
 
-	gate.heightReadNanos.Store(time.Now().Add(-bestHeightReadInterval - time.Millisecond).UnixNano())
+	gate.heightReadNanos.Store(gate.sinceStart() - int64(bestHeightReadInterval) - int64(time.Millisecond))
 	require.True(t, gate.Refuses(ctx, nil), "interval passed: read 2 starts, still below until it lands")
 	waitForHeightRead(t, gate)
 	require.False(t, gate.Refuses(ctx, nil), "read 2 returned 150")
@@ -279,7 +283,7 @@ func TestUnminedTxGate_ScheduleRechecksInsideTheSlot(t *testing.T) {
 	require.False(t, gate.heightReading.Load(), "reached: slot released, no read")
 
 	gate.reached.Store(false)
-	gate.heightReadNanos.Store(time.Now().UnixNano())
+	gate.heightReadNanos.Store(gate.sinceStart())
 	gate.scheduleHeightRead()
 	require.False(t, gate.heightReading.Load(), "inside the interval: slot released, no read")
 }
@@ -309,6 +313,15 @@ func TestUnminedTxGate_WaitForCheckpointAnswer(t *testing.T) {
 		gate := NewUnminedTxGate(ulogger.TestLogger{}, client, gateSettings(t, "utxoset"), "test_wait_read")
 		require.NoError(t, gate.WaitForCheckpointAnswer(ctx), "height %d", height)
 		require.Equal(t, height >= 100, gate.reached.Load())
+
+		if height >= 100 {
+			// Reached: every later message returns at once, with no read.
+			shortCtx, cancel := context.WithTimeout(ctx, 200*time.Millisecond)
+			require.NoError(t, gate.WaitForCheckpointAnswer(shortCtx))
+			cancel()
+			client.AssertNumberOfCalls(t, "GetBestHeightAndTime", 1)
+		}
+
 		client.AssertExpectations(t)
 	}
 
@@ -337,22 +350,6 @@ func TestUnminedTxGate_WaitForCheckpointAnswer(t *testing.T) {
 
 	require.ErrorIs(t, gate.WaitForCheckpointAnswer(waitCtx), context.DeadlineExceeded)
 	waitForHeightRead(t, gate)
-}
-
-// Refuses keeps reading the height while the FSM syncs, so the gate knows the
-// checkpoint is reached before the FSM stops refusing.
-func TestUnminedTxGate_ReadsHeightWhileSyncing(t *testing.T) {
-	catching := FSMStateCATCHINGBLOCKS
-	client := &Mock{}
-	t.Cleanup(func() { client.AssertExpectations(t) })
-	fsmRead(client, &catching)
-	client.On("GetBestHeightAndTime", mock.Anything).Return(150, 0, nil).Once()
-
-	gate := NewUnminedTxGate(ulogger.TestLogger{}, client, gateSettings(t, "utxoset"), "test_checkpoint_syncing")
-
-	require.True(t, gate.Refuses(context.Background(), nil), "CATCHINGBLOCKS refuses")
-	waitForHeightRead(t, gate)
-	require.True(t, gate.reached.Load())
 }
 
 // waitForHeightRead waits until the gate's background height read has finished.
