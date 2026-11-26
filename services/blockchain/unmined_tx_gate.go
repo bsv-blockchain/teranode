@@ -112,12 +112,12 @@ type UnminedTxGate struct {
 	highestCheckpoint uint32
 
 	// reached is set once a height read returns highestCheckpoint or above,
-	// and heightKnown once any height read succeeds.
+	// and readOKNanos is the unix time the last successful read was scheduled.
 	// heightReading is true while a read is in flight, heightReadNanos is the
 	// unix time the last read was scheduled, and lastWarnNanos the last time a
 	// failed read was logged.
 	reached         atomic.Bool
-	heightKnown     atomic.Bool
+	readOKNanos     atomic.Int64
 	heightReading   atomic.Bool
 	heightReadNanos atomic.Int64
 	lastWarnNanos   atomic.Int64
@@ -153,6 +153,12 @@ func NewUnminedTxGate(logger ulogger.Logger, client ClientI, tSettings *settings
 func (g *UnminedTxGate) Refuses(ctx context.Context, txHash *chainhash.Hash) bool {
 	if g == nil || g.client == nil {
 		return false
+	}
+
+	// Keep the height current through a sync too, so the gate knows the
+	// checkpoint is reached by the time the FSM stops refusing.
+	if g.highestCheckpoint != 0 && !g.reached.Load() {
+		g.scheduleHeightRead()
 	}
 
 	state, err := g.client.GetFSMCurrentState(ctx)
@@ -205,13 +211,14 @@ func (g *UnminedTxGate) scheduleHeightRead() {
 
 	g.heightReadNanos.Store(now)
 
-	go g.readBestHeight()
+	go g.readBestHeight(now)
 }
 
 // readBestHeight reads the best height once and sets reached when it is at or
-// above the highest checkpoint. It runs detached from any caller's context,
-// because it outlives the Refuses call that started it.
-func (g *UnminedTxGate) readBestHeight() {
+// above the highest checkpoint. scheduled is when the read was scheduled. It
+// runs detached from any caller's context, because it outlives the Refuses call
+// that started it.
+func (g *UnminedTxGate) readBestHeight(scheduled int64) {
 	defer g.heightReading.Store(false)
 
 	ctx, cancel := context.WithTimeout(context.Background(), bestHeightReadTimeout)
@@ -228,7 +235,7 @@ func (g *UnminedTxGate) readBestHeight() {
 		g.reached.Store(true)
 	}
 
-	g.heightKnown.Store(true)
+	g.readOKNanos.Store(scheduled)
 }
 
 // checkpointAnswerPoll is how often WaitForCheckpointAnswer looks again while
@@ -237,23 +244,30 @@ func (g *UnminedTxGate) readBestHeight() {
 const checkpointAnswerPoll = 50 * time.Millisecond
 
 // WaitForCheckpointAnswer returns once the checkpoint rule can judge a
-// transaction by a height it has read: the rule is off, or a height read has
-// succeeded. Until then it keeps scheduling reads. It returns ctx's error if
-// ctx ends first.
+// transaction by a current height: the rule is off, the checkpoint is known to
+// be reached, the FSM is syncing (Refuses refuses then whatever the height), or
+// a height read scheduled after this call began has succeeded. Until then it
+// keeps scheduling reads. It returns ctx's error if ctx ends first.
 //
 // An intake that has already acknowledged its transactions calls it before
-// Refuses, so a gate that has not yet read a height does not drop them. The
-// validator's Kafka intake is one: propagation acknowledged each message
+// Refuses, so a gate whose last answer is missing or stale does not drop them.
+// The validator's Kafka intake is one: propagation acknowledged each message
 // before queueing it, and a refused message is committed and lost.
 func (g *UnminedTxGate) WaitForCheckpointAnswer(ctx context.Context) error {
 	if g == nil || g.client == nil || g.highestCheckpoint == 0 {
 		return nil
 	}
 
+	began := time.Now().UnixNano()
+
 	ticker := time.NewTicker(checkpointAnswerPoll)
 	defer ticker.Stop()
 
-	for !g.heightKnown.Load() {
+	for !g.reached.Load() && g.readOKNanos.Load() < began {
+		if state, err := g.client.GetFSMCurrentState(ctx); err == nil && state != nil && IsSyncingState(*state) {
+			return nil
+		}
+
 		g.scheduleHeightRead()
 
 		select {

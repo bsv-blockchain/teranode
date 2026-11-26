@@ -529,10 +529,7 @@ func TestHandleKafkaTxMessage_RefusedWhileSyncing(t *testing.T) {
 			blockchainClient := &blockchain.Mock{}
 			t.Cleanup(func() { blockchainClient.AssertExpectations(t) })
 
-			// An unreadable height stops the message before the state read.
-			if !tt.wantErr {
-				blockchainClient.On("GetFSMCurrentState", mock.Anything).Return(&state, nil)
-			}
+			blockchainClient.On("GetFSMCurrentState", mock.Anything).Return(&state, nil)
 
 			tSettings := test.CreateBaseTestSettings(t)
 			if tt.netting {

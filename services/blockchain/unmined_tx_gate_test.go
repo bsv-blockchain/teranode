@@ -284,18 +284,26 @@ func TestUnminedTxGate_ScheduleRechecksInsideTheSlot(t *testing.T) {
 	require.False(t, gate.heightReading.Load(), "inside the interval: slot released, no read")
 }
 
-// WaitForCheckpointAnswer returns at once when the rule is off, once a read
-// succeeds whatever height it returns, and with ctx's error while reads fail.
+// WaitForCheckpointAnswer returns at once when the rule is off or the FSM is
+// syncing, and otherwise only after a read scheduled since it began succeeds,
+// so a stale below answer from before a sync cannot drop an acknowledged message.
 func TestUnminedTxGate_WaitForCheckpointAnswer(t *testing.T) {
 	ctx := context.Background()
+	running, catching := FSMStateRUNNING, FSMStateCATCHINGBLOCKS
 
 	require.NoError(t, NewUnminedTxGate(ulogger.TestLogger{}, &Mock{}, gateSettings(t, "postgres"), "test_wait_off").WaitForCheckpointAnswer(ctx))
 
 	var nilGate *UnminedTxGate
 	require.NoError(t, nilGate.WaitForCheckpointAnswer(ctx))
 
+	syncing := &Mock{}
+	fsmRead(syncing, &catching)
+	require.NoError(t, NewUnminedTxGate(ulogger.TestLogger{}, syncing, gateSettings(t, "utxoset"), "test_wait_syncing").WaitForCheckpointAnswer(ctx))
+	syncing.AssertNotCalled(t, "GetBestHeightAndTime", mock.Anything)
+
 	for _, height := range []int{50, 150} {
 		client := &Mock{}
+		fsmRead(client, &running)
 		client.On("GetBestHeightAndTime", mock.Anything).Return(height, 0, nil).Once()
 
 		gate := NewUnminedTxGate(ulogger.TestLogger{}, client, gateSettings(t, "utxoset"), "test_wait_read")
@@ -304,15 +312,47 @@ func TestUnminedTxGate_WaitForCheckpointAnswer(t *testing.T) {
 		client.AssertExpectations(t)
 	}
 
-	client := &Mock{}
-	client.On("GetBestHeightAndTime", mock.Anything).Return(0, 0, errors.NewServiceError("blockchain down"))
+	// A below answer read before a sync is stale: the wait reads again.
+	stale := &Mock{}
+	fsmRead(stale, &running)
+	stale.On("GetBestHeightAndTime", mock.Anything).Return(50, 0, nil).Once()
+	stale.On("GetBestHeightAndTime", mock.Anything).Return(150, 0, nil).Once()
 
-	gate := NewUnminedTxGate(ulogger.TestLogger{}, client, gateSettings(t, "utxoset"), "test_wait_fail")
+	gate := NewUnminedTxGate(ulogger.TestLogger{}, stale, gateSettings(t, "utxoset"), "test_wait_stale")
+	require.NoError(t, gate.WaitForCheckpointAnswer(ctx))
+	require.False(t, gate.reached.Load())
+
+	gate.heightReadNanos.Store(0)
+	require.NoError(t, gate.WaitForCheckpointAnswer(ctx))
+	require.True(t, gate.reached.Load(), "the second wait judged by a fresh read")
+	stale.AssertExpectations(t)
+
+	failing := &Mock{}
+	fsmRead(failing, &running)
+	failing.On("GetBestHeightAndTime", mock.Anything).Return(0, 0, errors.NewServiceError("blockchain down"))
+
+	gate = NewUnminedTxGate(ulogger.TestLogger{}, failing, gateSettings(t, "utxoset"), "test_wait_fail")
 	waitCtx, cancel := context.WithTimeout(ctx, 200*time.Millisecond)
 	defer cancel()
 
 	require.ErrorIs(t, gate.WaitForCheckpointAnswer(waitCtx), context.DeadlineExceeded)
 	waitForHeightRead(t, gate)
+}
+
+// Refuses keeps reading the height while the FSM syncs, so the gate knows the
+// checkpoint is reached before the FSM stops refusing.
+func TestUnminedTxGate_ReadsHeightWhileSyncing(t *testing.T) {
+	catching := FSMStateCATCHINGBLOCKS
+	client := &Mock{}
+	t.Cleanup(func() { client.AssertExpectations(t) })
+	fsmRead(client, &catching)
+	client.On("GetBestHeightAndTime", mock.Anything).Return(150, 0, nil).Once()
+
+	gate := NewUnminedTxGate(ulogger.TestLogger{}, client, gateSettings(t, "utxoset"), "test_checkpoint_syncing")
+
+	require.True(t, gate.Refuses(context.Background(), nil), "CATCHINGBLOCKS refuses")
+	waitForHeightRead(t, gate)
+	require.True(t, gate.reached.Load())
 }
 
 // waitForHeightRead waits until the gate's background height read has finished.
