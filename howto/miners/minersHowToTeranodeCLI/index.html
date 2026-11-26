@@ -8233,6 +8233,13 @@
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-14-1"><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a>teranode-cli<span class="w"> </span>resetblockassembly<span class="w"> </span><span class="o">[</span>--full-reset<span class="o">]</span>
 </span></code></pre></div>
 <p>Resets the block assembly state. Useful for clearing stuck transactions or resetting mining state.</p>
+<p>It is also the only way out of a deep reorg halt. When a reorg moves back at least the UTXO store
+retention, block assembly stops serving mining candidates, logs <code>MANUAL INTERVENTION REQUIRED</code> and
+sets <code>teranode_blockassembly_deep_reorg_halted</code> to 1, because the transactions the reorg returns to
+the mempool may spend parents the pruner already deleted. About 20 blocks later
+(<code>blockvalidation_maxBlocksBehindBlockAssembly</code>) block validation and the pruner stop as well, so
+the node stops following the chain. The halt survives a restart. Running <code>resetblockassembly</code> accepts that loss: it moves block assembly to
+the best block, reloads the mempool from the store, drops what it cannot find and lifts the halt.</p>
 <p>Options:</p>
 <ul>
 <li><code>--full-reset</code>: Perform a comprehensive reset including clearing mempool and unmined transactions</li>

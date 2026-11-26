@@ -8068,6 +8068,15 @@ from it, not read from settings.conf. Likewise <code>UnminedTxRetention</code> d
 <p>Tuning both: increasing retains transactions and parents longer, which is safer for resubmissions
 but prunes more slowly; decreasing prunes sooner at higher risk. Setting <code>UnminedTxRetention</code> too
 low may cause valid resubmitted transactions to fail because their parent UTXOs were already pruned.</p>
+<p>A fully spent record is stamped for deletion at its stamp height plus the UTXO retention plus
+<code>UnminedTxRetention</code>, not the UTXO retention alone. A child that spent its parent while unmined and
+was mined within <code>UnminedTxRetention</code> blocks therefore keeps the parent for a full retention after
+its own block; a child unmined for longer has its parents preserved instead. So a reorg up to the
+UTXO retention minus one never needs a parent the pruner deleted, whatever <code>UnminedTxRetention</code> is,
+and raising <code>UnminedTxRetention</code> keeps spent records that many blocks longer. This holds only while
+the pruner runs at every height with parent preservation on (<code>pruner_skipPreserveParents</code> off and
+<code>utxostore_parentPreservationBlocks</code> above 0): a height it skips can leave a child mined during the
+skip without either protection, and with preservation off a child unmined for longer has none.</p>
 <p>When <code>SkipProcessExpiredPreservations</code> is off (the default), each pruner cycle clears expired
 <code>PreserveUntil</code> markers and re-stamps <code>DeleteAtHeight</code> on preserved parents that have become safe to
 prune (mined, on the longest chain, and fully spent, or conflicting). When on, preserved parents

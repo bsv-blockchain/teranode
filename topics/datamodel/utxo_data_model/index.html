@@ -8699,7 +8699,7 @@
 <ul>
 <li><code>LuaSignalDAHSet</code> signal from Lua scripts when last UTXO spent</li>
 <li><code>LuaSignalDAHUnset</code> signal when previously spent UTXO is unspent (reorganization)</li>
-<li>Formula: <code>deleteAtHeight = currentBlockHeight + blockHeightRetention</code></li>
+<li>Formula: <code>deleteAtHeight = currentBlockHeight + blockHeightRetention + unminedTxRetention</code> (<code>GetUtxoStoreSpentDeleteRetention</code>)</li>
 </ul>
 <p><strong>Implementation:</strong></p>
 <ul>
