@@ -61,6 +61,12 @@ type Data struct {
 	// the other flags below it would add eight bytes to this struct. TestDataSize holds the size.
 	Finalizing bool `json:"finalizing,omitempty"`
 
+	// MarkOwed marks a creating record whose transaction is in a block of the longest chain. The mark
+	// that clears unminedSince was asked for it while it was creating, and waits until the record is
+	// complete. No rollback may claim the record, and it is not announced to block assembly. Not part
+	// of the serialized form. It sits in the same padding as Finalizing.
+	MarkOwed bool `json:"markOwed,omitempty"`
+
 	// LockTime is the block height or timestamp until which this transaction is locked.
 	// This can differ from the transaction's own locktime, especially for coinbase transactions.
 	LockTime uint32 `json:"lockTime"`

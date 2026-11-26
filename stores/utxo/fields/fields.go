@@ -64,6 +64,9 @@ const (
 	// Finalizing marks a creating master whose finalize has begun to clear its pagination children: every
 	// input of the attempt is spent, and no rollback may claim the record from then on
 	Finalizing FieldName = "finalizing"
+	// MarkOwed marks a creating master whose transaction is in a block of the longest chain: the mark that
+	// clears unminedSince was asked for it and waits until the record is complete. No rollback may claim it
+	MarkOwed FieldName = "markOwed"
 	// UtxoSpendableIn indicates the number of blocks after which the UTXO becomes spendable
 	UtxoSpendableIn FieldName = "utxoSpendableIn"
 	// SpendingHeight is the block height at which the UTXO was spent

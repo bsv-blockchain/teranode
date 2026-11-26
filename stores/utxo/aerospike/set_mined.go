@@ -221,7 +221,7 @@ func (s *Store) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, min
 	// tip+1), which is the correct input for the coinbase-maturity/DAH arithmetic in Spend
 	// when the store's height lags during catchup.
 	if !minedBlockInfo.UnsetMined {
-		if err := s.rollForwardCreatingBeforeSetMined(ctx, hashes, minedBlockInfo.BlockHeight); err != nil {
+		if err := s.rollForwardCreatingBeforeSetMined(ctx, hashes, minedBlockInfo.BlockHeight, minedBlockInfo.OnLongestChain); err != nil {
 			return nil, err
 		}
 	}
@@ -800,8 +800,8 @@ func (s *Store) clearLockedOnRecordsMulti(items []lockClearItem) error {
 // utxostore_useCreateFirstOrder says, because the healers are not gated on the setting. The
 // read is not negligible beside the mined write itself, most of all on the Lua write path;
 // BenchmarkSetMinedMulti measures the whole call.
-func (s *Store) rollForwardCreatingBeforeSetMined(ctx context.Context, hashes []*chainhash.Hash, blockHeight uint32) error {
-	_, err := s.rollForwardCreatingRecords(ctx, hashes, blockHeight, false)
+func (s *Store) rollForwardCreatingBeforeSetMined(ctx context.Context, hashes []*chainhash.Hash, blockHeight uint32, onLongestChain bool) error {
+	_, err := s.rollForwardCreatingRecords(ctx, hashes, blockHeight, false, onLongestChain)
 
 	return err
 }
@@ -810,112 +810,310 @@ func (s *Store) rollForwardCreatingBeforeSetMined(ctx context.Context, hashes []
 // transaction that is mined: it completes the creating records among hashes. With tolerant false it
 // stops at the first record it cannot complete and returns that error. With tolerant true it goes on,
 // and returns the error of each record it could not complete, by hash, so the caller leaves those
-// records as they are and still handles the rest. An error that is not about one record, a failed
-// batch read or a failed clear of the tokenless records, is returned as the second result in both modes.
-func (s *Store) rollForwardCreatingRecords(ctx context.Context, hashes []*chainhash.Hash, blockHeight uint32, tolerant bool) (map[chainhash.Hash]error, error) {
+// records as they are and still handles the rest. A record whose state could not be read is one of
+// them: it is not known to be complete. An error that is not about one record, a failed clear of the
+// tokenless records, is returned as the second result in both modes.
+//
+// The read of the creating state covers every hash, so it is as wide as the write it comes before.
+// It runs in batches of utxostore_maxMinedBatchSize on up to utxostore_maxMinedRoutines workers, and
+// reads three bins into records that are reused from batch to batch (readCreatingRecords). Only the
+// records it finds creating, which are few, cost a read of their own.
+//
+// blockHeight is the height the caller names for the roll-forward: the height of the block that is
+// being marked mined, or the tip of the store. It is the least a record is rolled forward at. A
+// record that carries the height of a block it is in is rolled forward at that height when it is
+// higher, so that a tip that lags the block does not make a mature coinbase parent look immature
+// or stamp a parent for deletion too early.
+//
+// onLongestChain says that the caller is marking the transactions as mined on the longest chain. A
+// creating record among them is then the record of a transaction that is in a best-chain block. It
+// is stamped with the markOwed bin before it is rolled forward (stampMarkOwed), so that no rollback
+// can claim it from then on and the sweep does not announce it to block assembly: a record that
+// this call cannot complete is left for the sweep, and a rollback of it would free outputs that a
+// mined transaction spent.
+func (s *Store) rollForwardCreatingRecords(ctx context.Context, hashes []*chainhash.Hash, blockHeight uint32, tolerant, onLongestChain bool) (map[chainhash.Hash]error, error) {
 	failed := make(map[chainhash.Hash]error)
 
-	// fail ends the pass for the record at hash when the caller is not tolerant, and otherwise notes it.
-	fail := func(hash chainhash.Hash, err error) error {
+	creating, unread := s.readCreatingRecords(ctx, hashes)
+
+	for hash, readErr := range unread {
+		wrapped := errors.NewProcessingError("[setMined] create-first pre-flight: read of the creating state of %s failed", hash.String(), readErr)
+
 		if !tolerant {
-			return err
+			return failed, wrapped
 		}
 
-		failed[hash] = err
-
-		return nil
+		failed[hash] = wrapped
 	}
 
-	items := make([]*utxo.UnresolvedMetaData, 0, len(hashes))
+	var (
+		legacy    []*chainhash.Hash
+		tentative []*creatingRecord
+	)
 
-	for i, h := range hashes {
-		if h == nil {
-			continue
-		}
-
-		items = append(items, &utxo.UnresolvedMetaData{Hash: *h, Idx: i, Fields: []fields.FieldName{fields.Creating, fields.RollingBack, fields.Attempt}})
-	}
-
-	if len(items) == 0 {
-		return failed, nil
-	}
-
-	if err := s.BatchDecorate(ctx, items, fields.Creating, fields.RollingBack, fields.Attempt); err != nil {
-		return failed, errors.NewProcessingError("[setMined] create-first pre-flight: batch read of creating flag failed", err)
-	}
-
-	var legacy []*chainhash.Hash
-
-	for _, item := range items {
-		if item.Err != nil {
-			if errors.Is(item.Err, errors.ErrTxNotFound) {
-				continue // nothing to roll forward
-			}
-
-			if failErr := fail(item.Hash, errors.NewProcessingError("[setMined] create-first pre-flight: read of %s failed", item.Hash.String(), item.Err)); failErr != nil {
-				return failed, failErr
-			}
-
-			continue
-		}
-
-		if item.Data == nil || !item.Data.Creating {
-			continue
-		}
+	for i := range creating {
+		rec := &creating[i]
 
 		// A creating record with no attempt token was not written by a create-first attempt. It
 		// is a record whose clearCreatingFlag failed, and the write that made it did not defer
 		// the spend of its inputs. There is nothing to roll forward: mining clears the bin.
-		if len(item.Data.Attempt) == 0 && !item.Data.RollingBack {
-			legacy = append(legacy, &item.Hash)
+		if len(rec.attempt) == 0 && !rec.rollingBack {
+			legacy = append(legacy, &rec.hash)
 
 			continue
 		}
 
-		// Mid-flight record: fetch the tx bytes and roll it forward (re-spend + finalize).
-		md, err := s.Get(ctx, &item.Hash, fields.Tx, fields.Creating, fields.RollingBack, fields.Attempt)
-		if err != nil {
-			if errors.Is(err, errors.ErrTxNotFound) {
-				continue
+		tentative = append(tentative, rec)
+	}
+
+	if onLongestChain {
+		if stampErr := s.stampMarkOwed(tentative); stampErr != nil {
+			// The records are rolled forward all the same. One that is not completed is then open to
+			// a rollback, as it was before the stamp existed, so the failure is not hidden.
+			s.logger.Errorf("[setMined] create-first pre-flight: the creating records of transactions on the longest chain could not be stamped, a rollback can still claim one that is not completed: %v", stampErr)
+		}
+	}
+
+	for _, rec := range tentative {
+		if rfErr := s.rollForwardCreatingRecord(ctx, rec, blockHeight); rfErr != nil {
+			if !tolerant {
+				return failed, rfErr
 			}
 
-			if failErr := fail(item.Hash, errors.NewProcessingError("[setMined] create-first pre-flight: get tx %s failed", item.Hash.String(), err)); failErr != nil {
-				return failed, failErr
-			}
-
-			continue
-		}
-
-		if !md.Creating {
-			continue // finalized between the batch read and this get
-		}
-
-		if md.RollingBack {
-			// Its owner is undoing it, and the hold it leaves carries no transaction at all, so it
-			// must not be completed or mined against. Fail closed: the block is retried once the
-			// rollback completes or the hold expires.
-			if failErr := fail(item.Hash, errors.NewProcessingError("[setMined] create-first pre-flight: tx %s is rolling back", item.Hash.String())); failErr != nil {
-				return failed, failErr
-			}
-
-			continue
-		}
-
-		if md.Tx == nil {
-			continue // finalized between the batch read and this get
-		}
-
-		// WithIgnoreLocked: a mined tx's parents may still be locked (e.g. their own
-		// create-first tentative lock); the roll-forward completes an already-committed
-		// spend, so a locked parent must not fail-close setMined for the whole block.
-		if _, _, err := utxo.RollForwardCreating(ctx, s.logger, s, md.Tx, md.Attempt, blockHeight, utxo.WithIgnoreLocked(true)); err != nil {
-			if failErr := fail(item.Hash, errors.NewProcessingError("[setMined] create-first pre-flight: roll-forward of %s failed", item.Hash.String(), err)); failErr != nil {
-				return failed, failErr
-			}
+			failed[rec.hash] = rfErr
 		}
 	}
 
 	return failed, s.clearCreatingWithoutAttempt(legacy)
+}
+
+// creatingRecord is a master record that the pre-flight read found with the creating bin.
+type creatingRecord struct {
+	hash        chainhash.Hash
+	attempt     []byte
+	rollingBack bool
+}
+
+// creatingReadBins are the bins the pre-flight reads from every record.
+var creatingReadBins = []string{fields.Creating.String(), fields.RollingBack.String(), fields.Attempt.String()}
+
+// readCreatingRecords reads the creating state of every hash and returns the records that carry the
+// creating bin, and the error of each hash whose state it could not read. A record that does not
+// exist is neither: there is nothing to roll forward. A read that fails for one batch fails only the
+// hashes of that batch, and the other batches are still read.
+//
+// The hashes are divided over the workers as the mark divides them, and each worker reads its share
+// in sequential batches through one set of slots, so a transaction costs no key, batch record or
+// metadata allocation of its own (see longestChainSlots).
+func (s *Store) readCreatingRecords(ctx context.Context, hashes []*chainhash.Hash) ([]creatingRecord, map[chainhash.Hash]error) {
+	if len(hashes) == 0 {
+		return nil, nil
+	}
+
+	batchSize := max(s.settings.UtxoStore.MaxMinedBatchSize, 1)
+	numChunks := (len(hashes) + batchSize - 1) / batchSize
+	numWorkers := max(min(s.settings.UtxoStore.MaxMinedRoutines, numChunks), 1)
+	rangeSize := (len(hashes) + numWorkers - 1) / numWorkers
+
+	batchPolicy := util.GetAerospikeBatchPolicy(s.settings)
+	readPolicy := aerospike.NewBatchReadPolicy()
+
+	var (
+		mu       sync.Mutex
+		creating []creatingRecord
+		unread   map[chainhash.Hash]error
+		wg       sync.WaitGroup
+	)
+
+	noteUnread := func(batch []chainhash.Hash, err error) {
+		mu.Lock()
+		defer mu.Unlock()
+
+		if unread == nil {
+			unread = make(map[chainhash.Hash]error)
+		}
+
+		for _, h := range batch {
+			unread[h] = err
+		}
+	}
+
+	for w := 0; w < numWorkers && w*rangeSize < len(hashes); w++ {
+		workerHashes := hashes[w*rangeSize : min((w+1)*rangeSize, len(hashes))]
+
+		wg.Add(1)
+
+		go func() {
+			defer wg.Done()
+
+			slots := newBatchReadSlots(min(batchSize, len(workerHashes)), readPolicy, creatingReadBins)
+
+			for start := 0; start < len(workerHashes); start += batchSize {
+				chunk := workerHashes[start:min(start+batchSize, len(workerHashes))]
+
+				n := 0
+
+				for _, h := range chunk {
+					if h == nil {
+						continue
+					}
+
+					if err := slots.set(n, h, s.namespace, s.setName); err != nil {
+						noteUnread([]chainhash.Hash{*h}, err)
+
+						continue
+					}
+
+					n++
+				}
+
+				if n == 0 {
+					continue
+				}
+
+				// slots.hashes is overwritten by the next batch, so what leaves this one is copied.
+				if err := ctx.Err(); err != nil {
+					noteUnread(append([]chainhash.Hash(nil), slots.hashes[:n]...), err)
+
+					continue
+				}
+
+				if err := s.batchOperate(batchPolicy, slots.records[:n]); err != nil {
+					noteUnread(append([]chainhash.Hash(nil), slots.hashes[:n]...), err)
+
+					continue
+				}
+
+				for j, record := range slots.records[:n] {
+					br := record.BatchRec()
+
+					if br.Err != nil {
+						if !isKeyNotFound(br.Err) {
+							noteUnread([]chainhash.Hash{slots.hashes[j]}, br.Err)
+						}
+
+						continue
+					}
+
+					if br.Record == nil {
+						continue
+					}
+
+					if _, isCreating := br.Record.Bins[fields.Creating.String()]; !isCreating {
+						continue
+					}
+
+					rec := creatingRecord{hash: slots.hashes[j]}
+					rec.attempt, _ = br.Record.Bins[fields.Attempt.String()].([]byte)
+					rec.rollingBack, _ = br.Record.Bins[fields.RollingBack.String()].(bool)
+
+					mu.Lock()
+					creating = append(creating, rec)
+					mu.Unlock()
+				}
+			}
+		}()
+	}
+
+	wg.Wait()
+
+	return creating, unread
+}
+
+// rollForwardCreatingRecord completes one creating record that a create-first attempt wrote: it
+// reads the transaction and rolls it forward (re-spend and finalize). It returns nil for a record
+// that has been completed or is gone since the batch read.
+func (s *Store) rollForwardCreatingRecord(ctx context.Context, rec *creatingRecord, blockHeight uint32) error {
+	md, err := s.Get(ctx, &rec.hash, fields.Tx, fields.Creating, fields.RollingBack, fields.Attempt, fields.BlockIDs, fields.BlockHeights)
+	if err != nil {
+		if errors.Is(err, errors.ErrTxNotFound) {
+			return nil
+		}
+
+		return errors.NewProcessingError("[setMined] create-first pre-flight: get tx %s failed", rec.hash.String(), err)
+	}
+
+	if !md.Creating {
+		return nil // finalized between the batch read and this get
+	}
+
+	if md.RollingBack {
+		// Its owner is undoing it, and the hold it leaves carries no transaction at all, so it
+		// must not be completed or mined against. Fail closed: the block is retried once the
+		// rollback completes or the hold expires.
+		return errors.NewProcessingError("[setMined] create-first pre-flight: tx %s is rolling back", rec.hash.String())
+	}
+
+	if md.Tx == nil {
+		return nil // finalized between the batch read and this get
+	}
+
+	height := blockHeight
+
+	for _, minedAt := range md.BlockHeights {
+		height = max(height, minedAt)
+	}
+
+	// WithIgnoreLocked: a mined tx's parents may still be locked (e.g. their own
+	// create-first tentative lock); the roll-forward completes an already-committed
+	// spend, so a locked parent must not fail-close setMined for the whole block.
+	if _, _, err := utxo.RollForwardCreating(ctx, s.logger, s, md.Tx, md.Attempt, height, utxo.WithIgnoreLocked(true)); err != nil {
+		return errors.NewProcessingError("[setMined] create-first pre-flight: roll-forward of %s failed", rec.hash.String(), err)
+	}
+
+	return nil
+}
+
+// stampMarkOwed sets the markOwed bin on the creating records of transactions that are in a block of
+// the longest chain, before the pre-flight rolls them forward. BeginCreateFirstRollback refuses a
+// master that carries the bin, and both are single-record writes on the master, so the server
+// orders them: from the stamp on no rollback begins. A record whose rollback began first is not
+// stamped, because that rollback cannot be stopped, and neither is one that has been completed
+// since the read. The bin is inert on a record that is no longer creating.
+func (s *Store) stampMarkOwed(records []*creatingRecord) error {
+	if len(records) == 0 {
+		return nil
+	}
+
+	writePolicy := util.GetAerospikeBatchWritePolicy(s.settings)
+	writePolicy.RecordExistsAction = aerospike.UPDATE_ONLY
+	writePolicy.FilterExpression = aerospike.ExpAnd(
+		aerospike.ExpBinExists(fields.Creating.String()),
+		aerospike.ExpNot(aerospike.ExpBinExists(fields.RollingBack.String())),
+	)
+
+	stampOp := aerospike.PutOp(aerospike.NewBin(fields.MarkOwed.String(), true))
+	batchPolicy := util.GetAerospikeBatchPolicy(s.settings)
+	batchSize := max(s.settings.UtxoStore.MaxMinedBatchSize, 1)
+
+	for start := 0; start < len(records); start += batchSize {
+		chunk := records[start:min(start+batchSize, len(records))]
+		writes := make([]aerospike.BatchRecordIfc, 0, len(chunk))
+
+		for _, rec := range chunk {
+			key, err := aerospike.NewKey(s.namespace, s.setName, rec.hash[:])
+			if err != nil {
+				return errors.NewProcessingError("[setMined] failed to create key for %s", rec.hash.String(), err)
+			}
+
+			writes = append(writes, aerospike.NewBatchWrite(writePolicy, key, stampOp))
+		}
+
+		if err := s.batchOperate(batchPolicy, writes); err != nil {
+			return errors.NewStorageError("[setMined] failed to stamp %d creating records as owed the longest-chain mark", len(chunk), err)
+		}
+
+		for i, write := range writes {
+			recErr := write.BatchRec().Err
+			if recErr == nil || isKeyNotFound(recErr) || isFilteredOut(recErr) {
+				continue
+			}
+
+			return errors.NewStorageError("[setMined] failed to stamp %s as owed the longest-chain mark", chunk[i].hash.String(), recErr)
+		}
+	}
+
+	return nil
 }
 
 // clearCreatingWithoutAttempt deletes the creating bin from the master records that carry no

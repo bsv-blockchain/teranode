@@ -744,6 +744,10 @@ func (s *Store) addAbstractedBins(bins []fields.FieldName) []fields.FieldName {
 		if !slices.Contains(newBins, fields.Finalizing) {
 			newBins = append(newBins, fields.Finalizing)
 		}
+
+		if !slices.Contains(newBins, fields.MarkOwed) {
+			newBins = append(newBins, fields.MarkOwed)
+		}
 	}
 
 	if slices.Contains(newBins, fields.BlockIDs) {
@@ -1187,6 +1191,11 @@ NEXT_BATCH_RECORD:
 			case fields.Finalizing:
 				if finalizing, ok := bins[key.String()].(bool); ok {
 					items[idx].Data.Finalizing = finalizing
+				}
+
+			case fields.MarkOwed:
+				if markOwed, ok := bins[key.String()].(bool); ok {
+					items[idx].Data.MarkOwed = markOwed
 				}
 
 			case fields.ConflictingChildren:

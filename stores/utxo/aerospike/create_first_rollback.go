@@ -214,10 +214,16 @@ func (s *Store) SpendLeasesLive(_ context.Context, hash *chainhash.Hash, attempt
 // rollback deletes the children, so from the first cleared child on the attempt can only be
 // completed. Every input of it was spent before its finalize began.
 //
+// The write is also refused for a master that carries the markOwed bin. The pre-flight of a write
+// that marks transactions as mined on the longest chain stamps a creating record with it before it
+// rolls the record forward (stampMarkOwed). The transaction of such a record is in a best-chain
+// block, so the record can only be completed: its rollback would unspend, by txid, outputs that a
+// mined transaction spent.
+//
 // It reports true only to the caller whose write set the marker: that caller owns the
 // rollback and is the one that unspends the inputs and ends the rollback. It reports false,
-// writing nothing, when the record is absent, already final, finalizing, owned by another
-// attempt, or already rolling back under another caller. A filtered-out write is read back only to tell
+// writing nothing, when the record is absent, already final, finalizing, owed the longest-chain
+// mark, owned by another attempt, or already rolling back under another caller. A filtered-out write is read back only to tell
 // those cases from a store fault. Any other error returns (false, err): the caller leaves the
 // record creating and the sweep heals it.
 func (s *Store) BeginCreateFirstRollback(_ context.Context, hash *chainhash.Hash, attempt []byte) (bool, error) {
@@ -231,6 +237,7 @@ func (s *Store) BeginCreateFirstRollback(_ context.Context, hash *chainhash.Hash
 	writePolicy.FilterExpression = aerospike.ExpAnd(
 		finalizeFilter(attempt),
 		aerospike.ExpNot(aerospike.ExpBinExists(fields.Finalizing.String())),
+		aerospike.ExpNot(aerospike.ExpBinExists(fields.MarkOwed.String())),
 		s.noLiveSpendLease(time.Now().Unix()),
 	)
 
@@ -258,7 +265,7 @@ func (s *Store) BeginCreateFirstRollback(_ context.Context, hash *chainhash.Hash
 		return false, errors.NewStorageError("error reading record after the rolling back marker was filtered out", getErr)
 	}
 
-	if state.absent || !state.creating || state.rollingBack || state.finalizing || !bytes.Equal(state.attempt, attempt) {
+	if state.absent || !state.creating || state.rollingBack || state.finalizing || state.markOwed || !bytes.Equal(state.attempt, attempt) {
 		return false, nil
 	}
 
@@ -713,6 +720,7 @@ type creatingState struct {
 	creating        bool
 	rollingBack     bool
 	finalizing      bool
+	markOwed        bool
 	hold            bool
 	busy            bool
 	hasUnminedSince bool
@@ -723,6 +731,7 @@ var creatingStateBins = []string{
 	fields.Creating.String(),
 	fields.RollingBack.String(),
 	fields.Finalizing.String(),
+	fields.MarkOwed.String(),
 	fields.Attempt.String(),
 	fields.Hold.String(),
 	fields.HoldUntil.String(),
@@ -753,6 +762,7 @@ func (s *Store) readCreatingState(key *aerospike.Key) (creatingState, error) {
 
 	state.rollingBack, _ = rec.Bins[fields.RollingBack.String()].(bool)
 	state.finalizing, _ = rec.Bins[fields.Finalizing.String()].(bool)
+	state.markOwed, _ = rec.Bins[fields.MarkOwed.String()].(bool)
 	state.hold, _ = rec.Bins[fields.Hold.String()].(bool)
 	state.busy, _ = rec.Bins[fields.Busy.String()].(bool)
 	state.attempt, _ = rec.Bins[fields.Attempt.String()].([]byte)

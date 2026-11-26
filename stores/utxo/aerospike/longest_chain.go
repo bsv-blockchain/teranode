@@ -71,7 +71,16 @@ import (
 // again. The call therefore settles the creating records among txHashes first, by the rule the
 // setMined pre-flight uses (rollForwardCreatingRecords). A record it cannot complete, one that is
 // rolling back included, is left out of the mark and keeps its unmined_since for the sweep, the rest
-// are marked, and the call returns an error that names the first of them.
+// are marked, and the call returns an error that names the first of them. A hash whose creating
+// state could not be read is left out in the same way: it is not known to be complete.
+//
+// The read of the creating state is as wide as the mark, so it runs in the mark's batches and on
+// the mark's workers, and one batch that fails leaves only its own hashes unmarked.
+//
+// The transaction of a creating record that this call finds is in a block of the longest chain,
+// so the record is stamped (markOwed) before it is rolled forward: no rollback claims it from then
+// on, and the sweep does not announce it to block assembly. A mark off the longest chain removes
+// the stamp again on the expression write path.
 func (s *Store) MarkTransactionsOnLongestChain(ctx context.Context, txHashes []chainhash.Hash, onLongestChain bool) error {
 	if len(txHashes) == 0 || !onLongestChain {
 		return s.markTransactionsOnLongestChain(ctx, txHashes, onLongestChain)
@@ -82,7 +91,9 @@ func (s *Store) MarkTransactionsOnLongestChain(ctx context.Context, txHashes []c
 		ptrs[i] = &txHashes[i]
 	}
 
-	failed, err := s.rollForwardCreatingRecords(ctx, ptrs, s.GetBlockHeight(), true)
+	// The height is the least the roll-forward of a record runs at: a record that carries the height
+	// of its own block runs at that height when it is the higher of the two.
+	failed, err := s.rollForwardCreatingRecords(ctx, ptrs, s.GetBlockHeight(), true, true)
 	if err != nil {
 		return errors.NewProcessingError("[MarkTransactionsOnLongestChain] the creating records could not be settled before the mark, nothing was marked", err)
 	}
@@ -110,7 +121,7 @@ func (s *Store) MarkTransactionsOnLongestChain(ctx context.Context, txHashes []c
 		}
 	}
 
-	unsettled := errors.NewProcessingError("[MarkTransactionsOnLongestChain] %d creating records could not be completed and were not marked, they keep unmined_since for the sweep, first %s", len(failed), first.String(), firstErr)
+	unsettled := errors.NewProcessingError("[MarkTransactionsOnLongestChain] %d records were not marked and keep unmined_since: a creating record that could not be completed, or a record whose creating state could not be read, first %s", len(failed), first.String(), firstErr)
 
 	// errors.Join keeps the type of its errors only when the first one has it.
 	if markErr := s.markTransactionsOnLongestChain(ctx, markable, true); markErr != nil {
@@ -180,14 +191,22 @@ func (s *Store) markTransactionsOnLongestChain(ctx context.Context, txHashes []c
 	} else {
 		// Only stamp unminedSince when the bin is absent. ExpUnknown with EvalNoFail makes the
 		// existing-value branch a no-op, so an earlier unminedSince is never overwritten.
-		exprOps = []*aerospike.Operation{aerospike.ExpWriteOp(
-			fields.UnminedSince.String(),
-			aerospike.ExpCond(
-				aerospike.ExpBinExists(fields.UnminedSince.String()), aerospike.ExpUnknown(),
-				aerospike.ExpIntVal(int64(unminedSince)),
+		//
+		// A creating record that was stamped as owed the longest-chain mark is no longer owed it once
+		// its block has left the longest chain, so the stamp goes. Only this path removes it: the
+		// native sub-op does not know the bin, and a stamp that outlives its block keeps the record
+		// from a rollback and from the sweep's announce until the record is complete.
+		exprOps = []*aerospike.Operation{
+			aerospike.ExpWriteOp(
+				fields.UnminedSince.String(),
+				aerospike.ExpCond(
+					aerospike.ExpBinExists(fields.UnminedSince.String()), aerospike.ExpUnknown(),
+					aerospike.ExpIntVal(int64(unminedSince)),
+				),
+				aerospike.ExpWriteFlagEvalNoFail,
 			),
-			aerospike.ExpWriteFlagEvalNoFail,
-		)}
+			aerospike.PutOp(aerospike.NewBin(fields.MarkOwed.String(), nil)),
+		}
 	}
 
 	// With native sub-op 14 each record is one TeranodeModifyOp the server's C module runs, in place
@@ -620,18 +639,31 @@ type longestChainSlots struct {
 	keys    []*aerospike.Key
 	records []aerospike.BatchRecordIfc
 
-	policy *aerospike.BatchWritePolicy
-	ops    []*aerospike.Operation
+	// newRecord makes the batch record of a slot, once, for the key the slot keeps.
+	newRecord func(key *aerospike.Key) aerospike.BatchRecordIfc
 }
 
 func newLongestChainSlots(size int, policy *aerospike.BatchWritePolicy, ops []*aerospike.Operation) *longestChainSlots {
+	return newBatchSlots(size, func(key *aerospike.Key) aerospike.BatchRecordIfc {
+		// NewBatchWrite, not a struct literal: it sets the unexported flag that routes the record as a write.
+		return aerospike.NewBatchWrite(policy, key, ops...)
+	})
+}
+
+// newBatchReadSlots returns slots whose records read bins, for a read that is as wide as the mark.
+func newBatchReadSlots(size int, policy *aerospike.BatchReadPolicy, bins []string) *longestChainSlots {
+	return newBatchSlots(size, func(key *aerospike.Key) aerospike.BatchRecordIfc {
+		return aerospike.NewBatchRead(policy, key, bins)
+	})
+}
+
+func newBatchSlots(size int, newRecord func(key *aerospike.Key) aerospike.BatchRecordIfc) *longestChainSlots {
 	return &longestChainSlots{
-		hashes:  make([]chainhash.Hash, size),
-		values:  make([]aerospike.Value, size),
-		keys:    make([]*aerospike.Key, size),
-		records: make([]aerospike.BatchRecordIfc, size),
-		policy:  policy,
-		ops:     ops,
+		hashes:    make([]chainhash.Hash, size),
+		values:    make([]aerospike.Value, size),
+		keys:      make([]*aerospike.Key, size),
+		records:   make([]aerospike.BatchRecordIfc, size),
+		newRecord: newRecord,
 	}
 }
 
@@ -656,8 +688,7 @@ func (ls *longestChainSlots) set(k int, hash *chainhash.Hash, namespace, setName
 	}
 
 	ls.keys[k] = key
-	// NewBatchWrite, not a struct literal: it sets the unexported flag that routes the record as a write.
-	ls.records[k] = aerospike.NewBatchWrite(ls.policy, key, ls.ops...)
+	ls.records[k] = ls.newRecord(key)
 
 	return nil
 }
