@@ -87,6 +87,15 @@ jobs:
       - name: Checkout PR branch
         uses: actions/checkout@v4
 
+      # The checkout above is GitHub's merge of the PR into main. Its first parent is the
+      # main commit that merge contains, so the base side runs exactly that commit.
+      - name: Find PR base
+        id: base
+        run: |
+          sha=$(git cat-file -p HEAD | awk '/^parent /{print $2; exit}')
+          test -n "$sha"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
@@ -107,12 +116,12 @@ jobs:
             ${{ matrix.packages }} \
             | tee pr-${{ matrix.group }}.txt
 
-      # The PR's base commit, not main's tip at job start: every group then runs the
-      # same baseline, and the report names it. The path stays "main" for the steps below.
+      # Every group then runs the same baseline, and the report names it. The path
+      # stays "main" for the steps below.
       - name: Checkout PR base
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.pull_request.base.sha }}
+          ref: ${{ steps.base.outputs.sha }}
           path: main
 
       - name: Run main benchmarks
@@ -174,11 +183,14 @@ jobs:
           echo "PR benchmarks: $(grep -c '^Benchmark' pr-benchmark-output.txt) results"
           echo "Main benchmarks: $(grep -c '^Benchmark' main-benchmark-output.txt) results"
 
-      # The bench jobs check out this commit as the main side. The checkout above is
-      # depth 1 with no origin/main, so git log here found nothing.
+      # The same merge commit the bench jobs checked out, so its first parent is the
+      # commit they ran as the main side.
       - name: Capture baseline SHA
         id: baseline_sha
-        run: echo "value=${{ github.event.pull_request.base.sha }}" >> "$GITHUB_OUTPUT"
+        run: |
+          sha=$(git cat-file -p HEAD | awk '/^parent /{print $2; exit}')
+          test -n "$sha"
+          echo "value=$sha" >> "$GITHUB_OUTPUT"
 
       - name: Compare benchmarks
         id: compare
