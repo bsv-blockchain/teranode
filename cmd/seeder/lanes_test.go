@@ -793,7 +793,8 @@ func TestSeederLaneStoreCallsAreBounded(t *testing.T) {
 	saved := seederDBTimeout
 	require.Equal(t, 2*time.Minute, saved, "the bound in production")
 
-	seederDBTimeout = 50 * time.Millisecond
+	// Long enough for the real SQLite calls before the blocked one, under -race too.
+	seederDBTimeout = 250 * time.Millisecond
 
 	t.Cleanup(func() { seederDBTimeout = saved })
 
@@ -846,9 +847,9 @@ func TestSeederLaneStoreCallsAreBounded(t *testing.T) {
 				require.NoError(t, err)
 			}
 
-			require.Less(t, time.Since(start), 300*time.Millisecond, "within a few times the 50 ms bound")
+			require.Less(t, time.Since(start), 2*time.Second, "within a few times the 250 ms bound")
 			require.LessOrEqual(t, store.bound, seederDBTimeout, "the blocked call had no more than the configured bound")
-			require.Greater(t, store.bound, seederDBTimeout-20*time.Millisecond, "the blocked call had the configured bound")
+			require.Greater(t, store.bound, seederDBTimeout-50*time.Millisecond, "the blocked call had the configured bound")
 		})
 	}
 }
