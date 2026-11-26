@@ -467,6 +467,45 @@ func TestFindUTXOSet_UncheckablePathIsAnError(t *testing.T) {
 	require.ErrorContains(t, err, "cannot check")
 }
 
+// The decoder takes a frame whose window is at most 512 MiB and refuses a larger one,
+// so a set compressed with a bigger window fails rather than using that memory.
+func TestReadUTXOSetTip_ZstdWindowLimit(t *testing.T) {
+	data, err := os.ReadFile(writeCompleteSnapshotFile(t, benchWrappers("window", 10, 0)))
+	require.NoError(t, err)
+
+	// One zstd frame, no checksum, declaring the window, then data as one raw last block.
+	frameWithWindow := func(descriptor byte) []byte {
+		frame := []byte{0x28, 0xb5, 0x2f, 0xfd, 0x00, descriptor}
+		block := uint32(len(data))<<3 | 1 //nolint:gosec // a few KiB
+		frame = append(frame, byte(block), byte(block>>8), byte(block>>16))
+
+		return append(frame, data...)
+	}
+
+	dir := t.TempDir()
+
+	for _, tc := range []struct {
+		name       string
+		descriptor byte // window log 10 + descriptor>>3
+		accepted   bool
+	}{
+		{"512 MiB window", 0x98, true},
+		{"1 GiB window", 0xa0, false},
+	} {
+		path := filepath.Join(dir, fmt.Sprintf("%x.utxo-set.zst", tc.descriptor))
+		require.NoError(t, os.WriteFile(path, frameWithWindow(tc.descriptor), 0o600))
+
+		tip, err := readUTXOSetTip(path)
+		if !tc.accepted {
+			require.ErrorContains(t, err, "window", tc.name)
+			continue
+		}
+
+		require.NoError(t, err, tc.name)
+		require.Equal(t, uint32(200), tip.height, tc.name)
+	}
+}
+
 // Only *.zst files are pieces, taken in name order; a fetch's unfinished
 // .part files and anything else in the directory are not.
 func TestUTXOSetPieces(t *testing.T) {

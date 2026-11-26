@@ -150,7 +150,7 @@ teranode-cli seeder -inputDir <folder> -hash <hash> [-skipHeaders] [-skipUTXOs] 
 
 Options:
 
-- `-inputDir`: Specifies the input directory containing UTXO set and headers files. The UTXO set is `<hash>.utxo-set`, or `<hash>.utxo-set.zst` compressed with zstd: one file, or a directory of `*.zst` pieces read in name order. Compression windows up to 512 MiB are accepted: every `zstd` level and `--long` up to 29.
+- `-inputDir`: Specifies the input directory containing UTXO set and headers files. The UTXO set is `<hash>.utxo-set`, or `<hash>.utxo-set.zst` compressed with zstd: one file, or a directory of `*.zst` pieces read in name order. A zstd frame whose window is at most 512 MiB is accepted, which every `zstd` level and `--long` up to 29 stay within; a frame with a larger window is refused.
 - `-hash`: Hash of the UTXO set / headers to process.
 - `-skipHeaders`: (Optional) Skip processing of headers.
 - `-skipUTXOs`: (Optional) Skip processing of UTXOs.
