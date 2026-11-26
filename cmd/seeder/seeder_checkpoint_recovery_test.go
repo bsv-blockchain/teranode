@@ -124,8 +124,6 @@ func (w *warnRecorder) Warnf(format string, args ...interface{}) {
 	w.warnings = append(w.warnings, fmt.Sprintf(format, args...))
 }
 
-// markImported records a completed import the way processUTXOs does: the
-// lastProcessed.dat height marker plus the imported-tip record with the hash.
 // checkpointRecoverable is recoverableTip as a yes or no, for the tests of that decision.
 func checkpointRecoverable(ctx context.Context, logger ulogger.Logger, blockStore blob.Store, blockchainStore blockchain_store.Store, utxoFile string) (bool, error) {
 	tip, err := recoverableTip(ctx, logger, blockStore, blockchainStore, utxoFile)
@@ -133,6 +131,8 @@ func checkpointRecoverable(ctx context.Context, logger ulogger.Logger, blockStor
 	return tip != nil, err
 }
 
+// markImported records a completed import the way processUTXOs does: the
+// lastProcessed.dat height marker plus the imported-tip record with the hash.
 func markImported(t *testing.T, ctx context.Context, blockStore blob.Store, height uint32, hash chainhash.Hash) {
 	t.Helper()
 

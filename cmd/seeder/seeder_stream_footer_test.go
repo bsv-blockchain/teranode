@@ -17,6 +17,7 @@ import (
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
+	bloboptions "github.com/bsv-blockchain/teranode/stores/blob/options"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/stretchr/testify/require"
 )
@@ -286,6 +287,11 @@ func TestProcessUTXOs_SetReplacedAfterTheTipRead_Fails(t *testing.T) {
 
 	_, err = processUTXOs(context.Background(), ulogger.TestLogger{}, tSettings, newTestBlockchainStore(t), path, "", false, false, "")
 	require.ErrorContains(t, err, "changed while the seed was reading it")
+
+	// Only a compressed import leaves the record that makes a plain re-run refuse.
+	exists, err := openTestBlockStore(t, tSettings).Exists(context.Background(), nil, fileformat.FileTypeDat, bloboptions.WithFilename(incompleteImportFilename), bloboptions.WithNoHashPrefix())
+	require.NoError(t, err)
+	require.False(t, exists)
 }
 
 // -recover-checkpoint records the tip it checked against the block store. With a

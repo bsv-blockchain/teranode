@@ -694,18 +694,19 @@ func processUTXOs(ctx context.Context, logger ulogger.Logger, appSettings *setti
 		return nil, err
 	}
 
+	// Every pass has now verified the set, so the record goes before anything
+	// else can fail; lastProcessed.dat comes later, so a crash in between leaves
+	// neither, and a plain re-run imports the same verified set again.
+	if err = blockStore.Del(ctx, nil, fileformat.FileTypeDat, bloboptions.WithFilename(incompleteImportFilename), bloboptions.WithNoHashPrefix()); err != nil && !errors.Is(err, errors.ErrNotFound) {
+		return nil, errors.NewStorageError("failed to clear the record of an import in progress", err)
+	}
+
 	if syncPath != "" {
 		logger.Infof("Syncing the external store filesystem at %s so it is durable before marking the seed complete", syncPath)
 
 		if err = syncFilesystem(syncPath); err != nil {
 			return nil, errors.NewStorageError("failed to sync external store filesystem", err)
 		}
-	}
-
-	// Cleared before lastProcessed.dat is written: a crash between the two then
-	// leaves neither, and a plain re-run imports the same verified set again.
-	if err = blockStore.Del(ctx, nil, fileformat.FileTypeDat, bloboptions.WithFilename(incompleteImportFilename), bloboptions.WithNoHashPrefix()); err != nil && !errors.Is(err, errors.ErrNotFound) {
-		return nil, errors.NewStorageError("failed to clear the record of an import in progress", err)
 	}
 
 	heightStr := fmt.Sprintf("%d\n", height)
