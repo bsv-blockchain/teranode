@@ -15,10 +15,13 @@ import (
 
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/services/blockassembly"
 	"github.com/bsv-blockchain/teranode/services/utxopersister"
+	"github.com/bsv-blockchain/teranode/settings"
 	bloboptions "github.com/bsv-blockchain/teranode/stores/blob/options"
+	"github.com/bsv-blockchain/teranode/stores/blockchain"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	utxosql "github.com/bsv-blockchain/teranode/stores/utxo/sql"
@@ -406,30 +409,9 @@ func TestProcessUTXOs_CompressedInput_InterruptedSeedReRuns(t *testing.T) {
 	require.Equal(t, uint32(200), tip.height)
 	require.Equal(t, "200", readMarker(t, ctx, blockStore))
 
-	u, err := url.Parse("sqlite:///compressed_rerun")
-	require.NoError(t, err)
-
-	store, err := utxosql.New(ctx, ulogger.TestLogger{}, tSettings, u)
-	require.NoError(t, err)
-
-	for _, w := range wrappers {
-		got, err := store.Get(ctx, &w.TxID)
-		require.NoError(t, err)
-		require.NotNil(t, got.Tx)
-
-		for _, want := range w.UTXOs {
-			out := got.Tx.Outputs[want.Index]
-			require.NotNil(t, out, "tx %s output %d", w.TxID, want.Index)
-			require.Equal(t, want.Value, out.Satoshis, "tx %s output %d", w.TxID, want.Index)
-			require.Equal(t, want.Script, []byte(*out.LockingScript), "tx %s output %d", w.TxID, want.Index)
-		}
-	}
+	requireStoredOutputs(ctx, t, tSettings, "compressed_rerun", wrappers)
 
 	stale := hex.EncodeToString(make([]byte, sha256.Size))
-
-	cancelled, cancel := context.WithCancel(ctx)
-	cancel()
-	require.ErrorIs(t, verifyUTXOSetFile(cancelled, dir, sum), context.Canceled)
 
 	// -recover-checkpoint takes the tip from the set, so it checks the set first.
 	_, err = processUTXOs(ctx, ulogger.TestLogger{}, tSettings, blockchainStore, dir, "", false, true, stale)
@@ -450,18 +432,142 @@ func TestProcessUTXOs_CompressedInput_InterruptedSeedReRuns(t *testing.T) {
 	require.Nil(t, tip, "a skipped import writes no checkpoint")
 }
 
+// requireStoredOutputs checks every wrapper's outputs in the named sqlite UTXO store.
+func requireStoredOutputs(ctx context.Context, t *testing.T, tSettings *settings.Settings, name string, wrappers []*utxopersister.UTXOWrapper) {
+	t.Helper()
+
+	u, err := url.Parse("sqlite:///" + name)
+	require.NoError(t, err)
+
+	store, err := utxosql.New(ctx, ulogger.TestLogger{}, tSettings, u)
+	require.NoError(t, err)
+
+	for _, w := range wrappers {
+		got, err := store.Get(ctx, &w.TxID)
+		require.NoError(t, err)
+		require.NotNil(t, got.Tx)
+
+		for _, want := range w.UTXOs {
+			out := got.Tx.Outputs[want.Index]
+			require.NotNil(t, out, "tx %s output %d", w.TxID, want.Index)
+			require.Equal(t, want.Value, out.Satoshis, "tx %s output %d", w.TxID, want.Index)
+			require.Equal(t, want.Script, []byte(*out.LockingScript), "tx %s output %d", w.TxID, want.Index)
+		}
+	}
+}
+
+// Both compressed forms, read in two passes, land every output intact in a real UTXO
+// store, the 200-output multi-record txs included.
+func TestProcessUTXOs_CompressedInput_StoresEveryOutput(t *testing.T) {
+	ctx := context.Background()
+	wrappers := withDistinctOutputs(benchWrappers("stored", 200, 25))
+	plain := writeCompleteSnapshotFile(t, wrappers)
+
+	for _, pieceSize := range []int{0, 3000} {
+		t.Run(fmt.Sprintf("pieceSize=%d", pieceSize), func(t *testing.T) {
+			tSettings := forceSeederSettings(t)
+			tSettings.UtxoStore.UtxoBatchSize = 128
+			name := fmt.Sprintf("compressed_stored_%d", pieceSize)
+			pointUtxoStoreAt(t, tSettings, name)
+
+			path, sum := compressedSnapshot(t, plain, pieceSize)
+
+			tip, err := processUTXOs(ctx, ulogger.TestLogger{}, tSettings, newTestBlockchainStore(t), path, "", false, false, sum)
+			require.NoError(t, err)
+			require.Equal(t, uint32(200), tip.height)
+
+			requireStoredOutputs(ctx, t, tSettings, name, wrappers)
+		})
+	}
+}
+
+// Each pass checks that the set still has the tip the seed will record, so a set
+// replaced after the tip was read fails rather than seeding one tip under another.
+func TestImportUTXOSet_TipChangedUnderTheSeed(t *testing.T) {
+	path, sum := compressedSnapshot(t, writeCompleteSnapshotFile(t, benchWrappers("tip-changed", 50, 0)), 1000)
+
+	for _, batch := range []int{0, 128} {
+		opts := testImportOptions()
+		opts.utxoBatchSize = batch
+		opts.expectedSHA256 = sum
+		opts.tip = &utxoSetTip{height: 200} // the set's real tip hash starts with 0xcc
+
+		err := importUTXOSet(context.Background(), ulogger.TestLogger{}, noopCreateStore{}, path, opts)
+		require.ErrorContains(t, err, "changed while the seed was reading it")
+
+		opts.tip.hash[0] = 0xcc
+		require.NoError(t, importUTXOSet(context.Background(), ulogger.TestLogger{}, noopCreateStore{}, path, opts))
+	}
+}
+
+// cancelAfterCtx reports cancellation from its n-th Err call on, so a test can
+// cancel a loop part-way through without timing.
+type cancelAfterCtx struct {
+	context.Context
+	calls, n int
+}
+
+func (c *cancelAfterCtx) Err() error {
+	c.calls++
+	if c.calls >= c.n {
+		return context.Canceled
+	}
+
+	return nil
+}
+
+// Verifying a set without importing it stops when the seed is cancelled part-way
+// through the read, not only before it starts.
+func TestVerifyUTXOSetFile_StopsOnCancel(t *testing.T) {
+	path, sum := compressedSnapshot(t, writeCompleteSnapshotFile(t, benchWrappers("verify-cancel", 40_000, 0)), 1<<20)
+
+	tip, err := verifyUTXOSetFile(context.Background(), path, sum)
+	require.NoError(t, err)
+	require.Equal(t, uint32(200), tip.height)
+
+	ctx := &cancelAfterCtx{Context: context.Background(), n: 3}
+	_, err = verifyUTXOSetFile(ctx, path, sum)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Equal(t, 3, ctx.calls, "the read must stop at the first check that sees the cancel")
+}
+
 // A headers-only run imports the headers and never reads the UTXO set, so having
 // both forms of the set in the directory is no reason to refuse.
 func TestSeeder_SkipUTXOs_DoesNotLookForTheUTXOSet(t *testing.T) {
+	ctx := context.Background()
 	dir := t.TempDir()
 
-	genesis, err := newTestBlockchainStore(t).GetBlockByID(context.Background(), 0)
+	tSettings := forceSeederSettings(t)
+	chainURL, err := url.Parse("sqlite:///headers_only")
+	require.NoError(t, err)
+
+	tSettings.BlockChain.StoreURL = chainURL
+
+	genesis, err := newTestBlockchainStore(t).GetBlockByID(ctx, 0)
 	require.NoError(t, err)
 
 	genesisRecord, err := blockToIndexBytes(t, genesis, genesis.Header.Hash())
 	require.NoError(t, err)
 
-	headers, err := os.ReadFile(writeUtxoHeadersFile(t, 0, genesisRecord))
+	coinbase := makeCoinbaseTx(t, 1, 1)
+	block1 := &model.Block{
+		Header: &model.BlockHeader{
+			Version:        1,
+			Timestamp:      1700000001,
+			Nonce:          1,
+			HashPrevBlock:  genesis.Header.Hash(),
+			HashMerkleRoot: coinbase.TxIDChainHash(),
+			Bits:           genesis.Header.Bits,
+		},
+		CoinbaseTx:       coinbase,
+		TransactionCount: 1,
+		Height:           1,
+	}
+
+	block1Record, err := blockToIndexBytes(t, block1, block1.Header.Hash())
+	require.NoError(t, err)
+
+	headers, err := os.ReadFile(writeUtxoHeadersFile(t, 1, genesisRecord, block1Record))
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(filepath.Join(dir, compressedTestHash+".utxo-headers"), headers, 0o600))
 
@@ -469,7 +575,14 @@ func TestSeeder_SkipUTXOs_DoesNotLookForTheUTXOSet(t *testing.T) {
 		require.NoError(t, os.WriteFile(filepath.Join(dir, name), nil, 0o600))
 	}
 
-	require.NoError(t, Seeder(ulogger.TestLogger{}, forceSeederSettings(t), dir, compressedTestHash, false /* skipHeaders */, true /* skipUTXOs */, false /* force */, false /* recoverCheckpoint */, false /* skipChecksum */))
+	require.NoError(t, Seeder(ulogger.TestLogger{}, tSettings, dir, compressedTestHash, false /* skipHeaders */, true /* skipUTXOs */, false /* force */, false /* recoverCheckpoint */, false /* skipChecksum */))
+
+	chain, err := blockchain.NewStore(ulogger.TestLogger{}, chainURL, tSettings)
+	require.NoError(t, err)
+
+	stored, err := chain.GetBlockByID(ctx, 1)
+	require.NoError(t, err)
+	require.Equal(t, block1.Header.Hash().String(), stored.Header.Hash().String())
 }
 
 // Through Seeder: a compressed set's sidecar is checked in the import pass, so

@@ -34,8 +34,9 @@ set through the hash instead.
 If reading the set fails part-way, for a checksum mismatch or a damaged or
 missing piece, the records read by then may already be in the UTXO store. The
 seeder skips a transaction that already exists, so a re-run would keep them:
-wipe the UTXO store before seeding again. A missing or cut piece always fails
-the seed, through the footer counts or the zstd decoder. A changed byte inside a
+wipe the UTXO store before seeding again. A missing or cut piece that removes
+bytes from the stream fails the seed, through the footer counts or the zstd
+decoder. A changed byte inside a
 piece is caught by zstd's frame checksum when the pieces carry one (the `zstd`
 command writes it by default) and by the sidecar's SHA-256; without either it
 can go unnoticed.

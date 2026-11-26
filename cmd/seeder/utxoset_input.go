@@ -225,15 +225,16 @@ func (s *utxoSetStream) verify(expected, path string) error {
 
 // verifyUTXOSetFile reads the whole UTXO set at path through the hash and
 // checks it against expected, for a run that uses the set without importing
-// it. An empty expected checks nothing. It stops when ctx is cancelled.
-func verifyUTXOSetFile(ctx context.Context, path, expected string) error {
+// it, and returns the tip read from the verified bytes. An empty expected
+// checks nothing and returns no tip. It stops when ctx is cancelled.
+func verifyUTXOSetFile(ctx context.Context, path, expected string) (*utxoSetTip, error) {
 	if expected == "" {
-		return nil
+		return nil, nil
 	}
 
-	s, err := openUTXOSetStream(path, true)
+	s, hash, height, err := openUTXOSetFile(path, true)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	defer func() {
@@ -244,7 +245,7 @@ func verifyUTXOSetFile(ctx context.Context, path, expected string) error {
 
 	for {
 		if err = ctx.Err(); err != nil {
-			return errors.NewProcessingError("checksum verification of %s cancelled", path, err)
+			return nil, errors.NewProcessingError("checksum verification of %s cancelled", path, err)
 		}
 
 		if _, err = s.reader.Read(buf); err == io.EOF {
@@ -252,9 +253,13 @@ func verifyUTXOSetFile(ctx context.Context, path, expected string) error {
 		}
 
 		if err != nil {
-			return errors.NewStorageError("failed to read %s for checksum verification", path, err)
+			return nil, errors.NewStorageError("failed to read %s for checksum verification", path, err)
 		}
 	}
 
-	return s.verify(expected, path)
+	if err = s.verify(expected, path); err != nil {
+		return nil, err
+	}
+
+	return &utxoSetTip{hash: hash, height: height}, nil
 }

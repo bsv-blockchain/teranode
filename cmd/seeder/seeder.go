@@ -523,12 +523,23 @@ func processUTXOs(ctx context.Context, logger ulogger.Logger, appSettings *setti
 
 		logger.Infof("lastProcessed.dat matches %s and no BlockAssembler checkpoint was found; recovering the checkpoint without re-importing", utxoFile)
 
-		// The tip comes from this file, so a compressed one is verified first.
-		if err = verifyUTXOSetFile(ctx, utxoFile, expectedSHA256); err != nil {
+		if expectedSHA256 == "" {
+			return readUTXOSetTip(utxoFile)
+		}
+
+		// A compressed set is verified, and the checkpoint takes its tip from
+		// the bytes that were verified, matched again against the tip record.
+		var tip *utxoSetTip
+
+		if tip, err = verifyUTXOSetFile(ctx, utxoFile, expectedSHA256); err != nil {
 			return nil, err
 		}
 
-		return readUTXOSetTip(utxoFile)
+		if matches, matchErr := importedTipMatches(ctx, logger, blockStore, tip, utxoFile); matchErr != nil || !matches {
+			return nil, errors.NewProcessingError("-recover-checkpoint refused: the verified %s is not the snapshot the block store records as imported", utxoFile, matchErr)
+		}
+
+		return tip, nil
 	case !force:
 		var skip bool
 
@@ -544,7 +555,9 @@ func processUTXOs(ctx context.Context, logger ulogger.Logger, appSettings *setti
 			// still verified, as a plain one was before this point.
 			logger.Errorf("lastProcessed.dat exists, skipping UTXOs")
 
-			return nil, verifyUTXOSetFile(ctx, utxoFile, expectedSHA256)
+			_, err = verifyUTXOSetFile(ctx, utxoFile, expectedSHA256)
+
+			return nil, err
 		}
 	}
 
@@ -640,6 +653,7 @@ func processUTXOs(ctx context.Context, logger ulogger.Logger, appSettings *setti
 		skipStore:              gocore.Config().GetBool("skipStore", false),
 		coinbaseTxs:            coinbaseTxs,
 		expectedSHA256:         expectedSHA256,
+		tip:                    tip,
 	}
 
 	// A re-import invalidates everything the previous import left vouching for
@@ -856,7 +870,8 @@ type importOptions struct {
 	utxoBatchSize          int // store outputs-per-record limit; <= 0 imports in one pass
 	skipStore              bool
 	coinbaseTxs            map[chainhash.Hash]*bt.Tx
-	expectedSHA256         string // hex SHA-256 of the uncompressed set; "" skips the check
+	expectedSHA256         string      // hex SHA-256 of the uncompressed set; "" skips the check
+	tip                    *utxoSetTip // the tip the seed records; each pass must read the same one
 }
 
 // importUTXOSet imports every record of the .utxo-set file at utxoFile into
@@ -895,7 +910,7 @@ func importUTXOSet(ctx context.Context, logger ulogger.Logger, store utxo.Store,
 
 	startPass := func(name string, workerCount int, accept func(maxIndex uint32) bool) {
 		g.Go(func() error {
-			s, _, _, err := openUTXOSetFile(utxoFile, verify)
+			s, hash, height, err := openUTXOSetFile(utxoFile, verify)
 			if err != nil {
 				return err
 			}
@@ -903,6 +918,12 @@ func importUTXOSet(ctx context.Context, logger ulogger.Logger, store utxo.Store,
 			defer func() {
 				_ = s.Close()
 			}()
+
+			// The markers and the checkpoint record opts.tip, read in an earlier
+			// opening, so the bytes this pass imports and verifies must be for it.
+			if opts.tip != nil && (hash != opts.tip.hash || height != opts.tip.height) {
+				return errors.NewProcessingError("the UTXO set %s changed while the seed was reading it: the %s pass read tip %s at height %d, the seed started with %s at height %d", utxoFile, name, hash.String(), height, opts.tip.hash.String(), opts.tip.height)
+			}
 
 			logger.Infof("[%s pass] starting %d workers, channel size %d", name, workerCount, opts.channelSize)
 
