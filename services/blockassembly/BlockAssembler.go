@@ -222,6 +222,9 @@ type BlockAssembler struct {
 	// resetCh handles reset requests for the assembler
 	resetCh chan resetRequest
 
+	// miningSubmissionMu orders a mined block's AddBlock against a deep reorg halt.
+	miningSubmissionMu sync.Mutex
+
 	// diskTxMapDegraded is set when a storage-triggered reset (see
 	// resetRequest.StorageTriggered) still hit a disk tx map storage error
 	// itself: the disk fault is one a fresh rotation can't cure, so further

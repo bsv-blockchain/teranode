@@ -18,7 +18,9 @@ import (
 	"github.com/bsv-blockchain/teranode/services/blockassembly/subtreeprocessor"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/settings"
+	"github.com/bsv-blockchain/teranode/stores/blob"
 	"github.com/bsv-blockchain/teranode/stores/blob/memory"
+	"github.com/bsv-blockchain/teranode/stores/blob/options"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/lane"
 	"github.com/bsv-blockchain/teranode/util/test"
@@ -28,6 +30,52 @@ import (
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc/status"
 )
+
+type miningSubmissionGateStore struct {
+	blob.Store
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (s *miningSubmissionGateStore) Set(ctx context.Context, key []byte, fileType fileformat.FileType, value []byte, opts ...options.FileOption) error {
+	close(s.entered)
+	<-s.release
+	return s.Store.Set(ctx, key, fileType, value, opts...)
+}
+
+func TestSubmitMiningSolution_DeepReorgHaltBeforeAddBlock(t *testing.T) {
+	initPrometheusMetrics()
+	h := newCandidateCoinbaseHarness(t)
+	h.server.blockAssembler.blockchainClient = h.store
+	issued := h.issue(t)
+	version := uint32(0x20000004)
+	nonce := mine(t, issued, version)
+	gate := &miningSubmissionGateStore{Store: memory.New(), entered: make(chan struct{}), release: make(chan struct{})}
+	h.server.txStore = gate
+	result := make(chan error, 1)
+	go func() {
+		_, err := h.server.submitMiningSolution(t.Context(), &BlockSubmissionRequest{
+			SubmitMiningSolutionRequest: &blockassembly_api.SubmitMiningSolutionRequest{Id: issued.Id, Nonce: nonce, Version: &version},
+		})
+		result <- err
+	}()
+	select {
+	case <-gate.entered:
+	case <-time.After(10 * time.Second):
+		t.Fatal("mining solution did not reach the block submission sink")
+	}
+	require.Error(t, h.server.blockAssembler.haltForDeepReorg(t.Context(), h.tip, h.candidate.Height, 20, 0))
+	close(gate.release)
+	select {
+	case err := <-result:
+		require.True(t, errors.Is(err, errors.ErrServiceUnavailable), "submission after halt: %v", err)
+	case <-time.After(10 * time.Second):
+		t.Fatal("mining solution did not finish")
+	}
+	best, _, err := h.store.GetBestBlockHeader(t.Context())
+	require.NoError(t, err)
+	require.Equal(t, h.tip.Hash(), best.Hash())
+}
 
 func Test_storeSubtreeData(t *testing.T) {
 	t.Run("Test storeSubtreeData", func(t *testing.T) {

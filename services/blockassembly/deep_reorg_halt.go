@@ -138,7 +138,9 @@ func (b *BlockAssembler) deepReorgHaltedError() error {
 func (b *BlockAssembler) haltForDeepReorg(ctx context.Context, target *model.BlockHeader, height uint32, moveBack, moveForward int) error {
 	h := &deepReorgHalt{target: *target.Hash(), height: height, moveBack: uint32(moveBack)} //nolint:gosec // a block count
 
+	b.miningSubmissionMu.Lock()
 	b.deepReorgHalt.Store(h)
+	b.miningSubmissionMu.Unlock()
 	prometheusBlockAssemblyDeepReorgHalted.Set(1)
 
 	b.logger.Errorf("[BlockAssembler] MANUAL INTERVENTION REQUIRED: %s (moving forward %d blocks)", b.deepReorgHaltMessage(), moveForward)

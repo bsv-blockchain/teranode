@@ -2570,7 +2570,16 @@ func (ba *BlockAssembly) submitMiningSolution(ctx context.Context, req *BlockSub
 		addBlockOpts = append(addBlockOpts, blockchainoptions.WithOwnBlockLaneMapRows(laneRows))
 	}
 
-	if err = ba.blockchainClient.AddBlock(callerCtx, block, "", addBlockOpts...); err != nil {
+	// The halt transition and AddBlock share this lock: a submission already adding a block
+	// finishes before the halt begins; one still being prepared is refused here.
+	ba.blockAssembler.miningSubmissionMu.Lock()
+	if ba.blockAssembler.DeepReorgHalted() {
+		ba.blockAssembler.miningSubmissionMu.Unlock()
+		return nil, ba.blockAssembler.deepReorgHaltedError()
+	}
+	err = ba.blockchainClient.AddBlock(callerCtx, block, "", addBlockOpts...)
+	ba.blockAssembler.miningSubmissionMu.Unlock()
+	if err != nil {
 		return nil, errors.NewProcessingError("[BlockAssembly][%s][%s] failed to add block", jobID, block.Hash().String(), err)
 	}
 
