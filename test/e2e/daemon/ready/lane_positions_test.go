@@ -2,6 +2,7 @@ package smoke
 
 import (
 	"net/url"
+	"slices"
 	"testing"
 	"time"
 
@@ -21,8 +22,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// laneReaderAnswers is teranode_lane_reader_answers_total for one reader, over every kind and via.
-func laneReaderAnswers(t *testing.T, reader string) float64 {
+// laneReaderAnswers is teranode_lane_reader_answers_total for one reader, over every via and the
+// given kinds, or every kind when none is given.
+func laneReaderAnswers(t *testing.T, reader string, kinds ...string) float64 {
 	t.Helper()
 
 	families, err := prometheus.DefaultGatherer.Gather()
@@ -36,10 +38,13 @@ func laneReaderAnswers(t *testing.T, reader string) float64 {
 		}
 
 		for _, m := range f.GetMetric() {
+			labels := map[string]string{}
 			for _, l := range m.GetLabel() {
-				if l.GetName() == "reader" && l.GetValue() == reader {
-					sum += m.GetCounter().GetValue()
-				}
+				labels[l.GetName()] = l.GetValue()
+			}
+
+			if labels["reader"] == reader && (len(kinds) == 0 || slices.Contains(kinds, labels["kind"])) {
+				sum += m.GetCounter().GetValue()
 			}
 		}
 	}
@@ -154,6 +159,8 @@ func runLanePositionsScenario(t *testing.T, td *daemon.TestDaemon, restart func(
 	}, 10*time.Second, 50*time.Millisecond)
 
 	validatorAnswers := laneReaderAnswers(t, lanereader.ReaderValidator)
+	validatorCoinbases := laneReaderAnswers(t, lanereader.ReaderValidator, lanereader.KindCoinbase)
+	validatorDisagreements := laneReaderAnswers(t, lanereader.ReaderValidator, lanereader.KindTodayOnly, lanereader.KindLanesOnly, lanereader.KindDifferentBlock)
 
 	// The node validates tx0 and its validator stamps it.
 	tx0 := td.CreateTransactionWithOptions(t,
@@ -172,6 +179,11 @@ func runLanePositionsScenario(t *testing.T, td *daemon.TestDaemon, restart func(
 
 	// Its parent check was answered from the lane index too, beside the store's answer, and counted.
 	require.Greater(t, laneReaderAnswers(t, lanereader.ReaderValidator), validatorAnswers)
+
+	// tx0's parent is block1's coinbase, which holds a lane position no block row holds: it counts
+	// coinbase, not a disagreement.
+	require.Greater(t, laneReaderAnswers(t, lanereader.ReaderValidator, lanereader.KindCoinbase), validatorCoinbases)
+	require.Equal(t, validatorDisagreements, laneReaderAnswers(t, lanereader.ReaderValidator, lanereader.KindTodayOnly, lanereader.KindLanesOnly, lanereader.KindDifferentBlock))
 
 	firstLane, firstPos := lane.Unpack(first)
 	t.Logf("tx0 %s: lane %d position %d", tx0.TxIDChainHash(), firstLane, firstPos)

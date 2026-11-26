@@ -607,6 +607,11 @@ type ParentOutput struct {
 	// call. Zero means the store did not read it or holds none: a store reads it only with lane
 	// positions on (utxostore_laneMigration shadow), and a parent created before that has none.
 	LanePosition uint64
+	// IsCoinbase is whether the parent is a coinbase, read in the same call, for the lanes shadow
+	// only. Like LanePosition it is filled only with lane positions on, by the stores that give
+	// positions (utxoset, Aerospike), and is false otherwise, so it must not decide anything such
+	// as coinbase maturity.
+	IsCoinbase bool
 	// Err is set when this outpoint could not be answered; Status is then Unknown.
 	Err error
 }
