@@ -77,6 +77,8 @@ const (
 // continues the hand-out below it, the spare's row is deleted in the same transaction and the grant
 // continues that hand-out (givesBack). The holder never took a position from the spare, so no record
 // carries one, and rows stay in order of first by time, which LaneCapGrants relies on.
+// Any settles pair the spare carried is first copied to lane_settlement, with its original lease
+// and acknowledgement time, so deleting the spare cannot erase another grant's final number.
 //
 // Not every hand-out is settled. A grant nobody used gets no settles pair: the spare held at a
 // release, a grant the holder refused, and a grant whose reply was lost. A lost reply happens when
@@ -455,6 +457,14 @@ func (s *SQL) recordGrant(ctx context.Context, tx *sql.Tx, id lane.LeaseID, l ui
 
 	switch {
 	case back:
+		if _, err = tx.ExecContext(ctx, `
+			INSERT INTO lane_settlement (lane, settles_first, settles_last_taken, lease_id, settled_at)
+			SELECT lane, settles_first, settles_last_taken, lease_id, handed_at FROM lane_handout
+			WHERE lane = $1 AND first = $2 AND settles_first IS NOT NULL
+			ON CONFLICT (lane, settles_first, settles_last_taken) DO NOTHING`, int(l), lane.ToSigned(st.first)); err != nil {
+			return lane.Grant{}, errors.NewStorageError("could not preserve the lane hand-out's settles pair", err)
+		}
+
 		if _, err = tx.ExecContext(ctx, `DELETE FROM lane_handout WHERE lane = $1 AND first = $2`, int(l), lane.ToSigned(st.first)); err != nil {
 			return lane.Grant{}, errors.NewStorageError("could not drop the lane hand-out given back", err)
 		}

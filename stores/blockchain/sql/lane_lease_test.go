@@ -243,6 +243,78 @@ func TestRenewLaneLeaseRecordsTheSettlesPairOnTheNextHandoutRow(t *testing.T) {
 			`SELECT settles_first, settles_last_taken FROM lane_handout WHERE lane = $1 AND first = $2`, int(g2.Lane), int64(g2.First)).Scan(&first, &lastTaken)) //nolint:gosec // test positions are small
 		require.False(t, first.Valid, "a grant asked for with nothing to settle carries no pair")
 	})
+
+	runLaneHandoutTests(t, "settles survive spare give-back and release", func(t *testing.T, s *SQL) {
+		id, a, _, err := s.OpenLaneLease(t.Context(), leaseOpen("a"))
+		require.NoError(t, err)
+
+		r := leaseRenew(id, a)
+		r.WantGrant = true
+		b, _, _, err := s.RenewLaneLease(t.Context(), r)
+		require.NoError(t, err)
+
+		// A's top position came back unwritten before B was promoted.
+		r.Settles = lane.Settles{First: a.First, LastTaken: a.Last - 1}
+		spare, _, _, err := s.RenewLaneLease(t.Context(), r)
+		require.NoError(t, err)
+		_, err = s.db.ExecContext(t.Context(), `UPDATE lane_handout SET handed_at = '2026-01-02 03:04:05' WHERE lane = $1 AND first = $2`,
+			int(a.Lane), lane.ToSigned(spare.First))
+		require.NoError(t, err)
+		var acknowledgedAt time.Time
+		require.NoError(t, s.db.QueryRowContext(t.Context(), `SELECT handed_at FROM lane_handout WHERE lane = $1 AND first = $2`,
+			int(a.Lane), lane.ToSigned(spare.First)).Scan(&acknowledgedAt))
+		require.Equal(t, 1, countRows(t, s, `SELECT COUNT(*) FROM lane_handout
+			WHERE lane = $1 AND settles_first = $2 AND settles_last_taken = $3`,
+			int(a.Lane), lane.ToSigned(a.First), lane.ToSigned(a.Last-1)))
+
+		r.Settles, r.GiveBack = lane.Settles{First: b.First, LastTaken: b.First + 500}, spare.First
+		// If preserving the older pair fails, the spare and its pair must remain intact.
+		_, err = s.db.ExecContext(t.Context(), `ALTER TABLE lane_settlement RENAME TO lane_settlement_unavailable`)
+		require.NoError(t, err)
+		_, _, _, err = s.RenewLaneLease(t.Context(), r)
+		require.Error(t, err)
+		require.Equal(t, 3, countRows(t, s, `SELECT COUNT(*) FROM lane_handout WHERE lane = $1`, int(a.Lane)))
+		require.Equal(t, 1, countRows(t, s, `SELECT COUNT(*) FROM lane_handout
+			WHERE lane = $1 AND first = $2 AND settles_first = $3 AND settles_last_taken = $4`,
+			int(a.Lane), lane.ToSigned(spare.First), lane.ToSigned(a.First), lane.ToSigned(a.Last-1)))
+		_, err = s.db.ExecContext(t.Context(), `ALTER TABLE lane_settlement_unavailable RENAME TO lane_settlement`)
+		require.NoError(t, err)
+
+		continued, granted, closed, err := s.RenewLaneLease(t.Context(), r)
+		require.NoError(t, err)
+		require.True(t, granted)
+		require.False(t, closed)
+		require.Equal(t, b.First+501, continued.First)
+		require.Zero(t, countRows(t, s, `SELECT COUNT(*) FROM lane_handout WHERE lane = $1 AND first = $2`,
+			int(a.Lane), lane.ToSigned(spare.First)), "the unused spare is still reclaimed")
+
+		checkPairs := func() {
+			t.Helper()
+			for _, pair := range []lane.Settles{{First: a.First, LastTaken: a.Last - 1}, r.Settles} {
+				require.Equal(t, 1, countRows(t, s, `SELECT COUNT(*) FROM (
+					SELECT lane, lease_id, settles_first, settles_last_taken FROM lane_handout
+					UNION ALL
+					SELECT lane, lease_id, settles_first, settles_last_taken FROM lane_settlement
+				) pairs WHERE lane = $1 AND lease_id = $2 AND settles_first = $3 AND settles_last_taken = $4`,
+					int(a.Lane), s.leaseParam(id), lane.ToSigned(pair.First), lane.ToSigned(pair.LastTaken)),
+					"each acknowledged pair survives, including the exact last taken position")
+			}
+		}
+		checkPairs()
+		var settledAt time.Time
+		require.NoError(t, s.db.QueryRowContext(t.Context(), `SELECT settled_at FROM lane_settlement WHERE lane = $1 AND settles_first = $2`,
+			int(a.Lane), lane.ToSigned(a.First)).Scan(&settledAt))
+		require.True(t, settledAt.Equal(acknowledgedAt), "the archived pair keeps its acknowledgement time")
+
+		alreadyClosed, err := s.ReleaseLaneLease(t.Context(), options.LaneLeaseRelease{
+			Lease: id, Lane: a.Lane, LastTaken: continued.First,
+			Settles: lane.Settles{First: continued.First, LastTaken: continued.First},
+		})
+		require.NoError(t, err)
+		require.False(t, alreadyClosed)
+		checkPairs()
+		checkLaneInvariants(t, s)
+	})
 }
 
 // A grant request whose settles pair settles the lane's newest hand-out, its own lease's, starts
@@ -748,6 +820,7 @@ func TestLaneLeaseDDLIsANoOpOnACurrentSchema(t *testing.T) {
 	for _, stmt := range []string{
 		`DROP TABLE lane_lease`,
 		`DROP TABLE lane_close`,
+		`DROP TABLE lane_settlement`,
 		`ALTER TABLE lane_handout DROP COLUMN lease_id`,
 		`ALTER TABLE lane_handout DROP COLUMN settles_first`,
 		`ALTER TABLE lane_handout DROP COLUMN settles_last_taken`,
@@ -762,7 +835,7 @@ func TestLaneLeaseDDLIsANoOpOnACurrentSchema(t *testing.T) {
 	require.NoError(t, db.QueryRow(`SELECT COUNT(*) FROM information_schema.columns WHERE table_name = 'lane_handout' AND column_name IN ('lease_id', 'settles_first', 'settles_last_taken')`).Scan(&n))
 	require.Equal(t, 3, n)
 
-	for _, table := range []string{"lane_lease", "lane_close"} {
+	for _, table := range []string{"lane_lease", "lane_close", "lane_settlement"} {
 		var exists bool
 		require.NoError(t, db.QueryRow(`SELECT to_regclass($1) IS NOT NULL`, table).Scan(&exists))
 		require.True(t, exists, table)
