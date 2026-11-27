@@ -20,7 +20,7 @@ import (
 // Issue 2269, plan PR 0: every phase of a fork reorg and of a reset gets a wall time, as a log line
 // and a histogram observation, so the scaling run shows where a long reorg spends its time.
 
-// phaseLogger records Infof lines; everything else is dropped as by TestLogger.
+// phaseLogger records Infof and Debugf lines; everything else is dropped as by TestLogger.
 type phaseLogger struct {
 	ulogger.TestLogger
 
@@ -33,6 +33,10 @@ func (l *phaseLogger) Infof(format string, args ...interface{}) {
 	defer l.mu.Unlock()
 
 	l.lines = append(l.lines, fmt.Sprintf(format, args...))
+}
+
+func (l *phaseLogger) Debugf(format string, args ...interface{}) {
+	l.Infof(format, args...)
 }
 
 var phaseLine = regexp.MustCompile(`^\[(\w+)\] phase (\w+) took `)
@@ -102,13 +106,24 @@ func TestPhaseTimer_LogsAndObservesEachPhase(t *testing.T) {
 	p.count("pending", 42)
 	p.done("alpha")
 	p.done("beta")
-	p.finish()
+	p.finish(false)
 
-	require.Equal(t, []string{"alpha", "beta", "after_last_phase"}, logger.phases("unittest"),
-		"finish records the time after the last phase: on a failure that is the phase that failed")
+	require.Equal(t, []string{"alpha", "beta"}, logger.phases("unittest"), "a success records no tail phase")
 	require.Contains(t, logger.lines, "[unittest] phase alpha took 1s")
-	require.Equal(t, "[unittest] phases total=3s pending=42 alpha=1s beta=1s after_last_phase=1s", logger.summary("unittest"))
+	require.Equal(t, "[unittest] phases total=2s pending=42 alpha=1s beta=1s", logger.summary("unittest"))
 	require.Equal(t, before+1, phaseSampleCount(t, "unittest", "alpha"))
+}
+
+func TestPhaseTimer_FailureRecordsTheTimeAfterTheLastPhase(t *testing.T) {
+	logger := &phaseLogger{}
+
+	p := newPhaseTimer("unittest", logger, &steppingClock{step: time.Second})
+	p.done("alpha")
+	p.finish(true)
+
+	require.Equal(t, []string{"alpha", "after_last_phase"}, logger.phases("unittest"),
+		"on a failure the time after the last phase is the phase that failed")
+	require.Equal(t, "[unittest] phases total=2s alpha=1s after_last_phase=1s", logger.summary("unittest"))
 }
 
 func TestPhaseTimer_NilIsANoOp(t *testing.T) {
@@ -117,7 +132,7 @@ func TestPhaseTimer_NilIsANoOp(t *testing.T) {
 	require.NotPanics(t, func() {
 		p.count("x", 1)
 		p.done("x")
-		p.finish()
+		p.finish(true)
 	})
 }
 
@@ -144,7 +159,7 @@ func TestReorgBlocks_LogsEachPhaseOnceInOrder(t *testing.T) {
 		want = append(want, forwardStepPhases...)
 	}
 
-	want = append(want, "mark_sets", "marks", "store_wait", "processed_at", "finalize", "after_last_phase")
+	want = append(want, "mark_sets", "marks", "store_wait", "processed_at", "finalize")
 
 	require.Equal(t, want, logger.phases("reorgBlocks"))
 }
@@ -194,7 +209,6 @@ func TestReset_LogsEachPhaseOnceInOrder(t *testing.T) {
 
 	require.Equal(t, []string{
 		"upfront_reads", "mark_assembly", "clear_and_retire", "move_back", "move_forward", "post_process", "queue_discard",
-		"after_last_phase",
 	}, logger.phases("reset"))
 }
 
@@ -248,7 +262,46 @@ func TestReorgBlocks_FailedReorgRecordsTheFailingPhase(t *testing.T) {
 	require.Error(t, sc.run(t))
 
 	phases := logger.phases("reorgBlocks")
-	require.NotEmpty(t, phases)
-	require.Equal(t, "after_last_phase", phases[len(phases)-1])
+	// The subtrees of every winning block are opened before anything moves, so the reads fail.
+	require.Equal(t, []string{"wait_pending_blocks", "after_last_phase"}, phases)
 	require.NotEmpty(t, logger.summary("reorgBlocks"))
+}
+
+// A reset that fails records the phase it failed in, as a failed fork reorg does.
+func TestReset_FailedResetRecordsTheFailingPhase(t *testing.T) {
+	sc := newReorgScenario(t, smallScenarioConfig())
+
+	sc.stp.subtreeStore = openFailingStore{Memory: sc.blobStore, key: *sc.forward[0].Subtrees[0]}
+
+	logger := &phaseLogger{}
+	sc.stp.logger = logger
+
+	require.Error(t, sc.stp.reset(sc.genesis, []*model.Block{sc.lost}, sc.forward, false, func() error { return nil }))
+
+	// The moveForward subtree check is part of the reads, which never complete.
+	require.Equal(t, []string{"after_last_phase"}, logger.phases("reset"))
+	require.Contains(t, logger.summary("reset"), " pending=2000 ")
+}
+
+// The summary's counts are what a slow reorg is read against, so each one is pinned.
+func TestReorgBlocks_SummaryCarriesTheQueueAndRemainderCounts(t *testing.T) {
+	sc := newReorgScenario(t, smallScenarioConfig())
+
+	// Nothing dequeues while the processor is not started, so the queue holds what intake sent.
+	stop := sc.startIntake(100_000)
+	require.Eventually(t, func() bool { return sc.stp.QueueLength() > 0 }, 10*time.Second, 5*time.Millisecond)
+
+	sent := stop()
+
+	logger := &phaseLogger{}
+	sc.stp.logger = logger
+
+	require.NoError(t, sc.run(t))
+
+	summary := logger.summary("reorgBlocks")
+	require.Contains(t, summary, fmt.Sprintf(" queue=%d ", sent))
+	// The head drain took the queue, so a forward step drains only what arrived since.
+	require.Equal(t, len(sc.forward), strings.Count(summary, " drain_queue="), "one drain count per forward step")
+	require.Equal(t, len(sc.forward), strings.Count(summary, " remainder="), "one remainder count per forward step")
+	require.Regexp(t, ` remainder=[1-9]\d* `, summary)
 }
