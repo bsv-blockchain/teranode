@@ -307,6 +307,10 @@ func (g *UnminedTxGate) RefusesAfterCheckpointAnswer(ctx context.Context, txHash
 		// fresh read seen here has its reached answer visible to the next load.
 		fresh := g.readOKNanos.Load() >= began
 
+		if betweenDecisionLoads != nil {
+			betweenDecisionLoads()
+		}
+
 		if g.highestCheckpoint == 0 || g.reached.Load() {
 			return false, nil
 		}
@@ -330,6 +334,11 @@ func (g *UnminedTxGate) RefusesAfterCheckpointAnswer(ctx context.Context, txHash
 		}
 	}
 }
+
+// betweenDecisionLoads, when a test sets it, runs between the freshness load
+// and the reached load in RefusesAfterCheckpointAnswer, so a test can land a
+// height read exactly there. It is nil in production.
+var betweenDecisionLoads func()
 
 // warnReadFailure logs a failed height read at most once per refusal log
 // interval. Without it a node that keeps refusing because the blockchain

@@ -419,6 +419,29 @@ func TestUnminedTxGate_AnswerFixedForTheCall(t *testing.T) {
 	require.False(t, gate.Refuses(context.Background(), nil), "the next call sees it")
 }
 
+// A height read that reaches the checkpoint between the decision's two loads
+// must not make it refuse: freshness is loaded first, reached second.
+func TestUnminedTxGate_ReadLandingInsideTheDecisionAccepts(t *testing.T) {
+	catching, running := FSMStateCATCHINGBLOCKS, FSMStateRUNNING
+	client := &Mock{}
+	t.Cleanup(func() { client.AssertExpectations(t) })
+	// The wait leaves on a syncing FSM; the decision then sees RUNNING.
+	client.On("GetFSMCurrentState", mock.Anything).Return(&catching, nil).Once()
+	client.On("GetFSMCurrentState", mock.Anything).Return(&running, nil)
+
+	gate := NewUnminedTxGate(ulogger.TestLogger{}, client, gateSettings(t, "utxoset"), "test_decision_loads")
+
+	betweenDecisionLoads = func() {
+		gate.reached.Store(true)
+		gate.readOKNanos.Store(gate.sinceStart())
+	}
+	t.Cleanup(func() { betweenDecisionLoads = nil })
+
+	refused, err := gate.RefusesAfterCheckpointAnswer(context.Background(), nil)
+	require.NoError(t, err)
+	require.False(t, refused)
+}
+
 // waitForHeightRead waits until the gate's background height read has finished.
 func waitForHeightRead(t *testing.T, gate *UnminedTxGate) {
 	t.Helper()
