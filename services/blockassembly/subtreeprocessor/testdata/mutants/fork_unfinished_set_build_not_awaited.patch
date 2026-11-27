@@ -1,13 +1,19 @@
 diff --git a/services/blockassembly/subtreeprocessor/prepare_fork_block.go b/services/blockassembly/subtreeprocessor/prepare_fork_block.go
-index 4e88aab4b..69826a84f 100644
+index de135ef35..32538e308 100644
 --- a/services/blockassembly/subtreeprocessor/prepare_fork_block.go
 +++ b/services/blockassembly/subtreeprocessor/prepare_fork_block.go
-@@ -311,7 +311,7 @@ func (stp *SubtreeProcessor) takePreparedForkSet(blocks []*model.Block) (*Sorted
+@@ -363,13 +363,13 @@ func (stp *SubtreeProcessor) takePreparedFork(blocks []*model.Block) *forkPrepar
+ 	case <-taken.done:
+ 	default:
+ 		// Still being built: the reorg builds its own on all cores. The build is cancelled and waited
  		// for, which is short because the reads stop with their context, so its partial set is
  		// garbage before the rebuild starts and not a second set alive beside it.
  		taken.cancel()
 -		<-taken.done
 +		_ = taken // mutant: the build is not waited for
  
- 		return nil, nil, false
+ 		return nil
  	}
+ 
+ 	if taken.err != nil || stp.forkStale(taken) {
+ 		return nil
