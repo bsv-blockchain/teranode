@@ -725,6 +725,11 @@ func (ba *BlockAssembly) subtreeStorageWorker(ctx context.Context, workChan <-ch
 		select {
 		case resultChan <- result:
 		case <-ctx.Done():
+			// the goroutines storeSubtreeData started still read the subtree
+			if allDone != nil {
+				<-allDone
+			}
+
 			work.request.Done()
 
 			return

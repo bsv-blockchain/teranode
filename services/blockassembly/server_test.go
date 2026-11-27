@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -2868,5 +2869,79 @@ func TestIngestHandsLanePositionsOnlyAtShadow(t *testing.T) {
 		}
 
 		require.Equal(t, []uint64{0, second, third}, handedPositions(t, true, several))
+	})
+}
+
+// A request the storage worker abandons because its context ended must release its pin exactly
+// once, and only after the storage work that reads the subtree has ended.
+func TestSubtreeStorageWorkerReleasesAnAbandonedRequestAfterItsStoreEnds(t *testing.T) {
+	newRequest := func(t *testing.T, released *atomic.Int32, onStorageComplete func()) subtreeprocessor.NewSubtreeRequest {
+		st, err := subtreepkg.NewTreeByLeafCount(4)
+		require.NoError(t, err)
+		require.NoError(t, st.AddNode(chainhash.HashH([]byte("abandoned-request-tx")), 1, 1))
+
+		return subtreeprocessor.NewSubtreeRequest{
+			Subtree:           st,
+			OnStorageComplete: onStorageComplete,
+			Release:           func() { released.Add(1) },
+		}
+	}
+
+	t.Run("cancelled before the worker takes it", func(t *testing.T) {
+		ba, _ := setupServer(t)
+
+		ctx, cancel := context.WithCancel(t.Context())
+		cancel()
+
+		var released atomic.Int32
+
+		workChan := make(chan *subtreeStorageWork, 1)
+		workChan <- &subtreeStorageWork{request: newRequest(t, &released, nil)}
+		close(workChan)
+
+		ba.subtreeStorageWorker(ctx, workChan, make(chan *subtreeRetrySend, 1), make(chan *subtreeStorageResult))
+
+		require.Equal(t, int32(1), released.Load())
+	})
+
+	t.Run("cancelled while its result waits for the notifier", func(t *testing.T) {
+		ba, _ := setupServer(t)
+
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+
+		var released atomic.Int32
+
+		entered, finish := make(chan struct{}), make(chan struct{})
+
+		// runs after the store, as part of the work the subtree is read by: it ends the context,
+		// so the worker abandons the result, and stays busy until finish
+		request := newRequest(t, &released, func() {
+			cancel()
+			close(entered)
+			<-finish
+		})
+
+		workChan := make(chan *subtreeStorageWork, 1)
+		workChan <- &subtreeStorageWork{request: request}
+		close(workChan)
+
+		workerDone := make(chan struct{})
+
+		go func() {
+			defer close(workerDone)
+
+			ba.subtreeStorageWorker(ctx, workChan, make(chan *subtreeRetrySend, 1), make(chan *subtreeStorageResult))
+		}()
+
+		<-entered
+
+		require.Never(t, func() bool { return released.Load() > 0 }, 200*time.Millisecond, 20*time.Millisecond,
+			"the request was released while the storage work still reads its subtree")
+
+		close(finish)
+		<-workerDone
+
+		require.Equal(t, int32(1), released.Load())
 	})
 }
