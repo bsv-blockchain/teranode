@@ -3,6 +3,7 @@ package subtreeprocessor
 import (
 	"cmp"
 	"context"
+	"fmt"
 	"math/rand"
 	"slices"
 	"testing"
@@ -354,4 +355,65 @@ func FuzzReorgDelta(f *testing.F) {
 		stp, store := newTxMapTestProcessor(t)
 		requireDeltaMatchesReference(t, stp, newDeltaBlocks(t, store, c), 1+int(subtrees)%4)
 	})
+}
+
+// BenchmarkReorgDelta times computeReorgDelta for a lost block of 1M nodes against a winner
+// set of 2M hashes (two forward blocks), at 50% and 99% of the lost nodes in the winners. The
+// subtrees are real files in the memory blob store and are read and parsed in every
+// iteration; the set is built once, outside the timer.
+func BenchmarkReorgDelta(b *testing.B) {
+	overlaps := []float64{0.5, 0.99}
+	if testing.Short() {
+		overlaps = overlaps[:1]
+	}
+
+	for _, overlap := range overlaps {
+		// the benchmark function runs again for every b.N the framework tries: build once
+		var (
+			stp       *SubtreeProcessor
+			d         *deltaBlocks
+			winners   *SortedHashSet
+			lostNodes int
+		)
+
+		b.Run(fmt.Sprintf("lost=1M/winners=2M/overlap=%.0f%%", overlap*100), func(b *testing.B) {
+			if stp == nil {
+				var store *blob_memory.Memory
+
+				stp, store = newTxMapTestProcessor(b)
+				d = newDeltaBlocks(b, store, deltaCase{
+					lostBlocks: 1, winBlocks: 2, subtrees: 16, subtreeSize: 1 << 16,
+					overlap: overlap, seed: 2269,
+				})
+
+				var err error
+
+				winners, err = stp.buildUnionSet(context.Background(), d.winners)
+				require.NoError(b, err)
+
+				for _, st := range d.lostLeaves[0] {
+					lostNodes += len(st)
+				}
+			}
+
+			ctx := context.Background()
+			workers := stp.settings.BlockAssembly.SubtreeProcessorConcurrentReads
+
+			b.ResetTimer()
+
+			for i := 0; i < b.N; i++ {
+				delta, err := stp.computeReorgDelta(ctx, d.lost, winners, workers)
+				if err != nil {
+					b.Fatal(err)
+				}
+
+				if delta.Hits == 0 {
+					b.Fatal("no hits")
+				}
+			}
+
+			b.StopTimer()
+			b.ReportMetric(float64(lostNodes)*float64(b.N)/b.Elapsed().Seconds(), "nodes/s")
+		})
+	}
 }

@@ -2,6 +2,7 @@ package subtreeprocessor
 
 import (
 	"encoding/binary"
+	"fmt"
 	"math"
 	"math/rand"
 	"os"
@@ -555,4 +556,53 @@ func TestSortedHashSet_FindEmptyAndUnfrozen(t *testing.T) {
 	require.Panics(t, func() { open.Find(chainhash.Hash{1}) })
 	require.Panics(t, func() { open.Positions() })
 	require.Panics(t, func() { open.IterPositions(1, func(int, uint64, *chainhash.Hash) {}) })
+}
+
+// BenchmarkReorgSortedHashSetFind times the position-returning lookup of the reorg delta
+// on a frozen set, probing members in random order, which is what the delta does for the
+// nodes both sides have. The set is in process memory and the probes are one goroutine's,
+// so this is the cost of one probe with a warm directory; a real 1.2B-hash set misses
+// the TLB and the cache far more (design section 4.4).
+func BenchmarkReorgSortedHashSetFind(b *testing.B) {
+	sizes := []int{1 << 20, 1 << 22}
+	if testing.Short() {
+		sizes = sizes[:1] // CI runs these with -short and a budget for the whole filter
+	}
+
+	for _, n := range sizes {
+		// the benchmark function runs again for every b.N the framework tries: build once
+		var (
+			hashes []chainhash.Hash
+			set    *SortedHashSet
+		)
+
+		b.Run(fmt.Sprintf("n=%dM", n>>20), func(b *testing.B) {
+			if set == nil {
+				hashes = randHashes(n, 5)
+				set = buildSet(b, hashes, n, 4)
+
+				rand.New(rand.NewSource(6)).Shuffle(len(hashes), func(i, j int) { hashes[i], hashes[j] = hashes[j], hashes[i] }) //nolint:gosec // deterministic benchmark data
+			}
+
+			var sum uint64
+
+			b.ResetTimer()
+
+			for i := 0; i < b.N; i++ {
+				pos, ok := set.Find(hashes[i%n])
+				if !ok {
+					b.Fatal("member not found")
+				}
+
+				sum += pos
+			}
+
+			b.StopTimer()
+			b.ReportMetric(float64(b.N)/b.Elapsed().Seconds(), "probes/s")
+
+			if sum == 0 && b.N > 1 {
+				b.Fatal("positions all zero")
+			}
+		})
+	}
 }
