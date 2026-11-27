@@ -627,9 +627,59 @@ func TestStoredSet_WithoutAMetaOnlyTheSubtreeIsNeeded(t *testing.T) {
 	require.True(t, set.Has(*subtree.RootHash()))
 }
 
+// The processor's stall rule leaves a root alone while its write is in the retry processor, and
+// only the store side can tell it so: the count must be up while the retried write is held.
+func TestStoredSet_ARootIsRetryingWhileItsRetriedWriteIsHeld(t *testing.T) {
+	for _, fileType := range []fileformat.FileType{fileformat.FileTypeSubtree, fileformat.FileTypeSubtreeMeta} {
+		t.Run(fileType.String(), func(t *testing.T) {
+			server, set := storedSetServer(t)
+			subtree, txMap := makeSubtree(t, 107)
+			root := *subtree.RootHash()
+
+			// the first write is held, then fails; the retry meets a second rule that holds it too
+			fail, failEntered := make(chan struct{}), make(chan struct{}, 1)
+			fault := blobfault.New(server.subtreeStore)
+			fault.OnSet(root[:], fileType, blobfault.Rule{FailTimes: 1, Block: fail, Entered: failEntered})
+			server.subtreeStore = fault
+
+			p := startStorePipeline(t, server)
+			result := p.store(subtree, txMap, true)
+
+			select {
+			case <-failEntered:
+			case <-time.After(10 * time.Second):
+				t.Fatal("the first write never reached the store")
+			}
+
+			release, entered := make(chan struct{}), make(chan struct{}, 1)
+			fault.OnSet(root[:], fileType, blobfault.Rule{Block: release, Entered: entered})
+			close(fail)
+
+			var releaseOnce sync.Once
+			unblock := func() { releaseOnce.Do(func() { close(release) }) }
+			t.Cleanup(unblock) // a failed assertion must not leave the write held
+
+			select {
+			case <-entered:
+			case <-time.After(10 * time.Second):
+				t.Fatal("the retry never reached the store")
+			}
+
+			require.True(t, set.Retrying(root), "the write is in the retry processor")
+
+			unblock()
+
+			require.True(t, awaitResult(t, result).OK())
+			require.False(t, set.Retrying(root), "the retry settled")
+		})
+	}
+}
+
 // Every way a request settles must leave the retry count where it was, or the progress rule,
 // which waits for no retry in flight, would stay off for good.
 func TestStoredSet_EveryWayARequestSettlesBalancesTheRetryCount(t *testing.T) {
+	initPrometheusMetrics() // fail counts the request; the counter is nil until initialised
+
 	root := chainhash.HashH([]byte("outcome"))
 	boom := errors.NewStorageError("boom")
 
@@ -643,6 +693,7 @@ func TestStoredSet_EveryWayARequestSettlesBalancesTheRetryCount(t *testing.T) {
 		"both retrying":  func(o *subtreeStoreOutcome) { o.toRetry(); o.toRetry(); o.subtreeStored(false); o.metaStored() },
 		"settled twice":  func(o *subtreeStoreOutcome) { o.subtreeStored(false); o.metaStored(); o.fail(boom) },
 		"meta not built": func(o *subtreeStoreOutcome) { o.subtreeStored(false); o.fail(boom) },
+		"retry too late": func(o *subtreeStoreOutcome) { o.subtreeStored(false); o.metaStored(); o.toRetry() },
 	} {
 		t.Run(name, func(t *testing.T) {
 			set := subtreeprocessor.NewStoredSet()
