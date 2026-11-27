@@ -14,11 +14,10 @@ import (
 // failed and their subtrees were stored without the file, leaving their blocks without rows.
 // BitmapsWriteRetry writes the file again while it fails with an error a retry can pass.
 
-// DefaultBitmapsWriteRetryBound is how long a lane bitmaps file write is retried. It is bounded by
-// time, not by attempts, so it covers an outage of a known length: the 13-second Postgres restart
-// four times over, with room for a slower one, such as a shutdown checkpoint on a large database.
-// The subtree file waits for the bitmaps file, so it is also the longest a subtree's storage waits
-// beyond today's single write. It is a small part of the ten minutes between blocks.
+// DefaultBitmapsWriteRetryBound is how long a lane bitmaps file write is retried after its first
+// failure. It is bounded by time, not by attempts, so it covers an outage of a known length: the
+// 13-second Postgres restart four times over, with room for a slower one, such as a shutdown
+// checkpoint on a large database. It is a small part of the ten minutes between blocks.
 const DefaultBitmapsWriteRetryBound = time.Minute
 
 // The backoff between attempts doubles from the first to the cap, so a short blip is retried
@@ -96,14 +95,16 @@ func (r *BitmapsWriteRetry) succeeded() {
 
 // Do runs write, the write of one lane bitmaps file, and runs it again after a backoff while it
 // fails with an error a retry can pass (RetryableBitmapsWriteError) and the outage's bound has not
-// run out. No attempt starts after the bound, but one in flight then is waited for, so a write
-// takes at most the bound plus one attempt. A write ctx ends stops at once. It returns nil once
-// write succeeds, or the error that ended the retries: write's own when it cannot pass on a retry.
+// run out. The bound starts at the first failure. No retry starts after it, and each retry gets a
+// context that ends at it, but an attempt in flight then is waited for wherever its store does not
+// honour that context. A write takes its first attempt, at most the bound, and one attempt in
+// flight when the bound runs out. A write ctx ends stops at once. It returns nil once write
+// succeeds, or the error that ended the retries: write's own when it cannot pass on a retry.
 // Writes retried are counted in teranode_lane_bitmaps_write_retries_total, and writes still
 // failing when the bound ran out in teranode_lane_bitmaps_write_retries_exhausted_total, both by
 // service.
-func (r *BitmapsWriteRetry) Do(ctx context.Context, service string, write func() error) error {
-	err := write()
+func (r *BitmapsWriteRetry) Do(ctx context.Context, service string, write func(ctx context.Context) error) error {
+	err := write(ctx)
 	if err == nil {
 		r.succeeded()
 
@@ -116,6 +117,9 @@ func (r *BitmapsWriteRetry) Do(ctx context.Context, service string, write func()
 
 	deadline := r.failed(time.Now()).Add(r.bound())
 	backoff := r.firstBackoff()
+
+	attemptCtx, cancel := context.WithDeadline(ctx, deadline)
+	defer cancel()
 	retried := false
 
 	for {
@@ -143,7 +147,7 @@ func (r *BitmapsWriteRetry) Do(ctx context.Context, service string, write func()
 			countBitmapsWriteRetried(service)
 		}
 
-		if err = write(); err == nil {
+		if err = write(attemptCtx); err == nil {
 			r.succeeded()
 
 			return nil

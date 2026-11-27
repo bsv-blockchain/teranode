@@ -6,7 +6,9 @@ import (
 	"net"
 	"net/netip"
 	"net/url"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -29,6 +31,7 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
+	utxosql "github.com/bsv-blockchain/teranode/stores/utxo/sql"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/kafka"
 	"github.com/bsv-blockchain/teranode/util/lane"
@@ -611,10 +614,7 @@ func TestStoreSubtreeFiles_ALaneBitmapsFailureDoesNotStopTheSubtree(t *testing.T
 
 			store := &recordingStore{Store: blobmemory.New(), refuseBitmaps: tc.failures, refuseErr: tc.err}
 
-			utxoStore := &utxo.MockUtxostore{}
-			utxoStore.On("GetBlockHeight").Return(uint32(100)).Maybe()
-
-			server := &Server{logger: ulogger.TestLogger{}, settings: test.CreateBaseTestSettings(t), subtreeStore: store, utxoStore: utxoStore}
+			server := &Server{logger: ulogger.TestLogger{}, settings: test.CreateBaseTestSettings(t), subtreeStore: store, utxoStore: laneHeightUtxoStore(t, 100)}
 			server.laneBitmapsRetry.Bound = 200 * time.Millisecond
 			if tc.wantFile {
 				server.laneBitmapsRetry.Bound = 5 * time.Second // a stalled runner cannot end a retry that must succeed
@@ -640,7 +640,10 @@ func TestStoreSubtreeFiles_ALaneBitmapsFailureDoesNotStopTheSubtree(t *testing.T
 			}
 
 			if tc.wantFile {
-				require.Equal(t, []fileformat.FileType{fileformat.FileTypeSubtreeMeta, fileformat.FileTypeSubtreeLaneBitmaps, fileformat.FileTypeSubtree}, types, "the file is written before the subtree file")
+				// the meta and bitmaps writes run side by side; each comes before the subtree file
+				require.Len(t, types, 3)
+				require.Equal(t, fileformat.FileTypeSubtree, types[2], "the subtree file is written last")
+				require.ElementsMatch(t, []fileformat.FileType{fileformat.FileTypeSubtreeMeta, fileformat.FileTypeSubtreeLaneBitmaps}, types[:2])
 			} else {
 				require.NotContains(t, types, fileformat.FileTypeSubtreeLaneBitmaps)
 			}
@@ -669,10 +672,7 @@ func TestStoreSubtreeFiles_AFailedMetaWriteStopsTheBitmapsRetry(t *testing.T) {
 	// the meta write fails only once the bitmaps write has failed, so the retry is under way
 	store := &recordingStore{Store: blobmemory.New(), refuse: fileformat.FileTypeSubtreeMeta, refuseBitmaps: -1, metaAfterBitmaps: make(chan struct{})}
 
-	utxoStore := &utxo.MockUtxostore{}
-	utxoStore.On("GetBlockHeight").Return(uint32(100)).Maybe()
-
-	server := &Server{logger: ulogger.TestLogger{}, settings: test.CreateBaseTestSettings(t), subtreeStore: store, utxoStore: utxoStore}
+	server := &Server{logger: ulogger.TestLogger{}, settings: test.CreateBaseTestSettings(t), subtreeStore: store, utxoStore: laneHeightUtxoStore(t, 100)}
 	server.laneBitmapsRetry.FirstBackoff = 10 * time.Millisecond // the default one-minute bound
 
 	bitmaps := &lane.SubtreeBitmaps{SubtreeHash: *root, Lanes: lane.LaneBitmaps{7: bitmapOfPositions(1)}}
@@ -806,10 +806,7 @@ func TestStoreSubtreeFiles_ADatabaseRestartMidSubtreeKeepsTheLaneBitmapsFile(t *
 	subtreeStore, err := blobfile.New(ulogger.TestLogger{}, storeURL, bloboptions.WithBlobDeletionScheduler(scheduler))
 	require.NoError(t, err)
 
-	utxoStore := &utxo.MockUtxostore{}
-	utxoStore.On("GetBlockHeight").Return(uint32(100)).Maybe()
-
-	server := &Server{logger: ulogger.TestLogger{}, settings: tSettings, subtreeStore: subtreeStore, utxoStore: utxoStore}
+	server := &Server{logger: ulogger.TestLogger{}, settings: tSettings, subtreeStore: subtreeStore, utxoStore: laneHeightUtxoStore(t, 100)}
 
 	st, m := laneBitmapsSubtree(t)
 	root := st.RootHash()
@@ -861,6 +858,85 @@ func TestStoreSubtreeFiles_ADatabaseRestartMidSubtreeKeepsTheLaneBitmapsFile(t *
 	rows, err := lane.BuildBlockRows([]lane.LaneBitmaps{decoded.Lanes})
 	require.NoError(t, err)
 	require.Equal(t, uint64(2), rows.Members, "the rows hold both members")
+}
+
+// laneHeightUtxoStore is a real sqlitememory UTXO store at block height.
+func laneHeightUtxoStore(t *testing.T, height uint32) utxo.Store {
+	t.Helper()
+
+	u, err := url.Parse("sqlitememory:///lane_bitmaps_" + strings.NewReplacer("/", "_", " ", "_").Replace(t.Name()) + fmt.Sprintf("_%d", height))
+	require.NoError(t, err)
+
+	store, err := utxosql.New(t.Context(), ulogger.TestLogger{}, test.CreateBaseTestSettings(t), u)
+	require.NoError(t, err)
+	require.NoError(t, store.SetBlockHeight(height))
+
+	return store
+}
+
+// heightRecordingScheduler keeps the delete-at height last scheduled for each file type, and runs
+// during, once, while refusing the first lane bitmaps schedule.
+type heightRecordingScheduler struct {
+	mu      sync.Mutex
+	heights map[string]uint32
+	during  func()
+	refused atomic.Bool
+}
+
+func (s *heightRecordingScheduler) ScheduleBlobDeletion(_ context.Context, _ []byte, fileType string, _ storetypes.BlobStoreType, deleteAtHeight uint32) (int64, bool, error) {
+	if fileType == string(fileformat.FileTypeSubtreeLaneBitmaps) && s.refused.CompareAndSwap(false, true) {
+		s.during()
+
+		return 0, false, errors.NewStorageError("database restarting")
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.heights[fileType] = deleteAtHeight
+
+	return 1, true, nil
+}
+
+func (s *heightRecordingScheduler) CancelBlobDeletion(context.Context, []byte, string, storetypes.BlobStoreType) (bool, error) {
+	return true, nil
+}
+
+// A validation whose bitmaps write is in its backoff while a second validation of the same subtree,
+// at a later height, stores all its files, leaves the bitmaps file to live as long as the subtree.
+func TestStoreSubtreeFiles_ARetryAfterASecondValidationKeepsTheFileAsLongAsItsSubtree(t *testing.T) {
+	ctx := t.Context()
+	tSettings := test.CreateBaseTestSettings(t)
+
+	st, m := laneBitmapsSubtree(t)
+	root := st.RootHash()
+	bitmaps := &lane.SubtreeBitmaps{SubtreeHash: *root, Lanes: lane.LaneBitmaps{7: bitmapOfPositions(1)}}
+
+	scheduler := &heightRecordingScheduler{heights: map[string]uint32{}}
+
+	storeURL, err := url.Parse("file://" + t.TempDir())
+	require.NoError(t, err)
+
+	subtreeStore, err := blobfile.New(ulogger.TestLogger{}, storeURL, bloboptions.WithBlobDeletionScheduler(scheduler))
+	require.NoError(t, err)
+
+	first := &Server{logger: ulogger.TestLogger{}, settings: tSettings, subtreeStore: subtreeStore, utxoStore: laneHeightUtxoStore(t, 100)}
+	second := &Server{logger: ulogger.TestLogger{}, settings: tSettings, subtreeStore: subtreeStore, utxoStore: laneHeightUtxoStore(t, 102)}
+
+	first.laneBitmapsRetry.FirstBackoff = time.Millisecond
+
+	scheduler.during = func() {
+		require.NoError(t, second.storeSubtreeFiles(ctx, gocore.NewStat("test"), root, st, m, bitmaps))
+	}
+
+	require.NoError(t, first.storeSubtreeFiles(ctx, gocore.NewStat("test"), root, st, m, bitmaps))
+
+	scheduler.mu.Lock()
+	defer scheduler.mu.Unlock()
+
+	bitmapsAt, subtreeAt := scheduler.heights[string(fileformat.FileTypeSubtreeLaneBitmaps)], scheduler.heights[string(fileformat.FileTypeSubtree)]
+	require.NotZero(t, subtreeAt)
+	require.GreaterOrEqual(t, bitmapsAt, subtreeAt, "the bitmaps file is not deleted before its subtree")
 }
 
 // laneBitmapsRetryCounts reads subtree validation's two lane bitmaps write retry counters.

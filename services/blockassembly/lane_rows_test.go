@@ -917,6 +917,51 @@ func TestAQueuedSubtreeRetryWaitsForTheLaneBitmapsWrite(t *testing.T) {
 	<-allDone
 }
 
+// TestALaneBitmapsRetryStartsNoWriteAfterWaitingOutItsBoundOnTheLock: a retry that waits for the
+// file's lock, held by another write of the same stripe, until its bound has run out gives up
+// without writing.
+func TestALaneBitmapsRetryStartsNoWriteAfterWaitingOutItsBoundOnTheLock(t *testing.T) {
+	server, memoryStore := setupServerWithSettings(t, func(s *settings.Settings) { s.UtxoStore.LaneMigration = settings.LaneMigrationShadow })
+	server.laneBitmapsRetry.Bound = 400 * time.Millisecond
+	server.laneBitmapsRetry.FirstBackoff = 200 * time.Millisecond
+
+	store := &failingBitmapsWriteStore{Store: memoryStore, failures: -1}
+	server.subtreeStore = store
+
+	root := chainhash.HashH([]byte("lock-past-bound"))
+	server.ownLaneBitmaps.put(root, lane.LaneBitmaps{}, 1)
+
+	service := map[string]string{"service": laneBitmapsService}
+	exhaustedBefore := ownLaneMetric(t, "teranode_lane_bitmaps_write_retries_exhausted_total", service)
+
+	written := make(chan struct{})
+
+	go func() {
+		defer close(written)
+
+		server.writeLaneBitmapsFile(t.Context(), lane.SubtreeBitmaps{SubtreeHash: root, Lanes: lane.LaneBitmaps{4: bitmapOfPositions(1)}}, 300)
+	}()
+
+	require.Eventually(t, func() bool {
+		store.mu.Lock()
+		defer store.mu.Unlock()
+
+		return store.refused == 1
+	}, 5*time.Second, time.Millisecond)
+
+	lock := server.ownLaneBitmaps.fileLock(root)
+	lock.Lock() // held by another write of the stripe through the retry's bound
+	time.Sleep(600 * time.Millisecond)
+	lock.Unlock()
+	<-written
+
+	store.mu.Lock()
+	defer store.mu.Unlock()
+
+	require.Equal(t, 1, store.refused, "no write started after the bound")
+	require.Equal(t, exhaustedBefore+1, ownLaneMetric(t, "teranode_lane_bitmaps_write_retries_exhausted_total", service))
+}
+
 // refreshDuringRetryStore refuses a lane bitmaps file write at delete-at height 300 until a refresh
 // at a later height has written the file, and signals the first refusal.
 type refreshDuringRetryStore struct {

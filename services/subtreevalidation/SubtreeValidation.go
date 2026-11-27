@@ -1290,8 +1290,8 @@ const laneBitmapsService = "subtreevalidation"
 func (u *Server) storeSubtreeLaneBitmaps(ctx context.Context, subtreeHash *chainhash.Hash, bitmaps lane.SubtreeBitmaps, dah uint32) {
 	data, err := lane.EncodeSubtreeBitmaps(bitmaps)
 	if err == nil {
-		err = u.laneBitmapsRetry.Do(ctx, laneBitmapsService, func() error {
-			return u.subtreeStore.Set(ctx, subtreeHash[:], fileformat.FileTypeSubtreeLaneBitmaps, data, options.WithDeleteAt(dah))
+		err = u.laneBitmapsRetry.Do(ctx, laneBitmapsService, func(attemptCtx context.Context) error {
+			return u.subtreeStore.Set(attemptCtx, subtreeHash[:], fileformat.FileTypeSubtreeLaneBitmaps, data, options.WithDeleteAt(dah))
 		})
 	}
 

@@ -221,12 +221,17 @@ func (ba *BlockAssembly) writeLaneBitmapsFile(ctx context.Context, bitmaps lane.
 	// The file's lock is held for each attempt, not across the backoff between them, so a refresh
 	// of the file can run in between: an attempt that then finds the file goes on as any write
 	// that finds one does, below, and cannot lower a delete-at the refresh raised.
-	err = ba.laneBitmapsRetry.Do(ctx, laneBitmapsService, func() error {
+	// A retry whose bound ran out while it waited for the lock starts no store call.
+	err = ba.laneBitmapsRetry.Do(ctx, laneBitmapsService, func(attemptCtx context.Context) error {
 		fileLock := ba.ownLaneBitmaps.fileLock(root)
 		fileLock.Lock()
 		defer fileLock.Unlock()
 
-		setErr := ba.subtreeStore.Set(ctx, root[:], fileformat.FileTypeSubtreeLaneBitmaps, data, options.WithDeleteAt(dah), options.WithExclusivePublish())
+		if attemptCtx.Err() != nil {
+			return errors.NewStorageError("[BlockAssembly:storeSubtreeData][%s] the lane bitmaps write retry bound ran out waiting for the file's lock", root.String(), attemptCtx.Err())
+		}
+
+		setErr := ba.subtreeStore.Set(attemptCtx, root[:], fileformat.FileTypeSubtreeLaneBitmaps, data, options.WithDeleteAt(dah), options.WithExclusivePublish())
 		if setErr == nil {
 			ba.ownLaneBitmaps.recordFileDAH(root, dah)
 		}

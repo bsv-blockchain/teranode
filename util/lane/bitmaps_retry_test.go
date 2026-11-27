@@ -27,10 +27,10 @@ func fastRetry(bound time.Duration) *BitmapsWriteRetry {
 }
 
 // failingWrite fails with err for its first n calls, then succeeds; n < 0 fails always.
-func failingWrite(n int, err error) (func() error, *atomic.Int32) {
+func failingWrite(n int, err error) (func(context.Context) error, *atomic.Int32) {
 	calls := &atomic.Int32{}
 
-	return func() error {
+	return func(context.Context) error {
 		if c := calls.Add(1); n < 0 || int(c) <= n {
 			return err
 		}
@@ -112,6 +112,34 @@ func TestBitmapsWriteRetryStartsNoAttemptAfterTheBound(t *testing.T) {
 	require.Equal(t, exhaustedBefore+1, exhausted)
 }
 
+// The first attempt gets the caller's context, and each retry one that ends at the bound.
+func TestBitmapsWriteRetryGivesEachRetryTheBoundAsItsDeadline(t *testing.T) {
+	var deadlines []time.Time
+
+	write := func(ctx context.Context) error {
+		deadline, ok := ctx.Deadline()
+		if !ok {
+			deadline = time.Time{}
+		}
+
+		deadlines = append(deadlines, deadline)
+
+		if len(deadlines) < 3 {
+			return errors.NewStorageError("store down")
+		}
+
+		return nil
+	}
+
+	start := time.Now()
+	require.NoError(t, fastRetry(10*time.Second).Do(t.Context(), "test-attempt-deadline", write))
+
+	require.Len(t, deadlines, 3)
+	require.True(t, deadlines[0].IsZero(), "the first attempt has the caller's context")
+	require.WithinRange(t, deadlines[1], start.Add(10*time.Second), time.Now().Add(10*time.Second))
+	require.Equal(t, deadlines[1], deadlines[2], "every retry ends at the same bound")
+}
+
 // A context that ends during the backoff stops the retry at once, and a write that fails with the
 // context already ended is not retried; neither counts as exhausted.
 func TestBitmapsWriteRetryStopsWithItsContext(t *testing.T) {
@@ -170,7 +198,7 @@ func TestBitmapsWriteRetryBoundIsPerOutage(t *testing.T) {
 	require.Equal(t, exhaustedBefore+2, exhausted)
 
 	// a write succeeds: the outage is over, and the next failure is retried again
-	require.NoError(t, r.Do(t.Context(), service, func() error { return nil }))
+	require.NoError(t, r.Do(t.Context(), service, func(context.Context) error { return nil }))
 
 	write, calls = failingWrite(2, storeDown)
 	require.NoError(t, r.Do(t.Context(), service, write))
