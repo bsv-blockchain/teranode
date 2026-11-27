@@ -7,6 +7,7 @@ import (
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
+	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/stretchr/testify/require"
 )
@@ -229,6 +230,80 @@ func TestReorgScenario_SlowPathReleasesLostChildAfterParentInOpenSubtree(t *test
 	requireEveryPrefixResolves(t, sc, nodes)
 	require.Equal(t, sc.expectedOrderAfter(), txHashes(nodes))
 	requireAssemblyValid(t, sc.stp, sc.onChainAfter)
+}
+
+// C is in the moved-back block and spends X, which the move-back keeps at its pending position, but
+// X never comes out of the pending loops: it is in no subtree, or keepPrevious drops it. The held-back
+// C must not be lost, so flush appends it.
+func TestReorgScenario_SlowPathFlushKeepsLostChildOfAParentThatIsNotEmitted(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		// setup puts X in the tx map and returns the previous current subtree, if any.
+		setup func(t *testing.T, stp *SubtreeProcessor, x chainhash.Hash, onChain chainhash.Hash) *subtreepkg.Subtree
+		// blockHasDroppedTx adds a block transaction that spends a dropped parent.
+		blockHasDroppedTx bool
+	}{
+		{
+			name: "X is in the tx map and in no subtree",
+			setup: func(t *testing.T, stp *SubtreeProcessor, x, onChain chainhash.Hash) *subtreepkg.Subtree {
+				_, wasSet := stp.currentTxMap.SetIfNotExists(x, inpointsWithParent(onChain))
+				require.True(t, wasSet)
+
+				return nil
+			},
+		},
+		{
+			name: "keepPrevious drops X",
+			setup: func(t *testing.T, stp *SubtreeProcessor, x, _ chainhash.Hash) *subtreepkg.Subtree {
+				dropped := chainhash.HashH([]byte("flush-dropped-parent"))
+
+				stp.droppedMu.Lock()
+				stp.recordDroppedLocked(dropped)
+				stp.droppedMu.Unlock()
+
+				_, wasSet := stp.currentTxMap.SetIfNotExists(x, inpointsWithParent(dropped))
+				require.True(t, wasSet)
+
+				st, err := subtreepkg.NewTreeByLeafCount(4)
+				require.NoError(t, err)
+				require.NoError(t, st.AddNode(x, 1, 1))
+
+				return st
+			},
+			blockHasDroppedTx: true,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			stp, _ := lanePoolProcessor(t, false, false)
+
+			x := chainhash.HashH([]byte("flush-x"))
+			c := chainhash.HashH([]byte("flush-c"))
+			onChain := chainhash.HashH([]byte("flush-on-chain"))
+			previous := tt.setup(t, stp, x, onChain)
+
+			st, err := subtreepkg.NewTreeByLeafCount(4)
+			require.NoError(t, err)
+			require.NoError(t, st.AddCoinbaseNode())
+			require.NoError(t, st.AddNode(x, 1, 1))
+			require.NoError(t, st.AddNode(c, 1, 1))
+
+			inpoints := []subtreepkg.TxInpoints{{}, *inpointsWithParent(onChain), *inpointsWithParent(x)}
+
+			if tt.blockHasDroppedTx {
+				e := chainhash.HashH([]byte("flush-e"))
+				require.NoError(t, st.AddNode(e, 1, 1))
+
+				inpoints = append(inpoints, *inpointsWithParent(chainhash.HashH([]byte("flush-dropped-parent"))))
+			}
+
+			block := &model.Block{Header: prevBlockHeader, Subtrees: []*chainhash.Hash{st.RootHash()}}
+
+			_, _, err = stp.moveBackBlockBulkBuild(t.Context(), block, true, nil, previous, [][]subtreepkg.Node{st.Nodes}, [][]subtreepkg.TxInpoints{inpoints}, nil)
+			require.NoError(t, err)
+
+			require.Equal(t, []chainhash.Hash{c}, txHashes(assemblyNodes(stp)), "C is kept, and X, in no subtree, is not emitted")
+		})
+	}
 }
 
 // requireEveryPrefixResolves checks the order rule on each prefix a miner could be given, one
