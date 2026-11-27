@@ -1,12 +1,15 @@
 package testhelpers
 
 import (
+	"context"
 	"testing"
 	"time"
 
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/settings"
+	"github.com/bsv-blockchain/teranode/stores/blob"
+	blockchainstore "github.com/bsv-blockchain/teranode/stores/blockchain"
 	"github.com/bsv-blockchain/teranode/util/kafka"
 	"github.com/bsv-blockchain/teranode/util/test/fault"
 	"github.com/stretchr/testify/require"
@@ -43,6 +46,19 @@ func TestNewStack_StacksAreIsolated(t *testing.T) {
 	require.Equal(t, uint32(22), b.UTXOStore.GetBlockHeight())
 }
 
+func TestNewStack_ClosesBlockchainStore(t *testing.T) {
+	var store blockchainstore.Store
+	t.Run("stack lifetime", func(t *testing.T) {
+		s := NewStack(t)
+		store = s.InnerBlockchainStore
+		_, _, err := store.Health(s.Ctx, true)
+		require.NoError(t, err)
+	})
+
+	_, _, err := store.Health(context.Background(), true)
+	require.Error(t, err, "the blockchain store must close with the test")
+}
+
 func TestNewStack_WithSettings(t *testing.T) {
 	s := NewStack(t, WithSettings(func(st *settings.Settings) { st.BlockValidation.OptimisticMining = true }))
 	require.True(t, s.Settings.BlockValidation.OptimisticMining)
@@ -67,6 +83,8 @@ func TestNewStack_FaultsSurfaceThroughTheClientButNotTheInnerClient(t *testing.T
 
 func TestNewStack_FaultsCoverEveryStore(t *testing.T) {
 	plan := fault.NewPlan()
+	injected := errors.NewStorageError("injected")
+	plan.On("Set").In(fault.StoreBlob).Fail(injected)
 	s := NewStack(t, WithFaults(plan))
 
 	_, _ = s.UTXOStore.Get(s.Ctx, s.Settings.ChainCfgParams.GenesisHash)
@@ -80,6 +98,26 @@ func TestNewStack_FaultsCoverEveryStore(t *testing.T) {
 	}
 
 	require.Equal(t, []string{fault.StoreUTXO, fault.StoreBlob, fault.StoreBlob, fault.StoreBlob}, stores)
+
+	for _, tc := range []struct {
+		name  string
+		kind  fileformat.FileType
+		inner blob.Store
+		outer blob.Store
+	}{
+		{"transaction", fileformat.FileTypeTx, s.InnerTxStore, s.TxStore},
+		{"block", fileformat.FileTypeBlock, s.InnerBlockStore, s.BlockStore},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			key := []byte(tc.name)
+			require.ErrorIs(t, tc.outer.Set(s.Ctx, key, tc.kind, []byte("blocked")), injected)
+			require.NoError(t, tc.inner.Set(s.Ctx, key, tc.kind, []byte("seeded")))
+			got, err := tc.outer.Get(s.Ctx, key, tc.kind)
+			require.NoError(t, err)
+			require.Equal(t, []byte("seeded"), got)
+		})
+	}
+	require.Equal(t, 2, plan.Count("Set"), "only decorated writes enter the fault plan")
 }
 
 func TestNewStack_InvalidBlocksTopicCapturesTheRealProducer(t *testing.T) {

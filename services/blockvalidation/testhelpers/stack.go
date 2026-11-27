@@ -53,6 +53,8 @@ type Stack struct {
 	InnerBlockchainStore blockchainstore.Store
 	InnerUTXOStore       utxo.Store
 	InnerSubtreeStore    blob.Store
+	InnerTxStore         blob.Store
+	InnerBlockStore      blob.Store
 
 	// InvalidBlocks captures the invalid-blocks topic, or is nil without WithInvalidBlocksTopic.
 	InvalidBlocks *KafkaCapture
@@ -133,8 +135,14 @@ func NewStack(t testing.TB, opts ...StackOption) *Stack {
 
 	innerChainStore, err := blockchainstore.NewStore(logger, &url.URL{Scheme: "sqlitememory"}, tSettings)
 	require.NoError(t, err)
+	t.Cleanup(func() {
+		logger.Shutdown()
+		_ = innerChainStore.Close(context.Background())
+	})
 
 	innerSubtrees := blobmemory.New()
+	innerTx := blobmemory.New()
+	innerBlock := blobmemory.New()
 
 	s := &Stack{
 		Ctx:                  ctx,
@@ -144,11 +152,13 @@ func NewStack(t testing.TB, opts ...StackOption) *Stack {
 		InnerBlockchainStore: innerChainStore,
 		InnerUTXOStore:       innerUTXO,
 		InnerSubtreeStore:    innerSubtrees,
+		InnerTxStore:         innerTx,
+		InnerBlockStore:      innerBlock,
 		BlockchainStore:      innerChainStore,
 		UTXOStore:            innerUTXO,
 		SubtreeStore:         innerSubtrees,
-		TxStore:              blobmemory.New(),
-		BlockStore:           blobmemory.New(),
+		TxStore:              innerTx,
+		BlockStore:           innerBlock,
 		InvalidBlocks:        capture,
 	}
 
