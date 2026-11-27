@@ -1085,7 +1085,7 @@ func TestAnOlderRefreshDoesNotShortenTheLaneBitmapsFile(t *testing.T) {
 	root := *st.RootHash()
 
 	keepSealed(server, st, txMap)
-	server.writeKeptLaneBitmapsFile(t.Context(), root, 1, 300)
+	require.NoError(t, server.writeKeptLaneBitmapsFile(t.Context(), root, 1, 300))
 
 	server.keepExistingSubtreeLaneBitmaps(t.Context(), root, 2, 302) // a newer refresh
 	server.keepExistingSubtreeLaneBitmaps(t.Context(), root, 1, 301) // an older one, finishing last
@@ -1157,7 +1157,7 @@ func TestALaneBitmapsFileWriteAndRefreshDoNotOverlap(t *testing.T) {
 
 	go func() {
 		defer wg.Done()
-		server.writeLaneBitmapsFile(t.Context(), lane.SubtreeBitmaps{SubtreeHash: root, Lanes: lane.LaneBitmaps{4: bitmapOfPositions(1)}}, 300)
+		require.NoError(t, server.writeLaneBitmapsFile(t.Context(), lane.SubtreeBitmaps{SubtreeHash: root, Lanes: lane.LaneBitmaps{4: bitmapOfPositions(1)}}, 300))
 	}()
 
 	<-store.entered
@@ -1357,7 +1357,7 @@ func TestWritingOverAnExistingLaneBitmapsFileMovesItsDeleteAt(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, memoryStore.Set(t.Context(), st.RootHash()[:], fileformat.FileTypeSubtreeLaneBitmaps, old, blobOptions.WithDeleteAt(5)))
 
-	server.writeKeptLaneBitmapsFile(t.Context(), *st.RootHash(), 1, 300)
+	require.NoError(t, server.writeKeptLaneBitmapsFile(t.Context(), *st.RootHash(), 1, 300))
 
 	require.Equal(t, uint32(300), store.dah(fileformat.FileTypeSubtreeLaneBitmaps))
 }
