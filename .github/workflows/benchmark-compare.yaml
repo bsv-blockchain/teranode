@@ -124,15 +124,7 @@ jobs:
           build_cache: 'false'
           bench_build_cache: 'true'
 
-      - name: Run PR benchmarks
-        run: |
-          BENCH_FILTER="${{ matrix.bench_filter || '.' }}"
-          go test -bench="$BENCH_FILTER" -benchmem -benchtime=${{ matrix.benchtime || '1s' }} -short -timeout=25m -count=${{ matrix.count || 3 }} -run=^$ \
-            -tags "testtxmetacache" \
-            ${{ matrix.packages }} \
-            | tee pr-${{ matrix.group }}.txt
-
-      # Every group then runs the same baseline, and the report names it. The path
+      # Every group runs the same baseline, and the report names it. The path
       # stays "main" for the steps below.
       - name: Checkout PR base
         uses: actions/checkout@v4
@@ -140,14 +132,71 @@ jobs:
           ref: ${{ steps.base.outputs.sha }}
           path: main
 
-      - name: Run main benchmarks
+      # One test binary per package and side, so the timed runs below compile nothing.
+      # -funcalign=64 starts every function on a 64-byte boundary. Go's default on amd64
+      # is 32, so code a PR adds elsewhere can move a benchmark by 32 bytes and change
+      # how its loop sits in 64-byte blocks. On the AMD runners that read as a 12% change
+      # in BenchmarkAtomicPointer with identical machine code. The flag only changes the
+      # link step, so the benchmark build cache, built without it, still hits.
+      - name: Build benchmark binaries
         run: |
-          cd main
+          i=0
+          for pkg in ${{ matrix.packages }}; do
+            go test -c -tags testtxmetacache -ldflags=-funcalign=64 -o "$RUNNER_TEMP/bench/pr/$i.test" "$pkg"
+            (cd main && go test -c -tags testtxmetacache -ldflags=-funcalign=64 -o "$RUNNER_TEMP/bench/main/$i.test" "$pkg")
+            i=$((i + 1))
+          done
+
+      # Fails when a benchmark function or one of its closures (where b.Run loops live) does
+      # not start on a 64-byte boundary, so an edit or a toolchain that drops -funcalign=64
+      # shows up here. In these cgo-linked binaries nm prints Go functions as t, not T.
+      # Every package in the matrix has benchmarks, so a binary in which none match fails too.
+      - name: Check benchmark functions start on 64-byte boundaries
+        run: |
+          for bin in "$RUNNER_TEMP"/bench/*/*.test; do
+            syms=$(go tool nm "$bin")
+            checked=0
+            while read -r addr _ name; do
+              checked=$((checked + 1))
+              if (( 0x$addr % 64 )); then
+                echo "::error::$name in $bin starts at 0x$addr, not on a 64-byte boundary"
+                exit 1
+              fi
+            done < <(grep -E ' [Tt] github[.]com/bsv-blockchain/teranode/[^ ]*[.]Benchmark' <<< "$syms" || true)
+            if [ "$checked" -eq 0 ]; then
+              echo "::error::no benchmark functions found in $bin"
+              exit 1
+            fi
+            echo "$bin: $checked benchmark functions start on 64-byte boundaries"
+          done
+
+      # The two sides take turns, one sample each, count times over. When all of one side
+      # ran before the other, every false flag measured on same-code runs read the first
+      # side as slower, and CI always ran the PR side first.
+      - name: Run benchmarks, alternating PR and base
+        run: |
           BENCH_FILTER="${{ matrix.bench_filter || '.' }}"
-          go test -bench="$BENCH_FILTER" -benchmem -benchtime=${{ matrix.benchtime || '1s' }} -short -timeout=25m -count=${{ matrix.count || 3 }} -run=^$ \
-            -tags "testtxmetacache" \
-            ${{ matrix.packages }} \
-            | tee ../main-${{ matrix.group }}.txt
+
+          # $1: pr or main, the binaries to run; $2: that side's source root; $3: output file.
+          run_side() {
+            i=0
+            for pkg in ${{ matrix.packages }}; do
+              bin="$RUNNER_TEMP/bench/$1/$i.test"
+              i=$((i + 1))
+              # go test -c writes no binary for a package without test files.
+              [ -x "$bin" ] || continue
+              (cd "$2/$pkg" && "$bin" -test.bench="$BENCH_FILTER" -test.benchmem \
+                -test.benchtime=${{ matrix.benchtime || '1s' }} -test.short -test.timeout=25m \
+                -test.count=1 -test.run='^$') | tee -a "$3"
+            done
+          }
+
+          for round in $(seq ${{ matrix.count || 3 }}); do
+            echo "::group::round $round"
+            run_side pr . "pr-${{ matrix.group }}.txt"
+            run_side main main "main-${{ matrix.group }}.txt"
+            echo "::endgroup::"
+          done
 
       - name: Upload results
         if: always()

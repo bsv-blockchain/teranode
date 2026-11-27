@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"net/url"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -765,41 +766,177 @@ func (o *ownLaneBitmaps) len() int {
 	return len(o.bySubtree)
 }
 
-// failingBitmapsWriteStore refuses every write of a lane bitmaps file.
+// failingBitmapsWriteStore refuses every write of a lane bitmaps file, or of the file types in
+// refuse when set, after running onRefuse if set.
 type failingBitmapsWriteStore struct {
 	blob.Store
+
+	onRefuse func()
+	refuse   []fileformat.FileType
 }
 
 func (s failingBitmapsWriteStore) Set(ctx context.Context, key []byte, fileType fileformat.FileType, value []byte, opts ...blobOptions.FileOption) error {
-	if fileType == fileformat.FileTypeSubtreeLaneBitmaps {
+	refused := fileType == fileformat.FileTypeSubtreeLaneBitmaps
+	if s.refuse != nil {
+		refused = slices.Contains(s.refuse, fileType)
+	}
+
+	if refused {
+		if s.onRefuse != nil {
+			s.onRefuse()
+		}
+
 		return errors.NewStorageError("write refused")
 	}
 
 	return s.Store.Set(ctx, key, fileType, value, opts...)
 }
 
-// TestStoreSubtreeDataCountsAFailedLaneBitmapsWrite: a lane bitmaps file block assembly cannot write
-// is counted as write_failed under block="own"; the subtree is still stored, and its bitmaps are
-// still kept for a block this node mines.
-func TestStoreSubtreeDataCountsAFailedLaneBitmapsWrite(t *testing.T) {
-	server, memoryStore := setupServerWithSettings(t, func(s *settings.Settings) { s.UtxoStore.LaneMigration = settings.LaneMigrationShadow })
-	server.subtreeStore = failingBitmapsWriteStore{Store: memoryStore}
+// TestAFailedLaneBitmapsWriteLeavesTheSubtreeToTheRetryProcessor: a subtree whose lane bitmaps file
+// the store refuses is not stored but queued, as a failed subtree file write is, and counted as
+// write_failed. The retry writes the bitmaps file, then the subtree file, once the store takes them.
+func TestAFailedLaneBitmapsWriteLeavesTheSubtreeToTheRetryProcessor(t *testing.T) {
+	var (
+		server      *BlockAssembly
+		memoryStore *memory.Memory
+		st          *subtreepkg.Subtree
+		txMap       subtreeprocessor.TxInpointsMap
+	)
+
+	// the kept bitmaps age out of memory while the write is in the store
+	server, memoryStore, st, txMap = laneStorageFailureServer(t, "write-fails", func(m *memory.Memory) blob.Store {
+		return failingBitmapsWriteStore{Store: m, onRefuse: func() {
+			server.ownLaneBitmaps.mu.Lock()
+			delete(server.ownLaneBitmaps.bySubtree, *st.RootHash())
+			server.ownLaneBitmaps.mu.Unlock()
+		}}
+	})
 
 	labels := map[string]string{"block": lane.BlockOwn, "reason": lane.MissingBitmapsWriteFailed}
 	before := ownLaneMetric(t, "teranode_lane_missing_bitmaps_total", labels)
 
-	st, txMap := laneSealSubtree(t, "write-fails")
-	keepSealed(server, st, txMap)
+	retries := make(chan *subtreeRetrySend, 10)
 
-	subtreeDone, allDone, err := server.storeSubtreeData(t.Context(), subtreeprocessor.NewSubtreeRequest{Subtree: st, ParentTxMap: txMap}, make(chan *subtreeRetrySend, 10))
+	subtreeDone, allDone, err := server.storeSubtreeData(t.Context(), subtreeprocessor.NewSubtreeRequest{Subtree: st, ParentTxMap: txMap}, retries)
 	require.NoError(t, err)
-	require.True(t, <-subtreeDone, "the subtree is still stored")
+	require.False(t, <-subtreeDone, "the subtree is not stored without its lane bitmaps file")
 	<-allDone
 
+	exists, err := memoryStore.Exists(t.Context(), st.RootHash()[:], fileformat.FileTypeSubtree)
+	require.NoError(t, err)
+	require.False(t, exists)
 	require.Equal(t, before+1, ownLaneMetric(t, "teranode_lane_missing_bitmaps_total", labels))
 
-	_, missing := server.ownLaneBitmaps.get([]*chainhash.Hash{st.RootHash()})
-	require.Zero(t, missing, "its bitmaps are still kept")
+	var retry *subtreeRetrySend
+	select {
+	case retry = <-retries:
+	default:
+		t.Fatal("the subtree was not queued for a retry")
+	}
+
+	// the store refuses the file again: still no subtree, and the retry is queued again
+	server.processSubtreeRetry(t.Context(), retry, retries)
+
+	exists, err = memoryStore.Exists(t.Context(), st.RootHash()[:], fileformat.FileTypeSubtree)
+	require.NoError(t, err)
+	require.False(t, exists)
+
+	select {
+	case retry = <-retries:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the failed retry was not queued again")
+	}
+
+	require.True(t, retry.hasLaneBitmaps, "the retry carries the subtree's bitmaps, read before the write")
+
+	// the store takes it: the bitmaps file is written before the subtree file, with its delete-at
+	order := &setOrderStore{Store: memoryStore}
+	server.subtreeStore = order
+	server.processSubtreeRetry(t.Context(), retry, retries)
+
+	bitmapsAt, subtreeAt := order.index(fileformat.FileTypeSubtreeLaneBitmaps), order.index(fileformat.FileTypeSubtree)
+	require.GreaterOrEqual(t, bitmapsAt, 0, "the lane bitmaps file is written")
+	require.Less(t, bitmapsAt, subtreeAt, "before the subtree file")
+	require.Equal(t, order.dah(fileformat.FileTypeSubtree), order.dah(fileformat.FileTypeSubtreeLaneBitmaps))
+
+	data, err := memoryStore.Get(t.Context(), st.RootHash()[:], fileformat.FileTypeSubtreeLaneBitmaps)
+	require.NoError(t, err)
+
+	decoded, err := lane.DecodeSubtreeBitmaps(data)
+	require.NoError(t, err)
+	require.Equal(t, []uint64{20, 21, 22}, decoded.Lanes[4].ToArray(), "the file holds the carried bitmaps")
+}
+
+// laneStorageFailureServer is a shadow server that writes subtree meta files, whose subtree store
+// is the one store wraps around its memory store, with a sealed subtree whose bitmaps are kept.
+func laneStorageFailureServer(t *testing.T, name string, store func(*memory.Memory) blob.Store) (*BlockAssembly, *memory.Memory, *subtreepkg.Subtree, subtreeprocessor.TxInpointsMap) {
+	t.Helper()
+
+	server, memoryStore := setupServerWithSettings(t, func(s *settings.Settings) {
+		s.UtxoStore.LaneMigration = settings.LaneMigrationShadow
+		s.BlockAssembly.StoreTxInpointsForSubtreeMeta = true
+	})
+	server.subtreeStore = store(memoryStore)
+
+	st, txMap := laneSealSubtree(t, name)
+	keepSealed(server, st, txMap)
+
+	return server, memoryStore, st, txMap
+}
+
+// TestAFailedLaneBitmapsWriteStopsQueuingItsRetryAtShutdown: a subtree whose lane bitmaps write
+// fails while nothing reads the retry queue stops waiting to queue its retry once the service
+// stops, so its storage finishes when its meta write did not fail too.
+func TestAFailedLaneBitmapsWriteStopsQueuingItsRetryAtShutdown(t *testing.T) {
+	server, _, st, txMap := laneStorageFailureServer(t, "full-queue", func(m *memory.Memory) blob.Store { return failingBitmapsWriteStore{Store: m} })
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	subtreeDone, allDone, err := server.storeSubtreeData(ctx, subtreeprocessor.NewSubtreeRequest{Subtree: st, ParentTxMap: txMap}, make(chan *subtreeRetrySend))
+	require.NoError(t, err)
+
+	time.AfterFunc(100*time.Millisecond, cancel)
+
+	select {
+	case stored := <-subtreeDone:
+		require.False(t, stored)
+	case <-time.After(10 * time.Second):
+		t.Fatal("the subtree's storage blocked on the full retry queue")
+	}
+
+	select {
+	case <-allDone:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the subtree's storage never finished")
+	}
+}
+
+// TestEveryRetryOfASubtreeCarriesItsLaneBitmaps: the retry queued for a failed meta or subtree file
+// write carries the subtree's kept lane bitmaps, as one for a failed lane bitmaps write does.
+func TestEveryRetryOfASubtreeCarriesItsLaneBitmaps(t *testing.T) {
+	for _, refused := range []fileformat.FileType{fileformat.FileTypeSubtreeMeta, fileformat.FileTypeSubtree} {
+		t.Run(string(refused), func(t *testing.T) {
+			server, _, st, txMap := laneStorageFailureServer(t, "carry-"+string(refused), func(m *memory.Memory) blob.Store {
+				return failingBitmapsWriteStore{Store: m, refuse: []fileformat.FileType{refused}}
+			})
+
+			retries := make(chan *subtreeRetrySend, 10)
+
+			subtreeDone, allDone, err := server.storeSubtreeData(t.Context(), subtreeprocessor.NewSubtreeRequest{Subtree: st, ParentTxMap: txMap}, retries)
+			require.NoError(t, err)
+			<-subtreeDone
+			<-allDone
+
+			require.NotEmpty(t, retries, "the failed write is queued")
+
+			for len(retries) > 0 {
+				retry := <-retries
+				require.True(t, retry.hasLaneBitmaps)
+				require.Equal(t, []uint64{20, 21, 22}, retry.laneBitmaps[4].ToArray())
+			}
+		})
+	}
 }
 
 // TestCandidateKeepsItsSubtreesLaneBitmaps: a subtree a mining candidate still lists keeps its
@@ -921,12 +1058,12 @@ func (s missingFileDAHStore) SetDAH(ctx context.Context, key []byte, fileType fi
 	return s.Store.SetDAH(ctx, key, fileType, dah, opts...)
 }
 
-// TestRepairingALaneBitmapsFileCountsNoMemberTwice: a subtree whose lane bitmaps file failed to
-// write, stored again, gets the file written from its kept bitmaps; its member without a position
-// was counted when the bitmaps were kept and is not counted again.
+// TestRepairingALaneBitmapsFileCountsNoMemberTwice: a subtree stored without its lane bitmaps file,
+// stored again, gets the file written from its kept bitmaps; its member without a position was
+// counted when the bitmaps were kept and is not counted again.
 func TestRepairingALaneBitmapsFileCountsNoMemberTwice(t *testing.T) {
 	server, memoryStore := setupServerWithSettings(t, func(s *settings.Settings) { s.UtxoStore.LaneMigration = settings.LaneMigrationShadow })
-	server.subtreeStore = failingBitmapsWriteStore{Store: memoryStore}
+	server.subtreeStore = missingFileDAHStore{Store: memoryStore}
 
 	st, txMap := laneSealSubtree(t, "repair-file")
 	txMap.Set(st.Nodes[2].Hash, singleParentInpointsPtr(chainhash.HashH([]byte("repair-parent")), 0)) // without a position
@@ -934,20 +1071,16 @@ func TestRepairingALaneBitmapsFileCountsNoMemberTwice(t *testing.T) {
 	unpositioned := map[string]string{"service": laneBitmapsService}
 	before := ownLaneMetric(t, "teranode_lane_txs_without_position_total", unpositioned)
 
-	request := subtreeprocessor.NewSubtreeRequest{Subtree: st, ParentTxMap: txMap}
+	// the subtree file is already stored, without its lane bitmaps file
+	subtreeBytes, err := st.Serialize()
+	require.NoError(t, err)
+	require.NoError(t, memoryStore.Set(t.Context(), st.RootHash()[:], fileformat.FileTypeSubtree, subtreeBytes))
 
 	keepSealed(server, st, txMap)
-
-	subtreeDone, allDone, err := server.storeSubtreeData(t.Context(), request, make(chan *subtreeRetrySend, 10))
-	require.NoError(t, err)
-	require.True(t, <-subtreeDone)
-	<-allDone
-
 	require.Equal(t, before+1, ownLaneMetric(t, "teranode_lane_txs_without_position_total", unpositioned))
 
-	// stored again, with a store that takes the file
-	server.subtreeStore = missingFileDAHStore{Store: memoryStore}
-	server.keepExistingSubtreeLaneBitmaps(t.Context(), *st.RootHash(), 1, 10)
+	_, _, err = server.storeSubtreeData(t.Context(), subtreeprocessor.NewSubtreeRequest{Subtree: st, ParentTxMap: txMap}, make(chan *subtreeRetrySend, 10))
+	require.ErrorIs(t, err, errors.ErrBlobAlreadyExists, "it is stored again")
 
 	stored, err := memoryStore.Get(t.Context(), st.RootHash()[:], fileformat.FileTypeSubtreeLaneBitmaps)
 	require.NoError(t, err, "the file is written")
@@ -1050,7 +1183,7 @@ func TestAnOlderRefreshDoesNotShortenTheLaneBitmapsFile(t *testing.T) {
 	root := *st.RootHash()
 
 	keepSealed(server, st, txMap)
-	server.writeKeptLaneBitmapsFile(t.Context(), root, 1, 300)
+	require.NoError(t, server.writeKeptLaneBitmapsFile(t.Context(), root, 1, 300))
 
 	server.keepExistingSubtreeLaneBitmaps(t.Context(), root, 2, 302) // a newer refresh
 	server.keepExistingSubtreeLaneBitmaps(t.Context(), root, 1, 301) // an older one, finishing last
@@ -1122,7 +1255,7 @@ func TestALaneBitmapsFileWriteAndRefreshDoNotOverlap(t *testing.T) {
 
 	go func() {
 		defer wg.Done()
-		server.writeLaneBitmapsFile(t.Context(), lane.SubtreeBitmaps{SubtreeHash: root, Lanes: lane.LaneBitmaps{4: bitmapOfPositions(1)}}, 300)
+		require.NoError(t, server.writeLaneBitmapsFile(t.Context(), lane.SubtreeBitmaps{SubtreeHash: root, Lanes: lane.LaneBitmaps{4: bitmapOfPositions(1)}}, 300))
 	}()
 
 	<-store.entered
@@ -1185,26 +1318,38 @@ func TestOwnLaneRowsDoNotWait(t *testing.T) {
 	require.Equal(t, before+1, ownLaneMetric(t, "teranode_lane_missing_bitmaps_total", absent))
 }
 
-// TestStoreSubtreeDataWithoutKeptBitmapsWritesNoFile: a subtree with no lane bitmaps kept is stored
-// without a lane bitmaps file, counted as write_failed; the storage worker does not build bitmaps
-// from the pool.
+// TestStoreSubtreeDataWithoutKeptBitmapsWritesNoFile: a subtree with no lane bitmaps kept, or with
+// kept bitmaps that cannot be encoded, is stored without a lane bitmaps file, counted as
+// write_failed; the storage worker does not build bitmaps from the pool.
 func TestStoreSubtreeDataWithoutKeptBitmapsWritesNoFile(t *testing.T) {
-	server, memoryStore := setupServerWithSettings(t, func(s *settings.Settings) { s.UtxoStore.LaneMigration = settings.LaneMigrationShadow })
+	for _, tc := range []struct {
+		name string
+		keep func(server *BlockAssembly, st *subtreepkg.Subtree)
+	}{
+		{"none kept", func(*BlockAssembly, *subtreepkg.Subtree) {}},
+		{"cannot be encoded", func(server *BlockAssembly, st *subtreepkg.Subtree) {
+			server.ownLaneBitmaps.put(*st.RootHash(), lane.LaneBitmaps{4: roaring64.New()}, 1) // an empty lane bitmap
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server, memoryStore := setupServerWithSettings(t, func(s *settings.Settings) { s.UtxoStore.LaneMigration = settings.LaneMigrationShadow })
 
-	writeFailed := map[string]string{"block": lane.BlockOwn, "reason": lane.MissingBitmapsWriteFailed}
-	before := ownLaneMetric(t, "teranode_lane_missing_bitmaps_total", writeFailed)
+			writeFailed := map[string]string{"block": lane.BlockOwn, "reason": lane.MissingBitmapsWriteFailed}
+			before := ownLaneMetric(t, "teranode_lane_missing_bitmaps_total", writeFailed)
 
-	st, txMap := laneSealSubtree(t, "not-kept")
+			st, txMap := laneSealSubtree(t, "not-kept-"+tc.name)
+			tc.keep(server, st)
 
-	subtreeDone, allDone, err := server.storeSubtreeData(t.Context(), subtreeprocessor.NewSubtreeRequest{Subtree: st, ParentTxMap: txMap}, make(chan *subtreeRetrySend, 10))
-	require.NoError(t, err)
-	require.True(t, <-subtreeDone, "the subtree is stored")
-	<-allDone
+			subtreeDone, allDone, err := server.storeSubtreeData(t.Context(), subtreeprocessor.NewSubtreeRequest{Subtree: st, ParentTxMap: txMap}, make(chan *subtreeRetrySend, 10))
+			require.NoError(t, err)
+			require.True(t, <-subtreeDone, "the subtree is stored")
+			<-allDone
 
-	_, err = memoryStore.Get(t.Context(), st.RootHash()[:], fileformat.FileTypeSubtreeLaneBitmaps)
-	require.Error(t, err)
-	require.Zero(t, server.ownLaneBitmaps.len())
-	require.Equal(t, before+1, ownLaneMetric(t, "teranode_lane_missing_bitmaps_total", writeFailed))
+			_, err = memoryStore.Get(t.Context(), st.RootHash()[:], fileformat.FileTypeSubtreeLaneBitmaps)
+			require.Error(t, err)
+			require.Equal(t, before+1, ownLaneMetric(t, "teranode_lane_missing_bitmaps_total", writeFailed))
+		})
+	}
 }
 
 // stuckStorageStore holds every subtree storage at its first store call until release is closed.
@@ -1310,7 +1455,7 @@ func TestWritingOverAnExistingLaneBitmapsFileMovesItsDeleteAt(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, memoryStore.Set(t.Context(), st.RootHash()[:], fileformat.FileTypeSubtreeLaneBitmaps, old, blobOptions.WithDeleteAt(5)))
 
-	server.writeKeptLaneBitmapsFile(t.Context(), *st.RootHash(), 1, 300)
+	require.NoError(t, server.writeKeptLaneBitmapsFile(t.Context(), *st.RootHash(), 1, 300))
 
 	require.Equal(t, uint32(300), store.dah(fileformat.FileTypeSubtreeLaneBitmaps))
 }

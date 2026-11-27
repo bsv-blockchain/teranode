@@ -1171,7 +1171,8 @@ func (u *Server) waitForRetryOrPriority(ctx context.Context, subtreeHash string,
 
 // storeSubtreeFiles writes a validated subtree's files, all with one expiry: its meta, and beside it
 // its lane bitmaps when laneBitmaps is not nil (utxostore_laneMigration shadow), then the subtree
-// file once both are written.
+// file once both are written. A failed lane bitmaps write fails the call as a failed meta write
+// does, so the subtree is not stored and its next validation writes both again.
 func (u *Server) storeSubtreeFiles(ctx context.Context, stat *gocore.Stat, subtreeHash *chainhash.Hash, subtree *subtreepkg.Subtree, subtreeMeta *subtreepkg.Meta, laneBitmaps *lane.SubtreeBitmaps) error {
 	ctx, _, deferFn := tracing.Tracer("subtreevalidation").Start(ctx, "storeSubtreeFiles",
 		tracing.WithParentStat(stat),
@@ -1191,20 +1192,26 @@ func (u *Server) storeSubtreeFiles(ctx context.Context, stat *gocore.Stat, subtr
 	// as "this subtree is done", so it is written beside the meta rather than before it: at
 	// shadow a subtree waits for no extra write in turn. Every return waits for it, so no write
 	// outlives the call.
-	waitForBitmaps := func() {}
+	waitForBitmaps := func() error { return nil }
 
 	if laneBitmaps != nil {
 		bitmapsWritten := make(chan struct{})
 
+		var bitmapsErr error
+
 		go func() {
 			defer close(bitmapsWritten)
 
-			u.storeSubtreeLaneBitmaps(ctx, subtreeHash, *laneBitmaps, dah)
+			bitmapsErr = u.storeSubtreeLaneBitmaps(ctx, subtreeHash, *laneBitmaps, dah)
 		}()
 
 		defer func() { <-bitmapsWritten }()
 
-		waitForBitmaps = func() { <-bitmapsWritten }
+		waitForBitmaps = func() error {
+			<-bitmapsWritten
+
+			return bitmapsErr
+		}
 	}
 
 	// The meta is written before the subtree, not beside it. The .subtree file is what
@@ -1244,7 +1251,9 @@ func (u *Server) storeSubtreeFiles(ctx context.Context, stat *gocore.Stat, subtr
 		return errors.NewProcessingError("[ValidateSubtreeInternal][%s] failed to serialize subtree", subtreeHash.String(), err)
 	}
 
-	waitForBitmaps()
+	if err = waitForBitmaps(); err != nil {
+		return err
+	}
 
 	u.logger.Debugf("[ValidateSubtreeInternal][%s] store subtree", subtreeHash.String())
 
@@ -1270,20 +1279,30 @@ func (u *Server) storeSubtreeFiles(ctx context.Context, stat *gocore.Stat, subtr
 const laneBitmapsService = "subtreevalidation"
 
 // storeSubtreeLaneBitmaps writes a subtree's lane bitmaps file, before its subtree file and with
-// its expiry, so the block gate finds it beside the subtree. At shadow nothing acts on lanes, so
-// a failure to write it does not stop the subtree: it is logged and counted as write_failed, and
-// the block that lists the subtree counts its bitmaps as absent and goes without rows. A file
+// its expiry, so the block gate finds it beside the subtree. A write the store refuses, such as
+// one whose delete-at height the blockchain database could not schedule, returns a storage error
+// so the subtree is not stored without the file; the meta and subtree writes need the same
+// database. Bitmaps that cannot be encoded are a lane fault, not a store one, and at shadow
+// nothing acts on lanes, so they do not stop the subtree: they are logged and counted, and the
+// block that lists the subtree goes without rows. Either failure counts as write_failed. A file
 // already there, from an earlier validation of the same subtree, is kept.
-func (u *Server) storeSubtreeLaneBitmaps(ctx context.Context, subtreeHash *chainhash.Hash, bitmaps lane.SubtreeBitmaps, dah uint32) {
+func (u *Server) storeSubtreeLaneBitmaps(ctx context.Context, subtreeHash *chainhash.Hash, bitmaps lane.SubtreeBitmaps, dah uint32) error {
 	data, err := lane.EncodeSubtreeBitmaps(bitmaps)
-	if err == nil {
-		err = u.subtreeStore.Set(ctx, subtreeHash[:], fileformat.FileTypeSubtreeLaneBitmaps, data, options.WithDeleteAt(dah))
+	if err != nil {
+		lane.CountMissingBitmaps(lane.BlockPeer, lane.MissingBitmapsWriteFailed, 1)
+		u.logger.Warnf("[ValidateSubtreeInternal][%s] storing the subtree without its lane bitmaps file, which could not be encoded, its block will go without lane rows: %v", subtreeHash.String(), err)
+
+		return nil
 	}
 
-	if err != nil && !errors.Is(err, errors.ErrBlobAlreadyExists) {
-		lane.CountMissingBitmaps(lane.BlockPeer, lane.MissingBitmapsWriteFailed, 1)
-		u.logger.Warnf("[ValidateSubtreeInternal][%s] failed to store subtree lane bitmaps, its block will go without lane rows: %v", subtreeHash.String(), err)
+	err = u.subtreeStore.Set(ctx, subtreeHash[:], fileformat.FileTypeSubtreeLaneBitmaps, data, options.WithDeleteAt(dah))
+	if err == nil || errors.Is(err, errors.ErrBlobAlreadyExists) {
+		return nil
 	}
+
+	lane.CountMissingBitmaps(lane.BlockPeer, lane.MissingBitmapsWriteFailed, 1)
+
+	return errors.NewStorageError("[ValidateSubtreeInternal][%s] failed to store subtree lane bitmaps", subtreeHash.String(), err)
 }
 
 // getSubtreeTxHashes retrieves transaction hashes for a subtree from a remote source.
@@ -1501,6 +1520,18 @@ func (u *Server) blessMissingTransactions(ctx context.Context, subtreeHash chain
 	txMetaSlice []metaSliceItem, blockHeight uint32, blockIds map[uint32]bool, keepAside bool, validationOptions ...validator.Option) (err error) {
 	u.logger.Debugf("[validateSubtree][%s] blessing %d missing txs", subtreeHash.String(), len(missingTxs))
 
+	// Reject a nil transaction up front, before anything spawns a goroutine. A
+	// nil check inside the per-level loop (after earlier iterations have already
+	// called g.Go) returns without g.Wait(), leaking the goroutines already
+	// started for that level: they keep validating, spending and creating in the
+	// UTXO store and writing txMetaSlice/lockedHashes after this function — and
+	// ValidateSubtreeInternal — have returned (issue #1974).
+	for _, mt := range missingTxs {
+		if mt.tx == nil {
+			return errors.NewProcessingError("[validateSubtree][%s] missing transaction is nil", subtreeHash.String())
+		}
+	}
+
 	var (
 		mTx          missingTx
 		missingCount atomic.Uint32
@@ -1573,9 +1604,8 @@ func (u *Server) blessMissingTransactions(ctx context.Context, subtreeHash chain
 			tx := mTx.tx
 			txIdx := mTx.idx
 
-			if tx == nil {
-				return errors.NewProcessingError("[validateSubtree][%s] missing transaction is nil", subtreeHash.String())
-			}
+			// A nil tx is rejected up front, before any goroutine starts (see the
+			// pre-pass above), so the leak path through a mid-level return is gone.
 
 			// process each transaction in the background, since the transactions are all batched into the utxo store
 			g.Go(func() error {

@@ -2,6 +2,10 @@ package subtreevalidation
 
 import (
 	"context"
+	"fmt"
+	"net"
+	"net/netip"
+	"net/url"
 	"sync"
 	"testing"
 	"time"
@@ -16,8 +20,11 @@ import (
 	"github.com/bsv-blockchain/teranode/services/validator"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/blob"
+	blobfile "github.com/bsv-blockchain/teranode/stores/blob/file"
 	blobmemory "github.com/bsv-blockchain/teranode/stores/blob/memory"
 	bloboptions "github.com/bsv-blockchain/teranode/stores/blob/options"
+	"github.com/bsv-blockchain/teranode/stores/blob/storetypes"
+	blockchainsql "github.com/bsv-blockchain/teranode/stores/blockchain/sql"
 	"github.com/bsv-blockchain/teranode/stores/txmetacache"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
@@ -26,10 +33,15 @@ import (
 	"github.com/bsv-blockchain/teranode/util/kafka"
 	"github.com/bsv-blockchain/teranode/util/lane"
 	"github.com/bsv-blockchain/teranode/util/test"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/network"
 	"github.com/ordishs/gocore"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
+	"github.com/testcontainers/testcontainers-go"
+	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
+	"github.com/testcontainers/testcontainers-go/wait"
 )
 
 // recordingStore records the file type and delete-at height of every Set, in order, and can be
@@ -540,31 +552,242 @@ func (p *positionValidator) ValidateWithOptions(ctx context.Context, tx *bt.Tx, 
 	return md, err
 }
 
-// At shadow nothing acts on lanes: a lane bitmaps file that cannot be written leaves the subtree
-// to be stored as it is stored without lanes, and its block goes without rows.
-func TestStoreSubtreeFiles_ALaneBitmapsFailureDoesNotStopTheSubtree(t *testing.T) {
-	ctx := context.Background()
+// A lane bitmaps file the store refuses fails the call, as a refused meta write does, so the
+// subtree is not stored and its next validation writes both. Bitmaps that cannot be encoded are a
+// lane fault, so at shadow the subtree is stored without the file. Each counts as one write_failed.
+func TestStoreSubtreeFiles_ALaneBitmapsFailureStopsTheSubtreeOnlyWhenTheStoreRefusesIt(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		refuse      fileformat.FileType
+		lanes       lane.LaneBitmaps
+		wantStopped bool
+	}{
+		{"the store refuses it", fileformat.FileTypeSubtreeLaneBitmaps, lane.LaneBitmaps{7: bitmapOfPositions(1)}, true},
+		{"it cannot be encoded", "", lane.LaneBitmaps{7: roaring64.New()}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := t.Context()
+
+			st, m := laneBitmapsSubtree(t)
+			root := st.RootHash()
+
+			store := &recordingStore{Store: blobmemory.New(), refuse: tc.refuse}
+			server := &Server{logger: ulogger.TestLogger{}, settings: test.CreateBaseTestSettings(t), subtreeStore: store, utxoStore: laneHeightUtxoStore(t, 100)}
+
+			writeFailed := laneMissingBitmaps(t, lane.MissingBitmapsWriteFailed)
+
+			err := server.storeSubtreeFiles(ctx, gocore.NewStat("test"), root, st, m, &lane.SubtreeBitmaps{SubtreeHash: *root, Lanes: tc.lanes})
+			if tc.wantStopped {
+				require.ErrorIs(t, err, errors.ErrStorageError)
+			} else {
+				require.NoError(t, err)
+			}
+
+			exists, err := store.Exists(ctx, root[:], fileformat.FileTypeSubtree)
+			require.NoError(t, err)
+			require.Equal(t, !tc.wantStopped, exists, "the subtree is stored only when the file could not be encoded")
+
+			exists, err = store.Exists(ctx, root[:], fileformat.FileTypeSubtreeLaneBitmaps)
+			require.NoError(t, err)
+			require.False(t, exists)
+
+			require.Equal(t, writeFailed+1, laneMissingBitmaps(t, lane.MissingBitmapsWriteFailed), "the failed write is counted as one")
+		})
+	}
+}
+
+// laneHeightUtxoStore is the package's real sqlitememory UTXO store, at block height.
+func laneHeightUtxoStore(t *testing.T, height uint32) utxo.Store {
+	t.Helper()
+
+	store := newSQLUtxoStore(t, t.Context(), test.CreateBaseTestSettings(t))
+	require.NoError(t, store.SetBlockHeight(height))
+
+	return store
+}
+
+// restartingScheduler schedules blob deletions in a blockchain store on a real Postgres, as the
+// blockchain service does. At the first lane bitmaps file schedule, once the subtree's meta has
+// been scheduled, it restarts the database: it stops the container and starts it again after
+// downFor, so the bitmaps write fails mid-subtree and the subtree file comes after the restart.
+type restartingScheduler struct {
+	store   *blockchainsql.SQL
+	restart func()
+	downFor time.Duration
+
+	metaScheduled chan struct{}
+	metaOnce      sync.Once
+	restartOnce   sync.Once
+	restarted     chan struct{}
+}
+
+func (s *restartingScheduler) ScheduleBlobDeletion(ctx context.Context, blobKey []byte, fileType string, storeType storetypes.BlobStoreType, deleteAtHeight uint32) (int64, bool, error) {
+	if fileType == string(fileformat.FileTypeSubtreeLaneBitmaps) {
+		select {
+		case <-s.metaScheduled:
+			s.restartOnce.Do(s.restart)
+		case <-ctx.Done():
+		case <-time.After(30 * time.Second): // the meta was never scheduled: fail on the assertions, not hang
+		}
+	}
+
+	id, err := s.store.ScheduleBlobDeletion(ctx, &blockchainsql.ScheduleRequest{BlobKey: blobKey, FileType: fileType, StoreType: int32(storeType), DeleteAtHeight: deleteAtHeight})
+	if err != nil {
+		// as the blockchain service answers it
+		return 0, false, errors.NewStorageError("failed to schedule deletion", err)
+	}
+
+	if fileType == string(fileformat.FileTypeSubtreeMeta) {
+		s.metaOnce.Do(func() { close(s.metaScheduled) })
+	}
+
+	return id, true, nil
+}
+
+func (s *restartingScheduler) CancelBlobDeletion(ctx context.Context, blobKey []byte, fileType string, storeType storetypes.BlobStoreType) (bool, error) {
+	if err := s.store.CancelBlobDeletion(ctx, blobKey, fileType, int32(storeType)); err != nil {
+		return false, err
+	}
+
+	return true, nil
+}
+
+// startRestartablePostgres starts a Postgres container of this test's own, on a fixed host port so
+// its address survives a stop and start. The shared test container cannot be restarted.
+func startRestartablePostgres(t *testing.T) (testcontainers.Container, string) {
+	t.Helper()
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+
+	port := listener.Addr().(*net.TCPAddr).Port
+	require.NoError(t, listener.Close())
+
+	pg, err := tcpostgres.Run(t.Context(), "docker.io/postgres:16-alpine",
+		tcpostgres.WithDatabase("lanes"),
+		tcpostgres.WithUsername("postgres"),
+		tcpostgres.WithPassword("password"),
+		testcontainers.WithHostConfigModifier(func(hc *container.HostConfig) {
+			hc.PortBindings = network.PortMap{
+				network.MustParsePort("5432/tcp"): []network.PortBinding{{HostIP: netip.MustParseAddr("127.0.0.1"), HostPort: fmt.Sprintf("%d", port)}},
+			}
+		}),
+		testcontainers.WithWaitStrategy(
+			wait.ForLog("database system is ready to accept connections").WithOccurrence(2).WithStartupTimeout(60*time.Second),
+			wait.ForListeningPort("5432/tcp"),
+		),
+	)
+	test.SkipIfContainerUnavailable(t, err)
+	require.NoError(t, err)
+
+	t.Cleanup(func() { _ = pg.Terminate(context.Background()) })
+
+	return pg, fmt.Sprintf("postgres://postgres:password@127.0.0.1:%d/lanes?sslmode=disable", port)
+}
+
+// A Postgres restart while a peer's subtree is stored, after its meta file and during its lane
+// bitmaps file, fails the subtree; the next validation stores it with the file, and its lane rows
+// read back from the file hold every member.
+func TestStoreSubtreeFiles_ADatabaseRestartMidSubtreeFailsItUntilTheNextValidation(t *testing.T) {
+	ctx := t.Context()
+
+	pg, dsn := startRestartablePostgres(t)
+
+	dbURL, err := url.Parse(dsn)
+	require.NoError(t, err)
+
+	tSettings := test.CreateBaseTestSettings(t)
+
+	chainStore, err := blockchainsql.New(ulogger.TestLogger{}, dbURL, tSettings)
+	require.NoError(t, err)
+
+	scheduler := &restartingScheduler{store: chainStore, downFor: 3 * time.Second, metaScheduled: make(chan struct{}), restarted: make(chan struct{})}
+	scheduler.restart = func() {
+		stopTimeout := 10 * time.Second
+		if err := pg.Stop(context.Background(), &stopTimeout); err != nil {
+			t.Errorf("stopping postgres: %v", err)
+		}
+
+		go func() {
+			defer close(scheduler.restarted)
+
+			time.Sleep(scheduler.downFor)
+
+			if err := pg.Start(context.Background()); err != nil {
+				t.Errorf("restarting postgres: %v", err)
+			}
+		}()
+	}
+
+	storeURL, err := url.Parse("file://" + t.TempDir())
+	require.NoError(t, err)
+
+	subtreeStore, err := blobfile.New(ulogger.TestLogger{}, storeURL, bloboptions.WithBlobDeletionScheduler(scheduler))
+	require.NoError(t, err)
+
+	server := &Server{logger: ulogger.TestLogger{}, settings: tSettings, subtreeStore: subtreeStore, utxoStore: laneHeightUtxoStore(t, 100)}
 
 	st, m := laneBitmapsSubtree(t)
 	root := st.RootHash()
+	dah := 100 + tSettings.GetSubtreeValidationBlockHeightRetention()
 
-	store := &recordingStore{Store: blobmemory.New(), refuse: fileformat.FileTypeSubtreeLaneBitmaps}
-
-	utxoStore := &utxo.MockUtxostore{}
-	utxoStore.On("GetBlockHeight").Return(uint32(100)).Maybe()
-
-	server := &Server{logger: ulogger.TestLogger{}, settings: test.CreateBaseTestSettings(t), subtreeStore: store, utxoStore: utxoStore}
-
-	bitmaps := &lane.SubtreeBitmaps{SubtreeHash: *root, Lanes: lane.LaneBitmaps{7: bitmapOfPositions(1)}}
+	bitmaps := &lane.SubtreeBitmaps{SubtreeHash: *root, Lanes: lane.LaneBitmaps{7: bitmapOfPositions(1, 2)}}
 
 	writeFailed := laneMissingBitmaps(t, lane.MissingBitmapsWriteFailed)
 
-	require.NoError(t, server.storeSubtreeFiles(ctx, gocore.NewStat("test"), root, st, m, bitmaps))
+	// the bitmaps write fails while the database is down, so the subtree is not stored
+	err = server.storeSubtreeFiles(ctx, gocore.NewStat("test"), root, st, m, bitmaps)
+	require.ErrorIs(t, err, errors.ErrStorageError)
+	require.Equal(t, writeFailed+1, laneMissingBitmaps(t, lane.MissingBitmapsWriteFailed))
 
-	exists, err := store.Exists(ctx, root[:], fileformat.FileTypeSubtree)
+	exists, err := subtreeStore.Exists(ctx, root[:], fileformat.FileTypeSubtree)
 	require.NoError(t, err)
-	require.True(t, exists)
-	require.Equal(t, writeFailed+1, laneMissingBitmaps(t, lane.MissingBitmapsWriteFailed), "the failed write is counted as one")
+	require.False(t, exists, "the subtree is not stored without its lane bitmaps file")
+
+	select {
+	case <-scheduler.restarted:
+	case <-time.After(2 * time.Minute):
+		t.Fatal("postgres was never restarted")
+	}
+
+	// A later validation, once the database is back, stores both. One that meets a connection
+	// the restart broke fails as the first did, and is followed by another, as in service.
+	for attempt := 1; ; attempt++ {
+		if err = server.storeSubtreeFiles(ctx, gocore.NewStat("test"), root, st, m, bitmaps); err == nil || attempt == 5 {
+			break
+		}
+
+		time.Sleep(time.Second)
+	}
+
+	require.NoError(t, err)
+
+	for _, fileType := range []fileformat.FileType{fileformat.FileTypeSubtreeMeta, fileformat.FileTypeSubtreeLaneBitmaps, fileformat.FileTypeSubtree} {
+		exists, err := subtreeStore.Exists(ctx, root[:], fileType)
+		require.NoError(t, err)
+		require.True(t, exists, "%s is stored", fileType)
+	}
+
+	pending, err := chainStore.GetPendingBlobDeletions(ctx, dah, 10)
+	require.NoError(t, err)
+
+	scheduled := map[string]uint32{}
+	for _, d := range pending {
+		scheduled[d.FileType] = d.DeleteAtHeight
+	}
+
+	require.Equal(t, dah, scheduled[string(fileformat.FileTypeSubtreeLaneBitmaps)], "the file's deletion is scheduled with the subtree's")
+	require.Equal(t, dah, scheduled[string(fileformat.FileTypeSubtree)])
+
+	data, err := subtreeStore.Get(ctx, root[:], fileformat.FileTypeSubtreeLaneBitmaps)
+	require.NoError(t, err)
+
+	decoded, err := lane.DecodeSubtreeBitmaps(data)
+	require.NoError(t, err)
+
+	rows, err := lane.BuildBlockRows([]lane.LaneBitmaps{decoded.Lanes})
+	require.NoError(t, err)
+	require.Equal(t, uint64(2), rows.Members, "the rows hold both members")
 }
 
 // At shadow ValidateSubtreeInternal puts each member's own lane position, from the txmeta cache,

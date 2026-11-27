@@ -44,8 +44,10 @@ import (
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/bump"
+	"github.com/bsv-blockchain/teranode/util/failpoint"
 	"github.com/bsv-blockchain/teranode/util/health"
 	"github.com/bsv-blockchain/teranode/util/kafka"
+	"github.com/bsv-blockchain/teranode/util/lane"
 	"github.com/bsv-blockchain/teranode/util/retry"
 	"github.com/bsv-blockchain/teranode/util/tracing"
 	"github.com/jellydator/ttlcache/v3"
@@ -175,6 +177,11 @@ type subtreeRetrySend struct {
 
 	// subtreeMetaBytes contains the serialized subtree meta data to be stored
 	subtreeMetaBytes []byte
+
+	// laneBitmaps are the subtree's kept lane bitmaps when it was queued, written as its lane
+	// bitmaps file before the subtree file, so the retry does not depend on them still being kept
+	laneBitmaps    lane.LaneBitmaps
+	hasLaneBitmaps bool
 
 	// retries tracks the number of storage attempts made for this subtree
 	// Used to implement exponential backoff and maximum retry limits
@@ -857,8 +864,27 @@ func (ba *BlockAssembly) storeSubtreeMetaWithRetry(ctx context.Context, subtreeR
 	return err
 }
 
-// storeSubtreeDataWithRetry attempts to store subtree data with retry logic.
+// storeSubtreeDataWithRetry attempts to store subtree data with retry logic. At shadow it writes
+// the subtree's lane bitmaps file first, as storeSubtreeData does, and retries both when that
+// write fails.
 func (ba *BlockAssembly) storeSubtreeDataWithRetry(ctx context.Context, subtreeRetry *subtreeRetrySend, subtreeRetryChan chan *subtreeRetrySend, dah uint32) error {
+	if ba.keepsLanePositions() {
+		var err error
+
+		if subtreeRetry.hasLaneBitmaps {
+			err = ba.writeLaneBitmapsFile(ctx, lane.SubtreeBitmaps{SubtreeHash: subtreeRetry.subtreeHash, Lanes: subtreeRetry.laneBitmaps}, dah)
+		} else {
+			err = ba.writeKeptLaneBitmapsFile(ctx, subtreeRetry.subtreeHash, ba.blockAssembler.utxoStore.GetBlockHeight(), dah)
+		}
+
+		if err != nil {
+			ba.logger.Errorf("[BlockAssembly:Init][%s] subtreeRetryChan: failed to retry store subtree lane bitmaps: %s", subtreeRetry.subtreeHash.String(), err)
+			ba.handleRetryLogic(ctx, subtreeRetry, subtreeRetryChan, "subtree lane bitmaps")
+
+			return err
+		}
+	}
+
 	err := ba.subtreeStore.Set(ctx,
 		subtreeRetry.subtreeHash[:],
 		fileformat.FileTypeSubtree,
@@ -1064,16 +1090,22 @@ func (ba *BlockAssembly) storeSubtreeData(ctx context.Context, subtreeRequest su
 
 	// laneBitmapsDone is closed once the write of the subtree's lane bitmaps has finished or failed.
 	// The subtree file waits for it, as subtree validation's does, so a subtree file is never
-	// written before its lane bitmaps are. A failed encode or write is logged and the subtree is
-	// still stored, as subtree validation does at shadow, so a stored subtree can lack the file. A
-	// peer's block that lists it then counts its bitmaps as missing; a block this node mines uses
-	// the kept bitmaps. Without lanes it is closed now and nothing waits.
+	// written before its lane bitmaps are. A write the store refused (laneBitmapsErr) leaves the
+	// subtree file to the retry processor, which writes the bitmaps file first, as a failed subtree
+	// file write does. Without lanes it is closed now and nothing waits.
 	laneBitmapsDone := make(chan struct{})
+
+	var laneBitmapsErr error
+
+	// The kept bitmaps are read once, here: the write and every retry queued for this request use
+	// them, so they cannot age out of memory in between.
+	laneBitmaps, hasLaneBitmaps := ba.laneRetryBitmaps(*subtree.RootHash())
+
 	if lanes {
 		go func() {
 			defer close(laneBitmapsDone)
 
-			ba.writeKeptLaneBitmapsFile(ctx, *subtree.RootHash(), height, dah)
+			laneBitmapsErr = ba.writeCapturedLaneBitmapsFile(ctx, *subtree.RootHash(), laneBitmaps, hasLaneBitmaps, height, dah)
 		}()
 	} else {
 		close(laneBitmapsDone)
@@ -1103,6 +1135,8 @@ func (ba *BlockAssembly) storeSubtreeData(ctx context.Context, subtreeRequest su
 						subtreeHash:      *subtree.RootHash(),
 						subtreeBytes:     subtreeBytes,
 						subtreeMetaBytes: subtreeMetaBytes,
+						laneBitmaps:      laneBitmaps,
+						hasLaneBitmaps:   hasLaneBitmaps,
 						retries:          0,
 					}
 				}
@@ -1119,6 +1153,24 @@ func (ba *BlockAssembly) storeSubtreeData(ctx context.Context, subtreeRequest su
 		// at shadow, after the subtree's lane bitmaps
 		<-laneBitmapsDone
 
+		if laneBitmapsErr != nil {
+			ba.logger.Errorf("[BlockAssembly:storeSubtreeData][%s] failed to store subtree: %s", subtree.RootHash().String(), laneBitmapsErr)
+			select {
+			case subtreeRetryChan <- &subtreeRetrySend{
+				subtreeHash:    *subtree.RootHash(),
+				subtreeBytes:   subtreeBytes,
+				laneBitmaps:    laneBitmaps,
+				hasLaneBitmaps: hasLaneBitmaps,
+				retries:        0,
+			}:
+			case <-ctx.Done():
+			}
+			subtreeDoneCh <- false
+			close(subtreeDoneCh)
+
+			return
+		}
+
 		storedOK := true
 		if err := ba.subtreeStore.Set(ctx,
 			subtree.RootHash()[:],
@@ -1131,9 +1183,11 @@ func (ba *BlockAssembly) storeSubtreeData(ctx context.Context, subtreeRequest su
 			} else {
 				ba.logger.Errorf("[BlockAssembly:storeSubtreeData][%s] failed to store subtree: %s", subtree.RootHash().String(), err)
 				subtreeRetryChan <- &subtreeRetrySend{
-					subtreeHash:  *subtree.RootHash(),
-					subtreeBytes: subtreeBytes,
-					retries:      0,
+					subtreeHash:    *subtree.RootHash(),
+					subtreeBytes:   subtreeBytes,
+					laneBitmaps:    laneBitmaps,
+					hasLaneBitmaps: hasLaneBitmaps,
+					retries:        0,
 				}
 				storedOK = false
 			}
@@ -2542,6 +2596,10 @@ func (ba *BlockAssembly) submitMiningSolution(ctx context.Context, req *BlockSub
 			ba.logger.Errorf("[BlockAssembly][%s][%s] error storing coinbase tx in tx store: %v", jobID, block.Hash().String(), err)
 		}
 	}
+
+	// crash-consistency seam: after the coinbase write attempt, before AddBlock (block not yet
+	// added or announced); subtree storage may still be in flight on the async workers
+	failpoint.Inject(failpoint.BlockAssemblyPersistBeforeAddBlock)
 
 	ba.logger.Debugf("[BlockAssembly][%s][%s] add block to blockchain", jobID, block.Header.Hash())
 	ba.logger.Debugf("[BlockAssembly][%s][%s] block difficulty: %s", jobID, block.Header.Hash(), block.Header.Bits.CalculateDifficulty().String())
