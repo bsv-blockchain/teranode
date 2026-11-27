@@ -1,0 +1,34 @@
+# Compose override for chaos-test's bsv-regtest fleet, so 'multinode.sh blast
+# --target bsv-regtest' can reach it. Copy it next to that fleet's compose file
+# (docker compose loads compose.override.yaml automatically) and restart:
+#
+#   cp compose/chaostest/bsv-regtest.override.yaml $CHAOS_TEST_DIR/bsv-regtest/compose.override.yaml
+#   make -C $CHAOS_TEST_DIR/bsv-regtest up
+#
+# - Publishes each teranode's propagation gRPC (8084) on the multinode port
+#   scheme (20000 + (N-1)*2000 + 84). The fleet publishes RPC, asset, health
+#   and propagation HTTP only.
+# - Runs the amd64-only images (bitcoin-sv, go-wallet-toolbox, merkle-service)
+#   as linux/amd64, which on Apple Silicon needs Rosetta (OrbStack, Docker
+#   Desktop). Harmless on amd64 hosts.
+#
+# Matches chaos-test's default fleet (3 teranodes, 2 SV nodes); add entries if
+# you generate a larger one.
+services:
+  teranode1:
+    ports:
+      - "20084:8084"
+  teranode2:
+    ports:
+      - "22084:8084"
+  teranode3:
+    ports:
+      - "24084:8084"
+  svnode1:
+    platform: linux/amd64
+  svnode2:
+    platform: linux/amd64
+  wallet-infra:
+    platform: linux/amd64
+  merkle-service:
+    platform: linux/amd64

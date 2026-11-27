@@ -1,0 +1,110 @@
+id: multinode-wallet-chaos-flow
+name: Wallet flow through chaos - a partition and a paused node mid-send, no divergence
+description: >
+  The BRC-100 wallet sends a steady low-rate flow through the broadcaster with auto-mining.
+  Partway through, C is cut off the p2p network and later B is paused; both are healed before
+  the flow stops. The wallet and the network must agree on every transaction (no
+  wallet_divergence), sends must land in blocks, and the fleet must converge afterwards.
+requires: [regtest]
+roles:
+  A: teranode1   # funds the wallet and auto-mines
+  B: teranode2   # paused mid-flow
+  C: teranode3   # partitioned mid-flow
+params:
+  tps: 2
+  phaseSeconds: 30
+  autoMine: 15
+steps:
+  - name: converge the fleet
+    action: mine
+    with: { node: A, blocks: 2 }
+    assert:
+      - { check: same_tip, with: { nodes: [A, B, C] }, timeout: 90s }
+
+  - name: top up the wallet
+    action: wallet_topup
+    with: { node: A, satoshis: 4000000, count: 12, mine: true, waitSeconds: 180 }
+    as: fund
+    timeout: 10m
+    assert:
+      - check: wallet_tx_status
+        with: { txid: "${fund.txid}", arcade: MINED }
+        timeout: 120s
+        message: the funding transaction reached a block
+
+  - name: mark
+    action: mark
+    as: m0
+
+  # The send loop does not mine; the orchestrator's auto-miner keeps the chain moving.
+  - name: auto-mine on A
+    action: automine
+    with: { enabled: true, intervalSeconds: "${autoMine}", node: A, blocks: 1 }
+
+  - name: start the send
+    action: wallet_send_start
+    with: { tps: "${tps}", workers: 2, shape: opreturn }
+
+  - name: calm phase
+    action: wait
+    with: { seconds: "${phaseSeconds}" }
+
+  - name: cut C off the p2p network
+    action: partition
+    with: { nodes: [C], plane: p2p, on: true }
+
+  - name: partitioned phase
+    action: wait
+    with: { seconds: "${phaseSeconds}" }
+
+  - name: pause B too
+    action: chaos
+    with: { node: B, action: pause }
+
+  - name: A alone phase
+    action: wait
+    with: { seconds: "${phaseSeconds}" }
+
+  - name: unpause B
+    action: chaos
+    with: { node: B, action: unpause }
+
+  - name: heal C
+    action: partition
+    with: { nodes: [C], plane: p2p, on: false }
+
+  - name: recovery phase
+    action: wait
+    with: { seconds: "${phaseSeconds}" }
+
+  - name: stop and read the counters
+    action: wallet_send_stop
+    with: { timeoutSeconds: 30 }
+    as: stopped
+    assert:
+      - check: expr
+        with: { left: "${stopped.succeeded}", op: "!=", right: "0" }
+        message: the wallet sent something
+      - check: expr
+        with: { left: "${stopped.failed}", op: "==", right: "0" }
+        message: no send failed
+        should: true
+
+  - name: stop auto-mining
+    action: automine
+    with: { enabled: false }
+
+  - name: the flow landed and the fleet agrees
+    action: note
+    with:
+      message: attempted=${stopped.attempted} succeeded=${stopped.succeeded} failed=${stopped.failed} waiting=${stopped.backpressure}
+    assert:
+      - check: event
+        with: { kind: mine, contains: "[auto-mine]", since: "${m0.eventId}", min: 2 }
+        timeout: 30s
+        message: the auto-miner kept mining through the chaos
+      - check: no_event
+        with: { kind: wallet_divergence, since: "${m0.eventId}" }
+        timeout: 60s
+        message: the wallet and the network agreed about every transaction
+      - { check: same_tip, with: { nodes: [A, B, C] }, timeout: 180s }

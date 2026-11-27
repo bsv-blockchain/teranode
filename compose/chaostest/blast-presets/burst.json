@@ -1,0 +1,7 @@
+{
+  "description": "The default mix in bursts: all workers paused for 5 s, then released together for 0.5 s (thundering herd).",
+  "mix": {
+    "Weights": [80, 0, 5, 5, 0, 5, 2, 0, 3, 0, 0, 0, 0, 0, 0, 0]
+  },
+  "burst_pattern": "5000,500"
+}

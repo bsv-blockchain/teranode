@@ -1,0 +1,7 @@
+{
+  "description": "15% double spends, each half sent to a different node.",
+  "mix": {
+    "Weights": [85, 0, 0, 0, 0, 0, 15, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    "ds_strategy": 1
+  }
+}

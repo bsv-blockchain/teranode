@@ -1,0 +1,106 @@
+id: multinode-bcast-double-spend
+name: Broadcaster double spend - the first spend wins, the rivals are refused everywhere
+description: >
+  Three transactions spend the same coinbase output. The first goes to the broadcaster and must
+  be MINED with a valid proof. The second also goes to the broadcaster after the first is in
+  every mempool, and must end DOUBLE_SPEND_ATTEMPTED or REJECTED, never MINED. The third goes
+  straight to node B, which must refuse it. No mempool keeps a rival, and the fleet converges.
+requires: [regtest]
+roles:
+  A: teranode1   # mines
+  B: teranode2   # receives the direct rival
+  C: teranode3
+params:
+  fee: 500
+steps:
+  - name: converge - mine on A
+    action: mine
+    with: { node: A, blocks: 1 }
+    assert:
+      - { check: same_tip, with: { nodes: [A, B, C] }, timeout: 90s }
+
+  - name: fund - mine to coinbase maturity on A
+    action: mine
+    with: { node: A, blocks: 101 }
+    as: fund
+    timeout: 10m
+    assert:
+      - { check: same_tip, with: { nodes: [A, B, C] }, timeout: 120s }
+
+  - name: three recipient keys
+    action: newkey
+    with: { name: "bcast-ds-1-${fund.last}" }
+    as: r1
+  - name: second recipient
+    action: newkey
+    with: { name: "bcast-ds-2-${fund.last}" }
+    as: r2
+  - name: third recipient
+    action: newkey
+    with: { name: "bcast-ds-3-${fund.last}" }
+    as: r3
+
+  - name: a mature coinbase
+    action: coinbase
+    with: { node: A, height: "${tip(A) - 100}" }
+    as: cb
+
+  - name: first spend
+    action: spend
+    with: { node: A, txid: "${cb.txid}", vout: 0, key: miner, to: "${r1.name}", fee: "${fee}" }
+    as: first
+  - name: rival spend for the broadcaster
+    action: spend
+    with: { node: A, txid: "${cb.txid}", vout: 0, key: miner, to: "${r2.name}", fee: "${fee}" }
+    as: rival
+  - name: rival spend for node B
+    action: spend
+    with: { node: A, txid: "${cb.txid}", vout: 0, key: miner, to: "${r3.name}", fee: "${fee}" }
+    as: direct
+
+  - name: submit the first spend to the broadcaster
+    action: submit
+    with: { target: arcade, tx: "${first}" }
+    as: s1
+    assert:
+      - { check: expr, with: { left: "${s1.accepted}", right: "true" } }
+      - { check: mempool_has, with: { node: A, txid: "${first.txid}" }, timeout: 60s }
+      - { check: mempool_has, with: { node: B, txid: "${first.txid}" }, timeout: 60s }
+      - { check: mempool_has, with: { node: C, txid: "${first.txid}" }, timeout: 60s }
+
+  - name: submit the rival to the broadcaster
+    action: submit
+    with: { target: arcade, tx: "${rival}" }
+    as: s2
+    assert:
+      - check: arcade_tx_status
+        with: { txid: "${rival.txid}", status: "DOUBLE_SPEND_ATTEMPTED|REJECTED" }
+        timeout: 90s
+        message: the broadcaster reports the rival as a double spend or a rejection
+      - { check: mempool_lacks, with: { node: A, txid: "${rival.txid}" } }
+      - { check: mempool_lacks, with: { node: B, txid: "${rival.txid}" } }
+      - { check: mempool_lacks, with: { node: C, txid: "${rival.txid}" } }
+
+  - name: submit the other rival straight to B
+    action: submit
+    with: { target: B, tx: "${direct}" }
+    as: s3
+    assert:
+      - check: expr
+        with: { left: "${s3.accepted}", right: "false" }
+        message: B refused a spend of an output already spent in its mempool
+      - { check: mempool_lacks, with: { node: B, txid: "${direct.txid}" } }
+
+  - name: mine on A
+    action: mine
+    with: { node: A, blocks: 1 }
+    as: blk
+    assert:
+      - check: arcade_tx_status
+        with: { txid: "${first.txid}", status: MINED, block: "${blk.last}", proof: true }
+        timeout: 90s
+        message: the first spend is mined with a valid proof
+      - check: arcade_tx_status
+        with: { txid: "${rival.txid}", status: "DOUBLE_SPEND_ATTEMPTED|REJECTED" }
+        message: the rival is still refused after the block, not MINED
+      - { check: same_tip, with: { nodes: [A, B, C] }, timeout: 60s }

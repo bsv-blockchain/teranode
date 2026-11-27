@@ -32,14 +32,15 @@ compose/multinode.sh down
 
 | Command | Description |
 |---|---|
-| `up <N> [-allinone=0\|1] [--skip N:svc ...]` | Generate config and start N nodes (3-10). See [Split topology](#split-topology) for the flags. |
+| `up <N> [-allinone=0\|1] [--skip N:svc ...] [--chaostest [--svnodes 0-2]]` | Generate config and start N nodes (3-10). See [Split topology](#split-topology) for the flags, and [chaos-test scenarios](#chaos-test-scenarios) for `--chaostest`. |
 | `down` | Stop and remove all containers and volumes |
 | `restart` | Restart containers (picks up config changes after `make gen-multinode`) |
 | `status` | Show container status (split mode: tallies running/total services per node) |
 | `logs [node[-svc]]` | Tail logs for all nodes, a specific node, or one split-mode service (e.g. `logs 2-validator`) |
 | `dashboards` | Open all node dashboards in the browser |
 | `generate <node,count> ...` | Generate blocks on specific nodes |
-| `blast [nodes] [--build] [--auto-mine[=N]] [-- args]` | Run the coinbase blaster against the stack |
+| `blast [nodes] [--build] [--auto-mine[=N]] [--fresh] [--target multinode\|bsv-regtest] [-- args]` | Run the coinbase blaster against the stack, or against chaos-test's fleet |
+| `sim up [--build] [--no-arcade] [--no-wallet]` / `sim run <scenario> [--step]` / `sim status\|logs\|down` | Run chaos-test scenarios against the stack. See [chaos-test scenarios](#chaos-test-scenarios). |
 
 ### Blaster
 
@@ -91,6 +92,7 @@ The suite is gated behind the `network_chaos` build tag so it does not run under
 | `chaos unpause <node> [service]` | Unfreeze a paused node or service |
 | `chaos slow <node> <ms>` | Add network latency to a node |
 | `chaos unslow <node>` | Remove added latency from a node |
+| `chaos seal [node]` | `--chaostest` stacks: make chaos-test partitions hold (see [chaos-test scenarios](#chaos-test-scenarios)) |
 
 ```bash
 # Isolate node 3 from peers (RPC still works, can still generate blocks)
@@ -111,6 +113,117 @@ compose/multinode.sh chaos start 4
 ```
 
 The `isolate`/`heal`/`slow`/`unslow` commands inject `iptables` and `tc` rules into the target container's network namespace via a short-lived `nicolaka/netshoot` sidecar that shares the netns (`docker run --net=container:teranodeN --cap-add=NET_ADMIN ...`). Rules persist in the target's netns after the sidecar exits. No `sudo`, `nsenter`, or `iproute2` on the host — works identically on Linux and macOS (Docker Desktop). The sidecar image (~200MB) is pulled on first use and cached. Override with `NETSHOOT_IMAGE=...` if you need a different tag or mirror. The `kill`/`start`/`pause`/`unpause` commands are pure Docker operations with no extra dependencies.
+
+## chaos-test scenarios
+
+[chaos-test](https://github.com/galt-tr/chaos-test) is a scenario engine with a web UI. A scenario is a YAML file of ordered steps (mine, spend, submit, freeze, pause a node, ...) with polled assertions (same tip, UTXO status, Kafka verdict events, container-log counts). A failed assertion either aborts the run or, with `should: true`, is recorded as a finding. `sim` runs its orchestrator against this stack.
+
+```bash
+git clone https://github.com/galt-tr/chaos-test ../chaos-test   # once; or set CHAOS_TEST_DIR
+
+compose/multinode.sh up 3 --chaostest             # chaos-test's network layout, alert hub, 2 SV nodes
+compose/multinode.sh sim up                        # builds the image on first use; UI on http://localhost:8600, arcade on :18080, wallet
+compose/multinode.sh sim run freeze-timing-skew    # any bundled scenario; follows the run, exits 0 on pass
+compose/multinode.sh sim run multinode-freeze-skew-rpc --step   # pause before each step
+compose/multinode.sh sim down                      # 'down' also removes it
+```
+
+`--chaostest` (all-in-one only) lays the stack out the way chaos-test's `bsv-regtest` fleet is, which is what its bundled scenarios assume:
+
+| Network | Subnet | Carries |
+|---|---|---|
+| `teranode-network-multinode-*` | docker-assigned | stores, Kafka, RPC, the orchestrator; never partitioned |
+| `teranode-chaosnet-multinode-*` | 10.200.0.0/24, pinned | node p2p (9905), the datahubs, legacy p2p to the SV nodes (18444), arcade |
+| `teranode-alertnet-multinode-*` | 192.0.0.128/26, pinned | alert p2p: teranodes (9908), the hub `alert-system-multinode` and SV sidecars (9906), the orchestrator |
+
+- chaos-test partitions a node by disconnecting it from chaosnet (`plane: p2p`) or alertnet (`plane: alert`). A node's own services talk on `localhost`, because its container name resolves to its chaosnet address.
+- Both planes are `internal`, and every node container drops packets for them that would leave through its default route (`chaos seal`, applied on `up`, `restart` and `chaos start`). Without that, a disconnected node still reaches the other side through the docker host: OrbStack forwards between bridges even when docker marks a network internal, and the partition silently leaks. Re-run `chaos seal` after restarting a node any other way.
+- Alerts use chaos-test's dev genesis keys (read from its `keys.json` at `up`) and throwaway identities from [`gennodes/alert_keys.json`](cmd/gennodes/alert_keys.json). The hub starts once teranode1's alert service listens and serves its API (`:3000`) after syncing with two peers, about a minute after `up`.
+- The nodes' asset API rate limits are raised (`asset_httpRateLimit`, `asset_httpHeavyRateLimit`) as on chaos-test's fleet. At the default 10 heavy requests per second per IP, the legacy service, which fetches each block it serves from its own asset API, was rate-limited and the SV nodes stalled.
+- `--svnodes N` (0-2, default 2) adds Bitcoin SV nodes (`bitcoinsv/bitcoin-sv:1.2.2`, amd64) following over the legacy protocol, each with an alert sidecar; RPC on host 16332/17332. svnode2 runs with `acceptnonstdoutputs=0`, as on chaos-test's fleet. `up` mines block 1 and restarts the teranodes once: their legacy service advertises NODE_NETWORK, which SV Node needs to sync, only if a block was persisted when it started.
+- Needs chaos-test's `alert-system` and `walletd` images; `up` and `sim up` build them from the checkout when missing.
+
+How it fits together:
+
+- `make gen-multinode` / `up` writes `generated/chaostest/inventory.json` (nodes, in-network and host URLs, Kafka verdict topics, containers) alongside the compose file.
+- `sim up` copies it to `data/multinode-chaostest/config/`, adding the miner key (`PK1`, which the coinbase pays) and chaos-test's development `keys.json`. Keys never land in `generated/`.
+- The orchestrator joins the stack's compose network, so it reaches nodes by name and consumes the `rejectedtx-*` / `invalid-blocks-*` topics that `event` checks match on. It uses the Docker socket (`CONTAINER_SOCKET`, default `/var/run/docker.sock`) for pause/stop and container-log checks.
+- `sim up` also starts arcade (`arcade-multinode`, the image and settings of bsv-regtest's `arcade` profile) on the stack network, pointed at every node's datahub and p2p address (on chaosnet with `--chaostest`), and adds it to the inventory, so `submit` with `target: arcade` works. Host ports 18080 (API), 18081 (health), 18082 (events), 18083 (chaintracks); `ARCADE_HOST_PORT` moves them, `--no-arcade` skips it (and the wallet). merkle-service sends it merkle proofs.
+- Before arcade it starts merkle-service (`merkle-service-multinode`, bsv-regtest's `merkle` profile, amd64, host 18090), which follows the nodes over p2p and calls arcade back with merkle proofs.
+- It then starts the wallet: `wallet-db-multinode` (postgres), `wallet-infra-multinode` (go-wallet-toolbox storage server, amd64, broadcasting through arcade, host 18100) and `walletd-multinode` (host 18700), with chaos-test's dev wallet config and keys. `--no-wallet` skips it.
+- With `--chaostest` the orchestrator also joins alertnet, so `push_alert` reaches the nodes. `down` clears its alert log along with the chain.
+- Scenarios load from the image's bundled examples plus [`chaostest/scenarios/`](chaostest/scenarios/) (override with `SCENARIOS_DIR`). Bundled scenarios are baked into the image, so pick up new ones with `sim up --build`; ours are mounted live and load on the next `sim up`. Run records are kept in `data/multinode-chaostest/data/runs/`.
+
+With `--chaostest` every action and check chaos-test has works here, so its bundled scenarios run unchanged. Without it there is one network: no alerts, SV nodes or partitions (use `chaos isolate`/`heal`). See [`chaostest/scenarios/README.md`](chaostest/scenarios/README.md) for results on this stack.
+
+The blaster runs alongside: start `blast` in another terminal and run a scenario while it loads the network. On both this stack and chaos-test's fleet the blaster funds itself from **PK2**, the coinbase's second output, while chaos-test scenarios spend the first (PK1), so the two never spend the same coins. A blaster state directory funded from PK1 by an earlier version needs `blast --fresh`.
+
+### chaosctl: both stacks, the blaster and scenarios in one tool
+
+`compose/chaostest/chaosctl.sh` wraps all of this: `stack up a|b [--switch]`, `stack status|reset|down`, `blast start <preset> | status | stop` (presets in `compose/chaostest/blast-presets/`), and `scenario run <id>... [--under-load [preset]] [--reset]`, which records each result in `data/chaosctl/runs/` and compares it with the previous run. The Claude Code skills `chaos-stack`, `chaos-blast` and `chaos-scenario` (`.claude/skills/`) drive it.
+
+### Blasting chaos-test's own fleet
+
+Most of chaos-test's bundled scenarios need services this stack does not run yet (the alert hub, SV nodes, the wallet). To run them unchanged under load, run chaos-test's `bsv-regtest` fleet with our image and point the blaster at it:
+
+```bash
+# once: run our image, publish propagation gRPC, run amd64-only images under Rosetta
+printf 'TERANODE_IMAGE_%s=teranode:latest\n' 1 2 3 > ../chaos-test/bsv-regtest/.env
+cp compose/chaostest/bsv-regtest.override.yaml ../chaos-test/bsv-regtest/compose.override.yaml
+make -C ../chaos-test/bsv-regtest RUNTIME=docker build-tools build-alert-system build-walletd up wait
+make -C ../chaos-test RUNTIME=docker sim-build sim-up              # UI on http://localhost:8600
+
+# terminal 1: load
+compose/multinode.sh blast --target bsv-regtest --fresh --auto-mine -- --workers 10
+# terminal 2 (or the UI): a scenario under that load
+curl -X POST -d '{"mode":"auto"}' localhost:8600/api/scenarios/freeze-skew-rpc/run
+```
+
+- That fleet runs teranode on SQLite, where this stack runs Aerospike, so the same scenario can behave differently on the two (an RPC freeze, for one, takes effect there and not here). With the default 100 workers and a block every second it sustained about 250 tx/s, but the other teranodes fell up to 50 blocks behind and needed about 40 s to catch up once mining slowed. Use `--workers 10` and the default 5 s auto-mine when a scenario needs the fleet converged; use this stack for high throughput.
+- chaos-test's `make reset` wipes the chain: stop the blaster first, and restart it with `--fresh`. Funding resumes once 100 blocks have been mined while it runs (`--auto-mine` does this).
+- Only one stack can run at a time: both publish the same host ports.
+
+### Nightly chain integrity on this stack
+
+`compose/chaostest/nightly.sh` runs the whole thing unattended, locally or from
+`.github/workflows/nightly_chain_integrity_stack.yaml` (05:00 UTC, `teranode-runner-16-core`, amd64):
+
+| Phase | Suite (`compose/chaostest/suites/`) | What it proves |
+|---|---|---|
+| 1 | `chain-integrity-nightly` | Under wallet load through the broadcaster (and the blaster when available), with mining rotating over the teranodes, then again through a fork, a paused node and a merkle-service outage: `chain_audit` finds the same block hash and merkle root at every height on every teranode and in the broadcaster's chaintracks, and `proof_audit` checks every wallet tx's merkle path - built independently by merkle-service from datahub subtrees - against each node's block at that height. The SV nodes are cross-checked on the heights they hold. |
+| 2 | `broadcaster-e2e` | the broadcaster scenarios (happy path, double spend, reorg, outages) |
+| 3 | `chaos-library` | chaos-test's bundled scenarios, plus `svnode-dust-policy` after a 110-block pre-mine |
+
+```bash
+compose/chaostest/nightly.sh --dry-run       # what would run
+compose/chaostest/nightly.sh --quick         # ~15 min smoke of the pipeline (short phase 1)
+compose/chaostest/nightly.sh --phases 1      # one phase; --no-build reuses the images, --keep leaves the stack up
+```
+
+Results land in `data/nightly/<run>/`: `summary.md` (also the GitHub job summary), `junit.xml`,
+every run record (`runs/`, `orchestrator-runs/` with the audit reports), container logs,
+diagnostics and merkle-service's consumer groups. The exit code is non-zero for any failure not
+listed in `suites/known-failures.txt`; chain divergences and wrong proofs are never quarantined.
+Scenario parameters can be overridden per run with `chaosctl.sh scenario run ... --param k=v`.
+
+To run the workflow from a fork on your own machine: register a self-hosted runner for the fork
+(Settings → Actions → Runners) with a label such as `chaos-stack`, and set the repository
+variable `NIGHTLY_RUNNER` to that label (or a JSON list, `["self-hosted","chaos-stack"]`). The
+runner needs Docker, about 16 GB of RAM for the stack, and amd64 or amd64 emulation (Docker
+Desktop on Apple silicon works, more slowly). Bring any local stack down first: the run checks
+that the stack's host ports are free. Without a `TERANODE_COINBASE_TOKEN` secret the run uses
+wallet load only. Scheduled runs only happen from the fork's default branch, so the workflow has
+to be on its `main`. The variable `NIGHTLY_PHASES` (for example `1`) limits which phases the
+scheduled run takes; a manual run (Actions → nightly-chain-integrity-stack → Run workflow)
+chooses its own. Install the runner as a service (`./svc.sh install && ./svc.sh start` in the
+runner directory) so it survives a restart. On macOS the service runs as a launchd agent, which
+cannot use the login keychain, so `docker login` fails with "User interaction is not allowed".
+Give the runner its own Docker config that stores logins in a file: create
+`<runner>/.docker/config.json` with `{"currentContext": "<your context>", "credHelpers":
+{"credentials-in-file.invalid": "none"}}` (any `credHelpers` entry stops the CLI from picking
+the keychain), symlink `contexts`, `cli-plugins` and `buildx` from `~/.docker` into it, and add
+`export DOCKER_CONFIG=<runner>/.docker` to `runsvc.sh` after its "insert anything to setup env"
+line (`.env` does not reach the job's steps). The workflow logs out at the end of each job.
 
 ## Split topology
 

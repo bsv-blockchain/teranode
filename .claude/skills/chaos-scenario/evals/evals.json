@@ -1,0 +1,44 @@
+{
+  "skill_name": "chaos-scenario",
+  "notes": "Needs a running stack with its orchestrator on :8600. Baseline = no skill. Long-running: allow 10+ minutes per scenario.",
+  "evals": [
+    {
+      "id": 1,
+      "name": "galts-six-under-load",
+      "prompt": "Run all six of galt's scenarios under the adversarial blaster preset.",
+      "expected_output": "On Stack B, runs chaosctl.sh scenario run with all six ids, --under-load adversarial and --reset; reports each result with findings and the comparison line.",
+      "assertions": [
+        "Checks that Stack B is the active stack (or offers to switch)",
+        "Uses --under-load adversarial",
+        "Uses --reset between scenarios",
+        "Reports passed / failed / findings per scenario rather than a single verdict",
+        "Mentions that --reset wipes the chain if the user did not ask for it"
+      ],
+      "files": []
+    },
+    {
+      "id": 2,
+      "name": "wrong-stack",
+      "prompt": "Run svnode-dust-policy.",
+      "expected_output": "If Stack A is up, explains it needs SV nodes (Stack B only) and offers to switch; on Stack B, runs it.",
+      "assertions": [
+        "Knows svnode-dust-policy needs Stack B",
+        "Does not start it on Stack A",
+        "Does not switch stacks without asking"
+      ],
+      "files": []
+    },
+    {
+      "id": 3,
+      "name": "findings-are-results",
+      "prompt": "freeze-skew-rpc says passed but lists 5 findings. Did it pass or fail?",
+      "expected_output": "Explains that findings are recorded disagreements from should:true checks; the run passed its hard checks, and the findings describe how node A rejects the block.",
+      "assertions": [
+        "Distinguishes findings (should: true) from failed steps",
+        "Summarises the findings in plain words",
+        "Points to the saved JSON or scenario last for details"
+      ],
+      "files": []
+    }
+  ]
+}

@@ -5,6 +5,7 @@
 //	<outdir>/settings_multinode.conf
 //	<outdir>/postgres/init-multinode.sql
 //	<outdir>/aerospike/aerospike-{1..N}.conf
+//	<outdir>/chaostest/inventory.json (chaos-test fleet description; see chaostest.go)
 //
 // Bring it up with:
 //
@@ -110,6 +111,13 @@ type node struct {
 	// would leave every peer undiallable ("no good addresses") and blocks
 	// would never propagate. Emitted only when AllInOne is false.
 	StaticPeersSplit string
+
+	// Set by applyChaosPlanes (-chaostest) only.
+	ChaosIP          string
+	AlertIP          string
+	AlertPeerID      string
+	AlertPrivateKey  string
+	StaticPeersChaos string // StaticPeers on chaosnet IPs
 }
 
 type spec struct {
@@ -130,6 +138,10 @@ type spec struct {
 	// settings_multinode.conf. Defaults to productionRetention, which emits
 	// nothing and leaves settings.conf's shipped values in force.
 	Retention retentionProfile
+
+	// Chaos is the chaos-test network layout (-chaostest); nil leaves the
+	// single-network stack. See chaosplanes.go.
+	Chaos *chaosPlanes
 }
 
 // retentionProfile is THE place to change pruning aggressiveness for the
@@ -530,6 +542,9 @@ func main() {
 	out := flag.String("o", "compose/generated", "output directory (relative or absolute)")
 	allInOne := flag.Int("allinone", 1, "1 = single container per node (default), 0 = split per microservice (chaos topology)")
 	limits := flag.String("limits", "", "split-mode per-service resource caps: 'svc=cpus[:mem][,...]' (e.g. 'blockassembly=2:8g,validator=4'); empty = unlimited")
+	chaosTest := flag.Bool("chaostest", false, "lay the stack out like chaos-test's bsv-regtest fleet: a p2p network chaos-test can partition, an alert network and the alert hub (all-in-one only)")
+	svNodes := flag.Int("svnodes", 2, "with -chaostest: Bitcoin SV nodes following the teranodes over the legacy protocol (0-2)")
+	alertGenesis := flag.String("alert-genesis-keys", "", "with -chaostest: comma-separated alert genesis public keys (hex), matching the keys chaos-test signs alerts with")
 	retention := flag.String("retention", "production", "pruner/retention profile: production (inherit settings.conf), aggressive (prune within tens of blocks), or prod-scaling (mirror a production scaling deployment)")
 	flag.Parse()
 
@@ -564,6 +579,19 @@ func main() {
 	s := buildSpec(keys)
 	s.AllInOne = *allInOne == 1
 	s.Retention = profile
+
+	if *chaosTest {
+		var genesis []string
+		for _, k := range strings.Split(*alertGenesis, ",") {
+			if k = strings.TrimSpace(k); k != "" {
+				genesis = append(genesis, k)
+			}
+		}
+		if err := applyChaosPlanes(&s, genesis, *svNodes); err != nil {
+			fmt.Fprintf(os.Stderr, "%v\n", err)
+			os.Exit(2)
+		}
+	}
 
 	if err := applyLimits(s.SplitServices, *limits); err != nil {
 		fmt.Fprintf(os.Stderr, "%v\n", err)
@@ -710,7 +738,15 @@ func writeAll(outDir string, s spec) error {
 			return err
 		}
 	}
-	return nil
+	if s.Chaos != nil {
+		if err := writeAlertConfigs(outDir, s); err != nil {
+			return err
+		}
+		if err := writeSVNodeConfigs(outDir, s); err != nil {
+			return err
+		}
+	}
+	return writeChaosTestInventory(outDir, s)
 }
 
 func renderToFile(tmplPath, dst string, data any) error {

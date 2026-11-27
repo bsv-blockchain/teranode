@@ -1,0 +1,107 @@
+id: multinode-bcast-reorg
+name: Broadcaster reorg - a mined tx loses its block and is mined again on the winning chain
+description: >
+  C is cut off from the p2p network. A spend submitted to the broadcaster reaches A and B only
+  and is MINED in block X on A. Meanwhile C mines a longer chain without it. When C rejoins,
+  A and B reorg onto C's chain and block X is orphaned. The tx must come back, be mined again
+  in the next block A mines, and the broadcaster must report it MINED in that canonical block
+  with a proof that matches the header, not in X.
+requires: [regtest]
+roles:
+  A: teranode1   # mines the losing block and, after the reorg, the winning one
+  B: teranode2
+  C: teranode3   # partitioned; mines the heavier chain
+params:
+  fee: 500
+  rivalBlocks: 2
+steps:
+  - name: converge - mine on A
+    action: mine
+    with: { node: A, blocks: 1 }
+    assert:
+      - { check: same_tip, with: { nodes: [A, B, C] }, timeout: 90s }
+
+  - name: fund - mine to coinbase maturity on A
+    action: mine
+    with: { node: A, blocks: 101 }
+    as: fund
+    timeout: 10m
+    assert:
+      - { check: same_tip, with: { nodes: [A, B, C] }, timeout: 120s }
+
+  - name: recipient key
+    action: newkey
+    with: { name: "bcast-reorg-${fund.last}" }
+    as: recipient
+
+  - name: a mature coinbase
+    action: coinbase
+    with: { node: A, height: "${tip(A) - 100}" }
+    as: cb
+
+  - name: spend it to the recipient
+    action: spend
+    with: { node: A, txid: "${cb.txid}", vout: 0, key: miner, to: "${recipient.name}", fee: "${fee}" }
+    as: tx
+
+  - name: cut C off the p2p network
+    action: partition
+    with: { nodes: [C], plane: p2p, on: true }
+
+  - name: submit to the broadcaster (reaches A and B only)
+    action: submit
+    with: { target: arcade, tx: "${tx}" }
+    as: submitted
+    assert:
+      - { check: expr, with: { left: "${submitted.accepted}", right: "true" } }
+      - { check: mempool_has, with: { node: A, txid: "${tx.txid}" }, timeout: 60s }
+      - { check: mempool_lacks, with: { node: C, txid: "${tx.txid}" } }
+
+  - name: A mines block X with the tx
+    action: mine
+    with: { node: A, blocks: 1 }
+    as: x
+    assert:
+      - check: arcade_tx_status
+        with: { txid: "${tx.txid}", status: MINED, block: "${x.last}", proof: true }
+        timeout: 90s
+        message: MINED in X before the reorg
+      - { check: same_tip, with: { nodes: [A, B] }, timeout: 60s }
+
+  - name: C mines a longer chain without the tx
+    action: mine
+    with: { node: C, blocks: "${rivalBlocks}" }
+    as: rival
+
+  - name: C rejoins - A and B must reorg onto its chain
+    action: partition
+    with: { nodes: [C], plane: p2p, on: false }
+    assert:
+      - check: tip_is
+        with: { node: A, hash: "${rival.last}" }
+        timeout: 120s
+        message: A reorged onto C's heavier chain
+      - { check: same_tip, with: { nodes: [A, B, C] }, timeout: 120s }
+      - check: arcade_block_status
+        with: { hash: "${x.last}", status: orphaned }
+        timeout: 120s
+        message: the broadcaster orphaned block X
+        should: true
+
+  - name: the tx is back in A's mempool
+    action: wait_for
+    with:
+      check: mempool_has
+      with: { node: A, txid: "${tx.txid}" }
+      timeout: 90s
+
+  - name: A mines the canonical block with the tx
+    action: mine
+    with: { node: A, blocks: 1 }
+    as: y
+    assert:
+      - check: arcade_tx_status
+        with: { txid: "${tx.txid}", status: MINED, block: "${y.last}", proof: true, node: C }
+        timeout: 120s
+        message: MINED in the canonical block, proof matches C's header
+      - { check: same_tip, with: { nodes: [A, B, C] }, timeout: 60s }

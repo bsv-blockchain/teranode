@@ -1,0 +1,187 @@
+name: nightly-chain-integrity-stack
+# Chain integrity on the multinode chaos stack: 3 teranodes on Aerospike, 2 SV nodes, BSV
+# Broadcaster, merkle-service, wallet and the chaos-test orchestrator. merkle-service builds a
+# merkle path for every broadcast tx independently, and every path is checked against every
+# node's block header; every height is compared across all nodes. Then the broadcaster
+# end-to-end suite and chaos-test's library run on the same stack. See
+# compose/chaostest/nightly.sh and compose/MULTINODE.md.
+on:
+  push:  # TEMPORARY: trial run on upstream before the PR; not for merge
+    branches: [chaostest/nightly-trial]
+  schedule:
+    - cron: '0 5 * * *'  # after nightly_tests (02:00) and fuzz (04:00), which share the runner pool
+  workflow_dispatch:
+    inputs:
+      quick:
+        description: 'Short phase 1 only (~15 min), to check the pipeline'
+        type: boolean
+        default: false
+      phases:
+        description: 'Phases to run (1 integrity, 2 broadcaster e2e, 3 chaos library)'
+        default: '1,2,3'
+      chaos_test_repo:
+        description: 'chaos-test repository (default: env.CHAOS_TEST_REPO)'
+        default: ''
+      chaos_test_ref:
+        description: 'chaos-test ref (default: env.CHAOS_TEST_REF; needs arcade_tx_status, chain_audit, proof_audit)'
+        default: ''
+
+permissions:
+  contents: read
+  packages: read
+  actions: read   # download the previous night's artifact for the comparison
+
+concurrency:
+  group: nightly-chain-integrity-stack
+  cancel-in-progress: false
+
+env:
+  GO_VERSION: '1.27.0'
+  # chaos-test with the checks the scenarios use (arcade_tx_status, chain_audit, proof_audit,
+  # chaos on services, the UTXO hash for teranode's freeze RPC), pinned to a commit until they are
+  # merged upstream in galt-tr/chaos-test.
+  CHAOS_TEST_REPO: sugh01/chaos-test
+  CHAOS_TEST_REF: 4488120ecf6f653fbc77183bf2a0adab490ee117
+
+jobs:
+  chain-integrity-stack:
+    # The org's self-hosted pool by default. A fork sets the repository variable NIGHTLY_RUNNER
+    # to its own runner's label, e.g. chaos-stack (a JSON list such as ["self-hosted","chaos-stack"]
+    # also works). The SV node, merkle-service and wallet-infra images are amd64-only: the
+    # runner must be amd64 or run them under emulation (Docker Desktop on Apple silicon).
+    runs-on: ${{ vars.NIGHTLY_RUNNER && (startsWith(vars.NIGHTLY_RUNNER, '[') && fromJSON(vars.NIGHTLY_RUNNER) || vars.NIGHTLY_RUNNER) || 'teranode-runner-16-core' }}
+    timeout-minutes: 180  # the phase time boxes (70 + 35 + 45 min) plus build and stack start
+    env:
+      CHAOS_TEST_DIR: ${{ github.workspace }}/chaos-test
+      HAS_COINBASE_TOKEN: ${{ secrets.TERANODE_COINBASE_TOKEN != '' }}
+    steps:
+      - name: Check the runner
+        run: |
+          set -eu
+          arch=$(uname -m)
+          cpus=$(getconf _NPROCESSORS_ONLN)
+          if [ "$(uname -s)" = Darwin ]; then
+            mem=$(( $(sysctl -n hw.memsize) / 1073741824 ))
+          else
+            mem=$(( $(awk '/MemTotal/{print $2}' /proc/meminfo) / 1048576 ))
+          fi
+          echo "os=$(uname -s) arch=$arch cpus=$cpus mem=${mem}G"
+          case "$arch" in
+            x86_64|amd64) ;;
+            arm64|aarch64)
+              # Not tested here: that would need a registry pull. Without emulation the SV nodes
+              # fail to start and stack-up reports it.
+              echo "::warning::arm64 runner: the SV node, merkle-service and wallet-infra images are amd64 and need emulation (Docker Desktop on Apple silicon); expect it to be slower" ;;
+            *) echo "::error::unsupported architecture $arch"; exit 1 ;;
+          esac
+          if command -v ss >/dev/null; then
+            listening=$(ss -ltnH | awk '{print $4}')
+          else
+            listening=$(lsof -nP -iTCP -sTCP:LISTEN 2>/dev/null | awk 'NR>1{print $9}')
+          fi
+          # The host ports Stack A (3 nodes) publishes, not whole ranges: a dev machine has
+          # editors and proxies listening in between. Teranode nodes sit at 20000/22000/24000
+          # plus the offsets gennodes maps (compose/cmd/gennodes, HostBase + container - 8000).
+          want="3010 3020 3030 15432 16300 16332 17300 17332 8600 18080 18081 18082 18083 18090 18100 18700"
+          for base in 20000 22000 24000; do
+            for off in 0 81 83 84 85 87 90 93 99 1091 1292 1905 1906; do want="$want $((base + off))"; done
+          done
+          busy=$(echo "$listening" | grep -Eo '[0-9]+$' | sort -u | grep -Fxf <(tr ' ' '\n' <<<"$want") | tr '\n' ' ' || true)
+          [ -z "$busy" ] || { echo "::error::ports the stack needs are in use (another stack running?): $busy"; exit 1; }
+
+      # A self-hosted runner keeps the workspace. On Linux the stack's root containers leave
+      # root-owned files under data/, and checkout cannot clean them when an earlier run died
+      # before its teardown handed them back.
+      - name: Reclaim the workspace
+        run: |
+          if [ -d teranode/data ]; then
+            docker run --rm -v "$PWD/teranode/data:/d" alpine chown -R "$(id -u):$(id -g)" /d || true
+          fi
+
+      - name: Checkout teranode
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+        with:
+          path: teranode
+
+      - name: Checkout chaos-test
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+        with:
+          repository: ${{ inputs.chaos_test_repo || env.CHAOS_TEST_REPO }}
+          ref: ${{ inputs.chaos_test_ref || env.CHAOS_TEST_REF }}
+          path: chaos-test
+          token: ${{ secrets.CHAOS_TEST_TOKEN || github.token }}
+
+      - name: Checkout the blaster (teranode-coinbase)
+        if: env.HAS_COINBASE_TOKEN == 'true'
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+        with:
+          repository: bitcoin-sv/teranode-coinbase
+          path: teranode-coinbase
+          token: ${{ secrets.TERANODE_COINBASE_TOKEN }}
+
+      - name: Set up Go
+        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: false
+
+      - name: Build the blaster
+        if: env.HAS_COINBASE_TOKEN == 'true'
+        run: make -C teranode-coinbase build-blaster
+
+      - name: Log in to GHCR
+        uses: docker/login-action@5e57cd118135c172c3672efd75eb46360885c0ef # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Raises Docker Hub's pull rate limit; skipped where the org's account is not configured.
+      - name: Log in to Docker Hub
+        if: vars.DOCKER_ORG != ''
+        uses: docker/login-action@5e57cd118135c172c3672efd75eb46360885c0ef # v3
+        with:
+          username: ${{ vars.DOCKER_ORG }}
+          password: ${{ secrets.DOCKER_ORG_TOKEN }}
+
+      - name: Fetch the previous night's results
+        id: previous
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          id=$(gh run list -R "$GITHUB_REPOSITORY" --workflow nightly_chain_integrity_stack.yaml --status success --limit 1 --json databaseId -q '.[0].databaseId')
+          [ -n "$id" ] || exit 0
+          # A self-hosted runner keeps the workspace between runs; a stale copy makes the
+          # download fail with "file exists".
+          rm -rf previous
+          gh run download "$id" -R "$GITHUB_REPOSITORY" -D previous
+          summary=$(find "$PWD/previous" -name summary.md | head -1)
+          [ -n "$summary" ] && echo "dir=$(dirname "$summary")" >> "$GITHUB_OUTPUT"
+
+      - name: Run the nightly
+        working-directory: teranode
+        run: |
+          # Scheduled runs take the repository variable NIGHTLY_PHASES when it is set (a fork can
+          # run phase 1 only while it proves the rest), and every phase otherwise.
+          args=(--phases "${{ inputs.phases || vars.NIGHTLY_PHASES || '1,2,3' }}")
+          [ "${{ inputs.quick }}" = true ] && args=(--quick)
+          [ -n "${{ steps.previous.outputs.dir }}" ] && args+=(--previous "${{ steps.previous.outputs.dir }}")
+          compose/chaostest/nightly.sh "${args[@]}"
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: chain-integrity-stack-${{ github.run_number }}-${{ github.sha }}
+          path: |
+            teranode/data/nightly/*/
+            !teranode/data/nightly/.lock
+          retention-days: 14
+          if-no-files-found: warn
+
+      - name: Tear down
+        if: always()
+        working-directory: teranode
+        run: compose/chaostest/chaosctl.sh stack down a || true

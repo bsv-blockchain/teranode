@@ -5,6 +5,29 @@
 networks:
   teranode-network:
     name: teranode-network-multinode-${TEST_ID:-default}
+{{- with .Chaos }}
+  # chaos-test layout (-chaostest): node p2p on chaosnet, which chaos-test
+  # partitions; alert p2p on alertnet. Stores and Kafka stay on
+  # teranode-network. See compose/cmd/gennodes/chaosplanes.go.
+  #
+  # Both are internal. Otherwise a container disconnected from one (a
+  # partition) still reaches it through its default route on
+  # teranode-network: the docker host forwards the packets to the other
+  # bridge, and the partition silently leaks.
+  chaosnet:
+    name: teranode-chaosnet-multinode-${TEST_ID:-default}
+    internal: true
+    ipam:
+      config:
+        - subnet: {{ .ChaosSubnet }}
+  alertnet:
+    name: teranode-alertnet-multinode-${TEST_ID:-default}
+    internal: true
+    ipam:
+      config:
+        - subnet: {{ .AlertSubnet }}
+          gateway: {{ .AlertGateway }}
+{{- end }}
 
 services:
   teranode-builder:
@@ -70,6 +93,93 @@ services:
       - teranode-network
     environment:
       - COLLECTOR_ZIPKIN_HOST_PORT=:9411
+{{- with .Chaos }}
+
+  alert-system:
+    # go-alert-system hub: the alert network's bootstrap peer and canonical
+    # alert store (GET /alerts, /health). Image built from chaos-test's
+    # bsv-regtest (make build-alert-system); multinode.sh up --chaostest
+    # builds it when missing. Runs as root so it can write the bind mount.
+    #
+    # It dials its bootstrap peer (teranode1's alert service) once, at start,
+    # and serves its API only after syncing with two peers, so it waits for
+    # that port: teranode1 itself first waits for its stores and Kafka.
+    container_name: alert-system-multinode
+    image: ${ALERT_SYSTEM_IMAGE:-localhost/bsv-regtest/alert-system:v0.1.17}
+    pull_policy: never
+    user: "0:0"
+    entrypoint: ["sh", "-c", "until nc -z {{ (index $.Nodes 0).AlertIP }} 9908; do sleep 1; done; exec /go-alert-system"]
+    networks:
+      teranode-network: {}
+      alertnet:
+        ipv4_address: {{ .HubIP }}
+    environment:
+      ALERT_SYSTEM_ENVIRONMENT: local
+      ALERT_SYSTEM_CONFIG_FILEPATH: /config/config.json
+    volumes:
+      - ./alert-system/config.json:/config/config.json:ro
+      - ../../data/multinode/alert-system:/data
+    ports:
+      - "${HUB_HOST_PORT:-3000}:3000"
+    restart: on-failure
+{{- range .SVNodes }}
+
+  {{ .Name }}:
+    # Bitcoin SV node following the teranodes over the legacy protocol on
+    # chaosnet; chaos-test partitions it like a teranode.
+    container_name: {{ .Name }}-multinode
+    image: ${SVNODE_IMAGE:-bitcoinsv/bitcoin-sv:1.2.2}
+    # Published for amd64 only; arm64 hosts run it under emulation.
+    platform: linux/amd64
+    networks:
+      teranode-network: {}
+      chaosnet:
+        ipv4_address: {{ .ChaosIP }}
+    # The image's entrypoint chowns /data and runs as user bitcoin; the conf
+    # lives outside /data so it can be mounted read-only.
+    command: ["bitcoind", "-conf=/config/bitcoin.conf"]
+    volumes:
+      - ./svnode/{{ .Name }}.conf:/config/bitcoin.conf:ro
+      - ../../data/multinode/{{ .Name }}:/data
+    ports:
+      - "{{ .RPCHostPort }}:18332"
+    healthcheck:
+      test: ["CMD", "bitcoin-cli", "-conf=/config/bitcoin.conf", "getblockcount"]
+      interval: 5s
+      timeout: 5s
+      retries: 60
+    mem_limit: 2g
+    # bitcoind's scheduler can die after a host suspend or clock jump.
+    restart: on-failure
+
+  {{ .SidecarName }}:
+    # go-alert-system sidecar: joins the alert network like any node and
+    # applies each alert to {{ .Name }} over RPC (freeze ->
+    # addToConsensusBlacklist, ...). chaos-test partitions it for the SV
+    # node's alert plane.
+    container_name: {{ .SidecarName }}-multinode
+    image: ${ALERT_SYSTEM_IMAGE:-localhost/bsv-regtest/alert-system:v0.1.17}
+    pull_policy: never
+    user: "0:0"
+    entrypoint: ["sh", "-c", "until nc -z {{ $.Chaos.HubIP }} 9906; do sleep 1; done; exec /go-alert-system"]
+    networks:
+      teranode-network: {}
+      alertnet:
+        ipv4_address: {{ .AlertIP }}
+    depends_on:
+      {{ .Name }}:
+        condition: service_started
+    environment:
+      ALERT_SYSTEM_ENVIRONMENT: local
+      ALERT_SYSTEM_CONFIG_FILEPATH: /config/config.json
+    volumes:
+      - ./alert-system/{{ .SidecarName }}.json:/config/config.json:ro
+      - ../../data/multinode/{{ .SidecarName }}:/data
+    ports:
+      - "{{ .APIHostPort }}:3000"
+    restart: on-failure
+{{- end }}
+{{- end }}
 {{- range .Nodes }}
 
   aerospike-{{ .Index }}:
@@ -102,7 +212,15 @@ services:
     cap_add:
       - NET_ADMIN
     networks:
+{{- if $.Chaos }}
+      teranode-network: {}
+      chaosnet:
+        ipv4_address: {{ .ChaosIP }}
+      alertnet:
+        ipv4_address: {{ .AlertIP }}
+{{- else }}
       - teranode-network
+{{- end }}
     depends_on:
       postgres:
         condition: service_healthy

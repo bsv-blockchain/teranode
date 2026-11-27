@@ -1,0 +1,13 @@
+{
+  "description": "The default mix, with sends to node 2 delayed 50-500 ms and 10% of them dropped: a slow, lossy peer.",
+  "mix": {
+    "Weights": [80, 0, 5, 5, 0, 5, 2, 0, 3, 0, 0, 0, 0, 0, 0, 0]
+  },
+  "node_chaos": {
+    "2": {
+      "latency_ms": 50,
+      "latency_max_ms": 500,
+      "drop_pct": 10
+    }
+  }
+}

@@ -1,0 +1,43 @@
+{
+  "skill_name": "chaos-blast",
+  "notes": "Needs a running stack (A or B) and the teranode-coinbase blaster built next to the teranode checkout. Baseline = no skill.",
+  "evals": [
+    {
+      "id": 1,
+      "name": "double-spend-storm",
+      "prompt": "Put galt's fleet under a double-spend storm.",
+      "expected_output": "Uses chaosctl.sh blast start ds-storm with modest workers on Stack B, waits until it sends and reports tx/s and rejects.",
+      "assertions": [
+        "Uses chaosctl.sh blast start with the ds-storm preset",
+        "Keeps workers at about 10 on Stack B (or explains the trade-off of more)",
+        "Reports the stats line after the blaster is sending",
+        "Does not pass the multinode target to Stack B by hand"
+      ],
+      "files": []
+    },
+    {
+      "id": 2,
+      "name": "fund-errors",
+      "prompt": "The blaster shows fund_err=120 and tx=0 after the fleet was reset. Why?",
+      "expected_output": "Explains that the coinbase DB belongs to the old chain; stop and restart with --fresh, which re-funds by mining 110 blocks.",
+      "assertions": [
+        "Attributes the errors to state from the wiped chain",
+        "Recommends blast stop then blast start --fresh",
+        "Mentions that funding needs blocks mined while the blaster runs (100 confirmations)"
+      ],
+      "files": []
+    },
+    {
+      "id": 3,
+      "name": "custom-preset",
+      "prompt": "Make a blaster preset that sends 20% orphans with a 2 second parent delay.",
+      "expected_output": "Writes compose/chaostest/blast-presets/<name>.json with 16 weights summing to 100 (index 13 = 20) and orphan_delay_ms 2000.",
+      "assertions": [
+        "Creates a JSON file under compose/chaostest/blast-presets/",
+        "Weights has 16 entries summing to 100 with Orphan (index 13) at 20",
+        "Sets orphan_delay_ms to 2000"
+      ],
+      "files": []
+    }
+  ]
+}

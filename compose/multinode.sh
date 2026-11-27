@@ -34,7 +34,16 @@ Usage: compose/multinode.sh <command> [args]
 Commands:
   up <N> [--build] [-allinone=0|1] [--skip N:svc ...]
          [--limits svc=cpus[:mem],...] [--retention production|aggressive|prod-scaling]
+         [--chaostest [--svnodes 0-2]]
                            Generate and start an N-node network (3-10).
+                           --chaostest: lay it out like chaos-test's fleet
+                             (all-in-one only): node p2p on its own network
+                             that chaos-test can partition, plus an alert
+                             network and the alert hub, so its bundled
+                             scenarios run unchanged ('sim up' next).
+                             --svnodes (default 2): Bitcoin SV nodes that
+                             follow over the legacy protocol, each with an
+                             alert sidecar.
                            -allinone=1 (default): one container per node runs
                              all services in a single process.
                            -allinone=0: split topology - each node becomes 9
@@ -69,14 +78,17 @@ Commands:
   dashboards               Open all dashboards in the browser
   generate <n,count> ...   Generate blocks on specific nodes
                            e.g. generate 1,10 3,5
-  blast [nodes] [--build] [--auto-mine[=N]] [-- args]
+  blast [nodes] [--build] [--auto-mine[=N]] [--fresh] [--target T] [-- args]
                            Run the coinbase blaster against the stack.
                            'nodes' is a comma/space-separated list (default: all
                            running). --build rebuilds the blaster first.
                            --auto-mine spawns a background miner on node N
                            (default: first target) every 5s; override with
-                           BLAST_AUTO_MINE_INTERVAL=<seconds>. Flags after '--'
-                           are passed to blaster.
+                           BLAST_AUTO_MINE_INTERVAL=<seconds>. --fresh wipes the
+                           blaster's saved state first. --target bsv-regtest
+                           blasts chaos-test's fleet instead of this stack
+                           (funds from PK2 so chaos-test scenarios keep PK1).
+                           Flags after '--' are passed to blaster.
 
 Chaos:
   chaos isolate <node>            Block peer traffic (RPC still works).
@@ -89,6 +101,21 @@ Chaos:
   chaos unpause <node> [service]  Unfreeze a paused node or service
   chaos slow <node> <ms>          Add network latency (split mode: -p2p only)
   chaos unslow <node>             Remove added latency
+  chaos seal [node]               --chaostest stacks: make chaos-test partitions
+                                  hold (re-run after a container restart that
+                                  'chaos start' or 'restart' did not do)
+
+chaos-test scenarios (github.com/galt-tr/chaos-test, checkout in ../chaos-test
+or CHAOS_TEST_DIR):
+  sim up [--build] [--no-arcade] [--no-wallet]
+                                  Start the scenario orchestrator + UI on :8600
+                                  (SIM_HOST_PORT), arcade on :18080
+                                  (ARCADE_HOST_PORT) and the wallet (walletd
+                                  on :18700) against this stack. Builds the
+                                  image on first use; --build rebuilds it.
+  sim run <scenario> [--step]     Run a scenario and follow it to completion
+  sim status | logs | down        Orchestrator state, logs, or remove it
+                                  (also removed by 'down')
 
 Examples:
   compose/multinode.sh up 5
@@ -98,12 +125,14 @@ Examples:
   compose/multinode.sh blast              # blast all running nodes (TUI)
   compose/multinode.sh blast --build --auto-mine  # rebuild, mine on node 1
   compose/multinode.sh blast 1,3 -- --headless --max-tps 50
+  compose/multinode.sh blast --target bsv-regtest --fresh --auto-mine -- --workers 10
   compose/multinode.sh chaos isolate 3
   compose/multinode.sh chaos kill 2 validator    # split mode: only validator
   compose/multinode.sh chaos heal
   compose/multinode.sh chaos slow 2 500
   compose/multinode.sh logs 2
   compose/multinode.sh logs 2-validator          # split mode service log
+  compose/multinode.sh sim up && compose/multinode.sh sim run multinode-smoke
   compose/multinode.sh down
 EOF
   exit 2
@@ -152,8 +181,11 @@ assert_known_service() {
 # $REPO_ROOT/data$BLASTER_DATA_DIR/coinbase.db.db - data/Users/... on macOS,
 # data/home/... on Linux. Remove exactly that tree, then any parents it leaves
 # empty, rather than anything else under the shared data/ directory.
+#
+# $1 is the blaster state directory, default $BLASTER_DATA_DIR ('blast
+# --target bsv-regtest' keeps its own).
 clean_blaster_state() {
-  local stale="$REPO_ROOT/data$BLASTER_DATA_DIR"
+  local stale="$REPO_ROOT/data${1:-$BLASTER_DATA_DIR}"
   if [[ -d "$stale" ]]; then
     rm -rf "$stale"
     echo "cleaned stray coinbase DB: $stale"
@@ -176,16 +208,162 @@ cmd_build() {
   echo "teranode:latest image built"
 }
 
+# chaostest_prepare readies what 'up --chaostest' needs from chaos-test's
+# checkout: the alert genesis public keys its orchestrator signs with (set in
+# CHAOSTEST_GENESIS, comma-separated) and the go-alert-system image its
+# bsv-regtest builds, which the alert hub runs.
+chaostest_prepare() {
+  local dir
+  dir=$(chaos_test_dir)
+  CHAOSTEST_GENESIS=$(python3 -I -c '
+import json, sys
+print(",".join(g["public_key_hex"] for g in json.load(open(sys.argv[1]))["genesis"]))
+' "$dir/bsv-regtest/config/keys.json") || {
+    echo "error: could not read alert genesis keys from $dir/bsv-regtest/config/keys.json" >&2
+    exit 1
+  }
+  local image="${ALERT_SYSTEM_IMAGE:-localhost/bsv-regtest/alert-system:v0.1.17}"
+  if ! docker image inspect "$image" >/dev/null 2>&1; then
+    echo "building $image from $dir/bsv-regtest..."
+    make -C "$dir/bsv-regtest" RUNTIME=docker build-alert-system
+  fi
+}
+
+# seal_planes [container...] makes chaos-test partitions hold on each
+# teranode container (default: all). Partitioning disconnects a container
+# from chaosnet or alertnet, but it keeps teranode-network and its default
+# route, and the docker host can forward packets for the lost subnet onto its
+# bridge: 'internal: true' blocks that on Linux docker, while OrbStack routes
+# between its bridges before docker's rules see them. So, inside the node's
+# network namespace, drop packets for those subnets that would leave through
+# the default-route interface; an attached plane has its own interface and is
+# unaffected. The rules sit in the mangle table, which 'chaos heal' (iptables
+# -F on the filter table) leaves alone. They live in the container's network
+# namespace, so a restart drops them: up, restart and 'chaos start' re-apply
+# them. No-op without the layout.
+seal_planes() {
+  local inv="$GEN_DIR/chaostest/inventory.json" nets
+  [[ -f "$inv" ]] || return 0
+  nets=$(python3 -I -c '
+import json, sys
+n = json.load(open(sys.argv[1]))["networks"]
+print(" ".join(x for x in (n.get("chaosnet"), n.get("alertnet")) if x))
+' "$inv")
+  [[ -z "$nets" ]] && return 0
+  local script='dev=$(ip route show default | awk "{print \$5; exit}"); [ -n "$dev" ] || exit 0; '
+  local net ctr
+  for net in $nets; do
+    script+="iptables -t mangle -C OUTPUT -o \"\$dev\" -d $net -j DROP 2>/dev/null || iptables -t mangle -A OUTPUT -o \"\$dev\" -d $net -j DROP; "
+  done
+  local -a ctrs=("$@")
+  # Default: every container chaos-test can partition, SV nodes and their
+  # alert sidecars included.
+  [[ ${#ctrs[@]} -eq 0 ]] && mapfile -t ctrs < <(python3 -I -c '
+import json, sys
+for n in json.load(open(sys.argv[1]))["nodes"]:
+    print(n["container"])
+    if n.get("sidecar"):
+        print(n["sidecar"]["container"])
+' "$inv")
+  for ctr in "${ctrs[@]}"; do
+    netns_sh "$ctr" "$script" || echo "warning: could not seal $ctr against partition leaks" >&2
+  done
+}
+
+# sv_follow makes the SV nodes follow the chain (bsv-regtest's
+# scripts/sv-follow.sh). SV Node syncs only from peers advertising
+# NODE_NETWORK, and teranode's legacy service advertises it only if its block
+# persister has stored a block when the service starts: on a new chain it
+# starts limited. So: mine block 1, wait for every persister to store it,
+# restart the teranodes once (re-sealing them), and check the SV nodes reach
+# the tip. No-op without SV nodes.
+sv_follow() {
+  local inv="$GEN_DIR/chaostest/inventory.json"
+  local -a tn sv
+  mapfile -t tn < <(python3 -I -c '
+import json, sys
+for n in json.load(open(sys.argv[1]))["nodes"]:
+    if n["kind"] == "teranode": print(n["index"], n["hostBase"], n["container"])
+' "$inv")
+  mapfile -t sv < <(python3 -I -c '
+import json, sys
+for n in json.load(open(sys.argv[1]))["nodes"]:
+    if n["kind"] == "svnode": print(n["name"], n["hostRPCURL"])
+' "$inv")
+  [[ ${#sv[@]} -eq 0 ]] && return 0
+
+  local line idx base ctr deadline
+  echo "making the SV nodes follow: waiting for the teranodes..."
+  for line in "${tn[@]}"; do
+    read -r idx base ctr <<<"$line"
+    deadline=$((SECONDS + 300))
+    until curl -sf -m 2 "http://localhost:$base/health" >/dev/null 2>&1; do
+      ((SECONDS > deadline)) && { echo "error: teranode$idx not healthy after 5m" >&2; return 1; }
+      sleep 2
+    done
+  done
+  echo "mining block 1: the legacy service advertises NODE_NETWORK only once a block is persisted"
+  cmd_generate 1,1 >/dev/null
+  for line in "${tn[@]}"; do
+    read -r idx base ctr <<<"$line"
+    deadline=$((SECONDS + 120))
+    until [[ "$(curl -sf -m 2 "http://localhost:$((base + 90))/api/v1/service/heights" 2>/dev/null |
+      python3 -I -c 'import json, sys; print(json.load(sys.stdin).get("block_persister_height", 0))' 2>/dev/null)" -gt 0 ]] 2>/dev/null; do
+      ((SECONDS > deadline)) && { echo "error: teranode$idx's block persister stored nothing in 2m" >&2; return 1; }
+      sleep 2
+    done
+  done
+  echo "restarting the teranodes so their legacy service starts with NODE_NETWORK..."
+  local -a ctrs=()
+  for line in "${tn[@]}"; do
+    read -r idx base ctr <<<"$line"
+    ctrs+=("$ctr")
+  done
+  docker restart "${ctrs[@]}" >/dev/null
+  seal_planes "${ctrs[@]}"
+  for line in "${tn[@]}"; do
+    read -r idx base ctr <<<"$line"
+    deadline=$((SECONDS + 300))
+    until curl -sf -m 2 "http://localhost:$base/health" >/dev/null 2>&1; do
+      ((SECONDS > deadline)) && { echo "error: teranode$idx not healthy 5m after the restart" >&2; return 1; }
+      sleep 2
+    done
+  done
+
+  local name url h
+  for line in "${sv[@]}"; do
+    read -r name url <<<"$line"
+    deadline=$((SECONDS + 180))
+    until h=$(curl -sf -m 3 -u bitcoin:bitcoin -H 'Content-Type: application/json' \
+      -d '{"jsonrpc":"1.0","id":1,"method":"getblockcount","params":[]}' "$url" 2>/dev/null |
+      python3 -I -c 'import json, sys; print(json.load(sys.stdin)["result"])' 2>/dev/null) && [[ "$h" -ge 1 ]]; do
+      ((SECONDS > deadline)) && { echo "error: $name did not reach height 1 in 3m" >&2; return 1; }
+      sleep 3
+    done
+    echo "$name following (height $h)"
+  done
+}
+
 cmd_up() {
   local n=""
   local do_build=false
   local allinone=1
   local limits=""
   local retention="production"
+  local chaostest=false
+  local svnodes=2
   local -a skip_specs=()
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --build) do_build=true; shift ;;
+      --chaostest|-chaostest) chaostest=true; shift ;;
+      --svnodes=*|-svnodes=*) svnodes="${1#*=}"; shift ;;
+      --svnodes|-svnodes)
+        if [[ $# -lt 2 ]]; then
+          echo "error: --svnodes requires a count (0-2)" >&2
+          exit 2
+        fi
+        svnodes="$2"; shift 2 ;;
       --limits=*|-limits=*) limits="${1#*=}"; shift ;;
       --limits|-limits)
         if [[ $# -lt 2 ]]; then
@@ -279,11 +457,21 @@ cmd_up() {
       skip_set["teranode${skip_n}-${skip_svc}"]=1
     done
   fi
+  local -a chaos_args=()
+  if $chaostest; then
+    if [[ "$allinone" -ne 1 ]]; then
+      echo "error: --chaostest needs the all-in-one topology; chaos-test partitions one container per node" >&2
+      exit 2
+    fi
+    chaostest_prepare
+    chaos_args=(-chaostest -svnodes "$svnodes" -alert-genesis-keys "$CHAOSTEST_GENESIS")
+  fi
   local topology="all-in-one"
   [[ "$allinone" -eq 0 ]] && topology="split-per-service"
+  $chaostest && topology="$topology, chaos-test layout"
   echo "generating $n-node stack (topology: $topology, retention: $retention${limits:+, limits: $limits})..."
   (cd "$REPO_ROOT" && go run ./compose/cmd/gennodes \
-    -n "$n" -allinone="$allinone" -retention "$retention" -limits "$limits" -o compose/generated)
+    -n "$n" -allinone="$allinone" -retention "$retention" -limits "$limits" "${chaos_args[@]}" -o compose/generated)
   if [[ "$do_build" == true ]]; then
     cmd_build
   fi
@@ -306,6 +494,10 @@ cmd_up() {
     echo "starting containers..."
     compose up -d
   fi
+  if $chaostest; then
+    seal_planes
+    sv_follow
+  fi
   echo ""
   echo "dashboards:"
   for f in "$GEN_DIR"/open-dashboards.sh; do
@@ -319,6 +511,9 @@ cmd_up() {
 
 cmd_down() {
   require_stack
+  # The orchestrator is attached to the stack's network; remove it first or
+  # compose cannot remove the network.
+  sim_down
   compose down -v --remove-orphans
 
   # 'compose down -v' removes named volumes but NOT bind mounts. Aerospike
@@ -329,10 +524,15 @@ cmd_down() {
   local state_dir="$REPO_ROOT/data/multinode"
   if [[ -d "$state_dir" ]]; then
     echo "wiping bind-mounted state in data/multinode/..."
-    if ! docker run --rm -v "$state_dir:/data" alpine sh -c 'rm -rf /data/aerospike* /data/teranode* 2>/dev/null' >/dev/null 2>&1; then
+    if ! docker run --rm -v "$state_dir:/data" alpine sh -c 'rm -rf /data/aerospike* /data/teranode* /data/alert-system /data/svnode* /data/alert-svnode* 2>/dev/null' >/dev/null 2>&1; then
       echo "warning: could not wipe data/multinode/ state; next 'up' may see stale data" >&2
     fi
   fi
+
+  # The orchestrator's alert log describes this chain's alert network; a new
+  # chain starts with none, as chaos-test's 'make reset' does. Runs are kept.
+  rm -f "$SIM_DATA_DIR/data/alerts.json" "$SIM_DATA_DIR/data/alerts.json.tmp" 2>/dev/null ||
+    docker run --rm -v "$SIM_DATA_DIR/data:/data" alpine rm -f /data/alerts.json /data/alerts.json.tmp >/dev/null 2>&1 || true
 
   # Wipe blaster local state so a subsequent 'blast' against a fresh chain
   # doesn't try to spend UTXOs that no longer exist.
@@ -348,6 +548,7 @@ cmd_restart() {
   require_stack
   compose down
   compose up -d
+  seal_planes
 }
 
 cmd_status() {
@@ -444,7 +645,7 @@ cmd_status() {
       local chaos_info drop_rules qdisc_line delay
       chaos_info=$(netns_sh "$net_ctr" '
         iptables -L INPUT --line-numbers 2>/dev/null | grep -c DROP || echo 0
-        tc qdisc show dev eth0 2>/dev/null
+        '"$P2P_DEV_SH"'tc qdisc show dev $dev 2>/dev/null
       ' 2>/dev/null || true)
       drop_rules=$(echo "$chaos_info" | sed -n '1p')
       qdisc_line=$(echo "$chaos_info" | sed -n '2,$p')
@@ -576,9 +777,13 @@ cmd_chaos() {
     unpause)   chaos_unpause "$@" ;;
     slow)      chaos_slow "$@" ;;
     unslow)    chaos_unslow "$@" ;;
+    seal)
+      if [[ $# -gt 0 ]]; then seal_planes "$(container_name "$1")"; else seal_planes; fi
+      echo "sealed against partition leaks"
+      ;;
     *)
       echo "error: unknown chaos action '$action'" >&2
-      echo "actions: isolate, heal, kill, start, pause, unpause, slow, unslow" >&2
+      echo "actions: isolate, heal, kill, start, pause, unpause, slow, unslow, seal" >&2
       exit 2
       ;;
   esac
@@ -624,13 +829,16 @@ chaos_isolate() {
   local script=""
   local blocked=0
   for other in $(peer_containers | grep -v "^${ctr}$"); do
-    local ip
-    ip=$(docker inspect --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$other" 2>/dev/null)
-    if [[ -n "$ip" ]]; then
+    # Every address the peer has: with --chaostest it is on three networks,
+    # and p2p runs over chaosnet, not teranode-network.
+    local ips ip
+    ips=$(docker inspect --format '{{range .NetworkSettings.Networks}}{{.IPAddress}} {{end}}' "$other" 2>/dev/null)
+    [[ -z "${ips// /}" ]] && continue
+    for ip in $ips; do
       script+="iptables -A INPUT -s ${ip} -j DROP; "
       script+="iptables -A OUTPUT -d ${ip} -j DROP; "
-      blocked=$((blocked + 1))
-    fi
+    done
+    blocked=$((blocked + 1))
   done
 
   if [[ $blocked -eq 0 ]]; then
@@ -723,6 +931,7 @@ chaos_start() {
   fi
   echo "starting teranode$node..."
   compose start "teranode${node}"
+  seal_planes "$(container_name "$node")"
   echo "teranode$node is up"
 }
 
@@ -787,16 +996,11 @@ chaos_unpause() {
   echo "teranode$node is unfrozen"
 }
 
-# Run a single tc command inside the target container's netns.
-netns_tc() {
-  local ctr="$1"
-  shift
-  docker run --rm \
-    --net="container:${ctr}" \
-    --cap-add=NET_ADMIN \
-    --entrypoint tc \
-    "$NETSHOOT_IMAGE" "$@"
-}
+
+# P2P_DEV_SH sets $dev, inside a node's netns, to the interface p2p runs
+# over: the chaosnet one with --chaostest (10.200.0.0/24, see gennodes
+# chaosplanes.go), else eth0, the only one.
+P2P_DEV_SH='dev=$(ip -o -4 addr show | awk '"'"'$4 ~ /^10\.200\.0\./ {print $2; exit}'"'"'); dev=${dev%%@*}; dev=${dev:-eth0}; '
 
 chaos_slow() {
   local node="${1:?usage: chaos slow <node> <ms>}"
@@ -805,7 +1009,7 @@ chaos_slow() {
   ctr=$(container_name "$node")
   echo "adding ${ms}ms latency to teranode$node..."
   # Try add first; if a qdisc is already set, fall back to change.
-  if netns_sh "$ctr" "tc qdisc add dev eth0 root netem delay ${ms}ms 2>/dev/null || tc qdisc change dev eth0 root netem delay ${ms}ms"; then
+  if netns_sh "$ctr" "${P2P_DEV_SH}tc qdisc add dev \$dev root netem delay ${ms}ms 2>/dev/null || tc qdisc change dev \$dev root netem delay ${ms}ms"; then
     echo "teranode$node now has ${ms}ms added latency"
   else
     echo "error: failed to set latency on teranode$node" >&2
@@ -818,7 +1022,7 @@ chaos_unslow() {
   local ctr
   ctr=$(container_name "$node")
   echo "removing latency from teranode$node..."
-  netns_tc "$ctr" qdisc del dev eth0 root 2>/dev/null || true
+  netns_sh "$ctr" "${P2P_DEV_SH}tc qdisc del dev \$dev root" >/dev/null 2>&1 || true
   echo "teranode$node latency restored to normal"
 }
 
@@ -832,8 +1036,6 @@ cmd_generate() {
 }
 
 cmd_blast() {
-  require_stack
-
   local -a nodes=()
   local -a passthrough=()
   local sawDashDash=false
@@ -841,6 +1043,8 @@ cmd_blast() {
   local auto_mine_node=""
   local auto_mine_interval="${BLAST_AUTO_MINE_INTERVAL:-5}"
   local do_build=false
+  local fresh=false
+  local target="multinode"
   while [[ $# -gt 0 ]]; do
     if [[ "$1" == "--" ]]; then
       sawDashDash=true
@@ -866,6 +1070,18 @@ cmd_blast() {
         auto_mine_node="${1#--auto-mine=}"
         shift
         ;;
+      --fresh)
+        fresh=true
+        shift
+        ;;
+      --target)
+        target="${2:?--target needs multinode or bsv-regtest}"
+        shift 2
+        ;;
+      --target=*)
+        target="${1#--target=}"
+        shift
+        ;;
       *)
         IFS=', ' read -ra items <<< "$1"
         for item in "${items[@]}"; do
@@ -875,6 +1091,49 @@ cmd_blast() {
         ;;
     esac
   done
+
+  # Target fleet. Both use the same host port scheme (node N: base
+  # 20000 + (N-1)*2000; RPC base+1292, propagation gRPC base+84), so only the
+  # container naming and state directory differ. bsv-regtest is chaos-test's
+  # fleet (CHAOS_TEST_DIR/bsv-regtest).
+  local ctr_re ctr_fmt blaster_data_dir
+  case "$target" in
+    multinode)
+      require_stack
+      ctr_re='^teranode([0-9]+)(-[a-z0-9]+)?-multinode$'
+      ctr_fmt='teranode%s-multinode'
+      blaster_data_dir="$BLASTER_DATA_DIR"
+      ;;
+    bsv-regtest)
+      ctr_re='^bsv-regtest-teranode([0-9]+)$'
+      ctr_fmt='bsv-regtest-teranode%s'
+      blaster_data_dir="$REPO_ROOT/data/bsv-regtest-blaster"
+      ;;
+    *)
+      echo "error: --target must be multinode or bsv-regtest, got '$target'" >&2
+      exit 2
+      ;;
+  esac
+
+  # On both fleets the blaster funds itself from PK2, the coinbase's second
+  # output: chaos-test scenarios spend the first (PK1), and sharing a key
+  # would make the two double-spend each other's coins. A blaster state
+  # directory funded from PK1 by an older version needs --fresh.
+  local pk2="${PK2:-}"
+  if [[ -z "$pk2" ]]; then
+    pk2=$(sed -nE 's/^PK2[[:space:]]*=[[:space:]]*([^[:space:]]+).*/\1/p' "$REPO_ROOT/settings.conf" | head -1)
+  fi
+  if [[ -z "$pk2" ]]; then
+    echo "error: PK2 not found in settings.conf; set PK2 in the environment" >&2
+    exit 1
+  fi
+  export coinbase_wallet_private_key="$pk2"
+
+  if $fresh; then
+    rm -rf "$blaster_data_dir"
+    clean_blaster_state "$blaster_data_dir"
+    echo "wiped blaster state: $blaster_data_dir"
+  fi
 
   if $do_build; then
     if [[ -n "${BLASTER_BIN:-}" ]]; then
@@ -926,31 +1185,43 @@ cmd_blast() {
     declare -A seen_nodes=()
     while read -r name; do
       [[ -z "$name" ]] && continue
-      if [[ "$name" =~ ^teranode([0-9]+)(-[a-z0-9]+)?-multinode$ ]]; then
+      if [[ "$name" =~ $ctr_re ]]; then
         local idx="${BASH_REMATCH[1]}"
         if [[ -z "${seen_nodes[$idx]:-}" ]]; then
           seen_nodes[$idx]=1
           nodes+=("$idx")
         fi
       fi
-    done < <(docker ps --filter "name=-multinode" --format '{{.Names}}' | sort -V)
+    done < <(docker ps --filter "name=teranode" --format '{{.Names}}' | sort -V)
   fi
 
   if [[ ${#nodes[@]} -eq 0 ]]; then
-    echo "error: no running teranode containers. Start the stack with '$0 up <N>' first." >&2
+    if [[ "$target" == "bsv-regtest" ]]; then
+      echo "error: no running bsv-regtest teranodes. Start chaos-test's fleet (make up && make wait in CHAOS_TEST_DIR) first." >&2
+    else
+      echo "error: no running teranode containers. Start the stack with '$0 up <N>' first." >&2
+    fi
     exit 1
   fi
 
   # Verify propagation port is exposed (older stacks generated before 8084 was added won't have it).
   local first="${nodes[0]}"
   local first_prop=$((20000 + (first - 1) * 2000 + 84))
-  local prop_ctr="teranode${first}-multinode"
-  if is_split_mode "$first"; then
+  local prop_ctr
+  # shellcheck disable=SC2059 # ctr_fmt is a fixed format chosen above
+  prop_ctr=$(printf "$ctr_fmt" "$first")
+  if [[ "$target" == "multinode" ]] && is_split_mode "$first"; then
     prop_ctr="teranode${first}-propagation-multinode"
   fi
   if ! docker ps --filter "name=${prop_ctr}" --format '{{.Ports}}' | grep -q ":${first_prop}->8084"; then
     echo "error: propagation port not exposed on ${prop_ctr} (expected host port ${first_prop})." >&2
-    echo "Regenerate the stack: '$0 down && $0 up <N>'" >&2
+    if [[ "$target" == "bsv-regtest" ]]; then
+      echo "chaos-test's fleet does not publish it by default. Apply our override and restart it:" >&2
+      echo "  cp $SCRIPT_DIR/chaostest/bsv-regtest.override.yaml \$CHAOS_TEST_DIR/bsv-regtest/compose.override.yaml" >&2
+      echo "  make -C \$CHAOS_TEST_DIR/bsv-regtest up" >&2
+    else
+      echo "Regenerate the stack: '$0 down && $0 up <N>'" >&2
+    fi
     exit 1
   fi
 
@@ -999,8 +1270,9 @@ cmd_blast() {
     # any of the 9 service containers; all-in-one: the single teranodeN
     # container). Without this the background mining loop silently does
     # nothing and the user is left wondering why funding stalls.
-    if ! docker ps --filter "status=running" --format '{{.Names}}' \
-         | grep -qE "^teranode${auto_mine_node}(-[a-z0-9]+)?-multinode$"; then
+    local mine_re="^teranode${auto_mine_node}(-[a-z0-9]+)?-multinode$"
+    [[ "$target" == "bsv-regtest" ]] && mine_re="^bsv-regtest-teranode${auto_mine_node}$"
+    if ! docker ps --filter "status=running" --format '{{.Names}}' | grep -qE "$mine_re"; then
       echo "error: auto-mine target teranode${auto_mine_node} is not running" >&2
       exit 1
     fi
@@ -1012,9 +1284,8 @@ cmd_blast() {
   fi
 
   # Control where the blaster writes snapshot + embedded coinbase DB so that
-  # 'multinode.sh down' can clean it up alongside the chain state. Only inject
-  # our path if the user didn't pass one via '--'.
-  local blaster_data_dir="$BLASTER_DATA_DIR"
+  # 'multinode.sh down' (or --fresh) can clean it up alongside the chain state.
+  # Only inject our path if the user didn't pass one via '--'.
   local user_snapshot=false
   for arg in ${passthrough[@]+"${passthrough[@]}"}; do
     case "$arg" in
@@ -1031,11 +1302,17 @@ cmd_blast() {
   fi
 
   echo "blaster:     $blaster_bin"
+  echo "target:      $target"
   echo "nodes:       ${nodes[*]}"
   echo "propagation: $prop_addrs"
   echo "rpc:         $rpc_url_default  (funding source for embedded coinbase)"
   if ! $user_snapshot; then
-    echo "snapshot:    $snapshot_path  (wiped by '$0 down')"
+    if [[ "$target" == "bsv-regtest" ]]; then
+      echo "snapshot:    $snapshot_path  (pass --fresh after chaos-test's 'make reset')"
+      echo "funding:     PK2 (coinbase output 1; chaos-test scenarios spend output 0)"
+    else
+      echo "snapshot:    $snapshot_path  (wiped by '$0 down')"
+    fi
     echo "logs:        $blaster_data_dir/blaster.log  (blaster writes service logs here in TUI mode)"
   fi
   if $auto_mine_enabled; then
@@ -1045,9 +1322,16 @@ cmd_blast() {
 
   local miner_pid=""
   if $auto_mine_enabled; then
+    local mine_rpc="http://localhost:$((20000 + (auto_mine_node - 1) * 2000 + 1292))"
     (
       while true; do
-        "$GEN_DIR/generate-blocks.sh" "${auto_mine_node},1" >/dev/null 2>&1 || true
+        if [[ "$target" == "bsv-regtest" ]]; then
+          # No generated helper script for chaos-test's fleet; mine over RPC.
+          curl -sf --max-time 30 -u bitcoin:bitcoin -H 'Content-Type: application/json' \
+            -d '{"method":"generate","params":[1]}' "$mine_rpc" >/dev/null 2>&1 || true
+        else
+          "$GEN_DIR/generate-blocks.sh" "${auto_mine_node},1" >/dev/null 2>&1 || true
+        fi
         sleep "$auto_mine_interval"
       done
     ) &
@@ -1094,6 +1378,480 @@ cmd_blast() {
     ${passthrough[@]+"${passthrough[@]}"}
 }
 
+# ---- chaos-test simulator --------------------------------------------------
+#
+# Runs galt-tr/chaos-test's orchestrator (scenario engine + UI) against this
+# stack. gennodes writes generated/chaostest/inventory.json describing the
+# nodes; sim_up adds the private bits at start time (minerWIF = PK1, and
+# chaos-test's own dev keys.json) into data/multinode-chaostest/config/, which
+# is gitignored, so no key is ever written into the generated tree.
+#
+# The orchestrator joins the stack's compose network, so it reaches nodes by
+# DNS name and consumes the Kafka verdict topics (rejectedtx-*, invalid-blocks-*)
+# that scenario 'event' checks match on.
+
+SIM_CONTAINER="chaos-orchestrator-multinode"
+SIM_IMAGE="${CHAOS_TEST_IMAGE:-chaos-orchestrator:multinode}"
+SIM_PORT="${SIM_HOST_PORT:-8600}"
+SIM_DATA_DIR="$REPO_ROOT/data/multinode-chaostest"
+SIM_SCENARIOS_DIR="${SCENARIOS_DIR:-$SCRIPT_DIR/chaostest/scenarios}"
+
+# BSV Broadcaster (Arcade's successor since 0.19.0; ARC-compatible) runs next
+# to the orchestrator so the scenarios that submit through it (freeze-skew-rpc,
+# arcade-*) work here as on chaos-test's own fleet. Settings follow
+# bsv-regtest's 'arcade' profile, pointed at this stack's datahubs and p2p
+# peers; merkle-service (below) sends it merkle proofs. The container and
+# variables keep the arcade name the scenarios and wallet use. State lives in
+# the container and goes with it, since every 'up' starts a new chain.
+# ARCADE_IMAGE=ghcr.io/bsv-blockchain/arcade:latest runs the old image.
+ARCADE_CONTAINER="arcade-multinode"
+ARCADE_IMAGE="${ARCADE_IMAGE:-ghcr.io/bsv-blockchain/broadcaster:latest}"
+ARCADE_PORT="${ARCADE_HOST_PORT:-18080}"
+
+# merkle-service (chaos-test's 'merkle' profile) follows the nodes' blocks
+# and subtrees over p2p and calls arcade back with merkle proofs, which the
+# wallet waits for. sqlite and in-memory blobs; state goes with the container.
+MERKLE_CONTAINER="merkle-service-multinode"
+# Pinned to the 11 Nov 2026 build: the June build started each stage only after
+# the one before had read a message, which needed a warm-up placeholder on the
+# topics; this one starts them all at once, and retries an undecodable block
+# message forever, so no placeholder may be put on its topics.
+MERKLE_IMAGE="${MERKLE_IMAGE:-ghcr.io/bsv-blockchain/merkle-service@sha256:f0576e2038c984d0ca6d585c7c0d073efd2deca6cd9cbf09e95cf51a7e2667d5}"
+
+# The wallet (chaos-test's 'wallet' profile): go-wallet-toolbox's storage
+# server on postgres, broadcasting through arcade, and walletd, the small
+# BRC-100 wallet the orchestrator drives. Same images and config as
+# bsv-regtest; the config and keys.json come from the chaos-test checkout
+# (its matching dev pair). Needs arcade. State lives in the containers.
+WALLET_DB_CONTAINER="wallet-db-multinode"
+WALLET_INFRA_CONTAINER="wallet-infra-multinode"
+WALLETD_CONTAINER="walletd-multinode"
+WALLET_INFRA_IMAGE="${WALLET_IMAGE:-ghcr.io/bsv-blockchain/go-wallet-toolbox:v0.184.5}"
+WALLETD_IMAGE="${WALLETD_IMAGE:-localhost/bsv-regtest/walletd:local}"
+
+chaos_test_dir() {
+  local dir="${CHAOS_TEST_DIR:-$REPO_ROOT/../chaos-test}"
+  if [[ ! -f "$dir/sim/Dockerfile" ]]; then
+    echo "error: chaos-test checkout not found at $dir" >&2
+    echo "       git clone https://github.com/galt-tr/chaos-test \"$dir\"" >&2
+    echo "       or set CHAOS_TEST_DIR to an existing checkout" >&2
+    exit 1
+  fi
+  (cd "$dir" && pwd)
+}
+
+sim_running() {
+  [[ "$(docker inspect -f '{{.State.Running}}' "$SIM_CONTAINER" 2>/dev/null)" == "true" ]]
+}
+
+sim_build() {
+  local dir
+  dir=$(chaos_test_dir)
+  echo "building $SIM_IMAGE from $dir ($(git -C "$dir" rev-parse --short HEAD 2>/dev/null || echo 'unknown ref'))..."
+  docker build -t "$SIM_IMAGE" --build-arg UI="${SIM_UI:-1}" -f "$dir/sim/Dockerfile" "$dir"
+}
+
+# attach_planes <container> <inventory> <network-key> <ip-key> connects a
+# created (not yet started) container to one of the chaos-test layout's
+# networks at its pinned address. A no-op on a stack without that layout.
+attach_planes() {
+  local container="$1" inv="$2" net_key="$3" ip_key="$4" net ip
+  read -r net ip < <(python3 -I -c '
+import json, sys
+n = json.load(open(sys.argv[1]))["networks"]
+print(n.get(sys.argv[2], "") if n.get(sys.argv[3]) else "", n.get(sys.argv[3], ""))
+' "$inv" "$net_key" "$ip_key")
+  [[ -z "$ip" ]] && return 0
+  docker network connect --ip "$ip" "$net" "$container"
+}
+
+# merkle_up <inventory> <network> starts merkle-service with bsv-regtest's
+# settings, pointed at this stack's nodes (over chaosnet with --chaostest).
+merkle_up() {
+  local inv="$1" network="$2" peers datahubs
+  read -r peers datahubs < <(python3 -I -c '
+import json, sys
+nodes = [n for n in json.load(open(sys.argv[1]))["nodes"] if n["kind"] == "teranode"]
+hub = lambda n: "http://" + n["chaosIP"] + ":8090/api/v1" if n.get("chaosIP") else n["assetURL"]
+print(",".join(n["p2pAddr"] for n in nodes), ",".join(hub(n) for n in nodes))
+' "$inv")
+  docker rm -f "$MERKLE_CONTAINER" >/dev/null 2>&1 || true
+  echo "starting $MERKLE_CONTAINER on $network..."
+  # Published for amd64 only; arm64 hosts run it under emulation.
+  # busy_timeout and WAL: the default DSN has neither, so under load concurrent
+  # writes fail at once with SQLITE_BUSY, /watch answers 500 and the broadcaster
+  # parks the txs at PENDING_RETRY with no proof.
+  docker create --name "$MERKLE_CONTAINER" --network "$network" --platform linux/amd64 --memory 1g \
+    --tmpfs /data:mode=1777 \
+    -e MODE=all-in-one -e LOG_LEVEL=info -e API_PORT=8080 \
+    -e STORE_BACKEND=sql -e STORE_SQL_DRIVER=sqlite \
+    -e STORE_SQL_DSN='file:/data/merkle.db?_pragma=busy_timeout(10000)&_pragma=journal_mode(WAL)' \
+    -e KAFKA_BROKERS=kafka-shared:9092 \
+    -e P2P_NETWORK=regtest -e P2P_BOOTSTRAP_PEERS="$peers" -e P2P_DHT_MODE=off \
+    -e P2P_ENABLE_NAT=false -e P2P_ENABLE_MDNS=false -e P2P_PORT=9905 -e P2P_STORAGE_PATH=/data/p2p \
+    -e BLOB_STORE_URL=memory: -e CALLBACK_ALLOW_PRIVATE_IPS=true -e DATAHUB_ALLOW_PRIVATE_IPS=true \
+    -e DATAHUB_FALLBACK_URLS="$datahubs" -e CALLBACK_BACKOFF_BASE_SEC=1 -e CALLBACK_TIMEOUT_SEC=5 \
+    -p "${MERKLE_HOST_PORT:-18090}:8080" \
+    "$MERKLE_IMAGE" >/dev/null
+  attach_planes "$MERKLE_CONTAINER" "$inv" chaosnetName merkleChaosIP
+  docker start "$MERKLE_CONTAINER" >/dev/null
+}
+
+# arcade_up <inventory> <network> writes arcade's config from the node list
+# and starts it on the stack network. Host ports follow bsv-regtest's:
+# API 18080, health 18081, events (SSE) 18082, chaintracks 18083.
+arcade_up() {
+  local inv="$1" network="$2"
+  local cfg="$SIM_DATA_DIR/arcade"
+  mkdir -p "$cfg"
+  python3 -I - "$inv" "$cfg/config.yaml" "$ARCADE_CONTAINER" "$MERKLE_CONTAINER" <<'PY'
+import json, secrets, sys
+inv, out, name, merkle = json.load(open(sys.argv[1])), sys.argv[2], sys.argv[3], sys.argv[4]
+nodes = [n for n in inv["nodes"] if n["kind"] == "teranode"]
+# With the chaos-test layout (up --chaostest) arcade reaches the datahubs over
+# chaosnet, as on chaos-test's fleet, so a p2p partition cuts it off too.
+for n in nodes:
+    if n.get("chaosIP"):
+        n["assetURL"] = f"http://{n['chaosIP']}:8090/api/v1"
+lines = [
+    "# Written by multinode.sh sim up; mirrors bsv-regtest's arcade profile.",
+    "mode: all", "log_level: info", "network: regtest", "storage_path: /data/arcade",
+    # merkle-service calls arcade back here with proofs.
+    f"callback_url: http://{name}:8080/api/v1/merkle-service/callback",
+    f"callback_token: {secrets.token_hex(32)}",
+    "api:", "  host: 0.0.0.0", "  port: 8080",
+    "health:", "  port: 8081",
+    "kafka:", "  backend: memory", "  consumer_group: arcade", "  max_retries: 5", "  buffer_size: 10000",
+    "store:", "  backend: pebble", "  pebble:", "    path: /data/pebble", "    sync_writes: false",
+    "datahub_urls:", *[f"  - {n['assetURL']}" for n in nodes],
+    "teranode:", '  auth_token: ""',
+    "merkle_service:", f"  url: http://{merkle}:8080", '  auth_token: ""',
+    "p2p:", "  seeds: []", "  datahub_discovery: false", '  dht_mode: "off"', "  listen_port: 9905",
+    "  storage_path: /data/p2p", "  allow_private_urls: true",
+    "  bootstrap_peers:", *[f"    - {n['p2pAddr']}" for n in nodes],
+    "chaintracks_server:", "  enabled: true", "  host: 0.0.0.0", "  port: 8083", "  tie_scan_min_interval_ms: 500",
+    "callback:", "  allow_private_ips: true",
+    "validator:", "  accept_zero_fee: true", "  min_fee_per_kb: 0", "  standard_format_supported: true",
+    "bump_builder:", "  grace_window_ms: 5000", "  reconciler:", "    interval_ms: 2000", "    max_defer_attempts: 2",
+    "chaintracks:", "  mode: embedded", "  storage_path: /data/chaintracks",
+    f"  bootstrap_url: {nodes[0]['assetURL']}", "  bootstrap_mode: api",
+]
+open(out, "w").write("\n".join(lines) + "\n")
+PY
+
+  docker rm -f "$ARCADE_CONTAINER" >/dev/null 2>&1 || true
+  echo "starting $ARCADE_CONTAINER on $network..."
+  docker create --name "$ARCADE_CONTAINER" \
+    --network "$network" \
+    -p "$ARCADE_PORT:8080" -p "$((ARCADE_PORT + 1)):8081" \
+    -p "$((ARCADE_PORT + 2)):8082" -p "$((ARCADE_PORT + 3)):8083" \
+    -v "$cfg/config.yaml:/etc/bsv-broadcaster/config.yaml:ro" \
+    --memory 1g \
+    "$ARCADE_IMAGE" --mode all --config /etc/bsv-broadcaster/config.yaml >/dev/null
+  attach_planes "$ARCADE_CONTAINER" "$inv" chaosnetName arcadeChaosIP
+  docker start "$ARCADE_CONTAINER" >/dev/null
+
+  local deadline=$((SECONDS + 60))
+  until curl -sf -m 2 "http://localhost:$((ARCADE_PORT + 1))/health" >/dev/null 2>&1; do
+    if [[ "$(docker inspect -f '{{.State.Running}}' "$ARCADE_CONTAINER" 2>/dev/null)" != "true" ]] || ((SECONDS > deadline)); then
+      echo "error: arcade did not come up; last log lines:" >&2
+      docker logs --tail 30 "$ARCADE_CONTAINER" >&2 || true
+      exit 1
+    fi
+    sleep 1
+  done
+}
+
+# merkle_ready waits for merkle-service's health endpoint.
+merkle_ready() {
+  local port="${MERKLE_HOST_PORT:-18090}"
+  local deadline=$((SECONDS + 60))
+  until curl -sf -m 2 "http://localhost:$port/health" >/dev/null 2>&1; do
+    if ((SECONDS > deadline)); then
+      echo "error: $MERKLE_CONTAINER did not come up; last log lines:" >&2
+      docker logs --tail 30 "$MERKLE_CONTAINER" >&2 || true
+      exit 1
+    fi
+    sleep 1
+  done
+}
+
+# wallet_up <network> starts the wallet next to arcade.
+wallet_up() {
+  local network="$1" dir cfg="$SIM_DATA_DIR/wallet"
+  dir=$(chaos_test_dir)
+  if ! docker image inspect "$WALLETD_IMAGE" >/dev/null 2>&1; then
+    echo "building $WALLETD_IMAGE from $dir/bsv-regtest..."
+    make -C "$dir/bsv-regtest" RUNTIME=docker build-walletd
+  fi
+  mkdir -p "$cfg"
+  # bsv-regtest's config points at its fixed IPs (database, and arcade's API,
+  # events and chaintracks); here they are container names on the stack
+  # network.
+  sed -E -e 's/^([[:space:]]*host:).*/\1 '"$WALLET_DB_CONTAINER"'/' \
+    -e 's#http://10\.190\.0\.40:#http://'"$ARCADE_CONTAINER"':#g' \
+    "$dir/bsv-regtest/config/wallet-infra/infra-config.yaml" >"$cfg/infra-config.yaml"
+  if grep -qE '10\.19[01]\.0\.' "$cfg/infra-config.yaml"; then
+    echo "error: $cfg/infra-config.yaml still names a chaos-test fleet address; update wallet_up" >&2
+    exit 1
+  fi
+  # wallet-infra runs as uid 1000, which on Linux is usually not the host user, so the
+  # file has to be world-readable for the container. The directory keeps it from the
+  # host's other users: Docker resolves the bind mount as root.
+  chmod 700 "$cfg"
+  chmod 644 "$cfg/infra-config.yaml"
+
+  docker rm -f "$WALLETD_CONTAINER" "$WALLET_INFRA_CONTAINER" "$WALLET_DB_CONTAINER" >/dev/null 2>&1 || true
+  echo "starting the wallet ($WALLET_DB_CONTAINER, $WALLET_INFRA_CONTAINER, $WALLETD_CONTAINER)..."
+  docker run -d --name "$WALLET_DB_CONTAINER" --network "$network" --memory 256m \
+    -e POSTGRES_USER=wallet -e POSTGRES_PASSWORD=wallet -e POSTGRES_DB=storage \
+    postgres:17-alpine >/dev/null
+  local deadline=$((SECONDS + 60))
+  until docker exec "$WALLET_DB_CONTAINER" pg_isready -U wallet -d storage >/dev/null 2>&1; do
+    ((SECONDS > deadline)) && { echo "error: wallet database did not come up" >&2; exit 1; }
+    sleep 1
+  done
+  # Published for amd64 only; arm64 hosts run it under emulation.
+  docker run -d --name "$WALLET_INFRA_CONTAINER" --network "$network" --platform linux/amd64 --memory 512m \
+    -e TSTN_ARCADE_URL="http://$ARCADE_CONTAINER:8080" \
+    -e TSTN_CHAINTRACKS_URL="http://$ARCADE_CONTAINER:8083/chaintracks" \
+    -v "$cfg/infra-config.yaml:/app/infra-config.yaml:ro" \
+    -p "${WALLET_HOST_PORT:-18100}:8100" \
+    "$WALLET_INFRA_IMAGE" >/dev/null
+  docker run -d --name "$WALLETD_CONTAINER" --network "$network" --memory 256m \
+    -e WALLET_INFRA_URL="http://$WALLET_INFRA_CONTAINER:8100" -e BSV_NETWORK=tstn -e LISTEN=:8700 \
+    -v "$SIM_DATA_DIR/config:/config:ro" \
+    -p "${WALLETD_HOST_PORT:-18700}:8700" \
+    "$WALLETD_IMAGE" >/dev/null
+}
+
+wallet_down() {
+  docker rm -f "$WALLETD_CONTAINER" "$WALLET_INFRA_CONTAINER" "$WALLET_DB_CONTAINER" >/dev/null 2>&1 || true
+}
+
+sim_up() {
+  local build=false arcade=true wallet=true
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --build) build=true; shift ;;
+      --no-arcade) arcade=false; wallet=false; shift ;;
+      --no-wallet) wallet=false; shift ;;
+      *) echo "error: sim up: unknown flag '$1'" >&2; exit 2 ;;
+    esac
+  done
+  require_stack
+
+  local inv="$GEN_DIR/chaostest/inventory.json"
+  if [[ ! -f "$inv" ]]; then
+    echo "error: $inv not found; this stack predates chaos-test support. Run '$0 down' and '$0 up <N>' again." >&2
+    exit 1
+  fi
+
+  local dir
+  dir=$(chaos_test_dir)
+  if $build || ! docker image inspect "$SIM_IMAGE" >/dev/null 2>&1; then
+    sim_build
+  fi
+
+  # The coinbase pays PK1 (miner_wallet_private_keys.docker, output 0), so
+  # chaos-test's 'miner' key must be PK1 for coinbase spends to sign.
+  local pk1="${PK1:-}"
+  if [[ -z "$pk1" ]]; then
+    pk1=$(sed -nE 's/^PK1[[:space:]]*=[[:space:]]*([^[:space:]]+).*/\1/p' "$REPO_ROOT/settings.conf" | head -1)
+  fi
+  if [[ -z "$pk1" ]]; then
+    echo "error: could not read PK1 from settings.conf; set PK1 in the environment" >&2
+    exit 1
+  fi
+
+  local cfg="$SIM_DATA_DIR/config"
+  mkdir -p "$cfg" "$SIM_DATA_DIR/data"
+  # The key is passed through the environment, not argv, so it never shows in ps.
+  MINER_WIF="$pk1" python3 -I -c '
+import json, os, sys
+inv = json.load(open(sys.argv[1]))
+inv["minerWIF"] = os.environ["MINER_WIF"]
+with open(sys.argv[2], "w") as f:
+    json.dump(inv, f, indent=2)
+' "$inv" "$cfg/inventory.json"
+  cp "$dir/bsv-regtest/config/keys.json" "$cfg/keys.json"
+  chmod 600 "$cfg/inventory.json" "$cfg/keys.json"
+
+  local network
+  # The stack's own network (stores, Kafka, RPC). With --chaostest the
+  # inventory's chaosnetName is the p2p-only network instead.
+  network="teranode-network-multinode-${TEST_ID:-default}"
+
+  if $arcade; then
+    merkle_up "$inv" "$network"
+    arcade_up "$inv" "$network"
+    merkle_ready
+    python3 -I - "$cfg/inventory.json" "$ARCADE_CONTAINER" "$ARCADE_PORT" "$MERKLE_CONTAINER" "${MERKLE_HOST_PORT:-18090}" <<'PY'
+import json, sys
+path, name, port, merkle, merkle_port = sys.argv[1], sys.argv[2], int(sys.argv[3]), sys.argv[4], sys.argv[5]
+inv = json.load(open(path))
+pair = lambda p: {"url": f"http://{name}:{p}", "hostURL": f"http://localhost:{port + p - 8080}"}
+inv["services"]["arcade"] = {
+    **pair(8080), "container": name,
+    "urls": {"health": pair(8081), "events": pair(8082), "chaintracks": pair(8083)},
+}
+inv["services"]["merkle-service"] = {
+    "url": f"http://{merkle}:8080", "hostURL": f"http://localhost:{merkle_port}", "container": merkle,
+}
+with open(path, "w") as f:
+    json.dump(inv, f, indent=2)
+PY
+  else
+    docker rm -f "$ARCADE_CONTAINER" "$MERKLE_CONTAINER" >/dev/null 2>&1 || true
+  fi
+  local walletd_url=""
+  if $wallet; then
+    wallet_up "$network"
+    walletd_url="http://$WALLETD_CONTAINER:8700"
+  else
+    wallet_down
+  fi
+
+  docker rm -f "$SIM_CONTAINER" >/dev/null 2>&1 || true
+  echo "starting $SIM_CONTAINER on $network..."
+  # -walletd= (empty) turns the wallet feature off; the env var cannot,
+  # because an empty WALLETD_URL falls back to bsv-regtest's walletd address.
+  # host.docker.internal lets scenarios reach host-side tools (the blaster).
+  docker create --name "$SIM_CONTAINER" \
+    --network "$network" \
+    --add-host host.docker.internal:host-gateway \
+    -p "$SIM_PORT:8600" \
+    -e KAFKA_BROKERS=kafka-shared:9092 \
+    -e SCENARIOS=/scenarios,/scenarios-multinode \
+    -v "$cfg:/config:ro" \
+    -v "$SIM_SCENARIOS_DIR:/scenarios-multinode:ro" \
+    -v "$SIM_DATA_DIR/data:/data" \
+    -v "${CONTAINER_SOCKET:-/var/run/docker.sock}:/var/run/docker.sock" \
+    "$SIM_IMAGE" -walletd="$walletd_url" >/dev/null
+  # On the chaos-test layout its alert host pushes alerts to the nodes over
+  # alertnet.
+  attach_planes "$SIM_CONTAINER" "$inv" alertnetName orchestratorAlertIP
+  docker start "$SIM_CONTAINER" >/dev/null
+
+  local deadline=$((SECONDS + 30))
+  until curl -sf -m 2 "http://localhost:$SIM_PORT/api/inventory" >/dev/null 2>&1; do
+    if ! sim_running || ((SECONDS > deadline)); then
+      echo "error: orchestrator did not come up; last log lines:" >&2
+      docker logs --tail 30 "$SIM_CONTAINER" >&2 || true
+      exit 1
+    fi
+    sleep 1
+  done
+  echo "chaos-test UI: http://localhost:$SIM_PORT"
+  echo "run a scenario: $0 sim run multinode-smoke"
+}
+
+# reclaim_dir hands files a root container wrote into a bind mount back to the
+# host user. On Linux they stay root-owned otherwise, and the user (or a CI
+# runner cleaning its workspace) cannot delete them.
+reclaim_dir() {
+  local d="$1"
+  [ -d "$d" ] || return 0
+  find "$d" ! -user "$(id -u)" -print -quit 2>/dev/null | grep -q . || return 0
+  docker run --rm -v "$d:/d" alpine chown -R "$(id -u):$(id -g)" /d >/dev/null 2>&1 || true
+}
+
+sim_down() {
+  if docker inspect "$SIM_CONTAINER" >/dev/null 2>&1; then
+    docker rm -f "$SIM_CONTAINER" >/dev/null
+    reclaim_dir "$SIM_DATA_DIR/data"
+    echo "removed $SIM_CONTAINER (runs kept in ${SIM_DATA_DIR#"$REPO_ROOT"/}/data/runs)"
+  fi
+  if docker inspect "$WALLETD_CONTAINER" >/dev/null 2>&1; then
+    wallet_down
+    echo "removed the wallet"
+  fi
+  if docker inspect "$ARCADE_CONTAINER" >/dev/null 2>&1; then
+    docker rm -f "$ARCADE_CONTAINER" "$MERKLE_CONTAINER" >/dev/null 2>&1
+    echo "removed $ARCADE_CONTAINER and $MERKLE_CONTAINER"
+  fi
+}
+
+sim_status() {
+  if ! sim_running; then
+    echo "chaos-test orchestrator: not running ('$0 sim up' to start)"
+    return
+  fi
+  echo "chaos-test orchestrator: running  ui=http://localhost:$SIM_PORT"
+  curl -sf -m 5 "http://localhost:$SIM_PORT/api/scenarios" | python3 -I -c '
+import json, sys
+for s in json.load(sys.stdin):
+    print("  " + s["id"])
+' || echo "  (scenario list unavailable)"
+}
+
+# sim_run starts a scenario and follows it to completion, printing each step
+# as it finishes. Exit status: 0 passed (findings are printed, not fatal),
+# 1 failed or aborted.
+sim_run() {
+  local id="${1:?usage: sim run <scenario-id> [--step]}"
+  local mode="auto"
+  [[ "${2:-}" == "--step" ]] && mode="step"
+  sim_running || { echo "error: orchestrator not running; '$0 sim up' first" >&2; exit 1; }
+
+  local base="http://localhost:$SIM_PORT/api"
+  local run_id
+  run_id=$(curl -sf -m 10 -X POST -H 'Content-Type: application/json' \
+    -d "{\"mode\":\"$mode\"}" "$base/scenarios/$id/run" \
+    | python3 -I -c 'import json, sys; print(json.load(sys.stdin)["id"])') || {
+    echo "error: could not start '$id' (unknown scenario, or another run is active)" >&2
+    exit 1
+  }
+  echo "run $run_id: $id ($mode)  ui=http://localhost:$SIM_PORT"
+  [[ "$mode" == "step" ]] && echo "step mode: release each step from the UI or POST $base/runs/$run_id/next"
+
+  local printed=0 status
+  while true; do
+    status=$(curl -sf -m 10 "$base/runs/$run_id" | python3 -I -c '
+import json, sys
+run = json.load(sys.stdin)
+done = [s for s in run.get("steps") or [] if s.get("status") not in (None, "", "pending", "running")]
+skip = int(sys.argv[1])
+for s in done[skip:]:
+    err = (" - " + s["error"]) if s.get("error") else ""
+    print("STEP %-7s %s%s" % (s.get("status"), s.get("name"), err))
+print("COUNT %d" % len(done))
+print("STATUS %s" % run.get("status"))
+for f in run.get("findings") or []:
+    print("FINDING %s" % (f if isinstance(f, str) else json.dumps(f)))
+' "$printed") || { sleep 3; continue; }
+    while IFS= read -r line; do
+      case "$line" in
+        STEP*) echo "  ${line#STEP }" ;;
+        COUNT*) printed="${line#COUNT }" ;;
+      esac
+    done <<<"$status"
+    local st
+    st=$(sed -n 's/^STATUS //p' <<<"$status")
+    if [[ "$st" != "running" && "$st" != "paused" ]]; then
+      grep '^FINDING' <<<"$status" | sed 's/^FINDING /  finding: /' || true
+      echo "run $run_id: $st"
+      [[ "$st" == "passed" ]]
+      return
+    fi
+    sleep 3
+  done
+}
+
+cmd_sim() {
+  local sub="${1:-}"
+  [[ $# -gt 0 ]] && shift
+  case "$sub" in
+    up)     sim_up "$@" ;;
+    down)   sim_down ;;
+    build)  sim_build ;;
+    status) sim_status ;;
+    logs)   docker logs -f "$SIM_CONTAINER" ;;
+    run)    sim_run "$@" ;;
+    *)      echo "usage: $0 sim up [--build] [--no-arcade] [--no-wallet] | down | build | status | logs | run <scenario> [--step]" >&2; exit 2 ;;
+  esac
+}
+
 [[ $# -eq 0 ]] && usage
 
 command="$1"
@@ -1110,6 +1868,7 @@ case "$command" in
   generate)   cmd_generate "$@" ;;
   blast)      cmd_blast "$@" ;;
   chaos)      cmd_chaos "$@" ;;
+  sim)        cmd_sim "$@" ;;
   help|-h)    usage ;;
   *)          echo "error: unknown command '$command'" >&2; usage ;;
 esac
