@@ -593,7 +593,7 @@ func TestStoreSubtreeFiles_ALaneBitmapsFailureDoesNotStopTheSubtree(t *testing.T
 	}{
 		{"fails twice then is written", 2, nil, true, 2, 0, 1, 0},
 		{"fails past the bound", -1, nil, false, -1, 1, 1, 1},
-		{"cannot pass on a retry", -1, errors.NewConfigurationError("no deletion scheduler"), false, 1, 1, 0, 0},
+		{"cannot pass on a retry", -1, errors.NewStorageError("failed to get file name", errors.NewConfigurationError("no deletion scheduler")), false, 1, 1, 0, 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			st, m := laneBitmapsSubtree(t)

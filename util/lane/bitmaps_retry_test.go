@@ -58,7 +58,7 @@ func TestBitmapsWriteRetryDo(t *testing.T) {
 		{"fails past the bound", -1, storeDown, true, -1, 1, 1},
 		{"cannot be encoded", -1, errors.NewProcessingError("encode"), true, 1, 0, 0},
 		{"a file already there", -1, errors.ErrBlobAlreadyExists, true, 1, 0, 0},
-		{"no deletion scheduler", -1, errors.NewConfigurationError("scheduler not configured"), true, 1, 0, 0},
+		{"no deletion scheduler", -1, errors.NewStorageError("failed to get file name", errors.NewConfigurationError("scheduler not configured")), true, 1, 0, 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			service := "test-do-" + tc.name
@@ -194,7 +194,9 @@ func TestRetryableBitmapsWriteError(t *testing.T) {
 		{"cancelled", live, errors.NewStorageError("key lock", context.Canceled), false},
 		{"a file already there", live, errors.ErrBlobAlreadyExists, false},
 		{"configuration", live, errors.NewConfigurationError("no scheduler"), false},
+		{"configuration wrapped by the file store", live, errors.NewStorageError("failed to get file name", errors.NewConfigurationError("no scheduler")), false},
 		{"invalid argument", live, errors.NewInvalidArgumentError("bad key"), false},
+		{"invalid argument wrapped by the file store", live, errors.NewStorageError("failed to get file name", errors.NewInvalidArgumentError("bad key")), false},
 		{"processing", live, errors.NewProcessingError("encode"), false},
 		{"unknown", live, errors.NewTxInvalidError("not a store error"), false},
 	} {
