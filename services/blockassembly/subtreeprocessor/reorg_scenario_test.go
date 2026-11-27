@@ -175,6 +175,44 @@ func TestReorgScenario_HasParentEdgesInsideTheAssembly(t *testing.T) {
 	require.Greater(t, inAssemblyParentEdges(sc.stp), 20, "after the reorg the D1 parents are in assembly too")
 }
 
+// The winning blocks are what the network accepted, so a chain child is never before its parent,
+// in the same block or in an earlier one. The blocks are consecutive slices of the winners.
+func TestReorgScenario_WinningBlocksPutEachChainChildAfterItsParent(t *testing.T) {
+	cfg := smallScenarioConfig()
+	cfg.hitsAtFront = true
+	cfg.forwardBlocks = 4
+
+	for seed := uint64(1); seed <= 20; seed++ {
+		cfg.seed = seed
+		sc := newReorgScenario(t, cfg)
+
+		position := make(map[scenarioID]int, len(sc.winnerIDs))
+		for i, id := range sc.winnerIDs {
+			position[id] = i
+		}
+
+		chained := 0
+
+		for i, id := range sc.winnerIDs {
+			extra, ok := sc.extraParent[id]
+			if !ok {
+				continue
+			}
+
+			parentPos, inWinners := position[extra.parent]
+			if !inWinners {
+				continue
+			}
+
+			chained++
+
+			require.Less(t, parentPos, i, "seed %d: a chain child comes after its parent", seed)
+		}
+
+		require.Positive(t, chained, "seed %d: the winners hold chains", seed)
+	}
+}
+
 func TestReorgScenario_OracleCatchesAParentMovedAfterItsChild(t *testing.T) {
 	sc := newReorgScenario(t, smallScenarioConfig())
 	require.NoError(t, sc.run(t))

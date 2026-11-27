@@ -229,10 +229,6 @@ func newReorgScenario(t testing.TB, cfg reorgScenarioConfig) *reorgScenario {
 		cfg.subtreeSize = 1024
 	}
 
-	// The winners are shuffled below, which can put a chain child before its hit parent, a block
-	// the network would reject; so the two knobs are not combined.
-	require.False(t, cfg.hitsAtFront && cfg.pendingChains > 0, "hitsAtFront and pendingChains cannot be combined")
-
 	sc := &reorgScenario{cfg: cfg}
 	rng := rand.New(rand.NewPCG(cfg.seed, 0x2269))
 
@@ -314,11 +310,48 @@ func newReorgScenario(t testing.TB, cfg reorgScenarioConfig) *reorgScenario {
 	}
 
 	rng.Shuffle(len(sc.winnerIDs), func(i, j int) { sc.winnerIDs[i], sc.winnerIDs[j] = sc.winnerIDs[j], sc.winnerIDs[i] })
+	sc.winnerIDs = sc.parentsFirst(sc.winnerIDs)
 
 	sc.buildChain(t)
 	sc.buildProcessor(t)
 
 	return sc
+}
+
+// parentsFirst keeps ids in their order, except that a transaction whose scenario parent is also in
+// ids follows that parent directly. The winning blocks are consecutive slices of the result, so a
+// child is never in an earlier block than its parent, nor before it in the same block.
+func (sc *reorgScenario) parentsFirst(ids []scenarioID) []scenarioID {
+	inIDs := make(map[scenarioID]struct{}, len(ids))
+	for _, id := range ids {
+		inIDs[id] = struct{}{}
+	}
+
+	waiting := make(map[scenarioID][]scenarioID)
+	out := make([]scenarioID, 0, len(ids))
+
+	var emit func(id scenarioID)
+
+	emit = func(id scenarioID) {
+		out = append(out, id)
+
+		for _, child := range waiting[id] {
+			emit(child)
+		}
+	}
+
+	for _, id := range ids {
+		if extra, ok := sc.extraParent[id]; ok {
+			if _, parentInIDs := inIDs[extra.parent]; parentInIDs {
+				waiting[extra.parent] = append(waiting[extra.parent], id)
+				continue
+			}
+		}
+
+		emit(id)
+	}
+
+	return out
 }
 
 // addParentEdges picks the pending transactions that spend another scenario transaction: first the
