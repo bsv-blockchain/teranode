@@ -60,19 +60,9 @@ func spendOutput(t *testing.T, parent *bt.Tx, vout uint32) *bt.Tx {
 	return child
 }
 
-// TestSetMinedMultiClearsCreatingOnExtraRecords covers a paginated transaction
-// whose clearCreatingFlag failed part-way, leaving `creating` on the master and
-// on an extra record. setMined is keyed on the master, so before this fix only
-// the master lost `creating`. The extra record kept it, and every output on it
-// (vout >= utxoBatchSize) was refused with ErrTxCreating although the
-// transaction was mined. Mining must make every output spendable.
-//
-// The first-mine case forges the stuck state before the first SetMinedMulti.
-// The re-mine case forges it on the extra records after a first mine and mines
-// again with the same block ID, which sends the expression path down its
-// FILTERED_OUT branch. A re-mine clears the state too, but only when something
-// mines the transaction again; a transaction already mined and settled with the
-// stuck state is not revisited.
+// TestSetMinedMultiClearsCreatingOnExtraRecords: a mined transaction must lose
+// `creating` on every record, on both paths, including a same-block re-mine that
+// the expression path sees as FILTERED_OUT.
 func TestSetMinedMultiClearsCreatingOnExtraRecords(t *testing.T) {
 	t.Parallel()
 
@@ -80,81 +70,93 @@ func TestSetMinedMultiClearsCreatingOnExtraRecords(t *testing.T) {
 		t.Skip("Skipping Aerospike integration test in short mode")
 	}
 
+	// Batch size 4. Ten outputs: master holds vouts 0-3, extra record 1 holds
+	// 4-7, extra record 2 holds 8-9. Three outputs: the master holds them all.
+	shapes := []struct {
+		name    string
+		outputs int
+		extras  int
+		vouts   []uint32 // one output on each record
+	}{
+		{name: "paginated", outputs: 10, extras: 2, vouts: []uint32{0, 5, 9}},
+		{name: "single-record", outputs: 3, extras: 0, vouts: []uint32{0, 2}},
+	}
+
 	for _, useExpressions := range []bool{false, true} {
 		for _, reMine := range []bool{false, true} {
-			name := "lua"
-			if useExpressions {
-				name = "expressions"
-			}
-
-			if reMine {
-				name += "/re-mine"
-			} else {
-				name += "/first-mine"
-			}
-
-			t.Run(name, func(t *testing.T) {
-				ctx := context.Background()
-				logger := ulogger.NewErrorTestLogger(t)
-				settings := test.CreateBaseTestSettings(t)
-
-				// Batch size 4 and 10 outputs: master holds vouts 0-3, extra
-				// record 1 holds 4-7, extra record 2 holds 8-9.
-				settings.UtxoStore.UtxoBatchSize = 4
-				settings.Aerospike.EnableSetMinedFilterExpressions = useExpressions
-
-				client, store, _, cleanup := initAerospike(t, settings, logger)
-				defer cleanup()
-
-				const blockHeight = 604315
-
-				const blockID = 11
-
-				// createTransactionWithOutputs spends the zero hash, so the store
-				// treats the parent as a coinbase; spend it well past maturity.
-				const spendHeight = blockHeight + 1_000
-
-				parent := createTransactionWithOutputs(10)
-				parentHash := parent.TxIDChainHash()
-
-				_, err := store.Create(ctx, parent, blockHeight)
-				require.NoError(t, err)
-
-				extras := totalExtraRecs(t, client, store, parentHash)
-				require.Equal(t, 2, extras, "10 outputs at batch size 4 must give two extra records")
-
-				mined := utxo.MinedBlockInfo{BlockID: blockID, BlockHeight: blockHeight, OnLongestChain: true}
+			for _, shape := range shapes {
+				name := "lua"
+				if useExpressions {
+					name = "expressions"
+				}
 
 				if reMine {
+					name += "/re-mine"
+				} else {
+					name += "/first-mine"
+				}
+
+				name += "/" + shape.name
+
+				t.Run(name, func(t *testing.T) {
+					ctx := context.Background()
+					logger := ulogger.NewErrorTestLogger(t)
+					settings := test.CreateBaseTestSettings(t)
+
+					settings.UtxoStore.UtxoBatchSize = 4
+					settings.Aerospike.EnableSetMinedFilterExpressions = useExpressions
+
+					client, store, _, cleanup := initAerospike(t, settings, logger)
+					defer cleanup()
+
+					const blockHeight = 604315
+
+					const blockID = 11
+
+					// createTransactionWithOutputs spends the zero hash, so the store
+					// treats the parent as a coinbase; spend it well past maturity.
+					const spendHeight = blockHeight + 1_000
+
+					parent := createTransactionWithOutputs(shape.outputs)
+					parentHash := parent.TxIDChainHash()
+
+					_, err := store.Create(ctx, parent, blockHeight)
+					require.NoError(t, err)
+
+					require.Equal(t, shape.extras, totalExtraRecs(t, client, store, parentHash))
+
+					mined := utxo.MinedBlockInfo{BlockID: blockID, BlockHeight: blockHeight, OnLongestChain: true}
+
+					if reMine {
+						_, err = store.SetMinedMulti(ctx, []*chainhash.Hash{parentHash}, mined)
+						require.NoError(t, err)
+					}
+
+					for i := uint32(0); i <= uint32(shape.extras); i++ { // nolint:gosec
+						markCreating(t, client, store, parentHash, i)
+					}
+
+					// Precondition: the forged state really blocks a spend of an
+					// output on every record.
+					for _, vout := range shape.vouts {
+						_, err = store.Spend(ctx, spendOutput(t, parent, vout), spendHeight)
+						require.ErrorIsf(t, err, errors.ErrTxCreating, "the forged creating bin must block the spend of vout %d", vout)
+					}
+
 					_, err = store.SetMinedMulti(ctx, []*chainhash.Hash{parentHash}, mined)
 					require.NoError(t, err)
-				} else {
-					markCreating(t, client, store, parentHash, 0)
-				}
 
-				for i := uint32(1); i <= uint32(extras); i++ { // nolint:gosec
-					markCreating(t, client, store, parentHash, i)
-				}
+					for i := uint32(0); i <= uint32(shape.extras); i++ { // nolint:gosec
+						require.Falsef(t, recordHasCreatingBin(t, client, store, parentHash, i),
+							"record %d must not have a creating bin once the transaction is mined", i)
+					}
 
-				// Precondition: the forged state really blocks a spend of an
-				// output on an extra record.
-				_, err = store.Spend(ctx, spendOutput(t, parent, 9), spendHeight)
-				require.ErrorIs(t, err, errors.ErrTxCreating, "the forged creating bin must block the spend")
-
-				_, err = store.SetMinedMulti(ctx, []*chainhash.Hash{parentHash}, mined)
-				require.NoError(t, err)
-
-				for i := uint32(0); i <= uint32(extras); i++ { // nolint:gosec
-					require.Falsef(t, recordHasCreatingBin(t, client, store, parentHash, i),
-						"record %d must not have a creating bin once the transaction is mined", i)
-				}
-
-				// One output on each record: master, extra 1, extra 2.
-				for _, vout := range []uint32{0, 5, 9} {
-					_, err = store.Spend(ctx, spendOutput(t, parent, vout), spendHeight)
-					require.NoErrorf(t, err, "vout %d of a mined transaction must be spendable", vout)
-				}
-			})
+					for _, vout := range shape.vouts {
+						_, err = store.Spend(ctx, spendOutput(t, parent, vout), spendHeight)
+						require.NoErrorf(t, err, "vout %d of a mined transaction must be spendable", vout)
+					}
+				})
+			}
 		}
 	}
 }

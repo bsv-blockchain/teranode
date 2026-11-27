@@ -7,7 +7,7 @@ This document describes the Aerospike UTXO store implementation, including the d
 ### Normal Transaction
 ```
 inputs
-outputs  
+outputs
 version
 locktime
 fee
@@ -120,9 +120,9 @@ If the clear phase fails or the process stops, the records stay in the `creating
    - The record batch has no top-level error, and every record returns OK or `KEY_EXISTS_ERROR`.
 
    A second store of a single-record transaction that went through the `RECORD_TOO_BIG` retry does not do this. It takes the plain `sendStoreBatch` put, gets `KEY_EXISTS_ERROR`, and returns `ErrTxExists` without a call to `clearCreatingFlag`. Only `setMined` recovers that case.
-3. **setMined**: when the transaction is mined, `setMined` deletes the `creating` bin from the master record and from every extra record that exists. The Lua `setMined` function or `set_mined_expressions.go` clears the master. `clearLockedOnRecordsMulti` in `set_mined.go` clears the extra records in the same write that clears `locked`. On the expressions path, a master write that comes back `FILTERED_OUT` keeps its `creating` bin, but its extra records are still cleared.
+3. **setMined**: when the transaction is mined, `setMined` deletes the `creating` bin from the master record and from every extra record that exists. The Lua `setMined` function or `set_mined_expressions.go` clears the master. `clearLockedOnRecordsMulti` in `set_mined.go` clears the extra records in the same write that clears `locked`. On the expressions path, a re-mine of a block the master already lists comes back `FILTERED_OUT` and skips the master write, so `applyLockClearWork` in `set_mined.go` reads the master's extra record count and `creating` bin. It deletes `creating` on the extra records first, and on the master only when every extra record of that transaction was cleared.
 
-One gap remains after `setMined`: an extra record that the write phase never created. `setMined` clears the master, and the clear of the missing record gets `KEY_NOT_FOUND`, which `setMined` treats as benign. The record stays missing. Subtree validation then sees a complete master and does not process the transaction again. A master record without the bin therefore does not prove that every extra record exists.
+One gap remains after `setMined`: an extra record that the write phase never created. On a first mine, and on every Lua mine, `setMined` clears the master, and the clear of the missing record gets `KEY_NOT_FOUND`, which `setMined` treats as benign. The record stays missing. Subtree validation then sees a complete master and does not process the transaction again. A master record without the bin therefore does not prove that every extra record exists. An expressions re-mine that finds the record missing leaves `creating` on the master instead.
 
 The validator retry does not act on the records. A child transaction that hits `ErrTxCreating` on a parent retries validation with exponential backoff (see `ValidateWithOptions` in `Validator.go`). This covers only the window while the clear phase is still in flight. The setting `validator_txlocked_maxRetries` controls the retry count. The default is 3 (10/20/40ms, about 70ms in total), and values above 10 are clamped. The `TX_LOCKED` retry uses the same budget. If the clear phase failed for good, the child uses all of its retries and the validator rejects it. The metric `teranode_validator_parent_commit_exhausted` counts these rejections, with the label `condition="TX_CREATING"`.
 

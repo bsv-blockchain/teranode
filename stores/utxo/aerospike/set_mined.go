@@ -57,6 +57,9 @@ package aerospike
 
 import (
 	"context"
+	"slices"
+	"strconv"
+	"strings"
 	"sync"
 
 	"github.com/bsv-blockchain/aerospike-client-go/v8"
@@ -538,11 +541,13 @@ func (s *Store) handleBatchRecordError(batchRecord aerospike.BatchRecordIfc, err
 // have the `locked` flag and the `creating` bin cleared as part of marking the
 // transaction mined. When the setMined UDF or expression write runs, it clears
 // the master's `locked` and `creating` itself. On the expression path's
-// FILTERED_OUT branch the master's `locked` is cleared by SetLocked(false), and
-// its `creating` is not cleared.
+// FILTERED_OUT branch that write is skipped, so an item whose master still has
+// `creating` sets master, and the master loses it here once its extra records
+// are cleared. Its `locked` is left to SetLocked(false).
 type lockClearItem struct {
 	txID       *chainhash.Hash
-	childCount int // number of pagination/extra records, cleared at indices 1..childCount
+	childCount int  // number of pagination/extra records, cleared at indices 1..childCount
+	master     bool // also delete creating on the master record, index 0
 }
 
 // lockClearWork is the lock-clearing follow-up that a setMined result processor
@@ -554,8 +559,10 @@ type lockClearWork struct {
 	items []lockClearItem
 	// fullUnlock: transactions whose record state is unknown from the batch (the
 	// expression write was FILTERED_OUT, so the child count and even the master's
-	// lock state were not returned). SetLocked(false) reads the child count from
-	// the master and clears every record (master + all pagination records).
+	// lock state were not returned). applyLockClearWork reads both and deletes
+	// `creating` on every extra record. It deletes it on the master only when
+	// every extra record was cleared. SetLocked(false) clears `locked` on every
+	// record.
 	fullUnlock []chainhash.Hash
 }
 
@@ -569,8 +576,10 @@ func (s *Store) applyLockClearWork(ctx context.Context, work lockClearWork) erro
 	items := work.items
 
 	// SetLocked below clears `locked` on the fullUnlock transactions but never
-	// touches `creating`, so their extra records also go through the clear here.
-	// Their child count was not returned by the FILTERED_OUT write, so read it.
+	// touches `creating`, so their records also go through the clear here. The
+	// FILTERED_OUT write returned neither the child count nor whether the master
+	// still has `creating`, so read both. A transaction whose read fails gets no
+	// item, and its master keeps `creating`.
 	if len(work.fullUnlock) > 0 {
 		extraItems, readErr := s.readExtraRecordCounts(work.fullUnlock)
 		if readErr != nil {
@@ -584,7 +593,9 @@ func (s *Store) applyLockClearWork(ctx context.Context, work lockClearWork) erro
 		if err == nil {
 			err = clearErr
 		} else {
-			err = errors.Join(err, clearErr)
+			// The clear error goes first: up to ten read errors, each with its cause,
+			// already fill Error()'s 20 printed links, so after them it would not print.
+			err = errors.Join(clearErr, err)
 		}
 	}
 
@@ -605,9 +616,10 @@ func (s *Store) applyLockClearWork(ctx context.Context, work lockClearWork) erro
 	return err
 }
 
-// readExtraRecordCounts reads the extra record count from the master record of
-// each transaction and returns a lockClearItem for each one that has extra
-// records. A master that no longer exists has no extra records to clear.
+// readExtraRecordCounts reads the extra record count and the `creating` bin from
+// the master record of each transaction, and returns a lockClearItem for each one
+// with extra records or with `creating` on its master. A master that no longer
+// exists has nothing to clear.
 func (s *Store) readExtraRecordCounts(txIDs []chainhash.Hash) ([]lockClearItem, error) {
 	readPolicy := aerospike.NewBatchReadPolicy()
 	records := make([]aerospike.BatchRecordIfc, 0, len(txIDs))
@@ -621,7 +633,7 @@ func (s *Store) readExtraRecordCounts(txIDs []chainhash.Hash) ([]lockClearItem, 
 			return nil, errors.NewProcessingError("[readExtraRecordCounts][%s] failed to create key", txID.String(), err)
 		}
 
-		records = append(records, aerospike.NewBatchRead(readPolicy, key, []string{fields.TotalExtraRecs.String()}))
+		records = append(records, aerospike.NewBatchRead(readPolicy, key, []string{fields.TotalExtraRecs.String(), fields.Creating.String()}))
 		ids = append(ids, txID)
 	}
 
@@ -633,7 +645,7 @@ func (s *Store) readExtraRecordCounts(txIDs []chainhash.Hash) ([]lockClearItem, 
 }
 
 // extraRecordItems turns the batch read of readExtraRecordCounts into one
-// lockClearItem per transaction with extra records. A master that comes back
+// lockClearItem per transaction with extra records or a `creating` master. A master that comes back
 // KEY_NOT_FOUND is skipped. Any other read error, or a record that came back
 // with neither data nor an error, is reported, so a transaction whose extra
 // records were not cleared is never dropped silently.
@@ -657,8 +669,11 @@ func extraRecordItems(records []aerospike.BatchRecordIfc, ids []*chainhash.Hash)
 			continue
 		}
 
-		if extraRecs, ok := br.Record.Bins[fields.TotalExtraRecs.String()].(int); ok && extraRecs > 0 {
-			items = append(items, lockClearItem{txID: ids[i], childCount: extraRecs})
+		extraRecs, _ := br.Record.Bins[fields.TotalExtraRecs.String()].(int)
+		_, masterCreating := br.Record.Bins[fields.Creating.String()]
+
+		if extraRecs > 0 || masterCreating {
+			items = append(items, lockClearItem{txID: ids[i], childCount: max(extraRecs, 0), master: masterCreating})
 		}
 	}
 
@@ -666,7 +681,8 @@ func extraRecordItems(records []aerospike.BatchRecordIfc, ids []*chainhash.Hash)
 }
 
 // clearLockedOnRecordsMulti clears the `locked` flag and deletes the `creating`
-// bin on the requested records in a single unfiltered BatchOperate.
+// bin on the extra records of each item, then deletes `creating` on the master
+// of each item that sets master.
 //
 // Why this exists (issue #1037): a transaction created WithLocked(true) — by the
 // block-validation quick-validate pipeline (services/blockvalidation/quick_validate.go)
@@ -688,90 +704,298 @@ func extraRecordItems(records []aerospike.BatchRecordIfc, ids []*chainhash.Hash)
 // master only, so the master looks complete and nothing re-runs the create,
 // while every output on a stuck extra record is refused with CREATING. Deleting
 // the bin here, in the same write as the lock clear, makes those outputs
-// spendable once the transaction is mined. Deleting the bin never exposes a
-// half-written record, since create writes each record with its full data in one
-// put and this write is UPDATE_ONLY. A record the create never wrote stays
-// missing and comes back KEY_NOT_FOUND below; this clear does not repair it.
+// spendable once the transaction is mined. Create writes each record with its
+// full data in one put and this write is UPDATE_ONLY, so a cleared extra record
+// is never half-written. A record the create never wrote stays missing and comes
+// back KEY_NOT_FOUND below; this clear does not repair it.
 //
-// A KEY_NOT_FOUND on any record is treated as benign: a record that does not exist
-// cannot be holding a lock.
+// A master without `creating` marks its transaction complete, so the master
+// item follows clearCreatingFlag's order: it is written in a second batch, and
+// only when every extra record of its transaction came back cleared. A failed or
+// missing extra record leaves `creating` on the master.
+//
+// A KEY_NOT_FOUND is not an error: a record that does not exist cannot be holding
+// a lock. On an extra record it still withholds the master clear.
 func (s *Store) clearLockedOnRecordsMulti(items []lockClearItem) error {
-	total := 0
-	for _, it := range items {
-		if it.childCount > 0 {
-			total += it.childCount
-		}
-	}
-
-	if total == 0 {
-		return nil
-	}
-
 	batchWritePolicy := util.GetAerospikeBatchWritePolicy(s.settings)
 	batchWritePolicy.RecordExistsAction = aerospike.UPDATE_ONLY
 	clearLockedOp := aerospike.PutOp(aerospike.NewBin(fields.Locked.String(), false))
 	// A nil value deletes the bin, matching clearCreatingFlag and setMined.
 	clearCreatingOp := aerospike.PutOp(aerospike.NewBin(fields.Creating.String(), nil))
 
-	batchRecords := make([]aerospike.BatchRecordIfc, 0, total)
-
-	appendRecord := func(txID *chainhash.Hash, idx uint32) error {
-		keySource := uaerospike.CalculateKeySourceInternal(txID, idx)
-
-		key, err := aerospike.NewKey(s.namespace, s.setName, keySource)
+	recordKey := func(txID *chainhash.Hash, idx uint32) (*aerospike.Key, error) {
+		key, err := aerospike.NewKey(s.namespace, s.setName, uaerospike.CalculateKeySourceInternal(txID, idx))
 		if err != nil {
-			return errors.NewProcessingError("[clearLockedOnRecordsMulti][%s] failed to create key for record %d", txID.String(), idx, err)
+			return nil, errors.NewProcessingError("[clearLockedOnRecordsMulti][%s] failed to create key for record %d", txID.String(), idx, err)
 		}
 
-		batchRecords = append(batchRecords, aerospike.NewBatchWrite(batchWritePolicy, key, clearLockedOp, clearCreatingOp))
-
-		return nil
+		return key, nil
 	}
 
-	for _, it := range items {
+	// childRef names the item and record index of each extra record write, so a
+	// failure is reported against them and withholds that item's master clear.
+	type childRef struct {
+		item int
+		idx  uint32
+	}
+
+	var (
+		childRecords []aerospike.BatchRecordIfc
+		childRefs    []childRef
+	)
+
+	for n, it := range items {
 		// Guard against a non-positive childCount: uint32(negative) would wrap to
-		// ~4e9 and blow up the batch. Both producers only ever append childCount > 0,
-		// so this is belt-and-suspenders for self-consistency with the sizing loop.
+		// ~4e9 and blow up the batch.
 		if it.childCount <= 0 {
 			continue
 		}
 
 		for i := uint32(1); i <= uint32(it.childCount); i++ { // nolint:gosec
-			if err := appendRecord(it.txID, i); err != nil {
+			key, err := recordKey(it.txID, i)
+			if err != nil {
 				return err
+			}
+
+			childRecords = append(childRecords, aerospike.NewBatchWrite(batchWritePolicy, key, clearLockedOp, clearCreatingOp))
+			childRefs = append(childRefs, childRef{item: n, idx: i})
+		}
+	}
+
+	var (
+		failed    []failedClear
+		otherErrs []error
+	)
+
+	incomplete := make([]bool, len(items))
+
+	if len(childRecords) > 0 {
+		// A non-nil top-level error here is a transport/batch-level failure, surfaced
+		// hard, and no master is cleared. The benign per-record KEY_NOT_FOUND tolerance
+		// below relies on Aerospike reporting missing records per-record
+		// (BatchRecord.Err), not as a top-level error.
+		if err := s.batchOperate(util.GetAerospikeBatchPolicy(s.settings), childRecords); err != nil {
+			return errors.NewStorageError("[clearLockedOnRecordsMulti] failed to clear locked flag", err)
+		}
+
+		for i, br := range childRecords {
+			recErr := br.BatchRec().Err
+			if recErr == nil {
+				continue
+			}
+
+			ref := childRefs[i]
+			incomplete[ref.item] = true
+
+			if isKeyNotFound(recErr) {
+				if items[ref.item].master {
+					s.logger.Warnf("[clearLockedOnRecordsMulti][%s] extra record %d is missing, so the master keeps its creating bin", items[ref.item].txID.String(), ref.idx)
+				}
+
+				continue
+			}
+
+			failed = append(failed, failedClear{txID: items[ref.item].txID, idx: ref.idx, cause: recErr})
+		}
+	}
+
+	// The master write deletes only `creating`, and only when the bin is there, so
+	// a master without it is not rewritten and comes back FILTERED_OUT.
+	masterWritePolicy := util.GetAerospikeBatchWritePolicy(s.settings)
+	masterWritePolicy.RecordExistsAction = aerospike.UPDATE_ONLY
+	masterWritePolicy.FilterExpression = aerospike.ExpBinExists(fields.Creating.String())
+
+	var (
+		masterRecords []aerospike.BatchRecordIfc
+		masterItems   []int
+	)
+
+	for n, it := range items {
+		if !it.master || incomplete[n] {
+			continue
+		}
+
+		key, err := recordKey(it.txID, 0)
+		if err != nil {
+			otherErrs = append(otherErrs, err)
+			continue
+		}
+
+		masterRecords = append(masterRecords, aerospike.NewBatchWrite(masterWritePolicy, key, clearCreatingOp))
+		masterItems = append(masterItems, n)
+	}
+
+	if len(masterRecords) > 0 {
+		if err := s.batchOperate(util.GetAerospikeBatchPolicy(s.settings), masterRecords); err != nil {
+			otherErrs = append(otherErrs, errors.NewStorageError("[clearLockedOnRecordsMulti] failed to clear creating on %d master records", len(masterRecords), err))
+		} else {
+			for i, br := range masterRecords {
+				recErr := br.BatchRec().Err
+
+				// A FILTERED_OUT master has no `creating` bin to delete.
+				var aErr *aerospike.AerospikeError
+				if recErr == nil || (errors.As(recErr, &aErr) && aErr != nil && aErr.Matches(types.KEY_NOT_FOUND_ERROR, types.FILTERED_OUT)) {
+					continue
+				}
+
+				failed = append(failed, failedClear{txID: items[masterItems[i]].txID, idx: 0, cause: recErr})
 			}
 		}
 	}
 
-	// A non-nil top-level error here is a transport/batch-level failure, surfaced
-	// hard. The benign per-record KEY_NOT_FOUND tolerance below relies on Aerospike
-	// reporting missing records per-record (BatchRecord.Err), not as a top-level
-	// error — consistent with the rest of this package's batch handling.
-	if err := s.batchOperate(util.GetAerospikeBatchPolicy(s.settings), batchRecords); err != nil {
-		return errors.NewStorageError("[clearLockedOnRecordsMulti] failed to clear locked flag", err)
+	errs := otherErrs
+	if len(failed) > 0 {
+		errs = append([]error{s.failedClearsError(failed)}, otherErrs...)
 	}
 
-	var recErrs []error
-
-	for _, br := range batchRecords {
-		recErr := br.BatchRec().Err
-		if recErr == nil {
-			continue
-		}
-
-		// A missing record cannot be holding a lock — tolerate it.
-		var aErr *aerospike.AerospikeError
-		if errors.As(recErr, &aErr) && aErr != nil && aErr.ResultCode == types.KEY_NOT_FOUND_ERROR {
-			continue
-		}
-
-		recErrs = append(recErrs, recErr)
-	}
-
-	if len(recErrs) == 0 {
+	if len(errs) == 0 {
 		return nil
 	}
 
-	// The per-record errors are raw Aerospike errors with no code of their own.
-	return errors.NewStorageError("[clearLockedOnRecordsMulti] failed to clear %d of %d records", len(recErrs), len(batchRecords), errors.JoinCapped(10, recErrs...))
+	return errors.Join(errs...)
+}
+
+// failedClear is one record whose clear came back with an error.
+type failedClear struct {
+	txID  *chainhash.Hash
+	idx   uint32
+	cause error
+}
+
+const (
+	// maxClearRangesPerPiece bounds the record ranges one piece of a clear
+	// error names, so a transaction with scattered failures is split up.
+	maxClearRangesPerPiece = 50
+	// maxClearErrorBytes bounds the record names a clear error, or one warning
+	// line of its overflow, carries: pieces stop once the next would pass it.
+	// The message's fixed text comes on top, and a piece is at most about 1 KiB.
+	maxClearErrorBytes = 16 << 10
+)
+
+// failedClearsError names the failed records in one message. Each piece names
+// one transaction, up to maxClearRangesPerPiece record ranges and their result
+// code. Error() prints at most 20 links of a chain, so a link per record would
+// lose names once a caller joins other errors in front. The error carries
+// pieces until the next would pass maxClearErrorBytes; the rest are logged as
+// warnings in lines of the same budget, so every failed record is named somewhere.
+func (s *Store) failedClearsError(failed []failedClear) error {
+	type reasonIdxs struct {
+		reason string
+		idxs   []uint32
+	}
+
+	var order []*chainhash.Hash
+
+	byTx := make(map[chainhash.Hash][]*reasonIdxs)
+
+	for _, f := range failed {
+		groups, seen := byTx[*f.txID]
+		if !seen {
+			order = append(order, f.txID)
+		}
+
+		reason := clearFailureReason(f.cause)
+
+		var group *reasonIdxs
+
+		for _, g := range groups {
+			if g.reason == reason {
+				group = g
+				break
+			}
+		}
+
+		if group == nil {
+			group = &reasonIdxs{reason: reason}
+			byTx[*f.txID] = append(groups, group)
+		}
+
+		group.idxs = append(group.idxs, f.idx)
+	}
+
+	var pieces []string
+
+	for _, txID := range order {
+		for _, g := range byTx[*txID] {
+			ranges := indexRanges(g.idxs)
+			for start := 0; start < len(ranges); start += maxClearRangesPerPiece {
+				end := min(start+maxClearRangesPerPiece, len(ranges))
+				pieces = append(pieces, txID.String()+" records "+strings.Join(ranges[start:end], ",")+" ("+g.reason+")")
+			}
+		}
+	}
+
+	named, rest := packClearPieces(pieces)
+	if len(rest) == 0 {
+		return errors.NewStorageError("[clearLockedOnRecordsMulti] failed to clear %d records: %s", len(failed), named)
+	}
+
+	omitted := len(rest)
+
+	for len(rest) > 0 {
+		var line string
+
+		line, rest = packClearPieces(rest)
+		s.logger.Warnf("[clearLockedOnRecordsMulti] failed clears not named in the returned error: %s", line)
+	}
+
+	return errors.NewStorageError("[clearLockedOnRecordsMulti] failed to clear %d records: %s; and %d more pieces, logged as warnings", len(failed), named, omitted)
+}
+
+// packClearPieces joins pieces until the next one would pass maxClearErrorBytes,
+// always taking at least one, and returns the pieces it did not take.
+func packClearPieces(pieces []string) (string, []string) {
+	size := len(pieces[0])
+	n := 1
+
+	for n < len(pieces) && size+2+len(pieces[n]) <= maxClearErrorBytes {
+		size += 2 + len(pieces[n])
+		n++
+	}
+
+	return strings.Join(pieces[:n], "; "), pieces[n:]
+}
+
+// indexRanges writes ascending record indexes as ranges: 1-3 and 5.
+func indexRanges(idxs []uint32) []string {
+	sorted := slices.Clone(idxs)
+	slices.Sort(sorted)
+
+	var ranges []string
+
+	for i := 0; i < len(sorted); {
+		j := i
+		for j+1 < len(sorted) && sorted[j+1] == sorted[j]+1 {
+			j++
+		}
+
+		r := strconv.FormatUint(uint64(sorted[i]), 10)
+		if j > i {
+			r += "-" + strconv.FormatUint(uint64(sorted[j]), 10)
+		}
+
+		ranges = append(ranges, r)
+		i = j + 1
+	}
+
+	return ranges
+}
+
+// maxClearReasonBytes bounds the error text a piece carries for a failure that
+// is not an Aerospike error.
+const maxClearReasonBytes = 256
+
+// clearFailureReason is the Aerospike result code of a failed clear, or the
+// first maxClearReasonBytes of the error text when it is not an Aerospike error.
+func clearFailureReason(err error) string {
+	var aErr *aerospike.AerospikeError
+	if errors.As(err, &aErr) && aErr != nil {
+		return "ResultCode: " + aErr.ResultCode.String()
+	}
+
+	if text := err.Error(); len(text) > maxClearReasonBytes {
+		return text[:maxClearReasonBytes] + "..."
+	}
+
+	return err.Error()
 }
