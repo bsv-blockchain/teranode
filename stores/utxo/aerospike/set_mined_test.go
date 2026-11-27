@@ -209,6 +209,7 @@ func TestApplyLockClearWorkReportsFailures(t *testing.T) {
 		fail     []rec
 		match    func(aerospike.BatchRecordIfc) bool
 		wantErr  []named
+		wantText []string
 		keep     []rec
 		lose     []rec
 	}{
@@ -233,13 +234,14 @@ func TestApplyLockClearWorkReportsFailures(t *testing.T) {
 			lose:     []rec{{0, 0}, {1, 2}},
 		},
 		{
-			// Twelve failed clears behind a failed read: every record is still named.
-			name:     "read failure and twelve failed clears",
+			// Twelve failed clears between a failed read and a failed unlock: every record is still named.
+			name:     "read, twelve clears and unlock fail",
 			outputs:  []int{2, 25, 25, 9},
 			creating: []rec{{0, 0}, {1, 0}, {2, 0}, {3, 0}},
 			fail:     []rec{{3, 0}, {1, 1}, {1, 2}, {1, 3}, {1, 4}, {1, 5}, {1, 6}, {2, 1}, {2, 2}, {2, 3}, {2, 4}, {2, 5}, {2, 6}},
 			match:    func(aerospike.BatchRecordIfc) bool { return true },
 			wantErr:  []named{{3, "] failed to read the extra record count"}, {1, " records 1-6 (ResultCode: TIMEOUT)"}, {2, " records 1-6 (ResultCode: TIMEOUT)"}},
+			wantText: []string{"[applyLockClearWork] failed to unlock 4 FILTERED_OUT txs"},
 			keep:     []rec{{1, 0}, {2, 0}, {3, 0}},
 			lose:     []rec{{0, 0}},
 		},
@@ -280,6 +282,10 @@ func TestApplyLockClearWorkReportsFailures(t *testing.T) {
 
 			for _, w := range tc.wantErr {
 				require.ErrorContains(t, err, hashes[w.tx].String()+w.text)
+			}
+
+			for _, text := range tc.wantText {
+				require.ErrorContains(t, err, text)
 			}
 
 			for _, r := range tc.keep {
