@@ -20,6 +20,11 @@ import (
 // the nodes held), drain_queue (unless the step skips the drain) and d2; then mark_true and
 // mark_false. A count that repeats appears once per forward step, in step order.
 //
+// The fast path's final drain runs after the reorg has answered and has its own timer, op
+// "reorgDrain", with one phase fast_drain and one count, fast_drain_queue (the queue length when the
+// drain starts). A fork reorg the fast path applied has no drain_queue in its own summary line: the
+// fast path does not run the forward steps that record it.
+//
 // While such an operation runs, the processor holds its timer in stp.phases, so the steps it calls
 // (moveForwardBlock, the remainder pass) report their sub-phases without new parameters. Outside one
 // stp.phases is nil, and every method of a nil timer does nothing. Only the processor goroutine

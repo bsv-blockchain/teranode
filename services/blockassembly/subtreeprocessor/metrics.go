@@ -30,7 +30,8 @@ var (
 	prometheusSubtreeProcessorReset                        prometheus.Histogram
 
 	// prometheusSubtreeProcessorReorgPhase is the wall time of each phase of a fork reorg
-	// (op="reorgBlocks") and of a reset (op="reset"); see phaseTimer.
+	// (op="reorgBlocks"), of a reset (op="reset") and, with the fast path on, of the drain that runs
+	// after the reorg has answered (op="reorgDrain", phase fast_drain); see phaseTimer.
 	prometheusSubtreeProcessorReorgPhase *prometheus.HistogramVec
 
 	// prometheusSubtreeProcessorReorgTipToStart is the time from block assembly first seeing a tip
@@ -245,7 +246,7 @@ func _initPrometheusMetrics() {
 			Namespace: "teranode",
 			Subsystem: "subtreeprocessor",
 			Name:      "reorg_phase_seconds",
-			Help:      "Wall time of each phase of a fork reorg (op=reorgBlocks) or reset (op=reset)",
+			Help:      "Wall time of each phase of a fork reorg (op=reorgBlocks), reset (op=reset) or the fast path's drain after a reorg (op=reorgDrain)",
 			Buckets:   prometheus.ExponentialBuckets(0.01, 2, 19),
 		},
 		[]string{"op", "phase"},
