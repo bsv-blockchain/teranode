@@ -392,6 +392,10 @@ type Config struct {
 	// messages.
 	Listeners MessageListeners
 
+	// BlockRejectReason maps a refused block body's error to a peer-safe reject
+	// reason. When nil, the generic reason is sent.
+	BlockRejectReason func(error) string
+
 	// TrickleInterval is the duration of the ticker which trickles down the
 	// inventory to a peer.
 	TrickleInterval time.Duration
@@ -2535,7 +2539,11 @@ out:
 					// Bounded: the connection has no write deadline, so a remote that has
 					// stopped reading our socket held this wait, and with it the disconnect,
 					// for as long as it kept the socket open.
-					if !p.pushRejectWithin(wire.CmdBlock, wire.RejectInvalid, "block body rejected", &rejected.Hash, rejectWriteBound) {
+					reason := "block body rejected"
+					if p.cfg.BlockRejectReason != nil {
+						reason = p.cfg.BlockRejectReason(rejected.Err)
+					}
+					if !p.pushRejectWithin(wire.CmdBlock, wire.RejectInvalid, reason, &rejected.Hash, rejectWriteBound) {
 						p.logger.Warnf("[%s] the reject for block %s was not written within %s; dropping the association without it", p, rejected.Hash, rejectWriteBound)
 					}
 

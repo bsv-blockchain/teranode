@@ -88,9 +88,10 @@ func punishmentPeerPair(t *testing.T, sm *SyncManager, idx uint8) (sender, recei
 				capture.rejected = append(capture.rejected, rejected)
 			},
 		},
-		UserAgentName:    "btcdtest",
-		UserAgentVersion: "1.0",
-		ChainParams:      &chaincfg.MainNetParams,
+		UserAgentName:     "btcdtest",
+		UserAgentVersion:  "1.0",
+		ChainParams:       &chaincfg.MainNetParams,
+		BlockRejectReason: BlockRejectReason,
 	}
 	senderCfg := peerpkg.Config{
 		Listeners: peerpkg.MessageListeners{
@@ -225,6 +226,7 @@ func TestPeer_ARejectedBodyDropsTheAssociationPrimary(t *testing.T) {
 	require.Equal(t, wire.CmdBlock, reject.Cmd, "the reject names the block command, not malformed")
 	require.Equal(t, wire.RejectInvalid, reject.Code)
 	require.Equal(t, hash, reject.Hash, "the reject names the block")
+	require.Equal(t, "bad-txnmrklroot", reject.Reason)
 
 	// What the primary's done message does in production, run here directly.
 	sm.handleDonePeerMsg(primary)
@@ -233,6 +235,32 @@ func TestPeer_ARejectedBodyDropsTheAssociationPrimary(t *testing.T) {
 	require.False(t, sm.blockDownloads.Requested(hash), "nobody is owed the block once its only owner has gone, so the next pass asks someone else")
 
 	requireNothingOfTheBlockOnDisk(t, store, hash, roots)
+}
+
+func TestPeer_ARepeatedTransactionSendsTheRejectReason(t *testing.T) {
+	sm := newPipelineParkManager(t, memory.New(), 8)
+	sm.blockDownloads = newBlockDownloadTracker(time.Hour)
+
+	msgBlock, hash := regtestStreamedBlock(t, sm, 6)
+	msgBlock.Transactions[2] = msgBlock.Transactions[1]
+
+	sm.blockDownloads = newBlockDownloadTracker(time.Hour)
+	sender, receiver, capture := punishmentPeerPair(t, sm, 36)
+	require.True(t, sm.blockDownloads.Add(receiver, hash))
+	sender.QueueMessage(msgBlock, nil)
+
+	require.True(t, disconnectsWithin(receiver, 5*time.Second))
+	rejected := capture.oneRejected(t)
+	require.Equal(t, hash, rejected.Hash)
+	require.True(t, errors.Is(rejected.Err, errors.ErrBlockInvalid))
+	require.Contains(t, rejected.Err.Error(), "CVE-2012-2459")
+
+	reject := capture.oneReject(t)
+	require.Equal(t, wire.CmdBlock, reject.Cmd)
+	require.Equal(t, wire.RejectInvalid, reject.Code)
+	require.Equal(t, hash, reject.Hash)
+	require.Equal(t, "bad-txns-duplicate", reject.Reason)
+	require.False(t, sm.blockPark.Has(hash), "a body refused before conversion has no parked record")
 }
 
 // framedBlock returns msgBlock as the bytes a peer writes on the wire: message

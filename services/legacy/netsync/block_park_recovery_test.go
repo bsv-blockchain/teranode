@@ -28,6 +28,7 @@ type peerMsgRecorder struct {
 	getData   []chainhash.Hash
 	getBlocks int
 	rejects   []chainhash.Hash
+	reasons   map[chainhash.Hash]string
 }
 
 func (r *peerMsgRecorder) recordGetData(msg *wire.MsgGetData) {
@@ -53,6 +54,20 @@ func (r *peerMsgRecorder) recordReject(msg *wire.MsgReject) {
 	defer r.mu.Unlock()
 
 	r.rejects = append(r.rejects, msg.Hash)
+
+	if r.reasons == nil {
+		r.reasons = make(map[chainhash.Hash]string)
+	}
+
+	r.reasons[msg.Hash] = msg.Reason
+}
+
+// rejectReason is the reason in the reject the remote end received for hash.
+func (r *peerMsgRecorder) rejectReason(hash chainhash.Hash) string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	return r.reasons[hash]
 }
 
 func (r *peerMsgRecorder) getBlocksCount() int {
