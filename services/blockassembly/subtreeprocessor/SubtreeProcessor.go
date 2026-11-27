@@ -116,8 +116,8 @@ type reorgBlocksRequest struct {
 	// moveForwardBlocks contains blocks that need to be added to form the new chain
 	moveForwardBlocks []*model.Block
 
-	// tipSeenAt is when block assembly first saw the tip change this reorg follows; zero when the
-	// caller did not say.
+	// tipSeenAt is when the block-announcement pass behind this reorg started; zero when the caller
+	// did not say.
 	tipSeenAt time.Time
 
 	// errChan receives any error encountered during reorganization
@@ -515,8 +515,8 @@ type SubtreeProcessor struct {
 	// anything. Only the processor goroutine touches it.
 	reorgForwardTxMapSubtrees []chainhash.Hash
 
-	// reorgTipSeenAt is when block assembly first saw the tip change the running Reorg request
-	// follows, zero when the request did not say. The processor loop sets it around reorgBlocks
+	// reorgTipSeenAt is when the block-announcement pass behind the running Reorg request started,
+	// zero when the request did not say. The processor loop sets it around reorgBlocks
 	// and only the processor goroutine reads it.
 	reorgTipSeenAt time.Time
 
@@ -1847,7 +1847,7 @@ func (stp *SubtreeProcessor) reset(blockHeader *model.BlockHeader, moveBackBlock
 
 	// Times each phase: a failed fork reorg ends in a reset, so its cost is part of the reorg's
 	// (issue 2269).
-	defer stp.startPhases("reset")()
+	defer stp.startPhases("reset", &err)()
 
 	stp.phases.count("pending", max(int(stp.TxCount())-1, 0)) //nolint:gosec // a count, far below MaxInt
 
@@ -4692,7 +4692,8 @@ func (stp *SubtreeProcessor) reChainSubtrees(fromIndex int) error {
 //
 // With a deadline the wait is for the typed StoreResult of each of the first wait subtrees, and a
 // store that failed, was cancelled, or did not finish within deadline of the end of the sends is an
-// error. Without one the wait is for ErrChan, which a failed write answers with nil.
+// error. Without one the wait is for ErrChan, which a write that failed and went to the retry path
+// answers with nil; an error raised before the write (a failed DAH update, a serialize error) arrives.
 func (stp *SubtreeProcessor) storeAndAnnounceChainedSubtrees(ctx context.Context, caller string, wait int, skipNotification bool, deadline time.Duration) error {
 	// subtrees a bulk rebuild chained get their lane bitmaps before they are stored
 	stp.ensureLaneBitmaps(stp.chainedSubtrees)
@@ -5641,8 +5642,9 @@ func (stp *SubtreeProcessor) MoveForwardBlock(block *model.Block) error {
 // ReorgOption adds optional information to a Reorg request.
 type ReorgOption func(*reorgBlocksRequest)
 
-// WithTipSeenAt tells the processor when block assembly first saw the tip change this reorg
-// follows, so a fork reorg reports how long the change waited before the reorg started (issue 2269).
+// WithTipSeenAt tells the processor when the block-announcement pass behind this reorg started, so a
+// fork reorg reports how long it waited before the reorg started (issue 2269). One pass can run
+// several reorgs, each given the same time, so a later one also counts the earlier moves' time.
 func WithTipSeenAt(t time.Time) ReorgOption {
 	return func(r *reorgBlocksRequest) { r.tipSeenAt = t }
 }
@@ -5919,7 +5921,7 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveBackBlocks []*
 
 		// Times each phase of the fork reorg; the forward steps report their own sub-phases
 		// (issue 2269). A catch-up above is not timed.
-		defer stp.startPhases("reorgBlocks")()
+		defer stp.startPhases("reorgBlocks", &err)()
 
 		stp.reportTipToStart()
 
@@ -6413,8 +6415,10 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveBackBlocks []*
 	// that failed or did not finish in time fails the reorg here, before anything irreversible
 	// below, and a reset follows (failedForkReorgNeedsReset). At 0 the wait is on ErrChan as before:
 	// an error there still fails the reorg, a write that failed and went to the retry path does not.
-	// Only the subtree file is checked: most subtrees take the store's Exists path here, because the
-	// forward steps already sent them, and their meta can still be in flight (PR 4b sends once).
+	// Most subtrees take the store's Exists path here, because the forward steps already sent
+	// them: that result covers the subtree file only, and their meta can still be in flight (PR 4b
+	// sends once). A send that writes the subtree is settled when its meta part is too, so a meta
+	// failure or its write time counts against the deadline there.
 	if err = stp.storeAndAnnounceChainedSubtrees(ctx, "reorgBlocks", len(stp.chainedSubtrees), true, stp.settings.BlockAssembly.ReorgStoreDeadline); err != nil {
 		return err
 	}
@@ -7037,7 +7041,7 @@ func (stp *SubtreeProcessor) moveBackBlockBulkBuild(ctx context.Context, block *
 		}
 	}
 	if held != nil {
-		allNodes = held.flush(allNodes)
+		stp.dropStrandedHeld(block, held.stranded())
 	}
 
 	// Step 5: Determine subtree size
@@ -10251,8 +10255,8 @@ func (stp *SubtreeProcessor) createTransactionMap(ctx context.Context, blockSubt
 }
 
 // verifyToCheckSubtree reads a subtree body, recomputes its merkle root from the leaves and returns the
-// body again if the root is the key's. The root at the head of the file is not enough: it is the
-// claim, and a changed leaf would leave it as it is. It closes reader.
+// body again if the root is the key's and the root at the head of the file is too. The head alone is
+// not enough: it is the claim, and a changed leaf would leave it as it is. It closes reader.
 func verifyToCheckSubtree(reader io.ReadCloser, key chainhash.Hash, maxBytes int64) (io.ReadCloser, error) {
 	defer func() { _ = reader.Close() }()
 
@@ -10270,9 +10274,8 @@ func verifyToCheckSubtree(reader io.ReadCloser, key chainhash.Hash, maxBytes int
 		return nil, errors.NewProcessingError("error deserializing subtree %s", key.String(), err)
 	}
 
-	store, err := subtreepkg.BuildMerkleTreeStoreFromBytes(subtree.Nodes)
-	if err != nil || len(*store) == 0 || chainhash.Hash((*store)[len(*store)-1]) != key {
-		return nil, errors.NewProcessingError("subtree %s does not hash to its key", key.String())
+	if err = model.ValidateSubtreeNodesMatchKey(subtree, &key); err != nil {
+		return nil, err
 	}
 
 	return io.NopCloser(bytes.NewReader(data)), nil

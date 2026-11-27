@@ -1,8 +1,11 @@
 diff --git a/services/blockassembly/subtreeprocessor/SubtreeProcessor.go b/services/blockassembly/subtreeprocessor/SubtreeProcessor.go
-index 2d7cbd297..daa8235f6 100644
+index b5c52c03f..a6efbaf1d 100644
 --- a/services/blockassembly/subtreeprocessor/SubtreeProcessor.go
 +++ b/services/blockassembly/subtreeprocessor/SubtreeProcessor.go
-@@ -6759,7 +6759,7 @@ func (stp *SubtreeProcessor) removeCoinbaseUtxos(ctx context.Context, block *mod
+@@ -7301,13 +7301,13 @@ func (stp *SubtreeProcessor) removeCoinbaseUtxos(ctx context.Context, block *mod
+ 	removeFromSubtrees := make([]chainhash.Hash, 0, len(savedHashes)+len(goneHashes)+len(assemblyDescendants))
+ 	removeFromSubtrees = append(removeFromSubtrees, savedHashes...)
+ 	removeFromSubtrees = append(removeFromSubtrees, goneHashes...)
  	removeFromSubtrees = append(removeFromSubtrees, assemblyDescendants...)
  
  	// remove from the subtree processor as well
@@ -11,3 +14,6 @@ index 2d7cbd297..daa8235f6 100644
  		return errors.NewProcessingError("[removeCoinbaseUtxos][%s] error removing child spends from subtrees", block.String(), err)
  	}
  
+ 	if err = stp.utxoStore.Delete(ctx, block.CoinbaseTx.TxIDChainHash()); err != nil {
+ 		return errors.NewProcessingError("[removeCoinbaseUtxos][%s] error deleting utxos for tx %s", block.String(), block.CoinbaseTx.String(), err)
+ 	}

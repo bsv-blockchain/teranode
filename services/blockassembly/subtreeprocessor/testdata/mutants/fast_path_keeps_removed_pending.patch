@@ -1,8 +1,11 @@
 diff --git a/services/blockassembly/subtreeprocessor/reorg_fast_path.go b/services/blockassembly/subtreeprocessor/reorg_fast_path.go
-index cdac49551..bafa33198 100644
+index c5d9aaf43..a6d65f7ad 100644
 --- a/services/blockassembly/subtreeprocessor/reorg_fast_path.go
 +++ b/services/blockassembly/subtreeprocessor/reorg_fast_path.go
-@@ -333,7 +333,7 @@ func (stp *SubtreeProcessor) flagPending(plan *fastReorgPlan, suppressed map[cha
+@@ -343,13 +343,13 @@ func (stp *SubtreeProcessor) flagPending(plan *fastReorgPlan, suppressed map[cha
+ 					hash := nodes[i].Hash
+ 
+ 					switch {
  					case hash.Equal(subtreepkg.CoinbasePlaceholderHashValue):
  						flags[i] = fastFlagCoinbase
  						continue
@@ -11,3 +14,6 @@ index cdac49551..bafa33198 100644
  						flags[i] = fastFlagRemoveMap
  						res.deletes++
  					case plan.winners.Exists(hash):
+ 						flags[i] = fastFlagHit
+ 						res.deletes++
+ 					default:

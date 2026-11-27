@@ -1,8 +1,11 @@
 diff --git a/services/blockassembly/subtreeprocessor/reorg_fast_path.go b/services/blockassembly/subtreeprocessor/reorg_fast_path.go
-index 0f7288b90..6cfb9203e 100644
+index c5d9aaf43..06a8d56bf 100644
 --- a/services/blockassembly/subtreeprocessor/reorg_fast_path.go
 +++ b/services/blockassembly/subtreeprocessor/reorg_fast_path.go
-@@ -237,9 +237,13 @@ func (stp *SubtreeProcessor) planFastReorg(ctx context.Context, moveBackBlocks,
+@@ -245,15 +245,19 @@ func (stp *SubtreeProcessor) planFastReorg(ctx context.Context, moveBackBlocks,
+ 
+ 	// Effective D1 is raw D1 minus what the tx map holds, membership only, as the move-back's dedup.
+ 	suppressed := make(map[chainhash.Hash]struct{})
  	effective := make([]reorgDeltaNode, 0, len(plan.delta.D1))
  
  	for _, node := range plan.delta.D1 {
@@ -17,7 +20,13 @@ index 0f7288b90..6cfb9203e 100644
  			effective = append(effective, node)
  		}
  	}
-@@ -478,9 +482,7 @@ func (stp *SubtreeProcessor) applyFastReorg(ctx context.Context, plan *fastReorg
+ 
+ 	found, survivors, deletes := stp.flagPending(plan, suppressed, workers)
+ 
+@@ -486,15 +490,13 @@ func (stp *SubtreeProcessor) applyFastReorg(ctx context.Context, plan *fastReorg
+ 	for i := range plan.d1Nodes {
+ 		var d1Position uint64
+ 		if d1Positions != nil {
  			d1Position = d1Positions[i]
  		}
  
@@ -28,3 +37,6 @@ index 0f7288b90..6cfb9203e 100644
  	}
  
  	stp.flushDiskTxMapWriters()
+ 
+ 	if mapErr := stp.diskTxMapErr(); mapErr != nil {
+ 		return nil, errors.NewStorageError("[reorgInPlace][%s] disk tx map storage error after inserting D1", lost.String(), mapErr)

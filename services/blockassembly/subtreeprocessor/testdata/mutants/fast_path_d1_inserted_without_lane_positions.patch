@@ -1,8 +1,11 @@
 diff --git a/services/blockassembly/subtreeprocessor/reorg_fast_path.go b/services/blockassembly/subtreeprocessor/reorg_fast_path.go
-index 0f7288b90..96758e93a 100644
+index c5d9aaf43..059b90b36 100644
 --- a/services/blockassembly/subtreeprocessor/reorg_fast_path.go
 +++ b/services/blockassembly/subtreeprocessor/reorg_fast_path.go
-@@ -475,7 +475,7 @@ func (stp *SubtreeProcessor) applyFastReorg(ctx context.Context, plan *fastReorg
+@@ -483,13 +483,13 @@ func (stp *SubtreeProcessor) applyFastReorg(ctx context.Context, plan *fastReorg
+ 	// as in a move-back, so the subtrees built from it keep complete lane bitmaps.
+ 	d1Positions := stp.lanePositionsFromUtxoStore(ctx, lost, d1Hashes)
+ 
  	for i := range plan.d1Nodes {
  		var d1Position uint64
  		if d1Positions != nil {
@@ -11,3 +14,6 @@ index 0f7288b90..96758e93a 100644
  		}
  
  		if _, inserted := stp.currentTxMap.SetIfNotExistsAt(plan.d1Nodes[i].Hash, &plan.d1Inpoints[i], d1Position); !inserted {
+ 			return nil, errors.NewProcessingError("[reorgInPlace][%s] effective D1 transaction %s is already in the tx map", lost.String(), plan.d1Nodes[i].Hash.String())
+ 		}
+ 	}

@@ -2,6 +2,7 @@ package subtreeprocessor
 
 import (
 	"encoding/binary"
+	"fmt"
 	"math"
 	"math/rand"
 	"os"
@@ -317,6 +318,12 @@ func TestSortedHashSet_FrozenContract(t *testing.T) {
 	require.Error(t, s.PutMultiBucket(0, []chainhash.Hash{h}), "PutMultiBucket after Freeze must fail")
 	require.Error(t, s.Freeze(1), "second Freeze must fail")
 	require.Equal(t, 1, s.Length())
+
+	// the position API must not answer before Freeze either
+	open := NewSortedHashSet(10)
+	require.Panics(t, func() { open.Find(h) })
+	require.Panics(t, func() { open.Positions() })
+	require.Panics(t, func() { open.IterPositions(1, func(int, uint64, *chainhash.Hash) {}) })
 }
 
 func TestSortedHashSet_EmptyAndSingle(t *testing.T) {
@@ -325,6 +332,12 @@ func TestSortedHashSet_EmptyAndSingle(t *testing.T) {
 	require.Equal(t, 0, s.Length())
 	require.False(t, s.Exists(chainhash.Hash{}))
 	require.Empty(t, collect(s))
+
+	pos, ok := s.Find(chainhash.Hash{1})
+	require.False(t, ok)
+	require.Zero(t, pos)
+	require.Zero(t, s.Positions())
+	s.IterPositions(2, func(int, uint64, *chainhash.Hash) { t.Fatal("empty set visited") })
 
 	h := randHashes(1, 3)[0]
 	s = buildSet(t, []chainhash.Hash{h}, 1, 1)
@@ -472,10 +485,9 @@ func findReference(hashes []chainhash.Hash) map[chainhash.Hash]uint64 {
 	return ref
 }
 
-// TestSortedHashSet_Find pins the position contract of PR 5: Find agrees with Exists,
-// a position is in [0, Positions()), distinct hashes get distinct positions, a
-// duplicated hash maps to the first of its run, and IterPositions visits each
-// distinct hash once with the position Find returns.
+// TestSortedHashSet_Find pins the position contract: Find agrees with Exists, distinct
+// hashes get distinct positions, a duplicate maps to the first of its run, and
+// IterPositions visits each distinct hash once with the position Find returns.
 func TestSortedHashSet_Find(t *testing.T) {
 	for _, tc := range []struct {
 		name       string
@@ -543,16 +555,48 @@ func TestSortedHashSet_Find(t *testing.T) {
 	}
 }
 
-func TestSortedHashSet_FindEmptyAndUnfrozen(t *testing.T) {
-	empty := buildSet(t, nil, 0, 1)
-	pos, ok := empty.Find(chainhash.Hash{1})
-	require.False(t, ok)
-	require.Zero(t, pos)
-	require.Zero(t, empty.Positions())
-	empty.IterPositions(2, func(int, uint64, *chainhash.Hash) { t.Fatal("empty set visited") })
+// BenchmarkReorgSortedHashSetFind times Find on a frozen in-memory set, probing members
+// in random order: the cost of one probe with a warm directory.
+func BenchmarkReorgSortedHashSetFind(b *testing.B) {
+	sizes := []int{1 << 20, 1 << 22}
+	if testing.Short() {
+		sizes = sizes[:1] // CI runs these with -short and a budget for the whole filter
+	}
 
-	open := NewSortedHashSet(10)
-	require.Panics(t, func() { open.Find(chainhash.Hash{1}) })
-	require.Panics(t, func() { open.Positions() })
-	require.Panics(t, func() { open.IterPositions(1, func(int, uint64, *chainhash.Hash) {}) })
+	for _, n := range sizes {
+		// the benchmark function runs again for every b.N the framework tries: build once
+		var (
+			hashes []chainhash.Hash
+			set    *SortedHashSet
+		)
+
+		b.Run(fmt.Sprintf("n=%dM", n>>20), func(b *testing.B) {
+			if set == nil {
+				hashes = randHashes(n, 5)
+				set = buildSet(b, hashes, n, 4)
+
+				rand.New(rand.NewSource(6)).Shuffle(len(hashes), func(i, j int) { hashes[i], hashes[j] = hashes[j], hashes[i] }) //nolint:gosec // deterministic benchmark data
+			}
+
+			var sum uint64
+
+			b.ResetTimer()
+
+			for i := 0; i < b.N; i++ {
+				pos, ok := set.Find(hashes[i%n])
+				if !ok {
+					b.Fatal("member not found")
+				}
+
+				sum += pos
+			}
+
+			b.StopTimer()
+			b.ReportMetric(float64(b.N)/b.Elapsed().Seconds(), "probes/s")
+
+			if sum == 0 && b.N > 1 {
+				b.Fatal("positions all zero")
+			}
+		})
+	}
 }

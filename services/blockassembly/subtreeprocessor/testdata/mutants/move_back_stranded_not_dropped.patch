@@ -1,0 +1,19 @@
+diff --git a/services/blockassembly/subtreeprocessor/SubtreeProcessor.go b/services/blockassembly/subtreeprocessor/SubtreeProcessor.go
+index b5c52c03f..8c5ea41ce 100644
+--- a/services/blockassembly/subtreeprocessor/SubtreeProcessor.go
++++ b/services/blockassembly/subtreeprocessor/SubtreeProcessor.go
+@@ -7033,13 +7033,13 @@ func (stp *SubtreeProcessor) moveBackBlockBulkBuild(ctx context.Context, block *
+ 				continue
+ 			}
+ 			allNodes = append(allNodes, node)
+ 		}
+ 	}
+ 	if held != nil {
+-		stp.dropStrandedHeld(block, held.stranded())
++		stp.dropStrandedHeld(block, nil) // mutant: a held-back transaction whose parent is not emitted stays in the tx map
+ 	}
+ 
+ 	// Step 5: Determine subtree size
+ 	subtreeSize := int(stp.currentItemsPerFile.Load())
+ 	if !createProperlySizedSubtrees {
+ 		subtreeSize = 1024 * 1024
