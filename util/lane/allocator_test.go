@@ -468,10 +468,12 @@ func TestAllocatorUnusedGrantExpiryWaitsForAFreshGrant(t *testing.T) {
 	a.takeWait = 30 * time.Millisecond
 	require.NoError(t, a.Start(context.Background()))
 	require.Eventually(t, func() bool { return a.Ready() == nil }, time.Second, time.Millisecond)
+	missed := testutil.ToFloat64(prometheusLaneGiveBacksMissed)
 	src.setDown(true)
 	clk.step(2 * time.Minute)
 	_, err := a.Next(context.Background())
 	require.ErrorIs(t, err, errors.ErrServiceUnavailable)
+	require.Equal(t, missed, testutil.ToFloat64(prometheusLaneGiveBacksMissed), "a failed request that gives nothing back is no missed give-back")
 	require.NoError(t, a.Ready(), "the grant expired, not the lease")
 	src.setDown(false)
 	a.signal()
