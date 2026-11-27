@@ -263,7 +263,8 @@ DATA = """\
 | `runs/phaseN/*.json` | each scenario's result: status, failed steps, findings |
 | `orchestrator-runs/*.json` | each scenario step by step, with every step's output, including the full audit reports |
 | `phaseN.log`, `stack-up.log`, `build.log`, `pull.log`, `teardown.log` | console output of each stage |
-| `logs/` | every container's log for the night |
+| `logs/` | every container's log for the night, as left by the last scenario |
+| `logs/scenarios/<run>/` | every container's log for each scenario, from its start to its end; `<run>` matches `orchestrator-runs/` |
 | `diagnostics.txt`, `merkle-groups.txt` | node state at the end; merkle-service's Kafka consumer groups |
 
 </details>

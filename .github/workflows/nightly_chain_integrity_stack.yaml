@@ -36,9 +36,10 @@ concurrency:
 env:
   GO_VERSION: '1.27.0'
   # chaos-test with the checks the scenarios use (arcade_tx_status, chain_audit, proof_audit,
-  # chaos on services), pinned to a commit until they are merged upstream in galt-tr/chaos-test.
+  # chaos on services, the UTXO hash for teranode's freeze RPC), pinned to a commit until they are
+  # merged upstream in galt-tr/chaos-test.
   CHAOS_TEST_REPO: sugh01/chaos-test
-  CHAOS_TEST_REF: 330de62dd0868e3d0790ca78fa690531dea126c0
+  CHAOS_TEST_REF: 4488120ecf6f653fbc77183bf2a0adab490ee117
 
 jobs:
   chain-integrity-stack:

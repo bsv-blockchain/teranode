@@ -81,6 +81,8 @@ run_id="$(date -u +%Y%m%d-%H%M%S)-$(git -C "$REPO_ROOT" rev-parse --short HEAD 2
 OUT="$out_root/$run_id"
 mkdir -p "$OUT/runs" "$OUT/orchestrator-runs" "$OUT/logs"
 start_marker="$OUT/.start"
+# chaosctl saves each scenario's container logs here before the next reset.
+export CHAOSCTL_LOG_DIR="$OUT/logs/scenarios"
 touch "$start_marker"
 started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 

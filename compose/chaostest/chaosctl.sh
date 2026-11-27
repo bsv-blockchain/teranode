@@ -467,13 +467,29 @@ d = {k: v for k, v in re.findall(r"([a-z_/]+)=([0-9.]+)", line)}
 print(json.dumps({"line": line, **d} if line else {}))' "${1:-}"
 }
 
+# save_scenario_logs keeps every stack container's log for one scenario run, in
+# $CHAOSCTL_LOG_DIR/<run id>/ when that is set. With --reset the next scenario
+# recreates the containers, so logs collected only at the end cover the last one.
+save_scenario_logs() {
+  local stack="$1" run_id="$2" since="$3" dir c filter=-multinode
+  [[ -n "${CHAOSCTL_LOG_DIR:-}" ]] || return 0
+  [[ "$stack" == b ]] && filter=bsv-regtest-
+  dir="$CHAOSCTL_LOG_DIR/$run_id"
+  mkdir -p "$dir"
+  for c in $(docker ps -a --filter "name=$filter" --format '{{.Names}}'); do
+    docker logs --since "$since" "$c" 2>&1 | gzip >"$dir/$c.log.gz"
+  done
+  echo "   logs: $dir"
+}
+
 # run_one starts a scenario, follows it, records a summary and compares it with
 # the previous run of the same scenario on the same stack. Returns 0 if passed.
 run_one() {
   local id="$1" mode="$2" stack="$3"
   shift 3
-  local before run_id resp
+  local before run_id resp started
   before=$(blast_last_stats)
+  started=$(date -u +%Y-%m-%dT%H:%M:%SZ)
   resp=$(curl -s -m 10 -X POST -H 'Content-Type: application/json' -d "$(python3 -I -c 'import json, sys; print(json.dumps({"mode": sys.argv[1], "params": dict(a.split("=", 1) for a in sys.argv[2:])}))' "$mode" "$@")" "$API/scenarios/$id/run")
   run_id=$(python3 -I -c 'import json, sys; print(json.loads(sys.argv[1])["id"])' "$resp" 2>/dev/null) ||
     { echo "error: the orchestrator refused to start '$id': ${resp:-no response}" >&2; return 1; }
@@ -547,6 +563,7 @@ if prev:
           "; ".join(changes) if changes else "same result"))
 print("   saved: " + out)
 EOF
+  save_scenario_logs "$stack" "$run_id" "$started"
   [[ "$st" == passed ]]
 }
 
