@@ -11,6 +11,7 @@ import (
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util/lane"
 	"github.com/stretchr/testify/require"
 )
 
@@ -163,16 +164,28 @@ func openSeedingStore(t *testing.T, base *Store) *Store {
 	return s
 }
 
-// In seeding mode a seed's create writes the coins alone, with their block height, below and
-// above the checkpoint: no containment row and no identity row, so a mainnet seed never puts
-// tens of gigabytes of rows on the disk for its hook to clear. Lookups still answer it as mined
-// at its height, a re-run is refused as an existing transaction, and a create that is not shaped
-// like the seeder's takes its normal route.
+// In seeding mode a seed's create writes only its coins, at their height and with any lane
+// position, so a mainnet seed puts no containment or identity rows on the disk; lookups still
+// answer it as mined, a re-run is refused, and other creates take their normal route.
 func TestSeedingModeWritesCoinsOnly(t *testing.T) {
+	for _, lanes := range []bool{false, true} {
+		t.Run(map[bool]string{false: "without lane columns", true: "with lane columns"}[lanes], func(t *testing.T) {
+			seedingModeWritesCoinsOnly(t, lanes)
+		})
+	}
+}
+
+func seedingModeWritesCoinsOnly(t *testing.T, lanes bool) {
 	parallelOnOwnDatabase(t)
 
 	base, ctx := newTestStore(t) // mainnet checkpoints
+
+	if lanes {
+		require.NoError(t, base.PrepareLaneSchema(ctx))
+	}
+
 	s := openSeedingStore(t, base)
+	require.Equal(t, lanes, s.laneCoinColumn)
 
 	count := func(sql string, args ...any) int {
 		var n int
@@ -212,6 +225,19 @@ func TestSeedingModeWritesCoinsOnly(t *testing.T) {
 
 	require.Zero(t, count(`SELECT count(*) FROM pg_class WHERE relname ~ '^tx_mined_w[0-9]+$'`),
 		"a seed creates no tx_mined partitions")
+
+	if lanes {
+		var positioned chainhash.Hash
+		positioned[0] = 0x61
+
+		_, _, err := s.SpendAndCreate(ctx, seededTx(map[uint32]uint64{0: 10, 1: 20}), 600,
+			utxo.WithCreateOnly(), utxo.WithTXID(&positioned), utxo.WithSetCoinbase(false),
+			utxo.WithMinedBlockInfo(utxo.MinedBlockInfo{BlockID: 0, BlockHeight: 600, SubtreeIdx: 0}),
+			utxo.WithLanePosition(lane.Pack(3, 7)))
+		require.NoError(t, err)
+		require.Equal(t, 2, count(`SELECT count(*) FROM utxo WHERE txid = $1 AND lane_position = $2`, positioned[:], lane.ToSigned(lane.Pack(3, 7))),
+			"each coin carries its transaction's position")
+	}
 
 	// A create without the seeder's shape takes the normal route even in seeding mode.
 	normal := seededTx(map[uint32]uint64{0: 30})

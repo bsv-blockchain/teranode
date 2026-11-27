@@ -14,6 +14,7 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util/lane"
 	"github.com/stretchr/testify/require"
 )
 
@@ -311,7 +312,7 @@ func TestProcessUTXO_OutputLayout(t *testing.T) {
 			store := &capturingStore{}
 			w := &utxopersister.UTXOWrapper{TxID: chainhash.HashH([]byte(name)), Height: 9, UTXOs: tc.utxos}
 
-			require.NoError(t, processUTXO(context.Background(), store, w, nil, false))
+			require.NoError(t, processUTXO(context.Background(), store, w, nil, false, lane.None))
 			require.NotNil(t, store.tx)
 			require.Len(t, store.tx.Outputs, len(tc.want))
 
@@ -366,7 +367,7 @@ func TestProcessUTXO_RejectsImpossibleOutputIndex(t *testing.T) {
 
 	store := &capturingStore{}
 
-	err := processUTXO(context.Background(), store, w, nil, false)
+	err := processUTXO(context.Background(), store, w, nil, false, lane.None)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "output index")
 	require.Nil(t, store.tx, "nothing must reach the store")

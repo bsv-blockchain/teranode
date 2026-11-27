@@ -90,9 +90,14 @@ func TestIndexLookupOverlappingRows(t *testing.T) {
 
 	c.add(10, 9, 10, rows10)
 	c.add(11, 10, 11, rows11)
-	c.tip(11)
+	c.add(12, 11, 12, []MapRow{{Lane: 9, First: 1, Last: 10, Tag: RowTagSeededRange}})
+	c.tip(12)
 
 	v := c.main()
+
+	// A seeded row answers like a range row and says it is the seeder's.
+	require.Equal(t, Answer{Mined: true, Via: ViaRow, BlockID: 12, Height: 12, Seeded: true}, v.Lookup(Pack(9, 4)))
+	require.Equal(t, Answer{}, v.Lookup(Pack(9, 11)))
 
 	require.Equal(t, Answer{Mined: true, Via: ViaRow, BlockID: 10, Height: 10}, v.Lookup(Pack(7, 150)))
 	require.Equal(t, Answer{Mined: true, Via: ViaRow, BlockID: 11, Height: 11}, v.Lookup(Pack(7, 977)))

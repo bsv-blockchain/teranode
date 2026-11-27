@@ -13,12 +13,12 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestSeederRefusesLaneEnabledImport(t *testing.T) {
+func TestSeederRefusesALaneStepThisBuildDoesNotRun(t *testing.T) {
 	dir := t.TempDir()
 	writeEmptyUTXOSetFile(t, filepath.Join(dir, "snapshot.utxo-set"))
 	s := test.CreateBaseTestSettings(t)
 	s.ProfilerAddr = ""
-	s.UtxoStore.LaneMigration = settings.LaneMigrationShadow
+	s.UtxoStore.LaneMigration = settings.LaneMigrationRows
 	s.UtxoStore.UtxoStore = &url.URL{Scheme: "sqlitememory"}
 	s.BlockChain.StoreURL = &url.URL{Scheme: "sqlitememory"}
 	blockPath := filepath.Join(dir, "blockstore")

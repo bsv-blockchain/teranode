@@ -249,7 +249,18 @@ func TestMapRowCheckRejects(t *testing.T) {
 
 	r := good[0]
 
+	// A seeded row is a range row: it checks like one and takes every position of its range.
+	seeded := MapRow{Lane: 3, First: 1, Last: 5, Tag: RowTagSeededRange}
+	_, err = seeded.Check()
+	require.NoError(t, err)
+
+	taken, err := seeded.Taken(3, nil)
+	require.NoError(t, err)
+	require.True(t, taken)
+
 	cases := map[string]MapRow{
+		"seeded with hole":     {Lane: 3, First: 1, Last: 5, FirstHole: 2, Tag: RowTagSeededRange},
+		"seeded with data":     {Lane: 3, First: 1, Last: 5, Tag: RowTagSeededRange, HoleData: r.HoleData},
 		"zero first":           {Lane: 3, First: 0, Last: 5, Tag: RowTagRange},
 		"first after last":     {Lane: 3, First: 6, Last: 5, Tag: RowTagRange},
 		"last too wide":        {Lane: 3, First: 1, Last: MaxPosition + 1, Tag: RowTagRange},
@@ -328,6 +339,16 @@ func TestSameRow(t *testing.T) {
 	same, err = SameRow(MapRow{Lane: 1, First: 1, Last: 3}, MapRow{Lane: 1, First: 1, Last: 3})
 	require.NoError(t, err)
 	require.True(t, same)
+
+	// A seeded row says the same as a seeded row over the same range, and not as a plain one.
+	seeded := MapRow{Lane: 1, First: 1, Last: 3, Tag: RowTagSeededRange}
+	same, err = SameRow(seeded, seeded)
+	require.NoError(t, err)
+	require.True(t, same)
+
+	same, err = SameRow(seeded, MapRow{Lane: 1, First: 1, Last: 3})
+	require.NoError(t, err)
+	require.False(t, same)
 
 	// The same lane, range, first hole and tag over different sets are different rows.
 	a, err := BuildMapRows(1, bitmapOf(1, 2, 4, 6))

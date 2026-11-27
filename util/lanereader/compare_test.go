@@ -236,6 +236,52 @@ func TestFloorAnswerDoesNotAgreeWithAnUnloadedBlock(t *testing.T) {
 	})
 }
 
+// A transaction the seeder imported names block ID 0 in today's mined list, a stand-in for its
+// real block, so a seeded row's answer counts seeded, never different_block; any other row or list
+// is judged as before.
+func TestSeededRowAgainstTheSeedersStandInBlock(t *testing.T) {
+	seeded := lane.Pack(3, 2)
+	plain := lane.Pack(4, 2)
+
+	for _, genesisLoaded := range []bool{false, true} {
+		r := newReader(ulogger.TestLogger{}, nil, 100)
+		idx := lane.NewIndex(100)
+
+		if genesisLoaded {
+			require.NoError(t, idx.AddBlock(lane.IndexBlock{ID: 0, Height: 0, Hash: benchBlockHash(0), TxCount: 1}, nil))
+		}
+
+		require.NoError(t, idx.AddBlock(lane.IndexBlock{ID: 1, Height: 1, Hash: benchBlockHash(1), Parent: benchBlockHash(0)},
+			[]lane.MapRow{{Lane: 3, First: 1, Last: 5, Tag: lane.RowTagSeededRange}, {Lane: 4, First: 1, Last: 5, Tag: lane.RowTagRange}}))
+		require.NoError(t, idx.SetTip(benchBlockHash(1)))
+		r.idx.Store(idx)
+
+		v := r.MainView()
+
+		cases := []struct {
+			name  string
+			pos   uint64
+			today []uint32
+			want  string
+		}{
+			{"seeded row, stand-in", seeded, []uint32{0}, KindSeeded},
+			{"seeded row, its own block", seeded, []uint32{1}, KindAgree},
+			{"seeded row, another block", seeded, []uint32{7}, KindDifferentBlock},
+			{"seeded row, stand-in and another block", seeded, []uint32{0, 7}, KindDifferentBlock},
+			{"plain row, stand-in", plain, []uint32{0}, KindDifferentBlock},
+			{"seeded row, not mined today", seeded, nil, KindLanesOnly},
+		}
+
+		for _, c := range cases {
+			require.Equal(t, c.want, classifyBlocks(v, v.Lookup(c.pos), c.today), "%s, genesis loaded %t", c.name, genesisLoaded)
+		}
+
+		requireCounted(t, ReaderBlockParent, KindSeeded, lane.ViaRow, func() {
+			r.CompareBlocks(ReaderBlockParent, v, chainhash.Hash{}, seeded, []uint32{0})
+		})
+	}
+}
+
 // Parent checks at once write no more than the first five lines: each is reserved before it is
 // written, and the minute starts when the gate is made. The race is narrow, so it runs many
 // rounds, each with a fresh gate.

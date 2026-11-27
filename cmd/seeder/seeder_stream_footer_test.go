@@ -96,7 +96,7 @@ func TestReadUTXOFrames_StreamedSnapshot_Succeeds(t *testing.T) {
 	_, _, txCount, utxoCount := buildSnapshotWrappers(t)
 	f, reader := streamSnapshotThroughFIFO(t, buildStreamedSnapshot(t, txCount, utxoCount))
 
-	frameCh := make(chan []byte, 10)
+	frameCh := make(chan seedFrame, 10)
 
 	var received int
 
@@ -110,7 +110,7 @@ func TestReadUTXOFrames_StreamedSnapshot_Succeeds(t *testing.T) {
 		}
 	}()
 
-	err := readUTXOFrames(context.Background(), ulogger.TestLogger{}, f, reader, frameCh, "all", nil)
+	err := readUTXOFrames(context.Background(), ulogger.TestLogger{}, f, reader, frameCh, "all", nil, nil)
 	<-done
 
 	require.NoError(t, err, "a complete snapshot streamed through a pipe must not be rejected")
@@ -124,14 +124,14 @@ func TestReadUTXOFrames_StreamedSnapshot_FooterMismatch_ReturnsError(t *testing.
 	_, _, txCount, utxoCount := buildSnapshotWrappers(t)
 	f, reader := streamSnapshotThroughFIFO(t, buildStreamedSnapshot(t, txCount+1, utxoCount))
 
-	frameCh := make(chan []byte, 10)
+	frameCh := make(chan seedFrame, 10)
 
 	go func() {
 		for range frameCh { //nolint:revive // drain channel
 		}
 	}()
 
-	err := readUTXOFrames(context.Background(), ulogger.TestLogger{}, f, reader, frameCh, "all", nil)
+	err := readUTXOFrames(context.Background(), ulogger.TestLogger{}, f, reader, frameCh, "all", nil, nil)
 	require.ErrorContains(t, err, "snapshot file truncated")
 }
 
@@ -159,14 +159,14 @@ func TestReadUTXOFrames_StreamedSnapshot_TruncatedIsRejected(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			f, reader := streamSnapshotThroughFIFO(t, tt.data)
 
-			frameCh := make(chan []byte, 10)
+			frameCh := make(chan seedFrame, 10)
 
 			go func() {
 				for range frameCh { //nolint:revive // drain channel
 				}
 			}()
 
-			err := readUTXOFrames(context.Background(), ulogger.TestLogger{}, f, reader, frameCh, "all", nil)
+			err := readUTXOFrames(context.Background(), ulogger.TestLogger{}, f, reader, frameCh, "all", nil, nil)
 			require.ErrorContains(t, err, "snapshot file truncated")
 		})
 	}

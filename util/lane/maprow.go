@@ -26,7 +26,20 @@ const (
 	// RowTagRoaring64 is a row with holes. Its hole data is a 64-bit Roaring bitmap, in the
 	// portable 64-bit format, of the positions the block took.
 	RowTagRoaring64 RowTag = 1
+
+	// RowTagSeededRange is a range row the seeder wrote for a block below a UTXO snapshot's tip:
+	// its block took every position from First to Last, and it has no hole data. It lists only
+	// the block's transactions other than its coinbase that the snapshot holds, those with an
+	// unspent output at the snapshot's tip, so it can hold fewer members than the block has
+	// transactions.
+	RowTagSeededRange RowTag = 2
 )
+
+// IsRange reports whether a row with this tag took every position of its range and has no hole
+// data.
+func (t RowTag) IsRange() bool {
+	return t == RowTagRange || t == RowTagSeededRange
+}
 
 // MaxRowHoleDataBytes is the largest hole data one map row holds. A block whose bitmap for a
 // lane would be larger is split into several rows for that lane, each over a run of whole
@@ -498,15 +511,15 @@ func checkArrayContainer(b []byte, card int) ([]byte, error) {
 }
 
 // Check validates a stored row against itself: range bounds, tag, first hole and hole data. It
-// returns the parsed bitmap of the positions taken for a RowTagRoaring64 row, nil for a
-// RowTagRange row.
+// returns the parsed bitmap of the positions taken for a RowTagRoaring64 row, nil for a range row
+// (RowTagRange or RowTagSeededRange).
 func (r MapRow) Check() (*roaring64.Bitmap, error) {
 	if r.First == 0 || r.Last > MaxPosition || r.First > r.Last {
 		return nil, errors.NewProcessingError("lane %d map row: range %d to %d is not within 1 to %d", r.Lane, r.First, r.Last, MaxPosition)
 	}
 
 	switch r.Tag {
-	case RowTagRange:
+	case RowTagRange, RowTagSeededRange:
 		if r.FirstHole != 0 || r.HoleData != nil {
 			return nil, errors.NewProcessingError("lane %d map row %d to %d: a range row has no holes", r.Lane, r.First, r.Last)
 		}
@@ -572,7 +585,7 @@ func (r MapRow) Taken(p uint64, holeData *roaring64.Bitmap) (bool, error) {
 		return false, nil
 	}
 
-	if r.Tag == RowTagRange || p < r.FirstHole {
+	if r.Tag.IsRange() || p < r.FirstHole {
 		return true, nil
 	}
 
@@ -590,7 +603,7 @@ func SameRow(a, b MapRow) (bool, error) {
 		return false, nil
 	}
 
-	if a.Tag == RowTagRange {
+	if a.Tag.IsRange() {
 		return true, nil
 	}
 
