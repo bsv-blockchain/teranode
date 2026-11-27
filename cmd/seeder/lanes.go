@@ -96,6 +96,10 @@ type seededLanes struct {
 	grant  lane.Grant
 }
 
+// maxSeedTipHeight bounds the tip height countSeedLayout sizes its arrays from: 2^24 heights, about
+// 200 MB of counts and offsets, far above mainnet's height near one million.
+const maxSeedTipHeight = 1 << 24
+
 // countSeedLayout reads every record of utxoFile and counts the records of each height, refusing a
 // height above the file's tip or a file whose footer does not match what it read.
 func countSeedLayout(ctx context.Context, utxoFile string) (*seedLayout, error) {
@@ -113,6 +117,11 @@ func countSeedLayout(ctx context.Context, utxoFile string) (*seedLayout, error) 
 	defer func() {
 		_ = f.Close()
 	}()
+
+	// The tip height sizes the per-height arrays, so one read from the file is bounded first.
+	if tipHeight > maxSeedTipHeight {
+		return nil, errors.NewProcessingError("%s names tip height %d, above the %d a seed at shadow counts", utxoFile, tipHeight, maxSeedTipHeight)
+	}
 
 	l := &seedLayout{counts: make([]uint32, uint64(tipHeight)+1)}
 
@@ -299,10 +308,11 @@ func checkRecordedPositions(ctx context.Context, logger ulogger.Logger, tSetting
 	return checkExistingPositions(ctx, store, utxoFile, lanes, true)
 }
 
-// checkRecordsHavePositions refuses a UTXO store holding any of the file's first records without a
-// lane position, as an import at off over a completed seed leaves. A record it does not hold, such
-// as one spent and pruned since, passes.
-func checkRecordsHavePositions(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, utxoFile string) error {
+// checkRecordsHavePositions refuses a UTXO store holding any of the file's first records at a position
+// outside grant, as an import at off or a store seeded from another grant leaves; grants never
+// overlap, so a position inside it is this seed's. A record it does not hold, such as one spent and
+// pruned since, passes.
+func checkRecordsHavePositions(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, utxoFile string, grant lane.Grant) error {
 	store, err := utxofactory.NewStore(ctx, logger, tSettings, "seeder", false)
 	if err != nil {
 		return errors.NewStorageError("failed to create utxostore", err)
@@ -347,8 +357,8 @@ func checkRecordsHavePositions(ctx context.Context, logger ulogger.Logger, tSett
 			return errors.NewStorageError("could not read the lane position of %s", txid.String(), getErr)
 		}
 
-		if !lane.Valid(md.LanePosition) {
-			return errors.NewProcessingError("the UTXO store holds %s with no lane position, though the seed of this snapshot was stamped: it was imported again at off since. Wipe the UTXO store, and the blockchain database too if any process has run at shadow on it since, then re-run with -force", txid.String())
+		if l, p := lane.Unpack(md.LanePosition); !lane.Valid(md.LanePosition) || l != grant.Lane || p < grant.First || p > grant.Last {
+			return errors.NewProcessingError("the UTXO store holds %s at lane %d position %d, outside this seed's grant of lane %d positions %d to %d: it was imported again at off, or from another grant, since. Wipe the UTXO store, and the blockchain database too if any process has run at shadow on it since, then re-run with -force", txid.String(), l, p, grant.Lane, grant.First, grant.Last)
 		}
 	}
 
@@ -368,7 +378,8 @@ func checkSeededAtShadow(ctx context.Context, logger ulogger.Logger, tSettings *
 		return nil, err
 	}
 
-	if _, ok, err := readSeederGrant(ctx, store, tip.hash); err != nil || !ok {
+	recorded, ok, err := readSeederGrant(ctx, store, tip.hash)
+	if err != nil || !ok {
 		if err == nil {
 			err = errors.NewProcessingError("utxostore_laneMigration is shadow but the blockchain store records no lane grant for the seed of %s: either lastProcessed.dat is from another snapshot's seed, or this snapshot was imported at off and its records have no lane position. Only in the second case, wipe the UTXO store, and the blockchain database too if any process has run at shadow on it since, then re-run with -force", tip.hash.String())
 		}
@@ -385,7 +396,7 @@ func checkSeededAtShadow(ctx context.Context, logger ulogger.Logger, tSettings *
 	}
 
 	if written {
-		return nil, checkRecordsHavePositions(ctx, logger, tSettings, utxoFile)
+		return nil, checkRecordsHavePositions(ctx, logger, tSettings, utxoFile, recorded.grant)
 	}
 
 	if tip.lanes, err = recordedSeedLanes(ctx, store, utxoFile, tip.hash); err != nil {

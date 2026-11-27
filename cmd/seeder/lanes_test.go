@@ -111,6 +111,15 @@ func TestSeedLayoutRefusesWhatItCannotPlace(t *testing.T) {
 	_, err = countSeedLayout(context.Background(), path)
 	require.ErrorContains(t, err, "the footer says 2 transactions")
 
+	// A tip height above the cap is refused before anything is sized from it.
+	path = writeCompleteSnapshotFile(t, one(5))
+	data, err = os.ReadFile(path)
+	require.NoError(t, err)
+	binary.LittleEndian.PutUint32(data[len(fileformat.NewHeader(fileformat.FileTypeUtxoSet).Bytes())+32:], maxSeedTipHeight+1)
+	require.NoError(t, os.WriteFile(path, data, 0o600))
+	_, err = countSeedLayout(context.Background(), path)
+	require.ErrorContains(t, err, "above the")
+
 	// A footer whose UTXO count disagrees is refused too.
 	path = writeCompleteSnapshotFile(t, one(5))
 	data, err = os.ReadFile(path)
@@ -459,7 +468,7 @@ func seedStampsPositionsAndRows(t *testing.T, heights []uint32, postgres bool) {
 	require.Len(t, grants, 1, "the re-run took no new grant")
 
 	// A done seed whose records were since spent and pruned is still done on a plain re-run, but
-	// one of its records imported again at off since, with no position, is refused.
+	// one of its records imported again since, at off or from another grant, is refused.
 	require.NoError(t, f.utxoStore().Delete(ctx, &f.records[0].TxID))
 	require.NoError(t, f.seed(false))
 
@@ -467,7 +476,11 @@ func seedStampsPositionsAndRows(t *testing.T, heights []uint32, postgres bool) {
 		f.settings.UtxoStore.LaneMigration = settings.LaneMigrationOff
 		require.NoError(t, processUTXO(ctx, f.utxoStore(), f.records[0], nil, false, lane.None))
 		f.settings.UtxoStore.LaneMigration = settings.LaneMigrationShadow
-		require.ErrorContains(t, f.seed(false), "imported again at off since")
+		require.ErrorContains(t, f.seed(false), "imported again at off, or from another grant")
+		require.NoError(t, f.utxoStore().Delete(ctx, &f.records[0].TxID))
+
+		require.NoError(t, processUTXO(ctx, f.utxoStore(), f.records[0], nil, false, lane.Pack(grant.Lane, grant.Last+1)))
+		require.ErrorContains(t, f.seed(false), "outside this seed's grant")
 		require.NoError(t, f.utxoStore().Delete(ctx, &f.records[0].TxID))
 	}
 
@@ -510,12 +523,21 @@ func seedStampsPositionsAndRows(t *testing.T, heights []uint32, postgres bool) {
 	require.NoError(t, os.Remove(marker))
 	require.NoError(t, os.MkdirAll(filepath.Join(marker, "held"), 0o700))
 
+	restored := false
+	restore := func() {
+		if !restored {
+			restored = true
+			require.NoError(t, os.RemoveAll(marker))
+			require.NoError(t, os.WriteFile(marker, saved, 0o600))
+		}
+	}
+	t.Cleanup(restore)
+
 	_, err = processUTXOs(ctx, ulogger.TestLogger{}, f.settings, other, f.utxoFile(), "", true, false)
 	require.ErrorContains(t, err, "failed to clear lastProcessed.dat")
 	requireSeedRecords(t, other, f.tip, true)
 
-	require.NoError(t, os.RemoveAll(marker))
-	require.NoError(t, os.WriteFile(marker, saved, 0o600))
+	restore()
 
 	// A forced run whose import starts and stops clears both records first, so neither
 	// vouches for the records it left.
@@ -708,6 +730,38 @@ func utxoStoreHasRecord(t *testing.T, f *seedFixture, txid *chainhash.Hash) bool
 	}
 
 	return true
+}
+
+// failImportedStore is a blockchain store whose write of the record that an import ran to its
+// end fails.
+type failImportedStore struct {
+	blockchain_store.Store
+}
+
+func (s failImportedStore) SetState(ctx context.Context, key string, data []byte) error {
+	if strings.HasPrefix(key, seederImportedKeyPrefix) && len(data) > 0 {
+		return errors.NewStorageError("refused")
+	}
+
+	return s.Store.SetState(ctx, key, data)
+}
+
+// An import whose end cannot be recorded fails, so no rows or checkpoint rest on it.
+func TestSeederFailsWhenItCannotRecordTheImport(t *testing.T) {
+	f := newSeedFixture(t, settings.LaneMigrationShadow, 8, fixtureHeights)
+	ctx := context.Background()
+
+	bc, err := blockchain_store.NewStore(ulogger.TestLogger{}, f.settings.BlockChain.StoreURL, f.settings)
+	require.NoError(t, err)
+
+	defer func() { _ = bc.Close(ctx) }()
+
+	_, err = processUTXOs(ctx, ulogger.TestLogger{}, f.settings, failImportedStore{Store: bc}, f.utxoFile(), "", false, false)
+	require.ErrorContains(t, err, "refused")
+
+	imported, err := seedImported(ctx, bc, f.tip)
+	require.NoError(t, err)
+	require.False(t, imported)
 }
 
 // A seed whose rows cannot be written leaves no BlockAssembler checkpoint, so a plain re-run does
