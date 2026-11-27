@@ -971,8 +971,10 @@ type hangingBitmapsStore struct {
 	calls atomic.Int32
 
 	mu sync.Mutex
-	// refusedAt is when the first write was refused, deadline the deadline the second one got.
+	// refusedAt is when the first write was refused, retriedAt when the retry began, and deadline
+	// the deadline the retry got.
 	refusedAt time.Time
+	retriedAt time.Time
 	deadline  time.Time
 }
 
@@ -986,6 +988,7 @@ func (s *hangingBitmapsStore) Set(ctx context.Context, key []byte, fileType file
 			return errors.NewStorageError("database restarting")
 		}
 
+		s.retriedAt = time.Now()
 		s.deadline, _ = ctx.Deadline()
 		s.mu.Unlock()
 
@@ -1019,7 +1022,8 @@ func TestALaneBitmapsRetryHungInTheStoreEndsAtItsBound(t *testing.T) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
 
-	require.WithinRange(t, store.deadline, store.refusedAt.Add(300*time.Millisecond), store.refusedAt.Add(350*time.Millisecond), "the hung retry's store call ends at the 300ms bound")
+	// the bound starts when the refusal is noted, between the refusal and the retry
+	require.WithinRange(t, store.deadline, store.refusedAt.Add(300*time.Millisecond), store.retriedAt.Add(300*time.Millisecond), "the hung retry's store call ends at the 300ms bound")
 }
 
 // refreshDuringRetryStore refuses a lane bitmaps file write at delete-at height 300 until a refresh
