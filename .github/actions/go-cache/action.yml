@@ -12,11 +12,23 @@ description: >
   job (save_bench_build_cache: 'true') saves the non-race benchmark build
   cache. Every other job restores only.
 
+  Uses runs-on/cache, a drop-in for actions/cache: on the self-hosted AWS
+  runners (RUNS_ON_S3_BUCKET_CACHE set in the runner's environment) it reads
+  and writes an S3 bucket in the runners' region; everywhere else it falls
+  back to GitHub's cache, exactly as actions/cache. On AWS only main's saver
+  label can write to the bucket.
+
   The build cache key rotates daily (GO_CACHE_DATE) so it never goes stale for
   weeks at a time; restore-keys fall back to the most recent dated entry, then
   to any build cache for this OS.
 
 inputs:
+  s3_sync:
+    description: >
+      'true' only in main's go-cache-s3-sync job on the AWS saver runner: copy
+      the module and build caches main just saved to GitHub's cache into the
+      AWS runners' S3 cache, under the same keys. Restores nothing for a build.
+    default: 'false'
   save:
     description: >
       'true' only on the main-branch unit test job, which saves the module
@@ -71,9 +83,13 @@ runs:
       shell: bash
       run: echo "GO_CACHE_DATE=$(date -u +%Y-%m-%d)" >> "$GITHUB_ENV"
 
-    # --- restore-only path (PR jobs, every non-main job) ---
-    - name: Restore Go module cache
-      if: inputs.save != 'true'
+    # --- GitHub cache -> S3 copy (main's go-cache-s3-sync job only) ---
+    # actions/cache always talks to GitHub's cache, even on the AWS runners;
+    # runs-on/cache/save writes to S3 there. Saved under the matched key, so S3
+    # holds exactly what GitHub has.
+    - name: Read Go module cache from GitHub's cache
+      id: sync_mod
+      if: inputs.s3_sync == 'true'
       uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
       with:
         path: ~/go/pkg/mod
@@ -81,9 +97,44 @@ runs:
         restore-keys: |
           gomod-${{ runner.os }}-
 
-    - name: Restore Go build cache
-      if: inputs.save != 'true' && inputs.build_cache == 'true'
+    - name: Write Go module cache to S3
+      if: inputs.s3_sync == 'true' && steps.sync_mod.outputs.cache-matched-key != ''
+      uses: runs-on/cache/save@88d90644011a3a9957fd141a106f5a94f9794203 # v5.0.7
+      with:
+        path: ~/go/pkg/mod
+        key: ${{ steps.sync_mod.outputs.cache-matched-key }}
+
+    - name: Read Go build cache from GitHub's cache
+      id: sync_build
+      if: inputs.s3_sync == 'true'
       uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+      with:
+        path: ~/.cache/go-build
+        key: gobuild-${{ runner.os }}-${{ hashFiles('**/go.mod') }}-${{ env.GO_CACHE_DATE }}
+        restore-keys: |
+          gobuild-${{ runner.os }}-${{ hashFiles('**/go.mod') }}-
+          gobuild-${{ runner.os }}-
+
+    - name: Write Go build cache to S3
+      if: inputs.s3_sync == 'true' && steps.sync_build.outputs.cache-matched-key != ''
+      uses: runs-on/cache/save@88d90644011a3a9957fd141a106f5a94f9794203 # v5.0.7
+      with:
+        path: ~/.cache/go-build
+        key: ${{ steps.sync_build.outputs.cache-matched-key }}
+
+    # --- restore-only path (PR jobs, every non-main job) ---
+    - name: Restore Go module cache
+      if: inputs.save != 'true' && inputs.s3_sync != 'true'
+      uses: runs-on/cache/restore@88d90644011a3a9957fd141a106f5a94f9794203 # v5.0.7
+      with:
+        path: ~/go/pkg/mod
+        key: gomod-${{ runner.os }}-${{ hashFiles('**/go.sum') }}
+        restore-keys: |
+          gomod-${{ runner.os }}-
+
+    - name: Restore Go build cache
+      if: inputs.save != 'true' && inputs.s3_sync != 'true' && inputs.build_cache == 'true'
+      uses: runs-on/cache/restore@88d90644011a3a9957fd141a106f5a94f9794203 # v5.0.7
       with:
         path: ~/.cache/go-build
         key: gobuild-${{ runner.os }}-${{ hashFiles('**/go.mod') }}-${{ env.GO_CACHE_DATE }}
@@ -94,7 +145,7 @@ runs:
     - name: Restore Go benchmark build cache
       id: bench_restore
       if: inputs.bench_build_cache == 'true' && inputs.save_bench_build_cache != 'true'
-      uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+      uses: runs-on/cache/restore@88d90644011a3a9957fd141a106f5a94f9794203 # v5.0.7
       with:
         path: ~/.cache/go-build-bench
         key: gobuild-bench-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('**/go.mod') }}-${{ env.GO_CACHE_DATE }}
@@ -108,7 +159,7 @@ runs:
     # new go.sum/go.mod), so same-day reruns are no-ops.
     - name: Save Go module cache
       if: inputs.save == 'true'
-      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+      uses: runs-on/cache@88d90644011a3a9957fd141a106f5a94f9794203 # v5.0.7
       with:
         path: ~/go/pkg/mod
         key: gomod-${{ runner.os }}-${{ hashFiles('**/go.sum') }}
@@ -117,7 +168,7 @@ runs:
 
     - name: Save Go build cache
       if: inputs.save == 'true' && inputs.build_cache == 'true'
-      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+      uses: runs-on/cache@88d90644011a3a9957fd141a106f5a94f9794203 # v5.0.7
       with:
         path: ~/.cache/go-build
         key: gobuild-${{ runner.os }}-${{ hashFiles('**/go.mod') }}-${{ env.GO_CACHE_DATE }}
@@ -131,7 +182,7 @@ runs:
     - name: Restore Go e2e build cache
       if: inputs.e2e_build_cache == 'true' && inputs.save_e2e_build_cache != 'true'
       id: e2e-restore
-      uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+      uses: runs-on/cache/restore@88d90644011a3a9957fd141a106f5a94f9794203 # v5.0.7
       with:
         path: ~/.cache/go-build-e2e
         key: gobuild-e2e-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('**/go.mod') }}-${{ env.GO_CACHE_DATE }}
@@ -146,7 +197,7 @@ runs:
 
     - name: Save Go e2e build cache
       if: inputs.save_e2e_build_cache == 'true'
-      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+      uses: runs-on/cache@88d90644011a3a9957fd141a106f5a94f9794203 # v5.0.7
       with:
         path: ~/.cache/go-build-e2e
         key: gobuild-e2e-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('**/go.mod') }}-${{ env.GO_CACHE_DATE }}
@@ -167,7 +218,7 @@ runs:
 
     - name: Save Go benchmark build cache
       if: inputs.save_bench_build_cache == 'true'
-      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+      uses: runs-on/cache@88d90644011a3a9957fd141a106f5a94f9794203 # v5.0.7
       with:
         path: ~/.cache/go-build-bench
         key: gobuild-bench-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('**/go.mod') }}-${{ env.GO_CACHE_DATE }}

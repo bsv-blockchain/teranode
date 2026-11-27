@@ -104,6 +104,25 @@ jobs:
           path: ${{ matrix.profile }}
           retention-days: 1
 
+  # Copies the module and build caches the unit shard just saved to GitHub's
+  # cache into the S3 cache the self-hosted AWS runners read. Runs on the AWS saver
+  # label, the only runner allowed to write to that bucket; its runner group
+  # only accepts this workflow on refs/heads/main. Not needed once main's unit
+  # shard itself runs on the saver label.
+  go-cache-s3-sync:
+    name: Go cache to S3
+    if: github.ref == 'refs/heads/main'
+    needs: go-test
+    runs-on: bsva-aws-arm64-16-saver
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+
+      - name: Copy Go caches to S3
+        uses: ./.github/actions/go-cache
+        with:
+          s3_sync: 'true'
+
   # Saves the build cache the Benchmark Comparison jobs restore. Those jobs build
   # without -race on ubuntu-latest (amd64), so neither the -race cache above nor
   # anything built on this workflow's ARM runners can serve them.
