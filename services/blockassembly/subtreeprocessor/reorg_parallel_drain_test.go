@@ -1,0 +1,201 @@
+package subtreeprocessor
+
+import (
+	"fmt"
+	"testing"
+
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	subtreepkg "github.com/bsv-blockchain/go-subtree"
+	"github.com/stretchr/testify/require"
+)
+
+// queueIntake queues n transactions of the scenario's intake kind, ids from first, which no set holds.
+func queueIntake(sc *reorgScenario, first, n int) {
+	nodes := make([]subtreepkg.Node, n)
+	inpoints := make([]*subtreepkg.TxInpoints, n)
+
+	for i := range nodes {
+		id := kindIntake | scenarioID(first+i)
+		p := voutZeroInpoints(sc.confirmedParent(id))
+		nodes[i] = subtreepkg.Node{Hash: sc.hash(id), Fee: 200, SizeInBytes: 250}
+		inpoints[i] = &p
+	}
+
+	sc.stp.AddBatch(nodes, inpoints)
+}
+
+// queuedDuringReorg is a reorg path that has 350 transactions queued before the reorg and 100 more each
+// time a drain starts, so every drain finds something. Fifty of the first are queued twice in the same
+// drain, and each later batch repeats the last ten of the one before, which the drain before it placed;
+// the first copy wins. It records whether each drain ran in parallel, or, with parallel off, runs them
+// all on one goroutine.
+func queuedDuringReorg(t testing.TB, parallel bool, modes *[]bool, shape *[]chainhash.Hash) reorgPath {
+	return func(t testing.TB, sc *reorgScenario) error {
+		prevHook, prevParallel := reorgDrainHook, reorgParallelDrain
+		defer func() { reorgDrainHook, reorgParallelDrain = prevHook, prevParallel }()
+
+		reorgParallelDrain = parallel
+		queued := 350
+
+		queueIntake(sc, 0, 300)
+		queueIntake(sc, 250, 100)
+
+		reorgDrainHook = func(p bool) {
+			*modes = append(*modes, p)
+
+			queueIntake(sc, queued-10, 110)
+			queued += 100
+		}
+
+		err := sc.run(t)
+
+		// where the subtrees end, not only the order of their leaves: the roots of the chained
+		// subtrees, then the length of the open one
+		*shape = nil
+		for _, st := range sc.stp.chainedSubtrees {
+			*shape = append(*shape, *st.RootHash())
+		}
+
+		*shape = append(*shape, chainhash.Hash{byte(sc.stp.currentSubtree.Load().Length())})
+
+		return err
+	}
+}
+
+func TestReorgParallelDrain_RunsOnEveryCoreWhenNothingConflicts(t *testing.T) {
+	for _, disk := range []bool{false, true} {
+		t.Run(map[bool]string{false: "in-memory map", true: "disk map"}[disk], func(t *testing.T) {
+			cfg := smallScenarioConfig()
+			cfg.parallelThreshold = 1
+			cfg.diskTxMap = disk
+
+			var modes, sequential []bool
+
+			var shape, sequentialShape []chainhash.Hash
+
+			// the reference drains every queued transaction one at a time
+			requireReorgEquivalent(t, cfg, queuedDuringReorg(t, false, &sequential, &sequentialShape), queuedDuringReorg(t, true, &modes, &shape))
+
+			// the head drain, then the drain of each of the two forward steps
+			require.Equal(t, []bool{true, true, true}, modes)
+			require.Equal(t, []bool{false, false, false}, sequential)
+			require.NotEmpty(t, shape)
+			require.Equal(t, sequentialShape, shape, "the same subtrees, not only the same leaves in the same order")
+		})
+	}
+}
+
+// A drain is skipped by a conflict in the order of the queue: a tx is dropped when an earlier queued
+// tx was, which the parallel steps do not keep. The head drain has no filter, so it still runs on
+// every core; a step that has conflicting or losing hashes does not.
+func TestReorgParallelDrain_StaysSequentialInAStepWithConflicts(t *testing.T) {
+	cfg := smallScenarioConfig()
+	cfg.parallelThreshold = 1
+	cfg.conflictsInWinner = 3
+
+	var modes, sequential []bool
+
+	requireReorgEquivalent(t, cfg, queuedDuringReorg(t, false, &sequential, new([]chainhash.Hash)), queuedDuringReorg(t, true, &modes, new([]chainhash.Hash)))
+
+	require.Len(t, modes, 3)
+	require.True(t, modes[0], "the head drain has no filter")
+	require.Contains(t, modes[1:], false, "the step that applies the conflicting nodes drains sequentially: %v", modes)
+}
+
+// A conflict the move-back reversed reaches a forward step only through that step's own conflicting
+// nodes. A reorg whose winners have none has nothing in play in any step, whatever the lost block did.
+func TestReorgParallelDrain_ARevertedLostConflictAloneDoesNotBlockIt(t *testing.T) {
+	cfg := smallScenarioConfig()
+	cfg.parallelThreshold = 1
+	cfg.conflictsInLost = 2
+
+	var modes, sequential []bool
+
+	requireReorgEquivalent(t, cfg, queuedDuringReorg(t, false, &sequential, new([]chainhash.Hash)), queuedDuringReorg(t, true, &modes, new([]chainhash.Hash)))
+
+	require.Equal(t, []bool{true, true, true}, modes)
+}
+
+// BenchmarkReorgDrain times a fork reorg with half a million transactions queued when it starts (issue
+// 2269, PR 9), with the drains on one goroutine and on every core. head_drain_ms in the report is the
+// drain of the queue before the move-back; the queueing itself is in the iteration's time, not in the
+// phase. Without a queue the drains cost nothing and the two runs are the same.
+func BenchmarkReorgDrain(b *testing.B) {
+	queued := 512 << 10
+	if testing.Short() { // the benchmark-compare job runs with -short
+		queued = 64 << 10
+	}
+
+	for _, parallel := range []bool{false, true} {
+		b.Run(fmt.Sprintf("parallel=%v", parallel), func(b *testing.B) {
+			benchmarkReorgPath(b, reorgPathBenchConfig(256<<10, 0.3, false), func(t testing.TB, sc *reorgScenario) error {
+				prev := reorgParallelDrain
+				defer func() { reorgParallelDrain = prev }()
+
+				reorgParallelDrain = parallel
+
+				queueIntake(sc, 0, queued)
+
+				return sc.run(t)
+			})
+		})
+	}
+}
+
+// The parallel build continues the open subtree and needs one. A drain that finds none places what
+// is queued one node at a time, as it did before the parallel drain, instead of failing the reorg.
+func TestReorgParallelDrain_StaysSequentialWithoutAnOpenSubtree(t *testing.T) {
+	sc, modes := drainWithOpenSubtree(t, func(sc *reorgScenario) { sc.stp.currentSubtree.Store(nil) })
+
+	require.NoError(t, sc.stp.dequeueDuringReorg(t.Context(), nil, nil, nil, false))
+	require.Equal(t, []bool{false}, *modes)
+	require.Zero(t, sc.stp.queue.length())
+
+	// placed, not only taken off the queue: the sequential drain logs a node it fails to add
+	placed := make(map[chainhash.Hash]struct{})
+	for _, n := range assemblyNodes(sc.stp) {
+		placed[n.Hash] = struct{}{}
+	}
+
+	for i := range 10 {
+		h := sc.hash(kindIntake | scenarioID(i))
+		require.Contains(t, placed, h, "queued tx %d is in a subtree", i)
+		require.True(t, sc.stp.GetCurrentTxMap().Exists(h), "queued tx %d is in the tx map", i)
+	}
+}
+
+// A full open subtree fails the reorg. The sequential drain would log every queued node as not added
+// and return no error, losing them without a reset.
+func TestReorgParallelDrain_FailsOnAFullOpenSubtree(t *testing.T) {
+	sc, modes := drainWithOpenSubtree(t, func(sc *reorgScenario) {
+		open := sc.stp.currentSubtree.Load()
+		for i := 0; !open.IsComplete(); i++ {
+			require.NoError(t, open.AddSubtreeNode(subtreepkg.Node{Hash: chainhash.HashH([]byte(fmt.Sprintf("fill-%d", i))), Fee: 1, SizeInBytes: 250}))
+		}
+	})
+
+	require.Error(t, sc.stp.dequeueDuringReorg(t.Context(), nil, nil, nil, false))
+	require.Equal(t, []bool{true}, *modes)
+}
+
+// drainWithOpenSubtree is a scenario inside a fork reorg's drain, with ten transactions queued and its
+// open subtree set up by prepare. It returns the drain modes the hook saw.
+func drainWithOpenSubtree(t *testing.T, prepare func(sc *reorgScenario)) (*reorgScenario, *[]bool) {
+	cfg := smallScenarioConfig()
+	cfg.parallelThreshold = 1
+	sc := newReorgScenario(t, cfg)
+
+	prevHook := reorgDrainHook
+	t.Cleanup(func() { reorgDrainHook = prevHook })
+
+	modes := new([]bool)
+	reorgDrainHook = func(p bool) { *modes = append(*modes, p) }
+
+	prepare(sc)
+	queueIntake(sc, 0, 10)
+
+	sc.stp.parallelReorgDrain = true
+	t.Cleanup(func() { sc.stp.parallelReorgDrain = false })
+
+	return sc, modes
+}

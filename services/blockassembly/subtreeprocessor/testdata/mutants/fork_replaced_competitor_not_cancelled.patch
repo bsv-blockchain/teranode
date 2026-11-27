@@ -1,0 +1,13 @@
+diff --git a/services/blockassembly/subtreeprocessor/prepare_fork_block.go b/services/blockassembly/subtreeprocessor/prepare_fork_block.go
+index b541d1a47..458f363f0 100644
+--- a/services/blockassembly/subtreeprocessor/prepare_fork_block.go
++++ b/services/blockassembly/subtreeprocessor/prepare_fork_block.go
+@@ -121,7 +121,7 @@ func (stp *SubtreeProcessor) prepareForkBlock(block *model.Block) {
+ 	if parent == nil {
+ 		// another competitor: its fork replaces the one prepared
+ 		for _, existing := range stp.preparedFork {
+-			existing.cancel()
++			_ = existing // mutant: the replaced fork keeps building
+ 		}
+ 
+ 		stp.preparedFork = nil

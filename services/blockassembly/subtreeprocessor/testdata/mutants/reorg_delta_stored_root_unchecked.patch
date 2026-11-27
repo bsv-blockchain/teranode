@@ -1,0 +1,13 @@
+diff --git a/services/blockassembly/subtreeprocessor/reorg_delta.go b/services/blockassembly/subtreeprocessor/reorg_delta.go
+index 5d291505b..1e2252312 100644
+--- a/services/blockassembly/subtreeprocessor/reorg_delta.go
++++ b/services/blockassembly/subtreeprocessor/reorg_delta.go
+@@ -114,7 +114,7 @@ func (stp *SubtreeProcessor) computeReorgDelta(ctx context.Context, lost []*mode
+ 				return errors.NewProcessingError("error reading the root of lost subtree: %s", root.String(), err)
+ 			}
+ 
+-			if stored != *root {
++			if false && stored != *root {
+ 				return errors.NewProcessingError("lost subtree does not match its key %s: file was built for %s", root.String(), stored.String())
+ 			}
+ 

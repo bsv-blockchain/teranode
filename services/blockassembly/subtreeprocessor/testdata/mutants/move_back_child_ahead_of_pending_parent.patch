@@ -1,0 +1,13 @@
+diff --git a/services/blockassembly/subtreeprocessor/SubtreeProcessor.go b/services/blockassembly/subtreeprocessor/SubtreeProcessor.go
+index a4a5c1340..2f9807ab0 100644
+--- a/services/blockassembly/subtreeprocessor/SubtreeProcessor.go
++++ b/services/blockassembly/subtreeprocessor/SubtreeProcessor.go
+@@ -6735,7 +6735,7 @@ func (stp *SubtreeProcessor) moveBackBlockBulkBuild(ctx context.Context, block *
+ 					continue
+ 				}
+ 
+-				if held != nil && held.hold(flatNodes[i], flatInpoints[i].ParentTxHashes) {
++				if false && held != nil && held.hold(flatNodes[i], flatInpoints[i].ParentTxHashes) {
+ 					continue
+ 				}
+ 

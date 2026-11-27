@@ -127,6 +127,14 @@ type BlockAssembly struct {
 	// configured miner keys cannot build a coinbase.
 	lastMinerKeyWarn atomic.Int64
 
+	// lateAnnounce carries to the notification sender the subtrees a retry stored after their first
+	// write failed. Nil when a BlockAssembly is built without New.
+	lateAnnounce chan chainhash.Hash
+
+	// storedSet is the set of subtree roots whose files are stored, shared with the subtree
+	// processor, which cuts its templates at it. Nil unless blockassembly_storedPrefixTemplate is on.
+	storedSet *subtreeprocessor.StoredSet
+
 	// blockSubmissionChan handles block submission requests
 	blockSubmissionChan chan *BlockSubmissionRequest
 
@@ -179,6 +187,21 @@ type subtreeRetrySend struct {
 	// retries tracks the number of storage attempts made for this subtree
 	// Used to implement exponential backoff and maximum retry limits
 	retries int
+
+	// outcome collects the final outcome of the request this entry belongs to; nil for an entry
+	// made without a request, which announces on success and reports nothing
+	outcome *subtreeStoreOutcome
+
+	// silent is set on an entry that must not announce when it succeeds: a meta-only entry, whose
+	// subtree was announced when its own write succeeded, and a retry that found the subtree
+	// already stored, which main does not announce either
+	silent bool
+
+	// existed records that the subtree write found the file already there
+	existed bool
+
+	// lastErr is the error of the last failed attempt, reported when the retries run out
+	lastErr error
 }
 
 // New creates a new BlockAssembly instance.
@@ -216,6 +239,7 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, txStore blob.Store
 		subtreeStore:        subtreeStore,
 		jobStore:            ttlcache.New[chainhash.Hash, *subtreeprocessor.Job](),
 		blockSubmissionChan: make(chan *BlockSubmissionRequest),
+		lateAnnounce:        make(chan chainhash.Hash, 100),
 	}
 
 	for _, opt := range opts {
@@ -346,6 +370,12 @@ func (ba *BlockAssembly) Init(ctx context.Context) (err error) {
 	txMetaEvictor := subtreeprocessor.NewTxMetaEvictor(ba.logger, ba.txMetaProducer)
 
 	assemblerOpts := []BlockAssemblerOption{WithTxMetaEvictor(txMetaEvictor)}
+
+	// one set, written by the store workers and read by the subtree processor
+	if ba.settings.BlockAssembly.StoredPrefixTemplate {
+		ba.storedSet = subtreeprocessor.NewStoredSet()
+		assemblerOpts = append(assemblerOpts, WithStoredSet(ba.storedSet))
+	}
 
 	// at utxostore_laneMigration shadow the subtree processor keeps each chained subtree's lane
 	// bitmaps here, for the rows of the blocks this node mines (lane_rows.go)
@@ -743,7 +773,23 @@ func (ba *BlockAssembly) subtreeNotificationSender(ctx context.Context, resultCh
 	pending := make(map[uint64]*subtreeStorageResult)
 	var nextSeq uint64
 
-	for result := range resultChan {
+	for {
+		var result *subtreeStorageResult
+
+		select {
+		case hash := <-ba.lateAnnounce:
+			// a retry stored a subtree whose first write failed: out of order by nature
+			ba.sendSubtreeNotification(ctx, hash)
+
+			continue
+		case r, ok := <-resultChan:
+			if !ok {
+				return
+			}
+
+			result = r
+		}
+
 		select {
 		case <-ctx.Done():
 			return
@@ -811,26 +857,26 @@ func (ba *BlockAssembly) processSubtreeRetry(ctx context.Context, subtreeRetry *
 		if err := ba.storeSubtreeMetaWithRetry(ctx, subtreeRetry, subtreeRetryChan, dah); err != nil {
 			return
 		}
+
+		subtreeRetry.subtreeMetaBytes = nil
+		subtreeRetry.outcome.metaStored()
 	}
 
 	// Store subtree data
-	if err := ba.storeSubtreeDataWithRetry(ctx, subtreeRetry, subtreeRetryChan, dah); err != nil {
+	if len(subtreeRetry.subtreeBytes) > 0 {
+		if err := ba.storeSubtreeDataWithRetry(ctx, subtreeRetry, subtreeRetryChan, dah); err != nil {
+			return
+		}
+
+		subtreeRetry.subtreeBytes = nil
+		subtreeRetry.outcome.subtreeStored(subtreeRetry.existed)
+	}
+
+	if subtreeRetry.silent {
 		return
 	}
 
-	isRunning, err := ba.blockchainClient.IsFSMCurrentState(ctx, blockchain.FSMStateRUNNING)
-	if err != nil {
-		ba.logger.Errorf("[BlockAssembly:Init][%s] failed to check FSM state: %s", subtreeRetry.subtreeHash.String(), err)
-		return
-	}
-
-	if !isRunning {
-		ba.logger.Debugf("[BlockAssembly:Init][%s] FSM is not running, skipping notification", subtreeRetry.subtreeHash.String())
-		return
-	}
-
-	// Send notification after successful storage
-	ba.sendSubtreeNotification(ctx, subtreeRetry.subtreeHash)
+	ba.announceLate(ctx, subtreeRetry)
 }
 
 // storeSubtreeMetaWithRetry attempts to store subtree metadata with retry logic.
@@ -848,10 +894,14 @@ func (ba *BlockAssembly) storeSubtreeMetaWithRetry(ctx context.Context, subtreeR
 			if dahErr := ba.subtreeStore.SetDAH(ctx, subtreeRetry.subtreeHash[:], fileformat.FileTypeSubtreeMeta, dah); dahErr != nil {
 				ba.logger.Debugf("[BlockAssembly:Init][%s] subtreeRetryChan: could not update subtree meta DAH (meta may not exist): %s", subtreeRetry.subtreeHash.String(), dahErr)
 			}
-		} else {
-			ba.logger.Errorf("[BlockAssembly:Init][%s] subtreeRetryChan: failed to retry store subtree meta: %s", subtreeRetry.subtreeHash.String(), err)
-			ba.handleRetryLogic(ctx, subtreeRetry, subtreeRetryChan, "subtree meta")
+
+			// an existing meta is a stored meta
+			return nil
 		}
+
+		ba.logger.Errorf("[BlockAssembly:Init][%s] subtreeRetryChan: failed to retry store subtree meta: %s", subtreeRetry.subtreeHash.String(), err)
+		subtreeRetry.lastErr = err
+		ba.handleRetryLogic(ctx, subtreeRetry, subtreeRetryChan, "subtree meta")
 	}
 
 	return err
@@ -871,13 +921,22 @@ func (ba *BlockAssembly) storeSubtreeDataWithRetry(ctx context.Context, subtreeR
 			ba.logger.Debugf("[BlockAssembly:Init][%s] subtreeRetryChan: subtree already exists, updating DeleteAtHeight", subtreeRetry.subtreeHash.String())
 			if dahErr := ba.subtreeStore.SetDAH(ctx, subtreeRetry.subtreeHash[:], fileformat.FileTypeSubtree, dah); dahErr != nil {
 				ba.logger.Errorf("[BlockAssembly:Init][%s] subtreeRetryChan: failed to update subtree DAH: %s", subtreeRetry.subtreeHash.String(), dahErr)
+				subtreeRetry.lastErr = dahErr
 				ba.handleRetryLogic(ctx, subtreeRetry, subtreeRetryChan, "subtree DAH update")
 				return dahErr
 			}
-		} else {
-			ba.logger.Errorf("[BlockAssembly:Init][%s] subtreeRetryChan: failed to retry store subtree: %s", subtreeRetry.subtreeHash.String(), err)
-			ba.handleRetryLogic(ctx, subtreeRetry, subtreeRetryChan, "subtree")
+
+			// An existing subtree is a stored subtree. Like main, the retry does not announce it, even
+			// when the earlier write landed but reported failure and so was never announced.
+			subtreeRetry.existed = true
+			subtreeRetry.silent = true
+
+			return nil
 		}
+
+		ba.logger.Errorf("[BlockAssembly:Init][%s] subtreeRetryChan: failed to retry store subtree: %s", subtreeRetry.subtreeHash.String(), err)
+		subtreeRetry.lastErr = err
+		ba.handleRetryLogic(ctx, subtreeRetry, subtreeRetryChan, "subtree")
 	}
 
 	return err
@@ -885,16 +944,22 @@ func (ba *BlockAssembly) storeSubtreeDataWithRetry(ctx context.Context, subtreeR
 
 // handleRetryLogic manages the retry logic for failed storage operations.
 func (ba *BlockAssembly) handleRetryLogic(ctx context.Context, subtreeRetry *subtreeRetrySend, subtreeRetryChan chan *subtreeRetrySend, itemType string) {
-	if subtreeRetry.retries > 10 {
+	if subtreeRetry.retries > subtreeRetryLimit {
 		ba.logger.Errorf("[BlockAssembly:Init][%s] subtreeRetryChan: failed to retry store %s, retries exhausted", subtreeRetry.subtreeHash.String(), itemType)
+		subtreeRetry.exhausted()
+
 		return
 	}
 
 	subtreeRetry.retries++
+	unit := subtreeRetryBackoffUnit // read here, on the retry processor, not in the goroutine
+
 	go func() {
 		// backoff and wait before re-adding to retry queue
-		if err := retry.BackoffAndSleep(ctx, subtreeRetry.retries, 2, time.Second); err != nil {
+		if err := retry.BackoffAndSleep(ctx, subtreeRetry.retries, 2, unit); err != nil {
 			ba.logger.Errorf("[BlockAssembly:Init][%s] subtreeRetryChan: context cancelled", subtreeRetry.subtreeHash.String())
+			subtreeRetry.outcome.cancel(err)
+
 			return
 		}
 
@@ -931,6 +996,12 @@ func (ba *BlockAssembly) sendSubtreeNotification(ctx context.Context, subtreeHas
 // buildSubtreeMeta returns the serialized subtree meta of the subtree in the
 // request, or false, after logging why, when it cannot be built.
 func (ba *BlockAssembly) buildSubtreeMeta(subtreeRequest subtreeprocessor.NewSubtreeRequest) ([]byte, bool) {
+	return ba.buildSubtreeMetaReportingReadError(subtreeRequest, nil)
+}
+
+// buildSubtreeMetaReportingReadError is buildSubtreeMeta; it sets *readErr, when readErr is not nil,
+// if a read error of the parent tx map was met, the one failure that can clear on its own.
+func (ba *BlockAssembly) buildSubtreeMetaReportingReadError(subtreeRequest subtreeprocessor.NewSubtreeRequest, readErr *bool) ([]byte, bool) {
 	subtree := subtreeRequest.Subtree
 
 	// An in-memory tx map keeps the inpoints serialized, so the meta is put
@@ -968,6 +1039,10 @@ func (ba *BlockAssembly) buildSubtreeMeta(subtreeRequest subtreeprocessor.NewSub
 
 				txInpoints, found, getErr = parentTxMapWithErr.GetWithErr(node.Hash)
 				if getErr != nil {
+					if readErr != nil {
+						*readErr = true
+					}
+
 					ba.logger.Errorf("[BlockAssembly:storeSubtreeData][%s] error reading parent tx hashes for node %s: %s", subtreeRequest.Subtree.RootHash().String(), node.Hash.String(), getErr)
 				}
 			} else {
@@ -1003,6 +1078,64 @@ func (ba *BlockAssembly) buildSubtreeMeta(subtreeRequest subtreeprocessor.NewSub
 	return subtreeMetaBytes, true
 }
 
+// storeSubtreeMeta builds, writes and settles the meta part of a request: stored, handed to the
+// retry channel with its bytes when the write failed, or failed when the build did.
+func (ba *BlockAssembly) storeSubtreeMeta(ctx context.Context, subtreeRequest subtreeprocessor.NewSubtreeRequest, dah uint32, outcome *subtreeStoreOutcome, subtreeRetryChan chan *subtreeRetrySend) {
+	subtree := subtreeRequest.Subtree
+
+	buildStart := time.Now()
+
+	subtreeMetaBytes, ok := ba.buildSubtreeMetaWithRetry(ctx, subtreeRequest)
+
+	prometheusBlockAssemblySubtreeStoreStep.WithLabelValues("meta_build").Observe(time.Since(buildStart).Seconds())
+
+	if !ok {
+		err := errors.NewProcessingError("[BlockAssembly:storeSubtreeData][%s] failed to build subtree meta", subtree.RootHash().String())
+
+		// a reset cleared the map the meta is built from: its own side effect, not a store failure
+		if subtreeRequest.Superseded() {
+			outcome.cancel(err)
+		} else {
+			outcome.fail(err)
+		}
+
+		return
+	}
+
+	writeStart := time.Now()
+
+	err := ba.subtreeStore.Set(ctx,
+		subtree.RootHash()[:],
+		fileformat.FileTypeSubtreeMeta,
+		subtreeMetaBytes,
+		options.WithDeleteAt(dah),
+	)
+
+	prometheusBlockAssemblySubtreeStoreStep.WithLabelValues("meta_write").Observe(time.Since(writeStart).Seconds())
+
+	if err != nil {
+		if errors.Is(err, errors.ErrBlobAlreadyExists) {
+			ba.logger.Debugf("[BlockAssembly:storeSubtreeData][%s] subtree meta already exists", subtree.RootHash().String())
+			outcome.metaStored()
+		} else {
+			ba.logger.Errorf("[BlockAssembly:storeSubtreeData][%s] failed to store subtree meta: %s", subtree.RootHash().String(), err)
+			outcome.toRetry()
+			subtreeRetryChan <- &subtreeRetrySend{
+				subtreeHash:      *subtree.RootHash(),
+				subtreeMetaBytes: subtreeMetaBytes,
+				retries:          0,
+				outcome:          outcome,
+				silent:           true, // the subtree was announced when its own write succeeded
+				lastErr:          err,
+			}
+		}
+
+		return
+	}
+
+	outcome.metaStored()
+}
+
 // storeSubtreeData stores the subtree data and metadata to the blob store.
 // It returns two channels:
 //   - subtreeDone: signals when subtree storage is complete (bool = success)
@@ -1027,6 +1160,13 @@ func (ba *BlockAssembly) storeSubtreeData(ctx context.Context, subtreeRequest su
 	)
 	defer deferFn()
 
+	// The typed result of this request, posted to subtreeRequest.Result once its store is settled
+	metaApplicable := subtreeRequest.ParentTxMap != nil && ba.settings.BlockAssembly.StoreTxInpointsForSubtreeMeta
+	outcome := newSubtreeStoreOutcome(subtreeRequest, metaApplicable, ba.lateAnnounce)
+	if ba.storedSet != nil {
+		outcome.track(ba.storedSet, *subtree.RootHash())
+	}
+
 	// At utxostore_laneMigration shadow the subtree's lane bitmaps, kept when the subtree processor
 	// chained it, are written before the subtree file (lane_rows.go).
 	lanes := ba.keepsLanePositions()
@@ -1037,7 +1177,10 @@ func (ba *BlockAssembly) storeSubtreeData(ctx context.Context, subtreeRequest su
 		height := ba.blockAssembler.utxoStore.GetBlockHeight()
 		dah := height + ba.settings.GlobalBlockHeightRetention
 		if err := ba.subtreeStore.SetDAH(ctx, subtree.RootHash()[:], fileformat.FileTypeSubtree, dah); err != nil {
-			return nil, nil, errors.NewProcessingError("[BlockAssembly:storeSubtreeData][%s] failed to update subtree DAH", subtree.RootHash().String(), err)
+			err = errors.NewProcessingError("[BlockAssembly:storeSubtreeData][%s] failed to update subtree DAH", subtree.RootHash().String(), err)
+			outcome.abort(err)
+
+			return nil, nil, err
 		}
 		if err := ba.subtreeStore.SetDAH(ctx, subtree.RootHash()[:], fileformat.FileTypeSubtreeMeta, dah); err != nil {
 			ba.logger.Debugf("[BlockAssembly:storeSubtreeData][%s] could not update subtree meta DAH (meta may not exist): %s", subtree.RootHash().String(), err)
@@ -1045,13 +1188,40 @@ func (ba *BlockAssembly) storeSubtreeData(ctx context.Context, subtreeRequest su
 		if lanes {
 			ba.keepExistingSubtreeLaneBitmaps(ctx, *subtree.RootHash(), height, dah)
 		}
+
+		outcome.subtreeStored(true)
+
+		if metaApplicable {
+			// Stored means both files: report whether the meta is there, checked only for a caller
+			// that reads the result or the stored set. A missing one is not rebuilt, unless the stored
+			// set needs it: a subtree whose file landed and whose meta failed is sent again by the
+			// processor and would never reach the set otherwise. The build runs here, before the
+			// caller is answered, but nobody makes it wait: the processor's re-send does not, and
+			// reads the live maps like every first-write meta build. A reset that clears them
+			// supersedes the request, and the build then ends as cancelled, not failed. It also
+			// delays the ordered announcements behind this request by one meta build; only a
+			// re-send, which does not announce, or a rare late send finds a subtree without its meta.
+			if subtreeRequest.Result == nil && ba.storedSet == nil {
+				outcome.metaAbsent()
+			} else if metaExists, _ := ba.subtreeStore.Exists(ctx, subtree.RootHash()[:], fileformat.FileTypeSubtreeMeta); metaExists {
+				outcome.metaStored()
+			} else if ba.storedSet != nil {
+				ba.storeSubtreeMeta(ctx, subtreeRequest, dah, outcome, subtreeRetryChan)
+			} else {
+				outcome.metaAbsent()
+			}
+		}
+
 		return nil, nil, errors.ErrBlobAlreadyExists
 	}
 
 	// Serialize subtree
 	subtreeBytes, err := subtree.Serialize()
 	if err != nil {
-		return nil, nil, errors.NewProcessingError("[BlockAssembly:storeSubtreeData][%s] failed to serialize subtree", subtree.RootHash().String(), err)
+		err = errors.NewProcessingError("[BlockAssembly:storeSubtreeData][%s] failed to serialize subtree", subtree.RootHash().String(), err)
+		outcome.abort(err)
+
+		return nil, nil, err
 	}
 
 	height := ba.blockAssembler.utxoStore.GetBlockHeight()
@@ -1080,33 +1250,11 @@ func (ba *BlockAssembly) storeSubtreeData(ctx context.Context, subtreeRequest su
 	}
 
 	// Build, serialize, and store subtree meta in background
-	if subtreeRequest.ParentTxMap != nil && ba.settings.BlockAssembly.StoreTxInpointsForSubtreeMeta {
+	if metaApplicable {
 		go func() {
 			defer close(metaDoneCh)
 
-			subtreeMetaBytes, ok := ba.buildSubtreeMeta(subtreeRequest)
-			if !ok {
-				return
-			}
-
-			if err := ba.subtreeStore.Set(ctx,
-				subtree.RootHash()[:],
-				fileformat.FileTypeSubtreeMeta,
-				subtreeMetaBytes,
-				options.WithDeleteAt(dah),
-			); err != nil {
-				if errors.Is(err, errors.ErrBlobAlreadyExists) {
-					ba.logger.Debugf("[BlockAssembly:storeSubtreeData][%s] subtree meta already exists", subtree.RootHash().String())
-				} else {
-					ba.logger.Errorf("[BlockAssembly:storeSubtreeData][%s] failed to store subtree meta: %s", subtree.RootHash().String(), err)
-					subtreeRetryChan <- &subtreeRetrySend{
-						subtreeHash:      *subtree.RootHash(),
-						subtreeBytes:     subtreeBytes,
-						subtreeMetaBytes: subtreeMetaBytes,
-						retries:          0,
-					}
-				}
-			}
+			ba.storeSubtreeMeta(ctx, subtreeRequest, dah, outcome, subtreeRetryChan)
 		}()
 	} else {
 		close(metaDoneCh)
@@ -1120,23 +1268,35 @@ func (ba *BlockAssembly) storeSubtreeData(ctx context.Context, subtreeRequest su
 		<-laneBitmapsDone
 
 		storedOK := true
-		if err := ba.subtreeStore.Set(ctx,
+		writeStart := time.Now()
+
+		err := ba.subtreeStore.Set(ctx,
 			subtree.RootHash()[:],
 			fileformat.FileTypeSubtree,
 			subtreeBytes,
 			options.WithDeleteAt(dah),
-		); err != nil {
+		)
+
+		prometheusBlockAssemblySubtreeStoreStep.WithLabelValues("subtree_write").Observe(time.Since(writeStart).Seconds())
+
+		if err != nil {
 			if errors.Is(err, errors.ErrBlobAlreadyExists) {
 				ba.logger.Debugf("[BlockAssembly:storeSubtreeData][%s] subtree already exists", subtree.RootHash().String())
+				outcome.subtreeStored(true)
 			} else {
 				ba.logger.Errorf("[BlockAssembly:storeSubtreeData][%s] failed to store subtree: %s", subtree.RootHash().String(), err)
+				outcome.toRetry()
 				subtreeRetryChan <- &subtreeRetrySend{
 					subtreeHash:  *subtree.RootHash(),
 					subtreeBytes: subtreeBytes,
 					retries:      0,
+					outcome:      outcome,
+					lastErr:      err,
 				}
 				storedOK = false
 			}
+		} else {
+			outcome.subtreeStored(false)
 		}
 		subtreeDoneCh <- storedOK
 		close(subtreeDoneCh)

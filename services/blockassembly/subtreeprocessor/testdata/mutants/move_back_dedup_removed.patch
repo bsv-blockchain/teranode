@@ -1,0 +1,13 @@
+diff --git a/services/blockassembly/subtreeprocessor/SubtreeProcessor.go b/services/blockassembly/subtreeprocessor/SubtreeProcessor.go
+index a4a5c1340..94713af42 100644
+--- a/services/blockassembly/subtreeprocessor/SubtreeProcessor.go
++++ b/services/blockassembly/subtreeprocessor/SubtreeProcessor.go
+@@ -6724,7 +6724,7 @@ func (stp *SubtreeProcessor) moveBackBlockBulkBuild(ctx context.Context, block *
+ 			allNodes = make([]subtreepkg.Node, 0, totalBlockNodes+totalPreviousNodes)
+ 
+ 			for i, set := range wasSet {
+-				if !set {
++				if !set && false { // mutant: keep every lost-block node, also the ones already pending
+ 					// Already pending: it keeps its pending position, and a child of it waits there.
+ 					if held == nil {
+ 						held = newHeldChildren()

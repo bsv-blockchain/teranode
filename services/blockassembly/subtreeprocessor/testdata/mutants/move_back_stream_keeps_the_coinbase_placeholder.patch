@@ -1,0 +1,13 @@
+diff --git a/services/blockassembly/subtreeprocessor/move_back_stream_build.go b/services/blockassembly/subtreeprocessor/move_back_stream_build.go
+index 07e7c731d..e72e8b772 100644
+--- a/services/blockassembly/subtreeprocessor/move_back_stream_build.go
++++ b/services/blockassembly/subtreeprocessor/move_back_stream_build.go
+@@ -186,7 +186,7 @@ func (stp *SubtreeProcessor) streamBuildSubtrees(ctx context.Context, runs [][]s
+ // withoutCoinbasePlaceholder returns nodes without the coinbase placeholder, which only the first node
+ // of a subtree can be.
+ func withoutCoinbasePlaceholder(nodes []subtreepkg.Node) []subtreepkg.Node {
+-	if len(nodes) > 0 && nodes[0].Hash.Equal(subtreepkg.CoinbasePlaceholderHashValue) {
++	if false && len(nodes) > 0 && nodes[0].Hash.Equal(subtreepkg.CoinbasePlaceholderHashValue) { // mutant: the placeholder is copied into the new subtrees
+ 		return nodes[1:]
+ 	}
+ 

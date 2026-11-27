@@ -34,6 +34,10 @@ type deferredBlockDrain struct {
 	// for it and left a forward intent to acknowledge. It does not depend on how many
 	// transactions the operation demoted, which can be none.
 	ackConflictIntents bool
+	// skipNotification is whether the subtrees the drain completes are stored without being
+	// announced: a fork reorg stores and announces what it built at its end. The drain after a block
+	// leaves it false.
+	skipNotification bool
 }
 
 // runDeferredBlockDrain runs the end of a moveForwardBlock that
@@ -97,7 +101,7 @@ func (stp *SubtreeProcessor) runDeferredBlockDrain(ctx context.Context, block *m
 // inpoints, which addNode treats specially.
 func (stp *SubtreeProcessor) drainQueueAfterBlock(ctx context.Context, drain *deferredBlockDrain) error {
 	if len(drain.conflictingHashes) > 0 {
-		return stp.dequeueDuringBlockMovement(drain.transactionMap, drain.losingTxHashesMap, drain.conflictingHashes, false)
+		return stp.dequeueDuringBlockMovement(drain.transactionMap, drain.losingTxHashesMap, drain.conflictingHashes, drain.skipNotification)
 	}
 
 	stp.drainingBlockSet = drain.transactionMap
@@ -140,7 +144,7 @@ func (stp *SubtreeProcessor) addDrainedBatches(ctx context.Context, batches []*T
 
 	for _, ip := range inpoints {
 		if ip == nil {
-			return stp.addDrainedNodesSequentially(nodes, inpoints, positions, drain.transactionMap, drain.losingTxHashesMap)
+			return stp.addDrainedNodesSequentially(nodes, inpoints, positions, drain.transactionMap, drain.losingTxHashesMap, drain.skipNotification)
 		}
 	}
 
@@ -165,7 +169,7 @@ func (stp *SubtreeProcessor) addDrainedBatches(ctx context.Context, batches []*T
 
 	prometheusSubtreeProcessorDequeuedTxs.Add(float64(total))
 
-	if err := stp.parallelBuildRemainderSubtrees(ctx, kept, keptPositions, false); err != nil {
+	if err := stp.parallelBuildRemainderSubtrees(ctx, kept, keptPositions, drain.skipNotification); err != nil {
 		return 0, err
 	}
 
@@ -200,7 +204,7 @@ func drainedPositions(batches []*TxBatch, total int) []uint64 {
 // is not counted, and a node that placeNode put in a subtree is counted even
 // when completing that subtree failed.
 func (stp *SubtreeProcessor) addDrainedNodesSequentially(nodes []subtreepkg.Node, inpoints []*subtreepkg.TxInpoints, positions []uint64,
-	transactionMap *SortedHashSet, losingTxHashesMap txmap.TxMap) (int, error) {
+	transactionMap *SortedHashSet, losingTxHashesMap txmap.TxMap, skipNotification bool) (int, error) {
 	placed := 0
 
 	for i, node := range nodes {
@@ -217,7 +221,7 @@ func (stp *SubtreeProcessor) addDrainedNodesSequentially(nodes []subtreepkg.Node
 			position = positions[i]
 		}
 
-		wasPlaced, err := stp.placeNodeAt(node, inpoints[i], position, false)
+		wasPlaced, err := stp.placeNodeAt(node, inpoints[i], position, skipNotification)
 		if err != nil {
 			stp.logger.Errorf("[SubtreeProcessor] error adding node %s during sequential remainder processing: %v", node.Hash.String(), err)
 		}

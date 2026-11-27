@@ -1,0 +1,15 @@
+diff --git a/services/blockassembly/subtreeprocessor/reorg_moved_back_marks.go b/services/blockassembly/subtreeprocessor/reorg_moved_back_marks.go
+index 4c0ec22c1..0164e57d2 100644
+--- a/services/blockassembly/subtreeprocessor/reorg_moved_back_marks.go
++++ b/services/blockassembly/subtreeprocessor/reorg_moved_back_marks.go
+@@ -58,9 +58,8 @@ func (m *movedBackMarks) markForward(block *SortedHashSet, workers int) []chainh
+ 		}
+ 
+ 		pos, ok := m.set.Find(*hash)
++		parts[part] = append(parts[part], *hash) // mutant: the transactions the lost block had are marked on the longest chain too
+ 		if !ok {
+-			parts[part] = append(parts[part], *hash)
+-
+ 			return
+ 		}
+ 

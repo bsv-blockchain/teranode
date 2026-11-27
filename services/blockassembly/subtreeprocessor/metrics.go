@@ -28,7 +28,29 @@ var (
 	prometheusSubtreeProcessorCreateTransactionMapDuration prometheus.Histogram
 	prometheusSubtreeProcessorRemoveTx                     prometheus.Histogram
 	prometheusSubtreeProcessorReset                        prometheus.Histogram
-	prometheusSubtreeProcessorDynamicSubtreeSize           prometheus.Gauge
+
+	// prometheusSubtreeProcessorReorgPhase is the wall time of each phase of a fork reorg
+	// (op="reorgBlocks") and of a reset (op="reset"); see phaseTimer.
+	prometheusSubtreeProcessorReorgPhase *prometheus.HistogramVec
+
+	// prometheusSubtreeProcessorReorgTipToStart is the time from block assembly first seeing a tip
+	// change to the processor starting the fork reorg that follows it, the processor's queue wait
+	// included. It is not a phase of reorg_phase_seconds: those add up to the reorg's total, and
+	// this wait comes before it.
+	prometheusSubtreeProcessorReorgTipToStart prometheus.Histogram
+
+	// prometheusSubtreeProcessorReorgFastPathDeclined counts the fork reorgs the in-place fast path
+	// (blockassembly_reorgFastPath) declined before it changed anything, by the first check that failed.
+	// prometheusSubtreeProcessorReorgFastPathApplied counts the ones it applied.
+	prometheusSubtreeProcessorReorgFastPathDeclined *prometheus.CounterVec
+	prometheusSubtreeProcessorReorgFastPathApplied  prometheus.Counter
+
+	prometheusSubtreeProcessorDynamicSubtreeSize prometheus.Gauge
+
+	// prometheusSubtreeProcessorStoredPrefixOldestUnstored is the age in seconds of the oldest
+	// chained subtree that is not in the stored set, 0 when every chained subtree is stored. It
+	// grows while a template stays cut short: the alert on a stored prefix that does not advance.
+	prometheusSubtreeProcessorStoredPrefixOldestUnstored prometheus.Gauge
 
 	// prometheusSubtreeProcessorBlockMaxSizeResizes counts re-chunks of the queue because
 	// the first subtree exceeded blockmaxsize. A resize lasts for one block, so a steadily
@@ -218,12 +240,61 @@ func _initPrometheusMetrics() {
 		},
 	)
 
+	prometheusSubtreeProcessorReorgPhase = promauto.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: "teranode",
+			Subsystem: "subtreeprocessor",
+			Name:      "reorg_phase_seconds",
+			Help:      "Wall time of each phase of a fork reorg (op=reorgBlocks) or reset (op=reset)",
+			Buckets:   prometheus.ExponentialBuckets(0.01, 2, 19),
+		},
+		[]string{"op", "phase"},
+	)
+
+	prometheusSubtreeProcessorReorgTipToStart = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "teranode",
+			Subsystem: "subtreeprocessor",
+			Name:      "reorg_tip_to_start_seconds",
+			Help:      "Time from the start of the block-announcement pass that leads to a fork reorg (a tip change or a best-tip replay) to the processor starting that reorg",
+			Buckets:   prometheus.ExponentialBuckets(0.01, 2, 19),
+		},
+	)
+
+	prometheusSubtreeProcessorReorgFastPathDeclined = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "subtreeprocessor",
+			Name:      "reorg_fast_path_declined_total",
+			Help:      "Fork reorgs the in-place fast path declined before changing anything, by reason",
+		},
+		[]string{"reason"},
+	)
+
+	prometheusSubtreeProcessorReorgFastPathApplied = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "subtreeprocessor",
+			Name:      "reorg_fast_path_applied_total",
+			Help:      "Fork reorgs applied in place by the fast path",
+		},
+	)
+
 	prometheusSubtreeProcessorDynamicSubtreeSize = promauto.NewGauge(
 		prometheus.GaugeOpts{
 			Namespace: "teranode",
 			Subsystem: "subtreeprocessor",
 			Name:      "dynamic_subtree_size",
 			Help:      "Dynamic subtree size in number of transactions",
+		},
+	)
+
+	prometheusSubtreeProcessorStoredPrefixOldestUnstored = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "teranode",
+			Subsystem: "subtreeprocessor",
+			Name:      "stored_prefix_oldest_unstored_seconds",
+			Help:      "Age of the oldest chained subtree not yet in the stored set, with blockassembly_storedPrefixTemplate on",
 		},
 	)
 
