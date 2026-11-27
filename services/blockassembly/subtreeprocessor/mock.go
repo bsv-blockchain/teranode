@@ -383,7 +383,7 @@ func (m *MockSubtreeProcessor) DrainPendingInvalidations() []chainhash.Hash {
 func (m *MockSubtreeProcessor) QueueInvalidation(_ chainhash.Hash) {}
 
 // Reorg implements Interface.Reorg
-func (m *MockSubtreeProcessor) Reorg(moveBackBlocks []*model.Block, modeUpBlocks []*model.Block) error {
+func (m *MockSubtreeProcessor) Reorg(moveBackBlocks []*model.Block, modeUpBlocks []*model.Block, _ ...ReorgOption) error {
 	args := m.Called(moveBackBlocks, modeUpBlocks)
 	return args.Error(0)
 }

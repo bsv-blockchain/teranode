@@ -221,6 +221,17 @@ test-build-pkgs:
 test-heavy:
 	SETTINGS_CONTEXT=test TERANODE_HEAVY_TESTS=1 go test -tags "testtxmetacache" -count=1 -timeout=10m -run '^(TestSortedHashSet_|Test_queueLarge$$|TestDiskTxMap_(ExistenceLayerThroughput|ThroughputTarget|MultiDiskThroughput)$$|TestSubtreeProcessorSizePerformance$$|TestDirectSubtreeCreationPerformance$$|TestOverheadBreakdownDetailed$$|TestSubtreeSizeTimingAnalysis$$|TestBlockSizeScaling$$)' ./services/blockassembly/subtreeprocessor ./services/subtreevalidation
 
+# kill every reorg mutant in services/blockassembly/subtreeprocessor/testdata/mutants (issue 2269)
+.PHONY: reorg-mutants
+reorg-mutants:
+	SETTINGS_CONTEXT=test ./scripts/reorg-mutants.sh
+
+# time a block-assembly fork reorg at large sizes on a big machine (issue 2269); settings are the
+# REORG_SCALE_* variables documented in services/blockassembly/subtreeprocessor/reorg_scale_test.go
+.PHONY: reorg-scale
+reorg-scale:
+	SETTINGS_CONTEXT=test go test -tags "reorgscale testtxmetacache" -count=1 -timeout=4h -run '^TestReorgScale$$' -v ./services/blockassembly/subtreeprocessor
+
 # run the Block Validation known-defect proofs (services/blockvalidation/spec.md, Conformance Gaps).
 # Each is a TestKnownDefect_* test behind the bvgaps build tag that asserts spec-correct behaviour
 # and FAILS until its defect is fixed, so this target is not part of `make test`. When a defect is
