@@ -542,7 +542,7 @@ func TestReorgScenario_FastPathLeavesEveryChainedNodeWithItsSubtreeHint(t *testi
 	}
 }
 
-// The memory gate: live heap plus the set plus the pending set twice (the flat copy of the survivors and the new subtrees) at 48 bytes each must stay within three
+// The memory gate: live heap plus the lost block and the winners' set plus the pending set twice (the flat copy of the survivors and the new subtrees) at 48 bytes each must stay within three
 // quarters of GOMEMLIMIT, when one is set.
 func TestReorgScenario_FastPathMemoryGate(t *testing.T) {
 	defer func(prev func() (uint64, int64)) { reorgMemoryStats = prev }(reorgMemoryStats)
@@ -572,6 +572,14 @@ func TestReorgScenario_FastPathMemoryGate(t *testing.T) {
 		reorgMemoryStats = func() (uint64, int64) { return uint64(limit*3/4) - 200_000, limit }
 
 		requireFastPathDeclines(t, cfg, "memory")
+	})
+
+	t.Run("the lost block tips it over", func(t *testing.T) {
+		// The winners' set and the pending set twice fit in the headroom; the lost block's 1000 hashes x 33 B do not.
+		limit := int64(1 << 20)
+		reorgMemoryStats = func() (uint64, int64) { return uint64(limit*3/4) - 260_000, limit }
+
+		requireFastPathDeclines(t, smallScenarioConfig(), "memory")
 	})
 }
 
