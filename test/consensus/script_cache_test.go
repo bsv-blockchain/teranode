@@ -8,8 +8,8 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2/bscript"
 	"github.com/bsv-blockchain/go-bt/v2/sighash"
 	bec "github.com/bsv-blockchain/go-sdk/primitives/ec"
+	hash "github.com/bsv-blockchain/go-sdk/primitives/hash"
 	"github.com/bsv-blockchain/teranode/errors"
-	"github.com/bsv-blockchain/teranode/services/legacy/bsvutil"
 	"github.com/stretchr/testify/require"
 )
 
@@ -419,5 +419,5 @@ func MakeSignature(key interface{}, sigHashType sighash.Flag) ([]byte, error) {
 
 // Hash160 computes RIPEMD160(SHA256(data))
 func Hash160(data []byte) []byte {
-	return bsvutil.Hash160(data)
+	return hash.Hash160(data)
 }
