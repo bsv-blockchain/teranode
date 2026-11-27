@@ -59,8 +59,7 @@ func readSingleUtxoRecord(t *testing.T, tx *bt.Tx, client *uaerospike.Client, tS
 // batch therefore passed the filter and silently replaced the first-seen spender.
 //
 // Each spend below goes through Spend() in its own call (a distinct batch), so the
-// in-batch FilterConflictingDuplicateSpendClaims guard does not apply — the store
-// itself must reject the double-spend.
+// store itself must reject the double-spend.
 func TestStore_SpendExpressions_CrossBatchDoubleSpend(t *testing.T) {
 	t.Parallel()
 
