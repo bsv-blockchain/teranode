@@ -1,6 +1,7 @@
 package model
 
 import (
+	"encoding/json"
 	"math/big"
 	"testing"
 
@@ -166,4 +167,52 @@ func TestBlock911636Difficulty(t *testing.T) {
 	// The tolerance is set to 0.001 to allow for minor floating point differences
 	require.InDelta(t, expectedDifficulty, difficultyFloat, 0.001,
 		"Difficulty calculation for block 911636 (nBits: 0x180f9ff5)")
+}
+
+// TestNBit_JSONRoundTrip pins the original bug: NBit must survive a
+// Marshal -> Unmarshal round-trip. The old UnmarshalJSON had a value receiver
+// (a silent no-op) and passed the quoted JSON straight to the hex decoder
+// (which rejects the '"'), so this failed on both counts.
+func TestNBit_JSONRoundTrip(t *testing.T) {
+	orig, err := NewNBitFromString("1e0cbb05")
+	require.NoError(t, err)
+
+	data, err := json.Marshal(orig)
+	require.NoError(t, err)
+
+	var got NBit
+	require.NoError(t, json.Unmarshal(data, &got))
+	require.Equal(t, orig.String(), got.String())
+	require.Equal(t, *orig, got)
+}
+
+// TestNBit_UnmarshalJSON covers decoding a single JSON value into an NBit: the
+// happy path and every error return. The length guard must reject a value that
+// is not exactly four bytes in BOTH directions — too short, and too long (a
+// 5-byte value must error rather than be silently truncated by copy).
+func TestNBit_UnmarshalJSON(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		wantErr bool
+		want    string // expected NBit.String() when wantErr is false
+	}{
+		{name: "valid 4-byte hex", input: `"1e0cbb05"`, want: "1e0cbb05"},
+		{name: "too short (3 bytes)", input: `"1e0cbb"`, wantErr: true},
+		{name: "too long (5 bytes)", input: `"001e0cbb05"`, wantErr: true},
+		{name: "not a JSON string", input: `12345678`, wantErr: true},
+		{name: "valid JSON string, invalid hex", input: `"zzzzzzzz"`, wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var nb NBit
+			err := nb.UnmarshalJSON([]byte(tt.input))
+			if tt.wantErr {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, tt.want, nb.String())
+		})
+	}
 }
