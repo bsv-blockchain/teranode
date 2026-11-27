@@ -2832,7 +2832,8 @@ func TestStoreSubtreeData_TimesEachStoreStep(t *testing.T) {
 	<-allDone
 
 	for _, step := range steps {
-		require.Equal(t, before[step].count+1, storeStep(t, step).count, "%s is observed once per store", step)
+		// At least: the histogram is process-global, so a late store of another test may add one.
+		require.GreaterOrEqual(t, storeStep(t, step).count, before[step].count+1, "%s is observed by the store", step)
 	}
 
 	require.GreaterOrEqual(t, storeStep(t, "subtree_write").sum-before["subtree_write"].sum, 0.2,
