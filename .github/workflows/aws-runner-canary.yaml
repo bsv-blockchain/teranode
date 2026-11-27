@@ -32,7 +32,7 @@ jobs:
           free -g
           df -h /
           TOKEN=$(curl -sX PUT http://169.254.169.254/latest/api/token -H 'X-aws-ec2-metadata-token-ttl-seconds: 60')
-          for k in instance-type instance-life-cycle placement/availability-zone; do
+          for k in instance-type instance-life-cycle; do
             echo "$k: $(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/$k)"
           done
 
@@ -55,6 +55,7 @@ jobs:
       - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5
         with:
           go-version-file: go.mod
+          cache: false
 
       - name: Go build (timing only)
         run: time go build ./...
@@ -79,7 +80,7 @@ jobs:
       - name: Host settings
         run: |
           set -x
-          uname -a || true
+          uname -srvmo || true
           ulimit -a || true
           ulimit -Hn || true
           cat /proc/sys/fs/file-max || true
@@ -89,7 +90,7 @@ jobs:
           grep -m1 -E 'Features|CPU part' /proc/cpuinfo || true
           lscpu || true
           free -m || true
-          docker info || true
+          docker info 2>&1 | grep -vE '^ *(Name|ID):' || true
           systemctl show docker containerd -p LimitNOFILE || true
           cat /etc/docker/daemon.json || true
 

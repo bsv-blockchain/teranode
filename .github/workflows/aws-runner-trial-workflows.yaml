@@ -13,6 +13,8 @@ name: AWS runner trial workflows
 #   compatibility).
 # - The Docker Hub logins run unconditionally: their PR-only if: is always
 #   false on a push event.
+# - Nothing saves a cache from this branch: setup-go runs with cache: false,
+#   go-cache only restores main's entries, and golangci-lint skips its save.
 # - Not copied: the ubuntu-latest jobs of teranode_pr_tests.yaml (test,
 #   js-unit-tests, filename-check-report, sonar-inputs), which have no AWS
 #   label of their size.
@@ -367,6 +369,7 @@ jobs:
         uses: golangci/golangci-lint-action@4afd733a84b1f43292c63897423277bb7f4313a9 # v8
         with:
           version: v2.13.2
+          skip-save-cache: true
           args: --timeout=5m --disable gosec --disable prealloc --output.checkstyle.path=golangci-lint-report.xml --output.text.path=stdout
 
       - name: Upload golangci-lint report
@@ -660,6 +663,7 @@ jobs:
         uses: golangci/golangci-lint-action@4afd733a84b1f43292c63897423277bb7f4313a9 # v8
         with:
           version: latest
+          skip-save-cache: true
           args: --timeout=5m --disable gosec --disable prealloc --issues-exit-code=0 --output.checkstyle.path=golangci-lint-report.xml
 
       # No upload: no SONAR_TOKEN, and sonar.scanner.skip makes the scanner CLI
