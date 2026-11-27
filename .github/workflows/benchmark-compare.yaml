@@ -133,13 +133,41 @@ jobs:
           path: main
 
       # One test binary per package and side, so the timed runs below compile nothing.
+      # -funcalign=64 starts every function on a 64-byte boundary. Go's default on amd64
+      # is 32, so code a PR adds elsewhere can move a benchmark by 32 bytes and change
+      # how its loop sits in 64-byte blocks. On the AMD runners that read as a 12% change
+      # in BenchmarkAtomicPointer with identical machine code. The flag only changes the
+      # link step, so the benchmark build cache, built without it, still hits.
       - name: Build benchmark binaries
         run: |
           i=0
           for pkg in ${{ matrix.packages }}; do
-            go test -c -tags testtxmetacache -o "$RUNNER_TEMP/bench/pr/$i.test" "$pkg"
-            (cd main && go test -c -tags testtxmetacache -o "$RUNNER_TEMP/bench/main/$i.test" "$pkg")
+            go test -c -tags testtxmetacache -ldflags=-funcalign=64 -o "$RUNNER_TEMP/bench/pr/$i.test" "$pkg"
+            (cd main && go test -c -tags testtxmetacache -ldflags=-funcalign=64 -o "$RUNNER_TEMP/bench/main/$i.test" "$pkg")
             i=$((i + 1))
+          done
+
+      # Fails when a benchmark function or one of its closures (where b.Run loops live) does
+      # not start on a 64-byte boundary, so an edit or a toolchain that drops -funcalign=64
+      # shows up here. In these cgo-linked binaries nm prints Go functions as t, not T.
+      # Every package in the matrix has benchmarks, so a binary in which none match fails too.
+      - name: Check benchmark functions start on 64-byte boundaries
+        run: |
+          for bin in "$RUNNER_TEMP"/bench/*/*.test; do
+            syms=$(go tool nm "$bin")
+            checked=0
+            while read -r addr _ name; do
+              checked=$((checked + 1))
+              if (( 0x$addr % 64 )); then
+                echo "::error::$name in $bin starts at 0x$addr, not on a 64-byte boundary"
+                exit 1
+              fi
+            done < <(grep -E ' [Tt] github[.]com/bsv-blockchain/teranode/[^ ]*[.]Benchmark' <<< "$syms" || true)
+            if [ "$checked" -eq 0 ]; then
+              echo "::error::no benchmark functions found in $bin"
+              exit 1
+            fi
+            echo "$bin: $checked benchmark functions start on 64-byte boundaries"
           done
 
       # The two sides take turns, one sample each, count times over. When all of one side
