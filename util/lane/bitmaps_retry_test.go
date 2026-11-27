@@ -153,6 +153,12 @@ func TestBitmapsWriteRetryAnOlderSuccessKeepsANewerOutage(t *testing.T) {
 
 	r.succeeded(now.Add(2 * time.Second))
 	require.Equal(t, now.Add(3*time.Second), r.failed(now.Add(3*time.Second)), "a newer success ends it")
+
+	// an older failure noted after a newer one does not move the last failure back
+	r.failed(now.Add(5 * time.Second))
+	r.failed(now.Add(4 * time.Second))
+	r.succeeded(now.Add(4500 * time.Millisecond)) // started between the two failures
+	require.Equal(t, now.Add(3*time.Second), r.failed(now.Add(6*time.Second)), "the outage goes on")
 }
 
 // Through Do: a write in flight while another write fails past the bound, succeeding only then,

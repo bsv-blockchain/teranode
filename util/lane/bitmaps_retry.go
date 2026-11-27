@@ -85,7 +85,10 @@ func (r *BitmapsWriteRetry) failed(now time.Time) time.Time {
 		r.failingSince = now
 	}
 
-	r.lastFailure = now
+	// failures can be noted out of order; the last failure is the latest one
+	if now.After(r.lastFailure) {
+		r.lastFailure = now
+	}
 
 	return r.failingSince
 }
