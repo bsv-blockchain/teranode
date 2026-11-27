@@ -212,10 +212,8 @@ func outerErrorLayers(err error) string {
 	return strings.Join(layers[:min(2, len(layers))], " -> ")
 }
 
-// A decline falls through to the move-back loop: the reset-flag defer of reorgBlocks is armed before
-// the hook, so a decline that returned would mark the processor as needing a reset. Here the removeMap
-// holds a lost-block transaction no winner has, which the slow path drops and the fast path cannot
-// reproduce.
+// A decline falls through to the move-back loop: a decline that returned would arm the reset flag of
+// reorgBlocks. The removeMap holds a lost-block transaction no winner has, which only the slow path drops.
 func TestReorgScenario_FastPathDeclineFallsThrough(t *testing.T) {
 	cfg := smallScenarioConfig()
 	cfg.removeMapD1 = 5
@@ -602,14 +600,9 @@ func TestReorgScenario_FastPathDeclinesMoreThanOneBackBlock(t *testing.T) {
 	require.Equal(t, sc.pendingOrder(), txHashes(assemblyNodes(sc.stp)), "nothing changed")
 }
 
-// The union-filtered final drain (design section 5 item 6) was the one named divergence. The slow path
-// drains after each forward step against that step's block only, so a transaction the first block
-// mined, arriving between the two steps, is kept; the fast path drains once against both blocks and
-// drops it. The arrival is injected at the same point of each path.
-//
-// With the kept mined sets on (blockassembly_minedTxSetRetention, the default) the slow path's later
-// drain also filters what an earlier block mined, so the paths agree and nothing is left out of the
-// comparison. With retention 0 the divergence remains, and only those hashes are left out of it.
+// The union-filtered final drain (design section 5 item 6): the slow path drains per forward step, the
+// fast path once against both blocks. With kept mined sets on the paths agree; with retention 0 only the
+// diverging hashes are left out of the comparison.
 func TestReorgDifferential_FastPathUnionFilteredFinalDrain(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
@@ -1175,48 +1168,67 @@ func TestReorgScenario_FastPathMapWritesDoNotGrowWithThePendingSet(t *testing.T)
 	require.Equal(t, small.deleted, large.deleted)
 }
 
-// The awaited stores of PR 2b hold for the fast path too: its subtrees are stored before the first
+// The awaited stores of PR 2b hold for the fast path: its subtrees are stored before the first
 // longest-chain mark and announced after it, and a failed store fails the reorg before any mark.
 func TestReorgScenario_FastPathStoresBeforeTheMarksAndAnnouncesAfter(t *testing.T) {
-	sc, r, _ := newAwaitedStoreScenario(t, 5*time.Second, answerStored)
+	for _, c := range []struct {
+		name   string
+		answer func(req NewSubtreeRequest)
+		fails  bool
+	}{
+		{"stored", answerStored, false},
+		{"failed", failAwaited, true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			sc, r, logger := newAwaitedStoreScenario(t, 5*time.Second, c.answer)
 
-	var rec fastPathRun
+			var rec fastPathRun
 
-	require.NoError(t, recordingFastPath(&rec)(t, sc))
-	require.True(t, rec.applied, "declined: %v", rec.reasons)
+			err := recordingFastPath(&rec)(t, sc)
 
-	r.mu.Lock()
-	defer r.mu.Unlock()
+			require.True(t, rec.applied, "declined: %v", rec.reasons)
 
-	require.NotEmpty(t, r.awaited, "the reorg waits for the stores of the subtrees it built")
+			r.mu.Lock()
+			require.NotEmpty(t, r.awaited, "the reorg waits for the stores of the subtrees it built")
 
-	for _, marks := range r.awaited {
-		require.Zero(t, marks, "every awaited store is sent before the first longest-chain mark")
+			for _, marks := range r.awaited {
+				require.Zero(t, marks, "every awaited store is sent before the first longest-chain mark")
+			}
+
+			r.mu.Unlock()
+
+			if c.fails {
+				require.Error(t, err)
+				require.Zero(t, sc.utxo.markCount(true)+sc.utxo.markCount(false), "no longest-chain mark is written")
+				require.True(t, sc.stp.failedForkReorgNeedsReset.Load(), "only a reset may follow")
+				require.NotContains(t, logger.phases("reorgBlocks"), "processed_at", "no forward block is marked processed")
+
+				r.mu.Lock()
+				defer r.mu.Unlock()
+
+				require.Empty(t, r.announced, "nothing is announced")
+
+				return
+			}
+
+			require.NoError(t, err)
+
+			// nothing waits for the announcing send, so the listener may take it after the reorg returns
+			require.Eventually(t, func() bool {
+				r.mu.Lock()
+				defer r.mu.Unlock()
+
+				return len(r.announced) > 0
+			}, 5*time.Second, 10*time.Millisecond, "the reorg announces its subtrees")
+
+			r.mu.Lock()
+			defer r.mu.Unlock()
+
+			for _, marks := range r.announced {
+				require.Positive(t, marks, "nothing is announced before the marks")
+			}
+		})
 	}
-
-	require.NotEmpty(t, r.announced)
-
-	for _, marks := range r.announced {
-		require.Positive(t, marks, "nothing is announced before the marks")
-	}
-}
-
-func TestReorgScenario_FastPathFailedStoreFailsTheReorgBeforeTheMarks(t *testing.T) {
-	sc, r, logger := newAwaitedStoreScenario(t, 5*time.Second, failAwaited)
-
-	var rec fastPathRun
-
-	require.Error(t, recordingFastPath(&rec)(t, sc))
-	require.True(t, rec.applied, "declined: %v", rec.reasons)
-
-	require.Zero(t, sc.utxo.markCount(true)+sc.utxo.markCount(false), "no longest-chain mark is written")
-	require.True(t, sc.stp.failedForkReorgNeedsReset.Load(), "only a reset may follow")
-	require.NotContains(t, logger.phases("reorgBlocks"), "processed_at", "no forward block is marked processed")
-
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	require.Empty(t, r.announced, "nothing is announced")
 }
 
 // Design section 3.2: every node of the installed subtrees has an entry in the tx map at every instant.
