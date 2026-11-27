@@ -68,7 +68,7 @@ func TestSpendSeamHelperProcess(t *testing.T) {
 
 	f := &tracingSequentialStore{fakeSequentialStore{spends: []*Spend{{}}, createMeta: &meta.Data{}}}
 
-	_, _, err := SequentialSpendAndCreate(context.Background(), ulogger.TestLogger{}, f, bt.NewTx(), 100, opts...)
+	_, _, err := SequentialSpendAndCreate(context.Background(), ulogger.TestLogger{}, f, bt.NewTx(), 100, false, opts...)
 	require.NoError(t, err)
 
 	os.Exit(0)
