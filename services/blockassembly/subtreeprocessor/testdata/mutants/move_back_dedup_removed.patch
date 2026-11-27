@@ -1,8 +1,11 @@
 diff --git a/services/blockassembly/subtreeprocessor/SubtreeProcessor.go b/services/blockassembly/subtreeprocessor/SubtreeProcessor.go
-index eaa1b059b..86a603986 100644
+index 3942b3db1..e8ec7361a 100644
 --- a/services/blockassembly/subtreeprocessor/SubtreeProcessor.go
 +++ b/services/blockassembly/subtreeprocessor/SubtreeProcessor.go
-@@ -6765,8 +6765,8 @@ func (stp *SubtreeProcessor) moveBackBlockBulkBuild(ctx context.Context, block *
+@@ -6764,14 +6764,14 @@ func (stp *SubtreeProcessor) moveBackBlockBulkBuild(ctx context.Context, block *
+ 					position = positions[i]
+ 				}
+ 
  				_, wasSet[i] = stp.currentTxMap.SetIfNotExistsAt(hash, flatInpoints[i], position)
  			}
  		}
@@ -13,3 +16,6 @@ index eaa1b059b..86a603986 100644
  				allNodes = append(allNodes, flatNodes[i])
  			}
  		}
+ 	}
+ 
+ 	// Step 4: Collect previous mempool nodes (already in currentTxMap). One that spends a

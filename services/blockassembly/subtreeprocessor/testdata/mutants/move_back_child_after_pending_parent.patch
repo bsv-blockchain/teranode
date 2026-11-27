@@ -1,8 +1,11 @@
 diff --git a/services/blockassembly/subtreeprocessor/SubtreeProcessor.go b/services/blockassembly/subtreeprocessor/SubtreeProcessor.go
-index eaa1b059b..ec6eaf841 100644
+index 3942b3db1..a998ed7b5 100644
 --- a/services/blockassembly/subtreeprocessor/SubtreeProcessor.go
 +++ b/services/blockassembly/subtreeprocessor/SubtreeProcessor.go
-@@ -6723,6 +6723,7 @@ func (stp *SubtreeProcessor) moveBackBlockBulkBuild(ctx context.Context, block *
+@@ -6722,12 +6722,13 @@ func (stp *SubtreeProcessor) moveBackBlockBulkBuild(ctx context.Context, block *
+ 		blockNodeCount-- // subtract coinbase from first subtree
+ 	}
+ 
  	flatHashes := make([]chainhash.Hash, 0, blockNodeCount)
  	flatInpoints := make([]*subtreepkg.TxInpoints, 0, blockNodeCount)
  	flatNodes := make([]subtreepkg.Node, 0, blockNodeCount)
@@ -10,7 +13,13 @@ index eaa1b059b..ec6eaf841 100644
  
  	// The block's transactions were validated at its height: keep out the ones under other
  	// rules than the next block's, as on every other way into the template.
-@@ -6765,11 +6766,29 @@ func (stp *SubtreeProcessor) moveBackBlockBulkBuild(ctx context.Context, block *
+ 	droppedFromBlock := false
+ 
+ 	stp.droppedMu.Lock()
+@@ -6764,17 +6765,35 @@ func (stp *SubtreeProcessor) moveBackBlockBulkBuild(ctx context.Context, block *
+ 					position = positions[i]
+ 				}
+ 
  				_, wasSet[i] = stp.currentTxMap.SetIfNotExistsAt(hash, flatInpoints[i], position)
  			}
  		}
@@ -42,7 +51,13 @@ index eaa1b059b..ec6eaf841 100644
  	}
  
  	// Step 4: Collect previous mempool nodes (already in currentTxMap). One that spends a
-@@ -6795,6 +6814,8 @@ func (stp *SubtreeProcessor) moveBackBlockBulkBuild(ctx context.Context, block *
+ 	// transaction Step 3 kept out goes too, with its own descendants: the template would
+ 	// otherwise hold a child without its parent. Previous nodes are in template order,
+ 	// parents first, so one pass finds every descendant.
+@@ -6794,12 +6813,14 @@ func (stp *SubtreeProcessor) moveBackBlockBulkBuild(ctx context.Context, block *
+ 				continue
+ 			}
+ 			allNodes = append(allNodes, node)
  		}
  	}
  
@@ -51,3 +66,6 @@ index eaa1b059b..ec6eaf841 100644
  	// Step 5: Determine subtree size
  	subtreeSize := int(stp.currentItemsPerFile.Load())
  	if !createProperlySizedSubtrees {
+ 		subtreeSize = 1024 * 1024
+ 	}
+ 
