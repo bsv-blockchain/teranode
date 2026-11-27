@@ -550,6 +550,41 @@ func TestJobSubtreesStayMapped_GetCandidateBlockAfterASiblingReorg(t *testing.T)
 	m.requireStillMapped(t, job, "a cached job")
 }
 
+// A request that took a job must keep its subtrees mapped after Delete, DeleteAll or an
+// overwrite of the id, until its hold is released.
+func TestHeldJobSubtreesStayMappedAfterTheJobLeavesTheStore(t *testing.T) {
+	leave := map[string]func(m *mmapJobServer, id chainhash.Hash){
+		"Delete":    func(m *mmapJobServer, id chainhash.Hash) { m.ba.jobStore.Delete(id) },
+		"DeleteAll": func(m *mmapJobServer, _ chainhash.Hash) { m.ba.jobStore.DeleteAll() },
+		"overwrite": func(m *mmapJobServer, id chainhash.Hash) {
+			old := m.ba.jobStore.Get(id).Value()
+			m.ba.jobStore.Set(id, &subtreeprocessor.Job{ID: old.ID, MiningCandidate: old.MiningCandidate}, jobTTL)
+		},
+	}
+
+	for name, leaveStore := range leave {
+		t.Run(name, func(t *testing.T) {
+			m := newMmapJobServer(t, false)
+
+			id, job := m.storeJob(t)
+
+			hold := m.ba.readerPins.NewHold()
+			require.NotNil(t, m.ba.holdJob(hold, id))
+
+			leaveStore(m, id)
+			m.reset(t)
+
+			m.requireNotInstalled(t, job)
+			m.requireStillMapped(t, job, "a request that took the job")
+
+			hold.Release()
+			m.reset(t)
+
+			m.requireClosed(t, job)
+		})
+	}
+}
+
 // chainedSubtrees is what a mining candidate would be built from now.
 func chainedSubtrees(ba *BlockAssembly) []*subtreepkg.Subtree {
 	if data := ba.blockAssembler.subtreeProcessor.GetPrecomputedMiningData(); data != nil {
