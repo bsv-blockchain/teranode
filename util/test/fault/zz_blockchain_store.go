@@ -4,6 +4,7 @@ package fault
 
 import (
 	"context"
+	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/model"
@@ -11,6 +12,7 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/blockchain"
 	"github.com/bsv-blockchain/teranode/stores/blockchain/options"
 	"github.com/bsv-blockchain/teranode/util"
+	"github.com/bsv-blockchain/teranode/util/lane"
 	"github.com/bsv-blockchain/teranode/util/usql"
 )
 
@@ -114,6 +116,32 @@ func (w *BlockchainStore) Close(p0 context.Context) (r0 error) {
 	}
 
 	r0 = w.inner.Close(p0)
+	r0 = c.after(r0)
+
+	return r0
+}
+
+func (w *BlockchainStore) CloseStaleLaneLeases(p0 context.Context, p1 time.Duration) (r0 int, r1 error) {
+	c := w.plan.enter(p0, StoreBlockchainStore, "CloseStaleLaneLeases", true, p1)
+	if err := c.before(); err != nil {
+		r1 = c.after(err)
+		return r0, r1
+	}
+
+	r0, r1 = w.inner.CloseStaleLaneLeases(p0, p1)
+	r1 = c.after(r1)
+
+	return r0, r1
+}
+
+func (w *BlockchainStore) CompleteLaneConversionSegment(p0 context.Context, p1 uint32, p2 chainhash.Hash) (r0 error) {
+	c := w.plan.enter(p0, StoreBlockchainStore, "CompleteLaneConversionSegment", true, p1, p2)
+	if err := c.before(); err != nil {
+		r0 = c.after(err)
+		return r0
+	}
+
+	r0 = w.inner.CompleteLaneConversionSegment(p0, p1, p2)
 	r0 = c.after(r0)
 
 	return r0
@@ -633,6 +661,45 @@ func (w *BlockchainStore) Health(p0 context.Context, p1 bool) (r0 int, r1 string
 	return r0, r1, r2
 }
 
+func (w *BlockchainStore) InsertLaneConversionBlocks(p0 context.Context, p1 uint32, p2 []lane.ConversionBlock) (r0 error) {
+	c := w.plan.enter(p0, StoreBlockchainStore, "InsertLaneConversionBlocks", true, p1, p2)
+	if err := c.before(); err != nil {
+		r0 = c.after(err)
+		return r0
+	}
+
+	r0 = w.inner.InsertLaneConversionBlocks(p0, p1, p2)
+	r0 = c.after(r0)
+
+	return r0
+}
+
+func (w *BlockchainStore) InsertLaneConversionSegment(p0 context.Context, p1 lane.ConversionSegment) (r0 error) {
+	c := w.plan.enter(p0, StoreBlockchainStore, "InsertLaneConversionSegment", true, p1)
+	if err := c.before(); err != nil {
+		r0 = c.after(err)
+		return r0
+	}
+
+	r0 = w.inner.InsertLaneConversionSegment(p0, p1)
+	r0 = c.after(r0)
+
+	return r0
+}
+
+func (w *BlockchainStore) InsertLaneMapRows(p0 context.Context, p1 uint32, p2 []lane.MapRow) (r0 error) {
+	c := w.plan.enter(p0, StoreBlockchainStore, "InsertLaneMapRows", true, p1, p2)
+	if err := c.before(); err != nil {
+		r0 = c.after(err)
+		return r0
+	}
+
+	r0 = w.inner.InsertLaneMapRows(p0, p1, p2)
+	r0 = c.after(r0)
+
+	return r0
+}
+
 func (w *BlockchainStore) InvalidateBlock(p0 context.Context, p1 *chainhash.Hash) (r0 []chainhash.Hash, r1 error) {
 	c := w.plan.enter(p0, StoreBlockchainStore, "InvalidateBlock", true, p1)
 	if err := c.before(); err != nil {
@@ -641,6 +708,84 @@ func (w *BlockchainStore) InvalidateBlock(p0 context.Context, p1 *chainhash.Hash
 	}
 
 	r0, r1 = w.inner.InvalidateBlock(p0, p1)
+	r1 = c.after(r1)
+
+	return r0, r1
+}
+
+func (w *BlockchainStore) LaneCapGrants(p0 context.Context, p1 uint32) (r0 []lane.CapGrant, r1 error) {
+	c := w.plan.enter(p0, StoreBlockchainStore, "LaneCapGrants", true, p1)
+	if err := c.before(); err != nil {
+		r1 = c.after(err)
+		return r0, r1
+	}
+
+	r0, r1 = w.inner.LaneCapGrants(p0, p1)
+	r1 = c.after(r1)
+
+	return r0, r1
+}
+
+func (w *BlockchainStore) LaneConversionBlocks(p0 context.Context, p1 uint32) (r0 []lane.ConversionBlock, r1 error) {
+	c := w.plan.enter(p0, StoreBlockchainStore, "LaneConversionBlocks", true, p1)
+	if err := c.before(); err != nil {
+		r1 = c.after(err)
+		return r0, r1
+	}
+
+	r0, r1 = w.inner.LaneConversionBlocks(p0, p1)
+	r1 = c.after(r1)
+
+	return r0, r1
+}
+
+func (w *BlockchainStore) LaneConversionComplete(p0 context.Context, p1 uint32) (r0 bool, r1 error) {
+	c := w.plan.enter(p0, StoreBlockchainStore, "LaneConversionComplete", true, p1)
+	if err := c.before(); err != nil {
+		r1 = c.after(err)
+		return r0, r1
+	}
+
+	r0, r1 = w.inner.LaneConversionComplete(p0, p1)
+	r1 = c.after(r1)
+
+	return r0, r1
+}
+
+func (w *BlockchainStore) LaneConversionSegments(p0 context.Context) (r0 []lane.ConversionSegment, r1 error) {
+	c := w.plan.enter(p0, StoreBlockchainStore, "LaneConversionSegments", true)
+	if err := c.before(); err != nil {
+		r1 = c.after(err)
+		return r0, r1
+	}
+
+	r0, r1 = w.inner.LaneConversionSegments(p0)
+	r1 = c.after(r1)
+
+	return r0, r1
+}
+
+func (w *BlockchainStore) LaneMapRows(p0 context.Context, p1 uint32) (r0 []lane.MapRow, r1 error) {
+	c := w.plan.enter(p0, StoreBlockchainStore, "LaneMapRows", true, p1)
+	if err := c.before(); err != nil {
+		r1 = c.after(err)
+		return r0, r1
+	}
+
+	r0, r1 = w.inner.LaneMapRows(p0, p1)
+	r1 = c.after(r1)
+
+	return r0, r1
+}
+
+func (w *BlockchainStore) LaneMapRowsEndingAbove(p0 context.Context, p1 uint8, p2 uint64) (r0 []lane.BlockMapRow, r1 error) {
+	c := w.plan.enter(p0, StoreBlockchainStore, "LaneMapRowsEndingAbove", true, p1, p2)
+	if err := c.before(); err != nil {
+		r1 = c.after(err)
+		return r0, r1
+	}
+
+	r0, r1 = w.inner.LaneMapRowsEndingAbove(p0, p1, p2)
 	r1 = c.after(r1)
 
 	return r0, r1
@@ -685,6 +830,45 @@ func (w *BlockchainStore) MainChainBlockHashesByHeights(p0 context.Context, p1 *
 	return r0, r1, r2
 }
 
+func (w *BlockchainStore) OpenLaneLease(p0 context.Context, p1 options.LaneLeaseOpen) (r0 lane.LeaseID, r1 lane.Grant, r2 int, r3 error) {
+	c := w.plan.enter(p0, StoreBlockchainStore, "OpenLaneLease", true, p1)
+	if err := c.before(); err != nil {
+		r3 = c.after(err)
+		return r0, r1, r2, r3
+	}
+
+	r0, r1, r2, r3 = w.inner.OpenLaneLease(p0, p1)
+	r3 = c.after(r3)
+
+	return r0, r1, r2, r3
+}
+
+func (w *BlockchainStore) ReleaseLaneLease(p0 context.Context, p1 options.LaneLeaseRelease) (r0 bool, r1 error) {
+	c := w.plan.enter(p0, StoreBlockchainStore, "ReleaseLaneLease", true, p1)
+	if err := c.before(); err != nil {
+		r1 = c.after(err)
+		return r0, r1
+	}
+
+	r0, r1 = w.inner.ReleaseLaneLease(p0, p1)
+	r1 = c.after(r1)
+
+	return r0, r1
+}
+
+func (w *BlockchainStore) RenewLaneLease(p0 context.Context, p1 options.LaneLeaseRenew) (r0 lane.Grant, r1 bool, r2 bool, r3 error) {
+	c := w.plan.enter(p0, StoreBlockchainStore, "RenewLaneLease", true, p1)
+	if err := c.before(); err != nil {
+		r3 = c.after(err)
+		return r0, r1, r2, r3
+	}
+
+	r0, r1, r2, r3 = w.inner.RenewLaneLease(p0, p1)
+	r3 = c.after(r3)
+
+	return r0, r1, r2, r3
+}
+
 func (w *BlockchainStore) RevalidateBlock(p0 context.Context, p1 *chainhash.Hash) (r0 error) {
 	c := w.plan.enter(p0, StoreBlockchainStore, "RevalidateBlock", true, p1)
 	if err := c.before(); err != nil {
@@ -698,14 +882,14 @@ func (w *BlockchainStore) RevalidateBlock(p0 context.Context, p1 *chainhash.Hash
 	return r0
 }
 
-func (w *BlockchainStore) SetBlockMinedSet(p0 context.Context, p1 *chainhash.Hash) (r0 error) {
-	c := w.plan.enter(p0, StoreBlockchainStore, "SetBlockMinedSet", true, p1)
+func (w *BlockchainStore) SetBlockMinedSet(p0 context.Context, p1 *chainhash.Hash, p2 *uint64) (r0 error) {
+	c := w.plan.enter(p0, StoreBlockchainStore, "SetBlockMinedSet", true, p1, p2)
 	if err := c.before(); err != nil {
 		r0 = c.after(err)
 		return r0
 	}
 
-	r0 = w.inner.SetBlockMinedSet(p0, p1)
+	r0 = w.inner.SetBlockMinedSet(p0, p1, p2)
 	r0 = c.after(r0)
 
 	return r0

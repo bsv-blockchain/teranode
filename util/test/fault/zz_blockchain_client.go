@@ -11,6 +11,7 @@ import (
 	"github.com/bsv-blockchain/teranode/services/blockchain/blockchain_api"
 	"github.com/bsv-blockchain/teranode/stores/blob/storetypes"
 	"github.com/bsv-blockchain/teranode/stores/blockchain/options"
+	"github.com/bsv-blockchain/teranode/util/lane"
 )
 
 // BlockchainClient decorates blockchain.ClientI with the rules of a Plan. Every method is delegated explicitly, so a
@@ -765,6 +766,32 @@ func (w *BlockchainClient) IsFullyReady(p0 context.Context) (r0 bool, r1 error) 
 	return r0, r1
 }
 
+func (w *BlockchainClient) LaneCapGrants(p0 context.Context, p1 uint32) (r0 []lane.CapGrant, r1 error) {
+	c := w.plan.enter(p0, StoreBlockchain, "LaneCapGrants", true, p1)
+	if err := c.before(); err != nil {
+		r1 = c.after(err)
+		return r0, r1
+	}
+
+	r0, r1 = w.inner.LaneCapGrants(p0, p1)
+	r1 = c.after(r1)
+
+	return r0, r1
+}
+
+func (w *BlockchainClient) LaneMapRows(p0 context.Context, p1 uint32) (r0 []lane.MapRow, r1 error) {
+	c := w.plan.enter(p0, StoreBlockchain, "LaneMapRows", true, p1)
+	if err := c.before(); err != nil {
+		r1 = c.after(err)
+		return r0, r1
+	}
+
+	r0, r1 = w.inner.LaneMapRows(p0, p1)
+	r1 = c.after(r1)
+
+	return r0, r1
+}
+
 func (w *BlockchainClient) ListScheduledDeletions(p0 context.Context, p1 uint32, p2 uint32, p3 storetypes.BlobStoreType, p4 bool, p5 int, p6 int) (r0 []*blockchain_api.ScheduledDeletion, r1 int, r2 error) {
 	c := w.plan.enter(p0, StoreBlockchain, "ListScheduledDeletions", true, p1, p2, p3, p4, p5, p6)
 	if err := c.before(); err != nil {
@@ -791,6 +818,32 @@ func (w *BlockchainClient) LocateBlockHeaders(p0 context.Context, p1 []*chainhas
 	return r0, r1
 }
 
+func (w *BlockchainClient) OpenLaneLease(p0 context.Context, p1 string) (r0 lane.LeaseID, r1 lane.Grant, r2 error) {
+	c := w.plan.enter(p0, StoreBlockchain, "OpenLaneLease", true, p1)
+	if err := c.before(); err != nil {
+		r2 = c.after(err)
+		return r0, r1, r2
+	}
+
+	r0, r1, r2 = w.inner.OpenLaneLease(p0, p1)
+	r2 = c.after(r2)
+
+	return r0, r1, r2
+}
+
+func (w *BlockchainClient) ReleaseLaneLease(p0 context.Context, p1 lane.Release) (r0 bool, r1 error) {
+	c := w.plan.enter(p0, StoreBlockchain, "ReleaseLaneLease", true, p1)
+	if err := c.before(); err != nil {
+		r1 = c.after(err)
+		return r0, r1
+	}
+
+	r0, r1 = w.inner.ReleaseLaneLease(p0, p1)
+	r1 = c.after(r1)
+
+	return r0, r1
+}
+
 func (w *BlockchainClient) RemoveBlobDeletion(p0 context.Context, p1 int64) (r0 error) {
 	c := w.plan.enter(p0, StoreBlockchain, "RemoveBlobDeletion", true, p1)
 	if err := c.before(); err != nil {
@@ -802,6 +855,19 @@ func (w *BlockchainClient) RemoveBlobDeletion(p0 context.Context, p1 int64) (r0 
 	r0 = c.after(r0)
 
 	return r0
+}
+
+func (w *BlockchainClient) RenewLaneLease(p0 context.Context, p1 lane.Renewal) (r0 lane.RenewResult, r1 error) {
+	c := w.plan.enter(p0, StoreBlockchain, "RenewLaneLease", true, p1)
+	if err := c.before(); err != nil {
+		r1 = c.after(err)
+		return r0, r1
+	}
+
+	r0, r1 = w.inner.RenewLaneLease(p0, p1)
+	r1 = c.after(r1)
+
+	return r0, r1
 }
 
 func (w *BlockchainClient) ReportPeerFailure(p0 context.Context, p1 *chainhash.Hash, p2 string, p3 string, p4 string) (r0 error) {
@@ -882,14 +948,14 @@ func (w *BlockchainClient) SendNotification(p0 context.Context, p1 *blockchain_a
 	return r0
 }
 
-func (w *BlockchainClient) SetBlockMinedSet(p0 context.Context, p1 *chainhash.Hash) (r0 error) {
-	c := w.plan.enter(p0, StoreBlockchain, "SetBlockMinedSet", true, p1)
+func (w *BlockchainClient) SetBlockMinedSet(p0 context.Context, p1 *chainhash.Hash, p2 uint64) (r0 error) {
+	c := w.plan.enter(p0, StoreBlockchain, "SetBlockMinedSet", true, p1, p2)
 	if err := c.before(); err != nil {
 		r0 = c.after(err)
 		return r0
 	}
 
-	r0 = w.inner.SetBlockMinedSet(p0, p1)
+	r0 = w.inner.SetBlockMinedSet(p0, p1, p2)
 	r0 = c.after(r0)
 
 	return r0
