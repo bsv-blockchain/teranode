@@ -27,6 +27,7 @@ import (
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/services/blockassembly/blockassembly_api"
+	"github.com/bsv-blockchain/teranode/services/blockassembly/mining"
 	"github.com/bsv-blockchain/teranode/services/blockassembly/subtreeprocessor"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/settings"
@@ -106,6 +107,7 @@ func newMmapJobServer(t *testing.T, gated bool) *mmapJobServer {
 		// (settleTemplate), and with this on that rebuild drops each transaction whose parent is
 		// missing. Parent validation is not what these tests cover.
 		s.BlockAssembly.OnRestartRemoveInvalidParentChainTxs = false
+		s.BlockAssembly.SubmitMiningSolutionWaitForResponse = true
 
 		if gated {
 			// one worker, so the second subtree waits in the queue while the first write is blocked
@@ -582,6 +584,124 @@ func TestHeldJobSubtreesStayMappedAfterTheJobLeavesTheStore(t *testing.T) {
 
 			m.requireClosed(t, job)
 		})
+	}
+}
+
+// A close that runs between retainedSubtrees' two reads must still see a job a request holds,
+// even when the request takes the job and the job leaves the store inside that gap.
+func TestRetainedSubtreesSeeAJobHeldAndDeletedBetweenItsTwoReads(t *testing.T) {
+	m := newMmapJobServer(t, false)
+
+	id, job := m.storeJob(t)
+
+	hold := m.ba.readerPins.NewHold()
+	defer hold.Release()
+
+	// holdJob and the Delete run on their own goroutine: with the reads under one lock with
+	// holdJob, it cannot start before the reads end, so the wait below runs out.
+	m.ba.afterPinnedRead = func() {
+		done := make(chan struct{})
+
+		go func() {
+			defer close(done)
+
+			m.ba.holdJob(hold, id)
+			m.ba.jobStore.Delete(id)
+		}()
+
+		select {
+		case <-done:
+		case <-time.After(300 * time.Millisecond):
+		}
+
+		m.ba.afterPinnedRead = nil
+	}
+
+	retained := m.ba.retainedSubtrees()
+
+	require.Contains(t, retained, job.subtrees[0], "the close would unmap a subtree the request holds")
+}
+
+// A handler paused after it took a job, while the job leaves the store and the subtrees are
+// retired and closed, must find them mapped when it resumes, and let go of them when it returns.
+func TestHandlersKeepAJobsSubtreesMappedAfterItLeavesTheStore(t *testing.T) {
+	calls := map[string]func(t *testing.T, m *mmapJobServer, id chainhash.Hash) error{
+		"GetCandidateBlock": func(t *testing.T, m *mmapJobServer, id chainhash.Hash) error {
+			_, err := m.ba.GetCandidateBlock(t.Context(), &blockassembly_api.GetCandidateBlockRequest{Id: id[:]})
+			return err
+		},
+		"SubmitMiningSolution": func(t *testing.T, m *mmapJobServer, id chainhash.Hash) error {
+			solution, err := mining.Mine(t.Context(), m.ba.settings, m.ba.jobStore.Get(id).Value().MiningCandidate, nil)
+			require.NoError(t, err)
+
+			_, err = m.ba.SubmitMiningSolution(t.Context(), &blockassembly_api.SubmitMiningSolutionRequest{
+				Id: id[:], Nonce: solution.Nonce, Time: solution.Time, Version: solution.Version, CoinbaseTx: solution.Coinbase,
+			})
+
+			return err
+		},
+	}
+	leaves := map[string]func(m *mmapJobServer, id chainhash.Hash){
+		"Delete":    func(m *mmapJobServer, id chainhash.Hash) { m.ba.jobStore.Delete(id) },
+		"DeleteAll": func(m *mmapJobServer, _ chainhash.Hash) { m.ba.jobStore.DeleteAll() },
+	}
+
+	for callName, call := range calls {
+		for leaveName, leave := range leaves {
+			t.Run(callName+"/"+leaveName, func(t *testing.T) {
+				initPrometheusMetrics()
+
+				m := newMmapJobServer(t, false)
+
+				id, job := m.storeJob(t)
+
+				reached, resume := make(chan struct{}), make(chan struct{})
+				m.ba.beforeJobSubtreesRead = func() {
+					close(reached)
+					<-resume
+				}
+
+				// A failed test leaves the handler paused rather than reading what was unmapped.
+				t.Cleanup(func() {
+					if !t.Failed() {
+						select {
+						case <-resume:
+						default:
+							close(resume)
+						}
+					}
+				})
+
+				result := make(chan error, 1)
+
+				go func() { result <- call(t, m, id) }()
+
+				select {
+				case <-reached:
+				case err := <-result:
+					require.FailNow(t, "the handler returned before it read the job's subtrees", "%v", err)
+				case <-time.After(10 * time.Second):
+					require.FailNow(t, "the handler never reached the job's subtrees")
+				}
+
+				leave(m, id)
+				m.reset(t)
+
+				m.requireNotInstalled(t, job)
+				m.requireStillMapped(t, job, "a handler that took the job")
+
+				close(resume)
+
+				select {
+				case err := <-result:
+					require.NoError(t, err)
+				case <-time.After(10 * time.Second):
+					require.FailNow(t, "the handler did not finish")
+				}
+
+				require.Empty(t, m.ba.readerPins.Pinned(), "the handler returned without releasing its hold")
+			})
+		}
 	}
 }
 
