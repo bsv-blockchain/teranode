@@ -464,11 +464,9 @@ func TestFailedClearsError(t *testing.T) {
 	t.Run("a long non-Aerospike reason is cut", func(t *testing.T) {
 		store := newTestStoreForGet(t)
 
-		err := store.failedClearsError([]failedClear{{tx, 1, errors.NewProcessingError(strings.Repeat("x", 64<<10))}})
-		_, reason, found := strings.Cut(err.Error(), " records 1 (")
-		require.True(t, found)
-		require.True(t, strings.HasSuffix(reason, "...)"), "the reason is cut")
-		require.Len(t, strings.TrimSuffix(reason, "...)"), 256, "the reason keeps exactly 256 bytes")
+		long := errors.NewProcessingError("start of the failure " + strings.Repeat("x", 64<<10) + " end")
+		err := store.failedClearsError([]failedClear{{tx, 1, long}})
+		require.ErrorContains(t, err, " records 1 ("+long.Error()[:256]+"...)", "the reason keeps the first 256 bytes")
 
 		short := errors.NewProcessingError("short")
 		require.Equal(t, short.Error(), clearFailureReason(short), "a reason under the limit is kept whole")
