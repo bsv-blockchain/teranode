@@ -7,6 +7,7 @@
     - [2.1 Command Initialization](#21-command-initialization)
     - [2.2 Processing Headers](#22-processing-headers)
     - [2.3 Processing UTXOs](#23-processing-utxos)
+    - [2.4 Lane positions at `utxostore_laneMigration=shadow`](#24-lane-positions-at-utxostore_lanemigrationshadow)
 3. [Data Model](#3-data-model)
 4. [Technology](#4-technology)
 5. [Directory Structure and Main Files](#5-directory-structure-and-main-files)
@@ -75,6 +76,28 @@ If UTXO processing is not skipped:
     - The transaction is stored in the UTXO store.
 6. Each pass counts every transaction and UTXO in the file and checks the
    totals against the file's footer, so a truncated file fails the import.
+
+### 2.4 Lane positions at `utxostore_laneMigration=shadow`
+
+At `off` the seeder writes no lane positions. At `shadow` it also:
+
+1. Reads the UTXO file once more to count its records by block height. A
+   snapshot is sorted by transaction ID, so this lets each block's records
+   take one run of positions.
+2. Takes one grant of positions from the blockchain store, sized to the
+   file's record count, and records it under the snapshot's tip hash. A
+   re-run of the same snapshot reuses it, so each record gets the same
+   position again.
+3. Gives each record the next position of its height; coinbases take the
+   positions after every height.
+4. After the import and the header pass, writes one seeded lane map row per
+   block, listing the block's transactions other than its coinbase, before
+   the BlockAssembler checkpoint.
+
+A seed at `shadow` needs a blockchain database that has never handed out a
+lane position, and refuses a named pipe as its snapshot, because it reads the
+file more than once. On utxoset, run `teranode-cli prepare-lane-schema`
+first.
 
 ## 3. Data Model
 
@@ -210,7 +233,10 @@ The Seeder uses various configuration options, which can be set through a config
 - `seeder_externalStoreFsyncMode`: fsync mode for a `file://` external store whose
   URL does not set `fsyncMode` (default: `data`). See `cmd/seeder/README.md` for
   the durability trade-off of `none`.
-- `skipStore`: Boolean flag to skip storing UTXOs (for testing purposes).
+- `skipStore`: Boolean flag to skip storing UTXOs (for testing purposes); refused at
+  `utxostore_laneMigration=shadow`.
+- `utxostore_laneMigration`: At `shadow` the seeder writes lane positions and rows
+  (see 2.4); `rows` and `lanes` are refused.
 
 `cmd/seeder/README.md` has the same settings with more detail.
 

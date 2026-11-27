@@ -729,8 +729,8 @@ func processUTXOs(ctx context.Context, logger ulogger.Logger, appSettings *setti
 	}
 
 	if lanes != nil {
-		// Only now can the import change the records the old rows describe. Keep the
-		// completed seed valid if preparation or marker deletion stops this run.
+		// Only now can the import change the records the old rows describe, so a run that
+		// stops in preparation or marker deletion leaves the seed's lane records as they were.
 		if err = setSeededRowsWritten(ctx, blockchainStore, hash, false); err != nil {
 			return nil, err
 		}
@@ -740,7 +740,7 @@ func processUTXOs(ctx context.Context, logger ulogger.Logger, appSettings *setti
 		}
 	}
 
-	if err = importUTXOSet(ctx, logger, utxoStore, utxoFile, opts); err != nil {
+	if err = runImport(ctx, logger, utxoStore, utxoFile, opts); err != nil {
 		return nil, err
 	}
 
@@ -780,6 +780,9 @@ func processUTXOs(ctx context.Context, logger ulogger.Logger, appSettings *setti
 
 	return &utxoSetTip{hash: hash, height: height, lanes: lanes}, nil
 }
+
+// runImport is importUTXOSet; a var so a test can stop an import part way.
+var runImport = importUTXOSet
 
 // readUTXOSetTip reads only the preamble of a .utxo-set file, not the records
 // after it, and returns the tip it is complete at.

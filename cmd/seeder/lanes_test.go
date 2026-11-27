@@ -502,6 +502,27 @@ func seedStampsPositionsAndRows(t *testing.T, heights []uint32, postgres bool) {
 	require.True(t, written)
 	require.NoError(t, f.seed(false))
 
+	// So does a forced run that stops while removing the old import markers.
+	if os.Geteuid() != 0 {
+		blockDir := f.settings.Block.BlockStore.Path
+		require.NoError(t, os.Chmod(blockDir, 0o500))
+		_, err = processUTXOs(ctx, ulogger.TestLogger{}, f.settings, other, f.utxoFile(), "", true, false)
+		require.NoError(t, os.Chmod(blockDir, 0o700))
+		require.ErrorContains(t, err, "failed to clear")
+
+		requireSeedRecords(t, other, f.tip, true)
+	}
+
+	// A forced run whose import starts and stops clears both records first, so neither
+	// vouches for the records it left.
+	runImport = func(context.Context, ulogger.Logger, utxo.Store, string, importOptions) error {
+		return errors.NewProcessingError("import stopped")
+	}
+	_, err = processUTXOs(ctx, ulogger.TestLogger{}, f.settings, other, f.utxoFile(), "", true, false)
+	runImport = importUTXOSet
+	require.ErrorContains(t, err, "import stopped")
+	requireSeedRecords(t, other, f.tip, false)
+
 	// A forced import that starts clears the rows-done record, and a plain re-run then
 	// writes the rows and the checkpoint again.
 	_, err = processUTXOs(ctx, ulogger.TestLogger{}, f.settings, other, f.utxoFile(), "", true, false)
@@ -519,6 +540,19 @@ func seedStampsPositionsAndRows(t *testing.T, heights []uint32, postgres bool) {
 	require.NoError(t, err)
 	require.True(t, written)
 	f.requireStamped(grant)
+}
+
+// requireSeedRecords checks the seed's imported and rows-done records are both set, or both not.
+func requireSeedRecords(t *testing.T, store blockchain_store.Store, tip chainhash.Hash, want bool) {
+	t.Helper()
+
+	imported, err := seedImported(context.Background(), store, tip)
+	require.NoError(t, err)
+	require.Equal(t, want, imported, "imported record")
+
+	written, err := seededRowsWritten(context.Background(), store, tip)
+	require.NoError(t, err)
+	require.Equal(t, want, written, "rows-done record")
 }
 
 // The stores lanes runs on take every record's position from the seed, the transactions that
