@@ -9,7 +9,7 @@ import (
 )
 
 // phaseTimer gives each phase of a long block-assembly operation (a fork reorg, a reset) its wall
-// time: one log line per phase as it ends, one observation of
+// time: one debug line per phase as it ends, one observation of
 // teranode_subtreeprocessor_reorg_phase_seconds{op,phase}, and one summary line at the end with the
 // counts and every phase. A phase that repeats, such as each forward step of a reorg, is logged and
 // observed each time.
@@ -73,19 +73,23 @@ func (p *phaseTimer) done(phase string) {
 	p.last = now
 	p.timings = append(p.timings, phaseTiming{phase, d})
 
-	p.logger.Infof("[%s] phase %s took %s", p.op, phase, d)
+	// Debug: the summary line repeats every phase at Info, and the histogram has them in production.
+	p.logger.Debugf("[%s] phase %s took %s", p.op, phase, d)
 	prometheusSubtreeProcessorReorgPhase.WithLabelValues(p.op, phase).Observe(d.Seconds())
 }
 
-// finish records the time since the last phase as after_last_phase, which is the phase that failed
-// when the operation returns an error part way, then logs the summary line: the total, the counts,
-// and every phase in order.
-func (p *phaseTimer) finish() {
+// finish logs the summary line: the total, the counts, and every phase in order. When the operation
+// failed it first records the time since the last phase as after_last_phase, which is the phase
+// that failed. A success records no such phase: the tail to the deferred call is not a phase, and
+// a dashboard reads after_last_phase as a failure.
+func (p *phaseTimer) finish(failed bool) {
 	if p == nil {
 		return
 	}
 
-	p.done("after_last_phase")
+	if failed {
+		p.done("after_last_phase")
+	}
 
 	var b strings.Builder
 
@@ -104,11 +108,11 @@ func (p *phaseTimer) finish() {
 
 // startPhases installs a timer for op as stp.phases and returns the function that logs its summary
 // and removes it.
-func (stp *SubtreeProcessor) startPhases(op string) (finish func()) {
+func (stp *SubtreeProcessor) startPhases(op string, errp *error) (finish func()) {
 	stp.phases = newPhaseTimer(op, stp.logger, stp.clock)
 
 	return func() {
-		stp.phases.finish()
+		stp.phases.finish(*errp != nil)
 		stp.phases = nil
 	}
 }

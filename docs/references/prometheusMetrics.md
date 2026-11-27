@@ -100,6 +100,7 @@ All metrics are CounterVec type with labels: `function` (handler function name),
 | `teranode_blockassembly_coinbase_divergence_total`                        | CounterVec   | Coinbase-divergence events by outcome (label: `outcome`); every detection records exactly one follow-up outcome, so `detected == repaired + no_gap + escalated + aborted` |
 | `teranode_blockassembly_conflict_intents_pending`                         | Gauge        | Number of pending conflict-resolution WAL intents found at startup (interrupted ProcessConflicting/ReverseProcessConflicting operations awaiting replay) |
 | `teranode_blockassembly_conflict_intent_replay_total`                     | CounterVec   | Total conflict-resolution WAL intent replays at startup, by result (label: `result`) |
+| `teranode_blockassembly_subtree_store_step_seconds` | HistogramVec | Wall time of each step of storing a subtree: meta_build, meta_write, subtree_write (label: `step`) |
 
 ## Blockchain Service Metrics
 
@@ -497,3 +498,4 @@ CounterVec metrics use labels: `function` (function name), `error` (error type).
 | `teranode_subtreeprocessor_oversize_batch_admitted_total` | Counter  | Number of client batches that exceeded the normalized `blockassembly_maxQueueItems` and were admitted alone onto an empty queue, so the ceiling is transiently exceeded by one batch rather than that client wedging forever. **Any** non-zero value means a client's batch size is above this pod's normalized cap and the cross-pod sizing guidance in the `blockassembly_maxQueueItems` longdesc has not been applied |
 | `teranode_subtreeprocessor_txmeta_delete_dropped_total` | Counter | Txmeta cache DELETEs for txs demoted to conflicting that block assembly dropped because the txmeta producer buffer was full or stopped. Each one can leave subtree validation caching that tx as non-conflicting until the cache rotates it out, so alert on any increase |
 | `teranode_subtreeprocessor_late_mined_dropped_total` | Counter | Handed-off transactions dropped, on arrival or when placed, because a block applied within `blockassembly_minedTxSetRetention`, plus any double-spend window, already mined them. Each one would otherwise have gone back into block assembly |
+| `teranode_subtreeprocessor_reorg_phase_seconds` | HistogramVec | Wall time of each phase of a fork reorg (op=reorgBlocks) or reset (op=reset) (labels: `op`, `phase`). `after_last_phase` is recorded only when the operation failed, and is the time spent in the phase that failed |
