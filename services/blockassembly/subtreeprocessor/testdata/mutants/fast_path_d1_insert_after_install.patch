@@ -1,8 +1,11 @@
 diff --git a/services/blockassembly/subtreeprocessor/reorg_fast_path.go b/services/blockassembly/subtreeprocessor/reorg_fast_path.go
-index 0f7288b90..32235eb03 100644
+index c5d9aaf43..f350b187f 100644
 --- a/services/blockassembly/subtreeprocessor/reorg_fast_path.go
 +++ b/services/blockassembly/subtreeprocessor/reorg_fast_path.go
-@@ -466,29 +466,6 @@ func (stp *SubtreeProcessor) applyFastReorg(ctx context.Context, plan *fastReorg
+@@ -474,35 +474,12 @@ func (stp *SubtreeProcessor) applyFastReorg(ctx context.Context, plan *fastReorg
+ 		stp.logger.Errorf("[reorgInPlace][%s] error clearing block processed_at timestamp: %v", lost.String(), err)
+ 	}
+ 
  	stp.phases.done("fast_remove_coinbase")
  	stp.reportProgressUnlessDone(ctx)
  
@@ -32,7 +35,13 @@ index 0f7288b90..32235eb03 100644
  	stp.phases.done("fast_d1_insert")
  	stp.reportProgressUnlessDone(ctx)
  
-@@ -548,6 +525,28 @@ func (stp *SubtreeProcessor) applyFastReorg(ctx context.Context, plan *fastReorg
+ 	workers := remainderWorkers(stp.settings.BlockAssembly.ProcessRemainderTxHashesConcurrency)
+ 
+ 	kept := stp.copySurvivors(plan, workers)
+@@ -571,12 +548,34 @@ func (stp *SubtreeProcessor) applyFastReorg(ctx context.Context, plan *fastReorg
+ 
+ 	stp.phases.done("fast_build")
+ 	stp.reportProgressUnlessDone(ctx)
  
  	stp.deleteFlaggedEntries(plan, workers)
  
@@ -61,3 +70,6 @@ index 0f7288b90..32235eb03 100644
  	stp.flushDiskTxMapWriters()
  
  	if mapErr := stp.diskTxMapErr(); mapErr != nil {
+ 		return nil, errors.NewStorageError("[reorgInPlace][%s] disk tx map storage error after the build", lost.String(), mapErr)
+ 	}
+ 

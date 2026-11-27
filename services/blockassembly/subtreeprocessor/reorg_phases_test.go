@@ -2,8 +2,10 @@ package subtreeprocessor
 
 import (
 	"fmt"
+	"maps"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -20,7 +22,7 @@ import (
 // Issue 2269, plan PR 0: every phase of a fork reorg and of a reset gets a wall time, as a log line
 // and a histogram observation, so the scaling run shows where a long reorg spends its time.
 
-// phaseLogger records Infof lines; everything else is dropped as by TestLogger.
+// phaseLogger records Infof and Debugf lines; everything else is dropped as by TestLogger.
 type phaseLogger struct {
 	ulogger.TestLogger
 
@@ -33,6 +35,10 @@ func (l *phaseLogger) Infof(format string, args ...interface{}) {
 	defer l.mu.Unlock()
 
 	l.lines = append(l.lines, fmt.Sprintf(format, args...))
+}
+
+func (l *phaseLogger) Debugf(format string, args ...interface{}) {
+	l.Infof(format, args...)
 }
 
 var phaseLine = regexp.MustCompile(`^\[(\w+)\] phase (\w+) took `)
@@ -102,13 +108,24 @@ func TestPhaseTimer_LogsAndObservesEachPhase(t *testing.T) {
 	p.count("pending", 42)
 	p.done("alpha")
 	p.done("beta")
-	p.finish()
+	p.finish(false)
 
-	require.Equal(t, []string{"alpha", "beta", "after_last_phase"}, logger.phases("unittest"),
-		"finish records the time after the last phase: on a failure that is the phase that failed")
+	require.Equal(t, []string{"alpha", "beta"}, logger.phases("unittest"), "a success records no tail phase")
 	require.Contains(t, logger.lines, "[unittest] phase alpha took 1s")
-	require.Equal(t, "[unittest] phases total=3s pending=42 alpha=1s beta=1s after_last_phase=1s", logger.summary("unittest"))
+	require.Equal(t, "[unittest] phases total=2s pending=42 alpha=1s beta=1s", logger.summary("unittest"))
 	require.Equal(t, before+1, phaseSampleCount(t, "unittest", "alpha"))
+}
+
+func TestPhaseTimer_FailureRecordsTheTimeAfterTheLastPhase(t *testing.T) {
+	logger := &phaseLogger{}
+
+	p := newPhaseTimer("unittest", logger, &steppingClock{step: time.Second})
+	p.done("alpha")
+	p.finish(true)
+
+	require.Equal(t, []string{"alpha", "after_last_phase"}, logger.phases("unittest"),
+		"on a failure the time after the last phase is the phase that failed")
+	require.Equal(t, "[unittest] phases total=2s alpha=1s after_last_phase=1s", logger.summary("unittest"))
 }
 
 func TestPhaseTimer_NilIsANoOp(t *testing.T) {
@@ -117,7 +134,7 @@ func TestPhaseTimer_NilIsANoOp(t *testing.T) {
 	require.NotPanics(t, func() {
 		p.count("x", 1)
 		p.done("x")
-		p.finish()
+		p.finish(true)
 	})
 }
 
@@ -144,7 +161,7 @@ func TestReorgBlocks_LogsEachPhaseOnceInOrder(t *testing.T) {
 		want = append(want, forwardStepPhases...)
 	}
 
-	want = append(want, "mark_sets", "store_wait", "marks", "announce", "processed_at", "finalize", "after_last_phase")
+	want = append(want, "mark_sets", "store_wait", "marks", "announce", "processed_at", "finalize")
 
 	require.Equal(t, want, logger.phases("reorgBlocks"))
 }
@@ -324,7 +341,6 @@ func TestReset_LogsEachPhaseOnceInOrder(t *testing.T) {
 
 	require.Equal(t, []string{
 		"upfront_reads", "mark_assembly", "clear_and_retire", "move_back", "move_forward", "post_process", "queue_discard",
-		"after_last_phase",
 	}, logger.phases("reset"))
 }
 
@@ -378,7 +394,302 @@ func TestReorgBlocks_FailedReorgRecordsTheFailingPhase(t *testing.T) {
 	require.Error(t, sc.run(t))
 
 	phases := logger.phases("reorgBlocks")
-	require.NotEmpty(t, phases)
-	require.Equal(t, "after_last_phase", phases[len(phases)-1])
+	// The subtrees of every winning block are opened before anything moves, so the reads fail.
+	require.Equal(t, []string{"wait_pending_blocks", "after_last_phase"}, phases)
 	require.NotEmpty(t, logger.summary("reorgBlocks"))
+}
+
+// Issue 2269, plan PR 0b: the time from block assembly seeing the new tip to the processor starting
+// the fork reorg is reported, queue wait included, when the request carries when the tip was seen.
+
+var summaryCount = regexp.MustCompile(`^(\w+)=(-?\d+)$`)
+
+type countValue struct {
+	name  string
+	value int
+}
+
+// summaryCounts returns the counts of a summary line, in the order they were recorded. A phase
+// time ends in a unit, so it never matches.
+func summaryCounts(summary string) []countValue {
+	var out []countValue
+
+	for _, field := range strings.Fields(summary) {
+		if m := summaryCount.FindStringSubmatch(field); m != nil {
+			v, _ := strconv.Atoi(m[2])
+			out = append(out, countValue{m[1], v})
+		}
+	}
+
+	return out
+}
+
+// countsNamed returns every value recorded under name, in order.
+func countsNamed(summary, name string) []int {
+	var out []int
+
+	for _, c := range summaryCounts(summary) {
+		if c.name == name {
+			out = append(out, c.value)
+		}
+	}
+
+	return out
+}
+
+func tipToStartSampleCount(t *testing.T) uint64 {
+	t.Helper()
+
+	initPrometheusMetrics()
+
+	m := &dto.Metric{}
+	require.NoError(t, prometheusSubtreeProcessorReorgTipToStart.(prometheus.Histogram).Write(m))
+
+	return m.GetHistogram().GetSampleCount()
+}
+
+func TestReorgBlocks_ReportsTipToStartWhenTheRequestCarriesIt(t *testing.T) {
+	sc := newReorgScenario(t, smallScenarioConfig())
+
+	logger := &phaseLogger{}
+	sc.stp.logger = logger
+	sc.stp.Start(t.Context())
+	before := tipToStartSampleCount(t)
+
+	require.NoError(t, sc.stp.Reorg([]*model.Block{sc.lost}, sc.forward, WithTipSeenAt(time.Now().Add(-5*time.Second))))
+
+	got := countsNamed(logger.summary("reorgBlocks"), "tip_to_start_ms")
+	require.Len(t, got, 1)
+	require.GreaterOrEqual(t, got[0], 5000)
+	require.Less(t, got[0], 15000)
+	require.Equal(t, "tip_to_start_ms", summaryCounts(logger.summary("reorgBlocks"))[0].name, "the first count of the summary")
+	require.Equal(t, before+1, tipToStartSampleCount(t))
+}
+
+// The processor is busy with an earlier request while the reorg waits: that wait is part of the time.
+func TestReorgBlocks_TipToStartIncludesTheProcessorQueueWait(t *testing.T) {
+	sc := newReorgScenario(t, smallScenarioConfig())
+
+	logger := &phaseLogger{}
+	sc.stp.logger = logger
+	sc.stp.Start(t.Context())
+
+	// The loop answers this request on an unbuffered channel nobody reads, so it stays busy
+	// until the test reads it.
+	busy := make(chan []chainhash.Hash)
+	sc.stp.getTransactionHashesChan <- busy
+
+	seen := time.Now()
+	done := make(chan error, 1)
+
+	go func() { done <- sc.stp.Reorg([]*model.Block{sc.lost}, sc.forward, WithTipSeenAt(seen)) }()
+
+	time.Sleep(400 * time.Millisecond)
+	<-busy
+	require.NoError(t, <-done)
+
+	got := countsNamed(logger.summary("reorgBlocks"), "tip_to_start_ms")
+	require.Len(t, got, 1)
+	require.GreaterOrEqual(t, got[0], 400)
+}
+
+func TestReorgBlocks_ReportsNoTipToStartWithoutATipTime(t *testing.T) {
+	sc := newReorgScenario(t, smallScenarioConfig())
+
+	logger := &phaseLogger{}
+	sc.stp.logger = logger
+	before := tipToStartSampleCount(t)
+
+	require.NoError(t, sc.run(t))
+
+	require.NotEmpty(t, logger.summary("reorgBlocks"))
+	require.Empty(t, countsNamed(logger.summary("reorgBlocks"), "tip_to_start_ms"))
+	require.Equal(t, before, tipToStartSampleCount(t))
+}
+
+// A request's tip time belongs to that request only: the processor drops it when the request is
+// done, so the next one cannot report it.
+func TestReorgBlocks_TipToStartIsDroppedWhenTheRequestIsDone(t *testing.T) {
+	sc := newReorgScenario(t, smallScenarioConfig())
+	sc.stp.Start(t.Context())
+
+	require.NoError(t, sc.stp.Reorg([]*model.Block{sc.lost}, sc.forward, WithTipSeenAt(time.Now())))
+
+	require.True(t, sc.stp.reorgTipSeenAt.IsZero())
+}
+
+// A reset that fails records the phase it failed in, as a failed fork reorg does.
+func TestReset_FailedResetRecordsTheFailingPhase(t *testing.T) {
+	sc := newReorgScenario(t, smallScenarioConfig())
+
+	sc.stp.subtreeStore = openFailingStore{Memory: sc.blobStore, key: *sc.forward[0].Subtrees[0]}
+
+	logger := &phaseLogger{}
+	sc.stp.logger = logger
+
+	require.Error(t, sc.stp.reset(sc.genesis, []*model.Block{sc.lost}, sc.forward, false, func() error { return nil }))
+
+	// The moveForward subtree check is part of the reads, which never complete.
+	require.Equal(t, []string{"after_last_phase"}, logger.phases("reset"))
+	require.Contains(t, logger.summary("reset"), " pending=2000 ")
+}
+
+// The summary's counts are what a slow reorg is read against, so each one is pinned.
+func TestReorgBlocks_SummaryCarriesTheQueueAndRemainderCounts(t *testing.T) {
+	sc := newReorgScenario(t, smallScenarioConfig())
+
+	// Nothing dequeues while the processor is not started, so the queue holds what intake sent.
+	stop := sc.startIntake(100_000)
+	require.Eventually(t, func() bool { return sc.stp.QueueLength() > 0 }, 10*time.Second, 5*time.Millisecond)
+
+	sent := stop()
+
+	logger := &phaseLogger{}
+	sc.stp.logger = logger
+
+	require.NoError(t, sc.run(t))
+
+	summary := logger.summary("reorgBlocks")
+	require.Contains(t, summary, fmt.Sprintf(" queue=%d ", sent))
+	// The head drain took the queue, so a forward step drains only what arrived since.
+	require.Equal(t, len(sc.forward), strings.Count(summary, " drain_queue="), "one drain count per forward step")
+	require.Equal(t, len(sc.forward), strings.Count(summary, " remainder="), "one remainder count per forward step")
+	require.Regexp(t, ` remainder=[1-9]\d* `, summary)
+}
+
+// BenchmarkReorgPath times a fork reorg of one block back and two forward through reorgBlocks, the
+// production call site, on the scenario shape of issue 2269: the lost block about twice the pending
+// set and almost entirely in the winners, the winners taking the oldest pending transactions. It is
+// the baseline every reorg change of that issue is measured against.
+//
+// The name matches the subtreeprocessor-unit filter of the benchmark-compare workflow, which runs
+// with -short: under -short only the 256K pending set runs, so the job stays inside its budget. The
+// larger sets run without -short. The 125M and larger sizes are the reorgscale suite.
+//
+// Each iteration builds a fresh scenario outside the timer, because a reorg consumes its input.
+func BenchmarkReorgPath(b *testing.B) {
+	sizes := []int{256 << 10}
+	if !testing.Short() {
+		sizes = append(sizes, 1<<20)
+	}
+
+	for _, pending := range sizes {
+		for _, hits := range []float64{0.3, 0.9} {
+			for _, disk := range []bool{false, true} {
+				cfg := reorgPathBenchConfig(pending, hits, disk)
+				name := fmt.Sprintf("pending=%dK/hits=%.0f%%/map=%s", pending>>10, hits*100, map[bool]string{false: "memory", true: "disk"}[disk])
+
+				b.Run(name, func(b *testing.B) {
+					benchmarkReorgPath(b, cfg, slowReorgPath)
+				})
+
+				// The fast path (blockassembly_reorgFastPath) declines when the winners mine more of the
+				// pending set than is left, so the 90% cases measure a decline plus the slow path; the
+				// fast_applied metric says which of the two ran.
+				b.Run(name+"/fast=on", func(b *testing.B) {
+					benchmarkReorgPath(b, cfg, fastReorgPath)
+				})
+			}
+		}
+	}
+}
+
+func reorgPathBenchConfig(pending int, hits float64, disk bool) reorgScenarioConfig {
+	return reorgScenarioConfig{
+		seed:             uint64(pending) ^ uint64(hits*100),
+		pending:          pending,
+		lost:             2 * pending,
+		lostInWinners:    0.995,
+		pendingInWinners: hits,
+		hitsAtFront:      true,
+		winnerOnly:       pending / 1000,
+		forwardBlocks:    2,
+		subtreeSize:      1 << 14,
+		diskTxMap:        disk,
+		// sqlite marks of synthetic hashes would be most of the time and log mid-line, which
+		// breaks benchstat's parsing; the marks are measured on their own against Aerospike.
+		skipStoreMarks: true,
+	}
+}
+
+func benchmarkReorgPath(b *testing.B, cfg reorgScenarioConfig, path reorgPath) {
+	b.Helper()
+	b.ReportAllocs()
+
+	var total time.Duration
+
+	phases := make(map[string]float64)
+	appliedBefore := readFastPathCounts().applied
+
+	for i := 0; i < b.N; i++ {
+		b.StopTimer()
+		sc := newReorgScenario(b, cfg)
+		before := reorgPhaseSeconds("reorgBlocks")
+		b.StartTimer()
+
+		start := time.Now()
+		err := path(b, sc)
+		total += time.Since(start)
+
+		b.StopTimer()
+
+		// b.Cleanup runs once per round, so without this every iteration's processor, tx map and
+		// listener would stay alive during the next timed reorg.
+		sc.release()
+
+		if err != nil {
+			b.Fatal(err)
+		}
+
+		for phase, seconds := range reorgPhaseSeconds("reorgBlocks") {
+			phases[phase] += seconds - before[phase]
+		}
+	}
+
+	b.ReportMetric(float64(total.Nanoseconds())/float64(b.N)/float64(cfg.pending), "ns/pending_tx")
+
+	// the fraction of iterations the fast path applied: 0 on the slow path and when it declined
+	b.ReportMetric((readFastPathCounts().applied-appliedBefore)/float64(b.N), "fast_applied")
+
+	for _, phase := range slices.Sorted(maps.Keys(phases)) {
+		b.ReportMetric(phases[phase]*1000/float64(b.N), phase+"_ms")
+	}
+}
+
+// reorgPhaseSeconds is the total time reorg_phase_seconds has recorded for each phase of op.
+func reorgPhaseSeconds(op string) map[string]float64 {
+	initPrometheusMetrics()
+
+	ch := make(chan prometheus.Metric, 64)
+
+	go func() {
+		prometheusSubtreeProcessorReorgPhase.Collect(ch)
+		close(ch)
+	}()
+
+	out := make(map[string]float64)
+
+	for metric := range ch {
+		m := &dto.Metric{}
+		if err := metric.Write(m); err != nil {
+			continue
+		}
+
+		var labelOp, phase string
+
+		for _, l := range m.GetLabel() {
+			switch l.GetName() {
+			case "op":
+				labelOp = l.GetValue()
+			case "phase":
+				phase = l.GetValue()
+			}
+		}
+
+		if labelOp == op {
+			out[phase] = m.GetHistogram().GetSampleSum()
+		}
+	}
+
+	return out
 }

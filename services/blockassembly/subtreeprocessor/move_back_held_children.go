@@ -118,14 +118,18 @@ func (h *heldChildren) release(dst []subtreepkg.Node, hash chainhash.Hash) []sub
 	return dst
 }
 
-// flush appends the held-back transactions that are still waiting, in the block's order. A parent
-// that is in the tx map but in no subtree never gets emitted, and the transaction must not be lost.
-func (h *heldChildren) flush(dst []subtreepkg.Node) []subtreepkg.Node {
+// stranded returns the held-back transactions that are still waiting, in the block's order. Their
+// parent, or an ancestor of it, was never emitted: it is in the tx map but in no subtree, or the
+// move-back dropped it. Emitting one would put a transaction in the template without its parent, so
+// the caller drops them, and with them everything that waits for them, which is in the list too.
+func (h *heldChildren) stranded() []chainhash.Hash {
+	var out []chainhash.Hash
+
 	for idx, left := range h.remaining {
 		if left > 0 {
-			dst = append(dst, h.nodes[idx])
+			out = append(out, h.nodes[idx].Hash)
 		}
 	}
 
-	return dst
+	return out
 }

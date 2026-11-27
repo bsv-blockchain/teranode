@@ -1,8 +1,11 @@
 diff --git a/services/blockassembly/subtreeprocessor/reorg_fast_path.go b/services/blockassembly/subtreeprocessor/reorg_fast_path.go
-index a11d22bb5..a7b64b7a9 100644
+index c5d9aaf43..1b3279b78 100644
 --- a/services/blockassembly/subtreeprocessor/reorg_fast_path.go
 +++ b/services/blockassembly/subtreeprocessor/reorg_fast_path.go
-@@ -548,7 +548,7 @@ func (stp *SubtreeProcessor) applyFastReorg(ctx context.Context, plan *fastReorg
+@@ -556,13 +556,13 @@ func (stp *SubtreeProcessor) applyFastReorg(ctx context.Context, plan *fastReorg
+ 			})
+ 		}
+ 
  		_ = g.Wait()
  	}
  
@@ -11,3 +14,6 @@ index a11d22bb5..a7b64b7a9 100644
  		return nil, errors.NewProcessingError("[reorgInPlace][%s] error building the subtrees", lost.String(), err)
  	}
  
+ 	built = true
+ 	stp.reorgPendingD1 = nil
+ 	kept = nil //nolint:ineffassign,wastedassign // let the copy go
