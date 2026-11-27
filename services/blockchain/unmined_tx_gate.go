@@ -277,6 +277,50 @@ func (g *UnminedTxGate) WaitForCheckpointAnswer(ctx context.Context) error {
 	return nil
 }
 
+// RefusesAfterCheckpointAnswer judges an acknowledged transaction after the
+// wait. If the FSM stops syncing between the wait and this decision, it waits
+// for a fresh height instead of dropping the transaction on an unknown height.
+func (g *UnminedTxGate) RefusesAfterCheckpointAnswer(ctx context.Context, txHash *chainhash.Hash) (bool, error) {
+	if g == nil || g.client == nil {
+		return false, nil
+	}
+
+	began := g.sinceStart()
+	if err := g.WaitForCheckpointAnswer(ctx); err != nil {
+		return false, err
+	}
+
+	ticker := time.NewTicker(checkpointAnswerPoll)
+	defer ticker.Stop()
+
+	for {
+		state, err := g.client.GetFSMCurrentState(ctx)
+		if err == nil && state != nil && IsSyncingState(*state) {
+			g.refuse(txHash, "the FSM is "+state.String())
+
+			return true, nil
+		}
+
+		if g.highestCheckpoint == 0 || g.reached.Load() {
+			return false, nil
+		}
+
+		if g.readOKNanos.Load() >= began {
+			g.refuse(txHash, "the best height is not known to have reached the highest checkpoint")
+
+			return true, nil
+		}
+
+		g.scheduleHeightRead()
+
+		select {
+		case <-ctx.Done():
+			return false, ctx.Err()
+		case <-ticker.C:
+		}
+	}
+}
+
 // warnReadFailure logs a failed height read at most once per refusal log
 // interval. Without it a node that keeps refusing because the blockchain
 // service never answers looks the same as one still below the checkpoint.

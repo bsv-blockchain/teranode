@@ -492,11 +492,12 @@ func (v *Server) handleKafkaTxMessage(consumerCtx context.Context, msg *kafka.Ka
 	// judge by a height it has read, not by not knowing one yet: a validator
 	// restarted at the tip would otherwise drop its backlog. An error here leaves
 	// the message uncommitted, so it is delivered again.
-	if err = v.unminedTxGate.WaitForCheckpointAnswer(consumerCtx); err != nil {
+	refused, err := v.unminedTxGate.RefusesAfterCheckpointAnswer(consumerCtx, tx.TxIDChainHash())
+	if err != nil {
 		return err
 	}
 
-	if v.unminedTxGate.Refuses(consumerCtx, tx.TxIDChainHash()) {
+	if refused {
 		return nil
 	}
 
