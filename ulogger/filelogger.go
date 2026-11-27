@@ -108,19 +108,22 @@ func (fl *FileLogger) Duplicate(options ...Option) Logger {
 		skipFrame: fl.skipFrame,
 	}
 
-	defaultOpts := DefaultOptions()
-	opts := DefaultOptions()
+	if len(options) == 0 {
+		return newLogger
+	}
+
+	opts := defaultOptions()
 
 	for _, o := range options {
 		o(opts)
 	}
 
 	// apply any options that are not the default, to the new logger
-	if opts.logLevel != defaultOpts.logLevel {
+	if opts.logLevel != defaultLogLevel {
 		newLogger.SetLogLevel(opts.logLevel)
 	}
 
-	if opts.skip != defaultOpts.skip {
+	if opts.skip != 0 {
 		newLogger.skipFrame = opts.skip
 	}
 
