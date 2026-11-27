@@ -728,6 +728,18 @@ func processUTXOs(ctx context.Context, logger ulogger.Logger, appSettings *setti
 		return nil, errors.NewStorageError("failed to clear lastProcessed.dat before re-import", err)
 	}
 
+	if lanes != nil {
+		// Only now can the import change the records the old rows describe. Keep the
+		// completed seed valid if preparation or marker deletion stops this run.
+		if err = setSeededRowsWritten(ctx, blockchainStore, hash, false); err != nil {
+			return nil, err
+		}
+
+		if err = setSeedImported(ctx, blockchainStore, hash, false); err != nil {
+			return nil, err
+		}
+	}
+
 	if err = importUTXOSet(ctx, logger, utxoStore, utxoFile, opts); err != nil {
 		return nil, err
 	}

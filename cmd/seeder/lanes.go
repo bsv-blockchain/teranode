@@ -279,16 +279,6 @@ func prepareSeedLanes(ctx context.Context, logger ulogger.Logger, tSettings *set
 		return nil, err
 	}
 
-	// The import may change the records the rows describe, so the rows count as unwritten until
-	// this run writes them.
-	if err = setSeededRowsWritten(ctx, bcStore, tip, false); err != nil {
-		return nil, err
-	}
-
-	if err = setSeedImported(ctx, bcStore, tip, false); err != nil {
-		return nil, err
-	}
-
 	return lanes, nil
 }
 

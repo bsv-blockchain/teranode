@@ -485,7 +485,8 @@ func seedStampsPositionsAndRows(t *testing.T, heights []uint32, postgres bool) {
 	require.NoError(t, err)
 	require.False(t, ok)
 
-	// An import that starts clears the record that one ran to its end with this grant.
+	// Preparing a forced import leaves the completed seed valid if the run stops before
+	// removing the old import marker or importing any record.
 	imported, err := seedImported(ctx, other, f.tip)
 	require.NoError(t, err)
 	require.True(t, imported)
@@ -495,14 +496,18 @@ func seedStampsPositionsAndRows(t *testing.T, heights []uint32, postgres bool) {
 
 	imported, err = seedImported(ctx, other, f.tip)
 	require.NoError(t, err)
-	require.False(t, imported)
+	require.True(t, imported)
+	written, err := seededRowsWritten(ctx, other, f.tip)
+	require.NoError(t, err)
+	require.True(t, written)
+	require.NoError(t, f.seed(false))
 
-	// A forced import that stops before its rows clears the rows-done record, and a plain re-run
-	// then writes the rows and the checkpoint again.
+	// A forced import that starts clears the rows-done record, and a plain re-run then
+	// writes the rows and the checkpoint again.
 	_, err = processUTXOs(ctx, ulogger.TestLogger{}, f.settings, other, f.utxoFile(), "", true, false)
 	require.NoError(t, err)
 
-	written, err := seededRowsWritten(ctx, other, f.tip)
+	written, err = seededRowsWritten(ctx, other, f.tip)
 	require.NoError(t, err)
 	require.False(t, written)
 	require.NoError(t, other.Close(ctx))
