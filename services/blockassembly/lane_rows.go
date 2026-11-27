@@ -262,6 +262,16 @@ func (ba *BlockAssembly) writeKeptLaneBitmapsFile(ctx context.Context, root chai
 	return ba.writeLaneBitmapsFile(ctx, lane.SubtreeBitmaps{SubtreeHash: root, Lanes: lanes}, dah)
 }
 
+// laneRetryBitmaps returns the kept lane bitmaps of subtree root for a storage retry to carry, and
+// whether lanes are on and any are kept.
+func (ba *BlockAssembly) laneRetryBitmaps(root chainhash.Hash) (lane.LaneBitmaps, bool) {
+	if !ba.keepsLanePositions() {
+		return nil, false
+	}
+
+	return ba.ownLaneBitmaps.lookup(root)
+}
+
 // keepExistingSubtreeLaneBitmaps is the lane half of storing a subtree the store already has: the
 // subtree's kept bitmaps stay kept for as long as the subtree is, and their file gets its new
 // delete-at height, or is written from the kept bitmaps when the store has none.

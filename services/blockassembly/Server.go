@@ -47,6 +47,7 @@ import (
 	"github.com/bsv-blockchain/teranode/util/failpoint"
 	"github.com/bsv-blockchain/teranode/util/health"
 	"github.com/bsv-blockchain/teranode/util/kafka"
+	"github.com/bsv-blockchain/teranode/util/lane"
 	"github.com/bsv-blockchain/teranode/util/retry"
 	"github.com/bsv-blockchain/teranode/util/tracing"
 	"github.com/jellydator/ttlcache/v3"
@@ -176,6 +177,11 @@ type subtreeRetrySend struct {
 
 	// subtreeMetaBytes contains the serialized subtree meta data to be stored
 	subtreeMetaBytes []byte
+
+	// laneBitmaps are the subtree's kept lane bitmaps when it was queued, written as its lane
+	// bitmaps file before the subtree file, so the retry does not depend on them still being kept
+	laneBitmaps    lane.LaneBitmaps
+	hasLaneBitmaps bool
 
 	// retries tracks the number of storage attempts made for this subtree
 	// Used to implement exponential backoff and maximum retry limits
@@ -863,9 +869,15 @@ func (ba *BlockAssembly) storeSubtreeMetaWithRetry(ctx context.Context, subtreeR
 // write fails.
 func (ba *BlockAssembly) storeSubtreeDataWithRetry(ctx context.Context, subtreeRetry *subtreeRetrySend, subtreeRetryChan chan *subtreeRetrySend, dah uint32) error {
 	if ba.keepsLanePositions() {
-		height := ba.blockAssembler.utxoStore.GetBlockHeight()
+		var err error
 
-		if err := ba.writeKeptLaneBitmapsFile(ctx, subtreeRetry.subtreeHash, height, dah); err != nil {
+		if subtreeRetry.hasLaneBitmaps {
+			err = ba.writeLaneBitmapsFile(ctx, lane.SubtreeBitmaps{SubtreeHash: subtreeRetry.subtreeHash, Lanes: subtreeRetry.laneBitmaps}, dah)
+		} else {
+			err = ba.writeKeptLaneBitmapsFile(ctx, subtreeRetry.subtreeHash, ba.blockAssembler.utxoStore.GetBlockHeight(), dah)
+		}
+
+		if err != nil {
 			ba.logger.Errorf("[BlockAssembly:Init][%s] subtreeRetryChan: failed to retry store subtree lane bitmaps: %s", subtreeRetry.subtreeHash.String(), err)
 			ba.handleRetryLogic(ctx, subtreeRetry, subtreeRetryChan, "subtree lane bitmaps")
 
@@ -1115,10 +1127,13 @@ func (ba *BlockAssembly) storeSubtreeData(ctx context.Context, subtreeRequest su
 					ba.logger.Debugf("[BlockAssembly:storeSubtreeData][%s] subtree meta already exists", subtree.RootHash().String())
 				} else {
 					ba.logger.Errorf("[BlockAssembly:storeSubtreeData][%s] failed to store subtree meta: %s", subtree.RootHash().String(), err)
+					laneBitmaps, hasLaneBitmaps := ba.laneRetryBitmaps(*subtree.RootHash())
 					subtreeRetryChan <- &subtreeRetrySend{
 						subtreeHash:      *subtree.RootHash(),
 						subtreeBytes:     subtreeBytes,
 						subtreeMetaBytes: subtreeMetaBytes,
+						laneBitmaps:      laneBitmaps,
+						hasLaneBitmaps:   hasLaneBitmaps,
 						retries:          0,
 					}
 				}
@@ -1137,10 +1152,16 @@ func (ba *BlockAssembly) storeSubtreeData(ctx context.Context, subtreeRequest su
 
 		if laneBitmapsErr != nil {
 			ba.logger.Errorf("[BlockAssembly:storeSubtreeData][%s] failed to store subtree: %s", subtree.RootHash().String(), laneBitmapsErr)
-			subtreeRetryChan <- &subtreeRetrySend{
-				subtreeHash:  *subtree.RootHash(),
-				subtreeBytes: subtreeBytes,
-				retries:      0,
+			laneBitmaps, hasLaneBitmaps := ba.laneRetryBitmaps(*subtree.RootHash())
+			select {
+			case subtreeRetryChan <- &subtreeRetrySend{
+				subtreeHash:    *subtree.RootHash(),
+				subtreeBytes:   subtreeBytes,
+				laneBitmaps:    laneBitmaps,
+				hasLaneBitmaps: hasLaneBitmaps,
+				retries:        0,
+			}:
+			case <-ctx.Done():
 			}
 			subtreeDoneCh <- false
 			close(subtreeDoneCh)
@@ -1159,10 +1180,13 @@ func (ba *BlockAssembly) storeSubtreeData(ctx context.Context, subtreeRequest su
 				ba.logger.Debugf("[BlockAssembly:storeSubtreeData][%s] subtree already exists", subtree.RootHash().String())
 			} else {
 				ba.logger.Errorf("[BlockAssembly:storeSubtreeData][%s] failed to store subtree: %s", subtree.RootHash().String(), err)
+				laneBitmaps, hasLaneBitmaps := ba.laneRetryBitmaps(*subtree.RootHash())
 				subtreeRetryChan <- &subtreeRetrySend{
-					subtreeHash:  *subtree.RootHash(),
-					subtreeBytes: subtreeBytes,
-					retries:      0,
+					subtreeHash:    *subtree.RootHash(),
+					subtreeBytes:   subtreeBytes,
+					laneBitmaps:    laneBitmaps,
+					hasLaneBitmaps: hasLaneBitmaps,
+					retries:        0,
 				}
 				storedOK = false
 			}
