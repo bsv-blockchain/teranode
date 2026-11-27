@@ -1,0 +1,13 @@
+diff --git a/services/blockassembly/subtreeprocessor/fork_lost_delta.go b/services/blockassembly/subtreeprocessor/fork_lost_delta.go
+index dc6db78da..57e458622 100644
+--- a/services/blockassembly/subtreeprocessor/fork_lost_delta.go
++++ b/services/blockassembly/subtreeprocessor/fork_lost_delta.go
+@@ -130,7 +130,7 @@ func (stp *SubtreeProcessor) probeLostAgainstFirst(ctx context.Context, e *forkP
+ 	// worst case: every node of the lost block is D1 (a node with its position), and every hash of the
+ 	// competitor is D2. D1 is charged twice: computeReorgDelta holds the per-subtree slices, with the spare
+ 	// capacity of their appends, while it allocates the combined one.
+-	if !stp.forkSetFits(2*lost.TransactionCount*forkLostNodeBytes + e.txCount*32) {
++	if !stp.forkSetFits(lost.TransactionCount*forkLostNodeBytes + e.txCount*32) {
+ 		return errors.NewProcessingError("not enough memory to keep the lost block's delta")
+ 	}
+ 
