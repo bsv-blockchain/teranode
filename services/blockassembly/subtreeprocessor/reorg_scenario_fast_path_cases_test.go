@@ -65,103 +65,120 @@ func TestReorgScenario_SlowPathConsumesRemoveMapEntries(t *testing.T) {
 	}
 }
 
-// Design section 5 item 2c, plan PR 9a (bsv-blockchain/teranode#2268): C is in B and not in F or P,
-// and spends X, which is in B and P and not in F. X keeps its pending position, so the move-back
-// emits C only after X: it used to build C into the prefix, and with a subtree boundary between the
-// two the slow path published C before its parent X, which block validation rejects.
-func TestReorgScenario_SlowPathPublishesLostChildAfterPendingParent(t *testing.T) {
-	cfg := smallScenarioConfig()
-	cfg.lostChildOfPending = 3
-	sc := newReorgScenario(t, cfg)
-
-	require.NoError(t, sc.run(t))
-
-	nodes := assemblyNodes(sc.stp)
-	requireEveryPrefixResolves(t, sc, nodes)
-	require.Equal(t, sc.expectedOrderAfter(), txHashes(nodes), "effective D1 without the children, then the pending set with each child right after its X")
-
-	position := make(map[chainhash.Hash]int, len(nodes))
-	for i, n := range nodes {
-		position[n.Hash] = i
+// Design section 5 item 2c, plan PR 9a (bsv-blockchain/teranode#2268): a lost-block child C of a
+// pending X is emitted after its last pending parent, not into the prefix ahead of X, so no subtree
+// boundary gives a miner C without its parent.
+func TestReorgScenario_SlowPathPublishesLostChildAfterItsPendingParents(t *testing.T) {
+	// childID is the scenario id of lost-block child j.
+	childID := func(cfg reorgScenarioConfig, j int) scenarioID {
+		return scenarioID(cfg.lostAlsoPending + cfg.pendingSpendsLost + j)
 	}
 
-	for j := range cfg.lostChildOfPending {
-		x := sc.hash(kindRawD1 | scenarioID(j))
-		c := sc.hash(kindRawD1 | scenarioID(cfg.lostAlsoPending+cfg.pendingSpendsLost+j))
+	for _, tt := range []struct {
+		name string
+		cfg  func(cfg *reorgScenarioConfig)
+		// before runs on the assembly before the reorg.
+		before func(t *testing.T, sc *reorgScenario)
+		// check pins where the children land, given every node's position.
+		check func(t *testing.T, sc *reorgScenario, position map[chainhash.Hash]int)
+	}{
+		{
+			name: "C comes right after its parent X",
+			cfg:  func(cfg *reorgScenarioConfig) { cfg.lostChildOfPending = 3 },
+			check: func(t *testing.T, sc *reorgScenario, position map[chainhash.Hash]int) {
+				for j := range sc.cfg.lostChildOfPending {
+					x := sc.hash(kindRawD1 | scenarioID(j))
+					c := sc.hash(kindRawD1 | childID(sc.cfg, j))
 
-		require.Equal(t, position[x]+1, position[c], "C %d is right after its parent X", j)
+					require.Equal(t, position[x]+1, position[c], "C %d is right after its parent X", j)
+				}
+			},
+		},
+		{
+			name: "a chain of children follows X in order",
+			cfg: func(cfg *reorgScenarioConfig) {
+				cfg.lostChildOfPending = 3
+				cfg.lostChildChain = true
+			},
+			check: func(t *testing.T, sc *reorgScenario, position map[chainhash.Hash]int) {
+				x := position[sc.hash(kindRawD1)]
+
+				for j := range sc.cfg.lostChildOfPending {
+					require.Equal(t, x+1+j, position[sc.hash(kindRawD1|childID(sc.cfg, j))], "link %d follows the one before it", j)
+				}
+			},
+		},
+		{
+			name: "C follows the later of its two parents",
+			cfg: func(cfg *reorgScenarioConfig) {
+				cfg.lostChildOfPending = 2
+				cfg.lostChildTwoParents = true
+				cfg.lostAlsoPending = 6
+			},
+			check: func(t *testing.T, sc *reorgScenario, position map[chainhash.Hash]int) {
+				for j := range sc.cfg.lostChildOfPending {
+					first := position[sc.hash(kindRawD1|scenarioID(j))]
+					last := position[sc.hash(kindRawD1|scenarioID(sc.cfg.lostChildOfPending+j))]
+
+					require.Less(t, first+1, last, "the two parents of child %d are apart", j)
+					require.Equal(t, last+1, position[sc.hash(kindRawD1|childID(sc.cfg, j))], "child %d follows its last parent", j)
+				}
+			},
+		},
+		{
+			// X is in the open current subtree, so C is released from the second pending loop.
+			name: "X is in the open subtree",
+			cfg: func(cfg *reorgScenarioConfig) {
+				cfg.pending = 100
+				cfg.pendingChains = 5
+				cfg.pendingSpendsLost = 5
+				cfg.lostChildOfPending = 5
+				cfg.pendingSpendsLostChild = true
+			},
+			before: func(t *testing.T, sc *reorgScenario) {
+				x := sc.hash(kindRawD1 | scenarioID(sc.cfg.lostChildOfPending-1))
+				inOpen := false
+
+				for _, n := range sc.stp.GetCurrentSubtree().Nodes {
+					inOpen = inOpen || n.Hash == x
+				}
+
+				require.True(t, inOpen, "the last X starts in the open subtree")
+			},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := smallScenarioConfig()
+			tt.cfg(&cfg)
+			sc := newReorgScenario(t, cfg)
+
+			if tt.before != nil {
+				tt.before(t, sc)
+			}
+
+			require.NoError(t, sc.run(t))
+
+			nodes := assemblyNodes(sc.stp)
+			requireEveryPrefixResolves(t, sc, nodes)
+			require.Equal(t, sc.expectedOrderAfter(), txHashes(nodes), "effective D1 without the children, then the pending set with each child after its parents")
+
+			if tt.check != nil {
+				position := make(map[chainhash.Hash]int, len(nodes))
+				for i, n := range nodes {
+					position[n.Hash] = i
+				}
+
+				tt.check(t, sc, position)
+			}
+
+			requireAssemblyValid(t, sc.stp, sc.onChainAfter)
+			require.ElementsMatch(t, sc.expectedMarkFalse(), sc.utxo.marked(false), "C and X are both marked off the longest chain")
+		})
 	}
-
-	requireAssemblyValid(t, sc.stp, sc.onChainAfter)
-	require.ElementsMatch(t, sc.expectedMarkFalse(), sc.utxo.marked(false), "C and X are both marked off the longest chain")
 }
 
-// A chain of lost-block children: C spends X and D spends C. D waits for C, which waits for X, so
-// the three come out together, in that order, at X's pending position.
-func TestReorgScenario_SlowPathPublishesLostChainAfterPendingParent(t *testing.T) {
-	cfg := smallScenarioConfig()
-	cfg.lostChildOfPending = 3
-	cfg.lostChildChain = true
-	sc := newReorgScenario(t, cfg)
-
-	require.NoError(t, sc.run(t))
-
-	nodes := assemblyNodes(sc.stp)
-	requireEveryPrefixResolves(t, sc, nodes)
-	require.Equal(t, sc.expectedOrderAfter(), txHashes(nodes))
-
-	position := make(map[chainhash.Hash]int, len(nodes))
-	for i, n := range nodes {
-		position[n.Hash] = i
-	}
-
-	childBase := cfg.lostAlsoPending + cfg.pendingSpendsLost
-	x := position[sc.hash(kindRawD1)]
-
-	for j := range cfg.lostChildOfPending {
-		require.Equal(t, x+1+j, position[sc.hash(kindRawD1|scenarioID(childBase+j))], "link %d of the chain follows the one before it", j)
-	}
-
-	requireAssemblyValid(t, sc.stp, sc.onChainAfter)
-}
-
-// C spends two pending parents, X1 and X2, in different places of the pending set: it follows the
-// later one, and the pending transactions between the two keep their order.
-func TestReorgScenario_SlowPathPublishesLostChildAfterItsLastPendingParent(t *testing.T) {
-	cfg := smallScenarioConfig()
-	cfg.lostChildOfPending = 2
-	cfg.lostChildTwoParents = true
-	cfg.lostAlsoPending = 6
-	sc := newReorgScenario(t, cfg)
-
-	require.NoError(t, sc.run(t))
-
-	nodes := assemblyNodes(sc.stp)
-	requireEveryPrefixResolves(t, sc, nodes)
-	require.Equal(t, sc.expectedOrderAfter(), txHashes(nodes))
-
-	position := make(map[chainhash.Hash]int, len(nodes))
-	for i, n := range nodes {
-		position[n.Hash] = i
-	}
-
-	childBase := cfg.lostAlsoPending + cfg.pendingSpendsLost
-
-	for j := range cfg.lostChildOfPending {
-		first := position[sc.hash(kindRawD1|scenarioID(j))]
-		last := position[sc.hash(kindRawD1|scenarioID(cfg.lostChildOfPending+j))]
-
-		require.Less(t, first+1, last, "the two parents of child %d are apart", j)
-		require.Equal(t, last+1, position[sc.hash(kindRawD1|scenarioID(childBase+j))], "child %d follows its last parent", j)
-	}
-
-	requireAssemblyValid(t, sc.stp, sc.onChainAfter)
-}
-
-// A pending transaction Q spends the lost-block child C and sits in the pending set ahead of C's
-// parent X. C waits for X, so Q waits for C: the pending nodes in front of X cannot be passed through
-// as they are. With X also in the winning blocks (the winning miner mined it too) X leaves the
-// assembly and C and Q keep the place X had.
+// A pending Q that spends the lost-block child C sits ahead of C's parent X, so C waits for X and Q
+// for C. With X also in the winning blocks, X leaves the assembly and C and Q keep X's place.
 func TestReorgScenario_SlowPathKeepsPendingSpenderBehindLostChild(t *testing.T) {
 	for _, xInWinners := range []bool{false, true} {
 		t.Run(fmt.Sprintf("xInWinners=%v", xInWinners), func(t *testing.T) {
@@ -202,34 +219,6 @@ func TestReorgScenario_SlowPathKeepsPendingSpenderBehindLostChild(t *testing.T) 
 			require.Equal(t, 1, spenders)
 		})
 	}
-}
-
-// X is in the open current subtree rather than a full chained one, so the move-back releases C from
-// the second of its two loops over the pending nodes.
-func TestReorgScenario_SlowPathReleasesLostChildAfterParentInOpenSubtree(t *testing.T) {
-	cfg := smallScenarioConfig()
-	cfg.pending = 100
-	cfg.pendingChains = 5
-	cfg.pendingSpendsLost = 5
-	cfg.lostChildOfPending = 5
-	cfg.pendingSpendsLostChild = true
-	sc := newReorgScenario(t, cfg)
-
-	x := sc.hash(kindRawD1 | scenarioID(cfg.lostChildOfPending-1))
-	inOpen := false
-
-	for _, n := range sc.stp.GetCurrentSubtree().Nodes {
-		inOpen = inOpen || n.Hash == x
-	}
-
-	require.True(t, inOpen, "the last X starts in the open subtree")
-
-	require.NoError(t, sc.run(t))
-
-	nodes := assemblyNodes(sc.stp)
-	requireEveryPrefixResolves(t, sc, nodes)
-	require.Equal(t, sc.expectedOrderAfter(), txHashes(nodes))
-	requireAssemblyValid(t, sc.stp, sc.onChainAfter)
 }
 
 // C is in the moved-back block and spends X, which the move-back keeps at its pending position, but
