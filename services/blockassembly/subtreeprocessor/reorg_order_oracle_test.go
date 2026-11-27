@@ -46,54 +46,6 @@ func TestOrderOracle_AcceptsParentFirst(t *testing.T) {
 	}.check())
 }
 
-func TestOrderOracle_RejectsChildBeforeParent(t *testing.T) {
-	chainParent, x, c := oracleHash(1), oracleHash(2), oracleHash(3)
-
-	err := oracleCase{
-		seq:      []chainhash.Hash{c, x},
-		inpoints: map[chainhash.Hash]*subtreepkg.TxInpoints{x: oracleInpoints(chainParent), c: oracleInpoints(x)},
-		onChain:  map[chainhash.Hash]struct{}{chainParent: {}},
-	}.check()
-	require.ErrorContains(t, err, "before its parent")
-}
-
-func TestOrderOracle_RejectsUnresolvedParent(t *testing.T) {
-	x := oracleHash(2)
-
-	err := oracleCase{
-		seq:      []chainhash.Hash{x},
-		inpoints: map[chainhash.Hash]*subtreepkg.TxInpoints{x: oracleInpoints(oracleHash(9))},
-	}.check()
-	require.ErrorContains(t, err, "neither on chain nor in assembly")
-}
-
-func TestOrderOracle_RejectsDuplicateHash(t *testing.T) {
-	chainParent, x := oracleHash(1), oracleHash(2)
-
-	err := oracleCase{
-		seq:      []chainhash.Hash{x, x},
-		inpoints: map[chainhash.Hash]*subtreepkg.TxInpoints{x: oracleInpoints(chainParent)},
-		onChain:  map[chainhash.Hash]struct{}{chainParent: {}},
-	}.check()
-	require.ErrorContains(t, err, "twice")
-}
-
-func TestOrderOracle_RejectsTwoSpendersOfOneOutpoint(t *testing.T) {
-	chainParent, x, y := oracleHash(1), oracleHash(2), oracleHash(3)
-
-	err := oracleCase{
-		seq:      []chainhash.Hash{x, y},
-		inpoints: map[chainhash.Hash]*subtreepkg.TxInpoints{x: oracleInpoints(chainParent), y: oracleInpoints(chainParent)},
-		onChain:  map[chainhash.Hash]struct{}{chainParent: {}},
-	}.check()
-	require.ErrorContains(t, err, "spent twice")
-}
-
-func TestOrderOracle_RejectsMissingInpoints(t *testing.T) {
-	err := oracleCase{seq: []chainhash.Hash{oracleHash(2)}}.check()
-	require.ErrorContains(t, err, "no inpoints")
-}
-
 func TestOrderOracle_SkipsCoinbasePlaceholder(t *testing.T) {
 	chainParent, x := oracleHash(1), oracleHash(2)
 
@@ -120,24 +72,52 @@ func TestSubtreeShapeOracle(t *testing.T) {
 	require.ErrorContains(t, checkSubtreeShape([]*subtreepkg.Subtree{build(4), build(3), build(4)}), "size")
 }
 
-func TestOrderOracle_RejectsATransactionAlreadyOnChain(t *testing.T) {
-	chainParent, x := oracleHash(1), oracleHash(2)
+func TestOrderOracle_Rejects(t *testing.T) {
+	chainParent, x, y := oracleHash(1), oracleHash(2), oracleHash(3)
+	c := y
+	placeholder := subtreepkg.CoinbasePlaceholderHashValue
+	onChain := map[chainhash.Hash]struct{}{chainParent: {}}
 
-	err := oracleCase{
-		seq:      []chainhash.Hash{x},
-		inpoints: map[chainhash.Hash]*subtreepkg.TxInpoints{x: oracleInpoints(chainParent)},
-		onChain:  map[chainhash.Hash]struct{}{chainParent: {}, x: {}},
-	}.check()
-	require.ErrorContains(t, err, "already on chain")
-}
+	tests := []struct {
+		name    string
+		c       oracleCase
+		wantErr string
+	}{
+		{"ChildBeforeParent", oracleCase{
+			seq:      []chainhash.Hash{c, x},
+			inpoints: map[chainhash.Hash]*subtreepkg.TxInpoints{x: oracleInpoints(chainParent), c: oracleInpoints(x)},
+			onChain:  onChain,
+		}, "before its parent"},
+		{"UnresolvedParent", oracleCase{
+			seq:      []chainhash.Hash{x},
+			inpoints: map[chainhash.Hash]*subtreepkg.TxInpoints{x: oracleInpoints(oracleHash(9))},
+		}, "neither on chain nor in assembly"},
+		{"DuplicateHash", oracleCase{
+			seq:      []chainhash.Hash{x, x},
+			inpoints: map[chainhash.Hash]*subtreepkg.TxInpoints{x: oracleInpoints(chainParent)},
+			onChain:  onChain,
+		}, "twice"},
+		{"TwoSpendersOfOneOutpoint", oracleCase{
+			seq:      []chainhash.Hash{x, y},
+			inpoints: map[chainhash.Hash]*subtreepkg.TxInpoints{x: oracleInpoints(chainParent), y: oracleInpoints(chainParent)},
+			onChain:  onChain,
+		}, "spent twice"},
+		{"MissingInpoints", oracleCase{seq: []chainhash.Hash{x}}, "no inpoints"},
+		{"ATransactionAlreadyOnChain", oracleCase{
+			seq:      []chainhash.Hash{x},
+			inpoints: map[chainhash.Hash]*subtreepkg.TxInpoints{x: oracleInpoints(chainParent)},
+			onChain:  map[chainhash.Hash]struct{}{chainParent: {}, x: {}},
+		}, "already on chain"},
+		{"CoinbasePlaceholderPastTheFront", oracleCase{
+			seq:      []chainhash.Hash{x, placeholder},
+			inpoints: map[chainhash.Hash]*subtreepkg.TxInpoints{x: oracleInpoints(chainParent)},
+			onChain:  onChain,
+		}, "coinbase placeholder"},
+	}
 
-func TestOrderOracle_RejectsCoinbasePlaceholderPastTheFront(t *testing.T) {
-	chainParent, x := oracleHash(1), oracleHash(2)
-
-	err := oracleCase{
-		seq:      []chainhash.Hash{x, subtreepkg.CoinbasePlaceholderHashValue},
-		inpoints: map[chainhash.Hash]*subtreepkg.TxInpoints{x: oracleInpoints(chainParent)},
-		onChain:  map[chainhash.Hash]struct{}{chainParent: {}},
-	}.check()
-	require.ErrorContains(t, err, "coinbase placeholder")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.ErrorContains(t, tt.c.check(), tt.wantErr)
+		})
+	}
 }

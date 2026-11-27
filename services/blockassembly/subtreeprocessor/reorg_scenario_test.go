@@ -163,12 +163,19 @@ func txHashes(nodes []subtreepkg.Node) []chainhash.Hash {
 func TestReorgScenario_IntakeFeedsTheQueueAtItsRate(t *testing.T) {
 	sc := newReorgScenario(t, smallScenarioConfig())
 
-	stop := sc.startIntake(100_000)
-	time.Sleep(200 * time.Millisecond)
+	const tps = 100_000
+
+	start := time.Now()
+	stop := sc.startIntake(tps)
+
+	require.Eventually(t, func() bool { return sc.stp.QueueLength() > 0 }, 10*time.Second, 5*time.Millisecond)
+
 	sent := stop()
+	elapsed := time.Since(start)
 
 	require.Positive(t, sent, "intake sends while it runs")
-	require.LessOrEqual(t, sent, 40_000, "and not much faster than its rate")
+	// One batch of slack: the ticker sends a batch per 1000/tps seconds and drops ticks when late.
+	require.LessOrEqual(t, sent, int(tps*elapsed.Seconds())+1000, "and not faster than its rate")
 	require.Equal(t, int64(sent), sc.stp.QueueLength(), "nothing dequeues while the processor is not started")
 }
 
@@ -219,6 +226,44 @@ func TestReorgScenario_HasParentEdgesInsideTheAssembly(t *testing.T) {
 
 	require.NoError(t, sc.run(t))
 	require.Greater(t, inAssemblyParentEdges(sc.stp), 20, "after the reorg the D1 parents are in assembly too")
+}
+
+// The winning blocks are what the network accepted, so a chain child is never before its parent,
+// in the same block or in an earlier one. The blocks are consecutive slices of the winners.
+func TestReorgScenario_WinningBlocksPutEachChainChildAfterItsParent(t *testing.T) {
+	cfg := smallScenarioConfig()
+	cfg.hitsAtFront = true
+	cfg.forwardBlocks = 4
+
+	for seed := uint64(1); seed <= 20; seed++ {
+		cfg.seed = seed
+		sc := newReorgScenario(t, cfg)
+
+		position := make(map[scenarioID]int, len(sc.winnerIDs))
+		for i, id := range sc.winnerIDs {
+			position[id] = i
+		}
+
+		chained := 0
+
+		for i, id := range sc.winnerIDs {
+			extra, ok := sc.extraParent[id]
+			if !ok {
+				continue
+			}
+
+			parentPos, inWinners := position[extra.parent]
+			if !inWinners {
+				continue
+			}
+
+			chained++
+
+			require.Less(t, parentPos, i, "seed %d: a chain child comes after its parent", seed)
+		}
+
+		require.Positive(t, chained, "seed %d: the winners hold chains", seed)
+	}
 }
 
 func TestReorgScenario_OracleCatchesAParentMovedAfterItsChild(t *testing.T) {
