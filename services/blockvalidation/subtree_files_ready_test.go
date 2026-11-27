@@ -15,11 +15,11 @@ import (
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	blobmemory "github.com/bsv-blockchain/teranode/stores/blob/memory"
-	bloboptions "github.com/bsv-blockchain/teranode/stores/blob/options"
 	blockchain_store "github.com/bsv-blockchain/teranode/stores/blockchain"
 	blockchainoptions "github.com/bsv-blockchain/teranode/stores/blockchain/options"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	testutil "github.com/bsv-blockchain/teranode/util/test"
+	"github.com/bsv-blockchain/teranode/util/test/fault"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sync/errgroup"
 )
@@ -226,16 +226,6 @@ func TestProcessSubtreesNotSet_ExcludesInvalidBlocks(t *testing.T) {
 	require.Empty(t, blocksAfter, "the invalid block must still not be a candidate after a sweep, so nothing loops")
 }
 
-// existsErrorStore is the real in-memory blob store with Exists forced to fail, standing in
-// for a storage backend that cannot answer (network blip, permission error).
-type existsErrorStore struct {
-	*blobmemory.Memory
-}
-
-func (s *existsErrorStore) Exists(context.Context, []byte, fileformat.FileType, ...bloboptions.FileOption) (bool, error) {
-	return false, errors.NewStorageError("simulated Exists failure")
-}
-
 // TestProcessSubtreesNotSet_LeavesFlagFalseWhenExistsFails pins the fail-closed side of
 // subtreeFilesReady: when the store cannot say whether a file exists, the sweep must not
 // set subtrees_set, even though every file is in fact present, and must leave the block
@@ -247,7 +237,11 @@ func TestProcessSubtreesNotSet_LeavesFlagFalseWhenExistsFails(t *testing.T) {
 		require.NoError(t, subtreeStore.Set(ctx, h[:], fileformat.FileTypeSubtree, []byte("subtree-bytes")))
 	}
 
-	bv.subtreeStore = &existsErrorStore{Memory: subtreeStore}
+	// The real in-memory store with Exists forced to fail, standing in for a storage backend that
+	// cannot answer (network blip, permission error).
+	faults := fault.NewPlan()
+	faults.On("Exists").Fail(errors.NewStorageError("simulated Exists failure"))
+	bv.subtreeStore = fault.NewBlobStore(subtreeStore, faults)
 
 	runSweep(ctx, bv)
 
