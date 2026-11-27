@@ -756,8 +756,8 @@ func handOff(sc *reorgScenario, hash chainhash.Hash) bool {
 }
 
 // A late hand-off of a transaction a winning block mined stays out of the template after a fast-path
-// reorg, as it does after the slow path's forward steps (kept mined sets). The fast path keeps its one
-// union set under the tip, so moving back the tip forgets it and the hand-off is placed again.
+// reorg, as it does after the slow path's forward steps (kept mined sets). The one union set sits under
+// F2, so a later move-back of only F2 also forgets F1's: a late F1 hand-off is placed (documented fallback).
 func TestReorgDifferential_FastPathKeepsTheWinnersMinedSet(t *testing.T) {
 	sc := newReorgScenario(t, smallScenarioConfig())
 
