@@ -133,12 +133,17 @@ jobs:
           path: main
 
       # One test binary per package and side, so the timed runs below compile nothing.
+      # -funcalign=64 starts every function on a 64-byte boundary. Go's default on amd64
+      # is 32, so code a PR adds elsewhere can move a benchmark by 32 bytes and change
+      # how its loop sits in 64-byte blocks. On the AMD runners that read as a 12% change
+      # in BenchmarkAtomicPointer with identical machine code. The flag only changes the
+      # link step, so the benchmark build cache, built without it, still hits.
       - name: Build benchmark binaries
         run: |
           i=0
           for pkg in ${{ matrix.packages }}; do
-            go test -c -tags testtxmetacache -o "$RUNNER_TEMP/bench/pr/$i.test" "$pkg"
-            (cd main && go test -c -tags testtxmetacache -o "$RUNNER_TEMP/bench/main/$i.test" "$pkg")
+            go test -c -tags testtxmetacache -ldflags=-funcalign=64 -o "$RUNNER_TEMP/bench/pr/$i.test" "$pkg"
+            (cd main && go test -c -tags testtxmetacache -ldflags=-funcalign=64 -o "$RUNNER_TEMP/bench/main/$i.test" "$pkg")
             i=$((i + 1))
           done
 
