@@ -708,9 +708,10 @@ type Store interface {
 	// QueryStaleCreatingTxs returns the hashes of transactions still in the "creating"
 	// state whose unminedSince height is strictly below unminedSinceBefore. Used by the
 	// pruner sweeper to roll forward abandoned tentative creates. When limit > 0 the
-	// result is bounded to that many hashes (the caller sweeps any remainder next pass)
-	// and the query is aborted early; limit <= 0 means unbounded. The context aborts an
-	// in-progress scan. Stores without create-first support return (nil, nil).
+	// result holds at most that many hashes (the caller sweeps any remainder next pass)
+	// and the query stops once it has them; with fewer matches the store may still read
+	// every record in the range. limit <= 0 means unbounded. The context stops the scan
+	// at the next result it returns. Stores without create-first support return (nil, nil).
 	QueryStaleCreatingTxs(ctx context.Context, unminedSinceBefore uint32, limit int) ([]chainhash.Hash, error)
 
 	// Close drains any in-flight batched writes (Create, Spend, Get, Unlock,

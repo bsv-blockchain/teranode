@@ -13,9 +13,9 @@ import (
 )
 
 // defaultCreatingSweepMaxPerPass is the per-pass cap used when
-// Pruner.CreatingTxSweepMaxPerPass is zero. The cap bounds both the store-side scan and
-// the serial roll-forward loop so neither grows with the unmined backlog after a crash
-// burst. A backlog above the cap is not swept in order: each pass takes one page of it, and the
+// Pruner.CreatingTxSweepMaxPerPass is zero. The cap bounds the hashes a pass takes and so
+// the serial roll-forward loop, which does not grow with the unmined backlog after a crash
+// burst. It does not bound the store-side scan (see QueryStaleCreatingTxs). A backlog above the cap is not swept in order: each pass takes one page of it, and the
 // store hands back a different page each time (see the note on convergence at sweepCreatingTxs),
 // so a record beyond the cap is reached on a later pass, not necessarily the next one.
 const defaultCreatingSweepMaxPerPass = 1000

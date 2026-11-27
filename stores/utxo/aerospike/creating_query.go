@@ -16,14 +16,16 @@ import (
 // server-side via a filter expression. Used by the pruner sweeper to roll
 // forward abandoned tentative creates.
 //
-// The result is bounded: when limit > 0 the scan stops after that many hashes and
-// the deferred recordset.Close() aborts the remaining partitions, so neither the
-// server scan nor the returned slice grows unbounded with the unmined backlog. The
-// caller treats a full page as "more may remain" and takes the rest on later passes. The
-// query keeps no cursor, and the page of a backlog above the limit is not the same from
-// call to call: the server streams the partitions as they answer, so which records come
-// first changes. The context is honoured so a shutdown mid-scan aborts promptly rather
-// than draining.
+// When limit > 0 the returned slice holds at most that many hashes: the loop stops
+// once it has them and the deferred recordset.Close() aborts the partitions not yet
+// read. The limit does not bound the server scan. With fewer matches than the limit,
+// the usual case when no record is creating, the server reads every record in the
+// unminedSince range to apply the filter. The caller treats a full page as "more may
+// remain" and takes the rest on later passes. The query keeps no cursor, and the page
+// of a backlog above the limit is not the same from call to call: the server streams
+// the partitions as they answer, so which records come first changes. The context is
+// checked only when a result arrives, so a cancelled scan that finds no match runs on
+// until the server finishes it.
 func (s *Store) QueryStaleCreatingTxs(ctx context.Context, unminedSinceBefore uint32, limit int) ([]chainhash.Hash, error) {
 	// unminedSinceBefore <= 1 leaves an empty [1, x) range; nothing to sweep.
 	if unminedSinceBefore <= 1 {
