@@ -273,9 +273,8 @@ func removeMapScenarioConfig() reorgScenarioConfig {
 	return cfg
 }
 
-// Design 3.2 step 7 and section 5 item 2b: a transaction in the removeMap, whether pending, a hit,
-// a lost-block transaction that is also pending (X) or one only the lost block has, is absent from
-// the assembly and the tx map afterwards and its removeMap entry is consumed.
+// A transaction in the removeMap (pending, a hit, X or lost-block only) is absent from the assembly
+// and the tx map afterwards, and its removeMap entry is consumed.
 func TestReorgScenario_SlowPathConsumesRemoveMapEntries(t *testing.T) {
 	for _, parallel := range []bool{false, true} {
 		name := map[bool]string{false: "sequential remainder", true: "parallel remainder"}[parallel]
@@ -312,14 +311,9 @@ func TestReorgScenario_SlowPathConsumesRemoveMapEntries(t *testing.T) {
 	}
 }
 
-// Design section 5 item 2c, plan PR 9a: C is in B and not in F or P, and spends X, which is in B and
-// P and not in F. Today's move-back skips X (it is in the tx map), builds C into the prefix and
-// leaves X at its pending position, so with a subtree boundary between them the slow path publishes
-// C before its parent X. Block validation rejects that order.
-//
-// This test pins the inversion as the order oracle's rejection. It is the red test PR 9a turns
-// green (bsv-blockchain/teranode#2268): when the slow path emits a recovered child only after its
-// last unconfirmed parent, the final assertion below flips and expectedOrderAfter gains the rule.
+// The slow path publishes a lost-block child C before its pending parent X when a subtree boundary
+// separates them; block validation rejects that order, so this pins the order oracle's rejection.
+// PR 9a (bsv-blockchain/teranode#2268) turns it green.
 func TestReorgScenario_SlowPathPublishesLostChildBeforePendingParent(t *testing.T) {
 	cfg := smallScenarioConfig()
 	cfg.lostChildOfPending = 3
@@ -350,12 +344,9 @@ func TestReorgScenario_SlowPathPublishesLostChildBeforePendingParent(t *testing.
 	require.ElementsMatch(t, sc.expectedMarkFalse(), sc.utxo.marked(false), "C and X are both marked off the longest chain")
 }
 
-// Design section 5, gate on B's coinbase children and on the removeMap "including what
-// removeCoinbaseUtxos will add". Pending transactions that spend B's coinbase are deleted with it:
-// out of the UTXO store (saved to the reorg journal), out of the assembly and out of the tx map,
-// and every other pending transaction keeps its order. Their removeMap entries are not consumed:
-// the entries were made after the children left the subtrees, so no remainder pass meets them, and
-// they stay to keep the same transactions out of the queue.
+// Pending children of the lost block's coinbase are deleted with it and every other pending
+// transaction keeps its order. Their removeMap entries stay: removeCoinbaseUtxos adds them and then
+// takes the children out of the subtrees itself, so no remainder pass meets them.
 func TestReorgScenario_SlowPathRemovesCoinbaseChildren(t *testing.T) {
 	cfg := smallScenarioConfig()
 	cfg.coinbaseChildren = 4
@@ -391,11 +382,8 @@ func TestReorgScenario_SlowPathRemovesCoinbaseChildren(t *testing.T) {
 	require.ElementsMatch(t, sc.winnerNotLost(), sc.utxo.marked(true))
 }
 
-// Plan A1 row 6: a pending hash that sits twice in the chained subtrees, as a failed path can leave
-// it. The remainder pass inserts into the fresh tx map and, above the parallel threshold, compacts
-// to what was inserted (wasInserted), so a surviving duplicate is built once, at its first position,
-// and both copies of a hit are dropped. Below the threshold addNode skips the second copy through the
-// map. Both branches give the same result.
+// A pending hash sitting twice in the subtrees is built once, at its first position, and both
+// copies of a hit are dropped, below and above the parallel threshold alike.
 func TestReorgScenario_SlowPathLeavesADuplicatePendingHashOnce(t *testing.T) {
 	for _, parallel := range []bool{false, true} {
 		name := map[bool]string{false: "sequential remainder", true: "parallel remainder"}[parallel]
@@ -455,14 +443,8 @@ func countHash(hashes []chainhash.Hash, h chainhash.Hash) int {
 	return n
 }
 
-// Plan A1 row 6: an empty forward block, first and last. Its step creates the block's coinbase and
-// returns before resetSubtreeState, so it neither drains nor resizes the subtrees.
-//
-// Finding (design item: empty and empty-last forward block): the subtree size is set by the LAST
-// forward step, which resets with the configured size; every earlier step, and the move-back, build
-// 1,048,576-leaf subtrees. With an empty last block no step does, so the reorg ends with a single
-// 1,048,576-leaf open subtree where the configured size is smaller. Pinned as it is today; the fast
-// path must match it or the finding must be fixed first.
+// An empty first and last forward block create the coinbase and return before resetSubtreeState,
+// so with an empty last block the reorg ends on one 1,048,576-leaf open subtree. Pinned as today.
 func TestReorgScenario_SlowPathWithEmptyForwardBlocks(t *testing.T) {
 	const moveBackSize = 1024 * 1024
 
@@ -524,14 +506,9 @@ func btoi(b bool) int {
 	return 0
 }
 
-// Design section 5 items 6 and 10: the queue during a reorg. The head drain takes a batch queued
-// before the reorg ahead of the move-back, so it sits in the pending set when the move-back and the
-// forward steps run: a queued lost-block transaction keeps its queue position after the pending set
-// instead of joining the D1 prefix, and one in the removeMap is flagged and consumed by the first
-// forward step. A forward step drains the queue after its remainder pass: a batch that arrives
-// between the steps is placed after the remainder, in queue order, and what the step's block mined is
-// filtered out. The arrival is injected at the progress beat before the second forward block, so it
-// is deterministic.
+// The head drain places a batch queued before the reorg after the pending set, and each forward step
+// drains the queue after its remainder pass, filtering what its block mined. The mid-reorg arrival
+// is injected at the progress beat before the second forward block, so it is deterministic.
 func TestReorgScenario_SlowPathDrainsTheQueueAroundTheReorg(t *testing.T) {
 	sc := newReorgScenario(t, smallScenarioConfig())
 	require.Zero(t, sc.stp.settings.BlockAssembly.DoubleSpendWindow, "with a window the drains would hold recent batches back")
@@ -638,9 +615,8 @@ func TestReorgScenario_SlowPathDrainsTheQueueAroundTheReorg(t *testing.T) {
 	require.ElementsMatch(t, sc.rawD1(), sc.utxo.marked(false), "the queued lost-block transaction is in the assembly, so it is marked like the rest of raw D1")
 }
 
-// Transactions that arrive while the reorg runs are never lost or placed twice: what the drains took
-// follows the remainder in the order they were sent, and the rest is still queued. A batch is queued
-// before the reorg, so the head drain takes at least that.
+// Transactions that arrive during the reorg are never lost or placed twice: what the drains took
+// follows the remainder in send order, and the rest is still queued.
 func TestReorgScenario_SlowPathKeepsEveryTransactionSentDuringTheReorg(t *testing.T) {
 	sc := newReorgScenario(t, smallScenarioConfig())
 	require.Zero(t, sc.stp.settings.BlockAssembly.DoubleSpendWindow)
@@ -668,11 +644,9 @@ func TestReorgScenario_SlowPathKeepsEveryTransactionSentDuringTheReorg(t *testin
 	require.Equal(t, len(after), sc.stp.GetCurrentTxMap().Length())
 }
 
-// Design section 5 gate "no conflicting nodes in B or F": the fast path declines these, so the slow
-// path's result is the reference. A winning block's conflicting node W' demotes the pending
-// transaction L' that spends the same output: L' leaves the assembly and the tx map and is marked off
-// the longest chain, and its pending child D', which the UTXO store has no record of, is dropped by
-// the assembly's own parent links (dropConflictingDescendants), not by the store's cascade.
+// A winning block's conflicting node demotes the pending transaction that spends the same output,
+// and the assembly's own parent links drop its pending child (dropConflictingDescendants), not the
+// store's cascade. The fast path declines these, so the slow path is the reference.
 func TestReorgScenario_SlowPathDemotesPendingLosersOfAWinnerConflict(t *testing.T) {
 	for _, parallel := range []bool{false, true} {
 		name := map[bool]string{false: "sequential remainder", true: "parallel remainder"}[parallel]
@@ -719,11 +693,9 @@ func TestReorgScenario_SlowPathDemotesPendingLosersOfAWinnerConflict(t *testing.
 	}
 }
 
-// A lost block's conflicting node W (it won a conflict when B was applied) is reversed by the
-// move-back: W is conflicting again, the loser L it displaced owns the output again, and W is evicted
-// through the removeMap, so it is absent from the assembly, not marked (marks cover what the assembly
-// holds) and the removeMap entry is consumed by the first forward step. L is in no set, so it is not
-// re-added to the assembly (the documented gap in reorgBlocks).
+// The move-back reverses a conflict the lost block won: the winner is evicted through the removeMap
+// (entry consumed, not marked) and the loser it displaced is not re-added to the assembly, the
+// documented gap in reorgBlocks.
 func TestReorgScenario_SlowPathReversesAConflictWonInTheLostBlock(t *testing.T) {
 	cfg := smallScenarioConfig()
 	cfg.conflictsInLost = 2
