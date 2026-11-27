@@ -1,8 +1,11 @@
 diff --git a/services/blockassembly/subtreeprocessor/SubtreeProcessor.go b/services/blockassembly/subtreeprocessor/SubtreeProcessor.go
-index a3f87f4ec..f799fcee6 100644
+index 3942b3db1..981045e58 100644
 --- a/services/blockassembly/subtreeprocessor/SubtreeProcessor.go
 +++ b/services/blockassembly/subtreeprocessor/SubtreeProcessor.go
-@@ -7858,10 +7858,7 @@ func (stp *SubtreeProcessor) moveForwardBlockDeferringDrain(ctx context.Context,
+@@ -8067,16 +8067,13 @@ func (stp *SubtreeProcessor) moveForwardBlockDeferringDrain(ctx context.Context,
+ 	}
+ 
+ 	if len(block.Subtrees) == 0 {
  		// empty block, nothing to do
  		stp.logger.Infof("[moveForwardBlock][%s] block has no subtrees, skipping processing", block.String())
  
@@ -14,3 +17,6 @@ index a3f87f4ec..f799fcee6 100644
  
  		// keeps nothing, but drops the expired kept sets, which a catch-up's dequeue loop cannot
  		stp.keepMinedSet(block, nil)
+ 
+ 		return nil, nil, nil, nil
+ 	}

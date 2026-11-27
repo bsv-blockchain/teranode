@@ -1792,7 +1792,7 @@ func (stp *SubtreeProcessor) reset(blockHeader *model.BlockHeader, moveBackBlock
 
 	// Times each phase: a failed fork reorg ends in a reset, so its cost is part of the reorg's
 	// (issue 2269).
-	defer stp.startPhases("reset")()
+	defer stp.startPhases("reset", &err)()
 
 	stp.phases.count("pending", max(int(stp.TxCount())-1, 0)) //nolint:gosec // a count, far below MaxInt
 
@@ -5744,7 +5744,7 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveBackBlocks []*
 
 		// Times each phase of the fork reorg; the forward steps report their own sub-phases
 		// (issue 2269). A catch-up above is not timed.
-		defer stp.startPhases("reorgBlocks")()
+		defer stp.startPhases("reorgBlocks", &err)()
 
 		// other operation, wait for all blocks to be processed first, mined_set etc.
 		if err = stp.WaitForPendingBlocks(ctx); err != nil {
