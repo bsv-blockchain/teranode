@@ -25,6 +25,7 @@ import (
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/bsv-blockchain/teranode/util/testutil"
 	"github.com/bsv-blockchain/teranode/util/testutil/blobfault"
+	promtestutil "github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -3149,23 +3150,63 @@ func TestStoreStages_ACancelledWaitForTheMetaSlotCancelsTheStoreAndTimesNoBuild(
 	require.Equal(t, before.count, storeStep(t, "meta_build").count, "no meta_build sample")
 }
 
+// A hand-off that gives up when its context ends settles the part it held as cancelled, so the
+// request still settles and the queue's byte charge ends.
 func TestStoreStages_ARetryHandOffGivesUpWhenItsContextEnds(t *testing.T) {
-	full := make(chan *subtreeRetrySend)
+	tests := []struct {
+		name  string
+		entry func(outcome *subtreeStoreOutcome) *subtreeRetrySend
+		other func(outcome *subtreeStoreOutcome)
+	}{
+		{
+			name: "subtree write",
+			entry: func(o *subtreeStoreOutcome) *subtreeRetrySend {
+				return &subtreeRetrySend{subtreeBytes: []byte("s"), outcome: o}
+			},
+			other: func(o *subtreeStoreOutcome) { o.metaStored() },
+		},
+		{
+			name: "meta write",
+			entry: func(o *subtreeStoreOutcome) *subtreeRetrySend {
+				return &subtreeRetrySend{subtreeMetaBytes: []byte("m"), outcome: o}
+			},
+			other: func(o *subtreeStoreOutcome) { o.subtreeStored(false) },
+		},
+	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			subtree, txMap := makeSubtree(t, 1)
+			result := make(chan subtreeprocessor.StoreResult, 1)
+			req := subtreeprocessor.NewSubtreeRequest{Subtree: subtree, ParentTxMap: txMap, Result: result}
+			outcome := newSubtreeStoreOutcome(req, true, nil)
+			full := make(chan *subtreeRetrySend)
 
-	done := make(chan struct{})
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
 
-	go func() {
-		sendRetry(ctx, full, &subtreeRetrySend{})
-		close(done)
-	}()
+			done := make(chan struct{})
 
-	select {
-	case <-done:
-	case <-time.After(5 * time.Second):
-		t.Fatal("sendRetry blocked on a full channel after its context ended")
+			go func() {
+				sendRetry(ctx, full, tc.entry(outcome))
+				close(done)
+			}()
+
+			select {
+			case <-done:
+			case <-time.After(5 * time.Second):
+				t.Fatal("sendRetry blocked on a full channel after its context ended")
+			}
+
+			tc.other(outcome)
+
+			select {
+			case res := <-result:
+				require.True(t, res.Cancelled, "the dropped part is cancelled")
+			default:
+				t.Fatal("the dropped part never settled, so the request never did")
+			}
+		})
 	}
 }
 
@@ -3182,6 +3223,13 @@ func TestStoreStages_TheDAHUpdateOfAnExistingSubtreeTakesAWriterSlot(t *testing.
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	_, _, err := server.storeSubtreeData(ctx, subtreeprocessor.NewSubtreeRequest{Subtree: subtree, ParentTxMap: txMap}, make(chan *subtreeRetrySend, 1))
+	result := make(chan subtreeprocessor.StoreResult, 1)
+	failedBefore := promtestutil.ToFloat64(prometheusBlockAssemblySubtreeStoreFailed)
+
+	_, _, err := server.storeSubtreeData(ctx, subtreeprocessor.NewSubtreeRequest{Subtree: subtree, ParentTxMap: txMap, Result: result}, make(chan *subtreeRetrySend, 1))
 	require.ErrorIs(t, err, context.Canceled, "the DAH update waited for a slot")
+
+	res := <-result
+	require.True(t, res.Cancelled, "a wait that ended with its context is cancelled, not failed")
+	require.Equal(t, failedBefore, promtestutil.ToFloat64(prometheusBlockAssemblySubtreeStoreFailed), "a shutdown is no store failure")
 }

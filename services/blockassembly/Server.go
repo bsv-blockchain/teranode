@@ -1227,11 +1227,12 @@ func (ba *BlockAssembly) setDAHStaged(ctx context.Context, stage chan struct{}, 
 }
 
 // sendRetry hands an entry to the retry processor, giving up when ctx ends so shutdown cannot hang on
-// a full channel.
+// a full channel. An entry it gave up on settles its parts as cancelled, so the request still settles.
 func sendRetry(ctx context.Context, ch chan *subtreeRetrySend, entry *subtreeRetrySend) {
 	select {
 	case ch <- entry:
 	case <-ctx.Done():
+		entry.cancelled(ctx.Err())
 	}
 }
 
@@ -1340,7 +1341,12 @@ func (ba *BlockAssembly) storeSubtreeData(ctx context.Context, subtreeRequest su
 		dah := height + ba.settings.GlobalBlockHeightRetention
 		if err := ba.setDAHStaged(ctx, writeStage, subtree.RootHash()[:], fileformat.FileTypeSubtree, dah); err != nil {
 			err = errors.NewProcessingError("[BlockAssembly:storeSubtreeData][%s] failed to update subtree DAH", subtree.RootHash().String(), err)
-			outcome.abort(err)
+			if ctx.Err() != nil {
+				// the wait for a writer slot ended with the context: a shutdown, no store failure
+				outcome.abortCancelled(err)
+			} else {
+				outcome.abort(err)
+			}
 
 			return nil, nil, err
 		}

@@ -178,6 +178,22 @@ func (o *subtreeStoreOutcome) abort(err error) {
 	}
 }
 
+// abortCancelled settles every part still open as cancelled, for an exit before the writes started
+// because the context ended.
+func (o *subtreeStoreOutcome) abortCancelled(err error) {
+	if o == nil {
+		return
+	}
+
+	o.mu.Lock()
+	open := o.pending
+	o.mu.Unlock()
+
+	for range open {
+		o.cancel(err)
+	}
+}
+
 // cancel settles a part as cancelled: by shutdown, or because a reset superseded its request.
 func (o *subtreeStoreOutcome) cancel(err error) {
 	o.settle(func(r *subtreeprocessor.StoreResult) {
@@ -187,6 +203,18 @@ func (o *subtreeStoreOutcome) cancel(err error) {
 			r.Err = err
 		}
 	})
+}
+
+// cancelled settles every part the entry holds as cancelled, for an entry that never reached the
+// retry processor.
+func (r *subtreeRetrySend) cancelled(err error) {
+	if len(r.subtreeBytes) > 0 {
+		r.outcome.cancel(err)
+	}
+
+	if len(r.subtreeMetaBytes) > 0 {
+		r.outcome.cancel(err)
+	}
 }
 
 // exhausted settles every part the entry still holds as failed.
