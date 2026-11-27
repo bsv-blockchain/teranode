@@ -1,8 +1,8 @@
 diff --git a/services/blockassembly/subtreeprocessor/SubtreeProcessor.go b/services/blockassembly/subtreeprocessor/SubtreeProcessor.go
-index 081e33848..cc70c4c84 100644
+index e9d592ca4..42230c690 100644
 --- a/services/blockassembly/subtreeprocessor/SubtreeProcessor.go
 +++ b/services/blockassembly/subtreeprocessor/SubtreeProcessor.go
-@@ -6502,7 +6502,7 @@ func (stp *SubtreeProcessor) moveBackBlockBulkBuild(ctx context.Context, block *
+@@ -6782,7 +6782,7 @@ func (stp *SubtreeProcessor) moveBackBlockBulkBuild(ctx context.Context, block *
  				continue
  			}
  

@@ -3,6 +3,7 @@ package subtreeprocessor
 import (
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
+	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/pkg/txrules"
 	utxostore "github.com/bsv-blockchain/teranode/stores/utxo"
 )
@@ -313,4 +314,22 @@ func (stp *SubtreeProcessor) keepPreviousNodeFunc(droppedFromBlock bool) func(ha
 
 		return true
 	}
+}
+
+// dropStrandedHeld keeps out of the template the held-back transactions whose parent the move-back
+// did not emit: recorded as dropped, so their descendants follow, and taken out of the tx map.
+func (stp *SubtreeProcessor) dropStrandedHeld(block *model.Block, hashes []chainhash.Hash) {
+	if len(hashes) == 0 {
+		return
+	}
+
+	stp.droppedMu.Lock()
+	defer stp.droppedMu.Unlock()
+
+	for _, hash := range hashes {
+		stp.recordDroppedLocked(hash)
+		stp.currentTxMap.Delete(hash)
+	}
+
+	stp.logger.Warnf("[moveBackBlock:BulkBuild][%s] dropped %d held-back transactions whose parent is not in the template", block.String(), len(hashes))
 }

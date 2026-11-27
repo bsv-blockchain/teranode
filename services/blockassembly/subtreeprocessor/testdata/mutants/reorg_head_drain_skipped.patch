@@ -1,8 +1,11 @@
 diff --git a/services/blockassembly/subtreeprocessor/SubtreeProcessor.go b/services/blockassembly/subtreeprocessor/SubtreeProcessor.go
-index 2d7cbd297..d7f361f59 100644
+index 3942b3db1..a2acf7d00 100644
 --- a/services/blockassembly/subtreeprocessor/SubtreeProcessor.go
 +++ b/services/blockassembly/subtreeprocessor/SubtreeProcessor.go
-@@ -5531,7 +5531,7 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveBackBlocks []*
+@@ -5786,13 +5786,13 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveBackBlocks []*
+ 		return errors.NewProcessingError("[reorgBlocks] error checking conflicting nodes against moveForward blocks", err)
+ 	}
+ 
  	stp.phases.done("upfront_reads")
  
  	// dequeueDuringBlockMovement all transactions that are in the queue
@@ -11,3 +14,6 @@ index 2d7cbd297..d7f361f59 100644
  		return errors.NewProcessingError("[reorgBlocks] error dequeueing transactions during block movement", err)
  	}
  
+ 	stp.phases.done("head_drain")
+ 
+ 	// A failed fork reorg keeps the subtrees and tx map of its last completed

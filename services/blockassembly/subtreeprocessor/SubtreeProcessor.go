@@ -7036,7 +7036,7 @@ func (stp *SubtreeProcessor) moveBackBlockBulkBuild(ctx context.Context, block *
 		}
 	}
 	if held != nil {
-		allNodes = held.flush(allNodes)
+		stp.dropStrandedHeld(block, held.stranded())
 	}
 
 	// Step 5: Determine subtree size

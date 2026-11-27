@@ -1,0 +1,13 @@
+diff --git a/services/blockassembly/subtreeprocessor/SubtreeProcessor.go b/services/blockassembly/subtreeprocessor/SubtreeProcessor.go
+index e331d70d6..840b39898 100644
+--- a/services/blockassembly/subtreeprocessor/SubtreeProcessor.go
++++ b/services/blockassembly/subtreeprocessor/SubtreeProcessor.go
+@@ -6821,7 +6821,7 @@ func (stp *SubtreeProcessor) moveBackBlockBulkBuild(ctx context.Context, block *
+ 		}
+ 	}
+ 	if held != nil {
+-		stp.dropStrandedHeld(block, held.stranded())
++		stp.dropStrandedHeld(block, nil) // mutant: a held-back transaction whose parent is not emitted stays in the tx map
+ 	}
+ 
+ 	// Step 5: Determine subtree size
