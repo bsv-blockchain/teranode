@@ -57,6 +57,7 @@ package aerospike
 
 import (
 	"context"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -758,7 +759,10 @@ func (s *Store) clearLockedOnRecordsMulti(items []lockClearItem) error {
 		}
 	}
 
-	var recordErrs []error
+	var (
+		failed    []failedClear
+		otherErrs []error
+	)
 
 	incomplete := make([]bool, len(items))
 
@@ -788,7 +792,7 @@ func (s *Store) clearLockedOnRecordsMulti(items []lockClearItem) error {
 				continue
 			}
 
-			recordErrs = append(recordErrs, errors.NewStorageError("[clearLockedOnRecordsMulti][%s] failed to clear record %d", items[ref.item].txID.String(), ref.idx, recErr))
+			failed = append(failed, failedClear{txID: items[ref.item].txID, idx: ref.idx, cause: recErr})
 		}
 	}
 
@@ -810,7 +814,7 @@ func (s *Store) clearLockedOnRecordsMulti(items []lockClearItem) error {
 
 		key, err := recordKey(it.txID, 0)
 		if err != nil {
-			recordErrs = append(recordErrs, err)
+			otherErrs = append(otherErrs, err)
 			continue
 		}
 
@@ -820,7 +824,7 @@ func (s *Store) clearLockedOnRecordsMulti(items []lockClearItem) error {
 
 	if len(masterRecords) > 0 {
 		if err := s.batchOperate(util.GetAerospikeBatchPolicy(s.settings), masterRecords); err != nil {
-			recordErrs = append(recordErrs, errors.NewStorageError("[clearLockedOnRecordsMulti] failed to clear creating on %d master records", len(masterRecords), err))
+			otherErrs = append(otherErrs, errors.NewStorageError("[clearLockedOnRecordsMulti] failed to clear creating on %d master records", len(masterRecords), err))
 		} else {
 			for i, br := range masterRecords {
 				recErr := br.BatchRec().Err
@@ -831,23 +835,68 @@ func (s *Store) clearLockedOnRecordsMulti(items []lockClearItem) error {
 					continue
 				}
 
-				recordErrs = append(recordErrs, errors.NewStorageError("[clearLockedOnRecordsMulti][%s] failed to clear record 0", items[masterItems[i]].txID.String(), recErr))
+				failed = append(failed, failedClear{txID: items[masterItems[i]].txID, idx: 0, cause: recErr})
 			}
 		}
 	}
 
-	const maxDetailedErrors = 10
-	if len(recordErrs) > maxDetailedErrors {
-		additional := make([]string, 0, len(recordErrs)-maxDetailedErrors)
-		for _, err := range recordErrs[maxDetailedErrors:] {
-			additional = append(additional, err.Error())
-		}
-
-		// Put the summary first: Error() truncates deep chains, so a tail
-		// summary would hide the identities it is meant to preserve.
-		summary := errors.NewStorageError("[clearLockedOnRecordsMulti] %d additional failures: %s", len(additional), strings.Join(additional, "; "))
-		recordErrs = append([]error{summary}, recordErrs[:maxDetailedErrors]...)
+	errs := otherErrs
+	if len(failed) > 0 {
+		errs = append([]error{failedClearsError(failed)}, otherErrs...)
 	}
 
-	return errors.Join(recordErrs...)
+	if len(errs) == 0 {
+		return nil
+	}
+
+	return errors.Join(errs...)
+}
+
+// failedClear is one record whose clear came back with an error.
+type failedClear struct {
+	txID  *chainhash.Hash
+	idx   uint32
+	cause error
+}
+
+// failedClearsError names every failed record and why it failed in one message,
+// grouped by transaction. Error() prints at most 20 links of a chain, so a link per record
+// would lose names once a caller joins other errors in front of it.
+func failedClearsError(failed []failedClear) error {
+	var (
+		order []*chainhash.Hash
+		byTx  = make(map[chainhash.Hash][]string)
+		b     strings.Builder
+	)
+
+	for _, f := range failed {
+		if _, seen := byTx[*f.txID]; !seen {
+			order = append(order, f.txID)
+		}
+
+		byTx[*f.txID] = append(byTx[*f.txID], strconv.FormatUint(uint64(f.idx), 10)+" ("+clearFailureReason(f.cause)+")")
+	}
+
+	for i, txID := range order {
+		if i > 0 {
+			b.WriteString("; ")
+		}
+
+		b.WriteString(txID.String())
+		b.WriteString(" records ")
+		b.WriteString(strings.Join(byTx[*txID], ", "))
+	}
+
+	return errors.NewStorageError("[clearLockedOnRecordsMulti] failed to clear %d records: %s", len(failed), b.String())
+}
+
+// clearFailureReason is the Aerospike result code of a failed clear, or the
+// error text when it is not an Aerospike error.
+func clearFailureReason(err error) string {
+	var aErr *aerospike.AerospikeError
+	if errors.As(err, &aErr) && aErr != nil {
+		return "ResultCode: " + aErr.ResultCode.String()
+	}
+
+	return err.Error()
 }

@@ -2,7 +2,7 @@ package aerospike
 
 import (
 	"context"
-	"strconv"
+	"fmt"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -92,6 +92,16 @@ func hasCreating(t *testing.T, client *uaerospike.Client, store *Store, txHash *
 	_, ok := rec.Bins[fields.Creating.String()]
 
 	return ok
+}
+
+// timedOut is how a clear error lists records that failed with TIMEOUT.
+func timedOut(idxs ...uint32) string {
+	parts := make([]string, len(idxs))
+	for i, idx := range idxs {
+		parts[i] = fmt.Sprintf("%d (ResultCode: TIMEOUT)", idx)
+	}
+
+	return strings.Join(parts, ", ")
 }
 
 func isBatchWrite(r aerospike.BatchRecordIfc) bool {
@@ -190,7 +200,7 @@ func TestApplyLockClearWorkReportsFailures(t *testing.T) {
 	}
 
 	type rec struct {
-		tx  int    // index into txs
+		tx  int    // index into outputs and hashes
 		idx uint32 // record index, 0 is the master
 	}
 
@@ -227,12 +237,23 @@ func TestApplyLockClearWorkReportsFailures(t *testing.T) {
 		{
 			name:     "extra record and master clears fail",
 			outputs:  []int{2, 10, 2},
-			creating: []rec{{0, 0}, {1, 0}, {2, 0}},
+			creating: []rec{{0, 0}, {1, 0}, {1, 1}, {1, 2}, {2, 0}},
 			fail:     []rec{{1, 1}, {2, 0}},
 			match:    isBatchWrite,
-			wantErr:  []named{{1, "] failed to clear record 1"}, {2, "] failed to clear record 0"}},
+			wantErr:  []named{{1, " records " + timedOut(1) + ";"}, {2, " records " + timedOut(0)}},
 			keep:     []rec{{1, 0}},
 			lose:     []rec{{0, 0}, {1, 2}},
+		},
+		{
+			// Twelve failed clears behind a failed read: every record is still named.
+			name:     "read failure and twelve failed clears",
+			outputs:  []int{2, 25, 25, 9},
+			creating: []rec{{0, 0}, {1, 0}, {2, 0}, {3, 0}},
+			fail:     []rec{{3, 0}, {1, 1}, {1, 2}, {1, 3}, {1, 4}, {1, 5}, {1, 6}, {2, 1}, {2, 2}, {2, 3}, {2, 4}, {2, 5}, {2, 6}},
+			match:    func(aerospike.BatchRecordIfc) bool { return true },
+			wantErr:  []named{{3, "] failed to read the extra record count"}, {1, " records " + timedOut(1, 2, 3, 4, 5, 6)}, {2, " records " + timedOut(1, 2, 3, 4, 5, 6)}},
+			keep:     []rec{{1, 0}, {2, 0}, {3, 0}},
+			lose:     []rec{{0, 0}},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -352,6 +373,10 @@ func TestClearLockedOnRecordsMultiMasterItem(t *testing.T) {
 	t.Run("item without master leaves the master alone", func(t *testing.T) {
 		txHash := create(t, 10, true)
 
+		for idx := uint32(1); idx <= 2; idx++ {
+			require.NoError(t, client.PutBins(nil, recordKey(t, store, txHash, idx), aerospike.NewBin(fields.Creating.String(), true)))
+		}
+
 		require.NoError(t, store.clearLockedOnRecordsMulti([]lockClearItem{{txID: txHash, childCount: 2}}))
 		require.True(t, hasCreating(t, client, store, txHash, 0), "only an item that sets master clears the master")
 		require.False(t, hasCreating(t, client, store, txHash, 2), "its extra records are cleared")
@@ -367,33 +392,6 @@ func TestClearLockedOnRecordsMultiMasterItem(t *testing.T) {
 		require.True(t, hasCreating(t, client, store, txHash, 0), "an incomplete transaction must keep creating on its master")
 		require.False(t, exists(t, recordKey(t, store, txHash, 2)), "the missing extra record stays missing")
 	})
-}
-
-// TestClearLockedOnRecordsMultiReportsEveryFailedRecord checks that a batch
-// with more than ten failures still names every transaction and record.
-func TestClearLockedOnRecordsMultiReportsEveryFailedRecord(t *testing.T) {
-	store := newTestStoreForGet(t)
-	store.batchOperateFn = func(_ *aerospike.BatchPolicy, records []aerospike.BatchRecordIfc) aerospike.Error {
-		for _, record := range records {
-			record.BatchRec().Err = &aerospike.AerospikeError{ResultCode: types.TIMEOUT}
-		}
-
-		return nil
-	}
-
-	first := &chainhash.Hash{0x01}
-	second := &chainhash.Hash{0x02}
-	err := store.clearLockedOnRecordsMulti([]lockClearItem{
-		{txID: first, childCount: 6, master: true},
-		{txID: second, childCount: 6, master: true},
-	})
-	require.ErrorIs(t, err, errors.ErrStorageError)
-
-	for _, txID := range []*chainhash.Hash{first, second} {
-		for idx := 1; idx <= 6; idx++ {
-			require.ErrorContains(t, err, txID.String()+"] failed to clear record "+strconv.Itoa(idx))
-		}
-	}
 }
 
 // TestApplyLockClearWorkReportsEveryFailure checks that a failed read of the
