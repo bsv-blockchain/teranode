@@ -214,6 +214,27 @@ func TestWhereFiltersBeforeCounting(t *testing.T) {
 
 	_, err = s.Exists(context.Background(), key("b"), fileformat.FileTypeSubtree)
 	require.ErrorIs(t, err, errInjected, "and does not count towards Nth")
+
+	t.Run("predicate can read the plan", func(t *testing.T) {
+		plan := fault.NewPlan()
+		plan.On("Exists").Where(func(fault.Call) bool {
+			return plan.Count("Set") == 0
+		}).Fail(errInjected)
+		s := blobStore(t, plan)
+
+		done := make(chan error, 1)
+		go func() {
+			_, err := s.Exists(context.Background(), key("a"), fileformat.FileTypeSubtree)
+			done <- err
+		}()
+
+		select {
+		case err := <-done:
+			require.ErrorIs(t, err, errInjected)
+		case <-time.After(time.Second):
+			t.Fatal("Where predicate deadlocked while reading the plan")
+		}
+	})
 }
 
 func TestFirstMatchingRuleWins(t *testing.T) {

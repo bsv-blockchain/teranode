@@ -88,9 +88,10 @@ type Rule struct {
 
 // Plan holds the rules and the call log shared by the decorators built on it.
 type Plan struct {
-	mu    sync.Mutex
-	rules []*Rule
-	calls []Call
+	matchMu sync.Mutex // serializes rule matching without holding mu in Where predicates
+	mu      sync.Mutex
+	rules   []*Rule
+	calls   []Call
 }
 
 // NewPlan returns an empty plan: every call passes through and is logged.
@@ -281,6 +282,9 @@ func (p *Plan) Methods() []string {
 
 // Reset clears the log and every rule's match count; the rules stay.
 func (p *Plan) Reset() {
+	p.matchMu.Lock()
+	defer p.matchMu.Unlock()
+
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
@@ -302,10 +306,12 @@ type call struct {
 
 // enter logs the call and picks the rule that fires on it, if any.
 func (p *Plan) enter(ctx context.Context, store, method string, hasErr bool, args ...any) *call {
-	p.mu.Lock()
-	defer p.mu.Unlock()
+	p.matchMu.Lock()
+	defer p.matchMu.Unlock()
 
+	p.mu.Lock()
 	c := Call{Seq: len(p.calls) + 1, Store: store, Method: method, Args: args}
+	p.mu.Unlock()
 
 	var fired *Rule
 
@@ -327,9 +333,12 @@ func (p *Plan) enter(ctx context.Context, store, method string, hasErr bool, arg
 	}
 
 	c.Injected = fired != nil
+	p.mu.Lock()
 	p.calls = append(p.calls, c)
+	idx := len(p.calls) - 1
+	p.mu.Unlock()
 
-	return &call{plan: p, ctx: ctx, idx: len(p.calls) - 1, rule: fired, hasErr: hasErr}
+	return &call{plan: p, ctx: ctx, idx: idx, rule: fired, hasErr: hasErr}
 }
 
 // before runs the rule's pre-call action. A non-nil error means: return it without calling the
