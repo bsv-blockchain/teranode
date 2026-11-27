@@ -93,6 +93,17 @@ func (r *BitmapsWriteRetry) failed(now time.Time) time.Time {
 	return r.failingSince
 }
 
+// deadline notes a write's first failure at now and returns when its retries end: the bound after
+// its outage began, and never later than the bound after now, even when a newer outage was noted first.
+func (r *BitmapsWriteRetry) deadline(now time.Time) time.Time {
+	since := r.failed(now)
+	if since.After(now) {
+		since = now
+	}
+
+	return since.Add(r.bound())
+}
+
 // succeeded ends the current outage with a write that started at started and succeeded, unless a
 // write failed after it started: that failure may be newer than the success, so its outage goes on
 // until a write that started after it succeeds.
@@ -131,7 +142,7 @@ func (r *BitmapsWriteRetry) Do(ctx context.Context, service string, write func(c
 		return err
 	}
 
-	deadline := r.failed(time.Now()).Add(r.bound())
+	deadline := r.deadline(time.Now())
 	backoff := r.firstBackoff()
 
 	attemptCtx, cancel := context.WithDeadline(ctx, deadline)

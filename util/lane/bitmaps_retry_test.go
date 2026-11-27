@@ -161,6 +161,20 @@ func TestBitmapsWriteRetryAnOlderSuccessKeepsANewerOutage(t *testing.T) {
 	require.Equal(t, now.Add(3*time.Second), r.failed(now.Add(6*time.Second)), "the outage goes on")
 }
 
+// A write's retries end at most a bound after its own first failure, even when that failure is
+// noted after a newer outage has begun.
+func TestBitmapsWriteRetryDeadlineIsNeverPastAWritesOwnBound(t *testing.T) {
+	r := fastRetry(time.Minute)
+
+	now := time.Now()
+	require.Equal(t, now.Add(time.Minute), r.deadline(now))
+
+	later := now.Add(5 * time.Minute) // a newer outage, noted first
+	require.Equal(t, later.Add(time.Minute), r.deadline(later))
+
+	require.Equal(t, now.Add(time.Minute), r.deadline(now), "the older failure keeps its own bound")
+}
+
 // Through Do: a write in flight while another write fails past the bound, succeeding only then,
 // does not give the next failing write a fresh bound.
 func TestBitmapsWriteRetryASuccessInFlightDuringAnOutageDoesNotEndIt(t *testing.T) {
