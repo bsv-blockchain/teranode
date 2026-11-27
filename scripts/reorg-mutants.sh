@@ -24,8 +24,19 @@ pkg=./services/blockassembly/subtreeprocessor
 mutant_dir=services/blockassembly/subtreeprocessor/testdata/mutants
 tests=${1:-${REORG_MUTANT_TESTS:-^(TestReorgScenario|TestReorgDifferential|TestOrderOracle)}}
 
+# run_tests returns 0 when the tests pass, 1 when a test failed and 2 when the run broke without
+# a test failing (timeout, panic outside a test, build error): only 1 is a kill.
 run_tests() {
-	go test -count=1 -tags testtxmetacache -run "$tests" "$pkg" >/dev/null 2>&1
+	local out status=0
+	out=$(go test -count=1 -timeout 15m -tags testtxmetacache -run "$tests" "$pkg" 2>&1) || status=$?
+	[[ $status -eq 0 ]] && return 0
+
+	if grep -q '^--- FAIL' <<<"$out" && ! grep -q 'panic: test timed out' <<<"$out"; then
+		return 1
+	fi
+
+	printf '%s\n' "$out" | tail -20 >&2
+	return 2
 }
 
 compiles() {
@@ -44,7 +55,7 @@ if [[ ${#patches[@]} -eq 0 ]]; then
 	exit 1
 fi
 
-if ! run_tests; then
+if run_tests; then :; else
 	echo "the tests fail on the clean tree; fix them before running mutants" >&2
 	exit 1
 fi
@@ -74,12 +85,23 @@ for patch in "${patches[@]}"; do
 
 	if ! compiles; then
 		stale+=("$name (does not compile)")
-	elif run_tests; then
-		survived+=("$name")
-		echo "SURVIVED  $name"
 	else
-		killed=$((killed + 1))
-		echo "killed    $name"
+		status=0
+		run_tests || status=$?
+
+		case $status in
+		0)
+			survived+=("$name")
+			echo "SURVIVED  $name"
+			;;
+		1)
+			killed=$((killed + 1))
+			echo "killed    $name"
+			;;
+		*)
+			stale+=("$name (the run broke without a test failing)")
+			;;
+		esac
 	fi
 
 	git apply -R "$patch"
