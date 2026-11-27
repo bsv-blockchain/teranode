@@ -1,8 +1,10 @@
 package subtreeprocessor
 
 import (
+	"context"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
@@ -139,6 +141,69 @@ func TestRebuiltSubtreesStayMappedUntilTheirStoreEnds(t *testing.T) {
 
 			stp.closeRetiredSubtrees()
 			require.Zero(t, len(stp.retiredSubtrees), "a subtree stayed mapped after its store ended")
+		})
+	}
+}
+
+// A subtree whose send to the store is abandoned because the context ended must not stay pinned,
+// on each of the three paths that send one.
+func TestSubtreeSendCancelledReleasesItsStoragePin(t *testing.T) {
+	send := map[string]func(t *testing.T, stp *SubtreeProcessor, ctx context.Context){
+		"processCompleteSubtree": func(t *testing.T, stp *SubtreeProcessor, ctx context.Context) {
+			stp.processorCtx.Store(&ctx)
+
+			current, err := stp.newSubtree(4)
+			require.NoError(t, err)
+
+			for i := range 4 {
+				require.NoError(t, current.AddNode(chainhash.Hash{byte(i + 1)}, 1, 250))
+			}
+
+			stp.currentSubtree.Store(current)
+
+			require.Error(t, stp.processCompleteSubtree(false))
+		},
+		"storeAndAnnounceChainedSubtrees": func(t *testing.T, stp *SubtreeProcessor, ctx context.Context) {
+			st, err := stp.newSubtree(4)
+			require.NoError(t, err)
+
+			stp.chainedSubtrees = append(stp.chainedSubtrees, st)
+
+			require.Error(t, stp.storeAndAnnounceChainedSubtrees(ctx, "test", 0))
+		},
+		"parallelBuildRemainderSubtrees": func(t *testing.T, stp *SubtreeProcessor, ctx context.Context) {
+			current, err := stp.newSubtree(4)
+			require.NoError(t, err)
+			require.NoError(t, current.AddCoinbaseNode())
+			stp.currentSubtree.Store(current)
+
+			kept := make([]subtreepkg.Node, 9)
+			for i := range kept {
+				kept[i] = subtreepkg.Node{Hash: chainhash.Hash{byte(i + 1)}, Fee: 1, SizeInBytes: 250}
+			}
+
+			require.Error(t, stp.parallelBuildRemainderSubtrees(ctx, kept, nil, true))
+		},
+	}
+
+	for name, run := range send {
+		t.Run(name, func(t *testing.T) {
+			tSettings := test.CreateBaseTestSettings(t)
+			tSettings.BlockAssembly.InitialMerkleItemsPerSubtree = 4
+
+			// nothing reads this channel, so the send can only end through the context
+			stp, err := NewSubtreeProcessor(t.Context(), ulogger.TestLogger{}, tSettings, nil, nil, nil, make(chan NewSubtreeRequest), WithMmapDir(t.TempDir()))
+			require.NoError(t, err)
+
+			stp.chainedSubtrees = nil
+
+			// live while the subtrees are built, so the send is what the context ends
+			ctx, cancel := context.WithTimeout(t.Context(), 200*time.Millisecond)
+			defer cancel()
+
+			run(t, stp, ctx)
+
+			require.Empty(t, stp.storagePins.Pinned(), "the abandoned send left its subtree pinned")
 		})
 	}
 }
