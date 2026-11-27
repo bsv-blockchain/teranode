@@ -482,6 +482,16 @@ func seedStampsPositionsAndRows(t *testing.T, heights []uint32, postgres bool) {
 		require.NoError(t, processUTXO(ctx, f.utxoStore(), f.records[0], nil, false, lane.Pack(grant.Lane, grant.Last+1)))
 		require.ErrorContains(t, f.seed(false), "outside this seed's grant")
 		require.NoError(t, f.utxoStore().Delete(ctx, &f.records[0].TxID))
+
+		// Each bound of the grant counts: the records the store holds now sit inside the real
+		// grant, and outside one in another lane or starting above them.
+		check := func(g lane.Grant) error {
+			return checkRecordsHavePositions(ctx, ulogger.TestLogger{}, f.settings, f.utxoFile(), g)
+		}
+
+		require.NoError(t, check(grant))
+		require.ErrorContains(t, check(lane.Grant{Lane: grant.Lane + 1, First: grant.First, Last: grant.Last}), "outside this seed's grant")
+		require.ErrorContains(t, check(lane.Grant{Lane: grant.Lane, First: grant.Last, Last: grant.Last}), "outside this seed's grant")
 	}
 
 	// Another snapshot cannot seed into this database, whose blocks already hold this seed's rows,
@@ -746,7 +756,8 @@ func (s failImportedStore) SetState(ctx context.Context, key string, data []byte
 	return s.Store.SetState(ctx, key, data)
 }
 
-// An import whose end cannot be recorded fails, so no rows or checkpoint rest on it.
+// An import whose end cannot be recorded fails, and the record stays unset, so no later run takes
+// the import as finished.
 func TestSeederFailsWhenItCannotRecordTheImport(t *testing.T) {
 	f := newSeedFixture(t, settings.LaneMigrationShadow, 8, fixtureHeights)
 	ctx := context.Background()
