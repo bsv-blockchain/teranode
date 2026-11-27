@@ -140,18 +140,53 @@ func TestBitmapsWriteRetryGivesEachRetryTheBoundAsItsDeadline(t *testing.T) {
 	require.Equal(t, deadlines[1], deadlines[2], "every retry ends at the same bound")
 }
 
-// A success that completed before a later failure does not end that failure's outage.
+// A success that started before a failure does not end that failure's outage, however late it is
+// recorded; one that started after it does.
 func TestBitmapsWriteRetryAnOlderSuccessKeepsANewerOutage(t *testing.T) {
 	r := fastRetry(time.Minute)
 
 	now := time.Now()
 	began := r.failed(now)
 
-	r.succeeded(now.Add(-time.Second)) // completed before the failure, recorded after it
+	r.succeeded(now.Add(-time.Second)) // started before the failure
 	require.Equal(t, began, r.failed(now.Add(time.Second)), "the outage goes on")
 
 	r.succeeded(now.Add(2 * time.Second))
 	require.Equal(t, now.Add(3*time.Second), r.failed(now.Add(3*time.Second)), "a newer success ends it")
+}
+
+// Through Do: a write in flight while another write fails past the bound, succeeding only then,
+// does not give the next failing write a fresh bound.
+func TestBitmapsWriteRetryASuccessInFlightDuringAnOutageDoesNotEndIt(t *testing.T) {
+	const service = "test-success-in-flight"
+
+	r := fastRetry(200 * time.Millisecond)
+	storeDown := errors.NewStorageError("store down")
+
+	release := make(chan struct{})
+	inFlight := make(chan struct{})
+	done := make(chan error)
+
+	go func() {
+		done <- r.Do(t.Context(), service, func(context.Context) error {
+			close(inFlight)
+			<-release
+
+			return nil
+		})
+	}()
+
+	<-inFlight
+
+	write, _ := failingWrite(-1, storeDown)
+	require.Error(t, r.Do(t.Context(), service, write), "a write fails past the bound while the other is in flight")
+
+	close(release)
+	require.NoError(t, <-done)
+
+	write, calls := failingWrite(-1, storeDown)
+	require.Error(t, r.Do(t.Context(), service, write))
+	require.Equal(t, int32(1), calls.Load(), "the outage went on, so the next failing write is not retried")
 }
 
 // With the defaults, a write is retried for a minute, with waits doubling from 250ms to a 4s cap.

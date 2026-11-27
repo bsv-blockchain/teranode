@@ -1019,7 +1019,7 @@ func TestALaneBitmapsRetryHungInTheStoreEndsAtItsBound(t *testing.T) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
 
-	require.WithinDuration(t, store.refusedAt.Add(300*time.Millisecond), store.deadline, 250*time.Millisecond, "the hung retry's store call ends at the bound")
+	require.WithinRange(t, store.deadline, store.refusedAt.Add(300*time.Millisecond), store.refusedAt.Add(350*time.Millisecond), "the hung retry's store call ends at the 300ms bound")
 }
 
 // refreshDuringRetryStore refuses a lane bitmaps file write at delete-at height 300 until a refresh

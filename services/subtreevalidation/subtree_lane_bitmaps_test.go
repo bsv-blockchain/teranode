@@ -916,7 +916,7 @@ func TestStoreSubtreeFiles_ALaneBitmapsRetryHungInTheStoreEndsAtItsBound(t *test
 	store.mu.Lock()
 	defer store.mu.Unlock()
 
-	require.WithinDuration(t, store.refusedAt.Add(300*time.Millisecond), store.deadline, 250*time.Millisecond, "the hung retry's store call ends at the bound")
+	require.WithinRange(t, store.deadline, store.refusedAt.Add(300*time.Millisecond), store.refusedAt.Add(350*time.Millisecond), "the hung retry's store call ends at the 300ms bound")
 
 	exists, err := store.Exists(ctx, root[:], fileformat.FileTypeSubtree)
 	require.NoError(t, err)

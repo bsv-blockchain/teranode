@@ -90,13 +90,14 @@ func (r *BitmapsWriteRetry) failed(now time.Time) time.Time {
 	return r.failingSince
 }
 
-// succeeded ends the current outage with a write that succeeded at done, unless a write failed
-// after it, whose outage it does not end.
-func (r *BitmapsWriteRetry) succeeded(done time.Time) {
+// succeeded ends the current outage with a write that started at started and succeeded, unless a
+// write failed after it started: that failure may be newer than the success, so its outage goes on
+// until a write that started after it succeeds.
+func (r *BitmapsWriteRetry) succeeded(started time.Time) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	if r.lastFailure.After(done) {
+	if r.lastFailure.After(started) {
 		return
 	}
 
@@ -114,9 +115,11 @@ func (r *BitmapsWriteRetry) succeeded(done time.Time) {
 // failing when the bound ran out in teranode_lane_bitmaps_write_retries_exhausted_total, both by
 // service.
 func (r *BitmapsWriteRetry) Do(ctx context.Context, service string, write func(ctx context.Context) error) error {
+	started := time.Now()
+
 	err := write(ctx)
 	if err == nil {
-		r.succeeded(time.Now())
+		r.succeeded(started)
 
 		return nil
 	}
@@ -157,8 +160,10 @@ func (r *BitmapsWriteRetry) Do(ctx context.Context, service string, write func(c
 			countBitmapsWriteRetried(service)
 		}
 
+		started = time.Now()
+
 		if err = write(attemptCtx); err == nil {
-			r.succeeded(time.Now())
+			r.succeeded(started)
 
 			return nil
 		}
