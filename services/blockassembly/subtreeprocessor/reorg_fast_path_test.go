@@ -20,7 +20,6 @@ import (
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/stores/blob"
 	bloboptions "github.com/bsv-blockchain/teranode/stores/blob/options"
-
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/prometheus/client_golang/prometheus"
