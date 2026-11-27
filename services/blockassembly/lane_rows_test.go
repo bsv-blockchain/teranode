@@ -796,21 +796,24 @@ func (s failingBitmapsWriteStore) Set(ctx context.Context, key []byte, fileType 
 // the store refuses is not stored but queued, as a failed subtree file write is, and counted as
 // write_failed. The retry writes the bitmaps file, then the subtree file, once the store takes them.
 func TestAFailedLaneBitmapsWriteLeavesTheSubtreeToTheRetryProcessor(t *testing.T) {
-	server, memoryStore := setupServerWithSettings(t, func(s *settings.Settings) { s.UtxoStore.LaneMigration = settings.LaneMigrationShadow })
-
-	st, txMap := laneSealSubtree(t, "write-fails")
+	var (
+		server      *BlockAssembly
+		memoryStore *memory.Memory
+		st          *subtreepkg.Subtree
+		txMap       subtreeprocessor.TxInpointsMap
+	)
 
 	// the kept bitmaps age out of memory while the write is in the store
-	server.subtreeStore = failingBitmapsWriteStore{Store: memoryStore, onRefuse: func() {
-		server.ownLaneBitmaps.mu.Lock()
-		delete(server.ownLaneBitmaps.bySubtree, *st.RootHash())
-		server.ownLaneBitmaps.mu.Unlock()
-	}}
+	server, memoryStore, st, txMap = laneStorageFailureServer(t, "write-fails", func(m *memory.Memory) blob.Store {
+		return failingBitmapsWriteStore{Store: m, onRefuse: func() {
+			server.ownLaneBitmaps.mu.Lock()
+			delete(server.ownLaneBitmaps.bySubtree, *st.RootHash())
+			server.ownLaneBitmaps.mu.Unlock()
+		}}
+	})
 
 	labels := map[string]string{"block": lane.BlockOwn, "reason": lane.MissingBitmapsWriteFailed}
 	before := ownLaneMetric(t, "teranode_lane_missing_bitmaps_total", labels)
-
-	keepSealed(server, st, txMap)
 
 	retries := make(chan *subtreeRetrySend, 10)
 
@@ -864,8 +867,8 @@ func TestAFailedLaneBitmapsWriteLeavesTheSubtreeToTheRetryProcessor(t *testing.T
 	require.Equal(t, []uint64{20, 21, 22}, decoded.Lanes[4].ToArray(), "the file holds the carried bitmaps")
 }
 
-// laneStorageFailureServer is a shadow server whose subtree store refuses store, with a sealed
-// subtree whose lane bitmaps are kept.
+// laneStorageFailureServer is a shadow server that writes subtree meta files, whose subtree store
+// is the one store wraps around its memory store, with a sealed subtree whose bitmaps are kept.
 func laneStorageFailureServer(t *testing.T, name string, store func(*memory.Memory) blob.Store) (*BlockAssembly, *memory.Memory, *subtreepkg.Subtree, subtreeprocessor.TxInpointsMap) {
 	t.Helper()
 
