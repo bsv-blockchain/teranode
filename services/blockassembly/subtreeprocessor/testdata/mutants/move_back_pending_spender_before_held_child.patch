@@ -1,0 +1,13 @@
+diff --git a/services/blockassembly/subtreeprocessor/move_back_held_children.go b/services/blockassembly/subtreeprocessor/move_back_held_children.go
+index 465a9ca5b..3f6299193 100644
+--- a/services/blockassembly/subtreeprocessor/move_back_held_children.go
++++ b/services/blockassembly/subtreeprocessor/move_back_held_children.go
+@@ -81,7 +81,7 @@ func (h *heldChildren) hold(node subtreepkg.Node, parents []chainhash.Hash) bool
+ // releases what the node frees. parents gives the node's parents from the tx map.
+ func (h *heldChildren) appendPending(dst []subtreepkg.Node, node subtreepkg.Node,
+ 	parents func(chainhash.Hash) (*subtreepkg.TxInpoints, bool)) []subtreepkg.Node {
+-	if h.unreleased > 0 {
++	if false && h.unreleased > 0 { // mutant: pending nodes are never checked against the held-back ones
+ 		if inpoints, ok := parents(node.Hash); ok && inpoints != nil && h.hold(node, inpoints.ParentTxHashes) {
+ 			return dst
+ 		}

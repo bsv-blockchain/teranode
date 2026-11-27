@@ -329,6 +329,9 @@ func NewSettings(alternativeContext ...string) *Settings {
 		},
 		BlockAssembly: BlockAssemblySettings{
 			LivenessStallTimeout:                 getDuration("blockassembly_livenessStallTimeout", 0, alternativeContext...),
+			ReorgStoreDeadline:                   getDuration("blockassembly_reorgStoreDeadline", 0, alternativeContext...),
+			StoredPrefixTemplate:                 getBool("blockassembly_storedPrefixTemplate", false, alternativeContext...),
+			ReorgFastPath:                        getBool("blockassembly_reorgFastPath", false, alternativeContext...),
 			ReconcileInterval:                    getDuration("blockassembly_reconcileInterval", 30*time.Second, alternativeContext...),
 			Disabled:                             getBool("blockassembly_disabled", false, alternativeContext...),
 			GenerateTipWaitTimeout:               getDuration("blockassembly_generateTipWaitTimeout", DefaultGenerateTipWaitTimeout, alternativeContext...),

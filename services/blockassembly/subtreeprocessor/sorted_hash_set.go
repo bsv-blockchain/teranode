@@ -58,6 +58,7 @@ type SortedHashSet struct {
 	total int          // hashes in all partitions, duplicates included
 	dir   []uint32     // slot g of partition p is parts[p].keys[dir[g+p] : dir[g+p+1]]
 	dups  atomic.Int64 // duplicate hashes in the partitions' keys
+	base  []uint64     // base[p] is the number of hashes in partitions before p, duplicates included
 }
 
 // sortedHashPart is 64 bytes, which keeps neighbouring partition locks off the same
@@ -202,6 +203,13 @@ func (s *SortedHashSet) Freeze(workers int) error {
 	slotsPerPart := 1 << (s.gbits - s.pbits)
 
 	s.total = int(total) //nolint:gosec // it is the length of slices that exist
+
+	// positions run through the partitions in order: partition p starts where p-1 ends
+	s.base = make([]uint64, len(s.parts)+1)
+	for i := range s.parts {
+		s.base[i+1] = s.base[i] + uint64(s.parts[i].n) //nolint:gosec // n is a length
+	}
+
 	// every partition has slotsPerPart+1 entries: its slot starts and its end
 	s.dir = make([]uint32, len(s.parts)*(slotsPerPart+1))
 
@@ -378,4 +386,80 @@ func (s *SortedHashSet) Iter(f func(hash chainhash.Hash) bool) {
 			}
 		}
 	}
+}
+
+// Find reports whether hash is in the set and, if so, its position: the index of the
+// hash in the whole set laid out partition after partition, each sorted, duplicates
+// included. A duplicated hash answers the first position of its run. Positions are
+// in [0, Positions()), distinct hashes never share one, and a position stays valid
+// for the life of the frozen set, which is what lets a caller keep a bitmap over
+// them. It panics if the set is not frozen. Exists is the same lookup without the
+// position and stays separate to keep its hot path as it is.
+func (s *SortedHashSet) Find(hash chainhash.Hash) (pos uint64, ok bool) {
+	if !s.frozen.Load() {
+		panic(errNotFrozen)
+	}
+
+	if s.total == 0 {
+		return 0, false
+	}
+
+	g := hashTopBits(&hash, s.gbits)
+	part := g >> (s.gbits - s.pbits)
+	lo := s.dir[g+part]
+	keys := s.parts[part].keys[lo:s.dir[g+part+1]]
+
+	if len(keys) <= 16 {
+		w := hashWord0(&hash)
+
+		// keys is sorted, so the first match is the first of its run
+		for k := range keys {
+			if hashWord0(&keys[k]) == w && keys[k] == hash {
+				return s.base[part] + uint64(lo) + uint64(k), true //nolint:gosec // k is an index
+			}
+		}
+
+		return 0, false
+	}
+
+	// BinarySearchFunc returns the lowest index whose key is not less than hash
+	k, found := slices.BinarySearchFunc(keys, hash, func(a, b chainhash.Hash) int { return compareHash(&a, &b) })
+	if !found {
+		return 0, false
+	}
+
+	return s.base[part] + uint64(lo) + uint64(k), true //nolint:gosec // k is an index
+}
+
+// Positions is the number of positions Find hands out, duplicates included: the size
+// of a bitmap over them. It panics if the set is not frozen.
+func (s *SortedHashSet) Positions() uint64 {
+	if !s.frozen.Load() {
+		panic(errNotFrozen)
+	}
+
+	return uint64(s.total) //nolint:gosec // total is a sum of lengths
+}
+
+// IterPositions calls f once for every distinct hash with the position Find answers
+// for it, on up to workers goroutines, one partition per goroutine at a time. Within
+// a partition the hashes come in ascending order; partitions run concurrently, so f
+// must be safe for concurrent use, and part tells it which partition it is in. It
+// panics if the set is not frozen.
+func (s *SortedHashSet) IterPositions(workers int, f func(part int, pos uint64, hash *chainhash.Hash)) {
+	if !s.frozen.Load() {
+		panic(errNotFrozen)
+	}
+
+	parallelFor(len(s.parts), workers, func(p int) {
+		keys := s.parts[p].keys
+
+		for i := range keys {
+			if i > 0 && keys[i] == keys[i-1] {
+				continue
+			}
+
+			f(p, s.base[p]+uint64(i), &keys[i]) //nolint:gosec // i is an index
+		}
+	})
 }

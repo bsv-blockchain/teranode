@@ -237,10 +237,11 @@ type Interface interface {
 	// Parameters:
 	//   - moveBackBlocks: Blocks to be removed from the chain
 	//   - modeUpBlocks: Blocks to be added to the chain
+	//   - opts: Optional request information, such as WithTipSeenAt
 	//
 	// Returns:
 	//   - error: Any error encountered during reorganization
-	Reorg(moveBackBlocks []*model.Block, modeUpBlocks []*model.Block) error
+	Reorg(moveBackBlocks []*model.Block, modeUpBlocks []*model.Block, opts ...ReorgOption) error
 
 	// Reset performs a complete reset of the processor state to a specific block.
 	// This is used during major reorganizations or when recovering from errors.

@@ -1,0 +1,14 @@
+diff --git a/services/blockassembly/subtreeprocessor/reorg_fast_path.go b/services/blockassembly/subtreeprocessor/reorg_fast_path.go
+index cdac49551..853794886 100644
+--- a/services/blockassembly/subtreeprocessor/reorg_fast_path.go
++++ b/services/blockassembly/subtreeprocessor/reorg_fast_path.go
+@@ -525,8 +525,7 @@ func (stp *SubtreeProcessor) applyFastReorg(ctx context.Context, plan *fastReorg
+ 	stp.phases.done("fast_build")
+ 	stp.reportProgressUnlessDone(ctx)
+ 
+-	stp.deleteFlaggedEntries(plan, workers)
+-
++	// mutant: the mined entries stay in the tx map
+ 	stp.flushDiskTxMapWriters()
+ 
+ 	if mapErr := stp.diskTxMapErr(); mapErr != nil {
