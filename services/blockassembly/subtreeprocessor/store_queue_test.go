@@ -121,7 +121,10 @@ func answerFromQueue(req NewSubtreeRequest, set *StoredSet, res StoreResult) {
 	}
 
 	req.Answered(nil)
-	req.Settled()
+
+	if settled := req.SettledFunc(); settled != nil {
+		settled(res)
+	}
 }
 
 // bySeq is what the workers took, in sequence order.
@@ -736,7 +739,7 @@ func TestStoreQueue_ASubtreeStillBeingStoredIsNotSentAgain(t *testing.T) {
 
 	first, _, ok := q.Take(ctx)
 	require.True(t, ok)
-	require.True(t, first.SettledFunc()(true), "and it announces once it is stored, though the forward step sent it silently")
+	require.True(t, first.SettledFunc()(StoreResult{SubtreeStored: true, MetaNotApplicable: true}), "and it announces once it is stored, though the forward step sent it silently")
 
 	stp.sendChainedSubtreeAgain(1, chainRoot(stp, 1), time.Now())
 	require.Equal(t, before-1, q.Len(), "the watch did not send a queued subtree again")
@@ -908,8 +911,97 @@ func TestStoreQueue_TheOlderOfTwoRequestsForASubtreeAnnouncesOnce(t *testing.T) 
 	second, _, ok := q.Take(ctx)
 	require.True(t, ok)
 
-	require.True(t, first.SettledFunc()(true), "the older request stored it: it announces")
-	require.False(t, second.SettledFunc()(true), "the newer one stays silent")
+	require.True(t, first.SettledFunc()(StoreResult{SubtreeStored: true, MetaNotApplicable: true}), "the older request stored it: it announces")
+	require.False(t, second.SettledFunc()(StoreResult{SubtreeStored: true, MetaNotApplicable: true}), "the newer one stays silent")
+}
+
+// A worker that settles a failed store before the reorg looks for the request must still fail the
+// reorg: Push hands the reorg its request, which a second lookup could miss.
+func TestStoreQueue_AFailedStoreThatSettledBeforeTheReorgLookedFailsItWithADeadline(t *testing.T) {
+	q := NewStoreQueue(1 << 40)
+	stp, _ := newStoredPrefixProcessor(t, 8, NewStoredSet(), func(stp *SubtreeProcessor) { stp.storeQueue = q })
+
+	req := chainRequest(t, 1)
+	req.Result = make(chan StoreResult, 1)
+	it := q.Push(req)
+
+	taken, _, ok := q.Take(t.Context())
+	require.True(t, ok)
+
+	failed := StoreResult{Err: errors.NewStorageError("write failed")}
+	taken.Result <- failed
+	taken.SettledFunc()(failed)
+
+	require.Nil(t, q.entry(req.Subtree), "the lookup misses a request that settled")
+
+	timer := time.NewTimer(time.Minute)
+	defer timer.Stop()
+
+	_, err := stp.awaitOne(t.Context(), "test", 0, it, time.Minute, timer.C)
+	require.ErrorContains(t, err, "was not stored")
+}
+
+// The stored-prefix watcher drains a request's Result channel; the reorg waiting for the same request
+// must not depend on it, and must not take the value the watcher needs.
+func TestStoreQueue_AReorgAndTheWatcherBothSeeTheResultOfOneRequest(t *testing.T) {
+	q := NewStoreQueue(1 << 40)
+	stp, _ := newStoredPrefixProcessor(t, 8, NewStoredSet(), func(stp *SubtreeProcessor) { stp.storeQueue = q })
+
+	req := chainRequest(t, 1)
+	req.Result = make(chan StoreResult, 1)
+	it := q.Push(req)
+
+	taken, _, ok := q.Take(t.Context())
+	require.True(t, ok)
+
+	failed := StoreResult{Err: errors.NewStorageError("write failed")}
+	taken.Result <- failed
+
+	require.Equal(t, failed, <-req.Result, "the watcher drains it after the post, before the settle")
+
+	taken.SettledFunc()(failed)
+
+	timer := time.NewTimer(time.Minute)
+	defer timer.Stop()
+
+	_, err := stp.awaitOne(t.Context(), "test", 0, it, time.Minute, timer.C)
+	require.ErrorContains(t, err, "was not stored", "the reorg still learns the outcome")
+
+	req2 := chainRequest(t, 2)
+	req2.Result = make(chan StoreResult, 1)
+	it2 := q.Push(req2)
+
+	taken2, _, ok := q.Take(t.Context())
+	require.True(t, ok)
+
+	stored := StoreResult{SubtreeStored: true, MetaNotApplicable: true}
+	taken2.Result <- stored
+	taken2.SettledFunc()(stored)
+
+	_, err = stp.awaitOne(t.Context(), "test", 0, it2, time.Minute, timer.C)
+	require.NoError(t, err)
+	require.Equal(t, stored, <-req2.Result, "the reorg left the value for the watcher")
+}
+
+// At the limit a Push scans the backlog for stale requests only when some were marked, so an outage
+// backlog does not cost a scan per Push.
+func TestStoreQueue_AtTheLimitAPushScansForStaleRequestsOnlyWhenSomeWereMarked(t *testing.T) {
+	q := NewStoreQueue(StoreRequestBytes(chainRequest(t, 1))) // room for one request
+
+	reqs := make([]NewSubtreeRequest, 4)
+	for i := range reqs {
+		reqs[i] = chainRequest(t, byte(i+1))
+		q.Push(reqs[i])
+	}
+
+	require.False(t, q.mayHaveStale(), "nothing was marked stale: no scan")
+
+	q.Stale(reqs[2].Subtree) // at the limit: dropped at once
+	require.Equal(t, 3, q.Len())
+	require.False(t, q.mayHaveStale(), "the scan dropped every stale request")
+
+	q.Push(chainRequest(t, 9))
+	require.False(t, q.mayHaveStale())
 }
 
 // Issue 2269, plan PR 4c: a worker that takes a chain request whose subtree has left the chain
@@ -985,9 +1077,8 @@ func TestReorgScenario_StoreQueue_ARemoveCancelsTheRequestsOfTheSubtreesItRetire
 }
 
 // A candidate published before the Remove holds only stored subtrees, because the template is cut at
-// the stored prefix. The cancelled requests are the ones of subtrees no template ever referenced, so a
-// later SubmitMiningSolution on that candidate finds its files. Nothing in the cancel keeps this true:
-// the cut does, and this test pins it (it passes before the cancel exists).
+// the stored prefix. The cancelled requests are of subtrees no template referenced, so a later
+// SubmitMiningSolution on that candidate finds its files.
 func TestStoreQueue_ACandidateWhoseSubtreeLeftTheChainStillHasItsFiles(t *testing.T) {
 	q := NewStoreQueue(1 << 40)
 	set := NewStoredSet()
@@ -1198,52 +1289,177 @@ func TestStoreQueue_WithoutAQueueARemoveStillStoresTheRetiredSubtrees(t *testing
 	}, 5*time.Second, 5*time.Millisecond, "the retired subtrees and their replacements were all sent")
 }
 
-// A failed block movement retires the chain and rolls back to it. A worker that came in between
-// cancelled the requests, so the rollback sends them again, and nothing but the request announces a
-// subtree after a rollback: it must announce as the cancelled one would have.
-func TestReorgScenario_StoreQueue_ARestoredChainRequestCancelledBeforeTheRollbackStillAnnounces(t *testing.T) {
-	q := NewStoreQueue(1 << 40)
-	stp, _ := newStoredPrefixProcessor(t, 8, NewStoredSet(), func(stp *SubtreeProcessor) { stp.storeQueue = q })
-	addStoredPrefixTxs(t, stp, 8*5)
+// drainAnnouncements takes what the queue holds and counts the announcements of the requests, the
+// way a worker and the in-order sender would: an announce-only or non-silent request announces, and
+// so does a silent one that settles stored while it carries the duty of a reorg.
+func drainAnnouncements(t testing.TB, q *StoreQueue) int {
+	t.Helper()
 
-	chained := append([]*subtreepkg.Subtree(nil), stp.chainedSubtrees...)
-	require.GreaterOrEqual(t, len(chained), 4)
+	n := 0
 
-	for _, st := range chained { // the helper's requests are silent: send announcing ones
-		q.removeQueued(st)
-		q.Push(NewSubtreeRequest{Subtree: st, ErrChan: make(chan error, 1)})
-	}
+	for {
+		req, _, ok := q.Take(takeCtx(t, 200*time.Millisecond))
+		if !ok {
+			return n
+		}
 
-	q.takeCleanups()
-
-	stp.retireSubtrees(chained...)
-
-	_, _, ok := q.Take(takeCtx(t, 200*time.Millisecond)) // an idle worker cancels every stale request
-	require.False(t, ok)
-	require.Zero(t, q.Len())
-
-	stp.wantRestored(chained)
-
-	for i, st := range chained {
-		it := q.entry(st)
-		require.NotNil(t, it, "restored subtree %d is sent again", i)
-		require.False(t, it.req.SkipNotification, "and announces when it stores")
+		n += announcementsOnSettle(req, !req.AnnounceOnly)
 	}
 }
 
-// The roots of dropped announcing requests are kept only for a rollback of the block movement in
-// progress, so the set is capped: past announceLostCap it starts again instead of growing for good.
-func TestStoreQueue_TheLostAnnouncementSetIsBounded(t *testing.T) {
+// announcementsOnSettle counts the announcements of a request that a worker holds and settles stored.
+func announcementsOnSettle(req NewSubtreeRequest, stored bool) int {
+	n := 0
+	if req.AnnounceOnly || !req.SkipNotification {
+		n++
+	}
+
+	if stored && req.SettledFunc()(StoreResult{SubtreeStored: true, MetaNotApplicable: true}) {
+		n++
+	}
+
+	return n
+}
+
+// A failed block movement retires the chain and rolls back to it. A worker that came in between may
+// have cancelled a request, and nothing but a request announces a subtree after a rollback: each
+// restored subtree announces exactly once, whichever request carried the duty.
+func TestReorgScenario_StoreQueue_ARollbackAnnouncesEachRestoredSubtreeOnce(t *testing.T) {
+	stored := StoreResult{SubtreeStored: true, MetaNotApplicable: true}
+
+	cases := []struct {
+		name  string
+		setup func(t *testing.T, stp *SubtreeProcessor, q *StoreQueue, set *StoredSet, st *subtreepkg.Subtree) (announced int, held []NewSubtreeRequest)
+	}{
+		{"an announcing request", func(t *testing.T, stp *SubtreeProcessor, q *StoreQueue, _ *StoredSet, st *subtreepkg.Subtree) (int, []NewSubtreeRequest) {
+			q.Push(NewSubtreeRequest{Subtree: st, ErrChan: make(chan error, 1)})
+			stp.retireSubtrees(st)
+
+			return 0, nil
+		}},
+		{"a silent request a reorg told to announce", func(t *testing.T, stp *SubtreeProcessor, q *StoreQueue, _ *StoredSet, st *subtreepkg.Subtree) (int, []NewSubtreeRequest) {
+			q.Push(NewSubtreeRequest{Subtree: st, SkipNotification: true, ErrChan: make(chan error, 1)})
+			require.True(t, q.AnnounceOnSuccess(st))
+			stp.retireSubtrees(st)
+
+			return 0, nil
+		}},
+		{"an announcing request cancelled beside a silent one a worker holds", func(t *testing.T, stp *SubtreeProcessor, q *StoreQueue, _ *StoredSet, st *subtreepkg.Subtree) (int, []NewSubtreeRequest) {
+			q.Push(NewSubtreeRequest{Subtree: st, SkipNotification: true, ErrChan: make(chan error, 1)})
+			taken, _, ok := q.Take(takeCtx(t, time.Second))
+			require.True(t, ok)
+			q.Push(NewSubtreeRequest{Subtree: st, ErrChan: make(chan error, 1)})
+			stp.retireSubtrees(st)
+
+			return 0, []NewSubtreeRequest{taken}
+		}},
+		{"an announcing request cancelled beside a silent one that stored", func(t *testing.T, stp *SubtreeProcessor, q *StoreQueue, set *StoredSet, st *subtreepkg.Subtree) (int, []NewSubtreeRequest) {
+			q.Push(NewSubtreeRequest{Subtree: st, SkipNotification: true, ErrChan: make(chan error, 1)})
+			taken, _, ok := q.Take(takeCtx(t, time.Second))
+			require.True(t, ok)
+			q.Push(NewSubtreeRequest{Subtree: st, ErrChan: make(chan error, 1)})
+			stp.retireSubtrees(st)
+
+			_, _, ok = q.Take(takeCtx(t, 200*time.Millisecond)) // cancels the announcing one
+			require.False(t, ok)
+			answerFromQueue(taken, set, stored)
+
+			return 0, nil
+		}},
+		{"a sibling holds the announcement", func(t *testing.T, stp *SubtreeProcessor, q *StoreQueue, _ *StoredSet, st *subtreepkg.Subtree) (int, []NewSubtreeRequest) {
+			q.Push(NewSubtreeRequest{Subtree: st, SkipNotification: true, ErrChan: make(chan error, 1)})
+			taken, _, ok := q.Take(takeCtx(t, time.Second))
+			require.True(t, ok)
+			q.Push(NewSubtreeRequest{Subtree: st, SkipNotification: true, ErrChan: make(chan error, 1)})
+			require.True(t, q.AnnounceOnSuccess(st))
+			stp.retireSubtrees(st)
+
+			return 0, []NewSubtreeRequest{taken}
+		}},
+		{"the sibling announced before the rollback", func(t *testing.T, stp *SubtreeProcessor, q *StoreQueue, set *StoredSet, st *subtreepkg.Subtree) (int, []NewSubtreeRequest) {
+			q.Push(NewSubtreeRequest{Subtree: st, SkipNotification: true, ErrChan: make(chan error, 1)})
+			taken, _, ok := q.Take(takeCtx(t, time.Second))
+			require.True(t, ok)
+			q.Push(NewSubtreeRequest{Subtree: st, SkipNotification: true, ErrChan: make(chan error, 1)})
+			require.True(t, q.AnnounceOnSuccess(st))
+			stp.retireSubtrees(st)
+
+			_, _, ok = q.Take(takeCtx(t, 200*time.Millisecond)) // cancels the sibling
+			require.False(t, ok)
+			set.Finish(*st.RootHash(), stored, false)
+
+			return announcementsOnSettle(taken, true), nil
+		}},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			q := NewStoreQueue(1 << 40)
+			set := NewStoredSet()
+			stp, _ := newStoredPrefixProcessor(t, 8, set, func(stp *SubtreeProcessor) { stp.storeQueue = q })
+			st := testQueueSubtree(t, 1)
+
+			announced, held := tc.setup(t, stp, q, set, st)
+
+			_, _, ok := q.Take(takeCtx(t, 200*time.Millisecond)) // an idle worker cancels the stale requests
+			require.False(t, ok)
+
+			stp.wantRestored([]*subtreepkg.Subtree{st})
+
+			for _, req := range held {
+				announced += announcementsOnSettle(req, true)
+			}
+
+			announced += drainAnnouncements(t, q)
+
+			require.Equal(t, 1, announced, "the restored subtree is announced exactly once")
+		})
+	}
+}
+
+// The roots of dropped announcing requests are kept for a rollback of the block movement in
+// progress and forgotten when it ends, except inside a catch-up, whose rollback is still to come.
+func TestStoreQueue_TheLostAnnouncementsAreForgottenWhenTheMovementEnds(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		pinned       bool
+		wantRemember bool
+	}{
+		{"a movement that ends", false, false},
+		{"inside a catch-up", true, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			q := NewStoreQueue(1 << 40)
+			stp, _ := newStoredPrefixProcessor(t, 8, NewStoredSet(), func(stp *SubtreeProcessor) { stp.storeQueue = q })
+			st := testQueueSubtree(t, 1)
+
+			q.mu.Lock()
+			q.noteAnnounceLost(*st.RootHash())
+			q.mu.Unlock()
+
+			stp.catchUpRollbackPinned = tc.pinned
+			stp.closeRetiredSubtrees()
+
+			require.Equal(t, tc.wantRemember, q.announceWasLost(st))
+		})
+	}
+}
+
+// A record is not dropped to make room for another: a clear between a cancel and its rollback would
+// send the restored subtree silent.
+func TestStoreQueue_ALostAnnouncementSurvivesAnyNumberOfOthers(t *testing.T) {
 	q := NewStoreQueue(1 << 40)
+	st := testQueueSubtree(t, 1)
 
 	q.mu.Lock()
-	defer q.mu.Unlock()
+	q.noteAnnounceLost(*st.RootHash())
 
-	for i := range announceLostCap + 10 {
+	for i := range 70000 {
 		var h chainhash.Hash
 		binary.LittleEndian.PutUint64(h[:], uint64(i))
 		q.noteAnnounceLost(h)
 	}
+	q.mu.Unlock()
 
-	require.LessOrEqual(t, len(q.announceLost), announceLostCap)
+	require.True(t, q.announceWasLost(st))
 }

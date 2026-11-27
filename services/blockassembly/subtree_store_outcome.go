@@ -40,7 +40,7 @@ type subtreeStoreOutcome struct {
 	late chan<- chainhash.Hash
 
 	// settled is the request's Settled: the store queue's charge for it ends with its store.
-	settled func(ok bool) bool
+	settled func(res subtreeprocessor.StoreResult) bool
 
 	// set is the stored set the settled request reports to, with the request's root, when
 	// blockassembly_storedPrefixTemplate is on; nil otherwise.
@@ -92,7 +92,7 @@ func (o *subtreeStoreOutcome) settle(apply func(r *subtreeprocessor.StoreResult)
 
 		// a silent request a fork reorg asked to announce is announced here, when it is stored,
 		// whichever path stored it: the retry paths of a meta or of a subtree found stored are silent
-		if o.settled != nil && o.settled(o.res.OK()) && o.skip && o.late != nil {
+		if o.settled != nil && o.settled(o.res) && o.skip && o.late != nil {
 			go func(root chainhash.Hash, late chan<- chainhash.Hash) {
 				select {
 				case late <- root:
