@@ -188,12 +188,21 @@ func TestBitmapsWriteRetryDoClampsItsDeadline(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
 	defer cancel()
 
-	write, _ := failingWrite(-1, errors.NewStorageError("store down"))
+	var firstFailed, retryDeadline time.Time
 
-	start := time.Now()
+	write := func(attemptCtx context.Context) error {
+		if firstFailed.IsZero() {
+			firstFailed = time.Now()
+		} else if retryDeadline.IsZero() {
+			retryDeadline, _ = attemptCtx.Deadline()
+		}
+
+		return errors.NewStorageError("store down")
+	}
+
 	require.Error(t, r.Do(ctx, service, write))
-	require.Less(t, time.Since(start), 10*time.Second, "it gave up at its own bound")
 	require.NoError(t, ctx.Err())
+	require.WithinRange(t, retryDeadline, firstFailed.Add(200*time.Millisecond), firstFailed.Add(250*time.Millisecond), "the retry ends at its own 200ms bound")
 
 	_, exhausted := retryCounts(service)
 	require.Equal(t, exhaustedBefore+1, exhausted)
