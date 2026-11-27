@@ -294,6 +294,11 @@ type BlockAssembler struct {
 	// The idle tick wakes a replay once it is older than blockassembly_reconcileInterval.
 	lastBestTipReplay atomic.Int64
 
+	// tipSeenAt is when the running processNewBlockAnnouncement pass started, which is when block
+	// assembly first sees the tip change; handleReorg hands it to the processor so a fork reorg
+	// reports the time from there to its start. Zero outside a pass. Only the main loop touches it.
+	tipSeenAt time.Time
+
 	// bestTipReplayFailures counts consecutive failed replay passes.
 	bestTipReplayFailures atomic.Int32
 
@@ -1603,6 +1608,9 @@ func (b *BlockAssembler) processNewBlockAnnouncement(ctx context.Context) {
 	defer b.runOwedSkippedForkWork(ctx)
 
 	b.lastBestTipReplay.Store(time.Now().UnixNano())
+
+	b.tipSeenAt = time.Now()
+	defer func() { b.tipSeenAt = time.Time{} }()
 
 	if !b.followBestTipChanges(ctx) {
 		// Nothing left to move to. A settle that failed after the last block move is retried
@@ -3484,7 +3492,7 @@ func (b *BlockAssembler) handleReorg(ctx context.Context, header *model.BlockHea
 	reorgFailed := false
 
 	// now do the reorg in the subtree processor
-	if err = b.subtreeProcessor.Reorg(moveBackBlocks, moveForwardBlocks); err != nil {
+	if err = b.subtreeProcessor.Reorg(moveBackBlocks, moveForwardBlocks, subtreeprocessor.WithTipSeenAt(b.tipSeenAt)); err != nil {
 		b.logger.Warnf("[BlockAssembler] error doing reorg, will reset instead: %v", err)
 		// fallback to full reset
 		reset = true

@@ -1,0 +1,15 @@
+diff --git a/services/blockassembly/subtreeprocessor/SubtreeProcessor.go b/services/blockassembly/subtreeprocessor/SubtreeProcessor.go
+index eaa1b059b..86a603986 100644
+--- a/services/blockassembly/subtreeprocessor/SubtreeProcessor.go
++++ b/services/blockassembly/subtreeprocessor/SubtreeProcessor.go
+@@ -6765,8 +6765,8 @@ func (stp *SubtreeProcessor) moveBackBlockBulkBuild(ctx context.Context, block *
+ 				_, wasSet[i] = stp.currentTxMap.SetIfNotExistsAt(hash, flatInpoints[i], position)
+ 			}
+ 		}
+-		for i, set := range wasSet {
+-			if set {
++		for i := range wasSet {
++			{ // mutant: keep every lost-block node, also the ones already pending
+ 				allNodes = append(allNodes, flatNodes[i])
+ 			}
+ 		}
