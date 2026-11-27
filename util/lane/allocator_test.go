@@ -37,16 +37,14 @@ type fakeLeases struct {
 	ignoreGiveBack bool
 	// loseReply makes the next grant request commit its grant and then fail, as a lost reply does.
 	loseReply bool
-	// downRenewals counts renewals refused because the service was down.
-	downRenewals int
-	gate         chan struct{} // when set, a grant request waits for it to close
-	openGate     chan struct{} // when set, an open waits for it to close, ignoring the caller's context
-	opening      chan struct{} // when set, closed as an open starts waiting on openGate
-	asking       chan struct{} // when set, closed as a grant request starts waiting on gate
-	opens        int
-	renewals     []Renewal
-	releases     []Release
-	seq          byte
+	gate      chan struct{} // when set, a grant request waits for it to close
+	openGate  chan struct{} // when set, an open waits for it to close, ignoring the caller's context
+	opening   chan struct{} // when set, closed as an open starts waiting on openGate
+	asking    chan struct{} // when set, closed as a grant request starts waiting on gate
+	opens     int
+	renewals  []Renewal
+	releases  []Release
+	seq       byte
 }
 
 // leaseGrantStart is a grant's first position and the lease it went to.
@@ -139,7 +137,6 @@ func (f *fakeLeases) RenewLaneLease(_ context.Context, r Renewal) (RenewResult, 
 	defer f.mu.Unlock()
 
 	if f.down {
-		f.downRenewals++
 		return RenewResult{}, errors.NewServiceUnavailableError("blockchain service down")
 	}
 
@@ -476,12 +473,7 @@ func TestAllocatorUnusedGrantExpiryWaitsForAFreshGrant(t *testing.T) {
 	clk.step(2 * time.Minute)
 	_, err := a.Next(context.Background())
 	require.ErrorIs(t, err, errors.ErrServiceUnavailable)
-	require.Eventually(t, func() bool {
-		src.mu.Lock()
-		defer src.mu.Unlock()
-
-		return src.downRenewals > 0
-	}, 5*time.Second, time.Millisecond, "a grant request reached the down service")
+	require.Error(t, a.renew(true), "a grant request to the down service fails, its error handled before renew returns")
 	require.Equal(t, missed, testutil.ToFloat64(prometheusLaneGiveBacksMissed), "a failed request that gives nothing back is no missed give-back")
 	require.NoError(t, a.Ready(), "the grant expired, not the lease")
 	src.setDown(false)
