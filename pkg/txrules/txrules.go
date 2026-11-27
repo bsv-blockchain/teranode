@@ -104,6 +104,77 @@ func EraBounds(params *chaincfg.Params, h uint32) (lo, hi uint32, ok bool) {
 	return lo, hi, true
 }
 
+// UnminedValidatedHeight returns the height an unmined transaction was validated at, read
+// from its unmined_since, or 0 when that is unknown. A transaction is created, and validated,
+// at its unmined_since, unless a reorg or an invalidation moved it back: then unmined_since
+// is backdated to the tip less the unmined retention, or 1 (utxo.BackdatedUnminedSince), and
+// says nothing about the rules it was validated under. Such a value, 1 or at least the
+// retention below the tip, is unknown; a transaction created that long ago is due for
+// pruning anyway.
+func UnminedValidatedHeight(unminedSince, tip, retention uint32) uint32 {
+	if unminedSince > 1 && (tip <= retention || unminedSince > tip-retention) {
+		return unminedSince
+	}
+
+	return 0
+}
+
+// Era is the range of heights that share the transaction rules of one block height
+// (EraBounds), for testing many heights against that block with integer comparisons.
+type Era struct {
+	lo, hi      uint32
+	blockHeight uint32
+	known       bool
+}
+
+// EraOf returns the era of blockHeight. On a network BDK does not know, no height shares it.
+func EraOf(params *chaincfg.Params, blockHeight uint32) Era {
+	lo, hi, ok := EraBounds(params, blockHeight)
+
+	return Era{lo: lo, hi: hi, blockHeight: blockHeight, known: ok}
+}
+
+// Holds reports what the verdict a stored transaction got at one of provenHeights proves for
+// a block at the era's block height:
+//   - rules: some proving height checks the transaction under the same rules, so its
+//     scripts verify the same way;
+//   - height: such a height is not above the block either. Coinbase maturity and
+//     height-based finality only grow with the height, so a verdict at h holds for them
+//     above it, not below.
+//
+// Time-based finality is not covered: it depends on the median time of the block's own
+// branch, which no height bounds (LockTimeIsTime). A 0 in provenHeights is an unknown
+// height and proves nothing.
+func (e Era) Holds(provenHeights []uint32) (rules, height bool) {
+	if !e.known {
+		return false, false
+	}
+
+	for _, h := range provenHeights {
+		if h == 0 || h < e.lo || h > e.hi {
+			continue
+		}
+
+		rules = true
+
+		if h <= e.blockHeight {
+			return true, true
+		}
+	}
+
+	return rules, false
+}
+
+// lockTimeThreshold is where a lock time stops being a block height and becomes a time.
+const lockTimeThreshold = 500_000_000
+
+// LockTimeIsTime reports whether lockTime is a time rather than a block height. A
+// transaction locked to a time is final against the median time of the block's branch,
+// which a verdict reached on another branch does not bound.
+func LockTimeIsTime(lockTime uint32) bool {
+	return lockTime >= lockTimeThreshold
+}
+
 // flagEngine returns the cached BDK engine for params, creating it on first use.
 func flagEngine(params *chaincfg.Params) *bdkscript.TxValidator {
 	key := flagEngineKey{

@@ -89,3 +89,77 @@ func TestSameTxRules_MempoolSentinelHeight(t *testing.T) {
 	require.False(t, SameTxRules(&chaincfg.RegressionNetParams, 150, math.MaxInt32))
 	require.False(t, SameTxRules(&chaincfg.RegressionNetParams, math.MaxUint32, 150))
 }
+
+// TestUnminedValidatedHeight pins when unmined_since still names the height a tx was
+// validated at: a reorg or an invalidation backdates it to the tip less the unmined
+// retention, or 1 (utxo.BackdatedUnminedSince), and then it names nothing.
+func TestUnminedValidatedHeight(t *testing.T) {
+	tests := []struct {
+		name                         string
+		unminedSince, tip, retention uint32
+		want                         uint32
+	}{
+		{"mined on the longest chain", 0, 1000, 144, 0},
+		{"backdated to 1", 1, 100, 144, 0},
+		{"tip within the retention", 99, 100, 144, 99},
+		{"backdated to the tip less the retention", 856, 1000, 144, 0},
+		{"older than the retention", 800, 1000, 144, 0},
+		{"within the retention", 857, 1000, 144, 857},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, UnminedValidatedHeight(tt.unminedSince, tt.tip, tt.retention))
+		})
+	}
+}
+
+// TestEraHolds pins what a verdict a tx got at one of provenHeights proves for a block at
+// another height: that its scripts verify the same way (the same transaction rules at some
+// proving height), and that coinbase maturity and height finality carry over too (a proving
+// height under the same rules and not above the block, since both only grow with the height).
+// Regtest: Genesis at 100, Chronicle at 200.
+func TestEraHolds(t *testing.T) {
+	params := &chaincfg.RegressionNetParams
+
+	tests := []struct {
+		name          string
+		provenHeights []uint32
+		blockHeight   uint32
+		rules, height bool
+	}{
+		{"same height", []uint32{150}, 150, true, true},
+		{"lower height, same rules", []uint32{120}, 199, true, true},
+		{"validated below Genesis, block above", []uint32{99}, 101, false, false},
+		{"validated below Chronicle, block above", []uint32{199}, 200, false, false},
+		{"validated above the block, same rules", []uint32{151}, 150, true, false},
+		{"validated above Chronicle, block below", []uint32{200}, 199, false, false},
+		{"one proving height is enough", []uint32{99, 150}, 160, true, true},
+		{"rules from one height, height from another", []uint32{170, 99}, 160, true, false},
+		{"no proving height", nil, 150, false, false},
+		{"an unknown height proves nothing", []uint32{0}, 50, false, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rules, height := EraOf(params, tt.blockHeight).Holds(tt.provenHeights)
+			require.Equal(t, tt.rules, rules, "rules")
+			require.Equal(t, tt.height, height, "height")
+		})
+	}
+}
+
+// TestEraOf_UnknownNetwork pins that a network BDK does not know proves nothing, so every
+// stored verdict is checked again.
+func TestEraOf_UnknownNetwork(t *testing.T) {
+	rules, height := EraOf(&chaincfg.Params{Name: "unknown"}, 150).Holds([]uint32{150})
+	require.False(t, rules)
+	require.False(t, height)
+}
+
+// TestLockTimeIsTime pins the height/time split of a lock time.
+func TestLockTimeIsTime(t *testing.T) {
+	require.False(t, LockTimeIsTime(0))
+	require.False(t, LockTimeIsTime(499_999_999), "a block height")
+	require.True(t, LockTimeIsTime(500_000_000), "a time")
+}

@@ -100,8 +100,13 @@ func TestValidateSubtreeInternal_FromBlockNotBlockedByPeerBurst(t *testing.T) {
 	utxoStore, validatorClient, txStore, subtreeStore, blockchainClient, deferFunc := setup(t)
 	defer deferFunc()
 
+	// the tip a node validating at the block's height has, so the records' unmined_since reads
+	// as the height they were validated at
+	require.NoError(t, utxoStore.SetBlockHeight(chaincfg.GenesisActivationHeight-1))
+
+	// validated at the height of the block below, so the block takes their stored verdicts
 	for _, tx := range []*bt.Tx{tx1, tx2, tx3, tx4} {
-		_, _, err := utxoStore.SpendAndCreate(context.Background(), tx, 0, utxo.WithCreateOnly())
+		_, _, err := utxoStore.SpendAndCreate(context.Background(), tx, chaincfg.GenesisActivationHeight, utxo.WithCreateOnly())
 		require.NoError(t, err)
 	}
 

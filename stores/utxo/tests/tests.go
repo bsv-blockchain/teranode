@@ -1305,6 +1305,33 @@ func SetMinedUnminedSince(t *testing.T, db utxostore.Store) {
 	assert.Zero(t, txMeta.UnminedSince, "tx back on longest chain should have UnminedSince=0")
 }
 
+// BatchDecorateLockTime tests that BatchDecorate returns a transaction's own lock time for
+// fields.LockTime: block validation reads it to tell whether a stored verdict carries over to
+// a block's height.
+func BatchDecorateLockTime(t *testing.T, db utxostore.Store) {
+	ctx := context.Background()
+
+	locked := Tx.Clone()
+	locked.LockTime = 123_456
+
+	for _, tx := range []*bt.Tx{Tx, locked} {
+		_, _, err := db.SpendAndCreate(ctx, tx, 200, utxostore.WithCreateOnly())
+		require.NoError(t, err)
+
+		hash := tx.TxIDChainHash()
+		defer func() { _ = db.Delete(ctx, hash) }()
+	}
+
+	items := []*utxostore.UnresolvedMetaData{{Hash: *Tx.TxIDChainHash()}, {Hash: *locked.TxIDChainHash(), Idx: 1}}
+	require.NoError(t, db.BatchDecorate(ctx, items, fields.LockTime))
+
+	for i, want := range []uint32{Tx.LockTime, locked.LockTime} {
+		require.NoError(t, items[i].Err)
+		require.NotNil(t, items[i].Data)
+		assert.Equal(t, want, items[i].Data.LockTime)
+	}
+}
+
 // SpendIdempotent tests that spending the same UTXO with the same spending transaction
 // is idempotent — the second spend should not return an error because the spending data
 // matches what's already stored.

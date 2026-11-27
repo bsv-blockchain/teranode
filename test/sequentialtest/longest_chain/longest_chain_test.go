@@ -214,13 +214,17 @@ func testLongestChainInvalidateBlockWithOldTx(t *testing.T, utxoStore string) {
 	// create a block with tx1 and tx2 that will be invalid as tx2 is already on block4a
 	_, block5a := td.CreateTestBlock(t, block4a, 5001, tx1, tx2)
 
-	// BV-BODY-017 requires block5a to be rejected ERR_BLOCK_INVALID before it can become the tip.
-	// Today it is added and only invalidated once mined-tagging finds tx2 already on the chain
-	// (GAP-BV-011, which has no TestKnownDefect_ proof yet).
-	// This test is about what happens to tx1 and tx2 afterwards, so it accepts either route to the
-	// invalid verdict and waits for it before checking the end state.
+	// BV-BODY-017 requires block5a to be rejected ERR_BLOCK_INVALID before it can become the tip
+	// (GAP-BV-011, which has no TestKnownDefect_ proof yet). Subtree validation now finds tx2's
+	// record mined on block5a's own chain and rejects it as already mined before the block is
+	// added; on this route the subtree list is not bound to the header yet, so the verdict is
+	// ERR_BLOCK_CORRUPT and the hash is not persisted (see the invalid-transaction branch of
+	// ValidateBlockWithOptions). A block that is added is invalidated once mined-tagging finds tx2.
+	// This test is about what happens to tx1 and tx2 afterwards, so it accepts any route to the
+	// rejection and waits for it before checking the end state.
 	if err := td.BlockValidation.ValidateBlock(td.Ctx, block5a, "test", false); err != nil {
-		require.True(t, errors.Is(err, errors.ErrBlockInvalid), "block5a re-includes tx2 from block4a, got: %v", err)
+		require.True(t, errors.Is(err, errors.ErrBlockInvalid) || errors.Is(err, errors.ErrBlockCorrupt),
+			"block5a re-includes tx2 from block4a, got: %v", err)
 	} else {
 		require.Eventually(t, func() bool {
 			_, meta, err := td.BlockchainClient.GetBlockHeader(td.Ctx, block5a.Hash())

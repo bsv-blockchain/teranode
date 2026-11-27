@@ -30,6 +30,9 @@ import (
 // of the verdict for cached subtrees, and that it costs nothing when there is
 // nothing to re-derive.
 
+// cachedBlockHeight is the height of the blocks boundBlock builds.
+const cachedBlockHeight = 200
+
 // conflictingFlagStore answers BatchDecorate from an explicit set.
 //
 // This is where the cached path now reads conflicting-ness from. It used to read
@@ -73,7 +76,9 @@ func (c *conflictingFlagStore) BatchDecorate(_ context.Context, items []*utxo.Un
 			continue
 		}
 
-		item.Data = &utxometa.Data{Conflicting: c.conflicting[item.Hash]}
+		// validated in a block at the height of the blocks these tests build (boundBlock), so
+		// the verdict holds there and only the conflicting flag decides
+		item.Data = &utxometa.Data{Conflicting: c.conflicting[item.Hash], BlockHeights: []uint32{cachedBlockHeight}}
 	}
 
 	return nil
@@ -163,7 +168,7 @@ func boundBlock(t *testing.T, first *subtreepkg.Subtree, subtreeHashes ...*chain
 			Nonce:          1,
 		},
 		CoinbaseTx: coinbaseTx,
-		Height:     200,
+		Height:     cachedBlockHeight,
 		Subtrees:   subtreeHashes,
 	}
 }

@@ -5306,6 +5306,9 @@ func (s *Store) batchDecorateChunk(ctx context.Context, items []*utxo.Unresolved
 
 		copy(row.hash[:], hashBytes)
 
+		// the transaction's own lock time, for fields.LockTime; the column is read either way
+		row.data.LockTime = row.lockTime
+
 		if unminedSince.Valid {
 			const maxUint32 = 0xFFFFFFFF
 			if unminedSince.Int64 >= 0 && unminedSince.Int64 <= maxUint32 {
