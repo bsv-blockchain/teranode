@@ -37,6 +37,16 @@ func WithTxMetaEvictor(e *TxMetaEvictor) Options {
 	}
 }
 
+// WithStoredSet makes the processor cut every mining template at the first chained subtree that is
+// not in set, which the storage side fills as it stores (blockassembly_storedPrefixTemplate). Nil,
+// the default, publishes the whole chain as before.
+func WithStoredSet(set *StoredSet) Options {
+	return func(stp *SubtreeProcessor) {
+		stp.storedSet = set
+		stp.prefixWatch = newStoredPrefixWatch()
+	}
+}
+
 // WithLaneBitmapsKeeper makes the processor build the lane bitmaps (util/lane) of each subtree it
 // chains, at utxostore_laneMigration shadow, and hand them to k before a mining candidate can list
 // the subtree. At off it is ignored.
