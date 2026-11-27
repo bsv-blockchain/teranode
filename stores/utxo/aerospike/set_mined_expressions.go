@@ -809,7 +809,12 @@ func (s *Store) SetMinedMultiWithExpressions(ctx context.Context, hashes []*chai
 	// otherwise skips the Locked=false op. Done here, outside the result processor,
 	// so the processor performs no follow-up I/O and stays unit-testable.
 	if clearErr := s.applyLockClearWork(ctx, work); clearErr != nil {
-		err = errors.Join(err, clearErr)
+		// errors.Join(nil, clearErr) would flatten clearErr into a plain error and drop its code.
+		if err == nil {
+			err = clearErr
+		} else {
+			err = errors.Join(err, clearErr)
+		}
 	}
 
 	return blockIDs, err

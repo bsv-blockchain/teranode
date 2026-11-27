@@ -205,16 +205,22 @@ func (s *Store) IncrementSpentRecordsMulti(ctx context.Context, txids []*chainha
 		return errors.NewStorageError("[IncrementSpentRecordsMulti] error in aerospike batch", err)
 	}
 
-	// Inspect per-record errors
+	// Inspect per-record errors. The first error is assigned, not joined: errors.Join(nil, err)
+	// would drop the error's code.
 	var aggErr error
+
+	addErr := func(err error) {
+		if aggErr == nil {
+			aggErr = err
+		} else {
+			aggErr = errors.Join(aggErr, err)
+		}
+	}
+
 	for i := range batchRecords {
 		if recErr := batchRecords[i].BatchRec().Err; recErr != nil {
 			s.demoteNativeOnUnsupported(recErr)
-			if aggErr == nil {
-				aggErr = recErr
-			} else {
-				aggErr = errors.Join(aggErr, recErr)
-			}
+			addErr(errors.NewStorageError("[IncrementSpentRecordsMulti][%s] record error", describeChainHash(txids[i]), recErr))
 		}
 
 		// Parse the SUCCESS bin via ParseLuaMapResponse rather than a bare
@@ -232,24 +238,24 @@ func (s *Store) IncrementSpentRecordsMulti(ctx context.Context, txids []*chainha
 
 		parsed, perr := s.ParseLuaMapResponse(rawResponse)
 		if perr != nil {
-			aggErr = errors.Join(aggErr, errors.NewProcessingError("[IncrementSpentRecordsMulti][%s] failed to parse response bin %q (value %s): %s", describeChainHash(txids[i]), LuaSuccess.String(), describeAerospikeValue(rawResponse), perr.Error(), perr))
+			addErr(errors.NewProcessingError("[IncrementSpentRecordsMulti][%s] failed to parse response bin %q (value %s): %s", describeChainHash(txids[i]), LuaSuccess.String(), describeAerospikeValue(rawResponse), perr.Error(), perr))
 			continue
 		}
 
 		if parsed.Status != LuaStatusOK {
-			aggErr = errors.Join(aggErr, errors.NewProcessingError("[IncrementSpentRecordsMulti][%s] incrementSpentExtraRecs returned %s: %s", describeChainHash(txids[i]), parsed.Status, parsed.Message))
+			addErr(errors.NewProcessingError("[IncrementSpentRecordsMulti][%s] incrementSpentExtraRecs returned %s: %s", describeChainHash(txids[i]), parsed.Status, parsed.Message))
 			continue
 		}
 
 		switch parsed.Signal {
 		case LuaSignalDAHSet:
 			if sigErr := s.handleDAHSetSignal(ctx, txids[i], parsed, blockHeight); sigErr != nil {
-				aggErr = errors.Join(aggErr, sigErr)
+				addErr(sigErr)
 			}
 
 		case LuaSignalDAHUnset:
 			if sigErr := s.setDAHForChildRecordsAt(txids[i], parsed.ChildCount, 0, reportedDAHVersion(parsed)); sigErr != nil {
-				aggErr = errors.Join(aggErr, sigErr)
+				addErr(sigErr)
 			}
 		}
 	}
@@ -363,10 +369,13 @@ func (s *Store) setDAHForChildRecordsMultiAt(items []childDAHItem) error {
 				continue
 			}
 
+			// The raw Aerospike error has no code of its own.
+			storageErr := errors.NewStorageError("[SetDAHForChildRecordsMulti][%s] record error", recordTxIDs[i].String(), recErr)
+
 			if aggErr == nil {
-				aggErr = recErr
+				aggErr = storageErr
 			} else {
-				aggErr = errors.Join(aggErr, recErr)
+				aggErr = errors.Join(aggErr, storageErr)
 			}
 		}
 	}
