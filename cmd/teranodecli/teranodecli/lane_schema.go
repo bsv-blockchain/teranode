@@ -22,8 +22,10 @@ each sees the same schema. The blockchain store's lane tables are not this comma
 the blockchain service creates them when its database role may CREATE. A role without CREATE needs
 the database owner to create the lane tables and the lane_map_lane_last index first, then grant
 SELECT and INSERT on the six map and conversion tables (lane_map, lane_floor, lane_gap and the
-three lane_conversion tables), and SELECT, INSERT and UPDATE on lane_lease and SELECT and INSERT on
-lane_handout and lane_close, which lease open, renewal, release and the stale-lease sweep write.`
+three lane_conversion tables), SELECT, INSERT and UPDATE on lane_lease, SELECT, INSERT and DELETE on
+lane_handout, and SELECT and INSERT on lane_close and lane_settlement, which lease open, renewal,
+release and the stale-lease sweep write. A role without CREATE upgrading to a build that adds a lane
+table, such as lane_settlement, cannot start until the owner has created it.`
 
 // laneSchemaExecute opens the configured UTXO store and installs its lane columns.
 func laneSchemaExecute(logger ulogger.Logger, tSettings *settings.Settings, out io.Writer) func(args []string) error {

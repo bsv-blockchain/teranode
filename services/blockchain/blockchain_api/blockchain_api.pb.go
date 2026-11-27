@@ -7895,6 +7895,7 @@ type RenewLaneLeaseRequest struct {
 	WantGrant        bool                   `protobuf:"varint,4,opt,name=want_grant,json=wantGrant,proto3" json:"want_grant,omitempty"`                        // Asks for the next grant
 	SettlesFirst     uint64                 `protobuf:"varint,5,opt,name=settles_first,json=settlesFirst,proto3" json:"settles_first,omitempty"`               // With want_grant: first position of the most recent grant the holder has left and not yet reported (an older one may follow on a later request or the release); 0 for none
 	SettlesLastTaken uint64                 `protobuf:"varint,6,opt,name=settles_last_taken,json=settlesLastTaken,proto3" json:"settles_last_taken,omitempty"` // Its final number: its last position if used up, else the highest taken, lowered past positions at the top that came back unwritten. 0 with settles_first set when every position the grant gave out came back
+	GiveBackFirst    uint64                 `protobuf:"varint,7,opt,name=give_back_first,json=giveBackFirst,proto3" json:"give_back_first,omitempty"`          // With want_grant: first position of a spare the holder hands back unused, because the grant it was granted above aged out with an unused tail; 0 for none
 	unknownFields    protoimpl.UnknownFields
 	sizeCache        protoimpl.SizeCache
 }
@@ -7967,6 +7968,13 @@ func (x *RenewLaneLeaseRequest) GetSettlesFirst() uint64 {
 func (x *RenewLaneLeaseRequest) GetSettlesLastTaken() uint64 {
 	if x != nil {
 		return x.SettlesLastTaken
+	}
+	return 0
+}
+
+func (x *RenewLaneLeaseRequest) GetGiveBackFirst() uint64 {
+	if x != nil {
+		return x.GiveBackFirst
 	}
 	return 0
 }
@@ -8700,7 +8708,7 @@ const file_services_blockchain_blockchain_api_blockchain_api_proto_rawDesc = "" 
 	"\blease_id\x18\x01 \x01(\fR\aleaseId\x12\x12\n" +
 	"\x04lane\x18\x02 \x01(\rR\x04lane\x12\x14\n" +
 	"\x05first\x18\x03 \x01(\x04R\x05first\x12\x12\n" +
-	"\x04last\x18\x04 \x01(\x04R\x04last\"\xcc\x01\n" +
+	"\x04last\x18\x04 \x01(\x04R\x04last\"\xf4\x01\n" +
 	"\x15RenewLaneLeaseRequest\x12\x19\n" +
 	"\blease_id\x18\x01 \x01(\fR\aleaseId\x12\x12\n" +
 	"\x04lane\x18\x02 \x01(\rR\x04lane\x12\x12\n" +
@@ -8708,7 +8716,8 @@ const file_services_blockchain_blockchain_api_blockchain_api_proto_rawDesc = "" 
 	"\n" +
 	"want_grant\x18\x04 \x01(\bR\twantGrant\x12#\n" +
 	"\rsettles_first\x18\x05 \x01(\x04R\fsettlesFirst\x12,\n" +
-	"\x12settles_last_taken\x18\x06 \x01(\x04R\x10settlesLastTaken\"t\n" +
+	"\x12settles_last_taken\x18\x06 \x01(\x04R\x10settlesLastTaken\x12&\n" +
+	"\x0fgive_back_first\x18\a \x01(\x04R\rgiveBackFirst\"t\n" +
 	"\x16RenewLaneLeaseResponse\x12\x16\n" +
 	"\x06closed\x18\x01 \x01(\bR\x06closed\x12\x18\n" +
 	"\agranted\x18\x02 \x01(\bR\agranted\x12\x14\n" +

@@ -1111,7 +1111,7 @@ func createPostgresSchemaUnlocked(db *usql.DB, withIndexes bool) error {
 	return nil
 }
 
-// createPostgresLaneTables creates the lane tables: lane_handout, lane_lease and lane_close, the
+// createPostgresLaneTables creates lane_handout, lane_lease, lane_close and lane_settlement, the
 // map, floor, gap and conversion tables of lane_map.go, and the lease columns on a lane_handout from before the lease. It touches no other table, so
 // createPostgresSchema runs it ahead of the fast-path probe: a database from before the lane tables
 // gains them without taking the full DDL path, whose peer_id ALTER takes ACCESS EXCLUSIVE on blocks.
@@ -1143,6 +1143,15 @@ func createPostgresLaneTables(db *usql.DB) error {
 				opened_at  TIMESTAMPTZ NOT NULL,
 				renewed_at TIMESTAMPTZ NOT NULL,
 				closed_at  TIMESTAMPTZ
+			);`},
+		{"lane_settlement", `
+			CREATE TABLE IF NOT EXISTS lane_settlement (
+				lane               SMALLINT    NOT NULL,
+				settles_first      BIGINT      NOT NULL,
+				settles_last_taken BIGINT      NOT NULL,
+				lease_id           UUID        NOT NULL,
+				settled_at         TIMESTAMPTZ NOT NULL,
+				PRIMARY KEY (lane, settles_first, settles_last_taken)
 			);`},
 		{"lane_close", `
 			CREATE TABLE IF NOT EXISTS lane_close (
@@ -1615,6 +1624,19 @@ func createSqliteLaneTables(db *usql.DB) error {
 		);
 	`); err != nil {
 		return errors.NewStorageError("could not create lane_close table", err)
+	}
+
+	if _, err := db.Exec(`
+		CREATE TABLE IF NOT EXISTS lane_settlement (
+			lane               INTEGER   NOT NULL,
+			settles_first      INTEGER   NOT NULL,
+			settles_last_taken INTEGER   NOT NULL,
+			lease_id           BLOB      NOT NULL,
+			settled_at         TIMESTAMP NOT NULL,
+			PRIMARY KEY (lane, settles_first, settles_last_taken)
+		);
+	`); err != nil {
+		return errors.NewStorageError("could not create lane_settlement table", err)
 	}
 
 	if _, err := db.Exec(laneMapSqliteDDL); err != nil {

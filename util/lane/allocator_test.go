@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 )
@@ -21,23 +22,29 @@ import (
 // fakeLeases stands in for the blockchain service at the LeaseSource boundary. It follows the
 // service's rules: a lease opens on the lowest lane with no open lease, every grant in a lane starts
 // one above that lane's last grant, or right after the last taken position when the request's
-// settles pair settles the lane's newest grant, its own lease's, and a renewal or release of a
-// closed lease is answered closed.
+// settles pair settles the lane's newest grant, its own lease's, or the grant below a spare it gives
+// back, and a renewal or release of a closed lease is answered closed.
 type fakeLeases struct {
-	mu       sync.Mutex
-	size     uint64
-	high     map[uint8]uint64
-	newest   map[uint8]leaseGrantStart // each lane's newest grant
-	open     map[LeaseID]uint8
-	down     bool
-	gate     chan struct{} // when set, a grant request waits for it to close
-	openGate chan struct{} // when set, an open waits for it to close, ignoring the caller's context
-	opening  chan struct{} // when set, closed as an open starts waiting on openGate
-	asking   chan struct{} // when set, closed as a grant request starts waiting on gate
-	opens    int
-	renewals []Renewal
-	releases []Release
-	seq      byte
+	mu      sync.Mutex
+	size    uint64
+	high    map[uint8]uint64
+	newest  map[uint8]leaseGrantStart // each lane's newest grant
+	below   map[uint8]leaseGrantStart // the grant below each lane's newest, whose last is belowHi
+	belowHi map[uint8]uint64
+	open    map[LeaseID]uint8
+	down    bool
+	// ignoreGiveBack makes it a service from before the give-back field.
+	ignoreGiveBack bool
+	// loseReply makes the next grant request commit its grant and then fail, as a lost reply does.
+	loseReply bool
+	gate      chan struct{} // when set, a grant request waits for it to close
+	openGate  chan struct{} // when set, an open waits for it to close, ignoring the caller's context
+	opening   chan struct{} // when set, closed as an open starts waiting on openGate
+	asking    chan struct{} // when set, closed as a grant request starts waiting on gate
+	opens     int
+	renewals  []Renewal
+	releases  []Release
+	seq       byte
 }
 
 // leaseGrantStart is a grant's first position and the lease it went to.
@@ -47,7 +54,7 @@ type leaseGrantStart struct {
 }
 
 func newFakeLeases(size uint64) *fakeLeases {
-	return &fakeLeases{size: size, high: map[uint8]uint64{}, newest: map[uint8]leaseGrantStart{}, open: map[LeaseID]uint8{}}
+	return &fakeLeases{size: size, high: map[uint8]uint64{}, newest: map[uint8]leaseGrantStart{}, below: map[uint8]leaseGrantStart{}, belowHi: map[uint8]uint64{}, open: map[LeaseID]uint8{}}
 }
 
 // continues is the service's continuation rule: the pair settles the lane's newest grant, which is
@@ -89,16 +96,22 @@ func (f *fakeLeases) OpenLaneLease(context.Context, string) (LeaseID, Grant, err
 	id := LeaseID{f.seq}
 	f.open[id] = l
 
-	return id, f.grantLocked(id, l, f.size, Settles{}), nil
+	return id, f.grantLocked(id, l, f.size, Settles{}, 0), nil
 }
 
-func (f *fakeLeases) grantLocked(id LeaseID, l uint8, size uint64, st Settles) Grant {
+func (f *fakeLeases) grantLocked(id LeaseID, l uint8, size uint64, st Settles, giveBack uint64) Grant {
+	if giveBack != 0 && f.newest[l].lease == id && f.newest[l].first == giveBack && continues(f.below[l], f.belowHi[l], id, st) {
+		// The spare given back is dropped, so the grant below it is the newest again.
+		f.newest[l], f.high[l] = f.below[l], f.belowHi[l]
+	}
+
 	first := f.high[l] + 1
 	if continues(f.newest[l], f.high[l], id, st) {
 		first = st.LastTaken + 1
 	}
 
 	g := Grant{Lane: l, First: first, Last: first + size - 1}
+	f.below[l], f.belowHi[l] = f.newest[l], f.high[l]
 	f.high[l], f.newest[l] = g.Last, leaseGrantStart{id, g.First}
 
 	return g
@@ -137,7 +150,19 @@ func (f *fakeLeases) RenewLaneLease(_ context.Context, r Renewal) (RenewResult, 
 		return RenewResult{}, nil
 	}
 
-	return RenewResult{Granted: true, Grant: f.grantLocked(r.Lease, r.Lane, f.size, r.Settles)}, nil
+	giveBack := r.GiveBack
+	if f.ignoreGiveBack {
+		giveBack = 0
+	}
+
+	g := f.grantLocked(r.Lease, r.Lane, f.size, r.Settles, giveBack)
+
+	if f.loseReply && giveBack != 0 {
+		f.loseReply = false
+		return RenewResult{}, errors.NewServiceUnavailableError("reply lost")
+	}
+
+	return RenewResult{Granted: true, Grant: g}, nil
 }
 
 func (f *fakeLeases) ReleaseLaneLease(_ context.Context, r Release) (bool, error) {
@@ -291,37 +316,98 @@ func TestAllocatorAsksForTheNextGrantAtHalf(t *testing.T) {
 	require.Eventually(t, func() bool { return len(src.grantRequests()) == 1 }, 5*time.Second, time.Millisecond)
 }
 
-// A grant is used for at most GrantDuration from its first take. Then the allocator moves to the
-// spare, and the grant it left is settled at the highest position it took, which the release carries.
-func TestAllocatorMovesToTheSpareTwoMinutesAfterTheFirstTake(t *testing.T) {
-	clk := newStepClock()
-	start := clk.Now()
-	src := newFakeLeases(100)
-	a := newTestAllocator(t, src, Timings{Renew: time.Hour, Stop: 10 * time.Minute, GrantDuration: 2 * time.Minute}, clk)
+// warnLog is a logger that keeps its warnings.
+type warnLog struct {
+	ulogger.TestLogger
+	mu    sync.Mutex
+	warns []string
+}
 
-	for i := uint64(1); i <= 50; i++ {
-		if i == 50 {
-			clk.step(time.Minute) // the spare is requested after the current grant has been in use
-		}
-		require.Equal(t, Pack(0, i), next(t, a))
+func (w *warnLog) Warnf(format string, args ...interface{}) {
+	w.mu.Lock()
+	w.warns = append(w.warns, fmt.Sprintf(format, args...))
+	w.mu.Unlock()
+}
+
+func (w *warnLog) warnings() []string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	return slices.Clone(w.warns)
+}
+
+// A grant is used for at most GrantDuration from its first take. One that ages out with an unused tail
+// gives the spare back, so the next grant starts right after its highest position taken. A service
+// older than the give-back field grants above the spare instead, and the allocator warns and counts it.
+func TestAllocatorGivesTheSpareBackWhenAGrantAgesOut(t *testing.T) {
+	for _, c := range []struct {
+		name   string
+		ignore bool
+		lose   bool // the reply to the give-back is lost after the service took the spare back
+		next   uint64
+		warn   string
+	}{
+		{"honoured", false, false, 52, ""},
+		{"ignored by an older service", true, false, 201, "[lane] blockchain service granted 0:201 to pod-3 instead of continuing after 51, so positions 52 to 200 stay unused"},
+		{"reply lost", false, true, 152, "[lane] grant request from pod-3 giving back spare 0:101 failed, so the retry goes without it and positions after 51 stay unused"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			clk := newStepClock()
+			start := clk.Now()
+			src := newFakeLeases(100)
+			src.ignoreGiveBack, src.loseReply = c.ignore, c.lose
+			a := newTestAllocator(t, src, Timings{Renew: time.Hour, Stop: 10 * time.Minute, GrantDuration: 2 * time.Minute}, clk)
+			logs := &warnLog{}
+			a.logger = logs
+			missed := testutil.ToFloat64(prometheusLaneGiveBacksMissed)
+
+			for i := uint64(1); i <= 50; i++ {
+				if i == 50 {
+					clk.step(time.Minute) // the spare is requested after the current grant has been in use
+				}
+				require.Equal(t, Pack(0, i), next(t, a))
+			}
+
+			require.Eventually(t, a.hasSpareGrant, 5*time.Second, time.Millisecond)
+
+			clk.step(start.Add(2*time.Minute - time.Second).Sub(clk.Now()))
+			require.Equal(t, Pack(0, 51), next(t, a), "still inside two minutes")
+
+			clk.step(time.Second)
+			require.Equal(t, Pack(0, c.next), next(t, a), "two minutes after the first take the spare goes back")
+			require.False(t, a.hasSpareGrant())
+
+			r := src.grantRequests()[1]
+			require.Equal(t, Settles{First: 1, LastTaken: 51}, r.Settles, "an aged grant settles at the highest position taken")
+			require.Equal(t, uint64(101), r.GiveBack, "the spare goes back unused")
+			var gaps []string // the lost reply also logs its retry, which is not this warning
+
+			for _, w := range logs.warnings() {
+				if strings.Contains(w, "stay unused") {
+					gaps = append(gaps, w)
+				}
+			}
+
+			warns := 0
+			if c.warn != "" {
+				warns = 1
+				require.Equal(t, []string{c.warn}, gaps)
+			} else {
+				require.Empty(t, gaps)
+			}
+
+			require.Equal(t, missed+float64(warns), testutil.ToFloat64(prometheusLaneGiveBacksMissed))
+
+			require.NoError(t, a.Close())
+
+			src.mu.Lock()
+			defer src.mu.Unlock()
+
+			require.Len(t, src.releases, 1)
+			require.Equal(t, c.next, src.releases[0].LastTaken)
+			require.Equal(t, Settles{}, src.releases[0].Settles, "the aged grant's pair went on the grant request")
+		})
 	}
-
-	require.Eventually(t, a.hasSpareGrant, 5*time.Second, time.Millisecond)
-
-	clk.step(start.Add(2*time.Minute - time.Second).Sub(clk.Now()))
-	require.Equal(t, Pack(0, 51), next(t, a), "still inside two minutes")
-
-	clk.step(time.Second)
-	require.Equal(t, Pack(0, 101), next(t, a), "two minutes after the first take it moves to the spare")
-
-	require.NoError(t, a.Close())
-
-	src.mu.Lock()
-	defer src.mu.Unlock()
-
-	require.Len(t, src.releases, 1)
-	require.Equal(t, uint64(101), src.releases[0].LastTaken)
-	require.Equal(t, Settles{First: 1, LastTaken: 51}, src.releases[0].Settles, "an aged grant settles at the highest position taken")
 }
 
 // A grant must start being used within two minutes of its request, even if the lease stays live.
@@ -346,6 +432,9 @@ func TestAllocatorDiscardsUnusedGrantsAfterIdle(t *testing.T) {
 						next(t, a)
 					}
 					require.Eventually(t, a.hasSpareGrant, time.Second, time.Millisecond)
+					for range 5 {
+						next(t, a) // used up, so the spare is promoted and is the grant left unused
+					}
 					want = Pack(0, 21)
 				}
 				idle := 2 * time.Minute
@@ -362,7 +451,7 @@ func TestAllocatorDiscardsUnusedGrantsAfterIdle(t *testing.T) {
 				require.Equal(t, Settles{}, src.releases[0].Settles, "no unused grant is settled on release")
 				for _, r := range src.grantRequests() {
 					if spare && r.Settles != (Settles{}) {
-						require.Equal(t, Settles{First: 1, LastTaken: 5}, r.Settles)
+						require.Equal(t, Settles{First: 1, LastTaken: 10}, r.Settles)
 					} else {
 						require.Equal(t, Settles{}, r.Settles, "unused grants get no settles pair")
 					}
@@ -379,10 +468,13 @@ func TestAllocatorUnusedGrantExpiryWaitsForAFreshGrant(t *testing.T) {
 	a.takeWait = 30 * time.Millisecond
 	require.NoError(t, a.Start(context.Background()))
 	require.Eventually(t, func() bool { return a.Ready() == nil }, time.Second, time.Millisecond)
+	missed := testutil.ToFloat64(prometheusLaneGiveBacksMissed)
 	src.setDown(true)
 	clk.step(2 * time.Minute)
 	_, err := a.Next(context.Background())
 	require.ErrorIs(t, err, errors.ErrServiceUnavailable)
+	require.Error(t, a.renew(true), "a grant request to the down service fails, its error handled before renew returns")
+	require.Equal(t, missed, testutil.ToFloat64(prometheusLaneGiveBacksMissed), "a failed request that gives nothing back is no missed give-back")
 	require.NoError(t, a.Ready(), "the grant expired, not the lease")
 	src.setDown(false)
 	a.signal()
@@ -1139,6 +1231,8 @@ type scriptedLeases struct {
 	highest  map[uint8]uint64 // the model's highest position given out in each lane
 	high     map[uint8]uint64
 	newest   map[uint8]leaseGrantStart // each lane's newest grant, for the service's continuation
+	below    map[uint8]leaseGrantStart // the grant below each lane's newest, whose last is belowHi
+	belowHi  map[uint8]uint64
 	open     map[LeaseID]uint8
 	seq      byte
 	answer   string // ok, slow, error, closed, bad or nogrant
@@ -1151,14 +1245,19 @@ type scriptedLeases struct {
 }
 
 // grant is the next grant in lane l for lease id, continuing the lane's newest grant when st
-// settles it, as the service does.
-func (f *scriptedLeases) grant(id LeaseID, l uint8, st Settles) Grant {
+// settles it, or the grant below the spare given back, as the service does.
+func (f *scriptedLeases) grant(id LeaseID, l uint8, st Settles, giveBack uint64) Grant {
+	if giveBack != 0 && f.newest[l].lease == id && f.newest[l].first == giveBack && continues(f.below[l], f.belowHi[l], id, st) {
+		f.newest[l], f.high[l] = f.below[l], f.belowHi[l]
+	}
+
 	first := f.high[l] + 1
 	if continues(f.newest[l], f.high[l], id, st) {
 		first = st.LastTaken + 1
 	}
 
 	g := Grant{Lane: l, First: first, Last: first + f.rng.Uint64N(8)}
+	f.below[l], f.belowHi[l] = f.newest[l], f.high[l]
 	f.high[l], f.newest[l] = g.Last, leaseGrantStart{id, g.First}
 
 	return g
@@ -1195,7 +1294,7 @@ func (f *scriptedLeases) OpenLaneLease(context.Context, string) (LeaseID, Grant,
 	id := LeaseID{f.seq}
 	f.open[id] = l
 
-	f.last = f.grant(id, l, Settles{})
+	f.last = f.grant(id, l, Settles{}, 0)
 	if f.answer == "bad" {
 		f.last = f.badGrant(l)
 	}
@@ -1224,7 +1323,7 @@ func (f *scriptedLeases) RenewLaneLease(_ context.Context, r Renewal) (RenewResu
 		return RenewResult{}, nil
 	}
 
-	f.last = f.grant(r.Lease, r.Lane, r.Settles)
+	f.last = f.grant(r.Lease, r.Lane, r.Settles, r.GiveBack)
 	if f.answer == "bad" {
 		f.last = f.badGrant(r.Lane)
 	}
@@ -1260,12 +1359,14 @@ type allocModel struct {
 	spare     Grant
 	spareSent time.Time
 	hasSpare  bool
-	pending   []Settles
-	taken     uint64 // the highest position this lease gave out
-	highest   map[uint8]uint64
-	lastGood  time.Time
-	released  bool
-	releases  []Release
+	// givingBack is the first position of a spare given back when the grant before it aged out.
+	givingBack uint64
+	pending    []Settles
+	taken      uint64 // the highest position this lease gave out
+	highest    map[uint8]uint64
+	lastGood   time.Time
+	released   bool
+	releases   []Release
 }
 
 func (m *allocModel) install(g Grant, sent time.Time) {
@@ -1284,12 +1385,16 @@ func (m *allocModel) take(now time.Time) uint64 {
 
 	for m.next != 0 && (m.next > m.cur.Last || now.Sub(m.requested) >= m.t.GrantDuration && m.firstTake.IsZero() ||
 		!m.firstTake.IsZero() && now.Sub(m.firstTake) >= m.t.GrantDuration) {
+		usedUp := m.next > m.cur.Last
 		if !m.firstTake.IsZero() {
 			m.pending = append(m.pending, Settles{First: m.cur.First, LastTaken: m.next - 1})
 		}
 		m.next = 0
 
-		if m.hasSpare {
+		switch {
+		case m.hasSpare && !usedUp:
+			m.givingBack, m.hasSpare = m.spare.First, false
+		case m.hasSpare:
 			m.install(m.spare, m.spareSent)
 			m.hasSpare = false
 		}
@@ -1348,7 +1453,7 @@ func runAllocModel(t *testing.T, seed uint64, steps int) {
 	clk := newStepClock()
 	tm := Timings{Renew: time.Hour, Stop: 2 * time.Minute, GrantDuration: 90 * time.Second}
 	m := &allocModel{t: tm, highest: map[uint8]uint64{}}
-	src := &scriptedLeases{clk: clk, rng: rng, highest: m.highest, high: map[uint8]uint64{}, newest: map[uint8]leaseGrantStart{}, open: map[LeaseID]uint8{}, closedAt: -1}
+	src := &scriptedLeases{clk: clk, rng: rng, highest: m.highest, high: map[uint8]uint64{}, newest: map[uint8]leaseGrantStart{}, below: map[uint8]leaseGrantStart{}, belowHi: map[uint8]uint64{}, open: map[LeaseID]uint8{}, closedAt: -1}
 
 	// The test turns the loop, so the loop never starts and Close has none to wait for.
 	a := NewAllocator(src, "pod-3", tm, nil)
@@ -1371,6 +1476,7 @@ func runAllocModel(t *testing.T, seed uint64, steps int) {
 		takes     []takeAt
 		grants    = map[LeaseID][]Grant{} // the grants each lease accepted, in order
 		requested = map[leaseGrant]time.Time{}
+		givenBack = map[leaseGrant]bool{} // spares given back unused
 	)
 
 	defer func() {
@@ -1384,7 +1490,11 @@ func runAllocModel(t *testing.T, seed uint64, steps int) {
 
 	takeOne := func() {
 		now, lease := clk.Now(), m.lease
+		spare := leaseGrant{m.lease, m.spare}
 		want := m.take(now)
+		if m.givingBack != 0 && m.givingBack == spare.g.First {
+			givenBack[spare] = true
+		}
 		v, err := a.Next(noWait)
 		ops = append(ops, fmt.Sprintf("next at %s -> %d:%d", now.Format("15:04:05"), Lane(v), v&MaxPosition))
 
@@ -1443,7 +1553,7 @@ func runAllocModel(t *testing.T, seed uint64, steps int) {
 				default:
 					require.NoError(t, err)
 
-					m.leased, m.lease, m.lane, m.hasSpare, m.pending, m.taken, m.lastGood = true, LeaseID{src.seq}, src.last.Lane, false, nil, 0, now
+					m.leased, m.lease, m.lane, m.hasSpare, m.pending, m.taken, m.lastGood, m.givingBack = true, LeaseID{src.seq}, src.last.Lane, false, nil, 0, now, 0
 					m.install(src.last, now)
 					grants[m.lease] = append(grants[m.lease], src.last)
 					requested[leaseGrant{m.lease, src.last}] = now
@@ -1458,7 +1568,7 @@ func runAllocModel(t *testing.T, seed uint64, steps int) {
 
 			req := Renewal{Lease: m.lease, Lane: m.lane, WantGrant: want}
 			if want {
-				req.Settles = m.pairToSend()
+				req.Settles, req.GiveBack = m.pairToSend(), m.givingBack
 			}
 
 			if rng.IntN(4) == 0 {
@@ -1480,6 +1590,10 @@ func runAllocModel(t *testing.T, seed uint64, steps int) {
 			switch {
 			case src.answer == "error":
 				require.Error(t, err)
+
+				if req.GiveBack != 0 {
+					m.givingBack = 0 // the retry goes without it
+				}
 			case src.answer == "closed":
 				require.NoError(t, err)
 
@@ -1494,7 +1608,14 @@ func runAllocModel(t *testing.T, seed uint64, steps int) {
 					m.pending = slices.Delete(m.pending, i, i+1)
 				}
 
-				if src.answer == "nogrant" || !m.acceptable(src.last) {
+				if src.answer == "nogrant" {
+					require.Error(t, err)
+					break
+				}
+
+				m.givingBack = 0 // a grant settles the spare given back, accepted or not
+
+				if !m.acceptable(src.last) {
 					require.Error(t, err)
 					break
 				}
@@ -1544,9 +1665,13 @@ func runAllocModel(t *testing.T, seed uint64, steps int) {
 		highest[l] = p
 
 		// A grant that continues an aged-out one starts inside it, so a position belongs to the
-		// accepted grant with the highest first at or below it.
+		// accepted grant with the highest first at or below it, leaving out spares given back unused.
 		i := -1
 		for j, g := range grants[tk.lease] {
+			if givenBack[leaseGrant{tk.lease, g}] {
+				continue
+			}
+
 			if g.Lane == l && g.First <= p && p <= g.Last && (i < 0 || g.First > grants[tk.lease][i].First) {
 				i = j
 			}

@@ -61,10 +61,13 @@ type Timings struct {
 // It holds the grant it is handing out and one spare. At half the current grant used it asks for
 // the next grant and keeps it as the spare. It takes from the current grant until the grant is used
 // up, with no returned position (Return) still waiting in it, or GrantDuration has passed since its
-// first position was taken, and only then moves to the spare. A grant that ages out with no spare is
-// left by the next take, which waits for a grant: the service starts that grant right after the last
-// position taken, so a slow process leaves no unused tail between its grants. An unused grant
-// expires GrantDuration after its request was sent, including a spare.
+// first position was taken. A grant used up moves to the spare. A grant that ages out is left by the
+// next take, which waits for a grant: the service starts that grant right after the last position
+// taken, so a slow process leaves no unused tail between its grants. A spare held then is given back
+// unused on that request, since it lies above the tail: take grant 5161 to 15160 aged out at 10258
+// with spare 15161 to 29920, and the next grant starts at 10259 instead of the process moving to
+// 15161. A grant every position of which came back still moves to the spare. An unused grant expires
+// GrantDuration after its request was sent, including a spare.
 // The grant it leaves is settled by the next request: the grant's first position and its
 // final number, which is the grant's last position if used up or the highest position taken if it
 // aged out, travel on the next grant request or on the release.
@@ -115,6 +118,9 @@ type Allocator struct {
 	returned []uint64
 	spare    Grant
 	hasSpare bool
+	// givingBack is the first position of a spare given back unused when the grant before it aged
+	// out, sent on the next grant request and cleared when that request is granted or fails; 0 for none.
+	givingBack uint64
 	// pending settles the grants left and not yet reported, oldest first, until grant requests (the
 	// newest pair, pairToSendLocked) or the release (the oldest) carry them. It holds at most two: a
 	// spare comes only from a request made while a grant is current, so once two are left no grant is
@@ -406,7 +412,8 @@ func (a *Allocator) takeLocked() (v uint64, ok bool, changed chan struct{}, err 
 }
 
 // leaveCurrentLocked settles the current grant and moves to the spare, or to no grant when there is
-// no spare, in which case the loop asks for one at once. The grant's returned positions are dropped.
+// no spare or the grant aged out before it was used up, in which case the loop asks for one at once
+// and gives back the spare. The grant's returned positions are dropped.
 // Those at the top of the taken range settledFinalLocked removes, and the grant settles below them,
 // so a grant that continues this one gives them out again; those left sit below that final number,
 // stay burned, and installLocked clears them. With no
@@ -430,10 +437,15 @@ func (a *Allocator) leaveCurrentLocked(usedUp bool) {
 		}
 	}
 
-	if a.hasSpare {
+	switch {
+	case a.hasSpare && !usedUp && final != 0:
+		// The spare starts above this grant's unused tail. Giving it back lets the next grant start
+		// right after final instead.
+		a.givingBack, a.hasSpare, a.next = a.spare.First, false, 0
+	case a.hasSpare:
 		a.installLocked(a.spare, a.spareRequested)
 		a.hasSpare = false
-	} else {
+	default:
 		a.next = 0
 	}
 
@@ -653,7 +665,7 @@ func (a *Allocator) open() error {
 
 	a.leased, a.lease, a.lane = true, id, g.Lane
 	a.installLocked(g, sent)
-	a.hasSpare, a.pending, a.npending, a.leaseTaken, a.leaseTakenBefore = false, [2]Settles{}, 0, 0, 0
+	a.hasSpare, a.pending, a.npending, a.leaseTaken, a.leaseTakenBefore, a.givingBack = false, [2]Settles{}, 0, 0, 0, 0
 	a.lastGood = sent
 	a.samples = [2]rateSample{{sent, a.taken}, {sent, a.taken}}
 	a.broadcastLocked()
@@ -697,7 +709,7 @@ func (a *Allocator) renew(want bool) error {
 	a.mu.Lock()
 	r := Renewal{Lease: a.lease, Lane: a.lane, Rate: a.rateLocked(sent), WantGrant: want}
 	if want {
-		r.Settles = a.pairToSendLocked()
+		r.Settles, r.GiveBack = a.pairToSendLocked(), a.givingBack
 	}
 	a.mu.Unlock()
 
@@ -706,6 +718,19 @@ func (a *Allocator) renew(want bool) error {
 	cancel()
 
 	if err != nil {
+		// The retry goes without the give-back, so a service that cannot take the spare back, such as
+		// one whose role may not delete hand-outs, still grants. Either way the request is safe to
+		// retry: had this one committed, its continuation is the lane's newest hand-out, not the spare.
+		// No grant is current while a give-back is in flight, so nothing sets another one meanwhile.
+		if r.GiveBack != 0 {
+			a.mu.Lock()
+			a.givingBack = 0
+			a.mu.Unlock()
+
+			prometheusLaneGiveBacksMissed.Inc()
+			a.logger.Warnf("[lane] grant request from %s giving back spare %d:%d failed, so the retry goes without it and positions after %d stay unused", a.holder, r.Lane, r.GiveBack, r.Settles.LastTaken)
+		}
+
 		return err
 	}
 
@@ -742,6 +767,15 @@ func (a *Allocator) renew(want bool) error {
 	}
 
 	if res.Granted {
+		// Whatever the service did with the spare given back, it is settled: dropped for this grant,
+		// or, when no longer the lane's newest, left unused.
+		if r.GiveBack != 0 && res.Grant.First != r.Settles.LastTaken+1 {
+			prometheusLaneGiveBacksMissed.Inc()
+			a.logger.Warnf("[lane] blockchain service granted %d:%d to %s instead of continuing after %d, so positions %d to %d stay unused", r.Lane, res.Grant.First, a.holder, r.Settles.LastTaken, r.Settles.LastTaken+1, res.Grant.First-1)
+		}
+
+		a.givingBack = 0
+
 		if err = a.acceptableLocked(res.Grant); err != nil {
 			a.logger.Errorf("%v", err)
 			a.broadcastLocked()
