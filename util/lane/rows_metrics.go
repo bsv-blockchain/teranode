@@ -33,9 +33,8 @@ const (
 	// cancelled (peers' blocks only).
 	MissingBitmapsTimedOut = "timed_out"
 	// MissingBitmapsWriteFailed: a subtree's lane bitmaps file could not be encoded or written, by
-	// subtree validation (block peer) or block assembly (block own), or block assembly stored a
-	// subtree with no bitmaps kept to write. It is counted when the write fails, so a peer's block
-	// that later lists the subtree counts it again, as absent.
+	// subtree validation (block peer) or block assembly (block own), or block assembly had no
+	// bitmaps kept to write.
 	MissingBitmapsWriteFailed = "write_failed"
 )
 
@@ -104,7 +103,7 @@ func initRowsMetrics() {
 			Namespace: "teranode",
 			Subsystem: "lane",
 			Name:      "missing_bitmaps_total",
-			Help:      "Subtrees without usable lane bitmaps, by reason; block is peer or own. absent, unreadable and timed_out are counted for the subtrees of a block stored without lane rows. For a peer's block (block peer) the bitmaps are its subtrees' lane bitmaps files, read by block validation: absent, unreadable, or timed_out when not read by the deadline. For a block this node mined (block own) they are the bitmaps block assembly kept in memory when it sealed the subtree, not read from a file: absent when none were kept. write_failed is counted when a subtree's lane bitmaps file could not be written, by subtree validation (block peer) or by block assembly (block own); a peer's block that later lists that subtree counts it again, as absent",
+			Help:      "Subtrees without usable lane bitmaps, by reason; block is peer or own. absent, unreadable and timed_out are counted for the subtrees of a block stored without lane rows. For a peer's block (block peer) the bitmaps are its subtrees' lane bitmaps files, read by block validation: absent, unreadable, or timed_out when not read by the deadline. For a block this node mined (block own) they are the bitmaps block assembly kept in memory when it sealed the subtree, not read from a file: absent when none were kept. write_failed is counted when a subtree's lane bitmaps file could not be encoded or written, by subtree validation (block peer) or by block assembly (block own), or block assembly had no bitmaps kept to write",
 		}, []string{"block", "reason"})
 		prometheusLaneTxsNoPosition = promauto.NewCounterVec(prometheus.CounterOpts{
 			Namespace: "teranode",
