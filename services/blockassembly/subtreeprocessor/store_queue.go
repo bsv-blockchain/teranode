@@ -58,6 +58,14 @@ func StoreRequestBytes(req NewSubtreeRequest) uint64 {
 // Workers take snapshots first, then the chain requests that are still wanted in the order they
 // were sent, then the stale ones. A sequence number is given when a request is taken, so a request
 // removed before that leaves no gap for the in-order notification sender.
+//
+// Known limits. A request a worker took keeps its charge until its store settles, so writes that hang
+// or are abandoned can hold the whole limit (about 23 full million-leaf subtrees at the 4096 MB
+// default); the stored-prefix watcher's replacement for such a request then waits, uncharged, with
+// nothing stale left to drop, and does not recover. The default path blocks on its full channel in the
+// same outage. A dropped request's OnStorageComplete deletes its subtree's hashes from DeletedTxs
+// while another request for the same subtree, which a worker took, may still build its meta from
+// them: that store can fail for a subtree that left the chain, unless wantRestored brings it back.
 type StoreQueue struct {
 	mu    sync.Mutex
 	wake  chan struct{} // closed, and replaced, when a worker may find something to take
@@ -411,7 +419,9 @@ func (q *StoreQueue) queued(st *subtreepkg.Subtree) bool {
 // whatever its SkipNotification says, and reports whether there was one. A fork reorg's forward steps
 // send silently and the reorg announces after its marks, which a subtree still being written, or
 // retried, would otherwise miss. When it reports false the request has settled, and the caller
-// announces a stored subtree itself.
+// announces a stored subtree itself. Only the requests outstanding at this call are tagged: if they
+// all exhaust their retries they settle without announcing, and a later store of the subtree, by the
+// stored-prefix watcher's silent re-send, is not announced.
 func (q *StoreQueue) AnnounceOnSuccess(st *subtreepkg.Subtree) bool {
 	q.mu.Lock()
 	defer q.mu.Unlock()
