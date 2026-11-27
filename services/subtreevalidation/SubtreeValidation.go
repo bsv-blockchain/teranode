@@ -1172,7 +1172,7 @@ func (u *Server) waitForRetryOrPriority(ctx context.Context, subtreeHash string,
 // storeSubtreeFiles writes a validated subtree's files, all with one expiry: its meta, and beside it
 // its lane bitmaps when laneBitmaps is not nil (utxostore_laneMigration shadow), then the subtree
 // file once both are written.
-func (u *Server) storeSubtreeFiles(ctx context.Context, stat *gocore.Stat, subtreeHash *chainhash.Hash, subtree *subtreepkg.Subtree, subtreeMeta *subtreepkg.Meta, laneBitmaps *lane.SubtreeBitmaps) error {
+func (u *Server) storeSubtreeFiles(ctx context.Context, stat *gocore.Stat, subtreeHash *chainhash.Hash, subtree *subtreepkg.Subtree, subtreeMeta *subtreepkg.Meta, laneBitmaps *lane.SubtreeBitmaps) (err error) {
 	ctx, _, deferFn := tracing.Tracer("subtreevalidation").Start(ctx, "storeSubtreeFiles",
 		tracing.WithParentStat(stat),
 		tracing.WithDebugLogMessage(u.logger, "[storeSubtreeFiles][%s] called", subtreeHash.String()),
@@ -1190,19 +1190,30 @@ func (u *Server) storeSubtreeFiles(ctx context.Context, stat *gocore.Stat, subtr
 	// The lane bitmaps file only has to exist before the subtree file, which the block gate reads
 	// as "this subtree is done", so it is written beside the meta rather than before it: at
 	// shadow a subtree waits for no extra write in turn. Every return waits for it, so no write
-	// outlives the call.
+	// outlives the call. A return with an error first stops the write retrying: the subtree is not
+	// stored, so its file is not needed yet, and its next validation writes one. The meta write
+	// needs the same database, so without the stop every validation failed by an outage would
+	// wait out the retry bound.
 	waitForBitmaps := func() {}
 
 	if laneBitmaps != nil {
 		bitmapsWritten := make(chan struct{})
+		bitmapsCtx, stopBitmaps := context.WithCancel(ctx)
 
 		go func() {
 			defer close(bitmapsWritten)
 
-			u.storeSubtreeLaneBitmaps(ctx, subtreeHash, *laneBitmaps, dah)
+			u.storeSubtreeLaneBitmaps(bitmapsCtx, subtreeHash, *laneBitmaps, dah)
 		}()
 
-		defer func() { <-bitmapsWritten }()
+		defer func() {
+			if err != nil {
+				stopBitmaps()
+			}
+
+			<-bitmapsWritten
+			stopBitmaps()
+		}()
 
 		waitForBitmaps = func() { <-bitmapsWritten }
 	}
@@ -1270,14 +1281,21 @@ func (u *Server) storeSubtreeFiles(ctx context.Context, stat *gocore.Stat, subtr
 const laneBitmapsService = "subtreevalidation"
 
 // storeSubtreeLaneBitmaps writes a subtree's lane bitmaps file, before its subtree file and with
-// its expiry, so the block gate finds it beside the subtree. At shadow nothing acts on lanes, so
-// a failure to write it does not stop the subtree: it is logged and counted as write_failed, and
-// the block that lists the subtree counts its bitmaps as absent and goes without rows. A file
-// already there, from an earlier validation of the same subtree, is kept.
+// its expiry, so the block gate finds it beside the subtree. A write that fails while the store or
+// its database is briefly unavailable is retried (laneBitmapsRetry). At shadow nothing acts on
+// lanes, so a write that still fails does not stop the subtree: it is logged and counted as
+// write_failed, and the block that lists the subtree counts its bitmaps as absent and goes without
+// rows. A file already there, from an earlier validation of the same subtree, is kept.
+//
+// Each attempt is a plain write, as the meta and subtree writes are, so the file gets this
+// validation's expiry as its subtree file then does, even when a second validation of the same
+// subtree wrote both while this one was in its backoff.
 func (u *Server) storeSubtreeLaneBitmaps(ctx context.Context, subtreeHash *chainhash.Hash, bitmaps lane.SubtreeBitmaps, dah uint32) {
 	data, err := lane.EncodeSubtreeBitmaps(bitmaps)
 	if err == nil {
-		err = u.subtreeStore.Set(ctx, subtreeHash[:], fileformat.FileTypeSubtreeLaneBitmaps, data, options.WithDeleteAt(dah))
+		err = u.laneBitmapsRetry.Do(ctx, laneBitmapsService, func() error {
+			return u.subtreeStore.Set(ctx, subtreeHash[:], fileformat.FileTypeSubtreeLaneBitmaps, data, options.WithDeleteAt(dah))
+		})
 	}
 
 	if err != nil && !errors.Is(err, errors.ErrBlobAlreadyExists) {

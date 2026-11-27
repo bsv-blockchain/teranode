@@ -202,8 +202,9 @@ func (o *ownLaneBitmaps) list(roots []chainhash.Hash, height uint32) {
 	}
 }
 
-// writeLaneBitmapsFile writes a subtree's lane bitmaps file, to live until dah. A file already
-// there gets dah; a file that cannot be encoded or written is counted under block="own".
+// writeLaneBitmapsFile writes a subtree's lane bitmaps file, to live until dah. A write that fails
+// while the store or its database is briefly unavailable is retried (laneBitmapsRetry). A file
+// already there gets dah; a file that cannot be encoded or written is counted under block="own".
 func (ba *BlockAssembly) writeLaneBitmapsFile(ctx context.Context, bitmaps lane.SubtreeBitmaps, dah uint32) {
 	root := bitmaps.SubtreeHash
 
@@ -217,13 +218,21 @@ func (ba *BlockAssembly) writeLaneBitmapsFile(ctx context.Context, bitmaps lane.
 
 	// An exclusive publish bounds the file store's delete-at scheduling, which the subtree file
 	// waits behind, and never replaces the delete-at of a file another writer published first.
-	fileLock := ba.ownLaneBitmaps.fileLock(root)
-	fileLock.Lock()
-	err = ba.subtreeStore.Set(ctx, root[:], fileformat.FileTypeSubtreeLaneBitmaps, data, options.WithDeleteAt(dah), options.WithExclusivePublish())
-	if err == nil {
-		ba.ownLaneBitmaps.recordFileDAH(root, dah)
-	}
-	fileLock.Unlock()
+	// The file's lock is held for each attempt, not across the backoff between them, so a refresh
+	// of the file can run in between: an attempt that then finds the file goes on as any write
+	// that finds one does, below, and cannot lower a delete-at the refresh raised.
+	err = ba.laneBitmapsRetry.Do(ctx, laneBitmapsService, func() error {
+		fileLock := ba.ownLaneBitmaps.fileLock(root)
+		fileLock.Lock()
+		defer fileLock.Unlock()
+
+		setErr := ba.subtreeStore.Set(ctx, root[:], fileformat.FileTypeSubtreeLaneBitmaps, data, options.WithDeleteAt(dah), options.WithExclusivePublish())
+		if setErr == nil {
+			ba.ownLaneBitmaps.recordFileDAH(root, dah)
+		}
+
+		return setErr
+	})
 
 	switch {
 	case errors.Is(err, errors.ErrBlobAlreadyExists):

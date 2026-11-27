@@ -46,6 +46,7 @@ import (
 	"github.com/bsv-blockchain/teranode/util/bump"
 	"github.com/bsv-blockchain/teranode/util/health"
 	"github.com/bsv-blockchain/teranode/util/kafka"
+	"github.com/bsv-blockchain/teranode/util/lane"
 	"github.com/bsv-blockchain/teranode/util/retry"
 	"github.com/bsv-blockchain/teranode/util/tracing"
 	"github.com/jellydator/ttlcache/v3"
@@ -117,6 +118,10 @@ type BlockAssembly struct {
 	// ownLaneBitmaps keeps the lane bitmaps of the subtrees this service's subtree processor sealed or rebuilt, by subtree hash,
 	// for the lane map rows of the blocks it mines, at utxostore_laneMigration shadow (lane_rows.go).
 	ownLaneBitmaps ownLaneBitmaps
+
+	// laneBitmapsRetry retries a failed write of a subtree's lane bitmaps file over a short outage
+	// of the subtree store or the database behind its delete-at heights (lane_rows.go).
+	laneBitmapsRetry lane.BitmapsWriteRetry
 
 	// jobCoinbaseMu makes GetMiningCandidate's read of a job's coinbase and its store of the new
 	// job one step, so two polls that share a candidate id cannot each build a coinbase and leave
