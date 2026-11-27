@@ -342,6 +342,24 @@ func TestConvertFromAPIPeerInfoErrors(t *testing.T) {
 		require.Contains(t, err.Error(), "invalid block hash")
 	})
 
+	t.Run("invalid_validated_block_hash_catchup", func(t *testing.T) {
+		_, err := convertFromAPIPeerInfo(&p2p_api.PeerInfoForCatchup{
+			Id:                 "12D3KooWBhWMmHCXuyfM48dEPRsBzkemQQu71yC9rR2zHGmAjzQz",
+			ValidatedBlockHash: "not-a-hash",
+		})
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "invalid block hash")
+	})
+
+	t.Run("invalid_validated_block_hash_registry", func(t *testing.T) {
+		_, err := convertFromAPIPeerInfo(&p2p_api.PeerRegistryInfo{
+			Id:                 "12D3KooWBhWMmHCXuyfM48dEPRsBzkemQQu71yC9rR2zHGmAjzQz",
+			ValidatedBlockHash: "not-a-hash",
+		})
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "invalid block hash")
+	})
+
 	t.Run("unsupported_type", func(t *testing.T) {
 		_, err := convertFromAPIPeerInfo("not a peer message")
 		require.Error(t, err)

@@ -17,6 +17,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 )
 
 // freshTestServer wires a P2P Server backed by a real in-memory
@@ -528,6 +529,49 @@ func TestGetPeersForCatchup_UsesCatchupSpecificCounters(t *testing.T) {
 	require.Equal(t, int64(3), p.CatchupAttempts, "attempts without an outcome must still be counted")
 	require.Equal(t, int64(1), p.CatchupSuccesses)
 	require.Equal(t, int64(1), p.CatchupFailures)
+}
+
+// TestGetPeersForCatchup_ValidatedTripleRoundTrips verifies that validated_height,
+// validated_block_hash, and validated_chain_work stored in the peer registry are
+// carried through GetPeersForCatchup without loss or corruption.
+func TestGetPeersForCatchup_ValidatedTripleRoundTrips(t *testing.T) {
+	s, reg, pid := freshTestServer(t)
+
+	validatedHash, err := chainhash.NewHashFromStr("000000000000000000000000000000000000000000000000000000000000abcd")
+	require.NoError(t, err)
+
+	validatedWork := []byte{0x00, 0x00, 0x00, 0x42}
+
+	reg.Register(&blockchain.PeerInfo{
+		ID:                 pid.String(),
+		DataHubURL:         "http://peer/api/v1",
+		Height:             500,
+		ValidatedHeight:    498,
+		ValidatedBlockHash: validatedHash,
+		ValidatedChainWork: validatedWork,
+	})
+
+	resp, err := s.GetPeersForCatchup(context.Background(), &p2p_api.GetPeersForCatchupRequest{})
+	require.NoError(t, err)
+	require.Len(t, resp.Peers, 1)
+
+	p := resp.Peers[0]
+	require.Equal(t, uint32(498), p.ValidatedHeight)
+	require.Equal(t, validatedHash.String(), p.ValidatedBlockHash)
+	require.Equal(t, validatedWork, p.ValidatedChainWork)
+
+	// Over the wire and through the client-side converter, which is what the
+	// blockvalidation catchup gate actually reads.
+	wire, err := proto.Marshal(p)
+	require.NoError(t, err)
+	decoded := &p2p_api.PeerInfoForCatchup{}
+	require.NoError(t, proto.Unmarshal(wire, decoded))
+
+	native, err := convertFromAPIPeerInfo(decoded)
+	require.NoError(t, err)
+	require.Equal(t, uint32(498), native.ValidatedHeight)
+	require.Equal(t, validatedHash, native.ValidatedBlockHash)
+	require.Equal(t, validatedWork, native.ValidatedChainWork)
 }
 
 func TestReportValidBlockHeaders_CreditsReputationNotCatchupCounters(t *testing.T) {

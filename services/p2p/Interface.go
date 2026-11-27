@@ -64,6 +64,12 @@ type PeerInfo struct {
 	// Catchup error tracking
 	LastCatchupError     string    // Last error message from catchup attempt with this peer
 	LastCatchupErrorTime time.Time // When the last catchup error occurred
+
+	// Locally validated chain progress. Zero/nil when the peer has not had
+	// header work validated locally via ReportValidatedChainProgress.
+	ValidatedHeight    uint32
+	ValidatedBlockHash *chainhash.Hash
+	ValidatedChainWork []byte
 }
 
 // DisplayHeight is the height to show an operator: what the peer advertised,
