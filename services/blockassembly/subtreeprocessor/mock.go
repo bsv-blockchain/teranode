@@ -46,6 +46,20 @@ type MockSubtreeProcessor struct {
 
 	// DrainResetRequested backs TakeDrainResetRequested the same way.
 	DrainResetRequested atomic.Bool
+
+	// reorgTipSeenAt is the WithTipSeenAt time the last Reorg call carried, nil before any call.
+	reorgTipSeenAt atomic.Pointer[time.Time]
+}
+
+// ReorgTipSeenAt returns the WithTipSeenAt time the last Reorg call carried: ok is false before any
+// Reorg call, and the time is zero when the call carried none.
+func (m *MockSubtreeProcessor) ReorgTipSeenAt() (t time.Time, ok bool) {
+	p := m.reorgTipSeenAt.Load()
+	if p == nil {
+		return time.Time{}, false
+	}
+
+	return *p, true
 }
 
 func (m *MockSubtreeProcessor) GetCurrentTxMap() TxInpointsMap {
@@ -383,7 +397,14 @@ func (m *MockSubtreeProcessor) DrainPendingInvalidations() []chainhash.Hash {
 func (m *MockSubtreeProcessor) QueueInvalidation(_ chainhash.Hash) {}
 
 // Reorg implements Interface.Reorg
-func (m *MockSubtreeProcessor) Reorg(moveBackBlocks []*model.Block, modeUpBlocks []*model.Block, _ ...ReorgOption) error {
+func (m *MockSubtreeProcessor) Reorg(moveBackBlocks []*model.Block, modeUpBlocks []*model.Block, opts ...ReorgOption) error {
+	var req reorgBlocksRequest
+	for _, opt := range opts {
+		opt(&req)
+	}
+
+	m.reorgTipSeenAt.Store(&req.tipSeenAt)
+
 	args := m.Called(moveBackBlocks, modeUpBlocks)
 	return args.Error(0)
 }

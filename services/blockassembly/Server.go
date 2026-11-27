@@ -1090,6 +1090,14 @@ func (ba *BlockAssembly) storeSubtreeMeta(ctx context.Context, subtreeRequest su
 	prometheusBlockAssemblySubtreeStoreStep.WithLabelValues("meta_build").Observe(time.Since(buildStart).Seconds())
 
 	if !ok {
+		// A build that ended because the context did (a shutdown during its backoff) is cancelled,
+		// not failed, as a cancelled write retry is.
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			outcome.cancel(ctxErr)
+
+			return
+		}
+
 		err := errors.NewProcessingError("[BlockAssembly:storeSubtreeData][%s] failed to build subtree meta", subtree.RootHash().String())
 
 		// a reset cleared the map the meta is built from: its own side effect, not a store failure
@@ -1206,7 +1214,10 @@ func (ba *BlockAssembly) storeSubtreeData(ctx context.Context, subtreeRequest su
 			// announce, or a rare late send finds a subtree without its meta.
 			if subtreeRequest.Result == nil && ba.storedSet == nil {
 				outcome.metaAbsent()
-			} else if metaExists, _ := ba.subtreeStore.Exists(ctx, subtree.RootHash()[:], fileformat.FileTypeSubtreeMeta); metaExists {
+			} else if metaExists, existsErr := ba.subtreeStore.Exists(ctx, subtree.RootHash()[:], fileformat.FileTypeSubtreeMeta); existsErr != nil {
+				ba.logger.Warnf("[BlockAssembly:storeSubtreeData][%s] could not check the subtree meta: %s", subtree.RootHash().String(), existsErr)
+				outcome.fail(errors.NewStorageError("[BlockAssembly:storeSubtreeData][%s] could not check the subtree meta", subtree.RootHash().String(), existsErr))
+			} else if metaExists {
 				outcome.metaStored()
 			} else if ba.storedSet != nil {
 				ba.storeSubtreeMeta(ctx, subtreeRequest, dah, outcome, subtreeRetryChan)

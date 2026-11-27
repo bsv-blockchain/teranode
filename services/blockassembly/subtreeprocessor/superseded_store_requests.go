@@ -5,7 +5,8 @@ import "sync/atomic"
 // Superseded reports whether reset() retired the state this request was built from after the
 // request was made. Its ParentTxMap was then cleared under it, so a meta build that cannot find a
 // parent has not failed on its own: the build is cancelled, not failed and not retried. The zero
-// value, a request made without a processor, is never superseded.
+// value, a request made without a processor, is never superseded, and neither is a request that
+// afterBlockSnapshot.storeOnce makes: it carries no token.
 func (r NewSubtreeRequest) Superseded() bool {
 	return r.superseded != nil && r.superseded.Load()
 }
@@ -22,8 +23,9 @@ func (stp *SubtreeProcessor) supersedeToken() *atomic.Bool {
 	return stp.supersedeFlag.Load()
 }
 
-// supersedeStoreRequests marks every store request made so far as superseded and starts a new
-// state for the requests made from now on. It sets a flag and waits for nothing, so reset() never
+// supersedeStoreRequests marks the store requests stamped with the current token as superseded and
+// starts a new state for the requests made from now on. The requests afterBlockSnapshot.storeOnce
+// makes are not stamped, so a reset does not mark them. It sets a flag and waits for nothing, so reset() never
 // waits for a store. It runs before the tx map is cleared: a build that misses a parent because of
 // the clear then finds the flag set.
 func (stp *SubtreeProcessor) supersedeStoreRequests() {
