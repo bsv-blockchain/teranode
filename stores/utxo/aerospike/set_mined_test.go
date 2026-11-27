@@ -439,7 +439,7 @@ func TestFailedClearsError(t *testing.T) {
 		require.ErrorContains(t, err, ",99 (ResultCode: TIMEOUT); "+tx.String()+" records 101,")
 
 		// The names in the error and in each warning line stay within the budget,
-		// and the error counts the 400 pieces it leaves out.
+		// and the error counts how many of the 400 pieces it leaves out.
 		_, names, _ := strings.Cut(err.Error(), "failed to clear 20000 records: ")
 		names, _, _ = strings.Cut(names, "; and ")
 		require.LessOrEqual(t, len(names), maxClearErrorBytes)
@@ -472,6 +472,19 @@ func TestFailedClearsError(t *testing.T) {
 		for _, f := range failed {
 			require.Equalf(t, 1, seen[strconv.FormatUint(uint64(f.idx), 10)], "record %d", f.idx)
 		}
+	})
+
+	t.Run("pieces pack up to exactly the budget", func(t *testing.T) {
+		first := strings.Repeat("a", 1000)
+		fits := strings.Repeat("b", maxClearErrorBytes-len(first)-len("; "))
+
+		packed, rest := packClearPieces([]string{first, fits})
+		require.Empty(t, rest, "a piece that brings the total to exactly the budget is packed")
+		require.Len(t, packed, maxClearErrorBytes)
+
+		packed, rest = packClearPieces([]string{first, fits + "b"})
+		require.Equal(t, first, packed, "one byte over starts the next group")
+		require.Len(t, rest, 1)
 	})
 
 	t.Run("a long non-Aerospike reason is cut", func(t *testing.T) {
