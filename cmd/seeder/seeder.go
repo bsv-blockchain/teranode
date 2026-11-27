@@ -245,7 +245,7 @@ func Seeder(logger ulogger.Logger, appSettings *settings.Settings, inputDir stri
 	if !skipHeaders || !skipUTXOs {
 		var err error
 
-		blockchainStore, err = newBlockchainStore(logger, appSettings)
+		blockchainStore, err = openBlockchainStore(logger, appSettings)
 		if err != nil {
 			logger.Fatalf("Failed to create blockchain store: %v", err)
 		}
@@ -1582,6 +1582,9 @@ func loadCoinbaseTxs(logger ulogger.Logger, headersFile string) (map[chainhash.H
 
 	return coinbaseTxs, nil
 }
+
+// openBlockchainStore is newBlockchainStore; a var so a test can wrap the store Seeder uses.
+var openBlockchainStore = newBlockchainStore
 
 // newBlockchainStore opens the blockchain store in bulk-import (seeder) mode.
 // A single shared handle is used for header import, the BlockAssembler-state

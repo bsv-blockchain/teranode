@@ -756,23 +756,40 @@ func (s failImportedStore) SetState(ctx context.Context, key string, data []byte
 	return s.Store.SetState(ctx, key, data)
 }
 
-// An import whose end cannot be recorded fails, and the record stays unset, so no later run takes
-// the import as finished.
+// A seed whose import's end cannot be recorded fails without writing rows or a checkpoint, and
+// the record stays unset, so no later run takes the import as finished.
 func TestSeederFailsWhenItCannotRecordTheImport(t *testing.T) {
 	f := newSeedFixture(t, settings.LaneMigrationShadow, 8, fixtureHeights)
 	ctx := context.Background()
 
-	bc, err := blockchain_store.NewStore(ulogger.TestLogger{}, f.settings.BlockChain.StoreURL, f.settings)
-	require.NoError(t, err)
+	openBlockchainStore = func(logger ulogger.Logger, s *settings.Settings) (blockchain_store.Store, error) {
+		store, err := newBlockchainStore(logger, s)
 
-	defer func() { _ = bc.Close(ctx) }()
+		return failImportedStore{Store: store}, err
+	}
+	t.Cleanup(func() { openBlockchainStore = newBlockchainStore })
 
-	_, err = processUTXOs(ctx, ulogger.TestLogger{}, f.settings, failImportedStore{Store: bc}, f.utxoFile(), "", false, false)
-	require.ErrorContains(t, err, "refused")
+	require.ErrorContains(t, f.seed(false), "refused")
+	openBlockchainStore = newBlockchainStore
+
+	bc := f.blockchainStore()
 
 	imported, err := seedImported(ctx, bc, f.tip)
 	require.NoError(t, err)
 	require.False(t, imported)
+
+	exists, err := blockAssemblerStateExists(ctx, bc)
+	require.NoError(t, err)
+	require.False(t, exists, "no checkpoint")
+
+	_, metas, err := bc.GetBlockHeadersByHeight(ctx, 0, f.tipH)
+	require.NoError(t, err)
+
+	for _, m := range metas {
+		rows, err := bc.LaneMapRows(ctx, m.ID)
+		require.NoError(t, err)
+		require.Empty(t, rows, "no row for height %d", m.Height)
+	}
 }
 
 // A seed whose rows cannot be written leaves no BlockAssembler checkpoint, so a plain re-run does
