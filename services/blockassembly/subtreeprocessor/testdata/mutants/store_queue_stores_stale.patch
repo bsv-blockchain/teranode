@@ -1,0 +1,13 @@
+diff --git a/services/blockassembly/subtreeprocessor/store_queue.go b/services/blockassembly/subtreeprocessor/store_queue.go
+index 944a4463f..05937caf6 100644
+--- a/services/blockassembly/subtreeprocessor/store_queue.go
++++ b/services/blockassembly/subtreeprocessor/store_queue.go
+@@ -284,7 +284,7 @@ func (q *StoreQueue) pickLocked() (it *storeItem, cancelled []*storeItem) {
+ 
+ 	it = q.ready[i]
+ 
+-	if it.stale {
++	if it.stale && false { // mutant: a stale chain request is stored, not cancelled
+ 		cancelled = q.dropLocked(func(other *storeItem) bool { return other == it })
+ 
+ 		return nil, append(cancelled, q.admitLocked()...)

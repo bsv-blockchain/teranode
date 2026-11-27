@@ -1,0 +1,15 @@
+diff --git a/services/blockassembly/subtreeprocessor/store_queue.go b/services/blockassembly/subtreeprocessor/store_queue.go
+index 193f569d7..1045de0e1 100644
+--- a/services/blockassembly/subtreeprocessor/store_queue.go
++++ b/services/blockassembly/subtreeprocessor/store_queue.go
+@@ -176,6 +176,10 @@ func (q *StoreQueue) Take(ctx context.Context) (NewSubtreeRequest, uint64, bool)
+ 		if len(cancelled) > 0 {
+ 			finishDropped(cancelled)
+ 
++			for _, cleanup := range q.takeCleanups() { // mutant: the cleanup runs on the worker
++				cleanup()
++			}
++
+ 			continue
+ 		}
+ 

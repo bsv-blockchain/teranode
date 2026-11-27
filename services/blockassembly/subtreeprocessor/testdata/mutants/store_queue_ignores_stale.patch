@@ -1,0 +1,16 @@
+diff --git a/services/blockassembly/subtreeprocessor/store_queue.go b/services/blockassembly/subtreeprocessor/store_queue.go
+index 944a4463f..3a17b482b 100644
+--- a/services/blockassembly/subtreeprocessor/store_queue.go
++++ b/services/blockassembly/subtreeprocessor/store_queue.go
+@@ -277,10 +277,7 @@ func (q *StoreQueue) pickLocked() (it *storeItem, cancelled []*storeItem) {
+ 		return nil, nil
+ 	}
+ 
+-	i := slices.IndexFunc(q.ready, func(it *storeItem) bool { return !it.stale })
+-	if i < 0 {
+-		i = 0
+-	}
++	i := 0 // mutant: the oldest request first, wanted or not
+ 
+ 	it = q.ready[i]
+ 

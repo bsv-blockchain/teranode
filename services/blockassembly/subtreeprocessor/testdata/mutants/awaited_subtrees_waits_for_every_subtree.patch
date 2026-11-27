@@ -1,0 +1,11 @@
+diff --git a/services/blockassembly/subtreeprocessor/store_queue_reorg.go b/services/blockassembly/subtreeprocessor/store_queue_reorg.go
+index 2ca318d2d..331027bbf 100644
+--- a/services/blockassembly/subtreeprocessor/store_queue_reorg.go
++++ b/services/blockassembly/subtreeprocessor/store_queue_reorg.go
+@@ -252,5 +252,5 @@ func (stp *SubtreeProcessor) reorgAwaitedSubtrees() int {
+ 		n = min(n, max(fit, 1))
+ 	}
+ 
+-	return min(n, k0)
++	return n // mutant: the full wait, whatever the setting
+ }

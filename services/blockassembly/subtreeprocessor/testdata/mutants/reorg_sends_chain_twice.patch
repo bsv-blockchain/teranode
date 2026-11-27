@@ -1,0 +1,15 @@
+diff --git a/services/blockassembly/subtreeprocessor/SubtreeProcessor.go b/services/blockassembly/subtreeprocessor/SubtreeProcessor.go
+index 054214761..1822680b1 100644
+--- a/services/blockassembly/subtreeprocessor/SubtreeProcessor.go
++++ b/services/blockassembly/subtreeprocessor/SubtreeProcessor.go
+@@ -4740,9 +4740,7 @@ func (stp *SubtreeProcessor) storeAndAnnounceChainedSubtrees(ctx context.Context
+ 
+ 	// With a store queue the reorg's two calls (wait with no announcement, announce with no wait)
+ 	// do not send the chain again: it was sent as it was built.
+-	if stp.storeQueue != nil && caller == "reorgBlocks" && wait > 0 && skipNotification {
+-		return stp.awaitQueuedStores(ctx, caller, wait, deadline)
+-	}
++	// mutant: the reorg sends the chain again instead of waiting for the requests of the forward steps
+ 
+ 	if stp.storeQueue != nil && caller == "reorgBlocks" && wait == 0 && !skipNotification {
+ 		return stp.announceChainedSubtrees(ctx, caller)
