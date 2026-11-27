@@ -148,7 +148,8 @@ jobs:
           done
 
       # Fails when a benchmark function in any binary does not start on a 64-byte boundary,
-      # so an edit or a toolchain that drops -funcalign=64 shows up here.
+      # so an edit or a toolchain that drops -funcalign=64 shows up here. In these
+      # cgo-linked binaries nm prints Go functions as t (local text), not T.
       - name: Check benchmark functions start on 64-byte boundaries
         run: |
           checked=0
@@ -159,7 +160,7 @@ jobs:
                 echo "::error::$name in $bin starts at 0x$addr, not on a 64-byte boundary"
                 exit 1
               fi
-            done < <(go tool nm "$bin" | grep -E ' T [^ ]*[.]Benchmark[^.]*$' || true)
+            done < <(go tool nm "$bin" | grep -E ' [Tt] [^ ]*[.]Benchmark[^.]*$' || true)
           done
           echo "$checked benchmark functions start on 64-byte boundaries"
           [ "$checked" -gt 0 ]
