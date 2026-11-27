@@ -2,6 +2,8 @@ package aerospike
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -419,6 +421,8 @@ func TestFailedClearsError(t *testing.T) {
 
 	t.Run("scattered failures stay within the budget", func(t *testing.T) {
 		store := newTestStoreForGet(t)
+		warnings := &warnCapture{}
+		store.logger = warnings
 
 		// Every other record of one transaction fails: 20000 separate ranges.
 		failed := make([]failedClear, 0, 20000)
@@ -430,7 +434,37 @@ func TestFailedClearsError(t *testing.T) {
 		require.ErrorContains(t, err, "failed to clear 20000 records: "+tx.String()+" records 1,3,5,")
 		require.ErrorContains(t, err, "more pieces, logged as warnings")
 		require.Less(t, len(err.Error()), maxClearErrorBytes+1024)
+
+		// Every record the error leaves out is in a warning line within the budget.
+		require.NotEmpty(t, warnings.lines)
+
+		all := err.Error()
+		for _, line := range warnings.lines {
+			require.Less(t, len(line), maxClearErrorBytes+1024)
+			all += line
+		}
+
+		for _, idx := range []string{"39999 (ResultCode: TIMEOUT)", ",39997,", ",20003,"} {
+			require.Contains(t, all, idx)
+		}
 	})
+
+	t.Run("a long non-Aerospike reason is cut", func(t *testing.T) {
+		store := newTestStoreForGet(t)
+
+		err := store.failedClearsError([]failedClear{{tx, 1, errors.NewProcessingError(strings.Repeat("x", 64<<10))}})
+		require.Less(t, len(err.Error()), maxClearReasonBytes+1024)
+	})
+}
+
+// warnCapture is a test logger that keeps each warning line.
+type warnCapture struct {
+	ulogger.TestLogger
+	lines []string
+}
+
+func (w *warnCapture) Warnf(format string, args ...interface{}) {
+	w.lines = append(w.lines, fmt.Sprintf(format, args...))
 }
 
 // TestApplyLockClearWorkReportsEveryFailure checks that a failed read of the

@@ -866,8 +866,9 @@ const (
 	// maxClearRangesPerPiece bounds the record ranges one piece of a clear
 	// error names, so a transaction with scattered failures is split up.
 	maxClearRangesPerPiece = 50
-	// maxClearErrorBytes bounds the text a clear error, or one warning line of
-	// its overflow, carries.
+	// maxClearErrorBytes bounds the record names a clear error, or one warning
+	// line of its overflow, carries: pieces stop once the next would pass it.
+	// The message's fixed text comes on top, and a piece is at most about 1 KiB.
 	maxClearErrorBytes = 16 << 10
 )
 
@@ -875,8 +876,8 @@ const (
 // one transaction, up to maxClearRangesPerPiece record ranges and their result
 // code. Error() prints at most 20 links of a chain, so a link per record would
 // lose names once a caller joins other errors in front. The error carries
-// pieces up to maxClearErrorBytes; the rest are logged as warnings in lines of
-// the same budget, so every failed record is named somewhere.
+// pieces until the next would pass maxClearErrorBytes; the rest are logged as
+// warnings in lines of the same budget, so every failed record is named somewhere.
 func (s *Store) failedClearsError(failed []failedClear) error {
 	type reasonIdxs struct {
 		reason string
@@ -980,12 +981,20 @@ func indexRanges(idxs []uint32) []string {
 	return ranges
 }
 
+// maxClearReasonBytes bounds the error text a piece carries for a failure that
+// is not an Aerospike error.
+const maxClearReasonBytes = 256
+
 // clearFailureReason is the Aerospike result code of a failed clear, or the
-// error text when it is not an Aerospike error.
+// first maxClearReasonBytes of the error text when it is not an Aerospike error.
 func clearFailureReason(err error) string {
 	var aErr *aerospike.AerospikeError
 	if errors.As(err, &aErr) && aErr != nil {
 		return "ResultCode: " + aErr.ResultCode.String()
+	}
+
+	if text := err.Error(); len(text) > maxClearReasonBytes {
+		return text[:maxClearReasonBytes] + "..."
 	}
 
 	return err.Error()
