@@ -5,7 +5,10 @@ import (
 	"encoding/binary"
 	"io"
 	"net/url"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
@@ -14,14 +17,18 @@ import (
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/services/asset/repository"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
+	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/blob"
 	"github.com/bsv-blockchain/teranode/stores/blob/options"
 	blockchain_store "github.com/bsv-blockchain/teranode/stores/blockchain"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
+	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
+	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/stores/utxo/sql"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -914,4 +921,188 @@ func (m *mockErrorStore) SetCurrentBlockHeight(height uint32) {
 
 func (m *mockErrorStore) Close(ctx context.Context) error {
 	return nil
+}
+
+// GetTxBlockRefs asks the UTXO store for exactly the block IDs, block heights and unmined height, so a
+// store that would otherwise load the transaction body with its metadata (Aerospike) does not read it,
+// and an unmined spender is known as unmined (Aerospike's default read has no UnminedSince).
+func TestRepository_GetTxBlockRefs_requestsOnlyThePlacementFields(t *testing.T) {
+	repo, mockUtxoStore, _ := newRepoWithMockedUtxoStore(t)
+
+	hash, err := chainhash.NewHashFromStr("0202020202020202020202020202020202020202020202020202020202020202")
+	require.NoError(t, err)
+
+	want := []fields.FieldName{fields.BlockIDs, fields.BlockHeights, fields.UnminedSince}
+	mockUtxoStore.On("Get", mock.Anything, hash, want).
+		Return(&meta.Data{BlockIDs: []uint32{8}, BlockHeights: []uint32{870}, UnminedSince: 0}, nil)
+
+	got, err := repo.GetTxBlockRefs(context.Background(), hash)
+	require.NoError(t, err)
+	require.Equal(t, []uint32{8}, got.BlockIDs)
+	require.Equal(t, []uint32{870}, got.BlockHeights)
+	require.Nil(t, got.Tx)
+	mockUtxoStore.AssertExpectations(t)
+}
+
+// GetTxFundingRecord names its fields, because a store's default read leaves some out: Aerospike's
+// default read has no UnminedSince (measured on a real Aerospike: an unmined record read back 0 by
+// default and its height with the field named), so an unconfirmed funding transaction would have
+// read as "funding unknown".
+func TestRepository_GetTxFundingRecord_requestsTheStatusFields(t *testing.T) {
+	repo, mockUtxoStore, _ := newRepoWithMockedUtxoStore(t)
+
+	hash, err := chainhash.NewHashFromStr("0303030303030303030303030303030303030303030303030303030303030303")
+	require.NoError(t, err)
+
+	want := []fields.FieldName{fields.Tx, fields.IsCoinbase, fields.BlockIDs, fields.BlockHeights,
+		fields.UnminedSince, fields.Conflicting, fields.Locked}
+	require.Equal(t, want, repository.TxFundingRecordFields)
+
+	mockUtxoStore.On("Get", mock.Anything, hash, want).
+		Return(&meta.Data{IsCoinbase: true, UnminedSince: 800, Locked: true}, nil)
+
+	got, err := repo.GetTxFundingRecord(context.Background(), hash)
+	require.NoError(t, err)
+	require.True(t, got.IsCoinbase)
+	require.True(t, got.Locked)
+	require.Equal(t, uint32(800), got.UnminedSince)
+	mockUtxoStore.AssertExpectations(t)
+}
+
+// GetTxFundingRecord loads the transaction body, so it takes the GetTransactionMeta permit: with
+// asset_concurrency_get_transaction_meta set, the bound holds for these reads across all requests.
+func TestRepository_GetTxFundingRecord_takesTheTransactionMetaPermit(t *testing.T) {
+	repo, mockUtxoStore, _ := newRepoWithMockedUtxoStoreWith(t, func(s *settings.Settings) {
+		s.Asset.ConcurrencyGetTransactionMeta = 2
+	})
+
+	var inFlight, peak atomic.Int32
+
+	mockUtxoStore.On("Get", mock.Anything, mock.Anything, mock.Anything).Run(func(mock.Arguments) {
+		cur := inFlight.Add(1)
+
+		for {
+			p := peak.Load()
+			if cur <= p || peak.CompareAndSwap(p, cur) {
+				break
+			}
+		}
+
+		time.Sleep(5 * time.Millisecond)
+		inFlight.Add(-1)
+	}).Return(&meta.Data{}, nil)
+
+	var wg sync.WaitGroup
+
+	errs := make([]error, 12)
+
+	for i := range errs {
+		wg.Add(1)
+
+		go func(i int) {
+			defer wg.Done()
+
+			hash := chainhash.HashH([]byte{byte(i)})
+			_, errs[i] = repo.GetTxFundingRecord(context.Background(), &hash)
+		}(i)
+	}
+
+	wg.Wait()
+
+	for _, err := range errs {
+		require.NoError(t, err)
+	}
+
+	require.Equal(t, int32(2), peak.Load(), "at most two funding reads may run at once, and the limit is reached")
+}
+
+// A store can return from a cancelled read while its batch and external-blob work carries on under its
+// own context. The permit is the process-wide bound, so GetTxFundingRecord must hold it until the store
+// has finished, whatever happens to the caller's context.
+func TestRepository_GetTxFundingRecord_holdsThePermitUntilTheStoreHasFinished(t *testing.T) {
+	repo, mockUtxoStore, _ := newRepoWithMockedUtxoStoreWith(t, func(s *settings.Settings) {
+		s.Asset.ConcurrencyGetTransactionMeta = 1
+	})
+
+	entered, release := make(chan struct{}), make(chan struct{})
+
+	mockUtxoStore.On("Get", mock.Anything, mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
+		close(entered)
+
+		// Like Aerospike's get(): return as soon as the context is cancelled.
+		select {
+		case <-args.Get(0).(context.Context).Done():
+		case <-release:
+		}
+	}).Return(&meta.Data{}, nil)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	hash := chainhash.HashH([]byte{1})
+	done := make(chan error, 1)
+
+	go func() {
+		_, err := repo.GetTxFundingRecord(ctx, &hash)
+		done <- err
+	}()
+
+	<-entered
+	cancel()
+
+	select {
+	case <-done:
+		t.Fatal("GetTxFundingRecord returned, and freed its permit, before the store finished the read")
+	case <-time.After(150 * time.Millisecond):
+	}
+
+	close(release)
+	require.NoError(t, <-done)
+}
+
+// The wait for the permit honours the caller's context; only the read, once the permit is taken, is
+// detached from it.
+func TestRepository_GetTxFundingRecord_permitWaitHonoursTheCallersContext(t *testing.T) {
+	repo, mockUtxoStore, _ := newRepoWithMockedUtxoStoreWith(t, func(s *settings.Settings) {
+		s.Asset.ConcurrencyGetTransactionMeta = 1
+	})
+
+	entered, release := make(chan struct{}), make(chan struct{})
+
+	mockUtxoStore.On("Get", mock.Anything, mock.Anything, mock.Anything).Run(func(mock.Arguments) {
+		close(entered)
+		<-release
+	}).Return(&meta.Data{}, nil)
+
+	first := chainhash.HashH([]byte{1})
+	firstDone := make(chan error, 1)
+
+	go func() {
+		_, err := repo.GetTxFundingRecord(context.Background(), &first)
+		firstDone <- err
+	}()
+
+	<-entered
+
+	ctx, cancel := context.WithCancel(context.Background())
+	second := chainhash.HashH([]byte{2})
+	secondDone := make(chan error, 1)
+
+	go func() {
+		_, err := repo.GetTxFundingRecord(ctx, &second)
+		secondDone <- err
+	}()
+
+	cancel()
+
+	select {
+	case err := <-secondDone:
+		require.Error(t, err, "a cancelled wait for the permit fails")
+	case <-time.After(5 * time.Second):
+		t.Fatal("the permit wait ignored the caller's cancellation")
+	}
+
+	close(release)
+	require.NoError(t, <-firstDone)
+	mockUtxoStore.AssertNumberOfCalls(t, "Get", 1)
 }

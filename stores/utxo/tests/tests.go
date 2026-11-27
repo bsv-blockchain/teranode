@@ -955,6 +955,38 @@ func GetSpendNotFound(t *testing.T, db utxostore.Store) {
 	require.Equal(t, int(utxostore.Status_NOT_FOUND), resp.Status)
 }
 
+// GetSpendHashMismatch tests that GetSpend returns ErrUtxoHashMismatch when the caller's UTXO
+// hash is not the stored one, and answers as usual with the stored hash or none. Callers use the
+// typed error to tell a changed commitment (an alert-system reassignment) from a store failure.
+func GetSpendHashMismatch(t *testing.T, db utxostore.Store) {
+	ctx := context.Background()
+
+	uniqueTx := newTestTx(t, 3_100_000)
+
+	_, _, err := db.SpendAndCreate(ctx, uniqueTx, 1000, utxostore.WithCreateOnly())
+	require.NoError(t, err)
+
+	defer func() { _ = db.Delete(ctx, uniqueTx.TxIDChainHash()) }()
+
+	stored, err := util.UTXOHashFromOutput(uniqueTx.TxIDChainHash(), uniqueTx.Outputs[0], 0)
+	require.NoError(t, err)
+
+	resp, err := db.GetSpend(ctx, &utxostore.Spend{TxID: uniqueTx.TxIDChainHash(), Vout: 0, UTXOHash: stored})
+	require.NoError(t, err)
+	require.Equal(t, int(utxostore.Status_OK), resp.Status)
+
+	resp, err = db.GetSpend(ctx, &utxostore.Spend{TxID: uniqueTx.TxIDChainHash(), Vout: 0})
+	require.NoError(t, err)
+	require.Equal(t, int(utxostore.Status_OK), resp.Status)
+
+	other := *stored
+	other[0] ^= 0xff
+
+	_, err = db.GetSpend(ctx, &utxostore.Spend{TxID: uniqueTx.TxIDChainHash(), Vout: 0, UTXOHash: &other})
+	require.Error(t, err)
+	require.ErrorIs(t, err, errors.ErrUtxoHashMismatch)
+}
+
 // SetBlockHeightZero tests that SetBlockHeight(0) returns an InvalidArgumentError.
 // Block height zero is invalid because it would break DAH calculations and maturity checks.
 func SetBlockHeightZero(t *testing.T, db utxostore.Store) {

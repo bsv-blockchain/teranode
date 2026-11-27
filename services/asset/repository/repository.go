@@ -25,6 +25,7 @@ import (
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/blob"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
+	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/health"
@@ -39,6 +40,12 @@ import (
 type Interface interface {
 	Health(ctx context.Context, checkLiveness bool) (int, string, error)
 	GetTxMeta(ctx context.Context, hash *chainhash.Hash) (*meta.Data, error)
+	// GetTxBlockRefs returns only the block IDs and block heights recorded for a transaction (no body),
+	// for callers that need where it was mined rather than what it is.
+	GetTxBlockRefs(ctx context.Context, hash *chainhash.Hash) (*meta.Data, error)
+	// GetTxFundingRecord returns the body, coinbase flag, mined blocks, unmined height and the
+	// conflicting and locked flags of a transaction, the fields an output-status answer reads.
+	GetTxFundingRecord(ctx context.Context, hash *chainhash.Hash) (*meta.Data, error)
 	GetTransaction(ctx context.Context, hash *chainhash.Hash) ([]byte, error)
 	GetBlockStats(ctx context.Context) (*model.BlockStats, error)
 	GetBlockGraphData(ctx context.Context, periodMillis uint64) (*model.BlockDataPoints, error)
@@ -313,6 +320,53 @@ func (repo *Repository) GetTxMeta(ctx context.Context, hash *chainhash.Hash) (*m
 	// reach a JSON marshaller — see withoutUnserializableTx. The metadata itself
 	// is still returned.
 	return withoutUnserializableTx(txMeta, hash), nil
+}
+
+// GetTxBlockRefs reads only the BlockIDs, BlockHeights and UnminedSince fields of a transaction's
+// record. On stores that would otherwise load the transaction body with its metadata (Aerospike), this
+// avoids reading the body, and possibly an external blob, when only where the transaction is mined is
+// needed. UnminedSince is named because Aerospike's default read leaves it out, and without it an
+// unmined transaction cannot be told apart from one whose blocks are unknown.
+func (repo *Repository) GetTxBlockRefs(ctx context.Context, hash *chainhash.Hash) (*meta.Data, error) {
+	return repo.UtxoStore.Get(ctx, hash, fields.BlockIDs, fields.BlockHeights, fields.UnminedSince)
+}
+
+// TxFundingRecordFields are the fields GetTxFundingRecord reads.
+var TxFundingRecordFields = []fields.FieldName{
+	fields.Tx, fields.IsCoinbase, fields.BlockIDs, fields.BlockHeights, fields.UnminedSince,
+	fields.Conflicting, fields.Locked,
+}
+
+// GetTxFundingRecord reads what an output-status answer needs from the transaction that created the
+// output: the body (for the output's value and script), whether it is a coinbase, the blocks it was
+// mined in, since when it is unmined, and the transaction-level conflicting and locked flags. The
+// fields are named because a store's default read does not include all of them: Aerospike's default
+// leaves out UnminedSince.
+//
+// Unlike GetTxMeta, the transaction is returned as the store holds it. A record seeded from a UTXO
+// snapshot holds an outputs-only reconstruction with a nil hole at each output that was already
+// spent, and the caller needs those positions: on Aerospike a hole is a nil UTXO slot, which GetSpend
+// reads as unspent. The caller must check the transaction (meta.Data.TxIsSerializable and its txid)
+// before trusting a value or script from it, and must never marshal it.
+//
+// The read loads the body, so it shares the GetTransactionMeta permit
+// (asset_concurrency_get_transaction_meta): the configured bound then covers these reads process-wide.
+func (repo *Repository) GetTxFundingRecord(ctx context.Context, hash *chainhash.Hash) (*meta.Data, error) {
+	if err := acquireSemaphorePermit(ctx, repo.semGetTransactionMeta, "GetTransactionMeta"); err != nil {
+		return nil, err
+	}
+	defer releaseSemaphorePermit(repo.semGetTransactionMeta)
+
+	// A store may return from a cancelled read while its batch and external
+	// blob work carries on under its own context. The permit is the
+	// process-wide bound, so the read is detached from the caller's
+	// cancellation: the permit is held until the store's read returns. How long
+	// that takes is bounded by the store itself (for Aerospike, its batch
+	// timeout, 5 minutes by default, and its batch-completion guard). The wait
+	// for the permit above still honours the caller's context.
+	readCtx := context.WithoutCancel(ctx)
+
+	return repo.UtxoStore.Get(readCtx, hash, TxFundingRecordFields...)
 }
 
 // GetTransaction retrieves transaction data by its hash.

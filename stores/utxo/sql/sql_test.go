@@ -1057,6 +1057,12 @@ func Test_SmokeTests(t *testing.T) {
 		tests.GetSpendNotFound(t, db)
 	})
 
+	t.Run("get spend hash mismatch", func(t *testing.T) {
+		db, _ := setup(ctx, t)
+
+		tests.GetSpendHashMismatch(t, db)
+	})
+
 	t.Run("set block height zero", func(t *testing.T) {
 		db, _ := setup(ctx, t)
 

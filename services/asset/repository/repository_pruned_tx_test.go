@@ -11,6 +11,7 @@ import (
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/services/asset/repository"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
+	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/blob"
 	blockchain_store "github.com/bsv-blockchain/teranode/stores/blockchain"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
@@ -29,8 +30,20 @@ import (
 func newRepoWithMockedUtxoStore(t *testing.T) (*repository.Repository, *utxo.MockUtxostore, blob.Store) {
 	t.Helper()
 
+	return newRepoWithMockedUtxoStoreWith(t, nil)
+}
+
+// newRepoWithMockedUtxoStoreWith is newRepoWithMockedUtxoStore with the settings adjusted before the
+// repository is built.
+func newRepoWithMockedUtxoStoreWith(t *testing.T, adjust func(*settings.Settings)) (*repository.Repository, *utxo.MockUtxostore, blob.Store) {
+	t.Helper()
+
 	logger := ulogger.NewErrorTestLogger(t)
 	tSettings := test.CreateBaseTestSettings(t)
+
+	if adjust != nil {
+		adjust(tSettings)
+	}
 
 	memoryURL, err := url.Parse("memory://")
 	require.NoError(t, err)

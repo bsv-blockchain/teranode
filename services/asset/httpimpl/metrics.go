@@ -46,6 +46,10 @@ var (
 	// The counter is incremented by the number of UTXO records processed per request.
 	prometheusAssetHTTPGetUTXOs *prometheus.CounterVec
 
+	// prometheusAssetHTTPGetUTXOStatuses tracks records served via POST /api/v1/utxos/status.
+	// The counter is incremented by the number of records processed per request.
+	prometheusAssetHTTPGetUTXOStatuses *prometheus.CounterVec
+
 	// prometheusAssetHTTPGetMerkleProof tracks merkle proof retrievals
 	prometheusAssetHTTPGetMerkleProof *prometheus.CounterVec
 
@@ -247,6 +251,19 @@ func _initPrometheusMetrics() {
 			Subsystem: "asset",
 			Name:      "http_get_utxos",
 			Help:      "Number of bulk Get UTXO records served via POST /api/v1/utxos",
+		},
+		[]string{
+			"function",
+			"operation",
+		},
+	)
+
+	prometheusAssetHTTPGetUTXOStatuses = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "asset",
+			Name:      "http_get_utxo_statuses",
+			Help:      "Number of bulk UTXO status records served via POST /api/v1/utxos/status",
 		},
 		[]string{
 			"function",
