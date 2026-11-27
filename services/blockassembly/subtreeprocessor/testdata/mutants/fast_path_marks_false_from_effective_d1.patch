@@ -1,0 +1,13 @@
+diff --git a/services/blockassembly/subtreeprocessor/reorg_fast_path.go b/services/blockassembly/subtreeprocessor/reorg_fast_path.go
+index cdac49551..63070ca14 100644
+--- a/services/blockassembly/subtreeprocessor/reorg_fast_path.go
++++ b/services/blockassembly/subtreeprocessor/reorg_fast_path.go
+@@ -562,7 +562,7 @@ func (stp *SubtreeProcessor) applyFastReorg(ctx context.Context, plan *fastReorg
+ 	stp.closeRetiredSubtrees()
+ 
+ 	movedBack := make(map[chainhash.Hash]bool, len(plan.delta.D1))
+-	for _, node := range plan.delta.D1 {
++	for _, node := range plan.d1Nodes { // mutant: only effective D1 is marked not on the longest chain
+ 		movedBack[node.Hash] = false
+ 	}
+ 

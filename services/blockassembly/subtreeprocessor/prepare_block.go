@@ -59,6 +59,11 @@ func (stp *SubtreeProcessor) PrepareBlock(block *model.Block) {
 	}
 
 	if stp.tipMovedPast(block) {
+		// a competitor of the tip, or a child of one, is for the fork reorg
+		if stp.settings.BlockAssembly.ReorgFastPath {
+			stp.prepareForkBlock(block)
+		}
+
 		return
 	}
 
@@ -260,6 +265,9 @@ func (stp *SubtreeProcessor) readBoundSubtree(ctx context.Context, hash *chainha
 // subtrees moveForwardBlock maps (numSubtreesToMap of them, none of them this node's own).
 // Any prepared map is dropped.
 func (stp *SubtreeProcessor) takePreparedTxMap(ctx context.Context, block *model.Block, numSubtreesToMap int) (*SortedHashSet, []chainhash.Hash, bool) {
+	// a block added on top of the tip moves the tip past the competitors the fork sets were for
+	stp.releaseForkPrepared()
+
 	stp.preparedMu.Lock()
 	p := stp.prepared
 	stp.prepared = nil

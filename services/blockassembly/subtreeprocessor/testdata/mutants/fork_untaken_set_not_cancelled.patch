@@ -1,0 +1,13 @@
+diff --git a/services/blockassembly/subtreeprocessor/prepare_fork_block.go b/services/blockassembly/subtreeprocessor/prepare_fork_block.go
+index b541d1a47..c5cff7a5c 100644
+--- a/services/blockassembly/subtreeprocessor/prepare_fork_block.go
++++ b/services/blockassembly/subtreeprocessor/prepare_fork_block.go
+@@ -294,7 +294,7 @@ func (stp *SubtreeProcessor) takePreparedForkSet(blocks []*model.Block) (*Sorted
+ 			continue
+ 		}
+ 
+-		e.cancel()
++		_ = e // mutant: a set that is not taken keeps building
+ 	}
+ 
+ 	if taken == nil {

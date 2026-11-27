@@ -1,0 +1,13 @@
+diff --git a/services/blockassembly/subtreeprocessor/SubtreeProcessor.go b/services/blockassembly/subtreeprocessor/SubtreeProcessor.go
+index 2d7cbd297..daa8235f6 100644
+--- a/services/blockassembly/subtreeprocessor/SubtreeProcessor.go
++++ b/services/blockassembly/subtreeprocessor/SubtreeProcessor.go
+@@ -6759,7 +6759,7 @@ func (stp *SubtreeProcessor) removeCoinbaseUtxos(ctx context.Context, block *mod
+ 	removeFromSubtrees = append(removeFromSubtrees, assemblyDescendants...)
+ 
+ 	// remove from the subtree processor as well
+-	if err = stp.removeTxsFromSubtrees(ctx, removeFromSubtrees); err != nil {
++	if err = stp.removeTxsFromSubtrees(ctx, removeFromSubtrees[:0]); err != nil { // mutant: the coinbase children stay in the subtrees
+ 		return errors.NewProcessingError("[removeCoinbaseUtxos][%s] error removing child spends from subtrees", block.String(), err)
+ 	}
+ 
