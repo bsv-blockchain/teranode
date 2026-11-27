@@ -57,6 +57,7 @@ package aerospike
 
 import (
 	"context"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -842,7 +843,7 @@ func (s *Store) clearLockedOnRecordsMulti(items []lockClearItem) error {
 
 	errs := otherErrs
 	if len(failed) > 0 {
-		errs = append([]error{failedClearsError(failed)}, otherErrs...)
+		errs = append([]error{s.failedClearsError(failed)}, otherErrs...)
 	}
 
 	if len(errs) == 0 {
@@ -859,35 +860,101 @@ type failedClear struct {
 	cause error
 }
 
-// failedClearsError names every failed record and why it failed in one message,
-// grouped by transaction. Error() prints at most 20 links of a chain, so a link per record
-// would lose names once a caller joins other errors in front of it.
-func failedClearsError(failed []failedClear) error {
-	var (
-		order []*chainhash.Hash
-		byTx  = make(map[chainhash.Hash][]string)
-		b     strings.Builder
-	)
+// maxFailedClearTxs bounds how many transactions a clear error names, so a
+// cluster-wide failure cannot build a multi-megabyte error string.
+const maxFailedClearTxs = 100
+
+// failedClearsError names the failed records in one message: one entry per
+// transaction, its record indexes as ranges per result code. Error() prints at
+// most 20 links of a chain, so a link per record would lose names once a caller
+// joins other errors in front. Past maxFailedClearTxs transactions the error
+// gives a count, and the remaining entries are logged as warnings.
+func (s *Store) failedClearsError(failed []failedClear) error {
+	type reasonIdxs struct {
+		reason string
+		idxs   []uint32
+	}
+
+	var order []*chainhash.Hash
+
+	byTx := make(map[chainhash.Hash][]*reasonIdxs)
 
 	for _, f := range failed {
-		if _, seen := byTx[*f.txID]; !seen {
+		groups, seen := byTx[*f.txID]
+		if !seen {
 			order = append(order, f.txID)
 		}
 
-		byTx[*f.txID] = append(byTx[*f.txID], strconv.FormatUint(uint64(f.idx), 10)+" ("+clearFailureReason(f.cause)+")")
-	}
+		reason := clearFailureReason(f.cause)
 
-	for i, txID := range order {
-		if i > 0 {
-			b.WriteString("; ")
+		var group *reasonIdxs
+
+		for _, g := range groups {
+			if g.reason == reason {
+				group = g
+				break
+			}
 		}
 
-		b.WriteString(txID.String())
-		b.WriteString(" records ")
-		b.WriteString(strings.Join(byTx[*txID], ", "))
+		if group == nil {
+			group = &reasonIdxs{reason: reason}
+			byTx[*f.txID] = append(groups, group)
+		}
+
+		group.idxs = append(group.idxs, f.idx)
 	}
 
-	return errors.NewStorageError("[clearLockedOnRecordsMulti] failed to clear %d records: %s", len(failed), b.String())
+	entries := make([]string, 0, len(order))
+
+	for _, txID := range order {
+		parts := make([]string, 0, len(byTx[*txID]))
+		for _, g := range byTx[*txID] {
+			parts = append(parts, indexRanges(g.idxs)+" ("+g.reason+")")
+		}
+
+		entries = append(entries, txID.String()+" records "+strings.Join(parts, ", "))
+	}
+
+	if len(entries) <= maxFailedClearTxs {
+		return errors.NewStorageError("[clearLockedOnRecordsMulti] failed to clear %d records: %s", len(failed), strings.Join(entries, "; "))
+	}
+
+	rest := entries[maxFailedClearTxs:]
+	for start := 0; start < len(rest); start += maxFailedClearTxs {
+		s.logger.Warnf("[clearLockedOnRecordsMulti] failed clears not named in the returned error: %s", strings.Join(rest[start:min(start+maxFailedClearTxs, len(rest))], "; "))
+	}
+
+	return errors.NewStorageError("[clearLockedOnRecordsMulti] failed to clear %d records: %s; and %d more transactions, logged as warnings", len(failed), strings.Join(entries[:maxFailedClearTxs], "; "), len(rest))
+}
+
+// indexRanges writes ascending record indexes as ranges: 1-3,5.
+func indexRanges(idxs []uint32) string {
+	sorted := slices.Clone(idxs)
+	slices.Sort(sorted)
+
+	var b strings.Builder
+
+	for i := 0; i < len(sorted); {
+		j := i
+		for j+1 < len(sorted) && sorted[j+1] == sorted[j]+1 {
+			j++
+		}
+
+		if b.Len() > 0 {
+			b.WriteString(",")
+		}
+
+		b.WriteString(strconv.FormatUint(uint64(sorted[i]), 10))
+
+		if j > i {
+			b.WriteString("-")
+			b.WriteString(strconv.FormatUint(uint64(sorted[j]), 10))
+		}
+
+		i = j + 1
+	}
+
+	return b.String()
 }
 
 // clearFailureReason is the Aerospike result code of a failed clear, or the

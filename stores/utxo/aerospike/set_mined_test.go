@@ -2,8 +2,6 @@ package aerospike
 
 import (
 	"context"
-	"fmt"
-	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -92,16 +90,6 @@ func hasCreating(t *testing.T, client *uaerospike.Client, store *Store, txHash *
 	_, ok := rec.Bins[fields.Creating.String()]
 
 	return ok
-}
-
-// timedOut is how a clear error lists records that failed with TIMEOUT.
-func timedOut(idxs ...uint32) string {
-	parts := make([]string, len(idxs))
-	for i, idx := range idxs {
-		parts[i] = fmt.Sprintf("%d (ResultCode: TIMEOUT)", idx)
-	}
-
-	return strings.Join(parts, ", ")
 }
 
 func isBatchWrite(r aerospike.BatchRecordIfc) bool {
@@ -240,7 +228,7 @@ func TestApplyLockClearWorkReportsFailures(t *testing.T) {
 			creating: []rec{{0, 0}, {1, 0}, {1, 1}, {1, 2}, {2, 0}},
 			fail:     []rec{{1, 1}, {2, 0}},
 			match:    isBatchWrite,
-			wantErr:  []named{{1, " records " + timedOut(1) + ";"}, {2, " records " + timedOut(0)}},
+			wantErr:  []named{{1, " records 1 (ResultCode: TIMEOUT);"}, {2, " records 0 (ResultCode: TIMEOUT)"}},
 			keep:     []rec{{1, 0}},
 			lose:     []rec{{0, 0}, {1, 2}},
 		},
@@ -251,7 +239,7 @@ func TestApplyLockClearWorkReportsFailures(t *testing.T) {
 			creating: []rec{{0, 0}, {1, 0}, {2, 0}, {3, 0}},
 			fail:     []rec{{3, 0}, {1, 1}, {1, 2}, {1, 3}, {1, 4}, {1, 5}, {1, 6}, {2, 1}, {2, 2}, {2, 3}, {2, 4}, {2, 5}, {2, 6}},
 			match:    func(aerospike.BatchRecordIfc) bool { return true },
-			wantErr:  []named{{3, "] failed to read the extra record count"}, {1, " records " + timedOut(1, 2, 3, 4, 5, 6)}, {2, " records " + timedOut(1, 2, 3, 4, 5, 6)}},
+			wantErr:  []named{{3, "] failed to read the extra record count"}, {1, " records 1-6 (ResultCode: TIMEOUT)"}, {2, " records 1-6 (ResultCode: TIMEOUT)"}},
 			keep:     []rec{{1, 0}, {2, 0}, {3, 0}},
 			lose:     []rec{{0, 0}},
 		},
@@ -394,6 +382,39 @@ func TestClearLockedOnRecordsMultiMasterItem(t *testing.T) {
 	})
 }
 
+// TestFailedClearsError checks the clear error's record ranges and its bound:
+// past maxFailedClearTxs transactions it gives a count instead of the names.
+func TestFailedClearsError(t *testing.T) {
+	timeout := &aerospike.AerospikeError{ResultCode: types.TIMEOUT}
+	busy := &aerospike.AerospikeError{ResultCode: types.KEY_BUSY}
+	tx := &chainhash.Hash{0x01}
+
+	t.Run("ranges per result code", func(t *testing.T) {
+		store := newTestStoreForGet(t)
+
+		err := store.failedClearsError([]failedClear{
+			{tx, 3, timeout}, {tx, 1, timeout}, {tx, 2, timeout}, {tx, 5, timeout}, {tx, 4, busy},
+		})
+		require.ErrorIs(t, err, errors.ErrStorageError)
+		require.ErrorContains(t, err, "failed to clear 5 records: "+tx.String()+" records 1-3,5 (ResultCode: TIMEOUT), 4 (ResultCode: KEY_BUSY)")
+	})
+
+	t.Run("bounded past the transaction limit", func(t *testing.T) {
+		store := newTestStoreForGet(t)
+
+		failed := make([]failedClear, 0, maxFailedClearTxs+1)
+		for i := 0; i <= maxFailedClearTxs; i++ {
+			failed = append(failed, failedClear{txID: &chainhash.Hash{byte(i), 0xff}, idx: 1, cause: timeout})
+		}
+
+		err := store.failedClearsError(failed)
+		require.ErrorContains(t, err, "failed to clear 101 records: ")
+		require.ErrorContains(t, err, "; and 1 more transactions, logged as warnings")
+		require.ErrorContains(t, err, failed[maxFailedClearTxs-1].txID.String())
+		require.NotContains(t, err.Error(), failed[maxFailedClearTxs].txID.String())
+	})
+}
+
 // TestApplyLockClearWorkReportsEveryFailure checks that a failed read of the
 // extra record count, a failed clear and a failed unlock all reach the caller.
 func TestApplyLockClearWorkReportsEveryFailure(t *testing.T) {
@@ -452,14 +473,14 @@ func TestSetMinedMultiKeepsTheStorageCodeOfAFailedCleanup(t *testing.T) {
 		cleanup     string
 		// fail is the cleanup's batch seam; nil fails every cleanup batch whole.
 		fail func(client *uaerospike.Client) func(*aerospike.BatchPolicy, []aerospike.BatchRecordIfc) aerospike.Error
-		// recordTimeouts is how many per-record timeouts the error must carry; 0 skips the check.
-		recordTimeouts int
+		// records is how the error must name the records that failed one by one; "" skips the check.
+		records string
 	}{
 		{name: "lua: the clear of the extra records fails", cleanup: "clearLockedOnRecordsMulti"},
 		{name: "expressions: the extra record count read of a FILTERED_OUT tx fails", expressions: true, cleanup: "readExtraRecordCounts"},
 		{name: "lua: the clear fails beside a failed sibling", sibling: true, cleanup: "clearLockedOnRecordsMulti"},
 		{name: "expressions: the count read fails beside a failed sibling", expressions: true, sibling: true, cleanup: "readExtraRecordCounts"},
-		{name: "lua: each record of the clear fails on its own", cleanup: "clearLockedOnRecordsMulti", fail: failClearRecords, recordTimeouts: 2},
+		{name: "lua: each record of the clear fails on its own", cleanup: "clearLockedOnRecordsMulti", fail: failClearRecords, records: " records 1-2 (ResultCode: TIMEOUT)"},
 		{name: "expressions: only the unlock of a FILTERED_OUT tx fails", expressions: true, cleanup: "applyLockClearWork", fail: failAfterReadAndClear},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -505,8 +526,8 @@ func TestSetMinedMultiKeepsTheStorageCodeOfAFailedCleanup(t *testing.T) {
 				require.ErrorContains(t, err, missing.String(), "the sibling's failure must survive the cleanup's")
 			}
 
-			if tc.recordTimeouts > 0 {
-				require.Equal(t, tc.recordTimeouts, strings.Count(err.Error(), "ResultCode: TIMEOUT"), "every failed record must reach the caller: %v", err)
+			if tc.records != "" {
+				require.ErrorContains(t, err, tx.TxIDChainHash().String()+tc.records, "every failed record must reach the caller")
 			}
 
 			// Quick validation's wrap, which legacy sync's park reads as retry-later.
