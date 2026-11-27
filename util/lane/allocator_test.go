@@ -349,7 +349,7 @@ func TestAllocatorGivesTheSpareBackWhenAGrantAgesOut(t *testing.T) {
 	}{
 		{"honoured", false, false, 52, ""},
 		{"ignored by an older service", true, false, 201, "[lane] blockchain service granted 0:201 to pod-3 instead of continuing after 51, so positions 52 to 200 stay unused"},
-		{"reply lost", false, true, 152, "[lane] blockchain service granted 0:152 to pod-3 instead of continuing after 51, so positions 52 to 151 stay unused"},
+		{"reply lost", false, true, 152, "[lane] grant request from pod-3 giving back spare 0:101 failed, so the retry goes without it and positions after 51 stay unused"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			clk := newStepClock()
@@ -383,7 +383,7 @@ func TestAllocatorGivesTheSpareBackWhenAGrantAgesOut(t *testing.T) {
 			var gaps []string // the lost reply also logs its retry, which is not this warning
 
 			for _, w := range logs.warnings() {
-				if strings.Contains(w, "instead of continuing") {
+				if strings.Contains(w, "stay unused") {
 					gaps = append(gaps, w)
 				}
 			}
@@ -1587,6 +1587,10 @@ func runAllocModel(t *testing.T, seed uint64, steps int) {
 			switch {
 			case src.answer == "error":
 				require.Error(t, err)
+
+				if req.GiveBack != 0 {
+					m.givingBack = 0 // the retry goes without it
+				}
 			case src.answer == "closed":
 				require.NoError(t, err)
 

@@ -416,6 +416,42 @@ func TestRenewLaneLeaseContinuesTheNewestHandout(t *testing.T) {
 		checkLaneInvariants(t, s)
 	})
 
+	// A give-back whose DELETE is refused, as for a role without DELETE on lane_handout, fails whole:
+	// the spare's row, its pair and lane_settlement are as before, and no continuation is recorded.
+	runLaneHandoutTests(t, "give-back whose delete is refused", func(t *testing.T, s *SQL) {
+		id, g, _, err := s.OpenLaneLease(t.Context(), leaseOpen("a"))
+		require.NoError(t, err)
+
+		r := leaseRenew(id, g)
+		r.WantGrant = true
+
+		spare, _, _, err := s.RenewLaneLease(t.Context(), r)
+		require.NoError(t, err)
+
+		refuse := []string{`CREATE TRIGGER lane_handout_no_delete BEFORE DELETE ON lane_handout BEGIN SELECT RAISE(ABORT, 'no delete'); END`}
+		if s.engine == util.Postgres {
+			refuse = []string{
+				`CREATE FUNCTION lane_handout_no_delete() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'no delete'; END $$`,
+				`CREATE TRIGGER lane_handout_no_delete BEFORE DELETE ON lane_handout FOR EACH ROW EXECUTE FUNCTION lane_handout_no_delete()`,
+			}
+		}
+
+		for _, stmt := range refuse {
+			_, err = s.db.ExecContext(t.Context(), stmt)
+			require.NoError(t, err)
+		}
+
+		r.Settles, r.GiveBack = lane.Settles{First: g.First, LastTaken: g.First + 287}, spare.First
+
+		_, _, _, err = s.RenewLaneLease(t.Context(), r)
+		require.Error(t, err)
+		require.Equal(t, 2, countRows(t, s, `SELECT COUNT(*) FROM lane_handout WHERE lane = $1`, int(g.Lane)), "no continuation, and the spare stays")
+		require.Equal(t, 1, countRows(t, s, `SELECT COUNT(*) FROM lane_handout WHERE lane = $1 AND first = $2`, int(g.Lane), lane.ToSigned(spare.First)))
+		require.Zero(t, countRows(t, s, `SELECT COUNT(*) FROM lane_settlement`), "the copy is rolled back with the delete")
+
+		checkLaneInvariants(t, s)
+	})
+
 	// A pair that used its grant to the end does not continue it: on a lane whose newest hand-out ends
 	// at the last position, the request is refused as having no positions left.
 	runLaneHandoutTests(t, "used up the lane's last hand-out", func(t *testing.T, s *SQL) {

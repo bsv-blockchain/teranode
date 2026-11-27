@@ -718,6 +718,19 @@ func (a *Allocator) renew(want bool) error {
 	cancel()
 
 	if err != nil {
+		// The retry goes without the give-back, so a service that cannot take the spare back, such as
+		// one whose role may not delete hand-outs, still grants. Either way the request is safe to
+		// retry: had this one committed, its continuation is the lane's newest hand-out, not the spare.
+		if r.GiveBack != 0 {
+			a.mu.Lock()
+			if a.givingBack == r.GiveBack {
+				a.givingBack = 0
+				prometheusLaneGiveBacksMissed.Inc()
+				a.logger.Warnf("[lane] grant request from %s giving back spare %d:%d failed, so the retry goes without it and positions after %d stay unused", a.holder, r.Lane, r.GiveBack, r.Settles.LastTaken)
+			}
+			a.mu.Unlock()
+		}
+
 		return err
 	}
 
