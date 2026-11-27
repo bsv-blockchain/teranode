@@ -5122,6 +5122,12 @@ func (stp *SubtreeProcessor) closeRetiredSubtrees() {
 	// the cleanups of dropped store requests read subtrees that are about to be unmapped
 	if stp.storeQueue != nil {
 		stp.runDroppedCleanups()
+
+		// the movement that retired these subtrees has committed or rolled back, and a catch-up
+		// still has its rollback ahead: its lost announcements stay until it ends
+		if !stp.catchUpRollbackPinned {
+			defer stp.storeQueue.forgetAnnounceLost()
+		}
 	}
 
 	if len(stp.retiredSubtrees) == 0 {

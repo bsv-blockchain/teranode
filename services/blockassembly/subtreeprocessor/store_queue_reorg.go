@@ -187,12 +187,28 @@ func (stp *SubtreeProcessor) announceChainedSubtrees(ctx context.Context, caller
 // wantRestored is for a failed block movement that put its chain back. Retiring the chain it built
 // on marked its requests stale, and a worker that came to one cancelled it (or the byte limit dropped
 // it); the restored subtrees are wanted again, so the ones left are unmarked and the ones dropped are
-// sent again, announcing if the dropped request would have: nothing else announces after a rollback.
+// sent again. Nothing else announces after a rollback, so a subtree whose announcement was lost with
+// a dropped request is announced by the request that is outstanding for it, by an announce-only one
+// when it is stored, or by the request sent again.
 func (stp *SubtreeProcessor) wantRestored(chained []*subtreepkg.Subtree) {
 	stp.storeQueue.Wanted(chained...)
 
 	for _, st := range chained {
-		if stp.storeQueue.entry(st) != nil || (stp.storedSet != nil && stp.storedSet.Has(*st.RootHash())) {
+		lost := stp.storeQueue.announceWasLost(st)
+
+		if lost && stp.storeQueue.AnnounceOnSuccess(st) {
+			continue
+		}
+
+		if stp.storeQueue.entry(st) != nil {
+			continue
+		}
+
+		if stp.storedSet != nil && stp.storedSet.Has(*st.RootHash()) {
+			if lost {
+				stp.storeQueue.Push(NewSubtreeRequest{Subtree: st, AnnounceOnly: true})
+			}
+
 			continue
 		}
 
@@ -201,7 +217,7 @@ func (stp *SubtreeProcessor) wantRestored(chained []*subtreepkg.Subtree) {
 			ParentTxMap:       stp.currentTxMap,
 			superseded:        stp.supersedeToken(),
 			DeletedTxs:        stp.deletedTxs,
-			SkipNotification:  !stp.storeQueue.announceWasLost(st),
+			SkipNotification:  !lost,
 			ErrChan:           make(chan error, 1),
 			OnStorageComplete: func() { stp.cleanupDeletedTxs(st) },
 		})

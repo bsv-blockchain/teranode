@@ -77,7 +77,8 @@ type StoreQueue struct {
 	cleanups []func()
 
 	// announceLost holds the roots of dropped requests that would have announced their subtree, until
-	// a restored chain asks for them (announceWasLost): the request it sends again must announce too.
+	// a restored chain asks for them (announceWasLost) or the block movement ends (forgetAnnounceLost):
+	// the request a rollback sends again must announce too.
 	announceLost map[chainhash.Hash]struct{}
 }
 
@@ -245,18 +246,22 @@ func (q *StoreQueue) takeCleanups() []func() {
 	return c
 }
 
-// announceLostCap bounds announceLost. An entry only matters to a rollback of the block movement in
-// progress, which restores at most one chain, so past the cap the set starts again rather than
-// keeping the root of every cancelled request for good.
-const announceLostCap = 1 << 16
-
 // noteAnnounceLost records that a request that would have announced root was dropped. q.mu is held.
 func (q *StoreQueue) noteAnnounceLost(root chainhash.Hash) {
-	if q.announceLost == nil || len(q.announceLost) >= announceLostCap {
+	if q.announceLost == nil {
 		q.announceLost = make(map[chainhash.Hash]struct{})
 	}
 
 	q.announceLost[root] = struct{}{}
+}
+
+// forgetAnnounceLost drops every record. The processor calls it when a block movement ends: a
+// rollback of that movement has run by then, and no later one restores these subtrees.
+func (q *StoreQueue) forgetAnnounceLost() {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+
+	q.announceLost = nil
 }
 
 // announceWasLost reports, once, whether a request that would have announced st was dropped.
@@ -388,11 +393,12 @@ func (q *StoreQueue) dropLocked(match func(*storeItem) bool) (dropped []*storeIt
 		it.done = true
 		it.dropped = true
 
-		if !it.req.AnnounceOnly && !it.req.SkipNotification {
+		q.unregisterLocked(it)
+
+		if q.announceDutyLostLocked(it) {
 			q.noteAnnounceLost(*it.req.Subtree.RootHash())
 		}
 
-		q.unregisterLocked(it)
 		close(it.first)
 
 		if it.req.OnStorageComplete != nil {
@@ -401,6 +407,31 @@ func (q *StoreQueue) dropLocked(match func(*storeItem) bool) (dropped []*storeIt
 	}
 
 	return dropped
+}
+
+// announceDutyLostLocked reports whether dropping it (already unregistered) leaves its subtree's
+// announcement undone: it announced on its own, or carried the duty a fork reorg gave it
+// (AnnounceOnSuccess) and no outstanding request shares that duty. q.mu is held.
+func (q *StoreQueue) announceDutyLostLocked(it *storeItem) bool {
+	if it.req.AnnounceOnly {
+		return false
+	}
+
+	if !it.req.SkipNotification {
+		return true
+	}
+
+	if it.ann == nil || it.ann.claimed {
+		return false
+	}
+
+	for _, other := range q.byTree[it.req.Subtree] {
+		if other.ann == it.ann {
+			return false
+		}
+	}
+
+	return true
 }
 
 // removeQueued drops the requests of st that no worker has taken, and queues their callbacks. The
