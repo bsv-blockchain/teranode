@@ -399,8 +399,8 @@ func TestClearLockedOnRecordsMultiMasterItem(t *testing.T) {
 	})
 }
 
-// TestFailedClearsError checks the clear error's record ranges and its bound:
-// past maxFailedClearTxs transactions it gives a count instead of the names.
+// TestFailedClearsError checks the clear error's record ranges and its byte
+// budget, including one transaction whose failed records are all scattered.
 func TestFailedClearsError(t *testing.T) {
 	timeout := &aerospike.AerospikeError{ResultCode: types.TIMEOUT}
 	busy := &aerospike.AerospikeError{ResultCode: types.KEY_BUSY}
@@ -413,22 +413,23 @@ func TestFailedClearsError(t *testing.T) {
 			{tx, 3, timeout}, {tx, 1, timeout}, {tx, 2, timeout}, {tx, 5, timeout}, {tx, 4, busy},
 		})
 		require.ErrorIs(t, err, errors.ErrStorageError)
-		require.ErrorContains(t, err, "failed to clear 5 records: "+tx.String()+" records 1-3,5 (ResultCode: TIMEOUT), 4 (ResultCode: KEY_BUSY)")
+		require.ErrorContains(t, err, "failed to clear 5 records: "+tx.String()+" records 1-3,5 (ResultCode: TIMEOUT); "+tx.String()+" records 4 (ResultCode: KEY_BUSY)")
+		require.NotContains(t, err.Error(), "logged as warnings")
 	})
 
-	t.Run("bounded past the transaction limit", func(t *testing.T) {
+	t.Run("scattered failures stay within the budget", func(t *testing.T) {
 		store := newTestStoreForGet(t)
 
-		failed := make([]failedClear, 0, maxFailedClearTxs+1)
-		for i := 0; i <= maxFailedClearTxs; i++ {
-			failed = append(failed, failedClear{txID: &chainhash.Hash{byte(i), 0xff}, idx: 1, cause: timeout})
+		// Every other record of one transaction fails: 20000 separate ranges.
+		failed := make([]failedClear, 0, 20000)
+		for i := uint32(1); i <= 40000; i += 2 {
+			failed = append(failed, failedClear{txID: tx, idx: i, cause: timeout})
 		}
 
 		err := store.failedClearsError(failed)
-		require.ErrorContains(t, err, "failed to clear 101 records: ")
-		require.ErrorContains(t, err, "; and 1 more transactions, logged as warnings")
-		require.ErrorContains(t, err, failed[maxFailedClearTxs-1].txID.String())
-		require.NotContains(t, err.Error(), failed[maxFailedClearTxs].txID.String())
+		require.ErrorContains(t, err, "failed to clear 20000 records: "+tx.String()+" records 1,3,5,")
+		require.ErrorContains(t, err, "more pieces, logged as warnings")
+		require.Less(t, len(err.Error()), maxClearErrorBytes+1024)
 	})
 }
 

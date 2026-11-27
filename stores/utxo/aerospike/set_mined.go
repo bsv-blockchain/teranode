@@ -862,15 +862,21 @@ type failedClear struct {
 	cause error
 }
 
-// maxFailedClearTxs bounds how many transactions a clear error names, so a
-// cluster-wide failure cannot build a multi-megabyte error string.
-const maxFailedClearTxs = 100
+const (
+	// maxClearRangesPerPiece bounds the record ranges one piece of a clear
+	// error names, so a transaction with scattered failures is split up.
+	maxClearRangesPerPiece = 50
+	// maxClearErrorBytes bounds the text a clear error, or one warning line of
+	// its overflow, carries.
+	maxClearErrorBytes = 16 << 10
+)
 
-// failedClearsError names the failed records in one message: one entry per
-// transaction, its record indexes as ranges per result code. Error() prints at
-// most 20 links of a chain, so a link per record would lose names once a caller
-// joins other errors in front. Past maxFailedClearTxs transactions the error
-// gives a count, and the remaining entries are logged as warnings.
+// failedClearsError names the failed records in one message. Each piece names
+// one transaction, up to maxClearRangesPerPiece record ranges and their result
+// code. Error() prints at most 20 links of a chain, so a link per record would
+// lose names once a caller joins other errors in front. The error carries
+// pieces up to maxClearErrorBytes; the rest are logged as warnings in lines of
+// the same budget, so every failed record is named somewhere.
 func (s *Store) failedClearsError(failed []failedClear) error {
 	type reasonIdxs struct {
 		reason string
@@ -906,35 +912,55 @@ func (s *Store) failedClearsError(failed []failedClear) error {
 		group.idxs = append(group.idxs, f.idx)
 	}
 
-	entries := make([]string, 0, len(order))
+	var pieces []string
 
 	for _, txID := range order {
-		parts := make([]string, 0, len(byTx[*txID]))
 		for _, g := range byTx[*txID] {
-			parts = append(parts, indexRanges(g.idxs)+" ("+g.reason+")")
+			ranges := indexRanges(g.idxs)
+			for start := 0; start < len(ranges); start += maxClearRangesPerPiece {
+				end := min(start+maxClearRangesPerPiece, len(ranges))
+				pieces = append(pieces, txID.String()+" records "+strings.Join(ranges[start:end], ",")+" ("+g.reason+")")
+			}
 		}
-
-		entries = append(entries, txID.String()+" records "+strings.Join(parts, ", "))
 	}
 
-	if len(entries) <= maxFailedClearTxs {
-		return errors.NewStorageError("[clearLockedOnRecordsMulti] failed to clear %d records: %s", len(failed), strings.Join(entries, "; "))
+	named, rest := packClearPieces(pieces)
+	if len(rest) == 0 {
+		return errors.NewStorageError("[clearLockedOnRecordsMulti] failed to clear %d records: %s", len(failed), named)
 	}
 
-	rest := entries[maxFailedClearTxs:]
-	for start := 0; start < len(rest); start += maxFailedClearTxs {
-		s.logger.Warnf("[clearLockedOnRecordsMulti] failed clears not named in the returned error: %s", strings.Join(rest[start:min(start+maxFailedClearTxs, len(rest))], "; "))
+	omitted := len(rest)
+
+	for len(rest) > 0 {
+		var line string
+
+		line, rest = packClearPieces(rest)
+		s.logger.Warnf("[clearLockedOnRecordsMulti] failed clears not named in the returned error: %s", line)
 	}
 
-	return errors.NewStorageError("[clearLockedOnRecordsMulti] failed to clear %d records: %s; and %d more transactions, logged as warnings", len(failed), strings.Join(entries[:maxFailedClearTxs], "; "), len(rest))
+	return errors.NewStorageError("[clearLockedOnRecordsMulti] failed to clear %d records: %s; and %d more pieces, logged as warnings", len(failed), named, omitted)
 }
 
-// indexRanges writes ascending record indexes as ranges: 1-3,5.
-func indexRanges(idxs []uint32) string {
+// packClearPieces joins pieces until the next one would pass maxClearErrorBytes,
+// always taking at least one, and returns the pieces it did not take.
+func packClearPieces(pieces []string) (string, []string) {
+	size := len(pieces[0])
+	n := 1
+
+	for n < len(pieces) && size+2+len(pieces[n]) <= maxClearErrorBytes {
+		size += 2 + len(pieces[n])
+		n++
+	}
+
+	return strings.Join(pieces[:n], "; "), pieces[n:]
+}
+
+// indexRanges writes ascending record indexes as ranges: 1-3 and 5.
+func indexRanges(idxs []uint32) []string {
 	sorted := slices.Clone(idxs)
 	slices.Sort(sorted)
 
-	var b strings.Builder
+	var ranges []string
 
 	for i := 0; i < len(sorted); {
 		j := i
@@ -942,21 +968,16 @@ func indexRanges(idxs []uint32) string {
 			j++
 		}
 
-		if b.Len() > 0 {
-			b.WriteString(",")
-		}
-
-		b.WriteString(strconv.FormatUint(uint64(sorted[i]), 10))
-
+		r := strconv.FormatUint(uint64(sorted[i]), 10)
 		if j > i {
-			b.WriteString("-")
-			b.WriteString(strconv.FormatUint(uint64(sorted[j]), 10))
+			r += "-" + strconv.FormatUint(uint64(sorted[j]), 10)
 		}
 
+		ranges = append(ranges, r)
 		i = j + 1
 	}
 
-	return b.String()
+	return ranges
 }
 
 // clearFailureReason is the Aerospike result code of a failed clear, or the
