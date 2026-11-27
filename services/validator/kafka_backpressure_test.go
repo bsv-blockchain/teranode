@@ -2,6 +2,7 @@ package validator
 
 import (
 	"context"
+	"maps"
 	"math"
 	"net/url"
 	"strings"
@@ -1736,6 +1737,7 @@ func TestFetchPauser_PausedWhileAnyReasonHolds(t *testing.T) {
 		paused              bool
 		wantPause, wantResu int
 	}{
+		{fetchPauseCheckpoint, false, 0, 0}, // releasing with nothing held resumes nothing
 		{fetchPauseBackpressure, true, 1, 0},
 		{fetchPauseCheckpoint, true, 1, 0},    // already paused: no second PauseAll
 		{fetchPauseBackpressure, false, 1, 0}, // checkpoint still holds
@@ -1770,6 +1772,19 @@ func TestArmFetchPauser_StalledKafkaMessagePausesFetching(t *testing.T) {
 	go func() { handled <- server.handleKafkaTxMessage(ctx, kafkaTxMessage(t)) }()
 
 	require.Eventually(t, func() bool { return consumer.pauseCount() == 1 }, 3*time.Second, 10*time.Millisecond)
+	require.Zero(t, consumer.resumeCount())
+
+	// The backpressure controller's lever holds its own reason on the same
+	// pauser, so its resume cannot undo the gate's pause.
+	backpressure := server.fetchPauseFor(fetchPauseBackpressure)
+	backpressure.PauseAll()
+
+	server.fetchPauser.mu.Lock()
+	held := maps.Clone(server.fetchPauser.held)
+	server.fetchPauser.mu.Unlock()
+	require.Equal(t, map[string]bool{fetchPauseBackpressure: true, fetchPauseCheckpoint: true}, held)
+
+	backpressure.ResumeAll()
 	require.Zero(t, consumer.resumeCount())
 
 	cancel()

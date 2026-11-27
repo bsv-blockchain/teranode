@@ -319,10 +319,32 @@ func TestUnminedTxGate_RefusesAfterCheckpointAnswer(t *testing.T) {
 	})
 
 	t.Run("syncing_refuses_without_waiting", func(t *testing.T) {
-		syncing := &Mock{}
-		fsmRead(syncing, &catching)
-		syncing.On("GetBestHeightAndTime", mock.Anything).Return(50, 0, nil).Maybe()
-		decide(t, NewUnminedTxGate(ulogger.TestLogger{}, syncing, gateSettings(t, "utxoset"), "test_decide_syncing"), true)
+		// Rule off, checkpoint reached, or below it: a syncing FSM refuses at
+		// once and counts it, even while the height cannot be read.
+		for _, tt := range []struct {
+			name, scheme string
+			reached      bool
+		}{{"off", "postgres", false}, {"reached", "utxoset", true}, {"below", "utxoset", false}} {
+			syncing := &Mock{}
+			fsmRead(syncing, &catching)
+			syncing.On("GetBestHeightAndTime", mock.Anything).Return(0, 0, errors.NewServiceError("blockchain down")).Maybe()
+
+			gate := NewUnminedTxGate(ulogger.TestLogger{}, syncing, gateSettings(t, tt.scheme), "test_decide_syncing_"+tt.name)
+			gate.reached.Store(tt.reached)
+			before := gate.RefusedTotal()
+
+			decide(t, gate, true)
+			require.InDelta(t, before+1, gate.RefusedTotal(), 0, tt.name)
+			waitForHeightRead(t, gate)
+		}
+	})
+
+	t.Run("state_read_failure_waits_for_the_height", func(t *testing.T) {
+		client := &Mock{}
+		fsmRead(client, nil)
+		client.On("GetBestHeightAndTime", mock.Anything).Return(50, 0, nil).Once()
+		decide(t, NewUnminedTxGate(ulogger.TestLogger{}, client, gateSettings(t, "utxoset"), "test_decide_state_fails"), true)
+		client.AssertExpectations(t)
 	})
 
 	t.Run("fresh_read_decides", func(t *testing.T) {
@@ -444,12 +466,19 @@ func TestUnminedTxGate_StallHooks(t *testing.T) {
 	require.False(t, refused, "judged by the second read, scheduled after the decision began")
 	require.Zero(t, stalls.Load()+recovers.Load(), "reads that succeed stall nothing, however slow")
 
+	catching := FSMStateCATCHINGBLOCKS
 	down := &Mock{}
+	down.On("GetFSMCurrentState", mock.Anything).Return(&catching, nil).Once()
 	fsmRead(down, &running)
 	down.On("GetBestHeightAndTime", mock.Anything).Return(0, 0, errors.NewServiceError("blockchain down"))
 
 	gate = NewUnminedTxGate(ulogger.TestLogger{}, down, gateSettings(t, "utxoset"), "test_stall_down")
 	hooks(gate)
+
+	refused, err = gate.RefusesAfterCheckpointAnswer(context.Background(), nil)
+	require.NoError(t, err)
+	require.True(t, refused, "refused while syncing, before any read")
+	require.Zero(t, gate.stalled, "a decision that never stalled ends no stall")
 
 	ctx, cancel := context.WithCancel(context.Background())
 

@@ -319,7 +319,7 @@ func (g *UnminedTxGate) RefusesAfterCheckpointAnswer(ctx context.Context, txHash
 			betweenDecisionLoads()
 		}
 
-		if g.highestCheckpoint == 0 || g.reached.Load() {
+		if g.reached.Load() {
 			return false, nil
 		}
 
