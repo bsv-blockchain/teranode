@@ -3,6 +3,8 @@ package aerospike
 import (
 	"context"
 	"fmt"
+	"regexp"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -444,16 +446,28 @@ func TestFailedClearsError(t *testing.T) {
 			all += line
 		}
 
-		for _, idx := range []string{"39999 (ResultCode: TIMEOUT)", ",39997,", ",20003,"} {
-			require.Contains(t, all, idx)
+		// Every failed index is named exactly once across the error and the warnings.
+		seen := make(map[string]int)
+		for _, m := range regexp.MustCompile(`records ([0-9,]+) \(`).FindAllStringSubmatch(all, -1) {
+			for _, idx := range strings.Split(m[1], ",") {
+				seen[idx]++
+			}
+		}
+
+		require.Len(t, seen, len(failed))
+
+		for _, f := range failed {
+			require.Equalf(t, 1, seen[strconv.FormatUint(uint64(f.idx), 10)], "record %d", f.idx)
 		}
 	})
 
 	t.Run("a long non-Aerospike reason is cut", func(t *testing.T) {
-		store := newTestStoreForGet(t)
+		reason := clearFailureReason(errors.NewProcessingError(strings.Repeat("x", 64<<10)))
+		require.Len(t, reason, maxClearReasonBytes+len("..."))
+		require.True(t, strings.HasSuffix(reason, "..."))
 
-		err := store.failedClearsError([]failedClear{{tx, 1, errors.NewProcessingError(strings.Repeat("x", 64<<10))}})
-		require.Less(t, len(err.Error()), maxClearReasonBytes+1024)
+		short := errors.NewProcessingError("short")
+		require.Equal(t, short.Error(), clearFailureReason(short), "a reason under the limit is kept whole")
 	})
 }
 
