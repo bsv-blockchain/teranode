@@ -222,9 +222,9 @@ func TestReorgScenario_SlowPathKeepsPendingSpenderBehindLostChild(t *testing.T) 
 }
 
 // C is in the moved-back block and spends X, which the move-back keeps at its pending position, but
-// X never comes out of the pending loops: it is in no subtree, or keepPrevious drops it. The held-back
-// C must not be lost, so flush appends it.
-func TestReorgScenario_SlowPathFlushKeepsLostChildOfAParentThatIsNotEmitted(t *testing.T) {
+// X never comes out of the pending loops: it is in no subtree, or keepPrevious drops it. C and its
+// child D must not be emitted without X, so flush drops them from the assembly and the tx map.
+func TestReorgScenario_SlowPathFlushDropsLostChildOfAParentThatIsNotEmitted(t *testing.T) {
 	for _, tt := range []struct {
 		name string
 		// setup puts X in the tx map and returns the previous current subtree, if any.
@@ -253,7 +253,7 @@ func TestReorgScenario_SlowPathFlushKeepsLostChildOfAParentThatIsNotEmitted(t *t
 				_, wasSet := stp.currentTxMap.SetIfNotExists(x, inpointsWithParent(dropped))
 				require.True(t, wasSet)
 
-				st, err := subtreepkg.NewTreeByLeafCount(4)
+				st, err := subtreepkg.NewTreeByLeafCount(8)
 				require.NoError(t, err)
 				require.NoError(t, st.AddNode(x, 1, 1))
 
@@ -270,12 +270,13 @@ func TestReorgScenario_SlowPathFlushKeepsLostChildOfAParentThatIsNotEmitted(t *t
 			onChain := chainhash.HashH([]byte("flush-on-chain"))
 			previous := tt.setup(t, stp, x, onChain)
 
-			st, err := subtreepkg.NewTreeByLeafCount(4)
+			st, err := subtreepkg.NewTreeByLeafCount(8)
 			require.NoError(t, err)
 			require.NoError(t, st.AddCoinbaseNode())
 			require.NoError(t, st.AddNode(x, 1, 1))
 			require.NoError(t, st.AddNode(c, 1, 1))
 
+			d := chainhash.HashH([]byte("flush-d"))
 			inpoints := []subtreepkg.TxInpoints{{}, *inpointsWithParent(onChain), *inpointsWithParent(x)}
 
 			if tt.blockHasDroppedTx {
@@ -285,12 +286,26 @@ func TestReorgScenario_SlowPathFlushKeepsLostChildOfAParentThatIsNotEmitted(t *t
 				inpoints = append(inpoints, *inpointsWithParent(chainhash.HashH([]byte("flush-dropped-parent"))))
 			}
 
+			require.NoError(t, st.AddNode(d, 1, 1))
+
+			inpoints = append(inpoints, *inpointsWithParent(c))
+
 			block := &model.Block{Header: prevBlockHeader, Subtrees: []*chainhash.Hash{st.RootHash()}}
 
 			_, _, err = stp.moveBackBlockBulkBuild(t.Context(), block, true, nil, previous, [][]subtreepkg.Node{st.Nodes}, [][]subtreepkg.TxInpoints{inpoints}, nil)
 			require.NoError(t, err)
 
-			require.Equal(t, []chainhash.Hash{c}, txHashes(assemblyNodes(stp)), "C is kept, and X, in no subtree, is not emitted")
+			require.Empty(t, txHashes(assemblyNodes(stp)), "X is not emitted, so neither are C and D")
+
+			for _, hash := range []chainhash.Hash{c, d} {
+				_, inMap := stp.currentTxMap.Get(hash)
+				require.False(t, inMap, "tx %s is out of the tx map", hash)
+
+				stp.droppedMu.Lock()
+				_, dropped := stp.droppedTxs[hash]
+				stp.droppedMu.Unlock()
+				require.True(t, dropped, "tx %s is recorded as dropped", hash)
+			}
 		})
 	}
 }

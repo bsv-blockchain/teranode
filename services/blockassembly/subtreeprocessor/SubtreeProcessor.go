@@ -6821,12 +6821,7 @@ func (stp *SubtreeProcessor) moveBackBlockBulkBuild(ctx context.Context, block *
 		}
 	}
 	if held != nil {
-		before := len(allNodes)
-		allNodes = held.flush(allNodes)
-
-		if flushed := len(allNodes) - before; flushed > 0 {
-			stp.logger.Warnf("[moveBackBlock:BulkBuild][%s] %d held-back transactions have a parent that is in no subtree, appended at the end", block.String(), flushed)
-		}
+		stp.dropStrandedHeld(block, held.stranded())
 	}
 
 	// Step 5: Determine subtree size
