@@ -4958,12 +4958,41 @@ func (sm *SyncManager) Pause() chan<- struct{} {
 	return c
 }
 
+// Dependencies holds the service clients and stores the sync manager needs.
+// It exists so New keeps a manageable parameter list as the sync manager grows.
+//
+// Every field is required unless its own comment says otherwise.
+type Dependencies struct {
+	// BlockchainClient queries blockchain state and submits blocks.
+	BlockchainClient teranodeblockchain.ClientI
+
+	// ValidationClient validates incoming transactions before relay.
+	ValidationClient validator.Interface
+
+	// UtxoStore is the UTXO set, used for validation and outpoint lookups.
+	UtxoStore utxostore.Store
+
+	// SubtreeStore holds merkle subtree blob data.
+	SubtreeStore blob.Store
+
+	// TempStore holds out-of-order blocks parked until their parent arrives.
+	// New also needs tSettings.Legacy.TempStore to be a file:// URL, so a restart
+	// can find what an earlier run parked.
+	TempStore blob.Store
+
+	// SubtreeValidation verifies merkle proofs and block structure.
+	SubtreeValidation subtreevalidation.Interface
+
+	// BlockValidation validates incoming blocks before acceptance.
+	BlockValidation blockvalidation.Interface
+
+	// BlockAssembly serves mining and block template generation. It may be nil.
+	BlockAssembly blockassembly.ClientI
+}
+
 // New constructs a new SyncManager. Use Start to begin processing asynchronous
 // block, tx, and inv updates.
-func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, blockchainClient teranodeblockchain.ClientI,
-	validationClient validator.Interface, utxoStore utxostore.Store, subtreeStore blob.Store, tempStore blob.Store,
-	subtreeValidation subtreevalidation.Interface, blockValidation blockvalidation.Interface,
-	blockAssembly blockassembly.ClientI, config *Config) (*SyncManager, error) {
+func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, deps Dependencies, config *Config) (*SyncManager, error) {
 	initPrometheusMetrics()
 
 	// Derived from the same settings inputs as the peer layer's download budget,
@@ -4975,7 +5004,7 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 	// this chain's parameters and reading the committed chain through the
 	// blockchain client. Built here, before anything in New starts a goroutine,
 	// because it is the one step that can fail.
-	headerRules, err := newHeaderRules(logger, tSettings, config.ChainParams, blockchainClient)
+	headerRules, err := newHeaderRules(logger, tSettings, config.ChainParams, deps.BlockchainClient)
 	if err != nil {
 		return nil, err
 	}
@@ -5008,22 +5037,22 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 		handlerDone:             make(chan struct{}),
 		// teranode stores etc.
 		logger:            logger,
-		blockchainClient:  blockchainClient,
-		validationClient:  validationClient,
-		utxoStore:         utxoStore,
-		subtreeStore:      subtreeStore,
-		subtreeValidation: subtreeValidation,
-		blockValidation:   blockValidation,
-		blockAssembly:     blockAssembly,
+		blockchainClient:  deps.BlockchainClient,
+		validationClient:  deps.ValidationClient,
+		utxoStore:         deps.UtxoStore,
+		subtreeStore:      deps.SubtreeStore,
+		subtreeValidation: deps.SubtreeValidation,
+		blockValidation:   deps.BlockValidation,
+		blockAssembly:     deps.BlockAssembly,
 
-		txGate:             teranodeblockchain.NewUnminedTxGate(logger, blockchainClient, tSettings, teranodeblockchain.UnminedTxRouteLegacyTx),
-		orphanGate:         teranodeblockchain.NewUnminedTxGate(logger, blockchainClient, tSettings, teranodeblockchain.UnminedTxRouteLegacyOrphan),
-		orphanEvictionGate: teranodeblockchain.NewUnminedTxGate(logger, blockchainClient, tSettings, teranodeblockchain.UnminedTxRouteLegacyOrphanEviction),
+		txGate:             teranodeblockchain.NewUnminedTxGate(logger, deps.BlockchainClient, tSettings, teranodeblockchain.UnminedTxRouteLegacyTx),
+		orphanGate:         teranodeblockchain.NewUnminedTxGate(logger, deps.BlockchainClient, tSettings, teranodeblockchain.UnminedTxRouteLegacyOrphan),
+		orphanEvictionGate: teranodeblockchain.NewUnminedTxGate(logger, deps.BlockchainClient, tSettings, teranodeblockchain.UnminedTxRouteLegacyOrphanEviction),
 	}
 
 	// Where every downloaded block is converted to and committed from. Not
 	// optional: a node without a usable park refuses to start.
-	park, err := newBlockPark(logger, tSettings, tempStore)
+	park, err := newBlockPark(logger, tSettings, deps.TempStore)
 	if err != nil {
 		return nil, err
 	}
