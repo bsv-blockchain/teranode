@@ -12,7 +12,7 @@ import (
 // Every subtree of the chain was sent to the queue as it was built, so the reorg does not send it
 // again: it waits for the request that is there, and announces what is stored.
 
-// awaitQueuedStores waits for the store of every chained subtree. A subtree whose request is no
+// awaitQueuedStores waits for the stores of the first wait chained subtrees. A subtree whose request is no
 // longer in the queue is looked up in the stored set, which a settled store fills; one that was
 // never sent, or was dropped, is sent now, once. With a deadline the wait is for each request's
 // typed result and a store that did not finish within it, failed, or left the meta unwritten fails
@@ -226,8 +226,10 @@ func (stp *SubtreeProcessor) runDroppedCleanups() {
 // the stored-prefix cut on it is K0 = min(chain length, the leading subtrees that fit in a block,
 // blockassembly_reorgAwaitedSubtrees), and at least one subtree of a chain: the rest store behind
 // the template, which the cut keeps at the stored prefix, and a subtree beyond the block-size prefix
-// is not in this block's template at all. With the cut off, or the setting 0, it is the whole chain:
-// a template published over subtrees that are not stored would name files nothing can read.
+// is not in this block's template at all. The block-size prefix is cut as the template cuts it
+// (BlockAssembler.filterSubtreesByMaxSize): header and subtree sizes, with no coinbase. With the
+// cut off, or the setting 0, it is the whole chain: a template published over subtrees that are
+// not stored would name files nothing can read.
 func (stp *SubtreeProcessor) reorgAwaitedSubtrees() int {
 	n := len(stp.chainedSubtrees)
 	k0 := stp.settings.BlockAssembly.ReorgAwaitedSubtrees
