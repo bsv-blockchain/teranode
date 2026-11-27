@@ -384,6 +384,128 @@ func TestBanReconsiderBadPeers_ReturnsCount(t *testing.T) {
 	require.Equal(t, 3, count)
 }
 
+// TestBanReconsiderBadPeers_SkipsPeersWithOutstandingBanScore covers issue #1161:
+// a peer that fed consensus-invalid blocks during catchup accrues ban score, and
+// must NOT be auto-recovered back into the sync-candidate pool while that score
+// is outstanding.
+func TestBanReconsiderBadPeers_SkipsPeersWithOutstandingBanScore(t *testing.T) {
+	r := NewCentralizedPeerRegistry(DefaultBanConfig())
+
+	r.Register(&PeerInfo{ID: "invalid-block-peer"})
+	r.UpdateMetrics("invalid-block-peer", 0, 0, 0, false, false, true, 0)
+	r.AddBanScore("invalid-block-peer", "invalid_block", 0)
+
+	got, _ := r.Get("invalid-block-peer")
+	require.Less(t, got.ReputationScore, 20.0)
+	require.Positive(t, got.BanScore)
+
+	// Backdate the failure so only the ban score keeps the peer out.
+	r.mu.Lock()
+	r.peers["invalid-block-peer"].LastInteractionFailure = time.Now().Add(-2 * time.Hour)
+	r.mu.Unlock()
+
+	require.Equal(t, 0, r.ReconsiderBadPeers(1*time.Hour), "peer with outstanding ban score must not recover")
+
+	got, _ = r.Get("invalid-block-peer")
+	require.Less(t, got.ReputationScore, 20.0)
+	require.Positive(t, got.MaliciousCount)
+
+	// Once the ban score has decayed to zero, normal recovery resumes.
+	r.mu.Lock()
+	r.banScores["invalid-block-peer"].Score = 0
+	r.mu.Unlock()
+
+	require.Equal(t, 1, r.ReconsiderBadPeers(1*time.Hour))
+}
+
+// TestBanReconsiderBadPeers_SkipsBannedPeers ensures an actively banned peer is
+// never handed back a usable reputation by the recovery sweep.
+func TestBanReconsiderBadPeers_SkipsBannedPeers(t *testing.T) {
+	r := NewCentralizedPeerRegistry(DefaultBanConfig())
+
+	r.Register(&PeerInfo{ID: "banned-peer"})
+	r.UpdateMetrics("banned-peer", 0, 0, 0, false, false, true, 0)
+
+	_, banned := r.AddBanScore("banned-peer", "test", DefaultBanConfig().Threshold)
+	require.True(t, banned)
+
+	r.mu.Lock()
+	r.peers["banned-peer"].LastInteractionFailure = time.Now().Add(-2 * time.Hour)
+	r.mu.Unlock()
+
+	require.Equal(t, 0, r.ReconsiderBadPeers(1*time.Hour))
+}
+
+// TestBanReconsiderBadPeers_SkipsActiveBanWithZeroScore covers the Banned clause of
+// the recovery gate on its own. With the default config a banned peer sits at
+// score 0 for most of its 24h ban, so the score clause cannot be what refuses it.
+func TestBanReconsiderBadPeers_SkipsActiveBanWithZeroScore(t *testing.T) {
+	r := NewCentralizedPeerRegistry(DefaultBanConfig())
+
+	r.Register(&PeerInfo{ID: "banned-zero-score"})
+	r.UpdateMetrics("banned-zero-score", 0, 0, 0, false, false, true, 0)
+
+	r.mu.Lock()
+	r.banScores["banned-zero-score"] = &banEntry{Banned: true, Score: 0, BanUntil: time.Now().Add(time.Hour), LastDecay: time.Now()}
+	r.peers["banned-zero-score"].LastInteractionFailure = time.Now().Add(-2 * time.Hour)
+	r.mu.Unlock()
+
+	require.Equal(t, 0, r.ReconsiderBadPeers(1*time.Hour), "an active ban must keep the peer out even at score 0")
+
+	got, _ := r.Get("banned-zero-score")
+	require.Less(t, got.ReputationScore, 20.0, "reputation must stay unchanged")
+}
+
+// TestBanReconsiderBadPeers_RecoversAfterBanExpiry covers an expired ban that no
+// other call has swept yet: the recovery sweep must clear it, not stay blocked.
+func TestBanReconsiderBadPeers_RecoversAfterBanExpiry(t *testing.T) {
+	r := NewCentralizedPeerRegistry(DefaultBanConfig())
+
+	r.Register(&PeerInfo{ID: "expired-ban"})
+	r.UpdateMetrics("expired-ban", 0, 0, 0, false, false, true, 0)
+
+	r.mu.Lock()
+	r.banScores["expired-ban"] = &banEntry{Banned: true, Score: 0, BanUntil: time.Now().Add(-time.Minute), LastDecay: time.Now().Add(-25 * time.Hour)}
+	r.peers["expired-ban"].LastInteractionFailure = time.Now().Add(-2 * time.Hour)
+	r.mu.Unlock()
+
+	require.Equal(t, 1, r.ReconsiderBadPeers(1*time.Hour), "an expired ban must not block recovery")
+}
+
+// TestBanScoreAccumulatesToBanForRepeatedInvalidBlocks documents the escalation
+// path for a peer repeatedly delivering consensus-invalid blocks during catchup.
+func TestBanScoreAccumulatesToBanForRepeatedInvalidBlocks(t *testing.T) {
+	cfg := DefaultBanConfig()
+	// Disable decay so the test measures pure accumulation.
+	cfg.DecayInterval = 0
+	r := NewCentralizedPeerRegistry(cfg)
+
+	r.Register(&PeerInfo{ID: "repeat-invalid"})
+
+	points := cfg.ReasonPoints["invalid_block"]
+	require.Positive(t, points, "invalid_block must carry ban points")
+
+	var banned bool
+	attempts := 0
+	for i := 0; i < int(cfg.Threshold/points)+1; i++ {
+		r.UpdateMetrics("repeat-invalid", 0, 0, 0, false, false, true, 0)
+		_, banned = r.AddBanScore("repeat-invalid", "invalid_block", 0)
+		attempts++
+		if banned {
+			break
+		}
+	}
+
+	require.True(t, banned, "peer should be banned after %d invalid blocks", attempts)
+	require.True(t, r.IsBannedPeer("repeat-invalid"))
+
+	// And recovery must not readmit it.
+	r.mu.Lock()
+	r.peers["repeat-invalid"].LastInteractionFailure = time.Now().Add(-2 * time.Hour)
+	r.mu.Unlock()
+	require.Equal(t, 0, r.ReconsiderBadPeers(1*time.Hour))
+}
+
 // ---------------------------------------------------------------------------
 // decayBanScores
 // ---------------------------------------------------------------------------

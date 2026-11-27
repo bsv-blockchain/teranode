@@ -3164,7 +3164,9 @@ func (u *Server) processCatchupChItem(ctx context.Context, c processBlockCatchup
 			// Mark peer as malicious only for a genuinely invalid (consensus-failing)
 			// block. Transient catchup-state errors fall through to alternative-peer
 			// retry, same as ErrBlockIncomplete. See issue #1031.
-			u.reportCatchupMalicious(ctx, c.peerID, "invalid_block")
+			if !isInheritedInvalidError(err) {
+				u.reportCatchupMalicious(ctx, c.peerID, "invalid_block")
+			}
 
 			// Clean up the processing notification for this block
 			u.processBlockNotify.Delete(*c.block.Hash())

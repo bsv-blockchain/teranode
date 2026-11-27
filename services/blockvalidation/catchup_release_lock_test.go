@@ -847,6 +847,16 @@ func TestShouldReportConsensusMalicious(t *testing.T) {
 			want: true,
 		},
 		{
+			name: "block-invalid inherited from an invalid parent is not the peer's fault",
+			err:  markInheritedInvalid(errors.NewBlockInvalidError("parent block is invalid")),
+			want: false,
+		},
+		{
+			name: "the inherited mark survives a processing wrap",
+			err:  errors.NewProcessingError("catchup failed", markInheritedInvalid(errors.NewBlockInvalidError("parent block is invalid"))),
+			want: false,
+		},
+		{
 			name: "block-invalid wrapping a storage fault is ours, not the peer's",
 			err: errors.NewBlockInvalidError("block is not valid",
 				errors.NewStorageError("external blob does not hash to its key")),
@@ -1101,4 +1111,84 @@ func TestIsLocalCatchupFault(t *testing.T) {
 			require.Equal(t, tc.want, isLocalCatchupFault(tc.err))
 		})
 	}
+}
+
+// TestReleaseCatchupLock_InheritedInvalidIsNotChargedToPeer pins the inherited-invalid exemption in
+// the catch-up release classifier. A peer that serves an honest descendant of a block this node
+// holds invalid is not malicious, and must not open a peer-error window either. The control case
+// shows a plain consensus failure from the same peer is still reported malicious.
+func TestReleaseCatchupLock_InheritedInvalidIsNotChargedToPeer(t *testing.T) {
+	header := testhelpers.CreateTestHeaders(t, 1)[0]
+
+	cases := []struct {
+		name          string
+		err           error
+		wantType      string
+		wantMalicious int
+	}{
+		{
+			name:          "inherited from an invalid parent",
+			err:           markInheritedInvalid(errors.NewBlockInvalidError("[ValidateBlock][abc] parent block is invalid")),
+			wantType:      "inherited_invalid",
+			wantMalicious: 0,
+		},
+		{
+			name:          "inherited mark under a processing wrap",
+			err:           errors.NewProcessingError("catchup failed", markInheritedInvalid(errors.NewBlockInvalidError("parent block is invalid"))),
+			wantType:      "inherited_invalid",
+			wantMalicious: 0,
+		},
+		{
+			name:          "plain consensus failure is still reported",
+			err:           errors.NewBlockInvalidError("[ValidateBlock][abc] bad coinbase length"),
+			wantType:      "validation_failure",
+			wantMalicious: 1,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			server, _, _, cleanup := setupTestCatchupServer(t)
+			defer cleanup()
+
+			recorder := newPeerFailureRecordingP2PClient()
+			server.p2pClient = recorder
+
+			ctx := &CatchupContext{
+				blockUpTo: &model.Block{Header: header, Height: 1000},
+				baseURL:   "http://honest-primary:8000",
+				peerID:    "honest-primary",
+				startTime: time.Now(),
+			}
+			require.NoError(t, server.acquireCatchupLock(ctx))
+
+			relErr := tc.err
+			server.releaseCatchupLock(ctx, &relErr)
+
+			recorder.mu.Lock()
+			defer recorder.mu.Unlock()
+
+			require.Equal(t, tc.wantMalicious, recorder.maliciousByPeer["honest-primary"])
+			require.NotNil(t, server.previousCatchupAttempt)
+			require.Equal(t, tc.wantType, server.previousCatchupAttempt.ErrorType)
+
+			if tc.wantMalicious == 0 {
+				require.Empty(t, recorder.errorMsgsByPeer["honest-primary"], "no peer-error window for an honest peer")
+			}
+		})
+	}
+}
+
+func TestIsInheritedInvalidError(t *testing.T) {
+	inherited := markInheritedInvalid(errors.NewBlockInvalidError("parent block is invalid"))
+
+	require.True(t, isInheritedInvalidError(inherited))
+	require.True(t, errors.Is(inherited, errors.ErrBlockInvalid), "the mark must not change the error code")
+	require.True(t, isInheritedInvalidError(errors.NewProcessingError("wrapped", inherited)), "the mark must survive a wrap")
+	require.True(t, isInheritedInvalidError(errors.UnwrapGRPC(errors.WrapGRPC(inherited))), "the mark must survive a gRPC round trip")
+
+	require.False(t, isInheritedInvalidError(nil))
+	require.False(t, isInheritedInvalidError(errors.NewBlockInvalidError("bad coinbase length")))
+	require.False(t, isInheritedInvalidError(errors.NewProcessingError("wrapped", errors.NewBlockInvalidError("bad coinbase length"))))
+	require.False(t, isInheritedInvalidError(context.Canceled))
 }

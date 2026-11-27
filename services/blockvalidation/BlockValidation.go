@@ -2203,7 +2203,16 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 
 				if blockMeta != nil && blockMeta.Invalid {
 					ctxLogger.Warnf("[ValidateBlock][%s] block already exists and is marked as invalid", block.Header.Hash().String())
-					return errors.NewBlockInvalidError("[ValidateBlock][%s] block already exists as invalid", block.Header.Hash().String())
+
+					existsInvalidErr := errors.NewBlockInvalidError("[ValidateBlock][%s] block already exists as invalid", block.Header.Hash().String())
+
+					// Inherited only when the parent is invalid too. A peer that serves its own bad
+					// block again has a valid parent here, so it stays chargeable.
+					if _, parentMeta, parentErr := u.blockchainClient.GetBlockHeader(ctx, block.Header.HashPrevBlock); parentErr == nil && u.checkParentInvalid(parentMeta) {
+						existsInvalidErr = markInheritedInvalid(existsInvalidErr)
+					}
+
+					return existsInvalidErr
 				}
 
 				// A stored valid block can be a fork accepted before the tip passed a
@@ -2514,8 +2523,9 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 		//     validating it fails as "already exists as invalid". Either way the chain is rejected
 		//     without a new row.
 		//   - So each such descendant announcement costs one catch-up header round instead of one
-		//     parent-row lookup, charged to the announcing peer through the catch-up consensus
-		//     failure path, and only for chains built on a block this node already condemned.
+		//     parent-row lookup, and only for chains built on a block this node already condemned.
+		//     The verdict is marked inherited (markInheritedInvalid), so the catch-up consensus
+		//     failure path does not report the announcing peer malicious for it.
 		//   - Once the parent is reconsidered, the child returns through normal sync; it is not
 		//     available from the local store for an operator reconsider.
 		if u.checkParentInvalid(parentMeta) {
@@ -2534,7 +2544,7 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 				}
 			}
 
-			return errors.NewBlockInvalidError("[ValidateBlock][%s] parent block is invalid", block.Hash().String())
+			return markInheritedInvalid(errors.NewBlockInvalidError("[ValidateBlock][%s] parent block is invalid", block.Hash().String()))
 		}
 
 		// Wait for reValidationBlock to do its thing
