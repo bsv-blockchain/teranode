@@ -26,6 +26,7 @@ services:
       args:
         BASE_IMG: ghcr.io/bsv-blockchain/teranode-base:build-latest
         RUN_IMG: ghcr.io/bsv-blockchain/teranode-base:run-latest
+        EXTRA_BUILD_TAGS: ${TERANODE_EXTRA_BUILD_TAGS:-}
     entrypoint: ["true"]
 
   postgres:

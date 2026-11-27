@@ -11,6 +11,8 @@ ARG TARGETOS
 ARG TARGETARCH
 ARG BUILD_JOBS=32
 ARG TXMETA_SMALL_TAG=false
+# Extra comma-separated Go build tags, e.g. failpoints for crash-consistency tests
+ARG EXTRA_BUILD_TAGS=
 
 # Download all the go dependecies so Docker can cache them if the go.mod and go.sum files are not changed
 WORKDIR /app
@@ -30,9 +32,9 @@ RUN echo "Building Git SHA: ${GIT_SHA}"
 
 # Build with $BUILD_JOBS parallel jobs
 RUN if [ "$TXMETA_SMALL_TAG" = "true" ]; then \
-  CGO_ENABLED=1 GOOS=${TARGETOS} GOARCH=${TARGETARCH} TXMETA_SMALL_TAG=true GIT_VERSION="${GIT_VERSION}" GIT_COMMIT="${GIT_COMMIT}" GIT_SHA="${GIT_SHA}" make build -j ${BUILD_JOBS}; \
+  CGO_ENABLED=1 GOOS=${TARGETOS} GOARCH=${TARGETARCH} TXMETA_SMALL_TAG=true GIT_VERSION="${GIT_VERSION}" GIT_COMMIT="${GIT_COMMIT}" GIT_SHA="${GIT_SHA}" EXTRA_BUILD_TAGS="${EXTRA_BUILD_TAGS}" make build -j ${BUILD_JOBS}; \
   else \
-  CGO_ENABLED=1 GOOS=${TARGETOS} GOARCH=${TARGETARCH} GIT_VERSION="${GIT_VERSION}" GIT_COMMIT="${GIT_COMMIT}" GIT_SHA="${GIT_SHA}" make build -j ${BUILD_JOBS}; \
+  CGO_ENABLED=1 GOOS=${TARGETOS} GOARCH=${TARGETARCH} GIT_VERSION="${GIT_VERSION}" GIT_COMMIT="${GIT_COMMIT}" GIT_SHA="${GIT_SHA}" EXTRA_BUILD_TAGS="${EXTRA_BUILD_TAGS}" make build -j ${BUILD_JOBS}; \
   fi
 
 # Build teranode-cli
