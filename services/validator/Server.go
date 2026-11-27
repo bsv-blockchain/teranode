@@ -240,7 +240,7 @@ func NewServer(logger ulogger.Logger, tSettings *settings.Settings, utxoStore ut
 	blockAssemblyClient blockassembly.ClientI) *Server {
 	initPrometheusMetrics()
 
-	return &Server{
+	v := &Server{
 		logger:                              logger,
 		settings:                            tSettings,
 		utxoStore:                           utxoStore,
@@ -253,6 +253,14 @@ func NewServer(logger ulogger.Logger, tSettings *settings.Settings, utxoStore ut
 		blockAssemblyClient:                 blockAssemblyClient,
 		unminedTxGate:                       blockchain.NewUnminedTxGate(logger, blockchainClient, tSettings, blockchain.UnminedTxRouteValidatorKafka),
 	}
+
+	// Armed here, before Start, so the consumer is shared with the gate before
+	// it delivers a message or the backpressure controller starts.
+	if consumerClient != nil {
+		v.armFetchPauser(consumerClient)
+	}
+
+	return v
 }
 
 // Health performs health checks on the validator service and its dependencies.
@@ -437,7 +445,6 @@ func (v *Server) Start(ctx context.Context, readyCh chan<- struct{}) (retErr err
 	}
 
 	if v.consumerClient != nil {
-		v.armFetchPauser(v.consumerClient)
 		v.consumerClient.Start(consumerCtx, kafkaMessageHandler, kafka.WithLogErrorAndMoveOn())
 	}
 

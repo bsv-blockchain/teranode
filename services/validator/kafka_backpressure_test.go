@@ -1752,27 +1752,35 @@ func TestFetchPauser_PausedWhileAnyReasonHolds(t *testing.T) {
 }
 
 // A Kafka message waiting on a utxoset node whose height reads fail pauses
-// fetching, and fetching resumes when the wait ends; the stalled message is
-// returned as an error, so it stays uncommitted.
-func TestArmFetchPauser_StalledKafkaMessagePausesFetching(t *testing.T) {
+// the consumer NewServer was given, and fetching resumes when the wait ends;
+// the stalled message is returned as an error, so it stays uncommitted.
+func TestNewServer_StalledKafkaMessagePausesFetching(t *testing.T) {
 	running := blockchain.FSMStateRUNNING
 	client := &blockchain.Mock{}
 	client.On("GetFSMCurrentState", mock.Anything).Return(&running, nil)
 	client.On("GetBestHeightAndTime", mock.Anything).Return(0, 0, errors.NewServiceError("blockchain down"))
 
-	server := NewServer(ulogger.TestLogger{}, nettingSettings(t), nil, client, nil, nil, nil, nil, nil)
-	server.validator = &MockValidator{}
+	kafkaURL, err := url.Parse("memory://localhost/new-server-fetch-pauser")
+	require.NoError(t, err)
 
-	consumer := &fakeConsumer{}
-	server.armFetchPauser(consumer)
+	group, err := kafka.NewKafkaConsumerGroupFromURL(ulogger.TestLogger{}, kafkaURL, "new-server-fetch-pauser-group", true, nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = group.Close() })
+
+	consumer := &spyPausableConsumer{KafkaConsumerGroup: group}
+	pauses := func() int { count, _ := consumer.counts(); return count }
+	resumes := func() int { _, count := consumer.counts(); return count }
+
+	server := NewServer(ulogger.TestLogger{}, nettingSettings(t), nil, client, consumer, nil, nil, nil, nil)
+	server.validator = &MockValidator{}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	handled := make(chan error, 1)
 
 	go func() { handled <- server.handleKafkaTxMessage(ctx, kafkaTxMessage(t)) }()
 
-	require.Eventually(t, func() bool { return consumer.pauseCount() == 1 }, 3*time.Second, 10*time.Millisecond)
-	require.Zero(t, consumer.resumeCount())
+	require.Eventually(t, func() bool { return pauses() == 1 }, 3*time.Second, 10*time.Millisecond)
+	require.Zero(t, resumes())
 
 	// The backpressure controller's lever holds its own reason on the same
 	// pauser, so its resume cannot undo the gate's pause.
@@ -1785,9 +1793,9 @@ func TestArmFetchPauser_StalledKafkaMessagePausesFetching(t *testing.T) {
 	require.Equal(t, map[string]bool{fetchPauseBackpressure: true, fetchPauseCheckpoint: true}, held)
 
 	backpressure.ResumeAll()
-	require.Zero(t, consumer.resumeCount())
+	require.Zero(t, resumes())
 
 	cancel()
 	require.Error(t, <-handled)
-	require.Equal(t, 1, consumer.resumeCount())
+	require.Equal(t, 1, resumes())
 }

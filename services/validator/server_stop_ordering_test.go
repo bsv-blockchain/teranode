@@ -356,6 +356,39 @@ func TestBackpressure_StopCancelsControllerGoroutine(t *testing.T) {
 		"each Start/Stop cycle must end its controller goroutine; the leak grew with the cycle count (%d cycles)", cycles)
 }
 
+// The controller pauses through the shared pauser, so its resume-on-exit cannot
+// undo a pause the checkpoint gate still holds.
+func TestBackpressure_ControllerCannotResumeOverTheCheckpointPause(t *testing.T) {
+	server, consumer, cleanup := backpressureLifecycleServer(t, "mvp-controller-shared-pauser", 5*time.Second)
+	defer cleanup()
+
+	server.armFetchPauser(consumer)
+	server.fetchPauser.set(fetchPauseCheckpoint, true)
+
+	held := func(reason string) bool {
+		server.fetchPauser.mu.Lock()
+		defer server.fetchPauser.mu.Unlock()
+
+		return server.fetchPauser.held[reason]
+	}
+
+	server.setConsumerContext(context.WithCancel(context.Background()))
+	server.startKafkaBackpressure(context.Background())
+
+	require.Eventually(t, func() bool { return held(fetchPauseBackpressure) }, 5*time.Second, 10*time.Millisecond,
+		"the controller pauses through the shared pauser")
+
+	server.cancelConsumer()
+
+	require.Eventually(t, func() bool { return !held(fetchPauseBackpressure) }, 5*time.Second, 10*time.Millisecond,
+		"resume-on-exit releases the controller's reason")
+	require.True(t, held(fetchPauseCheckpoint))
+
+	pauses, resumes := consumer.counts()
+	require.Equal(t, 1, pauses)
+	require.Zero(t, resumes, "the checkpoint pause still holds")
+}
+
 // TestBackpressure_ResumeOnExitRunsOnStop pins the consequence that mattered most:
 // with the controller bound to the wrong context its deferred resume-on-exit never
 // ran, so a shutdown while paused left the consumer paused. Bound to consumerCtx,

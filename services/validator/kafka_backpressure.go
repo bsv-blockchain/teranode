@@ -778,9 +778,9 @@ type fetchPauseReason struct {
 func (r fetchPauseReason) PauseAll()  { r.pauser.set(r.reason, true) }
 func (r fetchPauseReason) ResumeAll() { r.pauser.set(r.reason, false) }
 
-// fetchPauseFor returns the consumer lever for one pause reason. Start arms the
-// shared pauser before any owner asks; one made here covers a controller
-// started on its own, as tests do.
+// fetchPauseFor returns the consumer lever for one pause reason. NewServer arms
+// the shared pauser before any owner asks; one made here covers a server built
+// as a struct literal, as tests do.
 func (v *Server) fetchPauseFor(reason string) pausableConsumer {
 	if v.fetchPauser == nil {
 		v.fetchPauser = newFetchPauser(v.consumerClient)
