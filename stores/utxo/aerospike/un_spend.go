@@ -57,6 +57,7 @@ package aerospike
 
 import (
 	"context"
+	"math"
 
 	"github.com/bsv-blockchain/aerospike-client-go/v8"
 	"github.com/bsv-blockchain/teranode/errors"
@@ -135,6 +136,11 @@ func (s *Store) Unspend(ctx context.Context, spends []*utxo.Spend, flagAsLocked 
 func (s *Store) unspend(ctx context.Context, spends []*utxo.Spend, flagAsLocked ...bool) (failed int, err error) {
 	var errs []error
 
+	keepBelow, err := s.keepBelowHeight(ctx)
+	if err != nil {
+		return len(spends), err
+	}
+
 loop:
 	for i, spend := range spends {
 		select {
@@ -165,7 +171,7 @@ loop:
 				// commented change rather than a silent one.
 				s.logger.Debugf("un-spending utxo %s of tx %s:%d, spending data: %v", spend.UTXOHash.String(), spend.TxID.String(), spend.Vout, spend.SpendingData)
 
-				if err = s.unspendLua(ctx, spend); err != nil {
+				if err = s.unspendLua(ctx, spend, keepBelow); err != nil {
 					failed++
 
 					errs = append(errs, err)
@@ -201,7 +207,10 @@ loop:
 // Metrics:
 //   - prometheusUtxoMapReset: Successful unspends
 //   - prometheusUtxoMapErrors: Failed operations
-func (s *Store) unspendLua(ctx context.Context, spend *utxo.Spend) error {
+//
+// keepBelow is the optional keepBelowHeight argument of the Lua function: a spend recorded at a
+// lower height stays, and the call still succeeds (see keepBelowHeight). 0 sends no argument.
+func (s *Store) unspendLua(ctx context.Context, spend *utxo.Spend, keepBelow uint32) error {
 	policy := util.GetAerospikeWritePolicy(s.settings, 0)
 
 	keySource := uaerospike.CalculateKeySource(spend.TxID, spend.Vout, s.utxoBatchSize)
@@ -231,13 +240,19 @@ func (s *Store) unspendLua(ctx context.Context, spend *utxo.Spend) error {
 		return errors.NewProcessingError("[Unspend] SpendingData is required for %s:%d", spend.TxID, spend.Vout)
 	}
 
-	ret, aErr := s.executeTeranodeOp(policy, key, subOpUnspend, "unspend",
+	args := []any{
 		int(offset),                // vout adjusted for utxoBatchSize
 		spend.UTXOHash[:],          // utxo hash
 		spend.SpendingData.Bytes(), // expected stored spending data (mandatory ownership check; #766)
 		int(s.GetBlockHeight()),
 		s.settings.GetUtxoStoreSpentDeleteRetention(),
-	)
+	}
+
+	if keepBelow > 0 {
+		args = append(args, int(keepBelow))
+	}
+
+	ret, aErr := s.executeTeranodeOp(policy, key, subOpUnspend, "unspend", args...)
 	if aErr != nil {
 		if e, ok := aErr.(*aerospike.AerospikeError); ok {
 			prometheusUtxoMapErrors.WithLabelValues("Reset", e.ResultCode.String()).Inc()
@@ -251,6 +266,10 @@ func (s *Store) unspendLua(ctx context.Context, spend *utxo.Spend) error {
 	if err != nil {
 		prometheusUtxoMapErrors.WithLabelValues("Reset", "error parsing response").Inc()
 		return errors.NewProcessingError("[unspend][%s] error parsing response (value %s): %s", describeUTXOSpend(spend), describeAerospikeValue(ret), err.Error(), err)
+	}
+
+	if res.Status == LuaStatusOK && res.Kept {
+		s.logger.Warnf("[unspend][%s] kept the spend of vout %d: it was recorded before the record being rolled back", spend.TxID.String(), spend.Vout)
 	}
 
 	if res.Status == LuaStatusOK {
@@ -277,12 +296,62 @@ func (s *Store) unspendLua(ctx context.Context, spend *utxo.Spend) error {
 			return errors.NewNotFoundError("output %s:%d not found", spend.TxID, spend.Vout)
 		}
 
+		if res.ErrorCode == LuaErrorCodeUtxoNotFound {
+			return errors.NewTxNotFoundError("[unspend][%s] UTXO not found for vout %d: %s", spend.TxID, spend.Vout, res.Message)
+		}
+
+		if res.ErrorCode == LuaErrorCodeUtxoHashMismatch {
+			return errors.NewUtxoHashMismatchError("[unspend][%s] UTXO hash mismatch for vout %d: %s", spend.TxID, spend.Vout, res.Message)
+		}
+
 		return errors.NewStorageError("error in aerospike unspend record: %s", res.Message)
 	}
 
-	prometheusUtxoMapReset.Inc()
+	if !res.Kept {
+		prometheusUtxoMapReset.Inc()
+	}
 
 	return nil
+}
+
+// keepBelowHeight returns the keepBelowHeight argument of the unspends that run under ctx: the
+// height below which a recorded spend stays (utxo.KeepBelowHeight), or 0 when ctx carries no
+// create-first reversal guard. The store reads the unminedSince of the tentative record being
+// rolled back, which is the height the record was created at. A record that is gone, or one that
+// carries none, leaves the age rule alone to decide. A read that fails fails the unspend, so no
+// spend is cleared that the guard could not judge.
+func (s *Store) keepBelowHeight(ctx context.Context) (uint32, error) {
+	guard, ok := utxo.ReversalGuardFrom(ctx)
+	if !ok || guard.Record == nil {
+		return 0, nil
+	}
+
+	retention := s.settings.GetUtxoStoreBlockHeightRetention()
+	if retention == 0 {
+		return 0, nil
+	}
+
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+
+	key, aErr := aerospike.NewKey(s.namespace, s.setName, uaerospike.CalculateKeySource(guard.Record, 0, s.utxoBatchSize))
+	if aErr != nil {
+		return 0, errors.NewProcessingError("[unspend][%s] error in aerospike NewKey", guard.Record.String(), aErr)
+	}
+
+	state, err := s.readCreatingState(key)
+	if err != nil {
+		return 0, errors.NewStorageError("[unspend][%s] cannot read the height of the record being rolled back", guard.Record.String(), err)
+	}
+
+	var recordHeight uint32
+
+	if state.hasUnminedSince && state.unminedSince > 0 {
+		recordHeight = uint32(min(state.unminedSince, math.MaxUint32)) //nolint:gosec // bounded by the min
+	}
+
+	return utxo.KeepBelowHeight(recordHeight, max(s.GetBlockHeight(), guard.CallHeight), retention), nil
 }
 
 // txa & txb both spending txp

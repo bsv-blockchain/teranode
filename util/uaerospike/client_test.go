@@ -705,3 +705,80 @@ func TestMockAerospikeClient_CompleteCoverage(t *testing.T) {
 		assert.Nil(t, mockError.Unwrap())
 	})
 }
+
+// A write that must not start after a deadline carries only the time that is left, on every send.
+func TestBatchPolicyBefore(t *testing.T) {
+	policy := aerospike.NewBatchPolicy()
+	policy.TotalTimeout = 5 * time.Minute
+	policy.SocketTimeout = time.Minute
+
+	bounded, err := batchPolicyBefore(policy, time.Now().Add(2*time.Second))
+	require.Nil(t, err)
+	require.LessOrEqual(t, bounded.TotalTimeout, 2*time.Second)
+	require.Greater(t, bounded.TotalTimeout, time.Second)
+	require.LessOrEqual(t, bounded.SocketTimeout, 2*time.Second)
+	require.Equal(t, 5*time.Minute, policy.TotalTimeout, "the policy of the caller is not changed, so a repeat reads the time left again")
+
+	unlimited := aerospike.NewBatchPolicy()
+	unlimited.TotalTimeout = 0
+	unlimited.SocketTimeout = 0
+
+	bounded, err = batchPolicyBefore(unlimited, time.Now().Add(2*time.Second))
+	require.Nil(t, err)
+	require.Greater(t, bounded.TotalTimeout, time.Duration(0), "a policy with no timeout gets the time left")
+	require.Greater(t, bounded.SocketTimeout, time.Duration(0))
+
+	roomy, err := batchPolicyBefore(policy, time.Now().Add(time.Hour))
+	require.Nil(t, err)
+	require.Equal(t, 5*time.Minute, roomy.TotalTimeout, "a deadline further away than the timeout changes nothing")
+
+	_, err = batchPolicyBefore(policy, time.Now())
+	require.NotNil(t, err)
+	require.True(t, err.Matches(types.TIMEOUT))
+}
+
+// A batch whose deadline has passed is not sent: the call returns before it touches the client.
+func TestBatchOperateBefore_SendsNothingAfterTheDeadline(t *testing.T) {
+	c := &Client{}
+
+	answered, err := c.BatchOperateBefore(time.Now().Add(-time.Second), aerospike.NewBatchPolicy(), nil)
+	require.NotNil(t, err)
+	require.True(t, err.Matches(types.TIMEOUT))
+	require.False(t, answered, "the caller must be able to tell a refusal from an answer of the server")
+}
+
+// A repeat of an overloaded batch that the deadline refuses is the refusal of this client. The only
+// answer of the server was the overload, so the caller must not read the TIMEOUT as one.
+func TestBatchOperateBefore_ARepeatRefusedForTheDeadlineIsNotAnAnswerOfTheServer(t *testing.T) {
+	c := newOverloadTestClient(time.Second, time.Millisecond, time.Millisecond)
+
+	deadline := time.Now().Add(20 * time.Millisecond)
+	sends := 0
+
+	answered, err := c.batchOperateBefore(deadline, aerospike.NewBatchPolicy(), newTestBatchRecords(t, 1), func(*aerospike.BatchPolicy, []aerospike.BatchRecordIfc) aerospike.Error {
+		sends++
+
+		// The answer comes back after the deadline, so a repeat has no time left.
+		time.Sleep(time.Until(deadline) + 5*time.Millisecond)
+
+		return overloadErr(types.DEVICE_OVERLOAD)
+	})
+
+	require.Equal(t, 1, sends, "no repeat starts after the deadline")
+	require.NotNil(t, err)
+	require.True(t, err.Matches(types.TIMEOUT))
+	require.False(t, answered, "the refusal of a repeat is not an answer of the server")
+}
+
+// A TIMEOUT that the server side of a send produced is an answer, and the caller counts it.
+func TestBatchOperateBefore_AFailedSendIsAnAnswerOfTheServer(t *testing.T) {
+	c := newOverloadTestClient(time.Second, time.Millisecond, time.Millisecond)
+
+	answered, err := c.batchOperateBefore(time.Now().Add(time.Minute), aerospike.NewBatchPolicy(), newTestBatchRecords(t, 1), func(*aerospike.BatchPolicy, []aerospike.BatchRecordIfc) aerospike.Error {
+		return overloadErr(types.TIMEOUT)
+	})
+
+	require.NotNil(t, err)
+	require.True(t, err.Matches(types.TIMEOUT))
+	require.True(t, answered)
+}

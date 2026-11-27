@@ -1922,14 +1922,9 @@ func (b *BlockAssembler) reloadValidatedHeights(ctx context.Context, txs []*utxo
 // by the caller.
 func (b *BlockAssembler) reloadValidatedHeight(ctx context.Context, tx *utxo.UnminedTransaction, tip uint32, blockHeights map[uint32]uint32) (uint32, error) {
 	if len(tx.BlockIDs) == 0 {
-		retention := b.settings.UtxoStore.UnminedTxRetention
-
 		unminedSince := uint32(max(tx.UnminedSince, 0)) //nolint:gosec // a block height
-		if unminedSince > 1 && (tip <= retention || unminedSince > tip-retention) {
-			return unminedSince, nil
-		}
 
-		return 0, nil
+		return utxo.UnminedValidatedHeight(unminedSince, tip, b.settings.UtxoStore.UnminedTxRetention), nil
 	}
 
 	var validatedHeight uint32
@@ -3858,7 +3853,7 @@ func (b *BlockAssembler) validateParentChain(
 			// Batch fetch all parent metadata at once
 			// Request only the fields we need for validation
 			err := b.utxoStore.BatchDecorate(ctx, unresolvedParents,
-				fields.BlockIDs, fields.UnminedSince, fields.Locked, fields.Conflicting)
+				fields.BlockIDs, fields.UnminedSince, fields.Locked, fields.Conflicting, fields.Creating)
 			if err != nil {
 				// Log the batch error but continue - individual errors are in UnresolvedMetaData
 				b.logger.Warnf("[BlockAssembler][validateParentChain] BatchDecorate error (will check individual results): %v", err)
@@ -3955,6 +3950,17 @@ func (b *BlockAssembler) validateParentChain(
 					if filteringEnabled {
 						conflictingDescendants[tx.Hash] = struct{}{}
 					}
+					break
+				}
+
+				if parentMeta.Creating {
+					// Parent is mid create-first flight: its own input spends are
+					// unconfirmed, so this child cannot be restored yet. Reject without
+					// marking conflicting; recovery finalizes the parent and the next
+					// restore picks the child up.
+					allParentsValid = false
+					invalidReason = fmt.Sprintf("parent tx %s is still being created", parentTxID.String())
+					b.logger.Warnf("[BlockAssembler][validateParentChain] Transaction %s has invalid parent: %s", tx.Hash.String(), invalidReason)
 					break
 				}
 

@@ -677,6 +677,11 @@ func (s *Store) getTxFromBins(bins aerospike.BinMap) (tx *bt.Tx, err error) {
 // The function handles field dependencies such as:
 //   - TxInpoints requires Inputs and External fields
 //   - BlockIDs requires BlockHeights field
+//   - Creating and RollingBack require Hold, so that the record a rolled back create-first attempt
+//     leaves, which carries no transaction data, is read as its markers alone: Creating,
+//     RollingBack, Hold and the attempt token, whatever other fields were requested
+//   - Creating and RollingBack require Reversed, so that a rollback whose spends are reversed
+//     can be told apart without reading the transaction
 //   - Other abstracted field mappings
 //
 // This abstraction layer allows callers to request high-level fields without
@@ -724,6 +729,24 @@ func (s *Store) addAbstractedBins(bins []fields.FieldName) []fields.FieldName {
 	if slices.Contains(newBins, fields.Outputs) {
 		if !slices.Contains(newBins, fields.External) {
 			newBins = append(newBins, fields.External)
+		}
+	}
+
+	if slices.Contains(newBins, fields.Creating) || slices.Contains(newBins, fields.RollingBack) {
+		if !slices.Contains(newBins, fields.Hold) {
+			newBins = append(newBins, fields.Hold)
+		}
+
+		if !slices.Contains(newBins, fields.Reversed) {
+			newBins = append(newBins, fields.Reversed)
+		}
+
+		if !slices.Contains(newBins, fields.Finalizing) {
+			newBins = append(newBins, fields.Finalizing)
+		}
+
+		if !slices.Contains(newBins, fields.MarkOwed) {
+			newBins = append(newBins, fields.MarkOwed)
 		}
 	}
 
@@ -864,6 +887,15 @@ NEXT_BATCH_RECORD:
 		bins := batchRecord.BatchRec().Record.Bins
 
 		items[idx].Data = &meta.Data{}
+
+		if hold, _ := bins[fields.Hold.String()].(bool); hold {
+			items[idx].Data.Creating = true
+			items[idx].Data.RollingBack = true
+			items[idx].Data.Hold = true
+			items[idx].Data.Attempt, _ = bins[fields.Attempt.String()].([]byte)
+
+			continue NEXT_BATCH_RECORD
+		}
 
 		// If the tx is external, we need to fetch it from the external store...
 		var externalTx *bt.Tx
@@ -1138,6 +1170,32 @@ NEXT_BATCH_RECORD:
 				creatingBool, ok := bins[key.String()].(bool)
 				if ok {
 					items[idx].Data.Creating = creatingBool
+				}
+
+			case fields.RollingBack:
+				rollingBackBool, ok := bins[key.String()].(bool)
+				if ok {
+					items[idx].Data.RollingBack = rollingBackBool
+				}
+
+			case fields.Attempt:
+				if attempt, ok := bins[key.String()].([]byte); ok {
+					items[idx].Data.Attempt = attempt
+				}
+
+			case fields.Reversed:
+				if reversed, ok := bins[key.String()].(bool); ok {
+					items[idx].Data.Reversed = reversed
+				}
+
+			case fields.Finalizing:
+				if finalizing, ok := bins[key.String()].(bool); ok {
+					items[idx].Data.Finalizing = finalizing
+				}
+
+			case fields.MarkOwed:
+				if markOwed, ok := bins[key.String()].(bool); ok {
+					items[idx].Data.MarkOwed = markOwed
 				}
 
 			case fields.ConflictingChildren:
@@ -1783,6 +1841,10 @@ func (s *Store) sendOutpointBatch(batch []*batchOutpoint) {
 		// can be reconstructed with the era-aware unspendable rule keyed to their
 		// creation height, and so parent-output items can report it. The parent's
 		// inputs, version and locktime are not read: nothing on this path uses them.
+		// Hold is read so the data-less record that a rolled-back create-first attempt leaves for
+		// its txid answers as a missing parent, not as a record with no outputs bin.
+		// Hold is read so the data-less record that a rolled-back create-first attempt leaves for
+		// its txid answers as a missing parent, not as a record with no outputs bin.
 		bins := outpointBins
 		if laneShadow {
 			bins = outpointLaneBins
@@ -1837,6 +1899,15 @@ func (s *Store) sendOutpointBatch(batch []*batchOutpoint) {
 		}
 
 		bins := batchRecord.Record.Bins
+
+		// A hold carries no transaction. A child that spends its txid has no parent to read, which
+		// is what a missing record means to the caller, a definite not found that it can defer or
+		// park, and not a fault of this node's storage.
+		if hold, _ := bins[fields.Hold.String()].(bool); hold {
+			txErrors[previousTxHash] = errors.NewTxNotFoundError("transaction %s is held by a rolled back create-first attempt and carries no outputs", previousTxHash.String())
+
+			continue
+		}
 
 		var previousTx *bt.Tx
 
@@ -2549,8 +2620,8 @@ func (s *Store) sendGetBatch(batch []*batchGetItem) {
 // the parent's own lane position comes in the same read, for the validator to copy onto the child,
 // and its coinbase flag, for the lanes shadow (utxo.ParentOutput.IsCoinbase).
 var (
-	outpointBins     = []fields.FieldName{fields.Outputs, fields.External, fields.BlockHeights}
-	outpointLaneBins = []fields.FieldName{fields.Outputs, fields.External, fields.BlockHeights, fields.LanePosition, fields.IsCoinbase}
+	outpointBins     = []fields.FieldName{fields.Outputs, fields.External, fields.BlockHeights, fields.Hold}
+	outpointLaneBins = []fields.FieldName{fields.Outputs, fields.External, fields.BlockHeights, fields.Hold, fields.LanePosition, fields.IsCoinbase}
 )
 
 // lanePositionFromBins is the record's own lane position, and whether it has a readable one. The

@@ -76,6 +76,7 @@ func TestLaneSpendWroteNothing(t *testing.T) {
 		{"a refusal wrapped in a storage error may have written", []*Spend{{Err: errors.NewStorageError("disk", errors.NewTxNotFoundError("missing"))}}, false},
 		{"the context ending may have written", []*Spend{{Err: errors.NewContextCanceledError("cancelled")}}, false},
 		{"an invalid spend is not on the list", []*Spend{{Err: errors.NewUtxoError("invalid spend")}}, false},
+		{"the refusal of a replay of a pruned transaction is made before any write", []*Spend{{Err: errors.NewUtxoSpendingTxPrunedError("pruned")}}, true},
 	}
 
 	for _, c := range cases {
@@ -204,7 +205,7 @@ func TestSequentialSpendAndCreateRecordsItsBurns(t *testing.T) {
 
 		before := burnCount("seqstore", LaneBurnSpendRejected, CallerValidator)
 
-		_, _, err := SequentialSpendAndCreate(context.Background(), ulogger.TestLogger{}, s, tx, 100,
+		_, _, err := SequentialSpendAndCreate(context.Background(), ulogger.TestLogger{}, s, tx, 100, false,
 			WithCaller(CallerValidator))
 		require.Error(t, err)
 
@@ -223,7 +224,7 @@ func TestSequentialSpendAndCreateRecordsItsBurns(t *testing.T) {
 
 		before := burnCount("seqstore", LaneBurnError, CallerValidator)
 
-		_, _, err := SequentialSpendAndCreate(context.Background(), ulogger.TestLogger{}, s, tx, 100,
+		_, _, err := SequentialSpendAndCreate(context.Background(), ulogger.TestLogger{}, s, tx, 100, false,
 			WithCaller(CallerValidator))
 		require.ErrorIs(t, err, errors.ErrUtxoError)
 
@@ -240,7 +241,7 @@ func TestSequentialSpendAndCreateRecordsItsBurns(t *testing.T) {
 
 		before := burnCount("seqstore", LaneBurnExists, CallerBlockAssembly)
 
-		_, _, err := SequentialSpendAndCreate(context.Background(), ulogger.TestLogger{}, s, tx, 100,
+		_, _, err := SequentialSpendAndCreate(context.Background(), ulogger.TestLogger{}, s, tx, 100, false,
 			WithCreateOnly(), WithCaller(CallerBlockAssembly))
 		require.ErrorIs(t, err, errors.ErrTxExists)
 
@@ -256,7 +257,7 @@ func TestSequentialSpendAndCreateRecordsItsBurns(t *testing.T) {
 
 		before := burnCount("seqstore", LaneBurnOutcomeUnknown, CallerValidator)
 
-		_, _, err := SequentialSpendAndCreate(context.Background(), ulogger.TestLogger{}, s, tx, 100,
+		_, _, err := SequentialSpendAndCreate(context.Background(), ulogger.TestLogger{}, s, tx, 100, false,
 			WithCreateOnly(), WithCaller(CallerValidator))
 		require.True(t, IsCreateOutcomeUnknown(err))
 

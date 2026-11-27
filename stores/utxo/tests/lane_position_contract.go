@@ -1072,7 +1072,14 @@ func LanePositionReturns(t *testing.T, db utxostore.Store, store string, rules L
 func LanePositionInUnminedIterator(t *testing.T, db utxostore.Store, shadow bool) {
 	ctx := context.Background()
 
-	w := BuildMultiWorkload(t, 0xf4, 1, 3)
+	// The two modes run on one shared server, one after the other, so each builds roots of its own:
+	// a second run over the first's roots would be refused as a duplicate.
+	seed := byte(0xf4)
+	if !shadow {
+		seed = 0xf8
+	}
+
+	w := BuildMultiWorkload(t, seed, 1, 3)
 
 	positions := []uint64{lane.Pack(7, 61_000), widest, lane.None}
 

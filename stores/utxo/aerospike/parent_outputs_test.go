@@ -144,3 +144,35 @@ func TestParentOutputsForValidationTruncatedInlineOutputsBin(t *testing.T) {
 	require.NoError(t, answers[1].Err, "a short list is read as a parent without that output, not as a fault")
 	require.Equal(t, utxo.ParentOutputNoSuchIndex, answers[1].Status)
 }
+
+// The data-less record that a rolled-back create-first attempt leaves for its txid carries no
+// outputs bin. A child that spends it must see a missing parent, which it can defer or park, and
+// not a fault of this node's storage, which makes ingest answer 500 and drops the child.
+func TestParentOutputsForValidationOfAHoldIsAMissingParent(t *testing.T) {
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings := test.CreateBaseTestSettings(t)
+
+	client, store, ctx, deferFn := initAerospike(t, tSettings, logger)
+	t.Cleanup(deferFn)
+	cleanDB(t, client)
+
+	_, err := store.Create(ctx, tests.ParentTx, 100)
+	require.NoError(t, err)
+
+	held := spendableChildTx(t, tests.ParentTx, 0)
+	held.Version = 91
+	rolledBackHold(t, ctx, store, held)
+
+	answers, err := store.ParentOutputsForValidation(ctx, []utxo.Outpoint{
+		{TxID: *held.TxIDChainHash(), Vout: 0},
+		{TxID: *tests.ParentTx.TxIDChainHash(), Vout: 0},
+	})
+	require.NoError(t, err)
+	require.Len(t, answers, 2)
+
+	require.NoError(t, answers[0].Err, "a hold is not a fault of the store")
+	require.Equal(t, utxo.ParentOutputTxNotFound, answers[0].Status)
+
+	require.NoError(t, answers[1].Err, "an ordinary parent next to it is still answered")
+	require.NotEqual(t, utxo.ParentOutputTxNotFound, answers[1].Status)
+}

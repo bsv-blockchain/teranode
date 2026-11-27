@@ -12,6 +12,7 @@ import (
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 )
 
 // Simple tests focused on achieving code coverage
@@ -186,4 +187,21 @@ func TestBackdatedUnminedSince(t *testing.T) {
 		cutoff := h - retention
 		assert.LessOrEqual(t, BackdatedUnminedSince(h, retention), cutoff, "height %d", h)
 	}
+}
+
+// UnminedValidatedHeight is the height an unmined transaction with no block was validated at: its
+// unminedSince while that is a real height inside the retention of the tip, and 0 (unknown)
+// otherwise. A backdated unminedSince (BackdatedUnminedSince) is the tip less the retention, which
+// is outside the window, so a transaction a reorg moved back reads as unknown.
+func TestUnminedValidatedHeight(t *testing.T) {
+	const retention = uint32(144)
+
+	require.Equal(t, uint32(490), UnminedValidatedHeight(490, 500, retention), "inside the retention")
+	require.Equal(t, uint32(357), UnminedValidatedHeight(357, 500, retention), "one block inside the retention")
+	require.Equal(t, uint32(0), UnminedValidatedHeight(356, 500, retention), "exactly the tip less the retention is outside")
+	require.Equal(t, uint32(0), UnminedValidatedHeight(BackdatedUnminedSince(500, retention), 500, retention), "a backdated value is unknown")
+	require.Equal(t, uint32(0), UnminedValidatedHeight(0, 500, retention), "not stamped")
+	require.Equal(t, uint32(0), UnminedValidatedHeight(1, 500, retention), "1 is the floor of a backdated value")
+	require.Equal(t, uint32(2), UnminedValidatedHeight(2, 100, retention), "a tip within the retention of genesis keeps every real height")
+	require.Equal(t, uint32(0), UnminedValidatedHeight(1, 100, retention), "1 is never a real height")
 }

@@ -5,8 +5,11 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
+	"github.com/bsv-blockchain/aerospike-client-go/v8"
 	"github.com/bsv-blockchain/go-bt/v2"
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 )
 
@@ -33,6 +36,12 @@ func (s *Store) StopConflictingIndexSelfTest() {
 // writes, and clears it when given nil.
 func SetChildDAHBeforeWrite(f func()) {
 	childDAHBeforeWrite = f
+}
+
+// SetAfterChildAdoptionFailure installs the hook that runs after a create fails to give the surviving
+// pagination children its attempt token, and clears it when given nil.
+func SetAfterChildAdoptionFailure(f func()) {
+	afterChildAdoptionFailure = f
 }
 
 // UsesNativeOps reports whether the store engaged the native operate-path at start-up and still has it.
@@ -103,6 +112,41 @@ func (s *Store) ConflictWALFallbackScans() int64 {
 	return s.conflictWALScans.Load()
 }
 
+// FailChildAdoption makes the batch that gives surviving pagination children the attempt token
+// fail, and delegates every other batch to the real client. With batchLevel the batch call itself
+// returns the error, otherwise each record carries it. RestoreBatchOperate undoes it.
+func (s *Store) FailChildAdoption(batchLevel bool) {
+	failure := aerospike.ErrTimeout
+
+	s.batchOperateFn = func(policy *aerospike.BatchPolicy, records []aerospike.BatchRecordIfc) aerospike.Error {
+		if len(records) > 0 {
+			if bw, ok := records[0].(*aerospike.BatchWrite); ok && bw.Policy != nil && bw.Policy.RecordExistsAction == aerospike.UPDATE_ONLY {
+				if batchLevel {
+					return failure
+				}
+
+				for _, record := range records {
+					record.BatchRec().Err = failure
+				}
+
+				return nil
+			}
+		}
+
+		return s.client.BatchOperate(policy, records)
+	}
+}
+
+// RestoreBatchOperate removes the override that FailChildAdoption installed.
+func (s *Store) RestoreBatchOperate() {
+	s.batchOperateFn = nil
+}
+
+// SetBatcherWait sets how long a submitter waits for a batcher to deliver.
+func (s *Store) SetBatcherWait(d time.Duration) {
+	s.batcherWait = d
+}
+
 // RollbackIdempotentMatchesForTest runs the abort path's rollback for a failed
 // spend by tx whose only successful inputs were the given idempotent matches,
 // with an unwinnable sibling failure so no transient window suppresses it.
@@ -139,6 +183,24 @@ func (s *Store) ResolveSpendCompletionsForTest(ctx context.Context, tx *bt.Tx, s
 	res := s.resolveSpendCompletions(ctx, tx, items, false)
 
 	return res.spentSpends, res.succeeded
+}
+
+// SpenderState is the creating state of the record of a spender, as spenderOwnsSpend reads it.
+type SpenderState struct {
+	Absent          bool
+	Creating        bool
+	RollingBack     bool
+	Hold            bool
+	HasUnminedSince bool
+	UnminedSince    int
+}
+
+// SpenderOwnsSpend runs spenderOwnsSpend for a match recorded at recordedHeight.
+func SpenderOwnsSpend(st SpenderState, recordedHeight uint32, hasRecordedHeight bool) bool {
+	return spenderOwnsSpend(
+		creatingState{absent: st.Absent, creating: st.Creating, rollingBack: st.RollingBack, hold: st.Hold, hasUnminedSince: st.HasUnminedSince, unminedSince: st.UnminedSince},
+		&batchSpend{recordedHeight: recordedHeight, hasRecordedHeight: hasRecordedHeight},
+	)
 }
 
 // LeaveSharedClientOpenOnClose makes Close and CloseClient leave the process-wide client cache
@@ -195,4 +257,10 @@ func UsePrunerServiceForTest(t testing.TB) {
 		prunerServiceHolderMu.Unlock()
 		prunerServiceHolderCond.Broadcast()
 	})
+}
+
+// MarkFinalizingForTest runs the write that marks the master of a paginated create-first attempt
+// finalizing, which a finalize sends before it clears the first pagination child.
+func (s *Store) MarkFinalizingForTest(ctx context.Context, hash *chainhash.Hash, attempt, lease []byte) (bool, error) {
+	return s.markFinalizing(ctx, hash, attempt, lease)
 }

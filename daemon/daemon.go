@@ -35,6 +35,7 @@ import (
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
+	"github.com/bsv-blockchain/teranode/util/kafka"
 	"github.com/bsv-blockchain/teranode/util/servicemanager"
 	"github.com/bsv-blockchain/teranode/util/tracing"
 	"github.com/ordishs/gocore"
@@ -632,6 +633,11 @@ func (d *Daemon) closeStores(logger ulogger.Logger) {
 			logger.Errorf("error closing utxo store: %v", err)
 		}
 	}
+
+	// The store's recovery publisher may enqueue DELETEs until the store closes.
+	stopCtx, stopCancel := context.WithTimeout(context.Background(), util.DefaultBatcherDrainTimeout)
+	kafka.StopProducerCtx(stopCtx, logger, "utxo create-first txmeta", d.daemonStores.creatingConflictProducer)
+	stopCancel()
 
 	if txStoreToClose != nil {
 		logger.Debugf("closing tx store")

@@ -8,6 +8,7 @@ import (
 
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/services/blockassembly"
+	"github.com/bsv-blockchain/teranode/services/blockassembly/subtreeprocessor"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/blockvalidation"
 	"github.com/bsv-blockchain/teranode/services/p2p"
@@ -55,8 +56,9 @@ type Stores struct {
 	wrappers StoreWrappers
 	// rawUtxoStore and rawBlockchainStore are the stores before wrapping, so
 	// the test daemon's Crash can reach their database handles.
-	rawUtxoStore       utxostore.Store
-	rawBlockchainStore blockchainstore.Store
+	rawUtxoStore             utxostore.Store
+	creatingConflictProducer kafka.KafkaAsyncProducerI
+	rawBlockchainStore       blockchainstore.Store
 
 	// constructedClients retains every gRPC client the daemon constructs
 	// (both daemonStores singletons and the fresh-per-construction clients
@@ -111,6 +113,21 @@ func (d *Stores) GetUtxoStore(ctx context.Context, logger ulogger.Logger,
 			}
 
 			return nil, err
+		}
+	}
+
+	// Create-first recovery can run in any service using this shared store, including
+	// pruner and mined-status workers that have no txmeta producer of their own.
+	if aerospikeStore, ok := utxostore.As[*aerospike.Store](store); ok {
+		producer, producerErr := getKafkaTxmetaEvictionAsyncProducer(ctx, logger, appSettings)
+		if producerErr != nil {
+			_ = store.Close(ctx)
+			return nil, producerErr
+		}
+		if producer != nil {
+			producer.Start(ctx, make(chan *kafka.Message, 10_000))
+			aerospikeStore.SetCreatingConflictEvictor(subtreeprocessor.NewTxMetaEvictor(logger, producer).Evict)
+			d.creatingConflictProducer = producer
 		}
 	}
 

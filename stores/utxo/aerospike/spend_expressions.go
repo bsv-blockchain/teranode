@@ -373,8 +373,12 @@ func (s *Store) SpendMultiWithExpressions(ctx context.Context, batch []*batchSpe
 		return
 	}
 
-	batchPolicy := util.GetAerospikeBatchPolicy(s.settings)
-	if err := s.batchOperate(batchPolicy, batchRecords); err != nil {
+	writeCtx, cancelWrite := spendWriteContext(ctx, batch)
+	answered, err := s.batchOperateWithin(writeCtx, util.GetAerospikeBatchPolicy(s.settings), batchRecords)
+
+	cancelWrite()
+
+	if err != nil {
 		// complete is CAS-guarded: items already completed above (key-creation/
 		// validation failures) are no-ops here, so this safely covers every
 		// remaining item without racing or double-signalling.
@@ -382,7 +386,11 @@ func (s *Store) SpendMultiWithExpressions(ctx context.Context, batch []*batchSpe
 			bItem.complete(errors.NewStorageError("[SPEND_BATCH_EXP] failed to batch spend", err))
 		}
 
-		s.recordSpendOutcome(err, takeSlots(batch))
+		if answered {
+			s.recordSpendOutcome(err, takeSlots(batch))
+		} else {
+			s.releaseSlots(takeSlots(batch))
+		}
 
 		return
 	}

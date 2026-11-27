@@ -204,6 +204,10 @@ const (
 // utxostore_utxoBatchSize, with nothing in the node to recreate a pagination
 // child. Unreachable residue is preferred over wrongly reachable residue.
 func (s *Store) DeleteComplete(ctx context.Context, hash *chainhash.Hash) error {
+	return s.deleteComplete(ctx, hash)
+}
+
+func (s *Store) deleteComplete(ctx context.Context, hash *chainhash.Hash) error {
 	// The operator's reader policy, as every other record read in this store uses
 	// (get.go) and as the child pass below already does for its batch policy. The Go
 	// client does not observe ctx on this call, so the policy's timeout is the only
@@ -233,6 +237,7 @@ func (s *Store) DeleteComplete(ctx context.Context, hash *chainhash.Hash) error 
 	}
 
 	childCount := 0
+
 	if masterRecord != nil && masterRecord.Bins != nil {
 		if v, ok := masterRecord.Bins[fields.TotalExtraRecs.String()].(int); ok {
 			childCount = v
@@ -241,30 +246,78 @@ func (s *Store) DeleteComplete(ctx context.Context, hash *chainhash.Hash) error 
 
 	// 1. Delete the master record first, so any failure from here on leaves nothing
 	// that can be read back, enumerated or mined.
-	if err := s.Delete(ctx, hash); err != nil {
+	if err := s.deleteMasterWithNoSpender(key, hash); err != nil {
 		return err
 	}
 
+	return s.deleteCompleteTail(ctx, hash, childCount)
+}
+
+// deleteMasterWithNoSpender deletes the master record of a complete delete, and refuses while a
+// spend lease on it is live. A finalize removes only the lease of its caller, so a roll-forward
+// that took a lease while the record was creating, and has not released it, may still spend the
+// inputs of the transaction. A delete under it would be followed by an unspend, and the spend of
+// that roll-forward would then name a transaction that no longer exists. The server evaluates the
+// filter inside the delete, and no lease is granted on a record that is final, so no spender can
+// start after it. A refusal is an error and leaves the record in place.
+func (s *Store) deleteMasterWithNoSpender(key *aerospike.Key, hash *chainhash.Hash) error {
+	policy := util.GetAerospikeWritePolicy(s.settings, 0)
+	policy.FilterExpression = s.noLiveSpendLease(time.Now().Unix())
+
+	_, err := s.client.Delete(policy, key)
+	if err == nil {
+		prometheusUtxoMapDelete.Inc()
+
+		return nil
+	}
+
+	if errors.Is(err, aerospike.ErrKeyNotFound) {
+		return nil
+	}
+
+	if isFilteredOut(err) {
+		return errors.NewProcessingError("complete delete of %s refused: a spender of the transaction holds a live spend lease, the record is left in place", hash.String())
+	}
+
+	if e, ok := err.(*aerospike.AerospikeError); ok {
+		prometheusUtxoMapErrors.WithLabelValues("DeleteComplete", e.ResultCode.String()).Inc()
+	} else {
+		prometheusUtxoMapErrors.WithLabelValues("DeleteComplete", "unknown").Inc()
+	}
+
+	return errors.NewStorageError("error in aerospike delete key", err)
+}
+
+// deleteCompleteTail removes the pagination children and external blob(s) of a
+// transaction whose master record has already been deleted.
+func (s *Store) deleteCompleteTail(ctx context.Context, hash *chainhash.Hash, childCount int) error {
 	// 2. Delete pagination children (records 1..childCount).
 	if childCount > 0 {
-		if err := s.deleteChildRecordsWithRetry(ctx, hash, childCount); err != nil {
+		if err := s.deleteChildRecordsWithRetry(ctx, hash, childCount, nil); err != nil {
 			return errors.NewStorageError("complete delete removed the master record for %s but the pagination child pass did not complete; some of the %d child record(s) it covers may survive as locked, unspendable orphans until a create of the same transaction adopts them, so a manual repair must walk records 1..%d", hash.String(), childCount, childCount, err)
 		}
 	}
 
-	// 3. Delete external blob(s). Del treats a missing blob as success, so this is
-	// idempotent. One attempt only — an orphan blob carries no UTXO semantics, and a
-	// later create of the same transaction tolerates it rather than rewriting it: the
-	// external Set in create.go moves on when it gets ErrBlobAlreadyExists, so the
-	// surviving blob is kept. Same txid means same bytes, so keeping it is harmless.
-	if s.externalStore != nil {
-		if err := s.externalStore.Del(ctx, hash[:], fileformat.FileTypeTx); err != nil {
-			return errors.NewStorageError("error deleting external tx blob for complete delete", err)
-		}
+	// 3. Delete external blob(s).
+	return s.deleteExternalBlobs(ctx, hash)
+}
 
-		if err := s.externalStore.Del(ctx, hash[:], fileformat.FileTypeOutputs); err != nil {
-			return errors.NewStorageError("error deleting external outputs blob for complete delete", err)
-		}
+// deleteExternalBlobs deletes the external blob(s) of a transaction. Del treats a missing blob as
+// success, so this is idempotent. One attempt only — an orphan blob carries no UTXO semantics, and
+// a later create of the same transaction tolerates it rather than rewriting it: the external Set
+// in create.go moves on when it gets ErrBlobAlreadyExists, so the surviving blob is kept. Same
+// txid means same bytes, so keeping it is harmless.
+func (s *Store) deleteExternalBlobs(ctx context.Context, hash *chainhash.Hash) error {
+	if s.externalStore == nil {
+		return nil
+	}
+
+	if err := s.externalStore.Del(ctx, hash[:], fileformat.FileTypeTx); err != nil {
+		return errors.NewStorageError("error deleting external tx blob for complete delete", err)
+	}
+
+	if err := s.externalStore.Del(ctx, hash[:], fileformat.FileTypeOutputs); err != nil {
+		return errors.NewStorageError("error deleting external outputs blob for complete delete", err)
 	}
 
 	return nil
@@ -275,7 +328,7 @@ func (s *Store) DeleteComplete(ctx context.Context, hash *chainhash.Hash) error 
 // so this is the last point at which the children can be found by count; the
 // wait between attempts selects on ctx.Done() so the caller's budget really cuts
 // it short.
-func (s *Store) deleteChildRecordsWithRetry(ctx context.Context, hash *chainhash.Hash, childCount int) error {
+func (s *Store) deleteChildRecordsWithRetry(ctx context.Context, hash *chainhash.Hash, childCount int, filter *aerospike.Expression) error {
 	var lastErr error
 
 	for attempt := 0; attempt < deleteCompleteChildAttempts; attempt++ {
@@ -291,7 +344,7 @@ func (s *Store) deleteChildRecordsWithRetry(ctx context.Context, hash *chainhash
 			}
 		}
 
-		if err := s.deleteChildRecords(hash, childCount); err != nil {
+		if err := s.deleteChildRecords(hash, childCount, filter); err != nil {
 			lastErr = err
 			continue
 		}
@@ -306,9 +359,10 @@ func (s *Store) deleteChildRecordsWithRetry(ctx context.Context, hash *chainhash
 // transaction. It follows the child-key walk precedent used by
 // SetDAHForChildRecordsMulti (children start at index 1). A missing child record
 // is not an error — the cascade is idempotent.
-func (s *Store) deleteChildRecords(hash *chainhash.Hash, childCount int) error {
+func (s *Store) deleteChildRecords(hash *chainhash.Hash, childCount int, filter *aerospike.Expression) error {
 	batchRecords := make([]aerospike.BatchRecordIfc, 0, childCount)
 	deletePolicy := aerospike.NewBatchDeletePolicy()
+	deletePolicy.FilterExpression = filter
 
 	for i := uint32(1); i <= uint32(childCount); i++ { // nolint: gosec // children start at 1
 		keySource := uaerospike.CalculateKeySourceInternal(hash, i)
@@ -329,8 +383,9 @@ func (s *Store) deleteChildRecords(hash *chainhash.Hash, childCount int) error {
 
 	for _, br := range batchRecords {
 		if recErr := br.BatchRec().Err; recErr != nil {
-			// A missing child is not an error — the cascade is idempotent.
-			if errors.Is(recErr, aerospike.ErrKeyNotFound) {
+			// A missing child is not an error — the cascade is idempotent. A child the
+			// filter refused belongs to another attempt and is left alone.
+			if errors.Is(recErr, aerospike.ErrKeyNotFound) || isFilteredOut(recErr) {
 				continue
 			}
 

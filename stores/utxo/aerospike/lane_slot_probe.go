@@ -67,7 +67,7 @@ func (s *Store) probeLaneSlotWrites(ctx context.Context) bool {
 		return warn("utxo hash: %v", err)
 	}
 
-	bins, err := s.GetBinsToStore(tx, 1, nil, nil, nil, false, txHash, false, false, false, lane.None, nil)
+	bins, err := s.GetBinsToStore(tx, 1, nil, nil, nil, false, txHash, false, false, false, false, lane.None, nil)
 	if err != nil || len(bins) != 1 {
 		return warn("record: %v", err)
 	}

@@ -1370,6 +1370,27 @@ func TestTxMetaCache_ConflictingTxHashesAsksTheStore(t *testing.T) {
 	}
 }
 
+func TestTxMetaCache_CreateFirstDelegates(t *testing.T) {
+	ctx := context.Background()
+
+	utxoStoreURL, err := url.Parse("sqlitememory:///cf_delegates")
+	require.NoError(t, err)
+
+	utxoStore, err := sql.New(ctx, ulogger.TestLogger{}, test.CreateBaseTestSettings(t), utxoStoreURL)
+	require.NoError(t, err)
+
+	c, err := NewTxMetaCache(ctx, settings.NewSettings(), ulogger.TestLogger{}, utxoStore, Unallocated)
+	require.NoError(t, err)
+
+	// Delegates to the wrapped SQL store (which is spend-first / no-op).
+	require.False(t, c.SupportsCreateFirst())
+	require.NoError(t, c.FinalizeTransaction(ctx, &bt.Tx{}, nil, nil))
+
+	hashes, err := c.QueryStaleCreatingTxs(ctx, 100, 0)
+	require.NoError(t, err)
+	require.Nil(t, hashes)
+}
+
 // GetMeta reads no lane position, so at shadow a miss caches nothing: the entry would be a hit
 // without the position, and the subtree's lane bitmaps would leave the transaction out. At off it
 // caches the entry as before. An entry already cached with its position keeps it.
@@ -1435,4 +1456,40 @@ func Test_txMetaCache_GetMetaAtShadowCachesNoEntryWithoutAPosition(t *testing.T)
 			require.Equal(t, lane.Pack(8, 14), got.LanePosition)
 		})
 	}
+}
+
+// guardRecorder is a store whose Unspend records the reversal guard of its context.
+type guardRecorder struct {
+	*nullstore.NullStore
+
+	guard utxo.ReversalGuard
+	calls int
+}
+
+func (g *guardRecorder) Unspend(ctx context.Context, _ []*utxo.Spend, _ ...bool) error {
+	g.guard, _ = utxo.ReversalGuardFrom(ctx)
+	g.calls++
+
+	return nil
+}
+
+// The cache hands the context of Unspend on unchanged, so a create-first reversal still reaches the
+// store that reverses the spends with the record it undoes and the call height.
+func TestTxMetaCache_UnspendKeepsTheReversalGuard(t *testing.T) {
+	ns, err := nullstore.NewNullStore()
+	require.NoError(t, err)
+
+	inner := &guardRecorder{NullStore: ns}
+
+	c, err := NewTxMetaCache(context.Background(), settings.NewSettings(), ulogger.TestLogger{}, inner, Unallocated)
+	require.NoError(t, err)
+
+	hash := chainhash.Hash{7}
+	ctx := utxo.WithReversalCallHeight(utxo.WithReversedRecord(context.Background(), &hash), 321)
+
+	require.NoError(t, c.Unspend(ctx, nil))
+	require.Equal(t, 1, inner.calls)
+	require.NotNil(t, inner.guard.Record)
+	require.Equal(t, hash, *inner.guard.Record)
+	require.Equal(t, uint32(321), inner.guard.CallHeight)
 }

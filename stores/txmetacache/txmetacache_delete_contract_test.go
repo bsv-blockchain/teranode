@@ -4,7 +4,9 @@ import (
 	"context"
 	"net/url"
 	"testing"
+	"time"
 
+	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/settings"
@@ -157,4 +159,335 @@ func TestTxMetaCache_DeleteComplete_EvictsEvenWhenTheDurableDeleteFails(t *testi
 
 	_, found = cache.GetMetaCached(ctx, hash)
 	require.False(t, found, "the entry must be evicted even though the durable delete failed")
+}
+
+// TestTxMetaCache_BeginCreateFirstRollback_DelegatesAndEvicts pins that the marker call reaches
+// the underlying store and drops the cache entry whatever the store answers: a cached entry
+// would keep describing the record as an ordinary creating one after it is marked.
+func TestTxMetaCache_BeginCreateFirstRollback_DelegatesAndEvicts(t *testing.T) {
+	ctx := context.Background()
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings := test.CreateBaseTestSettings(t)
+
+	utxoStoreURL, err := url.Parse("sqlitememory:///txmetacache_begin_rollback_evicts")
+	require.NoError(t, err)
+
+	underlying, err := sql.New(ctx, logger, tSettings, utxoStoreURL)
+	require.NoError(t, err)
+
+	beginErr := errors.NewStorageError("marking the record failed")
+	marking := &beginRollbackStore{Store: underlying, began: true, err: beginErr}
+
+	c, err := NewTxMetaCache(ctx, settings.NewSettings(), logger, marking, Unallocated)
+	require.NoError(t, err)
+
+	cache, ok := c.(*TxMetaCache)
+	require.True(t, ok)
+
+	hash := testHash(18)
+	require.NoError(t, cache.SetCache(&hash, testMeta()))
+
+	_, found := cache.GetMetaCached(ctx, hash)
+	require.True(t, found, "precondition: the entry is in the cache")
+
+	began, err := cache.BeginCreateFirstRollback(ctx, &hash, nil)
+	require.ErrorIs(t, err, errors.ErrStorageError, "the underlying error is propagated")
+	require.True(t, began, "the underlying answer is propagated")
+	require.Equal(t, 1, marking.calls)
+
+	_, found = cache.GetMetaCached(ctx, hash)
+	require.False(t, found, "the entry must be evicted even though the marker call failed")
+}
+
+// beginRollbackStore decorates a REAL utxo.Store and scripts BeginCreateFirstRollback.
+type beginRollbackStore struct {
+	utxo.Store
+
+	began bool
+	err   error
+	calls int
+}
+
+func (s *beginRollbackStore) BeginCreateFirstRollback(_ context.Context, _ *chainhash.Hash, _ []byte) (bool, error) {
+	s.calls++
+
+	return s.began, s.err
+}
+
+// TestTxMetaCache_HoldMethods_DelegateAndEvict pins that ending a rollback, taking a hold and clearing
+// a hold reach the underlying store and drop the cache entry, which would otherwise keep describing
+// the record as it was before the call.
+func TestTxMetaCache_HoldMethods_DelegateAndEvict(t *testing.T) {
+	ctx := context.Background()
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings := test.CreateBaseTestSettings(t)
+
+	utxoStoreURL, err := url.Parse("sqlitememory:///txmetacache_hold_methods_evict")
+	require.NoError(t, err)
+
+	underlying, err := sql.New(ctx, logger, tSettings, utxoStoreURL)
+	require.NoError(t, err)
+
+	c, err := NewTxMetaCache(ctx, settings.NewSettings(), logger, underlying, Unallocated)
+	require.NoError(t, err)
+
+	cache, ok := c.(*TxMetaCache)
+	require.True(t, ok)
+
+	calls := map[string]func(hash *chainhash.Hash) error{
+		"end": func(hash *chainhash.Hash) error { return cache.EndCreateFirstRollback(ctx, hash, []byte{1}) },
+		"take": func(hash *chainhash.Hash) error {
+			took, takeErr := cache.TakeRollbackHold(ctx, hash, []byte{1})
+			require.False(t, took, "a store with no tentative state has nothing to take")
+
+			return takeErr
+		},
+		"clear": func(hash *chainhash.Hash) error {
+			cleared, clearErr := cache.ClearCreateFirstHold(ctx, hash, true)
+			require.False(t, cleared, "a store with no tentative state leaves no hold")
+
+			return clearErr
+		},
+	}
+
+	seed := 30
+
+	for name, call := range calls {
+		hash := testHash(seed)
+		seed++
+
+		require.NoError(t, cache.SetCache(&hash, testMeta()))
+
+		_, found := cache.GetMetaCached(ctx, hash)
+		require.True(t, found, "%s: precondition: the entry is in the cache", name)
+
+		require.NoError(t, call(&hash), name)
+
+		_, found = cache.GetMetaCached(ctx, hash)
+		require.False(t, found, "%s: the entry must be evicted", name)
+	}
+
+	require.NoError(t, cache.ReleaseRollbackHold(ctx, &chainhash.Hash{}, []byte{1}))
+}
+
+// spendLeaseStore decorates a REAL utxo.Store and scripts the three spend lease methods.
+type spendLeaseStore struct {
+	utxo.Store
+
+	lease   []byte
+	err     error
+	calls   []string
+	freed   []byte
+	attempt []byte
+}
+
+func (s *spendLeaseStore) TakeSpendLease(_ context.Context, _ *chainhash.Hash, attempt []byte) ([]byte, bool, error) {
+	s.calls = append(s.calls, "take")
+	s.attempt = attempt
+
+	return s.lease, true, s.err
+}
+
+func (s *spendLeaseStore) ReleaseSpendLease(_ context.Context, _ *chainhash.Hash, _, lease []byte) error {
+	s.calls = append(s.calls, "release")
+	s.freed = lease
+
+	return s.err
+}
+
+func (s *spendLeaseStore) SpendLeasesLive(_ context.Context, _ *chainhash.Hash, _ []byte) (bool, error) {
+	s.calls = append(s.calls, "live")
+
+	return true, s.err
+}
+
+// TestTxMetaCache_SpendLeaseMethods_Delegate pins that the three spend lease calls reach the
+// underlying store with their arguments and return its answers unchanged.
+func TestTxMetaCache_SpendLeaseMethods_Delegate(t *testing.T) {
+	ctx := context.Background()
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings := test.CreateBaseTestSettings(t)
+
+	utxoStoreURL, err := url.Parse("sqlitememory:///txmetacache_spend_lease_delegate")
+	require.NoError(t, err)
+
+	underlying, err := sql.New(ctx, logger, tSettings, utxoStoreURL)
+	require.NoError(t, err)
+
+	leaseErr := errors.NewStorageError("lease boom")
+	scripted := &spendLeaseStore{Store: underlying, lease: []byte{5, 6}, err: leaseErr}
+
+	c, err := NewTxMetaCache(ctx, settings.NewSettings(), logger, scripted, Unallocated)
+	require.NoError(t, err)
+
+	cache, ok := c.(*TxMetaCache)
+	require.True(t, ok)
+
+	hash := testHash(40)
+
+	lease, took, err := cache.TakeSpendLease(ctx, &hash, []byte{1})
+	require.Equal(t, []byte{5, 6}, lease)
+	require.True(t, took)
+	require.ErrorIs(t, err, leaseErr)
+	require.Equal(t, []byte{1}, scripted.attempt)
+
+	require.ErrorIs(t, cache.ReleaseSpendLease(ctx, &hash, []byte{1}, lease), leaseErr)
+	require.Equal(t, []byte{5, 6}, scripted.freed)
+
+	live, err := cache.SpendLeasesLive(ctx, &hash, []byte{1})
+	require.True(t, live)
+	require.ErrorIs(t, err, leaseErr)
+
+	require.Equal(t, []string{"take", "release", "live"}, scripted.calls)
+}
+
+// boundedStore decorates a REAL utxo.Store and names its own rollback bound.
+type boundedStore struct {
+	utxo.Store
+
+	bound time.Duration
+}
+
+func (b *boundedStore) SpendRollbackTimeout() time.Duration { return b.bound }
+
+// TestTxMetaCache_SpendRollbackTimeout_ComesFromTheWrappedStore pins that the shared rollback and
+// roll-forward see the bound of the store behind the cache, and zero, which selects the shared
+// default, when that store names none.
+func TestTxMetaCache_SpendRollbackTimeout_ComesFromTheWrappedStore(t *testing.T) {
+	ctx := context.Background()
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings := test.CreateBaseTestSettings(t)
+
+	utxoStoreURL, err := url.Parse("sqlitememory:///txmetacache_rollback_bound")
+	require.NoError(t, err)
+
+	underlying, err := sql.New(ctx, logger, tSettings, utxoStoreURL)
+	require.NoError(t, err)
+
+	c, err := NewTxMetaCache(ctx, settings.NewSettings(), logger, &boundedStore{Store: underlying, bound: 30 * time.Second}, Unallocated)
+	require.NoError(t, err)
+
+	bounded, ok := c.(*TxMetaCache)
+	require.True(t, ok)
+	require.Equal(t, 30*time.Second, bounded.SpendRollbackTimeout())
+
+	// spendLeaseStore embeds the utxo.Store interface, which has no SpendRollbackTimeout.
+	c, err = NewTxMetaCache(ctx, settings.NewSettings(), logger, &spendLeaseStore{Store: underlying}, Unallocated)
+	require.NoError(t, err)
+
+	unbounded, ok := c.(*TxMetaCache)
+	require.True(t, ok)
+	require.Equal(t, time.Duration(0), unbounded.SpendRollbackTimeout())
+}
+
+// waitBoundedStore decorates a REAL utxo.Store and names its own spend wait.
+type waitBoundedStore struct {
+	utxo.Store
+
+	wait time.Duration
+}
+
+func (b *waitBoundedStore) SpendWaitTimeout() time.Duration { return b.wait }
+
+// TestTxMetaCache_SpendWaitTimeout_ComesFromTheWrappedStore pins that a create-first rollback sees
+// the spend wait of the store behind the cache, and zero, which selects the shared default, when
+// that store names none.
+func TestTxMetaCache_SpendWaitTimeout_ComesFromTheWrappedStore(t *testing.T) {
+	ctx := context.Background()
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings := test.CreateBaseTestSettings(t)
+
+	utxoStoreURL, err := url.Parse("sqlitememory:///txmetacache_spend_wait")
+	require.NoError(t, err)
+
+	underlying, err := sql.New(ctx, logger, tSettings, utxoStoreURL)
+	require.NoError(t, err)
+
+	c, err := NewTxMetaCache(ctx, settings.NewSettings(), logger, &waitBoundedStore{Store: underlying, wait: 45 * time.Second}, Unallocated)
+	require.NoError(t, err)
+
+	bounded, ok := c.(*TxMetaCache)
+	require.True(t, ok)
+	require.Equal(t, 45*time.Second, bounded.SpendWaitTimeout())
+
+	// spendLeaseStore embeds the utxo.Store interface, which has no SpendWaitTimeout.
+	c, err = NewTxMetaCache(ctx, settings.NewSettings(), logger, &spendLeaseStore{Store: underlying}, Unallocated)
+	require.NoError(t, err)
+
+	unbounded, ok := c.(*TxMetaCache)
+	require.True(t, ok)
+	require.Equal(t, time.Duration(0), unbounded.SpendWaitTimeout())
+}
+
+// finalizeAnswerStore decorates a REAL utxo.Store and scripts FinalizeTransaction.
+type finalizeAnswerStore struct {
+	utxo.Store
+
+	err   error
+	calls int
+}
+
+func (s *finalizeAnswerStore) FinalizeTransaction(_ context.Context, _ *bt.Tx, _, _ []byte) error {
+	s.calls++
+
+	return s.err
+}
+
+// TestTxMetaCache_FinalizeTransaction_EvictsWhenTheRecordIsFinal pins what the cache does with each
+// answer of a finalize. The record is final after a finalize that cleared the creating state and
+// after one that found it already final, so both drop the cached entry, which may still say
+// creating. The already-final answer is passed on unchanged, because the caller needs it to know
+// that another actor owns the hand-off. Any other error leaves the entry: the record did not change.
+func TestTxMetaCache_FinalizeTransaction_EvictsWhenTheRecordIsFinal(t *testing.T) {
+	ctx := context.Background()
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings := test.CreateBaseTestSettings(t)
+
+	utxoStoreURL, err := url.Parse("sqlitememory:///txmetacache_finalize_answers")
+	require.NoError(t, err)
+
+	underlying, err := sql.New(ctx, logger, tSettings, utxoStoreURL)
+	require.NoError(t, err)
+
+	alreadyFinal := utxo.MarkAlreadyFinal(errors.NewTxExistsError("already final"))
+	failed := errors.NewStorageError("finalize boom")
+
+	for name, tc := range map[string]struct {
+		answer  error
+		evicted bool
+	}{
+		"cleared by this call": {nil, true},
+		"already final":        {alreadyFinal, true},
+		"failed":               {failed, false},
+	} {
+		answering := &finalizeAnswerStore{Store: underlying, err: tc.answer}
+
+		c, err := NewTxMetaCache(ctx, settings.NewSettings(), logger, answering, Unallocated)
+		require.NoError(t, err, name)
+
+		cache, ok := c.(*TxMetaCache)
+		require.True(t, ok, name)
+
+		tx := bt.NewTx()
+		hash := *tx.TxIDChainHash()
+
+		require.NoError(t, cache.SetCache(&hash, testMeta()), name)
+
+		_, found := cache.GetMetaCached(ctx, hash)
+		require.True(t, found, "%s: precondition: the entry is in the cache", name)
+
+		got := cache.FinalizeTransaction(ctx, tx, []byte{1}, []byte{1})
+		require.Equal(t, 1, answering.calls, name)
+
+		if tc.answer == nil {
+			require.NoError(t, got, name)
+		} else {
+			require.Same(t, tc.answer, got, "%s: the answer of the store is passed on unchanged", name)
+		}
+
+		require.Equal(t, tc.answer == alreadyFinal, utxo.IsAlreadyFinal(got), name)
+
+		_, found = cache.GetMetaCached(ctx, hash)
+		require.Equal(t, !tc.evicted, found, name)
+	}
 }

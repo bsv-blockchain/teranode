@@ -15,6 +15,7 @@ import (
 	astore "github.com/bsv-blockchain/teranode/stores/utxo/aerospike"
 	apruner "github.com/bsv-blockchain/teranode/stores/utxo/aerospike/pruner"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
+	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/bsv-blockchain/teranode/util/uaerospike"
@@ -33,7 +34,7 @@ const (
 )
 
 type replayConfig struct {
-	paginated, ttl, expressions, defensive bool
+	paginated, ttl, expressions, defensive, createFirst bool
 	// parents is how many parents the child spends one output of; default 1.
 	parents int
 }
@@ -51,6 +52,7 @@ type replayFixture struct {
 	child       *bt.Tx
 	childKey    *aerospike.Key
 	outputIndex uint32
+	createFirst bool
 }
 
 func newReplayFixture(t *testing.T, cfg replayConfig) *replayFixture {
@@ -62,6 +64,17 @@ func newReplayFixture(t *testing.T, cfg replayConfig) *replayFixture {
 	s.Pruner.UTXODefensiveEnabled = cfg.defensive
 	s.Pruner.UTXOSetTTL = cfg.ttl
 	s.Aerospike.EnableSpendFilterExpressions = true
+
+	// the settings library reads utxostore_useCreateFirstOrder from the environment first, so a case
+	// that does not ask for create-first keeps whatever the environment says
+	if cfg.createFirst {
+		s.UtxoStore.UseCreateFirstOrder = true
+	}
+
+	// a create-first rollback leaves a hold that a replay must wait out
+	if s.UtxoStore.UseCreateFirstOrder {
+		s.UtxoStore.SpendRollbackTimeout = 3 * time.Second
+	}
 
 	var outputIndex uint32
 
@@ -88,7 +101,7 @@ func newReplayFixture(t *testing.T, cfg replayConfig) *replayFixture {
 		cfg.parents = 1
 	}
 
-	f := &replayFixture{t: t, client: client, store: store, ctx: ctx, settings: s, outputIndex: outputIndex}
+	f := &replayFixture{t: t, client: client, store: store, ctx: ctx, settings: s, outputIndex: outputIndex, createFirst: s.UtxoStore.UseCreateFirstOrder}
 	child := bt.NewTx()
 
 	for i := 0; i < cfg.parents; i++ {
@@ -179,6 +192,24 @@ func (f *replayFixture) childExists() bool {
 	return exists
 }
 
+// childStored reports whether the store holds C as a stored transaction: a record that is final. The
+// tentative record of a create-first attempt, and the hold it leaves when it is rolled back, are
+// not one, although each has a record at the key.
+func (f *replayFixture) childStored() bool {
+	f.t.Helper()
+
+	got := &meta.Data{}
+
+	err := f.store.GetMeta(f.ctx, f.child.TxIDChainHash(), got)
+	if errors.Is(err, errors.ErrTxNotFound) {
+		return false
+	}
+
+	require.NoError(f.t, err)
+
+	return !got.Creating && !got.RollingBack
+}
+
 // spendOf is the spend of output outputIndex of parent i by the child, with the child's spending data.
 func (f *replayFixture) spendOf(i int) *utxo.Spend {
 	f.t.Helper()
@@ -226,6 +257,7 @@ func TestPrunedReplayIsRefusedAtSpend_Aerospike(t *testing.T) {
 		{name: "paginated_parent", cfg: replayConfig{paginated: true}},
 		{name: "defensive", cfg: replayConfig{defensive: true}},
 		{name: "expressions", cfg: replayConfig{expressions: true}},
+		{name: "create_first", cfg: replayConfig{createFirst: true}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newReplayFixture(t, tc.cfg)
@@ -239,13 +271,31 @@ func TestPrunedReplayIsRefusedAtSpend_Aerospike(t *testing.T) {
 			_, _, err = f.store.SpendAndCreate(f.ctx, f.child, replayBlock)
 			require.ErrorIs(t, err, errors.ErrUtxoSpendingTxPruned, "a pruned confirmed child must not be recreated")
 			require.Contains(t, err.Error(), "spending transaction was pruned")
-			require.False(t, f.childExists(), "the replay must not create C")
+			require.False(t, f.childStored(), "the replay must not create C")
 
 			f.requireStillSpentByChild(0)
 
 			// the refusal wrote nothing, so a second replay is refused the same way
 			_, _, err = f.store.SpendAndCreate(f.ctx, f.child, replayBlock+1)
-			require.ErrorIs(t, err, errors.ErrUtxoSpendingTxPruned)
+
+			if f.createFirst {
+				// the refused attempt rolled its record back and left a hold for the txid. A replay
+				// meets the hold, which is no stored transaction, and waits it out; once it has
+				// expired the replay is refused again.
+				require.Error(t, err)
+				require.False(t, f.childStored(), "the hold is not a stored transaction")
+				f.requireStillSpentByChild(0)
+
+				require.Eventually(t, func() bool {
+					_, _, replayErr := f.store.SpendAndCreate(f.ctx, f.child, replayBlock+1)
+
+					return errors.Is(replayErr, errors.ErrUtxoSpendingTxPruned)
+				}, 30*time.Second, 250*time.Millisecond, "once the hold has expired a replay is refused again")
+				require.False(t, f.childStored())
+			} else {
+				require.ErrorIs(t, err, errors.ErrUtxoSpendingTxPruned)
+			}
+
 			f.requireStillSpentByChild(0)
 		})
 	}
@@ -361,7 +411,7 @@ func TestFailedReplayKeepsItsHistoricalMatch_Aerospike(t *testing.T) {
 	after, err := f.store.GetSpend(f.ctx, f.spendOf(1))
 	require.NoError(t, err)
 	require.Nil(t, after.SpendingData, "the fresh spend the failed call wrote is reversed")
-	require.False(t, f.childExists())
+	require.False(t, f.childStored())
 
 	// a new spender must not be able to take the confirmed output
 	thief := bt.NewTx()
@@ -370,6 +420,49 @@ func TestFailedReplayKeepsItsHistoricalMatch_Aerospike(t *testing.T) {
 
 	_, _, err = f.store.SpendAndCreate(f.ctx, thief, replayBlock+1)
 	require.ErrorIs(t, err, errors.ErrSpent)
+}
+
+// TestFailedReplayBesideARivalKeepsItsHistoricalMatch_Aerospike: C spent two parents' outputs. P:0
+// is still spent by C. Q:0 was released by a rolled-back reorg and a rival then spent it. The
+// replay of the pruned C matches P:0, which is history, and loses Q:0 to the rival, so the call
+// fails. Whatever the order of create and spend, the failed call must leave P:0 spent by the
+// confirmed C: releasing it hands a confirmed output to anyone.
+func TestFailedReplayBesideARivalKeepsItsHistoricalMatch_Aerospike(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		cfg  replayConfig
+	}{
+		{name: "spend_first", cfg: replayConfig{parents: 2}},
+		{name: "create_first", cfg: replayConfig{parents: 2, createFirst: true}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newReplayFixture(t, tc.cfg)
+			f.prune(replayPruneBlock)
+
+			// release Q:0 as a reorg would, then let a rival take it
+			require.NoError(t, f.store.Unspend(f.ctx, []*utxo.Spend{f.spendOf(1)}))
+
+			rival := bt.NewTx()
+			require.NoError(t, rival.From(f.parents[1].TxID(), f.outputIndex, f.parents[1].Outputs[f.outputIndex].LockingScript.String(), f.parents[1].Outputs[f.outputIndex].Satoshis))
+			require.NoError(t, rival.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 3998))
+
+			_, _, err := f.store.SpendAndCreate(f.ctx, rival, replayBlock)
+			require.NoError(t, err, "fixture: the rival spends Q:0")
+
+			_, _, err = f.store.SpendAndCreate(f.ctx, f.child, replayBlock)
+			require.Error(t, err, "the replay of the pruned C must fail")
+
+			f.requireStillSpentByChild(0)
+
+			// a new spender must not be able to take the confirmed output
+			thief := bt.NewTx()
+			require.NoError(t, thief.From(f.parents[0].TxID(), f.outputIndex, f.parents[0].Outputs[f.outputIndex].LockingScript.String(), f.parents[0].Outputs[f.outputIndex].Satoshis))
+			require.NoError(t, thief.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 3999))
+
+			_, _, err = f.store.SpendAndCreate(f.ctx, thief, replayBlock+1)
+			require.ErrorIs(t, err, errors.ErrSpent)
+		})
+	}
 }
 
 // TestPreUpgradeEntryWithoutSpenderIsAccepted_Aerospike: an output spent before heights were
@@ -438,4 +531,75 @@ func TestHistoricalMatchPassesWhenTheSpenderRecordExists_Aerospike(t *testing.T)
 
 	_, err = f.store.Spend(f.ctx, f.child, replayBlock, utxo.IgnoreFlags{RequireParentOutputs: true})
 	require.NoError(t, err, "the record exists, so the historical match is an ordinary one")
+}
+
+// TestHistoricalMatchDependsOnWhatTheSpenderRecordOwns_Aerospike: a historical match is an ordinary
+// one only when the record of the spending transaction stands behind the spend. The spend of C was
+// recorded at 1000 and C was pruned; each case stages the record that C has when the replay arrives
+// at 2001.
+//   - absent, a hold, rolling back: nothing owns the spend, so it is a pruned replay;
+//   - final: the stored transaction owns it;
+//   - tentative (create-first): the record owns the spends recorded at or after the height it was
+//     created at, so one recorded before it is a replay, whatever the record's age.
+func TestHistoricalMatchDependsOnWhatTheSpenderRecordOwns_Aerospike(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		stage  func(t *testing.T, f *replayFixture)
+		refuse bool
+	}{
+		{name: "absent", stage: func(t *testing.T, f *replayFixture) {}, refuse: true},
+		{name: "final", stage: func(t *testing.T, f *replayFixture) {
+			_, err := f.store.Create(f.ctx, f.child, replayBlock)
+			require.NoError(t, err)
+		}},
+		{name: "tentative created at the height of the spend", stage: func(t *testing.T, f *replayFixture) {
+			_, err := f.store.Create(f.ctx, f.child, replaySpendBlock, utxo.WithCreating(true))
+			require.NoError(t, err)
+		}},
+		{name: "tentative created below the height of the spend", stage: func(t *testing.T, f *replayFixture) {
+			_, err := f.store.Create(f.ctx, f.child, replaySpendBlock-1, utxo.WithCreating(true))
+			require.NoError(t, err)
+		}},
+		{name: "tentative created after the spend", stage: func(t *testing.T, f *replayFixture) {
+			_, err := f.store.Create(f.ctx, f.child, replaySpendBlock+1, utxo.WithCreating(true))
+			require.NoError(t, err)
+		}, refuse: true},
+		{name: "tentative created now", stage: func(t *testing.T, f *replayFixture) {
+			_, err := f.store.Create(f.ctx, f.child, replayBlock, utxo.WithCreating(true))
+			require.NoError(t, err)
+		}, refuse: true},
+		{name: "rolling back, created at the height of the spend", stage: func(t *testing.T, f *replayFixture) {
+			md, err := f.store.Create(f.ctx, f.child, replaySpendBlock, utxo.WithCreating(true))
+			require.NoError(t, err)
+
+			began, err := beginAsCreator(f.ctx, f.store, f.child.TxIDChainHash(), md.Attempt)
+			require.NoError(t, err)
+			require.True(t, began)
+		}, refuse: true},
+		{name: "hold", stage: func(t *testing.T, f *replayFixture) {
+			md, err := f.store.Create(f.ctx, f.child, replayBlock, utxo.WithCreating(true))
+			require.NoError(t, err)
+
+			require.NoError(t, rollBackAsCreator(f.ctx, ulogger.NewErrorTestLogger(t), f.store, f.child, md.Attempt))
+			requireHeld(t, f.ctx, f.store, f.child.TxIDChainHash())
+		}, refuse: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newReplayFixture(t, replayConfig{})
+			f.prune(replayPruneBlock)
+			require.NoError(t, f.store.SetBlockHeight(replayBlock))
+
+			tc.stage(t, f)
+
+			_, err := f.store.Spend(f.ctx, f.child, replayBlock, utxo.IgnoreFlags{RequireParentOutputs: true})
+
+			if tc.refuse {
+				require.ErrorIs(t, err, errors.ErrUtxoSpendingTxPruned)
+			} else {
+				require.NoError(t, err, "the record owns the spend: an ordinary match")
+			}
+
+			f.requireStillSpentByChild(0)
+		})
+	}
 }

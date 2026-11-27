@@ -2,6 +2,7 @@ package aerospike
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -266,10 +267,19 @@ func TestSetMinedMultiKeepsTheStorageCodeOfAFailedCleanup(t *testing.T) {
 				hashes = append(hashes, missing)
 			}
 
-			// The mined update calls the client directly; only the cleanup batches go through this seam.
-			store.batchOperateFn = errorOperate()
+			// The mined update calls the client directly. The cleanup batches go through this seam, and so
+			// does the pre-flight read of the creating state, which is let through: only the cleanup fails.
+			fail := errorOperate()
 			if tc.fail != nil {
-				store.batchOperateFn = tc.fail(client)
+				fail = tc.fail(client)
+			}
+
+			store.batchOperateFn = func(policy *aerospike.BatchPolicy, records []aerospike.BatchRecordIfc) aerospike.Error {
+				if isCreatingStateRead(records) {
+					return client.BatchOperate(policy, records)
+				}
+
+				return fail(policy, records)
 			}
 
 			t.Cleanup(func() { store.batchOperateFn = nil })
@@ -292,6 +302,18 @@ func TestSetMinedMultiKeepsTheStorageCodeOfAFailedCleanup(t *testing.T) {
 			require.True(t, errors.IsTransientLocalError(err), "got %v", err)
 		})
 	}
+}
+
+// isCreatingStateRead reports whether a batch is the pre-flight's read of the creating state.
+func isCreatingStateRead(records []aerospike.BatchRecordIfc) bool {
+	for _, record := range records {
+		read, ok := record.(*aerospike.BatchRead)
+		if !ok || !slices.Equal(read.BinNames, creatingReadBins) {
+			return false
+		}
+	}
+
+	return len(records) > 0
 }
 
 // failClearRecords runs each batch for real, then marks every written record
@@ -324,6 +346,159 @@ func failAfterReadAndClear(client *uaerospike.Client) func(*aerospike.BatchPolic
 		}
 
 		return &aerospike.AerospikeError{ResultCode: types.TIMEOUT}
+	}
+}
+
+// TestSetMinedMultiKeepsTheStorageCodeOfAFailedCreatingRead checks that a failed
+// pre-flight read of the creating state leaves SetMinedMulti as a StorageError,
+// so legacy sync keeps the block for a retry instead of rejecting it. Nothing is
+// marked mined before the read succeeds, and the retry completes the call.
+func TestSetMinedMultiKeepsTheStorageCodeOfAFailedCreatingRead(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping Aerospike integration test in short mode")
+	}
+
+	for _, tc := range []struct {
+		name        string
+		expressions bool
+		// fail is what the seam does to the read of the creating state.
+		fail func() func(*aerospike.BatchPolicy, []aerospike.BatchRecordIfc) aerospike.Error
+	}{
+		{name: "lua: the batch of the read fails", fail: errorOperate},
+		{name: "lua: every record of the read fails", fail: timeoutEveryRecord},
+		{name: "expressions: the batch of the read fails", expressions: true, fail: errorOperate},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			logger := ulogger.NewErrorTestLogger(t)
+			tSettings := test.CreateBaseTestSettings(t)
+			tSettings.Aerospike.EnableSetMinedFilterExpressions = tc.expressions
+
+			store, client := newSharedTestStore(t, logger, tSettings, "&externalStore=file://./data/external&block_retention=100")
+
+			tx := txWithOutputs(t, 2)
+			_, err := store.Create(ctx, tx, 100)
+			require.NoError(t, err)
+
+			hashes := []*chainhash.Hash{tx.TxIDChainHash()}
+			info := utxo.MinedBlockInfo{BlockID: 7, BlockHeight: 100, OnLongestChain: true}
+
+			fail := tc.fail()
+
+			store.batchOperateFn = func(policy *aerospike.BatchPolicy, records []aerospike.BatchRecordIfc) aerospike.Error {
+				if isCreatingStateRead(records) {
+					return fail(policy, records)
+				}
+
+				return client.BatchOperate(policy, records)
+			}
+
+			t.Cleanup(func() { store.batchOperateFn = nil })
+
+			_, err = store.SetMinedMulti(ctx, hashes, info)
+			require.ErrorIs(t, err, errors.ErrStorageError)
+			require.ErrorContains(t, err, "read of the creating state")
+
+			// Quick validation's wrap, which legacy sync's park reads as retry-later.
+			err = errors.NewProcessingError("[createAndSpendUTXOsForBatch] failed to update mined info",
+				utxo.SetMinedMultiChunked(ctx, logger, store, hashes, info, 10, 1))
+			require.True(t, errors.IsTransientLocalError(err), "got %v", err)
+
+			got, err := store.Get(ctx, tx.TxIDChainHash(), fields.BlockIDs)
+			require.NoError(t, err)
+			require.Empty(t, got.BlockIDs, "the pre-flight fails closed: nothing is marked mined while the creating state is not read")
+
+			store.batchOperateFn = nil
+
+			_, err = store.SetMinedMulti(ctx, hashes, info)
+			require.NoError(t, err, "the retry completes once the store answers")
+
+			got, err = store.Get(ctx, tx.TxIDChainHash(), fields.BlockIDs)
+			require.NoError(t, err)
+			require.Equal(t, []uint32{7}, got.BlockIDs)
+		})
+	}
+}
+
+// TestSetMinedMultiKeepsTheStorageCodeOfAFailedCreatingGet checks that a failed
+// pre-flight get of a creating record leaves SetMinedMulti as a StorageError, so
+// legacy sync keeps the block for a retry instead of rejecting it. The record
+// stays creating and is not marked mined, and the retry completes both.
+func TestSetMinedMultiKeepsTheStorageCodeOfAFailedCreatingGet(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping Aerospike integration test in short mode")
+	}
+
+	for _, tc := range []struct {
+		name string
+		// fail is what the seam does to the get of the creating record.
+		fail func() func(*aerospike.BatchPolicy, []aerospike.BatchRecordIfc) aerospike.Error
+	}{
+		{name: "the batch of the get fails", fail: errorOperate},
+		{name: "the record of the get fails", fail: timeoutEveryRecord},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			logger := ulogger.NewErrorTestLogger(t)
+			tSettings := test.CreateBaseTestSettings(t)
+
+			store, client := newSharedTestStore(t, logger, tSettings, "&externalStore=file://./data/external&block_retention=100")
+
+			parent := txWithOutputs(t, 1)
+			_, err := store.Create(ctx, parent, 100)
+			require.NoError(t, err)
+
+			// A record that a create-first attempt wrote and did not complete.
+			child := bt.NewTx()
+			require.NoError(t, child.From(parent.TxIDChainHash().String(), 0,
+				parent.Outputs[0].LockingScript.String(), parent.Outputs[0].Satoshis))
+			require.NoError(t, child.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", parent.Outputs[0].Satoshis/3))
+
+			_, err = store.Create(ctx, child, 101, utxo.WithCreating(true))
+			require.NoError(t, err)
+
+			hash := child.TxIDChainHash()
+			hashes := []*chainhash.Hash{hash}
+			info := utxo.MinedBlockInfo{BlockID: 7, BlockHeight: 101, OnLongestChain: true}
+
+			fail := tc.fail()
+
+			// The get of the creating record is the only read of the call that is not the read of the
+			// creating state.
+			store.batchOperateFn = func(policy *aerospike.BatchPolicy, records []aerospike.BatchRecordIfc) aerospike.Error {
+				if _, isRead := records[0].(*aerospike.BatchRead); isRead && !isCreatingStateRead(records) {
+					return fail(policy, records)
+				}
+
+				return client.BatchOperate(policy, records)
+			}
+
+			t.Cleanup(func() { store.batchOperateFn = nil })
+
+			_, err = store.SetMinedMulti(ctx, hashes, info)
+			require.ErrorIs(t, err, errors.ErrStorageError)
+			require.ErrorContains(t, err, "get tx "+hash.String())
+
+			// Quick validation's wrap, which legacy sync's park reads as retry-later.
+			err = errors.NewProcessingError("[createAndSpendUTXOsForBatch] failed to update mined info",
+				utxo.SetMinedMultiChunked(ctx, logger, store, hashes, info, 10, 1))
+			require.True(t, errors.IsTransientLocalError(err), "got %v", err)
+
+			store.batchOperateFn = nil
+
+			got, err := store.Get(ctx, hash, fields.Creating, fields.BlockIDs)
+			require.NoError(t, err)
+			require.True(t, got.Creating, "the pre-flight fails closed: the record is not completed while its get fails")
+			require.Empty(t, got.BlockIDs, "the pre-flight fails closed: nothing is marked mined while the get fails")
+
+			_, err = store.SetMinedMulti(ctx, hashes, info)
+			require.NoError(t, err, "the retry completes once the store answers")
+
+			got, err = store.Get(ctx, hash, fields.Creating, fields.BlockIDs)
+			require.NoError(t, err)
+			require.False(t, got.Creating, "the retry rolls the record forward")
+			require.Equal(t, []uint32{7}, got.BlockIDs)
+		})
 	}
 }
 

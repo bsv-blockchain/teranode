@@ -34,6 +34,19 @@ func BackdatedUnminedSince(currentBlockHeight, unminedTxRetention uint32) uint32
 	return currentBlockHeight - unminedTxRetention
 }
 
+// UnminedValidatedHeight returns the height an unmined transaction that is in no block was
+// validated at, which block assembly keeps out of a block built under other rules than the
+// transaction was validated under. It is the unminedSince of the record while that is a real
+// height (above 1) inside the retention of the tip. A backdated unminedSince is the tip less the
+// retention or 1, so it is outside that window and the height is unknown: 0.
+func UnminedValidatedHeight(unminedSince, tip, unminedTxRetention uint32) uint32 {
+	if unminedSince > 1 && (tip <= unminedTxRetention || unminedSince > tip-unminedTxRetention) {
+		return unminedSince
+	}
+
+	return 0
+}
+
 // PreserveParentsOfOldUnminedTransactions protects parent transactions of old unmined transactions from deletion.
 // This is a store-agnostic implementation that works with any Store implementation.
 // It follows the same pattern as ProcessConflicting, using the Store interface methods.

@@ -368,7 +368,7 @@ func writeCreateThenSpend(ctx context.Context, s SpendAndCreateMultiStore, width
 	// combined call and create-only for the rest in the first wave, spend-only and
 	// RequireParentOutputs in the second, with the lane position the first wave wrote. They are built per call, so a list holds no options
 	// for its transactions while it runs; the wave's own are built once here.
-	createOnly, spendOnly, requireParentOutputs := WithCreateOnly(), WithSpendOnly(), withRequireParentOutputs()
+	createOnly, spendOnly, requireParentOutputs, completeCreating := WithCreateOnly(), WithSpendOnly(), withRequireParentOutputs(), withCompleteCreating()
 
 	all := make([]int, len(txs))
 	for i := range all {
@@ -453,9 +453,15 @@ func writeCreateThenSpend(ctx context.Context, s SpendAndCreateMultiStore, width
 		var spends []*Spend
 		var err error
 
-		if md := results[i].Meta; md != nil && md.LanePosition != lane.None {
+		switch md := results[i].Meta; {
+		case md != nil && md.LanePosition != lane.None:
 			_, spends, err = s.SpendAndCreate(callCtx, txs[i], blockHeight, items.option(i), spendOnly, requireParentOutputs, WithLanePosition(md.LanePosition))
-		} else {
+		case results[i].Status == MultiTxExisted:
+			// The create found a record at the txid and did not look at it. It can be the tentative
+			// record of a create-first attempt, which is not a stored transaction until it is
+			// finalized, so the spend completes it when it is one.
+			_, spends, err = s.SpendAndCreate(callCtx, txs[i], blockHeight, items.option(i), spendOnly, requireParentOutputs, completeCreating)
+		default:
 			_, spends, err = s.SpendAndCreate(callCtx, txs[i], blockHeight, items.option(i), spendOnly, requireParentOutputs)
 		}
 

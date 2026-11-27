@@ -56,9 +56,14 @@
 package aerospike
 
 import (
+	"bytes"
+	"crypto/sha1" //nolint:gosec // identifies a UDF body in log output only
 	_ "embed"
+	"encoding/base64"
+	"encoding/hex"
 	"math"
 	"reflect"
+	"strings"
 	"sync"
 	"time"
 
@@ -74,7 +79,7 @@ import (
 var teranodeLUA []byte
 
 var (
-	LuaPackage      = "teranode_v71" // N.B. Do not have any "." in this string
+	LuaPackage      = "teranode_v73" // N.B. Do not have any "." in this string
 	LuaPackageMined = LuaPackage + "_mined"
 )
 
@@ -143,8 +148,45 @@ const (
 	LuaPreserve LuaReturnValue = "PRESERVE"
 )
 
+// registeredUDFContent returns the body the cluster holds for a registered UDF file.
+// The udf-list hash is not a plain digest of the file bytes, so content is compared
+// directly rather than by hash.
+func registeredUDFContent(client *uaerospike.Client, filename string) ([]byte, error) {
+	nodes := client.GetNodes()
+	if len(nodes) == 0 {
+		return nil, errors.NewProcessingError("no aerospike nodes available to read UDF %s", filename)
+	}
+
+	command := "udf-get:filename=" + filename + ";"
+
+	response, err := nodes[0].RequestInfo(aerospike.NewInfoPolicy(), command)
+	if err != nil {
+		return nil, errors.NewProcessingError("failed to read UDF %s", filename, err)
+	}
+
+	for _, field := range strings.Split(response[command], ";") {
+		if encoded, found := strings.CutPrefix(field, "content="); found {
+			content, decodeErr := base64.StdEncoding.DecodeString(encoded)
+			if decodeErr != nil {
+				return nil, errors.NewProcessingError("failed to decode UDF %s content", filename, decodeErr)
+			}
+
+			return content, nil
+		}
+	}
+
+	return nil, errors.NewProcessingError("UDF %s response carries no content", filename)
+}
+
+func luaDigest(body []byte) string {
+	sum := sha1.Sum(body) //nolint:gosec // identifies a UDF body in log output only
+
+	return hex.EncodeToString(sum[:])
+}
+
 // registerLuaIfNecessary ensures required Lua scripts are registered with Aerospike.
-// It checks for existing scripts and registers new ones if needed.
+// It registers a script that is missing and re-registers one whose registered content
+// differs from funcBytes, so a changed script ships even when its package name is unchanged.
 //
 // Parameters:
 //   - logger: For operation logging
@@ -192,13 +234,22 @@ func registerLuaIfNecessary(logger ulogger.Logger, client *uaerospike.Client, fu
 	foundScript := false
 
 	for _, udf := range udfs {
-		if udf.Filename == funcName+".lua" {
+		if udf.Filename != funcName+".lua" {
+			continue
+		}
+
+		registered, readErr := registeredUDFContent(client, funcName+".lua")
+		if readErr == nil && bytes.Equal(registered, funcBytes) {
 			logger.Infof("LUA script %s already registered", funcName)
 
 			foundScript = true
 
 			break
 		}
+
+		logger.Warnf("LUA script %s is registered with different content (registered sha1 %s, embedded sha1 %s, listed hash %s, read error %v) - re-registering", funcName, luaDigest(registered), luaDigest(funcBytes), udf.Hash, readErr)
+
+		break
 	}
 
 	if !foundScript {
@@ -292,6 +343,9 @@ type LuaMapResponse struct {
 	// which never counts as historical (utxo.IsHistoricalSpend). A native-op server that does not
 	// report it fails probeNativeReplayProtection.
 	IdempotentHeights map[int]uint32 `json:"-"`
+	// Kept is true when an unspend that carried keepBelowHeight left the spend in place, because
+	// the spend was recorded below it. The unspend is then a success that cleared nothing.
+	Kept bool `json:"kept,omitempty"`
 	// DeleteAtHeight is the master record's stamped delete-at-height, present only with a DAHSET signal from a Lua package that reports it.
 	DeleteAtHeight    int  `json:"deleteAtHeight,omitempty"`
 	HasDeleteAtHeight bool `json:"-"`
@@ -330,6 +384,7 @@ func (r *LuaMapResponse) Reset() {
 	r.Status = ""
 	r.Idempotent = nil
 	r.IdempotentHeights = nil
+	r.Kept = false
 	r.ErrorCode = ""
 	r.Message = ""
 	r.Signal = ""
@@ -518,6 +573,10 @@ func (s *Store) parseLuaMapResponseInto(response interface{}, result *LuaMapResp
 
 			result.IdempotentHeights[idx] = uint32(height)
 		}
+	}
+
+	if kept, ok := respMap["kept"].(bool); ok {
+		result.Kept = kept
 	}
 
 	// Parse childCount

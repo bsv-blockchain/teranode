@@ -19,9 +19,11 @@ import (
 //
 // With chainhash.Hash keys the per-cell overhead is ~24 bytes higher than the
 // previous uint64-keyed layout; the constant is calibrated against that.
-// Phase B benchmarks confirmed entries fit at ~280-320 bytes each; 320 leaves
-// modest headroom for parent-hash-heavy transactions.
-const pointerCacheAvgEntryBytes = 320
+// Measured with a full cache of two-parent entries: 319 bytes each before the
+// create-first fields (RollingBack, Hold, Reversed, Attempt) grew meta.Data from
+// 240 to 264 bytes, and 367 bytes each after. One-parent entries cost 336 and
+// four-parent entries 447. 368 matches the two-parent median, as 320 did before.
+const pointerCacheAvgEntryBytes = 368
 
 // Compile-time check that *PointerCache satisfies the cacheBackend contract.
 var _ cacheBackend = (*PointerCache)(nil)
@@ -188,7 +190,13 @@ func metadataOnly(data *meta.Data) (*meta.Data, error) {
 		Frozen:      data.Frozen,
 		Conflicting: data.Conflicting,
 		Locked:      data.Locked,
-		TxInpoints:  inpoints,
+		// Creating MUST be carried: a create-first tx still mid-flight is Creating=true, and
+		// processTxMetaUsingCache treats a Creating entry as a miss so it falls back to the
+		// store. Dropping it here (pointer-cache mode) would cache a mid-flight tx as
+		// Creating=false and let subtree validation count it as validated — diverging from the
+		// byte backend, which preserves the flag (meta bit 5).
+		Creating:   data.Creating,
+		TxInpoints: inpoints,
 		// The byte backends keep it after MetaBytes (meta.CacheBytesInto).
 		LanePosition: data.LanePosition,
 	}, nil

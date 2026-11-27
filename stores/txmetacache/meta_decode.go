@@ -20,6 +20,7 @@ type CachedMeta struct {
 	Conflicting bool
 	Locked      bool
 	InBlock     bool
+	Creating    bool
 	TxInpoints  subtree.TxInpoints
 	// LanePosition is the own lane position the entry carries after its MetaBytes (see
 	// meta.CacheBytesInto), or 0.
@@ -66,6 +67,7 @@ func decodeCachedMeta(b []byte, parents []chainhash.Hash, vouts []uint32) (Cache
 		Conflicting: flags&0b100 != 0,
 		Locked:      flags&0b1000 != 0,
 		InBlock:     flags&0b10000 != 0,
+		Creating:    flags&0b100000 != 0,
 	}
 
 	n := uint64(binary.LittleEndian.Uint32(b[17:21]))

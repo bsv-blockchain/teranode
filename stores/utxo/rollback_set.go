@@ -1,6 +1,9 @@
 package utxo
 
 import (
+	"context"
+
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
 )
 
@@ -191,4 +194,73 @@ func ReplayRejectionsFirst(errs []error) []error {
 	}
 
 	return ordered
+}
+
+// KeepBelowHeight is the height below which a create-first reversal leaves a spend in place. A
+// reversal undoes the spends of a tentative record, and the record owns only the spends recorded at
+// or after the height it was created at. A spend recorded before it is kept when it is also history
+// (IsHistoricalSpend): a replay of a transaction the pruner removed matches such a spend, and
+// reversing it hands a confirmed output to anyone. A spend that is old but young by that rule is a
+// leftover of an earlier attempt, and the reversal still clears it.
+//
+// recordHeight is the unminedSince of the record, 0 when it is not known, and the bound is then
+// the age rule alone. currentHeight is the height the historical age is counted from. The result is
+// 0 when no spend is kept: a store with retention 0 never prunes, so nothing is history, and a chain
+// younger than HistoricalSpendAge has none either. A spend recorded at h is kept exactly when
+// h < KeepBelowHeight, which is IsHistoricalSpend(h, true, currentHeight, retention) && h < recordHeight.
+func KeepBelowHeight(recordHeight, currentHeight, retention uint32) uint32 {
+	if retention == 0 {
+		return 0
+	}
+
+	age := HistoricalSpendAge(retention)
+	if currentHeight < age {
+		return 0
+	}
+
+	bound := currentHeight - age + 1
+	if recordHeight != 0 && recordHeight < bound {
+		bound = recordHeight
+	}
+
+	return bound
+}
+
+type reversalGuardKey struct{}
+
+// ReversalGuard is what a create-first reversal tells the store that reverses its spends.
+type ReversalGuard struct {
+	// Record is the txid of the tentative record whose spends are reversed. The store reads the
+	// height of the record, and keeps the spends that predate it (KeepBelowHeight). Nil: no guard.
+	Record *chainhash.Hash
+	// CallHeight is the block height of the call that failed, 0 when not known. The store counts
+	// history from the larger of it and its own height, so a lagging tip never reverses a spend that
+	// the age rule refused as a replay.
+	CallHeight uint32
+}
+
+// WithReversalCallHeight returns ctx carrying the block height of the call whose spends a
+// create-first reversal may undo.
+func WithReversalCallHeight(ctx context.Context, height uint32) context.Context {
+	guard, _ := ReversalGuardFrom(ctx)
+	guard.CallHeight = height
+
+	return context.WithValue(ctx, reversalGuardKey{}, guard)
+}
+
+// WithReversedRecord returns ctx telling a store to keep, in the Unspend calls that run under it,
+// the historical spends that predate the tentative record of hash. Only the create-first reversals
+// set it; every other Unspend clears what it is told to, as before.
+func WithReversedRecord(ctx context.Context, hash *chainhash.Hash) context.Context {
+	guard, _ := ReversalGuardFrom(ctx)
+	guard.Record = hash
+
+	return context.WithValue(ctx, reversalGuardKey{}, guard)
+}
+
+// ReversalGuardFrom returns the guard ctx carries and whether it carries one.
+func ReversalGuardFrom(ctx context.Context) (ReversalGuard, bool) {
+	guard, ok := ctx.Value(reversalGuardKey{}).(ReversalGuard)
+
+	return guard, ok
 }

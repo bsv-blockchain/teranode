@@ -438,6 +438,20 @@ func (s *Store) Close(ctx context.Context) error {
 // outpoint-only fast path (SkipExtendedInputs on Create, SkipUTXOHashCheck on Spend).
 func (s *Store) SupportsOutpointOnlySpend() bool { return true }
 
+// SupportsCreateFirst returns false: the SQL store ignores CreateOptions.Creating,
+// so SpendAndCreate keeps spend-first order.
+func (s *Store) SupportsCreateFirst() bool { return false }
+
+// FinalizeTransaction is a no-op: the SQL store has no tentative-create state.
+func (s *Store) FinalizeTransaction(ctx context.Context, tx *bt.Tx, attempt, lease []byte) error {
+	return nil
+}
+
+// QueryStaleCreatingTxs returns nothing: the SQL store has no tentative-create state.
+func (s *Store) QueryStaleCreatingTxs(ctx context.Context, unminedSinceBefore uint32, limit int) ([]chainhash.Hash, error) {
+	return nil, nil
+}
+
 // Health checks the database connection and returns status information.
 func (s *Store) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
 	details := fmt.Sprintf("SQL Engine is %s", s.engine)
@@ -4753,6 +4767,36 @@ func (s *Store) DeleteComplete(ctx context.Context, hash *chainhash.Hash) error 
 	return s.Delete(ctx, hash)
 }
 
+// EndCreateFirstRollback is DeleteComplete here. The SQL store has no tentative state, so
+// BeginCreateFirstRollback never marks a record and nothing calls this for one.
+func (s *Store) EndCreateFirstRollback(ctx context.Context, hash *chainhash.Hash, attempt []byte) error {
+	return s.DeleteComplete(ctx, hash)
+}
+
+// TakeRollbackHold reports false and writes nothing. The SQL store has no tentative state, so
+// no record is rolling back and no hold exists.
+func (s *Store) TakeRollbackHold(ctx context.Context, hash *chainhash.Hash, attempt []byte) (bool, error) {
+	return false, nil
+}
+
+// ReleaseRollbackHold does nothing. The SQL store has no tentative state, so no hold is taken.
+func (s *Store) ReleaseRollbackHold(ctx context.Context, hash *chainhash.Hash, attempt []byte) error {
+	return nil
+}
+
+// ClearCreateFirstHold reports false and writes nothing. The SQL store has no tentative state,
+// so it never leaves a hold.
+func (s *Store) ClearCreateFirstHold(ctx context.Context, hash *chainhash.Hash, adopt bool) (bool, error) {
+	return false, nil
+}
+
+// BeginCreateFirstRollback reports false and writes nothing. The SQL store has no
+// tentative-create state (SupportsCreateFirst is false), so every record is final and there
+// is nothing to roll back.
+func (s *Store) BeginCreateFirstRollback(ctx context.Context, hash *chainhash.Hash, attempt []byte) (bool, error) {
+	return false, nil
+}
+
 func (s *Store) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, minedBlockInfo utxo.MinedBlockInfo) (map[chainhash.Hash][]uint32, error) {
 	if len(hashes) == 0 {
 		return make(map[chainhash.Hash][]uint32), nil
@@ -7810,4 +7854,19 @@ func (s *Store) SpendsMadeBy(ctx context.Context, txHash chainhash.Hash) ([]*utx
 	}
 
 	return utxo.SpendsForTx(txMeta.Tx)
+}
+
+// TakeSpendLease reports false and writes nothing. The SQL store has no tentative state, so no spend needs a lease.
+func (s *Store) TakeSpendLease(ctx context.Context, hash *chainhash.Hash, attempt []byte) ([]byte, bool, error) {
+	return nil, false, nil
+}
+
+// ReleaseSpendLease does nothing. The SQL store has no tentative state, so no spend needs a lease.
+func (s *Store) ReleaseSpendLease(ctx context.Context, hash *chainhash.Hash, attempt, lease []byte) error {
+	return nil
+}
+
+// SpendLeasesLive reports false. The SQL store has no tentative state, so no spend needs a lease.
+func (s *Store) SpendLeasesLive(ctx context.Context, hash *chainhash.Hash, attempt []byte) (bool, error) {
+	return false, nil
 }

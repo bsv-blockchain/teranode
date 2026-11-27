@@ -235,6 +235,57 @@ func TestSpend_ExpiredContextBeforeBatchOperateDoesNotTripBreaker(t *testing.T) 
 	}
 }
 
+// A create-first spender bounds the write of its spends by the deadline of its lease. When that
+// deadline passes after the item left the queue and before the write starts, the store sends
+// nothing. That says nothing about the backend, so the breaker counts no failure and a probe gets
+// its slot back.
+func TestSpend_LeaseBoundWriteRefusedBeforeTheSendDoesNotTripBreaker(t *testing.T) {
+	for _, expressions := range []bool{false, true} {
+		for _, halfOpen := range []bool{false, true} {
+			t.Run(pathName(expressions)+"/"+map[bool]string{false: "closed", true: "half-open"}[halfOpen], func(t *testing.T) {
+				s := newSpendBreakerTestStore(t, expressions)
+				cb := newCircuitBreaker(1, 1, time.Hour)
+				if halfOpen {
+					cb = probeBreaker(t, 1)
+				}
+				s.spendCircuitBreaker = cb
+
+				batch, group := competingSpendBatch(distinctParents(1)...)
+				batch[0].deadline = time.Now().Add(-time.Second)
+
+				if halfOpen {
+					admitProbes(t, cb, batch)
+				}
+
+				called := false
+				s.batchOperateFn = func(*aerospike.BatchPolicy, []aerospike.BatchRecordIfc) aerospike.Error {
+					called = true
+					return nil
+				}
+
+				if expressions {
+					s.SpendMultiWithExpressions(t.Context(), batch)
+				} else {
+					s.executeLuaSpendBatchContext(t.Context(), batch)
+				}
+
+				requireGroupCompleted(t, group, time.Second)
+
+				require.Error(t, batch[0].spend.Err)
+				require.False(t, called, "no write starts after the deadline of its caller")
+
+				if halfOpen {
+					require.Equal(t, cbStateHalfOpen, cb.state, "a write that was not sent must release the probe without a trip")
+					require.Zero(t, cb.halfOpenAttempts)
+				} else {
+					require.Equal(t, cbStateClosed, cb.state, "a write that was not sent is no failure of the backend")
+					require.Zero(t, cb.consecutiveFailures)
+				}
+			})
+		}
+	}
+}
+
 func TestSpend_HalfOpenProbeRecordOutcomesByResultCode(t *testing.T) {
 	cases := []struct {
 		name      string

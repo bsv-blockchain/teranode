@@ -1132,6 +1132,8 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 
 	var spentUtxos []*utxo.Spend
 
+	rolledForward := false
+
 	// Get atomic block state to prevent race conditions between height and median time reads
 	blockState := v.GetBlockState()
 
@@ -1317,42 +1319,80 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 
 			v.logger.Debugf("[Validate][%s] tx already exists in store, not sending to block assembly: %v", txID, err)
 
+			rolledForward = utxo.IsRolledForward(err)
+			existsErr := err
+
 			txMetaData = &meta.Data{}
 			if err = v.utxoStore.GetMeta(decoupledCtx, tx.TxIDChainHash(), txMetaData); err != nil {
 				return nil, errors.NewProcessingError("[Validate][%s] failed to get tx meta data from store", txID, err)
 			}
 
-			// The transaction is already durably present; a resubmit is an
-			// idempotent success and must not mutate lock state. It does not
-			// re-drive the block-assembly handoff.
+			// Under create-first, ErrTxExists no longer proves the tx was fully validated: a
+			// prior attempt (a TX_LOCKED retry, a crash, or a spend failure) can leave the
+			// record in the tentative "creating" state with its inputs NOT yet spent. Returning
+			// it as validated here would let a block be accepted whose parent outputs are still
+			// unspent — the mirror image of #1214.
 			//
-			// A shed of a mempool or Kafka submission leaves no record behind (see
-			// unwindShed), but a shed of a block-context transaction does: it stays
-			// Locked and unmined outside the template. Reaching here therefore means
-			// a genuine duplicate, or a resubmit of a record left that way, which
-			// takes the locked-and-unmined branch below and is counted there.
-			// True but incomplete: reaching here DURING another submission's shed
-			// window means the success returned below can later be undone by that
-			// shed's unwind, which deletes the very record this call just read. That
-			// is the residual named in unwindShed's preconditions. The per-id lock held from the
-			// create to the end of the call closes it between the callers that hold it, and the
-			// counter incremented below measures what remains.
-			// A record that IS locked and unmined here belongs to something a
-			// resubmit must not touch: an in-flight conflict resolution, which
-			// locks honest losing parents without marking them conflicting; or a
-			// submission interrupted between the create and the hand-off (shutdown
-			// mid-retry, or an unwind that itself failed). Those causes are
-			// bit-for-bit indistinguishable in the store, and the unmined reload on
-			// the next block-assembly start restores the LOCK STATE for all of them
-			// (the record itself is intact on every cause listed above) — so the
-			// state is counted and logged rather than answered differently.
-			if txMetaData.Locked && len(txMetaData.BlockIDs) == 0 && !txMetaData.Conflicting {
-				prometheusValidatorExistingTxLockedUnmined.Inc()
+			// The store rolls such a record forward inside SpendAndCreate, under this call's own
+			// ignore flags (spendIgnoreOptions), and marks the ErrTxExists it returns as rolled
+			// forward. A mempool caller that leaves IgnoreLocked false therefore still waits out a
+			// parent's two-phase commit, and a block-context caller keeps its outpoint-only fast
+			// path. A record still creating without that mark was not completed by the store, so
+			// FAIL CLOSED rather than trust it.
+			//
+			// A rolled-forward record is NOT returned early: it falls through to the normal
+			// post-create flow so the block-assembly hand-off and the unlock after it run
+			// exactly as for a fresh create. The roll-forward leaves the record Locked. This
+			// attempt did not create it, so a shed hand-off must not unwind it (see below).
+			if txMetaData.Creating && !rolledForward {
+				// The error must not carry existsErr as its cause: errors.Is walks the whole chain,
+				// and a caller that finds ErrTxExists in it reads the transaction as already
+				// validated, which is what this guard exists to refuse. The cause is logged.
+				v.logger.Warnf("[Validate][%s] tx exists in creating state and the store did not roll it forward: %v", txID, existsErr)
 
-				v.logger.Warnf("[Validate][%s] resubmit of an existing transaction that is locked and unmined; returning success, recovery is the unmined reload's unlock (cause is indistinguishable between conflict resolution and an interrupted submission)", txID)
+				return nil, errors.NewProcessingError("[Validate][%s] tx exists in creating state and the store did not roll it forward; not treating as validated", txID)
 			}
 
-			return txMetaData, nil
+			if rolledForward {
+				txMetaData.Creating = false
+
+				// the ErrTxExists is consumed here, so the tail guard and the deferred unlock do not depend on GetMeta having reset err
+				err = nil
+			}
+
+			if !rolledForward {
+				// The transaction is already durably present; a resubmit is an
+				// idempotent success and must not mutate lock state. It does not
+				// re-drive the block-assembly handoff.
+				//
+				// A shed of a mempool or Kafka submission leaves no record behind (see
+				// unwindShed), but a shed of a block-context transaction does: it stays
+				// Locked and unmined outside the template. Reaching here therefore means
+				// a genuine duplicate, or a resubmit of a record left that way, which
+				// takes the locked-and-unmined branch below and is counted there.
+				// True but incomplete: reaching here DURING another submission's shed
+				// window means the success returned below can later be undone by that
+				// shed's unwind, which deletes the very record this call just read. That
+				// is the residual named in unwindShed's preconditions. The per-id lock held from the
+				// create to the end of the call closes it between the callers that hold it, and the
+				// counter incremented below measures what remains.
+				// A record that IS locked and unmined here belongs to something a
+				// resubmit must not touch: an in-flight conflict resolution, which
+				// locks honest losing parents without marking them conflicting; or a
+				// submission interrupted between the create and the hand-off (shutdown
+				// mid-retry, or an unwind that itself failed). Those causes are
+				// bit-for-bit indistinguishable in the store, and the unmined reload on
+				// the next block-assembly start restores the LOCK STATE for all of them
+				// (the record itself is intact on every cause listed above) — so the
+				// state is counted and logged rather than answered differently.
+				if txMetaData.Locked && len(txMetaData.BlockIDs) == 0 && !txMetaData.Conflicting {
+					prometheusValidatorExistingTxLockedUnmined.Inc()
+
+					v.logger.Warnf("[Validate][%s] resubmit of an existing transaction that is locked and unmined; returning success, recovery is the unmined reload's unlock (cause is indistinguishable between conflict resolution and an interrupted submission)", txID)
+				}
+
+				return txMetaData, nil
+			}
 		}
 
 		if known, ok := v.knownTxResubmission(decoupledCtx, tx, spentUtxos); ok {
@@ -1443,21 +1483,93 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 				// fallback (reached during legacy below-checkpoint catchup on a stale/double
 				// spend — see handle_block.go PreValidateTransactions, which sets both
 				// CreateConflicting and OutpointOnlySpend) does not hard-fail the block.
-				conflictingCreateOpts := []utxo.CreateOption{utxo.WithCaller(createCaller(validationOptions))}
+				//
+				// The create is that of a transaction of a block, and it says so to the store the way a
+				// spend of a block does, by ignoring locks, which a create with no spend does not
+				// otherwise read. A store that keeps a hold for a rolled back create-first attempt clears
+				// it at once for such a create and makes it wait for the hold to expire for any other.
+				// This transaction's own spend was just refused, so with create-first on it has just
+				// rolled its own attempt back and left that hold: without the mark the fallback is
+				// refused by it on every retry of the block, because every retry leaves a new one.
+				conflictingCreateOpts := []utxo.CreateOption{utxo.WithCaller(createCaller(validationOptions)), utxo.WithIgnoreLocked(true)}
 				if validationOptions.OutpointOnlySpend {
 					conflictingCreateOpts = append(conflictingCreateOpts, utxo.WithSkipExtendedInputs(true))
 				}
 
-				if txMetaData, utxoMapErr = v.CreateInUtxoStore(decoupledCtx, tx, blockHeight, true, false, conflictingCreateOpts...); utxoMapErr != nil {
-					if errors.Is(utxoMapErr, errors.ErrTxExists) {
-						txMetaData = &meta.Data{}
-						if err = v.utxoStore.GetMeta(decoupledCtx, tx.TxIDChainHash(), txMetaData); err != nil {
-							err = errors.NewProcessingError("[Validate][%s] CreateInUtxoStore failed - tx exists but unable to get meta data", txID, err)
+				// settled and holdCleared let the create go round once more after each of the two steps
+				// that take a tentative record out of the way, and no more often.
+				settled, holdCleared := false, false
+
+				for {
+					txMetaData, utxoMapErr = v.CreateInUtxoStore(decoupledCtx, tx, blockHeight, true, false, conflictingCreateOpts...)
+					if utxoMapErr == nil || !errors.Is(utxoMapErr, errors.ErrTxExists) {
+						break
+					}
+
+					txMetaData = &meta.Data{}
+					if err = v.utxoStore.GetMeta(decoupledCtx, tx.TxIDChainHash(), txMetaData); err != nil {
+						err = errors.NewProcessingError("[Validate][%s] CreateInUtxoStore failed - tx exists but unable to get meta data", txID, err)
+						span.RecordError(err)
+
+						return nil, err
+					}
+
+					if !txMetaData.Hold && !txMetaData.Creating && !txMetaData.RollingBack {
+						break
+					}
+
+					// The record at this txid is a create-first attempt's tentative record or the hold a rolled
+					// back attempt left, not a transaction: it carries no data to mark conflicting and another
+					// actor owns it.
+					//
+					// A tentative record that is not a hold is settled here by the rule of the pruner sweep:
+					// it is rolled forward, or, when an input of it can never be spent and no spender holds a
+					// live lease, rolled back, which leaves a hold. The spend of this transaction was just
+					// refused as a double spend, so an attempt at the same txid that has not spent every
+					// input cannot complete either. The sweep would do the same, but it runs when the chain
+					// advances, and this block is what the chain waits for: without this step every retry of
+					// the block would stop here.
+					if !txMetaData.Hold && !settled {
+						settled = true
+
+						ended, settleErr := utxo.SettleTentativeInTheWay(decoupledCtx, v.logger, v.utxoStore, tx, txMetaData, blockHeight, spendIgnoreOptions(validationOptions)...)
+						if settleErr != nil {
+							err = errors.NewProcessingError("[Validate][%s] the tentative record in the way of the tx could not be settled", txID, settleErr)
 							span.RecordError(err)
 
 							return nil, err
 						}
 
+						if ended {
+							continue
+						}
+					}
+
+					// A hold in block context goes at once unless a holder is reversing spends.
+					if txMetaData.Hold && !holdCleared {
+						holdCleared = true
+
+						cleared, clearErr := v.utxoStore.ClearCreateFirstHold(decoupledCtx, tx.TxIDChainHash(), true)
+						if clearErr != nil {
+							err = errors.NewProcessingError("[Validate][%s] tx is rolling back and its hold could not be cleared", txID, clearErr)
+							span.RecordError(err)
+
+							return nil, err
+						}
+
+						if cleared {
+							continue
+						}
+					}
+
+					err = errors.NewProcessingError("[Validate][%s] tx is being created or rolled back by another attempt; retry after it completes", txID)
+					span.RecordError(err)
+
+					return nil, err
+				}
+
+				if utxoMapErr != nil {
+					if errors.Is(utxoMapErr, errors.ErrTxExists) {
 						// Tx already exists — ensure it and all its spending descendants are marked conflicting.
 						// NOTE: cascaded descendants may still be in the subtree processor's in-memory template
 						// until the next reset/reload — this path has no subtreeProcessor handle to evict them.
@@ -1516,10 +1628,14 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 			}
 		}
 
-		err = errors.NewProcessingError("[Validate][%s] error spending utxos", txID, err)
-		span.RecordError(err)
+		// A rolled-forward record is the only way to reach here with a nil err; it continues
+		// to the hand-off below.
+		if err != nil {
+			err = errors.NewProcessingError("[Validate][%s] error spending utxos", txID, err)
+			span.RecordError(err)
 
-		return nil, err
+			return nil, err
+		}
 	}
 
 	// From this point on the tx has been durably persisted with its inputs spent and,
@@ -1543,7 +1659,9 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 	// never delivered, and unlocking on that basis would be exactly the hazard this
 	// function exists to prevent.
 	persistedMeta := txMetaData
-	delivered := !addToBlockAssembly
+
+	// A rolled-forward record is never marked delivered here: its lock belongs to whoever created it, and setMined clears it when the block is mined.
+	delivered := !addToBlockAssembly && !rolledForward
 	shedInBlock := false
 
 	defer func() {
@@ -1740,7 +1858,17 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 					// master was already gone leaves nothing to reload — the inputs are
 					// then unspent unless that unspend itself fails, and only unreachable
 					// residue can survive, counted by shed_unwind_residue_total.
-					_ = v.unwindShed(decoupledCtx, tx, txID, spentUtxos, !validationOptions.SkipUtxoCreation)
+					//
+					// A record this attempt only rolled forward (the store found it creating
+					// and completed it) is not this call's work: another attempt created it
+					// and may be handing it off. It is left finalized and locked for the
+					// unmined reload instead.
+					if rolledForward {
+						prometheusValidatorShedRolledForwardKept.Inc()
+						v.logger.Warnf("[Validate][%s] block-assembly queue full on a rolled-forward record; left finalized and locked for the unmined reload because this attempt did not create it", txID)
+					} else {
+						_ = v.unwindShed(decoupledCtx, tx, txID, spentUtxos, !validationOptions.SkipUtxoCreation)
+					}
 
 					// On the ingest path the submitter was already told the transaction was
 					// accepted (propagation returns success before the validator sees it),
@@ -2982,6 +3110,20 @@ func (v *Validator) sendTxMetaBatchV2(batch []*txmetaBatchItem) {
 	}
 }
 
+// spendIgnoreOptions builds the spend-phase flags from the caller's options. The
+// original spend and the ErrTxExists roll-forward both use it so they cannot drift.
+func spendIgnoreOptions(validationOptions *Options) []utxo.CreateOption {
+	opts := []utxo.CreateOption{
+		utxo.WithIgnoreLocked(validationOptions.IgnoreLocked),
+	}
+
+	if validationOptions.OutpointOnlySpend {
+		opts = append(opts, utxo.WithSkipUTXOHashCheck(true), utxo.WithSkipExtendedInputs(true))
+	}
+
+	return opts
+}
+
 // spendAndCreateInUtxoStore spends the UTXOs referenced by the transaction's
 // inputs and stores the transaction's outputs + metadata in one store operation.
 // The store rolls the spends back when the create phase fails with anything
@@ -3010,14 +3152,7 @@ func (v *Validator) spendAndCreateInUtxoStore(ctx context.Context, tx *bt.Tx, bl
 	)
 	defer deferFn()
 
-	opts := []utxo.CreateOption{
-		utxo.WithIgnoreLocked(validationOptions.IgnoreLocked),
-		utxo.WithCaller(createCaller(validationOptions)),
-	}
-
-	if validationOptions.OutpointOnlySpend {
-		opts = append(opts, utxo.WithSkipUTXOHashCheck(true), utxo.WithSkipExtendedInputs(true))
-	}
+	opts := append(spendIgnoreOptions(validationOptions), utxo.WithCaller(createCaller(validationOptions)))
 
 	if validationOptions.SkipUtxoCreation {
 		opts = append(opts, utxo.WithSpendOnly())
@@ -3326,9 +3461,21 @@ func (v *Validator) handoffFloor() time.Duration {
 // # Preconditions, each naming the code that enforces it
 //
 //   - Only this call's own work is ever undone: on the created-record shape the
-//     already-exists branch returns before the hand-off, so an existing record
-//     from another submitter is unreachable from here; on the spend-only shape
-//     the record gate immediately before the unspend is what enforces it.
+//     already-exists branch returns before the hand-off, except for a record the
+//     store rolled forward (utxo.IsRolledForward), which another attempt created and
+//     which the shed branch in Validate leaves finalized and locked instead of calling
+//     this function; on the spend-only shape the record gate immediately before the
+//     unspend is what enforces it.
+//
+//     Under create-first two more things hold it up. The store returns nil from its
+//     finalize only to the caller whose write cleared the creating state, and it
+//     records that caller with the write, so a creator that reaches here did finalize
+//     the record itself and no roll-forward of the attempt delivered it. And the
+//     store's DeleteComplete refuses, with the record left in place, while a
+//     roll-forward still holds a spend lease on the record: its spend of the inputs
+//     could otherwise land after the unspend below. A refused delete takes the
+//     "master still present" arm, which leaves the transaction locked for the
+//     unmined reload.
 //
 //     Read that in one direction only. It means this call never undoes another
 //     submitter's STORE WORK. The converse is NOT claimed: a concurrent duplicate

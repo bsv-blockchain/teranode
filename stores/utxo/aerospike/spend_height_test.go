@@ -293,3 +293,141 @@ func TestSpendHeightsBinGrowsToCoverTheOutput_Aerospike(t *testing.T) {
 		require.Empty(t, res.IdempotentHeights)
 	})
 }
+
+// unspendUDF calls the unspend UDF directly and parses its answer. keepBelow is the optional
+// keepBelowHeight argument: none sends the arguments an older caller sent.
+func unspendUDF(t *testing.T, store *teranode_aerospike.Store, parent *bt.Tx, spend *utxo.Spend, keepBelow ...int) *teranode_aerospike.LuaMapResponse {
+	t.Helper()
+
+	tSettings := test.CreateBaseTestSettings(t)
+
+	args := make([]aerospike.Value, 0, 5+len(keepBelow))
+	args = append(args,
+		aerospike.NewIntegerValue(int(spend.Vout)),
+		aerospike.NewValue(spend.UTXOHash[:]),
+		aerospike.NewValue(spend.SpendingData.Bytes()),
+		aerospike.NewValue(1300),
+		aerospike.NewValue(spendHeightRetention),
+	)
+
+	for _, keep := range keepBelow {
+		args = append(args, aerospike.NewIntegerValue(keep))
+	}
+
+	ret, aErr := store.GetClient().Execute(util.GetAerospikeWritePolicy(tSettings, 0), spendHeightKey(t, store, parent.TxIDChainHash()), teranode_aerospike.LuaPackage, "unspend", args...)
+	require.NoError(t, aErr)
+
+	res, err := store.ParseLuaMapResponse(ret)
+	require.NoError(t, err)
+
+	return res
+}
+
+// TestUnspendKeepBelowHeight_Aerospike pins the optional keepBelowHeight argument of the unspend
+// UDF: a spend recorded below it stays and the answer says so, a spend recorded at or above it, a
+// spend with no recorded height and a call with no argument are cleared as before.
+func TestUnspendKeepBelowHeight_Aerospike(t *testing.T) {
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings := test.CreateBaseTestSettings(t)
+
+	_, store, ctx, cleanup := initAerospike(t, tSettings, logger)
+	t.Cleanup(cleanup)
+
+	const spentAt = uint32(1200)
+
+	parent := conflictingIndexParent(t, ctx, store, 7101, 7)
+	child := conflictingIndexTx(t, parent, []uint32{0, 1, 2, 3, 4, 5, 6}, 1)
+	parentKey := spendHeightKey(t, store, parent.TxIDChainHash())
+	spends := spendHeightSpendsOf(t, child)
+
+	for _, spend := range spends {
+		res := spendHeightUDF(t, store, parent, spend, spentAt)
+		require.Equal(t, teranode_aerospike.LuaStatusOK, res.Status)
+	}
+
+	// the output spent by older code: spent, with no height
+	spendHeightClear(t, store.GetClient(), parentKey, 5)
+
+	for _, tc := range []struct {
+		name      string
+		vout      int
+		keepBelow []int
+		wantKept  bool
+	}{
+		{name: "no argument clears the spend as before", vout: 0},
+		{name: "recorded height below the argument: kept", vout: 1, keepBelow: []int{int(spentAt) + 1}, wantKept: true},
+		{name: "recorded height at the argument: cleared", vout: 2, keepBelow: []int{int(spentAt)}},
+		{name: "recorded height above the argument: cleared", vout: 3, keepBelow: []int{int(spentAt) - 1}},
+		{name: "argument far above: kept", vout: 4, keepBelow: []int{4000000000}, wantKept: true},
+		{name: "no recorded height: cleared whatever the argument", vout: 5, keepBelow: []int{4000000000}},
+		{name: "argument zero keeps nothing", vout: 6, keepBelow: []int{0}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			res := unspendUDF(t, store, parent, spends[tc.vout], tc.keepBelow...)
+			require.Equal(t, teranode_aerospike.LuaStatusOK, res.Status, "a kept spend is not an error")
+			require.Equal(t, tc.wantKept, res.Kept)
+
+			entry := spendHeightEntry(t, store, parent.TxIDChainHash(), tc.vout)
+			height, recorded := spendHeightAt(t, store.GetClient(), parentKey, tc.vout)
+
+			if tc.wantKept {
+				require.Len(t, entry, 68, "the output is still spent")
+				require.Equal(t, spends[tc.vout].SpendingData.Bytes(), entry[32:68])
+				require.True(t, recorded)
+				require.Equal(t, spentAt, height, "the recorded height stays with the spend")
+
+				return
+			}
+
+			require.Len(t, entry, 32, "the output is free")
+			require.False(t, recorded, "unspend zeroes the height with the spend")
+		})
+	}
+
+	t.Run("a spend the caller does not own is left alone whatever the argument", func(t *testing.T) {
+		other := conflictingIndexTx(t, parent, []uint32{3}, 2)
+		otherSpends := spendHeightSpendsOf(t, other)
+
+		res := spendHeightUDF(t, store, parent, otherSpends[0], spentAt+10)
+		require.Equal(t, teranode_aerospike.LuaStatusOK, res.Status)
+
+		stranger := spendHeightSpendsOf(t, child)[3]
+
+		res = unspendUDF(t, store, parent, stranger, int(spentAt)+500)
+		require.Equal(t, teranode_aerospike.LuaStatusOK, res.Status)
+		require.False(t, res.Kept, "a spend by another transaction is not the caller's to keep or clear")
+		require.Len(t, spendHeightEntry(t, store, parent.TxIDChainHash(), 3), 68)
+	})
+}
+
+// TestSpenderOwnsSpend pins when the record of a spender stands behind a spend that matches a
+// historical one. A final record owns it. A tentative record owns the spends recorded at or after
+// its own height, and none when it carries no height, because nothing then separates its spends
+// from those of a pruned record. An absent record, a hold and a rollback own nothing.
+func TestSpenderOwnsSpend(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		state    teranode_aerospike.SpenderState
+		recorded uint32
+		hasRec   bool
+		want     bool
+	}{
+		{name: "a final record owns it", state: teranode_aerospike.SpenderState{}, recorded: 10, hasRec: true, want: true},
+		{name: "a final record owns it even when the height is not known", state: teranode_aerospike.SpenderState{}, want: true},
+		{name: "an absent record owns nothing", state: teranode_aerospike.SpenderState{Absent: true}, recorded: 1000, hasRec: true, want: false},
+		{name: "a hold owns nothing", state: teranode_aerospike.SpenderState{Creating: true, Hold: true, HasUnminedSince: true, UnminedSince: 100}, recorded: 1000, hasRec: true, want: false},
+		{name: "a rollback owns nothing", state: teranode_aerospike.SpenderState{Creating: true, RollingBack: true, HasUnminedSince: true, UnminedSince: 100}, recorded: 1000, hasRec: true, want: false},
+		{name: "a tentative record owns a spend recorded after it", state: teranode_aerospike.SpenderState{Creating: true, HasUnminedSince: true, UnminedSince: 100}, recorded: 101, hasRec: true, want: true},
+		{name: "a tentative record owns a spend recorded at its height", state: teranode_aerospike.SpenderState{Creating: true, HasUnminedSince: true, UnminedSince: 100}, recorded: 100, hasRec: true, want: true},
+		{name: "a tentative record does not own a spend recorded before it", state: teranode_aerospike.SpenderState{Creating: true, HasUnminedSince: true, UnminedSince: 100}, recorded: 99, hasRec: true, want: false},
+		{name: "a tentative record owns no spend whose height is not known", state: teranode_aerospike.SpenderState{Creating: true, HasUnminedSince: true, UnminedSince: 100}, want: false},
+		{name: "a tentative record at height 0 owns no spend whose height is not known", state: teranode_aerospike.SpenderState{Creating: true, HasUnminedSince: true, UnminedSince: 0}, want: false},
+		{name: "a tentative record that carries no height owns none", state: teranode_aerospike.SpenderState{Creating: true}, recorded: 1000, hasRec: true, want: false},
+		{name: "a tentative record whose height is 0 owns every spend that has a height", state: teranode_aerospike.SpenderState{Creating: true, HasUnminedSince: true, UnminedSince: 0}, recorded: 5, hasRec: true, want: true},
+		{name: "a tentative record with a negative height owns none", state: teranode_aerospike.SpenderState{Creating: true, HasUnminedSince: true, UnminedSince: -1}, recorded: 5, hasRec: true, want: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, teranode_aerospike.SpenderOwnsSpend(tc.state, tc.recorded, tc.hasRec))
+		})
+	}
+}

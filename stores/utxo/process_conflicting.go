@@ -1517,6 +1517,11 @@ func appliedWinnerOwnsInputs(ctx context.Context, s Store, h chainhash.Hash, m *
 	return winnerInputsOwned(ctx, s, h, m.Tx, absent)
 }
 
+// ConflictMarker is the store subset MarkConflictingRecursively needs.
+type ConflictMarker interface {
+	SetConflicting(ctx context.Context, txHashes []chainhash.Hash, value bool) ([]*Spend, []chainhash.Hash, error)
+}
+
 // MarkConflictingRecursively marks the given transactions as conflicting, and iteratively marks all their spending
 // children as conflicting too using breadth-first traversal.
 //
@@ -1536,7 +1541,7 @@ func appliedWinnerOwnsInputs(ctx context.Context, s Store, h chainhash.Hash, m *
 //     Those stay conflicting in the store, so callers evict them from the txmeta
 //     cache on error too; a retry may never re-flip them.
 //   - An error if any issues occur during the process.
-func MarkConflictingRecursively(ctx context.Context, s Store, hashes []chainhash.Hash) ([]*Spend, []chainhash.Hash, error) {
+func MarkConflictingRecursively(ctx context.Context, s ConflictMarker, hashes []chainhash.Hash) ([]*Spend, []chainhash.Hash, error) {
 	ctx, _, deferFn := tracing.Tracer("utxo").Start(ctx, "MarkConflictingRecursively")
 
 	defer deferFn()
