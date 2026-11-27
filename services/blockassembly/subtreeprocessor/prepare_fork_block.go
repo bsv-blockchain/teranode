@@ -278,8 +278,9 @@ func (stp *SubtreeProcessor) releaseForkPrepared() {
 
 // takePreparedForkSet returns the set prepared for exactly these blocks, in this order, with these
 // subtree lists, if it is built and the tip is still the one it was prepared against. A set that
-// is still being built is not waited for: it runs on a quarter of the cores and the reorg's own
-// build runs on all of them. Every prepared set is let go, taken or not.
+// is still being built is not used: it runs on a quarter of the cores and the reorg's own build
+// runs on all of them, so its build is cancelled, and ended, instead. Every prepared set is let go,
+// taken or not.
 func (stp *SubtreeProcessor) takePreparedForkSet(blocks []*model.Block) (*SortedHashSet, []chainhash.Hash, bool) {
 	stp.preparedMu.Lock()
 	entries := stp.preparedFork
@@ -306,6 +307,12 @@ func (stp *SubtreeProcessor) takePreparedForkSet(blocks []*model.Block) (*Sorted
 	select {
 	case <-taken.done:
 	default:
+		// Still being built: the reorg builds its own on all cores. The build is cancelled and waited
+		// for, which is short because the reads stop with their context, so its partial set is
+		// garbage before the rebuild starts and not a second set alive beside it.
+		taken.cancel()
+		<-taken.done
+
 		return nil, nil, false
 	}
 

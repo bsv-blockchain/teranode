@@ -10251,8 +10251,8 @@ func (stp *SubtreeProcessor) createTransactionMap(ctx context.Context, blockSubt
 }
 
 // verifyToCheckSubtree reads a subtree body, recomputes its merkle root from the leaves and returns the
-// body again if the root is the key's. The root at the head of the file is not enough: it is the
-// claim, and a changed leaf would leave it as it is. It closes reader.
+// body again if the root is the key's and the root at the head of the file is too. The head alone is
+// not enough: it is the claim, and a changed leaf would leave it as it is. It closes reader.
 func verifyToCheckSubtree(reader io.ReadCloser, key chainhash.Hash, maxBytes int64) (io.ReadCloser, error) {
 	defer func() { _ = reader.Close() }()
 
@@ -10270,9 +10270,8 @@ func verifyToCheckSubtree(reader io.ReadCloser, key chainhash.Hash, maxBytes int
 		return nil, errors.NewProcessingError("error deserializing subtree %s", key.String(), err)
 	}
 
-	store, err := subtreepkg.BuildMerkleTreeStoreFromBytes(subtree.Nodes)
-	if err != nil || len(*store) == 0 || chainhash.Hash((*store)[len(*store)-1]) != key {
-		return nil, errors.NewProcessingError("subtree %s does not hash to its key", key.String())
+	if err = model.ValidateSubtreeNodesMatchKey(subtree, &key); err != nil {
+		return nil, err
 	}
 
 	return io.NopCloser(bytes.NewReader(data)), nil
