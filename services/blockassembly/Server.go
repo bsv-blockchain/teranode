@@ -1176,7 +1176,10 @@ func (ba *BlockAssembly) storeSubtreeData(ctx context.Context, subtreeRequest su
 			// after the caller moved on (that needs pinning).
 			if subtreeRequest.Result == nil {
 				outcome.metaAbsent()
-			} else if metaExists, _ := ba.subtreeStore.Exists(ctx, subtree.RootHash()[:], fileformat.FileTypeSubtreeMeta); metaExists {
+			} else if metaExists, existsErr := ba.subtreeStore.Exists(ctx, subtree.RootHash()[:], fileformat.FileTypeSubtreeMeta); existsErr != nil {
+				ba.logger.Warnf("[BlockAssembly:storeSubtreeData][%s] could not check the subtree meta: %s", subtree.RootHash().String(), existsErr)
+				outcome.fail(errors.NewStorageError("[BlockAssembly:storeSubtreeData][%s] could not check the subtree meta", subtree.RootHash().String(), existsErr))
+			} else if metaExists {
 				outcome.metaStored()
 			} else {
 				outcome.metaAbsent()

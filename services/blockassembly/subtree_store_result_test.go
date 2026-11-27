@@ -15,6 +15,7 @@ import (
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/services/blockassembly/subtreeprocessor"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
+	"github.com/bsv-blockchain/teranode/stores/blob"
 	"github.com/bsv-blockchain/teranode/stores/blob/options"
 	"github.com/bsv-blockchain/teranode/util/testutil/blobfault"
 	"github.com/prometheus/client_golang/prometheus/testutil"
@@ -280,6 +281,46 @@ func TestSubtreeStoreResult_SubtreeExistsMetaDoesNot_ExistedAlreadyMetaNotStored
 	require.False(t, result.OK(), "the meta is not there")
 	require.Zero(t, fault.SetCalls(subtree.RootHash()[:], fileformat.FileTypeSubtreeMeta), "the meta is not rebuilt")
 	p.requireAnnounced(t, subtree.RootHash())
+}
+
+// existsFaultStore fails Exists for one file type, so a store that cannot be read is told from one
+// that has no such file.
+type existsFaultStore struct {
+	blob.Store
+	failType fileformat.FileType
+	err      error
+}
+
+func (s *existsFaultStore) Exists(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...options.FileOption) (bool, error) {
+	if fileType == s.failType {
+		return false, s.err
+	}
+
+	return s.Store.Exists(ctx, key, fileType, opts...)
+}
+
+func TestSubtreeStoreResult_ExistingSubtreeMetaExistsErrors_FailedNotMissing(t *testing.T) {
+	server, store, _, _ := setup(t)
+	subtree, txMap := makeSubtree(t, 6)
+
+	subtreeBytes, err := subtree.Serialize()
+	require.NoError(t, err)
+	require.NoError(t, store.Set(t.Context(), subtree.RootHash()[:], fileformat.FileTypeSubtree, subtreeBytes))
+	require.NoError(t, store.Set(t.Context(), subtree.RootHash()[:], fileformat.FileTypeSubtreeMeta, []byte("meta")))
+
+	server.subtreeStore = &existsFaultStore{Store: store, failType: fileformat.FileTypeSubtreeMeta, err: errors.NewStorageError("head object failed")}
+	before := testutil.ToFloat64(prometheusBlockAssemblySubtreeStoreFailed)
+
+	p := startStorePipeline(t, server)
+	result := awaitResult(t, p.store(subtree, txMap, false))
+
+	require.Error(t, result.Err, "a failed Exists is a failure, not a missing meta")
+	require.ErrorIs(t, result.Err, errors.ErrStorageError)
+	require.False(t, result.OK())
+	require.True(t, result.ExistedAlready)
+	require.True(t, result.SubtreeStored)
+	require.False(t, result.MetaStored)
+	require.Equal(t, before+1, testutil.ToFloat64(prometheusBlockAssemblySubtreeStoreFailed))
 }
 
 func TestSubtreeStoreResult_ExistingSubtreeWithItsMeta_MetaStoredWithoutAWrite(t *testing.T) {
