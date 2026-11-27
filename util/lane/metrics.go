@@ -69,7 +69,7 @@ func initPrometheusMetrics() {
 			Namespace: "teranode",
 			Subsystem: "lane",
 			Name:      "give_backs_missed_total",
-			Help:      "Grant requests that gave a spare back and got a grant that does not continue the aged grant, so the positions between stay unused; a blockchain service older than the give-back field gives this on every give-back",
+			Help:      "Grant requests that gave a spare back and either failed, so the retry goes without the give-back, or got a grant that does not continue the aged grant; the positions between stay unused. A blockchain service older than the give-back field, or a database role without DELETE on lane_handout, gives this on every give-back",
 		})
 	})
 }
