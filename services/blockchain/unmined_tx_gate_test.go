@@ -448,6 +448,7 @@ func TestUnminedTxGate_StallHooks(t *testing.T) {
 	hooks(gate)
 
 	ctx, cancel := context.WithCancel(context.Background())
+	started := time.Now()
 
 	var wg sync.WaitGroup
 
@@ -461,7 +462,8 @@ func TestUnminedTxGate_StallHooks(t *testing.T) {
 		}()
 	}
 
-	require.Eventually(t, func() bool { return stalls.Load() == 1 }, checkpointStallAfter+2*time.Second, 10*time.Millisecond)
+	require.Eventually(t, func() bool { return stalls.Load() == 1 }, checkpointStallAfter+time.Second, 10*time.Millisecond)
+	require.GreaterOrEqual(t, time.Since(started), checkpointStallAfter, "no pause before the stall threshold")
 	time.Sleep(200 * time.Millisecond)
 	require.Equal(t, int32(1), stalls.Load(), "two stalled waits, one onStall")
 	require.Zero(t, recovers.Load())

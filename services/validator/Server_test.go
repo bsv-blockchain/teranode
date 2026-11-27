@@ -548,6 +548,9 @@ func TestHandleKafkaTxMessage_RefusedWhileSyncing(t *testing.T) {
 
 			// NewServer builds the gate, so this also checks the wiring.
 			server := NewServer(ulogger.TestLogger{}, tSettings, nil, blockchainClient, nil, nil, nil, nil, nil)
+			if tt.netting {
+				require.Equal(t, uint32(100), server.unminedTxGate.CheckpointHeight())
+			}
 
 			validated := 0
 			server.validator = &MockValidator{
@@ -672,13 +675,6 @@ func TestHandleKafkaTxMessage_EarlyHeldShedIsNotInvalidAndCountedOnce(t *testing
 	for _, line := range logger.lines {
 		require.NotContains(t, line, "Invalid tx", "no per-message invalid-tx line for a held shed")
 	}
-}
-
-// NewServer must hand its settings to the unmined transaction gate, or the
-// checkpoint rule is off on the Kafka intake.
-func TestNewServer_UnminedTxGateTakesSettings(t *testing.T) {
-	srv := NewServer(ulogger.TestLogger{}, nettingSettings(t), nil, &blockchain.Mock{}, nil, nil, nil, nil, nil)
-	require.Equal(t, uint32(100), srv.unminedTxGate.CheckpointHeight())
 }
 
 // nettingSettings returns test settings for a utxoset node on a network whose

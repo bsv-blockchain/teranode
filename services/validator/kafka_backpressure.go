@@ -793,7 +793,7 @@ func (v *Server) fetchPauseFor(reason string) pausableConsumer {
 // unmined transaction gate. The gate pauses fetching while a Kafka message has
 // waited past one height-read timeout for its checkpoint answer, because the
 // consumer keeps fetching into per-partition queues with no bound while every
-// handler waits. A wait that succeeds within the timeout never pauses.
+// handler waits. A decision answered within the timeout never pauses.
 func (v *Server) armFetchPauser(consumer pausableConsumer) {
 	v.fetchPauser = newFetchPauser(consumer)
 

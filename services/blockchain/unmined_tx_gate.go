@@ -243,8 +243,9 @@ func (g *UnminedTxGate) readBestHeight(scheduled int64) {
 }
 
 // checkpointStallAfter is how long a RefusesAfterCheckpointAnswer call may wait
-// before it counts as stalled. A height read that succeeds lands well inside one
-// read timeout, so only a blockchain service that does not answer stalls a call.
+// before it counts as stalled. Any decision that waits that long stalls: a
+// blockchain service that does not answer, a read that succeeds slowly, or a
+// wait for a fresh read behind one still in flight.
 const checkpointStallAfter = bestHeightReadTimeout
 
 // checkpointAnswerPoll is how often RefusesAfterCheckpointAnswer looks again

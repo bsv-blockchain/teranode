@@ -1767,9 +1767,12 @@ func TestArmFetchPauser_StalledKafkaMessagePausesFetching(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	handled := make(chan error, 1)
 
+	started := time.Now()
+
 	go func() { handled <- server.handleKafkaTxMessage(ctx, kafkaTxMessage(t)) }()
 
-	require.Eventually(t, func() bool { return consumer.pauseCount() == 1 }, 5*time.Second, 10*time.Millisecond)
+	require.Eventually(t, func() bool { return consumer.pauseCount() == 1 }, 3*time.Second, 10*time.Millisecond)
+	require.GreaterOrEqual(t, time.Since(started), 2*time.Second, "paused only after the 2 s stall threshold")
 	require.Zero(t, consumer.resumeCount())
 
 	cancel()
