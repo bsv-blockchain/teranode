@@ -434,15 +434,28 @@ func TestFailedClearsError(t *testing.T) {
 
 		err := store.failedClearsError(failed)
 		require.ErrorContains(t, err, "failed to clear 20000 records: "+tx.String()+" records 1,3,5,")
-		require.ErrorContains(t, err, "more pieces, logged as warnings")
-		require.Less(t, len(err.Error()), maxClearErrorBytes+1024)
+
+		// A piece holds 50 ranges: the first ends at record 99, the next starts at 101.
+		require.ErrorContains(t, err, ",99 (ResultCode: TIMEOUT); "+tx.String()+" records 101,")
+
+		// The names in the error and in each warning line stay within the budget,
+		// and the error counts the 400 pieces it leaves out.
+		_, names, _ := strings.Cut(err.Error(), "failed to clear 20000 records: ")
+		names, _, _ = strings.Cut(names, "; and ")
+		require.LessOrEqual(t, len(names), maxClearErrorBytes)
+
+		inError := strings.Count(names, " records ")
+		require.ErrorContains(t, err, fmt.Sprintf("; and %d more pieces, logged as warnings", 400-inError))
 
 		// Every record the error leaves out is in a warning line within the budget.
 		require.NotEmpty(t, warnings.lines)
 
 		all := err.Error()
 		for _, line := range warnings.lines {
-			require.Less(t, len(line), maxClearErrorBytes+1024)
+			_, lineNames, found := strings.Cut(line, "not named in the returned error: ")
+			require.True(t, found)
+			require.LessOrEqual(t, len(lineNames), maxClearErrorBytes)
+
 			all += line
 		}
 
@@ -470,6 +483,11 @@ func TestFailedClearsError(t *testing.T) {
 
 		short := errors.NewProcessingError("short")
 		require.Equal(t, short.Error(), clearFailureReason(short), "a reason under the limit is kept whole")
+
+		exact := errors.NewProcessingError("")
+		exact = errors.NewProcessingError(strings.Repeat("y", 256-len(exact.Error())))
+		require.Len(t, exact.Error(), 256)
+		require.Equal(t, exact.Error(), clearFailureReason(exact), "a reason of exactly 256 bytes is kept whole")
 	})
 }
 
