@@ -287,9 +287,10 @@ type BlockAssembler struct {
 	// The idle tick wakes a replay once it is older than blockassembly_reconcileInterval.
 	lastBestTipReplay atomic.Int64
 
-	// tipSeenAt is when the running processNewBlockAnnouncement pass started, which is when block
-	// assembly first sees the tip change; handleReorg hands it to the processor so a fork reorg
-	// reports the time from there to its start. Zero outside a pass. Only the main loop touches it.
+	// tipSeenAt is when the running processNewBlockAnnouncement pass started. followBestTipChanges
+	// can move several times in one pass, and every handleReorg in it gets this same time, so a fork
+	// reorg after an earlier catch-up or reset in the pass also counts that earlier work. handleReorg
+	// hands it to the processor for tip_to_start_ms. Zero outside a pass. Only the main loop touches it.
 	tipSeenAt time.Time
 
 	// bestTipReplayFailures counts consecutive failed replay passes.
