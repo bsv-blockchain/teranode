@@ -57,6 +57,7 @@ package aerospike
 
 import (
 	"context"
+	"strings"
 	"sync"
 
 	"github.com/bsv-blockchain/aerospike-client-go/v8"
@@ -835,5 +836,18 @@ func (s *Store) clearLockedOnRecordsMulti(items []lockClearItem) error {
 		}
 	}
 
-	return errors.JoinCapped(10, recordErrs...)
+	const maxDetailedErrors = 10
+	if len(recordErrs) > maxDetailedErrors {
+		additional := make([]string, 0, len(recordErrs)-maxDetailedErrors)
+		for _, err := range recordErrs[maxDetailedErrors:] {
+			additional = append(additional, err.Error())
+		}
+
+		// Put the summary first: Error() truncates deep chains, so a tail
+		// summary would hide the identities it is meant to preserve.
+		summary := errors.NewStorageError("[clearLockedOnRecordsMulti] %d additional failures: %s", len(additional), strings.Join(additional, "; "))
+		recordErrs = append([]error{summary}, recordErrs[:maxDetailedErrors]...)
+	}
+
+	return errors.Join(recordErrs...)
 }

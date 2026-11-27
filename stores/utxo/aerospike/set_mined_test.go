@@ -2,6 +2,7 @@ package aerospike
 
 import (
 	"context"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -366,6 +367,33 @@ func TestClearLockedOnRecordsMultiMasterItem(t *testing.T) {
 		require.True(t, hasCreating(t, client, store, txHash, 0), "an incomplete transaction must keep creating on its master")
 		require.False(t, exists(t, recordKey(t, store, txHash, 2)), "the missing extra record stays missing")
 	})
+}
+
+// TestClearLockedOnRecordsMultiReportsEveryFailedRecord checks that a batch
+// with more than ten failures still names every transaction and record.
+func TestClearLockedOnRecordsMultiReportsEveryFailedRecord(t *testing.T) {
+	store := newTestStoreForGet(t)
+	store.batchOperateFn = func(_ *aerospike.BatchPolicy, records []aerospike.BatchRecordIfc) aerospike.Error {
+		for _, record := range records {
+			record.BatchRec().Err = &aerospike.AerospikeError{ResultCode: types.TIMEOUT}
+		}
+
+		return nil
+	}
+
+	first := &chainhash.Hash{0x01}
+	second := &chainhash.Hash{0x02}
+	err := store.clearLockedOnRecordsMulti([]lockClearItem{
+		{txID: first, childCount: 6, master: true},
+		{txID: second, childCount: 6, master: true},
+	})
+	require.ErrorIs(t, err, errors.ErrStorageError)
+
+	for _, txID := range []*chainhash.Hash{first, second} {
+		for idx := 1; idx <= 6; idx++ {
+			require.ErrorContains(t, err, txID.String()+"] failed to clear record "+strconv.Itoa(idx))
+		}
+	}
 }
 
 // TestApplyLockClearWorkReportsEveryFailure checks that a failed read of the
