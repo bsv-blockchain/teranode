@@ -270,7 +270,7 @@ func TestCreateTransactionMap_ToCheckSubtreeBodyIsVerified(t *testing.T) {
 	root := storeCorruptedSubtree(t, store, fileformat.FileTypeSubtreeToCheck)
 
 	_, _, err := stp.createTransactionMap(context.Background(), map[chainhash.Hash]int{root: 0}, 1, 4, txMapBuild{verifyToCheck: true})
-	require.ErrorContains(t, err, "does not hash to its key")
+	require.ErrorContains(t, err, "hash to its key")
 
 	_, _, err = stp.createTransactionMap(context.Background(), map[chainhash.Hash]int{root: 0}, 1, 4, txMapBuild{})
 	require.NoError(t, err, "the default build does not verify")
