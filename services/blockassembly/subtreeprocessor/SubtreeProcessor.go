@@ -115,8 +115,8 @@ type reorgBlocksRequest struct {
 	// moveForwardBlocks contains blocks that need to be added to form the new chain
 	moveForwardBlocks []*model.Block
 
-	// tipSeenAt is when block assembly first saw the tip change this reorg follows; zero when the
-	// caller did not say.
+	// tipSeenAt is when the block-announcement pass behind this reorg started; zero when the caller
+	// did not say.
 	tipSeenAt time.Time
 
 	// errChan receives any error encountered during reorganization
@@ -500,8 +500,8 @@ type SubtreeProcessor struct {
 	// anything. Only the processor goroutine touches it.
 	reorgForwardTxMapSubtrees []chainhash.Hash
 
-	// reorgTipSeenAt is when block assembly first saw the tip change the running Reorg request
-	// follows, zero when the request did not say. The processor loop sets it around reorgBlocks
+	// reorgTipSeenAt is when the block-announcement pass behind the running Reorg request started,
+	// zero when the request did not say. The processor loop sets it around reorgBlocks
 	// and only the processor goroutine reads it.
 	reorgTipSeenAt time.Time
 
@@ -1812,7 +1812,7 @@ func (stp *SubtreeProcessor) reset(blockHeader *model.BlockHeader, moveBackBlock
 
 	// Times each phase: a failed fork reorg ends in a reset, so its cost is part of the reorg's
 	// (issue 2269).
-	defer stp.startPhases("reset")()
+	defer stp.startPhases("reset", &err)()
 
 	stp.phases.count("pending", max(int(stp.TxCount())-1, 0)) //nolint:gosec // a count, far below MaxInt
 
@@ -5551,8 +5551,9 @@ func (stp *SubtreeProcessor) MoveForwardBlock(block *model.Block) error {
 // ReorgOption adds optional information to a Reorg request.
 type ReorgOption func(*reorgBlocksRequest)
 
-// WithTipSeenAt tells the processor when block assembly first saw the tip change this reorg
-// follows, so a fork reorg reports how long the change waited before the reorg started (issue 2269).
+// WithTipSeenAt tells the processor when the block-announcement pass behind this reorg started, so a
+// fork reorg reports how long it waited before the reorg started (issue 2269). One pass can run
+// several reorgs, each given the same time, so a later one also counts the earlier moves' time.
 func WithTipSeenAt(t time.Time) ReorgOption {
 	return func(r *reorgBlocksRequest) { r.tipSeenAt = t }
 }
@@ -5829,7 +5830,7 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveBackBlocks []*
 
 		// Times each phase of the fork reorg; the forward steps report their own sub-phases
 		// (issue 2269). A catch-up above is not timed.
-		defer stp.startPhases("reorgBlocks")()
+		defer stp.startPhases("reorgBlocks", &err)()
 
 		stp.reportTipToStart()
 

@@ -88,6 +88,9 @@ type reorgScenario struct {
 	lost      *model.Block
 	forward   []*model.Block
 
+	// release stops the processor; it runs once, at the latest at the end of the test.
+	release func()
+
 	lostIDs    []scenarioID
 	pendingIDs []scenarioID
 	winnerIDs  []scenarioID
@@ -314,11 +317,48 @@ func newReorgScenario(t testing.TB, cfg reorgScenarioConfig) *reorgScenario {
 	}
 
 	rng.Shuffle(len(sc.winnerIDs), func(i, j int) { sc.winnerIDs[i], sc.winnerIDs[j] = sc.winnerIDs[j], sc.winnerIDs[i] })
+	sc.winnerIDs = sc.parentsFirst(sc.winnerIDs)
 
 	sc.buildChain(t)
 	sc.buildProcessor(t)
 
 	return sc
+}
+
+// parentsFirst keeps ids in their order, except that a transaction whose scenario parent is also in
+// ids follows that parent directly. The winning blocks are consecutive slices of the result, so a
+// child is never in an earlier block than its parent, nor before it in the same block.
+func (sc *reorgScenario) parentsFirst(ids []scenarioID) []scenarioID {
+	inIDs := make(map[scenarioID]struct{}, len(ids))
+	for _, id := range ids {
+		inIDs[id] = struct{}{}
+	}
+
+	waiting := make(map[scenarioID][]scenarioID)
+	out := make([]scenarioID, 0, len(ids))
+
+	var emit func(id scenarioID)
+
+	emit = func(id scenarioID) {
+		out = append(out, id)
+
+		for _, child := range waiting[id] {
+			emit(child)
+		}
+	}
+
+	for _, id := range ids {
+		if extra, ok := sc.extraParent[id]; ok {
+			if _, parentInIDs := inIDs[extra.parent]; parentInIDs {
+				waiting[extra.parent] = append(waiting[extra.parent], id)
+				continue
+			}
+		}
+
+		emit(id)
+	}
+
+	return out
 }
 
 // addParentEdges picks the pending transactions that spend another scenario transaction: first the
@@ -524,11 +564,12 @@ func (sc *reorgScenario) buildProcessor(t testing.TB) {
 	stp, err := NewSubtreeProcessor(ctx, ulogger.TestLogger{}, tSettings, sc.blobStore, sc.client, sc.utxo, newSubtreeChan, opts...)
 	require.NoError(t, err)
 
-	t.Cleanup(func() {
+	sc.release = sync.OnceFunc(func() {
 		stp.Stop(context.Background())
 		close(newSubtreeChan)
 		<-listenerDone
 	})
+	t.Cleanup(sc.release)
 
 	stp.InitCurrentBlockHeader(sc.lost.Header)
 
