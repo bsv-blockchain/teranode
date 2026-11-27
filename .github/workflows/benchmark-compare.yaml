@@ -147,6 +147,23 @@ jobs:
             i=$((i + 1))
           done
 
+      # Fails when a benchmark function in any binary does not start on a 64-byte boundary,
+      # so an edit or a toolchain that drops -funcalign=64 shows up here.
+      - name: Check benchmark functions start on 64-byte boundaries
+        run: |
+          checked=0
+          for bin in "$RUNNER_TEMP"/bench/*/*.test; do
+            while read -r addr _ name; do
+              checked=$((checked + 1))
+              if (( 0x$addr % 64 )); then
+                echo "::error::$name in $bin starts at 0x$addr, not on a 64-byte boundary"
+                exit 1
+              fi
+            done < <(go tool nm "$bin" | grep -E ' T [^ ]*[.]Benchmark[^.]*$' || true)
+          done
+          echo "$checked benchmark functions start on 64-byte boundaries"
+          [ "$checked" -gt 0 ]
+
       # The two sides take turns, one sample each, count times over. When all of one side
       # ran before the other, every false flag measured on same-code runs read the first
       # side as slower, and CI always ran the PR side first.
