@@ -1,8 +1,11 @@
 diff --git a/services/blockassembly/subtreeprocessor/reorg_fast_path.go b/services/blockassembly/subtreeprocessor/reorg_fast_path.go
-index cdac49551..d14688751 100644
+index c5d9aaf43..7275f3572 100644
 --- a/services/blockassembly/subtreeprocessor/reorg_fast_path.go
 +++ b/services/blockassembly/subtreeprocessor/reorg_fast_path.go
-@@ -609,7 +609,7 @@ func (stp *SubtreeProcessor) copySurvivors(plan *fastReorgPlan, workers int) []s
+@@ -674,13 +674,13 @@ func (stp *SubtreeProcessor) copySurvivors(plan *fastReorgPlan, workers int) []s
+ 			for i, node := range st.Nodes {
+ 				switch f := plan.flags[idx][i]; {
+ 				case f == 0:
  					kept[pos] = node
  					pos++
  				case f&fastFlagRemoveMap != 0:
@@ -11,3 +14,6 @@ index cdac49551..d14688751 100644
  				}
  			}
  
+ 			return nil
+ 		})
+ 	}

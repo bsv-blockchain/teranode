@@ -1,8 +1,11 @@
 diff --git a/services/blockassembly/subtreeprocessor/SubtreeProcessor.go b/services/blockassembly/subtreeprocessor/SubtreeProcessor.go
-index 2d7cbd297..05dab4bdd 100644
+index b5c52c03f..38dbb511b 100644
 --- a/services/blockassembly/subtreeprocessor/SubtreeProcessor.go
 +++ b/services/blockassembly/subtreeprocessor/SubtreeProcessor.go
-@@ -5717,7 +5717,7 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveBackBlocks []*
+@@ -6165,13 +6165,13 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveBackBlocks []*
+ 			// counter-side already Spend/Unmarked. The realistic Remove failure
+ 			// is "tx already absent" (race with a concurrent eviction) which is
+ 			// the desired end state anyway. A genuine corruption case is
  			// recoverable via the next reorg/reset or `teranode-cli
  			// resetblockassembly --validate-inputs` — the same recovery path
  			// the validate-inputs cascade relies on.
@@ -11,3 +14,6 @@ index 2d7cbd297..05dab4bdd 100644
  				if removeErr := stp.Remove(ctx, h); removeErr != nil {
  					stp.logger.Warnf("[reorgBlocks][%s] failed to evict reverse-demoted tx %s from in-memory subtree: %v", block.String(), h.String(), removeErr)
  				}
+ 			}
+ 
+ 			// Persist the newly-conflicting demoted txs (and their cascaded

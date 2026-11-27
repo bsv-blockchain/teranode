@@ -58,14 +58,17 @@ func (stp *SubtreeProcessor) runDeferredReorgDrain(ctx context.Context) {
 		drainStartHook()
 	}
 
-	defer stp.startPhases("reorgDrain")()
+	// a drain that fails records the phase it failed in, as a failed reorg does
+	var drainErr error
+
+	defer stp.startPhases("reorgDrain", &drainErr)()
 
 	stp.phases.count("fast_drain_queue", int(stp.QueueLength()))
 
-	if err := stp.runHandlerWithRecover("deferredReorgDrain", func() error {
+	if drainErr = stp.runHandlerWithRecover("deferredReorgDrain", func() error {
 		return stp.drainQueueAfterBlock(ctx, drain)
-	}); err != nil {
-		stp.logger.Errorf("[SubtreeProcessor][reorgInPlace] error draining the queue after the reorg, requesting a block assembly reset: %v", err)
+	}); drainErr != nil {
+		stp.logger.Errorf("[SubtreeProcessor][reorgInPlace] error draining the queue after the reorg, requesting a block assembly reset: %v", drainErr)
 		stp.drainResetRequested.Store(true)
 	}
 

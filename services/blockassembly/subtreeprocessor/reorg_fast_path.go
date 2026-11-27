@@ -170,7 +170,8 @@ func (stp *SubtreeProcessor) planFastReorg(ctx context.Context, moveBackBlocks, 
 		return nil, "tx_map_length"
 	}
 
-	var setBytes uint64
+	// The lost block is charged like a winner: D1 and its subtrees' nodes and inpoints grow with it.
+	setBytes := lost.TransactionCount * fastPathSetBytesPerHash
 	for _, block := range moveForwardBlocks {
 		setBytes += block.TransactionCount * fastPathSetBytesPerHash
 	}

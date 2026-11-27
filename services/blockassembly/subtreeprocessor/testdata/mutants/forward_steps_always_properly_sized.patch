@@ -1,8 +1,8 @@
 diff --git a/services/blockassembly/subtreeprocessor/SubtreeProcessor.go b/services/blockassembly/subtreeprocessor/SubtreeProcessor.go
-index 0c5c39eb8..4467dd568 100644
+index b5c52c03f..1b73756c9 100644
 --- a/services/blockassembly/subtreeprocessor/SubtreeProcessor.go
 +++ b/services/blockassembly/subtreeprocessor/SubtreeProcessor.go
-@@ -6148,7 +6148,7 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveBackBlocks []*
+@@ -6271,7 +6271,7 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveBackBlocks []*
  		// it arrived before the set was kept, while blockassembly_minedTxSetRetention lasts (recent_mined_sets.go).
  		// One a positive double-spend window holds back past its block's drain
  		// reaches only later blocks' filters and the kept sets.

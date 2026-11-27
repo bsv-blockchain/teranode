@@ -20,7 +20,6 @@ type StoredSet struct {
 	mu       sync.RWMutex
 	roots    map[chainhash.Hash]struct{}
 	failed   map[chainhash.Hash]struct{} // stores that ended failed for good, until Retain or a later success
-	added    uint64                      // roots ever added: the stored count the progress rule watches
 	retrying map[chainhash.Hash]int      // per root: requests with a write in the retry processor, not yet settled
 
 	// version changes whenever a root is added or dropped, so a reader can tell that a prefix it
@@ -44,8 +43,6 @@ func (s *StoredSet) Add(root chainhash.Hash) {
 func (s *StoredSet) addLocked(root chainhash.Hash) {
 	if _, ok := s.roots[root]; !ok {
 		s.roots[root] = struct{}{}
-		s.added++
-
 		s.version.Add(1)
 	}
 
@@ -102,14 +99,6 @@ func (s *StoredSet) Finish(root chainhash.Hash, res StoreResult, retried bool) {
 	case res.Err != nil && !res.Cancelled:
 		s.failed[root] = struct{}{}
 	}
-}
-
-// Added is the number of roots ever added.
-func (s *StoredSet) Added() uint64 {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	return s.added
 }
 
 // Retrying reports whether a request for root has a write in the retry processor.

@@ -16,6 +16,7 @@ package blockassembly
 
 import (
 	"testing"
+	"time"
 
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
@@ -320,5 +321,47 @@ func TestProcessNewBlockAnnouncement_RepeatedWakeUpsAreIdempotent(t *testing.T) 
 		h, _ := items.blockAssembler.CurrentBlock()
 		require.Equal(t, genesis.Hash().String(), h.Hash().String(),
 			"redundant wake-up must not change the tip")
+	})
+}
+
+// handleReorg hands the processor when the running announcement pass started, and nothing when
+// no pass runs (issue 2269): without it tip_to_start_ms never reports.
+func TestHandleReorg_PassesTheAnnouncementPassStartToTheProcessor(t *testing.T) {
+	initPrometheusMetrics()
+
+	t.Run("outside a pass it passes no time", func(t *testing.T) {
+		mockStp, err := runReorgDecision(t, 1, 100)
+		require.NoError(t, err)
+
+		seen, ok := mockStp.ReorgTipSeenAt()
+		require.True(t, ok)
+		require.True(t, seen.IsZero())
+	})
+
+	t.Run("inside a pass it passes the pass start and clears it afterwards", func(t *testing.T) {
+		items := setupBlockAssemblyTest(t)
+		genesis := genesisHeader(t, items)
+
+		a1 := buildChain(genesis, 1, 600)[0]
+		b1 := buildChain(genesis, 1, 700)[0]
+		b2 := buildChain(b1, 1, 800)[0]
+		require.NoError(t, items.addBlock(t.Context(), a1))
+		require.NoError(t, items.addBlock(t.Context(), b1))
+		require.NoError(t, items.addBlock(t.Context(), b2))
+
+		mockStp := newReorgMockStp(t, items)
+		items.blockAssembler.setBestBlockHeader(a1, 1)
+
+		before := time.Now()
+		items.blockAssembler.processNewBlockAnnouncement(t.Context())
+		after := time.Now()
+
+		mockStp.AssertCalled(t, "Reorg", mock.Anything, mock.Anything)
+
+		seen, ok := mockStp.ReorgTipSeenAt()
+		require.True(t, ok)
+		require.False(t, seen.Before(before))
+		require.False(t, seen.After(after))
+		require.True(t, items.blockAssembler.tipSeenAt.IsZero())
 	})
 }
