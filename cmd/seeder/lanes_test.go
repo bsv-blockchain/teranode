@@ -20,6 +20,7 @@ import (
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
+	"github.com/bsv-blockchain/teranode/services/blockassembly"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/utxopersister"
 	"github.com/bsv-blockchain/teranode/settings"
@@ -761,95 +762,82 @@ func utxoStoreHasRecord(t *testing.T, f *seedFixture, txid *chainhash.Hash) bool
 	return true
 }
 
-// failImportedStore is a blockchain store whose write of the record that an import ran to its
-// end fails.
-type failImportedStore struct {
+// failStateStore is a blockchain store whose write of a set value under prefix fails.
+type failStateStore struct {
 	blockchain_store.Store
+	prefix string
 }
 
-func (s failImportedStore) SetState(ctx context.Context, key string, data []byte) error {
-	if strings.HasPrefix(key, seederImportedKeyPrefix) && len(data) > 0 {
+func (s failStateStore) SetState(ctx context.Context, key string, data []byte) error {
+	if strings.HasPrefix(key, s.prefix) && len(data) > 0 {
 		return errors.NewStorageError("refused")
 	}
 
 	return s.Store.SetState(ctx, key, data)
 }
 
-// A seed whose import's end cannot be recorded fails without writing rows or a checkpoint, and
-// the record stays unset, so no later run takes the import as finished.
-func TestSeederFailsWhenItCannotRecordTheImport(t *testing.T) {
-	f := newSeedFixture(t, settings.LaneMigrationShadow, 8, fixtureHeights)
-	ctx := context.Background()
-
-	openBlockchainStore = func(logger ulogger.Logger, s *settings.Settings) (blockchain_store.Store, error) {
-		store, err := newBlockchainStore(logger, s)
-
-		return failImportedStore{Store: store}, err
-	}
-	t.Cleanup(func() { openBlockchainStore = newBlockchainStore })
-
-	require.ErrorContains(t, f.seed(false), "refused")
-	openBlockchainStore = newBlockchainStore
-
-	bc := f.blockchainStore()
-
-	imported, err := seedImported(ctx, bc, f.tip)
-	require.NoError(t, err)
-	require.False(t, imported)
-
-	exists, err := blockAssemblerStateExists(ctx, bc)
-	require.NoError(t, err)
-	require.False(t, exists, "no checkpoint")
-
-	_, metas, err := bc.GetBlockHeadersByHeight(ctx, 0, f.tipH)
-	require.NoError(t, err)
-
-	for _, m := range metas {
-		rows, err := bc.LaneMapRows(ctx, m.ID)
-		require.NoError(t, err)
-		require.Empty(t, rows, "no row for height %d", m.Height)
-	}
-}
-
-// failRowsDoneStore is a blockchain store whose write of the rows-done record fails.
-type failRowsDoneStore struct {
-	blockchain_store.Store
-}
-
-func (s failRowsDoneStore) SetState(ctx context.Context, key string, data []byte) error {
-	if strings.HasPrefix(key, seederRowsKeyPrefix) && len(data) > 0 {
-		return errors.NewStorageError("refused")
+// A seed that cannot record its import as run to its end, or its rows as written, fails without a
+// checkpoint and leaves that record unset; -recover-checkpoint then finishes a seed whose import ran.
+func TestSeederFailsWhenItCannotRecordItsProgress(t *testing.T) {
+	cases := []struct {
+		name    string
+		prefix  string
+		recover bool
+	}{
+		{"import", seederImportedKeyPrefix, false},
+		{"rows", seederRowsKeyPrefix, true},
 	}
 
-	return s.Store.SetState(ctx, key, data)
-}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			f := newSeedFixture(t, settings.LaneMigrationShadow, 8, fixtureHeights)
+			ctx := context.Background()
 
-// A seed that cannot record its rows as written writes no checkpoint, and -recover-checkpoint then
-// finishes it.
-func TestSeederFailsWhenItCannotRecordTheRows(t *testing.T) {
-	f := newSeedFixture(t, settings.LaneMigrationShadow, 8, fixtureHeights)
-	ctx := context.Background()
+			openBlockchainStore = func(logger ulogger.Logger, s *settings.Settings) (blockchain_store.Store, error) {
+				store, err := newBlockchainStore(logger, s)
 
-	openBlockchainStore = func(logger ulogger.Logger, s *settings.Settings) (blockchain_store.Store, error) {
-		store, err := newBlockchainStore(logger, s)
+				return failStateStore{Store: store, prefix: c.prefix}, err
+			}
+			t.Cleanup(func() { openBlockchainStore = newBlockchainStore })
 
-		return failRowsDoneStore{Store: store}, err
+			require.ErrorContains(t, f.seed(false), "refused")
+			openBlockchainStore = newBlockchainStore
+
+			bc := f.blockchainStore()
+
+			exists, err := blockAssemblerStateExists(ctx, bc)
+			require.NoError(t, err)
+			require.False(t, exists, "no checkpoint")
+
+			record, err := readState(ctx, bc, seederStateKey(c.prefix, f.tip))
+			require.NoError(t, err)
+			require.Empty(t, record)
+
+			if !c.recover {
+				_, metas, err := bc.GetBlockHeadersByHeight(ctx, 0, f.tipH)
+				require.NoError(t, err)
+
+				for _, m := range metas {
+					rows, err := bc.LaneMapRows(ctx, m.ID)
+					require.NoError(t, err)
+					require.Empty(t, rows, "no row for height %d", m.Height)
+				}
+
+				return
+			}
+
+			require.NoError(t, Seeder(ulogger.TestLogger{}, f.settings, f.dir, f.name, false, false, false, true, true))
+			f.requireStamped(f.recordedGrant())
+
+			written, err := seededRowsWritten(ctx, f.blockchainStore(), f.tip)
+			require.NoError(t, err)
+			require.True(t, written)
+
+			state, err := f.blockchainStore().GetState(ctx, blockassembly.StateKey)
+			require.NoError(t, err)
+			require.NotEmpty(t, state, "recovery wrote the checkpoint")
+		})
 	}
-	t.Cleanup(func() { openBlockchainStore = newBlockchainStore })
-
-	require.ErrorContains(t, f.seed(false), "refused")
-	openBlockchainStore = newBlockchainStore
-
-	exists, err := blockAssemblerStateExists(ctx, f.blockchainStore())
-	require.NoError(t, err)
-	require.False(t, exists, "no checkpoint")
-
-	require.NoError(t, Seeder(ulogger.TestLogger{}, f.settings, f.dir, f.name, false, false, false, true, true))
-	f.requireStamped(f.recordedGrant())
-
-	written, err := seededRowsWritten(ctx, f.blockchainStore(), f.tip)
-	require.NoError(t, err)
-	require.True(t, written)
 }
 
 // A seed whose rows cannot be written leaves no BlockAssembler checkpoint, so a plain re-run does
