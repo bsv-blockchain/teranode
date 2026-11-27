@@ -850,7 +850,9 @@ func (s *Store) rollForwardCreatingRecords(ctx context.Context, hashes []*chainh
 	creating, unread := s.readCreatingRecords(ctx, hashes)
 
 	for hash, readErr := range unread {
-		wrapped := errors.NewProcessingError("[setMined] create-first pre-flight: read of the creating state of %s failed", hash.String(), readErr)
+		// A read that failed is a fault of this node's store, so it gets the storage code that keeps
+		// the block for a retry: a raw Aerospike error has no code of its own.
+		wrapped := errors.NewStorageError("[setMined] create-first pre-flight: read of the creating state of %s failed", hash.String(), readErr)
 
 		if !tolerant {
 			return failed, wrapped

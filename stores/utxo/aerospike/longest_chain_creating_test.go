@@ -500,6 +500,7 @@ func TestMarkOnLongestChain_ReadsTheCreatingStateInBoundedBatches(t *testing.T) 
 
 		err := store.MarkTransactionsOnLongestChain(ctx, hashes, true)
 		require.Error(t, err, "the hashes whose state could not be read are reported")
+		require.ErrorIs(t, err, errors.ErrStorageError, "a read that failed is a fault of the store, and the error says so")
 
 		store.SetBatchOperateFn(nil)
 
