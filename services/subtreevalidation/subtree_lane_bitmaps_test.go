@@ -6,7 +6,6 @@ import (
 	"net"
 	"net/netip"
 	"net/url"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -30,7 +29,6 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
-	utxosql "github.com/bsv-blockchain/teranode/stores/utxo/sql"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/kafka"
 	"github.com/bsv-blockchain/teranode/util/lane"
@@ -598,15 +596,11 @@ func TestStoreSubtreeFiles_ALaneBitmapsFailureStopsTheSubtreeOnlyWhenTheStoreRef
 	}
 }
 
-// laneHeightUtxoStore is a real sqlitememory UTXO store at block height.
+// laneHeightUtxoStore is the package's real sqlitememory UTXO store, at block height.
 func laneHeightUtxoStore(t *testing.T, height uint32) utxo.Store {
 	t.Helper()
 
-	u, err := url.Parse("sqlitememory:///lane_bitmaps_" + strings.NewReplacer("/", "_", " ", "_").Replace(t.Name()) + fmt.Sprintf("_%d", height))
-	require.NoError(t, err)
-
-	store, err := utxosql.New(t.Context(), ulogger.TestLogger{}, test.CreateBaseTestSettings(t), u)
-	require.NoError(t, err)
+	store := newSQLUtxoStore(t, t.Context(), test.CreateBaseTestSettings(t))
 	require.NoError(t, store.SetBlockHeight(height))
 
 	return store

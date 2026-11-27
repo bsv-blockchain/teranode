@@ -1097,11 +1097,15 @@ func (ba *BlockAssembly) storeSubtreeData(ctx context.Context, subtreeRequest su
 
 	var laneBitmapsErr error
 
+	// The kept bitmaps are read once, here: the write and every retry queued for this request use
+	// them, so they cannot age out of memory in between.
+	laneBitmaps, hasLaneBitmaps := ba.laneRetryBitmaps(*subtree.RootHash())
+
 	if lanes {
 		go func() {
 			defer close(laneBitmapsDone)
 
-			laneBitmapsErr = ba.writeKeptLaneBitmapsFile(ctx, *subtree.RootHash(), height, dah)
+			laneBitmapsErr = ba.writeCapturedLaneBitmapsFile(ctx, *subtree.RootHash(), laneBitmaps, hasLaneBitmaps, height, dah)
 		}()
 	} else {
 		close(laneBitmapsDone)
@@ -1127,7 +1131,6 @@ func (ba *BlockAssembly) storeSubtreeData(ctx context.Context, subtreeRequest su
 					ba.logger.Debugf("[BlockAssembly:storeSubtreeData][%s] subtree meta already exists", subtree.RootHash().String())
 				} else {
 					ba.logger.Errorf("[BlockAssembly:storeSubtreeData][%s] failed to store subtree meta: %s", subtree.RootHash().String(), err)
-					laneBitmaps, hasLaneBitmaps := ba.laneRetryBitmaps(*subtree.RootHash())
 					subtreeRetryChan <- &subtreeRetrySend{
 						subtreeHash:      *subtree.RootHash(),
 						subtreeBytes:     subtreeBytes,
@@ -1152,7 +1155,6 @@ func (ba *BlockAssembly) storeSubtreeData(ctx context.Context, subtreeRequest su
 
 		if laneBitmapsErr != nil {
 			ba.logger.Errorf("[BlockAssembly:storeSubtreeData][%s] failed to store subtree: %s", subtree.RootHash().String(), laneBitmapsErr)
-			laneBitmaps, hasLaneBitmaps := ba.laneRetryBitmaps(*subtree.RootHash())
 			select {
 			case subtreeRetryChan <- &subtreeRetrySend{
 				subtreeHash:    *subtree.RootHash(),
@@ -1180,7 +1182,6 @@ func (ba *BlockAssembly) storeSubtreeData(ctx context.Context, subtreeRequest su
 				ba.logger.Debugf("[BlockAssembly:storeSubtreeData][%s] subtree already exists", subtree.RootHash().String())
 			} else {
 				ba.logger.Errorf("[BlockAssembly:storeSubtreeData][%s] failed to store subtree: %s", subtree.RootHash().String(), err)
-				laneBitmaps, hasLaneBitmaps := ba.laneRetryBitmaps(*subtree.RootHash())
 				subtreeRetryChan <- &subtreeRetrySend{
 					subtreeHash:    *subtree.RootHash(),
 					subtreeBytes:   subtreeBytes,

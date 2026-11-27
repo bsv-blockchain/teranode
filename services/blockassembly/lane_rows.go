@@ -250,6 +250,13 @@ func (ba *BlockAssembly) writeLaneBitmapsFile(ctx context.Context, bitmaps lane.
 // subtree. It returns the error of a write the store refused (writeLaneBitmapsFile).
 func (ba *BlockAssembly) writeKeptLaneBitmapsFile(ctx context.Context, root chainhash.Hash, height, dah uint32) error {
 	lanes, kept := ba.ownLaneBitmaps.lookup(root)
+
+	return ba.writeCapturedLaneBitmapsFile(ctx, root, lanes, kept, height, dah)
+}
+
+// writeCapturedLaneBitmapsFile is writeKeptLaneBitmapsFile for bitmaps the caller already read:
+// lanes, when kept is true.
+func (ba *BlockAssembly) writeCapturedLaneBitmapsFile(ctx context.Context, root chainhash.Hash, lanes lane.LaneBitmaps, kept bool, height, dah uint32) error {
 	if !kept {
 		lane.CountMissingBitmaps(lane.BlockOwn, lane.MissingBitmapsWriteFailed, 1)
 		ba.logger.Warnf("[BlockAssembly:storeSubtreeData][%s] storing the subtree without its lane bitmaps file: it has no lane bitmaps kept", root.String())
