@@ -34,8 +34,10 @@ const (
 	MissingBitmapsTimedOut = "timed_out"
 	// MissingBitmapsWriteFailed: a subtree's lane bitmaps file could not be encoded or written, by
 	// subtree validation (block peer) or block assembly (block own), or block assembly stored a
-	// subtree with no bitmaps kept to write. It is counted when the write fails, so a peer's block
-	// that later lists the subtree counts it again, as absent.
+	// subtree with no bitmaps kept to write. It is counted once per failed write. A write the store
+	// refused leaves the subtree unstored until a later write of both succeeds; one that could not
+	// be encoded, or had no bitmaps kept, stores the subtree without the file, and a peer's block
+	// that later lists it counts it again, as absent.
 	MissingBitmapsWriteFailed = "write_failed"
 )
 
@@ -67,8 +69,6 @@ var (
 	prometheusLaneMissingBitmaps   *prometheus.CounterVec
 	prometheusLaneTxsNoPosition    *prometheus.CounterVec
 	prometheusLaneRowInsertFailure *prometheus.CounterVec
-	prometheusLaneBitmapsRetried   *prometheus.CounterVec
-	prometheusLaneBitmapsExhausted *prometheus.CounterVec
 
 	rowsMetricsInitOnce sync.Once
 )
@@ -106,7 +106,7 @@ func initRowsMetrics() {
 			Namespace: "teranode",
 			Subsystem: "lane",
 			Name:      "missing_bitmaps_total",
-			Help:      "Subtrees without usable lane bitmaps, by reason; block is peer or own. absent, unreadable and timed_out are counted for the subtrees of a block stored without lane rows. For a peer's block (block peer) the bitmaps are its subtrees' lane bitmaps files, read by block validation: absent, unreadable, or timed_out when not read by the deadline. For a block this node mined (block own) they are the bitmaps block assembly kept in memory when it sealed the subtree, not read from a file: absent when none were kept. write_failed is counted when a subtree's lane bitmaps file could not be written, by subtree validation (block peer) or by block assembly (block own); a peer's block that later lists that subtree counts it again, as absent",
+			Help:      "Subtrees without usable lane bitmaps, by reason; block is peer or own. absent, unreadable and timed_out are counted for the subtrees of a block stored without lane rows. For a peer's block (block peer) the bitmaps are its subtrees' lane bitmaps files, read by block validation: absent, unreadable, or timed_out when not read by the deadline. For a block this node mined (block own) they are the bitmaps block assembly kept in memory when it sealed the subtree, not read from a file: absent when none were kept. write_failed is counted once per failed write of a subtree's lane bitmaps file, by subtree validation (block peer) or by block assembly (block own). A write the store refused leaves the subtree unstored until a later write of both succeeds; bitmaps that could not be encoded, or none kept, store the subtree without the file, and a peer's block that later lists it counts it again, as absent",
 		}, []string{"block", "reason"})
 		prometheusLaneTxsNoPosition = promauto.NewCounterVec(prometheus.CounterOpts{
 			Namespace: "teranode",
@@ -120,18 +120,6 @@ func initRowsMetrics() {
 			Name:      "row_insert_failures_total",
 			Help:      "Blocks whose attempted map rows were not stored, so the block's store could go on: the rows could not be built (block validation or block assembly), parsed (the blockchain service) or checked (the blockchain store), the block ID does not fit the map, or their insert failed and was rolled back to its savepoint. Rows already stored for that block ID are left in place. In the blockchain store a block is counted once it is stored, from the attempt that stored it, so a retried store counts once and a store that fails counts nothing; a failure of the savepoint itself aborts the block's transaction and is not counted. block is peer or own",
 		}, []string{"block"})
-		prometheusLaneBitmapsRetried = promauto.NewCounterVec(prometheus.CounterOpts{
-			Namespace: "teranode",
-			Subsystem: "lane",
-			Name:      "bitmaps_write_retries_total",
-			Help:      "Lane bitmaps file writes that failed with an error a retry can pass (the subtree store, or the blockchain database it schedules the file's deletion in, unavailable, or a timeout) and were tried again after a backoff, counted once per write whatever its outcome. service is blockassembly or subtreevalidation",
-		}, []string{"service"})
-		prometheusLaneBitmapsExhausted = promauto.NewCounterVec(prometheus.CounterOpts{
-			Namespace: "teranode",
-			Subsystem: "lane",
-			Name:      "bitmaps_write_retries_exhausted_total",
-			Help:      "Lane bitmaps file writes still failing with an error a retry can pass when the retry bound had run out. The bound is per outage: a write that fails after it ran out, before any write has succeeded again, is not retried and is counted here at once. Each is also counted in teranode_lane_missing_bitmaps_total as write_failed. service is blockassembly or subtreevalidation",
-		}, []string{"service"})
 	})
 }
 
@@ -209,17 +197,4 @@ func CountRowInsertFailure(block string) {
 
 	initRowsMetrics()
 	prometheusLaneRowInsertFailure.WithLabelValues(block).Inc()
-}
-
-// countBitmapsWriteRetried counts a lane bitmaps file write by service that is tried again.
-func countBitmapsWriteRetried(service string) {
-	initRowsMetrics()
-	prometheusLaneBitmapsRetried.WithLabelValues(service).Inc()
-}
-
-// countBitmapsWriteRetriesExhausted counts a lane bitmaps file write by service still failing when
-// its retry bound ran out.
-func countBitmapsWriteRetriesExhausted(service string) {
-	initRowsMetrics()
-	prometheusLaneBitmapsExhausted.WithLabelValues(service).Inc()
 }

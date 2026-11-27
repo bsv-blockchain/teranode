@@ -202,10 +202,12 @@ func (o *ownLaneBitmaps) list(roots []chainhash.Hash, height uint32) {
 	}
 }
 
-// writeLaneBitmapsFile writes a subtree's lane bitmaps file, to live until dah. A write that fails
-// while the store or its database is briefly unavailable is retried (laneBitmapsRetry). A file
-// already there gets dah; a file that cannot be encoded or written is counted under block="own".
-func (ba *BlockAssembly) writeLaneBitmapsFile(ctx context.Context, bitmaps lane.SubtreeBitmaps, dah uint32) {
+// writeLaneBitmapsFile writes a subtree's lane bitmaps file, to live until dah. A file already
+// there gets dah. A write the store refuses returns a storage error, so the caller stores the
+// subtree file only once the bitmaps file is written. Bitmaps that cannot be encoded are a lane
+// fault, not a store one, and do not stop the subtree. Either failure is counted under
+// block="own".
+func (ba *BlockAssembly) writeLaneBitmapsFile(ctx context.Context, bitmaps lane.SubtreeBitmaps, dah uint32) error {
 	root := bitmaps.SubtreeHash
 
 	data, err := lane.EncodeSubtreeBitmaps(bitmaps)
@@ -213,31 +215,18 @@ func (ba *BlockAssembly) writeLaneBitmapsFile(ctx context.Context, bitmaps lane.
 		lane.CountMissingBitmaps(lane.BlockOwn, lane.MissingBitmapsWriteFailed, 1)
 		ba.logger.Warnf("[BlockAssembly:storeSubtreeData][%s] storing the subtree without its lane bitmaps file, which could not be encoded: %v", root.String(), err)
 
-		return
+		return nil
 	}
 
 	// An exclusive publish bounds the file store's delete-at scheduling, which the subtree file
 	// waits behind, and never replaces the delete-at of a file another writer published first.
-	// The file's lock is held for each attempt, not across the backoff between them, so a refresh
-	// of the file can run in between: an attempt that then finds the file goes on as any write
-	// that finds one does, below, and cannot lower a delete-at the refresh raised.
-	// A retry whose bound ran out while it waited for the lock starts no store call.
-	err = ba.laneBitmapsRetry.Do(ctx, laneBitmapsService, func(attemptCtx context.Context) error {
-		fileLock := ba.ownLaneBitmaps.fileLock(root)
-		fileLock.Lock()
-		defer fileLock.Unlock()
-
-		if attemptCtx.Err() != nil {
-			return errors.NewStorageError("[BlockAssembly:storeSubtreeData][%s] the lane bitmaps write retry bound ran out waiting for the file's lock", root.String(), attemptCtx.Err())
-		}
-
-		setErr := ba.subtreeStore.Set(attemptCtx, root[:], fileformat.FileTypeSubtreeLaneBitmaps, data, options.WithDeleteAt(dah), options.WithExclusivePublish())
-		if setErr == nil {
-			ba.ownLaneBitmaps.recordFileDAH(root, dah)
-		}
-
-		return setErr
-	})
+	fileLock := ba.ownLaneBitmaps.fileLock(root)
+	fileLock.Lock()
+	err = ba.subtreeStore.Set(ctx, root[:], fileformat.FileTypeSubtreeLaneBitmaps, data, options.WithDeleteAt(dah), options.WithExclusivePublish())
+	if err == nil {
+		ba.ownLaneBitmaps.recordFileDAH(root, dah)
+	}
+	fileLock.Unlock()
 
 	switch {
 	case errors.Is(err, errors.ErrBlobAlreadyExists):
@@ -247,25 +236,30 @@ func (ba *BlockAssembly) writeLaneBitmapsFile(ctx context.Context, bitmaps lane.
 			ba.logger.Warnf("[BlockAssembly:storeSubtreeData][%s] the lane bitmaps file may now expire before its subtree, whose DAH update failed: %v", root.String(), dahErr)
 		}
 	case err != nil:
-		// a peer's block that lists this subtree will count it absent; our own uses the kept bitmaps
 		lane.CountMissingBitmaps(lane.BlockOwn, lane.MissingBitmapsWriteFailed, 1)
-		ba.logger.Warnf("[BlockAssembly:storeSubtreeData][%s] storing the subtree without its lane bitmaps file, whose write failed: %v", root.String(), err)
+
+		return errors.NewStorageError("[BlockAssembly:storeSubtreeData][%s] failed to store the subtree's lane bitmaps file", root.String(), err)
 	}
+
+	return nil
 }
 
 // writeKeptLaneBitmapsFile writes the kept lane bitmaps of subtree root as its lane bitmaps file,
 // to live until dah, and marks them as stored at height. A subtree with no bitmaps kept gets no
-// file, which is counted as write_failed under block="own" and logged.
-func (ba *BlockAssembly) writeKeptLaneBitmapsFile(ctx context.Context, root chainhash.Hash, height, dah uint32) {
+// file, which is counted as write_failed under block="own" and logged, and does not stop the
+// subtree. It returns the error of a write the store refused (writeLaneBitmapsFile).
+func (ba *BlockAssembly) writeKeptLaneBitmapsFile(ctx context.Context, root chainhash.Hash, height, dah uint32) error {
 	lanes, kept := ba.ownLaneBitmaps.lookup(root)
 	if !kept {
 		lane.CountMissingBitmaps(lane.BlockOwn, lane.MissingBitmapsWriteFailed, 1)
 		ba.logger.Warnf("[BlockAssembly:storeSubtreeData][%s] storing the subtree without its lane bitmaps file: it has no lane bitmaps kept", root.String())
-		return
+
+		return nil
 	}
 
 	ba.ownLaneBitmaps.touch(root, height)
-	ba.writeLaneBitmapsFile(ctx, lane.SubtreeBitmaps{SubtreeHash: root, Lanes: lanes}, dah)
+
+	return ba.writeLaneBitmapsFile(ctx, lane.SubtreeBitmaps{SubtreeHash: root, Lanes: lanes}, dah)
 }
 
 // keepExistingSubtreeLaneBitmaps is the lane half of storing a subtree the store already has: the
@@ -281,9 +275,12 @@ func (ba *BlockAssembly) keepExistingSubtreeLaneBitmaps(ctx context.Context, roo
 
 	switch {
 	case errors.Is(err, errors.ErrNotFound):
-		// an earlier write of the file failed while its bitmaps were kept: write it now from the
-		// kept bitmaps, whose members were counted when they were kept
-		ba.writeKeptLaneBitmapsFile(ctx, root, height, dah)
+		// the subtree was stored without the file, before its bitmaps were kept or while they
+		// could not be encoded: write it now from the kept bitmaps, whose members were counted
+		// when they were kept
+		if writeErr := ba.writeKeptLaneBitmapsFile(ctx, root, height, dah); writeErr != nil {
+			ba.logger.Warnf("[BlockAssembly:storeSubtreeData][%s] the stored subtree is still without its lane bitmaps file: %v", root.String(), writeErr)
+		}
 	case err != nil:
 		ba.logger.Warnf("[BlockAssembly:storeSubtreeData][%s] the lane bitmaps file may now expire before its subtree, whose DAH update failed: %v", root.String(), err)
 	}

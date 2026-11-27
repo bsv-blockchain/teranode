@@ -33,7 +33,6 @@ import (
 	"github.com/bsv-blockchain/teranode/util/health"
 	"github.com/bsv-blockchain/teranode/util/kafka"
 	kafkamessage "github.com/bsv-blockchain/teranode/util/kafka/kafka_message"
-	"github.com/bsv-blockchain/teranode/util/lane"
 	"github.com/bsv-blockchain/teranode/util/tracing"
 	"github.com/ordishs/gocore"
 	"github.com/prometheus/client_golang/prometheus"
@@ -72,10 +71,6 @@ type Server struct {
 	// subtreeStore manages persistent storage of subtrees
 	// This blob store is used to save and retrieve complete subtree structures
 	subtreeStore blob.Store
-
-	// laneBitmapsRetry retries a failed write of a subtree's lane bitmaps file over a short outage
-	// of the subtree store or the database behind its delete-at heights (storeSubtreeLaneBitmaps).
-	laneBitmapsRetry lane.BitmapsWriteRetry
 
 	// txStore manages transaction storage
 	// This blob store is used to save and retrieve individual transactions

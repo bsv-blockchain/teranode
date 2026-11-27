@@ -47,7 +47,6 @@ import (
 	"github.com/bsv-blockchain/teranode/util/failpoint"
 	"github.com/bsv-blockchain/teranode/util/health"
 	"github.com/bsv-blockchain/teranode/util/kafka"
-	"github.com/bsv-blockchain/teranode/util/lane"
 	"github.com/bsv-blockchain/teranode/util/retry"
 	"github.com/bsv-blockchain/teranode/util/tracing"
 	"github.com/jellydator/ttlcache/v3"
@@ -119,10 +118,6 @@ type BlockAssembly struct {
 	// ownLaneBitmaps keeps the lane bitmaps of the subtrees this service's subtree processor sealed or rebuilt, by subtree hash,
 	// for the lane map rows of the blocks it mines, at utxostore_laneMigration shadow (lane_rows.go).
 	ownLaneBitmaps ownLaneBitmaps
-
-	// laneBitmapsRetry retries a failed write of a subtree's lane bitmaps file over a short outage
-	// of the subtree store or the database behind its delete-at heights (lane_rows.go).
-	laneBitmapsRetry lane.BitmapsWriteRetry
 
 	// jobCoinbaseMu makes GetMiningCandidate's read of a job's coinbase and its store of the new
 	// job one step, so two polls that share a candidate id cannot each build a coinbase and leave
@@ -863,8 +858,21 @@ func (ba *BlockAssembly) storeSubtreeMetaWithRetry(ctx context.Context, subtreeR
 	return err
 }
 
-// storeSubtreeDataWithRetry attempts to store subtree data with retry logic.
+// storeSubtreeDataWithRetry attempts to store subtree data with retry logic. At shadow it writes
+// the subtree's lane bitmaps file first, as storeSubtreeData does, and retries both when that
+// write fails.
 func (ba *BlockAssembly) storeSubtreeDataWithRetry(ctx context.Context, subtreeRetry *subtreeRetrySend, subtreeRetryChan chan *subtreeRetrySend, dah uint32) error {
+	if ba.keepsLanePositions() {
+		height := ba.blockAssembler.utxoStore.GetBlockHeight()
+
+		if err := ba.writeKeptLaneBitmapsFile(ctx, subtreeRetry.subtreeHash, height, dah); err != nil {
+			ba.logger.Errorf("[BlockAssembly:Init][%s] subtreeRetryChan: failed to retry store subtree lane bitmaps: %s", subtreeRetry.subtreeHash.String(), err)
+			ba.handleRetryLogic(ctx, subtreeRetry, subtreeRetryChan, "subtree lane bitmaps")
+
+			return err
+		}
+	}
+
 	err := ba.subtreeStore.Set(ctx,
 		subtreeRetry.subtreeHash[:],
 		fileformat.FileTypeSubtree,
@@ -1070,16 +1078,18 @@ func (ba *BlockAssembly) storeSubtreeData(ctx context.Context, subtreeRequest su
 
 	// laneBitmapsDone is closed once the write of the subtree's lane bitmaps has finished or failed.
 	// The subtree file waits for it, as subtree validation's does, so a subtree file is never
-	// written before its lane bitmaps are. A failed encode or write is logged and the subtree is
-	// still stored, as subtree validation does at shadow, so a stored subtree can lack the file. A
-	// peer's block that lists it then counts its bitmaps as missing; a block this node mines uses
-	// the kept bitmaps. Without lanes it is closed now and nothing waits.
+	// written before its lane bitmaps are. A write the store refused (laneBitmapsErr) leaves the
+	// subtree file to the retry processor, which writes the bitmaps file first, as a failed subtree
+	// file write does. Without lanes it is closed now and nothing waits.
 	laneBitmapsDone := make(chan struct{})
+
+	var laneBitmapsErr error
+
 	if lanes {
 		go func() {
 			defer close(laneBitmapsDone)
 
-			ba.writeKeptLaneBitmapsFile(ctx, *subtree.RootHash(), height, dah)
+			laneBitmapsErr = ba.writeKeptLaneBitmapsFile(ctx, *subtree.RootHash(), height, dah)
 		}()
 	} else {
 		close(laneBitmapsDone)
@@ -1105,11 +1115,6 @@ func (ba *BlockAssembly) storeSubtreeData(ctx context.Context, subtreeRequest su
 					ba.logger.Debugf("[BlockAssembly:storeSubtreeData][%s] subtree meta already exists", subtree.RootHash().String())
 				} else {
 					ba.logger.Errorf("[BlockAssembly:storeSubtreeData][%s] failed to store subtree meta: %s", subtree.RootHash().String(), err)
-
-					// the retry also stores the subtree file, so it is queued only once the lane
-					// bitmaps write, which may be retrying through the same outage, has ended
-					<-laneBitmapsDone
-
 					subtreeRetryChan <- &subtreeRetrySend{
 						subtreeHash:      *subtree.RootHash(),
 						subtreeBytes:     subtreeBytes,
@@ -1129,6 +1134,19 @@ func (ba *BlockAssembly) storeSubtreeData(ctx context.Context, subtreeRequest su
 
 		// at shadow, after the subtree's lane bitmaps
 		<-laneBitmapsDone
+
+		if laneBitmapsErr != nil {
+			ba.logger.Errorf("[BlockAssembly:storeSubtreeData][%s] failed to store subtree: %s", subtree.RootHash().String(), laneBitmapsErr)
+			subtreeRetryChan <- &subtreeRetrySend{
+				subtreeHash:  *subtree.RootHash(),
+				subtreeBytes: subtreeBytes,
+				retries:      0,
+			}
+			subtreeDoneCh <- false
+			close(subtreeDoneCh)
+
+			return
+		}
 
 		storedOK := true
 		if err := ba.subtreeStore.Set(ctx,
