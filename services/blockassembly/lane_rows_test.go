@@ -969,13 +969,25 @@ type hangingBitmapsStore struct {
 	blob.Store
 
 	calls atomic.Int32
+
+	mu sync.Mutex
+	// refusedAt is when the first write was refused, deadline the deadline the second one got.
+	refusedAt time.Time
+	deadline  time.Time
 }
 
 func (s *hangingBitmapsStore) Set(ctx context.Context, key []byte, fileType fileformat.FileType, value []byte, opts ...blobOptions.FileOption) error {
 	if fileType == fileformat.FileTypeSubtreeLaneBitmaps {
+		s.mu.Lock()
 		if s.calls.Add(1) == 1 {
+			s.refusedAt = time.Now()
+			s.mu.Unlock()
+
 			return errors.NewStorageError("database restarting")
 		}
+
+		s.deadline, _ = ctx.Deadline()
+		s.mu.Unlock()
 
 		<-ctx.Done()
 
@@ -992,7 +1004,8 @@ func TestALaneBitmapsRetryHungInTheStoreEndsAtItsBound(t *testing.T) {
 	server.laneBitmapsRetry.Bound = 300 * time.Millisecond
 	server.laneBitmapsRetry.FirstBackoff = time.Millisecond
 
-	server.subtreeStore = &hangingBitmapsStore{Store: memoryStore}
+	store := &hangingBitmapsStore{Store: memoryStore}
+	server.subtreeStore = store
 
 	root := chainhash.HashH([]byte("hung-retry"))
 	server.ownLaneBitmaps.put(root, lane.LaneBitmaps{}, 1)
@@ -1000,10 +1013,13 @@ func TestALaneBitmapsRetryHungInTheStoreEndsAtItsBound(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
 	defer cancel()
 
-	start := time.Now()
 	server.writeLaneBitmapsFile(ctx, lane.SubtreeBitmaps{SubtreeHash: root, Lanes: lane.LaneBitmaps{4: bitmapOfPositions(1)}}, 300)
-	require.Less(t, time.Since(start), 10*time.Second, "the hung retry ended at the bound")
 	require.NoError(t, ctx.Err())
+
+	store.mu.Lock()
+	defer store.mu.Unlock()
+
+	require.WithinDuration(t, store.refusedAt.Add(300*time.Millisecond), store.deadline, 250*time.Millisecond, "the hung retry's store call ends at the bound")
 }
 
 // refreshDuringRetryStore refuses a lane bitmaps file write at delete-at height 300 until a refresh

@@ -90,10 +90,15 @@ func (r *BitmapsWriteRetry) failed(now time.Time) time.Time {
 	return r.failingSince
 }
 
-// succeeded ends the current outage.
-func (r *BitmapsWriteRetry) succeeded() {
+// succeeded ends the current outage with a write that succeeded at done, unless a write failed
+// after it, whose outage it does not end.
+func (r *BitmapsWriteRetry) succeeded(done time.Time) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+
+	if r.lastFailure.After(done) {
+		return
+	}
 
 	r.failingSince = time.Time{}
 }
@@ -111,7 +116,7 @@ func (r *BitmapsWriteRetry) succeeded() {
 func (r *BitmapsWriteRetry) Do(ctx context.Context, service string, write func(ctx context.Context) error) error {
 	err := write(ctx)
 	if err == nil {
-		r.succeeded()
+		r.succeeded(time.Now())
 
 		return nil
 	}
@@ -153,7 +158,7 @@ func (r *BitmapsWriteRetry) Do(ctx context.Context, service string, write func(c
 		}
 
 		if err = write(attemptCtx); err == nil {
-			r.succeeded()
+			r.succeeded(time.Now())
 
 			return nil
 		}

@@ -1285,13 +1285,25 @@ const laneBitmapsService = "subtreevalidation"
 // its database is briefly unavailable is retried (laneBitmapsRetry). At shadow nothing acts on
 // lanes, so a write that still fails does not stop the subtree: it is logged and counted as
 // write_failed, and the block that lists the subtree counts its bitmaps as absent and goes without
-// rows. A file already there, from an earlier validation of the same subtree, is kept. Each attempt
-// is a plain write, as the meta and subtree writes are.
+// rows. A file already there, from an earlier validation of the same subtree, is kept.
+//
+// The first attempt is a plain write, as the meta and subtree writes are. A retry is an exclusive
+// publish, so a retry that finds the file, published by another writer during the backoff, keeps
+// that writer's delete-at height instead of replacing it with this, older, one.
 func (u *Server) storeSubtreeLaneBitmaps(ctx context.Context, subtreeHash *chainhash.Hash, bitmaps lane.SubtreeBitmaps, dah uint32) {
 	data, err := lane.EncodeSubtreeBitmaps(bitmaps)
 	if err == nil {
+		attempts := 0
+
 		err = u.laneBitmapsRetry.Do(ctx, laneBitmapsService, func(attemptCtx context.Context) error {
-			return u.subtreeStore.Set(attemptCtx, subtreeHash[:], fileformat.FileTypeSubtreeLaneBitmaps, data, options.WithDeleteAt(dah))
+			attempts++
+
+			opts := []options.FileOption{options.WithDeleteAt(dah)}
+			if attempts > 1 {
+				opts = append(opts, options.WithExclusivePublish())
+			}
+
+			return u.subtreeStore.Set(attemptCtx, subtreeHash[:], fileformat.FileTypeSubtreeLaneBitmaps, data, opts...)
 		})
 	}
 

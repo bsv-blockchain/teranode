@@ -866,13 +866,25 @@ type hangingBitmapsStore struct {
 	blob.Store
 
 	calls atomic.Int32
+
+	mu sync.Mutex
+	// refusedAt is when the first write was refused, deadline the deadline the second one got.
+	refusedAt time.Time
+	deadline  time.Time
 }
 
 func (s *hangingBitmapsStore) Set(ctx context.Context, key []byte, fileType fileformat.FileType, value []byte, opts ...bloboptions.FileOption) error {
 	if fileType == fileformat.FileTypeSubtreeLaneBitmaps {
+		s.mu.Lock()
 		if s.calls.Add(1) == 1 {
+			s.refusedAt = time.Now()
+			s.mu.Unlock()
+
 			return errors.NewStorageError("database restarting")
 		}
+
+		s.deadline, _ = ctx.Deadline()
+		s.mu.Unlock()
 
 		<-ctx.Done()
 
@@ -899,9 +911,12 @@ func TestStoreSubtreeFiles_ALaneBitmapsRetryHungInTheStoreEndsAtItsBound(t *test
 
 	bitmaps := &lane.SubtreeBitmaps{SubtreeHash: *root, Lanes: lane.LaneBitmaps{7: bitmapOfPositions(1)}}
 
-	start := time.Now()
 	require.NoError(t, server.storeSubtreeFiles(ctx, gocore.NewStat("test"), root, st, m, bitmaps))
-	require.Less(t, time.Since(start), 10*time.Second, "the hung retry ended at the bound")
+
+	store.mu.Lock()
+	defer store.mu.Unlock()
+
+	require.WithinDuration(t, store.refusedAt.Add(300*time.Millisecond), store.deadline, 250*time.Millisecond, "the hung retry's store call ends at the bound")
 
 	exists, err := store.Exists(ctx, root[:], fileformat.FileTypeSubtree)
 	require.NoError(t, err)
@@ -950,43 +965,77 @@ func (s *heightRecordingScheduler) CancelBlobDeletion(context.Context, []byte, s
 	return true, nil
 }
 
-// A validation whose bitmaps write is in its backoff while a second validation of the same subtree,
-// at a later height, stores all its files, ends with both files at its own height: the bitmaps file
-// lives as long as the subtree.
+// A validation whose bitmaps write is in its backoff while another writer of the same subtree, at
+// a later height, publishes the bitmaps file keeps that writer's height on the file, whichever
+// writer stores the subtree file last: the file lives at least as long as its subtree.
 func TestStoreSubtreeFiles_ARetryAfterASecondValidationKeepsTheFileAsLongAsItsSubtree(t *testing.T) {
-	ctx := t.Context()
 	tSettings := test.CreateBaseTestSettings(t)
-
-	st, m := laneBitmapsSubtree(t)
-	root := st.RootHash()
-	bitmaps := &lane.SubtreeBitmaps{SubtreeHash: *root, Lanes: lane.LaneBitmaps{7: bitmapOfPositions(1)}}
-
-	scheduler := &heightRecordingScheduler{heights: map[string]uint32{}}
-
-	storeURL, err := url.Parse("file://" + t.TempDir())
-	require.NoError(t, err)
-
-	subtreeStore, err := blobfile.New(ulogger.TestLogger{}, storeURL, bloboptions.WithBlobDeletionScheduler(scheduler))
-	require.NoError(t, err)
-
-	first := &Server{logger: ulogger.TestLogger{}, settings: tSettings, subtreeStore: subtreeStore, utxoStore: laneHeightUtxoStore(t, 100)}
-	second := &Server{logger: ulogger.TestLogger{}, settings: tSettings, subtreeStore: subtreeStore, utxoStore: laneHeightUtxoStore(t, 102)}
-
-	first.laneBitmapsRetry.FirstBackoff = time.Millisecond
-
-	scheduler.during = func() {
-		require.NoError(t, second.storeSubtreeFiles(ctx, gocore.NewStat("test"), root, st, m, bitmaps))
-	}
-
-	require.NoError(t, first.storeSubtreeFiles(ctx, gocore.NewStat("test"), root, st, m, bitmaps))
-
-	scheduler.mu.Lock()
-	defer scheduler.mu.Unlock()
-
 	firstDAH := 100 + tSettings.GetSubtreeValidationBlockHeightRetention()
+	laterDAH := 102 + tSettings.GetSubtreeValidationBlockHeightRetention()
 
-	require.Equal(t, firstDAH, scheduler.heights[string(fileformat.FileTypeSubtreeLaneBitmaps)], "the retried plain write scheduled its own height")
-	require.Equal(t, firstDAH, scheduler.heights[string(fileformat.FileTypeSubtree)], "and so did its subtree write after it")
+	for _, tc := range []struct {
+		name string
+		// during runs while the first validation's bitmaps write is refused; after runs once it returns
+		during, after  func(t *testing.T, second *Server, store blob.Store, root *chainhash.Hash, st *subtreepkg.Subtree, m *subtreepkg.Meta, bitmaps *lane.SubtreeBitmaps)
+		wantSubtreeDAH uint32
+	}{
+		{
+			name: "a second validation stores all its files",
+			during: func(t *testing.T, second *Server, _ blob.Store, root *chainhash.Hash, st *subtreepkg.Subtree, m *subtreepkg.Meta, bitmaps *lane.SubtreeBitmaps) {
+				require.NoError(t, second.storeSubtreeFiles(t.Context(), gocore.NewStat("test"), root, st, m, bitmaps))
+			},
+			wantSubtreeDAH: firstDAH, // the first validation's subtree write comes last
+		},
+		{
+			name: "another writer publishes the bitmaps file, and its subtree file last",
+			during: func(t *testing.T, _ *Server, store blob.Store, root *chainhash.Hash, _ *subtreepkg.Subtree, _ *subtreepkg.Meta, bitmaps *lane.SubtreeBitmaps) {
+				data, err := lane.EncodeSubtreeBitmaps(*bitmaps)
+				require.NoError(t, err)
+				require.NoError(t, store.Set(t.Context(), root[:], fileformat.FileTypeSubtreeLaneBitmaps, data, bloboptions.WithDeleteAt(laterDAH), bloboptions.WithExclusivePublish()))
+			},
+			after: func(t *testing.T, _ *Server, store blob.Store, root *chainhash.Hash, st *subtreepkg.Subtree, _ *subtreepkg.Meta, _ *lane.SubtreeBitmaps) {
+				data, err := st.Serialize()
+				require.NoError(t, err)
+
+				err = store.Set(t.Context(), root[:], fileformat.FileTypeSubtree, data, bloboptions.WithDeleteAt(laterDAH))
+				require.ErrorIs(t, err, errors.ErrBlobAlreadyExists)
+			},
+			wantSubtreeDAH: laterDAH,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			st, m := laneBitmapsSubtree(t)
+			root := st.RootHash()
+			bitmaps := &lane.SubtreeBitmaps{SubtreeHash: *root, Lanes: lane.LaneBitmaps{7: bitmapOfPositions(1)}}
+
+			scheduler := &heightRecordingScheduler{heights: map[string]uint32{}}
+
+			storeURL, err := url.Parse("file://" + t.TempDir())
+			require.NoError(t, err)
+
+			subtreeStore, err := blobfile.New(ulogger.TestLogger{}, storeURL, bloboptions.WithBlobDeletionScheduler(scheduler))
+			require.NoError(t, err)
+
+			first := &Server{logger: ulogger.TestLogger{}, settings: tSettings, subtreeStore: subtreeStore, utxoStore: laneHeightUtxoStore(t, 100)}
+			second := &Server{logger: ulogger.TestLogger{}, settings: tSettings, subtreeStore: subtreeStore, utxoStore: laneHeightUtxoStore(t, 102)}
+
+			first.laneBitmapsRetry.FirstBackoff = time.Millisecond
+
+			scheduler.during = func() { tc.during(t, second, subtreeStore, root, st, m, bitmaps) }
+
+			require.NoError(t, first.storeSubtreeFiles(t.Context(), gocore.NewStat("test"), root, st, m, bitmaps))
+
+			if tc.after != nil {
+				tc.after(t, second, subtreeStore, root, st, m, bitmaps)
+			}
+
+			scheduler.mu.Lock()
+			defer scheduler.mu.Unlock()
+
+			require.Equal(t, laterDAH, scheduler.heights[string(fileformat.FileTypeSubtreeLaneBitmaps)], "the retry kept the later writer's height")
+			require.Equal(t, tc.wantSubtreeDAH, scheduler.heights[string(fileformat.FileTypeSubtree)])
+		})
+	}
 }
 
 // laneBitmapsRetryCounts reads subtree validation's two lane bitmaps write retry counters.

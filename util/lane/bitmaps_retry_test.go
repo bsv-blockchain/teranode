@@ -140,6 +140,20 @@ func TestBitmapsWriteRetryGivesEachRetryTheBoundAsItsDeadline(t *testing.T) {
 	require.Equal(t, deadlines[1], deadlines[2], "every retry ends at the same bound")
 }
 
+// A success that completed before a later failure does not end that failure's outage.
+func TestBitmapsWriteRetryAnOlderSuccessKeepsANewerOutage(t *testing.T) {
+	r := fastRetry(time.Minute)
+
+	now := time.Now()
+	began := r.failed(now)
+
+	r.succeeded(now.Add(-time.Second)) // completed before the failure, recorded after it
+	require.Equal(t, began, r.failed(now.Add(time.Second)), "the outage goes on")
+
+	r.succeeded(now.Add(2 * time.Second))
+	require.Equal(t, now.Add(3*time.Second), r.failed(now.Add(3*time.Second)), "a newer success ends it")
+}
+
 // With the defaults, a write is retried for a minute, with waits doubling from 250ms to a 4s cap.
 func TestBitmapsWriteRetryDefaults(t *testing.T) {
 	var r BitmapsWriteRetry
