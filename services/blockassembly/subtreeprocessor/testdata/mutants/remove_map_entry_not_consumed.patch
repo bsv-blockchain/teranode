@@ -1,7 +1,7 @@
 diff --git a/services/blockassembly/subtreeprocessor/SubtreeProcessor.go b/services/blockassembly/subtreeprocessor/SubtreeProcessor.go
 --- a/services/blockassembly/subtreeprocessor/SubtreeProcessor.go
 +++ b/services/blockassembly/subtreeprocessor/SubtreeProcessor.go
-@@ -9392,13 +9392,13 @@ func (stp *SubtreeProcessor) processRemainderTxHashes(ctx context.Context, chain
+@@ -9398,13 +9398,13 @@ func (stp *SubtreeProcessor) processRemainderTxHashes(ctx context.Context, chain
  					pos++
  
  					continue

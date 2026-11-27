@@ -67,6 +67,10 @@ func (stp *SubtreeProcessor) maintainStoredPrefix(now time.Time) {
 	set.Retain(keep)
 
 	if stp.storeQueue != nil {
+		stp.storeQueue.retainAnnounceFailed(keep)
+	}
+
+	if stp.storeQueue != nil {
 		stp.runDroppedCleanups()
 	}
 
@@ -158,6 +162,7 @@ func (stp *SubtreeProcessor) sendChainedSubtreeAgain(i int, root chainhash.Hash,
 	st := stp.chainedSubtrees[i]
 	result := make(chan StoreResult, 1)
 
+	// No OnStorageComplete: the subtree's first request cleans up the deleted transactions.
 	req := NewSubtreeRequest{
 		Subtree:          st,
 		ParentTxMap:      stp.currentTxMap,

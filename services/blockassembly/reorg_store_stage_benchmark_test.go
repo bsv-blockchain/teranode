@@ -108,7 +108,7 @@ func (fx *storeStageFixture) runner(t *testing.T, path storeStagePath) func(blob
 	var push func(subtreeprocessor.NewSubtreeRequest)
 
 	if path.staged {
-		push = server.storeQueue.Push
+		push = func(req subtreeprocessor.NewSubtreeRequest) { server.storeQueue.Push(req) }
 	} else {
 		// the old path has no queue: a listener of our own reads the requests from a channel
 		in := make(chan subtreeprocessor.NewSubtreeRequest, len(fx.subtrees))

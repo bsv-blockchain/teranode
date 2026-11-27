@@ -1,7 +1,7 @@
 diff --git a/services/blockassembly/subtreeprocessor/SubtreeProcessor.go b/services/blockassembly/subtreeprocessor/SubtreeProcessor.go
 --- a/services/blockassembly/subtreeprocessor/SubtreeProcessor.go
 +++ b/services/blockassembly/subtreeprocessor/SubtreeProcessor.go
-@@ -6523,16 +6523,12 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveBackBlocks []*
+@@ -6529,16 +6529,12 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveBackBlocks []*
  	// below, and a reset follows (failedForkReorgNeedsReset). At 0 the wait is on ErrChan as before:
  	// an error there still fails the reorg, a write that failed and went to the retry path does not.
  	// Most subtrees take the store's Exists path here, because the forward steps already sent
@@ -18,7 +18,7 @@ diff --git a/services/blockassembly/subtreeprocessor/SubtreeProcessor.go b/servi
  	// (guaranteed by partitionLongestChainMarks above).
  	markGroup, markCtx := errgroup.WithContext(ctx)
  
-@@ -6552,12 +6548,17 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveBackBlocks []*
+@@ -6558,12 +6554,17 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveBackBlocks []*
  	}
  
  	if err = markGroup.Wait(); err != nil {

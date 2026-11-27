@@ -280,7 +280,7 @@ func (g *gatedStores) serve(ctx context.Context, req NewSubtreeRequest) {
 	req.ErrChan <- nil
 	req.Answered(nil)
 
-	if req.SettledFunc()(res.OK()) || (res.OK() && !req.SkipNotification) {
+	if req.SettledFunc()(res) || (res.OK() && !req.SkipNotification) {
 		g.noteAnnounced(root)
 	}
 

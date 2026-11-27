@@ -1,7 +1,7 @@
 diff --git a/services/blockassembly/subtreeprocessor/SubtreeProcessor.go b/services/blockassembly/subtreeprocessor/SubtreeProcessor.go
 --- a/services/blockassembly/subtreeprocessor/SubtreeProcessor.go
 +++ b/services/blockassembly/subtreeprocessor/SubtreeProcessor.go
-@@ -7413,13 +7413,13 @@ func (stp *SubtreeProcessor) removeCoinbaseUtxos(ctx context.Context, block *mod
+@@ -7419,13 +7419,13 @@ func (stp *SubtreeProcessor) removeCoinbaseUtxos(ctx context.Context, block *mod
  	removeFromSubtrees := make([]chainhash.Hash, 0, len(savedHashes)+len(goneHashes)+len(assemblyDescendants))
  	removeFromSubtrees = append(removeFromSubtrees, savedHashes...)
  	removeFromSubtrees = append(removeFromSubtrees, goneHashes...)

@@ -60,6 +60,14 @@ func StoreRequestBytes(req NewSubtreeRequest) uint64 {
 // were sent, then the stale ones, which a worker cancels instead of storing (Take). A request a
 // worker already took before it went stale still stores. A sequence number is given when a request
 // is taken, so a request removed before that leaves no gap for the in-order notification sender.
+//
+// Known limits. A request a worker took keeps its charge until its store settles, so writes that hang
+// or are abandoned can hold the whole limit (about 23 full million-leaf subtrees at the 4096 MB
+// default); the stored-prefix watcher's replacement for such a request then waits, uncharged, with
+// nothing stale left to drop, and does not recover. The default path blocks on its full channel in the
+// same outage. A dropped request's OnStorageComplete deletes its subtree's hashes from DeletedTxs
+// while another request for the same subtree, which a worker took, may still build its meta from
+// them: that store can fail for a subtree that left the chain, unless wantRestored brings it back.
 type StoreQueue struct {
 	mu    sync.Mutex
 	wake  chan struct{} // closed, and replaced, when a worker may find something to take
@@ -72,13 +80,24 @@ type StoreQueue struct {
 	waiting   []*storeItem // not admitted: no room
 	byTree    map[*subtreepkg.Subtree][]*storeItem
 
+	// staleHint is set when a request was marked stale and cleared when a scan dropped every stale
+	// request that was not taken, so a Push at the limit with none marked skips the scan. It can be
+	// set with nothing stale left (Wanted, or the marked request was taken): one scan clears it.
+	staleHint bool
+
 	// cleanups are the OnStorageComplete callbacks of dropped requests, for the processor to run:
 	// they read the nodes of a subtree that has left the chain and may be unmapped any moment.
 	cleanups []func()
 
 	// announceLost holds the roots of dropped requests that would have announced their subtree, until
-	// a restored chain asks for them (announceWasLost): the request it sends again must announce too.
+	// a restored chain asks for them (announceWasLost) or the block movement ends (forgetAnnounceLost):
+	// the request a rollback sends again must announce too.
 	announceLost map[chainhash.Hash]struct{}
+
+	// announceFailed holds the roots of requests that would have announced their subtree and failed
+	// for good, until the stored-prefix watch sends the subtree again (announceWasLost) or it leaves
+	// the chain (retainAnnounceFailed). A movement's end does not clear it.
+	announceFailed map[chainhash.Hash]struct{}
 }
 
 // announceState is shared by the outstanding requests of one subtree that a reorg asked to announce:
@@ -96,10 +115,15 @@ type storeItem struct {
 	taken   bool           // a worker has it
 	ann     *announceState // set by AnnounceOnSuccess, shared by the requests of one subtree; under the queue's lock
 
-	// first is closed once ErrChan was answered, with the error in firstErr; result is the request's
-	// Result. A reorg that finds its subtree already sent waits on these instead of sending it again.
+	// first is closed once ErrChan was answered, with the error in firstErr; finished is closed once
+	// the request settled or was dropped, with its outcome in final. A reorg that finds its subtree
+	// already sent waits on these instead of sending it again. They are read by any number of waiters,
+	// unlike result, the request's own Result, which holds one value for one reader (the stored-prefix
+	// watcher drains it).
 	first    chan struct{}
 	firstErr error
+	finished chan struct{}
+	final    StoreResult
 	result   chan StoreResult
 }
 
@@ -108,9 +132,10 @@ func NewStoreQueue(maxBytes uint64) *StoreQueue {
 	return &StoreQueue{limit: maxBytes, wake: make(chan struct{}), byTree: make(map[*subtreepkg.Subtree][]*storeItem)}
 }
 
-// Push hands a request to the queue. It never blocks.
-func (q *StoreQueue) Push(req NewSubtreeRequest) {
-	it := &storeItem{bytes: StoreRequestBytes(req), first: make(chan struct{})}
+// Push hands a request to the queue and returns its item, for a caller that waits for this request
+// and not for whichever one is the subtree's newest. It never blocks.
+func (q *StoreQueue) Push(req NewSubtreeRequest) *storeItem {
+	it := &storeItem{bytes: StoreRequestBytes(req), first: make(chan struct{}), finished: make(chan struct{})}
 
 	if req.Result == nil && !req.AnnounceOnly {
 		req.Result = make(chan StoreResult, 1)
@@ -118,7 +143,7 @@ func (q *StoreQueue) Push(req NewSubtreeRequest) {
 
 	it.result = req.Result
 	req.answered = func(err error) { q.answered(it, err) }
-	req.settled = func(ok bool) bool { return q.settled(it, ok) }
+	req.settled = func(res StoreResult) bool { return q.settled(it, res) }
 	req.failing = func() { q.failing(it) }
 	it.req = req
 
@@ -147,6 +172,8 @@ func (q *StoreQueue) Push(req NewSubtreeRequest) {
 	q.mu.Unlock()
 
 	finishDropped(dropped)
+
+	return it
 }
 
 // Take returns the next request and its sequence number, waiting until there is one. It reports
@@ -196,6 +223,7 @@ func (q *StoreQueue) Stale(subtrees ...*subtreepkg.Subtree) {
 	for _, st := range subtrees {
 		for _, it := range q.byTree[st] {
 			it.stale = true
+			q.staleHint = true
 		}
 	}
 
@@ -246,24 +274,24 @@ func (q *StoreQueue) takeCleanups() []func() {
 	return c
 }
 
-// announceLostCap bounds announceLost. An entry only matters to a rollback of the block movement in
-// progress, which restores at most one chain, so past the cap the set starts again rather than
-// keeping the root of every cancelled request for good.
-const announceLostCap = 1 << 16
-
 // noteAnnounceLost records that a request that would have announced root was dropped. q.mu is held.
 func (q *StoreQueue) noteAnnounceLost(root chainhash.Hash) {
-	if q.announceLost == nil || len(q.announceLost) >= announceLostCap {
+	if q.announceLost == nil {
 		q.announceLost = make(map[chainhash.Hash]struct{})
 	}
 
 	q.announceLost[root] = struct{}{}
 }
 
-// wouldAnnounce reports whether the request announces its subtree when it stores: it is not silent,
-// or it holds an announcement nobody claimed. q.mu is held.
-func (it *storeItem) wouldAnnounce() bool {
-	return !it.req.AnnounceOnly && (!it.req.SkipNotification || (it.ann != nil && !it.ann.claimed))
+// forgetAnnounceLost drops the records of dropped requests. The processor calls it when a block
+// movement ends: a rollback of that movement has run by then, and no later one restores these
+// subtrees. The records of requests that failed for good stay (announceFailed): the stored-prefix
+// watch resends those on its own schedule, whenever a movement ends.
+func (q *StoreQueue) forgetAnnounceLost() {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+
+	q.announceLost = nil
 }
 
 // failing records the announcement a request that failed for good would have made, before the
@@ -272,8 +300,30 @@ func (q *StoreQueue) failing(it *storeItem) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
-	if !it.done && it.wouldAnnounce() {
-		q.noteAnnounceLost(*it.req.Subtree.RootHash())
+	if !it.done && q.announceDutyLostLocked(it) {
+		q.noteAnnounceFailed(*it.req.Subtree.RootHash())
+	}
+}
+
+// noteAnnounceFailed records that a request that would have announced root failed for good. q.mu is held.
+func (q *StoreQueue) noteAnnounceFailed(root chainhash.Hash) {
+	if q.announceFailed == nil {
+		q.announceFailed = make(map[chainhash.Hash]struct{})
+	}
+
+	q.announceFailed[root] = struct{}{}
+}
+
+// retainAnnounceFailed forgets the failed announcements of subtrees not in keep, the roots of the
+// chain: a subtree that left it is not sent again, so nothing would ever consume its record.
+func (q *StoreQueue) retainAnnounceFailed(keep map[chainhash.Hash]struct{}) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+
+	for root := range q.announceFailed {
+		if _, ok := keep[root]; !ok {
+			delete(q.announceFailed, root)
+		}
 	}
 }
 
@@ -284,7 +334,10 @@ func (q *StoreQueue) announceWasLost(st *subtreepkg.Subtree) bool {
 
 	root := *st.RootHash()
 	_, lost := q.announceLost[root]
+	_, failed := q.announceFailed[root]
 	delete(q.announceLost, root)
+	delete(q.announceFailed, root)
+	lost = lost || failed
 
 	return lost
 }
@@ -327,11 +380,7 @@ func (q *StoreQueue) pickLocked() (it *storeItem, cancelled []*storeItem) {
 		return nil, nil
 	}
 
-	i := slices.IndexFunc(q.ready, func(it *storeItem) bool { return !it.stale })
-	if i < 0 {
-		i = 0
-	}
-
+	i := q.firstWantedLocked(q.ready)
 	it = q.ready[i]
 
 	if it.stale {
@@ -351,11 +400,7 @@ func (q *StoreQueue) pickLocked() (it *storeItem, cancelled []*storeItem) {
 // dropped requests, which the caller finishes after unlocking.
 func (q *StoreQueue) admitLocked() (dropped []*storeItem) {
 	for len(q.waiting) > 0 {
-		i := slices.IndexFunc(q.waiting, func(it *storeItem) bool { return !it.stale })
-		if i < 0 {
-			i = 0
-		}
-
+		i := q.firstWantedLocked(q.waiting)
 		it := q.waiting[i]
 		if q.held == 0 || q.held+it.bytes <= q.limit {
 			q.waiting = removeAt(q.waiting, i)
@@ -377,8 +422,32 @@ func (q *StoreQueue) admitLocked() (dropped []*storeItem) {
 	return dropped
 }
 
+// firstWantedLocked is the index of the first request of list that is not stale, or 0 when all are.
+// Without a stale mark it is the front, and the backlog is not scanned.
+func (q *StoreQueue) firstWantedLocked(list []*storeItem) int {
+	if !q.staleHint {
+		return 0
+	}
+
+	return max(slices.IndexFunc(list, func(it *storeItem) bool { return !it.stale }), 0)
+}
+
+// mayHaveStale reports whether a request may be stale: false means none is, and nothing is scanned.
+func (q *StoreQueue) mayHaveStale() bool {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+
+	return q.staleHint
+}
+
 // dropStaleLocked removes every stale chain request that has not been taken.
 func (q *StoreQueue) dropStaleLocked() []*storeItem {
+	if !q.staleHint {
+		return nil
+	}
+
+	q.staleHint = false
+
 	return q.dropLocked(func(it *storeItem) bool { return it.stale })
 }
 
@@ -405,13 +474,15 @@ func (q *StoreQueue) dropLocked(match func(*storeItem) bool) (dropped []*storeIt
 	for _, it := range dropped {
 		it.done = true
 		it.dropped = true
+		it.final = StoreResult{Cancelled: true, Err: errors.NewStorageError("store request dropped: its subtree left the chain")}
+		q.unregisterLocked(it)
 
-		if it.wouldAnnounce() {
+		if q.announceDutyLostLocked(it) {
 			q.noteAnnounceLost(*it.req.Subtree.RootHash())
 		}
 
-		q.unregisterLocked(it)
 		close(it.first)
+		close(it.finished)
 
 		if it.req.OnStorageComplete != nil {
 			q.cleanups = append(q.cleanups, it.req.OnStorageComplete)
@@ -419,6 +490,31 @@ func (q *StoreQueue) dropLocked(match func(*storeItem) bool) (dropped []*storeIt
 	}
 
 	return dropped
+}
+
+// announceDutyLostLocked reports whether dropping it (already unregistered) leaves its subtree's
+// announcement undone: it announced on its own, or carried the duty a fork reorg gave it
+// (AnnounceOnSuccess) and no outstanding request shares that duty. q.mu is held.
+func (q *StoreQueue) announceDutyLostLocked(it *storeItem) bool {
+	if it.req.AnnounceOnly {
+		return false
+	}
+
+	if !it.req.SkipNotification {
+		return true
+	}
+
+	if it.ann == nil || it.ann.claimed {
+		return false
+	}
+
+	for _, other := range q.byTree[it.req.Subtree] {
+		if other != it && other.ann == it.ann {
+			return false
+		}
+	}
+
+	return true
 }
 
 // removeQueued drops the requests of st that no worker has taken, and queues their callbacks. The
@@ -458,7 +554,9 @@ func (q *StoreQueue) queued(st *subtreepkg.Subtree) bool {
 // whatever its SkipNotification says, and reports whether there was one. A fork reorg's forward steps
 // send silently and the reorg announces after its marks, which a subtree still being written, or
 // retried, would otherwise miss. When it reports false the request has settled, and the caller
-// announces a stored subtree itself.
+// announces a stored subtree itself. Only the requests outstanding at this call are tagged: if they
+// all exhaust their retries they settle without announcing, and a later store of the subtree, by the
+// stored-prefix watcher's silent re-send, is not announced.
 func (q *StoreQueue) AnnounceOnSuccess(st *subtreepkg.Subtree) bool {
 	q.mu.Lock()
 	defer q.mu.Unlock()
@@ -510,10 +608,10 @@ func (q *StoreQueue) answered(it *storeItem, err error) {
 }
 
 // settled ends the request's charge, and admits what now fits. It reports whether the request was
-// stored (ok) and was told to announce its subtree (AnnounceOnSuccess): the caller announces it, and
+// stored (res.OK()) and was told to announce its subtree (AnnounceOnSuccess): the caller announces it, and
 // since the flag is claimed and the request unregistered under one lock, a request is announced either
 // here or by the announce-only request of a reorg that found it stored, never both or neither.
-func (q *StoreQueue) settled(it *storeItem, ok bool) (announce bool) {
+func (q *StoreQueue) settled(it *storeItem, res StoreResult) (announce bool) {
 	q.mu.Lock()
 
 	if it.done {
@@ -523,8 +621,10 @@ func (q *StoreQueue) settled(it *storeItem, ok bool) (announce bool) {
 	}
 
 	it.done = true
+	it.final = res
+	close(it.finished)
 
-	if ok && it.ann != nil && !it.ann.claimed {
+	if res.OK() && it.ann != nil && !it.ann.claimed {
 		it.ann.claimed = true
 		announce = true
 	}
@@ -532,11 +632,12 @@ func (q *StoreQueue) settled(it *storeItem, ok bool) (announce bool) {
 	// a request that would have announced and failed for good takes the announcement with it: the
 	// subtree is sent again by the stored-prefix watch, which asks announceWasLost. One that stored
 	// announces it, which a sibling's earlier failure must not have the watch do again.
-	switch {
-	case !ok && it.wouldAnnounce():
-		q.noteAnnounceLost(*it.req.Subtree.RootHash())
-	case ok && (announce || (!it.req.AnnounceOnly && !it.req.SkipNotification)):
-		delete(q.announceLost, *it.req.Subtree.RootHash())
+	switch root := *it.req.Subtree.RootHash(); {
+	case !res.OK() && q.announceDutyLostLocked(it):
+		q.noteAnnounceFailed(root)
+	case res.OK() && (announce || (!it.req.AnnounceOnly && !it.req.SkipNotification)):
+		delete(q.announceFailed, root)
+		delete(q.announceLost, root)
 	}
 
 	if it.charged {
@@ -561,7 +662,7 @@ func finishDropped(dropped []*storeItem) {
 	for _, it := range dropped {
 		if it.result != nil {
 			select {
-			case it.result <- StoreResult{Cancelled: true, Err: errors.NewStorageError("store request dropped: its subtree left the chain")}:
+			case it.result <- it.final:
 			default:
 			}
 		}
@@ -596,8 +697,8 @@ func (r NewSubtreeRequest) Answered(err error) {
 }
 
 // SettledFunc is the request's settle hook, or nil without a queue, so a request that has none costs a
-// holder of it nothing. It takes whether the store succeeded and reports whether to announce.
-func (r NewSubtreeRequest) SettledFunc() func(ok bool) bool { return r.settled }
+// holder of it nothing. It takes the request's final result and reports whether to announce.
+func (r NewSubtreeRequest) SettledFunc() func(res StoreResult) bool { return r.settled }
 
 // Failing is called when the request's store has ended failed for good, before the failure is
 // published to the stored set and before Settled: a watch that sees the failure must find the lost
@@ -612,6 +713,6 @@ func (r NewSubtreeRequest) Failing() {
 // queue stops counting its bytes. Without a queue it does nothing.
 func (r NewSubtreeRequest) Settled() {
 	if r.settled != nil {
-		r.settled(false)
+		r.settled(StoreResult{Err: errors.NewStorageError("store request settled without a result")})
 	}
 }

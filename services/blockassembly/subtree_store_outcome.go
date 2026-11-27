@@ -40,7 +40,7 @@ type subtreeStoreOutcome struct {
 	late chan<- chainhash.Hash
 
 	// settled is the request's Settled: the store queue's charge for it ends with its store.
-	settled func(ok bool) bool
+	settled func(res subtreeprocessor.StoreResult) bool
 
 	// failing is the request's Failing: it records the announcement a failed request loses before
 	// the failure is published to the stored set, which a watch resends on.
@@ -100,7 +100,7 @@ func (o *subtreeStoreOutcome) settle(apply func(r *subtreeprocessor.StoreResult)
 
 		// a silent request a fork reorg asked to announce is announced here, when it is stored,
 		// whichever path stored it: the retry paths of a meta or of a subtree found stored are silent
-		if o.settled != nil && o.settled(o.res.OK()) && o.skip && o.late != nil {
+		if o.settled != nil && o.settled(o.res) && o.skip && o.late != nil {
 			go func(root chainhash.Hash, late chan<- chainhash.Hash) {
 				select {
 				case late <- root:
@@ -186,6 +186,22 @@ func (o *subtreeStoreOutcome) abort(err error) {
 	}
 }
 
+// abortCancelled settles every part still open as cancelled, for an exit before the writes started
+// because the context ended.
+func (o *subtreeStoreOutcome) abortCancelled(err error) {
+	if o == nil {
+		return
+	}
+
+	o.mu.Lock()
+	open := o.pending
+	o.mu.Unlock()
+
+	for range open {
+		o.cancel(err)
+	}
+}
+
 // cancel settles a part as cancelled: by shutdown, or because a reset superseded its request.
 func (o *subtreeStoreOutcome) cancel(err error) {
 	o.settle(func(r *subtreeprocessor.StoreResult) {
@@ -195,6 +211,18 @@ func (o *subtreeStoreOutcome) cancel(err error) {
 			r.Err = err
 		}
 	})
+}
+
+// cancelled settles every part the entry holds as cancelled, for an entry that never reached the
+// retry processor.
+func (r *subtreeRetrySend) cancelled(err error) {
+	if len(r.subtreeBytes) > 0 {
+		r.outcome.cancel(err)
+	}
+
+	if len(r.subtreeMetaBytes) > 0 {
+		r.outcome.cancel(err)
+	}
 }
 
 // exhausted settles every part the entry still holds as failed.

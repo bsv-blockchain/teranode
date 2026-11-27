@@ -1,7 +1,7 @@
 diff --git a/services/blockassembly/subtreeprocessor/store_queue_reorg.go b/services/blockassembly/subtreeprocessor/store_queue_reorg.go
 --- a/services/blockassembly/subtreeprocessor/store_queue_reorg.go
 +++ b/services/blockassembly/subtreeprocessor/store_queue_reorg.go
-@@ -251,8 +251,8 @@ func (stp *SubtreeProcessor) reorgAwaitedSubtrees() int {
+@@ -260,8 +260,8 @@ func (stp *SubtreeProcessor) reorgAwaitedSubtrees() int {
  			fit++
  		}
  

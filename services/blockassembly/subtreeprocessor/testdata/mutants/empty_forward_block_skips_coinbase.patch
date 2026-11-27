@@ -1,7 +1,7 @@
 diff --git a/services/blockassembly/subtreeprocessor/SubtreeProcessor.go b/services/blockassembly/subtreeprocessor/SubtreeProcessor.go
 --- a/services/blockassembly/subtreeprocessor/SubtreeProcessor.go
 +++ b/services/blockassembly/subtreeprocessor/SubtreeProcessor.go
-@@ -8421,16 +8421,13 @@ func (stp *SubtreeProcessor) moveForwardBlockDeferringDrain(ctx context.Context,
+@@ -8427,16 +8427,13 @@ func (stp *SubtreeProcessor) moveForwardBlockDeferringDrain(ctx context.Context,
  	}
  
  	if len(block.Subtrees) == 0 {

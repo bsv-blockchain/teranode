@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -26,6 +27,7 @@ import (
 	"github.com/bsv-blockchain/teranode/util/testutil"
 	"github.com/bsv-blockchain/teranode/util/testutil/blobfault"
 	"github.com/prometheus/client_golang/prometheus"
+	promtestutil "github.com/prometheus/client_golang/prometheus/testutil"
 	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -2779,6 +2781,822 @@ func TestIngestHandsLanePositionsOnlyAtShadow(t *testing.T) {
 
 		require.Equal(t, []uint64{0, second, third}, handedPositions(t, true, several))
 	})
+}
+
+// Issue 2269, plan PR W: with blockassembly_storedPrefixTemplate on, the meta builds of the store
+// workers run up to a CPU-sized width and the blob writes stay within a writer bound of their own;
+// with it off the workers do both, as before.
+
+// gatedInpoints is a parent tx map that counts the meta builds in flight and holds each build, at its
+// first read, until the gate is opened. A build is in flight from its first read to its last.
+type gatedInpoints struct {
+	subtreeprocessor.TxInpointsMap
+	gate  <-chan struct{}
+	inc   *atomic.Int32
+	max   *atomic.Int32
+	reads atomic.Int32
+	size  int32
+}
+
+func (g *gatedInpoints) Get(hash chainhash.Hash) (*subtreepkg.TxInpoints, bool) {
+	n := g.reads.Add(1)
+	if n == 1 {
+		cur := g.inc.Add(1)
+		for {
+			m := g.max.Load()
+			if cur <= m || g.max.CompareAndSwap(m, cur) {
+				break
+			}
+		}
+
+		<-g.gate
+	}
+
+	if n == g.size {
+		g.inc.Add(-1)
+	}
+
+	return g.TxInpointsMap.Get(hash)
+}
+
+func startStagedListener(t *testing.T, flag bool, metaWorkers, writers, queueMB int) *BlockAssembly {
+	t.Helper()
+
+	server, _ := setupServerWithSettings(t, func(s *settings.Settings) {
+		s.BlockAssembly.StoredPrefixTemplate = flag
+		s.BlockAssembly.StoreQueueMaxMB = queueMB
+		s.BlockAssembly.SubtreeStorageWorkers = 4
+		s.BlockAssembly.SubtreeStorageMetaWorkers = metaWorkers
+		s.BlockAssembly.SubtreeStorageWriters = writers
+	})
+
+	if flag {
+		require.NotNil(t, server.storeQueue)
+	}
+
+	return server
+}
+
+// announceTo is a blockchain client that sends the hash of every subtree notification to ch.
+func announceTo(ch chan<- chainhash.Hash) *blockchain.Mock {
+	client := &blockchain.Mock{}
+	client.On("IsFSMCurrentState", mock.Anything, mock.Anything).Return(true, nil)
+	client.On("SendNotification", mock.Anything, mock.Anything).
+		Run(func(args mock.Arguments) {
+			n, _ := args.Get(1).(*blockchain.Notification)
+			ch <- chainhash.Hash(n.Hash)
+		}).
+		Return(nil)
+
+	return client
+}
+
+func closeOnce(ch chan struct{}) func() {
+	var once sync.Once
+
+	return func() { once.Do(func() { close(ch) }) }
+}
+
+func TestStoreStages_MetaBuildsRunUpToTheMetaWidthWhileWritesStayWithinTheWriterBound(t *testing.T) {
+	const (
+		metaWidth = 6 // more than the 4 workers of the old path
+		writers   = 3
+		requests  = 24
+	)
+
+	server := startStagedListener(t, true, metaWidth, writers, 64)
+	fault := blobfault.New(server.subtreeStore)
+	writeGate := make(chan struct{})
+	entered := make(chan struct{}, 4*requests)
+	fault.OnSetAny(fileformat.FileTypeSubtree, blobfault.Rule{Block: writeGate, Entered: entered})
+	fault.OnSetAny(fileformat.FileTypeSubtreeMeta, blobfault.Rule{Block: writeGate, Entered: entered})
+	server.subtreeStore = fault
+
+	buildGate := make(chan struct{})
+	openBuilds, openWrites := closeOnce(buildGate), closeOnce(writeGate)
+	t.Cleanup(openBuilds)
+	t.Cleanup(openWrites)
+
+	var inFlight, maxInFlight atomic.Int32
+
+	results := make([]chan subtreeprocessor.StoreResult, 0, requests)
+
+	for seed := 1; seed <= requests; seed++ {
+		subtree, txMap := makeSubtree(t, seed)
+		result := make(chan subtreeprocessor.StoreResult, 1)
+		results = append(results, result)
+
+		server.storeQueue.Push(subtreeprocessor.NewSubtreeRequest{
+			Subtree:          subtree,
+			ParentTxMap:      &gatedInpoints{TxInpointsMap: txMap, gate: buildGate, inc: &inFlight, max: &maxInFlight, size: 16},
+			SkipNotification: true,
+			ErrChan:          make(chan error, 1),
+			Result:           result,
+		})
+	}
+
+	require.Eventually(t, func() bool { return inFlight.Load() == metaWidth }, 5*time.Second, 5*time.Millisecond,
+		"the builds fill the meta stage")
+	time.Sleep(100 * time.Millisecond)
+	require.EqualValues(t, metaWidth, maxInFlight.Load(), "no more builds than the meta width run at once")
+
+	openBuilds()
+
+	require.Eventually(t, func() bool { return len(entered) >= writers }, 5*time.Second, 5*time.Millisecond,
+		"the writes fill the writer stage")
+	time.Sleep(100 * time.Millisecond)
+	require.Equal(t, writers, len(entered), "no more writes than the writer bound are in the store at once")
+	require.Positive(t, server.storeQueue.Held(), "the bytes between the stages stay charged until written")
+
+	openWrites()
+
+	for _, r := range results {
+		require.True(t, awaitResult(t, r).OK())
+	}
+
+	require.Eventually(t, func() bool { return server.storeQueue.Held() == 0 }, 5*time.Second, 5*time.Millisecond,
+		"the queue's byte accounting balances to zero after the burst")
+}
+
+func TestStoreStages_ABurstIsAnnouncedInOrderAndLeavesNoBytesHeld(t *testing.T) {
+	const requests = 40
+
+	server := startStagedListener(t, true, 8, 2, 64)
+
+	announced := make(chan chainhash.Hash, requests)
+	server.blockchainClient = announceTo(announced)
+
+	var maxHeld atomic.Uint64
+
+	stop := make(chan struct{})
+	done := make(chan struct{})
+
+	go func() {
+		defer close(done)
+
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+				if h := server.storeQueue.Held(); h > maxHeld.Load() {
+					maxHeld.Store(h)
+				}
+			}
+		}
+	}()
+
+	var order []chainhash.Hash
+
+	results := make([]chan subtreeprocessor.StoreResult, 0, requests)
+
+	for seed := 1; seed <= requests; seed++ {
+		subtree, txMap := makeSubtree(t, seed)
+		result := make(chan subtreeprocessor.StoreResult, 1)
+		results = append(results, result)
+		order = append(order, *subtree.RootHash())
+
+		server.storeQueue.Push(subtreeprocessor.NewSubtreeRequest{Subtree: subtree, ParentTxMap: txMap, ErrChan: make(chan error, 1), Result: result})
+	}
+
+	for _, r := range results {
+		require.True(t, awaitResult(t, r).OK())
+	}
+
+	for _, want := range order {
+		select {
+		case got := <-announced:
+			require.Equal(t, want, got, "announcements keep the order of the requests")
+		case <-time.After(5 * time.Second):
+			t.Fatal("a stored subtree was not announced")
+		}
+	}
+
+	close(stop)
+	<-done
+
+	require.Positive(t, maxHeld.Load())
+	require.Eventually(t, func() bool { return server.storeQueue.Held() == 0 }, 5*time.Second, 5*time.Millisecond)
+}
+
+func TestStoreStages_WithTheFlagOffTheWorkersKeepTheirOwnWidth(t *testing.T) {
+	server := startStagedListener(t, false, 1, 1, 64)
+	require.Nil(t, server.storeQueue)
+
+	fault := blobfault.New(server.subtreeStore)
+	writeGate := make(chan struct{})
+	entered := make(chan struct{}, 64)
+	fault.OnSetAny(fileformat.FileTypeSubtree, blobfault.Rule{Block: writeGate, Entered: entered})
+	server.subtreeStore = fault
+
+	buildGate := make(chan struct{})
+	openBuilds, openWrites := closeOnce(buildGate), closeOnce(writeGate)
+
+	p := startStorePipeline(t, server)
+
+	// registered after the pipeline's, so it runs first: the pipeline's cleanup waits for its workers
+	t.Cleanup(openBuilds)
+	t.Cleanup(openWrites)
+
+	var inFlight, maxInFlight atomic.Int32
+
+	for seed := 1; seed <= 4; seed++ {
+		subtree, txMap := makeSubtree(t, seed)
+		p.in <- subtreeprocessor.NewSubtreeRequest{
+			Subtree:          subtree,
+			ParentTxMap:      &gatedInpoints{TxInpointsMap: txMap, gate: buildGate, inc: &inFlight, max: &maxInFlight, size: 16},
+			SkipNotification: true,
+			ErrChan:          make(chan error, 1),
+		}
+	}
+
+	// the 4 workers each build at once and each has a write in flight, whatever the stage settings
+	require.Eventually(t, func() bool { return inFlight.Load() == 4 }, 5*time.Second, 5*time.Millisecond)
+	require.Eventually(t, func() bool { return len(entered) == 4 }, 5*time.Second, 5*time.Millisecond)
+}
+
+// With 64 writers the stages are wide, so the queue's byte limit is what bounds memory: at a limit of
+// one request's bytes, one request at a time is in the stages, charged until it is written.
+func TestStoreStages_TheByteLimitBindsWithManyWriters(t *testing.T) {
+	server := startStagedListener(t, true, 64, 64, 0)
+
+	fault := blobfault.New(server.subtreeStore)
+	release := make(chan struct{})
+	entered := make(chan struct{}, 64)
+	fault.OnSetAny(fileformat.FileTypeSubtree, blobfault.Rule{Block: release, Entered: entered})
+	fault.OnSetAny(fileformat.FileTypeSubtreeMeta, blobfault.Rule{Block: release, Entered: entered})
+	server.subtreeStore = fault
+	openRelease := closeOnce(release)
+	t.Cleanup(openRelease)
+
+	subtree, txMap := makeSubtree(t, 1)
+	one := subtreeprocessor.StoreRequestBytes(subtreeprocessor.NewSubtreeRequest{Subtree: subtree, ParentTxMap: txMap})
+
+	var results []queuedRequest
+
+	for seed := 1; seed <= 20; seed++ {
+		results = append(results, pushChain(t, server.storeQueue, seed, true))
+	}
+
+	require.Eventually(t, func() bool { return len(entered) == 2 }, 5*time.Second, 5*time.Millisecond, "the admitted request writes its subtree and its meta")
+	time.Sleep(100 * time.Millisecond)
+	require.Equal(t, 2, len(entered), "the 19 others wait in the queue, not in the stages")
+	require.Equal(t, one, server.storeQueue.Held())
+
+	openRelease()
+
+	for _, r := range results {
+		require.True(t, awaitResult(t, r.result).OK())
+	}
+
+	require.Eventually(t, func() bool { return server.storeQueue.Held() == 0 }, 5*time.Second, 5*time.Millisecond)
+}
+
+// The subtree processor waits for a snapshot, so its writes must not queue behind the chain writes of a
+// reorg for a writer slot.
+func TestStoreStages_ASnapshotWriteDoesNotWaitBehindChainWrites(t *testing.T) {
+	server := startStagedListener(t, true, 2, 1, 64) // 3 workers, 1 writer slot
+
+	fault := blobfault.New(server.subtreeStore)
+	gate := make(chan struct{})
+	entered := make(chan struct{}, 16)
+	fault.OnSetAny(fileformat.FileTypeSubtree, blobfault.Rule{Block: gate, Entered: entered})
+	fault.OnSetAny(fileformat.FileTypeSubtreeMeta, blobfault.Rule{Block: gate, Entered: entered})
+
+	snapshot, snapshotMap := makeSubtree(t, 99)
+	fault.OnSet(snapshot.RootHash()[:], fileformat.FileTypeSubtree, blobfault.Rule{})
+	fault.OnSet(snapshot.RootHash()[:], fileformat.FileTypeSubtreeMeta, blobfault.Rule{})
+
+	server.subtreeStore = fault
+	t.Cleanup(closeOnce(gate))
+
+	pushChain(t, server.storeQueue, 1, true)
+	pushChain(t, server.storeQueue, 2, true)
+
+	require.Eventually(t, func() bool { return len(entered) == 1 }, 5*time.Second, 5*time.Millisecond, "a chain write holds the writer slot")
+
+	result := make(chan subtreeprocessor.StoreResult, 1)
+	server.storeQueue.Push(subtreeprocessor.NewSubtreeRequest{
+		Subtree:     snapshot,
+		ParentTxMap: snapshotMap,
+		Class:       subtreeprocessor.StoreClassSnapshot,
+		ErrChan:     make(chan error, 1),
+		Result:      result,
+	})
+
+	select {
+	case res := <-result:
+		require.True(t, res.OK())
+	case <-time.After(5 * time.Second):
+		t.Fatal("the snapshot waited behind the chain writes")
+	}
+}
+
+// The meta slot is for the build alone: the next build starts while the previous meta is being written.
+func TestStoreStages_TheMetaSlotIsFreeOnceTheBuildIsDone(t *testing.T) {
+	server := startStagedListener(t, true, 1, 4, 64)
+
+	fault := blobfault.New(server.subtreeStore)
+	gate := make(chan struct{})
+	entered := make(chan struct{}, 16)
+	fault.OnSetAny(fileformat.FileTypeSubtreeMeta, blobfault.Rule{Block: gate, Entered: entered})
+	server.subtreeStore = fault
+	t.Cleanup(closeOnce(gate))
+
+	pushChain(t, server.storeQueue, 1, true)
+	pushChain(t, server.storeQueue, 2, true)
+
+	require.Eventually(t, func() bool { return len(entered) == 2 }, 5*time.Second, 5*time.Millisecond,
+		"both metas are being written though the meta stage is one wide")
+}
+
+func TestStoreStages_AcquireGivesUpWhenItsContextEnds(t *testing.T) {
+	stage := make(chan struct{}, 1)
+	stage <- struct{}{}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	done := make(chan error, 1)
+
+	go func() {
+		_, err := acquireStage(ctx, stage)
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(5 * time.Second):
+		t.Fatal("acquireStage ignored its cancelled context")
+	}
+}
+
+func TestStoreStages_ACancelledWaitForTheMetaSlotCancelsTheStoreAndTimesNoBuild(t *testing.T) {
+	server := startStagedListener(t, true, 1, 1, 64)
+	server.metaSem <- struct{}{} // the only slot is taken
+
+	subtree, txMap := makeSubtree(t, 1)
+	result := make(chan subtreeprocessor.StoreResult, 1)
+	req := subtreeprocessor.NewSubtreeRequest{Subtree: subtree, ParentTxMap: txMap, Result: result}
+	outcome := newSubtreeStoreOutcome(req, true, nil)
+	before := storeStep(t, "meta_build")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	server.storeSubtreeMeta(ctx, req, 1, outcome, make(chan *subtreeRetrySend, 1))
+	outcome.subtreeStored(false)
+
+	res := <-result
+	require.True(t, res.Cancelled, "a wait that ended with its context is cancelled, not failed")
+	require.Equal(t, before.count, storeStep(t, "meta_build").count, "no meta_build sample")
+}
+
+// A hand-off that gives up when its context ends settles the part it held as cancelled, so the
+// request still settles and the queue's byte charge ends.
+func TestStoreStages_ARetryHandOffGivesUpWhenItsContextEnds(t *testing.T) {
+	tests := []struct {
+		name  string
+		entry func(outcome *subtreeStoreOutcome) *subtreeRetrySend
+		other func(outcome *subtreeStoreOutcome)
+	}{
+		{
+			name: "subtree write",
+			entry: func(o *subtreeStoreOutcome) *subtreeRetrySend {
+				return &subtreeRetrySend{subtreeBytes: []byte("s"), outcome: o}
+			},
+			other: func(o *subtreeStoreOutcome) { o.metaStored() },
+		},
+		{
+			name: "meta write",
+			entry: func(o *subtreeStoreOutcome) *subtreeRetrySend {
+				return &subtreeRetrySend{subtreeMetaBytes: []byte("m"), outcome: o}
+			},
+			other: func(o *subtreeStoreOutcome) { o.subtreeStored(false) },
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			subtree, txMap := makeSubtree(t, 1)
+			result := make(chan subtreeprocessor.StoreResult, 1)
+			req := subtreeprocessor.NewSubtreeRequest{Subtree: subtree, ParentTxMap: txMap, Result: result}
+			outcome := newSubtreeStoreOutcome(req, true, nil)
+			full := make(chan *subtreeRetrySend)
+
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+
+			done := make(chan struct{})
+
+			go func() {
+				sendRetry(ctx, full, tc.entry(outcome))
+				close(done)
+			}()
+
+			select {
+			case <-done:
+			case <-time.After(5 * time.Second):
+				t.Fatal("sendRetry blocked on a full channel after its context ended")
+			}
+
+			tc.other(outcome)
+
+			select {
+			case res := <-result:
+				require.True(t, res.Cancelled, "the dropped part is cancelled")
+			default:
+				t.Fatal("the dropped part never settled, so the request never did")
+			}
+		})
+	}
+}
+
+// The permits the store hands out stay bounded by the writers, the DAH update of an existing subtree
+// included.
+func TestStoreStages_TheDAHUpdateOfAnExistingSubtreeTakesAWriterSlot(t *testing.T) {
+	server := startStagedListener(t, true, 1, 1, 64)
+
+	subtree, txMap := makeSubtree(t, 1)
+	require.NoError(t, server.subtreeStore.Set(t.Context(), subtree.RootHash()[:], fileformat.FileTypeSubtree, []byte("x")))
+
+	server.writeSem <- struct{}{} // the only slot is taken
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	result := make(chan subtreeprocessor.StoreResult, 1)
+	failedBefore := promtestutil.ToFloat64(prometheusBlockAssemblySubtreeStoreFailed)
+
+	_, _, err := server.storeSubtreeData(ctx, subtreeprocessor.NewSubtreeRequest{Subtree: subtree, ParentTxMap: txMap, Result: result}, make(chan *subtreeRetrySend, 1))
+	require.ErrorIs(t, err, context.Canceled, "the DAH update waited for a slot")
+
+	res := <-result
+	require.True(t, res.Cancelled, "a wait that ended with its context is cancelled, not failed")
+	require.Equal(t, failedBefore, promtestutil.ToFloat64(prometheusBlockAssemblySubtreeStoreFailed), "a shutdown is no store failure")
+}
+
+// store requests from the store queue, which enforces its byte limit, takes the bytes of a write that
+// is retried or abandoned into account, and gives sequence numbers at pickup.
+
+type queuedRequest struct {
+	subtree *subtreepkg.Subtree
+	result  chan subtreeprocessor.StoreResult
+}
+
+// startQueueListener is a server whose Init, with blockassembly_storedPrefixTemplate on, made the
+// store queue and started its listener. The queue limit is 0 MB: one request is admitted at a time
+// (a request larger than the limit is admitted when nothing is held), so Held is at most one
+// request's bytes.
+func startQueueListener(t *testing.T) (*BlockAssembly, *subtreeprocessor.StoreQueue, *storePipeline) {
+	t.Helper()
+
+	server, _ := setupServerWithSettings(t, func(s *settings.Settings) {
+		s.BlockAssembly.StoredPrefixTemplate = true
+		s.BlockAssembly.StoreQueueMaxMB = 0
+	})
+	require.NotNil(t, server.storeQueue, "Init makes the queue when the flag is on")
+
+	p := &storePipeline{announced: make(chan chainhash.Hash, 64)}
+
+	client := &blockchain.Mock{}
+	client.On("IsFSMCurrentState", mock.Anything, mock.Anything).Return(true, nil)
+	client.On("SendNotification", mock.Anything, mock.Anything).
+		Run(func(args mock.Arguments) {
+			n, _ := args.Get(1).(*blockchain.Notification)
+			p.announced <- chainhash.Hash(n.Hash)
+		}).
+		Return(nil)
+	server.blockchainClient = client
+	setForTest(t, &subtreeRetryBackoffUnit, time.Millisecond)
+	setForTest(t, &metaBuildBackoff, time.Millisecond)
+
+	return server, server.storeQueue, p
+}
+
+// pushChain sends a chain request for a new subtree, and returns it with its result.
+func pushChain(t *testing.T, q *subtreeprocessor.StoreQueue, seed int, skip bool) queuedRequest {
+	t.Helper()
+
+	subtree, txMap := makeSubtree(t, seed)
+	result := make(chan subtreeprocessor.StoreResult, 1)
+
+	q.Push(subtreeprocessor.NewSubtreeRequest{
+		Subtree:          subtree,
+		ParentTxMap:      txMap,
+		SkipNotification: skip,
+		ErrChan:          make(chan error, 1),
+		Result:           result,
+	})
+
+	return queuedRequest{subtree: subtree, result: result}
+}
+
+func TestStoreQueueListener_HeldBytesStayUnderTheLimitAcrossGenerationsDuringAnOutage(t *testing.T) {
+	server, q, _ := startQueueListener(t)
+
+	fault := blobfault.New(server.subtreeStore)
+	fault.OnSetAny(fileformat.FileTypeSubtree, blobfault.Rule{FailTimes: blobfault.Always})
+	fault.OnSetAny(fileformat.FileTypeSubtreeMeta, blobfault.Rule{FailTimes: blobfault.Always})
+	server.subtreeStore = fault
+	setForTest(t, &subtreeRetryLimit, 100000)
+
+	subtree, txMap := makeSubtree(t, 1)
+	limit := subtreeprocessor.StoreRequestBytes(subtreeprocessor.NewSubtreeRequest{Subtree: subtree, ParentTxMap: txMap})
+
+	var previous, all []queuedRequest
+
+	seed := 10
+
+	for generation := 0; generation < 5; generation++ {
+		var current []queuedRequest
+
+		for range 8 {
+			seed++
+
+			r := pushChain(t, q, seed, true)
+			current = append(current, r)
+			require.LessOrEqual(t, q.Held(), limit)
+		}
+
+		// a rechain: the previous generation has left the chain
+		for _, r := range previous {
+			q.Stale(r.subtree)
+		}
+
+		time.Sleep(50 * time.Millisecond)
+		require.LessOrEqual(t, q.Held(), limit, "queued, retried and in-flight bytes stay under the limit")
+		require.Positive(t, q.Held(), "the outage holds bytes in retries")
+
+		all = append(all, current...)
+		previous = current
+	}
+
+	// the outage ends: what is still wanted is stored, what left the chain was dropped
+	fault.OnSetAny(fileformat.FileTypeSubtree, blobfault.Rule{})
+	fault.OnSetAny(fileformat.FileTypeSubtreeMeta, blobfault.Rule{})
+
+	require.Eventually(t, func() bool { return q.Held() == 0 && q.Len() == 0 }, 20*time.Second, 20*time.Millisecond,
+		"every settled or dropped request gave its bytes back")
+
+	last := all[len(all)-8:]
+	for _, r := range last {
+		require.True(t, awaitResult(t, r.result).OK(), "the newest generation is stored")
+	}
+
+	dropped := 0
+
+	for _, r := range all[:len(all)-8] {
+		select {
+		case res := <-r.result:
+			if res.Cancelled {
+				dropped++
+			}
+		default:
+		}
+	}
+
+	require.Positive(t, dropped, "requests of generations that left the chain were dropped at the limit")
+}
+
+func TestStoreQueueListener_ABlockedWriteKeepsItsBytesUntilItReturns(t *testing.T) {
+	server, q, _ := startQueueListener(t)
+
+	fault := blobfault.New(server.subtreeStore)
+	release := make(chan struct{})
+	entered := make(chan struct{}, 1)
+	fault.OnSetAny(fileformat.FileTypeSubtree, blobfault.Rule{Block: release, Entered: entered})
+	server.subtreeStore = fault
+
+	subtree, txMap := makeSubtree(t, 1)
+	one := subtreeprocessor.StoreRequestBytes(subtreeprocessor.NewSubtreeRequest{Subtree: subtree, ParentTxMap: txMap})
+	t.Cleanup(func() {
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+	})
+
+	first := pushChain(t, q, 2, true)
+	<-entered
+
+	second := pushChain(t, q, 3, true)
+
+	time.Sleep(100 * time.Millisecond)
+	require.Equal(t, one, q.Held(), "the blocked write is the only request admitted")
+
+	select {
+	case <-second.result:
+		t.Fatal("the second request ran while the first held the whole limit")
+	default:
+	}
+
+	fault.OnSetAny(fileformat.FileTypeSubtree, blobfault.Rule{})
+	close(release)
+
+	require.True(t, awaitResult(t, first.result).OK())
+	require.True(t, awaitResult(t, second.result).OK())
+	require.Eventually(t, func() bool { return q.Held() == 0 }, 5*time.Second, 10*time.Millisecond)
+}
+
+// The in-order sender waits for each sequence number. A request the queue drops before pickup has
+// none, so the requests after it are still announced.
+func TestStoreQueueListener_ADroppedRequestLeavesNoGapInTheNotifications(t *testing.T) {
+	server, q, p := startQueueListener(t)
+
+	fault := blobfault.New(server.subtreeStore)
+	release := make(chan struct{})
+	entered := make(chan struct{}, 1)
+	fault.OnSetAny(fileformat.FileTypeSubtree, blobfault.Rule{Block: release, Entered: entered})
+	server.subtreeStore = fault
+	t.Cleanup(func() {
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+	})
+
+	blocker := pushChain(t, q, 2, false)
+	<-entered
+
+	dropped1, dropped2 := pushChain(t, q, 3, false), pushChain(t, q, 4, false)
+	q.Stale(dropped1.subtree, dropped2.subtree)
+
+	kept := pushChain(t, q, 5, false) // at the limit with stale requests queued: they are dropped
+
+	fault.OnSetAny(fileformat.FileTypeSubtree, blobfault.Rule{})
+	close(release)
+
+	require.True(t, awaitResult(t, blocker.result).OK())
+	require.True(t, awaitResult(t, kept.result).OK())
+	require.True(t, awaitResult(t, dropped1.result).Cancelled)
+	require.True(t, awaitResult(t, dropped2.result).Cancelled)
+
+	announced := map[chainhash.Hash]bool{}
+
+	for range 2 {
+		select {
+		case h := <-p.announced:
+			announced[h] = true
+		case <-time.After(5 * time.Second):
+			t.Fatal("a subtree after a dropped request was never announced: the sender waits for a number nobody has")
+		}
+	}
+
+	require.True(t, announced[*blocker.subtree.RootHash()])
+	require.True(t, announced[*kept.subtree.RootHash()])
+}
+
+// With room in the queue nothing is dropped at the limit, so a stale request is still queued when
+// a worker comes to it: the worker cancels it, never writes it, and the in-order sender announces the
+// request after it.
+func TestStoreQueueListener_AStaleRequestIsCancelledAtTakeAndTheNextOneIsAnnounced(t *testing.T) {
+	server, _ := setupServerWithSettings(t, func(s *settings.Settings) {
+		s.BlockAssembly.StoredPrefixTemplate = true
+		s.BlockAssembly.StoreQueueMaxMB = 1024
+		// 2 workers (meta stage plus writer stage), both held by the requests below
+		s.BlockAssembly.SubtreeStorageMetaWorkers = 1
+		s.BlockAssembly.SubtreeStorageWriters = 1
+	})
+	q := server.storeQueue
+	require.NotNil(t, q)
+
+	p := &storePipeline{announced: make(chan chainhash.Hash, 64)}
+	client := &blockchain.Mock{}
+	client.On("IsFSMCurrentState", mock.Anything, mock.Anything).Return(true, nil)
+	client.On("SendNotification", mock.Anything, mock.Anything).
+		Run(func(args mock.Arguments) {
+			n, _ := args.Get(1).(*blockchain.Notification)
+			p.announced <- chainhash.Hash(n.Hash)
+		}).
+		Return(nil)
+	server.blockchainClient = client
+	setForTest(t, &subtreeRetryBackoffUnit, time.Millisecond)
+	setForTest(t, &metaBuildBackoff, time.Millisecond)
+
+	fault := blobfault.New(server.subtreeStore)
+	release := make(chan struct{})
+	entered := make(chan struct{}, 1)
+	fault.OnSetAny(fileformat.FileTypeSubtree, blobfault.Rule{Block: release, Entered: entered})
+	server.subtreeStore = fault
+	t.Cleanup(func() {
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+	})
+
+	first := pushChain(t, q, 2, false)
+	<-entered // a worker is writing it, holding the only writer slot
+
+	second := pushChain(t, q, 5, false)
+	require.Eventually(t, func() bool { return q.Len() == 0 }, 5*time.Second, 5*time.Millisecond, "the other worker took the second request")
+
+	stale, last := pushChain(t, q, 3, false), pushChain(t, q, 4, false)
+	q.Stale(stale.subtree)
+
+	fault.OnSetAny(fileformat.FileTypeSubtree, blobfault.Rule{})
+	close(release)
+
+	require.True(t, awaitResult(t, first.result).OK())
+	require.True(t, awaitResult(t, second.result).OK())
+	require.True(t, awaitResult(t, last.result).OK())
+	require.True(t, awaitResult(t, stale.result).Cancelled)
+
+	announced := map[chainhash.Hash]bool{}
+
+	for range 3 {
+		select {
+		case h := <-p.announced:
+			announced[h] = true
+		case <-time.After(5 * time.Second):
+			t.Fatal("a subtree after a cancelled request was never announced")
+		}
+	}
+
+	require.True(t, announced[*first.subtree.RootHash()])
+	require.True(t, announced[*second.subtree.RootHash()])
+	require.True(t, announced[*last.subtree.RootHash()])
+	require.False(t, announced[*stale.subtree.RootHash()], "a cancelled request is not announced")
+	require.Zero(t, fault.SetCalls(stale.subtree.RootHash()[:], fileformat.FileTypeSubtree), "and its subtree is never written")
+	require.Eventually(t, func() bool { return q.Held() == 0 }, 5*time.Second, 10*time.Millisecond)
+}
+
+func TestStoreQueueListener_AnAnnounceOnlyRequestAnnouncesWithoutStoring(t *testing.T) {
+	server, q, p := startQueueListener(t)
+
+	fault := blobfault.New(server.subtreeStore)
+	server.subtreeStore = fault
+
+	stored := pushChain(t, q, 2, true)
+	require.True(t, awaitResult(t, stored.result).OK())
+	p.requireNoAnnouncement(t)
+
+	q.Push(subtreeprocessor.NewSubtreeRequest{Subtree: stored.subtree, AnnounceOnly: true})
+	p.requireAnnounced(t, stored.subtree.RootHash())
+
+	require.Equal(t, 1, fault.SetCalls(stored.subtree.RootHash()[:], fileformat.FileTypeSubtree), "announced, not stored again")
+}
+
+// With the flag off no request carries a settled hook: nothing holds the request for a retry's
+// whole backoff on account of a queue that is not there.
+func TestStoreQueueListener_WithoutAQueueTheOutcomeHoldsNoSettledHook(t *testing.T) {
+	require.Nil(t, newSubtreeStoreOutcome(subtreeprocessor.NewSubtreeRequest{}, true, nil).settled)
+}
+
+// A fork reorg's forward steps send silently. A subtree that is not stored when the reorg asks for its
+// announcement is announced once, when it settles stored, whichever path stored it.
+func TestStoreQueueListener_ASilentRequestIsAnnouncedOnceWhenItSettlesAfterTheReorgAsked(t *testing.T) {
+	for name, run := range map[string]func(t *testing.T, server *BlockAssembly, fault *blobfault.Store, subtree *subtreepkg.Subtree, ask func()){
+		// the subtree is written, the meta is not: the meta retry is silent
+		"meta retry": func(t *testing.T, server *BlockAssembly, fault *blobfault.Store, subtree *subtreepkg.Subtree, ask func()) {
+			fault.OnSet(subtree.RootHash()[:], fileformat.FileTypeSubtreeMeta, blobfault.Rule{FailTimes: blobfault.Always})
+			require.Eventually(t, func() bool { return exists(t, server.subtreeStore, subtree, fileformat.FileTypeSubtree) }, 5*time.Second, 5*time.Millisecond)
+			ask()
+			fault.OnSet(subtree.RootHash()[:], fileformat.FileTypeSubtreeMeta, blobfault.Rule{})
+		},
+		// the write failed, then the subtree turned up in the store: the retry finds it stored and is silent
+		"retry finds it stored": func(t *testing.T, server *BlockAssembly, fault *blobfault.Store, subtree *subtreepkg.Subtree, ask func()) {
+			fault.OnSet(subtree.RootHash()[:], fileformat.FileTypeSubtree, blobfault.Rule{FailTimes: blobfault.Always})
+			require.Eventually(t, func() bool { return fault.SetCalls(subtree.RootHash()[:], fileformat.FileTypeSubtree) > 0 }, 5*time.Second, 5*time.Millisecond)
+
+			bytes, err := subtree.Serialize()
+			require.NoError(t, err)
+			require.NoError(t, fault.Store.Set(t.Context(), subtree.RootHash()[:], fileformat.FileTypeSubtree, bytes))
+
+			ask()
+			fault.OnSet(subtree.RootHash()[:], fileformat.FileTypeSubtree, blobfault.Rule{})
+		},
+		"retry": func(t *testing.T, server *BlockAssembly, fault *blobfault.Store, subtree *subtreepkg.Subtree, ask func()) {
+			fault.OnSet(subtree.RootHash()[:], fileformat.FileTypeSubtree, blobfault.Rule{FailTimes: blobfault.Always})
+			require.Eventually(t, func() bool { return fault.SetCalls(subtree.RootHash()[:], fileformat.FileTypeSubtree) > 0 }, 5*time.Second, 5*time.Millisecond)
+			ask()
+			fault.OnSet(subtree.RootHash()[:], fileformat.FileTypeSubtree, blobfault.Rule{})
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			server, q, p := startQueueListener(t)
+
+			fault := blobfault.New(server.subtreeStore)
+			server.subtreeStore = fault
+			setForTest(t, &subtreeRetryLimit, 100000)
+
+			subtree, txMap := makeSubtree(t, 2)
+			subtree.RootHash() // cached before the workers read it
+			result := make(chan subtreeprocessor.StoreResult, 1)
+
+			q.Push(subtreeprocessor.NewSubtreeRequest{Subtree: subtree, ParentTxMap: txMap, SkipNotification: true, ErrChan: make(chan error, 1), Result: result})
+
+			run(t, server, fault, subtree, func() { require.True(t, q.AnnounceOnSuccess(subtree), "the request is outstanding") })
+
+			require.True(t, awaitResult(t, result).OK())
+			p.requireAnnounced(t, subtree.RootHash())
+		})
+	}
 }
 
 // Issue 2269, plan PR 3, end to end through Init: with blockassembly_storedPrefixTemplate on, a

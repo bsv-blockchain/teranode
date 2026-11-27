@@ -102,9 +102,9 @@ type NewSubtreeRequest struct {
 
 	superseded *atomic.Bool // set by reset() when the state this request was built from is retired; see Superseded
 
-	answered func(err error)    // set by a StoreQueue: see Answered
-	settled  func(ok bool) bool // set by a StoreQueue: see Settled
-	failing  func()             // set by a StoreQueue: see Failing
+	answered func(err error)            // set by a StoreQueue: see Answered
+	settled  func(res StoreResult) bool // set by a StoreQueue: see Settled
+	failing  func()                     // set by a StoreQueue: see Failing
 }
 
 // moveBlockRequest represents a request to move a block in the chain.
@@ -5144,6 +5144,12 @@ func (stp *SubtreeProcessor) closeRetiredSubtrees() {
 	// the cleanups of dropped store requests read subtrees that are about to be unmapped
 	if stp.storeQueue != nil {
 		stp.runDroppedCleanups()
+
+		// the movement that retired these subtrees has committed or rolled back, and a catch-up
+		// still has its rollback ahead: its lost announcements stay until it ends
+		if !stp.catchUpRollbackPinned {
+			defer stp.storeQueue.forgetAnnounceLost()
+		}
 	}
 
 	if len(stp.retiredSubtrees) == 0 {

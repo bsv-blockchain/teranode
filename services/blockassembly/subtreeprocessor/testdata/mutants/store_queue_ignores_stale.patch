@@ -1,21 +1,18 @@
 diff --git a/services/blockassembly/subtreeprocessor/store_queue.go b/services/blockassembly/subtreeprocessor/store_queue.go
 --- a/services/blockassembly/subtreeprocessor/store_queue.go
 +++ b/services/blockassembly/subtreeprocessor/store_queue.go
-@@ -324,16 +324,13 @@ func (q *StoreQueue) pickLocked() (it *storeItem, cancelled []*storeItem) {
+@@ -377,13 +377,13 @@ func (q *StoreQueue) pickLocked() (it *storeItem, cancelled []*storeItem) {
  	}
  
  	if len(q.ready) == 0 {
  		return nil, nil
  	}
  
--	i := slices.IndexFunc(q.ready, func(it *storeItem) bool { return !it.stale })
--	if i < 0 {
--		i = 0
--	}
+-	i := q.firstWantedLocked(q.ready)
 +	i := 0 // mutant: the oldest request first, wanted or not
- 
  	it = q.ready[i]
  
  	if it.stale {
  		cancelled = q.dropLocked(func(other *storeItem) bool { return other == it })
  
+ 		return nil, append(cancelled, q.admitLocked()...)

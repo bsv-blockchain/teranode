@@ -1,7 +1,7 @@
 diff --git a/services/blockassembly/subtreeprocessor/store_queue.go b/services/blockassembly/subtreeprocessor/store_queue.go
 --- a/services/blockassembly/subtreeprocessor/store_queue.go
 +++ b/services/blockassembly/subtreeprocessor/store_queue.go
-@@ -174,12 +174,16 @@ func (q *StoreQueue) Take(ctx context.Context) (NewSubtreeRequest, uint64, bool)
+@@ -201,12 +201,16 @@ func (q *StoreQueue) Take(ctx context.Context) (NewSubtreeRequest, uint64, bool)
  
  		q.mu.Unlock()
  

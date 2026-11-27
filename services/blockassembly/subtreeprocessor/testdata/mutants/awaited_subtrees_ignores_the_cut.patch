@@ -1,7 +1,7 @@
 diff --git a/services/blockassembly/subtreeprocessor/store_queue_reorg.go b/services/blockassembly/subtreeprocessor/store_queue_reorg.go
 --- a/services/blockassembly/subtreeprocessor/store_queue_reorg.go
 +++ b/services/blockassembly/subtreeprocessor/store_queue_reorg.go
-@@ -231,13 +231,13 @@ func (stp *SubtreeProcessor) runDroppedCleanups() {
+@@ -240,13 +240,13 @@ func (stp *SubtreeProcessor) runDroppedCleanups() {
  // cut off, or the setting 0, it is the whole chain: a template published over subtrees that are
  // not stored would name files nothing can read.
  func (stp *SubtreeProcessor) reorgAwaitedSubtrees() int {
