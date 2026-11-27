@@ -951,7 +951,8 @@ func (s *heightRecordingScheduler) CancelBlobDeletion(context.Context, []byte, s
 }
 
 // A validation whose bitmaps write is in its backoff while a second validation of the same subtree,
-// at a later height, stores all its files, leaves the bitmaps file to live as long as the subtree.
+// at a later height, stores all its files, ends with both files at its own height: the bitmaps file
+// lives as long as the subtree.
 func TestStoreSubtreeFiles_ARetryAfterASecondValidationKeepsTheFileAsLongAsItsSubtree(t *testing.T) {
 	ctx := t.Context()
 	tSettings := test.CreateBaseTestSettings(t)
@@ -982,9 +983,10 @@ func TestStoreSubtreeFiles_ARetryAfterASecondValidationKeepsTheFileAsLongAsItsSu
 	scheduler.mu.Lock()
 	defer scheduler.mu.Unlock()
 
-	bitmapsAt, subtreeAt := scheduler.heights[string(fileformat.FileTypeSubtreeLaneBitmaps)], scheduler.heights[string(fileformat.FileTypeSubtree)]
-	require.NotZero(t, subtreeAt)
-	require.GreaterOrEqual(t, bitmapsAt, subtreeAt, "the bitmaps file is not deleted before its subtree")
+	firstDAH := 100 + tSettings.GetSubtreeValidationBlockHeightRetention()
+
+	require.Equal(t, firstDAH, scheduler.heights[string(fileformat.FileTypeSubtreeLaneBitmaps)], "the retried plain write scheduled its own height")
+	require.Equal(t, firstDAH, scheduler.heights[string(fileformat.FileTypeSubtree)], "and so did its subtree write after it")
 }
 
 // laneBitmapsRetryCounts reads subtree validation's two lane bitmaps write retry counters.

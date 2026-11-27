@@ -130,7 +130,7 @@ func initRowsMetrics() {
 			Namespace: "teranode",
 			Subsystem: "lane",
 			Name:      "bitmaps_write_retries_exhausted_total",
-			Help:      "Lane bitmaps file writes still failing with an error a retry can pass when the retry bound had run out. The bound is per outage: a write that fails after it ran out, before any write has succeeded again, is not retried and is counted here at once. Each is also counted in teranode_lane_missing_bitmaps_total as write_failed, and its subtree is stored without the file. service is blockassembly or subtreevalidation",
+			Help:      "Lane bitmaps file writes still failing with an error a retry can pass when the retry bound had run out. The bound is per outage: a write that fails after it ran out, before any write has succeeded again, is not retried and is counted here at once. Each is also counted in teranode_lane_missing_bitmaps_total as write_failed. service is blockassembly or subtreevalidation",
 		}, []string{"service"})
 	})
 }
