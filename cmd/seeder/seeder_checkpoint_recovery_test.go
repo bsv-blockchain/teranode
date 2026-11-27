@@ -17,6 +17,7 @@ import (
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/blob"
 	bloboptions "github.com/bsv-blockchain/teranode/stores/blob/options"
+	blockchain_store "github.com/bsv-blockchain/teranode/stores/blockchain"
 	utxosql "github.com/bsv-blockchain/teranode/stores/utxo/sql"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/test"
@@ -121,6 +122,13 @@ type warnRecorder struct {
 
 func (w *warnRecorder) Warnf(format string, args ...interface{}) {
 	w.warnings = append(w.warnings, fmt.Sprintf(format, args...))
+}
+
+// checkpointRecoverable is recoverableTip as a yes or no, for the tests of that decision.
+func checkpointRecoverable(ctx context.Context, logger ulogger.Logger, blockStore blob.Store, blockchainStore blockchain_store.Store, utxoFile string) (bool, error) {
+	tip, err := recoverableTip(ctx, logger, blockStore, blockchainStore, utxoFile)
+
+	return tip != nil, err
 }
 
 // markImported records a completed import the way processUTXOs does: the
@@ -277,7 +285,7 @@ func TestProcessUTXOs_Force_OverExistingMarkerOfOtherSnapshot_ReimportsAndRewrit
 
 	utxoFile := writeUtxoSetPreamble(t, chainhash.Hash{}, 810000)
 
-	tip, err := processUTXOs(ctx, ulogger.TestLogger{}, tSettings, newTestBlockchainStore(t), utxoFile, "", true, false)
+	tip, err := processUTXOs(ctx, ulogger.TestLogger{}, tSettings, newTestBlockchainStore(t), utxoFile, "", true, false, "")
 	require.NoError(t, err)
 	require.NotNil(t, tip)
 	require.Equal(t, uint32(810000), tip.height)
@@ -302,7 +310,7 @@ func TestProcessUTXOs_RecoverCheckpoint_CompletedImport_RecoversTipWithoutImport
 
 	markImported(t, ctx, blockStore, 200, tipHash)
 
-	tip, err := processUTXOs(ctx, ulogger.TestLogger{}, tSettings, newTestBlockchainStore(t), utxoFile, "", false, true)
+	tip, err := processUTXOs(ctx, ulogger.TestLogger{}, tSettings, newTestBlockchainStore(t), utxoFile, "", false, true, "")
 	require.NoError(t, err)
 	require.NotNil(t, tip)
 	require.Equal(t, uint32(200), tip.height)
@@ -362,7 +370,7 @@ func TestProcessUTXOs_RecoverCheckpoint_IdentityMismatch_RefusesAndWritesNothing
 
 			tc.setup(t, ctx, blockStore)
 
-			tip, err := processUTXOs(ctx, ulogger.TestLogger{}, tSettings, newTestBlockchainStore(t), utxoFile, "", false, true)
+			tip, err := processUTXOs(ctx, ulogger.TestLogger{}, tSettings, newTestBlockchainStore(t), utxoFile, "", false, true, "")
 			require.Error(t, err)
 			require.ErrorContains(t, err, "-recover-checkpoint refused")
 			require.ErrorContains(t, err, "-force")
@@ -392,7 +400,7 @@ func TestProcessUTXOs_RecoverCheckpoint_CheckpointExists_Refuses(t *testing.T) {
 	block := storeBlockAboveGenesis(t, ctx, blockchainStore)
 	require.NoError(t, writeBlockAssemblerState(ctx, ulogger.TestLogger{}, blockchainStore, &utxoSetTip{hash: *block.Hash(), height: 1}))
 
-	tip, err := processUTXOs(ctx, ulogger.TestLogger{}, tSettings, blockchainStore, utxoFile, "", false, true)
+	tip, err := processUTXOs(ctx, ulogger.TestLogger{}, tSettings, blockchainStore, utxoFile, "", false, true, "")
 	require.ErrorContains(t, err, "-recover-checkpoint refused")
 	require.Nil(t, tip)
 }
@@ -412,7 +420,7 @@ func TestProcessUTXOs_WipedUtxoStore_ForceReimports(t *testing.T) {
 	// First seed into the original UTXO store.
 	pointUtxoStoreAt(t, tSettings, "wiped_original")
 
-	tip, err := processUTXOs(ctx, ulogger.TestLogger{}, tSettings, blockchainStore, utxoFile, "", false, false)
+	tip, err := processUTXOs(ctx, ulogger.TestLogger{}, tSettings, blockchainStore, utxoFile, "", false, false, "")
 	require.NoError(t, err)
 	require.NotNil(t, tip)
 	require.True(t, utxoStoreHasTx(ctx, t, tSettings, "wiped_original", &txid))
@@ -423,11 +431,11 @@ func TestProcessUTXOs_WipedUtxoStore_ForceReimports(t *testing.T) {
 	pointUtxoStoreAt(t, tSettings, "wiped_recreated")
 	require.False(t, utxoStoreHasTx(ctx, t, tSettings, "wiped_recreated", &txid))
 
-	_, err = processUTXOs(ctx, ulogger.TestLogger{}, tSettings, blockchainStore, utxoFile, "", false, false)
+	_, err = processUTXOs(ctx, ulogger.TestLogger{}, tSettings, blockchainStore, utxoFile, "", false, false, "")
 	require.Error(t, err)
 	require.ErrorContains(t, err, "-force")
 
-	tip, err = processUTXOs(ctx, ulogger.TestLogger{}, tSettings, blockchainStore, utxoFile, "", true, false)
+	tip, err = processUTXOs(ctx, ulogger.TestLogger{}, tSettings, blockchainStore, utxoFile, "", true, false, "")
 	require.NoError(t, err)
 	require.NotNil(t, tip)
 	require.True(t, utxoStoreHasTx(ctx, t, tSettings, "wiped_recreated", &txid), "-force must have re-imported the UTXOs into the recreated store")
@@ -454,7 +462,7 @@ func TestProcessUTXOs_Reimport_ClearsTipRecordBeforeImporting(t *testing.T) {
 
 	markImported(t, ctx, blockStore, 200, tipHash)
 
-	_, err = processUTXOs(ctx, ulogger.TestLogger{}, tSettings, newTestBlockchainStore(t), utxoFile, "", true, false)
+	_, err = processUTXOs(ctx, ulogger.TestLogger{}, tSettings, newTestBlockchainStore(t), utxoFile, "", true, false, "")
 	require.Error(t, err, "the truncated snapshot must fail the import")
 
 	exists, err := blockStore.Exists(ctx, nil, fileformat.FileTypeDat, bloboptions.WithFilename(importedTipFilename), bloboptions.WithNoHashPrefix())
@@ -481,7 +489,7 @@ func TestProcessUTXOs_Reimport_ClearsLastProcessedBeforeImporting(t *testing.T) 
 
 	markImported(t, ctx, blockStore, 200, tipHash)
 
-	_, err = processUTXOs(ctx, ulogger.TestLogger{}, tSettings, newTestBlockchainStore(t), utxoFile, "", true, false)
+	_, err = processUTXOs(ctx, ulogger.TestLogger{}, tSettings, newTestBlockchainStore(t), utxoFile, "", true, false, "")
 	require.Error(t, err, "the truncated snapshot must fail the import")
 
 	exists, err := blockStore.Exists(ctx, nil, fileformat.FileTypeDat, bloboptions.WithFilename("lastProcessed"), bloboptions.WithNoHashPrefix())
@@ -623,7 +631,7 @@ func TestProcessUTXOs_Force_OverMatchingMarker_ReimportsUTXOs(t *testing.T) {
 
 	markImported(t, ctx, blockStore, 200, tipHash)
 
-	tip, err := processUTXOs(ctx, ulogger.TestLogger{}, tSettings, newTestBlockchainStore(t), utxoFile, "", true, false)
+	tip, err := processUTXOs(ctx, ulogger.TestLogger{}, tSettings, newTestBlockchainStore(t), utxoFile, "", true, false, "")
 	require.NoError(t, err)
 	require.NotNil(t, tip)
 	require.True(t, utxoStoreHasTx(ctx, t, tSettings, "force_matching_marker", &txid), "-force must import the UTXOs, not skip on the marker")

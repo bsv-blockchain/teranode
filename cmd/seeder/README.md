@@ -13,6 +13,45 @@ This package is typically used to process blockchain data from specified input f
 - Handle system signals for graceful termination
 - Start a profiler server for debugging
 
+### Compressed UTXO set
+
+The UTXO set can stay compressed on disk. When `<hash>.utxo-set` is absent, the
+seeder reads `<hash>.utxo-set.zst` instead, decompressing as it reads. That path
+is either one zstd file or a directory of zstd pieces. The pieces are every
+`*.zst` file in the directory, read in name order, so their names must sort in
+stream order (`piece_0000.zst`, `piece_0001.zst`, ...). Each piece is any byte
+range of the set compressed on its own, as a resumable download writes them;
+other files in the directory, such as unfinished `.part` files, are ignored. The
+compressed set and every piece must be regular files: each import pass opens
+them itself, so a named pipe would split its bytes between passes. A pipe goes
+under the plain `<hash>.utxo-set` name. If both the plain and the compressed set
+exist, the seeder refuses to choose. The decoder accepts a zstd frame whose
+window is at most 512 MiB, its default, which every `zstd` level and `--long` up
+to 29 stay within. A frame with a larger window is refused when the decoder
+reaches it; past the first piece, that stops the import part-way.
+
+The checksum sidecar stays `<hash>.utxo-set.sha256` and covers the uncompressed
+bytes. For a compressed set it is read before the import and checked in the
+import pass itself, not by a separate read first: a mismatch fails the seed
+after the last record and before `lastProcessed.dat` is written. A run that does
+not import (the import is already complete, or `-recover-checkpoint`) reads the
+set through the hash instead, when the sidecar is present and `-skipChecksum` is
+not set.
+
+If a compressed import stops before every pass has read and checked the whole
+set, for a checksum mismatch, a damaged or missing piece, a store error or a
+cancel, the records stored by then may come from a damaged piece. The seeder
+skips a transaction that already exists, so a re-run would keep them. The
+seeder writes `seederImportIncomplete.dat` to the block store before a
+compressed import and clears it once every pass has read the whole set,
+checking the sidecar's checksum when there is one; while it exists, a plain
+re-run refuses. Wipe the UTXO store, then re-run with `-force`. A missing or cut piece that removes
+bytes from the stream fails the seed, through the footer counts or the zstd
+decoder. A changed byte inside a
+piece is caught by zstd's frame checksum when the pieces carry one (the `zstd`
+command writes it by default) and by the sidecar's SHA-256; without either it
+can go unnoticed.
+
 ### Checksum verification
 
 Before consuming a headers or UTXO-set file, the seeder looks for a
@@ -25,11 +64,12 @@ proceeds with a warning — older snapshots, or ones from a source that never
 produced a sidecar, are not blocked. This check is unauthenticated (it catches
 corruption/transfer errors, not tampering). Pass `-skipChecksum` only when
 the caller has already verified the same files (as a fetch script does after
-download); verification reads each file in full.
+download); verification reads each file in full. A compressed UTXO set is the
+exception: see above.
 
 ### Tuning (UTXO import)
 
-The UTXO set is imported in two concurrent passes over the same file: one for transactions that fit a single UTXO store record, one for transactions spanning multiple records (highest unspent output index >= `utxostore_utxoBatchSize`), which take a much slower create path. The first error in either pass stops the import; re-run the seeder to resume. Settings:
+The UTXO set is imported in two concurrent passes over the same file: one for transactions that fit a single UTXO store record, one for transactions spanning multiple records (highest unspent output index >= `utxostore_utxoBatchSize`), which take a much slower create path. The first error in either pass stops the import, and a re-run starts it again from the beginning; after a compressed import stops early, or a plain set fails part-way through its read, wipe the UTXO store first (see above). Settings:
 
 | Key | Default | Meaning |
 | --- | --- | --- |

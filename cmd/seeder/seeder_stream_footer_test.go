@@ -5,7 +5,9 @@ package seeder
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
 	"encoding/binary"
+	"encoding/hex"
 	"io"
 	"os"
 	"path/filepath"
@@ -15,6 +17,7 @@ import (
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
+	bloboptions "github.com/bsv-blockchain/teranode/stores/blob/options"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/stretchr/testify/require"
 )
@@ -215,5 +218,210 @@ func TestImportUTXOSet_PipeWithOnePass_StoresEveryRecord(t *testing.T) {
 
 	for txid, n := range store.seen {
 		require.Equal(t, 1, n, "tx %s", txid)
+	}
+}
+
+// swapAfterFirstOpen makes path a named pipe. Its first reader gets first, and the file
+// next takes the pipe's name before that reader gets a byte, so every later opening
+// reads next: a set replaced on disk between two openings, with no timing involved.
+func swapAfterFirstOpen(t *testing.T, path string, first []byte, next string) {
+	t.Helper()
+
+	require.NoError(t, syscall.Mkfifo(path, 0o600))
+
+	swapped := make(chan error, 1)
+
+	go func() {
+		w, err := os.OpenFile(path, os.O_WRONLY, 0)
+		if err != nil {
+			swapped <- err
+			return
+		}
+
+		defer func() { _ = w.Close() }()
+
+		swapped <- os.Rename(next, path)
+
+		_, _ = w.Write(first)
+	}()
+
+	t.Cleanup(func() {
+		// A non-blocking read open releases a writer still waiting in open.
+		if r, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK, 0); err == nil {
+			_ = r.Close()
+		}
+	})
+
+	t.Cleanup(func() {
+		select {
+		case err := <-swapped:
+			require.NoError(t, err, "the replacement must have taken the pipe's name")
+		default:
+		}
+	})
+}
+
+// withOtherTip returns a copy of a snapshot whose tip hash differs.
+func withOtherTip(snapshot []byte) []byte {
+	other := append([]byte(nil), snapshot...)
+	other[len(fileformat.NewHeader(fileformat.FileTypeUtxoSet).Bytes())] ^= 0xff
+
+	return other
+}
+
+// The seed records the tip it read first, so an import pass that opens a set replaced
+// since then must fail rather than store one snapshot's UTXOs under another's tip.
+func TestProcessUTXOs_SetReplacedAfterTheTipRead_Fails(t *testing.T) {
+	tSettings := forceSeederSettings(t)
+	tSettings.UtxoStore.UtxoBatchSize = 0
+
+	a, err := os.ReadFile(writeCompleteSnapshotFile(t, benchWrappers("replaced", 20, 0)))
+	require.NoError(t, err)
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, compressedTestHash+".utxo-set")
+	next := filepath.Join(dir, "next")
+	require.NoError(t, os.WriteFile(next, withOtherTip(a), 0o600))
+
+	swapAfterFirstOpen(t, path, a, next)
+
+	_, err = processUTXOs(context.Background(), ulogger.TestLogger{}, tSettings, newTestBlockchainStore(t), path, "", false, false, "")
+	require.ErrorContains(t, err, "changed while the seed was reading it")
+
+	// Only a compressed import leaves the record that makes a plain re-run refuse.
+	exists, err := openTestBlockStore(t, tSettings).Exists(context.Background(), nil, fileformat.FileTypeDat, bloboptions.WithFilename(incompleteImportFilename), bloboptions.WithNoHashPrefix())
+	require.NoError(t, err)
+	require.False(t, exists)
+}
+
+// -recover-checkpoint records the tip it checked against the block store. With a
+// checksum, a set replaced before verification is refused; without one, the checked
+// tip is returned rather than a second read of a replaced set.
+func TestProcessUTXOs_RecoverCheckpoint_SetReplacedAfterTheCheck(t *testing.T) {
+	ctx := context.Background()
+
+	a, err := os.ReadFile(writeCompleteSnapshotFile(t, benchWrappers("recover-replaced", 20, 0)))
+	require.NoError(t, err)
+
+	b := withOtherTip(a)
+	bSum := sha256.Sum256(b)
+
+	var tipA chainhash.Hash
+	tipA[0] = 0xcc // writeCompleteSnapshotFile's tip
+
+	for _, withChecksum := range []bool{true, false} {
+		tSettings := forceSeederSettings(t)
+		markImported(t, ctx, openTestBlockStore(t, tSettings), 200, tipA)
+
+		dir := t.TempDir()
+		path := filepath.Join(dir, compressedTestHash+".utxo-set")
+		next := filepath.Join(dir, "next")
+		require.NoError(t, os.WriteFile(next, b, 0o600))
+
+		swapAfterFirstOpen(t, path, a, next)
+
+		expected := ""
+		if withChecksum {
+			expected = hex.EncodeToString(bSum[:])
+		}
+
+		tip, err := processUTXOs(ctx, ulogger.TestLogger{}, tSettings, newTestBlockchainStore(t), path, "", false, true, expected)
+		if withChecksum {
+			require.ErrorContains(t, err, "changed while it was read")
+			continue
+		}
+
+		require.NoError(t, err)
+		require.Equal(t, tipA, tip.hash, "the tip checked against the block store, not a re-read")
+	}
+}
+
+// Cancelling the verification of a set that is a named pipe whose writer stalled after
+// the preamble must return at once, not wait for a read that may never end.
+func TestVerifyUTXOSetFile_CancelWhileAPipeReadIsBlocked(t *testing.T) {
+	data, err := os.ReadFile(writeCompleteSnapshotFile(t, benchWrappers("blocked", 20, 0)))
+	require.NoError(t, err)
+
+	path := filepath.Join(t.TempDir(), compressedTestHash+".utxo-set")
+	require.NoError(t, syscall.Mkfifo(path, 0o600))
+
+	stall := make(chan struct{})
+	writerDone := make(chan struct{})
+
+	go func() {
+		defer close(writerDone)
+
+		w, err := os.OpenFile(path, os.O_WRONLY, 0)
+		if err != nil {
+			return
+		}
+
+		_, _ = w.Write(data[:200])
+		<-stall // keep the pipe open with nothing more to read
+		_ = w.Close()
+	}()
+
+	t.Cleanup(func() {
+		close(stall)
+		<-writerDone
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+
+	go func() {
+		_, err := verifyUTXOSetFile(ctx, path, hex.EncodeToString(make([]byte, sha256.Size)))
+		done <- err
+	}()
+
+	time.Sleep(100 * time.Millisecond) // let the read block on the stalled pipe
+	cancel()
+
+	select {
+	case err := <-done:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(5 * time.Second):
+		t.Fatal("verification did not return after cancel")
+	}
+}
+
+// A compressed set, or one of its pieces, that is a named pipe is refused: two passes
+// would split its bytes. Only the plain .utxo-set name may be a pipe.
+func TestUTXOSetPieces_RefusesNamedPipes(t *testing.T) {
+	dir := t.TempDir()
+
+	zstPipe := filepath.Join(dir, compressedTestHash+".utxo-set.zst")
+	require.NoError(t, syscall.Mkfifo(zstPipe, 0o600))
+
+	_, err := utxoSetPieces(zstPipe)
+	require.ErrorContains(t, err, "not a regular file")
+
+	pieces := filepath.Join(dir, "pieces.zst")
+	require.NoError(t, os.Mkdir(pieces, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(pieces, "piece_000000.zst"), nil, 0o600))
+	require.NoError(t, syscall.Mkfifo(filepath.Join(pieces, "piece_000001.zst"), 0o600))
+
+	_, err = utxoSetPieces(pieces)
+	require.ErrorContains(t, err, "not a regular file")
+}
+
+// A piece replaced by a named pipe after it was listed must be refused when it is
+// opened, not block that open waiting for a writer.
+func TestPieceReader_RefusesAPipeAtOpen(t *testing.T) {
+	pipe := filepath.Join(t.TempDir(), "piece_000000.zst")
+	require.NoError(t, syscall.Mkfifo(pipe, 0o600))
+
+	done := make(chan error, 1)
+
+	go func() {
+		_, err := (&pieceReader{pieces: []string{pipe}}).Read(make([]byte, 16))
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		require.ErrorContains(t, err, "not a regular file")
+	case <-time.After(5 * time.Second):
+		t.Fatal("opening a piece that is a pipe blocked")
 	}
 }

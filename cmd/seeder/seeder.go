@@ -86,7 +86,8 @@ func usage(msg string) {
 		fmt.Printf("Error: %s\n\n", msg)
 	}
 
-	fmt.Printf("Usage: seeder -inputDir <folder> -hash <hash> [-skipHeaders] [-skipUTXOs]\n\n")
+	fmt.Printf("Usage: seeder -inputDir <folder> -hash <hash> [-skipHeaders] [-skipUTXOs]\n")
+	fmt.Printf("The UTXO set is <hash>.utxo-set, or <hash>.utxo-set.zst as one zstd file or a directory of zstd pieces.\n\n")
 
 	os.Exit(1)
 }
@@ -157,7 +158,25 @@ func Seeder(logger ulogger.Logger, appSettings *settings.Settings, inputDir stri
 	// so seeded coinbases keep their input. Existence is only enforced when the
 	// header pass will actually consume it.
 	headerFile := filepath.Join(inputDir, hash+".utxo-headers")
+
+	// The UTXO set is <hash>.utxo-set, or <hash>.utxo-set.zst as one zstd file
+	// or a directory of zstd pieces, decompressed as it is read. Only the UTXO
+	// pass reads it, so a headers-only run does not look for it.
 	utxoFile := filepath.Join(inputDir, hash+".utxo-set")
+
+	var err error
+
+	if !skipUTXOs {
+		if utxoFile, err = findUTXOSet(inputDir, hash); err != nil {
+			return err
+		}
+	}
+
+	// expectedUTXOSetSHA256 is set for a compressed UTXO set only: its checksum
+	// is checked in the import pass itself, since checking it first would
+	// decompress the whole set once more before the import begins. A run that
+	// does not import reads the set through the hash instead (processUTXOs).
+	var expectedUTXOSetSHA256 string
 
 	if !skipHeaders {
 		// Check the header file exists
@@ -186,10 +205,22 @@ func Seeder(logger ulogger.Logger, appSettings *settings.Settings, inputDir stri
 	if !skipUTXOs {
 		// Check the UTXO file exists
 		if _, err := os.Stat(utxoFile); os.IsNotExist(err) {
-			usage(fmt.Sprintf("UTXO file %s does not exist", utxoFile))
+			usage(fmt.Sprintf("UTXO file %s does not exist (nor %s%s)", utxoFile, utxoFile, compressedUTXOSetExtension))
 		}
 
-		if !skipChecksum {
+		switch {
+		case skipChecksum:
+		case isCompressedUTXOSet(utxoFile):
+			// The sidecar is read and parsed now, so a malformed one fails in
+			// seconds rather than after the import.
+			if expectedUTXOSetSHA256, err = readChecksumSidecar(logger, uncompressedUTXOSetPath(utxoFile)); err != nil {
+				return errors.NewProcessingError("checksum verification failed for UTXO file %s", utxoFile, err)
+			}
+
+			if expectedUTXOSetSHA256 != "" {
+				logger.Infof("UTXO set %s is compressed; its checksum is verified as it is read", utxoFile)
+			}
+		default:
 			if err := verifyChecksum(logger, utxoFile); err != nil {
 				return errors.NewProcessingError("checksum verification failed for UTXO file %s", utxoFile, err)
 			}
@@ -275,7 +306,7 @@ func Seeder(logger ulogger.Logger, appSettings *settings.Settings, inputDir stri
 			logger.Infof("UTXO store: %s", urlutil.Redact(appSettings.UtxoStore.UtxoStore))
 
 			// Process the UTXOs
-			tip, err := processUTXOs(ctx, logger, appSettings, blockchainStore, utxoFile, headerFile, force, recoverCheckpoint)
+			tip, err := processUTXOs(ctx, logger, appSettings, blockchainStore, utxoFile, headerFile, force, recoverCheckpoint, expectedUTXOSetSHA256)
 			if err != nil {
 				utxoErr = err
 				logger.Errorf("Failed to process UTXOs: %v", err)
@@ -445,9 +476,11 @@ func processHeaders(ctx context.Context, logger ulogger.Logger, blockchainStore 
 }
 
 // processUTXOs reads the UTXO set from a file and stores it in the UTXO store.
+// When expectedSHA256 is set, the import also hashes the uncompressed set and
+// fails on a mismatch before marking the seed complete.
 //
 //nolint:gocognit // Requires refactoring to reduce cognitive complexity
-func processUTXOs(ctx context.Context, logger ulogger.Logger, appSettings *settings.Settings, blockchainStore blockchain.Store, utxoFile string, headersFile string, force bool, recoverCheckpoint bool) (*utxoSetTip, error) {
+func processUTXOs(ctx context.Context, logger ulogger.Logger, appSettings *settings.Settings, blockchainStore blockchain.Store, utxoFile, headersFile string, force, recoverCheckpoint bool, expectedSHA256 string) (*utxoSetTip, error) {
 	blockStoreURL := appSettings.Block.BlockStore
 	if blockStoreURL == nil {
 		return nil, errors.NewConfigurationError("blockstore URL not found in config")
@@ -477,21 +510,43 @@ func processUTXOs(ctx context.Context, logger ulogger.Logger, appSettings *setti
 		// without importing. Only when the store proves a completed import of this
 		// exact snapshot; anything else is refused rather than quietly turned into
 		// an hours-long re-import the operator did not ask for.
-		var recoverable bool
+		var checked *utxoSetTip
 
-		recoverable, err = checkpointRecoverable(ctx, logger, blockStore, blockchainStore, utxoFile)
+		checked, err = recoverableTip(ctx, logger, blockStore, blockchainStore, utxoFile)
 		if err != nil {
 			return nil, err
 		}
 
-		if !recoverable {
+		if checked == nil {
 			return nil, errors.NewProcessingError("-recover-checkpoint refused: the block store does not record a completed import of %s with no BlockAssembler checkpoint; nothing was written. To import the UTXO set instead, re-run with -force", utxoFile)
 		}
 
 		logger.Infof("lastProcessed.dat matches %s and no BlockAssembler checkpoint was found; recovering the checkpoint without re-importing", utxoFile)
 
-		return readUTXOSetTip(utxoFile)
+		if expectedSHA256 == "" {
+			return checked, nil
+		}
+
+		// A compressed set is verified in a later opening, so the verified
+		// bytes must name the tip that was checked against the block store.
+		var verified *utxoSetTip
+
+		if verified, err = verifyUTXOSetFile(ctx, utxoFile, expectedSHA256); err != nil {
+			return nil, err
+		}
+
+		if *verified != *checked {
+			return nil, errors.NewProcessingError("-recover-checkpoint refused: %s changed while it was read: the verified set has tip %s at height %d, the block store records %s at height %d; nothing was written", utxoFile, verified.hash.String(), verified.height, checked.hash.String(), checked.height)
+		}
+
+		return verified, nil
 	case !force:
+		// Checked before the skip decision: a stopped compressed import also
+		// cleared lastProcessed.dat, which would otherwise read as a fresh seed.
+		if err = refuseAfterIncompleteImport(ctx, blockStore); err != nil {
+			return nil, err
+		}
+
 		var skip bool
 
 		skip, err = checkSkipUTXOImport(ctx, blockStore, blockchainStore)
@@ -502,9 +557,13 @@ func processUTXOs(ctx context.Context, logger ulogger.Logger, appSettings *setti
 		if skip {
 			// The store has already been fully seeded. Skip idempotently and
 			// leave any existing BlockAssembler checkpoint untouched (returning a
-			// nil tip signals the caller not to write state).
+			// nil tip signals the caller not to write state). A compressed set is
+			// still verified, as a plain one was before this point.
 			logger.Errorf("lastProcessed.dat exists, skipping UTXOs")
-			return nil, nil
+
+			_, err = verifyUTXOSetFile(ctx, utxoFile, expectedSHA256)
+
+			return nil, err
 		}
 	}
 
@@ -543,7 +602,7 @@ func processUTXOs(ctx context.Context, logger ulogger.Logger, appSettings *setti
 	// unsupported platform or an unusable path fails before hours of import
 	// rather than just before lastProcessed.dat.
 	if syncPath != "" {
-		if err = syncFilesystem(syncPath); err != nil {
+		if err = syncExternalStore(syncPath); err != nil {
 			return nil, errors.NewStorageError("cannot sync the external store filesystem at %s", syncPath, err)
 		}
 	}
@@ -569,23 +628,12 @@ func processUTXOs(ctx context.Context, logger ulogger.Logger, appSettings *setti
 
 	// Read the tip this UTXO set is complete at. importUTXOSet re-opens the
 	// file for each of its passes.
-	var (
-		hash   chainhash.Hash
-		height uint32
-	)
-
-	if err = func() error {
-		f, _, tipHash, tipHeight, openErr := openUTXOSetFile(utxoFile)
-		if openErr != nil {
-			return openErr
-		}
-
-		hash, height = tipHash, tipHeight
-
-		return f.Close()
-	}(); err != nil {
+	tip, err := readUTXOSetTip(utxoFile)
+	if err != nil {
 		return nil, err
 	}
+
+	hash, height := tip.hash, tip.height
 
 	// Multi-record txs go through a much slower create path, so they get their
 	// own pass (see importUTXOSet). Their workers only wait on the external
@@ -610,6 +658,8 @@ func processUTXOs(ctx context.Context, logger ulogger.Logger, appSettings *setti
 		utxoBatchSize:          appSettings.UtxoStore.UtxoBatchSize,
 		skipStore:              gocore.Config().GetBool("skipStore", false),
 		coinbaseTxs:            coinbaseTxs,
+		expectedSHA256:         expectedSHA256,
+		tip:                    tip,
 	}
 
 	// A re-import invalidates everything the previous import left vouching for
@@ -631,14 +681,32 @@ func processUTXOs(ctx context.Context, logger ulogger.Logger, appSettings *setti
 		return nil, errors.NewStorageError("failed to clear lastProcessed.dat before re-import", err)
 	}
 
+	// A compressed set is checked only as it is imported, so until the import
+	// finishes, the UTXO store may hold records from a damaged piece. This record
+	// makes a plain re-run refuse until the operator wipes the store and uses -force.
+	if isCompressedUTXOSet(utxoFile) {
+		if err = blockStore.Set(ctx, nil, fileformat.FileTypeDat, []byte(utxoFile+"\n"), bloboptions.WithFilename(incompleteImportFilename), bloboptions.WithNoHashPrefix(), bloboptions.WithAllowOverwrite(true)); err != nil {
+			return nil, errors.NewStorageError("failed to record that an import of %s has started", utxoFile, err)
+		}
+	}
+
 	if err = importUTXOSet(ctx, logger, utxoStore, utxoFile, opts); err != nil {
 		return nil, err
+	}
+
+	// Every pass has now read the whole set and, when there is a sidecar, checked
+	// its checksum, so the record goes before anything else can fail.
+	// lastProcessed.dat comes later, so a failure in between leaves neither. On a
+	// fresh seed a plain re-run then imports the same set again; over an existing
+	// BlockAssembler checkpoint it is refused and needs -force, as before.
+	if err = blockStore.Del(ctx, nil, fileformat.FileTypeDat, bloboptions.WithFilename(incompleteImportFilename), bloboptions.WithNoHashPrefix()); err != nil && !errors.Is(err, errors.ErrNotFound) {
+		return nil, errors.NewStorageError("failed to clear the record of an import in progress", err)
 	}
 
 	if syncPath != "" {
 		logger.Infof("Syncing the external store filesystem at %s so it is durable before marking the seed complete", syncPath)
 
-		if err = syncFilesystem(syncPath); err != nil {
+		if err = syncExternalStore(syncPath); err != nil {
 			return nil, errors.NewStorageError("failed to sync external store filesystem", err)
 		}
 	}
@@ -667,12 +735,12 @@ func processUTXOs(ctx context.Context, logger ulogger.Logger, appSettings *setti
 // readUTXOSetTip reads only the preamble of a .utxo-set file, not the records
 // after it, and returns the tip it is complete at.
 func readUTXOSetTip(utxoFile string) (*utxoSetTip, error) {
-	f, _, hash, height, err := openUTXOSetFile(utxoFile)
+	s, hash, height, err := openUTXOSetFile(utxoFile, false)
 	if err != nil {
 		return nil, err
 	}
 
-	if err = f.Close(); err != nil {
+	if err = s.Close(); err != nil {
 		return nil, errors.NewStorageError("failed to close %s", utxoFile, err)
 	}
 
@@ -685,57 +753,84 @@ func readUTXOSetTip(utxoFile string) (*utxoSetTip, error) {
 // bare height.
 const importedTipFilename = "seederImportedTip"
 
-// checkpointRecoverable reports whether the block store records a completed
-// import of utxoFile's own snapshot with the BlockAssembler checkpoint missing,
-// which is the state a failure to write the checkpoint leaves behind. Both
-// lastProcessed.dat and the tip record must name utxoFile's preamble height, and
-// the tip record must name its tip hash: the marker lives at a fixed path, so
-// its existence proves only that some import finished, and a height alone does
-// not tell two snapshots with the same tip height (reorg siblings) apart.
+// incompleteImportFilename names the block-store record that a compressed
+// import has started and not yet finished verifying.
+const incompleteImportFilename = "seederImportIncomplete"
+
+// refuseAfterIncompleteImport fails when a compressed import stopped part-way:
+// the records it stored may come from a damaged piece, and an import keeps a
+// record that already exists. -force skips this check, since its own help says
+// to use it after wiping the UTXO store.
+func refuseAfterIncompleteImport(ctx context.Context, blockStore blob.Store) error {
+	b, err := blockStore.Get(ctx, nil, fileformat.FileTypeDat, bloboptions.WithFilename(incompleteImportFilename), bloboptions.WithNoHashPrefix())
+	if err != nil {
+		if errors.Is(err, errors.ErrNotFound) {
+			return nil
+		}
+
+		return errors.NewStorageError("failed to read the record of an import in progress", err)
+	}
+
+	return errors.NewProcessingError("a previous import of the compressed UTXO set %s stopped before the whole set was read and checked (%s.dat in the block store). Records it stored may come from a damaged piece, and a re-run keeps a record that already exists: wipe the UTXO store, then re-run with -force", strings.TrimSpace(string(b)), incompleteImportFilename)
+}
+
+// recoverableTip reports whether the block store records a completed import of
+// utxoFile's own snapshot with the BlockAssembler checkpoint missing, which is
+// the state a failure to write the checkpoint leaves behind, and returns the
+// tip it checked (nil when not recoverable), so the caller records exactly that
+// tip. Both lastProcessed.dat and the tip record must name utxoFile's preamble
+// height, and the tip record must name its tip hash: the marker lives at a fixed
+// path, so its existence proves only that some import finished, and a height
+// alone does not tell two snapshots with the same tip height (reorg siblings)
+// apart.
 //
 // None of this is evidence about the UTXO store itself, which is a different
 // store from the block store: recreating the UTXO store leaves every record
 // here intact. That is why this is only reached via -recover-checkpoint, never
 // -force. A mismatch or an unparsable record is not recoverable.
-func checkpointRecoverable(ctx context.Context, logger ulogger.Logger, blockStore blob.Store, blockchainStore blockchain.Store, utxoFile string) (bool, error) {
+func recoverableTip(ctx context.Context, logger ulogger.Logger, blockStore blob.Store, blockchainStore blockchain.Store, utxoFile string) (*utxoSetTip, error) {
 	b, err := blockStore.Get(ctx, nil, fileformat.FileTypeDat, bloboptions.WithFilename("lastProcessed"), bloboptions.WithNoHashPrefix())
 	if err != nil {
 		if errors.Is(err, errors.ErrNotFound) {
-			return false, nil
+			return nil, nil
 		}
 
-		return false, errors.NewStorageError("failed to read lastProcessed.dat", err)
+		return nil, errors.NewStorageError("failed to read lastProcessed.dat", err)
 	}
 
 	markerHeight, err := strconv.ParseUint(strings.TrimSpace(string(b)), 10, 32)
 	if err != nil {
 		logger.Warnf("lastProcessed.dat does not hold a height (%q), so it proves nothing about %s: %v", strings.TrimSpace(string(b)), utxoFile, err)
 
-		return false, nil
+		return nil, nil
 	}
 
 	tip, err := readUTXOSetTip(utxoFile)
 	if err != nil {
-		return false, err
+		return nil, err
 	}
 
 	if uint64(tip.height) != markerHeight {
 		logger.Warnf("lastProcessed.dat records height %d but %s is for height %d; it is not the import of this snapshot", markerHeight, utxoFile, tip.height)
 
-		return false, nil
+		return nil, nil
 	}
 
 	matches, err := importedTipMatches(ctx, logger, blockStore, tip, utxoFile)
 	if err != nil || !matches {
-		return false, err
+		return nil, err
 	}
 
 	stateExists, err := blockAssemblerStateExists(ctx, blockchainStore)
 	if err != nil {
-		return false, errors.NewStorageError("failed to check BlockAssembler state", err)
+		return nil, errors.NewStorageError("failed to check BlockAssembler state", err)
 	}
 
-	return !stateExists, nil
+	if stateExists {
+		return nil, nil
+	}
+
+	return tip, nil
 }
 
 // importedTipMatches reports whether the tip record names exactly tip's height
@@ -826,6 +921,8 @@ type importOptions struct {
 	utxoBatchSize          int // store outputs-per-record limit; <= 0 imports in one pass
 	skipStore              bool
 	coinbaseTxs            map[chainhash.Hash]*bt.Tx
+	expectedSHA256         string      // hex SHA-256 of the uncompressed set; "" skips the check
+	tip                    *utxoSetTip // the tip the seed records; each pass must read the same one
 }
 
 // importUTXOSet imports every record of the .utxo-set file at utxoFile into
@@ -839,6 +936,10 @@ type importOptions struct {
 // its own reader, channel and workers, so neither can block the other, and the
 // import takes as long as the slower pass. Both run in one errgroup: the first
 // error in either cancels both, and the seed is then re-run from the start.
+//
+// With opts.expectedSHA256 set, every pass hashes every byte it reads and
+// fails after its last record when the hash does not match. Each pass opens
+// the files itself, so each must prove it read the bytes the sidecar names.
 func importUTXOSet(ctx context.Context, logger ulogger.Logger, store utxo.Store, utxoFile string, opts importOptions) error {
 	if opts.workerCount < 1 || opts.multiRecordWorkerCount < 1 || opts.workerCount > maxWorkerCount || opts.multiRecordWorkerCount > maxWorkerCount {
 		return errors.NewConfigurationError("workerCount (%d) and multiRecordWorkerCount (%d) must both be between 1 and %d", opts.workerCount, opts.multiRecordWorkerCount, maxWorkerCount)
@@ -855,16 +956,25 @@ func importUTXOSet(ctx context.Context, logger ulogger.Logger, store utxo.Store,
 
 	g, gCtx := errgroup.WithContext(ctx)
 
+	verify := opts.expectedSHA256 != ""
+	compressed := isCompressedUTXOSet(utxoFile)
+
 	startPass := func(name string, workerCount int, accept func(maxIndex uint32) bool) {
 		g.Go(func() error {
-			f, reader, _, _, err := openUTXOSetFile(utxoFile)
+			s, hash, height, err := openUTXOSetFile(utxoFile, verify)
 			if err != nil {
 				return err
 			}
 
 			defer func() {
-				_ = f.Close()
+				_ = s.Close()
 			}()
+
+			// The markers and the checkpoint record opts.tip, read in an earlier
+			// opening, so the bytes this pass imports and verifies must be for it.
+			if opts.tip != nil && (hash != opts.tip.hash || height != opts.tip.height) {
+				return errors.NewProcessingError("the UTXO set %s changed while the seed was reading it: the %s pass read tip %s at height %d, the seed started with %s at height %d", utxoFile, name, hash.String(), height, opts.tip.hash.String(), opts.tip.height)
+			}
 
 			logger.Infof("[%s pass] starting %d workers, channel size %d", name, workerCount, opts.channelSize)
 
@@ -881,7 +991,25 @@ func importUTXOSet(ctx context.Context, logger ulogger.Logger, store utxo.Store,
 			}
 
 			pg.Go(func() error {
-				return readUTXOFrames(pCtx, logger, f, reader, frameCh, name, accept)
+				err := readUTXOFrames(pCtx, logger, s.footerSource(), s.reader, frameCh, name, accept)
+				if err == nil && s.decoder != nil && s.decoder.err != io.EOF {
+					err = errors.NewProcessingError("compressed UTXO set did not reach a clean decoder EOF", s.decoder.err)
+				}
+
+				if err == nil && verify {
+					if err = s.verify(opts.expectedSHA256, utxoFile); err == nil {
+						logger.Infof("[%s pass] checksum verified for %s", name, utxoFile)
+					}
+				}
+
+				// A plain set's read that failed on its own, not because another
+				// part of the import stopped it, may have handed bad records to the
+				// workers. A compressed set gets this advice on any failure, below.
+				if err != nil && pCtx.Err() == nil && !compressed {
+					return errors.NewProcessingError("reading the UTXO set %s failed part-way. Records read before the failure may already be in the UTXO store, and a re-run keeps a record that already exists, so wipe the UTXO store before seeding again", utxoFile, err)
+				}
+
+				return err
 			})
 
 			return pg.Wait()
@@ -899,14 +1027,24 @@ func importUTXOSet(ctx context.Context, logger ulogger.Logger, store utxo.Store,
 		startPass("all", opts.workerCount, nil)
 	}
 
-	if err := g.Wait(); err != nil {
-		return errors.NewProcessingError("error in worker", err)
+	err := g.Wait()
+	if err != nil {
+		err = errors.NewProcessingError("error in worker", err)
+	} else if ctxErr := ctx.Err(); ctxErr != nil {
+		// Workers stop on cancellation without an error, possibly after the
+		// readers finished cleanly, so buffered records may have been dropped.
+		err = errors.NewProcessingError("UTXO import cancelled", ctxErr)
 	}
 
-	// Workers stop on cancellation without an error, possibly after the
-	// readers finished cleanly, so buffered records may have been dropped.
-	if err := ctx.Err(); err != nil {
-		return errors.NewProcessingError("UTXO import cancelled", err)
+	// zstd checks a frame's checksum only at the frame's end, so until every
+	// pass has read and hashed the whole set, any record already stored may
+	// have come from a damaged piece, whatever stopped the import.
+	if err != nil && compressed {
+		return errors.NewProcessingError("the import of the compressed UTXO set %s stopped before the whole set was read and checked. Records stored so far may come from a damaged piece, and a re-run keeps a record that already exists, so wipe the UTXO store, then re-run with -force", utxoFile, err)
+	}
+
+	if err != nil {
+		return err
 	}
 
 	logger.Infof("All workers finished successfully")
@@ -914,26 +1052,28 @@ func importUTXOSet(ctx context.Context, logger ulogger.Logger, store utxo.Store,
 	return nil
 }
 
-// openUTXOSetFile opens a .utxo-set file, validates its header and returns a
-// reader positioned at the first record, plus the block hash and height the
-// set is complete at.
-func openUTXOSetFile(utxoFile string) (*os.File, *bufio.Reader, chainhash.Hash, uint32, error) {
+// openUTXOSetFile opens a UTXO set (plain or compressed, see findUTXOSet),
+// validates its header and returns a stream positioned at the first record,
+// plus the block hash and height the set is complete at. With hashIt the
+// stream hashes everything it reads, the header included. Only the start of a
+// compressed set is decompressed.
+func openUTXOSetFile(utxoFile string, hashIt bool) (*utxoSetStream, chainhash.Hash, uint32, error) {
 	var (
 		hash   chainhash.Hash
 		height uint32
 	)
 
-	f, err := os.Open(utxoFile)
+	s, err := openUTXOSetStream(utxoFile, hashIt)
 	if err != nil {
-		return nil, nil, hash, 0, errors.NewStorageError("failed to open file", err)
+		return nil, hash, 0, err
 	}
 
-	fail := func(err error) (*os.File, *bufio.Reader, chainhash.Hash, uint32, error) {
-		_ = f.Close()
-		return nil, nil, hash, 0, err
+	fail := func(err error) (*utxoSetStream, chainhash.Hash, uint32, error) {
+		_ = s.Close()
+		return nil, hash, 0, err
 	}
 
-	reader := bufio.NewReader(f)
+	reader := s.reader
 
 	header, err := fileformat.ReadHeader(reader)
 	if err != nil {
@@ -953,8 +1093,12 @@ func openUTXOSetFile(utxoFile string) (*os.File, *bufio.Reader, chainhash.Hash, 
 	copy(hash[:], preamble[:32])
 	height = binary.LittleEndian.Uint32(preamble[32:36])
 
-	return f, reader, hash, height, nil
+	return s, hash, height, nil
 }
+
+// syncExternalStore is syncFilesystem, held in a variable so a test can make the
+// final sync fail after a good import.
+var syncExternalStore = syncFilesystem
 
 // resumeUnsafeAfterHostCrash reports whether utxoStoreURL has a file:// external
 // store with fsyncMode=none. Such a store can keep a zero-length or partial
@@ -1042,9 +1186,10 @@ func seedingExternalStoreURL(utxoStoreURL *url.URL, fsyncMode string) (*url.URL,
 // reason, that footer is compared against what was actually read, and a
 // mismatch is reported as an error instead of silently treated as success.
 // The footer is taken from the stream when the records end exactly at it
-// (utxopersister.ErrRecordBoundary), so this reader can validate a pipe;
-// otherwise it is read by seeking (utxopersister.GetFooter). A stream that
-// cannot seek and did not end at a footer is reported as truncated. Whether
+// (utxopersister.ErrRecordBoundary), so this reader can validate a pipe or a
+// decompressed stream; otherwise it is read by seeking f (utxopersister.GetFooter).
+// f is nil for a compressed set, whose file offsets are not the stream's. A
+// stream that cannot seek and did not end at a footer is reported as truncated. Whether
 // the seeder as a whole can take a pipe is decided in importUTXOSet, which
 // refuses one when the import would need two passes.
 //
@@ -1052,7 +1197,7 @@ func seedingExternalStoreURL(utxoStoreURL *url.URL, fsyncMode string) (*url.URL,
 // sent; accept gets the record's highest output index. Every record is still
 // read and counted, so each pass validates the whole file against the footer.
 // pass names the pass in log lines.
-func readUTXOFrames(ctx context.Context, logger ulogger.Logger, f *os.File, reader *bufio.Reader, frameCh chan<- []byte,
+func readUTXOFrames(ctx context.Context, logger ulogger.Logger, f io.Reader, reader *bufio.Reader, frameCh chan<- []byte,
 	pass string, accept func(maxIndex uint32) bool) error {
 	defer close(frameCh)
 
@@ -1131,12 +1276,18 @@ func readUTXOFrames(ctx context.Context, logger ulogger.Logger, f *os.File, read
 		footerErr                          error
 	)
 
-	if footerBytes != nil {
+	switch {
+	case footerBytes != nil:
 		expectedTxCount, expectedUTXOCount, footerErr = utxopersister.DecodeFooter(footerBytes)
 		if footerErr != nil {
 			return errors.NewProcessingError("failed to read snapshot footer", footerErr)
 		}
-	} else {
+	case f == nil:
+		// A compressed set has no file to seek; its footer is in the stream or nowhere.
+		return errors.NewProcessingError(
+			"snapshot file truncated: the records ended without a footer after %d transactions/%d UTXOs (%v)",
+			txProcessed, utxosProcessed, endErr)
+	default:
 		expectedTxCount, expectedUTXOCount, footerErr = utxopersister.GetFooter(f)
 		if footerErr != nil {
 			// The stream did not end at a footer, and there is none to seek to,
@@ -1497,53 +1648,12 @@ func writeBlockAssemblerState(ctx context.Context, logger ulogger.Logger, store 
 // doesn't match the file's actual content, the import is refused: a
 // corrupted-but-count-consistent file must never be silently imported.
 func verifyChecksum(logger ulogger.Logger, filePath string) error {
+	expected, err := readChecksumSidecar(logger, filePath)
+	if err != nil || expected == "" {
+		return err
+	}
+
 	sidecarPath := filePath + checksumSidecarExtension
-
-	// maxSidecarSize bounds the sidecar read: a genuine sidecar is a hex digest
-	// plus an optional filename, well under 1KB. Anything larger is not a
-	// sidecar (e.g. the snapshot file itself, copied to the wrong name), and
-	// reading it in full would pull an arbitrarily large file into memory.
-	const maxSidecarSize = 4096
-
-	f, err := os.Open(sidecarPath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			logger.Warnf("[verifyChecksum] no checksum sidecar %s found for %s; proceeding without checksum verification", sidecarPath, filePath)
-			return nil
-		}
-
-		return errors.NewStorageError("failed to read checksum sidecar %s", sidecarPath, err)
-	}
-
-	sidecar, err := io.ReadAll(io.LimitReader(f, maxSidecarSize))
-	_ = f.Close()
-
-	if err != nil {
-		return errors.NewStorageError("failed to read checksum sidecar %s", sidecarPath, err)
-	}
-
-	fields := strings.Fields(string(sidecar))
-	if len(fields) == 0 {
-		return errors.NewProcessingError("checksum sidecar %s is empty", sidecarPath)
-	}
-
-	expected := strings.ToLower(fields[0])
-
-	if len(expected) != sha256.Size*2 {
-		return errors.NewProcessingError("checksum sidecar %s is malformed: %q is not a hex-encoded SHA-256 digest", sidecarPath, fields[0])
-	}
-
-	if _, err := hex.DecodeString(expected); err != nil {
-		return errors.NewProcessingError("checksum sidecar %s is malformed: %q is not a hex-encoded SHA-256 digest", sidecarPath, fields[0])
-	}
-
-	// The standard sha256sum layout names the file the checksum belongs to as
-	// the second field. When present, it must match filePath's own basename —
-	// otherwise the sidecar was paired with the wrong snapshot, and reporting
-	// that as a checksum mismatch would misdirect the operator.
-	if len(fields) > 1 && fields[1] != filepath.Base(filePath) {
-		return errors.NewProcessingError("checksum sidecar %s belongs to %q, not to %s", sidecarPath, fields[1], filepath.Base(filePath))
-	}
 
 	if st, statErr := os.Stat(filePath); statErr == nil {
 		logger.Infof("[verifyChecksum] verifying %s (%s bytes) against %s; this reads the whole file", filePath, formatNumber(uint64(st.Size())), sidecarPath)
@@ -1574,6 +1684,61 @@ func verifyChecksum(logger ulogger.Logger, filePath string) error {
 	logger.Infof("[verifyChecksum] checksum verified for %s against %s", filePath, sidecarPath)
 
 	return nil
+}
+
+// readChecksumSidecar returns the lower-case hex SHA-256 recorded in the
+// "<filePath>.sha256" sidecar, or "" (with a warning) when there is none. A
+// sidecar that is empty, malformed or names another file is an error.
+func readChecksumSidecar(logger ulogger.Logger, filePath string) (string, error) {
+	sidecarPath := filePath + checksumSidecarExtension
+
+	// maxSidecarSize bounds the sidecar read: a genuine sidecar is a hex digest
+	// plus an optional filename, well under 1KB. Anything larger is not a
+	// sidecar (e.g. the snapshot file itself, copied to the wrong name), and
+	// reading it in full would pull an arbitrarily large file into memory.
+	const maxSidecarSize = 4096
+
+	f, err := os.Open(sidecarPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			logger.Warnf("[verifyChecksum] no checksum sidecar %s found for %s; proceeding without checksum verification", sidecarPath, filePath)
+			return "", nil
+		}
+
+		return "", errors.NewStorageError("failed to read checksum sidecar %s", sidecarPath, err)
+	}
+
+	sidecar, err := io.ReadAll(io.LimitReader(f, maxSidecarSize))
+	_ = f.Close()
+
+	if err != nil {
+		return "", errors.NewStorageError("failed to read checksum sidecar %s", sidecarPath, err)
+	}
+
+	fields := strings.Fields(string(sidecar))
+	if len(fields) == 0 {
+		return "", errors.NewProcessingError("checksum sidecar %s is empty", sidecarPath)
+	}
+
+	expected := strings.ToLower(fields[0])
+
+	if len(expected) != sha256.Size*2 {
+		return "", errors.NewProcessingError("checksum sidecar %s is malformed: %q is not a hex-encoded SHA-256 digest", sidecarPath, fields[0])
+	}
+
+	if _, err := hex.DecodeString(expected); err != nil {
+		return "", errors.NewProcessingError("checksum sidecar %s is malformed: %q is not a hex-encoded SHA-256 digest", sidecarPath, fields[0])
+	}
+
+	// The standard sha256sum layout names the file the checksum belongs to as
+	// the second field. When present, it must match filePath's own basename —
+	// otherwise the sidecar was paired with the wrong snapshot, and reporting
+	// that as a checksum mismatch would misdirect the operator.
+	if len(fields) > 1 && fields[1] != filepath.Base(filePath) {
+		return "", errors.NewProcessingError("checksum sidecar %s belongs to %q, not to %s", sidecarPath, fields[1], filepath.Base(filePath))
+	}
+
+	return expected, nil
 }
 
 // formatNumber formats a number with commas as thousands separators.
