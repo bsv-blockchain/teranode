@@ -3701,6 +3701,15 @@ outside:
 				break
 			}
 
+			// Marked failed since it was queued: processInvMsg's check, made again
+			// for a mark set between the Append and this drain. Consumed, like the
+			// held case above, since holding it would stall everything queued behind
+			// it for the mark's TTL, and put off rather than dropped: this item may
+			// be the peer's only announcement of the block (putOffIfMarked).
+			if sm.putOffIfMarked(parkedBlock{hash: iv.Hash, peer: peer}) {
+				break
+			}
+
 			// An owner still sending block bytes has not gone quiet, however
 			// long ago the block was asked for: it is delivering what was queued
 			// ahead of this one, and nothing is arriving for THIS block yet, so
@@ -3812,6 +3821,24 @@ func (sm *SyncManager) processInvMsg(i int, iv *wire.InvVect, processInvs bool, 
 	// inv at the tip. Answered from memory, before the chain round trip
 	// haveInventory makes.
 	if iv.Type == wire.InvTypeBlock && sm.blockHeldLocally(iv.Hash) {
+		return
+	}
+
+	// A block that recently failed is not asked for again while the mark stands,
+	// the rule unownedBlocksUpTo applies to the wanted range. Without it, above
+	// the final checkpoint, every peer that announces the block is sent a getdata
+	// for the mark's whole TTL. drainRequestQueue checks the mark again, which is
+	// what stops the getdata; this check spares the announcement the chain round
+	// trip and the disk read below. Read after blockHeldLocally for the same
+	// reason as there: a block being retried right now is held, so the mark is
+	// read only for a block nothing holds.
+	//
+	// Put off, not dropped. Above the final checkpoint this announcement may be
+	// the peer's last: it often answers requestMissingBlocks' getblocks, and
+	// PushGetBlocksMsg drops a repeat of that getblocks while the tip has not
+	// moved. So the block is asked of this peer once the mark has gone
+	// (putOffIfMarked).
+	if iv.Type == wire.InvTypeBlock && sm.putOffIfMarked(parkedBlock{hash: iv.Hash, peer: peer}) {
 		return
 	}
 
@@ -4931,12 +4958,41 @@ func (sm *SyncManager) Pause() chan<- struct{} {
 	return c
 }
 
+// Dependencies holds the service clients and stores the sync manager needs.
+// It exists so New keeps a manageable parameter list as the sync manager grows.
+//
+// Every field is required unless its own comment says otherwise.
+type Dependencies struct {
+	// BlockchainClient queries blockchain state and submits blocks.
+	BlockchainClient teranodeblockchain.ClientI
+
+	// ValidationClient validates incoming transactions before relay.
+	ValidationClient validator.Interface
+
+	// UtxoStore is the UTXO set, used for validation and outpoint lookups.
+	UtxoStore utxostore.Store
+
+	// SubtreeStore holds merkle subtree blob data.
+	SubtreeStore blob.Store
+
+	// TempStore holds out-of-order blocks parked until their parent arrives.
+	// New also needs tSettings.Legacy.TempStore to be a file:// URL, so a restart
+	// can find what an earlier run parked.
+	TempStore blob.Store
+
+	// SubtreeValidation verifies merkle proofs and block structure.
+	SubtreeValidation subtreevalidation.Interface
+
+	// BlockValidation validates incoming blocks before acceptance.
+	BlockValidation blockvalidation.Interface
+
+	// BlockAssembly serves mining and block template generation. It may be nil.
+	BlockAssembly blockassembly.ClientI
+}
+
 // New constructs a new SyncManager. Use Start to begin processing asynchronous
 // block, tx, and inv updates.
-func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, blockchainClient teranodeblockchain.ClientI,
-	validationClient validator.Interface, utxoStore utxostore.Store, subtreeStore blob.Store, tempStore blob.Store,
-	subtreeValidation subtreevalidation.Interface, blockValidation blockvalidation.Interface,
-	blockAssembly blockassembly.ClientI, config *Config) (*SyncManager, error) {
+func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, deps Dependencies, config *Config) (*SyncManager, error) {
 	initPrometheusMetrics()
 
 	// Derived from the same settings inputs as the peer layer's download budget,
@@ -4948,7 +5004,7 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 	// this chain's parameters and reading the committed chain through the
 	// blockchain client. Built here, before anything in New starts a goroutine,
 	// because it is the one step that can fail.
-	headerRules, err := newHeaderRules(logger, tSettings, config.ChainParams, blockchainClient)
+	headerRules, err := newHeaderRules(logger, tSettings, config.ChainParams, deps.BlockchainClient)
 	if err != nil {
 		return nil, err
 	}
@@ -4981,22 +5037,22 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 		handlerDone:             make(chan struct{}),
 		// teranode stores etc.
 		logger:            logger,
-		blockchainClient:  blockchainClient,
-		validationClient:  validationClient,
-		utxoStore:         utxoStore,
-		subtreeStore:      subtreeStore,
-		subtreeValidation: subtreeValidation,
-		blockValidation:   blockValidation,
-		blockAssembly:     blockAssembly,
+		blockchainClient:  deps.BlockchainClient,
+		validationClient:  deps.ValidationClient,
+		utxoStore:         deps.UtxoStore,
+		subtreeStore:      deps.SubtreeStore,
+		subtreeValidation: deps.SubtreeValidation,
+		blockValidation:   deps.BlockValidation,
+		blockAssembly:     deps.BlockAssembly,
 
-		txGate:             teranodeblockchain.NewUnminedTxGate(logger, blockchainClient, teranodeblockchain.UnminedTxRouteLegacyTx),
-		orphanGate:         teranodeblockchain.NewUnminedTxGate(logger, blockchainClient, teranodeblockchain.UnminedTxRouteLegacyOrphan),
-		orphanEvictionGate: teranodeblockchain.NewUnminedTxGate(logger, blockchainClient, teranodeblockchain.UnminedTxRouteLegacyOrphanEviction),
+		txGate:             teranodeblockchain.NewUnminedTxGate(logger, deps.BlockchainClient, teranodeblockchain.UnminedTxRouteLegacyTx),
+		orphanGate:         teranodeblockchain.NewUnminedTxGate(logger, deps.BlockchainClient, teranodeblockchain.UnminedTxRouteLegacyOrphan),
+		orphanEvictionGate: teranodeblockchain.NewUnminedTxGate(logger, deps.BlockchainClient, teranodeblockchain.UnminedTxRouteLegacyOrphanEviction),
 	}
 
 	// Where every downloaded block is converted to and committed from. Not
 	// optional: a node without a usable park refuses to start.
-	park, err := newBlockPark(logger, tSettings, tempStore)
+	park, err := newBlockPark(logger, tSettings, deps.TempStore)
 	if err != nil {
 		return nil, err
 	}

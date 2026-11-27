@@ -36,6 +36,7 @@ import (
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/jarcoal/httpmock"
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -257,11 +258,19 @@ func TestCheckBlockSubtrees(t *testing.T) {
 			BaseUrl: "http://localhost8090", // This will fail HTTP request
 		}
 
+		InitPrometheusMetrics()
+
+		missingBefore := testutil.ToFloat64(prometheusBlockMissingSubtrees)
+		outstandingBefore := testutil.ToFloat64(prometheusBlockMissingSubtreesOutstanding)
+
 		response, err := server.CheckBlockSubtrees(context.Background(), request)
 		require.Error(t, err)
 		assert.Nil(t, response)
 		// The error message will vary depending on network conditions, but it should be a processing error
 		assert.Contains(t, err.Error(), "failed to load subtree batch")
+
+		require.Equal(t, missingBefore+1, testutil.ToFloat64(prometheusBlockMissingSubtrees))
+		require.Equal(t, outstandingBefore, testutil.ToFloat64(prometheusBlockMissingSubtreesOutstanding))
 	})
 
 	t.Run("SubtreeExistsError", func(t *testing.T) {
@@ -1636,7 +1645,7 @@ func TestProcessTransactionsInLevels(t *testing.T) {
 		var allTransactions []*bt.Tx
 		blockIds := make(map[uint32]bool)
 
-		err := server.processTransactionsInLevels(context.Background(), allTransactions, chainhash.Hash{}, chainhash.Hash{}, 100, 0, 0, blockIds, true)
+		err := server.processTransactionsInLevels(context.Background(), allTransactions, chainhash.Hash{}, chainhash.Hash{}, 100, 0, 0, candidateForkMTPs{}, blockIds, true)
 		require.NoError(t, err)
 	})
 
@@ -1660,7 +1669,7 @@ func TestProcessTransactionsInLevels(t *testing.T) {
 			mock.Anything, blockchain.FSMStateRUNNING).
 			Return(true, nil)
 
-		err = server.processTransactionsInLevels(context.Background(), allTransactions, chainhash.Hash{}, chainhash.Hash{}, 100, 0, 0, blockIds, true)
+		err = server.processTransactionsInLevels(context.Background(), allTransactions, chainhash.Hash{}, chainhash.Hash{}, 100, 0, 0, candidateForkMTPs{}, blockIds, true)
 		require.NoError(t, err)
 	})
 
@@ -1687,7 +1696,7 @@ func TestProcessTransactionsInLevels(t *testing.T) {
 			Return(true, nil)
 
 		// Should fail with validation errors (errors are logged but not returned)
-		err = server.processTransactionsInLevels(context.Background(), allTransactions, chainhash.Hash{}, chainhash.Hash{}, 100, 0, 0, blockIds, true)
+		err = server.processTransactionsInLevels(context.Background(), allTransactions, chainhash.Hash{}, chainhash.Hash{}, 100, 0, 0, candidateForkMTPs{}, blockIds, true)
 		require.Error(t, err)
 	})
 
@@ -1711,7 +1720,7 @@ func TestProcessTransactionsInLevels(t *testing.T) {
 		// Missing-parent errors are deferred (not fatal) so the caller's
 		// sequential revalidation pass can re-run the failed subtrees in
 		// block order and resolve cross-subtree parent dependencies.
-		err = server.processTransactionsInLevels(context.Background(), allTransactions, chainhash.Hash{}, chainhash.Hash{}, 100, 0, 0, blockIds, true)
+		err = server.processTransactionsInLevels(context.Background(), allTransactions, chainhash.Hash{}, chainhash.Hash{}, 100, 0, 0, candidateForkMTPs{}, blockIds, true)
 		require.NoError(t, err)
 	})
 
@@ -1736,7 +1745,7 @@ func TestProcessTransactionsInLevels(t *testing.T) {
 		// The walk-limit error is deterministic for the block: it must fail the
 		// level immediately and keep its distinct code through the wrapping, not
 		// be swallowed into a countless summary error.
-		err = server.processTransactionsInLevels(context.Background(), allTransactions, chainhash.Hash{}, chainhash.Hash{}, 100, 0, 0, blockIds, true)
+		err = server.processTransactionsInLevels(context.Background(), allTransactions, chainhash.Hash{}, chainhash.Hash{}, 100, 0, 0, candidateForkMTPs{}, blockIds, true)
 		require.Error(t, err)
 		require.ErrorIs(t, err, errors.ErrUtxoWalkLimitExceeded)
 	})
@@ -1761,7 +1770,7 @@ func TestProcessTransactionsInLevels(t *testing.T) {
 
 		// Generic per-tx errors are counted and deferred, but the summary error
 		// must chain the first cause instead of reporting bare counts.
-		err = server.processTransactionsInLevels(context.Background(), allTransactions, chainhash.Hash{}, chainhash.Hash{}, 100, 0, 0, blockIds, true)
+		err = server.processTransactionsInLevels(context.Background(), allTransactions, chainhash.Hash{}, chainhash.Hash{}, 100, 0, 0, candidateForkMTPs{}, blockIds, true)
 		require.Error(t, err)
 		require.ErrorIs(t, err, errors.ErrStorageError)
 		require.Contains(t, err.Error(), "distinctive storage failure for testing")
@@ -1776,7 +1785,7 @@ func TestProcessTransactionsInLevels(t *testing.T) {
 		blockIds := make(map[uint32]bool)
 
 		// Should fail with nil transaction
-		err := server.processTransactionsInLevels(context.Background(), allTransactions, chainhash.Hash{}, chainhash.Hash{}, 100, 0, 0, blockIds, true)
+		err := server.processTransactionsInLevels(context.Background(), allTransactions, chainhash.Hash{}, chainhash.Hash{}, 100, 0, 0, candidateForkMTPs{}, blockIds, true)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "transaction is nil")
 	})
@@ -1811,7 +1820,7 @@ func TestProcessTransactionsInLevels(t *testing.T) {
 			mock.Anything, blockchain.FSMStateRUNNING).
 			Return(true, nil)
 
-		err = server.processTransactionsInLevels(context.Background(), allTransactions, chainhash.Hash{}, chainhash.Hash{}, 100, 0, 0, blockIds, true)
+		err = server.processTransactionsInLevels(context.Background(), allTransactions, chainhash.Hash{}, chainhash.Hash{}, 100, 0, 0, candidateForkMTPs{}, blockIds, true)
 		require.NoError(t, err)
 	})
 
@@ -1844,7 +1853,7 @@ func TestProcessTransactionsInLevels(t *testing.T) {
 			Return(true, nil)
 
 		// Should return error even some validation failures
-		err := server.processTransactionsInLevels(context.Background(), allTransactions, chainhash.Hash{}, chainhash.Hash{}, 100, 0, 0, blockIds, true)
+		err := server.processTransactionsInLevels(context.Background(), allTransactions, chainhash.Hash{}, chainhash.Hash{}, 100, 0, 0, candidateForkMTPs{}, blockIds, true)
 		require.Error(t, err)
 	})
 

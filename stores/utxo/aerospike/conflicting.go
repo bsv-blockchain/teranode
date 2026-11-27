@@ -96,7 +96,7 @@ func (s *Store) SetConflicting(ctx context.Context, txHashes []chainhash.Hash, s
 			batchUDFPolicy, LuaPackage, key, subOpSetConflicting, "setConflicting",
 			setValue,
 			int(s.GetBlockHeight()),
-			s.settings.GetUtxoStoreBlockHeightRetention(),
+			s.settings.GetUtxoStoreSpentDeleteRetention(),
 		))
 
 		for i, input := range tx.Inputs {

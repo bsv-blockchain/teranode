@@ -76,13 +76,15 @@ func reopenWithFlag(t *testing.T, s *Store, on bool) *Store {
 		ts.UtxoStore.LaneMigration = settings.LaneMigrationShadow
 	}
 
-	u, err := url.Parse(testDSN(t))
+	dsn := storeDSN(t, s)
+	u, err := url.Parse(dsn)
 	require.NoError(t, err)
 
 	reopened, err := New(t.Context(), ulogger.TestLogger{}, &ts, u)
 	require.NoError(t, err)
 
-	t.Cleanup(func() { _ = reopened.Close(context.Background()) })
+	closeOnCleanup(t, reopened)
+	rememberDSN(t, reopened, dsn)
 
 	return reopened
 }
@@ -90,6 +92,8 @@ func reopenWithFlag(t *testing.T, s *Store, on bool) *Store {
 // With the flag off a database never gets the column, so its rows stay what main writes. That is the
 // point of opening it only with the flag on: a NULL in a row with no other NULL costs 8 bytes.
 func TestLaneColumnExistsOnlyWithTheFlagOn(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	for _, table := range laneColumnTables {
@@ -109,13 +113,15 @@ func TestLaneColumnExistsOnlyWithTheFlagOn(t *testing.T) {
 // A step this build refuses must not add the column, even for a tool that opens the store without
 // the daemon.
 func TestOpeningAtARefusedLaneStepAddsNoColumn(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	for _, step := range []settings.LaneMigration{settings.LaneMigrationRows, settings.LaneMigrationLanes} {
 		ts := *s.settings
 		ts.UtxoStore.LaneMigration = step
 
-		u, err := url.Parse(testDSN(t))
+		u, err := url.Parse(storeDSN(t, s))
 		require.NoError(t, err)
 
 		refused, err := New(ctx, ulogger.TestLogger{}, &ts, u)
@@ -132,6 +138,8 @@ func TestOpeningAtARefusedLaneStepAddsNoColumn(t *testing.T) {
 // position, new ones get one, and it survives the flag going off again, because the copies follow the
 // column and not the flag.
 func TestLaneColumnArrivesWhenTheFlagGoesOnAndOutlivesIt(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	before := mkTx(t, 1, 5_000)
@@ -272,6 +280,8 @@ func requireGetLane(t *testing.T, s *Store, ctx context.Context, tx *bt.Tx, want
 // a block is recorded, still there after the stamp deletes the identity row, and copied again to
 // preserved_parent, which is what answers once the containment partition is gone.
 func TestLanePositionSurvivesEveryCopyOfTheRow(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newLaneStore(t)
 
 	// Lane 200 sets the top bit, so the column holds a negative number.
@@ -346,6 +356,8 @@ func storedLaneInBlock(t *testing.T, s *Store, ctx context.Context, tx *bt.Tx, b
 // TestLanePositionSurvivesEveryCopyOfTheRow only copies from the identity row. The rival is above
 // the stamp fence, or the write is fenced out and this checks nothing.
 func TestLanePositionIsCopiedFromAnExistingContainmentRow(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newLaneStore(t)
 
 	want := lane.Pack(200, 4_243)
@@ -428,6 +440,8 @@ func TestAnExistingIdentityRowDecidesTheLanePosition(t *testing.T) {
 // the position the record has, not the one just taken, or Get would return a position no identity
 // row ever carried once the stamp deleted the identity row.
 func TestABlockPathCreateOfAStoredRecordKeepsItsPosition(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	want, burned := lane.Pack(4, 100), lane.Pack(4, 900)
 
 	for _, route := range blockPathCreateRoutes {
@@ -475,6 +489,8 @@ func TestABlockPathCreateOfAStoredRecordKeepsItsPosition(t *testing.T) {
 // TestALaneReadInABatchWithAReadThatDidNotAsk: the batch reads the column if any item asked, so the
 // lane read gets its position whatever it shares a batch with.
 func TestALaneReadInABatchWithAReadThatDidNotAsk(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStoreWith(t, func(ts *settings.Settings) {
 		// Two items fill a batch, and the window is long enough that neither flushes alone.
 		ts.UtxoStore.GetBatcherSize = 2
@@ -508,6 +524,8 @@ func TestALaneReadInABatchWithAReadThatDidNotAsk(t *testing.T) {
 // is refused but still writes the new block's mined row, as a coinbase seen in a second block does. The
 // row must carry the position the record has, not the one this refused create took.
 func TestARefusedCreateCannotGiveARecordASecondLanePosition(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	first, second := lane.Pack(200, 4_244), lane.Pack(4, 200)
 
 	requireOneLanePosition := func(t *testing.T, s *Store, ctx context.Context, tx *bt.Tx) {
@@ -598,6 +616,8 @@ func (p *takeOrderSource) Next(context.Context) (uint64, error) {
 // conflicting create or a store with no create batcher, plans inside its transaction (createIn),
 // which is where a wait would hold locks, so it has its own subtest.
 func TestUtxosetTakesPositionsBeforeItOpensATransaction(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	ctx := t.Context()
 
 	entryOn := func(t *testing.T, s *Store, call func(s *Store, w *tests.MultiWorkload) error) *takeOrderSource {
@@ -687,6 +707,8 @@ func TestUtxosetTakesPositionsBeforeItOpensATransaction(t *testing.T) {
 // does not set the options that reach it, proves nothing about it. Each record gets its own position,
 // taken for the whole list at the entry.
 func TestLanePositionOnTheNettedBelowCheckpointWrite(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s := newBodySkipLaneStore(t)
 	ctx := t.Context()
 
@@ -725,6 +747,8 @@ func TestLanePositionOnTheNettedBelowCheckpointWrite(t *testing.T) {
 // Ignoring either netted route's position error must not let a list spend its roots or create
 // records without positions.
 func TestNettedMultiWithoutLanePositionsWritesNothing(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	for _, belowCheckpoint := range []bool{false, true} {
 		name := "families"
 		if belowCheckpoint {
@@ -777,6 +801,8 @@ func TestNettedMultiWithoutLanePositionsWritesNothing(t *testing.T) {
 // TestLanePositionInABatchMixingMinedAndUnmined: one flush can carry both create statements, which
 // makes each half a projection of the plan. Each half must keep its own positions.
 func TestLanePositionInABatchMixingMinedAndUnmined(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newCheckpointLaneStore(t)
 
 	mined := mkTx(t, 1, 5_000)
@@ -856,6 +882,8 @@ func TestLanePositionThroughTheSecondTier(t *testing.T) {
 // which is every create with the feature off, writes NULL on the identity and containment rows
 // and reads back as lane.None.
 func TestLanePositionAbsentIsNullInEveryTable(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newLaneStore(t)
 
 	tx := mkTx(t, 1, 5_000)
@@ -898,6 +926,8 @@ func TestLanePositionAbsentIsNullInEveryTable(t *testing.T) {
 // column existed gains it on the tables and partitions that already exist, with no value, and a
 // second pass changes nothing.
 func TestLanePositionColumnsAreAddedToAnExistingSchema(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newLaneStore(t)
 
 	for _, table := range laneColumnTables {
@@ -968,6 +998,8 @@ func TestLanePositionColumnsAreAddedToAnExistingSchema(t *testing.T) {
 // transaction open on tx_mined, the migration waits for it, and while it waits tx_ident has been
 // altered and committed and answers queries, so no table is held while waiting on another.
 func TestLanePositionMigrationHoldsOneTableAtATime(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newLaneStore(t)
 
 	for _, table := range laneColumnTables {
@@ -1026,6 +1058,8 @@ func TestLanePositionMigrationHoldsOneTableAtATime(t *testing.T) {
 // If another process keeps a transaction open past the retry limit, the store refuses to open with
 // the lock timeout error, and the next start tries again.
 func TestLanePositionMigrationGivesUpAtItsLimit(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newLaneStore(t)
 
 	for _, table := range laneColumnTables {
@@ -1058,6 +1092,8 @@ func TestLanePositionMigrationGivesUpAtItsLimit(t *testing.T) {
 // it must look first and not ask for the lock, or every start would queue behind the longest open
 // transaction on these tables.
 func TestLanePositionMigrationOnAMigratedSchemaTakesNoLock(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newLaneStore(t)
 
 	blocker, err := s.pool.Begin(ctx)
@@ -1083,6 +1119,8 @@ func TestLanePositionMigrationOnAMigratedSchemaTakesNoLock(t *testing.T) {
 // arrays line up with no help from a projection. The zeros are the plan's own: the rows with no
 // position must store NULL, in every table the route writes.
 func TestLanePositionsKeepTheirRowsWhenTheFirstRowsHaveNone(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	want := []uint64{lane.None, lane.None, lane.Pack(3, 11), lane.Pack(4, 22)}
 
 	checkpointed := func(t *testing.T) (*Store, context.Context) { return newCheckpointLaneStore(t) }
@@ -1154,6 +1192,8 @@ func hasLaneColumn(t *testing.T, s *Store, ctx context.Context, table string) bo
 // forged claim among honest siblings, plans its creates again in the next round. Each surviving
 // record carries the position its caller took at the entry, and the round takes none of its own.
 func TestUtxosetRolledBackRoundKeepsItsPositions(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newLaneStore(t)
 
 	ps := parents(t, s, ctx, 3, 100)
@@ -1186,6 +1226,8 @@ func TestUtxosetRolledBackRoundKeepsItsPositions(t *testing.T) {
 // stored under its lock, rolls the chunk back and runs it again without that one. The rerun plans
 // its creates again and must reuse the positions taken at the entry: one per transaction, never more.
 func TestUtxosetRerunChunkKeepsItsPositions(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newUncheckpointedLaneStore(t)
 
 	w := tests.BuildMultiWorkload(t, 0xf6, 2, 2)
@@ -2448,6 +2490,8 @@ func (l *laneLeases) ReleaseLaneLease(context.Context, lane.Release) (bool, erro
 // With the real allocator, a validator's second create of a stored transaction sends its position
 // back, and the next create writes it, so the lane keeps its run with no hole.
 func TestARefusedCreatesPositionIsWrittenByTheNextCreate(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newUncheckpointedLaneStore(t)
 
 	allocator := lane.NewAllocator(&laneLeases{}, "reuse-test", lane.Timings{Renew: time.Hour, Stop: 2 * time.Hour, GrantDuration: time.Hour}, nil)
@@ -2505,6 +2549,8 @@ func columnType(t *testing.T, s *Store, ctx context.Context, table, column strin
 // that write them are the lane forms: a database that has the copy columns but lost an identity
 // lane_position opens with neither copy flag set.
 func TestLaneCopyColumnsNeedTheIdentityColumns(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 	require.NoError(t, s.PrepareLaneSchema(ctx))
 
@@ -2531,6 +2577,8 @@ func TestLaneCopyColumnsNeedTheIdentityColumns(t *testing.T) {
 // identity tables; the other five lane columns wait for PrepareLaneSchema, and this build writes
 // them only once it has installed them, so turning lane positions on adds no other column.
 func TestLanePositionsOnAddsOnlyTheOwnPositionColumns(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 	on := reopenWithFlag(t, s, true)
 
@@ -2576,6 +2624,8 @@ func TestLanePositionsOnAddsOnlyTheOwnPositionColumns(t *testing.T) {
 // PrepareLaneSchema keeps retrying a lock timeout for its limit: a transaction that holds the
 // table for a second delays it and does not fail it.
 func TestPrepareLaneSchemaWaitsOutAShortLock(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	blocker, err := s.pool.Begin(ctx)
@@ -2605,6 +2655,8 @@ func TestPrepareLaneSchemaWaitsOutAShortLock(t *testing.T) {
 // The limit is one deadline for the pass, not one per attempt: with the table held well past the
 // limit, the add gives up soon after the limit instead of retrying until the holder lets go.
 func TestLaneColumnAddGivesUpAtItsLimitAcrossRetries(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	blocker, err := s.pool.Begin(ctx)
@@ -2631,6 +2683,8 @@ func TestLaneColumnAddGivesUpAtItsLimitAcrossRetries(t *testing.T) {
 // second column at the shared deadline, about 3.6 s in. A fresh deadline per column would keep
 // retrying the second until about 7 s.
 func TestLaneColumnPassSharesOneDeadline(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	holdMined, err := s.pool.Begin(ctx)
@@ -2687,6 +2741,8 @@ func hasColumn(t *testing.T, s *Store, ctx context.Context, table, column string
 // columns, and every disabled writer keeps working against it: create, spend, mine, the journal
 // copy-forward and drop, Unspend and lookup, in the process that installed it and after a restart.
 func TestLaneSchemaInstalledAtOffKeepsDisabledWritersWorking(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	parent := mkTx(t, 3, 5_000)
@@ -2783,4 +2839,47 @@ func TestLaneSchemaInstalledAtOffKeepsDisabledWritersWorking(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, s.Unspend(ctx, spends))
 	require.Equal(t, 2, utxoCount(t, s, ctx, parent), "the carried row rebuilds the coin")
+}
+
+// TestLanePositionInUnminedIteratorUtxoset: block assembly's reload reads each unmined
+// transaction's own lane position at shadow, and none at off.
+func TestLanePositionInUnminedIteratorUtxoset(t *testing.T) {
+	t.Run("shadow, then off on the same database", func(t *testing.T) {
+		s, ctx := newUncheckpointedLaneStore(t)
+		tests.LanePositionInUnminedIterator(t, s, true)
+
+		// The column outlives the flag, and at off the reload's query stays the one without it.
+		off := reopenWithFlag(t, s, false)
+		require.True(t, off.laneColumn)
+
+		it, err := off.GetUnminedTxIterator()
+		require.NoError(t, err)
+
+		defer func() { _ = it.Close() }()
+
+		seen := 0
+
+		for {
+			batch, err := it.Next(ctx)
+			require.NoError(t, err)
+
+			if batch == nil {
+				break
+			}
+
+			for _, u := range batch {
+				require.Zero(t, u.LanePosition, "tx %s", u.Hash)
+				seen++
+			}
+		}
+
+		require.Positive(t, seen)
+	})
+
+	t.Run("off", func(t *testing.T) {
+		s, _ := newTestStoreWith(t, func(ts *settings.Settings) {
+			withCheckpoints(ts, nil)
+		})
+		tests.LanePositionInUnminedIterator(t, s, false)
+	})
 }

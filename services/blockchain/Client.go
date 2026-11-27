@@ -360,6 +360,8 @@ func (c *Client) AddBlock(ctx context.Context, block *model.Block, peerID string
 		OptionID:          storeBlockOptions.ID,
 		CoinbaseBump:      block.CoinbaseBUMP,
 		LaneMapRows:       laneMapRowsToProto(storeBlockOptions.LaneMapRows),
+		// Sent only with rows, so a block stored without lanes is the same on the wire.
+		LaneMapRowsOwnBlock: storeBlockOptions.LaneMapRowsOwnBlock && len(storeBlockOptions.LaneMapRows) > 0,
 	}
 
 	for _, subtreeHash := range block.Subtrees {
@@ -536,6 +538,41 @@ func (c *Client) ReleaseLaneLease(ctx context.Context, r lane.Release) (bool, er
 	}
 
 	return resp.GetAlreadyClosed(), nil
+}
+
+// LaneMapRows returns one block's lane map rows.
+func (c *Client) LaneMapRows(ctx context.Context, blockID uint32) ([]lane.MapRow, error) {
+	resp, err := c.client.GetLaneMapRows(ctx, &blockchain_api.GetLaneMapRowsRequest{BlockId: blockID})
+	if err != nil {
+		return nil, errors.UnwrapGRPC(err)
+	}
+
+	return laneMapRowsFromProto(resp.GetRows())
+}
+
+// LaneCapGrants returns, for each lane with one, the first grant handed out at or above height.
+func (c *Client) LaneCapGrants(ctx context.Context, height uint32) ([]lane.CapGrant, error) {
+	resp, err := c.client.GetLaneCapGrants(ctx, &blockchain_api.GetLaneCapGrantsRequest{Height: height})
+	if err != nil {
+		return nil, errors.UnwrapGRPC(err)
+	}
+
+	grants := make([]lane.CapGrant, 0, len(resp.GetGrants()))
+
+	for _, g := range resp.GetGrants() {
+		if g.GetLane() > lane.MaxLane || g.GetFirst() == 0 || g.GetFirst() > lane.MaxPosition {
+			return nil, errors.NewProcessingError("lane cap grant lane %d first %d is out of range", g.GetLane(), g.GetFirst())
+		}
+
+		grants = append(grants, lane.CapGrant{
+			Lane:     uint8(g.GetLane()),
+			First:    g.GetFirst(),
+			Height:   g.GetHeight(),
+			HandedAt: time.Unix(0, g.GetHandedAtNanos()),
+		})
+	}
+
+	return grants, nil
 }
 
 // blockFromResponse converts a gRPC GetBlockResponse into a model.Block.
@@ -1952,6 +1989,18 @@ func (c *Client) GetFSMCurrentState(ctx context.Context) (*FSMStateType, error) 
 		return currentState, nil
 	}
 
+	state, err := c.client.GetFSMCurrentState(ctx, &emptypb.Empty{})
+	if err != nil {
+		return nil, errors.UnwrapGRPC(err)
+	}
+
+	return &state.State, nil
+}
+
+// FetchFSMCurrentState reads the FSM state from the Blockchain service and skips the
+// cached state. The cache holds IDLE as a placeholder while the FSM subscription is
+// broken or stale, so a reader that must tell a real IDLE from an unknown state uses this.
+func (c *Client) FetchFSMCurrentState(ctx context.Context) (*FSMStateType, error) {
 	state, err := c.client.GetFSMCurrentState(ctx, &emptypb.Empty{})
 	if err != nil {
 		return nil, errors.UnwrapGRPC(err)

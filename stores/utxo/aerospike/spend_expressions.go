@@ -353,7 +353,7 @@ func (s *Store) SpendMultiWithExpressions(ctx context.Context, batch []*batchSpe
 		batchWritePolicy.RecordExistsAction = aerospike.UPDATE_ONLY
 
 		// Build operations
-		blockHeightRetention := s.settings.GetUtxoStoreBlockHeightRetention()
+		blockHeightRetention := s.settings.GetUtxoStoreSpentDeleteRetention()
 		ops := s.buildSpendOperations(
 			offset,
 			bItem.spend.UTXOHash[:],

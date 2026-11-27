@@ -238,7 +238,12 @@ func (s *Store) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, min
 	// stays free of follow-up I/O. Runs even when err != nil so a tx mined
 	// successfully is fully unlocked despite a sibling failure in the same batch.
 	if clearErr := s.applyLockClearWork(ctx, work); clearErr != nil {
-		err = errors.Join(err, clearErr)
+		// errors.Join(nil, clearErr) would flatten clearErr into a plain error and drop its code.
+		if err == nil {
+			err = clearErr
+		} else {
+			err = errors.Join(err, clearErr)
+		}
 	}
 
 	return blockIDs, err
@@ -290,7 +295,7 @@ func (s *Store) prepareBatchRecordsForSetMined(batchRecords []aerospike.BatchRec
 			minedBlockInfo.BlockHeight,
 			minedBlockInfo.SubtreeIdx,
 			currentBlockHeight,
-			s.settings.GetUtxoStoreBlockHeightRetention(),
+			s.settings.GetUtxoStoreSpentDeleteRetention(),
 			minedBlockInfo.OnLongestChain,
 			minedBlockInfo.UnsetMined,
 		)
@@ -427,9 +432,8 @@ func (s *Store) processBatchResultsForSetMined(ctx context.Context, batchRecords
 	var postErr error
 
 	if len(extraRecords) > 0 {
-		if err := s.IncrementSpentRecordsMulti(ctx, extraRecords, 1, minedBlockInfo.BlockHeight); err != nil {
-			postErr = errors.Join(postErr, err)
-		}
+		// Assigned, not joined: errors.Join(nil, err) would drop the error's storage code.
+		postErr = s.IncrementSpentRecordsMulti(ctx, extraRecords, 1, minedBlockInfo.BlockHeight)
 	}
 
 	applied := s.applyChildDAHFollowUps(ctx, &childDAH)
@@ -586,6 +590,10 @@ func (s *Store) applyLockClearWork(ctx context.Context, work lockClearWork) erro
 
 	if len(work.fullUnlock) > 0 {
 		if unlockErr := s.SetLocked(ctx, work.fullUnlock, false); unlockErr != nil {
+			// SetLocked reports a failed batch as a ProcessingError; here it is a cleanup fault of this
+			// node's store, so give it the storage code that keeps the block for a retry.
+			unlockErr = errors.NewStorageError("[applyLockClearWork] failed to unlock %d FILTERED_OUT txs", len(work.fullUnlock), unlockErr)
+
 			if err == nil {
 				err = unlockErr
 			} else {
@@ -743,7 +751,7 @@ func (s *Store) clearLockedOnRecordsMulti(items []lockClearItem) error {
 		return errors.NewStorageError("[clearLockedOnRecordsMulti] failed to clear locked flag", err)
 	}
 
-	var aggErr error
+	var recErrs []error
 
 	for _, br := range batchRecords {
 		recErr := br.BatchRec().Err
@@ -757,8 +765,13 @@ func (s *Store) clearLockedOnRecordsMulti(items []lockClearItem) error {
 			continue
 		}
 
-		aggErr = errors.Join(aggErr, recErr)
+		recErrs = append(recErrs, recErr)
 	}
 
-	return aggErr
+	if len(recErrs) == 0 {
+		return nil
+	}
+
+	// The per-record errors are raw Aerospike errors with no code of their own.
+	return errors.NewStorageError("[clearLockedOnRecordsMulti] failed to clear %d of %d records", len(recErrs), len(batchRecords), errors.JoinCapped(10, recErrs...))
 }

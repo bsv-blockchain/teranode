@@ -154,6 +154,7 @@ func newFailedForkReorgBA(t *testing.T) *failedForkReorgBA {
 
 	utxoStore, err := utxostoresql.New(ctx, logger, tSettings, utxoStoreURL)
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = utxoStore.Close(context.Background()) })
 
 	storeURL, err := url.Parse("sqlitememory://")
 	require.NoError(t, err)

@@ -1470,14 +1470,17 @@ Checks if a network address is currently banned.
 
 Freezes a specific UTXO, preventing it from being spent.
 
-**Parameters:**
+**Parameters** (positional, in this order):
 
 1. `txid` (string, required) - Transaction ID of the output to freeze
 2. `vout` (numeric, required) - Output index to freeze
+3. `utxohash` (string, required) - UTXO commitment of the output, as a 64-character hex hash. The
+   Aerospike backend verifies it against the stored output and rejects a mismatch; the
+   SQL backend locates the output by `txid`/`vout` alone.
 
 **Returns:**
 
-- `boolean` - True if the UTXO was successfully frozen
+- `null` on success; an error if hash parsing or the store operation fails
 
 **Example Request:**
 
@@ -1488,7 +1491,8 @@ Freezes a specific UTXO, preventing it from being spent.
     "method": "freeze",
     "params": [
         "a08e6907dbbd3d809776dbfc5d82e371b764ed838b5655e72f463568df1aadf0",
-        1
+        1,
+        "4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda33b"
     ]
 }
 ```
@@ -1497,7 +1501,7 @@ Freezes a specific UTXO, preventing it from being spent.
 
 ```json
 {
-    "result": true,
+    "result": null,
     "error": null,
     "id": "curltest"
 }
@@ -1507,14 +1511,15 @@ Freezes a specific UTXO, preventing it from being spent.
 
 Unfreezes a previously frozen UTXO, allowing it to be spent.
 
-**Parameters:**
+**Parameters** (positional, in this order):
 
 1. `txid` (string, required) - Transaction ID of the frozen output
 2. `vout` (numeric, required) - Output index to unfreeze
+3. `utxohash` (string, required) - UTXO commitment of the output, as a 64-character hex hash (see `freeze`)
 
 **Returns:**
 
-- `boolean` - True if the UTXO was successfully unfrozen
+- `null` on success; an error if hash parsing or the store operation fails
 
 **Example Request:**
 
@@ -1525,7 +1530,8 @@ Unfreezes a previously frozen UTXO, allowing it to be spent.
     "method": "unfreeze",
     "params": [
         "a08e6907dbbd3d809776dbfc5d82e371b764ed838b5655e72f463568df1aadf0",
-        1
+        1,
+        "4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda33b"
     ]
 }
 ```
@@ -1534,7 +1540,7 @@ Unfreezes a previously frozen UTXO, allowing it to be spent.
 
 ```json
 {
-    "result": true,
+    "result": null,
     "error": null,
     "id": "curltest"
 }

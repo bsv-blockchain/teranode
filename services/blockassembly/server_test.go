@@ -18,8 +18,12 @@ import (
 	"github.com/bsv-blockchain/teranode/services/blockassembly/subtreeprocessor"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/settings"
+	"github.com/bsv-blockchain/teranode/stores/blob"
 	"github.com/bsv-blockchain/teranode/stores/blob/memory"
+	"github.com/bsv-blockchain/teranode/stores/blob/options"
+	blockchainoptions "github.com/bsv-blockchain/teranode/stores/blockchain/options"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util/lane"
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/bsv-blockchain/teranode/util/testutil"
 	"github.com/stretchr/testify/assert"
@@ -27,6 +31,93 @@ import (
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc/status"
 )
+
+type miningSubmissionGateStore struct {
+	blob.Store
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (s *miningSubmissionGateStore) Set(ctx context.Context, key []byte, fileType fileformat.FileType, value []byte, opts ...options.FileOption) error {
+	close(s.entered)
+	<-s.release
+	return s.Store.Set(ctx, key, fileType, value, opts...)
+}
+
+// miningSubmissionGateClient pauses a submission inside AddBlock.
+type miningSubmissionGateClient struct {
+	blockchain.ClientI
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (c *miningSubmissionGateClient) AddBlock(ctx context.Context, block *model.Block, peerID string, opts ...blockchainoptions.StoreBlockOption) error {
+	close(c.entered)
+	<-c.release
+	return c.ClientI.AddBlock(ctx, block, peerID, opts...)
+}
+
+// A halt that begins while a solution is being prepared refuses it. One that begins while its
+// block is being added does not wait for AddBlock, which has no deadline, and the block is added.
+func TestSubmitMiningSolution_DeepReorgHaltBeforeAddBlock(t *testing.T) {
+	for _, inAddBlock := range []bool{false, true} {
+		t.Run(fmt.Sprintf("inAddBlock=%t", inAddBlock), func(t *testing.T) {
+			initPrometheusMetrics()
+			h := newCandidateCoinbaseHarness(t)
+			h.server.blockAssembler.blockchainClient = h.store
+			issued := h.issue(t)
+			version := uint32(0x20000004)
+			nonce := mine(t, issued, version)
+
+			entered, release := make(chan struct{}), make(chan struct{})
+			if inAddBlock {
+				h.server.blockchainClient = &miningSubmissionGateClient{ClientI: h.server.blockchainClient, entered: entered, release: release}
+			} else {
+				h.server.txStore = &miningSubmissionGateStore{Store: memory.New(), entered: entered, release: release}
+			}
+
+			result := make(chan error, 1)
+			go func() {
+				_, err := h.server.submitMiningSolution(t.Context(), &BlockSubmissionRequest{
+					SubmitMiningSolutionRequest: &blockassembly_api.SubmitMiningSolutionRequest{Id: issued.Id, Nonce: nonce, Version: &version},
+				})
+				result <- err
+			}()
+			select {
+			case <-entered:
+			case <-time.After(10 * time.Second):
+				t.Fatal("mining solution did not reach the gate")
+			}
+
+			halted := make(chan error, 1)
+			go func() {
+				halted <- h.server.blockAssembler.haltForDeepReorg(t.Context(), h.tip, h.candidate.Height, 20, 0)
+			}()
+			select {
+			case err := <-halted:
+				require.Error(t, err)
+			case <-time.After(10 * time.Second):
+				t.Fatal("the halt waited for the submission")
+			}
+			close(release)
+
+			select {
+			case err := <-result:
+				if inAddBlock {
+					require.NoError(t, err)
+				} else {
+					require.True(t, errors.Is(err, errors.ErrServiceUnavailable), "submission after halt: %v", err)
+				}
+			case <-time.After(10 * time.Second):
+				t.Fatal("mining solution did not finish")
+			}
+
+			best, _, err := h.store.GetBestBlockHeader(t.Context())
+			require.NoError(t, err)
+			require.Equal(t, inAddBlock, *h.tip.Hash() != *best.Hash(), "the block is added only when the halt began inside AddBlock")
+		})
+	}
+}
 
 func Test_storeSubtreeData(t *testing.T) {
 	t.Run("Test storeSubtreeData", func(t *testing.T) {
@@ -653,6 +744,7 @@ func TestGetCurrentDifficultyCoverage(t *testing.T) {
 func TestResetBlockAssemblyCoverage(t *testing.T) {
 	server, _, _, _ := setup(t)
 	ctx := t.Context()
+	require.NoError(t, server.blockAssembler.Start(ctx))
 
 	t.Run("reset block assembly", func(t *testing.T) {
 		// Call reset function - testing for coverage
@@ -1791,6 +1883,7 @@ func TestResetFunctionsIntensive(t *testing.T) {
 	t.Run("ResetBlockAssembly normal operation", func(t *testing.T) {
 		server, _ := setupServer(t)
 		server.blockAssembler.unminedTransactionsLoading.Store(false)
+		require.NoError(t, server.blockAssembler.Start(t.Context()))
 
 		resp, err := server.ResetBlockAssembly(context.Background(), &blockassembly_api.EmptyMessage{})
 		assert.NoError(t, err)
@@ -1810,6 +1903,7 @@ func TestResetFunctionsIntensive(t *testing.T) {
 	t.Run("ResetBlockAssemblyFully normal operation", func(t *testing.T) {
 		server, _ := setupServer(t)
 		server.blockAssembler.unminedTransactionsLoading.Store(false)
+		require.NoError(t, server.blockAssembler.Start(t.Context()))
 
 		resp, err := server.ResetBlockAssemblyFully(context.Background(), &blockassembly_api.EmptyMessage{})
 		assert.NoError(t, err)
@@ -2135,6 +2229,7 @@ func TestResetBlockAssemblyFully(t *testing.T) {
 	t.Run("reset fully successful", func(t *testing.T) {
 		server, _ := setupServer(t)
 		server.blockAssembler.unminedTransactionsLoading.Store(false)
+		require.NoError(t, server.blockAssembler.Start(t.Context()))
 
 		resp, err := server.ResetBlockAssemblyFully(context.Background(), &blockassembly_api.EmptyMessage{})
 		assert.NoError(t, err)
@@ -2673,5 +2768,105 @@ func TestIngestKeepsParentLinksWithSubtreeMetaOff(t *testing.T) {
 			return err
 		})
 		require.Equal(t, []chainhash.Hash{parentHash}, parents)
+	})
+}
+
+// At utxostore_laneMigration shadow every ingest path hands the subtree processor each tx's own
+// lane position; at off, or for a columnar batch whose positions column does not have one per tx,
+// the batch goes as it does without lanes.
+func TestIngestHandsLanePositionsOnlyAtShadow(t *testing.T) {
+	parentHash := chainhash.Hash{0x06}
+	parentLinks := inpointsForParents(t, []chainhash.Hash{parentHash}, [][]uint32{{0}})
+
+	txid := make([]byte, 32)
+	txid[0] = 0x02
+
+	position := lane.Pack(5, 77)
+
+	// handedPositions runs add on block assembly at shadow or off and returns the positions the
+	// subtree processor got, nil when the batch went without any.
+	handedPositions := func(t *testing.T, shadow bool, add func(ba *BlockAssembly) error) []uint64 {
+		t.Helper()
+
+		var handed []uint64
+
+		stp := &subtreeprocessor.MockSubtreeProcessor{}
+		stp.On("AddBatchBounded", mock.Anything, mock.Anything, mock.Anything).Return(subtreeprocessor.Admitted).Maybe()
+		stp.On("AddPositionedBatchBounded", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
+			handed = args.Get(2).([]uint64)
+		}).Return(subtreeprocessor.Admitted).Maybe()
+
+		ba := baWithProcessor(t, func(s *settings.Settings) {
+			if shadow {
+				s.UtxoStore.LaneMigration = settings.LaneMigrationShadow
+			}
+		}, stp)
+
+		require.NoError(t, add(ba))
+
+		return handed
+	}
+
+	columnar := func(positions []uint64) func(ba *BlockAssembly) error {
+		return func(ba *BlockAssembly) error {
+			_, err := ba.AddTxBatchColumnar(context.Background(), &blockassembly_api.AddTxBatchColumnarRequest{
+				TxidsPacked:          txid,
+				Fees:                 []uint64{1},
+				Sizes:                []uint64{100},
+				ParentTxHashesPacked: parentHash[:],
+				ParentTxOffsets:      []uint32{0, 1},
+				VoutIdxsPacked:       []uint32{1, 0},
+				VoutIdxsTxOffsets:    []uint32{0, 2},
+				LanePositions:        positions,
+			})
+
+			return err
+		}
+	}
+
+	unary := func(ba *BlockAssembly) error {
+		_, err := ba.AddTx(context.Background(), &blockassembly_api.AddTxRequest{Txid: txid, Fee: 1, Size: 100, TxInpoints: parentLinks, LanePosition: position})
+		return err
+	}
+
+	batch := func(ba *BlockAssembly) error {
+		_, err := ba.AddTxBatch(context.Background(), &blockassembly_api.AddTxBatchRequest{
+			TxRequests: []*blockassembly_api.AddTxRequest{{Txid: txid, Fee: 1, Size: 100, TxInpoints: parentLinks, LanePosition: position}},
+		})
+
+		return err
+	}
+
+	for name, add := range map[string]func(ba *BlockAssembly) error{"AddTx": unary, "AddTxBatch": batch, "AddTxBatchColumnar": columnar([]uint64{position})} {
+		t.Run(name, func(t *testing.T) {
+			require.Equal(t, []uint64{position}, handedPositions(t, true, add), "at shadow")
+			require.Nil(t, handedPositions(t, false, add), "at off")
+		})
+	}
+
+	t.Run("AddTxBatchColumnar with a positions column of the wrong length", func(t *testing.T) {
+		require.Nil(t, handedPositions(t, true, columnar([]uint64{position, position})))
+	})
+
+	t.Run("a tx without a position", func(t *testing.T) {
+		require.Nil(t, handedPositions(t, true, columnar(nil)))
+	})
+
+	t.Run("AddTxBatch hands each tx its own position", func(t *testing.T) {
+		second, third := lane.Pack(2, 41), lane.Pack(3, 42)
+
+		several := func(ba *BlockAssembly) error {
+			requests := make([]*blockassembly_api.AddTxRequest, 3)
+			for i, p := range []uint64{0, second, third} {
+				hash := chainhash.HashH([]byte{byte(i), 0x5a})
+				requests[i] = &blockassembly_api.AddTxRequest{Txid: hash[:], Fee: 1, Size: 100, TxInpoints: parentLinks, LanePosition: p}
+			}
+
+			_, err := ba.AddTxBatch(context.Background(), &blockassembly_api.AddTxBatchRequest{TxRequests: requests})
+
+			return err
+		}
+
+		require.Equal(t, []uint64{0, second, third}, handedPositions(t, true, several))
 	})
 }

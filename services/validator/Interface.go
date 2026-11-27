@@ -113,11 +113,14 @@ type Interface interface {
 	// batch processing results can be monitored through metrics and logging systems.
 	TriggerBatcher()
 
-	// EnsureMTPLoaded pre-warms the in-memory MTP store up to (blockHeight - 1).
+	// EnsureMTPLoaded pre-warms the in-memory MTP store through blockHeight, one entry more than
+	// BIP68 reads.
 	// This must be called once per block, before concurrent per-transaction goroutines start,
-	// so that BIP68 MTP lookups inside each goroutine are pure array reads with no gRPC calls.
+	// so that BIP68 MTP lookups inside each goroutine are array reads with no gRPC calls, except
+	// for a reload when the store does not hold the candidate's base (Options.CandidateBaseID).
 	//
-	// If BIP68 is not yet active (blockHeight < CSVHeight) or no blockchain client is
+	// If BIP68 is not enforced at blockHeight (below CSVHeight, or at or above
+	// GenesisActivationHeight, where BIP68 is a no-op) or no blockchain client is
 	// configured, this is a no-op.
 	//
 	// When the store already covers the needed range this is a fast O(1) no-op.
@@ -126,7 +129,7 @@ type Interface interface {
 	//
 	// Parameters:
 	//   - ctx: Context for the operation, used for cancellation and tracing
-	//   - blockHeight: The block being validated; the store is loaded up to (blockHeight - 1)
+	//   - blockHeight: The block being validated; the store is loaded through blockHeight
 	//
 	// Returns:
 	//   - error: Error if the MTP fetch fails; the caller should abort block validation

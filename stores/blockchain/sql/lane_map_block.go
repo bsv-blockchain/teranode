@@ -8,6 +8,7 @@ import (
 
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/stores/blockchain/options"
+	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/lane"
 )
 
@@ -17,9 +18,10 @@ import (
 // DeleteBlock, which the rewind tool uses, removes the block and leaves its rows. Block IDs come
 // from a sequence that never hands one out again (BIGSERIAL, SQLite AUTOINCREMENT), so such rows
 // name a block ID no block has, which no chain reaches, and a reader has to resolve rows through
-// their blocks. Nothing reads the rows yet, so they are measured, never acted on: rows that fail
-// their check are left out before the block's transaction begins, rows whose insert fails are
-// rolled back to a savepoint, and either way the block commits as it would without lanes. What is measured is counted once the block is stored, from the attempt that
+// their blocks. Readers load the rows at shadow and do not act on them: rows that fail their
+// check are left out before the block's transaction begins, rows whose insert fails are rolled
+// back to a savepoint, and either way the block commits as it would without lanes. What is
+// measured is counted once the block is stored, from the attempt that
 // stored it, so a store that is retried, or that fails, adds nothing for the attempts it gave up.
 
 // laneMapRowsSavepoint brackets a block's rows inside its transaction. Postgres aborts the whole
@@ -28,6 +30,13 @@ const (
 	laneMapRowsSavepoint         = `SAVEPOINT lane_map_rows`
 	laneMapRowsRollbackSavepoint = `ROLLBACK TO SAVEPOINT lane_map_rows`
 	laneMapRowsReleaseSavepoint  = `RELEASE SAVEPOINT lane_map_rows`
+
+	// laneMapRowsLockTimeout bounds, on Postgres, each lock wait of a block's lane map rows insert
+	// at 2 s, so a lock held elsewhere costs the block its rows, not its store: StoreBlock holds slowPathMu
+	// and the block's uncommitted INSERT meanwhile. It reads the timeout in force, to put back
+	// once the rows are in; a rollback to the savepoint undoes it by itself.
+	laneMapRowsLockTimeout = `SELECT current_setting('lock_timeout'), set_config('lock_timeout', '2000ms', true)`
+	laneMapRowsRestoreLock = `SELECT set_config('lock_timeout', $1, true)`
 )
 
 // laneRowsToStore is the rows StoreBlock is to insert with its block, already checked, and what
@@ -44,6 +53,8 @@ type laneRowsToStore struct {
 	// refused is whether the last attempt left the rows out: a block ID too wide for the map, or
 	// an insert rolled back to its savepoint.
 	refused bool
+	// block is the lane metrics' block label, lane.BlockPeer or lane.BlockOwn.
+	block string
 }
 
 // observe records what the committed attempt did with the rows: their gate time when it stored
@@ -51,9 +62,9 @@ type laneRowsToStore struct {
 func (r *laneRowsToStore) observe() {
 	switch {
 	case r.stored:
-		lane.ObserveGate(lane.GateStageInsert, r.check+r.insert)
+		lane.ObserveGate(r.block, lane.GateStageInsert, r.check+r.insert)
 	case r.refused:
-		lane.CountRowInsertFailure()
+		lane.CountRowInsertFailure(r.block)
 	}
 }
 
@@ -75,13 +86,13 @@ func (s *SQL) checkedLaneMapRows(block *model.Block, o options.StoreBlockOptions
 		return nil, true
 	}
 
-	return &laneRowsToStore{rows: o.LaneMapRows, check: time.Since(start)}, false
+	return &laneRowsToStore{rows: o.LaneMapRows, check: time.Since(start), block: o.LaneMetricsBlock()}, false
 }
 
 // insertLaneMapRowsWithBlock inserts rows for the block just written as blockID, inside tx, under
 // a savepoint. A failed insert is rolled back to the savepoint and logged, and returns nil, so tx
-// commits the block alone; only a failure of the savepoint itself, which leaves tx unusable, is
-// returned. It records in rows what this attempt did, for StoreBlock to report once the block
+// commits the block alone. A failure that leaves tx unusable is returned: the savepoint's own, or,
+// on Postgres, putting back the transaction's lock timeout after the rows went in. It records in rows what this attempt did, for StoreBlock to report once the block
 // commits (laneRowsToStore.observe).
 func (s *SQL) insertLaneMapRowsWithBlock(ctx context.Context, tx *sql.Tx, block *model.Block, blockID uint64, rows *laneRowsToStore) error {
 	start := time.Now()
@@ -101,13 +112,32 @@ func (s *SQL) insertLaneMapRowsWithBlock(ctx context.Context, tx *sql.Tx, block 
 		return err
 	}
 
-	if err := s.insertLaneMapRowsTx(ctx, tx, uint32(blockID), rows.rows); err != nil {
+	var previousLockTimeout string
+
+	err := func() error {
+		if s.engine == util.Postgres {
+			var set string
+			if err := tx.QueryRowContext(ctx, laneMapRowsLockTimeout).Scan(&previousLockTimeout, &set); err != nil {
+				return err
+			}
+		}
+
+		return s.insertLaneMapRowsTx(ctx, tx, uint32(blockID), rows.rows)
+	}()
+
+	switch {
+	case err != nil:
+		// the rollback also undoes the lock timeout set after the savepoint
 		if _, rbErr := tx.ExecContext(ctx, laneMapRowsRollbackSavepoint); rbErr != nil {
 			return rbErr
 		}
 
 		rows.refused = true
 		s.logger.Warnf("[StoreBlock][%s] storing the block without its lane map rows, whose insert failed: %v", block.Hash().String(), err)
+	case s.engine == util.Postgres:
+		if _, err = tx.ExecContext(ctx, laneMapRowsRestoreLock, previousLockTimeout); err != nil {
+			return err
+		}
 	}
 
 	if _, err := tx.ExecContext(ctx, laneMapRowsReleaseSavepoint); err != nil {

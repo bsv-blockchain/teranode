@@ -14,11 +14,11 @@ import (
 // The block gate for a peer's block, at utxostore_laneMigration shadow (lanes Phase 1). Before the
 // block is stored, block validation reads the lane bitmaps subtree validation saved beside each of
 // the block's subtrees, merges them lane by lane into the block's map rows, and hands the rows to
-// AddBlock, which inserts them in the block's own database transaction. Nothing reads the rows
-// yet, so nothing here can stop a block: a subtree without usable bitmaps means the block is
-// stored without rows, and a count that does not match is counted and logged while whatever rows
-// were built still go with the block. A block whose bitmaps files were all read but hold no
-// position has no rows to go, and counts as fewer.
+// AddBlock, which inserts them in the block's own database transaction. Readers load the rows at
+// shadow and do not act on them, so nothing here can stop a block: a subtree without usable
+// bitmaps means the block is stored without rows, and a count that does not match is counted and
+// logged while whatever rows were built still go with the block. A block whose bitmaps files were
+// all read but hold no position has no rows to go, and counts as fewer.
 
 // laneBitmapReadConcurrency bounds the subtree bitmap reads in flight across every block, not per
 // block, and a read a block stopped waiting for keeps its slot until it returns. The file subtree
@@ -47,9 +47,9 @@ func (u *BlockValidation) laneRows(ctx context.Context, block *model.Block) []la
 	bitmaps, missing, unreadable, timedOut := u.readSubtreeLaneBitmaps(ctx, block)
 
 	if missing > 0 || unreadable > 0 || timedOut > 0 {
-		lane.CountMissingBitmaps(lane.MissingBitmapsAbsent, missing)
-		lane.CountMissingBitmaps(lane.MissingBitmapsUnreadable, unreadable)
-		lane.CountMissingBitmaps(lane.MissingBitmapsTimedOut, timedOut)
+		lane.CountMissingBitmaps(lane.BlockPeer, lane.MissingBitmapsAbsent, missing)
+		lane.CountMissingBitmaps(lane.BlockPeer, lane.MissingBitmapsUnreadable, unreadable)
+		lane.CountMissingBitmaps(lane.BlockPeer, lane.MissingBitmapsTimedOut, timedOut)
 		u.logger.Warnf("[laneRows][%s] storing the block without lane rows: of its %d subtrees, %d have no lane bitmaps, %d have unreadable ones and %d were not read in time", block.Hash().String(), len(block.Subtrees), missing, unreadable, timedOut)
 
 		return nil
@@ -57,14 +57,14 @@ func (u *BlockValidation) laneRows(ctx context.Context, block *model.Block) []la
 
 	rows, err := lane.BuildBlockRows(bitmaps)
 	if err != nil {
-		lane.CountRowInsertFailure()
+		lane.CountRowInsertFailure(lane.BlockPeer)
 		u.logger.Warnf("[laneRows][%s] storing the block without lane rows, which could not be built: %v", block.Hash().String(), err)
 
 		return nil
 	}
 
-	lane.ObserveGate(lane.GateStageBuild, time.Since(start))
-	lane.ObserveBlockRows(rows)
+	lane.ObserveGate(lane.BlockPeer, lane.GateStageBuild, time.Since(start))
+	lane.ObserveBlockRows(lane.BlockPeer, rows)
 	u.checkLaneRowCount(block, rows.Members)
 
 	return rows.Rows
@@ -87,7 +87,7 @@ func (u *BlockValidation) checkLaneRowCount(block *model.Block, members uint64) 
 		direction = lane.MismatchMore
 	}
 
-	lane.CountRowMismatch(direction)
+	lane.CountRowMismatch(lane.BlockPeer, direction)
 	u.logger.Warnf("[laneRows][%s] lane rows hold %d members, the block has %d transactions besides its coinbase", block.Hash().String(), members, want)
 }
 

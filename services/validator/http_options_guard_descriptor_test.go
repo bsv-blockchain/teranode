@@ -53,7 +53,11 @@ func TestNonDefaultValidationOptions_CoversEveryWireField(t *testing.T) {
 			}
 
 			req := &validator_api.ValidateTransactionRequest{}
-			req.ProtoReflect().Set(fd, value)
+			if fd.IsList() {
+				req.ProtoReflect().Mutable(fd).List().Append(value)
+			} else {
+				req.ProtoReflect().Set(fd, value)
+			}
 
 			require.NotEmpty(t, nonDefaultValidationOptions(req),
 				"field %s is settable on the wire but the guard does not reject it", fd.Name())
@@ -62,6 +66,6 @@ func TestNonDefaultValidationOptions_CoversEveryWireField(t *testing.T) {
 
 	// Without this the walk would pass vacuously on an empty or truncated
 	// descriptor, which is the failure mode the test exists to prevent.
-	require.Equal(t, 12, covered,
-		"the guard is expected to cover 12 wire-settable fields; update this count deliberately when the proto changes")
+	require.Equal(t, 15, covered,
+		"the guard is expected to cover 15 wire-settable fields; update this count deliberately when the proto changes")
 }

@@ -60,6 +60,7 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/lane"
+	"github.com/bsv-blockchain/teranode/util/lanereader"
 	"github.com/bsv-blockchain/teranode/util/tracing"
 	"github.com/ordishs/gocore"
 	"golang.org/x/sync/errgroup"
@@ -482,7 +483,8 @@ func (u *Server) readTxFromReader(body io.ReadCloser) (tx *bt.Tx, err error) {
 // the validator's answer, the validator's answer for a transaction it found already stored, an
 // older remote validator's answer, and the SQL store's create. blessMissingTransactions calls it,
 // where the position goes into the subtree; the block path's levels, which drop the metadata, do
-// not. The position is only measured, so a failure to read it leaves it at zero, where the
+// not. blessMissing also calls it at shadow, on both paths, for a record that names a mined block,
+// before the already-mined check's lanes shadow. The position is only measured, so a failure to read it leaves it at zero, where the
 // transaction is counted as one without a position, and is not an error.
 func (u *Server) fillLanePosition(ctx context.Context, hash *chainhash.Hash, md *meta.Data) {
 	if !u.laneShadow() || lane.Valid(md.LanePosition) {
@@ -646,6 +648,28 @@ func (u *Server) blessMissing(ctx context.Context, blockHash chainhash.Hash, sub
 		}
 
 		return nil, false, errors.NewProcessingError("[blessMissingTransaction][%s/%s][%s] tx meta is nil", blockHash.String(), subtreeHash.String(), tx.TxID())
+	}
+
+	// At utxostore_laneMigration shadow, the lanes shadow of the check below, counted only, judged
+	// on the same chain: blockIds, the ancestry the caller validates against, or the main chain
+	// when the caller gave none.
+	if r := lanereader.Current(); r != nil {
+		view := r.MainView()
+		if len(blockIds) > 0 {
+			view = r.ViewOfIDs(blockIds)
+		}
+
+		// A record that already existed and names a mined block, the case the check below can
+		// reject, comes back without its position; read it now, and keep it on txMeta so the read
+		// where the transaction goes into the subtree's metadata is not repeated when the record
+		// has one. A record with no mined block needs no position for the check, so nothing is
+		// read, and such a record that came back without its position counts no_position even
+		// though the store holds one.
+		if len(txMeta.BlockIDs) > 0 {
+			u.fillLanePosition(ctx, tx.TxIDChainHash(), txMeta)
+		}
+
+		r.CompareBlocks(lanereader.ReaderSubtreeAlreadyMined, view, *tx.TxIDChainHash(), txMeta.LanePosition, txMeta.BlockIDs)
 	}
 
 	// check whether this transaction was already mined on our chain by comparing the block ids
@@ -1257,7 +1281,7 @@ func (u *Server) storeSubtreeLaneBitmaps(ctx context.Context, subtreeHash *chain
 	}
 
 	if err != nil && !errors.Is(err, errors.ErrBlobAlreadyExists) {
-		lane.CountMissingBitmaps(lane.MissingBitmapsWriteFailed, 1)
+		lane.CountMissingBitmaps(lane.BlockPeer, lane.MissingBitmapsWriteFailed, 1)
 		u.logger.Warnf("[ValidateSubtreeInternal][%s] failed to store subtree lane bitmaps, its block will go without lane rows: %v", subtreeHash.String(), err)
 	}
 }
@@ -1477,6 +1501,18 @@ func (u *Server) blessMissingTransactions(ctx context.Context, subtreeHash chain
 	txMetaSlice []metaSliceItem, blockHeight uint32, blockIds map[uint32]bool, keepAside bool, validationOptions ...validator.Option) (err error) {
 	u.logger.Debugf("[validateSubtree][%s] blessing %d missing txs", subtreeHash.String(), len(missingTxs))
 
+	// Reject a nil transaction up front, before anything spawns a goroutine. A
+	// nil check inside the per-level loop (after earlier iterations have already
+	// called g.Go) returns without g.Wait(), leaking the goroutines already
+	// started for that level: they keep validating, spending and creating in the
+	// UTXO store and writing txMetaSlice/lockedHashes after this function — and
+	// ValidateSubtreeInternal — have returned (issue #1974).
+	for _, mt := range missingTxs {
+		if mt.tx == nil {
+			return errors.NewProcessingError("[validateSubtree][%s] missing transaction is nil", subtreeHash.String())
+		}
+	}
+
 	var (
 		mTx          missingTx
 		missingCount atomic.Uint32
@@ -1528,7 +1564,8 @@ func (u *Server) blessMissingTransactions(ctx context.Context, subtreeHash chain
 	kept := &keptAsideSet{u: u, txMetaSlice: txMetaSlice, blockHeight: blockHeight, hashes: make(map[chainhash.Hash]struct{})}
 
 	// Pre-warm the MTP store once before spawning per-transaction goroutines, so each goroutine
-	// can read mtpStore[h] without locking and without making gRPC calls.
+	// reads mtpStore[h] under a read lock without gRPC calls, unless the store does not hold
+	// the candidate's base, when the first to see it reloads the store.
 	if err = u.validatorClient.EnsureMTPLoaded(ctx, blockHeight); err != nil {
 		return errors.NewProcessingError("[processMissingTransactions][%s] failed to pre-load MTP store: %v", subtreeHash.String(), err)
 	}
@@ -1548,9 +1585,8 @@ func (u *Server) blessMissingTransactions(ctx context.Context, subtreeHash chain
 			tx := mTx.tx
 			txIdx := mTx.idx
 
-			if tx == nil {
-				return errors.NewProcessingError("[validateSubtree][%s] missing transaction is nil", subtreeHash.String())
-			}
+			// A nil tx is rejected up front, before any goroutine starts (see the
+			// pre-pass above), so the leak path through a mid-level return is gone.
 
 			// process each transaction in the background, since the transactions are all batched into the utxo store
 			g.Go(func() error {

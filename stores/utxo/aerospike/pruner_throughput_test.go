@@ -50,6 +50,8 @@ import (
 // which hides exactly the cost of extra serial batches, so compare wall times
 // with a delay set. The batch counts compare the same either way.
 func TestPrunerThroughput(t *testing.T) {
+	t.Parallel()
+
 	if os.Getenv("TERANODE_PRUNER_BENCH") != "1" {
 		t.Skip("set TERANODE_PRUNER_BENCH=1 to run the pruner throughput benchmark")
 	}
@@ -112,15 +114,14 @@ func runPruneWorkload(t *testing.T, w pruneWorkload, children int) pruneResult {
 		s.Pruner.UTXOChunkSize = chunk
 	}
 
-	client, store, ctx, cleanup := initAerospike(t, s, logger)
+	client, store, ctx, cleanup := initAerospikeOwnServer(t, s, logger)
 	defer cleanup()
 
 	require.NoError(t, store.SetBlockHeight(1000))
 
 	seedPruneWorkload(t, ctx, store, w, children)
 
-	astore.ResetPrunerServiceForTests()
-	defer astore.ResetPrunerServiceForTests()
+	astore.UsePrunerServiceForTest(t)
 
 	require.NoError(t, store.CreateIndexIfNotExists(ctx, apruner.IndexName, fields.DeleteAtHeight.String(), aerospike.NUMERIC))
 	require.NoError(t, store.WaitForIndexReady(ctx, apruner.IndexName))

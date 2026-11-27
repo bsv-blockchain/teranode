@@ -162,6 +162,7 @@ func TestSensitiveKeysDerivedMatchesExpected(t *testing.T) {
 		"blockpersister_httpAuthToken": true,
 		"blob_httpAuthToken":           true,
 		"asset_legacyPeerPoolToken":    true,
+		"probe_authToken":              true,
 	}
 
 	got := extractSensitiveKeys()

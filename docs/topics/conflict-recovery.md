@@ -223,11 +223,7 @@ those scans. If Teranode's Aerospike user cannot create indexes, create it by ha
 with `<ns>` the namespace and `<set>` the UTXO set:
 
 ```bash
-# Aerospike 8.1 and later
 asinfo -v 'sindex-create:namespace=<ns>;set=<set>_conflictwal;indexname=<set>_conflictwal_startedAt;bin=startedAt;type=numeric'
-
-# Aerospike 8.0
-asinfo -v 'sindex-create:ns=<ns>;set=<set>_conflictwal;indexname=<set>_conflictwal_startedAt;indexdata=startedAt,numeric'
 ```
 
 The read returns only WAL roots with an integer `startedAt`. Every build writes it

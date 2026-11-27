@@ -80,6 +80,8 @@ func preservedPairOf(t *testing.T, s *Store, ctx context.Context, tx *bt.Tx) (pa
 // NULL would lose a transaction from block assembly for good; setting it wrongly costs a mined
 // transaction reloaded as unmined, which is repaired.
 func TestUnMiningAForkBlockLeavesTheMainChainRow(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newUncheckpointedStore(t)
 
 	tx := mkTx(t, 1, 5_000)
@@ -119,6 +121,8 @@ func TestUnMiningAForkBlockLeavesTheMainChainRow(t *testing.T) {
 // The second half is the stamp: told that block 8 won, it writes the main-chain pair onto the
 // transaction's UTXO, deletes block 7's row as a loser, and deletes the identity row.
 func TestForkThenMainChainRecordClearsTheMarkerAndIsStamped(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	tx := mkTx(t, 1, 5_000)
@@ -159,6 +163,8 @@ func TestForkThenMainChainRecordClearsTheMarkerAndIsStamped(t *testing.T) {
 // below the fence, the one surviving row's pair; above it, (0,0), and the stamp reaches the
 // restored UTXO through the identity row like any other. Either way the siblings agree.
 func TestEveryLiveUTXOOfOneTransactionCarriesTheSamePair(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	parent := mkTx(t, 2, 5_000)
@@ -201,6 +207,8 @@ func TestEveryLiveUTXOOfOneTransactionCarriesTheSamePair(t *testing.T) {
 // stamp has completed, where the losing rows are already deleted, and skips the parent until
 // then.
 func TestPreservedCopyNamesTheBlockThatWon(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	parent := mkTx(t, 1, 5_000)
@@ -235,6 +243,8 @@ func TestPreservedCopyNamesTheBlockThatWon(t *testing.T) {
 // wrong copy is ever written. The store's own preservation can no longer write one, so the
 // wrong copy is planted by raw SQL.
 func TestPreservedCopyNeverOutranksACorrectUTXO(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	// Born from the main-chain block below the checkpoint, so the UTXO carries (100, 8) from

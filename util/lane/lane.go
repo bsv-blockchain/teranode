@@ -118,8 +118,9 @@ func NewLeaseID() (LeaseID, error) {
 }
 
 // Grant is a stretch of positions in a leased lane that the holder may use: First to Last
-// inclusive. The blockchain service records it before the holder uses it, and each grant in a lane
-// starts one above that lane's last grant, whoever held it.
+// inclusive. The blockchain service records it before the holder uses it. Each grant in a lane
+// starts one above that lane's newest grant, whoever held it, or, when its request settles that
+// newest grant as the same lease's own, right after the settled last taken position.
 type Grant struct {
 	Lane  uint8
 	First uint64
@@ -159,8 +160,9 @@ type Renewal struct {
 	Rate uint64
 	// WantGrant asks for the next grant.
 	WantGrant bool
-	// Settles finishes the oldest grant the holder has left and not yet reported. It is sent with a
-	// grant request, and the service records it on the new grant's hand-out row.
+	// Settles finishes the most recent grant the holder has left and not yet reported (an older one
+	// may follow on a later request or the release). It is sent with a grant request, and the
+	// service records it on the new grant's hand-out row.
 	Settles Settles
 }
 

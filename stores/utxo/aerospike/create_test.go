@@ -205,7 +205,7 @@ func TestStore_GetBinsToStore_UnspendableTransactionExpires(t *testing.T) {
 
 	tSettings := test.CreateBaseTestSettings(t)
 
-	retention := tSettings.GetUtxoStoreBlockHeightRetention()
+	retention := tSettings.GetUtxoStoreSpentDeleteRetention()
 	require.Greater(t, retention, uint32(0), "test requires a non-zero block height retention")
 
 	s := teranodeaerospike.Store{}
@@ -297,10 +297,12 @@ func TestStore_GetBinsToStore_UnspendableTransactionExpires(t *testing.T) {
 // asserts the persisted record carries a deleteAtHeight so the pruner can expire
 // it. Before the fix this record had no deleteAtHeight and was retained forever.
 func TestCreateMinedUnspendableGetsDAH(t *testing.T) {
+	t.Parallel()
+
 	logger := ulogger.NewErrorTestLogger(t)
 	tSettings := test.CreateBaseTestSettings(t)
 
-	retention := tSettings.GetUtxoStoreBlockHeightRetention()
+	retention := tSettings.GetUtxoStoreSpentDeleteRetention()
 	require.Greater(t, retention, uint32(0), "test requires a non-zero block height retention")
 
 	client, store, ctx, deferFn := initAerospike(t, tSettings, logger)
@@ -338,6 +340,8 @@ func TestCreateMinedUnspendableGetsDAH(t *testing.T) {
 }
 
 func TestStore_StoreTransactionExternally(t *testing.T) {
+	t.Parallel()
+
 	logger := ulogger.NewErrorTestLogger(t)
 	tSettings := test.CreateBaseTestSettings(t)
 
@@ -355,7 +359,7 @@ func TestStore_StoreTransactionExternally(t *testing.T) {
 
 		teranodeaerospike.InitPrometheusMetrics()
 
-		tx := readTransaction(t, "testdata/fbebcc148e40cb6c05e57c6ad63abd49d5e18b013c82f704601bc4ba567dfb90.hex")
+		tx := uniqueTx(readTransaction(t, "testdata/fbebcc148e40cb6c05e57c6ad63abd49d5e18b013c82f704601bc4ba567dfb90.hex"))
 		bItem, binsToStore := prepareBatchStoreItem(t, s, tx, 0, []uint32{}, []uint32{}, []int{})
 
 		// bItem.RecvDone() returns as soon as StoreTransactionExternally signals
@@ -399,7 +403,7 @@ func TestStore_StoreTransactionExternally(t *testing.T) {
 		tSettings := test.CreateBaseTestSettings(t)
 		s.SetSettings(tSettings)
 
-		tx := readTransaction(t, "testdata/fbebcc148e40cb6c05e57c6ad63abd49d5e18b013c82f704601bc4ba567dfb90.hex")
+		tx := uniqueTx(readTransaction(t, "testdata/fbebcc148e40cb6c05e57c6ad63abd49d5e18b013c82f704601bc4ba567dfb90.hex"))
 		tx.Outputs = []*bt.Output{}
 		_ = tx.AddOpReturnOutput([]byte("test"))
 		bItem, binsToStore := prepareBatchStoreItem(t, s, tx, 0, []uint32{}, []uint32{}, []int{})
@@ -434,6 +438,8 @@ func TestStore_StoreTransactionExternally(t *testing.T) {
 }
 
 func TestStore_StorePartialTransactionExternally(t *testing.T) {
+	t.Parallel()
+
 	logger := ulogger.NewErrorTestLogger(t)
 	tSettings := test.CreateBaseTestSettings(t)
 
@@ -451,7 +457,7 @@ func TestStore_StorePartialTransactionExternally(t *testing.T) {
 
 		teranodeaerospike.InitPrometheusMetrics()
 
-		tx := readTransaction(t, "testdata/fbebcc148e40cb6c05e57c6ad63abd49d5e18b013c82f704601bc4ba567dfb90.hex")
+		tx := uniqueTx(readTransaction(t, "testdata/fbebcc148e40cb6c05e57c6ad63abd49d5e18b013c82f704601bc4ba567dfb90.hex"))
 		bItem, binsToStore := prepareBatchStoreItem(t, s, tx, 0, []uint32{}, []uint32{}, []int{})
 
 		storeDone := make(chan struct{})
@@ -647,19 +653,24 @@ func TestStore_TwoPhaseCommit(t *testing.T) {
 // transaction spend the coin while the first stands, which a repeat never
 // heals because a repeat drops a transaction whose record exists.
 func TestSpendAndCreateKeepsSpendsWhenCreateInDoubt(t *testing.T) {
+	t.Parallel()
+
 	logger := ulogger.NewErrorTestLogger(t)
 	tSettings := test.CreateBaseTestSettings(t)
 
 	client, store, ctx, deferFn := initAerospike(t, tSettings, logger)
 	t.Cleanup(deferFn)
 
-	_, _, err := store.SpendAndCreate(ctx, tests.Tx, 1000, utxo.WithCreateOnly())
+	// A copy of tests.Tx with a txid of its own: the server is shared with other tests.
+	root := uniqueTx(tests.Tx.Clone())
+
+	_, _, err := store.SpendAndCreate(ctx, root, 1000, utxo.WithCreateOnly())
 	require.NoError(t, err)
 
-	in := tests.Tx.Outputs[0]
+	in := root.Outputs[0]
 
-	child := bt.NewTx()
-	require.NoError(t, child.From(tests.Tx.TxIDChainHash().String(), 0, in.LockingScript.String(), in.Satoshis))
+	child := uniqueTx(bt.NewTx())
+	require.NoError(t, child.From(root.TxIDChainHash().String(), 0, in.LockingScript.String(), in.Satoshis))
 	child.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{0x00, 0x48, 0x30, 0x45})
 	require.NoError(t, child.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", in.Satoshis-1_000))
 
@@ -688,10 +699,10 @@ func TestSpendAndCreateKeepsSpendsWhenCreateInDoubt(t *testing.T) {
 	_, err = store.Get(ctx, child.TxIDChainHash())
 	require.NoError(t, err, "the write landed, so the transaction is stored")
 
-	utxoHash, err := util.UTXOHashFromOutput(tests.Tx.TxIDChainHash(), in, 0)
+	utxoHash, err := util.UTXOHashFromOutput(root.TxIDChainHash(), in, 0)
 	require.NoError(t, err)
 
-	resp, err := store.GetSpend(ctx, &utxo.Spend{TxID: tests.Tx.TxIDChainHash(), Vout: 0, UTXOHash: utxoHash})
+	resp, err := store.GetSpend(ctx, &utxo.Spend{TxID: root.TxIDChainHash(), Vout: 0, UTXOHash: utxoHash})
 	require.NoError(t, err)
 	require.NotNil(t, resp.SpendingData, "the parent coin must stay spent by the stored transaction")
 	require.Equal(t, child.TxIDChainHash().String(), resp.SpendingData.TxID.String())
@@ -706,6 +717,8 @@ func TestSpendAndCreateKeepsSpendsWhenCreateInDoubt(t *testing.T) {
 // refused with CREATING. The create must return a retryable error and keep the
 // spends; a repeat must finish the clear.
 func TestCreateMinedReportsCreatingNotCleared(t *testing.T) {
+	t.Parallel()
+
 	if testing.Short() {
 		t.Skip("Skipping Aerospike integration test in short mode")
 	}
@@ -803,7 +816,6 @@ func TestCreateMinedReportsCreatingNotCleared(t *testing.T) {
 	}
 
 	t.Run("repeat finishes the clear", func(t *testing.T) {
-		cleanDB(t, client)
 
 		parent := createTransactionWithOutputs(10)
 
@@ -823,7 +835,6 @@ func TestCreateMinedReportsCreatingNotCleared(t *testing.T) {
 	})
 
 	t.Run("repeat whose clear fails reports it again", func(t *testing.T) {
-		cleanDB(t, client)
 
 		parent := createTransactionWithOutputs(10)
 
@@ -844,7 +855,6 @@ func TestCreateMinedReportsCreatingNotCleared(t *testing.T) {
 	})
 
 	t.Run("create with no mined info still succeeds", func(t *testing.T) {
-		cleanDB(t, client)
 
 		parent := createTransactionWithOutputs(10)
 
@@ -858,7 +868,6 @@ func TestCreateMinedReportsCreatingNotCleared(t *testing.T) {
 	})
 
 	t.Run("repeat with no mined info whose clear fails still reports exists", func(t *testing.T) {
-		cleanDB(t, client)
 
 		parent := createTransactionWithOutputs(10)
 
@@ -875,7 +884,6 @@ func TestCreateMinedReportsCreatingNotCleared(t *testing.T) {
 	})
 
 	t.Run("held lock is not reported as exists to a mined create", func(t *testing.T) {
-		cleanDB(t, client)
 
 		parent := createTransactionWithOutputs(10)
 
@@ -906,7 +914,6 @@ func TestCreateMinedReportsCreatingNotCleared(t *testing.T) {
 	})
 
 	t.Run("held lock over a cleared transaction answers exists", func(t *testing.T) {
-		cleanDB(t, client)
 
 		parent := createTransactionWithOutputs(10)
 
@@ -927,7 +934,6 @@ func TestCreateMinedReportsCreatingNotCleared(t *testing.T) {
 	})
 
 	t.Run("held lock over a master still creating is reported", func(t *testing.T) {
-		cleanDB(t, client)
 
 		parent := createTransactionWithOutputs(10)
 
@@ -948,7 +954,6 @@ func TestCreateMinedReportsCreatingNotCleared(t *testing.T) {
 	})
 
 	t.Run("lock write that fails for another reason is not outcome-unknown", func(t *testing.T) {
-		cleanDB(t, client)
 
 		parent := createTransactionWithOutputs(10)
 
