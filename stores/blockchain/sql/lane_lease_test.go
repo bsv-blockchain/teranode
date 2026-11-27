@@ -419,11 +419,19 @@ func TestRenewLaneLeaseContinuesTheNewestHandout(t *testing.T) {
 	// A give-back whose DELETE is refused, as for a role without DELETE on lane_handout, fails whole:
 	// the spare's row, its pair and lane_settlement are as before, and no continuation is recorded.
 	runLaneHandoutTests(t, "give-back whose delete is refused", func(t *testing.T, s *SQL) {
-		id, g, _, err := s.OpenLaneLease(t.Context(), leaseOpen("a"))
+		id, a, _, err := s.OpenLaneLease(t.Context(), leaseOpen("a"))
 		require.NoError(t, err)
 
-		r := leaseRenew(id, g)
+		r := leaseRenew(id, a)
 		r.WantGrant = true
+
+		g, _, _, err := s.RenewLaneLease(t.Context(), r)
+		require.NoError(t, err)
+
+		// The spare's request reports grant a, so the spare's row carries a's pair, which the
+		// give-back copies to lane_settlement before the refused delete.
+		aPair := lane.Settles{First: a.First, LastTaken: a.Last - 1}
+		r.Settles = aPair
 
 		spare, _, _, err := s.RenewLaneLease(t.Context(), r)
 		require.NoError(t, err)
@@ -445,8 +453,9 @@ func TestRenewLaneLeaseContinuesTheNewestHandout(t *testing.T) {
 
 		_, _, _, err = s.RenewLaneLease(t.Context(), r)
 		require.Error(t, err)
-		require.Equal(t, 2, countRows(t, s, `SELECT COUNT(*) FROM lane_handout WHERE lane = $1`, int(g.Lane)), "no continuation, and the spare stays")
-		require.Equal(t, 1, countRows(t, s, `SELECT COUNT(*) FROM lane_handout WHERE lane = $1 AND first = $2`, int(g.Lane), lane.ToSigned(spare.First)))
+		require.Equal(t, 3, countRows(t, s, `SELECT COUNT(*) FROM lane_handout WHERE lane = $1`, int(g.Lane)), "no continuation, and the spare stays")
+		require.Equal(t, 1, countRows(t, s, `SELECT COUNT(*) FROM lane_handout WHERE lane = $1 AND first = $2 AND settles_first = $3 AND settles_last_taken = $4`,
+			int(g.Lane), lane.ToSigned(spare.First), lane.ToSigned(aPair.First), lane.ToSigned(aPair.LastTaken)), "the spare keeps a's pair")
 		require.Zero(t, countRows(t, s, `SELECT COUNT(*) FROM lane_settlement`), "the copy is rolled back with the delete")
 
 		checkLaneInvariants(t, s)

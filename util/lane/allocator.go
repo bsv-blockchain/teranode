@@ -119,7 +119,7 @@ type Allocator struct {
 	spare    Grant
 	hasSpare bool
 	// givingBack is the first position of a spare given back unused when the grant before it aged
-	// out, sent on grant requests until one is granted; 0 for none.
+	// out, sent on the next grant request and cleared when that request is granted or fails; 0 for none.
 	givingBack uint64
 	// pending settles the grants left and not yet reported, oldest first, until grant requests (the
 	// newest pair, pairToSendLocked) or the release (the oldest) carry them. It holds at most two: a
