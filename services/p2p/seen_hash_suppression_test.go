@@ -233,6 +233,10 @@ func TestHandleSubtreeTopic_UnhealthyPeerDropDoesNotMarkSeen(t *testing.T) {
 	lowRep := mustNewPeerID(t)
 	reg.Register(&blockchain.PeerInfo{ID: lowRep.String()})
 	reg.UpdateMetrics(lowRep.String(), 0, 0, 0, false, false, true, 0)
+	// Directly connected: the reputation gate only applies to live neighbours.
+	s.P2PClient.(*MockServerP2PClient).peers = []p2pMessageBus.PeerInfo{
+		{ID: lowRep.String(), Addrs: []string{"/ip4/10.0.0.1/tcp/9905"}},
+	}
 	require.True(t, s.shouldSkipUnhealthyPeer(lowRep.String(), "precondition"),
 		"precondition: peer must be below the unhealthy threshold")
 

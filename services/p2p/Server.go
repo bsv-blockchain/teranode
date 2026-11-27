@@ -62,13 +62,17 @@ import (
 
 const logProcessingNotification = "[processBlockchainNotification] Processing %s notification: %s"
 
+// banSweepInterval is how often banSweepTick runs: the admission rules are
+// re-synced with the bans in force and connected peers are re-checked against
+// the IP ban list. The sync is what applies changes that raise no ban-list
+// event (an expiry, a Clear by the legacy service, which shares the list, a
+// registry ban that lapsed) and retries failed Block* calls, so those reach
+// connection admission within one interval. Declared as a var so tests can
+// shorten it; not a setting.
+var banSweepInterval = 1 * time.Minute
+
 const (
 	banActionAdd = "add" // Action constant for adding a ban
-
-	// banSweepInterval is how often connected peers are re-checked against the
-	// IP ban list. Without a libp2p connection gater banned peers can redial at
-	// will, so the sweep re-disconnects them at the application layer.
-	banSweepInterval = 1 * time.Minute
 
 	// Default values for peer map cleanup (reduced to prevent memory exhaustion)
 	defaultPeerMapMaxSize         = 10000            // Maximum entries in peer maps (reduced from 100k)
@@ -223,15 +227,8 @@ type Server struct {
 	peerMapCleanupTicker *time.Ticker  // Ticker for periodic cleanup of peer maps
 	peerMapTTL           time.Duration // Time-to-live for peer map entries; the size cap lives in cappedPeerMap.maxSize
 
-	// liveConnCache caches, per peer ID, whether the peer had an open libp2p
-	// connection when last checked (liveConnCacheEntry, expires after
-	// reputationCacheTTL). Written by isPeerIPBanned's existing GetPeers walk
-	// and by hasLiveConnection on a miss; updatePeerLastMessageTime consults
-	// it so gossip-relayed publishers are never marked IsConnected while a
-	// freshly connected neighbour is flagged on its first message.
 	// reconcileInFlight keeps ticker-driven reconcile passes from piling up
 	// when the registry is slow.
-	liveConnCache     sync.Map
 	reconcileInFlight atomic.Bool
 
 	invalidPolicyWarnOnce sync.Once // Emits the invalid-fee-policy warning at most once per process to avoid log spam
@@ -257,18 +254,22 @@ type Server struct {
 	// a notificationMsg must never be mutated after being stored or published.
 	latestNodeStatus atomic.Pointer[notificationMsg]
 
-	// ipBanCache is a short-lived cache of "is this peer's IP banned" lookups
-	// used by shouldSkipBannedPeer, avoiding a GetPeers scan per gossip message.
-	ipBanCache sync.Map // peerID string -> ipBanCacheEntry
 	// reputationCache is a short-lived cache of peer reputation scores used by
 	// shouldSkipUnhealthyPeer to avoid a gRPC round-trip per pubsub message.
-	// Entries expire after reputationCacheTTL; misses fall back to the registry.
-	reputationCache sync.Map // peerID string -> reputationCacheEntry
-	// banStatusCache is a short-lived cache of registry IsPeerBanned lookups
-	// used by shouldSkipBannedPeer, avoiding a gRPC round-trip per gossip
-	// message. Entries expire after reputationCacheTTL; local ban transitions
-	// (onPeerBanned) overwrite the entry immediately.
-	banStatusCache sync.Map // peerID string -> banStatusCacheEntry
+	// Entries expire after reputationCacheTTL; misses fall back to the
+	// registry. Only directly connected peers are ever inserted, and the cache
+	// is bounded at insert (applyPeerMapLimits), so gossip from free-to-mint
+	// identities cannot grow it.
+	reputationCache boundedTTLCache[reputationCacheEntry]
+	// bannedPeers mirrors the registry's banned peer IDs for
+	// shouldSkipBannedPeer, refreshed once per bannedPeerRefreshInterval
+	// instead of one IsPeerBanned round-trip per distinct author; local ban
+	// transitions (onPeerBanned) are applied to it immediately.
+	bannedPeers bannedPeerMirror
+	// admission records the ban rules applied to the message bus's
+	// connection gater, the primary enforcement of IP, subnet and peer-ID
+	// bans; see syncAdmissionBans.
+	admission admissionBans
 	// registryBatcher coalesces the per-message peer-registry writes from the
 	// gossip handlers into one batch of RPCs per peer per flush interval. Nil
 	// in tests that construct Server directly; helpers then fall back to
@@ -765,6 +766,14 @@ func NewServer(
 		preAnnouncedBlockHashes:           expiringmap.New[chainhash.Hash, struct{}](preAnnouncedBlockHashTTL).WithMaxSize(preAnnouncedBlockHashMaxSize),
 	}
 
+	// The bus holds admission rules in memory only and the client is already
+	// listening and dialling, so re-apply the persisted IP and subnet bans
+	// now rather than in Start: a connection admitted in between is closed
+	// by the Block* call that covers it. Peer-ID bans need the registry and
+	// are applied in Start (startGossipIntake). Both are no-ops with
+	// p2p_enforce_bans_at_admission off.
+	p2pServer.syncAdmissionBans()
+
 	initPrometheusMetrics()
 
 	p2pServer.applyPeerMapLimits(tSettings)
@@ -888,6 +897,11 @@ func (s *Server) applyPeerMapLimits(tSettings *settings.Settings) {
 	s.blockPeerMap.setMaxSize(maxSize)
 	s.subtreePeerMap.setMaxSize(maxSize)
 	s.reportedInvalidBlocks.setMaxSize(maxSize)
+
+	// The per-peer reputation cache shares the cap: it is keyed by peer ID
+	// rather than by hash, so the same figure bounds it far more loosely, but
+	// reusing the attribution maps' cap avoids another setting.
+	s.reputationCache.setMaxSize(maxSize)
 
 	// The seen-hash dedup caches take their limits from the same call: their
 	// zero values fall back to the package defaults, so this too costs only
@@ -1157,20 +1171,16 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 
 	// Start the peer-map sweep before the topic subscriptions that feed it, for
 	// the same reason. The gossip handlers below insert into the attribution
-	// maps and the reputation and IP-ban caches, and subscribeToTopic
-	// deliberately drains its channel without watching ctx.Done, so its workers
-	// outlive a failed Start. Starting the sweep afterwards would leave any
-	// early return between here and there — the blockchain Subscribe below —
-	// with those maps being fed and nothing expiring them or reading the
-	// at-capacity diagnostic. The attribution maps are bounded at insert either
-	// way (issue 1409), but the caches that share this sweep are TTL-only.
+	// maps and the reputation cache, and subscribeToTopic deliberately drains
+	// its channel without watching ctx.Done, so its workers outlive a failed
+	// Start. Starting the sweep afterwards would leave any early return
+	// between here and there — the blockchain Subscribe below — with those
+	// maps being fed and nothing expiring them or reading the at-capacity
+	// diagnostic. Every one of them is bounded at insert (issue 1409), so the
+	// sweep is about expiry and visibility rather than about the bound.
 	s.startPeerMapCleanup(ctx)
 
-	// Subscribe to all topics
-	s.subscribeToTopic(ctx, s.blockTopicName, s.handleBlockTopic)
-	s.subscribeToTopic(ctx, s.subtreeTopicName, s.handleSubtreeTopic)
-	s.subscribeToTopic(ctx, s.nodeStatusTopicName, s.handleNodeStatusTopic)
-	s.subscribeToTopic(ctx, s.rejectedTxTopicName, s.handleRejectedTxTopic)
+	s.startGossipIntake(ctx)
 
 	// Start blockchain subscription before marking service as ready
 	// This ensures we don't miss any block notifications
@@ -1215,6 +1225,26 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 	<-ctx.Done()
 
 	return nil
+}
+
+// startGossipIntake enforces the bans already in force and then subscribes to
+// the gossip topics. Both ban steps must stay before the subscriptions:
+//   - primeBannedPeers loads the registry's banned set, so a peer banned before
+//     this process started is dropped from its first message rather than read
+//     against an empty mirror. A gossip worker never waits on another worker's
+//     refresh; see bannedPeerMirror.
+//   - syncAdmissionBans then blocks those peer IDs at connection admission,
+//     closing their open connections, when p2p_enforce_bans_at_admission is
+//     on. NewServer already applied the IP and subnet bans right after
+//     creating the client.
+func (s *Server) startGossipIntake(ctx context.Context) {
+	s.primeBannedPeers()
+	s.syncAdmissionBans()
+
+	s.subscribeToTopic(ctx, s.blockTopicName, s.handleBlockTopic)
+	s.subscribeToTopic(ctx, s.subtreeTopicName, s.handleSubtreeTopic)
+	s.subscribeToTopic(ctx, s.nodeStatusTopicName, s.handleNodeStatusTopic)
+	s.subscribeToTopic(ctx, s.rejectedTxTopicName, s.handleRejectedTxTopic)
 }
 
 func (s *Server) subscribeToTopic(ctx context.Context, topicName string, handler func(context.Context, []byte, string)) {
@@ -1932,8 +1962,6 @@ func (s *Server) announceBlock(ctx context.Context, hash *chainhash.Hash, viaSub
 		}
 	}
 
-	var msgBytes []byte
-
 	h, meta, err := s.blockchainClient.GetBlockHeader(ctx, hash)
 	if err != nil {
 		return errors.NewError("error getting block header and meta for BlockMessage", err)
@@ -1993,16 +2021,30 @@ func (s *Server) announceBlock(ctx context.Context, hash *chainhash.Hash, viaSub
 		return errors.NewError("blockMessage failed gossip field validation, not publishing", err)
 	}
 
-	// An empty or unroutable DataHubURL is scored as a protocol violation by
-	// every receiver (checkDataHubURL); the once-per-process check below warns
-	// loudly but keeps publishing, since suppressing would also silence dev
-	// setups that legitimately advertise private addresses to peers configured
-	// to accept them.
-	s.checkStaticGossipURLs()
+	// Not published while the DataHubURL fails the check receivers apply
+	// (unpublishableAssetURL); node_status below still goes out, with its
+	// BaseURL blanked.
+	if s.unpublishableAssetURL() {
+		ctxLogger.Debugf("[announceBlock] not announcing block %s: DataHubURL fails the gossip URL check: %v", hash.String(), s.assetURLErr)
+	} else if err = s.publishBlockMessage(ctx, hash, &blockMessage, viaSubtreesSetNotification); err != nil {
+		return err
+	}
 
+	// Also send a node_status update when best block changes
+	if err = s.handleNodeStatusNotification(ctx); err != nil {
+		// Log the error but don't fail the block notification
+		ctxLogger.Warnf("[announceBlock] error sending node status update: %v", err)
+	}
+
+	return nil
+}
+
+// publishBlockMessage publishes a validated block announcement and arms the
+// duplicate guards announceBlock checks.
+func (s *Server) publishBlockMessage(ctx context.Context, hash *chainhash.Hash, blockMessage *BlockMessage, viaSubtreesSetNotification bool) error {
 	// The topic size cap on the marshalled bytes is enforced centrally in
 	// publishToNetwork.
-	msgBytes, err = json.Marshal(blockMessage)
+	msgBytes, err := json.Marshal(blockMessage)
 	if err != nil {
 		return errors.NewError("blockMessage - json marshal error", err)
 	}
@@ -2022,18 +2064,12 @@ func (s *Server) announceBlock(ctx context.Context, hash *chainhash.Hash, viaSub
 		s.lastAnnouncedBlockHash.Store(hash)
 
 		// Only the Block-notification branch records this: it is what
-		// handleBlockSubtreesSetNotification's duplicate check above consumes,
-		// and a BlockSubtreesSet announcement never needs to arm it, since
-		// nothing ever consumes an entry written from that side.
+		// handleBlockSubtreesSetNotification's duplicate check in announceBlock
+		// consumes, and a BlockSubtreesSet announcement never needs to arm it,
+		// since nothing ever consumes an entry written from that side.
 		if !viaSubtreesSetNotification && s.preAnnouncedBlockHashes != nil {
 			s.preAnnouncedBlockHashes.Set(*hash, struct{}{})
 		}
-	}
-
-	// Also send a node_status update when best block changes
-	if err = s.handleNodeStatusNotification(ctx); err != nil {
-		// Log the error but don't fail the block notification
-		ctxLogger.Warnf("[announceBlock] error sending node status update: %v", err)
 	}
 
 	return nil
@@ -2298,9 +2334,8 @@ func (s *Server) getNodeStatusMessage(ctx context.Context) *notificationMsg {
 	// Precisely: peers with an open libp2p connection that have authored at
 	// least one gossip message since process start — liveness derives from
 	// the message bus's topic-peer set, so a connected-but-silent peer is
-	// invisible until its first message. A flag can lag reality by up to
-	// reputationCacheTTL after a connect and by up to one cleanup interval
-	// after a disconnect.
+	// invisible until its first message. A flag is set on the first message
+	// after a connect and can lag a disconnect by up to one cleanup interval.
 	// The two transports are counted separately: ConnectedPeersCount keeps
 	// its established libp2p-only meaning for every node already consuming
 	// this gossip message, and legacy peers get their own figure.
@@ -2435,11 +2470,11 @@ func (s *Server) getNodeStatusMessage(ctx context.Context) *notificationMsg {
 // all run true withholds a private BaseURL those peers would have used —
 // judged the safer default, since the reverse mismatch gets the node scored.
 //
-// Only node_status degrades on a bad verdict (BaseURL blanked, message still
+// On a bad verdict node_status degrades (BaseURL blanked, message still
 // published): an empty BaseURL is legal there on ingress. Block and subtree
-// announcements are useless without a fetchable URL and receivers score an
-// empty DataHubURL just like a malformed one, so those publish unchanged and
-// the warning below is the operator's signal that peers will score them.
+// announcements are not published at all (unpublishableAssetURL): they are
+// useless without a fetchable URL, and receivers score an empty DataHubURL
+// just like a malformed one.
 func (s *Server) checkStaticGossipURLs() {
 	s.staticURLCheckOnce.Do(func() {
 		if err := checkGossipString("base_url", s.AssetHTTPAddressURL, maxGossipURLLen); err != nil {
@@ -2449,7 +2484,7 @@ func (s *Server) checkStaticGossipURLs() {
 		}
 
 		if s.assetURLErr != nil {
-			s.logger.Warnf("[checkStaticGossipURLs] DataHubURL %q will be scored as a protocol violation by peers: %v - expected on a deliberately private node, which keeps gossiping with node_status BaseURL blanked and simply cannot be fetched from; set asset_httpPublicAddress when this node should be a reachable source", s.AssetHTTPAddressURL, s.assetURLErr)
+			s.logger.Warnf("[checkStaticGossipURLs] DataHubURL %q fails the check peers apply to announced URLs: %v - block and subtree announcements are not published, since peers would score each one as a protocol violation and could not fetch from it, and node_status goes out with BaseURL blanked; expected on a deliberately private node, otherwise set asset_httpPublicAddress to a reachable URL, or p2p_allow_private_ips=true on a private network whose peers accept private URLs", s.AssetHTTPAddressURL, s.assetURLErr)
 		}
 
 		if err := checkGossipString("propagation_url", s.PropagationURL, maxGossipURLLen); err != nil {
@@ -2457,6 +2492,19 @@ func (s *Server) checkStaticGossipURLs() {
 			s.logger.Warnf("[checkStaticGossipURLs] PropagationURL breaches the gossip field bounds and will be omitted from node_status: %v", err)
 		}
 	})
+}
+
+// unpublishableAssetURL reports whether block and subtree announcements must
+// be withheld because the static DataHubURL fails the check receivers apply
+// to it (checkDataHubURL). Each such announcement would cost this node a
+// protocol violation at every peer, and enough of them a ban, which with
+// admission enforcement disconnects and refuses it. The check reads
+// p2p_allow_private_ips, so a dev or test network that advertises private
+// URLs with it set keeps announcing.
+func (s *Server) unpublishableAssetURL() bool {
+	s.checkStaticGossipURLs()
+
+	return s.assetURLErr != nil
 }
 
 func (s *Server) handleNodeStatusNotification(ctx context.Context) error {
@@ -2613,12 +2661,10 @@ func (s *Server) handleSubtreeNotification(ctx context.Context, hash *chainhash.
 		return errors.NewError("subtreeMessage failed gossip field validation, not publishing", err)
 	}
 
-	// An empty or unroutable DataHubURL is scored as a protocol violation by
-	// every receiver (checkDataHubURL); the once-per-process check below warns
-	// loudly but keeps publishing, since suppressing would also silence dev
-	// setups that legitimately advertise private addresses to peers configured
-	// to accept them.
-	s.checkStaticGossipURLs()
+	if s.unpublishableAssetURL() {
+		s.logger.Debugf("[handleSubtreeNotification] not announcing subtree %s: DataHubURL fails the gossip URL check: %v", hash.String(), s.assetURLErr)
+		return nil
+	}
 
 	// The topic size cap on the marshalled bytes is enforced centrally in
 	// publishToNetwork.
@@ -3108,6 +3154,9 @@ func (s *Server) BanPeer(ctx context.Context, peer *p2p_api.BanPeerRequest) (*p2
 	// be invisible to the metric despite its name implying all ban events.
 	prometheusP2PBanEvents.WithLabelValues(ReasonOperatorBan).Inc()
 
+	// Enforce at admission before replying; the ban-list event syncs again.
+	s.syncAdmissionBans()
+
 	return &p2p_api.BanPeerResponse{Ok: true}, nil
 }
 
@@ -3116,6 +3165,9 @@ func (s *Server) UnbanPeer(ctx context.Context, peer *p2p_api.UnbanPeerRequest) 
 	if err != nil {
 		return nil, errors.WrapGRPCPublic(err)
 	}
+
+	// Lift the admission rules no remaining ban covers before replying.
+	s.syncAdmissionBans()
 
 	return &p2p_api.UnbanPeerResponse{Ok: true}, nil
 }
@@ -3144,16 +3196,17 @@ func (s *Server) ConnectPeer(ctx context.Context, req *p2p_api.ConnectPeerReques
 	return &p2p_api.ConnectPeerResponse{Success: true}, nil
 }
 
-// DisconnectPeer disconnects a peer by ID: it is removed from the peer
-// registry and sync coordinator, and the libp2p connection is closed when the
-// P2P client supports it (go-p2p-message-bus does not yet expose a network
-// disconnect; see networkDisconnector).
+// DisconnectPeer disconnects a peer by ID: its libp2p connections are closed
+// (severPeer, only with p2p_enforce_bans_at_admission on) and it is removed
+// from the peer registry and sync coordinator. It is not a ban, so the peer
+// may reconnect.
 func (s *Server) DisconnectPeer(ctx context.Context, req *p2p_api.DisconnectPeerRequest) (*p2p_api.DisconnectPeerResponse, error) {
 	pid, err := peer.Decode(req.PeerId)
 	if err != nil {
 		return &p2p_api.DisconnectPeerResponse{Success: false, Error: fmt.Sprintf("invalid peer ID %s: %v", req.PeerId, err)}, nil
 	}
 
+	s.severPeer(pid.String())
 	s.disconnectBannedPeerByID(ctx, pid, "operator disconnect request")
 
 	return &p2p_api.DisconnectPeerResponse{Success: true}, nil
@@ -3181,6 +3234,9 @@ func (s *Server) ListBanned(ctx context.Context, _ *emptypb.Empty) (*p2p_api.Lis
 
 func (s *Server) ClearBanned(ctx context.Context, _ *emptypb.Empty) (*p2p_api.ClearBannedResponse, error) {
 	s.banList.Clear()
+	// Clear raises no ban-list event, so lift the IP and subnet rules here.
+	s.syncAdmissionBans()
+
 	return &p2p_api.ClearBannedResponse{Ok: true}, nil
 }
 
@@ -3232,8 +3288,11 @@ func (s *Server) applyBanScore(peerID, reason string) error {
 }
 
 // onPeerBanned reacts to a NEW ban transition (score crossed threshold this
-// call) by adding the peer's IP to the local banList and disconnecting it.
-// Replaces the old BanEventHandler indirection.
+// call): it adds the peer's IPs to the local banList, blocks the peer ID and
+// those IPs at connection admission when p2p_enforce_bans_at_admission is on,
+// which closes its connections, and drops it at the application layer, along
+// with any other peer those IP rules disconnected. Replaces the old
+// BanEventHandler indirection.
 func (s *Server) onPeerBanned(peerID, reason string) {
 	// Honor the configured ban duration so the address-level ban list and the
 	// centralized peer registry agree on how long the ban lasts. Fall back to
@@ -3250,8 +3309,8 @@ func (s *Server) onPeerBanned(peerID, reason string) {
 	prometheusP2PBanEvents.WithLabelValues(normalizeBanReasonLabel(reason)).Inc()
 
 	// Make the ban effective for gossip filtering immediately, without waiting
-	// for the cached IsPeerBanned=false entry to expire.
-	s.banStatusCache.Store(peerID, banStatusCacheEntry{banned: true, expiresAt: time.Now().Add(reputationCacheTTL)})
+	// for the banned-peer mirror's next registry refresh.
+	s.bannedPeers.add(peerID, time.Now())
 
 	pid, err := peer.Decode(peerID)
 	if err != nil {
@@ -3261,31 +3320,36 @@ func (s *Server) onPeerBanned(peerID, reason string) {
 
 	// Ban the peer's addresses by literal IP: the ban list stores IPs/subnets,
 	// so multiaddr strings ("/ip4/1.2.3.4/tcp/9905/p2p/...") must be reduced to
-	// their IP component or they would never match a lookup.
+	// their IP component or they would never match a lookup. The addresses
+	// are read before the block below closes the connections that carry them.
+	var bannedIPs []net.IP
 	if s.P2PClient != nil && s.banList != nil {
 		seen := make(map[string]struct{})
-		for _, p := range s.P2PClient.GetPeers() {
-			if p.ID != pid.String() {
+		for _, addr := range s.P2PClient.PeerAddrs(pid.String()) {
+			ip := extractIPFromMultiaddr(addr)
+			if ip == "" {
 				continue
 			}
-			for _, addr := range p.Addrs {
-				ip := extractIPFromMultiaddr(addr)
-				if ip == "" {
-					continue
-				}
-				if _, dup := seen[ip]; dup {
-					continue
-				}
-				seen[ip] = struct{}{}
-				if err := s.banList.Add(context.Background(), ip, until); err != nil {
-					s.logger.Errorf("[onPeerBanned] failed to add %s to ban list: %v", ip, err)
-				}
+			if _, dup := seen[ip]; dup {
+				continue
 			}
-			break
+			seen[ip] = struct{}{}
+			if err := s.banList.Add(context.Background(), ip, until); err != nil {
+				s.logger.Errorf("[onPeerBanned] failed to add %s to ban list: %v", ip, err)
+				continue
+			}
+			bannedIPs = append(bannedIPs, net.ParseIP(ip))
 		}
 	}
 
+	closed := s.blockBannedPeer(pid.String(), bannedIPs)
 	s.disconnectBannedPeerByID(s.gCtx, pid, reason)
+
+	// The IP rules also closed the connections of any other peer on those
+	// addresses; the block emptied their addresses, so no later walk finds
+	// them.
+	delete(closed, pid.String())
+	s.dropPeersClosedAtAdmission(closed, reason)
 }
 
 // RecordBytesDownloaded records the number of bytes downloaded via HTTP from a peer.
@@ -3318,16 +3382,15 @@ func (s *Server) ResetReputation(ctx context.Context, req *p2p_api.ResetReputati
 		return nil, errors.WrapGRPCPublic(errors.NewServiceError("reset reputation", err))
 	}
 
-	// Drop cached ban statuses so a reset (which may unban) takes effect
-	// immediately instead of after the cache TTL.
+	// A reputation reset does not lift bans: the registry's ResetReputation
+	// leaves ban scores alone. Re-read the registry on the next lookup, but keep
+	// the mirror's view in force until that listing lands, so no ban goes
+	// unenforced while it is in flight or if it fails.
+	s.bannedPeers.invalidate()
+
 	if req.PeerId == "" {
-		s.banStatusCache.Range(func(key, _ interface{}) bool {
-			s.banStatusCache.Delete(key)
-			return true
-		})
 		s.logger.Infof("[ResetReputation] Reset reputation for all peers. Count: %d", peersReset)
 	} else {
-		s.banStatusCache.Delete(req.PeerId)
 		s.logger.Infof("[ResetReputation] Reset reputation for peer %s", req.PeerId)
 	}
 

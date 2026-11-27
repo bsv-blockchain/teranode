@@ -27,6 +27,11 @@ type Interface interface {
 	// ListBanned returns all currently banned IPs and subnets.
 	ListBanned() []string
 
+	// ActiveNetworks returns the network of every ban in force now, one per
+	// entry; entries naming the same network repeat it. Callers must not
+	// modify the returned networks.
+	ActiveNetworks() []*net.IPNet
+
 	// Subscribe returns a channel that receives ban events.
 	Subscribe() chan BanEvent
 

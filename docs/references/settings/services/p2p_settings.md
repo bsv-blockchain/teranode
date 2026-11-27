@@ -37,6 +37,7 @@
 | EnablePeerScoring | bool | true | p2p_enable_peer_scoring | **CRITICAL** - GossipSub peer scoring (Sybil mesh protection); static/bootstrap peers exempt |
 | EnablePeerExchange | bool | true | p2p_enable_peer_exchange | GossipSub peer exchange (PX); requires EnablePeerScoring (startup error otherwise); inbound PX records currently refused |
 | PeerScoreIPColocationThreshold | int | 10 | p2p_peer_score_ip_colocation_threshold | Peers allowed per exact IP before the colocation penalty applies |
+| EnforceBansAtAdmission | bool | true | p2p_enforce_bans_at_admission | Apply IP, subnet and peer-ID bans at the connection gater (disconnect and refuse); false leaves message-layer ban checks only |
 | MaxConnections | int | 0 | p2p_max_connections | Connection manager high water mark; 0 keeps the library default (35) |
 | MinConnections | int | 0 | p2p_min_connections | Connection manager low water mark; 0 keeps the library default (25) |
 | ConnectionGracePeriod | time.Duration | 0s | p2p_connection_grace_period | How long new connections are protected from pruning; 0 keeps the library default (20s) |
@@ -54,7 +55,7 @@
 | RcmgrIPv6SubnetLimits | []string | (empty) | p2p_rcmgr_ipv6_subnet_limits | Per-IPv6-subnet connection caps as pipe-separated `prefix:conns` entries (e.g. `56:8\|48:64`); empty keeps the defaults of 8 per /56 and 64 per /48 |
 | SyncCoordinatorPeriodicEvaluationInterval | time.Duration | 30s | p2p_sync_coordinator_periodic_evaluation_interval | Sync coordinator evaluation interval |
 | HealthCheckEnabled | bool | true | p2p_health_check_enabled | Enable HTTP availability checking during peer selection |
-| PeerMapMaxSize | int | 10000 | p2p_peer_map_max_size | Maximum entries in peer maps |
+| PeerMapMaxSize | int | 10000 | p2p_peer_map_max_size | Maximum entries in the peer attribution maps and the per-peer reputation cache (bounded at insert) |
 | PeerMapTTL | time.Duration | 10m | p2p_peer_map_ttl | Peer map entry time-to-live |
 | PeerMapCleanupInterval | time.Duration | 1m | p2p_peer_map_cleanup_interval | Peer map cleanup frequency |
 | SeenHashMaxSize | int | 10000 | p2p_seen_hash_max_size | Maximum entries in each per-topic seen-hash announcement dedup cache |
@@ -95,6 +96,12 @@
 - `PeerScoreIPColocationThreshold` tunes the local penalty without disabling scoring (lower it on networks with no legitimately colocated operators).
 - With `AllowPrivateIPs` true, loopback, RFC1918, RFC6598, link-local, and IPv6 ULA ranges are whitelisted from the colocation penalty, so local/test multi-node clusters are unaffected.
 - `EnablePeerExchange` (default true) controls emitting PX records in PRUNE messages, and **requires** `EnablePeerScoring` (gossipsub v1.1 pairs PX with scoring) - the service refuses to start with PX on and scoring off. Inbound PX records are currently refused regardless (`AcceptPXThreshold` is set above the maximum attainable score): penalty-only scoring caps every score at 0, so accepting 0-scored records would let an attacker get itself dialed, and dialed peers register as outbound - bypassing gossipsub's Dhi graft refusal and Dout quota. This will be relaxed when positive (per-topic delivery) scoring exists.
+
+### Ban Enforcement
+
+- `EnforceBansAtAdmission` (default true) applies bans to the message bus's connection gater. Operator IP and subnet bans block the address or subnet, and peer bans in the peer registry block the peer ID; matching connections are closed, the peers on them leave the peer registry, and new connections are refused. A peer whose own connection an IP or subnet rule closed stays banned on gossip by its peer ID while a rule covers that address, so its messages relayed by other peers are dropped too. Only peers connected when the rule is applied, and that had sent a message on a joined topic, are remembered (at most 10,000). A host that was not connected then, that had sent no such message, or whose persisted ban is re-applied at startup, is refused a connection but its relayed gossip is not IP-checked. An unban, an expiry or `clearbanned` lifts the IP and subnet rules; a peer-ID rule lifts only when the registry ban lapses. The RPCs lift a rule at once; an expiry or a lapsed registry ban, which raise no event, within one ban sweep (1 minute). A failed block is logged once and retried on the next sweep, and the ban is still enforced on messages meanwhile.
+- A relayed connection is gated on the relay's address, so banning a relay's or bootstrap peer's IP drops every peer reached through it. A peer-ID ban reaches a peer behind a relay.
+- With `false`, no gater rule is applied: a banned peer's gossip is dropped and the peer leaves the peer registry, but its connection stays open, and `disconnectpeer` acts at the application layer only. A banned host that keeps its connection and signs gossip under fresh author keys is not stopped, because those authors have no connection of their own to IP-check. Use it to rule admission enforcement out while diagnosing connectivity.
 
 ### Connection Limits
 
@@ -239,6 +246,14 @@ with `true` the address checks are skipped, so an announced URL naming a private
 link-local address is accepted into the peer registry. The URL must still be a clean base URL
 (http or https, no credentials, query or fragment) either way, because fetch paths are joined
 onto it.
+
+The node applies the same check to its own DataHub URL (`asset_httpPublicAddress`, or
+`asset_httpAddress` when that is unset). If its own URL fails, the node does not publish block or
+subtree announcements, since peers would score each one as a protocol violation and could not
+fetch from it, and its `node_status` goes out with `BaseURL` blanked. It logs one warning at the
+first publish. The shipped default, a localhost `asset_httpAddress` with `p2p_allow_private_ips`
+false, is such a URL. Set `asset_httpPublicAddress` to a reachable URL. On a private network
+whose peers accept private URLs, set `p2p_allow_private_ips` to `true` instead.
 
 At connection time, every outbound request to a peer-supplied URL - availability probes and
 block/subtree fetches alike - resolves the hostname and checks each address:

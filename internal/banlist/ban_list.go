@@ -1,6 +1,7 @@
 package banlist
 
 import (
+	"container/heap"
 	"context"
 	"database/sql"
 	"fmt"
@@ -23,6 +24,10 @@ type BanList struct {
 	engine      util.SQLEngine
 	logger      ulogger.Logger
 	bannedPeers map[string]BanInfo
+	// index serves IsBanned without a scan of every entry. Every write to
+	// bannedPeers goes through putLocked, deleteLocked or swapLocked, which
+	// keep it in step.
+	index       banIndex
 	subscribers map[chan BanEvent]struct{}
 	mu          sync.RWMutex
 	// operationMu orders complete administrative operations across their SQL
@@ -38,6 +43,7 @@ func New(db *usql.DB, engine util.SQLEngine, logger ulogger.Logger) *BanList {
 		engine:      engine,
 		logger:      logger,
 		bannedPeers: make(map[string]BanInfo),
+		index:       newBanIndex(),
 		subscribers: make(map[chan BanEvent]struct{}),
 		stopCh:      make(chan struct{}),
 	}
@@ -126,8 +132,11 @@ func (b *BanList) reloadFromDatabase() error {
 		return err
 	}
 
+	// Index outside mu so lookups wait only for the swap.
+	newIndex := buildBanIndex(newPeers)
+
 	b.mu.Lock()
-	b.bannedPeers = newPeers
+	b.swapLocked(newPeers, newIndex)
 	b.mu.Unlock()
 
 	return nil
@@ -207,7 +216,7 @@ func (b *BanList) Add(ctx context.Context, ipOrSubnet string, expirationTime tim
 	defer b.operationMu.Unlock()
 
 	b.mu.Lock()
-	b.bannedPeers[ipOrSubnet] = banInfo
+	b.putLocked(ipOrSubnet, banInfo)
 	b.mu.Unlock()
 
 	event := BanEvent{Action: "add", IP: ipOrSubnet, Subnet: subnet}
@@ -292,7 +301,7 @@ func (b *BanList) Remove(ctx context.Context, ipOrSubnet string) error {
 	b.mu.Lock()
 	for _, key := range selectedKeys {
 		if _, present := b.bannedPeers[key]; present {
-			delete(b.bannedPeers, key)
+			b.deleteLocked(key)
 			removedKeys[key] = struct{}{}
 		}
 	}
@@ -430,39 +439,103 @@ func (b *BanList) IsBanned(ipStr string) bool {
 		return false
 	}
 
-	// Check every active network, whatever the spelling of its raw key.
-	b.mu.RLock()
-	var (
-		expiredKeys []string
-		isBanned    bool
-	)
-
-	for key, info := range b.bannedPeers {
-		if !info.ExpirationTime.After(now) {
-			expiredKeys = append(expiredKeys, key)
-			continue
-		}
-
-		if info.Subnet != nil && info.Subnet.Contains(ip) {
-			isBanned = true
-			break
-		}
+	addr, ok := lookupAddr(ip)
+	if !ok {
+		return false
 	}
+
+	// Candidates are the bans on this exact address, whatever the spelling of
+	// their raw keys, and every real subnet. Single-address bans on other
+	// addresses cannot contain ip and are not visited, so a clean lookup costs
+	// one map read plus the subnet scan however many hosts are banned.
+	b.mu.RLock()
+	isBanned := b.anyActiveContainsLocked(b.index.hosts[addr], ip, now) ||
+		b.anyActiveContainsLocked(b.index.networks, ip, now)
+	due := b.index.dueBy(now)
 	b.mu.RUnlock()
 
-	// Clean up expired entries, rechecking the current entry so a renewal made
-	// after the read above survives.
-	if len(expiredKeys) > 0 {
+	if due {
 		b.mu.Lock()
-		for _, key := range expiredKeys {
-			if info, exists := b.bannedPeers[key]; exists && !info.ExpirationTime.After(now) {
-				delete(b.bannedPeers, key)
-			}
-		}
+		b.purgeExpiredLocked(now)
 		b.mu.Unlock()
 	}
 
 	return isBanned
+}
+
+// anyActiveContainsLocked reports whether any of keys names a ban that is
+// active at now and whose network contains ip. Callers hold mu.
+func (b *BanList) anyActiveContainsLocked(keys map[string]struct{}, ip net.IP, now time.Time) bool {
+	for key := range keys {
+		info := b.bannedPeers[key]
+		if info.ExpirationTime.After(now) && info.Subnet != nil && info.Subnet.Contains(ip) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// purgeExpiredLocked drops every entry expired at now from memory (SQL keeps
+// its rows, as before). Each candidate is rechecked against the current map,
+// so a ban renewed after its expiry item was queued survives. Callers hold mu
+// for writing.
+func (b *BanList) purgeExpiredLocked(now time.Time) {
+	for b.index.dueBy(now) {
+		item := heap.Pop(&b.index.expiries).(expiryItem)
+
+		if info, exists := b.bannedPeers[item.key]; exists && !info.ExpirationTime.After(now) {
+			b.deleteLocked(item.key)
+		}
+	}
+}
+
+// putLocked stores info under key and indexes it, replacing any previous
+// entry. Callers hold mu for writing.
+func (b *BanList) putLocked(key string, info BanInfo) {
+	if old, exists := b.bannedPeers[key]; exists {
+		b.index.remove(key, old)
+	}
+
+	b.bannedPeers[key] = info
+	b.index.add(key, info)
+	b.compactExpiriesLocked()
+}
+
+// deleteLocked removes the entry under key and its index entries. Callers
+// hold mu for writing.
+func (b *BanList) deleteLocked(key string) {
+	if old, exists := b.bannedPeers[key]; exists {
+		b.index.remove(key, old)
+		delete(b.bannedPeers, key)
+	}
+}
+
+// swapLocked installs peers and its prebuilt index. Callers hold mu for
+// writing.
+func (b *BanList) swapLocked(peers map[string]BanInfo, index banIndex) {
+	b.bannedPeers = peers
+	b.index = index
+}
+
+// compactExpiriesLocked rebuilds the expiry heap from the live entries once
+// renewals and removals have left it holding many more items than entries,
+// so stale items cannot accumulate. The rebuild is linear and runs at most
+// once per that many writes. Callers hold mu for writing.
+func (b *BanList) compactExpiriesLocked() {
+	const slack = 64
+
+	if len(b.index.expiries) <= 2*len(b.bannedPeers)+slack {
+		return
+	}
+
+	items := make(expiryHeap, 0, len(b.bannedPeers))
+	for key, info := range b.bannedPeers {
+		items = append(items, expiryItem{key: key, at: info.ExpirationTime})
+	}
+
+	heap.Init(&items)
+	b.index.expiries = items
 }
 
 func (b *BanList) ListBanned() []string {
@@ -475,6 +548,27 @@ func (b *BanList) ListBanned() []string {
 	}
 
 	return banned
+}
+
+// ActiveNetworks returns the network of every ban whose expiration is still
+// ahead. It filters on expiration itself, so an entry that has lapsed but not
+// been purged yet is left out. It is linear in the entries: it is meant for
+// callers that mirror the list elsewhere (the p2p service's connection
+// admission), not for per-message checks.
+func (b *BanList) ActiveNetworks() []*net.IPNet {
+	now := time.Now()
+
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+
+	active := make([]*net.IPNet, 0, len(b.bannedPeers))
+	for _, info := range b.bannedPeers {
+		if info.Subnet != nil && info.ExpirationTime.After(now) {
+			active = append(active, info.Subnet)
+		}
+	}
+
+	return active
 }
 
 func (b *BanList) Subscribe() chan BanEvent {
@@ -500,7 +594,7 @@ func (b *BanList) Clear() {
 	defer b.operationMu.Unlock()
 
 	b.mu.Lock()
-	b.bannedPeers = make(map[string]BanInfo)
+	b.swapLocked(make(map[string]BanInfo), newBanIndex())
 	b.mu.Unlock()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -590,7 +684,7 @@ func (b *BanList) loadFromDatabase(ctx context.Context) error {
 
 	b.mu.Lock()
 	for key, info := range peers {
-		b.bannedPeers[key] = info
+		b.putLocked(key, info)
 	}
 	b.mu.Unlock()
 
