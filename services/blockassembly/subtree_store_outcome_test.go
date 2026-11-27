@@ -428,6 +428,42 @@ func TestSubtreeStoreResult_MetaReadAlwaysFails_FailedAfterTheRetries(t *testing
 	require.Equal(t, before+1, testutil.ToFloat64(prometheusBlockAssemblySubtreeStoreFailed))
 }
 
+// cancelOnRead is a ParentTxMap whose read fails and cancels the context, as a shutdown during
+// the meta build does.
+type cancelOnRead struct {
+	subtreeprocessor.TxInpointsMap
+
+	cancel context.CancelFunc
+}
+
+func (m *cancelOnRead) GetWithErr(chainhash.Hash) (*subtreepkg.TxInpoints, bool, error) {
+	m.cancel()
+
+	return nil, false, errors.NewStorageError("disk tx map read failed")
+}
+
+func TestSubtreeStoreResult_ShutdownDuringMetaBuildBackoff_Cancelled(t *testing.T) {
+	server, _, _, _ := setup(t)
+	subtree, txMap := makeSubtree(t, 11)
+	setForTest(t, &metaBuildBackoff, time.Hour)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	resultChan := make(chan subtreeprocessor.StoreResult, 1)
+	request := subtreeprocessor.NewSubtreeRequest{Subtree: subtree, ParentTxMap: &cancelOnRead{TxInpointsMap: txMap, cancel: cancel}, Result: resultChan}
+	outcome := newSubtreeStoreOutcome(request, true, nil)
+	outcome.subtreeStored(false)
+
+	server.storeSubtreeMeta(ctx, request, 1, outcome, make(chan *subtreeRetrySend, 1))
+
+	result := awaitResult(t, resultChan)
+
+	require.True(t, result.Cancelled, "%+v", result)
+	require.Error(t, result.Err)
+	require.False(t, result.OK())
+}
+
 // alreadyPublished answers every subtree Set as the file store does when another writer published
 // the name between the existence check and the write.
 type alreadyPublished struct {

@@ -1080,6 +1080,14 @@ func (ba *BlockAssembly) storeSubtreeMeta(ctx context.Context, subtreeRequest su
 	prometheusBlockAssemblySubtreeStoreStep.WithLabelValues("meta_build").Observe(time.Since(buildStart).Seconds())
 
 	if !ok {
+		// A build that ended because the context did (a shutdown during its backoff) is cancelled,
+		// not failed, as a cancelled write retry is.
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			outcome.cancel(ctxErr)
+
+			return
+		}
+
 		outcome.fail(errors.NewProcessingError("[BlockAssembly:storeSubtreeData][%s] failed to build subtree meta", subtree.RootHash().String()))
 
 		return

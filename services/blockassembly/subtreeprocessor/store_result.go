@@ -6,9 +6,10 @@ package subtreeprocessor
 // posted when the store is settled: stored on the first try or on a retry, or failed because
 // the retries ran out.
 //
-// A retry cancelled during its backoff settles its part as cancelled, and the result is posted
-// only if every other part has settled too. Nothing is posted for a worker that sees its context
-// end before it starts the store, or for requests left in the worker or retry queues at shutdown.
+// A retry, or a meta build, cancelled during its backoff settles its part as cancelled, and the
+// result is posted only if every other part has settled too. Nothing is posted for a worker that
+// sees its context end before it starts the store, or for requests left in the worker or retry
+// queues at shutdown.
 // A waiter must also watch its context.
 //
 // A subtree that existed with no meta file is reported with MetaStored false and Err nil. An
