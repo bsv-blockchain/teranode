@@ -70,6 +70,11 @@ type StoreQueue struct {
 	waiting   []*storeItem // not admitted: no room
 	byTree    map[*subtreepkg.Subtree][]*storeItem
 
+	// staleHint is set when a request was marked stale and cleared when a scan dropped every stale
+	// request that was not taken, so a Push at the limit with none marked skips the scan. It can be
+	// set with nothing stale left (Wanted, or the marked request was taken): one scan clears it.
+	staleHint bool
+
 	// cleanups are the OnStorageComplete callbacks of dropped requests, for the processor to run:
 	// they read the nodes of a subtree that has left the chain and may be unmapped any moment.
 	cleanups []func()
@@ -183,6 +188,7 @@ func (q *StoreQueue) Stale(subtrees ...*subtreepkg.Subtree) {
 	for _, st := range subtrees {
 		for _, it := range q.byTree[st] {
 			it.stale = true
+			q.staleHint = true
 		}
 	}
 
@@ -268,11 +274,7 @@ func (q *StoreQueue) pickLocked() *storeItem {
 		return nil
 	}
 
-	i := slices.IndexFunc(q.ready, func(it *storeItem) bool { return !it.stale })
-	if i < 0 {
-		i = 0
-	}
-
+	i := q.firstWantedLocked(q.ready)
 	it := q.ready[i]
 	q.ready = removeAt(q.ready, i)
 	it.taken = true
@@ -285,11 +287,7 @@ func (q *StoreQueue) pickLocked() *storeItem {
 // dropped requests, which the caller finishes after unlocking.
 func (q *StoreQueue) admitLocked() (dropped []*storeItem) {
 	for len(q.waiting) > 0 {
-		i := slices.IndexFunc(q.waiting, func(it *storeItem) bool { return !it.stale })
-		if i < 0 {
-			i = 0
-		}
-
+		i := q.firstWantedLocked(q.waiting)
 		it := q.waiting[i]
 		if q.held == 0 || q.held+it.bytes <= q.limit {
 			q.waiting = removeAt(q.waiting, i)
@@ -311,8 +309,32 @@ func (q *StoreQueue) admitLocked() (dropped []*storeItem) {
 	return dropped
 }
 
+// firstWantedLocked is the index of the first request of list that is not stale, or 0 when all are.
+// Without a stale mark it is the front, and the backlog is not scanned.
+func (q *StoreQueue) firstWantedLocked(list []*storeItem) int {
+	if !q.staleHint {
+		return 0
+	}
+
+	return max(slices.IndexFunc(list, func(it *storeItem) bool { return !it.stale }), 0)
+}
+
+// mayHaveStale reports whether a request may be stale: false means none is, and nothing is scanned.
+func (q *StoreQueue) mayHaveStale() bool {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+
+	return q.staleHint
+}
+
 // dropStaleLocked removes every stale chain request that has not been taken.
 func (q *StoreQueue) dropStaleLocked() []*storeItem {
+	if !q.staleHint {
+		return nil
+	}
+
+	q.staleHint = false
+
 	return q.dropLocked(func(it *storeItem) bool { return it.stale })
 }
 

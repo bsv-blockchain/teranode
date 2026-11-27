@@ -981,3 +981,24 @@ func TestStoreQueue_AReorgAndTheWatcherBothSeeTheResultOfOneRequest(t *testing.T
 	require.NoError(t, err)
 	require.Equal(t, stored, <-req2.Result, "the reorg left the value for the watcher")
 }
+
+// At the limit a Push scans the backlog for stale requests only when some were marked, so an outage
+// backlog does not cost a scan per Push.
+func TestStoreQueue_AtTheLimitAPushScansForStaleRequestsOnlyWhenSomeWereMarked(t *testing.T) {
+	q := NewStoreQueue(StoreRequestBytes(chainRequest(t, 1))) // room for one request
+
+	reqs := make([]NewSubtreeRequest, 4)
+	for i := range reqs {
+		reqs[i] = chainRequest(t, byte(i+1))
+		q.Push(reqs[i])
+	}
+
+	require.False(t, q.mayHaveStale(), "nothing was marked stale: no scan")
+
+	q.Stale(reqs[2].Subtree) // at the limit: dropped at once
+	require.Equal(t, 3, q.Len())
+	require.False(t, q.mayHaveStale(), "the scan dropped every stale request")
+
+	q.Push(chainRequest(t, 9))
+	require.False(t, q.mayHaveStale())
+}
