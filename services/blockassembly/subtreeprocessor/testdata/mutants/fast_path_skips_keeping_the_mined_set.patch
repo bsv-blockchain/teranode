@@ -1,9 +1,9 @@
 diff --git a/services/blockassembly/subtreeprocessor/reorg_fast_path.go b/services/blockassembly/subtreeprocessor/reorg_fast_path.go
-index c5d9aaf43..3c1b49477 100644
+index 758408a06..6a02d08fa 100644
 --- a/services/blockassembly/subtreeprocessor/reorg_fast_path.go
 +++ b/services/blockassembly/subtreeprocessor/reorg_fast_path.go
-@@ -620,13 +620,13 @@ func (stp *SubtreeProcessor) applyFastReorg(ctx context.Context, plan *fastReorg
- 	// like the end of a slow-path step, so a failed drain leaves no set. The fast path has one set,
+@@ -614,13 +614,13 @@ func (stp *SubtreeProcessor) applyFastReorg(ctx context.Context, plan *fastReorg
+ 	// (clearMinedSets). The fast path has one set,
  	// the winners' union, kept once under the tip: a later reorg that moves back any forward block
  	// moves back the tip too, so the union is forgotten whenever it must be. A reorg that moves back
  	// only the tip forgets the earlier blocks' protection with it, which only falls back to the
