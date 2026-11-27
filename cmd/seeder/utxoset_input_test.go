@@ -325,6 +325,11 @@ func TestImportUTXOSet_DamagedPieces(t *testing.T) {
 			require.NoError(t, err)
 			require.NoError(t, os.WriteFile(piecePath(dir, 3), b[:len(b)/2], 0o600))
 		}, ""},
+		{"truncated next-frame header", func(t *testing.T, dir string) {
+			entries, err := os.ReadDir(dir)
+			require.NoError(t, err)
+			require.NoError(t, os.WriteFile(piecePath(dir, len(entries)), []byte{0x28, 0xb5, 0x2f, 0xfd}, 0o600))
+		}, "unexpected EOF"},
 		{"last piece missing", func(t *testing.T, dir string) {
 			entries, err := os.ReadDir(dir)
 			require.NoError(t, err)
@@ -530,76 +535,96 @@ func TestUTXOSetPieces(t *testing.T) {
 	require.Error(t, err)
 }
 
-// A seed stopped part-way (here by a missing last piece) is not marked complete, and a
+// A seed stopped by a missing piece or truncated trailing frame is not marked complete. A
 // plain re-run refuses until the store is wiped and -force is used; that run stores
 // every output intact. Runs that do not import still check the checksum.
 func TestProcessUTXOs_CompressedInput_InterruptedSeedReRuns(t *testing.T) {
-	ctx := context.Background()
-	tSettings := forceSeederSettings(t)
-	pointUtxoStoreAt(t, tSettings, "compressed_rerun")
-	blockStore := openTestBlockStore(t, tSettings)
-	blockchainStore := newTestBlockchainStore(t)
+	for _, tc := range []struct {
+		name      string
+		pieceSize int
+		tail      []byte
+		wantErr   string
+	}{
+		{"missing last piece", 2048, nil, "truncated"},
+		{"file with truncated next-frame magic", 0, []byte{0x28}, "unexpected EOF"},
+		{"pieces with truncated next-frame header", 2048, []byte{0x28, 0xb5, 0x2f, 0xfd}, "unexpected EOF"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			tSettings := forceSeederSettings(t)
+			pointUtxoStoreAt(t, tSettings, "compressed_rerun")
+			blockStore := openTestBlockStore(t, tSettings)
+			blockchainStore := newTestBlockchainStore(t)
 
-	wrappers := withDistinctOutputs(benchWrappers("rerun", 300, 0))
+			wrappers := withDistinctOutputs(benchWrappers("rerun", 300, 0))
 
-	dir, sum := compressedSnapshot(t, writeCompleteSnapshotFile(t, wrappers), 2048)
+			dir, sum := compressedSnapshot(t, writeCompleteSnapshotFile(t, wrappers), tc.pieceSize)
 
-	pieces, err := utxoSetPieces(dir)
-	require.NoError(t, err)
+			pieces, err := utxoSetPieces(dir)
+			require.NoError(t, err)
 
-	last := pieces[len(pieces)-1]
-	lastBytes, err := os.ReadFile(last)
-	require.NoError(t, err)
-	require.NoError(t, os.Remove(last))
+			last := pieces[len(pieces)-1]
+			lastBytes, err := os.ReadFile(last)
+			require.NoError(t, err)
+			if tc.tail == nil {
+				require.NoError(t, os.Remove(last))
+			} else {
+				require.NoError(t, os.WriteFile(last, append(bytes.Clone(lastBytes), tc.tail...), 0o600))
+			}
 
-	_, err = processUTXOs(ctx, ulogger.TestLogger{}, tSettings, blockchainStore, dir, "", false, false, sum)
-	require.ErrorContains(t, err, "truncated")
-	require.ErrorContains(t, err, "wipe the UTXO store")
+			_, err = processUTXOs(ctx, ulogger.TestLogger{}, tSettings, blockchainStore, dir, "", false, false, sum)
+			require.ErrorContains(t, err, tc.wantErr)
+			if tc.tail != nil {
+				require.ErrorIs(t, err, io.ErrUnexpectedEOF)
+			}
+			require.ErrorContains(t, err, "wipe the UTXO store")
 
-	datExists := func(name string) bool {
-		exists, err := blockStore.Exists(ctx, nil, fileformat.FileTypeDat, bloboptions.WithFilename(name), bloboptions.WithNoHashPrefix())
-		require.NoError(t, err)
+			datExists := func(name string) bool {
+				exists, err := blockStore.Exists(ctx, nil, fileformat.FileTypeDat, bloboptions.WithFilename(name), bloboptions.WithNoHashPrefix())
+				require.NoError(t, err)
 
-		return exists
+				return exists
+			}
+
+			require.False(t, datExists("lastProcessed"), "an interrupted seed must not be marked complete")
+			require.True(t, datExists(incompleteImportFilename))
+
+			require.NoError(t, os.WriteFile(last, lastBytes, 0o600))
+
+			_, err = processUTXOs(ctx, ulogger.TestLogger{}, tSettings, blockchainStore, dir, "", false, false, sum)
+			require.ErrorContains(t, err, "wipe the UTXO store, then re-run with -force")
+
+			pointUtxoStoreAt(t, tSettings, "compressed_rerun_wiped")
+
+			tip, err := processUTXOs(ctx, ulogger.TestLogger{}, tSettings, blockchainStore, dir, "", true, false, sum)
+			require.NoError(t, err)
+			require.Equal(t, uint32(200), tip.height)
+			require.Equal(t, "200", readMarker(t, ctx, blockStore))
+			require.False(t, datExists(incompleteImportFilename), "a finished import clears the record")
+
+			requireStoredOutputs(ctx, t, openNamedUtxoStore(ctx, t, tSettings, "compressed_rerun_wiped"), wrappers)
+
+			stale := hex.EncodeToString(make([]byte, sha256.Size))
+
+			// -recover-checkpoint takes the tip from the set, so it checks the set first.
+			_, err = processUTXOs(ctx, ulogger.TestLogger{}, tSettings, blockchainStore, dir, "", false, true, stale)
+			require.ErrorContains(t, err, "checksum mismatch")
+
+			tip, err = processUTXOs(ctx, ulogger.TestLogger{}, tSettings, blockchainStore, dir, "", false, true, sum)
+			require.NoError(t, err)
+			require.Equal(t, uint32(200), tip.height)
+
+			// With the checkpoint written, a plain re-run skips the import but still checks the set.
+			require.NoError(t, blockchainStore.SetState(ctx, blockassembly.StateKey, []byte("checkpoint")))
+
+			_, err = processUTXOs(ctx, ulogger.TestLogger{}, tSettings, blockchainStore, dir, "", false, false, stale)
+			require.ErrorContains(t, err, "checksum mismatch")
+
+			tip, err = processUTXOs(ctx, ulogger.TestLogger{}, tSettings, blockchainStore, dir, "", false, false, sum)
+			require.NoError(t, err)
+			require.Nil(t, tip, "a skipped import writes no checkpoint")
+		})
 	}
-
-	require.False(t, datExists("lastProcessed"), "an interrupted seed must not be marked complete")
-	require.True(t, datExists(incompleteImportFilename))
-
-	require.NoError(t, os.WriteFile(last, lastBytes, 0o600))
-
-	_, err = processUTXOs(ctx, ulogger.TestLogger{}, tSettings, blockchainStore, dir, "", false, false, sum)
-	require.ErrorContains(t, err, "wipe the UTXO store, then re-run with -force")
-
-	pointUtxoStoreAt(t, tSettings, "compressed_rerun_wiped")
-
-	tip, err := processUTXOs(ctx, ulogger.TestLogger{}, tSettings, blockchainStore, dir, "", true, false, sum)
-	require.NoError(t, err)
-	require.Equal(t, uint32(200), tip.height)
-	require.Equal(t, "200", readMarker(t, ctx, blockStore))
-	require.False(t, datExists(incompleteImportFilename), "a finished import clears the record")
-
-	requireStoredOutputs(ctx, t, openNamedUtxoStore(ctx, t, tSettings, "compressed_rerun_wiped"), wrappers)
-
-	stale := hex.EncodeToString(make([]byte, sha256.Size))
-
-	// -recover-checkpoint takes the tip from the set, so it checks the set first.
-	_, err = processUTXOs(ctx, ulogger.TestLogger{}, tSettings, blockchainStore, dir, "", false, true, stale)
-	require.ErrorContains(t, err, "checksum mismatch")
-
-	tip, err = processUTXOs(ctx, ulogger.TestLogger{}, tSettings, blockchainStore, dir, "", false, true, sum)
-	require.NoError(t, err)
-	require.Equal(t, uint32(200), tip.height)
-
-	// With the checkpoint written, a plain re-run skips the import but still checks the set.
-	require.NoError(t, blockchainStore.SetState(ctx, blockassembly.StateKey, []byte("checkpoint")))
-
-	_, err = processUTXOs(ctx, ulogger.TestLogger{}, tSettings, blockchainStore, dir, "", false, false, stale)
-	require.ErrorContains(t, err, "checksum mismatch")
-
-	tip, err = processUTXOs(ctx, ulogger.TestLogger{}, tSettings, blockchainStore, dir, "", false, false, sum)
-	require.NoError(t, err)
-	require.Nil(t, tip, "a skipped import writes no checkpoint")
 }
 
 // openNamedUtxoStore opens the named sqlite UTXO store (see pointUtxoStoreAt).

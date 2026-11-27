@@ -992,6 +992,10 @@ func importUTXOSet(ctx context.Context, logger ulogger.Logger, store utxo.Store,
 
 			pg.Go(func() error {
 				err := readUTXOFrames(pCtx, logger, s.footerSource(), s.reader, frameCh, name, accept)
+				if err == nil && s.decoder != nil && s.decoder.err != io.EOF {
+					err = errors.NewProcessingError("compressed UTXO set did not reach a clean decoder EOF", s.decoder.err)
+				}
+
 				if err == nil && verify {
 					if err = s.verify(opts.expectedSHA256, utxoFile); err == nil {
 						logger.Infof("[%s pass] checksum verified for %s", name, utxoFile)

@@ -210,13 +210,30 @@ func (p *pieceReader) Close() error {
 	return err
 }
 
+// utxoSetDecoder keeps the decoder's terminal error even when the record
+// reader treats io.ErrUnexpectedEOF as the snapshot footer boundary.
+type utxoSetDecoder struct {
+	decoder *zstd.Decoder
+	err     error
+}
+
+func (d *utxoSetDecoder) Read(b []byte) (int, error) {
+	n, err := d.decoder.Read(b)
+	if err != nil {
+		d.err = err
+	}
+
+	return n, err
+}
+
 // utxoSetStream reads the uncompressed bytes of a UTXO set, from a plain file
 // or through a zstd decoder, optionally hashing every byte it reads.
 type utxoSetStream struct {
-	reader *bufio.Reader
-	file   *os.File // the plain file, so the footer can be read by seeking; nil when compressed
-	close  func() error
-	sum    hash.Hash // nil unless the stream is being hashed
+	reader  *bufio.Reader
+	file    *os.File // the plain file, so the footer can be read by seeking; nil when compressed
+	close   func() error
+	decoder *utxoSetDecoder // nil for a plain file
+	sum     hash.Hash       // nil unless the stream is being hashed
 }
 
 // openUTXOSetStream opens the UTXO set at path (see findUTXOSet). With hashIt,
@@ -239,7 +256,8 @@ func openUTXOSetStream(path string, hashIt bool) (*utxoSetStream, error) {
 			return nil, errors.NewProcessingError("failed to start the zstd decoder for %s", path, err)
 		}
 
-		src = dec
+		s.decoder = &utxoSetDecoder{decoder: dec}
+		src = s.decoder
 		s.close = func() error {
 			dec.Close()
 			return pr.Close()
