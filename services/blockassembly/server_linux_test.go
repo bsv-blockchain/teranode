@@ -34,6 +34,7 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/blob"
 	"github.com/bsv-blockchain/teranode/stores/blob/options"
 	utxostore "github.com/bsv-blockchain/teranode/stores/utxo"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -175,13 +176,13 @@ func (m *mmapJobServer) storeJob(t *testing.T) (chainhash.Hash, heldSubtrees) {
 		subtrees  []*subtreepkg.Subtree
 	)
 
-	require.Eventually(t, func() bool {
-		c, s, err := m.ba.blockAssembler.GetMiningCandidate(t.Context())
-		require.NoError(t, err)
+	require.EventuallyWithT(t, func(c *assert.CollectT) {
+		cand, sts, err := m.ba.blockAssembler.GetMiningCandidate(t.Context())
+		require.NoError(c, err)
 
-		candidate, subtrees = c, s
+		candidate, subtrees = cand, sts
 
-		return len(subtrees) >= 2
+		require.GreaterOrEqual(c, len(subtrees), 2)
 	}, 5*time.Second, 50*time.Millisecond, "a mining candidate built from the processor's subtrees")
 
 	id, err := chainhash.NewHash(candidate.Id)
@@ -383,32 +384,42 @@ func readLikeSubmit(t *testing.T, h heldSubtrees) {
 	}
 }
 
-func TestJobSubtreesStayMapped_OlderJobAfterNoOpResetOnTheSameTip(t *testing.T) {
-	m := newMmapJobServer(t, false)
+// A job whose subtrees the processor has replaced must still have them mapped, whether the
+// processor reset on the same tip or reorged to a sibling of it. A caller reads the job through
+// SubmitMiningSolution (readLikeSubmit) or GetCandidateBlock.
+func TestJobSubtreesStayMappedAfterTheProcessorReplacesThem(t *testing.T) {
+	retire := map[string]func(t *testing.T, m *mmapJobServer) (chainhash.Hash, heldSubtrees){
+		"no-op reset on the same tip": func(t *testing.T, m *mmapJobServer) (chainhash.Hash, heldSubtrees) {
+			id, job := m.storeJob(t)
 
-	id, job := m.storeJob(t)
+			m.reset(t)
 
-	m.reset(t)
+			m.requireNotInstalled(t, job)
+			m.requireGuardLetsJobThrough(t, id)
 
-	m.requireNotInstalled(t, job)
-	m.requireGuardLetsJobThrough(t, id)
-	m.requireStillMapped(t, job, "a cached job")
-	readLikeSubmit(t, job)
-}
+			return id, job
+		},
+		"sibling reorg": func(t *testing.T, m *mmapJobServer) (chainhash.Hash, heldSubtrees) {
+			return m.jobThenSiblingReorg(t)
+		},
+	}
 
-func TestJobSubtreesStayMapped_GetCandidateBlockAfterAReset(t *testing.T) {
-	m := newMmapJobServer(t, false)
+	for name, retireJob := range retire {
+		t.Run(name, func(t *testing.T) {
+			m := newMmapJobServer(t, false)
 
-	id, job := m.storeJob(t)
+			id, job := retireJob(t, m)
 
-	m.reset(t)
-	m.requireNotInstalled(t, job)
+			m.requireStillMapped(t, job, "a cached job")
+			readLikeSubmit(t, job)
 
-	resp, err := m.ba.GetCandidateBlock(t.Context(), &blockassembly_api.GetCandidateBlockRequest{Id: id[:]})
-	require.NoError(t, err)
-	require.NotEmpty(t, resp.SubtreeHashes)
+			resp, err := m.ba.GetCandidateBlock(t.Context(), &blockassembly_api.GetCandidateBlockRequest{Id: id[:]})
+			require.NoError(t, err)
+			require.NotEmpty(t, resp.SubtreeHashes)
 
-	m.requireStillMapped(t, job, "a cached job")
+			m.requireStillMapped(t, job, "a cached job")
+		})
+	}
 }
 
 // A job lives as long as it keeps being read, because every Get extends its TTL, so ten
@@ -419,13 +430,13 @@ func TestJobSubtreesStayMappedWhileTheJobIsReadAndAreClosedAfterItExpires(t *tes
 
 	id, job := m.storeJob(t)
 
-	const ttl = 3 * time.Second
+	const ttl = 600 * time.Millisecond
 
 	m.ba.jobStore.Set(id, m.ba.jobStore.Get(id).Value(), ttl)
 
 	// read for longer than the TTL: every Get extends it
-	for range 5 {
-		time.Sleep(time.Second)
+	for range 4 {
+		time.Sleep(250 * time.Millisecond)
 		require.NotNil(t, m.ba.jobStore.Get(id), "the job expired although it was read")
 	}
 
@@ -529,27 +540,6 @@ func TestSubtreesStayMappedWhileTheirStoreIsQueuedOrPending(t *testing.T) {
 
 		return true
 	}, 10*time.Second, 100*time.Millisecond, "the subtrees are never closed once their stores have ended")
-}
-
-func TestJobSubtreesStayMapped_OlderJobAfterASiblingReorgCommit(t *testing.T) {
-	m := newMmapJobServer(t, false)
-
-	_, job := m.jobThenSiblingReorg(t)
-
-	m.requireStillMapped(t, job, "a cached job")
-	readLikeSubmit(t, job)
-}
-
-func TestJobSubtreesStayMapped_GetCandidateBlockAfterASiblingReorg(t *testing.T) {
-	m := newMmapJobServer(t, false)
-
-	id, job := m.jobThenSiblingReorg(t)
-
-	resp, err := m.ba.GetCandidateBlock(t.Context(), &blockassembly_api.GetCandidateBlockRequest{Id: id[:]})
-	require.NoError(t, err)
-	require.NotEmpty(t, resp.SubtreeHashes)
-
-	m.requireStillMapped(t, job, "a cached job")
 }
 
 // A request that took a job must keep its subtrees mapped after Delete, DeleteAll or an
