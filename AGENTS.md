@@ -58,6 +58,20 @@ git fetch upstream && git rebase upstream/main && git push origin <branch>
 - **NEVER auto-resolve merge conflicts** — show the conflicting files and wait for
   approval on the resolution strategy.
 
+## Reviewing a Team PR
+
+Full process: [`docs/references/reviewProcess.md`](docs/references/reviewProcess.md). Agent steps: the `review-fix-forward` skill in `.claude/skills/`.
+
+- P0: request changes. The assignee fixes it. Never fix a P0 yourself.
+- P1–P3: finish the review first. Then fix them in separate `review-fix:` commits.
+- Before fixing, read the PR comments for an open `Fixing review findings:` claim. If one is open, do not push fixes.
+- If no claim is open, post a claim comment before the first fix.
+- Push to the PR branch only when the user asks in this session. Fast-forward only.
+- Fix only what the review found. Never rebase, force-push, or resolve conflicts.
+- Post one hand-back comment: findings, fixing commits, open items, questions.
+- In that comment, advise the assignee whether each existing approver should re-review. Criteria are in the process file. Do not ask the approver yourself.
+- The assignee still owns the PR. The other reviewer approves the final head commit.
+
 ## Go Conventions
 
 - No `Get` prefix on getters: `Name()`, not `GetName()`.
@@ -75,20 +89,51 @@ git fetch upstream && git rebase upstream/main && git push origin <branch>
 
 Test file layout:
 
-- `foo.go` is tested in `foo_test.go`. Before writing a test, find the existing
-  test file for the code under test and add to it.
-- A second test file for the same code is allowed only when its name states the
-  behaviour it covers (`create_arena_test.go`). Never name a file by how it was
-  written: no `_additional`, `_coverage`, `_extra`, `_more`, `_new` or numeric
-  suffixes.
+- A test for code in `foo.go` goes in `foo_test.go`, including a test for a new
+  behaviour or a bug fix. Create a new `_test.go` file only alongside a new
+  production file.
+- There are two exceptions. A test that needs its own build tag gets its own file,
+  because Go applies build tags per file; name it for the tag
+  (`foo_integration_test.go`). A package's shared test code gets its own file too:
+  `main_test.go` for `TestMain`, `helpers_test.go` for the package fixture,
+  `export_test.go`. Benchmarks also go in `foo_test.go`.
+- Never name a test file by how it was written: no `_additional`, `_coverage`,
+  `_extra`, `_more`, `_new` or numeric suffixes.
+- Existing split files stay as they are. A PR that adds tests to code with several
+  test files adds them to `foo_test.go`, or to the existing file that holds the
+  closest test.
 - Keep unit tests in the same directory as the code; don't move them to a
   separate tree. The top-level `test/` tree holds the e2e, multi-node,
   consensus-vector, long-running, sequential, chaos and soak suites.
 - Search production code first and open tests only when needed. Most hits for a
   common identifier are in tests: `git grep <name> -- ':!*_test.go'`.
+- New code still meets the 80% coverage gate. The rules below change only how
+  coverage is reached: an assertion or a table row in an existing test comes first.
+- Add to an existing test, not only an existing file. When a test already reaches
+  the code, add an assertion there. When only the inputs or the entry point differ
+  (a sync and an async version, two handlers with the same failure), add a row to
+  that test's table. Write a new Test function only for a genuinely new setup.
+- When a PR adds a second test whose setup repeats an existing one, or a third case
+  that differs only in inputs, turn them into a table or move the shared setup into
+  the package's fixture in the same PR. A package with no table or fixture gets one
+  the first time a PR adds tests there.
+- Where a shared fixture uses a mock, it registers every expectation a test relies
+  on as required, never `.Maybe()`, and asserts expectations after the test (for
+  example, with `t.Cleanup(func() { mockClient.AssertExpectations(t) })`). A
+  required expectation alone does not fail when the call is missing.
+- A store test that must pass on SQLite and PostgreSQL is one test body over a
+  backend loop, with a per-case timeout so a hang fails by name. No `_SQLite` and
+  `_Postgres` copies. Start PostgreSQL with `test/utils/postgres`, not
+  testcontainers' `postgres.Run`, except in a test of server configuration that
+  needs its own container settings.
+- A comment above a test is at most three lines: the behaviour it pins and why it
+  matters. Incident history, mutation proofs and review discussion go in the PR
+  body. Never put an issue number from a private tracker in a code comment.
 
 Test tags: `testtxmetacache` (small cache for testing), `largetxmetacache`
-(production cache size), `aerospike` (tests requiring Aerospike).
+(production cache size), `aerospike` (gates one native-ops integration test; the
+Aerospike store itself is always compiled and its container-backed tests run untagged,
+skipping when Docker is unavailable — reconciliation notes section 72).
 
 ```bash
 make smoketest TEST_RETRY_COUNT=3                       # retry (smoke/sequential only)
@@ -144,8 +189,9 @@ npm test && npm run lint && npm run check && npm run build
   instead of burying them.
 - Self-review before reporting (logic, edge cases, races, security, side effects),
   and report concretely: what changed, what was run and its result, residual risk.
-- A breaking change gets a `CHANGELOG.md` entry in the same PR, under `## [Unreleased]`
-  / `### Breaking`. Breaking means an operator or integrator must act before or during
+- A breaking change gets a `## Breaking` section in the PR description, and the `breaking`
+  label if it exists. The release skill collects these sections into the release notes.
+  Breaking means an operator or integrator must act before or during
   the upgrade, or something that worked stops working without their action: a removed,
   renamed or newly required setting, a change to what an existing setting does, or a
   startup failure on previously valid config; access a deployment didn't need before
@@ -154,11 +200,11 @@ npm test && npm run lint && npm run check && npm run build
   upgrade-order or no-downgrade constraint, between services that can be upgraded
   separately too; a removed, renamed or redefined metric or label value; a store or
   interface change that breaks out-of-tree implementations. A bug fix that does any of
-  these still gets an entry. No entry for other bug fixes (even observable ones), new
+  these still counts. No section for other bug fixes (even observable ones), new
   limits or defaults that don't break sane existing use, internal behaviour changes, log
-  changes, error-message wording or performance changes. Entry: 1–3 lines saying what
-  changed, who is affected and what to do, ending with the PR number (add it once the PR
-  is open). Detail goes in the PR.
+  changes, error-message wording or performance changes. Section: 1–3 lines saying what
+  changed, who is affected and what to do. Detail goes in the rest of the PR. Do not
+  edit a shared file for this: the repo has no `CHANGELOG.md`.
 
 ## Security Rules
 

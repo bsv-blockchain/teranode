@@ -11,6 +11,7 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/blob/storetypes"
 	blockchain_store "github.com/bsv-blockchain/teranode/stores/blockchain"
 	"github.com/bsv-blockchain/teranode/stores/blockchain/options"
+	"github.com/bsv-blockchain/teranode/util/lane"
 	"github.com/stretchr/testify/mock"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/types/known/emptypb"
@@ -416,8 +417,8 @@ func (m *Mock) SetState(ctx context.Context, key string, data []byte) error {
 }
 
 // SetBlockMinedSet mocks the SetBlockMinedSet method
-func (m *Mock) SetBlockMinedSet(ctx context.Context, blockHash *chainhash.Hash) error {
-	args := m.Called(ctx, blockHash)
+func (m *Mock) SetBlockMinedSet(ctx context.Context, blockHash *chainhash.Hash, minedSetGeneration uint64) error {
+	args := m.Called(ctx, blockHash, minedSetGeneration)
 	return args.Error(0)
 }
 
@@ -664,6 +665,48 @@ func (s *errorStoreGetBlockHeader) GetBlockHeader(ctx context.Context, h *chainh
 	return args.Get(0).(*model.BlockHeader), args.Get(1).(*model.BlockHeaderMeta), args.Error(2)
 }
 
+// OpenLaneLease mocks the OpenLaneLease method
+func (m *Mock) OpenLaneLease(ctx context.Context, holder string) (lane.LeaseID, lane.Grant, error) {
+	args := m.Called(ctx, holder)
+	if args.Error(2) != nil {
+		return lane.LeaseID{}, lane.Grant{}, args.Error(2)
+	}
+	return args.Get(0).(lane.LeaseID), args.Get(1).(lane.Grant), nil
+}
+
+// RenewLaneLease mocks the RenewLaneLease method
+func (m *Mock) RenewLaneLease(ctx context.Context, r lane.Renewal) (lane.RenewResult, error) {
+	args := m.Called(ctx, r)
+	if args.Error(1) != nil {
+		return lane.RenewResult{}, args.Error(1)
+	}
+	return args.Get(0).(lane.RenewResult), nil
+}
+
+// ReleaseLaneLease mocks the ReleaseLaneLease method
+func (m *Mock) ReleaseLaneLease(ctx context.Context, r lane.Release) (bool, error) {
+	args := m.Called(ctx, r)
+	return args.Bool(0), args.Error(1)
+}
+
+// LaneMapRows mocks the LaneMapRows method
+func (m *Mock) LaneMapRows(ctx context.Context, blockID uint32) ([]lane.MapRow, error) {
+	args := m.Called(ctx, blockID)
+
+	rows, _ := args.Get(0).([]lane.MapRow)
+
+	return rows, args.Error(1)
+}
+
+// LaneCapGrants mocks the LaneCapGrants method
+func (m *Mock) LaneCapGrants(ctx context.Context, height uint32) ([]lane.CapGrant, error) {
+	args := m.Called(ctx, height)
+
+	grants, _ := args.Get(0).([]lane.CapGrant)
+
+	return grants, args.Error(1)
+}
+
 type emptyStoreGetBlockHeader struct {
 	blockchain_store.MockStore
 }
@@ -789,8 +832,8 @@ func (m *mockStoreGetSetBlockIsMined) GetBlockIsMined(ctx context.Context, hash 
 	return args.Bool(0), nil
 }
 
-func (m *mockStoreGetSetBlockIsMined) SetBlockMinedSet(ctx context.Context, hash *chainhash.Hash) error {
-	args := m.Called(ctx, hash)
+func (m *mockStoreGetSetBlockIsMined) SetBlockMinedSet(ctx context.Context, hash *chainhash.Hash, expectedGeneration *uint64) error {
+	args := m.Called(ctx, hash, expectedGeneration)
 	return args.Error(0)
 }
 

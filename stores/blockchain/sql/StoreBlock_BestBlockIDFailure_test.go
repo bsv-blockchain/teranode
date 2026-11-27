@@ -246,6 +246,9 @@ func TestStoreBlockWhoseBestBlockLookupFailsLeavesTheChainCheckAnswerable(t *tes
 
 		require.GreaterOrEqual(t, s.maxBlockID.Load(), uint64(id),
 			"maxBlockID was left below a committed id, so the in-memory route drops it as uncommitted")
+
+		require.Equal(t, []uint32{block2.Header.Timestamp, block3.Header.Timestamp}, s.blockTimestampCache.Ancestors(uint64(id), 2),
+			"the median-time cache keeps its entries through the chain check's reset")
 	})
 
 	// The committed block is a fork block. Advancing maxBlockID on its own would be worse

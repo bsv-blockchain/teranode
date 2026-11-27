@@ -1,6 +1,7 @@
 package settings
 
 import (
+	"math"
 	"net/url"
 	"time"
 
@@ -90,6 +91,7 @@ type Settings struct {
 	Faucet                     FaucetSettings
 	Dashboard                  DashboardSettings
 	Pruner                     PrunerSettings
+	Probe                      ProbeSettings
 	GCTuning                   GCTuningSettings
 	GRPC                       GRPCSettings
 	GlobalBlockHeightRetention uint32        `key:"global_blockHeightRetention" desc:"Number of blocks to retain data for (default: ~2 days)" default:"288" category:"Global" usage:"Higher values use more storage but allow deeper reorgs" type:"uint32" longdesc:"### Purpose\nControls the default number of blocks to retain data for across all services before pruning.\n\n### How It Works\nUsed as base value for service-specific retention calculations via UtxoStore.BlockHeightRetentionAdjustment and SubtreeValidation.BlockHeightRetentionAdjustment. Services call GetUtxoStoreBlockHeightRetention() and GetSubtreeValidationBlockHeightRetention() which add adjustments to this global value. Affects old blocks, transactions, UTXO history, and Merkle tree data.\n\n### Values\n- **288** (default) - Approximately 2 days of blockchain history (with 10-minute block target)\n- Higher values for deeper reorg support\n\n### Trade-offs\n| Setting | Benefit | Drawback |\n|---------|---------|----------|\n| Higher | Deeper reorg handling, longer data availability | More storage consumption |\n| Lower | Reduced storage requirements | Limited reorg depth |\n\n### Recommendations\n- **288** (default) - Suitable for most deployments\n- Increase for archive nodes or environments requiring deeper history"`
@@ -107,6 +109,32 @@ func (s *Settings) GetUtxoStoreBlockHeightRetention() uint32 {
 	}
 
 	return uint32(result)
+}
+
+// GetUtxoStoreSpentDeleteRetention is how many blocks past its stamp height a fully spent UTXO
+// record is kept: the UTXO store retention plus utxostore_unminedTxRetention, or 0 when the
+// retention is 0 and pruning is off. A child that spent the record while unmined and was mined
+// within the unmined retention keeps its parent for the full retention after it is mined; a
+// child unmined for longer has the pruner preserve the parent instead, while preservation is on.
+func (s *Settings) GetUtxoStoreSpentDeleteRetention() uint32 {
+	retention := s.GetUtxoStoreBlockHeightRetention()
+	if retention == 0 {
+		return 0
+	}
+
+	// Capped at half the height range, so a block height plus the result never wraps a uint32
+	// and turns a long retention into an immediate delete. A retention already above the cap is
+	// returned as it is: the pad never shortens it.
+	padded := uint64(retention) + uint64(s.UtxoStore.UnminedTxRetention)
+	if padded > math.MaxUint32/2 {
+		if retention > math.MaxUint32/2 {
+			return retention
+		}
+
+		return math.MaxUint32 / 2
+	}
+
+	return uint32(padded)
 }
 
 // GetSubtreeValidationBlockHeightRetention calculates the effective block height retention for subtree validation

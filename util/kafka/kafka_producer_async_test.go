@@ -12,7 +12,17 @@ import (
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/twmb/franz-go/pkg/kadm"
+	"github.com/twmb/franz-go/pkg/kerr"
 )
+
+func TestPartitionCountFromTopicDetailReturnsTopicError(t *testing.T) {
+	detail := kadm.TopicDetail{Err: kerr.UnknownTopicOrPartition}
+
+	count, err := partitionCountFromTopicDetail(detail)
+	require.ErrorIs(t, err, kerr.UnknownTopicOrPartition)
+	require.Zero(t, count)
+}
 
 func TestMessageStruct(t *testing.T) {
 	key := []byte("test-key")
@@ -190,6 +200,24 @@ func TestNewKafkaAsyncProducerFromURLInvalidConversion(t *testing.T) {
 
 	assert.Error(t, err)
 	assert.Nil(t, producer)
+}
+
+// The caller's ctx bounds topic creation. A bare host name fails DNS lookup with
+// an error franz-go retries for its 30s request retry timeout per attempt; the
+// caller's deadline must end that attempt instead.
+func TestNewKafkaAsyncProducerFromURLHonoursContext(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+
+	kafkaURL, err := url.Parse("kafka://bad-url/test-topic")
+	require.NoError(t, err)
+
+	start := time.Now()
+	producer, err := NewKafkaAsyncProducerFromURL(ctx, &mockAsyncLogger{}, kafkaURL, nil)
+
+	require.Error(t, err)
+	require.Nil(t, producer)
+	require.Less(t, time.Since(start), 10*time.Second)
 }
 
 func TestNewKafkaAsyncProducerMemoryScheme(t *testing.T) {

@@ -24,7 +24,7 @@ func TestExternalTransactionPruning(t *testing.T) {
 	logger := ulogger.New("test")
 	ctx := context.Background()
 
-	container, err := aeroTest.RunContainer(ctx)
+	container, err := aeroTest.RunContainer(ctx, aeroTest.WithImage(test.AerospikeImage))
 	test.SkipIfContainerUnavailable(t, err)
 
 	t.Cleanup(func() {
@@ -122,7 +122,7 @@ func TestExternalTransactionOutputsOnlyPruning(t *testing.T) {
 	logger := ulogger.New("test")
 	ctx := context.Background()
 
-	container, err := aeroTest.RunContainer(ctx)
+	container, err := aeroTest.RunContainer(ctx, aeroTest.WithImage(test.AerospikeImage))
 	test.SkipIfContainerUnavailable(t, err)
 
 	t.Cleanup(func() {
@@ -212,7 +212,7 @@ func TestMultiRecordExternalTransactionPruning(t *testing.T) {
 	logger := ulogger.New("test")
 	ctx := context.Background()
 
-	container, err := aeroTest.RunContainer(ctx)
+	container, err := aeroTest.RunContainer(ctx, aeroTest.WithImage(test.AerospikeImage))
 	test.SkipIfContainerUnavailable(t, err)
 
 	t.Cleanup(func() {
@@ -345,7 +345,7 @@ func TestExternalFileAlreadyDeleted(t *testing.T) {
 	logger := ulogger.New("test")
 	ctx := context.Background()
 
-	container, err := aeroTest.RunContainer(ctx)
+	container, err := aeroTest.RunContainer(ctx, aeroTest.WithImage(test.AerospikeImage))
 	test.SkipIfContainerUnavailable(t, err)
 
 	t.Cleanup(func() {
@@ -425,7 +425,7 @@ func TestMixedExternalAndNormalTransactions(t *testing.T) {
 	logger := ulogger.New("test")
 	ctx := context.Background()
 
-	container, err := aeroTest.RunContainer(ctx)
+	container, err := aeroTest.RunContainer(ctx, aeroTest.WithImage(test.AerospikeImage))
 	test.SkipIfContainerUnavailable(t, err)
 
 	t.Cleanup(func() {
@@ -536,10 +536,9 @@ func TestMixedExternalAndNormalTransactions(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, exists, "External .outputs file should be deleted")
 
-	// Verify parent was marked with the deleted normal child (external has no inputs)
+	// The pruner deletes only: the surviving parent is not written to
 	parentRecord, err := client.Get(nil, keyParent)
 	require.NoError(t, err)
 	assert.NotNil(t, parentRecord)
-	deletedChildren := parentRecord.Bins[fields.DeletedChildren.String()].(map[interface{}]interface{})
-	assert.True(t, deletedChildren[txIDNormal.String()].(bool), "Normal tx with inputs should update parent")
+	assert.NotContains(t, parentRecord.Bins, fields.DeletedChildren.String(), "the pruner must not write a replay marker on the parent")
 }

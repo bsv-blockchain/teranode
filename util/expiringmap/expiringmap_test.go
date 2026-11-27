@@ -337,3 +337,131 @@ func TestExpiringMap_WithRandomEviction_DoesNotSeekTheOldest(t *testing.T) {
 
 	require.NotEqual(t, oldestFirst, evicted, "random eviction must not evict oldest first, which costs a scan of every entry per insert")
 }
+
+func TestExpiringMap_GetAndDelete(t *testing.T) {
+	t.Run("returns and removes the entry once", func(t *testing.T) {
+		m := New[string, int](time.Hour)
+		defer m.Stop()
+
+		m.Set("a", 1)
+
+		value, ok := m.GetAndDelete("a")
+		require.True(t, ok)
+		require.Equal(t, 1, value)
+
+		_, ok = m.Get("a")
+		require.False(t, ok, "the entry must be gone after GetAndDelete")
+
+		_, ok = m.GetAndDelete("a")
+		require.False(t, ok, "a second GetAndDelete must report that it removed nothing")
+	})
+
+	t.Run("missing key", func(t *testing.T) {
+		m := New[string, int](time.Hour)
+		defer m.Stop()
+
+		value, ok := m.GetAndDelete("missing")
+		require.False(t, ok)
+		require.Zero(t, value)
+	})
+
+	t.Run("takes an expired entry the cleaner has not removed", func(t *testing.T) {
+		// A zero expiry starts no cleaner, so the expired entry stays in the map.
+		m := New[string, int](0)
+		defer m.Stop()
+
+		m.Set("a", 1)
+		time.Sleep(time.Millisecond)
+
+		_, ok := m.Get("a")
+		require.False(t, ok, "Get hides an expired entry")
+
+		value, ok := m.GetAndDelete("a")
+		require.True(t, ok, "GetAndDelete still removes it, so its owner can release it")
+		require.Equal(t, 1, value)
+		require.Zero(t, m.Len())
+	})
+
+	t.Run("does not fire the eviction function", func(t *testing.T) {
+		var evicted atomic.Int32
+
+		m := New[string, int](time.Hour).WithEvictionFunction(func(string, int) bool {
+			evicted.Add(1)
+			return true
+		})
+		defer m.Stop()
+
+		m.Set("a", 1)
+		_, ok := m.GetAndDelete("a")
+		require.True(t, ok)
+		require.Zero(t, evicted.Load())
+	})
+
+	t.Run("one winner under concurrency", func(t *testing.T) {
+		m := New[string, int](time.Hour)
+		defer m.Stop()
+
+		m.Set("a", 1)
+
+		const racers = 64
+
+		var (
+			winners atomic.Int32
+			wg      sync.WaitGroup
+			start   = make(chan struct{})
+		)
+
+		for range racers {
+			wg.Add(1)
+
+			go func() {
+				defer wg.Done()
+				<-start
+
+				if _, ok := m.GetAndDelete("a"); ok {
+					winners.Add(1)
+				}
+			}()
+		}
+
+		close(start)
+		wg.Wait()
+
+		require.Equal(t, int32(1), winners.Load())
+	})
+}
+
+// Expiry reports when a key set now stops being returned, which is what a caller
+// waiting on the key's expiry needs, and reports nothing for a key that is absent
+// or has expired.
+func TestExpiringMap_Expiry(t *testing.T) {
+	m := New[string, int](time.Hour)
+	defer m.Stop()
+
+	before := time.Now()
+	m.Set("a", 1)
+	after := time.Now()
+
+	expiry, ok := m.Expiry("a")
+	require.True(t, ok)
+	require.False(t, expiry.Before(before.Add(time.Hour)))
+	require.False(t, expiry.After(after.Add(time.Hour)))
+
+	_, ok = m.Expiry("missing")
+	require.False(t, ok, "an absent key has no expiry")
+
+	// An entry past its expiry that the cleanup ticker has not removed yet. The ticker
+	// runs from the map's creation, not from Set, so this window is real: a caller
+	// waiting on the expiry would otherwise keep seeing the key until the next tick.
+	m.mu.Lock()
+	m.items["a"].expiry = time.Now().Add(-time.Second).UnixNano()
+	m.mu.Unlock()
+
+	_, ok = m.Expiry("a")
+	require.False(t, ok, "an expired key has no expiry, as Get does not return it")
+
+	m.mu.RLock()
+	_, stored := m.items["a"]
+	m.mu.RUnlock()
+	require.True(t, stored, "precondition: the expired entry is still stored, so the expiry check is what answered")
+}

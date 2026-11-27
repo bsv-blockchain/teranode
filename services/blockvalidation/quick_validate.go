@@ -251,10 +251,21 @@ func blockIDToUint32(id uint64, blockHash string) (uint32, error) {
 	return v, nil
 }
 
-// setQuickBlockID gives block the id quick validation stamps on its transactions,
-// once per block, from the first batch. The id always comes from block's own
-// reservation through AssignBlockID, which returns the same id for the same hash
-// while the reservation exists, so a retry stamps the id its first attempt used.
+// setQuickBlockID gives block the id quick validation stamps on its transactions.
+// The id always comes from block's own reservation through AssignBlockID, which
+// returns the same id for the same hash while the reservation exists, so a retry
+// stamps the id its first attempt used.
+//
+// A block can arrive holding an id: ProcessBlock copies a caller's block_id onto it.
+// That id must be the one AssignBlockID returns, and a mismatch is refused here,
+// before any transaction is stamped. StoreBlock refuses most wrong ids too, but only
+// after the transactions are locked and tagged with them. An id the sequence issued
+// whose reservation was swept is refused here as well: AssignBlockID reserves a new id
+// for the hash, and the caller recovers by sending 0 or that new id.
+// No internal route reaches quick validation holding an id: catch-up builds a fresh
+// block for each fetch, and ProcessBlock builds one per request. So the refusal can
+// only fire on a caller-supplied id, and adopting the reserved id instead would store
+// the block under an id the caller did not ask for.
 //
 // The id is never read back from the transactions. A transaction's recorded ids
 // can belong to other blocks that hold it too, such as a stored fork, and StoreBlock
@@ -265,18 +276,37 @@ func blockIDToUint32(id uint64, blockHash string) (uint32, error) {
 // in createAndSpendUTXOsForBatch), so the transactions carry the id the block is
 // stored under, plus the old id, which no block is stored under.
 func (u *BlockValidation) setQuickBlockID(ctx context.Context, block *model.Block, caller string) error {
-	if block.ID != 0 {
-		return nil
-	}
-
 	assigned, err := u.blockchainClient.AssignBlockID(ctx, block.Hash())
 	if err != nil {
 		return errors.NewProcessingError("[%s][%s] failed to assign block ID", caller, block.Hash().String(), err)
 	}
 
-	block.ID, err = blockIDToUint32(assigned, block.Hash().String())
+	id, err := blockIDToUint32(assigned, block.Hash().String())
+	if err != nil {
+		return err
+	}
 
-	return err
+	if block.ID != 0 && block.ID != id {
+		return errors.NewProcessingError("[%s][%s] refusing caller-supplied block id %d: the id reserved for this block is %d", caller, block.Hash().String(), block.ID, id)
+	}
+
+	block.ID = id
+
+	return nil
+}
+
+// checkCallerBlockID refuses a caller-supplied block id that is not the block's
+// reservation (see setQuickBlockID). It runs after the body is bound to the header,
+// so a corrupt body still takes no id, and before the subtree pipeline, so the id is
+// checked even when no batch carries a transaction for the pipeline to stamp. A
+// block that arrives with no id skips it: the pipeline assigns one on its first
+// batch, as before, at no extra round trip.
+func (u *BlockValidation) checkCallerBlockID(ctx context.Context, block *model.Block, caller string) error {
+	if block.ID == 0 {
+		return nil
+	}
+
+	return u.setQuickBlockID(ctx, block, caller)
 }
 
 // quickValidateBlock performs optimized validation for blocks below checkpoints.
@@ -314,8 +344,11 @@ func (u *BlockValidation) quickValidateBlock(ctx context.Context, block *model.B
 	// later full validation of this block (a retry without the header proof, the route turned
 	// off, the same block from a p2p peer) would sum zero fees against the coinbase and mark a
 	// valid block invalid. Removing them sends that validation back to the netsync-written
-	// .subtreeToCheck and .subtreeData files, which stay, and from which subtree validation
-	// derives the real fees. Skipped when the block is or may be stored (isBlockCommitted): its
+	// .subtreeToCheck and .subtreeData files, which stay. That alone does not restore the real
+	// fees: the transactions this attempt created keep fee 0 in the UTXO store, and subtree
+	// validation reuses a stored fee. What keeps such a block valid is the header proof
+	// (checkpointConfirmedAncestor), which the full route reads too; a crash before this cleanup
+	// runs leaves the same state. Skipped when the block is or may be stored (isBlockCommitted): its
 	// row then says its .subtree files are on disk. Only files this attempt wrote are removed;
 	// one that already existed was not written here, and legacy blocks are applied one at a
 	// time, so no other block is writing the same hash meanwhile.
@@ -386,8 +419,6 @@ func (u *BlockValidation) quickValidateBlock(ctx context.Context, block *model.B
 		prometheusBlockValidationOutpointOnlyBlocks.Inc()
 	}
 
-	var id uint64
-
 	if len(block.Subtrees) > 0 {
 		// Prove the peer-supplied body hashes to the checkpoint-certified header
 		// BEFORE the pipeline is entered, so no block-id assignment and no UTXO
@@ -397,6 +428,10 @@ func (u *BlockValidation) quickValidateBlock(ctx context.Context, block *model.B
 		// are the ones validateSubtrees has always produced, so the caller routes
 		// them exactly as before.
 		if err = u.bindSubtreeBodyToHeader(ctx, block); err != nil {
+			return err
+		}
+
+		if err = u.checkCallerBlockID(ctx, block, "quickValidateBlock"); err != nil {
 			return err
 		}
 
@@ -422,13 +457,8 @@ func (u *BlockValidation) quickValidateBlock(ctx context.Context, block *model.B
 
 	} else {
 
-		// No subtrees to process, assign block ID idempotently
-		id, err = u.blockchainClient.AssignBlockID(ctx, block.Hash())
-		if err != nil {
-			return errors.NewProcessingError("[quickValidateBlock][%s] failed to assign block ID", block.Hash().String(), err)
-		}
-		block.ID, err = blockIDToUint32(id, block.Hash().String())
-		if err != nil {
+		// No subtrees to process: assign the block ID idempotently, or check the caller's.
+		if err = u.setQuickBlockID(ctx, block, "quickValidateBlock"); err != nil {
 			return err
 		}
 
@@ -539,8 +569,6 @@ func (u *BlockValidation) quickValidateBlockAsync(ctx context.Context, block *mo
 		prometheusBlockValidationOutpointOnlyBlocks.Inc()
 	}
 
-	var id uint64
-
 	// Nil when the block carries no subtrees, so nothing was queued to the writer.
 	var barrier *subtreeWriteBarrier
 
@@ -551,6 +579,10 @@ func (u *BlockValidation) quickValidateBlockAsync(ctx context.Context, block *mo
 		// tryQuickValidation handles: it merges it with the fetch phase's own set,
 		// and the merge is nil-safe.
 		if err = u.bindSubtreeBodyToHeader(ctx, block); err != nil {
+			return emptyWG, nil, err
+		}
+
+		if err = u.checkCallerBlockID(ctx, block, "quickValidateBlockAsync"); err != nil {
 			return emptyWG, nil, err
 		}
 
@@ -578,14 +610,11 @@ func (u *BlockValidation) quickValidateBlockAsync(ctx context.Context, block *mo
 		u.clearNetFailures(block)
 	}
 
-	// If no block ID was assigned during processing, assign idempotently
-	if block.ID == 0 {
-		id, err = u.blockchainClient.AssignBlockID(ctx, block.Hash())
-		if err != nil {
-			return wg, freshlyWritten, errors.NewProcessingError("[quickValidateBlockAsync][%s] failed to assign block ID", block.Hash().String(), err)
-		}
-		block.ID, err = blockIDToUint32(id, block.Hash().String())
-		if err != nil {
+	// A block with no subtrees has had no ID assigned or checked yet, and one whose
+	// batches carried no transaction has had none assigned: assign idempotently, or
+	// check the caller's.
+	if len(block.Subtrees) == 0 || block.ID == 0 {
+		if err = u.setQuickBlockID(ctx, block, "quickValidateBlockAsync"); err != nil {
 			return wg, freshlyWritten, err
 		}
 	}
@@ -2848,6 +2877,7 @@ func (u *BlockValidation) applyList(ctx context.Context, block *model.Block, txs
 			utxo.WithIgnoreLocked(true),
 			utxo.WithSkipExtendedInputs(outpointOnly),
 			utxo.WithSkipUTXOHashCheck(outpointOnly),
+			utxo.WithCaller(utxo.CallerBlockValidation),
 		}
 	}
 
@@ -3068,7 +3098,8 @@ func (u *BlockValidation) applyOneByOne(ctx context.Context, block *model.Block,
 				utxo.WithLocked(lockUTXOs),
 				utxo.WithIgnoreLocked(true),
 				utxo.WithSkipExtendedInputs(outpointOnly),
-				utxo.WithSkipUTXOHashCheck(outpointOnly))
+				utxo.WithSkipUTXOHashCheck(outpointOnly),
+				utxo.WithCaller(utxo.CallerBlockValidation))
 
 			cancel()
 

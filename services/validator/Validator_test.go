@@ -29,10 +29,14 @@ import (
 	"net/url"
 	"os"
 	"reflect"
+	"slices"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/bsv-blockchain/go-batcher/v2"
 	bt "github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/bscript"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
@@ -46,6 +50,7 @@ import (
 	"github.com/bsv-blockchain/teranode/services/validator/validator_api"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/blob/memory"
+	blockchainsql "github.com/bsv-blockchain/teranode/stores/blockchain/sql"
 	"github.com/bsv-blockchain/teranode/stores/txmetacache"
 	utxostore "github.com/bsv-blockchain/teranode/stores/utxo"
 	teranode_aerospike "github.com/bsv-blockchain/teranode/stores/utxo/aerospike"
@@ -54,15 +59,20 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo/nullstore"
 	"github.com/bsv-blockchain/teranode/stores/utxo/sql"
 	"github.com/bsv-blockchain/teranode/stores/utxo/tests"
+	"github.com/bsv-blockchain/teranode/stores/utxo/utxoset"
+	tpostgres "github.com/bsv-blockchain/teranode/test/utils/postgres"
 	"github.com/bsv-blockchain/teranode/test/utils/transactions"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/kafka"
+	"github.com/bsv-blockchain/teranode/util/lane"
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/bsv-blockchain/teranode/util/tracing"
 	aeroTest "github.com/bsv-blockchain/testcontainers-aerospike-go"
 	"github.com/cespare/xxhash/v2"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/ordishs/gocore"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -267,6 +277,7 @@ func TestValidate_BlockAssemblyAndTxMetaChannels(t *testing.T) {
 	assert.Equal(t, tx.TxID(), blockAssembler.storedTxs[0].txHash.String())
 	assert.Equal(t, txMeta.Fee, blockAssembler.storedTxs[0].fee)
 	assert.Equal(t, txMeta.SizeInBytes, blockAssembler.storedTxs[0].size)
+	assert.Equal(t, uint32(257727), blockAssembler.storedTxs[0].validatedHeight, "block assembly is told the height the tx was validated at")
 }
 
 func TestValidate_RejectedTransactionChannel(t *testing.T) {
@@ -974,10 +985,12 @@ func TestIsFinalb633531280f980108329e3e0b9335b2290892d120916f9e17a9e3033bde1260b
 
 // txFeeSize represents transaction metadata for block assembly testing.
 type txFeeSize struct {
-	txHash     *chainhash.Hash
-	fee        uint64
-	size       uint64
-	txInpoints subtree.TxInpoints
+	txHash          *chainhash.Hash
+	fee             uint64
+	size            uint64
+	txInpoints      subtree.TxInpoints
+	validatedHeight uint32
+	lanePosition    uint64
 }
 
 // MockBlockAssemblyStore provides a test double for block assembly storage operations.
@@ -988,7 +1001,7 @@ type MockBlockAssemblyStore struct {
 	removedTxs   []chainhash.Hash
 }
 
-func (s *MockBlockAssemblyStore) Store(_ context.Context, hash *chainhash.Hash, fee, size uint64, txInpoints subtree.TxInpoints) (bool, error) {
+func (s *MockBlockAssemblyStore) Store(_ context.Context, hash *chainhash.Hash, fee, size uint64, txInpoints subtree.TxInpoints, validatedHeight uint32, lanePosition uint64) (bool, error) {
 	if s.panicOnStore {
 		// Simulates a nil/misconfigured block-assembly client panicking mid-delivery,
 		// e.g. inside the real gRPC client's Store() call.
@@ -1004,10 +1017,12 @@ func (s *MockBlockAssemblyStore) Store(_ context.Context, hash *chainhash.Hash, 
 	}
 
 	s.storedTxs = append(s.storedTxs, txFeeSize{
-		txHash:     hash,
-		fee:        fee,
-		size:       size,
-		txInpoints: txInpoints,
+		txHash:          hash,
+		fee:             fee,
+		size:            size,
+		txInpoints:      txInpoints,
+		validatedHeight: validatedHeight,
+		lanePosition:    lanePosition,
 	})
 
 	return true, nil
@@ -1071,7 +1086,7 @@ func TestExtendedTxa1f6a4ffcfd7bb4775790932aff1f82ac6a9b3b3e76c8faf8b11328e948af
 
 	ctx := context.Background()
 
-	container, err := aeroTest.RunContainer(ctx)
+	container, err := aeroTest.RunContainer(ctx, aeroTest.WithImage(test.AerospikeImage))
 	test.SkipIfContainerUnavailable(t, err)
 
 	t.Cleanup(func() {
@@ -1663,7 +1678,7 @@ func TestValidator_LockedFlagChangedIfBlockAssemblyStoreSucceeds(t *testing.T) {
 		stats:          gocore.NewStat("validator"),
 	}
 
-	blockAsmMock.On("Store", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+	blockAsmMock.On("Store", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		Return(true, nil).Times(1)
 
 	err = utxoStore.SetBlockHeight(2)
@@ -1723,7 +1738,7 @@ func TestValidator_ValidateWithOptions_ReturnsUnlockFailureError(t *testing.T) {
 		stats:          gocore.NewStat("validator"),
 	}
 
-	blockAsmMock.On("Store", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+	blockAsmMock.On("Store", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		Return(true, nil).Times(1)
 
 	require.NoError(t, utxoStore.SetBlockHeight(2))
@@ -2000,12 +2015,12 @@ func Test_serializeTxMetaBatchV2(t *testing.T) {
 		{item: &txmetaBatchItem{hash: &h2, isDelete: true}, h: 0x0102030405060708},
 	}
 
-	data := serializeTxMetaBatchV2(items)
+	data := serializeTxMetaBatchV2(items, txmetacache.BucketsCount)
 
 	assert.Equal(t, byte(0xFF), data[0], "magic byte")
 	assert.Equal(t, byte(0x02), data[1], "version byte")
-	assert.Equal(t, byte(0x00), data[2], "reserved")
-	assert.Equal(t, byte(0x00), data[3], "reserved")
+	assert.Equal(t, uint16(txmetacache.BucketsCount), binary.LittleEndian.Uint16(data[2:4]),
+		"producer BucketsCount in the header")
 	assert.Equal(t, uint32(2), binary.LittleEndian.Uint32(data[4:]), "entry count")
 
 	// Entry 1 (ADD).
@@ -2276,7 +2291,7 @@ func TestValidator_TwoPhaseCommitCompletesAfterTxMetaSerializationFailure(t *tes
 		txmetaKafkaProducerClient: kafkaMock,
 	}
 
-	blockAsmMock.On("Store", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+	blockAsmMock.On("Store", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		Return(true, nil).Times(1)
 
 	err = realStore.SetBlockHeight(2)
@@ -2306,31 +2321,23 @@ func TestValidator_TwoPhaseCommitCompletesAfterTxMetaSerializationFailure(t *tes
 // goroutines simultaneously read len(v.mtpStore)==0 and then both appended to it.
 // The test must be run with -race to catch the regression.
 func TestEnsureMTPLoaded_ConcurrentCallsNeitherHangsNorRaces(t *testing.T) {
-	const blockHeight = uint32(1_000_000) // well above RegressionNet CSVHeight=576
+	const blockHeight = uint32(2_000) // above RegressionNet CSVHeight=576
 
-	// Build a dense MTP slice that GetMedianTimePastRange would return.
-	// The range fetched is [0, blockHeight], so length = blockHeight+1.
-	mtpValues := make([]uint32, blockHeight+1)
-	for i := range mtpValues {
-		mtpValues[i] = uint32(1_700_000_000 + i) // plausible unix timestamps
-	}
-
-	// slowBlockchainClient introduces a brief pause so that both goroutines are
-	// likely inside EnsureMTPLoaded concurrently when the race would occur.
-	// Once() asserts that exactly one fetch is issued: the second concurrent
-	// caller must fast-path out under the mutex without re-fetching, which is
-	// the production failure mode this test guards against.
-	mockClient := &blockchain.Mock{}
-	mockClient.On("GetMedianTimePastRange", mock.Anything, uint32(0), blockHeight).
-		After(5*time.Millisecond).
-		Return(mtpValues, nil).Once()
+	// The second concurrent caller must fast-path out under the mutex without loading again,
+	// which is the production failure mode this test guards against.
+	client := &idChainClient{Mock: &blockchain.Mock{}, tip: blockHeight - 1}
 
 	tSettings := test.CreateBaseTestSettings(t)
+	// Keep the load height inside the BIP68 range: regtest's Genesis height (100) is
+	// below its CSV height (576), so EnsureMTPLoaded would otherwise load nothing.
+	params := *tSettings.ChainCfgParams
+	params.GenesisActivationHeight = ^uint32(0)
+	tSettings.ChainCfgParams = &params
 
 	v := &Validator{
 		logger:           ulogger.TestLogger{},
 		settings:         tSettings,
-		blockchainClient: mockClient,
+		blockchainClient: client,
 		stats:            gocore.NewStat("validator_test"),
 	}
 
@@ -2356,13 +2363,16 @@ func TestEnsureMTPLoaded_ConcurrentCallsNeitherHangsNorRaces(t *testing.T) {
 	require.Equal(t, int(blockHeight+1), len(v.mtpStore),
 		"mtpStore must have exactly blockHeight+1 entries after concurrent load")
 
-	// Spot-check a few values to confirm correct data (not a corrupted merge).
-	require.Equal(t, uint32(1_700_000_000), v.mtpStore[0])
+	// Spot-check a few values to confirm correct data (not a corrupted merge). Each entry is the
+	// median of the timestamps below it; near genesis there are fewer than 11 of them.
+	require.Zero(t, v.mtpStore[0])
+	require.Equal(t, uint32(1_700_000_006+2), v.mtpStore[4], "an even count takes the upper middle, as SV Node does")
+	require.Equal(t, uint32(1_700_000_006+2), v.mtpStore[5])
+	require.Equal(t, uint32(1_700_000_000+100), v.mtpStore[100])
 	require.Equal(t, uint32(1_700_000_000+blockHeight), v.mtpStore[blockHeight])
+	require.Equal(t, blockHeight, v.mtpIDs[blockHeight])
 
-	// Asserts exactly-one fetch (Once() above). Without the mutex both callers
-	// would each issue a 1.45 M-entry fetch — the production CPU peg.
-	mockClient.AssertExpectations(t)
+	require.Equal(t, int32(1), client.loads.Load(), "the second caller must not load again")
 }
 
 // TestEnsureMTPLoaded_CrossBlockReadersAndWritersDoNotRace verifies that
@@ -2378,38 +2388,23 @@ func TestEnsureMTPLoaded_ConcurrentCallsNeitherHangsNorRaces(t *testing.T) {
 // EnsureMTPLoaded runs.
 func TestEnsureMTPLoaded_CrossBlockReadersAndWritersDoNotRace(t *testing.T) {
 	const (
-		initialHeight  = uint32(1_000_000)
-		extendedHeight = uint32(1_000_500)
+		initialHeight  = uint32(2_000)
+		extendedHeight = uint32(2_500)
 	)
 
-	initialMTPs := make([]uint32, initialHeight+1)
-	for i := range initialMTPs {
-		initialMTPs[i] = uint32(1_700_000_000 + i)
-	}
-
-	// Second call refetches an mtpReorgOverlap-deep tail and the new heights:
-	//   fromHeight = (initialHeight+1) - mtpReorgOverlap
-	//   range     = [fromHeight, extendedHeight], so length = extendedHeight - fromHeight + 1.
-	extendFrom := (initialHeight + 1) - mtpReorgOverlap
-	extendedLen := extendedHeight - extendFrom + 1
-	extendedMTPs := make([]uint32, extendedLen)
-	for i := range extendedMTPs {
-		extendedMTPs[i] = uint32(1_700_000_000) + extendFrom + uint32(i)
-	}
-
-	mockClient := &blockchain.Mock{}
-	mockClient.On("GetMedianTimePastRange", mock.Anything, uint32(0), initialHeight).
-		Return(initialMTPs, nil).Once()
-	mockClient.On("GetMedianTimePastRange", mock.Anything, extendFrom, extendedHeight).
-		After(2*time.Millisecond).
-		Return(extendedMTPs, nil).Once()
+	client := &idChainClient{Mock: &blockchain.Mock{}, tip: extendedHeight - 1}
 
 	tSettings := test.CreateBaseTestSettings(t)
+	// Keep the load height inside the BIP68 range: regtest's Genesis height (100) is
+	// below its CSV height (576), so EnsureMTPLoaded would otherwise load nothing.
+	params := *tSettings.ChainCfgParams
+	params.GenesisActivationHeight = ^uint32(0)
+	tSettings.ChainCfgParams = &params
 
 	v := &Validator{
 		logger:           ulogger.TestLogger{},
 		settings:         tSettings,
-		blockchainClient: mockClient,
+		blockchainClient: client,
 		stats:            gocore.NewStat("validator_test"),
 	}
 
@@ -2435,16 +2430,10 @@ func TestEnsureMTPLoaded_CrossBlockReadersAndWritersDoNotRace(t *testing.T) {
 					return
 				default:
 				}
-				// Mimic validateTransaction's read pattern: take RLock,
-				// snapshot len, index a few entries.
-				v.mtpMu.RLock()
-				storeLen := uint32(len(v.mtpStore))
-				if storeLen > 0 {
-					_ = v.mtpStore[0]
-					_ = v.mtpStore[storeLen-1]
-					_ = v.mtpStore[storeLen/2]
-				}
-				v.mtpMu.RUnlock()
+				// Read through validateTransaction's own reader, so the test
+				// fails under -race if readMTPsLocked stops taking the lock.
+				// The extension reassigns v.mtpStore while the readers run.
+				_, _, _ = v.readMTPsLocked(initialHeight, 1, 0, nil, nil, []uint32{0, initialHeight / 2, initialHeight - 1})
 			}
 		}()
 	}
@@ -2467,13 +2456,12 @@ func TestEnsureMTPLoaded_CrossBlockReadersAndWritersDoNotRace(t *testing.T) {
 	require.NoError(t, extendErr)
 	require.GreaterOrEqual(t, len(v.mtpStore), int(extendedHeight+1))
 
-	// Asserts the initial-load + extension pair both fired exactly once
-	// (each .Once() above) — defends against accidental over-fetch.
-	mockClient.AssertExpectations(t)
+	// The initial load and the extension each loaded exactly once.
+	require.Equal(t, int32(2), client.loads.Load())
 }
 
-// TestReadMTPsLocked_HappyPath verifies the reader helper returns the per-input
-// MTP values and the block MTP correctly when mtpStore is fully populated.
+// TestReadMTPsLocked_HappyPath verifies the reader returns each input's MTP from the
+// store when mtpStore is fully populated and no base is named.
 func TestReadMTPsLocked_HappyPath(t *testing.T) {
 	v := &Validator{
 		logger: ulogger.TestLogger{},
@@ -2486,16 +2474,14 @@ func TestReadMTPsLocked_HappyPath(t *testing.T) {
 		},
 	}
 
-	utxoMTPs, blockMTP, err := v.readMTPsLocked(4, []uint32{0, 2, 3})
+	utxoMTPs, _, err := v.readMTPsLocked(4, 1_800_000_000, 0, nil, nil, []uint32{0, 2, 3})
 	require.NoError(t, err)
 	require.Equal(t, []uint32{1_700_000_000, 1_700_000_020, 1_700_000_030}, utxoMTPs)
-	require.Equal(t, uint32(1_700_000_040), blockMTP)
 }
 
-// TestReadMTPsLocked_ClampsOutOfRangeUTXOs verifies that utxoHeights at or above
-// the store length fall back to the blockMTP value (matches the production
-// behaviour for unconfirmed parents whose effective height is blockState.Height+1
-// and may exceed blockMTPHeight).
+// TestReadMTPsLocked_ClampsOutOfRangeUTXOs verifies that coins at or above the block height (a
+// same-block parent, or the unconfirmed sentinel) take the caller's blockMTP, the candidate's
+// parent MTP; mtpStore[blockHeight] is never read.
 func TestReadMTPsLocked_ClampsOutOfRangeUTXOs(t *testing.T) {
 	v := &Validator{
 		logger: ulogger.TestLogger{},
@@ -2506,34 +2492,21 @@ func TestReadMTPsLocked_ClampsOutOfRangeUTXOs(t *testing.T) {
 		},
 	}
 
-	utxoMTPs, blockMTP, err := v.readMTPsLocked(2, []uint32{0, 99, 1})
+	utxoMTPs, _, err := v.readMTPsLocked(2, 1_800_000_000, 0, nil, nil, []uint32{0, 99, 1, 2})
 	require.NoError(t, err)
-	require.Equal(t, []uint32{1_700_000_000, 1_700_000_020, 1_700_000_010}, utxoMTPs)
-	require.Equal(t, uint32(1_700_000_020), blockMTP)
+	require.Equal(t, []uint32{1_700_000_000, 1_800_000_000, 1_700_000_010, 1_800_000_000}, utxoMTPs)
 }
 
-// TestValidateTransaction_BIP68PathReadsMTPStore drives validateTransaction
-// through the SkipPolicyChecks BIP68 branch with a populated mtpStore. The
-// goal is coverage on the MTP-reading code path (`readMTPsLocked` call,
-// error wiring, ValidateBIP68 invocation) — the actual BIP68 lock-time
-// arithmetic is exercised by the dedicated TxValidator_bip68 tests.
-func TestValidateTransaction_BIP68PathReadsMTPStore(t *testing.T) {
+// bip68ForkValidator builds a validator whose mtpStore holds the main chain's medians,
+// MTP(h) = 1_700_000_000 + h for every h up to blockHeight, with mainnet parameters so
+// blockHeight is inside the BIP68 range.
+func bip68ForkValidator(t *testing.T, blockHeight uint32) *Validator {
+	t.Helper()
 	initPrometheusMetrics()
-
-	// Mainnet sets CSVHeight = 419328; choose a height comfortably above so
-	// the BIP68 gate at the top of validateTransaction lets us through.
-	const blockHeight = uint32(500_000)
-
-	tx, err := bt.NewTxFromString("010000000000000000ef01f80f63b70d76242a60f6a222e536f1383b6ac11ff69bb0b026871dfe8255ae5e010000006a47304402204dcc5d16184a0f5b73a56a9984de0156e60f486af4b9feb304c1e7a0bebeba50022029d2c4f7614438a3bb33b90ea6251aa760a2e6645068338faab2e65f7a54ca700121033ce8391ba0f2ffa4b39947920a28958b14569c382dab826e3e86253d6f2d6be6ffffffff906ca312000000001976a9143a570d7cd342bb8cf54193d2919d12f1b85f03cc88ac022000fc09000000001976a914dc1b13bfce97785162b14dc583947bc2e379eaa288ac501ea708000000001976a9144e70c86128dc5d236d7d79bd9e011e25ce9295aa88ac00000000")
-	require.NoError(t, err)
-	require.True(t, tx.IsExtended())
 
 	tSettings := test.CreateBaseTestSettings(t)
 	tSettings.ChainCfgParams, _ = chaincfg.GetChainParams("mainnet")
 
-	// blockchainClient just needs to be non-nil for the gate at the top of
-	// validateTransaction; mtpStore is pre-populated so readMTPsLocked finds
-	// the values it needs without a fetch.
 	mtpStore := make([]uint32, blockHeight+1)
 	for i := range mtpStore {
 		mtpStore[i] = uint32(1_700_000_000 + i)
@@ -2549,61 +2522,1570 @@ func TestValidateTransaction_BIP68PathReadsMTPStore(t *testing.T) {
 	}
 	v.txValidator.(*TxValidator).bdk = noopBDKValidator{}
 
+	return v
+}
+
+// bip68Tx returns an extended version 1 tx with one input and no relative lock.
+func bip68Tx(t *testing.T) *bt.Tx {
+	t.Helper()
+
+	tx, err := bt.NewTxFromString("010000000000000000ef01f80f63b70d76242a60f6a222e536f1383b6ac11ff69bb0b026871dfe8255ae5e010000006a47304402204dcc5d16184a0f5b73a56a9984de0156e60f486af4b9feb304c1e7a0bebeba50022029d2c4f7614438a3bb33b90ea6251aa760a2e6645068338faab2e65f7a54ca700121033ce8391ba0f2ffa4b39947920a28958b14569c382dab826e3e86253d6f2d6be6ffffffff906ca312000000001976a9143a570d7cd342bb8cf54193d2919d12f1b85f03cc88ac022000fc09000000001976a914dc1b13bfce97785162b14dc583947bc2e379eaa288ac501ea708000000001976a9144e70c86128dc5d236d7d79bd9e011e25ce9295aa88ac00000000")
+	require.NoError(t, err)
+	require.True(t, tx.IsExtended())
+
+	return tx
+}
+
+// bip68TimeLockedTx returns a version 2 tx whose only input carries a time-based relative
+// lock of one 512-second unit.
+func bip68TimeLockedTx(t *testing.T) *bt.Tx {
+	t.Helper()
+
+	tx := bip68Tx(t)
+	tx.Version = 2
+	tx.Inputs[0].SequenceNumber = SequenceLockTimeTypeFlag | 1
+
+	return tx
+}
+
+// TestValidateTransaction_BIP68BlockTimeFollowsCandidateBranch checks that a one-unit time lock
+// on a coin at H-1 is judged against Options.CandidateParentMedianTime, not mtpStore[H]: each
+// case puts the two on opposite sides of the lock.
+func TestValidateTransaction_BIP68BlockTimeFollowsCandidateBranch(t *testing.T) {
+	const blockHeight = uint32(500_000)
+
+	coinTime := uint32(1_700_000_000) + blockHeight - 1
+
+	ctx, _, endSpan := tracing.Tracer("validator").Start(context.Background(), "Test")
+	defer endSpan()
+
+	t.Run("candidate branch meets the lock the main chain does not", func(t *testing.T) {
+		v := bip68ForkValidator(t, blockHeight)
+		// main chain: MTP(H) = coin time + 1, short of the 512 seconds the lock needs
+
+		err := v.validateTransaction(ctx, bip68TimeLockedTx(t), blockHeight, []uint32{blockHeight - 1},
+			&Options{SkipPolicyChecks: true, CandidateParentMedianTime: coinTime + 10_000})
+		require.NoError(t, err)
+	})
+
+	t.Run("candidate branch misses the lock the main chain meets", func(t *testing.T) {
+		v := bip68ForkValidator(t, blockHeight)
+		v.mtpStore[blockHeight] = coinTime + 10_000
+
+		err := v.validateTransaction(ctx, bip68TimeLockedTx(t), blockHeight, []uint32{blockHeight - 1},
+			&Options{SkipPolicyChecks: true, CandidateParentMedianTime: coinTime + 1})
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "transaction sequence lock time not satisfied")
+	})
+
+	t.Run("same-block parent takes the candidate parent median as its coin time", func(t *testing.T) {
+		v := bip68ForkValidator(t, blockHeight)
+		// A coin at the candidate's own height has the candidate's parent as its ancestor, so
+		// its coin time equals the block time and a one-unit lock cannot be met in this block.
+		// A coin time of zero would meet it.
+
+		err := v.validateTransaction(ctx, bip68TimeLockedTx(t), blockHeight, []uint32{blockHeight},
+			&Options{SkipPolicyChecks: true, CandidateParentMedianTime: coinTime + 10_000})
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "transaction sequence lock time not satisfied")
+	})
+}
+
+// TestValidateTransaction_BIP68ForkCoinReadsItsOwnBranch checks that a coin at H-5 on the
+// candidate's branch (overlay H-8 to H-1) takes its coin time from Options.CandidateForkMTPs:
+// the branch and main-chain medians fall on opposite sides of a one-unit lock.
+func TestValidateTransaction_BIP68ForkCoinReadsItsOwnBranch(t *testing.T) {
+	const (
+		blockHeight = uint32(500_000)
+		forkStart   = blockHeight - 8
+		coinHeight  = blockHeight - 5
+	)
+
+	ctx, _, endSpan := tracing.Tracer("validator").Start(context.Background(), "Test")
+	defer endSpan()
+
+	forkMTPs := func(coinTime uint32) []uint32 {
+		mtps := make([]uint32, blockHeight-forkStart)
+		for i := range mtps {
+			mtps[i] = uint32(1_700_000_000) + forkStart + uint32(i) + 7_200
+		}
+
+		mtps[coinHeight-forkStart] = coinTime
+
+		return mtps
+	}
+
+	t.Run("lock not met on the candidate branch", func(t *testing.T) {
+		v := bip68ForkValidator(t, blockHeight)
+		branchCoinTime := v.mtpStore[coinHeight] + 7_200
+
+		err := v.validateTransaction(ctx, bip68TimeLockedTx(t), blockHeight, []uint32{coinHeight}, &Options{
+			SkipPolicyChecks:          true,
+			CandidateParentMedianTime: branchCoinTime + 100,
+			CandidateForkStartHeight:  forkStart,
+			CandidateForkMTPs:         forkMTPs(branchCoinTime),
+		})
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "transaction sequence lock time not satisfied")
+	})
+
+	t.Run("lock met on the candidate branch", func(t *testing.T) {
+		v := bip68ForkValidator(t, blockHeight)
+		// the branch coin time is earlier than the main chain's, and the block time is 100
+		// seconds after the main-chain coin time
+		branchCoinTime := v.mtpStore[coinHeight] - 1_000
+
+		err := v.validateTransaction(ctx, bip68TimeLockedTx(t), blockHeight, []uint32{coinHeight}, &Options{
+			SkipPolicyChecks:          true,
+			CandidateParentMedianTime: v.mtpStore[coinHeight] + 100,
+			CandidateForkStartHeight:  forkStart,
+			CandidateForkMTPs:         forkMTPs(branchCoinTime),
+		})
+		require.NoError(t, err)
+	})
+}
+
+// TestReadMTPsLocked_ForkMTPs checks which source each coin height reads with a branch overlay
+// (store below the fork, overlay up to the parent, block time at the candidate's height), and
+// that an overlay not ending at the candidate's parent is refused.
+func TestReadMTPsLocked_ForkMTPs(t *testing.T) {
+	v := &Validator{mtpStore: []uint32{100, 101, 102, 103, 104, 105}}
+
+	tests := []struct {
+		name      string
+		forkStart uint32
+		want      []uint32
+		wantErr   bool
+	}{
+		{name: "overlay ends at the parent", forkStart: 3, want: []uint32{102, 203, 204, 999}},
+		{name: "overlay ends below the parent", forkStart: 2, wantErr: true},
+		{name: "overlay runs past the parent", forkStart: 4, wantErr: true},
+	}
+
+	t.Run("store does not hold the base", func(t *testing.T) {
+		v := &Validator{mtpStore: []uint32{100, 101, 102, 103, 104, 105}, mtpIDs: []uint32{0, 1, 2, 3, 4, 5}}
+
+		_, held, err := v.readMTPsLocked(5, 999, 3, []uint32{203, 204}, &mtpBase{entry: 3, id: 9}, []uint32{2})
+		require.NoError(t, err)
+		require.False(t, held)
+
+		utxoMTPs, held, err := v.readMTPsLocked(5, 999, 3, []uint32{203, 204}, &mtpBase{entry: 3, id: 3}, []uint32{2})
+		require.NoError(t, err)
+		require.True(t, held)
+		require.Equal(t, []uint32{102}, utxoMTPs)
+
+		short := &Validator{mtpStore: v.mtpStore, mtpIDs: []uint32{0, 1, 2}}
+		_, held, err = short.readMTPsLocked(5, 999, 3, []uint32{203, 204}, &mtpBase{entry: 3, id: 3}, []uint32{2})
+		require.NoError(t, err)
+		require.False(t, held, "a base past the recorded IDs is not held")
+	})
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			utxoMTPs, _, err := v.readMTPsLocked(5, 999, tc.forkStart, []uint32{203, 204}, nil, []uint32{2, 3, 4, 5})
+			if tc.wantErr {
+				require.ErrorContains(t, err, "must end at the candidate's parent")
+				return
+			}
+
+			require.NoError(t, err)
+			require.Equal(t, tc.want, utxoMTPs)
+		})
+	}
+}
+
+// TestValidateTransaction_BIP68PathReadsMTPStore drives validateTransaction
+// through the SkipPolicyChecks BIP68 branch with a populated mtpStore. The
+// goal is coverage on the MTP-reading code path (`readMTPsLocked` call,
+// error wiring, ValidateBIP68 invocation) — the actual BIP68 lock-time
+// arithmetic is exercised by the dedicated TxValidator_bip68 tests.
+func TestValidateTransaction_BIP68PathReadsMTPStore(t *testing.T) {
+	// Mainnet sets CSVHeight = 419328 and Genesis = 620538; 500,000 is inside that range.
+	const blockHeight = uint32(500_000)
+
+	v := bip68ForkValidator(t, blockHeight)
+
 	ctx, _, endSpan := tracing.Tracer("validator").Start(context.Background(), "Test")
 	defer endSpan()
 
 	// utxoHeight at blockHeight-1 is well within the populated range so the
 	// per-input MTP lookup uses mtpStore[h] (the in-range branch).
-	err = v.validateTransaction(ctx, tx, blockHeight, []uint32{blockHeight - 1}, &Options{SkipPolicyChecks: true})
+	err := v.validateTransaction(ctx, bip68Tx(t), blockHeight, []uint32{blockHeight - 1}, &Options{SkipPolicyChecks: true, CandidateParentMedianTime: 1_700_000_000 + blockHeight})
 	require.NoError(t, err)
 }
 
-// TestValidateTransaction_BIP68GuardFiresOnUnpopulatedStore drives
-// validateTransaction with SkipPolicyChecks=true and an empty mtpStore. The
-// readMTPsLocked guard must fire and surface a processing error to the
-// caller via span.RecordError + return.
-func TestValidateTransaction_BIP68GuardFiresOnUnpopulatedStore(t *testing.T) {
-	initPrometheusMetrics()
-
+// TestValidateTransaction_BIP68FailsWithoutItsMTPs checks that a block in the BIP68 range fails,
+// rather than judging locks against zero, without a loaded mtpStore or a candidate-parent MTP.
+func TestValidateTransaction_BIP68FailsWithoutItsMTPs(t *testing.T) {
 	const blockHeight = uint32(500_000)
 
-	tx, err := bt.NewTxFromString("010000000000000000ef01f80f63b70d76242a60f6a222e536f1383b6ac11ff69bb0b026871dfe8255ae5e010000006a47304402204dcc5d16184a0f5b73a56a9984de0156e60f486af4b9feb304c1e7a0bebeba50022029d2c4f7614438a3bb33b90ea6251aa760a2e6645068338faab2e65f7a54ca700121033ce8391ba0f2ffa4b39947920a28958b14569c382dab826e3e86253d6f2d6be6ffffffff906ca312000000001976a9143a570d7cd342bb8cf54193d2919d12f1b85f03cc88ac022000fc09000000001976a914dc1b13bfce97785162b14dc583947bc2e379eaa288ac501ea708000000001976a9144e70c86128dc5d236d7d79bd9e011e25ce9295aa88ac00000000")
+	tests := []struct {
+		name                      string
+		emptyStore                bool
+		candidateParentMedianTime uint32
+		wantErr                   string
+	}{
+		{name: "store not loaded", emptyStore: true, candidateParentMedianTime: 1_700_000_000, wantErr: "MTP store not loaded up to height"},
+		{name: "no candidate-parent MTP", candidateParentMedianTime: 0, wantErr: "BIP68 requires Options.CandidateParentMedianTime"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			v := bip68ForkValidator(t, blockHeight)
+			if tc.emptyStore {
+				v.mtpStore = nil
+			}
+
+			ctx, _, endSpan := tracing.Tracer("validator").Start(context.Background(), "Test")
+			defer endSpan()
+
+			err := v.validateTransaction(ctx, bip68TimeLockedTx(t), blockHeight, []uint32{blockHeight - 1},
+				&Options{SkipPolicyChecks: true, CandidateParentMedianTime: tc.candidateParentMedianTime})
+			require.Error(t, err)
+			require.Contains(t, err.Error(), tc.wantErr)
+		})
+	}
+}
+
+// TestValidateTransaction_OutsideBIP68RangeSkipsMTPReads checks that a block below CSVHeight,
+// or at or above GenesisActivationHeight, reads no MTPs: BIP68 is a no-op there, so an empty
+// mtpStore and a missing candidate-parent MTP must not fail the transaction.
+func TestValidateTransaction_OutsideBIP68RangeSkipsMTPReads(t *testing.T) {
+	v := bip68ForkValidator(t, 0)
+	v.mtpStore = nil
+
+	params := v.settings.ChainCfgParams
+
+	for _, blockHeight := range []uint32{params.CSVHeight - 1, params.GenesisActivationHeight} {
+		ctx, _, endSpan := tracing.Tracer("validator").Start(context.Background(), "Test")
+
+		err := v.validateTransaction(ctx, bip68TimeLockedTx(t), blockHeight, []uint32{blockHeight - 1}, &Options{SkipPolicyChecks: true})
+		endSpan()
+		require.NoError(t, err, "height %d", blockHeight)
+	}
+}
+
+// TestEnsureMTPLoaded_OutsideBIP68RangeFetchesNothing checks that the MTP pre-warm is a no-op
+// below CSVHeight and at or above GenesisActivationHeight. The blockchain mock has no
+// expectations, so any fetch would panic.
+func TestEnsureMTPLoaded_OutsideBIP68RangeFetchesNothing(t *testing.T) {
+	v := bip68ForkValidator(t, 0)
+	v.mtpStore = nil
+
+	genesis := v.settings.ChainCfgParams.GenesisActivationHeight
+
+	require.NoError(t, v.EnsureMTPLoaded(context.Background(), v.settings.ChainCfgParams.CSVHeight-1))
+	require.NoError(t, v.EnsureMTPLoaded(context.Background(), genesis))
+	require.NoError(t, v.EnsureMTPLoaded(context.Background(), genesis+100_000))
+	require.Empty(t, v.mtpStore)
+}
+
+// TestReadMTPsLocked_GuardFiresOnUnpopulatedStore verifies the reader returns a processing
+// error when the store is not loaded up to blockHeight and no base is named.
+func TestReadMTPsLocked_GuardFiresOnUnpopulatedStore(t *testing.T) {
+	// Length 5 is the boundary: the store must hold entry 5 itself.
+	for _, length := range []int{2, 5} {
+		v := &Validator{logger: ulogger.TestLogger{}, mtpStore: make([]uint32, length)}
+
+		utxoMTPs, _, err := v.readMTPsLocked(5, 1_800_000_000, 0, nil, nil, []uint32{0})
+		require.ErrorContains(t, err, "MTP store not loaded up to height 5", "length %d", length)
+		require.Nil(t, utxoMTPs)
+	}
+}
+
+// laneShadowValidator is parentOutputsValidator at utxostore_laneMigration shadow.
+func laneShadowValidator(t *testing.T, store utxostore.Store) *Validator {
+	t.Helper()
+
+	v := parentOutputsValidator(t, store)
+	v.settings.UtxoStore.LaneMigration = settings.LaneMigrationShadow
+
+	return v
+}
+
+// The parents' lane positions come out in the order subtree.TxInpoints lists the parents, which is
+// the order the lane txmeta encoding and the store's parent_lane_positions use.
+func TestParentLanePositionsFollowTxInpointsOrder(t *testing.T) {
+	parents := []chainhash.Hash{{3}, {1}, {3}, {2}, {1}}
+	tx := parentOutputsChild(t, parents, []uint32{0, 0, 1, 0, 1})
+
+	inputLanes := []uint64{lane.Pack(3, 1), lane.Pack(1, 1), lane.Pack(3, 1), lane.Pack(2, 1), lane.Pack(1, 1)}
+
+	inpoints, err := subtree.NewTxInpointsFromTx(tx)
+	require.NoError(t, err)
+	require.Equal(t, []chainhash.Hash{{3}, {1}, {2}}, inpoints.ParentTxHashes)
+
+	require.Equal(t, []uint64{lane.Pack(3, 1), lane.Pack(1, 1), lane.Pack(2, 1)}, parentLanePositions(tx, inputLanes))
+	require.Nil(t, parentLanePositions(tx, nil), "lane positions off")
+
+	// A wide transaction takes the set, and must give the same order.
+	wide := make([]chainhash.Hash, 0, 3*parentLaneLinearMax)
+	vouts := make([]uint32, 0, cap(wide))
+	wideLanes := make([]uint64, 0, cap(wide))
+
+	for i := 0; i < cap(wide); i++ {
+		p := chainhash.Hash{byte(i % (parentLaneLinearMax + 3))}
+		wide = append(wide, p)
+		vouts = append(vouts, uint32(i)) //nolint:gosec // i is small
+		wideLanes = append(wideLanes, lane.Pack(1, uint64(p[0])+1))
+	}
+
+	wideTx := parentOutputsChild(t, wide, vouts)
+	wideInpoints, err := subtree.NewTxInpointsFromTx(wideTx)
+	require.NoError(t, err)
+
+	want := make([]uint64, len(wideInpoints.ParentTxHashes))
+	for i, p := range wideInpoints.ParentTxHashes {
+		want[i] = lane.Pack(1, uint64(p[0])+1)
+	}
+
+	require.Equal(t, want, parentLanePositions(wideTx, wideLanes))
+}
+
+// At shadow the parents' lane positions come from the one parent read the validator already makes,
+// whether the store answers it or the caller prefetched the parent.
+func TestParentLanePositionsComeFromTheParentRead(t *testing.T) {
+	ctx := context.Background()
+	base := parentOutputsStore(t)
+
+	s0 := bscript.NewFromBytes([]byte{0x76, 0xa9, 0x00})
+	first := storedParent(t, base, 1, 120, s0, s0)
+	second := storedParent(t, base, 2, 0, s0)
+
+	positions := map[chainhash.Hash]uint64{
+		*first.TxIDChainHash():  lane.Pack(7, 100),
+		*second.TxIDChainHash(): lane.Pack(8, 200),
+	}
+
+	store := &countingParentStore{Store: base}
+	store.override = func(answers []utxostore.ParentOutput) ([]utxostore.ParentOutput, error) {
+		for i := range answers {
+			answers[i].LanePosition = positions[store.outpoints[len(store.outpoints)-len(answers)+i].TxID]
+		}
+
+		return answers, nil
+	}
+
+	tx := parentOutputsChild(t, []chainhash.Hash{*second.TxIDChainHash(), *first.TxIDChainHash(), *first.TxIDChainHash()}, []uint32{0, 0, 1})
+
+	_, parentLanes, _, err := laneShadowValidator(t, store).getTransactionInputBlockHeightsAndExtendTx(ctx, tx, tx.TxID(), &Options{})
+	require.NoError(t, err)
+	require.Equal(t, []uint64{lane.Pack(8, 200), lane.Pack(7, 100)}, parentLanes)
+	require.Equal(t, 1, store.calls, "no read is added for the positions")
+
+	t.Run("prefetched", func(t *testing.T) {
+		prefetched := map[chainhash.Hash]*meta.Data{
+			*first.TxIDChainHash(): {Tx: first, BlockHeights: []uint32{120}, LanePosition: lane.Pack(9, 1)},
+		}
+
+		calls := store.calls
+
+		_, parentLanes, _, err := laneShadowValidator(t, store).getTransactionInputBlockHeightsAndExtendTx(ctx, tx, tx.TxID(),
+			&Options{PrefetchedParents: prefetched})
+		require.NoError(t, err)
+		require.Equal(t, []uint64{lane.Pack(8, 200), lane.Pack(9, 1)}, parentLanes)
+		require.Equal(t, calls+1, store.calls, "only the parent not prefetched is read")
+	})
+
+	t.Run("off", func(t *testing.T) {
+		_, parentLanes, _, err := parentOutputsValidator(t, store).getTransactionInputBlockHeightsAndExtendTx(ctx, tx, tx.TxID(), &Options{})
+		require.NoError(t, err)
+		require.Nil(t, parentLanes)
+	})
+}
+
+// At shadow the txmeta entry carries the lane positions when every one is valid, and is the legacy
+// entry otherwise, counted with its reason; off, it is always the legacy entry.
+func TestTxMetaPayloadCarriesLanePositionsAtShadow(t *testing.T) {
+	parents := []chainhash.Hash{{1}, {2}}
+	tx := parentOutputsChild(t, parents, []uint32{0, 0})
+
+	inpoints, err := subtree.NewTxInpointsFromTx(tx)
+	require.NoError(t, err)
+
+	data := func(own uint64) *meta.Data {
+		return &meta.Data{TxInpoints: inpoints, Fee: 500, SizeInBytes: 250, LanePosition: own}
+	}
+
+	legacy, err := data(lane.Pack(1, 1)).MetaBytes()
+	require.NoError(t, err)
+
+	shadow := laneShadowValidator(t, nil)
+	good := []uint64{lane.Pack(2, 1), lane.Pack(3, 1)}
+
+	t.Run("off", func(t *testing.T) {
+		b, action, err := parentOutputsValidator(t, nil).txMetaPayload(data(lane.Pack(1, 1)), good)
+		require.NoError(t, err)
+		require.Equal(t, txmetacache.WireActionADD, action)
+		require.Equal(t, legacy, b)
+	})
+
+	t.Run("every position valid", func(t *testing.T) {
+		b, action, err := shadow.txMetaPayload(data(lane.Pack(1, 1)), good)
+		require.NoError(t, err)
+		require.Equal(t, txmetacache.WireActionADDLane, action)
+
+		var back meta.Data
+		gotParents, err := meta.NewDataFromLaneMetaBytes(b, &back)
+		require.NoError(t, err)
+		require.Equal(t, lane.Pack(1, 1), back.LanePosition)
+		require.Equal(t, good, gotParents)
+	})
+
+	for _, c := range []struct {
+		name    string
+		own     uint64
+		parents []uint64
+		reason  string
+	}{
+		{"no own position", lane.None, good, txmetacache.LaneMissOwn},
+		{"one more position than parents", lane.Pack(1, 1), []uint64{lane.Pack(2, 1), lane.Pack(3, 1), lane.Pack(4, 1)}, txmetacache.LaneMissParentsNotRead},
+		{"parents not read", lane.Pack(1, 1), nil, txmetacache.LaneMissParentsNotRead},
+		{"a parent without a position", lane.Pack(1, 1), []uint64{lane.Pack(2, 1), lane.None}, txmetacache.LaneMissParent},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			require.Equal(t, c.reason, laneTxMetaMiss(data(c.own), c.parents))
+
+			b, action, err := shadow.txMetaPayload(data(c.own), c.parents)
+			require.NoError(t, err, "a miss is counted, never an error")
+
+			if c.own == lane.None {
+				require.Equal(t, txmetacache.WireActionADD, action, "with no own position the entry is MetaBytes")
+
+				want, err := data(c.own).MetaBytes()
+				require.NoError(t, err)
+				require.Equal(t, want, b)
+
+				return
+			}
+
+			// The own position still goes, after MetaBytes: the cache form subtree validation
+			// keeps for the subtree's lane bitmaps.
+			require.Equal(t, txmetacache.WireActionADDOwn, action)
+
+			want, err := data(c.own).CacheBytes()
+			require.NoError(t, err)
+			require.Equal(t, want, b)
+
+			legacyPart, own, err := meta.OwnCacheBytesView(b)
+			require.NoError(t, err)
+			require.Equal(t, c.own, own)
+			require.Equal(t, legacy, legacyPart)
+		})
+	}
+
+	t.Run("no parents", func(t *testing.T) {
+		require.Empty(t, laneTxMetaMiss(&meta.Data{LanePosition: lane.Pack(1, 1), IsCoinbase: true}, nil))
+	})
+}
+
+// A lane entry goes on the wire with the ADDLane action, in both wire formats.
+func TestSerializeTxMetaBatchMarksLaneEntries(t *testing.T) {
+	h1, h2, h3 := chainhash.Hash{1}, chainhash.Hash{2}, chainhash.Hash{3}
+	batch := []*txmetaBatchItem{
+		{hash: &h1, metaBytes: []byte("legacy")},
+		{hash: &h2, metaBytes: []byte("lane"), action: txmetacache.WireActionADDLane},
+		{hash: &h3, metaBytes: []byte("own"), action: txmetacache.WireActionADDOwn},
+	}
+
+	v1 := serializeTxMetaBatch(batch)
+	off := 4
+	require.Equal(t, txmetacache.WireActionADD, v1[off+32])
+	off += 32 + 1 + 4 + len("legacy")
+	require.Equal(t, txmetacache.WireActionADDLane, v1[off+32])
+	off += 32 + 1 + 4 + len("lane")
+	require.Equal(t, txmetacache.WireActionADDOwn, v1[off+32])
+
+	v2 := serializeTxMetaBatchV2([]txmetaItemWithHash{{item: batch[0]}, {item: batch[1]}, {item: batch[2]}}, txmetacache.BucketsCount)
+	off = txmetacache.WireV2HeaderLen
+	require.Equal(t, txmetacache.WireActionADD, v2[off+8+32])
+	off += 8 + 32 + 1 + 4 + len("legacy")
+	require.Equal(t, txmetacache.WireActionADDLane, v2[off+8+32])
+	off += 8 + 32 + 1 + 4 + len("lane")
+	require.Equal(t, txmetacache.WireActionADDOwn, v2[off+8+32])
+}
+
+// From the parent read to the record and the txmeta entry, on a real utxoset store at
+// utxostore_laneMigration shadow with the lane schema installed: the parent's position comes back
+// with the read, the create writes it beside the child's inpoints, and the child's txmeta entry
+// carries the child's own position and its parent's.
+func TestLanePositionsFlowThroughAUtxosetStore(t *testing.T) {
+	ctx := context.Background()
+
+	dsn, cleanup, err := tpostgres.SetupTestPostgresContainer()
+	if err != nil {
+		test.SkipIfContainerUnavailable(t, err)
+		t.Fatalf("postgres container unavailable: %v", err)
+	}
+
+	t.Cleanup(func() { _ = cleanup() })
+
+	u, err := url.Parse(dsn)
 	require.NoError(t, err)
 
 	tSettings := test.CreateBaseTestSettings(t)
-	tSettings.ChainCfgParams, _ = chaincfg.GetChainParams("mainnet")
+	tSettings.UtxoStore.LaneMigration = settings.LaneMigrationShadow
+
+	first, err := utxoset.New(ctx, ulogger.TestLogger{}, tSettings, u)
+	require.NoError(t, err)
+	require.NoError(t, first.PrepareLaneSchema(ctx))
+	require.NoError(t, first.Close(ctx))
+
+	store, err := utxoset.New(ctx, ulogger.TestLogger{}, tSettings, u)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = store.Close(ctx) })
+	require.NoError(t, store.SetBlockHeight(200))
+
+	parentPosition, childPosition := lane.Pack(12, 1), lane.Pack(12, 2)
+	store.SetLanePositionSource(tests.NewScriptedLanePositions(parentPosition, childPosition))
+
+	parent := storedParent(t, store, 0x61, 0, bscript.NewFromBytes([]byte{0x76, 0xa9, 0x61}))
+	child := parentOutputsChild(t, []chainhash.Hash{*parent.TxIDChainHash()}, []uint32{0})
+
+	v := laneShadowValidator(t, store)
+
+	_, parentLanes, _, err := v.getTransactionInputBlockHeightsAndExtendTx(ctx, child, child.TxID(), &Options{})
+	require.NoError(t, err)
+	require.Equal(t, []uint64{parentPosition}, parentLanes, "the parent read gives the parent's position")
+
+	md, _, err := v.spendAndCreateInUtxoStore(ctx, child, 201, false, &Options{}, parentLanes)
+	require.NoError(t, err)
+	require.Equal(t, childPosition, md.LanePosition, "the create returns the position it wrote")
+
+	b, action, err := v.txMetaPayload(md, parentLanes)
+	require.NoError(t, err)
+	require.Equal(t, txmetacache.WireActionADDLane, action)
+
+	var back meta.Data
+	gotParents, err := meta.NewDataFromLaneMetaBytes(b, &back)
+	require.NoError(t, err)
+	require.Equal(t, childPosition, back.LanePosition)
+	require.Equal(t, []uint64{parentPosition}, gotParents)
+
+	pool, err := pgxpool.New(ctx, dsn)
+	require.NoError(t, err)
+	t.Cleanup(pool.Close)
+
+	var stored []byte
+	require.NoError(t, pool.QueryRow(ctx, `SELECT parent_lane_positions FROM tx_ident WHERE txid = $1`,
+		child.TxIDChainHash()[:]).Scan(&stored))
+	require.Equal(t, lane.AppendPositions(nil, []uint64{parentPosition}), stored, "the record keeps its parent's position")
+}
+
+func TestCreateCaller(t *testing.T) {
+	require.Equal(t, utxostore.CallerValidator, createCaller(nil))
+	require.Equal(t, utxostore.CallerValidator, createCaller(&Options{}))
+	require.Equal(t, utxostore.CallerSubtreeValidation, createCaller(&Options{InBlock: true}))
+
+	// WithCaller sets the caller and nothing else: it changes nothing about validation.
+	named := ProcessOptions(WithCaller(utxostore.CallerBlockValidation))
+	require.Equal(t, utxostore.CallerBlockValidation, named.Caller)
+
+	named.Caller = utxostore.CallerUnknown
+	require.Equal(t, ProcessOptions(), named, "WithCaller must leave every other option as it was")
+
+	// A caller the options name wins, with or without InBlock.
+	require.Equal(t, utxostore.CallerSubtreeValidation, createCaller(&Options{Caller: utxostore.CallerSubtreeValidation}))
+	require.Equal(t, utxostore.CallerBlockValidation, createCaller(&Options{Caller: utxostore.CallerBlockValidation, InBlock: true}))
+}
+
+// A validator create names its caller on the store's burned lane position counter: its own for a
+// mempool submission, subtree validation's for a request marked InBlock.
+func TestSpendAndCreateInUtxoStoreNamesItsCaller(t *testing.T) {
+	tracing.SetupMockTracer()
+
+	ctx := context.Background()
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings := test.CreateBaseTestSettings(t)
+
+	storeURL, err := url.Parse("sqlitememory:///validator_burn_caller")
+	require.NoError(t, err)
+
+	store, err := sql.New(ctx, logger, tSettings, storeURL)
+	require.NoError(t, err)
+
+	v := &Validator{logger: logger, utxoStore: store, settings: tSettings}
+
+	for _, c := range []struct {
+		name    string
+		inBlock bool
+		named   utxostore.Caller
+		caller  string
+		seed    byte
+	}{
+		{"mempool submission", false, utxostore.CallerUnknown, "validator", 0xce},
+		{"in a block or subtree", true, utxostore.CallerUnknown, "subtree_validation", 0xcf},
+		{"a peer subtree, named without InBlock", false, utxostore.CallerSubtreeValidation, "subtree_validation", 0xd9},
+		{"a named caller wins over InBlock", true, utxostore.CallerBlockValidation, "block_validation", 0xda},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			// A transaction whose parent the store does not hold: the spend fails, and the
+			// position the call took burns.
+			tx := tests.BuildMultiWorkload(t, c.seed, 1, 1).Roots[0]
+
+			store.SetLanePositionSource(tests.NewScriptedLanePositions(lane.Pack(40, 1)))
+			t.Cleanup(func() { store.SetLanePositionSource(nil) })
+
+			before := tests.ReadLaneBurns(t, "sql")
+
+			_, _, err := v.spendAndCreateInUtxoStore(ctx, tx, 940, false, &Options{InBlock: c.inBlock, Caller: c.named}, nil)
+			require.Error(t, err)
+
+			burns := tests.ReadLaneBurns(t, "sql").Since(before)
+			require.Len(t, burns, 1, "one position burned: %v", burns)
+
+			for key, n := range burns {
+				require.Equal(t, float64(1), n)
+				require.Truef(t, strings.HasSuffix(key, "/"+c.caller), "burn %q is labelled %s", key, c.caller)
+			}
+		})
+	}
+}
+
+// createCallerRecorder remembers the caller each create-only SpendAndCreate names, by transaction,
+// then forwards the call to the real store.
+type createCallerRecorder struct {
+	utxostore.Store
+
+	mu      sync.Mutex
+	callers map[chainhash.Hash][]utxostore.Caller
+}
+
+func (r *createCallerRecorder) SpendAndCreate(ctx context.Context, tx *bt.Tx, blockHeight uint32,
+	opts ...utxostore.CreateOption) (*meta.Data, []*utxostore.Spend, error) {
+	if options, err := utxostore.ParseCreateOptions(opts...); err == nil && options.CreateOnly {
+		r.mu.Lock()
+		if r.callers == nil {
+			r.callers = map[chainhash.Hash][]utxostore.Caller{}
+		}
+
+		r.callers[*tx.TxIDChainHash()] = append(r.callers[*tx.TxIDChainHash()], options.Caller)
+		r.mu.Unlock()
+	}
+
+	return r.Store.SpendAndCreate(ctx, tx, blockHeight, opts...)
+}
+
+// createOnly returns the callers the create-only calls for txid named.
+func (r *createCallerRecorder) createOnly(txid chainhash.Hash) []utxostore.Caller {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	return append([]utxostore.Caller(nil), r.callers[txid]...)
+}
+
+// laneTxMetaCounter reads one series of a teranode_lane counter from the default registry.
+func laneTxMetaCounter(t *testing.T, name string, labels map[string]string) float64 {
+	t.Helper()
+
+	families, err := prometheus.DefaultGatherer.Gather()
+	require.NoError(t, err)
+
+	for _, family := range families {
+		if family.GetName() != name {
+			continue
+		}
+
+	metrics:
+		for _, m := range family.GetMetric() {
+			got := map[string]string{}
+			for _, l := range m.GetLabel() {
+				got[l.GetName()] = l.GetValue()
+			}
+
+			for k, v := range labels {
+				if got[k] != v {
+					continue metrics
+				}
+			}
+
+			return m.GetCounter().GetValue()
+		}
+	}
+
+	return 0
+}
+
+func laneSentCount(t *testing.T, format string) float64 {
+	return laneTxMetaCounter(t, "teranode_lane_txmeta_messages_total", map[string]string{"side": "sent", "format": format})
+}
+
+func laneMissCount(t *testing.T, reason string) float64 {
+	return laneTxMetaCounter(t, "teranode_lane_txmeta_position_misses_total", map[string]string{"reason": reason})
+}
+
+// The validator counts every entry it sends at shadow, lane or legacy, with the reason for a legacy
+// one. An entry that passes the position checks but does not encode, here because its inpoints name
+// a parent twice, goes out legacy and is counted as encode_failed.
+func TestTxMetaPayloadCountsWhatItSends(t *testing.T) {
+	parents := []chainhash.Hash{{1}, {2}}
+	tx := parentOutputsChild(t, parents, []uint32{0, 0})
+
+	inpoints, err := subtree.NewTxInpointsFromTx(tx)
+	require.NoError(t, err)
+
+	shadow := laneShadowValidator(t, nil)
+	good := []uint64{lane.Pack(2, 1), lane.Pack(3, 1)}
+
+	t.Run("lane", func(t *testing.T) {
+		lanes := laneSentCount(t, "lane")
+
+		_, action, err := shadow.txMetaPayload(&meta.Data{TxInpoints: inpoints, LanePosition: lane.Pack(1, 1)}, good)
+		require.NoError(t, err)
+		require.Equal(t, txmetacache.WireActionADDLane, action)
+		require.InDelta(t, lanes+1, laneSentCount(t, "lane"), 0)
+	})
+
+	t.Run("a parent miss", func(t *testing.T) {
+		own, legacy, misses := laneSentCount(t, "own"), laneSentCount(t, "legacy"), laneMissCount(t, txmetacache.LaneMissParent)
+
+		_, action, err := shadow.txMetaPayload(&meta.Data{TxInpoints: inpoints, LanePosition: lane.Pack(1, 1)}, []uint64{lane.Pack(2, 1), lane.None})
+		require.NoError(t, err)
+		require.Equal(t, txmetacache.WireActionADDOwn, action)
+		require.InDelta(t, own+1, laneSentCount(t, "own"), 0)
+		require.InDelta(t, legacy, laneSentCount(t, "legacy"), 0)
+		require.InDelta(t, misses+1, laneMissCount(t, txmetacache.LaneMissParent), 0)
+	})
+
+	t.Run("an own entry that cannot serialize", func(t *testing.T) {
+		// Two parents and a single vout word: the inpoints cannot serialize, so neither can the
+		// own entry, and the error goes back rather than an entry with no content.
+		broken := &meta.Data{TxInpoints: subtree.NewTxInpointsFromPacked([]chainhash.Hash{{1}, {2}}, []uint32{0}), LanePosition: lane.Pack(1, 1)}
+
+		_, wantErr := broken.MetaBytes()
+		require.Error(t, wantErr, "the fixture really fails to serialize")
+
+		_, _, err := shadow.txMetaPayload(broken, nil)
+		require.Error(t, err)
+	})
+
+	t.Run("no own position", func(t *testing.T) {
+		own, legacy, misses := laneSentCount(t, "own"), laneSentCount(t, "legacy"), laneMissCount(t, txmetacache.LaneMissOwn)
+
+		_, action, err := shadow.txMetaPayload(&meta.Data{TxInpoints: inpoints}, good)
+		require.NoError(t, err)
+		require.Equal(t, txmetacache.WireActionADD, action)
+		require.InDelta(t, own, laneSentCount(t, "own"), 0)
+		require.InDelta(t, legacy+1, laneSentCount(t, "legacy"), 0)
+		require.InDelta(t, misses+1, laneMissCount(t, txmetacache.LaneMissOwn), 0)
+	})
+
+	t.Run("an encode failure", func(t *testing.T) {
+		twice := subtree.NewTxInpointsFromPacked([]chainhash.Hash{{1}, {1}}, []uint32{1, 0, 1, 1})
+		data := &meta.Data{TxInpoints: twice, Fee: 500, SizeInBytes: 250, LanePosition: lane.Pack(1, 1)}
+		require.Empty(t, laneTxMetaMiss(data, good), "the position checks pass")
+
+		own, misses := laneSentCount(t, "own"), laneMissCount(t, txmetacache.LaneMissEncode)
+
+		b, action, err := shadow.txMetaPayload(data, good)
+		require.NoError(t, err, "a miss is counted, never an error")
+		require.Equal(t, txmetacache.WireActionADDOwn, action, "the own position still goes")
+
+		want, err := data.CacheBytes()
+		require.NoError(t, err)
+		require.Equal(t, want, b)
+		require.InDelta(t, own+1, laneSentCount(t, "own"), 0)
+		require.InDelta(t, misses+1, laneMissCount(t, txmetacache.LaneMissEncode), 0)
+	})
+}
+
+// laneCaptureStore gives each parent read a lane position per parent, keeps the options of the
+// create, and gives the created record its own position, so a test can follow the positions through
+// Validate without a lane position source.
+type laneCaptureStore struct {
+	utxostore.Store
+
+	parentPositions map[chainhash.Hash]uint64
+	own             uint64
+	created         *utxostore.CreateOptions
+}
+
+func (s *laneCaptureStore) ParentOutputsForValidation(ctx context.Context, outpoints []utxostore.Outpoint, opts ...utxostore.ParentOutputOption) ([]utxostore.ParentOutput, error) {
+	answers, err := s.Store.ParentOutputsForValidation(ctx, outpoints, opts...)
+	if err != nil {
+		return nil, err
+	}
+
+	for i := range answers {
+		answers[i].LanePosition = s.parentPositions[outpoints[i].TxID]
+	}
+
+	return answers, nil
+}
+
+func (s *laneCaptureStore) SpendAndCreate(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...utxostore.CreateOption) (*meta.Data, []*utxostore.Spend, error) {
+	created, err := utxostore.ParseCreateOptions(opts...)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	s.created = created
+
+	md, spends, err := s.Store.SpendAndCreate(ctx, tx, blockHeight, opts...)
+	if md != nil {
+		md.LanePosition = s.own
+	}
+
+	return md, spends, err
+}
+
+// TestValidateHandsTheLanePositionToBlockAssembly: at shadow the validator hands block assembly
+// the lane position the create returned, and 0 for a record without one; at off it hands over 0
+// even when the store returns a position. The store under laneCaptureStore is SQL, which returns
+// no position from its create (lanes Phase 1 leaves it out), so laneCaptureStore sets the returned
+// position as utxoset and Aerospike do; the test pins the validator's copy, not a store.
+func TestValidateHandsTheLanePositionToBlockAssembly(t *testing.T) {
+	tracing.SetupMockTracer()
+	initPrometheusMetrics()
+
+	ctx := context.Background()
+	base := parentOutputsStore(t)
+
+	s0 := bscript.NewFromBytes([]byte{0x76, 0xa9, 0x00})
+	parent := storedParent(t, base, 0x72, 150, s0, s0, s0, s0)
+	store := &laneCaptureStore{Store: base, parentPositions: map[chainhash.Hash]uint64{*parent.TxIDChainHash(): lane.Pack(14, 1)}}
+
+	for _, tc := range []struct {
+		name   string
+		shadow bool
+		vout   uint32
+		own    uint64
+		handed uint64
+	}{
+		{name: "shadow", shadow: true, vout: 0, own: lane.Pack(14, 3), handed: lane.Pack(14, 3)},
+		{name: "shadow, a record without a position", shadow: true, vout: 1, own: lane.None, handed: lane.None},
+		{name: "off", shadow: false, vout: 2, own: lane.Pack(14, 4), handed: lane.None},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			v := parentOutputsValidator(t, store)
+			if tc.shadow {
+				v = laneShadowValidator(t, store)
+			}
+
+			v.logger = ulogger.TestLogger{}
+			v.txValidator = NewTxValidator(ulogger.TestLogger{}, v.settings)
+			v.stats = gocore.NewStat("validator")
+
+			blockAssembly := &MockBlockAssemblyStore{}
+			v.blockAssembler = blockAssembly
+
+			store.own = tc.own
+
+			child := parentOutputsChild(t, []chainhash.Hash{*parent.TxIDChainHash()}, []uint32{tc.vout})
+			_, err := v.Validate(ctx, child, 201, WithSkipPolicyChecks(true), WithSkipScriptValidation(true), WithAddTXToBlockAssembly(true))
+			require.NoError(t, err)
+
+			require.Len(t, blockAssembly.storedTxs, 1)
+			require.Equal(t, tc.handed, blockAssembly.storedTxs[0].lanePosition)
+		})
+	}
+}
+
+// laneEntry reads the one entry of a v1 txmeta message: its action and its content.
+func laneEntry(t *testing.T, value []byte) (byte, []byte) {
+	t.Helper()
+
+	require.Equal(t, uint32(1), binary.LittleEndian.Uint32(value))
+
+	off := 4 + 32
+	action := value[off]
+	off++
+
+	n := int(binary.LittleEndian.Uint32(value[off:]))
+	off += 4
+	require.Len(t, value, off+n)
+
+	return action, value[off:]
+}
+
+// Through Validate at shadow, the parents' positions the parent read returned go to the create and
+// into the published txmeta entry, which carries the ADDLane action and the child's and parent's
+// positions, on the direct publish and through the batcher. A record without its own position goes
+// out as a plain ADD entry holding MetaBytes, on both paths.
+func TestValidateCarriesLanePositionsToTheCreateAndTheTxMeta(t *testing.T) {
+	tracing.SetupMockTracer()
+	initPrometheusMetrics()
+
+	ctx := context.Background()
+	base := parentOutputsStore(t)
+
+	s0 := bscript.NewFromBytes([]byte{0x76, 0xa9, 0x00})
+	parent := storedParent(t, base, 0x71, 150, s0, s0, s0, s0)
+	parentPosition := lane.Pack(14, 1)
+
+	store := &laneCaptureStore{Store: base, parentPositions: map[chainhash.Hash]uint64{*parent.TxIDChainHash(): parentPosition}}
+
+	validate := func(t *testing.T, v *Validator, vout uint32, own uint64) {
+		t.Helper()
+
+		store.own = own
+
+		child := parentOutputsChild(t, []chainhash.Hash{*parent.TxIDChainHash()}, []uint32{vout})
+		_, err := v.Validate(ctx, child, 201, WithSkipPolicyChecks(true), WithSkipScriptValidation(true), WithAddTXToBlockAssembly(false))
+		require.NoError(t, err)
+
+		require.NotNil(t, store.created)
+		require.Equal(t, []uint64{parentPosition}, store.created.ParentLanePositions, "the create gets the parent's position")
+	}
+
+	newValidator := func(t *testing.T) *Validator {
+		v := laneShadowValidator(t, store)
+		v.logger = ulogger.TestLogger{}
+		v.txValidator = NewTxValidator(ulogger.TestLogger{}, v.settings)
+		v.stats = gocore.NewStat("validator")
+
+		return v
+	}
+
+	// checkEntry checks one published entry: ADDLane with the child's and parent's positions when
+	// the child has its own position, a plain ADD holding MetaBytes when it has none.
+	checkEntry := func(t *testing.T, action byte, content []byte, own uint64) {
+		t.Helper()
+
+		if own == lane.None {
+			require.Equal(t, txmetacache.WireActionADD, action, "an entry without positions is a plain ADD")
+
+			var back meta.Data
+			require.NoError(t, meta.NewMetaDataFromBytes(content, &back), "and holds MetaBytes")
+
+			return
+		}
+
+		require.Equal(t, txmetacache.WireActionADDLane, action)
+
+		var back meta.Data
+		gotParents, err := meta.NewDataFromLaneMetaBytes(content, &back)
+		require.NoError(t, err)
+		require.Equal(t, own, back.LanePosition)
+		require.Equal(t, []uint64{parentPosition}, gotParents)
+	}
+
+	for _, tc := range []struct {
+		name string
+		vout uint32
+		own  uint64
+	}{
+		{name: "lane entry", vout: 0, own: lane.Pack(14, 2)},
+		{name: "plain entry", vout: 1, own: lane.None},
+	} {
+		t.Run("direct publish: "+tc.name, func(t *testing.T) {
+			producer := kafka.NewKafkaAsyncProducerMock()
+
+			v := newValidator(t)
+			v.txmetaKafkaProducerClient = producer
+
+			validate(t, v, tc.vout, tc.own)
+
+			require.Len(t, producer.PublishChannel(), 1)
+			msg := <-producer.PublishChannel()
+
+			action, content := laneEntry(t, msg.Value)
+			checkEntry(t, action, content, tc.own)
+		})
+
+		t.Run("batcher: "+tc.name, func(t *testing.T) {
+			var (
+				mu    sync.Mutex
+				items []*txmetaBatchItem
+			)
+
+			v := newValidator(t)
+			v.txmetaKafkaProducerClient = kafka.NewKafkaAsyncProducerMock()
+			v.txmetaKafkaBatcher = batcher.New[txmetaBatchItem](1, 10*time.Millisecond, func(batch []*txmetaBatchItem) {
+				mu.Lock()
+				items = append(items, batch...)
+				mu.Unlock()
+			}, true)
+
+			validate(t, v, tc.vout+2, tc.own)
+
+			require.Eventually(t, func() bool {
+				mu.Lock()
+				defer mu.Unlock()
+
+				return len(items) == 1
+			}, 2*time.Second, 10*time.Millisecond)
+
+			mu.Lock()
+			defer mu.Unlock()
+
+			checkEntry(t, items[0].wireAction(), items[0].metaBytes, tc.own)
+		})
+	}
+}
+
+// idChainClient serves a straight synthetic chain of blocks 0 to tip: block h has nonce h, ID
+// h+1, stored median 1_700_000_000+h and a timestamp six seconds later, so the median of the 11
+// timestamps below any height h is also 1_700_000_000+h. It counts the loads (one main-chain
+// read of the top block each).
+type idChainClient struct {
+	*blockchain.Mock
+
+	tip     uint32
+	once    sync.Once
+	headers []*model.BlockHeader
+	loads   atomic.Int32
+}
+
+func (c *idChainClient) chain() []*model.BlockHeader {
+	c.once.Do(func() {
+		c.headers = make([]*model.BlockHeader, c.tip+1)
+		prev := &chainhash.Hash{}
+
+		for h := uint32(0); h <= c.tip; h++ {
+			c.headers[h] = &model.BlockHeader{Nonce: h, Timestamp: 1_700_000_006 + h, HashPrevBlock: prev, HashMerkleRoot: &chainhash.Hash{}}
+			prev = c.headers[h].Hash()
+		}
+	})
+
+	return c.headers
+}
+
+func idChainMeta(h uint32) *model.BlockHeaderMeta {
+	return &model.BlockHeaderMeta{Height: h, ID: h + 1}
+}
+
+func (c *idChainClient) GetBlockHeadersByHeight(_ context.Context, start, _ uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
+	c.loads.Add(1)
+
+	if start > c.tip {
+		return nil, nil, nil
+	}
+
+	return []*model.BlockHeader{c.chain()[start]}, []*model.BlockHeaderMeta{idChainMeta(start)}, nil
+}
+
+func (c *idChainClient) GetBestBlockHeader(_ context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
+	return c.chain()[c.tip], idChainMeta(c.tip), nil
+}
+
+func (c *idChainClient) GetBlockHeadersByParentLinks(_ context.Context, hash *chainhash.Hash, n uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
+	headers := c.chain()
+
+	for h := int(c.tip); h >= 0; h-- {
+		if !headers[h].Hash().IsEqual(hash) {
+			continue
+		}
+
+		var (
+			out   []*model.BlockHeader
+			metas []*model.BlockHeaderMeta
+		)
+
+		for x := h; x >= 0 && uint64(len(out)) < n; x-- {
+			out = append(out, headers[x])
+			metas = append(metas, idChainMeta(uint32(x))) //nolint:gosec // x >= 0
+		}
+
+		return out, metas, nil
+	}
+
+	return nil, nil, nil
+}
+
+// brokenLinkClient is idChainClient whose parent-link walk, on its call-th page, swaps the header
+// at index at for one that does not link to its neighbours, at the right height.
+type brokenLinkClient struct {
+	*idChainClient
+
+	call, at int
+	calls    int
+}
+
+func (c *brokenLinkClient) GetBlockHeadersByParentLinks(ctx context.Context, hash *chainhash.Hash, n uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
+	headers, metas, err := c.idChainClient.GetBlockHeadersByParentLinks(ctx, hash, n)
+
+	c.calls++
+	if c.calls == c.call && len(headers) > c.at {
+		headers = append([]*model.BlockHeader{}, headers...)
+		headers[c.at] = &model.BlockHeader{Nonce: 999_999, HashPrevBlock: &chainhash.Hash{}, HashMerkleRoot: &chainhash.Hash{}}
+	}
+
+	return headers, metas, err
+}
+
+// TestEnsureMTPLoaded_RefusesAChainThatDoesNotLink checks that a load whose parent-link read does
+// not form one chain fails rather than storing medians from more than one chain.
+func TestEnsureMTPLoaded_RefusesAChainThatDoesNotLink(t *testing.T) {
+	tests := []struct {
+		name                string
+		pageLimit, call, at int
+	}{
+		{name: "inside a page", call: 1, at: 3},
+		{name: "first header of a later page", pageLimit: 100, call: 2, at: 0},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			tSettings := test.CreateBaseTestSettings(t)
+			params := *tSettings.ChainCfgParams
+			params.GenesisActivationHeight = ^uint32(0)
+			tSettings.ChainCfgParams = &params
+			tSettings.BlockChain.MaxBlockHeadersPerRequest = tc.pageLimit
+
+			v := &Validator{
+				logger:           ulogger.TestLogger{},
+				settings:         tSettings,
+				blockchainClient: &brokenLinkClient{idChainClient: &idChainClient{Mock: &blockchain.Mock{}, tip: 999}, call: tc.call, at: tc.at},
+				stats:            gocore.NewStat("validator_test"),
+			}
+
+			require.ErrorContains(t, v.EnsureMTPLoaded(context.Background(), 1_000), "does not link")
+			require.Empty(t, v.mtpStore)
+		})
+	}
+}
+
+// TestEnsureMTPLoaded_PlaceholderIDsDoNotJoin checks that entries above the tip, whose ID 0 names
+// no block, do not count as the fetched and stored chains agreeing: a store holding another
+// chain below them must still be reached and repaired.
+func TestEnsureMTPLoaded_PlaceholderIDsDoNotJoin(t *testing.T) {
+	tSettings := test.CreateBaseTestSettings(t)
+	params := *tSettings.ChainCfgParams
+	params.CSVHeight = 0
+	params.GenesisActivationHeight = ^uint32(0)
+	tSettings.ChainCfgParams = &params
+
+	// The store reaches 30 along another chain (IDs 1000+h) whose entries above 11 are
+	// placeholders; the current chain ends at 10.
+	store := make([]uint32, 31)
+	ids := make([]uint32, 31)
+
+	for h := uint32(1); h <= 11; h++ {
+		ids[h] = 1_000 + h
+	}
+
+	v := &Validator{
+		logger:           ulogger.TestLogger{},
+		settings:         tSettings,
+		blockchainClient: &idChainClient{Mock: &blockchain.Mock{}, tip: 10},
+		stats:            gocore.NewStat("validator_test"),
+		mtpStore:         store,
+		mtpIDs:           ids,
+	}
+
+	base := &mtpBase{entry: 11, id: 11} // the current chain's block at 10
+	require.NoError(t, v.ensureMTPLoaded(context.Background(), 30, base))
+	require.True(t, v.holdsBaseLocked(base))
+	require.Equal(t, uint32(2), v.mtpIDs[2], "entries below the placeholders must be the current chain's (block 1, ID 2)")
+}
+
+// reorgTestBlocks builds n blocks on top of parentHash, the first at height firstHeight, with
+// block times 600 seconds apart plus skew.
+func reorgTestBlocks(t *testing.T, parentHash *chainhash.Hash, firstHeight uint32, n int, skew uint32) []*model.Block {
+	t.Helper()
+
+	coinbase, err := bt.NewTxFromString(model.CoinbaseHex)
+	require.NoError(t, err)
+
+	tree, err := subtree.NewTreeByLeafCount(4)
+	require.NoError(t, err)
+	require.NoError(t, tree.AddNode(*coinbase.TxIDChainHash(), 0, 0))
+
+	nBits, err := model.NewNBitFromString("207fffff")
+	require.NoError(t, err)
+
+	blocks := make([]*model.Block, 0, n)
+	prev := parentHash
+
+	for i := 0; i < n; i++ {
+		block := &model.Block{
+			Header: &model.BlockHeader{
+				Version:        1,
+				Timestamp:      1_600_000_000 + 600*(firstHeight+uint32(i)) + skew, //nolint:gosec // test sizes are small
+				Nonce:          2573394689,
+				HashPrevBlock:  prev,
+				HashMerkleRoot: tree.RootHash(),
+				Bits:           *nBits,
+			},
+			CoinbaseTx:       coinbase,
+			TransactionCount: 1,
+			Subtrees:         []*chainhash.Hash{tree.RootHash()},
+		}
+
+		blocks = append(blocks, block)
+		prev = block.Hash()
+	}
+
+	return blocks
+}
+
+// medianBelow is the median of the 11 timestamps below height h, read from timeAt.
+func medianBelow(h uint32, timeAt func(uint32) uint32) uint32 {
+	window := make([]uint32, 0, 11)
+	for x := h - 11; x < h; x++ {
+		window = append(window, timeAt(x))
+	}
+
+	slices.Sort(window)
+
+	return window[len(window)/2]
+}
+
+// reorgFixture is a sqlitememory blockchain store with chain A (heights 1 to 60) and chain B
+// (leaving A after height 20, block times two hours ahead, heights 21 to 60), A current, and a
+// validator whose MTP store is loaded along A through height 60. makeBCurrent stores B's block
+// at 61, making B the current chain.
+type reorgFixture struct {
+	v              *Validator
+	client         blockchain.ClientI
+	loads          *loadCounter
+	chainA, chainB []*model.Block
+	makeBCurrent   func()
+}
+
+// sqlChainSettings enforces BIP68 from csvHeight up to Genesis activation at 1,000.
+func sqlChainSettings(t *testing.T, csvHeight uint32) *settings.Settings {
+	t.Helper()
+
+	tSettings := test.CreateBaseTestSettings(t)
+	params := *tSettings.ChainCfgParams
+	params.CSVHeight = csvHeight
+	params.GenesisActivationHeight = 1_000
+	tSettings.ChainCfgParams = &params
+
+	return tSettings
+}
+
+// newSQLChainValidator stores blocks, in order, in a sqlitememory blockchain store and returns a
+// validator reading it through a loadCounter, the client and the store.
+func newSQLChainValidator(t *testing.T, tSettings *settings.Settings, blocks []*model.Block) (*Validator, *loadCounter, blockchain.ClientI, *blockchainsql.SQL) {
+	t.Helper()
+
+	storeURL, err := url.Parse("sqlitememory:///" + t.Name())
+	require.NoError(t, err)
+
+	store, err := blockchainsql.New(ulogger.TestLogger{}, storeURL, tSettings)
+	require.NoError(t, err)
+
+	for _, block := range blocks {
+		_, _, err = store.StoreBlock(context.Background(), block, "")
+		require.NoError(t, err)
+	}
+
+	client, err := blockchain.NewLocalClient(ulogger.TestLogger{}, tSettings, store, nil, nil)
+	require.NoError(t, err)
+
+	loads := &loadCounter{ClientI: client}
 
 	v := &Validator{
 		logger:           ulogger.TestLogger{},
 		settings:         tSettings,
 		txValidator:      NewTxValidator(ulogger.TestLogger{}, tSettings),
-		blockchainClient: &blockchain.Mock{},
+		blockchainClient: loads,
 		stats:            gocore.NewStat("validator_test"),
-		// mtpStore intentionally empty
 	}
 	v.txValidator.(*TxValidator).bdk = noopBDKValidator{}
 
-	ctx, _, endSpan := tracing.Tracer("validator").Start(context.Background(), "Test")
-	defer endSpan()
-
-	err = v.validateTransaction(ctx, tx, blockHeight, []uint32{blockHeight - 1}, &Options{SkipPolicyChecks: true})
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "MTP store not loaded up to height")
+	return v, loads, client, store
 }
 
-// TestReadMTPsLocked_GuardFiresOnUnpopulatedStore verifies the guard returns a
-// processing error when EnsureMTPLoaded has not populated the store up to the
-// requested blockMTPHeight (in normal operation this cannot happen because
-// Server.go calls EnsureMTPLoaded before per-tx goroutines start).
-func TestReadMTPsLocked_GuardFiresOnUnpopulatedStore(t *testing.T) {
-	v := &Validator{
-		logger:   ulogger.TestLogger{},
-		mtpStore: []uint32{1_700_000_000, 1_700_000_010}, // length 2, asking for height 5
+func newReorgFixture(t *testing.T) *reorgFixture {
+	t.Helper()
+
+	ctx := context.Background()
+	tSettings := sqlChainSettings(t, 0)
+
+	chainA := reorgTestBlocks(t, tSettings.ChainCfgParams.GenesisHash, 1, 60, 0)
+	chainB := reorgTestBlocks(t, chainA[19].Hash(), 21, 41, 7_200)
+
+	v, loads, client, store := newSQLChainValidator(t, tSettings, append(slices.Clone(chainA), chainB[:40]...))
+
+	best, _, err := client.GetBestBlockHeader(ctx)
+	require.NoError(t, err)
+	require.Equal(t, chainA[59].Hash().String(), best.Hash().String(), "chain A must be current while the store loads")
+	require.NoError(t, v.EnsureMTPLoaded(ctx, 60))
+
+	return &reorgFixture{v: v, client: client, loads: loads, chainA: chainA, chainB: chainB, makeBCurrent: func() {
+		_, _, storeErr := store.StoreBlock(ctx, chainB[40], "")
+		require.NoError(t, storeErr)
+
+		best, _, bestErr := client.GetBestBlockHeader(ctx)
+		require.NoError(t, bestErr)
+		require.Equal(t, chainB[40].Hash().String(), best.Hash().String(), "chain B must be current")
+	}}
+}
+
+func (f *reorgFixture) timeOnA(h uint32) uint32 { return f.chainA[h-1].Header.Timestamp }
+
+func (f *reorgFixture) timeOnB(h uint32) uint32 {
+	if h > 20 {
+		return f.chainB[h-21].Header.Timestamp
 	}
 
-	utxoMTPs, blockMTP, err := v.readMTPsLocked(5, []uint32{0})
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "MTP store not loaded up to height 5")
-	require.Nil(t, utxoMTPs)
-	require.Equal(t, uint32(0), blockMTP)
+	return f.chainA[h-1].Header.Timestamp
+}
+
+func (f *reorgFixture) blockID(t *testing.T, block *model.Block) uint32 {
+	t.Helper()
+
+	_, meta, err := f.client.GetBlockHeader(context.Background(), block.Hash())
+	require.NoError(t, err)
+
+	return meta.ID
+}
+
+// loadCounter counts the main-chain reads of a load's top block, one per store load.
+type loadCounter struct {
+	blockchain.ClientI
+
+	calls atomic.Int32
+}
+
+func (c *loadCounter) GetBlockHeadersByHeight(ctx context.Context, startHeight, endHeight uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
+	c.calls.Add(1)
+
+	return c.ClientI.GetBlockHeadersByHeight(ctx, startHeight, endHeight)
+}
+
+// timeLockedFor40Units is a v2 tx whose input carries a 40-unit (20,480 second) time lock.
+func timeLockedFor40Units(t *testing.T) *bt.Tx {
+	t.Helper()
+
+	tx := bip68Tx(t)
+	tx.Version = 2
+	tx.Inputs[0].SequenceNumber = SequenceLockTimeTypeFlag | 40
+
+	return tx
+}
+
+// TestValidateTransaction_BIP68AfterReorgReadsTheNewChain checks a block at 60 on B, whose parent
+// is on the current chain, with a coin at 30: 18,000 seconds old on B, short of a 40-unit lock,
+// but past it measured from A's cached median. The store must reload along B first.
+func TestValidateTransaction_BIP68AfterReorgReadsTheNewChain(t *testing.T) {
+	f := newReorgFixture(t)
+	require.NoError(t, f.v.EnsureMTPLoaded(context.Background(), 61)) // one entry past the candidate, on A
+	f.makeBCurrent()
+
+	const coinHeight = uint32(30)
+
+	blockMTP := medianBelow(60, f.timeOnB)
+	require.Less(t, blockMTP-medianBelow(coinHeight, f.timeOnB), uint32(40*512))
+	require.GreaterOrEqual(t, blockMTP-medianBelow(coinHeight, f.timeOnA), uint32(40*512))
+
+	opts := &Options{SkipPolicyChecks: true, CandidateParentMedianTime: blockMTP, CandidateBaseID: f.blockID(t, f.chainB[38]), CandidateBaseSet: true}
+
+	err := f.v.validateTransaction(context.Background(), timeLockedFor40Units(t), 60, []uint32{coinHeight}, opts)
+	require.ErrorContains(t, err, "transaction sequence lock time not satisfied")
+	require.Equal(t, medianBelow(coinHeight, f.timeOnB), f.v.mtpStore[coinHeight])
+	require.Len(t, f.v.mtpStore, 61, "the entry above the reload belonged to A and must be cut")
+}
+
+// TestValidateTransaction_BIP68ForkCandidateChecksTheForkPoint checks a block at 60 on B while A
+// is current: its coins above the fork come from the overlay and its base is the fork point, A's
+// block at 20, which the store loaded along A holds, so no reload runs and B's medians decide.
+func TestValidateTransaction_BIP68ForkCandidateChecksTheForkPoint(t *testing.T) {
+	f := newReorgFixture(t)
+
+	const coinHeight = uint32(30)
+
+	overlay := make([]uint32, 0, 39)
+	for h := uint32(21); h < 60; h++ {
+		overlay = append(overlay, medianBelow(h, f.timeOnB))
+	}
+
+	opts := &Options{
+		SkipPolicyChecks:          true,
+		CandidateParentMedianTime: medianBelow(60, f.timeOnB),
+		CandidateForkStartHeight:  21,
+		CandidateForkMTPs:         overlay,
+		CandidateBaseID:           f.blockID(t, f.chainA[19]),
+		CandidateBaseSet:          true,
+	}
+
+	before := f.loads.calls.Load()
+
+	err := f.v.validateTransaction(context.Background(), timeLockedFor40Units(t), 60, []uint32{coinHeight}, opts)
+	require.ErrorContains(t, err, "transaction sequence lock time not satisfied")
+	require.NoError(t, f.v.validateTransaction(context.Background(), timeLockedFor40Units(t), 60, []uint32{10}, opts))
+	require.Equal(t, before, f.loads.calls.Load(), "the store holds the fork point, so nothing reloads")
+}
+
+// TestEnsureMTPLoaded_PagedWalkMatchesOnePage checks that a load read in pages of 7 headers,
+// joined by parent links across page boundaries, stores what a single-page load does.
+func TestEnsureMTPLoaded_PagedWalkMatchesOnePage(t *testing.T) {
+	f := newReorgFixture(t)
+
+	paged := *f.v.settings
+	paged.BlockChain.MaxBlockHeadersPerRequest = 7
+
+	v := &Validator{logger: ulogger.TestLogger{}, settings: &paged, blockchainClient: f.client, stats: gocore.NewStat("validator_test")}
+	require.NoError(t, v.EnsureMTPLoaded(context.Background(), 60))
+
+	require.Equal(t, f.v.mtpStore, v.mtpStore)
+	require.Equal(t, f.v.mtpIDs, v.mtpIDs)
+}
+
+// TestValidateTransaction_BIP68FailsWhenTheStoreCannotHoldTheBase checks that once the store has
+// moved to B, a candidate naming a base on A (its block at 59) fails with a ProcessingError rather
+// than being judged on B's medians. While the store still held A, it would read A's, correctly.
+func TestValidateTransaction_BIP68FailsWhenTheStoreCannotHoldTheBase(t *testing.T) {
+	f := newReorgFixture(t)
+	f.makeBCurrent()
+	require.NoError(t, f.v.EnsureMTPLoaded(context.Background(), 61))
+
+	opts := &Options{SkipPolicyChecks: true, CandidateParentMedianTime: medianBelow(60, f.timeOnA), CandidateBaseID: f.blockID(t, f.chainA[58]), CandidateBaseSet: true}
+
+	before := f.loads.calls.Load()
+
+	for range 5 {
+		err := f.v.validateTransaction(context.Background(), timeLockedFor40Units(t), 60, []uint32{30}, opts)
+		require.ErrorIs(t, err, errors.ErrProcessing)
+		require.ErrorContains(t, err, "does not hold block ID")
+	}
+
+	require.Equal(t, int32(1), f.loads.calls.Load()-before, "the block's other transactions must not reload again")
+
+	// Once the memory lapses, a retried block reloads.
+	f.v.mtpUnheldAt = time.Now().Add(-2 * mtpUnheldMemory)
+
+	err := f.v.validateTransaction(context.Background(), timeLockedFor40Units(t), 60, []uint32{30}, opts)
+	require.ErrorIs(t, err, errors.ErrProcessing)
+	require.Equal(t, int32(2), f.loads.calls.Load()-before)
+}
+
+// TestValidateTransaction_BIP68ReloadsAShortStore checks that a candidate above what the store
+// covers, as after another candidate's reload cut it back, reloads instead of failing.
+func TestValidateTransaction_BIP68ReloadsAShortStore(t *testing.T) {
+	f := newReorgFixture(t)
+	f.makeBCurrent()
+
+	opts := &Options{SkipPolicyChecks: true, CandidateParentMedianTime: medianBelow(62, f.timeOnB), CandidateBaseID: f.blockID(t, f.chainB[40]), CandidateBaseSet: true}
+
+	require.NoError(t, f.v.validateTransaction(context.Background(), bip68Tx(t), 62, []uint32{30}, opts))
+	require.Len(t, f.v.mtpStore, 63)
+}
+
+// TestEnsureMTPLoaded_ExtensionRepairsADeepReorg checks that extending the store after a reorg
+// 40 blocks deep (B leaves A after 20) replaces every entry above the fork, not only the last 12.
+func TestEnsureMTPLoaded_ExtensionRepairsADeepReorg(t *testing.T) {
+	f := newReorgFixture(t)
+	f.makeBCurrent()
+
+	// GetBlockHeaders answers from chain A, as a cache the reorg left stale would; the loader
+	// must read by parent links and never see it.
+	f.v.blockchainClient = &staleHeadersClient{ClientI: f.v.blockchainClient, chainA: f.chainA}
+
+	require.NoError(t, f.v.EnsureMTPLoaded(context.Background(), 61))
+
+	for h := uint32(12); h <= 61; h++ {
+		require.Equal(t, medianBelow(h, f.timeOnB), f.v.mtpStore[h], "height %d", h)
+	}
+
+	require.Equal(t, f.blockID(t, f.chainB[39]), f.v.mtpIDs[61])
+}
+
+// staleHeadersClient answers GetBlockHeaders with chain A's run at the same heights.
+type staleHeadersClient struct {
+	blockchain.ClientI
+	chainA []*model.Block
+}
+
+func (c *staleHeadersClient) GetBlockHeaders(ctx context.Context, hash *chainhash.Hash, n uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
+	_, meta, err := c.ClientI.GetBlockHeader(ctx, hash)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	h := min(int(meta.Height), len(c.chainA))
+
+	return c.ClientI.GetBlockHeaders(ctx, c.chainA[h-1].Hash(), n)
+}
+
+// widenGateClient holds the first parent-link read made while a load window covers height,
+// which only a widened window does, until release is closed.
+type widenGateClient struct {
+	blockchain.ClientI
+	v       *Validator
+	height  uint32
+	once    sync.Once
+	gated   chan struct{}
+	release chan struct{}
+}
+
+func (c *widenGateClient) GetBlockHeadersByParentLinks(ctx context.Context, hash *chainhash.Hash, n uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
+	c.v.mtpMu.RLock()
+	covering := slices.ContainsFunc(c.v.mtpLoadWindows, func(w mtpLoadWindow) bool { return c.height >= w.From && c.height < w.To })
+	c.v.mtpMu.RUnlock()
+
+	if covering {
+		c.once.Do(func() {
+			close(c.gated)
+			<-c.release
+		})
+	}
+
+	return c.ClientI.GetBlockHeadersByParentLinks(ctx, hash, n)
+}
+
+// TestEnsureMTPLoaded_WaitsInsideTheWidenedWindow checks that while a load reaches back past
+// its first window after a deep reorg, a caller for a height only the widened window covers
+// waits for the repair instead of returning on the old chain's entry.
+func TestEnsureMTPLoaded_WaitsInsideTheWidenedWindow(t *testing.T) {
+	f := newReorgFixture(t)
+	f.makeBCurrent()
+
+	// The extension to 61 first patches [49, 61), then reaches back to 37 and 13.
+	gate := &widenGateClient{ClientI: f.v.blockchainClient, v: f.v, height: 40, gated: make(chan struct{}), release: make(chan struct{})}
+	f.v.blockchainClient = gate
+
+	loaded := make(chan error, 1)
+	go func() { loaded <- f.v.EnsureMTPLoaded(context.Background(), 61) }()
+
+	select {
+	case <-gate.gated:
+	case err := <-loaded:
+		t.Fatalf("the load finished without widening its window over height 40: %v", err)
+	case <-time.After(10 * time.Second):
+		t.Fatal("the load never widened its window over height 40")
+	}
+
+	type reading struct {
+		err error
+		mtp uint32
+	}
+
+	seen := make(chan reading, 1)
+	go func() {
+		err := f.v.EnsureMTPLoaded(context.Background(), 40)
+		f.v.mtpMu.RLock()
+		seen <- reading{err: err, mtp: f.v.mtpStore[40]}
+		f.v.mtpMu.RUnlock()
+	}()
+
+	select {
+	case got := <-seen:
+		t.Fatalf("EnsureMTPLoaded(40) returned during the repair, reading %d (err %v)", got.mtp, got.err)
+	case <-time.After(300 * time.Millisecond):
+	}
+
+	close(gate.release)
+	require.NoError(t, <-loaded)
+
+	got := <-seen
+	require.NoError(t, got.err)
+	require.Equal(t, medianBelow(40, f.timeOnB), got.mtp)
+}
+
+// TestEnsureMTPLoaded_ComputesMediansFromTheWalkedChain checks that coin medians come from the
+// walked chain's own timestamps, not the stored column: that is 0 below CSVHeight, and a side
+// block stored at height 25, between A's blocks 25 and 26, puts its time into A's stored medians.
+func TestEnsureMTPLoaded_ComputesMediansFromTheWalkedChain(t *testing.T) {
+	tSettings := sqlChainSettings(t, 30)
+
+	chainA := reorgTestBlocks(t, tSettings.ChainCfgParams.GenesisHash, 1, 40, 0)
+	template := reorgTestBlocks(t, chainA[23].Hash(), 25, 1, 0)[0]
+	sideHeader := *template.Header
+	sideHeader.Timestamp = 1_000_000_000 // older than every block on A
+	side := &model.Block{Header: &sideHeader, CoinbaseTx: template.CoinbaseTx, TransactionCount: 1, Subtrees: template.Subtrees}
+	require.NotEqual(t, chainA[24].Hash(), side.Hash())
+
+	v, _, _, _ := newSQLChainValidator(t, tSettings, append(append(slices.Clone(chainA[:25]), side), chainA[25:]...))
+	require.NoError(t, v.EnsureMTPLoaded(context.Background(), 40))
+
+	timeAt := func(h uint32) uint32 { return chainA[h-1].Header.Timestamp }
+
+	for h := uint32(12); h <= 40; h++ {
+		require.Equal(t, medianBelow(h, timeAt), v.mtpStore[h], "height %d", h)
+	}
 }

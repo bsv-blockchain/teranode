@@ -72,6 +72,13 @@ func (s *SQL) DeleteBlock(ctx context.Context, blockHash *chainhash.Hash) error 
 	var res sql.Result
 
 	if err := s.db.RetryTx(ctx, nil, func(tx *sql.Tx) error {
+		// First, so a walk in any process sees this delete: rewindblockchain deletes
+		// through its own store, which a node's in-process watch never hears from. See
+		// chainWriteStateKey.
+		if execErr := s.lockChainWrites(ctx, tx); execErr != nil {
+			return execErr
+		}
+
 		before, hadBefore, execErr := bestTipKey(ctx, tx)
 		if execErr != nil {
 			return execErr
@@ -91,7 +98,8 @@ func (s *SQL) DeleteBlock(ctx context.Context, blockHash *chainhash.Hash) error 
 	}
 
 	// Invalidate caches so subsequent reads (GetBestBlockHeader, etc.) reflect
-	// the deletion. Matches InvalidateBlock's defer sequence exactly.
+	// the deletion. Unlike InvalidateBlock, this also clears the median-time
+	// cache, because the deleted row's entry has no block behind it any more.
 	s.blockTimestampCache.Clear()
 	s.ResetResponseCache()
 	if s.useInMemoryChainCheck {

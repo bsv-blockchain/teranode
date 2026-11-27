@@ -3,50 +3,53 @@ package sql
 import (
 	"context"
 	"net/url"
+	"strings"
 	"testing"
-	"time"
 
+	tpostgres "github.com/bsv-blockchain/teranode/test/utils/postgres"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/bsv-blockchain/teranode/util/usql"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/testcontainers/testcontainers-go"
-	"github.com/testcontainers/testcontainers-go/modules/postgres"
-	"github.com/testcontainers/testcontainers-go/wait"
 )
 
-// newSchemaTestDB spins up a fresh postgres container and returns:
-//   - dbURL parsed for blockchain.New
-//   - a raw *usql.DB for direct probes
-//   - the terminate func (registered via t.Cleanup)
-func newSchemaTestDB(t *testing.T) (*url.URL, *usql.DB) {
+// postgresTestURL returns a fresh, empty database of its own on the PostgreSQL server
+// shared by this test binary (test/utils/postgres). The database is dropped when the test
+// ends, after any cleanup the test registers later, such as closing its store.
+//
+// Tests on a database of their own run in parallel. Those that set a package-level hook
+// (openLeaseAttemptHook, reservationSweepInterval) or read a process-wide metric stay
+// sequential, and Go runs every sequential test before it releases the parallel ones.
+func postgresTestURL(t *testing.T) *url.URL {
 	t.Helper()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-	defer cancel()
-
-	pgContainer, err := postgres.Run(ctx,
-		"postgres:13",
-		postgres.WithDatabase("testdb"),
-		postgres.WithUsername("testuser"),
-		postgres.WithPassword("testpass"),
-		testcontainers.WithWaitStrategy(
-			wait.ForLog("database system is ready to accept connections").
-				WithOccurrence(2).
-				WithStartupTimeout(5*time.Minute),
-		),
-	)
+	connStr, teardown, err := tpostgres.SetupTestPostgresContainer()
 	test.SkipIfContainerUnavailable(t, err)
-	t.Cleanup(func() { _ = pgContainer.Terminate(context.Background()) })
-
-	connStr, err := pgContainer.ConnectionString(ctx, "sslmode=disable")
-	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, teardown()) })
 
 	dbURL, err := url.Parse(connStr)
 	require.NoError(t, err)
 
-	db, err := usql.Open("postgres", connStr)
+	return dbURL
+}
+
+// testRoleName names a login role for one test. A role belongs to the whole server rather than
+// to a database, so the name carries the test's own database name to stay unique on the
+// shared server.
+func testRoleName(prefix string, dbURL *url.URL) string {
+	return prefix + "_" + strings.TrimPrefix(dbURL.Path, "/")
+}
+
+// newSchemaTestDB gives the test a fresh database on the shared postgres server and returns:
+//   - dbURL parsed for blockchain.New
+//   - a raw *usql.DB for direct probes
+func newSchemaTestDB(t *testing.T) (*url.URL, *usql.DB) {
+	t.Helper()
+
+	dbURL := postgresTestURL(t)
+
+	db, err := usql.Open("postgres", dbURL.String())
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
 
@@ -54,6 +57,8 @@ func newSchemaTestDB(t *testing.T) (*url.URL, *usql.DB) {
 }
 
 func TestIsBlockchainSchemaCurrent_EmptyDB(t *testing.T) {
+	t.Parallel() // a database of its own on the shared server
+
 	if testing.Short() {
 		t.Skip("skipping postgres-backed test in -short mode")
 	}
@@ -66,6 +71,8 @@ func TestIsBlockchainSchemaCurrent_EmptyDB(t *testing.T) {
 }
 
 func TestIsBlockchainSchemaCurrent_AfterCreate(t *testing.T) {
+	t.Parallel() // a database of its own on the shared server
+
 	if testing.Short() {
 		t.Skip("skipping postgres-backed test in -short mode")
 	}
@@ -85,6 +92,8 @@ func TestIsBlockchainSchemaCurrent_AfterCreate(t *testing.T) {
 }
 
 func TestIsBlockchainSchemaCurrent_MissingColumn(t *testing.T) {
+	t.Parallel() // a database of its own on the shared server
+
 	if testing.Short() {
 		t.Skip("skipping postgres-backed test in -short mode")
 	}
@@ -106,7 +115,54 @@ func TestIsBlockchainSchemaCurrent_MissingColumn(t *testing.T) {
 	assert.False(t, current, "schema should not be current after column drop")
 }
 
+// TestBlockchainSchema_AddsMinedSetGenToExistingBlocks covers the upgrade of a database that
+// predates mined_set_gen: reopening the store must add the column, give existing rows 0, and
+// leave the schema current, so a tagging run on an old block reads generation 0 and its
+// SetBlockMinedSet still lands.
+func TestBlockchainSchema_AddsMinedSetGenToExistingBlocks(t *testing.T) {
+	t.Parallel() // a database of its own on the shared server
+
+	if testing.Short() {
+		t.Skip("skipping postgres-backed test in -short mode")
+	}
+
+	dbURL, db := newSchemaTestDB(t)
+
+	tSettings := test.CreateBaseTestSettings(t)
+	s, err := New(ulogger.TestLogger{}, dbURL, tSettings)
+	require.NoError(t, err)
+
+	_, _, err = s.StoreBlock(context.Background(), block1, "")
+	require.NoError(t, err)
+	require.NoError(t, s.Close(context.Background()))
+
+	// simulate a database written by a build without the column
+	_, err = db.Exec(`ALTER TABLE blocks DROP COLUMN mined_set_gen`)
+	require.NoError(t, err)
+
+	current, err := isBlockchainSchemaCurrent(db, true)
+	require.NoError(t, err)
+	require.False(t, current, "a missing mined_set_gen must send the store through the DDL path")
+
+	s, err = New(ulogger.TestLogger{}, dbURL, tSettings)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = s.Close(context.Background()) })
+
+	current, err = isBlockchainSchemaCurrent(db, true)
+	require.NoError(t, err)
+	require.True(t, current, "reopening the store must add mined_set_gen back")
+
+	_, meta, err := s.GetBlockHeader(context.Background(), block1.Hash())
+	require.NoError(t, err)
+	require.Equal(t, uint64(0), meta.MinedSetGeneration, "existing rows start at generation 0")
+
+	gen := meta.MinedSetGeneration
+	require.NoError(t, s.SetBlockMinedSet(context.Background(), block1.Hash(), &gen))
+}
+
 func TestIsBlockchainSchemaCurrent_MissingReservationsTable(t *testing.T) {
+	t.Parallel() // a database of its own on the shared server
+
 	if testing.Short() {
 		t.Skip("skipping postgres-backed test in -short mode")
 	}
@@ -130,6 +186,8 @@ func TestIsBlockchainSchemaCurrent_MissingReservationsTable(t *testing.T) {
 }
 
 func TestIsBlockchainSchemaCurrent_MissingIndex(t *testing.T) {
+	t.Parallel() // a database of its own on the shared server
+
 	if testing.Short() {
 		t.Skip("skipping postgres-backed test in -short mode")
 	}
@@ -150,6 +208,8 @@ func TestIsBlockchainSchemaCurrent_MissingIndex(t *testing.T) {
 }
 
 func TestIsBlockchainSchemaCurrent_WrongPeerIDType(t *testing.T) {
+	t.Parallel() // a database of its own on the shared server
+
 	if testing.Short() {
 		t.Skip("skipping postgres-backed test in -short mode")
 	}
@@ -173,6 +233,8 @@ func TestIsBlockchainSchemaCurrent_WrongPeerIDType(t *testing.T) {
 }
 
 func TestIsBlockchainSchemaCurrent_MissingPeerIDColumn(t *testing.T) {
+	t.Parallel() // a database of its own on the shared server
+
 	if testing.Short() {
 		t.Skip("skipping postgres-backed test in -short mode")
 	}
@@ -197,6 +259,8 @@ func TestIsBlockchainSchemaCurrent_MissingPeerIDColumn(t *testing.T) {
 }
 
 func TestCreatePostgresSchema_FastPathOnSecondCall(t *testing.T) {
+	t.Parallel() // a database of its own on the shared server
+
 	if testing.Short() {
 		t.Skip("skipping postgres-backed test in -short mode")
 	}
@@ -231,6 +295,8 @@ func TestCreatePostgresSchema_FastPathOnSecondCall(t *testing.T) {
 // fast path would skip the DDL sequence and the DROP INDEX would never run on an
 // existing database.
 func TestIsBlockchainSchemaCurrent_RetiredIndexPresent(t *testing.T) {
+	t.Parallel() // a database of its own on the shared server
+
 	if testing.Short() {
 		t.Skip("skipping postgres-backed test in -short mode")
 	}
@@ -258,6 +324,8 @@ func TestIsBlockchainSchemaCurrent_RetiredIndexPresent(t *testing.T) {
 // A database created by an older version still carries idx_inserted_at. Running the
 // schema setup against it must drop the index and leave the schema current.
 func TestCreatePostgresSchema_DropsRetiredIndex(t *testing.T) {
+	t.Parallel() // a database of its own on the shared server
+
 	if testing.Short() {
 		t.Skip("skipping postgres-backed test in -short mode")
 	}
@@ -285,10 +353,66 @@ func TestCreatePostgresSchema_DropsRetiredIndex(t *testing.T) {
 	require.True(t, current, "schema must be current once the retired index is gone")
 }
 
+// A database created before the best-tip order dropped peer_id carries idx_chain_work_peer_id and
+// idx_chain_work_valid, both ordered by peer_id, and lacks the indexes ordered by id. Running the
+// schema setup against it must swap them and leave the schema current.
+func TestCreatePostgresSchema_ReplacesPeerIDBestTipIndexes(t *testing.T) {
+	t.Parallel() // a database of its own on the shared server
+
+	if testing.Short() {
+		t.Skip("skipping postgres-backed test in -short mode")
+	}
+
+	dbURL, db := newSchemaTestDB(t)
+
+	tSettings := test.CreateBaseTestSettings(t)
+	s, err := New(ulogger.TestLogger{}, dbURL, tSettings)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = s.Close(context.Background()) })
+
+	for _, stmt := range []string{
+		`DROP INDEX idx_chain_work_id_v2`,
+		`DROP INDEX idx_chain_work_id_valid`,
+		`CREATE INDEX idx_chain_work_peer_id ON blocks (chain_work DESC, peer_id ASC, id ASC)`,
+		`CREATE INDEX idx_chain_work_valid ON blocks (chain_work DESC, peer_id ASC, id ASC) WHERE invalid = false`,
+		// The name an earlier build of the id order used, which an older binary drops on start.
+		`CREATE INDEX idx_chain_work_id ON blocks (chain_work DESC, id ASC)`,
+	} {
+		_, err = db.Exec(stmt)
+		require.NoError(t, err, stmt)
+	}
+
+	current, err := isBlockchainSchemaCurrent(db, true)
+	require.NoError(t, err)
+	require.False(t, current, "a schema with the peer_id indexes is not current")
+
+	require.NoError(t, createPostgresSchema(ulogger.TestLogger{}, db, true))
+
+	for name, want := range map[string]bool{
+		"idx_chain_work_peer_id":  false,
+		"idx_chain_work_valid":    false,
+		"idx_chain_work_id":       false,
+		"idx_chain_work_id_v2":    true,
+		"idx_chain_work_id_valid": true,
+	} {
+		var exists bool
+		require.NoError(t, db.QueryRow(
+			`SELECT EXISTS (SELECT 1 FROM pg_class WHERE relname = $1 AND relkind = 'i')`, name,
+		).Scan(&exists))
+		require.Equal(t, want, exists, name)
+	}
+
+	current, err = isBlockchainSchemaCurrent(db, true)
+	require.NoError(t, err)
+	require.True(t, current, "schema must be current once the indexes are swapped")
+}
+
 // A failed DROP INDEX on the retired index must stop the schema setup with an
 // error rather than carry on. A table with the index's name makes Postgres refuse
 // the drop, because the name is not an index.
 func TestCreatePostgresSchema_RetiredIndexDropFails(t *testing.T) {
+	t.Parallel() // a database of its own on the shared server
+
 	if testing.Short() {
 		t.Skip("skipping postgres-backed test in -short mode")
 	}
@@ -306,4 +430,78 @@ func TestCreatePostgresSchema_RetiredIndexDropFails(t *testing.T) {
 	err = createPostgresSchemaUnlocked(db, true)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "could not drop idx_inserted_at index")
+}
+
+func TestCreatePostgresSchema_MissingLaneHandoutTableTakesFastPath(t *testing.T) {
+	t.Parallel() // a database of its own on the shared server
+
+	if testing.Short() {
+		t.Skip("skipping postgres-backed test in -short mode")
+	}
+
+	dbURL, db := newSchemaTestDB(t)
+
+	tSettings := test.CreateBaseTestSettings(t)
+	s, err := New(ulogger.TestLogger{}, dbURL, tSettings)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = s.Close(context.Background()) })
+
+	// A database created before lane_handout existed must still take the fast
+	// path, so its first start does not run the peer_id ALTER on blocks.
+	_, err = db.Exec(`DROP TABLE lane_handout`)
+	require.NoError(t, err)
+
+	current, err := isBlockchainSchemaCurrent(db, true)
+	require.NoError(t, err)
+	require.True(t, current, "a missing lane_handout must not send the schema down the full DDL path")
+
+	require.NoError(t, createPostgresSchema(ulogger.TestLogger{}, db, true))
+
+	var exists bool
+	require.NoError(t, db.QueryRow(
+		`SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'lane_handout')`,
+	).Scan(&exists))
+	require.True(t, exists, "createPostgresSchema must create lane_handout before the probe")
+}
+
+func TestCreatePostgresSchema_CurrentSchemaNeedsNoCreatePrivilege(t *testing.T) {
+	t.Parallel() // a database of its own on the shared server
+
+	if testing.Short() {
+		t.Skip("skipping postgres-backed test in -short mode")
+	}
+
+	dbURL, db := newSchemaTestDB(t)
+
+	tSettings := test.CreateBaseTestSettings(t)
+	s, err := New(ulogger.TestLogger{}, dbURL, tSettings)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = s.Close(context.Background()) })
+
+	// A node role that can read and write the tables but has no CREATE on the
+	// schema, as when a separate owner role runs the migrations.
+	role := testRoleName("node_no_ddl", dbURL)
+	for _, stmt := range []string{
+		"CREATE ROLE " + role + " LOGIN PASSWORD '" + role + "'",
+		`REVOKE CREATE ON SCHEMA public FROM PUBLIC`,
+		"GRANT USAGE ON SCHEMA public TO " + role,
+		"GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO " + role,
+	} {
+		_, err = db.Exec(stmt)
+		require.NoError(t, err, stmt)
+	}
+
+	nodeURL := *dbURL
+	nodeURL.User = url.UserPassword(role, role)
+
+	nodeDB, err := usql.Open("postgres", nodeURL.String())
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = nodeDB.Close() })
+
+	// CREATE TABLE IF NOT EXISTS is refused for this role even though the
+	// table exists, so the schema setup must not issue it.
+	_, err = nodeDB.Exec(`CREATE TABLE IF NOT EXISTS lane_handout (lane SMALLINT)`)
+	require.Error(t, err, "the role must lack CREATE on the schema for this test to mean anything")
+
+	require.NoError(t, createPostgresSchema(ulogger.TestLogger{}, nodeDB, true))
 }

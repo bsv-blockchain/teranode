@@ -22,6 +22,8 @@ import (
 // scale_factor stays 0 deliberately: scale-factor triggering is proportional to table
 // size, and the dead-row rate here is proportional to block production instead.
 func TestAutovacuumThresholdIsSizedToTheIndex(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	var opts []string
@@ -42,6 +44,8 @@ func TestAutovacuumThresholdIsSizedToTheIndex(t *testing.T) {
 // between passes the key drifts toward the measured 2x bloat plateau. The UTXO table's block
 // applies here for the same reason it applies there.
 func TestIdentityPartitionsCarryTheReclaimerSizedAutovacuum(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	var opts []string

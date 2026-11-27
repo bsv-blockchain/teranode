@@ -9,6 +9,7 @@ import stderrors "errors"
 //	processing error -> error when manipulating data, i.e., when processing a block, a transaction, etc., inside the method/function.
 var (
 	ErrBlobAlreadyExists          = New(ERR_BLOB_EXISTS, "blob already exists")
+	ErrBlobCorrupt                = New(ERR_BLOB_CORRUPT, "blob corrupt")
 	ErrBlobError                  = New(ERR_BLOB_ERROR, "blob error")
 	ErrBlobNotFound               = New(ERR_BLOB_NOT_FOUND, "blob not found")
 	ErrBlockAssemblyReset         = New(ERR_BLOCK_ASSEMBLY_RESET, "block assembly reset")
@@ -48,6 +49,7 @@ var (
 	ErrUtxoInvalidSize            = New(ERR_UTXO_INVALID_SIZE, "utxo invalid size")
 	ErrUtxoUnspent                = New(ERR_UTXO_UNSPENT, "utxo is unspent")
 	ErrUtxoWalkLimitExceeded      = New(ERR_UTXO_WALK_LIMIT_EXCEEDED, "utxo walk limit exceeded")
+	ErrUtxoSpendingTxPruned       = New(ERR_UTXO_SPENDING_TX_PRUNED, "spending transaction was pruned")
 	ErrUtxoError                  = New(ERR_UTXO_ERROR, "utxo error")
 	ErrStateError                 = New(ERR_STATE_ERROR, "error in state")
 	ErrStateInitialization        = New(ERR_STATE_INITIALIZATION, "error initializing state")
@@ -532,6 +534,25 @@ func NewUtxoWalkLimitExceededError(message string, params ...interface{}) *Error
 	return New(ERR_UTXO_WALK_LIMIT_EXCEEDED, message, params...)
 }
 
+// NewUtxoSpendingTxPrunedError creates a new error indicating that the
+// transaction attempting to spend an output is one the pruner has already
+// removed. It has two producers. In both stores, the output still names the
+// transaction as its spender, the spend was recorded long enough ago to be
+// history (utxo.IsHistoricalSpend), and the transaction has no record. In the
+// Aerospike store it is also the answer to a deletedChildren marker the pruner
+// wrote before spend heights were recorded (Lua INVALID_SPEND), which checks
+// neither the height nor whether the transaction's record exists. Without this answer the spend would succeed as an
+// idempotent re-spend and let the caller recreate the pruned transaction.
+//
+// It carries its own code rather than ERR_UTXO_ERROR because callers have to
+// tell it apart from the generic utxo error: it is one of the rejections that
+// must roll back the sibling spends of the same transaction (see
+// utxo.IsSpendRollbackError / utxo.NeedsSpendRollback in
+// stores/utxo/rollback_set.go).
+func NewUtxoSpendingTxPrunedError(message string, params ...interface{}) *Error {
+	return New(ERR_UTXO_SPENDING_TX_PRUNED, message, params...)
+}
+
 // NewUtxoError creates a new generic utxo error.
 func NewUtxoError(message string, params ...interface{}) *Error {
 	return New(ERR_UTXO_ERROR, message, params...)
@@ -565,6 +586,28 @@ func NewBlobNotFoundError(message string, params ...interface{}) *Error {
 // NewBlobError creates a new error with the blob error code.
 func NewBlobError(message string, params ...interface{}) *Error {
 	return New(ERR_BLOB_ERROR, message, params...)
+}
+
+// NewBlobCorruptError creates an error for a stored blob whose bytes are present but unusable,
+// such as a missing, truncated or wrong-type header. Stores write blobs whole (temp file then
+// rename, or a single S3 put), so such a blob stays broken and a retry of the same read cannot
+// help. A store keeps its StorageError and adds this as the cause, so the StorageError and
+// IsRetryableError checks are unchanged. The rendered message contains BLOB_CORRUPT, which the
+// substring match in IsMaliciousResponseError catches, so a caller that must not retry checks
+// IsBlobCorrupt first. Block validation's priority-queue worker does: it neither requeues a block
+// that failed on one nor tries another source for it. Catchup and the legacy park do not check it
+// yet; they treat it as a local storage fault and retry the block later.
+func NewBlobCorruptError(message string, params ...interface{}) *Error {
+	return New(ERR_BLOB_CORRUPT, message, params...)
+}
+
+// IsBlobCorrupt reports whether err, or anything it wraps, is a blob-corrupt error.
+func IsBlobCorrupt(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	return Is(err, ErrBlobCorrupt)
 }
 
 // NewBlobFooterSizeMismatchError creates a new error with the blob footer size mismatch error code.

@@ -236,12 +236,26 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, repo *repository.R
 	// isn't rejected with 413 (see resolveMaxSignedBodyBytes).
 	var peerAuth *peerAuthVerifier
 	p2pClient := repo.GetP2PClient()
+	allowlist := parsePeerAuthAllowlist(logger, tSettings.Asset.PeerAuthAllowlist)
 	if p2pClient != nil {
 		peerCache := newPeerTierCache(logger, p2pClient, tSettings.Asset.PeerMinerReputationThreshold)
-		allowlist := parsePeerAuthAllowlist(logger, tSettings.Asset.PeerAuthAllowlist)
 		maxSignedBodyBytes := resolveMaxSignedBodyBytes(tSettings.SubtreeValidation.MissingTransactionsBatchSize)
 		peerAuth = newPeerAuthVerifierWithBodyCap(logger, peerCache, allowlist, maxSignedBodyBytes)
 		e.Use(peerAuth.Middleware())
+	}
+
+	// Announce which metering regime this node actually serves. Both gates must be
+	// open for a caller to be elevated past the address-keyed rate: a non-empty
+	// allowlist AND a wired P2P client. Until now neither fact was logged, so an
+	// operator who allowlisted a peer and saw no change had the middleware source
+	// or nothing to consult.
+	switch {
+	case len(allowlist) == 0:
+		logger.Infof("[Asset HTTP] metering: every caller address-keyed - asset_peerAuthAllowlist is empty, peer multiplier and miner tier unreachable")
+	case p2pClient == nil:
+		logger.Warnf("[Asset HTTP] metering: every caller address-keyed - asset_peerAuthAllowlist lists %d peer(s) but no P2P client is wired, so no request can be elevated", len(allowlist))
+	default:
+		logger.Infof("[Asset HTTP] metering: tiered elevation active for %d allowlisted peer(s)", len(allowlist))
 	}
 
 	// Global tiered rate limiting. Unverified clients are IP-keyed (IPv6 to

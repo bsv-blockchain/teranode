@@ -156,6 +156,7 @@ func newParentCheckStores(ctx context.Context, t *testing.T, inMemoryChainCheck 
 
 	utxoStore, err := sql.New(ctx, logger, tSettings, utxoStoreURL)
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = utxoStore.Close(context.Background()) })
 
 	return &parentCheckStores{
 		settings:     tSettings,
@@ -321,7 +322,9 @@ func newForkParentFixture(ctx context.Context, t *testing.T, inMemoryChainCheck 
 	blockF, childTxHash := stores.buildBlockSpendingFrom(ctx, t, fundingMeta, blockP0.Hash(), forkHeight, baseTime+forkHeight)
 
 	// F's parent has had setTxMined run, as it would on a live node.
-	require.NoError(t, realClient.SetBlockMinedSet(ctx, blockP0.Hash()))
+	_, p0Meta, err = realClient.GetBlockHeader(ctx, blockP0.Hash())
+	require.NoError(t, err)
+	require.NoError(t, realClient.SetBlockMinedSet(ctx, blockP0.Hash(), p0Meta.MinedSetGeneration))
 
 	// Preconditions, all read from the real store.
 	bestHeader, _, err := realClient.GetBestBlockHeader(ctx)
@@ -454,12 +457,15 @@ func TestValidateBlock_AcceptsBlockSpendingParentMinedDeepOnItsOwnFork(t *testin
 }
 
 // TestValidateBlock_AcceptsMainChainBlockSpendingParentMinedPastThePrefetchWindow covers a parent
-// mined deeper than the prefetch route's 10,000-ID window. The main chain is genesis - B1 .. B10002,
-// T is mined in B1, and block C on B10002 spends it. B1 is C's own ancestor, so C is valid. B1 is
-// outside both the header window block.Valid checks and the prefetch window, so both routes must
+// mined deeper than the prefetch route's window, shrunk to 200 IDs. The main chain is genesis - B1 ..
+// B202, T is mined in B1, and block C on B202 spends it. B1 is C's own ancestor, so C is valid. B1 is
+// outside both the 100-header window block.Valid checks and the prefetch window, so both routes must
 // resolve it with the ancestor lookup and accept C.
 func TestValidateBlock_AcceptsMainChainBlockSpendingParentMinedPastThePrefetchWindow(t *testing.T) {
-	const chainLength = uint32(10_002)
+	const (
+		prefetchWindow = uint64(200)
+		chainLength    = uint32(prefetchWindow) + 2
+	)
 
 	for _, route := range forkParentRoutes {
 		t.Run(route.name, func(t *testing.T) {
@@ -491,13 +497,17 @@ func TestValidateBlock_AcceptsMainChainBlockSpendingParentMinedPastThePrefetchWi
 
 			childHeight := chainLength + 1
 			blockC, _ := stores.buildBlockSpendingFrom(ctx, t, b1Meta, parent, childHeight, baseTime+childHeight*60)
-			require.NoError(t, stores.client.SetBlockMinedSet(ctx, parent))
+			_, parentMeta, err := stores.client.GetBlockHeader(ctx, parent)
+			require.NoError(t, err)
+			require.NoError(t, stores.client.SetBlockMinedSet(ctx, parent, parentMeta.MinedSetGeneration))
 
-			window, err := stores.client.GetBlockHeaderIDs(ctx, parent, 10_000)
+			window, err := stores.client.GetBlockHeaderIDs(ctx, parent, prefetchWindow)
 			require.NoError(t, err)
 			require.NotContains(t, window, b1Meta.ID, "precondition: B1 is outside the prefetch window")
+			require.Greater(t, chainLength, uint32(stores.settings.BlockValidation.PreviousBlockHeaderCount), "precondition: B1 is outside the header window")
 
 			bv := stores.newBlockValidation(ctx, t)
+			bv.oldBlockIDsPrefetchWindow = prefetchWindow
 
 			require.NoError(t, bv.ValidateBlock(ctx, blockC, "test", true), "a main-chain block spending a parent mined past the prefetch window was rejected; chain calls: %s",
 				describeChainCheckCalls(stores.spy.recorded()))
@@ -571,7 +581,9 @@ func rejectsForkBlockWithOneParentOffItsHistory(t *testing.T, inMemoryChainCheck
 
 	// F: the fork block on B13, at the tip's height.
 	blockF, _ := stores.buildBlockSpendingFromEach(ctx, t, fundingMetas, blockParentOfF.Hash(), chainLength, baseTime+chainLength)
-	require.NoError(t, stores.client.SetBlockMinedSet(ctx, blockParentOfF.Hash()))
+	_, parentOfFMeta, err := stores.client.GetBlockHeader(ctx, blockParentOfF.Hash())
+	require.NoError(t, err)
+	require.NoError(t, stores.client.SetBlockMinedSet(ctx, blockParentOfF.Hash(), parentOfFMeta.MinedSetGeneration))
 
 	historyOfF, err := stores.client.GetBlockHeaderIDs(ctx, blockParentOfF.Hash(), 10_000)
 	require.NoError(t, err)

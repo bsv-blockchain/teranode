@@ -88,7 +88,7 @@ type RPCServer struct {
     authsha [sha256.Size]byte
 
     // limitauthsha contains the SHA256 hash of the HTTP basic auth string for limited-level access
-    // This is used for authenticating clients with restricted access (read-only operations)
+    // This is used for authenticating clients with restricted access (read-only commands and the submission commands)
     limitauthsha [sha256.Size]byte
 
     // numClients tracks the number of connected RPC clients for connection limiting
@@ -295,7 +295,7 @@ Implements the two-tier HTTP Basic authentication system for RPC clients. It val
     1. **Extracts the Authorization header** from the HTTP request
     2. **Validates the credentials** against both admin and limited-user authentication strings
     3. **Uses time-constant comparison** operations to prevent timing attacks
-    4. **Distinguishes between admin users** (who can perform state-changing operations) and limited users (who can only perform read-only operations)
+    4. **Distinguishes between admin users** (who can run every command) and limited users (who can run only the commands that `rpcAccessPolicy` does not mark admin-only)
 
 !!! warning "Security Considerations"
 
@@ -362,7 +362,7 @@ Some key handlers include:
     **Authentication Settings:**
 
     - **`rpc_user` and `rpc_pass`**: Credentials for RPC authentication with full admin privileges
-    - **`rpc_limit_user` and `rpc_limit_pass`**: Credentials for limited RPC access (read-only operations)
+    - **`rpc_limit_user` and `rpc_limit_pass`**: Credentials for limited RPC access (read-only commands plus `sendrawtransaction`, `submitblock`, `getminingcandidate` and `submitminingsolution`)
 
     **Connection Settings:**
 
@@ -409,18 +409,23 @@ Authentication is performed using HTTP Basic Auth.
 Admin users can execute all RPC commands. Limited users can execute the following commands:
 
 **Read-only commands:**
-createrawtransaction, decoderawtransaction, decodescript, estimatefee, getbestblock, getbestblockhash,
-getblock, getblockcount, getblockhash, getblockheader, getcfilter, getcfilterheader, getcurrentnet,
-getdifficulty, getheaders, getinfo, getnettotals, getnetworkhashps, getrawmempool, getrawtransaction,
-gettxout, gettxoutproof, help, searchrawtransactions, uptime, validateaddress, verifymessage,
-verifytxoutproof, version
+createrawtransaction, decoderawtransaction, decodescript, estimatefee, getbestblock,
+getbestblockhash, getblock, getblockcount, getblockhash, getblockheader, getcfilter,
+getcfilterheader, getcurrentnet, getdifficulty, getheaders, getinfo, getnettotals, getnetworkhashps,
+getrawmempool, getrawtransaction, gettxout, gettxoutproof, help, searchrawtransactions, uptime,
+validateaddress, verifymessage, verifytxoutproof, version
 
 **State-changing commands (also available to limited users):**
-sendrawtransaction, submitblock, getminingcandidate, submitminingsolution, freeze, unfreeze, reassign
+getminingcandidate, sendrawtransaction, submitblock, submitminingsolution
 
 **Admin-only commands (not available to limited users):**
-generate, generatetoaddress, getblockbyheight, getblockchaininfo, getchaintips, getmininginfo,
-getpeerinfo, invalidateblock, reconsiderblock, setban, isbanned, listbanned, clearbanned, stop
+addnode, clearbanned, debuglevel, freeze, generate, generatetoaddress, getaddednodeinfo,
+getblockbyheight, getblockchaininfo, getblocktemplate, getchaintips, getconnectioncount,
+getgenerate, gethashespersec, getmempoolinfo, getmininginfo, getpeerinfo, invalidateblock, isbanned,
+listbanned, node, ping, reassign, reconsiderblock, setban, setgenerate, stop, unfreeze, verifychain
+
+The classification lives in `rpcAccessPolicy` in `services/rpc/Server.go`. Every registered handler must
+have an entry. A method with no entry is denied to limited users.
 
 ### GRPC API Key Authentication
 
@@ -1465,14 +1470,17 @@ Checks if a network address is currently banned.
 
 Freezes a specific UTXO, preventing it from being spent.
 
-**Parameters:**
+**Parameters** (positional, in this order):
 
 1. `txid` (string, required) - Transaction ID of the output to freeze
 2. `vout` (numeric, required) - Output index to freeze
+3. `utxohash` (string, required) - UTXO commitment of the output, as a 64-character hex hash. The
+   Aerospike backend verifies it against the stored output and rejects a mismatch; the
+   SQL backend locates the output by `txid`/`vout` alone.
 
 **Returns:**
 
-- `boolean` - True if the UTXO was successfully frozen
+- `null` on success; an error if hash parsing or the store operation fails
 
 **Example Request:**
 
@@ -1483,7 +1491,8 @@ Freezes a specific UTXO, preventing it from being spent.
     "method": "freeze",
     "params": [
         "a08e6907dbbd3d809776dbfc5d82e371b764ed838b5655e72f463568df1aadf0",
-        1
+        1,
+        "4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda33b"
     ]
 }
 ```
@@ -1492,7 +1501,7 @@ Freezes a specific UTXO, preventing it from being spent.
 
 ```json
 {
-    "result": true,
+    "result": null,
     "error": null,
     "id": "curltest"
 }
@@ -1502,14 +1511,15 @@ Freezes a specific UTXO, preventing it from being spent.
 
 Unfreezes a previously frozen UTXO, allowing it to be spent.
 
-**Parameters:**
+**Parameters** (positional, in this order):
 
 1. `txid` (string, required) - Transaction ID of the frozen output
 2. `vout` (numeric, required) - Output index to unfreeze
+3. `utxohash` (string, required) - UTXO commitment of the output, as a 64-character hex hash (see `freeze`)
 
 **Returns:**
 
-- `boolean` - True if the UTXO was successfully unfrozen
+- `null` on success; an error if hash parsing or the store operation fails
 
 **Example Request:**
 
@@ -1520,7 +1530,8 @@ Unfreezes a previously frozen UTXO, allowing it to be spent.
     "method": "unfreeze",
     "params": [
         "a08e6907dbbd3d809776dbfc5d82e371b764ed838b5655e72f463568df1aadf0",
-        1
+        1,
+        "4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda33b"
     ]
 }
 ```
@@ -1529,7 +1540,7 @@ Unfreezes a previously frozen UTXO, allowing it to be spent.
 
 ```json
 {
-    "result": true,
+    "result": null,
     "error": null,
     "id": "curltest"
 }

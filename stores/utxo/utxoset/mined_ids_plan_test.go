@@ -123,6 +123,8 @@ func populateMembershipWindows(t *testing.T, s *Store, ctx context.Context, base
 // or merge join anywhere, and no seq scan of any tx_body or tx_mined partition. The block-id
 // read is held to more than that: it must not name tx_body at all.
 func TestMinedReadsNeverScanEveryBodyWindow(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newUncheckpointedStore(t)
 
 	keys := populateMembershipWindows(t, s, ctx, 576_000, 60_000)
@@ -147,6 +149,13 @@ func TestMinedReadsNeverScanEveryBodyWindow(t *testing.T) {
 
 	t.Run("minedByTxidSQL", func(t *testing.T) {
 		root := explainUnderNoNestloop(t, s, ctx, minedByTxidSQL, keys, int32(0), true)
+		require.True(t, assertFenced(t, root), "this read joins the body, so its plan must name tx_body")
+	})
+
+	t.Run("minedByTxidSQL naming the lane position", func(t *testing.T) {
+		require.NoError(t, addLanePositionColumns(ctx, s.pool, laneColumnMigrationLimit))
+
+		root := explainUnderNoNestloop(t, s, ctx, minedByTxidLaneSQL, keys, int32(0), true)
 		require.True(t, assertFenced(t, root), "this read joins the body, so its plan must name tx_body")
 	})
 
@@ -190,6 +199,8 @@ func minedIDsViaLookup(t *testing.T, s *Store, ctx context.Context, txids [][]by
 // tx_mined partition boundary, at a floor that excludes the lower partition, and after an
 // un-mine. Same keys, same ids, same (mined_height, block_id) order.
 func TestMinedIDsByTxidMatchesTheFullContainmentRead(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newUncheckpointedStore(t)
 
 	const base = 700_000 // partition 2430 covers 699,840 to 700,127

@@ -1,6 +1,7 @@
 package utxoset
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
@@ -15,6 +16,8 @@ import (
 // would be one round trip each. Both other implementations of this interface funnel single
 // reads into this call for exactly that reason.
 func TestBatchDecorateFillsEveryEntryFromOneQuery(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	const n = 5
@@ -47,6 +50,8 @@ func TestBatchDecorateFillsEveryEntryFromOneQuery(t *testing.T) {
 // into a rejection for that transaction alone, and failing the batch would reject every
 // transaction that happened to be resolved alongside it.
 func TestBatchDecorateReportsMissingEntriesIndividually(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	known := mkTx(t, 1, 1_000)
@@ -77,6 +82,8 @@ func TestBatchDecorateReportsMissingEntriesIndividually(t *testing.T) {
 // unlock is a single-hash call per transaction on the hot path, which is why the sql store
 // batches it.
 func TestSetLockedMarksAndClears(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	tx := mkTx(t, 1, 1_000)
@@ -108,6 +115,8 @@ func TestSetLockedMarksAndClears(t *testing.T) {
 // the spend path reads the UTXO row and never the transaction row. Setting only one of them
 // would leave a transaction that reports itself locked while its UTXOs are spendable.
 func TestSetLockedReachesTheUTXORowsToo(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	tx := mkTx(t, 3, 1_000)
@@ -124,4 +133,25 @@ func TestSetLockedReachesTheUTXORowsToo(t *testing.T) {
 
 	require.Equal(t, 3, lockedUTXOs,
 		"every UTXO must carry it: the spend path reads the UTXO row, never the transaction row")
+}
+
+// TestSetLockedContainmentStatementNeverScansItsTable pins setLockedMinedSQL's plan with nested
+// loops off, the stand-in for the estimates that pick a hash join. As a plain UPDATE ... FROM
+// unnest join it planned a Hash Join over a Seq Scan of the containment partitions here.
+func TestSetLockedContainmentStatementNeverScansItsTable(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
+	s, ctx := newTestStore(t)
+
+	parent, _, _ := lockedStampedParentSpent(t, s, ctx)
+	h := parent.TxIDChainHash()
+
+	root := explainUnderNoNestloop(t, s, ctx, setLockedMinedSQL, [][]byte{h[:]}, false, FlagLocked, s.lookupFloor())
+
+	walkPlan(root, func(n planNode) {
+		if strings.HasPrefix(n.RelationName, "tx_mined") {
+			require.NotEqual(t, "Seq Scan", n.NodeType, "seq scan of %s", n.RelationName)
+			require.NotEqual(t, "Parallel Seq Scan", n.NodeType, "seq scan of %s", n.RelationName)
+		}
+	})
 }

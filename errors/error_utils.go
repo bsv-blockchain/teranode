@@ -365,6 +365,12 @@ func GetErrorCategory(err error) string {
 		return "block"
 	}
 
+	// ERR_BLOB_CORRUPT renders "BLOB_CORRUPT" into the message too, so the same substring match
+	// would label a corrupt stored blob "malicious". It is a fault in this node's own storage.
+	if IsBlobCorrupt(err) {
+		return "blob"
+	}
+
 	if IsMaliciousResponseError(err) {
 		return "malicious"
 	}

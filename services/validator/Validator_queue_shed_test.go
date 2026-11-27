@@ -425,7 +425,7 @@ func (f *recoveryBAStore) ResetBlockAssembly(_ context.Context) error {
 
 var _ blockassembly.Store = (*recoveryBAStore)(nil)
 
-func (f *recoveryBAStore) Store(ctx context.Context, _ *chainhash.Hash, _, _ uint64, _ subtree.TxInpoints) (bool, error) {
+func (f *recoveryBAStore) Store(ctx context.Context, _ *chainhash.Hash, _, _ uint64, _ subtree.TxInpoints, _ uint32, _ uint64) (bool, error) {
 	if f.onStore != nil {
 		f.onStoreOnce.Do(f.onStore)
 	}
@@ -1077,9 +1077,12 @@ func TestValidate_ExistingTxHandling(t *testing.T) {
 		initPrometheusMetrics()
 
 		observedBefore := testutil.ToFloat64(prometheusValidatorExistingTxLockedUnmined)
+		existingBefore := testutil.ToFloat64(prometheusValidatorExistingTx)
 
 		_, err = v.Validate(ctx, childTx, 100, WithSkipPolicyChecks(true))
 		require.NoError(t, err, "the contract is unchanged: the resubmit still returns success")
+		require.Equal(t, existingBefore+1, testutil.ToFloat64(prometheusValidatorExistingTx),
+			"a transaction the store already holds is counted as skipped")
 		require.Equal(t, 0, baStore.calls, "the resubmit must not re-drive the handoff")
 		require.Equal(t, 0, spy.unlockCalls, "the resubmit must not mutate lock state")
 

@@ -23,6 +23,8 @@ import (
 // deleting rows: a drop returned 883 MB to the operating system for 228 KB of crash-recovery
 // journal, where the equivalent delete plus vacuum returned 128 KB for 1.75 GB.
 func TestTxBodyIsRangePartitionedOnCreatedHeight(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	var strategy string
@@ -41,6 +43,8 @@ func TestTxBodyIsRangePartitionedOnCreatedHeight(t *testing.T) {
 // DETACH PARTITION ... CONCURRENTLY impossible on every other partition of the table, and the
 // concurrent form is what keeps the drop from blocking readers.
 func TestTxBodyHasASentinelPartitionBelowEveryLiveWindow(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	var isDefault bool
@@ -69,6 +73,8 @@ func TestTxBodyHasASentinelPartitionBelowEveryLiveWindow(t *testing.T) {
 // reconstructed: unlocking scripts exist only in the transaction, and the node keeps almost
 // no blocks.
 func TestCreateWritesTheBody(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	tx := mkTx(t, 2, 4_242)
@@ -90,6 +96,8 @@ func TestCreateWritesTheBody(t *testing.T) {
 // TestCreateDoesNotWriteASecondBodyForADuplicate: the claim gates the body too, or a
 // re-applied block writes the bytes again for every transaction in it.
 func TestCreateDoesNotWriteASecondBodyForADuplicate(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	tx := mkTx(t, 1, 1_000)
@@ -122,6 +130,8 @@ func TestCreateDoesNotWriteASecondBodyForADuplicate(t *testing.T) {
 // The forced failure here is a tx_body partition that does not exist. Detaching one leaves the
 // range unrouted, so the body insert fails while the identity claim has already succeeded.
 func TestCreateIsAtomicAcrossItsThreeWrites(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	// Make the partition for height 700_000 exist, then take it away, so the body insert fails
@@ -190,6 +200,8 @@ func tableExists(t *testing.T, s *Store, ctx context.Context, name string) bool 
 // The journal's own listing has handled this since it was written. This is the same handling,
 // ported.
 func TestTxBodyReclaimRecoversAnOrphanedWindow(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	s.bodyRetention = 96
@@ -230,6 +242,8 @@ func TestTxBodyReclaimRecoversAnOrphanedWindow(t *testing.T) {
 // tried to reach the state with a rolled-back transaction, that form cannot produce it at all,
 // and the test then asserted "nothing is pending" against a database where nothing ever was.
 func TestTxBodyReclaimRecoversAWindowStuckMidDetach(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	s.bodyRetention = 96
@@ -269,6 +283,8 @@ func TestTxBodyReclaimRecoversAWindowStuckMidDetach(t *testing.T) {
 // it decides which disk comes back first and whether the oldest surviving partition is a usable
 // measure of progress at all.
 func TestTxBodyReclaimTakesTheOldestWindowFirst(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	s.bodyRetention = 96
@@ -303,6 +319,8 @@ func bodyExists(t *testing.T, s *Store, ctx context.Context, tx *bt.Tx) bool {
 // TestBodyWindowsBelowRetentionAreDropped. The transaction bytes are the one part with a
 // horizon rather than a dependency, so their partitions go wholesale.
 func TestBodyWindowsBelowRetentionAreDropped(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	old := mkTx(t, 1, 1_000)

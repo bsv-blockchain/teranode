@@ -81,6 +81,7 @@ import (
 	spendpkg "github.com/bsv-blockchain/teranode/stores/utxo/spend"
 	"github.com/bsv-blockchain/teranode/stores/utxo/txparse"
 	"github.com/bsv-blockchain/teranode/util"
+	"github.com/bsv-blockchain/teranode/util/lane"
 	"github.com/bsv-blockchain/teranode/util/tracing"
 	"github.com/bsv-blockchain/teranode/util/uaerospike"
 	"github.com/ordishs/gocore"
@@ -1171,6 +1172,22 @@ NEXT_BATCH_RECORD:
 						items[idx].Data.CreatedAt = t
 					}
 				}
+
+			case fields.LanePosition:
+				// Only written when a lane position was supplied, so an absent bin is
+				// normal and leaves 0 (lane.None). The bin is a signed integer holding
+				// the position bit for bit. An unexpected type is ignored rather than
+				// failing the read.
+				if v := bins[key.String()]; v != nil {
+					switch t := v.(type) {
+					case int:
+						items[idx].Data.LanePosition = lane.FromSigned(int64(t))
+					case int64:
+						items[idx].Data.LanePosition = lane.FromSigned(t)
+					default:
+						s.logger.Warnf("[BatchDecorate][%s] ignoring lane position bin of unexpected type %T", items[idx].Hash, v)
+					}
+				}
 			}
 		}
 	}
@@ -1729,6 +1746,8 @@ func (s *Store) sendOutpointBatch(batch []*batchOutpoint) {
 		previousOutputsDecorateStat.AddTimeForRange(start, len(batch))
 	}()
 
+	laneShadow := s.laneShadow()
+
 	var err error
 
 	batchPolicy := util.GetAerospikeBatchPolicy(s.settings)
@@ -1764,7 +1783,11 @@ func (s *Store) sendOutpointBatch(batch []*batchOutpoint) {
 		// can be reconstructed with the era-aware unspendable rule keyed to their
 		// creation height, and so parent-output items can report it. The parent's
 		// inputs, version and locktime are not read: nothing on this path uses them.
-		bins := []fields.FieldName{fields.Outputs, fields.External, fields.BlockHeights}
+		bins := outpointBins
+		if laneShadow {
+			bins = outpointLaneBins
+		}
+
 		record := aerospike.NewBatchRead(policy, key, fields.FieldNamesToStrings(bins))
 
 		// Add to batch records
@@ -1790,6 +1813,13 @@ func (s *Store) sendOutpointBatch(batch []*batchOutpoint) {
 	txExternal := make(map[chainhash.Hash]bool, len(batchRecords))
 	txHeights := make(map[chainhash.Hash][]uint32, len(batchRecords))
 	heightErrors := make(map[chainhash.Hash]error)
+	// Per parent, with lane positions on: its own lane position, for the validator to copy onto the
+	// child. A parent with none, or a bin that does not parse, is left out and answers zero. And
+	// the coinbases, for the lanes shadow; a bin that does not parse answers false.
+	var (
+		txLanes     map[chainhash.Hash]uint64
+		txCoinbases map[chainhash.Hash]bool
+	)
 
 	// Process the batch records
 	for idx, batchRecordIfc := range batchRecords {
@@ -1815,6 +1845,23 @@ func (s *Store) sendOutpointBatch(batch []*batchOutpoint) {
 			heightErrors[previousTxHash] = heightsErr
 		} else {
 			txHeights[previousTxHash] = blockHeights
+		}
+
+		if position, ok := lanePositionFromBins(bins); laneShadow && ok {
+			if txLanes == nil {
+				txLanes = make(map[chainhash.Hash]uint64, len(batchRecords))
+			}
+
+			txLanes[previousTxHash] = position
+		}
+
+		// Only outpointLaneBins asks for the flag, so it is read with lane positions on and no other time.
+		if coinbase, _ := bins[fields.IsCoinbase.String()].(bool); coinbase {
+			if txCoinbases == nil {
+				txCoinbases = make(map[chainhash.Hash]bool)
+			}
+
+			txCoinbases[previousTxHash] = true
 		}
 
 		external, ok := bins[fields.External.String()].(bool)
@@ -1851,6 +1898,11 @@ func (s *Store) sendOutpointBatch(batch []*batchOutpoint) {
 		if batchItem.parent != nil {
 			batchItem.answer = parentOutputAnswer(batchItem.parent.Vout, txs[parentTxID], txErrors[parentTxID],
 				txExternal[parentTxID], txHeights[parentTxID], heightErrors[parentTxID])
+			if batchItem.answer.Err == nil {
+				batchItem.answer.LanePosition = txLanes[parentTxID]
+				batchItem.answer.IsCoinbase = txCoinbases[parentTxID]
+			}
+
 			batchItem.complete(nil)
 
 			continue
@@ -2488,5 +2540,28 @@ func (s *Store) sendGetBatch(batch []*batchGetItem) {
 			Data: item.Data,
 			Err:  item.Err,
 		})
+	}
+}
+
+// The bins the outpoint batch reads from a parent's master record. Only the outputs are ever used.
+// BlockHeights is read so external parents can be reconstructed with the era-aware unspendable rule
+// keyed to their creation height, and so parent-output items can report it. With lane positions on
+// the parent's own lane position comes in the same read, for the validator to copy onto the child,
+// and its coinbase flag, for the lanes shadow (utxo.ParentOutput.IsCoinbase).
+var (
+	outpointBins     = []fields.FieldName{fields.Outputs, fields.External, fields.BlockHeights}
+	outpointLaneBins = []fields.FieldName{fields.Outputs, fields.External, fields.BlockHeights, fields.LanePosition, fields.IsCoinbase}
+)
+
+// lanePositionFromBins is the record's own lane position, and whether it has a readable one. The
+// bin is a signed integer holding the position bit for bit.
+func lanePositionFromBins(bins aerospike.BinMap) (uint64, bool) {
+	switch t := bins[fields.LanePosition.String()].(type) {
+	case int:
+		return lane.FromSigned(int64(t)), true
+	case int64:
+		return lane.FromSigned(t), true
+	default:
+		return lane.None, false
 	}
 }

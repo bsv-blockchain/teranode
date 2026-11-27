@@ -14,6 +14,7 @@ import (
 	"github.com/bsv-blockchain/teranode/services/blockchain/blockchain_api"
 	"github.com/bsv-blockchain/teranode/stores/blob/storetypes"
 	"github.com/bsv-blockchain/teranode/stores/blockchain/options"
+	"github.com/bsv-blockchain/teranode/util/lane"
 )
 
 // Subscriber source identifiers passed to Subscribe(). Services use these
@@ -27,6 +28,7 @@ const (
 	SubscriberBlockValidation     = "blockvalidation"
 	SubscriberSubtreeValidation   = "subtreevalidation"
 	SubscriberPruner              = "Pruner"
+	SubscriberProbe               = "probe"
 	SubscriberAssetService        = "AssetService"
 	SubscriberUTXOPersister       = "utxo-persister"
 	SubscriberFileBlockHeight     = "File BlockHeight"
@@ -97,6 +99,27 @@ type ClientI interface {
 
 	// AssignBlockID returns a stable block ID for a given block hash (idempotent per hash).
 	AssignBlockID(ctx context.Context, blockHash *chainhash.Hash) (uint64, error)
+
+	// OpenLaneLease opens a lease on a free lane, never 254 or 255, with its first grant. It returns
+	// an error when no lane is free, and the caller retries.
+	OpenLaneLease(ctx context.Context, holder string) (lane.LeaseID, lane.Grant, error)
+
+	// RenewLaneLease renews a lease and, with WantGrant, records the next grant. A closed lease is
+	// answered with Closed set, not an error, and the holder opens a new lease.
+	RenewLaneLease(ctx context.Context, r lane.Renewal) (lane.RenewResult, error)
+
+	// ReleaseLaneLease closes a lease cleanly. alreadyClosed reports a lease that was closed before.
+	ReleaseLaneLease(ctx context.Context, r lane.Release) (alreadyClosed bool, err error)
+
+	// LaneMapRows returns one block's lane map rows, by lane and first position, each checked by
+	// the store; none for a block the map holds no row of. Readers at utxostore_laneMigration
+	// shadow load them into their index.
+	LaneMapRows(ctx context.Context, blockID uint32) ([]lane.MapRow, error)
+
+	// LaneCapGrants returns, for each lane with one, the first grant handed out at or above height,
+	// by lane. Block assembly's restart dry run at utxostore_laneMigration shadow starts its window
+	// there.
+	LaneCapGrants(ctx context.Context, height uint32) ([]lane.CapGrant, error)
 
 	// SendNotification broadcasts a notification to subscribers.
 	//
@@ -410,7 +433,7 @@ type ClientI interface {
 	GetBlockHeadersFromHeight(ctx context.Context, height, limit uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error)
 
 	// BlocksBetterThan returns the valid blocks that sort better than after in the order the
-	// store picks its best tip by (most chain work, then lowest peer id, then lowest block id),
+	// store picks its best tip by (most chain work, then lowest block id),
 	// worst first, at or above minHeight, at most limit of them. When from is not nil it also
 	// returns the valid blocks that sort better than or level with from.
 	//
@@ -585,10 +608,15 @@ type ClientI interface {
 	// Parameters:
 	// - ctx: Context for the operation with timeout and cancellation support
 	// - blockHash: Hash of the block to mark as mined
+	// - minedSetGeneration: BlockHeaderMeta.MinedSetGeneration read from GetBlockHeader
+	//   when the caller's tagging run started. The write is refused if it has moved since,
+	//   because ClearBlockMinedSet, InvalidateBlock or RevalidateBlock cleared mined_set so
+	//   the block is processed again.
 	//
 	// Returns:
+	// - errors.ErrStateError if the block's mined_set generation no longer equals minedSetGeneration
 	// - Error if the operation fails, nil on success
-	SetBlockMinedSet(ctx context.Context, blockHash *chainhash.Hash) error
+	SetBlockMinedSet(ctx context.Context, blockHash *chainhash.Hash, minedSetGeneration uint64) error
 
 	// ClearBlockMinedSet resets the mined_set flag to false for a block.
 	//
@@ -731,7 +759,8 @@ type ClientI interface {
 	// - blockIDs: Array of block IDs to check
 	//
 	// Returns:
-	// - Boolean indicating whether all the blocks are in the main chain (true) or not (false)
+	// - Boolean indicating whether ANY of the blocks is in the main chain (true) or none is (false).
+	//   Callers rely on this any-of semantics; an empty blockIDs slice returns false.
 	// - Error if the check operation fails
 	CheckBlockIsInCurrentChain(ctx context.Context, blockIDs []uint32) (bool, error)
 

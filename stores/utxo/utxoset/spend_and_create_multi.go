@@ -8,6 +8,7 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
+	"github.com/bsv-blockchain/teranode/util/lane"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -53,19 +54,128 @@ func (s *Store) SpendAndCreateMulti(ctx context.Context, txs []*bt.Tx, blockHeig
 		return []utxo.SpendAndCreateMultiResult{}, nil
 	}
 
+	// The two netted routes take one position per transaction here, before any transaction is
+	// opened, and keep them through a rolled-back round. The default route goes through
+	// SpendAndCreate, which takes its own.
 	if below, err := s.nettedBelowGate(list.Options); below {
 		if err != nil {
 			return nil, err
 		}
 
-		return s.netBelow(ctx, txs, list, blockHeight)
+		positions, err := s.TakeListLanePositions(ctx, list)
+		if err != nil {
+			return nil, err
+		}
+
+		return s.netBelow(ctx, txs, list, blockHeight, positions)
 	}
 
 	if !s.canNet(list.Options) {
 		return utxo.DefaultSpendAndCreateMulti(ctx, s, utxo.SpendAndCreateMultiWidthsFor(s.settings), txs, blockHeight, opts...)
 	}
 
-	return s.newNettedWrite(txs, list, blockHeight).writeFamilies(ctx)
+	positions, err := s.TakeListLanePositions(ctx, list)
+	if err != nil {
+		return nil, err
+	}
+
+	w := s.newNettedWrite(txs, list, blockHeight)
+	w.positions = positions
+
+	w.burns = newListBurns(positions)
+
+	results, err := w.writeFamilies(ctx)
+
+	// On a failed list the results are nil, but chunks that committed before the failure gave
+	// their transactions results, and those positions were written.
+	s.burnList(list, positions, utxo.LaneBurnListFailed, func(i int) (utxo.SpendAndCreateMultiResult, string) {
+		return w.items[i].result, w.burnAt(i)
+	})
+
+	// A transaction its chunk rolled back whole before sending the COMMIT, and that no later attempt
+	// settled, wrote nothing, so its position also goes back. It was counted as burned above.
+	s.returnRolledBackList(positions, func(i int) bool {
+		return w.burnAt(i) == utxo.LaneBurnRolledBack && w.items[i].result.Status == utxo.MultiTxNotAttempted
+	})
+
+	return results, err
+}
+
+// burnList records every position a netted list took and wrote no record with. outcome gives
+// transaction i's result and, when its chunk failed, why its position burned; with no outcome, or
+// for a transaction with no result and no failed chunk, the position burned for unsettled.
+func (s *Store) burnList(list *utxo.SpendAndCreateMultiList, positions []uint64, unsettled string,
+	outcome func(i int) (utxo.SpendAndCreateMultiResult, string)) {
+	// Tallied per reason and counted once each: at the tip most of a mined list is found stored,
+	// and one counter lookup per transaction would cost a million lookups for a million-transaction
+	// block.
+	var counts map[string]int
+
+	for i, position := range positions {
+		if position == lane.None {
+			continue
+		}
+
+		var (
+			res       utxo.SpendAndCreateMultiResult
+			chunkBurn string
+		)
+
+		if outcome != nil {
+			res, chunkBurn = outcome(i)
+		}
+
+		var reason string
+
+		switch {
+		case res.Status == utxo.MultiTxCreated:
+			continue
+		case res.Status == utxo.MultiTxExisted:
+			reason = utxo.LaneBurnExists
+		case res.Status == utxo.MultiTxFailed:
+			reason = utxo.LaneBurnReason(res.Err, res.Spends)
+		case res.Status == utxo.MultiTxParentFailed:
+			reason = utxo.LaneBurnParentFailed
+		case chunkBurn != "":
+			reason = chunkBurn
+		default:
+			reason = unsettled
+		}
+
+		if counts == nil {
+			counts = make(map[string]int, 4)
+		}
+
+		counts[reason]++
+	}
+
+	for reason, n := range counts {
+		s.BurnLanePositions(list.Options.Caller, reason, n)
+	}
+}
+
+// returnRolledBackList hands back, once a netted list has ended and no chunk can still commit, the
+// lane position of every transaction rolledBack says was rolled back whole before its chunk's COMMIT
+// was sent and that has no result from a later attempt. Nothing else of a list goes back: a
+// transaction found stored or with a refused spend may share its round's containment and journal
+// writes, which this does not prove unwritten.
+func (s *Store) returnRolledBackList(positions []uint64, rolledBack func(i int) bool) {
+	for i, position := range positions {
+		if position != lane.None && rolledBack(i) {
+			s.ReturnLanePosition(position, utxo.LaneReturnRolledBack, true)
+		}
+	}
+}
+
+// listItemOptions are the options transaction pos of a list is written with, carrying the position
+// taken for it at the entry, if any.
+func listItemOptions(list *utxo.SpendAndCreateMultiList, positions []uint64, pos int) *utxo.CreateOptions {
+	o := list.Options.ItemOptions(pos)
+	if positions != nil {
+		o.LanePosition = positions[pos]
+	}
+
+	return o
 }
 
 // canNet reports whether the netted write models every option of the list.
@@ -149,6 +259,84 @@ type nettedWrite struct {
 	items       []*multiTx
 	// position is each transaction's index in items, by txid.
 	position map[chainhash.Hash]int
+	// positions are the lane positions taken at the entry, by list index; nil with no source.
+	positions []uint64
+	// burns says why each transaction's lane position burned once its chunk failed, by list
+	// index. Allocated only with positions, so a list without them carries no byte for it. Each
+	// chunk writes only its own transactions', and they are read after every chunk ends.
+	burns []listBurn
+}
+
+// newListBurns is the burn-reason slice for a list that took positions, one byte per transaction,
+// or nil for a list that took none, which then carries nothing for it.
+func newListBurns(positions []uint64) []listBurn {
+	if positions == nil {
+		return nil
+	}
+
+	return make([]listBurn, len(positions))
+}
+
+// setBurn records why transaction i's position burned, when the list took positions.
+func (w *nettedWrite) setBurn(i int, b listBurn) {
+	if w.burns != nil {
+		w.burns[i] = b
+	}
+}
+
+// burnAt is the reason recorded for transaction i, or "" when none was.
+func (w *nettedWrite) burnAt(i int) string {
+	if w.burns == nil {
+		return ""
+	}
+
+	return w.burns[i].String()
+}
+
+// listBurn is a burned lane position's reason as one byte, so a list of a million transactions
+// spends a byte each on it rather than a string's sixteen.
+type listBurn uint8
+
+const (
+	listBurnNone listBurn = iota
+	listBurnExists
+	listBurnSpendRejected
+	listBurnOutcomeUnknown
+	listBurnRolledBack
+	listBurnParentFailed
+	listBurnListFailed
+	listBurnError
+)
+
+var listBurnReasons = [...]string{
+	listBurnNone:           "",
+	listBurnExists:         utxo.LaneBurnExists,
+	listBurnSpendRejected:  utxo.LaneBurnSpendRejected,
+	listBurnOutcomeUnknown: utxo.LaneBurnOutcomeUnknown,
+	listBurnRolledBack:     utxo.LaneBurnRolledBack,
+	listBurnParentFailed:   utxo.LaneBurnParentFailed,
+	listBurnListFailed:     utxo.LaneBurnListFailed,
+	listBurnError:          utxo.LaneBurnError,
+}
+
+// String returns the counter's reason label, or "" for none.
+func (b listBurn) String() string {
+	if int(b) >= len(listBurnReasons) {
+		return utxo.LaneBurnError
+	}
+
+	return listBurnReasons[b]
+}
+
+// listBurnFor is the code of one of utxo's reason labels.
+func listBurnFor(reason string) listBurn {
+	for b, r := range listBurnReasons {
+		if r == reason && b != int(listBurnNone) {
+			return listBurn(b) //nolint:gosec // b indexes a short fixed array
+		}
+	}
+
+	return listBurnError
 }
 
 // multiSlowListLog is the write time above which a list gets an info log line saying where the
@@ -215,6 +403,9 @@ type nettedRows struct {
 	spenders  [][]byte
 	vins      []int32
 	scripts   [][]byte
+	// lanes is each row's output's lane position, the creating transaction's, in signed form, 0
+	// for none; nil when no transaction in the plan has a position.
+	lanes []int64
 }
 
 // takeNetted removes from the plan every UTXO a child in the list spends and returns the
@@ -223,6 +414,7 @@ type nettedRows struct {
 func (p *createPlan) takeNetted(spender map[nettedKey]nettedSpender) *nettedRows {
 	j := &nettedRows{}
 	keep := 0
+	lanes := p.lanesByTxid()
 
 	for c := range p.utxoTxids {
 		by, ok := spender[newNettedKey(p.utxoTxids[c], p.utxoUkeys[c])]
@@ -253,6 +445,10 @@ func (p *createPlan) takeNetted(spender map[nettedKey]nettedSpender) *nettedRows
 		j.spenders = append(j.spenders, by.txid)
 		j.vins = append(j.vins, by.vin)
 		j.scripts = append(j.scripts, p.utxoScripts[c])
+
+		if lanes != nil {
+			j.lanes = append(j.lanes, lanes[string(p.utxoTxids[c])])
+		}
 	}
 
 	p.utxoSats = p.utxoSats[:keep]
@@ -282,14 +478,46 @@ SELECT $1::int, j.spending_vin, j.satoshis, j.created_height, j.spendable_from, 
     AS j(satoshis, created_height, spendable_from, flags, mined_height, block_id,
          ukey, txid, spending_txid, script, spending_vin)`
 
+// nettedJournalLaneSQL is nettedJournalSQL carrying each output's lane position, for a database with
+// lane_position on spend_journal (Store.laneCoinColumn).
+var nettedJournalLaneSQL = laneStatement(nettedJournalSQL,
+	"spending_txid, script)\nSELECT", "spending_txid, script, lane_position)\nSELECT",
+	"j.spending_txid, j.script\n  FROM unnest", "j.spending_txid, j.script, NULLIF(j.lane_position, 0)\n  FROM unnest",
+	"$11::bytea[], $12::int[])", "$11::bytea[], $12::int[], $13::bigint[])",
+	"spending_txid, script, spending_vin)", "spending_txid, script, spending_vin, lane_position)",
+)
+
 func (w *nettedWrite) writeNettedJournal(ctx context.Context, dbTx pgx.Tx, j *nettedRows) error {
 	if len(j.ukeys) == 0 {
 		return nil
 	}
 
-	if _, err := dbTx.Exec(ctx, nettedJournalSQL, int32(w.blockHeight), //nolint:gosec // a height fits int32
-		j.sats, j.created, j.spendable, j.flags, j.mined, j.blockIDs, j.ukeys, j.txids, j.spenders, j.scripts, j.vins); err != nil {
+	stmt := nettedJournalSQL
+	args := []any{int32(w.blockHeight), //nolint:gosec // a height fits int32
+		j.sats, j.created, j.spendable, j.flags, j.mined, j.blockIDs, j.ukeys, j.txids, j.spenders, j.scripts, j.vins}
+
+	if w.s.laneCoinColumn {
+		stmt = nettedJournalLaneSQL
+		args = append(args, j.lanes)
+	}
+
+	if _, err := dbTx.Exec(ctx, stmt, args...); err != nil {
 		return errors.NewStorageError("[utxoset][SpendAndCreateMulti] journal netted spends", err)
+	}
+
+	if w.s.laneShadow {
+		carried := 0
+		for _, position := range j.lanes {
+			if position != 0 {
+				carried++
+			}
+		}
+
+		if !w.s.laneCoinColumn {
+			carried = 0
+		}
+
+		utxo.CountLaneSpends(laneStoreName, carried, len(j.ukeys)-carried)
 	}
 
 	return nil

@@ -16,6 +16,7 @@ import (
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
+	"github.com/bsv-blockchain/teranode/util/lane"
 )
 
 const (
@@ -42,6 +43,7 @@ var (
 	rawBinIsCoinbase   = fields.IsCoinbase.String()
 	rawBinExternal     = fields.External.String()
 	rawBinInputs       = fields.Inputs.String()
+	rawBinLanePosition = fields.LanePosition.String()
 )
 
 // rawUnminedRecord holds the decoded bins of the record being delivered.
@@ -51,6 +53,9 @@ type rawUnminedRecord struct {
 	size         uint64
 	createdAt    int
 	unminedSince int
+	// lanePosition is the record's own lane position, read only at utxostore_laneMigration
+	// shadow, when the query names the bin; 0 for none.
+	lanePosition uint64
 
 	// hasCreatedAt is set whenever the bin is present, whatever its type:
 	// its absence is what marks a split record.
@@ -159,6 +164,12 @@ func (h *rawUnminedHandler) Bin(name []byte, particleType int, value []byte) err
 		r.coinbase = rawBool(particleType, value)
 	case rawBinExternal:
 		r.external = rawBool(particleType, value)
+	case rawBinLanePosition:
+		// A position that does not decode is none: at shadow a lane read never fails the reload,
+		// and the tx is counted as without position when its subtree is sealed.
+		if particleType == particle_type.INTEGER && len(value) == 8 {
+			r.lanePosition = lane.FromSigned(int64(binary.BigEndian.Uint64(value))) //nolint:gosec // wire int64
+		}
 	case rawBinBlockIDs:
 		r.blockIDs, r.blockIDsErr = as.DecodeParticle(particleType, value)
 	case rawBinInputs:
@@ -226,7 +237,8 @@ func (h *rawUnminedHandler) EndRecord() error {
 	return h.add(tx)
 }
 
-// buildTx mirrors processRecord for a raw record.
+// buildTx mirrors processRecord for a raw record. A missing external file
+// yields a hashed Skip record so block assembly can filter queued children.
 func (h *rawUnminedHandler) buildTx() (*utxo.UnminedTransaction, error) {
 	r := &h.cur
 
@@ -275,6 +287,30 @@ func (h *rawUnminedHandler) buildTx() (*utxo.UnminedTransaction, error) {
 		h.busy.Store(true)
 		*txInpoints, err = h.it.processExternalTransactionInpoints(h.ctx, &r.txid)
 		h.busy.Store(false)
+
+		// The record says the transaction is in the external store, but its file
+		// is not there. For block assembly's load, leave it out rather than fail
+		// the scan (see GetUnminedTxIteratorSkippingMissingExternal). Its children
+		// are left out by the load's parent chain check or startup queue drain:
+		// the hashed Skip record below lets the drain reject children submitted
+		// after their scan partition completed. Block assembly opens this scan
+		// only while blockassembly_onRestartValidateParentChain and
+		// blockassembly_onRestartRemoveInvalidParentChainTxs are both on (the defaults).
+		if h.it.skipMissingExternal && errors.Is(err, errors.ErrNotFound) {
+			h.it.missingExternalSkipped.Add(1)
+			prometheusUnminedMissingExternalSkipped.Inc()
+			h.it.store.logger.Errorf("[unminedTxIterator][%s] skipping unmined transaction: its record is external but the external store has no file for it: %v", r.txid.String(), err)
+
+			// The block IDs and unmined_since go with it: a record already mined on
+			// the best chain with a stale unmined_since is repaired by the load as
+			// usual, file or no file, and its children stay valid.
+			return &utxo.UnminedTransaction{
+				Node:         &subtree.Node{Hash: r.txid},
+				Skip:         true,
+				UnminedSince: r.unminedSince,
+				BlockIDs:     blockIDs,
+			}, nil
+		}
 	case r.fastInputs:
 		*txInpoints, err = h.txInpointsFromBuffer()
 	case r.inputsErr != nil:
@@ -300,6 +336,7 @@ func (h *rawUnminedHandler) buildTx() (*utxo.UnminedTransaction, error) {
 		CreatedAt:    r.createdAt,
 		Locked:       r.locked,
 		BlockIDs:     blockIDs,
+		LanePosition: r.lanePosition,
 	}
 
 	return &rec.tx, nil

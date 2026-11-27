@@ -9,6 +9,7 @@ package validator
 
 import (
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 )
 
@@ -46,8 +47,16 @@ type Options struct {
 	// rather than via mempool submission. Published on the txmeta topic so
 	// relay consumers never announce such transactions. Explicit by design —
 	// not inferred from SkipPolicyChecks, which external submitters may set
-	// on genuinely fresh transactions.
+	// on genuinely fresh transactions. It also changes which validation
+	// checks run and how block assembly treats the transaction; for example,
+	// the DAH-evicted-parent grace runs only when InBlock is false.
 	InBlock bool
+
+	// Caller names the service the validation's create is made for, on the burned lane position
+	// counter (stores/utxo, WithCaller). Zero lets the validator choose: subtree validation for
+	// InBlock, the validator otherwise. It changes nothing about validation, and it is not sent to
+	// a remote validator over gRPC, which then chooses as for zero.
+	Caller utxo.Caller
 
 	// SkipScriptValidation determines whether BDK transaction/script validation should be skipped.
 	// When true, the validator skips the BDK ValidateTransaction call (script execution,
@@ -68,14 +77,16 @@ type Options struct {
 
 	// CandidateParentMedianTime carries the equivalent of bitcoin-sv's
 	// pindexPrev->GetMedianTimePast() for the candidate block being validated.
-	// Only consumed when SkipPolicyChecks=true AND blockHeight >= CSVHeight,
-	// matching bitcoin-sv's BIP113 activation at ContextualCheckBlock
-	// (src/validation.cpp:6001), where post-activation finality is checked
-	// against the parent's MTP rather than the candidate block's own timestamp.
+	// Only consumed when SkipPolicyChecks=true AND blockHeight >= CSVHeight:
+	// as the finality comparison time, matching bitcoin-sv's BIP113 activation
+	// at ContextualCheckBlock (src/validation.cpp:6001), where post-activation
+	// finality is checked against the parent's MTP rather than the candidate
+	// block's own timestamp; and, below GenesisActivationHeight, as BIP68's
+	// block MTP and the coin time of a coin at or above the candidate height.
 	//
 	// Required field on the consensus path. Block-validation callers MUST
-	// populate this. selectFinalityComparisonTime returns a ProcessingError
-	// when it is missing — there is no tip-MTP soft-fall. blockState.MedianTime
+	// populate this. selectFinalityComparisonTime, and validateTransaction's
+	// BIP68 phase, return a ProcessingError when it is missing — there is no tip-MTP soft-fall. blockState.MedianTime
 	// is updated asynchronously from blockchain notifications, so a tip
 	// advance / reorg between the caller's snapshot and the validator's read
 	// would silently swap the comparison time source; the hard-error stance
@@ -96,6 +107,31 @@ type Options struct {
 	// (see services/legacy/netsync and services/subtreevalidation for the
 	// reference implementations).
 	CandidateParentMedianTime uint32
+
+	// CandidateForkStartHeight and CandidateForkMTPs give BIP68 the coin times of a
+	// candidate block on a side chain. CandidateForkMTPs[i] is the median of the 11
+	// timestamps before the candidate-branch block at height CandidateForkStartHeight+i,
+	// the value bitcoin-sv reads as GetAncestor(nCoinHeight-1)->GetMedianTimePast() for a
+	// coin created in that block. The list runs from the first block above the point where
+	// the candidate's branch leaves the current chain up to the candidate's parent, so
+	// CandidateForkStartHeight+len(CandidateForkMTPs) is the candidate's height. A coin at
+	// one of those heights reads its time from here rather than from the validator's MTP
+	// store, which holds the current chain's values. Both are empty when the candidate's
+	// parent is on the current chain. Only consumed where BIP68 is enforced. The validator
+	// looks a coin up by its lowest recorded height across every block that mined it, so a
+	// parent also mined lower on another chain is read at that other height.
+	CandidateForkStartHeight uint32
+	CandidateForkMTPs        []uint32
+
+	// CandidateBaseID, when CandidateBaseSet, is the ID of the block BIP68 needs the
+	// validator's MTP store to hold: the candidate's fork point when it carries
+	// CandidateForkMTPs, or else its parent. Every coin time the store gives the candidate is
+	// a median below that block, so the store must hold the chain through it. The validator
+	// checks this when it reads, and reloads its store from the current chain when it does
+	// not, as after a reorg; if the store still does not hold it, the block fails with a
+	// ProcessingError, never a verdict. Unset, the store is read without the check.
+	CandidateBaseID  uint32
+	CandidateBaseSet bool
 
 	// UnconfirmedParentsAtCandidateHeight makes the unconfirmedParentHeight
 	// sentinel resolve to the candidate block height instead of failing closed
@@ -343,6 +379,14 @@ func WithInBlock(inBlock bool) Option {
 	}
 }
 
+// WithCaller names the service a validation's create is made for, on the burned lane position
+// counter. See Options.Caller.
+func WithCaller(caller utxo.Caller) Option {
+	return func(o *Options) {
+		o.Caller = caller
+	}
+}
+
 // WithSkipScriptValidation creates an option to skip the BDK transaction/script
 // validation step. See Options.SkipScriptValidation for safety constraints.
 func WithSkipScriptValidation(skip bool) Option {
@@ -386,6 +430,24 @@ func WithCandidateBlockTime(timestamp uint32) Option {
 func WithCandidateParentMedianTime(mtp uint32) Option {
 	return func(o *Options) {
 		o.CandidateParentMedianTime = mtp
+	}
+}
+
+// WithCandidateForkMTPs carries the coin times of the candidate's own branch above the
+// point where it leaves the current chain. See Options.CandidateForkMTPs.
+func WithCandidateForkMTPs(startHeight uint32, mtps []uint32) Option {
+	return func(o *Options) {
+		o.CandidateForkStartHeight = startHeight
+		o.CandidateForkMTPs = mtps
+	}
+}
+
+// WithCandidateBase names the block the candidate needs the MTP store to hold. See
+// Options.CandidateBaseID.
+func WithCandidateBase(id uint32) Option {
+	return func(o *Options) {
+		o.CandidateBaseID = id
+		o.CandidateBaseSet = true
 	}
 }
 

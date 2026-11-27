@@ -708,6 +708,17 @@ func optionsFromValidateRequest(req *validator_api.ValidateTransactionRequest) (
 		opts.OutpointOnlySpend = *req.OutpointOnlySpend
 	}
 
+	if req.CandidateForkStartHeight != nil {
+		opts.CandidateForkStartHeight = *req.CandidateForkStartHeight
+	}
+
+	opts.CandidateForkMTPs = req.CandidateForkMtps
+
+	if req.CandidateBaseId != nil {
+		opts.CandidateBaseID = *req.CandidateBaseId
+		opts.CandidateBaseSet = true
+	}
+
 	return opts, nil
 }
 
@@ -800,6 +811,9 @@ func (v *Server) validateTransaction(ctx context.Context, req *validator_api.Val
 		Valid:    true,
 		Txid:     tx.TxIDChainHash().CloneBytes(),
 		Metadata: txMetaBytes,
+		// Bytes does not carry the lane position, so it goes beside it: subtree validation puts it
+		// in the subtree's lane bitmaps at utxostore_laneMigration shadow.
+		LanePosition: txMetaData.LanePosition,
 	}, nil
 }
 
@@ -832,8 +846,8 @@ func (v *Server) ValidateTransactionBatch(ctx context.Context, req *validator_ap
 
 	// Pre-warm the MTP store for BIP68 validation before spawning per-transaction goroutines.
 	// All transactions in a block share the same blockHeight; loading the store here (serially)
-	// means the concurrent goroutines below can look up MTPs via direct array reads, with no
-	// locking and no per-transaction gRPC calls.
+	// means the concurrent goroutines below look up MTPs by array reads under a read lock,
+	// with no per-transaction gRPC calls unless the store does not hold the candidate's base.
 	if len(req.GetTransactions()) > 0 {
 		if err := v.validator.EnsureMTPLoaded(ctx, req.GetTransactions()[0].GetBlockHeight()); err != nil {
 			return nil, err
@@ -844,6 +858,7 @@ func (v *Server) ValidateTransactionBatch(ctx context.Context, req *validator_ap
 
 	// we create a slice for all transactions we just batched, in the same order as we got them
 	metaData := make([][]byte, len(req.GetTransactions()))
+	lanePositions := make([]uint64, len(req.GetTransactions()))
 	errReasons := make([]*errors.TError, len(req.GetTransactions()))
 
 	for idx, reqItem := range req.GetTransactions() {
@@ -855,6 +870,7 @@ func (v *Server) ValidateTransactionBatch(ctx context.Context, req *validator_ap
 			// metadata through the nil-safe generated accessor: no response means
 			// empty metadata at this index, with the error recorded alongside it.
 			metaData[idx] = validatorResponse.GetMetadata()
+			lanePositions[idx] = validatorResponse.GetLanePosition()
 			errReasons[idx] = errors.Wrap(err)
 
 			// Never return an error because we don't want to cancel the context for other transactions in the batch.
@@ -868,9 +884,10 @@ func (v *Server) ValidateTransactionBatch(ctx context.Context, req *validator_ap
 	return &validator_api.ValidateTransactionBatchResponse{
 		// Valid is always true at the batch level by design — callers must
 		// inspect per-item Errors. The field is retained for wire compatibility.
-		Valid:    true,
-		Errors:   errReasons,
-		Metadata: metaData,
+		Valid:         true,
+		Errors:        errReasons,
+		Metadata:      metaData,
+		LanePositions: lanePositions,
 	}, nil
 }
 

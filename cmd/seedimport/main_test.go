@@ -2,13 +2,31 @@ package main
 
 import (
 	"context"
+	"net/url"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/stretchr/testify/require"
 )
+
+func TestRunRefusesLaneEnabledImportBeforeOpeningStores(t *testing.T) {
+	s := test.CreateBaseTestSettings(t)
+	s.UtxoStore.LaneMigration = settings.LaneMigrationShadow
+	s.UtxoStore.UtxoStore = &url.URL{Scheme: "sqlitememory"}
+	s.BlockChain.StoreURL = &url.URL{Scheme: "sqlitememory"}
+	seedPath := filepath.Join(t.TempDir(), "seed")
+	seedURL := (&url.URL{Scheme: "file", Path: seedPath}).String()
+	err := run(context.Background(), ulogger.TestLogger{}, s,
+		"0000000000000000000000000000000000000000000000000000000000000001",
+		seedURL, "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798")
+	require.ErrorIs(t, err, errors.ErrConfiguration)
+	require.NoDirExists(t, seedPath)
+}
 
 // TestRunRejectsUnparseableSeedURLWithoutEchoingIt covers the credential half
 // of an invalid --seed-url. The flag can carry userinfo, and url.Parse embeds

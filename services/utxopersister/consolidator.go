@@ -93,6 +93,41 @@ type consolidator struct {
 
 	// acc accumulates the MuHash set commitment over the full materialized set.
 	acc *muhash.MuHash3072
+
+	// progress, when set, is called as a long roll-up or set write advances, so
+	// the owning loop's liveness heartbeat can tell slow work from a wedge
+	// (issue 1447). Nil does nothing.
+	progress func()
+
+	// recordsSinceBeat counts records handled since progress was last called.
+	recordsSinceBeat int
+
+	// beatEvery is how many records pass between progress calls. Zero means
+	// progressBeatEvery; tests set it to 1.
+	beatEvery int
+}
+
+// beat reports progress to the owning loop, if there is one.
+func (c *consolidator) beat() {
+	if c.progress != nil {
+		c.progress()
+	}
+}
+
+// recordDone counts one record and reports progress every beatEvery records
+// (progressBeatEvery unless a test set it).
+func (c *consolidator) recordDone() {
+	c.recordsSinceBeat++
+
+	every := c.beatEvery
+	if every <= 0 {
+		every = progressBeatEvery
+	}
+
+	if c.recordsSinceBeat >= every {
+		c.recordsSinceBeat = 0
+		c.beat()
+	}
 }
 
 // Addition represents a UTXO addition.
@@ -236,6 +271,8 @@ func (c *consolidator) ConsolidateBlockRange(ctx context.Context, startBlock, en
 			return err
 		}
 
+		c.beat()
+
 		c.lastBlockHeight = height
 		c.lastBlockHash = hash
 		c.previousBlockHash = previousHash
@@ -247,14 +284,16 @@ func (c *consolidator) ConsolidateBlockRange(ctx context.Context, startBlock, en
 }
 
 // consumeDeletions fetches the per-block deletions reader, processes it, and
-// releases the read permit. ErrBlobNotFound is tolerated (matching the prior
-// behaviour) and means "no deletions for this block".
+// releases the read permit. A missing deletions ledger is an error, never "no
+// deletions": NewUTXOSet always creates the deletions file (header only, for a
+// block that spends nothing), and UTXOSet.Close finalises additions before
+// deletions. A missing ledger therefore means "not written yet" or "half
+// written". Treating it as zero spends would roll a block into the set with
+// every output it spent still present, and every later set would inherit that.
+// Propagating the error stalls the roll-up until the block persister finishes.
 func (c *consolidator) consumeDeletions(ctx context.Context, us *UTXOSet) error {
 	r, err := us.GetUTXODeletionsReader(ctx)
 	if err != nil {
-		if errors.Is(err, errors.ErrBlobNotFound) {
-			return nil
-		}
 		return err
 	}
 	defer r.Close()
@@ -262,8 +301,8 @@ func (c *consolidator) consumeDeletions(ctx context.Context, us *UTXOSet) error 
 }
 
 // consumeAdditions fetches the per-block additions reader, processes it, and
-// releases the read permit. Unlike deletions, a missing additions file is a
-// real error - every block written via NewUTXOSet creates one.
+// releases the read permit. A missing additions file is an error, as a missing
+// deletions file is: every block written via NewUTXOSet creates both.
 func (c *consolidator) consumeAdditions(ctx context.Context, us *UTXOSet) error {
 	r, err := us.GetUTXOAdditionsReader(ctx)
 	if err != nil {
@@ -298,6 +337,8 @@ func (c *consolidator) processDeletionsFromReader(ctx context.Context, r io.Read
 			} else {
 				c.deletions[*outpoint] = struct{}{}
 			}
+
+			c.recordDone()
 		}
 	}
 }
@@ -320,6 +361,8 @@ func (c *consolidator) processAdditionsFromReader(ctx context.Context, r io.Read
 
 				return err
 			}
+
+			c.recordDone()
 
 			txid := &wrapper.TxID
 

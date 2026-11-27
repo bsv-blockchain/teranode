@@ -20,6 +20,7 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/health"
+	"github.com/bsv-blockchain/teranode/util/lane"
 )
 
 const errNotImplemented = "not implemented"
@@ -174,6 +175,26 @@ func (c *LocalClient) GetNextBlockID(ctx context.Context) (uint64, error) {
 
 func (c *LocalClient) AssignBlockID(ctx context.Context, blockHash *chainhash.Hash) (uint64, error) {
 	return c.store.AssignBlockID(ctx, blockHash)
+}
+
+func (c *LocalClient) OpenLaneLease(ctx context.Context, holder string) (lane.LeaseID, lane.Grant, error) {
+	return openLaneLease(ctx, c.store, c.settings, holder)
+}
+
+func (c *LocalClient) RenewLaneLease(ctx context.Context, r lane.Renewal) (lane.RenewResult, error) {
+	return renewLaneLease(ctx, c.store, c.settings, r)
+}
+
+func (c *LocalClient) ReleaseLaneLease(ctx context.Context, r lane.Release) (bool, error) {
+	return releaseLaneLease(ctx, c.store, r)
+}
+
+func (c *LocalClient) LaneMapRows(ctx context.Context, blockID uint32) ([]lane.MapRow, error) {
+	return c.store.LaneMapRows(ctx, blockID)
+}
+
+func (c *LocalClient) LaneCapGrants(ctx context.Context, height uint32) ([]lane.CapGrant, error) {
+	return c.store.LaneCapGrants(ctx, height)
 }
 
 func (c *LocalClient) GetBlockStats(ctx context.Context) (*model.BlockStats, error) {
@@ -390,8 +411,8 @@ func (c *LocalClient) GetBlockIsMined(ctx context.Context, blockHash *chainhash.
 	return c.store.GetBlockIsMined(ctx, blockHash)
 }
 
-func (c *LocalClient) SetBlockMinedSet(ctx context.Context, blockHash *chainhash.Hash) error {
-	return c.store.SetBlockMinedSet(ctx, blockHash)
+func (c *LocalClient) SetBlockMinedSet(ctx context.Context, blockHash *chainhash.Hash, minedSetGeneration uint64) error {
+	return c.store.SetBlockMinedSet(ctx, blockHash, &minedSetGeneration)
 }
 
 func (c *LocalClient) ClearBlockMinedSet(ctx context.Context, blockHash *chainhash.Hash) error {

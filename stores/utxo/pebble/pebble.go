@@ -536,7 +536,7 @@ func getMasterFrom(r reader, hash *chainhash.Hash) (*masterRecord, error) {
 }
 
 func (s *Store) retention() int64 {
-	if r := s.settings.GetUtxoStoreBlockHeightRetention(); r > 0 {
+	if r := s.settings.GetUtxoStoreSpentDeleteRetention(); r > 0 {
 		return int64(r)
 	}
 

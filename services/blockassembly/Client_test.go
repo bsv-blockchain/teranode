@@ -2,6 +2,7 @@ package blockassembly
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"sync"
 	"sync/atomic"
@@ -17,11 +18,13 @@ import (
 	"github.com/bsv-blockchain/teranode/services/blockassembly/blockassembly_api"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util/lane"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 )
 
 func createTestClient(mockClient *mockBlockAssemblyAPIClient, batchSize int) *Client {
@@ -177,7 +180,7 @@ func TestNewClientWithAddress_UnaryModeBuildsNoBatchers(t *testing.T) {
 		mockClient.On("AddTx", mock.Anything, mock.MatchedBy(func(req *blockassembly_api.AddTxRequest) bool { return req.InBlock }), mock.Anything).
 			Return(&blockassembly_api.AddTxResponse{}, nil)
 
-		ok, err := client.Store(ContextWithInBlock(ctx), hash, 1000, 250, subtree.TxInpoints{})
+		ok, err := client.Store(ContextWithInBlock(ctx), hash, 1000, 250, subtree.TxInpoints{}, 0, 0)
 		require.NoError(t, err)
 		require.True(t, ok, "a block transaction is stored in unary mode without a batcher")
 		mockClient.AssertExpectations(t)
@@ -286,10 +289,10 @@ func TestClient_Store_NonBatchMode(t *testing.T) {
 	t.Run("successful store", func(t *testing.T) {
 		mockClient.ExpectedCalls = nil
 		mockClient.On("AddTx", ctx, mock.MatchedBy(func(req *blockassembly_api.AddTxRequest) bool {
-			return req.Fee == fee && req.Size == size
+			return req.Fee == fee && req.Size == size && req.ValidatedHeight == 943_900
 		}), mock.Anything).Return(&blockassembly_api.AddTxResponse{}, nil)
 
-		success, err := client.Store(ctx, hash, fee, size, txInpoints)
+		success, err := client.Store(ctx, hash, fee, size, txInpoints, 943_900, 0)
 		assert.True(t, success)
 		assert.NoError(t, err)
 		mockClient.AssertExpectations(t)
@@ -300,7 +303,7 @@ func TestClient_Store_NonBatchMode(t *testing.T) {
 		mockClient.On("AddTx", ctx, mock.Anything, mock.Anything).Return(
 			nil, status.Error(codes.Internal, "internal error"))
 
-		success, err := client.Store(ctx, hash, fee, size, txInpoints)
+		success, err := client.Store(ctx, hash, fee, size, txInpoints, 0, 0)
 		assert.False(t, success)
 		assert.Error(t, err)
 		mockClient.AssertExpectations(t)
@@ -311,7 +314,7 @@ func TestClient_Store_NonBatchMode(t *testing.T) {
 		mockClient.On("AddTx", ctx, mock.Anything, mock.Anything).Return(&blockassembly_api.AddTxResponse{}, nil)
 
 		emptyTxInpoints := subtree.TxInpoints{}
-		success, err := client.Store(ctx, hash, fee, size, emptyTxInpoints)
+		success, err := client.Store(ctx, hash, fee, size, emptyTxInpoints, 0, 0)
 		assert.True(t, success)
 		assert.NoError(t, err) // Serialization of empty txInpoints should succeed
 		mockClient.AssertExpectations(t)
@@ -323,7 +326,7 @@ func TestClient_Store_NonBatchMode(t *testing.T) {
 
 		// Create a valid txInpoints structure
 		validTxInpoints := subtree.TxInpoints{}
-		success, err := client.Store(ctx, hash, fee, size, validTxInpoints)
+		success, err := client.Store(ctx, hash, fee, size, validTxInpoints, 0, 0)
 		assert.True(t, success)
 		assert.NoError(t, err)
 		mockClient.AssertExpectations(t)
@@ -346,7 +349,7 @@ func TestClient_Store_BatchMode(t *testing.T) {
 			return len(req.TxRequests) == 1
 		}), mock.Anything).Return(&blockassembly_api.AddTxBatchResponse{}, nil)
 
-		success, err := client.Store(ctx, hash, fee, size, txInpoints)
+		success, err := client.Store(ctx, hash, fee, size, txInpoints, 0, 0)
 		assert.True(t, success)
 		assert.NoError(t, err)
 		mockClient.AssertExpectations(t)
@@ -357,7 +360,7 @@ func TestClient_Store_BatchMode(t *testing.T) {
 		mockClient.On("AddTxBatch", mock.Anything, mock.Anything, mock.Anything).Return(
 			nil, status.Error(codes.Internal, "batch error"))
 
-		success, err := client.Store(ctx, hash, fee, size, txInpoints)
+		success, err := client.Store(ctx, hash, fee, size, txInpoints, 0, 0)
 		assert.False(t, success)
 		assert.Error(t, err)
 		mockClient.AssertExpectations(t)
@@ -452,7 +455,7 @@ func storeAsync(ctx context.Context, client *Client, hash *chainhash.Hash) <-cha
 	out := make(chan storeOutcome, 1)
 
 	go func() {
-		success, err := client.Store(ctx, hash, 1000, 250, subtree.TxInpoints{})
+		success, err := client.Store(ctx, hash, 1000, 250, subtree.TxInpoints{}, 0, 0)
 		out <- storeOutcome{success: success, err: err}
 	}()
 
@@ -569,7 +572,7 @@ func TestClient_Store_BatchMode_LateCompletionAfterAbandonIsSafe(t *testing.T) {
 
 	// The client is still usable: a fresh hand-off on an uncancelled context waits to
 	// completion and succeeds, exactly as batch mode always did.
-	success, err := h.client.Store(context.Background(), hash, 1000, 250, subtree.TxInpoints{})
+	success, err := h.client.Store(context.Background(), hash, 1000, 250, subtree.TxInpoints{}, 0, 0)
 	require.NoError(t, err, "abandoning a wait must not leave the batcher or the completion group broken")
 	require.True(t, success)
 }
@@ -1078,7 +1081,7 @@ func TestClient_Store_BatchMode_MaxConcurrent(t *testing.T) {
 	// Submit enough items to fill multiple batches (6 items = 3 batches of 2)
 	for i := 0; i < 6; i++ {
 		go func() {
-			_, _ = client.Store(ctx, hash, 1000, 250, txInpoints)
+			_, _ = client.Store(ctx, hash, 1000, 250, txInpoints, 0, 0)
 		}()
 	}
 
@@ -1156,11 +1159,11 @@ func TestClient_Store_BothBatchersShareTheMaxConcurrentCap(t *testing.T) {
 
 	for i := 0; i < 6; i++ {
 		go func() {
-			_, _ = client.Store(ctx, hash, 1000, 250, txInpoints)
+			_, _ = client.Store(ctx, hash, 1000, 250, txInpoints, 0, 0)
 		}()
 
 		go func() {
-			_, _ = client.Store(ContextWithInBlock(ctx), hash, 1000, 250, txInpoints)
+			_, _ = client.Store(ContextWithInBlock(ctx), hash, 1000, 250, txInpoints, 0, 0)
 		}()
 	}
 
@@ -1309,11 +1312,11 @@ func TestClient_StoreMarksBlockTransactionsInTheirOwnBatch(t *testing.T) {
 					record(args.Get(1).(*blockassembly_api.AddTxBatchColumnarRequest).GetInBlock())
 				}).Return(&blockassembly_api.AddTxBatchResponse{}, nil)
 
-			ok, err := client.Store(context.Background(), hash, 1, 250, subtree.TxInpoints{})
+			ok, err := client.Store(context.Background(), hash, 1, 250, subtree.TxInpoints{}, 0, 0)
 			require.NoError(t, err)
 			require.True(t, ok)
 
-			ok, err = client.Store(ContextWithInBlock(context.Background()), hash, 1, 250, subtree.TxInpoints{})
+			ok, err = client.Store(ContextWithInBlock(context.Background()), hash, 1, 250, subtree.TxInpoints{}, 0, 0)
 			require.NoError(t, err)
 			require.True(t, ok)
 
@@ -1338,10 +1341,10 @@ func TestClient_StoreUnaryMarksBlockTransactions(t *testing.T) {
 			seen = append(seen, args.Get(1).(*blockassembly_api.AddTxRequest).GetInBlock())
 		}).Return(&blockassembly_api.AddTxResponse{Ok: true}, nil)
 
-	_, err := client.Store(context.Background(), hash, 1, 250, subtree.TxInpoints{})
+	_, err := client.Store(context.Background(), hash, 1, 250, subtree.TxInpoints{}, 0, 0)
 	require.NoError(t, err)
 
-	_, err = client.Store(ContextWithInBlock(context.Background()), hash, 1, 250, subtree.TxInpoints{})
+	_, err = client.Store(ContextWithInBlock(context.Background()), hash, 1, 250, subtree.TxInpoints{}, 0, 0)
 	require.NoError(t, err)
 
 	require.Equal(t, []bool{false, true}, seen)
@@ -1364,4 +1367,135 @@ func TestClient_QueueStatsCarriesHeldCount(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, int64(70), stats.HeldCount)
 	require.Equal(t, int64(100), stats.MaxHeld)
+}
+
+// TestClient_SendsLanePositionsOnlyWhenATxHasOne: a tx handed over without a lane position, as at
+// utxostore_laneMigration off, is the same on the wire as without lanes, unary and columnar; one
+// with a position carries it, and a columnar batch then carries one per tx.
+func TestClient_SendsLanePositionsOnlyWhenATxHasOne(t *testing.T) {
+	empty := subtree.NewTxInpoints()
+
+	inpoints, err := empty.Serialize()
+	require.NoError(t, err)
+
+	request := func(i byte, position uint64) *blockassembly_api.AddTxRequest {
+		txid := make([]byte, 32)
+		txid[0] = i
+
+		return &blockassembly_api.AddTxRequest{Txid: txid, Fee: 1, Size: 100, TxInpoints: inpoints, LanePosition: position}
+	}
+
+	plain := request(1, 0)
+	withoutField := &blockassembly_api.AddTxRequest{Txid: plain.Txid, Fee: 1, Size: 100, TxInpoints: inpoints}
+
+	plainBytes, err := proto.Marshal(plain)
+	require.NoError(t, err)
+
+	withoutBytes, err := proto.Marshal(withoutField)
+	require.NoError(t, err)
+	require.Equal(t, withoutBytes, plainBytes, "position 0 is not sent")
+
+	c := &Client{}
+
+	offBatch, err := c.convertToColumnarFormat([]*batchItem{{req: request(1, 0)}, {req: request(2, 0)}})
+	require.NoError(t, err)
+	require.Nil(t, offBatch.LanePositions, "a batch without positions sends no column")
+
+	shadowBatch, err := c.convertToColumnarFormat([]*batchItem{{req: request(1, 0)}, {req: request(2, lane.Pack(4, 9))}})
+	require.NoError(t, err)
+	require.Equal(t, []uint64{0, lane.Pack(4, 9)}, shadowBatch.LanePositions, "one position per tx, 0 for none")
+
+	t.Run("unary", func(t *testing.T) {
+		mockClient := &mockBlockAssemblyAPIClient{}
+		client := createTestClient(mockClient, 0)
+
+		mockClient.On("AddTx", mock.Anything, mock.MatchedBy(func(req *blockassembly_api.AddTxRequest) bool {
+			return req.LanePosition == lane.Pack(4, 9)
+		}), mock.Anything).Return(&blockassembly_api.AddTxResponse{Ok: true}, nil)
+
+		hash := chainhash.Hash{0x09}
+		ok, err := client.Store(context.Background(), &hash, 1, 100, subtree.NewTxInpoints(), 0, lane.Pack(4, 9))
+		require.NoError(t, err)
+		require.True(t, ok)
+		mockClient.AssertExpectations(t)
+	})
+
+	positions := []uint64{0, lane.Pack(4, 9), lane.Pack(5, 11)}
+
+	t.Run("unary sends each call's own position, and none for 0", func(t *testing.T) {
+		mockClient := &mockBlockAssemblyAPIClient{}
+		client := createTestClient(mockClient, 0)
+
+		var sent []*blockassembly_api.AddTxRequest
+
+		mockClient.On("AddTx", mock.Anything, mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
+			sent = append(sent, args.Get(1).(*blockassembly_api.AddTxRequest))
+		}).Return(&blockassembly_api.AddTxResponse{Ok: true}, nil)
+
+		for i, position := range positions {
+			hash := chainhash.Hash{0x0a, byte(i)}
+			_, err := client.Store(context.Background(), &hash, 1, 100, subtree.NewTxInpoints(), 0, position)
+			require.NoError(t, err)
+		}
+
+		require.Len(t, sent, len(positions))
+
+		for i, req := range sent {
+			require.Equal(t, positions[i], req.GetLanePosition())
+		}
+
+		zeroBytes, err := proto.Marshal(sent[0])
+		require.NoError(t, err)
+
+		withoutBytes, err := proto.Marshal(&blockassembly_api.AddTxRequest{Txid: sent[0].Txid, Fee: 1, Size: 100, TxInpoints: sent[0].TxInpoints})
+		require.NoError(t, err)
+		require.Equal(t, withoutBytes, zeroBytes, "a Store with position 0 sends no position field")
+	})
+
+	for _, columnar := range []bool{false, true} {
+		t.Run(fmt.Sprintf("a batch sends each tx's own position, columnar=%t", columnar), func(t *testing.T) {
+			mockClient := &mockBlockAssemblyAPIClient{}
+			client := createTestClient(mockClient, len(positions))
+			client.settings.BlockAssembly.UseColumnarBatch = columnar
+
+			sent := make(chan map[byte]uint64, 1)
+
+			mockClient.On("AddTxBatch", mock.Anything, mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
+				byTx := make(map[byte]uint64)
+				for _, req := range args.Get(1).(*blockassembly_api.AddTxBatchRequest).GetTxRequests() {
+					byTx[req.GetTxid()[1]] = req.GetLanePosition()
+				}
+				sent <- byTx
+			}).Return(&blockassembly_api.AddTxBatchResponse{Ok: true}, nil)
+
+			mockClient.On("AddTxBatchColumnar", mock.Anything, mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
+				req := args.Get(1).(*blockassembly_api.AddTxBatchColumnarRequest)
+				byTx := make(map[byte]uint64)
+				for i, position := range req.GetLanePositions() {
+					byTx[req.GetTxidsPacked()[i*32+1]] = position
+				}
+				sent <- byTx
+			}).Return(&blockassembly_api.AddTxBatchResponse{Ok: true}, nil)
+
+			var wg sync.WaitGroup
+
+			for i, position := range positions {
+				wg.Add(1)
+
+				go func() {
+					defer wg.Done()
+
+					hash := chainhash.Hash{0x0b, byte(i)}
+					_, _ = client.Store(context.Background(), &hash, 1, 100, subtree.NewTxInpoints(), 0, position)
+				}()
+			}
+
+			byTx := <-sent
+			wg.Wait()
+
+			for i, position := range positions {
+				require.Equal(t, position, byTx[byte(i)], "tx %d", i)
+			}
+		})
+	}
 }

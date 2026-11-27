@@ -150,6 +150,12 @@ var (
 	// the subtree failed validation within subtreevalidation_failedSubtreeNegativeCacheTTL.
 	prometheusRecentlyFailedPeerSubtreesSkipped prometheus.Counter
 
+	// prometheusBlockMissingSubtrees counts subtrees that a block listed and the node did not hold.
+	prometheusBlockMissingSubtrees prometheus.Counter
+
+	// prometheusBlockMissingSubtreesOutstanding is the number of those subtrees still being fetched and validated.
+	prometheusBlockMissingSubtreesOutstanding prometheus.Gauge
+
 	// prometheusSkippedSubtrees counts peer subtrees announced while the node was catching up, by
 	// outcome: recorded (newly kept), evicted (oldest dropped when full), expired (announced more
 	// than skippedSubtreeMaxAge before its replay), requeued (kept again because the node was
@@ -393,6 +399,24 @@ func _initPrometheusMetrics() {
 		},
 	)
 
+	prometheusBlockMissingSubtrees = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "subtreevalidation",
+			Name:      "block_missing_subtrees_total",
+			Help:      "Number of subtrees that a block listed and the node did not hold",
+		},
+	)
+
+	prometheusBlockMissingSubtreesOutstanding = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "teranode",
+			Subsystem: "subtreevalidation",
+			Name:      "block_missing_subtrees_outstanding",
+			Help:      "Number of missing block subtrees still being fetched and validated",
+		},
+	)
+
 	prometheusSkippedSubtrees = promauto.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: "teranode",
@@ -422,3 +446,16 @@ func _initPrometheusMetrics() {
 		},
 	)
 }
+
+// prometheusSubtreeValidationTxMetaBucketsMismatch counts v2 txmeta batches
+// received with a producer BucketsCount different from this binary's
+// compile-time cache count, labelled by the producer's count. Non-zero means
+// producer and receiver cache bucket ranges overlap and the Kafka partition
+// alignment has degraded to lock contention; see txmetaHandler.
+var prometheusSubtreeValidationTxMetaBucketsMismatch = promauto.NewCounterVec(
+	prometheus.CounterOpts{
+		Name: "subtree_validation_txmeta_buckets_mismatch_total",
+		Help: "Total v2 txmeta batches whose producer BucketsCount differs from this binary's compile-time cache BucketsCount, by producer count",
+	},
+	[]string{"producer_buckets"},
+)

@@ -144,7 +144,7 @@ Understanding where storage is consumed helps with capacity planning.
 
 **Storage type requirements:**
 
-- **Aerospike**: NVMe SSD required. High random IOPS for UTXO lookups.
+- **Aerospike**: Aerospike 8.1 or later. NVMe SSD required. High random IOPS for UTXO lookups.
 - **Blob Storage**: SSD recommended. Sequential read/write for transaction data.
 - **PostgreSQL**: SSD recommended. Standard database workload.
 

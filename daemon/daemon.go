@@ -56,6 +56,8 @@ const (
 	loggerBlockchainClient         = "bchc"
 	loggerBlockchainSQL            = "bcsql"
 	loggerPruner                   = "pruner"
+	loggerProbe                    = "probe"
+	loggerLaneReader               = "lanerd"
 	loggerKafkaConsumerBlocks      = "kcb"
 	loggerKafkaConsumerRejectedTx  = "kcrtx"
 	loggerKafkaConsumerSubtree     = "kcs"
@@ -88,7 +90,10 @@ const (
 	serviceBlockPersisterFormal    = "BlockPersister"
 	serviceBlockValidation         = "blockvalidation"
 	servicePruner                  = "pruner"
+	serviceLaneReader              = "lanereader"
 	servicePrunerFormal            = "Pruner"
+	serviceProbe                   = "probe"
+	serviceProbeFormal             = "Probe"
 	serviceBlockValidationFormal   = "BlockValidation"
 	serviceBlockchainFormal        = "Blockchain"
 	serviceHelp                    = "help"
@@ -765,6 +770,9 @@ func printUsage() {
 	fmt.Println("")
 	fmt.Println("    -pruner=<1|0>")
 	fmt.Println("          whether to start the pruner service")
+	fmt.Println("")
+	fmt.Println("    -probe=<1|0>")
+	fmt.Println("          whether to start the probe service")
 	fmt.Println("")
 	fmt.Println("    -wait_for_postgres=1")
 	fmt.Println("          wait for PostgreSQL to be ready before starting any service")

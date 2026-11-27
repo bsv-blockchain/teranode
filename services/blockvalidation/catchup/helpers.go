@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/go-chaincfg"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/ulogger"
@@ -42,6 +43,7 @@ func ValidateBlockHeaderBytes(headerBytes []byte) error {
 //
 // Parameters:
 //   - headerBytes: Raw header bytes to parse
+//   - params: Chain parameters whose proof-of-work limit bounds each declared target (nil: no bound)
 //
 // Returns:
 //   - []*model.BlockHeader: Successfully parsed headers (nil if error)
@@ -49,7 +51,7 @@ func ValidateBlockHeaderBytes(headerBytes []byte) error {
 //
 // Returns immediately on first error to simplify debugging.
 // Validates proof of work, merkle root, and timestamp for each header.
-func ParseBlockHeaders(headerBytes []byte) ([]*model.BlockHeader, error) {
+func ParseBlockHeaders(headerBytes []byte, params *chaincfg.Params) ([]*model.BlockHeader, error) {
 	if len(headerBytes) == 0 {
 		return nil, nil
 	}
@@ -71,7 +73,7 @@ func ParseBlockHeaders(headerBytes []byte) ([]*model.BlockHeader, error) {
 		}
 
 		// Perform basic header validation
-		if err = ValidateHeaderProofOfWork(header); err != nil {
+		if err = ValidateHeaderProofOfWork(header, params); err != nil {
 			// Return immediately on first validation error
 			return nil, err
 		}
@@ -124,6 +126,7 @@ func BuildBlockLocatorString(locatorHashes []*chainhash.Hash) string {
 //   - logger: Logger for retry attempts
 //   - url: URL to fetch headers from
 //   - maxRetries: Maximum retry attempts
+//   - backoff: Wait before the first retry; 0 or less means 1s, above 30s is capped at 30s
 //   - maxBytes: Cap on the response body, enforced before it is read into memory
 //
 // Returns:
@@ -139,7 +142,15 @@ func BuildBlockLocatorString(locatorHashes []*chainhash.Hash) string {
 // caller-known exact size - the caller requests a fixed count and each header is a
 // fixed model.BlockHeaderSize bytes - so, unlike the block-fetch paths, a byte cap is
 // the right fit here and needs no invented constant.
-func FetchHeadersWithRetry(ctx context.Context, logger ulogger.Logger, url string, maxRetries int, maxBytes int64) ([]byte, error) {
+func FetchHeadersWithRetry(ctx context.Context, logger ulogger.Logger, url string, maxRetries int, backoff time.Duration, maxBytes int64) ([]byte, error) {
+	const maxBackoff = 30 * time.Second
+
+	if backoff <= 0 {
+		backoff = time.Second
+	} else if backoff > maxBackoff {
+		backoff = maxBackoff
+	}
+
 	return retry.Retry(ctx, logger, func() ([]byte, error) {
 		headerBytes, err := util.DoHTTPRequestBounded(ctx, url, maxBytes)
 		if err != nil {
@@ -168,8 +179,9 @@ func FetchHeadersWithRetry(ctx context.Context, logger ulogger.Logger, url strin
 	},
 		retry.WithRetryCount(maxRetries),
 		retry.WithExponentialBackoff(),
+		retry.WithBackoffDurationType(backoff),
 		retry.WithBackoffFactor(2.0),
-		retry.WithMaxBackoff(30*time.Second),
+		retry.WithMaxBackoff(maxBackoff),
 		retry.WithMessage("Failed to fetch block headers"),
 	)
 }

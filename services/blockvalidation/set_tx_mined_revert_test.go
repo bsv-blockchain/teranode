@@ -77,6 +77,7 @@ func TestSetTxMinedStatus_RevertFailureLeavesMinedSetFalse(t *testing.T) {
 
 	realUtxoStore, err := sql.New(ctx, logger, tSettings, utxoStoreURL)
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = realUtxoStore.Close(context.Background()) })
 
 	subtreeStore := blobmemory.New()
 	txStore := blobmemory.New()
@@ -142,7 +143,7 @@ func TestSetTxMinedStatus_RevertFailureLeavesMinedSetFalse(t *testing.T) {
 	// A bare BlockValidation (no background setMined worker or subscription) keeps the run
 	// deterministic: the only setTxMinedStatus calls are the ones this test makes. The store writes
 	// genesis unmined, and ValidateBlock waits for the parent to be mined.
-	require.NoError(t, blockchainClient.SetBlockMinedSet(ctx, tSettings.ChainCfgParams.GenesisHash))
+	require.NoError(t, blockchainClient.SetBlockMinedSet(ctx, tSettings.ChainCfgParams.GenesisHash, 0))
 
 	bv := &BlockValidation{
 		logger:                        logger,

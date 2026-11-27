@@ -16,9 +16,11 @@ import (
 
 // ParentOutputsForValidation implements utxo.Store. Every outpoint goes through
 // the shared outpoint batcher, which reads each distinct parent's master record
-// once, fetching only the outputs, external and blockHeights bins. External
-// parents are reconstructed through GetOutpointsFromExternalStore, which re-hashes
-// the blob against its key and caches the outputs.
+// once, fetching only the outputs, external and blockHeights bins and, with lane
+// positions on, the parent's lanePos and isCoinbase bins in that same read, the
+// second for the lanes shadow only. External parents are reconstructed through
+// GetOutpointsFromExternalStore, which re-hashes the blob against its key and
+// caches the outputs.
 //
 // An index past the end of the parent's output list is NoSuchIndex, and so is a
 // nil entry inside it: an output the seeder left out when it rebuilt the parent

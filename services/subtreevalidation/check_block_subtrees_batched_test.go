@@ -41,10 +41,21 @@ var opTrue = bscript.NewFromBytes([]byte{0x51})
 type countingStore struct {
 	utxo.Store
 	multiCalls atomic.Int64
+
+	// callers are the callers the lists named, in order.
+	mu      sync.Mutex
+	callers []utxo.Caller
 }
 
 func (c *countingStore) SpendAndCreateMulti(ctx context.Context, txs []*bt.Tx, blockHeight uint32, opts ...utxo.CreateOption) ([]utxo.SpendAndCreateMultiResult, error) {
 	c.multiCalls.Add(1)
+
+	if options, err := utxo.ParseCreateOptions(opts...); err == nil {
+		c.mu.Lock()
+		c.callers = append(c.callers, options.Caller)
+		c.mu.Unlock()
+	}
+
 	return c.Store.SpendAndCreateMulti(ctx, txs, blockHeight, opts...)
 }
 
@@ -91,6 +102,21 @@ type batchedFixture struct {
 // the test height so no median-time lookups are needed.
 func newBatchedFixture(t *testing.T, state blockchain.FSMStateType) *batchedFixture {
 	t.Helper()
+
+	return newBatchedFixtureWithParams(t, state, func(params *chaincfg.Params) { params.CSVHeight = 1_000_000 }, fixtureWraps{})
+}
+
+// fixtureWraps lets a test wrap the server's blockchain client and validator before the server
+// starts, so its background goroutines never see the clients change. A nil field wraps nothing.
+type fixtureWraps struct {
+	client    func(blockchain.ClientI) blockchain.ClientI
+	validator func(*publishSpy) validator.Interface
+}
+
+// newBatchedFixtureWithParams is newBatchedFixture with the regtest chain params adjusted by
+// adjust instead of only pushing CSV above the test height, and the clients wrapped by wraps.
+func newBatchedFixtureWithParams(t *testing.T, state blockchain.FSMStateType, adjust func(params *chaincfg.Params), wraps fixtureWraps) *batchedFixture {
+	t.Helper()
 	InitPrometheusMetrics()
 
 	ctx := newCancelCtx(t)
@@ -98,7 +124,7 @@ func newBatchedFixture(t *testing.T, state blockchain.FSMStateType) *batchedFixt
 
 	tSettings := test.CreateBaseTestSettings(t)
 	params := *tSettings.ChainCfgParams
-	params.CSVHeight = 1_000_000
+	adjust(&params)
 	tSettings.ChainCfgParams = &params
 	tSettings.BlockAssembly.Disabled = true
 
@@ -117,7 +143,7 @@ func newBatchedFixture(t *testing.T, state blockchain.FSMStateType) *batchedFixt
 	localClient, err := blockchain.NewLocalClient(logger, tSettings, &blockchainstore.MockStore{}, subtreeStore, base)
 	require.NoError(t, err)
 
-	blockchainClient := &fsmStateOverrideClient{ClientI: localClient, state: state}
+	blockchainClient := &fsmStateOverrideClient{ClientI: localClient, state: state, tipHeight: batchedTestHeight - 1}
 
 	txmeta := kafka.NewKafkaAsyncProducerMockWithBuffer(10_000)
 
@@ -127,7 +153,20 @@ func newBatchedFixture(t *testing.T, state blockchain.FSMStateType) *batchedFixt
 	nilConsumer := &kafka.KafkaConsumerGroup{}
 	spy := &publishSpy{Validator: v.(*validator.Validator), published: map[chainhash.Hash]bool{}}
 
-	server, err := New(ctx, logger, tSettings, subtreeStore, blobmemory.New(), store, spy, blockchainClient, nilConsumer, nilConsumer, nil, nil)
+	var (
+		serverClient    blockchain.ClientI  = blockchainClient
+		serverValidator validator.Interface = spy
+	)
+
+	if wraps.client != nil {
+		serverClient = wraps.client(blockchainClient)
+	}
+
+	if wraps.validator != nil {
+		serverValidator = wraps.validator(spy)
+	}
+
+	server, err := New(ctx, logger, tSettings, subtreeStore, blobmemory.New(), store, serverValidator, serverClient, nilConsumer, nilConsumer, nil, nil)
 	require.NoError(t, err)
 
 	return &batchedFixture{server: server, store: store, txmeta: txmeta, validator: v.(*validator.Validator)}
@@ -348,6 +387,12 @@ func TestCheckBlockSubtreesBatched_WritesThroughSpendAndCreateMulti(t *testing.T
 	require.NoError(t, checkBlock(t, f, storeBlock(t, f, txs, false)))
 	require.Positive(t, f.store.multiCalls.Load(), "catch-up above the checkpoint must take the batch path")
 
+	f.store.mu.Lock()
+	for i, c := range f.store.callers {
+		require.Equal(t, utxo.CallerSubtreeValidation, c, "list %d names subtree validation for the burned lane position counter", i)
+	}
+	f.store.mu.Unlock()
+
 	requireCreatedUnmined(t, f, txs)
 
 	spy := f.server.validatorClient.(*publishSpy)
@@ -487,7 +532,7 @@ func TestProcessTransactionsBatched_ForgedExtensionFails(t *testing.T) {
 	checker, ok := f.server.batchChecker(blockchain.FSMStateCATCHINGBLOCKS, batchedTestHeight)
 	require.True(t, ok)
 
-	err := f.server.processTransactionsBatched(context.Background(), checker, []*bt.Tx{forged}, chainhash.Hash{}, batchedTestHeight, 0, 0, map[uint32]bool{})
+	err := f.server.processTransactionsBatched(context.Background(), checker, []*bt.Tx{forged}, chainhash.Hash{}, batchedTestHeight, 0, 0, candidateForkMTPs{}, map[uint32]bool{})
 	require.ErrorIs(t, err, errors.ErrTxInvalid)
 	requireAbsent(t, f, []*bt.Tx{forged})
 }
@@ -510,7 +555,7 @@ func TestProcessTransactionsBatched_CoinbaseIsNeverAParent(t *testing.T) {
 
 	spy := &spyChecker{BlockBatchChecker: inner, checked: map[chainhash.Hash]bool{}}
 
-	_ = f.server.processTransactionsBatched(context.Background(), spy, []*bt.Tx{coinbase, spender}, chainhash.Hash{}, batchedTestHeight, 0, 0, map[uint32]bool{})
+	_ = f.server.processTransactionsBatched(context.Background(), spy, []*bt.Tx{coinbase, spender}, chainhash.Hash{}, batchedTestHeight, 0, 0, candidateForkMTPs{}, map[uint32]bool{})
 
 	require.False(t, spy.checked[*spender.TxIDChainHash()], "a spend of the subtree data's coinbase must not reach the batch script check")
 	require.False(t, spy.checked[*coinbase.TxIDChainHash()])
@@ -529,11 +574,11 @@ func TestProcessTransactionsBatched_InvalidBodiesFailBeforeWriting(t *testing.T)
 	a := opTrueTx(t, 1, []*bt.Tx{root}, []uint32{0})
 	b := opTrueTx(t, 2, []*bt.Tx{root}, []uint32{0})
 
-	err := f.server.processTransactionsBatched(context.Background(), checker, []*bt.Tx{a, b}, chainhash.Hash{}, batchedTestHeight, 0, 0, map[uint32]bool{})
+	err := f.server.processTransactionsBatched(context.Background(), checker, []*bt.Tx{a, b}, chainhash.Hash{}, batchedTestHeight, 0, 0, candidateForkMTPs{}, map[uint32]bool{})
 	require.ErrorIs(t, err, errors.ErrBlockInvalid)
 
 	child := opTrueTx(t, 3, []*bt.Tx{a}, []uint32{0})
-	err = f.server.processTransactionsBatched(context.Background(), checker, []*bt.Tx{child, a}, chainhash.Hash{}, batchedTestHeight, 0, 0, map[uint32]bool{})
+	err = f.server.processTransactionsBatched(context.Background(), checker, []*bt.Tx{child, a}, chainhash.Hash{}, batchedTestHeight, 0, 0, candidateForkMTPs{}, map[uint32]bool{})
 	require.ErrorIs(t, err, errors.ErrBlockInvalid)
 
 	require.Zero(t, f.store.multiCalls.Load())
@@ -560,7 +605,7 @@ func TestProcessTransactionsBatched_FailedSpendGoesThroughTodaysPath(t *testing.
 	winner := opTrueTx(t, 2, []*bt.Tx{roots[1]}, []uint32{0})
 	child := opTrueTx(t, 3, []*bt.Tx{winner}, []uint32{0})
 
-	err = f.server.processTransactionsBatched(context.Background(), checker, []*bt.Tx{loser, winner, child}, chainhash.Hash{}, batchedTestHeight, 0, 0, map[uint32]bool{})
+	err = f.server.processTransactionsBatched(context.Background(), checker, []*bt.Tx{loser, winner, child}, chainhash.Hash{}, batchedTestHeight, 0, 0, candidateForkMTPs{}, map[uint32]bool{})
 	require.NoError(t, err)
 	require.Positive(t, f.store.multiCalls.Load())
 
@@ -583,7 +628,7 @@ func TestProcessTransactionsBatched_CutsLists(t *testing.T) {
 	roots := []*bt.Tx{storedRoot(t, f, 1, opTrue), storedRoot(t, f, 2, opTrue), storedRoot(t, f, 3, opTrue)}
 	txs := chainedTxs(t, roots, 4)
 
-	err := f.server.processTransactionsBatched(context.Background(), checker, txs, chainhash.Hash{}, batchedTestHeight, 0, 0, map[uint32]bool{})
+	err := f.server.processTransactionsBatched(context.Background(), checker, txs, chainhash.Hash{}, batchedTestHeight, 0, 0, candidateForkMTPs{}, map[uint32]bool{})
 	require.NoError(t, err)
 	require.Equal(t, int64(3), f.store.multiCalls.Load(), "12 transactions in lists of 4")
 	requireCreatedUnmined(t, f, txs)
@@ -722,7 +767,7 @@ func TestProcessTransactionsBatched_StoreFaultIsRetryable(t *testing.T) {
 	checker, ok := f.server.batchChecker(blockchain.FSMStateCATCHINGBLOCKS, batchedTestHeight)
 	require.True(t, ok)
 
-	err := f.server.processTransactionsBatched(context.Background(), checker, txs, chainhash.Hash{}, batchedTestHeight, 0, 0, map[uint32]bool{})
+	err := f.server.processTransactionsBatched(context.Background(), checker, txs, chainhash.Hash{}, batchedTestHeight, 0, 0, candidateForkMTPs{}, map[uint32]bool{})
 	require.ErrorIs(t, err, errors.ErrProcessing)
 	require.NotErrorIs(t, err, errors.ErrTxInvalid)
 	require.NotErrorIs(t, err, errors.ErrBlockInvalid)
@@ -779,7 +824,7 @@ func TestProcessTransactionsBatched_StepMetricsSeparateReadsFromChecks(t *testin
 
 		resolveBefore, tailBefore := batchStepSum(t, "resolve"), batchStepSum(t, "check_after_reads")
 
-		require.NoError(t, f.server.processTransactionsBatched(context.Background(), checker, []*bt.Tx{tx}, chainhash.Hash{}, batchedTestHeight, 0, 0, map[uint32]bool{}))
+		require.NoError(t, f.server.processTransactionsBatched(context.Background(), checker, []*bt.Tx{tx}, chainhash.Hash{}, batchedTestHeight, 0, 0, candidateForkMTPs{}, map[uint32]bool{}))
 
 		require.GreaterOrEqual(t, batchStepSum(t, "resolve")-resolveBefore, delay.Seconds(), "resolve covers the parent reads")
 		require.Less(t, batchStepSum(t, "check_after_reads")-tailBefore, delay.Seconds(), "a fast check leaves little after the reads")
@@ -795,8 +840,296 @@ func TestProcessTransactionsBatched_StepMetricsSeparateReadsFromChecks(t *testin
 
 		tailBefore := batchStepSum(t, "check_after_reads")
 
-		require.NoError(t, f.server.processTransactionsBatched(context.Background(), &slowChecker{BlockBatchChecker: inner, delay: delay}, []*bt.Tx{tx}, chainhash.Hash{}, batchedTestHeight, 0, 0, map[uint32]bool{}))
+		require.NoError(t, f.server.processTransactionsBatched(context.Background(), &slowChecker{BlockBatchChecker: inner, delay: delay}, []*bt.Tx{tx}, chainhash.Hash{}, batchedTestHeight, 0, 0, candidateForkMTPs{}, map[uint32]bool{}))
 
 		require.GreaterOrEqual(t, batchStepSum(t, "check_after_reads")-tailBefore, delay.Seconds(), "a slow check shows after the reads")
 	})
+}
+
+// forkAnswerClient serves a candidate branch (headers newest first, ending at the parent) to the
+// header reads, reports metas from onChainFrom on as on the current chain, and passes other calls
+// on. A real store cannot cheaply hold a chain at the fixture's height of 20,000.
+type forkAnswerClient struct {
+	blockchain.ClientI
+	headers     []*model.BlockHeader
+	metas       []*model.BlockHeaderMeta
+	onChainFrom int
+	pageErr     error // when set, GetBlockHeadersByParentLinks fails with it
+}
+
+func (c *forkAnswerClient) index(hash *chainhash.Hash) int {
+	for i, h := range c.headers {
+		if h.Hash().IsEqual(hash) {
+			return i
+		}
+	}
+
+	return -1
+}
+
+func (c *forkAnswerClient) GetBlockHeader(ctx context.Context, hash *chainhash.Hash) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
+	if i := c.index(hash); i >= 0 {
+		return c.headers[i], c.metas[i], nil
+	}
+
+	return c.ClientI.GetBlockHeader(ctx, hash)
+}
+
+func (c *forkAnswerClient) GetBlockHeaders(ctx context.Context, hash *chainhash.Hash, n uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
+	if i := c.index(hash); i >= 0 {
+		end := min(i+int(n), len(c.headers)) //nolint:gosec // test sizes are small
+
+		return c.headers[i:end], c.metas[i:end], nil
+	}
+
+	return c.ClientI.GetBlockHeaders(ctx, hash, n)
+}
+
+func (c *forkAnswerClient) GetBlockHeadersByParentLinks(ctx context.Context, hash *chainhash.Hash, n uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
+	if c.pageErr != nil {
+		return nil, nil, c.pageErr
+	}
+
+	if i := c.index(hash); i >= 0 {
+		end := min(i+int(n), len(c.headers)) //nolint:gosec // test sizes are small
+
+		return c.headers[i:end], c.metas[i:end], nil
+	}
+
+	return c.ClientI.GetBlockHeadersByParentLinks(ctx, hash, n)
+}
+
+func (c *forkAnswerClient) CheckBlockIsInCurrentChain(_ context.Context, blockIDs []uint32) (bool, error) {
+	for _, id := range blockIDs {
+		if int(id) >= c.onChainFrom {
+			return true, nil
+		}
+	}
+
+	return false, nil
+}
+
+// forkOptionsRecorder records the options of every transaction check the block paths send to
+// the validator: ValidateWithOptions on the level path, CheckExtendedTransaction on the batch path.
+type forkOptionsRecorder struct {
+	*publishSpy
+
+	mu         sync.Mutex
+	seen       []*validator.Options
+	levelCalls int // ValidateWithOptions calls, the level path's
+}
+
+func (r *forkOptionsRecorder) record(opts *validator.Options) {
+	r.mu.Lock()
+	r.seen = append(r.seen, opts)
+	r.mu.Unlock()
+}
+
+func (r *forkOptionsRecorder) ValidateWithOptions(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts *validator.Options) (*meta.Data, error) {
+	r.record(opts)
+	r.mu.Lock()
+	r.levelCalls++
+	r.mu.Unlock()
+
+	return r.publishSpy.ValidateWithOptions(ctx, tx, blockHeight, opts)
+}
+
+func (r *forkOptionsRecorder) CheckExtendedTransaction(ctx context.Context, tx *bt.Tx, blockHeight uint32, utxoHeights []uint32, opts *validator.Options) error {
+	r.record(opts)
+
+	return r.publishSpy.CheckExtendedTransaction(ctx, tx, blockHeight, utxoHeights, opts)
+}
+
+// forkCandidateFixture is a batched fixture enforcing BIP68 at the test height, whose candidate's
+// parent and the two blocks below it are off the current chain, recording every transaction check.
+type forkCandidateFixture struct {
+	*batchedFixture
+	recorder *forkOptionsRecorder
+	client   *forkAnswerClient
+	parent   *chainhash.Hash
+	fork     candidateForkMTPs
+}
+
+func newForkCandidateFixture(t *testing.T, state blockchain.FSMStateType) *forkCandidateFixture {
+	t.Helper()
+
+	const n = 20
+
+	timestamps := make([]uint32, n)
+	metas := make([]*model.BlockHeaderMeta, n)
+
+	for i := range timestamps {
+		timestamps[i] = uint32(1_700_000_000 - 600*i)                                               //nolint:gosec // test data
+		metas[i] = &model.BlockHeaderMeta{ID: uint32(i), Height: batchedTestHeight - 1 - uint32(i)} //nolint:gosec // test data
+	}
+
+	headers := makeChain(t, n, timestamps)
+
+	var (
+		recorder *forkOptionsRecorder
+		client   *forkAnswerClient
+	)
+
+	f := newBatchedFixtureWithParams(t, state, func(params *chaincfg.Params) {
+		params.CSVHeight = 0
+		params.GenesisActivationHeight = batchedTestHeight + 1_000
+	}, fixtureWraps{
+		client: func(c blockchain.ClientI) blockchain.ClientI {
+			client = &forkAnswerClient{ClientI: c, headers: headers, metas: metas, onChainFrom: 3}
+
+			return client
+		},
+		validator: func(spy *publishSpy) validator.Interface {
+			recorder = &forkOptionsRecorder{publishSpy: spy}
+
+			return recorder
+		},
+	})
+
+	fork, err := f.server.fetchCandidateForkMTPs(context.Background(), headers[0].Hash(), batchedTestHeight)
+	require.NoError(t, err)
+	require.Equal(t, batchedTestHeight-3, fork.start)
+	require.Len(t, fork.mtps, 3)
+	require.Equal(t, metas[3].ID, fork.baseID)
+
+	return &forkCandidateFixture{batchedFixture: f, recorder: recorder, client: client, parent: headers[0].Hash(), fork: fork}
+}
+
+// requireBranchCoinTimes checks that transactions reached the validator and that every check
+// carried the branch's coin times.
+func (f *forkCandidateFixture) requireBranchCoinTimes(t *testing.T) {
+	t.Helper()
+
+	f.recorder.mu.Lock()
+	defer f.recorder.mu.Unlock()
+
+	require.NotEmpty(t, f.recorder.seen, "the block's transactions must reach the validator")
+
+	for _, opts := range f.recorder.seen {
+		require.Equal(t, f.fork.start, opts.CandidateForkStartHeight)
+		require.Equal(t, f.fork.mtps, opts.CandidateForkMTPs)
+		require.True(t, opts.CandidateBaseSet)
+		require.Equal(t, f.fork.baseID, opts.CandidateBaseID)
+	}
+}
+
+// TestCheckBlockSubtrees_ForkCandidateCarriesBranchCoinTimes checks that a block whose parent is
+// off the current chain reaches the validator with its branch's coin times, on the level path
+// (RUNNING) and on the batch path (catch-up).
+func TestCheckBlockSubtrees_ForkCandidateCarriesBranchCoinTimes(t *testing.T) {
+	for _, state := range []blockchain.FSMStateType{blockchain.FSMStateRUNNING, blockchain.FSMStateCATCHINGBLOCKS} {
+		t.Run(state.String(), func(t *testing.T) {
+			f := newForkCandidateFixture(t, state)
+
+			roots := []*bt.Tx{storedRoot(t, f.batchedFixture, 1, opTrue), storedRoot(t, f.batchedFixture, 2, opTrue)}
+			block := storeBlock(t, f.batchedFixture, chainedTxs(t, roots, 2), false)
+			block.Header.HashPrevBlock = f.parent
+
+			require.NoError(t, checkBlock(t, f.batchedFixture, block))
+			f.requireBranchCoinTimes(t)
+		})
+	}
+}
+
+// TestCheckSubtreeFromBlock_ForkCandidateCarriesBranchCoinTimes checks the same through the legacy
+// branch of CheckSubtreeFromBlock, whose options the peer branch shares.
+func TestCheckSubtreeFromBlock_ForkCandidateCarriesBranchCoinTimes(t *testing.T) {
+	// The peer row's transactions spend only stored roots: on this fixture a chain inside one
+	// subtree fails the peer branch with bad-txns-unconfirmed-input-in-block.
+	for _, tc := range []struct {
+		baseURL string
+		depth   int
+	}{{"legacy", 2}, {"http://peer.invalid", 1}} {
+		t.Run(tc.baseURL, func(t *testing.T) {
+			f := newForkCandidateFixture(t, blockchain.FSMStateCATCHINGBLOCKS)
+
+			roots := []*bt.Tx{storedRoot(t, f.batchedFixture, 1, opTrue), storedRoot(t, f.batchedFixture, 2, opTrue)}
+			block := storeBlock(t, f.batchedFixture, chainedTxs(t, roots, tc.depth), false)
+			block.Header.HashPrevBlock = f.parent
+
+			response, err := f.server.CheckSubtreeFromBlock(context.Background(), &subtreevalidation_api.CheckSubtreeFromBlockRequest{
+				Hash:              block.Subtrees[0][:],
+				BaseUrl:           tc.baseURL,
+				BlockHeight:       batchedTestHeight,
+				BlockHash:         block.Hash()[:],
+				PreviousBlockHash: f.parent[:],
+			})
+			require.NoError(t, err)
+			require.True(t, response.Blessed)
+			f.requireBranchCoinTimes(t)
+		})
+	}
+}
+
+// TestProcessTransactionsBatched_FallbackCarriesBranchCoinTimes checks that a transaction the
+// batch path hands back to the level path, after a failed spend, keeps the branch's coin times.
+func TestProcessTransactionsBatched_FallbackCarriesBranchCoinTimes(t *testing.T) {
+	f := newForkCandidateFixture(t, blockchain.FSMStateCATCHINGBLOCKS)
+
+	checker, ok := f.server.batchChecker(blockchain.FSMStateCATCHINGBLOCKS, batchedTestHeight)
+	require.True(t, ok)
+
+	roots := []*bt.Tx{storedRoot(t, f.batchedFixture, 1, opTrue), storedRoot(t, f.batchedFixture, 2, opTrue)}
+
+	// An unmined transaction spends root 0's output 0 first, so the loser falls back.
+	thief := opTrueTx(t, 99, []*bt.Tx{roots[0]}, []uint32{0})
+	_, err := f.validator.Validate(context.Background(), thief, batchedTestHeight)
+	require.NoError(t, err)
+
+	f.recorder.mu.Lock()
+	f.recorder.seen, f.recorder.levelCalls = nil, 0
+	f.recorder.mu.Unlock()
+
+	loser := opTrueTx(t, 1, []*bt.Tx{roots[0]}, []uint32{0})
+	winner := opTrueTx(t, 2, []*bt.Tx{roots[1]}, []uint32{0})
+
+	err = f.server.processTransactionsBatched(context.Background(), checker, []*bt.Tx{loser, winner}, chainhash.Hash{}, batchedTestHeight, 1_700_000_000, 1_700_000_000, f.fork, map[uint32]bool{})
+	require.NoError(t, err)
+
+	f.recorder.mu.Lock()
+	levelCalls := f.recorder.levelCalls
+	f.recorder.mu.Unlock()
+	require.Positive(t, levelCalls, "the loser must go through the level path")
+	f.requireBranchCoinTimes(t)
+}
+
+// TestForkCandidateWalkErrorFailsTheBlock checks that a failed walk of the candidate's branch
+// fails the block on both entry points, rather than validating without the branch's coin times.
+func TestForkCandidateWalkErrorFailsTheBlock(t *testing.T) {
+	tests := []struct {
+		name  string
+		check func(t *testing.T, f *forkCandidateFixture, block *model.Block) error
+	}{
+		{name: "CheckBlockSubtrees", check: func(t *testing.T, f *forkCandidateFixture, block *model.Block) error {
+			return checkBlock(t, f.batchedFixture, block)
+		}},
+		{name: "CheckSubtreeFromBlock", check: func(_ *testing.T, f *forkCandidateFixture, block *model.Block) error {
+			_, err := f.server.CheckSubtreeFromBlock(context.Background(), &subtreevalidation_api.CheckSubtreeFromBlockRequest{
+				Hash:              block.Subtrees[0][:],
+				BaseUrl:           "legacy",
+				BlockHeight:       batchedTestHeight,
+				BlockHash:         block.Hash()[:],
+				PreviousBlockHash: f.parent[:],
+			})
+
+			return err
+		}},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newForkCandidateFixture(t, blockchain.FSMStateCATCHINGBLOCKS)
+
+			roots := []*bt.Tx{storedRoot(t, f.batchedFixture, 1, opTrue), storedRoot(t, f.batchedFixture, 2, opTrue)}
+			block := storeBlock(t, f.batchedFixture, chainedTxs(t, roots, 2), false)
+			block.Header.HashPrevBlock = f.parent
+
+			f.client.pageErr = errors.NewServiceError("header store down")
+
+			require.ErrorContains(t, tc.check(t, f, block), "candidate branch coin times")
+			f.recorder.mu.Lock()
+			defer f.recorder.mu.Unlock()
+			require.Empty(t, f.recorder.seen, "no transaction may be checked without the branch's coin times")
+		})
+	}
 }

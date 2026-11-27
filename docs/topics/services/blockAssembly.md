@@ -385,8 +385,9 @@ The Block Assembly service implements real-time fork detection through the follo
 
     - Monitors the size of potential chain reorganizations, by the deeper of the two sides (blocks moved back and blocks moved forward)
     - Triggers a full reset of the block assembler instead of an in-place reorganization when either rule holds:
-        - the depth is at least the effective UTXO store block height retention (`GetUtxoStoreBlockHeightRetention()`: global retention plus the UTXO store adjustment), at any height. Spent transactions of a side chain are deleted at their height plus that retention, so the blocks being moved forward may already have lost them. A retention of 0 (pruning disabled) turns this rule off.
+        - the depth is at least the effective UTXO store block height retention (`GetUtxoStoreBlockHeightRetention()`: global retention plus the UTXO store adjustment), at any height. Spent transactions of a side chain are deleted at their stamp, their height plus that retention plus `utxostore_unminedTxRetention`, so the blocks being moved forward may already have lost them. A retention of 0 (pruning disabled) turns this rule off.
         - the depth is at least the coinbase maturity threshold (typically 100 blocks, `Settings.ChainCfgParams.CoinbaseMaturity`) and the current chain height is greater than 1000 blocks
+    - Halts instead of resetting when the blocks moved back reach the UTXO store retention. The pruner deletes a fully spent record once the tip reaches its stamp, its last spend or mined height plus the retention plus `utxostore_unminedTxRetention`, so a child keeps its parent for at least the retention after its own block, while the pruner runs at every height with parent preservation on (`pruner_skipPreserveParents` off, `utxostore_parentPreservationBlocks` above 0) on the Aerospike, SQL and Pebble stores; the utxoset store keeps its own retention. A reorg that moves back the retention or more may return transactions to the mempool whose parents are gone, and a reset would quietly drop them. While halted, block assembly serves no mining candidates, accepts no mining solutions, follows no further best-block changes and sets `teranode_blockassembly_deep_reorg_halted` to 1. Block validation waits for block assembly to be within `blockvalidation_maxBlocksBehindBlockAssembly` blocks (20 by default) of each block it validates, so once the chain is that far past the halted tip, block validation, legacy sync and the pruner stop too: the node stops following the chain until the operator acts. The halt does not fail the readiness check, because clients, `resetblockassembly` among them, reach block assembly through a Kubernetes Service that sends traffic only to ready pods. The halt is recorded in the blockchain state (`BlockAssemblerDeepReorgHalt`), so a restart stays halted. An operator lifts it with `teranode-cli resetblockassembly`, which reloads the mempool from the store and drops what it cannot find.
 
 The `BlockAssembler` keeps the node synchronized with the network by identifying and switching to the strongest chain (the one with the most accumulated proof of work), ensuring all nodes in the network converge on the same transaction history.
 
@@ -396,6 +397,8 @@ During a reorganization, the `BlockAssembler` performs two key operations:
 
 1. Removes (rolls back) transactions from blocks in the current chain, starting from where the fork occurred
 2. Applies transactions from the new chain's blocks, ensuring the node switches to the stronger chain
+
+For the order of these operations relative to the Blockchain service, Block Validation and the UTXO store, see [Reorg Coordination Order](../architecture/teranode-overall-system-design.md#921-reorg-coordination-order).
 
 The service automatically manages chain selection through:
 

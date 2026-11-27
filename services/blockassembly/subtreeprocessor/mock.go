@@ -236,9 +236,36 @@ func (m *MockSubtreeProcessor) AddBatch(nodes []subtree.Node, txInpoints []*subt
 	m.Called(nodes, txInpoints)
 }
 
+// SetTxEra implements Interface.SetTxEra. A no-op, so tests need no expectation for it.
+func (m *MockSubtreeProcessor) SetTxEra(uint32) {}
+
+// TxEra implements Interface.TxEra: no era, so nothing is ever reset for one.
+func (m *MockSubtreeProcessor) TxEra() (lo, hi uint32, ok bool) {
+	return 0, 0, false
+}
+
+// NothingToReload implements Interface.NothingToReload: never, so a rules change reloads.
+func (m *MockSubtreeProcessor) NothingToReload() bool { return false }
+
+// RestartDroppedTxs implements Interface.RestartDroppedTxs. A no-op.
+func (m *MockSubtreeProcessor) RestartDroppedTxs() func(bool) {
+	return func(bool) {}
+}
+
+// FilterUnminedTxEra implements Interface.FilterUnminedTxEra: admits everything.
+func (m *MockSubtreeProcessor) FilterUnminedTxEra(txs []*utxostore.UnminedTransaction, _ []uint32) []*utxostore.UnminedTransaction {
+	return txs
+}
+
 // AddBatchBounded implements Interface.AddBatchBounded
-func (m *MockSubtreeProcessor) AddBatchBounded(nodes []subtree.Node, txInpoints []*subtree.TxInpoints, inBlock bool) Admission {
+func (m *MockSubtreeProcessor) AddBatchBounded(nodes []subtree.Node, txInpoints []*subtree.TxInpoints, inBlock bool, _ []uint32) Admission {
 	args := m.Called(nodes, txInpoints, inBlock)
+	return args.Get(0).(Admission)
+}
+
+// AddPositionedBatchBounded implements Interface.AddPositionedBatchBounded
+func (m *MockSubtreeProcessor) AddPositionedBatchBounded(nodes []subtree.Node, txInpoints []*subtree.TxInpoints, inBlock bool, _ []uint32, positions []uint64) Admission {
+	args := m.Called(nodes, txInpoints, positions, inBlock)
 	return args.Get(0).(Admission)
 }
 
@@ -256,6 +283,17 @@ func (m *MockSubtreeProcessor) UnminedLoading() bool { return false }
 
 func (m *MockSubtreeProcessor) AddDirectly(node *subtree.Node, txInpoints *subtree.TxInpoints, skipNotification bool) error {
 	args := m.Called(node, txInpoints, skipNotification)
+
+	if args.Get(0) == nil {
+		return nil
+	}
+
+	return args.Error(0)
+}
+
+// AddDirectlyAt implements Interface.AddDirectlyAt
+func (m *MockSubtreeProcessor) AddDirectlyAt(node *subtree.Node, txInpoints *subtree.TxInpoints, position uint64, skipNotification, reportOnly bool) error {
+	args := m.Called(node, txInpoints, position, skipNotification, reportOnly)
 
 	if args.Get(0) == nil {
 		return nil

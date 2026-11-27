@@ -312,6 +312,25 @@ func candidateParentMedianTimePtr(opts *Options) *uint32 {
 	return &opts.CandidateParentMedianTime
 }
 
+// candidateForkStartHeightPtr returns the fork start height only when the request carries
+// fork coin times, so a request without them leaves the field unset.
+func candidateForkStartHeightPtr(opts *Options) *uint32 {
+	if len(opts.CandidateForkMTPs) == 0 {
+		return nil
+	}
+
+	return &opts.CandidateForkStartHeight
+}
+
+// candidateBaseIDPtr returns the base block ID only when the options name one.
+func candidateBaseIDPtr(opts *Options) *uint32 {
+	if !opts.CandidateBaseSet {
+		return nil
+	}
+
+	return &opts.CandidateBaseID
+}
+
 // buildValidateTxRequest constructs the gRPC ValidateTransactionRequest from
 // raw transaction bytes, block height, and validation options. Shared by the
 // client's non-batch / batch send paths AND by the server's HTTP /tx, /txs
@@ -332,6 +351,9 @@ func buildValidateTxRequest(transactionData []byte, blockHeight uint32, opts *Op
 		UnconfirmedParentsAtCandidateHeight: unconfirmedParentsAtCandidateHeightPtr(opts),
 		SkipScriptValidation:                &opts.SkipScriptValidation,
 		OutpointOnlySpend:                   &opts.OutpointOnlySpend,
+		CandidateForkStartHeight:            candidateForkStartHeightPtr(opts),
+		CandidateForkMtps:                   opts.CandidateForkMTPs,
+		CandidateBaseId:                     candidateBaseIDPtr(opts),
 	}
 }
 
@@ -348,7 +370,9 @@ func (c *Client) Validate(ctx context.Context, tx *bt.Tx, blockHeight uint32, op
 
 type validateBatchResponse struct {
 	metaData []byte
-	err      error
+	// lanePosition is the created record's own lane position, which metaData does not carry.
+	lanePosition uint64
+	err          error
 }
 
 // ValidateWithOptions validates a transaction against the remote validator service.
@@ -370,6 +394,9 @@ func (c *Client) ValidateWithOptions(ctx context.Context, tx *bt.Tx, blockHeight
 			c.logger.Errorf("[ValidateWithOptions] failed to parse metadata: %v", err)
 			return nil, err
 		}
+
+		// The metadata encoding has no lane position; the response carries it beside it.
+		result.LanePosition = response.GetLanePosition()
 
 		return result, nil
 	}
@@ -417,6 +444,8 @@ func (c *Client) ValidateWithOptions(ctx context.Context, tx *bt.Tx, blockHeight
 		c.logger.Errorf("[ValidateWithOptions] failed to parse metadata: %v", err)
 		return nil, err
 	}
+
+	result.LanePosition = r.lanePosition
 
 	return result, nil
 }
@@ -571,7 +600,7 @@ func (c *Client) retryBatchItemsIndividually(ctx context.Context, batch []*batch
 		// delivered — and it returns real metadata, which the HTTP route cannot.
 		response, err := c.client.ValidateTransaction(ctx, txReq)
 		if err == nil {
-			item.complete(validateBatchResponse{metaData: response.Metadata})
+			item.complete(validateBatchResponse{metaData: response.Metadata, lanePosition: response.GetLanePosition()})
 			continue
 		}
 
@@ -652,7 +681,15 @@ func (c *Client) processBatchResponse(batch []*batchItem, resp *validator_api.Va
 			// on *errors.Error downstream.
 			item.complete(validateBatchResponse{metaData: nil, err: errors.UnwrapTError(resp.Errors[i])})
 		} else {
-			item.complete(validateBatchResponse{metaData: resp.Metadata[i], err: nil})
+			// A server built before lane_positions sends none, so these records come back with
+			// position 0; at shadow subtree validation then reads the position from the store
+			// (fillLanePosition) for each one it puts into a subtree, one extra read each.
+			var lanePosition uint64
+			if i < len(resp.LanePositions) {
+				lanePosition = resp.LanePositions[i]
+			}
+
+			item.complete(validateBatchResponse{metaData: resp.Metadata[i], lanePosition: lanePosition, err: nil})
 		}
 	}
 }

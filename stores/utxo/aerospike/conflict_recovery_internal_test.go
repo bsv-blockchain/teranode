@@ -11,6 +11,7 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/bscript"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/stretchr/testify/require"
@@ -23,6 +24,7 @@ func restoreTestTxs(t *testing.T, s *Store, outputs int) (parent, child *bt.Tx) 
 	ctx := t.Context()
 
 	parent = bt.NewTx()
+	parent.LockTime = NextUniqueLockTime() // a txid of its own: the server is shared
 	in := &bt.Input{PreviousTxOutIndex: 0, PreviousTxSatoshis: 1_000_000, PreviousTxScript: bscript.NewFromBytes([]byte{0x51}),
 		SequenceNumber: 0xffffffff, UnlockingScript: bscript.NewFromBytes([]byte{0x00})}
 	require.NoError(t, in.PreviousTxIDAdd(&chainhash.Hash{0xd5, 0xd5}))
@@ -52,6 +54,8 @@ func restoreTestTxs(t *testing.T, s *Store, outputs int) (parent, child *bt.Tx) 
 // RestoreConflictSpends writes the recorded spends with one Lua batch, not one round trip per
 // outpoint: a wide cascade restores thousands of outpoints.
 func TestRestoreConflictSpends_OneRoundTripPerBatch(t *testing.T) {
+	t.Parallel()
+
 	s, _ := setupStoreForLockTest(t)
 	ctx := t.Context()
 
@@ -87,6 +91,8 @@ func TestRestoreConflictSpends_OneRoundTripPerBatch(t *testing.T) {
 
 // Only the phase of a published checklist changes, so a phase save must not rewrite its chunks.
 func TestSaveConflictRecovery_PhaseSaveKeepsChunks(t *testing.T) {
+	t.Parallel()
+
 	s, client := setupStoreForLockTest(t)
 	ctx := t.Context()
 
@@ -165,6 +171,8 @@ func TestConflictBatchPolicyDeadline(t *testing.T) {
 // LoadConflictRecovery refuses a root record whose checklist reference or chunks are damaged, and
 // SaveConflictRecovery refuses a checklist for an intent that does not exist.
 func TestConflictRecovery_DamagedRecords(t *testing.T) {
+	t.Parallel()
+
 	s, _ := setupStoreForLockTest(t)
 	ctx := t.Context()
 
@@ -238,4 +246,55 @@ func TestConflictRecovery_DamagedRecords(t *testing.T) {
 	r, lerr = s.LoadConflictRecovery(ctx, id)
 	require.NoError(t, lerr)
 	require.Nil(t, r, "the record is gone")
+}
+
+// At shadow every spend RestoreConflictSpends writes counts once as not carrying a lane position,
+// across batches; with lane positions off nothing is counted, and a batch that fails counts nothing.
+func TestRestoreConflictSpendsCountsEachRestoredSpend(t *testing.T) {
+	// Not parallel: it reads the process-wide lane spend counts, which other tests' spends add to.
+	s, _ := setupStoreForLockTest(t)
+	ctx := t.Context()
+
+	_, child := restoreTestTxs(t, s, 3)
+
+	spends, err := utxo.GetSpends(child)
+	require.NoError(t, err)
+
+	// Two batches for the three spends.
+	s.settings.UtxoStore.SpendBatcherSize = 2
+
+	for _, tc := range []struct {
+		name      string
+		migration settings.LaneMigration
+		counted   float64
+	}{
+		{name: "off", migration: settings.LaneMigrationOff, counted: 0},
+		{name: "shadow", migration: settings.LaneMigrationShadow, counted: 3},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s.settings.UtxoStore.LaneMigration = tc.migration
+
+			require.NoError(t, s.Unspend(ctx, spends))
+
+			carried, missing := laneSpendCount(t, "yes"), laneSpendCount(t, "no")
+			require.NoError(t, s.RestoreConflictSpends(ctx, spends, 2))
+			require.InDelta(t, carried, laneSpendCount(t, "yes"), 0)
+			require.InDelta(t, missing+tc.counted, laneSpendCount(t, "no"), 0, "one count per restored spend")
+		})
+	}
+
+	t.Run("a failed batch counts nothing", func(t *testing.T) {
+		s.settings.UtxoStore.LaneMigration = settings.LaneMigrationShadow
+
+		require.NoError(t, s.Unspend(ctx, spends))
+
+		s.batchOperateFn = func(*aerospike.BatchPolicy, []aerospike.BatchRecordIfc) aerospike.Error {
+			return aerospike.ErrNetwork
+		}
+		t.Cleanup(func() { s.batchOperateFn = nil })
+
+		missing := laneSpendCount(t, "no")
+		require.Error(t, s.RestoreConflictSpends(ctx, spends, 2))
+		require.InDelta(t, missing, laneSpendCount(t, "no"), 0)
+	})
 }

@@ -95,6 +95,7 @@ const (
 	ERR_UTXO_INVALID_SIZE        ERR = 75
 	ERR_UTXO_UNSPENT             ERR = 76
 	ERR_UTXO_WALK_LIMIT_EXCEEDED ERR = 77
+	ERR_UTXO_SPENDING_TX_PRUNED  ERR = 78
 	ERR_UTXO_ERROR               ERR = 79
 	// Kafka errors 80-89
 	ERR_KAFKA_DECODE_ERROR ERR = 80
@@ -103,6 +104,7 @@ const (
 	ERR_BLOB_EXISTS               ERR = 90
 	ERR_BLOB_NOT_FOUND            ERR = 91
 	ERR_BLOB_FOOTER_SIZE_MISMATCH ERR = 92
+	ERR_BLOB_CORRUPT              ERR = 93
 	ERR_BLOB_ERROR                ERR = 99
 	// State errors 100-109
 	ERR_STATE_INITIALIZATION ERR = 100
@@ -195,12 +197,14 @@ var (
 		75:  "UTXO_INVALID_SIZE",
 		76:  "UTXO_UNSPENT",
 		77:  "UTXO_WALK_LIMIT_EXCEEDED",
+		78:  "UTXO_SPENDING_TX_PRUNED",
 		79:  "UTXO_ERROR",
 		80:  "KAFKA_DECODE_ERROR",
 		89:  "KAFKA_ERROR",
 		90:  "BLOB_EXISTS",
 		91:  "BLOB_NOT_FOUND",
 		92:  "BLOB_FOOTER_SIZE_MISMATCH",
+		93:  "BLOB_CORRUPT",
 		99:  "BLOB_ERROR",
 		100: "STATE_INITIALIZATION",
 		101: "CATCHUP_IN_PROGRESS",
@@ -276,12 +280,14 @@ var (
 		"UTXO_INVALID_SIZE":             75,
 		"UTXO_UNSPENT":                  76,
 		"UTXO_WALK_LIMIT_EXCEEDED":      77,
+		"UTXO_SPENDING_TX_PRUNED":       78,
 		"UTXO_ERROR":                    79,
 		"KAFKA_DECODE_ERROR":            80,
 		"KAFKA_ERROR":                   89,
 		"BLOB_EXISTS":                   90,
 		"BLOB_NOT_FOUND":                91,
 		"BLOB_FOOTER_SIZE_MISMATCH":     92,
+		"BLOB_CORRUPT":                  93,
 		"BLOB_ERROR":                    99,
 		"STATE_INITIALIZATION":          100,
 		"CATCHUP_IN_PROGRESS":           101,
@@ -431,7 +437,7 @@ const file_errors_error_proto_rawDesc = "" +
 	"\fwrappedError\x18\x04 \x01(\v2\x0e.errors.TErrorR\fwrappedError\x12\x12\n" +
 	"\x04file\x18\x05 \x01(\tR\x04file\x12\x12\n" +
 	"\x04line\x18\x06 \x01(\x05R\x04line\x12\x1a\n" +
-	"\bfunction\x18\a \x01(\tR\bfunction*\x9e\r\n" +
+	"\bfunction\x18\a \x01(\tR\bfunction*\xcd\r\n" +
 	"\x03ERR\x12\v\n" +
 	"\aUNKNOWN\x10\x00\x12\x14\n" +
 	"\x10INVALID_ARGUMENT\x10\x01\x12\x16\n" +
@@ -494,14 +500,16 @@ const file_errors_error_proto_rawDesc = "" +
 	"\rUTXO_MISMATCH\x10J\x12\x15\n" +
 	"\x11UTXO_INVALID_SIZE\x10K\x12\x10\n" +
 	"\fUTXO_UNSPENT\x10L\x12\x1c\n" +
-	"\x18UTXO_WALK_LIMIT_EXCEEDED\x10M\x12\x0e\n" +
+	"\x18UTXO_WALK_LIMIT_EXCEEDED\x10M\x12\x1b\n" +
+	"\x17UTXO_SPENDING_TX_PRUNED\x10N\x12\x0e\n" +
 	"\n" +
 	"UTXO_ERROR\x10O\x12\x16\n" +
 	"\x12KAFKA_DECODE_ERROR\x10P\x12\x0f\n" +
 	"\vKAFKA_ERROR\x10Y\x12\x0f\n" +
 	"\vBLOB_EXISTS\x10Z\x12\x12\n" +
 	"\x0eBLOB_NOT_FOUND\x10[\x12\x1d\n" +
-	"\x19BLOB_FOOTER_SIZE_MISMATCH\x10\\\x12\x0e\n" +
+	"\x19BLOB_FOOTER_SIZE_MISMATCH\x10\\\x12\x10\n" +
+	"\fBLOB_CORRUPT\x10]\x12\x0e\n" +
 	"\n" +
 	"BLOB_ERROR\x10c\x12\x18\n" +
 	"\x14STATE_INITIALIZATION\x10d\x12\x17\n" +

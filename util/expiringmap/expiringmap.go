@@ -233,6 +233,20 @@ func (m *ExpiringMap[K, V]) evictOldestLocked() bool {
 	return true
 }
 
+// Expiry reports when key stops being returned by Get, and false when key is absent
+// or has already expired.
+func (m *ExpiringMap[K, V]) Expiry(key K) (time.Time, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	item, ok := m.items[key]
+	if !ok || time.Now().UnixNano() > item.expiry {
+		return time.Time{}, false
+	}
+
+	return time.Unix(0, item.expiry), true
+}
+
 // Get returns the value for the given key.
 func (m *ExpiringMap[K, V]) Get(key K) (value V, ok bool) {
 	m.mu.RLock()
@@ -250,6 +264,28 @@ func (m *ExpiringMap[K, V]) Get(key K) (value V, ok bool) {
 
 	value = item.item
 	return
+}
+
+// GetAndDelete removes the entry for key and returns its value, in one step
+// under the write lock. ok reports whether this call removed an entry, so when
+// several goroutines race for the same key exactly one of them gets ok == true.
+//
+// Expiry is ignored: an entry the cleaner has not yet removed is still returned.
+// The eviction function and channel do not fire, as with Delete. A caller that
+// hands ownership of a value through the map can rely on both: the goroutine
+// that gets ok == true is the only one that will ever see the value leave it.
+func (m *ExpiringMap[K, V]) GetAndDelete(key K) (value V, ok bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	item, ok := m.items[key]
+	if !ok {
+		return
+	}
+
+	delete(m.items, key)
+
+	return item.item, true
 }
 
 // Delete deletes the given key from the map.

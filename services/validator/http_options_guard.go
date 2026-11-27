@@ -90,5 +90,17 @@ func nonDefaultValidationOptions(req *validator_api.ValidateTransactionRequest) 
 		return "outpointOnlySpend"
 	}
 
+	if req.CandidateForkStartHeight != nil && *req.CandidateForkStartHeight != 0 {
+		return "candidateForkStartHeight"
+	}
+
+	if len(req.CandidateForkMtps) > 0 {
+		return "candidateForkMtps"
+	}
+
+	if req.CandidateBaseId != nil {
+		return "candidateBaseId"
+	}
+
 	return ""
 }

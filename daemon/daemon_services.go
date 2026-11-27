@@ -21,6 +21,7 @@ import (
 	"github.com/bsv-blockchain/teranode/services/legacy"
 	"github.com/bsv-blockchain/teranode/services/legacy/peer"
 	"github.com/bsv-blockchain/teranode/services/p2p"
+	"github.com/bsv-blockchain/teranode/services/probe"
 	"github.com/bsv-blockchain/teranode/services/propagation"
 	"github.com/bsv-blockchain/teranode/services/pruner"
 	"github.com/bsv-blockchain/teranode/services/rpc"
@@ -33,6 +34,7 @@ import (
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/kafka"
+	"github.com/bsv-blockchain/teranode/util/lanereader"
 	"github.com/bsv-blockchain/teranode/util/servicemanager"
 	"github.com/bsv-blockchain/teranode/util/tracing"
 	"github.com/felixge/fgprof"
@@ -72,6 +74,7 @@ func (d *Daemon) startServices(ctx context.Context, logger ulogger.Logger, appSe
 	startRPC := d.shouldStart(serviceRPCFormal, args)
 	startAlert := d.shouldStart(serviceAlertFormal, args)
 	startPruner := d.shouldStart(servicePrunerFormal, args)
+	startProbe := d.shouldStart(serviceProbeFormal, args)
 
 	// Create the application count based on the services that are going to be started
 	d.appCount += len(d.externalServices)
@@ -122,6 +125,14 @@ func (d *Daemon) startServices(ctx context.Context, logger ulogger.Logger, appSe
 		{startPropagation, func() error { return d.startPropagationService(ctx, appSettings, createLogger) }},
 		{startLegacy, func() error { return d.startLegacyService(ctx, appSettings, createLogger) }},
 		{startPruner, func() error { return d.startPrunerService(ctx, appSettings, createLogger) }},
+		{startProbe, func() error { return d.startProbeService(ctx, appSettings, createLogger, startBlockPersister) }},
+	}
+
+	// At utxostore_laneMigration shadow, a process running a service that checks whether a parent
+	// is mined, block assembly, or the pruner, which judges each delete by the lane rule, keeps an
+	// index of the lane map and answers those checks from it too (util/lanereader).
+	if laneReaderWanted(args, appSettings.Validator.UseLocalValidator) {
+		d.startLaneReader(ctx, appSettings, createLogger)
 	}
 
 	// Loop through and start each service if needed
@@ -774,6 +785,51 @@ func (d *Daemon) startBlockAssemblyService(ctx context.Context, appSettings *set
 	))
 }
 
+// needsLaneReader reports whether a process keeps a lane index: one running subtree validation,
+// block validation or the validator, which check parents themselves, block assembly, whose restart
+// dry run judges records against it (services/blockassembly/lane_restart.go), a service that sends its
+// transactions to a validator (propagation, legacy, RPC) when that validator runs in-process
+// (useLocalValidator), or the pruner, which judges its deletes by the lane rule. With a remote
+// validator, such a service's parent checks are made, and counted, in the validator's process, so its
+// own index would answer nothing.
+func needsLaneReader(subtreeValidation, blockValidation, validator, blockAssembly, validatorClient, localValidator, pruner bool) bool {
+	return subtreeValidation || blockValidation || validator || blockAssembly || (validatorClient && localValidator) || pruner
+}
+
+// laneReaderWanted is needsLaneReader for the services args and the config switch on, as Start
+// reads them.
+func laneReaderWanted(args []string, localValidator bool) bool {
+	return needsLaneReader(
+		serviceEnabled(serviceSubtreeValidationFormal, args),
+		serviceEnabled(serviceBlockValidationFormal, args),
+		serviceEnabled(serviceValidatorFormal, args),
+		serviceEnabled(serviceBlockAssemblyFormal, args),
+		serviceEnabled(servicePropagationFormal, args) || serviceEnabled(serviceLegacyFormal, args) || serviceEnabled(serviceRPCFormal, args),
+		localValidator,
+		serviceEnabled(servicePrunerFormal, args),
+	)
+}
+
+// laneReaderConnectRetry is how long the lane index waits before connecting to the blockchain
+// service again.
+const laneReaderConnectRetry = 5 * time.Second
+
+// startLaneReader starts the process's lane index at utxostore_laneMigration shadow; at off it
+// starts nothing and opens no connection. The index's blockchain client connects in the
+// background: creating it waits for the blockchain service, which this same process may not have
+// started yet, so the index does not hold up a service's start.
+func (d *Daemon) startLaneReader(ctx context.Context, appSettings *settings.Settings, createLogger func(string) ulogger.Logger) {
+	if !appSettings.UtxoStore.LaneMigration.Stamps() {
+		lanereader.Start(ctx, nil, appSettings, nil)
+
+		return
+	}
+
+	lanereader.StartConnecting(ctx, createLogger(loggerLaneReader), appSettings, func(ctx context.Context) (lanereader.Source, error) {
+		return d.daemonStores.GetBlockchainClient(ctx, createLogger(loggerBlockchainClient), appSettings, serviceLaneReader)
+	}, laneReaderConnectRetry)
+}
+
 // startSubtreeValidationService initializes and adds the SubtreeValidation service to the ServiceManager.
 func (d *Daemon) startSubtreeValidationService(
 	ctx context.Context,
@@ -1030,14 +1086,14 @@ func (d *Daemon) startValidatorService(
 		return err
 	}
 
-	var policyRejectedTxKafkaProducerClient *kafka.KafkaAsyncProducer
-
-	policyRejectedTxKafkaProducerClient, err = getKafkaTxPolicyRejectedAsyncProducer(
+	policyRejectedProducer, err := getKafkaTxPolicyRejectedAsyncProducer(
 		ctx, createLogger("kafka-producer-policy-rejected-tx"), appSettings,
 	)
 	if err != nil {
 		return err
 	}
+	// Keep the interface nil when the optional producer is not configured.
+	policyRejectedTxKafkaProducerClient := nonNilAsyncProducer(policyRejectedProducer)
 
 	// Create the BlockAssembly client for the Validator service
 	var blockAssemblyClient *blockassembly.Client
@@ -1267,6 +1323,34 @@ func (d *Daemon) startPrunerService(ctx context.Context, appSettings *settings.S
 		blockchainClient,
 		blockAssemblyClient,
 	))
+}
+
+func (d *Daemon) startProbeService(ctx context.Context, appSettings *settings.Settings,
+	createLogger func(string) ulogger.Logger, blockPersisterRuns bool) error {
+	blockchainClient, err := d.daemonStores.GetBlockchainClient(
+		ctx, createLogger(loggerBlockchainClient), appSettings, serviceProbe,
+	)
+	if err != nil {
+		return err
+	}
+
+	p2pClient, err := d.daemonStores.GetP2PClient(ctx, createLogger(loggerP2P), appSettings)
+	if err != nil {
+		return err
+	}
+
+	probeServer := probe.New(
+		createLogger(loggerProbe),
+		appSettings,
+		blockchainClient,
+		p2pClient,
+	)
+
+	if !blockPersisterRuns {
+		probeServer.WithoutBlockPersister()
+	}
+
+	return d.ServiceManager.AddService(serviceProbeFormal, probeServer)
 }
 
 // createBanList creates, initializes, and starts periodic reload for a ban list.

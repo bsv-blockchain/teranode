@@ -37,6 +37,7 @@ var (
 
 	// Additional metrics for block assembler operations
 	prometheusBlockAssemblerGetMiningCandidate          prometheus.Counter
+	prometheusBlockAssemblerLastMiningCandidateTime     prometheus.Gauge
 	prometheusBlockAssemblerCandidateTimeClockSkew      prometheus.Counter
 	prometheusBlockAssemblerSubtreeCreated              prometheus.Counter
 	prometheusBlockAssemblerTransactions                prometheus.Gauge
@@ -96,6 +97,10 @@ var (
 	// Storage-triggered resets are suspended while it is 1; any reset that
 	// completes without a storage error clears it.
 	prometheusBlockAssemblyDiskTxMapDegraded prometheus.Gauge
+
+	// prometheusBlockAssemblyDeepReorgHalted is 1 while block assembly is halted on a reorg
+	// deeper than the UTXO retention and waits for an operator reset, and 0 otherwise.
+	prometheusBlockAssemblyDeepReorgHalted prometheus.Gauge
 
 	// prometheusBlockAssemblerLivenessHeartbeatAge tracks how long since the main select loop last beat
 	prometheusBlockAssemblerLivenessHeartbeatAge prometheus.Gauge
@@ -188,6 +193,15 @@ func _initPrometheusMetrics() {
 			Subsystem: "blockassembly",
 			Name:      "block_assembler_get_mining_candidate",
 			Help:      "Number of calls to GetMiningCandidate in the block assembler",
+		},
+	)
+
+	prometheusBlockAssemblerLastMiningCandidateTime = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "teranode",
+			Subsystem: "blockassembly",
+			Name:      "last_mining_candidate_timestamp_seconds",
+			Help:      "Unix time at which block assembly last served a mining candidate",
 		},
 	)
 
@@ -612,6 +626,15 @@ func _initPrometheusMetrics() {
 			Subsystem: "blockassembly",
 			Name:      "disk_tx_map_degraded",
 			Help:      "1 while auto-reset on a disk tx map storage error is suspended because a storage-triggered reset hit a storage error again (a disk fault a rotation can't cure), 0 otherwise. Any reset that completes without a storage error clears it.",
+		},
+	)
+
+	prometheusBlockAssemblyDeepReorgHalted = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "teranode",
+			Subsystem: "blockassembly",
+			Name:      "deep_reorg_halted",
+			Help:      "1 while block assembly is halted on a reorg that moves back at least the UTXO retention and serves no mining candidates until an operator runs resetblockassembly, 0 otherwise.",
 		},
 	)
 

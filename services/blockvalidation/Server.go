@@ -16,6 +16,8 @@ package blockvalidation
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/binary"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -397,6 +399,7 @@ type Server struct {
 
 	// cacheBustCounter produces the unique token appended to a peer request URL when
 	// a previous response from that peer looked poisoned. See peer_cache_bypass.go.
+	// New seeds it randomly so tokens are not reused across restarts.
 	cacheBustCounter atomic.Uint64
 
 	// previousCatchupAttempt stores details about the last failed catchup attempt.
@@ -573,6 +576,13 @@ func New(
 
 	bVal.fetchSubtreeDataForBlockFn = bVal.fetchSubtreeDataForBlock
 	bVal.catchupFunc = bVal.catchup
+
+	// Seed the cache-bust token randomly so a restarted node does not request
+	// "?cachebust=1" again and get back an entry the peer cached under that URL
+	// before the restart (#1373). crypto/rand.Read never returns an error.
+	var cacheBustSeed [8]byte
+	_, _ = rand.Read(cacheBustSeed[:])
+	bVal.cacheBustCounter.Store(binary.LittleEndian.Uint64(cacheBustSeed[:]))
 
 	// 0 disables rather than falling back to a default: an explicit operator opt-out that
 	// turns off the byte budget AND the oversized-block subtree-concurrency rule
@@ -1745,9 +1755,12 @@ func (u *Server) ProcessBlock(ctx context.Context, request *blockvalidation_api.
 
 	block.Height = height
 
-	// A caller-supplied block ID is applied so the block is stored under it. It does not
-	// mark the block mined: full validation still has the setMinedChan worker tag the
-	// transactions (buildAddBlockOpts). Legacy netsync sends 0 on every route.
+	// A caller-supplied block ID is applied so the block is stored under it. On full
+	// validation it does not mark the block mined: the setMinedChan worker still tags the
+	// transactions (buildAddBlockOpts). On the quick route the transactions are stamped
+	// with it and commitBlock stores the block with mined_set true, so setQuickBlockID
+	// first refuses an ID that is not the block's reservation. Legacy netsync sends 0 on
+	// every route.
 	if request.BlockId != 0 {
 		block.ID = request.BlockId
 	}
@@ -1828,8 +1841,8 @@ func (u *Server) ValidateBlock(ctx context.Context, request *blockvalidation_api
 
 	// Create meta regenerator for potential meta file recovery (no peer URL for gRPC, local store only)
 	metaRegenerator := u.blockValidation.createMetaRegenerator(nil)
-	block.SetCheckpointConfirmedAncestor(u.blockValidation.checkpointConfirmedAncestor(ctx, block))
-	if ok, err := block.Valid(ctx, u.logger, u.subtreeStore, u.utxoStore, oldBlockIDsMap, blockHeaders, blockHeaderIDs, u.settings, metaRegenerator); !ok {
+	block.SetCheckpointConfirmedAncestor(u.blockValidation.checkpointConfirmedAncestor(ctx, block, false))
+	if ok, err := block.Valid(laneParentsContext(ctx, block), u.logger, u.subtreeStore, u.utxoStore, oldBlockIDsMap, blockHeaders, blockHeaderIDs, u.settings, metaRegenerator); !ok {
 		// Transient catchup-state (e.g. parent tx not yet in our store) must not be
 		// reported as a consensus failure to the caller. See issue #1031.
 		if errors.Is(err, errors.ErrBlockIncomplete) {
@@ -2215,12 +2228,13 @@ func (u *Server) processBlockFound(ctx context.Context, hash *chainhash.Hash, pe
 	// non-poisoning removal primitive (only InvalidateBlock, which poisons). With the default
 	// (opt-out) gate, block.Valid runs monolithically before AddBlock, so no corrupt body is
 	// ever added. When opted in, a corrupt body on the optimistic-background path takes the
-	// invalidate route (see the block.Valid background handler). This gate is removed once
-	// block.Valid is split so its integrity floor runs before the optimistic AddBlock.
+	// invalidate route (see the block.Valid background handler). The integrity floor that runs
+	// before the optimistic AddBlock narrows that to defects it does not check, so the gate stays.
 	opts := &ValidateBlockOptions{
 		DisableOptimisticMining: optimisticMiningDisabledForPeerPath(u.settings, baseURL),
 		IsRevalidation:          false, // processBlockFound is for new blocks, not revalidation
 		PeerID:                  peerID,
+		HeaderProven:            headerProven,
 	}
 
 	err = u.blockValidation.ValidateBlockWithOptions(ctx, block, baseURL, opts)
@@ -2266,8 +2280,10 @@ func (u *Server) processBlockFound(ctx context.Context, hash *chainhash.Hash, pe
 // An eligible block without the proof falls to ValidateBlockWithOptions. That is
 // correct for a legacy record because netsync writes its structure files as
 // FileTypeSubtreeToCheck, which full validation treats as unvalidated: subtree
-// validation creates the transactions and rebuilds the fees before the reward
-// check reads them. It is also slow, which is why netsync refuses to commit an
+// validation creates any transaction not yet stored and computes its fee. A
+// transaction an earlier outpoint-only quick attempt already stored keeps the fee 0
+// it was written with, so such a block can fail the reward check without the proof
+// (see checkpointConfirmedAncestor). It is also slow, which is why netsync refuses to commit an
 // unproven eligible record before it makes this RPC and re-offers it once the
 // header walk has proven it.
 func (u *Server) legacyUnifiedRoute(block *model.Block, baseURL string, headerProven bool) bool {
@@ -2665,6 +2681,12 @@ func (u *Server) blockRetryDelay(hash *chainhash.Hash, err error) (time.Duration
 	// A final verdict is then never retried, whatever its text: the proof-of-work limit
 	// rejection says "network proof-of-work limit", which IsNetworkError matches.
 	switch {
+	case errors.IsBlobCorrupt(err):
+		// A corrupt blob in this node's own store is permanent: the file is written atomically,
+		// and it exists, so a retry skips the fetch and reads the same bytes. It comes first
+		// because its rendered text matches IsMaliciousResponseError ("corrupt", "invalid
+		// header"), and a truncated header's innermost cause, an EOF, matches isTransportFailure.
+		return 0, false
 	case errors.Is(err, context.DeadlineExceeded):
 		delay = blockDeadlineRetryDelay
 	case isTransportFailure(err):
@@ -2718,6 +2740,19 @@ func isTransportFailure(err error) bool {
 
 		current = wrapped
 	}
+}
+
+// isPeerFetchFailure reports whether err looks like a failure to fetch the block from its peer,
+// which another source might not repeat. A corrupt blob in this node's own store is excluded:
+// it is not the peer's doing, and every alternative source would read the same local file. Its
+// rendered text would otherwise match IsMaliciousResponseError, and a truncated header's EOF
+// cause IsNetworkError.
+func isPeerFetchFailure(err error) bool {
+	if errors.IsBlobCorrupt(err) {
+		return false
+	}
+
+	return errors.IsNetworkError(err) || errors.IsMaliciousResponseError(err)
 }
 
 func (u *Server) clearBlockRetryAttempts(hash *chainhash.Hash) {
@@ -3030,9 +3065,10 @@ func (u *Server) processCatchupChItem(ctx context.Context, c processBlockCatchup
 			//
 			//   blockchain.Server.ReportPeerFailure broadcasts NotificationType_PeerFailure
 			//   -> p2p.Server routes failure_type "catchup" to
-			//      syncCoordinator.HandleCatchupFailure (and its subscription listener
-			//      deliberately bypasses the "skip notifications while syncing" filter for
-			//      this type — "needed to switch peers on catchup failure")
+			//      syncCoordinator.HandleCatchupFailure (its subscription listener hands
+			//      catchup PeerFailures to a dedicated worker that never runs the FSM skip
+			//      check, so neither a parked block announcement nor the CATCHINGBLOCKS
+			//      filter holds them back)
 			//   -> SyncCoordinator clears currentSyncPeer and calls triggerSyncLocked, i.e.
 			//      immediate re-selection of a different sync peer.
 			//
@@ -3896,7 +3932,7 @@ func (u *Server) processBlockWithPriority(ctx context.Context, blockFound proces
 	}
 
 	// If fetch failed and it's not a validation error, try alternative sources
-	if err != nil && (errors.IsNetworkError(err) || errors.IsMaliciousResponseError(err)) {
+	if err != nil && isPeerFetchFailure(err) {
 		u.logger.Warnf("[processBlockWithPriority] Failed to fetch block %s from %s (peer: %s), trying alternative sources: %v", blockFound.hash.String(), blockFound.baseURL, blockFound.peerID, err)
 
 		// Try alternative sources

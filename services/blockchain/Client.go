@@ -24,6 +24,7 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/blockchain/options"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
+	"github.com/bsv-blockchain/teranode/util/lane"
 	"github.com/google/uuid"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
@@ -358,6 +359,9 @@ func (c *Client) AddBlock(ctx context.Context, block *model.Block, peerID string
 		OptionInvalid:     storeBlockOptions.Invalid,
 		OptionID:          storeBlockOptions.ID,
 		CoinbaseBump:      block.CoinbaseBUMP,
+		LaneMapRows:       laneMapRowsToProto(storeBlockOptions.LaneMapRows),
+		// Sent only with rows, so a block stored without lanes is the same on the wire.
+		LaneMapRowsOwnBlock: storeBlockOptions.LaneMapRowsOwnBlock && len(storeBlockOptions.LaneMapRows) > 0,
 	}
 
 	for _, subtreeHash := range block.Subtrees {
@@ -482,6 +486,93 @@ func (c *Client) AssignBlockID(ctx context.Context, blockHash *chainhash.Hash) (
 		return 0, errors.UnwrapGRPC(err)
 	}
 	return resp.BlockId, nil
+}
+
+// OpenLaneLease asks the blockchain service for a lease on a free lane, with its first grant.
+func (c *Client) OpenLaneLease(ctx context.Context, holder string) (lane.LeaseID, lane.Grant, error) {
+	resp, err := c.client.OpenLaneLease(ctx, &blockchain_api.OpenLaneLeaseRequest{Holder: holder})
+	if err != nil {
+		return lane.LeaseID{}, lane.Grant{}, errors.UnwrapGRPC(err)
+	}
+
+	id, l, err := leaseFromRequest(resp.GetLeaseId(), resp.GetLane())
+	if err != nil {
+		return lane.LeaseID{}, lane.Grant{}, errors.NewServiceError("blockchain service returned a bad lane lease", err)
+	}
+
+	return id, lane.Grant{Lane: l, First: resp.GetFirst(), Last: resp.GetLast()}, nil
+}
+
+// RenewLaneLease renews a lane lease and, if asked, takes the next grant.
+func (c *Client) RenewLaneLease(ctx context.Context, r lane.Renewal) (lane.RenewResult, error) {
+	resp, err := c.client.RenewLaneLease(ctx, &blockchain_api.RenewLaneLeaseRequest{
+		LeaseId:          r.Lease[:],
+		Lane:             uint32(r.Lane),
+		Rate:             r.Rate,
+		WantGrant:        r.WantGrant,
+		SettlesFirst:     r.Settles.First,
+		SettlesLastTaken: r.Settles.LastTaken,
+	})
+	if err != nil {
+		return lane.RenewResult{}, errors.UnwrapGRPC(err)
+	}
+
+	return lane.RenewResult{
+		Closed:  resp.GetClosed(),
+		Granted: resp.GetGranted(),
+		Grant:   lane.Grant{Lane: r.Lane, First: resp.GetFirst(), Last: resp.GetLast()},
+	}, nil
+}
+
+// ReleaseLaneLease closes a lane lease cleanly.
+func (c *Client) ReleaseLaneLease(ctx context.Context, r lane.Release) (bool, error) {
+	resp, err := c.client.ReleaseLaneLease(ctx, &blockchain_api.ReleaseLaneLeaseRequest{
+		LeaseId:          r.Lease[:],
+		Lane:             uint32(r.Lane),
+		LastTaken:        r.LastTaken,
+		SettlesFirst:     r.Settles.First,
+		SettlesLastTaken: r.Settles.LastTaken,
+	})
+	if err != nil {
+		return false, errors.UnwrapGRPC(err)
+	}
+
+	return resp.GetAlreadyClosed(), nil
+}
+
+// LaneMapRows returns one block's lane map rows.
+func (c *Client) LaneMapRows(ctx context.Context, blockID uint32) ([]lane.MapRow, error) {
+	resp, err := c.client.GetLaneMapRows(ctx, &blockchain_api.GetLaneMapRowsRequest{BlockId: blockID})
+	if err != nil {
+		return nil, errors.UnwrapGRPC(err)
+	}
+
+	return laneMapRowsFromProto(resp.GetRows())
+}
+
+// LaneCapGrants returns, for each lane with one, the first grant handed out at or above height.
+func (c *Client) LaneCapGrants(ctx context.Context, height uint32) ([]lane.CapGrant, error) {
+	resp, err := c.client.GetLaneCapGrants(ctx, &blockchain_api.GetLaneCapGrantsRequest{Height: height})
+	if err != nil {
+		return nil, errors.UnwrapGRPC(err)
+	}
+
+	grants := make([]lane.CapGrant, 0, len(resp.GetGrants()))
+
+	for _, g := range resp.GetGrants() {
+		if g.GetLane() > lane.MaxLane || g.GetFirst() == 0 || g.GetFirst() > lane.MaxPosition {
+			return nil, errors.NewProcessingError("lane cap grant lane %d first %d is out of range", g.GetLane(), g.GetFirst())
+		}
+
+		grants = append(grants, lane.CapGrant{
+			Lane:     uint8(g.GetLane()),
+			First:    g.GetFirst(),
+			Height:   g.GetHeight(),
+			HandedAt: time.Unix(0, g.GetHandedAtNanos()),
+		})
+	}
+
+	return grants, nil
 }
 
 // blockFromResponse converts a gRPC GetBlockResponse into a model.Block.
@@ -827,6 +918,8 @@ func (c *Client) GetBlockHeader(ctx context.Context, blockHash *chainhash.Hash) 
 		SubtreesSet:    resp.SubtreesSet,
 		Invalid:        resp.Invalid,
 		MedianTimePast: resp.MedianTimePast,
+
+		MinedSetGeneration: resp.MinedSetGeneration,
 	}
 
 	if resp.ProcessedAt != nil {
@@ -1722,12 +1815,15 @@ func (c *Client) GetBlockIsMined(ctx context.Context, blockHash *chainhash.Hash)
 // Parameters:
 //   - ctx: Context for the operation with timeout and cancellation support
 //   - blockHash: Hash of the block to mark as mined
+//   - minedSetGeneration: The block's mined_set generation when the caller's tagging run started
 //
 // Returns:
-//   - error: Any error encountered during the mining status update operation
-func (c *Client) SetBlockMinedSet(ctx context.Context, blockHash *chainhash.Hash) error {
+//   - error: errors.ErrStateError if the block's mined_set generation has moved, or any
+//     other error encountered during the mining status update operation
+func (c *Client) SetBlockMinedSet(ctx context.Context, blockHash *chainhash.Hash, minedSetGeneration uint64) error {
 	_, err := c.client.SetBlockMinedSet(ctx, &blockchain_api.SetBlockMinedSetRequest{
-		BlockHash: blockHash[:],
+		BlockHash:          blockHash[:],
+		MinedSetGeneration: &minedSetGeneration,
 	})
 	if err != nil {
 		return errors.UnwrapGRPC(err)
@@ -1893,6 +1989,18 @@ func (c *Client) GetFSMCurrentState(ctx context.Context) (*FSMStateType, error) 
 		return currentState, nil
 	}
 
+	state, err := c.client.GetFSMCurrentState(ctx, &emptypb.Empty{})
+	if err != nil {
+		return nil, errors.UnwrapGRPC(err)
+	}
+
+	return &state.State, nil
+}
+
+// FetchFSMCurrentState reads the FSM state from the Blockchain service and skips the
+// cached state. The cache holds IDLE as a placeholder while the FSM subscription is
+// broken or stale, so a reader that must tell a real IDLE from an unknown state uses this.
+func (c *Client) FetchFSMCurrentState(ctx context.Context) (*FSMStateType, error) {
 	state, err := c.client.GetFSMCurrentState(ctx, &emptypb.Empty{})
 	if err != nil {
 		return nil, errors.UnwrapGRPC(err)
@@ -2676,4 +2784,42 @@ func maxMedianTimePastHeightsPerRequest(tSettings *settings.Settings) uint32 {
 		return ^uint32(0)
 	}
 	return uint32(configured) //nolint:gosec // bounded above before conversion
+}
+
+// NewLaneClient returns the blockchain client a lane allocator takes its lease through. The
+// allocator owns it and closes it after it releases its lease.
+//
+// It is built on a context that ctx's cancel does not reach. A client closes its connection when
+// its context ends, and a process cancels its context before it closes its clients, so on ctx the
+// release at shutdown would go out over a closed connection and the lease would lapse instead.
+// Close still ends the client's subscription, so nothing outlives the allocator.
+//
+// Only the client's lifetime is detached. Its startup calls (the health check and the API key
+// check) still end when ctx does, so a blockchain service that accepts the connection and never
+// answers holds up a process that is shutting down only for NewClient's retry backoff, which
+// does not watch ctx: about 6 s with the default blockchain_maxRetries and blockchain_retrySleep.
+func NewLaneClient(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings) (ClientI, error) {
+	life, cancel := context.WithCancel(context.WithoutCancel(ctx))
+	stop := context.AfterFunc(ctx, cancel)
+
+	client, err := NewClient(life, logger, tSettings, "lane")
+
+	if !stop() {
+		// ctx ended while the client was starting, so the process is shutting down.
+		cancel()
+
+		if err == nil {
+			_ = client.(*Client).Close()
+			err = errors.NewContextCanceledError("lane client start cut short by shutdown", ctx.Err())
+		}
+
+		return nil, err
+	}
+
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+
+	return client, nil
 }

@@ -1,0 +1,103 @@
+name: Consensus library gate
+# A pull request that changes the pin of a consensus library (listed in
+# .github/consensus-modules.txt) runs the consensus vectors on the base commit
+# and on the pull request, and fails if any outcome differs or a bumped library
+# is never executed by the vectors. A maintainer who has reviewed the
+# difference as an intended consensus change adds the
+# consensus-change-acknowledged label, which re-runs the job and lets it pass
+# for that event's commit only. After a push, remove and reapply the label.
+#
+# The job runs on every pull request and exits early when no pin changed, so
+# it can be a required status check.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  GO_VERSION: "1.27.0"
+  ACK_LABEL: consensus-change-acknowledged
+
+jobs:
+  consensus-library-gate:
+    name: consensus-library-gate
+    # arm64-safe: gobdk ships arm64 libraries; the PR unit tests run there too.
+    runs-on: teranode-runner-8-core-arm
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+
+      - name: Fetch the base commit
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: git fetch --no-tags --depth=1 origin "$BASE_SHA"
+
+      - name: Check for a consensus-library pin change
+        id: pins
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          if git diff --quiet "$BASE_SHA" HEAD -- go.mod; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "go.mod is unchanged; nothing to check." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5
+        if: steps.pins.outputs.changed == 'true'
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: false
+
+      # Plain go test (no -race): module cache only.
+      - name: Restore Go caches
+        if: steps.pins.outputs.changed == 'true'
+        uses: ./.github/actions/go-cache
+        with:
+          build_cache: 'false'
+
+      - name: Run the consensus vectors on base and pull request
+        if: steps.pins.outputs.changed == 'true'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          ACKNOWLEDGED: ${{ contains(github.event.pull_request.labels.*.name, env.ACK_LABEL) }}
+          PR_ACTION: ${{ github.event.action }}
+          PR_LABEL: ${{ github.event.label.name }}
+        run: |
+          status=0
+          ./scripts/consensus_lib_gate.sh "$BASE_SHA" "$RUNNER_TEMP/consensus-gate" || status=$?
+          cat "$RUNNER_TEMP/consensus-gate/summary.md" >> "$GITHUB_STEP_SUMMARY"
+
+          case $status in
+          0) ;;
+          3)
+            if [ "$ACKNOWLEDGED" = "true" ] && [ "$PR_ACTION" = "labeled" ] && [ "$PR_LABEL" = "$ACK_LABEL" ]; then
+              echo "::notice::Consensus outcomes differ; acknowledged by the $ACK_LABEL label."
+              printf '\n**Acknowledged** by the `%s` label.\n' "$ACK_LABEL" >> "$GITHUB_STEP_SUMMARY"
+            else
+              echo "::error::This pull request changes a consensus library and the consensus vectors cannot confirm it changes nothing (see the job summary). Review this commit as a consensus change; a maintainer then removes and reapplies the $ACK_LABEL label."
+              exit 1
+            fi
+            ;;
+          *) exit "$status" ;;
+          esac
+
+      - name: Upload the raw runs
+        if: always() && steps.pins.outputs.changed == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: consensus-gate
+          path: |
+            ${{ runner.temp }}/consensus-gate/*.json
+            ${{ runner.temp }}/consensus-gate/*.tsv
+            ${{ runner.temp }}/consensus-gate/*.md
+            ${{ runner.temp }}/consensus-gate/*.stderr
+          if-no-files-found: ignore
+          retention-days: 14

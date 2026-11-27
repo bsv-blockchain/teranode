@@ -16,6 +16,7 @@ import (
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
+	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/blob"
 	"github.com/bsv-blockchain/teranode/stores/blob/options"
 	utxostore "github.com/bsv-blockchain/teranode/stores/utxo"
@@ -23,6 +24,7 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
+	"github.com/bsv-blockchain/teranode/util/lane"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -1691,4 +1693,100 @@ func TestRemoveCoinbaseUtxosTakesAVanishedTxOutOfBlockAssembly(t *testing.T) {
 		foundIndex, _, _ := stp.locateTxInSubtrees(*tx.TxIDChainHash())
 		require.Equal(t, -1, foundIndex, "%s must not be in any subtree", name)
 	}
+}
+
+// callerRecorder remembers the caller each SpendAndCreate names, by transaction, then forwards it.
+type callerRecorder struct {
+	utxostore.Store
+
+	mu      sync.Mutex
+	callers map[chainhash.Hash][]utxostore.Caller
+}
+
+func (r *callerRecorder) SpendAndCreate(ctx context.Context, tx *bt.Tx, blockHeight uint32,
+	opts ...utxostore.CreateOption) (*meta.Data, []*utxostore.Spend, error) {
+	options := &utxostore.CreateOptions{}
+	for _, opt := range opts {
+		opt(options)
+	}
+
+	r.mu.Lock()
+	r.callers[*tx.TxIDChainHash()] = append(r.callers[*tx.TxIDChainHash()], options.Caller)
+	r.mu.Unlock()
+
+	return r.Store.SpendAndCreate(ctx, tx, blockHeight, opts...)
+}
+
+// Block assembly names itself on the creates it makes, the coinbase and the transactions a reorg
+// re-creates, so a lane position either of them burns is counted under block_assembly.
+func TestBlockAssemblyCreatesNameBlockAssembly(t *testing.T) {
+	ctx := context.Background()
+	stp, block := newMoveForwardCommitBoundaryProcessor(t)
+
+	first, second := createCoinbaseChain(t, ctx, stp, block)
+
+	require.NoError(t, stp.removeCoinbaseUtxos(ctx, block))
+
+	recorder := &callerRecorder{Store: stp.utxoStore, callers: map[chainhash.Hash][]utxostore.Caller{}}
+	stp.utxoStore = recorder
+
+	_, _, err := stp.moveForwardBlock(ctx, block, true, map[chainhash.Hash]struct{}{}, false, true)
+	require.NoError(t, err)
+
+	for name, tx := range map[string]*bt.Tx{"coinbase": block.CoinbaseTx, "first": first, "second": second} {
+		callers := recorder.callers[*tx.TxIDChainHash()]
+		require.NotEmpty(t, callers, "%s was created by the move forward", name)
+
+		for _, c := range callers {
+			require.Equal(t, utxostore.CallerBlockAssembly, c, name)
+		}
+	}
+}
+
+// lanePositionAnsweringStore answers a read of fields.LanePosition with the position it is given
+// for a tx, as utxoset and Aerospike do for a record created at utxostore_laneMigration shadow.
+type lanePositionAnsweringStore struct {
+	utxostore.Store
+	positions map[chainhash.Hash]uint64
+}
+
+func (s *lanePositionAnsweringStore) BatchDecorate(ctx context.Context, items []*utxostore.UnresolvedMetaData, fieldNames ...fields.FieldName) error {
+	if err := s.Store.BatchDecorate(ctx, items, fieldNames...); err != nil {
+		return err
+	}
+
+	for _, f := range fieldNames {
+		if f != fields.LanePosition {
+			continue
+		}
+
+		for _, item := range items {
+			if item.Data != nil {
+				item.Data.LanePosition = s.positions[item.Hash]
+			}
+		}
+	}
+
+	return nil
+}
+
+// At shadow, a restored tx that goes back into block assembly takes the lane position its
+// recreated record holds with it.
+func TestApplyCoinbaseUtxosRequeuesARestoredTxWithItsLanePosition(t *testing.T) {
+	ctx := context.Background()
+	stp, block := newMoveForwardCommitBoundaryProcessor(t)
+	stp.settings.UtxoStore.LaneMigration = settings.LaneMigrationShadow
+
+	first, _ := createCoinbaseChain(t, ctx, stp, block)
+	addToAssembly(t, stp, first)
+
+	require.NoError(t, stp.removeCoinbaseUtxos(ctx, block))
+
+	position := lane.Pack(13, 900)
+	stp.utxoStore = &lanePositionAnsweringStore{Store: stp.utxoStore, positions: map[chainhash.Hash]uint64{*first.TxIDChainHash(): position}}
+
+	require.NoError(t, stp.applyCoinbaseUtxos(ctx, block, true, true))
+
+	require.True(t, stp.currentTxMap.Exists(*first.TxIDChainHash()))
+	require.Equal(t, position, stp.currentTxMap.Position(*first.TxIDChainHash()))
 }

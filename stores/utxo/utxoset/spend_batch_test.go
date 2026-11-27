@@ -17,6 +17,8 @@ import (
 // out the package-level error values, that join would chain ErrFrozen onto the global ErrSpent
 // and every later double spend in the process would also read as frozen.
 func TestSpendGivesEachFailedInputAnErrorOfItsOwn(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 	require.NoError(t, s.SetBlockHeight(100))
 
@@ -54,6 +56,8 @@ func TestSpendGivesEachFailedInputAnErrorOfItsOwn(t *testing.T) {
 // let the validator's join chain ErrTxLocked onto the global ErrTxConflicting, and every later
 // conflicting spend in the process would also read as locked.
 func TestSpendGivesAConflictingAndALockedInputEachAnErrorOfItsOwn(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 	require.NoError(t, s.SetBlockHeight(100))
 

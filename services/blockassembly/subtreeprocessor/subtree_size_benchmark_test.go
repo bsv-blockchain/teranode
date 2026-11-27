@@ -3,6 +3,7 @@ package subtreeprocessor
 import (
 	"context"
 	"net/url"
+	"sync"
 	"testing"
 	"time"
 
@@ -203,41 +204,60 @@ func TestDirectSubtreeCreationPerformance(t *testing.T) {
 	}
 }
 
-// benchmarkTxHashPool is a pre-generated pool of real transaction hashes for benchmarks.
-// Using a pool allows benchmarks to use real tx hashes while supporting variable b.N.
+// benchmarkTxHashes returns a pool of real transaction hashes for benchmarks,
+// built on first use. Signing the chain takes seconds under -race, so building it
+// at package init cost every run of this test binary, child processes included.
+// A pool lets benchmarks use real tx hashes while supporting variable b.N.
 const benchmarkTxPoolSize = 10000
 
-var benchmarkTxHashPool []chainhash.Hash
-
-func init() {
-	// Pre-generate real transaction hashes at package init for benchmarks.
+var benchmarkTxHashes = sync.OnceValue(func() []chainhash.Hash {
 	// We use a minimal testing.T wrapper since CreateTestTransactionChainWithCount requires it.
 	// Note: CreateTestTransactionChainWithCount returns count-1 transactions due to loop bounds,
 	// so we request one extra to get exactly benchmarkTxPoolSize transactions.
 	t := &testing.T{}
 	allTxs := transactions.CreateTestTransactionChainWithCount(t, uint32(benchmarkTxPoolSize+2))
-	benchmarkTxHashPool = make([]chainhash.Hash, len(allTxs))
+	pool := make([]chainhash.Hash, len(allTxs))
 	for i, tx := range allTxs {
-		benchmarkTxHashPool[i] = *tx.TxIDChainHash()
+		pool[i] = *tx.TxIDChainHash()
+	}
+
+	return pool
+})
+
+// skipInShort skips a sub-benchmark size that -short (CI) leaves out. CI keeps 4 and 1024 per
+// subtree (64 for SubtreeProcessorOverheadBreakdown, whose 1024 row times the same loop as
+// SubtreeProcessorAdd/1024_per_subtree), 1k and 100k nodes for the parallel benchmarks, and 1k and
+// 10k for the sequential ones, whose 100k rows read 13 to 82% apart between two runs of the same
+// code on one GitHub runner.
+func skipInShort(b *testing.B, long bool) {
+	b.Helper()
+
+	if long && testing.Short() {
+		b.Skip("a kept size times the same code; skipped in -short")
 	}
 }
 
 // BenchmarkDirectSubtreeAdd benchmarks direct subtree node addition
 // WITHOUT SubtreeProcessor overhead. Compare with BenchmarkSubtreeProcessorAdd.
 func BenchmarkDirectSubtreeAdd(b *testing.B) {
+	txHashPool := benchmarkTxHashes()
+
 	testCases := []struct {
 		name            string
 		itemsPerSubtree int
+		long            bool
 	}{
 		{name: "4_per_subtree", itemsPerSubtree: 4},
-		{name: "64_per_subtree", itemsPerSubtree: 64},
-		{name: "256_per_subtree", itemsPerSubtree: 256},
+		{name: "64_per_subtree", itemsPerSubtree: 64, long: true},
+		{name: "256_per_subtree", itemsPerSubtree: 256, long: true},
 		{name: "1024_per_subtree", itemsPerSubtree: 1024},
-		{name: "2048_per_subtree", itemsPerSubtree: 2048},
+		{name: "2048_per_subtree", itemsPerSubtree: 2048, long: true},
 	}
 
 	for _, tc := range testCases {
 		b.Run(tc.name, func(b *testing.B) {
+			skipInShort(b, tc.long)
+
 			subtrees := make([]*subtreepkg.Subtree, 0)
 			currentSubtree, _ := subtreepkg.NewTreeByLeafCount(tc.itemsPerSubtree)
 			_ = currentSubtree.AddCoinbaseNode()
@@ -250,7 +270,7 @@ func BenchmarkDirectSubtreeAdd(b *testing.B) {
 					subtrees = append(subtrees, currentSubtree)
 					currentSubtree, _ = subtreepkg.NewTreeByLeafCount(tc.itemsPerSubtree)
 				}
-				_ = currentSubtree.AddNode(benchmarkTxHashPool[i%benchmarkTxPoolSize], uint64(i), 250)
+				_ = currentSubtree.AddNode(txHashPool[i%benchmarkTxPoolSize], uint64(i), 250)
 			}
 
 			b.StopTimer()
@@ -267,19 +287,24 @@ func BenchmarkDirectSubtreeAdd(b *testing.B) {
 // BenchmarkSubtreeProcessorAdd benchmarks the SubtreeProcessor's Add performance
 // with different subtree sizes. Compare with BenchmarkDirectSubtreeAdd.
 func BenchmarkSubtreeProcessorAdd(b *testing.B) {
+	txHashPool := benchmarkTxHashes()
+
 	testCases := []struct {
 		name            string
 		itemsPerSubtree int
+		long            bool
 	}{
 		{name: "4_per_subtree", itemsPerSubtree: 4},
-		{name: "64_per_subtree", itemsPerSubtree: 64},
-		{name: "256_per_subtree", itemsPerSubtree: 256},
+		{name: "64_per_subtree", itemsPerSubtree: 64, long: true},
+		{name: "256_per_subtree", itemsPerSubtree: 256, long: true},
 		{name: "1024_per_subtree", itemsPerSubtree: 1024},
-		{name: "2048_per_subtree", itemsPerSubtree: 2048},
+		{name: "2048_per_subtree", itemsPerSubtree: 2048, long: true},
 	}
 
 	for _, tc := range testCases {
 		b.Run(tc.name, func(b *testing.B) {
+			skipInShort(b, tc.long)
+
 			stp, cleanup := setupSubtreeProcessorForBenchB(b, tc.itemsPerSubtree)
 			defer cleanup()
 
@@ -288,7 +313,7 @@ func BenchmarkSubtreeProcessorAdd(b *testing.B) {
 
 			for i := 0; i < b.N; i++ {
 				_ = stp.addNode(
-					subtreepkg.Node{Hash: benchmarkTxHashPool[i%benchmarkTxPoolSize], Fee: uint64(i), SizeInBytes: 250},
+					subtreepkg.Node{Hash: txHashPool[i%benchmarkTxPoolSize], Fee: uint64(i), SizeInBytes: 250},
 					&subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{}},
 					true,
 				)
@@ -305,18 +330,23 @@ func BenchmarkSubtreeProcessorAdd(b *testing.B) {
 // BenchmarkSubtreeProcessorRotate benchmarks the cost of subtree rotation
 // (when a subtree fills up and a new one is created).
 func BenchmarkSubtreeProcessorRotate(b *testing.B) {
+	txHashPool := benchmarkTxHashes()
+
 	testCases := []struct {
 		name            string
 		itemsPerSubtree int
+		long            bool
 	}{
 		{name: "4_per_subtree", itemsPerSubtree: 4},
-		{name: "64_per_subtree", itemsPerSubtree: 64},
-		{name: "256_per_subtree", itemsPerSubtree: 256},
+		{name: "64_per_subtree", itemsPerSubtree: 64, long: true},
+		{name: "256_per_subtree", itemsPerSubtree: 256, long: true},
 		{name: "1024_per_subtree", itemsPerSubtree: 1024},
 	}
 
 	for _, tc := range testCases {
 		b.Run(tc.name, func(b *testing.B) {
+			skipInShort(b, tc.long)
+
 			stp, cleanup := setupSubtreeProcessorForBenchB(b, tc.itemsPerSubtree)
 			defer cleanup()
 
@@ -327,7 +357,7 @@ func BenchmarkSubtreeProcessorRotate(b *testing.B) {
 			for i := 0; i < b.N; i++ {
 				prevLen := len(stp.chainedSubtrees)
 				_ = stp.addNode(
-					subtreepkg.Node{Hash: benchmarkTxHashPool[i%benchmarkTxPoolSize], Fee: uint64(i), SizeInBytes: 250},
+					subtreepkg.Node{Hash: txHashPool[i%benchmarkTxPoolSize], Fee: uint64(i), SizeInBytes: 250},
 					&subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{}},
 					true,
 				)
@@ -389,8 +419,12 @@ func setupSubtreeProcessorForBench(t *testing.T, itemsPerSubtree int) (*SubtreeP
 	)
 	require.NoError(t, err)
 
+	// Each call builds a store. Closing it stops the live heap growing call by call through a
+	// benchmark run, which made a row's reading depend on how many rows ran before it.
 	cleanup := func() {
 		close(done)
+
+		require.NoError(t, utxoStore.Close(ctx))
 	}
 
 	return stp, cleanup
@@ -404,6 +438,8 @@ func setupSubtreeProcessorForBench(t *testing.T, itemsPerSubtree int) (*SubtreeP
 // BenchmarkTxMapSetIfNotExists benchmarks the TxMap duplicate detection overhead.
 // This is called for every transaction in addNode to check for duplicates.
 func BenchmarkTxMapSetIfNotExists(b *testing.B) {
+	txHashPool := benchmarkTxHashes()
+
 	txMap := txmappkg.NewSyncedMap[chainhash.Hash, subtreepkg.TxInpoints]()
 	emptyInpoints := subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{}}
 
@@ -411,19 +447,21 @@ func BenchmarkTxMapSetIfNotExists(b *testing.B) {
 	b.ReportAllocs()
 
 	for i := 0; i < b.N; i++ {
-		txMap.SetIfNotExists(benchmarkTxHashPool[i%benchmarkTxPoolSize], emptyInpoints)
+		txMap.SetIfNotExists(txHashPool[i%benchmarkTxPoolSize], emptyInpoints)
 	}
 }
 
 // BenchmarkTxMapSetIfNotExistsDuplicate benchmarks TxMap with duplicate checks.
 // This measures the overhead when we repeatedly check for duplicates (all duplicate case).
 func BenchmarkTxMapSetIfNotExistsDuplicate(b *testing.B) {
+	txHashPool := benchmarkTxHashes()
+
 	txMap := txmappkg.NewSyncedMap[chainhash.Hash, subtreepkg.TxInpoints]()
 	emptyInpoints := subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{}}
 
 	// Pre-populate with hashes from the pool
 	for i := 0; i < 1000; i++ {
-		txMap.SetIfNotExists(benchmarkTxHashPool[i], emptyInpoints)
+		txMap.SetIfNotExists(txHashPool[i], emptyInpoints)
 	}
 
 	b.ResetTimer()
@@ -431,25 +469,30 @@ func BenchmarkTxMapSetIfNotExistsDuplicate(b *testing.B) {
 
 	for i := 0; i < b.N; i++ {
 		// All lookups are duplicates
-		txMap.SetIfNotExists(benchmarkTxHashPool[i%1000], emptyInpoints)
+		txMap.SetIfNotExists(txHashPool[i%1000], emptyInpoints)
 	}
 }
 
 // BenchmarkSubtreeNodeAddOnly benchmarks just the AddSubtreeNode call
 // without any SubtreeProcessor overhead (no txMap, no channel send).
 func BenchmarkSubtreeNodeAddOnly(b *testing.B) {
+	txHashPool := benchmarkTxHashes()
+
 	testCases := []struct {
 		name            string
 		itemsPerSubtree int
+		long            bool
 	}{
 		{name: "4_per_subtree", itemsPerSubtree: 4},
-		{name: "64_per_subtree", itemsPerSubtree: 64},
-		{name: "256_per_subtree", itemsPerSubtree: 256},
+		{name: "64_per_subtree", itemsPerSubtree: 64, long: true},
+		{name: "256_per_subtree", itemsPerSubtree: 256, long: true},
 		{name: "1024_per_subtree", itemsPerSubtree: 1024},
 	}
 
 	for _, tc := range testCases {
 		b.Run(tc.name, func(b *testing.B) {
+			skipInShort(b, tc.long)
+
 			currentSubtree, _ := subtreepkg.NewTreeByLeafCount(tc.itemsPerSubtree)
 			_ = currentSubtree.AddCoinbaseNode()
 
@@ -464,7 +507,7 @@ func BenchmarkSubtreeNodeAddOnly(b *testing.B) {
 					rotations++
 				}
 				_ = currentSubtree.AddSubtreeNode(subtreepkg.Node{
-					Hash:        benchmarkTxHashPool[i%benchmarkTxPoolSize],
+					Hash:        txHashPool[i%benchmarkTxPoolSize],
 					Fee:         uint64(i),
 					SizeInBytes: 250,
 				})
@@ -482,16 +525,19 @@ func BenchmarkSubtreeCreationOnly(b *testing.B) {
 	testCases := []struct {
 		name            string
 		itemsPerSubtree int
+		long            bool
 	}{
 		{name: "4_per_subtree", itemsPerSubtree: 4},
-		{name: "64_per_subtree", itemsPerSubtree: 64},
-		{name: "256_per_subtree", itemsPerSubtree: 256},
+		{name: "64_per_subtree", itemsPerSubtree: 64, long: true},
+		{name: "256_per_subtree", itemsPerSubtree: 256, long: true},
 		{name: "1024_per_subtree", itemsPerSubtree: 1024},
-		{name: "2048_per_subtree", itemsPerSubtree: 2048},
+		{name: "2048_per_subtree", itemsPerSubtree: 2048, long: true},
 	}
 
 	for _, tc := range testCases {
 		b.Run(tc.name, func(b *testing.B) {
+			skipInShort(b, tc.long)
+
 			b.ReportAllocs()
 
 			for i := 0; i < b.N; i++ {
@@ -547,17 +593,22 @@ func BenchmarkChannelSendReceive(b *testing.B) {
 // BenchmarkSubtreeProcessorOverheadBreakdown provides a detailed breakdown
 // of where time is spent in addNode by measuring each component.
 func BenchmarkSubtreeProcessorOverheadBreakdown(b *testing.B) {
+	txHashPool := benchmarkTxHashes()
+
 	// This test runs all components together but with detailed metrics
 	testCases := []struct {
 		name            string
 		itemsPerSubtree int
+		long            bool
 	}{
 		{name: "64_per_subtree", itemsPerSubtree: 64},
-		{name: "1024_per_subtree", itemsPerSubtree: 1024},
+		{name: "1024_per_subtree", itemsPerSubtree: 1024, long: true},
 	}
 
 	for _, tc := range testCases {
 		b.Run(tc.name, func(b *testing.B) {
+			skipInShort(b, tc.long)
+
 			stp, cleanup := setupSubtreeProcessorForBenchB(b, tc.itemsPerSubtree)
 			defer cleanup()
 
@@ -566,7 +617,7 @@ func BenchmarkSubtreeProcessorOverheadBreakdown(b *testing.B) {
 
 			for i := 0; i < b.N; i++ {
 				_ = stp.addNode(
-					subtreepkg.Node{Hash: benchmarkTxHashPool[i%benchmarkTxPoolSize], Fee: uint64(i), SizeInBytes: 250},
+					subtreepkg.Node{Hash: txHashPool[i%benchmarkTxPoolSize], Fee: uint64(i), SizeInBytes: 250},
 					&subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{}},
 					true,
 				)
@@ -703,18 +754,23 @@ func TestOverheadBreakdownDetailed(t *testing.T) {
 // BenchmarkParallelGetAndSetIfNotExists benchmarks the parallel processing
 // optimization at various node counts.
 func BenchmarkParallelGetAndSetIfNotExists(b *testing.B) {
+	txHashPool := benchmarkTxHashes()
+
 	testCases := []struct {
 		name      string
 		nodeCount int
+		long      bool
 	}{
 		{name: "1k_nodes", nodeCount: 1000},
-		{name: "10k_nodes", nodeCount: 10000},
-		{name: "50k_nodes", nodeCount: 50000},
+		{name: "10k_nodes", nodeCount: 10000, long: true},
+		{name: "50k_nodes", nodeCount: 50000, long: true},
 		{name: "100k_nodes", nodeCount: 100000},
 	}
 
 	for _, tc := range testCases {
 		b.Run(tc.name, func(b *testing.B) {
+			skipInShort(b, tc.long)
+
 			stp, cleanup := setupSubtreeProcessorForBenchB(b, 1024)
 			defer cleanup()
 
@@ -722,7 +778,7 @@ func BenchmarkParallelGetAndSetIfNotExists(b *testing.B) {
 			nodes := make([]subtreepkg.Node, tc.nodeCount)
 			currentTxMap := NewSplitTxInpointsMap(splitMapBuckets)
 			for i := 0; i < tc.nodeCount; i++ {
-				hash := benchmarkTxHashPool[i%benchmarkTxPoolSize]
+				hash := txHashPool[i%benchmarkTxPoolSize]
 				nodes[i] = subtreepkg.Node{Hash: hash, Fee: uint64(i), SizeInBytes: 250}
 				currentTxMap.Set(hash, &subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{}})
 			}
@@ -748,18 +804,23 @@ func BenchmarkParallelGetAndSetIfNotExists(b *testing.B) {
 // BenchmarkSequentialGetAndSetIfNotExists benchmarks the sequential path
 // for comparison with parallel processing.
 func BenchmarkSequentialGetAndSetIfNotExists(b *testing.B) {
+	txHashPool := benchmarkTxHashes()
+
 	testCases := []struct {
 		name      string
 		nodeCount int
+		long      bool
 	}{
 		{name: "1k_nodes", nodeCount: 1000},
 		{name: "10k_nodes", nodeCount: 10000},
-		{name: "50k_nodes", nodeCount: 50000},
-		{name: "100k_nodes", nodeCount: 100000},
+		{name: "50k_nodes", nodeCount: 50000, long: true},
+		{name: "100k_nodes", nodeCount: 100000, long: true},
 	}
 
 	for _, tc := range testCases {
 		b.Run(tc.name, func(b *testing.B) {
+			skipInShort(b, tc.long)
+
 			stp, cleanup := setupSubtreeProcessorForBenchB(b, 1024)
 			defer cleanup()
 
@@ -767,7 +828,7 @@ func BenchmarkSequentialGetAndSetIfNotExists(b *testing.B) {
 			nodes := make([]subtreepkg.Node, tc.nodeCount)
 			currentTxMap := NewSplitTxInpointsMap(splitMapBuckets)
 			for i := 0; i < tc.nodeCount; i++ {
-				hash := benchmarkTxHashPool[i%benchmarkTxPoolSize]
+				hash := txHashPool[i%benchmarkTxPoolSize]
 				nodes[i] = subtreepkg.Node{Hash: hash, Fee: uint64(i), SizeInBytes: 250}
 				currentTxMap.Set(hash, &subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{}})
 			}
@@ -798,17 +859,22 @@ func BenchmarkSequentialGetAndSetIfNotExists(b *testing.B) {
 // BenchmarkProcessOwnBlockSubtreeNodesParallel benchmarks the full processOwnBlockSubtreeNodes
 // function with parallel processing enabled.
 func BenchmarkProcessOwnBlockSubtreeNodesParallel(b *testing.B) {
+	txHashPool := benchmarkTxHashes()
+
 	testCases := []struct {
 		name      string
 		nodeCount int
+		long      bool
 	}{
 		{name: "1k_nodes", nodeCount: 1000},
-		{name: "10k_nodes", nodeCount: 10000},
+		{name: "10k_nodes", nodeCount: 10000, long: true},
 		{name: "100k_nodes", nodeCount: 100000},
 	}
 
 	for _, tc := range testCases {
 		b.Run(tc.name, func(b *testing.B) {
+			skipInShort(b, tc.long)
+
 			stp, cleanup := setupSubtreeProcessorForBenchB(b, 1024)
 			defer cleanup()
 
@@ -819,7 +885,7 @@ func BenchmarkProcessOwnBlockSubtreeNodesParallel(b *testing.B) {
 			nodes := make([]subtreepkg.Node, tc.nodeCount)
 			currentTxMap := NewSplitTxInpointsMap(splitMapBuckets)
 			for i := 0; i < tc.nodeCount; i++ {
-				hash := benchmarkTxHashPool[i%benchmarkTxPoolSize]
+				hash := txHashPool[i%benchmarkTxPoolSize]
 				nodes[i] = subtreepkg.Node{Hash: hash, Fee: uint64(i), SizeInBytes: 250}
 				currentTxMap.Set(hash, &subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{}})
 			}
@@ -849,17 +915,22 @@ func BenchmarkProcessOwnBlockSubtreeNodesParallel(b *testing.B) {
 // BenchmarkProcessOwnBlockSubtreeNodesSequential benchmarks the full processOwnBlockSubtreeNodes
 // function with sequential processing (high threshold to disable parallel).
 func BenchmarkProcessOwnBlockSubtreeNodesSequential(b *testing.B) {
+	txHashPool := benchmarkTxHashes()
+
 	testCases := []struct {
 		name      string
 		nodeCount int
+		long      bool
 	}{
 		{name: "1k_nodes", nodeCount: 1000},
 		{name: "10k_nodes", nodeCount: 10000},
-		{name: "100k_nodes", nodeCount: 100000},
+		{name: "100k_nodes", nodeCount: 100000, long: true},
 	}
 
 	for _, tc := range testCases {
 		b.Run(tc.name, func(b *testing.B) {
+			skipInShort(b, tc.long)
+
 			stp, cleanup := setupSubtreeProcessorForBenchB(b, 1024)
 			defer cleanup()
 
@@ -870,7 +941,7 @@ func BenchmarkProcessOwnBlockSubtreeNodesSequential(b *testing.B) {
 			nodes := make([]subtreepkg.Node, tc.nodeCount)
 			currentTxMap := NewSplitTxInpointsMap(splitMapBuckets)
 			for i := 0; i < tc.nodeCount; i++ {
-				hash := benchmarkTxHashPool[i%benchmarkTxPoolSize]
+				hash := txHashPool[i%benchmarkTxPoolSize]
 				nodes[i] = subtreepkg.Node{Hash: hash, Fee: uint64(i), SizeInBytes: 250}
 				currentTxMap.Set(hash, &subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{}})
 			}
@@ -941,8 +1012,14 @@ func setupSubtreeProcessorForBenchB(b *testing.B, itemsPerSubtree int) (*Subtree
 		newSubtreeChan,
 	)
 
+	// Each call builds a store. Closing it stops the live heap growing call by call through a
+	// benchmark run, which made a row's reading depend on how many rows ran before it.
 	cleanup := func() {
 		close(done)
+
+		if utxoStore != nil {
+			require.NoError(b, utxoStore.Close(ctx))
+		}
 	}
 
 	return stp, cleanup

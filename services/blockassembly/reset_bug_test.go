@@ -55,6 +55,7 @@ func setupBlockAssemblyTestWithUtxoStore(t *testing.T, withSettings ...func(*set
 
 	utxo, err := utxostoresql.New(ctx, logger, tSettings, utxoStoreURL)
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = utxo.Close(context.Background()) })
 	items.utxoStore = utxo
 
 	storeURL, err := url.Parse("sqlitememory://")
@@ -110,6 +111,17 @@ func addBlockWithMinedSet(ctx context.Context, t *testing.T, items *baTestItems,
 		Subtrees:         []*chainhash.Hash{},
 	}, "", blockchainoptions.WithMinedSet(true))
 	require.NoError(t, err)
+}
+
+// setBlockMinedSetAtCurrentGeneration tags a block mined the way a tagging run does: it reads the
+// block's current mined_set generation and writes against it, so the write is not refused.
+func setBlockMinedSetAtCurrentGeneration(ctx context.Context, t *testing.T, items *baTestItems, hash *chainhash.Hash) {
+	t.Helper()
+
+	_, meta, err := items.blockchainClient.GetBlockHeader(ctx, hash)
+	require.NoError(t, err)
+
+	require.NoError(t, items.blockchainClient.SetBlockMinedSet(ctx, hash, meta.MinedSetGeneration))
 }
 
 // TestResetWithBlockchainAhead_MissesIntermediateBlockProcessing covers a bug where,
@@ -189,7 +201,7 @@ func TestHandleReorg_FallbackReset_ReturnsNilInsteadOfResetError(t *testing.T) {
 	initPrometheusMetrics()
 
 	ctx := t.Context()
-	items := setupBlockAssemblyTestWithUtxoStore(t)
+	items := setupBlockAssemblyTestWithUtxoStore(t, giveUpOnMinedSetAtOnce)
 	require.NotNil(t, items)
 
 	// Build two forks from block1:
@@ -277,6 +289,16 @@ func TestReset_FallbackHeaderFailure_RestoresPreResetTip(t *testing.T) {
 	require.True(t, gotHeader.Hash().IsEqual(preHeader.Hash()), "pointer must be restored to pre-reset tip")
 }
 
+// giveUpOnMinedSetAtOnce is for tests whose reset moves back over an invalidated
+// block. Reset waits for that block's mined_set, which only Block Validation's
+// background job sets, and these tests never run it. So the wait always ends by
+// giving up and carrying on. At the production 45 retries that takes about 78 s
+// per reset; a single retry (two polls, 20 ms apart) reaches the same give-up
+// path almost at once.
+func giveUpOnMinedSetAtOnce(s *settings.Settings) {
+	s.BlockValidation.IsParentMinedRetryMaxRetry = 1
+}
+
 // setUpFailedRollbackReset builds the rollback shape the reset fallback has to
 // cope with: the blockchain has block1 -> block2, block assembly sits on the
 // abandoned block2Alt at the same height, so reset() produces one moveBack block
@@ -340,7 +362,7 @@ func TestReset_FallbackHeaderFailure_RollbackDirectionStaysOffTheChainTip(t *tes
 	initPrometheusMetrics()
 
 	ctx := t.Context()
-	items := setupBlockAssemblyTestWithUtxoStore(t)
+	items := setupBlockAssemblyTestWithUtxoStore(t, giveUpOnMinedSetAtOnce)
 	require.NotNil(t, items)
 
 	// A header no side of this reset ever saw and the blockchain store does not
@@ -376,7 +398,7 @@ func TestReset_FailedRollbackResolvesHeightWithoutTheBlockchain(t *testing.T) {
 	initPrometheusMetrics()
 
 	ctx := t.Context()
-	items := setupBlockAssemblyTestWithUtxoStore(t)
+	items := setupBlockAssemblyTestWithUtxoStore(t, giveUpOnMinedSetAtOnce)
 	require.NotNil(t, items)
 
 	// The processor reports the new tip: SubtreeProcessor.reset stores each

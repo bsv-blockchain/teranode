@@ -4,6 +4,10 @@ SHELL=/bin/bash
 
 DEBUG_FLAGS=
 TXMETA_TAG=
+# Extra comma-separated Go build tags for the teranode binary, e.g. EXTRA_BUILD_TAGS=failpoints
+EXTRA_BUILD_TAGS ?=
+comma := ,
+EXTRA_BUILD_TAGS_SUFFIX = $(if $(EXTRA_BUILD_TAGS),$(comma)$(EXTRA_BUILD_TAGS))
 SETTINGS_CONTEXT_DEFAULT := docker.ci
 LOCAL_TEST_START_FROM_STATE ?=
 
@@ -97,21 +101,25 @@ clean_backup:
 	@rm -f settings_local.conf.bak
 
 
+# Note: the aerospike tag below no longer gates the Aerospike store (it has been
+# always-compiled since; see docs/topics/microservicesReconciliationNotes.md
+# section 72). It is passed through so tag-gated test code still compiles in
+# tagged contexts; removing it from build targets changes nothing in the binary.
 .PHONY: build-teranode-with-dashboard
 build-teranode-with-dashboard: set_debug_flags set_txmetacache_flag build-dashboard
-	CGO_ENABLED=$(CGO_ENABLED) GOOS=$(GOOS) GOARCH=$(GOARCH) go build -mod=readonly -tags aerospike,${TXMETA_TAG} --trimpath -ldflags="-X main.commit=${GIT_COMMIT} -X main.version=${GIT_VERSION} -X main.StartFromState=${START_FROM_STATE}"  -gcflags "all=${DEBUG_FLAGS}" -o teranode.run .
+	CGO_ENABLED=$(CGO_ENABLED) GOOS=$(GOOS) GOARCH=$(GOARCH) go build -mod=readonly -tags aerospike,${TXMETA_TAG}$(EXTRA_BUILD_TAGS_SUFFIX) --trimpath -ldflags="-X main.commit=${GIT_COMMIT} -X main.version=${GIT_VERSION} -X main.StartFromState=${START_FROM_STATE}"  -gcflags "all=${DEBUG_FLAGS}" -o teranode.run .
 
 .PHONY: build-teranode
 build-teranode: set_debug_flags set_txmetacache_flag
-	CGO_ENABLED=$(CGO_ENABLED) GOOS=$(GOOS) GOARCH=$(GOARCH) go build -mod=readonly -tags aerospike,${TXMETA_TAG} --trimpath -ldflags="-X main.commit=${GIT_COMMIT} -X main.version=${GIT_VERSION}" -gcflags "all=${DEBUG_FLAGS}" -o teranode.run .
+	CGO_ENABLED=$(CGO_ENABLED) GOOS=$(GOOS) GOARCH=$(GOARCH) go build -mod=readonly -tags aerospike,${TXMETA_TAG}$(EXTRA_BUILD_TAGS_SUFFIX) --trimpath -ldflags="-X main.commit=${GIT_COMMIT} -X main.version=${GIT_VERSION}" -gcflags "all=${DEBUG_FLAGS}" -o teranode.run .
 
 .PHONY: build-teranode-no-debug
 build-teranode-no-debug: set_txmetacache_flag
-	CGO_ENABLED=$(CGO_ENABLED) GOOS=$(GOOS) GOARCH=$(GOARCH) go build -mod=readonly -a -tags aerospike,${TXMETA_TAG} --trimpath -ldflags="-X main.commit=${GIT_COMMIT} -X main.version=${GIT_VERSION} -s -w" -gcflags "-l -B" -o teranode_no_debug.run .
+	CGO_ENABLED=$(CGO_ENABLED) GOOS=$(GOOS) GOARCH=$(GOARCH) go build -mod=readonly -a -tags aerospike,${TXMETA_TAG}$(EXTRA_BUILD_TAGS_SUFFIX) --trimpath -ldflags="-X main.commit=${GIT_COMMIT} -X main.version=${GIT_VERSION} -s -w" -gcflags "-l -B" -o teranode_no_debug.run .
 
 .PHONY: build-teranode-ci
 build-teranode-ci: set_debug_flags set_txmetacache_flag
-	CGO_ENABLED=$(CGO_ENABLED) GOOS=$(GOOS) GOARCH=$(GOARCH) go build -mod=readonly -race -tags aerospike,${TXMETA_TAG} --trimpath -ldflags="-X main.commit=${GIT_COMMIT} -X main.version=${GIT_VERSION}" -gcflags "all=${DEBUG_FLAGS}" -o teranode.run .
+	CGO_ENABLED=$(CGO_ENABLED) GOOS=$(GOOS) GOARCH=$(GOARCH) go build -mod=readonly -race -tags aerospike,${TXMETA_TAG}$(EXTRA_BUILD_TAGS_SUFFIX) --trimpath -ldflags="-X main.commit=${GIT_COMMIT} -X main.version=${GIT_VERSION}" -gcflags "all=${DEBUG_FLAGS}" -o teranode.run .
 
 .PHONY: build-chainintegrity
 build-chainintegrity: set_debug_flags
@@ -174,16 +182,70 @@ install-tools:
 	go install github.com/ctrf-io/go-ctrf-json-reporter/cmd/go-ctrf-json-reporter@latest
 	go install gotest.tools/gotestsum@latest
 
+# -timeout is per package. stores/utxo/aerospike runs its testcontainer suite
+# under -race and coverage, which took 9m20s on main by itself in October 2026,
+# so 10m left no room for new container tests there.
+#
+# TEST_EXCLUDE drops packages (paths relative to the module, space-separated) from
+# `make test`; CI sets it to run the slowest packages in jobs of their own via
+# `make test-pkgs`.
+# TEST_COVERPROFILE names the coverage file either target writes.
+TEST_EXCLUDE ?=
+TEST_COVERPROFILE ?= coverage.out
+# TEST_BUILD_FLAGS are the flags that shape the test build, so the build cache
+# entries `test-build-pkgs` writes are the ones `make test` reads.
+TEST_BUILD_FLAGS = -race -tags "testtxmetacache" -coverpkg=./...
+TEST_FLAGS = $(TEST_BUILD_FLAGS) -count=1 -timeout=20m -coverprofile=$(TEST_COVERPROFILE)
+UNIT_TEST_PKGS = $(filter-out $(addprefix github.com/bsv-blockchain/teranode/,$(TEST_EXCLUDE)),$(shell go list ./... | grep -v github.com/bsv-blockchain/teranode/test/ | sort))
+
 .PHONY: test
 test:
 	@command -v gotestsum >/dev/null 2>&1 || { echo "gotestsum not found. Installing..."; $(MAKE) install-tools; }
-	SETTINGS_CONTEXT=test $$(go env GOPATH)/bin/gotestsum --format pkgname -- -race -tags "testtxmetacache" -count=1 -timeout=20m -coverprofile=coverage.out -coverpkg=./... $$(go list ./... | grep -v github.com/bsv-blockchain/teranode/test/ | sort)
+	SETTINGS_CONTEXT=test $$(go env GOPATH)/bin/gotestsum --format pkgname -- $(TEST_FLAGS) $(UNIT_TEST_PKGS)
+
+# run `make test` for only the packages in TEST_PKGS (paths relative to the module),
+# e.g. make test-pkgs TEST_PKGS=stores/utxo/aerospike TEST_COVERPROFILE=coverage-aerospike.out
+.PHONY: test-pkgs
+test-pkgs:
+	@test -n "$(TEST_PKGS)" || { echo "TEST_PKGS is empty"; exit 1; }
+	@command -v gotestsum >/dev/null 2>&1 || { echo "gotestsum not found. Installing..."; $(MAKE) install-tools; }
+	SETTINGS_CONTEXT=test $$(go env GOPATH)/bin/gotestsum --format pkgname -- $(TEST_FLAGS) $(addprefix ./,$(TEST_PKGS))
+
+# compile, without running, the test binaries of the packages in TEST_PKGS into the
+# Go build cache. Main's unit-test job runs it for the packages other test jobs run,
+# since it is the only job that saves the build cache.
+.PHONY: test-build-pkgs
+test-build-pkgs:
+	@test -n "$(TEST_PKGS)" || { echo "TEST_PKGS is empty"; exit 1; }
+	d="$$(mktemp -d)" && go test -c -o "$$d/" $(TEST_BUILD_FLAGS) $(addprefix ./,$(TEST_PKGS)) && rm -rf "$$d"
 
 # run the tests too slow for `make test` under -race and coverage (TERANODE_HEAVY_TESTS), without -race.
 # The PR test job runs it after `make test`.
 .PHONY: test-heavy
 test-heavy:
-	SETTINGS_CONTEXT=test TERANODE_HEAVY_TESTS=1 go test -tags "testtxmetacache" -count=1 -timeout=10m -run '^(TestSortedHashSet_|Test_queueLarge$$|TestDiskTxMap_(ExistenceLayerThroughput|ThroughputTarget|MultiDiskThroughput)$$|TestSubtreeProcessorSizePerformance$$|TestDirectSubtreeCreationPerformance$$|TestOverheadBreakdownDetailed$$)' ./services/blockassembly/subtreeprocessor
+	SETTINGS_CONTEXT=test TERANODE_HEAVY_TESTS=1 go test -tags "testtxmetacache" -count=1 -timeout=10m -run '^(TestSortedHashSet_|Test_queueLarge$$|TestDiskTxMap_(ExistenceLayerThroughput|ThroughputTarget|MultiDiskThroughput)$$|TestSubtreeProcessorSizePerformance$$|TestDirectSubtreeCreationPerformance$$|TestOverheadBreakdownDetailed$$|TestSubtreeSizeTimingAnalysis$$|TestBlockSizeScaling$$)' ./services/blockassembly/subtreeprocessor ./services/subtreevalidation
+
+# run the Block Validation known-defect proofs (services/blockvalidation/spec.md, Conformance Gaps).
+# Each is a TestKnownDefect_* test behind the bvgaps build tag that asserts spec-correct behaviour
+# and FAILS until its defect is fixed, so this target is not part of `make test`. When a defect is
+# fixed, drop the bvgaps tag and the TestKnownDefect_ prefix so the test becomes a regression test.
+# ./services/subtreevalidation/... has no proofs until bsv-blockchain/teranode#2124 (test task T08)
+# merges; it holds the GAP-BV-047 proofs. Until then `go test` reports no tests to run there.
+.PHONY: test-bvgaps
+test-bvgaps:
+	SETTINGS_CONTEXT=test go test -race -count=1 -tags "bvgaps testtxmetacache" -run '^TestKnownDefect_' ./model/... ./services/blockvalidation/... ./services/subtreevalidation/...
+
+# compile and vet the gap-proof tests without running them, so a rename in the code they exercise
+# breaks the build here (and in CI) instead of silently when a gap is fixed.
+.PHONY: vet-bvgaps
+vet-bvgaps:
+	go vet -tags "bvgaps testtxmetacache" ./model/... ./services/blockvalidation/... ./services/subtreevalidation/...
+
+# run bitcoin-sv's consensus vectors (script, transaction and signature hash tests) in
+# test/consensus. `make test` skips everything under test/; the PR test job runs this after it.
+.PHONY: consensustest
+consensustest:
+	go test -count=1 -timeout=10m ./test/consensus/...
 
 # run tagged service regressions and tests in the test/longtest directory
 .PHONY: longtest
@@ -196,7 +258,8 @@ longtest:
 # run the soak test: the in-process daemon under steady tx load for SOAK_DURATION, failing if heap or goroutine
 # counts trend upward. No -race: the detector skews memory and throughput, which is what this test measures.
 # SOAK_TIMEOUT must exceed SOAK_DURATION by at least 10m. Other knobs (SOAK_WARMUP, SOAK_SAMPLE_INTERVAL,
-# SOAK_TXS_PER_CYCLE, SOAK_UTXO_STORE, SOAK_OUTPUT_DIR, SOAK_INJECT_LEAK) are read from the environment.
+# SOAK_TXS_PER_CYCLE, SOAK_UTXO_STORE, SOAK_OUTPUT_DIR, SOAK_INJECT_LEAK and the SOAK_*_TOLERANCE* settings) are
+# read from the environment; see docs/howto/runningTests.md.
 # Example: make soaktest SOAK_DURATION=2h SOAK_TIMEOUT=150m
 SOAK_DURATION ?= 30m
 SOAK_TIMEOUT ?= 60m
@@ -259,7 +322,16 @@ FUZZ_TARGETS = \
 	services/legacy/peer:FuzzReadWireMessage \
 	services/legacy/peer:FuzzStreamingBlockFraming \
 	services/rpc/bsvjson:FuzzParseRPCRequest \
-	services/rpc/bsvjson:FuzzUnmarshalCmd
+	services/rpc/bsvjson:FuzzUnmarshalCmd \
+	util/lane:FuzzDecodeDiskPayload \
+	util/lane:FuzzDecodeHoleData \
+	util/lane:FuzzCheckContainersMatchesValidate \
+	util/lane:FuzzDecodeSubtreePositions \
+	util/lane:FuzzDecodeProofFile \
+	util/lane:FuzzDecodeSubtreeBitmaps \
+	util/lane/backfill:FuzzOpenManifest \
+	stores/utxo/meta:FuzzNewDataFromLaneMetaBytes \
+	stores/utxo/meta:FuzzOwnCacheBytesView
 
 # Per-target budget. The nightly workflow uses 5m; the default here is kept
 # short so `make fuzz` is usable as a pre-push check.
@@ -333,6 +405,16 @@ network-chaos-test:
 	@docker image inspect teranode:latest >/dev/null 2>&1 || { echo "teranode:latest image not found. Run 'make build' (or 'compose/multinode.sh up N --build') first."; exit 1; }
 	@mkdir -p /tmp/teranode-test-results
 	cd test/multinode && gotestsum --format pkgname -- -v -count=1 -tags network_chaos -timeout=30m -parallel=1 -run . 2>&1 | tee /tmp/teranode-test-results/network-chaos-results.txt
+
+# Crash-consistency failpoint tests. Rebuilds teranode:latest with the
+# "failpoints" build tag (so util/failpoint.Inject can crash the node at a
+# named seam), then runs the TestFailpoint* multinode scenarios.
+.PHONY: network-chaos-failpoint-test
+network-chaos-failpoint-test:
+	@command -v gotestsum >/dev/null 2>&1 || { echo "gotestsum not found. Installing..."; $(MAKE) install-tools; }
+	docker build --build-arg EXTRA_BUILD_TAGS=failpoints -t teranode:latest .
+	@mkdir -p /tmp/teranode-test-results
+	cd test/multinode && gotestsum --format pkgname -- -v -count=1 -tags network_chaos,failpoints -timeout=30m -parallel=1 -run TestFailpoint 2>&1 | tee /tmp/teranode-test-results/network-chaos-failpoint-results.txt
 
 # Split-per-service variant of the network-chaos suite. Brings up its own
 # -allinone=0 stack (~32 containers) so per-service chaos verbs are available.
@@ -562,7 +644,7 @@ install-lint:
 # lint will check the changed files in the current branch compared to main, including commits and unstaged/untracked changes
 # It will show new linting errors/warnings, by updating local copy of origin/main with the latest state of the remote main branch.
 .PHONY: lint
-lint: lint-tracing-info
+lint: lint-tracing-info vet-bvgaps
 	git fetch origin main
 	golangci-lint run ./... --new-from-rev origin/main --disable gosec --disable prealloc # TODO: re-enable gosec once gosec >v2.23.0 is released (fixes float constant panic)
 

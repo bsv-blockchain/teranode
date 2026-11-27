@@ -53,6 +53,8 @@ func countRows(t *testing.T, s *Store, ctx context.Context, table string) int {
 // as it would had the two arrived in separate batches, and it must not write a second body
 // row or a second set of UTXOs.
 func TestCreateBatchClaimsARepeatedTransactionOnce(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	first := mkTx(t, 2, 5000)
@@ -74,6 +76,8 @@ func TestCreateBatchClaimsARepeatedTransactionOnce(t *testing.T) {
 // one item already stored must not spoil the rest of its batch, and must not duplicate its
 // own UTXOs.
 func TestCreateBatchReportsATransactionTheStoreAlreadyHolds(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	held := mkTx(t, 2, 5000)

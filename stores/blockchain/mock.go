@@ -16,6 +16,7 @@ import (
 	"context"
 	"net/http"
 	"sync"
+	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
@@ -23,6 +24,7 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/blob/file"
 	"github.com/bsv-blockchain/teranode/stores/blockchain/options"
 	"github.com/bsv-blockchain/teranode/util"
+	"github.com/bsv-blockchain/teranode/util/lane"
 	"github.com/bsv-blockchain/teranode/util/usql"
 )
 
@@ -691,6 +693,62 @@ func (m *MockStore) RevalidateBlock(ctx context.Context, blockHash *chainhash.Ha
 	panic(implementMe)
 }
 
+func (m *MockStore) OpenLaneLease(ctx context.Context, req options.LaneLeaseOpen) (lane.LeaseID, lane.Grant, int, error) {
+	panic(implementMe)
+}
+
+func (m *MockStore) RenewLaneLease(ctx context.Context, req options.LaneLeaseRenew) (lane.Grant, bool, bool, error) {
+	panic(implementMe)
+}
+
+func (m *MockStore) ReleaseLaneLease(ctx context.Context, req options.LaneLeaseRelease) (bool, error) {
+	panic(implementMe)
+}
+
+func (m *MockStore) CloseStaleLaneLeases(ctx context.Context, closeAfter time.Duration) (int, error) {
+	panic(implementMe)
+}
+
+func (m *MockStore) InsertLaneMapRows(ctx context.Context, blockID uint32, rows []lane.MapRow) error {
+	panic(implementMe)
+}
+
+func (m *MockStore) LaneMapRows(ctx context.Context, blockID uint32) ([]lane.MapRow, error) {
+	panic(implementMe)
+}
+
+func (m *MockStore) LaneMapRowsEndingAbove(ctx context.Context, laneNum uint8, above uint64) ([]lane.BlockMapRow, error) {
+	panic(implementMe)
+}
+
+func (m *MockStore) LaneCapGrants(ctx context.Context, height uint32) ([]lane.CapGrant, error) {
+	panic(implementMe)
+}
+
+func (m *MockStore) InsertLaneConversionSegment(ctx context.Context, seg lane.ConversionSegment) error {
+	panic(implementMe)
+}
+
+func (m *MockStore) LaneConversionSegments(ctx context.Context) ([]lane.ConversionSegment, error) {
+	panic(implementMe)
+}
+
+func (m *MockStore) InsertLaneConversionBlocks(ctx context.Context, segment uint32, blocks []lane.ConversionBlock) error {
+	panic(implementMe)
+}
+
+func (m *MockStore) LaneConversionBlocks(ctx context.Context, segment uint32) ([]lane.ConversionBlock, error) {
+	panic(implementMe)
+}
+
+func (m *MockStore) CompleteLaneConversionSegment(ctx context.Context, segment uint32, auditDigest chainhash.Hash) error {
+	panic(implementMe)
+}
+
+func (m *MockStore) LaneConversionComplete(ctx context.Context, segment uint32) (bool, error) {
+	panic(implementMe)
+}
+
 func (m *MockStore) DeleteBlock(ctx context.Context, blockHash *chainhash.Hash) error {
 	panic(implementMe)
 }
@@ -733,7 +791,7 @@ func (m *MockStore) GetBlockIsMined(_ context.Context, blockHash *chainhash.Hash
 	return isMined, nil
 }
 
-func (m *MockStore) SetBlockMinedSet(ctx context.Context, blockHash *chainhash.Hash) error {
+func (m *MockStore) SetBlockMinedSet(ctx context.Context, blockHash *chainhash.Hash, expectedGeneration *uint64) error {
 	panic(implementMe)
 }
 

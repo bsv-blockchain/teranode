@@ -303,6 +303,7 @@ func (s *Store) scanConflictWAL(ctx context.Context) ([]*aerospike.Record, error
 	}
 
 	prometheusConflictWALFallbackScans.Inc()
+	s.conflictWALScans.Add(1)
 
 	stmt := aerospike.NewStatement(s.namespace, s.conflictWALSet(), conflictWALBins...)
 

@@ -238,8 +238,8 @@ func analyzeFlagUsage(t *testing.T, category string, tests []TxTest) {
 	flagCounts := make(map[string]int)
 
 	for _, test := range tests {
-		for _, flag := range test.Flags {
-			flagCounts[flag]++
+		for _, set := range test.FlagSets {
+			flagCounts[set]++
 		}
 	}
 

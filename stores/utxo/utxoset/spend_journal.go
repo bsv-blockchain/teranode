@@ -142,6 +142,18 @@ journal AS (
 )
 SELECT d.vin, d.satoshis, d.script, d.hash_override FROM del d`
 
+// spendJournalLaneSQL is spendJournalSQL on a database with lane_position on utxo and
+// spend_journal (Store.laneCoinColumn). The journal row copies the deleted UTXO's lane_position,
+// the position of the transaction that created the output, so Unspend can put it back; utxoset has
+// no slot for the spender's own position, which a reader finds by following spending_txid to the
+// spender's record. The last column says whether the row carried one, for the coverage counter.
+var spendJournalLaneSQL = laneStatement(spendJournalSQL,
+	"u.script, u.hash_override\n),", "u.script, u.hash_override, u.lane_position\n),",
+	"script, hash_override)\n    SELECT d.spent_height", "script, hash_override, lane_position)\n    SELECT d.spent_height",
+	"d.hash_override\n      FROM del d\n)", "d.hash_override, d.lane_position\n      FROM del d\n)",
+	"SELECT d.vin, d.satoshis, d.script, d.hash_override FROM del d", "SELECT d.vin, d.satoshis, d.script, d.hash_override, d.lane_position IS NOT NULL FROM del d",
+)
+
 // ensureSpendJournalPartition creates the spend-journal leaf covering height, if absent.
 //
 // Each leaf gets ONE index, the packed-key btree, which is what every restore probes. There
@@ -414,6 +426,11 @@ func (s *Store) dropSpendJournalPartitionsBelow(ctx context.Context, height uint
 	// spend made after the read is journaled at its own height, above every retiring leaf.
 	var carry *copyForwardSet
 
+	// At utxostore_laneMigration shadow the lane rule judges every row of each retiring leaf beside
+	// today's carry (lane_prune.go); nil at off.
+	var lanes *laneJournalJudge
+	defer func() { lanes.done() }()
+
 	for _, l := range leaves {
 		if l.leaf >= cutoff {
 			continue
@@ -431,7 +448,11 @@ func (s *Store) dropSpendJournalPartitionsBelow(ctx context.Context, height uint
 				}
 
 				carry = c
+				lanes = s.newLaneJournalJudge(carry, retiringJournalLeaves(leaves, cutoff))
 			}
+
+			// Before the copy-forward moves the kept rows out of the leaf.
+			lanes.judgeLeaf(ctx, l.leaf)
 
 			if _, err := s.copyForwardFrom(ctx, l.leaf, keepFrom, carry); err != nil {
 				return dropped, err
@@ -618,6 +639,14 @@ SELECT $4::int, j.spending_vin, j.satoshis, j.created_height, j.spendable_from, 
         WHERE x.spent_height >= $5::int
           AND x.ukey = j.ukey AND x.txid = j.txid AND x.spending_txid = j.spending_txid)`
 
+// copyForwardLaneSQL is copyForwardSQL carrying the journal row's lane_position, for a leaf that has
+// the column on a database where spend_journal does (Store.laneCoinColumn).
+var copyForwardLaneSQL = laneStatement(copyForwardSQL,
+	"j.spending_txid, j.script, j.hash_override\n)", "j.spending_txid, j.script, j.hash_override, j.lane_position\n)",
+	"spending_txid, script, hash_override)\nSELECT $4::int", "spending_txid, script, hash_override, lane_position)\nSELECT $4::int",
+	"j.ukey, j.txid, j.spending_txid, j.script, j.hash_override\n  FROM moved j", "j.ukey, j.txid, j.spending_txid, j.script, j.hash_override, j.lane_position\n  FROM moved j",
+)
+
 // copyForwardBatch bounds one statement's arrays.
 const copyForwardBatch = 10_000
 
@@ -626,6 +655,9 @@ const copyForwardBatch = 10_000
 type copyForwardSet struct {
 	ukeys, parents, spenders [][]byte
 	seen                     map[string]struct{}
+	// unmined is how many leading entries are spends of waiting transactions; the rest are spends
+	// of recently mined ones, carried for a reorg.
+	unmined int
 }
 
 // collectSpenders runs stmt, whose rows are a spender's txid and its packed inputs, and adds
@@ -702,6 +734,8 @@ func (s *Store) collectCopyForward(ctx context.Context, keepFrom uint32) (*copyF
 		return nil, err
 	}
 
+	c.unmined = len(c.ukeys)
+
 	// A block at or below the highest checkpoint is never un-mined (unMine refuses it), so the
 	// read starts above it. During a sync below the checkpoint it reads no partition at all.
 	minedFrom := max(keepFrom, model.HighestCheckpointHeight(s.checkpoints)+1)
@@ -731,7 +765,21 @@ func (s *Store) copyForwardFrom(ctx context.Context, leaf, keepFrom uint32, c *c
 		return 0, err
 	}
 
-	stmt := fmt.Sprintf(copyForwardSQL, fmt.Sprintf("spend_journal_%d", leaf))
+	leafTable := fmt.Sprintf("spend_journal_%d", leaf)
+	stmt := fmt.Sprintf(copyForwardSQL, leafTable)
+
+	// A leaf detached before the lane schema was installed kept its old columns, so the carry names
+	// lane_position only when this leaf has it. That is one catalog read per retiring leaf.
+	if s.laneCoinColumn {
+		hasLane, err := schemaHas(ctx, s.pool, leafTable, "lane_position")
+		if err != nil {
+			return 0, errors.NewStorageError("[utxoset] read the columns of journal leaf %d", leaf, err)
+		}
+
+		if hasLane {
+			stmt = fmt.Sprintf(copyForwardLaneSQL, leafTable)
+		}
+	}
 
 	var copied int64
 
