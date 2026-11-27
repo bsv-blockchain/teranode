@@ -1,0 +1,13 @@
+diff --git a/services/blockassembly/subtreeprocessor/SubtreeProcessor.go b/services/blockassembly/subtreeprocessor/SubtreeProcessor.go
+index 2d7cbd297..05dab4bdd 100644
+--- a/services/blockassembly/subtreeprocessor/SubtreeProcessor.go
++++ b/services/blockassembly/subtreeprocessor/SubtreeProcessor.go
+@@ -5717,7 +5717,7 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveBackBlocks []*
+ 			// recoverable via the next reorg/reset or `teranode-cli
+ 			// resetblockassembly --validate-inputs` — the same recovery path
+ 			// the validate-inputs cascade relies on.
+-			for _, h := range cascadedConflicting {
++			for _, h := range cascadedConflicting[:0] { // mutant: reverse-demoted transactions are not evicted
+ 				if removeErr := stp.Remove(ctx, h); removeErr != nil {
+ 					stp.logger.Warnf("[reorgBlocks][%s] failed to evict reverse-demoted tx %s from in-memory subtree: %v", block.String(), h.String(), removeErr)
+ 				}

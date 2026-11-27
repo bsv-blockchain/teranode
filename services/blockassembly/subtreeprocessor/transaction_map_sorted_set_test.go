@@ -7,6 +7,7 @@ import (
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	blob_memory "github.com/bsv-blockchain/teranode/stores/blob/memory"
 	"github.com/bsv-blockchain/teranode/stores/utxo/sql"
@@ -16,7 +17,7 @@ import (
 )
 
 // newTxMapTestProcessor returns a processor over an in-memory subtree store.
-func newTxMapTestProcessor(t *testing.T) (*SubtreeProcessor, *blob_memory.Memory) {
+func newTxMapTestProcessor(t testing.TB) (*SubtreeProcessor, *blob_memory.Memory) {
 	t.Helper()
 
 	ctx := context.Background()
@@ -37,7 +38,7 @@ func newTxMapTestProcessor(t *testing.T) (*SubtreeProcessor, *blob_memory.Memory
 
 // storeSubtree stores a subtree of the given leaf hashes (a power of two count) and
 // returns its root hash.
-func storeSubtree(t *testing.T, store *blob_memory.Memory, hashes []chainhash.Hash) chainhash.Hash {
+func storeSubtree(t testing.TB, store *blob_memory.Memory, hashes []chainhash.Hash) chainhash.Hash {
 	t.Helper()
 
 	st, err := subtreepkg.NewTreeByLeafCount(len(hashes))
@@ -53,7 +54,11 @@ func storeSubtree(t *testing.T, store *blob_memory.Memory, hashes []chainhash.Ha
 
 	b, err := st.Serialize()
 	require.NoError(t, err)
-	require.NoError(t, store.Set(context.Background(), st.RootHash()[:], fileformat.FileTypeSubtree, b))
+
+	// two blocks can hold the same subtree
+	if err = store.Set(context.Background(), st.RootHash()[:], fileformat.FileTypeSubtree, b); !errors.Is(err, errors.ErrBlobAlreadyExists) {
+		require.NoError(t, err)
+	}
 
 	return *st.RootHash()
 }
