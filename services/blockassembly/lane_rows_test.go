@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/url"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -960,6 +961,49 @@ func TestALaneBitmapsRetryStartsNoWriteAfterWaitingOutItsBoundOnTheLock(t *testi
 
 	require.Equal(t, 1, store.refused, "no write started after the bound")
 	require.Equal(t, exhaustedBefore+1, ownLaneMetric(t, "teranode_lane_bitmaps_write_retries_exhausted_total", service))
+}
+
+// hangingBitmapsStore refuses the first lane bitmaps write, then holds each later one until its
+// context ends.
+type hangingBitmapsStore struct {
+	blob.Store
+
+	calls atomic.Int32
+}
+
+func (s *hangingBitmapsStore) Set(ctx context.Context, key []byte, fileType fileformat.FileType, value []byte, opts ...blobOptions.FileOption) error {
+	if fileType == fileformat.FileTypeSubtreeLaneBitmaps {
+		if s.calls.Add(1) == 1 {
+			return errors.NewStorageError("database restarting")
+		}
+
+		<-ctx.Done()
+
+		return errors.NewStorageError("scheduler call ended", ctx.Err())
+	}
+
+	return s.Store.Set(ctx, key, fileType, value, opts...)
+}
+
+// TestALaneBitmapsRetryHungInTheStoreEndsAtItsBound: a retried write whose store call hangs ends at
+// the retry bound, which its context carries, not when the caller's context ends.
+func TestALaneBitmapsRetryHungInTheStoreEndsAtItsBound(t *testing.T) {
+	server, memoryStore := setupServerWithSettings(t, func(s *settings.Settings) { s.UtxoStore.LaneMigration = settings.LaneMigrationShadow })
+	server.laneBitmapsRetry.Bound = 300 * time.Millisecond
+	server.laneBitmapsRetry.FirstBackoff = time.Millisecond
+
+	server.subtreeStore = &hangingBitmapsStore{Store: memoryStore}
+
+	root := chainhash.HashH([]byte("hung-retry"))
+	server.ownLaneBitmaps.put(root, lane.LaneBitmaps{}, 1)
+
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
+	defer cancel()
+
+	start := time.Now()
+	server.writeLaneBitmapsFile(ctx, lane.SubtreeBitmaps{SubtreeHash: root, Lanes: lane.LaneBitmaps{4: bitmapOfPositions(1)}}, 300)
+	require.Less(t, time.Since(start), 10*time.Second, "the hung retry ended at the bound")
+	require.NoError(t, ctx.Err())
 }
 
 // refreshDuringRetryStore refuses a lane bitmaps file write at delete-at height 300 until a refresh

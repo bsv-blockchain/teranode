@@ -860,6 +860,54 @@ func TestStoreSubtreeFiles_ADatabaseRestartMidSubtreeKeepsTheLaneBitmapsFile(t *
 	require.Equal(t, uint64(2), rows.Members, "the rows hold both members")
 }
 
+// hangingBitmapsStore refuses the first lane bitmaps write, then holds each later one until its
+// context ends.
+type hangingBitmapsStore struct {
+	blob.Store
+
+	calls atomic.Int32
+}
+
+func (s *hangingBitmapsStore) Set(ctx context.Context, key []byte, fileType fileformat.FileType, value []byte, opts ...bloboptions.FileOption) error {
+	if fileType == fileformat.FileTypeSubtreeLaneBitmaps {
+		if s.calls.Add(1) == 1 {
+			return errors.NewStorageError("database restarting")
+		}
+
+		<-ctx.Done()
+
+		return errors.NewStorageError("scheduler call ended", ctx.Err())
+	}
+
+	return s.Store.Set(ctx, key, fileType, value, opts...)
+}
+
+// A retried bitmaps write whose store call hangs ends at the retry bound, which its context
+// carries, and the subtree is stored without the file.
+func TestStoreSubtreeFiles_ALaneBitmapsRetryHungInTheStoreEndsAtItsBound(t *testing.T) {
+	st, m := laneBitmapsSubtree(t)
+	root := st.RootHash()
+
+	store := &hangingBitmapsStore{Store: blobmemory.New()}
+
+	server := &Server{logger: ulogger.TestLogger{}, settings: test.CreateBaseTestSettings(t), subtreeStore: store, utxoStore: laneHeightUtxoStore(t, 100)}
+	server.laneBitmapsRetry.Bound = 300 * time.Millisecond
+	server.laneBitmapsRetry.FirstBackoff = time.Millisecond
+
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
+	defer cancel()
+
+	bitmaps := &lane.SubtreeBitmaps{SubtreeHash: *root, Lanes: lane.LaneBitmaps{7: bitmapOfPositions(1)}}
+
+	start := time.Now()
+	require.NoError(t, server.storeSubtreeFiles(ctx, gocore.NewStat("test"), root, st, m, bitmaps))
+	require.Less(t, time.Since(start), 10*time.Second, "the hung retry ended at the bound")
+
+	exists, err := store.Exists(ctx, root[:], fileformat.FileTypeSubtree)
+	require.NoError(t, err)
+	require.True(t, exists)
+}
+
 // laneHeightUtxoStore is a real sqlitememory UTXO store at block height.
 func laneHeightUtxoStore(t *testing.T, height uint32) utxo.Store {
 	t.Helper()
