@@ -507,23 +507,20 @@ func TestHandleSingleTxAttachesVerdictHeader(t *testing.T) {
 // for the first height read; an unreadable height returns an error, uncommitted.
 func TestHandleKafkaTxMessage_RefusedWhileSyncing(t *testing.T) {
 	initPrometheusMetrics()
-	running := blockchain.FSMStateRUNNING
-
 	for _, tt := range []struct {
-		name           string
-		state          blockchain.FSMStateType
-		stateAfterWait *blockchain.FSMStateType
-		netting        bool
-		height         int
-		heightErr      bool
-		refuses        bool
-		wantErr        bool
+		name      string
+		state     blockchain.FSMStateType
+		netting   bool
+		height    int
+		heightErr bool
+		refuses   bool
+		wantErr   bool
 	}{
 		{name: "CATCHINGBLOCKS", state: blockchain.FSMStateCATCHINGBLOCKS, refuses: true},
 		{name: "RUNNING", state: blockchain.FSMStateRUNNING},
 		{name: "IDLE", state: blockchain.FSMStateIDLE},
 		{name: "utxoset_restart_at_tip", state: blockchain.FSMStateRUNNING, netting: true, height: 150},
-		{name: "utxoset_sync_ends_before_refusal", state: blockchain.FSMStateCATCHINGBLOCKS, stateAfterWait: &running, netting: true, height: 150},
+		{name: "utxoset_syncing", state: blockchain.FSMStateCATCHINGBLOCKS, netting: true, height: 150, refuses: true},
 		{name: "utxoset_below_checkpoint", state: blockchain.FSMStateIDLE, netting: true, height: 50, refuses: true},
 		{name: "utxoset_height_unreadable", state: blockchain.FSMStateRUNNING, netting: true, heightErr: true, wantErr: true},
 	} {
@@ -532,12 +529,7 @@ func TestHandleKafkaTxMessage_RefusedWhileSyncing(t *testing.T) {
 			blockchainClient := &blockchain.Mock{}
 			t.Cleanup(func() { blockchainClient.AssertExpectations(t) })
 
-			if tt.stateAfterWait != nil {
-				blockchainClient.On("GetFSMCurrentState", mock.Anything).Return(&state, nil).Once()
-				blockchainClient.On("GetFSMCurrentState", mock.Anything).Return(tt.stateAfterWait, nil)
-			} else {
-				blockchainClient.On("GetFSMCurrentState", mock.Anything).Return(&state, nil)
-			}
+			blockchainClient.On("GetFSMCurrentState", mock.Anything).Return(&state, nil)
 
 			tSettings := test.CreateBaseTestSettings(t)
 			if tt.netting {
@@ -548,7 +540,10 @@ func TestHandleKafkaTxMessage_RefusedWhileSyncing(t *testing.T) {
 					heightErr = errors.NewServiceError("blockchain down")
 				}
 
-				blockchainClient.On("GetBestHeightAndTime", mock.Anything).Return(tt.height, 0, heightErr)
+				// A syncing node refuses before it needs a height.
+				if tt.state != blockchain.FSMStateCATCHINGBLOCKS {
+					blockchainClient.On("GetBestHeightAndTime", mock.Anything).Return(tt.height, 0, heightErr)
+				}
 			}
 
 			// NewServer builds the gate, so this also checks the wiring.

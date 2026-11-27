@@ -12,6 +12,7 @@ import (
 
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/services/blockassembly"
+	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/kafka"
@@ -1722,4 +1723,56 @@ func TestBackpressure_WarnsOnceWhenOffWithInMemoryLimit(t *testing.T) {
 		v.warnBackpressureOffWithLimit(ctx)
 		require.Len(t, logger.lines, 1)
 	})
+}
+
+// The consumer is paused while any owner holds its reason and resumed only when
+// the last releases, so one owner's resume cannot cancel another's pause.
+func TestFetchPauser_PausedWhileAnyReasonHolds(t *testing.T) {
+	consumer := &fakeConsumer{}
+	pauser := newFetchPauser(consumer)
+
+	for _, step := range []struct {
+		reason              string
+		paused              bool
+		wantPause, wantResu int
+	}{
+		{fetchPauseBackpressure, true, 1, 0},
+		{fetchPauseCheckpoint, true, 1, 0},    // already paused: no second PauseAll
+		{fetchPauseBackpressure, false, 1, 0}, // checkpoint still holds
+		{fetchPauseBackpressure, false, 1, 0}, // releasing a reason not held changes nothing
+		{fetchPauseCheckpoint, false, 1, 1},
+		{fetchPauseCheckpoint, true, 2, 1},
+	} {
+		pauser.set(step.reason, step.paused)
+		require.Equal(t, step.wantPause, consumer.pauseCount(), "%s=%v", step.reason, step.paused)
+		require.Equal(t, step.wantResu, consumer.resumeCount(), "%s=%v", step.reason, step.paused)
+	}
+}
+
+// A Kafka message stalled past one height-read timeout on a utxoset node pauses
+// fetching, and fetching resumes when the wait ends; the stalled message is
+// returned as an error, so it stays uncommitted.
+func TestArmFetchPauser_StalledKafkaMessagePausesFetching(t *testing.T) {
+	running := blockchain.FSMStateRUNNING
+	client := &blockchain.Mock{}
+	client.On("GetFSMCurrentState", mock.Anything).Return(&running, nil)
+	client.On("GetBestHeightAndTime", mock.Anything).Return(0, 0, errors.NewServiceError("blockchain down"))
+
+	server := NewServer(ulogger.TestLogger{}, nettingSettings(t), nil, client, nil, nil, nil, nil, nil)
+	server.validator = &MockValidator{}
+
+	consumer := &fakeConsumer{}
+	server.armFetchPauser(consumer)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	handled := make(chan error, 1)
+
+	go func() { handled <- server.handleKafkaTxMessage(ctx, kafkaTxMessage(t)) }()
+
+	require.Eventually(t, func() bool { return consumer.pauseCount() == 1 }, 5*time.Second, 10*time.Millisecond)
+	require.Zero(t, consumer.resumeCount())
+
+	cancel()
+	require.Error(t, <-handled)
+	require.Equal(t, 1, consumer.resumeCount())
 }

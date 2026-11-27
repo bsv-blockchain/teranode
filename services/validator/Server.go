@@ -168,6 +168,11 @@ type Server struct {
 	// catch-up, which must go on validating a block's own transactions. nil
 	// accepts everything.
 	unminedTxGate *blockchain.UnminedTxGate
+
+	// fetchPauser shares the Kafka consumer between the backpressure controller
+	// and the unmined transaction gate, each pausing it for its own reason. Nil
+	// until Start arms it, and nil when there is no consumer.
+	fetchPauser *fetchPauser
 }
 
 // setConsumerContext installs the consumer context and its cancel function,
@@ -432,6 +437,7 @@ func (v *Server) Start(ctx context.Context, readyCh chan<- struct{}) (retErr err
 	}
 
 	if v.consumerClient != nil {
+		v.armFetchPauser(v.consumerClient)
 		v.consumerClient.Start(consumerCtx, kafkaMessageHandler, kafka.WithLogErrorAndMoveOn())
 	}
 

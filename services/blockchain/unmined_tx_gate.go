@@ -2,6 +2,7 @@ package blockchain
 
 import (
 	"context"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -126,6 +127,13 @@ type UnminedTxGate struct {
 	heightReading   atomic.Bool
 	heightReadNanos atomic.Int64
 	lastWarnNanos   atomic.Int64
+
+	// stallMu guards stalled, the number of RefusesAfterCheckpointAnswer calls
+	// waiting longer than checkpointStallAfter, and the hooks SetStallHooks set.
+	stallMu   sync.Mutex
+	stalled   int
+	onStall   func()
+	onRecover func()
 }
 
 // NewUnminedTxGate returns a gate for one intake route. route is stored as
@@ -234,56 +242,56 @@ func (g *UnminedTxGate) readBestHeight(scheduled int64) {
 	g.readOKNanos.Store(scheduled)
 }
 
-// checkpointAnswerPoll is how often waitForCheckpointAnswer looks again until
-// the checkpoint is reached, the FSM is syncing, or a height read scheduled
-// after the call began has succeeded. Reads stay spaced by
+// checkpointStallAfter is how long a RefusesAfterCheckpointAnswer call may wait
+// before it counts as stalled. A height read that succeeds lands well inside one
+// read timeout, so only a blockchain service that does not answer stalls a call.
+const checkpointStallAfter = bestHeightReadTimeout
+
+// checkpointAnswerPoll is how often RefusesAfterCheckpointAnswer looks again
+// until the checkpoint is reached, the FSM is syncing, or a height read
+// scheduled after the call began has succeeded. Reads stay spaced by
 // bestHeightReadInterval.
 const checkpointAnswerPoll = 50 * time.Millisecond
 
-// waitForCheckpointAnswer returns once the checkpoint rule can judge a
-// transaction by a current height: the rule is off, the checkpoint is known to
-// be reached, the FSM is syncing, or a height read scheduled after this call
-// began has succeeded. Until then it keeps scheduling reads. It returns ctx's
-// error if ctx ends first. RefusesAfterCheckpointAnswer is its one caller.
-func (g *UnminedTxGate) waitForCheckpointAnswer(ctx context.Context) error {
-	if g == nil || g.client == nil || g.highestCheckpoint == 0 || g.reached.Load() {
-		return nil
-	}
-
-	began := g.sinceStart()
-
-	ticker := time.NewTicker(checkpointAnswerPoll)
-	defer ticker.Stop()
-
-	for !g.reached.Load() && g.readOKNanos.Load() < began {
-		if state, err := g.client.GetFSMCurrentState(ctx); err == nil && state != nil && IsSyncingState(*state) {
-			return nil
-		}
-
-		g.scheduleHeightRead()
-
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-ticker.C:
-		}
-	}
-
-	return nil
-}
-
-// RefusesAfterCheckpointAnswer judges an acknowledged transaction after the
-// wait. If the FSM stops syncing between the wait and this decision, it waits
-// for a fresh height instead of dropping the transaction on an unknown height.
+// RefusesAfterCheckpointAnswer is Refuses for an intake that has already
+// acknowledged its transactions, so it must not drop one because the height is
+// not known yet. It refuses while the FSM syncs, accepts once the checkpoint is
+// known to be reached, and refuses on a "below" answer only from a height read
+// scheduled after this call began. Until one of those holds it keeps reading.
+// It returns ctx's error if ctx ends first, and the caller leaves the
+// transaction to be delivered again. The validator's Kafka intake is the one
+// user: propagation acknowledged each message before queueing it, and a refused
+// message is committed and lost.
 func (g *UnminedTxGate) RefusesAfterCheckpointAnswer(ctx context.Context, txHash *chainhash.Hash) (bool, error) {
 	if g == nil || g.client == nil {
 		return false, nil
 	}
 
-	began := g.sinceStart()
-	if err := g.waitForCheckpointAnswer(ctx); err != nil {
-		return false, err
+	// Rule off or checkpoint reached: Refuses answers at once, with no clock
+	// read and no timer per message.
+	if g.highestCheckpoint == 0 || g.reached.Load() {
+		return g.Refuses(ctx, txHash), nil
 	}
+
+	began := g.sinceStart()
+
+	// A call waiting past checkpointStallAfter counts itself as stalled once,
+	// and stops counting when it returns, whatever it returns.
+	start := time.Now()
+	stalled := false
+
+	tick := func() {
+		if !stalled && time.Since(start) >= checkpointStallAfter {
+			stalled = true
+			g.stallBegin()
+		}
+	}
+
+	defer func() {
+		if stalled {
+			g.stallEnd()
+		}
+	}()
 
 	// Made only when the decision has to wait, so the usual answer allocates no
 	// timer per message.
@@ -322,6 +330,7 @@ func (g *UnminedTxGate) RefusesAfterCheckpointAnswer(ctx context.Context, txHash
 		}
 
 		g.scheduleHeightRead()
+		tick()
 
 		if ticker == nil {
 			ticker = time.NewTicker(checkpointAnswerPoll)
@@ -332,6 +341,43 @@ func (g *UnminedTxGate) RefusesAfterCheckpointAnswer(ctx context.Context, txHash
 			return false, ctx.Err()
 		case <-ticker.C:
 		}
+	}
+}
+
+// SetStallHooks sets the functions called when the first
+// RefusesAfterCheckpointAnswer call stalls (onStall) and when the last stalled
+// call returns (onRecover). They run in that order, one at a time, under the
+// gate's stall lock, so they must not call back into the gate. The validator uses
+// them to pause Kafka fetching while no message can be judged, because fetched
+// batches queue in memory with no bound. Nil hooks are skipped.
+func (g *UnminedTxGate) SetStallHooks(onStall, onRecover func()) {
+	if g == nil {
+		return
+	}
+
+	g.stallMu.Lock()
+	defer g.stallMu.Unlock()
+
+	g.onStall, g.onRecover = onStall, onRecover
+}
+
+func (g *UnminedTxGate) stallBegin() {
+	g.stallMu.Lock()
+	defer g.stallMu.Unlock()
+
+	g.stalled++
+	if g.stalled == 1 && g.onStall != nil {
+		g.onStall()
+	}
+}
+
+func (g *UnminedTxGate) stallEnd() {
+	g.stallMu.Lock()
+	defer g.stallMu.Unlock()
+
+	g.stalled--
+	if g.stalled == 0 && g.onRecover != nil {
+		g.onRecover()
 	}
 }
 
