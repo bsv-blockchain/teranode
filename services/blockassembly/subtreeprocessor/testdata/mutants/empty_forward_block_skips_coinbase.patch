@@ -1,8 +1,8 @@
 diff --git a/services/blockassembly/subtreeprocessor/SubtreeProcessor.go b/services/blockassembly/subtreeprocessor/SubtreeProcessor.go
-index 3942b3db1..981045e58 100644
+index b5c52c03f..a5c6127fa 100644
 --- a/services/blockassembly/subtreeprocessor/SubtreeProcessor.go
 +++ b/services/blockassembly/subtreeprocessor/SubtreeProcessor.go
-@@ -8067,16 +8067,13 @@ func (stp *SubtreeProcessor) moveForwardBlockDeferringDrain(ctx context.Context,
+@@ -8309,16 +8309,13 @@ func (stp *SubtreeProcessor) moveForwardBlockDeferringDrain(ctx context.Context,
  	}
  
  	if len(block.Subtrees) == 0 {

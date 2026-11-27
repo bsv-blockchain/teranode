@@ -1,8 +1,11 @@
 diff --git a/services/blockassembly/subtreeprocessor/reorg_fast_path.go b/services/blockassembly/subtreeprocessor/reorg_fast_path.go
-index cdac49551..853794886 100644
+index c5d9aaf43..b6e91675a 100644
 --- a/services/blockassembly/subtreeprocessor/reorg_fast_path.go
 +++ b/services/blockassembly/subtreeprocessor/reorg_fast_path.go
-@@ -525,8 +525,7 @@ func (stp *SubtreeProcessor) applyFastReorg(ctx context.Context, plan *fastReorg
+@@ -569,14 +569,13 @@ func (stp *SubtreeProcessor) applyFastReorg(ctx context.Context, plan *fastReorg
+ 
+ 	stp.setTxCountFromSubtrees()
+ 
  	stp.phases.done("fast_build")
  	stp.reportProgressUnlessDone(ctx)
  
@@ -12,3 +15,6 @@ index cdac49551..853794886 100644
  	stp.flushDiskTxMapWriters()
  
  	if mapErr := stp.diskTxMapErr(); mapErr != nil {
+ 		return nil, errors.NewStorageError("[reorgInPlace][%s] disk tx map storage error after the build", lost.String(), mapErr)
+ 	}
+ 

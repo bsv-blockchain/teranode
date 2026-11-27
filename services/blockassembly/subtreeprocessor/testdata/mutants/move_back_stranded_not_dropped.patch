@@ -1,8 +1,11 @@
 diff --git a/services/blockassembly/subtreeprocessor/SubtreeProcessor.go b/services/blockassembly/subtreeprocessor/SubtreeProcessor.go
-index e331d70d6..840b39898 100644
+index b5c52c03f..8c5ea41ce 100644
 --- a/services/blockassembly/subtreeprocessor/SubtreeProcessor.go
 +++ b/services/blockassembly/subtreeprocessor/SubtreeProcessor.go
-@@ -6821,7 +6821,7 @@ func (stp *SubtreeProcessor) moveBackBlockBulkBuild(ctx context.Context, block *
+@@ -7033,13 +7033,13 @@ func (stp *SubtreeProcessor) moveBackBlockBulkBuild(ctx context.Context, block *
+ 				continue
+ 			}
+ 			allNodes = append(allNodes, node)
  		}
  	}
  	if held != nil {
@@ -11,3 +14,6 @@ index e331d70d6..840b39898 100644
  	}
  
  	// Step 5: Determine subtree size
+ 	subtreeSize := int(stp.currentItemsPerFile.Load())
+ 	if !createProperlySizedSubtrees {
+ 		subtreeSize = 1024 * 1024

@@ -1,8 +1,11 @@
 diff --git a/services/blockassembly/subtreeprocessor/reorg_fast_path.go b/services/blockassembly/subtreeprocessor/reorg_fast_path.go
-index cdac49551..63070ca14 100644
+index c5d9aaf43..fd34a5b56 100644
 --- a/services/blockassembly/subtreeprocessor/reorg_fast_path.go
 +++ b/services/blockassembly/subtreeprocessor/reorg_fast_path.go
-@@ -562,7 +562,7 @@ func (stp *SubtreeProcessor) applyFastReorg(ctx context.Context, plan *fastReorg
+@@ -627,13 +627,13 @@ func (stp *SubtreeProcessor) applyFastReorg(ctx context.Context, plan *fastReorg
+ 
+ 	stp.currentBlockHeader.Store(moveForwardBlocks[len(moveForwardBlocks)-1].Header)
+ 	stp.updatePrecomputedMiningData()
  	stp.closeRetiredSubtrees()
  
  	movedBack := make(map[chainhash.Hash]bool, len(plan.delta.D1))
@@ -11,3 +14,6 @@ index cdac49551..63070ca14 100644
  		movedBack[node.Hash] = false
  	}
  
+ 	stp.phases.count("d2", len(plan.delta.D2))
+ 	stp.phases.count("hits", int(plan.delta.Hits))
+ 	stp.phases.count("remainder", plan.survivors)

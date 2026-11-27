@@ -1,8 +1,11 @@
 diff --git a/services/blockassembly/subtreeprocessor/SubtreeProcessor.go b/services/blockassembly/subtreeprocessor/SubtreeProcessor.go
-index 0c5c39eb8..011bc6064 100644
+index b5c52c03f..c91a03084 100644
 --- a/services/blockassembly/subtreeprocessor/SubtreeProcessor.go
 +++ b/services/blockassembly/subtreeprocessor/SubtreeProcessor.go
-@@ -1896,7 +1896,7 @@ func (stp *SubtreeProcessor) reset(blockHeader *model.BlockHeader, moveBackBlock
+@@ -1939,13 +1939,13 @@ func (stp *SubtreeProcessor) reset(blockHeader *model.BlockHeader, moveBackBlock
+ 		if err := sweep(currentSubtree.Nodes); err != nil {
+ 			return err
+ 		}
  
  		// A failed in-place fork reorg (reorgInPlace) flagged the lost block's transactions mined and has
  		// not put them in the subtrees above yet.
@@ -11,3 +14,6 @@ index 0c5c39eb8..011bc6064 100644
  			chunk = append(chunk, hash)
  
  			if len(chunk) == resetSweepChunkSize {
+ 				if err := markChunk(); err != nil {
+ 					return err
+ 				}

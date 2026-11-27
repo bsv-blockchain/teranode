@@ -1,8 +1,8 @@
 diff --git a/services/blockassembly/subtreeprocessor/SubtreeProcessor.go b/services/blockassembly/subtreeprocessor/SubtreeProcessor.go
-index 3942b3db1..4134bef9c 100644
+index b5c52c03f..38dbb511b 100644
 --- a/services/blockassembly/subtreeprocessor/SubtreeProcessor.go
 +++ b/services/blockassembly/subtreeprocessor/SubtreeProcessor.go
-@@ -5972,13 +5972,13 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveBackBlocks []*
+@@ -6165,13 +6165,13 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveBackBlocks []*
  			// counter-side already Spend/Unmarked. The realistic Remove failure
  			// is "tx already absent" (race with a concurrent eviction) which is
  			// the desired end state anyway. A genuine corruption case is

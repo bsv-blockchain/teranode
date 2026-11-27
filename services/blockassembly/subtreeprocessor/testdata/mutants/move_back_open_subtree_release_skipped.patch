@@ -1,8 +1,8 @@
 diff --git a/services/blockassembly/subtreeprocessor/SubtreeProcessor.go b/services/blockassembly/subtreeprocessor/SubtreeProcessor.go
-index e9d592ca4..1cffb8e21 100644
+index b5c52c03f..a84851802 100644
 --- a/services/blockassembly/subtreeprocessor/SubtreeProcessor.go
 +++ b/services/blockassembly/subtreeprocessor/SubtreeProcessor.go
-@@ -6811,13 +6811,13 @@ func (stp *SubtreeProcessor) moveBackBlockBulkBuild(ctx context.Context, block *
+@@ -7026,13 +7026,13 @@ func (stp *SubtreeProcessor) moveBackBlockBulkBuild(ctx context.Context, block *
  	if previousCurrentSubtree != nil {
  		for _, node := range previousCurrentSubtree.Nodes {
  			if node.Hash.Equal(subtreepkg.CoinbasePlaceholderHashValue) || !keepPrevious(node.Hash) {
