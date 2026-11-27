@@ -19,6 +19,7 @@ import (
 
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/go-chaincfg"
 	bec "github.com/bsv-blockchain/go-sdk/primitives/ec"
 	"github.com/bsv-blockchain/go-wire"
 	"github.com/bsv-blockchain/teranode/errors"
@@ -2027,7 +2028,7 @@ func TestProcessTransaction_RefusedWhileSyncing(t *testing.T) {
 				settings:      test.CreateBaseTestSettings(t),
 				validator:     validatorInstance,
 				txStore:       txStore,
-				unminedTxGate: blockchain.NewUnminedTxGate(ulogger.TestLogger{}, blockchainClient, blockchain.UnminedTxRoutePropagation),
+				unminedTxGate: blockchain.NewUnminedTxGate(ulogger.TestLogger{}, blockchainClient, nil, blockchain.UnminedTxRoutePropagation),
 			}
 
 			txs := transactions.CreateTestTransactionChainWithCount(t, 3)
@@ -2091,7 +2092,7 @@ func newGatedPropagationServer(t *testing.T, state blockchain.FSMStateType, logg
 		settings:      tSettings,
 		validator:     &orderedErrValidator{},
 		txStore:       txStore,
-		unminedTxGate: blockchain.NewUnminedTxGate(ulogger.TestLogger{}, blockchainClient, blockchain.UnminedTxRoutePropagation),
+		unminedTxGate: blockchain.NewUnminedTxGate(ulogger.TestLogger{}, blockchainClient, nil, blockchain.UnminedTxRoutePropagation),
 	}
 }
 
@@ -2245,4 +2246,17 @@ func TestParseDatagram_AnExtendedTransactionDecodes(t *testing.T) {
 	got, ok := msg.(*wire.MsgExtendedTx)
 	require.True(t, ok, "want *wire.MsgExtendedTx, got %T", msg)
 	require.Equal(t, tx.TxHash(), got.TxHash())
+}
+
+// New must hand its settings to the unmined transaction gate, or the checkpoint
+// rule is off on this intake.
+func TestNew_UnminedTxGateTakesSettings(t *testing.T) {
+	tSettings := test.CreateBaseTestSettings(t)
+	params := *tSettings.ChainCfgParams
+	params.Checkpoints = []chaincfg.Checkpoint{{Height: 100}}
+	tSettings.ChainCfgParams = &params
+	tSettings.UtxoStore.UtxoStore = &url.URL{Scheme: "utxoset", Host: "localhost"}
+
+	ps := New(ulogger.TestLogger{}, tSettings, nil, nil, &blockchain.Mock{}, nil, nil)
+	require.Equal(t, uint32(100), ps.unminedTxGate.CheckpointHeight())
 }

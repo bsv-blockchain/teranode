@@ -199,7 +199,7 @@ func TestHandleSendRawTransaction_RefusedWhileSyncing(t *testing.T) {
 						return &meta.Data{}, nil
 					},
 				},
-				unminedTxGate: blockchain.NewUnminedTxGate(mocklogger.NewTestLogger(), blockchainClient, blockchain.UnminedTxRouteRPCSendRawTx),
+				unminedTxGate: blockchain.NewUnminedTxGate(mocklogger.NewTestLogger(), blockchainClient, nil, blockchain.UnminedTxRouteRPCSendRawTx),
 			}
 
 			tx := transactions.CreateTestTransactionChainWithCount(t, 3)[1]

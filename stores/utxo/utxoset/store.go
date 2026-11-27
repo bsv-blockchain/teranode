@@ -266,7 +266,7 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 	}
 
 	dsn := *storeURL
-	if dsn.Scheme == "utxoset" {
+	if dsn.Scheme == utxo.NettingStoreScheme {
 		dsn.Scheme = "postgres"
 	}
 

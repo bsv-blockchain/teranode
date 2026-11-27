@@ -1549,7 +1549,7 @@ func NewServer(logger ulogger.Logger, tSettings *settings.Settings, blockchainCl
 		p2pClient:              p2pClient,
 		txStore:                txStore,
 		validatorClient:        validatorClient,
-		unminedTxGate:          blockchain.NewUnminedTxGate(logger, blockchainClient, blockchain.UnminedTxRouteRPCSendRawTx),
+		unminedTxGate:          blockchain.NewUnminedTxGate(logger, blockchainClient, tSettings, blockchain.UnminedTxRouteRPCSendRawTx),
 	}
 
 	rpcUser := tSettings.RPC.RPCUser

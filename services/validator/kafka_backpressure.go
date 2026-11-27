@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -664,7 +665,7 @@ func (v *Server) startKafkaBackpressure(ctx context.Context) {
 		controllerCtx = ctx
 	}
 
-	controller := newKafkaBackpressureController(v.logger, cfg, v.settings.BlockAssembly.DoubleSpendWindow, v.blockAssemblyClient, v.consumerClient)
+	controller := newKafkaBackpressureController(v.logger, cfg, v.settings.BlockAssembly.DoubleSpendWindow, v.blockAssemblyClient, v.fetchPauseFor(fetchPauseBackpressure))
 	if observer, ok := v.validator.(interface {
 		observeQueueStats(blockassembly.QueueStats)
 	}); ok {
@@ -723,4 +724,87 @@ func (v *Server) warnBackpressureOffWithLimit(ctx context.Context) {
 	}
 
 	v.logger.Warnf("[Validator] kafka backpressure is off while block assembly limits transactions in memory (blockassembly_maxTransactionsInMemory=%d): every Kafka transaction refused by that limit, including all of them during an unmined load or reset, is validated, refused, unwound and dropped; set validator_kafkaBackpressureEnabled=true so the backlog waits in Kafka instead", stats.MaxHeld)
+}
+
+// Reasons the validator's transaction consumer can be paused for. Each owner
+// pauses and resumes only its own reason through a fetchPauser.
+const (
+	fetchPauseBackpressure = "backpressure"
+	fetchPauseCheckpoint   = "checkpoint"
+)
+
+// fetchPauser shares one Kafka consumer between owners that pause it for
+// different reasons. Fetching stays paused while any reason holds, so one
+// owner's resume cannot undo another's pause.
+type fetchPauser struct {
+	mu       sync.Mutex
+	consumer pausableConsumer
+	held     map[string]bool
+}
+
+func newFetchPauser(consumer pausableConsumer) *fetchPauser {
+	return &fetchPauser{consumer: consumer, held: make(map[string]bool)}
+}
+
+// set holds or releases reason, pausing the consumer when the first reason is
+// held and resuming it when the last is released.
+func (p *fetchPauser) set(reason string, paused bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	wasPaused := len(p.held) > 0
+
+	if paused {
+		p.held[reason] = true
+	} else {
+		delete(p.held, reason)
+	}
+
+	switch isPaused := len(p.held) > 0; {
+	case isPaused && !wasPaused:
+		p.consumer.PauseAll()
+	case !isPaused && wasPaused:
+		p.consumer.ResumeAll()
+	}
+}
+
+// fetchPauseReason is the pausableConsumer one owner sees: its PauseAll and
+// ResumeAll hold and release that owner's reason.
+type fetchPauseReason struct {
+	pauser *fetchPauser
+	reason string
+}
+
+func (r fetchPauseReason) PauseAll()  { r.pauser.set(r.reason, true) }
+func (r fetchPauseReason) ResumeAll() { r.pauser.set(r.reason, false) }
+
+// fetchPauseFor returns the consumer lever for one pause reason. NewServer arms
+// the shared pauser before any owner asks; one made here covers a server built
+// as a struct literal, as tests do.
+func (v *Server) fetchPauseFor(reason string) pausableConsumer {
+	if v.fetchPauser == nil {
+		v.fetchPauser = newFetchPauser(v.consumerClient)
+	}
+
+	return fetchPauseReason{pauser: v.fetchPauser, reason: reason}
+}
+
+// armFetchPauser shares consumer between the backpressure controller and the
+// unmined transaction gate. The gate pauses fetching while a Kafka message waits
+// for its checkpoint answer and a height read has failed since it began, because
+// the consumer keeps fetching into per-partition queues with no bound while every
+// handler waits. A read that succeeds, however slowly, never pauses.
+func (v *Server) armFetchPauser(consumer pausableConsumer) {
+	v.fetchPauser = newFetchPauser(consumer)
+
+	v.unminedTxGate.SetStallHooks(
+		func() {
+			v.logger.Warnf("[Validator] pausing the Kafka transaction consumer: the unmined transaction gate cannot read the best height to judge a message")
+			v.fetchPauser.set(fetchPauseCheckpoint, true)
+		},
+		func() {
+			v.logger.Infof("[Validator] the unmined transaction gate is answering again; releasing its pause on the Kafka transaction consumer")
+			v.fetchPauser.set(fetchPauseCheckpoint, false)
+		},
+	)
 }

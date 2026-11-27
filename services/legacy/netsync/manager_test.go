@@ -1043,9 +1043,9 @@ func gatedSyncManager(t *testing.T, name string, state blockchain2.FSMStateType,
 	blockchainClient := &blockchain2.Mock{}
 	blockchainClient.On("GetFSMCurrentState", mock.Anything).Return(&state, nil)
 	sm.blockchainClient = blockchainClient
-	sm.txGate = blockchain2.NewUnminedTxGate(ulogger.TestLogger{}, blockchainClient, blockchain2.UnminedTxRouteLegacyTx)
-	sm.orphanGate = blockchain2.NewUnminedTxGate(ulogger.TestLogger{}, blockchainClient, blockchain2.UnminedTxRouteLegacyOrphan)
-	sm.orphanEvictionGate = blockchain2.NewUnminedTxGate(ulogger.TestLogger{}, blockchainClient, blockchain2.UnminedTxRouteLegacyOrphanEviction)
+	sm.txGate = blockchain2.NewUnminedTxGate(ulogger.TestLogger{}, blockchainClient, nil, blockchain2.UnminedTxRouteLegacyTx)
+	sm.orphanGate = blockchain2.NewUnminedTxGate(ulogger.TestLogger{}, blockchainClient, nil, blockchain2.UnminedTxRouteLegacyOrphan)
+	sm.orphanEvictionGate = blockchain2.NewUnminedTxGate(ulogger.TestLogger{}, blockchainClient, nil, blockchain2.UnminedTxRouteLegacyOrphanEviction)
 
 	return sm, p, store
 }
@@ -1158,8 +1158,8 @@ func TestProcessOrphanTransactions_RefusedOnceTheNodeStartsSyncing(t *testing.T)
 			blockchainClient.On("GetFSMCurrentState", mock.Anything).Return(&running, nil).Once()
 			blockchainClient.On("GetFSMCurrentState", mock.Anything).Return(&later, nil)
 			sm.blockchainClient = blockchainClient
-			sm.txGate = blockchain2.NewUnminedTxGate(ulogger.TestLogger{}, blockchainClient, blockchain2.UnminedTxRouteLegacyTx)
-			sm.orphanGate = blockchain2.NewUnminedTxGate(ulogger.TestLogger{}, blockchainClient, blockchain2.UnminedTxRouteLegacyOrphan)
+			sm.txGate = blockchain2.NewUnminedTxGate(ulogger.TestLogger{}, blockchainClient, nil, blockchain2.UnminedTxRouteLegacyTx)
+			sm.orphanGate = blockchain2.NewUnminedTxGate(ulogger.TestLogger{}, blockchainClient, nil, blockchain2.UnminedTxRouteLegacyOrphan)
 
 			parents := txmap.NewSyncedMap[chainhash.Hash, struct{}]()
 			parents.Set(*parent.TxIDChainHash(), struct{}{})

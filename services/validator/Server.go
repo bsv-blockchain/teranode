@@ -168,6 +168,11 @@ type Server struct {
 	// catch-up, which must go on validating a block's own transactions. nil
 	// accepts everything.
 	unminedTxGate *blockchain.UnminedTxGate
+
+	// fetchPauser shares the Kafka consumer between the backpressure controller
+	// and the unmined transaction gate, each pausing it for its own reason. Nil
+	// until Start arms it, and nil when there is no consumer.
+	fetchPauser *fetchPauser
 }
 
 // setConsumerContext installs the consumer context and its cancel function,
@@ -235,7 +240,7 @@ func NewServer(logger ulogger.Logger, tSettings *settings.Settings, utxoStore ut
 	blockAssemblyClient blockassembly.ClientI) *Server {
 	initPrometheusMetrics()
 
-	return &Server{
+	v := &Server{
 		logger:                              logger,
 		settings:                            tSettings,
 		utxoStore:                           utxoStore,
@@ -246,8 +251,16 @@ func NewServer(logger ulogger.Logger, tSettings *settings.Settings, utxoStore ut
 		rejectedTxKafkaProducerClient:       rejectedTxKafkaProducerClient,
 		policyRejectedTxKafkaProducerClient: policyRejectedTxKafkaProducerClient,
 		blockAssemblyClient:                 blockAssemblyClient,
-		unminedTxGate:                       blockchain.NewUnminedTxGate(logger, blockchainClient, blockchain.UnminedTxRouteValidatorKafka),
+		unminedTxGate:                       blockchain.NewUnminedTxGate(logger, blockchainClient, tSettings, blockchain.UnminedTxRouteValidatorKafka),
 	}
+
+	// Armed here, before Start, so the consumer is shared with the gate before
+	// it delivers a message or the backpressure controller starts.
+	if consumerClient != nil {
+		v.armFetchPauser(consumerClient)
+	}
+
+	return v
 }
 
 // Health performs health checks on the validator service and its dependencies.
@@ -487,7 +500,17 @@ func (v *Server) handleKafkaTxMessage(consumerCtx context.Context, msg *kafka.Ka
 	// dropped, and nil commits its offset: a transaction held until RUNNING would
 	// be hours old when the node caught up. Propagation refuses at its own intake,
 	// so this catches what was already on the topic when the sync began.
-	if v.unminedTxGate.Refuses(consumerCtx, tx.TxIDChainHash()) {
+	//
+	// Propagation acknowledged each message before queueing it, so the gate must
+	// judge by a height it has read, not by not knowing one yet: a validator
+	// restarted at the tip would otherwise drop its backlog. An error here leaves
+	// the message uncommitted, so it is delivered again.
+	refused, err := v.unminedTxGate.RefusesAfterCheckpointAnswer(consumerCtx, tx.TxIDChainHash())
+	if err != nil {
+		return err
+	}
+
+	if refused {
 		return nil
 	}
 
