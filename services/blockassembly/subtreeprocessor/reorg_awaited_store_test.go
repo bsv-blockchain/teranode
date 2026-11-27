@@ -2,6 +2,7 @@ package subtreeprocessor
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -266,6 +267,10 @@ func (g *gatedStores) serve(ctx context.Context, req NewSubtreeRequest) {
 	}
 
 	// the way the block assembly worker settles: with the result, and announcing when the queue says so
+	if !res.OK() {
+		req.Failing()
+	}
+
 	g.set.Finish(root, res, false)
 
 	if req.Result != nil {
@@ -561,44 +566,58 @@ func TestReorgScenario_AwaitedSubtrees_AFailureWithinK0FailsTheReorg(t *testing.
 }
 
 // A store beyond K0 that fails after the commit does not fail the reorg and never resets: the chain
-// stays, the template stays at the stored prefix, and the watch sends the subtree to the store again.
+// stays, the template stays at the stored prefix, and the watch sends the subtree to the store again,
+// as many times as it fails, and the store that succeeds announces it once.
 func TestReorgScenario_AwaitedSubtrees_AFailureBeyondK0ReEnqueuesAndNeverResets(t *testing.T) {
-	a := newAwaitedScenario(t, awaitedK0, 30*time.Second, true)
+	for _, failures := range []int{1, 2} {
+		t.Run(fmt.Sprintf("fails %d times", failures), func(t *testing.T) {
+			a := newAwaitedScenario(t, awaitedK0, 30*time.Second, true)
 
-	const failing = awaitedK0 + 1
+			const failing = awaitedK0 + 1
 
-	done, g := a.start(t, 1, func(i, attempt int) StoreResult {
-		if i == failing && attempt == 1 {
-			return StoreResult{Err: context.DeadlineExceeded}
-		}
+			done, g := a.start(t, 1, func(i, attempt int) StoreResult {
+				if i == failing && attempt <= failures {
+					return StoreResult{Err: context.DeadlineExceeded}
+				}
 
-		return StoreResult{SubtreeStored: true, MetaNotApplicable: true}
-	})
-	require.NoError(t, requireDone(t, done), "a store beyond K0 is not awaited")
+				return StoreResult{SubtreeStored: true, MetaNotApplicable: true}
+			})
+			require.NoError(t, requireDone(t, done), "a store beyond K0 is not awaited")
 
-	stp := a.sc.stp
-	chain := append([]*subtreepkg.Subtree(nil), stp.chainedSubtrees...)
-	root := *chain[failing].RootHash()
+			stp := a.sc.stp
+			chain := append([]*subtreepkg.Subtree(nil), stp.chainedSubtrees...)
+			root := *chain[failing].RootHash()
 
-	g.releaseTail(failing - awaitedK0 + 1)
+			g.releaseTail(failing - awaitedK0 + 1)
 
-	require.Eventually(t, func() bool { return a.set.HasFailed(root) }, 10*time.Second, time.Millisecond, "the store beyond K0 failed")
-	require.False(t, stp.failedForkReorgNeedsReset.Load(), "no reset")
-	require.NotNil(t, stp.GetPrecomputedMiningData(), "the template is still served")
-	require.Equal(t, chain, stp.chainedSubtrees, "the chain was not rebuilt")
-	require.Len(t, stp.GetPrecomputedMiningData().Subtrees, failing, "the template stops before the failed subtree")
+			require.Eventually(t, func() bool { return a.set.HasFailed(root) }, 10*time.Second, time.Millisecond, "the store beyond K0 failed")
+			require.False(t, stp.failedForkReorgNeedsReset.Load(), "no reset")
+			require.NotNil(t, stp.GetPrecomputedMiningData(), "the template is still served")
+			require.Equal(t, chain, stp.chainedSubtrees, "the chain was not rebuilt")
+			require.Len(t, stp.GetPrecomputedMiningData().Subtrees, failing, "the template stops before the failed subtree")
 
-	stp.prefixWatch.reenqueueGap = 0
-	stp.maintainStoredPrefix(time.Now())
+			stp.prefixWatch.reenqueueGap = 0
 
-	g.releaseTail(len(chain))
+			for resend := 1; resend <= failures; resend++ {
+				g.releaseTail(len(chain))
 
-	require.Eventually(t, func() bool { return a.set.PrefixLen(chain) == len(chain) }, 10*time.Second, time.Millisecond, "the subtree is stored by its second request")
-	require.Equal(t, 2, g.takes(root), "the failed subtree was sent again once")
-	require.Eventually(t, func() bool { return g.announcements(root) >= 1 }, 10*time.Second, time.Millisecond, "the subtree is announced when it is stored again")
-	time.Sleep(50 * time.Millisecond)
-	require.Equal(t, 1, g.announcements(root), "and announced once")
-	require.False(t, stp.failedForkReorgNeedsReset.Load(), "still no reset")
+				require.Eventually(t, func() bool {
+					stp.maintainStoredPrefix(time.Now())
+
+					return g.takes(root) > resend
+				}, 10*time.Second, time.Millisecond, "the subtree was sent again")
+			}
+
+			g.releaseTail(len(chain))
+
+			require.Eventually(t, func() bool { return a.set.PrefixLen(chain) == len(chain) }, 10*time.Second, time.Millisecond, "the subtree is stored by its last request")
+			require.Equal(t, failures+1, g.takes(root), "the failed subtree was sent again after each failure")
+			require.Eventually(t, func() bool { return g.announcements(root) >= 1 }, 10*time.Second, time.Millisecond, "the subtree is announced when it is stored again")
+			time.Sleep(50 * time.Millisecond)
+			require.Equal(t, 1, g.announcements(root), "and announced once")
+			require.False(t, stp.failedForkReorgNeedsReset.Load(), "still no reset")
+		})
+	}
 }
 
 // The next block, while the tail of a reorg is still in the queue, is stored ahead of the tail's
