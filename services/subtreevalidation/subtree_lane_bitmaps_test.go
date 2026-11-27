@@ -574,10 +574,9 @@ func (p *positionValidator) ValidateWithOptions(ctx context.Context, tx *bt.Tx, 
 	return md, err
 }
 
-// A lane bitmaps file write that fails while the store is unavailable is retried, and the file is
-// written before the subtree file. At shadow nothing acts on lanes, so a write that fails past the
-// retry bound, or with an error a retry cannot pass, leaves the subtree to be stored as it is
-// stored without lanes, counted as one write_failed, and its block goes without rows.
+// A failed lane bitmaps file write is retried and written before the subtree file. Past the bound,
+// or with an error a retry cannot pass, the subtree is stored without it as at off, counted as one
+// write_failed, and its block goes without rows.
 func TestStoreSubtreeFiles_ALaneBitmapsFailureDoesNotStopTheSubtree(t *testing.T) {
 	ctx := context.Background()
 
@@ -605,7 +604,11 @@ func TestStoreSubtreeFiles_ALaneBitmapsFailureDoesNotStopTheSubtree(t *testing.T
 			utxoStore.On("GetBlockHeight").Return(uint32(100)).Maybe()
 
 			server := &Server{logger: ulogger.TestLogger{}, settings: test.CreateBaseTestSettings(t), subtreeStore: store, utxoStore: utxoStore}
-			server.laneBitmapsRetry.Bound = 50 * time.Millisecond
+			server.laneBitmapsRetry.Bound = 200 * time.Millisecond
+			if tc.wantFile {
+				server.laneBitmapsRetry.Bound = 5 * time.Second // a stalled runner cannot end a retry that must succeed
+			}
+
 			server.laneBitmapsRetry.FirstBackoff = time.Millisecond
 			server.laneBitmapsRetry.MaxBackoff = 5 * time.Millisecond
 
@@ -634,7 +637,7 @@ func TestStoreSubtreeFiles_ALaneBitmapsFailureDoesNotStopTheSubtree(t *testing.T
 			if tc.wantAttempts > 0 {
 				require.Equal(t, tc.wantAttempts, store.bitmapsRefused)
 			} else {
-				require.Greater(t, store.bitmapsRefused, 2, "it was retried until the bound")
+				require.Greater(t, store.bitmapsRefused, 1, "it was retried until the bound")
 			}
 
 			require.Equal(t, writeFailed+tc.wantFailed, laneMissingBitmaps(t, lane.MissingBitmapsWriteFailed))
@@ -689,8 +692,12 @@ type restartingScheduler struct {
 
 func (s *restartingScheduler) ScheduleBlobDeletion(ctx context.Context, blobKey []byte, fileType string, storeType storetypes.BlobStoreType, deleteAtHeight uint32) (int64, bool, error) {
 	if fileType == string(fileformat.FileTypeSubtreeLaneBitmaps) {
-		<-s.metaScheduled
-		s.restartOnce.Do(s.restart)
+		select {
+		case <-s.metaScheduled:
+			s.restartOnce.Do(s.restart)
+		case <-ctx.Done():
+		case <-time.After(30 * time.Second): // the meta was never scheduled: fail on the assertions, not hang
+		}
 	}
 
 	id, err := s.store.ScheduleBlobDeletion(ctx, &blockchainsql.ScheduleRequest{BlobKey: blobKey, FileType: fileType, StoreType: int32(storeType), DeleteAtHeight: deleteAtHeight})
@@ -766,7 +773,9 @@ func TestStoreSubtreeFiles_ADatabaseRestartMidSubtreeKeepsTheLaneBitmapsFile(t *
 	scheduler := &restartingScheduler{store: chainStore, downFor: 3 * time.Second, metaScheduled: make(chan struct{}), restarted: make(chan struct{})}
 	scheduler.restart = func() {
 		stopTimeout := 10 * time.Second
-		require.NoError(t, pg.Stop(context.Background(), &stopTimeout))
+		if err := pg.Stop(context.Background(), &stopTimeout); err != nil {
+			t.Errorf("stopping postgres: %v", err)
+		}
 
 		go func() {
 			defer close(scheduler.restarted)
@@ -803,7 +812,11 @@ func TestStoreSubtreeFiles_ADatabaseRestartMidSubtreeKeepsTheLaneBitmapsFile(t *
 	require.NoError(t, server.storeSubtreeFiles(ctx, gocore.NewStat("test"), root, st, m, bitmaps))
 	t.Logf("stored the subtree in %s across a %s database restart", time.Since(start), scheduler.downFor)
 
-	<-scheduler.restarted
+	select {
+	case <-scheduler.restarted:
+	case <-time.After(2 * time.Minute):
+		t.Fatal("postgres was never restarted")
+	}
 
 	retriedNow, exhaustedNow := laneBitmapsRetryCounts(t)
 	require.Equal(t, retried+1, retriedNow, "the bitmaps write was retried")

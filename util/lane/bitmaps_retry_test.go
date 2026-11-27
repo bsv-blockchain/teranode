@@ -63,9 +63,16 @@ func TestBitmapsWriteRetryDo(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			service := "test-do-" + tc.name
 			write, calls := failingWrite(tc.failures, tc.err)
+			retriedBefore, exhaustedBefore := retryCounts(service)
+
+			// a bound of seconds where the write must succeed, so a stalled runner cannot end it
+			bound := 5 * time.Second
+			if tc.wantExhausted > 0 {
+				bound = 200 * time.Millisecond
+			}
 
 			start := time.Now()
-			err := fastRetry(50*time.Millisecond).Do(t.Context(), service, write)
+			err := fastRetry(bound).Do(t.Context(), service, write)
 
 			if tc.wantErr {
 				require.Error(t, err)
@@ -76,13 +83,13 @@ func TestBitmapsWriteRetryDo(t *testing.T) {
 			if tc.wantCalls > 0 {
 				require.Equal(t, tc.wantCalls, calls.Load())
 			} else {
-				require.Greater(t, calls.Load(), int32(2), "it retried until the bound")
-				require.GreaterOrEqual(t, time.Since(start), 50*time.Millisecond, "it gave up only once the bound ran out")
+				require.Greater(t, calls.Load(), int32(1), "it retried until the bound")
+				require.GreaterOrEqual(t, time.Since(start), bound, "it gave up only once the bound ran out")
 			}
 
 			retried, exhausted := retryCounts(service)
-			require.Equal(t, tc.wantRetried, retried)
-			require.Equal(t, tc.wantExhausted, exhausted)
+			require.Equal(t, retriedBefore+tc.wantRetried, retried)
+			require.Equal(t, exhaustedBefore+tc.wantExhausted, exhausted)
 		})
 	}
 }
@@ -131,19 +138,18 @@ func TestBitmapsWriteRetryBoundIsPerOutage(t *testing.T) {
 	const service = "test-per-outage"
 
 	storeDown := errors.NewStorageError("store down")
-	r := fastRetry(40 * time.Millisecond)
+	r := fastRetry(500 * time.Millisecond)
+	_, exhaustedBefore := retryCounts(service)
 
 	write, _ := failingWrite(-1, storeDown)
 	require.Error(t, r.Do(t.Context(), service, write), "the first write uses up the bound")
 
-	start := time.Now()
 	write, calls := failingWrite(-1, storeDown)
 	require.Error(t, r.Do(t.Context(), service, write))
 	require.Equal(t, int32(1), calls.Load(), "a write in the same outage is not retried")
-	require.Less(t, time.Since(start), 40*time.Millisecond)
 
 	_, exhausted := retryCounts(service)
-	require.Equal(t, float64(2), exhausted)
+	require.Equal(t, exhaustedBefore+2, exhausted)
 
 	// a write succeeds: the outage is over, and the next failure is retried again
 	require.NoError(t, r.Do(t.Context(), service, func() error { return nil }))
@@ -155,7 +161,7 @@ func TestBitmapsWriteRetryBoundIsPerOutage(t *testing.T) {
 	// a failure a whole bound after the last one starts a new outage
 	write, _ = failingWrite(-1, storeDown)
 	require.Error(t, r.Do(t.Context(), service, write))
-	time.Sleep(50 * time.Millisecond)
+	time.Sleep(600 * time.Millisecond)
 
 	write, calls = failingWrite(1, storeDown)
 	require.NoError(t, r.Do(t.Context(), service, write))

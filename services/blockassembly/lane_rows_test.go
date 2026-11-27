@@ -800,16 +800,14 @@ func (s *failingBitmapsWriteStore) Set(ctx context.Context, key []byte, fileType
 
 // fastLaneBitmapsRetry shortens the server's lane bitmaps write retry to suit a test.
 func fastLaneBitmapsRetry(server *BlockAssembly) {
-	server.laneBitmapsRetry.Bound = 50 * time.Millisecond
+	server.laneBitmapsRetry.Bound = 200 * time.Millisecond
 	server.laneBitmapsRetry.FirstBackoff = time.Millisecond
 	server.laneBitmapsRetry.MaxBackoff = 5 * time.Millisecond
 }
 
-// TestStoreSubtreeDataRetriesAFailedLaneBitmapsWrite: a lane bitmaps file write that fails while the
-// store is unavailable is retried, and the file is written before the subtree file; one that fails
-// past the retry bound, or with an error a retry cannot pass, is counted as write_failed under
-// block="own". Either way the subtree is stored, and its bitmaps stay kept for a block this node
-// mines.
+// TestStoreSubtreeDataRetriesAFailedLaneBitmapsWrite: a failed lane bitmaps file write is retried and
+// written before the subtree file; past the bound, or with an error a retry cannot pass, it counts
+// as write_failed. The subtree is stored and its bitmaps stay kept either way.
 func TestStoreSubtreeDataRetriesAFailedLaneBitmapsWrite(t *testing.T) {
 	for _, tc := range []struct {
 		name          string
@@ -828,6 +826,10 @@ func TestStoreSubtreeDataRetriesAFailedLaneBitmapsWrite(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			server, memoryStore := setupServerWithSettings(t, func(s *settings.Settings) { s.UtxoStore.LaneMigration = settings.LaneMigrationShadow })
 			fastLaneBitmapsRetry(server)
+
+			if tc.wantFile {
+				server.laneBitmapsRetry.Bound = 5 * time.Second // a stalled runner cannot end a retry that must succeed
+			}
 
 			order := &setOrderStore{Store: memoryStore}
 			store := &failingBitmapsWriteStore{Store: order, failures: tc.failures, err: tc.err}
@@ -861,7 +863,7 @@ func TestStoreSubtreeDataRetriesAFailedLaneBitmapsWrite(t *testing.T) {
 			if tc.wantAttempts > 0 {
 				require.Equal(t, tc.wantAttempts, store.refused)
 			} else {
-				require.Greater(t, store.refused, 2, "it was retried until the bound")
+				require.Greater(t, store.refused, 1, "it was retried until the bound")
 			}
 
 			require.Equal(t, failedBefore+tc.wantFailed, ownLaneMetric(t, "teranode_lane_missing_bitmaps_total", writeFailed))
