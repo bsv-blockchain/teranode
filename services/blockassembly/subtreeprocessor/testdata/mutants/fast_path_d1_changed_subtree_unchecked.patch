@@ -1,8 +1,11 @@
 diff --git a/services/blockassembly/subtreeprocessor/reorg_fast_path.go b/services/blockassembly/subtreeprocessor/reorg_fast_path.go
-index ce36b4d68..338961f0c 100644
+index c5d9aaf43..f41f511e5 100644
 --- a/services/blockassembly/subtreeprocessor/reorg_fast_path.go
 +++ b/services/blockassembly/subtreeprocessor/reorg_fast_path.go
-@@ -424,7 +424,7 @@ func (stp *SubtreeProcessor) readEffectiveD1(ctx context.Context, plan *fastReor
+@@ -422,13 +422,13 @@ func (stp *SubtreeProcessor) readEffectiveD1(ctx context.Context, plan *fastReor
+ 	plan.d1Nodes = make([]subtreepkg.Node, 0, len(effective))
+ 	plan.d1Inpoints = make([]subtreepkg.TxInpoints, 0, len(effective))
+ 
  	for _, d := range effective {
  		i := needed[d.Subtree]
  
@@ -11,3 +14,6 @@ index ce36b4d68..338961f0c 100644
  			stp.logger.Warnf("[reorgInPlace] the lost block's subtree %d changed between two reads, declining", d.Subtree)
  
  			return "read_failed"
+ 		}
+ 
+ 		for _, parent := range inpoints[i][d.Node].ParentTxHashes {

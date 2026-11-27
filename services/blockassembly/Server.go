@@ -1259,6 +1259,14 @@ func (ba *BlockAssembly) storeSubtreeMeta(ctx context.Context, subtreeRequest su
 	prometheusBlockAssemblySubtreeStoreStep.WithLabelValues("meta_build").Observe(time.Since(buildStart).Seconds())
 
 	if !ok {
+		// A build that ended because the context did (a shutdown during its backoff) is cancelled,
+		// not failed, as a cancelled write retry is.
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			outcome.cancel(ctxErr)
+
+			return
+		}
+
 		err := errors.NewProcessingError("[BlockAssembly:storeSubtreeData][%s] failed to build subtree meta", subtree.RootHash().String())
 
 		// a reset cleared the map the meta is built from: its own side effect, not a store failure
@@ -1358,14 +1366,20 @@ func (ba *BlockAssembly) storeSubtreeData(ctx context.Context, subtreeRequest su
 			// that reads the result or the stored set. A missing one is not rebuilt, unless the stored
 			// set needs it: a subtree whose file landed and whose meta failed is sent again by the
 			// processor and would never reach the set otherwise. The build runs here, before the
-			// caller is answered, but nobody makes it wait: the processor's re-send does not, and
-			// reads the live maps like every first-write meta build. A reset that clears them
-			// supersedes the request, and the build then ends as cancelled, not failed. It also
-			// delays the ordered announcements behind this request by one meta build; only a
-			// re-send, which does not announce, or a rare late send finds a subtree without its meta.
+			// caller is answered, so every waiter on ErrChan or Result waits for it: a fork reorg's
+			// store pass waits for every chained subtree, and right after the forward steps a meta is
+			// often still in flight, so the reorg can build it a second time here, and a failed write
+			// can block on a full subtreeRetryChan. The processor's re-send does not wait, and reads
+			// the live maps like every first-write meta build. A reset that clears them supersedes the
+			// request, and the build then ends as cancelled, not failed. It also delays the ordered
+			// announcements behind this request by one meta build; only a re-send, which does not
+			// announce, or a rare late send finds a subtree without its meta.
 			if subtreeRequest.Result == nil && ba.storedSet == nil {
 				outcome.metaAbsent()
-			} else if metaExists, _ := ba.subtreeStore.Exists(ctx, subtree.RootHash()[:], fileformat.FileTypeSubtreeMeta); metaExists {
+			} else if metaExists, existsErr := ba.subtreeStore.Exists(ctx, subtree.RootHash()[:], fileformat.FileTypeSubtreeMeta); existsErr != nil {
+				ba.logger.Warnf("[BlockAssembly:storeSubtreeData][%s] could not check the subtree meta: %s", subtree.RootHash().String(), existsErr)
+				outcome.fail(errors.NewStorageError("[BlockAssembly:storeSubtreeData][%s] could not check the subtree meta", subtree.RootHash().String(), existsErr))
+			} else if metaExists {
 				outcome.metaStored()
 			} else if ba.storedSet != nil {
 				ba.storeSubtreeMeta(ctx, subtreeRequest, dah, outcome, subtreeRetryChan)

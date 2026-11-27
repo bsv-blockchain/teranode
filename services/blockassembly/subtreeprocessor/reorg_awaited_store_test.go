@@ -19,8 +19,8 @@ import (
 // Issue 2269, plan PR 2b: a fork reorg stores the subtrees it built before it writes any
 // longest-chain mark, and announces them only after the marks. With blockassembly_reorgStoreDeadline
 // set, a store that fails or does not finish in time fails the reorg before the marks; a reset
-// follows (failedForkReorgNeedsReset). With the deadline at 0 the reorg waits as it always did and
-// never fails on a store.
+// follows (failedForkReorgNeedsReset). With the deadline at 0 the reorg waits as it always did and a
+// write that failed and went to the retry path does not fail it.
 
 // storeRecorder answers store requests and records, for each request, whether it asked to
 // announce and how many longest-chain marks had been written when it arrived.

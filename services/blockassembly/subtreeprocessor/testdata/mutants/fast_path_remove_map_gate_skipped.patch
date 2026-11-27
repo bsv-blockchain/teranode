@@ -1,8 +1,11 @@
 diff --git a/services/blockassembly/subtreeprocessor/reorg_fast_path.go b/services/blockassembly/subtreeprocessor/reorg_fast_path.go
-index cdac49551..b9fe0f190 100644
+index c5d9aaf43..400c0a68f 100644
 --- a/services/blockassembly/subtreeprocessor/reorg_fast_path.go
 +++ b/services/blockassembly/subtreeprocessor/reorg_fast_path.go
-@@ -225,9 +225,7 @@ func (stp *SubtreeProcessor) planFastReorg(ctx context.Context, moveBackBlocks,
+@@ -235,15 +235,13 @@ func (stp *SubtreeProcessor) planFastReorg(ctx context.Context, moveBackBlocks,
+ 				overlap = true
+ 			}
+ 
  			return overlap
  		})
  
@@ -13,3 +16,6 @@ index cdac49551..b9fe0f190 100644
  	}
  
  	// Effective D1 is raw D1 minus what the tx map holds, membership only, as the move-back's dedup.
+ 	suppressed := make(map[chainhash.Hash]struct{})
+ 	effective := make([]reorgDeltaNode, 0, len(plan.delta.D1))
+ 

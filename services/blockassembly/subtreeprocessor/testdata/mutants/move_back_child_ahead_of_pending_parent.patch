@@ -1,8 +1,10 @@
 diff --git a/services/blockassembly/subtreeprocessor/SubtreeProcessor.go b/services/blockassembly/subtreeprocessor/SubtreeProcessor.go
-index 081e33848..cc70c4c84 100644
 --- a/services/blockassembly/subtreeprocessor/SubtreeProcessor.go
 +++ b/services/blockassembly/subtreeprocessor/SubtreeProcessor.go
-@@ -6502,7 +6502,7 @@ func (stp *SubtreeProcessor) moveBackBlockBulkBuild(ctx context.Context, block *
+@@ -7106,13 +7106,13 @@ func (stp *SubtreeProcessor) moveBackBlockBulkBuild(ctx context.Context, block *
+ 
+ 				held.keep(flatHashes[i])
+ 
  				continue
  			}
  
@@ -11,3 +13,6 @@ index 081e33848..cc70c4c84 100644
  				continue
  			}
  
+ 			allNodes = append(allNodes, flatNodes[i])
+ 		}
+ 	}

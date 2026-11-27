@@ -1,0 +1,19 @@
+diff --git a/services/blockassembly/subtreeprocessor/SubtreeProcessor.go b/services/blockassembly/subtreeprocessor/SubtreeProcessor.go
+--- a/services/blockassembly/subtreeprocessor/SubtreeProcessor.go
++++ b/services/blockassembly/subtreeprocessor/SubtreeProcessor.go
+@@ -2040,14 +2040,14 @@ func (stp *SubtreeProcessor) reset(blockHeader *model.BlockHeader, moveBackBlock
+ 	//
+ 	// Best-effort, like resetSubtreeState's Clear of the incoming half:
+ 	// verify rather than assume, so a failed rotation that leaves the map
+ 	// still populated fails reset outright instead of silently reloading on
+ 	// top of stale entries (SetIfNotExists would report them as "already
+ 	// exists" and drop the corresponding fresh reload data).
+-	stp.supersedeStoreRequests()
+ 	stp.currentTxMap.Clear()
++	stp.supersedeStoreRequests() // mutant: supersede after the clear
+ 
+ 	if diskMap, ok := stp.currentTxMap.(*DiskTxMap); ok {
+ 		stp.reportDiskTxMapCloseWarn(diskMap, "reset_clear")
+ 	}
+ 
+ 	if remaining := stp.currentTxMap.Length(); remaining != 0 {

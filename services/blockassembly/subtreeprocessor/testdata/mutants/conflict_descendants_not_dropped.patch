@@ -1,8 +1,10 @@
 diff --git a/services/blockassembly/subtreeprocessor/SubtreeProcessor.go b/services/blockassembly/subtreeprocessor/SubtreeProcessor.go
-index 2d7cbd297..d7745207b 100644
 --- a/services/blockassembly/subtreeprocessor/SubtreeProcessor.go
 +++ b/services/blockassembly/subtreeprocessor/SubtreeProcessor.go
-@@ -8614,7 +8614,7 @@ func (stp *SubtreeProcessor) processRemainderTxHashes(ctx context.Context, chain
+@@ -9408,13 +9408,13 @@ func (stp *SubtreeProcessor) processRemainderTxHashes(ctx context.Context, chain
+ 	}
+ 
+ 	if err := g.Wait(); err != nil {
  		return errors.NewProcessingError("error collecting remainder txs", err)
  	}
  
@@ -11,3 +13,6 @@ index 2d7cbd297..d7745207b 100644
  		if err := dropConflictingDescendants(ctx, remainderSubtrees, conflictingHashes, currentTxMap, workers); err != nil {
  			return err
  		}
+ 
+ 		// dropConflictingDescendants shrank each view in place, leaving a gap
+ 		// after each one. Move the views down, in order, so the remainder is

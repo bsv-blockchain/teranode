@@ -1,8 +1,10 @@
 diff --git a/services/blockassembly/subtreeprocessor/SubtreeProcessor.go b/services/blockassembly/subtreeprocessor/SubtreeProcessor.go
-index 0c5c39eb8..4467dd568 100644
 --- a/services/blockassembly/subtreeprocessor/SubtreeProcessor.go
 +++ b/services/blockassembly/subtreeprocessor/SubtreeProcessor.go
-@@ -6148,7 +6148,7 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveBackBlocks []*
+@@ -6380,13 +6380,13 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveBackBlocks []*
+ 		// the store marks unmined, and a queued tx is one, as with the last
+ 		// step's drain before. A tx that arrives after its own block's step is
+ 		// checked against that block's kept set on arrival, or when placed if
  		// it arrived before the set was kept, while blockassembly_minedTxSetRetention lasts (recent_mined_sets.go).
  		// One a positive double-spend window holds back past its block's drain
  		// reaches only later blocks' filters and the kept sets.
@@ -11,3 +13,6 @@ index 0c5c39eb8..4467dd568 100644
  			return err
  		}
  
+ 		markedBefore := len(markOnLongestChain)
+ 
+ 		if transactionMap != nil {

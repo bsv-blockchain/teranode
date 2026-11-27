@@ -1,8 +1,10 @@
 diff --git a/services/blockassembly/subtreeprocessor/store_queue.go b/services/blockassembly/subtreeprocessor/store_queue.go
-index 944a4463f..05937caf6 100644
 --- a/services/blockassembly/subtreeprocessor/store_queue.go
 +++ b/services/blockassembly/subtreeprocessor/store_queue.go
-@@ -284,7 +284,7 @@ func (q *StoreQueue) pickLocked() (it *storeItem, cancelled []*storeItem) {
+@@ -331,13 +331,13 @@ func (q *StoreQueue) pickLocked() (it *storeItem, cancelled []*storeItem) {
+ 	if i < 0 {
+ 		i = 0
+ 	}
  
  	it = q.ready[i]
  
@@ -11,3 +13,6 @@ index 944a4463f..05937caf6 100644
  		cancelled = q.dropLocked(func(other *storeItem) bool { return other == it })
  
  		return nil, append(cancelled, q.admitLocked()...)
+ 	}
+ 
+ 	q.ready = removeAt(q.ready, i)

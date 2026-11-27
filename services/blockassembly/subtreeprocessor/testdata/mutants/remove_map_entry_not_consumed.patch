@@ -1,8 +1,10 @@
 diff --git a/services/blockassembly/subtreeprocessor/SubtreeProcessor.go b/services/blockassembly/subtreeprocessor/SubtreeProcessor.go
-index 2d7cbd297..7aec14db0 100644
 --- a/services/blockassembly/subtreeprocessor/SubtreeProcessor.go
 +++ b/services/blockassembly/subtreeprocessor/SubtreeProcessor.go
-@@ -8598,7 +8598,7 @@ func (stp *SubtreeProcessor) processRemainderTxHashes(ctx context.Context, chain
+@@ -9392,13 +9392,13 @@ func (stp *SubtreeProcessor) processRemainderTxHashes(ctx context.Context, chain
+ 					pos++
+ 
+ 					continue
  				}
  
  				if f&flagIsRemoveMap != 0 {
@@ -11,3 +13,6 @@ index 2d7cbd297..7aec14db0 100644
  				}
  			}
  
+ 			if pos != len(view) {
+ 				return errors.NewProcessingError("[processRemainderTxHashes] subtree %d kept %d nodes, counted %d", idx, pos, len(view))
+ 			}

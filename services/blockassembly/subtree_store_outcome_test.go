@@ -12,10 +12,13 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
 	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/services/blockassembly/subtreeprocessor"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
+	"github.com/bsv-blockchain/teranode/stores/blob"
 	"github.com/bsv-blockchain/teranode/stores/blob/options"
+	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/testutil/blobfault"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/mock"
@@ -282,6 +285,46 @@ func TestSubtreeStoreResult_SubtreeExistsMetaDoesNot_ExistedAlreadyMetaNotStored
 	p.requireAnnounced(t, subtree.RootHash())
 }
 
+// existsFaultStore fails Exists for one file type, so a store that cannot be read is told from one
+// that has no such file.
+type existsFaultStore struct {
+	blob.Store
+	failType fileformat.FileType
+	err      error
+}
+
+func (s *existsFaultStore) Exists(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...options.FileOption) (bool, error) {
+	if fileType == s.failType {
+		return false, s.err
+	}
+
+	return s.Store.Exists(ctx, key, fileType, opts...)
+}
+
+func TestSubtreeStoreResult_ExistingSubtreeMetaExistsErrors_FailedNotMissing(t *testing.T) {
+	server, store, _, _ := setup(t)
+	subtree, txMap := makeSubtree(t, 6)
+
+	subtreeBytes, err := subtree.Serialize()
+	require.NoError(t, err)
+	require.NoError(t, store.Set(t.Context(), subtree.RootHash()[:], fileformat.FileTypeSubtree, subtreeBytes))
+	require.NoError(t, store.Set(t.Context(), subtree.RootHash()[:], fileformat.FileTypeSubtreeMeta, []byte("meta")))
+
+	server.subtreeStore = &existsFaultStore{Store: store, failType: fileformat.FileTypeSubtreeMeta, err: errors.NewStorageError("head object failed")}
+	before := testutil.ToFloat64(prometheusBlockAssemblySubtreeStoreFailed)
+
+	p := startStorePipeline(t, server)
+	result := awaitResult(t, p.store(subtree, txMap, false))
+
+	require.Error(t, result.Err, "a failed Exists is a failure, not a missing meta")
+	require.ErrorIs(t, result.Err, errors.ErrStorageError)
+	require.False(t, result.OK())
+	require.True(t, result.ExistedAlready)
+	require.True(t, result.SubtreeStored)
+	require.False(t, result.MetaStored)
+	require.Equal(t, before+1, testutil.ToFloat64(prometheusBlockAssemblySubtreeStoreFailed))
+}
+
 func TestSubtreeStoreResult_ExistingSubtreeWithItsMeta_MetaStoredWithoutAWrite(t *testing.T) {
 	server, store, _, _ := setup(t)
 	subtree, txMap := makeSubtree(t, 7)
@@ -385,6 +428,42 @@ func TestSubtreeStoreResult_MetaReadAlwaysFails_FailedAfterTheRetries(t *testing
 	require.False(t, result.OK())
 	require.False(t, exists(t, store, subtree, fileformat.FileTypeSubtreeMeta))
 	require.Equal(t, before+1, testutil.ToFloat64(prometheusBlockAssemblySubtreeStoreFailed))
+}
+
+// cancelOnRead is a ParentTxMap whose read fails and cancels the context, as a shutdown during
+// the meta build does.
+type cancelOnRead struct {
+	subtreeprocessor.TxInpointsMap
+
+	cancel context.CancelFunc
+}
+
+func (m *cancelOnRead) GetWithErr(chainhash.Hash) (*subtreepkg.TxInpoints, bool, error) {
+	m.cancel()
+
+	return nil, false, errors.NewStorageError("disk tx map read failed")
+}
+
+func TestSubtreeStoreResult_ShutdownDuringMetaBuildBackoff_Cancelled(t *testing.T) {
+	server, _, _, _ := setup(t)
+	subtree, txMap := makeSubtree(t, 11)
+	setForTest(t, &metaBuildBackoff, time.Hour)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	resultChan := make(chan subtreeprocessor.StoreResult, 1)
+	request := subtreeprocessor.NewSubtreeRequest{Subtree: subtree, ParentTxMap: &cancelOnRead{TxInpointsMap: txMap, cancel: cancel}, Result: resultChan}
+	outcome := newSubtreeStoreOutcome(request, true, nil)
+	outcome.subtreeStored(false)
+
+	server.storeSubtreeMeta(ctx, request, 1, outcome, make(chan *subtreeRetrySend, 1))
+
+	result := awaitResult(t, resultChan)
+
+	require.True(t, result.Cancelled, "%+v", result)
+	require.Error(t, result.Err)
+	require.False(t, result.OK())
 }
 
 // alreadyPublished answers every subtree Set as the file store does when another writer published
@@ -510,4 +589,394 @@ func TestSubtreeStoreResult_RetryFindsTheSubtreeAlreadyStored_ReportsExistedAndS
 	require.True(t, result.OK(), "%+v", result)
 	require.True(t, result.ExistedAlready)
 	p.requireNoAnnouncement(t)
+}
+
+// A reset clears the tx map that the store requests of the state it retires were built from. A meta
+// build of such a request that finds no parent is the reset's own side effect: it is cancelled, not
+// failed (issue 2269, PR 4a).
+
+// supersedeHarness is a real subtree processor whose subtree requests the test takes off the channel
+// and feeds to a store pipeline itself.
+type supersedeHarness struct {
+	stp      *subtreeprocessor.SubtreeProcessor
+	requests chan subtreeprocessor.NewSubtreeRequest
+	seq      int
+}
+
+func newSupersedeHarness(t *testing.T) *supersedeHarness {
+	t.Helper()
+
+	initPrometheusMetrics()
+
+	items := setupBlockAssemblyTest(t)
+	items.blockAssembler.subtreeProcessor.Stop(t.Context())
+
+	stp, err := subtreeprocessor.NewSubtreeProcessor(t.Context(), ulogger.TestLogger{}, items.blockAssembler.settings, items.blobStore, items.blockchainClient, items.utxoStore, items.newSubtreeChan)
+	require.NoError(t, err)
+
+	stp.Start(t.Context())
+
+	return &supersedeHarness{stp: stp, requests: items.newSubtreeChan}
+}
+
+// complete queues the transactions of one complete subtree, so the processor goroutine places them, and returns its request.
+func (h *supersedeHarness) complete(t *testing.T) subtreeprocessor.NewSubtreeRequest {
+	t.Helper()
+
+	parent := chainhash.HashH([]byte("parent"))
+	nodes := make([]subtreepkg.Node, 0, 4)
+	inpoints := make([]*subtreepkg.TxInpoints, 0, 4)
+
+	for range 4 {
+		h.seq++
+
+		nodes = append(nodes, subtreepkg.Node{Hash: chainhash.HashH([]byte(fmt.Sprintf("superseded-tx-%d", h.seq))), Fee: 1, SizeInBytes: 100})
+		inpoints = append(inpoints, &subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{parent}})
+	}
+
+	h.stp.AddBatch(nodes, inpoints)
+
+	select {
+	case req := <-h.requests:
+		return req
+	case <-time.After(10 * time.Second):
+		t.Fatal("the processor sent no subtree")
+
+		return subtreeprocessor.NewSubtreeRequest{}
+	}
+}
+
+func (h *supersedeHarness) reset(t *testing.T) {
+	t.Helper()
+
+	require.NoError(t, h.tryReset())
+}
+
+// tryReset runs a no-op reset and returns its error, for a caller off the test goroutine.
+func (h *supersedeHarness) tryReset() error {
+	return h.stp.Reset(&model.BlockHeader{
+		Version:        1,
+		HashPrevBlock:  &chainhash.Hash{},
+		HashMerkleRoot: &chainhash.Hash{},
+		Nonce:          2269,
+	}, nil, nil, false, func() error { return nil }).Err
+}
+
+// pausedParents is a ParentTxMap whose first read signals that the build is under way and then waits.
+type pausedParents struct {
+	subtreeprocessor.TxInpointsMap
+
+	once    sync.Once
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (m *pausedParents) Get(hash chainhash.Hash) (*subtreepkg.TxInpoints, bool) {
+	m.once.Do(func() { close(m.entered) })
+	<-m.release
+
+	return m.TxInpointsMap.Get(hash)
+}
+
+func TestSubtreeStoreSuperseded_ResetWhileTheMetaBuildIsPaused_ResetDoesNotWaitAndTheBuildIsCancelled(t *testing.T) {
+	server, _, _, _ := setup(t)
+	h := newSupersedeHarness(t)
+	p := startStorePipeline(t, server)
+
+	req := h.complete(t)
+	paused := &pausedParents{TxInpointsMap: req.ParentTxMap, entered: make(chan struct{}), release: make(chan struct{})}
+	result := make(chan subtreeprocessor.StoreResult, 1)
+	req.ParentTxMap = paused
+	req.Result = result
+	p.in <- req
+
+	select {
+	case <-paused.entered:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the meta build never started")
+	}
+
+	failedBefore := testutil.ToFloat64(prometheusBlockAssemblySubtreeStoreFailed)
+
+	// the build is blocked inside the map: a reset that waited for it would not return
+	resetDone := make(chan error, 1)
+
+	go func() { resetDone <- h.tryReset() }()
+
+	select {
+	case err := <-resetDone:
+		require.NoError(t, err)
+	case <-time.After(10 * time.Second):
+		t.Fatal("reset waited for the paused store request")
+	}
+
+	close(paused.release)
+
+	got := awaitResult(t, result)
+
+	require.True(t, got.Cancelled, "%+v", got)
+	require.False(t, got.OK())
+	require.Equal(t, failedBefore, testutil.ToFloat64(prometheusBlockAssemblySubtreeStoreFailed), "a superseded build is not a store failure")
+}
+
+func TestSubtreeStoreSuperseded_RequestMadeAfterTheReset_StillFailsWhenItsParentIsMissing(t *testing.T) {
+	server, _, _, _ := setup(t)
+	h := newSupersedeHarness(t)
+	p := startStorePipeline(t, server)
+
+	h.reset(t)
+
+	req := h.complete(t)
+	parents := &noParents{TxInpointsMap: req.ParentTxMap}
+	result := make(chan subtreeprocessor.StoreResult, 1)
+	req.ParentTxMap = parents
+	req.Result = result
+
+	failedBefore := testutil.ToFloat64(prometheusBlockAssemblySubtreeStoreFailed)
+
+	p.in <- req
+
+	got := awaitResult(t, result)
+
+	require.False(t, got.Cancelled, "%+v", got)
+	require.Error(t, got.Err)
+	require.Equal(t, failedBefore+1, testutil.ToFloat64(prometheusBlockAssemblySubtreeStoreFailed))
+}
+
+func TestSubtreeStoreSuperseded_ReadErrorAfterTheReset_IsNotRetried(t *testing.T) {
+	server, _, _, _ := setup(t)
+	h := newSupersedeHarness(t)
+	p := startStorePipeline(t, server)
+
+	req := h.complete(t)
+	h.reset(t)
+
+	reads := &countingFlakyReads{flakyReads: flakyReads{TxInpointsMap: req.ParentTxMap, fails: 1 << 30}}
+	result := make(chan subtreeprocessor.StoreResult, 1)
+	req.ParentTxMap = reads
+	req.Result = result
+	p.in <- req
+
+	got := awaitResult(t, result)
+
+	require.True(t, got.Cancelled, "%+v", got)
+	require.Equal(t, 1, reads.count(), "a superseded build does not wait and read again")
+}
+
+// countingFlakyReads is flakyReads that counts its reads.
+type countingFlakyReads struct {
+	flakyReads
+
+	cmu   sync.Mutex
+	reads int
+}
+
+func (m *countingFlakyReads) GetWithErr(hash chainhash.Hash) (*subtreepkg.TxInpoints, bool, error) {
+	m.cmu.Lock()
+	m.reads++
+	m.cmu.Unlock()
+
+	return m.flakyReads.GetWithErr(hash)
+}
+
+func (m *countingFlakyReads) count() int {
+	m.cmu.Lock()
+	defer m.cmu.Unlock()
+
+	return m.reads
+}
+
+// Issue 2269, plan PR 3: the storage side adds a subtree's root to the stored set when its store
+// ends with everything it has to write stored, and notes a store that failed for good.
+
+func storedSetServer(t *testing.T) (*BlockAssembly, *subtreeprocessor.StoredSet) {
+	t.Helper()
+
+	server, _, _, _ := setup(t)
+	server.storedSet = subtreeprocessor.NewStoredSet()
+
+	return server, server.storedSet
+}
+
+func TestStoredSet_AStoredSubtreeAndItsMetaAddTheRoot(t *testing.T) {
+	server, set := storedSetServer(t)
+	subtree, txMap := makeSubtree(t, 101)
+
+	p := startStorePipeline(t, server)
+	result := awaitResult(t, p.store(subtree, txMap, true))
+
+	require.True(t, result.OK(), "%+v", result)
+	require.True(t, set.Has(*subtree.RootHash()), "the root is in the set when the result is posted")
+	require.False(t, set.Retrying(*subtree.RootHash()))
+}
+
+func TestStoredSet_ASubtreeStoredByARetryAddsTheRootAndTheRetryIsNoLongerInFlight(t *testing.T) {
+	server, set := storedSetServer(t)
+	subtree, txMap := makeSubtree(t, 102)
+
+	fault := blobfault.New(server.subtreeStore)
+	fault.OnSet(subtree.RootHash()[:], fileformat.FileTypeSubtree, blobfault.Rule{FailTimes: 1})
+	server.subtreeStore = fault
+
+	p := startStorePipeline(t, server)
+	result := awaitResult(t, p.store(subtree, txMap, true))
+
+	require.True(t, result.OK(), "%+v", result)
+	require.True(t, set.Has(*subtree.RootHash()))
+	require.False(t, set.Retrying(*subtree.RootHash()), "the retry settled")
+}
+
+func TestStoredSet_ARetryThatIsExhaustedLeavesTheRootOutAndNotesTheFailure(t *testing.T) {
+	server, set := storedSetServer(t)
+	subtree, txMap := makeSubtree(t, 103)
+
+	fault := blobfault.New(server.subtreeStore)
+	fault.OnSet(subtree.RootHash()[:], fileformat.FileTypeSubtree, blobfault.Rule{FailTimes: blobfault.Always})
+	server.subtreeStore = fault
+	setForTest(t, &subtreeRetryLimit, 1)
+
+	p := startStorePipeline(t, server)
+	result := awaitResult(t, p.store(subtree, txMap, true))
+
+	require.Error(t, result.Err)
+	require.False(t, set.Has(*subtree.RootHash()))
+	require.True(t, set.HasFailed(*subtree.RootHash()), "the processor sends it again from memory")
+	require.False(t, set.Retrying(*subtree.RootHash()))
+}
+
+// A subtree whose file landed but whose meta did not: the second request for it finds the file and
+// must build the meta, or the root never reaches the set and the prefix stops there for good.
+func TestStoredSet_AnExistingSubtreeWithoutItsMetaGetsTheMetaBuiltAndIsStored(t *testing.T) {
+	server, set := storedSetServer(t)
+	subtree, txMap := makeSubtree(t, 104)
+
+	subtreeBytes, err := subtree.Serialize()
+	require.NoError(t, err)
+	require.NoError(t, server.subtreeStore.Set(t.Context(), subtree.RootHash()[:], fileformat.FileTypeSubtree, subtreeBytes))
+
+	p := startStorePipeline(t, server)
+
+	// no Result channel: the processor's re-enqueue does not ask for one
+	errChan := make(chan error, 1)
+	p.in <- subtreeprocessor.NewSubtreeRequest{Subtree: subtree, ParentTxMap: txMap, SkipNotification: true, ErrChan: errChan}
+	require.NoError(t, <-errChan)
+
+	require.True(t, set.Has(*subtree.RootHash()), "the meta was built")
+	require.True(t, exists(t, server.subtreeStore, subtree, fileformat.FileTypeSubtreeMeta))
+}
+
+func TestStoredSet_AMetaThatFailedForGoodIsStoredByTheSecondRequest(t *testing.T) {
+	server, set := storedSetServer(t)
+	subtree, txMap := makeSubtree(t, 105)
+
+	fault := blobfault.New(server.subtreeStore)
+	fault.OnSet(subtree.RootHash()[:], fileformat.FileTypeSubtreeMeta, blobfault.Rule{FailTimes: blobfault.Always})
+	server.subtreeStore = fault
+	setForTest(t, &subtreeRetryLimit, 1)
+
+	p := startStorePipeline(t, server)
+
+	first := awaitResult(t, p.store(subtree, txMap, true))
+	require.Error(t, first.Err)
+	require.False(t, set.Has(*subtree.RootHash()), "the meta is missing")
+	require.True(t, set.HasFailed(*subtree.RootHash()))
+
+	fault.OnSet(subtree.RootHash()[:], fileformat.FileTypeSubtreeMeta, blobfault.Rule{})
+
+	second := awaitResult(t, p.store(subtree, txMap, true))
+	require.True(t, second.OK(), "%+v", second)
+	require.True(t, set.Has(*subtree.RootHash()))
+	require.False(t, set.HasFailed(*subtree.RootHash()), "stored since")
+}
+
+func TestStoredSet_WithoutAMetaOnlyTheSubtreeIsNeeded(t *testing.T) {
+	server, set := storedSetServer(t)
+	server.settings.BlockAssembly.StoreTxInpointsForSubtreeMeta = false
+	subtree, txMap := makeSubtree(t, 106)
+
+	p := startStorePipeline(t, server)
+	result := awaitResult(t, p.store(subtree, txMap, true))
+
+	require.True(t, result.OK(), "%+v", result)
+	require.True(t, set.Has(*subtree.RootHash()))
+}
+
+// The processor's stall rule leaves a root alone while its write is in the retry processor, and
+// only the store side can tell it so: the count must be up while the retried write is held.
+func TestStoredSet_ARootIsRetryingWhileItsRetriedWriteIsHeld(t *testing.T) {
+	for _, fileType := range []fileformat.FileType{fileformat.FileTypeSubtree, fileformat.FileTypeSubtreeMeta} {
+		t.Run(fileType.String(), func(t *testing.T) {
+			server, set := storedSetServer(t)
+			subtree, txMap := makeSubtree(t, 107)
+			root := *subtree.RootHash()
+
+			// the first write is held, then fails; the retry meets a second rule that holds it too
+			fail, failEntered := make(chan struct{}), make(chan struct{}, 1)
+			fault := blobfault.New(server.subtreeStore)
+			fault.OnSet(root[:], fileType, blobfault.Rule{FailTimes: 1, Block: fail, Entered: failEntered})
+			server.subtreeStore = fault
+
+			p := startStorePipeline(t, server)
+			result := p.store(subtree, txMap, true)
+
+			select {
+			case <-failEntered:
+			case <-time.After(10 * time.Second):
+				t.Fatal("the first write never reached the store")
+			}
+
+			release, entered := make(chan struct{}), make(chan struct{}, 1)
+			fault.OnSet(root[:], fileType, blobfault.Rule{Block: release, Entered: entered})
+			close(fail)
+
+			var releaseOnce sync.Once
+			unblock := func() { releaseOnce.Do(func() { close(release) }) }
+			t.Cleanup(unblock) // a failed assertion must not leave the write held
+
+			select {
+			case <-entered:
+			case <-time.After(10 * time.Second):
+				t.Fatal("the retry never reached the store")
+			}
+
+			require.True(t, set.Retrying(root), "the write is in the retry processor")
+
+			unblock()
+
+			require.True(t, awaitResult(t, result).OK())
+			require.False(t, set.Retrying(root), "the retry settled")
+		})
+	}
+}
+
+// Every way a request settles must leave the retry count where it was, or the progress rule,
+// which waits for no retry in flight, would stay off for good.
+func TestStoredSet_EveryWayARequestSettlesBalancesTheRetryCount(t *testing.T) {
+	initPrometheusMetrics() // fail counts the request; the counter is nil until initialised
+
+	root := chainhash.HashH([]byte("outcome"))
+	boom := errors.NewStorageError("boom")
+
+	for name, settle := range map[string]func(o *subtreeStoreOutcome){
+		"stored":         func(o *subtreeStoreOutcome) { o.subtreeStored(false); o.metaStored() },
+		"existed":        func(o *subtreeStoreOutcome) { o.subtreeStored(true); o.metaAbsent() },
+		"retry stored":   func(o *subtreeStoreOutcome) { o.toRetry(); o.subtreeStored(false); o.metaStored() },
+		"retry failed":   func(o *subtreeStoreOutcome) { o.toRetry(); o.fail(boom); o.metaStored() },
+		"cancelled":      func(o *subtreeStoreOutcome) { o.toRetry(); o.cancel(boom); o.cancel(boom) },
+		"aborted":        func(o *subtreeStoreOutcome) { o.abort(boom) },
+		"both retrying":  func(o *subtreeStoreOutcome) { o.toRetry(); o.toRetry(); o.subtreeStored(false); o.metaStored() },
+		"settled twice":  func(o *subtreeStoreOutcome) { o.subtreeStored(false); o.metaStored(); o.fail(boom) },
+		"meta not built": func(o *subtreeStoreOutcome) { o.subtreeStored(false); o.fail(boom) },
+		"retry too late": func(o *subtreeStoreOutcome) { o.subtreeStored(false); o.metaStored(); o.toRetry() },
+	} {
+		t.Run(name, func(t *testing.T) {
+			set := subtreeprocessor.NewStoredSet()
+			o := newSubtreeStoreOutcome(subtreeprocessor.NewSubtreeRequest{}, true, nil)
+			o.track(set, root)
+
+			settle(o)
+
+			require.False(t, set.Retrying(root))
+		})
+	}
 }

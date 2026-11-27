@@ -1,8 +1,10 @@
 diff --git a/services/blockassembly/subtreeprocessor/store_queue_reorg.go b/services/blockassembly/subtreeprocessor/store_queue_reorg.go
-index 2ca318d2d..3d3244dc7 100644
 --- a/services/blockassembly/subtreeprocessor/store_queue_reorg.go
 +++ b/services/blockassembly/subtreeprocessor/store_queue_reorg.go
-@@ -232,7 +232,7 @@ func (stp *SubtreeProcessor) reorgAwaitedSubtrees() int {
+@@ -231,13 +231,13 @@ func (stp *SubtreeProcessor) runDroppedCleanups() {
+ // cut off, or the setting 0, it is the whole chain: a template published over subtrees that are
+ // not stored would name files nothing can read.
+ func (stp *SubtreeProcessor) reorgAwaitedSubtrees() int {
  	n := len(stp.chainedSubtrees)
  	k0 := stp.settings.BlockAssembly.ReorgAwaitedSubtrees
  
@@ -10,4 +12,7 @@ index 2ca318d2d..3d3244dc7 100644
 +	if k0 <= 0 || n == 0 { // mutant: K0 whether or not the cut is on
  		return n
  	}
+ 
+ 	if budget, ok := stp.blockMaxSizeBudget(); ok {
+ 		var total uint64
  

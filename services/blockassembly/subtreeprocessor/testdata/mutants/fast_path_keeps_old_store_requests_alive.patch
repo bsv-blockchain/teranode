@@ -1,8 +1,11 @@
 diff --git a/services/blockassembly/subtreeprocessor/reorg_fast_path.go b/services/blockassembly/subtreeprocessor/reorg_fast_path.go
-index ce36b4d68..da691f73d 100644
+index c5d9aaf43..3658b8a02 100644
 --- a/services/blockassembly/subtreeprocessor/reorg_fast_path.go
 +++ b/services/blockassembly/subtreeprocessor/reorg_fast_path.go
-@@ -527,7 +527,7 @@ func (stp *SubtreeProcessor) applyFastReorg(ctx context.Context, plan *fastReorg
+@@ -525,13 +525,13 @@ func (stp *SubtreeProcessor) applyFastReorg(ctx context.Context, plan *fastReorg
+ 		return nil, errors.NewProcessingError("[reorgInPlace][%s] error creating the new current subtree", lost.String(), err)
+ 	}
+ 
  	_ = newSubtree.AddCoinbaseNode()
  
  	// The store requests the old subtrees still have in flight read the entries deleted below.
@@ -11,3 +14,6 @@ index ce36b4d68..da691f73d 100644
  
  	stp.retireSubtrees(oldCurrent)
  	stp.currentSubtree.Store(newSubtree)
+ 	stp.retireChainedSubtrees()
+ 
+ 	// The remainder pass of the slow path reads each kept node's position from the map; so does this,
