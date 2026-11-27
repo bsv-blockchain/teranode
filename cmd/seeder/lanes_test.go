@@ -36,6 +36,7 @@ import (
 	"github.com/bsv-blockchain/teranode/util/lane"
 	"github.com/bsv-blockchain/teranode/util/lanereader"
 	"github.com/bsv-blockchain/teranode/util/test"
+	usql "github.com/bsv-blockchain/teranode/util/usql"
 	"github.com/ordishs/gocore"
 	"github.com/stretchr/testify/require"
 )
@@ -423,6 +424,23 @@ func TestSeederStampsLanePositionsAndRows(t *testing.T) {
 	}
 }
 
+// requireCleanClose checks the seed's lease closed clean with every position of grant counted used.
+func requireCleanClose(t *testing.T, store blockchain_store.Store, grant lane.Grant) {
+	t.Helper()
+
+	withDB, ok := store.(interface{ GetDB() *usql.DB })
+	require.True(t, ok)
+
+	var (
+		kind string
+		last int64
+	)
+
+	require.NoError(t, withDB.GetDB().QueryRowContext(context.Background(), `SELECT kind, last FROM lane_close WHERE lane = $1`, int(grant.Lane)).Scan(&kind, &last))
+	require.Equal(t, "clean", kind)
+	require.Equal(t, grant.Last, lane.FromSigned(last), "the close counts the whole grant used")
+}
+
 func seedStampsPositionsAndRows(t *testing.T, heights []uint32, postgres bool) {
 	f := newSeedFixture(t, settings.LaneMigrationShadow, 8, heights)
 
@@ -440,6 +458,7 @@ func seedStampsPositionsAndRows(t *testing.T, heights []uint32, postgres bool) {
 	grant := f.recordedGrant()
 	require.Equal(t, uint64(len(f.records)), grant.Len())
 	f.requireStamped(grant)
+	requireCleanClose(t, f.blockchainStore(), grant)
 
 	ctx := context.Background()
 	bc := f.blockchainStore()
@@ -790,6 +809,47 @@ func TestSeederFailsWhenItCannotRecordTheImport(t *testing.T) {
 		require.NoError(t, err)
 		require.Empty(t, rows, "no row for height %d", m.Height)
 	}
+}
+
+// failRowsDoneStore is a blockchain store whose write of the rows-done record fails.
+type failRowsDoneStore struct {
+	blockchain_store.Store
+}
+
+func (s failRowsDoneStore) SetState(ctx context.Context, key string, data []byte) error {
+	if strings.HasPrefix(key, seederRowsKeyPrefix) && len(data) > 0 {
+		return errors.NewStorageError("refused")
+	}
+
+	return s.Store.SetState(ctx, key, data)
+}
+
+// A seed that cannot record its rows as written writes no checkpoint, and -recover-checkpoint then
+// finishes it.
+func TestSeederFailsWhenItCannotRecordTheRows(t *testing.T) {
+	f := newSeedFixture(t, settings.LaneMigrationShadow, 8, fixtureHeights)
+	ctx := context.Background()
+
+	openBlockchainStore = func(logger ulogger.Logger, s *settings.Settings) (blockchain_store.Store, error) {
+		store, err := newBlockchainStore(logger, s)
+
+		return failRowsDoneStore{Store: store}, err
+	}
+	t.Cleanup(func() { openBlockchainStore = newBlockchainStore })
+
+	require.ErrorContains(t, f.seed(false), "refused")
+	openBlockchainStore = newBlockchainStore
+
+	exists, err := blockAssemblerStateExists(ctx, f.blockchainStore())
+	require.NoError(t, err)
+	require.False(t, exists, "no checkpoint")
+
+	require.NoError(t, Seeder(ulogger.TestLogger{}, f.settings, f.dir, f.name, false, false, false, true, true))
+	f.requireStamped(f.recordedGrant())
+
+	written, err := seededRowsWritten(ctx, f.blockchainStore(), f.tip)
+	require.NoError(t, err)
+	require.True(t, written)
 }
 
 // A seed whose rows cannot be written leaves no BlockAssembler checkpoint, so a plain re-run does
