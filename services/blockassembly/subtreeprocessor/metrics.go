@@ -33,9 +33,8 @@ var (
 	// (op="reorgBlocks") and of a reset (op="reset"); see phaseTimer.
 	prometheusSubtreeProcessorReorgPhase *prometheus.HistogramVec
 
-	// prometheusSubtreeProcessorReorgTipToStart is the time from block assembly first seeing a tip
-	// change to the processor starting the fork reorg that follows it, the processor's queue wait
-	// included. It is not a phase of reorg_phase_seconds: those add up to the reorg's total, and
+	// prometheusSubtreeProcessorReorgTipToStart is the time from the start of the block-announcement
+	// pass behind a fork reorg to the processor starting it, the processor's queue wait included. It is not a phase of reorg_phase_seconds: those add up to the reorg's total, and
 	// this wait comes before it.
 	prometheusSubtreeProcessorReorgTipToStart prometheus.Histogram
 
