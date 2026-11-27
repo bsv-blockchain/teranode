@@ -90,12 +90,15 @@ At `off` the seeder writes no lane positions. At `shadow` it also:
    position again.
 3. Gives each record the next position of its height; coinbases take the
    positions after every height.
-4. After the import and the header pass, writes one seeded lane map row per
-   block, listing the block's transactions other than its coinbase, before
-   the BlockAssembler checkpoint.
+4. After the import and the header pass, and before the BlockAssembler
+   checkpoint, writes one seeded lane map row for each block that has a record
+   other than its coinbase in the snapshot. The row covers exactly those
+   records, so it leaves out the block's fully spent transactions, and a block
+   with no such record gets no row.
 
-A seed at `shadow` needs a blockchain database that has never handed out a
-lane position, and refuses a named pipe as its snapshot, because it reads the
+Taking a new grant needs a blockchain database that has never handed out a
+lane position; a re-run of the same snapshot reuses its recorded grant. A seed
+at `shadow` also refuses a named pipe as its snapshot, because it reads the
 file more than once. On utxoset, run `teranode-cli prepare-lane-schema`
 first.
 

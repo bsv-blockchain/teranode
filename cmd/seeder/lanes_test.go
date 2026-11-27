@@ -502,16 +502,20 @@ func seedStampsPositionsAndRows(t *testing.T, heights []uint32, postgres bool) {
 	require.True(t, written)
 	require.NoError(t, f.seed(false))
 
-	// So does a forced run that stops while removing the old import markers.
-	if os.Geteuid() != 0 {
-		blockDir := f.settings.Block.BlockStore.Path
-		require.NoError(t, os.Chmod(blockDir, 0o500))
-		_, err = processUTXOs(ctx, ulogger.TestLogger{}, f.settings, other, f.utxoFile(), "", true, false)
-		require.NoError(t, os.Chmod(blockDir, 0o700))
-		require.ErrorContains(t, err, "failed to clear")
+	// So does a forced run that stops while removing the old import markers: here the tip
+	// record goes and lastProcessed.dat, made a non-empty directory, cannot.
+	marker := filepath.Join(f.settings.Block.BlockStore.Path, "lastProcessed.dat")
+	saved, err := os.ReadFile(marker)
+	require.NoError(t, err)
+	require.NoError(t, os.Remove(marker))
+	require.NoError(t, os.MkdirAll(filepath.Join(marker, "held"), 0o700))
 
-		requireSeedRecords(t, other, f.tip, true)
-	}
+	_, err = processUTXOs(ctx, ulogger.TestLogger{}, f.settings, other, f.utxoFile(), "", true, false)
+	require.ErrorContains(t, err, "failed to clear lastProcessed.dat")
+	requireSeedRecords(t, other, f.tip, true)
+
+	require.NoError(t, os.RemoveAll(marker))
+	require.NoError(t, os.WriteFile(marker, saved, 0o600))
 
 	// A forced run whose import starts and stops clears both records first, so neither
 	// vouches for the records it left.
