@@ -1,0 +1,16 @@
+diff --git a/services/blockassembly/subtreeprocessor/SubtreeProcessor.go b/services/blockassembly/subtreeprocessor/SubtreeProcessor.go
+index a3f87f4ec..f799fcee6 100644
+--- a/services/blockassembly/subtreeprocessor/SubtreeProcessor.go
++++ b/services/blockassembly/subtreeprocessor/SubtreeProcessor.go
+@@ -7858,10 +7858,7 @@ func (stp *SubtreeProcessor) moveForwardBlockDeferringDrain(ctx context.Context,
+ 		// empty block, nothing to do
+ 		stp.logger.Infof("[moveForwardBlock][%s] block has no subtrees, skipping processing", block.String())
+ 
+-		// create the coinbase after processing all other transaction operations
+-		if err = stp.applyCoinbaseUtxos(ctx, block, true, skipNotification); err != nil {
+-			return nil, nil, nil, errors.NewProcessingError("[moveForwardBlock][%s] error processing coinbase utxos", block.String(), err)
+-		}
++		// mutant: an empty block's coinbase is never created
+ 
+ 		// keeps nothing, but drops the expired kept sets, which a catch-up's dequeue loop cannot
+ 		stp.keepMinedSet(block, nil)
