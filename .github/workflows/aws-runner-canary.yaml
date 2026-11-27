@@ -116,3 +116,103 @@ jobs:
           docker logs as-nofile 2>&1 || true
           docker exec as-nofile asinfo -v status || true
           docker rm -f as-nofile || true
+
+  # Trial diagnostic for services/probe TestHistoryEndpointProjectsStage, which
+  # fails on the AWS runners. Its first pipeline evaluation fsyncs the probe
+  # state file under t.TempDir(); the test reads history ~100 ms later. This
+  # measures fsync latency on TMPDIR and runs the test idle, under buffered
+  # write load, and with TMPDIR on tmpfs, on an AWS and a GitHub-hosted runner.
+  probe-fsync-diag:
+    name: probe-fsync-diag (${{ matrix.label }})
+    strategy:
+      fail-fast: false
+      matrix:
+        label:
+          - bsva-aws-arm64-16
+          - teranode-runner-16-core-arm
+    runs-on: ${{ matrix.label }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Restore Go caches
+        uses: ./.github/actions/go-cache
+        with:
+          build_cache: 'false'
+
+      - name: Disks and temp dirs
+        run: |
+          set -x
+          echo "TMPDIR=${TMPDIR:-unset} RUNNER_TEMP=$RUNNER_TEMP"
+          go env GOTMPDIR || true
+          df -hT /tmp "$RUNNER_TEMP" "$GITHUB_WORKSPACE" /dev/shm || true
+          findmnt -T /tmp || true
+          findmnt -T "$GITHUB_WORKSPACE" || true
+          lsblk -o NAME,TYPE,SIZE,MODEL,MOUNTPOINTS || true
+          for q in /sys/block/*/queue/scheduler; do echo "$q: $(cat "$q")"; done || true
+          cat /proc/sys/vm/dirty_ratio /proc/sys/vm/dirty_background_ratio /proc/sys/vm/dirty_expire_centisecs || true
+          nproc; free -m
+
+      - name: Build probe test binary (-race, as make test)
+        run: go test -c -race -o "$RUNNER_TEMP/probe.test" ./services/probe
+
+      - name: fsync latency and test runs
+        shell: bash
+        run: |
+          # bash -e would stop at load_stop (kill/wait exit non-zero) before the tmpfs arm.
+          set +e
+          set -u
+          cat > "$RUNNER_TEMP/fsync.py" <<'PY'
+          import os, sys, time, tempfile
+          d = sys.argv[1]; n = int(sys.argv[2]); lat = []
+          for _ in range(n):
+              fd, p = tempfile.mkstemp(dir=d)
+              os.write(fd, b"x" * 2048)
+              t = time.perf_counter(); os.fsync(fd); lat.append((time.perf_counter() - t) * 1000)
+              os.close(fd); os.unlink(p)
+          lat.sort()
+          print("fsync %s n=%d p50=%.2fms p90=%.2fms p99=%.2fms max=%.2fms" % (d, n, lat[n//2], lat[n*9//10], lat[min(n-1, n*99//100)], lat[-1]))
+          PY
+          runs() {
+            local label=$1 tmp=$2 pass=0 fail=0
+            for _ in $(seq 1 10); do
+              if (cd services/probe && TMPDIR="$tmp" "$RUNNER_TEMP/probe.test" -test.run '^TestHistoryEndpointProjectsStage$' -test.count=1 -test.timeout 60s > "$RUNNER_TEMP/run.log" 2>&1); then
+                pass=$((pass+1))
+              else
+                fail=$((fail+1)); grep -m1 -A2 'expected:' "$RUNNER_TEMP/run.log" || tail -5 "$RUNNER_TEMP/run.log"
+              fi
+            done
+            echo "RESULT $label TMPDIR=$tmp pass=$pass fail=$fail"
+          }
+          # Buffered write load: half the free space on /tmp, at most 12 GiB, so TempDir writes never hit ENOSPC.
+          load_start() {
+            local avail_mb count
+            avail_mb=$(df -Pm /tmp | awk 'NR==2 {print $4}')
+            count=$(( avail_mb / 2 < 12288 ? avail_mb / 2 : 12288 ))
+            echo "load: ${count} MiB into /tmp (free ${avail_mb} MiB)"
+            dd if=/dev/zero of=/tmp/probe-load bs=1M count="$count" status=none & LOAD=$!
+            sleep 3
+          }
+          load_stop() { kill "$LOAD" 2>/dev/null || true; wait "$LOAD" 2>/dev/null || true; rm -f /tmp/probe-load; sync; }
+
+          echo "== idle"
+          python3 -I "$RUNNER_TEMP/fsync.py" /tmp 100
+          python3 -I "$RUNNER_TEMP/fsync.py" /dev/shm 100
+          runs idle /tmp
+
+          echo "== buffered write load on /tmp"
+          load_start
+          python3 -I "$RUNNER_TEMP/fsync.py" /tmp 50
+          runs load /tmp
+          load_stop
+
+          echo "== buffered write load on /tmp, test TMPDIR on tmpfs"
+          load_start
+          python3 -I "$RUNNER_TEMP/fsync.py" /dev/shm 50
+          runs load /dev/shm
+          load_stop
