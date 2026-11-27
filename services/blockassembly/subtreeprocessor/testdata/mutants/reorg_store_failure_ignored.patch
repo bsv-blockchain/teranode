@@ -1,0 +1,13 @@
+diff --git a/services/blockassembly/subtreeprocessor/SubtreeProcessor.go b/services/blockassembly/subtreeprocessor/SubtreeProcessor.go
+index 6396edc30..0e6107949 100644
+--- a/services/blockassembly/subtreeprocessor/SubtreeProcessor.go
++++ b/services/blockassembly/subtreeprocessor/SubtreeProcessor.go
+@@ -4485,7 +4485,7 @@ func awaitStoreResults(ctx context.Context, caller string, results []chan StoreR
+ 		case r := <-result:
+ 			switch {
+ 			case r.Err != nil:
+-				return errors.NewStorageError("[%s] subtree %d was not stored", caller, i, r.Err)
++				continue // mutant: a failed store does not fail the reorg
+ 			case r.Cancelled || !r.SubtreeStored:
+ 				return errors.NewStorageError("[%s] subtree %d was not stored (cancelled %t)", caller, i, r.Cancelled)
+ 			}

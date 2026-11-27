@@ -1,0 +1,22 @@
+diff --git a/services/blockassembly/subtreeprocessor/reorg_fast_path.go b/services/blockassembly/subtreeprocessor/reorg_fast_path.go
+index 1a3dc0855..99fe168f3 100644
+--- a/services/blockassembly/subtreeprocessor/reorg_fast_path.go
++++ b/services/blockassembly/subtreeprocessor/reorg_fast_path.go
+@@ -443,8 +443,6 @@ func (stp *SubtreeProcessor) applyFastReorg(ctx context.Context, plan *fastReorg
+ 		d1Hashes[i] = plan.d1Nodes[i].Hash
+ 	}
+ 
+-	stp.reorgPendingD1 = d1Hashes
+-
+ 	txMapLength := stp.currentTxMap.Length()
+ 
+ 	if err = stp.removeCoinbaseUtxos(ctx, lost); err != nil && !errors.Is(err, errors.ErrTxNotFound) {
+@@ -463,6 +461,8 @@ func (stp *SubtreeProcessor) applyFastReorg(ctx context.Context, plan *fastReorg
+ 		stp.logger.Errorf("[reorgInPlace][%s] error clearing block processed_at timestamp: %v", lost.String(), err)
+ 	}
+ 
++	stp.reorgPendingD1 = d1Hashes // mutant: recorded only once the removal succeeded
++
+ 	stp.phases.done("fast_remove_coinbase")
+ 	stp.reportProgressUnlessDone(ctx)
+ 

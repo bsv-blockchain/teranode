@@ -1,0 +1,13 @@
+diff --git a/services/blockassembly/subtreeprocessor/move_back_held_children.go b/services/blockassembly/subtreeprocessor/move_back_held_children.go
+index 465a9ca5b..262d76ad0 100644
+--- a/services/blockassembly/subtreeprocessor/move_back_held_children.go
++++ b/services/blockassembly/subtreeprocessor/move_back_held_children.go
+@@ -111,7 +111,7 @@ func (h *heldChildren) release(dst []subtreepkg.Node, hash chainhash.Hash) []sub
+ 		dst = append(dst, h.nodes[idx])
+ 		h.unreleased--
+ 
+-		queue = append(queue, h.waiting[h.nodes[idx].Hash]...)
++		// mutant: a released node frees nothing in turn; the cascade is an order preference, so only the exact-order check kills this
+ 		delete(h.waiting, h.nodes[idx].Hash)
+ 	}
+ 

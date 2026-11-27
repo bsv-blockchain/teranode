@@ -1,0 +1,13 @@
+diff --git a/services/blockassembly/subtreeprocessor/reorg_fast_path.go b/services/blockassembly/subtreeprocessor/reorg_fast_path.go
+index eeeba1b6b..d3cdf14f9 100644
+--- a/services/blockassembly/subtreeprocessor/reorg_fast_path.go
++++ b/services/blockassembly/subtreeprocessor/reorg_fast_path.go
+@@ -576,7 +576,7 @@ func (stp *SubtreeProcessor) applyFastReorg(ctx context.Context, plan *fastReorg
+ 	// only the tip forgets the earlier blocks' protection with it, which only falls back to the
+ 	// behaviour without kept sets and never drops a transaction wrongly. The earlier blocks get no
+ 	// entry: this call also prunes the expired sets, as each step's does.
+-	stp.keepMinedSet(moveForwardBlocks[len(moveForwardBlocks)-1], plan.winners)
++	// stp.keepMinedSet(moveForwardBlocks[len(moveForwardBlocks)-1], plan.winners)
+ 
+ 	stp.currentBlockHeader.Store(moveForwardBlocks[len(moveForwardBlocks)-1].Header)
+ 	stp.updatePrecomputedMiningData()
