@@ -291,18 +291,18 @@ func TestUnminedTxGate_ScheduleRechecksInsideTheSlot(t *testing.T) {
 // WaitForCheckpointAnswer returns at once when the rule is off or the FSM is
 // syncing, and otherwise only after a read scheduled since it began succeeds,
 // so a stale below answer from before a sync cannot drop an acknowledged message.
-func TestUnminedTxGate_WaitForCheckpointAnswer(t *testing.T) {
+func TestUnminedTxGate_waitForCheckpointAnswer(t *testing.T) {
 	ctx := context.Background()
 	running, catching := FSMStateRUNNING, FSMStateCATCHINGBLOCKS
 
-	require.NoError(t, NewUnminedTxGate(ulogger.TestLogger{}, &Mock{}, gateSettings(t, "postgres"), "test_wait_off").WaitForCheckpointAnswer(ctx))
+	require.NoError(t, NewUnminedTxGate(ulogger.TestLogger{}, &Mock{}, gateSettings(t, "postgres"), "test_wait_off").waitForCheckpointAnswer(ctx))
 
 	var nilGate *UnminedTxGate
-	require.NoError(t, nilGate.WaitForCheckpointAnswer(ctx))
+	require.NoError(t, nilGate.waitForCheckpointAnswer(ctx))
 
 	syncing := &Mock{}
 	fsmRead(syncing, &catching)
-	require.NoError(t, NewUnminedTxGate(ulogger.TestLogger{}, syncing, gateSettings(t, "utxoset"), "test_wait_syncing").WaitForCheckpointAnswer(ctx))
+	require.NoError(t, NewUnminedTxGate(ulogger.TestLogger{}, syncing, gateSettings(t, "utxoset"), "test_wait_syncing").waitForCheckpointAnswer(ctx))
 	syncing.AssertNotCalled(t, "GetBestHeightAndTime", mock.Anything)
 
 	for _, height := range []int{50, 150} {
@@ -311,17 +311,17 @@ func TestUnminedTxGate_WaitForCheckpointAnswer(t *testing.T) {
 		client.On("GetBestHeightAndTime", mock.Anything).Return(height, 0, nil).Once()
 
 		gate := NewUnminedTxGate(ulogger.TestLogger{}, client, gateSettings(t, "utxoset"), "test_wait_read")
-		require.NoError(t, gate.WaitForCheckpointAnswer(ctx), "height %d", height)
+		require.NoError(t, gate.waitForCheckpointAnswer(ctx), "height %d", height)
 		require.Equal(t, height >= 100, gate.reached.Load())
 
 		if height >= 100 {
 			// Reached: every later message returns at once, with no read and no
 			// timer, which allocates.
 			shortCtx, cancel := context.WithTimeout(ctx, 200*time.Millisecond)
-			require.NoError(t, gate.WaitForCheckpointAnswer(shortCtx))
+			require.NoError(t, gate.waitForCheckpointAnswer(shortCtx))
 			cancel()
 			client.AssertNumberOfCalls(t, "GetBestHeightAndTime", 1)
-			require.Zero(t, testing.AllocsPerRun(10, func() { _ = gate.WaitForCheckpointAnswer(ctx) }))
+			require.Zero(t, testing.AllocsPerRun(10, func() { _ = gate.waitForCheckpointAnswer(ctx) }))
 		}
 
 		client.AssertExpectations(t)
@@ -342,7 +342,7 @@ func TestUnminedTxGate_WaitForCheckpointAnswer(t *testing.T) {
 	go func() {
 		waitCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 		defer cancel()
-		waited <- gate.WaitForCheckpointAnswer(waitCtx)
+		waited <- gate.waitForCheckpointAnswer(waitCtx)
 	}()
 
 	time.Sleep(200 * time.Millisecond) // let the wait reach its loop first
@@ -368,7 +368,7 @@ func TestUnminedTxGate_WaitForCheckpointAnswer(t *testing.T) {
 	}()
 
 	waitCtx, waitCancel := context.WithTimeout(ctx, 3*time.Second)
-	require.NoError(t, gate.WaitForCheckpointAnswer(waitCtx))
+	require.NoError(t, gate.waitForCheckpointAnswer(waitCtx))
 	waitCancel()
 	require.True(t, gate.reached.Load(), "judged by the read scheduled after the wait began")
 	inFlightBelow.AssertNumberOfCalls(t, "GetBestHeightAndTime", 2)
@@ -380,11 +380,11 @@ func TestUnminedTxGate_WaitForCheckpointAnswer(t *testing.T) {
 	stale.On("GetBestHeightAndTime", mock.Anything).Return(150, 0, nil).Once()
 
 	gate = NewUnminedTxGate(ulogger.TestLogger{}, stale, gateSettings(t, "utxoset"), "test_wait_stale")
-	require.NoError(t, gate.WaitForCheckpointAnswer(ctx))
+	require.NoError(t, gate.waitForCheckpointAnswer(ctx))
 	require.False(t, gate.reached.Load())
 
 	gate.heightReadNanos.Store(0)
-	require.NoError(t, gate.WaitForCheckpointAnswer(ctx))
+	require.NoError(t, gate.waitForCheckpointAnswer(ctx))
 	require.True(t, gate.reached.Load(), "the second wait judged by a fresh read")
 	stale.AssertExpectations(t)
 
@@ -396,7 +396,7 @@ func TestUnminedTxGate_WaitForCheckpointAnswer(t *testing.T) {
 	waitCtx, cancel := context.WithTimeout(ctx, 200*time.Millisecond)
 	defer cancel()
 
-	require.ErrorIs(t, gate.WaitForCheckpointAnswer(waitCtx), context.DeadlineExceeded)
+	require.ErrorIs(t, gate.waitForCheckpointAnswer(waitCtx), context.DeadlineExceeded)
 	waitForHeightRead(t, gate)
 }
 

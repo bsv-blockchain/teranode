@@ -234,23 +234,18 @@ func (g *UnminedTxGate) readBestHeight(scheduled int64) {
 	g.readOKNanos.Store(scheduled)
 }
 
-// checkpointAnswerPoll is how often WaitForCheckpointAnswer looks again until
+// checkpointAnswerPoll is how often waitForCheckpointAnswer looks again until
 // the checkpoint is reached, the FSM is syncing, or a height read scheduled
 // after the call began has succeeded. Reads stay spaced by
 // bestHeightReadInterval.
 const checkpointAnswerPoll = 50 * time.Millisecond
 
-// WaitForCheckpointAnswer returns once the checkpoint rule can judge a
+// waitForCheckpointAnswer returns once the checkpoint rule can judge a
 // transaction by a current height: the rule is off, the checkpoint is known to
-// be reached, the FSM is syncing (Refuses refuses then whatever the height), or
-// a height read scheduled after this call began has succeeded. Until then it
-// keeps scheduling reads. It returns ctx's error if ctx ends first.
-//
-// An intake that has already acknowledged its transactions calls it before
-// Refuses, so a gate whose last answer is missing or stale does not drop them.
-// The validator's Kafka intake is one: propagation acknowledged each message
-// before queueing it, and a refused message is committed and lost.
-func (g *UnminedTxGate) WaitForCheckpointAnswer(ctx context.Context) error {
+// be reached, the FSM is syncing, or a height read scheduled after this call
+// began has succeeded. Until then it keeps scheduling reads. It returns ctx's
+// error if ctx ends first. RefusesAfterCheckpointAnswer is its one caller.
+func (g *UnminedTxGate) waitForCheckpointAnswer(ctx context.Context) error {
 	if g == nil || g.client == nil || g.highestCheckpoint == 0 || g.reached.Load() {
 		return nil
 	}
@@ -286,7 +281,7 @@ func (g *UnminedTxGate) RefusesAfterCheckpointAnswer(ctx context.Context, txHash
 	}
 
 	began := g.sinceStart()
-	if err := g.WaitForCheckpointAnswer(ctx); err != nil {
+	if err := g.waitForCheckpointAnswer(ctx); err != nil {
 		return false, err
 	}
 
