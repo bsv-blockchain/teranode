@@ -175,6 +175,30 @@ func TestBitmapsWriteRetryDeadlineIsNeverPastAWritesOwnBound(t *testing.T) {
 	require.Equal(t, now.Add(time.Minute), r.deadline(now), "the older failure keeps its own bound")
 }
 
+// Through Do: a write whose first failure joins an outage noted as beginning later still gives up
+// a bound after its own first failure.
+func TestBitmapsWriteRetryDoClampsItsDeadline(t *testing.T) {
+	const service = "test-do-clamp"
+
+	r := fastRetry(200 * time.Millisecond)
+	r.failed(time.Now().Add(time.Hour)) // a newer outage, noted first
+
+	_, exhaustedBefore := retryCounts(service)
+
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
+	defer cancel()
+
+	write, _ := failingWrite(-1, errors.NewStorageError("store down"))
+
+	start := time.Now()
+	require.Error(t, r.Do(ctx, service, write))
+	require.Less(t, time.Since(start), 10*time.Second, "it gave up at its own bound")
+	require.NoError(t, ctx.Err())
+
+	_, exhausted := retryCounts(service)
+	require.Equal(t, exhaustedBefore+1, exhausted)
+}
+
 // Through Do: a write in flight while another write fails past the bound, succeeding only then,
 // does not give the next failing write a fresh bound.
 func TestBitmapsWriteRetryASuccessInFlightDuringAnOutageDoesNotEndIt(t *testing.T) {

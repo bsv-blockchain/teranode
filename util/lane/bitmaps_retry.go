@@ -81,6 +81,22 @@ func (r *BitmapsWriteRetry) failed(now time.Time) time.Time {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
+	return r.failedLocked(now)
+}
+
+// failedNow notes a failure at the time it takes under the lock, so failures are noted in the
+// order they are timed, and returns that time and when its outage began.
+func (r *BitmapsWriteRetry) failedNow() (now, since time.Time) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	now = time.Now()
+
+	return now, r.failedLocked(now)
+}
+
+// failedLocked is failed with r.mu held.
+func (r *BitmapsWriteRetry) failedLocked(now time.Time) time.Time {
 	if r.failingSince.IsZero() || now.Sub(r.lastFailure) > r.bound() {
 		r.failingSince = now
 	}
@@ -96,7 +112,12 @@ func (r *BitmapsWriteRetry) failed(now time.Time) time.Time {
 // deadline notes a write's first failure at now and returns when its retries end: the bound after
 // its outage began, and never later than the bound after now, even when a newer outage was noted first.
 func (r *BitmapsWriteRetry) deadline(now time.Time) time.Time {
-	since := r.failed(now)
+	return r.clampedDeadline(now, r.failed(now))
+}
+
+// clampedDeadline is the bound after since, the start of the outage a failure at now belongs to,
+// but never later than the bound after now.
+func (r *BitmapsWriteRetry) clampedDeadline(now, since time.Time) time.Time {
 	if since.After(now) {
 		since = now
 	}
@@ -142,7 +163,7 @@ func (r *BitmapsWriteRetry) Do(ctx context.Context, service string, write func(c
 		return err
 	}
 
-	deadline := r.deadline(time.Now())
+	deadline := r.clampedDeadline(r.failedNow())
 	backoff := r.firstBackoff()
 
 	attemptCtx, cancel := context.WithDeadline(ctx, deadline)
@@ -186,7 +207,7 @@ func (r *BitmapsWriteRetry) Do(ctx context.Context, service string, write func(c
 			return err
 		}
 
-		r.failed(time.Now())
+		r.failedNow()
 
 		backoff = r.nextBackoff(backoff)
 	}
