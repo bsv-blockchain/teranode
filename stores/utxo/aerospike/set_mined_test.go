@@ -245,6 +245,17 @@ func TestApplyLockClearWorkReportsFailures(t *testing.T) {
 			keep:     []rec{{1, 0}, {2, 0}, {3, 0}},
 			lose:     []rec{{0, 0}},
 		},
+		{
+			// Eleven failed reads fill the printed chain; the failed clears still print.
+			name:     "eleven reads and six clears fail",
+			outputs:  []int{2, 25, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9},
+			creating: []rec{{0, 0}, {1, 0}},
+			fail:     []rec{{1, 1}, {1, 2}, {1, 3}, {1, 4}, {1, 5}, {1, 6}, {2, 0}, {3, 0}, {4, 0}, {5, 0}, {6, 0}, {7, 0}, {8, 0}, {9, 0}, {10, 0}, {11, 0}, {12, 0}},
+			match:    func(r aerospike.BatchRecordIfc) bool { _, isUDF := r.(*aerospike.BatchUDF); return !isUDF },
+			wantErr:  []named{{1, " records 1-6 (ResultCode: TIMEOUT)"}, {2, "] failed to read the extra record count"}},
+			keep:     []rec{{1, 0}},
+			lose:     []rec{{0, 0}},
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := context.Background()

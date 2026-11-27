@@ -593,7 +593,9 @@ func (s *Store) applyLockClearWork(ctx context.Context, work lockClearWork) erro
 		if err == nil {
 			err = clearErr
 		} else {
-			err = errors.Join(err, clearErr)
+			// The clear error goes first: up to ten read errors, each with its cause,
+			// already fill Error()'s 20 printed links, so after them it would not print.
+			err = errors.Join(clearErr, err)
 		}
 	}
 
