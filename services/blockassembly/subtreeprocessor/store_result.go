@@ -6,10 +6,15 @@ package subtreeprocessor
 // posted when the store is settled: stored on the first try or on a retry, or failed because
 // the retries ran out.
 //
-// Nothing is posted when block assembly shuts down before the store settles: a worker that sees
-// its context end before it starts the store, and requests left in the worker or retry queues. A
-// waiter must also watch its context.
-// A subtree that existed with no meta file is reported with MetaStored false and Err nil.
+// A retry cancelled during its backoff settles its part as cancelled, and the result is posted
+// only if every other part has settled too. Nothing is posted for a worker that sees its context
+// end before it starts the store, or for requests left in the worker or retry queues at shutdown.
+// A waiter must also watch its context.
+//
+// A subtree that existed with no meta file is reported with MetaStored false and Err nil. An
+// error returned by the store's Exists check on that meta is reported as a failure in Err; a blob
+// store that turns some of its own lookup errors into "not found" cannot be told apart from a
+// missing meta.
 type StoreResult struct {
 	// SubtreeStored is true when the subtree file is in the store, written by this store or
 	// found there (ExistedAlready).
