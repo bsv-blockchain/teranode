@@ -203,7 +203,8 @@ func (o *ownLaneBitmaps) list(roots []chainhash.Hash, height uint32) {
 }
 
 // writeLaneBitmapsFile writes a subtree's lane bitmaps file, to live until dah. A file already
-// there gets dah. A write the store refuses returns a storage error, so the caller stores the
+// there is given dah, and a failure to give it is logged without failing the write. A write the
+// store refuses returns a storage error, so the caller stores the
 // subtree file only once the bitmaps file is written. Bitmaps that cannot be encoded are a lane
 // fault, not a store one, and do not stop the subtree. Either failure is counted under
 // block="own".

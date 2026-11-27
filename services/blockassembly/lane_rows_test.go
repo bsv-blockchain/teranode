@@ -884,9 +884,10 @@ func laneStorageFailureServer(t *testing.T, name string, store func(*memory.Memo
 	return server, memoryStore, st, txMap
 }
 
-// TestAFailedLaneBitmapsWriteDoesNotBlockShutdownOnAFullRetryQueue: a subtree whose lane bitmaps
-// write fails while nothing reads the retry queue still finishes once the service stops.
-func TestAFailedLaneBitmapsWriteDoesNotBlockShutdownOnAFullRetryQueue(t *testing.T) {
+// TestAFailedLaneBitmapsWriteStopsQueuingItsRetryAtShutdown: a subtree whose lane bitmaps write
+// fails while nothing reads the retry queue stops waiting to queue its retry once the service
+// stops, so its storage finishes when its meta write did not fail too.
+func TestAFailedLaneBitmapsWriteStopsQueuingItsRetryAtShutdown(t *testing.T) {
 	server, _, st, txMap := laneStorageFailureServer(t, "full-queue", func(m *memory.Memory) blob.Store { return failingBitmapsWriteStore{Store: m} })
 
 	ctx, cancel := context.WithCancel(t.Context())
