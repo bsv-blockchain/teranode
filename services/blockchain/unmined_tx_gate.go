@@ -290,8 +290,15 @@ func (g *UnminedTxGate) RefusesAfterCheckpointAnswer(ctx context.Context, txHash
 		return false, err
 	}
 
-	ticker := time.NewTicker(checkpointAnswerPoll)
-	defer ticker.Stop()
+	// Made only when the decision has to wait, so the usual answer allocates no
+	// timer per message.
+	var ticker *time.Ticker
+
+	defer func() {
+		if ticker != nil {
+			ticker.Stop()
+		}
+	}()
 
 	for {
 		state, err := g.client.GetFSMCurrentState(ctx)
@@ -301,17 +308,25 @@ func (g *UnminedTxGate) RefusesAfterCheckpointAnswer(ctx context.Context, txHash
 			return true, nil
 		}
 
+		// Freshness before reached: readBestHeight stores reached first, so a
+		// fresh read seen here has its reached answer visible to the next load.
+		fresh := g.readOKNanos.Load() >= began
+
 		if g.highestCheckpoint == 0 || g.reached.Load() {
 			return false, nil
 		}
 
-		if g.readOKNanos.Load() >= began {
+		if fresh {
 			g.refuse(txHash, "the best height is not known to have reached the highest checkpoint")
 
 			return true, nil
 		}
 
 		g.scheduleHeightRead()
+
+		if ticker == nil {
+			ticker = time.NewTicker(checkpointAnswerPoll)
+		}
 
 		select {
 		case <-ctx.Done():
