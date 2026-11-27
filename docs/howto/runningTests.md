@@ -12,7 +12,7 @@ Each `make` target belongs to one test level. The levels are:
 | Level | Target or command | What it runs |
 |---|---|---|
 | Unit | `make test` | Every package except `./test/`, with `-race` and coverage. This also replays the committed seed corpus of each fuzz target. |
-| Unit | `make test-heavy` | The `TestSortedHashSet_` tests in `services/blockassembly/subtreeprocessor`, without `-race`. |
+| Unit | `make test-heavy` | The tests too slow for `make test` under `-race` and coverage, with `TERANODE_HEAVY_TESTS=1` and without `-race`, in `services/blockassembly/subtreeprocessor` and `services/subtreevalidation`. They are selected by name in the Makefile: the `TestSortedHashSet_` tests, the large-queue, disk tx map throughput and subtree size timing tests, and the reorg fast path differentials (`TestReorgDifferential_FastPath...`), which run their disk-map, full lane-position and extra random-fork cases only here. |
 | Unit | `make fuzz` | Fuzzes each target in `FUZZ_TARGETS` for `FUZZTIME`. |
 | Integration | `make longtest` | `TestLegacyHistoricalTestnetSync` (`longtest` build tag), `make test-heavy`, and `test/longtest/`. |
 | System | `make smoketest` | `test/e2e/daemon/ready/` with in-process daemons, except the tests in its `-skip` list. That list holds the tests that `make prunertest` and `make legacy-sync` run, and two other tests. |
