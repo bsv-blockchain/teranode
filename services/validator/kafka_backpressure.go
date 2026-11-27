@@ -790,10 +790,10 @@ func (v *Server) fetchPauseFor(reason string) pausableConsumer {
 }
 
 // armFetchPauser shares consumer between the backpressure controller and the
-// unmined transaction gate. The gate pauses fetching while a Kafka message has
-// waited past one height-read timeout for its checkpoint answer, because the
-// consumer keeps fetching into per-partition queues with no bound while every
-// handler waits. A decision answered within the timeout never pauses.
+// unmined transaction gate. The gate pauses fetching while a Kafka message waits
+// for its checkpoint answer and a height read has failed since it began, because
+// the consumer keeps fetching into per-partition queues with no bound while every
+// handler waits. A read that succeeds, however slowly, never pauses.
 func (v *Server) armFetchPauser(consumer pausableConsumer) {
 	v.fetchPauser = newFetchPauser(consumer)
 

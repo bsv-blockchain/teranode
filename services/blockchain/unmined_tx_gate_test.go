@@ -416,9 +416,9 @@ func TestUnminedTxGate_RefusesAfterCheckpointAnswer(t *testing.T) {
 	})
 }
 
-// Waits stalled past one read timeout call onStall once however many stall, and
-// onRecover once when the last returns; a wait that gets its answer in time
-// calls neither.
+// A waiting decision stalls only when a height read fails: onStall runs once
+// however many stall and onRecover once when the last returns. Slow reads that
+// succeed, even one in flight when the decision began, stall nothing.
 func TestUnminedTxGate_StallHooks(t *testing.T) {
 	running := FSMStateRUNNING
 
@@ -428,17 +428,21 @@ func TestUnminedTxGate_StallHooks(t *testing.T) {
 		gate.SetStallHooks(func() { stalls.Add(1) }, func() { recovers.Add(1) })
 	}
 
-	quick := &Mock{}
-	fsmRead(quick, &running)
-	quick.On("GetBestHeightAndTime", mock.Anything).Return(150, 0, nil).Once()
+	slow := &Mock{}
+	fsmRead(slow, &running)
+	slowRead := func(mock.Arguments) { time.Sleep(1200 * time.Millisecond) }
+	slow.On("GetBestHeightAndTime", mock.Anything).Run(slowRead).Return(50, 0, nil).Once()
+	slow.On("GetBestHeightAndTime", mock.Anything).Run(slowRead).Return(150, 0, nil).Once()
 
-	gate := NewUnminedTxGate(ulogger.TestLogger{}, quick, gateSettings(t, "utxoset"), "test_stall_quick")
+	gate := NewUnminedTxGate(ulogger.TestLogger{}, slow, gateSettings(t, "utxoset"), "test_stall_slow")
 	hooks(gate)
+	gate.readFailNanos.Store(1) // a read that failed before the decision began does not count
+	require.True(t, gate.Refuses(context.Background(), nil), "starts the first slow read")
 
 	refused, err := gate.RefusesAfterCheckpointAnswer(context.Background(), nil)
 	require.NoError(t, err)
-	require.False(t, refused)
-	require.Zero(t, stalls.Load()+recovers.Load(), "an answer within the timeout stalls nothing")
+	require.False(t, refused, "judged by the second read, scheduled after the decision began")
+	require.Zero(t, stalls.Load()+recovers.Load(), "reads that succeed stall nothing, however slow")
 
 	down := &Mock{}
 	fsmRead(down, &running)
@@ -448,7 +452,6 @@ func TestUnminedTxGate_StallHooks(t *testing.T) {
 	hooks(gate)
 
 	ctx, cancel := context.WithCancel(context.Background())
-	started := time.Now()
 
 	var wg sync.WaitGroup
 
@@ -462,8 +465,7 @@ func TestUnminedTxGate_StallHooks(t *testing.T) {
 		}()
 	}
 
-	require.Eventually(t, func() bool { return stalls.Load() == 1 }, checkpointStallAfter+time.Second, 10*time.Millisecond)
-	require.GreaterOrEqual(t, time.Since(started), checkpointStallAfter, "no pause before the stall threshold")
+	require.Eventually(t, func() bool { return stalls.Load() == 1 }, 2*time.Second, 10*time.Millisecond)
 	time.Sleep(200 * time.Millisecond)
 	require.Equal(t, int32(1), stalls.Load(), "two stalled waits, one onStall")
 	require.Zero(t, recovers.Load())

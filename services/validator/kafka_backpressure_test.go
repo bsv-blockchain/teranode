@@ -1749,7 +1749,7 @@ func TestFetchPauser_PausedWhileAnyReasonHolds(t *testing.T) {
 	}
 }
 
-// A Kafka message stalled past one height-read timeout on a utxoset node pauses
+// A Kafka message waiting on a utxoset node whose height reads fail pauses
 // fetching, and fetching resumes when the wait ends; the stalled message is
 // returned as an error, so it stays uncommitted.
 func TestArmFetchPauser_StalledKafkaMessagePausesFetching(t *testing.T) {
@@ -1767,12 +1767,9 @@ func TestArmFetchPauser_StalledKafkaMessagePausesFetching(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	handled := make(chan error, 1)
 
-	started := time.Now()
-
 	go func() { handled <- server.handleKafkaTxMessage(ctx, kafkaTxMessage(t)) }()
 
 	require.Eventually(t, func() bool { return consumer.pauseCount() == 1 }, 3*time.Second, 10*time.Millisecond)
-	require.GreaterOrEqual(t, time.Since(started), 2*time.Second, "paused only after the 2 s stall threshold")
 	require.Zero(t, consumer.resumeCount())
 
 	cancel()

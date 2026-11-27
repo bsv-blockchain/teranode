@@ -118,18 +118,21 @@ type UnminedTxGate struct {
 	highestCheckpoint uint32
 
 	// reached is set once a height read returns highestCheckpoint or above,
-	// and readOKNanos is when the last successful read was scheduled.
+	// readOKNanos is when the last successful read was scheduled, and
+	// readFailNanos when the last failed one was.
 	// heightReading is true while a read is in flight, heightReadNanos is when
 	// the last read was scheduled, and lastWarnNanos the last time a failed
 	// read was logged, all as nanoseconds since start.
 	reached         atomic.Bool
 	readOKNanos     atomic.Int64
+	readFailNanos   atomic.Int64
 	heightReading   atomic.Bool
 	heightReadNanos atomic.Int64
 	lastWarnNanos   atomic.Int64
 
 	// stallMu guards stalled, the number of RefusesAfterCheckpointAnswer calls
-	// waiting longer than checkpointStallAfter, and the hooks SetStallHooks set.
+	// that have seen a height read fail while waiting, and the hooks
+	// SetStallHooks set.
 	stallMu   sync.Mutex
 	stalled   int
 	onStall   func()
@@ -228,6 +231,7 @@ func (g *UnminedTxGate) readBestHeight(scheduled int64) {
 
 	height, _, err := g.client.GetBestHeightAndTime(ctx)
 	if err != nil {
+		g.readFailNanos.Store(scheduled)
 		g.warnReadFailure(err)
 
 		return
@@ -241,12 +245,6 @@ func (g *UnminedTxGate) readBestHeight(scheduled int64) {
 
 	g.readOKNanos.Store(scheduled)
 }
-
-// checkpointStallAfter is how long a RefusesAfterCheckpointAnswer call may wait
-// before it counts as stalled. Any decision that waits that long stalls: a
-// blockchain service that does not answer, a read that succeeds slowly, or a
-// wait for a fresh read behind one still in flight.
-const checkpointStallAfter = bestHeightReadTimeout
 
 // checkpointAnswerPoll is how often RefusesAfterCheckpointAnswer looks again
 // until the checkpoint is reached, the FSM is syncing, or a height read
@@ -276,13 +274,14 @@ func (g *UnminedTxGate) RefusesAfterCheckpointAnswer(ctx context.Context, txHash
 
 	began := g.sinceStart()
 
-	// A call waiting past checkpointStallAfter counts itself as stalled once,
-	// and stops counting when it returns, whatever it returns.
-	start := time.Now()
+	// A call that sees a height read scheduled after it began fail counts
+	// itself as stalled once, and stops counting when it returns, whatever it
+	// returns. A read that succeeds, however slowly, never stalls a call: only
+	// a blockchain service that does not answer, or answers with an error, does.
 	stalled := false
 
 	tick := func() {
-		if !stalled && time.Since(start) >= checkpointStallAfter {
+		if !stalled && g.readFailNanos.Load() >= began {
 			stalled = true
 			g.stallBegin()
 		}
