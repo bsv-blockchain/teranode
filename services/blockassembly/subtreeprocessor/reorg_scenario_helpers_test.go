@@ -81,6 +81,9 @@ type reorgScenario struct {
 	lost      *model.Block
 	forward   []*model.Block
 
+	// release stops the processor; it runs once, at the latest at the end of the test.
+	release func()
+
 	lostIDs    []scenarioID
 	pendingIDs []scenarioID
 	winnerIDs  []scenarioID
@@ -225,6 +228,10 @@ func newReorgScenario(t testing.TB, cfg reorgScenarioConfig) *reorgScenario {
 	if cfg.subtreeSize == 0 {
 		cfg.subtreeSize = 1024
 	}
+
+	// The winners are shuffled below, which can put a chain child before its hit parent, a block
+	// the network would reject; so the two knobs are not combined.
+	require.False(t, cfg.hitsAtFront && cfg.pendingChains > 0, "hitsAtFront and pendingChains cannot be combined")
 
 	sc := &reorgScenario{cfg: cfg}
 	rng := rand.New(rand.NewPCG(cfg.seed, 0x2269))
@@ -513,11 +520,12 @@ func (sc *reorgScenario) buildProcessor(t testing.TB) {
 	stp, err := NewSubtreeProcessor(ctx, ulogger.TestLogger{}, tSettings, sc.blobStore, sc.client, sc.utxo, newSubtreeChan, opts...)
 	require.NoError(t, err)
 
-	t.Cleanup(func() {
+	sc.release = sync.OnceFunc(func() {
 		stp.Stop(context.Background())
 		close(newSubtreeChan)
 		<-listenerDone
 	})
+	t.Cleanup(sc.release)
 
 	stp.InitCurrentBlockHeader(sc.lost.Header)
 

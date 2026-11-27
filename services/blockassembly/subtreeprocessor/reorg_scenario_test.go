@@ -110,12 +110,19 @@ func txHashes(nodes []subtreepkg.Node) []chainhash.Hash {
 func TestReorgScenario_IntakeFeedsTheQueueAtItsRate(t *testing.T) {
 	sc := newReorgScenario(t, smallScenarioConfig())
 
-	stop := sc.startIntake(100_000)
-	time.Sleep(200 * time.Millisecond)
+	const tps = 100_000
+
+	start := time.Now()
+	stop := sc.startIntake(tps)
+
+	require.Eventually(t, func() bool { return sc.stp.QueueLength() > 0 }, 10*time.Second, 5*time.Millisecond)
+
 	sent := stop()
+	elapsed := time.Since(start)
 
 	require.Positive(t, sent, "intake sends while it runs")
-	require.LessOrEqual(t, sent, 40_000, "and not much faster than its rate")
+	// One batch of slack: the ticker sends a batch per 1000/tps seconds and drops ticks when late.
+	require.LessOrEqual(t, sent, int(tps*elapsed.Seconds())+1000, "and not faster than its rate")
 	require.Equal(t, int64(sent), sc.stp.QueueLength(), "nothing dequeues while the processor is not started")
 }
 
