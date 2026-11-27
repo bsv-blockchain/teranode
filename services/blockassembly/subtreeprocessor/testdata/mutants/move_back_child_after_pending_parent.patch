@@ -1,0 +1,53 @@
+diff --git a/services/blockassembly/subtreeprocessor/SubtreeProcessor.go b/services/blockassembly/subtreeprocessor/SubtreeProcessor.go
+index eaa1b059b..ec6eaf841 100644
+--- a/services/blockassembly/subtreeprocessor/SubtreeProcessor.go
++++ b/services/blockassembly/subtreeprocessor/SubtreeProcessor.go
+@@ -6723,6 +6723,7 @@ func (stp *SubtreeProcessor) moveBackBlockBulkBuild(ctx context.Context, block *
+ 	flatHashes := make([]chainhash.Hash, 0, blockNodeCount)
+ 	flatInpoints := make([]*subtreepkg.TxInpoints, 0, blockNodeCount)
+ 	flatNodes := make([]subtreepkg.Node, 0, blockNodeCount)
++	var mutantDeferred []subtreepkg.Node
+ 
+ 	// The block's transactions were validated at its height: keep out the ones under other
+ 	// rules than the next block's, as on every other way into the template.
+@@ -6765,11 +6766,29 @@ func (stp *SubtreeProcessor) moveBackBlockBulkBuild(ctx context.Context, block *
+ 				_, wasSet[i] = stp.currentTxMap.SetIfNotExistsAt(hash, flatInpoints[i], position)
+ 			}
+ 		}
++		// mutant: a recovered child whose parent is already pending goes after the pending nodes
++		held := make(map[chainhash.Hash]struct{})
+ 		for i, set := range wasSet {
+-			if set {
+-				allNodes = append(allNodes, flatNodes[i])
++			if !set {
++				held[flatHashes[i]] = struct{}{}
+ 			}
+ 		}
++		for i, set := range wasSet {
++			if !set {
++				continue
++			}
++			child := false
++			for _, parent := range flatInpoints[i].ParentTxHashes {
++				if _, ok := held[parent]; ok {
++					child = true
++				}
++			}
++			if child {
++				mutantDeferred = append(mutantDeferred, flatNodes[i])
++				continue
++			}
++			allNodes = append(allNodes, flatNodes[i])
++		}
+ 	}
+ 
+ 	// Step 4: Collect previous mempool nodes (already in currentTxMap). One that spends a
+@@ -6795,6 +6814,8 @@ func (stp *SubtreeProcessor) moveBackBlockBulkBuild(ctx context.Context, block *
+ 		}
+ 	}
+ 
++	allNodes = append(allNodes, mutantDeferred...)
++
+ 	// Step 5: Determine subtree size
+ 	subtreeSize := int(stp.currentItemsPerFile.Load())
+ 	if !createProperlySizedSubtrees {
