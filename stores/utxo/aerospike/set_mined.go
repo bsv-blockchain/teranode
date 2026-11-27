@@ -1047,7 +1047,8 @@ func (s *Store) rollForwardCreatingRecord(ctx context.Context, rec *creatingReco
 			return nil
 		}
 
-		return errors.NewProcessingError("[setMined] create-first pre-flight: get tx %s failed", rec.hash.String(), err)
+		// A get that failed is a fault of this node's store, as a failed read of the creating state is.
+		return errors.NewStorageError("[setMined] create-first pre-flight: get tx %s failed", rec.hash.String(), err)
 	}
 
 	if !md.Creating {

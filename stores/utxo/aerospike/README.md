@@ -494,8 +494,9 @@ reorg/conflict helpers) are single-phase and bypass the create-first ordering.
   nothing. The write paths no longer clear the `creating` bin. The pre-flight runs on every call, whatever `utxostore_useCreateFirstOrder`
   says, so turning the flag off cannot strand creating records. Correctness rests on the
   pre-flight, which fails closed, because the native sub-op write path's handling of the bin
-  is not verifiable from this repository. A read of the creating state that fails is returned as
-  a storage error, so legacy sync keeps the block for a retry and does not reject it.
+  is not verifiable from this repository. A read of the creating state that fails, or a get of a
+  creating record that fails, is returned as a storage error, so legacy sync keeps the block for a
+  retry and does not reject it.
 
 The healers (setMined pre-flight and pruner sweep) are not gated on the flag.
 
